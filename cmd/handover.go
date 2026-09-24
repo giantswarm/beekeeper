@@ -11,17 +11,25 @@ import (
 
 func (a *app) handoverCmd() *cobra.Command {
 	var events int
+	var prompt bool
 	c := &cobra.Command{
 		Use:   "handover",
 		Short: "Everything the next supervisor needs, from the live state",
 		Long: `Print the hand-over as Markdown: the supervisor, the running sessions and
-what each is on, overlaps, leases and grant queues, holds, registered
-agents, open notes, what the alert watch reads and the latest events. Everything comes from the live
+what each is on, overlaps, leases and grant queues, holds, the merge lanes,
+registered agents, session records, open notes with their defaults, timers,
+what the alert watch reads and the latest events. Everything comes from the
 state and the machine, so a successor (or the same supervisor after a
-restart) reads it instead of a prose brief.`,
+restart) reads it instead of a prose brief.
+
+--prompt prints the successor's session prompt instead: the configured
+instructions (supervisor.skill or supervisor.instructions), the scope
+(supervisor.scope), the pending state in full and the commands that read
+the live values. It carries no standing rule and no live value: no version,
+memory figure or pull request state.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			v, err := a.collect(true)
+			v, err := a.collect(!prompt) // the prompt names no session's current work
 			if err != nil {
 				return err
 			}
@@ -39,17 +47,22 @@ restart) reads it instead of a prose brief.`,
 			if err != nil {
 				return err
 			}
+			if prompt {
+				return a.printPrompt(cmd.Context(), v, l, al)
+			}
 			if a.json {
 				return a.printJSON(struct {
 					*view
-					Leases *leaseList    `json:"leases"`
-					Holds  []state.Hold  `json:"holds"`
-					Lanes  []laneView    `json:"lanes"`
-					Agents []agentView   `json:"agents"`
-					Notes  []state.Note  `json:"notes"`
-					Alerts *alertsView   `json:"alerts"`
-					Events []state.Event `json:"events"`
-				}{v, l, holds, a.laneViews(v.st), agents, v.st.Notes, al, evs})
+					Leases  *leaseList     `json:"leases"`
+					Holds   []state.Hold   `json:"holds"`
+					Lanes   []laneView     `json:"lanes"`
+					Agents  []agentView    `json:"agents"`
+					Records []state.Record `json:"records"`
+					Notes   []state.Note   `json:"notes"`
+					Timers  []state.Timer  `json:"timers"`
+					Alerts  *alertsView    `json:"alerts"`
+					Events  []state.Event  `json:"events"`
+				}{v, l, holds, a.laneViews(v.st), agents, v.st.Records, v.st.Notes, v.st.Timers, al, evs})
 			}
 			p := func(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format+"\n", args...) }
 			p("# Hand-over, %s (%s UTC)\n", a.now.Format("2006-01-02 15:04 MST"), a.now.UTC().Format("15:04"))
@@ -71,8 +84,12 @@ restart) reads it instead of a prose brief.`,
 			a.printLanes(a.laneViews(v.st))
 			p("\n## Agents\n")
 			a.printAgents(agents)
+			p("\n## Session records\n")
+			a.printRecords(v.st.Records, v.raw)
 			p("\n## Open notes\n")
 			a.printNotes(v.st.Notes)
+			p("\n## Timers\n")
+			a.printTimers(v.st.Timers)
 			p("\n## Alerts\n")
 			a.printAlerts(al)
 			if len(evs) > 0 {
@@ -85,6 +102,7 @@ restart) reads it instead of a prose brief.`,
 		},
 	}
 	c.Flags().IntVar(&events, "events", 20, "how many of the latest events to include")
+	c.Flags().BoolVar(&prompt, "prompt", false, "print the successor's session prompt: instructions, scope and the pending state")
 	return c
 }
 

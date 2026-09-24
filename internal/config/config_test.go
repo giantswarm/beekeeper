@@ -59,6 +59,7 @@ func TestLoadRejects(t *testing.T) {
 		"path as resource":    "resources: [../x]",
 		"nameless install":    "alerts: {installations: [{context: x}]}",
 		"bad duration":        "grantTTL: soon",
+		"skill and file":      "supervisor: {skill: supervise, instructions: /x.md}",
 	} {
 		p := filepath.Join(t.TempDir(), "c.yaml")
 		if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {

@@ -48,6 +48,14 @@ BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper lanes
 `{"state":"OPEN","mergedAt":null}` (or `MERGED` with a time, or `CLOSED`) from a file and hands
 every other call to the real one plays a pull request merging outside the gate.
 
+`watch` finds a session by its process: a `claude` binary not running under another session,
+named by `CLAUDE_CODE_HOST_SESSION_ID` and `CLAUDE_CODE_SESSION_NAME`. A copy of `sleep` named
+`claude`, started detached (`setsid -f`) with those two variables, stands in for a session that
+ends when the sleep does, so `sessions serve` and the `SESSION ENDED` line can be tried against
+scratch state. The live supervisor's watch sees it too: give it a name that reads as a test and a
+short life. `handover --prompt` on a copy of the live state (`cp -r` of the state and lease
+directories into the scratch configuration) shows what a successor would get.
+
 `free` takes its temp dir from `TMPDIR` (Claude Code's session dirs are `$TMPDIR/claude-<uid>`), so
 `--apply` can be tried on a fixture instead of the real `/tmp`:
 `TMPDIR=/tmp/fixture ./beekeeper free --apply --only session-dirs,tmp-dirs`.
@@ -61,7 +69,7 @@ every other call to the real one plays a pull request merging outside the gate.
 | `internal/machine` | Memory, pressure, the desktop scope, disk, build slots, kind clusters, OOM kills. |
 | `internal/github` | The budget from rate-limit headers; a pull request's state from `gh pr view`. |
 | `internal/lease` | Lease directories and the grant rule. |
-| `internal/state` | The shared state document and the event log, under a file lock. |
+| `internal/state` | The shared state document (supervisor, grants, holds, agents, notes, timers, session records, merges) and the event log, under a file lock. |
 | `internal/alerts` | The installations' alerts: bounded `kubectl port-forward`s in their own process group, the Alertmanager reading, the NEW/RESOLVED lines and the grouped snapshot (pure, tested against Alertmanager-shaped fixtures and a fake `kubectl`), and the baseline with its single owner. |
 | `internal/guard` | The build guard: a capped run in a build slot, and the PreToolUse hook's rewrite and third-lab refusal. |
 | `internal/free` | What can be freed (dead sessions' dirs, throwaway temp dirs, orphaned workers) and what is only reported, as a report or the front end's TSV. |

@@ -39,7 +39,8 @@ func NewStore(dir string) *Store {
 	return &Store{dir: dir, lock: flock.New(filepath.Join(dir, "alerts.lock"))}
 }
 
-func (s *Store) path() string { return filepath.Join(s.dir, "alerts.json") }
+// Path is the baseline file.
+func (s *Store) Path() string { return filepath.Join(s.dir, "alerts.json") }
 
 // Own makes this process the baseline's owner unless another one is; then it
 // returns false and that owner. Owning lasts until Release or the process ends.
@@ -80,14 +81,14 @@ func (s *Store) Release() error {
 // Load reads the baseline; a missing file is an empty one.
 func (s *Store) Load() (*State, error) {
 	st := &State{}
-	raw, err := os.ReadFile(s.path())
+	raw, err := os.ReadFile(s.Path())
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 	case err != nil:
 		return nil, err
 	default:
 		if err := json.Unmarshal(raw, st); err != nil {
-			return nil, fmt.Errorf("%s: %w", s.path(), err)
+			return nil, fmt.Errorf("%s: %w", s.Path(), err)
 		}
 	}
 	if st.Installations == nil {
@@ -102,11 +103,11 @@ func (s *Store) Save(st *State) error {
 	if err != nil {
 		return err
 	}
-	tmp := s.path() + ".tmp"
+	tmp := s.Path() + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.path())
+	return os.Rename(tmp, s.Path())
 }
 
 // Import adds the per-installation baselines in dir (one <installation>.json

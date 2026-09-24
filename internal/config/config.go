@@ -44,6 +44,21 @@ type Config struct {
 	Lanes    []Lane   `yaml:"lanes"`
 	Merge    Merge    `yaml:"merge"`
 	Alerts   Alerts   `yaml:"alerts"`
+	// Supervisor is what `handover --prompt` tells a successor supervisor.
+	Supervisor Supervisor `yaml:"supervisor"`
+}
+
+// Supervisor configures the successor's session prompt: the instructions it
+// follows (a skill or a file, not both) and the scope it supervises.
+type Supervisor struct {
+	// Skill is the name of the skill the successor runs (supervise).
+	Skill string `yaml:"skill"`
+	// Instructions is a file (~/ allowed) whose content opens the prompt
+	// instead.
+	Instructions string `yaml:"instructions"`
+	// Scope says what the supervisor watches, in a sentence or two; empty,
+	// the prompt names the resources, lanes and installations configured.
+	Scope string `yaml:"scope"`
 }
 
 // Lane is a set of repositories whose merges roll the same components of an
@@ -278,10 +293,16 @@ func (c *Config) defaults() error {
 	setDur(&al.Every, 5*time.Minute)
 	setDur(&al.Timeout, time.Minute)
 	setStr(&al.Kubectl, "kubectl")
+	if rest, ok := strings.CutPrefix(c.Supervisor.Instructions, "~/"); ok {
+		c.Supervisor.Instructions = filepath.Join(home, rest)
+	}
 	return nil
 }
 
 func (c *Config) validate() error {
+	if c.Supervisor.Skill != "" && c.Supervisor.Instructions != "" {
+		return errors.New("supervisor: set skill or instructions, not both")
+	}
 	for i, in := range c.Alerts.Installations {
 		if in.Name == "" {
 			return fmt.Errorf("alerts.installations[%d]: an installation needs a name", i)

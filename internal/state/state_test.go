@@ -1,7 +1,10 @@
 package state
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"testing"
@@ -86,5 +89,50 @@ func TestHoldExcepts(t *testing.T) {
 	h.Except = "giantswarm/devctl"
 	if !h.Excepts("giantswarm/devctl", 3) || h.Excepts("giantswarm/marge", 3) || (Hold{}).Excepts("giantswarm/devctl", 3) {
 		t.Error("a repository exception")
+	}
+}
+
+func TestUpdateKeepsFieldsItDoesNotKnow(t *testing.T) {
+	dir := t.TempDir()
+	newer := `{"nextNote":2,"relay":{"to":"Supervisor run 12"},"shift":"4h"}`
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(newer), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Update(func(st *State) ([]Event, error) { st.NextNote++; return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Clean(filepath.Join(dir, "state.json")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["nextNote"] != 3.0 || got["shift"] != "4h" || got["relay"].(map[string]any)["to"] != "Supervisor run 12" {
+		t.Errorf("state.json = %s", raw)
+	}
+}
+
+func TestDue(t *testing.T) {
+	now := time.Date(2026, 9, 25, 2, 0, 0, 0, time.UTC)
+	cases := []struct {
+		due, fired time.Time
+		want       bool
+	}{
+		{time.Time{}, time.Time{}, false},
+		{now.Add(time.Minute), time.Time{}, false},
+		{now, time.Time{}, true},
+		{now.Add(-time.Hour), time.Time{}, true},
+		{now.Add(-time.Hour), now.Add(-time.Minute), false}, // reported once
+	}
+	for _, c := range cases {
+		if got := Due(c.due, c.fired, now); got != c.want {
+			t.Errorf("Due(%v, %v) = %v", c.due, c.fired, got)
+		}
 	}
 }

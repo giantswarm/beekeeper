@@ -1,7 +1,7 @@
 // Package state is beekeeper's shared memory on the machine: the supervisor,
-// grants, holds, registered agents and notes, one JSON document read and
-// rewritten under an exclusive file lock, plus an append-only event log of
-// every change. It outlives any session: a restarted supervisor or its
+// grants, holds, registered agents, notes, timers and session records, one
+// JSON document read and rewritten under an exclusive file lock, plus an
+// append-only event log of every change. It outlives any session: a restarted supervisor or its
 // successor reads what the previous one knew instead of rebuilding it from
 // prose.
 package state
@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -102,8 +103,41 @@ type Note struct {
 	For  string    `json:"for,omitempty"`
 	Text string    `json:"text"`
 	Due  time.Time `json:"due,omitzero"`
+	// Default is what happens when nobody answers by Due.
+	Default string    `json:"default,omitempty"`
+	By      Party     `json:"by"`
+	At      time.Time `json:"at"`
+	// Fired is when a watch reported the note due; it reports it once.
+	Fired time.Time `json:"fired,omitzero"`
+}
+
+// Timer is a point in time the supervisor has to look at something ("check
+// the rollout after 22:55").
+type Timer struct {
+	ID   int       `json:"id"`
+	Due  time.Time `json:"due"`
+	What string    `json:"what"`
 	By   Party     `json:"by"`
 	At   time.Time `json:"at"`
+	// Fired is when a watch reported the timer; it reports it once.
+	Fired time.Time `json:"fired,omitzero"`
+}
+
+// Due reports whether a watch has yet to report something due by now.
+func Due(due, fired, now time.Time) bool {
+	return !due.IsZero() && !due.After(now) && fired.IsZero()
+}
+
+// Record is what a session serves: the issue or epic (owner/repo#n) and
+// what it waits on. Any session can have one, registered agent or not.
+type Record struct {
+	Session Party     `json:"session"`
+	Issue   string    `json:"issue"`
+	Waits   string    `json:"waits,omitempty"`
+	By      Party     `json:"by"`
+	At      time.Time `json:"at"`
+	// Ended is when a watch saw the session's CLI gone; it reports it once.
+	Ended time.Time `json:"ended,omitzero"`
 }
 
 // State is the whole document.
@@ -113,11 +147,15 @@ type State struct {
 	Grants []Grant `json:"grants,omitempty"`
 	// Released is when each resource was last released; a grant's TTL runs
 	// from the later of it and the grant.
-	Released map[string]time.Time `json:"released,omitempty"`
-	Holds    []Hold               `json:"holds,omitempty"`
-	Agents   []Agent              `json:"agents,omitempty"`
-	Notes    []Note               `json:"notes,omitempty"`
-	NextNote int                  `json:"nextNote,omitempty"`
+	Released  map[string]time.Time `json:"released,omitempty"`
+	Holds     []Hold               `json:"holds,omitempty"`
+	Agents    []Agent              `json:"agents,omitempty"`
+	Notes     []Note               `json:"notes,omitempty"`
+	NextNote  int                  `json:"nextNote,omitempty"`
+	Timers    []Timer              `json:"timers,omitempty"`
+	NextTimer int                  `json:"nextTimer,omitempty"`
+	// Records say which session serves which issue.
+	Records []Record `json:"records,omitempty"`
 	// BudgetETag makes the budget probe a conditional request (a 304
 	// costs no budget).
 	BudgetETag string `json:"budgetETag,omitempty"`
@@ -126,6 +164,63 @@ type State struct {
 	// Merges are the wrapped devctl pr merge runs, per lane: waiting in join
 	// order, running, and settling until the lane's installation rolled them.
 	Merges []Merge `json:"merges,omitempty"`
+
+	// unknown are the fields a newer beekeeper wrote: an older binary still
+	// running (a watch, a gated merge) writes them back unchanged instead of
+	// dropping the newer one's state.
+	unknown map[string]json.RawMessage
+}
+
+// plainState is State without its JSON methods.
+type plainState State
+
+// knownKeys are the JSON names of State's fields.
+var knownKeys = func() map[string]bool {
+	out := map[string]bool{}
+	t := reflect.TypeFor[plainState]()
+	for i := range t.NumField() {
+		if name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ","); name != "" && name != "-" {
+			out[name] = true
+		}
+	}
+	return out
+}()
+
+// UnmarshalJSON decodes the state and keeps the fields it does not know.
+func (s *State) UnmarshalJSON(raw []byte) error {
+	if err := json.Unmarshal(raw, (*plainState)(s)); err != nil {
+		return err
+	}
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &all); err != nil {
+		return err
+	}
+	for k := range all {
+		if knownKeys[k] {
+			delete(all, k)
+		}
+	}
+	s.unknown = nil
+	if len(all) > 0 {
+		s.unknown = all
+	}
+	return nil
+}
+
+// MarshalJSON encodes the state with the fields it did not know.
+func (s State) MarshalJSON() ([]byte, error) {
+	raw, err := json.Marshal(plainState(s))
+	if err != nil || len(s.unknown) == 0 {
+		return raw, err
+	}
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &all); err != nil {
+		return nil, err
+	}
+	for k, v := range s.unknown {
+		all[k] = v
+	}
+	return json.Marshal(all)
 }
 
 // Budget is one reading of the GitHub core budget.

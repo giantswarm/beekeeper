@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -19,6 +20,8 @@ type sessionView struct {
 	Work   claude.Work `json:"work"`
 	Role   string      `json:"role,omitempty"`
 	Leases []string    `json:"leases,omitempty"`
+	// Serves is the session's record: the issue it serves, what it waits on.
+	Serves *state.Record `json:"serves,omitempty"`
 }
 
 // view is everything the session-level commands show.
@@ -67,6 +70,9 @@ func (a *app) collect(withWork bool) (*view, error) {
 			work[s.PID] = sv.Work
 		}
 		sv.Role = roleOf(st, s)
+		if i := slices.IndexFunc(st.Records, func(r state.Record) bool { return r.Session.Is(s.Party()) }); i >= 0 {
+			sv.Serves = &st.Records[i]
+		}
 		for _, h := range holders {
 			if h.Party().Is(s.Party()) {
 				sv.Leases = append(sv.Leases, h.Env)
@@ -113,7 +119,10 @@ bounded sleep with the time left), its memory, and its role and leases.
 
 Overlaps name the issues, pull requests and repositories more than one
 session is on now. --all adds the sessions of the last 24 hours that run no
-CLI (paused or closed, not archived): a message to them does not arrive.`,
+CLI (paused or closed, not archived): a message to them does not arrive.
+
+The session records (sessions serve) follow the table: which session serves
+which issue and what it waits on, and the records whose session has ended.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			v, err := a.collect(true)
@@ -127,10 +136,15 @@ CLI (paused or closed, not archived): a message to them does not arrive.`,
 			if a.json {
 				return a.printJSON(struct {
 					*view
-					Paused []*claude.Record `json:"paused,omitempty"`
-				}{v, paused})
+					Records []state.Record   `json:"records,omitempty"`
+					Paused  []*claude.Record `json:"paused,omitempty"`
+				}{v, v.st.Records, paused})
 			}
 			a.printSessions(v)
+			if len(v.st.Records) > 0 {
+				_, _ = fmt.Fprintf(a.out, "\nSession records:\n")
+				a.printRecords(v.st.Records, v.raw)
+			}
 			if len(paused) > 0 {
 				_, _ = fmt.Fprintf(a.out, "\nNot running (paused or closed):\n")
 				w := a.table()
@@ -144,7 +158,123 @@ CLI (paused or closed, not archived): a message to them does not arrive.`,
 		},
 	}
 	c.Flags().BoolVar(&all, "all", false, "also list the sessions of the last 24 hours that run no CLI")
+	c.AddCommand(a.serveCmd(), a.unserveCmd())
 	return c
+}
+
+// issueRef is an issue or pull request, owner/repo#n.
+var issueRef = regexp.MustCompile(`^[\w.-]+/[\w.-]+#[0-9]+$`)
+
+func (a *app) serveCmd() *cobra.Command {
+	var waits string
+	c := &cobra.Command{
+		Use:   "serve <session> <owner/repo#n>",
+		Short: "Record the issue or epic a session serves and what it waits on",
+		Long: `Record, for any running session (a registered agent or not), the issue or
+epic it serves and what it waits on. A new record replaces the session's
+last one. sessions and the hand-over show it, and beekeeper watch prints one
+line when the session ends, naming the issue to re-query. The session is a
+name, a unique part of one, a session id or a PID.`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(_ *cobra.Command, args []string) error {
+			if !issueRef.MatchString(args[1]) {
+				return usageErr("%q is not an issue: owner/repo#n", args[1])
+			}
+			me, err := a.caller()
+			if err != nil {
+				return err
+			}
+			sessions, _, err := a.sessions()
+			if err != nil {
+				return err
+			}
+			s, err := claude.Resolve(sessions, args[0])
+			if err != nil {
+				return refused("%v", err)
+			}
+			r := state.Record{Session: s.Party(), Issue: args[1], Waits: strings.Join(strings.Fields(waits), " "), By: me, At: a.now.UTC()}
+			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Records = slices.DeleteFunc(st.Records, func(o state.Record) bool { return o.Session.Is(r.Session) })
+				st.Records = append(st.Records, r)
+				return []state.Event{event(me, "session.serve", "%s: %s", s.Name, recordText(r))}, nil
+			})
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(a.out, "%q %s\n", s.Name, recordText(r))
+			return err
+		},
+	}
+	c.Flags().StringVar(&waits, "waits", "", "what the session waits on")
+	return c
+}
+
+func (a *app) unserveCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "unserve <session>",
+		Short: "Remove a session's record: its work is done or handed on",
+		Long: `Remove a session's record, running or ended. The session is a name, a
+unique part of one or a session id.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			me, err := a.caller()
+			if err != nil {
+				return err
+			}
+			var r state.Record
+			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+				parties := make([]state.Party, len(st.Records))
+				for i, r := range st.Records {
+					parties[i] = r.Session
+				}
+				i, err := findParty(parties, args[0], "session record", "session records")
+				if err != nil {
+					return nil, err
+				}
+				r = st.Records[i]
+				st.Records = slices.Delete(st.Records, i, i+1)
+				return []state.Event{event(me, "session.unserve", "%s: %s", r.Session.Name, recordText(r))}, nil
+			})
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(a.out, "removed the record of %q\n", r.Session.Name)
+			return err
+		},
+	}
+}
+
+// recordText says what a record's session serves.
+func recordText(r state.Record) string {
+	s := "serves " + r.Issue
+	if r.Waits != "" {
+		s += ", waiting on " + r.Waits
+	}
+	return s
+}
+
+// printRecords lists the session records: the running sessions' first,
+// then those whose session has ended.
+func (a *app) printRecords(records []state.Record, sessions []*claude.Session) {
+	if len(records) == 0 {
+		_, _ = fmt.Fprintln(a.out, "no session records")
+		return
+	}
+	var ended []string
+	for _, r := range records {
+		if _, live := claude.Live(sessions, r.Session); live && r.Ended.IsZero() {
+			_, _ = fmt.Fprintf(a.out, "- %q %s\n", r.Session.Name, recordText(r))
+			continue
+		}
+		when := "has ended"
+		if !r.Ended.IsZero() {
+			when = "ended at " + clock(a.now, r.Ended)
+		}
+		ended = append(ended, fmt.Sprintf("- %q %s: it %s; re-query %s", r.Session.Name, when, recordText(r), r.Issue))
+	}
+	for _, l := range ended {
+		_, _ = fmt.Fprintln(a.out, l)
+	}
 }
 
 func (a *app) paused(running []*claude.Session) []*claude.Record {
