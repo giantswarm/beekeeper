@@ -1,0 +1,245 @@
+// Package config loads beekeeper's machine configuration: where its state
+// lives, which shared resources sessions lease, the GitHub budget floor and
+// the thresholds of the machine watch.
+//
+// The file is $XDG_CONFIG_HOME/beekeeper/config.yaml (or --config, or
+// $BEEKEEPER_CONFIG). Every field is optional; a missing file is the
+// defaults. The defaults are the numbers proven on an 86 GiB workstation
+// running a Claude Desktop scope capped at 48 GiB: tune them to the machine.
+package config
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+// Browser is the resource every machine has: the one Chrome the Claude in
+// Chrome extension drives.
+const Browser = "browser"
+
+// Config is the parsed configuration with the defaults applied.
+type Config struct {
+	// StateDir holds state.json, events.jsonl and the last snapshot.
+	StateDir string `yaml:"stateDir"`
+	// LeaseDir holds one directory per held lease (mkdir is the lock).
+	LeaseDir string `yaml:"leaseDir"`
+	// Resources are the environments sessions lease besides the browser:
+	// kind labs and shared installations.
+	Resources []string `yaml:"resources"`
+	// GrantTTL is how long a grant stays claimable once its resource is free.
+	GrantTTL Duration `yaml:"grantTTL"`
+
+	GitHub   GitHub   `yaml:"github"`
+	Watch    Watch    `yaml:"watch"`
+	Overlaps Overlaps `yaml:"overlaps"`
+	Claude   Claude   `yaml:"claude"`
+	Memcap   Memcap   `yaml:"memcap"`
+	Checks   []Check  `yaml:"checks"`
+}
+
+// Check is an external command for what beekeeper does not read itself (the
+// alerts of the installations the sessions work on): watch runs Watch every
+// Every and relays each line it prints as an event; snapshot adds the output
+// of Snapshot as a section.
+type Check struct {
+	Name     string   `yaml:"name"`
+	Watch    []string `yaml:"watch"`
+	Snapshot []string `yaml:"snapshot"`
+	Every    Duration `yaml:"every"`
+	Timeout  Duration `yaml:"timeout"`
+}
+
+// GitHub configures the budget reading.
+type GitHub struct {
+	// Floor is the remaining core budget under which GitHub work stops.
+	Floor int `yaml:"floor"`
+	// ProbeRepo is the repository whose conditional GET reads the budget
+	// headers; any repository the token can read.
+	ProbeRepo string `yaml:"probeRepo"`
+}
+
+// Overlaps tunes which sessions count as working on the same thing.
+type Overlaps struct {
+	// Ignore lists repositories whose issues and name form no overlap:
+	// issue trackers and notebooks every session writes to.
+	Ignore []string `yaml:"ignore"`
+	// ActiveWithin leaves out sessions idle for longer.
+	ActiveWithin Duration `yaml:"activeWithin"`
+}
+
+// Watch holds the thresholds of `beekeeper watch` (MiB unless noted).
+type Watch struct {
+	Interval        Duration `yaml:"interval"`
+	Repeat          Duration `yaml:"repeat"`
+	BudgetEvery     Duration `yaml:"budgetEvery"`
+	AvailMinMiB     int      `yaml:"availMinMiB"`
+	SwapMaxMiB      int      `yaml:"swapMaxMiB"`
+	ScopeAnonMaxMiB int      `yaml:"scopeAnonMaxMiB"`
+	ScopeMaxMiB     int      `yaml:"scopeMaxMiB"`
+	LoadMax         float64  `yaml:"loadMax"`
+	PSIMax          float64  `yaml:"psiMax"`
+	TmpMaxMiB       int      `yaml:"tmpMaxMiB"`
+	DiskMinMiB      int      `yaml:"diskMinMiB"`
+}
+
+// Claude locates what Claude Code and the desktop app keep on disk.
+type Claude struct {
+	ProjectsDir string `yaml:"projectsDir"`
+	DesktopDir  string `yaml:"desktopDir"`
+}
+
+// Memcap locates the build slots of the memcap wrapper.
+type Memcap struct {
+	SlotDir string `yaml:"slotDir"`
+	Slots   int    `yaml:"slots"`
+}
+
+// Duration is a time.Duration written as "30s", "10m" in YAML.
+type Duration struct{ time.Duration }
+
+// UnmarshalYAML parses a Go duration string.
+func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
+	var s string
+	if err := n.Decode(&s); err != nil {
+		return err
+	}
+	v, err := time.ParseDuration(s)
+	if err != nil {
+		return fmt.Errorf("line %d: %w", n.Line, err)
+	}
+	d.Duration = v
+	return nil
+}
+
+// Path returns the configuration file beekeeper reads.
+func Path(flag string) (string, error) {
+	if flag != "" {
+		return flag, nil
+	}
+	if env := os.Getenv("BEEKEEPER_CONFIG"); env != "" {
+		return env, nil
+	}
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "beekeeper", "config.yaml"), nil
+}
+
+// Load reads the file at path and applies the defaults.
+func Load(path string) (*Config, error) {
+	c := &Config{}
+	raw, err := os.ReadFile(filepath.Clean(path))
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+	case err != nil:
+		return nil, err
+	default:
+		if err := yaml.Unmarshal(raw, c); err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+	}
+	if err := c.defaults(); err != nil {
+		return nil, err
+	}
+	return c, c.validate()
+}
+
+func (c *Config) defaults() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	state := os.Getenv("XDG_STATE_HOME")
+	if state == "" {
+		state = filepath.Join(home, ".local", "state")
+	}
+	setStr(&c.StateDir, filepath.Join(state, "beekeeper"))
+	setStr(&c.LeaseDir, filepath.Join(c.StateDir, "leases"))
+	setDur(&c.GrantTTL, 30*time.Minute)
+
+	setDur(&c.Overlaps.ActiveWithin, time.Hour)
+
+	setInt(&c.GitHub.Floor, 2500)
+	setStr(&c.GitHub.ProbeRepo, "giantswarm/devctl")
+
+	w := &c.Watch
+	setDur(&w.Interval, 30*time.Second)
+	setDur(&w.Repeat, 10*time.Minute)
+	setDur(&w.BudgetEvery, 5*time.Minute)
+	setInt(&w.AvailMinMiB, 10240)
+	setInt(&w.SwapMaxMiB, 10000)
+	setInt(&w.ScopeAnonMaxMiB, 28000)
+	setInt(&w.ScopeMaxMiB, 45000)
+	if w.LoadMax == 0 {
+		w.LoadMax = 45
+	}
+	if w.PSIMax == 0 {
+		w.PSIMax = 10
+	}
+	setInt(&w.TmpMaxMiB, 20000)
+	setInt(&w.DiskMinMiB, 102400)
+
+	setStr(&c.Claude.ProjectsDir, filepath.Join(home, ".claude", "projects"))
+	cfg, err := os.UserConfigDir()
+	if err != nil {
+		return err
+	}
+	setStr(&c.Claude.DesktopDir, filepath.Join(cfg, "Claude", "claude-code-sessions"))
+
+	setStr(&c.Memcap.SlotDir, filepath.Join(state, "memcap", "slots"))
+	setInt(&c.Memcap.Slots, 2)
+	for i := range c.Checks {
+		setDur(&c.Checks[i].Every, 5*time.Minute)
+		setDur(&c.Checks[i].Timeout, 4*time.Minute)
+	}
+	return nil
+}
+
+func (c *Config) validate() error {
+	for i, ch := range c.Checks {
+		if ch.Name == "" || (len(ch.Watch) == 0 && len(ch.Snapshot) == 0) {
+			return fmt.Errorf("checks[%d]: a check needs a name and a watch or snapshot command", i)
+		}
+	}
+	for _, r := range c.Resources {
+		if r == "" || r == Browser || filepath.Base(r) != r || r[0] == '.' {
+			return fmt.Errorf("resources: %q is not a valid resource name", r)
+		}
+	}
+	return nil
+}
+
+// Leasable returns every resource a session can lease, the browser last.
+func (c *Config) Leasable() []string {
+	return append(slices.Clone(c.Resources), Browser)
+}
+
+// IsLeasable reports whether name is a configured resource or the browser.
+func (c *Config) IsLeasable(name string) bool {
+	return slices.Contains(c.Leasable(), name)
+}
+
+func setStr(p *string, v string) {
+	if *p == "" {
+		*p = v
+	}
+}
+
+func setInt(p *int, v int) {
+	if *p == 0 {
+		*p = v
+	}
+}
+
+func setDur(p *Duration, v time.Duration) {
+	if p.Duration == 0 {
+		p.Duration = v
+	}
+}
