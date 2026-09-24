@@ -57,7 +57,7 @@ BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper lanes
 | `internal/github` | The budget from rate-limit headers. |
 | `internal/lease` | Lease directories and the grant rule. |
 | `internal/state` | The shared state document and the event log, under a file lock. |
-| `internal/check` | External commands configured as checks. |
+| `internal/alerts` | The installations' alerts: bounded `kubectl port-forward`s in their own process group, the Alertmanager reading, the NEW/RESOLVED lines and the grouped snapshot (pure, tested against Alertmanager-shaped fixtures and a fake `kubectl`), and the baseline with its single owner. |
 | `internal/guard` | The build guard: a capped run in a build slot, and the PreToolUse hook's rewrite and third-lab refusal. |
 | `internal/free` | What can be freed (dead sessions' dirs, throwaway temp dirs, orphaned workers) and what is only reported, as a report or the front end's TSV. |
 | `internal/update` | The latest release, its signature check and the one-rename install. |

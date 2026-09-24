@@ -16,11 +16,11 @@ func (a *app) handoverCmd() *cobra.Command {
 		Short: "Everything the next supervisor needs, from the live state",
 		Long: `Print the hand-over as Markdown: the supervisor, the running sessions and
 what each is on, overlaps, leases and grant queues, holds, registered
-agents, open notes and the latest events. Everything comes from the live
+agents, open notes, what the alert watch reads and the latest events. Everything comes from the live
 state and the machine, so a successor (or the same supervisor after a
 restart) reads it instead of a prose brief.`,
 		Args: cobra.NoArgs,
-		RunE: func(*cobra.Command, []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			v, err := a.collect(true)
 			if err != nil {
 				return err
@@ -35,6 +35,10 @@ restart) reads it instead of a prose brief.`,
 			}
 			agents := a.agentViews(v.st, v.raw)
 			holds := a.activeHolds(v.st)
+			al, err := a.alertsHandover(cmd.Context())
+			if err != nil {
+				return err
+			}
 			if a.json {
 				return a.printJSON(struct {
 					*view
@@ -43,8 +47,9 @@ restart) reads it instead of a prose brief.`,
 					Lanes  []laneView    `json:"lanes"`
 					Agents []agentView   `json:"agents"`
 					Notes  []state.Note  `json:"notes"`
+					Alerts *alertsView   `json:"alerts"`
 					Events []state.Event `json:"events"`
-				}{v, l, holds, a.laneViews(v.st), agents, v.st.Notes, evs})
+				}{v, l, holds, a.laneViews(v.st), agents, v.st.Notes, al, evs})
 			}
 			p := func(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format+"\n", args...) }
 			p("# Hand-over, %s (%s UTC)\n", a.now.Format("2006-01-02 15:04 MST"), a.now.UTC().Format("15:04"))
@@ -68,6 +73,8 @@ restart) reads it instead of a prose brief.`,
 			a.printAgents(agents)
 			p("\n## Open notes\n")
 			a.printNotes(v.st.Notes)
+			p("\n## Alerts\n")
+			a.printAlerts(al)
 			if len(evs) > 0 {
 				p("\n## Latest events\n")
 				for _, e := range evs {

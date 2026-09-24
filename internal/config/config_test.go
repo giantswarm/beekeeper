@@ -28,9 +28,9 @@ func TestLoadFile(t *testing.T) {
 grantTTL: 10m
 github: {floor: 3000}
 watch: {interval: 1m}
-checks:
-  - name: alerts
-    watch: [python3, alerts.py, watch]
+alerts:
+  installations: [alpha, {name: beta, context: admin@beta}]
+  team: bumblebee
 `
 	if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
@@ -40,8 +40,16 @@ checks:
 		t.Fatal(err)
 	}
 	if !c.IsLeasable("staging") || c.GrantTTL.Duration != 10*time.Minute || c.GitHub.Floor != 3000 ||
-		c.Watch.Interval.Duration != time.Minute || c.Checks[0].Every.Duration != 5*time.Minute {
+		c.Watch.Interval.Duration != time.Minute {
 		t.Errorf("config = %+v", c)
+	}
+	al := c.Alerts
+	if len(al.Installations) != 2 || al.Installations[0] != (Installation{Name: "alpha"}) ||
+		al.Installations[1] != (Installation{Name: "beta", Context: "admin@beta"}) {
+		t.Errorf("installations = %+v", al.Installations)
+	}
+	if len(al.Ignore) != 3 || al.Collapse != 3 || al.Every.Duration != 5*time.Minute || al.Timeout.Duration != time.Minute {
+		t.Errorf("alerts defaults = %+v", al)
 	}
 }
 
@@ -49,7 +57,7 @@ func TestLoadRejects(t *testing.T) {
 	for name, raw := range map[string]string{
 		"browser as resource": "resources: [browser]",
 		"path as resource":    "resources: [../x]",
-		"check without cmd":   "checks: [{name: x}]",
+		"nameless install":    "alerts: {installations: [{context: x}]}",
 		"bad duration":        "grantTTL: soon",
 	} {
 		p := filepath.Join(t.TempDir(), "c.yaml")

@@ -12,7 +12,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/giantswarm/beekeeper/internal/check"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/lease"
@@ -43,14 +42,7 @@ type snapshot struct {
 	Holds       []state.Hold      `json:"holds,omitempty"`
 	Budget      *github.Budget    `json:"budget,omitempty"`
 	BudgetErr   string            `json:"budgetError,omitempty"`
-	Checks      []checkOutput     `json:"checks,omitempty"`
-}
-
-// checkOutput is a configured check's snapshot section.
-type checkOutput struct {
-	Name   string `json:"name"`
-	Output string `json:"output"`
-	Error  string `json:"error,omitempty"`
+	Alerts      []string          `json:"alerts,omitempty"`
 }
 
 // wait is a long-running command a session sits on: a devctl wait or merge,
@@ -70,7 +62,7 @@ type oomKill struct {
 
 func (a *app) snapshotCmd() *cobra.Command {
 	var since string
-	var changes, noBudget, noChecks bool
+	var changes, noBudget, noAlerts bool
 	c := &cobra.Command{
 		Use:   "snapshot",
 		Short: "One tick: the machine, its sessions and what changed since your last snapshot",
@@ -80,7 +72,7 @@ memory.current is mostly reclaimable cache), tmpfs and disk, build slots,
 kind clusters, the commands sessions sit on (with their owner), the kernel
 OOM kills since your last snapshot (every one counted, attributed to a
 memcap scope, a kind lab or the desktop scope), leases, holds and the GitHub
-budget, and each configured check's snapshot section.
+budget, and the installations' alerts, grouped (beekeeper alerts snapshot).
 
 Each caller's last snapshot is kept; the next one ends with what changed
 since. --changes prints only that: the quiet tick.`,
@@ -107,7 +99,7 @@ since. --changes prints only that: the quiet tick.`,
 				}
 				oomSince = t
 			}
-			s, err := a.takeSnapshot(cmd.Context(), oomSince, !noBudget, !noChecks && !changes)
+			s, err := a.takeSnapshot(cmd.Context(), oomSince, !noBudget, !noAlerts && !changes)
 			if err != nil {
 				return err
 			}
@@ -143,7 +135,7 @@ since. --changes prints only that: the quiet tick.`,
 	c.Flags().StringVar(&since, "since", "", "count OOM kills since this time (15:04) or duration (2h) instead of your last snapshot")
 	c.Flags().BoolVar(&changes, "changes", false, "print only what changed since your last snapshot")
 	c.Flags().BoolVar(&noBudget, "no-budget", false, "skip the GitHub budget probe")
-	c.Flags().BoolVar(&noChecks, "no-checks", false, "skip the configured checks' snapshot commands")
+	c.Flags().BoolVar(&noAlerts, "no-alerts", false, "skip reading the installations' alerts")
 	return c
 }
 
@@ -175,7 +167,7 @@ func sinceTime(now time.Time, s string) (time.Time, error) {
 	return t, nil
 }
 
-func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, withChecks bool) (*snapshot, error) {
+func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, withAlerts bool) (*snapshot, error) {
 	s := &snapshot{At: a.now.UTC(), OOMSince: oomSince.UTC()}
 	var err error
 	if s.Mem, err = machine.ReadMem(); err != nil {
@@ -231,18 +223,8 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 			s.Budget = &b
 		}
 	}
-	if withChecks {
-		for _, c := range a.cfg.Checks {
-			if len(c.Snapshot) == 0 {
-				continue
-			}
-			out, err := check.Snapshot(ctx, c)
-			co := checkOutput{Name: c.Name, Output: out}
-			if err != nil {
-				co.Error = err.Error()
-			}
-			s.Checks = append(s.Checks, co)
-		}
+	if withAlerts {
+		s.Alerts = a.alertSnapshot(ctx)
 	}
 	return s, nil
 }
@@ -410,14 +392,9 @@ func (a *app) printSnapshot(s *snapshot) {
 	case s.BudgetErr != "":
 		p("GitHub: budget unknown (%s)", truncate(s.BudgetErr, 80))
 	}
-	for _, c := range s.Checks {
-		p("== %s", c.Name)
-		if c.Output != "" {
-			p("%s", c.Output)
-		}
-		if c.Error != "" {
-			p("(%s failed: %s)", c.Name, truncate(c.Error, 120))
-		}
+	if len(s.Alerts) > 0 {
+		p("== alerts")
+		p("%s", strings.Join(s.Alerts, "\n"))
 	}
 }
 
