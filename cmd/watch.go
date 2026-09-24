@@ -13,7 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/giantswarm/beekeeper/internal/check"
+	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/machine"
@@ -33,9 +33,9 @@ Threshold breaches (RAM, swap, desktop scope, load, memory pressure, tmpfs,
 disk, the GitHub budget) repeat at most every watch.repeat (10m) per kind.
 OOM kills are never folded away: every poll reports every kill since the
 last one, grouped by whose limit they hit. Sessions that start, end or
-restart are reported, and so is a lease whose holder is gone. Every
-configured check's watch command runs every check.every and its lines are
-passed on as they are.
+restart are reported, and so is a lease whose holder is gone. The
+installations' alerts are read every alerts.every and each NEW or RESOLVED
+one is a line (beekeeper alerts watch); only one watch at a time reads them.
 
 Runs until killed. --once polls once and exits.`,
 		Args: cobra.NoArgs,
@@ -71,18 +71,7 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 	}
 	var wg sync.WaitGroup
 	if !once {
-		for _, c := range w.cfg.Checks {
-			if len(c.Watch) == 0 {
-				continue
-			}
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				check.Watch(ctx, c,
-					func(line string) { w.emitLine(line) },
-					func(err error) { w.emit("check-"+c.Name, "CHECK %s failed: %v", c.Name, err) })
-			}()
-		}
+		wg.Go(func() { w.watchAlerts(ctx) })
 	}
 	defer wg.Wait()
 	tick := time.NewTicker(w.cfg.Watch.Interval.Duration)
@@ -96,6 +85,41 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 		case <-ctx.Done():
 			return nil
 		case <-tick.C:
+		}
+	}
+}
+
+// watchAlerts reads the alerts every alerts.every while this watch owns the
+// baseline; another watch that owns it is said once, and this one takes over
+// when it ends.
+func (w *watcher) watchAlerts(ctx context.Context) {
+	store := alerts.NewStore(w.cfg.StateDir)
+	defer func() { _ = store.Release() }()
+	other := 0
+	for {
+		start := time.Now()
+		owned, owner, err := store.Own()
+		switch {
+		case err != nil:
+			w.emit("alerts", "ALERTS baseline unusable: %v", err)
+		case !owned:
+			if owner.PID != other {
+				other = owner.PID
+				w.emitNow("alerts", "ALERTS read by the watch with pid %d; this one takes over when it ends", other)
+			}
+		default:
+			if other != 0 {
+				other = 0
+				w.emitNow("alerts", "ALERTS taken over by this watch")
+			}
+			for _, l := range w.alertCycle(ctx, store) {
+				w.emitNow("alerts", "%s", l)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(max(time.Until(start.Add(w.cfg.Alerts.Every.Duration)), 0)):
 		}
 	}
 }
@@ -118,7 +142,7 @@ func (w *watcher) emitNow(_ string, format string, args ...any) {
 	w.emitLine(time.Now().Format("15:04:05") + " " + fmt.Sprintf(format, args...))
 }
 
-// emitLine prints one complete line; checks print their own.
+// emitLine prints one complete line.
 func (w *watcher) emitLine(line string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -179,6 +203,7 @@ func (w *watcher) poll(ctx context.Context) {
 		w.lastBudget = w.now
 		b, err := w.probeBudget(ctx)
 		switch {
+		case err != nil && ctx.Err() != nil:
 		case err != nil:
 			w.emit("budget-error", "GitHub budget unknown: %v", err)
 		case b.Remaining < w.cfg.GitHub.Floor:
@@ -197,6 +222,9 @@ func (w *watcher) kills(ctx context.Context, since time.Time, sessions []*claude
 	defer cancel()
 	kills, err := machine.OOMKills(ctx, since.Add(-2*time.Second))
 	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
 		w.emit("journal", "cannot read the kernel journal: %v", err)
 		return
 	}

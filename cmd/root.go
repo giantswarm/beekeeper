@@ -118,7 +118,7 @@ Exit codes: 0 done, 1 error, 2 usage, 3 refused, 125 a newer release
 		&cobra.Group{ID: "supervising", Title: "Supervising:"},
 		&cobra.Group{ID: "guarding", Title: "Guarding:"},
 	)
-	for _, c := range []*cobra.Command{a.sessionsCmd(), a.tailCmd(), a.snapshotCmd(), a.watchCmd(), a.budgetCmd()} {
+	for _, c := range []*cobra.Command{a.sessionsCmd(), a.tailCmd(), a.snapshotCmd(), a.watchCmd(), a.alertsCmd(), a.budgetCmd()} {
 		c.GroupID = "watching"
 		root.AddCommand(c)
 	}

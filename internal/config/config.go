@@ -1,6 +1,6 @@
 // Package config loads beekeeper's machine configuration: where its state
-// lives, which shared resources sessions lease, the GitHub budget floor and
-// the thresholds of the machine watch.
+// lives, which shared resources sessions lease, the GitHub budget floor, the
+// thresholds of the machine watch and which installations' alerts it reads.
 //
 // The file is $XDG_CONFIG_HOME/beekeeper/config.yaml (or --config, or
 // $BEEKEEPER_CONFIG). Every field is optional; a missing file is the
@@ -40,20 +40,52 @@ type Config struct {
 	Overlaps Overlaps `yaml:"overlaps"`
 	Claude   Claude   `yaml:"claude"`
 	Memcap   Memcap   `yaml:"memcap"`
-	Checks   []Check  `yaml:"checks"`
+	Alerts   Alerts   `yaml:"alerts"`
 }
 
-// Check is an external command for what beekeeper does not read itself (the
-// alerts of the installations the sessions work on): watch runs Watch every
-// Every and relays each line it prints as an event; snapshot adds the output
-// of Snapshot as a section.
-type Check struct {
-	Name     string   `yaml:"name"`
-	Watch    []string `yaml:"watch"`
-	Snapshot []string `yaml:"snapshot"`
-	Every    Duration `yaml:"every"`
-	Timeout  Duration `yaml:"timeout"`
+// Alerts configures the reading of the installations' Alertmanagers: watch
+// reads them every Every and prints NEW and RESOLVED lines, snapshot adds
+// the current set as a section.
+type Alerts struct {
+	// Installations are read always; a held lease whose name resolves to a
+	// kube context is read too.
+	Installations []Installation `yaml:"installations"`
+	// Ignore are alert names that never appear; setting it replaces the
+	// default (Heartbeat, InhibitionOutsideWorkingHours, Watchdog).
+	Ignore []string `yaml:"ignore"`
+	// Team is the team whose alerts are marked in capitals and counted.
+	Team string `yaml:"team"`
+	// Collapse is the number of changes of one alertname in one run above
+	// which they are one line with a count.
+	Collapse int `yaml:"collapse"`
+	// Every is the watch's reading interval.
+	Every Duration `yaml:"every"`
+	// Timeout bounds the reading of one installation, port-forwards included.
+	Timeout Duration `yaml:"timeout"`
+	// Kubectl is the kubectl binary.
+	Kubectl string `yaml:"kubectl"`
 }
+
+// Installation is an installation and, optionally, the kube context that
+// reaches it; written as a name alone or as {name, context}. Without a
+// context it is teleport.giantswarm.io-<name>, else <name>, else the one
+// ending in @<name>.
+type Installation struct {
+	Name    string `yaml:"name"`
+	Context string `yaml:"context"`
+}
+
+// UnmarshalYAML accepts a plain name.
+func (i *Installation) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode {
+		return n.Decode(&i.Name)
+	}
+	type plain Installation
+	return n.Decode((*plain)(i))
+}
+
+// DefaultIgnore are the alerts that always fire or only route others.
+var DefaultIgnore = []string{"Heartbeat", "InhibitionOutsideWorkingHours", "Watchdog"}
 
 // GitHub configures the budget reading.
 type GitHub struct {
@@ -195,17 +227,21 @@ func (c *Config) defaults() error {
 
 	setStr(&c.Memcap.SlotDir, filepath.Join(state, "memcap", "slots"))
 	setInt(&c.Memcap.Slots, 2)
-	for i := range c.Checks {
-		setDur(&c.Checks[i].Every, 5*time.Minute)
-		setDur(&c.Checks[i].Timeout, 4*time.Minute)
+	al := &c.Alerts
+	if al.Ignore == nil {
+		al.Ignore = slices.Clone(DefaultIgnore)
 	}
+	setInt(&al.Collapse, 3)
+	setDur(&al.Every, 5*time.Minute)
+	setDur(&al.Timeout, time.Minute)
+	setStr(&al.Kubectl, "kubectl")
 	return nil
 }
 
 func (c *Config) validate() error {
-	for i, ch := range c.Checks {
-		if ch.Name == "" || (len(ch.Watch) == 0 && len(ch.Snapshot) == 0) {
-			return fmt.Errorf("checks[%d]: a check needs a name and a watch or snapshot command", i)
+	for i, in := range c.Alerts.Installations {
+		if in.Name == "" {
+			return fmt.Errorf("alerts.installations[%d]: an installation needs a name", i)
 		}
 	}
 	for _, r := range c.Resources {
