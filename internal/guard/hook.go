@@ -37,7 +37,12 @@ var (
 	lightMake = regexp.MustCompile(`^\s+(?:-n\b|--dry-run\b|help\b|version\b|clean\b|fmt\b|print-|list\b)`)
 	lab       = regexp.MustCompile(`(?m)` + pos + `(agentlab\s+up\b|kind\s+create\s+cluster\b)`)
 	trivial   = regexp.MustCompile(`^\s*\S+(?:\s+\S+)?\s+(?:--version|-V|--help|-h|help)\s*$`)
-	wrapped   = regexp.MustCompile(`(?:^|[\s;&|(/])(?:memcap|beekeeper\s+run)(?:\s|$)`)
+	// wrapped: the command invokes the wrapper itself, by name or path, at a
+	// command position. A wrapper path merely mentioned (ls …/memcap,
+	// m=$(ls …/memcap), M=…/memcap) is no wrapper, so pos's assignments may
+	// not hold a substitution here.
+	wrapped = regexp.MustCompile(`(?m)(?:^|[;&|(]\s*|\b(?:then|do|else)\s+)(?:(?:timeout\s+\S+|time|nice(?:\s+-n\s*\d+)?|env|command|\w+=[^\s$()]*)\s+)*` +
+		`["']?(?:[^\s=;&|()'"]*/)?(?:memcap|beekeeper["']?\s+run)(?:["']?\s|$)`)
 	kindName  = regexp.MustCompile(`--name[= ]\s*([\w.-]+)`)
 	cdArg     = regexp.MustCompile(`(?:^|[;&|]\s*)cd\s+(\S+)`)
 	clusterRe = regexp.MustCompile(`^\s*clusterName:\s*"?([\w.-]+)"?`)

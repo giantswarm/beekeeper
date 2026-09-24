@@ -53,6 +53,9 @@ func TestPassThrough(t *testing.T) {
 		"/home/u/klaus-lab/scripts/memcap -- zsh -c 'go test ./...'",
 		self + " run -- zsh -c 'go test ./...'",
 		"beekeeper run --max 4G -- go test ./...",
+		"cd ~/src/x && CGO_ENABLED=0 ~/bin/memcap -- go build ./...",
+		`MEMCAP_WAIT=60m "$HOME/.go/bin/beekeeper" run -- zsh -c 'cd x; go test ./...'`,
+		"if [ -x scripts/memcap ]; then scripts/memcap graphify update .; fi",
 		"make help",
 		"make -n build",
 		"echo 'go test ./...'",
@@ -85,7 +88,13 @@ func TestHeavyCommandIsWrappedVerbatim(t *testing.T) {
 	if d.UpdatedInput["description"] != "tests" {
 		t.Errorf("other tool input fields lost: %v", d.UpdatedInput)
 	}
-	for _, c := range []string{"make build", "timeout 600 go vet ./...", "x=$(yarn tsc)", "if true; then golangci-lint run; fi", "FOO=1 npx jest"} {
+	for _, c := range []string{"make build", "timeout 600 go vet ./...", "x=$(yarn tsc)", "if true; then golangci-lint run; fi", "FOO=1 npx jest",
+		// the wrapper mentioned, not invoked: the build still needs a slot
+		"cd ~/d && m=$(ls ~/klaus-lab/scripts/memcap 2>/dev/null); echo $m; go test ./e2e/",
+		"which memcap beekeeper && go vet ./...",
+		// invoked through a variable: wrapped again, the inner run takes no slot
+		`go vet ./... && M=/x/scripts/memcap && "$M" go test ./...`,
+	} {
 		if decide(t, hook(), "/", c, nil) == nil {
 			t.Errorf("%q: want wrapped", c)
 		}
