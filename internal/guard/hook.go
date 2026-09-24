@@ -35,8 +35,10 @@ var (
 	}, "|") + `)`)
 	// lightMake: make targets that build nothing (RE2 has no lookahead).
 	lightMake = regexp.MustCompile(`^\s+(?:-n\b|--dry-run\b|help\b|version\b|clean\b|fmt\b|print-|list\b)`)
-	lab       = regexp.MustCompile(`(?m)` + pos + `(agentlab\s+up\b|kind\s+create\s+cluster\b)`)
-	trivial   = regexp.MustCompile(`^\s*\S+(?:\s+\S+)?\s+(?:--version|-V|--help|-h|help)\s*$`)
+	// merge: devctl pr merge at a command position, the gate goes before it.
+	merge   = regexp.MustCompile(`(?m)` + pos + `(devctl\s+pr\s+merge)\b`)
+	lab     = regexp.MustCompile(`(?m)` + pos + `(agentlab\s+up\b|kind\s+create\s+cluster\b)`)
+	trivial = regexp.MustCompile(`^\s*\S+(?:\s+\S+)?\s+(?:--version|-V|--help|-h|help)\s*$`)
 	// wrapped: the command invokes the wrapper itself, by name or path, at a
 	// command position. A wrapper path merely mentioned (ls …/memcap,
 	// m=$(ls …/memcap), M=…/memcap) is no wrapper, so pos's assignments may
@@ -83,8 +85,13 @@ func (h Hook) Decide(input []byte) []byte {
 		return nil
 	}
 	cmd, _ := ev.ToolInput["command"].(string)
-	if strings.TrimSpace(cmd) == "" || trivial.MatchString(cmd) || wrapped.MatchString(cmd) {
+	if strings.TrimSpace(cmd) == "" || trivial.MatchString(cmd) {
 		return nil
+	}
+	bg, _ := ev.ToolInput["run_in_background"].(bool)
+	cmd, gated := h.gate(cmd, bg)
+	if wrapped.MatchString(cmd) {
+		return h.rewrite(ev.ToolInput, cmd, gated, bg)
 	}
 	cwd := ev.CWD
 	if cwd == "" {
@@ -103,20 +110,42 @@ func (h Hook) Decide(input []byte) []byte {
 	}
 
 	if !isHeavy(cmd) {
-		return nil
-	}
-	bg, _ := ev.ToolInput["run_in_background"].(bool)
-	updated := make(map[string]any, len(ev.ToolInput)+1)
-	for k, v := range ev.ToolInput {
-		updated[k] = v
+		return h.rewrite(ev.ToolInput, cmd, gated, bg)
 	}
 	prefix := ""
 	if bg {
 		prefix = "MEMCAP_WAIT=60m "
 	}
-	updated["command"] = prefix + ShellQuote(h.Self) + " run -- zsh -c " + ShellQuote(cmd)
+	return h.rewrite(ev.ToolInput, prefix+ShellQuote(h.Self)+" run -- zsh -c "+ShellQuote(cmd), true, bg)
+}
+
+// gate puts "beekeeper gate --" before every devctl pr merge at a command
+// position; a background merge waits up to 30 minutes for its turn.
+func (h Hook) gate(cmd string, bg bool) (string, bool) {
+	ms := merge.FindAllStringSubmatchIndex(cmd, -1)
+	gate := ShellQuote(h.Self) + " gate -- "
+	if bg {
+		gate = ShellQuote(h.Self) + " gate --wait 30m -- "
+	}
+	for i := len(ms) - 1; i >= 0; i-- {
+		cmd = cmd[:ms[i][2]] + gate + cmd[ms[i][2]:]
+	}
+	return cmd, len(ms) > 0
+}
+
+// rewrite allows the call with cmd as its command when changed, a
+// foreground call's timeout raised to the Bash tool's 10 minutes.
+func (h Hook) rewrite(input map[string]any, cmd string, changed, bg bool) []byte {
+	if !changed {
+		return nil
+	}
+	updated := make(map[string]any, len(input)+1)
+	for k, v := range input {
+		updated[k] = v
+	}
+	updated["command"] = cmd
 	if !bg {
-		updated["timeout"] = max(toInt(ev.ToolInput["timeout"]), 600000)
+		updated["timeout"] = max(toInt(input["timeout"]), 600000)
 	}
 	return answer(hookOutput{PermissionDecision: "allow", UpdatedInput: updated})
 }

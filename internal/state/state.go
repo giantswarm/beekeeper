@@ -63,6 +63,16 @@ type Hold struct {
 	By     Party     `json:"by"`
 	At     time.Time `json:"at"`
 	Until  time.Time `json:"until,omitzero"`
+	// Except is the one repository a "merges" hold lets through: the tool's
+	// own repository during a tool-release window.
+	Except string `json:"except,omitempty"`
+	// Tool is the binary whose release window this hold is, ToolFrom the
+	// version it reported when the window opened and ToolRelease the release
+	// the merge produced. The window closes once the tool reports another
+	// version than ToolFrom and no merge of its repository runs.
+	Tool        string `json:"tool,omitempty"`
+	ToolFrom    string `json:"toolFrom,omitempty"`
+	ToolRelease string `json:"toolRelease,omitempty"`
 }
 
 // Active reports whether the hold still applies at now.
@@ -105,9 +115,56 @@ type State struct {
 	// BudgetETag makes the budget probe a conditional request (a 304
 	// costs no budget).
 	BudgetETag string `json:"budgetETag,omitempty"`
+	// Budget is the last reading of the GitHub core budget.
+	Budget *Budget `json:"budget,omitempty"`
+	// Merges are the wrapped devctl pr merge runs, per lane: waiting in join
+	// order, running, and settling until the lane's installation rolled them.
+	Merges []Merge `json:"merges,omitempty"`
 }
 
 // Event is one line of events.jsonl.
+// Budget is one reading of the GitHub core budget.
+type Budget struct {
+	Remaining int       `json:"remaining"`
+	Limit     int       `json:"limit"`
+	Reset     time.Time `json:"reset"`
+	At        time.Time `json:"at"`
+}
+
+// The phases of a Merge.
+const (
+	Waiting  = "waiting"
+	Running  = "running"
+	Settling = "settling"
+)
+
+// Merge is one devctl pr merge the gate holds in its lane's queue.
+type Merge struct {
+	Repo  string `json:"repo"`
+	PR    int    `json:"pr"`
+	Lane  string `json:"lane"`
+	By    Party  `json:"by"`
+	PID   int    `json:"pid"`
+	Phase string `json:"phase"`
+	// Joined orders the queue; a rerun within the queue TTL keeps it.
+	Joined   time.Time `json:"joined"`
+	Seen     time.Time `json:"seen"`
+	Started  time.Time `json:"started,omitzero"`
+	Finished time.Time `json:"finished,omitzero"`
+	Exit     int       `json:"exit,omitempty"`
+	// Seeded marks a place queued on a session's behalf (lanes queue): it
+	// survives refusals and keeps the seed TTL until the merge runs.
+	Seeded bool `json:"seeded,omitempty"`
+	// Release is the tag the merge released, empty when unknown.
+	Release string `json:"release,omitempty"`
+	// Roll names the HelmReleases (namespace/name) that must reach Release
+	// before the lane frees.
+	Roll []string `json:"roll,omitempty"`
+}
+
+// Key is the merge's repository and number, owner/repo#n.
+func (m Merge) Key() string { return fmt.Sprintf("%s#%d", m.Repo, m.PR) }
+
 type Event struct {
 	At     time.Time `json:"at"`
 	By     Party     `json:"by"`

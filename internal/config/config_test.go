@@ -69,3 +69,32 @@ func TestLoadRejects(t *testing.T) {
 		}
 	}
 }
+
+const (
+	backstage = "giantswarm/backstage"
+	portal    = "portal-tools"
+)
+
+func TestLanes(t *testing.T) {
+	c := &Config{Lanes: []Lane{
+		{Name: portal, Repositories: []string{backstage, "marge"}, Installation: "gazelle"},
+		{Name: "serving", Repositories: []string{"giantswarm/model-manager"}},
+	}}
+	if err := c.validate(); err != nil {
+		t.Fatal(err)
+	}
+	for repo, lane := range map[string]string{
+		backstage:                  portal,
+		"giantswarm/marge":         portal,
+		"giantswarm/model-manager": "serving",
+		"giantswarm/devctl":        "giantswarm/devctl",
+	} {
+		if got := c.LaneOf(repo).Name; got != lane {
+			t.Errorf("%s: lane %s, want %s", repo, got, lane)
+		}
+	}
+	c.Lanes = append(c.Lanes, Lane{Name: "dup", Repositories: []string{backstage}})
+	if err := c.validate(); err == nil {
+		t.Error("a repository in two lanes validates")
+	}
+}

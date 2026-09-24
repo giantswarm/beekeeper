@@ -30,6 +30,19 @@ EOF
 BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper sessions
 ```
 
+The merge gate runs against a fake devctl first on `PATH` (a script that sleeps and prints a
+devctl-shaped document) and scratch state, never a real merge. A lane with an `installation` also
+reads HelmReleases, which a fake `kubectl` can answer from a file. Feed the hook an event to see
+the rewrite, and run what it prints:
+
+```bash
+echo '{"tool_name":"Bash","tool_input":{"command":"devctl pr merge giantswarm/marge 1"}}' |
+  BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook pretooluse
+PATH=/tmp/fake:$PATH BEEKEEPER_CONFIG=/tmp/bk.yaml CLAUDE_CODE_SESSION_ID=a \
+  ./beekeeper gate --wait 10s -- devctl pr merge giantswarm/marge 1
+BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper lanes
+```
+
 `free` takes its temp dir from `TMPDIR` (Claude Code's session dirs are `$TMPDIR/claude-<uid>`), so
 `--apply` can be tried on a fixture instead of the real `/tmp`:
 `TMPDIR=/tmp/fixture ./beekeeper free --apply --only session-dirs,tmp-dirs`.

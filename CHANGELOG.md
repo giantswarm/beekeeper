@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The merge gate: the PreToolUse hook puts `beekeeper gate` in front of every `devctl pr merge`. Merges queue per lane (`lanes` in the configuration), one at a time, the next once the lane's HelmReleases are Ready and the previous release rolled; a held repository, lane, `merges` or `github`, a budget under the floor and an unreadable installation refuse (exit 77); a wait past its bound exits 76 and keeps the merge's place; the machine runs at most `merge.cap` devctl processes; a giantswarm/devctl merge opens the tool-release window. devctl's document and exit code pass through unchanged.
+- `lanes [queue|drop|clear]`: each lane's running, settling and waiting merges, also in `handover`; `queue <owner/repo> <n> --for <session>` seeds a session's place so an agreed order carries over.
+- `hold set|lift|check --lane <name>`, the `merges` target and `--except`.
+
 - `sessions` and `tail`: every running Claude Code session from disk (processes, desktop records, transcripts, checkouts), what it is on, what it runs, overlaps.
 - `snapshot` and `watch`: the machine tick and the Monitor source, with every OOM kill attributed, session starts, ends and restarts, stale leases, and the installations' alerts.
 - `budget`: the GitHub budget from a conditional request's headers, with every `gh` and `devctl` process and its session.

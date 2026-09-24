@@ -44,11 +44,12 @@ restart) reads it instead of a prose brief.`,
 					*view
 					Leases *leaseList    `json:"leases"`
 					Holds  []state.Hold  `json:"holds"`
+					Lanes  []laneView    `json:"lanes"`
 					Agents []agentView   `json:"agents"`
 					Notes  []state.Note  `json:"notes"`
 					Alerts *alertsView   `json:"alerts"`
 					Events []state.Event `json:"events"`
-				}{v, l, holds, agents, v.st.Notes, al, evs})
+				}{v, l, holds, a.laneViews(v.st), agents, v.st.Notes, al, evs})
 			}
 			p := func(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format+"\n", args...) }
 			p("# Hand-over, %s (%s UTC)\n", a.now.Format("2006-01-02 15:04 MST"), a.now.UTC().Format("15:04"))
@@ -66,6 +67,8 @@ restart) reads it instead of a prose brief.`,
 			a.printLeases(l)
 			p("\n## Holds\n")
 			a.printHolds(holds)
+			p("\n## Merge lanes\n")
+			a.printLanes(a.laneViews(v.st))
 			p("\n## Agents\n")
 			a.printAgents(agents)
 			p("\n## Open notes\n")

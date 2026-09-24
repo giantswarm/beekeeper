@@ -9,6 +9,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/merge"
 )
 
 type poller struct {
@@ -51,7 +52,7 @@ portal among them: at zero it signs them out.
 			}
 			var pollers []poller
 			for _, p := range t.ByPID {
-				if p.Comm != "gh" && p.Comm != "devctl" {
+				if p.Comm != "gh" && p.Comm != merge.Tool {
 					continue
 				}
 				pl := poller{PID: p.PID, Args: p.Cmdline(), Elapsed: p.Elapsed(a.now).Round(time.Second)}

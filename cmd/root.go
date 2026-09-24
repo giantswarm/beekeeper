@@ -122,7 +122,7 @@ Exit codes: 0 done, 1 error, 2 usage, 3 refused, 125 a newer release
 		c.GroupID = "watching"
 		root.AddCommand(c)
 	}
-	for _, c := range []*cobra.Command{a.leaseCmd(), a.holdCmd()} {
+	for _, c := range []*cobra.Command{a.leaseCmd(), a.holdCmd(), a.lanesCmd()} {
 		c.GroupID = "sharing"
 		root.AddCommand(c)
 	}
@@ -130,7 +130,7 @@ Exit codes: 0 done, 1 error, 2 usage, 3 refused, 125 a newer release
 		c.GroupID = "supervising"
 		root.AddCommand(c)
 	}
-	for _, c := range []*cobra.Command{a.runCmd(), a.hookCmd(), a.freeCmd()} {
+	for _, c := range []*cobra.Command{a.runCmd(), a.hookCmd(), a.freeCmd(), a.gateCmd()} {
 		c.GroupID = "guarding"
 		root.AddCommand(c)
 	}
