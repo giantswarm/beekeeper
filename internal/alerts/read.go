@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -206,9 +205,7 @@ func (r Reader) forward(ctx context.Context, kubeContext string, ep endpoint) (*
 	fctx, cancel := context.WithCancel(ctx)
 	cmd := exec.CommandContext(fctx, r.Kubectl, "--context", kubeContext, "-n", ep.namespace, //nolint:gosec // kubectl from the configuration
 		"port-forward", "svc/"+ep.service, fmt.Sprintf(":%d", ep.port))
-	// Pdeathsig ends the forward even when beekeeper itself is killed.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGTERM}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
+	ownGroup(cmd)
 	cmd.WaitDelay = stopGrace
 	pr, pw, err := os.Pipe()
 	if err != nil {

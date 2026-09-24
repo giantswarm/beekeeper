@@ -275,7 +275,7 @@ func (a *app) alertsHandover(ctx context.Context) (*alertsView, error) {
 	}
 	al := a.cfg.Alerts
 	return &alertsView{
-		Every: dur(al.Every.Duration), Owner: st.Owner, Live: st.Owner != nil && syscall.Kill(st.Owner.PID, 0) == nil, Targets: a.alertTargets(ctx),
+		Every: dur(al.Every.Duration), Owner: st.Owner, Live: st.Owner != nil && proc.Alive(st.Owner.PID), Targets: a.alertTargets(ctx),
 		Ignore: al.Ignore, Team: al.Team, Collapse: al.Collapse, Baselines: st.Installations,
 	}, nil
 }
