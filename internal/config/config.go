@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -41,6 +42,38 @@ type Config struct {
 	Claude   Claude   `yaml:"claude"`
 	Memcap   Memcap   `yaml:"memcap"`
 	Checks   []Check  `yaml:"checks"`
+	Lanes    []Lane   `yaml:"lanes"`
+	Merge    Merge    `yaml:"merge"`
+}
+
+// Lane is a set of repositories whose merges roll the same components of an
+// installation: one merge at a time, the next once they rolled. A repository
+// in no lane is a lane of its own, with no installation to wait for.
+type Lane struct {
+	Name string `yaml:"name"`
+	// Repositories are owner/repo; a bare name matches it under any owner.
+	// A repository's name is also the chart name of its HelmReleases.
+	Repositories []string `yaml:"repositories"`
+	// Installation is where the lane's HelmReleases run; empty: none to wait for.
+	Installation string `yaml:"installation"`
+	// Context is the kubeconfig context of the installation (default: the
+	// one named after it, or ending in -<installation>).
+	Context string `yaml:"context"`
+}
+
+// Merge configures the gate on devctl pr merge.
+type Merge struct {
+	// Cap is the most devctl processes the machine runs when a merge starts.
+	Cap int `yaml:"cap"`
+	// QueueTTL is how long a queued merge keeps its place after its run ended.
+	QueueTTL Duration `yaml:"queueTTL"`
+	// Settle is how long a lane waits after a merge whose release is unknown.
+	Settle Duration `yaml:"settle"`
+	// SettleTimeout is how long a lane waits for a release to roll before
+	// the next merge is refused.
+	SettleTimeout Duration `yaml:"settleTimeout"`
+	// BudgetFresh is how old the last budget reading may be to gate on.
+	BudgetFresh Duration `yaml:"budgetFresh"`
 }
 
 // Check is an external command for what beekeeper does not read itself (the
@@ -193,6 +226,12 @@ func (c *Config) defaults() error {
 	}
 	setStr(&c.Claude.DesktopDir, filepath.Join(cfg, "Claude", "claude-code-sessions"))
 
+	setInt(&c.Merge.Cap, 5)
+	setDur(&c.Merge.QueueTTL, 15*time.Minute)
+	setDur(&c.Merge.Settle, 5*time.Minute)
+	setDur(&c.Merge.SettleTimeout, 30*time.Minute)
+	setDur(&c.Merge.BudgetFresh, time.Minute)
+
 	setStr(&c.Memcap.SlotDir, filepath.Join(state, "memcap", "slots"))
 	setInt(&c.Memcap.Slots, 2)
 	for i := range c.Checks {
@@ -213,7 +252,47 @@ func (c *Config) validate() error {
 			return fmt.Errorf("resources: %q is not a valid resource name", r)
 		}
 	}
+	names, repos := map[string]bool{}, map[string]string{}
+	for i, l := range c.Lanes {
+		if l.Name == "" || len(l.Repositories) == 0 || strings.Contains(l.Name, "/") {
+			return fmt.Errorf("lanes[%d]: a lane needs a name without a slash and repositories", i)
+		}
+		if names[l.Name] {
+			return fmt.Errorf("lanes: %q is named twice", l.Name)
+		}
+		names[l.Name] = true
+		for _, r := range l.Repositories {
+			if prev, ok := repos[r]; ok {
+				return fmt.Errorf("lanes: %s is in both %q and %q", r, prev, l.Name)
+			}
+			repos[r] = l.Name
+		}
+	}
 	return nil
+}
+
+// LaneOf is the lane a repository's merges queue in: the configured lane
+// that lists it, else a lane of its own named after it.
+func (c *Config) LaneOf(repo string) Lane {
+	name := repo[strings.LastIndex(repo, "/")+1:]
+	for _, l := range c.Lanes {
+		for _, r := range l.Repositories {
+			if strings.EqualFold(r, repo) || (!strings.Contains(r, "/") && strings.EqualFold(r, name)) {
+				return l
+			}
+		}
+	}
+	return Lane{Name: repo, Repositories: []string{repo}}
+}
+
+// LaneNamed is the configured lane of that name.
+func (c *Config) LaneNamed(name string) (Lane, bool) {
+	for _, l := range c.Lanes {
+		if l.Name == name {
+			return l, true
+		}
+	}
+	return Lane{}, false
 }
 
 // Leasable returns every resource a session can lease, the browser last.

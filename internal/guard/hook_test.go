@@ -166,3 +166,33 @@ func TestParse(t *testing.T) {
 		}
 	}
 }
+
+func TestHookGatesMerges(t *testing.T) {
+	h := Hook{Self: self, Clusters: func() []string { return nil }, Leases: func() []lease.Holder { return nil }}
+	g := self + " gate -- "
+	for _, c := range []struct {
+		cmd, want string
+		bg        bool
+	}{
+		{"devctl pr merge giantswarm/marge 3", g + "devctl pr merge giantswarm/marge 3", false},
+		{"devctl pr merge giantswarm/marge 3 --timeout 9m | $L record x", g + "devctl pr merge giantswarm/marge 3 --timeout 9m | $L record x", false},
+		{"timeout 600 devctl pr merge o/r 1", "timeout 600 " + g + "devctl pr merge o/r 1", false},
+		{"cd x && devctl pr merge o/r 1", "cd x && " + g + "devctl pr merge o/r 1", false},
+		{"devctl pr merge o/r 1", self + " gate --wait 30m -- devctl pr merge o/r 1", true},
+		{"make && devctl pr merge o/r 1", self + " run -- zsh -c 'make && " + g + "devctl pr merge o/r 1'", false},
+	} {
+		d := decide(t, h, t.TempDir(), c.cmd, map[string]any{"run_in_background": c.bg})
+		if d == nil || d.UpdatedInput["command"] != c.want {
+			t.Errorf("%q: got %+v, want %q", c.cmd, d, c.want)
+			continue
+		}
+		if _, ok := d.UpdatedInput["timeout"]; ok == c.bg {
+			t.Errorf("%q: timeout %v in the background=%v", c.cmd, d.UpdatedInput["timeout"], c.bg)
+		}
+	}
+	for _, cmd := range []string{"devctl pr wait o/r 1", "devctl version", "echo devctl pr merge o/r 1", g + "devctl pr merge o/r 1"} {
+		if d := decide(t, h, t.TempDir(), cmd, nil); d != nil {
+			t.Errorf("%q is rewritten: %v", cmd, d.UpdatedInput["command"])
+		}
+	}
+}
