@@ -52,6 +52,23 @@ func refused(format string, a ...any) error {
 	return &exitError{code: ExitRefused, msg: fmt.Sprintf(format, a...)}
 }
 
+func usageErr(format string, a ...any) error {
+	return &exitError{code: ExitUsage, msg: fmt.Sprintf(format, a...)}
+}
+
+// Main runs the command line and returns the process exit code. An error
+// without a message (a wrapped command's exit code) prints nothing.
+func Main() int {
+	err := New().Execute()
+	if err == nil {
+		return 0
+	}
+	if msg := err.Error(); msg != "" {
+		fmt.Fprintln(os.Stderr, project.Name+":", msg)
+	}
+	return Code(err)
+}
+
 type app struct {
 	cfgPath string
 	as      string
@@ -99,6 +116,7 @@ Exit codes: 0 done, 1 error, 2 usage, 3 refused, 125 a newer release
 		&cobra.Group{ID: "watching", Title: "Watching:"},
 		&cobra.Group{ID: "sharing", Title: "Sharing:"},
 		&cobra.Group{ID: "supervising", Title: "Supervising:"},
+		&cobra.Group{ID: "guarding", Title: "Guarding:"},
 	)
 	for _, c := range []*cobra.Command{a.sessionsCmd(), a.tailCmd(), a.snapshotCmd(), a.watchCmd(), a.budgetCmd()} {
 		c.GroupID = "watching"
@@ -110,6 +128,10 @@ Exit codes: 0 done, 1 error, 2 usage, 3 refused, 125 a newer release
 	}
 	for _, c := range []*cobra.Command{a.supervisorCmd(), a.agentsCmd(), a.noteCmd(), a.handoverCmd(), a.logCmd()} {
 		c.GroupID = "supervising"
+		root.AddCommand(c)
+	}
+	for _, c := range []*cobra.Command{a.runCmd(), a.hookCmd()} {
+		c.GroupID = "guarding"
 		root.AddCommand(c)
 	}
 	root.AddCommand(a.selfUpdateCmd(), a.versionCmd())
@@ -141,11 +163,7 @@ func usageArgs(c *cobra.Command) {
 }
 
 func (a *app) load() error {
-	path, err := config.Path(a.cfgPath)
-	if err != nil {
-		return err
-	}
-	a.cfg, err = config.Load(path)
+	err := a.loadConfig()
 	if err != nil {
 		return err
 	}
