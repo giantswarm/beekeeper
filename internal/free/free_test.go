@@ -124,7 +124,7 @@ func TestSummaryRows(t *testing.T) {
 	r.anonKiB = func(pid int) int { return anon[pid] }
 	r.uid = func(pid int) int {
 		if pid == 40 {
-			return 0
+			return os.Getuid() + 1 // another user's, whoever runs the test
 		}
 		return os.Getuid()
 	}
