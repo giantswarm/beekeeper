@@ -44,12 +44,14 @@ type Config struct {
 	Lanes    []Lane   `yaml:"lanes"`
 	Merge    Merge    `yaml:"merge"`
 	Alerts   Alerts   `yaml:"alerts"`
-	// Supervisor is what `handover --prompt` tells a successor supervisor.
+	// Supervisor is what `handover --prompt` tells a successor supervisor,
+	// how long a relay to it stays open and how long a shift lasts.
 	Supervisor Supervisor `yaml:"supervisor"`
 }
 
-// Supervisor configures the successor's session prompt: the instructions it
-// follows (a skill or a file, not both) and the scope it supervises.
+// Supervisor configures the successor's session prompt (the instructions it
+// follows, a skill or a file, not both, and the scope it supervises), the
+// shift and the relay.
 type Supervisor struct {
 	// Skill is the name of the skill the successor runs (supervise).
 	Skill string `yaml:"skill"`
@@ -59,6 +61,11 @@ type Supervisor struct {
 	// Scope says what the supervisor watches, in a sentence or two; empty,
 	// the prompt names the resources, lanes and installations configured.
 	Scope string `yaml:"scope"`
+	// Shift is how long a supervisor serves before the watch reports the
+	// relay due at a quiet moment; zero never reports it.
+	Shift Duration `yaml:"shift"`
+	// RelayTTL is how long a relay stays open for the successor's start.
+	RelayTTL Duration `yaml:"relayTTL"`
 }
 
 // Lane is a set of repositories whose merges roll the same components of an
@@ -246,6 +253,7 @@ func (c *Config) defaults() error {
 	setStr(&c.StateDir, filepath.Join(state, "beekeeper"))
 	setStr(&c.LeaseDir, filepath.Join(c.StateDir, "leases"))
 	setDur(&c.GrantTTL, 30*time.Minute)
+	setDur(&c.Supervisor.RelayTTL, 15*time.Minute)
 
 	setDur(&c.Overlaps.ActiveWithin, time.Hour)
 

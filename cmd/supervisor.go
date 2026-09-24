@@ -6,6 +6,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -16,16 +17,18 @@ func (a *app) supervisorCmd() *cobra.Command {
 		Long: `The supervisor is the one session that watches the others. While its
 session runs, leases are claimed only on its grant and merges wait for its
 word. When its CLI is gone the rule lifts by itself: nobody is stuck behind
-a supervisor that crashed.
+a supervisor that crashed. The role moves to a successor in two steps that
+leave no gap: the supervisor names it (relay), the successor starts.
 
-Without a subcommand, shows the supervisor (exit 3 when none runs).`,
+Without a subcommand, shows the supervisor (exit 3 when none runs, 4 in the
+session a relay relieved).`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error { return a.supervisorStatus() },
 	}
 	var takeOver bool
 	start := &cobra.Command{
 		Use:   "start",
-		Short: "Make the calling session the supervisor",
+		Short: "Make the calling session the supervisor, or take the role relayed to it",
 		Args:  cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			me, err := a.caller()
@@ -39,17 +42,21 @@ Without a subcommand, shows the supervisor (exit 3 when none runs).`,
 			if err != nil {
 				return err
 			}
+			dir := lease.Dir(a.cfg.LeaseDir)
 			var msg string
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-				if prev := st.Supervisor; prev != nil && !prev.Is(me) {
-					if _, live := claude.Live(sessions, prev.Party); live && !takeOver {
-						return nil, refused("%q supervises since %s and still runs: take over with --take-over", prev.Name, clock(a.now, prev.Since))
-					}
-					msg = fmt.Sprintf(" (taking over from %q)", prev.Name)
+				holders, err := dir.List()
+				if err != nil {
+					return nil, err
 				}
-				st.Supervisor = &state.Supervisor{Party: me, Since: a.now.UTC()}
-				msg = fmt.Sprintf("%q supervises now%s", me.Name, msg)
-				return []state.Event{event(me, "supervisor.start", "%s", msg)}, nil
+				lease.Prune(st, heldMap(holders), a.now, a.cfg.GrantTTL.Duration)
+				prevLive := false
+				if st.Supervisor != nil {
+					_, prevLive = claude.Live(sessions, st.Supervisor.Party)
+				}
+				var evs []state.Event
+				msg, evs, err = startRole(st, me, prevLive, takeOver, a.now)
+				return evs, err
 			})
 			if err != nil {
 				return err
@@ -58,7 +65,7 @@ Without a subcommand, shows the supervisor (exit 3 when none runs).`,
 			return err
 		},
 	}
-	start.Flags().BoolVar(&takeOver, "take-over", false, "replace a supervisor whose session still runs (the hand-over)")
+	start.Flags().BoolVar(&takeOver, "take-over", false, "replace a supervisor whose session still runs without its relay")
 	var force bool
 	stop := &cobra.Command{
 		Use:   "stop",
@@ -79,7 +86,10 @@ Without a subcommand, shows the supervisor (exit 3 when none runs).`,
 					return nil, refused("%q supervises, not you: --force ends another session's watch", st.Supervisor.Name)
 				}
 				msg = fmt.Sprintf("%q no longer supervises", st.Supervisor.Name)
-				st.Supervisor = nil
+				if st.Relay.Open(a.now) {
+					msg += fmt.Sprintf("; the relay to %q is cancelled", st.Relay.To.Name)
+				}
+				st.Supervisor, st.Relay = nil, nil
 				return []state.Event{event(me, "supervisor.stop", "%s", msg)}, nil
 			})
 			if err != nil {
@@ -92,11 +102,71 @@ Without a subcommand, shows the supervisor (exit 3 when none runs).`,
 	stop.Flags().BoolVar(&force, "force", false, "end the watch of another session")
 	status := &cobra.Command{
 		Use:   "status",
-		Short: "Show the supervisor (exit 3 when none runs)",
+		Short: "Show the supervisor (exit 3 when none runs, 4 when a relay relieved you)",
 		Args:  cobra.NoArgs,
 		RunE:  func(*cobra.Command, []string) error { return a.supervisorStatus() },
 	}
-	c.AddCommand(start, stop, status)
+	c.AddCommand(start, a.supervisorRelayCmd(), stop, status)
+	return c
+}
+
+func (a *app) supervisorRelayCmd() *cobra.Command {
+	var cancel bool
+	c := &cobra.Command{
+		Use:   "relay <successor> | --cancel",
+		Short: "Hand the role to a successor: its `supervisor start` takes it and the grants",
+		Long: `Name the session that takes over the watch. Its ` + "`beekeeper supervisor start`" + `
+takes the role, the grant queue and the pending grants in one step; until
+then you stay the supervisor and the grant rule stays yours, so no claim
+goes ungated in between. Any other session's start stays refused while you
+run. The relay stays open for supervisor.relayTTL (default 15m), then
+expires and you simply keep supervising; --cancel withdraws it earlier.
+
+Once the successor has started, ` + "`beekeeper supervisor status`" + ` in your session
+exits 4: you have been relieved. The successor is a name, a unique part of
+one, a session id or a PID.`,
+		Args: func(_ *cobra.Command, args []string) error {
+			if cancel != (len(args) == 0) {
+				return usageErr("name the successor, or --cancel without one")
+			}
+			return nil
+		},
+		RunE: func(_ *cobra.Command, args []string) error {
+			me, err := a.caller()
+			if err != nil {
+				return err
+			}
+			var to state.Party
+			if !cancel {
+				sessions, _, err := a.sessions()
+				if err != nil {
+					return err
+				}
+				s, err := claude.Resolve(sessions, args[0])
+				if err != nil {
+					return usageErr("%v", err)
+				}
+				to = s.Party()
+			}
+			var msg string
+			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+				var evs []state.Event
+				var err error
+				if cancel {
+					msg, evs, err = cancelRelay(st, me, a.now)
+				} else {
+					msg, evs, err = relayRole(st, me, to, a.now, a.cfg.Supervisor.RelayTTL.Duration)
+				}
+				return evs, err
+			})
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintln(a.out, msg)
+			return err
+		},
+	}
+	c.Flags().BoolVar(&cancel, "cancel", false, "withdraw the open relay: you keep supervising")
 	return c
 }
 
@@ -113,14 +183,30 @@ func (a *app) supervisorStatus() error {
 		return refused("no supervisor runs")
 	}
 	_, live := claude.Live(sessions, st.Supervisor.Party)
+	v := supervisorView{Supervisor: *st.Supervisor, Live: live, Relay: st.Relay}
+	if me, err := a.caller(); err == nil {
+		if r := relievedBy(st, me); r != nil {
+			v.Relieved = true
+			if a.json {
+				_ = a.printJSON(v)
+			}
+			return &exitError{code: ExitRelieved, msg: fmt.Sprintf("you have been relieved: %q supervises since %s (relayed at %s)",
+				r.To.Name, clock(a.now, r.Taken), clock(a.now, r.At))}
+		}
+	}
 	if a.json {
-		_ = a.printJSON(supervisorView{Supervisor: *st.Supervisor, Live: live})
+		_ = a.printJSON(v)
 	}
 	if !live {
 		return refused("no supervisor runs (%q was recorded at %s; its session is gone)", st.Supervisor.Name, clock(a.now, st.Supervisor.Since))
 	}
-	if !a.json {
-		_, err = fmt.Fprintf(a.out, "%q supervises since %s\n", st.Supervisor.Name, clock(a.now, st.Supervisor.Since))
+	if a.json {
+		return nil
 	}
+	relay := ""
+	if st.Relay.Open(a.now) {
+		relay = fmt.Sprintf(", relaying to %q until %s", st.Relay.To.Name, clock(a.now, st.Relay.Expires))
+	}
+	_, err = fmt.Fprintf(a.out, "%q supervises since %s%s\n", st.Supervisor.Name, clock(a.now, st.Supervisor.Since), relay)
 	return err
 }

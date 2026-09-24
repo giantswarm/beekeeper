@@ -1,5 +1,5 @@
-// Package state is beekeeper's shared memory on the machine: the supervisor,
-// grants, holds, registered agents, notes, timers and session records, one
+// Package state is beekeeper's shared memory on the machine: the supervisor
+// and its relay, grants, holds, registered agents, notes, timers and session records, one
 // JSON document read and rewritten under an exclusive file lock, plus an
 // append-only event log of every change. It outlives any session: a restarted supervisor or its
 // successor reads what the previous one knew instead of rebuilding it from
@@ -47,6 +47,44 @@ func (p Party) Is(o Party) bool {
 type Supervisor struct {
 	Party
 	Since time.Time `json:"since"`
+}
+
+// Relay is the supervisor naming its successor: the successor's
+// `supervisor start` takes the role and the grants until Expires; the
+// outgoing supervisor keeps both meanwhile.
+type Relay struct {
+	From    Party     `json:"from"`
+	To      Party     `json:"to"`
+	At      time.Time `json:"at"`
+	Expires time.Time `json:"expires"`
+	// Taken is when the successor took the role; the record stays so the
+	// outgoing supervisor learns it has been relieved.
+	Taken time.Time `json:"taken,omitzero"`
+	// Reported is when a watch said the relay was taken or expired; it says
+	// it once.
+	Reported time.Time `json:"reported,omitzero"`
+}
+
+// Open reports whether the relay can still be taken at now.
+func (r *Relay) Open(now time.Time) bool {
+	return r != nil && r.Taken.IsZero() && now.Before(r.Expires)
+}
+
+// Shift is the watch's memory of the running supervisor's shift: when it
+// reported the relay due and whether the machine stayed quiet since.
+type Shift struct {
+	// Supervisor and Since name the supervisor's term this is about.
+	Supervisor Party     `json:"supervisor"`
+	Since      time.Time `json:"since"`
+	Reported   time.Time `json:"reported"`
+	// Quiet is false once a busy moment followed the report: the next quiet
+	// moment reports the relay due again.
+	Quiet bool `json:"quiet,omitempty"`
+}
+
+// Of reports whether the shift record is about sup's current term.
+func (s *Shift) Of(sup *Supervisor) bool {
+	return s != nil && sup != nil && s.Supervisor.Is(sup.Party) && s.Since.Equal(sup.Since)
 }
 
 // Grant is the supervisor's word that a session may claim a resource.
@@ -143,6 +181,10 @@ type Record struct {
 // State is the whole document.
 type State struct {
 	Supervisor *Supervisor `json:"supervisor,omitempty"`
+	// Relay is the supervisor's last relay: open, taken or expired.
+	Relay *Relay `json:"relay,omitempty"`
+	// Shift is what the watch reported of the supervisor's shift.
+	Shift *Shift `json:"shift,omitempty"`
 	// Grants are queued per resource in the order given.
 	Grants []Grant `json:"grants,omitempty"`
 	// Released is when each resource was last released; a grant's TTL runs
