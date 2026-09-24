@@ -42,7 +42,7 @@ the budget work on any system.
 | `beekeeper budget` | The GitHub core budget from the headers of a real, conditional request (a 304 costs nothing), and every `gh` and `devctl` process with its session. `--gate` exits 3 under the floor. |
 | `beekeeper lease claim\|release\|status\|grant\|revoke` | One holder per resource: the environments in the configuration and the browser. While a supervisor runs, a session claims only what the supervisor granted it, in grant order. |
 | `beekeeper hold set\|lift\|check` | Stop merges into a repository (a broken main), one lane (`--lane serving`: a proving window such as a model load stops the lane whose components it exercises, not the others), every merge (`merges`, `--except owner/repo`) or every GitHub call (`github`) until lifted or a time passes. The merge gate enforces them. |
-| `beekeeper lanes [clear <lane>]` | Each merge lane: the running merge, the one settling until its release rolled, and the waiting ones in turn order, so who is next is never prose. `clear` frees a lane whose settling release will not roll, after a look at the installation. |
+| `beekeeper lanes [queue\|drop\|clear]` | Each merge lane: the running merge, the one settling until its release rolled, and the waiting ones in turn order, so who is next is never prose. `queue <owner/repo> <n> --for <session>` gives a session's merge its place now so an agreed order carries over (kept until that merge runs, through refusals, for `merge.seedTTL`, 12h); `drop` takes a waiting merge out; `clear` frees a lane whose settling release will not roll, after a look at the installation. |
 | `beekeeper supervisor start\|stop` | Make a session the supervisor. The grant rule applies while its session runs and lifts by itself when it is gone. |
 | `beekeeper agents register\|assign\|idle` | The roster of empty sessions registered as spare capacity. |
 | `beekeeper note add\|done` | Open items that outlive a session: a question waiting on a person, a deadline. |
@@ -72,7 +72,8 @@ call gets `--wait 30m`), and the gate decides:
   installation cannot be read (a lapsed `tsh` login); the lane waited `merge.settleTimeout` for a
   release that did not roll.
 - **Queued, exit 76**, one line starting `beekeeper gate: queued,` with the merge's position and
-  whom it waits behind. The merge keeps its place for `merge.queueTTL` (15m): run the same
+  whom it waits behind; when the machine-wide devctl cap is the reason, the line says
+  `<n> devctl processes run machine-wide (cap <n>), not a lane problem`. The merge keeps its place for `merge.queueTTL` (15m): run the same
   command again, best with `run_in_background`, where the wait is 30 minutes instead of 2.
 - **Otherwise devctl runs once**, its JSON document and exit code (devctl's own 0–9) unchanged,
   and the event log records `merging` and `merged` with the release.
@@ -130,6 +131,7 @@ lanes:                      # merges that roll the same components of an install
 merge:
   cap: 5                    # devctl processes on the machine when a merge starts
   queueTTL: 15m             # a queued merge keeps its place this long after its run ended
+  seedTTL: 12h              # a place queued with lanes queue --for, from its seeding or last arrival
   settle: 5m                # a lane waits this long after a merge whose release is unknown
   settleTimeout: 30m        # then refuses its next merge while the release has not rolled
   budgetFresh: 1m           # the last budget reading is used this long, then read afresh

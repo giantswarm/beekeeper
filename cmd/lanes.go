@@ -3,10 +3,13 @@ package cmd
 import (
 	"fmt"
 	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/merge"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -44,7 +47,88 @@ a merge in it: running, settling, and the waiting merges in turn order.`,
 			return nil
 		},
 	}
-	c.AddCommand(&cobra.Command{
+	var forName string
+	queue := &cobra.Command{
+		Use:   "queue <owner/repo> <n> --for <session>",
+		Short: "Queue a merge on a session's behalf, at the end of its lane",
+		Long: `queue gives a session's merge its place in the lane now, before the session
+runs it, so an agreed order carries over. The place holds until the session's
+own devctl pr merge of that repository and number arrives and runs; a hold's
+refusal does not lose it. It is kept for merge.seedTTL (12h) from the seeding
+or the session's last arrival.`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(_ *cobra.Command, args []string) error {
+			pr, err := strconv.Atoi(args[1])
+			if err != nil || pr < 1 || !strings.Contains(args[0], "/") {
+				return usageErr("want <owner/repo> <number>, got %s %s", args[0], args[1])
+			}
+			if strings.TrimSpace(forName) == "" {
+				return usageErr("--for <session name> is required")
+			}
+			me, err := a.caller()
+			if err != nil {
+				return err
+			}
+			lane := a.cfg.LaneOf(args[0]).Name
+			pos := 0
+			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+				if pos = merge.Queue(st, lane).Position(args[0], pr); pos > 0 {
+					return nil, nil
+				}
+				st.Merges = append(st.Merges, state.Merge{Repo: args[0], PR: pr, Lane: lane, By: state.Party{Name: forName},
+					Phase: state.Waiting, Seeded: true, Joined: a.now.UTC(), Seen: a.now.UTC()})
+				pos = -merge.Queue(st, lane).Position(args[0], pr)
+				return []state.Event{event(me, "merge.queued", "%s#%d in lane %s for %q", args[0], pr, lane, forName)}, nil
+			})
+			if err != nil {
+				return err
+			}
+			if pos > 0 {
+				_, err = fmt.Fprintf(a.out, "%s#%d is already queued in lane %s at position %d\n", args[0], pr, lane, pos)
+				return err
+			}
+			_, err = fmt.Fprintf(a.out, "queued %s#%d for %q in lane %s at position %d\n", args[0], pr, forName, lane, -pos)
+			return err
+		},
+	}
+	queue.Flags().StringVar(&forName, "for", "", "the session whose merge this is")
+	drop := &cobra.Command{
+		Use:   "drop <owner/repo> <n>",
+		Short: "Take a waiting merge out of its lane's queue",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(_ *cobra.Command, args []string) error {
+			pr, err := strconv.Atoi(args[1])
+			if err != nil {
+				return usageErr("%s is not a pull request number", args[1])
+			}
+			me, err := a.caller()
+			if err != nil {
+				return err
+			}
+			found := false
+			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool {
+					hit := m.Repo == args[0] && m.PR == pr && m.Phase == state.Waiting
+					found = found || hit
+					return hit
+				})
+				if !found {
+					return nil, nil
+				}
+				return []state.Event{event(me, "merge.dropped", "%s#%d", args[0], pr)}, nil
+			})
+			if err != nil {
+				return err
+			}
+			if !found {
+				_, err = fmt.Fprintf(a.out, "%s#%d is not waiting in any lane\n", args[0], pr)
+				return err
+			}
+			_, err = fmt.Fprintf(a.out, "dropped %s#%d from its lane\n", args[0], pr)
+			return err
+		},
+	}
+	c.AddCommand(queue, drop, &cobra.Command{
 		Use:   "clear <lane>",
 		Short: "Free a lane whose settling merge will not roll",
 		Long: `clear drops the lane's settling merge, after its installation was checked
@@ -142,7 +226,11 @@ func (a *app) printLanes(views []laneView) {
 			if i == 0 {
 				label = "  next"
 			}
-			p("%s %d. %s by %q, waiting since %s", label, i+1, m.Key(), m.By.Name, clock(a.now, m.Joined))
+			how := "waiting"
+			if !proc.Alive(m.PID) {
+				how = "not arrived, queued"
+			}
+			p("%s %d. %s by %q, %s since %s", label, i+1, m.Key(), m.By.Name, how, clock(a.now, m.Joined))
 		}
 	}
 }

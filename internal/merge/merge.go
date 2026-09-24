@@ -111,12 +111,17 @@ func Blocking(st *state.State, now time.Time, repo, lane string) (state.Hold, bo
 	return state.Hold{}, false
 }
 
-// Prune drops the waiting merges whose run ended more than ttl ago and turns
+// Prune drops the waiting merges whose run ended more than ttl ago (seedTTL
+// for a seeded place) and turns
 // a running merge whose run is gone into a settling one: whether it merged
 // is unknown, so the lane settles by the settle rule.
-func Prune(st *state.State, now time.Time, ttl time.Duration, alive func(pid int) bool) {
+func Prune(st *state.State, now time.Time, ttl, seedTTL time.Duration, alive func(pid int) bool) {
 	st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool {
-		return m.Phase == state.Waiting && !alive(m.PID) && now.Sub(m.Seen) > ttl
+		keep := ttl
+		if m.Seeded {
+			keep = seedTTL
+		}
+		return m.Phase == state.Waiting && !alive(m.PID) && now.Sub(m.Seen) > keep
 	})
 	for i, m := range st.Merges {
 		if m.Phase == state.Running && !alive(m.PID) {

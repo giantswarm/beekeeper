@@ -67,6 +67,9 @@ type Merge struct {
 	Cap int `yaml:"cap"`
 	// QueueTTL is how long a queued merge keeps its place after its run ended.
 	QueueTTL Duration `yaml:"queueTTL"`
+	// SeedTTL is how long a place queued on a session's behalf is kept from
+	// its seeding or the session's last arrival.
+	SeedTTL Duration `yaml:"seedTTL"`
 	// Settle is how long a lane waits after a merge whose release is unknown.
 	Settle Duration `yaml:"settle"`
 	// SettleTimeout is how long a lane waits for a release to roll before
@@ -228,6 +231,7 @@ func (c *Config) defaults() error {
 
 	setInt(&c.Merge.Cap, 5)
 	setDur(&c.Merge.QueueTTL, 15*time.Minute)
+	setDur(&c.Merge.SeedTTL, 12*time.Hour)
 	setDur(&c.Merge.Settle, 5*time.Minute)
 	setDur(&c.Merge.SettleTimeout, 30*time.Minute)
 	setDur(&c.Merge.BudgetFresh, time.Minute)

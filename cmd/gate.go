@@ -87,6 +87,7 @@ type gateRun struct {
 	me      state.Party
 	pid     int
 	lastWhy string
+	seeded  bool // the merge's place was queued on the session's behalf
 }
 
 func (a *app) gate(ctx context.Context, argv []string, wait time.Duration) error {
@@ -107,8 +108,12 @@ func (a *app) gate(ctx context.Context, argv []string, wait time.Duration) error
 			return err
 		}
 		if !a.now.Before(deadline) {
+			kept := a.cfg.Merge.QueueTTL.Duration
+			if g.seeded {
+				kept = a.cfg.Merge.SeedTTL.Duration
+			}
 			gateLine("queued, %s; your place is kept for %s: run the same command again with run_in_background (the wait is then %s), do not poll",
-				why, a.cfg.Merge.QueueTTL.Duration, BackgroundGateWait)
+				why, kept, BackgroundGateWait)
 			return &exitError{code: ExitGateQueued}
 		}
 		if why != g.lastWhy {
@@ -133,7 +138,7 @@ func (g *gateRun) step() (string, error) {
 	var held bool
 	var dup *state.Merge
 	err := g.store.Update(func(st *state.State) ([]state.Event, error) {
-		merge.Prune(st, g.now, g.cfg.Merge.QueueTTL.Duration, proc.Alive)
+		merge.Prune(st, g.now, g.cfg.Merge.QueueTTL.Duration, g.cfg.Merge.SeedTTL.Duration, proc.Alive)
 		if hold, held = merge.Blocking(st, g.now, g.repo, g.lane.Name); held {
 			g.drop(st)
 			return nil, nil
@@ -147,6 +152,7 @@ func (g *gateRun) step() (string, error) {
 		var ev []state.Event
 		if i := g.mine(st, state.Waiting); i >= 0 {
 			st.Merges[i].PID, st.Merges[i].By, st.Merges[i].Seen = g.pid, g.me, g.now.UTC()
+			g.seeded = st.Merges[i].Seeded
 		} else {
 			st.Merges = append(st.Merges, state.Merge{Repo: g.repo, PR: g.pr, Lane: g.lane.Name, By: g.me, PID: g.pid,
 				Phase: state.Waiting, Joined: g.now.UTC(), Seen: g.now.UTC()})
@@ -169,7 +175,11 @@ func (g *gateRun) step() (string, error) {
 		if q.Running != nil {
 			ahead = *q.Running
 		}
-		return fmt.Sprintf("position %d in lane %s behind %s (%q, %s)", pos, g.lane.Name, ahead.Key(), ahead.By.Name, ahead.Phase), nil
+		phase := ahead.Phase
+		if phase == state.Waiting && !proc.Alive(ahead.PID) {
+			phase = "queued, its merge has not arrived"
+		}
+		return fmt.Sprintf("position %d in lane %s behind %s (%q, %s)", pos, g.lane.Name, ahead.Key(), ahead.By.Name, phase), nil
 	}
 	if q.Running != nil {
 		return fmt.Sprintf("next in lane %s behind the running %s (%q, since %s)", g.lane.Name, q.Running.Key(), q.Running.By.Name,
@@ -197,8 +207,9 @@ func (g *gateRun) mine(st *state.State, phase string) int {
 	})
 }
 
+// drop removes the merge's waiting entry; a seeded place stays.
 func (g *gateRun) drop(st *state.State) {
-	if i := g.mine(st, state.Waiting); i >= 0 {
+	if i := g.mine(st, state.Waiting); i >= 0 && !st.Merges[i].Seeded {
 		st.Merges = slices.Delete(st.Merges, i, i+1)
 	}
 }
@@ -255,13 +266,14 @@ func (g *gateRun) start(settling *state.Merge, hrs []merge.HelmRelease) (string,
 			return nil, nil
 		}
 		if n := devctlRuns(st); n >= g.cfg.Merge.Cap {
-			why = fmt.Sprintf("next in lane %s, the machine runs %d devctl processes and the cap is %d", g.lane.Name, n, g.cfg.Merge.Cap)
+			why = fmt.Sprintf("%d devctl processes run machine-wide (cap %d), not a lane problem: %s#%d is next in lane %s and starts when one ends",
+				n, g.cfg.Merge.Cap, g.repo, g.pr, g.lane.Name)
 			return nil, nil
 		}
 		st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool { return m.Lane == g.lane.Name && m.Phase == state.Settling })
 		i = g.mine(st, state.Waiting)
 		m := &st.Merges[i]
-		m.Phase, m.Started, m.Roll = state.Running, g.now.UTC(), merge.RollSet(hrs, g.repo)
+		m.Phase, m.Started, m.Roll, m.Seeded = state.Running, g.now.UTC(), merge.RollSet(hrs, g.repo), false
 		ev := []state.Event{event(g.me, "merging", "%s#%d in lane %s", g.repo, g.pr, g.lane.Name)}
 		if strings.EqualFold(g.repo, merge.ToolRepo) {
 			st.Holds = slices.DeleteFunc(st.Holds, func(h state.Hold) bool { return h.Target == merge.AllMerges })

@@ -152,6 +152,9 @@ type Merge struct {
 	Started  time.Time `json:"started,omitzero"`
 	Finished time.Time `json:"finished,omitzero"`
 	Exit     int       `json:"exit,omitempty"`
+	// Seeded marks a place queued on a session's behalf (lanes queue): it
+	// survives refusals and keeps the seed TTL until the merge runs.
+	Seeded bool `json:"seeded,omitempty"`
 	// Release is the tag the merge released, empty when unknown.
 	Release string `json:"release,omitempty"`
 	// Roll names the HelmReleases (namespace/name) that must reach Release

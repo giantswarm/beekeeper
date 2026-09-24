@@ -79,10 +79,11 @@ func TestQueueAndPrune(t *testing.T) {
 		{Repo: "o/a", PR: 1, Lane: "l", PID: 1, Phase: state.Waiting, Joined: now.Add(-2 * time.Minute), Seen: now},
 		{Repo: "o/c", PR: 3, Lane: "l", PID: 3, Phase: state.Waiting, Joined: now, Seen: now.Add(-time.Hour)},
 		{Repo: "o/d", PR: 4, Lane: "m", PID: 4, Phase: state.Running, Release: "v1", Roll: []string{"x"}},
+		{Repo: "o/e", PR: 5, Lane: "l", Phase: state.Waiting, Seeded: true, Joined: now, Seen: now.Add(-time.Hour)},
 	}}
-	Prune(st, now, 15*time.Minute, func(pid int) bool { return pid == 1 })
+	Prune(st, now, 15*time.Minute, 12*time.Hour, func(pid int) bool { return pid == 1 })
 	q := Queue(st, "l")
-	if len(q.Waiting) != 2 || q.Position("o/a", 1) != 1 || q.Position("o/b", 2) != 2 {
+	if len(q.Waiting) != 3 || q.Position("o/a", 1) != 1 || q.Position("o/b", 2) != 2 || q.Position("o/e", 5) != 3 {
 		t.Errorf("queue order: %+v", q.Waiting)
 	}
 	m := Queue(st, "m")
