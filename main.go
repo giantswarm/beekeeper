@@ -5,15 +5,11 @@
 package main
 
 import (
-	"fmt"
 	"os"
 
 	"github.com/giantswarm/beekeeper/cmd"
 )
 
 func main() {
-	if err := cmd.New().Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, "beekeeper:", err)
-		os.Exit(cmd.Code(err))
-	}
+	os.Exit(cmd.Main())
 }

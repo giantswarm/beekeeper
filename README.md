@@ -47,6 +47,8 @@ the budget work on any system.
 | `beekeeper note add\|done` | Open items that outlive a session: a question waiting on a person, a deadline. |
 | `beekeeper handover` | Everything the next supervisor needs, as Markdown, from the live state. |
 | `beekeeper log` | Every claim, grant, hold, registration and note, as they happened. |
+| `beekeeper run [--max SIZE] [--wait DURATION] -- <command>` | Run a build, test or lint command in one of the machine's build slots (memcap's, shared with the `memcap` wrapper) inside a memory-capped systemd scope. When every slot is held it waits once, then exits 75 with the holders; when the cap fires the kernel kills the biggest process in the scope only, and `run` exits 137 with one line starting `beekeeper run: the <SIZE> cap killed:`. |
+| `beekeeper hook pretooluse` | The Bash tool's PreToolUse hook: rewrites build, test, lint and lab commands to `<this binary> run -- zsh -c '<command>'` with the command verbatim and the tool timeout at 10 minutes (a background run waits 60 minutes), and refuses a third kind cluster, listing the held leases. |
 | `beekeeper self-update` | Install the latest signed release over this binary; `--check` only asks. |
 
 Exit codes: 0 done, 1 error, 2 usage, 3 refused (held, not granted, under the floor), 125 a

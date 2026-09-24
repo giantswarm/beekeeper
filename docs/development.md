@@ -14,6 +14,11 @@ every package has to compile everywhere. Linux-only reads stay behind `/proc` an
 that simply fail elsewhere, and the one syscall (`statfs`) is split by build tag
 (`internal/machine/disk_*.go`). Pre-commit runs golangci-lint with gosec and goconst.
 
+The `run` tests (`cmd/guard_test.go`) need zsh and a user systemd: they skip in CI and run on a
+desktop. The test binary doubles as beekeeper (`BEEKEEPER_TEST_MAIN=1`), so the hook's rewrite runs
+the build under test, and each test starts its command in a scope of its own: on a guarded machine
+`go test` itself runs in a capped scope, where `run` takes no slot.
+
 Try a change against the live machine without touching the real state: point a scratch
 configuration at a scratch state directory.
 
@@ -36,5 +41,6 @@ BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper sessions
 | `internal/lease` | Lease directories and the grant rule. |
 | `internal/state` | The shared state document and the event log, under a file lock. |
 | `internal/check` | External commands configured as checks. |
+| `internal/guard` | The build guard: a capped run in a build slot, and the PreToolUse hook's rewrite and third-lab refusal. |
 | `internal/update` | The latest release, its signature check and the one-rename install. |
 | `cmd` | The command line. |
