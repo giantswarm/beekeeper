@@ -21,11 +21,14 @@ import (
 )
 
 // Exit codes: 0 done, 1 error, 2 usage, 3 refused (a lease held or not
-// granted, a hold set, the budget under its floor).
+// granted, a hold set, the budget under its floor), 125 outdated (a newer
+// release exists: self-update --check, the status devctl's version check and
+// muster's self-update --check use).
 const (
-	ExitError   = 1
-	ExitUsage   = 2
-	ExitRefused = 3
+	ExitError    = 1
+	ExitUsage    = 2
+	ExitRefused  = 3
+	ExitOutdated = 125
 )
 
 // exitError carries the process exit code of a failed command.
@@ -77,7 +80,8 @@ Its state (the supervisor, grants, holds, registered agents, notes) lives
 on disk and survives restarts: a supervisor's successor reads it instead of
 rebuilding it from a hand-over prompt.
 
-Exit codes: 0 done, 1 error, 2 usage, 3 refused.`,
+Exit codes: 0 done, 1 error, 2 usage, 3 refused, 125 a newer release
+(self-update --check).`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       project.VersionLine(),
@@ -108,7 +112,7 @@ Exit codes: 0 done, 1 error, 2 usage, 3 refused.`,
 		c.GroupID = "supervising"
 		root.AddCommand(c)
 	}
-	root.AddCommand(a.versionCmd())
+	root.AddCommand(a.selfUpdateCmd(), a.versionCmd())
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
 		return &exitError{code: ExitUsage, msg: err.Error()}
 	})

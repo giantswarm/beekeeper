@@ -10,10 +10,11 @@ import (
 	"strings"
 )
 
-// Name and Source identify the project in messages.
+// Name, Module and Source identify the project in messages.
 const (
 	Name   = "beekeeper"
-	Source = "https://github.com/giantswarm/beekeeper"
+	Module = "github.com/giantswarm/beekeeper"
+	Source = "https://" + Module
 )
 
 // Set at link time by the Makefile / architect (`-X <module>/pkg/project.version=…`).

@@ -25,7 +25,7 @@ func TestPartyIs(t *testing.T) {
 			t.Errorf("Is(%+v) = %v", c.b, got)
 		}
 	}
-	if !(Party{Name: "timo"}).Is(Party{Name: "timo"}) {
+	if !(Party{Name: "alex"}).Is(Party{Name: "alex"}) {
 		t.Error("a person is not themselves")
 	}
 }

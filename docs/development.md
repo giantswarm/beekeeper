@@ -5,6 +5,10 @@ make test        # go test ./...
 go build .       # ./beekeeper
 ```
 
+A plain build reports the version Go derives from the checkout's tag (`v0.2.0+dirty`), a test
+binary `dev`, which `self-update` refuses. To try `self-update` against the latest release, stamp
+an older version: `go build -ldflags "-X github.com/giantswarm/beekeeper/pkg/project.version=0.0.1" .`
+
 CI (`architect/go-build`) runs `make test` and cross-compiles for Linux, macOS and Windows, so
 every package has to compile everywhere. Linux-only reads stay behind `/proc` and cgroup paths
 that simply fail elsewhere, and the one syscall (`statfs`) is split by build tag
@@ -32,4 +36,5 @@ BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper sessions
 | `internal/lease` | Lease directories and the grant rule. |
 | `internal/state` | The shared state document and the event log, under a file lock. |
 | `internal/check` | External commands configured as checks. |
+| `internal/update` | The latest release, its signature check and the one-rename install. |
 | `cmd` | The command line. |

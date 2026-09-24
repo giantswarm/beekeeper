@@ -1,7 +1,11 @@
 package cmd
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"io"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -10,6 +14,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/update"
 )
 
 func TestUntilTime(t *testing.T) {
@@ -66,7 +71,7 @@ func TestGroupKills(t *testing.T) {
 	for range 46 {
 		kills = append(kills, oomKill{OOMKill: machine.OOMKill{Task: "jest", At: at}, Owner: "memcap"})
 	}
-	kills = append(kills, oomKill{OOMKill: machine.OOMKill{Task: "node", At: at}, Owner: "kind lab agentlab"})
+	kills = append(kills, oomKill{OOMKill: machine.OOMKill{Task: "node", At: at}, Owner: "kind lab lab-1"})
 	got := groupKills(kills)
 	if len(got) != 2 || !strings.HasPrefix(got[0], "46 from memcap: jest×46") {
 		t.Errorf("groupKills = %v", got)
@@ -112,5 +117,36 @@ func TestUsageExitCode(t *testing.T) {
 		if err := root.Execute(); Code(err) != ExitUsage {
 			t.Errorf("%v: exit %d (%v), want %d", args, Code(err), err, ExitUsage)
 		}
+	}
+}
+
+// self-update reads neither the configuration nor the state, and --check
+// answers a newer release with exit 125 and, under --json, the result.
+func TestSelfUpdateCheck(t *testing.T) {
+	cfg := t.TempDir() + "/broken.yaml"
+	if err := os.WriteFile(cfg, []byte("resources: ["), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BEEKEEPER_CONFIG", cfg)
+	prev := runUpdate
+	t.Cleanup(func() { runUpdate = prev })
+	var checked bool
+	runUpdate = func(_ context.Context, _ io.Writer, check bool) (update.Result, error) {
+		checked = check
+		return update.Result{Current: "v0.2.0", Latest: "v0.3.0", Newer: true}, update.ErrOutdated
+	}
+
+	var out bytes.Buffer
+	root := New()
+	root.SetArgs([]string{"self-update", "--check", "--json"})
+	root.SetOut(&out)
+	root.SetErr(io.Discard)
+	err := root.Execute()
+	if Code(err) != ExitOutdated || !checked || !strings.Contains(err.Error(), "v0.3.0 is newer than v0.2.0") {
+		t.Errorf("self-update --check = exit %d, %v (check %v)", Code(err), err, checked)
+	}
+	var res update.Result
+	if jerr := json.Unmarshal(out.Bytes(), &res); jerr != nil || res.Latest != "v0.3.0" || !res.Newer {
+		t.Errorf("--json printed %q (%v)", out.String(), jerr)
 	}
 }
