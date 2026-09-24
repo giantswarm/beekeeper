@@ -25,6 +25,7 @@ type Mem struct {
 	AvailableMiB int `json:"availableMiB"`
 	SwapTotalMiB int `json:"swapTotalMiB"`
 	SwapUsedMiB  int `json:"swapUsedMiB"`
+	ShmemMiB     int `json:"shmemMiB"`
 }
 
 // ReadMem parses /proc/meminfo.
@@ -49,6 +50,7 @@ func ReadMem() (Mem, error) {
 		AvailableMiB: kb["MemAvailable"] / 1024,
 		SwapTotalMiB: kb["SwapTotal"] / 1024,
 		SwapUsedMiB:  (kb["SwapTotal"] - kb["SwapFree"]) / 1024,
+		ShmemMiB:     kb["Shmem"] / 1024,
 	}, sc.Err()
 }
 
@@ -206,26 +208,32 @@ type Cluster struct {
 	MemMiB int    `json:"memMiB"`
 	// Containers are the node containers' full ids.
 	Containers []string `json:"containers"`
+	// RunningFor is docker's age of its oldest node ("2 hours ago").
+	RunningFor string `json:"runningFor"`
 }
 
 // KindClusters lists the kind clusters from the node containers docker runs.
 func KindClusters(ctx context.Context) ([]Cluster, error) {
 	out, err := exec.CommandContext(ctx, "docker", "ps", "--no-trunc", "--filter", "label=io.x-k8s.kind.cluster",
-		"--format", `{{.ID}} {{.Label "io.x-k8s.kind.cluster"}}`).Output()
+		"--format", `{{.ID}}\t{{.Label "io.x-k8s.kind.cluster"}}\t{{.RunningFor}}`).Output()
 	if err != nil {
 		return nil, err
 	}
 	by := map[string]*Cluster{}
 	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
-		id, name, ok := strings.Cut(line, " ")
-		if !ok {
+		f := strings.Split(line, "\t")
+		if len(f) != 3 {
 			continue
 		}
+		id, name := f[0], f[1]
 		c := by[name]
 		if c == nil {
+			// docker lists the newest container first: the last node seen
+			// is the oldest.
 			c = &Cluster{Name: name}
 			by[name] = c
 		}
+		c.RunningFor = f[2]
 		c.Nodes++
 		c.Containers = append(c.Containers, id)
 		c.MemMiB += int(readInt("/sys/fs/cgroup/system.slice/docker-"+id+".scope/memory.current") >> 20)
