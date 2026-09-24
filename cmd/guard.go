@@ -105,12 +105,15 @@ func (a *app) hookCmd() *cobra.Command {
 	}
 	c.AddCommand(&cobra.Command{
 		Use:   "pretooluse",
-		Short: "The Bash tool's PreToolUse hook: builds into a slot, at most two kind labs",
+		Short: "The Bash tool's PreToolUse hook: builds into a slot, at most two kind labs, the merge gate",
 		Long: `pretooluse reads a PreToolUse event on stdin. A build, test, lint or lab
 command is rewritten to run through "beekeeper run -- zsh -c '<command>'"
 (the absolute path of this binary), the tool timeout raised to 10 minutes;
 a background run gets a 60-minute wait instead. A command that would start a
 third kind cluster is refused with the running labs and the held leases.
+Every devctl pr merge gets "<this binary> gate --" in front of it (a
+background one "gate --wait 30m --"), the timeout raised the same way; see
+beekeeper lanes. Other devctl commands pass untouched.
 Anything else, malformed input included, passes unchanged.
 
 Register it in ~/.claude/settings.json:

@@ -262,12 +262,11 @@ func (a *app) probeBudget(ctx context.Context) (github.Budget, error) {
 	if err != nil {
 		return b, err
 	}
-	if etag != st.BudgetETag {
-		_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
-			st.BudgetETag = etag
-			return nil, nil
-		})
-	}
+	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.BudgetETag = etag
+		st.Budget = &state.Budget{Remaining: b.Remaining, Limit: b.Limit, Reset: b.Reset, At: time.Now().UTC()}
+		return nil, nil
+	})
 	return b, nil
 }
 
