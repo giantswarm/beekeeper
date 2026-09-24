@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -63,8 +64,8 @@ type Hold struct {
 	By     Party     `json:"by"`
 	At     time.Time `json:"at"`
 	Until  time.Time `json:"until,omitzero"`
-	// Except is the one repository a "merges" hold lets through: the tool's
-	// own repository during a tool-release window.
+	// Except is what a merge hold lets through: a repository (the tool's own
+	// during a tool-release window) or one pull request, owner/repo#n.
 	Except string `json:"except,omitempty"`
 	// Tool is the binary whose release window this hold is, ToolFrom the
 	// version it reported when the window opened and ToolRelease the release
@@ -78,6 +79,11 @@ type Hold struct {
 // Active reports whether the hold still applies at now.
 func (h Hold) Active(now time.Time) bool {
 	return h.Until.IsZero() || now.Before(h.Until)
+}
+
+// Excepts reports whether the hold lets a merge of repo#pr through.
+func (h Hold) Excepts(repo string, pr int) bool {
+	return h.Except != "" && (strings.EqualFold(h.Except, repo) || strings.EqualFold(h.Except, fmt.Sprintf("%s#%d", repo, pr)))
 }
 
 // Agent is an empty session registered as spare capacity.
@@ -122,7 +128,6 @@ type State struct {
 	Merges []Merge `json:"merges,omitempty"`
 }
 
-// Event is one line of events.jsonl.
 // Budget is one reading of the GitHub core budget.
 type Budget struct {
 	Remaining int       `json:"remaining"`
@@ -155,6 +160,12 @@ type Merge struct {
 	// Seeded marks a place queued on a session's behalf (lanes queue): it
 	// survives refusals and keeps the seed TTL until the merge runs.
 	Seeded bool `json:"seeded,omitempty"`
+	// Outside marks a merge run outside the gate (lanes settle): waiting, it
+	// heads its lane until its own devctl pr merge runs or GitHub reports it
+	// merged; merged, it settles its lane like a gated merge.
+	Outside bool `json:"outside,omitempty"`
+	// Checked is when GitHub last reported an outside merge not merged yet.
+	Checked time.Time `json:"checked,omitzero"`
 	// Release is the tag the merge released, empty when unknown.
 	Release string `json:"release,omitempty"`
 	// Roll names the HelmReleases (namespace/name) that must reach Release
@@ -165,6 +176,7 @@ type Merge struct {
 // Key is the merge's repository and number, owner/repo#n.
 func (m Merge) Key() string { return fmt.Sprintf("%s#%d", m.Repo, m.PR) }
 
+// Event is one line of events.jsonl.
 type Event struct {
 	At     time.Time `json:"at"`
 	By     Party     `json:"by"`

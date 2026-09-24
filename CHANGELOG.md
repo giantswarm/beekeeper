@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The merge gate: the PreToolUse hook puts `beekeeper gate` in front of every `devctl pr merge`. Merges queue per lane (`lanes` in the configuration), one at a time, the next once the lane's HelmReleases are Ready and the previous release rolled; a held repository, lane, `merges` or `github`, a budget under the floor and an unreadable installation refuse (exit 77); a wait past its bound exits 76 and keeps the merge's place; the machine runs at most `merge.cap` devctl processes; a giantswarm/devctl merge opens the tool-release window. devctl's document and exit code pass through unchanged.
 - `lanes [queue|drop|clear]`: each lane's running, settling and waiting merges, also in `handover`; `queue <owner/repo> <n> --for <session>` seeds a session's place so an agreed order carries over.
 - `hold set|lift|check --lane <name>`, the `merges` target and `--except`.
+- `lanes settle <owner/repo> <n> [--for <session>]`: a merge run outside the gate heads its lane until it merges, so its own `devctl pr merge` passes the gate while the lane's other merges wait; merged through the gate or outside it (GitHub asked at most once a minute), it settles the lane like a gated merge. `lanes` and `handover` show it.
+- `hold set --except owner/repo#n` on a lane or repository hold: the hold refuses every merge but that pull request's; `hold check` takes `owner/repo#n`, and `hold`, `lanes` and `handover` show the exception.
 
 - `sessions` and `tail`: every running Claude Code session from disk (processes, desktop records, transcripts, checkouts), what it is on, what it runs, overlaps.
 - `snapshot` and `watch`: the machine tick and the Monitor source, with every OOM kill attributed, session starts, ends and restarts, stale leases, and the installations' alerts.
@@ -29,6 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `checks:` configuration and `snapshot --no-checks`: the alerts it ran a script for are read natively (`snapshot --no-alerts` skips them).
 
 ### Fixed
+
+- A merged run whose release devctl could not confirm no longer keeps its lane until `merge.settleTimeout`: after `merge.settle` only the lane's HelmReleases decide.
 
 - `watch` stopped by SIGINT or SIGTERM during a poll no longer reports the journal or the GitHub budget as unreadable.
 - `hook pretooluse`'s third-lab refusal names each lease holder as `lease list` does (the claim's or the live session's name), no longer the `user@host` holder field.

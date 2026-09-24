@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
@@ -182,6 +183,31 @@ func TestHookNamesLeaseHoldersAsLeaseList(t *testing.T) {
 	for _, h := range hs {
 		if v := a.leaseView(sessions, h); !strings.Contains(o.D.Reason, h.Env+": "+v.Name+" since") {
 			t.Errorf("%s: the refusal does not name %q as lease list does", h.Env, v.Name)
+		}
+	}
+}
+
+func TestCheckExcept(t *testing.T) {
+	const serving, marge = "lane:serving", "giantswarm/marge"
+	a := &app{cfg: &config.Config{Lanes: []config.Lane{{Name: "serving", Repositories: []string{"giantswarm/model-manager"}}}}}
+	for _, c := range []struct {
+		target, except string
+		ok             bool
+	}{
+		{serving, "giantswarm/model-manager#172", true},
+		{serving, "giantswarm/model-manager", true},
+		{serving, "giantswarm/marge#3", false},
+		{serving, "model-manager#172", false},
+		{serving, "giantswarm/model-manager#x", false},
+		{marge, marge + "#3", true},
+		{marge, marge, false},
+		{marge, "giantswarm/backstage#3", false},
+		{"merges", "giantswarm/devctl", true},
+		{"github", "giantswarm/devctl", false},
+		{"github", "", true},
+	} {
+		if err := a.checkExcept(c.target, c.except); (err == nil) != c.ok {
+			t.Errorf("%s except %q: %v", c.target, c.except, err)
 		}
 	}
 }

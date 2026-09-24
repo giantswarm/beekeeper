@@ -92,20 +92,17 @@ func ParseDocument(raw []byte) (Outcome, bool) {
 	return o, true
 }
 
-// Blocking is the active hold that stops a merge into repo in lane: the
-// repository's, the lane's, github's or one on all merges.
-func Blocking(st *state.State, now time.Time, repo, lane string) (state.Hold, bool) {
+// Blocking is the active hold that stops a merge of repo#pr in lane: the
+// repository's, the lane's, github's or one on all merges, unless the hold
+// lets that repository or pull request through.
+func Blocking(st *state.State, now time.Time, repo string, pr int, lane string) (state.Hold, bool) {
 	for _, h := range st.Holds {
-		if !h.Active(now) {
+		if !h.Active(now) || h.Excepts(repo, pr) {
 			continue
 		}
 		switch h.Target {
-		case repo, LanePrefix + lane, "github":
+		case repo, LanePrefix + lane, "github", AllMerges:
 			return h, true
-		case AllMerges:
-			if !strings.EqualFold(h.Except, repo) {
-				return h, true
-			}
 		}
 	}
 	return state.Hold{}, false
@@ -140,7 +137,7 @@ type Lane struct {
 }
 
 // Queue returns the lane's running and settling merges and the waiting
-// ones in turn order.
+// ones in turn order: a settled outside merge first, then in join order.
 func Queue(st *state.State, lane string) Lane {
 	q := Lane{Name: lane, Waiting: []state.Merge{}}
 	for i := range st.Merges {
@@ -152,13 +149,31 @@ func Queue(st *state.State, lane string) Lane {
 		case state.Running:
 			q.Running = m
 		case state.Settling:
-			q.Settling = m
+			if q.Settling == nil || m.Finished.After(q.Settling.Finished) {
+				q.Settling = m
+			}
 		default:
 			q.Waiting = append(q.Waiting, *m)
 		}
 	}
-	slices.SortStableFunc(q.Waiting, func(a, b state.Merge) int { return a.Joined.Compare(b.Joined) })
+	slices.SortStableFunc(q.Waiting, func(a, b state.Merge) int {
+		if a.Outside != b.Outside {
+			if a.Outside {
+				return -1
+			}
+			return 1
+		}
+		return a.Joined.Compare(b.Joined)
+	})
 	return q
+}
+
+// Merged turns an outside merge that GitHub reports merged at into its
+// lane's settling merge. Its release is unknown: the lane settles by the
+// settle rule from the merge on.
+func Merged(m *state.Merge, at time.Time) {
+	m.Phase, m.Finished, m.PID, m.Seeded = state.Settling, at.UTC(), 0, false
+	m.Release, m.Roll, m.Checked = "", nil, time.Time{}
 }
 
 // Position is the 1-based turn of repo#pr among the lane's waiting merges,
@@ -287,12 +302,13 @@ func RollSet(hrs []HelmRelease, repo string) []string {
 // ended. why says what the lane waits for.
 func Ready(lane config.Lane, hrs []HelmRelease, settling *state.Merge, now time.Time, settle time.Duration) (bool, string) {
 	mine := laneReleases(lane, hrs)
-	if settling != nil {
-		if settling.Release == "" {
-			if until := settling.Finished.Add(settle); now.Before(until) {
-				return false, fmt.Sprintf("%s's release is unknown: the lane settles until %s", settling.Key(), until.Local().Format("15:04"))
-			}
+	switch {
+	case settling == nil:
+	case settling.Release == "":
+		if until := settling.Finished.Add(settle); now.Before(until) {
+			return false, fmt.Sprintf("%s's release is unknown: the lane settles until %s", settling.Key(), until.Local().Format("15:04"))
 		}
+	default:
 		for _, key := range settling.Roll {
 			i := slices.IndexFunc(mine, func(hr HelmRelease) bool { return hr.Key == key })
 			switch {
