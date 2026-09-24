@@ -290,6 +290,18 @@ func (a *app) laneViews(st *state.State) []laneView {
 	return out
 }
 
+// settlingText says what a settling merge waits for.
+func (a *app) settlingText(m state.Merge) string {
+	switch {
+	case m.Outside:
+		return fmt.Sprintf("settling %s, merged outside the gate at %s, until %s and its HelmReleases are Ready", m.Key(),
+			clock(a.now, m.Finished), clock(a.now, m.Finished.Add(a.cfg.Merge.Settle.Duration)))
+	case m.Release == "":
+		return fmt.Sprintf("settling %s until an unknown release rolls", m.Key())
+	}
+	return fmt.Sprintf("settling %s until %s rolls", m.Key(), m.Release)
+}
+
 func (a *app) printLanes(views []laneView) {
 	if len(views) == 0 {
 		_, _ = fmt.Fprintln(a.out, "no lanes are configured and nothing merges")
@@ -305,17 +317,17 @@ func (a *app) printLanes(views []laneView) {
 		switch {
 		case v.Running != nil:
 			status = fmt.Sprintf("running %s by %q since %s", v.Running.Key(), v.Running.By.Name, clock(a.now, v.Running.Started))
-		case v.Settling != nil && v.Settling.Outside:
-			status = fmt.Sprintf("settling %s, merged outside the gate at %s, until %s and its HelmReleases are Ready", v.Settling.Key(),
-				clock(a.now, v.Settling.Finished), clock(a.now, v.Settling.Finished.Add(a.cfg.Merge.Settle.Duration)))
 		case v.Settling != nil:
-			release := v.Settling.Release
-			if release == "" {
-				release = "an unknown release"
-			}
-			status = fmt.Sprintf("settling %s until %s rolls", v.Settling.Key(), release)
+			status = a.settlingText(*v.Settling)
 		}
 		p("%s%s: %s", v.Name, where, status)
+		also := v.AllSettling
+		if v.Running == nil && len(also) > 0 {
+			also = also[:len(also)-1]
+		}
+		for _, m := range also {
+			p("  also %s", a.settlingText(*m))
+		}
 		if v.Hold != nil {
 			except := ""
 			if v.Hold.Except != "" {

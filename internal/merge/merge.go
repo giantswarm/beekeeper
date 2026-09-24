@@ -130,10 +130,14 @@ func Prune(st *state.State, now time.Time, ttl, seedTTL time.Duration, alive fun
 
 // Lane is one lane's queue.
 type Lane struct {
-	Name     string        `json:"name"`
-	Running  *state.Merge  `json:"running,omitempty"`
-	Settling *state.Merge  `json:"settling,omitempty"`
-	Waiting  []state.Merge `json:"waiting"`
+	Name    string       `json:"name"`
+	Running *state.Merge `json:"running,omitempty"`
+	// Settling is the latest of the lane's settling merges, AllSettling all
+	// of them, oldest first: a merge outside the gate can settle while a
+	// gated one does.
+	Settling    *state.Merge   `json:"settling,omitempty"`
+	AllSettling []*state.Merge `json:"allSettling,omitempty"`
+	Waiting     []state.Merge  `json:"waiting"`
 }
 
 // Queue returns the lane's running and settling merges and the waiting
@@ -149,12 +153,14 @@ func Queue(st *state.State, lane string) Lane {
 		case state.Running:
 			q.Running = m
 		case state.Settling:
-			if q.Settling == nil || m.Finished.After(q.Settling.Finished) {
-				q.Settling = m
-			}
+			q.AllSettling = append(q.AllSettling, m)
 		default:
 			q.Waiting = append(q.Waiting, *m)
 		}
+	}
+	slices.SortStableFunc(q.AllSettling, func(a, b *state.Merge) int { return a.Finished.Compare(b.Finished) })
+	if n := len(q.AllSettling); n > 0 {
+		q.Settling = q.AllSettling[n-1]
 	}
 	slices.SortStableFunc(q.Waiting, func(a, b state.Merge) int {
 		if a.Outside != b.Outside {
@@ -174,6 +180,15 @@ func Queue(st *state.State, lane string) Lane {
 func Merged(m *state.Merge, at time.Time) {
 	m.Phase, m.Finished, m.PID, m.Seeded = state.Settling, at.UTC(), 0, false
 	m.Release, m.Roll, m.Checked = "", nil, time.Time{}
+}
+
+// SettlingKeys names the lane's settling merges, oldest first.
+func (q Lane) SettlingKeys() string {
+	keys := make([]string, 0, len(q.AllSettling))
+	for _, m := range q.AllSettling {
+		keys = append(keys, m.Key())
+	}
+	return strings.Join(keys, " ")
 }
 
 // Position is the 1-based turn of repo#pr among the lane's waiting merges,

@@ -125,8 +125,8 @@ func TestMerged(t *testing.T) {
 	if m.Phase != state.Settling || !m.Finished.Equal(at) || m.PID != 0 || m.Seeded || m.Roll != nil || m.Release != "" || !m.Outside {
 		t.Errorf("merged outside: %+v", m)
 	}
-	if q := Queue(&state.State{Merges: []state.Merge{m, earlier}}, "l"); q.Settling == nil || q.Settling.Key() != "o/f#6" {
-		t.Errorf("the lane does not settle the latest merge: %+v", q.Settling)
+	if q := Queue(&state.State{Merges: []state.Merge{m, earlier}}, "l"); q.Settling == nil || q.Settling.Key() != "o/f#6" || q.SettlingKeys() != "o/a#1 o/f#6" {
+		t.Errorf("the lane does not settle both merges, the latest last: %+v %q", q.Settling, q.SettlingKeys())
 	}
 }
 
