@@ -10,10 +10,12 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 func (a *app) runCmd() *cobra.Command {
@@ -123,7 +125,7 @@ Register it in ~/.claude/settings.json:
 				return nil
 			}
 			self, _ := os.Executable()
-			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: heldLeases(a.cfgPath)}
+			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: a.heldLeases}
 			if out := h.Decide(raw); out != nil {
 				_, _ = a.out.Write(out)
 			}
@@ -154,19 +156,30 @@ func kindClusterNames() []string {
 	return names
 }
 
-func heldLeases(cfgPath string) func() []lease.Holder {
-	return func() []lease.Holder {
-		path, err := config.Path(cfgPath)
-		if err != nil {
-			return nil
-		}
-		cfg, err := config.Load(path)
-		if err != nil {
-			return nil
-		}
-		hs, _ := lease.Dir(cfg.LeaseDir).List()
-		return hs
+// heldLeases lists the held leases for the third-lab refusal, each holder
+// named as `lease list` names it. The configuration is read only when a
+// refusal needs it: a broken one must not block a tool call.
+func (a *app) heldLeases() []lease.Holder {
+	if a.loadConfig() != nil {
+		return nil
 	}
+	hs, _ := lease.Dir(a.cfg.LeaseDir).List()
+	var sessions []*claude.Session
+	if t, err := proc.Read(); err == nil {
+		sessions = claude.Discover(a.cfg, t, time.Now())
+	}
+	return a.namedHolders(sessions, hs)
+}
+
+// namedHolders sets each holder's name to the one `lease list` shows: the
+// claim's, the live session's, or the user@host holder.
+func (a *app) namedHolders(sessions []*claude.Session, hs []lease.Holder) []lease.Holder {
+	out := make([]lease.Holder, len(hs))
+	for i, h := range hs {
+		h.Name = a.leaseView(sessions, h).Name
+		out[i] = h
+	}
+	return out
 }
 
 func env(name, def string) string {

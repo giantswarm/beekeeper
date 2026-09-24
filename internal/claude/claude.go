@@ -64,6 +64,9 @@ type Record struct {
 	LastActivityAt int64  `json:"lastActivityAt"`
 	PermissionMode string `json:"permissionMode"`
 	Model          string `json:"model"`
+	// PriorCLISessionIDs are the CLI sessions the desktop session ran before
+	// a restart gave it a new one.
+	PriorCLISessionIDs []string `json:"priorCliSessionIds"`
 }
 
 // Discover returns the running sessions, newest first.
@@ -154,7 +157,11 @@ func ReadRecord(cfg *config.Config, hostID string) (*Record, bool) {
 	if len(m) == 0 {
 		return nil, false
 	}
-	raw, err := os.ReadFile(filepath.Clean(m[0]))
+	return readRecord(m[0])
+}
+
+func readRecord(path string) (*Record, bool) {
+	raw, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		return nil, false
 	}
@@ -165,24 +172,40 @@ func ReadRecord(cfg *config.Config, hostID string) (*Record, bool) {
 	return r, true
 }
 
+func recordFiles(cfg *config.Config) []string {
+	m, _ := filepath.Glob(filepath.Join(cfg.Claude.DesktopDir, "*", "*", "local_*.json"))
+	return m
+}
+
+// Titles maps CLI session ids, current and prior, to their desktop titles,
+// archived sessions included: the name of a session whose CLI is gone.
+func Titles(cfg *config.Config) map[string]string {
+	out := map[string]string{}
+	for _, path := range recordFiles(cfg) {
+		r, ok := readRecord(path)
+		if !ok || r.Title == "" {
+			continue
+		}
+		for _, id := range append(r.PriorCLISessionIDs, r.CLISessionID) {
+			if id != "" {
+				out[id] = r.Title
+			}
+		}
+	}
+	return out
+}
+
 // RecentRecords returns the unarchived desktop records active since since.
 func RecentRecords(cfg *config.Config, since time.Time) []*Record {
-	m, _ := filepath.Glob(filepath.Join(cfg.Claude.DesktopDir, "*", "*", "local_*.json"))
 	var out []*Record
-	for _, path := range m {
+	for _, path := range recordFiles(cfg) {
 		fi, err := os.Stat(path)
 		if err != nil || fi.ModTime().Before(since) {
 			continue
 		}
-		raw, err := os.ReadFile(filepath.Clean(path))
-		if err != nil {
-			continue
+		if r, ok := readRecord(path); ok && !r.IsArchived {
+			out = append(out, r)
 		}
-		r := &Record{}
-		if json.Unmarshal(raw, r) != nil || r.IsArchived {
-			continue
-		}
-		out = append(out, r)
 	}
 	slices.SortFunc(out, func(a, b *Record) int { return int(b.LastActivityAt - a.LastActivityAt) })
 	return out

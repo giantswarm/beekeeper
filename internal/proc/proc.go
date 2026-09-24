@@ -28,6 +28,10 @@ type Process struct {
 	Comm  string
 	Args  []string
 	Start time.Time
+	// CPU is the processor time it has burned (user and system).
+	CPU time.Duration
+	// RSSKiB is its resident memory, file-backed pages included.
+	RSSKiB int
 }
 
 // Cmdline is the argument vector joined by spaces.
@@ -77,7 +81,7 @@ func readProcess(pid int, boot time.Time) (*Process, error) {
 	if err != nil {
 		return nil, err
 	}
-	comm, ppid, start, err := parseStat(stat)
+	st, err := parseStat(stat)
 	if err != nil {
 		return nil, err
 	}
@@ -86,37 +90,50 @@ func readProcess(pid int, boot time.Time) (*Process, error) {
 		return nil, err
 	}
 	return &Process{
-		PID:   pid,
-		PPID:  ppid,
-		Comm:  comm,
-		Args:  splitNul(raw),
-		Start: boot.Add(time.Duration(start) * time.Second / clockTicks),
+		PID:    pid,
+		PPID:   st.ppid,
+		Comm:   st.comm,
+		Args:   splitNul(raw),
+		Start:  boot.Add(ticks(st.start)),
+		CPU:    ticks(st.cpu),
+		RSSKiB: int(st.rssPages * int64(os.Getpagesize()) / 1024),
 	}, nil
 }
 
-// parseStat returns comm, ppid and starttime (clock ticks since boot) from
-// /proc/<pid>/stat. comm is in parentheses and may itself contain spaces and
-// parentheses, so the fields after it are found from the last ')'.
-func parseStat(b []byte) (string, int, int64, error) {
+func ticks(n int64) time.Duration { return time.Duration(n) * time.Second / clockTicks }
+
+// stat is the part of /proc/<pid>/stat beekeeper reads; times in clock ticks.
+type stat struct {
+	comm     string
+	ppid     int
+	cpu      int64 // utime + stime
+	start    int64 // since boot
+	rssPages int64
+}
+
+// parseStat reads /proc/<pid>/stat. comm is in parentheses and may itself
+// contain spaces and parentheses, so the fields after it are found from the
+// last ')'.
+func parseStat(b []byte) (stat, error) {
 	open, end := bytes.IndexByte(b, '('), bytes.LastIndexByte(b, ')')
 	if open < 0 || end < open {
-		return "", 0, 0, errors.New("malformed stat")
+		return stat{}, errors.New("malformed stat")
 	}
-	comm := string(b[open+1 : end])
 	f := strings.Fields(string(b[end+1:]))
-	// f[0] is field 3 (state); ppid is field 4, starttime field 22.
-	if len(f) < 20 {
-		return "", 0, 0, errors.New("short stat")
+	// f[0] is field 3 (state): field n is f[n-3]. ppid is field 4, utime
+	// and stime 14 and 15, starttime 22, rss 24.
+	if len(f) < 22 {
+		return stat{}, errors.New("short stat")
 	}
-	ppid, err := strconv.Atoi(f[1])
-	if err != nil {
-		return "", 0, 0, err
+	n := map[int]int64{}
+	for _, i := range []int{4, 14, 15, 22, 24} {
+		v, err := strconv.ParseInt(f[i-3], 10, 64)
+		if err != nil {
+			return stat{}, err
+		}
+		n[i] = v
 	}
-	start, err := strconv.ParseInt(f[19], 10, 64)
-	if err != nil {
-		return "", 0, 0, err
-	}
-	return comm, ppid, start, nil
+	return stat{comm: string(b[open+1 : end]), ppid: int(n[4]), cpu: n[14] + n[15], start: n[22], rssPages: n[24]}, nil
 }
 
 func splitNul(b []byte) []string {
@@ -229,4 +246,37 @@ func AnonKiB(pid int) int {
 		}
 	}
 	return 0
+}
+
+// UID returns the real user id pid runs as, or -1 when it cannot be read.
+func UID(pid int) int {
+	raw, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "status"))
+	if err != nil {
+		return -1
+	}
+	for line := range strings.SplitSeq(string(raw), "\n") {
+		if v, ok := strings.CutPrefix(line, "Uid:"); ok {
+			if f := strings.Fields(v); len(f) > 0 {
+				n, err := strconv.Atoi(f[0])
+				if err == nil {
+					return n
+				}
+			}
+		}
+	}
+	return -1
+}
+
+// Cgroup returns the cgroup v2 path of pid ("/user.slice/…"), or "".
+func Cgroup(pid int) string {
+	raw, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cgroup"))
+	if err != nil {
+		return ""
+	}
+	for line := range strings.SplitSeq(string(raw), "\n") {
+		if p, ok := strings.CutPrefix(line, "0::"); ok {
+			return p
+		}
+	}
+	return ""
 }

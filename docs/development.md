@@ -30,6 +30,10 @@ EOF
 BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper sessions
 ```
 
+`free` takes its temp dir from `TMPDIR` (Claude Code's session dirs are `$TMPDIR/claude-<uid>`), so
+`--apply` can be tried on a fixture instead of the real `/tmp`:
+`TMPDIR=/tmp/fixture ./beekeeper free --apply --only session-dirs,tmp-dirs`.
+
 ## Layout
 
 | Package | What it knows |
@@ -42,5 +46,6 @@ BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper sessions
 | `internal/state` | The shared state document and the event log, under a file lock. |
 | `internal/check` | External commands configured as checks. |
 | `internal/guard` | The build guard: a capped run in a build slot, and the PreToolUse hook's rewrite and third-lab refusal. |
+| `internal/free` | What can be freed (dead sessions' dirs, throwaway temp dirs, orphaned workers) and what is only reported, as a report or the front end's TSV. |
 | `internal/update` | The latest release, its signature check and the one-rename install. |
 | `cmd` | The command line. |
