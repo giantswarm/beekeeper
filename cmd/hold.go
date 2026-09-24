@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -20,8 +21,10 @@ func (a *app) holdCmd() *cobra.Command {
 fixed on main), "lane:<name>" (--lane) the merges of one lane (a proving
 window, such as a model load on an installation's GPU pool, stops the lane
 whose components it exercises and not the others), "merges" every merge,
-"github" every GitHub call (the budget is spent). The gate on devctl pr merge
-refuses a held merge with the hold's reason. A merge of giantswarm/devctl
+"github" every GitHub call (the budget is spent). A merge hold can let one
+repository or pull request through (--except owner/repo or owner/repo#n): a
+window that stops a lane but for the one merge it waits for. The gate on
+/home/teemow/.go/bin/beekeeper gate -- devctl pr merge refuses a held merge with the hold's reason. A merge of giantswarm/devctl
 opens a tool-release window by itself: a "merges" hold that lets only
 giantswarm/devctl through and lifts once the local devctl reports another
 version.
@@ -41,6 +44,9 @@ Without a subcommand, lists the holds.`,
 			if err := a.checkTarget(args[0]); err != nil {
 				return err
 			}
+			if err := a.checkExcept(args[0], except); err != nil {
+				return err
+			}
 			if strings.TrimSpace(reason) == "" {
 				return &exitError{code: ExitUsage, msg: "--reason is required"}
 			}
@@ -56,18 +62,18 @@ Without a subcommand, lists the holds.`,
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Holds = slices.DeleteFunc(st.Holds, func(x state.Hold) bool { return x.Target == h.Target || !x.Active(a.now) })
 				st.Holds = append(st.Holds, h)
-				return []state.Event{event(me, "hold.set", "%s until %s: %s", h.Target, untilText(a, h), reason)}, nil
+				return []state.Event{event(me, "hold.set", "%s until %s: %s", holdTarget(h), untilText(a, h), reason)}, nil
 			})
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(a.out, "held %s until %s: %s\n", h.Target, untilText(a, h), reason)
+			_, err = fmt.Fprintf(a.out, "held %s until %s: %s\n", holdTarget(h), untilText(a, h), reason)
 			return err
 		},
 	}
 	set.Flags().StringVarP(&reason, "reason", "r", "", "why (required)")
 	set.Flags().StringVar(&until, "until", "", "when the hold ends by itself: a time (15:30) or a duration (2h); default: until lifted")
-	set.Flags().StringVar(&except, "except", "", "the one owner/repo a merges hold lets through")
+	set.Flags().StringVar(&except, "except", "", "the one owner/repo or owner/repo#n the merge hold lets through")
 	lane.register(set)
 	var liftLane, checkLane laneFlag
 	lift := &cobra.Command{
@@ -109,8 +115,8 @@ Without a subcommand, lists the holds.`,
 		Use:   "check <target> | --lane <name>",
 		Short: "Exit 0 when the target is not held, 3 when it is",
 		Long: `Exit 0 when the target is not held, 3 (with the reason) when it is. A
-repository is also held while its lane, "merges" (unless it is the hold's
-exception) or "github" is.`,
+repository, or one pull request of it (owner/repo#n), is also held while its
+lane, "merges" or "github" is, unless it is the hold's exception.`,
 		Args: checkLane.args,
 		RunE: func(_ *cobra.Command, args []string) error {
 			args = checkLane.target(args)
@@ -119,8 +125,8 @@ exception) or "github" is.`,
 				return err
 			}
 			h, ok := activeHold(st, a, args[0])
-			if strings.Contains(args[0], "/") {
-				h, ok = merge.Blocking(st, a.now, args[0], a.cfg.LaneOf(args[0]).Name)
+			if repo, pr, isRepo := splitPR(args[0]); isRepo {
+				h, ok = merge.Blocking(st, a.now, repo, pr, a.cfg.LaneOf(repo).Name)
 			}
 			if ok {
 				return refused("%s is held by %q until %s: %s", h.Target, h.By.Name, untilText(a, h), h.Reason)
@@ -166,6 +172,41 @@ func (a *app) checkTarget(target string) error {
 	return nil
 }
 
+// splitPR reads owner/repo or owner/repo#n; pr is 0 without a number.
+func splitPR(s string) (repo string, pr int, ok bool) {
+	repo, num, hasNum := strings.Cut(s, "#")
+	if !strings.Contains(repo, "/") || strings.HasPrefix(repo, merge.LanePrefix) {
+		return "", 0, false
+	}
+	if !hasNum {
+		return repo, 0, true
+	}
+	n, err := strconv.Atoi(num)
+	return repo, n, err == nil && n > 0
+}
+
+// checkExcept refuses an exception the hold cannot make: one that is not a
+// repository or pull request, on github, of another repository than the
+// held one, or outside the held lane.
+func (a *app) checkExcept(target, except string) error {
+	if except == "" {
+		return nil
+	}
+	repo, pr, ok := splitPR(except)
+	lane, isLane := strings.CutPrefix(target, merge.LanePrefix)
+	switch {
+	case !ok:
+		return usageErr("--except wants owner/repo or owner/repo#n, got %s", except)
+	case target == "github":
+		return usageErr("a github hold stops every GitHub call and makes no exception")
+	case isLane && a.cfg.LaneOf(repo).Name != lane:
+		return usageErr("%s is not in lane %s (beekeeper lanes lists the lanes)", repo, lane)
+	case strings.Contains(target, "/") && (!strings.EqualFold(repo, target) || pr == 0):
+		return usageErr("a hold on %s can only except one of its pull requests, %s#<n>", target, target)
+	}
+	return nil
+}
+
 // activeHold returns the hold that applies to target: its own, or the
 // "github" hold for any target.
 func activeHold(st *state.State, a *app, target string) (state.Hold, bool) {
@@ -177,6 +218,14 @@ func activeHold(st *state.State, a *app, target string) (state.Hold, bool) {
 		}
 	}
 	return state.Hold{}, false
+}
+
+// holdTarget is the hold's target with its exception.
+func holdTarget(h state.Hold) string {
+	if h.Except == "" {
+		return h.Target
+	}
+	return h.Target + " except " + h.Except
 }
 
 func untilText(a *app, h state.Hold) string {
@@ -217,7 +266,7 @@ func (a *app) printHolds(holds []state.Hold) {
 	w := a.table()
 	_, _ = fmt.Fprintln(w, "TARGET\tUNTIL\tBY\tSINCE\tREASON")
 	for _, h := range holds {
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", h.Target, untilText(a, h), truncate(h.By.Name, 30), clock(a.now, h.At), truncate(h.Reason, 60))
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", holdTarget(h), untilText(a, h), truncate(h.By.Name, 30), clock(a.now, h.At), truncate(h.Reason, 60))
 	}
 	_ = w.Flush()
 }

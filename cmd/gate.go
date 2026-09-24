@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -45,7 +46,8 @@ func (a *app) gateCmd() *cobra.Command {
 session never calls it. It refuses the merge (exit 77) when the repository,
 its lane, "merges" or "github" is held, when the GitHub budget is under the
 floor or unknown, or when the lane's installation cannot be read. Otherwise
-the merge joins its lane's queue and runs when it is first, nothing else of
+the merge joins its lane's queue (a merge registered with lanes settle heads
+it) and runs when it is first, nothing else of
 the lane runs, the lane's HelmReleases are Ready and the previous merge's
 release has rolled, and fewer than merge.cap devctl processes run. A wait
 longer than --wait exits 76 and keeps the merge's place for merge.queueTTL.
@@ -133,13 +135,16 @@ func (a *app) gate(ctx context.Context, argv []string, wait time.Duration) error
 // run's outcome once devctl ran or the merge was refused.
 func (g *gateRun) step() (string, error) {
 	g.closeToolWindow()
+	if why := g.checkOutside(); why != "" {
+		return why, nil
+	}
 	var q merge.Lane
 	var hold state.Hold
 	var held bool
 	var dup *state.Merge
 	err := g.store.Update(func(st *state.State) ([]state.Event, error) {
 		merge.Prune(st, g.now, g.cfg.Merge.QueueTTL.Duration, g.cfg.Merge.SeedTTL.Duration, proc.Alive)
-		if hold, held = merge.Blocking(st, g.now, g.repo, g.lane.Name); held {
+		if hold, held = merge.Blocking(st, g.now, g.repo, g.pr, g.lane.Name); held {
 			g.drop(st)
 			return nil, nil
 		}
@@ -166,7 +171,7 @@ func (g *gateRun) step() (string, error) {
 		return "", gateRefused("the state does not load (%v): fix it, then run the same command again", err)
 	case held:
 		return "", g.refuse("%s is held (%s) by %q until %s: %s; merge after the hold lifts (beekeeper hold), do not poll",
-			g.repo, hold.Target, hold.By.Name, untilText(g.app, hold), hold.Reason)
+			g.repo, holdTarget(hold), hold.By.Name, untilText(g.app, hold), hold.Reason)
 	case dup != nil:
 		return "", g.refuse("%s#%d is already merging in %q (pid %d): let that run finish", g.repo, g.pr, dup.By.Name, dup.PID)
 	}
@@ -176,7 +181,11 @@ func (g *gateRun) step() (string, error) {
 			ahead = *q.Running
 		}
 		phase := ahead.Phase
-		if phase == state.Waiting && !proc.Alive(ahead.PID) {
+		switch {
+		case phase != state.Waiting || proc.Alive(ahead.PID):
+		case ahead.Outside:
+			phase = fmt.Sprintf("settled outside the gate, GitHub reported it not merged at %s", clock(g.now, ahead.Checked))
+		default:
 			phase = "queued, its merge has not arrived"
 		}
 		return fmt.Sprintf("position %d in lane %s behind %s (%q, %s)", pos, g.lane.Name, ahead.Key(), ahead.By.Name, phase), nil
@@ -185,7 +194,7 @@ func (g *gateRun) step() (string, error) {
 		return fmt.Sprintf("next in lane %s behind the running %s (%q, since %s)", g.lane.Name, q.Running.Key(), q.Running.By.Name,
 			clock(g.now, q.Running.Started)), nil
 	}
-	hrs, why, err := g.laneReady(q.Settling)
+	hrs, why, err := g.laneReady(q)
 	if err != nil || why != "" {
 		return why, err
 	}
@@ -197,7 +206,61 @@ func (g *gateRun) step() (string, error) {
 		return "", g.refuse("the GitHub budget %d is under the floor %d: merge after the reset at %s, do not poll",
 			b.Remaining, g.cfg.GitHub.Floor, clock(g.now, b.Reset))
 	}
-	return g.start(q.Settling, hrs)
+	return g.start(q.SettlingKeys(), hrs)
+}
+
+// outsideCheck is how often a merge waiting behind a settled outside merge
+// asks GitHub whether it merged.
+const outsideCheck = time.Minute
+
+// checkOutside asks GitHub about the lane's settled outside merges that
+// wait without their own merge and were last checked more than outsideCheck
+// ago: a merged one settles the lane, a closed one leaves it. It returns
+// what the merge waits for when GitHub does not answer.
+func (g *gateRun) checkOutside() string {
+	st, err := g.store.Read()
+	if err != nil {
+		return ""
+	}
+	pulls := map[string]github.Pull{}
+	for _, m := range st.Merges {
+		if m.Lane != g.lane.Name || !m.Outside || m.Phase != state.Waiting || proc.Alive(m.PID) ||
+			(m.Repo == g.repo && m.PR == g.pr) || g.now.Sub(m.Checked) < outsideCheck {
+			continue
+		}
+		p, err := github.PullState(g.ctx, m.Repo, m.PR)
+		if err != nil {
+			return fmt.Sprintf("lane %s waits for %s, settled outside the gate, and GitHub does not answer for it (%v)", g.lane.Name, m.Key(), err)
+		}
+		pulls[m.Key()] = p
+	}
+	if len(pulls) == 0 {
+		return ""
+	}
+	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+		var ev []state.Event
+		closed := map[string]bool{}
+		for i := range st.Merges {
+			m := &st.Merges[i]
+			p, ok := pulls[m.Key()]
+			if !ok || !m.Outside || m.Phase != state.Waiting {
+				continue
+			}
+			switch p.State {
+			case github.Merged:
+				merge.Merged(m, p.MergedAt)
+				ev = append(ev, event(g.me, "merged", "%s outside the gate at %s, release unknown", m.Key(), p.MergedAt.UTC().Format(time.RFC3339)))
+			case github.Closed:
+				closed[m.Key()] = true
+				ev = append(ev, event(g.me, "merge.dropped", "%s: closed without a merge, it no longer heads lane %s", m.Key(), m.Lane))
+			default:
+				m.Checked = g.now.UTC()
+			}
+		}
+		st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool { return closed[m.Key()] && m.Outside && m.Phase == state.Waiting })
+		return ev, nil
+	})
+	return ""
 }
 
 // mine is the index of this merge's entry in that phase, -1 when none.
@@ -225,8 +288,9 @@ func (g *gateRun) refuse(format string, args ...any) error {
 }
 
 // laneReady reads the lane's installation: why is what the lane waits for,
-// "" when it is free. An installation that cannot be read refuses.
-func (g *gateRun) laneReady(settling *state.Merge) ([]merge.HelmRelease, string, error) {
+// "" when it is free, which needs each of its settling merges settled. An
+// installation that cannot be read refuses.
+func (g *gateRun) laneReady(q merge.Lane) ([]merge.HelmRelease, string, error) {
 	if g.lane.Installation == "" {
 		return nil, "", nil
 	}
@@ -235,20 +299,28 @@ func (g *gateRun) laneReady(settling *state.Merge) ([]merge.HelmRelease, string,
 		return nil, "", g.refuse("lane %s cannot read the HelmReleases of %s (%v): log in (tsh kube login %s), then run the same command again",
 			g.lane.Name, g.lane.Installation, err, g.lane.Installation)
 	}
-	ready, why := merge.Ready(g.lane, hrs, settling, g.now, g.cfg.Merge.Settle.Duration)
-	if ready {
-		return hrs, "", nil
+	settling := q.AllSettling
+	if len(settling) == 0 {
+		settling = []*state.Merge{nil}
 	}
-	if settling != nil && g.now.Sub(settling.Finished) > g.cfg.Merge.SettleTimeout.Duration {
-		return nil, "", g.refuse("lane %s has waited %s since %s: %s; fix the installation or clear the lane (beekeeper lanes clear %s), then run the same command again",
-			g.lane.Name, g.cfg.Merge.SettleTimeout.Duration, settling.Key(), why, g.lane.Name)
+	for _, s := range settling {
+		ready, why := merge.Ready(g.lane, hrs, s, g.now, g.cfg.Merge.Settle.Duration)
+		switch {
+		case ready:
+			continue
+		case s != nil && g.now.Sub(s.Finished) > g.cfg.Merge.SettleTimeout.Duration:
+			return nil, "", g.refuse("lane %s has waited %s since %s: %s; fix the installation or clear the lane (beekeeper lanes clear %s), then run the same command again",
+				g.lane.Name, g.cfg.Merge.SettleTimeout.Duration, s.Key(), why, g.lane.Name)
+		}
+		return nil, fmt.Sprintf("next in lane %s, waiting for %s: %s", g.lane.Name, g.lane.Installation, why), nil
 	}
-	return nil, fmt.Sprintf("next in lane %s, waiting for %s: %s", g.lane.Name, g.lane.Installation, why), nil
+	return hrs, "", nil
 }
 
-// start makes the merge the lane's running one, when it still is first and
-// the machine runs fewer than merge.cap devctl processes, and runs devctl.
-func (g *gateRun) start(settling *state.Merge, hrs []merge.HelmRelease) (string, error) {
+// start makes the merge the lane's running one, when it still is first, its
+// lane's settling merges are the ones it checked and the machine runs fewer
+// than merge.cap devctl processes, and runs devctl.
+func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error) {
 	toolFrom := ""
 	if strings.EqualFold(g.repo, merge.ToolRepo) {
 		toolFrom = toolVersion(g.ctx)
@@ -261,7 +333,7 @@ func (g *gateRun) start(settling *state.Merge, hrs []merge.HelmRelease) (string,
 		case i < 0 || q.Position(g.repo, g.pr) != 1 || q.Running != nil:
 			why = "the lane moved on"
 			return nil, nil
-		case q.Settling != nil && (settling == nil || q.Settling.Key() != settling.Key()):
+		case q.SettlingKeys() != settling:
 			why = "another merge of the lane just settled"
 			return nil, nil
 		}
@@ -273,7 +345,7 @@ func (g *gateRun) start(settling *state.Merge, hrs []merge.HelmRelease) (string,
 		st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool { return m.Lane == g.lane.Name && m.Phase == state.Settling })
 		i = g.mine(st, state.Waiting)
 		m := &st.Merges[i]
-		m.Phase, m.Started, m.Roll, m.Seeded = state.Running, g.now.UTC(), merge.RollSet(hrs, g.repo), false
+		m.Phase, m.Started, m.Roll, m.Seeded, m.Outside = state.Running, g.now.UTC(), merge.RollSet(hrs, g.repo), false, false
 		ev := []state.Event{event(g.me, "merging", "%s#%d in lane %s", g.repo, g.pr, g.lane.Name)}
 		if strings.EqualFold(g.repo, merge.ToolRepo) {
 			st.Holds = slices.DeleteFunc(st.Holds, func(h state.Hold) bool { return h.Target == merge.AllMerges })

@@ -77,3 +77,14 @@ func TestHoldActive(t *testing.T) {
 		t.Error("an expired hold is active")
 	}
 }
+
+func TestHoldExcepts(t *testing.T) {
+	h := Hold{Except: "giantswarm/Model-Manager#172"}
+	if !h.Excepts("giantswarm/model-manager", 172) || h.Excepts("giantswarm/model-manager", 17) || h.Excepts("giantswarm/model-manager", 0) {
+		t.Error("a pull request exception")
+	}
+	h.Except = "giantswarm/devctl"
+	if !h.Excepts("giantswarm/devctl", 3) || h.Excepts("giantswarm/marge", 3) || (Hold{}).Excepts("giantswarm/devctl", 3) {
+		t.Error("a repository exception")
+	}
+}

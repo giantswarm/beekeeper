@@ -42,8 +42,8 @@ the budget work on any system.
 | `beekeeper alerts watch\|snapshot\|import` | The installations' alerts, read from each Alertmanager through a bounded `kubectl port-forward` (Mimir's with the `giantswarm` tenant, else the plain one), in parallel: `watch` prints one line per NEW or RESOLVED alert since the baseline (pages and your team in capitals, a burst of one alertname as one line, one line when an installation stops or starts answering, the lease holder and the sessions working against it in brackets); `snapshot` the current set, grouped; `import` takes over another watcher's per-installation baseline. One process owns the baseline at a time, so two watches never split the lines. Every port-forward ends with the reading, on SIGINT or SIGTERM, and when beekeeper is killed. |
 | `beekeeper budget` | The GitHub core budget from the headers of a real, conditional request (a 304 costs nothing), and every `gh` and `devctl` process with its session. `--gate` exits 3 under the floor. |
 | `beekeeper lease claim\|release\|status\|grant\|revoke` | One holder per resource: the environments in the configuration and the browser. While a supervisor runs, a session claims only what the supervisor granted it, in grant order. |
-| `beekeeper hold set\|lift\|check` | Stop merges into a repository (a broken main), one lane (`--lane serving`: a proving window such as a model load stops the lane whose components it exercises, not the others), every merge (`merges`, `--except owner/repo`) or every GitHub call (`github`) until lifted or a time passes. The merge gate enforces them. |
-| `beekeeper lanes [queue\|drop\|clear]` | Each merge lane: the running merge, the one settling until its release rolled, and the waiting ones in turn order, so who is next is never prose. `queue <owner/repo> <n> --for <session>` gives a session's merge its place now so an agreed order carries over (kept until that merge runs, through refusals, for `merge.seedTTL`, 12h); `drop` takes a waiting merge out; `clear` frees a lane whose settling release will not roll, after a look at the installation. |
+| `beekeeper hold set\|lift\|check` | Stop merges into a repository (a broken main), one lane (`--lane serving`: a proving window such as a model load stops the lane whose components it exercises, not the others), every merge (`merges`) or every GitHub call (`github`) until lifted or a time passes. A merge hold lets one repository or pull request through with `--except owner/repo[#n]`: `hold set --lane serving --except giantswarm/model-manager#172` stops the lane but for the merge it waits for. The merge gate enforces them. |
+| `beekeeper lanes [queue\|settle\|drop\|clear]` | Each merge lane: the running merge, the one settling until its release rolled, and the waiting ones in turn order, so who is next is never prose. `queue <owner/repo> <n> --for <session>` gives a session's merge its place now so an agreed order carries over (kept until that merge runs, through refusals, for `merge.seedTTL`, 12h); `settle <owner/repo> <n> [--for <session>]` registers a merge run outside the gate (in flight when the gate went live, run without the hook): it heads its lane until it merges, then settles the lane like a gated merge; `drop` takes a waiting merge out; `clear` frees a lane whose settling release will not roll, after a look at the installation. |
 | `beekeeper supervisor start\|stop` | Make a session the supervisor. The grant rule applies while its session runs and lifts by itself when it is gone. |
 | `beekeeper agents register\|assign\|idle` | The roster of empty sessions registered as spare capacity. |
 | `beekeeper note add\|done` | Open items that outlive a session: a question waiting on a person, a deadline. |
@@ -87,6 +87,15 @@ now reports the released version; a release devctl could not confirm (exit 9, a 
 tool timeout) settles for `merge.settle` instead. The installation is read with `kubectl
 --context <lanes[].context>` (default: the kubeconfig context named after the installation or
 ending in `-<installation>`).
+
+A merge the gate did not wrap leaves its lane looking free while its release rolls. `beekeeper
+lanes settle <owner/repo> <n>` registers it: until the pull request is merged it heads the lane, so
+its own `devctl pr merge` (a retry of a failed run) passes the gate as the lane's next merge and
+the others wait behind it, through a lane hold's refusal too. Once merged through the gate, it
+settles like any gated merge; merged outside it, GitHub reports no release, so the lane settles for
+`merge.settle` from the merge and then frees once its HelmReleases are Ready. A merge waiting
+behind the entry asks GitHub (`gh pr view`) at most once a minute; a pull request closed without a
+merge leaves the lane.
 
 A merge of giantswarm/devctl opens a tool-release window by itself: a `merges` hold with
 giantswarm/devctl excepted, since the release makes every in-flight devctl run refuse until

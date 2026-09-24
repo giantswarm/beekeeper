@@ -54,21 +54,41 @@ func TestBlocking(t *testing.T) {
 		{Target: "lane:serving", Reason: "model load"},
 		{Target: "giantswarm/old", Until: now.Add(-time.Minute)},
 	}}
-	if h, ok := Blocking(st, now, "giantswarm/model-manager", "serving"); !ok || h.Reason != "model load" {
+	if h, ok := Blocking(st, now, "giantswarm/model-manager", 7, "serving"); !ok || h.Reason != "model load" {
 		t.Error("the lane hold does not stop its lane")
 	}
-	if _, ok := Blocking(st, now, backstage, "portal-tools"); ok {
+	if _, ok := Blocking(st, now, backstage, 8, "portal-tools"); ok {
 		t.Error("a lane hold stops another lane")
 	}
-	if _, ok := Blocking(st, now, "giantswarm/old", "giantswarm/old"); ok {
+	if _, ok := Blocking(st, now, "giantswarm/old", 1, "giantswarm/old"); ok {
 		t.Error("an expired hold stops a merge")
 	}
 	st.Holds = append(st.Holds, state.Hold{Target: AllMerges, Except: ToolRepo})
-	if _, ok := Blocking(st, now, backstage, "portal-tools"); !ok {
+	if _, ok := Blocking(st, now, backstage, 8, "portal-tools"); !ok {
 		t.Error("the tool-release window lets another merge through")
 	}
-	if _, ok := Blocking(st, now, ToolRepo, ToolRepo); ok {
+	if _, ok := Blocking(st, now, ToolRepo, 9, ToolRepo); ok {
 		t.Error("the tool-release window stops the tool's own release")
+	}
+}
+
+func TestBlockingExcept(t *testing.T) {
+	now := time.Now()
+	st := &state.State{Holds: []state.Hold{{Target: "lane:serving", Except: "giantswarm/model-manager#172", Reason: "its release"}}}
+	if _, ok := Blocking(st, now, "giantswarm/model-manager", 172, "serving"); ok {
+		t.Error("the lane hold stops the pull request it excepts")
+	}
+	for _, c := range []struct {
+		repo string
+		pr   int
+	}{{"giantswarm/model-manager", 180}, {"giantswarm/cluster-manager", 172}} {
+		if _, ok := Blocking(st, now, c.repo, c.pr, "serving"); !ok {
+			t.Errorf("the lane hold lets %s#%d through", c.repo, c.pr)
+		}
+	}
+	st.Holds[0].Except = "giantswarm/model-manager"
+	if _, ok := Blocking(st, now, "giantswarm/model-manager", 180, "serving"); ok {
+		t.Error("the lane hold stops the repository it excepts")
 	}
 }
 
@@ -89,6 +109,24 @@ func TestQueueAndPrune(t *testing.T) {
 	m := Queue(st, "m")
 	if m.Running != nil || m.Settling == nil || m.Settling.Release != "" || m.Settling.Exit != -1 {
 		t.Errorf("a lost run does not settle with an unknown release: %+v", m)
+	}
+	st.Merges = append(st.Merges, state.Merge{Repo: "o/f", PR: 6, Lane: "l", Phase: state.Waiting, Seeded: true, Outside: true, Joined: now, Seen: now})
+	Prune(st, now, 15*time.Minute, 12*time.Hour, func(pid int) bool { return pid == 1 })
+	if q := Queue(st, "l"); q.Position("o/f", 6) != 1 || q.Position("o/a", 1) != 2 {
+		t.Errorf("a settled outside merge does not head its lane: %+v", q.Waiting)
+	}
+}
+
+func TestMerged(t *testing.T) {
+	at := time.Now().Add(-time.Minute)
+	earlier := state.Merge{Repo: "o/a", PR: 1, Lane: "l", Phase: state.Settling, Release: "v1", Finished: at.Add(-time.Hour)}
+	m := state.Merge{Repo: "o/f", PR: 6, Lane: "l", Phase: state.Waiting, PID: 5, Seeded: true, Outside: true, Roll: []string{"x"}, Checked: at}
+	Merged(&m, at)
+	if m.Phase != state.Settling || !m.Finished.Equal(at) || m.PID != 0 || m.Seeded || m.Roll != nil || m.Release != "" || !m.Outside {
+		t.Errorf("merged outside: %+v", m)
+	}
+	if q := Queue(&state.State{Merges: []state.Merge{m, earlier}}, "l"); q.Settling == nil || q.Settling.Key() != "o/f#6" || q.SettlingKeys() != "o/a#1 o/f#6" {
+		t.Errorf("the lane does not settle both merges, the latest last: %+v %q", q.Settling, q.SettlingKeys())
 	}
 }
 
@@ -131,5 +169,9 @@ func TestReady(t *testing.T) {
 	}
 	if ok, _ := Ready(lane, hrs, s, now.Add(time.Minute), time.Minute); !ok {
 		t.Error("an unknown release keeps the lane after the settle time")
+	}
+	s.Roll = roll
+	if ok, why := Ready(lane, hrs, s, now.Add(time.Minute), time.Minute); !ok {
+		t.Errorf("a merge with a roll set and an unknown release keeps the lane after the settle time: %q", why)
 	}
 }

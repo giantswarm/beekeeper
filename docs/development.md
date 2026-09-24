@@ -43,6 +43,11 @@ PATH=/tmp/fake:$PATH BEEKEEPER_CONFIG=/tmp/bk.yaml CLAUDE_CODE_SESSION_ID=a \
 BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper lanes
 ```
 
+`lanes settle` and the gate's check of a settled outside merge ask GitHub through `gh pr view
+<n> --repo <owner/repo> --json state,mergedAt`; a fake `gh` first on `PATH` that prints
+`{"state":"OPEN","mergedAt":null}` (or `MERGED` with a time, or `CLOSED`) from a file and hands
+every other call to the real one plays a pull request merging outside the gate.
+
 `free` takes its temp dir from `TMPDIR` (Claude Code's session dirs are `$TMPDIR/claude-<uid>`), so
 `--apply` can be tried on a fixture instead of the real `/tmp`:
 `TMPDIR=/tmp/fixture ./beekeeper free --apply --only session-dirs,tmp-dirs`.
@@ -54,7 +59,7 @@ BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper lanes
 | `internal/proc` | The process table from `/proc`: parents, children, environment, start time. |
 | `internal/claude` | Sessions: CLI processes, desktop session records, transcripts, git checkouts, what each is on and which overlap. |
 | `internal/machine` | Memory, pressure, the desktop scope, disk, build slots, kind clusters, OOM kills. |
-| `internal/github` | The budget from rate-limit headers. |
+| `internal/github` | The budget from rate-limit headers; a pull request's state from `gh pr view`. |
 | `internal/lease` | Lease directories and the grant rule. |
 | `internal/state` | The shared state document and the event log, under a file lock. |
 | `internal/alerts` | The installations' alerts: bounded `kubectl port-forward`s in their own process group, the Alertmanager reading, the NEW/RESOLVED lines and the grouped snapshot (pure, tested against Alertmanager-shaped fixtures and a fake `kubectl`), and the baseline with its single owner. |
