@@ -94,7 +94,7 @@ func TestHoldExcepts(t *testing.T) {
 
 func TestUpdateKeepsFieldsItDoesNotKnow(t *testing.T) {
 	dir := t.TempDir()
-	newer := `{"nextNote":2,"relay":{"to":"Supervisor run 12"},"shift":"4h"}`
+	newer := `{"nextNote":2,"rota":{"next":"Supervisor run 13"},"quietHours":"4h"}`
 	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(newer), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestUpdateKeepsFieldsItDoesNotKnow(t *testing.T) {
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got["nextNote"] != 3.0 || got["shift"] != "4h" || got["relay"].(map[string]any)["to"] != "Supervisor run 12" {
+	if got["nextNote"] != 3.0 || got["quietHours"] != "4h" || got["rota"].(map[string]any)["next"] != "Supervisor run 13" {
 		t.Errorf("state.json = %s", raw)
 	}
 }

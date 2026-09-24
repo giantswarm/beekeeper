@@ -74,6 +74,9 @@ memory figure or pull request state.`,
 			default:
 				p("Supervisor: %q since %s, its session is gone.", v.Supervisor.Name, clock(a.now, v.Supervisor.Since))
 			}
+			if r := v.st.Relay; r.Open(a.now) {
+				p("Relayed to %q until %s: its `beekeeper supervisor start` takes the role.", r.To.Name, clock(a.now, r.Expires))
+			}
 			p("\n## Sessions (%d running)\n", len(v.Sessions))
 			a.printSessions(v)
 			p("\n## Leases\n")

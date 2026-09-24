@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `supervisor relay <successor>`: the supervisor names its successor, whose `supervisor start` takes the role, the grant queue and the pending grants in one step, so no claim goes ungated in between; the event log shows both steps. A relay not taken expires after `supervisor.relayTTL` (default 15m) or is withdrawn with `relay --cancel`; the outgoing supervisor keeps the role meanwhile. `supervisor status` exits 4 in the session a relay relieved. `watch` says `RELAY TAKEN` or `RELAY EXPIRED` once.
+- `supervisor.shift`: `watch` says `RELAY DUE` once the supervisor has served its shift, at the first quiet moment (no gated merge running or settling, no grant waiting, no claim queued), and again only when a quiet moment follows a busy one.
 - `note add --default "<what happens if unanswered>"`: a decision carries its default; `watch` reports a note once when it is due.
 - `timer add <time> <what>`, `timer done`, `timer list`: `watch` prints one line when a timer is due.
 - `sessions serve <session> <owner/repo#n> [--waits "<what>"]` and `sessions unserve`: a record for any session; `sessions` and `handover` show it, and `watch` prints one line when the session ends, naming the issue to re-query, instead of the plain `SESSIONS ended` line.

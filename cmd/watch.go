@@ -15,8 +15,10 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -35,11 +37,16 @@ disk, the GitHub budget) repeat at most every watch.repeat (10m) per kind.
 OOM kills are never folded away: every poll reports every kill since the
 last one, grouped by whose limit they hit. Sessions that start, end or
 restart are reported, and so is a lease whose holder is gone. A note or a
-timer that falls due and the end of a session with a record (sessions
-serve) are one line each, once: the state keeps that they were reported, so
+timer that falls due, the end of a session with a record (sessions serve)
+and a supervisor relay taken or expired are one line each, once: the state keeps that they were reported, so
 a second or restarted watch stays silent about them. The
 installations' alerts are read every alerts.every and each NEW or RESOLVED
 one is a line (beekeeper alerts watch); only one watch at a time reads them.
+
+Once the supervisor has served supervisor.shift, RELAY DUE is said at the
+first quiet moment: no gated merge running or settling, no grant waiting
+to be claimed and no claim queued. It is said once, and again only when a
+quiet moment follows a busy one; never while a relay is open.
 
 Runs until killed. --once polls once and exits.`,
 		Args: cobra.NoArgs,
@@ -203,7 +210,7 @@ func (w *watcher) poll(ctx context.Context) {
 	}
 	sessions := claude.Discover(w.cfg, t, w.now)
 	w.kills(ctx, since, sessions, t)
-	w.pending(sessions)
+	w.pending(ctx, sessions)
 	w.sessionChanges(sessions)
 	w.staleLeases(sessions)
 
@@ -306,23 +313,32 @@ func (w *watcher) sessionChanges(sessions []*claude.Session) {
 // watchParty is who the watch's events are by.
 var watchParty = state.Party{Name: "beekeeper watch"}
 
-// pending prints the notes and timers that fell due and the recorded
-// sessions that ended. The state keeps that they were reported, so each is
-// one line however many watches run; the state is written only then.
-func (w *watcher) pending(sessions []*claude.Session) {
+// pending prints the notes and timers that fell due, the recorded sessions
+// that ended, a relay taken or expired and the relay due after the shift.
+// The state keeps that they were reported, so each is one line however many
+// watches run; the state is written only then.
+func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	st, err := w.store.Read()
 	if err != nil {
 		w.emit("state", "cannot read the state: %v", err)
 		return
 	}
 	w.records = st.Records
-	if lines, evs := firePending(st, sessions, w.now); len(lines) == 0 && len(evs) == 0 {
+	q := w.quietness(ctx, st, sessions)
+	fire := func(st *state.State) ([]string, []state.Event, bool) {
+		lines, evs := firePending(st, sessions, w.now)
+		rl, re := fireRelay(st, w.now)
+		sl, se, changed := fireShift(st, q, w.now, w.cfg.Supervisor.Shift.Duration)
+		lines, evs = append(append(lines, rl...), sl...), append(append(evs, re...), se...)
+		return lines, evs, changed || len(lines) > 0 || len(evs) > 0
+	}
+	if _, _, changed := fire(st); !changed {
 		return
 	}
 	var lines []string
 	err = w.store.Update(func(st *state.State) ([]state.Event, error) {
 		var evs []state.Event
-		lines, evs = firePending(st, sessions, w.now)
+		lines, evs, _ = fire(st)
 		w.records = st.Records
 		return evs, nil
 	})
@@ -333,6 +349,30 @@ func (w *watcher) pending(sessions []*claude.Session) {
 	for _, l := range lines {
 		w.emitNow("pending", "%s", l)
 	}
+}
+
+// quietness reads whether the machine is at a quiet moment, once the
+// supervisor's shift is over: outside the state lock, since a settling
+// merge's installation is read with kubectl.
+func (w *watcher) quietness(ctx context.Context, st *state.State, sessions []*claude.Session) quietness {
+	if !shiftOver(st, sessions, w.now, w.cfg.Supervisor.Shift.Duration) {
+		return quietness{}
+	}
+	holders, err := lease.Dir(w.cfg.LeaseDir).List()
+	if err != nil {
+		return quietness{checked: true, busy: fmt.Sprintf("the leases cannot be read: %v", err)}
+	}
+	hrs := map[string][]merge.HelmRelease{}
+	rolled := func(m state.Merge, lane config.Lane) bool {
+		h, ok := hrs[lane.Name]
+		if !ok {
+			h, _ = readHelmReleases(ctx, lane) // unreadable: not rolled, not quiet
+			hrs[lane.Name] = h
+		}
+		ready, _ := merge.Ready(lane, h, &m, w.now, w.cfg.Merge.Settle.Duration)
+		return h != nil && ready
+	}
+	return quietness{checked: true, busy: busyWith(st, w.cfg, heldMap(holders), w.now, proc.Alive, rolled)}
 }
 
 // firePending marks what is due or ended in st as reported and returns its

@@ -53,7 +53,12 @@ named by `CLAUDE_CODE_HOST_SESSION_ID` and `CLAUDE_CODE_SESSION_NAME`. A copy of
 `claude`, started detached (`setsid -f`) with those two variables, stands in for a session that
 ends when the sleep does, so `sessions serve` and the `SESSION ENDED` line can be tried against
 scratch state. The live supervisor's watch sees it too: give it a name that reads as a test and a
-short life. `handover --prompt` on a copy of the live state (`cp -r` of the state and lease
+short life. Two such stand-ins play a supervisor hand-over: each runs `supervisor start`,
+`supervisor relay` or `supervisor status` with its own `CLAUDE_CODE_SESSION_ID`,
+`CLAUDE_CODE_HOST_SESSION_ID` and `CLAUDE_CODE_SESSION_NAME` in the environment; a short
+`supervisor.shift` and `supervisor.relayTTL` in the scratch configuration and a settling merge
+written into the scratch `state.json` show `RELAY DUE` held back and then said by
+`watch --once`. `handover --prompt` on a copy of the live state (`cp -r` of the state and lease
 directories into the scratch configuration) shows what a successor would get.
 
 `free` takes its temp dir from `TMPDIR` (Claude Code's session dirs are `$TMPDIR/claude-<uid>`), so
@@ -69,7 +74,7 @@ directories into the scratch configuration) shows what a successor would get.
 | `internal/machine` | Memory, pressure, the desktop scope, disk, build slots, kind clusters, OOM kills. |
 | `internal/github` | The budget from rate-limit headers; a pull request's state from `gh pr view`. |
 | `internal/lease` | Lease directories and the grant rule. |
-| `internal/state` | The shared state document (supervisor, grants, holds, agents, notes, timers, session records, merges) and the event log, under a file lock. |
+| `internal/state` | The shared state document (supervisor and its relay, the shift the watch reported, grants, holds, agents, notes, timers, session records, merges) and the event log, under a file lock. |
 | `internal/alerts` | The installations' alerts: bounded `kubectl port-forward`s in their own process group, the Alertmanager reading, the NEW/RESOLVED lines and the grouped snapshot (pure, tested against Alertmanager-shaped fixtures and a fake `kubectl`), and the baseline with its single owner. |
 | `internal/guard` | The build guard: a capped run in a build slot, and the PreToolUse hook's rewrite and third-lab refusal. |
 | `internal/free` | What can be freed (dead sessions' dirs, throwaway temp dirs, orphaned workers) and what is only reported, as a report or the front end's TSV. |

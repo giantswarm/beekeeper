@@ -37,6 +37,9 @@ type view struct {
 type supervisorView struct {
 	state.Supervisor
 	Live bool `json:"live"`
+	// Relay is the supervisor's last relay; Relieved says it relieved the caller.
+	Relay    *state.Relay `json:"relay,omitempty"`
+	Relieved bool         `json:"relieved,omitempty"`
 }
 
 // collect reads processes, sessions, state and leases; withWork also scans
