@@ -1,6 +1,7 @@
 package merge
 
 import (
+	"embed"
 	"strings"
 	"testing"
 	"time"
@@ -31,21 +32,41 @@ func TestParseArgs(t *testing.T) {
 }
 
 func TestParseDocument(t *testing.T) {
-	o, ok := ParseDocument([]byte(`{"exitCode":0,"mergeCommitSha":"abc","release":{"verdict":"available","result":{"tag":"v1.2.3"}}}`))
-	if !ok || !o.Merged || o.Release != "v1.2.3" || o.NoRelease {
-		t.Errorf("released: %+v %v", o, ok)
-	}
-	o, _ = ParseDocument([]byte(`{"exitCode":0,"mergeCommitSha":"abc","release":{"verdict":"no_release"}}`))
-	if !o.Merged || !o.NoRelease {
-		t.Errorf("no release: %+v", o)
-	}
-	o, _ = ParseDocument([]byte(`{"exitCode":3,"mergeCommitSha":"","release":null}`))
-	if o.Merged {
-		t.Errorf("refused: %+v", o)
+	for _, c := range []struct {
+		name string
+		doc  []byte
+		want Outcome
+	}{
+		// testdata/pr-merge.json is the example under "The document" in
+		// giantswarm/devctl's docs/pr-merge.md, its two elided array
+		// elements dropped so it parses.
+		{"documented example", testdata(t, "pr-merge.json"), Outcome{Merged: true, Release: "v8.91.0"}},
+		// testdata/pr-merge-no-release.json is a real document, the merge of
+		// giantswarm/github#6335.
+		{"real no release", testdata(t, "pr-merge-no-release.json"), Outcome{Merged: true, NoRelease: true}},
+		{"no release", []byte(`{"exitCode":0,"mergeCommitSha":"abc","release":{"verdict":"no_release","tag":""}}`), Outcome{Merged: true, NoRelease: true}},
+		{"unconfirmed", []byte(`{"exitCode":9,"mergeCommitSha":"abc","release":{"verdict":"timeout","tag":"v1.2.4"}}`), Outcome{Merged: true}},
+		{"nothing merged", []byte(`{"exitCode":3,"mergeCommitSha":"","release":null}`), Outcome{}},
+	} {
+		if o, ok := ParseDocument(c.doc); !ok || o != c.want {
+			t.Errorf("%s: %+v %v, want %+v", c.name, o, ok, c.want)
+		}
 	}
 	if _, ok := ParseDocument([]byte("not json")); ok {
 		t.Error("garbage parsed")
 	}
+}
+
+//go:embed testdata/*.json
+var testdataFS embed.FS
+
+func testdata(t *testing.T, name string) []byte {
+	t.Helper()
+	raw, err := testdataFS.ReadFile("testdata/" + name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
 }
 
 func TestBlocking(t *testing.T) {

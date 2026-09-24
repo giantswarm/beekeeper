@@ -1,0 +1,87 @@
+{
+  "command": "pr merge",
+  "schemaVersion": 1,
+  "exitCode": 0,
+  "verdict": "green",
+  "reason": "",
+  "warnings": [],
+  "startedAt": "2026-09-24T20:11:17.495571694Z",
+  "finishedAt": "2026-09-24T20:11:49.71525239Z",
+  "repository": "giantswarm/github",
+  "number": 6335,
+  "headSha": "a0de066feb0c87878107031b3e812108dd729656",
+  "baseRef": "main",
+  "checks": [
+    {
+      "name": "Repositories YAML",
+      "source": "check_run",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/giantswarm/github/actions/runs/36053121751/job/107813388871",
+      "required": false
+    },
+    {
+      "name": "Workflows",
+      "source": "check_run",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/giantswarm/github/actions/runs/36053121964/job/107813388811",
+      "required": false
+    },
+    {
+      "name": "publish / gitleaks",
+      "source": "check_run",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/giantswarm/github/actions/runs/36053122869/job/107813392468",
+      "required": false
+    },
+    {
+      "name": "semantic-pull-request / Validate PR title",
+      "source": "check_run",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/giantswarm/github/actions/runs/36053123216/job/107813393822",
+      "required": false
+    }
+  ],
+  "actions": [
+    {
+      "name": "Validate",
+      "runId": 36053121964,
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/giantswarm/github/actions/runs/36053121964"
+    },
+    {
+      "name": "gitleaks",
+      "runId": 36053122869,
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/giantswarm/github/actions/runs/36053122869"
+    },
+    {
+      "name": "semantic-pull-request",
+      "runId": 36053123216,
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/giantswarm/github/actions/runs/36053123216"
+    }
+  ],
+  "mergeCommitSha": "b26f63bf22823c2d1ab969190788b49c23ef3cae",
+  "method": "squash",
+  "branchDeleted": true,
+  "enqueued": false,
+  "release": {
+    "verdict": "no_release",
+    "reason": "giantswarm/github releases through the legacy workflow, which does not tag the merge commit of #6335: a release of it is waited for by its version",
+    "repository": "giantswarm/github",
+    "tag": "",
+    "sha": "b26f63bf22823c2d1ab969190788b49c23ef3cae",
+    "releaseModel": "legacy",
+    "ciModel": "none",
+    "artifacts": [],
+    "pipeline": null,
+    "actions": []
+  }
+}

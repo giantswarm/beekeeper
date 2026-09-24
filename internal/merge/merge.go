@@ -61,22 +61,24 @@ func ParseArgs(argv []string) (repo string, pr int, ok bool) {
 type Outcome struct {
 	// Merged is true when the document names a merge commit.
 	Merged bool
-	// Release is the tag the merge released, empty when none or unknown.
+	// Release is the tag the merge released and devctl confirmed pullable,
+	// empty when none or unknown.
 	Release string
 	// NoRelease is true when the merge warranted no release: nothing rolls.
 	NoRelease bool
 }
 
-// ParseDocument reads devctl pr merge's JSON document; ok is false when it
-// is none.
+// ParseDocument reads devctl pr merge's JSON document (docs/pr-merge.md in
+// giantswarm/devctl): its release object carries the verdict and the tag side
+// by side. The tag counts only with the verdict available, a release devctl
+// confirmed pullable; any other tag is unknown and the lane settles by the
+// settle rule. ok is false when it is none.
 func ParseDocument(raw []byte) (Outcome, bool) {
 	var doc struct {
 		MergeCommitSha string `json:"mergeCommitSha"`
 		Release        *struct {
 			Verdict string `json:"verdict"`
-			Result  *struct {
-				Tag string `json:"tag"`
-			} `json:"result"`
+			Tag     string `json:"tag"`
 		} `json:"release"`
 	}
 	if json.Unmarshal(raw, &doc) != nil {
@@ -84,9 +86,11 @@ func ParseDocument(raw []byte) (Outcome, bool) {
 	}
 	o := Outcome{Merged: doc.MergeCommitSha != ""}
 	if doc.Release != nil {
-		o.NoRelease = doc.Release.Verdict == "no_release"
-		if doc.Release.Result != nil {
-			o.Release = doc.Release.Result.Tag
+		switch doc.Release.Verdict {
+		case "available":
+			o.Release = doc.Release.Tag
+		case "no_release":
+			o.NoRelease = true
 		}
 	}
 	return o, true
