@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The merge gate reads the release where devctl's `pr merge` document reports it (`release.tag` beside `release.verdict`, the tag counted only when the verdict is `available`): a released merge holds its lane until the release rolled, no longer only for `merge.settle` as a merge of unknown release.
 - A merged run whose release devctl could not confirm no longer keeps its lane until `merge.settleTimeout`: after `merge.settle` only the lane's HelmReleases decide.
 
 - `watch` stopped by SIGINT or SIGTERM during a poll no longer reports the journal or the GitHub budget as unreadable.
