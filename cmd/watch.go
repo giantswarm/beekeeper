@@ -18,6 +18,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 func (a *app) watchCmd() *cobra.Command {
@@ -33,7 +34,10 @@ Threshold breaches (RAM, swap, desktop scope, load, memory pressure, tmpfs,
 disk, the GitHub budget) repeat at most every watch.repeat (10m) per kind.
 OOM kills are never folded away: every poll reports every kill since the
 last one, grouped by whose limit they hit. Sessions that start, end or
-restart are reported, and so is a lease whose holder is gone. The
+restart are reported, and so is a lease whose holder is gone. A note or a
+timer that falls due and the end of a session with a record (sessions
+serve) are one line each, once: the state keeps that they were reported, so
+a second or restarted watch stays silent about them. The
 installations' alerts are read every alerts.every and each NEW or RESOLVED
 one is a line (beekeeper alerts watch); only one watch at a time reads them.
 
@@ -60,6 +64,9 @@ type watcher struct {
 	sessions       map[string]*claude.Session
 	seenKills      map[string]bool
 	reportedLeases map[string]bool
+	// records are the session records of the last poll: their sessions'
+	// ends get the record's line instead of the SESSIONS ended one.
+	records []state.Record
 }
 
 func (w *watcher) run(ctx context.Context, once bool) error {
@@ -196,6 +203,7 @@ func (w *watcher) poll(ctx context.Context) {
 	}
 	sessions := claude.Discover(w.cfg, t, w.now)
 	w.kills(ctx, since, sessions, t)
+	w.pending(sessions)
 	w.sessionChanges(sessions)
 	w.staleLeases(sessions)
 
@@ -274,7 +282,9 @@ func (w *watcher) sessionChanges(sessions []*claude.Session) {
 		}
 	}
 	for k, s := range w.sessions {
-		if _, ok := cur[k]; !ok {
+		_, ok := cur[k]
+		recorded := slices.ContainsFunc(w.records, func(r state.Record) bool { return r.Session.Is(s.Party()) })
+		if !ok && !recorded {
 			ended = append(ended, fmt.Sprintf("%q", s.Name))
 		}
 	}
@@ -291,6 +301,87 @@ func (w *watcher) sessionChanges(sessions []*claude.Session) {
 		w.emitNow("sessions", "SESSIONS restarted (a new CLI: its context may be fresh, send it its state): %s", strings.Join(restarted, ", "))
 	}
 	w.sessions = cur
+}
+
+// watchParty is who the watch's events are by.
+var watchParty = state.Party{Name: "beekeeper watch"}
+
+// pending prints the notes and timers that fell due and the recorded
+// sessions that ended. The state keeps that they were reported, so each is
+// one line however many watches run; the state is written only then.
+func (w *watcher) pending(sessions []*claude.Session) {
+	st, err := w.store.Read()
+	if err != nil {
+		w.emit("state", "cannot read the state: %v", err)
+		return
+	}
+	w.records = st.Records
+	if lines, evs := firePending(st, sessions, w.now); len(lines) == 0 && len(evs) == 0 {
+		return
+	}
+	var lines []string
+	err = w.store.Update(func(st *state.State) ([]state.Event, error) {
+		var evs []state.Event
+		lines, evs = firePending(st, sessions, w.now)
+		w.records = st.Records
+		return evs, nil
+	})
+	if err != nil {
+		w.emit("state", "cannot write the state: %v", err)
+		return
+	}
+	for _, l := range lines {
+		w.emitNow("pending", "%s", l)
+	}
+}
+
+// firePending marks what is due or ended in st as reported and returns its
+// watch lines and events; an event without a line is a recorded session
+// that runs again.
+func firePending(st *state.State, sessions []*claude.Session, now time.Time) ([]string, []state.Event) {
+	var lines []string
+	var evs []state.Event
+	for i := range st.Notes {
+		n := &st.Notes[i]
+		if !state.Due(n.Due, n.Fired, now) {
+			continue
+		}
+		n.Fired = now.UTC()
+		l := fmt.Sprintf("NOTE DUE: #%d", n.ID)
+		if n.For != "" {
+			l += " for " + n.For
+		}
+		l += fmt.Sprintf(", due %s: %s", clock(now, n.Due), truncate(n.Text, 200))
+		if n.Default != "" {
+			l += "; if unanswered: " + truncate(n.Default, 120)
+		}
+		lines = append(lines, l)
+		evs = append(evs, event(watchParty, "note.due", "#%d %s", n.ID, n.Text))
+	}
+	for i := range st.Timers {
+		t := &st.Timers[i]
+		if !state.Due(t.Due, t.Fired, now) {
+			continue
+		}
+		t.Fired = now.UTC()
+		lines = append(lines, fmt.Sprintf("TIMER: #%d due %s: %s (beekeeper timer done %d)", t.ID, clock(now, t.Due), truncate(t.What, 200), t.ID))
+		evs = append(evs, event(watchParty, "timer.due", "#%d %s", t.ID, t.What))
+	}
+	for i := range st.Records {
+		r := &st.Records[i]
+		_, live := claude.Live(sessions, r.Session)
+		if live && !r.Ended.IsZero() {
+			r.Ended = time.Time{} // resumed: its next end is reported again
+			evs = append(evs, event(watchParty, "session.resumed", "%s: %s", r.Session.Name, recordText(*r)))
+		}
+		if live || !r.Ended.IsZero() {
+			continue
+		}
+		r.Ended = now.UTC()
+		lines = append(lines, fmt.Sprintf("SESSION ENDED: %q, which %s: re-query %s", r.Session.Name, truncate(recordText(*r), 200), r.Issue))
+		evs = append(evs, event(watchParty, "session.ended", "%s: %s", r.Session.Name, recordText(*r)))
+	}
+	return lines, evs
 }
 
 func sessionKey(s *claude.Session) string {

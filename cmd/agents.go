@@ -148,13 +148,23 @@ Without a subcommand, lists the agents.`,
 }
 
 func findAgent(st *state.State, q string) (int, error) {
+	parties := make([]state.Party, len(st.Agents))
+	for i, ag := range st.Agents {
+		parties[i] = ag.Party
+	}
+	return findParty(parties, q, "registered agent", "agents")
+}
+
+// findParty finds q among parties: a session id, a name, or a unique part
+// of one.
+func findParty(parties []state.Party, q, one, many string) (int, error) {
 	lq := strings.ToLower(q)
 	var hits []int
-	for i, ag := range st.Agents {
-		if strings.ToLower(ag.Name) == lq || ag.Session == q {
+	for i, p := range parties {
+		if strings.ToLower(p.Name) == lq || (q != "" && (p.Session == q || p.HostSession == q)) {
 			return i, nil
 		}
-		if strings.Contains(strings.ToLower(ag.Name), lq) {
+		if strings.Contains(strings.ToLower(p.Name), lq) {
 			hits = append(hits, i)
 		}
 	}
@@ -162,9 +172,9 @@ func findAgent(st *state.State, q string) (int, error) {
 	case 1:
 		return hits[0], nil
 	case 0:
-		return -1, refused("no registered agent matches %q", q)
+		return -1, refused("no %s matches %q", one, q)
 	}
-	return -1, refused("%q matches %d agents", q, len(hits))
+	return -1, refused("%q matches %d %s", q, len(hits), many)
 }
 
 func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentView {

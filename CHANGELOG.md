@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `note add --default "<what happens if unanswered>"`: a decision carries its default; `watch` reports a note once when it is due.
+- `timer add <time> <what>`, `timer done`, `timer list`: `watch` prints one line when a timer is due.
+- `sessions serve <session> <owner/repo#n> [--waits "<what>"]` and `sessions unserve`: a record for any session; `sessions` and `handover` show it, and `watch` prints one line when the session ends, naming the issue to re-query, instead of the plain `SESSIONS ended` line.
+- `handover` shows the session records, the notes' defaults and the timers; `handover --prompt` prints the successor supervisor's session prompt: the configured instructions (`supervisor.skill` or `supervisor.instructions`), the scope (`supervisor.scope`), the pending state in full and the commands that read the live values, without standing rules or live values.
+- `state.json` keeps the fields a newer beekeeper wrote when an older one still running rewrites it.
+
 - The merge gate: the PreToolUse hook puts `beekeeper gate` in front of every `devctl pr merge`. Merges queue per lane (`lanes` in the configuration), one at a time, the next once the lane's HelmReleases are Ready and the previous release rolled; a held repository, lane, `merges` or `github`, a budget under the floor and an unreadable installation refuse (exit 77); a wait past its bound exits 76 and keeps the merge's place; the machine runs at most `merge.cap` devctl processes; a giantswarm/devctl merge opens the tool-release window. devctl's document and exit code pass through unchanged.
 - `lanes [queue|drop|clear]`: each lane's running, settling and waiting merges, also in `handover`; `queue <owner/repo> <n> --for <session>` seeds a session's place so an agreed order carries over.
 - `hold set|lift|check --lane <name>`, the `merges` target and `--except`.

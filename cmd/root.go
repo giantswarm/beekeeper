@@ -93,9 +93,9 @@ machine's memory, swap, disk and OOM kills, reads the GitHub budget all
 sessions draw from, and holds the shared resources one session at a time:
 kind labs, installations, the browser, merges into a repository.
 
-Its state (the supervisor, grants, holds, registered agents, notes) lives
-on disk and survives restarts: a supervisor's successor reads it instead of
-rebuilding it from a hand-over prompt.
+Its state (the supervisor, grants, holds, registered agents, notes, timers,
+session records) lives on disk and survives restarts: a supervisor's
+successor starts from beekeeper handover --prompt instead of a prose brief.
 
 Exit codes: 0 done, 1 error, 2 usage, 3 refused, 125 a newer release
 (self-update --check).`,
@@ -126,7 +126,7 @@ Exit codes: 0 done, 1 error, 2 usage, 3 refused, 125 a newer release
 		c.GroupID = "sharing"
 		root.AddCommand(c)
 	}
-	for _, c := range []*cobra.Command{a.supervisorCmd(), a.agentsCmd(), a.noteCmd(), a.handoverCmd(), a.logCmd()} {
+	for _, c := range []*cobra.Command{a.supervisorCmd(), a.agentsCmd(), a.noteCmd(), a.timerCmd(), a.handoverCmd(), a.logCmd()} {
 		c.GroupID = "supervising"
 		root.AddCommand(c)
 	}

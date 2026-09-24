@@ -16,14 +16,16 @@ func (a *app) noteCmd() *cobra.Command {
 		Use:   "note",
 		Short: "Open items that outlive a session: questions for a person, deadlines",
 		Long: `Notes are the open items a supervisor would otherwise carry only in its
-transcript: the decisions waiting on a person, a deadline to check. They
-appear in every hand-over until marked done.
+transcript: the decisions waiting on a person, a deadline to check. A
+decision carries its default, what happens when nobody answers by its due
+time; beekeeper watch reports a note once when it is due. Notes appear in
+every hand-over until marked done.
 
 Without a subcommand, lists the open notes.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error { return a.noteList() },
 	}
-	var forWho, due string
+	var forWho, due, dflt string
 	add := &cobra.Command{
 		Use:   "add <text>",
 		Short: "Add a note",
@@ -37,7 +39,7 @@ Without a subcommand, lists the open notes.`,
 			if err != nil {
 				return err
 			}
-			n := state.Note{For: forWho, Text: strings.Join(args, " "), Due: d.UTC(), By: me, At: a.now.UTC()}
+			n := state.Note{For: forWho, Text: strings.Join(args, " "), Due: d.UTC(), Default: dflt, By: me, At: a.now.UTC()}
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.NextNote++
 				n.ID = st.NextNote
@@ -53,6 +55,7 @@ Without a subcommand, lists the open notes.`,
 	}
 	add.Flags().StringVar(&forWho, "for", "", "who has to act (a person's name)")
 	add.Flags().StringVar(&due, "due", "", "when it is due: a time (22:55) or a duration (3h)")
+	add.Flags().StringVar(&dflt, "default", "", "what happens if nobody answers by the due time")
 	done := &cobra.Command{
 		Use:   "done <id>...",
 		Short: "Mark notes done",
@@ -62,13 +65,9 @@ Without a subcommand, lists the open notes.`,
 			if err != nil {
 				return err
 			}
-			var ids []int
-			for _, s := range args {
-				id, err := strconv.Atoi(strings.TrimPrefix(s, "#"))
-				if err != nil {
-					return &exitError{code: ExitUsage, msg: fmt.Sprintf("%q is not a note id", s)}
-				}
-				ids = append(ids, id)
+			ids, err := parseIDs(args, "note")
+			if err != nil {
+				return err
 			}
 			var evs []state.Event
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -127,6 +126,23 @@ func (a *app) printNotes(notes []state.Note) {
 		if len(tags) > 0 {
 			tag = " [" + strings.Join(tags, ", ") + "]"
 		}
-		_, _ = fmt.Fprintf(a.out, "#%d%s %s\n", n.ID, tag, n.Text)
+		dflt := ""
+		if n.Default != "" {
+			dflt = " (default: " + n.Default + ")"
+		}
+		_, _ = fmt.Fprintf(a.out, "#%d%s %s%s\n", n.ID, tag, n.Text, dflt)
 	}
+}
+
+// parseIDs reads note or timer ids, with or without their #.
+func parseIDs(args []string, kind string) ([]int, error) {
+	ids := make([]int, 0, len(args))
+	for _, s := range args {
+		id, err := strconv.Atoi(strings.TrimPrefix(s, "#"))
+		if err != nil {
+			return nil, usageErr("%q is not a %s id", s, kind)
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }

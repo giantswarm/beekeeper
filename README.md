@@ -10,7 +10,7 @@ call draws from.
 beekeeper reads what is on disk: the process table, the desktop app's session records, the
 transcripts and the git checkouts. It needs no MCP call and no GitHub request to show what
 every session does. What must be shared lives in a small state directory that survives
-restarts: the supervisor, grants, holds, registered agents and notes. Every session and the
+restarts: the supervisor, grants, holds, registered agents, notes, timers and session records. Every session and the
 supervisor use the same binary.
 
 ## Install
@@ -38,7 +38,7 @@ the budget work on any system.
 | `beekeeper sessions` | Every running session: the issues and pull requests its latest turns are about, when it was last active, the commands it runs right now (a `devctl` wait, a bounded `sleep` with the time left), its memory, role and leases. Overlaps name what more than one session is on. `--all` adds the paused ones: a message to them does not arrive. |
 | `beekeeper tail <session>` | A session's last turns without tool calls: what it said and what it was told. |
 | `beekeeper snapshot` | One tick: load, RAM, swap, memory pressure, the desktop scope, tmpfs and disk, build slots, kind clusters, the commands sessions sit on, every kernel OOM kill since your last snapshot with whose limit it hit, leases, holds, the GitHub budget, the installations' alerts. It ends with what changed since your last snapshot; `--changes` prints only that. |
-| `beekeeper watch` | Silent until something needs a look, then one line: the source of a `Monitor`. Thresholds repeat at most every 10 minutes; OOM kills, sessions that start, end or restart, stale leases and every NEW or RESOLVED alert of the installations are always reported. |
+| `beekeeper watch` | Silent until something needs a look, then one line: the source of a `Monitor`. Thresholds repeat at most every 10 minutes; OOM kills, sessions that start, end or restart, stale leases and every NEW or RESOLVED alert of the installations are always reported. A note or timer that falls due and the end of a session with a record are one line each, once: the state keeps that they were reported, so a second or restarted watch stays silent about them. |
 | `beekeeper alerts watch\|snapshot\|import` | The installations' alerts, read from each Alertmanager through a bounded `kubectl port-forward` (Mimir's with the `giantswarm` tenant, else the plain one), in parallel: `watch` prints one line per NEW or RESOLVED alert since the baseline (pages and your team in capitals, a burst of one alertname as one line, one line when an installation stops or starts answering, the lease holder and the sessions working against it in brackets); `snapshot` the current set, grouped; `import` takes over another watcher's per-installation baseline. One process owns the baseline at a time, so two watches never split the lines. Every port-forward ends with the reading, on SIGINT or SIGTERM, and when beekeeper is killed. |
 | `beekeeper budget` | The GitHub core budget from the headers of a real, conditional request (a 304 costs nothing), and every `gh` and `devctl` process with its session. `--gate` exits 3 under the floor. |
 | `beekeeper lease claim\|release\|status\|grant\|revoke` | One holder per resource: the environments in the configuration and the browser. While a supervisor runs, a session claims only what the supervisor granted it, in grant order. |
@@ -46,9 +46,11 @@ the budget work on any system.
 | `beekeeper lanes [queue\|settle\|drop\|clear]` | Each merge lane: the running merge, the one settling until its release rolled, and the waiting ones in turn order, so who is next is never prose. `queue <owner/repo> <n> --for <session>` gives a session's merge its place now so an agreed order carries over (kept until that merge runs, through refusals, for `merge.seedTTL`, 12h); `settle <owner/repo> <n> [--for <session>]` registers a merge run outside the gate (in flight when the gate went live, run without the hook): it heads its lane until it merges, then settles the lane like a gated merge; `drop` takes a waiting merge out; `clear` frees a lane whose settling release will not roll, after a look at the installation. |
 | `beekeeper supervisor start\|stop` | Make a session the supervisor. The grant rule applies while its session runs and lifts by itself when it is gone. |
 | `beekeeper agents register\|assign\|idle` | The roster of empty sessions registered as spare capacity. |
-| `beekeeper note add\|done` | Open items that outlive a session: a question waiting on a person, a deadline. |
-| `beekeeper handover` | Everything the next supervisor needs, as Markdown, from the live state, including what the alert watch reads: the installations and why, the ignored alert names, the baseline. |
-| `beekeeper log` | Every claim, grant, hold, registration and note, as they happened. |
+| `beekeeper note add\|done` | Open items that outlive a session: a decision waiting on a person with its deadline and what happens if nobody answers (`note add --for Timo --due 22:55 --default "the alert stays as is" <text>`), a deadline. `watch` reports a note once when it is due. |
+| `beekeeper timer add\|done\|list` | Times to look at something: `timer add 22:55 "check the rollout"` (or a duration, `45m`). `watch` prints one line when a timer is due; it stays open until `timer done`. |
+| `beekeeper sessions serve\|unserve` | A record for any session, registered agent or not: `sessions serve <session> <owner/repo#n> [--waits "<what>"]`, the issue or epic it serves and what it waits on. `sessions` and `handover` show it; `watch` prints one line when the session ends, naming the issue to re-query. |
+| `beekeeper handover [--prompt]` | Everything the next supervisor needs, as Markdown, from the live state: leases and grants, holds and their exceptions, agents, session records, notes with their defaults, timers, the merge lanes with their queues and settling merges, and what the alert watch reads (the installations and why, the ignored alert names, the baseline). `--prompt` prints the successor's session prompt: the configured instructions (`supervisor.skill` or `supervisor.instructions`), the scope, the pending state in full and the commands that read the live values; no standing rule and no live value (version, memory figure, pull request state). |
+| `beekeeper log` | Every claim, grant, hold, registration, note, timer and session record, as they happened. |
 | `beekeeper run [--max SIZE] [--wait DURATION] -- <command>` | Run a build, test or lint command in one of the machine's build slots (memcap's, shared with the `memcap` wrapper) inside a memory-capped systemd scope. When every slot is held it waits once, then exits 75 with the holders; when the cap fires the kernel kills the biggest process in the scope only, and `run` exits 137 with one line starting `beekeeper run: the <SIZE> cap killed:`. |
 | `beekeeper hook pretooluse` | The Bash tool's PreToolUse hook: rewrites build, test, lint and lab commands to `<this binary> run -- zsh -c '<command>'` with the command verbatim and the tool timeout at 10 minutes (a background run waits 60 minutes), and refuses a third kind cluster, listing the held leases. It puts the merge gate in front of every `devctl pr merge` (below) and passes every other devctl command untouched. |
 | `beekeeper free [--apply] [--only SECTIONS] [--summary]` | Show where the memory is and, with `--apply`, free what no running work needs: dead sessions' dirs in the tmpfs `/tmp` (the CLI is gone; an idle session's stay), throwaway temp dirs and orphaned jest or Claude workers. Kind clusters, idle CLIs, heavy or runaway processes and Chrome renderers are only reported. Never runs as root: the swap reset and root-owned leftovers are printed as the commands to run. `--summary` prints the TSV rows a desktop front end parses. |
@@ -154,9 +156,13 @@ alerts:
   collapse: 3               # more changes of one alertname in one reading are one line
   every: 5m
   timeout: 1m               # per installation, port-forwards included
+supervisor:                 # what handover --prompt tells the successor supervisor
+  skill: supervise          # the skill it runs; or instructions: ~/supervisor.md, a file that opens the prompt
+  scope: The lab machine's sessions, kind labs and merge lanes.   # default: the resources, lanes and installations configured
 ```
 
-State lives in `$XDG_STATE_HOME/beekeeper/` (`state.json`, `events.jsonl`, each caller's last
+State lives in `$XDG_STATE_HOME/beekeeper/` (`state.json`, which an older beekeeper still running
+writes back with the fields it does not know, `events.jsonl`, each caller's last
 snapshot, the alert baseline `alerts.json` with its owner's `alerts.lock`) and leases in `leases/`, one directory per held resource.
 
 ## Development
