@@ -9,6 +9,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/update"
 )
 
+// runUpdate is the update; the tests replace it.
+var runUpdate = update.Run
+
 func (a *app) selfUpdateCmd() *cobra.Command {
 	var check bool
 	c := &cobra.Command{
@@ -32,13 +35,16 @@ anonymously, apart from the budget gh and devctl share, unless GITHUB_TOKEN
 is set. A development build (version dev) is refused.`,
 		Args: cobra.NoArgs,
 		// Needs neither the configuration nor the state.
-		PersistentPreRunE: func(*cobra.Command, []string) error { return nil },
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			a.out = cmd.OutOrStdout()
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			w := a.out
 			if a.json {
 				w = io.Discard
 			}
-			res, err := update.Run(cmd.Context(), w, check)
+			res, err := runUpdate(cmd.Context(), w, check)
 			if a.json && res.Latest != "" {
 				if perr := a.printJSON(res); perr != nil {
 					return perr
