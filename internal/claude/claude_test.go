@@ -10,7 +10,7 @@ import (
 
 const (
 	devctlRepo = "giantswarm/devctl"
-	labRepo    = "teemow/klaus-lab"
+	labRepo    = "example/lab-notes"
 	mmRepo     = "giantswarm/model-manager"
 	musterRepo = "giantswarm/muster"
 	musterRef  = musterRepo + "#1"
@@ -76,7 +76,7 @@ func TestOverlaps(t *testing.T) {
 func TestRepoFromURL(t *testing.T) {
 	for in, want := range map[string]string{
 		"git@github.com:giantswarm/beekeeper.git":     "giantswarm/beekeeper",
-		"https://github.com/teemow/klaus-lab":         "teemow/klaus-lab",
+		"https://github.com/example/lab-notes":        "example/lab-notes",
 		"ssh://git@github.com/giantswarm/devctl.git/": "giantswarm/devctl",
 		"https://gitlab.com/a/b.git":                  "gitlab.com/a/b",
 	} {
@@ -103,10 +103,10 @@ func TestGitInfoWorktree(t *testing.T) {
 	}
 	write(filepath.Join(common, "config"), "[core]\n\tbare = false\n[remote \"origin\"]\n\turl = git@github.com:giantswarm/beekeeper.git\n")
 	write(filepath.Join(wtGit, "commondir"), "../..\n")
-	write(filepath.Join(wtGit, "HEAD"), "ref: refs/heads/teemow/feature\n")
+	write(filepath.Join(wtGit, "HEAD"), "ref: refs/heads/someone/feature\n")
 	write(filepath.Join(wt, ".git"), "gitdir: "+wtGit+"\n")
 	repo, branch := GitInfo(filepath.Join(wt, "sub"))
-	if repo != "giantswarm/beekeeper" || branch != "teemow/feature" {
+	if repo != "giantswarm/beekeeper" || branch != "someone/feature" {
 		t.Errorf("GitInfo = %q, %q", repo, branch)
 	}
 }

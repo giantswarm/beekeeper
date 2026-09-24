@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"io"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -66,7 +67,7 @@ func TestGroupKills(t *testing.T) {
 	for range 46 {
 		kills = append(kills, oomKill{OOMKill: machine.OOMKill{Task: "jest", At: at}, Owner: "memcap"})
 	}
-	kills = append(kills, oomKill{OOMKill: machine.OOMKill{Task: "node", At: at}, Owner: "kind lab agentlab"})
+	kills = append(kills, oomKill{OOMKill: machine.OOMKill{Task: "node", At: at}, Owner: "kind lab lab-1"})
 	got := groupKills(kills)
 	if len(got) != 2 || !strings.HasPrefix(got[0], "46 from memcap: jest×46") {
 		t.Errorf("groupKills = %v", got)
@@ -112,5 +113,24 @@ func TestUsageExitCode(t *testing.T) {
 		if err := root.Execute(); Code(err) != ExitUsage {
 			t.Errorf("%v: exit %d (%v), want %d", args, Code(err), err, ExitUsage)
 		}
+	}
+}
+
+// self-update reads neither the configuration nor the state: a broken
+// configuration does not stop it, and a test binary (version dev) is refused
+// before GitHub is asked.
+func TestSelfUpdateNeedsNoConfiguration(t *testing.T) {
+	cfg := t.TempDir() + "/broken.yaml"
+	if err := os.WriteFile(cfg, []byte("resources: ["), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BEEKEEPER_CONFIG", cfg)
+	root := New()
+	root.SetArgs([]string{"self-update", "--check"})
+	root.SetOut(io.Discard)
+	root.SetErr(io.Discard)
+	err := root.Execute()
+	if err == nil || !strings.Contains(err.Error(), "development build") || Code(err) != ExitError {
+		t.Errorf("self-update --check = exit %d, %v; want the development-build refusal", Code(err), err)
 	}
 }

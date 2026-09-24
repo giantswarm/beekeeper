@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	lab      = "agentlab-1"
+	lab      = "kind-1"
 	agentOne = "Agent one"
 )
 
@@ -19,7 +19,7 @@ var (
 	sup   = &state.Supervisor{Party: state.Party{Session: "s0", Name: "Supervisor run 11"}}
 	one   = state.Party{Session: "s1", HostSession: "local_1", Name: agentOne}
 	two   = state.Party{Session: "s2", HostSession: "local_2", Name: "Agent two"}
-	timo  = state.Party{Name: "timo"}
+	alex  = state.Party{Name: "alex"}
 	grant = func(to state.Party, at time.Time) state.Grant {
 		return state.Grant{Resource: lab, To: to, By: sup.Party, At: at}
 	}
@@ -39,7 +39,7 @@ func TestCheckNeedsGrantUnderSupervisor(t *testing.T) {
 		t.Fatalf("want a refusal, got %v", err)
 	}
 	// The supervisor itself and a person are not gated.
-	for _, p := range []state.Party{sup.Party, timo} {
+	for _, p := range []state.Party{sup.Party, alex} {
 		if _, err := Check(&state.State{}, Gate{Resource: lab, Caller: p, Supervisor: sup, Now: now, TTL: ttl}); err != nil {
 			t.Errorf("%s: %v", p.Name, err)
 		}

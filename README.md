@@ -15,14 +15,18 @@ supervisor use the same binary.
 
 ## Install
 
+Download the binary for your OS and architecture from the latest release into any directory on
+your `PATH`:
+
 ```bash
-bin=$(go env GOBIN)   # any directory on PATH
-gh release download --repo giantswarm/beekeeper --pattern beekeeper-linux-amd64 --output "$bin/.beekeeper.new" --clobber
-chmod +x "$bin/.beekeeper.new" && mv "$bin/.beekeeper.new" "$bin/beekeeper"
+dir=~/.local/bin   # any directory on PATH
+curl -fsSL -o "$dir/beekeeper" https://github.com/giantswarm/beekeeper/releases/latest/download/beekeeper-linux-amd64
+chmod +x "$dir/beekeeper"
 ```
 
-The rename replaces the binary without disturbing a running `beekeeper watch`; writing over it in
-place fails while one runs.
+From then on `beekeeper self-update` keeps it current: it verifies the release binary's Sigstore
+signature and renames it over the old one in one step, so a running `beekeeper watch` keeps
+running. `beekeeper self-update --check` exits 125 while a newer release is out.
 
 The session and machine views need Linux (`/proc`, cgroup v2, the journal). Leases, holds and
 the budget work on any system.
@@ -43,10 +47,11 @@ the budget work on any system.
 | `beekeeper note add\|done` | Open items that outlive a session: a question waiting on a person, a deadline. |
 | `beekeeper handover` | Everything the next supervisor needs, as Markdown, from the live state. |
 | `beekeeper log` | Every claim, grant, hold, registration and note, as they happened. |
+| `beekeeper self-update` | Install the latest signed release over this binary; `--check` only asks. |
 
-Exit codes: 0 done, 1 error, 2 usage, 3 refused (held, not granted, under the floor). A claim
-gates the action it guards: `beekeeper lease claim graveler -p "Dex restart" && kubectl …`,
-never a `;` between them.
+Exit codes: 0 done, 1 error, 2 usage, 3 refused (held, not granted, under the floor), 125 a
+newer release is out (`self-update --check`). A claim gates the action it guards:
+`beekeeper lease claim staging -p "database migration" && kubectl …`, never a `;` between them.
 
 `--json` prints any command's result as JSON. A session is identified by the environment
 Claude Code gives its tool commands; a person or a script passes `--as <name>`.
@@ -58,7 +63,7 @@ optional. The defaults are the numbers proven on an 86 GiB workstation whose Cla
 scope is capped at 48 GiB, so tune `watch` to your machine.
 
 ```yaml
-resources: [kind-1, kind-2, graveler, gazelle]   # leasable besides the browser
+resources: [kind-1, kind-2, staging, production]   # leasable besides the browser
 grantTTL: 30m               # a grant expires this long after its resource is free
 github:
   floor: 2500               # budget under which GitHub work stops

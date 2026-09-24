@@ -17,14 +17,14 @@ func TestLoadDefaults(t *testing.T) {
 		c.Watch.Interval.Duration != 30*time.Second || c.Watch.LoadMax != 45 {
 		t.Errorf("defaults = %+v", c)
 	}
-	if !c.IsLeasable(Browser) || c.IsLeasable("agentlab-1") {
+	if !c.IsLeasable(Browser) || c.IsLeasable("kind-1") {
 		t.Error("only the browser is leasable without resources")
 	}
 }
 
 func TestLoadFile(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "config.yaml")
-	raw := `resources: [agentlab-1, gazelle]
+	raw := `resources: [kind-1, staging]
 grantTTL: 10m
 github: {floor: 3000}
 watch: {interval: 1m}
@@ -39,7 +39,7 @@ checks:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !c.IsLeasable("gazelle") || c.GrantTTL.Duration != 10*time.Minute || c.GitHub.Floor != 3000 ||
+	if !c.IsLeasable("staging") || c.GrantTTL.Duration != 10*time.Minute || c.GitHub.Floor != 3000 ||
 		c.Watch.Interval.Duration != time.Minute || c.Checks[0].Every.Duration != 5*time.Minute {
 		t.Errorf("config = %+v", c)
 	}
