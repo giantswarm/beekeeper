@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"strconv"
@@ -89,8 +90,43 @@ Without a subcommand, lists the open notes.`,
 			return nil
 		},
 	}
+	answer := &cobra.Command{
+		Use:   "answer <id> <answer>",
+		Short: "Record a person's answer on a note, word for word, and close it",
+		Long: `Close the note with the person's answer. The note.answered event carries
+the answer verbatim, so the session that filed the note, the supervisor and
+the guide's feed read it from the log (beekeeper log --verb note.answered).`,
+		Args: cobra.MinimumNArgs(2),
+		RunE: func(_ *cobra.Command, args []string) error {
+			me, err := a.caller()
+			if err != nil {
+				return err
+			}
+			ids, err := parseIDs(args[:1], "note")
+			if err != nil {
+				return err
+			}
+			text := strings.Join(args[1:], " ")
+			var n *state.Note
+			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+				i := slices.IndexFunc(st.Notes, func(n state.Note) bool { return n.ID == ids[0] })
+				if i < 0 {
+					return nil, refused("note #%d is not open", ids[0])
+				}
+				n = &st.Notes[i]
+				ev := event(me, "note.answered", "#%d answered for %s: %s (asked by %s: %s)", n.ID, cmp.Or(n.For, "nobody named"), text, n.By.Name, n.Text)
+				st.Notes = slices.Delete(st.Notes, i, i+1)
+				return []state.Event{ev}, nil
+			})
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(a.out, "note #%d answered and closed\n", ids[0])
+			return err
+		},
+	}
 	list := listCmd("List the open notes", a.noteList)
-	c.AddCommand(add, done, list)
+	c.AddCommand(add, answer, done, list)
 	return c
 }
 

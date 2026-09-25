@@ -115,6 +115,48 @@ func (r *RelayDue) Of(sup *Supervisor) bool {
 	return r != nil && sup != nil && r.Supervisor.Is(sup.Party) && r.Since.Equal(sup.Since)
 }
 
+// Role is a relayed role's record: its holder and term, its last relay,
+// the holders relays relieved, what beekeeper saw of its CLI and the relay
+// due the watch reported. The supervisor's lives in State's own fields
+// (SupervisorRole), the guide's in Guide.
+type Role struct {
+	Holder   *Supervisor `json:"holder,omitempty"`
+	Relay    *Relay      `json:"relay,omitempty"`
+	Relieved []Relief    `json:"relieved,omitempty"`
+	CLI      *CLI        `json:"cli,omitempty"`
+	RelayDue *RelayDue   `json:"relayDue,omitempty"`
+	// Fed are the keys of what the guide's feed reported: the open notes
+	// for a person and the sessions waiting on one, each said once.
+	Fed []string `json:"fed,omitempty"`
+}
+
+// SupervisorRole is the supervisor's record.
+func (st *State) SupervisorRole() Role {
+	return Role{Holder: st.Supervisor, Relay: st.Relay, Relieved: st.Relieved, CLI: st.SupervisorCLI, RelayDue: st.RelayDue}
+}
+
+// SetSupervisorRole stores the supervisor's record.
+func (st *State) SetSupervisorRole(r Role) {
+	st.Supervisor, st.Relay, st.Relieved, st.SupervisorCLI, st.RelayDue = r.Holder, r.Relay, r.Relieved, r.CLI, r.RelayDue
+}
+
+// GuideRole is the guide's record.
+func (st *State) GuideRole() Role {
+	if st.Guide == nil {
+		return Role{}
+	}
+	return *st.Guide
+}
+
+// SetGuideRole stores the guide's record, none when it is empty.
+func (st *State) SetGuideRole(r Role) {
+	if r.Holder == nil && r.Relay == nil && len(r.Relieved) == 0 && len(r.Fed) == 0 {
+		st.Guide = nil
+		return
+	}
+	st.Guide = &r
+}
+
 // Grant is the supervisor's word that a session may claim a resource.
 type Grant struct {
 	Resource string    `json:"resource"`
@@ -217,6 +259,9 @@ type State struct {
 	SupervisorCLI *CLI `json:"supervisorCLI,omitempty"`
 	// RelayDue is the relay due the watch reported to the supervisor.
 	RelayDue *RelayDue `json:"relayDue,omitempty"`
+	// Guide is the guide's role, the supervisor's counterpart for the
+	// person's decisions.
+	Guide *Role `json:"guide,omitempty"`
 	// Grants are queued per resource in the order given.
 	Grants []Grant `json:"grants,omitempty"`
 	// Released is when each resource was last released; a grant's TTL runs
