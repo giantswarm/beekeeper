@@ -30,3 +30,29 @@ func TestFirst(t *testing.T) {
 		t.Errorf("no user turn: found %v, err %v", found, err)
 	}
 }
+
+func TestModel(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	for _, c := range []struct{ name, lines, want string }{
+		{"no assistant message yet", `{"type":"custom-title","customTitle":"x"}
+{"type":"user","message":{"role":"user","content":"the brief"}}
+`, ""},
+		{"the last assistant model", `{"type":"assistant","message":{"model":"claude-haiku-4-5-20251001"}}
+{"type":"assistant","message":{"model":"<synthetic>"}}
+{"type":"user","message":{"role":"user","content":"next"}}
+{"type":"assistant","message":{"model":"claude-sonnet-5"}}
+`, "claude-sonnet-5"},
+		{"a partial last line", `{"type":"assistant","message":{"model":"claude-haiku-4-5-20251001"}}
+{"type":"assistant","message":{"model":"claude-sonn`, "claude-haiku-4-5-20251001"},
+	} {
+		if err := os.WriteFile(path, []byte(c.lines), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := Model(path); err != nil || got != c.want {
+			t.Errorf("%s: Model = %q, %v; want %q", c.name, got, err, c.want)
+		}
+	}
+	if _, err := Model(filepath.Join(t.TempDir(), "missing.jsonl")); err == nil {
+		t.Error("a missing transcript: no error")
+	}
+}

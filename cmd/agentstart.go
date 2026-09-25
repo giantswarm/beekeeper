@@ -23,9 +23,13 @@ const (
 	// startsKept is how long the record keeps a start: the permission
 	// hook stops answering for a session started longer ago.
 	startsKept = 30 * 24 * time.Hour
-	// transcriptWait bounds the wait for a started session's transcript,
-	// which the import reads.
-	transcriptWait = time.Minute
+	// replyWait bounds the wait for a started session's first reply, whose
+	// model the import reads.
+	replyWait = 5 * time.Minute
+	// replyQuiet is how long the transcript stays unchanged before the
+	// import, which reads it twice and takes no model when it changed
+	// in between.
+	replyQuiet = 2 * time.Second
 	// maxBrief keeps the brief within one command-line argument.
 	maxBrief = 100 << 10
 	// focusWait bounds the wait for the import to show its session, after
@@ -47,7 +51,7 @@ id and mode as one of its starts and registers it on the roster under
 <name>, busy with --task, by default the brief's first line (or with the
 open task of a stopped session's entry under that name, which it takes
 over), so the roster shows it at work from its start. Once the
-transcript is on disk it imports the session into Claude Desktop
+transcript holds the first reply it imports the session into Claude Desktop
 (claude://resume?session=<id>): it shows in the sidebar as local_<id> and
 takes messages there. The import switches the desktop's main window to the
 new session; beekeeper switches it back to the session it showed before
@@ -81,6 +85,9 @@ nothing while its first turn runs (beekeeper agents shows it live).`,
 			if err == nil && sa.kept != "" {
 				_, err = fmt.Fprintf(a.out, "the desktop still shows %s\n", sa.kept)
 			}
+			if err == nil {
+				_, err = fmt.Fprintln(a.out, modelLine(sa.model))
+			}
 			return err
 		},
 	}
@@ -106,11 +113,14 @@ type startedAgent struct {
 	// kept is the session the desktop showed before the import and shows
 	// again after it; empty when there was none to go back to.
 	kept string
+	// model is the model the desktop recorded for the session's later
+	// turns; empty: none, they run on the desktop's default.
+	model string
 }
 
 // startAgent records and registers the session, starts its first turn in a
-// transient user unit and imports it into the desktop once its transcript
-// is on disk.
+// transient user unit and imports it into the desktop once the transcript
+// holds its first reply, which carries its model.
 func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, error) {
 	dir, err := filepath.Abs(sp.dir)
 	if err != nil {
@@ -159,8 +169,8 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if err := launch(unit, dir, a.explicitConfig(), agentArgv(bin, id, sp.name, sp.model, sp.brief)); err != nil {
 		return startedAgent{}, fmt.Errorf("starting %s: %w (the start stays recorded; beekeeper agents remove %q takes it off the roster)", sp.name, err, sp.name)
 	}
-	if err := a.awaitTranscript(ctx, id, unit); err != nil {
-		return startedAgent{}, err
+	if err := awaitReply(ctx, a.cfg.Claude.ProjectsDir, id, func() bool { return unitEnded(ctx, unit) }, replyQuiet, replyWait); err != nil {
+		return startedAgent{}, fmt.Errorf("%w, not imported into the desktop: journalctl --user -u %s", err, unit)
 	}
 	var follow string
 	if sp.replaces != nil {
@@ -170,7 +180,34 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if err != nil {
 		return startedAgent{}, err
 	}
-	return startedAgent{id: id, unit: unit, dir: dir, task: reg.task, kept: kept}, nil
+	return startedAgent{id: id, unit: unit, dir: dir, task: reg.task, kept: kept, model: a.desktopModel(ctx, "local_"+id)}, nil
+}
+
+// desktopModel is the model of host's desktop record, waiting up to
+// focusWait for the desktop to write it.
+func (a *app) desktopModel(ctx context.Context, host string) string {
+	ctx, cancel := context.WithTimeout(ctx, focusWait)
+	defer cancel()
+	tick := time.NewTicker(250 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if r, ok := claude.ReadRecord(a.cfg, host); ok {
+			return r.Model
+		}
+		select {
+		case <-ctx.Done():
+			return ""
+		case <-tick.C:
+		}
+	}
+}
+
+// modelLine says which model the session's desktop turns run on.
+func modelLine(model string) string {
+	if model == "" {
+		return "the desktop recorded no model: its desktop turns run on the desktop's default model"
+	}
+	return "its desktop turns run on " + model
 }
 
 // importSession imports the session into the desktop. The import switches
@@ -316,29 +353,54 @@ func launch(unit, dir, config string, argv []string) error {
 	return nil
 }
 
-// awaitTranscript waits up to transcriptWait for the session's transcript,
-// and fails early once its unit has ended without one.
-func (a *app) awaitTranscript(ctx context.Context, id, unit string) error {
-	ctx, cancel := context.WithTimeout(ctx, transcriptWait)
+// awaitReply waits up to wait for the session's transcript to hold its
+// first reply and then to stay unchanged for quiet, and fails early once
+// ended reports the unit gone without a reply. Claude Desktop's import takes
+// a session's model from the transcript's last reply, and takes none when
+// the transcript has none or changes while the import reads it; a session
+// imported without a model runs every desktop turn on the desktop's default
+// instead of --model. A reply that never goes quiet within wait is imported
+// all the same: the start reports the model the desktop recorded.
+func awaitReply(ctx context.Context, projectsDir, id string, ended func() bool, quiet, wait time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
-	tick := time.NewTicker(500 * time.Millisecond)
+	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
-	written := func() bool {
-		m, _ := filepath.Glob(filepath.Join(a.cfg.Claude.ProjectsDir, "*", id+".jsonl"))
-		return len(m) > 0
-	}
+	var (
+		last    os.FileInfo
+		since   time.Time
+		replied bool
+	)
 	for {
-		if written() {
-			return nil
+		if m, _ := filepath.Glob(filepath.Join(projectsDir, "*", id+".jsonl")); len(m) > 0 {
+			if fi, err := os.Stat(m[0]); err == nil {
+				if last == nil || fi.Size() != last.Size() || !fi.ModTime().Equal(last.ModTime()) {
+					last, since = fi, time.Now()
+					model, _ := claude.Model(m[0])
+					replied = model != ""
+				}
+				if replied && time.Since(since) >= quiet {
+					return nil
+				}
+			}
 		}
-		out, _ := exec.CommandContext(ctx, "systemctl", "--user", "show", "-p", "ActiveState", "--value", unit).Output() //nolint:gosec // the unit beekeeper named
-		if s := strings.TrimSpace(string(out)); (s == "inactive" || s == "failed") && !written() {
-			return fmt.Errorf("session %s ended without a transcript: journalctl --user -u %s", id, unit)
+		if !replied && ended() {
+			return fmt.Errorf("session %s ended before its first reply", id)
 		}
 		select {
 		case <-ctx.Done():
-			return errors.Join(fmt.Errorf("no transcript for session %s after %s: journalctl --user -u %s", id, transcriptWait, unit), ctx.Err())
+			if replied {
+				return nil
+			}
+			return errors.Join(fmt.Errorf("no reply from session %s after %s", id, wait), ctx.Err())
 		case <-tick.C:
 		}
 	}
+}
+
+// unitEnded reports whether the transient unit has ended.
+func unitEnded(ctx context.Context, unit string) bool {
+	out, _ := exec.CommandContext(ctx, "systemctl", "--user", "show", "-p", "ActiveState", "--value", unit).Output() //nolint:gosec // the unit beekeeper named
+	s := strings.TrimSpace(string(out))
+	return s == "inactive" || s == "failed"
 }

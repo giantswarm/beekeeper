@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -122,5 +123,40 @@ func TestDesktopStart(t *testing.T) {
 		if got := desktopStart(tc.t); !got.Equal(tc.want) {
 			t.Errorf("%s: desktopStart = %v, want %v", name, got, tc.want)
 		}
+	}
+}
+
+func TestAwaitReply(t *testing.T) {
+	projects := t.TempDir()
+	dir := filepath.Join(projects, "-home-x")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "id.jsonl")
+	write := func(lines string) {
+		if err := os.WriteFile(path, []byte(lines), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	running := func() bool { return false }
+	write(`{"type":"user","message":{"role":"user","content":"the brief"}}` + "\n")
+	if err := awaitReply(t.Context(), projects, "id", running, 0, 700*time.Millisecond); err == nil {
+		t.Error("awaitReply before the first reply: no error")
+	}
+	if err := awaitReply(t.Context(), projects, "id", func() bool { return true }, 0, 5*time.Second); err == nil || !strings.Contains(err.Error(), "ended before its first reply") {
+		t.Errorf("awaitReply after the unit ended without a reply = %v", err)
+	}
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		write(`{"type":"user","message":{"role":"user","content":"the brief"}}
+{"type":"assistant","message":{"model":"claude-haiku-4-5-20251001"}}
+`)
+	}()
+	start := time.Now()
+	if err := awaitReply(t.Context(), projects, "id", running, 500*time.Millisecond, 5*time.Second); err != nil {
+		t.Errorf("awaitReply after the first reply = %v", err)
+	}
+	if took := time.Since(start); took < 600*time.Millisecond {
+		t.Errorf("awaitReply returned %s after the start, before the transcript was quiet", took)
 	}
 }
