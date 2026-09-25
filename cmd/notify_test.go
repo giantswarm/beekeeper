@@ -107,11 +107,18 @@ func TestSupervisorGoneNotifiesOnceAndEndsStandby(t *testing.T) {
 	}
 	poll(0, nil)
 	poll(40*time.Second, nil)
+	// A CLI back within the grace is a restart: nothing to say.
+	poll(45*time.Second, live)
+	if strings.Contains(out.String(), "SUPERVISOR") || gone() != 0 {
+		t.Fatalf("a restart within the grace was said:\n%s", out)
+	}
+	poll(50*time.Second, nil)
+	poll(90*time.Second, nil)
 	if strings.Contains(out.String(), "SUPERVISOR GONE") {
 		t.Fatalf("gone within the grace:\n%s", out)
 	}
-	poll(80*time.Second, nil)
 	poll(2*time.Minute, nil)
+	poll(3*time.Minute, nil)
 	poll(10*time.Minute, nil)
 	if gone() != 1 || strings.Count(out.String(), "SUPERVISOR GONE") != 1 || !strings.Contains(out.String(), "claims stay gated") {
 		t.Fatalf("no-supervisor: %d notifications, lines:\n%s", gone(), out)
@@ -120,8 +127,8 @@ func TestSupervisorGoneNotifiesOnceAndEndsStandby(t *testing.T) {
 		t.Errorf("the standby watch leaves the timer to a supervisor that is gone:\n%s", out)
 	}
 	// While it lasts, again after notify.repeat, still one line.
-	poll(80*time.Second+30*time.Minute, nil)
-	poll(81*time.Second+30*time.Minute, nil)
+	poll(2*time.Minute+30*time.Minute, nil)
+	poll(3*time.Minute+30*time.Minute, nil)
 	if gone() != 2 || strings.Count(out.String(), "SUPERVISOR GONE") != 1 {
 		t.Fatalf("repeat: %d notifications, lines:\n%s", gone(), out)
 	}
