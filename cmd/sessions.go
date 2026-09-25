@@ -169,7 +169,8 @@ repository and the issues or pull requests its latest turns are about, when
 it was last active, the tool commands it runs right now (a devctl wait, a
 bounded sleep with the time left), its memory, how full its context is,
 its last hour (turns, tool calls and their errors, GitHub calls, cost),
-and its role and leases. A
+and its role and leases, after "archived" or "test" for a session the
+guide's feed leaves out. A
 session another session started (a claude -p or claude --bg worker with an
 id of its own) is listed under its own id and name, started by that session;
 a claude --bg daemon is no session.
@@ -202,7 +203,7 @@ moving is no change), or one "no change" line. --full prints everything.`,
 			}
 			var paused []*claude.Record
 			if all {
-				paused = a.paused(v.raw)
+				paused = claude.StoppedRecords(a.cfg, v.raw, a.now.Add(-24*time.Hour))
 			}
 			if a.json {
 				return a.printJSON(struct {
@@ -221,8 +222,8 @@ moving is no change), or one "no change" line. --full prints everything.`,
 					_, _ = fmt.Fprintf(a.out, "\nNot running (paused or closed):\n")
 					w := a.table()
 					for _, r := range paused {
-						_, _ = fmt.Fprintf(w, "  %s\t%s\tactive %s ago\n", truncate(r.Title, 50), r.Branch,
-							ago(a.now, time.UnixMilli(r.LastActivityAt)))
+						_, _ = fmt.Fprintf(w, "  %s\t%s\tactive %s ago\t%s\n", truncate(r.Title, 50), r.Branch,
+							ago(a.now, time.UnixMilli(r.LastActivityAt)), r.Aside())
 					}
 					_ = w.Flush()
 				}
@@ -356,16 +357,6 @@ func (a *app) printRecords(records []state.Record, sessions []*claude.Session) {
 	}
 }
 
-func (a *app) paused(running []*claude.Session) []*claude.Record {
-	var out []*claude.Record
-	for _, r := range claude.RecentRecords(a.cfg, a.now.Add(-24*time.Hour)) {
-		if !slices.ContainsFunc(running, func(s *claude.Session) bool { return s.HostID == r.SessionID }) {
-			out = append(out, r)
-		}
-	}
-	return out
-}
-
 func (a *app) printSessions(v *view) {
 	w := a.table()
 	_, _ = fmt.Fprintln(w, "SESSION\tON\tACTIVE\tRUNNING\tMEM\tCTX\tLAST HOUR\tROLE / LEASES")
@@ -374,16 +365,13 @@ func (a *app) printSessions(v *view) {
 		if role == "" && s.Parent != "" {
 			role = "started by " + parentName(v.raw, s.Parent)
 		}
-		if len(s.Leases) > 0 {
-			role = strings.TrimPrefix(role+" holds "+strings.Join(s.Leases, ","), " ")
-		}
 		hour := "-"
 		if s.Metrics != nil {
 			hour = hourText(s.Metrics.LastHour)
 		}
 		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%dM\t%s\t%s\t%s\n",
 			truncate(s.Name, 44), truncate(on(s), 44), ago(a.now, s.LastActive),
-			truncate(running(s.Commands), 40), s.MemMiB, contextText(s.Metrics), hour, truncate(role, 40))
+			truncate(running(s.Commands), 40), s.MemMiB, contextText(s.Metrics), hour, truncate(roleText(s, role), 40))
 	}
 	_ = w.Flush()
 	if t := v.Totals; t != nil {
@@ -395,6 +383,15 @@ func (a *app) printSessions(v *view) {
 			_, _ = fmt.Fprintf(a.out, "  %s: %s\n", o.Key, strings.Join(o.Sessions, ", "))
 		}
 	}
+}
+
+// roleText is role and the session's leases, after "archived" or "test"
+// for a session the guide's feed leaves out.
+func roleText(s *sessionView, role string) string {
+	if len(s.Leases) > 0 {
+		role = strings.TrimPrefix(role+" holds "+strings.Join(s.Leases, ","), " ")
+	}
+	return strings.TrimSpace(s.Aside() + " " + role)
 }
 
 // parentName names the session that started a child session: its name
