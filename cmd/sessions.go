@@ -47,6 +47,31 @@ type supervisorView struct {
 	// Relay is the supervisor's last relay; Relieved says it relieved the caller.
 	Relay    *state.Relay `json:"relay,omitempty"`
 	Relieved bool         `json:"relieved,omitempty"`
+	// Context is its session's context in tokens (0: not read), RelayAt
+	// the context at which the watch reports the relay due.
+	Context int64 `json:"contextTokens,omitempty"`
+	RelayAt int64 `json:"relayAt"`
+}
+
+// viewSupervisor is the recorded supervisor as sv reads it, with its
+// session's context; nil when none is recorded.
+func (a *app) viewSupervisor(st *state.State, sessions []*claude.Session, sv supervision) *supervisorView {
+	if st.Supervisor == nil {
+		return nil
+	}
+	return &supervisorView{
+		Supervisor: *st.Supervisor, Live: sv.live, CLIGone: sv.gone, RestartUntil: sv.until, Relay: st.Relay,
+		Context: sessionContext(sessions, st.Supervisor.Party, a.now), RelayAt: int64(a.cfg.Supervisor.RelayAt),
+	}
+}
+
+// contextText says how far the supervisor's context is towards relayAt,
+// "" when it is not known.
+func (v *supervisorView) contextText() string {
+	if v.Context == 0 {
+		return ""
+	}
+	return fmt.Sprintf(", %s tokens of context (relay at %s)", tokensText(v.Context), tokensText(v.RelayAt))
 }
 
 // collect reads processes, sessions, state and leases; withWork also scans
@@ -65,10 +90,7 @@ func (a *app) collect(withWork bool) (*view, error) {
 		return nil, err
 	}
 	v := &view{raw: raw, st: st}
-	if st.Supervisor != nil {
-		sv := a.supervision(st, raw)
-		v.Supervisor = &supervisorView{Supervisor: *st.Supervisor, Live: sv.live, CLIGone: sv.gone, RestartUntil: sv.until}
-	}
+	v.Supervisor = a.viewSupervisor(st, raw, a.supervision(st, raw))
 	for _, h := range holders {
 		v.Leases = append(v.Leases, a.leaseView(raw, h))
 	}

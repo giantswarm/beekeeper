@@ -14,7 +14,7 @@ func TestLoadDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if c.StateDir != "/state/beekeeper" || c.LeaseDir != "/state/beekeeper/leases" || c.GitHub.Floor != 2500 ||
-		c.Watch.Interval.Duration != 30*time.Second || c.Watch.LoadMax != 45 {
+		c.Watch.Interval.Duration != 30*time.Second || c.Watch.LoadMax != 45 || c.Supervisor.RelayAt != 400_000 {
 		t.Errorf("defaults = %+v", c)
 	}
 	if len(c.Notify.Kinds) != 6 || c.Notify.Policy().Quiet != nil {
@@ -39,6 +39,7 @@ notify:
   kinds: [due, oom-kill]
   quietHours: "22:00-07:00"
   urgency: {due: critical}
+supervisor: {relayAt: 1.5M}
 `
 	if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
@@ -48,7 +49,7 @@ notify:
 		t.Fatal(err)
 	}
 	if !c.IsLeasable("staging") || c.GrantTTL.Duration != 10*time.Minute || c.GitHub.Floor != 3000 ||
-		c.Watch.Interval.Duration != time.Minute {
+		c.Watch.Interval.Duration != time.Minute || c.Supervisor.RelayAt != 1_500_000 {
 		t.Errorf("config = %+v", c)
 	}
 	if n := c.Notify; len(n.Kinds) != 2 || n.Repeat.Duration != 30*time.Minute || n.Policy().Quiet == nil || n.Urgency["due"] != "critical" {
@@ -78,6 +79,8 @@ func TestLoadRejects(t *testing.T) {
 		"unknown urgency":     "notify: {urgency: {due: urgent}}",
 		"urgency of no kind":  "notify: {urgency: {sessions: low}}",
 		"bad quiet hours":     "notify: {quietHours: 22-7}",
+		"bad relayAt":         "supervisor: {relayAt: 400kb}",
+		"negative relayAt":    "supervisor: {relayAt: -1}",
 	} {
 		p := filepath.Join(t.TempDir(), "c.yaml")
 		if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
@@ -85,6 +88,19 @@ func TestLoadRejects(t *testing.T) {
 		}
 		if _, err := Load(p); err == nil {
 			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+func TestParseTokens(t *testing.T) {
+	for in, want := range map[string]Tokens{"400k": 400_000, "400K": 400_000, "1m": 1_000_000, "0.5M": 500_000, "250000": 250_000, " 80k ": 80_000} {
+		if got, err := ParseTokens(in); err != nil || got != want {
+			t.Errorf("%q = %d, %v; want %d", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"", "k", "0", "-5k", "lots", "4e", "inf", "NaN", "0.5"} {
+		if _, err := ParseTokens(in); err == nil {
+			t.Errorf("%q accepted", in)
 		}
 	}
 }

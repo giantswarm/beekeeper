@@ -57,10 +57,11 @@ installations' alerts are read every alerts.every and each NEW or RESOLVED
 one at or above its installation's floor is a line, a flapping one a single
 FLAPPING line (beekeeper alerts watch); only one watch at a time reads them.
 
-Once the supervisor has served supervisor.shift, RELAY DUE is said at the
-first quiet moment: no gated merge running or settling, no grant waiting
-to be claimed and no claim queued. It is said once, and again only when a
-quiet moment follows a busy one; never while a relay is open.
+Once the supervisor session's context (its transcript's last request, the
+CTX column) reaches supervisor.relayAt, RELAY DUE is said at the first
+quiet moment: no gated merge running or settling, no grant waiting to be
+claimed, no claim queued and no relay open. It is said once per supervisor,
+and again only after a relay is cancelled or expires.
 
 --notify also sends the events that need a person to the desktop's
 notification service (org.freedesktop.Notifications on the session bus):
@@ -484,7 +485,7 @@ func (w *watcher) sessionChanges(sessions []*claude.Session) {
 var watchParty = state.Party{Name: "beekeeper watch"}
 
 // pending prints the notes and timers that fell due, the recorded sessions
-// that ended, a relay taken or expired and the relay due after the shift.
+// that ended, a relay taken or expired and the relay due at relayAt.
 // The state keeps that they were reported, so each is one line however many
 // watches run; the state is written only then.
 func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
@@ -507,9 +508,9 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		}
 		evs = append(evs, ce...)
 		rl, re := fireRelay(st, w.now)
-		sl, se, changed := fireShift(st, q, w.now, w.cfg.Supervisor.Shift.Duration)
-		lines, evs = append(append(lines, rl...), sl...), append(append(evs, re...), se...)
-		return lines, evs, seen || changed || len(lines) > 0 || len(evs) > 0
+		dl, de := fireRelayDue(st, q, w.now)
+		lines, evs = append(append(lines, rl...), dl...), append(append(evs, re...), de...)
+		return lines, evs, seen || len(lines) > 0 || len(evs) > 0
 	}
 	if _, _, changed := fire(st); !changed {
 		return
@@ -589,15 +590,16 @@ func (w *watcher) supervisorGone(ctx context.Context, st *state.State, sessions 
 }
 
 // quietness reads whether the machine is at a quiet moment, once the
-// supervisor's shift is over: outside the state lock, since a settling
-// merge's installation is read with kubectl.
+// supervisor's context reached relayAt: outside the state lock, since a
+// settling merge's installation is read with kubectl.
 func (w *watcher) quietness(ctx context.Context, st *state.State, sessions []*claude.Session) quietness {
-	if !shiftOver(st, sessions, w.now, w.cfg.Supervisor.Shift.Duration) {
+	c := relayContext(st, sessions, w.now, w.cfg.Supervisor.RelayAt)
+	if c == 0 {
 		return quietness{}
 	}
 	holders, err := lease.Dir(w.cfg.LeaseDir).List()
 	if err != nil {
-		return quietness{checked: true, busy: fmt.Sprintf("the leases cannot be read: %v", err)}
+		return quietness{checked: true, context: c, busy: fmt.Sprintf("the leases cannot be read: %v", err)}
 	}
 	hrs := map[string][]merge.HelmRelease{}
 	rolled := func(m state.Merge, lane config.Lane) bool {
@@ -609,7 +611,7 @@ func (w *watcher) quietness(ctx context.Context, st *state.State, sessions []*cl
 		ready, _ := merge.Ready(lane, h, &m, w.now, w.cfg.Merge.Settle.Duration)
 		return h != nil && ready
 	}
-	return quietness{checked: true, busy: busyWith(st, w.cfg, heldMap(holders), w.now, proc.Alive, rolled)}
+	return quietness{checked: true, context: c, busy: busyWith(st, w.cfg, heldMap(holders), w.now, proc.Alive, rolled)}
 }
 
 // firePending marks what is due or ended in st as reported and returns its

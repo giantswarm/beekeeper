@@ -15,10 +15,11 @@ func (a *app) handoverCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "handover",
 		Short: "Everything the next supervisor needs, from the live state",
-		Long: `Print the hand-over as Markdown: the supervisor, the running sessions and
-what each is on, overlaps, leases and grant queues, holds, the merge lanes,
-registered agents, session records, open notes with their defaults, timers,
-what the alert watch reads and the latest events. Everything comes from the
+		Long: `Print the hand-over as Markdown: the supervisor and its context in tokens,
+the running sessions and what each is on, overlaps, leases and grant
+queues, holds, the merge lanes, registered agents, session records, open
+notes with their defaults, timers, what the alert watch reads and the
+latest events. Everything comes from the
 state and the machine, so a successor (or the same supervisor after a
 restart) reads it instead of a prose brief.
 
@@ -70,7 +71,7 @@ memory figure or pull request state.`,
 			case v.Supervisor == nil:
 				p("No supervisor is recorded.")
 			case v.Supervisor.Live:
-				p("Supervisor: %q since %s.", v.Supervisor.Name, clock(a.now, v.Supervisor.Since))
+				p("Supervisor: %q since %s%s.", v.Supervisor.Name, clock(a.now, v.Supervisor.Since), v.Supervisor.contextText())
 			default:
 				p("Supervisor: %q since %s, its session is gone.", v.Supervisor.Name, clock(a.now, v.Supervisor.Since))
 			}

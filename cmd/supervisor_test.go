@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -125,57 +126,93 @@ func TestRelayExpiresAndCancels(t *testing.T) {
 	}
 }
 
-func TestRelayDueOnlyAtAQuietMoment(t *testing.T) {
+// supervisorTranscript is a real supervisor transcript's window, its content
+// stripped to the usage lines: its last request read 163018 tokens.
+var supervisorTranscript = filepath.Join("..", "internal", "claude", "testdata", "transcript", "window.jsonl")
+
+func TestRelayDueAtTheContextOnceAtAQuietMoment(t *testing.T) {
 	cfg := &config.Config{
 		GrantTTL: config.Duration{Duration: 30 * time.Minute},
 		Lanes:    []config.Lane{{Name: serving, Installation: gazelle, Repositories: []string{modelManager}}},
 		Merge:    config.Merge{Settle: config.Duration{Duration: 5 * time.Minute}, SettleTimeout: config.Duration{Duration: 30 * time.Minute}},
 	}
-	shift := 8 * time.Hour
-	sessions := []*claude.Session{{ID: supA.Session, HostID: supA.HostSession, Name: supA.Name}}
-	st := &state.State{Supervisor: &state.Supervisor{Party: supA, Since: relayNow.Add(-shift + time.Minute)}}
-	if shiftOver(st, sessions, relayNow, shift) {
-		t.Fatal("shift over a minute early")
+	now := relayNow
+	sessions := []*claude.Session{{ID: supA.Session, HostID: supA.HostSession, Name: supA.Name, Transcript: supervisorTranscript}}
+	st := &state.State{Supervisor: &state.Supervisor{Party: supA, Since: now.Add(-3 * time.Hour)}}
+	if c := sessionContext(sessions, supA, now); c != 163018 {
+		t.Fatalf("the supervisor's context from its transcript: %d", c)
 	}
-	now := relayNow.Add(time.Minute)
-	if !shiftOver(st, sessions, now, shift) || shiftOver(st, nil, now, shift) || shiftOver(st, sessions, now, 0) {
-		t.Fatal("shiftOver")
+	if c := relayContext(st, sessions, now, 200_000); c != 0 {
+		t.Fatalf("relay due under relayAt: %d", c)
+	}
+	const relayAt = 150_000
+	if relayContext(st, sessions, now, relayAt) != 163018 || relayContext(st, nil, now, relayAt) != 0 {
+		t.Fatal("relayContext")
 	}
 	never := func(int) bool { return false }
 	notRolled := func(state.Merge, config.Lane) bool { return false }
-	busy := func() string { return busyWith(st, cfg, map[string]bool{}, now, never, notRolled) }
+	quiet := func() quietness {
+		c := relayContext(st, sessions, now, relayAt)
+		if c == 0 {
+			return quietness{}
+		}
+		return quietness{checked: true, context: c, busy: busyWith(st, cfg, map[string]bool{}, now, never, notRolled)}
+	}
 
 	st.Merges = []state.Merge{{Repo: modelManager, PR: 172, Lane: serving, Phase: state.Settling, Finished: now.Add(-time.Minute)}}
-	if b := busy(); b != "giantswarm/model-manager#172 settles" {
-		t.Fatalf("settling merge: %q", b)
+	if q := quiet(); q.busy != "giantswarm/model-manager#172 settles" {
+		t.Fatalf("settling merge: %q", q.busy)
 	}
-	lines, _, _ := fireShift(st, quietness{checked: true, busy: busy()}, now, shift)
-	if len(lines) != 0 {
+	if lines, _ := fireRelayDue(st, quiet(), now); len(lines) != 0 || st.RelayDue != nil {
 		t.Fatalf("relay due while a merge settles: %q", lines)
 	}
 	st.Merges = nil
 	st.Grants = []state.Grant{{Resource: browser, To: four, By: supA, At: now}}
-	if b := busy(); b != `browser is granted to "Agent four" and not claimed yet` {
-		t.Fatalf("waiting grant: %q", b)
+	if q := quiet(); q.busy != `browser is granted to "Agent four" and not claimed yet` {
+		t.Fatalf("waiting grant: %q", q.busy)
 	}
 	st.Grants = nil
-	lines, evs, changed := fireShift(st, quietness{checked: true}, now, shift)
-	if len(lines) != 1 || !strings.HasPrefix(lines[0], "RELAY DUE:") || len(evs) != 1 || !changed {
+	lines, evs := fireRelayDue(st, quiet(), now)
+	if want := `RELAY DUE: "Supervisor run 11" is at 163k tokens of context: beekeeper handover --prompt`; len(lines) != 1 || lines[0] != want || len(evs) != 1 {
 		t.Fatalf("relay due at a quiet moment: %q", lines)
 	}
-	if lines, _, changed := fireShift(st, quietness{checked: true}, now.Add(time.Minute), shift); len(lines) != 0 || changed {
-		t.Fatalf("relay due twice in one quiet period: %q", lines)
+	if !st.RelayDue.Of(st.Supervisor) || st.RelayDue.Context != 163018 {
+		t.Fatalf("relay due record: %+v", st.RelayDue)
 	}
-	if lines, _, changed := fireShift(st, quietness{checked: true, busy: "x merges"}, now.Add(2*time.Minute), shift); len(lines) != 0 || !changed {
-		t.Fatalf("busy moment: %q, changed %v", lines, changed)
+	for i, q := range []quietness{quiet(), {checked: true, context: 170_000}, {checked: true, busy: "x merges"}, {checked: true, context: 170_000}} {
+		now = now.Add(time.Minute)
+		if lines, evs := fireRelayDue(st, q, now); len(lines) != 0 || len(evs) != 0 {
+			t.Fatalf("relay due again for the same supervisor (%d): %q", i, lines)
+		}
 	}
-	if lines, _, _ := fireShift(st, quietness{checked: true}, now.Add(3*time.Minute), shift); len(lines) != 1 {
-		t.Fatalf("relay due not repeated after a busy moment: %q", lines)
+
+	if _, _, err := relayRole(st, supA, supB, now, 15*time.Minute); err != nil {
+		t.Fatal(err)
 	}
-	st.Shift.Quiet = false
-	st.Relay = &state.Relay{From: supA, To: supB, Expires: now.Add(time.Hour)}
-	if shiftOver(st, sessions, now, shift) {
-		t.Fatal("relay due while a relay is open")
+	if q := quiet(); q.checked {
+		t.Fatal("quietness read while a relay is open")
+	}
+	if _, _, err := cancelRelay(st, supA, now); err != nil {
+		t.Fatal(err)
+	}
+	if lines, _ := fireRelayDue(st, quiet(), now); len(lines) != 1 {
+		t.Fatalf("relay due not said again after a cancelled relay: %q", lines)
+	}
+	if _, _, err := relayRole(st, supA, supB, now, 15*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Hour)
+	if lines, _ := fireRelay(st, now); len(lines) != 1 || !strings.HasPrefix(lines[0], "RELAY EXPIRED:") || st.RelayDue != nil {
+		t.Fatalf("an expired relay: %q, %+v", lines, st.RelayDue)
+	}
+	if lines, _ := fireRelayDue(st, quiet(), now); len(lines) != 1 {
+		t.Fatalf("relay due not said again after an expired relay: %q", lines)
+	}
+
+	st.Supervisor = &state.Supervisor{Party: supB, Since: now}
+	sessions[0] = &claude.Session{ID: supB.Session, HostID: supB.HostSession, Name: supB.Name, Transcript: supervisorTranscript}
+	if lines, _ := fireRelayDue(st, quiet(), now); len(lines) != 1 || !strings.Contains(lines[0], supB.Name) {
+		t.Fatalf("relay due not said to the next supervisor: %q", lines)
 	}
 }
 
@@ -323,5 +360,21 @@ func TestRestartGraceHoldsTheRuleThroughACLIRestart(t *testing.T) {
 	}
 	if readSupervision(st, nil, relayNow.Add(2*time.Hour), grace).gating() != nil {
 		t.Fatal("the previous term's CLI record gates the new supervisor")
+	}
+}
+
+func TestSupervisorViewShowsTheContext(t *testing.T) {
+	a := &app{cfg: &config.Config{Supervisor: config.Supervisor{RelayAt: 400_000}}, now: relayNow}
+	st := &state.State{Supervisor: &state.Supervisor{Party: supA, Since: relayNow.Add(-time.Hour)}}
+	sessions := []*claude.Session{{ID: supA.Session, HostID: supA.HostSession, Name: supA.Name, Transcript: supervisorTranscript}}
+	v := a.viewSupervisor(st, sessions, supervision{live: true})
+	if got := v.contextText(); got != ", 163k tokens of context (relay at 400k)" {
+		t.Fatalf("context: %q", got)
+	}
+	if got := a.viewSupervisor(st, nil, supervision{}).contextText(); got != "" {
+		t.Fatalf("context of a gone session: %q", got)
+	}
+	if a.viewSupervisor(&state.State{}, sessions, supervision{}) != nil {
+		t.Fatal("a view of no supervisor")
 	}
 }

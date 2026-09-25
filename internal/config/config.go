@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,13 +51,13 @@ type Config struct {
 	Notify   Notify   `yaml:"notify"`
 	Metrics  Metrics  `yaml:"metrics"`
 	// Supervisor is what `handover --prompt` tells a successor supervisor,
-	// how long a relay to it stays open and how long a shift lasts.
+	// how long a relay to it stays open and at what context it is due.
 	Supervisor Supervisor `yaml:"supervisor"`
 }
 
 // Supervisor configures the successor's session prompt (the instructions it
-// follows, a skill or a file, not both, and the scope it supervises), the
-// shift and the relay.
+// follows, a skill or a file, not both, and the scope it supervises) and the
+// relay.
 type Supervisor struct {
 	// Skill is the name of the skill the successor runs (supervise).
 	Skill string `yaml:"skill"`
@@ -66,9 +67,9 @@ type Supervisor struct {
 	// Scope says what the supervisor watches, in a sentence or two; empty,
 	// the prompt names the resources, lanes and installations configured.
 	Scope string `yaml:"scope"`
-	// Shift is how long a supervisor serves before the watch reports the
-	// relay due at a quiet moment; zero never reports it.
-	Shift Duration `yaml:"shift"`
+	// RelayAt is the supervisor session's context, in tokens, at which the
+	// watch reports the relay due at a quiet moment ("400k").
+	RelayAt Tokens `yaml:"relayAt"`
 	// RelayTTL is how long a relay stays open for the successor's start.
 	RelayTTL Duration `yaml:"relayTTL"`
 	// RestartGrace is how long the grant rule holds after beekeeper first
@@ -331,6 +332,39 @@ func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 	return nil
 }
 
+// Tokens is a token count written as "400k", "1m" or "400000" in YAML.
+type Tokens int64
+
+// UnmarshalYAML parses a count with an optional k or m suffix.
+func (t *Tokens) UnmarshalYAML(n *yaml.Node) error {
+	var s string
+	if err := n.Decode(&s); err != nil {
+		return err
+	}
+	v, err := ParseTokens(s)
+	if err != nil {
+		return fmt.Errorf("line %d: %w", n.Line, err)
+	}
+	*t = v
+	return nil
+}
+
+// ParseTokens parses "400k", "1m" or "400000" (case-insensitive).
+func ParseTokens(s string) (Tokens, error) {
+	num, mult := strings.ToLower(strings.TrimSpace(s)), 1.0
+	switch {
+	case strings.HasSuffix(num, "k"):
+		num, mult = strings.TrimSuffix(num, "k"), 1e3
+	case strings.HasSuffix(num, "m"):
+		num, mult = strings.TrimSuffix(num, "m"), 1e6
+	}
+	f, err := strconv.ParseFloat(num, 64)
+	if err != nil || !(f*mult >= 1 && f*mult < 1e12) {
+		return 0, fmt.Errorf("%q is not a positive token count (400k, 1m, 400000)", s)
+	}
+	return Tokens(f * mult), nil
+}
+
 // Path returns the configuration file beekeeper reads.
 func Path(flag string) (string, error) {
 	if flag != "" {
@@ -379,6 +413,9 @@ func (c *Config) defaults() error {
 	setDur(&c.GrantTTL, 30*time.Minute)
 	setDur(&c.Supervisor.RelayTTL, 15*time.Minute)
 	setDur(&c.Supervisor.RestartGrace, time.Minute)
+	if c.Supervisor.RelayAt == 0 {
+		c.Supervisor.RelayAt = 400_000
+	}
 
 	setDur(&c.Overlaps.ActiveWithin, time.Hour)
 

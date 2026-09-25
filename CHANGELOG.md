@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `supervisor.relayAt` (tokens, default `400k`) replaces `supervisor.shift`: `watch` says `RELAY DUE` once the supervisor session's context, read from its transcript's last request like the `CTX` column, reaches it, at the first quiet moment (no gated merge running or settling, no grant waiting, no claim queued, no relay open). It is one line naming the context and `beekeeper handover --prompt`, said once per supervisor and again only after a relay is cancelled or expires. `supervisor status` and `handover` show the supervisor's context in tokens. The state's `relayDue` record replaces `shift`.
+
+### Removed
+
+- `supervisor.shift`: a supervisor is relayed at a context size, not after a time.
+
 ### Fixed
 
 - The PreToolUse hook gates every `devctl pr merge` that runs as a command: behind `flock <lock>`, `nohup`, `setsid`, `stdbuf`, `ionice`, `chrt`, `nice`, `timeout` (with options), `env` (with `-u`), `time`, `command`, `exec` and `VAR=value`, in any segment of a pipeline or list, and with devctl named by path (`~/bin/devctl`, `./devctl`). The gate wraps only the devctl invocation, so pipelines and `pipefail` behave as written. 43 of the 577 real merge invocations in the lab machine's transcripts ran ungated before (`flock <lock> devctl pr merge … | tee … | ledger.sh record …` among them); all are pinned in `internal/guard/testdata/merges.jsonl`.

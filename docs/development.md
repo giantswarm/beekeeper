@@ -97,9 +97,11 @@ scratch state. The live supervisor's watch sees it too: give it a name that read
 short life. Two such stand-ins play a supervisor hand-over: each runs `supervisor start`,
 `supervisor relay` or `supervisor status` with its own `CLAUDE_CODE_SESSION_ID`,
 `CLAUDE_CODE_HOST_SESSION_ID` and `CLAUDE_CODE_SESSION_NAME` in the environment; a short
-`supervisor.shift` and `supervisor.relayTTL` in the scratch configuration and a settling merge
-written into the scratch `state.json` show `RELAY DUE` held back and then said by
-`watch --once`. A supervisor stand-in killed by its PID and started again with the same
+a small `supervisor.relayAt` and a short `supervisor.relayTTL` in the scratch configuration,
+a supervisor stand-in started with `--session-id <id>` whose transcript (a real one with its
+content stripped, as `<claude.projectsDir>/<project>/<id>.jsonl`) reports a context above it,
+and a settling merge written into the scratch `state.json` show `RELAY DUE` held back and then
+said once by `watch --once`. A supervisor stand-in killed by its PID and started again with the same
 `--resume <id>` within `supervisor.restartGrace` is a CLI restart: a claim loop from a third
 identity stays refused throughout and `watch --once` says `SUPERVISOR RESTARTED`; one not started
 again shows the rule lifting once the grace has passed. `handover --prompt` on a copy of the live state (`cp -r` of the state and lease
@@ -186,7 +188,7 @@ measured with `beekeeper sessions --json` against the installed release on the s
 | `internal/machine` | Memory, pressure, the desktop scope, disk, build slots, kind clusters, OOM kills. |
 | `internal/github` | The budget from rate-limit headers; a pull request's state from `gh pr view`. |
 | `internal/lease` | Lease directories and the grant rule. |
-| `internal/state` | The shared state document (supervisor and its relay, the shift the watch reported, grants, holds, agents, notes, timers, session records, merges) and the event log, under a file lock; `Log` appends the events that change no state (build runs) with a bounded wait for the lock. |
+| `internal/state` | The shared state document (supervisor and its relay, the relay due the watch reported, grants, holds, agents, notes, timers, session records, merges) and the event log, under a file lock; `Log` appends the events that change no state (build runs) with a bounded wait for the lock. |
 | `internal/notify` | Desktop notifications: the kinds, urgencies and quiet hours, the ledger `notify.json` under `notify.lock` that makes each event one notification across watches and holds the quiet hours' ones, and the D-Bus sender to `org.freedesktop.Notifications` (godbus, never `notify-send`, never an autolaunched bus). |
 | `internal/alerts` | The installations' alerts: bounded `kubectl port-forward`s in their own process group, the Alertmanager reading, the NEW/RESOLVED/FLAPPING lines with the severity floors and the flap damper, and the grouped snapshot (pure, tested against Alertmanager-shaped fixtures, recorded answers in `testdata/` and a fake `kubectl`), the baseline with the damper's records and its single owner, and recorded answers for `alerts replay`. |
 | `internal/guard` | The build guard: a capped run in a build slot with its `run.start`/`run.end` events, and the PreToolUse hook's rewrite and third-lab refusal. |

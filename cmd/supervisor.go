@@ -24,8 +24,9 @@ CLI back under the same session within it keeps the role. The role moves
 to a successor in two steps that leave no gap: the supervisor names it
 (relay), the successor starts.
 
-Without a subcommand, shows the supervisor (exit 3 when none runs, 4 in the
-session a relay relieved).`,
+Without a subcommand, shows the supervisor and its context in tokens
+against supervisor.relayAt, at which watch says RELAY DUE (exit 3 when none
+runs, 4 in the session a relay relieved).`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error { return a.supervisorStatus() },
 	}
@@ -190,9 +191,9 @@ func (a *app) supervisorStatus() error {
 		return err
 	}
 	sv := a.supervision(st, sessions)
-	var v supervisorView
-	if st.Supervisor != nil {
-		v = supervisorView{Supervisor: *st.Supervisor, Live: sv.live, CLIGone: sv.gone, RestartUntil: sv.until, Relay: st.Relay}
+	v := a.viewSupervisor(st, sessions, sv)
+	if v == nil {
+		v = &supervisorView{}
 	}
 	if me, err := a.caller(); err == nil {
 		if r := relievedBy(st, me); r != nil {
@@ -231,7 +232,7 @@ func (a *app) supervisorStatus() error {
 	if st.Relay.Open(a.now) {
 		relay = fmt.Sprintf(", relaying to %q until %s", st.Relay.To.Name, clock(a.now, st.Relay.Expires))
 	}
-	_, err = fmt.Fprintf(a.out, "%q supervises since %s%s%s\n", st.Supervisor.Name, clock(a.now, st.Supervisor.Since), relay, restart)
+	_, err = fmt.Fprintf(a.out, "%q supervises since %s%s%s%s\n", st.Supervisor.Name, clock(a.now, st.Supervisor.Since), v.contextText(), relay, restart)
 	return err
 }
 

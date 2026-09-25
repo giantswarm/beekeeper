@@ -99,21 +99,20 @@ func (c *CLI) Of(sup *Supervisor) bool {
 	return c != nil && sup != nil && c.Supervisor.Is(sup.Party) && c.Since.Equal(sup.Since)
 }
 
-// Shift is the watch's memory of the running supervisor's shift: when it
-// reported the relay due and whether the machine stayed quiet since.
-type Shift struct {
-	// Supervisor and Since name the supervisor's term this is about.
+// RelayDue is the watch's memory that it reported the relay due to the
+// supervisor's term Supervisor and Since, once: a relay cancelled or
+// expired removes it, so the next quiet moment reports it again.
+type RelayDue struct {
 	Supervisor Party     `json:"supervisor"`
 	Since      time.Time `json:"since"`
 	Reported   time.Time `json:"reported"`
-	// Quiet is false once a busy moment followed the report: the next quiet
-	// moment reports the relay due again.
-	Quiet bool `json:"quiet,omitempty"`
+	// Context is the supervisor's context in tokens when it was reported.
+	Context int64 `json:"contextTokens"`
 }
 
-// Of reports whether the shift record is about sup's current term.
-func (s *Shift) Of(sup *Supervisor) bool {
-	return s != nil && sup != nil && s.Supervisor.Is(sup.Party) && s.Since.Equal(sup.Since)
+// Of reports whether the record is about sup's current term.
+func (r *RelayDue) Of(sup *Supervisor) bool {
+	return r != nil && sup != nil && r.Supervisor.Is(sup.Party) && r.Since.Equal(sup.Since)
 }
 
 // Grant is the supervisor's word that a session may claim a resource.
@@ -216,8 +215,8 @@ type State struct {
 	Relieved []Relief `json:"relieved,omitempty"`
 	// SupervisorCLI is what beekeeper saw of the supervisor's CLI.
 	SupervisorCLI *CLI `json:"supervisorCLI,omitempty"`
-	// Shift is what the watch reported of the supervisor's shift.
-	Shift *Shift `json:"shift,omitempty"`
+	// RelayDue is the relay due the watch reported to the supervisor.
+	RelayDue *RelayDue `json:"relayDue,omitempty"`
 	// Grants are queued per resource in the order given.
 	Grants []Grant `json:"grants,omitempty"`
 	// Released is when each resource was last released; a grant's TTL runs
