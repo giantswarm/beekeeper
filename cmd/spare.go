@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -179,11 +180,13 @@ func openDesktop(ctx context.Context, url string, running bool) error {
 }
 
 // desktopStart is when the desktop app's main process started, zero when
-// it does not run.
+// it does not run. Electron rewrites its command line into one string, so
+// the arguments are its fields.
 func desktopStart(t *proc.Table) time.Time {
 	for _, p := range t.ByPID {
-		if len(p.Args) > 0 && filepath.Base(p.Args[0]) == desktopApp &&
-			!slices.ContainsFunc(p.Args, func(a string) bool { return len(a) > 7 && a[:7] == "--type=" }) {
+		args := strings.Fields(p.Cmdline())
+		if len(args) > 0 && filepath.Base(args[0]) == desktopApp &&
+			!slices.ContainsFunc(args, func(a string) bool { return strings.HasPrefix(a, "--type=") }) {
 			return p.Start
 		}
 	}

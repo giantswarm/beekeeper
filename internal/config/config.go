@@ -349,6 +349,9 @@ type Claude struct {
 	// it runs (<pid>.json), what `claude agents` lists.
 	SessionsDir string `yaml:"sessionsDir"`
 	DesktopDir  string `yaml:"desktopDir"`
+	// DesktopLog is the desktop app's main log: its latest focus change
+	// says which session the main window shows.
+	DesktopLog string `yaml:"desktopLog"`
 }
 
 // Memcap locates the build slots of the memcap wrapper.
@@ -496,6 +499,7 @@ func (c *Config) defaults() error {
 		return err
 	}
 	setStr(&c.Claude.DesktopDir, filepath.Join(cfg, "Claude", "claude-code-sessions"))
+	setStr(&c.Claude.DesktopLog, filepath.Join(cfg, "Claude", "logs", "main.log"))
 
 	if c.Metrics.Models == nil {
 		c.Metrics.Models = map[string]Model{}

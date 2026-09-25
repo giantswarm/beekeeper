@@ -1,10 +1,14 @@
 package cmd
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -68,5 +72,55 @@ func TestAgentArgvAndBriefTask(t *testing.T) {
 	}
 	if got := briefTask("# Brief: bk-permhook\n\nbody"); got != "Brief: bk-permhook" {
 		t.Errorf("briefTask = %q", got)
+	}
+}
+
+func TestAwaitFocus(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "main.log")
+	focus := func(id string) {
+		f, err := os.OpenFile(filepath.Clean(log), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close() //nolint:errcheck // test
+		if _, err := fmt.Fprintf(f, "2026-09-25 13:14:04 [info] [CCD] LocalSessions.setFocusedSession: sessionId=%s\n", id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	focus("local_prev")
+	if awaitFocus(t.Context(), log, "local_new", 300*time.Millisecond) {
+		t.Error("awaitFocus while the desktop shows another session: true")
+	}
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		focus("null")
+		focus("local_new")
+	}()
+	if !awaitFocus(t.Context(), log, "local_new", 5*time.Second) {
+		t.Error("awaitFocus after the import showed the session: false")
+	}
+}
+
+func TestDesktopStart(t *testing.T) {
+	at := time.Date(2026, 9, 25, 8, 0, 0, 0, time.UTC)
+	table := func(args ...[]string) *proc.Table {
+		tb := &proc.Table{ByPID: map[int]*proc.Process{}}
+		for i, a := range args {
+			tb.ByPID[i+1] = &proc.Process{PID: i + 1, Args: a, Start: at}
+		}
+		return tb
+	}
+	renderer := []string{"/usr/lib/claude-desktop/claude-desktop --type=renderer --lang=en"}
+	for name, tc := range map[string]struct {
+		t    *proc.Table
+		want time.Time
+	}{
+		"the argument vector":             {table([]string{"/usr/lib/claude-desktop/claude-desktop", "--ozone-platform=wayland"}), at},
+		"a command line Electron rewrote": {table(renderer, []string{"/usr/lib/claude-desktop/claude-desktop --ozone-platform=wayland --password-store=gnome-libsecret"}), at},
+		"only its helpers":                {table(renderer, []string{"/usr/lib/claude-desktop/chrome_crashpad_handler"}), time.Time{}},
+	} {
+		if got := desktopStart(tc.t); !got.Equal(tc.want) {
+			t.Errorf("%s: desktopStart = %v, want %v", name, got, tc.want)
+		}
 	}
 }

@@ -28,6 +28,9 @@ const (
 	transcriptWait = time.Minute
 	// maxBrief keeps the brief within one command-line argument.
 	maxBrief = 100 << 10
+	// focusWait bounds the wait for the import to show its session, after
+	// which the desktop is switched back to the session it showed.
+	focusWait = 15 * time.Second
 )
 
 func (a *app) agentStartCmd() *cobra.Command {
@@ -45,7 +48,9 @@ id and mode as one of its starts and registers it on the roster under
 stopped session's entry under that name, which it takes over). Once the
 transcript is on disk it imports the session into Claude Desktop
 (claude://resume?session=<id>): it shows in the sidebar as local_<id> and
-takes messages there.
+takes messages there. The import switches the desktop's main window to the
+new session; beekeeper switches it back to the session it showed before
+(claude://code/continue), so the person working there stays on it.
 
 Its first turn runs the brief from the command line in bypass. The desktop
 runs every later turn in acceptEdits (its import always drops bypass), so
@@ -69,6 +74,9 @@ nothing while its first turn runs (beekeeper agents shows it live).`,
 			_, err = fmt.Fprintf(a.out, "started %s: session %s, desktop local_%s, bypassPermissions, in %s, busy with %q\n"+
 				"its first turn runs from the command line (journalctl --user -u %s); later turns are desktop turns in acceptEdits\n",
 				name, sa.id, sa.id, sa.dir, sa.task, sa.unit)
+			if err == nil && sa.kept != "" {
+				_, err = fmt.Fprintf(a.out, "the desktop still shows %s\n", sa.kept)
+			}
 			return err
 		},
 	}
@@ -90,6 +98,9 @@ type agentStart struct {
 // startedAgent is what startAgent started.
 type startedAgent struct {
 	id, unit, dir, task string
+	// kept is the session the desktop showed before the import and shows
+	// again after it; empty when there was none to go back to.
+	kept string
 }
 
 // startAgent records and registers the session, starts its first turn in a
@@ -146,14 +157,62 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if err := a.awaitTranscript(ctx, id, unit); err != nil {
 		return startedAgent{}, err
 	}
-	t, err := proc.Read()
+	var follow string
+	if sp.replaces != nil {
+		follow = sp.replaces.HostSession
+	}
+	kept, err := a.importSession(ctx, id, follow)
 	if err != nil {
 		return startedAgent{}, err
 	}
-	if err := openDesktop(ctx, resumeURL(id), !desktopStart(t).IsZero()); err != nil {
-		return startedAgent{}, fmt.Errorf("importing %s into the desktop: %w", id, err)
+	return startedAgent{id: id, unit: unit, dir: dir, task: reg.task, kept: kept}, nil
+}
+
+// importSession imports the session into the desktop. The import switches
+// the main window to it: once it has, the window goes back to the session
+// it showed before, which importSession returns. A desktop that showed no
+// session or follow (the session a hand-over ends), or was not running, is
+// left on the import.
+func (a *app) importSession(ctx context.Context, id, follow string) (string, error) {
+	t, err := proc.Read()
+	if err != nil {
+		return "", err
 	}
-	return startedAgent{id: id, unit: unit, dir: dir, task: reg.task}, nil
+	running := !desktopStart(t).IsZero()
+	var prev string
+	if running {
+		prev, _ = claude.DesktopFocus(a.cfg.Claude.DesktopLog) // unreadable: nothing to go back to
+	}
+	if err := openDesktop(ctx, resumeURL(id), running); err != nil {
+		return "", fmt.Errorf("importing %s into the desktop: %w", id, err)
+	}
+	host := "local_" + id
+	if prev == "" || prev == host || prev == follow || !awaitFocus(ctx, a.cfg.Claude.DesktopLog, host, focusWait) {
+		return "", nil
+	}
+	if err := openDesktop(ctx, continueURL(prev), true); err != nil {
+		return "", fmt.Errorf("showing %s again after the import: %w", prev, err)
+	}
+	return prev, nil
+}
+
+// awaitFocus reports whether the desktop's main window shows host within
+// wait.
+func awaitFocus(ctx context.Context, log, host string, wait time.Duration) bool {
+	ctx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	tick := time.NewTicker(250 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if f, _ := claude.DesktopFocus(log); f == host {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-tick.C:
+		}
+	}
 }
 
 // moveRecord gives from's session record to to.
