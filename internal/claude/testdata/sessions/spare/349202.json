@@ -1,0 +1,13 @@
+{
+  "pid": 349202,
+  "sessionId": "eeeeeeee-0000-4000-8000-000000000006",
+  "cwd": "/home/user/work/repo",
+  "startedAt": 1790313804572,
+  "procStart": "5390727",
+  "version": "2.1.281",
+  "kind": "bg",
+  "entrypoint": "cli",
+  "name": "test: beekeeper#35 worker b",
+  "status": "idle",
+  "updatedAt": 1790313807478
+}

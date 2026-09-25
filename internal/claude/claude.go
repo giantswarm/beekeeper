@@ -1,8 +1,9 @@
 // Package claude finds the Claude Code sessions running on the machine and
 // what they are doing, from what is on disk: the CLI processes (their
-// environment names the desktop session), the desktop app's session records
-// (title, branch), the transcripts (last activity, last words) and the git
-// checkout each works in. No MCP call and no GitHub request is needed.
+// environment names the desktop session), the record each CLI keeps of the
+// session it runs, the desktop app's session records (title, branch), the
+// transcripts (last activity, last words) and the git checkout each works
+// in. No MCP call and no GitHub request is needed.
 package claude
 
 import (
@@ -86,18 +87,27 @@ type Record struct {
 
 // Discover returns the running sessions, newest first. Every session is a
 // CLI process of its own: a desktop session's, a background session's behind
-// the daemon, a headless one's. A CLI that another session's tool command
-// runs belongs to that session unless it was started under an id of its own.
+// the daemon (a fresh CLI, or the spare the daemon handed it), a headless
+// one's. A CLI that another session's tool command runs belongs to that
+// session unless it was started under an id of its own.
 func Discover(cfg *config.Config, t *proc.Table, now time.Time) []*Session {
+	records := map[int]*cliRecord{}
+	for _, p := range t.ByPID {
+		if isCLI(p) || isSpare(p) {
+			if r, ok := readCLIRecord(cfg, p); ok {
+				records[p.PID] = r
+			}
+		}
+	}
 	clis := map[int]bool{}
 	for _, p := range t.ByPID {
-		if isCLI(p) && (ownID(p.Args) != "" || !underCLI(t, p)) {
+		if runsSession(p, records) && (ownID(p.Args) != "" || !underSession(t, p, records)) {
 			clis[p.PID] = true
 		}
 	}
 	byKey := map[string]*Session{}
 	for pid := range clis {
-		s := newSession(cfg, t, t.ByPID[pid], clis, now)
+		s := newSession(cfg, t, t.ByPID[pid], records[pid], clis, now)
 		// A restarted CLI can overlap its predecessor for a moment:
 		// the newest process is the session.
 		if prev, ok := byKey[s.Key()]; ok && prev.Started.After(s.Started) {
@@ -125,39 +135,102 @@ var helpers = map[string]bool{
 // subcommand nor the `claude --bg` launcher, which exits once the daemon
 // runs the session.
 func isCLI(p *proc.Process) bool {
-	if p.Comm != "claude" || len(p.Args) == 0 {
-		return false
-	}
-	// The subcommand is argv[1], or the second word of an argv[0] the
-	// process retitled ("claude bg-pty-host").
-	if title := strings.Fields(p.Args[0]); len(title) > 1 && helpers[title[1]] || len(p.Args) > 1 && helpers[p.Args[1]] {
+	if p.Comm != "claude" || len(p.Args) == 0 || subcommand(p) != "" || isSpare(p) {
 		return false
 	}
 	return !slices.Contains(p.Args, "--bg") && !slices.Contains(p.Args, "--background")
 }
 
-// underCLI reports whether p runs inside another session's CLI (a headless
+// isSpare reports whether p is a spare CLI the daemon starts ahead of the
+// next background session and hands it when it starts or wakes; it retitles
+// itself "claude bg-spare" once it runs.
+func isSpare(p *proc.Process) bool {
+	return p.Comm == "claude" && (subcommand(p) == "bg-spare" || len(p.Args) > 1 && p.Args[1] == "--bg-spare")
+}
+
+// subcommand is a claude process's subcommand, "" for none: argv[1], or the
+// second word of an argv[0] the process retitled ("claude bg-pty-host").
+func subcommand(p *proc.Process) string {
+	if len(p.Args) == 0 {
+		return ""
+	}
+	if title := strings.Fields(p.Args[0]); len(title) > 1 && helpers[title[1]] {
+		return title[1]
+	}
+	if len(p.Args) > 1 && helpers[p.Args[1]] {
+		return p.Args[1]
+	}
+	return ""
+}
+
+// runsSession reports whether p runs a session: a CLI, or a spare the daemon
+// has handed one. Only the spare's record says which: the spare was started
+// before the session.
+func runsSession(p *proc.Process, records map[int]*cliRecord) bool {
+	return isCLI(p) || isSpare(p) && records[p.PID] != nil
+}
+
+// underSession reports whether p runs inside another session (a headless
 // `claude -p` a tool command started).
-func underCLI(t *proc.Table, p *proc.Process) bool {
-	return slices.ContainsFunc(t.Ancestors(p.PID), isCLI)
+func underSession(t *proc.Table, p *proc.Process, records map[int]*cliRecord) bool {
+	return slices.ContainsFunc(t.Ancestors(p.PID), func(a *proc.Process) bool { return runsSession(a, records) })
 }
 
 // ownID is the session id a CLI was started under: --session-id, or the
-// session --resume continues.
+// session --resume continues, which the daemon names by its transcript
+// when it wakes a background session (<projects>/<dir>/<id>.jsonl).
 func ownID(args []string) string {
 	for _, flag := range []string{"--session-id", "--resume", "-r"} {
 		if v := argValue(args, flag); v != "" && !strings.HasPrefix(v, "-") {
+			if id, ok := strings.CutSuffix(filepath.Base(v), ".jsonl"); ok {
+				return id
+			}
 			return v
 		}
 	}
 	return ""
 }
 
-func newSession(cfg *config.Config, t *proc.Table, p *proc.Process, clis map[int]bool, now time.Time) *Session {
+// cliRecord is the part of the record a running CLI keeps of the session it
+// runs (<sessions dir>/<pid>.json) that beekeeper reads. It names the session
+// the process runs now: a spare's, or a resumed CLI's that went on under a
+// new id.
+type cliRecord struct {
+	PID       int    `json:"pid"`
+	SessionID string `json:"sessionId"`
+	Name      string `json:"name"`
+	// ProcStart is the process's start time in clock ticks since boot: a
+	// record a dead process left behind is not taken for another process
+	// under its PID.
+	ProcStart string `json:"procStart"`
+}
+
+// readCLIRecord reads the record of the session process p runs.
+func readCLIRecord(cfg *config.Config, p *proc.Process) (*cliRecord, bool) {
+	raw, err := os.ReadFile(filepath.Clean(filepath.Join(cfg.Claude.SessionsDir, strconv.Itoa(p.PID)+".json")))
+	if err != nil {
+		return nil, false
+	}
+	r := &cliRecord{}
+	if json.Unmarshal(raw, r) != nil || r.PID != p.PID || r.ProcStart != strconv.FormatInt(p.StartTicks, 10) || r.SessionID == "" {
+		return nil, false
+	}
+	return r, true
+}
+
+// newSession builds the session process p runs: its record names it, else
+// its arguments and environment do.
+func newSession(cfg *config.Config, t *proc.Table, p *proc.Process, rec *cliRecord, clis map[int]bool, now time.Time) *Session {
 	s := &Session{PID: p.PID, Started: p.Start, Cwd: t.Cwd(p.PID), ID: ownID(p.Args)}
 	s.Name = argValue(p.Args, "--name")
 	if s.Name == "" {
 		s.Name = argValue(p.Args, "-n")
+	}
+	if rec != nil {
+		s.ID = rec.SessionID
+		if rec.Name != "" {
+			s.Name = rec.Name
+		}
 	}
 	if env, err := t.Environ(p.PID); err == nil {
 		// Every tool command inherits its session's ids. A CLI whose

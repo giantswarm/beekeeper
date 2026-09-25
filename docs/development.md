@@ -70,8 +70,13 @@ replacement.
 
 `watch` finds a session by its process: a `claude` binary that is no subcommand (`daemon`,
 `bg-pty-host`, `stop`, …) and not the `--bg` launcher, running under no other session's CLI
-unless it has an id of its own (`--session-id`, `--resume`), named by
-`CLAUDE_CODE_HOST_SESSION_ID` and `CLAUDE_CODE_SESSION_NAME`. A CLI whose environment has
+unless it has an id of its own (`--session-id`, `--resume`, a woken worker's transcript path),
+or a daemon's spare (`claude bg-spare`) once the daemon has handed it a session. The CLI's record
+in `claude.sessionsDir` (`~/.claude/sessions/<pid>.json`, what `claude agents` lists) names the
+session it runs, and counts only while its `procStart` is the process's start time in clock
+ticks, so a record a killed CLI left behind names no later process under its PID. Without a
+record, the command line and `CLAUDE_CODE_HOST_SESSION_ID` and `CLAUDE_CODE_SESSION_NAME` name
+it. A CLI whose environment has
 `CLAUDE_CODE_SESSION_ID` was started from inside that session and inherited its host id:
 beekeeper takes that session as its parent and ignores the host id. A copy of `sleep` named
 `claude`, started detached (`setsid -f`) with those two variables and without
@@ -99,13 +104,19 @@ machine's journal, verbatim.
 
 Session discovery is tested against real process trees in `internal/claude/testdata/proc/`: a
 desktop session with a `claude -p` its tool shell runs and one it left to the user manager, and
-a `claude --bg` worker started through `systemd-run` with its daemon, terminal hosts and spare.
-Each process is its `stat`, its `cmdline` and its environment reduced to the `CLAUDE*` keys, with
+a `claude --bg` worker started through `systemd-run` with its daemon, terminal hosts and spare,
+two workers started one after the other through the same daemon (the second in the claimed
+spare) and a worker stopped and woken with `claude --bg --resume <id>`. The CLI records of the
+last two are in `internal/claude/testdata/sessions/`, reduced to the keys beekeeper reads and a
+few more. Each process is its `stat`, its `cmdline` and its environment reduced to the `CLAUDE*` keys, with
 values only for the identity keys (session and host ids, name, kind, entry point); paths are
 neutral, ids fake and names `test: …`. `proc.ReadAt` reads such a tree as it reads `/proc`. A new
 shape is captured the same way, from workers named `test: …` started through
 `systemd-run --user` (the user manager's environment has no session ids), stopped and removed
-after.
+after. The second `claude --bg` through a running daemon lands in its spare; a wake lands in the
+spare too, or in a fresh `claude --resume <transcript>` when a new daemon serves it, and a
+`--resume` with flags of its own starts a copy instead of waking the session. The daemon exits
+once its last worker stops.
 
 The alert triage is tried on recorded answers: `alerts capture <dir>` a few times, readings apart,
 then `alerts replay <dir>...` with a scratch configuration whose `stateDir` holds a copy of the live

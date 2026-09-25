@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A `claude --bg` worker the daemon served from its pre-started spare CLI is listed in `sessions` under its session id and name, so `lease grant`, `agents` and every lookup by session find it: the second worker started through a daemon, and a worker woken with `claude --bg --resume <id>` while a spare was ready. A spare no session has claimed is not listed.
+- A woken `claude --bg` worker is listed under its session id instead of its transcript's path.
+- A resumed CLI that went on under a new session id is listed under that id, and its transcript and last activity are the new one's.
+- A session's id and name come from the record its CLI keeps of the session it runs (`~/.claude/sessions/<pid>.json`, configurable as `claude.sessionsDir`), ahead of its command line and environment; a record a dead CLI left behind is not taken for a later process under its PID.
+
 - A lane no longer reads `settling … until vX rolls` after its release rolled: `watch` drops a settling merge once its release rolled and the lane's HelmReleases are Ready (logged as `lane.settled`), so `lanes`, `handover` and the relay's quiet moment see the lane free before its next merge arrives. The roll check itself already matched a chart version with build metadata (`4.74.0+971d12027db0`) against its tag (`v4.74.0`); a test now pins it against a real `kubectl get helmreleases -A -o json` answer.
 - A merge into a repository whose lane has no installation leaves nothing settling: its lane frees when devctl returns.
 

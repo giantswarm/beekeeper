@@ -7,8 +7,9 @@ installations, the one browser the Claude in Chrome extension drives, the merges
 repository that rolls an installation, and the one GitHub REST budget every `gh` and `devctl`
 call draws from.
 
-beekeeper reads what is on disk: the process table, the desktop app's session records, the
-transcripts and the git checkouts. It needs no MCP call and no GitHub request to show what
+beekeeper reads what is on disk: the process table, the record each Claude Code CLI keeps of
+the session it runs (`~/.claude/sessions`), the desktop app's session records, the transcripts
+and the git checkouts. It needs no MCP call and no GitHub request to show what
 every session does. What must be shared lives in a small state directory that survives
 restarts: the supervisor, grants, holds, registered agents, notes, timers and session records. Every session and the
 supervisor use the same binary.
@@ -68,10 +69,14 @@ relieved (`supervisor status` in the session a relay relieved), 125 a newer rele
 Claude Code gives its tool commands; a person or a script passes `--as <name>`.
 
 Every session is a Claude Code CLI of its own: a desktop session, a `claude --bg` worker (its
-daemon and terminal hosts are no session) or a headless `claude -p`. A CLI that a session
-started, from its tool shell or through `systemd-run`, is listed under its own `--session-id`
-(or `--resume`) and `-n` name, `started by` that session, never as that session restarting; a
-`claude -p` its tool shell runs without an id of its own is one of that session's commands.
+daemon and terminal hosts are no session) or a headless `claude -p`. A session is listed under
+the id and name its CLI's record names, the session the process runs now: a `--bg` worker the
+daemon started or woke in its pre-started spare CLI, whose command line names no session, and a
+resumed CLI that went on under a new id are listed as what they run; a spare no session has
+claimed is not listed. A CLI that a session started, from its tool shell or through
+`systemd-run`, is listed under its own id and name, `started by` that session, never as that
+session restarting; a `claude -p` its tool shell runs without an id of its own is one of that
+session's commands.
 
 ## The merge gate
 
