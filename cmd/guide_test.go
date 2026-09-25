@@ -2,11 +2,14 @@ package cmd
 
 import (
 	"encoding/json"
+	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -75,7 +78,7 @@ func TestGuideRelayDueFiresOncePerTerm(t *testing.T) {
 
 func TestGuideFeedSaysEachItemOnce(t *testing.T) {
 	owner := state.Party{Session: "sO", Name: "Agent seven"}
-	a := &app{now: relayNow}
+	a := &app{now: relayNow, cfg: &config.Config{}} // guide.person unset: every --for note
 	st := &state.State{Notes: []state.Note{
 		{ID: 1, For: "Timo", Text: "merge the bump?", Default: "it waits", By: owner},
 		{ID: 2, Text: "check the rollout", By: owner},
@@ -117,5 +120,74 @@ func TestDesktopRecordSaysWaiting(t *testing.T) {
 	r.LastAssistantUUID, r.PostTurnSummary.Category = "u2", "review_ready"
 	if r.Waiting() != nil {
 		t.Fatal("a review_ready summary says waiting")
+	}
+}
+
+// guideNotes are the shapes of a live state's notes: filed for the person
+// (Pat, in any case, one only by its older "[for Pat]" prefix), for the
+// supervisor, for a team and for nobody.
+func guideNotes(t *testing.T) *state.State {
+	t.Helper()
+	raw, err := os.ReadFile("testdata/guide-notes.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := &state.State{}
+	if err := json.Unmarshal(raw, &st.Notes); err != nil {
+		t.Fatal(err)
+	}
+	return st
+}
+
+func TestGuideQueueHoldsOnlyItsPersonsNotes(t *testing.T) {
+	st := guideNotes(t)
+	var out strings.Builder
+	a := &app{out: &out, now: relayNow}
+	sessions := []*claude.Session{{ID: "s1", Name: agentOne}, {ID: "s3", Name: agentC.Name, Waiting: &claude.Waiting{Turn: "t1", Action: "approve the ADR"}}}
+	a.printQueue(guideQueue(st, sessions, "Pat"))
+	want := `#84 for Pat from "Agent three": refine the proposal: the split or one issue?
+#99 for Pat from "Agent three": merge the context bump?; if unanswered: it waits
+#100 for pat from "Agent one": relay due: pick the successor
+"Agent three" waits on its person: approve the ADR
+`
+	if out.String() != want {
+		t.Fatalf("queue for Pat:\n%s\nwant:\n%s", out.String(), want)
+	}
+	var ids []int
+	for _, it := range guideQueue(st, sessions, "") {
+		if it.Note != nil {
+			ids = append(ids, it.Note.ID)
+		}
+	}
+	if !slices.Equal(ids, []int{23, 37, 88, 99, 100}) {
+		t.Fatalf("with guide.person unset, the queue holds every --for note as before: %v", ids)
+	}
+}
+
+func TestGuideFeedSaysOnlyItsPersonsNotesOnce(t *testing.T) {
+	st := guideNotes(t)
+	a := &app{now: relayNow, cfg: &config.Config{Guide: config.Guide{Person: "PAT"}}}
+	// A feed before guide.person said the supervisor's and the team's notes.
+	guideRole.update(st, func(r *state.Role) { r.Fed = []string{"note#23", "note#37"} })
+	sessions := []*claude.Session{{ID: "s1", Name: agentOne}, {ID: "s3", Name: agentC.Name}}
+	lines, changed := a.feedLines(st, sessions, nil)
+	want := []string{
+		`GUIDE DECISION: #84 for Pat from "Agent three": refine the proposal: the split or one issue?`,
+		`GUIDE DECISION: #99 for Pat from "Agent three": merge the context bump?; if unanswered: it waits`,
+		`GUIDE DECISION: #100 for pat from "Agent one": relay due: pick the successor`,
+	}
+	if !changed || !slices.Equal(lines, want) {
+		t.Fatalf("first poll: %q", lines)
+	}
+	if fed := st.GuideRole().Fed; !slices.Equal(fed, []string{"note#100", "note#84", "note#99"}) {
+		t.Fatalf("fed: %q", fed)
+	}
+	if lines, changed := a.feedLines(st, sessions, nil); changed || lines != nil {
+		t.Fatalf("second poll said again: %q", lines)
+	}
+	st.Notes = slices.DeleteFunc(st.Notes, func(n state.Note) bool { return n.ID == 23 || n.ID == 99 })
+	closed := map[int]state.Event{99: {Verb: "note.answered", By: state.Party{Name: "Guide"}, Detail: "#99 answered for Pat: yes"}}
+	if lines, _ := a.feedLines(st, sessions, closed); !slices.Equal(lines, []string{"GUIDE ANSWERED (Guide): #99 answered for Pat: yes"}) {
+		t.Fatalf("the person's answer, and nothing for the supervisor's closed note: %q", lines)
 	}
 }

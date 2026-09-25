@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -33,8 +34,9 @@ guide names its successor (relay), the successor starts
 (` + "`beekeeper guide handover --prompt`" + ` is its prompt). ` + "`beekeeper guide watch`" + `
 says GUIDE RELAY DUE once the guide's context reaches guide.relayAt.
 
-Its queue is every open note filed --for a person (` + "`beekeeper guide queue`" + `)
-and every session the desktop files as waiting on its person;
+Its queue is every open note filed --for its person, guide.person
+(` + "`beekeeper guide queue`" + `), and every session the desktop files as waiting
+on its person;
 ` + "`beekeeper note answer <id> <answer>`" + ` records an answer word for word and closes
 the note.
 
@@ -91,13 +93,44 @@ type queueItem struct {
 	Key string `json:"key"`
 }
 
-// guideQueue is the guide's queue: the open --for notes in filing order,
-// then the sessions waiting on their person.
-func guideQueue(st *state.State, sessions []*claude.Session) []queueItem {
+// forPrefix is the "[for <person>]" an older note carries at the start of
+// its text instead of its For.
+var forPrefix = regexp.MustCompile(`(?i)^\s*\[for\s+([^\]]*[^\]\s])\s*\]\s*`)
+
+// noteFor is whom n is filed for, its For or else an older note's
+// "[for <person>]" prefix, and its text without that prefix.
+func noteFor(n *state.Note) (who, text string) {
+	if n.For != "" {
+		return n.For, n.Text
+	}
+	if m := forPrefix.FindStringSubmatch(n.Text); m != nil {
+		return m[1], n.Text[len(m[0]):]
+	}
+	return "", n.Text
+}
+
+// personUnset is what the guide's queue and feed say once when
+// guide.person is unset.
+const personUnset = "guide.person is unset: every note filed --for anyone is shown"
+
+// guides says whether the guide of person has n in its queue: n is filed
+// for person, in any case; every note filed --for anyone when person is
+// unset.
+func guides(person string, n *state.Note) bool {
+	if person == "" {
+		return n.For != ""
+	}
+	who, _ := noteFor(n)
+	return strings.EqualFold(who, person)
+}
+
+// guideQueue is the queue of the guide of person: the open notes filed for
+// person in filing order, then the sessions waiting on their person.
+func guideQueue(st *state.State, sessions []*claude.Session, person string) []queueItem {
 	var out []queueItem
 	for i := range st.Notes {
 		n := &st.Notes[i]
-		if n.For == "" {
+		if !guides(person, n) {
 			continue
 		}
 		_, live := claude.Live(sessions, n.By)
@@ -118,18 +151,19 @@ func (a *app) queueText(q queueItem) string {
 		return fmt.Sprintf("%q waits on its person: %s", q.Owner, oneLine(q.Waiting))
 	}
 	n := q.Note
+	who, text := noteFor(n)
 	owner := fmt.Sprintf("from %q", q.Owner)
 	if !q.OwnerLive && (n.By.Session != "" || n.By.HostSession != "") { // a person or script does not end
 		owner += " (ended)"
 	}
-	s := fmt.Sprintf("#%d for %s %s", n.ID, n.For, owner)
+	s := fmt.Sprintf("#%d for %s %s", n.ID, who, owner)
 	if !n.Due.IsZero() {
 		s += ", due " + clock(a.now, n.Due)
 		if !n.Due.After(a.now) {
 			s += " (overdue)"
 		}
 	}
-	s += ": " + oneLine(n.Text)
+	s += ": " + oneLine(text)
 	if n.Default != "" {
 		s += "; if unanswered: " + oneLine(n.Default)
 	}
@@ -140,11 +174,14 @@ func (a *app) guideQueueCmd() *cobra.Command {
 	var full bool
 	c := &cobra.Command{
 		Use:   "queue",
-		Short: "The decisions waiting on the person: open --for notes and waiting sessions, with their owners",
-		Long: `Every open note filed --for a person, with the session that filed it
-(its owner, and whether it still runs), its deadline and its default, then
-every session the desktop files as waiting on its person with what it
-needs. A caller that has read the queue before gets only what changed.`,
+		Short: "The decisions waiting on the person: its open notes and waiting sessions, with their owners",
+		Long: `Every open note filed for the guide's person, guide.person (note add --for,
+or an older note's "[for <person>]" prefix, in any case), with the session
+that filed it (its owner, and whether it still runs), its deadline and its
+default, then every session the desktop files as waiting on its person with
+what it needs. With guide.person unset, every note filed --for anyone, and
+a line that says so. A caller that has read the queue before gets only what
+changed.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			st, err := a.store.Read()
@@ -155,11 +192,20 @@ needs. A caller that has read the queue before gets only what changed.`,
 			if err != nil {
 				return err
 			}
-			q := guideQueue(st, sessions)
+			q := guideQueue(st, sessions, a.cfg.Guide.Person)
 			if a.json {
 				return a.printJSON(q)
 			}
-			return a.delta("guide-queue", full, a.queueFacts(q), func() { a.printQueue(q) })
+			facts := a.queueFacts(q)
+			if a.cfg.Guide.Person == "" {
+				facts = append(textFacts("person", personUnset), facts...)
+			}
+			return a.delta("guide-queue", full, facts, func() {
+				if a.cfg.Guide.Person == "" {
+					_, _ = fmt.Fprintln(a.out, personUnset)
+				}
+				a.printQueue(q)
+			})
 		},
 	}
 	fullFlag(c, &full)
@@ -206,7 +252,7 @@ the hand-over before gets only what changed; --full prints everything.`,
 			if err != nil {
 				return err
 			}
-			q := guideQueue(st, sessions)
+			q := guideQueue(st, sessions, a.cfg.Guide.Person)
 			r := guideRole.get(st)
 			if prompt {
 				return a.printGuidePrompt(r, q)
@@ -281,10 +327,11 @@ func (a *app) guideWatchCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "watch [--once]",
 		Short: "The guide's feed: one line per new decision, waiting session, answer and guide relay",
-		Long: `One line, once, for each open note newly filed --for a person, each session
-the desktop newly files as waiting on its person (read from its session
-record, never from a transcript), each note of the queue answered or
-closed, and the guide's relay: GUIDE RELAY DUE at guide.relayAt, taken or
+		Long: `One line, once, for each open note newly filed for the guide's person
+(the notes ` + "`beekeeper guide queue`" + ` lists), each session the desktop newly
+files as waiting on its person (read from its session record, never from a
+transcript), each note of the queue answered or closed, and the guide's
+relay: GUIDE RELAY DUE at guide.relayAt, taken or
 expired, and a restart of its CLI. Silent otherwise. What it said is kept
 in the state, so a restarted feed says nothing again. Runs until killed;
 --once polls once.`,
@@ -294,6 +341,9 @@ in the state, so a restarted feed says nothing again. Runs until killed;
 			defer stop()
 			tick := time.NewTicker(a.cfg.Watch.Interval.Duration)
 			defer tick.Stop()
+			if a.cfg.Guide.Person == "" {
+				_, _ = fmt.Fprintln(a.out, time.Now().Format("15:04:05")+" GUIDE: "+personUnset)
+			}
 			for {
 				a.now = time.Now()
 				lines, err := a.guideFeed(ctx)
@@ -393,7 +443,7 @@ func (a *app) closedNotes(st *state.State) (map[int]state.Event, error) {
 func (a *app) feedLines(st *state.State, sessions []*claude.Session, closed map[int]state.Event) (lines []string, changed bool) {
 	guideRole.update(st, func(r *state.Role) {
 		var cur []string
-		for _, it := range guideQueue(st, sessions) {
+		for _, it := range guideQueue(st, sessions, a.cfg.Guide.Person) {
 			k := it.Key
 			cur = append(cur, k)
 			if slices.Contains(r.Fed, k) {
@@ -407,8 +457,8 @@ func (a *app) feedLines(st *state.State, sessions []*claude.Session, closed map[
 		}
 		for _, k := range r.Fed {
 			id, err := strconv.Atoi(strings.TrimPrefix(k, "note#"))
-			if err != nil || slices.Contains(cur, k) {
-				continue
+			if err != nil || slices.Contains(cur, k) || slices.ContainsFunc(st.Notes, func(n state.Note) bool { return n.ID == id }) {
+				continue // still in the queue, or open and filed for someone else
 			}
 			switch e, ok := closed[id]; {
 			case ok && e.Verb == "note.answered":

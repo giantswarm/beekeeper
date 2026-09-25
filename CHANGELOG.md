@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `guide queue` and `guide watch` show only the notes for the guide's person, `guide.person` (new; matched without case, an older note marked only by a `[for <person>]` text prefix included, the prefix left out of its line), plus the sessions waiting on the person. A note the feed said before that is open but filed for someone else leaves it without a line. With `guide.person` unset, both show every `--for` note as before and say once that it is unset.
+
 ### Added
 
 - `beekeeper agents start <name> <brief file>` starts an agent without a click: `claude -p` in `bypassPermissions` under a session id beekeeper chooses, in a transient user unit, recorded as one of beekeeper's starts and registered on the roster under the name before the session exists, then imported into Claude Desktop with `claude://resume`. The state's `starts` field is new; older binaries carry it unchanged.
