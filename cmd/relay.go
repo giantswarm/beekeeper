@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
@@ -30,6 +31,8 @@ func startRole(st *state.State, me state.Party, prevLive, takeOver bool, now tim
 			st.Grants[i].By = me
 		}
 		st.Relay.Taken = now.UTC()
+		st.Relieved = append(dropRelief(st.Relieved, prev.Party),
+			state.Relief{Party: prev.Party, By: me, At: st.Relay.At, Taken: st.Relay.Taken})
 		how = fmt.Sprintf(" (relieving %q, relayed at %s; %d grant(s) move over)", prev.Name, clock(now, st.Relay.At), len(st.Grants))
 	case prevLive && !takeOver:
 		named := ""
@@ -45,6 +48,9 @@ func startRole(st *state.State, me state.Party, prevLive, takeOver bool, now tim
 		st.Relay = nil
 		how = fmt.Sprintf(" (taking over from %q)", prev.Name)
 	}
+	// Supervising again ends my relief; a relief nobody asked about for
+	// reliefTTL is dropped.
+	st.Relieved = slices.DeleteFunc(dropRelief(st.Relieved, me), func(r state.Relief) bool { return now.Sub(r.Taken) > reliefTTL })
 	st.Supervisor = &state.Supervisor{Party: me, Since: now.UTC()}
 	msg := fmt.Sprintf("%q supervises now%s", me.Name, how)
 	return msg, []state.Event{event(me, "supervisor.start", "%s", msg)}, nil
@@ -94,13 +100,113 @@ func mustSupervise(st *state.State, me state.Party) error {
 	return nil
 }
 
-// relievedBy returns the taken relay that relieved me, nil when none did.
-func relievedBy(st *state.State, me state.Party) *state.Relay {
-	r := st.Relay
-	if r == nil || r.Taken.IsZero() || !r.From.Is(me) || st.Supervisor == nil || !st.Supervisor.Is(r.To) {
+// reliefTTL is how long a relieved supervisor's status keeps exiting 4.
+const reliefTTL = 7 * 24 * time.Hour
+
+func dropRelief(rs []state.Relief, p state.Party) []state.Relief {
+	return slices.DeleteFunc(rs, func(r state.Relief) bool { return r.Party.Is(p) })
+}
+
+// relievedBy returns the relief of a relay that relieved me, nil when none
+// did or I supervise again. It survives the successor's own relays.
+func relievedBy(st *state.State, me state.Party) *state.Relief {
+	if st.Supervisor != nil && st.Supervisor.Is(me) {
 		return nil
 	}
-	return r
+	for i := range st.Relieved {
+		if st.Relieved[i].Party.Is(me) {
+			return &st.Relieved[i]
+		}
+	}
+	return nil
+}
+
+// supervision is the recorded supervisor read against the running
+// sessions and the grace a CLI restart has.
+type supervision struct {
+	sup  *state.Supervisor
+	live bool
+	// gone is when beekeeper first saw the CLI gone (now when no record
+	// says so yet) and until when the grant rule holds for its restart;
+	// both are zero while it runs and once the grace has passed.
+	gone, until time.Time
+}
+
+// readSupervision reads st's supervisor: live while its CLI runs,
+// restarting for grace after beekeeper first saw its CLI gone, provided it
+// saw the CLI run in this term, and gone after that.
+func readSupervision(st *state.State, sessions []*claude.Session, now time.Time, grace time.Duration) supervision {
+	v := supervision{sup: st.Supervisor}
+	if v.sup == nil {
+		return v
+	}
+	if _, v.live = claude.Live(sessions, v.sup.Party); v.live {
+		return v
+	}
+	c := st.SupervisorCLI
+	if !c.Of(v.sup) || c.PID == 0 {
+		return v
+	}
+	gone := now
+	if !c.Gone.IsZero() {
+		gone = c.Gone
+	}
+	if until := gone.Add(grace); now.Before(until) {
+		v.gone, v.until = gone, until
+	}
+	return v
+}
+
+// restarting reports whether the supervisor's CLI is gone within the grace.
+func (v supervision) restarting() bool { return !v.until.IsZero() }
+
+// gating returns the supervisor whose grant rule is in force: a live or a
+// restarting one; nil when none is.
+func (v supervision) gating() *state.Supervisor {
+	if v.live || v.restarting() {
+		return v.sup
+	}
+	return nil
+}
+
+// observeCLI records what the running sessions say of the supervisor's
+// CLI in this term: the PID it runs as, and since when it is gone. The same
+// session back with a new PID is a restart, logged once. It reports whether
+// st changed.
+func observeCLI(st *state.State, sessions []*claude.Session, now time.Time) (bool, []state.Event) {
+	sup := st.Supervisor
+	if sup == nil {
+		changed := st.SupervisorCLI != nil
+		st.SupervisorCLI = nil
+		return changed, nil
+	}
+	changed := false
+	c := st.SupervisorCLI
+	if !c.Of(sup) {
+		c = &state.CLI{Supervisor: sup.Party, Since: sup.Since}
+		st.SupervisorCLI, changed = c, true
+	}
+	s, live := claude.Live(sessions, sup.Party)
+	switch {
+	case live && s.PID != c.PID:
+		var evs []state.Event
+		if c.PID != 0 {
+			away := "unseen"
+			if !c.Gone.IsZero() {
+				away = "gone for " + dur(now.Sub(c.Gone))
+			}
+			evs = append(evs, event(sup.Party, "supervisor.restart", "CLI %d back as %d (%s)", c.PID, s.PID, away))
+		}
+		c.PID, c.Gone = s.PID, time.Time{}
+		return true, evs
+	case live && !c.Gone.IsZero():
+		c.Gone = time.Time{}
+		return true, nil
+	case !live && c.PID != 0 && c.Gone.IsZero():
+		c.Gone = now.UTC()
+		return true, nil
+	}
+	return changed, nil
 }
 
 // fireRelay reports a relay taken or expired, once.

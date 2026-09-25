@@ -213,3 +213,115 @@ func TestSettlesByTheGateRule(t *testing.T) {
 		t.Error("an unknown release settles past merge.settle")
 	}
 }
+
+func TestRelievedSurvivesTheSuccessorsRelays(t *testing.T) {
+	st := handOverState()
+	step := func(at time.Duration, what string, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("%s at +%s: %v", what, at, err)
+		}
+		if r := relievedBy(st, supA); r == nil || !r.By.Is(supB) {
+			t.Fatalf("after %s, A's status does not say B relieved it: %+v", what, r)
+		}
+	}
+	relay := func(from, to state.Party, at time.Duration) error {
+		_, _, err := relayRole(st, from, to, relayNow.Add(at), 15*time.Minute)
+		return err
+	}
+	start := func(who state.Party, at time.Duration) error {
+		_, _, err := startRole(st, who, true, false, relayNow.Add(at))
+		return err
+	}
+	if err := relay(supA, supB, 0); err != nil || relievedBy(st, supA) != nil {
+		t.Fatalf("relieved by an open relay: %v", err)
+	}
+	step(time.Minute, "B's start", start(supB, time.Minute))
+	step(2*time.Minute, "B's relay to C", relay(supB, agentC, 2*time.Minute))
+	_, _, err := cancelRelay(st, supB, relayNow.Add(3*time.Minute))
+	step(3*time.Minute, "B's cancel", err)
+	step(4*time.Minute, "B's relay to C again", relay(supB, agentC, 4*time.Minute))
+	step(5*time.Minute, "C's start", start(agentC, 5*time.Minute))
+	if r := relievedBy(st, supB); r == nil || !r.By.Is(agentC) {
+		t.Fatalf("B is not relieved by C: %+v", r)
+	}
+	if relievedBy(st, agentC) != nil {
+		t.Fatal("the supervisor reads as relieved")
+	}
+	// A takes the role back through C's relay: supervising again ends its relief.
+	if err := relay(agentC, supA, 6*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := start(supA, 7*time.Minute); err != nil || relievedBy(st, supA) != nil {
+		t.Fatalf("A supervises again and still reads as relieved: %v", err)
+	}
+	if len(st.Relieved) != 2 {
+		t.Fatalf("one relief per party: %+v", st.Relieved)
+	}
+	// A relief nobody asked about for reliefTTL goes with the next start.
+	if err := relay(supA, supB, reliefTTL+time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := start(supB, reliefTTL+time.Hour+time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Relieved) != 1 || !st.Relieved[0].Party.Is(supA) {
+		t.Fatalf("stale reliefs stay: %+v", st.Relieved)
+	}
+}
+
+func TestRestartGraceHoldsTheRuleThroughACLIRestart(t *testing.T) {
+	const grace = time.Minute
+	st := handOverState()
+	running := func(pid int) []*claude.Session {
+		return []*claude.Session{{PID: pid, ID: supA.Session, HostID: supA.HostSession, Name: supA.Name}}
+	}
+	gated := func(at time.Duration, sessions []*claude.Session) error {
+		sv := readSupervision(st, sessions, relayNow.Add(at), grace)
+		_, err := lease.Check(st, lease.Gate{Resource: browser, Caller: agentC, Supervisor: sv.gating(), RestartUntil: sv.until,
+			Held: true, Now: relayNow.Add(at), TTL: 30 * time.Minute})
+		return err
+	}
+	if sv := readSupervision(st, nil, relayNow, grace); sv.gating() != nil {
+		t.Fatal("a CLI never seen in this term has a grace")
+	}
+	if changed, evs := observeCLI(st, running(100), relayNow); !changed || len(evs) != 0 || st.SupervisorCLI.PID != 100 {
+		t.Fatalf("first sighting: %v %+v %+v", changed, evs, st.SupervisorCLI)
+	}
+	if changed, _ := observeCLI(st, running(100), relayNow.Add(time.Second)); changed {
+		t.Fatal("an unchanged CLI changes the state")
+	}
+	// The CLI exits: gated before anyone recorded it gone, and after.
+	if err := gated(10*time.Second, nil); err == nil || !strings.Contains(err.Error(), "is restarting its CLI") {
+		t.Fatalf("unrecorded restart: %v", err)
+	}
+	if changed, _ := observeCLI(st, nil, relayNow.Add(10*time.Second)); !changed || st.SupervisorCLI.Gone.IsZero() {
+		t.Fatal("the CLI's absence is not recorded")
+	}
+	if err := gated(69*time.Second, nil); err == nil {
+		t.Fatal("a claim went ungated within the grace")
+	}
+	// Back under the same session with a new PID: a restart, logged once.
+	changed, evs := observeCLI(st, running(200), relayNow.Add(16*time.Second))
+	if !changed || len(evs) != 1 || evs[0].Verb != "supervisor.restart" || !strings.Contains(evs[0].Detail, "CLI 100 back as 200 (gone for 6s)") {
+		t.Fatalf("restart: %v %+v", changed, evs)
+	}
+	if err := gated(17*time.Second, running(200)); err == nil || strings.Contains(err.Error(), "restarting") {
+		t.Fatalf("after the restart: %v", err)
+	}
+	// A crash: the CLI does not come back; the rule lifts once the grace has passed.
+	observeCLI(st, nil, relayNow.Add(time.Hour))
+	if err := gated(time.Hour+grace-time.Second, nil); err == nil {
+		t.Fatal("ungated before the grace passed")
+	}
+	if err := gated(time.Hour+grace, nil); err != nil {
+		t.Fatalf("the rule did not lift after the grace: %v", err)
+	}
+	// A new term starts a new record.
+	if _, _, err := startRole(st, supB, false, false, relayNow.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if readSupervision(st, nil, relayNow.Add(2*time.Hour), grace).gating() != nil {
+		t.Fatal("the previous term's CLI record gates the new supervisor")
+	}
+}

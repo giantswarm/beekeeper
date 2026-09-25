@@ -84,15 +84,9 @@ func heldMap(holders []lease.Holder) map[string]bool {
 	return m
 }
 
-// liveSupervisor returns the recorded supervisor when its session runs.
-func liveSupervisor(st *state.State, sessions []*claude.Session) *state.Supervisor {
-	if st.Supervisor == nil {
-		return nil
-	}
-	if _, ok := claude.Live(sessions, st.Supervisor.Party); !ok {
-		return nil
-	}
-	return st.Supervisor
+// supervision reads st's supervisor with the configured restart grace.
+func (a *app) supervision(st *state.State, sessions []*claude.Session) supervision {
+	return readSupervision(st, sessions, a.now, a.cfg.Supervisor.RestartGrace.Duration)
 }
 
 func (a *app) leaseClaimCmd() *cobra.Command {
@@ -119,6 +113,7 @@ func (a *app) leaseClaimCmd() *cobra.Command {
 			}
 			dir := lease.Dir(a.cfg.LeaseDir)
 			var msg string
+			var refusal error
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				holders, err := dir.List()
 				if err != nil {
@@ -126,23 +121,35 @@ func (a *app) leaseClaimCmd() *cobra.Command {
 				}
 				held := heldMap(holders)
 				lease.Prune(st, held, a.now, a.cfg.GrantTTL.Duration)
+				// What this claim saw of the supervisor's CLI is kept even
+				// when it is refused: the restart grace runs from it.
+				seen, evs := observeCLI(st, sessions, a.now)
+				refuse := func(err error) ([]state.Event, error) {
+					if !seen {
+						return nil, err
+					}
+					refusal = err
+					return evs, nil
+				}
 				if cur, _ := dir.Get(res); cur != nil {
 					if cur.Party().Is(me) {
 						msg = fmt.Sprintf("%s is already yours (since %s)", res, clock(a.now, cur.SinceTime()))
-						return nil, nil
+						return evs, nil
 					}
-					return nil, a.heldBy(a.leaseView(sessions, *cur))
+					return refuse(a.heldBy(a.leaseView(sessions, *cur)))
 				}
+				sv := a.supervision(st, sessions)
 				idx, err := lease.Check(st, lease.Gate{
-					Resource:   res,
-					Caller:     me,
-					Supervisor: liveSupervisor(st, sessions),
-					Held:       false,
-					Now:        a.now,
-					TTL:        a.cfg.GrantTTL.Duration,
+					Resource:     res,
+					Caller:       me,
+					Supervisor:   sv.gating(),
+					RestartUntil: sv.until,
+					Held:         false,
+					Now:          a.now,
+					TTL:          a.cfg.GrantTTL.Duration,
 				})
 				if r := (*lease.Refusal)(nil); errors.As(err, &r) {
-					return nil, refused("%s: %s", res, r.Reason)
+					return refuse(refused("%s: %s", res, r.Reason))
 				} else if err != nil {
 					return nil, err
 				}
@@ -160,14 +167,17 @@ func (a *app) leaseClaimCmd() *cobra.Command {
 					return nil, err
 				}
 				if cur != nil {
-					return nil, a.heldBy(a.leaseView(sessions, *cur))
+					return refuse(a.heldBy(a.leaseView(sessions, *cur)))
 				}
 				if idx >= 0 {
 					st.Grants = slices.Delete(st.Grants, idx, idx+1)
 				}
 				msg = "claimed " + res
-				return []state.Event{event(me, "lease.claim", "%s: %s", res, purpose)}, nil
+				return append(evs, event(me, "lease.claim", "%s: %s", res, purpose)), nil
 			})
+			if err == nil {
+				err = refusal
+			}
 			if err != nil {
 				return err
 			}

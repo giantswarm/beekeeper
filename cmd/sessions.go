@@ -40,6 +40,10 @@ type view struct {
 type supervisorView struct {
 	state.Supervisor
 	Live bool `json:"live"`
+	// CLIGone and RestartUntil are set while its CLI restarts: gone since
+	// CLIGone, the grant rule holds until RestartUntil.
+	CLIGone      time.Time `json:"cliGone,omitzero"`
+	RestartUntil time.Time `json:"restartUntil,omitzero"`
 	// Relay is the supervisor's last relay; Relieved says it relieved the caller.
 	Relay    *state.Relay `json:"relay,omitempty"`
 	Relieved bool         `json:"relieved,omitempty"`
@@ -62,8 +66,8 @@ func (a *app) collect(withWork bool) (*view, error) {
 	}
 	v := &view{raw: raw, st: st}
 	if st.Supervisor != nil {
-		_, live := claude.Live(raw, st.Supervisor.Party)
-		v.Supervisor = &supervisorView{Supervisor: *st.Supervisor, Live: live}
+		sv := a.supervision(st, raw)
+		v.Supervisor = &supervisorView{Supervisor: *st.Supervisor, Live: sv.live, CLIGone: sv.gone, RestartUntil: sv.until}
 	}
 	for _, h := range holders {
 		v.Leases = append(v.Leases, a.leaseView(raw, h))

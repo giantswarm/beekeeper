@@ -423,11 +423,16 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	}
 	q := w.quietness(ctx, st, sessions)
 	fire := func(st *state.State) ([]string, []state.Event, bool) {
+		seen, ce := observeCLI(st, sessions, w.now)
 		lines, evs := firePending(st, sessions, w.now)
+		for _, e := range ce {
+			lines = append(lines, fmt.Sprintf("SUPERVISOR RESTARTED: %q, %s; it keeps the role", e.By.Name, e.Detail))
+		}
+		evs = append(evs, ce...)
 		rl, re := fireRelay(st, w.now)
 		sl, se, changed := fireShift(st, q, w.now, w.cfg.Supervisor.Shift.Duration)
 		lines, evs = append(append(lines, rl...), sl...), append(append(evs, re...), se...)
-		return lines, evs, changed || len(lines) > 0 || len(evs) > 0
+		return lines, evs, seen || changed || len(lines) > 0 || len(evs) > 0
 	}
 	if _, _, changed := fire(st); !changed {
 		return
@@ -481,17 +486,18 @@ func firedNow(st *state.State, now time.Time) []dueItem {
 }
 
 // supervisorGone says once, and notifies, when the recorded supervisor's
-// session has not run for two polls in a row with no relay open; it
-// reports whether a supervisor runs.
+// session has not run for two polls in a row with no relay open and no
+// restart of its CLI in its grace; it reports whether a supervisor runs (a
+// restarting one does not: its watch restarts with it).
 func (w *watcher) supervisorGone(ctx context.Context, st *state.State, sessions []*claude.Session) bool {
 	s := st.Supervisor
 	if s == nil {
 		w.supervisorMissed = 0
 		return false
 	}
-	if _, live := claude.Live(sessions, s.Party); live || st.Relay.Open(w.now) {
+	if sv := readSupervision(st, sessions, w.now, w.cfg.Supervisor.RestartGrace.Duration); sv.live || sv.restarting() || st.Relay.Open(w.now) {
 		w.supervisorMissed = 0
-		return live
+		return sv.live
 	}
 	w.supervisorMissed++
 	key := s.Name + "@" + s.Since.UTC().Format(time.RFC3339)
