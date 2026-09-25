@@ -16,6 +16,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/upgrade"
 )
 
 // Hold targets besides owner/repo and github.
@@ -98,18 +99,19 @@ func ParseDocument(raw []byte) (Outcome, bool) {
 
 // Blocking is the active hold that stops a merge of repo#pr in lane: the
 // repository's, the lane's, github's or one on all merges, unless the hold
-// lets that repository or pull request through.
-func Blocking(st *state.State, now time.Time, repo string, pr int, lane string) (state.Hold, bool) {
+// lets that repository or pull request through, else an upgrade running on
+// the lane's installation.
+func Blocking(st *state.State, now time.Time, repo string, pr int, lane config.Lane) (state.Hold, bool) {
 	for _, h := range st.Holds {
 		if !h.Active(now) || h.Excepts(repo, pr) {
 			continue
 		}
 		switch h.Target {
-		case repo, LanePrefix + lane, "github", AllMerges:
+		case repo, LanePrefix + lane.Name, "github", AllMerges:
 			return h, true
 		}
 	}
-	return state.Hold{}, false
+	return upgrade.Held(st, lane.Installation, now)
 }
 
 // Prune drops the waiting merges whose run ended more than ttl ago (seedTTL

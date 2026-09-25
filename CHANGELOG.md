@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- An installation is held while its clusters upgrade. `watch` reads the Cluster API clusters of `alerts.installations` every `watch.interval`, read-only (4 lists per installation: Clusters, KubeadmControlPlanes, MachinePools, MachineDeployments, within `alerts.timeout`, in parallel). A cluster's upgrade begins when its release label differs from the release cluster-api-events recorded, cluster-api-events marks it upgrading, or its scheduled upgrade is due, and ends once none of that holds and its control plane and node pools have rolled; a workload cluster on an older release is not upgrading. While it runs a hold `upgrade:<installation>/<cluster>` naming the cluster and both releases makes the merge gate refuse the installation's lanes (exit 77) and `lease claim <installation>` refuse; `watch` says `UPGRADE <installation>/<cluster> <from> → <to>` and `UPGRADE ENDED …` once each, `lanes` shows the hold and `snapshot` the upgrade with its progress. An unreadable installation is one line and keeps its holds.
+
 ### Changed
 
 - Reading commands print only what the caller has not read: `snapshot`, `sessions`, `lanes`, `agents` and `handover` keep a read mark per caller and command (`seen.<command>.<caller>.json`), and a caller inside a Claude session that has read before gets the facts that are new or changed since, `gone: …` for those gone, or one `no change since HH:MM` line; a moving figure (an age, a countdown, a memory size, a context in tokens) is no change. `--full` prints everything; `--json`, `handover --prompt` and a person at a terminal always get the whole text. `snapshot --changes` is now the default and hidden. Marks are per host session: a subagent shares its parent's and passes `--full` or `--json`. Against v0.17.0 a second read with nothing changed drops from 5533 to 22 bytes (`snapshot`), 11746 to 22 (`sessions`), 590 to 22 (`lanes`), 577 to 22 (`agents`) and 23424 to 22 (`handover`).

@@ -13,6 +13,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/upgrade"
 )
 
 // laneView is one lane's queue with its installation and hold.
@@ -304,6 +305,9 @@ func (a *app) laneViews(st *state.State) []laneView {
 			if h.Target == merge.LanePrefix+name && h.Active(a.now) {
 				v.Hold = &h
 			}
+		}
+		if h, ok := upgrade.Held(st, installation, a.now); ok && v.Hold == nil {
+			v.Hold = &h
 		}
 		out = append(out, v)
 	}

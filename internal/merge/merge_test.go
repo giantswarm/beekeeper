@@ -69,46 +69,64 @@ func testdata(t *testing.T, name string) []byte {
 	return raw
 }
 
+const (
+	serving = "serving"
+	portal  = "portal"
+)
+
 func TestBlocking(t *testing.T) {
 	now := time.Now()
 	st := &state.State{Holds: []state.Hold{
 		{Target: "lane:serving", Reason: "model load"},
 		{Target: "giantswarm/old", Until: now.Add(-time.Minute)},
 	}}
-	if h, ok := Blocking(st, now, "giantswarm/model-manager", 7, "serving"); !ok || h.Reason != "model load" {
+	if h, ok := Blocking(st, now, "giantswarm/model-manager", 7, config.Lane{Name: serving}); !ok || h.Reason != "model load" {
 		t.Error("the lane hold does not stop its lane")
 	}
-	if _, ok := Blocking(st, now, backstage, 8, "portal-tools"); ok {
+	if _, ok := Blocking(st, now, backstage, 8, config.Lane{Name: "portal-tools"}); ok {
 		t.Error("a lane hold stops another lane")
 	}
-	if _, ok := Blocking(st, now, "giantswarm/old", 1, "giantswarm/old"); ok {
+	if _, ok := Blocking(st, now, "giantswarm/old", 1, config.Lane{Name: "giantswarm/old"}); ok {
 		t.Error("an expired hold stops a merge")
 	}
 	st.Holds = append(st.Holds, state.Hold{Target: AllMerges, Except: ToolRepo})
-	if _, ok := Blocking(st, now, backstage, 8, "portal-tools"); !ok {
+	if _, ok := Blocking(st, now, backstage, 8, config.Lane{Name: "portal-tools"}); !ok {
 		t.Error("the tool-release window lets another merge through")
 	}
-	if _, ok := Blocking(st, now, ToolRepo, 9, ToolRepo); ok {
+	if _, ok := Blocking(st, now, ToolRepo, 9, config.Lane{Name: ToolRepo}); ok {
 		t.Error("the tool-release window stops the tool's own release")
+	}
+}
+
+func TestBlockingUpgrade(t *testing.T) {
+	now := time.Now()
+	st := &state.State{Holds: []state.Hold{{Target: "upgrade:prod/mc", Reason: "upgrade prod/mc 1.0.0 → 1.1.0"}}}
+	if h, ok := Blocking(st, now, backstage, 8, config.Lane{Name: portal, Installation: "prod"}); !ok || h.Target != "upgrade:prod/mc" {
+		t.Error("an upgrade on the lane's installation lets its merge through")
+	}
+	for _, l := range []config.Lane{{Name: "portal", Installation: "test"}, {Name: backstage}} {
+		if _, ok := Blocking(st, now, backstage, 8, l); ok {
+			t.Errorf("an upgrade on prod stops lane %+v", l)
+		}
 	}
 }
 
 func TestBlockingExcept(t *testing.T) {
 	now := time.Now()
 	st := &state.State{Holds: []state.Hold{{Target: "lane:serving", Except: "giantswarm/model-manager#172", Reason: "its release"}}}
-	if _, ok := Blocking(st, now, "giantswarm/model-manager", 172, "serving"); ok {
+	if _, ok := Blocking(st, now, "giantswarm/model-manager", 172, config.Lane{Name: serving}); ok {
 		t.Error("the lane hold stops the pull request it excepts")
 	}
 	for _, c := range []struct {
 		repo string
 		pr   int
 	}{{"giantswarm/model-manager", 180}, {"giantswarm/cluster-manager", 172}} {
-		if _, ok := Blocking(st, now, c.repo, c.pr, "serving"); !ok {
+		if _, ok := Blocking(st, now, c.repo, c.pr, config.Lane{Name: serving}); !ok {
 			t.Errorf("the lane hold lets %s#%d through", c.repo, c.pr)
 		}
 	}
 	st.Holds[0].Except = "giantswarm/model-manager"
-	if _, ok := Blocking(st, now, "giantswarm/model-manager", 180, "serving"); ok {
+	if _, ok := Blocking(st, now, "giantswarm/model-manager", 180, config.Lane{Name: serving}); ok {
 		t.Error("the lane hold stops the repository it excepts")
 	}
 }

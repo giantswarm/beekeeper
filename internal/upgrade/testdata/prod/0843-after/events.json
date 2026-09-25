@@ -1,0 +1,36 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "reason": "UpgradingWithNodeRoll",
+      "message": "from release 35.0.1 to 35.1.1",
+      "lastTimestamp": "2026-09-25T08:21:29Z",
+      "involvedObject": {
+        "kind": "Cluster",
+        "name": "mc",
+        "namespace": "org-mc"
+      }
+    },
+    {
+      "reason": "UpgradedControlPlane",
+      "message": "to release 35.1.1",
+      "lastTimestamp": "2026-09-25T08:34:47Z",
+      "involvedObject": {
+        "kind": "Cluster",
+        "name": "mc",
+        "namespace": "org-mc"
+      }
+    },
+    {
+      "reason": "Upgraded",
+      "message": "to release 35.1.1 in 13m18s",
+      "lastTimestamp": "2026-09-25T08:34:47Z",
+      "involvedObject": {
+        "kind": "Cluster",
+        "name": "mc",
+        "namespace": "org-mc"
+      }
+    }
+  ]
+}
