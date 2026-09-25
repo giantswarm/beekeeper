@@ -21,6 +21,9 @@ import (
 // information.
 const hourBudget = 5900
 
+// agentOne is the caller of the read-mark tests.
+const agentOne = "Agent one"
+
 var (
 	hourLine   = regexp.MustCompile(`^(\d\d:\d\d:\d\d) (.*)$`)
 	alertLine  = regexp.MustCompile(`^ALERT (NEW|RESOLVED) (\S+) (\S+) (\S+) (\S+) (\S+) since (\S+ )?(\d\d:\d\d)Z(?: \[(.*)\])?$`)
@@ -173,7 +176,7 @@ func TestSecondReadSaysNoChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	a := &app{cfg: cfg, store: store, now: time.Now(), out: &out, as: "Agent one"}
+	a := &app{cfg: cfg, store: store, now: time.Now(), out: &out, as: agentOne}
 	full := func() { out.WriteString("the whole text\n") }
 	read := func(age string, all bool) string {
 		out.Reset()
@@ -213,5 +216,54 @@ func TestSecondReadSaysNoChange(t *testing.T) {
 				t.Errorf("a second read printed %q", out.String())
 			}
 		}
+	}
+}
+
+// A restarted watch of the same caller resumes its open conditions: the
+// condition still in progress gives no new line until it ends.
+func TestRestartedWatchSaysAnOpenConditionOnlyAtItsEnd(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("stateDir: "+dir+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.Open(cfg.StateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	a := &app{cfg: cfg, store: store, now: time.Now(), out: &out, as: agentOne}
+	low := func(w *watcher, on bool) { w.check("avail", on, "LOW RAM: %d MiB available, swap %d MiB", 900, 12000) }
+
+	first := a.newWatcher(false, true)
+	low(first, true)
+	first.reported["runaway x"], first.dirty = true, true
+	first.saveMark()
+	if strings.Count(out.String(), "LOW RAM") != 1 {
+		t.Fatalf("the first watch printed:\n%s", out.String())
+	}
+
+	out.Reset()
+	second := a.newWatcher(false, true)
+	for range 5 {
+		low(second, true)
+	}
+	if out.Len() != 0 || !second.reported["runaway x"] {
+		t.Errorf("a restarted watch said again what the first had said:\n%s", out.String())
+	}
+	low(second, false)
+	if got := out.String(); strings.Count(got, "\n") != 1 || !strings.Contains(got, "ENDED LOW RAM (since ") {
+		t.Errorf("the restarted watch ended the condition with:\n%s", got)
+	}
+
+	out.Reset()
+	once := a.newWatcher(false, false)
+	low(once, true)
+	if strings.Count(out.String(), "LOW RAM") != 1 {
+		t.Errorf("watch --once keeps a mark:\n%s", out.String())
 	}
 }
