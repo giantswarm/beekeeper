@@ -110,6 +110,9 @@ type Merge struct {
 	SettleTimeout Duration `yaml:"settleTimeout"`
 	// BudgetFresh is how old the last budget reading may be to gate on.
 	BudgetFresh Duration `yaml:"budgetFresh"`
+	// StallAfter is how long a lane's first arrived merge may wait behind
+	// places whose merges are not in the gate before the lane is stalled.
+	StallAfter Duration `yaml:"stallAfter"`
 }
 
 // Notify configures what `watch --notify` sends to the desktop.
@@ -424,6 +427,7 @@ func (c *Config) defaults() error {
 	setDur(&c.Merge.Settle, 5*time.Minute)
 	setDur(&c.Merge.SettleTimeout, 30*time.Minute)
 	setDur(&c.Merge.BudgetFresh, time.Minute)
+	setDur(&c.Merge.StallAfter, 5*time.Minute)
 
 	setStr(&c.Memcap.SlotDir, filepath.Join(state, "memcap", "slots"))
 	setInt(&c.Memcap.Slots, 2)

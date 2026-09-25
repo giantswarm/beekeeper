@@ -215,12 +215,81 @@ func (q Lane) Ahead(repo string, pr int, present func(state.Merge) bool) (state.
 	}
 	me := q.Waiting[i]
 	for _, m := range q.Waiting[:i] {
-		later := m.Repo == me.Repo && m.PR > me.PR && m.By.Name == me.By.Name
-		if present(m) || (me.Seeded && m.Seeded && !later) {
+		if holds(m, me, present) {
 			return m, true
 		}
 	}
 	return state.Merge{}, false
+}
+
+// holds says whether the waiting merge m, before me in the queue, holds me
+// up: m is present, or both are seeded places and m is not a later pull
+// request of me's session and repository.
+func holds(m, me state.Merge, present func(state.Merge) bool) bool {
+	later := m.Repo == me.Repo && m.PR > me.PR && m.By.Name == me.By.Name
+	return present(m) || (me.Seeded && m.Seeded && !later)
+}
+
+// Stall is a lane's first arrived merge held up by places whose merges are
+// not in the gate.
+type Stall struct {
+	// Merge is the waiting merge whose gate call is in the gate.
+	Merge state.Merge `json:"merge"`
+	// Behind are the places before it that hold it up: seeds whose merges
+	// have not arrived, merges that left the gate.
+	Behind []state.Merge `json:"behind"`
+	// Since is when the wait began: the gate call's arrival, the last of
+	// those places going absent or the lane's last merge ending, the latest.
+	Since time.Time `json:"since"`
+}
+
+// Stalled reports the lane's stall: no merge runs, the first waiting merge
+// whose gate call is in the gate (alive) is held up only by places whose
+// merges are not, none of them run outside the gate, and it has waited so
+// for longer than after. arrived is when a gate call's process started.
+func (q Lane) Stalled(now time.Time, after time.Duration, present func(state.Merge) bool, alive func(pid int) bool,
+	arrived func(pid int) (time.Time, bool)) (Stall, bool) {
+	if q.Running != nil {
+		return Stall{}, false
+	}
+	i := slices.IndexFunc(q.Waiting, func(m state.Merge) bool { return alive(m.PID) })
+	if i < 0 {
+		return Stall{}, false
+	}
+	s := Stall{Merge: q.Waiting[i]}
+	since, ok := arrived(s.Merge.PID)
+	if !ok {
+		return Stall{}, false
+	}
+	for _, m := range q.Waiting[:i] {
+		if !holds(m, s.Merge, present) {
+			continue
+		}
+		if m.Outside {
+			return Stall{}, false
+		}
+		gone := m.Joined
+		if m.PID != 0 {
+			gone = m.Seen
+		}
+		since = latest(since, gone)
+		s.Behind = append(s.Behind, m)
+	}
+	if q.Settling != nil {
+		since = latest(since, q.Settling.Finished)
+	}
+	if len(s.Behind) == 0 || now.Sub(since) <= after {
+		return Stall{}, false
+	}
+	s.Since = since
+	return s, true
+}
+
+func latest(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
 }
 
 // Passed names the absent merges before repo#pr that it runs ahead of.

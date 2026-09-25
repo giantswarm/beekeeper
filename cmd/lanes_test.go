@@ -1,0 +1,64 @@
+package cmd
+
+import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/state"
+)
+
+// A lane whose arrived merge waits behind a seed that has not arrived is
+// stalled in lanes and one LANE STALLED line of the watch, folded while it
+// lasts.
+func TestLanesAndWatchSayAStall(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("stateDir: "+dir+"\nlanes: [{name: ap, repositories: [giantswarm/klaus]}]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.Open(cfg.StateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const repo, five = "giantswarm/klaus", "Agent seven"
+	now := time.Now()
+	err = store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Merges = []state.Merge{
+			{Repo: repo, PR: 676, Lane: "ap", By: state.Party{Name: "GPU"}, Phase: state.Waiting, Seeded: true, Joined: now, Seen: now},
+			{Repo: repo, PR: 671, Lane: "ap", By: state.Party{Name: five}, PID: os.Getpid(), Phase: state.Waiting, Seeded: true,
+				Joined: now.Add(time.Second), Seen: now},
+		}
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	a := &app{cfg: cfg, store: store, now: now.Add(cfg.Merge.StallAfter.Duration + time.Minute), out: &out}
+	st, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.printLanes(a.laneViews(st))
+	if want := `stalled for 6m`; !strings.Contains(out.String(), want) ||
+		!strings.Contains(out.String(), repo+`#671 ("`+five+`") waits in the gate behind `+repo+`#676 ("GPU", not arrived)`) {
+		t.Errorf("lanes does not say the stall (%q):\n%s", want, out.String())
+	}
+
+	out.Reset()
+	w := &watcher{app: a, last: map[string]time.Time{}}
+	w.stalls()
+	w.stalls()
+	if lines := strings.Count(out.String(), "LANE STALLED ap: stalled for"); lines != 1 {
+		t.Errorf("watch said the stall %d times:\n%s", lines, out.String())
+	}
+}

@@ -1,0 +1,228 @@
+{
+  "items": [
+    {
+      "apiVersion": "helm.toolkit.fluxcd.io/v2",
+      "kind": "HelmRelease",
+      "metadata": {
+        "namespace": "flux-giantswarm",
+        "name": "agent-platform"
+      },
+      "spec": {
+        "chartRef": {
+          "kind": "OCIRepository",
+          "name": "agent-platform"
+        }
+      },
+      "status": {
+        "history": [
+          {
+            "chartName": "agent-platform",
+            "chartVersion": "4.74.0+971d12027db0"
+          }
+        ],
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "helm.toolkit.fluxcd.io/v2",
+      "kind": "HelmRelease",
+      "metadata": {
+        "namespace": "flux-giantswarm",
+        "name": "agent-platform-connectivity"
+      },
+      "spec": {
+        "chartRef": {
+          "kind": "OCIRepository",
+          "name": "agent-platform-connectivity"
+        }
+      },
+      "status": {
+        "history": [
+          {
+            "chartName": "agent-platform-connectivity",
+            "chartVersion": "4.74.0+e58372fe1983"
+          }
+        ],
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "helm.toolkit.fluxcd.io/v2",
+      "kind": "HelmRelease",
+      "metadata": {
+        "namespace": "flux-giantswarm",
+        "name": "agent-platform-mcps"
+      },
+      "spec": {
+        "chartRef": {
+          "kind": "OCIRepository",
+          "name": "agent-platform-mcps"
+        }
+      },
+      "status": {
+        "history": [
+          {
+            "chartName": "agent-platform-mcps",
+            "chartVersion": "0.11.4+136d6f694440"
+          }
+        ],
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "helm.toolkit.fluxcd.io/v2",
+      "kind": "HelmRelease",
+      "metadata": {
+        "namespace": "flux-giantswarm",
+        "name": "agentgateway"
+      },
+      "spec": {
+        "chartRef": {
+          "kind": "OCIRepository",
+          "name": "agentgateway"
+        }
+      },
+      "status": {
+        "history": [
+          {
+            "chartName": "agentgateway",
+            "chartVersion": "2.7.3+f277595cd131"
+          }
+        ],
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "helm.toolkit.fluxcd.io/v2",
+      "kind": "HelmRelease",
+      "metadata": {
+        "namespace": "flux-giantswarm",
+        "name": "backstage"
+      },
+      "spec": {
+        "chartRef": {
+          "kind": "OCIRepository",
+          "name": "backstage"
+        }
+      },
+      "status": {
+        "history": [
+          {
+            "chartName": "backstage",
+            "chartVersion": "2.66.2+eea0f2afaa97"
+          }
+        ],
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "helm.toolkit.fluxcd.io/v2",
+      "kind": "HelmRelease",
+      "metadata": {
+        "namespace": "flux-giantswarm",
+        "name": "kagent"
+      },
+      "spec": {
+        "chartRef": {
+          "kind": "OCIRepository",
+          "name": "kagent"
+        }
+      },
+      "status": {
+        "history": [
+          {
+            "chartName": "kagent",
+            "chartVersion": "1.1.0+ee0b7c54125c"
+          }
+        ],
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "helm.toolkit.fluxcd.io/v2",
+      "kind": "HelmRelease",
+      "metadata": {
+        "namespace": "flux-giantswarm",
+        "name": "kagent-crds"
+      },
+      "spec": {
+        "chartRef": {
+          "kind": "OCIRepository",
+          "name": "kagent-crds"
+        }
+      },
+      "status": {
+        "history": [
+          {
+            "chartName": "kagent-crds",
+            "chartVersion": "1.1.0+5fac8e4adb20"
+          }
+        ],
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "helm.toolkit.fluxcd.io/v2",
+      "kind": "HelmRelease",
+      "metadata": {
+        "namespace": "flux-giantswarm",
+        "name": "muster"
+      },
+      "spec": {
+        "chartRef": {
+          "kind": "OCIRepository",
+          "name": "muster"
+        }
+      },
+      "status": {
+        "history": [
+          {
+            "chartName": "muster",
+            "chartVersion": "5.32.6+d3e4bacda9f2"
+          }
+        ],
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ]
+      }
+    }
+  ]
+}

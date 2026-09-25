@@ -41,7 +41,12 @@ last one, grouped by whose limit they hit. Sessions that start, end or
 restart are reported, and so is a lease whose holder is gone. A session
 over a threshold in metrics.runaway (GitHub calls in the last hour, the
 same failing tool call repeating in it, its context's fill) is one RUNAWAY
-line per figure, once per watch. A note or a
+line per figure, once per watch. A lane whose first arrived merge has
+waited longer than merge.stallAfter (5m) behind places whose merges are
+not in the gate (beekeeper lanes) is one LANE STALLED line, repeated at
+most every watch.repeat while it lasts. A settling merge leaves its lane
+once the lane has settled (its release rolled and its HelmReleases Ready,
+or no installation to roll), logged as lane.settled, silently. A note or a
 timer that falls due, the end of a session with a record (sessions serve)
 and a supervisor relay taken or expired are one line each, once: the state keeps that they were reported, so
 a second or restarted watch stays silent about them. The
@@ -270,6 +275,8 @@ func (w *watcher) poll(ctx context.Context) {
 	w.sessionChanges(sessions)
 	w.staleLeases(ctx, sessions)
 	w.runaways(sessions, t)
+	w.stalls()
+	w.settled(ctx)
 
 	if w.now.Sub(w.lastBudget) >= th.BudgetEvery.Duration {
 		w.lastBudget = w.now
@@ -287,6 +294,69 @@ func (w *watcher) poll(ctx context.Context) {
 	if w.notifier != nil {
 		w.notifier.Flush(ctx, w.now)
 	}
+}
+
+// stalls says each stalled lane, one LANE STALLED line per lane and waiting
+// merge at most every watch.repeat.
+func (w *watcher) stalls() {
+	st, err := w.store.Read()
+	if err != nil {
+		return
+	}
+	for _, v := range w.laneViews(st) {
+		if v.Stall != nil {
+			w.emit("stall:"+v.Name+":"+v.Stall.Merge.Key(), "LANE STALLED %s: %s", v.Name, w.stallText(*v.Stall))
+		}
+	}
+}
+
+// settled drops the settling merges whose lane has settled, so lanes shows
+// the lane free before its next merge starts: a lane with no installation
+// has nothing to roll, and one whose release rolled and whose HelmReleases
+// are Ready is done. A lane past merge.settleTimeout is left to lanes clear.
+func (w *watcher) settled(ctx context.Context) {
+	st, err := w.store.Read()
+	if err != nil {
+		return
+	}
+	hrs := map[string][]merge.HelmRelease{}
+	done := map[string]string{}
+	for _, m := range st.Merges {
+		if m.Phase != state.Settling || w.now.Sub(m.Finished) > w.cfg.Merge.SettleTimeout.Duration {
+			continue
+		}
+		lane, ok := w.cfg.LaneNamed(m.Lane)
+		if !ok || lane.Installation == "" {
+			done[m.Key()] = "no installation to roll"
+			continue
+		}
+		h, read := hrs[lane.Name]
+		if !read {
+			h, err = readHelmReleases(ctx, lane)
+			if err != nil {
+				continue // unreadable: not settled
+			}
+			hrs[lane.Name] = h
+		}
+		if ready, _ := merge.Ready(lane, h, &m, w.now, w.cfg.Merge.Settle.Duration); ready {
+			done[m.Key()] = "rolled, HelmReleases of " + lane.Installation + " Ready"
+		}
+	}
+	if len(done) == 0 {
+		return
+	}
+	_ = w.store.Update(func(st *state.State) ([]state.Event, error) {
+		var ev []state.Event
+		st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool {
+			why, ok := done[m.Key()]
+			if !ok || m.Phase != state.Settling {
+				return false
+			}
+			ev = append(ev, event(watchParty, "lane.settled", "%s: %s %s", m.Lane, m.Key(), why))
+			return true
+		})
+		return ev, nil
+	})
 }
 
 // commandTimeout bounds one journalctl or docker call of a poll: a wedged

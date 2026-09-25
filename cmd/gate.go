@@ -21,6 +21,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
 // The gate's own exit codes, apart from devctl's 1-9 and the busy machine's 75.
@@ -35,6 +36,9 @@ const (
 	// gives a background one BackgroundGateWait.
 	DefaultGateWait    = 2 * time.Minute
 	BackgroundGateWait = 30 * time.Minute
+	// gateDeadlineEnv carries a waiting call's deadline across the re-exec
+	// of a replaced binary.
+	gateDeadlineEnv = "BEEKEEPER_GATE_DEADLINE"
 )
 
 func (a *app) gateCmd() *cobra.Command {
@@ -52,7 +56,9 @@ within merge.queueTTL of its last run; for a seeded place also the seeds
 before it), nothing else of the lane runs, the lane's HelmReleases are Ready
 and the previous merge's release has rolled, and fewer than merge.cap devctl
 processes run. A wait longer than --wait exits 76 and keeps the merge's
-place for merge.queueTTL. devctl then runs once; its document and exit code
+place for merge.queueTTL. A waiting call whose binary is replaced (beekeeper
+self-update) re-executes the new one: the same process, arguments and stdio,
+the same place and deadline; never while devctl runs. devctl then runs once; its document and exit code
 pass through unchanged. A run with nothing merged keeps its place for the
 retry (merge.seedTTL), except devctl's refusal (exit 5).`,
 		Hidden: true,
@@ -106,6 +112,14 @@ func (a *app) gate(ctx context.Context, argv []string, wait time.Duration) error
 	}
 	g := &gateRun{app: a, ctx: ctx, argv: argv, repo: repo, pr: pr, lane: a.cfg.LaneOf(repo), me: me, pid: os.Getpid()}
 	deadline := time.Now().Add(wait)
+	if v, ok := os.LookupEnv(gateDeadlineEnv); ok {
+		_ = os.Unsetenv(gateDeadlineEnv) // devctl must not inherit it
+		if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
+			deadline = t
+			gateLine("continuing under %s %s: %s#%d keeps its place in lane %s", project.Name, project.Version(), repo, pr, g.lane.Name)
+		}
+	}
+	bin := runningBinary()
 	for {
 		a.now = time.Now()
 		why, err := g.step()
@@ -120,6 +134,11 @@ func (a *app) gate(ctx context.Context, argv []string, wait time.Duration) error
 			gateLine("queued, %s; your place is kept for %s: run the same command again with run_in_background (the wait is then %s), do not poll",
 				why, kept, BackgroundGateWait)
 			return &exitError{code: ExitGateQueued}
+		}
+		if bin.replaced() {
+			gateLine("%s was replaced while the merge waited: re-executing it", bin.path)
+			err := bin.exec(gateDeadlineEnv + "=" + deadline.Format(time.RFC3339Nano))
+			gateLine("the new binary does not start (%v): waiting on under %s", err, project.Version())
 		}
 		if why != g.lastWhy {
 			gateLine("waiting (up to %s): %s", deadline.Sub(a.now).Round(time.Second), why)
@@ -213,11 +232,6 @@ func (g *gateRun) step() (string, error) {
 			b.Remaining, g.cfg.GitHub.Floor, clock(g.now, b.Reset))
 	}
 	return g.start(q.SettlingKeys(), hrs)
-}
-
-// present says whether a waiting merge holds its place against this one.
-func (g *gateRun) present(m state.Merge) bool {
-	return merge.Present(m, g.now, g.cfg.Merge.QueueTTL.Duration, proc.Alive)
 }
 
 // outsideCheck is how often a merge waiting behind a settled outside merge
@@ -384,8 +398,8 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 
 // runMerge runs devctl once, its document and exit code unchanged, and
 // records the outcome: a merge settles its lane, one that warranted no
-// release leaves it, and one with nothing merged keeps its place for the
-// retry.
+// release or whose lane has no installation to roll leaves it, and one with
+// nothing merged keeps its place for the retry.
 func (g *gateRun) runMerge() error {
 	var doc bytes.Buffer
 	rc := runChild(g.argv, io.MultiWriter(os.Stdout, &doc))
@@ -398,7 +412,7 @@ func (g *gateRun) runMerge() error {
 	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
 		switch i := g.mine(st, state.Running); {
 		case i < 0:
-		case out.Merged && !out.NoRelease:
+		case out.Merged && !out.NoRelease && g.lane.Installation != "":
 			m := &st.Merges[i]
 			m.Phase, m.Finished, m.Exit, m.Release = state.Settling, now, rc, out.Release
 		case !out.Merged && merge.Failed(&st.Merges[i], rc, now):
