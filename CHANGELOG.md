@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `beekeeper supervisor spare <session>` records the relay spare; `supervisor status` and `handover` show it, and the spare's `supervisor start` clears it. The state's `spare` field is new; older binaries carry it unchanged.
+- The standby watch (`watch --standby`) keeps the spare awake: once it sat idle for `supervisor.keepAwake` (default `25m`, under the desktop's 30-minute idle disconnect) it sends `beekeeper keep-awake: reply "ok", nothing else` from the command line, silent unless it fails (`KEEP-AWAKE FAILED`, `SPARE ASLEEP`).
+- After a supervisor crash the standby watch hands the role to the running spare from the command line once the CLI has been gone past `supervisor.restartGrace` (`HANDOVER`); `SUPERVISOR GONE` and its notification name the spare. A supervisor CLI back under a new PID is told to resume the role (`RESUME`).
+- `beekeeper supervisor reopen` and the login unit `contrib/systemd/beekeeper-supervisor-open.service` start the desktop app on the recorded supervisor's session after a reboot; the standby watch does the same once after an app restart with no spare to take over.
+- `internal/peer` sends a message to a running session from the command line: one headless `claude -p` turn with SendMessage, the only interface Claude Code offers for it.
+
+### Changed
+
+- `supervisor.restartGrace` defaults to `30s` instead of `1m`: the desktop app never restarts a crashed CLI, so it only debounces a supervisor someone woke.
+
 ### Changed
 
 - Claims stay gated after a supervisor crash: the grant rule holds from the first `supervisor start` until a deliberate `supervisor stop` or a successor's `supervisor start`, instead of lifting once `supervisor.restartGrace` has passed. A claim during the gap is refused naming the gone supervisor and the successor's start; `supervisor status` and `status` say it is gone and claims wait. `supervisor.restartGrace` now only delays the gone line and notification: a CLI back within it is still a restart that keeps the role.

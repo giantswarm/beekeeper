@@ -75,8 +75,15 @@ type Supervisor struct {
 	// RestartGrace is how long beekeeper waits after it first saw the
 	// supervisor's CLI gone: a CLI back under the same session within it is
 	// a restart and keeps the role; past it, the watch says the supervisor
-	// is gone and notifies. The grant rule holds throughout.
+	// is gone, notifies and hands over to the spare. The desktop app never
+	// restarts a crashed CLI by itself, so it is a short debounce for a
+	// supervisor someone woke (30s). The grant rule holds throughout.
 	RestartGrace Duration `yaml:"restartGrace"`
+	// KeepAwake is how long the recorded spare may sit idle before the
+	// standby watch sends it a keep-awake message (25m): under the desktop
+	// app's 30-minute idle disconnect, so a command-line message still
+	// reaches it.
+	KeepAwake Duration `yaml:"keepAwake"`
 }
 
 // Lane is a set of repositories whose merges roll the same components of an
@@ -413,7 +420,8 @@ func (c *Config) defaults() error {
 	setStr(&c.LeaseDir, filepath.Join(c.StateDir, "leases"))
 	setDur(&c.GrantTTL, 30*time.Minute)
 	setDur(&c.Supervisor.RelayTTL, 15*time.Minute)
-	setDur(&c.Supervisor.RestartGrace, time.Minute)
+	setDur(&c.Supervisor.RestartGrace, 30*time.Second)
+	setDur(&c.Supervisor.KeepAwake, 25*time.Minute)
 	if c.Supervisor.RelayAt == 0 {
 		c.Supervisor.RelayAt = 400_000
 	}

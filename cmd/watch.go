@@ -89,6 +89,7 @@ Runs until killed. --once polls once and exits.`,
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			w := &watcher{app: a, standby: standby, last: map[string]time.Time{}, seenKills: map[string]bool{}, reported: map[string]bool{}}
+			w.spare = spareWatch{send: a.peerSend, sent: map[string]time.Time{}, checked: map[string]bool{}}
 			if notifyDesktop {
 				d := &notify.Desktop{}
 				defer func() { _ = d.Close() }()
@@ -124,6 +125,10 @@ type watcher struct {
 	// records are the session records of the last poll: their sessions'
 	// ends get the record's line instead of the SESSIONS ended one.
 	records []state.Record
+	// spare is the standby watch's keep-awake and hand-over memory; table
+	// the last poll's process table.
+	spare spareWatch
+	table *proc.Table
 }
 
 func (w *watcher) run(ctx context.Context, once bool) error {
@@ -274,6 +279,7 @@ func (w *watcher) poll(ctx context.Context) {
 		w.emit("proc", "cannot read the process table: %v", err)
 		return
 	}
+	w.table = t
 	sessions := claude.Discover(w.cfg, t, w.now)
 	w.kills(ctx, since, sessions, t)
 	w.pending(ctx, sessions)
@@ -497,7 +503,11 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	}
 	w.records = st.Records
 	supervised := w.supervisorGone(ctx, st, sessions)
+	if w.standby {
+		w.tendSpare(ctx, st, sessions)
+	}
 	if w.standby && supervised {
+		w.resumeRestarted(ctx, st, sessions)
 		return // the supervisor's watch reports them
 	}
 	q := w.quietness(ctx, st, sessions)
@@ -584,8 +594,15 @@ func (w *watcher) supervisorGone(ctx context.Context, st *state.State, sessions 
 		return sv.live
 	}
 	key := s.Name + "@" + s.Since.UTC().Format(time.RFC3339)
-	l := fmt.Sprintf("SUPERVISOR GONE: %q (supervising since %s) is gone since %s; claims stay gated until a successor's beekeeper supervisor start (beekeeper handover --prompt)",
-		s.Name, clock(w.now, s.Since), clock(w.now, sv.gone))
+	spare := ""
+	if w.standby {
+		spare = w.handOver(ctx, st, sessions, key)
+		if st.Spare == nil || strings.Contains(spare, "no running CLI") {
+			w.reopenAfterAppStart(ctx, st, sv.gone, key)
+		}
+	}
+	l := fmt.Sprintf("SUPERVISOR GONE: %q (supervising since %s) is gone since %s; claims stay gated until a successor's beekeeper supervisor start (beekeeper handover --prompt)%s",
+		s.Name, clock(w.now, s.Since), clock(w.now, sv.gone), spare)
 	if w.gap != key {
 		w.gap = key
 		w.emitNow("supervisor", "%s", l)

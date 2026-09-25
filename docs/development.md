@@ -108,7 +108,19 @@ again keeps the claim loop refused past the grace, until a successor's `supervis
 scratch standby watch (`watch --notify --standby`) run inside `dbus-run-session`, with
 `dbus-monitor` recording the `Notify` calls so nothing reaches the desktop, says `SUPERVISOR
 GONE` once past the grace and `SUPERVISOR BACK` once a successor stand-in starts; a stand-in
-that ran `supervisor stop` before its kill gives neither and leaves claims ungated. `handover --prompt` on a copy of the live state (`cp -r` of the state and lease
+that ran `supervisor stop` before its kill gives neither and leaves claims ungated. The spare's keep-awake and the crash hand-over need desktop sessions, never the live ones:
+throwaway sessions titled `test: …` on the smallest model, made with `claude -p --session-id <id>`
+in a scratch folder and imported with `claude://resume?session=<id>` (then
+`claude://code/continue?session=<previous>` puts the window back). A `.claude/settings.local.json`
+in that folder sets `BEEKEEPER_CONFIG` to the scratch configuration and allows `Bash(beekeeper *)`,
+so their commands never touch the live state. `BEEKEEPER_PEER_TEST=<title> go test -run TestLive
+./internal/peer/` sends one message to such a session from the command line and checks that an
+absent name is unreachable. A scratch `watch --standby` with the spare in the scratch state keeps
+one session awake past 35 idle minutes while an untouched one is dropped at 30; a stand-in
+supervisor killed by its CLI's PID shows `SUPERVISOR GONE` naming the spare, the `HANDOVER` line
+and the spare's `supervisor start`, with claims refused until then. `supervisor reopen` against a
+scratch state whose supervisor is a stopped throwaway session starts its CLI through the deep
+link. Archive the sessions afterwards. `handover --prompt` on a copy of the live state (`cp -r` of the state and lease
 directories into the scratch configuration) shows what a successor would get.
 
 The roster is tried with real `claude --bg` workers against scratch state: started through
@@ -192,6 +204,7 @@ measured with `beekeeper sessions --json` against the installed release on the s
 | `internal/machine` | Memory, pressure, the desktop scope, disk, build slots, kind clusters, OOM kills. |
 | `internal/github` | The budget from rate-limit headers; a pull request's state from `gh pr view`. |
 | `internal/lease` | Lease directories and the grant rule. |
+| `internal/peer` | The command-line send to a running Claude session: one headless `claude -p` turn whose only tool is SendMessage, by the session's ListAgents name. It rests on Claude Code's undocumented peer messaging, so it is kept here with a live test. |
 | `internal/state` | The shared state document (supervisor and its relay, the relay due the watch reported, grants, holds, agents, notes, timers, session records, merges) and the event log, under a file lock; `Log` appends the events that change no state (build runs) with a bounded wait for the lock. |
 | `internal/notify` | Desktop notifications: the kinds, urgencies and quiet hours, the ledger `notify.json` under `notify.lock` that makes each event one notification across watches and holds the quiet hours' ones, and the D-Bus sender to `org.freedesktop.Notifications` (godbus, never `notify-send`, never an autolaunched bus). |
 | `internal/alerts` | The installations' alerts: bounded `kubectl port-forward`s in their own process group, the Alertmanager reading, the NEW/RESOLVED/FLAPPING lines with the severity floors and the flap damper, and the grouped snapshot (pure, tested against Alertmanager-shaped fixtures, recorded answers in `testdata/` and a fake `kubectl`), the baseline with the damper's records and its single owner, and recorded answers for `alerts replay`. |

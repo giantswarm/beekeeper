@@ -388,3 +388,38 @@ func TestSupervisorViewShowsTheContext(t *testing.T) {
 		t.Fatal("a view of no supervisor")
 	}
 }
+
+func TestKeepAwakeDue(t *testing.T) {
+	t0 := time.Date(2026, 9, 25, 11, 0, 0, 0, time.UTC)
+	every := 25 * time.Minute
+	for _, c := range []struct {
+		name         string
+		active, sent time.Time
+		now          time.Time
+		want         bool
+	}{
+		{"idle past keepAwake", t0, time.Time{}, t0.Add(25 * time.Minute), true},
+		{"active recently", t0, time.Time{}, t0.Add(24 * time.Minute), false},
+		{"sent recently, no turn yet", t0, t0.Add(25 * time.Minute), t0.Add(30 * time.Minute), false},
+		{"turn after the send counts", t0.Add(26 * time.Minute), t0.Add(25 * time.Minute), t0.Add(50 * time.Minute), false},
+		{"due again", t0.Add(26 * time.Minute), t0.Add(25 * time.Minute), t0.Add(51 * time.Minute), true},
+	} {
+		if got := keepAwakeDue(c.active, c.sent, c.now, every); got != c.want {
+			t.Errorf("%s: keepAwakeDue = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestStartClearsTheSpare(t *testing.T) {
+	now := time.Date(2026, 9, 25, 11, 0, 0, 0, time.UTC)
+	old := state.Party{Session: "s1", Name: "old"}
+	spare := state.Party{Session: "s2", HostSession: "local_s2", Name: "spare"}
+	st := &state.State{Supervisor: &state.Supervisor{Party: old, Since: now.Add(-time.Hour)}, Spare: &spare}
+	// The old supervisor's CLI is gone past the grace: the spare takes over.
+	if _, _, err := startRole(st, state.Party{Session: "s2b", HostSession: "local_s2", Name: "spare"}, false, false, now); err != nil {
+		t.Fatal(err)
+	}
+	if st.Spare != nil || !st.Supervisor.Is(spare) {
+		t.Fatalf("after the spare's start: supervisor %+v, spare %+v", st.Supervisor, st.Spare)
+	}
+}

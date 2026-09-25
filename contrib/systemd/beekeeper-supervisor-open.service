@@ -1,0 +1,22 @@
+# beekeeper supervisor reopen as a systemd user unit: at login it starts the
+# Claude desktop app on the recorded supervisor's session
+# (claude://code/continue?session=local_…). Every CLI is cold after a reboot,
+# so the focus starts the supervisor's CLI, and the standby watch
+# (beekeeper-notify.service) sees it back and tells it to resume the role.
+# The app runs in a scope of its own under app.slice and outlives this unit.
+#
+# Install (README, "The spare"): copy it to ~/.config/systemd/user/, point
+# ExecStart at `command -v beekeeper`, then
+#   systemctl --user enable beekeeper-supervisor-open.service
+[Unit]
+Description=beekeeper: reopen the supervisor's desktop session at login
+Documentation=https://github.com/giantswarm/beekeeper#the-spare-and-a-supervisor-started-again-without-a-click
+PartOf=graphical-session.target
+After=graphical-session.target beekeeper-notify.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/beekeeper supervisor reopen
+
+[Install]
+WantedBy=graphical-session.target
