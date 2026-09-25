@@ -113,13 +113,13 @@ func Blocking(st *state.State, now time.Time, repo string, pr int, lane string) 
 }
 
 // Prune drops the waiting merges whose run ended more than ttl ago (seedTTL
-// for a seeded place) and turns
+// for a seeded place and a failed attempt's) and turns
 // a running merge whose run is gone into a settling one: whether it merged
 // is unknown, so the lane settles by the settle rule.
 func Prune(st *state.State, now time.Time, ttl, seedTTL time.Duration, alive func(pid int) bool) {
 	st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool {
 		keep := ttl
-		if m.Seeded {
+		if m.Seeded || m.Retrying() {
 			keep = seedTTL
 		}
 		return m.Phase == state.Waiting && !alive(m.PID) && now.Sub(m.Seen) > keep
@@ -176,6 +176,63 @@ func Queue(st *state.State, lane string) Lane {
 		return a.Joined.Compare(b.Joined)
 	})
 	return q
+}
+
+// ExitRefused is devctl's refusal (another human's pull request, a
+// repository with agentMerge: false): final, no retry follows it.
+const ExitRefused = 5
+
+// Failed records a run that ended with exit code rc and nothing merged. The
+// merge goes back to waiting at its place, so its session's retry of the same
+// pull request runs before the merges that joined behind it; a refusal leaves
+// the lane. It reports whether the place is kept.
+func Failed(m *state.Merge, rc int, at time.Time) bool {
+	if rc == ExitRefused {
+		return false
+	}
+	m.Phase, m.Finished, m.Seen, m.Exit, m.Release, m.Roll = state.Waiting, at.UTC(), at.UTC(), rc, "", nil
+	return true
+}
+
+// Present says whether a waiting merge holds its place against the arrived
+// merges behind it: a merge run outside the gate, one whose devctl pr merge
+// is in the gate, or was within ttl (a rerun after exit 76, the retry of a
+// failed attempt). A seeded place whose merge has not arrived, or left more
+// than ttl ago, is absent.
+func Present(m state.Merge, now time.Time, ttl time.Duration, alive func(pid int) bool) bool {
+	return m.Outside || alive(m.PID) || (m.PID != 0 && now.Sub(m.Seen) <= ttl)
+}
+
+// Ahead is the waiting merge repo#pr waits behind, false when repo#pr is
+// the lane's next: the first merge before it that is present, or, for a
+// seeded place, an absent seed before it, as seeds keep their order, unless
+// that seed is a later pull request of the same session and repository,
+// which cannot arrive first. A free lane runs the first arrived merge.
+func (q Lane) Ahead(repo string, pr int, present func(state.Merge) bool) (state.Merge, bool) {
+	i := slices.IndexFunc(q.Waiting, func(m state.Merge) bool { return m.Repo == repo && m.PR == pr })
+	if i < 0 {
+		return state.Merge{}, false
+	}
+	me := q.Waiting[i]
+	for _, m := range q.Waiting[:i] {
+		later := m.Repo == me.Repo && m.PR > me.PR && m.By.Name == me.By.Name
+		if present(m) || (me.Seeded && m.Seeded && !later) {
+			return m, true
+		}
+	}
+	return state.Merge{}, false
+}
+
+// Passed names the absent merges before repo#pr that it runs ahead of.
+func (q Lane) Passed(repo string, pr int) string {
+	var keys []string
+	for _, m := range q.Waiting {
+		if m.Repo == repo && m.PR == pr {
+			break
+		}
+		keys = append(keys, m.Key())
+	}
+	return strings.Join(keys, " ")
 }
 
 // Merged turns an outside merge that GitHub reports merged at into its

@@ -30,7 +30,12 @@ installation (lanes in the configuration; a repository in no lane is a lane
 of its own). The gate the PreToolUse hook puts in front of devctl pr merge
 runs one merge per lane at a time, in the order the merges joined, and the
 next once the installation's HelmReleases of the lane's charts are Ready and
-the previous merge's release has rolled.
+the previous merge's release has rolled. The lane never idles for a merge
+that is not there: an arrived merge runs ahead of a seeded place whose merge
+has not arrived (seeds keep their order among themselves), and a merge that
+ended with nothing merged keeps its place, "retrying", so its session's
+retry runs before the merges behind it; it holds the lane for
+merge.queueTTL after the failure and keeps its place for merge.seedTTL.
 
 A merge run outside the gate (one in flight when the gate went live, one run
 without the hook) is registered with lanes settle: it heads its lane until it
@@ -60,7 +65,9 @@ a merge in it: running, settling, and the waiting merges in turn order.`,
 runs it, so an agreed order carries over. The place holds until the session's
 own devctl pr merge of that repository and number arrives and runs; a hold's
 refusal does not lose it. It is kept for merge.seedTTL (12h) from the seeding
-or the session's last arrival.`,
+or the session's last arrival. Seeds keep their order among themselves, but a
+seed whose merge has not arrived holds up no other merge in a free lane: not
+an arrived unseeded merge, not an earlier pull request of its own session.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error {
 			pr, err := prArgs(args)
@@ -335,9 +342,14 @@ func (a *app) printLanes(views []laneView) {
 			}
 			p("  held by %q until %s%s: %s", v.Hold.By.Name, untilText(a, *v.Hold), except, v.Hold.Reason)
 		}
+		present := func(m state.Merge) bool { return merge.Present(m, a.now, a.cfg.Merge.QueueTTL.Duration, proc.Alive) }
+		next := max(slices.IndexFunc(v.Waiting, func(m state.Merge) bool {
+			_, behind := v.Ahead(m.Repo, m.PR, present)
+			return present(m) && !behind
+		}), 0)
 		for i, m := range v.Waiting {
 			label := "      "
-			if i == 0 {
+			if i == next {
 				label = "  next"
 			}
 			how := "waiting"
@@ -345,6 +357,15 @@ func (a *app) printLanes(views []laneView) {
 			case proc.Alive(m.PID):
 			case m.Outside:
 				how = fmt.Sprintf("settled outside the gate, not merged at %s, heads the lane", clock(a.now, m.Checked))
+			case m.Retrying() && present(m):
+				how = fmt.Sprintf("retrying after exit %d at %s (holds the lane until %s), queued", m.Exit, clock(a.now, m.Finished),
+					clock(a.now, m.Seen.Add(a.cfg.Merge.QueueTTL.Duration)))
+			case m.Retrying():
+				how = fmt.Sprintf("retrying after exit %d at %s (not back, arrived merges pass it), queued", m.Exit, clock(a.now, m.Finished))
+			case m.PID != 0 && present(m):
+				how = fmt.Sprintf("left the gate at %s (its place is kept until %s), queued", clock(a.now, m.Seen), clock(a.now, m.Seen.Add(a.cfg.Merge.QueueTTL.Duration)))
+			case m.PID != 0:
+				how = fmt.Sprintf("left the gate at %s (arrived merges pass it), queued", clock(a.now, m.Seen))
 			default:
 				how = "not arrived, queued"
 			}

@@ -57,7 +57,7 @@ func TestParseDocument(t *testing.T) {
 	}
 }
 
-//go:embed testdata/*.json
+//go:embed testdata/*.json testdata/*.jsonl
 var testdataFS embed.FS
 
 func testdata(t *testing.T, name string) []byte {

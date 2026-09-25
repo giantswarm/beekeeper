@@ -290,9 +290,11 @@ type Merge struct {
 	PID   int    `json:"pid"`
 	Phase string `json:"phase"`
 	// Joined orders the queue; a rerun within the queue TTL keeps it.
-	Joined   time.Time `json:"joined"`
-	Seen     time.Time `json:"seen"`
-	Started  time.Time `json:"started,omitzero"`
+	Joined  time.Time `json:"joined"`
+	Seen    time.Time `json:"seen"`
+	Started time.Time `json:"started,omitzero"`
+	// Finished and Exit are when and how the merge's run ended; on a
+	// waiting merge, the failed attempt whose place it keeps (Retrying).
 	Finished time.Time `json:"finished,omitzero"`
 	Exit     int       `json:"exit,omitempty"`
 	// Seeded marks a place queued on a session's behalf (lanes queue): it
@@ -313,6 +315,10 @@ type Merge struct {
 
 // Key is the merge's repository and number, owner/repo#n.
 func (m Merge) Key() string { return fmt.Sprintf("%s#%d", m.Repo, m.PR) }
+
+// Retrying says whether a waiting merge is a failed attempt that keeps its
+// place for its session's retry of the same pull request.
+func (m Merge) Retrying() bool { return m.Phase == Waiting && !m.Finished.IsZero() }
 
 // Event is one line of events.jsonl.
 type Event struct {

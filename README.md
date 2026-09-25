@@ -44,7 +44,7 @@ the budget work on any system.
 | `beekeeper budget` | The GitHub core budget from the headers of a real, conditional request (a 304 costs nothing), and every `gh` and `devctl` process with its session. `--gate` exits 3 under the floor. |
 | `beekeeper lease claim\|release\|status\|grant\|revoke` | One holder per resource: the environments in the configuration and the browser. While a supervisor runs, a session claims only what the supervisor granted it, in grant order. |
 | `beekeeper hold set\|lift\|check` | Stop merges into a repository (a broken main), one lane (`--lane serving`: a proving window such as a model load stops the lane whose components it exercises, not the others), every merge (`merges`) or every GitHub call (`github`) until lifted or a time passes. A merge hold lets one repository or pull request through with `--except owner/repo[#n]`: `hold set --lane serving --except giantswarm/model-manager#172` stops the lane but for the merge it waits for. The merge gate enforces them. |
-| `beekeeper lanes [queue\|settle\|drop\|clear]` | Each merge lane: the running merge, the one settling until its release rolled, and the waiting ones in turn order, so who is next is never prose. `queue <owner/repo> <n> --for <session>` gives a session's merge its place now so an agreed order carries over (kept until that merge runs, through refusals, for `merge.seedTTL`, 12h); `settle <owner/repo> <n> [--for <session>]` registers a merge run outside the gate (in flight when the gate went live, run without the hook): it heads its lane until it merges, then settles the lane like a gated merge; `drop` takes a waiting merge out; `clear` frees a lane whose settling release will not roll, after a look at the installation. |
+| `beekeeper lanes [queue\|settle\|drop\|clear]` | Each merge lane: the running merge, the one settling until its release rolled, and the waiting ones in turn order, so who is next is never prose. `queue <owner/repo> <n> --for <session>` gives a session's merge its place now so an agreed order carries over (kept until that merge runs, through refusals, for `merge.seedTTL`, 12h; seeds keep their order, an arrived unseeded merge passes one whose merge has not arrived); a run with nothing merged stays in its place as `retrying` for its session's retry; `settle <owner/repo> <n> [--for <session>]` registers a merge run outside the gate (in flight when the gate went live, run without the hook): it heads its lane until it merges, then settles the lane like a gated merge; `drop` takes a waiting merge out; `clear` frees a lane whose settling release will not roll, after a look at the installation. |
 | `beekeeper supervisor start\|stop` | Make a session the supervisor. The grant rule applies while its session runs and lifts by itself when it is gone. Another session's start is refused while it runs, unless the supervisor relayed the role to it. |
 | `beekeeper supervisor relay <successor>\|--cancel` | Hand the role over without a gap: the supervisor names its successor, the successor's `supervisor start` takes the role, the grant queue and the pending grants in one step, and the event log shows both. Until then the outgoing supervisor keeps the role and the grant rule; a relay not taken expires after `supervisor.relayTTL` (15m) or is withdrawn with `--cancel`. `supervisor status` in the relieved session exits 4. |
 | `beekeeper agents register\|assign\|idle` | The roster of empty sessions registered as spare capacity. |
@@ -88,9 +88,13 @@ call gets `--wait 30m`), and the gate decides:
   `<n> devctl processes run machine-wide (cap <n>), not a lane problem`. The merge keeps its place for `merge.queueTTL` (15m): run the same
   command again, best with `run_in_background`, where the wait is 30 minutes instead of 2.
 - **Otherwise devctl runs once**, its JSON document and exit code (devctl's own 0–9) unchanged,
-  and the event log records `merging` and `merged` with the release.
+  and the event log records `merging` and `merged` with the release. A run that ends with nothing
+  merged (exit 1–4, 7, 8) is `merge.failed` and keeps its place: `lanes` shows it `retrying`, and
+  the session's retry of the same pull request runs before every merge that was behind it. It
+  holds the lane for `merge.queueTTL` from the failure, then keeps its place for `merge.seedTTL`
+  without holding up a free lane; devctl's refusal (exit 5) leaves the lane.
 
-A merge runs when it is first in its lane's queue, nothing else of the lane runs, fewer than
+A merge runs when no merge before it in its lane's queue holds its place, nothing else of the lane runs, fewer than
 `merge.cap` devctl processes run on the machine, and the lane's installation is ready: every
 HelmRelease of the lane's charts Ready, and the previous merge rolled. Rolled means each
 HelmRelease of the merged repository's chart that ran the newest version when the merge started
@@ -98,6 +102,14 @@ now reports the released version; a release devctl could not confirm (exit 9, a 
 tool timeout) settles for `merge.settle` instead. The installation is read with `kubectl
 --context <lanes[].context>` (default: the kubeconfig context named after the installation or
 ending in `-<installation>`).
+
+A free lane never idles for a merge that is not there. A place holds against the merges behind
+it while its merge is in the gate or was within `merge.queueTTL` (a rerun after exit 76, the retry
+of a failed run), and a merge registered with `lanes settle` always does. A place seeded with
+`lanes queue --for` whose merge has not arrived holds up only the seeds behind it, so seeds keep
+their order among themselves, and never an earlier pull request of its own session and
+repository, which cannot arrive first; an arrived merge that was not seeded runs ahead of it, and
+`merging` names the places it passed.
 
 A merge the gate did not wrap leaves its lane looking free while its release rolls. `beekeeper
 lanes settle <owner/repo> <n>` registers it: until the pull request is merged it heads the lane, so
@@ -204,7 +216,7 @@ lanes:                      # merges that roll the same components of an install
 merge:
   cap: 5                    # devctl processes on the machine when a merge starts
   queueTTL: 15m             # a queued merge keeps its place this long after its run ended
-  seedTTL: 12h              # a place queued with lanes queue --for, from its seeding or last arrival
+  seedTTL: 12h              # a place queued with lanes queue --for, from its seeding or last arrival; a failed run's, from the failure
   settle: 5m                # a lane waits this long after a merge whose release is unknown
   settleTimeout: 30m        # then refuses its next merge while the release has not rolled
   budgetFresh: 1m           # the last budget reading is used this long, then read afresh
