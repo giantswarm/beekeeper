@@ -177,7 +177,7 @@ func (a *app) promptLeases(p printer, l *leaseList) {
 		if h.State == holderGone {
 			gone = ", its session has ended"
 		}
-		p("- %s held by %q since %s%s: %s", h.Env, h.Name, a.stamp(h.SinceTime()), gone, oneLine(h.Purpose))
+		p("- %s held by %q since %s%s: %s", h.Env, h.Name, a.stamp(h.SinceTime()), gone, oneLine(purposeText(h.Holder)))
 	}
 	if len(l.Free) > 0 {
 		p("- free: %s", strings.Join(l.Free, ", "))
@@ -189,7 +189,7 @@ func (a *app) promptLeases(p printer, l *leaseList) {
 		}
 		names := make([]string, len(q))
 		for i, g := range q {
-			names[i] = fmt.Sprintf("%q (granted %s by %q)", g.To.Name, a.stamp(g.At), g.By.Name)
+			names[i] = fmt.Sprintf("%q (granted %s by %q%s)", g.To.Name, a.stamp(g.At), g.By.Name, unblockText(g))
 		}
 		p("- %s is granted to %s", r, strings.Join(names, ", then "))
 	}

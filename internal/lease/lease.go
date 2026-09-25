@@ -33,6 +33,9 @@ type Holder struct {
 	Name        string `json:"name,omitempty"`
 	Purpose     string `json:"purpose"`
 	Since       string `json:"since"`
+	// UpgradeUnblock is the reason of the upgrade-unblock grant the claim
+	// was admitted by during an upgrade, empty for any other claim.
+	UpgradeUnblock string `json:"upgradeUnblock,omitempty"`
 }
 
 // Party is the holder as the state names it.
@@ -186,11 +189,11 @@ func expired(st *state.State, g state.Grant, held bool, now time.Time, ttl time.
 
 // Check decides whether the caller may claim and, when a grant carries the
 // claim, returns its index in st.Grants (-1 when none is needed). While an
-// upgrade runs on the installation of the resource's name nobody may claim.
+// upgrade runs on the installation of the resource's name only an
+// upgrade-unblock grant admits a claim, in grant order.
 func Check(st *state.State, g Gate) (int, error) {
 	if h, ok := upgrade.Held(st, g.Resource, g.Now); ok {
-		return -1, &Refusal{fmt.Sprintf("%s runs since %s: claim after it ends (beekeeper hold lists it)",
-			h.Reason, h.At.Local().Format(time.TimeOnly))}
+		return checkUnblock(st, g, h)
 	}
 	if g.Supervisor == nil || g.Caller.Is(g.Supervisor.Party) || g.Caller.Session == "" {
 		// No supervisor is recorded, the supervisor itself, or a person.
@@ -218,4 +221,23 @@ func Check(st *state.State, g Gate) (int, error) {
 	}
 	return -1, &Refusal{fmt.Sprintf("supervisor %q runs: a free lease is not a grant; send it `%s needed: <purpose>` and claim after its `yours %s`",
 		g.Supervisor.Name, g.Resource, g.Resource)}
+}
+
+// checkUnblock admits a claim during the upgrade h only by the caller's
+// upgrade-unblock grant, the first such grant of the resource.
+func checkUnblock(st *state.State, g Gate, h state.Hold) (int, error) {
+	pending := slices.DeleteFunc(Pending(st, g.Resource, g.Held, g.Now, g.TTL), func(p state.Grant) bool { return p.UpgradeUnblock == "" })
+	for pos, p := range pending {
+		if !p.To.Is(g.Caller) {
+			continue
+		}
+		if pos > 0 {
+			return -1, &Refusal{fmt.Sprintf("%s runs: its upgrade unblock is granted to %q first; you are number %d", h.Reason, pending[0].To.Name, pos+1)}
+		}
+		return slices.IndexFunc(st.Grants, func(x state.Grant) bool {
+			return x.Resource == p.Resource && x.To.Is(p.To) && x.At.Equal(p.At)
+		}), nil
+	}
+	return -1, &Refusal{fmt.Sprintf("%s runs since %s: claim after it ends (beekeeper hold lists it); only work that unblocks the upgrade is claimed during it, with the supervisor's `lease grant %s <session> --upgrade-unblock <why>`",
+		h.Reason, h.At.Local().Format(time.TimeOnly), g.Resource)}
 }
