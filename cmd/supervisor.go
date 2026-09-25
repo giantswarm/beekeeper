@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -17,8 +18,11 @@ func (a *app) supervisorCmd() *cobra.Command {
 		Long: `The supervisor is the one session that watches the others. While its
 session runs, leases are claimed only on its grant and merges wait for its
 word. When its CLI is gone the rule lifts by itself: nobody is stuck behind
-a supervisor that crashed. The role moves to a successor in two steps that
-leave no gap: the supervisor names it (relay), the successor starts.
+a supervisor that crashed. A CLI restart is not a crash: the rule holds for
+supervisor.restartGrace (1m) after beekeeper first saw the CLI gone, and a
+CLI back under the same session within it keeps the role. The role moves
+to a successor in two steps that leave no gap: the supervisor names it
+(relay), the successor starts.
 
 Without a subcommand, shows the supervisor (exit 3 when none runs, 4 in the
 session a relay relieved).`,
@@ -50,13 +54,15 @@ session a relay relieved).`,
 					return nil, err
 				}
 				lease.Prune(st, heldMap(holders), a.now, a.cfg.GrantTTL.Duration)
-				prevLive := false
-				if st.Supervisor != nil {
-					_, prevLive = claude.Live(sessions, st.Supervisor.Party)
-				}
+				// A supervisor restarting its CLI still holds the role.
+				sv := a.supervision(st, sessions)
 				var evs []state.Event
-				msg, evs, err = startRole(st, me, prevLive, takeOver, a.now)
-				return evs, err
+				msg, evs, err = startRole(st, me, sv.live || sv.restarting(), takeOver, a.now)
+				if err != nil {
+					return nil, err
+				}
+				_, cli := observeCLI(st, sessions, a.now)
+				return append(evs, cli...), nil
 			})
 			if err != nil {
 				return err
@@ -89,7 +95,7 @@ session a relay relieved).`,
 				if st.Relay.Open(a.now) {
 					msg += fmt.Sprintf("; the relay to %q is cancelled", st.Relay.To.Name)
 				}
-				st.Supervisor, st.Relay = nil, nil
+				st.Supervisor, st.Relay, st.SupervisorCLI = nil, nil, nil
 				return []state.Event{event(me, "supervisor.stop", "%s", msg)}, nil
 			})
 			if err != nil {
@@ -136,12 +142,12 @@ one, a session id or a PID.`,
 			if err != nil {
 				return err
 			}
+			sessions, _, err := a.sessions()
+			if err != nil {
+				return err
+			}
 			var to state.Party
 			if !cancel {
-				sessions, _, err := a.sessions()
-				if err != nil {
-					return err
-				}
 				s, err := claude.Resolve(sessions, args[0])
 				if err != nil {
 					return usageErr("%v", err)
@@ -157,7 +163,11 @@ one, a session id or a PID.`,
 				} else {
 					msg, evs, err = relayRole(st, me, to, a.now, a.cfg.Supervisor.RelayTTL.Duration)
 				}
-				return evs, err
+				if err != nil {
+					return nil, err
+				}
+				_, cli := observeCLI(st, sessions, a.now)
+				return append(evs, cli...), nil
 			})
 			if err != nil {
 				return err
@@ -179,34 +189,51 @@ func (a *app) supervisorStatus() error {
 	if err != nil {
 		return err
 	}
-	if st.Supervisor == nil {
-		return refused("no supervisor runs")
+	sv := a.supervision(st, sessions)
+	var v supervisorView
+	if st.Supervisor != nil {
+		v = supervisorView{Supervisor: *st.Supervisor, Live: sv.live, CLIGone: sv.gone, RestartUntil: sv.until, Relay: st.Relay}
 	}
-	_, live := claude.Live(sessions, st.Supervisor.Party)
-	v := supervisorView{Supervisor: *st.Supervisor, Live: live, Relay: st.Relay}
 	if me, err := a.caller(); err == nil {
 		if r := relievedBy(st, me); r != nil {
 			v.Relieved = true
 			if a.json {
 				_ = a.printJSON(v)
 			}
-			return &exitError{code: ExitRelieved, msg: fmt.Sprintf("you have been relieved: %q supervises since %s (relayed at %s)",
-				r.To.Name, clock(a.now, r.Taken), clock(a.now, r.At))}
+			now := ""
+			switch {
+			case st.Supervisor == nil:
+				now = "; no supervisor is recorded now"
+			case !st.Supervisor.Is(r.By):
+				now = fmt.Sprintf("; %q supervises now", st.Supervisor.Name)
+			}
+			return &exitError{code: ExitRelieved, msg: fmt.Sprintf("you have been relieved: %q took the role at %s (relayed at %s)%s",
+				r.By.Name, clock(a.now, r.Taken), clock(a.now, r.At), now)}
 		}
+	}
+	if st.Supervisor == nil {
+		return refused("no supervisor runs")
 	}
 	if a.json {
 		_ = a.printJSON(v)
 	}
-	if !live {
+	if sv.gating() == nil {
 		return refused("no supervisor runs (%q was recorded at %s; its session is gone)", st.Supervisor.Name, clock(a.now, st.Supervisor.Since))
 	}
 	if a.json {
 		return nil
 	}
+	restart := ""
+	if sv.restarting() {
+		restart = fmt.Sprintf("; its CLI is restarting (gone since %s): the grant rule holds until %s", stamp(sv.gone), stamp(sv.until))
+	}
 	relay := ""
 	if st.Relay.Open(a.now) {
 		relay = fmt.Sprintf(", relaying to %q until %s", st.Relay.To.Name, clock(a.now, st.Relay.Expires))
 	}
-	_, err = fmt.Fprintf(a.out, "%q supervises since %s%s\n", st.Supervisor.Name, clock(a.now, st.Supervisor.Since), relay)
+	_, err = fmt.Fprintf(a.out, "%q supervises since %s%s%s\n", st.Supervisor.Name, clock(a.now, st.Supervisor.Since), relay, restart)
 	return err
 }
+
+// stamp renders t as local "15:04:05", for times seconds apart.
+func stamp(t time.Time) string { return t.Local().Format(time.TimeOnly) }

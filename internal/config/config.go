@@ -71,6 +71,10 @@ type Supervisor struct {
 	Shift Duration `yaml:"shift"`
 	// RelayTTL is how long a relay stays open for the successor's start.
 	RelayTTL Duration `yaml:"relayTTL"`
+	// RestartGrace is how long the grant rule holds after beekeeper first
+	// saw the supervisor's CLI gone: a CLI back under the same session
+	// within it is a restart and keeps the role; past it, the rule lifts.
+	RestartGrace Duration `yaml:"restartGrace"`
 }
 
 // Lane is a set of repositories whose merges roll the same components of an
@@ -368,6 +372,7 @@ func (c *Config) defaults() error {
 	setStr(&c.LeaseDir, filepath.Join(c.StateDir, "leases"))
 	setDur(&c.GrantTTL, 30*time.Minute)
 	setDur(&c.Supervisor.RelayTTL, 15*time.Minute)
+	setDur(&c.Supervisor.RestartGrace, time.Minute)
 
 	setDur(&c.Overlaps.ActiveWithin, time.Hour)
 

@@ -71,6 +71,34 @@ func (r *Relay) Open(now time.Time) bool {
 	return r != nil && r.Taken.IsZero() && now.Before(r.Expires)
 }
 
+// Relief records a supervisor a relay relieved, so that its `supervisor
+// status` keeps saying so after the successor relays onward, cancels a relay
+// or is relieved in turn.
+type Relief struct {
+	Party Party `json:"party"`
+	// By is the successor whose start took the relay, At when the relay
+	// was opened and Taken when it was taken.
+	By    Party     `json:"by"`
+	At    time.Time `json:"at"`
+	Taken time.Time `json:"taken"`
+}
+
+// CLI is what beekeeper saw of the supervisor's CLI process in the term
+// Supervisor and Since name: the PID it ran as and since when it has been
+// gone. A CLI back under the same session within supervisor.restartGrace of
+// Gone is a restart, and the grant rule holds throughout.
+type CLI struct {
+	Supervisor Party     `json:"supervisor"`
+	Since      time.Time `json:"since"`
+	PID        int       `json:"pid,omitempty"`
+	Gone       time.Time `json:"gone,omitzero"`
+}
+
+// Of reports whether the record is about sup's current term.
+func (c *CLI) Of(sup *Supervisor) bool {
+	return c != nil && sup != nil && c.Supervisor.Is(sup.Party) && c.Since.Equal(sup.Since)
+}
+
 // Shift is the watch's memory of the running supervisor's shift: when it
 // reported the relay due and whether the machine stayed quiet since.
 type Shift struct {
@@ -184,6 +212,10 @@ type State struct {
 	Supervisor *Supervisor `json:"supervisor,omitempty"`
 	// Relay is the supervisor's last relay: open, taken or expired.
 	Relay *Relay `json:"relay,omitempty"`
+	// Relieved are the supervisors relays relieved, one per party.
+	Relieved []Relief `json:"relieved,omitempty"`
+	// SupervisorCLI is what beekeeper saw of the supervisor's CLI.
+	SupervisorCLI *CLI `json:"supervisorCLI,omitempty"`
 	// Shift is what the watch reported of the supervisor's shift.
 	Shift *Shift `json:"shift,omitempty"`
 	// Grants are queued per resource in the order given.

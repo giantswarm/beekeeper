@@ -7,7 +7,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -27,6 +26,7 @@ contract is fixed: five fields, always present, in this order:
   beekeeper  <supervisor>  <leases>  <holds>  <due>
 
   supervisor  the supervising session's name; - when none is recorded;
+              ~<name> while its CLI restarts (the grant rule holds);
               !<name> when the recorded one's session no longer runs
   leases      the number of leases held
   holds       the number of holds in force
@@ -59,10 +59,13 @@ type statusView struct {
 	// Supervisor is the recorded supervisor's name, empty when none is.
 	Supervisor string `json:"supervisor"`
 	// SupervisorLive is whether its session runs.
-	SupervisorLive bool     `json:"supervisorLive"`
-	Leases         []string `json:"leases"`
-	Holds          []string `json:"holds"`
-	Due            int      `json:"due"`
+	SupervisorLive bool `json:"supervisorLive"`
+	// RestartUntil is set while its CLI restarts: the grant rule holds
+	// until then.
+	RestartUntil time.Time `json:"restartUntil,omitzero"`
+	Leases       []string  `json:"leases"`
+	Holds        []string  `json:"holds"`
+	Due          int       `json:"due"`
 }
 
 func (a *app) status() (*statusView, error) {
@@ -80,8 +83,8 @@ func (a *app) status() (*statusView, error) {
 		if err != nil {
 			return nil, err
 		}
-		v.Supervisor = st.Supervisor.Name
-		_, v.SupervisorLive = claude.Live(sessions, st.Supervisor.Party)
+		sv := a.supervision(st, sessions)
+		v.Supervisor, v.SupervisorLive, v.RestartUntil = st.Supervisor.Name, sv.live, sv.until
 	}
 	for _, h := range holders {
 		v.Leases = append(v.Leases, h.Env)
@@ -116,6 +119,8 @@ func (v *statusView) bar() string {
 	switch {
 	case v.Supervisor != "" && v.SupervisorLive:
 		sup = v.Supervisor
+	case v.Supervisor != "" && !v.RestartUntil.IsZero():
+		sup = "~" + v.Supervisor
 	case v.Supervisor != "":
 		sup = "!" + v.Supervisor
 	}
@@ -132,6 +137,8 @@ func (v *statusView) line() string {
 	switch {
 	case v.Supervisor != "" && v.SupervisorLive:
 		sup = fmt.Sprintf("%q supervises", v.Supervisor)
+	case v.Supervisor != "" && !v.RestartUntil.IsZero():
+		sup = fmt.Sprintf("%q supervises (its CLI is restarting; the grant rule holds until %s)", v.Supervisor, stamp(v.RestartUntil))
 	case v.Supervisor != "":
 		sup = fmt.Sprintf("no supervisor (%q's session is gone)", v.Supervisor)
 	}

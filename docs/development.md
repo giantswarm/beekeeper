@@ -68,7 +68,10 @@ short life. Two such stand-ins play a supervisor hand-over: each runs `superviso
 `CLAUDE_CODE_HOST_SESSION_ID` and `CLAUDE_CODE_SESSION_NAME` in the environment; a short
 `supervisor.shift` and `supervisor.relayTTL` in the scratch configuration and a settling merge
 written into the scratch `state.json` show `RELAY DUE` held back and then said by
-`watch --once`. `handover --prompt` on a copy of the live state (`cp -r` of the state and lease
+`watch --once`. A supervisor stand-in killed by its PID and started again with the same
+`--resume <id>` within `supervisor.restartGrace` is a CLI restart: a claim loop from a third
+identity stays refused throughout and `watch --once` says `SUPERVISOR RESTARTED`; one not started
+again shows the rule lifting once the grace has passed. `handover --prompt` on a copy of the live state (`cp -r` of the state and lease
 directories into the scratch configuration) shows what a successor would get.
 
 A capped run records its events in `$XDG_STATE_HOME/beekeeper/events.jsonl`: the capped-run tests

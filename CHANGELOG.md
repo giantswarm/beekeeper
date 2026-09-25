@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A relieved supervisor's `supervisor status` keeps exiting 4 after its successor relays onward, cancels a relay or is relieved in turn: the relief is recorded per party (`relieved` in the state) instead of read from the latest relay, and ends when that session supervises again or after 7 days. The message names who relieved it and who supervises now.
+- A supervisor CLI restart no longer opens an ungated window for claims: the grant rule holds for `supervisor.restartGrace` (default 1m) after beekeeper first saw the supervisor's CLI gone (`supervisorCLI` in the state, recorded by a claim, the watch and the supervisor commands), and a CLI back under the same session id or desktop record within it keeps the role and an open relay. A refused claim says the supervisor is restarting and until when, `supervisor status` and `status` (`~<name>` in `--bar`) show the restarting state, another session's `supervisor start` stays refused, `SUPERVISOR GONE` waits for the grace, and the restart is logged (`supervisor.restart`) and said by `watch` (`SUPERVISOR RESTARTED`). A CLI that does not come back lifts the rule once the grace has passed, as before.
+
 - A merge that ends with nothing merged (a branch behind, exit 3) keeps its place in its lane: `lanes` shows it `retrying`, and its session's retry runs before every merge that was behind it instead of joining at the end. It holds the lane for `merge.queueTTL` after the failure and keeps its place for `merge.seedTTL`; devctl's refusal (exit 5) leaves the lane.
 - A free lane no longer waits for a seeded place whose merge has not arrived: an arrived merge that was not seeded runs ahead of it, and a seed never holds up an earlier pull request of its own session. Seeds keep their order among themselves, and `merging` names the places a merge passed.
 

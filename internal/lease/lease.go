@@ -139,6 +139,9 @@ type Gate struct {
 	Caller   state.Party
 	// Supervisor is the running supervisor, nil when none runs.
 	Supervisor *state.Supervisor
+	// RestartUntil is set while the supervisor's CLI restarts: its grant
+	// rule holds until then.
+	RestartUntil time.Time
 	// Held is whether the resource is held right now (by anyone).
 	Held bool
 	Now  time.Time
@@ -195,6 +198,10 @@ func Check(st *state.State, g Gate) (int, error) {
 		return slices.IndexFunc(st.Grants, func(x state.Grant) bool {
 			return x.Resource == p.Resource && x.To.Is(p.To) && x.At.Equal(p.At)
 		}), nil
+	}
+	if !g.RestartUntil.IsZero() {
+		return -1, &Refusal{fmt.Sprintf("supervisor %q is restarting its CLI: a free lease is not a grant until %s; send it `%s needed: <purpose>` once it is back, or claim after %s if it does not come back",
+			g.Supervisor.Name, g.RestartUntil.Local().Format(time.TimeOnly), g.Resource, g.RestartUntil.Local().Format(time.TimeOnly))}
 	}
 	return -1, &Refusal{fmt.Sprintf("supervisor %q runs: a free lease is not a grant; send it `%s needed: <purpose>` and claim after its `yours %s`",
 		g.Supervisor.Name, g.Resource, g.Resource)}
