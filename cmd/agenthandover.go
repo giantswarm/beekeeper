@@ -301,7 +301,9 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 		a.say("note: not asked, the CLI of %q does not run", ag.Name)
 	} else {
 		since := time.Now().UTC()
-		res, err := peer.Sender{Dir: a.cfg.StateDir}.Send(ctx, ag.Name, a.noteRequest(h))
+		// Its running CLI answers peer messages under its own name, which an
+		// imported session's desktop derives: not always the roster's.
+		res, err := peer.Sender{Dir: a.cfg.StateDir}.Send(ctx, h.session.Name, a.noteRequest(h))
 		if err != nil {
 			return fmt.Errorf("asking %q for its note: %w (nothing changed)", ag.Name, err)
 		}

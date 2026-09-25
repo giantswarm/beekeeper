@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `agents handover` sends the note request to the name the agent's running CLI answers peer messages under (an imported session's desktop derives one, such as `w-c2`), not the roster name, which no CLI answers to.
 - `guide queue` and `guide watch` leave out the guide's own session, archived sessions and test runs (titled `test: …`), and add the stopped, unarchived sessions waiting on the person, marked `(stopped)`. `sessions` marks archived and test sessions in its role column, `sessions --json` has `archived`.
 
 - `guide queue` and `guide watch` show only the notes for the guide's person, `guide.person` (new; matched without case, an older note marked only by a `[for <person>]` text prefix included, the prefix left out of its line), plus the sessions waiting on the person. A note the feed said before that is open but filed for someone else leaves it without a line. With `guide.person` unset, both show every `--for` note as before and say once that it is unset.
