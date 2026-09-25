@@ -18,6 +18,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/update"
 )
 
@@ -79,6 +80,38 @@ func TestGroupKills(t *testing.T) {
 	got := groupKills(kills)
 	if len(got) != 2 || !strings.HasPrefix(got[0], "46 from memcap: jest×46") {
 		t.Errorf("groupKills = %v", got)
+	}
+}
+
+// A cap kill found after its run ended: the scope's process and session are
+// gone, the run.start event still names them. The journal lines are the
+// machine's own, verbatim.
+func TestOOMOwnerNamesAnEndedRun(t *testing.T) {
+	raw, err := os.ReadFile("testdata/oom-memcap-2516344.journal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kills := machine.ParseOOM(string(raw))
+	if len(kills) != 1 {
+		t.Fatalf("kills %+v", kills)
+	}
+	store, err := state.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gone := &proc.Table{ByPID: map[int]*proc.Process{}}
+	if got := oomOwner(kills[0], nil, nil, gone, &runIndex{store: store}); got != "memcap cap on one command (its session has moved on)" {
+		t.Errorf("without its run: %q", got)
+	}
+	by := state.Party{Session: "0f3c", Name: "bk-run-events"}
+	if err := store.Log(
+		state.Event{By: state.Party{Name: "other"}, Verb: guard.VerbStart, Detail: "memcap-2516344-49287.scope slot 2 max 12G: make lint"},
+		state.Event{By: by, Verb: guard.VerbStart, Detail: "memcap-2516344-492870.scope slot 1 max 12G: uv run pytest -n 8"},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if got := oomOwner(kills[0], nil, nil, gone, &runIndex{store: store}); got != `memcap cap of "bk-run-events"'s `+"`uv run pytest -n 8`" {
+		t.Errorf("with its run: %q", got)
 	}
 }
 

@@ -1,13 +1,14 @@
 // Package state is beekeeper's shared memory on the machine: the supervisor
 // and its relay, grants, holds, registered agents, notes, timers and session records, one
 // JSON document read and rewritten under an exclusive file lock, plus an
-// append-only event log of every change. It outlives any session: a restarted supervisor or its
+// append-only event log of every change and of every build run. It outlives any session: a restarted supervisor or its
 // successor reads what the previous one knew instead of rebuilding it from
 // prose.
 package state
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -370,6 +371,26 @@ func (s *Store) Update(fn func(*State) ([]Event, error)) error {
 	return s.append(events)
 }
 
+// Log appends events that change no state, a build's run for one, under
+// the state lock. It waits at most logWait for the lock, so that a caller on
+// every build's path never queues behind a slow update.
+func (s *Store) Log(events ...Event) error {
+	ctx, cancel := context.WithTimeout(context.Background(), logWait)
+	defer cancel()
+	l := flock.New(s.path("state.lock"))
+	ok, err := l.TryLockContext(ctx, 10*time.Millisecond)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errors.New("the state lock is busy")
+	}
+	defer func() { _ = l.Unlock() }()
+	return s.append(events)
+}
+
+const logWait = time.Second
+
 func (s *Store) load() (*State, error) {
 	st := &State{}
 	raw, err := os.ReadFile(s.path("state.json"))
@@ -403,8 +424,9 @@ func (s *Store) append(events []Event) error {
 	return f.Close()
 }
 
-// Events returns the last n events, oldest first (all when n <= 0).
-func (s *Store) Events(n int) ([]Event, error) {
+// Events returns the last n events keep accepts, oldest first (all when
+// n <= 0, every event when keep is nil).
+func (s *Store) Events(n int, keep func(Event) bool) ([]Event, error) {
 	f, err := os.Open(s.path("events.jsonl"))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -418,7 +440,7 @@ func (s *Store) Events(n int) ([]Event, error) {
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
 	for sc.Scan() {
 		var e Event
-		if json.Unmarshal(sc.Bytes(), &e) == nil {
+		if json.Unmarshal(sc.Bytes(), &e) == nil && (keep == nil || keep(e)) {
 			out = append(out, e)
 		}
 	}

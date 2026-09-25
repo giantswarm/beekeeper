@@ -81,7 +81,7 @@ portal among them: at zero it signs them out.
 					for _, p := range pollers {
 						owner := p.Session
 						if owner == "" {
-							owner = "no session"
+							owner = noSession
 						}
 						_, _ = fmt.Fprintf(w, "  %s\t%s\t%s\n", dur(p.Elapsed), truncate(p.Args, 70), truncate(owner, 40))
 					}

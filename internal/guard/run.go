@@ -19,6 +19,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -40,6 +41,42 @@ const (
 // LogPrefix starts every line Run writes, the cap's victim line included.
 const LogPrefix = "beekeeper run: "
 
+// The event log verbs of a capped run. Their detail is
+// "<scope> <facts>: <command>": the scope's unit name exactly as the kernel
+// prints it in an OOM kill's memcg path, then the slot and the cap (start) or
+// the exit code, the duration and the cap's victims (end), then CommandHead.
+const (
+	VerbStart = "run.start"
+	VerbEnd   = "run.end"
+)
+
+// RunScope is the scope a run event names.
+func RunScope(detail string) string {
+	scope, _, _ := strings.Cut(detail, " ")
+	return scope
+}
+
+// RunCommand is the command a run event names.
+func RunCommand(detail string) string {
+	_, cmd, _ := strings.Cut(detail, ": ")
+	return cmd
+}
+
+// CommandHead is the command a run's events name: a shell's -c script
+// rather than the shell (the hook wraps every build in zsh -c), on one line,
+// at most 100 characters.
+func CommandHead(argv []string) string {
+	cmd := argv
+	if len(argv) >= 3 && argv[1] == "-c" && slices.Contains([]string{"sh", "bash", "zsh"}, filepath.Base(argv[0])) {
+		cmd = argv[2:3]
+	}
+	s := strings.Join(strings.Fields(strings.Join(cmd, " ")), " ")
+	if r := []rune(s); len(r) > 100 {
+		s = string(r[:99]) + "…"
+	}
+	return s
+}
+
 // Options configure one capped run.
 type Options struct {
 	// Max is the scope's MemoryMax, a systemd size ("12G").
@@ -51,6 +88,16 @@ type Options struct {
 	SlotDir string
 	Slots   int
 	Stderr  io.Writer
+	// Record appends a run event (VerbStart, VerbEnd) to the event log; nil
+	// records nothing. It must not fail or block the run: it swallows its
+	// own errors and bounds its wait.
+	Record func(verb, detail string)
+}
+
+func (o Options) record(verb, detail string) {
+	if o.Record != nil {
+		o.Record(verb, detail)
+	}
 }
 
 var sizeRe = regexp.MustCompile(`^(\d+)([KkMmGgTt]?)$`)
@@ -143,13 +190,18 @@ func Run(o Options, argv []string) int {
 	defer func() { _ = os.Remove(holder) }()
 
 	unit := fmt.Sprintf("memcap-%d-%06d", os.Getpid(), time.Now().Nanosecond()%1000000)
+	head := CommandHead(argv)
+	o.record(VerbStart, fmt.Sprintf("%s.scope slot %d max %s: %s", unit, slot, o.Max, head))
 	start := time.Now()
 	rc := scope(unit, o, argv, logf)
+	end := fmt.Sprintf("%s.scope exit %d after %s", unit, rc, time.Since(start).Round(time.Second))
 	if rc != 0 {
 		if v := victims(unit, start, rc); len(v) > 0 {
 			logf("the %s cap killed: %s (exit %d) — bound the parallelism, do not raise --max", o.Max, strings.Join(v, "; "), rc)
+			end += fmt.Sprintf(", the %s cap killed %s", o.Max, strings.Join(v, "; "))
 		}
 	}
+	o.record(VerbEnd, end+": "+head)
 	return rc
 }
 

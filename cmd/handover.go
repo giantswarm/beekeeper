@@ -37,7 +37,7 @@ memory figure or pull request state.`,
 			if err != nil {
 				return err
 			}
-			evs, err := a.store.Events(events)
+			evs, err := a.store.Events(events, func(e state.Event) bool { return !isRun(e) })
 			if err != nil {
 				return err
 			}
@@ -109,14 +109,19 @@ memory figure or pull request state.`,
 	return c
 }
 
+// isRun is a build's run.start or run.end: machine traffic, which a
+// successor's handover leaves out.
+func isRun(e state.Event) bool { return strings.HasPrefix(e.Verb, "run.") }
+
 func (a *app) logCmd() *cobra.Command {
 	var n int
+	var verb string
 	c := &cobra.Command{
 		Use:   "log",
-		Short: "The event log: every claim, grant, hold, registration and note",
+		Short: "The event log: every claim, grant, hold, registration, note and build run",
 		Args:  cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
-			evs, err := a.store.Events(n)
+			evs, err := a.store.Events(n, func(e state.Event) bool { return strings.HasPrefix(e.Verb, verb) })
 			if err != nil {
 				return err
 			}
@@ -131,5 +136,6 @@ func (a *app) logCmd() *cobra.Command {
 		},
 	}
 	c.Flags().IntVarP(&n, "lines", "n", 50, "how many of the latest events (0: all)")
+	c.Flags().StringVar(&verb, "verb", "", "only the events whose verb starts with this (run.: the build runs)")
 	return c
 }

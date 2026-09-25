@@ -1,16 +1,21 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gofrs/flock"
 
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 // The test binary doubles as beekeeper (BEEKEEPER_TEST_MAIN=1), so the hook's
@@ -56,7 +61,8 @@ func capped(t *testing.T) (state string, env []string) {
 	}
 	state = t.TempDir()
 	return state, append(os.Environ(), "BEEKEEPER_TEST_MAIN=1", "BEEKEEPER_CONFIG="+filepath.Join(state, "none.yaml"),
-		"MEMCAP_STATE="+state, "MEMCAP_MAX=64M", "MEMCAP_WAIT=30s")
+		"XDG_STATE_HOME="+state, "MEMCAP_STATE="+state, "MEMCAP_MAX=64M", "MEMCAP_WAIT=30s",
+		"CLAUDE_CODE_SESSION_ID=test-session", "CLAUDE_CODE_HOST_SESSION_ID=", "CLAUDE_CODE_SESSION_NAME=capped test")
 }
 
 // zsh runs the command the way the Bash tool does, in a scope of its own:
@@ -140,11 +146,74 @@ func TestRunExits75WhenEverySlotIsHeld(t *testing.T) {
 	}
 }
 
+// The kill is found again after the run has ended, as snapshot and watch
+// find it: by the scope's run.start event, not by a live process.
 func TestRunNamesTheCapsVictim(t *testing.T) {
-	_, env := capped(t)
+	dir, env := capped(t)
 	self, _ := os.Executable()
+	start := time.Now()
 	_, errOut, rc := zsh(t, env, self+" run -- "+self+" __alloc")
 	if rc != 137 || !strings.Contains(errOut, guard.LogPrefix+"the 64M cap killed: ") || !strings.Contains(errOut, "(exit 137) — bound the parallelism") {
 		t.Errorf("rc %d, stderr %q", rc, errOut)
 	}
+	evs := runEvents(t, dir)
+	if len(evs) != 2 || evs[0].Verb != guard.VerbStart || evs[1].Verb != guard.VerbEnd ||
+		!strings.Contains(evs[1].Detail, "exit 137") || !strings.Contains(evs[1].Detail, "the 64M cap killed") {
+		t.Fatalf("events %+v", evs)
+	}
+	kills, err := machine.OOMKills(context.Background(), start.Add(-time.Second))
+	if err != nil {
+		t.Skipf("no kernel journal: %v", err)
+	}
+	store, _ := stateStore(dir)
+	runs := &runIndex{store: store}
+	for _, k := range kills {
+		if strings.HasSuffix(k.Memcg, "/"+guard.RunScope(evs[0].Detail)) {
+			if got := oomOwner(k, nil, nil, &proc.Table{ByPID: map[int]*proc.Process{}}, runs); got != `memcap cap of "capped test"'s `+"`"+self+" __alloc`" {
+				t.Errorf("owner %q", got)
+			}
+			return
+		}
+	}
+	t.Errorf("no kill in %s among %+v", guard.RunScope(evs[0].Detail), kills)
+}
+
+func TestRunRecordsItsStartAndEnd(t *testing.T) {
+	dir, env := capped(t)
+	if _, errOut, rc := zsh(t, env, rewrite(t, `echo  built;  if false; then go test ./...; fi`)); rc != 0 {
+		t.Fatalf("rc %d, stderr %q", rc, errOut)
+	}
+	evs := runEvents(t, dir)
+	if len(evs) != 2 {
+		t.Fatalf("events %+v", evs)
+	}
+	scope := guard.RunScope(evs[0].Detail)
+	for i, verb := range []string{guard.VerbStart, guard.VerbEnd} {
+		e := evs[i]
+		if e.Verb != verb || e.By.Session != "test-session" || e.By.Name != "capped test" || guard.RunScope(e.Detail) != scope ||
+			!strings.HasPrefix(scope, "memcap-") || !strings.HasSuffix(scope, ".scope") ||
+			guard.RunCommand(e.Detail) != "echo built; if false; then go test ./...; fi" {
+			t.Errorf("event %d: %+v", i, e)
+		}
+	}
+	if !strings.Contains(evs[1].Detail, " exit 0 after ") {
+		t.Errorf("end %q", evs[1].Detail)
+	}
+}
+
+func stateStore(dir string) (*state.Store, error) {
+	return state.Open(filepath.Join(dir, "beekeeper"))
+}
+
+func runEvents(t *testing.T, dir string) []state.Event {
+	t.Helper()
+	s, err := stateStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs, err := s.Events(0, isRun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return evs
 }

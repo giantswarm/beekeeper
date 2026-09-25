@@ -16,6 +16,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 func (a *app) runCmd() *cobra.Command {
@@ -40,6 +41,12 @@ The slots are memcap's flock files, shared with the memcap wrapper. The
 command's arguments reach it verbatim: systemd-run's own ${VAR} expansion is
 off. Without a user systemd (containers, CI) the command runs uncapped.
 
+Every capped run leaves a run.start and a run.end event in beekeeper log,
+naming the scope, the session and the command, so that a cap kill found
+later (snapshot, watch) names them after the run has ended. Logging never
+fails or delays the run: an event the log cannot take within a second is
+dropped.
+
 Environment: MEMCAP_MAX (12G), MEMCAP_SWAP (0), MEMCAP_WAIT (8m),
 MEMCAP_SLOTS and MEMCAP_STATE (the directory holding slots/) override the
 configuration; the flags override the environment.`,
@@ -49,7 +56,7 @@ configuration; the flags override the environment.`,
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			o := guard.Options{Max: env("MEMCAP_MAX", "12G"), Swap: env("MEMCAP_SWAP", "0"),
-				SlotDir: a.cfg.Memcap.SlotDir, Slots: a.cfg.Memcap.Slots, Stderr: os.Stderr}
+				SlotDir: a.cfg.Memcap.SlotDir, Slots: a.cfg.Memcap.Slots, Stderr: os.Stderr, Record: a.runRecorder()}
 			if s := os.Getenv("MEMCAP_STATE"); s != "" {
 				o.SlotDir = filepath.Join(s, "slots")
 			}
@@ -91,6 +98,25 @@ configuration; the flags override the environment.`,
 	c.Flags().StringVar(&swapFlag, "swap", "", "the command's swap cap (default $MEMCAP_SWAP or 0)")
 	c.Flags().StringVar(&waitFlag, "wait", "", "how long to wait for a slot and memory (default $MEMCAP_WAIT or 8m)")
 	return c
+}
+
+// noSession names a process no Claude Code session started.
+const noSession = "no session"
+
+// runRecorder appends a run's events to the event log as the calling
+// session, or nil when the log cannot be opened: a build runs regardless.
+func (a *app) runRecorder() func(verb, detail string) {
+	st, err := state.Open(a.cfg.StateDir)
+	if err != nil {
+		return nil
+	}
+	by, err := a.caller()
+	if err != nil {
+		by = state.Party{Name: noSession}
+	}
+	return func(verb, detail string) {
+		_ = st.Log(state.Event{At: time.Now(), By: by, Verb: verb, Detail: detail})
+	}
 }
 
 func (a *app) hookCmd() *cobra.Command {
