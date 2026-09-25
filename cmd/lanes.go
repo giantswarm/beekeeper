@@ -26,6 +26,7 @@ type laneView struct {
 }
 
 func (a *app) lanesCmd() *cobra.Command {
+	var full bool
 	c := &cobra.Command{
 		Use:   "lanes",
 		Short: "The merge lanes: the running merge, the settling one and who is next",
@@ -54,7 +55,9 @@ left it. lanes names the waiting merge and those places, and watch says it
 as LANE STALLED; lanes drop takes out a place that will not arrive.
 
 Without a subcommand, lists every configured lane and every other lane with
-a merge in it: running, settling, and the waiting merges in turn order.`,
+a merge in it: running, settling, and the waiting merges in turn order. A
+caller that has read the lanes before gets only the lines that changed
+since, or one "no change" line; --full prints everything.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			st, err := a.store.Read()
@@ -65,10 +68,11 @@ a merge in it: running, settling, and the waiting merges in turn order.`,
 			if a.json {
 				return a.printJSON(views)
 			}
-			a.printLanes(views)
-			return nil
+			return a.delta("lanes", full, textFacts("lane", a.capture(func() { a.printLanes(views) })),
+				func() { a.printLanes(views) })
 		},
 	}
+	fullFlag(c, &full)
 	var forName string
 	queue := &cobra.Command{
 		Use:   "queue <owner/repo> <n> --for <session>",

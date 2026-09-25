@@ -1,0 +1,74 @@
+04:00:33 ALERT RESOLVED alpha - team InhibitionKubeletDown kube-system/node-1 since 00:55Z
+04:00:33 ALERT RESOLVED alpha - team InhibitionKubeletDown kube-system/node-2 since 00:53Z
+04:00:33 ALERT RESOLVED alpha - team InhibitionNodeNotReady kube-system since 00:54Z
+04:00:33 ALERT RESOLVED alpha - team InhibitionNodeNotReady kube-system since 00:53Z
+04:00:33 ALERT NEW beta notify team NodeHasConstantOOMKills ns/pod-a since 00:58Z
+04:00:33 ALERT NEW delta warning - KubeJobFailed ns/job-29838285 since 01:00Z
+04:00:33 ALERT RESOLVED delta warning - KubeJobFailed ns/job-29838225 since 00:00Z
+04:01:01 SESSIONS ended (CLI gone: paused, closed or crashed): "test: stand-in 0"
+04:02:01 KERNEL OOM: 1 from memcap cap on one command (its session has moved on): cmd.test×1 (first 04:01)
+04:02:31 KERNEL OOM: 1 from memcap cap on one command (its session has moved on): cmd.test×1 (first 04:02)
+04:04:01 KERNEL OOM: 1 from memcap cap on one command (its session has moved on): cmd.test×1 (first 04:03)
+04:05:32 ALERT NEW alpha notify team AppWithoutTeamAnnotation org-x/exporter@wc1 since 01:02Z [during merged example/app#678 by "Agent one" at 01:04Z]
+04:05:32 ALERT RESOLVED delta warning - HelmReleaseNotReady agent-platform/substrate since 09-24 23:07Z
+04:10:01 SESSIONS started: "pid 3133026"
+04:11:01 SESSIONS started: "pid 3133087"
+04:11:01 SESSIONS ended (CLI gone: paused, closed or crashed): "pid 3133026"
+04:11:31 SESSIONS ended (CLI gone: paused, closed or crashed): "pid 3133087"
+04:15:50 SESSIONS started: "test: stand-in 6"
+04:16:20 SESSIONS restarted (a new CLI: its context may be fresh, send it its state): "test: stand-in 6"
+04:16:50 SESSIONS ended (CLI gone: paused, closed or crashed): "test: stand-in 6"
+04:16:51 ALERT RESOLVED alpha notify team AppWithoutTeamAnnotation org-x/exporter@wc1 since 01:02Z
+04:16:51 ALERT NEW delta warning - KubeJobFailed ns/job-29838300 since 01:15Z
+04:16:51 ALERT RESOLVED delta warning - KubeJobFailed ns/job-29838240 since 00:15Z
+04:17:20 SESSIONS started: "test: stand-in 6", "test: stand-in 8"
+04:19:50 KERNEL OOM: 1 from memcap cap on one command (its session has moved on): cmd.test×1 (first 04:19)
+04:19:50 SESSIONS ended (CLI gone: paused, closed or crashed): "test: stand-in 6"
+04:20:20 SESSIONS ended (CLI gone: paused, closed or crashed): "test: stand-in 8"
+04:20:50 KERNEL OOM: 1 from memcap cap on one command (its session has moved on): cmd.test×1 (first 04:20)
+04:26:50 KERNEL OOM: 1 from memcap cap on one command (its session has moved on): cmd.test×1 (first 04:26)
+04:26:52 ALERT NEW delta warning - etcdDatabaseHighFragmentationRatio kube-system/kube-etcd since 01:26Z
+04:31:52 ALERT NEW delta warning - KubeJobFailed ns/job-29838315 since 01:30Z
+04:31:52 ALERT NEW delta warning - etcdDatabaseHighFragmentationRatio kube-system/kube-etcd since 01:27Z
+04:31:52 ALERT RESOLVED delta warning - KubeJobFailed ns/job-29838255 since 00:30Z
+04:36:50 SESSIONS started: "test: x#12 delegation 1"
+04:38:20 SESSIONS ended (CLI gone: paused, closed or crashed): "test: x#12 delegation 1"
+04:39:20 SESSIONS started: "test: x#12 delegation 2a"
+04:39:50 SESSIONS ended (CLI gone: paused, closed or crashed): "test: x#12 delegation 2a"
+04:40:20 KERNEL OOM: 1 from memcap cap on one command (its session has moved on): cmd.test×1 (first 04:40)
+04:40:50 KERNEL OOM: 1 from memcap cap on one command (its session has moved on): cmd.test×1 (first 04:40)
+04:41:56 ALERT NEW beta notify team ManagementClusterContainerIsRestartingTooFrequently ns/pod-a since 01:41Z
+04:46:56 ALERT NEW alpha - team InhibitionKubeletDown kube-system/node-3@wc1 since 01:46Z [during merged example/app#679 by "Agent one" at 01:45Z]
+04:46:56 ALERT NEW alpha - team InhibitionNodeNotReady kube-system@wc1 since 01:46Z [during merged example/app#679 by "Agent one" at 01:45Z]
+04:46:56 ALERT NEW alpha - team InhibitionNodeNotReady kube-system@wc1 since 01:45Z [during merged example/app#679 by "Agent one" at 01:45Z]
+04:46:56 ALERT NEW alpha - team InhibitionNodeUnschedulable kube-system@wc1 since 01:45Z [during merged example/app#679 by "Agent one" at 01:45Z]
+04:46:56 ALERT NEW gamma PAGE team EnvoyProxyDeploymentNotSatisfied ns/envoy-a since 01:44Z
+04:46:56 ALERT NEW delta warning - KubeJobFailed ns/job-29838330 since 01:45Z
+04:46:56 ALERT RESOLVED delta warning - KubeJobFailed ns/job-29838270 since 00:45Z
+04:48:24 SESSIONS started: "test: x#12 delegation 3"
+04:48:31 ALERT NEW alpha - team InhibitionKubeletDown kube-system/node-4@wc1 since 01:47Z [during merged example/app#679 by "Agent one" at 01:45Z]
+04:48:31 ALERT NEW alpha - team InhibitionKubeletDown kube-system/node-5@wc1 since 01:47Z [during merged example/app#679 by "Agent one" at 01:45Z]
+04:48:31 ALERT NEW alpha - team InhibitionNodeNotReady kube-system@wc1 since 01:47Z [during merged example/app#679 by "Agent one" at 01:45Z]
+04:48:31 ALERT RESOLVED alpha - team InhibitionNodeNotReady kube-system@wc1 since 01:45Z
+04:48:31 ALERT RESOLVED alpha - team InhibitionNodeNotReady kube-system@wc1 since 01:46Z
+04:48:31 ALERT RESOLVED alpha - team InhibitionNodeUnschedulable kube-system@wc1 since 01:45Z
+04:48:31 ALERT RESOLVED beta notify team ManagementClusterContainerIsRestartingTooFrequently ns/pod-a since 01:41Z
+04:48:59 SESSIONS ended (CLI gone: paused, closed or crashed): "test: x#12 delegation 3"
+04:49:59 SESSIONS started: "test: x#12 delegation 4"
+04:51:29 KERNEL OOM: 1 from memcap cap on one command (its session has moved on): cmd.test×1 (first 04:51)
+04:53:29 SESSIONS started: "test: x#30/#31 successor", "test: x#30/#31 supervisor"
+04:53:30 ALERT RESOLVED alpha - team InhibitionKubeletDown kube-system/node-4@wc1 since 01:47Z
+04:53:30 ALERT RESOLVED alpha - team InhibitionKubeletDown kube-system/node-3@wc1 since 01:46Z
+04:53:30 ALERT RESOLVED alpha - team InhibitionKubeletDown kube-system/node-5@wc1 since 01:47Z
+04:53:30 ALERT RESOLVED alpha - team InhibitionNodeNotReady kube-system@wc1 since 01:47Z
+04:53:30 ALERT RESOLVED gamma PAGE team EnvoyProxyDeploymentNotSatisfied ns/envoy-a since 01:44Z
+04:53:30 ALERT RESOLVED delta warning - etcdDatabaseHighFragmentationRatio kube-system/kube-etcd since 01:26Z
+04:53:30 ALERT RESOLVED delta warning - etcdDatabaseHighFragmentationRatio kube-system/kube-etcd since 01:27Z
+04:53:59 SESSIONS ended (CLI gone: paused, closed or crashed): "test: x#30/#31 successor", "test: x#30/#31 supervisor"
+04:55:29 SESSIONS ended (CLI gone: paused, closed or crashed): "test: x#12 delegation 4"
+04:55:59 SESSIONS started: "test: x#12 delegation 4"
+04:58:30 ALERT NEW alpha notify team KarpenterServiceDegraded ns/pod-b since 01:58Z [during merged example/app#679 by "Agent one" at 01:45Z]
+04:58:30 ALERT NEW delta warning - HelmReleaseNotReady agent-platform/substrate since 01:56Z
+04:58:59 SESSIONS ended (CLI gone: paused, closed or crashed): "test: x#12 delegation 4"
+04:59:29 SESSIONS started: "test: x#12 delegation 5a"
+04:59:59 SESSIONS ended (CLI gone: paused, closed or crashed): "test: x#12 delegation 5a"

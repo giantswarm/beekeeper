@@ -216,7 +216,10 @@ type Overlaps struct {
 
 // Watch holds the thresholds of `beekeeper watch` (MiB unless noted).
 type Watch struct {
-	Interval        Duration `yaml:"interval"`
+	Interval Duration `yaml:"interval"`
+	// Repeat paces how often a lasting condition is handed to the
+	// notifier (which sends it again after notify.repeat); the watch
+	// prints it once when it starts and once when it ends.
 	Repeat          Duration `yaml:"repeat"`
 	BudgetEvery     Duration `yaml:"budgetEvery"`
 	AvailMinMiB     int      `yaml:"availMinMiB"`
