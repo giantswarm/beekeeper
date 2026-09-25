@@ -56,6 +56,19 @@ type Config struct {
 	// Guide is the role that walks the person through the decisions
 	// waiting on them, never in the supervisor's session.
 	Guide Guide `yaml:"guide"`
+	// Agents configures how a registered agent near its context limit is
+	// handed over to a fresh session.
+	Agents Agents `yaml:"agents"`
+}
+
+// Agents configures the hand-over of registered agents.
+type Agents struct {
+	// RelayAt is an agent's session context, in tokens, at which the watch
+	// says its hand-over due (default: supervisor.relayAt).
+	RelayAt Tokens `yaml:"relayAt"`
+	// NoteWait bounds how long `agents handover` waits for the agent's
+	// note on what is in flight (3m).
+	NoteWait Duration `yaml:"noteWait"`
 }
 
 // Guide configures the guide: its role and the person it guides.
@@ -446,6 +459,10 @@ func (c *Config) defaults() error {
 	setDur(&c.Supervisor.KeepAwake, 25*time.Minute)
 	c.Supervisor.defaults(home)
 	c.Guide.defaults(home)
+	if c.Agents.RelayAt == 0 {
+		c.Agents.RelayAt = c.Supervisor.RelayAt
+	}
+	setDur(&c.Agents.NoteWait, 3*time.Minute)
 	if c.Guide.Skill == "" && c.Guide.Instructions == "" {
 		c.Guide.Skill = "guide"
 	}

@@ -55,6 +55,8 @@ the budget work on any system.
 | `beekeeper guide watch [--once]` | The guide's feed, silent otherwise: `GUIDE DECISION` for each new open note of the queue (only `guide.person`'s; with it unset, every `--for` note and one `GUIDE:` line that says so), `GUIDE WAITING` for each session of the queue newly waiting on its person, `GUIDE ANSWERED` or `GUIDE CLOSED` for a note of the queue closed, and the guide's relay: `GUIDE RELAY DUE` once its context reaches `guide.relayAt` (400k), `GUIDE RELAY TAKEN`, `GUIDE RELAY EXPIRED`, `GUIDE RESTARTED`. Each is one line, once: what it said is kept in the state (`guide.fed`). |
 | `beekeeper agents register\|assign\|idle` | The roster of empty sessions registered as spare capacity. `register` names the session by its title (a `claude --bg` worker by its `-n` name) unless `--name` overrides it. A name is one agent's: registering under the name of a session that no longer runs (what `agents` shows as `not running`: stopped, closed or asleep) replaces its entry, saying so; a task the replaced entry left unfinished becomes the new entry's, with its assignment time, named in the `agents.register` event (`replaces <id>, takes over "<task>"`) and in the output, so the fresh session works it and a later `assign` to the name is refused as busy until `idle`. Re-registering keeps the session's own open task; two dropped entries with open tasks are refused (exit 3). A name a running session's entry holds is refused (exit 3). `assign` and `remove` take a session id, a name or a unique part of one, and refuse a name several entries share. |
 | `beekeeper agents start <name> <brief file> [--model m] [--dir d]` | Starts an agent session without a click: `claude -p` in `bypassPermissions` under a session id beekeeper chooses, the brief as its first prompt, in a transient user unit `beekeeper-agent-<id>` (`KillMode=process`, the user manager's environment). Before the session exists it records the id and mode as one of beekeeper's starts (the state's `starts`, kept 30 days) and registers it on the roster under the name, busy with the brief's first line or with the open task of a stopped entry under that name. Once the transcript is on disk it imports the session into Claude Desktop (`claude://resume?session=<id>`, sidebar row `local_<id>`). See [Agents started without a click](#agents-started-without-a-click). |
+| `beekeeper agents handover <agent> [--prompt] [--model m] [--dir d]` | Hands a registered agent over to a fresh session near its context limit, one line per step: asks it by peer message for `beekeeper agents note "<what is in flight, what is next>"` (waiting `agents.noteWait` at most), builds the follow-up's prompt, starts the follow-up as `agents start` does under the agent's name (it takes over the roster entry, the task and the session record), stops the old session's CLI and the processes under it by PID, and logs `agents.handover`. `--prompt` prints the prompt only. `watch` says `HANDOVER DUE` once per agent session at `agents.relayAt`. See [Agents handed over near their context limit](#agents-handed-over-near-their-context-limit). |
+| `beekeeper agents note <text>` | The calling agent's hand-over note, logged as an `agents.note` event; the next `agents handover` puts the latest one into the follow-up's prompt. |
 | `beekeeper note add\|answer\|done` | Open items that outlive a session: a decision waiting on a person with its deadline and what happens if nobody answers (`note add --for Timo --due 22:55 --default "the alert stays as is" <text>`), a deadline. `watch` reports a note once when it is due. `note answer <id> <answer>` records the person's answer word for word and closes the note; the `note.answered` event carries it for the owning session, the supervisor and the guide's feed. |
 | `beekeeper timer add\|done\|list` | Times to look at something: `timer add 22:55 "check the rollout"` (or a duration, `45m`). `watch` prints one line when a timer is due; it stays open until `timer done`. |
 | `beekeeper sessions serve\|unserve` | A record for any session, registered agent or not: `sessions serve <session> <owner/repo#n> [--waits "<what>"]`, the issue or epic it serves and what it waits on. `sessions` and `handover` show it; `watch` prints one line when the session ends, naming the issue to re-query. |
@@ -346,6 +348,39 @@ Install it in `~/.claude/settings.json`, next to the PreToolUse hook:
   "command": "~/.go/bin/beekeeper hook permissionrequest", "timeout": 10}]}]
 ```
 
+### Agents handed over near their context limit
+
+Every registered agent's context (the CTX column) is watched, not only the supervisor's and the
+guide's. Once an agent session's context reaches `agents.relayAt` (default `supervisor.relayAt`),
+`watch` says `HANDOVER DUE "<agent>" at <n>k: beekeeper agents handover "<agent>"` at the
+agent's first quiet moment: no tool command of its own running and no gated merge of its own in
+flight. It says it once per agent session, across the watch's restarts. An agent holding the
+supervisor's or the guide's role moves by relay instead.
+
+The supervisor then runs `beekeeper agents handover "<agent>"`. It refuses (exit 3, before it
+asks for anything) unless a PermissionRequest hook for every tool runs `beekeeper hook
+permissionrequest` where the follow-up starts: in the user settings or in the `.claude/settings.json`
+or `settings.local.json` of its folder or of the checkout that folder is in. Without it the
+follow-up would stop at its first card after the old session was stopped. Otherwise it prints one
+line per step:
+
+1. **The note.** A peer message asks the agent to record what is in flight and what is next with
+   `beekeeper agents note "<...>"` and end its turn; the hand-over waits `agents.noteWait` (3m)
+   for it and carries on without it after that. A failed send changes nothing.
+2. **The prompt.** `beekeeper agents handover --prompt "<agent>"` prints it: the roster task, the
+   brief the agent was started with (a follow-up's brief is its predecessor's, not the prompt
+   around it), its `sessions serve` record, its gated merges, its last events and its note. No
+   standing rules and no live values: the follow-up is told to check the live state first.
+3. **The start.** The follow-up is started as `agents start` starts one, in the old session's
+   folder and model, under the agent's name: it takes over the roster entry, the task and the
+   session record. It shows in the sidebar and runs its first turn from the prompt alone.
+4. **The end.** Once the follow-up's transcript is on disk, the old session's CLI and every
+   process under it get SIGTERM, then SIGKILL after 10 s, by PID: the desktop shows it stopped.
+5. **The log.** One `agents.handover` event in `beekeeper log`.
+
+A configuration named with `--config` or `$BEEKEEPER_CONFIG` is passed to the started session
+as `$BEEKEEPER_CONFIG` and named in the note's command, so both write to the same state.
+
 ## Session metrics
 
 How each session has been doing, read from what beekeeper already reads, never from GitHub:
@@ -434,6 +469,9 @@ guide:                      # the guide's role: what guide handover --prompt tel
   relayAt: 400k             # guide watch says GUIDE RELAY DUE once the guide's context reaches this
   relayTTL: 15m
   restartGrace: 1m
+agents:                     # the hand-over of registered agents
+  relayAt: 400k             # watch says HANDOVER DUE once an agent's context reaches this; default: supervisor.relayAt
+  noteWait: 3m              # agents handover waits this long for the agent's note
 metrics:
   models:                   # USD per million tokens and the context window; an entry replaces the default of its id
     claude-opus-5-5: {input: 4, output: 20, cacheWrite5m: 5, cacheWrite1h: 8, cacheRead: 0.2, contextWindow: 1000000}
