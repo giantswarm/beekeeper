@@ -47,8 +47,8 @@ func standbyAfterBoot(t *testing.T, appStart time.Time) (*watcher, *[]string, *b
 		checked: map[string]bool{},
 	}
 	w.table = &proc.Table{ByPID: map[int]*proc.Process{
-		7: {PID: 7, Args: []string{"/usr/lib/claude-desktop/claude-desktop", "--ozone-platform=wayland"}, Start: appStart},
-		8: {PID: 8, Args: []string{"/usr/lib/claude-desktop/claude-desktop", "--type=renderer"}, Start: appStart},
+		7: {PID: 7, Args: []string{"/opt/Claude/" + desktopApp, "--ozone-platform=wayland"}, Start: appStart},
+		8: {PID: 8, Args: []string{"/opt/Claude/" + desktopApp, "--type=renderer"}, Start: appStart},
 	}}
 	st := &state.State{Supervisor: &state.Supervisor{Party: four, Since: relayNow.Add(-time.Hour)},
 		SupervisorCLI: &state.CLI{Supervisor: four, Since: relayNow.Add(-time.Hour), PID: 4242}}
@@ -100,9 +100,9 @@ func TestWatchSettlesALostMerge(t *testing.T) {
 	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges = []state.Merge{
 			// Its gate died with the machine.
-			{Repo: "o/lost", PR: 1, Lane: "portal", By: four, PID: 0, Phase: state.Running, Started: relayNow.Add(-2 * time.Hour)},
+			{Repo: "o/lost", PR: 1, Lane: "scratch", By: four, PID: 0, Phase: state.Running, Started: relayNow.Add(-2 * time.Hour)},
 			{Repo: "o/live", PR: 2, Lane: "other", By: four, PID: os.Getpid(), Phase: state.Running, Started: relayNow},
-			{Repo: "o/next", PR: 3, Lane: "portal", By: four, Phase: state.Waiting, Joined: relayNow, Seen: relayNow},
+			{Repo: "o/next", PR: 3, Lane: "scratch", By: four, Phase: state.Waiting, Joined: relayNow, Seen: relayNow},
 		}
 		return nil, nil
 	})
@@ -111,7 +111,7 @@ func TestWatchSettlesALostMerge(t *testing.T) {
 	}
 	w.lostMerges()
 	w.lostMerges()
-	if n := strings.Count(out.String(), "MERGE LOST: o/lost#1 in lane portal"); n != 1 {
+	if n := strings.Count(out.String(), "MERGE LOST: o/lost#1 in lane scratch"); n != 1 {
 		t.Fatalf("MERGE LOST said %d times:\n%s", n, out)
 	}
 	st, err := w.store.Read()
