@@ -117,7 +117,7 @@ status after a relay), 125 a newer release (self-update --check).`,
 	root.AddGroup(
 		&cobra.Group{ID: "watching", Title: "Watching:"},
 		&cobra.Group{ID: "sharing", Title: "Sharing:"},
-		&cobra.Group{ID: "supervising", Title: "Supervising:"},
+		&cobra.Group{ID: supervisorRole.ing, Title: "Supervising:"},
 		&cobra.Group{ID: "guarding", Title: "Guarding:"},
 	)
 	for _, c := range []*cobra.Command{a.statusCmd(), a.sessionsCmd(), a.tailCmd(), a.snapshotCmd(), a.watchCmd(), a.alertsCmd(), a.budgetCmd()} {
@@ -128,7 +128,7 @@ status after a relay), 125 a newer release (self-update --check).`,
 		c.GroupID = "sharing"
 		root.AddCommand(c)
 	}
-	for _, c := range []*cobra.Command{a.supervisorCmd(), a.agentsCmd(), a.noteCmd(), a.timerCmd(), a.handoverCmd(), a.logCmd()} {
+	for _, c := range []*cobra.Command{a.supervisorCmd(), a.guideCmd(), a.agentsCmd(), a.noteCmd(), a.timerCmd(), a.handoverCmd(), a.logCmd()} {
 		c.GroupID = "supervising"
 		root.AddCommand(c)
 	}

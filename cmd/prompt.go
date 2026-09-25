@@ -59,24 +59,30 @@ func (a *app) printPrompt(ctx context.Context, v *view, l *leaseList, al *alerts
 	return ctx.Err()
 }
 
-// instructions opens the prompt: the configured skill or file.
+// instructions opens the supervisor's prompt: the configured skill or file.
 func (a *app) instructions(st *state.State) (string, error) {
-	sup := a.cfg.Supervisor
+	return a.roleInstructions(supervisorRole, st.SupervisorRole())
+}
+
+// roleInstructions opens rl's successor prompt: the configured skill or
+// file.
+func (a *app) roleInstructions(rl role, r state.Role) (string, error) {
+	cfg := rl.cfg(a.cfg)
 	from := ""
-	if st.Supervisor != nil {
-		from = fmt.Sprintf(" from %q", st.Supervisor.Name)
+	if r.Holder != nil {
+		from = fmt.Sprintf(" from %q", r.Holder.Name)
 	}
 	switch {
-	case sup.Instructions != "":
-		raw, err := os.ReadFile(sup.Instructions)
+	case cfg.Instructions != "":
+		raw, err := os.ReadFile(cfg.Instructions)
 		if err != nil {
-			return "", fmt.Errorf("supervisor.instructions: %w", err)
+			return "", fmt.Errorf("%s.instructions: %w", rl.name, err)
 		}
 		return strings.TrimSpace(string(raw)), nil
-	case sup.Skill != "":
-		return fmt.Sprintf("Run /%s: you take over the supervisor's watch%s.", sup.Skill, from), nil
+	case cfg.Skill != "":
+		return fmt.Sprintf("Run /%s: you take over %s%s.", cfg.Skill, rl.duty, from), nil
 	}
-	return fmt.Sprintf("You take over the supervisor's watch%s. (No instructions are configured: set supervisor.skill or supervisor.instructions.)", from), nil
+	return fmt.Sprintf("You take over %s%s. (No instructions are configured: set %s.skill or %s.instructions.)", rl.duty, from, rl.name, rl.name), nil
 }
 
 // scope is the configured scope, or what the configuration watches.

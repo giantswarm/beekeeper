@@ -40,6 +40,16 @@ type Session struct {
 	MemMiB     int       `json:"memMiB"`
 	Permission string    `json:"permissionMode,omitempty"`
 	Model      string    `json:"model,omitempty"`
+	// Waiting is what the session waits on its person for, as the desktop
+	// recorded it after its last turn; "" when it waits on nobody.
+	Waiting *Waiting `json:"waiting,omitempty"`
+}
+
+// Waiting is a session's turn that ended needing its person: the desktop's
+// summary of the turn Turn says what it needs (Action).
+type Waiting struct {
+	Turn   string `json:"turn"`
+	Action string `json:"action"`
 }
 
 // Party is the session as the state names it.
@@ -83,6 +93,29 @@ type Record struct {
 	// PriorCLISessionIDs are the CLI sessions the desktop session ran before
 	// a restart gave it a new one.
 	PriorCLISessionIDs []string `json:"priorCliSessionIds"`
+	// PostTurnSummary is the desktop's summary of the turn
+	// PostTurnSummaryFor, LastAssistantUUID the session's latest turn.
+	PostTurnSummary    *TurnSummary `json:"postTurnSummary"`
+	PostTurnSummaryFor string       `json:"postTurnSummaryFor"`
+	LastAssistantUUID  string       `json:"lastAssistantUuid"`
+}
+
+// TurnSummary is the desktop's summary of a turn: the status it files the
+// session under (blocked: it needs its person) and what it needs.
+type TurnSummary struct {
+	Category    string `json:"status_category"`
+	NeedsAction string `json:"needs_action"`
+}
+
+// Waiting is what the record says the session waits on its person for:
+// its latest turn's summary is blocked on an action; nil otherwise.
+func (r *Record) Waiting() *Waiting {
+	t := r.PostTurnSummary
+	if t == nil || t.Category != "blocked" || strings.TrimSpace(t.NeedsAction) == "" ||
+		r.PostTurnSummaryFor == "" || r.PostTurnSummaryFor != r.LastAssistantUUID {
+		return nil
+	}
+	return &Waiting{Turn: r.PostTurnSummaryFor, Action: strings.TrimSpace(t.NeedsAction)}
 }
 
 // Discover returns the running sessions, newest first. Every session is a
@@ -272,6 +305,7 @@ func newSession(cfg *config.Config, t *proc.Table, p *proc.Process, rec *cliReco
 			s.Branch = r.Branch
 			s.Permission = r.PermissionMode
 			s.Model = r.Model
+			s.Waiting = r.Waiting()
 		}
 	}
 	if s.Name == "" {

@@ -53,37 +53,45 @@ type Config struct {
 	// Supervisor is what `handover --prompt` tells a successor supervisor,
 	// how long a relay to it stays open and at what context it is due.
 	Supervisor Supervisor `yaml:"supervisor"`
+	// Guide is the role that walks the person through the decisions
+	// waiting on them, never in the supervisor's session.
+	Guide Role `yaml:"guide"`
 }
 
-// Supervisor configures the successor's session prompt (the instructions it
-// follows, a skill or a file, not both, and the scope it supervises) and the
-// relay.
+// Supervisor configures the supervisor: its role and the scope it
+// supervises.
 type Supervisor struct {
-	// Skill is the name of the skill the successor runs (supervise).
+	Role `yaml:",inline"`
+	// Scope says what the supervisor watches, in a sentence or two; empty,
+	// the prompt names the resources, lanes and installations configured.
+	Scope string `yaml:"scope"`
+	// KeepAwake is how long the recorded spare may sit idle before the
+	// standby watch sends it a keep-awake message (25m): under the desktop
+	// app's 30-minute idle timeout for an off-screen CLI, so a command-line
+	// message still reaches it. The supervisor's restartGrace defaults to
+	// 30s: past it the standby watch hands the role to the spare.
+	KeepAwake Duration `yaml:"keepAwake"`
+}
+
+// Role configures a relayed role, the supervisor's or the guide's: the
+// successor's session prompt (the instructions it follows, a skill or a
+// file, not both) and the relay.
+type Role struct {
+	// Skill is the name of the skill the successor runs (supervise, guide).
 	Skill string `yaml:"skill"`
 	// Instructions is a file (~/ allowed) whose content opens the prompt
 	// instead.
 	Instructions string `yaml:"instructions"`
-	// Scope says what the supervisor watches, in a sentence or two; empty,
-	// the prompt names the resources, lanes and installations configured.
-	Scope string `yaml:"scope"`
-	// RelayAt is the supervisor session's context, in tokens, at which the
-	// watch reports the relay due at a quiet moment ("400k").
+	// RelayAt is the role's session context, in tokens, at which the watch
+	// reports the relay due ("400k").
 	RelayAt Tokens `yaml:"relayAt"`
 	// RelayTTL is how long a relay stays open for the successor's start.
 	RelayTTL Duration `yaml:"relayTTL"`
 	// RestartGrace is how long beekeeper waits after it first saw the
-	// supervisor's CLI gone: a CLI back under the same session within it is
-	// a restart and keeps the role; past it, the watch says the supervisor
-	// is gone, notifies and hands over to the spare. The desktop app never
-	// restarts a crashed CLI by itself, so it is a short debounce for a
-	// supervisor someone woke (30s). The grant rule holds throughout.
+	// role's CLI gone: a CLI back under the same session within it is a
+	// restart and keeps the role; past it, the watch says the supervisor
+	// is gone and notifies. The grant rule holds throughout.
 	RestartGrace Duration `yaml:"restartGrace"`
-	// KeepAwake is how long the recorded spare may sit idle before the
-	// standby watch sends it a keep-awake message (25m): under the desktop
-	// app's 30-minute idle disconnect, so a command-line message still
-	// reaches it.
-	KeepAwake Duration `yaml:"keepAwake"`
 }
 
 // Lane is a set of repositories whose merges roll the same components of an
@@ -422,11 +430,14 @@ func (c *Config) defaults() error {
 	setStr(&c.StateDir, filepath.Join(state, "beekeeper"))
 	setStr(&c.LeaseDir, filepath.Join(c.StateDir, "leases"))
 	setDur(&c.GrantTTL, 30*time.Minute)
-	setDur(&c.Supervisor.RelayTTL, 15*time.Minute)
+	// The desktop app never restarts a crashed CLI by itself: the grace only
+	// debounces a supervisor someone woke.
 	setDur(&c.Supervisor.RestartGrace, 30*time.Second)
 	setDur(&c.Supervisor.KeepAwake, 25*time.Minute)
-	if c.Supervisor.RelayAt == 0 {
-		c.Supervisor.RelayAt = 400_000
+	c.Supervisor.defaults(home)
+	c.Guide.defaults(home)
+	if c.Guide.Skill == "" && c.Guide.Instructions == "" {
+		c.Guide.Skill = "guide"
 	}
 
 	setDur(&c.Overlaps.ActiveWithin, time.Hour)
@@ -498,15 +509,25 @@ func (c *Config) defaults() error {
 		c.Notify.Kinds = slices.Clone(notify.Kinds)
 	}
 	setDur(&c.Notify.Repeat, 30*time.Minute)
-	if rest, ok := strings.CutPrefix(c.Supervisor.Instructions, "~/"); ok {
-		c.Supervisor.Instructions = filepath.Join(home, rest)
-	}
 	return nil
 }
 
+func (r *Role) defaults(home string) {
+	setDur(&r.RelayTTL, 15*time.Minute)
+	setDur(&r.RestartGrace, time.Minute)
+	if r.RelayAt == 0 {
+		r.RelayAt = 400_000
+	}
+	if rest, ok := strings.CutPrefix(r.Instructions, "~/"); ok {
+		r.Instructions = filepath.Join(home, rest)
+	}
+}
+
 func (c *Config) validate() error {
-	if c.Supervisor.Skill != "" && c.Supervisor.Instructions != "" {
-		return errors.New("supervisor: set skill or instructions, not both")
+	for name, r := range map[string]Role{"supervisor": c.Supervisor.Role, "guide": c.Guide} {
+		if r.Skill != "" && r.Instructions != "" {
+			return fmt.Errorf("%s: set skill or instructions, not both", name)
+		}
 	}
 	for i, in := range c.Alerts.Installations {
 		if in.Name == "" {

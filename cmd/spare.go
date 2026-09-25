@@ -91,7 +91,7 @@ session is a name, a unique part of one, a session id or a PID.`,
 			}
 			var msg string
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-				if err := mustSupervise(st, me); err != nil {
+				if err := supervisorRole.mustHold(st.SupervisorRole(), me); err != nil {
 					return nil, err
 				}
 				if to != nil && to.Is(me) {
