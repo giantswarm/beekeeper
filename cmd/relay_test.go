@@ -123,7 +123,7 @@ func TestPromptHasThePendingStateAndNoLiveValue(t *testing.T) {
 	a := &app{out: &out, now: relayNow, cfg: &config.Config{
 		Resources:  []string{"agentlab-1", graveler},
 		Lanes:      []config.Lane{{Name: serving, Installation: gazelle, Repositories: []string{modelManager}}, {Name: "portal", Repositories: []string{"giantswarm/backstage"}}},
-		Supervisor: config.Supervisor{Skill: "supervise"},
+		Supervisor: config.Supervisor{Role: config.Role{Skill: "supervise"}},
 		Alerts:     config.Alerts{Ignore: []string{"Heartbeat"}, Team: "bumblebee", Collapse: 3, Every: config.Duration{Duration: 5 * time.Minute}},
 		StateDir:   t.TempDir(),
 	}}

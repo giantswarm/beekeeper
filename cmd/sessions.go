@@ -56,12 +56,18 @@ type supervisorView struct {
 // viewSupervisor is the recorded supervisor as sv reads it, with its
 // session's context; nil when none is recorded.
 func (a *app) viewSupervisor(st *state.State, sessions []*claude.Session, sv supervision) *supervisorView {
-	if st.Supervisor == nil {
+	return a.viewRole(supervisorRole, st.SupervisorRole(), sessions, sv)
+}
+
+// viewRole is rl's recorded holder r as sv reads it, with its session's
+// context; nil when none is recorded.
+func (a *app) viewRole(rl role, r state.Role, sessions []*claude.Session, sv supervision) *supervisorView {
+	if r.Holder == nil {
 		return nil
 	}
 	return &supervisorView{
-		Supervisor: *st.Supervisor, Live: sv.live, CLIGone: sv.gone, RestartUntil: sv.until, Relay: st.Relay,
-		Context: sessionContext(sessions, st.Supervisor.Party, a.now), RelayAt: int64(a.cfg.Supervisor.RelayAt),
+		Supervisor: *r.Holder, Live: sv.live, CLIGone: sv.gone, RestartUntil: sv.until, Relay: r.Relay,
+		Context: sessionContext(sessions, r.Holder.Party, a.now), RelayAt: int64(rl.cfg(a.cfg).RelayAt),
 	}
 }
 
@@ -130,8 +136,10 @@ func (a *app) collect(withWork bool) (*view, error) {
 }
 
 func roleOf(st *state.State, s *claude.Session) string {
-	if st.Supervisor != nil && st.Supervisor.Is(s.Party()) {
-		return "supervisor"
+	for _, rl := range roles {
+		if h := rl.get(st).Holder; h != nil && h.Is(s.Party()) {
+			return rl.name
+		}
 	}
 	for _, ag := range st.Agents {
 		if ag.Is(s.Party()) {

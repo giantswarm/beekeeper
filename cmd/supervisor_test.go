@@ -374,7 +374,7 @@ func TestRestartGraceHoldsTheRuleThroughACLIRestart(t *testing.T) {
 }
 
 func TestSupervisorViewShowsTheContext(t *testing.T) {
-	a := &app{cfg: &config.Config{Supervisor: config.Supervisor{RelayAt: 400_000}}, now: relayNow}
+	a := &app{cfg: &config.Config{Supervisor: config.Supervisor{Role: config.Role{RelayAt: 400_000}}}, now: relayNow}
 	st := &state.State{Supervisor: &state.Supervisor{Party: supA, Since: relayNow.Add(-time.Hour)}}
 	sessions := []*claude.Session{{ID: supA.Session, HostID: supA.HostSession, Name: supA.Name, Transcript: supervisorTranscript}}
 	v := a.viewSupervisor(st, sessions, supervision{live: true})
