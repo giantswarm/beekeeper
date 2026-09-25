@@ -334,9 +334,15 @@ tab-separated fields, always present, in this order.
 
 `beekeeper agents start <name> <brief file>` starts an agent the way a person would start a
 session and hand it a brief, without the click. The first turn runs the brief from the command
-line in bypass, and the roster shows it busy with its `--task` from the moment it is started. The session is then a desktop session: the supervisor sends it later work with
-SendMessage to `local_<id>`, and the person reads and answers it in the sidebar. Send it nothing
-while its first turn runs: `beekeeper agents` shows it live until then.
+line in bypass, and the roster shows it busy with its `--task` from the moment it is started. The session is then a desktop session as well: the person reads and answers it in the sidebar.
+
+The import makes the desktop warm a CLI of its own for the session (`--resume=<id>`) while the
+first turn still runs. Two CLIs on one session id are two peers under one name, and a message by
+name could reach the desktop's copy, which would run a turn beside the first turn. So once the
+import has shown the session, beekeeper stops the desktop's CLI (it waits up to 15s for it) while
+the first turn runs: the first turn is then the session's only CLI, and a message by name, such as
+a grant or a clearance, reaches it at its next tool call. The desktop starts a new CLI when the
+person opens the session.
 
 The desktop's import takes the session's model from the transcript's last reply and falls back to
 its own default model without one. So beekeeper imports the session only once the transcript

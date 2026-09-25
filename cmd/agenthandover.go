@@ -328,6 +328,7 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 	}
 	a.say("started %q: session %s, desktop local_%s, in %s, busy with %q", ag.Name, sa.id, sa.id, sa.dir, sa.task)
 	a.say("%s", modelLine(sa.model))
+	a.say("%s", twinLine(sa.twin))
 	if sa.kept != "" {
 		a.say("the desktop still shows %s", sa.kept)
 	}

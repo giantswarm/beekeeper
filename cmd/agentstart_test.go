@@ -160,3 +160,18 @@ func TestAwaitReply(t *testing.T) {
 		t.Errorf("awaitReply returned %s after the start, before the transcript was quiet", took)
 	}
 }
+
+func TestResumesNamesTheDesktopsCLIOnly(t *testing.T) {
+	const id = "25a32485-e71e-462b-8d77-ddbb65220943"
+	for args, want := range map[string]bool{
+		"claude --output-format stream-json --resume=" + id + " --model default": true,
+		"claude --resume " + id: true,
+		"claude -p --session-id " + id + " --permission-mode bypassPermissions": false,
+		"claude --resume=" + id[:8]:           false,
+		"claude --resume /p/" + id + ".jsonl": false,
+	} {
+		if got := resumes(strings.Fields(args), id); got != want {
+			t.Errorf("resumes(%q) = %v, want %v", args, got, want)
+		}
+	}
+}
