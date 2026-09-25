@@ -52,7 +52,7 @@ func TestImportKeepsWhatIsKnown(t *testing.T) {
 		t.Errorf("after import: %+v %+v %+v", a, b, g)
 	}
 	// An imported set is a baseline: the next reading prints only what changed.
-	if lines, _ := rules.Step(instA, a, ok(), now); len(lines) != 1 || lines[0] != "ALERT RESOLVED alpha PAGE BUMBLEBEE X - since ?" {
+	if lines, _ := rules.Step(instA, a, ok(), now); len(lines) != 1 || lines[0] != "ALERT RESOLVED alpha PAGE BUMBLEBEE X -" {
 		t.Errorf("lines = %q", lines)
 	}
 }

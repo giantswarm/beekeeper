@@ -35,7 +35,8 @@ silent otherwise: made to be the source of a Monitor, so the supervisor
 wakes only when something needs a look.
 
 Threshold breaches (RAM, swap, desktop scope, load, memory pressure, tmpfs,
-disk, the GitHub budget) repeat at most every watch.repeat (10m) per kind.
+disk, the GitHub budget) and unreadable sources are one line when they
+start and one ENDED line when they end, never repeated while they last.
 OOM kills are never folded away: every poll reports every kill since the
 last one, grouped by whose limit they hit; a cap kill whose scope no
 run.start names says its cap is unknown. A kill in a test run's scope
@@ -46,8 +47,8 @@ over a threshold in metrics.runaway (GitHub calls in the last hour, the
 same failing tool call repeating in it, its context's fill) is one RUNAWAY
 line per figure, once per watch. A lane whose first arrived merge has
 waited longer than merge.stallAfter (5m) behind places whose merges are
-not in the gate (beekeeper lanes) is one LANE STALLED line, repeated at
-most every watch.repeat while it lasts. A settling merge leaves its lane
+not in the gate (beekeeper lanes) is one LANE STALLED line when it starts
+and one ENDED line when it ends. A settling merge leaves its lane
 once the lane has settled (its release rolled and its HelmReleases Ready,
 or no installation to roll), logged as lane.settled, silently. A note or a
 timer that falls due, the end of a session with a record (sessions serve)
@@ -105,8 +106,10 @@ Runs until killed. --once polls once and exits.`,
 
 type watcher struct {
 	*app
-	mu         sync.Mutex
-	last       map[string]time.Time
+	mu   sync.Mutex
+	last map[string]time.Time
+	// active are the lasting conditions said and not yet ENDED.
+	active     map[string]condition
 	lastPoll   time.Time
 	lastBudget time.Time
 	scopeOOM   int64
@@ -188,20 +191,59 @@ func (w *watcher) watchAlerts(ctx context.Context) {
 	}
 }
 
-// emit prints a breach at most once per watch.repeat per key and returns
-// the line, empty when it was folded away.
+// emit says a lasting condition once, when it starts. While it lasts it is
+// silent and returns its line at most every watch.repeat, for the
+// notification a person gets (notify.repeat decides whether it goes out).
 func (w *watcher) emit(key, format string, args ...any) string {
+	line := fmt.Sprintf(format, args...)
 	w.mu.Lock()
 	now := time.Now()
-	if t, ok := w.last[key]; ok && now.Sub(t) < w.cfg.Watch.Repeat.Duration {
+	if w.active == nil {
+		w.active = map[string]condition{}
+	}
+	_, active := w.active[key]
+	if active && now.Sub(w.last[key]) < w.cfg.Watch.Repeat.Duration {
 		w.mu.Unlock()
 		return ""
 	}
 	w.last[key] = now
+	if !active {
+		label, _, _ := strings.Cut(line, ":")
+		w.active[key] = condition{since: now, label: label}
+	}
 	w.mu.Unlock()
-	line := fmt.Sprintf(format, args...)
-	w.emitNow(key, "%s", line)
+	if !active {
+		w.emitNow(key, "%s", line)
+	}
 	return line
+}
+
+// check says a condition's start (emit) while on holds and its end, one
+// ENDED line, once it no longer does.
+func (w *watcher) check(key string, on bool, format string, args ...any) string {
+	if on {
+		return w.emit(key, format, args...)
+	}
+	w.clear(key)
+	return ""
+}
+
+// clear ends a condition the watch has said: one ENDED line.
+func (w *watcher) clear(key string) {
+	w.mu.Lock()
+	c, active := w.active[key]
+	delete(w.active, key)
+	w.mu.Unlock()
+	if active {
+		w.emitNow("ended", "ENDED %s (since %s)", c.label, c.since.Format("15:04"))
+	}
+}
+
+// condition is a lasting condition a watch has said: since when, and the
+// line's head that names it.
+type condition struct {
+	since time.Time
+	label string
 }
 
 // notify sends one event that needs a person (--notify): a lasting kind
@@ -236,33 +278,25 @@ func (w *watcher) poll(ctx context.Context) {
 	th := w.cfg.Watch
 
 	if m, err := machine.ReadMem(); err == nil {
-		if m.AvailableMiB < th.AvailMinMiB {
-			w.oomLine(ctx, w.emit("avail", "LOW RAM: %d MiB available (swap used %d MiB)", m.AvailableMiB, m.SwapUsedMiB))
-		}
-		if m.SwapUsedMiB > th.SwapMaxMiB {
-			w.oomLine(ctx, w.emit("swap", "SWAP near the oomd trigger: %d of %d MiB used (systemd-oomd kills at 90%%)", m.SwapUsedMiB, m.SwapTotalMiB))
-		}
+		w.oomLine(ctx, w.check("avail", m.AvailableMiB < th.AvailMinMiB, "LOW RAM: %d MiB available, swap %d MiB", m.AvailableMiB, m.SwapUsedMiB))
+		w.oomLine(ctx, w.check("swap", m.SwapUsedMiB > th.SwapMaxMiB, "SWAP: %d of %d MiB used", m.SwapUsedMiB, m.SwapTotalMiB))
 	}
-	if l, err := machine.ReadLoad(); err == nil && l[0] > th.LoadMax {
-		w.emit("load", "HIGH LOAD: %.0f (image imports into a fresh lab reach 35-53 on an encrypted disk)", l[0])
+	if l, err := machine.ReadLoad(); err == nil {
+		w.check("load", l[0] > th.LoadMax, "HIGH LOAD: %.0f", l[0])
 	}
-	if psi, err := machine.ReadPSIFull60(); err == nil && psi > th.PSIMax {
-		w.oomLine(ctx, w.emit("psi", "MEMORY PRESSURE: full avg60 %.0f%%", psi))
+	if psi, err := machine.ReadPSIFull60(); err == nil {
+		w.oomLine(ctx, w.check("psi", psi > th.PSIMax, "MEMORY PRESSURE: full avg60 %.0f%%", psi))
 	}
-	if d, err := machine.ReadDisk("/tmp"); err == nil && d.UsedMiB > th.TmpMaxMiB {
-		w.emit("tmp", "TMPFS /tmp at %d MiB (RAM-backed scratch)", d.UsedMiB)
+	if d, err := machine.ReadDisk("/tmp"); err == nil {
+		w.check("tmp", d.UsedMiB > th.TmpMaxMiB, "TMPFS /tmp: %d MiB", d.UsedMiB)
 	}
-	if d, err := machine.ReadDisk("/"); err == nil && d.FreeMiB < th.DiskMinMiB {
-		w.emit("disk", "LOW DISK: / has %d GiB free (go clean -cache; prune unreferenced images and volumes)", d.FreeMiB/1024)
+	if d, err := machine.ReadDisk("/"); err == nil {
+		w.check("disk", d.FreeMiB < th.DiskMinMiB, "LOW DISK: / %d GiB free", d.FreeMiB/1024)
 	}
 	if p := machine.FindScope(); p != "" {
 		s := machine.ReadScope(p)
-		if s.AnonMiB > th.ScopeAnonMaxMiB {
-			w.oomLine(ctx, w.emit("scopeanon", "DESKTOP SCOPE anonymous memory %d MiB (only anon cannot be reclaimed; archiving idle sessions frees it)", s.AnonMiB))
-		}
-		if s.CurrentMiB > th.ScopeMaxMiB {
-			w.oomLine(ctx, w.emit("scope", "DESKTOP SCOPE near its hard cap: %d MiB RAM + %d MiB swap (max %s)", s.CurrentMiB, s.SwapMiB, s.Max))
-		}
+		w.oomLine(ctx, w.check("scopeanon", s.AnonMiB > th.ScopeAnonMaxMiB, "DESKTOP SCOPE anon: %d MiB", s.AnonMiB))
+		w.oomLine(ctx, w.check("scope", s.CurrentMiB > th.ScopeMaxMiB, "DESKTOP SCOPE near its cap: %d MiB RAM + %d MiB swap of %s", s.CurrentMiB, s.SwapMiB, s.Max))
 		if s.OOMKills != w.scopeOOM {
 			w.emitNow("scopeoom", "OOM KILL in the desktop scope: oom_kill %d -> %d", w.scopeOOM, s.OOMKills)
 			w.scopeOOM = s.OOMKills
@@ -274,6 +308,7 @@ func (w *watcher) poll(ctx context.Context) {
 		w.emit("proc", "cannot read the process table: %v", err)
 		return
 	}
+	w.clear("proc")
 	sessions := claude.Discover(w.cfg, t, w.now)
 	w.kills(ctx, since, sessions, t)
 	w.pending(ctx, sessions)
@@ -290,9 +325,10 @@ func (w *watcher) poll(ctx context.Context) {
 		case err != nil && ctx.Err() != nil:
 		case err != nil:
 			w.emit("budget-error", "GitHub budget unknown: %v", err)
-		case b.Remaining < w.cfg.GitHub.Floor:
-			l := w.emit("budget", "GITHUB BUDGET %d of %d, under the floor %d: hold GitHub work until the reset at %s",
-				b.Remaining, b.Limit, w.cfg.GitHub.Floor, b.Reset.Local().Format("15:04"))
+		default:
+			w.clear("budget-error")
+			l := w.check("budget", b.Remaining < w.cfg.GitHub.Floor, "GITHUB BUDGET %d of %d: hold GitHub work until %s",
+				b.Remaining, b.Limit, b.Reset.Local().Format("15:04"))
 			w.notify(ctx, notify.Budget, "", "beekeeper: GitHub budget under the floor", l+"\nbeekeeper budget")
 		}
 	}
@@ -302,16 +338,30 @@ func (w *watcher) poll(ctx context.Context) {
 }
 
 // stalls says each stalled lane, one LANE STALLED line per lane and waiting
-// merge at most every watch.repeat.
+// merge when the stall starts and one ENDED line when it ends.
 func (w *watcher) stalls() {
 	st, err := w.store.Read()
 	if err != nil {
 		return
 	}
+	stalled := map[string]bool{}
 	for _, v := range w.laneViews(st) {
 		if v.Stall != nil {
-			w.emit("stall:"+v.Name+":"+v.Stall.Merge.Key(), "LANE STALLED %s: %s", v.Name, w.stallText(*v.Stall))
+			key := "stall:" + v.Name + ":" + v.Stall.Merge.Key()
+			stalled[key] = true
+			w.emit(key, "LANE STALLED %s: %s", v.Name, w.stallText(*v.Stall))
 		}
+	}
+	w.mu.Lock()
+	var over []string
+	for k := range w.active {
+		if strings.HasPrefix(k, "stall:") && !stalled[k] {
+			over = append(over, k)
+		}
+	}
+	w.mu.Unlock()
+	for _, k := range over {
+		w.clear(k)
 	}
 }
 
@@ -474,10 +524,10 @@ func (w *watcher) sessionChanges(sessions []*claude.Session) {
 		w.emitNow("sessions", "SESSIONS started: %s", strings.Join(started, ", "))
 	}
 	if len(ended) > 0 {
-		w.emitNow("sessions", "SESSIONS ended (CLI gone: paused, closed or crashed): %s", strings.Join(ended, ", "))
+		w.emitNow("sessions", "SESSIONS ended: %s", strings.Join(ended, ", "))
 	}
 	if len(restarted) > 0 {
-		w.emitNow("sessions", "SESSIONS restarted (a new CLI: its context may be fresh, send it its state): %s", strings.Join(restarted, ", "))
+		w.emitNow("sessions", "SESSIONS restarted: %s", strings.Join(restarted, ", "))
 	}
 	w.sessions = cur
 }

@@ -134,6 +134,16 @@ machine's journal, verbatim. The capped-run tests also set `MEMCAP_TEST=1`, so t
 is that kill from before the test scopes, which must read `cap unknown`. A trial of your own sets it
 too.
 
+The output is a context budget. `cmd/testdata/watch-hour.txt` is a real hour of a supervisor's
+`watch` under v0.15.5 (anonymised: installations, nodes, pods, sessions and pull requests renamed),
+6977 bytes in 74 lines; `TestWatchReplayedHourSaysEachFactOnceInBudget` replays it through the
+watch's session tracking, alert lines and brackets and fails when a fact is said twice or dropped,
+or when the hour prints more than `hourBudget` bytes (5862 now). Raise the budget only for a line
+that carries new information. A second read of a reading command with nothing changed is one
+`no change` line (`TestSecondReadSaysNoChange`); measure a change of your own the same way:
+`--full` and a first read against a scratch copy of the state (`BEEKEEPER_CONFIG` naming a config
+whose `stateDir` is the copy), then a second read, bytes by `wc -c`.
+
 Session discovery is tested against real process trees in `internal/claude/testdata/proc/`: a
 desktop session with a `claude -p` its tool shell runs and one it left to the user manager, and
 a `claude --bg` worker started through `systemd-run` with its daemon, terminal hosts and spare,

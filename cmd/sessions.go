@@ -145,7 +145,7 @@ func roleOf(st *state.State, s *claude.Session) string {
 }
 
 func (a *app) sessionsCmd() *cobra.Command {
-	var all bool
+	var all, full bool
 	c := &cobra.Command{
 		Use:     "sessions",
 		Aliases: []string{"ps"},
@@ -174,7 +174,12 @@ session is on now. --all adds the sessions of the last 24 hours that run no
 CLI (paused or closed, not archived): a message to them does not arrive.
 
 The session records (sessions serve) follow the table: which session serves
-which issue and what it waits on, and the records whose session has ended.`,
+which issue and what it waits on, and the records whose session has ended.
+
+A caller that has read the list before gets only what changed since: a
+session that started, ended or changed what it is on, runs or holds, a
+record or an overlap that came or went (an age, a memory size or a context
+moving is no change), or one "no change" line. --full prints everything.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			v, err := a.collect(true)
@@ -192,24 +197,32 @@ which issue and what it waits on, and the records whose session has ended.`,
 					Paused  []*claude.Record `json:"paused,omitempty"`
 				}{v, v.st.Records, paused})
 			}
-			a.printSessions(v)
-			if len(v.st.Records) > 0 {
-				_, _ = fmt.Fprintf(a.out, "\nSession records:\n")
-				a.printRecords(v.st.Records, v.raw)
-			}
-			if len(paused) > 0 {
-				_, _ = fmt.Fprintf(a.out, "\nNot running (paused or closed):\n")
-				w := a.table()
-				for _, r := range paused {
-					_, _ = fmt.Fprintf(w, "  %s\t%s\tactive %s ago\n", truncate(r.Title, 50), r.Branch,
-						ago(a.now, time.UnixMilli(r.LastActivityAt)))
+			printFull := func() {
+				a.printSessions(v)
+				if len(v.st.Records) > 0 {
+					_, _ = fmt.Fprintf(a.out, "\nSession records:\n")
+					a.printRecords(v.st.Records, v.raw)
 				}
-				_ = w.Flush()
+				if len(paused) > 0 {
+					_, _ = fmt.Fprintf(a.out, "\nNot running (paused or closed):\n")
+					w := a.table()
+					for _, r := range paused {
+						_, _ = fmt.Fprintf(w, "  %s\t%s\tactive %s ago\n", truncate(r.Title, 50), r.Branch,
+							ago(a.now, time.UnixMilli(r.LastActivityAt)))
+					}
+					_ = w.Flush()
+				}
 			}
-			return nil
+			facts := a.sessionFacts(v)
+			for _, r := range paused {
+				l := fmt.Sprintf("paused %q %s", r.Title, r.Branch)
+				facts = append(facts, fact{Key: l, Sig: l, Line: l})
+			}
+			return a.delta("sessions", full, facts, printFull)
 		},
 	}
 	c.Flags().BoolVar(&all, "all", false, "also list the sessions of the last 24 hours that run no CLI")
+	fullFlag(c, &full)
 	c.AddCommand(a.serveCmd(), a.unserveCmd())
 	return c
 }
