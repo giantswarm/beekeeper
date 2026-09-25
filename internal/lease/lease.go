@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/upgrade"
 )
 
 // Holder is the record in <leaseDir>/<resource>/holder.json.
@@ -184,8 +185,13 @@ func expired(st *state.State, g state.Grant, held bool, now time.Time, ttl time.
 }
 
 // Check decides whether the caller may claim and, when a grant carries the
-// claim, returns its index in st.Grants (-1 when none is needed).
+// claim, returns its index in st.Grants (-1 when none is needed). While an
+// upgrade runs on the installation of the resource's name nobody may claim.
 func Check(st *state.State, g Gate) (int, error) {
+	if h, ok := upgrade.Held(st, g.Resource, g.Now); ok {
+		return -1, &Refusal{fmt.Sprintf("%s runs since %s: claim after it ends (beekeeper hold lists it)",
+			h.Reason, h.At.Local().Format(time.TimeOnly))}
+	}
 	if g.Supervisor == nil || g.Caller.Is(g.Supervisor.Party) || g.Caller.Session == "" {
 		// No supervisor is recorded, the supervisor itself, or a person.
 		return -1, nil

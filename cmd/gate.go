@@ -48,7 +48,8 @@ func (a *app) gateCmd() *cobra.Command {
 		Short: "The PreToolUse hook's gate on devctl pr merge",
 		Long: `gate is what the PreToolUse hook puts in front of every devctl pr merge; a
 session never calls it. It refuses the merge (exit 77) when the repository,
-its lane, "merges" or "github" is held, when the GitHub budget is under the
+its lane, "merges" or "github" is held (a cluster upgrade on the lane's
+installation holds it too), when the GitHub budget is under the
 floor or unknown, or when the lane's installation cannot be read. Otherwise
 the merge joins its lane's queue (a merge registered with lanes settle heads
 it) and runs when no merge before it holds its place (one in the gate or
@@ -166,7 +167,7 @@ func (g *gateRun) step() (string, error) {
 	var dup *state.Merge
 	err := g.store.Update(func(st *state.State) ([]state.Event, error) {
 		merge.Prune(st, g.now, g.cfg.Merge.QueueTTL.Duration, g.cfg.Merge.SeedTTL.Duration, proc.Alive)
-		if hold, held = merge.Blocking(st, g.now, g.repo, g.pr, g.lane.Name); held {
+		if hold, held = merge.Blocking(st, g.now, g.repo, g.pr, g.lane); held {
 			g.drop(st)
 			return nil, nil
 		}

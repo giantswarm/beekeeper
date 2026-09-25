@@ -20,6 +20,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/upgrade"
 )
 
 // snapshot is one tick of the machine and its sessions.
@@ -46,6 +47,7 @@ type snapshot struct {
 	Budget      *github.Budget    `json:"budget,omitempty"`
 	BudgetErr   string            `json:"budgetError,omitempty"`
 	Alerts      []string          `json:"alerts,omitempty"`
+	Upgrades    []upgrade.Status  `json:"upgrades,omitempty"`
 }
 
 // wait is a long-running command a session sits on: a devctl wait or merge,
@@ -78,7 +80,8 @@ sit on (with their owner), the kernel
 OOM kills since your last snapshot (every one counted, attributed to a
 memcap scope, a kind lab or the desktop scope; a memcap scope no run.start
 names has an unknown cap, a test run's scope is a test kill), leases, holds and the GitHub
-budget, and the installations' alerts, grouped (beekeeper alerts snapshot).
+budget, the installations' alerts, grouped (beekeeper alerts snapshot), and
+their running upgrades (beekeeper watch).
 
 Each caller's last snapshot is kept. A caller inside a Claude session that
 has taken one before gets only what changed since, or one "no change"
@@ -147,7 +150,7 @@ changed; a first snapshot and a person at a terminal get the whole screen.
 	_ = c.Flags().MarkHidden("changes")
 	fullFlag(c, &full)
 	c.Flags().BoolVar(&noBudget, "no-budget", false, "skip the GitHub budget probe")
-	c.Flags().BoolVar(&noAlerts, "no-alerts", false, "skip reading the installations' alerts")
+	c.Flags().BoolVar(&noAlerts, "no-alerts", false, "skip reading the installations (their alerts and upgrades)")
 	return c
 }
 
@@ -240,6 +243,7 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 	}
 	if withAlerts {
 		s.Alerts = a.alertSnapshot(ctx)
+		s.Upgrades = a.readUpgrades(ctx, st, a.now)
 	}
 	return s, nil
 }
@@ -448,6 +452,9 @@ func (a *app) printSnapshot(s *snapshot) {
 	for _, h := range s.Holds {
 		p("hold %s until %s: %s", h.Target, untilText(a, h), truncate(h.Reason, 60))
 	}
+	if len(s.Upgrades) > 0 {
+		p("upgrades: %s", strings.Join(upgradeWords(s.Upgrades, a.now), " · "))
+	}
 	switch {
 	case s.Budget != nil:
 		p("GitHub: %s", budgetLine(a, *s.Budget))
@@ -565,6 +572,7 @@ func diffSnapshots(prev, cur *snapshot) []string {
 	setDiff("leases", leaseKeys(prev.Leases), leaseKeys(cur.Leases))
 	setDiff("waits", waitKeys(prev.Waits), waitKeys(cur.Waits))
 	setDiff("holds", holdKeys(prev.Holds), holdKeys(cur.Holds))
+	setDiff("upgrades", upgradeWords(prev.Upgrades, time.Time{}), upgradeWords(cur.Upgrades, time.Time{}))
 	if prev.Budget != nil && cur.Budget != nil && prev.Budget.Reset.Equal(cur.Budget.Reset) {
 		if d := prev.Budget.Remaining - cur.Budget.Remaining; d >= 250 {
 			out = append(out, fmt.Sprintf("GitHub budget %d → %d (%d spent)", prev.Budget.Remaining, cur.Budget.Remaining, d))
@@ -611,6 +619,15 @@ func holdKeys(hs []state.Hold) []string {
 	out := make([]string, len(hs))
 	for i, h := range hs {
 		out[i] = h.Target
+	}
+	return out
+}
+
+// upgradeWords is each installation's upgrade state.
+func upgradeWords(ss []upgrade.Status, now time.Time) []string {
+	out := make([]string, 0, len(ss))
+	for _, s := range ss {
+		out = append(out, s.Words(now))
 	}
 	return out
 }

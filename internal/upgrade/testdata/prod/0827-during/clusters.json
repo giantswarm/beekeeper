@@ -1,0 +1,57 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "cluster.x-k8s.io/v1beta2",
+      "kind": "Cluster",
+      "metadata": {
+        "name": "ops",
+        "namespace": "org-ops",
+        "labels": {
+          "cluster.x-k8s.io/cluster-name": "ops",
+          "release.giantswarm.io/version": "35.1.0"
+        },
+        "annotations": {
+          "giantswarm.io/cluster-upgrading": "false",
+          "giantswarm.io/last-known-cluster-upgrade-version": "35.1.0"
+        }
+      },
+      "spec": {},
+      "status": {
+        "conditions": [
+          {
+            "type": "RollingOut",
+            "status": "False"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "cluster.x-k8s.io/v1beta2",
+      "kind": "Cluster",
+      "metadata": {
+        "name": "mc",
+        "namespace": "org-mc",
+        "labels": {
+          "cluster.x-k8s.io/cluster-name": "mc",
+          "release.giantswarm.io/version": "35.1.1"
+        },
+        "annotations": {
+          "giantswarm.io/cluster-upgrading": "true",
+          "giantswarm.io/last-known-cluster-upgrade-version": "35.1.1",
+          "giantswarm.io/upgrade-start-time": "2026-09-25T08:21:29Z"
+        }
+      },
+      "spec": {},
+      "status": {
+        "conditions": [
+          {
+            "type": "RollingOut",
+            "status": "True"
+          }
+        ]
+      }
+    }
+  ]
+}
