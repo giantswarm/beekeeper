@@ -48,10 +48,15 @@ BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper lanes
 `{"state":"OPEN","mergedAt":null}` (or `MERGED` with a time, or `CLOSED`) from a file and hands
 every other call to the real one plays a pull request merging outside the gate.
 
-`watch` finds a session by its process: a `claude` binary not running under another session,
-named by `CLAUDE_CODE_HOST_SESSION_ID` and `CLAUDE_CODE_SESSION_NAME`. A copy of `sleep` named
-`claude`, started detached (`setsid -f`) with those two variables, stands in for a session that
-ends when the sleep does, so `sessions serve` and the `SESSION ENDED` line can be tried against
+`watch` finds a session by its process: a `claude` binary that is no subcommand (`daemon`,
+`bg-pty-host`, `stop`, …) and not the `--bg` launcher, running under no other session's CLI
+unless it has an id of its own (`--session-id`, `--resume`), named by
+`CLAUDE_CODE_HOST_SESSION_ID` and `CLAUDE_CODE_SESSION_NAME`. A CLI whose environment has
+`CLAUDE_CODE_SESSION_ID` was started from inside that session and inherited its host id:
+beekeeper takes that session as its parent and ignores the host id. A copy of `sleep` named
+`claude`, started detached (`setsid -f`) with those two variables and without
+`CLAUDE_CODE_SESSION_ID` (`env -u CLAUDE_CODE_SESSION_ID`, since every tool shell has it),
+stands in for a session that ends when the sleep does, so `sessions serve` and the `SESSION ENDED` line can be tried against
 scratch state. The live supervisor's watch sees it too: give it a name that reads as a test and a
 short life. Two such stand-ins play a supervisor hand-over: each runs `supervisor start`,
 `supervisor relay` or `supervisor status` with its own `CLAUDE_CODE_SESSION_ID`,
@@ -68,6 +73,16 @@ point `XDG_STATE_HOME` at their temp dir, and a manual trial does the same
 only real builds. A run event's detail starts with the scope's unit name as the kernel prints it in
 an OOM kill's memcg path; `cmd/testdata/oom-memcap-2516344.journal` holds such a kill from the lab
 machine's journal, verbatim.
+
+Session discovery is tested against real process trees in `internal/claude/testdata/proc/`: a
+desktop session with a `claude -p` its tool shell runs and one it left to the user manager, and
+a `claude --bg` worker started through `systemd-run` with its daemon, terminal hosts and spare.
+Each process is its `stat`, its `cmdline` and its environment reduced to the `CLAUDE*` keys, with
+values only for the identity keys (session and host ids, name, kind, entry point); paths are
+neutral, ids fake and names `test: …`. `proc.ReadAt` reads such a tree as it reads `/proc`. A new
+shape is captured the same way, from workers named `test: …` started through
+`systemd-run --user` (the user manager's environment has no session ids), stopped and removed
+after.
 
 The alert triage is tried on recorded answers: `alerts capture <dir>` a few times, readings apart,
 then `alerts replay <dir>...` with a scratch configuration whose `stateDir` holds a copy of the live
@@ -97,8 +112,8 @@ bus. Label every trial notification as a test in its text.
 
 | Package | What it knows |
 |---|---|
-| `internal/proc` | The process table from `/proc`: parents, children, environment, start time. |
-| `internal/claude` | Sessions: CLI processes, desktop session records, transcripts, git checkouts, what each is on and which overlap. |
+| `internal/proc` | The process table from `/proc`, or a copy of it in testdata: parents, children, environment, start time. |
+| `internal/claude` | Sessions: CLI processes (desktop, background, headless, and the children a session starts), desktop session records, transcripts, git checkouts, what each is on and which overlap. |
 | `internal/machine` | Memory, pressure, the desktop scope, disk, build slots, kind clusters, OOM kills. |
 | `internal/github` | The budget from rate-limit headers; a pull request's state from `gh pr view`. |
 | `internal/lease` | Lease directories and the grant rule. |

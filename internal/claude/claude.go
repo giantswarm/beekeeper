@@ -8,6 +8,7 @@ package claude
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -22,9 +23,11 @@ import (
 
 // Session is one running Claude Code CLI.
 type Session struct {
-	PID        int       `json:"pid"`
-	ID         string    `json:"session"`
-	HostID     string    `json:"hostSession,omitempty"`
+	PID    int    `json:"pid"`
+	ID     string `json:"session"`
+	HostID string `json:"hostSession,omitempty"`
+	// Parent is the session whose tool command started this one.
+	Parent     string    `json:"parent,omitempty"`
 	Name       string    `json:"name"`
 	Cwd        string    `json:"cwd"`
 	Repo       string    `json:"repo,omitempty"`
@@ -41,6 +44,18 @@ type Session struct {
 // Party is the session as the state names it.
 func (s *Session) Party() state.Party {
 	return state.Party{Session: s.ID, HostSession: s.HostID, Name: s.Name}
+}
+
+// Key identifies the session across CLI restarts: the desktop's host id,
+// else the session id, else the process.
+func (s *Session) Key() string {
+	switch {
+	case s.HostID != "":
+		return s.HostID
+	case s.ID != "":
+		return s.ID
+	}
+	return "pid " + strconv.Itoa(s.PID)
 }
 
 // Command is a tool command a session runs right now (foreground or in the
@@ -69,45 +84,94 @@ type Record struct {
 	PriorCLISessionIDs []string `json:"priorCliSessionIds"`
 }
 
-// Discover returns the running sessions, newest first.
+// Discover returns the running sessions, newest first. Every session is a
+// CLI process of its own: a desktop session's, a background session's behind
+// the daemon, a headless one's. A CLI that another session's tool command
+// runs belongs to that session unless it was started under an id of its own.
 func Discover(cfg *config.Config, t *proc.Table, now time.Time) []*Session {
-	byHost := map[string]*Session{}
-	var out []*Session
+	clis := map[int]bool{}
 	for _, p := range t.ByPID {
-		if p.Comm != "claude" || underClaude(t, p) {
+		if isCLI(p) && (ownID(p.Args) != "" || !underCLI(t, p)) {
+			clis[p.PID] = true
+		}
+	}
+	byKey := map[string]*Session{}
+	for pid := range clis {
+		s := newSession(cfg, t, t.ByPID[pid], clis, now)
+		// A restarted CLI can overlap its predecessor for a moment:
+		// the newest process is the session.
+		if prev, ok := byKey[s.Key()]; ok && prev.Started.After(s.Started) {
 			continue
 		}
-		s := newSession(cfg, t, p, now)
-		if s.HostID != "" {
-			// A restarted CLI can overlap its predecessor for a moment:
-			// the newest process is the session.
-			if prev, ok := byHost[s.HostID]; ok && prev.Started.After(s.Started) {
-				continue
-			}
-			byHost[s.HostID] = s
-			continue
-		}
-		out = append(out, s)
+		byKey[s.Key()] = s
 	}
-	for _, s := range byHost {
-		out = append(out, s)
-	}
+	out := slices.Collect(maps.Values(byKey))
 	slices.SortFunc(out, func(a, b *Session) int { return b.Started.Compare(a.Started) })
 	return out
 }
 
-// underClaude reports whether p runs inside another session (a headless
-// `claude -p` started by a tool command): it belongs to that session.
-func underClaude(t *proc.Table, p *proc.Process) bool {
-	return slices.ContainsFunc(t.Ancestors(p.PID), func(a *proc.Process) bool { return a.Comm == "claude" })
+// helpers are the claude subcommands: processes of the claude binary that
+// are no session. daemon, bg-pty-host and bg-spare run the background
+// sessions; attach, logs, stop and the rest are clients.
+var helpers = map[string]bool{
+	"daemon": true, "bg-pty-host": true, "bg-spare": true,
+	"agents": true, "attach": true, "auth": true, "auto-mode": true, "doctor": true, "gateway": true,
+	"import": true, "install": true, "kill": true, "logs": true, "mcp": true, "plugin": true,
+	"plugins": true, "project": true, "respawn": true, "rm": true, "setup-token": true,
+	"stop": true, "ultrareview": true, "update": true, "upgrade": true,
 }
 
-func newSession(cfg *config.Config, t *proc.Table, p *proc.Process, now time.Time) *Session {
-	s := &Session{PID: p.PID, Started: p.Start, Cwd: proc.Cwd(p.PID)}
-	s.ID = argValue(p.Args, "--resume")
-	if env, err := proc.Environ(p.PID); err == nil {
-		s.HostID = env["CLAUDE_CODE_HOST_SESSION_ID"]
-		s.Name = env["CLAUDE_CODE_SESSION_NAME"]
+// isCLI reports whether p is a session's CLI: the claude binary, neither a
+// subcommand nor the `claude --bg` launcher, which exits once the daemon
+// runs the session.
+func isCLI(p *proc.Process) bool {
+	if p.Comm != "claude" || len(p.Args) == 0 {
+		return false
+	}
+	// The subcommand is argv[1], or the second word of an argv[0] the
+	// process retitled ("claude bg-pty-host").
+	if title := strings.Fields(p.Args[0]); len(title) > 1 && helpers[title[1]] || len(p.Args) > 1 && helpers[p.Args[1]] {
+		return false
+	}
+	return !slices.Contains(p.Args, "--bg") && !slices.Contains(p.Args, "--background")
+}
+
+// underCLI reports whether p runs inside another session's CLI (a headless
+// `claude -p` a tool command started).
+func underCLI(t *proc.Table, p *proc.Process) bool {
+	return slices.ContainsFunc(t.Ancestors(p.PID), isCLI)
+}
+
+// ownID is the session id a CLI was started under: --session-id, or the
+// session --resume continues.
+func ownID(args []string) string {
+	for _, flag := range []string{"--session-id", "--resume", "-r"} {
+		if v := argValue(args, flag); v != "" && !strings.HasPrefix(v, "-") {
+			return v
+		}
+	}
+	return ""
+}
+
+func newSession(cfg *config.Config, t *proc.Table, p *proc.Process, clis map[int]bool, now time.Time) *Session {
+	s := &Session{PID: p.PID, Started: p.Start, Cwd: t.Cwd(p.PID), ID: ownID(p.Args)}
+	s.Name = argValue(p.Args, "--name")
+	if s.Name == "" {
+		s.Name = argValue(p.Args, "-n")
+	}
+	if env, err := t.Environ(p.PID); err == nil {
+		// Every tool command inherits its session's ids. A CLI whose
+		// environment names a session was started by that session and
+		// carries its host id too; only a CLI the desktop app started
+		// has a host id of its own.
+		if parent := env["CLAUDE_CODE_SESSION_ID"]; parent != "" {
+			s.Parent = parent
+		} else {
+			s.HostID = env["CLAUDE_CODE_HOST_SESSION_ID"]
+		}
+		if s.Name == "" {
+			s.Name = env["CLAUDE_CODE_SESSION_NAME"]
+		}
 	}
 	if s.HostID != "" {
 		if r, ok := ReadRecord(cfg, s.HostID); ok {
@@ -138,14 +202,27 @@ func newSession(cfg *config.Config, t *proc.Table, p *proc.Process, now time.Tim
 			}
 		}
 	}
-	tree := t.Descendants(p.PID)
-	kib := proc.AnonKiB(p.PID)
+	tree := ownTree(t, p.PID, clis)
+	kib := t.AnonKiB(p.PID)
 	for _, d := range tree {
-		kib += proc.AnonKiB(d.PID)
+		kib += t.AnonKiB(d.PID)
 	}
 	s.MemMiB = kib / 1024
 	s.Commands = toolCommands(t, tree, now)
 	return s
+}
+
+// ownTree returns the processes below pid that are its session's: the
+// tree of a session one of its tool commands started is that session's.
+func ownTree(t *proc.Table, pid int, clis map[int]bool) []*proc.Process {
+	var out []*proc.Process
+	for _, c := range t.Children(pid) {
+		if !clis[c.PID] {
+			out = append(out, c)
+			out = append(out, ownTree(t, c.PID, clis)...)
+		}
+	}
+	return out
 }
 
 // ReadRecord reads the desktop record of a host session id.
@@ -343,6 +420,11 @@ func OwnerOf(sessions []*Session, pid int) (*Session, bool) {
 	p := state.Party{Session: env["CLAUDE_CODE_SESSION_ID"], HostSession: env["CLAUDE_CODE_HOST_SESSION_ID"]}
 	if p.Session == "" && p.HostSession == "" {
 		return nil, false
+	}
+	// A child session's commands carry its id and the host id it inherited
+	// from its parent: the session id decides.
+	if s, ok := Live(sessions, state.Party{Session: p.Session}); ok && p.Session != "" {
+		return s, true
 	}
 	return Live(sessions, p)
 }

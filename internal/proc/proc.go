@@ -21,6 +21,9 @@ import (
 // clockTicks is USER_HZ, 100 on every Linux architecture Go supports.
 const clockTicks = 100
 
+// procRoot is the live process tree.
+const procRoot = "/proc"
+
 // Process is one entry of the table.
 type Process struct {
 	PID   int
@@ -44,25 +47,32 @@ func (p *Process) Elapsed(now time.Time) time.Duration { return now.Sub(p.Start)
 type Table struct {
 	ByPID    map[int]*Process
 	children map[int][]int
+	// root is the process tree the table was read from; "" is /proc.
+	root string
 }
 
 // Read scans /proc.
-func Read() (*Table, error) {
-	boot, err := bootTime()
+func Read() (*Table, error) { return ReadAt(procRoot) }
+
+// ReadAt scans the process tree under root: /proc, or a copy of it (each
+// process's stat, cmdline and environ, and the btime line of stat) captured
+// into testdata.
+func ReadAt(root string) (*Table, error) {
+	boot, err := bootTime(root)
 	if err != nil {
 		return nil, err
 	}
-	entries, err := os.ReadDir("/proc")
+	entries, err := os.ReadDir(root)
 	if err != nil {
 		return nil, err
 	}
-	t := &Table{ByPID: map[int]*Process{}, children: map[int][]int{}}
+	t := &Table{ByPID: map[int]*Process{}, children: map[int][]int{}, root: root}
 	for _, e := range entries {
 		pid, err := strconv.Atoi(e.Name())
 		if err != nil {
 			continue
 		}
-		p, err := readProcess(pid, boot)
+		p, err := readProcess(root, pid, boot)
 		if err != nil {
 			continue // exited while scanning
 		}
@@ -75,8 +85,8 @@ func Read() (*Table, error) {
 	return t, nil
 }
 
-func readProcess(pid int, boot time.Time) (*Process, error) {
-	dir := filepath.Join("/proc", strconv.Itoa(pid))
+func readProcess(root string, pid int, boot time.Time) (*Process, error) {
+	dir := filepath.Join(root, strconv.Itoa(pid))
 	stat, err := os.ReadFile(filepath.Clean(filepath.Join(dir, "stat")))
 	if err != nil {
 		return nil, err
@@ -149,8 +159,8 @@ func splitNul(b []byte) []string {
 	return out
 }
 
-func bootTime() (time.Time, error) {
-	f, err := os.Open("/proc/stat")
+func bootTime(root string) (time.Time, error) {
+	f, err := os.Open(filepath.Clean(filepath.Join(root, "stat")))
 	if err != nil {
 		return time.Time{}, fmt.Errorf("reading the process table needs Linux /proc: %w", err)
 	}
@@ -209,8 +219,27 @@ func (t *Table) Children(pid int) []*Process {
 
 // Environ returns the environment of pid (readable for the caller's own
 // processes).
-func Environ(pid int) (map[string]string, error) {
-	raw, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "environ"))
+func Environ(pid int) (map[string]string, error) { return environ(procRoot, pid) }
+
+// Environ returns the environment of pid in the table's process tree.
+func (t *Table) Environ(pid int) (map[string]string, error) { return environ(t.rootDir(), pid) }
+
+// Cwd returns the working directory of pid in the table's process tree.
+func (t *Table) Cwd(pid int) string { return cwd(t.rootDir(), pid) }
+
+// AnonKiB returns the anonymous resident memory of pid in the table's
+// process tree.
+func (t *Table) AnonKiB(pid int) int { return anonKiB(t.rootDir(), pid) }
+
+func (t *Table) rootDir() string {
+	if t.root == "" {
+		return procRoot
+	}
+	return t.root
+}
+
+func environ(root string, pid int) (map[string]string, error) {
+	raw, err := os.ReadFile(filepath.Clean(filepath.Join(root, strconv.Itoa(pid), "environ")))
 	if err != nil {
 		return nil, err
 	}
@@ -224,8 +253,10 @@ func Environ(pid int) (map[string]string, error) {
 }
 
 // Cwd returns the working directory of pid.
-func Cwd(pid int) string {
-	d, err := os.Readlink(filepath.Join("/proc", strconv.Itoa(pid), "cwd"))
+func Cwd(pid int) string { return cwd(procRoot, pid) }
+
+func cwd(root string, pid int) string {
+	d, err := os.Readlink(filepath.Join(root, strconv.Itoa(pid), "cwd"))
 	if err != nil {
 		return ""
 	}
@@ -234,8 +265,10 @@ func Cwd(pid int) string {
 
 // AnonKiB returns the anonymous resident memory of pid in KiB: what killing
 // it would give back.
-func AnonKiB(pid int) int {
-	raw, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "status"))
+func AnonKiB(pid int) int { return anonKiB(procRoot, pid) }
+
+func anonKiB(root string, pid int) int {
+	raw, err := os.ReadFile(filepath.Clean(filepath.Join(root, strconv.Itoa(pid), "status")))
 	if err != nil {
 		return 0
 	}
@@ -250,7 +283,7 @@ func AnonKiB(pid int) int {
 
 // UID returns the real user id pid runs as, or -1 when it cannot be read.
 func UID(pid int) int {
-	raw, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "status"))
+	raw, err := os.ReadFile(filepath.Join(procRoot, strconv.Itoa(pid), "status"))
 	if err != nil {
 		return -1
 	}
@@ -269,7 +302,7 @@ func UID(pid int) int {
 
 // Cgroup returns the cgroup v2 path of pid ("/user.slice/…"), or "".
 func Cgroup(pid int) string {
-	raw, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cgroup"))
+	raw, err := os.ReadFile(filepath.Join(procRoot, strconv.Itoa(pid), "cgroup"))
 	if err != nil {
 		return ""
 	}

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A session started from inside another session no longer reads as that session restarting: a CLI whose environment names a session is its child, listed under its own `--session-id` (or `--resume`) and `-n` name and `started by` it, and `watch` reports no restart of the parent. A `claude -p` its tool shell runs without an id of its own stays one of its commands, and its memory is no longer counted twice once the child is a session.
+- `claude --bg` workers appear in `sessions` under their session id and name; the `claude daemon`, its terminal hosts, the spare CLI, the `--bg` launcher and the other `claude` subcommands (`stop`, `logs`, `mcp`, …) are no longer listed as sessions.
+- `--session-id` on a CLI's command line names the session, ahead of the environment.
+
 ### Changed
 
 - The owner hints on a NEW alert line read as timing, not cause: `[during merging … since …]`, `[during merged … at …]`, so a merge that merely coincides with an alert is not read as its cause.
