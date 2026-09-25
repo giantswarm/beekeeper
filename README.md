@@ -36,10 +36,10 @@ the budget work on any system.
 | Command | For |
 |---|---|
 | `beekeeper status [--bar]` | One line: who supervises, the leases held, the holds in force and the notes and timers that are due. `--bar` prints it as the fixed tab-separated row a desktop bar reads (see [Desktop notifications](#desktop-notifications)). |
-| `beekeeper sessions` | Every running session: the issues and pull requests its latest turns are about, when it was last active, the commands it runs right now (a `devctl` wait, a bounded `sleep` with the time left), its memory, role and leases. Overlaps name what more than one session is on. `--all` adds the paused ones: a message to them does not arrive. |
+| `beekeeper sessions` | Every running session: the issues and pull requests its latest turns are about, when it was last active, the commands it runs right now (a `devctl` wait, a bounded `sleep` with the time left), its memory, how full its context is, its last hour (turns, tool calls and their errors, GitHub calls, cost), role and leases. Overlaps name what more than one session is on. `--all` adds the paused ones: a message to them does not arrive. `--json` has every figure per session and their totals (see [Session metrics](#session-metrics)). |
 | `beekeeper tail <session>` | A session's last turns without tool calls: what it said and what it was told. |
-| `beekeeper snapshot` | One tick: load, RAM, swap, memory pressure, the desktop scope, tmpfs and disk, build slots, kind clusters, the commands sessions sit on, every kernel OOM kill since your last snapshot with whose limit it hit, leases, holds, the GitHub budget, the installations' alerts. It ends with what changed since your last snapshot; `--changes` prints only that. |
-| `beekeeper watch` | Silent until something needs a look, then one line: the source of a `Monitor`. Thresholds repeat at most every 10 minutes; OOM kills, sessions that start, end or restart, stale leases and every NEW or RESOLVED alert of the installations are always reported. A note or timer that falls due, the end of a session with a record and a relay taken or expired are one line each, once: the state keeps that they were reported, so a second or restarted watch stays silent about them. After `supervisor.shift`, `RELAY DUE` is said at the first quiet moment (no gated merge running or settling, no grant waiting, no claim queued), and again only when a quiet moment follows a busy one. A recorded supervisor whose session has ended with no relay open is `SUPERVISOR GONE`, once. `--notify` also sends the events that need a person to the desktop, `--standby` leaves a running supervisor's events to its watch (see [Desktop notifications](#desktop-notifications)). |
+| `beekeeper snapshot` | One tick: load, RAM, swap, memory pressure, the desktop scope, tmpfs and disk, build slots, kind clusters, the sessions' last hour and the three that spent the most in it, the commands sessions sit on, every kernel OOM kill since your last snapshot with whose limit it hit, leases, holds, the GitHub budget, the installations' alerts. It ends with what changed since your last snapshot; `--changes` prints only that. |
+| `beekeeper watch` | Silent until something needs a look, then one line: the source of a `Monitor`. Thresholds repeat at most every 10 minutes; OOM kills, sessions that start, end or restart, stale leases and every NEW or RESOLVED alert of the installations are always reported. A note or timer that falls due, the end of a session with a record and a relay taken or expired are one line each, once: the state keeps that they were reported, so a second or restarted watch stays silent about them. After `supervisor.shift`, `RELAY DUE` is said at the first quiet moment (no gated merge running or settling, no grant waiting, no claim queued), and again only when a quiet moment follows a busy one. A recorded supervisor whose session has ended with no relay open is `SUPERVISOR GONE`, once. A session over a threshold in `metrics.runaway` is one `RUNAWAY` line per figure, once per watch. `--notify` also sends the events that need a person to the desktop, `--standby` leaves a running supervisor's events to its watch (see [Desktop notifications](#desktop-notifications)). |
 | `beekeeper alerts watch\|snapshot\|import\|capture\|replay` | The installations' alerts, read from each Alertmanager through a bounded `kubectl port-forward` (Mimir's with the `giantswarm` tenant, else the plain one), in parallel: `watch` prints one line per NEW or RESOLVED alert since the baseline (pages and your team in capitals, a burst of one alertname as one line, one line when an installation stops or starts answering, the lease holder and the sessions working against it in brackets, and on a NEW line the merges into the installation's lanes and the lease claims on it of the last 30 minutes with their sessions, worded as timing (`during merging …`, `during merged … at …`), not as cause); `snapshot` the current set, grouped; `import` takes over another watcher's per-installation baseline. An alert below its installation's severity floor never appears in either, and an alert that keeps firing and resolving is one FLAPPING line, then quiet until it has been stable for the damper's window; neither a floor nor a damper change prints a burst of lines. `capture <dir>` records each installation's answer, `replay <dir>...` prints what the watch would for recorded answers, from the current baseline without writing it: a floor or damper setting tried before the watch gets it. One process owns the baseline at a time, so two watches never split the lines. Every port-forward ends with the reading, on SIGINT or SIGTERM, and when beekeeper is killed. |
 | `beekeeper budget` | The GitHub core budget from the headers of a real, conditional request (a 304 costs nothing), and every `gh` and `devctl` process with its session. `--gate` exits 3 under the floor. |
 | `beekeeper lease claim\|release\|status\|grant\|revoke` | One holder per resource: the environments in the configuration and the browser. While a supervisor runs, a session claims only what the supervisor granted it, in grant order. |
@@ -181,6 +181,31 @@ tab-separated fields, always present, in this order.
 | 4 | the number of holds in force |
 | 5 | the number of notes and timers whose time has come |
 
+## Session metrics
+
+How each session has been doing, read from what beekeeper already reads, never from GitHub:
+
+| Figure | Source |
+|---|---|
+| busy time (entries less than 5 minutes apart), turns, tool calls, tool errors and the most repeated failing call, GitHub calls (`gh` and `devctl` commands, tools of a GitHub MCP server) | the transcript |
+| tokens (input, cache writes by TTL, cache reads, output) and cost | the transcript's usage fields, once per API response, priced from `metrics.models` |
+| context: the last request's tokens and their share of the model's window | the transcript |
+| idle time | the transcript's modification time |
+| memory: the process tree's anonymous memory, and each capped run's scope (`memory.current`) | `/proc` and the memcap scopes its `run.start` events name |
+| `gh` and `devctl` processes | the process table, attributed as `budget` does |
+| merges queued, merged, refused and failed | the gate's events in the event log |
+| leases and how long each has been held | the lease directories |
+
+The transcript's figures cover its last 512 KiB, the window `sessions` already reads for what a
+session is on (`since` in `--json` is its first entry, `whole` says it is the whole transcript),
+and the last hour of it. `sessions --json` has them per session, `sessions --json` and `snapshot
+--json` the totals; `snapshot` names the three sessions that spent the most in the last hour.
+
+Cost is priced per response from the model's entry in `metrics.models` (US dollars per million
+tokens). The defaults are the Claude API list prices; a model without an entry, or a fast-mode
+response without a `fast` multiplier, makes the cost `cost unknown`, never a guess. There is no
+Prometheus export: nothing on the lab machine scrapes one.
+
 ## Configuration
 
 `$XDG_CONFIG_HOME/beekeeper/config.yaml` (or `--config`, or `$BEEKEEPER_CONFIG`). Every field is
@@ -235,6 +260,14 @@ supervisor:                 # what handover --prompt tells the successor supervi
   scope: The lab machine's sessions, kind labs and merge lanes.   # default: the resources, lanes and installations configured
   shift: 8h                 # watch says RELAY DUE after this, at a quiet moment; default: never
   relayTTL: 15m             # a relay not taken by the successor's start expires
+metrics:
+  models:                   # USD per million tokens and the context window; an entry replaces the default of its id
+    claude-opus-5-5: {input: 4, output: 20, cacheWrite5m: 5, cacheWrite1h: 8, cacheRead: 0.2, contextWindow: 1000000}
+    my-model: {input: 1, output: 5, cacheWrite5m: 1.25, cacheWrite1h: 2, cacheRead: 0.1, fast: 2, contextWindow: 200000}   # fast: fast mode's multiplier
+  runaway:                  # watch says RUNAWAY once per session and figure over these; negative: off
+    githubCallsPerHour: 1000
+    sameErrorRepeats: 10    # the same failing tool call in the last hour
+    contextFill: 0.9
 notify:                     # what watch --notify sends to the desktop
   kinds: [due, oom-line, oom-kill, budget, stale-lease, no-supervisor]   # the default: all
   quietHours: "22:00-07:00" # local time; holds everything but critical; default: none

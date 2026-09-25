@@ -63,6 +63,12 @@ func Tail(path string, n int) ([]Turn, error) {
 	return turns, nil
 }
 
+// The roles of a transcript's message entries.
+const (
+	roleUser      = "user"
+	roleAssistant = "assistant"
+)
+
 type entry struct {
 	Type      string    `json:"type"`
 	Timestamp time.Time `json:"timestamp"`
@@ -83,7 +89,7 @@ func parseTurn(line []byte) (Turn, bool) {
 		return Turn{}, false
 	}
 	var e entry
-	if json.Unmarshal(line, &e) != nil || e.IsMeta || (e.Type != "user" && e.Type != "assistant") {
+	if json.Unmarshal(line, &e) != nil || e.IsMeta || (e.Type != roleUser && e.Type != roleAssistant) {
 		return Turn{}, false
 	}
 	var text []string

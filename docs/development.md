@@ -113,12 +113,21 @@ bus. Label every trial notification as a test in its text.
 `--apply` can be tried on a fixture instead of the real `/tmp`:
 `TMPDIR=/tmp/fixture ./beekeeper free --apply --only session-dirs,tmp-dirs`.
 
+Session metrics are tested against `internal/claude/testdata/transcript/window.jsonl`, the last
+512 KiB of a real transcript of the lab machine stripped to what the figures read: each entry's
+type, timestamp and `isMeta`, the message id (renumbered), model and usage fields, the content
+blocks' types, tool names, tool-use ids (renumbered) and `is_error`, text replaced by `x`. A new
+fixture is made the same way, never written by hand, and its expected figures computed with `jq`
+over the file (usage summed once per message id, the last line of an id being its final usage).
+The repeats, GitHub calls and turn rules are tested on synthetic lines without usage. Timing is
+measured with `beekeeper sessions --json` against the installed release on the same sessions.
+
 ## Layout
 
 | Package | What it knows |
 |---|---|
 | `internal/proc` | The process table from `/proc`, or a copy of it in testdata: parents, children, environment, start time. |
-| `internal/claude` | Sessions: CLI processes (desktop, background, headless, and the children a session starts), desktop session records, transcripts, git checkouts, what each is on and which overlap. |
+| `internal/claude` | Sessions: CLI processes (desktop, background, headless, and the children a session starts), desktop session records, transcripts, git checkouts, what each is on and which overlap, and how each has been doing (turns, tool calls and errors, tokens and cost, context), read from the same 512 KiB window of its transcript in one pass. |
 | `internal/machine` | Memory, pressure, the desktop scope, disk, build slots, kind clusters, OOM kills. |
 | `internal/github` | The budget from rate-limit headers; a pull request's state from `gh pr view`. |
 | `internal/lease` | Lease directories and the grant rule. |

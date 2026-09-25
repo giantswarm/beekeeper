@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"os/signal"
 	"slices"
@@ -37,7 +38,10 @@ Threshold breaches (RAM, swap, desktop scope, load, memory pressure, tmpfs,
 disk, the GitHub budget) repeat at most every watch.repeat (10m) per kind.
 OOM kills are never folded away: every poll reports every kill since the
 last one, grouped by whose limit they hit. Sessions that start, end or
-restart are reported, and so is a lease whose holder is gone. A note or a
+restart are reported, and so is a lease whose holder is gone. A session
+over a threshold in metrics.runaway (GitHub calls in the last hour, the
+same failing tool call repeating in it, its context's fill) is one RUNAWAY
+line per figure, once per watch. A note or a
 timer that falls due, the end of a session with a record (sessions serve)
 and a supervisor relay taken or expired are one line each, once: the state keeps that they were reported, so
 a second or restarted watch stays silent about them. The
@@ -265,6 +269,7 @@ func (w *watcher) poll(ctx context.Context) {
 	w.pending(ctx, sessions)
 	w.sessionChanges(sessions)
 	w.staleLeases(ctx, sessions)
+	w.runaways(sessions, t)
 
 	if w.now.Sub(w.lastBudget) >= th.BudgetEvery.Duration {
 		w.lastBudget = w.now
@@ -571,6 +576,24 @@ func firePending(st *state.State, sessions []*claude.Session, now time.Time) ([]
 		evs = append(evs, event(watchParty, "session.ended", "%s: %s", r.Session.Name, recordText(*r)))
 	}
 	return lines, evs
+}
+
+// runaways prints one line for each session figure over its threshold in
+// metrics.runaway, once per watch: a GitHub budget drain, the same failing
+// tool call repeating, a context near its window.
+func (w *watcher) runaways(sessions []*claude.Session, t *proc.Table) {
+	holders, _ := lease.Dir(w.cfg.LeaseDir).List()
+	_, ms := w.sessionMetrics(sessions, t, holders)
+	for i, s := range sessions {
+		lines := w.runaway(s, ms[i])
+		for _, figure := range slices.Sorted(maps.Keys(lines)) {
+			key := "runaway " + s.Key() + " " + figure
+			if !w.reported[key] {
+				w.reported[key] = true
+				w.emitNow(key, "%s", lines[figure])
+			}
+		}
+	}
 }
 
 func (w *watcher) staleLeases(ctx context.Context, sessions []*claude.Session) {

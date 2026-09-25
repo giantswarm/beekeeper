@@ -117,3 +117,33 @@ func TestLanes(t *testing.T) {
 		t.Error("a repository in two lanes validates")
 	}
 }
+
+func TestMetricsModels(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "c.yaml")
+	raw := "metrics:\n  models:\n    claude-opus-5-5: {input: 1, output: 2, contextWindow: 500000}\n    my-model: {input: 3}\n  runaway: {sameErrorRepeats: -1}\n"
+	if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := c.Metrics
+	if got, _ := m.Model("claude-opus-5-5"); got.Input != 1 || got.ContextWindow != 500000 {
+		t.Errorf("a configured model replaces the default: %+v", got)
+	}
+	if got, ok := m.Model("claude-haiku-4-5-20251001"); !ok || got.Input != 1 {
+		t.Errorf("a dated snapshot is priced like its model: %+v %v", got, ok)
+	}
+	for _, unknown := range []string{"claude-opus-5-6", "claude-opus-5-5-fast", "claude"} {
+		if _, ok := m.Model(unknown); ok {
+			t.Errorf("%s has no price", unknown)
+		}
+	}
+	if _, ok := m.Model("my-model"); !ok {
+		t.Error("a configured model is priced")
+	}
+	if r := m.Runaway; r.SameErrorRepeats != -1 || r.GitHubCallsPerHour != 1000 || r.ContextFill != 0.9 {
+		t.Errorf("runaway %+v", r)
+	}
+}
