@@ -125,8 +125,10 @@ func guides(person string, n *state.Note) bool {
 }
 
 // guideQueue is the queue of the guide of person: the open notes filed for
-// person in filing order, then the sessions waiting on their person.
-func guideQueue(st *state.State, sessions []*claude.Session, person string) []queueItem {
+// person in filing order, then the sessions waiting on their person, the
+// running ones before the stopped ones. The guide's own session, an
+// archived one and a test are left out.
+func guideQueue(st *state.State, sessions []*claude.Session, stopped []*claude.Record, person string) []queueItem {
 	var out []queueItem
 	for i := range st.Notes {
 		n := &st.Notes[i]
@@ -136,19 +138,43 @@ func guideQueue(st *state.State, sessions []*claude.Session, person string) []qu
 		_, live := claude.Live(sessions, n.By)
 		out = append(out, queueItem{Note: n, Owner: n.By.Name, OwnerLive: live, Key: "note#" + strconv.Itoa(n.ID)})
 	}
+	guide := guideRole.get(st).Holder
+	own := func(p state.Party) bool { return guide != nil && guide.Is(p) }
+	wait := func(owner string, live bool, host string, w *claude.Waiting) queueItem {
+		return queueItem{Owner: owner, OwnerLive: live, Waiting: w.Action, Key: "wait:" + host + ":" + w.Turn}
+	}
 	for _, s := range sessions {
-		if s.Waiting != nil {
-			out = append(out, queueItem{Owner: s.Name, OwnerLive: true, Waiting: s.Waiting.Action,
-				Key: "wait:" + cmp.Or(s.HostID, s.ID) + ":" + s.Waiting.Turn})
+		if s.Waiting != nil && s.Aside() == "" && !own(s.Party()) {
+			out = append(out, wait(s.Name, true, cmp.Or(s.HostID, s.ID), s.Waiting))
+		}
+	}
+	for _, r := range stopped {
+		if !own(r.Party()) {
+			out = append(out, wait(cmp.Or(r.Title, r.CLISessionID), false, r.SessionID, r.Waiting()))
 		}
 	}
 	return out
 }
 
+// guideQueue is the queue of the guide of the configured person, with the
+// stopped sessions waiting on their person read from the desktop records.
+func (a *app) guideQueue(st *state.State, sessions []*claude.Session) []queueItem {
+	return guideQueue(st, sessions, claude.StoppedWaiting(a.cfg, sessions), a.cfg.Guide.Person)
+}
+
+// waiter is a waiting session's item owner: its name, "(stopped)" when it
+// runs no CLI.
+func waiter(q queueItem) string {
+	if q.OwnerLive {
+		return strconv.Quote(q.Owner)
+	}
+	return strconv.Quote(q.Owner) + " (stopped)"
+}
+
 // text is the item in one line: owner, status quo, deadline and default.
 func (a *app) queueText(q queueItem) string {
 	if q.Note == nil {
-		return fmt.Sprintf("%q waits on its person: %s", q.Owner, oneLine(q.Waiting))
+		return fmt.Sprintf("%s waits on its person: %s", waiter(q), oneLine(q.Waiting))
 	}
 	n := q.Note
 	who, text := noteFor(n)
@@ -179,9 +205,10 @@ func (a *app) guideQueueCmd() *cobra.Command {
 or an older note's "[for <person>]" prefix, in any case), with the session
 that filed it (its owner, and whether it still runs), its deadline and its
 default, then every session the desktop files as waiting on its person with
-what it needs. With guide.person unset, every note filed --for anyone, and
-a line that says so. A caller that has read the queue before gets only what
-changed.`,
+what it needs, running or stopped, except the guide's own session, an
+archived one and a test (titled "test: …"). With guide.person unset, every
+note filed --for anyone, and a line that says so. A caller that has read
+the queue before gets only what changed.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			st, err := a.store.Read()
@@ -192,7 +219,7 @@ changed.`,
 			if err != nil {
 				return err
 			}
-			q := guideQueue(st, sessions, a.cfg.Guide.Person)
+			q := a.guideQueue(st, sessions)
 			if a.json {
 				return a.printJSON(q)
 			}
@@ -252,7 +279,7 @@ the hand-over before gets only what changed; --full prints everything.`,
 			if err != nil {
 				return err
 			}
-			q := guideQueue(st, sessions, a.cfg.Guide.Person)
+			q := a.guideQueue(st, sessions)
 			r := guideRole.get(st)
 			if prompt {
 				return a.printGuidePrompt(r, q)
@@ -386,6 +413,7 @@ func (a *app) guideFeed(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	stopped := claude.StoppedWaiting(a.cfg, sessions)
 	fire := func(st *state.State) ([]string, []state.Event, bool) {
 		seen, ce := guideRole.observeCLI(st, sessions, a.now)
 		var lines []string
@@ -394,7 +422,7 @@ func (a *app) guideFeed(ctx context.Context) ([]string, error) {
 		}
 		rl, re := guideRole.fireRelay(st, a.now)
 		dl, de := guideRole.fireRelayDue(st, q, a.now)
-		fl, fed := a.feedLines(st, sessions, closed)
+		fl, fed := a.feedLines(st, sessions, stopped, closed)
 		lines = append(append(append(lines, rl...), dl...), fl...)
 		evs := append(append(ce, re...), de...)
 		return lines, evs, seen || fed || len(lines) > 0 || len(evs) > 0
@@ -440,10 +468,10 @@ func (a *app) closedNotes(st *state.State) (map[int]state.Event, error) {
 // feedLines says each queue item the feed has not said yet and each note it
 // said that is closed now, and records what it said in the guide's Fed. It
 // reports whether Fed changed.
-func (a *app) feedLines(st *state.State, sessions []*claude.Session, closed map[int]state.Event) (lines []string, changed bool) {
+func (a *app) feedLines(st *state.State, sessions []*claude.Session, stopped []*claude.Record, closed map[int]state.Event) (lines []string, changed bool) {
 	guideRole.update(st, func(r *state.Role) {
 		var cur []string
-		for _, it := range guideQueue(st, sessions, a.cfg.Guide.Person) {
+		for _, it := range guideQueue(st, sessions, stopped, a.cfg.Guide.Person) {
 			k := it.Key
 			cur = append(cur, k)
 			if slices.Contains(r.Fed, k) {
@@ -452,7 +480,7 @@ func (a *app) feedLines(st *state.State, sessions []*claude.Session, closed map[
 			if it.Note != nil {
 				lines = append(lines, "GUIDE DECISION: "+truncate(a.queueText(it), 240))
 			} else {
-				lines = append(lines, fmt.Sprintf("GUIDE WAITING: %q needs its person: %s", it.Owner, truncate(oneLine(it.Waiting), 200)))
+				lines = append(lines, fmt.Sprintf("GUIDE WAITING: %s needs its person: %s", waiter(it), truncate(oneLine(it.Waiting), 200)))
 			}
 		}
 		for _, k := range r.Fed {

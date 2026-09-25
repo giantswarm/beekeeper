@@ -7,6 +7,8 @@
 package claude
 
 import (
+	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -43,6 +45,22 @@ type Session struct {
 	// Waiting is what the session waits on its person for, as the desktop
 	// recorded it after its last turn; "" when it waits on nobody.
 	Waiting *Waiting `json:"waiting,omitempty"`
+	// Archived says the person archived the session in the desktop app.
+	Archived bool `json:"archived,omitempty"`
+}
+
+// Aside says why the guide leaves the session out of its feed: "archived",
+// "test" (titled "test: …", as every test run is), "" for neither.
+func (s *Session) Aside() string { return aside(s.Name, s.Archived) }
+
+func aside(title string, archived bool) string {
+	switch {
+	case archived:
+		return "archived"
+	case strings.HasPrefix(strings.TrimSpace(title), "test:"):
+		return "test"
+	}
+	return ""
 }
 
 // Waiting is a session's turn that ended needing its person: the desktop's
@@ -106,6 +124,15 @@ type TurnSummary struct {
 	Category    string `json:"status_category"`
 	NeedsAction string `json:"needs_action"`
 }
+
+// Party is the record's session as the state names it.
+func (r *Record) Party() state.Party {
+	return state.Party{Session: r.CLISessionID, HostSession: r.SessionID, Name: r.Title}
+}
+
+// Aside says why the guide leaves the record's session out of its feed, as
+// Session.Aside does.
+func (r *Record) Aside() string { return aside(r.Title, r.IsArchived) }
 
 // Waiting is what the record says the session waits on its person for:
 // its latest turn's summary is blocked on an action; nil otherwise.
@@ -306,6 +333,7 @@ func newSession(cfg *config.Config, t *proc.Table, p *proc.Process, rec *cliReco
 			s.Permission = r.PermissionMode
 			s.Model = r.Model
 			s.Waiting = r.Waiting()
+			s.Archived = r.IsArchived
 		}
 	}
 	if s.Name == "" {
@@ -364,6 +392,10 @@ func readRecord(path string) (*Record, bool) {
 	if err != nil {
 		return nil, false
 	}
+	return parseRecord(raw)
+}
+
+func parseRecord(raw []byte) (*Record, bool) {
 	r := &Record{}
 	if json.Unmarshal(raw, r) != nil {
 		return nil, false
@@ -394,20 +426,46 @@ func Titles(cfg *config.Config) map[string]string {
 	return out
 }
 
-// RecentRecords returns the unarchived desktop records active since since.
-func RecentRecords(cfg *config.Config, since time.Time) []*Record {
+// StoppedRecords returns the unarchived desktop records active since since
+// whose session runs no CLI (paused or closed), most recently active first.
+func StoppedRecords(cfg *config.Config, running []*Session, since time.Time) []*Record {
 	var out []*Record
 	for _, path := range recordFiles(cfg) {
 		fi, err := os.Stat(path)
 		if err != nil || fi.ModTime().Before(since) {
 			continue
 		}
-		if r, ok := readRecord(path); ok && !r.IsArchived {
+		if r, ok := readRecord(path); ok && !r.IsArchived && !runsCLI(running, r) {
 			out = append(out, r)
 		}
 	}
-	slices.SortFunc(out, func(a, b *Record) int { return int(b.LastActivityAt - a.LastActivityAt) })
-	return out
+	return byActivity(out)
+}
+
+// StoppedWaiting returns the desktop records of the sessions that run no
+// CLI and wait on their person, neither archived nor a test, most recently
+// active first: the person can answer one and it resumes.
+func StoppedWaiting(cfg *config.Config, running []*Session) []*Record {
+	var out []*Record
+	for _, path := range recordFiles(cfg) {
+		raw, err := os.ReadFile(filepath.Clean(path))
+		if err != nil || !bytes.Contains(raw, []byte(`"blocked"`)) {
+			continue // the most records: read, never parsed
+		}
+		if r, ok := parseRecord(raw); ok && r.Waiting() != nil && r.Aside() == "" && !runsCLI(running, r) {
+			out = append(out, r)
+		}
+	}
+	return byActivity(out)
+}
+
+func runsCLI(running []*Session, r *Record) bool {
+	return slices.ContainsFunc(running, func(s *Session) bool { return s.HostID == r.SessionID })
+}
+
+func byActivity(rs []*Record) []*Record {
+	slices.SortFunc(rs, func(a, b *Record) int { return cmp.Compare(b.LastActivityAt, a.LastActivityAt) })
+	return rs
 }
 
 func argValue(args []string, flag string) string {

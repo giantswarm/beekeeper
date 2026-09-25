@@ -112,10 +112,7 @@ func textFacts(section, text string) []fact {
 func (a *app) sessionFacts(v *view) []fact {
 	var facts []fact
 	for _, s := range v.Sessions {
-		role := s.Role
-		if len(s.Leases) > 0 {
-			role = strings.TrimPrefix(role+" holds "+strings.Join(s.Leases, ","), " ")
-		}
+		role := roleText(s, s.Role)
 		cmds := make([]string, 0, len(s.Commands))
 		for _, c := range s.Commands {
 			cmds = append(cmds, commandName(c.Args))

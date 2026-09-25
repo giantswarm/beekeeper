@@ -98,7 +98,7 @@ func TestDiscoverKeepsTheDesktopSessionWhenItStartsChildren(t *testing.T) {
 		t.Fatalf("sessions = %v, want the desktop session and its detached child", got)
 	}
 	d := got[desktopPID]
-	if d == nil || d.HostID != desktopHost || d.ID != desktopID || d.Name != desktopName || d.Parent != "" {
+	if d == nil || d.HostID != desktopHost || d.ID != desktopID || d.Name != desktopName || d.Parent != "" || d.Aside() != "test" {
 		t.Fatalf("desktop session = %+v", d)
 	}
 	if !slices.ContainsFunc(d.Commands, func(c Command) bool { return c.PID == inTreePID }) {
@@ -271,6 +271,47 @@ func TestRecordNameIsTheBackgroundWorkersTitle(t *testing.T) {
 	for id, want := range map[string]string{workerA: workerAName, workerB: workerBName, desktopID: ""} {
 		if got := RecordName(cfg, tab, id); got != want {
 			t.Errorf("RecordName(%s) = %q, want %q", id, got, want)
+		}
+	}
+}
+
+func TestStoppedWaitingSkipsArchivedAndTestSessions(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Claude.DesktopDir = filepath.Join("testdata", "desktop-waiting")
+	titles := func(rs []*Record) []string {
+		var out []string
+		for _, r := range rs {
+			out = append(out, r.Title)
+		}
+		return out
+	}
+	// The archived #60 test (no title), the "test: …" run, the completed
+	// session and the stale summary stay out.
+	want := []string{"Land the follow-ups", "Guide Timo through his decisions"}
+	if got := titles(StoppedWaiting(cfg, nil)); !slices.Equal(got, want) {
+		t.Fatalf("stopped and waiting = %q, want %q", got, want)
+	}
+	running := []*Session{{HostID: "local_bbbbbbbb-0000-4000-8000-000000000013"}}
+	if got := titles(StoppedWaiting(cfg, running)); !slices.Equal(got, want[1:]) {
+		t.Fatalf("with the first one running = %q, want %q", got, want[1:])
+	}
+	if got := StoppedRecords(cfg, nil, time.Time{}); len(got) != 5 || slices.ContainsFunc(got, func(r *Record) bool { return r.IsArchived }) {
+		t.Fatalf("stopped records = %q, want every unarchived one", titles(got))
+	}
+}
+
+func TestAsideMarksArchivedAndTestSessions(t *testing.T) {
+	for _, c := range []struct {
+		s    Session
+		want string
+	}{
+		{Session{Name: "c-32", Archived: true}, "archived"},
+		{Session{Name: "test: beekeeper#60 permission hook"}, "test"},
+		{Session{Name: "Test the rollout"}, ""},
+		{Session{Name: "Land the follow-ups"}, ""},
+	} {
+		if got := c.s.Aside(); got != c.want {
+			t.Errorf("%q archived=%v: aside %q, want %q", c.s.Name, c.s.Archived, got, c.want)
 		}
 	}
 }
