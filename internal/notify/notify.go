@@ -29,7 +29,8 @@ const (
 	Budget = "budget"
 	// StaleLease is a lease whose holder's session is gone.
 	StaleLease = "stale-lease"
-	// NoSupervisor is a supervisor whose session ended with no successor.
+	// NoSupervisor is a supervisor whose CLI stayed gone past the restart
+	// grace with no successor: claims wait for one.
 	NoSupervisor = "no-supervisor"
 )
 
@@ -39,6 +40,10 @@ var Kinds = []string{Due, OOMLine, OOMKill, Budget, StaleLease, NoSupervisor}
 // lasting are the kinds that are a condition, not an event with an identity:
 // one notification per Repeat.
 var lasting = map[string]bool{OOMLine: true, Budget: true}
+
+// repeating are the kinds that notify again after Repeat while they last:
+// the lasting ones, and a supervisor gone, per supervisor term.
+var repeating = map[string]bool{OOMLine: true, Budget: true, NoSupervisor: true}
 
 // The urgency levels of the Desktop Notifications Specification.
 const (
@@ -51,9 +56,10 @@ const (
 var Urgencies = []string{Low, Normal, Critical}
 
 // DefaultUrgency is the urgency of a kind notify.urgency does not set:
-// critical for the two that end sessions, else normal.
+// critical for the two that end sessions and a machine without a supervisor,
+// else normal.
 func DefaultUrgency(kind string) string {
-	if kind == OOMLine || kind == OOMKill {
+	if kind == OOMLine || kind == OOMKill || kind == NoSupervisor {
 		return Critical
 	}
 	return Normal
@@ -140,8 +146,9 @@ func New(p Policy, dir string, s Sender, say func(string)) *Notifier {
 }
 
 // Claim records the events of kind identified by keys and returns the keys
-// no watch had claimed before; a lasting kind is claimed as the kind itself
-// once per Repeat and takes no keys. A kind notify.kinds leaves out claims
+// no watch had claimed before, or claimed longer than Repeat ago for a
+// repeating kind; a lasting kind is claimed as the kind itself and takes no
+// keys. A kind notify.kinds leaves out claims
 // nothing.
 func (n *Notifier) Claim(ctx context.Context, now time.Time, kind string, keys ...string) []string {
 	if !slices.Contains(n.policy.Kinds, kind) {
@@ -157,7 +164,7 @@ func (n *Notifier) Claim(ctx context.Context, now time.Time, kind string, keys .
 			if lasting[kind] {
 				id = kind
 			}
-			if s, ok := l.Sent[id]; ok && (!lasting[kind] || now.Sub(s) < n.policy.Repeat) {
+			if s, ok := l.Sent[id]; ok && (!repeating[kind] || now.Sub(s) < n.policy.Repeat) {
 				continue
 			}
 			l.Sent[id] = now.UTC()

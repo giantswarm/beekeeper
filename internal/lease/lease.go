@@ -3,9 +3,10 @@
 // (mkdir is atomic) holding the holder's record; the record's fields are the
 // ones the lab's earlier shell lock wrote, so both read the same directory.
 //
-// While a supervisor session runs, a free lease is not permission: a session
+// While a supervisor is recorded, a free lease is not permission: a session
 // claims only what the supervisor granted it, in the order the grants were
-// given. Grants live in the state document.
+// given, from the supervisor's start to a deliberate stop, whether its
+// session runs or has crashed. Grants live in the state document.
 package lease
 
 import (
@@ -137,11 +138,13 @@ func (r *Refusal) Error() string { return r.Reason }
 type Gate struct {
 	Resource string
 	Caller   state.Party
-	// Supervisor is the running supervisor, nil when none runs.
+	// Supervisor is the recorded supervisor, nil when none is.
 	Supervisor *state.Supervisor
-	// RestartUntil is set while the supervisor's CLI restarts: its grant
-	// rule holds until then.
+	// RestartUntil is set while the supervisor's CLI may still come back
+	// as a restart; Gone once its CLI stayed away longer: claims wait for
+	// its successor.
 	RestartUntil time.Time
+	Gone         bool
 	// Held is whether the resource is held right now (by anyone).
 	Held bool
 	Now  time.Time
@@ -184,7 +187,7 @@ func expired(st *state.State, g state.Grant, held bool, now time.Time, ttl time.
 // claim, returns its index in st.Grants (-1 when none is needed).
 func Check(st *state.State, g Gate) (int, error) {
 	if g.Supervisor == nil || g.Caller.Is(g.Supervisor.Party) || g.Caller.Session == "" {
-		// No supervisor runs, the supervisor itself, or a person.
+		// No supervisor is recorded, the supervisor itself, or a person.
 		return -1, nil
 	}
 	pending := Pending(st, g.Resource, g.Held, g.Now, g.TTL)
@@ -199,9 +202,13 @@ func Check(st *state.State, g Gate) (int, error) {
 			return x.Resource == p.Resource && x.To.Is(p.To) && x.At.Equal(p.At)
 		}), nil
 	}
-	if !g.RestartUntil.IsZero() {
-		return -1, &Refusal{fmt.Sprintf("supervisor %q is restarting its CLI: a free lease is not a grant until %s; send it `%s needed: <purpose>` once it is back, or claim after %s if it does not come back",
-			g.Supervisor.Name, g.RestartUntil.Local().Format(time.TimeOnly), g.Resource, g.RestartUntil.Local().Format(time.TimeOnly))}
+	switch {
+	case g.Gone:
+		return -1, &Refusal{fmt.Sprintf("supervisor %q is gone: a free lease is not a grant until its successor's `beekeeper supervisor start`; send the successor `%s needed: <purpose>`",
+			g.Supervisor.Name, g.Resource)}
+	case !g.RestartUntil.IsZero():
+		return -1, &Refusal{fmt.Sprintf("supervisor %q is restarting its CLI (grace until %s): a free lease is not a grant; send it `%s needed: <purpose>` once it is back",
+			g.Supervisor.Name, g.RestartUntil.Local().Format(time.TimeOnly), g.Resource)}
 	}
 	return -1, &Refusal{fmt.Sprintf("supervisor %q runs: a free lease is not a grant; send it `%s needed: <purpose>` and claim after its `yours %s`",
 		g.Supervisor.Name, g.Resource, g.Resource)}

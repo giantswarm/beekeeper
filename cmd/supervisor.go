@@ -15,14 +15,17 @@ func (a *app) supervisorCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "supervisor",
 		Short: "Start, stop or show the supervisor session",
-		Long: `The supervisor is the one session that watches the others. While its
-session runs, leases are claimed only on its grant and merges wait for its
-word. When its CLI is gone the rule lifts by itself: nobody is stuck behind
-a supervisor that crashed. A CLI restart is not a crash: the rule holds for
-supervisor.restartGrace (1m) after beekeeper first saw the CLI gone, and a
-CLI back under the same session within it keeps the role. The role moves
-to a successor in two steps that leave no gap: the supervisor names it
-(relay), the successor starts.
+		Long: `The supervisor is the one session that watches the others. From its
+start, leases are claimed only on its grant and merges wait for its word,
+until a deliberate ` + "`beekeeper supervisor stop`" + ` or a successor's start: a
+supervisor whose CLI crashed keeps the rule in force, its grants and queue
+stay recorded, and every claim waits for the successor. People and scripts
+(--as) stay ungated. A CLI back under the same session within
+supervisor.restartGrace (1m) of beekeeper first seeing it gone is a restart
+and keeps the role. Past the grace, with no relay open, the watch says
+SUPERVISOR GONE and notifies (no-supervisor, critical) until a supervisor
+is back. The role moves to a successor in two steps that leave no gap: the
+supervisor names it (relay), the successor starts.
 
 Without a subcommand, shows the supervisor and its context in tokens
 against supervisor.relayAt, at which watch says RELAY DUE (exit 3 when none
@@ -76,7 +79,7 @@ runs, 4 in the session a relay relieved).`,
 	var force bool
 	stop := &cobra.Command{
 		Use:   "stop",
-		Short: "End the watch: grants and merge words no longer gate anyone",
+		Short: "End supervision on purpose: grants and merge words no longer gate anyone",
 		Args:  cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			me, err := a.caller()
@@ -218,15 +221,16 @@ func (a *app) supervisorStatus() error {
 	if a.json {
 		_ = a.printJSON(v)
 	}
-	if sv.gating() == nil {
-		return refused("no supervisor runs (%q was recorded at %s; its session is gone)", st.Supervisor.Name, clock(a.now, st.Supervisor.Since))
+	if sv.down() {
+		return refused("no supervisor runs: %q (since %s) is gone since %s; claims wait for a successor's `beekeeper supervisor start`",
+			st.Supervisor.Name, clock(a.now, st.Supervisor.Since), clock(a.now, sv.gone))
 	}
 	if a.json {
 		return nil
 	}
 	restart := ""
 	if sv.restarting() {
-		restart = fmt.Sprintf("; its CLI is restarting (gone since %s): the grant rule holds until %s", stamp(sv.gone), stamp(sv.until))
+		restart = fmt.Sprintf("; its CLI is restarting (gone since %s, grace until %s)", stamp(sv.gone), stamp(sv.until))
 	}
 	relay := ""
 	if st.Relay.Open(a.now) {

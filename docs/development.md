@@ -104,7 +104,11 @@ and a settling merge written into the scratch `state.json` show `RELAY DUE` held
 said once by `watch --once`. A supervisor stand-in killed by its PID and started again with the same
 `--resume <id>` within `supervisor.restartGrace` is a CLI restart: a claim loop from a third
 identity stays refused throughout and `watch --once` says `SUPERVISOR RESTARTED`; one not started
-again shows the rule lifting once the grace has passed. `handover --prompt` on a copy of the live state (`cp -r` of the state and lease
+again keeps the claim loop refused past the grace, until a successor's `supervisor start`. A
+scratch standby watch (`watch --notify --standby`) run inside `dbus-run-session`, with
+`dbus-monitor` recording the `Notify` calls so nothing reaches the desktop, says `SUPERVISOR
+GONE` once past the grace and `SUPERVISOR BACK` once a successor stand-in starts; a stand-in
+that ran `supervisor stop` before its kill gives neither and leaves claims ungated. `handover --prompt` on a copy of the live state (`cp -r` of the state and lease
 directories into the scratch configuration) shows what a successor would get.
 
 The roster is tried with real `claude --bg` workers against scratch state: started through

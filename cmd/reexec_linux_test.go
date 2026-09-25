@@ -19,6 +19,11 @@ func TestBinaryReplaced(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The running binary stays open while it runs: keep its inode allocated,
+	// or a filesystem that reuses it at once gives the replacement the same.
+	if err := os.Link(path, filepath.Join(dir, "running")); err != nil {
+		t.Fatal(err)
+	}
 	b := &binary{path: path, self: self}
 	if b.replaced() {
 		t.Error("the running file reads as replaced")

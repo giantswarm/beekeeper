@@ -86,7 +86,7 @@ type Relief struct {
 // CLI is what beekeeper saw of the supervisor's CLI process in the term
 // Supervisor and Since name: the PID it ran as and since when it has been
 // gone. A CLI back under the same session within supervisor.restartGrace of
-// Gone is a restart, and the grant rule holds throughout.
+// Gone is a restart; the grant rule holds whether it comes back or not.
 type CLI struct {
 	Supervisor Party     `json:"supervisor"`
 	Since      time.Time `json:"since"`

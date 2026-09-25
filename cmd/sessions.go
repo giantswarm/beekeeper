@@ -40,8 +40,8 @@ type view struct {
 type supervisorView struct {
 	state.Supervisor
 	Live bool `json:"live"`
-	// CLIGone and RestartUntil are set while its CLI restarts: gone since
-	// CLIGone, the grant rule holds until RestartUntil.
+	// CLIGone is set while its CLI is gone, RestartUntil while it may still
+	// come back as a restart; the grant rule holds either way.
 	CLIGone      time.Time `json:"cliGone,omitzero"`
 	RestartUntil time.Time `json:"restartUntil,omitzero"`
 	// Relay is the supervisor's last relay; Relieved says it relieved the caller.

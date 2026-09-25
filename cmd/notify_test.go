@@ -88,23 +88,65 @@ func TestSupervisorGoneNotifiesOnceAndEndsStandby(t *testing.T) {
 	if len(du.sent) != 0 || strings.Contains(out.String(), "TIMER") {
 		t.Fatalf("a standby watch fired the supervisor's timer: %s %+v", out, du.sent)
 	}
-	// The supervisor's session ends: after two polls, one line per watch and
-	// one notification, then the standby watch reports the pending itself.
-	for range 3 {
-		unit.pending(context.Background(), nil)
-		sup.pending(context.Background(), nil)
+	// The supervisor's session ends: once the restart grace has passed, one
+	// line per watch and one critical notification; the standby watch
+	// reports the pending itself from the first poll that misses the
+	// supervisor.
+	poll := func(at time.Duration, sessions []*claude.Session) {
+		unit.now, sup.now = relayNow.Add(at), relayNow.Add(at)
+		unit.pending(context.Background(), sessions)
+		sup.pending(context.Background(), sessions)
 	}
-	gone := 0
-	for _, m := range append(du.sent, ds.sent...) {
-		if m.Summary == "beekeeper: no supervisor" {
-			gone++
+	gone := func() (n int) {
+		for _, m := range append(du.sent, ds.sent...) {
+			if m.Summary == "beekeeper: no supervisor, claims gated" && m.Urgency == notify.Critical && strings.Contains(m.Body, `"Agent four"`) {
+				n++
+			}
 		}
+		return n
 	}
-	if gone != 1 || strings.Count(out.String(), "SUPERVISOR GONE") != 1 {
-		t.Fatalf("no-supervisor: %d notifications, lines:\n%s", gone, out)
+	poll(0, nil)
+	poll(40*time.Second, nil)
+	// A CLI back within the grace is a restart: nothing to say.
+	poll(45*time.Second, live)
+	if strings.Contains(out.String(), "SUPERVISOR") || gone() != 0 {
+		t.Fatalf("a restart within the grace was said:\n%s", out)
+	}
+	poll(50*time.Second, nil)
+	poll(90*time.Second, nil)
+	if strings.Contains(out.String(), "SUPERVISOR GONE") {
+		t.Fatalf("gone within the grace:\n%s", out)
+	}
+	poll(2*time.Minute, nil)
+	poll(3*time.Minute, nil)
+	poll(10*time.Minute, nil)
+	if gone() != 1 || strings.Count(out.String(), "SUPERVISOR GONE") != 1 || !strings.Contains(out.String(), "claims stay gated") {
+		t.Fatalf("no-supervisor: %d notifications, lines:\n%s", gone(), out)
 	}
 	if !strings.Contains(out.String(), "TIMER: #1") {
 		t.Errorf("the standby watch leaves the timer to a supervisor that is gone:\n%s", out)
+	}
+	// While it lasts, again after notify.repeat, still one line.
+	poll(2*time.Minute+30*time.Minute, nil)
+	poll(3*time.Minute+30*time.Minute, nil)
+	if gone() != 2 || strings.Count(out.String(), "SUPERVISOR GONE") != 1 {
+		t.Fatalf("repeat: %d notifications, lines:\n%s", gone(), out)
+	}
+	// Its CLI back: one line, and no more notifications.
+	poll(40*time.Minute, live)
+	poll(41*time.Minute, live)
+	poll(80*time.Minute, live)
+	if strings.Count(out.String(), "SUPERVISOR BACK: \"Agent four\"") != 1 || gone() != 2 {
+		t.Fatalf("back: %d notifications, lines:\n%s", gone(), out)
+	}
+	// Supervision ended on purpose: nothing to say.
+	if err := unit.store.Update(func(s *state.State) ([]state.Event, error) { s.Supervisor = nil; return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	poll(90*time.Minute, nil)
+	poll(95*time.Minute, nil)
+	if strings.Count(out.String(), "SUPERVISOR") != 2 || gone() != 2 {
+		t.Fatalf("after supervisor stop: %d notifications, lines:\n%s", gone(), out)
 	}
 }
 
