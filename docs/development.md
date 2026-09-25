@@ -110,7 +110,9 @@ The roster is tried with real `claude --bg` workers against scratch state: start
 scratch configuration, a haiku worker started with `-n "test: …"` registers under that title
 without `--name` (its tool commands inherit no name: `caller` reads its CLI's record). Once it is
 stopped (`claude stop <id>`), a second worker under the same title replaces its entry and gets
-the next `agents assign`; a third session registering under the name of a running worker is
+the next `agents assign`; a task assigned to the stopped worker's entry before the second one
+registers is the second one's (`agents --json`, and `beekeeper log --verb agents.` shows
+`takes over "<task>"`); a third session registering under the name of a running worker is
 refused. `claude stop` and `claude rm` end the workers; the daemon and its spare are killed by
 their PIDs.
 

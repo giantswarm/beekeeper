@@ -56,28 +56,32 @@ Without a subcommand, lists the agents.`,
 				_, ok := claude.Live(sessions, p)
 				return ok
 			}
-			var replaced []state.Agent
+			var reg registration
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				var err error
-				replaced, err = registerAgent(st, me, live, a.now.UTC())
+				reg, err = registerAgent(st, me, live, a.now.UTC())
 				if err != nil {
 					return nil, err
 				}
 				detail := me.Name
-				for _, r := range replaced {
+				for _, r := range reg.replaced {
 					detail += fmt.Sprintf(", replaces %s", r.Session)
+				}
+				if reg.task != "" {
+					detail += fmt.Sprintf(", takes over %q", reg.task)
 				}
 				return []state.Event{event(me, "agents.register", "%s", detail)}, nil
 			})
 			if err != nil {
 				return err
 			}
-			for _, r := range replaced {
-				unfinished := ""
-				if r.Task != "" {
-					unfinished = fmt.Sprintf(", its task unfinished: %q", r.Task)
-				}
-				_, _ = fmt.Fprintf(a.out, "register: replaces the entry of session %s, which no longer runs%s\n", r.Session, unfinished)
+			for _, r := range reg.replaced {
+				_, _ = fmt.Fprintf(a.out, "register: replaces the entry of session %s, which no longer runs\n", r.Session)
+			}
+			if reg.task != "" {
+				_, err = fmt.Fprintf(a.out, "register: %s takes over the unfinished task %q, assigned %s: work it, then `beekeeper agents idle`\n",
+					me.Name, reg.task, clock(a.now, reg.assignedAt))
+				return err
 			}
 			_, err = fmt.Fprintf(a.out, "register: %s idle, ready for a task\n", me.Name)
 			return err
@@ -171,24 +175,47 @@ Without a subcommand, lists the agents.`,
 	return c
 }
 
-// registerAgent puts me on the roster as an idle agent and returns the
-// entries it replaces. A name is one agent's: me replaces its own entry and
-// the entries under its name of sessions that no longer run, and is refused
-// a name the entry of a running session holds.
-func registerAgent(st *state.State, me state.Party, live func(state.Party) bool, now time.Time) ([]state.Agent, error) {
-	var replaced []state.Agent
+// registration is what registerAgent did: the entries of other sessions it
+// replaced and the open task the new entry took over from an entry it
+// dropped, empty when none had one.
+type registration struct {
+	replaced   []state.Agent
+	task       string
+	assignedAt time.Time
+}
+
+// registerAgent puts me on the roster and says what it replaced. A name is
+// one agent's: me replaces its own entry and the entries under its name of
+// sessions that no longer run, and is refused a name the entry of a running
+// session holds. An open task of a dropped entry is never lost: the new
+// entry takes it over with its assignment time, and two dropped entries with
+// open tasks are refused, since one entry holds one task.
+func registerAgent(st *state.State, me state.Party, live func(state.Party) bool, now time.Time) (registration, error) {
+	var reg registration
+	var holder string
 	for _, x := range st.Agents {
-		if x.Is(me) || !strings.EqualFold(x.Name, me.Name) {
+		own := x.Is(me)
+		if !own && !strings.EqualFold(x.Name, me.Name) {
 			continue
 		}
-		if live(x.Party) {
-			return nil, refused("%q is the name of the running session %s: register under another with --name", x.Name, x.Session)
+		if !own {
+			if live(x.Party) {
+				return registration{}, refused("%q is the name of the running session %s: register under another with --name", x.Name, x.Session)
+			}
+			reg.replaced = append(reg.replaced, x)
 		}
-		replaced = append(replaced, x)
+		if x.Task == "" {
+			continue
+		}
+		if reg.task != "" {
+			return registration{}, refused("the entries of sessions %s and %s both hold an open task (%q, %q): finish one, or take it off with `beekeeper agents remove`",
+				holder, x.Session, reg.task, x.Task)
+		}
+		reg.task, reg.assignedAt, holder = x.Task, x.AssignedAt, x.Session
 	}
 	st.Agents = slices.DeleteFunc(st.Agents, func(x state.Agent) bool { return x.Is(me) || strings.EqualFold(x.Name, me.Name) })
-	st.Agents = append(st.Agents, state.Agent{Party: me, Registered: now, IdleSince: now})
-	return replaced, nil
+	st.Agents = append(st.Agents, state.Agent{Party: me, Registered: now, IdleSince: now, Task: reg.task, AssignedAt: reg.assignedAt})
+	return reg, nil
 }
 
 func findAgent(st *state.State, q string) (int, error) {
