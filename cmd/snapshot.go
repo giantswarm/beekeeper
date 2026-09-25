@@ -36,6 +36,7 @@ type snapshot struct {
 	ClustersErr string            `json:"clustersError,omitempty"`
 	Sessions    []string          `json:"sessions"`
 	CLIMemMiB   int               `json:"cliMemMiB"`
+	Metrics     *metricsTotals    `json:"metrics,omitempty"`
 	Waits       []wait            `json:"waits,omitempty"`
 	OOMSince    time.Time         `json:"oomSince"`
 	OOM         []oomKill         `json:"oom,omitempty"`
@@ -71,7 +72,9 @@ func (a *app) snapshotCmd() *cobra.Command {
 		Long: `Print one screen of the machine's state: load, RAM and swap, memory
 pressure, the Claude Desktop scope (anonymous memory is what can OOM it;
 memory.current is mostly reclaimable cache), tmpfs and disk, build slots,
-kind clusters, the commands sessions sit on (with their owner), the kernel
+kind clusters, the sessions' last hour (turns, tool calls, errors, GitHub
+calls, cost) and the three that spent the most in it, the commands sessions
+sit on (with their owner), the kernel
 OOM kills since your last snapshot (every one counted, attributed to a
 memcap scope, a kind lab or the desktop scope), leases, holds and the GitHub
 budget, and the installations' alerts, grouped (beekeeper alerts snapshot).
@@ -213,6 +216,8 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 	for _, h := range holders {
 		s.Leases = append(s.Leases, a.leaseView(sessions, h))
 	}
+	_, ms := a.sessionMetrics(sessions, t, holders)
+	s.Metrics = totals(sessions, ms)
 	st, err := a.store.Read()
 	if err != nil {
 		return nil, err
@@ -390,6 +395,12 @@ func (a *app) printSnapshot(s *snapshot) {
 		p("kind clusters: %s", strings.Join(cl, ", "))
 	}
 	p("sessions: %d CLIs, %d MiB anonymous", len(s.Sessions), s.CLIMemMiB)
+	if m := s.Metrics; m != nil {
+		p("last hour: %s; %d gh/devctl processes now; merges %d queued, %d merged", hourText(m.LastHour), m.GitHubProcesses, m.Merges.Queued, m.Merges.Merged)
+		for _, t := range m.Top {
+			p("  %s  %s  context %.0f%%", truncate(t.Name, 44), costText(t.LastHour), 100*t.ContextFill)
+		}
+	}
 	if len(s.Waits) > 0 {
 		p("waits:")
 		for _, w := range s.Waits {

@@ -118,6 +118,22 @@ func FindScope() string {
 	return best
 }
 
+// memcapSlice is the slice `beekeeper run` starts its capped scopes in.
+const memcapSlice = "/sys/fs/cgroup/user.slice/user-*.slice/user@*.service/memcap.slice/"
+
+// FindMemcapScope returns the cgroup of the capped run's scope unit (as a
+// run event names it, "memcap-….scope"), or "" when it has ended.
+func FindMemcapScope(unit string) string {
+	if unit == "" || strings.ContainsAny(unit, "/*?[") {
+		return ""
+	}
+	m, _ := filepath.Glob(memcapSlice + unit)
+	if len(m) == 0 {
+		return ""
+	}
+	return m[0]
+}
+
 // ReadScope reads the cgroup at path.
 func ReadScope(path string) *Scope {
 	s := &Scope{

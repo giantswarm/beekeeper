@@ -22,11 +22,14 @@ type sessionView struct {
 	Leases []string    `json:"leases,omitempty"`
 	// Serves is the session's record: the issue it serves, what it waits on.
 	Serves *state.Record `json:"serves,omitempty"`
+	// Metrics are how it has been doing: read with its work.
+	Metrics *metrics `json:"metrics,omitempty"`
 }
 
 // view is everything the session-level commands show.
 type view struct {
 	Sessions   []*sessionView   `json:"sessions"`
+	Totals     *metricsTotals   `json:"totals,omitempty"`
 	Overlaps   []claude.Overlap `json:"overlaps,omitempty"`
 	Supervisor *supervisorView  `json:"supervisor,omitempty"`
 	Leases     []leaseView      `json:"leases,omitempty"`
@@ -43,9 +46,9 @@ type supervisorView struct {
 }
 
 // collect reads processes, sessions, state and leases; withWork also scans
-// the transcripts for what each session is on.
+// the transcripts for what each session is on and how it has been doing.
 func (a *app) collect(withWork bool) (*view, error) {
-	raw, _, err := a.sessions()
+	raw, t, err := a.sessions()
 	if err != nil {
 		return nil, err
 	}
@@ -66,10 +69,16 @@ func (a *app) collect(withWork bool) (*view, error) {
 		v.Leases = append(v.Leases, a.leaseView(raw, h))
 	}
 	work := map[int]claude.Work{}
-	for _, s := range raw {
+	var works []claude.Work
+	var ms []*metrics
+	if withWork {
+		works, ms = a.sessionMetrics(raw, t, holders)
+		v.Totals = totals(raw, ms)
+	}
+	for i, s := range raw {
 		sv := &sessionView{Session: s}
 		if withWork {
-			sv.Work = claude.ReadWork(s.Transcript)
+			sv.Work, sv.Metrics = works[i], ms[i]
 			work[s.PID] = sv.Work
 		}
 		sv.Role = roleOf(st, s)
@@ -118,10 +127,21 @@ func (a *app) sessionsCmd() *cobra.Command {
 		Long: `List the running Claude Code sessions, most recently active first: the
 repository and the issues or pull requests its latest turns are about, when
 it was last active, the tool commands it runs right now (a devctl wait, a
-bounded sleep with the time left), its memory, and its role and leases. A
+bounded sleep with the time left), its memory, how full its context is,
+its last hour (turns, tool calls and their errors, GitHub calls, cost),
+and its role and leases. A
 session another session started (a claude -p or claude --bg worker with an
 id of its own) is listed under its own id and name, started by that session;
 a claude --bg daemon is no session.
+
+The figures come from the last 512 KiB of each transcript, the process
+table, the memcap scopes, the event log and the leases, never from GitHub;
+--json has them all per session (over the transcript window and the last
+hour: busy time, turns, tool calls, errors and the most repeated failing
+call, GitHub calls, tokens and cost, context; idle time, the capped runs'
+memory, gh and devctl processes, merges, lease times) and their totals.
+Cost is priced from metrics.models; a model without a price is "cost
+unknown".
 
 Overlaps name the issues, pull requests and repositories more than one
 session is on now. --all adds the sessions of the last 24 hours that run no
@@ -295,7 +315,7 @@ func (a *app) paused(running []*claude.Session) []*claude.Record {
 
 func (a *app) printSessions(v *view) {
 	w := a.table()
-	_, _ = fmt.Fprintln(w, "SESSION\tON\tACTIVE\tRUNNING\tMEM\tROLE / LEASES")
+	_, _ = fmt.Fprintln(w, "SESSION\tON\tACTIVE\tRUNNING\tMEM\tCTX\tLAST HOUR\tROLE / LEASES")
 	for _, s := range v.Sessions {
 		role := s.Role
 		if role == "" && s.Parent != "" {
@@ -304,11 +324,18 @@ func (a *app) printSessions(v *view) {
 		if len(s.Leases) > 0 {
 			role = strings.TrimPrefix(role+" holds "+strings.Join(s.Leases, ","), " ")
 		}
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%dM\t%s\n",
+		hour := "-"
+		if s.Metrics != nil {
+			hour = hourText(s.Metrics.LastHour)
+		}
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%dM\t%s\t%s\t%s\n",
 			truncate(s.Name, 44), truncate(on(s), 44), ago(a.now, s.LastActive),
-			truncate(running(s.Commands), 40), s.MemMiB, truncate(role, 40))
+			truncate(running(s.Commands), 40), s.MemMiB, contextText(s.Metrics), hour, truncate(role, 40))
 	}
 	_ = w.Flush()
+	if t := v.Totals; t != nil {
+		_, _ = fmt.Fprintf(a.out, "\nLast hour, all sessions: %s; %d gh/devctl processes now\n", hourText(t.LastHour), t.GitHubProcesses)
+	}
 	if len(v.Overlaps) > 0 {
 		_, _ = fmt.Fprintln(a.out, "\nOverlaps:")
 		for _, o := range v.Overlaps {

@@ -27,24 +27,31 @@ const workWindow = 512 << 10
 
 // ReadWork scans the tail of the transcript at path.
 func ReadWork(path string) Work {
+	buf, _ := readWindow(path)
+	return scanWork(string(buf))
+}
+
+// readWindow returns the last workWindow bytes of the transcript at path
+// and whether they are all of it.
+func readWindow(path string) ([]byte, bool) {
 	if path == "" {
-		return Work{}
+		return nil, false
 	}
 	f, err := os.Open(filepath.Clean(path))
 	if err != nil {
-		return Work{}
+		return nil, false
 	}
 	defer func() { _ = f.Close() }()
 	fi, err := f.Stat()
 	if err != nil {
-		return Work{}
+		return nil, false
 	}
 	off := max(fi.Size()-workWindow, 0)
 	buf := make([]byte, fi.Size()-off)
 	if _, err := f.ReadAt(buf, off); err != nil && err != io.EOF {
-		return Work{}
+		return nil, false
 	}
-	return scanWork(string(buf))
+	return buf, off == 0
 }
 
 // scanWork finds "github.com/o/r/pull/N", "github.com/o/r/issues/N",
