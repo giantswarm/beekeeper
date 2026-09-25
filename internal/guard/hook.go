@@ -13,10 +13,32 @@ import (
 	"github.com/giantswarm/beekeeper/internal/lease"
 )
 
-// pos is a command position: start of line, after ; & | ( $( or
-// then/do/else, with optional wrappers (timeout 600, time, nice, env,
-// VAR=val, command).
-const pos = `(?:^|[;&|(]\s*|\$\(\s*|\b(?:then|do|else)\s+)(?:(?:timeout\s+\S+|time|nice(?:\s+-n\s*\d+)?|env(?:\s+\w+=\S*)*|command|\w+=\S*)\s+)*`
+// start is where a command starts: start of line, after ; & | ( $( or
+// then/do/else.
+const start = `(?:^|[;&|(]\s*|\$\(\s*|\b(?:then|do|else)\s+)`
+
+// pos is a command position: a start with optional wrappers (timeout 600,
+// time, nice, env, VAR=val, command).
+const pos = start + `(?:(?:timeout\s+\S+|time|nice(?:\s+-n\s*\d+)?|env(?:\s+\w+=\S*)*|command|\w+=\S*)\s+)*`
+
+// mergePos is a command position for the merge gate: a start with any of the
+// prefix commands that run their arguments as a command, with their options.
+// The build rewrite keeps pos: a wider one would change what it wraps.
+const mergePos = start + `(?:(?:` +
+	`flock(?:\s+(?:-[wE]\s*\S+|--(?:timeout|wait|conflict-exit-code)(?:=|\s+)\S+|-[a-zA-Z]+|--[\w-]+))*\s+[^\s;&|()-]\S*` +
+	`|timeout(?:\s+(?:-[ks]\s*\S+|-\S+))*\s+\d\S*` +
+	`|nice(?:\s+(?:-n\s*-?\d+|-\d+|--adjustment=-?\d+))?` +
+	`|ionice(?:\s+(?:-[cnpP]\s*\S+|-\S+))*` +
+	`|chrt(?:\s+-\S+)*\s+\d+` +
+	`|stdbuf(?:\s+(?:-[ioe]\s*\S+|--\S+))+` +
+	`|env(?:\s+(?:-[uC]\s*\S+|-\S+|\w+=\S*))*` +
+	`|setsid(?:\s+-\S+)*` +
+	`|nohup|time(?:\s+-p)?|command|exec|\w+=\S*` +
+	`)\s+)*`
+
+// devctlMerge is devctl pr merge, devctl by name or by a path that starts
+// with /, ~/, ./, ../ or a variable ($HOME/bin/devctl).
+const devctlMerge = `(?:(?:~|\.\.?|\$\{?\w+\}?)?/(?:[^\s;&|()'"<>=]*/)?)?devctl\s+pr\s+merge\b`
 
 var (
 	heavy = regexp.MustCompile(`(?m)` + pos + `(` + strings.Join([]string{
@@ -36,7 +58,12 @@ var (
 	// lightMake: make targets that build nothing (RE2 has no lookahead).
 	lightMake = regexp.MustCompile(`^\s+(?:-n\b|--dry-run\b|help\b|version\b|clean\b|fmt\b|print-|list\b)`)
 	// merge: devctl pr merge at a command position, the gate goes before it.
-	merge   = regexp.MustCompile(`(?m)` + pos + `(devctl\s+pr\s+merge)\b`)
+	merge = regexp.MustCompile(`(?m)` + mergePos + `(` + devctlMerge + `)`)
+	// anyMerge: devctl pr merge anywhere; gated: the gate ends the text before it.
+	anyMerge = regexp.MustCompile(devctlMerge)
+	gated    = regexp.MustCompile(`\bgate\s+(?:--wait\s+\S+\s+)?--\s+$`)
+	// shellC: a shell's -c option up to the quote opening its command string.
+	shellC  = regexp.MustCompile(`(?:^|[\s;&|(/])(?:ba|z|da|k)?sh\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*c[a-zA-Z]*\s+(['"])`)
 	lab     = regexp.MustCompile(`(?m)` + pos + `(agentlab\s+up\b|kind\s+create\s+cluster\b)`)
 	trivial = regexp.MustCompile(`^\s*\S+(?:\s+\S+)?\s+(?:--version|-V|--help|-h|help)\s*$`)
 	// wrapped: the command invokes the wrapper itself, by name or path, at a
@@ -49,6 +76,13 @@ var (
 	cdArg     = regexp.MustCompile(`(?:^|[;&|]\s*)cd\s+(\S+)`)
 	clusterRe = regexp.MustCompile(`^\s*clusterName:\s*"?([\w.-]+)"?`)
 	shellSafe = regexp.MustCompile(`^[\w@%+=:,./-]+$`)
+)
+
+// The hook's permission decisions and the Bash tool's background flag.
+const (
+	decisionAllow = "allow"
+	decisionDeny  = "deny"
+	backgroundKey = "run_in_background"
 )
 
 // MaxLabs is how many kind clusters the machine runs at most.
@@ -88,8 +122,12 @@ func (h Hook) Decide(input []byte) []byte {
 	if strings.TrimSpace(cmd) == "" || trivial.MatchString(cmd) {
 		return nil
 	}
-	bg, _ := ev.ToolInput["run_in_background"].(bool)
+	bg, _ := ev.ToolInput[backgroundKey].(bool)
 	cmd, gated := h.gate(cmd, bg)
+	if fixed, ok := h.hiddenMerges(cmd, bg); ok {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused: a devctl pr merge inside a shell's -c string " +
+			"runs outside the merge gate. Run it as its own command, or with the gate written in:\n" + fixed})
+	}
 	if wrapped.MatchString(cmd) {
 		return h.rewrite(ev.ToolInput, cmd, gated, bg)
 	}
@@ -102,7 +140,7 @@ func (h Hook) Decide(input []byte) []byte {
 		running := h.Clusters()
 		target := labTarget(cmd, m, cwd)
 		if !slices.Contains(running, target) && len(running) >= MaxLabs {
-			return answer(hookOutput{PermissionDecision: "deny", Reason: fmt.Sprintf(
+			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: fmt.Sprintf(
 				"Refused: %d kind labs already run (%s) and this machine allows at most %d. `%s` would create a third (%s). "+
 					"Reuse a running lab — claim it with `beekeeper lease claim` — or wait until one is torn down; do not poll for it.\nleases:\n%s",
 				len(running), strings.Join(running, ", "), MaxLabs, strings.TrimSpace(cmd[m[2]:m[3]]), target, leaseLines(h.Leases()))})
@@ -120,17 +158,58 @@ func (h Hook) Decide(input []byte) []byte {
 }
 
 // gate puts "beekeeper gate --" before every devctl pr merge at a command
-// position; a background merge waits up to 30 minutes for its turn.
+// position, behind its prefix commands, so that only the devctl invocation
+// is wrapped and pipelines and lists run as written.
 func (h Hook) gate(cmd string, bg bool) (string, bool) {
-	ms := merge.FindAllStringSubmatchIndex(cmd, -1)
+	var at []int
+	for _, m := range merge.FindAllStringSubmatchIndex(cmd, -1) {
+		at = append(at, m[2])
+	}
+	return h.insertGate(cmd, at, bg), len(at) > 0
+}
+
+// hiddenMerges returns cmd with the gate before each devctl pr merge the gate
+// rewrite left inside a sh, bash or zsh -c string, and whether there was one.
+// The hook refuses such a command rather than rewriting a quoted string.
+func (h Hook) hiddenMerges(cmd string, bg bool) (string, bool) {
+	var at []int
+	for _, m := range shellC.FindAllStringSubmatchIndex(cmd, -1) {
+		body := cmd[m[1]:]
+		end := closingQuote(body, cmd[m[2]])
+		for _, mm := range anyMerge.FindAllStringIndex(body[:end], -1) {
+			if !gated.MatchString(body[:mm[0]]) {
+				at = append(at, m[1]+mm[0])
+			}
+		}
+	}
+	return h.insertGate(cmd, at, bg), len(at) > 0
+}
+
+// insertGate puts the gate before each offset in at, in ascending order; a
+// background merge waits up to 30 minutes for its turn.
+func (h Hook) insertGate(cmd string, at []int, bg bool) string {
 	gate := ShellQuote(h.Self) + " gate -- "
 	if bg {
 		gate = ShellQuote(h.Self) + " gate --wait 30m -- "
 	}
-	for i := len(ms) - 1; i >= 0; i-- {
-		cmd = cmd[:ms[i][2]] + gate + cmd[ms[i][2]:]
+	for i := len(at) - 1; i >= 0; i-- {
+		cmd = cmd[:at[i]] + gate + cmd[at[i]:]
 	}
-	return cmd, len(ms) > 0
+	return cmd
+}
+
+// closingQuote is the offset of the quote q closing the string s starts in,
+// len(s) when it does not close.
+func closingQuote(s string, q byte) int {
+	for i := 0; i < len(s); i++ {
+		switch {
+		case s[i] == q:
+			return i
+		case s[i] == '\\' && q == '"':
+			i++
+		}
+	}
+	return len(s)
 }
 
 // rewrite allows the call with cmd as its command when changed, a
@@ -147,7 +226,7 @@ func (h Hook) rewrite(input map[string]any, cmd string, changed, bg bool) []byte
 	if !bg {
 		updated["timeout"] = max(toInt(input["timeout"]), 600000)
 	}
-	return answer(hookOutput{PermissionDecision: "allow", UpdatedInput: updated})
+	return answer(hookOutput{PermissionDecision: decisionAllow, UpdatedInput: updated})
 }
 
 func isHeavy(cmd string) bool {
