@@ -447,12 +447,31 @@ func (a *app) awaitNote(ctx context.Context, p state.Party, since time.Time, wai
 	}
 }
 
+// bgJob is a session claude agents lists: its job id, session id and kind.
+type bgJob struct {
+	ID      string `json:"id"`
+	Session string `json:"sessionId"`
+	Kind    string `json:"kind"`
+}
+
 // claudeStop stops a background session through its daemon, which would
-// otherwise resume it once its CLI dies.
+// otherwise resume it once its CLI dies. The daemon names its sessions by a
+// job id of their own, which claude agents maps to the session id.
 var claudeStop = func(ctx context.Context, id string) error {
-	out, err := exec.CommandContext(ctx, "claude", "stop", id).CombinedOutput() //nolint:gosec // the session handed over
+	out, err := exec.CommandContext(ctx, "claude", "agents", "--json").Output()
 	if err != nil {
-		return fmt.Errorf("claude stop %s: %w: %s", id, err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("claude agents: %w", err)
+	}
+	var jobs []bgJob
+	if err := json.Unmarshal(out, &jobs); err != nil {
+		return fmt.Errorf("claude agents: %w", err)
+	}
+	i := slices.IndexFunc(jobs, func(j bgJob) bool { return j.Session == id && j.Kind == "background" && j.ID != "" })
+	if i < 0 {
+		return fmt.Errorf("claude agents lists no background job of session %s", id)
+	}
+	if out, err := exec.CommandContext(ctx, "claude", "stop", jobs[i].ID).CombinedOutput(); err != nil { //nolint:gosec // the job claude agents named
+		return fmt.Errorf("claude stop %s: %w: %s", jobs[i].ID, err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
