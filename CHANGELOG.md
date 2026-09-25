@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `beekeeper supervisor spare <session>` records the relay spare; `supervisor status` and `handover` show it, and the spare's `supervisor start` clears it. The state's `spare` field is new; older binaries carry it unchanged.
-- The standby watch (`watch --standby`) keeps the spare awake: once it sat idle for `supervisor.keepAwake` (default `25m`, under the desktop's 30-minute idle disconnect) it sends `beekeeper keep-awake: reply "ok", nothing else` from the command line, silent unless it fails (`KEEP-AWAKE FAILED`, `SPARE ASLEEP`).
+- The standby watch (`watch --standby`) keeps the spare awake: once it sat idle for `supervisor.keepAwake` (default `25m`, under the desktop's 30-minute idle timeout for an off-screen CLI) it sends `beekeeper keep-awake: reply "ok", nothing else` from the command line, silent unless it fails (`KEEP-AWAKE FAILED`, `SPARE ASLEEP`).
 - After a supervisor crash the standby watch hands the role to the running spare from the command line once the CLI has been gone past `supervisor.restartGrace` (`HANDOVER`); `SUPERVISOR GONE` and its notification name the spare. A supervisor CLI back under a new PID is told to resume the role (`RESUME`).
 - `beekeeper supervisor reopen` and the login unit `contrib/systemd/beekeeper-supervisor-open.service` start the desktop app on the recorded supervisor's session after a reboot; the standby watch does the same once after an app restart with no spare to take over.
 - `internal/peer` sends a message to a running session from the command line: one headless `claude -p` turn with SendMessage, the only interface Claude Code offers for it.

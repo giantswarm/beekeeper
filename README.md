@@ -217,8 +217,9 @@ after `notify.repeat` while the gap lasts. A supervisor back, the same one or a 
 
 The supervisor records its relay spare with `beekeeper supervisor spare <session>`; `supervisor
 status` and `handover` show it, and the spare's own `supervisor start` clears it. The desktop app
-disconnects the CLI of a session that sat idle for 30 minutes off screen, and only a message from
-inside the desktop starts a stopped session; a message from the command line reaches a session
+arms a 30-minute idle timeout for the CLI of a session off screen (app 2.7032.0 was not seen to
+fire it: an untouched session still answered after 35 minutes), and only a message from inside
+the desktop starts a stopped session; a message from the command line reaches a session
 only while its CLI runs. So the standby watch (`watch --standby`, the `beekeeper-notify` unit)
 sends the spare a keep-awake from the command line whenever it sat idle for
 `supervisor.keepAwake` (25m): `beekeeper keep-awake: reply "ok", nothing else`, one small turn
@@ -348,7 +349,7 @@ supervisor:                 # what handover --prompt tells the successor supervi
   relayAt: 400k             # watch says RELAY DUE once the supervisor's context reaches this, at a quiet moment
   relayTTL: 15m             # a relay not taken by the successor's start expires
   restartGrace: 30s         # a CLI back within this of first seen gone is a restart; past it, SUPERVISOR GONE (claims stay gated) and the hand-over to the spare
-  keepAwake: 25m            # the standby watch sends the spare a keep-awake once it sat idle this long (the desktop drops an idle CLI at 30m)
+  keepAwake: 25m            # the standby watch sends the spare a keep-awake once it sat idle this long (under the desktop's 30-minute idle timeout)
 metrics:
   models:                   # USD per million tokens and the context window; an entry replaces the default of its id
     claude-opus-5-5: {input: 4, output: 20, cacheWrite5m: 5, cacheWrite1h: 8, cacheRead: 0.2, contextWindow: 1000000}
