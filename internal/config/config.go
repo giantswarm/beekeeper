@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/giantswarm/beekeeper/internal/alerts"
 )
 
 // Browser is the resource every machine has: the one Chrome the Claude in
@@ -122,15 +124,28 @@ type Alerts struct {
 	Timeout Duration `yaml:"timeout"`
 	// Kubectl is the kubectl binary.
 	Kubectl string `yaml:"kubectl"`
+	// Flap is the flap damper.
+	Flap Flap `yaml:"flap"`
+}
+
+// Flap holds back an alert that changes too often: its Changes-th NEW or
+// RESOLVED within Window is one FLAPPING line, and its changes print nothing
+// until it has been stable for Window.
+type Flap struct {
+	Changes int      `yaml:"changes"`
+	Window  Duration `yaml:"window"`
 }
 
 // Installation is an installation and, optionally, the kube context that
-// reaches it; written as a name alone or as {name, context}. Without a
-// context it is teleport.giantswarm.io-<name>, else <name>, else the one
-// ending in @<name>.
+// reaches it and the lowest severity printed of its alerts; written as a
+// name alone or as {name, context, floor}. Without a context it is
+// teleport.giantswarm.io-<name>, else <name>, else the one ending in @<name>.
 type Installation struct {
 	Name    string `yaml:"name"`
 	Context string `yaml:"context"`
+	// Floor is the lowest severity printed (alerts.Severities: none, info,
+	// warning, notify, critical, page); empty prints every alert.
+	Floor string `yaml:"floor"`
 }
 
 // UnmarshalYAML accepts a plain name.
@@ -301,6 +316,8 @@ func (c *Config) defaults() error {
 	setDur(&al.Every, 5*time.Minute)
 	setDur(&al.Timeout, time.Minute)
 	setStr(&al.Kubectl, "kubectl")
+	setInt(&al.Flap.Changes, 4)
+	setDur(&al.Flap.Window, time.Hour)
 	if rest, ok := strings.CutPrefix(c.Supervisor.Instructions, "~/"); ok {
 		c.Supervisor.Instructions = filepath.Join(home, rest)
 	}
@@ -315,6 +332,12 @@ func (c *Config) validate() error {
 		if in.Name == "" {
 			return fmt.Errorf("alerts.installations[%d]: an installation needs a name", i)
 		}
+		if in.Floor != "" && !slices.Contains(alerts.Severities, in.Floor) {
+			return fmt.Errorf("alerts.installations[%d]: floor %q is none of %s", i, in.Floor, strings.Join(alerts.Severities, ", "))
+		}
+	}
+	if n := c.Alerts.Flap.Changes; n < 0 || n == 1 {
+		return fmt.Errorf("alerts.flap.changes: %d; an alert is flapping from its second change on at the earliest", n)
 	}
 	for _, r := range c.Resources {
 		if r == "" || r == Browser || filepath.Base(r) != r || r[0] == '.' {

@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Alert triage: `alerts.installations[].floor` is the lowest severity (none, info, warning, notify, critical, page) of an installation's alerts that `watch` and `snapshot` show; the alerts below it stay in the baseline, so a changed floor prints no burst. The flap damper (`alerts.flap`, default 4 changes within 1h) turns an alert that keeps firing and resolving into one `ALERT FLAPPING` line and holds its changes back until it has been stable for the window; its records live in `alerts.json`. A NEW line names the merges into the installation's lanes (`merging`, `merged`) and the lease claims on it of the last 30 minutes, each with its session.
+- `alerts capture <dir>` records each installation's Alertmanager answer; `alerts replay <dir>...` prints what the watch would for recorded answers, from the current baseline without writing it. `handover` shows the floors and the damper.
+
 - `beekeeper run` records every capped run in the event log: `run.start` (the scope, the slot, the cap, the command) and `run.end` (the exit code, the duration, the cap's victims), both as the calling session. `snapshot` and `watch` name the session and the command of a memcap cap kill from its scope's `run.start`, also after the run and its session have ended. Logging never fails or delays the run: an event the log cannot take within a second is dropped.
 - `log --verb <prefix>` shows only the matching events (`--verb run.`: the build runs); `handover` leaves the runs out of its latest events.
 

@@ -29,8 +29,9 @@ grantTTL: 10m
 github: {floor: 3000}
 watch: {interval: 1m}
 alerts:
-  installations: [alpha, {name: beta, context: admin@beta}]
+  installations: [alpha, {name: beta, context: admin@beta, floor: warning}]
   team: bumblebee
+  flap: {changes: 3}
 `
 	if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
@@ -45,10 +46,11 @@ alerts:
 	}
 	al := c.Alerts
 	if len(al.Installations) != 2 || al.Installations[0] != (Installation{Name: "alpha"}) ||
-		al.Installations[1] != (Installation{Name: "beta", Context: "admin@beta"}) {
+		al.Installations[1] != (Installation{Name: "beta", Context: "admin@beta", Floor: "warning"}) {
 		t.Errorf("installations = %+v", al.Installations)
 	}
-	if len(al.Ignore) != 3 || al.Collapse != 3 || al.Every.Duration != 5*time.Minute || al.Timeout.Duration != time.Minute {
+	if len(al.Ignore) != 3 || al.Collapse != 3 || al.Every.Duration != 5*time.Minute || al.Timeout.Duration != time.Minute ||
+		al.Flap.Changes != 3 || al.Flap.Window.Duration != time.Hour {
 		t.Errorf("alerts defaults = %+v", al)
 	}
 }
@@ -58,6 +60,8 @@ func TestLoadRejects(t *testing.T) {
 		"browser as resource": "resources: [browser]",
 		"path as resource":    "resources: [../x]",
 		"nameless install":    "alerts: {installations: [{context: x}]}",
+		"unknown floor":       "alerts: {installations: [{name: x, floor: low}]}",
+		"flapping at once":    "alerts: {flap: {changes: 1}}",
 		"bad duration":        "grantTTL: soon",
 		"skill and file":      "supervisor: {skill: supervise, instructions: /x.md}",
 	} {

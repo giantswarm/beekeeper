@@ -1,0 +1,44 @@
+{"at":"2026-09-24T22:28:24.091627916Z","by":{"name":"Land the beekeeper follow-ups #2–#5 with subagents"},"verb":"merge.queued","detail":"giantswarm/agent-platform#676 in lane agent-platform for \"Continue #37639 GPU node pool with subagents\""}
+{"at":"2026-09-24T22:28:24.102560312Z","by":{"name":"Land the beekeeper follow-ups #2–#5 with subagents"},"verb":"merge.queued","detail":"giantswarm/agent-platform#678 in lane agent-platform for \"Continue #37639 GPU node pool with subagents\""}
+{"at":"2026-09-24T22:28:24.114670647Z","by":{"name":"Land the beekeeper follow-ups #2–#5 with subagents"},"verb":"merge.queued","detail":"giantswarm/agent-platform#679 in lane agent-platform for \"Continue #37639 GPU node pool with subagents\""}
+{"at":"2026-09-24T22:28:24.126846816Z","by":{"name":"Land the beekeeper follow-ups #2–#5 with subagents"},"verb":"merge.queued","detail":"giantswarm/agent-platform#671 in lane agent-platform for \"Agent five\""}
+{"at":"2026-09-24T22:28:24.136913861Z","by":{"name":"Land the beekeeper follow-ups #2–#5 with subagents"},"verb":"merge.queued","detail":"giantswarm/model-manager#172 in lane serving for \"Continue #37639 GPU node pool with subagents\""}
+{"at":"2026-09-24T22:28:24.147213816Z","by":{"name":"Land the beekeeper follow-ups #2–#5 with subagents"},"verb":"merge.queued","detail":"giantswarm/model-manager#180 in lane serving for \"Agent four\""}
+{"at":"2026-09-24T22:30:38.209084533Z","by":{"name":"Supervisor run 11: take over the night watch"},"verb":"merge.dropped","detail":"giantswarm/model-manager#180"}
+{"at":"2026-09-24T22:30:38.217393977Z","by":{"name":"Supervisor run 11: take over the night watch"},"verb":"merge.queued","detail":"giantswarm/model-manager#173 in lane serving for \"Agent one\""}
+{"at":"2026-09-24T22:30:38.226028173Z","by":{"name":"Supervisor run 11: take over the night watch"},"verb":"merge.queued","detail":"giantswarm/model-manager#180 in lane serving for \"Agent four\""}
+{"at":"2026-09-24T22:31:06.201022546Z","by":{"name":"Finish #37878 repository alignment"},"verb":"merge.queued","detail":"giantswarm/mcp-template#159 in lane giantswarm/mcp-template"}
+{"at":"2026-09-24T22:31:06.82110109Z","by":{"name":"Finish #37878 repository alignment"},"verb":"merging","detail":"giantswarm/mcp-template#159 in lane giantswarm/mcp-template"}
+{"at":"2026-09-24T22:31:20.001578548Z","by":{"name":"Finish #37878 repository alignment"},"verb":"merged","detail":"giantswarm/mcp-template#159 exit 0, release none warranted"}
+{"at":"2026-09-24T22:32:17.722189203Z","by":{"name":"Agent one"},"verb":"merge.refused","detail":"giantswarm/agent-platform#672: giantswarm/agent-platform is held (lane:agent-platform) by \"Supervisor run 11: take over the night watch\" until lifted: until agent-platform#672's release is Ready on gazelle; merge after the hold lifts (beekeeper hold), do not poll"}
+{"at":"2026-09-24T22:32:18.493975884Z","by":{"name":"Finish #37878 repository alignment"},"verb":"merge.queued","detail":"giantswarm/bumblebee-optin-proof#1 in lane giantswarm/bumblebee-optin-proof"}
+{"at":"2026-09-24T22:32:19.146299218Z","by":{"name":"Finish #37878 repository alignment"},"verb":"merging","detail":"giantswarm/bumblebee-optin-proof#1 in lane giantswarm/bumblebee-optin-proof"}
+{"at":"2026-09-24T22:32:26.616579596Z","by":{"name":"Finish #37878 repository alignment"},"verb":"merge.failed","detail":"giantswarm/bumblebee-optin-proof#1 exit 1, nothing merged"}
+{"at":"2026-09-24T22:32:59.934359043Z","by":{"name":"Supervisor run 11: take over the night watch"},"verb":"merge.dropped","detail":"giantswarm/agent-platform#676"}
+{"at":"2026-09-24T22:32:59.943006183Z","by":{"name":"Supervisor run 11: take over the night watch"},"verb":"merge.dropped","detail":"giantswarm/agent-platform#678"}
+{"at":"2026-09-24T22:32:59.953508569Z","by":{"name":"Supervisor run 11: take over the night watch"},"verb":"merge.dropped","detail":"giantswarm/agent-platform#679"}
+{"at":"2026-09-24T22:32:59.962778271Z","by":{"name":"Supervisor run 11: take over the night watch"},"verb":"merge.dropped","detail":"giantswarm/agent-platform#671"}
+{"at":"2026-09-24T22:32:59.971412678Z","by":{"name":"Supervisor run 11: take over the night watch"},"verb":"merge.queued","detail":"giantswarm/agent-platform#672 in lane agent-platform for \"Agent one\""}
+{"at":"2026-09-24T22:32:59.981889485Z","by":{"name":"Supervisor run 11: take over the night watch"},"verb":"merge.queued","detail":"giantswarm/agent-platform#676 in lane agent-platform for \"Continue #37639 GPU node pool with subagents\""}
+{"at":"2026-09-24T22:32:59.990484757Z","by":{"name":"Supervisor run 11: take over the night watch"},"verb":"merge.queued","detail":"giantswarm/agent-platform#678 in lane agent-platform for \"Continue #37639 GPU node pool with subagents\""}
+{"at":"2026-09-24T22:33:00.000984578Z","by":{"name":"Supervisor run 11: take over the night watch"},"verb":"merge.queued","detail":"giantswarm/agent-platform#679 in lane agent-platform for \"Continue #37639 GPU node pool with subagents\""}
+{"at":"2026-09-24T22:33:00.011828957Z","by":{"name":"Supervisor run 11: take over the night watch"},"verb":"merge.queued","detail":"giantswarm/agent-platform#671 in lane agent-platform for \"Agent five\""}
+{"at":"2026-09-24T22:34:19.521693491Z","by":{"name":"Agent one"},"verb":"merging","detail":"giantswarm/agent-platform#672 in lane agent-platform"}
+{"at":"2026-09-24T22:35:31.576822711Z","by":{"name":"Land the beekeeper follow-ups #2–#5 with subagents"},"verb":"merge.queued","detail":"giantswarm/beekeeper#17 in lane giantswarm/beekeeper"}
+{"at":"2026-09-24T22:35:32.15067227Z","by":{"name":"Land the beekeeper follow-ups #2–#5 with subagents"},"verb":"merging","detail":"giantswarm/beekeeper#17 in lane giantswarm/beekeeper"}
+{"at":"2026-09-24T22:35:46.066465303Z","by":{"name":"Supervisor run 11: take over the night watch"},"verb":"lease.grant","detail":"browser to Continue #37639 GPU node pool with subagents"}
+{"at":"2026-09-24T22:35:54.654979622Z","by":{"name":"Continue #37639 GPU node pool with subagents"},"verb":"lease.claim","detail":"browser: muster auth login gazelle (#37639)"}
+{"at":"2026-09-24T22:36:05.764440399Z","by":{"name":"Continue #37639 GPU node pool with subagents"},"verb":"lease.release","detail":"browser"}
+{"at":"2026-09-24T22:37:52.946410112Z","by":{"name":"Land the beekeeper follow-ups #2–#5 with subagents"},"verb":"merged","detail":"giantswarm/beekeeper#17 exit 0, release unknown"}
+{"at":"2026-09-24T22:38:28.483129228Z","by":{"name":"Agent one"},"verb":"merged","detail":"giantswarm/agent-platform#672 exit 0, release unknown"}
+{"at":"2026-09-24T22:44:28.897987256Z","by":{"name":"Check glean and graveler clean, prepare gazelle (#37850)"},"verb":"merge.queued","detail":"giantswarm/giantswarm-platform-manager#283 in lane portal-tools"}
+{"at":"2026-09-24T22:44:30.827934484Z","by":{"name":"Check glean and graveler clean, prepare gazelle (#37850)"},"verb":"merging","detail":"giantswarm/giantswarm-platform-manager#283 in lane portal-tools"}
+{"at":"2026-09-24T22:48:24.456325821Z","by":{"name":"Agent four"},"verb":"lease.release","detail":"agentlab-1"}
+{"at":"2026-09-24T22:51:47.754790561Z","by":{"name":"Check glean and graveler clean, prepare gazelle (#37850)"},"verb":"merged","detail":"giantswarm/giantswarm-platform-manager#283 exit 0, release unknown"}
+{"at":"2026-09-24T22:53:45.656902068Z","by":{"name":"Land the beekeeper follow-ups #2–#5 with subagents"},"verb":"merge.queued","detail":"giantswarm/beekeeper#19 in lane giantswarm/beekeeper"}
+{"at":"2026-09-24T22:53:46.214772774Z","by":{"name":"Land the beekeeper follow-ups #2–#5 with subagents"},"verb":"merging","detail":"giantswarm/beekeeper#19 in lane giantswarm/beekeeper"}
+{"at":"2026-09-24T22:56:07.402632821Z","by":{"name":"Land the beekeeper follow-ups #2–#5 with subagents"},"verb":"merged","detail":"giantswarm/beekeeper#19 exit 0, release unknown"}
+{"at":"2026-09-24T22:59:55.450284803Z","by":{"name":"Supervisor run 11: take over the night watch"},"verb":"lease.grant","detail":"lab to Agent one"}
+{"at":"2026-09-24T23:00:07.607533999Z","by":{"name":"Agent one"},"verb":"lease.claim","detail":"lab: agent-platform#684 netpol proof"}
+{"at":"2026-09-24T23:02:45.86394706Z","by":{"name":"Agent one"},"verb":"lease.release","detail":"lab"}
+{"at":"2026-09-24T23:03:57.206369073Z","by":{"name":"Agent one"},"verb":"merge.queued","detail":"giantswarm/agent-platform#684 in lane agent-platform"}

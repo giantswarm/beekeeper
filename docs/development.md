@@ -69,6 +69,15 @@ only real builds. A run event's detail starts with the scope's unit name as the 
 an OOM kill's memcg path; `cmd/testdata/oom-memcap-2516344.journal` holds such a kill from the lab
 machine's journal, verbatim.
 
+The alert triage is tried on recorded answers: `alerts capture <dir>` a few times, readings apart,
+then `alerts replay <dir>...` with a scratch configuration whose `stateDir` holds a copy of the live
+`alerts.json` (and, for the owner hints, an `events.jsonl` with a `merged` event into a lane of the
+installation) prints what the watch would, floors and damper applied, and writes nothing.
+`internal/alerts/testdata/` holds such readings of two installations and `cmd/testdata/` the merge
+and lease events of the lab machine's log; both are reduced to what beekeeper reads, and the
+recorded answers have person, organization and workload-cluster names and node addresses
+replaced: this repository is public.
+
 `free` takes its temp dir from `TMPDIR` (Claude Code's session dirs are `$TMPDIR/claude-<uid>`), so
 `--apply` can be tried on a fixture instead of the real `/tmp`:
 `TMPDIR=/tmp/fixture ./beekeeper free --apply --only session-dirs,tmp-dirs`.
@@ -83,7 +92,7 @@ machine's journal, verbatim.
 | `internal/github` | The budget from rate-limit headers; a pull request's state from `gh pr view`. |
 | `internal/lease` | Lease directories and the grant rule. |
 | `internal/state` | The shared state document (supervisor and its relay, the shift the watch reported, grants, holds, agents, notes, timers, session records, merges) and the event log, under a file lock; `Log` appends the events that change no state (build runs) with a bounded wait for the lock. |
-| `internal/alerts` | The installations' alerts: bounded `kubectl port-forward`s in their own process group, the Alertmanager reading, the NEW/RESOLVED lines and the grouped snapshot (pure, tested against Alertmanager-shaped fixtures and a fake `kubectl`), and the baseline with its single owner. |
+| `internal/alerts` | The installations' alerts: bounded `kubectl port-forward`s in their own process group, the Alertmanager reading, the NEW/RESOLVED/FLAPPING lines with the severity floors and the flap damper, and the grouped snapshot (pure, tested against Alertmanager-shaped fixtures, recorded answers in `testdata/` and a fake `kubectl`), the baseline with the damper's records and its single owner, and recorded answers for `alerts replay`. |
 | `internal/guard` | The build guard: a capped run in a build slot with its `run.start`/`run.end` events, and the PreToolUse hook's rewrite and third-lab refusal. |
 | `internal/free` | What can be freed (dead sessions' dirs, throwaway temp dirs, orphaned workers) and what is only reported, as a report or the front end's TSV. |
 | `internal/update` | The latest release, its signature check and the one-rename install. |
