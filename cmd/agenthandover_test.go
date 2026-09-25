@@ -1,11 +1,15 @@
 package cmd
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -14,6 +18,7 @@ const (
 	newID     = "s-new"
 	countTask = "count the files"
 	dueID     = "due"
+	countName = "test: count"
 )
 
 func TestHandoversDue(t *testing.T) {
@@ -55,7 +60,7 @@ func TestHandoversDue(t *testing.T) {
 func TestHandoverPromptPassesOnTheBrief(t *testing.T) {
 	at := time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC)
 	h := handover{
-		agent:   state.Agent{Party: state.Party{Session: oldID, Name: "test: count"}, Task: countTask},
+		agent:   state.Agent{Party: state.Party{Session: oldID, Name: countName}, Task: countTask},
 		context: 25_400,
 		record:  &state.Record{Issue: "o/r#61", Waits: "CI"},
 		merges:  []state.Merge{{Repo: "o/r", PR: 7, Lane: "main", Phase: state.Waiting}},
@@ -64,7 +69,7 @@ func TestHandoverPromptPassesOnTheBrief(t *testing.T) {
 		brief:   "# Count\n\n## Steps\ncount a, b, c",
 	}
 	p := h.prompt()
-	for _, want := range []string{`You are "test: count"`, "session " + oldID, "at 25k tokens", "Task: " + countTask,
+	for _, want := range []string{`You are "` + countName + `"`, "session " + oldID, "at 25k tokens", "Task: " + countTask,
 		"Serves: o/r#61, waiting on CI", "a and b done; c next", "o/r#7 in lane main: waiting", "lease.claim lab-a",
 		briefOpen + "\n# Count"} {
 		if !strings.Contains(p, want) {
@@ -91,7 +96,7 @@ func TestHandoverPromptPassesOnTheBrief(t *testing.T) {
 
 func TestHandoverStartTakesOverTheRunningEntry(t *testing.T) {
 	now := time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC)
-	old := state.Party{Session: oldID, HostSession: "local_" + oldID, Name: "test: count"}
+	old := state.Party{Session: oldID, HostSession: "local_" + oldID, Name: countName}
 	st := &state.State{
 		Agents:  []state.Agent{{Party: old, Task: countTask, AssignedAt: now.Add(-time.Hour)}},
 		Records: []state.Record{{Session: old, Issue: "o/r#61"}},
@@ -118,5 +123,54 @@ func TestHandoverStartTakesOverTheRunningEntry(t *testing.T) {
 	st = &state.State{Agents: []state.Agent{{Party: old}}}
 	if reg, err := recordStart(st, s, "", handedOver); err != nil || reg.task != "" || !st.Agents[0].AssignedAt.IsZero() {
 		t.Errorf("idle: %+v, %v, roster %+v", reg, err, st.Agents)
+	}
+}
+
+func TestHandoverRefusedWithoutThePermissionHook(t *testing.T) {
+	home, repo := t.TempDir(), t.TempDir()
+	user := filepath.Join(home, "settings.json")
+	dir := filepath.Join(repo, "sub")
+	for _, d := range []string{filepath.Join(repo, ".git"), filepath.Join(repo, ".claude"), dir} {
+		if err := os.MkdirAll(d, 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(path, body string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hook := func(matcher, command string) string {
+		return `{"hooks":{"PermissionRequest":[{"matcher":"` + matcher + `","hooks":[{"type":"command","command":"` + command + `"}]}]}}`
+	}
+	// No settings, another hook, a hook for one tool only: refused.
+	if files, ok := permissionHook(user, dir); ok || len(files) != 5 {
+		t.Errorf("no settings: ok = %v, files = %v", ok, files)
+	}
+	write(user, hook("*", "~/bin/other-hook"))
+	write(filepath.Join(repo, ".claude", "settings.json"), hook("Bash", "beekeeper hook permissionrequest"))
+	if _, ok := permissionHook(user, dir); ok {
+		t.Error("another hook or a hook for Bash only must not count")
+	}
+	// The checkout's local settings carry it.
+	write(filepath.Join(repo, ".claude", "settings.local.json"), hook("*", "/bin/sh -c '~/.go/bin/beekeeper --config /s.yaml hook permissionrequest'"))
+	if _, ok := permissionHook(user, dir); !ok {
+		t.Error("the checkout's settings.local.json has the hook")
+	}
+	// The user settings carry it.
+	write(user, hook("", "~/.go/bin/beekeeper hook permissionrequest"))
+	if _, ok := permissionHook(user, t.TempDir()); !ok {
+		t.Error("the user settings have the hook")
+	}
+
+	// handOver refuses before it asks for the note: nothing is sent,
+	// started or stopped.
+	a := &app{cfg: &config.Config{Claude: config.Claude{ProjectsDir: filepath.Join(t.TempDir(), "projects")}}, as: "test: supervisor"}
+	h := handover{agent: state.Agent{Party: state.Party{Session: oldID, Name: countName}}, dir: t.TempDir()}
+	err := a.handOver(t.Context(), h)
+	var ee *exitError
+	if !errors.As(err, &ee) || ee.code != ExitRefused || !strings.Contains(ee.msg, "hook permissionrequest") {
+		t.Errorf("handOver without the hook: %v", err)
 	}
 }

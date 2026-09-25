@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -290,6 +291,11 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 	if h.dir == "" {
 		return usageErr("the folder of %q is unknown: pass --dir", ag.Name)
 	}
+	userSettings := filepath.Join(filepath.Dir(a.cfg.Claude.ProjectsDir), "settings.json")
+	if files, ok := permissionHook(userSettings, h.dir); !ok {
+		return refused("%q is not handed over: no PermissionRequest hook runs `beekeeper hook permissionrequest` in %s, so its follow-up would stop at its first card; "+
+			"install the hook there (README: Agents started without a click) or pass --dir a folder whose settings have it", ag.Name, strings.Join(files, ", "))
+	}
 	noted := "no note"
 	if h.session == nil {
 		a.say("note: not asked, the CLI of %q does not run", ag.Name)
@@ -331,6 +337,68 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 	}
 	a.say("handed over %q in %s: logged as agents.handover", ag.Name, dur(took))
 	return nil
+}
+
+// hookSettings is the part of a Claude Code settings file permissionHook
+// reads.
+type hookSettings struct {
+	Hooks struct {
+		PermissionRequest []struct {
+			Matcher string `json:"matcher"`
+			Hooks   []struct {
+				Type    string `json:"type"`
+				Command string `json:"command"`
+			} `json:"hooks"`
+		} `json:"PermissionRequest"`
+	} `json:"hooks"`
+}
+
+// permissionHook reports whether a session started in dir gets beekeeper's
+// PermissionRequest hook for every tool: from the user settings, or from
+// the project settings of dir or of the checkout dir is in. files are the
+// settings files it read.
+func permissionHook(userSettings, dir string) (files []string, ok bool) {
+	files = []string{userSettings}
+	for _, d := range projectDirs(dir) {
+		files = append(files, filepath.Join(d, ".claude", "settings.json"), filepath.Join(d, ".claude", "settings.local.json"))
+	}
+	for _, f := range files {
+		raw, err := os.ReadFile(f) //nolint:gosec // the Claude Code settings a started session reads
+		if err != nil {
+			continue
+		}
+		var hs hookSettings
+		if json.Unmarshal(raw, &hs) != nil {
+			continue
+		}
+		for _, m := range hs.Hooks.PermissionRequest {
+			if m.Matcher != "" && m.Matcher != "*" {
+				continue
+			}
+			for _, hk := range m.Hooks {
+				if hk.Type == "command" && strings.Contains(hk.Command, "beekeeper") && strings.Contains(hk.Command, "hook permissionrequest") {
+					return files, true
+				}
+			}
+		}
+	}
+	return files, false
+}
+
+// projectDirs are dir and, when dir lies in a git checkout, its top.
+func projectDirs(dir string) []string {
+	out := []string{dir}
+	for d := dir; ; d = filepath.Dir(d) {
+		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
+			if d != dir {
+				out = append(out, d)
+			}
+			return out
+		}
+		if filepath.Dir(d) == d {
+			return out
+		}
+	}
 }
 
 // say prints one line.

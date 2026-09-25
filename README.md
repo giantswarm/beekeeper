@@ -357,7 +357,12 @@ agent's first quiet moment: no tool command of its own running and no gated merg
 flight. It says it once per agent session, across the watch's restarts. An agent holding the
 supervisor's or the guide's role moves by relay instead.
 
-The supervisor then runs `beekeeper agents handover "<agent>"`, which prints one line per step:
+The supervisor then runs `beekeeper agents handover "<agent>"`. It refuses (exit 3, before it
+asks for anything) unless a PermissionRequest hook for every tool runs `beekeeper hook
+permissionrequest` where the follow-up starts: in the user settings or in the `.claude/settings.json`
+or `settings.local.json` of its folder or of the checkout that folder is in. Without it the
+follow-up would stop at its first card after the old session was stopped. Otherwise it prints one
+line per step:
 
 1. **The note.** A peer message asks the agent to record what is in flight and what is next with
    `beekeeper agents note "<...>"` and end its turn; the hand-over waits `agents.noteWait` (3m)
