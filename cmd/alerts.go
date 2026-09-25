@@ -326,8 +326,8 @@ func (a *app) ownerHints(now time.Time) func(string) []string {
 	}
 }
 
-// ownerHints are who likely caused a new alert on an installation at now,
-// newest first: the merges into its lanes that are running or merged within
+// ownerHints are what went on on an installation around a new alert at now,
+// newest first, worded as timing, not cause: the merges into its lanes that are running or merged within
 // hintWindow (merging, merged; the latest event of a pull request counts,
 // so a failed or dropped merge is none) and the lease claims on it, each
 // with its session. events are oldest first.
@@ -361,9 +361,9 @@ func ownerHints(events []state.Event, laneOf func(string) config.Lane, installat
 			key = fields[0]
 			switch e.Verb {
 			case "merging":
-				text = fmt.Sprintf("merging %s by %q since %s", key, e.By.Name, e.At.UTC().Format("15:04Z"))
+				text = fmt.Sprintf("during merging %s by %q since %s", key, e.By.Name, e.At.UTC().Format("15:04Z"))
 			case "merged":
-				text = fmt.Sprintf("merged %s by %q at %s", key, e.By.Name, e.At.UTC().Format("15:04Z"))
+				text = fmt.Sprintf("during merged %s by %q at %s", key, e.By.Name, e.At.UTC().Format("15:04Z"))
 			case "merge.queued":
 				continue
 			}

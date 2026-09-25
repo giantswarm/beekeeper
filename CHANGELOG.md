@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The owner hints on a NEW alert line read as timing, not cause: `[during merging … since …]`, `[during merged … at …]`, so a merge that merely coincides with an alert is not read as its cause.
+
 ### Added
 
 - Alert triage: `alerts.installations[].floor` is the lowest severity (none, info, warning, notify, critical, page) of an installation's alerts that `watch` and `snapshot` show; the alerts below it stay in the baseline, so a changed floor prints no burst. The flap damper (`alerts.flap`, default 4 changes within 1h) turns an alert that keeps firing and resolving into one `ALERT FLAPPING` line and holds its changes back until it has been stable for the window; its records live in `alerts.json`. A NEW line names the merges into the installation's lanes (`merging`, `merged`) and the lease claims on it of the last 30 minutes, each with its session.
