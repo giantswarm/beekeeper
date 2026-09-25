@@ -115,9 +115,8 @@ func Blocking(st *state.State, now time.Time, repo string, pr int, lane config.L
 }
 
 // Prune drops the waiting merges whose run ended more than ttl ago (seedTTL
-// for a seeded place and a failed attempt's) and turns
-// a running merge whose run is gone into a settling one: whether it merged
-// is unknown, so the lane settles by the settle rule.
+// for a seeded place and a failed attempt's) and settles the lost ones
+// (Lost).
 func Prune(st *state.State, now time.Time, ttl, seedTTL time.Duration, alive func(pid int) bool) {
 	st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool {
 		keep := ttl
@@ -126,12 +125,22 @@ func Prune(st *state.State, now time.Time, ttl, seedTTL time.Duration, alive fun
 		}
 		return m.Phase == state.Waiting && !alive(m.PID) && now.Sub(m.Seen) > keep
 	})
+	Lost(st, now, alive)
+}
+
+// Lost turns each running merge whose gate process is gone (killed, or
+// lost with the machine) into a settling one and returns them: whether it
+// merged is unknown, so the lane settles by the settle rule from now.
+func Lost(st *state.State, now time.Time, alive func(pid int) bool) []state.Merge {
+	var lost []state.Merge
 	for i, m := range st.Merges {
 		if m.Phase == state.Running && !alive(m.PID) {
 			st.Merges[i].Phase, st.Merges[i].Finished, st.Merges[i].Exit = state.Settling, now, -1
 			st.Merges[i].Release, st.Merges[i].Roll = "", nil
+			lost = append(lost, m)
 		}
 	}
+	return lost
 }
 
 // Lane is one lane's queue.

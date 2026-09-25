@@ -163,7 +163,8 @@ an arrived unseeded merge, not an earlier pull request of its own session.`,
 		Long: `clear drops the lane's settling merge, after its installation was checked
 by hand: a release that is not going to roll (a HelmRelease pinned since,
 a failed upgrade rolled back) otherwise refuses the lane's next merge once
-merge.settleTimeout has passed.`,
+merge.settleTimeout has passed. A running merge whose gate process is gone
+counts as settling: watch settles it too, with a MERGE LOST line.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			me, err := a.caller()
@@ -172,6 +173,7 @@ merge.settleTimeout has passed.`,
 			}
 			var cleared []string
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+				merge.Lost(st, a.now, proc.Alive)
 				st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool {
 					if m.Lane == args[0] && m.Phase == state.Settling {
 						cleared = append(cleared, m.Key())

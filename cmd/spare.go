@@ -42,6 +42,8 @@ const keepAwakeCheck = 3 * time.Minute
 // messages it sent; a restarted watch starts afresh.
 type spareWatch struct {
 	send func(ctx context.Context, to, msg string) error
+	// open hands a claude:// link to the desktop app (openDesktop).
+	open func(ctx context.Context, url string, running bool) error
 	busy atomic.Bool
 	// sent is the last keep-awake per spare, checked once for its turn.
 	sent    map[string]time.Time
@@ -49,6 +51,10 @@ type spareWatch struct {
 	// asleep is the spare said to have no CLI; handed and reopened are the
 	// gone supervisor terms handed over and reopened.
 	asleep, handed, reopened string
+	// liveAt is when this watch last saw the supervisor's CLI of the term
+	// liveTerm run.
+	liveTerm string
+	liveAt   time.Time
 }
 
 func (a *app) supervisorSpareCmd() *cobra.Command {
@@ -262,22 +268,36 @@ func (w *watcher) handOver(ctx context.Context, st *state.State, sessions []*cla
 }
 
 // reopenAfterAppStart opens the gone supervisor's row once when the desktop
-// app started after its CLI was gone and no spare can take over: an app
-// restart leaves every CLI cold, so the focus starts it.
+// app started after its CLI stopped and no spare can take over: an app
+// restart, and a reboot, leave every CLI cold, so the focus starts it.
 func (w *watcher) reopenAfterAppStart(ctx context.Context, st *state.State, gone time.Time, term string) {
 	sup := st.Supervisor
 	if w.table == nil || sup.HostSession == "" || w.spare.reopened == term {
 		return
 	}
-	if start := desktopStart(w.table); start.IsZero() || start.Before(gone) {
+	liveAt := w.spare.liveAt
+	if w.spare.liveTerm != term {
+		liveAt = time.Time{}
+	}
+	if !reopenDue(desktopStart(w.table), gone, liveAt) {
 		return
 	}
 	w.spare.reopened = term
-	if err := openDesktop(ctx, continueURL(sup.HostSession), true); err != nil {
+	if err := w.spare.open(ctx, continueURL(sup.HostSession), true); err != nil {
 		w.emitNow("spare", "REOPEN FAILED: %q: %v", sup.Name, err)
 		return
 	}
 	w.emitNow("spare", "REOPENED: %q after the desktop app started", sup.Name)
+}
+
+// reopenDue says whether the desktop app, started at start (zero: it does
+// not run), started after the supervisor's CLI stopped: after beekeeper
+// first saw the CLI gone at gone, or with this watch never having seen the
+// CLI run under it (liveAt, zero when never). After a reboot the app starts
+// at login before the standby watch's first poll, which first sees gone a
+// CLI that stopped with the machine.
+func reopenDue(start, gone, liveAt time.Time) bool {
+	return !start.IsZero() && (!start.Before(gone) || liveAt.Before(start))
 }
 
 // resumeRestarted records a supervisor CLI back under a new PID (standby
