@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A cap kill in a memcap scope no `run.start` names is reported with `cap unknown` (and the owner unknown when its process is gone) instead of "memcap cap on one command", which read as a build hitting the default 12G cap.
+- The guard test's deliberate 64M kill no longer reads as a build's: a run with `MEMCAP_TEST=1` (the capped-run tests set it) takes a `memcap-test-…` scope, and `snapshot` and `watch` report a kill in one as a test kill, `watch` as one quiet `test kill:` line instead of `KERNEL OOM`, `snapshot --changes` as `N test kills` apart from the kernel OOM kills.
+
 - `agents register` in a `claude --bg` worker registers it under its `-n` title instead of its session id: a session's name falls back to the name its CLI's record holds (`~/.claude/sessions/<pid>.json`) before its id, for every command that names the caller. `--name` still overrides.
 - A fresh session registering under the name of an agent whose session no longer runs replaces that entry instead of adding a second one, so `agents assign <name>` reaches the new session; the output names the replaced session and a task it left unfinished. A name a running session's entry holds is refused (exit 3), and `agents assign` and `agents remove` refuse a name several entries share instead of taking the first.
 

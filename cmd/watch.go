@@ -37,7 +37,10 @@ wakes only when something needs a look.
 Threshold breaches (RAM, swap, desktop scope, load, memory pressure, tmpfs,
 disk, the GitHub budget) repeat at most every watch.repeat (10m) per kind.
 OOM kills are never folded away: every poll reports every kill since the
-last one, grouped by whose limit they hit. Sessions that start, end or
+last one, grouped by whose limit they hit; a cap kill whose scope no
+run.start names says its cap is unknown. A kill in a test run's scope
+(memcap-test-…, MEMCAP_TEST=1) is one quiet "test kill" line, never a
+KERNEL OOM. Sessions that start, end or
 restart are reported, and so is a lease whose holder is gone. A session
 over a threshold in metrics.runaway (GitHub calls in the last hour, the
 same failing tool call repeating in it, its context's fill) is one RUNAWAY
@@ -388,8 +391,12 @@ func (w *watcher) kills(ctx context.Context, since time.Time, sessions []*claude
 		}
 		fresh = append(fresh, oomKill{OOMKill: k, Owner: oomOwner(k, clusters, sessions, t, runs)})
 	}
-	for _, line := range groupKills(fresh) {
+	real, tests := splitTestKills(fresh)
+	for _, line := range groupKills(real) {
 		w.emitNow("kern", "KERNEL OOM: %s", line)
+	}
+	for _, line := range groupKills(tests) {
+		w.emitNow("testkill", "test kill: %s", line)
 	}
 	w.notifyKills(ctx, fresh)
 	if lines, err := machine.OomdKills(ctx, since.Add(-2*time.Second)); err == nil {

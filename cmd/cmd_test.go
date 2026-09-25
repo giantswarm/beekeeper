@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"path"
 	"slices"
 	"strings"
 	"testing"
@@ -53,11 +54,12 @@ func TestDiffSnapshots(t *testing.T) {
 		Scope:    &machine.Scope{AnonMiB: 8100, OOMKills: 1},
 		Root:     machine.Disk{FreeMiB: 180 * 1024},
 		Sessions: []string{"b", "c"},
-		OOM:      []oomKill{{Owner: "x"}},
-		Budget:   &github.Budget{Remaining: 3500, Reset: reset},
+		OOM: []oomKill{{Owner: "x"}, {OOMKill: machine.OOMKill{Memcg: "/user.slice/memcap.slice/memcap-test-1-2.scope"}, Owner: testKillOwner},
+			{OOMKill: machine.OOMKill{Memcg: "/user.slice/memcap.slice/memcap-test-1-3.scope"}, Owner: testKillOwner}},
+		Budget: &github.Budget{Remaining: 3500, Reset: reset},
 	}
 	got := strings.Join(diffSnapshots(prev, cur), "\n")
-	for _, want := range []string{"swap used 5000 → 7000", "OOM KILL in the desktop scope", "disk / free 200 → 180", "sessions +1: c", "sessions -1: a", "1 kernel OOM kills", "GitHub budget 4000 → 3500"} {
+	for _, want := range []string{"swap used 5000 → 7000", "OOM KILL in the desktop scope", "disk / free 200 → 180", "sessions +1: c", "sessions -1: a", "1 kernel OOM kills", "2 test kills in " + testKillOwner, "GitHub budget 4000 → 3500"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("diff lacks %q:\n%s", want, got)
 		}
@@ -100,7 +102,7 @@ func TestOOMOwnerNamesAnEndedRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	gone := &proc.Table{ByPID: map[int]*proc.Process{}}
-	if got := oomOwner(kills[0], nil, nil, gone, &runIndex{store: store}); got != "memcap cap on one command (its session has moved on)" {
+	if got := oomOwner(kills[0], nil, nil, gone, &runIndex{store: store}); got != "memcap scope, cap unknown, owner unknown (no run.start)" {
 		t.Errorf("without its run: %q", got)
 	}
 	by := state.Party{Session: "0f3c", Name: "bk-run-events"}
@@ -112,6 +114,61 @@ func TestOOMOwnerNamesAnEndedRun(t *testing.T) {
 	}
 	if got := oomOwner(kills[0], nil, nil, gone, &runIndex{store: store}); got != `memcap cap of "bk-run-events"'s `+"`uv run pytest -n 8`" {
 		t.Errorf("with its run: %q", got)
+	}
+}
+
+// The guard test's own 64M kill, logged to the test's scratch state, before
+// its scopes were named memcap-test-: the live log has no run.start for the
+// scope, and the kill must not read as the default 12G cap. The journal lines
+// are the machine's own, verbatim.
+func TestOOMOwnerSaysCapUnknownWithoutARun(t *testing.T) {
+	const task = "cmd.test"
+	raw, err := os.ReadFile("testdata/oom-memcap-287208.journal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kills := machine.ParseOOM(string(raw))
+	if len(kills) != 1 || kills[0].Task != task || kills[0].AnonMiB != 63 {
+		t.Fatalf("kills %+v", kills)
+	}
+	store, err := state.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs := &runIndex{store: store}
+	gone := &proc.Table{ByPID: map[int]*proc.Process{}}
+	if got := oomOwner(kills[0], nil, nil, gone, runs); got != "memcap scope, cap unknown, owner unknown (no run.start)" {
+		t.Errorf("gone: %q", got)
+	}
+	alive := &proc.Table{ByPID: map[int]*proc.Process{287208: {PID: 287208, Args: []string{task, "run", "--", task, "__alloc"}}}}
+	if got := oomOwner(kills[0], nil, nil, alive, runs); got != "memcap scope of `cmd.test run -- cmd.test __alloc`, cap unknown (no run.start)" {
+		t.Errorf("alive: %q", got)
+	}
+	if isTestKill(kills[0]) {
+		t.Error("a memcap- scope is not a test's")
+	}
+}
+
+// A kill in a test run's scope is the test's own, run.start or not.
+func TestOOMOwnerNamesATestKill(t *testing.T) {
+	raw, err := os.ReadFile("testdata/oom-memcap-287208.journal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := machine.ParseOOM(strings.ReplaceAll(string(raw), "/memcap-287208-", "/"+guard.TestScopePrefix+"287208-"))[0]
+	store, err := state.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Log(state.Event{By: state.Party{Name: "capped test"}, Verb: guard.VerbStart, Detail: path.Base(k.Memcg) + " slot 1 max 64M: cmd.test __alloc"}); err != nil {
+		t.Fatal(err)
+	}
+	if !isTestKill(k) {
+		t.Fatalf("not a test kill: %+v", k)
+	}
+	gone := &proc.Table{ByPID: map[int]*proc.Process{}}
+	if got := oomOwner(k, nil, nil, gone, &runIndex{store: store}); got != testKillOwner {
+		t.Errorf("owner %q", got)
 	}
 }
 

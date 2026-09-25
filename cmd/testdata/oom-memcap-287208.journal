@@ -1,0 +1,2 @@
+2026-09-25T08:13:22+03:00 demiurg kernel: oom-kill:constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=user.slice,mems_allowed=0,oom_memcg=/user.slice/user-1000.slice/user@1000.service/memcap.slice/memcap-287208-833645.scope,task_memcg=/user.slice/user-1000.slice/user@1000.service/memcap.slice/memcap-287208-833645.scope,task=cmd.test,pid=287233,uid=1000
+2026-09-25T08:13:22+03:00 demiurg kernel: Memory cgroup out of memory: Killed process 287233 (cmd.test) total-vm:2627852kB, anon-rss:64784kB, file-rss:2024kB, shmem-rss:17968kB, UID:1000 pgtables:388kB oom_score_adj:200
