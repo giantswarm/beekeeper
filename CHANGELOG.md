@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The PreToolUse hook gates every `devctl pr merge` that runs as a command: behind `flock <lock>`, `nohup`, `setsid`, `stdbuf`, `ionice`, `chrt`, `nice`, `timeout` (with options), `env` (with `-u`), `time`, `command`, `exec` and `VAR=value`, in any segment of a pipeline or list, and with devctl named by path (`~/bin/devctl`, `./devctl`). The gate wraps only the devctl invocation, so pipelines and `pipefail` behave as written. 43 of the 577 real merge invocations in the lab machine's transcripts ran ungated before (`flock <lock> devctl pr merge … | tee … | ledger.sh record …` among them); all are pinned in `internal/guard/testdata/merges.jsonl`.
+- A `devctl pr merge` inside a `sh`, `bash` or `zsh -c` string that the rewrite cannot reach is refused, naming the command with the gate written in, instead of running ungated.
+
 - A cap kill in a memcap scope no `run.start` names is reported with `cap unknown` (and the owner unknown when its process is gone) instead of "memcap cap on one command", which read as a build hitting the default 12G cap.
 - The guard test's deliberate 64M kill no longer reads as a build's: a run with `MEMCAP_TEST=1` (the capped-run tests set it) takes a `memcap-test-…` scope, and `snapshot` and `watch` report a kill in one as a test kill, `watch` as one quiet `test kill:` line instead of `KERNEL OOM`, `snapshot --changes` as `N test kills` apart from the kernel OOM kills.
 

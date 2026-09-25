@@ -44,6 +44,17 @@ PATH=/tmp/fake:$PATH BEEKEEPER_CONFIG=/tmp/bk.yaml CLAUDE_CODE_SESSION_ID=a \
 BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper lanes
 ```
 
+The hook's merge rewrite is pinned against real commands: `internal/guard/testdata/merges.jsonl`
+holds every statement with a `devctl pr merge` from the lab machine's Claude Code transcripts,
+reduced to its shell skeleton (every word outside the shell structure is `x`, every repository
+`o/r`, so nothing internal lands in this public repository) with the number of merges a shell
+parser (mvdan.cc/sh) counts in it. `TestHookGatesRealMerges` requires every one gated and the
+rewrite to add nothing but the gates. To refresh it, extract the Bash `tool_use` commands matching
+`devctl pr merge` from `~/.claude/projects/*/*.jsonl`, keep the top-level statements the parser
+finds a merge in, reduce them the same way and deduplicate. Before a release that touches
+`internal/guard`, feed the old and the new binary every distinct Bash command of the transcripts
+and compare their answers: no build rewrite may change.
+
 `FAKE_EXIT=3` on such a fake plays a run with nothing merged (the document's `mergeCommitSha`
 empty): the merge stays in `lanes` as `retrying`, and the next gate call for it runs first. The
 queue rule itself is tested by replaying a real event trail (`internal/merge/testdata/*.jsonl`,

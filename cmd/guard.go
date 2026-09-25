@@ -142,7 +142,12 @@ a background run gets a 60-minute wait instead. A command that would start a
 third kind cluster is refused with the running labs and the held leases.
 Every devctl pr merge gets "<this binary> gate --" in front of it (a
 background one "gate --wait 30m --"), the timeout raised the same way; see
-beekeeper lanes. Other devctl commands pass untouched.
+beekeeper lanes. That is behind prefix commands (flock <lock>, nohup, setsid,
+stdbuf, ionice, chrt, nice, timeout, env, VAR=value) and in any segment of a
+pipeline or list, devctl by name or path, wrapping only the devctl
+invocation. A merge inside a sh, bash or zsh -c string the rewrite cannot
+reach is refused, naming the command with the gate written in. Other devctl
+commands pass untouched.
 Anything else, malformed input included, passes unchanged.
 
 Register it in ~/.claude/settings.json:

@@ -1,0 +1,543 @@
+{"command": "devctl pr merge --help 2>&1 | /x/x/grep -i -E \"x|x|x\" | head", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | sed -n 1,60p", "merges": 1}
+{"command": "devctl pr merge o/r 122 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "timeout 590 devctl pr merge o/r 2404 --release-timeout 8m >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge o/r 2404 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge o/r 2411 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge o/r 6307 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "for x in 6311 6312; do devctl pr merge o/r \"$n\" >| \"$S/x$n.json\" 2>| \"$S/x$n.err\"; echo \"$n exit=$?\"; jq -c '{x, verdict, x, x}' \"$S/x$n.json\" 2>/x/x; done", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 127 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "cd ~/x/x/devctl/.claude/x/x && timeout 330 devctl pr merge --update-branch o/r 2329 --timeout 5m 2>&1 | tail -40;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 168 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 669 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 2595 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 677 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge o/r 273 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 674 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 681 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 672 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 684 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "timeout 900 devctl pr merge o/r 959 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 173 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 689 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 78 >| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 70 >| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 86 >| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 85 >| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 91 >| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 93 >| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 92 >| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 101 >| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 88 >| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 2573 >| \"$OUT\" 2>$S/x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 49 2>&1 | tail -12;", "merges": 1}
+{"command": "devctl pr merge o/r 245 2>&1 | /x/x/grep -E '\"x\"|\"x\"|\"x\"|x|x' | head -6;", "merges": 1}
+{"command": "devctl pr merge o/r 2528 2>&1 | /x/x/grep -E '\"x\"|\"x\"|\"x\"|x|x|x x|x' | head -8;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 1326 >| \"$HOME/.local/x/x/x\" 2>| \"$HOME/.local/x/x/x\";", "merges": 1}
+{"command": "~/x/devctl pr merge --update-branch o/r 118 2>&1 | jq -c '{x, verdict, x, x: (.mergeCommitSha // .merge.sha // .sha)}' 2>&1 | head -c 1500", "merges": 1}
+{"command": "~/x/devctl pr merge --help 2>&1 | sed -n 1,60p | /x/x/grep -v \"^\\x*$\" | tail -30", "merges": 1}
+{"command": "~/x/devctl pr merge --help 2>&1 | /x/x/grep -n -E \"x:|devctl pr merge \\[|--update-branch|--timeout|x\" | head;", "merges": 1}
+{"command": "~/x/devctl pr merge o/r 118 --update-branch >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "cd $S && devctl pr merge --update-branch o/r 618 >| x 2>| x;", "merges": 1}
+{"command": "cd $S && devctl pr merge --update-branch o/r 619 >| x 2>| x;", "merges": 1}
+{"command": "cd $S && devctl pr merge --update-branch o/r 946 >| x 2>| x;", "merges": 1}
+{"command": "if jq -e '.verdict == \"x\"' x >/x/x; then devctl pr merge --update-branch o/r 947 >| x 2>| x; echo \"merge exit=$?\"; jq -r '\"verdict=\\(.verdict) x=\\(.exitCode) x=\\(.reason)\"' x 2>/x/x; tail -c 400 x; gh pr view 947 --repo x/x --json x,x,x --jq '\"\\(.state) merged=\\(.mergedAt) x=\\(.mergeCommit.oid)\"'; fi", "merges": 1}
+{"command": "cd $S && devctl pr merge --update-branch o/r 947 >| x 2>| x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 622 >| x 2>| x;", "merges": 1}
+{"command": "if [ \"$(jq -r .verdict x)\" = \"x\" ]; then devctl pr merge --update-branch o/r 623 >| x 2>| x; echo \"merge exit=$?\"; jq -r '\"verdict=\\(.verdict) x=\\(.exitCode) x=\\(.reason)\"' x 2>/x/x; tail -c 300 x; gh pr view 623 --repo x/x --json x,x,x --jq '\"\\(.state) merged=\\(.mergedAt) x=\\(.mergeCommit.oid)\"'; fi", "merges": 1}
+{"command": "cd $S && devctl pr merge --update-branch o/r 949 >| x 2>| x;", "merges": 1}
+{"command": "if [ \"$v\" = \"x\" ]; then devctl pr merge --update-branch o/r 950 >| x 2>| x; echo \"merge exit=$?\"; jq -r '\"verdict=\\(.verdict) x=\\(.exitCode) x=\\(.reason)\"' x 2>/x/x; tail -c 300 x; gh pr view 950 --repo x/x --json x,x,x --jq '\"\\(.state) merged=\\(.mergedAt) x=\\(.mergeCommit.oid)\"'; fi", "merges": 1}
+{"command": "cd ~/x/x/x/.claude/x/x && devctl pr merge --update-branch --timeout 9m o/r 211 2>&1 | tail -25;", "merges": 1}
+{"command": "if [ \"$t\" = 0 ]; then git x -A && git x -q --no-edit && git x --oneline -2 && git x -q 2>&1 | tail -1 && echo x && sleep 20 && timeout 500 devctl pr wait --timeout 8m o/r 211 2>&1 | python3 -c 'x x,x; x=x()\nx:\n  x=x(x[x(\"{\"):]); x({x:x(x) for x in (\"verdict\",\"x\",\"x\",\"x\")})\nx x: x(x[-800:])'; x=${x[1]}; echo \"wait exit=$w\"; if [ \"$w\" = 0 ]; then devctl pr merge --update-branch --timeout 4m o/r 211 2>&1 | python3 -c 'x x,x; x=x()\nx:\n  x=x(x[x(\"{\"):]); x({x:x(x) for x in (\"verdict\",\"x\",\"x\",\"x\",\"x\",\"x\")})\nx x: x(x[-800:])'; echo \"merge exit=${x[1]}\"; fi; fi", "merges": 1}
+{"command": "cd ~/x/x/x && for x in \"o/r 883\" \"o/r 2524\"; do x=\"${x% *}\"; x=\"${x#* }\"; echo \"=== $repo#$n ===\"; timeout 560 devctl pr merge --update-branch --timeout 9m \"$repo\" \"$n\" 2>&1 | python3 -c 'x x,x; x=x()\nx:\n  x=x(x[x(\"{\"):]); x({x:x(x) for x in (\"verdict\",\"x\",\"x\",\"x\",\"x\",\"x\",\"x\")})\nx x: x(x[-1200:])'; echo \"exit=${x[1]}\"; done", "merges": 1}
+{"command": "devctl pr merge o/r 632 2>&1 | tail -15;", "merges": 1}
+{"command": "devctl pr merge o/r 225 2>&1 | python3 -c 'x x,x; x=x(); x=x(\"{\"); x=x(x[x:]) if x>=0 else {}; x({x:x(x) for x in (\"verdict\",\"x\",\"x\",\"x\",\"x\")} if x else x[-400:])';", "merges": 1}
+{"command": "devctl pr merge o/r 303 2>&1 | python3 -c 'x x,x; x=x(); x=x(\"{\"); x=x(x[x:]) if x>=0 else {}; x({x:x(x) for x in (\"verdict\",\"x\",\"x\",\"x\",\"x\")} if x else x[-600:])';", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge --rebase o/r 69 2>&1 | tail -30;", "merges": 1}
+{"command": "cd ~/x/x/x && ~/x/devctl pr merge --update-branch o/r 2394 >| $S/x 2>| $S/x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 2394 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "~/x/devctl pr merge o/r 76 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "~/x/devctl pr merge --update-branch o/r 2395 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge o/r 104 2>&1 | tail -25;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 104 >| $S/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge o/r 926 >| $S/x 2>&1;", "merges": 1}
+{"command": "cd ~/x/devctl && devctl pr merge --update-branch o/r 2353 --timeout 5m 2>&1 | tail -15;", "merges": 1}
+{"command": "cd ~/x/x && devctl pr merge o/r 2525 --timeout 5m 2>&1 | /x/x/grep -E '\"verdict\"|\"x\"|\"x\"|\"x\"|\"merged\"' | head -8;", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge --update-branch o/r 108 --timeout 5m 2>&1 | /x/x/grep -E '\"verdict\"|\"x\"|\"x\"|\"x\"' | head -6;", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge o/r 2 --timeout 5m 2>&1 | /x/x/grep -E '\"verdict\"|\"x\"|\"x\"|\"x\"' | head -6;", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge --update-branch o/r 109 --timeout 5m 2>&1 | /x/x/grep -E '\"verdict\"|\"x\"|\"x\"|\"x\"' | head -5;", "merges": 1}
+{"command": "cd ~/x/x && devctl pr merge o/r 2526 --timeout 5m 2>&1 | /x/x/grep -E '\"verdict\"|\"x\"|\"x\"|\"x\"' | head -5;", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge --update-branch o/r 222 2>&1 | tail -15;", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge --update-branch o/r 227 2>&1 | /x/x/grep -E '\"x\"|\"x\"|\"x\"|x|x' | head -5;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 251 >| \"$HOME/.local/x/devctl/x\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 511 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 507 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 509 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 510 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | /x/x/grep -E '^\\x+--' | head -20", "merges": 1}
+{"command": "devctl pr merge o/r 2329 --timeout 20m 2>&1 | tail -30;", "merges": 1}
+{"command": "devctl pr merge o/r 2329 --timeout 20m 2>/x/x | python3 -c 'x x,x; x=x(x); x(\"exit\",x(\"x\"),\"verdict\",x(\"verdict\"),\"x\",x(\"x\"),\"merge\",x(\"x\"),\"x\",x(\"x\"))'", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge --update-branch o/r 235 >| $S/x 2>&1;", "merges": 1}
+{"command": "cd ~ && devctl pr merge --update-branch o/r 924 2>&1 | tail -40", "merges": 1}
+{"command": "cd ~ && devctl pr merge o/r 955 2>&1 | python3 -c 'x x,x; x=x(); x=x(\"{\"); \nx:\n  x=x(x[x:x(\"}\")+1]); x({x:x(x) for x in (\"x\",\"verdict\",\"x\",\"x\",\"x\")}); x(\"release:\", {x:(x(\"release\") x {}).get(x) for x in (\"verdict\",\"x\",\"x\")})\nx x x e: x(x[-3000:])'", "merges": 1}
+{"command": "cd ~ && devctl pr merge o/r 338 2>&1 | python3 -c 'x x,x; x=x(); x=x(\"{\")\nx:\n  x=x(x[x:x(\"}\")+1]); x({x:x(x) for x in (\"x\",\"verdict\",\"x\",\"x\",\"x\",\"x\")}); r=x(\"release\") x {}; x(\"release:\", {x:x(x) for x in (\"verdict\",\"x\",\"x\",\"x\")}); x([(x(\"x\"),x(\"x\") x x(\"x\"),x(\"verdict\") x x(\"status\")) for x in x(\"x\",[])])\nx x: x(x[-3000:])'", "merges": 1}
+{"command": "cd ~/x/x/x/.claude/x/x && devctl pr merge --update-branch o/r 209 >| $S/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge o/r 2535 2>&1 | tail -15;", "merges": 1}
+{"command": "cd $S && x -u +%x:%x:%S && devctl pr merge o/r 6286 >| x 2>&1;", "merges": 1}
+{"command": "cd $S && x -u +%x:%x:%x && devctl pr merge o/r 30 --update-branch >| x 2>&1;", "merges": 1}
+{"command": "cd $S && x -u +%x:%x:%x && devctl pr merge o/r 46 --update-branch >| x 2>&1;", "merges": 1}
+{"command": "cd $S && x -u +%x:%x:%x && devctl pr merge o/r 52 --update-branch >| x 2>&1;", "merges": 1}
+{"command": "cd $S && x -u +%x:%x:%x && devctl pr merge o/r 54 --update-branch >| x 2>&1;", "merges": 1}
+{"command": "cd $S && x -u +%x:%x:%x && devctl pr merge o/r 92 --update-branch >| x 2>&1;", "merges": 1}
+{"command": "cd $S && x -u +%x:%x:%x && devctl pr merge o/r 135 --update-branch >| x 2>&1;", "merges": 1}
+{"command": "cd $S && x -u +%x:%x:%x && devctl pr merge o/r 79 --update-branch >| x 2>&1;", "merges": 1}
+{"command": "cd $S && { x -u +%x:%x:%x; gh pr view 8 --repo x/x --json x,x --jq '\"x: x=\\(.mergeStateStatus) x=\\(.reviewDecision)\"'; gh pr x 8 --repo x/x --approve --body \"x x x'x x: x x x, x x x\" && echo \"x\" && devctl pr merge o/r 8 --update-branch; echo \"exit=$?\"; x -u +%x:%x:%x; } >| x 2>&1", "merges": 1}
+{"command": "cd $S && { x -u +%x:%x:%x; gh pr view 61 --repo x/x --json x,x --jq '\"x: x=\\(.mergeStateStatus) x=\\(.reviewDecision)\"'; gh pr x 61 --repo x/x --approve --body \"x x x'x x: x x x, x x x\" && echo \"x\" && devctl pr merge o/r 61 --update-branch; echo \"exit=$?\"; x -u +%x:%x:%x; } >| x 2>&1", "merges": 1}
+{"command": "cd $S && { x -u +%x:%x:%x; gh pr view 381 --repo x/x --json x,x,x --jq '\"x: x=\\(.mergeStateStatus) x=\\(.reviewDecision) x=\\(.autoMergeRequest != x)\"'; gh pr x 381 --repo x/x --approve --body \"x x x'x x: x x x, x x x\" && echo \"x\" && devctl pr merge o/r 381 --update-branch; echo \"exit=$?\"; x -u +%x:%x:%x; } >| x 2>&1", "merges": 1}
+{"command": "cd $S && { x -u +%x:%x:%x; gh pr view 869 --repo x/x --json x,x,x --jq '\"x: x=\\(.mergeStateStatus) x=\\(.reviewDecision) x=\\(.autoMergeRequest != x)\"'; gh pr x 869 --repo x/x --approve --body \"x x x'x x: x x x, x x x\" && echo \"x\" && devctl pr merge o/r 869 --update-branch; echo \"exit=$?\"; x -u +%x:%x:%x; } >| x 2>&1", "merges": 1}
+{"command": "cd $S && x -u +%x:%x:%x && devctl pr merge o/r 910 >| x 2>&1;", "merges": 1}
+{"command": "cd $S && x -u +%x:%x:%x && devctl pr merge --update-branch o/r 6290 >| x 2>&1;", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | /x/x/grep -E -e \"--(x|x|timeout|x)\" | head", "merges": 1}
+{"command": "devctl pr merge o/r 65 --update-branch --rebase 2>&1 | tail -25;", "merges": 1}
+{"command": "devctl pr merge o/r 66 --update-branch 2>&1 | tail -12;", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | head -30", "merges": 1}
+{"command": "cd ~/x/x/x && S=$S && devctl pr merge --update-branch o/r 2564 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 46 >| $S/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge o/r 913 --no-release-wait >| $S/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | sed -n '1,60p'", "merges": 1}
+{"command": "devctl pr merge o/r 62 --update-branch --no-release-wait --timeout 45m >| \"$out\" 2>| \"$OUT/x\";", "merges": 1}
+{"command": "devctl pr merge o/r 67 --rebase 2>&1 | tee $S/x;", "merges": 1}
+{"command": "cd ~/x/x/devctl/.claude/x/x && S=$S && { echo \"=== pr wait ===\"; devctl pr wait o/r 2331 2>&1 | tail -4; x=${x[1]}; echo \"x=$w\"; if [ \"$w\" -eq 0 ]; then echo \"=== pr merge ===\"; devctl pr merge --update-branch o/r 2331 2>&1 | tail -8; x=${x[1]}; echo \"x=$m\"; if [ \"$m\" -eq 0 ]; then echo \"=== release wait ===\"; devctl release wait x/devctl --pr 2331 2>&1 | tail -8; echo \"x=${x[1]}\"; fi; fi; } >| \"$S/x\" 2>&1;", "merges": 1}
+{"command": "~/x/devctl pr merge --update-branch o/r 2366", "merges": 1}
+{"command": "~/x/devctl pr merge o/r 323 | jq -c '{x, verdict, x, x}'", "merges": 1}
+{"command": "devctl pr merge o/r 516 --timeout 5m 2>&1 | tail -20;", "merges": 1}
+{"command": "devctl pr merge o/r 517 --timeout 5m 2>/x/x | python3 -c 'x x,x; x=x(x); x({x:x(x) for x in (\"x\",\"x\",\"x\",\"x\")})';", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 2536 >| \"$S/x\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 888 >| \"$S/x\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 1339 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "flock x/x/x ~/x/devctl pr merge --update-branch o/r 2386 >| x/x/x/x;", "merges": 1}
+{"command": "flock x/x/x ~/x/devctl pr merge --update-branch o/r 2387 >| x/x/x/x;", "merges": 1}
+{"command": "timeout 3000 devctl pr merge o/r 2575 2>&1 | tail -20;", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | sed -n 1,60p;", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | /x/x/grep -E \"x|timeout|x\" | head -5", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 178;", "merges": 1}
+{"command": "cd ~/x/x/.claude/x/x && mkdir -p x/x/x && flock $K/x/x/x ~/x/devctl pr merge --update-branch o/r 2391 >| x/x/x/x 2>| x/x/x/x;", "merges": 1}
+{"command": "cd ~/x/devctl/.claude/x/x && devctl pr merge o/r 2356 2>&1 | tail -12;", "merges": 1}
+{"command": "devctl pr merge o/r 1 2>&1 | /x/x/grep -E '\"(verdict|x|x|x|x|x)\"';", "merges": 1}
+{"command": "devctl pr merge o/r 624 2>&1 | python3 -c 'x x,x; x=x(x); x(\"verdict\", x[\"verdict\"], \"|\", x(\"x\",\"\"), \"| merge\", x(\"x\",\"\")[:9], x(\"x\",\"\"))' 2>&1 | tail -3;", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge --update-branch o/r 639 2>&1 | tail -15;", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge --update-branch o/r 640 2>&1 | /x/x/grep -E '\"x\"|\"x\"|\"x\"|exit|x|x' | head -6;", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge --update-branch o/r 2363 2>&1 | /x/x/grep -E '\"x\"|\"x\"|\"x\"|x|x' | head -5;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 6269 2>&1 | /x/x/grep -E '\"x\"|\"x\"|x|x|x|x|x' | head -6 | x -c1-200;", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge --update-branch o/r 6270 2>&1 | /x/x/grep -E '\"x\"|\"x\"|x|x|x|x|x|\"x\"|\"x\"' | head -24 | x -c1-200;", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge --update-branch o/r 642 2>&1 | /x/x/grep -E '\"x\"|\"x\"|x|x|x' | head -5 | x -c1-160;", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge --update-branch o/r 17 2>&1 | /x/x/grep -E '\"x\"|\"x\"|x|x|x|\"x\"' | head -6 | x -c1-160;", "merges": 1}
+{"command": "cd ~/x/x/x && timeout 280 devctl pr merge --update-branch o/r 6271 2>&1 | /x/x/grep -E '\"x\"|\"x\"|x|x|x|x' | head -5 | x -c1-200;", "merges": 1}
+{"command": "cd ~/x/x/x && timeout 280 devctl pr merge --update-branch o/r 6272 2>&1 | /x/x/grep -E '\"x\"|\"x\"|x|x|x|x' | head -5 | x -c1-200;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 644 2>&1 | /x/x/grep -E '\"x\"|\"x\"|x|x|x' | head -5 | x -c1-200;", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge --update-branch o/r 62 2>&1 | /x/x/grep -E '\"x\"|\"x\"|x|x|x' | head -5 | x -c1-200;", "merges": 1}
+{"command": "if [ \"$(gh pr checks 644 --repo o/r 2>&1 | awk -F'\\x' '$2!=\"x\" && $2!=\"x\"' | x -l)\" = \"0\" ]; then echo \"=== merge 644\"; devctl pr merge --update-branch o/r 644 2>&1 | /x/x/grep -E '\"x\"|x|x' | head -4 | x -c1-160; gh pr view 644 --repo x/x --json x,x --jq '\"644 \\(.state) \\(.mergeCommit.oid[0:8])\"'; sleep 75; gh x x/x/x/x --jq '.[0:2][]|\"x \\(.name) \\(.commit.sha[0:8])\"'; else echo \"644 x x x, x x\"; fi", "merges": 1}
+{"command": "cd ~/x/x/x && timeout 280 devctl pr merge --update-branch o/r 6275 2>&1 | /x/x/grep -E '\"x\"|\"x\"|x|x|x' | head -4 | x -c1-200;", "merges": 1}
+{"command": "if [ \"$(gh pr checks 644 --repo o/r 2>&1 | awk -F'\\x' '$2!=\"x\" && $2!=\"x\"' | x -l)\" = \"0\" ]; then echo \"=== merge 644\"; devctl pr merge --update-branch o/r 644 2>&1 | /x/x/grep -E '\"x\"|x|x' | head -4 | x -c1-160; gh pr view 644 --repo x/x --json x,x --jq '\"644 \\(.state) \\(.mergeCommit.oid[0:8])\"'; sleep 75; gh x x/x/x/x --jq '.[0:2][]|\"x \\(.name) \\(.commit.sha[0:8])\"'; else echo \"644 x x x, x x\"; gh pr checks 644 --repo o/r 2>&1 | awk -F'\\x' '$2!=\"x\"{x $2, $1}'; fi", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 20 2>&1 | /x/x/grep -E '\"x\"|\"x\"|x|x|x' | head -5 | x -c1-200;", "merges": 1}
+{"command": "if [ \"$(gh pr checks 19 --repo o/r 2>&1 | awk -F'\\x' '$2!=\"x\" && $2!=\"x\"' | x -l)\" = \"0\" ]; then echo \"=== merge 19\"; devctl pr merge --update-branch o/r 19 2>&1 | /x/x/grep -E '\"x\"|x|x' | head -4 | x -c1-160; gh pr view 19 --repo x/x --json x,x --jq '\"19 \\(.state) \\(.mergeCommit.oid[0:8])\"'; else echo \"19 x x x, x x\"; gh pr checks 19 --repo o/r 2>&1 | awk -F'\\x' '$2!=\"x\"{x $2, $1}'; fi", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 65 2>&1 | /x/x/grep -E '\"x\"|x|x|x x' | head -4 | x -c1-160;", "merges": 1}
+{"command": "if [ \"$(gh pr checks 19 --repo o/r 2>&1 | awk -F'\\x' '$2!=\"x\" && $2!=\"x\"' | x -l)\" = \"0\" ]; then echo \"=== merge 19\"; devctl pr merge --update-branch o/r 19 2>&1 | /x/x/grep -E '\"x\"|x|x' | head -4 | x -c1-160; gh pr view 19 --repo x/x --json x,x --jq '\"19 \\(.state) \\(.mergeCommit.oid[0:8])\"'; else echo \"19 x x x\"; gh pr checks 19 --repo o/r 2>&1 | awk -F'\\x' '$2!=\"x\"{x $2, $1}'; fi", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge o/r 21 --timeout 20m 2>&1 | /x/x/grep -E '\"x\"|\"x\"|x|\"x\"|x|x' | head -8;", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge o/r 19 --timeout 20m 2>&1 | /x/x/grep -E '\"x\"|\"x\"|x|x|x' | head -6;", "merges": 1}
+{"command": "devctl pr merge o/r 872 --timeout 15m 2>&1 | /x/x/grep -E '\"x\"|\"x\"|x|x' | head -5;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 6277 --timeout 10m 2>&1 | /x/x/grep -E '\"x\"|\"x\"|x|x' | head -6;", "merges": 1}
+{"command": "cd ~/x/x/x && x=$(devctl pr merge --rebase o/r 23 --timeout 45m 2>&1);", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge o/r 66 --timeout 45m 2>&1 | /x/x/grep -E '\"x\"|\"x\"|x|\"x\"|x' | head -8;", "merges": 1}
+{"command": "devctl pr merge o/r 66 --timeout 45m 2>&1 | /x/x/grep -E '\"x\"|\"x\"|x|\"x\"|x' | head -8;", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge o/r 24 --timeout 20m 2>&1 | /x/x/grep -E '\"x\"|\"x\"|x|x' | head -5;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 6279 --timeout 10m 2>&1 | /x/x/grep -E '\"x\"|\"x\"|x|x' | head -5;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 6280 --timeout 10m 2>&1 | /x/x/grep -E '\"x\"|\"x\"|x|x' | head -5;", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge o/r 25 --timeout 20m 2>&1 | /x/x/grep -E '\"x\"|\"x\"|x|x' | head -5;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 6281 --timeout 10m 2>&1 | /x/x/grep -E '\"x\"|\"x\"|x|x' | head -5;", "merges": 1}
+{"command": "x=$(devctl pr merge --update-branch o/r 37920 --timeout 15m 2>&1);", "merges": 1}
+{"command": "x=\"$S/x\" x=\"$S/x\" devctl pr merge --update-branch o/r 650 >| \"$S/x\" 2>&1;", "merges": 1}
+{"command": "~/x/devctl pr merge --update-branch o/r 2342 --timeout 15m 2>&1 | tail -c 2500", "merges": 1}
+{"command": "~/x/devctl pr merge --update-branch o/r 99 --timeout 15m 2>&1 | jq -c '{x, verdict, x, x, x, x, x}' 2>/x/x || echo \"merge x x x x x\"", "merges": 1}
+{"command": "~/x/devctl pr merge --update-branch o/r 104 --timeout 15m 2>&1 | jq -c '{x, verdict, x, x, x, x, x}' 2>/x/x || echo \"merge x x x x\"", "merges": 1}
+{"command": "~/x/devctl pr merge --update-branch o/r 2347 --timeout 15m 2>&1 | jq -c '{x, verdict, x, x, x, x, x}' 2>/x/x || echo \"merge x x x x\"", "merges": 1}
+{"command": "~/x/devctl pr merge --update-branch o/r 105 --timeout 15m 2>&1 | jq -c '{x, verdict, x, x, x, x, x}' 2>/x/x || echo \"merge x x x x\"", "merges": 1}
+{"command": "devctl pr merge o/r 249 2>&1 | tail -25;", "merges": 1}
+{"command": "devctl pr merge o/r 456;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 256;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 2147;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 129;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 92;", "merges": 1}
+{"command": "devctl pr merge o/r 179 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge o/r 955 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge o/r 6289 >| ~/.local/x/x/x/x/x/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 152 >| \"$L\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 2393 > ~/.local/x/x/x 2> ~/.local/x/x/x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 2579 > ~/.local/x/x/x 2> ~/.local/x/x/x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 625 >| $S/x 2>| $S/x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 626 >| \"$D/x\" 2>| \"$D/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 960 >| \"$D/x\" 2>| \"$D/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 961 >| \"$D/x\" 2>| \"$D/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 2400 >| \"$D/x\" 2>| \"$D/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 69 2>&1 | tail -40;", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | /x/x/grep -n -i -A1 'exit\\|7' | head -40", "merges": 1}
+{"command": "devctl pr merge --update-branch --progress o/r 69 >| \"$OUT\" 2>| \"$OUT.err\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 70 >| $S/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 68 >| $S/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 71 >| $S/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 86 >| $S/x 2>&1;", "merges": 1}
+{"command": "~/x/devctl pr merge o/r 2376 --progress >| ~/.local/x/x/x 2>| ~/.local/x/x/x;", "merges": 1}
+{"command": "~/x/devctl pr merge o/r 2377 --progress >| ~/.local/x/x/x 2>| ~/.local/x/x/x;", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | head -40", "merges": 1}
+{"command": "devctl pr merge o/r 318 --timeout 5m >| \"$OUT\";", "merges": 1}
+{"command": "devctl pr merge o/r 2588 2>&1 | tail -30;", "merges": 1}
+{"command": "devctl pr merge o/r 925 2>&1 | tail -8;", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | /x/x/grep -i -A2 -E \"exit|[^0-9]7[^0-9]\" | head -30", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | /x/x/grep -n -E \"x|exit [0-9]|  [0-9] \" | head -30", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 255 2>&1 | tail -25;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 247 2>&1 | tail -15;", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | /x/x/grep -n -i -B1 -A14 \"exit\" | head -60", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 247 >| \"$S/x\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 83 >| \"$S/x\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge o/r 83 >| \"$S/x\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | head -6;", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | /x/x/grep -i -E -- '--(x|x|timeout|x)' | head", "merges": 1}
+{"command": "devctl pr merge o/r 2530 --update-branch --timeout 45m >| \"$S/x\";", "merges": 1}
+{"command": "if [ \"$rc1\" -eq 0 ]; then\n  devctl pr merge o/r 241 --update-branch --timeout 45m --release-timeout 30m >| \"$S/x\"; x=$?\n  o/r record x/x#236 --agent x --pass-status x < \"$S/x\"\n  echo \"x#241 exit=$rc2\"; python3 -c \"x x,x;x=x(x(x[1]));x({x:x(x) for x in ('x','verdict','x','x','x','x')})\" \"$S/x\"\nfi", "merges": 1}
+{"command": "devctl pr merge o/r 2576 --update-branch --timeout 45m --release-timeout 40m >| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge o/r 326 --update-branch --timeout 45m >| \"$S/x\";", "merges": 1}
+{"command": "cd $K && devctl pr merge o/r 70 --update-branch --timeout 20m >| $S/x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 169 >| \"$O\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 667 >| \"$O\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 100 >| \"$O\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 670 >| \"$O\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 680 >| \"$O\";", "merges": 1}
+{"command": "devctl pr merge o/r 2154 >| \"$O\";", "merges": 1}
+{"command": "for x in 1 2 3 4 5 6; do devctl pr merge --update-branch o/r 676 >| \"$O\" 2>| \"$O.err\"; x=$?; echo \"$(x -u +%x:%x:%x) x=$try exit=$rc $(/x/x/grep -h 'x x' \"$O.err\" | tail -1)\"; [ \"$rc\" = 76 ] || x; done;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 676 >| \"$O\" 2>| \"$O.err\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 678 >| \"$O\" 2>| \"$O.err\";", "merges": 1}
+{"command": "devctl pr merge o/r 678 >| \"$O\" 2>| \"$O.err\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 679 >| \"$O\" 2>| \"$O.err\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 172 >| \"$O\" 2>| \"$O.err\";", "merges": 1}
+{"command": "for x in 1 2 3 4; do devctl pr merge --update-branch o/r 109 >| \"$O\" 2>| \"$O.err\"; x=$?; echo \"$(x -u +%x:%x:%x) x=$try exit=$rc $(/x/x/grep -h 'x x' \"$O.err\" | tail -1 | x -c1-200)\"; [ \"$rc\" = 76 ] || x; done;", "merges": 1}
+{"command": "~/.local/x/x/devctl pr merge --help 2>&1 | /x/x/grep -c \"x\"", "merges": 1}
+{"command": "cd ~/.local/x/x && ./devctl pr merge o/r 2368 --timeout 45m --release-timeout 40m --progress > x 2> x;", "merges": 1}
+{"command": "devctl pr merge --help | /x/x/grep -c \"x\"", "merges": 1}
+{"command": "~/x/devctl pr merge --help | /x/x/grep -c \"x\"", "merges": 1}
+{"command": "cd ~/.local/x/x && devctl pr merge o/r 2369 --timeout 45m --progress > x 2> x;", "merges": 1}
+{"command": "cd ~/.local/x/x && devctl pr merge o/r 324 --timeout 30m --progress > x 2> x;", "merges": 1}
+{"command": "cd ~/.local/x/x && devctl pr merge o/r 2369 --timeout 45m --progress >| x 2>| x;", "merges": 1}
+{"command": "cd ~/.local/x/x && devctl pr merge o/r 324 --timeout 30m --progress >| x 2>| x;", "merges": 1}
+{"command": "cd ~/.local/x/x && devctl pr merge o/r 37914 --timeout 30m --progress >| x 2>| x;", "merges": 1}
+{"command": "mkdir -p ~/.local/x/x && cd ~/.local/x/x && devctl pr merge o/r 2371 --timeout 45m --progress >| x 2>| x;", "merges": 1}
+{"command": "devctl pr merge o/r 2371 --timeout 45m --progress >| x 2>| x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 210 2>&1 | tail -15;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 4890;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 4890 >| $S/x;", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | /x/x/grep -E 'x|timeout|x|x|x' | head -8", "merges": 1}
+{"command": "devctl pr merge --update-branch --rebase o/r 74 >| \"$f\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch --rebase o/r 75 >| \"$f\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge o/r 651 >| \"$f\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 111 --timeout 5m 2>/x/x | jq -c '{x,verdict,x,merged:(.merged // .merge // x),x:(.mergeCommit // .sha // x)}' ;", "merges": 1}
+{"command": "x=$(devctl pr merge o/r 943 --timeout 5m 2>/x/x);", "merges": 1}
+{"command": "x=$(devctl pr merge o/r 944 --timeout 5m 2>/x/x);", "merges": 1}
+{"command": "x=$(devctl pr merge --update-branch o/r 2362 --timeout 5m 2>/x/x);", "merges": 1}
+{"command": "devctl pr merge o/r 206 2>&1 | tail -20;", "merges": 1}
+{"command": "devctl pr merge --rebase --update-branch o/r 86 2>&1 | /x/x/grep -v '^\\x*[{}\\[\\]\"]' | tail -25;", "merges": 1}
+{"command": "devctl pr merge --rebase --update-branch o/r 87 >| $S/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge --rebase --update-branch o/r 89 >| $S/x 2>&1;", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge o/r 58 --rebase 2>&1 | tail -15;", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge o/r 58 --rebase;", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge o/r 59;", "merges": 1}
+{"command": "cd /x && gh x x 35888764215 --repo x/x --failed 2>&1 | tail -1 && devctl pr merge o/r 59;", "merges": 1}
+{"command": "devctl pr merge o/r 59;", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | /x/x/grep -i -E 'timeout|x|x' | head", "merges": 1}
+{"command": "devctl pr merge --update-branch --timeout 2m --release-timeout 7m o/r 505 2>/x/x | jq -c '{x,verdict,x,x,x}';", "merges": 1}
+{"command": "devctl pr merge o/r 6335 >| \"$(o/r x x)\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 1327 > ~/.local/x/x/x 2> ~/.local/x/x/x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 658 >| ~/.local/x/x/x 2>| ~/.local/x/x/x;", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | head -70", "merges": 1}
+{"command": "devctl pr merge --no-release-wait o/r 932 >| ~/.local/x/x/x/x 2>| ~/.local/x/x/x/x;", "merges": 1}
+{"command": "cd ~/x/x/devctl/.claude/x/x && devctl pr merge --update-branch o/r 2357 2>&1 | tail -c 1200;", "merges": 1}
+{"command": "cd ~/x/x/devctl/.claude/x/x && devctl pr merge --update-branch o/r 2358 2>&1 | /x/x/grep -E '\"x\"|\"verdict\"|\"x\"|\"x\"' | head -4;", "merges": 1}
+{"command": "cd ~/x/x/devctl/.claude/x/x && devctl pr merge --update-branch o/r 2360 2>&1 | /x/x/grep -E '\"x\"|\"verdict\"|\"x\"|\"x\"' | head -4;", "merges": 1}
+{"command": "devctl pr merge --update-branch --timeout 9m o/r 6284 >| ~/.local/x/x/x/x/x 2>| ~/.local/x/x/x/x/x;", "merges": 1}
+{"command": "devctl pr merge --update-branch --timeout 9m o/r 42 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch --timeout 9m o/r 44 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --timeout 9m o/r 905 >| ~/.local/x/x/x/x/x 2>| ~/.local/x/x/x/x/x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 157 >| $S/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | head -8;", "merges": 1}
+{"command": "cd /x && timeout 900 devctl pr merge o/r 37904 2>&1 | tail -5;", "merges": 1}
+{"command": "cd /x && (timeout 2700 devctl pr merge --update-branch o/r 2328 2>&1 | tail -3; echo \"merge exit=${x[0]}\")", "merges": 1}
+{"command": "cd /x && timeout 2700 devctl pr merge --update-branch o/r 2328 >| $S/x 2>&1;", "merges": 1}
+{"command": "timeout 900 devctl pr merge o/r 6243 >| \"$out\" 2>&1;", "merges": 1}
+{"command": "timeout 2700 devctl pr merge --update-branch o/r 2328 >| \"$out\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge o/r 81 --rebase 2>&1 | tail -15;", "merges": 1}
+{"command": "devctl pr merge o/r 82 --rebase 2>&1 | tail -12;", "merges": 1}
+{"command": "devctl pr merge o/r 259 2>&1 | tail -25;", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | head -80;", "merges": 1}
+{"command": "devctl pr merge --update-branch --rebase o/r 78 2>&1 | tail -30;", "merges": 1}
+{"command": "devctl pr merge --update-branch --rebase o/r 76 2>&1 | tail -30;", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | /x/x/grep -iE -A2 'exit|timeout|x' | head -40;", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | /x/x/grep -nE '^\\x*(x|exit)|exit 1|exit 2|exit 4|exit 7|exit 8|x 1' | head -20;", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | /x/x/grep -n -B2 -A6 'x x' | head -40", "merges": 1}
+{"command": "devctl pr merge --update-branch --rebase o/r 76 >| \"$S/x\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch --rebase o/r 80 >| \"$S/x\" 2>&1;", "merges": 1}
+{"command": "cd /x && ~/x/devctl pr merge o/r 16 --rebase --timeout 20m 2>&1 | tail -20", "merges": 1}
+{"command": "cd /x && for x in x:54 x:67; do r=\"${x%%:*}\"; x=\"${x##*:}\"; echo \"===== $r#$n =====\"; ~/x/devctl pr merge \"x/$r\" \"$n\" --rebase --timeout 30m 2>&1 | python3 -c \"x x,x;x=x(x);x(x('verdict'),'|',x('x'),'|merged:',x('x','-'),'|x:',x('x','-'))\" 2>/x/x || echo \"(x x)\"; done", "merges": 1}
+{"command": "cd /x && for x in x:54 x:67; do r=\"${x%%:*}\"; x=\"${x##*:}\"; echo \"===== $r#$n =====\"; ~/x/devctl pr merge \"x/$r\" \"$n\" --rebase --timeout 35m 2>&1 | python3 -c \"x x,x;x=x(x);x(x('verdict'),'|',x('x'),'| merged:',x('x','-'))\" 2>/x/x || echo \"(x x x)\"; done", "merges": 1}
+{"command": "cd /x && ~/x/devctl pr merge o/r 67 --rebase --timeout 35m 2>&1 | python3 -c \"x x,x;x=x(x);x(x('verdict'),'|',x('x'),'| merged:',x('x','-'))\" 2>/x/x || echo \"(x x x)\"", "merges": 1}
+{"command": "devctl pr merge o/r 26 --update-branch 2>&1 | tail -40;", "merges": 1}
+{"command": "devctl pr merge o/r 67 --update-branch 2>&1 | tail -40;", "merges": 1}
+{"command": "devctl pr merge o/r 83 --rebase --update-branch 2>&1 | tail -60;", "merges": 1}
+{"command": "devctl pr merge o/r 904 2>&1 | tail -25;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 160 >| ~/.local/x/x/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 657 >| ~/.local/x/x/x 2>&1;", "merges": 1}
+{"command": "timeout 540 devctl pr merge --update-branch o/r 6283 2>&1 | tail -25;", "merges": 1}
+{"command": "timeout 540 devctl pr merge --update-branch o/r 80 >| ~/.local/x/x/x/x/59642e-merge80.json 2>&1;", "merges": 1}
+{"command": "timeout 540 devctl pr merge --update-branch o/r 83 >| ~/.local/x/x/x/x/59642e-merge83.json 2>&1;", "merges": 1}
+{"command": "timeout 540 devctl pr merge --update-branch o/r 84 >| ~/.local/x/x/x/x/59642e-merge84.json 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 100 >| $S/x 2>&1;", "merges": 1}
+{"command": "mkdir -p ~/.local/x/x/x && flock ~/.local/x/x/x/x devctl pr merge --update-branch o/r 131 | tee \"$(o/r x x)\" | ./x/ledger.sh record x/x#70 --agent x;", "merges": 1}
+{"command": "flock ~/.local/x/x/x/x devctl pr merge --update-branch o/r 134 | tee \"$(o/r x x)\" | ./x/ledger.sh record x/x#132 --agent x;", "merges": 1}
+{"command": "flock ~/.local/x/x/x/x devctl pr merge --update-branch o/r 191 | tee \"$(o/r x x)\" | ./x/ledger.sh record x/x#188 --agent x;", "merges": 1}
+{"command": "gh pr view 2594 --repo x/x --json x,x,x --jq '\"\\(.state) \\(.headRefOid[0:8]) \\(.mergeStateStatus)\"' && (flock ~/.local/x/x/x/x devctl pr merge --update-branch o/r 2594 | tee \"$(o/r x x)\" | ./x/ledger.sh record x/x#37816 --agent x; echo \"exit ${x[1]}\") >| \"$(o/r x x)\" 2>&1 &", "merges": 1}
+{"command": "flock ~/.local/x/x/x/x devctl pr merge --update-branch o/r 666 | tee \"$(o/r x x)\" | ./x/ledger.sh record x/x#513 --agent x;", "merges": 1}
+{"command": "flock ~/.local/x/x/x/x devctl pr merge o/r 2420 | tee \"$(o/r x x)\" | ./x/ledger.sh record x/devctl#2419 --agent x;", "merges": 1}
+{"command": "~/x/devctl pr merge --help 2>&1 | head -25;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 99 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 260 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge o/r 60 --rebase --progress >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge o/r 61 --progress >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge o/r 648 --update-branch --progress >| \"$D/x\" 2>| \"$D/x\";", "merges": 1}
+{"command": "devctl pr merge o/r 63 --rebase --progress >| \"$D/x\" 2>| \"$D/x\";", "merges": 1}
+{"command": "devctl pr merge o/r 64 --progress >| \"$D/x\" 2>| \"$D/x\";", "merges": 1}
+{"command": "devctl pr merge o/r 653 --update-branch --progress >| \"$D/x\" 2>| \"$D/x\";", "merges": 1}
+{"command": "devctl pr merge o/r 190 2>&1 | tail -30", "merges": 1}
+{"command": "devctl pr merge o/r 190;", "merges": 1}
+{"command": "devctl pr merge o/r 190 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 190 >| ~/.local/x/x/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge o/r 923 >| ~/.local/x/x/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 257 >| \"$L\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 259 >| \"$L\" 2>&1;", "merges": 1}
+{"command": "timeout 580 devctl pr merge --timeout 9m o/r 6282 2>&1 | tail -25;", "merges": 1}
+{"command": "timeout 580 devctl pr merge --update-branch --timeout 9m o/r 134 >| ~/.local/x/x/x/x/x 2>&1;", "merges": 1}
+{"command": "timeout 580 devctl pr merge --update-branch --timeout 9m o/r 138 >| \"$F\" 2>&1;", "merges": 1}
+{"command": "cd ~/x/x/x && S=$S && { x -u +%x%x; devctl pr merge --update-branch o/r 220; echo \"pr merge exit $?\"; x -u +%x%x; } >| \"$S/x\" 2>&1", "merges": 1}
+{"command": "cd ~/x/x/x && S=$S && { x -u +%x%x; devctl pr merge --update-branch o/r 228; echo \"pr merge exit $?\"; x -u +%x%x; devctl release wait x/x --pr 228; echo \"release wait exit $?\"; x -u +%x%x; } >| \"$S/x\" 2>&1", "merges": 1}
+{"command": "{ x -u +%x%x; devctl pr merge --update-branch o/r 228; echo \"pr merge exit $?\"; x -u +%x%x; devctl release wait x/x --pr 228; echo \"release wait exit $?\"; x -u +%x%x; } >| \"$S/x\" 2>&1 &", "merges": 1}
+{"command": "cd ~/x/x/x && S=$S && { x -u +%x%x; devctl pr merge --update-branch o/r 229; echo \"pr merge exit $?\"; x -u +%x%x; devctl release wait x/x --pr 229; echo \"release wait exit $?\"; x -u +%x%x; } >| \"$S/x\" 2>&1", "merges": 1}
+{"command": "cd ~/x/x/x && S=$S && { x -u +%x%x; devctl pr merge --update-branch o/r 231; echo \"pr merge exit $?\"; x -u +%x%x; devctl release wait x/x --pr 231; echo \"release wait exit $?\"; x -u +%x%x; } >| \"$S/x\" 2>&1", "merges": 1}
+{"command": "cd ~/x/x/x && S=$S && { x -u +%x%x; devctl pr merge --update-branch o/r 234; echo \"pr merge exit $?\"; x -u +%x%x; devctl release wait x/x --pr 234; echo \"release wait exit $?\"; x -u +%x%x; } >| \"$S/x\" 2>&1", "merges": 1}
+{"command": "cd ~/x/x/x && S=$S && { x -u +%x%x; devctl pr merge --update-branch o/r 240; echo \"pr merge exit $?\"; x -u +%x%x; devctl release wait x/x --pr 240; echo \"release wait exit $?\"; x -u +%x%x; } >| \"$S/x\" 2>&1", "merges": 1}
+{"command": "~/x/devctl pr merge --update-branch o/r 2385;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 1331 2>&1 | tail -40;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 129 >| $S/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 129 >| \"$L\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 944 >| \"$L\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 360 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "echo \"=== devctl pr merge --help ===\" && devctl pr merge --help 2>&1 | head -60", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 2396 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 2397 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 6287 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 121 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge o/r 6 2>/x/x | jq -c '{x, verdict, x, x, release: (.release | {x, verdict})}';", "merges": 1}
+{"command": "x=x/x/x/x && gh pr view 57 --repo x/x --json x,x,x -q '\"x=\\(.isDraft) x=\\(.author.login) \\(.state)\"' && devctl pr merge o/r 57 --timeout 1m >| \"$P/x\" 2>| \"$P/x\";", "merges": 1}
+{"command": "x=x/x/x/x && for x in 56 22; do echo \"== x#$n $(gh pr view $n --repo x/x --json x,x,x -q '\"x=\\(.isDraft) x=\\(.author.login) x=\\(.mergeable)\"')\"; devctl pr merge o/r $n --timeout 1m >| \"$P/x\" 2>| \"$P/x\"; x=$?; echo \"exit=$rc\"; jq -c '{verdict,x,x,x}' \"$P/x\"; gh pr view $n --repo x/x --json x -q '\"x: \\(.state)\"'; [ \"$rc\" = 5 ] && x; done", "merges": 1}
+{"command": "x=$PWD/x/x/x/x && S=$S && x -rf \"$S/x\" && git x -q --depth 1 x://x/x/x \"$S/x\" && cd \"$S/x\" && git x -q -b x && /x/x/grep -c \" -- \" x && sed -i 'x/ -- / \u2014 /x' x && git x --stat && git x -q -am \"x: x x x in x x\" && git x -q -u x x 2>&1 | tail -1 && x=$(gh pr x --repo x/x --title \"x: x x x in x x\" --body \"x x x x x x in x x; x x x x x x x x x x x x x x x\n\nx x \\`devctl pr merge\\` x x x x x x://x/x/devctl/x/2278 in x x x x x x devctl x x x x\" --head x --base x) && echo \"x $PR\" && N=${x##*/} && cd \"$P\" && echo \"--- x x merge ---\" && gh x x/x/x/x/x/x | jq -c '[.[] | {x}]' >| \"$P/x\" && gh x x/x/x/x/23792301 | jq -S 'x(.updated_at,.created_at,._links,.node_id,.current_user_can_bypass)' >| \"$P/x\" && echo \"--- devctl pr merge (x, x x 25m) ---\" && devctl pr merge o/r \"$N\" --timeout 25m --progress >| \"$P/x\" 2>| \"$P/x\";", "merges": 1}
+{"command": "x=x/x/x/x && gh x x/x/x/x/23792301 | jq -S 'x(.updated_at,.created_at,._links,.node_id,.current_user_can_bypass)' >| \"$P/x\" && gh x x/x/x/x/x/x | jq -c '[.[] | {x}]' >| \"$P/x\" && echo \"--- devctl pr merge o/r 10 ---\" && devctl pr merge o/r 10 --timeout 20m --progress >| \"$P/x\" 2>| \"$P/x\";", "merges": 1}
+{"command": "git x x -q --detach \"$W\" x && cd \"$W\" && (x x ./... >/x/x 2>&1; x x -ldflags \"-X x/x/devctl/x/x/x=8.83.0 -X x/x/devctl/x/x/x=$(git x x)\" -o ~/x/devctl .) && cd ~/x/x/devctl && git x x --force \"$W\" && devctl x | head -1 && cd $K && x=x/x/x/x && echo \"--- devctl pr merge o/r 10 ---\" && devctl pr merge o/r 10 --timeout 20m --progress >| \"$P/x\" 2>| \"$P/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 159 2>&1 | tail -40;", "merges": 1}
+{"command": "devctl pr merge o/r 885 2>&1 | tail -6;", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | /x/x/grep -n -i -A1 \"exit\\| 7\\x\" | head -30;", "merges": 1}
+{"command": "devctl pr merge o/r 885 >| $S/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge o/r 2382 >| $S/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge o/r 2383 >| $S/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 119 >| $S/x 2>&1;", "merges": 1}
+{"command": "cd ~/x/x/devctl/.claude/x/x && devctl pr merge o/r 2348 2>&1 | tail -30", "merges": 1}
+{"command": "cd ~/x/x/devctl/.claude/x/x && devctl pr merge o/r 2349 2>&1 | tail -20", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge o/r 6256 2>&1 | tail -25;", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge o/r 6257 2>&1 | tail -8", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge o/r 6258 2>&1 | tail -30", "merges": 1}
+{"command": "cd $S && x -u +%x:%x:%x && devctl pr merge --rebase o/r 85 >| x 2>&1;", "merges": 1}
+{"command": "cd $S && x -u +%x:%x:%x && devctl pr merge --rebase --update-branch o/r 85 >| x 2>&1;", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | /x/x/grep -E -- '--update-branch|--rebase|exit 7|x' | head -6", "merges": 1}
+{"command": "cd $S && x -u +%x:%x:%x && devctl pr merge o/r 262 >| x 2>&1;", "merges": 1}
+{"command": "cd $S && x -u +%x:%x:%x && devctl pr merge o/r 69 >| x 2>&1;", "merges": 1}
+{"command": "cd $S && x -u +%x:%x:%x && devctl pr merge o/r 661 >| x 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 208 >| \"$S/x\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge o/r 1310 >| \"$S/x\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 250 2>&1 | tail -25;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 71 2>&1 | tail -12;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 2367 2>&1 | tail -6;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 1320 2>&1 | tail -6;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 635 2>&1 | tail -5;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 244 2>&1 | tail -5;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 244 2>&1 | /x/x/grep -E '\"(verdict|x|x|x)\"';", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 93 >| $S/x 2>&1;", "merges": 1}
+{"command": "for x in x:244 x:28; do r=${x%%:*} x=${x##*:}; devctl pr merge --update-branch x/$r $n >| \"$S/x$r.json\" 2>&1; echo \"$r#$n merge exit=$? $(python3 -c 'x x,x; x=x(x(x[1])); x(x(\"verdict\"), x(\"x\"), x(\"x\"))' \"$S/x$r.json\")\"; done", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 244 >| \"$S/x\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 28 >| \"$S/x\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 116 >| \"$S/x\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 96 >| \"$S/x\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge o/r 455 >| \"$S/x\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge o/r 255 >| \"$S/x\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge o/r 128 >| \"$S/x\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 69 >| \"$S/x\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge o/r 88 >| \"$S/x\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge o/r 89 >| \"$S/x\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge o/r 307 2>&1 | tail -30", "merges": 1}
+{"command": "devctl pr merge o/r 308 2>&1 | tail -20", "merges": 1}
+{"command": "~/x/devctl pr merge --update-branch o/r 2389 2>&1 | tail -40;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 180 >| $S/x 2>| $S/x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 358 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 506 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 263 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 156 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 33 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 186 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 232 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 643 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 1334 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge o/r 336;", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | /x/x/grep -E -- '--(x|x|timeout|x)' | x -c1-140", "merges": 1}
+{"command": "S=$S && (devctl pr merge --update-branch o/r 2328 >| \"$S/x\" 2>&1; echo \"exit=$?\" >> \"$S/x\");", "merges": 1}
+{"command": "S=$S && gh pr view --repo o/r 2329 --json x,x,x --jq '\"2329 \\(.headRefOid[0:8]) \\(.mergeable) \\(.mergeStateStatus)\"' && (devctl pr merge --update-branch o/r 2329 >| \"$S/x\" 2>&1; echo \"exit=$?\" >> \"$S/x\");", "merges": 1}
+{"command": "cd ~/x/x && timeout 600 devctl pr merge o/r 2523 2>&1 | tail -15;", "merges": 1}
+{"command": "cd ~/x/x && timeout 600 devctl pr merge --update-branch o/r 882 2>&1 >| $S/x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 2578 2>&1 | tail -15;", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | /x/x/grep -i -A2 -E 'exit|[0-9] ' | head -40", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | sed -n '/^x x:/,$p' | head -20", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 2578 >| \"$HOME/.local/x/x\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge o/r 857 >| \"$HOME/.local/x/x\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 250 >| \"$HOME/.local/x/x\" 2>&1;", "merges": 1}
+{"command": "timeout 540 devctl pr merge --update-branch o/r 2569 2>&1 | python3 -c '\nx x,x\nx=x()\nx:\n    x=x(x[x(\"{\"):x(\"}\")+1])\n    for x in (\"x\",\"x\",\"status\",\"x\",\"merged\",\"x\",\"x\",\"x\",\"x\",\"x\",\"x\",\"x\"):\n        if x in x: x(x, x(x[x])[:200])\n    x=x(\"merge\") x {}\n    for x,x in x(): x(\"x\"+x, x(x)[:200])\nx x x e:\n    x(x[-1500:])\n';", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 81 > \"$S/x\" 2> \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | /x/x/grep -E -- '--(x|timeout|x|x|x|x)' | head", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 82 > \"$S/x\" 2> \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch --no-release-wait o/r 83 > \"$S/x\" 2> \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 104 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge o/r 180 >| \"$SP/x\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge o/r 106 >| \"$SP/x\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge o/r 2424 >| \"$SP/x\" 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 1244 >| ~/.local/x/x/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 1245 >| ~/.local/x/x/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 170 >| ~/.local/x/x/x 2>/x/x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 171 >| ~/.local/x/x/x 2>/x/x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 174 >| ~/.local/x/x/x 2>/x/x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 175 >| ~/.local/x/x/x 2>/x/x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 176 >| ~/.local/x/x/x 2>/x/x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 102 >| ~/.local/x/x/x 2>/x/x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 101 >| ~/.local/x/x/x 2>/x/x;", "merges": 1}
+{"command": "devctl pr merge --rebase o/r 96 2>&1 | tail -12;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 671 2>&1 | tail -25;", "merges": 1}
+{"command": "devctl pr merge o/r 2327 --timeout 5m >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 2327 --timeout 9m >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge o/r 6237 --timeout 5m >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge o/r 6246 --timeout 5m >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge o/r 6244 --timeout 5m >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 953 >| $S/x 2>| $S/x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 954 >| \"$sd/x\" 2>| \"$sd/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 1419 >| \"$sd/x\" 2>| \"$sd/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 957 >| \"$sd/x\" 2>| \"$sd/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 959 >| \"$sd/x\" 2>| \"$sd/x\";", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | head -20", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 627 2>&1 | tail -15;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 628 2>&1 | tail -25;", "merges": 1}
+{"command": "cd $K && devctl pr merge --update-branch o/r 962 >| $S/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 963 >| $S/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 2415 >| $S/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 930 >| $S/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 246 2>&1 | tail -15;", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | /x/x/grep -i -A2 \"exit\\|6\" | head -30;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 249 > $S/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 249 >| $S/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 253 >| $S/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 256 >| $S/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 59 >| $S/x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 155 >| $S/x;", "merges": 1}
+{"command": "$S/devctl pr merge --help 2>&1 | sed -n 28,36p", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 2335 --timeout 5m >| \"$OUT/x\" 2>\"$OUT/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 2339 --timeout 5m >| \"$OUT/x\" 2>\"$OUT/x\";", "merges": 1}
+{"command": "devctl pr merge o/r 6248 --timeout 5m >| \"$OUT/x\" 2>\"$OUT/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 660 > $S/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 163 > $S/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge o/r 2374 >| $S/x 2>| $S/x;", "merges": 1}
+{"command": "x -u +%x%x && devctl pr merge o/r 117 2>&1 | tail -15;", "merges": 1}
+{"command": "x -u +%x%x && devctl pr merge o/r 631 2>&1 | tail -8;", "merges": 1}
+{"command": "x -u +%x%x && devctl pr merge --update-branch o/r 204 2>&1 | tail -12;", "merges": 1}
+{"command": "devctl pr merge o/r 96 --timeout 10m 2>&1 | python3 -c \"\nx x,x,x\nx=x()\nx=x(r'\\{.*\\}', x, x)\nx:\n    x=x(x(0))\n    x({x:x(x) for x in ('command','verdict','x','x','merged','x','x','x','x') if x in x})\n    for x in ('merge','x'):\n        if x in x: x(x, x(x[x])[:600])\nx x x e:\n    x('x:', x[-2500:])\n\";", "merges": 1}
+{"command": "devctl pr merge o/r 6241 --timeout 10m 2>&1 | python3 -c \"\nx x,x,x\nx=x()\nx=x(r'\\{.*\\}', x, x)\nx:\n    x=x(x(0))\n    x({x:x(x) for x in ('command','verdict','x','x','x','x','x') if x in x})\nx x x e:\n    x('x:', x[-2000:])\n\";", "merges": 1}
+{"command": "cd ~/x/x/devctl/.claude/x/x && timeout 420 devctl pr merge o/r 2325 --timeout 5m 2>&1 | tail -30;", "merges": 1}
+{"command": "if [ \"$decision\" = \"x\" ]; then timeout 400 devctl pr merge o/r 2325 --timeout 5m 2>/x/x | jq -c '{x, verdict, x, x}'; else echo \"== x merge x x'x x\"; gh pr merge 2325 --repo x/devctl --squash --admin --delete-branch 2>&1 | tail -5; echo \"gh exit ${x[1]}\"; fi;", "merges": 1}
+{"command": "cd ~/x/x/devctl/.claude/x/x && gh pr view 2325 --repo x/devctl --json x,x --jq '{x, x: [.reviews[] | \"\\(.author.login):\\(.state)\"]}' | tee /x/x | jq -e '.reviewDecision == \"x\"' >/x/x && timeout 400 devctl pr merge o/r 2325 --timeout 5m 2>/x/x | jq -c '{x, verdict, x, x, x}' || echo \"x x x\"", "merges": 1}
+{"command": "if gh x x/x/devctl/x/23846963 --jq '.bypass_actors[] | x(.actor_type==\"x\") | .actor_id' | /x/x/grep -q .; then timeout 2400 devctl pr merge o/r 2325 --update-branch --timeout 35m 2>/x/x | jq -c '{x, verdict, x, x, x, x}'; else echo \"x x x x; x x\"; fi", "merges": 1}
+{"command": "timeout 2400 devctl pr merge o/r 97 --timeout 35m 2>/x/x | jq -c '{x, verdict, x, x, x}';", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 45;", "merges": 1}
+{"command": "~/x/devctl pr merge --update-branch o/r 2372 >| $S/x;", "merges": 1}
+{"command": "devctl pr merge --rebase --update-branch o/r 84 >| $S/x 2>| $S/x;", "merges": 1}
+{"command": "devctl pr merge --help 2>&1 | /x/x/grep -iE \"timeout|exit|x|^  -\" | head -25", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 124 --timeout 5m --release-timeout 3m >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 94 >| ~/.local/x/x/x 2>| ~/.local/x/x/x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 256 >| ~/.local/x/x/x 2>| ~/.local/x/x/x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 8 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 2398 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 6288 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 186 2>&1 | tail -c 3000;", "merges": 1}
+{"command": "devctl pr merge o/r 186 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 659 >| $S/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge o/r 2401 >| ~/.local/x/x/x 2>| ~/.local/x/x/x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 6291 >| ~/.local/x/x/x 2>| ~/.local/x/x/x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 6295 >| ~/.local/x/x/x 2>| ~/.local/x/x/x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 270 >| $S/x 2>| $S/x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 271 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 276 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 277 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 279 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge o/r 2546 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 282 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 283 >| \"$S/x\" 2>| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge o/r 96 >| \"$S/x\" 2>&1;", "merges": 1}
+{"command": "for x in x:4891 x:14 x:628; do r=${x%%:*}; x=${x##*:}; devctl pr merge \"x/$r\" \"$n\" >| \"$S/x$r-$n.json\" 2>&1; x -r -- \"$r #$n exit=$?\"; done", "merges": 1}
+{"command": "devctl pr merge o/r 14 >| \"$S/x\" 2>&1;", "merges": 1}
+{"command": "for x in x:70 x:216 x:43 x:284; do r=${x%%:*}; x=${x##*:}; devctl pr merge \"x/$r\" \"$n\" >| \"$S/x$r-$n.json\" 2>&1; x -r -- \"$r #$n exit=$?\"; done", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 333 >| ~/.local/x/x/x 2>&1;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 652 >| ~/.local/x/x/x 2>&1;", "merges": 1}
+{"command": "~/.go/x/devctl pr merge --update-branch o/r 937 2>&1 | tail -15;", "merges": 1}
+{"command": "~/.go/x/devctl pr merge --update-branch o/r 937 2>&1 | head -12;", "merges": 1}
+{"command": "cd ~/x/x && devctl pr merge o/r 2351 --timeout 45m 2>&1 | tail -40;", "merges": 1}
+{"command": "x -p ~/x/devctl \"$SP/x\" && x -m 0755 \"$SP/x\" ~/x/devctl && devctl x 2>&1 | head -3 && echo \"=== x x x x x ===\" && devctl pr merge --help 2>&1 | /x/x/grep -A2 \"exit 5: x\"", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 2412 >| ~/.local/x/x/x 2>| ~/.local/x/x/x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 6310 >| ~/.local/x/x/x 2>| ~/.local/x/x/x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 6314 >| ~/.local/x/x/x 2>| ~/.local/x/x/x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 2414 >| ~/.local/x/x/x 2>| ~/.local/x/x/x;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 6316 >| ~/.local/x/x/x 2>| ~/.local/x/x/x;", "merges": 1}
+{"command": "cd ~/x/x/x/.claude/x/x && ~/x/devctl pr merge o/r 103 --timeout 45m 2>&1 | tail -30;", "merges": 1}
+{"command": "cd ~/x/x/x && ~/x/devctl pr merge o/r 6252 --timeout 20m 2>&1 | tail -15;", "merges": 1}
+{"command": "cd ~/x/x/x && ~/x/devctl pr merge o/r 6253 --timeout 20m 2>&1 | tail -6;", "merges": 1}
+{"command": "cd ~/x/x/x && ~/x/devctl pr merge o/r 6255 --timeout 20m 2>&1 | tail -8;", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge --update-branch o/r 75 2>&1 | tail -25;", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge --update-branch o/r 76 2>&1 | tail -8;", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge --update-branch o/r 77 2>&1 | /x/x/grep -E 'x|x|\"x\"' | head -3;", "merges": 1}
+{"command": "[ -n \"$pr\" ] && devctl pr merge --update-branch o/r \"$pr\" 2>&1 | /x/x/grep -E 'x' ;", "merges": 1}
+{"command": "if [ -n \"$pr\" ]; then devctl pr merge --update-branch o/r \"$pr\" 2>&1 | /x/x/grep -E 'x|x|x' | head -3; echo \"x x x x ${x[1]}\"; fi", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge --update-branch o/r 641 2>&1 | /x/x/grep -E 'x|\"x\"|x|x' | head -3;", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge --update-branch o/r 224 --timeout 45m 2>&1 | /x/x/grep -E 'x|\"x\"|x|x|x x' | head -4;", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge --update-branch o/r 80 2>&1 | /x/x/grep -E 'x|x|x' | head -2;", "merges": 1}
+{"command": "if [ -n \"$pr\" ]; then devctl pr merge --update-branch o/r \"$pr\" 2>&1 | /x/x/grep -E 'x|x|x' | head -2; echo \"x x x x ${x[1]}\"; devctl release wait x/x x --timeout 25m 2>&1 | tail -2; echo \"x x ${x[1]}\"; fi;", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge --update-branch o/r 85 --timeout 30m 2>&1 | /x/x/grep -E 'x|x|x' | head -2;", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge --update-branch o/r 1321 --timeout 45m 2>&1 | /x/x/grep -E 'x|x|x' | head -2;", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge --update-branch o/r 2533 --timeout 30m 2>&1 | /x/x/grep -E 'x|x|x|x x|x' | head -3;", "merges": 1}
+{"command": "cd ~/x/x/x && devctl pr merge --update-branch o/r 254 --timeout 45m 2>&1 | /x/x/grep -E 'x|x|x|x x' | head -3;", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 6323 >| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 6261 >| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 6326 >| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 6329 >| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 6337 >| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 2417 >| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 6338 >| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 136 >| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 6341 >| \"$S/x\";", "merges": 1}
+{"command": "for x in x:2150 x:331 x:159; do r=\"${x%%:*}\"; x=\"${x##*:}\"; devctl pr merge --update-branch \"x/$r\" \"$n\" >| \"$S/x$r-$n.json\"; x=$?; echo \"$r#$n exit $rc $(jq -c '{verdict, x, release: .release.verdict}' \"$S/x$r-$n.json\")\"; [ \"$rc\" -eq 0 ] || x; done", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 159 >| \"$S/x\";", "merges": 1}
+{"command": "devctl pr merge --update-branch o/r 1 >| \"$S/x\";", "merges": 1}
