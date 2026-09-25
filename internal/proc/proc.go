@@ -85,6 +85,19 @@ func ReadAt(root string) (*Table, error) {
 	return t, nil
 }
 
+// Started is when the live process pid started.
+func Started(pid int) (time.Time, error) {
+	boot, err := bootTime(procRoot)
+	if err != nil {
+		return time.Time{}, err
+	}
+	p, err := readProcess(procRoot, pid, boot)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return p.Start, nil
+}
+
 func readProcess(root string, pid int, boot time.Time) (*Process, error) {
 	dir := filepath.Join(root, strconv.Itoa(pid))
 	stat, err := os.ReadFile(filepath.Clean(filepath.Join(dir, "stat")))

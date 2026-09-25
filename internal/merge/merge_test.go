@@ -196,3 +196,28 @@ func TestReady(t *testing.T) {
 		t.Errorf("a merge with a roll set and an unknown release keeps the lane after the settle time: %q", why)
 	}
 }
+
+// testdata/helmreleases-gazelle.json is gazelle's real answer to kubectl get
+// helmreleases -A -o json, trimmed to the agent-platform lane's neighbours
+// and to what the roll check reads: every chart version carries build
+// metadata (4.74.0+971d12027db0) and each HelmRelease takes its chart from
+// an OCIRepository (spec.chartRef), so the chart name is in the history.
+func TestReadyGazelleBuildMetadata(t *testing.T) {
+	hrs, err := ParseHelmReleases(testdata(t, "helmreleases-gazelle.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const repo = "giantswarm/agent-platform"
+	lane := config.Lane{Name: "ap", Installation: "gazelle", Repositories: []string{repo}}
+	roll := RollSet(hrs, repo)
+	if len(roll) != 1 || roll[0] != "flux-giantswarm/agent-platform" {
+		t.Fatalf("roll set %v, want only the agent-platform chart's HelmRelease", roll)
+	}
+	now := time.Now()
+	for release, want := range map[string]string{"v4.74.0": "", "v4.75.0": "flux-giantswarm/agent-platform is on 4.74.0, rolling to 4.75.0"} {
+		ready, why := Ready(lane, hrs, &state.Merge{Repo: repo, PR: 671, Release: release, Roll: roll, Finished: now}, now, 5*time.Minute)
+		if ready != (want == "") || why != want {
+			t.Errorf("%s: ready %v %q, want %q", release, ready, why, want)
+		}
+	}
+}

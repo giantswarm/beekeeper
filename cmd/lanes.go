@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -19,6 +20,9 @@ type laneView struct {
 	merge.Lane
 	Installation string      `json:"installation,omitempty"`
 	Hold         *state.Hold `json:"hold,omitempty"`
+	// Stall is set when the lane's first arrived merge has waited longer
+	// than merge.stallAfter behind places whose merges are not in the gate.
+	Stall *merge.Stall `json:"stall,omitempty"`
 }
 
 func (a *app) lanesCmd() *cobra.Command {
@@ -30,7 +34,9 @@ installation (lanes in the configuration; a repository in no lane is a lane
 of its own). The gate the PreToolUse hook puts in front of devctl pr merge
 runs one merge per lane at a time, in the order the merges joined, and the
 next once the installation's HelmReleases of the lane's charts are Ready and
-the previous merge's release has rolled. The lane never idles for a merge
+the previous merge's release has rolled; watch drops a settling merge once
+that holds, and a lane with no installation has nothing to settle. The lane
+never idles for a merge
 that is not there: an arrived merge runs ahead of a seeded place whose merge
 has not arrived (seeds keep their order among themselves), and a merge that
 ended with nothing merged keeps its place, "retrying", so its session's
@@ -40,6 +46,12 @@ merge.queueTTL after the failure and keeps its place for merge.seedTTL.
 A merge run outside the gate (one in flight when the gate went live, one run
 without the hook) is registered with lanes settle: it heads its lane until it
 merges, and then settles the lane like a gated merge.
+
+A lane is stalled when no merge runs and its first arrived merge (its gate
+call waiting now) has waited longer than merge.stallAfter (5m) behind places
+whose merges are not in the gate: seeds that have not arrived, merges that
+left it. lanes names the waiting merge and those places, and watch says it
+as LANE STALLED; lanes drop takes out a place that will not arrive.
 
 Without a subcommand, lists every configured lane and every other lane with
 a merge in it: running, settling, and the waiting merges in turn order.`,
@@ -281,6 +293,9 @@ func (a *app) laneViews(st *state.State) []laneView {
 		}
 		seen[name] = true
 		v := laneView{Lane: merge.Queue(st, name), Installation: installation}
+		if s, ok := v.Stalled(a.now, a.cfg.Merge.StallAfter.Duration, a.present, proc.Alive, arrived); ok {
+			v.Stall = &s
+		}
 		for _, h := range st.Holds {
 			if h.Target == merge.LanePrefix+name && h.Active(a.now) {
 				v.Hold = &h
@@ -295,6 +310,33 @@ func (a *app) laneViews(st *state.State) []laneView {
 		add(m.Lane, a.cfg.LaneOf(m.Repo).Installation)
 	}
 	return out
+}
+
+// present says whether a waiting merge holds its place against the merges
+// behind it.
+func (a *app) present(m state.Merge) bool {
+	return merge.Present(m, a.now, a.cfg.Merge.QueueTTL.Duration, proc.Alive)
+}
+
+// arrived is when a gate call's process started, false when it is gone.
+func arrived(pid int) (time.Time, bool) {
+	t, err := proc.Started(pid)
+	return t, err == nil
+}
+
+// stallText says who a stalled lane's arrived merge waits behind and how to
+// free it.
+func (a *app) stallText(s merge.Stall) string {
+	behind := make([]string, 0, len(s.Behind))
+	for _, m := range s.Behind {
+		how := "not arrived"
+		if m.PID != 0 {
+			how = "left the gate at " + clock(a.now, m.Seen)
+		}
+		behind = append(behind, fmt.Sprintf("%s (%q, %s)", m.Key(), m.By.Name, how))
+	}
+	return fmt.Sprintf("stalled for %s: %s (%q) waits in the gate behind %s; drop the places that will not arrive (beekeeper lanes drop <owner/repo> <n>)",
+		a.now.Sub(s.Since).Round(time.Second), s.Merge.Key(), s.Merge.By.Name, strings.Join(behind, ", "))
 }
 
 // settlingText says what a settling merge waits for.
@@ -342,7 +384,10 @@ func (a *app) printLanes(views []laneView) {
 			}
 			p("  held by %q until %s%s: %s", v.Hold.By.Name, untilText(a, *v.Hold), except, v.Hold.Reason)
 		}
-		present := func(m state.Merge) bool { return merge.Present(m, a.now, a.cfg.Merge.QueueTTL.Duration, proc.Alive) }
+		if v.Stall != nil {
+			p("  %s", a.stallText(*v.Stall))
+		}
+		present := a.present
 		next := max(slices.IndexFunc(v.Waiting, func(m state.Merge) bool {
 			_, behind := v.Ahead(m.Repo, m.PR, present)
 			return present(m) && !behind

@@ -11,8 +11,9 @@ an older version: `go build -ldflags "-X github.com/giantswarm/beekeeper/pkg/pro
 
 CI (`architect/go-build`) runs `make test` and cross-compiles for Linux, macOS and Windows, so
 every package has to compile everywhere. Linux-only reads stay behind `/proc` and cgroup paths
-that simply fail elsewhere, and the one syscall (`statfs`) is split by build tag
-(`internal/machine/disk_*.go`). Pre-commit runs golangci-lint with gosec and goconst.
+that simply fail elsewhere, and the syscalls are split by build tag: `statfs`
+(`internal/machine/disk_*.go`) and the gate's re-exec of a replaced binary (`cmd/reexec_*.go`,
+Linux only, a no-op elsewhere). Pre-commit runs golangci-lint with gosec and goconst.
 
 The `run` tests (`cmd/guard_test.go`) need zsh and a user systemd: they skip in CI and run on a
 desktop. The test binary doubles as beekeeper (`BEEKEEPER_TEST_MAIN=1`), so the hook's rewrite runs
@@ -52,6 +53,20 @@ the sessions' ids left out) through `merge.Queue`, `Lane.Ahead` and `merge.Faile
 <n> --repo <owner/repo> --json state,mergedAt`; a fake `gh` first on `PATH` that prints
 `{"state":"OPEN","mergedAt":null}` (or `MERGED` with a time, or `CLOSED`) from a file and hands
 every other call to the real one plays a pull request merging outside the gate.
+
+The roll check is tested against a real answer: `internal/merge/testdata/helmreleases-gazelle.json`
+is `kubectl get helmreleases -A -o json` of an installation, trimmed to chart names, versions (with
+their build metadata) and Ready conditions. `watch --once` against scratch state with a settling
+merge and a fake `kubectl` answering such a file shows the lane freed (`lane.settled`).
+
+A stalled lane plays with a short `merge.stallAfter` (10s): seed two places with `lanes queue`,
+run the second one's `beekeeper gate --wait 1m` in the background, and after 10s `lanes` shows
+the lane `stalled` and `watch --once` prints one `LANE STALLED` line. The re-exec plays with two
+builds stamped with different versions (`-ldflags "-X …/pkg/project.version=…"`): start a
+waiting gate call from build A's path, rename build B over that path (`mv -f`, as `self-update`
+does), and within 5s the call prints `continuing under beekeeper <B>` and keeps its position in
+`lanes`. The test binary is not re-executed: `cmd/reexec_linux_test.go` covers noticing the
+replacement.
 
 `watch` finds a session by its process: a `claude` binary that is no subcommand (`daemon`,
 `bg-pty-host`, `stop`, …) and not the `--bg` launcher, running under no other session's CLI
