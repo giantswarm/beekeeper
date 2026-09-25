@@ -58,6 +58,19 @@ installations' alerts are read every alerts.every and each NEW or RESOLVED
 one at or above its installation's floor is a line, a flapping one a single
 FLAPPING line (beekeeper alerts watch); only one watch at a time reads them.
 
+Every watch.interval the same installations' Cluster API clusters are read
+(one list each of Clusters, KubeadmControlPlanes, MachinePools and
+MachineDeployments per installation, within alerts.timeout, in parallel). A
+cluster whose release changes begins an upgrade: its release label differs
+from the one cluster-api-events recorded, cluster-api-events marks it
+upgrading, or its scheduled upgrade is due. It ends once none of that holds
+and its control plane and node pools have rolled. While it runs, the
+installation is held (hold upgrade:<installation>/<cluster>): the gate
+refuses the merges of its lanes and lease claims of its name are refused.
+"UPGRADE <installation>/<cluster> <from> → <to>" is said when it begins and
+"UPGRADE ENDED …" when it ends, once each; an unreadable installation is one
+line and keeps its holds.
+
 Once the supervisor session's context (its transcript's last request, the
 CTX column) reaches supervisor.relayAt, RELAY DUE is said at the first
 quiet moment: no gated merge running or settling, no grant waiting to be
@@ -148,8 +161,13 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 	}
 	w.check("noscope", p == "", "no Claude Desktop scope found; watching the machine numbers only")
 	var wg sync.WaitGroup
-	if !once && !w.standby {
+	switch {
+	case w.standby:
+	case once:
+		w.upgradeCycle(ctx)
+	default:
 		wg.Go(func() { w.watchAlerts(ctx) })
+		wg.Go(func() { w.watchUpgrades(ctx) })
 	}
 	defer wg.Wait()
 	tick := time.NewTicker(w.cfg.Watch.Interval.Duration)

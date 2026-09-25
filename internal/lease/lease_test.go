@@ -32,6 +32,23 @@ func TestCheckWithoutSupervisor(t *testing.T) {
 	}
 }
 
+func TestCheckRefusesDuringUpgrade(t *testing.T) {
+	st := &state.State{Holds: []state.Hold{{Target: "upgrade:prod/mc", Reason: "upgrade prod/mc 1.0.0 → 1.1.0", At: now}}}
+	for _, who := range []state.Party{alex, sup.Party} {
+		var r *Refusal
+		if _, err := Check(st, Gate{Resource: "prod", Caller: who, Now: now, TTL: ttl}); !errors.As(err, &r) {
+			t.Errorf("%s claims prod while it upgrades: %v", who.Name, err)
+		}
+	}
+	if _, err := Check(st, Gate{Resource: lab, Caller: alex, Now: now, TTL: ttl}); err != nil {
+		t.Errorf("an upgrade on prod refuses %s: %v", lab, err)
+	}
+	st.Holds = nil
+	if _, err := Check(st, Gate{Resource: "prod", Caller: alex, Now: now, TTL: ttl}); err != nil {
+		t.Errorf("prod stays refused after the upgrade: %v", err)
+	}
+}
+
 func TestCheckNeedsGrantUnderSupervisor(t *testing.T) {
 	_, err := Check(&state.State{}, Gate{Resource: lab, Caller: one, Supervisor: sup, Now: now, TTL: ttl})
 	var r *Refusal

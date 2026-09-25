@@ -10,6 +10,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/upgrade"
 )
 
 func (a *app) holdCmd() *cobra.Command {
@@ -126,7 +127,7 @@ lane, "merges" or "github" is, unless it is the hold's exception.`,
 			}
 			h, ok := activeHold(st, a, args[0])
 			if repo, pr, isRepo := splitPR(args[0]); isRepo {
-				h, ok = merge.Blocking(st, a.now, repo, pr, a.cfg.LaneOf(repo).Name)
+				h, ok = merge.Blocking(st, a.now, repo, pr, a.cfg.LaneOf(repo))
 			}
 			if ok {
 				return refused("%s is held by %q until %s: %s", h.Target, h.By.Name, untilText(a, h), h.Reason)
@@ -162,8 +163,12 @@ func (l *laneFlag) target(args []string) []string {
 	return args
 }
 
-// checkTarget refuses a hold on a lane the configuration does not name.
+// checkTarget refuses a hold on a lane the configuration does not name and
+// one on an upgrade, which only the watch sets.
 func (a *app) checkTarget(target string) error {
+	if strings.HasPrefix(target, upgrade.HoldPrefix) {
+		return usageErr("the watch holds an installation while its clusters upgrade; hold its lanes instead (--lane)")
+	}
 	if name, ok := strings.CutPrefix(target, merge.LanePrefix); ok {
 		if _, known := a.cfg.LaneNamed(name); !known {
 			return usageErr("no lane %q in the configuration (beekeeper lanes lists them)", name)
@@ -229,6 +234,9 @@ func holdTarget(h state.Hold) string {
 }
 
 func untilText(a *app, h state.Hold) string {
+	if upgrade.Is(h) {
+		return "the upgrade ends"
+	}
 	if h.Until.IsZero() {
 		return "lifted"
 	}
