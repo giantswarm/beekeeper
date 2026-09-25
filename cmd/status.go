@@ -60,8 +60,7 @@ type statusView struct {
 	Supervisor string `json:"supervisor"`
 	// SupervisorLive is whether its session runs.
 	SupervisorLive bool `json:"supervisorLive"`
-	// RestartUntil is set while its CLI restarts: the grant rule holds
-	// until then.
+	// RestartUntil is set while its CLI may still come back as a restart.
 	RestartUntil time.Time `json:"restartUntil,omitzero"`
 	Leases       []string  `json:"leases"`
 	Holds        []string  `json:"holds"`
@@ -138,9 +137,9 @@ func (v *statusView) line() string {
 	case v.Supervisor != "" && v.SupervisorLive:
 		sup = fmt.Sprintf("%q supervises", v.Supervisor)
 	case v.Supervisor != "" && !v.RestartUntil.IsZero():
-		sup = fmt.Sprintf("%q supervises (its CLI is restarting; the grant rule holds until %s)", v.Supervisor, stamp(v.RestartUntil))
+		sup = fmt.Sprintf("%q supervises (its CLI is restarting, grace until %s)", v.Supervisor, stamp(v.RestartUntil))
 	case v.Supervisor != "":
-		sup = fmt.Sprintf("no supervisor (%q's session is gone)", v.Supervisor)
+		sup = fmt.Sprintf("no supervisor (%q's session is gone; claims wait for a successor)", v.Supervisor)
 	}
 	list := func(n int, one, many string, names []string) string {
 		s := fmt.Sprintf("%d %s", n, many)

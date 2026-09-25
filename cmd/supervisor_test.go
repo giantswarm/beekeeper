@@ -315,12 +315,12 @@ func TestRestartGraceHoldsTheRuleThroughACLIRestart(t *testing.T) {
 	}
 	gated := func(at time.Duration, sessions []*claude.Session) error {
 		sv := readSupervision(st, sessions, relayNow.Add(at), grace)
-		_, err := lease.Check(st, lease.Gate{Resource: browser, Caller: agentC, Supervisor: sv.gating(), RestartUntil: sv.until,
+		_, err := lease.Check(st, lease.Gate{Resource: browser, Caller: agentC, Supervisor: sv.sup, RestartUntil: sv.until, Gone: sv.down(),
 			Held: true, Now: relayNow.Add(at), TTL: 30 * time.Minute})
 		return err
 	}
-	if sv := readSupervision(st, nil, relayNow, grace); sv.gating() != nil {
-		t.Fatal("a CLI never seen in this term has a grace")
+	if sv := readSupervision(st, nil, relayNow, grace); !sv.restarting() {
+		t.Fatal("a CLI never seen in this term has no grace")
 	}
 	if changed, evs := observeCLI(st, running(100), relayNow); !changed || len(evs) != 0 || st.SupervisorCLI.PID != 100 {
 		t.Fatalf("first sighting: %v %+v %+v", changed, evs, st.SupervisorCLI)
@@ -346,20 +346,30 @@ func TestRestartGraceHoldsTheRuleThroughACLIRestart(t *testing.T) {
 	if err := gated(17*time.Second, running(200)); err == nil || strings.Contains(err.Error(), "restarting") {
 		t.Fatalf("after the restart: %v", err)
 	}
-	// A crash: the CLI does not come back; the rule lifts once the grace has passed.
+	// A crash: the CLI does not come back; the rule holds past the grace,
+	// and every claim waits for the successor.
 	observeCLI(st, nil, relayNow.Add(time.Hour))
-	if err := gated(time.Hour+grace-time.Second, nil); err == nil {
-		t.Fatal("ungated before the grace passed")
+	if err := gated(time.Hour+grace-time.Second, nil); err == nil || !strings.Contains(err.Error(), "is restarting its CLI") {
+		t.Fatalf("within the grace: %v", err)
 	}
-	if err := gated(time.Hour+grace, nil); err != nil {
-		t.Fatalf("the rule did not lift after the grace: %v", err)
+	for _, at := range []time.Duration{grace, time.Hour, 24 * time.Hour} {
+		if err := gated(time.Hour+at, nil); err == nil || !strings.Contains(err.Error(), "is gone: a free lease is not a grant until its successor's") {
+			t.Fatalf("%s after the crash: %v", at, err)
+		}
 	}
-	// A new term starts a new record.
+	if sv := readSupervision(st, nil, relayNow.Add(time.Hour+grace), grace); !sv.down() || !sv.gone.Equal(relayNow.Add(time.Hour)) {
+		t.Fatalf("down: %+v", sv)
+	}
+	// The grants stay: the first in the queue still claims.
+	if _, err := lease.Check(st, lease.Gate{Resource: browser, Caller: four, Supervisor: st.Supervisor, Gone: true, Held: true, Now: relayNow.Add(2 * time.Hour), TTL: 30 * time.Minute}); err != nil {
+		t.Fatalf("a gone supervisor's grant: %v", err)
+	}
+	// A new term starts a new record: the successor's own grace.
 	if _, _, err := startRole(st, supB, false, false, relayNow.Add(2*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if readSupervision(st, nil, relayNow.Add(2*time.Hour), grace).gating() != nil {
-		t.Fatal("the previous term's CLI record gates the new supervisor")
+	if sv := readSupervision(st, nil, relayNow.Add(2*time.Hour), grace); !sv.restarting() || !sv.gone.Equal(relayNow.Add(2*time.Hour)) {
+		t.Fatalf("the previous term's CLI record counts for the new supervisor: %+v", sv)
 	}
 }
 

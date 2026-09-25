@@ -72,9 +72,10 @@ type Supervisor struct {
 	RelayAt Tokens `yaml:"relayAt"`
 	// RelayTTL is how long a relay stays open for the successor's start.
 	RelayTTL Duration `yaml:"relayTTL"`
-	// RestartGrace is how long the grant rule holds after beekeeper first
-	// saw the supervisor's CLI gone: a CLI back under the same session
-	// within it is a restart and keeps the role; past it, the rule lifts.
+	// RestartGrace is how long beekeeper waits after it first saw the
+	// supervisor's CLI gone: a CLI back under the same session within it is
+	// a restart and keeps the role; past it, the watch says the supervisor
+	// is gone and notifies. The grant rule holds throughout.
 	RestartGrace Duration `yaml:"restartGrace"`
 }
 
@@ -124,11 +125,11 @@ type Notify struct {
 	// QuietHours ("22:00-07:00", local time) hold every notification but a
 	// critical one until they end.
 	QuietHours string `yaml:"quietHours"`
-	// Urgency is a kind's urgency (low, normal, critical); oom-line and
-	// oom-kill are critical, the others normal.
+	// Urgency is a kind's urgency (low, normal, critical); oom-line,
+	// oom-kill and no-supervisor are critical, the others normal.
 	Urgency map[string]string `yaml:"urgency"`
-	// Repeat is how often a lasting condition (oom-line, budget) notifies
-	// again while it lasts.
+	// Repeat is how often a lasting condition (oom-line, budget,
+	// no-supervisor) notifies again while it lasts.
 	Repeat Duration `yaml:"repeat"`
 }
 

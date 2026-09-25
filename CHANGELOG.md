@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Claims stay gated after a supervisor crash: the grant rule holds from the first `supervisor start` until a deliberate `supervisor stop` or a successor's `supervisor start`, instead of lifting once `supervisor.restartGrace` has passed. A claim during the gap is refused naming the gone supervisor and the successor's start; `supervisor status` and `status` say it is gone and claims wait. `supervisor.restartGrace` now only delays the gone line and notification: a CLI back within it is still a restart that keeps the role.
+- A supervisor gone past the grace is `SUPERVISOR GONE` once, naming it and that claims stay gated, said once the grace has passed instead of after two polls; its `no-supervisor` notification is critical by default and repeats after `notify.repeat` while the gap lasts. A supervisor back after it is one `SUPERVISOR BACK` line.
+
 - `supervisor.relayAt` (tokens, default `400k`) replaces `supervisor.shift`: `watch` says `RELAY DUE` once the supervisor session's context, read from its transcript's last request like the `CTX` column, reaches it, at the first quiet moment (no gated merge running or settling, no grant waiting, no claim queued, no relay open). It is one line naming the context and `beekeeper handover --prompt`, said once per supervisor and again only after a relay is cancelled or expires. `supervisor status` and `handover` show the supervisor's context in tokens. The state's `relayDue` record replaces `shift`.
 
 ### Removed

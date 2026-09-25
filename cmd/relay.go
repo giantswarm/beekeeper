@@ -122,19 +122,20 @@ func relievedBy(st *state.State, me state.Party) *state.Relief {
 }
 
 // supervision is the recorded supervisor read against the running
-// sessions and the grace a CLI restart has.
+// sessions and the grace a CLI restart has. Its grant rule is in force in
+// every state: live, restarting and gone.
 type supervision struct {
 	sup  *state.Supervisor
 	live bool
 	// gone is when beekeeper first saw the CLI gone (now when no record
-	// says so yet) and until when the grant rule holds for its restart;
-	// both are zero while it runs and once the grace has passed.
+	// says so yet), zero while it runs; until is the end of the grace a
+	// restart has, zero while it runs and once the grace has passed.
 	gone, until time.Time
 }
 
 // readSupervision reads st's supervisor: live while its CLI runs,
-// restarting for grace after beekeeper first saw its CLI gone, provided it
-// saw the CLI run in this term, and gone after that.
+// restarting for grace after beekeeper first saw its CLI gone, and gone
+// after that.
 func readSupervision(st *state.State, sessions []*claude.Session, now time.Time, grace time.Duration) supervision {
 	v := supervision{sup: st.Supervisor}
 	if v.sup == nil {
@@ -143,16 +144,12 @@ func readSupervision(st *state.State, sessions []*claude.Session, now time.Time,
 	if _, v.live = claude.Live(sessions, v.sup.Party); v.live {
 		return v
 	}
-	c := st.SupervisorCLI
-	if !c.Of(v.sup) || c.PID == 0 {
-		return v
+	v.gone = now
+	if c := st.SupervisorCLI; c.Of(v.sup) && !c.Gone.IsZero() {
+		v.gone = c.Gone
 	}
-	gone := now
-	if !c.Gone.IsZero() {
-		gone = c.Gone
-	}
-	if until := gone.Add(grace); now.Before(until) {
-		v.gone, v.until = gone, until
+	if until := v.gone.Add(grace); now.Before(until) {
+		v.until = until
 	}
 	return v
 }
@@ -160,14 +157,9 @@ func readSupervision(st *state.State, sessions []*claude.Session, now time.Time,
 // restarting reports whether the supervisor's CLI is gone within the grace.
 func (v supervision) restarting() bool { return !v.until.IsZero() }
 
-// gating returns the supervisor whose grant rule is in force: a live or a
-// restarting one; nil when none is.
-func (v supervision) gating() *state.Supervisor {
-	if v.live || v.restarting() {
-		return v.sup
-	}
-	return nil
-}
+// down reports whether the recorded supervisor's CLI stayed gone past the
+// grace: its successor is due.
+func (v supervision) down() bool { return v.sup != nil && !v.live && !v.restarting() }
 
 // observeCLI records what the running sessions say of the supervisor's
 // CLI in this term: the PID it runs as, and since when it is gone. The same
@@ -202,7 +194,7 @@ func observeCLI(st *state.State, sessions []*claude.Session, now time.Time) (boo
 	case live && !c.Gone.IsZero():
 		c.Gone = time.Time{}
 		return true, nil
-	case !live && c.PID != 0 && c.Gone.IsZero():
+	case !live && c.Gone.IsZero():
 		c.Gone = now.UTC()
 		return true, nil
 	}

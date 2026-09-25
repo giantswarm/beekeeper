@@ -68,10 +68,11 @@ notification service (org.freedesktop.Notifications on the session bus):
 the kinds in notify.kinds, a note or timer falling due (due), the machine
 near its OOM line (oom-line), a kernel OOM kill outside a build slot or a
 systemd-oomd kill (oom-kill), the GitHub budget under the floor (budget), a
-stale lease (stale-lease) and a supervisor whose session ended with no
-successor (no-supervisor). Each event is one notification however many
-watches notify: the first to claim it in notify.json sends it. A lasting
-condition notifies again after notify.repeat (30m); notify.quietHours hold
+stale lease (stale-lease) and a supervisor whose CLI stayed gone past
+supervisor.restartGrace with no relay open (no-supervisor, critical). Each
+event is one notification however many watches notify: the first to claim
+it in notify.json sends it. A lasting condition and a supervisor gone
+notify again after notify.repeat (30m); notify.quietHours hold
 everything but a critical one and send what they held as one notification
 when they end. Nothing routine notifies. With no notification service the
 watch runs on, prints its lines and says so once.
@@ -111,15 +112,15 @@ type watcher struct {
 	scopeOOM   int64
 	sessions   map[string]*claude.Session
 	seenKills  map[string]bool
-	// reported are the stale leases and gone supervisors said once.
+	// reported are the stale leases said once.
 	reported map[string]bool
 	// notifier sends the events that need a person (--notify); nil prints only.
 	notifier *notify.Notifier
 	// standby leaves a running supervisor's events to its watch.
 	standby bool
-	// supervisorMissed counts the polls the recorded supervisor's session
-	// has not run in.
-	supervisorMissed int
+	// gap is the term of the gone supervisor this watch said, until a
+	// supervisor is back.
+	gap string
 	// records are the session records of the last poll: their sessions'
 	// ends get the record's line instead of the SESSIONS ended one.
 	records []state.Record
@@ -564,28 +565,32 @@ func firedNow(st *state.State, now time.Time) []dueItem {
 }
 
 // supervisorGone says once, and notifies, when the recorded supervisor's
-// session has not run for two polls in a row with no relay open and no
-// restart of its CLI in its grace; it reports whether a supervisor runs (a
-// restarting one does not: its watch restarts with it).
+// CLI stayed gone past the restart grace with no relay open: its grant rule
+// holds, so every claim waits for a successor. The notification repeats
+// after notify.repeat while the gap lasts; a supervisor back is one line.
+// It reports whether a supervisor runs (a restarting one does not: its
+// watch restarts with it).
 func (w *watcher) supervisorGone(ctx context.Context, st *state.State, sessions []*claude.Session) bool {
 	s := st.Supervisor
-	if s == nil {
-		w.supervisorMissed = 0
-		return false
-	}
-	if sv := readSupervision(st, sessions, w.now, w.cfg.Supervisor.RestartGrace.Duration); sv.live || sv.restarting() || st.Relay.Open(w.now) {
-		w.supervisorMissed = 0
+	sv := readSupervision(st, sessions, w.now, w.cfg.Supervisor.RestartGrace.Duration)
+	if !sv.down() || st.Relay.Open(w.now) {
+		switch {
+		case s == nil:
+			w.gap = ""
+		case sv.live && w.gap != "":
+			w.gap = ""
+			w.emitNow("supervisor", "SUPERVISOR BACK: %q supervises since %s", s.Name, clock(w.now, s.Since))
+		}
 		return sv.live
 	}
-	w.supervisorMissed++
 	key := s.Name + "@" + s.Since.UTC().Format(time.RFC3339)
-	if w.supervisorMissed < 2 || w.reported["supervisor "+key] {
-		return false
+	l := fmt.Sprintf("SUPERVISOR GONE: %q (supervising since %s) is gone since %s; claims stay gated until a successor's beekeeper supervisor start (beekeeper handover --prompt)",
+		s.Name, clock(w.now, s.Since), clock(w.now, sv.gone))
+	if w.gap != key {
+		w.gap = key
+		w.emitNow("supervisor", "%s", l)
 	}
-	w.reported["supervisor "+key] = true
-	l := fmt.Sprintf("SUPERVISOR GONE: %q, supervising since %s, ended with no successor (beekeeper handover --prompt starts one)", s.Name, clock(w.now, s.Since))
-	w.emitNow("supervisor", "%s", l)
-	w.notify(ctx, notify.NoSupervisor, key, "beekeeper: no supervisor", l)
+	w.notify(ctx, notify.NoSupervisor, key, "beekeeper: no supervisor, claims gated", l)
 	return false
 }
 

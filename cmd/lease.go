@@ -142,8 +142,9 @@ func (a *app) leaseClaimCmd() *cobra.Command {
 				idx, err := lease.Check(st, lease.Gate{
 					Resource:     res,
 					Caller:       me,
-					Supervisor:   sv.gating(),
+					Supervisor:   sv.sup,
 					RestartUntil: sv.until,
+					Gone:         sv.down(),
 					Held:         false,
 					Now:          a.now,
 					TTL:          a.cfg.GrantTTL.Duration,
