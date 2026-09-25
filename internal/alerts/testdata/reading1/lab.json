@@ -1,0 +1,321 @@
+[
+  {
+    "fingerprint": "01ed80b1bc7b0a6b",
+    "labels": {
+      "alertname": "KubePodNotReady",
+      "severity": "warning",
+      "namespace": "kserve",
+      "pod": "qwen3-8-27b-kserve-6565cc788c-87j2d",
+      "job": "kube-state-metrics"
+    },
+    "startsAt": "2026-09-24T18:49:29.442Z"
+  },
+  {
+    "fingerprint": "06f53d6b382b9e16",
+    "labels": {
+      "alertname": "TrivyCriticalCVEInRunningWorkload",
+      "severity": "info",
+      "namespace": "monitoring",
+      "cluster": "lab"
+    },
+    "startsAt": "2026-09-24T11:28:14.685Z"
+  },
+  {
+    "fingerprint": "1f20c015dc6ca8f6",
+    "labels": {
+      "alertname": "KubeJobFailed",
+      "severity": "warning",
+      "namespace": "sbfspot",
+      "service": "kube-prometheus-stack-kube-state-metrics",
+      "job_name": "sbfspot-29837860",
+      "pod": "kube-prometheus-stack-kube-state-metrics-c87b777df-p5552",
+      "job": "kube-state-metrics"
+    },
+    "startsAt": "2026-09-24T17:58:29.442Z"
+  },
+  {
+    "fingerprint": "218d7193e20cdfba",
+    "labels": {
+      "alertname": "TrivyCriticalCVEInRunningWorkload",
+      "severity": "info",
+      "namespace": "monitoring",
+      "cluster": "lab"
+    },
+    "startsAt": "2026-09-24T11:28:14.685Z"
+  },
+  {
+    "fingerprint": "26f9c2b8e4a1320f",
+    "labels": {
+      "alertname": "KubeJobFailed",
+      "severity": "warning",
+      "namespace": "longhorn-system",
+      "service": "kube-prometheus-stack-kube-state-metrics",
+      "job_name": "longhorn-stale-va-detector-29838225",
+      "pod": "kube-prometheus-stack-kube-state-metrics-c87b777df-p5552",
+      "job": "kube-state-metrics"
+    },
+    "startsAt": "2026-09-25T00:00:29.442Z"
+  },
+  {
+    "fingerprint": "2bbb886600c3d6e0",
+    "labels": {
+      "alertname": "KubeJobFailed",
+      "severity": "warning",
+      "namespace": "longhorn-system",
+      "service": "kube-prometheus-stack-kube-state-metrics",
+      "job_name": "longhorn-stale-va-detector-29838240",
+      "pod": "kube-prometheus-stack-kube-state-metrics-c87b777df-p5552",
+      "job": "kube-state-metrics"
+    },
+    "startsAt": "2026-09-25T00:15:29.442Z"
+  },
+  {
+    "fingerprint": "2d6e9e455d819fc8",
+    "labels": {
+      "alertname": "TrivyCriticalCVEInRunningWorkload",
+      "severity": "info",
+      "namespace": "monitoring",
+      "cluster": "lab"
+    },
+    "startsAt": "2026-09-24T11:28:14.685Z"
+  },
+  {
+    "fingerprint": "41a52e42c3fd660f",
+    "labels": {
+      "alertname": "KubePodCrashLooping",
+      "severity": "warning",
+      "namespace": "kserve",
+      "service": "kube-prometheus-stack-kube-state-metrics",
+      "pod": "qwen3-8-27b-kserve-6565cc788c-87j2d",
+      "job": "kube-state-metrics"
+    },
+    "startsAt": "2026-09-24T18:51:59.442Z"
+  },
+  {
+    "fingerprint": "4459e5a6ea2736bb",
+    "labels": {
+      "alertname": "TrivyCriticalCVEInRunningWorkload",
+      "severity": "info",
+      "namespace": "monitoring",
+      "cluster": "lab"
+    },
+    "startsAt": "2026-09-24T11:28:14.685Z"
+  },
+  {
+    "fingerprint": "4526b5a51b9da242",
+    "labels": {
+      "alertname": "PodHighRestartRate",
+      "severity": "warning",
+      "namespace": "kserve",
+      "service": "kube-prometheus-stack-kube-state-metrics",
+      "cluster": "lab",
+      "pod": "qwen3-8-27b-kserve-6565cc788c-87j2d",
+      "job": "kube-state-metrics"
+    },
+    "startsAt": "2026-09-24T23:09:45.125Z"
+  },
+  {
+    "fingerprint": "50927abdfb89e2c1",
+    "labels": {
+      "alertname": "LonghornStaleVolumeAttachmentDetected",
+      "severity": "warning",
+      "cluster": "lab"
+    },
+    "startsAt": "2026-09-24T23:05:35.903Z"
+  },
+  {
+    "fingerprint": "548d702d3de08a46",
+    "labels": {
+      "alertname": "NodeMemoryHighUtilization",
+      "severity": "warning",
+      "namespace": "monitoring",
+      "service": "kube-prometheus-stack-prometheus-node-exporter",
+      "pod": "kube-prometheus-stack-prometheus-node-exporter-5js9m",
+      "job": "node-exporter"
+    },
+    "startsAt": "2026-09-24T20:06:16.774Z"
+  },
+  {
+    "fingerprint": "5c3fb8ad862c1489",
+    "labels": {
+      "alertname": "SbfspotImportHistoryNoRecentSuccess",
+      "severity": "warning",
+      "cluster": "lab"
+    },
+    "startsAt": "2026-09-24T11:19:23.609Z"
+  },
+  {
+    "fingerprint": "5e57bf27a1550e74",
+    "labels": {
+      "alertname": "TrivyCriticalCVEInRunningWorkload",
+      "severity": "info",
+      "namespace": "ate-system",
+      "cluster": "lab"
+    },
+    "startsAt": "2026-09-24T11:28:14.685Z"
+  },
+  {
+    "fingerprint": "7da76e02b5888fb5",
+    "labels": {
+      "alertname": "Watchdog",
+      "severity": "none"
+    },
+    "startsAt": "2026-09-24T11:13:45.584Z"
+  },
+  {
+    "fingerprint": "7ded8dfb2c38f4e3",
+    "labels": {
+      "alertname": "KubeJobFailed",
+      "severity": "warning",
+      "namespace": "longhorn-system",
+      "service": "kube-prometheus-stack-kube-state-metrics",
+      "job_name": "longhorn-stale-va-detector-29838210",
+      "pod": "kube-prometheus-stack-kube-state-metrics-c87b777df-p5552",
+      "job": "kube-state-metrics"
+    },
+    "startsAt": "2026-09-24T23:45:29.442Z"
+  },
+  {
+    "fingerprint": "85ccb2527bec9615",
+    "labels": {
+      "alertname": "TetragonRuntimePolicyMatch",
+      "severity": "info",
+      "cluster": "lab"
+    },
+    "startsAt": "2026-09-25T00:15:58.063Z"
+  },
+  {
+    "fingerprint": "af3895f8f711cccc",
+    "labels": {
+      "alertname": "HelmReleaseNotReady",
+      "severity": "warning",
+      "namespace": "flux-system",
+      "exported_namespace": "agent-platform",
+      "service": "flux-operator",
+      "cluster": "lab",
+      "name": "substrate",
+      "pod": "flux-operator-7bd6d6c98-ncn95",
+      "job": "flux-operator"
+    },
+    "startsAt": "2026-09-24T23:07:06.163Z"
+  },
+  {
+    "fingerprint": "b8d0d524cebcff31",
+    "labels": {
+      "alertname": "TetragonRuntimePolicyMatch",
+      "severity": "info",
+      "cluster": "lab"
+    },
+    "startsAt": "2026-09-25T00:15:58.063Z"
+  },
+  {
+    "fingerprint": "b911e498b0a20688",
+    "labels": {
+      "alertname": "TrivyCriticalCVEInRunningWorkload",
+      "severity": "info",
+      "namespace": "monitoring",
+      "cluster": "lab"
+    },
+    "startsAt": "2026-09-24T11:28:14.685Z"
+  },
+  {
+    "fingerprint": "bb2ef849c44bb2fa",
+    "labels": {
+      "alertname": "TrivyCriticalCVEInRunningWorkload",
+      "severity": "info",
+      "namespace": "monitoring",
+      "cluster": "lab"
+    },
+    "startsAt": "2026-09-24T11:28:14.685Z"
+  },
+  {
+    "fingerprint": "bec856cc80b61a03",
+    "labels": {
+      "alertname": "TrivyCriticalCVEInRunningWorkload",
+      "severity": "info",
+      "namespace": "ate-system",
+      "cluster": "lab"
+    },
+    "startsAt": "2026-09-24T11:28:14.685Z"
+  },
+  {
+    "fingerprint": "c098724cb5e7a74b",
+    "labels": {
+      "alertname": "TrivyCriticalCVEInRunningWorkload",
+      "severity": "info",
+      "namespace": "monitoring",
+      "cluster": "lab"
+    },
+    "startsAt": "2026-09-24T11:28:14.685Z"
+  },
+  {
+    "fingerprint": "c67a410112fadf7f",
+    "labels": {
+      "alertname": "PodStuckInContainerCreating",
+      "severity": "warning",
+      "namespace": "ate-system",
+      "service": "kube-prometheus-stack-kube-state-metrics",
+      "cluster": "lab",
+      "pod": "rustfs-554fcc4db4-qbw6r",
+      "job": "kube-state-metrics"
+    },
+    "startsAt": "2026-09-24T22:51:20.732Z"
+  },
+  {
+    "fingerprint": "c8d91ceef145a035",
+    "labels": {
+      "alertname": "TrivyCriticalCVEBacklog",
+      "severity": "info",
+      "cluster": "lab"
+    },
+    "startsAt": "2026-09-24T11:28:14.685Z"
+  },
+  {
+    "fingerprint": "c92353717ec5aad9",
+    "labels": {
+      "alertname": "KubeJobFailed",
+      "severity": "warning",
+      "namespace": "longhorn-system",
+      "service": "kube-prometheus-stack-kube-state-metrics",
+      "job_name": "longhorn-stale-va-detector-29838195",
+      "pod": "kube-prometheus-stack-kube-state-metrics-c87b777df-p5552",
+      "job": "kube-state-metrics"
+    },
+    "startsAt": "2026-09-24T23:30:29.442Z"
+  },
+  {
+    "fingerprint": "d3040ff9c27e8409",
+    "labels": {
+      "alertname": "PodStuckContainerCreating",
+      "severity": "warning",
+      "namespace": "ate-system",
+      "service": "kube-prometheus-stack-kube-state-metrics",
+      "cluster": "lab",
+      "pod": "rustfs-554fcc4db4-qbw6r",
+      "job": "kube-state-metrics"
+    },
+    "startsAt": "2026-09-24T22:36:45.125Z"
+  },
+  {
+    "fingerprint": "d347245bbd06698a",
+    "labels": {
+      "alertname": "TrivyHighCVEBacklog",
+      "severity": "info",
+      "cluster": "lab"
+    },
+    "startsAt": "2026-09-24T11:28:14.685Z"
+  },
+  {
+    "fingerprint": "fa6bf08b8caabe66",
+    "labels": {
+      "alertname": "KubeJobFailed",
+      "severity": "warning",
+      "namespace": "sbfspot",
+      "service": "kube-prometheus-stack-kube-state-metrics",
+      "job_name": "sbfspot-import-history-29831728",
+      "pod": "kube-prometheus-stack-kube-state-metrics-c87b777df-p5552",
+      "job": "kube-state-metrics"
+    },
+    "startsAt": "2026-09-24T11:14:59.442Z"
+  }
+]

@@ -41,7 +41,8 @@ timer that falls due, the end of a session with a record (sessions serve)
 and a supervisor relay taken or expired are one line each, once: the state keeps that they were reported, so
 a second or restarted watch stays silent about them. The
 installations' alerts are read every alerts.every and each NEW or RESOLVED
-one is a line (beekeeper alerts watch); only one watch at a time reads them.
+one at or above its installation's floor is a line, a flapping one a single
+FLAPPING line (beekeeper alerts watch); only one watch at a time reads them.
 
 Once the supervisor has served supervisor.shift, RELAY DUE is said at the
 first quiet moment: no gated merge running or settling, no grant waiting

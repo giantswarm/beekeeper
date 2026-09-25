@@ -139,3 +139,38 @@ func Import(st *State, dir string) ([]string, error) {
 	slices.Sort(done)
 	return done, nil
 }
+
+// WriteAnswer records an installation's answer as dir/<installation>.json,
+// for alerts replay and as a test fixture. It returns the file.
+func WriteAnswer(dir, installation string, raw []Raw) (string, error) {
+	b, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, installation+".json")
+	return path, os.WriteFile(path, append(b, '\n'), 0o600)
+}
+
+// ReadAnswers are the answers recorded in dir, by installation.
+func ReadAnswers(dir string) (map[string][]Raw, error) {
+	files, err := filepath.Glob(filepath.Join(dir, "*.json"))
+	if err != nil {
+		return nil, err
+	}
+	if len(files) == 0 {
+		return nil, fmt.Errorf("%s: no recorded answer (<installation>.json)", dir)
+	}
+	out := map[string][]Raw{}
+	for _, f := range files {
+		b, err := os.ReadFile(filepath.Clean(f))
+		if err != nil {
+			return nil, err
+		}
+		var raw []Raw
+		if err := json.Unmarshal(b, &raw); err != nil {
+			return nil, fmt.Errorf("%s: %w", f, err)
+		}
+		out[strings.TrimSuffix(filepath.Base(f), ".json")] = raw
+	}
+	return out, nil
+}

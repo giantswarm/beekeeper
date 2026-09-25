@@ -18,6 +18,18 @@ import (
 // Page is the severity that pages the on-call person; it is printed in capitals.
 const Page = "page"
 
+// Severities are the severities from lowest to highest, as Giant Swarm's
+// rules (none, notify, page) and kube-prometheus-stack's (info, warning,
+// critical) set them. A floor is one of them; an alert whose severity is
+// none of them is never below a floor.
+var Severities = []string{"none", "info", "warning", "notify", "critical", "page"}
+
+// Below reports whether severity ranks under floor.
+func Below(severity, floor string) bool {
+	s := slices.Index(Severities, severity)
+	return s >= 0 && s < slices.Index(Severities, floor)
+}
+
 // objectLabels name the alerting object, most specific first. pod, node and
 // job come last and name the object only when nothing more specific does (a
 // restarting pod, a node without its agent, a failing scrape job) and the pod
@@ -62,6 +74,47 @@ type Rules struct {
 	// Collapse is the number of changes of one alertname in one run above
 	// which they are one line with a count.
 	Collapse int
+	// Floors are the lowest severity printed, per installation. An alert
+	// below its floor stays in the baseline and is never printed, so a
+	// changed floor prints no burst of NEW or RESOLVED lines.
+	Floors map[string]string
+	// Flap is the flap damper.
+	Flap Damper
+}
+
+// Damper holds back an alert that changes too often: its Changes-th NEW or
+// RESOLVED within Window is one FLAPPING line, and its changes print nothing
+// until it has been stable for Window. Changes under 2 is no damper.
+type Damper struct {
+	Changes int
+	Window  time.Duration
+}
+
+// Flap is the damper's memory of one alert: its changes within the window,
+// and whether it was reported flapping.
+type Flap struct {
+	Changes  []time.Time `json:"changes"`
+	Flapping bool        `json:"flapping,omitempty"`
+}
+
+// shown reports whether an installation's alert is at or above its floor.
+func (r Rules) shown(installation string, a Alert) bool {
+	return !Below(a.Severity, r.Floors[installation])
+}
+
+// hidden is the count of the set's alerts below the installation's floor, as
+// a clause of a head line.
+func (r Rules) hidden(installation string, s Set) string {
+	n := 0
+	for _, a := range s {
+		if !r.shown(installation, a) {
+			n++
+		}
+	}
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf(", %d below the floor %s", n, r.Floors[installation])
 }
 
 // Set is an installation's alerts by fingerprint.
@@ -209,6 +262,9 @@ func (r Rules) changeLines(kind, installation string, alerts []Alert, now time.T
 type Installation struct {
 	Reachable bool `json:"reachable"`
 	Alerts    Set  `json:"alerts"`
+	// Flaps are the damper's records of the alerts that changed within its
+	// window, by fingerprint.
+	Flaps map[string]*Flap `json:"flaps,omitempty"`
 }
 
 // Step returns the lines one watch run prints for an installation and the
@@ -217,7 +273,7 @@ func (r Rules) Step(installation string, prev *Installation, ans Answer, now tim
 	if !ans.OK {
 		next := &Installation{}
 		if prev != nil {
-			next.Alerts = prev.Alerts
+			next.Alerts, next.Flaps = prev.Alerts, prev.Flaps
 			if !prev.Reachable {
 				return nil, next
 			}
@@ -233,15 +289,70 @@ func (r Rules) Step(installation string, prev *Installation, ans Answer, now tim
 	if !prev.Reachable {
 		lines = append(lines, fmt.Sprintf("ALERTS %s reachable again", installation))
 	}
-	lines = append(lines, r.changeLines("NEW", installation, missing(current, prev.Alerts), now, r.Collapse)...)
-	lines = append(lines, r.changeLines("RESOLVED", installation, missing(prev.Alerts, current), now, r.Collapse)...)
+	next.Flaps = r.Flap.keep(prev.Flaps, now)
+	added, flapping := r.Flap.damp(next.Flaps, r.missing(installation, current, prev.Alerts), now)
+	gone, flappingGone := r.Flap.damp(next.Flaps, r.missing(installation, prev.Alerts, current), now)
+	lines = append(lines, r.changeLines(New, installation, added, now, r.Collapse)...)
+	lines = append(lines, r.changeLines("RESOLVED", installation, gone, now, r.Collapse)...)
+	lines = append(lines, r.changeLines("FLAPPING", installation, append(flapping, flappingGone...), now, r.Collapse)...)
 	return lines, next
+}
+
+// New is the kind of a line about an alert that started firing.
+const New = "NEW"
+
+// IsNew reports whether a line of Step is about an alert that started firing.
+func IsNew(line string) bool { return strings.HasPrefix(line, "ALERT "+New+" ") }
+
+// keep returns copies of the records of the alerts that changed within the
+// window: an alert stable for the window is forgotten, and a flapping one is
+// released, so its next change prints again.
+func (d Damper) keep(flaps map[string]*Flap, now time.Time) map[string]*Flap {
+	out := map[string]*Flap{}
+	for fp, f := range flaps {
+		if n := len(f.Changes); n > 0 && now.Sub(f.Changes[n-1]) < d.Window {
+			out[fp] = &Flap{Changes: slices.Clone(f.Changes), Flapping: f.Flapping}
+		}
+	}
+	return out
+}
+
+// damp records the change of every alert in changed and splits them into
+// those that print and those that start flapping now, the latter since their
+// first change within the window. The change of an alert that is flapping
+// already is neither.
+func (d Damper) damp(flaps map[string]*Flap, changed map[string]Alert, now time.Time) (print, flapping []Alert) {
+	for fp, a := range changed {
+		if d.Changes < 2 {
+			print = append(print, a)
+			continue
+		}
+		f := flaps[fp]
+		if f == nil {
+			f = &Flap{}
+			flaps[fp] = f
+		}
+		f.Changes = append(slices.DeleteFunc(f.Changes, func(t time.Time) bool { return now.Sub(t) >= d.Window }), now)
+		switch {
+		case f.Flapping:
+		case len(f.Changes) >= d.Changes:
+			f.Flapping = true
+			a.Since = f.Changes[0].UTC().Format(time.RFC3339Nano)
+			flapping = append(flapping, a)
+		default:
+			print = append(print, a)
+		}
+	}
+	return print, flapping
 }
 
 func (r Rules) firstLook(installation string, current Set, now time.Time) []string {
 	pages, mine := 0, 0
 	all := make([]Alert, 0, len(current))
 	for _, a := range current {
+		if !r.shown(installation, a) {
+			continue
+		}
 		all = append(all, a)
 		if a.Severity == Page {
 			pages++
@@ -250,19 +361,21 @@ func (r Rules) firstLook(installation string, current Set, now time.Time) []stri
 			mine++
 		}
 	}
-	head := fmt.Sprintf("ALERTS %s first look: %d active, %d page", installation, len(current), pages)
+	head := fmt.Sprintf("ALERTS %s first look: %d active, %d page", installation, len(all), pages)
 	if r.Team != "" {
 		head += fmt.Sprintf(", %d %s", mine, r.Team)
 	}
+	head += r.hidden(installation, current)
 	return append([]string{head}, r.changeLines("OPEN", installation, all, now, 1)...)
 }
 
-// missing are the alerts of a whose fingerprint b lacks.
-func missing(a, b Set) []Alert {
-	var out []Alert
+// missing are the alerts of a at or above the installation's floor whose
+// fingerprint b lacks.
+func (r Rules) missing(installation string, a, b Set) map[string]Alert {
+	out := map[string]Alert{}
 	for k, v := range a {
-		if _, ok := b[k]; !ok {
-			out = append(out, v)
+		if _, ok := b[k]; !ok && r.shown(installation, v) {
+			out[k] = v
 		}
 	}
 	return out
@@ -275,6 +388,7 @@ func (r Rules) SnapshotLines(installation string, ans Answer, now time.Time) []s
 		return []string{fmt.Sprintf("%s unreachable: %s", installation, ans.Why)}
 	}
 	current, order := r.normalize(ans.Alerts, installation)
+	shown := 0
 	type group struct {
 		Alert
 		n int
@@ -283,6 +397,10 @@ func (r Rules) SnapshotLines(installation string, ans Answer, now time.Time) []s
 	byKey := map[[4]string]*group{}
 	for _, fp := range order {
 		a := current[fp]
+		if !r.shown(installation, a) {
+			continue
+		}
+		shown++
 		k := [4]string{a.Severity, a.Team, a.Alertname, a.Cluster}
 		if g, ok := byKey[k]; ok {
 			g.n++
@@ -298,7 +416,7 @@ func (r Rules) SnapshotLines(installation string, ans Answer, now time.Time) []s
 			cmp.Compare(b.n, a.n),
 			strings.Compare(a.Alertname, b.Alertname))
 	})
-	lines := []string{fmt.Sprintf("%s at %s: %d active", installation, now.UTC().Format("15:04Z"), len(current))}
+	lines := []string{fmt.Sprintf("%s at %s: %d active%s", installation, now.UTC().Format("15:04Z"), shown, r.hidden(installation, current))}
 	for _, g := range groups {
 		s, t := r.mark(g.Alert)
 		lines = append(lines, fmt.Sprintf("  %-7s %-11s %-50s %-12s %3d", s, t, g.Alertname, g.Cluster, g.n))

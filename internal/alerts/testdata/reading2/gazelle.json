@@ -1,0 +1,713 @@
+[
+  {
+    "fingerprint": "0b65cbb20c9bb8cd",
+    "labels": {
+      "alertname": "ChartOrphanConfigMap",
+      "severity": "notify",
+      "team": "honeybadger",
+      "namespace": "giantswarm",
+      "service": "chart-operator",
+      "cluster_id": "wc01",
+      "installation": "gazelle",
+      "pod": "chart-operator-585f7bf7c4-6dw65",
+      "job": "chart-operator"
+    },
+    "startsAt": "2026-09-24T23:57:53.932Z"
+  },
+  {
+    "fingerprint": "0d525e9faf2033f1",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-distributor",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-distributor-f55744f67-85jb8",
+      "job": "mimir/distributor"
+    },
+    "startsAt": "2026-09-24T18:44:10.193Z"
+  },
+  {
+    "fingerprint": "0e39131043ba2a6f",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-ingester",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-ingester-0",
+      "job": "mimir/ingester"
+    },
+    "startsAt": "2026-09-24T22:06:10.193Z"
+  },
+  {
+    "fingerprint": "1135be59342324df",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-query-scheduler",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-query-scheduler-77f7f7778-4svjz",
+      "job": "mimir/query-scheduler"
+    },
+    "startsAt": "2026-09-24T11:01:10.193Z"
+  },
+  {
+    "fingerprint": "1201f828eb779cf4",
+    "labels": {
+      "alertname": "ManagementClusterJobFailed",
+      "severity": "notify",
+      "team": "phoenix",
+      "namespace": "monitoring",
+      "service": "kube-prometheus-stack-kube-state-metrics",
+      "cluster_id": "gazelle",
+      "installation": "gazelle",
+      "job_name": "grafana-postgresql-recovery-test-29828160",
+      "pod": "kube-prometheus-stack-kube-state-metrics-75c65ff446-h569w",
+      "node": "ip-10-0-0-1.compute.internal",
+      "job": "kube-state-metrics"
+    },
+    "startsAt": "2026-09-25T00:03:14.635Z"
+  },
+  {
+    "fingerprint": "1329362ce1e05c6e",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-query-scheduler",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-query-scheduler-77f7f7778-xg4g4",
+      "job": "mimir/query-scheduler"
+    },
+    "startsAt": "2026-09-24T23:59:10.193Z"
+  },
+  {
+    "fingerprint": "15ae5ef1778c376b",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-querier",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-querier-f77f6789d-l7pn7",
+      "job": "mimir/querier"
+    },
+    "startsAt": "2026-09-24T18:44:10.193Z"
+  },
+  {
+    "fingerprint": "1baec20fa8b39575",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-querier",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-querier-f77f6789d-46q25",
+      "job": "mimir/querier"
+    },
+    "startsAt": "2026-09-24T23:42:10.193Z"
+  },
+  {
+    "fingerprint": "26df626fb4d745a3",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-alertmanager",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-alertmanager-1",
+      "job": "mimir/alertmanager"
+    },
+    "startsAt": "2026-09-24T09:07:10.193Z"
+  },
+  {
+    "fingerprint": "2a1e183d7abf8275",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-store-gateway",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-store-gateway-0",
+      "job": "mimir/store-gateway"
+    },
+    "startsAt": "2026-09-24T22:23:10.193Z"
+  },
+  {
+    "fingerprint": "2c025c673071c9d3",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-metadata-cache",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-metadata-cache-0",
+      "job": "mimir/metadata-cache"
+    },
+    "startsAt": "2026-09-24T18:44:10.193Z"
+  },
+  {
+    "fingerprint": "310f0decd1cf0c91",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-ingester",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-ingester-1",
+      "job": "mimir/ingester"
+    },
+    "startsAt": "2026-09-24T23:48:10.193Z"
+  },
+  {
+    "fingerprint": "31d285eb4926264c",
+    "labels": {
+      "alertname": "InhibitionOutsideWorkingHours",
+      "team": "atlas"
+    },
+    "startsAt": "2026-09-24T16:01:31.402Z"
+  },
+  {
+    "fingerprint": "373e23021792792f",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-alertmanager",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-alertmanager-0",
+      "job": "mimir/alertmanager"
+    },
+    "startsAt": "2026-09-25T00:00:10.193Z"
+  },
+  {
+    "fingerprint": "4465668608724af3",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-distributor",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-distributor-f55744f67-8k598",
+      "job": "mimir/distributor"
+    },
+    "startsAt": "2026-09-24T23:41:10.193Z"
+  },
+  {
+    "fingerprint": "46001cbd8d61234a",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-distributor",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-distributor-f55744f67-42cdq",
+      "job": "mimir/distributor"
+    },
+    "startsAt": "2026-09-24T12:08:10.193Z"
+  },
+  {
+    "fingerprint": "48112342a95ca727",
+    "labels": {
+      "alertname": "ChartOrphanConfigMap",
+      "severity": "notify",
+      "team": "honeybadger",
+      "namespace": "giantswarm",
+      "service": "chart-operator",
+      "cluster_id": "wc02",
+      "installation": "gazelle",
+      "pod": "chart-operator-5c4f57b7fb-9dn69",
+      "job": "chart-operator"
+    },
+    "startsAt": "2026-09-24T23:57:53.932Z"
+  },
+  {
+    "fingerprint": "4b8f8a9451f5d966",
+    "labels": {
+      "alertname": "KyvernoCertificateSecretWillExpireInLessThanTwoDays",
+      "severity": "notify",
+      "team": "shield",
+      "exported_namespace": "kyverno",
+      "cluster_id": "gazelle",
+      "installation": "gazelle",
+      "name": "kyverno-cleanup-controller.kyverno.svc.kyverno-tls-ca"
+    },
+    "startsAt": "2026-09-24T23:49:05.973Z"
+  },
+  {
+    "fingerprint": "4c7829fe5fb9f823",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-continuous-test-headless",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-continuous-test-55bd447c64-5nqhw",
+      "job": "mimir/continuous-test"
+    },
+    "startsAt": "2026-09-24T22:06:10.193Z"
+  },
+  {
+    "fingerprint": "50c178bb8b15a123",
+    "labels": {
+      "alertname": "KyvernoCertificateSecretWillExpireInLessThanTwoDays",
+      "severity": "notify",
+      "team": "shield",
+      "exported_namespace": "kyverno",
+      "cluster_id": "gazelle",
+      "installation": "gazelle",
+      "name": "kyverno-svc.kyverno.svc.kyverno-tls-ca"
+    },
+    "startsAt": "2026-09-24T23:49:05.973Z"
+  },
+  {
+    "fingerprint": "51be7fc84921acaf",
+    "labels": {
+      "alertname": "ManagementClusterJobFailed",
+      "severity": "notify",
+      "team": "phoenix",
+      "namespace": "default",
+      "service": "kube-prometheus-stack-kube-state-metrics",
+      "cluster_id": "gazelle",
+      "installation": "gazelle",
+      "job_name": "kratix-appdeployment-py-ai-1-template-a8249",
+      "pod": "kube-prometheus-stack-kube-state-metrics-75c65ff446-h569w",
+      "node": "ip-10-0-0-1.compute.internal",
+      "job": "kube-state-metrics"
+    },
+    "startsAt": "2026-09-25T00:03:14.635Z"
+  },
+  {
+    "fingerprint": "5b9ddcecaabacae3",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-chunks-cache",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-chunks-cache-0",
+      "job": "mimir/chunks-cache"
+    },
+    "startsAt": "2026-09-24T22:05:10.193Z"
+  },
+  {
+    "fingerprint": "5f13afb3ff13bdeb",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-alertmanager",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-alertmanager-2",
+      "job": "mimir/alertmanager"
+    },
+    "startsAt": "2026-09-24T22:39:10.193Z"
+  },
+  {
+    "fingerprint": "73ca39b73c7f1a27",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-querier",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-querier-f77f6789d-2jxts",
+      "job": "mimir/querier"
+    },
+    "startsAt": "2026-09-24T22:07:10.193Z"
+  },
+  {
+    "fingerprint": "75d1bfbb9e370d02",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-querier",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-querier-f77f6789d-2d8nj",
+      "job": "mimir/querier"
+    },
+    "startsAt": "2026-09-24T18:43:10.193Z"
+  },
+  {
+    "fingerprint": "778dcfc99f73f483",
+    "labels": {
+      "alertname": "AtlasOperatorsReconciliationError",
+      "severity": "notify",
+      "team": "atlas",
+      "cluster_id": "gazelle",
+      "installation": "gazelle",
+      "pod": "observability-operator-6688d557dc-r9549"
+    },
+    "startsAt": "2026-09-24T22:06:22.935Z"
+  },
+  {
+    "fingerprint": "7c29ca2cb6fd18fd",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-querier",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-querier-f77f6789d-nrqps",
+      "job": "mimir/querier"
+    },
+    "startsAt": "2026-09-24T23:48:10.193Z"
+  },
+  {
+    "fingerprint": "83e062b15ef8d69a",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-index-cache",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-index-cache-0",
+      "job": "mimir/index-cache"
+    },
+    "startsAt": "2026-09-24T09:55:10.193Z"
+  },
+  {
+    "fingerprint": "8472bc6a279ba4af",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-querier",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-querier-f77f6789d-cn4d4",
+      "job": "mimir/querier"
+    },
+    "startsAt": "2026-09-24T22:05:10.193Z"
+  },
+  {
+    "fingerprint": "87f9e3439d2da560",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-ingester",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-ingester-3",
+      "job": "mimir/ingester"
+    },
+    "startsAt": "2026-09-24T22:10:10.193Z"
+  },
+  {
+    "fingerprint": "8e999e6a50a8148f",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-ruler",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-ruler-7d7f96965f-fwtlz",
+      "job": "mimir/ruler"
+    },
+    "startsAt": "2026-09-24T23:49:10.193Z"
+  },
+  {
+    "fingerprint": "a18e06e3cc854895",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-querier",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-querier-f77f6789d-r9nxq",
+      "job": "mimir/querier"
+    },
+    "startsAt": "2026-09-24T09:55:10.193Z"
+  },
+  {
+    "fingerprint": "a3acd1d645919680",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-overrides-exporter",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-overrides-exporter-6744588ff4-c7b68",
+      "job": "mimir/overrides-exporter"
+    },
+    "startsAt": "2026-09-24T23:59:10.193Z"
+  },
+  {
+    "fingerprint": "a53f54664c883fb0",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-distributor",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-distributor-f55744f67-gv2gr",
+      "job": "mimir/distributor"
+    },
+    "startsAt": "2026-09-24T23:54:10.193Z"
+  },
+  {
+    "fingerprint": "a595646fe24d52fb",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-distributor",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-distributor-f55744f67-kxwc5",
+      "job": "mimir/distributor"
+    },
+    "startsAt": "2026-09-24T23:48:10.193Z"
+  },
+  {
+    "fingerprint": "af98a5743065a2aa",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-distributor",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-distributor-f55744f67-6cnzc",
+      "job": "mimir/distributor"
+    },
+    "startsAt": "2026-09-24T22:05:10.193Z"
+  },
+  {
+    "fingerprint": "b1f44c2638f10636",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-ingester",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-ingester-2",
+      "job": "mimir/ingester"
+    },
+    "startsAt": "2026-09-24T23:41:10.193Z"
+  },
+  {
+    "fingerprint": "b975004afe144e9b",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-distributor",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-distributor-f55744f67-nmwxt",
+      "job": "mimir/distributor"
+    },
+    "startsAt": "2026-09-24T23:48:10.193Z"
+  },
+  {
+    "fingerprint": "c0ee5c6cf183fe77",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-querier",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-querier-f77f6789d-b8qnm",
+      "job": "mimir/querier"
+    },
+    "startsAt": "2026-09-24T22:23:10.193Z"
+  },
+  {
+    "fingerprint": "c15cc305d0e08eb5",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-ingester",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-ingester-4",
+      "job": "mimir/ingester"
+    },
+    "startsAt": "2026-09-24T21:39:10.193Z"
+  },
+  {
+    "fingerprint": "c1fc680e1abe3bdc",
+    "labels": {
+      "alertname": "ChartOrphanConfigMap",
+      "severity": "notify",
+      "team": "honeybadger",
+      "namespace": "giantswarm",
+      "service": "chart-operator",
+      "cluster_id": "gazelle",
+      "installation": "gazelle",
+      "pod": "chart-operator-787c8f87d6-fd2k6",
+      "job": "chart-operator"
+    },
+    "startsAt": "2026-09-24T23:57:53.932Z"
+  },
+  {
+    "fingerprint": "c72477c3966b3da3",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-compactor",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-compactor-0",
+      "job": "mimir/compactor"
+    },
+    "startsAt": "2026-09-24T17:18:10.193Z"
+  },
+  {
+    "fingerprint": "cd8889c0b4acc40e",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-query-frontend",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-query-frontend-5f8cdbc795-dhc22",
+      "job": "mimir/query-frontend"
+    },
+    "startsAt": "2026-09-24T23:51:10.193Z"
+  },
+  {
+    "fingerprint": "dd4f2be1e17d9e18",
+    "labels": {
+      "alertname": "VclusterOnlineTooLong",
+      "severity": "notify",
+      "team": "tenet",
+      "namespace": "mctl-test1-vcluster",
+      "service": "kube-prometheus-stack-kube-state-metrics",
+      "cluster_id": "wc01",
+      "installation": "gazelle",
+      "pod": "kube-prometheus-stack-kube-state-metrics-75c65ff446-h4l5s",
+      "node": "ip-10-0-0-2.compute.internal",
+      "job": "kube-state-metrics"
+    },
+    "startsAt": "2026-09-24T23:57:42.354Z"
+  },
+  {
+    "fingerprint": "e7d61c005c4be462",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-distributor",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-distributor-f55744f67-44wdj",
+      "job": "mimir/distributor"
+    },
+    "startsAt": "2026-09-24T18:43:10.193Z"
+  },
+  {
+    "fingerprint": "ebcd6dd3ee2d59a0",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-querier",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-querier-f77f6789d-224kp",
+      "job": "mimir/querier"
+    },
+    "startsAt": "2026-09-24T09:57:10.193Z"
+  },
+  {
+    "fingerprint": "f6b7191b57ccf04e",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-distributor",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-distributor-f55744f67-xjrwh",
+      "job": "mimir/distributor"
+    },
+    "startsAt": "2026-09-24T20:19:10.193Z"
+  },
+  {
+    "fingerprint": "fd241bc830d4db8a",
+    "labels": {
+      "alertname": "Heartbeat",
+      "team": "atlas",
+      "namespace": "mimir",
+      "service": "mimir-querier",
+      "cluster_id": "gazelle",
+      "cluster": "mimir",
+      "installation": "gazelle",
+      "pod": "mimir-querier-f77f6789d-7dln5",
+      "job": "mimir/querier"
+    },
+    "startsAt": "2026-09-24T09:55:10.193Z"
+  }
+]
