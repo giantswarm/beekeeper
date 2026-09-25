@@ -178,7 +178,9 @@ func (a *app) load() error {
 }
 
 // caller is who runs this command: the Claude Code session it runs in, or
-// the --as name.
+// the --as name. The session's name is its desktop title, else the name in
+// the environment, else the name its CLI's record holds (a `claude --bg`
+// worker's tool commands inherit neither), else its id.
 func (a *app) caller() (state.Party, error) {
 	if a.as != "" {
 		return state.Party{Name: a.as}, nil
@@ -194,6 +196,11 @@ func (a *app) caller() (state.Party, error) {
 	if p.HostSession != "" {
 		if r, ok := claude.ReadRecord(a.cfg, p.HostSession); ok && r.Title != "" {
 			p.Name = r.Title
+		}
+	}
+	if p.Name == "" {
+		if t, err := proc.Read(); err == nil {
+			p.Name = claude.RecordName(a.cfg, t, p.Session)
 		}
 	}
 	if p.Name == "" {

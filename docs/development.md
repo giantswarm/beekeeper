@@ -94,6 +94,15 @@ identity stays refused throughout and `watch --once` says `SUPERVISOR RESTARTED`
 again shows the rule lifting once the grace has passed. `handover --prompt` on a copy of the live state (`cp -r` of the state and lease
 directories into the scratch configuration) shows what a successor would get.
 
+The roster is tried with real `claude --bg` workers against scratch state: started through
+`systemd-run --user` with the session variables cleared and `BEEKEEPER_CONFIG` naming the
+scratch configuration, a haiku worker started with `-n "test: …"` registers under that title
+without `--name` (its tool commands inherit no name: `caller` reads its CLI's record). Once it is
+stopped (`claude stop <id>`), a second worker under the same title replaces its entry and gets
+the next `agents assign`; a third session registering under the name of a running worker is
+refused. `claude stop` and `claude rm` end the workers; the daemon and its spare are killed by
+their PIDs.
+
 A capped run records its events in `$XDG_STATE_HOME/beekeeper/events.jsonl`: the capped-run tests
 point `XDG_STATE_HOME` at their temp dir, and a manual trial does the same
 (`XDG_STATE_HOME=/tmp/bk ./beekeeper run --max 64M -- python3 -c 'bytearray(200<<20)'`, then

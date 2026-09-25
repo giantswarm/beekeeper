@@ -218,6 +218,21 @@ func readCLIRecord(cfg *config.Config, p *proc.Process) (*cliRecord, bool) {
 	return r, true
 }
 
+// RecordName is the name in the record of the running CLI of session id, ""
+// for none: the title a `claude --bg` worker was started under, which the
+// commands its tools run do not inherit.
+func RecordName(cfg *config.Config, t *proc.Table, id string) string {
+	for _, p := range t.ByPID {
+		if !isCLI(p) && !isSpare(p) {
+			continue
+		}
+		if r, ok := readCLIRecord(cfg, p); ok && r.SessionID == id {
+			return r.Name
+		}
+	}
+	return ""
+}
+
 // newSession builds the session process p runs: its record names it, else
 // its arguments and environment do.
 func newSession(cfg *config.Config, t *proc.Table, p *proc.Process, rec *cliRecord, clis map[int]bool, now time.Time) *Session {
