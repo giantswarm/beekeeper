@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Desktop notifications: `watch --notify` sends the events that need a person to `org.freedesktop.Notifications` over D-Bus and still prints every line: a note or timer due, the machine near its OOM line, a kernel OOM kill outside a build slot or a systemd-oomd kill, the GitHub budget under the floor, a stale lease and a supervisor whose session ended with no successor (`notify.kinds`). Each event is one notification however many watches notify, claimed in `notify.json` under `notify.lock`; a lasting condition notifies again after `notify.repeat` (30m); `notify.quietHours` hold everything but a critical one (`notify.urgency`) and send what they held as one notification when they end. With no notification service the watch runs on and says so once.
+- `watch --standby` and the user unit `contrib/systemd/beekeeper-notify.service` (shipped, not enabled): a watch for when no supervisor runs, which leaves a running supervisor's notes, timers, session records and relays to its watch and never reads the alerts.
+- `watch` says `SUPERVISOR GONE` once when the recorded supervisor's session has ended with no relay open.
+- `status [--bar]`: the supervisor, the leases held, the holds and what is due in one line; `--bar` is a fixed tab-separated row for a desktop bar, the shape of `free --summary`'s rows.
+
 - Alert triage: `alerts.installations[].floor` is the lowest severity (none, info, warning, notify, critical, page) of an installation's alerts that `watch` and `snapshot` show; the alerts below it stay in the baseline, so a changed floor prints no burst. The flap damper (`alerts.flap`, default 4 changes within 1h) turns an alert that keeps firing and resolving into one `ALERT FLAPPING` line and holds its changes back until it has been stable for the window; its records live in `alerts.json`. A NEW line names the merges into the installation's lanes (`merging`, `merged`) and the lease claims on it of the last 30 minutes, each with its session.
 - `alerts capture <dir>` records each installation's Alertmanager answer; `alerts replay <dir>...` prints what the watch would for recorded answers, from the current baseline without writing it. `handover` shows the floors and the damper.
 

@@ -20,6 +20,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/giantswarm/beekeeper/internal/alerts"
+	"github.com/giantswarm/beekeeper/internal/notify"
 )
 
 // Browser is the resource every machine has: the one Chrome the Claude in
@@ -46,6 +47,7 @@ type Config struct {
 	Lanes    []Lane   `yaml:"lanes"`
 	Merge    Merge    `yaml:"merge"`
 	Alerts   Alerts   `yaml:"alerts"`
+	Notify   Notify   `yaml:"notify"`
 	// Supervisor is what `handover --prompt` tells a successor supervisor,
 	// how long a relay to it stays open and how long a shift lasts.
 	Supervisor Supervisor `yaml:"supervisor"`
@@ -101,6 +103,28 @@ type Merge struct {
 	SettleTimeout Duration `yaml:"settleTimeout"`
 	// BudgetFresh is how old the last budget reading may be to gate on.
 	BudgetFresh Duration `yaml:"budgetFresh"`
+}
+
+// Notify configures what `watch --notify` sends to the desktop.
+type Notify struct {
+	// Kinds are the kinds that notify (notify.Kinds, the default: due,
+	// oom-line, oom-kill, budget, stale-lease, no-supervisor).
+	Kinds []string `yaml:"kinds"`
+	// QuietHours ("22:00-07:00", local time) hold every notification but a
+	// critical one until they end.
+	QuietHours string `yaml:"quietHours"`
+	// Urgency is a kind's urgency (low, normal, critical); oom-line and
+	// oom-kill are critical, the others normal.
+	Urgency map[string]string `yaml:"urgency"`
+	// Repeat is how often a lasting condition (oom-line, budget) notifies
+	// again while it lasts.
+	Repeat Duration `yaml:"repeat"`
+}
+
+// Policy is the notify package's view of the section.
+func (n Notify) Policy() notify.Policy {
+	q, _ := notify.ParseQuietHours(n.QuietHours) // validated on load
+	return notify.Policy{Kinds: n.Kinds, Quiet: q, Urgency: n.Urgency, Repeat: n.Repeat.Duration}
 }
 
 // Alerts configures the reading of the installations' Alertmanagers: watch
@@ -318,6 +342,10 @@ func (c *Config) defaults() error {
 	setStr(&al.Kubectl, "kubectl")
 	setInt(&al.Flap.Changes, 4)
 	setDur(&al.Flap.Window, time.Hour)
+	if c.Notify.Kinds == nil {
+		c.Notify.Kinds = slices.Clone(notify.Kinds)
+	}
+	setDur(&c.Notify.Repeat, 30*time.Minute)
 	if rest, ok := strings.CutPrefix(c.Supervisor.Instructions, "~/"); ok {
 		c.Supervisor.Instructions = filepath.Join(home, rest)
 	}
@@ -339,6 +367,9 @@ func (c *Config) validate() error {
 	if n := c.Alerts.Flap.Changes; n < 0 || n == 1 {
 		return fmt.Errorf("alerts.flap.changes: %d; an alert is flapping from its second change on at the earliest", n)
 	}
+	if err := c.Notify.validate(); err != nil {
+		return err
+	}
 	for _, r := range c.Resources {
 		if r == "" || r == Browser || filepath.Base(r) != r || r[0] == '.' {
 			return fmt.Errorf("resources: %q is not a valid resource name", r)
@@ -359,6 +390,26 @@ func (c *Config) validate() error {
 			}
 			repos[r] = l.Name
 		}
+	}
+	return nil
+}
+
+func (n Notify) validate() error {
+	for _, k := range n.Kinds {
+		if !slices.Contains(notify.Kinds, k) {
+			return fmt.Errorf("notify.kinds: %q is none of %s", k, strings.Join(notify.Kinds, ", "))
+		}
+	}
+	for k, u := range n.Urgency {
+		if !slices.Contains(notify.Kinds, k) {
+			return fmt.Errorf("notify.urgency: %q is none of %s", k, strings.Join(notify.Kinds, ", "))
+		}
+		if !slices.Contains(notify.Urgencies, u) {
+			return fmt.Errorf("notify.urgency.%s: %q is none of %s", k, u, strings.Join(notify.Urgencies, ", "))
+		}
+	}
+	if _, err := notify.ParseQuietHours(n.QuietHours); err != nil {
+		return fmt.Errorf("notify.quietHours: %w", err)
 	}
 	return nil
 }
