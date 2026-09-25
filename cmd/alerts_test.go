@@ -42,10 +42,10 @@ var machineLanes = &config.Config{Lanes: []config.Lane{
 
 const (
 	lab          = "lab"
-	merged672    = `merged giantswarm/agent-platform#672 by "Agent one" at 22:38Z`
+	merged672    = `during merged giantswarm/agent-platform#672 by "Agent one" at 22:38Z`
 	check        = `"Check glean and graveler clean, prepare gazelle (#37850)"`
-	merged283    = `merged giantswarm/giantswarm-platform-manager#283 by ` + check + ` at 22:51Z`
-	merging283   = `merging giantswarm/giantswarm-platform-manager#283 by ` + check + ` since 22:44Z`
+	merged283    = `during merged giantswarm/giantswarm-platform-manager#283 by ` + check + ` at 22:51Z`
+	merging283   = `during merging giantswarm/giantswarm-platform-manager#283 by ` + check + ` since 22:44Z`
 	claimedByOne = `claimed by "Agent one" at 23:00Z`
 )
 

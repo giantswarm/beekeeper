@@ -19,12 +19,13 @@ import (
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/merge"
+	"github.com/giantswarm/beekeeper/internal/notify"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 func (a *app) watchCmd() *cobra.Command {
-	var once bool
+	var once, notifyDesktop, standby bool
 	c := &cobra.Command{
 		Use:   "watch",
 		Short: "Stay silent until something needs a look, then say it in one line",
@@ -49,29 +50,63 @@ first quiet moment: no gated merge running or settling, no grant waiting
 to be claimed and no claim queued. It is said once, and again only when a
 quiet moment follows a busy one; never while a relay is open.
 
+--notify also sends the events that need a person to the desktop's
+notification service (org.freedesktop.Notifications on the session bus):
+the kinds in notify.kinds, a note or timer falling due (due), the machine
+near its OOM line (oom-line), a kernel OOM kill outside a build slot or a
+systemd-oomd kill (oom-kill), the GitHub budget under the floor (budget), a
+stale lease (stale-lease) and a supervisor whose session ended with no
+successor (no-supervisor). Each event is one notification however many
+watches notify: the first to claim it in notify.json sends it. A lasting
+condition notifies again after notify.repeat (30m); notify.quietHours hold
+everything but a critical one and send what they held as one notification
+when they end. Nothing routine notifies. With no notification service the
+watch runs on, prints its lines and says so once.
+
+--standby is for a watch that runs when no supervisor does (the
+beekeeper-notify user unit): while a supervisor's session runs it leaves
+the notes, timers, session records and relays to the supervisor's watch,
+and it never reads the alerts, so it takes nothing from the supervisor's
+view.
+
 Runs until killed. --once polls once and exits.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			w := &watcher{app: a, last: map[string]time.Time{}, seenKills: map[string]bool{}, reportedLeases: map[string]bool{}}
+			w := &watcher{app: a, standby: standby, last: map[string]time.Time{}, seenKills: map[string]bool{}, reported: map[string]bool{}}
+			if notifyDesktop {
+				d := &notify.Desktop{}
+				defer func() { _ = d.Close() }()
+				w.notifier = notify.New(a.cfg.Notify.Policy(), a.cfg.StateDir, d, func(l string) { w.emitNow("notify", "%s", l) })
+			}
 			return w.run(ctx, once)
 		},
 	}
 	c.Flags().BoolVar(&once, "once", false, "poll once and exit")
+	c.Flags().BoolVar(&notifyDesktop, "notify", false, "send the events that need a person to the desktop too (notify.kinds)")
+	c.Flags().BoolVar(&standby, "standby", false, "while a supervisor runs, leave its events to its watch and never read the alerts")
 	return c
 }
 
 type watcher struct {
 	*app
-	mu             sync.Mutex
-	last           map[string]time.Time
-	lastPoll       time.Time
-	lastBudget     time.Time
-	scopeOOM       int64
-	sessions       map[string]*claude.Session
-	seenKills      map[string]bool
-	reportedLeases map[string]bool
+	mu         sync.Mutex
+	last       map[string]time.Time
+	lastPoll   time.Time
+	lastBudget time.Time
+	scopeOOM   int64
+	sessions   map[string]*claude.Session
+	seenKills  map[string]bool
+	// reported are the stale leases and gone supervisors said once.
+	reported map[string]bool
+	// notifier sends the events that need a person (--notify); nil prints only.
+	notifier *notify.Notifier
+	// standby leaves a running supervisor's events to its watch.
+	standby bool
+	// supervisorMissed counts the polls the recorded supervisor's session
+	// has not run in.
+	supervisorMissed int
 	// records are the session records of the last poll: their sessions'
 	// ends get the record's line instead of the SESSIONS ended one.
 	records []state.Record
@@ -85,7 +120,7 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 		w.emitNow("scope", "no Claude Desktop scope found; watching the machine numbers only")
 	}
 	var wg sync.WaitGroup
-	if !once {
+	if !once && !w.standby {
 		wg.Go(func() { w.watchAlerts(ctx) })
 	}
 	defer wg.Wait()
@@ -139,17 +174,33 @@ func (w *watcher) watchAlerts(ctx context.Context) {
 	}
 }
 
-// emit prints a breach at most once per watch.repeat per key.
-func (w *watcher) emit(key, format string, args ...any) {
+// emit prints a breach at most once per watch.repeat per key and returns
+// the line, empty when it was folded away.
+func (w *watcher) emit(key, format string, args ...any) string {
 	w.mu.Lock()
 	now := time.Now()
 	if t, ok := w.last[key]; ok && now.Sub(t) < w.cfg.Watch.Repeat.Duration {
 		w.mu.Unlock()
-		return
+		return ""
 	}
 	w.last[key] = now
 	w.mu.Unlock()
-	w.emitNow(key, format, args...)
+	line := fmt.Sprintf(format, args...)
+	w.emitNow(key, "%s", line)
+	return line
+}
+
+// notify sends one event that needs a person (--notify): a lasting kind
+// takes no key.
+func (w *watcher) notify(ctx context.Context, kind, key, summary, body string) {
+	if w.notifier != nil && body != "" {
+		w.notifier.Notify(ctx, w.now, kind, key, summary, body)
+	}
+}
+
+// oomLine notifies a breach of the OOM line the poll printed.
+func (w *watcher) oomLine(ctx context.Context, line string) {
+	w.notify(ctx, notify.OOMLine, "", "beekeeper: the machine is near its OOM line", line+"\nbeekeeper snapshot")
 }
 
 // emitNow prints an event that is never folded away.
@@ -172,17 +223,17 @@ func (w *watcher) poll(ctx context.Context) {
 
 	if m, err := machine.ReadMem(); err == nil {
 		if m.AvailableMiB < th.AvailMinMiB {
-			w.emit("avail", "LOW RAM: %d MiB available (swap used %d MiB)", m.AvailableMiB, m.SwapUsedMiB)
+			w.oomLine(ctx, w.emit("avail", "LOW RAM: %d MiB available (swap used %d MiB)", m.AvailableMiB, m.SwapUsedMiB))
 		}
 		if m.SwapUsedMiB > th.SwapMaxMiB {
-			w.emit("swap", "SWAP near the oomd trigger: %d of %d MiB used (systemd-oomd kills at 90%%)", m.SwapUsedMiB, m.SwapTotalMiB)
+			w.oomLine(ctx, w.emit("swap", "SWAP near the oomd trigger: %d of %d MiB used (systemd-oomd kills at 90%%)", m.SwapUsedMiB, m.SwapTotalMiB))
 		}
 	}
 	if l, err := machine.ReadLoad(); err == nil && l[0] > th.LoadMax {
 		w.emit("load", "HIGH LOAD: %.0f (image imports into a fresh lab reach 35-53 on an encrypted disk)", l[0])
 	}
 	if psi, err := machine.ReadPSIFull60(); err == nil && psi > th.PSIMax {
-		w.emit("psi", "MEMORY PRESSURE: full avg60 %.0f%%", psi)
+		w.oomLine(ctx, w.emit("psi", "MEMORY PRESSURE: full avg60 %.0f%%", psi))
 	}
 	if d, err := machine.ReadDisk("/tmp"); err == nil && d.UsedMiB > th.TmpMaxMiB {
 		w.emit("tmp", "TMPFS /tmp at %d MiB (RAM-backed scratch)", d.UsedMiB)
@@ -193,10 +244,10 @@ func (w *watcher) poll(ctx context.Context) {
 	if p := machine.FindScope(); p != "" {
 		s := machine.ReadScope(p)
 		if s.AnonMiB > th.ScopeAnonMaxMiB {
-			w.emit("scopeanon", "DESKTOP SCOPE anonymous memory %d MiB (only anon cannot be reclaimed; archiving idle sessions frees it)", s.AnonMiB)
+			w.oomLine(ctx, w.emit("scopeanon", "DESKTOP SCOPE anonymous memory %d MiB (only anon cannot be reclaimed; archiving idle sessions frees it)", s.AnonMiB))
 		}
 		if s.CurrentMiB > th.ScopeMaxMiB {
-			w.emit("scope", "DESKTOP SCOPE near its hard cap: %d MiB RAM + %d MiB swap (max %s)", s.CurrentMiB, s.SwapMiB, s.Max)
+			w.oomLine(ctx, w.emit("scope", "DESKTOP SCOPE near its hard cap: %d MiB RAM + %d MiB swap (max %s)", s.CurrentMiB, s.SwapMiB, s.Max))
 		}
 		if s.OOMKills != w.scopeOOM {
 			w.emitNow("scopeoom", "OOM KILL in the desktop scope: oom_kill %d -> %d", w.scopeOOM, s.OOMKills)
@@ -213,7 +264,7 @@ func (w *watcher) poll(ctx context.Context) {
 	w.kills(ctx, since, sessions, t)
 	w.pending(ctx, sessions)
 	w.sessionChanges(sessions)
-	w.staleLeases(sessions)
+	w.staleLeases(ctx, sessions)
 
 	if w.now.Sub(w.lastBudget) >= th.BudgetEvery.Duration {
 		w.lastBudget = w.now
@@ -223,9 +274,13 @@ func (w *watcher) poll(ctx context.Context) {
 		case err != nil:
 			w.emit("budget-error", "GitHub budget unknown: %v", err)
 		case b.Remaining < w.cfg.GitHub.Floor:
-			w.emit("budget", "GITHUB BUDGET %d of %d, under the floor %d: hold GitHub work until the reset at %s",
+			l := w.emit("budget", "GITHUB BUDGET %d of %d, under the floor %d: hold GitHub work until the reset at %s",
 				b.Remaining, b.Limit, w.cfg.GitHub.Floor, b.Reset.Local().Format("15:04"))
+			w.notify(ctx, notify.Budget, "", "beekeeper: GitHub budget under the floor", l+"\nbeekeeper budget")
 		}
+	}
+	if w.notifier != nil {
+		w.notifier.Flush(ctx, w.now)
 	}
 }
 
@@ -261,13 +316,44 @@ func (w *watcher) kills(ctx context.Context, since time.Time, sessions []*claude
 	for _, line := range groupKills(fresh) {
 		w.emitNow("kern", "KERNEL OOM: %s", line)
 	}
+	w.notifyKills(ctx, fresh)
 	if lines, err := machine.OomdKills(ctx, since.Add(-2*time.Second)); err == nil {
 		for _, l := range lines {
 			if !w.seenKills[l] {
 				w.seenKills[l] = true
 				w.emitNow("oomd", "SYSTEMD-OOMD: %s", truncate(l, 200))
+				w.notify(ctx, notify.OOMKill, l, "beekeeper: systemd-oomd killed a unit", truncate(l, 200)+"\nbeekeeper snapshot")
 			}
 		}
+	}
+}
+
+// notifyKills sends the kernel OOM kills no other watch has claimed, as one
+// notification; a build slot's cap killing its own command is left out,
+// its session sees the exit.
+func (w *watcher) notifyKills(ctx context.Context, kills []oomKill) {
+	if w.notifier == nil {
+		return
+	}
+	var keys []string
+	byKey := map[string]oomKill{}
+	for _, k := range kills {
+		if strings.Contains(k.Memcg, "memcap") {
+			continue
+		}
+		key := fmt.Sprintf("%d@%d", k.PID, k.At.Unix())
+		keys = append(keys, key)
+		byKey[key] = k
+	}
+	if len(keys) == 0 {
+		return
+	}
+	var claimed []oomKill
+	for _, key := range w.notifier.Claim(ctx, w.now, notify.OOMKill, keys...) {
+		claimed = append(claimed, byKey[key])
+	}
+	if len(claimed) > 0 {
+		w.notifier.Send(ctx, w.now, notify.OOMKill, "beekeeper: kernel OOM kill", strings.Join(groupKills(claimed), "\n")+"\nbeekeeper snapshot")
 	}
 }
 
@@ -326,6 +412,10 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		return
 	}
 	w.records = st.Records
+	supervised := w.supervisorGone(ctx, st, sessions)
+	if w.standby && supervised {
+		return // the supervisor's watch reports them
+	}
 	q := w.quietness(ctx, st, sessions)
 	fire := func(st *state.State) ([]string, []state.Event, bool) {
 		lines, evs := firePending(st, sessions, w.now)
@@ -338,10 +428,12 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		return
 	}
 	var lines []string
+	var due []dueItem
 	err = w.store.Update(func(st *state.State) ([]state.Event, error) {
 		var evs []state.Event
 		lines, evs, _ = fire(st)
 		w.records = st.Records
+		due = firedNow(st, w.now)
 		return evs, nil
 	})
 	if err != nil {
@@ -351,6 +443,61 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	for _, l := range lines {
 		w.emitNow("pending", "%s", l)
 	}
+	for _, d := range due {
+		w.notify(ctx, notify.Due, d.key, d.summary, d.body)
+	}
+}
+
+// dueItem is a note or timer this poll reported due.
+type dueItem struct{ key, summary, body string }
+
+// firedNow are the notes and timers fired at now.
+func firedNow(st *state.State, now time.Time) []dueItem {
+	var out []dueItem
+	for _, n := range st.Notes {
+		if n.Fired.Equal(now.UTC()) {
+			body := truncate(n.Text, 200)
+			if n.For != "" {
+				body = "for " + n.For + ": " + body
+			}
+			if n.Default != "" {
+				body += "\nif unanswered: " + truncate(n.Default, 120)
+			}
+			out = append(out, dueItem{fmt.Sprintf("note#%d", n.ID), fmt.Sprintf("beekeeper: note #%d due", n.ID), body + "\nbeekeeper note list"})
+		}
+	}
+	for _, t := range st.Timers {
+		if t.Fired.Equal(now.UTC()) {
+			out = append(out, dueItem{fmt.Sprintf("timer#%d", t.ID), fmt.Sprintf("beekeeper: timer #%d due: %s", t.ID, truncate(t.What, 60)),
+				truncate(t.What, 200) + fmt.Sprintf("\nbeekeeper timer done %d", t.ID)})
+		}
+	}
+	return out
+}
+
+// supervisorGone says once, and notifies, when the recorded supervisor's
+// session has not run for two polls in a row with no relay open; it
+// reports whether a supervisor runs.
+func (w *watcher) supervisorGone(ctx context.Context, st *state.State, sessions []*claude.Session) bool {
+	s := st.Supervisor
+	if s == nil {
+		w.supervisorMissed = 0
+		return false
+	}
+	if _, live := claude.Live(sessions, s.Party); live || st.Relay.Open(w.now) {
+		w.supervisorMissed = 0
+		return live
+	}
+	w.supervisorMissed++
+	key := s.Name + "@" + s.Since.UTC().Format(time.RFC3339)
+	if w.supervisorMissed < 2 || w.reported["supervisor "+key] {
+		return false
+	}
+	w.reported["supervisor "+key] = true
+	l := fmt.Sprintf("SUPERVISOR GONE: %q, supervising since %s, ended with no successor (beekeeper handover --prompt starts one)", s.Name, clock(w.now, s.Since))
+	w.emitNow("supervisor", "%s", l)
+	w.notify(ctx, notify.NoSupervisor, key, "beekeeper: no supervisor", l)
+	return false
 }
 
 // quietness reads whether the machine is at a quiet moment, once the
@@ -436,7 +583,7 @@ func sessionKey(s *claude.Session) string {
 	return fmt.Sprint(s.PID)
 }
 
-func (w *watcher) staleLeases(sessions []*claude.Session) {
+func (w *watcher) staleLeases(ctx context.Context, sessions []*claude.Session) {
 	holders, err := lease.Dir(w.cfg.LeaseDir).List()
 	if err != nil {
 		return
@@ -444,9 +591,11 @@ func (w *watcher) staleLeases(sessions []*claude.Session) {
 	for _, h := range holders {
 		v := w.leaseView(sessions, h)
 		key := h.Env + "@" + h.Since
-		if v.State == holderGone && !w.reportedLeases[key] {
-			w.reportedLeases[key] = true
-			w.emitNow("lease", "STALE LEASE: %s is held by %q, whose session no longer runs (%s)", h.Env, v.Name, truncate(h.Purpose, 60))
+		if v.State == holderGone && !w.reported["lease "+key] {
+			w.reported["lease "+key] = true
+			l := fmt.Sprintf("STALE LEASE: %s is held by %q, whose session no longer runs (%s)", h.Env, v.Name, truncate(h.Purpose, 60))
+			w.emitNow("lease", "%s", l)
+			w.notify(ctx, notify.StaleLease, key, "beekeeper: stale lease "+h.Env, l+"\nbeekeeper lease status "+h.Env)
 		}
 	}
 }

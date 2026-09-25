@@ -1,0 +1,23 @@
+# beekeeper watch --notify --standby as a systemd user unit: the events that
+# need a person reach the desktop when no supervisor runs. While a
+# supervisor's session runs, it leaves the notes, timers and relays to the
+# supervisor's watch and never reads the alerts; each event is one
+# notification, whichever watch --notify sends it.
+#
+# Install (README, "Desktop notifications"): copy it to
+# ~/.config/systemd/user/, point ExecStart at `command -v beekeeper`, then
+# systemctl --user enable --now beekeeper-notify.service
+[Unit]
+Description=beekeeper: desktop notifications for the events that need a person
+Documentation=https://github.com/giantswarm/beekeeper#desktop-notifications
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/bin/beekeeper watch --notify --standby
+Restart=on-failure
+RestartSec=30s
+MemoryMax=256M
+
+[Install]
+WantedBy=graphical-session.target

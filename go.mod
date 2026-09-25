@@ -6,6 +6,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/creativeprojects/go-selfupdate v1.6.0
 	github.com/giantswarm/selfupdate-cosign v0.3.1
+	github.com/godbus/dbus/v5 v5.2.2
 	github.com/gofrs/flock v0.13.1
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/sys v0.48.0

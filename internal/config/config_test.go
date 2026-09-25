@@ -17,6 +17,9 @@ func TestLoadDefaults(t *testing.T) {
 		c.Watch.Interval.Duration != 30*time.Second || c.Watch.LoadMax != 45 {
 		t.Errorf("defaults = %+v", c)
 	}
+	if len(c.Notify.Kinds) != 6 || c.Notify.Policy().Quiet != nil {
+		t.Errorf("notify defaults = %+v", c.Notify)
+	}
 	if !c.IsLeasable(Browser) || c.IsLeasable("kind-1") {
 		t.Error("only the browser is leasable without resources")
 	}
@@ -32,6 +35,10 @@ alerts:
   installations: [alpha, {name: beta, context: admin@beta, floor: warning}]
   team: bumblebee
   flap: {changes: 3}
+notify:
+  kinds: [due, oom-kill]
+  quietHours: "22:00-07:00"
+  urgency: {due: critical}
 `
 	if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
@@ -43,6 +50,9 @@ alerts:
 	if !c.IsLeasable("staging") || c.GrantTTL.Duration != 10*time.Minute || c.GitHub.Floor != 3000 ||
 		c.Watch.Interval.Duration != time.Minute {
 		t.Errorf("config = %+v", c)
+	}
+	if n := c.Notify; len(n.Kinds) != 2 || n.Repeat.Duration != 30*time.Minute || n.Policy().Quiet == nil || n.Urgency["due"] != "critical" {
+		t.Errorf("notify = %+v", n)
 	}
 	al := c.Alerts
 	if len(al.Installations) != 2 || al.Installations[0] != (Installation{Name: "alpha"}) ||
@@ -64,6 +74,10 @@ func TestLoadRejects(t *testing.T) {
 		"flapping at once":    "alerts: {flap: {changes: 1}}",
 		"bad duration":        "grantTTL: soon",
 		"skill and file":      "supervisor: {skill: supervise, instructions: /x.md}",
+		"unknown notify kind": "notify: {kinds: [due, alerts]}",
+		"unknown urgency":     "notify: {urgency: {due: urgent}}",
+		"urgency of no kind":  "notify: {urgency: {sessions: low}}",
+		"bad quiet hours":     "notify: {quietHours: 22-7}",
 	} {
 		p := filepath.Join(t.TempDir(), "c.yaml")
 		if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {

@@ -78,6 +78,17 @@ and lease events of the lab machine's log; both are reduced to what beekeeper re
 recorded answers have person, organization and workload-cluster names and node addresses
 replaced: this repository is public.
 
+Desktop notifications are tried against the real notification service on a scratch configuration
+whose `stateDir` holds a copy of the live state and whose `notify.kinds` names only the kinds under
+trial, so a trial sends few notifications and never takes the live watch's events or alert baseline:
+a scratch timer due in 30 seconds (`timer add 30s "TEST …"`) under `watch --notify` is one
+notification, and `notify.json`'s `log` shows the id the service returned. `quietHours` covering now
+holds a normal one and passes a critical one (`urgency: {stale-lease: critical}` with a scratch
+lease whose holder is a finished process); `DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent` shows
+the watch running on and saying so once; two scratch watches with `--notify` on the same state send
+one notification per event. The unit test's fake `notify.Sender` covers the same rules without a
+bus. Label every trial notification as a test in its text.
+
 `free` takes its temp dir from `TMPDIR` (Claude Code's session dirs are `$TMPDIR/claude-<uid>`), so
 `--apply` can be tried on a fixture instead of the real `/tmp`:
 `TMPDIR=/tmp/fixture ./beekeeper free --apply --only session-dirs,tmp-dirs`.
@@ -92,6 +103,7 @@ replaced: this repository is public.
 | `internal/github` | The budget from rate-limit headers; a pull request's state from `gh pr view`. |
 | `internal/lease` | Lease directories and the grant rule. |
 | `internal/state` | The shared state document (supervisor and its relay, the shift the watch reported, grants, holds, agents, notes, timers, session records, merges) and the event log, under a file lock; `Log` appends the events that change no state (build runs) with a bounded wait for the lock. |
+| `internal/notify` | Desktop notifications: the kinds, urgencies and quiet hours, the ledger `notify.json` under `notify.lock` that makes each event one notification across watches and holds the quiet hours' ones, and the D-Bus sender to `org.freedesktop.Notifications` (godbus, never `notify-send`, never an autolaunched bus). |
 | `internal/alerts` | The installations' alerts: bounded `kubectl port-forward`s in their own process group, the Alertmanager reading, the NEW/RESOLVED/FLAPPING lines with the severity floors and the flap damper, and the grouped snapshot (pure, tested against Alertmanager-shaped fixtures, recorded answers in `testdata/` and a fake `kubectl`), the baseline with the damper's records and its single owner, and recorded answers for `alerts replay`. |
 | `internal/guard` | The build guard: a capped run in a build slot with its `run.start`/`run.end` events, and the PreToolUse hook's rewrite and third-lab refusal. |
 | `internal/free` | What can be freed (dead sessions' dirs, throwaway temp dirs, orphaned workers) and what is only reported, as a report or the front end's TSV. |

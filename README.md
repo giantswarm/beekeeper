@@ -35,11 +35,12 @@ the budget work on any system.
 
 | Command | For |
 |---|---|
+| `beekeeper status [--bar]` | One line: who supervises, the leases held, the holds in force and the notes and timers that are due. `--bar` prints it as the fixed tab-separated row a desktop bar reads (see [Desktop notifications](#desktop-notifications)). |
 | `beekeeper sessions` | Every running session: the issues and pull requests its latest turns are about, when it was last active, the commands it runs right now (a `devctl` wait, a bounded `sleep` with the time left), its memory, role and leases. Overlaps name what more than one session is on. `--all` adds the paused ones: a message to them does not arrive. |
 | `beekeeper tail <session>` | A session's last turns without tool calls: what it said and what it was told. |
 | `beekeeper snapshot` | One tick: load, RAM, swap, memory pressure, the desktop scope, tmpfs and disk, build slots, kind clusters, the commands sessions sit on, every kernel OOM kill since your last snapshot with whose limit it hit, leases, holds, the GitHub budget, the installations' alerts. It ends with what changed since your last snapshot; `--changes` prints only that. |
-| `beekeeper watch` | Silent until something needs a look, then one line: the source of a `Monitor`. Thresholds repeat at most every 10 minutes; OOM kills, sessions that start, end or restart, stale leases and every NEW or RESOLVED alert of the installations are always reported. A note or timer that falls due, the end of a session with a record and a relay taken or expired are one line each, once: the state keeps that they were reported, so a second or restarted watch stays silent about them. After `supervisor.shift`, `RELAY DUE` is said at the first quiet moment (no gated merge running or settling, no grant waiting, no claim queued), and again only when a quiet moment follows a busy one. |
-| `beekeeper alerts watch\|snapshot\|import\|capture\|replay` | The installations' alerts, read from each Alertmanager through a bounded `kubectl port-forward` (Mimir's with the `giantswarm` tenant, else the plain one), in parallel: `watch` prints one line per NEW or RESOLVED alert since the baseline (pages and your team in capitals, a burst of one alertname as one line, one line when an installation stops or starts answering, the lease holder and the sessions working against it in brackets, and on a NEW line the merges into the installation's lanes and the lease claims on it of the last 30 minutes with their sessions: who likely caused it); `snapshot` the current set, grouped; `import` takes over another watcher's per-installation baseline. An alert below its installation's severity floor never appears in either, and an alert that keeps firing and resolving is one FLAPPING line, then quiet until it has been stable for the damper's window; neither a floor nor a damper change prints a burst of lines. `capture <dir>` records each installation's answer, `replay <dir>...` prints what the watch would for recorded answers, from the current baseline without writing it: a floor or damper setting tried before the watch gets it. One process owns the baseline at a time, so two watches never split the lines. Every port-forward ends with the reading, on SIGINT or SIGTERM, and when beekeeper is killed. |
+| `beekeeper watch` | Silent until something needs a look, then one line: the source of a `Monitor`. Thresholds repeat at most every 10 minutes; OOM kills, sessions that start, end or restart, stale leases and every NEW or RESOLVED alert of the installations are always reported. A note or timer that falls due, the end of a session with a record and a relay taken or expired are one line each, once: the state keeps that they were reported, so a second or restarted watch stays silent about them. After `supervisor.shift`, `RELAY DUE` is said at the first quiet moment (no gated merge running or settling, no grant waiting, no claim queued), and again only when a quiet moment follows a busy one. A recorded supervisor whose session has ended with no relay open is `SUPERVISOR GONE`, once. `--notify` also sends the events that need a person to the desktop, `--standby` leaves a running supervisor's events to its watch (see [Desktop notifications](#desktop-notifications)). |
+| `beekeeper alerts watch\|snapshot\|import\|capture\|replay` | The installations' alerts, read from each Alertmanager through a bounded `kubectl port-forward` (Mimir's with the `giantswarm` tenant, else the plain one), in parallel: `watch` prints one line per NEW or RESOLVED alert since the baseline (pages and your team in capitals, a burst of one alertname as one line, one line when an installation stops or starts answering, the lease holder and the sessions working against it in brackets, and on a NEW line the merges into the installation's lanes and the lease claims on it of the last 30 minutes with their sessions, worded as timing (`during merging …`, `during merged … at …`), not as cause); `snapshot` the current set, grouped; `import` takes over another watcher's per-installation baseline. An alert below its installation's severity floor never appears in either, and an alert that keeps firing and resolving is one FLAPPING line, then quiet until it has been stable for the damper's window; neither a floor nor a damper change prints a burst of lines. `capture <dir>` records each installation's answer, `replay <dir>...` prints what the watch would for recorded answers, from the current baseline without writing it: a floor or damper setting tried before the watch gets it. One process owns the baseline at a time, so two watches never split the lines. Every port-forward ends with the reading, on SIGINT or SIGTERM, and when beekeeper is killed. |
 | `beekeeper budget` | The GitHub core budget from the headers of a real, conditional request (a 304 costs nothing), and every `gh` and `devctl` process with its session. `--gate` exits 3 under the floor. |
 | `beekeeper lease claim\|release\|status\|grant\|revoke` | One holder per resource: the environments in the configuration and the browser. While a supervisor runs, a session claims only what the supervisor granted it, in grant order. |
 | `beekeeper hold set\|lift\|check` | Stop merges into a repository (a broken main), one lane (`--lane serving`: a proving window such as a model load stops the lane whose components it exercises, not the others), every merge (`merges`) or every GitHub call (`github`) until lifted or a time passes. A merge hold lets one repository or pull request through with `--except owner/repo[#n]`: `hold set --lane serving --except giantswarm/model-manager#172` stops the lane but for the merge it waits for. The merge gate enforces them. |
@@ -110,6 +111,58 @@ The budget floor uses the last reading in the state when it is younger than `mer
 (1m, less than one merge's draw at the floor's margin), else a fresh conditional request, which
 costs nothing when GitHub answers 304; a failed read refuses.
 
+## Desktop notifications
+
+`beekeeper watch --notify` sends the events that need a person to the desktop's notification
+service (`org.freedesktop.Notifications` on the session bus: dunst, mako, GNOME, KDE) and still
+prints every line. Each notification carries a summary, the session or resource involved and the
+command that shows more.
+
+| Kind | Event | Urgency |
+|---|---|---|
+| `due` | a note or a timer falls due | normal |
+| `oom-line` | the machine near its OOM line: low RAM, swap near the systemd-oomd trigger, memory pressure, the desktop scope near its cap | critical |
+| `oom-kill` | a kernel OOM kill outside a build slot (a slot's cap killing its own command is its session's exit code), a systemd-oomd kill | critical |
+| `budget` | the GitHub budget under the floor | normal |
+| `stale-lease` | a lease whose holder's session is gone | normal |
+| `no-supervisor` | a supervisor whose session ended with no successor | normal |
+
+Nothing routine notifies: sessions starting or ending, thresholds of load, tmpfs and disk, alerts,
+relays. Each event is one notification however many watches run `--notify` on the same state: the
+first to claim it in `notify.json` (under `notify.lock`) sends it. A lasting condition (`oom-line`,
+`budget`) notifies again after `notify.repeat`. Quiet hours hold every notification that is not
+critical and send what they held as one notification when they end. With no notification service
+on the bus the watch runs on, prints its lines and says so once. `notify.json` also keeps the
+last 20 deliveries with the id the service returned.
+
+When no supervisor runs, the same watch runs as a systemd user unit,
+[`contrib/systemd/beekeeper-notify.service`](contrib/systemd/beekeeper-notify.service), with
+`--standby`: while a supervisor's session runs it leaves the notes, timers, session records and
+relays to the supervisor's watch and never reads the alerts, so it takes nothing from the
+supervisor's view; what both see (the machine, OOM kills, the budget, stale leases) is sent once.
+A supervisor runs its own watch with `--notify` too. To install the unit:
+
+```bash
+mkdir -p ~/.config/systemd/user
+curl -fsSL https://raw.githubusercontent.com/giantswarm/beekeeper/main/contrib/systemd/beekeeper-notify.service |
+  sed "s|%h/.local/bin/beekeeper|$(command -v beekeeper)|" > ~/.config/systemd/user/beekeeper-notify.service
+systemctl --user daemon-reload
+systemctl --user enable --now beekeeper-notify.service
+journalctl --user -u beekeeper-notify -f   # its lines
+```
+
+`beekeeper status --bar` prints one row for a desktop bar (waybar, polybar, i3blocks), the same
+shape as the rows of `free --summary`, so one bar module reads both. The contract is fixed: five
+tab-separated fields, always present, in this order.
+
+| Field | Value |
+|---|---|
+| 1 | `beekeeper`, the row's key |
+| 2 | the supervising session's name; `-` when none is recorded; `!<name>` when the recorded one's session no longer runs |
+| 3 | the number of leases held |
+| 4 | the number of holds in force |
+| 5 | the number of notes and timers whose time has come |
+
 ## Configuration
 
 `$XDG_CONFIG_HOME/beekeeper/config.yaml` (or `--config`, or `$BEEKEEPER_CONFIG`). Every field is
@@ -164,11 +217,17 @@ supervisor:                 # what handover --prompt tells the successor supervi
   scope: The lab machine's sessions, kind labs and merge lanes.   # default: the resources, lanes and installations configured
   shift: 8h                 # watch says RELAY DUE after this, at a quiet moment; default: never
   relayTTL: 15m             # a relay not taken by the successor's start expires
+notify:                     # what watch --notify sends to the desktop
+  kinds: [due, oom-line, oom-kill, budget, stale-lease, no-supervisor]   # the default: all
+  quietHours: "22:00-07:00" # local time; holds everything but critical; default: none
+  urgency: {oom-kill: critical, due: normal}   # low, normal, critical; oom-line and oom-kill default to critical
+  repeat: 30m               # a lasting condition (oom-line, budget) notifies again after this
 ```
 
 State lives in `$XDG_STATE_HOME/beekeeper/` (`state.json`, which an older beekeeper still running
 writes back with the fields it does not know, `events.jsonl`, each caller's last
-snapshot, the alert baseline `alerts.json` with its owner's `alerts.lock`) and leases in `leases/`, one directory per held resource.
+snapshot, the alert baseline `alerts.json` with its owner's `alerts.lock`, the notification ledger
+`notify.json` with `notify.lock`) and leases in `leases/`, one directory per held resource.
 
 ## Development
 
