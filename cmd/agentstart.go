@@ -34,7 +34,7 @@ const (
 )
 
 func (a *app) agentStartCmd() *cobra.Command {
-	var model, dir string
+	var model, dir, task string
 	c := &cobra.Command{
 		Use:   "start <name> <brief file>",
 		Short: "Start an agent session in bypass from the command line and import it into the desktop",
@@ -44,8 +44,9 @@ as its first prompt, in a transient user unit (beekeeper-agent-<id>, its
 output in journalctl --user -u <unit>) that the caller's session, scope or
 terminal do not take down. Before the session exists, beekeeper records its
 id and mode as one of its starts and registers it on the roster under
-<name>, busy with the brief's first line (or with the open task of a
-stopped session's entry under that name, which it takes over). Once the
+<name>, busy with --task, by default the brief's first line (or with the
+open task of a stopped session's entry under that name, which it takes
+over), so the roster shows it at work from its start. Once the
 transcript is on disk it imports the session into Claude Desktop
 (claude://resume?session=<id>): it shows in the sidebar as local_<id> and
 takes messages there. The import switches the desktop's main window to the
@@ -67,7 +68,10 @@ nothing while its first turn runs (beekeeper agents shows it live).`,
 			if err != nil {
 				return err
 			}
-			sa, err := a.startAgent(cmd.Context(), agentStart{name: name, brief: brief, task: briefTask(brief), dir: dir, model: model})
+			if task = strings.TrimSpace(task); task == "" {
+				task = briefTask(brief)
+			}
+			sa, err := a.startAgent(cmd.Context(), agentStart{name: name, brief: brief, task: task, dir: dir, model: model})
 			if err != nil {
 				return err
 			}
@@ -82,6 +86,7 @@ nothing while its first turn runs (beekeeper agents shows it live).`,
 	}
 	c.Flags().StringVar(&model, "model", "", "the session's model (default: Claude Code's)")
 	c.Flags().StringVar(&dir, "dir", ".", "the session's working directory")
+	c.Flags().StringVar(&task, "task", "", "the task the roster shows it busy with (default: the brief's first line)")
 	return c
 }
 

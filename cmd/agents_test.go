@@ -28,7 +28,7 @@ func TestRegisterAgentKeepsNamesUnique(t *testing.T) {
 	st := &state.State{Agents: []state.Agent{stale, running, other, dup}}
 	b := state.Party{Session: "b", Name: "Test: Worker"}
 	reg, err := registerAgent(st, b, live, now)
-	if err != nil || len(reg.replaced) != 2 || reg.replaced[0].Session != "a" || reg.task != staleTask || !reg.assignedAt.Equal(assigned) {
+	if err != nil || len(reg.replaced) != 2 || reg.replaced[0].Session != "a" || reg.task != staleTask || reg.own || !reg.assignedAt.Equal(assigned) {
 		t.Fatalf("registration = %+v, err = %v", reg, err)
 	}
 	if len(st.Agents) != 3 || st.Agents[2].Session != "b" || st.Agents[2].Task != staleTask || !st.Agents[2].AssignedAt.Equal(assigned) {
@@ -39,9 +39,9 @@ func TestRegisterAgentKeepsNamesUnique(t *testing.T) {
 	}
 
 	// Registering again, under another name, replaces its own entry and
-	// keeps its open task.
+	// keeps its open task as its own: a started session registers busy.
 	reg, err = registerAgent(st, state.Party{Session: "b", Name: "test: renamed"}, live, now)
-	if err != nil || len(reg.replaced) != 0 || reg.task != staleTask || len(st.Agents) != 3 || st.Agents[2].Name != "test: renamed" || st.Agents[2].Task != staleTask {
+	if err != nil || len(reg.replaced) != 0 || reg.task != staleTask || !reg.own || len(st.Agents) != 3 || st.Agents[2].Name != "test: renamed" || st.Agents[2].Task != staleTask {
 		t.Fatalf("re-register: registration = %+v, err = %v, roster = %+v", reg, err, st.Agents)
 	}
 

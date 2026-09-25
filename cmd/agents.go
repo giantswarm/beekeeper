@@ -71,7 +71,10 @@ one "no change" line; --full prints everything.`,
 				for _, r := range reg.replaced {
 					detail += fmt.Sprintf(", replaces %s", r.Session)
 				}
-				if reg.task != "" {
+				switch {
+				case reg.own:
+					detail += fmt.Sprintf(", busy with %q", reg.task)
+				case reg.task != "":
 					detail += fmt.Sprintf(", takes over %q", reg.task)
 				}
 				return []state.Event{event(me, "agents.register", "%s", detail)}, nil
@@ -81,6 +84,11 @@ one "no change" line; --full prints everything.`,
 			}
 			for _, r := range reg.replaced {
 				_, _ = fmt.Fprintf(a.out, "register: replaces the entry of session %s, which no longer runs\n", r.Session)
+			}
+			if reg.own {
+				_, err = fmt.Fprintf(a.out, "register: %s busy with %q since %s: work it, then `beekeeper agents idle`\n",
+					me.Name, reg.task, clock(a.now, reg.assignedAt))
+				return err
 			}
 			if reg.task != "" {
 				_, err = fmt.Fprintf(a.out, "register: %s takes over the unfinished task %q, assigned %s: work it, then `beekeeper agents idle`\n",
@@ -181,12 +189,14 @@ one "no change" line; --full prints everything.`,
 }
 
 // registration is what registerAgent did: the entries of other sessions it
-// replaced and the open task the new entry took over from an entry it
-// dropped, empty when none had one.
+// replaced and the open task the new entry holds, empty when none had one;
+// own when the task is the session's own (a start registers its session
+// busy, and the session's own register keeps it).
 type registration struct {
 	replaced   []state.Agent
 	task       string
 	assignedAt time.Time
+	own        bool
 }
 
 // registerAgent puts me on the roster and says what it replaced. A name is
@@ -216,7 +226,7 @@ func registerAgent(st *state.State, me state.Party, live func(state.Party) bool,
 			return registration{}, refused("the entries of sessions %s and %s both hold an open task (%q, %q): finish one, or take it off with `beekeeper agents remove`",
 				holder, x.Session, reg.task, x.Task)
 		}
-		reg.task, reg.assignedAt, holder = x.Task, x.AssignedAt, x.Session
+		reg.task, reg.assignedAt, reg.own, holder = x.Task, x.AssignedAt, own, x.Session
 	}
 	st.Agents = slices.DeleteFunc(st.Agents, func(x state.Agent) bool { return x.Is(me) || strings.EqualFold(x.Name, me.Name) })
 	st.Agents = append(st.Agents, state.Agent{Party: me, Registered: now, IdleSince: now, Task: reg.task, AssignedAt: reg.assignedAt})
