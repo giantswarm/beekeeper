@@ -139,3 +139,47 @@ func parseTurn(line []byte) (Turn, bool) {
 	}
 	return Turn{At: e.Timestamp, Role: e.Type, Text: joined}, true
 }
+
+// modelWindow is how much of a transcript's end Model reads: the window
+// Claude Desktop scans when it imports a session.
+const modelWindow = 256 << 10
+
+// Model returns the model of the transcript's last assistant message, which
+// Claude Desktop takes as an imported session's model for every later turn;
+// empty while the transcript holds none. A partial last line (the CLI still
+// writing it) is skipped.
+func Model(path string) (string, error) {
+	f, err := os.Open(filepath.Clean(path))
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	if err != nil {
+		return "", err
+	}
+	off := max(fi.Size()-modelWindow, 0)
+	if _, err := f.Seek(off, io.SeekStart); err != nil {
+		return "", err
+	}
+	raw, err := io.ReadAll(f)
+	if err != nil {
+		return "", err
+	}
+	if off > 0 {
+		_, raw, _ = bytes.Cut(raw, []byte{'\n'})
+	}
+	var model string
+	for line := range bytes.SplitSeq(raw, []byte{'\n'}) {
+		var e struct {
+			Type    string `json:"type"`
+			Message struct {
+				Model string `json:"model"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(line, &e) == nil && e.Type == roleAssistant && e.Message.Model != "" && e.Message.Model != "<synthetic>" {
+			model = e.Message.Model
+		}
+	}
+	return model, nil
+}
