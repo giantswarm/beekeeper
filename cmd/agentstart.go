@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -35,6 +36,8 @@ const (
 	// focusWait bounds the wait for the import to show its session, after
 	// which the desktop is switched back to the session it showed.
 	focusWait = 15 * time.Second
+	// twinWait bounds the wait for the CLI the desktop warms for an import.
+	twinWait = 15 * time.Second
 )
 
 func (a *app) agentStartCmd() *cobra.Command {
@@ -60,8 +63,10 @@ new session; beekeeper switches it back to the session it showed before
 Its first turn runs the brief from the command line in bypass. The desktop
 runs every later turn in acceptEdits (its import always drops bypass), so
 requests no allow rule covers would stop at a card: beekeeper hook
-permissionrequest answers them, for beekeeper's starts only. Send it
-nothing while its first turn runs (beekeeper agents shows it live).`,
+permissionrequest answers them, for beekeeper's starts only. While the first
+turn runs, beekeeper stops the CLI the desktop warms for the import, so the
+first turn is the session's only CLI and a message by name reaches it; the
+desktop starts a new CLI when the person opens the session.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := strings.TrimSpace(args[0])
@@ -87,6 +92,9 @@ nothing while its first turn runs (beekeeper agents shows it live).`,
 			}
 			if err == nil {
 				_, err = fmt.Fprintln(a.out, modelLine(sa.model))
+			}
+			if err == nil {
+				_, err = fmt.Fprintln(a.out, twinLine(sa.twin))
 			}
 			return err
 		},
@@ -116,6 +124,9 @@ type startedAgent struct {
 	// model is the model the desktop recorded for the session's later
 	// turns; empty: none, they run on the desktop's default.
 	model string
+	// twin is the desktop's CLI of the session the start stopped while the
+	// first turn runs; 0: none.
+	twin int
 }
 
 // startAgent records and registers the session, starts its first turn in a
@@ -180,7 +191,66 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if err != nil {
 		return startedAgent{}, err
 	}
-	return startedAgent{id: id, unit: unit, dir: dir, task: reg.task, kept: kept, model: a.desktopModel(ctx, "local_"+id)}, nil
+	sa := startedAgent{id: id, unit: unit, dir: dir, task: reg.task, kept: kept, model: a.desktopModel(ctx, "local_"+id)}
+	sa.twin, err = endDesktopTwin(ctx, id, func() bool { return unitEnded(ctx, unit) })
+	return sa, err
+}
+
+// endDesktopTwin stops the CLI the desktop warms for an imported session
+// while its first turn still runs: two CLIs on one session id are two peers
+// under its name, and a message by name could reach the desktop's copy,
+// which would run a turn of its own beside the first turn. It waits up to
+// twinWait for the desktop's CLI and returns its PID, 0 when none came or
+// the first turn ended (ended) first, which leaves the desktop's CLI the
+// session's only one. The desktop starts a new CLI when the person opens
+// the session.
+func endDesktopTwin(ctx context.Context, id string, ended func() bool) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, twinWait)
+	defer cancel()
+	tick := time.NewTicker(250 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if ended() {
+			return 0, nil
+		}
+		t, err := proc.Read()
+		if err != nil {
+			return 0, err
+		}
+		if p := desktopTwin(t, id); p != nil {
+			if err := syscall.Kill(p.PID, syscall.SIGTERM); err != nil {
+				return 0, fmt.Errorf("stopping the desktop's CLI %d of session %s: %w", p.PID, id, err)
+			}
+			return p.PID, nil
+		}
+		select {
+		case <-ctx.Done():
+			return 0, nil
+		case <-tick.C:
+		}
+	}
+}
+
+// desktopTwin is the CLI that resumes session id (the desktop's: the first
+// turn runs under --session-id), nil when none runs.
+func desktopTwin(t *proc.Table, id string) *proc.Process {
+	for _, p := range t.ByPID {
+		if p.Comm == "claude" && resumes(p.Args, id) {
+			return p
+		}
+	}
+	return nil
+}
+
+// resumes reports whether args resume session id: --resume=<id> or
+// --resume <id>.
+func resumes(args []string, id string) bool {
+	for i, a := range args {
+		if a == "--resume="+id || a == "--resume" && i+1 < len(args) && args[i+1] == id {
+			return true
+		}
+	}
+	return false
 }
 
 // desktopModel is the model of host's desktop record, waiting up to
@@ -200,6 +270,14 @@ func (a *app) desktopModel(ctx context.Context, host string) string {
 		case <-tick.C:
 		}
 	}
+}
+
+// twinLine says whether the first turn is the session's only CLI.
+func twinLine(twin int) string {
+	if twin == 0 {
+		return "the desktop warmed no CLI of its own while the first turn ran: messages by name reach the session's one CLI"
+	}
+	return fmt.Sprintf("stopped the desktop's CLI %d of the session: the first turn is its only CLI and the only peer under its name, until someone opens it in the desktop", twin)
 }
 
 // modelLine says which model the session's desktop turns run on.
