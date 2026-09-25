@@ -47,7 +47,8 @@ the budget work on any system.
 | `beekeeper lease claim\|release\|status\|grant\|revoke` | One holder per resource: the environments in the configuration and the browser. While a supervisor runs, a session claims only what the supervisor granted it, in grant order. While a cluster upgrade runs on the installation of the resource's name, nobody claims it. |
 | `beekeeper hold set\|lift\|check` | Stop merges into a repository (a broken main), one lane (`--lane serving`: a proving window such as a model load stops the lane whose components it exercises, not the others), every merge (`merges`) or every GitHub call (`github`) until lifted or a time passes. A merge hold lets one repository or pull request through with `--except owner/repo[#n]`: `hold set --lane serving --except giantswarm/model-manager#172` stops the lane but for the merge it waits for. The merge gate enforces them. |
 | `beekeeper lanes [queue\|settle\|drop\|clear]` | Each merge lane: the running merge, the one settling until its release rolled, and the waiting ones in turn order, so who is next is never prose. `queue <owner/repo> <n> --for <session>` gives a session's merge its place now so an agreed order carries over (kept until that merge runs, through refusals, for `merge.seedTTL`, 12h; seeds keep their order, an arrived unseeded merge passes one whose merge has not arrived); a run with nothing merged stays in its place as `retrying` for its session's retry; `settle <owner/repo> <n> [--for <session>]` registers a merge run outside the gate (in flight when the gate went live, run without the hook): it heads its lane until it merges, then settles the lane like a gated merge; `drop` takes a waiting merge out; `clear` frees a lane whose settling release will not roll, after a look at the installation. A lane where no merge runs and whose first arrived merge has waited longer than `merge.stallAfter` (5m) behind places whose merges are not in the gate (seeds that have not arrived, merges that left it) is `stalled`, with the waiting merge and those places named. |
-| `beekeeper supervisor start\|stop` | Make a session the supervisor. The grant rule applies from its start until a deliberate `supervisor stop` (which ends supervision and starts no successor) or a successor's `supervisor start`: a supervisor whose CLI crashed keeps it in force, its grants and queue stay recorded, and every claim waits for the successor. A CLI back under the same session id or desktop record within `supervisor.restartGrace` (1m) of beekeeper first seeing it gone (a claim or a watch's poll) is a restart and keeps the role and an open relay without a new start; `supervisor status` and `status` show it restarting, then gone. Another session's start is refused while it runs or restarts, unless the supervisor relayed the role to it; past the grace a successor's start takes the role. |
+| `beekeeper supervisor start\|stop` | Make a session the supervisor. The grant rule applies from its start until a deliberate `supervisor stop` (which ends supervision and starts no successor) or a successor's `supervisor start`: a supervisor whose CLI crashed keeps it in force, its grants and queue stay recorded, and every claim waits for the successor. A CLI back under the same session id or desktop record within `supervisor.restartGrace` (30s) of beekeeper first seeing it gone (a claim or a watch's poll) is a restart and keeps the role and an open relay without a new start; `supervisor status` and `status` show it restarting, then gone. Another session's start is refused while it runs or restarts, unless the supervisor relayed the role to it; past the grace a successor's start takes the role. |
+| `beekeeper supervisor spare <session>\|--clear` | Record the relay spare: the standby watch keeps it awake and hands it the role after a crash (see [The spare](#the-spare-and-a-supervisor-started-again-without-a-click)). `supervisor reopen` opens the recorded supervisor's desktop session, starting the app if needed (the login unit). |
 | `beekeeper supervisor relay <successor>\|--cancel` | Hand the role over without a gap: the supervisor names its successor, the successor's `supervisor start` takes the role, the grant queue and the pending grants in one step, and the event log shows both. Until then the outgoing supervisor keeps the role and the grant rule; a relay not taken expires after `supervisor.relayTTL` (15m) or is withdrawn with `--cancel`. `supervisor status` in the relieved session exits 4, also after the successor relays onward, cancels a relay or is relieved in turn, until that session supervises again (or for 7 days). |
 | `beekeeper guide start\|stop\|status\|relay <successor>` | The guide: the session that walks the person through the decisions waiting on them, next to the supervisor and never in its session (`guide start` in the supervisor's session and `supervisor start` in the guide's are refused, and neither relays to the other's holder). It has no grant power. Its role moves like the supervisor's (relay, successor's start, relief with exit 4, restart grace) without touching the supervisor's record; `guide handover --prompt` is the successor's prompt (`guide.skill`, default `guide`, or `guide.instructions`, then its queue and an open relay). |
 | `beekeeper guide queue` | The guide's queue: every open note filed `--for` a person with its owning session (the one that filed it, and whether it still runs), deadline and default, then every session the desktop files as waiting on its person (its session record's latest turn summary is `blocked` with an action; no transcript is read). Delta output like `sessions`. |
@@ -248,6 +249,49 @@ supervisor and that claims are gated, and sends a critical `no-supervisor` notif
 after `notify.repeat` while the gap lasts. A supervisor back, the same one or a successor, is
 `SUPERVISOR BACK`, once. `beekeeper handover --prompt` is what a successor starts from.
 
+### The spare, and a supervisor started again without a click
+
+The supervisor records its relay spare with `beekeeper supervisor spare <session>`; `supervisor
+status` and `handover` show it, and the spare's own `supervisor start` clears it. The desktop app
+arms a 30-minute idle timeout for the CLI of a session off screen (app 2.7032.0 was not seen to
+fire it: an untouched session still answered after 35 minutes), and only a message from inside
+the desktop starts a stopped session; a message from the command line reaches a session
+only while its CLI runs. So the standby watch (`watch --standby`, the `beekeeper-notify` unit)
+sends the spare a keep-awake from the command line whenever it sat idle for
+`supervisor.keepAwake` (25m): `beekeeper keep-awake: reply "ok", nothing else`, one small turn
+of the spare's and one headless sender turn on haiku. It is silent unless it fails
+(`KEEP-AWAKE FAILED`, also when the spare ran no turn on it within 3 minutes); a spare with no
+running CLI is one `SPARE ASLEEP` line.
+
+- **Relay:** unchanged. The supervisor runs `supervisor relay <spare>` and sends the output of
+  `handover --prompt` to the spare's `local_` id with the desktop's SendMessage, which starts
+  even a stopped spare.
+- **Crash or CLI exit:** once the supervisor's CLI has been gone past `supervisor.restartGrace`
+  (30s, a debounce for a supervisor someone woke: the app never restarts a crashed CLI), the
+  standby watch sends the running spare `beekeeper: the supervisor "…" is gone and you are its
+  spare. Run beekeeper handover --prompt and follow it.` from the command line, one `HANDOVER`
+  line; the `SUPERVISOR GONE` line and its critical notification name the spare. Claims stay
+  gated until the spare's `supervisor start`.
+- **Reboot or app restart:** the login unit
+  [`contrib/systemd/beekeeper-supervisor-open.service`](contrib/systemd/beekeeper-supervisor-open.service)
+  runs `beekeeper supervisor reopen`, which starts the app on the recorded supervisor's session
+  (`claude://code/continue?session=local_…`); the standby watch opens it the same way once when
+  it sees the app started after the supervisor went gone with no spare to take over. Every CLI is
+  cold after an app start, so the focus starts the supervisor's; the standby watch sees its CLI
+  back under a new PID and sends it the same hand-over from the command line (`RESUME`), since a
+  restarted CLI has lost its watch.
+
+The command-line send is one headless `claude -p` turn whose only tool is SendMessage, addressed
+by the name ListAgents shows (the session's title): Claude Code has no send command, and its
+peer messaging is not a documented interface, so it is isolated in `internal/peer`.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/giantswarm/beekeeper/main/contrib/systemd/beekeeper-supervisor-open.service |
+  sed "s|%h/.local/bin/beekeeper|$(command -v beekeeper)|" > ~/.config/systemd/user/beekeeper-supervisor-open.service
+systemctl --user daemon-reload
+systemctl --user enable beekeeper-supervisor-open.service   # runs at the next login
+```
+
 `beekeeper status --bar` prints one row for a desktop bar (waybar, polybar, i3blocks), the same
 shape as the rows of `free --summary`, so one bar module reads both. The contract is fixed: five
 tab-separated fields, always present, in this order.
@@ -340,7 +384,8 @@ supervisor:                 # what handover --prompt tells the successor supervi
   scope: The lab machine's sessions, kind labs and merge lanes.   # default: the resources, lanes and installations configured
   relayAt: 400k             # watch says RELAY DUE once the supervisor's context reaches this, at a quiet moment
   relayTTL: 15m             # a relay not taken by the successor's start expires
-  restartGrace: 1m          # a CLI back within this of first seen gone is a restart; past it, SUPERVISOR GONE (claims stay gated)
+  restartGrace: 30s         # a CLI back within this of first seen gone is a restart; past it, SUPERVISOR GONE (claims stay gated) and the hand-over to the spare
+  keepAwake: 25m            # the standby watch sends the spare a keep-awake once it sat idle this long (under the desktop's 30-minute idle timeout)
 guide:                      # the guide's role: what guide handover --prompt tells its successor, and its relay
   skill: guide              # the default; or instructions: ~/guide.md
   relayAt: 400k             # guide watch says GUIDE RELAY DUE once the guide's context reaches this

@@ -141,6 +141,9 @@ func (a *app) printSupervisor(v *view) {
 	if r := v.st.Relay; r.Open(a.now) {
 		p("Relayed to %q until %s: its `beekeeper supervisor start` takes the role.", r.To.Name, clock(a.now, r.Expires))
 	}
+	if sp := v.st.Spare; sp != nil {
+		p("Spare: %q, kept awake by the standby watch; it takes the role after a crash.", sp.Name)
+	}
 }
 
 // eventText is one event of the log in a line.

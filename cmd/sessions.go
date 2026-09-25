@@ -47,6 +47,8 @@ type supervisorView struct {
 	// Relay is the supervisor's last relay; Relieved says it relieved the caller.
 	Relay    *state.Relay `json:"relay,omitempty"`
 	Relieved bool         `json:"relieved,omitempty"`
+	// Spare is the session kept ready to take over after a crash.
+	Spare *state.Party `json:"spare,omitempty"`
 	// Context is its session's context in tokens (0: not read), RelayAt
 	// the context at which the watch reports the relay due.
 	Context int64 `json:"contextTokens,omitempty"`
@@ -56,7 +58,11 @@ type supervisorView struct {
 // viewSupervisor is the recorded supervisor as sv reads it, with its
 // session's context; nil when none is recorded.
 func (a *app) viewSupervisor(st *state.State, sessions []*claude.Session, sv supervision) *supervisorView {
-	return a.viewRole(supervisorRole, st.SupervisorRole(), sessions, sv)
+	v := a.viewRole(supervisorRole, st.SupervisorRole(), sessions, sv)
+	if v != nil {
+		v.Spare = st.Spare
+	}
+	return v
 }
 
 // viewRole is rl's recorded holder r as sv reads it, with its session's

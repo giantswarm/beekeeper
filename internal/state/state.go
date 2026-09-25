@@ -257,6 +257,9 @@ type State struct {
 	Relieved []Relief `json:"relieved,omitempty"`
 	// SupervisorCLI is what beekeeper saw of the supervisor's CLI.
 	SupervisorCLI *CLI `json:"supervisorCLI,omitempty"`
+	// Spare is the session the supervisor keeps ready to take over: the
+	// standby watch keeps it awake and, after a crash, hands it the role.
+	Spare *Party `json:"spare,omitempty"`
 	// RelayDue is the relay due the watch reported to the supervisor.
 	RelayDue *RelayDue `json:"relayDue,omitempty"`
 	// Guide is the guide's role, the supervisor's counterpart for the

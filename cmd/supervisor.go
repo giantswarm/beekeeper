@@ -21,7 +21,7 @@ until a deliberate ` + "`beekeeper supervisor stop`" + ` or a successor's start:
 supervisor whose CLI crashed keeps the rule in force, its grants and queue
 stay recorded, and every claim waits for the successor. People and scripts
 (--as) stay ungated. A CLI back under the same session within
-supervisor.restartGrace (1m) of beekeeper first seeing it gone is a restart
+supervisor.restartGrace (30s) of beekeeper first seeing it gone is a restart
 and keeps the role. Past the grace, with no relay open, the watch says
 SUPERVISOR GONE and notifies (no-supervisor, critical) until a supervisor
 is back. The role moves to a successor in two steps that leave no gap: the
@@ -55,7 +55,7 @@ runs, 4 in the session a relay relieved).`,
 		Args:  cobra.NoArgs,
 		RunE:  func(*cobra.Command, []string) error { return a.roleStatus(supervisorRole) },
 	}
-	c.AddCommand(start, a.relayCmd(supervisorRole, supervisorRelayLong), stop, status)
+	c.AddCommand(start, a.relayCmd(supervisorRole, supervisorRelayLong), a.supervisorSpareCmd(), a.supervisorReopenCmd(), stop, status)
 	return c
 }
 
@@ -258,7 +258,11 @@ func (a *app) roleStatus(rl role) error {
 	if r.Relay.Open(a.now) {
 		relay = fmt.Sprintf(", relaying to %q until %s", r.Relay.To.Name, clock(a.now, r.Relay.Expires))
 	}
-	_, err = fmt.Fprintf(a.out, "%q %s since %s%s%s%s\n", r.Holder.Name, rl.verb, clock(a.now, r.Holder.Since), v.contextText(), relay, restart)
+	spare := ""
+	if st.Spare != nil && rl.name == supervisorRole.name {
+		spare = fmt.Sprintf(", spare %q", st.Spare.Name)
+	}
+	_, err = fmt.Fprintf(a.out, "%q %s since %s%s%s%s%s\n", r.Holder.Name, rl.verb, clock(a.now, r.Holder.Since), v.contextText(), relay, spare, restart)
 	return err
 }
 

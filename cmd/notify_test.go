@@ -106,14 +106,14 @@ func TestSupervisorGoneNotifiesOnceAndEndsStandby(t *testing.T) {
 		return n
 	}
 	poll(0, nil)
-	poll(40*time.Second, nil)
-	// A CLI back within the grace is a restart: nothing to say.
-	poll(45*time.Second, live)
+	poll(20*time.Second, nil)
+	// A CLI back within the grace (30s) is a restart: nothing to say.
+	poll(22*time.Second, live)
 	if strings.Contains(out.String(), "SUPERVISOR") || gone() != 0 {
 		t.Fatalf("a restart within the grace was said:\n%s", out)
 	}
-	poll(50*time.Second, nil)
-	poll(90*time.Second, nil)
+	poll(25*time.Second, nil)
+	poll(45*time.Second, nil)
 	if strings.Contains(out.String(), "SUPERVISOR GONE") {
 		t.Fatalf("gone within the grace:\n%s", out)
 	}

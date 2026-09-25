@@ -124,6 +124,9 @@ func (rl role) start(st *state.State, me state.Party, prevLive, takeOver bool, n
 	r.Relieved = slices.DeleteFunc(dropRelief(r.Relieved, me), func(rf state.Relief) bool { return now.Sub(rf.Taken) > reliefTTL })
 	r.Holder = &state.Supervisor{Party: me, Since: now.UTC()}
 	rl.set(st, r)
+	if rl.name == supervisorRole.name && st.Spare != nil && st.Spare.Is(me) {
+		st.Spare = nil // the spare supervises now; it records its own
+	}
 	msg := fmt.Sprintf("%q %s now%s", me.Name, rl.verb, how)
 	return msg, []state.Event{event(me, rl.name+".start", "%s", msg)}, nil
 }
