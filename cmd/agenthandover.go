@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -78,7 +79,8 @@ beekeeper agents note, waiting agents.noteWait (3m) at most; builds the
 follow-up's prompt; starts the follow-up as agents start does, under the
 agent's name, taking over its roster entry, task and session record; stops
 the old session's CLI and what it left running, so the desktop shows it
-stopped; and logs agents.handover. watch says HANDOVER DUE once an agent's
+stopped (a claude --bg session through claude stop first, so its daemon
+does not resume it); and logs agents.handover. watch says HANDOVER DUE once an agent's
 context reached agents.relayAt, at its first quiet moment.
 
 The follow-up runs in the old session's folder and model (--dir, --model
@@ -330,11 +332,15 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 		a.say("the desktop still shows %s", sa.kept)
 	}
 	if h.session != nil {
-		n, err := endSession(h.session.PID)
+		n, err := endSession(ctx, h.session)
 		if err != nil {
 			return fmt.Errorf("ending session %s: %w", ag.Session, err)
 		}
-		a.say("ended session %s: its CLI %d and %d processes it left stopped", ag.Session, h.session.PID, n-1)
+		how := ""
+		if h.session.Background {
+			how = "claude stop, so its daemon does not resume it; "
+		}
+		a.say("ended session %s: %sits CLI %d and %d processes it left stopped", ag.Session, how, h.session.PID, n-1)
 	}
 	took := time.Since(began)
 	if err := a.store.Log(event(me, "agents.handover", "%s: session %s at %s tokens to %s, %s, in %s",
@@ -441,10 +447,41 @@ func (a *app) awaitNote(ctx context.Context, p state.Party, since time.Time, wai
 	}
 }
 
+// bgJob is a session claude agents lists: its job id, session id and kind.
+type bgJob struct {
+	ID      string `json:"id"`
+	Session string `json:"sessionId"`
+	Kind    string `json:"kind"`
+}
+
+// claudeStop stops a background session through its daemon, which would
+// otherwise resume it once its CLI dies. The daemon names its sessions by a
+// job id of their own, which claude agents maps to the session id.
+var claudeStop = func(ctx context.Context, id string) error {
+	out, err := exec.CommandContext(ctx, "claude", "agents", "--json").Output()
+	if err != nil {
+		return fmt.Errorf("claude agents: %w", err)
+	}
+	var jobs []bgJob
+	if err := json.Unmarshal(out, &jobs); err != nil {
+		return fmt.Errorf("claude agents: %w", err)
+	}
+	i := slices.IndexFunc(jobs, func(j bgJob) bool { return j.Session == id && j.Kind == "background" && j.ID != "" })
+	if i < 0 {
+		return fmt.Errorf("claude agents lists no background job of session %s", id)
+	}
+	if out, err := exec.CommandContext(ctx, "claude", "stop", jobs[i].ID).CombinedOutput(); err != nil { //nolint:gosec // the job claude agents named
+		return fmt.Errorf("claude stop %s: %w: %s", jobs[i].ID, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // endSession stops a session's CLI and every process under it (its unit's
-// KillMode=process leaves them): SIGTERM, then SIGKILL for what still runs
-// after endWait. It returns how many processes it stopped.
-func endSession(pid int) (int, error) {
+// KillMode=process leaves them): a background session through `claude stop`
+// first, so its daemon does not resume it, then SIGTERM, then SIGKILL for
+// what still runs after endWait. It returns how many processes it stopped.
+func endSession(ctx context.Context, s *claude.Session) (int, error) {
+	pid := s.PID
 	t, err := proc.Read()
 	if err != nil {
 		return 0, err
@@ -452,6 +489,11 @@ func endSession(pid int) (int, error) {
 	pids := []int{pid}
 	for _, d := range t.Descendants(pid) {
 		pids = append(pids, d.PID)
+	}
+	if s.Background {
+		if err := claudeStop(ctx, s.ID); err != nil {
+			return 0, err
+		}
 	}
 	signal := func(sig syscall.Signal) {
 		for _, p := range pids {

@@ -47,6 +47,10 @@ type Session struct {
 	Waiting *Waiting `json:"waiting,omitempty"`
 	// Archived says the person archived the session in the desktop app.
 	Archived bool `json:"archived,omitempty"`
+	// Background says the claude daemon runs the session (`claude --bg`):
+	// it resumes the session by itself when its CLI dies, so only `claude
+	// stop` ends it.
+	Background bool `json:"background,omitempty"`
 }
 
 // Aside says why the guide leaves the session out of its feed: "archived",
@@ -180,6 +184,9 @@ func Discover(cfg *config.Config, t *proc.Table, now time.Time) []*Session {
 	return out
 }
 
+// cliComm is the claude binary's process name.
+const cliComm = "claude"
+
 // helpers are the claude subcommands: processes of the claude binary that
 // are no session. daemon, bg-pty-host and bg-spare run the background
 // sessions; attach, logs, stop and the rest are clients.
@@ -195,7 +202,7 @@ var helpers = map[string]bool{
 // subcommand nor the `claude --bg` launcher, which exits once the daemon
 // runs the session.
 func isCLI(p *proc.Process) bool {
-	if p.Comm != "claude" || len(p.Args) == 0 || subcommand(p) != "" || isSpare(p) {
+	if p.Comm != cliComm || len(p.Args) == 0 || subcommand(p) != "" || isSpare(p) {
 		return false
 	}
 	return !slices.Contains(p.Args, "--bg") && !slices.Contains(p.Args, "--background")
@@ -205,7 +212,7 @@ func isCLI(p *proc.Process) bool {
 // next background session and hands it when it starts or wakes; it retitles
 // itself "claude bg-spare" once it runs.
 func isSpare(p *proc.Process) bool {
-	return p.Comm == "claude" && (subcommand(p) == "bg-spare" || len(p.Args) > 1 && p.Args[1] == "--bg-spare")
+	return p.Comm == cliComm && (subcommand(p) == "bg-spare" || len(p.Args) > 1 && p.Args[1] == "--bg-spare")
 }
 
 // subcommand is a claude process's subcommand, "" for none: argv[1], or the
@@ -234,6 +241,15 @@ func runsSession(p *proc.Process, records map[int]*cliRecord) bool {
 // `claude -p` a tool command started).
 func underSession(t *proc.Table, p *proc.Process, records map[int]*cliRecord) bool {
 	return slices.ContainsFunc(t.Ancestors(p.PID), func(a *proc.Process) bool { return runsSession(a, records) })
+}
+
+// underDaemon reports whether the claude daemon runs p: it or one of its
+// ancestors is the daemon or a background session's terminal host.
+func underDaemon(t *proc.Table, p *proc.Process) bool {
+	return slices.ContainsFunc(append(t.Ancestors(p.PID), p), func(a *proc.Process) bool {
+		c := subcommand(a)
+		return a.Comm == cliComm && (c == "daemon" || c == "bg-pty-host")
+	})
 }
 
 // ownID is the session id a CLI was started under: --session-id, or the
@@ -296,7 +312,7 @@ func RecordName(cfg *config.Config, t *proc.Table, id string) string {
 // newSession builds the session process p runs: its record names it, else
 // its arguments and environment do.
 func newSession(cfg *config.Config, t *proc.Table, p *proc.Process, rec *cliRecord, clis map[int]bool, now time.Time) *Session {
-	s := &Session{PID: p.PID, Started: p.Start, Cwd: t.Cwd(p.PID), ID: ownID(p.Args)}
+	s := &Session{PID: p.PID, Started: p.Start, Cwd: t.Cwd(p.PID), ID: ownID(p.Args), Background: underDaemon(t, p)}
 	s.Name = argValue(p.Args, "--name")
 	if s.Name == "" {
 		s.Name = argValue(p.Args, "-n")

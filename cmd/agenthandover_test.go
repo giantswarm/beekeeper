@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -172,5 +175,35 @@ func TestHandoverRefusedWithoutThePermissionHook(t *testing.T) {
 	var ee *exitError
 	if !errors.As(err, &ee) || ee.code != ExitRefused || !strings.Contains(ee.msg, "hook permissionrequest") {
 		t.Errorf("handOver without the hook: %v", err)
+	}
+}
+
+func TestEndSessionStopsABackgroundSessionThroughItsDaemon(t *testing.T) {
+	for _, bg := range []bool{true, false} {
+		cli := exec.Command("sleep", "60")
+		if err := cli.Start(); err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan struct{})
+		go func() { _ = cli.Wait(); close(done) }()
+		var stopped []string
+		orig := claudeStop
+		claudeStop = func(_ context.Context, id string) error {
+			if !proc.Alive(cli.Process.Pid) {
+				t.Error("claude stop ran after the CLI was signalled")
+			}
+			stopped = append(stopped, id)
+			return nil
+		}
+		s := &claude.Session{PID: cli.Process.Pid, ID: "test-bg", Background: bg}
+		n, err := endSession(context.Background(), s)
+		claudeStop = orig
+		<-done
+		if err != nil || n != 1 {
+			t.Errorf("background %v: endSession = %d, %v", bg, n, err)
+		}
+		if want := map[bool]int{true: 1, false: 0}[bg]; len(stopped) != want {
+			t.Errorf("background %v: claude stop ran for %v, want %d", bg, stopped, want)
+		}
 	}
 }

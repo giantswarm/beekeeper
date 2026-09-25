@@ -98,14 +98,14 @@ func TestDiscoverKeepsTheDesktopSessionWhenItStartsChildren(t *testing.T) {
 		t.Fatalf("sessions = %v, want the desktop session and its detached child", got)
 	}
 	d := got[desktopPID]
-	if d == nil || d.HostID != desktopHost || d.ID != desktopID || d.Name != desktopName || d.Parent != "" || d.Aside() != "test" {
+	if d == nil || d.HostID != desktopHost || d.ID != desktopID || d.Name != desktopName || d.Parent != "" || d.Aside() != "test" || d.Background {
 		t.Fatalf("desktop session = %+v", d)
 	}
 	if !slices.ContainsFunc(d.Commands, func(c Command) bool { return c.PID == inTreePID }) {
 		t.Errorf("the claude -p its tool shell runs is not its command: %+v", d.Commands)
 	}
 	c := got[detachedPID]
-	if c == nil || c.ID != detachedID || c.HostID != "" || c.Parent != desktopID || c.Name != "test: beekeeper#27 detached child" {
+	if c == nil || c.ID != detachedID || c.HostID != "" || c.Parent != desktopID || c.Name != "test: beekeeper#27 detached child" || c.Background {
 		t.Fatalf("detached child = %+v", c)
 	}
 	// watch reports a restart when a key's PID changes: the children leave
@@ -138,7 +138,7 @@ func TestDiscoverFindsTheBackgroundWorkerNotItsDaemon(t *testing.T) {
 	if len(got) != 1 || w == nil {
 		t.Fatalf("sessions = %v, want the worker alone", got)
 	}
-	if w.ID != workerID || w.Name != "test: beekeeper#27 bg worker" || w.HostID != "" || w.Parent != "" || w.Key() != workerID {
+	if w.ID != workerID || w.Name != "test: beekeeper#27 bg worker" || w.HostID != "" || w.Parent != "" || w.Key() != workerID || !w.Background {
 		t.Errorf("worker = %+v", w)
 	}
 }
@@ -151,7 +151,7 @@ func TestDiscoverFindsAWorkerInAClaimedSpare(t *testing.T) {
 		t.Fatalf("sessions = %v, want both workers, neither the daemon nor the unclaimed spare", got)
 	}
 	for pid, want := range map[int][2]string{freshPID: {workerA, workerAName}, claimedPID: {workerB, workerBName}} {
-		if w := got[pid]; w == nil || w.ID != want[0] || w.Name != want[1] || w.Key() != want[0] || w.HostID != "" || w.Parent != "" {
+		if w := got[pid]; w == nil || w.ID != want[0] || w.Name != want[1] || w.Key() != want[0] || w.HostID != "" || w.Parent != "" || !w.Background {
 			t.Errorf("worker %d = %+v", pid, w)
 		}
 	}
@@ -174,7 +174,7 @@ func TestDiscoverFindsAWokenWorkerUnderItsID(t *testing.T) {
 	for from, records := range map[string]string{"record": filepath.Join("testdata", "sessions", "woken"), "arguments": ""} {
 		got := discoverAt(t, root, records)
 		w := got[wokenPID]
-		if len(got) != 1 || w == nil || w.ID != workerA || w.Name != workerAName || w.Key() != workerA {
+		if len(got) != 1 || w == nil || w.ID != workerA || w.Name != workerAName || w.Key() != workerA || !w.Background {
 			t.Errorf("from its %s: sessions = %v, worker = %+v", from, got, w)
 		}
 	}
