@@ -218,7 +218,11 @@ func endDesktopTwin(ctx context.Context, id string, ended func() bool) (int, err
 			return 0, err
 		}
 		if p := desktopTwin(t, id); p != nil {
-			if err := syscall.Kill(p.PID, syscall.SIGTERM); err != nil {
+			pr, err := os.FindProcess(p.PID)
+			if err == nil {
+				err = pr.Signal(syscall.SIGTERM)
+			}
+			if err != nil {
 				return 0, fmt.Errorf("stopping the desktop's CLI %d of session %s: %w", p.PID, id, err)
 			}
 			return p.PID, nil
