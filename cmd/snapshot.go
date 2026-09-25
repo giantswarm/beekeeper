@@ -76,7 +76,8 @@ kind clusters, the sessions' last hour (turns, tool calls, errors, GitHub
 calls, cost) and the three that spent the most in it, the commands sessions
 sit on (with their owner), the kernel
 OOM kills since your last snapshot (every one counted, attributed to a
-memcap scope, a kind lab or the desktop scope), leases, holds and the GitHub
+memcap scope, a kind lab or the desktop scope; a memcap scope no run.start
+names has an unknown cap, a test run's scope is a test kill), leases, holds and the GitHub
 budget, and the installations' alerts, grouped (beekeeper alerts snapshot).
 
 Each caller's last snapshot is kept; the next one ends with what changed
@@ -301,7 +302,16 @@ func isWait(p *proc.Process) bool {
 	return false
 }
 
-var memcapScope = regexp.MustCompile(`memcap-(\d+)-`)
+var memcapScope = regexp.MustCompile(guard.ScopePrefix + `(\d+)-`)
+
+// testKillOwner is whose limit a kill in a test run's scope hit: the test's
+// own small cap, on purpose.
+const testKillOwner = "a test's own memcap scope (a deliberate test kill, not a build)"
+
+// isTestKill: the kill hit a test run's scope (guard.TestScopePrefix).
+func isTestKill(k machine.OOMKill) bool {
+	return strings.Contains(k.Memcg, "memcap") && guard.IsTestScope(path.Base(k.Memcg))
+}
 
 // runIndex finds the run.start event of a memcap scope. It reads the event
 // log once, when the first kill asks: kills are rare, the log is long.
@@ -327,10 +337,14 @@ func (r *runIndex) start(scope string) (state.Event, bool) {
 
 // oomOwner names whose limit an OOM kill hit. A memcap cap's kill names the
 // session and the command of the run that started the scope, from its
-// run.start event (the memcg path ends in the scope's unit name); a scope
-// no event names, from before the runs were logged, by its process.
+// run.start event (the memcg path ends in the scope's unit name). A scope no
+// event names has an unknown cap, never the default: its session by the
+// process that started it, if that is still there. A test run's scope is a
+// test kill, whatever its events.
 func oomOwner(k machine.OOMKill, clusters []machine.Cluster, sessions []*claude.Session, t *proc.Table, runs *runIndex) string {
 	switch {
+	case isTestKill(k):
+		return testKillOwner
 	case strings.Contains(k.Memcg, "memcap"):
 		if e, ok := runs.start(path.Base(k.Memcg)); ok {
 			return fmt.Sprintf("memcap cap of %q's `%s`", e.By.Name, truncate(guard.RunCommand(e.Detail), 60))
@@ -338,13 +352,13 @@ func oomOwner(k machine.OOMKill, clusters []machine.Cluster, sessions []*claude.
 		if m := memcapScope.FindStringSubmatch(k.Memcg); m != nil {
 			pid, _ := strconv.Atoi(m[1])
 			if s, ok := claude.OwnerOf(sessions, pid); ok {
-				return fmt.Sprintf("memcap cap of %q's command", s.Name)
+				return fmt.Sprintf("memcap scope of %q's command, cap unknown (no run.start)", s.Name)
 			}
 			if p := t.ByPID[pid]; p != nil {
-				return "memcap cap of `" + truncate(p.Cmdline(), 60) + "`"
+				return "memcap scope of `" + truncate(p.Cmdline(), 60) + "`, cap unknown (no run.start)"
 			}
 		}
-		return "memcap cap on one command (its session has moved on)"
+		return "memcap scope, cap unknown, owner unknown (no run.start)"
 	case strings.Contains(k.Memcg, "docker-"):
 		for _, c := range clusters {
 			for _, id := range c.Containers {
@@ -449,6 +463,19 @@ func tailArgs(args string) string {
 	return strings.Join(f[4:], " ")
 }
 
+// splitTestKills separates the kills of a build, a lab or the desktop from
+// a test run's deliberate ones.
+func splitTestKills(kills []oomKill) (real, tests []oomKill) {
+	for _, k := range kills {
+		if isTestKill(k.OOMKill) {
+			tests = append(tests, k)
+		} else {
+			real = append(real, k)
+		}
+	}
+	return real, tests
+}
+
 // groupKills folds the kills of one event (46 jest workers) into one line.
 func groupKills(kills []oomKill) []string {
 	type group struct {
@@ -508,8 +535,12 @@ func diffSnapshots(prev, cur *snapshot) []string {
 	}
 	num("disk / free", prev.Root.FreeMiB/1024, cur.Root.FreeMiB/1024, 10, "GiB")
 	num("tmpfs /tmp", prev.Tmp.UsedMiB, cur.Tmp.UsedMiB, 2048, "MiB")
-	if len(cur.OOM) > 0 {
-		out = append(out, fmt.Sprintf("%d kernel OOM kills", len(cur.OOM)))
+	real, tests := splitTestKills(cur.OOM)
+	if len(real) > 0 {
+		out = append(out, fmt.Sprintf("%d kernel OOM kills", len(real)))
+	}
+	if len(tests) > 0 {
+		out = append(out, fmt.Sprintf("%d test kills in %s", len(tests), testKillOwner))
 	}
 	if len(cur.Oomd) > 0 {
 		out = append(out, fmt.Sprintf("SYSTEMD-OOMD killed %d times", len(cur.Oomd)))

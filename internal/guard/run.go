@@ -50,6 +50,19 @@ const (
 	VerbEnd   = "run.end"
 )
 
+// A capped run's scope is <ScopePrefix><pid>-<n>.scope in memcap.slice. A
+// test's run (Options.Test) takes TestScopePrefix instead, so that the cap
+// kill it provokes on purpose reads as a test kill, never as a build's.
+const (
+	ScopePrefix     = "memcap-"
+	TestScopePrefix = "memcap-test-"
+)
+
+// IsTestScope reports whether a scope's unit name is a test run's.
+func IsTestScope(unit string) bool {
+	return strings.HasPrefix(unit, TestScopePrefix)
+}
+
 // RunScope is the scope a run event names.
 func RunScope(detail string) string {
 	scope, _, _ := strings.Cut(detail, " ")
@@ -92,6 +105,9 @@ type Options struct {
 	// records nothing. It must not fail or block the run: it swallows its
 	// own errors and bounds its wait.
 	Record func(verb, detail string)
+	// Test names the scope TestScopePrefix…: a test's run, whose cap kill
+	// snapshot and watch report as a test kill.
+	Test bool
 }
 
 func (o Options) record(verb, detail string) {
@@ -189,7 +205,11 @@ func Run(o Options, argv []string) int {
 	holder := filepath.Join(o.SlotDir, strconv.Itoa(slot)+".holder")
 	defer func() { _ = os.Remove(holder) }()
 
-	unit := fmt.Sprintf("memcap-%d-%06d", os.Getpid(), time.Now().Nanosecond()%1000000)
+	prefix := ScopePrefix
+	if o.Test {
+		prefix = TestScopePrefix
+	}
+	unit := fmt.Sprintf("%s%d-%06d", prefix, os.Getpid(), time.Now().Nanosecond()%1000000)
 	head := CommandHead(argv)
 	o.record(VerbStart, fmt.Sprintf("%s.scope slot %d max %s: %s", unit, slot, o.Max, head))
 	start := time.Now()

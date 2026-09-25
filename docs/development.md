@@ -105,11 +105,15 @@ their PIDs.
 
 A capped run records its events in `$XDG_STATE_HOME/beekeeper/events.jsonl`: the capped-run tests
 point `XDG_STATE_HOME` at their temp dir, and a manual trial does the same
-(`XDG_STATE_HOME=/tmp/bk ./beekeeper run --max 64M -- python3 -c 'bytearray(200<<20)'`, then
+(`XDG_STATE_HOME=/tmp/bk MEMCAP_TEST=1 ./beekeeper run --max 64M -- python3 -c 'bytearray(200<<20)'`, then
 `XDG_STATE_HOME=/tmp/bk ./beekeeper log --verb run.` and `snapshot`), so the machine's log keeps
 only real builds. A run event's detail starts with the scope's unit name as the kernel prints it in
 an OOM kill's memcg path; `cmd/testdata/oom-memcap-2516344.journal` holds such a kill from the lab
-machine's journal, verbatim.
+machine's journal, verbatim. The capped-run tests also set `MEMCAP_TEST=1`, so their scopes are
+`memcap-test-…` and the exit-137 test's deliberate kill reads as a test kill in the machine's
+`watch` and `snapshot`, which have no `run.start` for it; `cmd/testdata/oom-memcap-287208.journal`
+is that kill from before the test scopes, which must read `cap unknown`. A trial of your own sets it
+too.
 
 Session discovery is tested against real process trees in `internal/claude/testdata/proc/`: a
 desktop session with a `claude -p` its tool shell runs and one it left to the user manager, and

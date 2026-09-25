@@ -49,14 +49,17 @@ dropped.
 
 Environment: MEMCAP_MAX (12G), MEMCAP_SWAP (0), MEMCAP_WAIT (8m),
 MEMCAP_SLOTS and MEMCAP_STATE (the directory holding slots/) override the
-configuration; the flags override the environment.`,
+configuration; the flags override the environment. MEMCAP_TEST=1 marks a
+test's run: its scope is memcap-test-…, and snapshot and watch report a
+kill in it as a test kill, not a build's.`,
 		Args: cobra.MinimumNArgs(1),
 		PersistentPreRunE: func(*cobra.Command, []string) error {
 			return a.loadConfig()
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			o := guard.Options{Max: env("MEMCAP_MAX", "12G"), Swap: env("MEMCAP_SWAP", "0"),
-				SlotDir: a.cfg.Memcap.SlotDir, Slots: a.cfg.Memcap.Slots, Stderr: os.Stderr, Record: a.runRecorder()}
+				SlotDir: a.cfg.Memcap.SlotDir, Slots: a.cfg.Memcap.Slots, Stderr: os.Stderr, Record: a.runRecorder(),
+				Test: os.Getenv("MEMCAP_TEST") == "1"}
 			if s := os.Getenv("MEMCAP_STATE"); s != "" {
 				o.SlotDir = filepath.Join(s, "slots")
 			}

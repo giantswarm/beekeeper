@@ -49,8 +49,9 @@ if false; then go test ./...; fi`
 const expected = "[a]\n[b]\n<a b>\n<empty>\n<3>\n{l1}\n{l2}\n{A B}\nps=0 pid_ok=1 args=0\ne=[]\n"
 
 // capped skips without the user systemd and zsh a capped run needs, and
-// returns the environment of a run with private slots and a 64M cap, so the
-// test neither waits for the machine's build slots nor counts as a build.
+// returns the environment of a test's run (MEMCAP_TEST) with private slots
+// and a 64M cap, so the test neither waits for the machine's build slots nor
+// counts as a build, and its cap kill reads as a test kill.
 func capped(t *testing.T) (state string, env []string) {
 	t.Helper()
 	if _, err := exec.LookPath("zsh"); err != nil {
@@ -61,7 +62,7 @@ func capped(t *testing.T) (state string, env []string) {
 	}
 	state = t.TempDir()
 	return state, append(os.Environ(), "BEEKEEPER_TEST_MAIN=1", "BEEKEEPER_CONFIG="+filepath.Join(state, "none.yaml"),
-		"XDG_STATE_HOME="+state, "MEMCAP_STATE="+state, "MEMCAP_MAX=64M", "MEMCAP_WAIT=30s",
+		"XDG_STATE_HOME="+state, "MEMCAP_STATE="+state, "MEMCAP_MAX=64M", "MEMCAP_WAIT=30s", "MEMCAP_TEST=1",
 		"CLAUDE_CODE_SESSION_ID=test-session", "CLAUDE_CODE_HOST_SESSION_ID=", "CLAUDE_CODE_SESSION_NAME=capped test")
 }
 
@@ -109,8 +110,8 @@ func TestRunKeepsTheCallersShellSemantics(t *testing.T) {
 
 func TestRunHoldsASlotInACappedScope(t *testing.T) {
 	state, env := capped(t)
-	out, errOut, rc := zsh(t, env, rewrite(t, `grep -o 'memcap.slice/memcap-[0-9]*-[0-9]*' /proc/self/cgroup; cat "$MEMCAP_STATE/slots/1.holder"; if false; then go test; fi`))
-	if rc != 0 || !strings.HasPrefix(out, "memcap.slice/memcap-") {
+	out, errOut, rc := zsh(t, env, rewrite(t, `grep -o 'memcap.slice/memcap-test-[0-9]*-[0-9]*' /proc/self/cgroup; cat "$MEMCAP_STATE/slots/1.holder"; if false; then go test; fi`))
+	if rc != 0 || !strings.HasPrefix(out, "memcap.slice/"+guard.TestScopePrefix) {
 		t.Fatalf("rc %d, stdout %q, stderr %q", rc, out, errOut)
 	}
 	var h struct {
@@ -147,7 +148,7 @@ func TestRunExits75WhenEverySlotIsHeld(t *testing.T) {
 }
 
 // The kill is found again after the run has ended, as snapshot and watch
-// find it: by the scope's run.start event, not by a live process.
+// find it, and reads as the test's own kill, never as a build's cap.
 func TestRunNamesTheCapsVictim(t *testing.T) {
 	dir, env := capped(t)
 	self, _ := os.Executable()
@@ -169,7 +170,7 @@ func TestRunNamesTheCapsVictim(t *testing.T) {
 	runs := &runIndex{store: store}
 	for _, k := range kills {
 		if strings.HasSuffix(k.Memcg, "/"+guard.RunScope(evs[0].Detail)) {
-			if got := oomOwner(k, nil, nil, &proc.Table{ByPID: map[int]*proc.Process{}}, runs); got != `memcap cap of "capped test"'s `+"`"+self+" __alloc`" {
+			if got := oomOwner(k, nil, nil, &proc.Table{ByPID: map[int]*proc.Process{}}, runs); got != testKillOwner {
 				t.Errorf("owner %q", got)
 			}
 			return
@@ -191,7 +192,7 @@ func TestRunRecordsItsStartAndEnd(t *testing.T) {
 	for i, verb := range []string{guard.VerbStart, guard.VerbEnd} {
 		e := evs[i]
 		if e.Verb != verb || e.By.Session != "test-session" || e.By.Name != "capped test" || guard.RunScope(e.Detail) != scope ||
-			!strings.HasPrefix(scope, "memcap-") || !strings.HasSuffix(scope, ".scope") ||
+			!guard.IsTestScope(scope) || !strings.HasSuffix(scope, ".scope") ||
 			guard.RunCommand(e.Detail) != "echo built; if false; then go test ./...; fi" {
 			t.Errorf("event %d: %+v", i, e)
 		}
