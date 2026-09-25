@@ -226,8 +226,11 @@ func contextText(m *metrics) string {
 	case m.ContextWindow > 0:
 		return fmt.Sprintf("%.0f%%", 100*m.ContextFill)
 	}
-	return fmt.Sprintf("%dk", m.Context/1000)
+	return tokensText(m.Context)
 }
+
+// tokensText renders a token count in thousands: "412k".
+func tokensText(n int64) string { return fmt.Sprintf("%dk", n/1000) }
 
 // runaways are the figures of a session over the configured thresholds,
 // each with the key the watch says it once under.

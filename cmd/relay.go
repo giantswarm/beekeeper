@@ -85,7 +85,7 @@ func cancelRelay(st *state.State, me state.Party, now time.Time) (string, []stat
 		return "no relay is open: you supervise", nil, nil
 	}
 	to := st.Relay.To.Name
-	st.Relay = nil
+	st.Relay, st.RelayDue = nil, nil
 	return fmt.Sprintf("relay to %q cancelled: you still supervise", to),
 		[]state.Event{event(me, "supervisor.relay-cancel", "to %s", to)}, nil
 }
@@ -224,6 +224,7 @@ func fireRelay(st *state.State, now time.Time) ([]string, []state.Event) {
 		line = fmt.Sprintf("RELAY EXPIRED: %q did not take the role from %q by %s (beekeeper supervisor relay <successor> opens another)",
 			r.To.Name, r.From.Name, clock(now, r.Expires))
 		evs = append(evs, event(watchParty, "supervisor.relay-expired", "to %s at %s", r.To.Name, clock(now, r.Expires)))
+		st.RelayDue = nil
 	default:
 		return nil, nil
 	}
@@ -231,48 +232,51 @@ func fireRelay(st *state.State, now time.Time) ([]string, []state.Event) {
 	return []string{line}, evs
 }
 
-// shiftOver reports whether st's supervisor runs, has served its shift and
-// has no relay open: the moment the watch asks whether the machine is quiet.
-func shiftOver(st *state.State, sessions []*claude.Session, now time.Time, shift time.Duration) bool {
+// relayContext is the running supervisor's context in tokens once it has
+// reached relayAt, with no relay open and the relay due not reported yet to
+// its term; 0 otherwise. Only then does the watch ask whether the machine is
+// quiet.
+func relayContext(st *state.State, sessions []*claude.Session, now time.Time, relayAt config.Tokens) int64 {
 	sup := st.Supervisor
-	if shift <= 0 || sup == nil || st.Relay.Open(now) || now.Sub(sup.Since) < shift {
-		return false
+	if sup == nil || st.Relay.Open(now) || st.RelayDue.Of(sup) {
+		return 0
 	}
-	_, live := claude.Live(sessions, sup.Party)
-	return live
+	if c := sessionContext(sessions, sup.Party, now); c >= int64(relayAt) {
+		return c
+	}
+	return 0
+}
+
+// sessionContext is the context in tokens of p's running session, read from
+// its transcript's last request (the CTX column); 0 when it does not run.
+func sessionContext(sessions []*claude.Session, p state.Party, now time.Time) int64 {
+	s, live := claude.Live(sessions, p)
+	if !live || s.Transcript == "" {
+		return 0
+	}
+	_, a := claude.ReadTranscript(s.Transcript, now)
+	return a.Context
 }
 
 // quietness is the watch's reading of the machine for a relay: checked once
-// the shift is over, busy saying what keeps it from a quiet moment ("" when
-// quiet).
+// the supervisor's context reached relayAt (context), busy saying what keeps
+// it from a quiet moment ("" when quiet).
 type quietness struct {
 	checked bool
 	busy    string
+	context int64
 }
 
-// fireShift reports the relay due at the first quiet moment after the shift
-// and again at the first quiet moment after a busy one. changed says that
-// st changed without a line (a busy moment after the report).
-func fireShift(st *state.State, q quietness, now time.Time, shift time.Duration) (lines []string, evs []state.Event, changed bool) {
+// fireRelayDue reports the relay due at the first quiet moment after the
+// supervisor's context reached relayAt, once per supervisor term.
+func fireRelayDue(st *state.State, q quietness, now time.Time) ([]string, []state.Event) {
 	sup := st.Supervisor
-	if !q.checked || sup == nil || st.Relay.Open(now) {
-		return nil, nil, false
+	if !q.checked || q.busy != "" || sup == nil || st.Relay.Open(now) || st.RelayDue.Of(sup) {
+		return nil, nil
 	}
-	mine := st.Shift.Of(sup)
-	switch {
-	case q.busy != "":
-		if mine && st.Shift.Quiet {
-			st.Shift.Quiet = false
-			return nil, nil, true
-		}
-		return nil, nil, false
-	case mine && st.Shift.Quiet:
-		return nil, nil, false
-	}
-	st.Shift = &state.Shift{Supervisor: sup.Party, Since: sup.Since, Reported: now.UTC(), Quiet: true}
-	line := fmt.Sprintf("RELAY DUE: %q supervises since %s (shift %s) and the machine is quiet: start a successor from `beekeeper handover --prompt`, then `beekeeper supervisor relay <successor>`",
-		sup.Name, clock(now, sup.Since), dur(shift))
-	return []string{line}, []state.Event{event(watchParty, "supervisor.relay-due", "%s since %s", sup.Name, clock(now, sup.Since))}, true
+	st.RelayDue = &state.RelayDue{Supervisor: sup.Party, Since: sup.Since, Reported: now.UTC(), Context: q.context}
+	line := fmt.Sprintf("RELAY DUE: %q is at %s tokens of context: beekeeper handover --prompt", sup.Name, tokensText(q.context))
+	return []string{line}, []state.Event{event(watchParty, "supervisor.relay-due", "%s at %s tokens", sup.Name, tokensText(q.context))}
 }
 
 // busyWith says what keeps the machine from a quiet moment for a relay: a
