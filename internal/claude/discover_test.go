@@ -49,6 +49,8 @@ const (
 	wokenPID    = 399599
 	workerA     = "dddddddd-0000-4000-8000-000000000005"
 	workerB     = "eeeeeeee-0000-4000-8000-000000000006"
+	workerAName = "test: beekeeper#35 worker a"
+	workerBName = "test: beekeeper#35 worker b"
 )
 
 // discoverAt discovers the sessions of a captured process tree with the CLI
@@ -148,7 +150,7 @@ func TestDiscoverFindsAWorkerInAClaimedSpare(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("sessions = %v, want both workers, neither the daemon nor the unclaimed spare", got)
 	}
-	for pid, want := range map[int][2]string{freshPID: {workerA, "test: beekeeper#35 worker a"}, claimedPID: {workerB, "test: beekeeper#35 worker b"}} {
+	for pid, want := range map[int][2]string{freshPID: {workerA, workerAName}, claimedPID: {workerB, workerBName}} {
 		if w := got[pid]; w == nil || w.ID != want[0] || w.Name != want[1] || w.Key() != want[0] || w.HostID != "" || w.Parent != "" {
 			t.Errorf("worker %d = %+v", pid, w)
 		}
@@ -172,7 +174,7 @@ func TestDiscoverFindsAWokenWorkerUnderItsID(t *testing.T) {
 	for from, records := range map[string]string{"record": filepath.Join("testdata", "sessions", "woken"), "arguments": ""} {
 		got := discoverAt(t, root, records)
 		w := got[wokenPID]
-		if len(got) != 1 || w == nil || w.ID != workerA || w.Name != "test: beekeeper#35 worker a" || w.Key() != workerA {
+		if len(got) != 1 || w == nil || w.ID != workerA || w.Name != workerAName || w.Key() != workerA {
 			t.Errorf("from its %s: sessions = %v, worker = %+v", from, got, w)
 		}
 	}
@@ -255,6 +257,20 @@ func TestOwnID(t *testing.T) {
 	} {
 		if got := ownID(strings.Fields(args)); got != want {
 			t.Errorf("ownID(%q) = %q, want %q", args, got, want)
+		}
+	}
+}
+
+func TestRecordNameIsTheBackgroundWorkersTitle(t *testing.T) {
+	tab, err := proc.ReadAt(filepath.Join("testdata", "proc", "spare"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{}
+	cfg.Claude.SessionsDir = filepath.Join("testdata", "sessions", "spare")
+	for id, want := range map[string]string{workerA: workerAName, workerB: workerBName, desktopID: ""} {
+		if got := RecordName(cfg, tab, id); got != want {
+			t.Errorf("RecordName(%s) = %q, want %q", id, got, want)
 		}
 	}
 }

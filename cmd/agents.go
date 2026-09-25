@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -47,13 +48,36 @@ Without a subcommand, lists the agents.`,
 			if name != "" {
 				me.Name = name
 			}
+			sessions, _, err := a.sessions()
+			if err != nil {
+				return err
+			}
+			live := func(p state.Party) bool {
+				_, ok := claude.Live(sessions, p)
+				return ok
+			}
+			var replaced []state.Agent
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-				st.Agents = slices.DeleteFunc(st.Agents, func(x state.Agent) bool { return x.Is(me) })
-				st.Agents = append(st.Agents, state.Agent{Party: me, Registered: a.now.UTC(), IdleSince: a.now.UTC()})
-				return []state.Event{event(me, "agents.register", "%s", me.Name)}, nil
+				var err error
+				replaced, err = registerAgent(st, me, live, a.now.UTC())
+				if err != nil {
+					return nil, err
+				}
+				detail := me.Name
+				for _, r := range replaced {
+					detail += fmt.Sprintf(", replaces %s", r.Session)
+				}
+				return []state.Event{event(me, "agents.register", "%s", detail)}, nil
 			})
 			if err != nil {
 				return err
+			}
+			for _, r := range replaced {
+				unfinished := ""
+				if r.Task != "" {
+					unfinished = fmt.Sprintf(", its task unfinished: %q", r.Task)
+				}
+				_, _ = fmt.Fprintf(a.out, "register: replaces the entry of session %s, which no longer runs%s\n", r.Session, unfinished)
 			}
 			_, err = fmt.Fprintf(a.out, "register: %s idle, ready for a task\n", me.Name)
 			return err
@@ -147,6 +171,26 @@ Without a subcommand, lists the agents.`,
 	return c
 }
 
+// registerAgent puts me on the roster as an idle agent and returns the
+// entries it replaces. A name is one agent's: me replaces its own entry and
+// the entries under its name of sessions that no longer run, and is refused
+// a name the entry of a running session holds.
+func registerAgent(st *state.State, me state.Party, live func(state.Party) bool, now time.Time) ([]state.Agent, error) {
+	var replaced []state.Agent
+	for _, x := range st.Agents {
+		if x.Is(me) || !strings.EqualFold(x.Name, me.Name) {
+			continue
+		}
+		if live(x.Party) {
+			return nil, refused("%q is the name of the running session %s: register under another with --name", x.Name, x.Session)
+		}
+		replaced = append(replaced, x)
+	}
+	st.Agents = slices.DeleteFunc(st.Agents, func(x state.Agent) bool { return x.Is(me) || strings.EqualFold(x.Name, me.Name) })
+	st.Agents = append(st.Agents, state.Agent{Party: me, Registered: now, IdleSince: now})
+	return replaced, nil
+}
+
 func findAgent(st *state.State, q string) (int, error) {
 	parties := make([]state.Party, len(st.Agents))
 	for i, ag := range st.Agents {
@@ -156,22 +200,33 @@ func findAgent(st *state.State, q string) (int, error) {
 }
 
 // findParty finds q among parties: a session id, a name, or a unique part
-// of one.
+// of one. A name several parties carry names none of them.
 func findParty(parties []state.Party, q, one, many string) (int, error) {
 	lq := strings.ToLower(q)
-	var hits []int
+	var named, hits []int
 	for i, p := range parties {
-		if strings.ToLower(p.Name) == lq || (q != "" && (p.Session == q || p.HostSession == q)) {
+		if q != "" && (p.Session == q || p.HostSession == q) {
 			return i, nil
 		}
-		if strings.Contains(strings.ToLower(p.Name), lq) {
+		switch {
+		case strings.ToLower(p.Name) == lq:
+			named = append(named, i)
+		case strings.Contains(strings.ToLower(p.Name), lq):
 			hits = append(hits, i)
 		}
 	}
-	switch len(hits) {
-	case 1:
+	switch {
+	case len(named) == 1:
+		return named[0], nil
+	case len(named) > 1:
+		ids := make([]string, len(named))
+		for i, n := range named {
+			ids[i] = parties[n].Session
+		}
+		return -1, refused("%q names %d %s: pass one's session id (%s)", q, len(named), many, strings.Join(ids, ", "))
+	case len(hits) == 1:
 		return hits[0], nil
-	case 0:
+	case len(hits) == 0:
 		return -1, refused("no %s matches %q", one, q)
 	}
 	return -1, refused("%q matches %d %s", q, len(hits), many)

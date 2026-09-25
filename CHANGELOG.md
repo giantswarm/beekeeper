@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `agents register` in a `claude --bg` worker registers it under its `-n` title instead of its session id: a session's name falls back to the name its CLI's record holds (`~/.claude/sessions/<pid>.json`) before its id, for every command that names the caller. `--name` still overrides.
+- A fresh session registering under the name of an agent whose session no longer runs replaces that entry instead of adding a second one, so `agents assign <name>` reaches the new session; the output names the replaced session and a task it left unfinished. A name a running session's entry holds is refused (exit 3), and `agents assign` and `agents remove` refuse a name several entries share instead of taking the first.
+
 - A `claude --bg` worker the daemon served from its pre-started spare CLI is listed in `sessions` under its session id and name, so `lease grant`, `agents` and every lookup by session find it: the second worker started through a daemon, and a worker woken with `claude --bg --resume <id>` while a spare was ready. A spare no session has claimed is not listed.
 - A woken `claude --bg` worker is listed under its session id instead of its transcript's path.
 - A resumed CLI that went on under a new session id is listed under that id, and its transcript and last activity are the new one's.
