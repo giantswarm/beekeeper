@@ -358,6 +358,19 @@ desktop's log (`claude.desktopLog`, `~/.config/Claude/logs/main.log`), so the pe
 where they were; the new session waits in the sidebar. A desktop that showed no session, or that
 the start had to launch, stays on the new one.
 
+A follow-up by message crosses permission modes: the started session runs in `acceptEdits`, a
+bypass supervisor sends to it, and it answers back. Claude Code decides each cross-session message
+on the receiving side by its `crossSessionInbound` setting; unset, it holds a message from the other
+permission class for the person's approval, and a headless receiver lets it expire. Set it once in the
+user-level `~/.claude/settings.json` (a project or local settings file can only tighten it):
+
+```json
+"crossSessionInbound": "accept"
+```
+
+Every message between the user's own sessions is then delivered, whatever the two modes; each
+session's tool permissions stay its own.
+
 Claude Desktop's import turns `bypassPermissions` into `acceptEdits` for every desktop turn, with
 no setting to change that, and raising the mode again takes the person's approval card each time.
 So in its desktop turns such an agent would stop at the first request no allow rule covers.
