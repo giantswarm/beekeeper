@@ -302,6 +302,9 @@ func isDigits(s string) bool {
 // Claude locates what Claude Code and the desktop app keep on disk.
 type Claude struct {
 	ProjectsDir string `yaml:"projectsDir"`
+	// SessionsDir holds the record every running CLI keeps of the session
+	// it runs (<pid>.json), what `claude agents` lists.
+	SessionsDir string `yaml:"sessionsDir"`
 	DesktopDir  string `yaml:"desktopDir"`
 }
 
@@ -400,6 +403,7 @@ func (c *Config) defaults() error {
 	setInt(&w.DiskMinMiB, 102400)
 
 	setStr(&c.Claude.ProjectsDir, filepath.Join(home, ".claude", "projects"))
+	setStr(&c.Claude.SessionsDir, filepath.Join(home, ".claude", "sessions"))
 	cfg, err := os.UserConfigDir()
 	if err != nil {
 		return err

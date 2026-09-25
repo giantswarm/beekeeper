@@ -31,6 +31,8 @@ type Process struct {
 	Comm  string
 	Args  []string
 	Start time.Time
+	// StartTicks is Start as the kernel counts it: clock ticks since boot.
+	StartTicks int64
 	// CPU is the processor time it has burned (user and system).
 	CPU time.Duration
 	// RSSKiB is its resident memory, file-backed pages included.
@@ -113,13 +115,14 @@ func readProcess(root string, pid int, boot time.Time) (*Process, error) {
 		return nil, err
 	}
 	return &Process{
-		PID:    pid,
-		PPID:   st.ppid,
-		Comm:   st.comm,
-		Args:   splitNul(raw),
-		Start:  boot.Add(ticks(st.start)),
-		CPU:    ticks(st.cpu),
-		RSSKiB: int(st.rssPages * int64(os.Getpagesize()) / 1024),
+		PID:        pid,
+		PPID:       st.ppid,
+		Comm:       st.comm,
+		Args:       splitNul(raw),
+		Start:      boot.Add(ticks(st.start)),
+		StartTicks: st.start,
+		CPU:        ticks(st.cpu),
+		RSSKiB:     int(st.rssPages * int64(os.Getpagesize()) / 1024),
 	}, nil
 }
 

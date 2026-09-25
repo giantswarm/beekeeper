@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -23,6 +24,16 @@ import (
 //   - background: a `claude --bg` worker started through systemd-run: the
 //     daemon (3055535), the worker's terminal host (3055586) and CLI
 //     (3055597), a spare terminal host (3055581) and spare CLI (3055600).
+//   - spare: two `claude --bg` workers started one after the other through
+//     the same daemon (349150): worker a in a fresh CLI (349203), worker b
+//     in the spare the daemon handed it (349202, `claude bg-spare`), and
+//     the next spare (350263), which no session has claimed.
+//   - woken: worker a stopped and woken with `claude --bg --resume <id>`
+//     through a new daemon (399538): its CLI (399599) resumes the
+//     transcript's path; the daemon's spare (399593) is unclaimed.
+//
+// testdata/sessions holds the records the CLIs of spare and woken kept in
+// ~/.claude/sessions, reduced to the keys beekeeper reads and a few more.
 const (
 	desktopPID  = 2927993
 	desktopHost = "local_aaaaaaaa-0000-4000-8000-000000000002"
@@ -33,9 +44,16 @@ const (
 	detachedID  = "cccccccc-0000-4000-8000-000000000003"
 	workerPID   = 3055597
 	workerID    = "bbbbbbbb-0000-4000-8000-000000000004"
+	freshPID    = 349203
+	claimedPID  = 349202
+	wokenPID    = 399599
+	workerA     = "dddddddd-0000-4000-8000-000000000005"
+	workerB     = "eeeeeeee-0000-4000-8000-000000000006"
 )
 
-func discoverAt(t *testing.T, root string) map[int]*Session {
+// discoverAt discovers the sessions of a captured process tree with the CLI
+// records in sessions ("" for none).
+func discoverAt(t *testing.T, root, sessions string) map[int]*Session {
 	t.Helper()
 	tab, err := proc.ReadAt(root)
 	if err != nil {
@@ -43,6 +61,10 @@ func discoverAt(t *testing.T, root string) map[int]*Session {
 	}
 	cfg := &config.Config{}
 	cfg.Claude.ProjectsDir = t.TempDir()
+	cfg.Claude.SessionsDir = sessions
+	if sessions == "" {
+		cfg.Claude.SessionsDir = t.TempDir()
+	}
 	cfg.Claude.DesktopDir = filepath.Join("testdata", "desktop")
 	out := map[int]*Session{}
 	for _, s := range Discover(cfg, tab, time.Now()) {
@@ -51,8 +73,8 @@ func discoverAt(t *testing.T, root string) map[int]*Session {
 	return out
 }
 
-// copyTree copies a captured process tree into a temporary directory,
-// without the processes skip names.
+// copyTree copies a captured process tree or record directory into a
+// temporary directory, without the processes skip names.
 func copyTree(t *testing.T, src string, skip ...int) string {
 	t.Helper()
 	dst := t.TempDir()
@@ -69,7 +91,7 @@ func copyTree(t *testing.T, src string, skip ...int) string {
 
 func TestDiscoverKeepsTheDesktopSessionWhenItStartsChildren(t *testing.T) {
 	root := filepath.Join("testdata", "proc", "children")
-	got := discoverAt(t, root)
+	got := discoverAt(t, root, "")
 	if len(got) != 2 {
 		t.Fatalf("sessions = %v, want the desktop session and its detached child", got)
 	}
@@ -86,7 +108,7 @@ func TestDiscoverKeepsTheDesktopSessionWhenItStartsChildren(t *testing.T) {
 	}
 	// watch reports a restart when a key's PID changes: the children leave
 	// the desktop session's key and PID as they were without them.
-	alone := discoverAt(t, copyTree(t, root, inTreePID, detachedPID))
+	alone := discoverAt(t, copyTree(t, root, inTreePID, detachedPID), "")
 	if a := alone[desktopPID]; a == nil || a.Key() != d.Key() || len(alone) != 1 {
 		t.Errorf("without the children: %v", alone)
 	}
@@ -98,7 +120,7 @@ func TestDiscoverListsAChildStartedUnderItsOwnID(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, strconv.Itoa(inTreePID), "cmdline"), []byte(args), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got := discoverAt(t, root)
+	got := discoverAt(t, root, "")
 	c := got[inTreePID]
 	if c == nil || c.ID != detachedID || c.Parent != desktopID || c.Name != "test: in-tree child" {
 		t.Fatalf("in-tree child = %+v", c)
@@ -109,7 +131,7 @@ func TestDiscoverListsAChildStartedUnderItsOwnID(t *testing.T) {
 }
 
 func TestDiscoverFindsTheBackgroundWorkerNotItsDaemon(t *testing.T) {
-	got := discoverAt(t, filepath.Join("testdata", "proc", "background"))
+	got := discoverAt(t, filepath.Join("testdata", "proc", "background"), "")
 	w := got[workerPID]
 	if len(got) != 1 || w == nil {
 		t.Fatalf("sessions = %v, want the worker alone", got)
@@ -117,6 +139,68 @@ func TestDiscoverFindsTheBackgroundWorkerNotItsDaemon(t *testing.T) {
 	if w.ID != workerID || w.Name != "test: beekeeper#27 bg worker" || w.HostID != "" || w.Parent != "" || w.Key() != workerID {
 		t.Errorf("worker = %+v", w)
 	}
+}
+
+func TestDiscoverFindsAWorkerInAClaimedSpare(t *testing.T) {
+	root := filepath.Join("testdata", "proc", "spare")
+	records := filepath.Join("testdata", "sessions", "spare")
+	got := discoverAt(t, root, records)
+	if len(got) != 2 {
+		t.Fatalf("sessions = %v, want both workers, neither the daemon nor the unclaimed spare", got)
+	}
+	for pid, want := range map[int][2]string{freshPID: {workerA, "test: beekeeper#35 worker a"}, claimedPID: {workerB, "test: beekeeper#35 worker b"}} {
+		if w := got[pid]; w == nil || w.ID != want[0] || w.Name != want[1] || w.Key() != want[0] || w.HostID != "" || w.Parent != "" {
+			t.Errorf("worker %d = %+v", pid, w)
+		}
+	}
+	// A record a dead process left behind does not name a new process
+	// under its PID.
+	stale := copyTree(t, records)
+	rec := fmt.Sprintf(`{"pid":%d,"sessionId":%q,"name":"test: dead worker","procStart":"5390000","kind":"bg"}`, claimedPID, workerB)
+	if err := os.WriteFile(filepath.Join(stale, strconv.Itoa(claimedPID)+".json"), []byte(rec), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := discoverAt(t, root, stale); len(got) != 1 || got[freshPID] == nil {
+		t.Errorf("with a stale record: %v, want worker a alone", got)
+	}
+}
+
+func TestDiscoverFindsAWokenWorkerUnderItsID(t *testing.T) {
+	root := filepath.Join("testdata", "proc", "woken")
+	// Its record names it, and so does its transcript's path before the
+	// CLI has written the record.
+	for from, records := range map[string]string{"record": filepath.Join("testdata", "sessions", "woken"), "arguments": ""} {
+		got := discoverAt(t, root, records)
+		w := got[wokenPID]
+		if len(got) != 1 || w == nil || w.ID != workerA || w.Name != "test: beekeeper#35 worker a" || w.Key() != workerA {
+			t.Errorf("from its %s: sessions = %v, worker = %+v", from, got, w)
+		}
+	}
+}
+
+func TestDiscoverTakesTheSessionFromTheRecord(t *testing.T) {
+	// A resumed CLI goes on under a new session id; its arguments keep
+	// the one it resumed.
+	root := filepath.Join("testdata", "proc", "children")
+	tab, err := proc.ReadAt(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := t.TempDir()
+	rec := fmt.Sprintf(`{"pid":%d,"sessionId":"ffffffff-0000-4000-8000-000000000007","name":"test: renamed","procStart":"%d","kind":"interactive"}`, desktopPID, tab.ByPID[desktopPID].StartTicks)
+	if err := os.WriteFile(filepath.Join(records, strconv.Itoa(desktopPID)+".json"), []byte(rec), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d := discoverAt(t, root, records)[desktopPID]
+	// The desktop title still names it, and its host id keys it.
+	if d == nil || d.ID != "ffffffff-0000-4000-8000-000000000007" || d.Name != desktopName || d.Key() != desktopHost {
+		t.Fatalf("desktop session = %+v", d)
+	}
+}
+
+// claudeProcess is a claude process with the arguments args, separated by "|".
+func claudeProcess(args string) *proc.Process {
+	return &proc.Process{Comm: "claude", Args: strings.Split(args, "|")}
 }
 
 func TestIsCLI(t *testing.T) {
@@ -131,16 +215,30 @@ func TestIsCLI(t *testing.T) {
 		"claude|bg-pty-host|--bg-pty-host|s|--|claude|--session-id|x": false,
 		"claude bg-pty-host|--bg-pty-host|s|--|claude|--session-id|x": false,
 		"claude bg-spare|--bg-spare|s":                                false,
+		"claude|--bg-spare|s":                                         false,
 		"claude|--bg|-n|worker|prompt":                                false,
 		"claude|stop|bbbbbbbb":                                        false,
 		"claude|mcp|serve":                                            false,
 	} {
-		if got := isCLI(&proc.Process{Comm: "claude", Args: strings.Split(args, "|")}); got != want {
+		if got := isCLI(claudeProcess(args)); got != want {
 			t.Errorf("isCLI(%q) = %v", args, got)
 		}
 	}
 	if isCLI(&proc.Process{Comm: "claude-desktop", Args: []string{"claude-desktop"}}) {
 		t.Error("the desktop app is a CLI")
+	}
+}
+
+func TestIsSpare(t *testing.T) {
+	for args, want := range map[string]bool{
+		"claude bg-spare|--bg-spare|s":                              true,
+		"claude|--bg-spare|s":                                       true,
+		"claude bg-pty-host|--bg-pty-host|s|--|claude|--bg-spare|s": false,
+		"claude|--session-id|x":                                     false,
+	} {
+		if got := isSpare(claudeProcess(args)); got != want {
+			t.Errorf("isSpare(%q) = %v", args, got)
+		}
 	}
 }
 
@@ -153,6 +251,7 @@ func TestOwnID(t *testing.T) {
 		"claude -r --model haiku":            "",
 		"claude -p ok":                       "",
 		"claude --session-id s5 --resume s6": "s5",
+		"claude --resume /home/user/.claude/projects/-home-user-work/s7.jsonl -n w": "s7",
 	} {
 		if got := ownID(strings.Fields(args)); got != want {
 			t.Errorf("ownID(%q) = %q, want %q", args, got, want)
