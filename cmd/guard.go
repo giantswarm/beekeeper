@@ -169,7 +169,70 @@ Register it in ~/.claude/settings.json:
 			return nil
 		},
 	})
+	c.AddCommand(&cobra.Command{
+		Use:   "permissionrequest",
+		Short: "The PermissionRequest hook: no card for beekeeper's own bypass starts after the desktop import",
+		Long: `permissionrequest reads a PermissionRequest event on stdin: Claude Code is
+about to show the person a permission card. It answers "allow" only when
+the session is one beekeeper agents start started in bypassPermissions (its
+session id is in beekeeper's record of starts) and the session now runs in
+acceptEdits, the mode Claude Desktop's import gives it. Each allow is a
+hook.allow event in beekeeper log.
+
+Every other request gets no answer and the person gets the normal card:
+sessions beekeeper did not start, desktop sessions, and beekeeper's starts
+the person set to default or plan. Deny rules still win: Claude Code
+refuses a denied call before it asks, so the hook never sees it. Malformed
+input, an unreadable configuration or state, any error: no answer, never an
+allow. A request in any mode but acceptEdits is decided without reading the
+state.
+
+Register it in ~/.claude/settings.json:
+
+  "PermissionRequest": [{"matcher": "*", "hooks": [{"type": "command",
+    "command": "~/.go/bin/beekeeper hook permissionrequest", "timeout": 10}]}]`,
+		Args: cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			defer func() { _ = recover() }() // a broken hook gives no answer: the person's card
+			raw, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				return nil
+			}
+			var start state.Start
+			out, req := guard.Permission(raw, func(session string) bool {
+				var ok bool
+				start, ok = a.bypassStart(session)
+				return ok
+			})
+			if out == nil {
+				return nil
+			}
+			if _, err := a.out.Write(out); err == nil && a.store != nil {
+				_ = a.store.Log(state.Event{At: time.Now(), By: start.Party, Verb: "hook.allow", Detail: req.Tool + " in " + start.Dir})
+			}
+			return nil
+		},
+	})
 	return c
+}
+
+// bypassStart returns the record of session when beekeeper agents start
+// started it in bypassPermissions. It reads the state without its lock, so
+// that a permission request never waits on a slow update.
+func (a *app) bypassStart(session string) (state.Start, bool) {
+	if a.loadConfig() != nil {
+		return state.Start{}, false
+	}
+	store, err := state.Open(a.cfg.StateDir)
+	if err != nil {
+		return state.Start{}, false
+	}
+	st, err := store.Peek()
+	if err != nil {
+		return state.Start{}, false
+	}
+	a.store = store
+	return st.BypassStart(session)
 }
 
 // loadConfig reads the configuration without opening the state.
