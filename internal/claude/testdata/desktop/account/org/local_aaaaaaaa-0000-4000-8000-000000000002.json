@@ -1,0 +1,10 @@
+{
+  "sessionId": "local_aaaaaaaa-0000-4000-8000-000000000002",
+  "cliSessionId": "aaaaaaaa-0000-4000-8000-000000000001",
+  "cwd": "/home/user/work/repo",
+  "branch": "main",
+  "title": "test: desktop session",
+  "isArchived": false,
+  "permissionMode": "bypassPermissions",
+  "model": "claude-opus-5-5"
+}

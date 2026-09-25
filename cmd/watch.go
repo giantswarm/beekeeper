@@ -360,7 +360,7 @@ func (w *watcher) notifyKills(ctx context.Context, kills []oomKill) {
 func (w *watcher) sessionChanges(sessions []*claude.Session) {
 	cur := map[string]*claude.Session{}
 	for _, s := range sessions {
-		cur[sessionKey(s)] = s
+		cur[s.Key()] = s
 	}
 	if w.sessions == nil {
 		w.sessions = cur
@@ -571,16 +571,6 @@ func firePending(st *state.State, sessions []*claude.Session, now time.Time) ([]
 		evs = append(evs, event(watchParty, "session.ended", "%s: %s", r.Session.Name, recordText(*r)))
 	}
 	return lines, evs
-}
-
-func sessionKey(s *claude.Session) string {
-	if s.HostID != "" {
-		return s.HostID
-	}
-	if s.ID != "" {
-		return s.ID
-	}
-	return fmt.Sprint(s.PID)
 }
 
 func (w *watcher) staleLeases(ctx context.Context, sessions []*claude.Session) {

@@ -118,7 +118,10 @@ func (a *app) sessionsCmd() *cobra.Command {
 		Long: `List the running Claude Code sessions, most recently active first: the
 repository and the issues or pull requests its latest turns are about, when
 it was last active, the tool commands it runs right now (a devctl wait, a
-bounded sleep with the time left), its memory, and its role and leases.
+bounded sleep with the time left), its memory, and its role and leases. A
+session another session started (a claude -p or claude --bg worker with an
+id of its own) is listed under its own id and name, started by that session;
+a claude --bg daemon is no session.
 
 Overlaps name the issues, pull requests and repositories more than one
 session is on now. --all adds the sessions of the last 24 hours that run no
@@ -295,6 +298,9 @@ func (a *app) printSessions(v *view) {
 	_, _ = fmt.Fprintln(w, "SESSION\tON\tACTIVE\tRUNNING\tMEM\tROLE / LEASES")
 	for _, s := range v.Sessions {
 		role := s.Role
+		if role == "" && s.Parent != "" {
+			role = "started by " + parentName(v.raw, s.Parent)
+		}
 		if len(s.Leases) > 0 {
 			role = strings.TrimPrefix(role+" holds "+strings.Join(s.Leases, ","), " ")
 		}
@@ -309,6 +315,15 @@ func (a *app) printSessions(v *view) {
 			_, _ = fmt.Fprintf(a.out, "  %s: %s\n", o.Key, strings.Join(o.Sessions, ", "))
 		}
 	}
+}
+
+// parentName names the session that started a child session: its name
+// while it runs, else its id.
+func parentName(sessions []*claude.Session, id string) string {
+	if s, ok := claude.Live(sessions, state.Party{Session: id}); ok {
+		return fmt.Sprintf("%q", s.Name)
+	}
+	return id
 }
 
 // on is the repository and refs a session is on, or its checkout.

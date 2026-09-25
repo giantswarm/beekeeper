@@ -66,6 +66,12 @@ relieved (`supervisor status` in the session a relay relieved), 125 a newer rele
 `--json` prints any command's result as JSON. A session is identified by the environment
 Claude Code gives its tool commands; a person or a script passes `--as <name>`.
 
+Every session is a Claude Code CLI of its own: a desktop session, a `claude --bg` worker (its
+daemon and terminal hosts are no session) or a headless `claude -p`. A CLI that a session
+started, from its tool shell or through `systemd-run`, is listed under its own `--session-id`
+(or `--resume`) and `-n` name, `started by` that session, never as that session restarting; a
+`claude -p` its tool shell runs without an id of its own is one of that session's commands.
+
 ## The merge gate
 
 Sessions keep typing `devctl pr merge <owner/repo> <n> [flags]`; beekeeper never replaces devctl.
