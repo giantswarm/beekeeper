@@ -1,0 +1,10 @@
+[
+  {"id": 23, "for": "Supervisor", "text": "the predictor roll on an installation: watch it after the merge", "by": {"session": "s1", "name": "Agent one"}, "at": "2026-09-24T21:10:00Z"},
+  {"id": 37, "for": "team", "text": "Morning: each chip needs 'need <env>' before it claims", "by": {"session": "s2", "name": "Agent two"}, "at": "2026-09-24T22:00:00Z"},
+  {"id": 84, "text": "[for Pat] refine the proposal: the split or one issue?", "by": {"session": "s3", "name": "Agent three"}, "at": "2026-09-25T06:30:00Z"},
+  {"id": 88, "for": "Supervisor", "text": "the 24h proof, timer #5", "by": {"session": "s1", "name": "Agent one"}, "at": "2026-09-25T07:00:00Z"},
+  {"id": 90, "text": "[for Supervisor] the board sweep is due", "by": {"session": "s2", "name": "Agent two"}, "at": "2026-09-25T07:10:00Z"},
+  {"id": 92, "text": "check the rollout", "by": {"session": "s2", "name": "Agent two"}, "at": "2026-09-25T07:20:00Z"},
+  {"id": 99, "for": "Pat", "text": "merge the context bump?", "default": "it waits", "by": {"session": "s3", "name": "Agent three"}, "at": "2026-09-25T08:00:00Z"},
+  {"id": 100, "for": "pat", "text": "relay due: pick the successor", "by": {"session": "s1", "name": "Agent one"}, "at": "2026-09-25T09:00:00Z"}
+]

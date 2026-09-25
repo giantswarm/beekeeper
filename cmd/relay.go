@@ -51,7 +51,7 @@ var (
 		name: "guide", inf: "guide", verb: "guides", ing: "guiding", tag: "GUIDE ", duty: "the guide's role", handover: "beekeeper guide handover --prompt",
 		gone: "a successor's `beekeeper guide start` takes the role (beekeeper guide handover --prompt)",
 		get:  (*state.State).GuideRole, set: (*state.State).SetGuideRole,
-		cfg: func(c *config.Config) config.Role { return c.Guide },
+		cfg: func(c *config.Config) config.Role { return c.Guide.Role },
 	}
 	roles = []role{supervisorRole, guideRole}
 )

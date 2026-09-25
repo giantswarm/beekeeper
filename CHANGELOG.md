@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `guide queue` and `guide watch` show only the notes for the guide's person, `guide.person` (new; matched without case, an older note marked only by a `[for <person>]` text prefix included, the prefix left out of its line), plus the sessions waiting on the person. A note the feed said before that is open but filed for someone else leaves it without a line. With `guide.person` unset, both show every `--for` note as before and say once that it is unset.
+
 ### Added
 
 - `beekeeper supervisor spare <session>` records the relay spare; `supervisor status` and `handover` show it, and the spare's `supervisor start` clears it. The state's `spare` field is new; older binaries carry it unchanged.

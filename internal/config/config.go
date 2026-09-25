@@ -55,7 +55,17 @@ type Config struct {
 	Supervisor Supervisor `yaml:"supervisor"`
 	// Guide is the role that walks the person through the decisions
 	// waiting on them, never in the supervisor's session.
-	Guide Role `yaml:"guide"`
+	Guide Guide `yaml:"guide"`
+}
+
+// Guide configures the guide: its role and the person it guides.
+type Guide struct {
+	Role `yaml:",inline"`
+	// Person is the name the guide's notes are filed for (note add --for,
+	// or an older note's "[for <person>]" prefix), matched without regard
+	// to case. Its queue and feed show only that person's notes; empty,
+	// they show every note filed --for anyone.
+	Person string `yaml:"person"`
 }
 
 // Supervisor configures the supervisor: its role and the scope it
@@ -524,7 +534,7 @@ func (r *Role) defaults(home string) {
 }
 
 func (c *Config) validate() error {
-	for name, r := range map[string]Role{"supervisor": c.Supervisor.Role, "guide": c.Guide} {
+	for name, r := range map[string]Role{"supervisor": c.Supervisor.Role, "guide": c.Guide.Role} {
 		if r.Skill != "" && r.Instructions != "" {
 			return fmt.Errorf("%s: set skill or instructions, not both", name)
 		}
