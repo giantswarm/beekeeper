@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"maps"
@@ -48,7 +49,10 @@ same failing tool call repeating in it, its context's fill) is one RUNAWAY
 line per figure, once per watch. A lane whose first arrived merge has
 waited longer than merge.stallAfter (5m) behind places whose merges are
 not in the gate (beekeeper lanes) is one LANE STALLED line when it starts
-and one ENDED line when it ends. A settling merge leaves its lane
+and one ENDED line when it ends. A running merge whose gate process is
+gone is one MERGE LOST line: it settles with an unknown release. A
+registered agent with a task and no running CLI is one AGENTS STOPPED
+line with how to resume it. A settling merge leaves its lane
 once the lane has settled (its release rolled and its HelmReleases Ready,
 or no installation to roll), logged as lane.settled, silently. A note or a
 timer that falls due, the end of a session with a record (sessions serve)
@@ -152,6 +156,9 @@ type watcher struct {
 	// records are the session records of the last poll: their sessions'
 	// ends get the record's line instead of the SESSIONS ended one.
 	records []state.Record
+	// stopped are the agents with a task this watch said have no running
+	// CLI, by session key, until their CLI runs again.
+	stopped map[string]bool
 	// spare is the standby watch's keep-awake and hand-over memory; table
 	// the last poll's process table.
 	spare spareWatch
@@ -298,7 +305,7 @@ type watchMark struct {
 func (a *app) newWatcher(standby, keep bool) *watcher {
 	w := &watcher{app: a, standby: standby, last: map[string]time.Time{}, seenKills: map[string]bool{},
 		reported: map[string]bool{}, active: map[string]condition{}}
-	w.spare = spareWatch{send: a.peerSend, sent: map[string]time.Time{}, checked: map[string]bool{}}
+	w.spare = spareWatch{send: a.peerSend, open: openDesktop, sent: map[string]time.Time{}, checked: map[string]bool{}}
 	if me, err := a.caller(); keep && err == nil {
 		w.markFile = "seen.watch." + fileKey(me) + ".json"
 		var m watchMark
@@ -391,6 +398,7 @@ func (w *watcher) poll(ctx context.Context) {
 	w.sessionChanges(sessions)
 	w.staleLeases(ctx, sessions)
 	w.runaways(sessions, t)
+	w.lostMerges()
 	w.stalls()
 	w.settled(ctx)
 
@@ -446,6 +454,33 @@ func (w *watcher) stalls() {
 // the lane free before its next merge starts: a lane with no installation
 // has nothing to roll, and one whose release rolled and whose HelmReleases
 // are Ready is done. A lane past merge.settleTimeout is left to lanes clear.
+// lostMerges settles each running merge whose gate process is gone (a gate
+// killed, or lost with the machine), once: the gate itself prunes it only
+// when the lane's next merge arrives, and until then the lane shows a merge
+// running that no process runs.
+func (w *watcher) lostMerges() {
+	st, err := w.store.Read()
+	if err != nil || !slices.ContainsFunc(st.Merges, func(m state.Merge) bool { return m.Phase == state.Running && !proc.Alive(m.PID) }) {
+		return
+	}
+	var lost []state.Merge
+	err = w.store.Update(func(st *state.State) ([]state.Event, error) {
+		lost = merge.Lost(st, w.now, proc.Alive)
+		evs := make([]state.Event, 0, len(lost))
+		for _, m := range lost {
+			evs = append(evs, event(watchParty, "merge.lost", "%s in lane %s: its gate (pid %d) is gone", m.Key(), m.Lane, m.PID))
+		}
+		return evs, nil
+	})
+	if err != nil {
+		return
+	}
+	for _, m := range lost {
+		w.emitNow("lanes", "MERGE LOST: %s in lane %s by %q: its gate (pid %d) is gone, whether it merged is unknown; the lane settles until %s, then frees once its HelmReleases are Ready",
+			m.Key(), m.Lane, m.By.Name, m.PID, clock(w.now, w.now.Add(w.cfg.Merge.Settle.Duration)))
+	}
+}
+
 func (w *watcher) settled(ctx context.Context) {
 	st, err := w.store.Read()
 	if err != nil {
@@ -633,6 +668,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		w.resumeRestarted(ctx, st, sessions)
 		return // the supervisor's watch reports them
 	}
+	w.stoppedAgents(st, sessions)
 	q := w.quietness(ctx, st, sessions)
 	w.handoversDue(st, sessions)
 	fire := func(st *state.State) ([]string, []state.Event, bool) {
@@ -672,6 +708,25 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	}
 }
 
+// stoppedAgents says once which agents with a task have no running CLI: a
+// worker stopped by a reboot or a crash does not come back by itself, and
+// its task waits until the supervisor resumes it.
+func (w *watcher) stoppedAgents(st *state.State, sessions []*claude.Session) {
+	stopped := map[string]bool{}
+	var now []string
+	for _, ag := range stoppedAgents(st.Agents, sessions) {
+		k := cmp.Or(ag.Session, ag.Name)
+		stopped[k] = true
+		if !w.stopped[k] {
+			now = append(now, fmt.Sprintf("%q (%s)", ag.Name, resumeHint(ag)))
+		}
+	}
+	w.stopped = stopped
+	if len(now) > 0 {
+		w.emitNow("agents", "AGENTS STOPPED with a task and no running CLI: %s", strings.Join(now, ", "))
+	}
+}
+
 // dueItem is a note or timer this poll reported due.
 type dueItem struct{ key, summary, body string }
 
@@ -708,6 +763,13 @@ func firedNow(st *state.State, now time.Time) []dueItem {
 func (w *watcher) supervisorGone(ctx context.Context, st *state.State, sessions []*claude.Session) bool {
 	s := st.Supervisor
 	sv := readSupervision(st, sessions, w.now, w.cfg.Supervisor.RestartGrace.Duration)
+	var key string
+	if s != nil {
+		key = s.Name + "@" + s.Since.UTC().Format(time.RFC3339)
+	}
+	if sv.live {
+		w.spare.liveTerm, w.spare.liveAt = key, w.now
+	}
 	if !sv.down() || st.Relay.Open(w.now) {
 		switch {
 		case s == nil:
@@ -718,7 +780,6 @@ func (w *watcher) supervisorGone(ctx context.Context, st *state.State, sessions 
 		}
 		return sv.live
 	}
-	key := s.Name + "@" + s.Since.UTC().Format(time.RFC3339)
 	spare := ""
 	if w.standby {
 		spare = w.handOver(ctx, st, sessions, key)

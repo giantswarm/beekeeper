@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- After a reboot the standby watch reopens the recorded supervisor's desktop session when no running spare can take over. The app starts at login before the watch's first poll, which first saw the supervisor's CLI gone only then, so the app looked started before the CLI stopped and the reopen never fired. The watch now also reopens when it never saw that CLI run under the running app.
+- `watch` settles a running merge whose gate process is gone (`MERGE LOST`, a `merge.lost` event) instead of leaving it running until the lane's next gate call; `lanes clear` drops such a merge too.
 - `agents handover` sends the note request to the name the agent's running CLI answers peer messages under (an imported session's desktop derives one, such as `w-c2`), not the roster name, which no CLI answers to.
 - `guide queue` and `guide watch` leave out the guide's own session, archived sessions and test runs (titled `test: …`), and add the stopped, unarchived sessions waiting on the person, marked `(stopped)`. `sessions` marks archived and test sessions in its role column, `sessions --json` has `archived`.
 
@@ -18,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `watch` says `AGENTS STOPPED` once per registered agent with a task and no running CLI, and the `handover --prompt` Agents section marks it, each with how to resume it (`claude --bg --resume <session> "…"`, or the desktop session's `claude://code/continue` link). The state's format is unchanged.
 - `beekeeper agents handover <agent>` hands a registered agent over to a fresh session near its context limit: it asks the agent by peer message for a note (`beekeeper agents note`, new), builds the follow-up's prompt (`--prompt`: the roster task, the brief, the session record, its gated merges, its last events, its note), starts the follow-up under the agent's name as `agents start` does, taking over the roster entry, task and session record, stops the old session's CLI and the processes under it by PID, and logs `agents.handover`; one line per step. It refuses (exit 3) before any step unless a PermissionRequest hook running `beekeeper hook permissionrequest` is configured where the follow-up starts (the user settings, or the folder's or checkout's `.claude/settings.json` or `settings.local.json`). `watch` says `HANDOVER DUE` once per agent session whose context reached `agents.relayAt` (new, default `supervisor.relayAt`), at its first quiet moment. The state's format is unchanged: the note is an event, the report is kept in the watch's mark.
 - `agents start` and `agents handover` pass a configuration named with `--config` or `$BEEKEEPER_CONFIG` to the started session as `$BEEKEEPER_CONFIG`.
 - `beekeeper agents start <name> <brief file>` starts an agent without a click: `claude -p` in `bypassPermissions` under a session id beekeeper chooses, in a transient user unit, recorded as one of beekeeper's starts and registered on the roster under the name before the session exists, then imported into Claude Desktop with `claude://resume`. The state's `starts` field is new; older binaries carry it unchanged.

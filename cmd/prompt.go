@@ -50,7 +50,7 @@ func (a *app) printPrompt(ctx context.Context, v *view, l *leaseList, al *alerts
 	a.promptHolds(p, a.activeHolds(v.st))
 	a.promptLanes(p, a.laneViews(v.st))
 	a.promptRecords(p, v.st.Records, v.raw)
-	a.promptAgents(p, v.st.Agents)
+	a.promptAgents(p, v.st.Agents, v.raw)
 	a.promptAlerts(p, al)
 	p("## Live values\n\nRead them when you need them; this prompt holds none:\n")
 	for _, c := range liveCommands {
@@ -263,11 +263,15 @@ func (a *app) promptRecords(p printer, records []state.Record, sessions []*claud
 	p("")
 }
 
-func (a *app) promptAgents(p printer, agents []state.Agent) {
+func (a *app) promptAgents(p printer, agents []state.Agent, sessions []*claude.Session) {
 	if !section(p, "Agents", len(agents) == 0, "None registered.") {
 		return
 	}
 	for _, ag := range agents {
+		if _, live := claude.Live(sessions, ag.Party); ag.Task != "" && !live {
+			p("- %q on %s since %s; its CLI is not running (stopped by a reboot or a crash): resume it with `%s`", ag.Name, oneLine(ag.Task), a.stamp(ag.AssignedAt), resumeHint(ag))
+			continue
+		}
 		if ag.Task != "" {
 			p("- %q on %s since %s", ag.Name, oneLine(ag.Task), a.stamp(ag.AssignedAt))
 			continue

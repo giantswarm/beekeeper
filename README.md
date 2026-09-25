@@ -162,6 +162,11 @@ devctl already runs is never re-executed. A lane that stays stuck anyway (a seed
 gone) is flagged: `lanes` shows it `stalled` and `watch` says `LANE STALLED` once the first
 arrived merge has waited `merge.stallAfter` behind places whose merges are not in the gate.
 
+A running merge whose gate process is gone (killed, or lost with the machine in a reboot) is
+lost: whether it merged is unknown. `watch` turns it into the lane's settling merge with an
+unknown release, one `MERGE LOST` line and a `merge.lost` event, so the lane settles for
+`merge.settle` and frees once its HelmReleases are Ready; `lanes clear <lane>` drops it at once.
+
 A merge of giantswarm/devctl opens a tool-release window by itself: a `merges` hold with
 giantswarm/devctl excepted, since the release makes every in-flight devctl run refuse until
 updated. It lifts once no devctl merge runs and the local `devctl version` reports another
@@ -289,10 +294,18 @@ running CLI is one `SPARE ASLEEP` line.
   [`contrib/systemd/beekeeper-supervisor-open.service`](contrib/systemd/beekeeper-supervisor-open.service)
   runs `beekeeper supervisor reopen`, which starts the app on the recorded supervisor's session
   (`claude://code/continue?session=local_…`); the standby watch opens it the same way once when
-  it sees the app started after the supervisor went gone with no spare to take over. Every CLI is
+  it sees the app started after the supervisor's CLI stopped with no spare to take over: after the
+  CLI was first seen gone, or with the watch never having seen that CLI run under this app, as
+  after a reboot, where the app starts at login before the standby watch's first poll. Every CLI is
   cold after an app start, so the focus starts the supervisor's; the standby watch sees its CLI
   back under a new PID and sends it the same hand-over from the command line (`RESUME`), since a
   restarted CLI has lost its watch.
+- **Stopped workers:** a registered agent with a task whose CLI does not run (a `claude --bg`
+  worker a reboot stopped, a desktop session closed) does not come back by itself. `watch` says
+  `AGENTS STOPPED` once per agent, and the `handover --prompt` Agents section marks it, each with
+  how to resume it: `claude --bg --resume <session> "…"` for a background worker, its
+  `claude://code/continue` link for a desktop session. Nothing is resumed automatically: a burst
+  of resumed workers after a login is the supervisor's call against the machine's memory.
 
 The command-line send is one headless `claude -p` turn whose only tool is SendMessage, addressed
 by the name ListAgents shows (the session's title): Claude Code has no send command, and its
