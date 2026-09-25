@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `beekeeper agents start <name> <brief file>` starts an agent without a click: `claude -p` in `bypassPermissions` under a session id beekeeper chooses, in a transient user unit, recorded as one of beekeeper's starts and registered on the roster under the name before the session exists, then imported into Claude Desktop with `claude://resume`. The state's `starts` field is new; older binaries carry it unchanged.
+- `beekeeper hook permissionrequest`, a PermissionRequest hook: it allows a request only for a session `agents start` started in bypass that now runs in `acceptEdits` (the desktop import's downgrade), each allow a `hook.allow` event; every other session gets the normal card, and deny rules still win.
 - `beekeeper supervisor spare <session>` records the relay spare; `supervisor status` and `handover` show it, and the spare's `supervisor start` clears it. The state's `spare` field is new; older binaries carry it unchanged.
 - The standby watch (`watch --standby`) keeps the spare awake: once it sat idle for `supervisor.keepAwake` (default `25m`, under the desktop's 30-minute idle timeout for an off-screen CLI) it sends `beekeeper keep-awake: reply "ok", nothing else` from the command line, silent unless it fails (`KEEP-AWAKE FAILED`, `SPARE ASLEEP`).
 - After a supervisor crash the standby watch hands the role to the running spare from the command line once the CLI has been gone past `supervisor.restartGrace` (`HANDOVER`); `SUPERVISOR GONE` and its notification name the spare. A supervisor CLI back under a new PID is told to resume the role (`RESUME`).

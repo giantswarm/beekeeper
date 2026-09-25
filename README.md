@@ -54,6 +54,7 @@ the budget work on any system.
 | `beekeeper guide queue` | The guide's queue: every open note filed `--for` a person with its owning session (the one that filed it, and whether it still runs), deadline and default, then every session the desktop files as waiting on its person (its session record's latest turn summary is `blocked` with an action; no transcript is read). Delta output like `sessions`. |
 | `beekeeper guide watch [--once]` | The guide's feed, silent otherwise: `GUIDE DECISION` for each new open `--for` note, `GUIDE WAITING` for each session newly waiting on its person, `GUIDE ANSWERED` or `GUIDE CLOSED` for a note of the queue closed, and the guide's relay: `GUIDE RELAY DUE` once its context reaches `guide.relayAt` (400k), `GUIDE RELAY TAKEN`, `GUIDE RELAY EXPIRED`, `GUIDE RESTARTED`. Each is one line, once: what it said is kept in the state (`guide.fed`). |
 | `beekeeper agents register\|assign\|idle` | The roster of empty sessions registered as spare capacity. `register` names the session by its title (a `claude --bg` worker by its `-n` name) unless `--name` overrides it. A name is one agent's: registering under the name of a session that no longer runs (what `agents` shows as `not running`: stopped, closed or asleep) replaces its entry, saying so; a task the replaced entry left unfinished becomes the new entry's, with its assignment time, named in the `agents.register` event (`replaces <id>, takes over "<task>"`) and in the output, so the fresh session works it and a later `assign` to the name is refused as busy until `idle`. Re-registering keeps the session's own open task; two dropped entries with open tasks are refused (exit 3). A name a running session's entry holds is refused (exit 3). `assign` and `remove` take a session id, a name or a unique part of one, and refuse a name several entries share. |
+| `beekeeper agents start <name> <brief file> [--model m] [--dir d]` | Starts an agent session without a click: `claude -p` in `bypassPermissions` under a session id beekeeper chooses, the brief as its first prompt, in a transient user unit `beekeeper-agent-<id>` (`KillMode=process`, the user manager's environment). Before the session exists it records the id and mode as one of beekeeper's starts (the state's `starts`, kept 30 days) and registers it on the roster under the name, busy with the brief's first line or with the open task of a stopped entry under that name. Once the transcript is on disk it imports the session into Claude Desktop (`claude://resume?session=<id>`, sidebar row `local_<id>`). See [Agents started without a click](#agents-started-without-a-click). |
 | `beekeeper note add\|answer\|done` | Open items that outlive a session: a decision waiting on a person with its deadline and what happens if nobody answers (`note add --for Timo --due 22:55 --default "the alert stays as is" <text>`), a deadline. `watch` reports a note once when it is due. `note answer <id> <answer>` records the person's answer word for word and closes the note; the `note.answered` event carries it for the owning session, the supervisor and the guide's feed. |
 | `beekeeper timer add\|done\|list` | Times to look at something: `timer add 22:55 "check the rollout"` (or a duration, `45m`). `watch` prints one line when a timer is due; it stays open until `timer done`. |
 | `beekeeper sessions serve\|unserve` | A record for any session, registered agent or not: `sessions serve <session> <owner/repo#n> [--waits "<what>"]`, the issue or epic it serves and what it waits on. `sessions` and `handover` show it; `watch` prints one line when the session ends, naming the issue to re-query. |
@@ -61,6 +62,7 @@ the budget work on any system.
 | `beekeeper log [--verb PREFIX]` | Every claim, grant, hold, registration, note, timer, session record and build run, as they happened; `--verb run.` shows only the runs. |
 | `beekeeper run [--max SIZE] [--wait DURATION] -- <command>` | Run a build, test or lint command in one of the machine's build slots (memcap's, shared with the `memcap` wrapper) inside a memory-capped systemd scope. When every slot is held it waits once, then exits 75 with the holders; when the cap fires the kernel kills the biggest process in the scope only, and `run` exits 137 with one line starting `beekeeper run: the <SIZE> cap killed:`. Each run leaves `run.start` and `run.end` in `beekeeper log` with its scope, session and command, so `snapshot` and `watch` name a cap kill's session and command after the run has ended. `MEMCAP_TEST=1` marks a test's run: its scope is `memcap-test-…`, and a kill in it is reported as a test kill (one quiet `test kill:` line in `watch`), never as a build's. |
 | `beekeeper hook pretooluse` | The Bash tool's PreToolUse hook: rewrites build, test, lint and lab commands to `<this binary> run -- zsh -c '<command>'` with the command verbatim and the tool timeout at 10 minutes (a background run waits 60 minutes), and refuses a third kind cluster, listing the held leases. It puts the merge gate in front of every `devctl pr merge`, behind prefix commands and in pipelines and lists, and refuses one hidden in a `-c` string (below); every other devctl command passes untouched. |
+| `beekeeper hook permissionrequest` | The PermissionRequest hook: answers `allow` only for a session `agents start` started in bypass that now runs in `acceptEdits`; every other request gets no answer, so the person sees the normal card. Below. |
 | `beekeeper free [--apply] [--only SECTIONS] [--summary]` | Show where the memory is and, with `--apply`, free what no running work needs: dead sessions' dirs in the tmpfs `/tmp` (the CLI is gone; an idle session's stay), throwaway temp dirs and orphaned jest or Claude workers. Kind clusters, idle CLIs, heavy or runaway processes and Chrome renderers are only reported. Never runs as root: the swap reset and root-owned leftovers are printed as the commands to run. `--summary` prints the TSV rows a desktop front end parses. |
 | `beekeeper self-update` | Install the latest signed release over this binary; `--check` only asks. |
 
@@ -303,6 +305,46 @@ tab-separated fields, always present, in this order.
 | 3 | the number of leases held |
 | 4 | the number of holds in force |
 | 5 | the number of notes and timers whose time has come |
+
+### Agents started without a click
+
+`beekeeper agents start <name> <brief file>` starts an agent the way a person would start a
+session and hand it a brief, without the click. The first turn runs the brief from the command
+line in bypass. The session is then a desktop session: the supervisor sends it later work with
+SendMessage to `local_<id>`, and the person reads and answers it in the sidebar. Send it nothing
+while its first turn runs: `beekeeper agents` shows it live until then.
+
+Claude Desktop's import turns `bypassPermissions` into `acceptEdits` for every desktop turn, with
+no setting to change that, and raising the mode again takes the person's approval card each time.
+So in its desktop turns such an agent would stop at the first request no allow rule covers.
+`beekeeper hook permissionrequest` answers those requests.
+
+**What the hook allows:** every request that would otherwise show a permission card, and nothing
+else, only in sessions whose id `beekeeper agents start` recorded together with the mode
+`bypassPermissions` it passed at start, and only while such a session runs in `acceptEdits`, the
+mode the import gives it. That is exactly what the session's bypass start already allowed. Its
+subagents share its session id and are answered the same way. Each allow is a `hook.allow` event
+in `beekeeper log`, naming the session and the tool.
+
+**What it leaves to the person:** every other session gets no answer and the normal card: desktop
+sessions, sessions started any other way (a `claude -p` in bypass that beekeeper did not start
+included), beekeeper's starts the person set to `default` or `plan`, and starts older than 30
+days. Deny rules still win: Claude Code refuses a denied call before it asks, so the hook never
+sees it. The desktop's own consent cards (raising a mode, deleting a session) are the app's, not
+permission requests, and the hook cannot answer them. On malformed input or an unreadable
+configuration or state the hook gives no answer, never an allow; a request in any mode but
+`acceptEdits` is decided without reading the state, and the state is read without its lock, so
+a permission request never waits on beekeeper.
+
+A session cannot add itself: its id enters the record only through the start that created it,
+written under the state lock before the session existed.
+
+Install it in `~/.claude/settings.json`, next to the PreToolUse hook:
+
+```json
+"PermissionRequest": [{"matcher": "*", "hooks": [{"type": "command",
+  "command": "~/.go/bin/beekeeper hook permissionrequest", "timeout": 10}]}]
+```
 
 ## Session metrics
 

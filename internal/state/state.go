@@ -248,6 +248,32 @@ type Record struct {
 	Ended time.Time `json:"ended,omitzero"`
 }
 
+// ModeBypass is Claude Code's bypassPermissions mode.
+const ModeBypass = "bypassPermissions"
+
+// Start is a session `beekeeper agents start` started: the id beekeeper
+// chose and the permission mode it passed, recorded before the session
+// existed. A session cannot add itself: its id is only ever written here by
+// the start that created it.
+type Start struct {
+	Party
+	Mode string    `json:"mode"`
+	Dir  string    `json:"dir"`
+	By   Party     `json:"by"`
+	At   time.Time `json:"at"`
+}
+
+// BypassStart returns the start of session when beekeeper started it in
+// bypassPermissions.
+func (st *State) BypassStart(session string) (Start, bool) {
+	for _, s := range st.Starts {
+		if session != "" && s.Session == session && s.Mode == ModeBypass {
+			return s, true
+		}
+	}
+	return Start{}, false
+}
+
 // State is the whole document.
 type State struct {
 	Supervisor *Supervisor `json:"supervisor,omitempty"`
@@ -278,6 +304,9 @@ type State struct {
 	NextTimer int                  `json:"nextTimer,omitempty"`
 	// Records say which session serves which issue.
 	Records []Record `json:"records,omitempty"`
+	// Starts are the sessions beekeeper started, what the permission hook
+	// answers for.
+	Starts []Start `json:"starts,omitempty"`
 	// BudgetETag makes the budget probe a conditional request (a 304
 	// costs no budget).
 	BudgetETag string `json:"budgetETag,omitempty"`
@@ -432,6 +461,11 @@ func (s *Store) Read() (*State, error) {
 	defer func() { _ = l.Unlock() }()
 	return s.load()
 }
+
+// Peek returns the current state without taking the lock, for a caller
+// that must never wait on it (a permission hook): a write replaces the file
+// in one rename, so the document read is always a whole one.
+func (s *Store) Peek() (*State, error) { return s.load() }
 
 // Update runs fn on the state under the exclusive lock and writes the result
 // back atomically together with the events fn returns. When fn fails nothing
