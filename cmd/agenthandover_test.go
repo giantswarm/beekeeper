@@ -64,7 +64,7 @@ func TestHandoverPromptPassesOnTheBrief(t *testing.T) {
 		brief:   "# Count\n\n## Steps\ncount a, b, c",
 	}
 	p := h.prompt()
-	for _, want := range []string{`You are "test: count"`, "session "+oldID, "at 25k tokens", "Task: "+countTask,
+	for _, want := range []string{`You are "test: count"`, "session " + oldID, "at 25k tokens", "Task: " + countTask,
 		"Serves: o/r#61, waiting on CI", "a and b done; c next", "o/r#7 in lane main: waiting", "lease.claim lab-a",
 		briefOpen + "\n# Count"} {
 		if !strings.Contains(p, want) {
