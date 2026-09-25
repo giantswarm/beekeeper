@@ -245,6 +245,7 @@ func (w *watcher) kills(ctx context.Context, since time.Time, sessions []*claude
 	}
 	var fresh []oomKill
 	var clusters []machine.Cluster
+	runs := &runIndex{store: w.store}
 	for _, k := range kills {
 		key := fmt.Sprintf("%d@%d", k.PID, k.At.Unix())
 		if w.seenKills[key] {
@@ -254,7 +255,7 @@ func (w *watcher) kills(ctx context.Context, since time.Time, sessions []*claude
 		if clusters == nil && strings.Contains(k.Memcg, "docker-") {
 			clusters, _ = machine.KindClusters(ctx)
 		}
-		fresh = append(fresh, oomKill{OOMKill: k, Owner: oomOwner(k, clusters, sessions, t)})
+		fresh = append(fresh, oomKill{OOMKill: k, Owner: oomOwner(k, clusters, sessions, t, runs)})
 	}
 	for _, line := range groupKills(fresh) {
 		w.emitNow("kern", "KERNEL OOM: %s", line)

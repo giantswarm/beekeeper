@@ -1,0 +1,2 @@
+2026-09-25T02:42:41+03:00 demiurg kernel: oom-kill:constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=user.slice,mems_allowed=0,oom_memcg=/user.slice/user-1000.slice/user@1000.service/memcap.slice/memcap-2516344-492870.scope,task_memcg=/user.slice/user-1000.slice/user@1000.service/memcap.slice/memcap-2516344-492870.scope,task=python,pid=2516454,uid=1000
+2026-09-25T02:42:41+03:00 demiurg kernel: Memory cgroup out of memory: Killed process 2516454 (python) total-vm:5614608kB, anon-rss:5292644kB, file-rss:15936kB, shmem-rss:0kB, UID:1000 pgtables:10580kB oom_score_adj:200

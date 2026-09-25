@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"path"
 	"regexp"
 	"slices"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -199,8 +201,9 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 	if err != nil {
 		return nil, err
 	}
+	runs := &runIndex{store: a.store}
 	for _, k := range kills {
-		s.OOM = append(s.OOM, oomKill{OOMKill: k, Owner: oomOwner(k, s.Clusters, sessions, t)})
+		s.OOM = append(s.OOM, oomKill{OOMKill: k, Owner: oomOwner(k, s.Clusters, sessions, t, runs)})
 	}
 	s.Oomd, _ = machine.OomdKills(ctx, oomSince)
 	holders, err := lease.Dir(a.cfg.LeaseDir).List()
@@ -295,10 +298,38 @@ func isWait(p *proc.Process) bool {
 
 var memcapScope = regexp.MustCompile(`memcap-(\d+)-`)
 
-// oomOwner names whose limit an OOM kill hit.
-func oomOwner(k machine.OOMKill, clusters []machine.Cluster, sessions []*claude.Session, t *proc.Table) string {
+// runIndex finds the run.start event of a memcap scope. It reads the event
+// log once, when the first kill asks: kills are rare, the log is long.
+type runIndex struct {
+	store  *state.Store
+	starts map[string]state.Event
+}
+
+func (r *runIndex) start(scope string) (state.Event, bool) {
+	if r == nil || r.store == nil {
+		return state.Event{}, false
+	}
+	if r.starts == nil {
+		r.starts = map[string]state.Event{}
+		evs, _ := r.store.Events(0, func(e state.Event) bool { return e.Verb == guard.VerbStart })
+		for _, e := range evs {
+			r.starts[guard.RunScope(e.Detail)] = e
+		}
+	}
+	e, ok := r.starts[scope]
+	return e, ok
+}
+
+// oomOwner names whose limit an OOM kill hit. A memcap cap's kill names the
+// session and the command of the run that started the scope, from its
+// run.start event (the memcg path ends in the scope's unit name); a scope
+// no event names, from before the runs were logged, by its process.
+func oomOwner(k machine.OOMKill, clusters []machine.Cluster, sessions []*claude.Session, t *proc.Table, runs *runIndex) string {
 	switch {
 	case strings.Contains(k.Memcg, "memcap"):
+		if e, ok := runs.start(path.Base(k.Memcg)); ok {
+			return fmt.Sprintf("memcap cap of %q's `%s`", e.By.Name, truncate(guard.RunCommand(e.Detail), 60))
+		}
 		if m := memcapScope.FindStringSubmatch(k.Memcg); m != nil {
 			pid, _ := strconv.Atoi(m[1])
 			if s, ok := claude.OwnerOf(sessions, pid); ok {
@@ -364,7 +395,7 @@ func (a *app) printSnapshot(s *snapshot) {
 		for _, w := range s.Waits {
 			owner := w.Session
 			if owner == "" {
-				owner = "no session"
+				owner = noSession
 			}
 			p("  %s  %s  (%s)", dur(w.Elapsed), truncate(commandName(w.Args)+" "+tailArgs(w.Args), 70), truncate(owner, 40))
 		}

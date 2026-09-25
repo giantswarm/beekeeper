@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `beekeeper run` records every capped run in the event log: `run.start` (the scope, the slot, the cap, the command) and `run.end` (the exit code, the duration, the cap's victims), both as the calling session. `snapshot` and `watch` name the session and the command of a memcap cap kill from its scope's `run.start`, also after the run and its session have ended. Logging never fails or delays the run: an event the log cannot take within a second is dropped.
+- `log --verb <prefix>` shows only the matching events (`--verb run.`: the build runs); `handover` leaves the runs out of its latest events.
+
 - `supervisor relay <successor>`: the supervisor names its successor, whose `supervisor start` takes the role, the grant queue and the pending grants in one step, so no claim goes ungated in between; the event log shows both steps. A relay not taken expires after `supervisor.relayTTL` (default 15m) or is withdrawn with `relay --cancel`; the outgoing supervisor keeps the role meanwhile. `supervisor status` exits 4 in the session a relay relieved. `watch` says `RELAY TAKEN` or `RELAY EXPIRED` once.
 - `supervisor.shift`: `watch` says `RELAY DUE` once the supervisor has served its shift, at the first quiet moment (no gated merge running or settling, no grant waiting, no claim queued), and again only when a quiet moment follows a busy one.
 - `note add --default "<what happens if unanswered>"`: a decision carries its default; `watch` reports a note once when it is due.

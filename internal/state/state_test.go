@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/gofrs/flock"
 )
 
 func TestPartyIs(t *testing.T) {
@@ -57,7 +59,7 @@ func TestUpdateIsAtomicAndLogged(t *testing.T) {
 	if err != nil || st.NextNote != 20 {
 		t.Fatalf("NextNote = %d, %v", st.NextNote, err)
 	}
-	evs, err := s.Events(5)
+	evs, err := s.Events(5, nil)
 	if err != nil || len(evs) != 5 {
 		t.Fatalf("Events = %d, %v", len(evs), err)
 	}
@@ -68,6 +70,39 @@ func TestUpdateIsAtomicAndLogged(t *testing.T) {
 	}
 	if st, _ := s.Read(); st.NextNote != 20 {
 		t.Fatalf("failed update was written: %d", st.NextNote)
+	}
+}
+
+func TestLogAppendsWithoutTouchingTheState(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Update(func(st *State) ([]Event, error) {
+		st.NextNote = 7
+		return []Event{{Verb: "note"}}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Log(Event{Verb: "run.start", Detail: "a"}, Event{Verb: "run.end", Detail: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := s.Read(); st.NextNote != 7 {
+		t.Errorf("Log changed the state: %+v", st)
+	}
+	runs, err := s.Events(0, func(e Event) bool { return e.Verb != "note" })
+	if err != nil || len(runs) != 2 || runs[0].Detail != "a" || runs[1].Detail != "b" {
+		t.Errorf("Events = %+v, %v", runs, err)
+	}
+	// A held lock drops the event after the bounded wait instead of blocking.
+	l := flock.New(s.path("state.lock"))
+	if err := l.Lock(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l.Unlock() }()
+	t0 := time.Now()
+	if err := s.Log(Event{Verb: "run.start"}); err == nil || time.Since(t0) > 3*logWait {
+		t.Errorf("Log under a held lock = %v after %s", err, time.Since(t0))
 	}
 }
 
