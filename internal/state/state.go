@@ -163,6 +163,9 @@ type Grant struct {
 	To       Party     `json:"to"`
 	By       Party     `json:"by"`
 	At       time.Time `json:"at"`
+	// UpgradeUnblock is why the supervisor granted a claim that the
+	// resource's upgrade hold admits: the work that unblocks the upgrade.
+	UpgradeUnblock string `json:"upgradeUnblock,omitempty"`
 }
 
 // Hold stops work on a target (a repository's merges, "github" for every

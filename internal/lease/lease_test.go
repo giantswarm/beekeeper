@@ -2,6 +2,7 @@ package lease
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -121,5 +122,39 @@ func TestDirClaimRelease(t *testing.T) {
 	}
 	if cur, _ := d.Get("browser"); cur != nil {
 		t.Fatalf("released lease still held: %+v", cur)
+	}
+}
+
+func TestCheckAdmitsUpgradeUnblockGrants(t *testing.T) {
+	const prod = "prod"
+	unblock := func(to state.Party, at time.Time) state.Grant {
+		return state.Grant{Resource: prod, To: to, By: sup.Party, At: at, UpgradeUnblock: "delete the pod a PDB keeps the drain on"}
+	}
+	st := &state.State{
+		Holds:  []state.Hold{{Target: "upgrade:prod/mc", Reason: "upgrade prod/mc 1.0.0 → 1.1.0", At: now}},
+		Grants: []state.Grant{{Resource: prod, To: one, By: sup.Party, At: now.Add(-2 * time.Minute)}, unblock(two, now.Add(-time.Minute)), unblock(one, now)},
+	}
+	gate := func(who state.Party) Gate {
+		return Gate{Resource: prod, Caller: who, Supervisor: sup, Now: now, TTL: ttl}
+	}
+
+	// The first upgrade-unblock grant carries the claim; a plain grant
+	// earlier in the queue does not hold it back.
+	if idx, err := Check(st, gate(two)); err != nil || idx != 1 {
+		t.Errorf("the first unblock grant: %d, %v", idx, err)
+	}
+	// Every other claim stays refused: behind it in the unblock queue, the
+	// supervisor itself, a person, a session with no grant.
+	for _, who := range []state.Party{one, sup.Party, alex, {Session: "s9", Name: "Agent nine"}} {
+		var r *Refusal
+		if _, err := Check(st, gate(who)); !errors.As(err, &r) {
+			t.Errorf("%s claims prod while it upgrades: %v", who.Name, err)
+		}
+	}
+	// A plain grant alone admits nothing during the upgrade.
+	st.Grants = st.Grants[:1]
+	var r *Refusal
+	if _, err := Check(st, gate(one)); !errors.As(err, &r) || !strings.Contains(r.Reason, "--upgrade-unblock") {
+		t.Errorf("a plain grant during the upgrade: %v", err)
 	}
 }

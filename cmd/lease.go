@@ -13,6 +13,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/upgrade"
 )
 
 // The states of a held lease.
@@ -154,6 +155,10 @@ func (a *app) leaseClaimCmd() *cobra.Command {
 				} else if err != nil {
 					return nil, err
 				}
+				var unblock string
+				if idx >= 0 {
+					unblock = st.Grants[idx].UpgradeUnblock
+				}
 				host, _ := os.Hostname()
 				cur, err := dir.Claim(res, lease.Holder{
 					Env:         res,
@@ -163,6 +168,8 @@ func (a *app) leaseClaimCmd() *cobra.Command {
 					Name:        me.Name,
 					Purpose:     purpose,
 					Since:       a.now.UTC().Format("2006-01-02T15:04:05Z"),
+
+					UpgradeUnblock: unblock,
 				})
 				if err != nil {
 					return nil, err
@@ -174,6 +181,10 @@ func (a *app) leaseClaimCmd() *cobra.Command {
 					st.Grants = slices.Delete(st.Grants, idx, idx+1)
 				}
 				msg = "claimed " + res
+				if unblock != "" {
+					msg += " to unblock its upgrade: " + unblock
+					return append(evs, event(me, "lease.claim", "%s: %s (upgrade unblock: %s)", res, purpose, unblock)), nil
+				}
 				return append(evs, event(me, "lease.claim", "%s: %s", res, purpose)), nil
 			})
 			if err == nil {
@@ -345,6 +356,11 @@ func (a *app) printLeases(l *leaseList) {
 			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", h.Env, truncate(h.Name, 40), clock(a.now, h.SinceTime()), h.State, truncate(h.Purpose, 60))
 		}
 		_ = w.Flush()
+		for _, h := range l.Held {
+			if h.UpgradeUnblock != "" {
+				_, _ = fmt.Fprintf(a.out, "%s is claimed during its upgrade to unblock it: %s\n", h.Env, h.UpgradeUnblock)
+			}
+		}
 	}
 	if len(l.Free) > 0 {
 		_, _ = fmt.Fprintln(a.out, "free:", strings.Join(l.Free, ", "))
@@ -356,23 +372,48 @@ func (a *app) printLeases(l *leaseList) {
 		}
 		names := make([]string, len(q))
 		for i, g := range q {
-			names[i] = fmt.Sprintf("%q (granted %s)", g.To.Name, clock(a.now, g.At))
+			names[i] = fmt.Sprintf("%q (granted %s%s)", g.To.Name, clock(a.now, g.At), unblockText(g))
 		}
 		_, _ = fmt.Fprintf(a.out, "granted %s: %s\n", r, strings.Join(names, ", then "))
 	}
 }
 
+// purposeText is a lease's purpose, with the upgrade unblock that admitted
+// its claim.
+func purposeText(h lease.Holder) string {
+	if h.UpgradeUnblock == "" {
+		return h.Purpose
+	}
+	return h.Purpose + " (upgrade unblock: " + h.UpgradeUnblock + ")"
+}
+
+// unblockText marks a grant an upgrade hold admits.
+func unblockText(g state.Grant) string {
+	if g.UpgradeUnblock == "" {
+		return ""
+	}
+	return ", upgrade unblock: " + g.UpgradeUnblock
+}
+
 func (a *app) leaseGrantCmd() *cobra.Command {
-	return &cobra.Command{
+	var unblock string
+	c := &cobra.Command{
 		Use:   "grant <resource> <session>",
 		Short: "Grant a resource to a session: its `yours <resource>`, queued behind earlier grants",
 		Long: `Record the supervisor's grant of a resource to a session: the session may
 claim it once it is free and every earlier grant for it is claimed or
 expired. A grant waits while the resource is held; once it is free the grant
 expires after grantTTL (default 30m). The session is a name, a unique part of
-one, a session id or a PID.`,
+one, a session id or a PID.
+
+While a cluster upgrade holds an installation, every claim on it is refused,
+plain grants included. --upgrade-unblock "<why>" grants the one claim that
+unblocks the upgrade (a drain stalled on a PodDisruptionBudget, say): only
+the supervisor gives it and only while an upgrade holds the resource; the
+reason is kept on the grant and the lease and shown in lease list, handover
+and the log. Such grants are claimed during the upgrade in their order.`,
 		Args: cobra.ExactArgs(2),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			res := args[0]
 			if err := a.checkResource(res); err != nil {
 				return err
@@ -389,6 +430,10 @@ one, a session id or a PID.`,
 			if err != nil {
 				return err
 			}
+			unblock = strings.TrimSpace(unblock)
+			if cmd.Flags().Changed("upgrade-unblock") && unblock == "" {
+				return usageErr("--upgrade-unblock needs the reason: what unblocks the upgrade")
+			}
 			dir := lease.Dir(a.cfg.LeaseDir)
 			var msg string
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -398,12 +443,36 @@ one, a session id or a PID.`,
 				}
 				held := heldMap(holders)
 				lease.Prune(st, held, a.now, a.cfg.GrantTTL.Duration)
+				var hold state.Hold
+				if unblock != "" {
+					if r := st.SupervisorRole(); r.Holder == nil || !r.Holder.Is(me) {
+						return nil, refused("only the supervisor grants an upgrade unblock")
+					}
+					var ok bool
+					if hold, ok = upgrade.Held(st, res, a.now); !ok {
+						return nil, refused("no upgrade holds %s: grant it without --upgrade-unblock", res)
+					}
+				}
 				q := lease.Pending(st, res, held[res], a.now, a.cfg.GrantTTL.Duration)
 				if i := slices.IndexFunc(q, func(g state.Grant) bool { return g.To.Is(to.Party()) }); i >= 0 {
-					msg = fmt.Sprintf("%s is already granted to %q (number %d in its queue)", res, to.Name, i+1)
-					return nil, nil
+					if unblock == "" || q[i].UpgradeUnblock != "" {
+						msg = fmt.Sprintf("%s is already granted to %q (number %d in its queue%s)", res, to.Name, i+1, unblockText(q[i]))
+						return nil, nil
+					}
+					j := slices.IndexFunc(st.Grants, func(g state.Grant) bool { return g.Resource == res && g.To.Is(q[i].To) && g.At.Equal(q[i].At) })
+					st.Grants[j].UpgradeUnblock = unblock
+					msg = fmt.Sprintf("the grant of %s to %q now unblocks %s: it claims with `beekeeper lease claim %s --purpose ...`", res, to.Name, hold.Reason, res)
+					return []state.Event{event(me, "lease.grant", "%s to %s, upgrade unblock: %s", res, to.Name, unblock)}, nil
 				}
-				st.Grants = append(st.Grants, state.Grant{Resource: res, To: to.Party(), By: me, At: a.now.UTC()})
+				st.Grants = append(st.Grants, state.Grant{Resource: res, To: to.Party(), By: me, At: a.now.UTC(), UpgradeUnblock: unblock})
+				if unblock != "" {
+					msg = fmt.Sprintf("granted %s to %q to unblock %s: it claims with `beekeeper lease claim %s --purpose ...`; every other claim stays refused", res, to.Name, hold.Reason, res)
+					if held[res] {
+						cur, _ := dir.Get(res)
+						msg += fmt.Sprintf(" (%q holds it: %s)", cur.Name, cur.Purpose)
+					}
+					return []state.Event{event(me, "lease.grant", "%s to %s, upgrade unblock: %s", res, to.Name, unblock)}, nil
+				}
 				switch {
 				case held[res]:
 					cur, _ := dir.Get(res)
@@ -422,6 +491,8 @@ one, a session id or a PID.`,
 			return err
 		},
 	}
+	c.Flags().StringVar(&unblock, "upgrade-unblock", "", "grant the claim that unblocks the upgrade holding the resource, and say why (supervisor only)")
+	return c
 }
 
 func (a *app) leaseRevokeCmd() *cobra.Command {
