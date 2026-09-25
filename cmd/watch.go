@@ -77,6 +77,11 @@ quiet moment: no gated merge running or settling, no grant waiting to be
 claimed, no claim queued and no relay open. It is said once per supervisor,
 and again only after a relay is cancelled or expires.
 
+A registered agent whose session's context reaches agents.relayAt gets one
+HANDOVER DUE "<agent>" at <n>k: beekeeper agents handover "<agent>" at its
+first quiet moment: no tool command of its own running and no gated merge
+of its own in flight.
+
 --notify also sends the events that need a person to the desktop's
 notification service (org.freedesktop.Notifications on the session bus):
 the kinds in notify.kinds, a note or timer falling due (due), the machine
@@ -629,6 +634,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		return // the supervisor's watch reports them
 	}
 	q := w.quietness(ctx, st, sessions)
+	w.handoversDue(st, sessions)
 	fire := func(st *state.State) ([]string, []state.Event, bool) {
 		seen, ce := observeCLI(st, sessions, w.now)
 		lines, evs := firePending(st, sessions, w.now)

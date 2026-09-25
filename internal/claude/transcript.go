@@ -63,6 +63,32 @@ func Tail(path string, n int) ([]Turn, error) {
 	return turns, nil
 }
 
+// firstWindow bounds how much of a transcript's start First reads.
+const firstWindow = 4 << 20
+
+// First returns the first turn a person or a starter gave the session: its
+// brief. found is false when the transcript's start holds none.
+func First(path string) (t Turn, found bool, err error) {
+	f, err := os.Open(filepath.Clean(path))
+	if err != nil {
+		return Turn{}, false, err
+	}
+	defer func() { _ = f.Close() }()
+	r := bufio.NewReaderSize(io.LimitReader(f, firstWindow), 1<<20)
+	for {
+		line, err := r.ReadBytes('\n')
+		if t, ok := parseTurn(bytes.TrimSpace(line)); ok && t.Role == roleUser {
+			return t, true, nil
+		}
+		if err == io.EOF {
+			return Turn{}, false, nil
+		}
+		if err != nil {
+			return Turn{}, false, err
+		}
+	}
+}
+
 // The roles of a transcript's message entries.
 const (
 	roleUser      = "user"

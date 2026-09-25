@@ -176,7 +176,7 @@ one "no change" line; --full prints everything.`,
 	}
 	list := listCmd("List the agents, idle ones first", func() error { return a.agentList(full) })
 	fullFlag(list, &full)
-	c.AddCommand(register, a.agentStartCmd(), assign, idle, remove, list)
+	c.AddCommand(register, a.agentStartCmd(), a.agentHandoverCmd(), a.agentNoteCmd(), assign, idle, remove, list)
 	return c
 }
 

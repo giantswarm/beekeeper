@@ -51,6 +51,13 @@ and imports it into the desktop: prove it with a throwaway brief on the smallest
 throwaway folder whose `.claude/settings.local.json` carries the hook, and archive the session
 afterwards.
 
+The hand-over is proven the same way: a scratch configuration with a small `agents.relayAt`
+(20k is past a fresh session's first turn), a throwaway agent started with `agents start` on a
+multi-step brief that outlives the hand-over, `watch --once` saying `HANDOVER DUE` for it once
+it is quiet, then `agents handover`. The started sessions get the scratch configuration as
+`$BEEKEEPER_CONFIG`, and the note's command names it, so nothing reaches the real state.
+`agents handover --prompt` shows the prompt without starting anything.
+
 ```bash
 echo '{"hook_event_name":"PermissionRequest","session_id":"<id>","permission_mode":"acceptEdits","tool_name":"WebSearch"}' |
   BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook permissionrequest

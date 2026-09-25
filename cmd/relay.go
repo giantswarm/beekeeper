@@ -364,7 +364,16 @@ func roleContext(r state.Role, sessions []*claude.Session, now time.Time, relayA
 // its transcript's last request (the CTX column); 0 when it does not run.
 func sessionContext(sessions []*claude.Session, p state.Party, now time.Time) int64 {
 	s, live := claude.Live(sessions, p)
-	if !live || s.Transcript == "" {
+	if !live {
+		return 0
+	}
+	return transcriptContext(s, now)
+}
+
+// transcriptContext is the context in tokens of s, read from its
+// transcript's last request; 0 without a transcript.
+func transcriptContext(s *claude.Session, now time.Time) int64 {
+	if s.Transcript == "" {
 		return 0
 	}
 	_, a := claude.ReadTranscript(s.Transcript, now)
