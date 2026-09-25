@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A merge that ends with nothing merged (a branch behind, exit 3) keeps its place in its lane: `lanes` shows it `retrying`, and its session's retry runs before every merge that was behind it instead of joining at the end. It holds the lane for `merge.queueTTL` after the failure and keeps its place for `merge.seedTTL`; devctl's refusal (exit 5) leaves the lane.
+- A free lane no longer waits for a seeded place whose merge has not arrived: an arrived merge that was not seeded runs ahead of it, and a seed never holds up an earlier pull request of its own session. Seeds keep their order among themselves, and `merging` names the places a merge passed.
+
 - A session started from inside another session no longer reads as that session restarting: a CLI whose environment names a session is its child, listed under its own `--session-id` (or `--resume`) and `-n` name and `started by` it, and `watch` reports no restart of the parent. A `claude -p` its tool shell runs without an id of its own stays one of its commands, and its memory is no longer counted twice once the child is a session.
 - `claude --bg` workers appear in `sessions` under their session id and name; the `claude daemon`, its terminal hosts, the spare CLI, the `--bg` launcher and the other `claude` subcommands (`stop`, `logs`, `mcp`, …) are no longer listed as sessions.
 - `--session-id` on a CLI's command line names the session, ahead of the environment.

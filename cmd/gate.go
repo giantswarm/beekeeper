@@ -47,11 +47,14 @@ session never calls it. It refuses the merge (exit 77) when the repository,
 its lane, "merges" or "github" is held, when the GitHub budget is under the
 floor or unknown, or when the lane's installation cannot be read. Otherwise
 the merge joins its lane's queue (a merge registered with lanes settle heads
-it) and runs when it is first, nothing else of
-the lane runs, the lane's HelmReleases are Ready and the previous merge's
-release has rolled, and fewer than merge.cap devctl processes run. A wait
-longer than --wait exits 76 and keeps the merge's place for merge.queueTTL.
-devctl then runs once; its document and exit code pass through unchanged.`,
+it) and runs when no merge before it holds its place (one in the gate or
+within merge.queueTTL of its last run; for a seeded place also the seeds
+before it), nothing else of the lane runs, the lane's HelmReleases are Ready
+and the previous merge's release has rolled, and fewer than merge.cap devctl
+processes run. A wait longer than --wait exits 76 and keeps the merge's
+place for merge.queueTTL. devctl then runs once; its document and exit code
+pass through unchanged. A run with nothing merged keeps its place for the
+retry (merge.seedTTL), except devctl's refusal (exit 5).`,
 		Hidden: true,
 		Args:   cobra.MinimumNArgs(1),
 		PersistentPreRunE: func(*cobra.Command, []string) error {
@@ -157,7 +160,7 @@ func (g *gateRun) step() (string, error) {
 		var ev []state.Event
 		if i := g.mine(st, state.Waiting); i >= 0 {
 			st.Merges[i].PID, st.Merges[i].By, st.Merges[i].Seen = g.pid, g.me, g.now.UTC()
-			g.seeded = st.Merges[i].Seeded
+			g.seeded = st.Merges[i].Seeded || st.Merges[i].Retrying()
 		} else {
 			st.Merges = append(st.Merges, state.Merge{Repo: g.repo, PR: g.pr, Lane: g.lane.Name, By: g.me, PID: g.pid,
 				Phase: state.Waiting, Joined: g.now.UTC(), Seen: g.now.UTC()})
@@ -175,8 +178,7 @@ func (g *gateRun) step() (string, error) {
 	case dup != nil:
 		return "", g.refuse("%s#%d is already merging in %q (pid %d): let that run finish", g.repo, g.pr, dup.By.Name, dup.PID)
 	}
-	if pos := q.Position(g.repo, g.pr); pos > 1 {
-		ahead := q.Waiting[0]
+	if ahead, ok := q.Ahead(g.repo, g.pr, g.present); ok {
 		if q.Running != nil {
 			ahead = *q.Running
 		}
@@ -185,10 +187,14 @@ func (g *gateRun) step() (string, error) {
 		case phase != state.Waiting || proc.Alive(ahead.PID):
 		case ahead.Outside:
 			phase = fmt.Sprintf("settled outside the gate, GitHub reported it not merged at %s", clock(g.now, ahead.Checked))
+		case ahead.Retrying():
+			phase = fmt.Sprintf("retrying after exit %d at %s, its place is kept", ahead.Exit, clock(g.now, ahead.Finished))
+		case ahead.PID != 0:
+			phase = fmt.Sprintf("queued, its merge left the gate at %s, its place is kept", clock(g.now, ahead.Seen))
 		default:
 			phase = "queued, its merge has not arrived"
 		}
-		return fmt.Sprintf("position %d in lane %s behind %s (%q, %s)", pos, g.lane.Name, ahead.Key(), ahead.By.Name, phase), nil
+		return fmt.Sprintf("position %d in lane %s behind %s (%q, %s)", q.Position(g.repo, g.pr), g.lane.Name, ahead.Key(), ahead.By.Name, phase), nil
 	}
 	if q.Running != nil {
 		return fmt.Sprintf("next in lane %s behind the running %s (%q, since %s)", g.lane.Name, q.Running.Key(), q.Running.By.Name,
@@ -207,6 +213,11 @@ func (g *gateRun) step() (string, error) {
 			b.Remaining, g.cfg.GitHub.Floor, clock(g.now, b.Reset))
 	}
 	return g.start(q.SettlingKeys(), hrs)
+}
+
+// present says whether a waiting merge holds its place against this one.
+func (g *gateRun) present(m state.Merge) bool {
+	return merge.Present(m, g.now, g.cfg.Merge.QueueTTL.Duration, proc.Alive)
 }
 
 // outsideCheck is how often a merge waiting behind a settled outside merge
@@ -329,8 +340,9 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 	err := g.store.Update(func(st *state.State) ([]state.Event, error) {
 		q := merge.Queue(st, g.lane.Name)
 		i := g.mine(st, state.Waiting)
+		_, behind := q.Ahead(g.repo, g.pr, g.present)
 		switch {
-		case i < 0 || q.Position(g.repo, g.pr) != 1 || q.Running != nil:
+		case i < 0 || behind || q.Running != nil:
 			why = "the lane moved on"
 			return nil, nil
 		case q.SettlingKeys() != settling:
@@ -344,9 +356,14 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 		}
 		st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool { return m.Lane == g.lane.Name && m.Phase == state.Settling })
 		i = g.mine(st, state.Waiting)
+		passed := q.Passed(g.repo, g.pr)
 		m := &st.Merges[i]
 		m.Phase, m.Started, m.Roll, m.Seeded, m.Outside = state.Running, g.now.UTC(), merge.RollSet(hrs, g.repo), false, false
+		m.Finished, m.Exit = time.Time{}, 0
 		ev := []state.Event{event(g.me, "merging", "%s#%d in lane %s", g.repo, g.pr, g.lane.Name)}
+		if passed != "" {
+			ev[0].Detail += ", ahead of " + passed + " (not arrived)"
+		}
 		if strings.EqualFold(g.repo, merge.ToolRepo) {
 			st.Holds = slices.DeleteFunc(st.Holds, func(h state.Hold) bool { return h.Target == merge.AllMerges })
 			h := state.Hold{Target: merge.AllMerges, Except: merge.ToolRepo, By: g.me, At: g.now.UTC(), Tool: merge.Tool, ToolFrom: toolFrom,
@@ -366,7 +383,9 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 }
 
 // runMerge runs devctl once, its document and exit code unchanged, and
-// records the outcome: a merge settles its lane, anything else leaves it.
+// records the outcome: a merge settles its lane, one that warranted no
+// release leaves it, and one with nothing merged keeps its place for the
+// retry.
 func (g *gateRun) runMerge() error {
 	var doc bytes.Buffer
 	rc := runChild(g.argv, io.MultiWriter(os.Stdout, &doc))
@@ -375,12 +394,16 @@ func (g *gateRun) runMerge() error {
 		out = merge.Outcome{Merged: rc == 0 || rc == 9}
 	}
 	now := time.Now().UTC()
+	kept := false
 	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
-		i := g.mine(st, state.Running)
-		if i >= 0 && out.Merged && !out.NoRelease {
+		switch i := g.mine(st, state.Running); {
+		case i < 0:
+		case out.Merged && !out.NoRelease:
 			m := &st.Merges[i]
 			m.Phase, m.Finished, m.Exit, m.Release = state.Settling, now, rc, out.Release
-		} else if i >= 0 {
+		case !out.Merged && merge.Failed(&st.Merges[i], rc, now):
+			kept = true
+		default:
 			st.Merges = slices.Delete(st.Merges, i, i+1)
 		}
 		if strings.EqualFold(g.repo, merge.ToolRepo) {
@@ -401,10 +424,18 @@ func (g *gateRun) runMerge() error {
 			release = "unknown"
 		}
 		if !out.Merged {
-			return []state.Event{event(g.me, "merge.failed", "%s#%d exit %d, nothing merged", g.repo, g.pr, rc)}, nil
+			e := event(g.me, "merge.failed", "%s#%d exit %d, nothing merged", g.repo, g.pr, rc)
+			if kept {
+				e.Detail += fmt.Sprintf(", its place in lane %s is kept for the retry", g.lane.Name)
+			}
+			return []state.Event{e}, nil
 		}
 		return []state.Event{event(g.me, "merged", "%s#%d exit %d, release %s", g.repo, g.pr, rc, release)}, nil
 	})
+	if kept {
+		gateLine("nothing merged (exit %d); your place in lane %s is kept for %s: act on devctl's reason, then run the same command again",
+			rc, g.lane.Name, g.cfg.Merge.SeedTTL.Duration)
+	}
 	return exitCode(rc)
 }
 

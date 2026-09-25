@@ -91,10 +91,12 @@ type Lane struct {
 type Merge struct {
 	// Cap is the most devctl processes the machine runs when a merge starts.
 	Cap int `yaml:"cap"`
-	// QueueTTL is how long a queued merge keeps its place after its run ended.
+	// QueueTTL is how long a queued merge keeps its place after its run ended,
+	// and how long after it the place holds up the merges behind it.
 	QueueTTL Duration `yaml:"queueTTL"`
 	// SeedTTL is how long a place queued on a session's behalf is kept from
-	// its seeding or the session's last arrival.
+	// its seeding or the session's last arrival, and a failed run's from the
+	// failure.
 	SeedTTL Duration `yaml:"seedTTL"`
 	// Settle is how long a lane waits after a merge whose release is unknown.
 	Settle Duration `yaml:"settle"`

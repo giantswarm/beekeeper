@@ -43,6 +43,11 @@ PATH=/tmp/fake:$PATH BEEKEEPER_CONFIG=/tmp/bk.yaml CLAUDE_CODE_SESSION_ID=a \
 BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper lanes
 ```
 
+`FAKE_EXIT=3` on such a fake plays a run with nothing merged (the document's `mergeCommitSha`
+empty): the merge stays in `lanes` as `retrying`, and the next gate call for it runs first. The
+queue rule itself is tested by replaying a real event trail (`internal/merge/testdata/*.jsonl`,
+the sessions' ids left out) through `merge.Queue`, `Lane.Ahead` and `merge.Failed`.
+
 `lanes settle` and the gate's check of a settled outside merge ask GitHub through `gh pr view
 <n> --repo <owner/repo> --json state,mergedAt`; a fake `gh` first on `PATH` that prints
 `{"state":"OPEN","mergedAt":null}` (or `MERGED` with a time, or `CLOSED`) from a file and hands
