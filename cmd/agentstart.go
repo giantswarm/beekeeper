@@ -177,7 +177,11 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 		return startedAgent{}, err
 	}
 	unit := "beekeeper-agent-" + id[:8]
-	if err := launch(unit, dir, a.explicitConfig(), agentArgv(bin, id, sp.name, sp.model, sp.brief)); err != nil {
+	self, err := os.Executable()
+	if err != nil {
+		return startedAgent{}, err
+	}
+	if err := launch(unit, dir, a.explicitConfig(), []string{self, "agents", "reopen", id}, agentArgv(bin, id, sp.name, sp.model, sp.brief)); err != nil {
 		return startedAgent{}, fmt.Errorf("starting %s: %w (the start stays recorded; beekeeper agents remove %q takes it off the roster)", sp.name, err, sp.name)
 	}
 	if err := awaitReply(ctx, a.cfg.Claude.ProjectsDir, id, func() bool { return unitEnded(ctx, unit) }, replyQuiet, replyWait); err != nil {
@@ -192,7 +196,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 		return startedAgent{}, err
 	}
 	sa := startedAgent{id: id, unit: unit, dir: dir, task: reg.task, kept: kept, model: a.desktopModel(ctx, "local_"+id)}
-	sa.twin, err = endDesktopTwin(ctx, id, func() bool { return unitEnded(ctx, unit) })
+	sa.twin, err = endDesktopTwin(ctx, id)
 	return sa, err
 }
 
@@ -201,21 +205,20 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 // under its name, and a message by name could reach the desktop's copy,
 // which would run a turn of its own beside the first turn. It waits up to
 // twinWait for the desktop's CLI and returns its PID, 0 when none came or
-// the first turn ended (ended) first, which leaves the desktop's CLI the
-// session's only one. The desktop starts a new CLI when the person opens
-// the session.
-func endDesktopTwin(ctx context.Context, id string, ended func() bool) (int, error) {
+// the first turn's process ended first: from then on the desktop's CLI is
+// the session's one (agents reopen warms it once the first turn ended).
+func endDesktopTwin(ctx context.Context, id string) (int, error) {
 	ctx, cancel := context.WithTimeout(ctx, twinWait)
 	defer cancel()
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		if ended() {
-			return 0, nil
-		}
 		t, err := proc.Read()
 		if err != nil {
 			return 0, err
+		}
+		if !firstTurnRuns(t, id) {
+			return 0, nil
 		}
 		if p := desktopTwin(t, id); p != nil {
 			pr, err := os.FindProcess(p.PID)
@@ -233,6 +236,17 @@ func endDesktopTwin(ctx context.Context, id string, ended func() bool) (int, err
 		case <-tick.C:
 		}
 	}
+}
+
+// firstTurnRuns reports whether the first turn of session id runs: a claude
+// process started under --session-id <id>.
+func firstTurnRuns(t *proc.Table, id string) bool {
+	for _, p := range t.ByPID {
+		if i := slices.Index(p.Args, "--session-id"); p.Comm == "claude" && i >= 0 && i+1 < len(p.Args) && p.Args[i+1] == id {
+			return true
+		}
+	}
+	return false
 }
 
 // desktopTwin is the CLI that resumes session id (the desktop's: the first
@@ -303,21 +317,79 @@ func (a *app) importSession(ctx context.Context, id, follow string) (string, err
 		return "", err
 	}
 	running := !desktopStart(t).IsZero()
+	prev, err := a.showBriefly(ctx, resumeURL(id), "local_"+id, follow, running)
+	if err != nil {
+		return "", fmt.Errorf("importing %s into the desktop: %w", id, err)
+	}
+	return prev, nil
+}
+
+// showBriefly opens url, which shows host in the desktop's main window, and
+// once it does, shows the session the window showed before again and
+// returns it; empty when there was none to go back to, or it was host or
+// follow.
+func (a *app) showBriefly(ctx context.Context, url, host, follow string, running bool) (string, error) {
 	var prev string
 	if running {
 		prev, _ = claude.DesktopFocus(a.cfg.Claude.DesktopLog) // unreadable: nothing to go back to
 	}
-	if err := openDesktop(ctx, resumeURL(id), running); err != nil {
-		return "", fmt.Errorf("importing %s into the desktop: %w", id, err)
+	if err := openDesktop(ctx, url, running); err != nil {
+		return "", err
 	}
-	host := "local_" + id
 	if prev == "" || prev == host || prev == follow || !awaitFocus(ctx, a.cfg.Claude.DesktopLog, host, focusWait) {
 		return "", nil
 	}
 	if err := openDesktop(ctx, continueURL(prev), true); err != nil {
-		return "", fmt.Errorf("showing %s again after the import: %w", prev, err)
+		return "", fmt.Errorf("showing %s again: %w", prev, err)
 	}
 	return prev, nil
+}
+
+// agentReopenCmd is the unit's ExecStopPost: once a start's first turn has
+// ended, it shows the session in the desktop for a moment, which warms the
+// desktop's CLI of it (endDesktopTwin stopped the one the import warmed), so
+// the session is a peer again and takes follow-ups by message. Only a
+// session still on the roster is reopened: a hand-over or agents remove
+// took the others off, and a handed-over session must not come back.
+func (a *app) agentReopenCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:    "reopen <session id>",
+		Short:  "Warm the desktop's CLI of a started session once its first turn ended",
+		Hidden: true,
+		Args:   cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id := args[0]
+			st, err := a.store.Read()
+			if err != nil {
+				return err
+			}
+			if !reopens(st, id) {
+				_, err := fmt.Fprintf(a.out, "reopen: %s is no start on the roster, left closed\n", id)
+				return err
+			}
+			t, err := proc.Read()
+			if err != nil {
+				return err
+			}
+			if desktopStart(t).IsZero() {
+				_, err := fmt.Fprintf(a.out, "reopen: the desktop does not run, %s waits for it\n", id)
+				return err
+			}
+			if _, err := a.showBriefly(cmd.Context(), continueURL("local_"+id), "local_"+id, "", true); err != nil {
+				return fmt.Errorf("reopening %s in the desktop: %w", id, err)
+			}
+			_, err = fmt.Fprintf(a.out, "reopen: showed local_%s in the desktop, which warms its CLI\n", id)
+			return err
+		},
+	}
+}
+
+// reopens reports whether the session id is one of beekeeper's starts that a
+// roster entry still holds.
+func reopens(st *state.State, id string) bool {
+	p := state.Party{Session: id}
+	return slices.ContainsFunc(st.Starts, func(s state.Start) bool { return s.Session == id }) &&
+		slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) })
 }
 
 // awaitFocus reports whether the desktop's main window shows host within
@@ -419,11 +491,15 @@ func agentArgv(bin, id, name, model, brief string) []string {
 
 // launch runs argv in a transient user service: it gets the user manager's
 // environment, not the caller's session variables, and outlives the caller;
-// a configuration file the caller named is passed on as $BEEKEEPER_CONFIG.
+// a configuration file the caller named is passed on as $BEEKEEPER_CONFIG,
+// and stopPost runs once argv has ended.
 // KillMode=process leaves what the turn started running when it ends, as a
 // terminal would.
-func launch(unit, dir, config string, argv []string) error {
+func launch(unit, dir, config string, stopPost, argv []string) error {
 	args := []string{"--user", "--collect", "--quiet", "--unit=" + unit, "-p", "KillMode=process", "--working-directory=" + dir}
+	if len(stopPost) > 0 {
+		args = append(args, "-p", "ExecStopPost="+strings.Join(stopPost, " "))
+	}
 	if config != "" {
 		args = append(args, "--setenv=BEEKEEPER_CONFIG="+config)
 	}

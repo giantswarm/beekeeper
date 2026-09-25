@@ -341,8 +341,11 @@ first turn still runs. Two CLIs on one session id are two peers under one name, 
 name could reach the desktop's copy, which would run a turn beside the first turn. So once the
 import has shown the session, beekeeper stops the desktop's CLI (it waits up to 15s for it) while
 the first turn runs: the first turn is then the session's only CLI, and a message by name, such as
-a grant or a clearance, reaches it at its next tool call. The desktop starts a new CLI when the
-person opens the session.
+a grant or a clearance, reaches it at its next tool call. Once the first turn has ended, the unit's
+`ExecStopPost` runs `beekeeper agents reopen <id>`: it shows the session in the desktop for a
+moment and switches back, which warms the desktop's CLI of it, so the session is a peer again and
+takes a follow-up task by message as a desktop turn. It reopens only a start the roster still
+holds, never one a hand-over or `agents remove` took off.
 
 The desktop's import takes the session's model from the transcript's last reply and falls back to
 its own default model without one. So beekeeper imports the session only once the transcript

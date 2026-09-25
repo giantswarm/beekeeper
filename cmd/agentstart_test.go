@@ -175,3 +175,15 @@ func TestResumesNamesTheDesktopsCLIOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestReopensOnlyAStartTheRosterHolds(t *testing.T) {
+	st := &state.State{
+		Starts: []state.Start{{Party: state.Party{Session: "on"}}, {Party: state.Party{Session: "handed"}}},
+		Agents: []state.Agent{{Party: state.Party{Session: "on", Name: "test: on"}}, {Party: state.Party{Session: "desk", Name: "test: desk"}}},
+	}
+	for id, want := range map[string]bool{"on": true, "handed": false, "desk": false, "none": false} {
+		if got := reopens(st, id); got != want {
+			t.Errorf("reopens(%q) = %v, want %v", id, got, want)
+		}
+	}
+}
