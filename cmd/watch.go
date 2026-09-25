@@ -35,7 +35,8 @@ silent otherwise: made to be the source of a Monitor, so the supervisor
 wakes only when something needs a look.
 
 Threshold breaches (RAM, swap, desktop scope, load, memory pressure, tmpfs,
-disk, the GitHub budget) repeat at most every watch.repeat (10m) per kind.
+disk, the GitHub budget) and unreadable sources are one line when they
+start and one ENDED line when they end, never repeated while they last.
 OOM kills are never folded away: every poll reports every kill since the
 last one, grouped by whose limit they hit; a cap kill whose scope no
 run.start names says its cap is unknown. A kill in a test run's scope
@@ -46,8 +47,8 @@ over a threshold in metrics.runaway (GitHub calls in the last hour, the
 same failing tool call repeating in it, its context's fill) is one RUNAWAY
 line per figure, once per watch. A lane whose first arrived merge has
 waited longer than merge.stallAfter (5m) behind places whose merges are
-not in the gate (beekeeper lanes) is one LANE STALLED line, repeated at
-most every watch.repeat while it lasts. A settling merge leaves its lane
+not in the gate (beekeeper lanes) is one LANE STALLED line when it starts
+and one ENDED line when it ends. A settling merge leaves its lane
 once the lane has settled (its release rolled and its HelmReleases Ready,
 or no installation to roll), logged as lane.settled, silently. A note or a
 timer that falls due, the end of a session with a record (sessions serve)
@@ -83,13 +84,15 @@ the notes, timers, session records and relays to the supervisor's watch,
 and it never reads the alerts, so it takes nothing from the supervisor's
 view.
 
-Runs until killed. --once polls once and exits.`,
+What a watch has said is kept per caller (seen.watch.<caller>.json): a
+restarted watch of the same session says no open condition, runaway or
+stale lease again, only its end or what is new. Runs until killed. --once
+polls once, keeps no mark and says every condition it finds.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			w := &watcher{app: a, standby: standby, last: map[string]time.Time{}, seenKills: map[string]bool{}, reported: map[string]bool{}}
-			w.spare = spareWatch{send: a.peerSend, sent: map[string]time.Time{}, checked: map[string]bool{}}
+			w := a.newWatcher(standby, !once)
 			if notifyDesktop {
 				d := &notify.Desktop{}
 				defer func() { _ = d.Close() }()
@@ -106,8 +109,14 @@ Runs until killed. --once polls once and exits.`,
 
 type watcher struct {
 	*app
-	mu         sync.Mutex
-	last       map[string]time.Time
+	mu   sync.Mutex
+	last map[string]time.Time
+	// active are the lasting conditions said and not yet ENDED.
+	active map[string]condition
+	// markFile keeps active and reported for a restarted watch; dirty is
+	// set when they changed since it was written.
+	markFile   string
+	dirty      bool
 	lastPoll   time.Time
 	lastBudget time.Time
 	scopeOOM   int64
@@ -133,11 +142,11 @@ type watcher struct {
 
 func (w *watcher) run(ctx context.Context, once bool) error {
 	w.lastPoll = time.Now().Add(-w.cfg.Watch.Interval.Duration)
-	if p := machine.FindScope(); p != "" {
+	p := machine.FindScope()
+	if p != "" {
 		w.scopeOOM = machine.ReadScope(p).OOMKills
-	} else {
-		w.emitNow("scope", "no Claude Desktop scope found; watching the machine numbers only")
 	}
+	w.check("noscope", p == "", "no Claude Desktop scope found; watching the machine numbers only")
 	var wg sync.WaitGroup
 	if !once && !w.standby {
 		wg.Go(func() { w.watchAlerts(ctx) })
@@ -172,11 +181,13 @@ func (w *watcher) watchAlerts(ctx context.Context) {
 		case err != nil:
 			w.emit("alerts", "ALERTS baseline unusable: %v", err)
 		case !owned:
+			w.clear("alerts")
 			if owner.PID != other {
 				other = owner.PID
 				w.emitNow("alerts", "ALERTS read by the watch with pid %d; this one takes over when it ends", other)
 			}
 		default:
+			w.clear("alerts")
 			if other != 0 {
 				other = 0
 				w.emitNow("alerts", "ALERTS taken over by this watch")
@@ -193,20 +204,98 @@ func (w *watcher) watchAlerts(ctx context.Context) {
 	}
 }
 
-// emit prints a breach at most once per watch.repeat per key and returns
-// the line, empty when it was folded away.
+// emit says a lasting condition once, when it starts. While it lasts it is
+// silent and returns its line at most every watch.repeat, for the
+// notification a person gets (notify.repeat decides whether it goes out).
 func (w *watcher) emit(key, format string, args ...any) string {
+	line := fmt.Sprintf(format, args...)
 	w.mu.Lock()
 	now := time.Now()
-	if t, ok := w.last[key]; ok && now.Sub(t) < w.cfg.Watch.Repeat.Duration {
+	if w.active == nil {
+		w.active = map[string]condition{}
+	}
+	_, active := w.active[key]
+	if active && now.Sub(w.last[key]) < w.cfg.Watch.Repeat.Duration {
 		w.mu.Unlock()
 		return ""
 	}
 	w.last[key] = now
+	if !active {
+		label, _, _ := strings.Cut(line, ":")
+		w.active[key] = condition{Since: now, Label: label}
+		w.dirty = true
+	}
 	w.mu.Unlock()
-	line := fmt.Sprintf(format, args...)
-	w.emitNow(key, "%s", line)
+	if !active {
+		w.emitNow(key, "%s", line)
+	}
 	return line
+}
+
+// check says a condition's start (emit) while on holds and its end, one
+// ENDED line, once it no longer does.
+func (w *watcher) check(key string, on bool, format string, args ...any) string {
+	if on {
+		return w.emit(key, format, args...)
+	}
+	w.clear(key)
+	return ""
+}
+
+// clear ends a condition the watch has said: one ENDED line.
+func (w *watcher) clear(key string) {
+	w.mu.Lock()
+	c, active := w.active[key]
+	delete(w.active, key)
+	w.dirty = w.dirty || active
+	w.mu.Unlock()
+	if active {
+		w.emitNow("ended", "ENDED %s (since %s)", c.Label, c.Since.Local().Format("15:04"))
+	}
+}
+
+// condition is a lasting condition a watch has said: since when, and the
+// line's head that names it.
+type condition struct {
+	Since time.Time `json:"since"`
+	Label string    `json:"label"`
+}
+
+// watchMark is what a caller's watch has said and a restarted watch of the
+// same caller must not say again: the conditions open (it says only their
+// end) and the one-time events (runaways, stale leases).
+type watchMark struct {
+	Conditions map[string]condition `json:"conditions"`
+	Reported   map[string]bool      `json:"reported"`
+}
+
+// newWatcher is a watch; one that keeps a mark resumes its caller's last
+// watch (seen.watch.<caller>.json): it says no open condition or event
+// again. --once and a watch outside a Claude session keep none.
+func (a *app) newWatcher(standby, keep bool) *watcher {
+	w := &watcher{app: a, standby: standby, last: map[string]time.Time{}, seenKills: map[string]bool{},
+		reported: map[string]bool{}, active: map[string]condition{}}
+	w.spare = spareWatch{send: a.peerSend, sent: map[string]time.Time{}, checked: map[string]bool{}}
+	if me, err := a.caller(); keep && err == nil {
+		w.markFile = "seen.watch." + fileKey(me) + ".json"
+		var m watchMark
+		if found, err := a.store.ReadFile(w.markFile, &m); err == nil && found {
+			maps.Copy(w.active, m.Conditions)
+			maps.Copy(w.reported, m.Reported)
+		}
+	}
+	return w
+}
+
+// saveMark keeps what the watch has said for its successor, when it changed.
+func (w *watcher) saveMark() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.markFile == "" || !w.dirty {
+		return
+	}
+	w.dirty = false
+	_ = w.store.WriteFile(w.markFile, watchMark{Conditions: w.active, Reported: w.reported})
 }
 
 // notify sends one event that needs a person (--notify): a lasting kind
@@ -241,33 +330,25 @@ func (w *watcher) poll(ctx context.Context) {
 	th := w.cfg.Watch
 
 	if m, err := machine.ReadMem(); err == nil {
-		if m.AvailableMiB < th.AvailMinMiB {
-			w.oomLine(ctx, w.emit("avail", "LOW RAM: %d MiB available (swap used %d MiB)", m.AvailableMiB, m.SwapUsedMiB))
-		}
-		if m.SwapUsedMiB > th.SwapMaxMiB {
-			w.oomLine(ctx, w.emit("swap", "SWAP near the oomd trigger: %d of %d MiB used (systemd-oomd kills at 90%%)", m.SwapUsedMiB, m.SwapTotalMiB))
-		}
+		w.oomLine(ctx, w.check("avail", m.AvailableMiB < th.AvailMinMiB, "LOW RAM: %d MiB available, swap %d MiB", m.AvailableMiB, m.SwapUsedMiB))
+		w.oomLine(ctx, w.check("swap", m.SwapUsedMiB > th.SwapMaxMiB, "SWAP: %d of %d MiB used", m.SwapUsedMiB, m.SwapTotalMiB))
 	}
-	if l, err := machine.ReadLoad(); err == nil && l[0] > th.LoadMax {
-		w.emit("load", "HIGH LOAD: %.0f (image imports into a fresh lab reach 35-53 on an encrypted disk)", l[0])
+	if l, err := machine.ReadLoad(); err == nil {
+		w.check("load", l[0] > th.LoadMax, "HIGH LOAD: %.0f", l[0])
 	}
-	if psi, err := machine.ReadPSIFull60(); err == nil && psi > th.PSIMax {
-		w.oomLine(ctx, w.emit("psi", "MEMORY PRESSURE: full avg60 %.0f%%", psi))
+	if psi, err := machine.ReadPSIFull60(); err == nil {
+		w.oomLine(ctx, w.check("psi", psi > th.PSIMax, "MEMORY PRESSURE: full avg60 %.0f%%", psi))
 	}
-	if d, err := machine.ReadDisk("/tmp"); err == nil && d.UsedMiB > th.TmpMaxMiB {
-		w.emit("tmp", "TMPFS /tmp at %d MiB (RAM-backed scratch)", d.UsedMiB)
+	if d, err := machine.ReadDisk("/tmp"); err == nil {
+		w.check("tmp", d.UsedMiB > th.TmpMaxMiB, "TMPFS /tmp: %d MiB", d.UsedMiB)
 	}
-	if d, err := machine.ReadDisk("/"); err == nil && d.FreeMiB < th.DiskMinMiB {
-		w.emit("disk", "LOW DISK: / has %d GiB free (go clean -cache; prune unreferenced images and volumes)", d.FreeMiB/1024)
+	if d, err := machine.ReadDisk("/"); err == nil {
+		w.check("disk", d.FreeMiB < th.DiskMinMiB, "LOW DISK: / %d GiB free", d.FreeMiB/1024)
 	}
 	if p := machine.FindScope(); p != "" {
 		s := machine.ReadScope(p)
-		if s.AnonMiB > th.ScopeAnonMaxMiB {
-			w.oomLine(ctx, w.emit("scopeanon", "DESKTOP SCOPE anonymous memory %d MiB (only anon cannot be reclaimed; archiving idle sessions frees it)", s.AnonMiB))
-		}
-		if s.CurrentMiB > th.ScopeMaxMiB {
-			w.oomLine(ctx, w.emit("scope", "DESKTOP SCOPE near its hard cap: %d MiB RAM + %d MiB swap (max %s)", s.CurrentMiB, s.SwapMiB, s.Max))
-		}
+		w.oomLine(ctx, w.check("scopeanon", s.AnonMiB > th.ScopeAnonMaxMiB, "DESKTOP SCOPE anon: %d MiB", s.AnonMiB))
+		w.oomLine(ctx, w.check("scope", s.CurrentMiB > th.ScopeMaxMiB, "DESKTOP SCOPE near its cap: %d MiB RAM + %d MiB swap of %s", s.CurrentMiB, s.SwapMiB, s.Max))
 		if s.OOMKills != w.scopeOOM {
 			w.emitNow("scopeoom", "OOM KILL in the desktop scope: oom_kill %d -> %d", w.scopeOOM, s.OOMKills)
 			w.scopeOOM = s.OOMKills
@@ -279,6 +360,7 @@ func (w *watcher) poll(ctx context.Context) {
 		w.emit("proc", "cannot read the process table: %v", err)
 		return
 	}
+	w.clear("proc")
 	w.table = t
 	sessions := claude.Discover(w.cfg, t, w.now)
 	w.kills(ctx, since, sessions, t)
@@ -296,28 +378,44 @@ func (w *watcher) poll(ctx context.Context) {
 		case err != nil && ctx.Err() != nil:
 		case err != nil:
 			w.emit("budget-error", "GitHub budget unknown: %v", err)
-		case b.Remaining < w.cfg.GitHub.Floor:
-			l := w.emit("budget", "GITHUB BUDGET %d of %d, under the floor %d: hold GitHub work until the reset at %s",
-				b.Remaining, b.Limit, w.cfg.GitHub.Floor, b.Reset.Local().Format("15:04"))
+		default:
+			w.clear("budget-error")
+			l := w.check("budget", b.Remaining < w.cfg.GitHub.Floor, "GITHUB BUDGET %d of %d: hold GitHub work until %s",
+				b.Remaining, b.Limit, b.Reset.Local().Format("15:04"))
 			w.notify(ctx, notify.Budget, "", "beekeeper: GitHub budget under the floor", l+"\nbeekeeper budget")
 		}
 	}
+	w.saveMark()
 	if w.notifier != nil {
 		w.notifier.Flush(ctx, w.now)
 	}
 }
 
 // stalls says each stalled lane, one LANE STALLED line per lane and waiting
-// merge at most every watch.repeat.
+// merge when the stall starts and one ENDED line when it ends.
 func (w *watcher) stalls() {
 	st, err := w.store.Read()
 	if err != nil {
 		return
 	}
+	stalled := map[string]bool{}
 	for _, v := range w.laneViews(st) {
 		if v.Stall != nil {
-			w.emit("stall:"+v.Name+":"+v.Stall.Merge.Key(), "LANE STALLED %s: %s", v.Name, w.stallText(*v.Stall))
+			key := "stall:" + v.Name + ":" + v.Stall.Merge.Key()
+			stalled[key] = true
+			w.emit(key, "LANE STALLED %s: %s", v.Name, w.stallText(*v.Stall))
 		}
+	}
+	w.mu.Lock()
+	var over []string
+	for k := range w.active {
+		if strings.HasPrefix(k, "stall:") && !stalled[k] {
+			over = append(over, k)
+		}
+	}
+	w.mu.Unlock()
+	for _, k := range over {
+		w.clear(k)
 	}
 }
 
@@ -385,6 +483,7 @@ func (w *watcher) kills(ctx context.Context, since time.Time, sessions []*claude
 		w.emit("journal", "cannot read the kernel journal: %v", err)
 		return
 	}
+	w.clear("journal")
 	var fresh []oomKill
 	var clusters []machine.Cluster
 	runs := &runIndex{store: w.store}
@@ -480,10 +579,10 @@ func (w *watcher) sessionChanges(sessions []*claude.Session) {
 		w.emitNow("sessions", "SESSIONS started: %s", strings.Join(started, ", "))
 	}
 	if len(ended) > 0 {
-		w.emitNow("sessions", "SESSIONS ended (CLI gone: paused, closed or crashed): %s", strings.Join(ended, ", "))
+		w.emitNow("sessions", "SESSIONS ended: %s", strings.Join(ended, ", "))
 	}
 	if len(restarted) > 0 {
-		w.emitNow("sessions", "SESSIONS restarted (a new CLI: its context may be fresh, send it its state): %s", strings.Join(restarted, ", "))
+		w.emitNow("sessions", "SESSIONS restarted: %s", strings.Join(restarted, ", "))
 	}
 	w.sessions = cur
 }
@@ -498,9 +597,10 @@ var watchParty = state.Party{Name: "beekeeper watch"}
 func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	st, err := w.store.Read()
 	if err != nil {
-		w.emit("state", "cannot read the state: %v", err)
+		w.emit("state-read", "cannot read the state: %v", err)
 		return
 	}
+	w.clear("state-read")
 	w.records = st.Records
 	supervised := w.supervisorGone(ctx, st, sessions)
 	if w.standby {
@@ -536,9 +636,10 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		return evs, nil
 	})
 	if err != nil {
-		w.emit("state", "cannot write the state: %v", err)
+		w.emit("state-write", "cannot write the state: %v", err)
 		return
 	}
+	w.clear("state-write")
 	for _, l := range lines {
 		w.emitNow("pending", "%s", l)
 	}
@@ -696,7 +797,7 @@ func (w *watcher) runaways(sessions []*claude.Session, t *proc.Table) {
 		for _, figure := range slices.Sorted(maps.Keys(lines)) {
 			key := "runaway " + s.Key() + " " + figure
 			if !w.reported[key] {
-				w.reported[key] = true
+				w.reported[key], w.dirty = true, true
 				w.emitNow(key, "%s", lines[figure])
 			}
 		}
@@ -712,7 +813,7 @@ func (w *watcher) staleLeases(ctx context.Context, sessions []*claude.Session) {
 		v := w.leaseView(sessions, h)
 		key := h.Env + "@" + h.Since
 		if v.State == holderGone && !w.reported["lease "+key] {
-			w.reported["lease "+key] = true
+			w.reported["lease "+key], w.dirty = true, true
 			l := fmt.Sprintf("STALE LEASE: %s is held by %q, whose session no longer runs (%s)", h.Env, v.Name, truncate(h.Purpose, 60))
 			w.emitNow("lease", "%s", l)
 			w.notify(ctx, notify.StaleLease, key, "beekeeper: stale lease "+h.Env, l+"\nbeekeeper lease status "+h.Env)

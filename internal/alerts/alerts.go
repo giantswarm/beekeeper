@@ -245,16 +245,29 @@ func (r Rules) changeLines(kind, installation string, alerts []Alert, now time.T
 		severity, team := r.mark(group[0])
 		if len(group) > collapse {
 			earliest := slices.MinFunc(group, func(a, b Alert) int { return strings.Compare(a.Since, b.Since) }).Since
-			lines = append(lines, fmt.Sprintf("ALERT %s %s %s %s %s x%d (%s, ...) since %s",
-				kind, installation, severity, team, k.alertname, len(group), group[0].Where, sinceText(earliest, now)))
+			lines = append(lines, fmt.Sprintf("ALERT %s %s %s %s %s x%d (%s, ...)%s",
+				kind, installation, severity, team, k.alertname, len(group), group[0].Where, sinceSuffix(kind, earliest, now)))
 			continue
 		}
 		for _, a := range group {
-			lines = append(lines, fmt.Sprintf("ALERT %s %s %s %s %s %s since %s",
-				kind, installation, severity, team, a.Alertname, a.Where, sinceText(a.Since, now)))
+			lines = append(lines, Line(kind, installation, severity, team, a.Alertname, a.Where, a.Since, now))
 		}
 	}
 	return lines
+}
+
+// Line is one alert's change: NEW, RESOLVED or FLAPPING.
+func Line(kind, installation, severity, team, alertname, where, since string, now time.Time) string {
+	return fmt.Sprintf("ALERT %s %s %s %s %s %s%s", kind, installation, severity, team, alertname, where, sinceSuffix(kind, since, now))
+}
+
+// sinceSuffix is when an alert started, said on its NEW or FLAPPING line;
+// its RESOLVED line leaves it out, the reader has it.
+func sinceSuffix(kind, since string, now time.Time) string {
+	if kind == "RESOLVED" {
+		return ""
+	}
+	return " since " + sinceText(since, now)
 }
 
 // Installation is an installation's baseline: its last set, kept while it

@@ -137,7 +137,7 @@ func TestStepNewAndResolved(t *testing.T) {
 	lines, st := rules.Step(instB, st, ok(restarted), now)
 	equal(t, lines, []string{
 		"ALERT NEW beta notify rocket ManagementClusterContainerIsRestartingTooFrequently kube-system since 18:45Z",
-		"ALERT RESOLVED beta PAGE shield FluxCustomerHelmReleaseFailed org-acme/acme0230-kubescape@acme0230 since 14:37Z",
+		"ALERT RESOLVED beta PAGE shield FluxCustomerHelmReleaseFailed org-acme/acme0230-kubescape@acme0230",
 	})
 	lines, _ = rules.Step(instB, st, ok(restarted), now)
 	equal(t, lines, nil) // silent when nothing changed
@@ -164,7 +164,7 @@ func TestStepBurstCollapsesAboveTheThreshold(t *testing.T) {
 		t.Errorf("lines = %v", lines)
 	}
 	lines, _ = rules.Step(instA, st, ok(), now)
-	equal(t, lines, []string{"ALERT RESOLVED alpha PAGE atlas LoggingAgentMissingOnNode x5 (node-0, ...) since 14:37Z"})
+	equal(t, lines, []string{"ALERT RESOLVED alpha PAGE atlas LoggingAgentMissingOnNode x5 (node-0, ...)"})
 }
 
 func TestStepUnreachableOnceSetKept(t *testing.T) {

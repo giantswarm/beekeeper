@@ -21,6 +21,7 @@ type agentView struct {
 }
 
 func (a *app) agentsCmd() *cobra.Command {
+	var full bool
 	c := &cobra.Command{
 		Use:   "agents",
 		Short: "The roster of empty sessions registered as spare capacity",
@@ -28,10 +29,13 @@ func (a *app) agentsCmd() *cobra.Command {
 before it spawns new sessions. An agent registers, gets a task assigned,
 reports back idle, and clears its context between tasks.
 
-Without a subcommand, lists the agents.`,
+Without a subcommand, lists the agents. A caller that has read the list
+before gets only the agents whose task or reachability changed since, or
+one "no change" line; --full prints everything.`,
 		Args: cobra.NoArgs,
-		RunE: func(*cobra.Command, []string) error { return a.agentList() },
+		RunE: func(*cobra.Command, []string) error { return a.agentList(full) },
 	}
+	fullFlag(c, &full)
 	var name string
 	register := &cobra.Command{
 		Use:   "register",
@@ -170,7 +174,8 @@ Without a subcommand, lists the agents.`,
 			return err
 		},
 	}
-	list := listCmd("List the agents, idle ones first", a.agentList)
+	list := listCmd("List the agents, idle ones first", func() error { return a.agentList(full) })
+	fullFlag(list, &full)
 	c.AddCommand(register, assign, idle, remove, list)
 	return c
 }
@@ -286,7 +291,7 @@ func boolInt(b bool) int {
 	return 0
 }
 
-func (a *app) agentList() error {
+func (a *app) agentList(full bool) error {
 	st, err := a.store.Read()
 	if err != nil {
 		return err
@@ -299,8 +304,7 @@ func (a *app) agentList() error {
 	if a.json {
 		return a.printJSON(views)
 	}
-	a.printAgents(views)
-	return nil
+	return a.delta("agents", full, a.agentFacts(views), func() { a.printAgents(views) })
 }
 
 func (a *app) printAgents(views []agentView) {

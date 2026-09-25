@@ -48,7 +48,8 @@ the watch's rules over recorded ones, to try a floor or damper setting.`,
 		Short: "One line per alert that is NEW or RESOLVED since the last reading",
 		Long: `Read once, print what changed since the baseline and keep the new one:
 
-  HH:MM:SS ALERT NEW|RESOLVED|FLAPPING <installation> <severity> <team> <alertname> <namespace/object[@cluster]> since <start>
+  HH:MM:SS ALERT NEW|FLAPPING <installation> <severity> <team> <alertname> <namespace/object[@cluster]> since <start>
+  HH:MM:SS ALERT RESOLVED <installation> <severity> <team> <alertname> <namespace/object[@cluster]>
 
 A page says PAGE and alerts.team's alerts carry the team in capitals. More
 than alerts.collapse changes of one alertname are one line with a count. An
@@ -290,11 +291,14 @@ func (a *app) alertLines(st *alerts.State, targets []alerts.Target, answers []al
 }
 
 // decorate appends who is on the installation to each line in brackets, and
-// to a NEW line also the owner hints, asked for once.
+// to a NEW line also the owner hints, asked for once. Each part is said
+// once per reading: the lines after it share it.
 func decorate(lines, who []string, hints func() []string) []string {
 	var owners []string
 	asked := false
-	for i, l := range lines {
+	said := map[string]bool{}
+	out := make([]string, 0, len(lines))
+	for _, l := range lines {
 		parts := who
 		if alerts.IsNew(l) {
 			if !asked {
@@ -302,11 +306,16 @@ func decorate(lines, who []string, hints func() []string) []string {
 			}
 			parts = append(slices.Clone(who), owners...)
 		}
-		if len(parts) > 0 {
-			lines[i] += " [" + strings.Join(parts, "; ") + "]"
+		parts = slices.DeleteFunc(slices.Clone(parts), func(p string) bool { return said[p] })
+		for _, p := range parts {
+			said[p] = true
 		}
+		if len(parts) > 0 {
+			l += " [" + strings.Join(parts, "; ") + "]"
+		}
+		out = append(out, l)
 	}
-	return lines
+	return out
 }
 
 // hintWindow is how far back the owner hints of a new alert reach.

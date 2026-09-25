@@ -88,8 +88,8 @@ func TestDecorateGivesTheHintsToNewLinesOnly(t *testing.T) {
 	}, []string{`lease "Agent one"`}, hints)
 	want := []string{
 		`ALERT NEW gazelle notify honeybadger ChartOrphanConfigMap giantswarm/chart-operator since 02:55Z [lease "Agent one"; ` + merged672 + `]`,
-		`ALERT RESOLVED gazelle notify atlas MimirRulerTooManyFailedQueries mimir/mimir-ruler since 01:02Z [lease "Agent one"]`,
-		`ALERT NEW gazelle notify atlas MimirContinuousTestFailed mimir/mimir-continuous-test since 03:01Z [lease "Agent one"; ` + merged672 + `]`,
+		"ALERT RESOLVED gazelle notify atlas MimirRulerTooManyFailedQueries mimir/mimir-ruler since 01:02Z",
+		"ALERT NEW gazelle notify atlas MimirContinuousTestFailed mimir/mimir-continuous-test since 03:01Z",
 	}
 	if !slices.Equal(lines, want) {
 		t.Errorf("lines:\n got %q\nwant %q", lines, want)

@@ -65,7 +65,7 @@ type oomKill struct {
 
 func (a *app) snapshotCmd() *cobra.Command {
 	var since string
-	var changes, noBudget, noAlerts bool
+	var changes, full, noBudget, noAlerts bool
 	c := &cobra.Command{
 		Use:   "snapshot",
 		Short: "One tick: the machine, its sessions and what changed since your last snapshot",
@@ -80,13 +80,16 @@ memcap scope, a kind lab or the desktop scope; a memcap scope no run.start
 names has an unknown cap, a test run's scope is a test kill), leases, holds and the GitHub
 budget, and the installations' alerts, grouped (beekeeper alerts snapshot).
 
-Each caller's last snapshot is kept; the next one ends with what changed
-since. --changes prints only that: the quiet tick.`,
+Each caller's last snapshot is kept. A caller inside a Claude session that
+has taken one before gets only what changed since, or one "no change"
+line: the quiet tick. --full prints the whole screen and then what
+changed; a first snapshot and a person at a terminal get the whole screen.
+--json is always complete.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			me, err := a.caller()
 			if err != nil {
-				me = state.Party{Name: "anonymous"}
+				me, full = state.Party{Name: "anonymous"}, true
 			}
 			file := "snapshot." + fileKey(me) + ".json"
 			var prev snapshot
@@ -105,7 +108,8 @@ since. --changes prints only that: the quiet tick.`,
 				}
 				oomSince = t
 			}
-			s, err := a.takeSnapshot(cmd.Context(), oomSince, !noBudget, !noAlerts && !changes)
+			whole := full || !found
+			s, err := a.takeSnapshot(cmd.Context(), oomSince, !noBudget, !noAlerts && (whole || a.json))
 			if err != nil {
 				return err
 			}
@@ -122,7 +126,7 @@ since. --changes prints only that: the quiet tick.`,
 					Changes []string `json:"changes,omitempty"`
 				}{s, diff})
 			}
-			if !changes {
+			if whole {
 				a.printSnapshot(s)
 			}
 			switch {
@@ -139,7 +143,9 @@ since. --changes prints only that: the quiet tick.`,
 		},
 	}
 	c.Flags().StringVar(&since, "since", "", "count OOM kills since this time (15:04) or duration (2h) instead of your last snapshot")
-	c.Flags().BoolVar(&changes, "changes", false, "print only what changed since your last snapshot")
+	c.Flags().BoolVar(&changes, "changes", false, "print only what changed since your last snapshot (the default now)")
+	_ = c.Flags().MarkHidden("changes")
+	fullFlag(c, &full)
 	c.Flags().BoolVar(&noBudget, "no-budget", false, "skip the GitHub budget probe")
 	c.Flags().BoolVar(&noAlerts, "no-alerts", false, "skip reading the installations' alerts")
 	return c
