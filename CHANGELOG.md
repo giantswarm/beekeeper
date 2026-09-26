@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `watch` keeps checking a settling merge past `merge.settleTimeout` and drops it once its release rolled and the lane's HelmReleases are Ready, instead of leaving the lane settling until `lanes clear`. While it has not settled past the timeout, `watch` says `LANE STUCK` with what the lane waits for, and `lanes` marks the settle `stuck since`.
 - After a reboot the standby watch reopens the recorded supervisor's desktop session when no running spare can take over. The app starts at login before the watch's first poll, which first saw the supervisor's CLI gone only then, so the app looked started before the CLI stopped and the reopen never fired. The watch now also reopens when it never saw that CLI run under the running app.
 - `watch` settles a running merge whose gate process is gone (`MERGE LOST`, a `merge.lost` event) instead of leaving it running until the lane's next gate call; `lanes clear` drops such a merge too.
 - `agents handover` sends the note request to the name the agent's running CLI answers peer messages under (an imported session's desktop derives one, such as `w-c2`), not the roster name, which no CLI answers to.

@@ -54,7 +54,9 @@ gone is one MERGE LOST line: it settles with an unknown release. A
 registered agent with a task and no running CLI is one AGENTS STOPPED
 line with how to resume it. A settling merge leaves its lane
 once the lane has settled (its release rolled and its HelmReleases Ready,
-or no installation to roll), logged as lane.settled, silently. A note or a
+or no installation to roll), logged as lane.settled, silently, however
+late; one not settled past merge.settleTimeout is one LANE STUCK line
+with what the lane waits for and one ENDED line when it ends. A note or a
 timer that falls due, the end of a session with a record (sessions serve)
 and a supervisor relay taken or expired are one line each, once: the state keeps that they were reported, so
 a second or restarted watch stays silent about them. The
@@ -163,6 +165,16 @@ type watcher struct {
 	// the last poll's process table.
 	spare spareWatch
 	table *proc.Table
+	// readHRs reads a lane installation's HelmReleases; nil is kubectl.
+	readHRs func(context.Context, config.Lane) ([]merge.HelmRelease, error)
+}
+
+// helmReleases reads the lane installation's HelmReleases.
+func (w *watcher) helmReleases(ctx context.Context, lane config.Lane) ([]merge.HelmRelease, error) {
+	if w.readHRs != nil {
+		return w.readHRs(ctx, lane)
+	}
+	return readHelmReleases(ctx, lane)
 }
 
 func (w *watcher) run(ctx context.Context, once bool) error {
@@ -450,10 +462,6 @@ func (w *watcher) stalls() {
 	}
 }
 
-// settled drops the settling merges whose lane has settled, so lanes shows
-// the lane free before its next merge starts: a lane with no installation
-// has nothing to roll, and one whose release rolled and whose HelmReleases
-// are Ready is done. A lane past merge.settleTimeout is left to lanes clear.
 // lostMerges settles each running merge whose gate process is gone (a gate
 // killed, or lost with the machine), once: the gate itself prunes it only
 // when the lane's next merge arrives, and until then the lane shows a merge
@@ -481,15 +489,26 @@ func (w *watcher) lostMerges() {
 	}
 }
 
+// settled drops the settling merges whose lane has settled, so lanes shows
+// the lane free before its next merge starts: a lane with no installation
+// has nothing to roll, and one whose release rolled and whose HelmReleases
+// are Ready is done, however late. A merge not settled past
+// merge.settleTimeout is one LANE STUCK line with what the lane waits for,
+// and one ENDED line once it settles or the lane is cleared.
 func (w *watcher) settled(ctx context.Context) {
 	st, err := w.store.Read()
 	if err != nil {
 		return
 	}
-	hrs := map[string][]merge.HelmRelease{}
+	type reading struct {
+		hrs []merge.HelmRelease
+		err error
+	}
+	read := map[string]reading{}
 	done := map[string]string{}
+	stuck := map[string]bool{}
 	for _, m := range st.Merges {
-		if m.Phase != state.Settling || w.now.Sub(m.Finished) > w.cfg.Merge.SettleTimeout.Duration {
+		if m.Phase != state.Settling {
 			continue
 		}
 		lane, ok := w.cfg.LaneNamed(m.Lane)
@@ -497,17 +516,37 @@ func (w *watcher) settled(ctx context.Context) {
 			done[m.Key()] = "no installation to roll"
 			continue
 		}
-		h, read := hrs[lane.Name]
-		if !read {
-			h, err = readHelmReleases(ctx, lane)
-			if err != nil {
-				continue // unreadable: not settled
-			}
-			hrs[lane.Name] = h
+		r, ok := read[lane.Name]
+		if !ok {
+			r.hrs, r.err = w.helmReleases(ctx, lane)
+			read[lane.Name] = r
 		}
-		if ready, _ := merge.Ready(lane, h, &m, w.now, w.cfg.Merge.Settle.Duration); ready {
+		why := ""
+		if r.err != nil {
+			why = fmt.Sprintf("the HelmReleases of %s cannot be read (%v)", lane.Installation, r.err)
+		} else if ready, wait := merge.Ready(lane, r.hrs, &m, w.now, w.cfg.Merge.Settle.Duration); ready {
 			done[m.Key()] = "rolled, HelmReleases of " + lane.Installation + " Ready"
+			continue
+		} else {
+			why = wait
 		}
+		if since := w.now.Sub(m.Finished); since > w.cfg.Merge.SettleTimeout.Duration {
+			key := "stuck:" + lane.Name + ":" + m.Key()
+			stuck[key] = true
+			w.emit(key, "LANE STUCK %s: %s has not settled %s after its merge: %s; fix the installation or clear the lane (beekeeper lanes clear %s)",
+				lane.Name, m.Key(), dur(since), why, lane.Name)
+		}
+	}
+	w.mu.Lock()
+	var over []string
+	for k := range w.active {
+		if strings.HasPrefix(k, "stuck:") && !stuck[k] {
+			over = append(over, k)
+		}
+	}
+	w.mu.Unlock()
+	for _, k := range over {
+		w.clear(k)
 	}
 	if len(done) == 0 {
 		return
@@ -813,7 +852,7 @@ func (w *watcher) quietness(ctx context.Context, st *state.State, sessions []*cl
 	rolled := func(m state.Merge, lane config.Lane) bool {
 		h, ok := hrs[lane.Name]
 		if !ok {
-			h, _ = readHelmReleases(ctx, lane) // unreadable: not rolled, not quiet
+			h, _ = w.helmReleases(ctx, lane) // unreadable: not rolled, not quiet
 			hrs[lane.Name] = h
 		}
 		ready, _ := merge.Ready(lane, h, &m, w.now, w.cfg.Merge.Settle.Duration)

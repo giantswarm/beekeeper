@@ -349,16 +349,23 @@ func (a *app) stallText(s merge.Stall) string {
 		a.now.Sub(s.Since).Round(time.Second), s.Merge.Key(), s.Merge.By.Name, strings.Join(behind, ", "))
 }
 
-// settlingText says what a settling merge waits for.
+// settlingText says what a settling merge waits for, and since when it is
+// stuck past merge.settleTimeout.
 func (a *app) settlingText(m state.Merge) string {
+	var text string
 	switch {
 	case m.Outside:
-		return fmt.Sprintf("settling %s, merged outside the gate at %s, until %s and its HelmReleases are Ready", m.Key(),
+		text = fmt.Sprintf("settling %s, merged outside the gate at %s, until %s and its HelmReleases are Ready", m.Key(),
 			clock(a.now, m.Finished), clock(a.now, m.Finished.Add(a.cfg.Merge.Settle.Duration)))
 	case m.Release == "":
-		return fmt.Sprintf("settling %s until an unknown release rolls", m.Key())
+		text = fmt.Sprintf("settling %s until an unknown release rolls", m.Key())
+	default:
+		text = fmt.Sprintf("settling %s until %s rolls", m.Key(), m.Release)
 	}
-	return fmt.Sprintf("settling %s until %s rolls", m.Key(), m.Release)
+	if stuck := m.Finished.Add(a.cfg.Merge.SettleTimeout.Duration); a.now.After(stuck) {
+		text += fmt.Sprintf(", stuck since %s (the watch's LANE STUCK line says why)", clock(a.now, stuck))
+	}
+	return text
 }
 
 func (a *app) printLanes(views []laneView) {
