@@ -46,7 +46,23 @@ type Raw struct {
 	Fingerprint string            `json:"fingerprint"`
 	Labels      map[string]string `json:"labels"`
 	StartsAt    string            `json:"startsAt"`
+	Status      Status            `json:"status"`
 }
+
+// Status is an alert's state; InhibitedBy are the fingerprints of the alerts
+// that inhibit it.
+type Status struct {
+	InhibitedBy []string `json:"inhibitedBy,omitempty"`
+}
+
+// WorkingHours is the alert that inhibits the alerts labelled
+// cancel_if_outside_working_hours outside working hours. It only keeps them
+// from paging: the team's alerts it inhibits are read all the same.
+const WorkingHours = "InhibitionOutsideWorkingHours"
+
+// UnseenRepeat is how often the watch repeats that an unreachable
+// installation's alerts are unseen, with the time since its last reading.
+const UnseenRepeat = 15 * time.Minute
 
 // Alert is what a line prints of one alert.
 type Alert struct {
@@ -129,9 +145,13 @@ func (r Rules) Normalize(raw []Raw, installation string) Set {
 // normalize also returns the fingerprints in the answer's order.
 func (r Rules) normalize(raw []Raw, installation string) (Set, []string) {
 	out, order := Set{}, []string{}
+	names := make(map[string]string, len(raw))
+	for _, a := range raw {
+		names[a.Fingerprint] = a.Labels["alertname"]
+	}
 	for _, a := range raw {
 		l := a.Labels
-		if slices.Contains(r.Ignore, l["alertname"]) {
+		if slices.Contains(r.Ignore, l["alertname"]) || !r.visible(a, names) {
 			continue
 		}
 		cluster := first(l["cluster_id"], l["cluster"], l["installation"], installation)
@@ -168,6 +188,25 @@ func (r Rules) normalize(raw []Raw, installation string) (Set, []string) {
 		}
 	}
 	return out, order
+}
+
+// visible reports whether an alert is read: an uninhibited one, and the
+// team's alerts that only the working hours inhibit (an inhibitor missing
+// from the answer is not the working hours).
+func (r Rules) visible(a Raw, names map[string]string) bool {
+	by := a.Status.InhibitedBy
+	if len(by) == 0 {
+		return true
+	}
+	if r.Team == "" || a.Labels["team"] != r.Team {
+		return false
+	}
+	for _, fp := range by {
+		if names[fp] != WorkingHours {
+			return false
+		}
+	}
+	return true
 }
 
 func first(values ...string) string {
@@ -275,6 +314,11 @@ func sinceSuffix(kind, since string, now time.Time) string {
 type Installation struct {
 	Reachable bool `json:"reachable"`
 	Alerts    Set  `json:"alerts"`
+	// Seen is its last reading; zero when it has not answered since the
+	// baseline has the field.
+	Seen time.Time `json:"seen,omitzero"`
+	// Said is when the watch last said it is unreachable.
+	Said time.Time `json:"said,omitzero"`
 	// Flaps are the damper's records of the alerts that changed within its
 	// window, by fingerprint.
 	Flaps map[string]*Flap `json:"flaps,omitempty"`
@@ -284,23 +328,28 @@ type Installation struct {
 // baseline it leaves. prev is nil on the installation's first run.
 func (r Rules) Step(installation string, prev *Installation, ans Answer, now time.Time) ([]string, *Installation) {
 	if !ans.OK {
-		next := &Installation{}
+		next := &Installation{Said: now}
 		if prev != nil {
-			next.Alerts, next.Flaps = prev.Alerts, prev.Flaps
-			if !prev.Reachable {
+			next.Alerts, next.Flaps, next.Seen = prev.Alerts, prev.Flaps, prev.Seen
+			if !prev.Reachable && now.Sub(prev.Said) < UnseenRepeat {
+				next.Said = prev.Said
 				return nil, next
 			}
 		}
-		return []string{fmt.Sprintf("ALERTS %s unreachable: %s", installation, ans.Why)}, next
+		return []string{fmt.Sprintf("ALERTS %s unreachable, %s: %s", installation, unseen(next, now), ans.Why)}, next
 	}
 	current := r.Normalize(ans.Alerts, installation)
-	next := &Installation{Reachable: true, Alerts: current}
+	next := &Installation{Reachable: true, Alerts: current, Seen: now}
 	if prev == nil || prev.Alerts == nil {
 		return r.firstLook(installation, current, now), next
 	}
 	var lines []string
 	if !prev.Reachable {
-		lines = append(lines, fmt.Sprintf("ALERTS %s reachable again", installation))
+		again := fmt.Sprintf("ALERTS %s reachable again", installation)
+		if !prev.Seen.IsZero() {
+			again += fmt.Sprintf(" after %s unseen", ago(now.Sub(prev.Seen)))
+		}
+		lines = append(lines, again)
 	}
 	next.Flaps = r.Flap.keep(prev.Flaps, now)
 	added, flapping := r.Flap.damp(next.Flaps, r.missing(installation, current, prev.Alerts), now)
@@ -309,6 +358,26 @@ func (r Rules) Step(installation string, prev *Installation, ans Answer, now tim
 	lines = append(lines, r.changeLines("RESOLVED", installation, gone, now, r.Collapse)...)
 	lines = append(lines, r.changeLines("FLAPPING", installation, append(flapping, flappingGone...), now, r.Collapse)...)
 	return lines, next
+}
+
+// unseen says since when an unreachable installation's alerts are unseen.
+func unseen(in *Installation, now time.Time) string {
+	switch {
+	case in.Alerts == nil:
+		return "alerts never read"
+	case in.Seen.IsZero():
+		return "alerts unseen since an unknown time"
+	}
+	return fmt.Sprintf("alerts unseen for %s (since %s)", ago(now.Sub(in.Seen)), sinceText(in.Seen.Format(time.RFC3339Nano), now))
+}
+
+// ago is a duration in whole minutes, at least one: 7m, 1h05m.
+func ago(d time.Duration) string {
+	m := max(int(d.Round(time.Minute)/time.Minute), 1)
+	if m < 60 {
+		return fmt.Sprintf("%dm", m)
+	}
+	return fmt.Sprintf("%dh%02dm", m/60, m%60)
 }
 
 // New is the kind of a line about an alert that started firing.
