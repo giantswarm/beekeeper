@@ -114,6 +114,9 @@ func TestHoldActive(t *testing.T) {
 	if (Hold{Until: now.Add(-time.Minute)}).Active(now) {
 		t.Error("an expired hold is active")
 	}
+	if (Hold{LiftedBy: &Party{Name: "x"}}).Active(now) {
+		t.Error("a lifted hold is active")
+	}
 }
 
 func TestHoldExcepts(t *testing.T) {

@@ -255,11 +255,12 @@ func Held(st *state.State, installation string, now time.Time) (state.Hold, bool
 	return state.Hold{}, false
 }
 
-// HeldClusters says which clusters of which installation hold an upgrade.
+// HeldClusters says which clusters of which installation hold an upgrade,
+// lifted or not: an upgrade whose hold was lifted still runs.
 func HeldClusters(st *state.State, now time.Time) func(installation, cluster string) bool {
 	held := map[string]bool{}
 	for _, h := range st.Holds {
-		if Is(h) && h.Active(now) {
+		if Is(h) && !h.Expired(now) {
 			held[h.Target] = true
 		}
 	}
@@ -268,32 +269,65 @@ func HeldClusters(st *state.State, now time.Time) func(installation, cluster str
 
 // Reconcile makes the installation's upgrade holds those of its running
 // upgrades: a hold for each that has none (begun), none for any that no
-// longer runs (ended). Only a readable installation is reconciled.
+// longer runs (ended). A lifted hold stays lifted while its upgrade runs; a
+// different upgrade of the cluster (another target release) replaces it with
+// an active hold. Only a readable installation is reconciled.
 func Reconcile(st *state.State, installation string, running []Upgrade, now time.Time, by state.Party) (begun, ended []state.Hold) {
-	want := map[string]bool{}
+	want := map[string]Upgrade{}
 	for _, u := range running {
-		want[HoldTarget(installation, u.Cluster)] = true
+		want[HoldTarget(installation, u.Cluster)] = u
 	}
 	have := map[string]bool{}
 	st.Holds = slices.DeleteFunc(st.Holds, func(h state.Hold) bool {
 		if !strings.HasPrefix(h.Target, HoldPrefix+installation+"/") {
 			return false
 		}
-		if want[h.Target] && h.Active(now) {
+		u, runs := want[h.Target]
+		switch {
+		case runs && h.Active(now):
 			have[h.Target] = true
 			return false
+		case runs && h.LiftedBy != nil && !h.Expired(now) && sameUpgrade(h, u):
+			have[h.Target] = true
+			return false
+		case runs && h.LiftedBy != nil:
+			return true // a different upgrade: its hold begins below
 		}
 		ended = append(ended, h)
 		return true
 	})
+	for i, h := range st.Holds {
+		if u, ok := want[h.Target]; ok && h.UpgradeTo == "" && !u.Rolling {
+			st.Holds[i].UpgradeTo = u.To
+		}
+	}
 	for _, u := range running {
 		t := HoldTarget(installation, u.Cluster)
 		if have[t] || u.Rolling {
 			continue
 		}
-		h := state.Hold{Target: t, Reason: reasonHead + Describe(installation, u), By: by, At: now.UTC()}
+		h := state.Hold{Target: t, Reason: reasonHead + Describe(installation, u), By: by, At: now.UTC(), UpgradeTo: u.To}
 		st.Holds = append(st.Holds, h)
 		begun = append(begun, h)
 	}
 	return begun, ended
+}
+
+// sameUpgrade reports whether a running upgrade is the one the hold stands
+// for: a rollout that runs on (its release change done) or the same target
+// release.
+func sameUpgrade(h state.Hold, u Upgrade) bool {
+	return u.Rolling || u.To == "" || h.UpgradeTo == "" || u.To == h.UpgradeTo
+}
+
+// Lift records a person's lift of an upgrade hold: the hold stays, inactive,
+// until its upgrade ends. It reports whether the target held an active hold.
+func Lift(st *state.State, target string, by state.Party, now time.Time) bool {
+	for i, h := range st.Holds {
+		if h.Target == target && h.Active(now) {
+			st.Holds[i].LiftedBy, st.Holds[i].LiftedAt = &by, now.UTC()
+			return true
+		}
+	}
+	return false
 }

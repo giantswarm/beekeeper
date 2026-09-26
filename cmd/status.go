@@ -64,7 +64,10 @@ type statusView struct {
 	RestartUntil time.Time `json:"restartUntil,omitzero"`
 	Leases       []string  `json:"leases"`
 	Holds        []string  `json:"holds"`
-	Due          int       `json:"due"`
+	// Lifted are the upgrade holds lifted while their upgrades run, with
+	// who lifted them.
+	Lifted []string `json:"lifted,omitempty"`
+	Due    int      `json:"due"`
 }
 
 func (a *app) status() (*statusView, error) {
@@ -93,6 +96,9 @@ func (a *app) status() (*statusView, error) {
 		if h.Active(a.now) {
 			v.Holds = append(v.Holds, h.Target)
 		}
+	}
+	for _, h := range liftedHolds(st, a.now) {
+		v.Lifted = append(v.Lifted, h.Target+" by "+h.LiftedBy.Name)
 	}
 	return v, nil
 }
@@ -152,5 +158,9 @@ func (v *statusView) line() string {
 		}
 		return s
 	}
-	return fmt.Sprintf("%s; %s; %s; %d due", sup, list(len(v.Leases), "lease held", "leases held", v.Leases), list(len(v.Holds), "hold", "holds", v.Holds), v.Due)
+	holds := list(len(v.Holds), "hold", "holds", v.Holds)
+	if len(v.Lifted) > 0 {
+		holds += "; " + list(len(v.Lifted), "lifted", "lifted", v.Lifted)
+	}
+	return fmt.Sprintf("%s; %s; %s; %d due", sup, list(len(v.Leases), "lease held", "leases held", v.Leases), holds, v.Due)
 }

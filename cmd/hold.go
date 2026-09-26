@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -61,7 +62,7 @@ Without a subcommand, lists the holds.`,
 			}
 			h := state.Hold{Target: args[0], Reason: reason, By: me, At: a.now.UTC(), Until: u.UTC(), Except: except}
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-				st.Holds = slices.DeleteFunc(st.Holds, func(x state.Hold) bool { return x.Target == h.Target || !x.Active(a.now) })
+				st.Holds = slices.DeleteFunc(st.Holds, func(x state.Hold) bool { return x.Target == h.Target || x.Expired(a.now) })
 				st.Holds = append(st.Holds, h)
 				return []state.Event{event(me, "hold.set", "%s until %s: %s", holdTarget(h), untilText(a, h), reason)}, nil
 			})
@@ -89,12 +90,15 @@ Without a subcommand, lists the holds.`,
 			}
 			found := false
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+				if strings.HasPrefix(args[0], upgrade.HoldPrefix) {
+					found = upgrade.Lift(st, args[0], me, a.now)
+				}
 				st.Holds = slices.DeleteFunc(st.Holds, func(x state.Hold) bool {
-					if x.Target == args[0] {
+					if x.Target == args[0] && !upgrade.Is(x) {
 						found = true
 						return true
 					}
-					return !x.Active(a.now)
+					return x.Expired(a.now)
 				})
 				if !found {
 					return nil, nil
@@ -106,6 +110,10 @@ Without a subcommand, lists the holds.`,
 			}
 			if !found {
 				_, err = fmt.Fprintf(a.out, "%s was not held\n", args[0])
+				return err
+			}
+			if strings.HasPrefix(args[0], upgrade.HoldPrefix) {
+				_, err = fmt.Fprintf(a.out, "lifted the hold on %s until its upgrade ends\n", args[0])
 				return err
 			}
 			_, err = fmt.Fprintf(a.out, "lifted the hold on %s\n", args[0])
@@ -234,6 +242,9 @@ func holdTarget(h state.Hold) string {
 }
 
 func untilText(a *app, h state.Hold) string {
+	if h.LiftedBy != nil {
+		return "lifted by " + h.LiftedBy.Name + " " + clock(a.now, h.LiftedAt)
+	}
 	if upgrade.Is(h) {
 		return "the upgrade ends"
 	}
@@ -253,12 +264,24 @@ func (a *app) activeHolds(st *state.State) []state.Hold {
 	return out
 }
 
+// liftedHolds are the upgrade holds lifted while their upgrades run.
+func liftedHolds(st *state.State, now time.Time) []state.Hold {
+	var out []state.Hold
+	for _, h := range st.Holds {
+		if h.LiftedBy != nil && !h.Expired(now) {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
 func (a *app) holdList() error {
 	st, err := a.store.Read()
 	if err != nil {
 		return err
 	}
 	holds := a.activeHolds(st)
+	holds = append(holds, liftedHolds(st, a.now)...)
 	if a.json {
 		return a.printJSON(holds)
 	}

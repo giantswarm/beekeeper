@@ -203,3 +203,49 @@ func TestRead(t *testing.T) {
 		t.Errorf("an unreadable installation: %+v", ss[0])
 	}
 }
+
+const stuckTo = "36.0.0"
+
+func TestLiftSticks(t *testing.T) {
+	st := &state.State{}
+	stuck := []Upgrade{{Cluster: "wc", To: stuckTo}}
+	Reconcile(st, prod, stuck, at, watch)
+	timo := state.Party{Name: "Supervisor"}
+	if !Lift(st, HoldTarget(prod, "wc"), timo, at) || Lift(st, HoldTarget(prod, "wc"), timo, at) {
+		t.Fatal("lift: want the first to lift and the second to find nothing held")
+	}
+	for tick := range 3 {
+		if begun, ended := Reconcile(st, prod, stuck, at.Add(time.Duration(tick)*time.Minute), watch); len(begun)+len(ended) != 0 {
+			t.Fatalf("tick %d re-held: begun %+v ended %+v", tick, begun, ended)
+		}
+		if _, held := Held(st, prod, at); held {
+			t.Fatalf("tick %d: the lifted hold is active again", tick)
+		}
+	}
+	if len(st.Holds) != 1 || st.Holds[0].LiftedBy == nil || st.Holds[0].LiftedBy.Name != "Supervisor" {
+		t.Fatalf("holds %+v", st.Holds)
+	}
+	if !HeldClusters(st, at)(prod, "wc") {
+		t.Error("a lifted upgrade's rollout must still count as running")
+	}
+	rolling := []Upgrade{{Cluster: "wc", Rolling: true}}
+	if begun, ended := Reconcile(st, prod, rolling, at, watch); len(begun)+len(ended) != 0 || st.Holds[0].LiftedBy == nil {
+		t.Errorf("the rollout running on re-held: begun %+v ended %+v", begun, ended)
+	}
+	begun, _ := Reconcile(st, prod, []Upgrade{{Cluster: "wc", From: stuckTo, To: "36.1.0"}}, at, watch)
+	if len(begun) != 1 || st.Holds[0].LiftedBy != nil || st.Holds[0].UpgradeTo != "36.1.0" {
+		t.Errorf("a different upgrade must hold again: begun %+v holds %+v", begun, st.Holds)
+	}
+	Lift(st, HoldTarget(prod, "wc"), timo, at)
+	if _, ended := Reconcile(st, prod, nil, at, watch); len(ended) != 1 || len(st.Holds) != 0 {
+		t.Errorf("the upgrade's end must remove the lifted hold: ended %+v holds %+v", ended, st.Holds)
+	}
+}
+
+func TestLiftBackfillsTarget(t *testing.T) {
+	st := &state.State{Holds: []state.Hold{{Target: HoldTarget(prod, "wc")}}}
+	Reconcile(st, prod, []Upgrade{{Cluster: "wc", To: stuckTo}}, at, watch)
+	if st.Holds[0].UpgradeTo != stuckTo {
+		t.Errorf("holds %+v", st.Holds)
+	}
+}
