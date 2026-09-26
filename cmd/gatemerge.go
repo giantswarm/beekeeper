@@ -49,13 +49,13 @@ func runDetached(argv []string, base string, started func(pid int)) (doc []byte,
 		gateLine("%v", err)
 		return nil, guard.ExitNotFound
 	}
-	out, err := os.Create(base + ".json")
+	out, err := os.Create(base + ".json") //nolint:gosec // the gate's own file under the state directory
 	if err != nil {
 		gateLine("%v", err)
 		return nil, guard.ExitNotFound
 	}
 	defer func() { _ = out.Close(); _ = os.Remove(out.Name()) }()
-	log, err := os.Create(base + ".log")
+	log, err := os.Create(base + ".log") //nolint:gosec // the gate's own file under the state directory
 	if err != nil {
 		gateLine("%v", err)
 		return nil, guard.ExitNotFound

@@ -23,6 +23,13 @@ import (
 	"github.com/giantswarm/beekeeper/internal/update"
 )
 
+
+// A scratch repository and the devctl a release window opened on.
+const (
+	scratchRepo = "o/r"
+	devctlFrom  = "v8.0.0"
+)
+
 func TestUntilTime(t *testing.T) {
 	now := time.Date(2026, 9, 24, 22, 0, 0, 0, time.Local)
 	for in, want := range map[string]time.Time{

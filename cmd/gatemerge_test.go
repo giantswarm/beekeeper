@@ -66,7 +66,7 @@ func runningMerge(t *testing.T, repo string, lane config.Lane) *gateRun {
 	err = store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges = []state.Merge{{Repo: repo, PR: 7, Lane: lane.Name, By: me, PID: g.pid, Phase: state.Running, Joined: relayNow, Started: relayNow}}
 		if repo == merge.ToolRepo {
-			st.Holds = []state.Hold{{Target: merge.AllMerges, Except: repo, By: me, Tool: merge.Tool, ToolFrom: "v8.0.0", ToolPR: 7}}
+			st.Holds = []state.Hold{{Target: merge.AllMerges, Except: repo, By: me, Tool: merge.Tool, ToolFrom: devctlFrom, ToolPR: 7}}
 		}
 		return nil, nil
 	})
@@ -98,8 +98,8 @@ func TestAGatedMergeOutlivesItsCaller(t *testing.T) {
 	sidFile := filepath.Join(t.TempDir(), "sid")
 	fakeDevctl(t, `echo merging >&2; ps -o sid= -p $$ >`+sidFile+`; sleep 1; echo "waiting for the release" >&2; echo '`+mergedDoc+`'`)
 	stubGitHub(t, "", "")
-	lane := config.Lane{Name: "o/r", Repositories: []string{"o/r"}}
-	g := runningMerge(t, "o/r", lane)
+	lane := config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}}
+	g := runningMerge(t, scratchRepo, lane)
 	// The caller's stdout pipe is gone with its session.
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -135,14 +135,14 @@ func TestAGatedMergeOutlivesItsCaller(t *testing.T) {
 }
 
 func TestASignalExitWithoutADocumentIsJudgedByGitHub(t *testing.T) {
-	gazelleLane := config.Lane{Name: "serving", Installation: "gazelle", Repositories: []string{"o/r"}}
+	gazelleLane := config.Lane{Name: "serving", Installation: "gazelle", Repositories: []string{scratchRepo}}
 	toolLane := config.Lane{Name: merge.ToolRepo, Repositories: []string{merge.ToolRepo}}
 	for _, c := range []struct {
 		name, repo, pull string
 		lane             config.Lane
 		check            func(t *testing.T, g *gateRun, st *state.State)
 	}{
-		{"merged, a lane to roll", "o/r", github.Merged, gazelleLane, func(t *testing.T, g *gateRun, st *state.State) {
+		{"merged, a lane to roll", scratchRepo, github.Merged, gazelleLane, func(t *testing.T, g *gateRun, st *state.State) {
 			if len(st.Merges) != 1 || st.Merges[0].Phase != state.Settling || st.Merges[0].Retrying() {
 				t.Errorf("want one settling merge, no retry place: %+v", st.Merges)
 			}
@@ -153,7 +153,7 @@ func TestASignalExitWithoutADocumentIsJudgedByGitHub(t *testing.T) {
 				t.Error("logged merge.failed")
 			}
 		}},
-		{"unmerged keeps the retry place", "o/r", github.Open, gazelleLane, func(t *testing.T, g *gateRun, st *state.State) {
+		{"unmerged keeps the retry place", scratchRepo, github.Open, gazelleLane, func(t *testing.T, g *gateRun, st *state.State) {
 			if len(st.Merges) != 1 || !st.Merges[0].Retrying() {
 				t.Errorf("want the retry place: %+v", st.Merges)
 			}
@@ -177,7 +177,7 @@ func TestASignalExitWithoutADocumentIsJudgedByGitHub(t *testing.T) {
 				t.Errorf("hold.lift event: %q", d)
 			}
 		}},
-		{"GitHub unanswered settles by the rule", "o/r", "", gazelleLane, func(t *testing.T, g *gateRun, st *state.State) {
+		{"GitHub unanswered settles by the rule", scratchRepo, "", gazelleLane, func(t *testing.T, g *gateRun, st *state.State) {
 			if len(st.Merges) != 1 || st.Merges[0].Phase != state.Settling || st.Merges[0].Exit != 143 {
 				t.Errorf("want one settling merge: %+v", st.Merges)
 			}
@@ -188,7 +188,7 @@ func TestASignalExitWithoutADocumentIsJudgedByGitHub(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			fakeDevctl(t, `echo merged >&2; kill -TERM $$`)
-			asked := stubGitHub(t, c.pull, "v8.0.0")
+			asked := stubGitHub(t, c.pull, devctlFrom)
 			g := runningMerge(t, c.repo, c.lane)
 			if err := g.runMerge(); Code(err) != 143 {
 				t.Fatalf("exit %d, want 143", Code(err))
@@ -206,9 +206,9 @@ func TestADeadMergesToolWindowCloses(t *testing.T) {
 		name, pull, version string
 		lifted, merged      bool
 	}{
-		{"not merged", github.Open, "v8.0.0", true, false},
+		{"not merged", github.Open, devctlFrom, true, false},
 		{"closed", github.Closed, "", true, false},
-		{"merged, devctl not updated", github.Merged, "v8.0.0", false, true},
+		{"merged, devctl not updated", github.Merged, devctlFrom, false, true},
 		{"devctl updated", github.Merged, "v8.1.0", true, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -233,7 +233,7 @@ func TestADeadMergesToolWindowCloses(t *testing.T) {
 		})
 	}
 	// A live devctl keeps the window, whatever GitHub says.
-	asked := stubGitHub(t, github.Open, "v8.0.0")
+	asked := stubGitHub(t, github.Open, devctlFrom)
 	g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
 	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges[0].PID, st.Merges[0].Child = 0, os.Getpid()

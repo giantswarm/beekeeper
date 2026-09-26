@@ -34,7 +34,7 @@ func TestHandoversDue(t *testing.T) {
 	st := &state.State{
 		Agents:     agents,
 		Supervisor: &state.Supervisor{Party: party("sup")},
-		Merges:     []state.Merge{{Repo: "o/r", PR: 1, By: party("merging"), Phase: state.Running, PID: 42}},
+		Merges:     []state.Merge{{Repo: scratchRepo, PR: 1, By: party("merging"), Phase: state.Running, PID: 42}},
 	}
 	var sessions []*claude.Session
 	for _, id := range ids[:len(ids)-1] { // "gone" does not run
@@ -66,7 +66,7 @@ func TestHandoverPromptPassesOnTheBrief(t *testing.T) {
 		agent:   state.Agent{Party: state.Party{Session: oldID, Name: countName}, Task: countTask},
 		context: 25_400,
 		record:  &state.Record{Issue: "o/r#61", Waits: "CI"},
-		merges:  []state.Merge{{Repo: "o/r", PR: 7, Lane: "main", Phase: state.Waiting}},
+		merges:  []state.Merge{{Repo: scratchRepo, PR: 7, Lane: "main", Phase: state.Waiting}},
 		events:  []state.Event{{At: at, Verb: "lease.claim", Detail: "lab-a"}},
 		note:    "a and b done; c next",
 		brief:   "# Count\n\n## Steps\ncount a, b, c",
