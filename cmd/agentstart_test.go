@@ -213,7 +213,7 @@ func TestTitleTranscriptReachesTheImportWindow(t *testing.T) {
 	if err := titleTranscript(projects, "id", `Guide run 2: Timo's "open" decisions`); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // the test's own transcript
 	if err != nil {
 		t.Fatal(err)
 	}
