@@ -291,6 +291,10 @@ func (rl role) observeCLI(st *state.State, sessions []*claude.Session, now time.
 			c = &state.CLI{Supervisor: sup.Party, Since: sup.Since}
 			r.CLI, changed = c, true
 		}
+		if old := sup.Name; renameHolder(sup, sessions) {
+			c.Supervisor.Name, changed = sup.Name, true
+			evs = append(evs, event(sup.Party, rl.name+".rename", "%q is now %q", old, sup.Name))
+		}
 		s, live := claude.Live(sessions, sup.Party)
 		switch {
 		case live && s.PID != c.PID:
@@ -310,6 +314,21 @@ func (rl role) observeCLI(st *state.State, sessions []*claude.Session, now time.
 		}
 	})
 	return changed, evs
+}
+
+// renameHolder gives sup the title its running session carries now: a
+// holder renamed after its start is known by its current name, not the one
+// recorded at the start. It reports whether the name changed.
+func renameHolder(sup *state.Supervisor, sessions []*claude.Session) bool {
+	if sup == nil {
+		return false
+	}
+	s, live := claude.Live(sessions, sup.Party)
+	if !live || s.Name == "" || s.Name == sup.Name {
+		return false
+	}
+	sup.Name = s.Name
+	return true
 }
 
 // fireRelay reports the supervisor's relay taken or expired, once.

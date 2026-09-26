@@ -423,3 +423,26 @@ func TestStartClearsTheSpare(t *testing.T) {
 		t.Fatalf("after the spare's start: supervisor %+v, spare %+v", st.Supervisor, st.Spare)
 	}
 }
+
+func TestARenamedSupervisorIsKnownByItsCurrentTitle(t *testing.T) {
+	st := handOverState()
+	renamed := []*claude.Session{{PID: 100, ID: supA.Session, HostID: supA.HostSession, Name: "Supervisor run 18"}}
+	observeCLI(st, []*claude.Session{{PID: 100, ID: supA.Session, HostID: supA.HostSession, Name: supA.Name}}, relayNow)
+	changed, evs := observeCLI(st, renamed, relayNow.Add(time.Second))
+	if !changed || st.Supervisor.Name != "Supervisor run 18" || st.SupervisorCLI.Supervisor.Name != "Supervisor run 18" {
+		t.Fatalf("the rename is not recorded: %v %+v %+v", changed, st.Supervisor, st.SupervisorCLI)
+	}
+	if len(evs) != 1 || evs[0].Verb != "supervisor.rename" || !strings.Contains(evs[0].Detail, `is now "Supervisor run 18"`) {
+		t.Fatalf("the rename is not logged once: %+v", evs)
+	}
+	if changed, evs := observeCLI(st, renamed, relayNow.Add(2*time.Second)); changed || len(evs) != 0 {
+		t.Fatalf("an unchanged title changes the state: %v %+v", changed, evs)
+	}
+	if !st.Supervisor.Is(supA) || !st.SupervisorCLI.Of(st.Supervisor) {
+		t.Fatal("the rename changes who holds the role")
+	}
+	// A session without a title keeps the recorded name.
+	if renameHolder(st.Supervisor, []*claude.Session{{PID: 100, ID: supA.Session}}) || st.Supervisor.Name != "Supervisor run 18" {
+		t.Fatalf("an untitled session erased the name: %+v", st.Supervisor)
+	}
+}

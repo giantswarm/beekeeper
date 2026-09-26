@@ -275,7 +275,7 @@ func TestRecordNameIsTheBackgroundWorkersTitle(t *testing.T) {
 	}
 }
 
-func TestStoppedWaitingSkipsArchivedAndTestSessions(t *testing.T) {
+func TestStoppedRecordsSkipArchivedSessions(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Claude.DesktopDir = filepath.Join("testdata", "desktop-waiting")
 	titles := func(rs []*Record) []string {
@@ -284,16 +284,6 @@ func TestStoppedWaitingSkipsArchivedAndTestSessions(t *testing.T) {
 			out = append(out, r.Title)
 		}
 		return out
-	}
-	// The archived #60 test (no title), the "test: …" run, the completed
-	// session and the stale summary stay out.
-	want := []string{"Land the follow-ups", "Guide Timo through his decisions"}
-	if got := titles(StoppedWaiting(cfg, nil)); !slices.Equal(got, want) {
-		t.Fatalf("stopped and waiting = %q, want %q", got, want)
-	}
-	running := []*Session{{HostID: "local_bbbbbbbb-0000-4000-8000-000000000013"}}
-	if got := titles(StoppedWaiting(cfg, running)); !slices.Equal(got, want[1:]) {
-		t.Fatalf("with the first one running = %q, want %q", got, want[1:])
 	}
 	if got := StoppedRecords(cfg, nil, time.Time{}); len(got) != 5 || slices.ContainsFunc(got, func(r *Record) bool { return r.IsArchived }) {
 		t.Fatalf("stopped records = %q, want every unarchived one", titles(got))

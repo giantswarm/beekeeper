@@ -7,7 +7,6 @@
 package claude
 
 import (
-	"bytes"
 	"cmp"
 	"encoding/json"
 	"fmt"
@@ -452,23 +451,6 @@ func StoppedRecords(cfg *config.Config, running []*Session, since time.Time) []*
 			continue
 		}
 		if r, ok := readRecord(path); ok && !r.IsArchived && !runsCLI(running, r) {
-			out = append(out, r)
-		}
-	}
-	return byActivity(out)
-}
-
-// StoppedWaiting returns the desktop records of the sessions that run no
-// CLI and wait on their person, neither archived nor a test, most recently
-// active first: the person can answer one and it resumes.
-func StoppedWaiting(cfg *config.Config, running []*Session) []*Record {
-	var out []*Record
-	for _, path := range recordFiles(cfg) {
-		raw, err := os.ReadFile(filepath.Clean(path))
-		if err != nil || !bytes.Contains(raw, []byte(`"blocked"`)) {
-			continue // the most records: read, never parsed
-		}
-		if r, ok := parseRecord(raw); ok && r.Waiting() != nil && r.Aside() == "" && !runsCLI(running, r) {
 			out = append(out, r)
 		}
 	}
