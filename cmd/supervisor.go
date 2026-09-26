@@ -215,6 +215,7 @@ func (a *app) roleStatus(rl role) error {
 		return err
 	}
 	r := rl.get(st)
+	renameHolder(r.Holder, sessions)
 	sv := readHolder(r, sessions, a.now, rl.cfg(a.cfg).RestartGrace.Duration)
 	v := a.viewRole(rl, r, sessions, sv)
 	if v == nil {

@@ -82,6 +82,7 @@ func (a *app) status() (*statusView, error) {
 		if err != nil {
 			return nil, err
 		}
+		renameHolder(st.Supervisor, sessions)
 		sv := a.supervision(st, sessions)
 		v.Supervisor, v.SupervisorLive, v.RestartUntil = st.Supervisor.Name, sv.live, sv.until
 	}
