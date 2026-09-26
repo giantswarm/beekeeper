@@ -186,11 +186,23 @@ type Hold struct {
 	Tool        string `json:"tool,omitempty"`
 	ToolFrom    string `json:"toolFrom,omitempty"`
 	ToolRelease string `json:"toolRelease,omitempty"`
+	// UpgradeTo is the target release of the upgrade an automatic upgrade
+	// hold stands for.
+	UpgradeTo string `json:"upgradeTo,omitempty"`
+	// LiftedBy and LiftedAt record the lift of an upgrade hold: the watch
+	// keeps a lifted hold, inactive, for as long as its upgrade runs.
+	LiftedBy *Party    `json:"liftedBy,omitempty"`
+	LiftedAt time.Time `json:"liftedAt,omitzero"`
 }
 
 // Active reports whether the hold still applies at now.
 func (h Hold) Active(now time.Time) bool {
-	return h.Until.IsZero() || now.Before(h.Until)
+	return h.LiftedBy == nil && !h.Expired(now)
+}
+
+// Expired reports whether the hold's time has passed at now.
+func (h Hold) Expired(now time.Time) bool {
+	return !h.Until.IsZero() && !now.Before(h.Until)
 }
 
 // Excepts reports whether the hold lets a merge of repo#pr through.

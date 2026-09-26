@@ -205,8 +205,11 @@ upgrade with its progress. The watch whose update sets the hold says `UPGRADE �
 update lifts it `UPGRADE ENDED …`, so a second or restarted watch says neither again. An
 unreadable installation is one `UPGRADES <installation> unreadable: …` line until it answers
 again and keeps its holds as they are: it counts as neither upgrading nor quiet. `hold set`
-refuses an `upgrade:` target; `hold lift upgrade:<installation>/<cluster>` lifts one by hand; the
-watch sets it again while the cluster's release change runs, not for its rollout alone.
+refuses an `upgrade:` target; `hold lift upgrade:<installation>/<cluster>` lifts one by hand
+(a workload cluster's roll stuck on a drain need not stop the installation's merges): the hold
+stays lifted, recorded with who lifted it, until that upgrade ends, and only a different upgrade
+of the cluster (another target release) holds the installation again. `hold list` and `status`
+show the lifted hold and who lifted it.
 
 
 The one claim an upgrade admits is the work that unblocks it: a node drain stalled on a
