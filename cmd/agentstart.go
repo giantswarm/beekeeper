@@ -244,22 +244,35 @@ func endDesktopTwin(ctx context.Context, id string) (int, error) {
 	}
 }
 
-// firstTurnRuns reports whether the first turn of session id runs: a claude
-// process started under --session-id <id>.
+// The claude CLI's process name and the flag a start names its session
+// with.
+const (
+	claudeComm    = "claude"
+	sessionIDFlag = "--session-id"
+)
+
+// firstTurnRuns reports whether the first turn of session id runs.
 func firstTurnRuns(t *proc.Table, id string) bool {
 	for _, p := range t.ByPID {
-		if i := slices.Index(p.Args, "--session-id"); p.Comm == "claude" && i >= 0 && i+1 < len(p.Args) && p.Args[i+1] == id {
+		if startsSession(p, id) {
 			return true
 		}
 	}
 	return false
 }
 
+// startsSession reports whether p is a first turn of session id: a claude
+// process started under --session-id <id>.
+func startsSession(p *proc.Process, id string) bool {
+	i := slices.Index(p.Args, sessionIDFlag)
+	return p.Comm == claudeComm && i >= 0 && i+1 < len(p.Args) && p.Args[i+1] == id
+}
+
 // desktopTwin is the CLI that resumes session id (the desktop's: the first
 // turn runs under --session-id), nil when none runs.
 func desktopTwin(t *proc.Table, id string) *proc.Process {
 	for _, p := range t.ByPID {
-		if p.Comm == "claude" && resumes(p.Args, id) {
+		if p.Comm == claudeComm && resumes(p.Args, id) {
 			return p
 		}
 	}
@@ -488,7 +501,7 @@ func briefTask(brief string) string {
 // agentArgv is the started session's command line: one headless turn in
 // bypassPermissions under the id beekeeper recorded.
 func agentArgv(bin, id, name, model, brief string) []string {
-	argv := []string{bin, "-p", "--session-id", id, "--permission-mode", state.ModeBypass, "-n", name}
+	argv := []string{bin, "-p", sessionIDFlag, id, "--permission-mode", state.ModeBypass, "-n", name}
 	if model != "" {
 		argv = append(argv, "--model", model)
 	}

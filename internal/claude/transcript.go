@@ -183,3 +183,43 @@ func Model(path string) (string, error) {
 	}
 	return model, nil
 }
+
+// Called reports whether the transcript at path holds a call of a tool
+// whose name ends in suffix that returned without an error: a posted
+// Slack message is a slack_send_message call's result.
+func Called(path, suffix string) (bool, error) {
+	f, err := os.Open(filepath.Clean(path))
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = f.Close() }()
+	calls := map[string]bool{}
+	r := bufio.NewReaderSize(f, 1<<20)
+	for {
+		line, err := r.ReadBytes('\n')
+		var e entry
+		var blocks []struct {
+			Type      string `json:"type"`
+			ID        string `json:"id"`
+			Name      string `json:"name"`
+			ToolUseID string `json:"tool_use_id"`
+			IsError   bool   `json:"is_error"`
+		}
+		if json.Unmarshal(bytes.TrimSpace(line), &e) == nil && json.Unmarshal(e.Message.Content, &blocks) == nil {
+			for _, b := range blocks {
+				switch {
+				case b.Type == "tool_use" && strings.HasSuffix(b.Name, suffix):
+					calls[b.ID] = true
+				case b.Type == "tool_result" && calls[b.ToolUseID] && !b.IsError:
+					return true, nil
+				}
+			}
+		}
+		if err == io.EOF {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+	}
+}

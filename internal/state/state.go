@@ -278,6 +278,27 @@ type Start struct {
 	At   time.Time `json:"at"`
 }
 
+// Report is one run of the scheduled status reporter: the session the
+// standby watch started for an interval's slot, until it posted, timed out
+// or failed to start.
+type Report struct {
+	Party
+	// Unit is the transient user unit its turn runs in.
+	Unit string `json:"unit"`
+	// Slot is the start of the interval it reports on.
+	Slot    time.Time `json:"slot"`
+	Started time.Time `json:"started"`
+	// Ended is when beekeeper took it off the roster; zero while it runs.
+	Ended time.Time `json:"ended,omitzero"`
+	// Outcome is posted, timeout or failed: <why>; empty while it runs.
+	Outcome string `json:"outcome,omitempty"`
+	// Skipped is the latest slot skipped while it ran.
+	Skipped time.Time `json:"skipped,omitzero"`
+}
+
+// Running reports whether the reporter has yet to end.
+func (r *Report) Running() bool { return r != nil && r.Ended.IsZero() }
+
 // BypassStart returns the start of session when beekeeper started it in
 // bypassPermissions.
 func (st *State) BypassStart(session string) (Start, bool) {
@@ -330,6 +351,8 @@ type State struct {
 	// Merges are the wrapped devctl pr merge runs, per lane: waiting in join
 	// order, running, and settling until the lane's installation rolled them.
 	Merges []Merge `json:"merges,omitempty"`
+	// Report is the scheduled status reporter's current or last run.
+	Report *Report `json:"report,omitempty"`
 
 	// unknown are the fields a newer beekeeper wrote: an older binary still
 	// running (a watch, a gated merge) writes them back unchanged instead of

@@ -56,3 +56,27 @@ func TestModel(t *testing.T) {
 		t.Error("a missing transcript: no error")
 	}
 }
+
+func TestCalled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	use := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"mcp__claude_ai_Slack__slack_send_message","input":{}}]}}` + "\n"
+	for _, c := range []struct {
+		name, lines string
+		want        bool
+	}{
+		{"no call", `{"type":"user","message":{"role":"user","content":"the brief"}}` + "\n", false},
+		{"a call without its result yet", use, false},
+		{"a failed call", use + `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"denied"}]}}` + "\n", false},
+		{"another tool's result", `{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t0","name":"Bash","input":{}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t0","content":"ok"}]}}
+`, false},
+		{"a posted message", use + `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"sent"}]}]}}` + "\n", true},
+	} {
+		if err := os.WriteFile(path, []byte(c.lines), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := Called(path, "slack_send_message"); err != nil || got != c.want {
+			t.Errorf("%s: Called = %v, %v; want %v", c.name, got, err, c.want)
+		}
+	}
+}

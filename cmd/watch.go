@@ -165,6 +165,10 @@ type watcher struct {
 	// the last poll's process table.
 	spare spareWatch
 	table *proc.Table
+	// runReport launches a reporter's turn; nil is launchReport.
+	runReport func(unit, id, name, prompt string) error
+	// turnEnded reports whether a reporter's unit ended; nil is unitEnded.
+	turnEnded func(context.Context, string) bool
 	// readHRs reads a lane installation's HelmReleases; nil is kubectl.
 	readHRs func(context.Context, config.Lane) ([]merge.HelmRelease, error)
 }
@@ -406,6 +410,7 @@ func (w *watcher) poll(ctx context.Context) {
 	w.table = t
 	sessions := claude.Discover(w.cfg, t, w.now)
 	w.kills(ctx, since, sessions, t)
+	w.tendReporter(ctx, sessions)
 	w.pending(ctx, sessions)
 	w.sessionChanges(sessions)
 	w.staleLeases(ctx, sessions)
@@ -754,6 +759,9 @@ func (w *watcher) stoppedAgents(st *state.State, sessions []*claude.Session) {
 	stopped := map[string]bool{}
 	var now []string
 	for _, ag := range stoppedAgents(st.Agents, sessions) {
+		if st.Report.Running() && ag.Is(st.Report.Party) {
+			continue // the reporter's turn ended: tendReporter ends it, nobody resumes it
+		}
 		k := cmp.Or(ag.Session, ag.Name)
 		stopped[k] = true
 		if !w.stopped[k] {
