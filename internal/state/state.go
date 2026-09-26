@@ -433,11 +433,11 @@ const (
 
 // Merge is one devctl pr merge the gate holds in its lane's queue.
 type Merge struct {
-	Repo  string `json:"repo"`
-	PR    int    `json:"pr"`
-	Lane  string `json:"lane"`
-	By    Party  `json:"by"`
-	PID   int    `json:"pid"`
+	Repo string `json:"repo"`
+	PR   int    `json:"pr"`
+	Lane string `json:"lane"`
+	By   Party  `json:"by"`
+	PID  int    `json:"pid"`
 	// Child is a running merge's devctl, in a session of its own: it merges
 	// on when the gate's caller, or the gate, is gone.
 	Child int    `json:"child,omitempty"`
