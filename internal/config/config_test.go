@@ -163,3 +163,35 @@ func TestMetricsModels(t *testing.T) {
 		t.Errorf("runaway %+v", r)
 	}
 }
+
+func TestLoadReporter(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	write := func(raw string) string {
+		p := filepath.Join(dir, "config.yaml")
+		if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	c, err := Load(write("guide: {person: Ada}\nreporter: {every: 1h, brief: ~/brief.md, model: sonnet}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := c.Reporter
+	if !r.Enabled() || r.Every.Duration != time.Hour || r.Brief != filepath.Join(home, "brief.md") || r.Person != "Ada" ||
+		r.Dir != home || r.Timeout.Duration != 20*time.Minute || r.Model != "sonnet" {
+		t.Errorf("reporter = %+v", r)
+	}
+	if c, err := Load(write("")); err != nil || c.Reporter.Enabled() {
+		t.Errorf("no reporter section: %+v, %v", c.Reporter, err)
+	}
+	for _, raw := range []string{"reporter: {every: 1h}\n", "reporter: {every: 10s, brief: b.md}\n"} {
+		if _, err := Load(write(raw)); err == nil {
+			t.Errorf("%q loads", raw)
+		}
+	}
+}

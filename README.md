@@ -58,6 +58,7 @@ the budget work on any system.
 | `beekeeper agents handover <agent> [--prompt] [--model m] [--dir d]` | Hands a registered agent over to a fresh session near its context limit, one line per step: asks it by peer message for `beekeeper agents note "<what is in flight, what is next>"` (waiting `agents.noteWait` at most), builds the follow-up's prompt, starts the follow-up as `agents start` does under the agent's name (it takes over the roster entry, the task and the session record), stops the old session's CLI and the processes under it by PID (a `claude --bg` session through `claude stop` first, so its daemon does not resume it), and logs `agents.handover`. `--prompt` prints the prompt only. `watch` says `HANDOVER DUE` once per agent session at `agents.relayAt`. See [Agents handed over near their context limit](#agents-handed-over-near-their-context-limit). |
 | `beekeeper agents note <text>` | The calling agent's hand-over note, logged as an `agents.note` event; the next `agents handover` puts the latest one into the follow-up's prompt. |
 | `beekeeper note add\|answer\|done` | Open items that outlive a session: a decision waiting on a person with its deadline and what happens if nobody answers (`note add --for Timo --due 22:55 --default "the alert stays as is" <text>`), a deadline. `watch` reports a note once when it is due. `note answer <id> <answer>` records the person's answer word for word and closes the note; the `note.answered` event carries it for the owning session, the supervisor and the guide's feed. |
+| `beekeeper reporter` | The scheduled status reporter (see [The scheduled status reporter](#the-scheduled-status-reporter)): its schedule, when the next one starts, and the current or last run with its outcome. |
 | `beekeeper timer add\|done\|list` | Times to look at something: `timer add 22:55 "check the rollout"` (or a duration, `45m`). `watch` prints one line when a timer is due; it stays open until `timer done`. |
 | `beekeeper sessions serve\|unserve` | A record for any session, registered agent or not: `sessions serve <session> <owner/repo#n> [--waits "<what>"]`, the issue or epic it serves and what it waits on. `sessions` and `handover` show it; `watch` prints one line when the session ends, naming the issue to re-query. |
 | `beekeeper handover [--prompt]` | Everything the next supervisor needs, as Markdown, from the live state: leases and grants, holds and their exceptions, agents, session records, notes with their defaults, timers, the merge lanes with their queues and settling merges, and what the alert watch reads (the installations and why, the ignored alert names, the baseline). `--prompt` prints the successor's session prompt: the configured instructions (`supervisor.skill` or `supervisor.instructions`), the scope, the pending state in full and the commands that read the live values; no standing rule and no live value (version, memory figure, pull request state). |
@@ -442,6 +443,28 @@ line per step:
 A configuration named with `--config` or `$BEEKEEPER_CONFIG` is passed to the started session
 as `$BEEKEEPER_CONFIG` and named in the note's command, so both write to the same state.
 
+### The scheduled status reporter
+
+With `reporter.every` and `reporter.brief` set, the standby watch (`watch --standby`,
+`beekeeper-notify.service`) starts a one-off reporter session once per interval, on the interval's
+multiples (on the hour for `1h`), whether or not a supervisor runs:
+
+1. **The start.** One headless `claude -p` turn in `bypassPermissions` in a transient user unit
+   (`beekeeper-report-<id>`, its output in `journalctl --user -u <unit>`), in `reporter.dir` with
+   `reporter.model`, registered on the roster as `Status report HH:MM`, busy with the brief's first
+   line. Its prompt names `reporter.person` and the interval it covers, then the brief. It is not
+   imported into the desktop: the command-line turn has the claude.ai connectors, and the person's
+   window is not switched every hour. `reporter.start` in the log, one watch line.
+2. **The post.** The session posts its report itself, with the Slack connector. beekeeper sees it in
+   the session's transcript: a `slack_send_message` call that returned without an error.
+3. **The end.** Once it posted, beekeeper takes the reporter off the roster and stops what still
+   runs of its turn by PID (SIGTERM, then SIGKILL after 10 s): `reporter.posted`. A turn that
+   ended without a post is ended the same way (`reporter.unposted`), and one that has not posted
+   within `reporter.timeout` (20m) is stopped (`reporter.timeout`); each is one watch line.
+4. **No overlap.** While a reporter runs, the next slot starts none: `reporter.skip` once. The slot
+   after its end starts the next one; the state's `report` keeps the current or last run, so two
+   standby watches start one reporter per slot.
+
 ## Session metrics
 
 How each session has been doing, read from what beekeeper already reads, never from GitHub:
@@ -533,6 +556,13 @@ guide:                      # the guide's role: what guide handover --prompt tel
 agents:                     # the hand-over of registered agents
   relayAt: 400k             # watch says HANDOVER DUE once an agent's context reaches this; default: supervisor.relayAt
   noteWait: 3m              # agents handover waits this long for the agent's note
+reporter:                   # the scheduled status reporter the standby watch starts; off without every and brief
+  every: 1h                 # one report per interval, on its multiples (on the hour)
+  brief: ~/reporter.md      # what to report and where to post it
+  model: claude-sonnet-5    # default: Claude Code's
+  person: Ada               # who the report is for; default: guide.person
+  dir: ~/                   # the session's working directory; default: home
+  timeout: 20m              # a reporter that has not posted by then is stopped
 metrics:
   models:                   # USD per million tokens and the context window; an entry replaces the default of its id
     claude-opus-5-5: {input: 4, output: 20, cacheWrite5m: 5, cacheWrite1h: 8, cacheRead: 0.2, contextWindow: 1000000}

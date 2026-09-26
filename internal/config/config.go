@@ -59,7 +59,34 @@ type Config struct {
 	// Agents configures how a registered agent near its context limit is
 	// handed over to a fresh session.
 	Agents Agents `yaml:"agents"`
+	// Reporter is the one-off status reporter session the standby watch
+	// starts once per interval.
+	Reporter Reporter `yaml:"reporter"`
 }
+
+// Reporter configures the scheduled status reporter: once per Every the
+// standby watch starts one headless session with Brief, which posts one
+// report to Person and ends; beekeeper then takes it off the roster.
+type Reporter struct {
+	// Every is the interval; the reports start on its multiples (on the
+	// hour for 1h). Unset, no reporter runs.
+	Every Duration `yaml:"every"`
+	// Brief is the reporter's brief file (~/ allowed): what to report and
+	// where to post it.
+	Brief string `yaml:"brief"`
+	// Model is the session's model (default: Claude Code's).
+	Model string `yaml:"model"`
+	// Person is who the report is for (default: guide.person).
+	Person string `yaml:"person"`
+	// Dir is the session's working directory (~/ allowed; default: home).
+	Dir string `yaml:"dir"`
+	// Timeout is how long a reporter may run without posting before it is
+	// stopped (20m).
+	Timeout Duration `yaml:"timeout"`
+}
+
+// Enabled reports whether a reporter is scheduled.
+func (r Reporter) Enabled() bool { return r.Every.Duration > 0 && r.Brief != "" }
 
 // Agents configures the hand-over of registered agents.
 type Agents struct {
@@ -466,6 +493,7 @@ func (c *Config) defaults() error {
 		c.Agents.RelayAt = c.Supervisor.RelayAt
 	}
 	setDur(&c.Agents.NoteWait, 3*time.Minute)
+	c.Reporter.defaults(home, c.Guide.Person)
 	if c.Guide.Skill == "" && c.Guide.Instructions == "" {
 		c.Guide.Skill = "guide"
 	}
@@ -554,7 +582,21 @@ func (r *Role) defaults(home string) {
 	}
 }
 
+func (r *Reporter) defaults(home, person string) {
+	setDur(&r.Timeout, 20*time.Minute)
+	setStr(&r.Person, person)
+	setStr(&r.Dir, home)
+	for _, p := range []*string{&r.Brief, &r.Dir} {
+		if rest, ok := strings.CutPrefix(*p, "~/"); ok {
+			*p = filepath.Join(home, rest)
+		}
+	}
+}
+
 func (c *Config) validate() error {
+	if r := c.Reporter; r.Every.Duration != 0 && (r.Every.Duration < time.Minute || r.Brief == "") {
+		return fmt.Errorf("reporter: every %s needs at least a minute and a brief", r.Every.Duration)
+	}
 	for name, r := range map[string]Role{"supervisor": c.Supervisor.Role, "guide": c.Guide.Role} {
 		if r.Skill != "" && r.Instructions != "" {
 			return fmt.Errorf("%s: set skill or instructions, not both", name)
