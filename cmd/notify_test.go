@@ -170,22 +170,23 @@ func TestStatusBar(t *testing.T) {
 }
 
 func TestLiftedUpgradeHoldShowsWhoLiftedIt(t *testing.T) {
+	const portalLane = "lane:portal"
 	sup := state.Party{Name: "Supervisor run 17"}
 	st := &state.State{Holds: []state.Hold{
 		{Target: "upgrade:gazelle/cicddev", Reason: "upgrade gazelle/cicddev ? → 36.0.0", LiftedBy: &sup, LiftedAt: relayNow},
-		{Target: "lane:portal", Reason: "stuck drain"},
+		{Target: portalLane, Reason: "stuck drain"},
 	}}
 	var out bytes.Buffer
 	a := &app{out: &out, now: relayNow}
-	if active := a.activeHolds(st); len(active) != 1 || active[0].Target != "lane:portal" {
+	if active := a.activeHolds(st); len(active) != 1 || active[0].Target != portalLane {
 		t.Errorf("active holds %+v", active)
 	}
 	a.printHolds(liftedHolds(st, relayNow))
 	if !strings.Contains(out.String(), `lifted by Supervisor run 17`) {
 		t.Errorf("hold list:\n%s", out.String())
 	}
-	v := statusView{Holds: []string{"lane:portal"}, Lifted: []string{"upgrade:gazelle/cicddev by Supervisor run 17"}}
-	if got := v.line(); !strings.Contains(got, "1 hold (lane:portal); 1 lifted (upgrade:gazelle/cicddev by Supervisor run 17)") {
+	v := statusView{Holds: []string{portalLane}, Lifted: []string{"upgrade:gazelle/cicddev by Supervisor run 17"}}
+	if got := v.line(); !strings.Contains(got, "1 hold ("+portalLane+"); 1 lifted (upgrade:gazelle/cicddev by Supervisor run 17)") {
 		t.Errorf("status line %q", got)
 	}
 }
