@@ -43,6 +43,7 @@ type fake struct {
 	t      *testing.T
 	reader Reader
 	pids   string
+	failed string // the file the fake's failure once leaves
 	mu     sync.Mutex
 	seen   []string // path and tenant of each request
 	hang   bool
@@ -60,7 +61,8 @@ func newFake(t *testing.T) *fake {
 	t.Setenv("FAKE_PLAIN", "")
 	t.Setenv("FAKE_FAIL", "")
 	t.Setenv("FAKE_FAIL_ONCE", "")
-	t.Setenv("FAKE_FAILED", filepath.Join(dir, "failed"))
+	f.failed = filepath.Join(dir, "failed")
+	t.Setenv("FAKE_FAILED", f.failed)
 	pause := retryPause
 	retryPause = 100 * time.Millisecond
 	t.Cleanup(func() { retryPause = pause })
@@ -162,10 +164,10 @@ func TestReadRetriesAFailedForward(t *testing.T) {
 	f.serve("FAKE_MIMIR")
 	t.Setenv("FAKE_FAIL_ONCE", "error: error upgrading connection: connection reset by peer")
 	got := f.reader.Read(context.Background(), []Target{alpha})
-	if !got[0].OK || got[0].Alerts[0].Fingerprint != "b6dd" {
+	if !got[0].OK || got[0].Alerts[0].Fingerprint != gateway.Fingerprint {
 		t.Fatalf("answer = %+v", got[0])
 	}
-	if _, err := os.Stat(os.Getenv("FAKE_FAILED")); err != nil {
+	if _, err := os.Stat(f.failed); err != nil {
 		t.Errorf("the first attempt did not fail: %v", err)
 	}
 	f.noForwardLeft()
