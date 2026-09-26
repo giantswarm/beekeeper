@@ -107,7 +107,7 @@ func TestAGatedMergeOutlivesItsCaller(t *testing.T) {
 			userSystemd = func() bool { return systemd }
 			t.Cleanup(func() { userSystemd = was })
 			where := filepath.Join(t.TempDir(), "where")
-			fakeDevctl(t, `echo merging >&2; { ps -o sid= -p $$; echo $$; cat /proc/$$/cgroup; } >`+where+`; sleep 1; echo "waiting for the release" >&2; echo '`+mergedDoc+`'`)
+			fakeDevctl(t, `echo merging >&2; { cut -d" " -f6 /proc/$$/stat; echo $$; cat /proc/$$/cgroup; } >`+where+`; sleep 1; echo "waiting for the release" >&2; echo '`+mergedDoc+`'`)
 			stubGitHub(t, "", "")
 			lane := config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}}
 			g := runningMerge(t, scratchRepo, lane)

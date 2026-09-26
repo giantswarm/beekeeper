@@ -215,7 +215,7 @@ func (a *app) mergeChildCmd() *cobra.Command {
 }
 
 // mergeChild runs base.spec's command with its stdout in base.json and its
-// stderr in base.log, records its own pid in base.pid first and the
+// stderr in base.log, records its own pid in base.pid before it starts it and the
 // command's exit code (128+n for a signal) in base.rc last. SIGINT is passed
 // on; SIGTERM and SIGHUP too, as they come from the service manager or a
 // person, never from the gate's caller.
@@ -244,6 +244,9 @@ func mergeChild(base string) int {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(sig)
+	if err := os.WriteFile(base+".pid", []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil { //nolint:gosec // the gate's own file, named by the gate
+		return guard.ExitNotFound
+	}
 	rc := guard.ExitNotFound
 	if err := c.Start(); err == nil {
 		go func() {
@@ -251,9 +254,6 @@ func mergeChild(base string) int {
 				_ = c.Process.Signal(s)
 			}
 		}()
-		if err := os.WriteFile(base+".pid", []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil { //nolint:gosec // the gate's own file, named by the gate
-			_ = c.Process.Kill()
-		}
 		_ = c.Wait()
 		rc = c.ProcessState.ExitCode()
 		if ws, ok := c.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
@@ -261,7 +261,6 @@ func mergeChild(base string) int {
 		}
 	} else {
 		_, _ = fmt.Fprintln(errs, err)
-		_ = os.WriteFile(base+".pid", []byte(strconv.Itoa(os.Getpid())), 0o600) //nolint:gosec // as above
 	}
 	// Written whole or not at all: the gate reads it while it appears.
 	if os.WriteFile(base+".rc.tmp", []byte(strconv.Itoa(rc)), 0o600) == nil { //nolint:gosec // as above
