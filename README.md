@@ -164,15 +164,28 @@ devctl already runs is never re-executed. A lane that stays stuck anyway (a seed
 gone) is flagged: `lanes` shows it `stalled` and `watch` says `LANE STALLED` once the first
 arrived merge has waited `merge.stallAfter` behind places whose merges are not in the gate.
 
-A running merge whose gate process is gone (killed, or lost with the machine in a reboot) is
-lost: whether it merged is unknown. `watch` turns it into the lane's settling merge with an
+A merge survives its caller. The gate runs devctl in a session of its own, its document and
+stderr in files under the state directory (`merges/`), which the gate follows onto its own
+output: when the caller's session ends mid-merge (SIGHUP, SIGTERM to its process group, its pipes
+closed), devctl merges on and waits for the release, and the gate waits on and records the
+outcome. Only SIGINT, a person's Ctrl-C, reaches devctl. A run that ends without its document or
+by a signal (exit 128+n) is judged by GitHub (`gh pr view`), never by its exit code: merged, it
+settles its lane with its release unconfirmed and the gate line names `devctl release wait
+<owner/repo> --pr <n>`, with no retry place; not merged, it keeps its place for the retry; with
+GitHub unanswered, the lane settles as for a lost merge.
+
+A running merge whose gate process and devctl are both gone (killed, or lost with the machine in
+a reboot) is lost: whether it merged is unknown. `watch` turns it into the lane's settling merge with an
 unknown release, one `MERGE LOST` line and a `merge.lost` event, so the lane settles for
 `merge.settle` and frees once its HelmReleases are Ready; `lanes clear <lane>` drops it at once.
 
 A merge of giantswarm/devctl opens a tool-release window by itself: a `merges` hold with
 giantswarm/devctl excepted, since the release makes every in-flight devctl run refuse until
 updated. It lifts once no devctl merge runs and the local `devctl version` reports another
-version than when the window opened.
+version than when the window opened, or once its pull request did not merge: the gate lifts it
+after a run with nothing merged, and `watch` (or the next gate call) asks GitHub about a window
+whose merge ended unrecorded (its gate killed) and lifts it when the pull request is open or
+closed.
 
 The budget floor uses the last reading in the state when it is younger than `merge.budgetFresh`
 (1m, less than one merge's draw at the floor's margin), else a fresh conditional request, which

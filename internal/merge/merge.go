@@ -15,6 +15,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/upgrade"
 )
@@ -67,6 +68,22 @@ type Outcome struct {
 	Release string
 	// NoRelease is true when the merge warranted no release: nothing rolls.
 	NoRelease bool
+	// Unconfirmed is true when GitHub, not the document, reports the merge:
+	// devctl ended before it confirmed the release.
+	Unconfirmed bool
+}
+
+// Judged is the outcome of a run that ended without its document or by a
+// signal (exit 128+n): GitHub's state of the pull request decides whether it
+// merged, never the exit code, and a merge's release is unconfirmed.
+func Judged(p github.Pull) Outcome {
+	return Outcome{Merged: p.State == github.Merged, Unconfirmed: p.State == github.Merged}
+}
+
+// NeedsJudging says whether a run's outcome is GitHub's to decide: devctl
+// printed no document (ok false) or a signal ended it.
+func NeedsJudging(ok bool, rc int) bool {
+	return !ok || rc > 128
 }
 
 // ParseDocument reads devctl pr merge's JSON document (docs/pr-merge.md in
@@ -128,19 +145,25 @@ func Prune(st *state.State, now time.Time, ttl, seedTTL time.Duration, alive fun
 	Lost(st, now, alive)
 }
 
-// Lost turns each running merge whose gate process is gone (killed, or
-// lost with the machine) into a settling one and returns them: whether it
-// merged is unknown, so the lane settles by the settle rule from now.
+// Lost turns each running merge whose gate process and devctl are gone
+// (killed, or lost with the machine) into a settling one and returns them:
+// whether it merged is unknown, so the lane settles by the settle rule from
+// now.
 func Lost(st *state.State, now time.Time, alive func(pid int) bool) []state.Merge {
 	var lost []state.Merge
 	for i, m := range st.Merges {
-		if m.Phase == state.Running && !alive(m.PID) {
+		if m.Phase == state.Running && !Runs(m, alive) {
 			st.Merges[i].Phase, st.Merges[i].Finished, st.Merges[i].Exit = state.Settling, now, -1
 			st.Merges[i].Release, st.Merges[i].Roll = "", nil
 			lost = append(lost, m)
 		}
 	}
 	return lost
+}
+
+// Runs says whether a running merge's gate or its devctl still runs.
+func Runs(m state.Merge, alive func(pid int) bool) bool {
+	return alive(m.PID) || alive(m.Child)
 }
 
 // Lane is one lane's queue.

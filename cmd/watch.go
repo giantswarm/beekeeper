@@ -418,6 +418,7 @@ func (w *watcher) poll(ctx context.Context) {
 	w.staleLeases(ctx, sessions)
 	w.runaways(sessions, t)
 	w.lostMerges()
+	w.closeToolWindow(ctx, watchParty)
 	w.stalls()
 	w.settled(ctx)
 
@@ -469,13 +470,13 @@ func (w *watcher) stalls() {
 	}
 }
 
-// lostMerges settles each running merge whose gate process is gone (a gate
-// killed, or lost with the machine), once: the gate itself prunes it only
+// lostMerges settles each running merge whose gate process and devctl are
+// gone (killed, or lost with the machine), once: the gate itself prunes it only
 // when the lane's next merge arrives, and until then the lane shows a merge
 // running that no process runs.
 func (w *watcher) lostMerges() {
 	st, err := w.store.Read()
-	if err != nil || !slices.ContainsFunc(st.Merges, func(m state.Merge) bool { return m.Phase == state.Running && !proc.Alive(m.PID) }) {
+	if err != nil || !slices.ContainsFunc(st.Merges, func(m state.Merge) bool { return m.Phase == state.Running && !merge.Runs(m, proc.Alive) }) {
 		return
 	}
 	var lost []state.Merge
@@ -483,7 +484,7 @@ func (w *watcher) lostMerges() {
 		lost = merge.Lost(st, w.now, proc.Alive)
 		evs := make([]state.Event, 0, len(lost))
 		for _, m := range lost {
-			evs = append(evs, event(watchParty, "merge.lost", "%s in lane %s: its gate (pid %d) is gone", m.Key(), m.Lane, m.PID))
+			evs = append(evs, event(watchParty, "merge.lost", "%s in lane %s: its gate (pid %d) and devctl are gone", m.Key(), m.Lane, m.PID))
 		}
 		return evs, nil
 	})
@@ -491,7 +492,7 @@ func (w *watcher) lostMerges() {
 		return
 	}
 	for _, m := range lost {
-		w.emitNow("lanes", "MERGE LOST: %s in lane %s by %q: its gate (pid %d) is gone, whether it merged is unknown; the lane settles until %s, then frees once its HelmReleases are Ready",
+		w.emitNow("lanes", "MERGE LOST: %s in lane %s by %q: its gate (pid %d) and devctl are gone, whether it merged is unknown; the lane settles until %s, then frees once its HelmReleases are Ready",
 			m.Key(), m.Lane, m.By.Name, m.PID, clock(w.now, w.now.Add(w.cfg.Merge.Settle.Duration)))
 	}
 }

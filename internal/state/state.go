@@ -180,11 +180,15 @@ type Hold struct {
 	// during a tool-release window) or one pull request, owner/repo#n.
 	Except string `json:"except,omitempty"`
 	// Tool is the binary whose release window this hold is, ToolFrom the
-	// version it reported when the window opened and ToolRelease the release
-	// the merge produced. The window closes once the tool reports another
-	// version than ToolFrom and no merge of its repository runs.
+	// version it reported when the window opened, ToolPR the pull request
+	// that opened it, ToolMerged whether it merged and ToolRelease the release
+	// it produced. The window closes once the tool reports another version
+	// than ToolFrom and no merge of its repository runs, or once its merge
+	// ended with nothing merged.
 	Tool        string `json:"tool,omitempty"`
 	ToolFrom    string `json:"toolFrom,omitempty"`
+	ToolPR      int    `json:"toolPR,omitempty"`
+	ToolMerged  bool   `json:"toolMerged,omitempty"`
 	ToolRelease string `json:"toolRelease,omitempty"`
 	// UpgradeTo is the target release of the upgrade an automatic upgrade
 	// hold stands for.
@@ -434,6 +438,9 @@ type Merge struct {
 	Lane  string `json:"lane"`
 	By    Party  `json:"by"`
 	PID   int    `json:"pid"`
+	// Child is a running merge's devctl, in a session of its own: it merges
+	// on when the gate's caller, or the gate, is gone.
+	Child int    `json:"child,omitempty"`
 	Phase string `json:"phase"`
 	// Joined orders the queue; a rerun within the queue TTL keeps it.
 	Joined  time.Time `json:"joined"`
