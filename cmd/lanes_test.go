@@ -96,9 +96,10 @@ func TestWatchSettlesALaneReadyAfterTheSettleTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	const repo = "giantswarm/agent-platform"
 	now := time.Now()
 	err = store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Merges = []state.Merge{{Repo: "giantswarm/agent-platform", PR: 701, Lane: "agent-platform", Phase: state.Settling,
+		st.Merges = []state.Merge{{Repo: repo, PR: 701, Lane: "agent-platform", Phase: state.Settling,
 			Release: "v4.79.0", Roll: []string{"flux-giantswarm/agent-platform"}, Finished: now.Add(-cfg.Merge.SettleTimeout.Duration - 10*time.Minute)}}
 		return nil, nil
 	})
