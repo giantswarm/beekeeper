@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `beekeeper reporter final <time>` schedules one last report outside the slots (covering the time since the last one) and pauses the schedule with its start; `reporter pause` pauses at once and `reporter resume` ends the pause, the current slot's report starting at the next poll. The state's `reportPause` field is new; older binaries carry it unchanged.
+
 ### Changed
 
 - `reporter check` and the reporter's post hook refuse every bare `#<n>`, `note #<n>` and `timer #<n>` included: a report names a beekeeper note `note <n>`, and a session name with a reference links it.

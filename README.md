@@ -58,6 +58,7 @@ the budget work on any system.
 | `beekeeper agents handover <agent> [--prompt] [--model m] [--dir d]` | Hands a registered agent over to a fresh session near its context limit, one line per step: asks it by peer message for `beekeeper agents note "<what is in flight, what is next>"` (waiting `agents.noteWait` at most), builds the follow-up's prompt, starts the follow-up as `agents start` does under the agent's name (it takes over the roster entry, the task and the session record), stops the old session's CLI and the processes under it by PID (a `claude --bg` session through `claude stop` first, so its daemon does not resume it), and logs `agents.handover`. `--prompt` prints the prompt only. `watch` says `HANDOVER DUE` once per agent session at `agents.relayAt`. See [Agents handed over near their context limit](#agents-handed-over-near-their-context-limit). |
 | `beekeeper agents note <text>` | The calling agent's hand-over note, logged as an `agents.note` event; the next `agents handover` puts the latest one into the follow-up's prompt. |
 | `beekeeper note add\|answer\|done` | Open items that outlive a session: a decision waiting on a person with its deadline and what happens if nobody answers (`note add --for Timo --due 22:55 --default "the alert stays as is" <text>`), a deadline. `watch` reports a note once when it is due. `note answer <id> <answer>` records the person's answer word for word and closes the note; the `note.answered` event carries it for the owning session, the supervisor and the guide's feed. |
+| `beekeeper reporter final\|pause\|resume` | Pauses the scheduled reporter: `final 06:45` (or `45m`) starts one last report at that time, covering the time since the last one, then pauses; `pause` pauses now; `resume` starts the current slot's report at the standby watch's next poll and the schedule again. |
 | `beekeeper reporter check` | Checks a report on stdin as the reporter's post hook does (see [The scheduled status reporter](#the-scheduled-status-reporter)): one line per problem and exit 3, or `ok`. |
 | `beekeeper reporter` | The scheduled status reporter (see [The scheduled status reporter](#the-scheduled-status-reporter)): its schedule, when the next one starts, and the current or last run with its outcome. |
 | `beekeeper timer add\|done\|list` | Times to look at something: `timer add 22:55 "check the rollout"` (or a duration, `45m`). `watch` prints one line when a timer is due; it stays open until `timer done`. |
@@ -489,7 +490,12 @@ multiples (on the hour for `1h`), whether or not a supervisor runs:
    runs of its turn by PID (SIGTERM, then SIGKILL after 10 s): `reporter.posted`. A turn that
    ended without a post is ended the same way (`reporter.unposted`), and one that has not posted
    within `reporter.timeout` (20m) is stopped (`reporter.timeout`); each is one watch line.
-4. **No overlap.** While a reporter runs, the next slot starts none: `reporter.skip` once. The slot
+4. **A pause.** `beekeeper reporter final <time>` starts one last report at that time, outside the
+   slots, covering the time since the last report started and saying that the reports pause; with
+   its start no scheduled report starts until `beekeeper reporter resume` (`reporter pause` pauses
+   at once). A running reporter still posts and is ended. `reporter.final`, `reporter.pause` and
+   `reporter.resume` in the log.
+5. **No overlap.** While a reporter runs, the next slot starts none: `reporter.skip` once. The slot
    after its end starts the next one; the state's `report` keeps the current or last run, so two
    standby watches start one reporter per slot.
 

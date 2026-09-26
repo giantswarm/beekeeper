@@ -28,21 +28,28 @@ func TestReportDue(t *testing.T) {
 	for _, c := range []struct {
 		name          string
 		r             *state.Report
+		pause         *state.ReportPause
 		now           time.Time
 		posted, ended bool
 		want          reportAction
 	}{
-		{"never ran", nil, reportNow, false, false, reportStart},
-		{"the last slot's ended", &state.Report{Slot: last, Started: last, Ended: last.Add(time.Minute)}, reportNow, false, false, reportStart},
-		{"this slot's ended", &state.Report{Slot: slot, Started: slot, Ended: slot.Add(time.Minute)}, reportNow.Add(30 * time.Minute), false, false, reportNone},
-		{"runs", &state.Report{Slot: slot, Started: slot}, reportNow.Add(5 * time.Minute), false, false, reportNone},
-		{"posted", &state.Report{Slot: slot, Started: slot}, reportNow, true, true, reportPosted},
-		{"ended without a post", &state.Report{Slot: slot, Started: slot}, reportNow, false, true, reportUnposted},
-		{"past the timeout", &state.Report{Slot: slot, Started: slot}, slot.Add(20 * time.Minute), false, false, reportTimeout},
-		{"the next slot while it runs", &state.Report{Slot: last, Started: slot.Add(-5 * time.Minute)}, reportNow, false, false, reportSkip},
-		{"the next slot, skipped already", &state.Report{Slot: last, Started: slot.Add(-5 * time.Minute), Skipped: slot}, reportNow, false, false, reportNone},
+		{"never ran", nil, nil, reportNow, false, false, reportStart},
+		{"the last slot's ended", &state.Report{Slot: last, Started: last, Ended: last.Add(time.Minute)}, nil, reportNow, false, false, reportStart},
+		{"this slot's ended", &state.Report{Slot: slot, Started: slot, Ended: slot.Add(time.Minute)}, nil, reportNow.Add(30 * time.Minute), false, false, reportNone},
+		{"runs", &state.Report{Slot: slot, Started: slot}, nil, reportNow.Add(5 * time.Minute), false, false, reportNone},
+		{"posted", &state.Report{Slot: slot, Started: slot}, nil, reportNow, true, true, reportPosted},
+		{"ended without a post", &state.Report{Slot: slot, Started: slot}, nil, reportNow, false, true, reportUnposted},
+		{"past the timeout", &state.Report{Slot: slot, Started: slot}, nil, slot.Add(20 * time.Minute), false, false, reportTimeout},
+		{"the next slot while it runs", &state.Report{Slot: last, Started: slot.Add(-5 * time.Minute)}, nil, reportNow, false, false, reportSkip},
+		{"the next slot, skipped already", &state.Report{Slot: last, Started: slot.Add(-5 * time.Minute), Skipped: slot}, nil, reportNow, false, false, reportNone},
+		{"paused", &state.Report{Slot: last, Started: last, Ended: last.Add(time.Minute)}, &state.ReportPause{Since: last}, reportNow, false, false, reportNone},
+		{"paused while one runs: no skip", &state.Report{Slot: last, Started: slot.Add(-5 * time.Minute)}, &state.ReportPause{Since: slot}, reportNow, false, false, reportNone},
+		{"a final not yet due", &state.Report{Slot: slot, Started: slot, Ended: slot.Add(time.Minute)}, &state.ReportPause{Final: slot.Add(45 * time.Minute)}, slot.Add(30 * time.Minute), false, false, reportNone},
+		{"a final not yet due, the next slot", &state.Report{Slot: last, Started: last, Ended: last.Add(time.Minute)}, &state.ReportPause{Final: slot.Add(45 * time.Minute)}, reportNow, false, false, reportStart},
+		{"the final due", &state.Report{Slot: slot, Started: slot, Ended: slot.Add(time.Minute)}, &state.ReportPause{Final: slot.Add(45 * time.Minute)}, slot.Add(45 * time.Minute), false, false, reportFinal},
+		{"the final due while one runs", &state.Report{Slot: slot, Started: slot}, &state.ReportPause{Final: slot.Add(5 * time.Minute)}, slot.Add(6 * time.Minute), false, false, reportNone},
 	} {
-		if got := reportDue(c.r, hourly(), c.now, c.posted, c.ended); got != c.want {
+		if got := reportDue(c.r, c.pause, hourly(), c.now, c.posted, c.ended); got != c.want {
 			t.Errorf("%s: reportDue = %d, want %d", c.name, got, c.want)
 		}
 	}
@@ -248,5 +255,50 @@ func TestReportSettings(t *testing.T) {
 	if len(pre) != 1 || !regexp.MustCompile("^(?:"+pre[0].Matcher+")$").MatchString("mcp__claude_ai_Slack__slack_send_message") ||
 		len(pre[0].Hooks) != 1 || pre[0].Hooks[0].Command != "'/bin/bee keeper' hook reportcheck" {
 		t.Errorf("settings = %+v", s)
+	}
+}
+
+func TestReporterFinalThenPaused(t *testing.T) {
+	dir := t.TempDir()
+	w, launched, out := reportingWatch(t, dir)
+	ctx := context.Background()
+	w.tendReporter(ctx, nil) // 02:00 EEST
+	w.turnEnded = func(context.Context, string) bool { return true }
+	w.now = reportNow.Add(time.Minute)
+	w.tendReporter(ctx, nil) // ended
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.ReportPause = &state.ReportPause{Final: reportNow.Add(45 * time.Minute)}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var prompt string
+	w.runReport = func(_, _, name, p string) error {
+		*launched = append(*launched, name)
+		prompt = p
+		return nil
+	}
+	w.now = reportNow.Add(30 * time.Minute)
+	w.tendReporter(ctx, nil)
+	w.now = reportNow.Add(45 * time.Minute)
+	w.tendReporter(ctx, nil)
+	if len(*launched) != 2 || (*launched)[1] != "Status report 02:45" || !strings.Contains(prompt, "Report 02:00–02:45 EEST") ||
+		!strings.Contains(prompt, "last report before the 1h00m reports pause") {
+		t.Fatalf("launched %v, prompt %q; out:\n%s", *launched, prompt, out)
+	}
+	w.tendReporter(ctx, nil) // ended
+	w.now = reportNow.Add(3 * time.Hour)
+	w.tendReporter(ctx, nil)
+	w.tendReporter(ctx, nil)
+	st, _ := w.store.Read()
+	if len(*launched) != 2 || !st.ReportPause.Paused() || verbs(t, w, "reporter.pause") != 1 {
+		t.Errorf("after the final: launched %v, pause %+v", *launched, st.ReportPause)
+	}
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) { st.ReportPause = nil; return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	w.tendReporter(ctx, nil)
+	if len(*launched) != 3 {
+		t.Errorf("after resume: launched %v", *launched)
 	}
 }
