@@ -242,13 +242,13 @@ func TestTitleTranscriptReachesTheImportWindow(t *testing.T) {
 // after it, also when the import failed; a unit that ended is not frozen.
 func TestWhileFrozenThawsAfterTheImport(t *testing.T) {
 	unit := "beekeeper-test-freeze-" + uuid.NewString()[:8]
-	if out, err := exec.Command("systemd-run", "--user", "--collect", "--quiet", "--unit="+unit, "--", "sleep", "60").CombinedOutput(); err != nil {
+	if out, err := userCommand("systemd-run", "--user", "--collect", "--quiet", "--unit="+unit, "--", "sleep", "60"); err != nil {
 		t.Skipf("no systemd user manager: %v: %s", err, out)
 	}
-	t.Cleanup(func() { _ = exec.Command("systemctl", "--user", "stop", unit).Run() })
+	t.Cleanup(func() { _, _ = userCommand("systemctl", "--user", "stop", unit) })
 	ctx := context.Background()
 	state := func() string {
-		out, _ := exec.Command("systemctl", "--user", "show", "-p", "FreezerState", "--value", unit).Output()
+		out, _ := userCommand("systemctl", "--user", "show", "-p", "FreezerState", "--value", unit)
 		return strings.TrimSpace(string(out))
 	}
 	boom := errors.New("import failed")
@@ -265,11 +265,16 @@ func TestWhileFrozenThawsAfterTheImport(t *testing.T) {
 			t.Errorf("the unit after the import (%v) is %q, want running", want, after)
 		}
 	}
-	_ = exec.Command("systemctl", "--user", "stop", unit).Run()
+	_, _ = userCommand("systemctl", "--user", "stop", unit)
 	called := false
 	if err := whileFrozen(ctx, unit, func() error { called = true; return nil }); err != nil || !called {
 		t.Errorf("an ended unit: whileFrozen = %v, fn called %v", err, called)
 	}
+}
+
+// userCommand runs one systemd command of the test on its own unit.
+func userCommand(name string, args ...string) ([]byte, error) {
+	return exec.Command(name, args...).CombinedOutput() //nolint:gosec // the test's own unit
 }
 
 func TestTitleLine(t *testing.T) {
