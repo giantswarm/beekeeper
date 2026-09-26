@@ -79,6 +79,15 @@ empty): the merge stays in `lanes` as `retrying`, and the next gate call for it 
 queue rule itself is tested by replaying a real event trail (`internal/merge/testdata/*.jsonl`,
 the sessions' ids left out) through `merge.Queue`, `Lane.Ahead` and `merge.Failed`.
 
+A merge that outlives its caller is proven the same way: a fake devctl that sleeps before its
+document, the gate run from a script (so the hook does not rewrite it) as a Claude Code background
+command against scratch state, and the harness's stop of that command mid-merge, which kills the
+command's process tree. devctl runs on in its `beekeeper-merge-…` unit (`systemctl --user
+list-units 'beekeeper-merge-*'`, its `/proc/<pid>/cgroup`); `watch --once` says nothing while it
+runs and `MERGE RECORDED … whose gate … is gone` once it ended. Live, a background `devctl pr
+merge` of a docs pull request whose command is stopped while it waits for the checks is logged
+`merged` once the checks pass, and the lane is free.
+
 `lanes settle` and the gate's check of a settled outside merge ask GitHub through `gh pr view
 <n> --repo <owner/repo> --json state,mergedAt`; a fake `gh` first on `PATH` that prints
 `{"state":"OPEN","mergedAt":null}` (or `MERGED` with a time, or `CLOSED`) from a file and hands
