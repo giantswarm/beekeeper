@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path"
@@ -306,4 +307,22 @@ func TestCheckExcept(t *testing.T) {
 			t.Errorf("%s except %q: %v", c.target, c.except, err)
 		}
 	}
+}
+
+// stubGitHub answers pullState with state and devctlVersion with version.
+func stubGitHub(t *testing.T, pullAt string, version string) *int {
+	t.Helper()
+	asked := new(int)
+	pull, ver, wait := pullState, devctlVersion, judgeWait
+	t.Cleanup(func() { pullState, devctlVersion, judgeWait = pull, ver, wait })
+	judgeWait = 0
+	pullState = func(context.Context, string, int) (github.Pull, error) {
+		*asked++
+		if pullAt == "" {
+			return github.Pull{}, fmt.Errorf("no network")
+		}
+		return github.Pull{State: pullAt}, nil
+	}
+	devctlVersion = func(context.Context) string { return version }
+	return asked
 }

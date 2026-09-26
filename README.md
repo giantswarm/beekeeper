@@ -164,11 +164,17 @@ devctl already runs is never re-executed. A lane that stays stuck anyway (a seed
 gone) is flagged: `lanes` shows it `stalled` and `watch` says `LANE STALLED` once the first
 arrived merge has waited `merge.stallAfter` behind places whose merges are not in the gate.
 
-A merge survives its caller. The gate runs devctl in a session of its own, its document and
-stderr in files under the state directory (`merges/`), which the gate follows onto its own
-output: when the caller's session ends mid-merge (SIGHUP, SIGTERM to its process group, its pipes
-closed), devctl merges on and waits for the release, and the gate waits on and records the
-outcome. Only SIGINT, a person's Ctrl-C, reaches devctl. A run that ends without its document or
+A merge survives its caller. A harness that stops a command kills its process tree, and a
+session run as a unit takes its cgroup down with it, so the gate runs devctl outside both: a
+transient user service (`beekeeper-merge-<repo>-<n>-…`, through `systemd-run`) runs the hidden
+`beekeeper merge-child`, which runs devctl with the caller's environment and directory, its
+document, stderr and exit code in files under the state directory (`merges/`); without a user
+service manager, merge-child runs in a session of its own. The gate follows devctl's stderr onto
+its own output and records the outcome. When the caller ends mid-merge (SIGTERM, SIGHUP, its pipes
+closed), devctl merges on and waits for the release, and the gate waits on to record it; when the
+gate is killed too, `watch` records the outcome from the files once devctl ended (`MERGE
+RECORDED`, a `merged` or `merge.failed` event naming the gone gate). Only SIGINT, a person's
+Ctrl-C, reaches devctl. A run that ends without its document or
 by a signal (exit 128+n) is judged by GitHub (`gh pr view`), never by its exit code: merged, it
 settles its lane with its release unconfirmed and the gate line names `devctl release wait
 <owner/repo> --pr <n>`, with no retry place; not merged, it keeps its place for the retry; with

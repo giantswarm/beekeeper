@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -31,24 +33,6 @@ func fakeDevctl(t *testing.T, script string) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-}
-
-// stubGitHub answers pullState with state and devctlVersion with version.
-func stubGitHub(t *testing.T, pullAt string, version string) *int {
-	t.Helper()
-	asked := new(int)
-	pull, ver, wait := pullState, devctlVersion, judgeWait
-	t.Cleanup(func() { pullState, devctlVersion, judgeWait = pull, ver, wait })
-	judgeWait = 0
-	pullState = func(context.Context, string, int) (github.Pull, error) {
-		*asked++
-		if pullAt == "" {
-			return github.Pull{}, fmt.Errorf("no network")
-		}
-		return github.Pull{State: pullAt}, nil
-	}
-	devctlVersion = func(context.Context) string { return version }
-	return asked
 }
 
 // runningMerge is a gate run of repo#pr in its lane that devctl's turn has
@@ -94,44 +78,109 @@ func lastEvent(t *testing.T, g *gateRun, verb string) string {
 	return evs[len(evs)-1].Detail
 }
 
+// ancestors are pid's parents up to init.
+func ancestors(pid int) []int {
+	var up []int
+	for pid > 1 {
+		raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+		if err != nil {
+			break
+		}
+		// pid (comm) state ppid ...
+		f := strings.Fields(string(raw[strings.LastIndexByte(string(raw), ')')+1:]))
+		if len(f) < 2 {
+			break
+		}
+		pid, _ = strconv.Atoi(f[1])
+		up = append(up, pid)
+	}
+	return up
+}
+
 func TestAGatedMergeOutlivesItsCaller(t *testing.T) {
-	sidFile := filepath.Join(t.TempDir(), "sid")
-	fakeDevctl(t, `echo merging >&2; ps -o sid= -p $$ >`+sidFile+`; sleep 1; echo "waiting for the release" >&2; echo '`+mergedDoc+`'`)
-	stubGitHub(t, "", "")
-	lane := config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}}
-	g := runningMerge(t, scratchRepo, lane)
-	// The caller's stdout pipe is gone with its session.
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
+	for _, systemd := range []bool{false, true} {
+		t.Run(fmt.Sprintf("user systemd %v", systemd), func(t *testing.T) {
+			if systemd && !guard.UserSystemd() {
+				t.Skip("no user service manager")
+			}
+			was := userSystemd
+			userSystemd = func() bool { return systemd }
+			t.Cleanup(func() { userSystemd = was })
+			where := filepath.Join(t.TempDir(), "where")
+			fakeDevctl(t, `echo merging >&2; { ps -o sid= -p $$; echo $$; cat /proc/$$/cgroup; } >`+where+`; sleep 1; echo "waiting for the release" >&2; echo '`+mergedDoc+`'`)
+			stubGitHub(t, "", "")
+			lane := config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}}
+			g := runningMerge(t, scratchRepo, lane)
+			// The caller's stdout pipe is gone with its session.
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = r.Close()
+			stdout := os.Stdout
+			os.Stdout = w
+			t.Cleanup(func() { os.Stdout = stdout; _ = w.Close() })
+			go func() {
+				time.Sleep(600 * time.Millisecond)
+				// The caller's session ends: its process group gets SIGHUP and SIGTERM.
+				_ = syscall.Kill(os.Getpid(), syscall.SIGHUP)
+				_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
+			}()
+			if err := g.runMerge(); err != nil {
+				t.Fatalf("the merge did not finish: %v", err)
+			}
+			raw, err := os.ReadFile(where) //nolint:gosec // the test's file
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines := strings.SplitN(string(raw), "\n", 3)
+			sid, _ := strconv.Atoi(strings.TrimSpace(lines[0]))
+			if mine, _ := unix.Getsid(0); sid == mine {
+				t.Errorf("devctl ran in its caller's session %d", sid)
+			}
+			if systemd {
+				// A harness kills its command's process tree, a unit its cgroup.
+				pid, _ := strconv.Atoi(strings.TrimSpace(lines[1]))
+				if slices.Contains(ancestors(pid), os.Getpid()) {
+					t.Errorf("devctl (pid %d) is a descendant of its caller: %v", pid, ancestors(pid))
+				}
+				mine, _ := os.ReadFile("/proc/self/cgroup")
+				if strings.TrimSpace(lines[2]) == strings.TrimSpace(string(mine)) {
+					t.Errorf("devctl ran in its caller's cgroup %s", mine)
+				}
+			}
+			if d := lastEvent(t, g, "merged"); !strings.Contains(d, "o/r#7 exit 0, release v1.2.4") {
+				t.Errorf("merged event: %q", d)
+			}
+			if st := gateState(t, g); len(st.Merges) != 0 {
+				t.Errorf("merges left: %+v", st.Merges)
+			}
+		})
 	}
-	_ = r.Close()
-	stdout := os.Stdout
-	os.Stdout = w
-	t.Cleanup(func() { os.Stdout = stdout; _ = w.Close() })
-	go func() {
-		time.Sleep(400 * time.Millisecond)
-		// The caller's session ends: its process group gets SIGHUP and SIGTERM.
-		_ = syscall.Kill(os.Getpid(), syscall.SIGHUP)
-		_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
-	}()
-	if err := g.runMerge(); err != nil {
-		t.Fatalf("the merge did not finish: %v", err)
+}
+
+func TestAKilledMergeChildIsJudgedByGitHub(t *testing.T) {
+	noSystemd(t)
+	pidFile := filepath.Join(t.TempDir(), "runner")
+	// devctl kills the merge's runner (its parent), as a person or an OOM would.
+	fakeDevctl(t, `echo $PPID >`+pidFile+`; kill -KILL $PPID; sleep 1`)
+	stubGitHub(t, github.Merged, "")
+	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
+	if err := g.runMerge(); Code(err) != 137 {
+		t.Fatalf("exit %d, want 137", Code(err))
 	}
-	raw, err := os.ReadFile(sidFile) //nolint:gosec // the test's file
-	if err != nil {
-		t.Fatal(err)
-	}
-	sid, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
-	if mine, _ := unix.Getsid(0); sid == mine {
-		t.Errorf("devctl ran in its caller's session %d", sid)
-	}
-	if d := lastEvent(t, g, "merged"); !strings.Contains(d, "o/r#7 exit 0, release v1.2.4") {
+	if d := lastEvent(t, g, "merged"); !strings.Contains(d, "exit 137, release unconfirmed") {
 		t.Errorf("merged event: %q", d)
 	}
-	if st := gateState(t, g); len(st.Merges) != 0 {
-		t.Errorf("merges left: %+v", st.Merges)
-	}
+}
+
+// noSystemd runs merge-child in a session of its own, as without a user
+// service manager.
+func noSystemd(t *testing.T) {
+	t.Helper()
+	was := userSystemd
+	userSystemd = func() bool { return false }
+	t.Cleanup(func() { userSystemd = was })
 }
 
 func TestASignalExitWithoutADocumentIsJudgedByGitHub(t *testing.T) {
@@ -187,6 +236,7 @@ func TestASignalExitWithoutADocumentIsJudgedByGitHub(t *testing.T) {
 		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			noSystemd(t)
 			fakeDevctl(t, `echo merged >&2; kill -TERM $$`)
 			asked := stubGitHub(t, c.pull, devctlFrom)
 			g := runningMerge(t, c.repo, c.lane)
