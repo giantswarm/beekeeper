@@ -287,7 +287,7 @@ func (a *app) promptAlerts(p printer, al *alertsView) {
 		p("No installation is watched (alerts.installations is empty and no leased one has a kube context).")
 	}
 	for _, t := range al.Targets {
-		p("- %s (%s; context %s): %s", t.Name, t.Why, cmp.Or(t.Context, "none"), baselineText(al.Baselines[t.Name]))
+		p("- %s (%s; context %s): %s", t.Name, t.Why, cmp.Or(t.Context, "none"), baselineText(a.now, al.Baselines[t.Name]))
 	}
 	p("\nThe baseline is %s: the next beekeeper watch compares against it and reads every %s.", alerts.NewStore(a.cfg.StateDir).Path(), al.Every)
 	p("Ignored alert names: %s.", strings.Join(al.Ignore, ", "))
@@ -298,7 +298,7 @@ func (a *app) promptAlerts(p printer, al *alertsView) {
 }
 
 // baselineText is an installation's baseline: its known alerts by name.
-func baselineText(b *alerts.Installation) string {
+func baselineText(now time.Time, b *alerts.Installation) string {
 	switch {
 	case b == nil:
 		return "no baseline yet"
@@ -317,12 +317,20 @@ func baselineText(b *alerts.Installation) string {
 	}
 	s := fmt.Sprintf("%d known", len(b.Alerts))
 	if !b.Reachable {
-		s = fmt.Sprintf("unreachable, %d known when last read", len(b.Alerts))
+		s = fmt.Sprintf("unreachable, %d known when last read%s", len(b.Alerts), lastRead(now, b))
 	}
 	if len(names) > 0 {
 		s += ": " + strings.Join(names, ", ")
 	}
 	return s
+}
+
+// lastRead is " at <clock>" of an installation's last reading, if known.
+func lastRead(now time.Time, b *alerts.Installation) string {
+	if b.Seen.IsZero() {
+		return ""
+	}
+	return " at " + clock(now, b.Seen)
 }
 
 // oneLine folds a text onto one line.

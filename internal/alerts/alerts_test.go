@@ -2,6 +2,7 @@ package alerts
 
 import (
 	"cmp"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -170,17 +171,78 @@ func TestStepBurstCollapsesAboveTheThreshold(t *testing.T) {
 func TestStepUnreachableOnceSetKept(t *testing.T) {
 	down := Answer{Why: "port-forward: connection refused"}
 	_, st := rules.Step(instA, nil, ok(gateway), now)
-	lines, st := rules.Step(instA, st, down, now)
-	equal(t, lines, []string{"ALERTS alpha unreachable: port-forward: connection refused"})
-	lines, st = rules.Step(instA, st, down, now)
+	lines, st := rules.Step(instA, st, down, now.Add(5*time.Minute))
+	equal(t, lines, []string{"ALERTS alpha unreachable, alerts unseen for 5m (since 18:50Z): port-forward: connection refused"})
+	lines, st = rules.Step(instA, st, down, now.Add(10*time.Minute))
 	equal(t, lines, nil)
-	lines, _ = rules.Step(instA, st, ok(gateway), now)
-	equal(t, lines, []string{"ALERTS alpha reachable again"}) // the kept set: nothing new, nothing resolved
+	lines, _ = rules.Step(instA, st, ok(gateway), now.Add(15*time.Minute))
+	equal(t, lines, []string{"ALERTS alpha reachable again after 15m unseen"}) // the kept set: nothing new, nothing resolved
+}
+
+// An installation that stays unreachable is said again every UnseenRepeat,
+// with the time since its last reading, across a saved baseline too.
+func TestStepUnreachableRepeatsTheUnseenTime(t *testing.T) {
+	down := Answer{Why: "no port-forward within 15s (4 attempts)"}
+	_, st := rules.Step(instA, nil, ok(gateway), now)
+	var lines []string
+	var said []string
+	for m := 5; m <= 80; m += 5 {
+		lines, st = rules.Step(instA, roundTrip(t, st), down, now.Add(time.Duration(m)*time.Minute))
+		said = append(said, lines...)
+	}
+	equal(t, said, []string{
+		"ALERTS alpha unreachable, alerts unseen for 5m (since 18:50Z): no port-forward within 15s (4 attempts)",
+		"ALERTS alpha unreachable, alerts unseen for 20m (since 18:50Z): no port-forward within 15s (4 attempts)",
+		"ALERTS alpha unreachable, alerts unseen for 35m (since 18:50Z): no port-forward within 15s (4 attempts)",
+		"ALERTS alpha unreachable, alerts unseen for 50m (since 18:50Z): no port-forward within 15s (4 attempts)",
+		"ALERTS alpha unreachable, alerts unseen for 1h05m (since 18:50Z): no port-forward within 15s (4 attempts)",
+		"ALERTS alpha unreachable, alerts unseen for 1h20m (since 18:50Z): no port-forward within 15s (4 attempts)",
+	})
+	st.Seen, st.Said = time.Time{}, time.Time{} // a baseline written before Seen: the time is unknown
+	lines, _ = rules.Step(instA, st, down, now.Add(90*time.Minute))
+	equal(t, lines, []string{"ALERTS alpha unreachable, alerts unseen since an unknown time: no port-forward within 15s (4 attempts)"})
+}
+
+func roundTrip(t *testing.T, in *Installation) *Installation {
+	t.Helper()
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := &Installation{}
+	if err := json.Unmarshal(b, out); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// Outside working hours InhibitionOutsideWorkingHours inhibits the alerts
+// labelled cancel_if_outside_working_hours: the team's are read all the
+// same, another team's and those inhibited by anything else are not.
+func TestStepTeamAlertInhibitedByWorkingHoursIsNew(t *testing.T) {
+	hours := alert("wh", "InhibitionOutsideWorkingHours", "none", "atlas", "")
+	down := alert("kd", "InhibitionKubeletDown", "none", "tenet", "")
+	inhibited := func(r Raw, by ...string) Raw {
+		r.Labels["cancel_if_outside_working_hours"] = "true"
+		r.Status.InhibitedBy = by
+		return r
+	}
+	restarting := alert("mc", "AgentPlatformContainerRestartingTooOften", "page", "bumblebee", "2026-09-24T18:34:14Z",
+		"cluster_id", instA, "namespace", "agent-platform", "container", "mcp-capi", "job", "mcp-capi")
+	_, st := rules.Step(instA, nil, ok(hours, down), now.Add(-5*time.Minute))
+	lines, _ := rules.Step(instA, st, ok(hours, down,
+		inhibited(restarting, "wh"),
+		inhibited(alert("ot", "ManagementClusterJobFailed", "notify", "phoenix", ""), "wh"),
+		inhibited(alert("kb", "DeploymentNotSatisfiedBumblebee", "page", "bumblebee", ""), "kd"),
+		inhibited(alert("mx", "AgentPlatformPodNotReady", "page", "bumblebee", ""), "wh", "kd"),
+		inhibited(alert("gn", "AgentPlatformPodPending", "page", "bumblebee", ""), "gone"),
+	), now)
+	equal(t, lines, []string{"ALERT NEW alpha PAGE BUMBLEBEE AgentPlatformContainerRestartingTooOften agent-platform/mcp-capi since 18:34Z"})
 }
 
 func TestStepFirstRunUnreachableThenFirstLook(t *testing.T) {
 	lines, st := rules.Step(instD, nil, Answer{Why: "no kube context for delta"}, now)
-	equal(t, lines, []string{"ALERTS delta unreachable: no kube context for delta"})
+	equal(t, lines, []string{"ALERTS delta unreachable, alerts never read: no kube context for delta"})
 	lines, _ = rules.Step(instD, st, ok(gateway), now)
 	if len(lines) == 0 || !strings.HasPrefix(lines[0], "ALERTS delta first look: 1 active") {
 		t.Errorf("lines = %v", lines)

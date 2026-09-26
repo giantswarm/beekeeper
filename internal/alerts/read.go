@@ -17,8 +17,9 @@ import (
 	"time"
 )
 
-// query keeps the active alerts only: nothing silenced or inhibited.
-const query = "active=true&silenced=false&inhibited=false"
+// query keeps the active, unsilenced alerts, the inhibited ones included:
+// Normalize keeps the team's alerts inhibited by working hours only.
+const query = "active=true&silenced=false&inhibited=true"
 
 // teleportPrefix is the context `tsh kube login` writes for an installation.
 const teleportPrefix = "teleport.giantswarm.io-"
@@ -31,6 +32,9 @@ const (
 	// stopGrace is how long a port-forward has after SIGTERM before it is killed.
 	stopGrace = 3 * time.Second
 )
+
+// retryPause is the pause before another attempt at a failed reading.
+var retryPause = 2 * time.Second
 
 // endpoint is an Alertmanager service, in the order they are tried: Mimir's
 // with the tenant header (the tenant "anonymous" holds nothing, and the API
@@ -140,15 +144,46 @@ func (r Reader) Read(ctx context.Context, targets []Target) []Answer {
 	return out
 }
 
+// fetch reads one installation, attempt after attempt until one answers or
+// r.Timeout has passed: a port-forward through a proxy fails now and then
+// and answers at the next attempt. A failure names the last attempt's
+// reason and the number of attempts.
 func (r Reader) fetch(ctx context.Context, t Target) Answer {
 	if t.Context == "" {
 		return Answer{Why: "no kube context for " + t.Name}
 	}
 	ctx, cancel := context.WithTimeout(ctx, r.Timeout)
 	defer cancel()
+	var last Answer
+	for n := 1; ; n++ {
+		ans := r.attempt(ctx, t.Context)
+		if ans.OK {
+			return ans
+		}
+		if ctx.Err() == nil || last.Why == "" {
+			last = ans
+		}
+		pause := time.NewTimer(retryPause)
+		select {
+		case <-pause.C:
+			if ctx.Err() == nil {
+				continue
+			}
+		case <-ctx.Done():
+			pause.Stop()
+		}
+		if n > 1 {
+			last.Why += fmt.Sprintf(" (%d attempts)", n)
+		}
+		return last
+	}
+}
+
+// attempt reads the first Alertmanager the context has.
+func (r Reader) attempt(ctx context.Context, kubeContext string) Answer {
 	why := ""
 	for _, ep := range endpoints {
-		f, port, err := r.forward(ctx, t.Context, ep)
+		f, port, err := r.forward(ctx, kubeContext, ep)
 		if f == nil {
 			why = err
 			if strings.Contains(strings.ToLower(why), "not found") {

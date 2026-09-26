@@ -20,11 +20,13 @@ import (
 // fakeKubectl is a kubectl on disk that forwards svc/<service> to the local
 // port in $FAKE_<SERVICE> (mimir-alertmanager is FAKE_MIMIR, the plain one
 // FAKE_PLAIN), says "not found" for a service without one, and fails with
-// $FAKE_FAIL. It starts a child like a real port-forward's helpers and
+// $FAKE_FAIL, or once with $FAKE_FAIL_ONCE (the file $FAKE_FAILED records
+// that it did). It starts a child like a real port-forward's helpers and
 // records both PIDs, so the test can tell whether the process group ended.
 const fakeKubectl = `#!/bin/sh
 case "$*" in *"config get-contexts"*) echo teleport.giantswarm.io-alpha; exit 0;; esac
 if [ -n "$FAKE_FAIL" ]; then echo "$FAKE_FAIL" >&2; exit 1; fi
+if [ -n "$FAKE_FAIL_ONCE" ] && [ ! -e "$FAKE_FAILED" ]; then : > "$FAKE_FAILED"; echo "$FAKE_FAIL_ONCE" >&2; exit 1; fi
 case "$*" in
   *svc/mimir-alertmanager*) port=$FAKE_MIMIR; svc=mimir-alertmanager;;
   *) port=$FAKE_PLAIN; svc=kube-prometheus-stack-alertmanager;;
@@ -41,6 +43,7 @@ type fake struct {
 	t      *testing.T
 	reader Reader
 	pids   string
+	failed string // the file the fake's failure once leaves
 	mu     sync.Mutex
 	seen   []string // path and tenant of each request
 	hang   bool
@@ -57,6 +60,12 @@ func newFake(t *testing.T) *fake {
 	t.Setenv("FAKE_MIMIR", "")
 	t.Setenv("FAKE_PLAIN", "")
 	t.Setenv("FAKE_FAIL", "")
+	t.Setenv("FAKE_FAIL_ONCE", "")
+	f.failed = filepath.Join(dir, "failed")
+	t.Setenv("FAKE_FAILED", f.failed)
+	pause := retryPause
+	retryPause = 100 * time.Millisecond
+	t.Cleanup(func() { retryPause = pause })
 	return f
 }
 
@@ -137,14 +146,31 @@ func TestReadPlainAlertmanagerWhenNoMimir(t *testing.T) {
 
 func TestReadUnreachableIsAnAnswer(t *testing.T) {
 	f := newFake(t)
+	f.reader.Timeout = time.Second
 	t.Setenv("FAKE_FAIL", "error: connection refused")
 	got := f.reader.Read(context.Background(), []Target{alpha, {Name: instC}})
-	if got[0].OK || got[0].Why != "error: connection refused" {
+	if got[0].OK || !strings.HasPrefix(got[0].Why, "error: connection refused (") || !strings.HasSuffix(got[0].Why, " attempts)") {
 		t.Errorf("alpha = %+v", got[0])
 	}
 	if got[1].OK || got[1].Why != "no kube context for gamma" {
 		t.Errorf("gamma = %+v", got[1])
 	}
+}
+
+// A port-forward through a proxy fails now and then: the next attempt
+// within the timeout answers.
+func TestReadRetriesAFailedForward(t *testing.T) {
+	f := newFake(t)
+	f.serve("FAKE_MIMIR")
+	t.Setenv("FAKE_FAIL_ONCE", "error: error upgrading connection: connection reset by peer")
+	got := f.reader.Read(context.Background(), []Target{alpha})
+	if !got[0].OK || got[0].Alerts[0].Fingerprint != gateway.Fingerprint {
+		t.Fatalf("answer = %+v", got[0])
+	}
+	if _, err := os.Stat(f.failed); err != nil {
+		t.Errorf("the first attempt did not fail: %v", err)
+	}
+	f.noForwardLeft()
 }
 
 // TestReadCancelEndsTheForward is what SIGTERM and SIGINT of a watch do:

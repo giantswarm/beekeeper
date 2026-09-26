@@ -557,10 +557,10 @@ alerts:
     - production            # context teleport.giantswarm.io-<name>, else <name>, else *@<name>
     - {name: lab, context: admin@lab, floor: warning}   # floor: the lowest severity shown (none, info, warning, notify, critical, page)
   ignore: [Heartbeat, InhibitionOutsideWorkingHours, Watchdog]   # the default; setting it replaces it
-  team: my-team             # marked in capitals and counted
+  team: my-team             # marked in capitals and counted; its alerts that only InhibitionOutsideWorkingHours inhibits are read too
   collapse: 3               # more changes of one alertname in one reading are one line
   every: 5m
-  timeout: 1m               # per installation, port-forwards included; also bounds the upgrade reading
+  timeout: 1m               # per installation, port-forwards included, a failed attempt tried again within it; also bounds the upgrade reading
   flap: {changes: 4, window: 1h}   # an alert's 4th change within 1h is one FLAPPING line, then quiet until stable for 1h
 supervisor:                 # what handover --prompt tells the successor supervisor
   skill: supervise          # the skill it runs; or instructions: ~/supervisor.md, a file that opens the prompt
