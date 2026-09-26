@@ -300,6 +300,22 @@ type Report struct {
 	Skipped time.Time `json:"skipped,omitzero"`
 }
 
+// ReportPause pauses the scheduled reporter until it is resumed: from Since,
+// or, while Final is set, from the start of one final report due then.
+type ReportPause struct {
+	Final time.Time `json:"final,omitzero"`
+	Since time.Time `json:"since,omitzero"`
+	By    Party     `json:"by"`
+}
+
+// Paused reports whether no scheduled report starts.
+func (p *ReportPause) Paused() bool { return p != nil && !p.Since.IsZero() }
+
+// FinalDue reports whether the final report is due at now.
+func (p *ReportPause) FinalDue(now time.Time) bool {
+	return p != nil && !p.Final.IsZero() && !now.Before(p.Final)
+}
+
 // Running reports whether the reporter has yet to end.
 func (r *Report) Running() bool { return r != nil && r.Ended.IsZero() }
 
@@ -357,6 +373,8 @@ type State struct {
 	Merges []Merge `json:"merges,omitempty"`
 	// Report is the scheduled status reporter's current or last run.
 	Report *Report `json:"report,omitempty"`
+	// ReportPause pauses the scheduled reporter, after one final report.
+	ReportPause *ReportPause `json:"reportPause,omitempty"`
 
 	// unknown are the fields a newer beekeeper wrote: an older binary still
 	// running (a watch, a gated merge) writes them back unchanged instead of

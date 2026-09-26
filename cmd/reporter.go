@@ -35,6 +35,8 @@ const (
 	reportNone reportAction = iota
 	// reportStart starts the reporter of the current slot.
 	reportStart
+	// reportFinal starts the final report before the pause.
+	reportFinal
 	// reportSkip says the current slot skipped: the last one's still runs.
 	reportSkip
 	// reportPosted ends a reporter that posted.
@@ -49,13 +51,17 @@ const (
 // every since the zero time, on the hour for 1h.
 func reportSlot(every time.Duration, now time.Time) time.Time { return now.UTC().Truncate(every) }
 
-// reportDue decides what to do about the reporter r at now: posted and
-// ended say what its running session did.
-func reportDue(r *state.Report, rc config.Reporter, now time.Time, posted, ended bool) reportAction {
+// reportDue decides what to do about the reporter r at now under pause:
+// posted and ended say what its running session did.
+func reportDue(r *state.Report, pause *state.ReportPause, rc config.Reporter, now time.Time, posted, ended bool) reportAction {
 	slot := reportSlot(rc.Every.Duration, now)
 	switch {
 	case !r.Running():
-		if r == nil || slot.After(r.Slot) {
+		switch {
+		case pause.FinalDue(now):
+			return reportFinal
+		case pause.Paused():
+		case r == nil || slot.After(r.Slot):
 			return reportStart
 		}
 	case posted:
@@ -64,7 +70,7 @@ func reportDue(r *state.Report, rc config.Reporter, now time.Time, posted, ended
 		return reportUnposted
 	case now.Sub(r.Started) >= rc.Timeout.Duration:
 		return reportTimeout
-	case slot.After(r.Slot) && !r.Skipped.Equal(slot):
+	case slot.After(r.Slot) && !r.Skipped.Equal(slot) && !pause.Paused():
 		return reportSkip
 	}
 	return reportNone
@@ -92,9 +98,9 @@ func (w *watcher) tendReporter(ctx context.Context, sessions []*claude.Session) 
 		posted = w.reportPosted(r.Session)
 		ended = !posted && turnEnded(ctx, r.Unit)
 	}
-	switch reportDue(r, rc, w.now, posted, ended) {
-	case reportStart:
-		err := w.startReport(ctx, sessions)
+	switch action := reportDue(r, st.ReportPause, rc, w.now, posted, ended); action {
+	case reportStart, reportFinal:
+		err := w.startReport(ctx, sessions, action)
 		w.check("reporter", err != nil, "REPORTER not started: %v", err)
 	case reportSkip:
 		w.skipReport()
@@ -121,7 +127,7 @@ func (w *watcher) reportPosted(id string) bool {
 // bypassPermissions in a transient user unit, registered on the roster busy
 // with the brief's first line. It is not imported into the desktop: the
 // command-line turn has the connectors, and the person's window stays put.
-func (w *watcher) startReport(ctx context.Context, sessions []*claude.Session) error {
+func (w *watcher) startReport(ctx context.Context, sessions []*claude.Session, action reportAction) error {
 	rc := w.cfg.Reporter
 	brief, err := readBrief(rc.Brief)
 	if err != nil {
@@ -136,8 +142,15 @@ func (w *watcher) startReport(ctx context.Context, sessions []*claude.Session) e
 		return err
 	}
 	slot := reportSlot(rc.Every.Duration, w.now)
+	final := action == reportFinal
+	// A scheduled report covers the interval before its slot; the final one
+	// the time since the last report started, up to now.
+	from, to := slot.Add(-rc.Every.Duration), slot
+	if final {
+		from, to = w.now.Add(-rc.Every.Duration), w.now
+	}
 	id := uuid.NewString()
-	p := state.Party{Session: id, Name: "Status report " + slot.In(zone).Format("15:04")}
+	p := state.Party{Session: id, Name: "Status report " + to.In(zone).Format("15:04")}
 	unit := "beekeeper-report-" + id[:8]
 	live := func(x state.Party) bool {
 		_, ok := claude.Live(sessions, x)
@@ -145,8 +158,14 @@ func (w *watcher) startReport(ctx context.Context, sessions []*claude.Session) e
 	}
 	started := false
 	err = w.store.Update(func(st *state.State) ([]state.Event, error) {
-		if reportDue(st.Report, rc, w.now, false, false) != reportStart {
+		if reportDue(st.Report, st.ReportPause, rc, w.now, false, false) != action {
 			return nil, nil // another watch started it
+		}
+		if final {
+			if st.Report != nil {
+				from = st.Report.Started
+			}
+			st.ReportPause.Final, st.ReportPause.Since = time.Time{}, w.now.UTC()
 		}
 		s := state.Start{Party: p, Mode: state.ModeBypass, Dir: rc.Dir, By: reporterParty, At: w.now.UTC()}
 		reg, err := recordStart(st, s, briefTask(brief), live)
@@ -155,7 +174,11 @@ func (w *watcher) startReport(ctx context.Context, sessions []*claude.Session) e
 		}
 		st.Report = &state.Report{Party: p, Unit: unit, Slot: slot, Started: w.now.UTC()}
 		started = true
-		return []state.Event{event(reporterParty, "reporter.start", "%s: session %s for %s, busy with %q", p.Name, id, rc.Person, reg.task)}, nil
+		evs := []state.Event{event(reporterParty, "reporter.start", "%s: session %s for %s, busy with %q", p.Name, id, rc.Person, reg.task)}
+		if final {
+			evs = append(evs, event(reporterParty, "reporter.pause", "after the final report %s, until beekeeper reporter resume", p.Name))
+		}
+		return evs, nil
 	})
 	if err != nil || !started {
 		return err
@@ -164,7 +187,7 @@ func (w *watcher) startReport(ctx context.Context, sessions []*claude.Session) e
 	if run == nil {
 		run = w.launchReport
 	}
-	if err := run(unit, id, p.Name, reportPrompt(rc, slot, zone, brief)); err != nil {
+	if err := run(unit, id, p.Name, reportPrompt(rc, from, to, zone, final, brief)); err != nil {
 		w.endReport(ctx, "failed", err.Error())
 		return err
 	}
@@ -204,17 +227,21 @@ func reportSettings(self string) string {
 // reportPrompt is the reporter's first prompt: who the report is for, what
 // it covers in the person's time zone (the machine's), and how the post must
 // look, then the brief.
-func reportPrompt(rc config.Reporter, slot time.Time, zone *time.Location, brief string) string {
-	from, to := slot.Add(-rc.Every.Duration).In(zone), slot.In(zone)
+func reportPrompt(rc config.Reporter, from, to time.Time, zone *time.Location, final bool, brief string) string {
+	from, to = from.In(zone), to.In(zone)
 	span := from.Format("15:04") + "–" + to.Format("15:04 MST")
-	return fmt.Sprintf("You are beekeeper's scheduled status reporter. Report the last %s (%s) to %s, "+
+	last := ""
+	if final {
+		last = fmt.Sprintf("This is the last report before the %s reports pause until they are resumed: say so in one line at its end. ", dur(rc.Every.Duration))
+	}
+	return fmt.Sprintf("You are beekeeper's scheduled status reporter. %sReport %s to %s, "+
 		"posted exactly once. Its first line gives the range %s; every time in the post is in %s (%s), never UTC. "+
 		"The connector's message is standard Markdown, which it converts for Slack: every pull request or issue is a link "+
 		"to it in its own repository, [<repo>#<n>](https://github.com/<owner>/<repo>/pull/<n>), never a bare #<n>, not even in a session's name; a beekeeper note is \"note <n>\": "+
 		"check the text with `beekeeper reporter check` (it reads stdin) before posting; a post that fails the check is refused "+
 		"with what to fix. Once the post has gone out, end your turn: beekeeper sees the post, "+
 		"takes you off the roster and stops this session.\n\n%s",
-		dur(rc.Every.Duration), span, rc.Person, span, zone, to.Format("MST"), brief)
+		last, span, rc.Person, span, zone, to.Format("MST"), brief)
 }
 
 // skipReport records, once per slot, that the slot's reporter was not
@@ -319,13 +346,19 @@ and the watch. While a reporter runs, the next slot is skipped, once.`,
 			if err != nil {
 				return err
 			}
-			next := reportSlot(rc.Every.Duration, a.now).Add(rc.Every.Duration)
+			next := "next " + clock(a.now, reportSlot(rc.Every.Duration, a.now).Add(rc.Every.Duration))
 			if r := st.Report; r == nil || reportSlot(rc.Every.Duration, a.now).After(r.Slot) && !r.Running() {
-				next = a.now
+				next = "next " + clock(a.now, a.now)
+			}
+			switch pause := st.ReportPause; {
+			case pause.Paused():
+				next = fmt.Sprintf("paused since %s by %s: beekeeper reporter resume", clock(a.now, pause.Since), pause.By.Name)
+			case pause != nil:
+				next += fmt.Sprintf("; the final report at %s, then paused (set by %s)", clock(a.now, pause.Final), pause.By.Name)
 			}
 			model := cmp.Or(rc.Model, "Claude Code's default")
-			_, err = fmt.Fprintf(a.out, "every %s for %s, brief %s, model %s, timeout %s; next %s\n",
-				dur(rc.Every.Duration), rc.Person, rc.Brief, model, dur(rc.Timeout.Duration), clock(a.now, next))
+			_, err = fmt.Fprintf(a.out, "every %s for %s, brief %s, model %s, timeout %s; %s\n",
+				dur(rc.Every.Duration), rc.Person, rc.Brief, model, dur(rc.Timeout.Duration), next)
 			if err != nil || st.Report == nil {
 				return err
 			}
@@ -338,7 +371,7 @@ and the watch. While a reporter runs, the next slot is skipped, once.`,
 			return err
 		},
 	}
-	c.AddCommand(&cobra.Command{
+	c.AddCommand(a.reporterFinalCmd(), a.reporterPauseCmd(), a.reporterResumeCmd(), &cobra.Command{
 		Use:   "check",
 		Short: "Check a report on stdin: every pull request and issue linked to its repository, the times in the machine's zone",
 		Long: `check reads a report from stdin and prints what is wrong with it, one
@@ -371,4 +404,76 @@ it), and a time in UTC.`,
 		},
 	})
 	return c
+}
+
+func (a *app) reporterFinalCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "final <time>",
+		Short: "One final report at a time (06:45) or after a duration (45m), then pause the schedule",
+		Long: `final schedules one last report at <time>, outside the interval's slots,
+covering the time since the last report started; the hourly reports run
+until then. With its start the schedule pauses: no report starts until
+beekeeper reporter resume. A final set again replaces the last one.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			at, err := untilTime(a.now, args[0])
+			if err != nil {
+				return err
+			}
+			if at.IsZero() {
+				return usageErr("final needs a time")
+			}
+			return a.setReportPause(&state.ReportPause{Final: at.UTC()}, "reporter.final",
+				"the final report at %s, then paused until beekeeper reporter resume", clock(a.now, at))
+		},
+	}
+}
+
+func (a *app) reporterPauseCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "pause",
+		Short: "Pause the scheduled reports now, until reporter resume",
+		Long:  `pause starts no scheduled report from now on; a running reporter still posts and is ended. beekeeper reporter resume ends the pause.`,
+		Args:  cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			return a.setReportPause(&state.ReportPause{Since: a.now.UTC()}, "reporter.pause", "paused until beekeeper reporter resume")
+		},
+	}
+}
+
+func (a *app) reporterResumeCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "resume",
+		Short: "Resume the scheduled reports: the current slot's report starts at once",
+		Long: `resume ends a pause or a pending final: the standby watch starts the current
+slot's report at its next poll, then one per interval.`,
+		Args: cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			return a.setReportPause(nil, "reporter.resume", "the scheduled reports run again")
+		},
+	}
+}
+
+// setReportPause records pause (nil: none) for the caller and says so.
+func (a *app) setReportPause(pause *state.ReportPause, verb, format string, args ...any) error {
+	if !a.cfg.Reporter.Enabled() {
+		return refused("no reporter is scheduled: set reporter.every and reporter.brief")
+	}
+	me, err := a.caller()
+	if err != nil {
+		return err
+	}
+	line := fmt.Sprintf(format, args...)
+	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		if pause != nil {
+			pause.By = me
+		}
+		st.ReportPause = pause
+		return []state.Event{event(me, verb, "%s", line)}, nil
+	})
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(a.out, "reporter: "+line)
+	return err
 }
