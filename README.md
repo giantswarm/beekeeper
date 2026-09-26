@@ -475,8 +475,8 @@ multiples (on the hour for `1h`), whether or not a supervisor runs:
    hook on `slack_send_message` (`beekeeper hook reportcheck`) that refuses a post failing
    `beekeeper reporter check`, with what to fix: the connector takes standard Markdown, so every pull
    request or issue is a link `[<repo>#<n>](https://github.com/<owner>/<repo>/pull/<n>)` whose label
-   names the repository and number it links; no bare `#<n>` or `repo#<n>` (`note #<n>` and
-   `timer #<n>` are beekeeper's own), no Slack `<url|label>` syntax, a first line naming the
+   names the repository and number it links; no bare `#<n>` or `repo#<n>`, session names included
+   (a beekeeper note is `note <n>`), no Slack `<url|label>` syntax, a first line naming the
    zone (`EEST`), no time in UTC. beekeeper sees the post in the session's transcript: a
    `slack_send_message` call that returned without an error.
 3. **The end.** Once it posted, beekeeper takes the reporter off the roster and stops what still

@@ -210,7 +210,7 @@ func reportPrompt(rc config.Reporter, slot time.Time, zone *time.Location, brief
 	return fmt.Sprintf("You are beekeeper's scheduled status reporter. Report the last %s (%s) to %s, "+
 		"posted exactly once. Its first line gives the range %s; every time in the post is in %s (%s), never UTC. "+
 		"The connector's message is standard Markdown, which it converts for Slack: every pull request or issue is a link "+
-		"to it in its own repository, [<repo>#<n>](https://github.com/<owner>/<repo>/pull/<n>), never a bare #<n>: "+
+		"to it in its own repository, [<repo>#<n>](https://github.com/<owner>/<repo>/pull/<n>), never a bare #<n>, not even in a session's name; a beekeeper note is \"note <n>\": "+
 		"check the text with `beekeeper reporter check` (it reads stdin) before posting; a post that fails the check is refused "+
 		"with what to fix. Once the post has gone out, end your turn: beekeeper sees the post, "+
 		"takes you off the roster and stops this session.\n\n%s",
@@ -347,8 +347,9 @@ the reporter's post passes: a reporter session's slack_send_message is
 refused by its PreToolUse hook (beekeeper hook reportcheck) until the
 message passes. The Slack connector takes standard Markdown and converts
 it for Slack, so links are [label](url). It refuses Slack's own <url|label>
-syntax, every #<n> or [owner/]repo#<n> outside a link ("note #<n>" and
-"timer #<n>" are beekeeper's own and pass), a GitHub pull request or issue
+syntax, every #<n> or [owner/]repo#<n> outside a link, session names
+included (a beekeeper note or timer is "note <n>", without the #), a
+GitHub pull request or issue
 link whose label does not name its repository and number, a first line
 that does not name the machine's time zone (read live, as timedatectl sets
 it), and a time in UTC.`,
