@@ -80,12 +80,13 @@ queue rule itself is tested by replaying a real event trail (`internal/merge/tes
 the sessions' ids left out) through `merge.Queue`, `Lane.Ahead` and `merge.Failed`.
 
 A merge that outlives its caller is proven the same way: a fake devctl that sleeps before its
-document, the gate started under `setsid zsh -c '…'` with its PIDs captured at spawn, then
-`kill -HUP` and `kill -TERM` to the caller's process group mid-merge. The shell dies, devctl (in a
-session of its own, `ps -o sid=`) and the gate run on and log `merged`. A `kill -KILL` to the whole
-group, the gate included, leaves devctl running: `watch --once` does not call the merge lost until
-devctl ended. Live, a background `devctl pr merge` of a docs pull request whose command is stopped
-while it waits for the checks is logged `merged` once the checks pass.
+document, the gate run from a script (so the hook does not rewrite it) as a Claude Code background
+command against scratch state, and the harness's stop of that command mid-merge, which kills the
+command's process tree. devctl runs on in its `beekeeper-merge-…` unit (`systemctl --user
+list-units 'beekeeper-merge-*'`, its `/proc/<pid>/cgroup`); `watch --once` says nothing while it
+runs and `MERGE RECORDED … whose gate … is gone` once it ended. Live, a background `devctl pr
+merge` of a docs pull request whose command is stopped while it waits for the checks is logged
+`merged` once the checks pass, and the lane is free.
 
 `lanes settle` and the gate's check of a settled outside merge ask GitHub through `gh pr view
 <n> --repo <owner/repo> --json state,mergedAt`; a fake `gh` first on `PATH` that prints
