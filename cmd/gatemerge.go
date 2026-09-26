@@ -146,7 +146,9 @@ func runDetached(argv []string, base string, started func(pid int)) (doc []byte,
 		case s := <-sig:
 			switch {
 			case s == syscall.SIGINT:
-				_ = syscall.Kill(pid, syscall.SIGINT)
+				if p, err := os.FindProcess(pid); err == nil {
+					_ = p.Signal(os.Interrupt)
+				}
 			case !said:
 				gateLine("%v: the caller is going away; devctl merges on outside it (pid %d) and the gate records its outcome", s, pid)
 				said = true
