@@ -204,9 +204,11 @@ func TestRead(t *testing.T) {
 	}
 }
 
+const stuckTo = "36.0.0"
+
 func TestLiftSticks(t *testing.T) {
 	st := &state.State{}
-	stuck := []Upgrade{{Cluster: "wc", To: "36.0.0"}}
+	stuck := []Upgrade{{Cluster: "wc", To: stuckTo}}
 	Reconcile(st, prod, stuck, at, watch)
 	timo := state.Party{Name: "Supervisor"}
 	if !Lift(st, HoldTarget(prod, "wc"), timo, at) || Lift(st, HoldTarget(prod, "wc"), timo, at) {
@@ -230,7 +232,7 @@ func TestLiftSticks(t *testing.T) {
 	if begun, ended := Reconcile(st, prod, rolling, at, watch); len(begun)+len(ended) != 0 || st.Holds[0].LiftedBy == nil {
 		t.Errorf("the rollout running on re-held: begun %+v ended %+v", begun, ended)
 	}
-	begun, _ := Reconcile(st, prod, []Upgrade{{Cluster: "wc", From: "36.0.0", To: "36.1.0"}}, at, watch)
+	begun, _ := Reconcile(st, prod, []Upgrade{{Cluster: "wc", From: stuckTo, To: "36.1.0"}}, at, watch)
 	if len(begun) != 1 || st.Holds[0].LiftedBy != nil || st.Holds[0].UpgradeTo != "36.1.0" {
 		t.Errorf("a different upgrade must hold again: begun %+v holds %+v", begun, st.Holds)
 	}
@@ -242,8 +244,8 @@ func TestLiftSticks(t *testing.T) {
 
 func TestLiftBackfillsTarget(t *testing.T) {
 	st := &state.State{Holds: []state.Hold{{Target: HoldTarget(prod, "wc")}}}
-	Reconcile(st, prod, []Upgrade{{Cluster: "wc", To: "36.0.0"}}, at, watch)
-	if st.Holds[0].UpgradeTo != "36.0.0" {
+	Reconcile(st, prod, []Upgrade{{Cluster: "wc", To: stuckTo}}, at, watch)
+	if st.Holds[0].UpgradeTo != stuckTo {
 		t.Errorf("holds %+v", st.Holds)
 	}
 }

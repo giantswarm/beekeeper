@@ -173,7 +173,7 @@ func TestLiftedUpgradeHoldShowsWhoLiftedIt(t *testing.T) {
 	sup := state.Party{Name: "Supervisor run 17"}
 	st := &state.State{Holds: []state.Hold{
 		{Target: "upgrade:gazelle/cicddev", Reason: "upgrade gazelle/cicddev ? → 36.0.0", LiftedBy: &sup, LiftedAt: relayNow},
-		{Target: "lane:serving", Reason: "L4 round first"},
+		{Target: "lane:serving", Reason: "stuck drain"},
 	}}
 	var out bytes.Buffer
 	a := &app{out: &out, now: relayNow}
