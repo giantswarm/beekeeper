@@ -10,7 +10,7 @@ func TestCheckPasses(t *testing.T) {
 	msg := "**Lab status, 23:00–00:00 EEST**\n" +
 		"- [beekeeper#109](https://github.com/giantswarm/beekeeper/pull/109) v0.26.0\n" +
 		"- [giantswarm/giantswarm#37853](https://github.com/giantswarm/giantswarm/issues/37853) epic\n" +
-		"- note #84 and timer #53, see [the docs](https://example.com/x)\n" +
+		"- note 84 and timer 53, see [the docs](https://example.com/x)\n" +
 		"- `#12 in code` and &#35; and C# and a -> b\n" +
 		"— written by Timo's agents (hourly status)"
 	if p := Check(msg); len(p) != 0 {
@@ -22,6 +22,8 @@ func TestCheckRefuses(t *testing.T) {
 	for _, c := range []struct{ name, msg, want string }{
 		{"empty", "  \n", "empty"},
 		{"a bare number", "merged #109 today", "#109 is not a link"},
+		{"a note with a hash", "- note #84: the refine", `a beekeeper note or timer is "note 84"`},
+		{"a ref in a session name", "- #37941 flash next — benchmarking", "#37941 is not a link"},
 		{"a bare repo ref", "merged beekeeper#109 (epic giantswarm/giantswarm#37853)", "beekeeper#109 is not a link"},
 		{"Slack's link syntax", "<https://github.com/giantswarm/beekeeper/pull/109|beekeeper#109>", "Slack's link syntax"},
 		{"a wrong repository", "[beekeeper#109](https://github.com/giantswarm/devctl/pull/109)", "labelled beekeeper#109 but links giantswarm/devctl#109"},

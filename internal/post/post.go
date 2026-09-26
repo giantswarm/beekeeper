@@ -21,10 +21,7 @@ var (
 	github = regexp.MustCompile(`^https://github\.com/([\w.-]+)/([\w.-]+)/(pull|issues)/(\d+)(?:[/?#]\S*)?$`)
 	// ref is [owner/]repo#n or a bare #n. The character before it is
 	// matched to exclude HTML entities (&#123;) and words glued to it.
-	ref = regexp.MustCompile(`(^|[^\w&/.#-])((?:[\w.-]+/)?[\w.-]*#(\d+))\b`)
-	// own are the numbered things of beekeeper's own that are no pull
-	// request or issue: "note #84", "timer #53".
-	own      = regexp.MustCompile(`(?i)\b(?:note|notes|timer|timers)\s*$`)
+	ref      = regexp.MustCompile(`(^|[^\w&/.#-])((?:[\w.-]+/)?[\w.-]*#(\d+))\b`)
 	codeSpan = regexp.MustCompile("(?s)```.*?```|`[^`\n]*`")
 	utc      = regexp.MustCompile(`\b(?:UTC|GMT)\b`)
 )
@@ -47,11 +44,9 @@ func Check(text string) []string {
 	outside := link.ReplaceAllString(plain, " ")
 	for _, l := range strings.Split(outside, "\n") {
 		for _, m := range ref.FindAllStringSubmatchIndex(l, -1) {
-			if own.MatchString(l[:m[4]]) {
-				continue
-			}
 			n := l[m[6]:m[7]]
-			add("%s is not a link: write [<repo>#%s](https://github.com/<owner>/<repo>/pull/%s) (issues/%s for an issue)", l[m[4]:m[5]], n, n, n)
+			add("%s is not a link: write [<repo>#%s](https://github.com/<owner>/<repo>/pull/%s) (issues/%s for an issue); "+
+				"a beekeeper note or timer is \"note %s\", without the #", l[m[4]:m[5]], n, n, n, n)
 		}
 	}
 	return problems
