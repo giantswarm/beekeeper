@@ -372,6 +372,18 @@ moment and switches back, which warms the desktop's CLI of it, so the session is
 takes a follow-up task by message as a desktop turn. It reopens only a start the roster still
 holds, never one a hand-over or `agents remove` took off.
 
+The desktop handles each `claude://resume` link twice. When the second delivery arrives while the
+first import still runs, both import, the second drops the transcript's title and model as stale
+(the first touched the file), and the desktop keeps its untitled record: the session shows
+untitled in the sidebar and to ListAgents under a default name (`<dir>-<n>`), which a message by
+its name does not reach, even when the record file showed the title for a moment. The desktop
+rereads neither the transcript nor its record files, so `agents reopen` checks the record once the
+first turn has ended and, when it lacks the roster name, asks the session through its desktop
+CLI's socket (`$XDG_RUNTIME_DIR/cc-socks/<pid>.sock`) to call the desktop's `set_session_title`
+for itself, then waits up to 2 minutes for the desktop to record it (the unit's
+`TimeoutStopSec` is 5 minutes). A title set that way is the desktop's "set by an agent", which its
+own titling never overwrites.
+
 The desktop's import takes the session's model from the transcript's last reply and falls back to
 its own default model without one. So beekeeper imports the session only once the transcript
 holds its first reply and has stayed unchanged for 2 seconds (up to 5 minutes), and says which

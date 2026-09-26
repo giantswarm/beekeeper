@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A started session keeps its name as its desktop title after its first turn: the desktop handles each resume link twice and, when both deliveries import, keeps an untitled record (default name `<dir>-<n>` in ListAgents). `agents reopen` now checks the desktop's record once the first turn ended and, when the name is missing, has the session set it with the desktop's `set_session_title` through its desktop CLI's socket, waiting for the desktop to record it; the unit's `TimeoutStopSec` is 5 minutes for that.
+
 ### Added
 
 - `beekeeper reporter final <time>` schedules one last report outside the slots (covering the time since the last one) and pauses the schedule with its start; `reporter pause` pauses at once and `reporter resume` ends the pause, the current slot's report starting at the next poll. The state's `reportPause` field is new; older binaries carry it unchanged.

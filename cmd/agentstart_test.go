@@ -188,9 +188,9 @@ func TestReopensOnlyAStartTheRosterHolds(t *testing.T) {
 		Starts: []state.Start{{Party: state.Party{Session: "on"}}, {Party: state.Party{Session: "handed"}}},
 		Agents: []state.Agent{{Party: state.Party{Session: "on", Name: "test: on"}}, {Party: state.Party{Session: "desk", Name: "test: desk"}}},
 	}
-	for id, want := range map[string]bool{"on": true, "handed": false, "desk": false, "none": false} {
-		if got := reopens(st, id); got != want {
-			t.Errorf("reopens(%q) = %v, want %v", id, got, want)
+	for id, want := range map[string]string{"on": "test: on", "handed": "", "desk": "", "none": ""} {
+		if got, ok := reopens(st, id); got != want || ok != (want != "") {
+			t.Errorf("reopens(%q) = %q, %v, want %q", id, got, ok, want)
 		}
 	}
 }
@@ -280,8 +280,8 @@ func userCommand(name string, args ...string) ([]byte, error) {
 func TestTitleLine(t *testing.T) {
 	for _, c := range []struct{ title, want string }{
 		{"Board pull 3", `the desktop titled it "Board pull 3"`},
-		{"", `the desktop recorded no title: the sidebar shows it untitled, not as "Board pull 3"`},
-		{"General coding session", `the desktop titled it "General coding session", not "Board pull 3"`},
+		{"", `the desktop recorded no title: the sidebar shows it untitled, not as "Board pull 3", until the session retitles itself after its first turn`},
+		{"General coding session", `the desktop titled it "General coding session", not "Board pull 3", until the session retitles itself after its first turn`},
 	} {
 		if got := titleLine("Board pull 3", c.title); got != c.want {
 			t.Errorf("titleLine(%q) = %q, want %q", c.title, got, c.want)
