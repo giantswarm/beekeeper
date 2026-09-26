@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -185,5 +187,48 @@ func TestReopensOnlyAStartTheRosterHolds(t *testing.T) {
 		if got := reopens(st, id); got != want {
 			t.Errorf("reopens(%q) = %v, want %v", id, got, want)
 		}
+	}
+}
+
+// A first turn that grew the transcript past the desktop import's window
+// leaves the title -n wrote at its start out of reach: titleTranscript puts
+// the name in the window's last custom-title line, and the reply's model
+// stays readable.
+func TestTitleTranscriptReachesTheImportWindow(t *testing.T) {
+	projects := t.TempDir()
+	dir := filepath.Join(projects, "-home-x")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := titleTranscript(projects, "id", "Guide run 2"); err == nil {
+		t.Error("titling a session without a transcript: no error")
+	}
+	path := filepath.Join(dir, "id.jsonl")
+	turn := `{"type":"custom-title","customTitle":"Guide run 2","sessionId":"id"}` + "\n" +
+		strings.Repeat(`{"type":"attachment","content":"`+strings.Repeat("x", 1000)+`"}`+"\n", importTitleWindow/1000+10) +
+		`{"type":"assistant","message":{"model":"claude-haiku-4-5-20251001"}}` + "\n"
+	if err := os.WriteFile(path, []byte(turn), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := titleTranscript(projects, "id", `Guide run 2: Timo's "open" decisions`); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	window := raw[len(raw)-importTitleWindow:]
+	lines := strings.Split(strings.TrimSpace(string(window)), "\n")
+	var title struct {
+		Type        string `json:"type"`
+		CustomTitle string `json:"customTitle"`
+		SessionID   string `json:"sessionId"`
+	}
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &title); err != nil || title.Type != "custom-title" ||
+		title.CustomTitle != `Guide run 2: Timo's "open" decisions` || title.SessionID != "id" {
+		t.Errorf("the import window's last line = %q (%v)", lines[len(lines)-1], err)
+	}
+	if model, err := claude.Model(path); err != nil || model != "claude-haiku-4-5-20251001" {
+		t.Errorf("the titled transcript's model = %q, %v", model, err)
 	}
 }

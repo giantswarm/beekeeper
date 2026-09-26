@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `agents start` and `agents handover` give the imported desktop session the agent's name as its sidebar title. The desktop's import reads the title only from the transcript's last 256 KiB, and a first turn that grew past it left the name `-n` wrote at the start out of reach, so the session showed untitled; beekeeper now appends the name's `custom-title` line right before the import.
 - After a reboot the standby watch reopens the recorded supervisor's desktop session when no running spare can take over. The app starts at login before the watch's first poll, which first saw the supervisor's CLI gone only then, so the app looked started before the CLI stopped and the reopen never fired. The watch now also reopens when it never saw that CLI run under the running app.
 - `watch` settles a running merge whose gate process is gone (`MERGE LOST`, a `merge.lost` event) instead of leaving it running until the lane's next gate call; `lanes clear` drops such a merge too.
 - `agents handover` sends the note request to the name the agent's running CLI answers peer messages under (an imported session's desktop derives one, such as `w-c2`), not the roster name, which no CLI answers to.

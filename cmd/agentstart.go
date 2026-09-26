@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -55,8 +56,10 @@ id and mode as one of its starts and registers it on the roster under
 open task of a stopped session's entry under that name, which it takes
 over), so the roster shows it at work from its start. Once the
 transcript holds the first reply it imports the session into Claude Desktop
-(claude://resume?session=<id>): it shows in the sidebar as local_<id> and
-takes messages there. The import switches the desktop's main window to the
+(claude://resume?session=<id>): it shows in the sidebar as local_<id>,
+titled with <name> (beekeeper appends the name's custom-title line to the
+transcript first, within the last 256 KiB the import reads), and takes
+messages there. The import switches the desktop's main window to the
 new session; beekeeper switches it back to the session it showed before
 (claude://code/continue), so the person working there stays on it.
 
@@ -186,6 +189,9 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	}
 	if err := awaitReply(ctx, a.cfg.Claude.ProjectsDir, id, func() bool { return unitEnded(ctx, unit) }, replyQuiet, replyWait); err != nil {
 		return startedAgent{}, fmt.Errorf("%w, not imported into the desktop: journalctl --user -u %s", err, unit)
+	}
+	if err := titleTranscript(a.cfg.Claude.ProjectsDir, id, sp.name); err != nil {
+		return startedAgent{}, fmt.Errorf("%w, not imported into the desktop", err)
 	}
 	var follow string
 	if sp.replaces != nil {
@@ -554,6 +560,39 @@ func awaitReply(ctx context.Context, projectsDir, id string, ended func() bool, 
 		case <-tick.C:
 		}
 	}
+}
+
+// importTitleWindow is how much of a transcript's end Claude Desktop's
+// import reads for the session's title (its last custom-title line).
+const importTitleWindow = 256 << 10
+
+// titleTranscript appends the session's name as its title to its transcript,
+// the line the desktop's own rename writes, so that the import finds it: -n
+// writes it once at the start, and a first turn that grew the transcript
+// past importTitleWindow left the session untitled in the sidebar. One
+// append of one line, as the running CLI appends its own.
+func titleTranscript(projectsDir, id, name string) error {
+	m, _ := filepath.Glob(filepath.Join(projectsDir, "*", id+".jsonl"))
+	if len(m) == 0 {
+		return fmt.Errorf("session %s has no transcript to title", id)
+	}
+	line, err := json.Marshal(struct {
+		Type        string `json:"type"`
+		CustomTitle string `json:"customTitle"`
+		SessionID   string `json:"sessionId"`
+	}{"custom-title", name, id})
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(m[0], os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		return fmt.Errorf("titling session %s: %w", id, err)
+	}
+	if _, err := f.Write(append(line, '\n')); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("titling session %s: %w", id, err)
+	}
+	return f.Close()
 }
 
 // unitEnded reports whether the transient unit has ended.
