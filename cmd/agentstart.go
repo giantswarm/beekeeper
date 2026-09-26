@@ -499,12 +499,14 @@ func briefTask(brief string) string {
 }
 
 // agentArgv is the started session's command line: one headless turn in
-// bypassPermissions under the id beekeeper recorded.
-func agentArgv(bin, id, name, model, brief string) []string {
+// bypassPermissions under the id beekeeper recorded; flags go before the
+// brief.
+func agentArgv(bin, id, name, model, brief string, flags ...string) []string {
 	argv := []string{bin, "-p", sessionIDFlag, id, "--permission-mode", state.ModeBypass, "-n", name}
 	if model != "" {
 		argv = append(argv, "--model", model)
 	}
+	argv = append(argv, flags...)
 	return append(argv, "--", brief)
 }
 

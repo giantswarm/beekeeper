@@ -58,6 +58,7 @@ the budget work on any system.
 | `beekeeper agents handover <agent> [--prompt] [--model m] [--dir d]` | Hands a registered agent over to a fresh session near its context limit, one line per step: asks it by peer message for `beekeeper agents note "<what is in flight, what is next>"` (waiting `agents.noteWait` at most), builds the follow-up's prompt, starts the follow-up as `agents start` does under the agent's name (it takes over the roster entry, the task and the session record), stops the old session's CLI and the processes under it by PID (a `claude --bg` session through `claude stop` first, so its daemon does not resume it), and logs `agents.handover`. `--prompt` prints the prompt only. `watch` says `HANDOVER DUE` once per agent session at `agents.relayAt`. See [Agents handed over near their context limit](#agents-handed-over-near-their-context-limit). |
 | `beekeeper agents note <text>` | The calling agent's hand-over note, logged as an `agents.note` event; the next `agents handover` puts the latest one into the follow-up's prompt. |
 | `beekeeper note add\|answer\|done` | Open items that outlive a session: a decision waiting on a person with its deadline and what happens if nobody answers (`note add --for Timo --due 22:55 --default "the alert stays as is" <text>`), a deadline. `watch` reports a note once when it is due. `note answer <id> <answer>` records the person's answer word for word and closes the note; the `note.answered` event carries it for the owning session, the supervisor and the guide's feed. |
+| `beekeeper reporter check` | Checks a report on stdin as the reporter's post hook does (see [The scheduled status reporter](#the-scheduled-status-reporter)): one line per problem and exit 3, or `ok`. |
 | `beekeeper reporter` | The scheduled status reporter (see [The scheduled status reporter](#the-scheduled-status-reporter)): its schedule, when the next one starts, and the current or last run with its outcome. |
 | `beekeeper timer add\|done\|list` | Times to look at something: `timer add 22:55 "check the rollout"` (or a duration, `45m`). `watch` prints one line when a timer is due; it stays open until `timer done`. |
 | `beekeeper sessions serve\|unserve` | A record for any session, registered agent or not: `sessions serve <session> <owner/repo#n> [--waits "<what>"]`, the issue or epic it serves and what it waits on. `sessions` and `handover` show it; `watch` prints one line when the session ends, naming the issue to re-query. |
@@ -455,8 +456,16 @@ multiples (on the hour for `1h`), whether or not a supervisor runs:
    line. Its prompt names `reporter.person` and the interval it covers, then the brief. It is not
    imported into the desktop: the command-line turn has the claude.ai connectors, and the person's
    window is not switched every hour. `reporter.start` in the log, one watch line.
-2. **The post.** The session posts its report itself, with the Slack connector. beekeeper sees it in
-   the session's transcript: a `slack_send_message` call that returned without an error.
+2. **The post.** The session posts its report itself, with the Slack connector. Its prompt gives the
+   time range in the person's time zone, the machine's, read for each run as `timedatectl` sets it
+   (a running watch keeps no stale zone). The session starts with `--settings` adding a PreToolUse
+   hook on `slack_send_message` (`beekeeper hook reportcheck`) that refuses a post failing
+   `beekeeper reporter check`, with what to fix: the connector takes standard Markdown, so every pull
+   request or issue is a link `[<repo>#<n>](https://github.com/<owner>/<repo>/pull/<n>)` whose label
+   names the repository and number it links; no bare `#<n>` or `repo#<n>` (`note #<n>` and
+   `timer #<n>` are beekeeper's own), no Slack `<url|label>` syntax, a first line naming the
+   zone (`EEST`), no time in UTC. beekeeper sees the post in the session's transcript: a
+   `slack_send_message` call that returned without an error.
 3. **The end.** Once it posted, beekeeper takes the reporter off the roster and stops what still
    runs of its turn by PID (SIGTERM, then SIGKILL after 10 s): `reporter.posted`. A turn that
    ended without a post is ended the same way (`reporter.unposted`), and one that has not posted

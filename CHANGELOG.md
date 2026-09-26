@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The scheduled reporter's post is checked before it goes out: `beekeeper reporter check` (new, stdin) and the PreToolUse hook `beekeeper hook reportcheck` (new), which beekeeper adds to each reporter session with `--settings`, refuse a `slack_send_message` whose message has a bare `#<n>` or `repo#<n>`, a pull request or issue link whose label does not name its repository and number, Slack's `<url|label>` syntax (the connector takes Markdown), a first line that does not name the machine's time zone, or a time in UTC; the reason lists what to fix. The reporter's prompt gives the time range in the machine's time zone, read for each run.
+
 ### Fixed
 
 - A lifted upgrade hold stays lifted: `hold lift upgrade:<installation>/<cluster>` records the lift (who, when) on the hold instead of deleting it, and the watch no longer sets the hold again while that upgrade (installation, cluster, target release) runs. The lift ends with the upgrade; a different target release holds the installation again. The gate and lease claims let work through meanwhile, and `hold list` and `status` show the lifted hold with who lifted it.

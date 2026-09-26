@@ -3,10 +3,14 @@ package cmd
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,13 +18,12 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/post"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
-
-// postTool is the suffix of the tool whose successful call is the report
-// posted: the Slack connector's slack_send_message.
-const postTool = "slack_send_message"
 
 // reporterParty is who the standby watch's reporter events are by.
 var reporterParty = state.Party{Name: "beekeeper reporter"}
@@ -110,7 +113,7 @@ func (w *watcher) reportPosted(id string) bool {
 	if len(m) == 0 {
 		return false
 	}
-	ok, _ := claude.Called(m[0], postTool) // unreadable: not yet
+	ok, _ := claude.Called(m[0], guard.PostTool) // unreadable: not yet
 	return ok
 }
 
@@ -124,9 +127,17 @@ func (w *watcher) startReport(ctx context.Context, sessions []*claude.Session) e
 	if err != nil {
 		return err
 	}
+	readZone := w.zone
+	if readZone == nil {
+		readZone = machine.Zone
+	}
+	zone, err := readZone()
+	if err != nil {
+		return err
+	}
 	slot := reportSlot(rc.Every.Duration, w.now)
 	id := uuid.NewString()
-	p := state.Party{Session: id, Name: "Status report " + slot.Local().Format("15:04")}
+	p := state.Party{Session: id, Name: "Status report " + slot.In(zone).Format("15:04")}
 	unit := "beekeeper-report-" + id[:8]
 	live := func(x state.Party) bool {
 		_, ok := claude.Live(sessions, x)
@@ -153,7 +164,7 @@ func (w *watcher) startReport(ctx context.Context, sessions []*claude.Session) e
 	if run == nil {
 		run = w.launchReport
 	}
-	if err := run(unit, id, p.Name, reportPrompt(rc, slot, brief)); err != nil {
+	if err := run(unit, id, p.Name, reportPrompt(rc, slot, zone, brief)); err != nil {
 		w.endReport(ctx, "failed", err.Error())
 		return err
 	}
@@ -162,22 +173,48 @@ func (w *watcher) startReport(ctx context.Context, sessions []*claude.Session) e
 }
 
 // launchReport runs the reporter's turn in its transient user unit, with no
-// ExecStopPost: nothing reopens it in the desktop.
+// ExecStopPost: nothing reopens it in the desktop. Its settings add the
+// report check as a PreToolUse hook on the post, for this session only.
 func (w *watcher) launchReport(unit, id, name, prompt string) error {
 	bin, err := exec.LookPath("claude")
 	if err != nil {
 		return err
 	}
-	return launch(unit, w.cfg.Reporter.Dir, w.explicitConfig(), nil, agentArgv(bin, id, name, w.cfg.Reporter.Model, prompt))
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	return launch(unit, w.cfg.Reporter.Dir, w.explicitConfig(), nil,
+		agentArgv(bin, id, name, w.cfg.Reporter.Model, prompt, "--settings", reportSettings(self)))
 }
 
-// reportPrompt is the reporter's first prompt: who the report is for and
-// what it covers, then the brief.
-func reportPrompt(rc config.Reporter, slot time.Time, brief string) string {
-	return fmt.Sprintf("You are beekeeper's scheduled status reporter. Report the last %s (since %s) to %s, "+
-		"posted exactly once. Once the post has gone out, end your turn: beekeeper sees the post, "+
+// hookTypeCommand is a settings hook that runs a command.
+const hookTypeCommand = "command"
+
+// reportSettings are the reporter session's added settings: the PreToolUse
+// hook that denies a post failing the report check.
+func reportSettings(self string) string {
+	hook := map[string]any{"type": hookTypeCommand, "command": guard.ShellQuote(self) + " hook reportcheck", "timeout": 10}
+	raw, _ := json.Marshal(map[string]any{"hooks": map[string]any{
+		"PreToolUse": []any{map[string]any{"matcher": ".*" + guard.PostTool, "hooks": []any{hook}}},
+	}})
+	return string(raw)
+}
+
+// reportPrompt is the reporter's first prompt: who the report is for, what
+// it covers in the person's time zone (the machine's), and how the post must
+// look, then the brief.
+func reportPrompt(rc config.Reporter, slot time.Time, zone *time.Location, brief string) string {
+	from, to := slot.Add(-rc.Every.Duration).In(zone), slot.In(zone)
+	span := from.Format("15:04") + "–" + to.Format("15:04 MST")
+	return fmt.Sprintf("You are beekeeper's scheduled status reporter. Report the last %s (%s) to %s, "+
+		"posted exactly once. Its first line gives the range %s; every time in the post is in %s (%s), never UTC. "+
+		"The connector's message is standard Markdown, which it converts for Slack: every pull request or issue is a link "+
+		"to it in its own repository, [<repo>#<n>](https://github.com/<owner>/<repo>/pull/<n>), never a bare #<n>: "+
+		"check the text with `beekeeper reporter check` (it reads stdin) before posting; a post that fails the check is refused "+
+		"with what to fix. Once the post has gone out, end your turn: beekeeper sees the post, "+
 		"takes you off the roster and stops this session.\n\n%s",
-		dur(rc.Every.Duration), slot.Add(-rc.Every.Duration).Local().Format("15:04"), rc.Person, brief)
+		dur(rc.Every.Duration), span, rc.Person, span, zone, to.Format("MST"), brief)
 }
 
 // skipReport records, once per slot, that the slot's reporter was not
@@ -258,7 +295,7 @@ func turnPIDs(t *proc.Table, id string) []int {
 }
 
 func (a *app) reporterCmd() *cobra.Command {
-	return &cobra.Command{
+	c := &cobra.Command{
 		Use:   "reporter",
 		Short: "The scheduled status reporter: its schedule, the current or last run",
 		Long: `The standby watch (watch --standby, beekeeper-notify.service) starts a
@@ -301,4 +338,36 @@ and the watch. While a reporter runs, the next slot is skipped, once.`,
 			return err
 		},
 	}
+	c.AddCommand(&cobra.Command{
+		Use:   "check",
+		Short: "Check a report on stdin: every pull request and issue linked to its repository, the times in the machine's zone",
+		Long: `check reads a report from stdin and prints what is wrong with it, one
+line each, exiting 3; a report that passes prints "ok". It is the check
+the reporter's post passes: a reporter session's slack_send_message is
+refused by its PreToolUse hook (beekeeper hook reportcheck) until the
+message passes. The Slack connector takes standard Markdown and converts
+it for Slack, so links are [label](url). It refuses Slack's own <url|label>
+syntax, every #<n> or [owner/]repo#<n> outside a link ("note #<n>" and
+"timer #<n>" are beekeeper's own and pass), a GitHub pull request or issue
+link whose label does not name its repository and number, a first line
+that does not name the machine's time zone (read live, as timedatectl sets
+it), and a time in UTC.`,
+		Args: cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			raw, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				return err
+			}
+			zone, err := machine.Zone()
+			if err != nil {
+				return err
+			}
+			if p := post.Report(string(raw), zone, time.Now()); len(p) > 0 {
+				return refused("%s", strings.Join(p, "\n"))
+			}
+			_, err = fmt.Fprintln(a.out, "ok")
+			return err
+		},
+	})
+	return c
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/post"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -167,6 +168,33 @@ Register it in ~/.claude/settings.json:
 				_, _ = a.out.Write(out)
 			}
 			return nil
+		},
+	})
+	c.AddCommand(&cobra.Command{
+		Use:   "reportcheck",
+		Short: "The scheduled reporter's PreToolUse hook: a post that fails the report check is refused",
+		Long: `reportcheck reads a PreToolUse event on stdin and refuses a
+slack_send_message whose message fails beekeeper reporter check, with what
+to fix as the reason; every other call passes. beekeeper starts each
+scheduled reporter session with it in its --settings; it is never
+registered in the person's settings.`,
+		Args: cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			raw, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				return err
+			}
+			check := func(msg string) []string {
+				zone, err := machine.Zone()
+				if err != nil {
+					return []string{err.Error()}
+				}
+				return post.Report(msg, zone, time.Now())
+			}
+			if out := guard.ReportCheck(raw, check); out != nil {
+				_, err = a.out.Write(out)
+			}
+			return err
 		},
 	})
 	c.AddCommand(&cobra.Command{

@@ -389,7 +389,7 @@ func permissionHook(userSettings, dir string) (files []string, ok bool) {
 				continue
 			}
 			for _, hk := range m.Hooks {
-				if hk.Type == "command" && strings.Contains(hk.Command, "beekeeper") && strings.Contains(hk.Command, "hook permissionrequest") {
+				if hk.Type == hookTypeCommand && strings.Contains(hk.Command, "beekeeper") && strings.Contains(hk.Command, "hook permissionrequest") {
 					return files, true
 				}
 			}
