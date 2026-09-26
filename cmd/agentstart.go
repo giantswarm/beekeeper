@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -39,6 +40,9 @@ const (
 	focusWait = 15 * time.Second
 	// twinWait bounds the wait for the CLI the desktop warms for an import.
 	twinWait = 15 * time.Second
+	// stopPostWait bounds the reopen after the first turn: the desktop's
+	// CLI, the retitle request and the desktop recording the title.
+	stopPostWait = 5 * time.Minute
 )
 
 func (a *app) agentStartCmd() *cobra.Command {
@@ -60,7 +64,10 @@ transcript holds the first reply it imports the session into Claude Desktop
 titled with <name> (beekeeper appends the name's custom-title line to the
 transcript first, within the last 256 KiB the import reads, and freezes the
 first turn's unit until the desktop recorded the session, so the transcript
-does not change under the import), and takes messages there. The import switches the desktop's main window to the
+does not change under the import), and takes messages there. The desktop
+handles the link twice and sometimes keeps an untitled record: once the
+first turn has ended, beekeeper has the session set its own title with the
+desktop's set_session_title. The import switches the desktop's main window to the
 new session; beekeeper switches it back to the session it showed before
 (claude://code/continue), so the person working there stays on it.
 
@@ -360,9 +367,9 @@ func titleLine(name, title string) string {
 	case name:
 		return fmt.Sprintf("the desktop titled it %q", title)
 	case "":
-		return fmt.Sprintf("the desktop recorded no title: the sidebar shows it untitled, not as %q", name)
+		return fmt.Sprintf("the desktop recorded no title: the sidebar shows it untitled, not as %q, until the session retitles itself after its first turn", name)
 	}
-	return fmt.Sprintf("the desktop titled it %q, not %q", title, name)
+	return fmt.Sprintf("the desktop titled it %q, not %q, until the session retitles itself after its first turn", title, name)
 }
 
 // twinLine says whether the first turn is the session's only CLI.
@@ -438,7 +445,8 @@ func (a *app) agentReopenCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if !reopens(st, id) {
+			name, ok := reopens(st, id)
+			if !ok {
 				_, err := fmt.Fprintf(a.out, "reopen: %s is no start on the roster, left closed\n", id)
 				return err
 			}
@@ -453,18 +461,31 @@ func (a *app) agentReopenCmd() *cobra.Command {
 			if _, err := a.showBriefly(cmd.Context(), continueURL("local_"+id), "local_"+id, "", true); err != nil {
 				return fmt.Errorf("reopening %s in the desktop: %w", id, err)
 			}
-			_, err = fmt.Fprintf(a.out, "reopen: showed local_%s in the desktop, which warms its CLI\n", id)
+			if _, err := fmt.Fprintf(a.out, "reopen: showed local_%s in the desktop, which warms its CLI\n", id); err != nil {
+				return err
+			}
+			line, err := a.keepTitle(cmd.Context(), id, name)
+			if err != nil {
+				return fmt.Errorf("reopen: %w", err)
+			}
+			_, err = fmt.Fprintln(a.out, "reopen: "+line)
 			return err
 		},
 	}
 }
 
 // reopens reports whether the session id is one of beekeeper's starts that a
-// roster entry still holds.
-func reopens(st *state.State, id string) bool {
+// roster entry still holds, and the entry's name, the session's title.
+func reopens(st *state.State, id string) (string, bool) {
+	if !slices.ContainsFunc(st.Starts, func(s state.Start) bool { return s.Session == id }) {
+		return "", false
+	}
 	p := state.Party{Session: id}
-	return slices.ContainsFunc(st.Starts, func(s state.Start) bool { return s.Session == id }) &&
-		slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) })
+	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) })
+	if i < 0 {
+		return "", false
+	}
+	return st.Agents[i].Name, true
 }
 
 // awaitFocus reports whether the desktop's main window shows host within
@@ -575,7 +596,8 @@ func agentArgv(bin, id, name, model, brief string, flags ...string) []string {
 func launch(unit, dir, config string, stopPost, argv []string) error {
 	args := []string{"--user", "--collect", "--quiet", "--unit=" + unit, "-p", "KillMode=process", "--working-directory=" + dir}
 	if len(stopPost) > 0 {
-		args = append(args, "-p", "ExecStopPost="+strings.Join(stopPost, " "))
+		// The reopen may wait for the session to retitle itself.
+		args = append(args, "-p", "ExecStopPost="+strings.Join(stopPost, " "), "-p", "TimeoutStopSec="+strconv.Itoa(int(stopPostWait.Seconds())))
 	}
 	if config != "" {
 		args = append(args, "--setenv=BEEKEEPER_CONFIG="+config)
