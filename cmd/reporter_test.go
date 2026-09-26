@@ -3,8 +3,10 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -62,8 +64,9 @@ func reportingWatch(t *testing.T, dir string) (*watcher, *[]string, *bytes.Buffe
 	w.now = reportNow
 	var launched []string
 	w.turnEnded = func(context.Context, string) bool { return false }
+	w.zone = func() (*time.Location, error) { return time.LoadLocation("Europe/Athens") }
 	w.runReport = func(unit, id, name, prompt string) error {
-		if !strings.HasPrefix(unit, "beekeeper-report-"+id[:8]) || !strings.Contains(prompt, "to Ada") || !strings.HasSuffix(prompt, "Post it.") {
+		if !strings.HasPrefix(unit, "beekeeper-report-"+id[:8]) || !strings.Contains(prompt, "to Ada") || !strings.Contains(prompt, "–"+strings.TrimPrefix(name, "Status report ")+" EEST; every time in the post is in Europe/Athens") || !strings.Contains(prompt, "beekeeper reporter check") || !strings.HasSuffix(prompt, "Post it.") {
 			t.Errorf("launch %s %s %q", unit, name, prompt)
 		}
 		launched = append(launched, name)
@@ -79,8 +82,8 @@ func TestReporterStartsOncePerSlotAcrossWatches(t *testing.T) {
 	ctx := context.Background()
 	a.tendReporter(ctx, nil)
 	b.tendReporter(ctx, nil)
-	if len(*la)+len(*lb) != 1 {
-		t.Fatalf("started %v and %v, want one reporter", *la, *lb)
+	if names := append(*la, *lb...); len(names) != 1 || names[0] != "Status report 02:00" {
+		t.Fatalf("started %v and %v, want one reporter, Status report 02:00", *la, *lb)
 	}
 	st, err := a.store.Read()
 	if err != nil {
@@ -224,5 +227,26 @@ func TestStoppedAgentsLeaveTheRunningReporterOut(t *testing.T) {
 	w.stoppedAgents(st, nil)
 	if out.Len() != 0 {
 		t.Errorf("the running reporter said stopped:\n%s", out)
+	}
+}
+
+func TestReportSettings(t *testing.T) {
+	var s struct {
+		Hooks struct {
+			PreToolUse []struct {
+				Matcher string `json:"matcher"`
+				Hooks   []struct {
+					Type, Command string
+				} `json:"hooks"`
+			} `json:"PreToolUse"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal([]byte(reportSettings("/bin/bee keeper")), &s); err != nil {
+		t.Fatal(err)
+	}
+	pre := s.Hooks.PreToolUse
+	if len(pre) != 1 || !regexp.MustCompile("^(?:"+pre[0].Matcher+")$").MatchString("mcp__claude_ai_Slack__slack_send_message") ||
+		len(pre[0].Hooks) != 1 || pre[0].Hooks[0].Command != "'/bin/bee keeper' hook reportcheck" {
+		t.Errorf("settings = %+v", s)
 	}
 }

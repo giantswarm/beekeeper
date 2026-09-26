@@ -169,6 +169,8 @@ type watcher struct {
 	runReport func(unit, id, name, prompt string) error
 	// turnEnded reports whether a reporter's unit ended; nil is unitEnded.
 	turnEnded func(context.Context, string) bool
+	// zone reads the person's time zone; nil is machine.Zone.
+	zone func() (*time.Location, error)
 	// readHRs reads a lane installation's HelmReleases; nil is kubectl.
 	readHRs func(context.Context, config.Lane) ([]merge.HelmRelease, error)
 }

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The scheduled reporter's post is checked before it goes out: `beekeeper reporter check` (new, stdin) and the PreToolUse hook `beekeeper hook reportcheck` (new), which beekeeper adds to each reporter session with `--settings`, refuse a `slack_send_message` whose message has a bare `#<n>` or `repo#<n>`, a pull request or issue link whose label does not name its repository and number, Slack's `<url|label>` syntax (the connector takes Markdown), a first line that does not name the machine's time zone, or a time in UTC; the reason lists what to fix. The reporter's prompt gives the time range in the machine's time zone, read for each run.
+
 ### Fixed
 
 - `agents start` and `agents handover` freeze the first turn's unit (`systemctl --user freeze`) while the desktop imports the session and thaw it once the desktop recorded it. The import reads the transcript's identity and then its end for title and model, and drops that read when the transcript changed in between, so a first turn that wrote meanwhile (a restart or takeover under an existing name most often) left the session untitled in the sidebar and without a model. Both commands now print the title the desktop recorded.
