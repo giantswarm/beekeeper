@@ -79,6 +79,14 @@ empty): the merge stays in `lanes` as `retrying`, and the next gate call for it 
 queue rule itself is tested by replaying a real event trail (`internal/merge/testdata/*.jsonl`,
 the sessions' ids left out) through `merge.Queue`, `Lane.Ahead` and `merge.Failed`.
 
+A merge that outlives its caller is proven the same way: a fake devctl that sleeps before its
+document, the gate started under `setsid zsh -c '…'` with its PIDs captured at spawn, then
+`kill -HUP` and `kill -TERM` to the caller's process group mid-merge. The shell dies, devctl (in a
+session of its own, `ps -o sid=`) and the gate run on and log `merged`. A `kill -KILL` to the whole
+group, the gate included, leaves devctl running: `watch --once` does not call the merge lost until
+devctl ended. Live, a background `devctl pr merge` of a docs pull request whose command is stopped
+while it waits for the checks is logged `merged` once the checks pass.
+
 `lanes settle` and the gate's check of a settled outside merge ask GitHub through `gh pr view
 <n> --repo <owner/repo> --json state,mergedAt`; a fake `gh` first on `PATH` that prints
 `{"state":"OPEN","mergedAt":null}` (or `MERGED` with a time, or `CLOSED`) from a file and hands
