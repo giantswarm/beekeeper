@@ -58,8 +58,9 @@ over), so the roster shows it at work from its start. Once the
 transcript holds the first reply it imports the session into Claude Desktop
 (claude://resume?session=<id>): it shows in the sidebar as local_<id>,
 titled with <name> (beekeeper appends the name's custom-title line to the
-transcript first, within the last 256 KiB the import reads), and takes
-messages there. The import switches the desktop's main window to the
+transcript first, within the last 256 KiB the import reads, and freezes the
+first turn's unit until the desktop recorded the session, so the transcript
+does not change under the import), and takes messages there. The import switches the desktop's main window to the
 new session; beekeeper switches it back to the session it showed before
 (claude://code/continue), so the person working there stays on it.
 
@@ -94,6 +95,9 @@ desktop starts a new CLI when the person opens the session.`,
 				_, err = fmt.Fprintf(a.out, "the desktop still shows %s\n", sa.kept)
 			}
 			if err == nil {
+				_, err = fmt.Fprintln(a.out, titleLine(name, sa.title))
+			}
+			if err == nil {
 				_, err = fmt.Fprintln(a.out, modelLine(sa.model))
 			}
 			if err == nil {
@@ -124,6 +128,8 @@ type startedAgent struct {
 	// kept is the session the desktop showed before the import and shows
 	// again after it; empty when there was none to go back to.
 	kept string
+	// title is the title the desktop recorded, the sidebar's; empty: none.
+	title string
 	// model is the model the desktop recorded for the session's later
 	// turns; empty: none, they run on the desktop's default.
 	model string
@@ -190,20 +196,59 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if err := awaitReply(ctx, a.cfg.Claude.ProjectsDir, id, func() bool { return unitEnded(ctx, unit) }, replyQuiet, replyWait); err != nil {
 		return startedAgent{}, fmt.Errorf("%w, not imported into the desktop: journalctl --user -u %s", err, unit)
 	}
-	if err := titleTranscript(a.cfg.Claude.ProjectsDir, id, sp.name); err != nil {
-		return startedAgent{}, fmt.Errorf("%w, not imported into the desktop", err)
-	}
 	var follow string
 	if sp.replaces != nil {
 		follow = sp.replaces.HostSession
 	}
-	kept, err := a.importSession(ctx, id, follow)
+	sa := startedAgent{id: id, unit: unit, dir: dir, task: reg.task}
+	err = whileFrozen(ctx, unit, func() error {
+		if err := titleTranscript(a.cfg.Claude.ProjectsDir, id, sp.name); err != nil {
+			return fmt.Errorf("%w, not imported into the desktop", err)
+		}
+		var err error
+		if sa.kept, err = a.importSession(ctx, id, follow); err != nil {
+			return err
+		}
+		if r := a.desktopRecord(ctx, "local_"+id); r != nil {
+			sa.title, sa.model = r.Title, r.Model
+		}
+		return nil
+	})
 	if err != nil {
 		return startedAgent{}, err
 	}
-	sa := startedAgent{id: id, unit: unit, dir: dir, task: reg.task, kept: kept, model: a.desktopModel(ctx, "local_"+id)}
 	sa.twin, err = endDesktopTwin(ctx, id)
 	return sa, err
+}
+
+// whileFrozen runs fn with the first turn's unit frozen, and thaws it once
+// fn returned, whatever fn returned. The desktop's import reads the
+// transcript's identity and then its end for the session's title and model,
+// and drops that read when the transcript changed in between: a first turn
+// that appends a line meanwhile leaves the import untitled, without a model.
+// A unit no longer active (its first turn ended, or is ending) has no
+// writer and is not frozen.
+func whileFrozen(ctx context.Context, unit string, fn func() error) error {
+	if err := systemctlUser(ctx, "freeze", unit); err != nil {
+		if unitState(ctx, unit) != "active" {
+			return fn()
+		}
+		return fmt.Errorf("freezing %s for the import: %w", unit, err)
+	}
+	err := fn()
+	if terr := systemctlUser(context.WithoutCancel(ctx), "thaw", unit); terr != nil {
+		err = errors.Join(err, fmt.Errorf("thawing %s: %w (systemctl --user thaw %s resumes its first turn)", unit, terr, unit))
+	}
+	return err
+}
+
+// systemctlUser runs one systemctl --user verb on unit.
+func systemctlUser(ctx context.Context, verb, unit string) error {
+	out, err := exec.CommandContext(ctx, "systemctl", "--user", verb, unit).CombinedOutput() //nolint:gosec // the unit beekeeper named
+	if err != nil {
+		return fmt.Errorf("systemctl --user %s: %w: %s", verb, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // endDesktopTwin stops the CLI the desktop warms for an imported session
@@ -290,23 +335,34 @@ func resumes(args []string, id string) bool {
 	return false
 }
 
-// desktopModel is the model of host's desktop record, waiting up to
-// focusWait for the desktop to write it.
-func (a *app) desktopModel(ctx context.Context, host string) string {
+// desktopRecord is host's desktop record, waiting up to focusWait for the
+// desktop to write it; nil when it wrote none.
+func (a *app) desktopRecord(ctx context.Context, host string) *claude.Record {
 	ctx, cancel := context.WithTimeout(ctx, focusWait)
 	defer cancel()
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
 	for {
 		if r, ok := claude.ReadRecord(a.cfg, host); ok {
-			return r.Model
+			return r
 		}
 		select {
 		case <-ctx.Done():
-			return ""
+			return nil
 		case <-tick.C:
 		}
 	}
+}
+
+// titleLine says which title the sidebar shows the session under.
+func titleLine(name, title string) string {
+	switch title {
+	case name:
+		return fmt.Sprintf("the desktop titled it %q", title)
+	case "":
+		return fmt.Sprintf("the desktop recorded no title: the sidebar shows it untitled, not as %q", name)
+	}
+	return fmt.Sprintf("the desktop titled it %q, not %q", title, name)
 }
 
 // twinLine says whether the first turn is the session's only CLI.
@@ -610,7 +666,12 @@ func titleTranscript(projectsDir, id, name string) error {
 
 // unitEnded reports whether the transient unit has ended.
 func unitEnded(ctx context.Context, unit string) bool {
-	out, _ := exec.CommandContext(ctx, "systemctl", "--user", "show", "-p", "ActiveState", "--value", unit).Output() //nolint:gosec // the unit beekeeper named
-	s := strings.TrimSpace(string(out))
+	s := unitState(ctx, unit)
 	return s == "inactive" || s == "failed"
+}
+
+// unitState is the transient unit's ActiveState; empty when unreadable.
+func unitState(ctx context.Context, unit string) string {
+	out, _ := exec.CommandContext(ctx, "systemctl", "--user", "show", "-p", "ActiveState", "--value", unit).Output() //nolint:gosec // the unit beekeeper named
+	return strings.TrimSpace(string(out))
 }

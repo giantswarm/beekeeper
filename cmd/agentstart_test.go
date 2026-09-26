@@ -1,14 +1,19 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -230,5 +235,51 @@ func TestTitleTranscriptReachesTheImportWindow(t *testing.T) {
 	}
 	if model, err := claude.Model(path); err != nil || model != "claude-haiku-4-5-20251001" {
 		t.Errorf("the titled transcript's model = %q, %v", model, err)
+	}
+}
+
+// The import runs with the first turn's unit frozen and the unit is thawed
+// after it, also when the import failed; a unit that ended is not frozen.
+func TestWhileFrozenThawsAfterTheImport(t *testing.T) {
+	unit := "beekeeper-test-freeze-" + uuid.NewString()[:8]
+	if out, err := exec.Command("systemd-run", "--user", "--collect", "--quiet", "--unit="+unit, "--", "sleep", "60").CombinedOutput(); err != nil {
+		t.Skipf("no systemd user manager: %v: %s", err, out)
+	}
+	t.Cleanup(func() { _ = exec.Command("systemctl", "--user", "stop", unit).Run() })
+	ctx := context.Background()
+	state := func() string {
+		out, _ := exec.Command("systemctl", "--user", "show", "-p", "FreezerState", "--value", unit).Output()
+		return strings.TrimSpace(string(out))
+	}
+	boom := errors.New("import failed")
+	for _, want := range []error{nil, boom} {
+		var during string
+		err := whileFrozen(ctx, unit, func() error { during = state(); return want })
+		if !errors.Is(err, want) || (want == nil && err != nil) {
+			t.Errorf("whileFrozen returned %v, want %v", err, want)
+		}
+		if during != "frozen" {
+			t.Errorf("the unit during the import is %q, want frozen", during)
+		}
+		if after := state(); after != "running" {
+			t.Errorf("the unit after the import (%v) is %q, want running", want, after)
+		}
+	}
+	_ = exec.Command("systemctl", "--user", "stop", unit).Run()
+	called := false
+	if err := whileFrozen(ctx, unit, func() error { called = true; return nil }); err != nil || !called {
+		t.Errorf("an ended unit: whileFrozen = %v, fn called %v", err, called)
+	}
+}
+
+func TestTitleLine(t *testing.T) {
+	for _, c := range []struct{ title, want string }{
+		{"Board pull 3", `the desktop titled it "Board pull 3"`},
+		{"", `the desktop recorded no title: the sidebar shows it untitled, not as "Board pull 3"`},
+		{"General coding session", `the desktop titled it "General coding session", not "Board pull 3"`},
+	} {
+		if got := titleLine("Board pull 3", c.title); got != c.want {
+			t.Errorf("titleLine(%q) = %q, want %q", c.title, got, c.want)
+		}
 	}
 }
