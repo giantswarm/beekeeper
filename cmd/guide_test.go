@@ -83,9 +83,9 @@ func TestGuideFeedSaysEachItemOnce(t *testing.T) {
 		{ID: 1, For: "Timo", Text: "merge the bump?", Default: "it waits", By: owner},
 		{ID: 2, Text: "check the rollout", By: owner},
 	}}
-	agent := state.Party{Session: "sC", Name: "Agent three"}
-	st.Records = []state.Record{{Session: agent, Issue: "o/r#1", Waits: "Timo: " + approveADR}}
-	sessions := []*claude.Session{{ID: "sC", Name: "Agent three"}, {ID: "sO", Name: "Agent seven"}}
+	agent := state.Party{Session: "sC", Name: agentC.Name}
+	st.Records = []state.Record{{Session: agent, Issue: "o/r#1", Waits: personTimo + ": " + approveADR}}
+	sessions := []*claude.Session{{ID: "sC", Name: agentC.Name}, {ID: "sO", Name: "Agent seven"}}
 	lines, changed := a.feedLines(st, sessions, nil)
 	if !changed || len(lines) != 2 ||
 		lines[0] != `GUIDE DECISION: #1 for Timo from "Agent seven": merge the bump?; if unanswered: it waits` ||
@@ -105,7 +105,11 @@ func TestGuideFeedSaysEachItemOnce(t *testing.T) {
 	}
 }
 
-const approveADR = "approve the ADR"
+const (
+	approveADR = "approve the ADR"
+	personTimo = "Timo"
+	ciWait     = "CI on #12"
+)
 
 func TestDesktopRecordSaysWaiting(t *testing.T) {
 	var r claude.Record
@@ -208,7 +212,7 @@ func TestGuideQueueSkipsArchivedTestAndOwnSessions(t *testing.T) {
 	party := func(id, host, name string) state.Party {
 		return state.Party{Session: id, HostSession: host, Name: name}
 	}
-	ask := "Timo: " + approveADR
+	ask := personTimo + ": " + approveADR
 	st.Records = []state.Record{
 		{Session: party("sA", "local_a", "c-32"), Waits: ask},
 		{Session: party("sT", "local_t", "test: beekeeper#60 permission hook"), Waits: ask},
@@ -225,14 +229,14 @@ func TestGuideQueueSkipsArchivedTestAndOwnSessions(t *testing.T) {
 	}
 	var out strings.Builder
 	a := &app{out: &out, now: relayNow, cfg: &config.Config{}}
-	a.printQueue(guideQueue(st, sessions, "Timo"))
+	a.printQueue(guideQueue(st, sessions, personTimo))
 	want := `"Agent three" waits on its person: approve the ADR
 "Land the follow-ups" (stopped) waits on its person: merge it
 `
 	if out.String() != want {
 		t.Fatalf("queue:\n%s\nwant:\n%s", out.String(), want)
 	}
-	a.cfg.Guide.Person = "Timo"
+	a.cfg.Guide.Person = personTimo
 	lines, _ := a.feedLines(st, sessions, nil)
 	if !slices.Equal(lines, []string{
 		`GUIDE WAITING: "Agent three" needs its person: approve the ADR`,
@@ -248,10 +252,10 @@ func TestGuideQueueIgnoresTheDesktopsTurnSummary(t *testing.T) {
 	sup := state.Party{Session: "sP", Name: "Supervisor run 17"}
 	st := &state.State{Records: []state.Record{{Session: sup, Issue: "o/r#1"}}}
 	sessions := []*claude.Session{{ID: "sP", Name: sup.Name, Waiting: &claude.Waiting{Turn: "t1", Action: "clarify: is klaus-lab-67 an agent"}}}
-	if q := guideQueue(st, sessions, "Timo"); len(q) != 0 {
+	if q := guideQueue(st, sessions, personTimo); len(q) != 0 {
 		t.Fatalf("a report read as an ask is queued: %+v", q)
 	}
-	a := &app{now: relayNow, cfg: &config.Config{Guide: config.Guide{Person: "Timo"}}}
+	a := &app{now: relayNow, cfg: &config.Config{Guide: config.Guide{Person: personTimo}}}
 	if lines, _ := a.feedLines(st, sessions, nil); lines != nil {
 		t.Fatalf("a report read as an ask is fed: %q", lines)
 	}
@@ -262,12 +266,12 @@ func TestWaitsOnReadsTheAskOfThePerson(t *testing.T) {
 		person, waits, ask string
 		ok                 bool
 	}{
-		{"Timo", "Timo: 8 questions in the plan", "8 questions in the plan", true},
+		{personTimo, "Timo: 8 questions in the plan", "8 questions in the plan", true},
 		{"timo", "TIMO:merge it", "merge it", true},
-		{"Timo", "Supervisor: the lease", "", false},
-		{"Timo", "CI on #12", "", false},
-		{"Timo", "", "", false},
-		{"", "CI on #12", "CI on #12", true},
+		{personTimo, "Supervisor: the lease", "", false},
+		{personTimo, ciWait, "", false},
+		{personTimo, "", "", false},
+		{"", ciWait, ciWait, true},
 	} {
 		if ask, ok := waitsOn(c.person, c.waits); ask != c.ask || ok != c.ok {
 			t.Errorf("waitsOn(%q, %q) = %q %v, want %q %v", c.person, c.waits, ask, ok, c.ask, c.ok)
