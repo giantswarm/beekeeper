@@ -23,7 +23,6 @@ import (
 	"github.com/giantswarm/beekeeper/internal/update"
 )
 
-
 // A scratch repository and the devctl a release window opened on.
 const (
 	scratchRepo = "o/r"
