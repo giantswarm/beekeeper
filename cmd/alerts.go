@@ -34,9 +34,12 @@ func (a *app) alertsCmd() *cobra.Command {
 		Long: `Read each installation's Alertmanager through a bounded kubectl port-forward
 (Mimir's mimir/mimir-alertmanager:8080 with the giantswarm tenant, else
 monitoring/kube-prometheus-stack-alertmanager:9093): active, unsilenced and
-uninhibited alerts, the names in alerts.ignore left out. The installations
-are alerts.installations plus every held lease whose name resolves to a kube
-context, read in parallel, each within alerts.timeout.
+uninhibited alerts, the names in alerts.ignore left out. alerts.team's alerts
+that only InhibitionOutsideWorkingHours inhibits are read too: working hours
+keep them from paging, not from the watch. The installations are
+alerts.installations plus every held lease whose name resolves to a kube
+context, read in parallel, each within alerts.timeout; a failed port-forward
+or request is tried again until the timeout.
 
 beekeeper watch runs the watch every alerts.every; these commands run it
 once, for a look or a script. capture records the answers and replay runs
@@ -58,9 +61,10 @@ printed; it stays in the baseline, so a changed floor prints no burst. The
 alerts.flap.changes-th change of an alert within alerts.flap.window is one
 FLAPPING line (since its first change in the window), and its changes print
 nothing until it has been stable for the window. An installation's first
-reading prints its set as OPEN lines; one that does not answer is one
-unreachable line (its set is kept, nothing reads as resolved) and one
-reachable-again line when it is back. The lease holder and the sessions
+reading prints its set as OPEN lines; one that does not answer is an
+unreachable line with how long its alerts have been unseen (its set is kept,
+nothing reads as resolved), said again every 15 minutes while it does not
+answer, and one reachable-again line when it is back. The lease holder and the sessions
 running commands against the installation follow in brackets; a NEW line
 also names the merges into the installation's lanes (merging, merged) and
 the lease claims on it of the last 30 minutes, each with its session.
@@ -500,7 +504,7 @@ func (a *app) printAlerts(v *alertsView) {
 		case b != nil && b.Alerts != nil && b.Reachable:
 			base = fmt.Sprintf("%d active", len(b.Alerts))
 		case b != nil && b.Alerts != nil:
-			base = fmt.Sprintf("unreachable, %d active when last read", len(b.Alerts))
+			base = fmt.Sprintf("unreachable, %d active when last read%s", len(b.Alerts), lastRead(a.now, b))
 		case b != nil:
 			base = "unreachable, never read"
 		}

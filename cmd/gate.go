@@ -421,68 +421,22 @@ func (g *gateRun) runMerge() error {
 		doc, rc = runDetached(g.argv, base, g.started)
 		_, _ = os.Stdout.Write(doc) // the caller's pipe may be gone
 	}
-	out, ok := merge.ParseDocument(doc)
-	var unanswered error
-	if merge.NeedsJudging(ok, rc) {
-		out, unanswered = g.judge()
+	r := runOutcome{rc: rc}
+	var ok bool
+	if r.out, ok = merge.ParseDocument(doc); merge.NeedsJudging(ok, rc) {
+		r.out, r.unanswered = judgeRun(g.ctx, g.repo, g.pr, judgeTries)
 	}
-	now := time.Now().UTC()
 	kept := false
 	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+		i := g.mine(st, state.Running)
+		if i < 0 {
+			return nil, nil
+		}
 		var ev []state.Event
-		switch i := g.mine(st, state.Running); {
-		case i < 0:
-		case unanswered != nil:
-			m := &st.Merges[i]
-			m.Phase, m.Finished, m.Exit, m.Release, m.Roll = state.Settling, now, rc, "", nil
-		case out.Merged && !out.NoRelease && g.lane.Installation != "":
-			m := &st.Merges[i]
-			m.Phase, m.Finished, m.Exit, m.Release = state.Settling, now, rc, out.Release
-		case !out.Merged && merge.Failed(&st.Merges[i], rc, now):
-			kept = true
-		default:
-			st.Merges = slices.Delete(st.Merges, i, i+1)
-		}
-		if strings.EqualFold(g.repo, merge.ToolRepo) && unanswered == nil {
-			for j, h := range st.Holds {
-				if h.Tool != "" && out.Merged {
-					st.Holds[j].ToolRelease, st.Holds[j].ToolMerged = out.Release, true
-				}
-			}
-			if !out.Merged {
-				st.Holds = slices.DeleteFunc(st.Holds, func(h state.Hold) bool {
-					if h.Tool == "" {
-						return false
-					}
-					ev = append(ev, event(g.me, "hold.lift", "%s: %s#%d merged nothing", h.Target, g.repo, g.pr))
-					return true
-				})
-			}
-		}
-		release := out.Release
-		switch {
-		case out.NoRelease:
-			release = "none warranted"
-		case out.Unconfirmed:
-			release = "unconfirmed (merged per GitHub)"
-		case release == "":
-			release = "unknown"
-		}
-		switch {
-		case unanswered != nil:
-			ev = append(ev, event(g.me, "merge.unknown", "%s#%d exit %d without its document, GitHub does not answer (%v): lane %s settles by the settle rule",
-				g.repo, g.pr, rc, unanswered, g.lane.Name))
-		case !out.Merged:
-			e := event(g.me, "merge.failed", "%s#%d exit %d, nothing merged", g.repo, g.pr, rc)
-			if kept {
-				e.Detail += fmt.Sprintf(", its place in lane %s is kept for the retry", g.lane.Name)
-			}
-			ev = append(ev, e)
-		default:
-			ev = append(ev, event(g.me, "merged", "%s#%d exit %d, release %s", g.repo, g.pr, rc, release))
-		}
+		ev, kept = recordRun(st, i, g.lane, g.me, r, time.Now().UTC(), "")
 		return ev, nil
 	})
+	out, unanswered := r.out, r.unanswered
 	switch {
 	case unanswered != nil:
 		gateLine("devctl ended with exit %d without its document and GitHub does not answer (%v): whether %s#%d merged is unknown, lane %s settles by the settle rule; check the pull request, do not rerun blindly",
@@ -513,21 +467,94 @@ const judgeTries = 3
 
 var judgeWait = 10 * time.Second
 
-// judge asks GitHub whether the merge merged, as the run left no document
-// to say it; the caller's context may be gone, the gate's is not.
-func (g *gateRun) judge() (merge.Outcome, error) {
-	ctx := context.WithoutCancel(g.ctx)
+// judgeRun asks GitHub, up to tries times, whether repo#pr merged, as its
+// run left no document to say it; the caller's context may be gone, the
+// gate's is not.
+func judgeRun(ctx context.Context, repo string, pr, tries int) (merge.Outcome, error) {
+	ctx = context.WithoutCancel(ctx)
 	var err error
-	for try := range judgeTries {
+	for try := range tries {
 		if try > 0 {
 			time.Sleep(judgeWait)
 		}
 		var p github.Pull
-		if p, err = pullState(ctx, g.repo, g.pr); err == nil {
+		if p, err = pullState(ctx, repo, pr); err == nil {
 			return merge.Judged(p), nil
 		}
 	}
 	return merge.Outcome{}, err
+}
+
+// runOutcome is how one merge's devctl run ended: its outcome, its exit
+// code, and GitHub's error when nothing could judge it.
+type runOutcome struct {
+	out        merge.Outcome
+	rc         int
+	unanswered error
+}
+
+// recordRun records the outcome of the running merge st.Merges[i] in lane:
+// a merge settles its lane, one that warranted no release or whose lane has
+// no installation to roll leaves it, one with nothing merged keeps its place
+// for the retry, and one nothing could judge settles by the settle rule. A
+// devctl merge's release window records the merge, or lifts when nothing
+// merged. It returns the events, with note appended, and whether the place
+// is kept.
+func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOutcome, now time.Time, note string) ([]state.Event, bool) {
+	m := &st.Merges[i]
+	key, repo, out, rc := m.Key(), m.Repo, r.out, r.rc
+	var ev []state.Event
+	kept := false
+	switch {
+	case r.unanswered != nil:
+		m.Phase, m.Finished, m.Exit, m.Release, m.Roll = state.Settling, now, rc, "", nil
+	case out.Merged && !out.NoRelease && lane.Installation != "":
+		m.Phase, m.Finished, m.Exit, m.Release = state.Settling, now, rc, out.Release
+	case !out.Merged && merge.Failed(m, rc, now):
+		kept = true
+	default:
+		st.Merges = slices.Delete(st.Merges, i, i+1)
+	}
+	if strings.EqualFold(repo, merge.ToolRepo) && r.unanswered == nil {
+		for j, h := range st.Holds {
+			if h.Tool != "" && out.Merged {
+				st.Holds[j].ToolRelease, st.Holds[j].ToolMerged = out.Release, true
+			}
+		}
+		if !out.Merged {
+			st.Holds = slices.DeleteFunc(st.Holds, func(h state.Hold) bool {
+				if h.Tool == "" {
+					return false
+				}
+				ev = append(ev, event(by, "hold.lift", "%s: %s merged nothing", h.Target, key))
+				return true
+			})
+		}
+	}
+	release := out.Release
+	switch {
+	case out.NoRelease:
+		release = "none warranted"
+	case out.Unconfirmed:
+		release = "unconfirmed (merged per GitHub)"
+	case release == "":
+		release = "unknown"
+	}
+	var e state.Event
+	switch {
+	case r.unanswered != nil:
+		e = event(by, "merge.unknown", "%s exit %d without its document, GitHub does not answer (%v): lane %s settles by the settle rule",
+			key, rc, r.unanswered, lane.Name)
+	case !out.Merged:
+		e = event(by, "merge.failed", "%s exit %d, nothing merged", key, rc)
+		if kept {
+			e.Detail += fmt.Sprintf(", its place in lane %s is kept for the retry", lane.Name)
+		}
+	default:
+		e = event(by, "merged", "%s exit %d, release %s", key, rc, release)
+	}
+	e.Detail += note
+	return append(ev, e), kept
 }
 
 // closeToolWindow lifts a tool-release window once no merge of the tool's
@@ -614,7 +641,7 @@ func devctlRuns(st *state.State) int {
 		return n
 	}
 	for _, p := range t.ByPID {
-		if p.Comm == merge.Tool && !running[p.PPID] && !children[p.PID] {
+		if p.Comm == merge.Tool && !running[p.PPID] && !children[p.PPID] {
 			n++
 		}
 	}

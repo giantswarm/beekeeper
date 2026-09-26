@@ -164,11 +164,17 @@ devctl already runs is never re-executed. A lane that stays stuck anyway (a seed
 gone) is flagged: `lanes` shows it `stalled` and `watch` says `LANE STALLED` once the first
 arrived merge has waited `merge.stallAfter` behind places whose merges are not in the gate.
 
-A merge survives its caller. The gate runs devctl in a session of its own, its document and
-stderr in files under the state directory (`merges/`), which the gate follows onto its own
-output: when the caller's session ends mid-merge (SIGHUP, SIGTERM to its process group, its pipes
-closed), devctl merges on and waits for the release, and the gate waits on and records the
-outcome. Only SIGINT, a person's Ctrl-C, reaches devctl. A run that ends without its document or
+A merge survives its caller. A harness that stops a command kills its process tree, and a
+session run as a unit takes its cgroup down with it, so the gate runs devctl outside both: a
+transient user service (`beekeeper-merge-<repo>-<n>-…`, through `systemd-run`) runs the hidden
+`beekeeper merge-child`, which runs devctl with the caller's environment and directory, its
+document, stderr and exit code in files under the state directory (`merges/`); without a user
+service manager, merge-child runs in a session of its own. The gate follows devctl's stderr onto
+its own output and records the outcome. When the caller ends mid-merge (SIGTERM, SIGHUP, its pipes
+closed), devctl merges on and waits for the release, and the gate waits on to record it; when the
+gate is killed too, `watch` records the outcome from the files once devctl ended (`MERGE
+RECORDED`, a `merged` or `merge.failed` event naming the gone gate). Only SIGINT, a person's
+Ctrl-C, reaches devctl. A run that ends without its document or
 by a signal (exit 128+n) is judged by GitHub (`gh pr view`), never by its exit code: merged, it
 settles its lane with its release unconfirmed and the gate line names `devctl release wait
 <owner/repo> --pr <n>`, with no retry place; not merged, it keeps its place for the retry; with
@@ -475,8 +481,8 @@ multiples (on the hour for `1h`), whether or not a supervisor runs:
    hook on `slack_send_message` (`beekeeper hook reportcheck`) that refuses a post failing
    `beekeeper reporter check`, with what to fix: the connector takes standard Markdown, so every pull
    request or issue is a link `[<repo>#<n>](https://github.com/<owner>/<repo>/pull/<n>)` whose label
-   names the repository and number it links; no bare `#<n>` or `repo#<n>` (`note #<n>` and
-   `timer #<n>` are beekeeper's own), no Slack `<url|label>` syntax, a first line naming the
+   names the repository and number it links; no bare `#<n>` or `repo#<n>`, session names included
+   (a beekeeper note is `note <n>`), no Slack `<url|label>` syntax, a first line naming the
    zone (`EEST`), no time in UTC. beekeeper sees the post in the session's transcript: a
    `slack_send_message` call that returned without an error.
 3. **The end.** Once it posted, beekeeper takes the reporter off the roster and stops what still
@@ -557,10 +563,10 @@ alerts:
     - production            # context teleport.giantswarm.io-<name>, else <name>, else *@<name>
     - {name: lab, context: admin@lab, floor: warning}   # floor: the lowest severity shown (none, info, warning, notify, critical, page)
   ignore: [Heartbeat, InhibitionOutsideWorkingHours, Watchdog]   # the default; setting it replaces it
-  team: my-team             # marked in capitals and counted
+  team: my-team             # marked in capitals and counted; its alerts that only InhibitionOutsideWorkingHours inhibits are read too
   collapse: 3               # more changes of one alertname in one reading are one line
   every: 5m
-  timeout: 1m               # per installation, port-forwards included; also bounds the upgrade reading
+  timeout: 1m               # per installation, port-forwards included, a failed attempt tried again within it; also bounds the upgrade reading
   flap: {changes: 4, window: 1h}   # an alert's 4th change within 1h is one FLAPPING line, then quiet until stable for 1h
 supervisor:                 # what handover --prompt tells the successor supervisor
   skill: supervise          # the skill it runs; or instructions: ~/supervisor.md, a file that opens the prompt

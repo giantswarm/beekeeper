@@ -9,12 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `reporter check` and the reporter's post hook refuse every bare `#<n>`, `note #<n>` and `timer #<n>` included: a report names a beekeeper note `note <n>`, and a session name with a reference links it.
+
 ### Added
 
 - The scheduled reporter's post is checked before it goes out: `beekeeper reporter check` (new, stdin) and the PreToolUse hook `beekeeper hook reportcheck` (new), which beekeeper adds to each reporter session with `--settings`, refuse a `slack_send_message` whose message has a bare `#<n>` or `repo#<n>`, a pull request or issue link whose label does not name its repository and number, Slack's `<url|label>` syntax (the connector takes Markdown), a first line that does not name the machine's time zone, or a time in UTC; the reason lists what to fix. The reporter's prompt gives the time range in the machine's time zone, read for each run.
 
 ### Fixed
 
+- A gated merge survives a harness that kills its caller's process tree, or a session unit's cgroup: devctl runs in a transient user service (`systemd-run`, the hidden `beekeeper merge-child`) with the caller's environment and directory, its document, stderr and exit code in the state directory. A merge whose gate was killed is recorded by `watch` from those files once devctl ended (`MERGE RECORDED`), or from GitHub when there is no document, instead of `MERGE LOST`.
+
+- The watch reads `alerts.team`'s alerts that only `InhibitionOutsideWorkingHours` inhibits: an Alertmanager that inhibits `cancel_if_outside_working_hours` alerts outside working hours no longer hides the team's night-time alerts from the watch (every other inhibited alert stays out). A failed port-forward or Alertmanager request is tried again within `alerts.timeout`, and an unreachable installation's line says how long its alerts have been unseen (`ALERTS <installation> unreachable, alerts unseen for 20m (since 18:50Z): …`), again every 15 minutes while it stays unreachable; `reachable again` says how long they were unseen, and `alerts` and `handover` show an unreachable installation's last reading.
 - A gated merge survives its caller's session: the gate runs devctl in a session of its own with its document and stderr in the state directory (followed onto the gate's stderr), forwards only SIGINT, and waits on through SIGTERM and SIGHUP to record the outcome. A run that ends without its document or by a signal is judged by GitHub, not by its exit code: merged, it settles with its release unconfirmed (the gate line names `devctl release wait`) and keeps no retry place. A devctl release window whose merge ended unrecorded lifts once GitHub reports its pull request not merged; `watch` checks it too.
 
 - `agents start` and `agents handover` freeze the first turn's unit (`systemctl --user freeze`) while the desktop imports the session and thaw it once the desktop recorded it. The import reads the transcript's identity and then its end for title and model, and drops that read when the transcript changed in between, so a first turn that wrote meanwhile (a restart or takeover under an existing name most often) left the session untitled in the sidebar and without a model. Both commands now print the title the desktop recorded.
