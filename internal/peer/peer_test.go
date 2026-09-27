@@ -95,7 +95,7 @@ echo '{"type":"result","total_cost_usd":0.01}'
 		if (err == nil) != tc.ok || (!tc.ok && !errors.Is(err, errNoCall)) {
 			t.Errorf("call on turn %s: err %v", tc.callOn, err)
 		}
-		n, _ := os.ReadFile(fake + ".n")
+		n, _ := os.ReadFile(fake + ".n") //nolint:gosec // the test script's counter
 		if got := strings.TrimSpace(string(n)); got != strconv.Itoa(tc.turns) {
 			t.Errorf("call on turn %s: %s turns, want %d", tc.callOn, got, tc.turns)
 		}
