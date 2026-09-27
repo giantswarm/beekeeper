@@ -71,7 +71,7 @@ var (
 	// group 1, or the data's length.
 	templateKeys = regexp.MustCompile(`range\s+\$\w+\s*,\s*\$(\w+)\s*:=\s*\.(?:data|stringData)\b|len\s+\.(?:data|stringData)\b`)
 	// leakyFilter: what prints values once the keys-only parts are gone.
-	leakyFilter = regexp.MustCompile(`(?i)\b(?:string)?data\b|\bvalues?\b|\.\.|to_entries|with_entries|@base64d|\$ENV|\benv\b|\binputs?\b|tostream|paths|getpath|(?:^|[\s,:(|])\.(?:\s*(?:[,})\]|]|$)|\[)`)
+	leakyFilter = regexp.MustCompile(`(?i)\b(?:string)?data\b|\bvalues?\b|\.\.|to_entries|with_entries|@base64d|\$ENV|\benv\b|\binputs?\b|tostream|paths|getpath|(?:^|[\s,:(|])\.(?:\s*(?:[,})\]|]|$)|\[\s*(?:\]|"))`)
 	// kubectlFunc, kubectlVar: a shell function or a variable that runs kubectl.
 	kubectlFunc = regexp.MustCompile(`(?:^|[\s;&|(])(?:function\s+([\w-]+)\s*(?:\(\))?|([\w-]+)\s*\(\))\s*\{[^}]*?(?:^|[\s/])kubectl\s`)
 	kubectlVar  = regexp.MustCompile(`(?:^|[\s;&|(])(\w+)=\(?\s*["']?(?:[^\s"'()]*/)?kubectl(?:\s|["')])`)
