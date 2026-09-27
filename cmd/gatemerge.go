@@ -211,10 +211,35 @@ func (a *app) mergeChildCmd() *cobra.Command {
 			return nil
 		},
 		RunE: func(_ *cobra.Command, args []string) error {
-			return exitCode(mergeChild(args[0]))
+			return exitCode(unitExit(mergeChild(args[0])))
 		},
 	}
 }
+
+// unitExit is the exit of merge-child's unit for devctl's exit code rc. The
+// outcome travels in base.rc to the gate, which hands it to the calling
+// session and the event log; the unit fails only where a person must act:
+// devctl's usage or tooling failure (7), its authentication (8), a signal
+// or merge-child itself failing. A merge, a red or unfinished pull request
+// and a refusal (0-6, 9) are the calling session's to act on and end the
+// unit successfully.
+func unitExit(rc int) int {
+	switch rc {
+	case devctlUsage, devctlAuth:
+		return rc
+	}
+	if rc >= 0 && rc <= devctlUnconfirmed {
+		return 0
+	}
+	return rc
+}
+
+// devctl pr merge's exit codes the unit's exit tells apart.
+const (
+	devctlUsage       = 7
+	devctlAuth        = 8
+	devctlUnconfirmed = 9
+)
 
 // mergeChild runs base.spec's command with its stdout in base.json and its
 // stderr in base.log, records its own pid in base.pid before it starts it and the

@@ -294,7 +294,7 @@ command that shows more.
 | Kind | Event | Urgency |
 |---|---|---|
 | `due` | a note or a timer falls due | normal |
-| `oom-line` | the machine near its OOM line: low RAM, swap near the systemd-oomd trigger, memory pressure, the desktop scope near its cap | critical |
+| `oom-line` | the machine near its OOM line: low RAM, swap near the systemd-oomd trigger, memory pressure, the desktop scope's anonymous memory near its cap (page cache never counts) | critical |
 | `oom-kill` | a kernel OOM kill outside a build slot (a slot's cap killing its own command is its session's exit code), a systemd-oomd kill | critical |
 | `budget` | the GitHub budget under the floor | normal |
 | `stale-lease` | a lease whose holder's session is gone | normal |
@@ -600,7 +600,6 @@ watch:
   availMinMiB: 10240        # machine MemAvailable
   swapMaxMiB: 10000         # systemd-oomd kills the largest swap user at 90 %
   scopeAnonMaxMiB: 28000    # desktop scope anonymous memory (cache is reclaimable, anon is not)
-  scopeMaxMiB: 45000
   loadMax: 45
   psiMax: 10
   tmpMaxMiB: 20000
