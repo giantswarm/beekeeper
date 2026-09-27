@@ -81,3 +81,29 @@ func TestFindPartyRefusesADuplicateName(t *testing.T) {
 		t.Errorf("partial name of three: err = %v", err)
 	}
 }
+
+// An agent's last task survives a repeated idle and a re-register, so a
+// hand-over at its first quiet moment still has it.
+func TestIdleAgentKeepsItsLastTask(t *testing.T) {
+	now := time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)
+	ag := state.Agent{Party: state.Party{Session: "a", Name: workerName}, Task: staleTask}
+	reportIdle(&ag, now)
+	reportIdle(&ag, now.Add(time.Hour))
+	if ag.Task != "" || ag.LastTask != staleTask || !ag.IdleSince.Equal(now) {
+		t.Fatalf("after two idles: %+v", ag)
+	}
+	st := &state.State{Agents: []state.Agent{ag}}
+	if _, err := registerAgent(st, ag.Party, func(state.Party) bool { return false }, now.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Agents[0].LastTask; got != staleTask {
+		t.Errorf("after a re-register: last task %q", got)
+	}
+	// A session that takes the entry over under its name keeps it too.
+	if _, err := registerAgent(st, state.Party{Session: "b", Name: workerName}, func(state.Party) bool { return false }, now); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Agents[0]; got.Session != "b" || got.LastTask != staleTask {
+		t.Errorf("after a take-over: %+v", got)
+	}
+}

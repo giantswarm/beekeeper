@@ -156,7 +156,7 @@ one "no change" line; --full prints everything.`,
 					return nil, refused("this session is not registered: `beekeeper agents register` first")
 				}
 				ag := &st.Agents[i]
-				ag.LastTask, ag.Task, ag.IdleSince = ag.Task, "", a.now.UTC()
+				reportIdle(ag, a.now)
 				return []state.Event{event(me, "agents.idle", "%s done: %s", ag.Name, ag.LastTask)}, nil
 			})
 			if err != nil {
@@ -217,11 +217,14 @@ type registration struct {
 // open tasks are refused, since one entry holds one task.
 func registerAgent(st *state.State, me state.Party, live func(state.Party) bool, now time.Time) (registration, error) {
 	var reg registration
-	var holder string
+	var holder, lastTask string
 	for _, x := range st.Agents {
 		own := x.Is(me)
 		if !own && !strings.EqualFold(x.Name, me.Name) {
 			continue
+		}
+		if x.LastTask != "" && (own || lastTask == "") {
+			lastTask = x.LastTask
 		}
 		if !own {
 			if live(x.Party) {
@@ -239,8 +242,16 @@ func registerAgent(st *state.State, me state.Party, live func(state.Party) bool,
 		reg.task, reg.assignedAt, reg.own, holder = x.Task, x.AssignedAt, own, x.Session
 	}
 	st.Agents = slices.DeleteFunc(st.Agents, func(x state.Agent) bool { return x.Is(me) || strings.EqualFold(x.Name, me.Name) })
-	st.Agents = append(st.Agents, state.Agent{Party: me, Registered: now, IdleSince: now, Task: reg.task, AssignedAt: reg.assignedAt})
+	st.Agents = append(st.Agents, state.Agent{Party: me, Registered: now, IdleSince: now, Task: reg.task, AssignedAt: reg.assignedAt, LastTask: lastTask})
 	return reg, nil
+}
+
+// reportIdle ends ag's task. An agent reporting idle again keeps its last
+// task and since when it is idle.
+func reportIdle(ag *state.Agent, now time.Time) {
+	if ag.Task != "" {
+		ag.LastTask, ag.Task, ag.IdleSince = ag.Task, "", now.UTC()
+	}
 }
 
 func findAgent(st *state.State, q string) (int, error) {
