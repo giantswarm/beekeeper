@@ -190,3 +190,21 @@ func TestLiftedUpgradeHoldShowsWhoLiftedIt(t *testing.T) {
 		t.Errorf("status line %q", got)
 	}
 }
+
+// A poll with no breach of the OOM line notifies nothing: the critical
+// notification says what crossed the line, and only while it does.
+func TestOOMLineNotifiesOnlyABreach(t *testing.T) {
+	w, d, _ := notifyingWatch(t, t.TempDir(), false)
+	ctx := context.Background()
+	for range 3 {
+		w.oomLine(ctx, w.check("avail", false, "LOW RAM: %d MiB available, swap %d MiB", 50000, 3000))
+		w.oomLine(ctx, w.check("scopeanon", false, "DESKTOP SCOPE anon: %d MiB", 5000))
+	}
+	if len(d.sent) != 0 {
+		t.Fatalf("no breach notified: %+v", d.sent)
+	}
+	w.oomLine(ctx, w.check("avail", true, "LOW RAM: %d MiB available, swap %d MiB", 9000, 3000))
+	if len(d.sent) != 1 || !strings.HasPrefix(d.sent[0].Body, "LOW RAM: 9000 MiB available") || d.sent[0].Urgency != notify.Critical {
+		t.Fatalf("a breach: %+v", d.sent)
+	}
+}

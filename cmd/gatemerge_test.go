@@ -294,3 +294,13 @@ func TestADeadMergesToolWindowCloses(t *testing.T) {
 		t.Errorf("a running devctl's window: %+v, GitHub asked %d times", st.Holds, *asked)
 	}
 }
+
+// A merge-child unit fails only where a person must act; devctl's verdicts
+// on the pull request are its caller's and end the unit successfully.
+func TestMergeChildUnitFailsOnlyForAPerson(t *testing.T) {
+	for rc, want := range map[int]int{0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 9: 0, 7: 7, 8: 8, 127: 127, 130: 130, 137: 137} {
+		if got := unitExit(rc); got != want {
+			t.Errorf("devctl exit %d: unit exit %d, want %d", rc, got, want)
+		}
+	}
+}

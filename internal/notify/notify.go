@@ -21,7 +21,8 @@ const (
 	// Due is a note or a timer falling due.
 	Due = "due"
 	// OOMLine is the machine near its OOM line: low RAM, swap near the
-	// systemd-oomd trigger, memory pressure, the desktop scope near its cap.
+	// systemd-oomd trigger, memory pressure, the desktop scope's anonymous
+	// memory near its cap (its page cache is reclaimable and never counts).
 	OOMLine = "oom-line"
 	// OOMKill is a kernel OOM kill outside a build slot, or a systemd-oomd kill.
 	OOMKill = "oom-kill"

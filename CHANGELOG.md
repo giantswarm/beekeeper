@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `watch --notify` sends the critical "the machine is near its OOM line" notification only while a threshold is crossed. It sent one every `notify.repeat` whatever the machine's state, with the body `beekeeper snapshot` and no condition. The desktop scope's `memory.current` no longer counts toward the OOM line, because it is mostly reclaimable page cache under the scope's `memory.high`. The scope's anonymous memory (`watch.scopeAnonMaxMiB`) is the line, and `watch.scopeMaxMiB` is gone.
+- A gated merge's `beekeeper-merge-*` unit no longer fails when devctl merged or declined the pull request (exit 0–6, 9: not applicable, refused, red, timed out). The gate hands that outcome to the calling session and the event log. The unit fails only where a person must act: devctl's usage or tooling failure (7), its authentication (8), a signal, or the merge child itself.
+- A session beekeeper stops with SIGTERM (a reporter past its timeout, a stopped agent) ends its unit successfully instead of as a failed unit.
 - The Secret guard lets a jq slice or index (`.[:3]`, `.[0]`) through after a keys-only filter; `.[]` and `.["key"]` on the object stay refused.
 - A started session keeps its name as its desktop title after its first turn: the desktop handles each resume link twice and, when both deliveries import, keeps an untitled record (default name `<dir>-<n>` in ListAgents). `agents reopen` now checks the desktop's record once the first turn ended and, when the name is missing, has the session set it with the desktop's `set_session_title` through its desktop CLI's socket, waiting for the desktop to record it; the unit's `TimeoutStopSec` is 5 minutes for that.
 

@@ -354,8 +354,13 @@ func (w *watcher) notify(ctx context.Context, kind, key, summary, body string) {
 	}
 }
 
-// oomLine notifies a breach of the OOM line the poll printed.
+// oomLine notifies a breach of the OOM line the poll printed; a check that
+// holds no breach, or one already said within watch.repeat, returns no line
+// and notifies nothing.
 func (w *watcher) oomLine(ctx context.Context, line string) {
+	if line == "" {
+		return
+	}
 	w.notify(ctx, notify.OOMLine, "", "beekeeper: the machine is near its OOM line", line+"\nbeekeeper snapshot")
 }
 
@@ -396,7 +401,6 @@ func (w *watcher) poll(ctx context.Context) {
 	if p := machine.FindScope(); p != "" {
 		s := machine.ReadScope(p)
 		w.oomLine(ctx, w.check("scopeanon", s.AnonMiB > th.ScopeAnonMaxMiB, "DESKTOP SCOPE anon: %d MiB", s.AnonMiB))
-		w.oomLine(ctx, w.check("scope", s.CurrentMiB > th.ScopeMaxMiB, "DESKTOP SCOPE near its cap: %d MiB RAM + %d MiB swap of %s", s.CurrentMiB, s.SwapMiB, s.Max))
 		if s.OOMKills != w.scopeOOM {
 			w.emitNow("scopeoom", "OOM KILL in the desktop scope: oom_kill %d -> %d", w.scopeOOM, s.OOMKills)
 			w.scopeOOM = s.OOMKills

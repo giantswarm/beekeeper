@@ -290,7 +290,6 @@ type Watch struct {
 	AvailMinMiB     int      `yaml:"availMinMiB"`
 	SwapMaxMiB      int      `yaml:"swapMaxMiB"`
 	ScopeAnonMaxMiB int      `yaml:"scopeAnonMaxMiB"`
-	ScopeMaxMiB     int      `yaml:"scopeMaxMiB"`
 	LoadMax         float64  `yaml:"loadMax"`
 	PSIMax          float64  `yaml:"psiMax"`
 	TmpMaxMiB       int      `yaml:"tmpMaxMiB"`
@@ -510,7 +509,6 @@ func (c *Config) defaults() error {
 	setInt(&w.AvailMinMiB, 10240)
 	setInt(&w.SwapMaxMiB, 10000)
 	setInt(&w.ScopeAnonMaxMiB, 28000)
-	setInt(&w.ScopeMaxMiB, 45000)
 	if w.LoadMax == 0 {
 		w.LoadMax = 45
 	}
