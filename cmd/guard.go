@@ -135,7 +135,7 @@ func (a *app) hookCmd() *cobra.Command {
 	}
 	c.AddCommand(&cobra.Command{
 		Use:   "pretooluse",
-		Short: "The PreToolUse hook: builds into a slot, at most two kind labs, the merge gate, desktop sends by name",
+		Short: "The PreToolUse hook: builds into a slot, at most two kind labs, the merge gate, Secret reads, questions via the guide, desktop sends by name",
 		Long: `pretooluse reads a PreToolUse event on stdin. A build, test, lint or lab
 command is rewritten to run through "beekeeper run -- zsh -c '<command>'"
 (the absolute path of this binary), the tool timeout raised to 10 minutes;
@@ -158,9 +158,13 @@ refused, naming them. A send to a session with no running CLI passes: the
 desktop starts it.
 Anything else, malformed input included, passes unchanged.
 
+An AskUserQuestion call is refused in every session but the guide's (the
+one beekeeper guide names): the agent files beekeeper note add --for
+<guide.person> and carries on.
+
 Register it in ~/.claude/settings.json:
 
-  "PreToolUse": [{"matcher": "Bash|SendMessage", "hooks": [{"type": "command",
+  "PreToolUse": [{"matcher": "Bash|AskUserQuestion|SendMessage", "hooks": [{"type": "command",
     "command": "~/.go/bin/beekeeper hook pretooluse"}]}]`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
@@ -170,7 +174,7 @@ Register it in ~/.claude/settings.json:
 				return nil
 			}
 			self, _ := os.Executable()
-			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Peer: a.desktopPeer}
+			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, Peer: a.desktopPeer}
 			if out := h.Decide(raw); out != nil {
 				_, _ = a.out.Write(out)
 			}
@@ -289,6 +293,27 @@ func kindClusterNames() []string {
 		names = append(names, c.Name)
 	}
 	return names
+}
+
+// isGuide reports whether the session (its CLI id, or the desktop id in
+// the environment) holds the guide role, and the person the guide asks. A
+// broken configuration or state reads as not the guide.
+func (a *app) isGuide(session string) (bool, string) {
+	if a.loadConfig() != nil {
+		return false, ""
+	}
+	person := a.cfg.Guide.Person
+	store, err := state.Open(a.cfg.StateDir)
+	if err != nil {
+		return false, person
+	}
+	st, err := store.Read()
+	if err != nil {
+		return false, person
+	}
+	holder := st.GuideRole().Holder
+	me := state.Party{Session: session, HostSession: os.Getenv("CLAUDE_CODE_HOST_SESSION_ID")}
+	return holder != nil && session != "" && holder.Is(me), person
 }
 
 // heldLeases lists the held leases for the third-lab refusal, each holder

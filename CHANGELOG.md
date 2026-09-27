@@ -12,15 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `beekeeper agents wake <agent> "<message>"` wakes and messages a session past Claude Desktop's cap on `local_` sends. A running CLI gets the message by name. A stopped session is resumed headless (`claude -p --resume <id>` in its directory, mode and model, unit `beekeeper-wake-<id>`), then reopened in the desktop. `agents` shows `live, first turn running` and `live, wake turn running`.
-- The PreToolUse hook sends a `SendMessage` to a `local_` id whose session has a running CLI to that CLI by name, so a desktop send during a first turn or a wake starts no second copy of the session and spends none of the desktop's cap. A name two running CLIs carry is refused. The hook's matcher becomes `Bash|SendMessage`.
+- The PreToolUse hook sends a `SendMessage` to a `local_` id whose session has a running CLI to that CLI by name, so a desktop send during a first turn or a wake starts no second copy of the session and spends none of the desktop's cap. A name two running CLIs carry is refused. The hook's matcher becomes `Bash|AskUserQuestion|SendMessage`.
 
 ### Fixed
 
+- `watch --notify` sends the critical "the machine is near its OOM line" notification only while a threshold is crossed. It sent one every `notify.repeat` whatever the machine's state, with the body `beekeeper snapshot` and no condition. The desktop scope's `memory.current` no longer counts toward the OOM line, because it is mostly reclaimable page cache under the scope's `memory.high`. The scope's anonymous memory (`watch.scopeAnonMaxMiB`) is the line, and `watch.scopeMaxMiB` is gone.
+- A gated merge's `beekeeper-merge-*` unit no longer fails when devctl merged or declined the pull request (exit 0–6, 9: not applicable, refused, red, timed out). The gate hands that outcome to the calling session and the event log. The unit fails only where a person must act: devctl's usage or tooling failure (7), its authentication (8), a signal, or the merge child itself.
+- A session beekeeper stops with SIGTERM (a reporter past its timeout, a stopped agent) ends its unit successfully instead of as a failed unit.
 - The Secret guard lets a jq slice or index (`.[:3]`, `.[0]`) through after a keys-only filter; `.[]` and `.["key"]` on the object stay refused.
 - A started session keeps its name as its desktop title after its first turn: the desktop handles each resume link twice and, when both deliveries import, keeps an untitled record (default name `<dir>-<n>` in ListAgents). `agents reopen` now checks the desktop's record once the first turn ended and, when the name is missing, has the session set it with the desktop's `set_session_title` through its desktop CLI's socket, waiting for the desktop to record it; the unit's `TimeoutStopSec` is 5 minutes for that.
 
 ### Added
 
+- The PreToolUse hook refuses `AskUserQuestion` in every session but the guide's, telling the agent to file `beekeeper note add --for <person> … --default …` and carry on; register the hook with the matcher `Bash|AskUserQuestion`.
 - The PreToolUse hook refuses a Bash command that would print secret values into the transcript: `kubectl get secret -o yaml|json`, templates over a Secret's data, `kubectl view-secret`, `sops -d`, `op read`, `op item get --reveal`, `vault kv get` and `base64 -d` of `.data`, also through kubectl wrappers and inside shell `-c` strings. Keys, metadata, hashes, files, variables and consumers such as `kubectl apply -f -` pass; the refusal names the safe forms.
 - `beekeeper reporter final <time>` schedules one last report outside the slots (covering the time since the last one) and pauses the schedule with its start; `reporter pause` pauses at once and `reporter resume` ends the pause, the current slot's report starting at the next poll. The state's `reportPause` field is new; older binaries carry it unchanged.
 

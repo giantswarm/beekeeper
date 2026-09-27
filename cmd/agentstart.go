@@ -604,7 +604,8 @@ func agentArgv(bin, id, name, model, brief string, flags ...string) []string {
 // KillMode=process leaves what the turn started running when it ends, as a
 // terminal would.
 func launch(unit, dir, config string, stopPost, argv []string) error {
-	args := []string{"--user", "--collect", "--quiet", "--unit=" + unit, "-p", "KillMode=process", "--working-directory=" + dir}
+	// A session beekeeper stops (SIGTERM) ended as asked, not failed.
+	args := []string{"--user", "--collect", "--quiet", "--unit=" + unit, "-p", "KillMode=process", "-p", "SuccessExitStatus=143 SIGTERM", "--working-directory=" + dir}
 	if len(stopPost) > 0 {
 		// The reopen may wait for the session to retitle itself.
 		args = append(args, "-p", "ExecStopPost="+strings.Join(stopPost, " "), "-p", "TimeoutStopSec="+strconv.Itoa(int(stopPostWait.Seconds())))

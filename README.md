@@ -67,7 +67,7 @@ the budget work on any system.
 | `beekeeper handover [--prompt]` | Everything the next supervisor needs, as Markdown, from the live state: leases and grants, holds and their exceptions, agents, session records, notes with their defaults, timers, the merge lanes with their queues and settling merges, and what the alert watch reads (the installations and why, the ignored alert names, the baseline). `--prompt` prints the successor's session prompt: the configured instructions (`supervisor.skill` or `supervisor.instructions`), the scope, the pending state in full and the commands that read the live values; no standing rule and no live value (version, memory figure, pull request state). |
 | `beekeeper log [--verb PREFIX]` | Every claim, grant, hold, registration, note, timer, session record and build run, as they happened; `--verb run.` shows only the runs. |
 | `beekeeper run [--max SIZE] [--wait DURATION] -- <command>` | Run a build, test or lint command in one of the machine's build slots (memcap's, shared with the `memcap` wrapper) inside a memory-capped systemd scope. When every slot is held it waits once, then exits 75 with the holders; when the cap fires the kernel kills the biggest process in the scope only, and `run` exits 137 with one line starting `beekeeper run: the <SIZE> cap killed:`. Each run leaves `run.start` and `run.end` in `beekeeper log` with its scope, session and command, so `snapshot` and `watch` name a cap kill's session and command after the run has ended. `MEMCAP_TEST=1` marks a test's run: its scope is `memcap-test-…`, and a kill in it is reported as a test kill (one quiet `test kill:` line in `watch`), never as a build's. |
-| `beekeeper hook pretooluse` | The PreToolUse hook (matcher `Bash|SendMessage`): rewrites build, test, lint and lab commands to `<this binary> run -- zsh -c '<command>'` with the command verbatim and the tool timeout at 10 minutes (a background run waits 60 minutes), and refuses a third kind cluster, listing the held leases. It puts the merge gate in front of every `devctl pr merge`, behind prefix commands and in pipelines and lists, and refuses one hidden in a `-c` string (below); every other devctl command passes untouched. It refuses a command that would print secret values (below, [Secret reads](#secret-reads)). A `SendMessage` to a desktop id (`local_…`) whose session has a running CLI goes to that CLI by name, so a headless turn gets no second copy beside it (below, [Waking a session](#waking-a-session)). |
+| `beekeeper hook pretooluse` | The PreToolUse hook (matcher `Bash|AskUserQuestion|SendMessage`): rewrites build, test, lint and lab commands to `<this binary> run -- zsh -c '<command>'` with the command verbatim and the tool timeout at 10 minutes (a background run waits 60 minutes), and refuses a third kind cluster, listing the held leases. It puts the merge gate in front of every `devctl pr merge`, behind prefix commands and in pipelines and lists, and refuses one hidden in a `-c` string (below); every other devctl command passes untouched. It refuses a command that would print secret values (below, [Secret reads](#secret-reads)), and an `AskUserQuestion` call outside the guide's session ([Questions go to the guide](#questions-go-to-the-guide)). A `SendMessage` to a desktop id (`local_…`) whose session has a running CLI goes to that CLI by name, so a headless turn gets no second copy beside it (below, [Waking a session](#waking-a-session)). |
 | `beekeeper hook permissionrequest` | The PermissionRequest hook: answers `allow` only for a session `agents start` started in bypass that now runs in `acceptEdits`; every other request gets no answer, so the person sees the normal card. Below. |
 | `beekeeper free [--apply] [--only SECTIONS] [--summary]` | Show where the memory is and, with `--apply`, free what no running work needs: dead sessions' dirs in the tmpfs `/tmp` (the CLI is gone; an idle session's stay), throwaway temp dirs and orphaned jest or Claude workers. Kind clusters, idle CLIs, heavy or runaway processes and Chrome renderers are only reported. Never runs as root: the swap reset and root-owned leftovers are printed as the commands to run. `--summary` prints the TSV rows a desktop front end parses. |
 | `beekeeper self-update` | Install the latest signed release over this binary; `--check` only asks. |
@@ -123,6 +123,20 @@ captured in a variable or a flag's value (`T=$(…)`, `--from-literal=k=$(…)`)
 `.data` that prints only the keys passes, as do `-o name`, `-o wide`, the table and `kubectl describe
 secret` (sizes only). Anything else that reads a secret is refused: false positives beat leaks, and
 the refusal says how to write the command safely.
+
+## Questions go to the guide
+
+A question put to the person with `AskUserQuestion` blocks the session until the person answers, and
+the person talks to one session only: the guide's. The PreToolUse hook refuses `AskUserQuestion` in
+every session but the one holding the guide role (`beekeeper guide`, matched by the CLI session id
+or the desktop id), and tells the agent to file the question for the guide and carry on:
+
+```
+beekeeper note add --for <guide.person> "<status quo, the options, your recommendation>" --default "<what you do if nobody answers>"
+```
+
+With no guide running, every session is refused. The hook reads the state only for this tool, and a
+state it cannot read counts as not the guide.
 
 ## The merge gate
 
@@ -281,7 +295,7 @@ command that shows more.
 | Kind | Event | Urgency |
 |---|---|---|
 | `due` | a note or a timer falls due | normal |
-| `oom-line` | the machine near its OOM line: low RAM, swap near the systemd-oomd trigger, memory pressure, the desktop scope near its cap | critical |
+| `oom-line` | the machine near its OOM line: low RAM, swap near the systemd-oomd trigger, memory pressure, the desktop scope's anonymous memory near its cap (page cache never counts) | critical |
 | `oom-kill` | a kernel OOM kill outside a build slot (a slot's cap killing its own command is its session's exit code), a systemd-oomd kill | critical |
 | `budget` | the GitHub budget under the floor | normal |
 | `stale-lease` | a lease whose holder's session is gone | normal |
@@ -494,11 +508,11 @@ first turn, a wake): two copies of one session then run turns side by side. The 
 therefore sends a `SendMessage` to a `local_` id whose session has a running CLI to that CLI by
 its name (`updatedInput`), which queues the message in the running turn. A name that two running
 CLIs carry is refused with their PIDs, since a send by it reaches neither for sure. A send to a
-session with no running CLI passes to the desktop, which starts it. Register the hook for both
+session with no running CLI passes to the desktop, which starts it. Register the hook for its three
 tools:
 
 ```json
-"PreToolUse": [{"matcher": "Bash|SendMessage", "hooks": [{"type": "command",
+"PreToolUse": [{"matcher": "Bash|AskUserQuestion|SendMessage", "hooks": [{"type": "command",
   "command": "~/.go/bin/beekeeper hook pretooluse"}]}]
 ```
 
@@ -617,7 +631,6 @@ watch:
   availMinMiB: 10240        # machine MemAvailable
   swapMaxMiB: 10000         # systemd-oomd kills the largest swap user at 90 %
   scopeAnonMaxMiB: 28000    # desktop scope anonymous memory (cache is reclaimable, anon is not)
-  scopeMaxMiB: 45000
   loadMax: 45
   psiMax: 10
   tmpMaxMiB: 20000

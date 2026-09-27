@@ -25,7 +25,13 @@ func decide(t *testing.T, h Hook, cwd, command string, extra map[string]any) *de
 	for k, v := range extra {
 		ti[k] = v
 	}
-	raw, _ := json.Marshal(map[string]any{"tool_name": "Bash", "tool_input": ti, "cwd": cwd})
+	return decideEvent(t, h, map[string]any{"tool_name": "Bash", "tool_input": ti, "cwd": cwd})
+}
+
+// decideEvent feeds any PreToolUse event to the hook.
+func decideEvent(t *testing.T, h Hook, ev map[string]any) *decision {
+	t.Helper()
+	raw, _ := json.Marshal(ev)
 	out := h.Decide(raw)
 	if out == nil {
 		return nil

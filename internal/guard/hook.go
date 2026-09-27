@@ -96,6 +96,9 @@ type Hook struct {
 	Clusters func() []string
 	// Leases lists the held leases.
 	Leases func() []lease.Holder
+	// Guide reports whether the session is the guide's, and the person the
+	// guide asks; read only for an AskUserQuestion call.
+	Guide func(session string) (bool, string)
 	// Peer names the running CLI of a desktop session id, "" when none
 	// runs; an error refuses the send. Nil passes every SendMessage.
 	Peer func(host string) (string, error)
@@ -115,11 +118,15 @@ func (h Hook) Decide(input []byte) []byte {
 		ToolName  string         `json:"tool_name"`
 		ToolInput map[string]any `json:"tool_input"`
 		CWD       string         `json:"cwd"`
+		Session   string         `json:"session_id"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(input))
 	dec.UseNumber()
 	if dec.Decode(&ev) != nil {
 		return nil
+	}
+	if ev.ToolName == AskTool {
+		return h.ask(ev.Session)
 	}
 	if ev.ToolName == SendMessageTool {
 		return h.sendMessage(ev.ToolInput)
