@@ -122,6 +122,9 @@ func (h Hook) Decide(input []byte) []byte {
 	if strings.TrimSpace(cmd) == "" || trivial.MatchString(cmd) {
 		return nil
 	}
+	if l := secretLeak(cmd); l != nil {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: l.reason()})
+	}
 	bg, _ := ev.ToolInput[backgroundKey].(bool)
 	cmd, gated := h.gate(cmd, bg)
 	if fixed, ok := h.hiddenMerges(cmd, bg); ok {
