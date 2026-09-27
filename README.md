@@ -66,7 +66,7 @@ the budget work on any system.
 | `beekeeper handover [--prompt]` | Everything the next supervisor needs, as Markdown, from the live state: leases and grants, holds and their exceptions, agents, session records, notes with their defaults, timers, the merge lanes with their queues and settling merges, and what the alert watch reads (the installations and why, the ignored alert names, the baseline). `--prompt` prints the successor's session prompt: the configured instructions (`supervisor.skill` or `supervisor.instructions`), the scope, the pending state in full and the commands that read the live values; no standing rule and no live value (version, memory figure, pull request state). |
 | `beekeeper log [--verb PREFIX]` | Every claim, grant, hold, registration, note, timer, session record and build run, as they happened; `--verb run.` shows only the runs. |
 | `beekeeper run [--max SIZE] [--wait DURATION] -- <command>` | Run a build, test or lint command in one of the machine's build slots (memcap's, shared with the `memcap` wrapper) inside a memory-capped systemd scope. When every slot is held it waits once, then exits 75 with the holders; when the cap fires the kernel kills the biggest process in the scope only, and `run` exits 137 with one line starting `beekeeper run: the <SIZE> cap killed:`. Each run leaves `run.start` and `run.end` in `beekeeper log` with its scope, session and command, so `snapshot` and `watch` name a cap kill's session and command after the run has ended. `MEMCAP_TEST=1` marks a test's run: its scope is `memcap-test-…`, and a kill in it is reported as a test kill (one quiet `test kill:` line in `watch`), never as a build's. |
-| `beekeeper hook pretooluse` | The Bash tool's PreToolUse hook: rewrites build, test, lint and lab commands to `<this binary> run -- zsh -c '<command>'` with the command verbatim and the tool timeout at 10 minutes (a background run waits 60 minutes), and refuses a third kind cluster, listing the held leases. It puts the merge gate in front of every `devctl pr merge`, behind prefix commands and in pipelines and lists, and refuses one hidden in a `-c` string (below); every other devctl command passes untouched. |
+| `beekeeper hook pretooluse` | The Bash tool's PreToolUse hook: rewrites build, test, lint and lab commands to `<this binary> run -- zsh -c '<command>'` with the command verbatim and the tool timeout at 10 minutes (a background run waits 60 minutes), and refuses a third kind cluster, listing the held leases. It puts the merge gate in front of every `devctl pr merge`, behind prefix commands and in pipelines and lists, and refuses one hidden in a `-c` string (below); every other devctl command passes untouched. It refuses a command that would print secret values (below, [Secret reads](#secret-reads)). |
 | `beekeeper hook permissionrequest` | The PermissionRequest hook: answers `allow` only for a session `agents start` started in bypass that now runs in `acceptEdits`; every other request gets no answer, so the person sees the normal card. Below. |
 | `beekeeper free [--apply] [--only SECTIONS] [--summary]` | Show where the memory is and, with `--apply`, free what no running work needs: dead sessions' dirs in the tmpfs `/tmp` (the CLI is gone; an idle session's stay), throwaway temp dirs and orphaned jest or Claude workers. Kind clusters, idle CLIs, heavy or runaway processes and Chrome renderers are only reported. Never runs as root: the swap reset and root-owned leftovers are printed as the commands to run. `--summary` prints the TSV rows a desktop front end parses. |
 | `beekeeper self-update` | Install the latest signed release over this binary; `--check` only asks. |
@@ -94,6 +94,34 @@ claimed is not listed. A CLI that a session started, from its tool shell or thro
 `systemd-run`, is listed under its own id and name, `started by` that session, never as that
 session restarting; a `claude -p` its tool shell runs without an id of its own is one of that
 session's commands.
+
+## Secret reads
+
+A value a command prints lands in the session's transcript and goes to the model API with the next
+turn; one printed credential is one rotation. The PreToolUse hook refuses a Bash command that would
+print secret values, names the part that would, and gives the safe forms:
+
+- `kubectl get` of Secrets (by kind, `secret/<name>`, or in a list such as `cm,secret`) with
+  `-o yaml|json`, or with a `jsonpath`, `go-template` or `custom-columns` template that prints the data
+  or the whole object; `kubectl view-secret`; also through a shell function or variable that runs
+  kubectl (`kc(){ kubectl --context x "$@"; }`, `K="kubectl …"`), and `kubectl get -o yaml` of names
+  piped in from a Secret listing.
+- `sops -d` / `sops decrypt` to stdout; `op read`, `op inject` and `op document get` without
+  `--out-file`, `op item get --reveal` or `--format json`, `op run --no-masking`; `vault kv get` and
+  `vault read`; `base64 -d` of a secret's `.data`.
+- The same inside `sh|bash|zsh -c`, `ssh`, `eval` and `watch` strings and here-documents fed to a
+  shell. Quoted text, comments and other here-documents (a commit message, an issue body) are not
+  commands and pass.
+
+A command passes when the values never reach the terminal: the pipeline ends in a hash (`sha256sum`,
+`md5sum`, `openssl dgst`), `wc`, `grep -q|-c`, a `jq`/`yq` filter that keeps only keys or metadata
+(`jq '.data|keys'`, `.items[].metadata.name`, `(.value|length)`), a consumer that prints nothing of it
+(`kubectl apply -f -`, `--password-stdin`, `gh secret set`, `sops -e`, `openssl x509 -noout`,
+`age-keygen -y`), or a file (`> file`, `sops -d --output`, `op read --out-file`); or when the output is
+captured in a variable or a flag's value (`T=$(…)`, `--from-literal=k=$(…)`). A template ranging over
+`.data` that prints only the keys passes, as do `-o name`, `-o wide`, the table and `kubectl describe
+secret` (sizes only). Anything else that reads a secret is refused: false positives beat leaks, and
+the refusal says how to write the command safely.
 
 ## The merge gate
 

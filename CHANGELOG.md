@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The PreToolUse hook refuses a Bash command that would print secret values into the transcript: `kubectl get secret -o yaml|json`, templates over a Secret's data, `kubectl view-secret`, `sops -d`, `op read`, `op item get --reveal`, `vault kv get` and `base64 -d` of `.data`, also through kubectl wrappers and inside shell `-c` strings. Keys, metadata, hashes, files, variables and consumers such as `kubectl apply -f -` pass; the refusal names the safe forms.
 - `beekeeper reporter final <time>` schedules one last report outside the slots (covering the time since the last one) and pauses the schedule with its start; `reporter pause` pauses at once and `reporter resume` ends the pause, the current slot's report starting at the next poll. The state's `reportPause` field is new; older binaries carry it unchanged.
 
 ### Changed
