@@ -13,6 +13,11 @@ import (
 // variable or a consumer that prints nothing of it (kubectl apply -f -).
 // False positives beat leaks.
 
+const (
+	kubectlCmd = "kubectl"
+	verbGet    = "get"
+)
+
 // A leak names the command that would print secret values and the safe forms.
 type leak struct {
 	what, safe string
@@ -97,7 +102,7 @@ func scanLeaks(cmd string, depth int) *leak {
 	}
 	sc := scanShell(cmd)
 	segs := sc.segments()
-	aliases := map[string]bool{"kubectl": true}
+	aliases := map[string]bool{kubectlCmd: true}
 	for _, re := range []*regexp.Regexp{kubectlFunc, kubectlVar} {
 		for _, m := range re.FindAllStringSubmatch(sc.plain, -1) {
 			aliases[strings.Join(m[1:], "")] = true
@@ -158,10 +163,10 @@ func sourceLeak(words []string, before string, aliases map[string]bool) *leak {
 		args := words[k+1:]
 		name := path.Base(w)
 		if aliases[strings.Trim(strings.TrimSuffix(strings.TrimSuffix(w, "[@]}"), "[*]}"), "${}")] {
-			name = "kubectl"
+			name = kubectlCmd
 		}
 		switch name {
-		case "kubectl":
+		case kubectlCmd:
 			if l := kubectlLeak(args, before); l != nil {
 				return l
 			}
@@ -225,7 +230,7 @@ func kubectlLeak(args []string, before string) *leak {
 	switch verb {
 	case "view-secret":
 		return &leak{what: "kubectl view-secret", safe: kubectlSafe}
-	case "get":
+	case verbGet:
 	default:
 		return nil
 	}
@@ -284,11 +289,11 @@ func opLeak(args []string) *leak {
 	switch {
 	case sub[0] == "read" && !out, sub[0] == "inject" && !out:
 		return &leak{what: "op " + sub[0], safe: opSafe}
-	case len(sub) > 1 && sub[0] == "document" && sub[1] == "get" && !out:
+	case len(sub) > 1 && sub[0] == "document" && sub[1] == verbGet && !out:
 		return &leak{what: "op document get", safe: opSafe}
-	case len(sub) > 1 && sub[0] == "item" && sub[1] == "get" && hasFlag(args, "--reveal"):
+	case len(sub) > 1 && sub[0] == "item" && sub[1] == verbGet && hasFlag(args, "--reveal"):
 		return &leak{what: "op item get --reveal", safe: opSafe}
-	case len(sub) > 1 && sub[0] == "item" && sub[1] == "get" && flagValue(args, "--format") == "json":
+	case len(sub) > 1 && sub[0] == "item" && sub[1] == verbGet && flagValue(args, "--format") == "json":
 		return &leak{what: "op item get --format json", safe: opSafe}
 	case sub[0] == "run" && hasFlag(args, "--no-masking"):
 		return &leak{what: "op run --no-masking", safe: opSafe}
@@ -299,7 +304,7 @@ func opLeak(args []string) *leak {
 func vaultLeak(args []string) *leak {
 	sub := nonFlags(args)
 	switch {
-	case len(sub) > 1 && sub[0] == "kv" && sub[1] == "get":
+	case len(sub) > 1 && sub[0] == "kv" && sub[1] == verbGet:
 		return &leak{what: "vault kv get", safe: vaultSafe}
 	case len(sub) > 0 && sub[0] == "read":
 		return &leak{what: "vault read", safe: vaultSafe}
@@ -369,7 +374,7 @@ func safeSink(words []string) bool {
 				return true
 			}
 		}
-	case name == "kubectl":
+	case name == kubectlCmd:
 		sub := nonFlags(args)
 		return len(sub) > 0 && (sub[0] == "apply" || sub[0] == "create" || sub[0] == "replace") && readsStdin(args)
 	case name == "sops":
