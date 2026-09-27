@@ -197,7 +197,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if err != nil {
 		return startedAgent{}, err
 	}
-	if err := launch(unit, dir, a.explicitConfig(), []string{self, "agents", "reopen", id}, agentArgv(bin, id, sp.name, sp.model, sp.brief)); err != nil {
+	if err := launch(unit, dir, a.explicitConfig(), []string{self, agentsName, reopenName, id}, agentArgv(bin, id, sp.name, sp.model, sp.brief)); err != nil {
 		return startedAgent{}, fmt.Errorf("starting %s: %w (the start stays recorded; beekeeper agents remove %q takes it off the roster)", sp.name, err, sp.name)
 	}
 	if err := awaitReply(ctx, a.cfg.Claude.ProjectsDir, id, func() bool { return unitEnded(ctx, unit) }, replyQuiet, replyWait); err != nil {
@@ -335,7 +335,7 @@ func desktopTwin(t *proc.Table, id string) *proc.Process {
 // --resume <id>.
 func resumes(args []string, id string) bool {
 	for i, a := range args {
-		if a == "--resume="+id || a == "--resume" && i+1 < len(args) && args[i+1] == id {
+		if a == "--resume="+id || a == resumeFlag && i+1 < len(args) && args[i+1] == id {
 			return true
 		}
 	}

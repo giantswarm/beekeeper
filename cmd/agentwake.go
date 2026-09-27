@@ -115,7 +115,7 @@ func (a *app) wakeAgent(ctx context.Context, q, msg, mode string) error {
 	}
 	var stopPost []string
 	if w.host != "" {
-		stopPost = []string{self, "agents", "reopen", w.host}
+		stopPost = []string{self, agentsName, reopenName, w.host}
 	}
 	if err := launch(unit, w.dir, a.explicitConfig(), stopPost, wakeArgv(bin, w, msg)); err != nil {
 		return fmt.Errorf("waking %s: %w", ag.Name, err)
@@ -205,6 +205,9 @@ func uniqueName(sessions []*claude.Session, s *claude.Session) (string, error) {
 	return s.Name, nil
 }
 
+// resumeFlag continues a session in a new CLI.
+const resumeFlag = "--resume"
+
 // wakeUnit is the transient unit a wake of session id runs in.
 func wakeUnit(id string) string { return "beekeeper-wake-" + id[:min(8, len(id))] }
 
@@ -212,7 +215,7 @@ func wakeUnit(id string) string { return "beekeeper-wake-" + id[:min(8, len(id))
 // in its mode and on its model, the message as the turn; flags go before the
 // message.
 func wakeArgv(bin string, w wakeTarget, msg string) []string {
-	argv := []string{bin, "-p", "--resume", w.id, "--permission-mode", w.mode}
+	argv := []string{bin, "-p", resumeFlag, w.id, "--permission-mode", w.mode}
 	if w.name != "" {
 		argv = append(argv, "-n", w.name)
 	}

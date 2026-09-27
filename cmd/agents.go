@@ -23,10 +23,17 @@ type agentView struct {
 	Reachable string `json:"reachable"`
 }
 
+// The agents command's name and its reopen subcommand's, which a start's and
+// a wake's unit run once their turn ended.
+const (
+	agentsName = "agents"
+	reopenName = "reopen"
+)
+
 func (a *app) agentsCmd() *cobra.Command {
 	var full bool
 	c := &cobra.Command{
-		Use:   "agents",
+		Use:   agentsName,
 		Short: "The roster of empty sessions registered as spare capacity",
 		Long: `Empty sessions register as spare capacity; the supervisor hands them tasks
 before it spawns new sessions. An agent registers, gets a task assigned,

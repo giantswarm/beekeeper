@@ -9,18 +9,13 @@ import (
 
 func decideSend(t *testing.T, h Hook, to string) *decision {
 	t.Helper()
-	raw, _ := json.Marshal(map[string]any{"tool_name": SendMessageTool, "tool_input": map[string]any{"to": to, "message": "hi", "summary": "s"}})
-	out := h.Decide(raw)
-	if out == nil {
-		return nil
-	}
-	var o struct {
-		D decision `json:"hookSpecificOutput"`
-	}
-	if err := json.Unmarshal(out, &o); err != nil {
-		t.Fatalf("hook output %q: %v", out, err)
-	}
-	return &o.D
+	raw, _ := json.Marshal(struct {
+		Tool  string         `json:"tool_name"`
+		Input map[string]any `json:"tool_input"`
+	}{SendMessageTool, map[string]any{"to": to, "message": "hi", "summary": "s"}})
+	var ev map[string]any
+	_ = json.Unmarshal(raw, &ev)
+	return decideEvent(t, h, ev)
 }
 
 func TestSendMessageToARunningDesktopSessionGoesByName(t *testing.T) {
