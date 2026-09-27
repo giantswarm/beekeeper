@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `beekeeper agents wake <agent> "<message>"` wakes and messages a session past Claude Desktop's cap on `local_` sends. A running CLI gets the message by name. A stopped session is resumed headless (`claude -p --resume <id>` in its directory, mode and model, unit `beekeeper-wake-<id>`), then reopened in the desktop. `agents` shows `live, first turn running` and `live, wake turn running`.
+- The PreToolUse hook sends a `SendMessage` to a `local_` id whose session has a running CLI to that CLI by name, so a desktop send during a first turn or a wake starts no second copy of the session and spends none of the desktop's cap. A name two running CLIs carry is refused. The hook's matcher becomes `Bash|SendMessage`.
+
 ### Fixed
 
 - The Secret guard lets a jq slice or index (`.[:3]`, `.[0]`) through after a keys-only filter; `.[]` and `.["key"]` on the object stay refused.

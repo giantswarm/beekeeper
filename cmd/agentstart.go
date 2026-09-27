@@ -432,20 +432,23 @@ func (a *app) showBriefly(ctx context.Context, url, host, follow string, running
 // desktop's CLI of it (endDesktopTwin stopped the one the import warmed), so
 // the session is a peer again and takes follow-ups by message. Only a
 // session still on the roster is reopened: a hand-over or agents remove
-// took the others off, and a handed-over session must not come back.
+// took the others off, and a handed-over session must not come back. A
+// wake names the desktop id of any roster agent it resumed.
 func (a *app) agentReopenCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:    "reopen <session id>",
+		Use:    "reopen <session id | local_ desktop id>",
 		Short:  "Warm the desktop's CLI of a started session once its first turn ended",
 		Hidden: true,
 		Args:   cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			id := args[0]
+			// A wake names the desktop id (local_…), a start its session id,
+			// which is the desktop id's too.
+			id := strings.TrimPrefix(args[0], "local_")
 			st, err := a.store.Read()
 			if err != nil {
 				return err
 			}
-			name, ok := reopens(st, id)
+			name, ok := reopens(st, args[0])
 			if !ok {
 				_, err := fmt.Fprintf(a.out, "reopen: %s is no start on the roster, left closed\n", id)
 				return err
@@ -477,6 +480,13 @@ func (a *app) agentReopenCmd() *cobra.Command {
 // reopens reports whether the session id is one of beekeeper's starts that a
 // roster entry still holds, and the entry's name, the session's title.
 func reopens(st *state.State, id string) (string, bool) {
+	if strings.HasPrefix(id, "local_") {
+		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.HostSession == id })
+		if i < 0 {
+			return "", false
+		}
+		return st.Agents[i].Name, true
+	}
 	if !slices.ContainsFunc(st.Starts, func(s state.Start) bool { return s.Session == id }) {
 		return "", false
 	}

@@ -96,6 +96,9 @@ type Hook struct {
 	Clusters func() []string
 	// Leases lists the held leases.
 	Leases func() []lease.Holder
+	// Peer names the running CLI of a desktop session id, "" when none
+	// runs; an error refuses the send. Nil passes every SendMessage.
+	Peer func(host string) (string, error)
 }
 
 type hookOutput struct {
@@ -115,7 +118,13 @@ func (h Hook) Decide(input []byte) []byte {
 	}
 	dec := json.NewDecoder(bytes.NewReader(input))
 	dec.UseNumber()
-	if dec.Decode(&ev) != nil || ev.ToolName != "Bash" {
+	if dec.Decode(&ev) != nil {
+		return nil
+	}
+	if ev.ToolName == SendMessageTool {
+		return h.sendMessage(ev.ToolInput)
+	}
+	if ev.ToolName != "Bash" {
 		return nil
 	}
 	cmd, _ := ev.ToolInput["command"].(string)

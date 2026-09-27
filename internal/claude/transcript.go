@@ -223,3 +223,29 @@ func Called(path, suffix string) (bool, error) {
 		}
 	}
 }
+
+// TranscriptCwd is the working directory the transcript at path records for
+// its session: the first entry's cwd within firstWindow, "" for none.
+func TranscriptCwd(path string) (string, error) {
+	f, err := os.Open(filepath.Clean(path))
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+	r := bufio.NewReaderSize(io.LimitReader(f, firstWindow), 1<<20)
+	for {
+		line, err := r.ReadBytes('\n')
+		var e struct {
+			Cwd string `json:"cwd"`
+		}
+		if json.Unmarshal(bytes.TrimSpace(line), &e) == nil && e.Cwd != "" {
+			return e.Cwd, nil
+		}
+		if err == io.EOF {
+			return "", nil
+		}
+		if err != nil {
+			return "", err
+		}
+	}
+}

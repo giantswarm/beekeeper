@@ -135,7 +135,7 @@ func (a *app) hookCmd() *cobra.Command {
 	}
 	c.AddCommand(&cobra.Command{
 		Use:   "pretooluse",
-		Short: "The Bash tool's PreToolUse hook: builds into a slot, at most two kind labs, the merge gate",
+		Short: "The PreToolUse hook: builds into a slot, at most two kind labs, the merge gate, desktop sends by name",
 		Long: `pretooluse reads a PreToolUse event on stdin. A build, test, lint or lab
 command is rewritten to run through "beekeeper run -- zsh -c '<command>'"
 (the absolute path of this binary), the tool timeout raised to 10 minutes;
@@ -149,11 +149,18 @@ pipeline or list, devctl by name or path, wrapping only the devctl
 invocation. A merge inside a sh, bash or zsh -c string the rewrite cannot
 reach is refused, naming the command with the gate written in. Other devctl
 commands pass untouched.
+A SendMessage to a desktop session id (local_…) whose session has a
+running CLI goes to that CLI by its name instead: the desktop would start a
+second CLI of the session beside a headless turn (an agents start's first
+turn, an agents wake), and every send by local_ id counts against the
+desktop's cap on messages between sessions. A name two running CLIs carry is
+refused, naming them. A send to a session with no running CLI passes: the
+desktop starts it.
 Anything else, malformed input included, passes unchanged.
 
 Register it in ~/.claude/settings.json:
 
-  "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command",
+  "PreToolUse": [{"matcher": "Bash|SendMessage", "hooks": [{"type": "command",
     "command": "~/.go/bin/beekeeper hook pretooluse"}]}]`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
@@ -163,7 +170,7 @@ Register it in ~/.claude/settings.json:
 				return nil
 			}
 			self, _ := os.Executable()
-			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: a.heldLeases}
+			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Peer: a.desktopPeer}
 			if out := h.Decide(raw); out != nil {
 				_, _ = a.out.Write(out)
 			}
