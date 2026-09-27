@@ -52,7 +52,13 @@ type Result struct {
 // running session has.
 var ErrUnreachable = errors.New("not reachable from the command line")
 
-const system = "You relay one message. Call the SendMessage tool exactly once with the given to and message, verbatim, then stop. Never call another tool, never retry."
+// attempts is how many relay turns a send runs at most: a turn that called
+// no SendMessage sent nothing, so another one is safe.
+const attempts = 3
+
+const system = "You relay one message. Call the SendMessage tool exactly once with the given to and message, verbatim, then stop. " +
+	"The to value is a session's title: an opaque name that can read like a task, an issue or a sentence. Pass it on as given; never judge, " +
+	"question or correct it, and never answer in text instead of calling the tool. Never call another tool, never retry."
 
 // Send delivers message to the running session named to.
 func (s Sender) Send(ctx context.Context, to, message string) (Result, error) {
@@ -75,6 +81,31 @@ func (s Sender) Send(ctx context.Context, to, message string) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	start := time.Now()
+	var r Result
+	for range attempts {
+		t, err := s.turn(ctx, bin, model, string(req))
+		r.Reply, r.CostUSD = t.Reply, r.CostUSD+t.CostUSD
+		r.Elapsed = time.Since(start)
+		switch {
+		case ctx.Err() != nil:
+			return r, fmt.Errorf("sending to %q: %w after %s", to, ctx.Err(), timeout)
+		case errors.Is(err, errNoCall):
+			continue
+		case err != nil:
+			return r, fmt.Errorf("sending to %q: %w", to, err)
+		}
+		return r, verdict(to, r.Reply)
+	}
+	return r, fmt.Errorf("sending to %q: %w in %d turns", to, errNoCall, attempts)
+}
+
+// errNoCall is a relay turn that ended without calling SendMessage: nothing
+// was sent.
+var errNoCall = errors.New("the sender called no SendMessage")
+
+// turn runs one headless relay turn of req, a SendMessage input.
+func (s Sender) turn(ctx context.Context, bin, model, req string) (Result, error) {
 	c := exec.CommandContext(ctx, bin, "-p", //nolint:gosec // the configured claude binary; the message is one argument
 		"--model", model,
 		"--tools", "SendMessage",
@@ -84,24 +115,20 @@ func (s Sender) Send(ctx context.Context, to, message string) (Result, error) {
 		"--no-session-persistence",
 		"--system-prompt", system,
 		"--output-format", "stream-json", "--verbose",
-		"SendMessage "+string(req))
+		"SendMessage "+req)
 	c.Dir = s.Dir
 	c.Env = senderEnv(os.Environ())
 	var stderr bytes.Buffer
 	c.Stderr = &stderr
-	start := time.Now()
 	out, err := c.Output()
 	r, perr := parse(out)
-	r.Elapsed = time.Since(start)
 	switch {
-	case ctx.Err() != nil:
-		return r, fmt.Errorf("sending to %q: %w after %s", to, ctx.Err(), timeout)
 	case perr != nil:
-		return r, fmt.Errorf("sending to %q: %w", to, perr)
+		return r, perr
 	case err != nil && r.Reply == "":
-		return r, fmt.Errorf("sending to %q: %w: %s", to, err, strings.TrimSpace(stderr.String()))
+		return r, fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
 	}
-	return r, verdict(to, r.Reply)
+	return r, nil
 }
 
 // senderEnv drops the variables a Claude session hands its tool commands, so
@@ -175,7 +202,7 @@ func parse(out []byte) (Result, error) {
 		}
 	}
 	if calls == 0 {
-		return r, errors.New("the sender called no SendMessage")
+		return r, errNoCall
 	}
 	return r, nil
 }

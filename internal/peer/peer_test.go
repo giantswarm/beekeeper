@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -61,5 +64,43 @@ func TestLive(t *testing.T) {
 	}
 	if _, err := (Sender{Dir: t.TempDir()}).Send(context.Background(), to+" (absent)", msg); !errors.Is(err, ErrUnreachable) {
 		t.Fatalf("an absent session: %v, want unreachable", err)
+	}
+}
+
+// A relay turn that called no SendMessage sent nothing: the send runs
+// another, up to attempts, and gives up after that.
+func TestSendRetriesATurnWithoutACall(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "claude")
+	script := `#!/bin/sh
+n=$(cat "$0.n" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" >| "$0.n"
+if [ "$n" -lt "$CALL_ON" ]; then
+  echo '{"type":"assistant","message":{"content":[{"type":"text","text":"that is no valid agent name"}]}}'
+else
+  echo '{"type":"user","message":{"content":[{"type":"tool_result","content":"{\"success\":true}"}]}}'
+fi
+echo '{"type":"result","total_cost_usd":0.01}'
+`
+	if err := os.WriteFile(fake, []byte(script), 0o700); err != nil { //nolint:gosec // a test script
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		callOn string
+		turns  int
+		ok     bool
+	}{{"1", 1, true}, {"3", 3, true}, {"4", 3, false}} {
+		_ = os.Remove(fake + ".n")
+		t.Setenv("CALL_ON", tc.callOn)
+		r, err := Sender{Claude: fake, Dir: dir}.Send(context.Background(), "Close epic #1 GPU node pool", "hi")
+		if (err == nil) != tc.ok || (!tc.ok && !errors.Is(err, errNoCall)) {
+			t.Errorf("call on turn %s: err %v", tc.callOn, err)
+		}
+		n, _ := os.ReadFile(fake + ".n") //nolint:gosec // the test script's counter
+		if got := strings.TrimSpace(string(n)); got != strconv.Itoa(tc.turns) {
+			t.Errorf("call on turn %s: %s turns, want %d", tc.callOn, got, tc.turns)
+		}
+		if want := 0.01 * float64(tc.turns); r.CostUSD < want-1e-9 || r.CostUSD > want+1e-9 {
+			t.Errorf("call on turn %s: cost %v, want %v", tc.callOn, r.CostUSD, want)
+		}
 	}
 }

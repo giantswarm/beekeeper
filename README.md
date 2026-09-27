@@ -534,14 +534,17 @@ line per step:
 
 1. **The note.** A peer message asks the agent to record what is in flight and what is next with
    `beekeeper agents note "<...>"` and end its turn; the hand-over waits `agents.noteWait` (3m)
-   for it and carries on without it after that. A failed send changes nothing.
-2. **The prompt.** `beekeeper agents handover --prompt "<agent>"` prints it: the roster task, the
-   brief the agent was started with (a follow-up's brief is its predecessor's, not the prompt
+   for it and carries on without it after that. The ask is one headless relay turn; a turn that
+   called no SendMessage sent nothing and is run again, three turns at most. A failed send changes
+   nothing.
+2. **The prompt.** `beekeeper agents handover --prompt "<agent>"` prints it: the roster task (of an
+   idle agent the last task it reported idle on, which a repeated `agents idle` or a re-register
+   keeps), the brief the agent was started with (a follow-up's brief is its predecessor's, not the prompt
    around it), its `sessions serve` record, its gated merges, its last events and its note. No
    standing rules and no live values: the follow-up is told to check the live state first.
 3. **The start.** The follow-up is started as `agents start` starts one, in the old session's
    folder and model, under the agent's name: it takes over the roster entry, the task and the
-   session record. It shows in the sidebar and runs its first turn from the prompt alone.
+   session record, busy with the task. It shows in the sidebar and runs its first turn from the prompt alone.
 4. **The end.** Once the follow-up's transcript holds its first reply, the old session's CLI and every
    process under it get SIGTERM, then SIGKILL after 10 s, by PID: the desktop shows it stopped.
 5. **The log.** One `agents.handover` event in `beekeeper log`.

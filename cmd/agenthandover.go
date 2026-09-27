@@ -223,11 +223,15 @@ func (h handover) prompt() string {
 	b.WriteString(". Carry the task on to its finish from this prompt alone: nobody adds to it. " +
 		"Continue where the note leaves off and do not redo finished steps; check the live state " +
 		"(files, pull requests, CI) before acting on anything below, which was true when the previous session ended.\n\n")
-	task := ag.Task
-	if task == "" {
-		task = "(none: the agent was idle; report back idle with beekeeper agents idle)"
+	switch task := h.task(); {
+	case task == "":
+		b.WriteString("Task: (none: the agent was idle; report back idle with beekeeper agents idle)\n")
+	case ag.Task == "":
+		fmt.Fprintf(&b, "Task: %s\n(The previous session had reported it idle at %s, waiting: finish what is left of it, then report idle.)\n",
+			task, ag.IdleSince.Local().Format("Jan 2 15:04"))
+	default:
+		fmt.Fprintf(&b, "Task: %s\n", task)
 	}
-	fmt.Fprintf(&b, "Task: %s\n", task)
 	if r := h.record; r != nil {
 		fmt.Fprintf(&b, "Serves: %s", r.Issue)
 		if r.Waits != "" {
@@ -261,6 +265,15 @@ func (h handover) prompt() string {
 		fmt.Fprintf(&b, "\nThe brief it was started with:\n%s\n%s\n%s\n", briefOpen, brief, briefClose)
 	}
 	return strings.TrimSpace(b.String())
+}
+
+// task is the agent's task: the open one, or the last one it reported idle
+// on, which a hand-over at its first quiet moment carries on.
+func (h handover) task() string {
+	if h.agent.Task != "" {
+		return h.agent.Task
+	}
+	return h.agent.LastTask
 }
 
 // summary names the parts a prompt carries, for the step's one line.
@@ -322,7 +335,7 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 	}
 	p := h.prompt()
 	a.say("prompt: %d bytes: %s", len(p), h.summary())
-	sa, err := a.startAgent(ctx, agentStart{name: ag.Name, brief: p, task: ag.Task, dir: h.dir, model: h.model, replaces: &ag.Party})
+	sa, err := a.startAgent(ctx, agentStart{name: ag.Name, brief: p, task: h.task(), dir: h.dir, model: h.model, replaces: &ag.Party})
 	if err != nil {
 		return err
 	}

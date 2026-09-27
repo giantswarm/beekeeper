@@ -89,6 +89,11 @@ func TestHandoverPromptPassesOnTheBrief(t *testing.T) {
 	if got := briefOf("  a plain brief\n"); got != "a plain brief" {
 		t.Errorf("briefOf(plain) = %q", got)
 	}
+	// An idle agent is handed over with the last task it reported idle on.
+	h = handover{agent: state.Agent{Party: state.Party{Session: oldID, Name: countName}, LastTask: countTask, IdleSince: at}}
+	if p := h.prompt(); !strings.Contains(p, "Task: "+countTask+"\n(The previous session had reported it idle") || h.task() != countTask {
+		t.Errorf("prompt of an idle agent:\n%s", p)
+	}
 	// Without a note and a task, the prompt says so; a huge brief is cut.
 	h = handover{agent: state.Agent{Party: state.Party{Session: oldID, Name: "x"}}, brief: strings.Repeat("b", maxBrief)}
 	p = h.prompt()
