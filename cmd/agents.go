@@ -9,21 +9,31 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 type agentView struct {
 	state.Agent
-	// Reachable: "live" (the CLI runs), "waiting <t> left" (a bounded wait
-	// keeps it reachable), or "not running" (paused or closed: only the
-	// person reopening it brings it back).
+	// Reachable: "live" (the CLI runs), "live, first turn running" or
+	// "live, wake turn running" (a headless turn of agents start or agents
+	// wake is its CLI), "waiting <t> left" (a bounded wait keeps it
+	// reachable), or "not running" (paused or closed: agents wake brings it
+	// back).
 	Reachable string `json:"reachable"`
 }
+
+// The agents command's name and its reopen subcommand's, which a start's and
+// a wake's unit run once their turn ended.
+const (
+	agentsName = "agents"
+	reopenName = "reopen"
+)
 
 func (a *app) agentsCmd() *cobra.Command {
 	var full bool
 	c := &cobra.Command{
-		Use:   "agents",
+		Use:   agentsName,
 		Short: "The roster of empty sessions registered as spare capacity",
 		Long: `Empty sessions register as spare capacity; the supervisor hands them tasks
 before it spawns new sessions. An agent registers, gets a task assigned,
@@ -184,7 +194,7 @@ one "no change" line; --full prints everything.`,
 	}
 	list := listCmd("List the agents, idle ones first", func() error { return a.agentList(full) })
 	fullFlag(list, &full)
-	c.AddCommand(register, a.agentStartCmd(), a.agentReopenCmd(), a.agentHandoverCmd(), a.agentNoteCmd(), assign, idle, remove, list)
+	c.AddCommand(register, a.agentStartCmd(), a.agentWakeCmd(), a.agentReopenCmd(), a.agentHandoverCmd(), a.agentNoteCmd(), assign, idle, remove, list)
 	return c
 }
 
@@ -276,6 +286,7 @@ func findParty(parties []state.Party, q, one, many string) (int, error) {
 
 func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentView {
 	out := make([]agentView, 0, len(st.Agents))
+	t, _ := proc.Read() // unreadable: no headless turn is named
 	for _, ag := range st.Agents {
 		v := agentView{Agent: ag, Reachable: "not running"}
 		if s, ok := claude.Live(sessions, ag.Party); ok {
@@ -284,6 +295,9 @@ func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentVie
 				if c.Remaining > 0 {
 					v.Reachable = "waiting, " + dur(c.Remaining) + " left"
 				}
+			}
+			if turn := headlessTurn(t, s.ID); turn != "" {
+				v.Reachable = "live, " + turn + " running"
 			}
 		}
 		out = append(out, v)

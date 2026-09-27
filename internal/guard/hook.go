@@ -99,6 +99,9 @@ type Hook struct {
 	// Guide reports whether the session is the guide's, and the person the
 	// guide asks; read only for an AskUserQuestion call.
 	Guide func(session string) (bool, string)
+	// Peer names the running CLI of a desktop session id, "" when none
+	// runs; an error refuses the send. Nil passes every SendMessage.
+	Peer func(host string) (string, error)
 }
 
 type hookOutput struct {
@@ -124,6 +127,9 @@ func (h Hook) Decide(input []byte) []byte {
 	}
 	if ev.ToolName == AskTool {
 		return h.ask(ev.Session)
+	}
+	if ev.ToolName == SendMessageTool {
+		return h.sendMessage(ev.ToolInput)
 	}
 	if ev.ToolName != "Bash" {
 		return nil
