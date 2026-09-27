@@ -66,7 +66,7 @@ var (
 	// wholeObject: a template that prints an object with its data.
 	wholeObject = regexp.MustCompile(`(?i)\b(?:string)?data\b|\{\s*[@.]\s*\}|\.\.|\{\s*\.items\s*(?:\[[^\]]*\])?\s*\}|\{\{-?\s*(?:json|toJson|toYaml|toPrettyJson)?\s*\.\s*-?\}\}|:=\s*\.\s*-?\}\}`)
 	// keysOnly: a jq or yq filter part that keeps only the keys of the data.
-	keysOnly = regexp.MustCompile(`(?:\.\w+|\[[^\]]*\])*\.(?:data|stringData)\s*\|\s*(?:keys_unsorted|keys|length)\b(?:\[\])?|\.value\s*\|\s*length\b`)
+	keysOnly = regexp.MustCompile(`(?:\.\w+|\[[^\]]*\])*\.(?:data|stringData)(?:\s*//\s*\{\}\s*\))?\s*\|\s*(?:keys_unsorted|keys|length)\b(?:\[\])?|\.value\s*\|\s*length\b`)
 	// templateKeys: a template range over the data that binds the value to
 	// group 1, or the data's length.
 	templateKeys = regexp.MustCompile(`range\s+\$\w+\s*,\s*\$(\w+)\s*:=\s*\.(?:data|stringData)\b|len\s+\.(?:data|stringData)\b`)

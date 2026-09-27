@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The Secret guard takes the null-safe keys form `(.data // {})|keys` as keys only.
 - `watch --notify` sends the critical "the machine is near its OOM line" notification only while a threshold is crossed. It sent one every `notify.repeat` whatever the machine's state, with the body `beekeeper snapshot` and no condition. The desktop scope's `memory.current` no longer counts toward the OOM line, because it is mostly reclaimable page cache under the scope's `memory.high`. The scope's anonymous memory (`watch.scopeAnonMaxMiB`) is the line, and `watch.scopeMaxMiB` is gone.
 - A gated merge's `beekeeper-merge-*` unit no longer fails when devctl merged or declined the pull request (exit 0–6, 9: not applicable, refused, red, timed out). The gate hands that outcome to the calling session and the event log. The unit fails only where a person must act: devctl's usage or tooling failure (7), its authentication (8), a signal, or the merge child itself.
 - A session beekeeper stops with SIGTERM (a reporter past its timeout, a stopped agent) ends its unit successfully instead of as a failed unit.
