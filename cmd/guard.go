@@ -186,7 +186,8 @@ Register it in ~/.claude/settings.json:
 			}
 			self, _ := os.Executable()
 			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, Peer: a.desktopPeer,
-				Project: os.Getenv("CLAUDE_PROJECT_DIR"), Reads: a.firstReads}
+				Project: os.Getenv("CLAUDE_PROJECT_DIR"), Reads: a.firstReads,
+				Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig()}
 			if out := h.Decide(raw); out != nil {
 				_, _ = a.out.Write(out)
 			}
@@ -368,4 +369,18 @@ func env(name, def string) string {
 		return v
 	}
 	return def
+}
+
+// machineKubeconfig is the machine kubeconfig, ~/.kube/config.
+func machineKubeconfig() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".kube", "config")
+}
+
+// kubeconfigList is the kubeconfig list kubectl reads by default.
+func kubeconfigList() string {
+	return env("KUBECONFIG", machineKubeconfig())
 }

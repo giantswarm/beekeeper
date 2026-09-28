@@ -48,6 +48,9 @@ type snapshot struct {
 	BudgetErr   string            `json:"budgetError,omitempty"`
 	Alerts      []string          `json:"alerts,omitempty"`
 	Upgrades    []upgrade.Status  `json:"upgrades,omitempty"`
+	// KubeContext is the machine kubeconfig's current context, which
+	// should stay unset.
+	KubeContext string `json:"kubeContext,omitempty"`
 }
 
 // wait is a long-running command a session sits on: a devctl wait or merge,
@@ -196,6 +199,7 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 	s.Tmp, _ = machine.ReadDisk("/tmp")
 	s.Root, _ = machine.ReadDisk("/")
 	s.Slots = machine.ReadSlots(a.cfg.Memcap.SlotDir, a.cfg.Memcap.Slots)
+	s.KubeContext = guard.CurrentContext(machineKubeconfig())
 	if s.Clusters, err = machine.KindClusters(ctx); err != nil {
 		s.ClustersErr = err.Error()
 	}
@@ -406,6 +410,9 @@ func (a *app) printSnapshot(s *snapshot) {
 		}
 	}
 	p("build slots: %s", strings.Join(slots, "; "))
+	if s.KubeContext != "" {
+		p("machine kubeconfig has a current context: %s (unset it: kubectl config unset current-context)", s.KubeContext)
+	}
 	var cl []string
 	for _, c := range s.Clusters {
 		cl = append(cl, fmt.Sprintf("%s (%d node, %d MiB)", c.Name, c.Nodes, c.MemMiB))
@@ -573,6 +580,9 @@ func diffSnapshots(prev, cur *snapshot) []string {
 	setDiff("waits", waitKeys(prev.Waits), waitKeys(cur.Waits))
 	setDiff("holds", holdKeys(prev.Holds), holdKeys(cur.Holds))
 	setDiff("upgrades", upgradeWords(prev.Upgrades, time.Time{}), upgradeWords(cur.Upgrades, time.Time{}))
+	if cur.KubeContext != "" && cur.KubeContext != prev.KubeContext {
+		out = append(out, "MACHINE KUBECONFIG current context set: "+cur.KubeContext)
+	}
 	if prev.Budget != nil && cur.Budget != nil && prev.Budget.Reset.Equal(cur.Budget.Reset) {
 		if d := prev.Budget.Remaining - cur.Budget.Remaining; d >= 250 {
 			out = append(out, fmt.Sprintf("GitHub budget %d → %d (%d spent)", prev.Budget.Remaining, cur.Budget.Remaining, d))
