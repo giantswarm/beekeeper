@@ -1,12 +1,15 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 // A session whose desktop record lost its name is asked, through its
@@ -63,5 +66,26 @@ func TestRetitle(t *testing.T) {
 func TestPeerSocket(t *testing.T) {
 	if got := peerSocket("/run/user/1000", 878093); got != "/run/user/1000/cc-socks/878093.sock" {
 		t.Errorf("peerSocket = %q", got)
+	}
+}
+
+// A reopen the desktop did not take ends the unit successfully and leaves
+// its reason in the event log.
+func TestAMissedReopenFailsNoUnit(t *testing.T) {
+	store, err := state.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	a := &app{store: store, out: &out}
+	if err := a.reopenMissed("#1 task", errors.New("the desktop recorded no title")); err != nil {
+		t.Fatalf("a missed reopen fails its unit: %v", err)
+	}
+	evs, err := store.Events(0, func(e state.Event) bool { return e.Verb == "agent.reopen" })
+	if err != nil || len(evs) != 1 || !strings.Contains(evs[0].Detail, "no title") || evs[0].By.Name != "#1 task" {
+		t.Errorf("events %+v, %v", evs, err)
+	}
+	if !strings.Contains(out.String(), "reopen: missed") {
+		t.Errorf("printed %q", out.String())
 	}
 }

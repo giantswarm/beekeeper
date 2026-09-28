@@ -180,6 +180,17 @@ type Merge struct {
 	// StallAfter is how long a lane's first arrived merge may wait behind
 	// places whose merges are not in the gate before the lane is stalled.
 	StallAfter Duration `yaml:"stallAfter"`
+	// DevctlOwners are the owners whose repositories devctl pr merge serves
+	// (its GitHub App login reaches the giantswarm organisation only); a
+	// repository of any other owner takes the plain squash merge as the gh
+	// login instead.
+	DevctlOwners []string `yaml:"devctlOwners"`
+}
+
+// DevctlServes says whether devctl pr merge serves repo's owner.
+func (m Merge) DevctlServes(repo string) bool {
+	owner, _, _ := strings.Cut(repo, "/")
+	return slices.ContainsFunc(m.DevctlOwners, func(o string) bool { return strings.EqualFold(o, owner) })
 }
 
 // Notify configures what `watch --notify` sends to the desktop.
@@ -549,6 +560,9 @@ func (c *Config) defaults() error {
 	setDur(&c.Merge.SettleTimeout, 30*time.Minute)
 	setDur(&c.Merge.BudgetFresh, time.Minute)
 	setDur(&c.Merge.StallAfter, 5*time.Minute)
+	if c.Merge.DevctlOwners == nil {
+		c.Merge.DevctlOwners = []string{"giantswarm"}
+	}
 
 	setStr(&c.Memcap.SlotDir, filepath.Join(state, "memcap", "slots"))
 	setInt(&c.Memcap.Slots, 2)

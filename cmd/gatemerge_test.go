@@ -35,6 +35,14 @@ func fakeDevctl(t *testing.T, script string) {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
+// labRepo is a repository devctl does not serve.
+const labRepo = "teemow/lab"
+
+// mergeArgv is devctl pr merge repo 7 with extra flags.
+func mergeArgv(repo string, extra ...string) []string {
+	return append([]string{merge.Tool, "pr", "merge", repo, "7"}, extra...)
+}
+
 // runningMerge is a gate run of repo#pr in its lane that devctl's turn has
 // come for, with the devctl release window open when repo is devctl's.
 func runningMerge(t *testing.T, repo string, lane config.Lane) *gateRun {
@@ -43,10 +51,10 @@ func runningMerge(t *testing.T, repo string, lane config.Lane) *gateRun {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := &config.Config{Lanes: []config.Lane{lane}, Merge: config.Merge{SeedTTL: config.Duration{Duration: time.Hour}}}
+	cfg := &config.Config{Lanes: []config.Lane{lane}, Merge: config.Merge{SeedTTL: config.Duration{Duration: time.Hour}, DevctlOwners: []string{"o", "giantswarm"}}}
 	me := state.Party{Name: "worker"}
 	g := &gateRun{app: &app{cfg: cfg, store: store, now: relayNow}, ctx: context.Background(), repo: repo, pr: 7, lane: lane, me: me, pid: os.Getpid(),
-		argv: []string{"devctl", "pr", "merge", repo, "7"}}
+		argv: mergeArgv(repo)}
 	err = store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges = []state.Merge{{Repo: repo, PR: 7, Lane: lane.Name, By: me, PID: g.pid, Phase: state.Running, Joined: relayNow, Started: relayNow}}
 		if repo == merge.ToolRepo {
@@ -303,4 +311,96 @@ func TestMergeChildUnitFailsOnlyForAPerson(t *testing.T) {
 			t.Errorf("devctl exit %d: unit exit %d, want %d", rc, got, want)
 		}
 	}
+}
+
+// The plain squash merge route carries the caller's --timeout, in either
+// spelling, and nothing else of devctl's flags.
+func TestSquashArgv(t *testing.T) {
+	for want, argv := range map[string][]string{
+		"bk squash-merge teemow/lab 7":                mergeArgv(labRepo, "--progress"),
+		"bk squash-merge teemow/lab 7 --timeout 10m":  mergeArgv(labRepo, "--timeout", "10m"),
+		"bk squash-merge teemow/lab 7 --timeout 1h0m": mergeArgv(labRepo, "--timeout=1h0m"),
+	} {
+		if got := strings.Join(squashArgv("bk", labRepo, 7, argv), " "); got != want {
+			t.Errorf("%v: %q, want %q", argv, got, want)
+		}
+	}
+}
+
+// A finished run's stderr and document are kept for its owner outside the
+// run's own files; kept outputs past keptFor are pruned.
+func TestKeepOutput(t *testing.T) {
+	dir := t.TempDir()
+	base := mergeBase(dir, labRepo, 7)
+	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(base+".log", []byte("not found error\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(dir, keptOutputs, "old.log")
+	if err := os.MkdirAll(filepath.Dir(old), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(old, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if err := os.Chtimes(old, now.Add(-keptFor-time.Hour), now.Add(-keptFor-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	path := keepOutput(base, []byte(`{"exitCode":7}`), now)
+	raw, err := os.ReadFile(path) //nolint:gosec // the test's file
+	if err != nil || !strings.Contains(string(raw), "not found error") || !strings.Contains(string(raw), `"exitCode":7`) {
+		t.Fatalf("kept %q: %q, %v", path, raw, err)
+	}
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Errorf("the old output is not pruned: %v", err)
+	}
+	removeMergeFiles(base)
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("the kept output went with the run's files: %v", err)
+	}
+}
+
+// A repository devctl does not serve takes the plain squash merge in the
+// merge's child, not devctl, and the event names the route and the output.
+func TestAnUnservedRepositoryTakesThePlainSquashMerge(t *testing.T) {
+	userSystemd = func() bool { return false }
+	t.Cleanup(func() { userSystemd = guard.UserSystemd })
+	fakeDevctl(t, `echo devctl ran >&2; exit 7`)
+	dir := t.TempDir()
+	args := filepath.Join(dir, "args")
+	self := filepath.Join(dir, "beekeeper")
+	// Stands in for this binary: merge-child runs the squash-merge it names.
+	script := "#!/bin/sh\nif [ \"$1\" = merge-child ]; then exec " + os.Args[0] + " -test.run=TestHelperMergeChild -- \"$2\"; fi\n" +
+		"echo \"$@\" >" + args + "; echo green >&2; echo '{\"mergeCommitSha\":\"abc\",\"release\":null}'\n"
+	if err := os.WriteFile(self, []byte(script), 0o700); err != nil { //nolint:gosec // a test script
+		t.Fatal(err)
+	}
+	was := selfExe
+	selfExe = func() (string, error) { return self, nil }
+	t.Cleanup(func() { selfExe = was })
+	stubGitHub(t, "", "")
+	g := runningMerge(t, labRepo, config.Lane{Name: labRepo})
+	if err := g.runMerge(); err != nil {
+		t.Fatalf("the plain squash merge: %v", err)
+	}
+	raw, _ := os.ReadFile(args) //nolint:gosec // the test's file
+	if got := strings.TrimSpace(string(raw)); got != "squash-merge teemow/lab 7" {
+		t.Errorf("ran %q", got)
+	}
+	d := lastEvent(t, g, "merged")
+	if !strings.Contains(d, "teemow/lab#7 exit 0") || !strings.Contains(d, github.SquashRoute) || !strings.Contains(d, "output in ") {
+		t.Errorf("merged event: %q", d)
+	}
+}
+
+// TestHelperMergeChild is merge-child for the fake binary above.
+func TestHelperMergeChild(t *testing.T) {
+	i := slices.Index(os.Args, "--")
+	if i < 0 {
+		t.Skip("run by TestAnUnservedRepositoryTakesThePlainSquashMerge")
+	}
+	os.Exit(mergeChild(os.Args[i+1]))
 }

@@ -25,6 +25,7 @@ var (
 	pullState     = github.PullState
 	devctlVersion = toolVersion
 	userSystemd   = guard.UserSystemd
+	selfExe       = os.Executable
 )
 
 // mergeFiles is the base of the merge's files (mergeBase), its directory
@@ -50,6 +51,41 @@ func removeMergeFiles(base string) {
 	for _, ext := range mergeExts {
 		_ = os.Remove(base + ext)
 	}
+}
+
+// keptOutputs is the directory under the state directory that keeps each
+// finished merge run's output (keptOutput), keptFor how long.
+const (
+	keptOutputs = "merge-output"
+	keptFor     = 7 * 24 * time.Hour
+)
+
+// keepOutput keeps a finished run's stderr and document for its owner in
+// <state>/merge-output/<repo>-<n>-<UTC time>.log, as its files under merges/
+// are removed with the run, and prunes the kept outputs older than keptFor.
+// It returns the kept file, "" when there was nothing to keep.
+func keepOutput(base string, doc []byte, now time.Time) string {
+	dir := filepath.Join(filepath.Dir(filepath.Dir(base)), keptOutputs)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return ""
+	}
+	if entries, err := os.ReadDir(dir); err == nil {
+		for _, e := range entries {
+			if info, err := e.Info(); err == nil && now.Sub(info.ModTime()) > keptFor {
+				_ = os.Remove(filepath.Join(dir, e.Name()))
+			}
+		}
+	}
+	stderr, _ := os.ReadFile(base + ".log") //nolint:gosec // the gate's own file
+	if len(stderr) == 0 && len(doc) == 0 {
+		return ""
+	}
+	path := filepath.Join(dir, filepath.Base(base)+"-"+now.UTC().Format("20060102T150405Z")+".log")
+	out := append(append(stderr, []byte("--- document ---\n")...), doc...)
+	if os.WriteFile(path, out, 0o600) != nil { //nolint:gosec // under the state directory, named by the gate
+		return ""
+	}
+	return path
 }
 
 // finishedRun reads how a merge's run ended from its files once its runner
@@ -93,32 +129,32 @@ type childSpec struct {
 // Only SIGINT, a person's Ctrl-C, reaches devctl; SIGTERM and SIGHUP, a
 // caller going away, do not (runMerge keeps them from ending the gate).
 // started gets merge-child's pid. rc is devctl's exit code, 128+n for a
-// signal.
-func runDetached(argv []string, base string, started func(pid int)) (doc []byte, rc int) {
+// signal; kept is the file keepOutput kept its output in.
+func runDetached(argv []string, base string, started func(pid int)) (doc []byte, rc int, kept string) {
 	removeMergeFiles(base)
 	defer removeMergeFiles(base)
 	path, err := exec.LookPath(argv[0])
 	if err != nil {
 		gateLine("%v", err)
-		return nil, guard.ExitNotFound
+		return nil, guard.ExitNotFound, ""
 	}
 	dir, _ := os.Getwd()
 	spec, _ := json.Marshal(childSpec{Argv: append([]string{path}, argv[1:]...), Env: os.Environ(), Dir: dir})
 	if err := os.WriteFile(base+".spec", spec, 0o600); err != nil {
 		gateLine("%v", err)
-		return nil, guard.ExitNotFound
+		return nil, guard.ExitNotFound, ""
 	}
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(sig)
 	if err := startChild(base); err != nil {
 		gateLine("the merge does not start: %v", err)
-		return nil, guard.ExitNotFound
+		return nil, guard.ExitNotFound, ""
 	}
 	pid, err := awaitPID(base)
 	if err != nil {
 		gateLine("the merge does not start: %v", err)
-		return nil, guard.ExitNotFound
+		return nil, guard.ExitNotFound, ""
 	}
 	started(pid)
 	log, err := os.Open(base + ".log") //nolint:gosec // the gate's own file under the state directory
@@ -132,7 +168,7 @@ func runDetached(argv []string, base string, started func(pid int)) (doc []byte,
 		}
 		if _, err := os.Stat(base + ".rc"); err == nil {
 			doc, rc = finishedRun(base)
-			return doc, rc
+			return doc, rc, keepOutput(base, doc, time.Now())
 		}
 		if !proc.Alive(pid) {
 			// The rc file is written before the runner exits: finishedRun reads it.
@@ -140,7 +176,7 @@ func runDetached(argv []string, base string, started func(pid int)) (doc []byte,
 				gateLine("the merge's runner (pid %d) is gone without devctl's exit code", pid)
 			}
 			doc, rc = finishedRun(base)
-			return doc, rc
+			return doc, rc, keepOutput(base, doc, time.Now())
 		}
 		select {
 		case s := <-sig:
@@ -161,7 +197,7 @@ func runDetached(argv []string, base string, started func(pid int)) (doc []byte,
 // startChild starts merge-child for base: in a transient user service, else
 // in a session of its own, reaped in the background.
 func startChild(base string) error {
-	self, err := os.Executable()
+	self, err := selfExe()
 	if err != nil {
 		return err
 	}

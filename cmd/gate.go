@@ -415,11 +415,25 @@ func (g *gateRun) runMerge() error {
 	defer signal.Stop(away)
 	var doc []byte
 	rc := guard.ExitNotFound
+	argv, note, output := g.argv, "", ""
+	if !g.cfg.Merge.DevctlServes(g.repo) {
+		self, err := selfExe()
+		if err != nil {
+			gateLine("%v", err)
+			return exitCode(rc)
+		}
+		argv, note = squashArgv(self, g.repo, g.pr, g.argv), ", "+github.SquashRoute
+		gateLine("devctl serves the repositories of %s only (merge.devctlOwners): %s#%d takes the %s as the gh login, green first, no release wait",
+			strings.Join(g.cfg.Merge.DevctlOwners, ", "), g.repo, g.pr, github.SquashRoute)
+	}
 	if base, err := g.mergeFiles(); err != nil {
 		gateLine("%v", err)
 	} else {
-		doc, rc = runDetached(g.argv, base, g.started)
+		doc, rc, output = runDetached(argv, base, g.started)
 		_, _ = os.Stdout.Write(doc) // the caller's pipe may be gone
+	}
+	if output != "" {
+		note += ", output in " + output
 	}
 	r := runOutcome{rc: rc}
 	var ok bool
@@ -433,7 +447,7 @@ func (g *gateRun) runMerge() error {
 			return nil, nil
 		}
 		var ev []state.Event
-		ev, kept = recordRun(st, i, g.lane, g.me, r, time.Now().UTC(), "")
+		ev, kept = recordRun(st, i, g.lane, g.me, r, time.Now().UTC(), note)
 		return ev, nil
 	})
 	out, unanswered := r.out, r.unanswered
@@ -444,8 +458,11 @@ func (g *gateRun) runMerge() error {
 	case out.Unconfirmed:
 		gateLine("devctl ended with exit %d before its document, and GitHub reports %s#%d merged: its release is unconfirmed, confirm it with `devctl release wait %s --pr %d`, do not merge again",
 			rc, g.repo, g.pr, g.repo, g.pr)
+	case kept && (rc == devctlUsage || rc == devctlAuth):
+		gateLine("nothing merged (exit %d, a tooling fault): the same command fails the same way until what the reason names is fixed (output in %s); your place in lane %s is kept for %s",
+			rc, output, g.lane.Name, g.cfg.Merge.SeedTTL.Duration)
 	case kept:
-		gateLine("nothing merged (exit %d); your place in lane %s is kept for %s: act on devctl's reason, then run the same command again",
+		gateLine("nothing merged (exit %d); your place in lane %s is kept for %s: act on the reason, then run the same command again",
 			rc, g.lane.Name, g.cfg.Merge.SeedTTL.Duration)
 	}
 	return exitCode(rc)

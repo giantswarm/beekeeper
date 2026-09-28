@@ -195,3 +195,17 @@ func TestLoadReporter(t *testing.T) {
 		}
 	}
 }
+
+// devctl serves the giantswarm organisation by default; any other owner's
+// repository takes the plain squash merge.
+func TestDevctlServes(t *testing.T) {
+	var c Config
+	if err := c.defaults(); err != nil {
+		t.Fatal(err)
+	}
+	for repo, want := range map[string]bool{"giantswarm/beekeeper": true, "GiantSwarm/x": true, "teemow/klaus-lab": false} {
+		if got := c.Merge.DevctlServes(repo); got != want {
+			t.Errorf("%s: %v, want %v", repo, got, want)
+		}
+	}
+}
