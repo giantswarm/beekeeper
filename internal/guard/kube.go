@@ -27,6 +27,7 @@ const (
 	envHelmContext = "HELM_KUBECONTEXT"
 	flagDryRun     = "--dry-run"
 	flagKubeconfig = "--kubeconfig"
+	verbLogin      = "login"
 )
 
 var (
@@ -237,7 +238,7 @@ func (h Hook) kubectlRefusal(args []string, env kubeEnv, at string) string {
 	switch {
 	case verb == "config" && (sub == "use-context" || sub == "use" || sub == "set" && len(pos) > 2 && pos[2] == "current-context"):
 		return switchReason(at)
-	case verb == "ctx" && len(pos) > 1, verb == "gs" && sub == "login" && flags["--self-contained"] == "":
+	case verb == "ctx" && len(pos) > 1, verb == "gs" && sub == verbLogin && flags["--self-contained"] == "":
 		return switchReason(at)
 	case !kubectlWrites[verb] && !writeSub[verb][sub], dryRun(flags):
 		return ""
@@ -278,7 +279,7 @@ func (h Hook) fluxRefusal(args []string, env kubeEnv, at string) string {
 // the current context of the kubeconfig they write.
 func (h Hook) tshRefusal(args []string, env kubeEnv, at string) string {
 	pos, flags := kubeArgs(args, setOf("--kube-cluster", "--proxy", "--user", "--auth", "-l", "--login", "--ttl", "-i", "--identity"))
-	kube := len(pos) > 1 && pos[0] == "kube" && pos[1] == "login" || len(pos) > 0 && pos[0] == "login" && flags["--kube-cluster"] != ""
+	kube := len(pos) > 1 && pos[0] == "kube" && pos[1] == verbLogin || len(pos) > 0 && pos[0] == verbLogin && flags["--kube-cluster"] != ""
 	if !kube || !h.machineKubeconfig(env.kubeconfig) {
 		return ""
 	}
