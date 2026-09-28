@@ -82,7 +82,7 @@ func keepOutput(base string, doc []byte, now time.Time) string {
 	}
 	path := filepath.Join(dir, filepath.Base(base)+"-"+now.UTC().Format("20060102T150405Z")+".log")
 	out := append(append(stderr, []byte("--- document ---\n")...), doc...)
-	if os.WriteFile(path, out, 0o600) != nil {
+	if os.WriteFile(path, out, 0o600) != nil { //nolint:gosec // under the state directory, named by the gate
 		return ""
 	}
 	return path

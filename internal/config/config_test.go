@@ -203,7 +203,7 @@ func TestDevctlServes(t *testing.T) {
 	if err := c.defaults(); err != nil {
 		t.Fatal(err)
 	}
-	for repo, want := range map[string]bool{"giantswarm/devctl": true, "GiantSwarm/x": true, "teemow/klaus-lab": false} {
+	for repo, want := range map[string]bool{"giantswarm/beekeeper": true, "GiantSwarm/x": true, "teemow/klaus-lab": false} {
 		if got := c.Merge.DevctlServes(repo); got != want {
 			t.Errorf("%s: %v, want %v", repo, got, want)
 		}
