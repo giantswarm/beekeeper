@@ -404,3 +404,24 @@ func TestHelperMergeChild(t *testing.T) {
 	}
 	os.Exit(mergeChild(os.Args[i+1]))
 }
+
+// A fix window lets its pull request through a lane whose installation
+// cannot be read (or is not Ready) and logs it; without it the lane refuses.
+func TestAFixWindowWaivesTheLanesReadiness(t *testing.T) {
+	lane := config.Lane{Name: "portal-tools", Installation: "nowhere", Context: "no-such-context"}
+	g := runningMerge(t, "o/r", lane)
+	g.now = time.Now()
+	if _, why, err := g.laneReady(merge.Lane{}); err == nil && why == "" {
+		t.Fatal("an unreadable installation is ready without a fix window")
+	}
+	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Holds = append(st.Holds, state.Hold{Target: merge.LanePrefix + lane.Name, Except: "o/r#7", By: state.Party{Name: "supervisor"}, Reason: "the outage fix"})
+		return nil, nil
+	})
+	if _, why, err := g.laneReady(merge.Lane{}); err != nil || why != "" {
+		t.Fatalf("the fix window's merge waits: %q, %v", why, err)
+	}
+	if d := lastEvent(t, g, "merge.window"); !strings.Contains(d, "o/r#7 in lane portal-tools") || !strings.Contains(d, "the outage fix") {
+		t.Errorf("merge.window event: %q", d)
+	}
+}
