@@ -164,7 +164,15 @@ refusal naming the command with the gate written in.
   `<n> devctl processes run machine-wide (cap <n>), not a lane problem`. The merge keeps its place for `merge.queueTTL` (15m): run the same
   command again, best with `run_in_background`, where the wait is 30 minutes instead of 2.
 - **Otherwise devctl runs once**, its JSON document and exit code (devctl's own 0–9) unchanged,
-  and the event log records `merging` and `merged` with the release. A run that ends with nothing
+  and the event log records `merging` and `merged` with the release. devctl serves the
+  repositories of `merge.devctlOwners` only (its GitHub App login reaches the giantswarm
+  organisation); any other owner's repository takes the **plain squash merge** instead, in the
+  same place and unit: as the gh login, it waits up to `--timeout` (45m) for the head's checks,
+  refuses what devctl refuses before its wait (a draft, a closed, merged or conflicting pull
+  request: 3; another person's: 5), and squash-merges green with the judged head as the expected
+  one and `<title> (#<n>)` as the subject, then deletes the branch; red is 1, a timeout 2, a gh
+  failure 7, and it waits for no release. Each run's stderr and document are kept in
+  `<state>/merge-output/<repo>-<n>-<time>.log` for 7 days, named in its event. A run that ends with nothing
   merged (exit 1–4, 7, 8) is `merge.failed` and keeps its place: `lanes` shows it `retrying`, and
   the session's retry of the same pull request runs before every merge that was behind it. It
   holds the lane for `merge.queueTTL` from the failure, then keeps its place for `merge.seedTTL`
@@ -413,7 +421,9 @@ a grant or a clearance, reaches it at its next tool call. Once the first turn ha
 `ExecStopPost` runs `beekeeper agents reopen <id>`: it shows the session in the desktop for a
 moment and switches back, which warms the desktop's CLI of it, so the session is a peer again and
 takes a follow-up task by message as a desktop turn. It reopens only a start the roster still
-holds, never one a hand-over or `agents remove` took off.
+holds, never one a hand-over or `agents remove` took off. A reopen the desktop did not take (the
+session not shown, its title not restored) is an `agent.reopen` event and ends the unit
+successfully: the turn ended as it should.
 
 The desktop handles each `claude://resume` link twice. When the second delivery arrives while the
 first import still runs, both import, the second drops the transcript's title and model as stale
@@ -651,6 +661,7 @@ merge:
   settleTimeout: 30m        # then refuses its next merge while the release has not rolled
   budgetFresh: 1m           # the last budget reading is used this long, then read afresh
   stallAfter: 5m            # a lane's first arrived merge waits this long behind absent places, then the lane is stalled
+  devctlOwners: [giantswarm] # the owners devctl pr merge serves; any other owner's repository takes the plain squash merge
 alerts:
   installations:            # read always; a held lease whose name has a kube context is read too
     - production            # context teleport.giantswarm.io-<name>, else <name>, else *@<name>

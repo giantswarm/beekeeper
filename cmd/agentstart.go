@@ -462,19 +462,32 @@ func (a *app) agentReopenCmd() *cobra.Command {
 				return err
 			}
 			if _, err := a.showBriefly(cmd.Context(), continueURL("local_"+id), "local_"+id, "", true); err != nil {
-				return fmt.Errorf("reopening %s in the desktop: %w", id, err)
+				return a.reopenMissed(name, fmt.Errorf("reopening %s in the desktop: %w", id, err))
 			}
 			if _, err := fmt.Fprintf(a.out, "reopen: showed local_%s in the desktop, which warms its CLI\n", id); err != nil {
 				return err
 			}
 			line, err := a.keepTitle(cmd.Context(), id, name)
 			if err != nil {
-				return fmt.Errorf("reopen: %w", err)
+				return a.reopenMissed(name, err)
 			}
 			_, err = fmt.Fprintln(a.out, "reopen: "+line)
 			return err
 		},
 	}
+}
+
+// reopenMissed records a reopen the desktop did not take (not shown, its
+// title not restored) in the event log and ends the unit successfully: the
+// session's turn ended as it should, the desktop's record is what fell
+// short, and its owner reads that in the log and in `agents`, not in a
+// failed unit.
+func (a *app) reopenMissed(name string, why error) error {
+	_ = a.store.Update(func(*state.State) ([]state.Event, error) {
+		return []state.Event{event(state.Party{Name: name}, "agent.reopen", "missed: %v", why)}, nil
+	})
+	_, err := fmt.Fprintf(a.out, "reopen: missed, %v\n", why)
+	return err
 }
 
 // reopens reports whether the session id is one of beekeeper's starts that a
