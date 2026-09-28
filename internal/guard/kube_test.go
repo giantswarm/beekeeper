@@ -55,6 +55,7 @@ func TestKubeRefusesContextSwitches(t *testing.T) {
 		"kubectl config use kind-lab",
 		"kubectl config set current-context kind-lab",
 		"kubectl ctx kind-lab",
+		"kubectl-ctx kind-lab",
 		"kubectx kind-lab",
 		"kubectx -",
 		"kubectl gs login gazelle",
@@ -69,6 +70,7 @@ func TestKubeRefusesContextSwitches(t *testing.T) {
 		"/home/u/.go/bin/beekeeper run -- zsh -c 'kubectl config use-context a'",
 		"sh <<'EOF'\nkubectl config use-context a\nEOF",
 		`K="kubectl"; $K config use-context a`,
+		"K=kubectl; $K config use-context a",
 		`kc(){ kubectl "$@"; }; kc config use-context a`,
 		"xargs kubectl config use-context <<< a",
 		`"kubectl" config 'use-context' a`,
@@ -196,6 +198,78 @@ func TestKubeRefusesProductionWrites(t *testing.T) {
 	// A lab kubeconfig overrides a production default.
 	wantPassed(t, kubeHook(gazelleKC), "KUBECONFIG=testdata/kubeconfig-lab kubectl apply -f x")
 	wantPassed(t, kubeHook(gazelleKC), "kubectl --context kind-agentlab apply -f x")
+}
+
+func TestKubeRefusesProductionPluginWrites(t *testing.T) {
+	h := kubeHook(machineKC)
+	for _, cmd := range []string{
+		"kubectl ate delete actor x -a ate-golden --context teleport.giantswarm.io-gazelle",
+		"kubectl ate --context teleport.giantswarm.io-gazelle suspend actor x",
+		"kubectl --context teleport.giantswarm.io-gazelle ate admin make-ca-pool --name x",
+		"kubectl ate -a ate-golden --context=teleport.giantswarm.io-gazelle-operations pause actor x",
+		"kubectl-ate admin make-jwt-pool --context teleport.giantswarm.io-gazelle --name x",
+		"kubectl-ate --context teleport.giantswarm.io-gazelle-cicdprod create actor x --template t",
+		"kubectl-ate --context teleport.giantswarm.io-gazelle delete actor-template x -a y",
+		"kubectl-ate --kubeconfig testdata/kubeconfig-default-gazelle resume actor x",
+		"/home/u/bin/kubectl-ate --context teleport.giantswarm.io-gazelle delete actor x",
+		"go run ./cmd/kubectl-ate --context teleport.giantswarm.io-gazelle delete actor x",
+		"kubectl gs update app --name x --version 1 --context teleport.giantswarm.io-gazelle",
+		"kubectl gadget deploy --context teleport.giantswarm.io-gazelle",
+		"kubectl-some_plugin apply --context teleport.giantswarm.io-gazelle",
+		// Bypasses: wrappers, shells, heredocs, xargs, variables, functions,
+		// a kubeconfig whose current context is production.
+		"sudo -E kubectl-ate --context teleport.giantswarm.io-gazelle delete actor x",
+		"env FOO=1 kubectl ate --context teleport.giantswarm.io-gazelle delete actor x",
+		"timeout 30 kubectl-ate --context teleport.giantswarm.io-gazelle delete actor x",
+		"ls && kubectl ate --context teleport.giantswarm.io-gazelle delete actor x",
+		"echo $(kubectl-ate --context teleport.giantswarm.io-gazelle delete actor x)",
+		"bash -c 'kubectl ate --context teleport.giantswarm.io-gazelle delete actor x'",
+		`zsh -lc "cd /x && kubectl-ate admin make-ca-pool --context teleport.giantswarm.io-gazelle"`,
+		"/home/u/.go/bin/beekeeper run -- zsh -c 'kubectl-ate --context teleport.giantswarm.io-gazelle delete actor x'",
+		"sh <<'EOF'\nkubectl ate --context teleport.giantswarm.io-gazelle delete actor x\nEOF",
+		"echo x | xargs kubectl-ate --context teleport.giantswarm.io-gazelle delete actor",
+		"echo x | xargs kubectl ate --context teleport.giantswarm.io-gazelle delete actor",
+		`K="kubectl --context teleport.giantswarm.io-gazelle"; $K ate delete actor x`,
+		`A="kubectl-ate --context teleport.giantswarm.io-gazelle"; $A delete actor x`,
+		`A=/home/u/bin/kubectl-ate; $A --context teleport.giantswarm.io-gazelle admin make-ca-pool`,
+		`ka(){ kubectl-ate --context teleport.giantswarm.io-gazelle "$@"; }; ka delete actor x`,
+		`kg(){ kubectl --context teleport.giantswarm.io-gazelle "$@"; }; kg ate delete actor x`,
+		`"kubectl-ate" --context teleport.giantswarm.io-gazelle 'delete' actor x`,
+		"KUBECONFIG=testdata/kubeconfig-default-gazelle kubectl ate delete actor x",
+		"export KUBECONFIG=testdata/kubeconfig-default-gazelle; kubectl-ate admin make-ca-pool",
+	} {
+		wantRefused(t, h, cmd, gitopsMsg)
+	}
+	for _, cmd := range []string{
+		"kubectl ate delete actor x",
+		"kubectl-ate admin make-ca-pool --name x",
+	} {
+		wantRefused(t, kubeHook(gazelleKC), cmd, prodMsg)
+	}
+	for _, cmd := range []string{
+		"kubectl ate get actors -A --context teleport.giantswarm.io-gazelle",
+		"kubectl ate -a ate-golden get actors --context teleport.giantswarm.io-gazelle",
+		"kubectl-ate --context teleport.giantswarm.io-gazelle get workers -n kagent",
+		"kubectl-ate --context teleport.giantswarm.io-gazelle logs actors x -a y",
+		"kubectl-ate --context teleport.giantswarm.io-gazelle top workers",
+		"kubectl-ate --help",
+		"kubectl ate",
+		"kubectl-ate --context kind-agentlab delete actor x",
+		"kubectl-ate --kubeconfig testdata/kubeconfig-lab admin make-ca-pool --name x",
+		"KUBECONFIG=testdata/kubeconfig-lab kubectl ate delete actor x",
+		"kubectl-ate --context teleport.giantswarm.io-graveler delete actor x",
+		"kubectl tree deploy x --context teleport.giantswarm.io-gazelle",
+		"kubectl resource-capacity --context teleport.giantswarm.io-gazelle",
+		"kubectl gs get clusters --context teleport.giantswarm.io-gazelle",
+		"kubectl gs template cluster --provider capa --name x",
+		"kubectl krew install tree",
+		"kubectl ctx",
+		"git commit -m 'guard kubectl-ate --context teleport.giantswarm.io-gazelle delete actor x'",
+		"rg -n 'kubectl-ate delete' docs/",
+	} {
+		wantPassed(t, h, cmd)
+	}
+	wantPassed(t, kubeHook(gazelleKC), "kubectl-ate --context kind-agentlab delete actor x")
 }
 
 func TestKubeRefusesOpItemGet(t *testing.T) {

@@ -45,6 +45,26 @@ var (
 		"certificate": setOf("approve", "deny"),
 		"auth":        setOf("reconcile"),
 	}
+	// kubectlBuiltins: kubectl's own commands; any other first word runs a
+	// plugin, kubectl-<word>.
+	kubectlBuiltins = setOf("get", "describe", "logs", "top", "explain", "api-resources", "api-versions", "cluster-info",
+		"version", "config", "auth", "diff", "wait", "port-forward", "proxy", "completion", "kustomize", "plugin", "events",
+		"alpha", "certificate", "rollout", "options", "help", "convert")
+	// pluginReads: plugin subcommands that only read; readOnlyPlugins:
+	// plugins that never write. Any other plugin command counts as a write.
+	pluginReads     = setOf("get", "list", "ls", "describe", "logs", "log", "top", "tree", "show", "view", "status", "version", "help", "completion", "template", "validate", "info", "whoami", "explain", "diff")
+	readOnlyPlugins = setOf("tree", "access-matrix", "resource-capacity", "who-can", "neat", "krew", "oidc-login", "ns")
+	// pluginValue: flags of kubectl plugins that take a value, kubectl-ate's.
+	pluginValue = map[string]map[string]bool{
+		"ate": setOf("-a", "--atespace", "--endpoint", "--token-file", "--tag", "--scope", "--actor", "--ca-id",
+			"--secret-namespace", "--name", "--key-type", "--key-id", "--sandbox-class"),
+	}
+	// pluginBinary: a kubectl plugin run as its own binary.
+	pluginBinary = regexp.MustCompile(`^kubectl-([\w-]+)$`)
+	// pluginFunc, pluginVar: a shell function or a variable that runs a
+	// kubectl plugin binary.
+	pluginFunc = regexp.MustCompile(`(?:^|[\s;&|(])(?:function\s+([\w-]+)\s*(?:\(\))?|([\w-]+)\s*\(\))\s*\{[^}]*?(?:^|[\s/])kubectl-([\w-]+)\s`)
+	pluginVar  = regexp.MustCompile(`(?:^|[\s;&|(])(\w+)=\(?\s*["']?(?:[^\s"'()]*/)?kubectl-([\w-]+)(?:[\s"');&|]|$)`)
 	helmWrites = setOf("install", "upgrade", "uninstall", "un", "delete", "del", "rollback", "test")
 	fluxWrites = setOf("suspend", "resume", "reconcile", "create", "delete", "bootstrap", "install", "uninstall")
 	// helm and flux flags that take a value.
@@ -78,10 +98,17 @@ func (h Hook) scanKube(cmd string, env kubeEnv, depth int) string {
 		return ""
 	}
 	sc := scanShell(cmd)
-	aliases := map[string]bool{kubectlCmd: true}
+	// aliases: a function or variable that runs kubectl, with the plugin
+	// it runs ("" for kubectl itself).
+	aliases := map[string]string{}
 	for _, re := range []*regexp.Regexp{kubectlFunc, kubectlVar} {
 		for _, m := range re.FindAllStringSubmatch(sc.plain, -1) {
-			aliases[strings.Join(m[1:], "")] = true
+			aliases[strings.Join(m[1:], "")] = ""
+		}
+	}
+	for _, re := range []*regexp.Regexp{pluginFunc, pluginVar} {
+		for _, m := range re.FindAllStringSubmatch(sc.plain, -1) {
+			aliases[strings.Join(m[1:len(m)-1], "")] = strings.ReplaceAll(m[len(m)-1], "_", "-")
 		}
 	}
 	for _, m := range contextFlag.FindAllStringSubmatch(sc.plain, -1) {
@@ -122,7 +149,7 @@ func (h Hook) scanKube(cmd string, env kubeEnv, depth int) string {
 // simpleKube decides one simple command. An assignment-only command
 // (KUBECONFIG=…, export KUBECONFIG=…, unset KUBECONFIG) changes env for the
 // commands after it; a prefix assignment only for its own command.
-func (h Hook) simpleKube(words []string, env *kubeEnv, aliases map[string]bool, at string) string {
+func (h Hook) simpleKube(words []string, env *kubeEnv, aliases map[string]string, at string) string {
 	local := *env
 	k := 0
 	if k < len(words) && (words[k] == "export" || words[k] == "unset") {
@@ -162,19 +189,23 @@ func (h Hook) simpleKube(words []string, env *kubeEnv, aliases map[string]bool, 
 			local.kubeconfig = expandHome(m[2])
 		}
 		name, args := path.Base(w), words[i+1:]
-		if name != kubectlCmd && aliases[strings.Trim(strings.TrimSuffix(strings.TrimSuffix(w, "[@]}"), "[*]}"), "${}")] {
+		if m := pluginBinary.FindStringSubmatch(name); m != nil {
+			name, args = kubectlCmd, append([]string{strings.ReplaceAll(m[1], "_", "-")}, args...)
+		}
+		if plugin, ok := aliases[strings.Trim(strings.TrimSuffix(strings.TrimSuffix(w, "[@]}"), "[*]}"), "${}")]; ok && name != kubectlCmd {
 			name = kubectlCmd
 			if local.wrapped != "" {
 				args = append([]string{"--context", local.wrapped}, args...)
+			}
+			if plugin != "" {
+				args = append([]string{plugin}, args...)
 			}
 		}
 		var r string
 		switch name {
 		case kubectlCmd:
 			r = h.kubectlRefusal(args, local, at)
-		case "kubectl-gs":
-			r = h.kubectlRefusal(append([]string{"gs"}, args...), local, at)
-		case "kubectx", "kubectl-ctx", "kubeswitch", "switcher", "kubie":
+		case "kubectx", "kubeswitch", "switcher", "kubie":
 			r = switcherRefusal(args, at)
 		case "helm":
 			r = h.helmRefusal(args, local, at)
@@ -231,6 +262,9 @@ func (h Hook) kubectlRefusal(args []string, env kubeEnv, at string) string {
 	if len(pos) == 0 {
 		return ""
 	}
+	if !kubectlBuiltins[pos[0]] {
+		pos, flags = kubeArgs(args, pluginValues(pos[0]))
+	}
 	verb, sub := pos[0], ""
 	if len(pos) > 1 {
 		sub = pos[1]
@@ -240,13 +274,28 @@ func (h Hook) kubectlRefusal(args []string, env kubeEnv, at string) string {
 		return switchReason(at)
 	case verb == "ctx" && len(pos) > 1, verb == "gs" && sub == verbLogin && flags["--self-contained"] == "":
 		return switchReason(at)
-	case !kubectlWrites[verb] && !writeSub[verb][sub], dryRun(flags):
+	case kubectlBuiltins[verb] && !writeSub[verb][sub], dryRun(flags):
+		return ""
+	case !kubectlBuiltins[verb] && !kubectlWrites[verb] && (readOnlyPlugins[verb] || sub == "" || pluginReads[sub]):
+		// A plugin: its subcommand reads, or it has none.
 		return ""
 	}
 	if f := flags[flagKubeconfig]; f != "" {
 		env.kubeconfig = expandHome(f)
 	}
 	return h.writeReason(at, flags["--context"], flags["--cluster"], env.kubeconfig)
+}
+
+// pluginValues: the value flags of a kubectl plugin's command line,
+// kubectl's own and the plugin's.
+func pluginValues(plugin string) map[string]bool {
+	values := make(map[string]bool, len(kubectlValue)+len(pluginValue[plugin]))
+	for _, m := range []map[string]bool{kubectlValue, pluginValue[plugin]} {
+		for f := range m {
+			values[f] = true
+		}
+	}
+	return values
 }
 
 func (h Hook) helmRefusal(args []string, env kubeEnv, at string) string {

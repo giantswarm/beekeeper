@@ -73,7 +73,7 @@ var (
 	leakyFilter = regexp.MustCompile(`(?i)\b(?:string)?data\b|\bvalues?\b|\.\.|to_entries|with_entries|@base64d|\$ENV|\benv\b|\binputs?\b|tostream|paths|getpath|(?:^|[\s,:(|])\.(?:\s*(?:[,})\]|]|$)|\[\s*(?:\]|"))`)
 	// kubectlFunc, kubectlVar: a shell function or a variable that runs kubectl.
 	kubectlFunc = regexp.MustCompile(`(?:^|[\s;&|(])(?:function\s+([\w-]+)\s*(?:\(\))?|([\w-]+)\s*\(\))\s*\{[^}]*?(?:^|[\s/])kubectl\s`)
-	kubectlVar  = regexp.MustCompile(`(?:^|[\s;&|(])(\w+)=\(?\s*["']?(?:[^\s"'()]*/)?kubectl(?:\s|["')])`)
+	kubectlVar  = regexp.MustCompile(`(?:^|[\s;&|(])(\w+)=\(?\s*["']?(?:[^\s"'()]*/)?kubectl(?:[\s"');&|]|$)`)
 	// harmlessFilter: a filter that names only keys or metadata.
 	harmlessFilter = regexp.MustCompile(`\b(?:KEYS|keys|keys_unsorted|length)\b|\.(?:metadata|kind|type|apiVersion|name|namespace|label|id|title)\b`)
 	shells         = map[string]bool{"sh": true, "bash": true, "zsh": true, "ksh": true, "dash": true, "ssh": true, "eval": true, "watch": true}
