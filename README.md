@@ -67,7 +67,7 @@ the budget work on any system.
 | `beekeeper handover [--prompt]` | Everything the next supervisor needs, as Markdown, from the live state: leases and grants, holds and their exceptions, agents, session records, notes with their defaults, timers, the merge lanes with their queues and settling merges, and what the alert watch reads (the installations and why, the ignored alert names, the baseline). `--prompt` prints the successor's session prompt: the configured instructions (`supervisor.skill` or `supervisor.instructions`), the scope, the pending state in full and the commands that read the live values; no standing rule and no live value (version, memory figure, pull request state). |
 | `beekeeper log [--verb PREFIX]` | Every claim, grant, hold, registration, note, timer, session record and build run, as they happened; `--verb run.` shows only the runs. |
 | `beekeeper run [--max SIZE] [--wait DURATION] -- <command>` | Run a build, test or lint command in one of the machine's build slots (memcap's, shared with the `memcap` wrapper) inside a memory-capped systemd scope. When every slot is held it waits once, then exits 75 with the holders; when the cap fires the kernel kills the biggest process in the scope only, and `run` exits 137 with one line starting `beekeeper run: the <SIZE> cap killed:`. Each run leaves `run.start` and `run.end` in `beekeeper log` with its scope, session and command, so `snapshot` and `watch` name a cap kill's session and command after the run has ended. `MEMCAP_TEST=1` marks a test's run: its scope is `memcap-test-…`, and a kill in it is reported as a test kill (one quiet `test kill:` line in `watch`), never as a build's. |
-| `beekeeper hook pretooluse` | The PreToolUse hook (matcher `Bash|AskUserQuestion|SendMessage`): rewrites build, test, lint and lab commands to `<this binary> run -- zsh -c '<command>'` with the command verbatim and the tool timeout at 10 minutes (a background run waits 60 minutes), and refuses a third kind cluster, listing the held leases. It puts the merge gate in front of every `devctl pr merge`, behind prefix commands and in pipelines and lists, and refuses one hidden in a `-c` string (below); every other devctl command passes untouched. It refuses a command that would print secret values (below, [Secret reads](#secret-reads)), and an `AskUserQuestion` call outside the guide's session ([Questions go to the guide](#questions-go-to-the-guide)). A `SendMessage` to a desktop id (`local_…`) whose session has a running CLI goes to that CLI by name, so a headless turn gets no second copy beside it (below, [Waking a session](#waking-a-session)). |
+| `beekeeper hook pretooluse` | The PreToolUse hook (matcher `Bash|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage`): rewrites build, test, lint and lab commands to `<this binary> run -- zsh -c '<command>'` with the command verbatim and the tool timeout at 10 minutes (a background run waits 60 minutes), and refuses a third kind cluster, listing the held leases. It puts the merge gate in front of every `devctl pr merge`, behind prefix commands and in pipelines and lists, and refuses one hidden in a `-c` string (below); every other devctl command passes untouched. It refuses a command that would print secret values (below, [Secret reads](#secret-reads)), and an `AskUserQuestion` call outside the guide's session ([Questions go to the guide](#questions-go-to-the-guide)). A `SendMessage` to a desktop id (`local_…`) whose session has a running CLI goes to that CLI by name, so a headless turn gets no second copy beside it (below, [Waking a session](#waking-a-session)). A session's first write or `git commit` in another repository carries that repository's `CLAUDE.md`, `AGENTS.md`, rules and mandatory reads ([A repository's instructions on the first write](#a-repositorys-instructions-on-the-first-write)). |
 | `beekeeper hook permissionrequest` | The PermissionRequest hook: answers `allow` only for a session `agents start` started in bypass that now runs in `acceptEdits`; every other request gets no answer, so the person sees the normal card. Below. |
 | `beekeeper free [--apply] [--only SECTIONS] [--summary]` | Show where the memory is and, with `--apply`, free what no running work needs: dead sessions' dirs in the tmpfs `/tmp` (the CLI is gone; an idle session's stay), throwaway temp dirs and orphaned jest or Claude workers. Kind clusters, idle CLIs, heavy or runaway processes and Chrome renderers are only reported. Never runs as root: the swap reset and root-owned leftovers are printed as the commands to run. `--summary` prints the TSV rows a desktop front end parses. |
 | `beekeeper self-update` | Install the latest signed release over this binary; `--check` only asks. |
@@ -518,11 +518,36 @@ first turn, a wake): two copies of one session then run turns side by side. The 
 therefore sends a `SendMessage` to a `local_` id whose session has a running CLI to that CLI by
 its name (`updatedInput`), which queues the message in the running turn. A name that two running
 CLIs carry is refused with their PIDs, since a send by it reaches neither for sure. A send to a
-session with no running CLI passes to the desktop, which starts it. Register the hook for its three
-tools:
+session with no running CLI passes to the desktop, which starts it.
+
+### A repository's instructions on the first write
+
+Claude Code loads the instructions of the project a session started in, not those of another
+repository the session goes on to change. The hook closes that gap: a session's first `Edit`,
+`Write` or `NotebookEdit`, or first `git commit` (in the call's directory, behind `cd <dir> &&`
+or with `git -C <dir>`), in a git repository other than `$CLAUDE_PROJECT_DIR` carries that
+repository's instructions as `additionalContext`, once per session, subagent and repository:
+
+- `CLAUDE.md`, `AGENTS.md` and `.claude/CLAUDE.md`, with their `@path` imports three levels deep;
+- `.claude/rules/**/*.md`;
+- the `hooks` and `permissions` of `.claude/settings.json`, which do not run in the session;
+- the files these name, linked or in backticks, on a line that makes them mandatory ("must read",
+  "read … first", "mandatory", "always read", "required reading").
+
+The context is at most 10,000 bytes: a file that does not fit is cut with a note naming it, the
+files after it are listed for the agent to read. Only regular text files inside the repository
+are read: no symlink out of it, no `.git`, and no name that holds or may hold a secret or a
+person's own setup (`settings.local.json`, `*.local.md`, `.env*`, keys and certificates, sops
+files, anything named secret, credential, password, token or kubeconfig). The call's permission
+is untouched: a rewrite such as the build slot or the merge gate carries the context beside it, a
+refused call carries none and does not count as the first write. The markers are one file per
+session and repository under `<stateDir>/reads/`, created exclusively so two concurrent calls
+inject once; a session's markers go 7 days after its last first write.
+
+Register the hook for its six tools:
 
 ```json
-"PreToolUse": [{"matcher": "Bash|AskUserQuestion|SendMessage", "hooks": [{"type": "command",
+"PreToolUse": [{"matcher": "Bash|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage", "hooks": [{"type": "command",
   "command": "~/.go/bin/beekeeper hook pretooluse"}]}]
 ```
 
