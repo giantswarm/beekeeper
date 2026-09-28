@@ -323,6 +323,17 @@ func (g *gateRun) laneReady(q merge.Lane) ([]merge.HelmRelease, string, error) {
 	if g.lane.Installation == "" {
 		return nil, "", nil
 	}
+	if st, err := g.store.Read(); err == nil {
+		if h, ok := merge.FixWindow(st, g.now, g.repo, g.pr, g.lane); ok {
+			gateLine("fix window: %q holds lane %s for %s#%d (%s); it merges without %s Ready or the previous release rolled",
+				h.By.Name, g.lane.Name, g.repo, g.pr, h.Reason, g.lane.Installation)
+			_ = g.store.Update(func(*state.State) ([]state.Event, error) {
+				return []state.Event{event(g.me, "merge.window", "%s#%d in lane %s: %q's fix window waives %s Ready and the previous release rolled (%s)",
+					g.repo, g.pr, g.lane.Name, h.By.Name, g.lane.Installation, h.Reason)}, nil
+			})
+			return nil, "", nil
+		}
+	}
 	hrs, err := readHelmReleases(g.ctx, g.lane)
 	if err != nil {
 		return nil, "", g.refuse("lane %s cannot read the HelmReleases of %s (%v): log in (tsh kube login %s), then run the same command again",

@@ -131,6 +131,37 @@ func TestBlockingExcept(t *testing.T) {
 	}
 }
 
+// Only a lane hold that excepts exactly the pull request is its fix window;
+// a repository exception, another lane's hold or a lifted one is not.
+// mmRepo and mmPR are the fix window test's repository and pull request.
+const (
+	mmRepo = "giantswarm/model-manager"
+	mmPR   = mmRepo + "#172"
+)
+
+func TestFixWindow(t *testing.T) {
+	now := time.Now()
+	lane := config.Lane{Name: serving}
+	st := &state.State{Holds: []state.Hold{{Target: LanePrefix + serving, Except: mmPR, Reason: "the fix"}}}
+	if _, ok := FixWindow(st, now, mmRepo, 172, lane); !ok {
+		t.Error("the declared fix window is not one")
+	}
+	if _, ok := FixWindow(st, now, mmRepo, 180, lane); ok {
+		t.Error("another pull request of the repository is in the window")
+	}
+	if _, ok := FixWindow(st, now, mmRepo, 172, config.Lane{Name: "other"}); ok {
+		t.Error("another lane's merge is in the window")
+	}
+	st.Holds[0].Except = mmRepo
+	if _, ok := FixWindow(st, now, mmRepo, 172, lane); ok {
+		t.Error("a repository exception waives the lane's readiness")
+	}
+	st.Holds[0].Except, st.Holds[0].Until = mmPR, now.Add(-time.Minute)
+	if _, ok := FixWindow(st, now, mmRepo, 172, lane); ok {
+		t.Error("an expired hold is a fix window")
+	}
+}
+
 func TestQueueAndPrune(t *testing.T) {
 	now := time.Now()
 	st := &state.State{Merges: []state.Merge{

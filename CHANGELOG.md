@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A lane hold that excepts one pull request (`hold set --lane <l> --except <owner/repo>#<n>`) is that merge's fix window: the gate runs it without the lane's HelmReleases Ready or the previous release rolled, logged as `merge.window`. The fix of a broken rollout waited on a Ready only it could restore, then was refused.
 - The gate merges a repository devctl does not serve (`merge.devctlOwners`, default `giantswarm`) with a plain squash merge as the gh login, in the merge's unit as for devctl: it waits for the head's checks, refuses a draft, closed, conflicting or another person's pull request, and squash-merges with the head as the expected one and `<title> (#<n>)` as the subject, then deletes the branch. devctl's GitHub App login reaches the giantswarm organisation and public repositories only, so every merge of a private teemow repository ended in exit 7 and a failed `beekeeper-merge-*` unit, and each retry in another.
 - Each gated merge's stderr and document are kept in `<state>/merge-output/<repo>-<n>-<time>.log` for 7 days, named in its `merged`/`merge.failed` event; the run's own files no longer take devctl's reason with them. After exit 7 or 8 the gate says the same command fails the same way until the reason is fixed.
 - `agents reopen`, a started or woken session's `ExecStopPost`, no longer fails its unit when the desktop did not show the session or keep its title: the miss is an `agent.reopen` event.

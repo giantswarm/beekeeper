@@ -131,6 +131,20 @@ func Blocking(st *state.State, now time.Time, repo string, pr int, lane config.L
 	return upgrade.Held(st, lane.Installation, now)
 }
 
+// FixWindow is the active hold on lane that lets exactly repo#pr through
+// (hold set --lane <lane> --except <repo>#<pr>): a declared fix window, in
+// which that pull request merges without the lane's installation Ready or
+// its previous merge rolled, the conditions a broken rollout only the fix
+// itself can restore.
+func FixWindow(st *state.State, now time.Time, repo string, pr int, lane config.Lane) (state.Hold, bool) {
+	for _, h := range st.Holds {
+		if h.Active(now) && h.Target == LanePrefix+lane.Name && strings.EqualFold(h.Except, fmt.Sprintf("%s#%d", repo, pr)) {
+			return h, true
+		}
+	}
+	return state.Hold{}, false
+}
+
 // Prune drops the waiting merges whose run ended more than ttl ago (seedTTL
 // for a seeded place and a failed attempt's) and settles the lost ones
 // (Lost).
