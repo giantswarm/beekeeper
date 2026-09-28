@@ -117,10 +117,17 @@ that way and refuses, with the reason and the explicit form:
   session). Changes to production go through GitOps pull requests and platformctl; there is no
   break-glass. Reads (`get`, `describe`, `logs`, `top`, `auth can-i`, `diff`, `--dry-run=server`;
   `helm list|status|get|template`; `flux get|logs`) and writes to any other cluster pass.
+- A kubectl plugin's write to production: `kubectl <plugin> …` (a first word that is no kubectl
+  command) and a `kubectl-<plugin>` binary (a path or `go run ./cmd/kubectl-<plugin>` included), with
+  the same targets as kubectl. `kubectl ate delete actor …`, `kubectl-ate admin make-ca-pool …` and
+  `kubectl gs update app …` are refused; a plugin subcommand that reads (`get`, `list`, `describe`,
+  `logs`, `top`, `status`, `version`, `template`, …) and the read-only plugins (`tree`,
+  `access-matrix`, `resource-capacity`, `who-can`, `neat`, `krew`, `oidc-login`, `ns`) pass. Every other
+  plugin subcommand counts as a write.
 - `op item get` in every form: `op read op://<vault>/<item>/<field>` into a pipe or a file, or `op run`.
 
 Each guard sees through prefix commands, pipelines and lists, `$( )`, shell `-c` strings and
-here-documents fed to a shell, and kubectl run through a shell function or a variable. Quoted text
+here-documents fed to a shell, and kubectl or a kubectl plugin run through a shell function or a variable. Quoted text
 (a commit message, an issue body) passes.
 
 ## Secret reads
