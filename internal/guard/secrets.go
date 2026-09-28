@@ -45,7 +45,6 @@ var (
 		"  sops -d <file> | kubectl apply -f -"
 	opSafe = "  op read --out-file <file> <ref>\n" +
 		"  op read <ref> | sha256sum\n" +
-		"  op item get <item>   (concealed fields stay concealed without --reveal)\n" +
 		"  op run -- <command>   (masks the values in the output)"
 	vaultSafe = "  vault kv get -field=<key> <path> > <file>\n" +
 		"  vault kv get -format=json <path> | jq '.data.data|keys'\n" +
@@ -291,10 +290,6 @@ func opLeak(args []string) *leak {
 		return &leak{what: "op " + sub[0], safe: opSafe}
 	case len(sub) > 1 && sub[0] == "document" && sub[1] == verbGet && !out:
 		return &leak{what: "op document get", safe: opSafe}
-	case len(sub) > 1 && sub[0] == "item" && sub[1] == verbGet && hasFlag(args, "--reveal"):
-		return &leak{what: "op item get --reveal", safe: opSafe}
-	case len(sub) > 1 && sub[0] == "item" && sub[1] == verbGet && flagValue(args, "--format") == "json":
-		return &leak{what: "op item get --format json", safe: opSafe}
 	case sub[0] == "run" && hasFlag(args, "--no-masking"):
 		return &leak{what: "op run --no-masking", safe: opSafe}
 	}
@@ -452,18 +447,6 @@ func hasFlag(args []string, flags ...string) bool {
 		}
 	}
 	return false
-}
-
-func flagValue(args []string, flag string) string {
-	for i, a := range args {
-		if name, val, ok := strings.Cut(a, "="); ok && name == flag {
-			return strings.ToLower(val)
-		}
-		if a == flag && i+1 < len(args) {
-			return strings.ToLower(args[i+1])
-		}
-	}
-	return ""
 }
 
 // segment is one simple command of a shell command line: its offsets and the

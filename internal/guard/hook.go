@@ -108,6 +108,12 @@ type Hook struct {
 	// Reads reports whether a call is the session's first write in the
 	// repository, and records it; nil adds no repository reads.
 	Reads func(session, repo string) bool
+	// Kubeconfig is the kubeconfig list the session's commands use by
+	// default ($KUBECONFIG, else MachineKubeconfig).
+	Kubeconfig string
+	// MachineKubeconfig is the machine kubeconfig (~/.kube/config), which
+	// keeps no current context.
+	MachineKubeconfig string
 }
 
 // event is the part of a PreToolUse event the hook reads.
@@ -165,6 +171,9 @@ func (h Hook) decide(ev event) []byte {
 	cmd, _ := ev.ToolInput["command"].(string)
 	if strings.TrimSpace(cmd) == "" || trivial.MatchString(cmd) {
 		return nil
+	}
+	if r := h.kubeRefusal(cmd); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	if l := secretLeak(cmd); l != nil {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: l.reason()})
