@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The PreToolUse hook gives a session its first write's repository's instructions: on the first `Edit`, `Write`, `NotebookEdit` or `git commit` in a git repository other than `$CLAUDE_PROJECT_DIR`, the call carries that repository's `CLAUDE.md`, `AGENTS.md`, `.claude/rules`, the hooks and permissions of `.claude/settings.json` and the files they name as mandatory reading as `additionalContext`, once per session and repository, at most 10,000 bytes, never a secret's file, never refusing the call. The hook's matcher becomes `Bash|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage`.
 - `beekeeper agents wake <agent> "<message>"` wakes and messages a session past Claude Desktop's cap on `local_` sends. A running CLI gets the message by name. A stopped session is resumed headless (`claude -p --resume <id>` in its directory, mode and model, unit `beekeeper-wake-<id>`), then reopened in the desktop. `agents` shows `live, first turn running` and `live, wake turn running`.
 - The PreToolUse hook sends a `SendMessage` to a `local_` id whose session has a running CLI to that CLI by name, so a desktop send during a first turn or a wake starts no second copy of the session and spends none of the desktop's cap. A name two running CLIs carry is refused. The hook's matcher becomes `Bash|AskUserQuestion|SendMessage`.
 

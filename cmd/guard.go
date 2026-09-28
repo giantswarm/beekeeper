@@ -135,7 +135,7 @@ func (a *app) hookCmd() *cobra.Command {
 	}
 	c.AddCommand(&cobra.Command{
 		Use:   "pretooluse",
-		Short: "The PreToolUse hook: builds into a slot, at most two kind labs, the merge gate, Secret reads, questions via the guide, desktop sends by name",
+		Short: "The PreToolUse hook: builds into a slot, at most two kind labs, the merge gate, Secret reads, questions via the guide, desktop sends by name, a repository's instructions on the first write",
 		Long: `pretooluse reads a PreToolUse event on stdin. A build, test, lint or lab
 command is rewritten to run through "beekeeper run -- zsh -c '<command>'"
 (the absolute path of this binary), the tool timeout raised to 10 minutes;
@@ -162,9 +162,20 @@ An AskUserQuestion call is refused in every session but the guide's (the
 one beekeeper guide names): the agent files beekeeper note add --for
 <guide.person> and carries on.
 
+A session's first Edit, Write or NotebookEdit, or first git commit, in a
+git repository other than its own project ($CLAUDE_PROJECT_DIR) carries
+that repository's instructions as additional context, once per session
+(and subagent) and repository: CLAUDE.md and AGENTS.md with their @imports,
+.claude/rules/*.md, the hooks and permissions of .claude/settings.json, and
+the files these name as mandatory reading, at most 10,000 bytes, a cut file
+and the ones left out named. Only regular text files inside the repository
+are read, never a secret's name (settings.local.json, *.local.md, .env*,
+keys, sops files). The call is never refused for it; the markers live
+under <stateDir>/reads.
+
 Register it in ~/.claude/settings.json:
 
-  "PreToolUse": [{"matcher": "Bash|AskUserQuestion|SendMessage", "hooks": [{"type": "command",
+  "PreToolUse": [{"matcher": "Bash|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage", "hooks": [{"type": "command",
     "command": "~/.go/bin/beekeeper hook pretooluse"}]}]`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
@@ -174,7 +185,8 @@ Register it in ~/.claude/settings.json:
 				return nil
 			}
 			self, _ := os.Executable()
-			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, Peer: a.desktopPeer}
+			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, Peer: a.desktopPeer,
+				Project: os.Getenv("CLAUDE_PROJECT_DIR"), Reads: a.firstReads}
 			if out := h.Decide(raw); out != nil {
 				_, _ = a.out.Write(out)
 			}
@@ -272,6 +284,15 @@ func (a *app) bypassStart(session string) (state.Start, bool) {
 	}
 	a.store = store
 	return st.BypassStart(session)
+}
+
+// firstReads reports whether this is the session's first write in repo. The
+// configuration is read only for a write outside the session's project.
+func (a *app) firstReads(session, repo string) bool {
+	if a.loadConfig() != nil {
+		return false
+	}
+	return guard.ReadsMarker{Dir: filepath.Join(a.cfg.StateDir, "reads")}.First(session, repo)
 }
 
 // loadConfig reads the configuration without opening the state.

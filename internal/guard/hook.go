@@ -102,36 +102,64 @@ type Hook struct {
 	// Peer names the running CLI of a desktop session id, "" when none
 	// runs; an error refuses the send. Nil passes every SendMessage.
 	Peer func(host string) (string, error)
+	// Project is the session's own project ($CLAUDE_PROJECT_DIR), whose
+	// instructions Claude Code loads itself; "" takes the call's cwd.
+	Project string
+	// Reads reports whether a call is the session's first write in the
+	// repository, and records it; nil adds no repository reads.
+	Reads func(session, repo string) bool
+}
+
+// event is the part of a PreToolUse event the hook reads.
+type event struct {
+	ToolName  string         `json:"tool_name"`
+	ToolInput map[string]any `json:"tool_input"`
+	CWD       string         `json:"cwd"`
+	Session   string         `json:"session_id"`
+	Agent     string         `json:"agent_id"`
 }
 
 type hookOutput struct {
 	HookEventName      string         `json:"hookEventName"`
-	PermissionDecision string         `json:"permissionDecision"`
+	PermissionDecision string         `json:"permissionDecision,omitempty"`
 	Reason             string         `json:"permissionDecisionReason,omitempty"`
 	UpdatedInput       map[string]any `json:"updatedInput,omitempty"`
+	AdditionalContext  string         `json:"additionalContext,omitempty"`
 }
 
 // Decide returns the hook's JSON answer for the event, nil to let the call
-// pass unchanged. Malformed input passes.
+// pass unchanged. Malformed input passes. A call the hook does not refuse
+// that is the session's first write in another repository carries that
+// repository's instructions as additional context.
 func (h Hook) Decide(input []byte) []byte {
-	var ev struct {
-		ToolName  string         `json:"tool_name"`
-		ToolInput map[string]any `json:"tool_input"`
-		CWD       string         `json:"cwd"`
-		Session   string         `json:"session_id"`
-	}
+	var ev event
 	dec := json.NewDecoder(bytes.NewReader(input))
 	dec.UseNumber()
 	if dec.Decode(&ev) != nil {
 		return nil
 	}
+	out := h.decide(ev)
+	var o map[string]hookOutput
+	if out != nil && (json.Unmarshal(out, &o) != nil || o["hookSpecificOutput"].PermissionDecision == decisionDeny) {
+		return out
+	}
+	reads := h.repoReads(ev)
+	if reads == "" {
+		return out
+	}
+	d := o["hookSpecificOutput"]
+	d.AdditionalContext = reads
+	return answer(d)
+}
+
+func (h Hook) decide(ev event) []byte {
 	if ev.ToolName == AskTool {
 		return h.ask(ev.Session)
 	}
 	if ev.ToolName == SendMessageTool {
 		return h.sendMessage(ev.ToolInput)
 	}
-	if ev.ToolName != "Bash" {
+	if ev.ToolName != bashTool {
 		return nil
 	}
 	cmd, _ := ev.ToolInput["command"].(string)
