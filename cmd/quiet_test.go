@@ -13,12 +13,18 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// The team and management cluster of the quiet tests.
+const (
+	ourTeam = "bumblebee"
+	mcName  = "mc-one"
+)
+
 // quietApp is an app with the default quiet rules, a store and a lease
 // directory.
 func quietApp(t *testing.T, out *bytes.Buffer) *app {
 	t.Helper()
 	cfg := &config.Config{StateDir: t.TempDir(), LeaseDir: t.TempDir(),
-		Alerts: config.Alerts{Team: "bumblebee", Collapse: 3, Quiet: config.DefaultQuiet},
+		Alerts: config.Alerts{Team: ourTeam, Collapse: 3, Quiet: config.DefaultQuiet},
 		Watch:  config.Watch{QuietSessions: config.DefaultQuietSessions}}
 	store, err := state.Open(cfg.StateDir)
 	if err != nil {
@@ -78,12 +84,12 @@ func TestAlertLinesHoldBackTestClustersUnlessInPlay(t *testing.T) {
 	firing := []alerts.Raw{
 		raw("a", "IncorrectResourceUsageData", "page", "tenet", "t-ahz0dnsqiqlqt96zmb"),
 		raw("b", "MonitoringAgentDown", "page", "atlas", "t-gr5x1yijsdi6vhrh77"),
-		raw("c", "AgentPlatformContainerRestartingTooOften", "page", "bumblebee", "t-bx7aynmir71j1x8pdg"),
-		raw("d", "LoggingAgentMissingOnNode", "page", "atlas", "grizzly"),
+		raw("c", "AgentPlatformContainerRestartingTooOften", "page", ourTeam, "t-bx7aynmir71j1x8pdg"),
+		raw("d", "LoggingAgentMissingOnNode", "page", "atlas", mcName),
 	}
-	targets := []alerts.Target{{Name: "grizzly"}}
+	targets := []alerts.Target{{Name: mcName}}
 	run := func(a *app) []string {
-		st := &alerts.State{Installations: map[string]*alerts.Installation{"grizzly": {Reachable: true, Alerts: alerts.Set{}}}}
+		st := &alerts.State{Installations: map[string]*alerts.Installation{mcName: {Reachable: true, Alerts: alerts.Set{}}}}
 		return a.alertLines(st, targets, []alerts.Answer{{OK: true, Alerts: firing}}, time.Now())
 	}
 
@@ -98,7 +104,7 @@ func TestAlertLinesHoldBackTestClustersUnlessInPlay(t *testing.T) {
 	}
 
 	a = quietApp(t, &out)
-	if _, err := lease.Dir(a.cfg.LeaseDir).Claim("grizzly", lease.Holder{Env: "grizzly", Name: "Agent one", Purpose: "e2e"}); err != nil {
+	if _, err := lease.Dir(a.cfg.LeaseDir).Claim(mcName, lease.Holder{Env: mcName, Name: "Agent one", Purpose: "e2e"}); err != nil {
 		t.Fatal(err)
 	}
 	if lines := run(a); len(lines) != len(firing) {

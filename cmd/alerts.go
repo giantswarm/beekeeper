@@ -282,8 +282,9 @@ func (a *app) alertLines(st *alerts.State, targets []alerts.Target, answers []al
 	var on func(alerts.Target) []string
 	var hints func(string) []string
 	rules.InPlay = a.inPlay(now)
-	for i, t := range targets {
-		changed, held, next := rules.Triage(t.Name, st.Installations[t.Name], answers[i], now)
+	for i, ans := range answers {
+		t := targets[i]
+		changed, held, next := rules.Triage(t.Name, st.Installations[t.Name], ans, now)
 		st.Installations[t.Name] = next
 		quiet = append(quiet, held...)
 		if len(changed) == 0 {

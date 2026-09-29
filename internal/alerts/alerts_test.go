@@ -24,7 +24,7 @@ const (
 
 var (
 	now   = time.Date(2026, 9, 24, 18, 50, 0, 0, time.UTC)
-	rules = Rules{Ignore: []string{"Heartbeat", "InhibitionOutsideWorkingHours", "Watchdog"}, Team: "bumblebee", Collapse: 3}
+	rules = Rules{Ignore: []string{"Heartbeat", "InhibitionOutsideWorkingHours", "Watchdog"}, Team: ourTeam, Collapse: 3}
 )
 
 // alert is an alert shaped like the Alertmanager API's, labels as the
@@ -38,7 +38,7 @@ func alert(fp, alertname, severity, team, starts string, kv ...string) Raw {
 }
 
 var (
-	gateway = alert("b6dd", "DeploymentNotSatisfiedBumblebee", "page", "bumblebee", "2026-09-24T17:40:06Z",
+	gateway = alert("b6dd", "DeploymentNotSatisfiedBumblebee", "page", ourTeam, "2026-09-24T17:40:06Z",
 		"cluster_id", instA, "installation", instA, "namespace", "agent-platform",
 		"deployment", "klaus-gateway", "pod", "kube-prometheus-stack-kube-state-metrics-6d594cf44f-7jdsc")
 	fluxWC = alert("046b", "FluxCustomerHelmReleaseFailed", "page", "shield", "",
@@ -227,15 +227,15 @@ func TestStepTeamAlertInhibitedByWorkingHoursIsNew(t *testing.T) {
 		r.Status.InhibitedBy = by
 		return r
 	}
-	restarting := alert("mc", "AgentPlatformContainerRestartingTooOften", "page", "bumblebee", "2026-09-24T18:34:14Z",
+	restarting := alert("mc", "AgentPlatformContainerRestartingTooOften", "page", ourTeam, "2026-09-24T18:34:14Z",
 		"cluster_id", instA, "namespace", "agent-platform", "container", "mcp-capi", "job", "mcp-capi")
 	_, st := rules.Step(instA, nil, ok(hours, down), now.Add(-5*time.Minute))
 	lines, _ := rules.Step(instA, st, ok(hours, down,
 		inhibited(restarting, "wh"),
 		inhibited(alert("ot", "ManagementClusterJobFailed", "notify", "phoenix", ""), "wh"),
-		inhibited(alert("kb", "DeploymentNotSatisfiedBumblebee", "page", "bumblebee", ""), "kd"),
-		inhibited(alert("mx", "AgentPlatformPodNotReady", "page", "bumblebee", ""), "wh", "kd"),
-		inhibited(alert("gn", "AgentPlatformPodPending", "page", "bumblebee", ""), "gone"),
+		inhibited(alert("kb", "DeploymentNotSatisfiedBumblebee", "page", ourTeam, ""), "kd"),
+		inhibited(alert("mx", "AgentPlatformPodNotReady", "page", ourTeam, ""), "wh", "kd"),
+		inhibited(alert("gn", "AgentPlatformPodPending", "page", ourTeam, ""), "gone"),
 	), now)
 	equal(t, lines, []string{"ALERT NEW alpha PAGE BUMBLEBEE AgentPlatformContainerRestartingTooOften agent-platform/mcp-capi since 18:34Z"})
 }

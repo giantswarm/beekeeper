@@ -48,7 +48,7 @@ func TestImportKeepsWhatIsKnown(t *testing.T) {
 	}
 	st, _ = s.Load()
 	a, b, g := st.Installations[instA], st.Installations[instB], st.Installations[instC]
-	if !a.Reachable || a.Alerts["b6dd"].Team != "bumblebee" || b.Reachable || b.Alerts != nil || len(g.Alerts) != 1 {
+	if !a.Reachable || a.Alerts["b6dd"].Team != ourTeam || b.Reachable || b.Alerts != nil || len(g.Alerts) != 1 {
 		t.Errorf("after import: %+v %+v %+v", a, b, g)
 	}
 	// An imported set is a baseline: the next reading prints only what changed.

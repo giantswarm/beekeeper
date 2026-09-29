@@ -11,10 +11,14 @@ import (
 // September, which a first filter was measured on: other teams' alerts on
 // the e2e test clusters (t-…) of a management cluster woke it for nothing,
 // the team's pages and pages outside the test clusters needed it.
-const mc = "alpha"
+const (
+	mc              = "alpha"
+	ourTeam         = "bumblebee"
+	testClusterGlob = "t-*"
+)
 
 var (
-	testClusters = Rules{Team: "bumblebee", Collapse: 3, Quiet: []Quiet{{Cluster: "t-*"}}}
+	testClusters = Rules{Team: ourTeam, Collapse: 3, Quiet: []Quiet{{Cluster: testClusterGlob}}}
 
 	onTestCluster = []Raw{
 		alert("q1", "MonitoringAgentDown", "page", "atlas", "", "cluster_id", "t-gr5x1yijsdi6vhrh77"),
@@ -24,7 +28,7 @@ var (
 		alert("q4", "InhibitionControlPlaneUnhealthy", "none", "tenet", "", "cluster_id", "t-x88cqdpkx4u10oxzmi",
 			"namespace", "org-t-x88cqdpkx4u10oxzmi", "name", "t-x88cqdpkx4u10oxzmi"),
 	}
-	oursOnTestCluster = alert("o1", "AgentPlatformContainerRestartingTooOften", "page", "bumblebee", "", "cluster_id", "t-bx7aynmir71j1x8pdg",
+	oursOnTestCluster = alert("o1", "AgentPlatformContainerRestartingTooOften", "page", ourTeam, "", "cluster_id", "t-bx7aynmir71j1x8pdg",
 		"namespace", "agent-platform")
 	pageOnMC   = alert("p1", "LoggingAgentMissingOnNode", "page", "atlas", "", "cluster_id", mc, "node", "ip-10-0-164-17")
 	notifyOnMC = alert("n1", "KarpenterServiceDegraded", "notify", "phoenix", "", "cluster_id", mc,
@@ -75,7 +79,7 @@ func TestInstallationInPlayQuietsNothing(t *testing.T) {
 }
 
 func TestQuietRuleWithoutClusterNeverQuietsAPage(t *testing.T) {
-	r := Rules{Team: "bumblebee", Collapse: 3, Quiet: []Quiet{{Installation: mc}}}
+	r := Rules{Team: ourTeam, Collapse: 3, Quiet: []Quiet{{Installation: mc}}}
 	lines, quiet, _ := triage(t, r, nil, []Raw{pageOnMC, notifyOnMC})
 	if len(lines) != 1 || !strings.Contains(lines[0], "LoggingAgentMissingOnNode") {
 		t.Errorf("lines = %q, want the page", lines)
@@ -86,7 +90,7 @@ func TestQuietRuleWithoutClusterNeverQuietsAPage(t *testing.T) {
 }
 
 func TestQuietRuleMatchesByNameAndSeverity(t *testing.T) {
-	r := Rules{Team: "bumblebee", Collapse: 3, Quiet: []Quiet{{Alertname: "Karpenter*", Severity: "notify"}}}
+	r := Rules{Team: ourTeam, Collapse: 3, Quiet: []Quiet{{Alertname: "Karpenter*", Severity: "notify"}}}
 	lines, quiet, _ := triage(t, r, nil, []Raw{notifyOnMC, pageOnMC})
 	if len(quiet) != 1 || len(lines) != 1 {
 		t.Errorf("lines %q, quiet %q", lines, quiet)
@@ -98,8 +102,8 @@ func TestQuietRuleMatchesByNameAndSeverity(t *testing.T) {
 // is quiet, a real re-fire with a new start is not, and neither is the
 // team's alert or a page.
 func TestRepeatAfterAMissedReadingIsQuiet(t *testing.T) {
-	r := Rules{Team: "bumblebee", Collapse: 3, Flap: Damper{Window: time.Hour}}
-	ours := alert("b1", "FluxGiantswarmHelmReleaseFailed", "page", "bumblebee", "", "cluster_id", mc, "namespace", "flux-giantswarm", "name", "repo-manager")
+	r := Rules{Team: ourTeam, Collapse: 3, Flap: Damper{Window: time.Hour}}
+	ours := alert("b1", "FluxGiantswarmHelmReleaseFailed", "page", ourTeam, "", "cluster_id", mc, "namespace", "flux-giantswarm", "name", "repo-manager")
 	all := []Raw{notifyOnMC, pageOnMC, ours}
 	_, st := r.Step(mc, nil, ok(all...), now)
 	lines, _, st := r.Triage(mc, st, ok(), now.Add(every))
@@ -144,14 +148,14 @@ func TestGlob(t *testing.T) {
 		want       bool
 	}{
 		{"", "anything", true},
-		{"t-*", "t-gr5x1yijsdi6vhrh77", true},
-		{"t-*", "alpha", false},
+		{testClusterGlob, "t-gr5x1yijsdi6vhrh77", true},
+		{testClusterGlob, mc, false},
 		{"test: *", "test: beekeeper#12 delegation 8", true},
 		{"*/b*", "a/x/bc", true},
 		{"a*c*e", "abcde", true},
 		{"a*c*e", "abcd", false},
-		{"exact", "exact", true},
-		{"exact", "exactly", false},
+		{mc, mc, true},
+		{mc, mc + "s", false},
 	} {
 		if got := Glob(c.pattern, c.s); got != c.want {
 			t.Errorf("Glob(%q, %q) = %v, want %v", c.pattern, c.s, got, c.want)
