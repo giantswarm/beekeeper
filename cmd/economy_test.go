@@ -42,7 +42,7 @@ func TestWatchReplayedHourSaysEachFactOnceInBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	w := &watcher{app: &app{out: &out}, last: map[string]time.Time{}, sessions: map[string]*claude.Session{}}
+	w := &watcher{app: &app{out: &out, cfg: &config.Config{}}, last: map[string]time.Time{}, sessions: map[string]*claude.Session{}}
 	live := map[string]*claude.Session{}
 	pid := 0
 	session := func(name string) *claude.Session {

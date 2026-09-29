@@ -231,7 +231,7 @@ func (a *app) alertRules() alerts.Rules {
 		}
 	}
 	return alerts.Rules{Ignore: al.Ignore, Team: al.Team, Collapse: al.Collapse, Floors: floors,
-		Flap: alerts.Damper{Changes: al.Flap.Changes, Window: al.Flap.Window.Duration}}
+		Flap: alerts.Damper{Changes: al.Flap.Changes, Window: al.Flap.Window.Duration}, Quiet: al.Quiet}
 }
 
 func (a *app) alertReader() alerts.Reader {
@@ -274,15 +274,19 @@ func (a *app) alertCycle(ctx context.Context, store *alerts.Store) []string {
 
 // alertLines steps every target's baseline in st with its answer and returns
 // the lines, each with who is on the installation in brackets, a NEW one
-// also with the merges and lease claims that likely caused it.
+// also with the merges and lease claims that likely caused it. The lines
+// the quiet rules hold back are logged (watch.quiet), not returned.
 func (a *app) alertLines(st *alerts.State, targets []alerts.Target, answers []alerts.Answer, now time.Time) []string {
 	rules := a.alertRules()
-	var lines []string
+	var lines, quiet []string
 	var on func(alerts.Target) []string
 	var hints func(string) []string
-	for i, t := range targets {
-		changed, next := rules.Step(t.Name, st.Installations[t.Name], answers[i], now)
+	rules.InPlay = a.inPlay(now)
+	for i, ans := range answers {
+		t := targets[i]
+		changed, held, next := rules.Triage(t.Name, st.Installations[t.Name], ans, now)
 		st.Installations[t.Name] = next
+		quiet = append(quiet, held...)
 		if len(changed) == 0 {
 			continue
 		}
@@ -291,7 +295,69 @@ func (a *app) alertLines(st *alerts.State, targets []alerts.Target, answers []al
 		}
 		lines = append(lines, decorate(changed, on(t), func() []string { return hints(t.Name) })...)
 	}
+	a.logQuiet(quiet...)
 	return lines
+}
+
+// inPlay returns whether an installation is in play at now, asked for once
+// on the first call: leased, claimed or merged into within hintWindow (the
+// owner hints), or with a merge of its lanes running or settling. None of
+// its alerts is quiet.
+func (a *app) inPlay(now time.Time) func(string) bool {
+	var leased, merging map[string]bool
+	var hints func(string) []string
+	return func(installation string) bool {
+		if hints == nil {
+			leased, merging, hints = map[string]bool{}, map[string]bool{}, a.ownerHints(now)
+			if holders, err := lease.Dir(a.cfg.LeaseDir).List(); err == nil {
+				for _, h := range holders {
+					leased[h.Env] = true
+				}
+			}
+			if a.store != nil {
+				if st, err := a.store.Read(); err == nil {
+					for _, m := range st.Merges {
+						if l, ok := a.cfg.LaneNamed(m.Lane); ok && (m.Phase == state.Running || m.Phase == state.Settling) {
+							merging[l.Installation] = true
+						}
+					}
+				}
+			}
+		}
+		return leased[installation] || merging[installation] || len(hints(installation)) > 0
+	}
+}
+
+// quietText names the quiet rules in one sentence.
+func quietText(rules []alerts.Quiet) string {
+	names := make([]string, len(rules))
+	for i, q := range rules {
+		names[i] = q.String()
+	}
+	return fmt.Sprintf("Quiet, logged as %s instead of said (never the team's, an installation in play or a page unless the rule names a cluster): %s.",
+		quietVerb, strings.Join(names, "; "))
+}
+
+// quietVerb is the event of a watch line the quiet rules held back.
+const quietVerb = "watch.quiet"
+
+// logQuiet logs the watch lines that wake nobody, so beekeeper log --verb
+// watch.quiet and the snapshot's count still show them.
+func (a *app) logQuiet(lines ...string) {
+	if a.store == nil || len(lines) == 0 {
+		return
+	}
+	evs := make([]state.Event, len(lines))
+	for i, l := range lines {
+		evs[i] = event(watchParty, quietVerb, "%s", l)
+	}
+	_ = a.store.Log(evs...)
+}
+
+// quietSince is the count of the watch lines held back since then.
+func (a *app) quietSince(since time.Time) int {
+	evs, _ := a.store.Events(0, func(e state.Event) bool { return e.Verb == quietVerb && !e.At.Before(since) })
+	return len(evs)
 }
 
 // decorate appends who is on the installation to each line in brackets, and
@@ -466,6 +532,7 @@ type alertsView struct {
 	Live      bool                            `json:"live"`
 	Targets   []alerts.Target                 `json:"installations"`
 	Ignore    []string                        `json:"ignore"`
+	Quiet     []alerts.Quiet                  `json:"quiet,omitempty"`
 	Team      string                          `json:"team,omitempty"`
 	Collapse  int                             `json:"collapse"`
 	Floors    map[string]string               `json:"floors,omitempty"`
@@ -487,7 +554,7 @@ func (a *app) alertsHandover(ctx context.Context) (*alertsView, error) {
 	al := a.cfg.Alerts
 	return &alertsView{
 		Every: dur(al.Every.Duration), Owner: st.Owner, Live: st.Owner != nil && proc.Alive(st.Owner.PID), Targets: a.alertTargets(ctx),
-		Ignore: al.Ignore, Team: al.Team, Collapse: al.Collapse, Floors: a.alertRules().Floors,
+		Ignore: al.Ignore, Quiet: al.Quiet, Team: al.Team, Collapse: al.Collapse, Floors: a.alertRules().Floors,
 		Flap: flapView{Changes: al.Flap.Changes, Window: dur(al.Flap.Window.Duration)}, Baselines: st.Installations,
 	}, nil
 }
@@ -523,6 +590,9 @@ func (a *app) printAlerts(v *alertsView) {
 		p("\nNot read yet: beekeeper watch reads them every %s.", v.Every)
 	}
 	p("Ignored alert names: %s.", strings.Join(v.Ignore, ", "))
+	if len(v.Quiet) > 0 {
+		p("%s", quietText(v.Quiet))
+	}
 	if v.Team != "" {
 		p("Marked team: %s; more than %d changes of one alertname are one line.", v.Team, v.Collapse)
 	}

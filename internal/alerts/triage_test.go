@@ -155,7 +155,8 @@ func TestFloorOrDamperChangePrintsNoBurst(t *testing.T) {
 
 // flapped replays the two recorded readings of lab alternately, the way
 // tonight's alert fired and cleared at every reading, and returns every
-// line printed after the first look.
+// line printed after the first look. Each reading starts its alerts at its
+// own time: an alert that fires again starts again.
 func flapped(t *testing.T, r Rules, readings int) ([]string, *Installation) {
 	t.Helper()
 	answers := []Answer{recorded(t, 1, lab), recorded(t, 2, lab)}
@@ -163,10 +164,20 @@ func flapped(t *testing.T, r Rules, readings int) ([]string, *Installation) {
 	var all []string
 	for i := 1; i <= readings; i++ {
 		var lines []string
-		lines, st = r.Step(lab, st, answers[i%2], now.Add(time.Duration(i)*every))
+		at := now.Add(time.Duration(i) * every)
+		lines, st = r.Step(lab, st, startedAt(answers[i%2], at), at)
 		all = append(all, lines...)
 	}
 	return all, st
+}
+
+// startedAt is the answer with every alert started at t.
+func startedAt(ans Answer, t time.Time) Answer {
+	ans.Alerts = slices.Clone(ans.Alerts)
+	for i := range ans.Alerts {
+		ans.Alerts[i].StartsAt = t.UTC().Format(time.RFC3339Nano)
+	}
+	return ans
 }
 
 func TestFlappingAlertIsOneLine(t *testing.T) {

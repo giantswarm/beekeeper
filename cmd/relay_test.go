@@ -84,7 +84,7 @@ func TestFirePendingReportsEachOnce(t *testing.T) {
 
 func TestSessionChangesLeavesARecordedEndToItsLine(t *testing.T) {
 	var out bytes.Buffer
-	w := &watcher{app: &app{out: &out}, records: []state.Record{{Session: four, Issue: issue}}}
+	w := &watcher{app: &app{out: &out, cfg: &config.Config{}}, records: []state.Record{{Session: four, Issue: issue}}}
 	w.sessions = map[string]*claude.Session{
 		hostFour:  {ID: "s4", HostID: hostFour, Name: agentFour},
 		"local_5": {ID: "s5", HostID: "local_5", Name: "Agent five"},
@@ -124,7 +124,7 @@ func TestPromptHasThePendingStateAndNoLiveValue(t *testing.T) {
 		Resources:  []string{"agentlab-1", graveler},
 		Lanes:      []config.Lane{{Name: serving, Installation: gazelle, Repositories: []string{modelManager}}, {Name: "portal", Repositories: []string{"giantswarm/backstage"}}},
 		Supervisor: config.Supervisor{Role: config.Role{Skill: "supervise"}},
-		Alerts:     config.Alerts{Ignore: []string{"Heartbeat"}, Team: "bumblebee", Collapse: 3, Every: config.Duration{Duration: 5 * time.Minute}},
+		Alerts:     config.Alerts{Ignore: []string{"Heartbeat"}, Team: ourTeam, Collapse: 3, Every: config.Duration{Duration: 5 * time.Minute}},
 		StateDir:   t.TempDir(),
 	}}
 	l := &leaseList{
@@ -135,7 +135,7 @@ func TestPromptHasThePendingStateAndNoLiveValue(t *testing.T) {
 	al := &alertsView{
 		Every:   "5m",
 		Targets: []alerts.Target{{Name: gazelle, Context: "teleport.giantswarm.io-gazelle", Why: "configured"}},
-		Ignore:  []string{"Heartbeat"}, Team: "bumblebee", Collapse: 3,
+		Ignore:  []string{"Heartbeat"}, Team: ourTeam, Collapse: 3,
 		Baselines: map[string]*alerts.Installation{gazelle: {Reachable: true, Alerts: alerts.Set{
 			"a": {Alertname: "AppWithoutTeamAnnotation"}, "b": {Alertname: "AppWithoutTeamAnnotation"}, "c": {Alertname: "ChartOrphanConfigMap"},
 		}}},

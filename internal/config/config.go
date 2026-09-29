@@ -238,6 +238,15 @@ type Alerts struct {
 	Kubectl string `yaml:"kubectl"`
 	// Flap is the flap damper.
 	Flap Flap `yaml:"flap"`
+	// Quiet are the rules whose alerts' changes are no wake-up: the watch
+	// logs them (watch.quiet) instead of printing them. A rule never
+	// quiets an alert of the team, one on an installation in play (leased,
+	// claimed or merged into within the last half hour, or with a merge
+	// settling), or a page unless it names a cluster. Setting it replaces
+	// the default, Giant Swarm's e2e test clusters ({cluster: "t-*"}). An
+	// alert back after a reading that missed it, with its old start, is
+	// quiet too.
+	Quiet []alerts.Quiet `yaml:"quiet"`
 }
 
 // Flap holds back an alert that changes too often: its Changes-th NEW or
@@ -268,6 +277,12 @@ func (i *Installation) UnmarshalYAML(n *yaml.Node) error {
 	type plain Installation
 	return n.Decode((*plain)(i))
 }
+
+// DefaultQuiet are the alerts of other teams' e2e test clusters.
+var DefaultQuiet = []alerts.Quiet{{Cluster: "t-*"}}
+
+// DefaultQuietSessions are the sessions of beekeeper's own tests.
+var DefaultQuietSessions = []string{"test: *"}
 
 // DefaultIgnore are the alerts that always fire or only route others.
 var DefaultIgnore = []string{"Heartbeat", "InhibitionOutsideWorkingHours", "Watchdog"}
@@ -305,6 +320,11 @@ type Watch struct {
 	PSIMax          float64  `yaml:"psiMax"`
 	TmpMaxMiB       int      `yaml:"tmpMaxMiB"`
 	DiskMinMiB      int      `yaml:"diskMinMiB"`
+	// QuietSessions are globs (* matches any run) of the names of
+	// short-lived sessions whose start, end and restart are no wake-up:
+	// the watch logs them (watch.quiet) instead of printing them. Setting
+	// it replaces the default, beekeeper's own tests ("test: *").
+	QuietSessions []string `yaml:"quietSessions"`
 }
 
 // Metrics prices the tokens of the sessions' transcripts and sets the
@@ -569,6 +589,12 @@ func (c *Config) defaults() error {
 	al := &c.Alerts
 	if al.Ignore == nil {
 		al.Ignore = slices.Clone(DefaultIgnore)
+	}
+	if al.Quiet == nil {
+		al.Quiet = slices.Clone(DefaultQuiet)
+	}
+	if c.Watch.QuietSessions == nil {
+		c.Watch.QuietSessions = slices.Clone(DefaultQuietSessions)
 	}
 	setInt(&al.Collapse, 3)
 	setDur(&al.Every, 5*time.Minute)

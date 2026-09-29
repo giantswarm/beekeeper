@@ -48,6 +48,9 @@ type snapshot struct {
 	BudgetErr   string            `json:"budgetError,omitempty"`
 	Alerts      []string          `json:"alerts,omitempty"`
 	Upgrades    []upgrade.Status  `json:"upgrades,omitempty"`
+	// Quiet is the count of watch lines the quiet rules held back in the
+	// last hour (beekeeper log --verb watch.quiet).
+	Quiet int `json:"quietLastHour,omitempty"`
 	// KubeContext is the machine kubeconfig's current context, which
 	// should stay unset.
 	KubeContext string `json:"kubeContext,omitempty"`
@@ -83,7 +86,8 @@ sit on (with their owner), the kernel
 OOM kills since your last snapshot (every one counted, attributed to a
 memcap scope, a kind lab or the desktop scope; a memcap scope no run.start
 names has an unknown cap, a test run's scope is a test kill), leases, holds and the GitHub
-budget, the installations' alerts, grouped (beekeeper alerts snapshot), and
+budget, the count of watch lines the quiet rules held back in the last
+hour, the installations' alerts, grouped (beekeeper alerts snapshot), and
 their running upgrades (beekeeper watch).
 
 Each caller's last snapshot is kept. A caller inside a Claude session that
@@ -237,6 +241,7 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 		return nil, err
 	}
 	s.Holds = a.activeHolds(st)
+	s.Quiet = a.quietSince(a.now.Add(-time.Hour))
 	if withBudget {
 		b, err := a.probeBudget(ctx)
 		if err != nil {
@@ -458,6 +463,9 @@ func (a *app) printSnapshot(s *snapshot) {
 	}
 	for _, h := range s.Holds {
 		p("hold %s until %s: %s", h.Target, untilText(a, h), truncate(h.Reason, 60))
+	}
+	if s.Quiet > 0 {
+		p("quiet: %d watch lines held back in the last hour (beekeeper log --verb %s)", s.Quiet, quietVerb)
 	}
 	if len(s.Upgrades) > 0 {
 		p("upgrades: %s", strings.Join(upgradeWords(s.Upgrades, a.now), " · "))

@@ -72,6 +72,9 @@ type Alert struct {
 	Cluster   string `json:"cluster"`
 	Where     string `json:"where"`
 	Since     string `json:"since"`
+	// fp is the fingerprint of a changed alert (missing), for the quiet
+	// rules' repeat check.
+	fp string
 }
 
 // Answer is one installation's reading: its alerts, or why it did not answer.
@@ -96,6 +99,13 @@ type Rules struct {
 	Floors map[string]string
 	// Flap is the flap damper.
 	Flap Damper
+	// Quiet are the rules whose alerts' changes wake nobody (Triage);
+	// their alerts repeating after a reading that missed them are quiet
+	// too.
+	Quiet []Quiet
+	// InPlay reports whether an installation is in play (leased, merged
+	// into): none of its alerts is quiet. nil is none in play.
+	InPlay func(installation string) bool
 }
 
 // Damper holds back an alert that changes too often: its Changes-th NEW or
@@ -322,28 +332,37 @@ type Installation struct {
 	// Flaps are the damper's records of the alerts that changed within its
 	// window, by fingerprint.
 	Flaps map[string]*Flap `json:"flaps,omitempty"`
+	// Resolved are the alerts resolved within the damper's window, by
+	// fingerprint, for the quiet repeat.
+	Resolved map[string]Resolved `json:"resolved,omitempty"`
 }
 
 // Step returns the lines one watch run prints for an installation and the
 // baseline it leaves. prev is nil on the installation's first run.
 func (r Rules) Step(installation string, prev *Installation, ans Answer, now time.Time) ([]string, *Installation) {
+	lines, _, next := r.Triage(installation, prev, ans, now)
+	return lines, next
+}
+
+// Triage is Step with the changes the quiet rules hold back: lines wake the
+// reader, quiet are the lines that wake nobody, each ending in its reason.
+func (r Rules) Triage(installation string, prev *Installation, ans Answer, now time.Time) (lines, quiet []string, next *Installation) {
 	if !ans.OK {
 		next := &Installation{Said: now}
 		if prev != nil {
-			next.Alerts, next.Flaps, next.Seen = prev.Alerts, prev.Flaps, prev.Seen
+			next.Alerts, next.Flaps, next.Seen, next.Resolved = prev.Alerts, prev.Flaps, prev.Seen, prev.Resolved
 			if !prev.Reachable && now.Sub(prev.Said) < UnseenRepeat {
 				next.Said = prev.Said
-				return nil, next
+				return nil, nil, next
 			}
 		}
-		return []string{fmt.Sprintf("ALERTS %s unreachable, %s: %s", installation, unseen(next, now), ans.Why)}, next
+		return []string{fmt.Sprintf("ALERTS %s unreachable, %s: %s", installation, unseen(next, now), ans.Why)}, nil, next
 	}
 	current := r.Normalize(ans.Alerts, installation)
-	next := &Installation{Reachable: true, Alerts: current, Seen: now}
+	next = &Installation{Reachable: true, Alerts: current, Seen: now}
 	if prev == nil || prev.Alerts == nil {
-		return r.firstLook(installation, current, now), next
+		return r.firstLook(installation, current, now), nil, next
 	}
-	var lines []string
 	if !prev.Reachable {
 		again := fmt.Sprintf("ALERTS %s reachable again", installation)
 		if !prev.Seen.IsZero() {
@@ -352,12 +371,20 @@ func (r Rules) Step(installation string, prev *Installation, ans Answer, now tim
 		lines = append(lines, again)
 	}
 	next.Flaps = r.Flap.keep(prev.Flaps, now)
-	added, flapping := r.Flap.damp(next.Flaps, r.missing(installation, current, prev.Alerts), now)
-	gone, flappingGone := r.Flap.damp(next.Flaps, r.missing(installation, prev.Alerts, current), now)
-	lines = append(lines, r.changeLines(New, installation, added, now, r.Collapse)...)
-	lines = append(lines, r.changeLines("RESOLVED", installation, gone, now, r.Collapse)...)
-	lines = append(lines, r.changeLines("FLAPPING", installation, append(flapping, flappingGone...), now, r.Collapse)...)
-	return lines, next
+	back, resolved := r.missing(installation, current, prev.Alerts), r.missing(installation, prev.Alerts, current)
+	recent := r.recentResolved(prev.Resolved, now)
+	next.Resolved = nextResolved(recent, resolved, back, now)
+	added, flapping := r.Flap.damp(next.Flaps, back, now)
+	gone, flappingGone := r.Flap.damp(next.Flaps, resolved, now)
+	for _, c := range []struct {
+		kind   string
+		alerts []Alert
+	}{{New, added}, {"RESOLVED", gone}, {"FLAPPING", append(flapping, flappingGone...)}} {
+		loud, q := r.split(c.kind, installation, c.alerts, recent, now)
+		lines = append(lines, r.changeLines(c.kind, installation, loud, now, r.Collapse)...)
+		quiet = append(quiet, q...)
+	}
+	return lines, quiet, next
 }
 
 // unseen says since when an unreachable installation's alerts are unseen.
@@ -457,6 +484,7 @@ func (r Rules) missing(installation string, a, b Set) map[string]Alert {
 	out := map[string]Alert{}
 	for k, v := range a {
 		if _, ok := b[k]; !ok && r.shown(installation, v) {
+			v.fp = k
 			out[k] = v
 		}
 	}
