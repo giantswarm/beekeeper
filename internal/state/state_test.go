@@ -6,12 +6,15 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/gofrs/flock"
 )
+
+const verbRunStart = "run.start"
 
 func TestPartyIs(t *testing.T) {
 	const agentOne = "Agent one"
@@ -84,7 +87,7 @@ func TestLogAppendsWithoutTouchingTheState(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Log(Event{Verb: "run.start", Detail: "a"}, Event{Verb: "run.end", Detail: "b"}); err != nil {
+	if err := s.Log(Event{Verb: verbRunStart, Detail: "a"}, Event{Verb: "run.end", Detail: "b"}); err != nil {
 		t.Fatal(err)
 	}
 	if st, _ := s.Read(); st.NextNote != 7 {
@@ -101,7 +104,7 @@ func TestLogAppendsWithoutTouchingTheState(t *testing.T) {
 	}
 	defer func() { _ = l.Unlock() }()
 	t0 := time.Now()
-	if err := s.Log(Event{Verb: "run.start"}); err == nil || time.Since(t0) > 3*logWait {
+	if err := s.Log(Event{Verb: verbRunStart}); err == nil || time.Since(t0) > 3*logWait {
 		t.Errorf("Log under a held lock = %v after %s", err, time.Since(t0))
 	}
 }
@@ -172,5 +175,39 @@ func TestDue(t *testing.T) {
 		if got := Due(c.due, c.fired, now); got != c.want {
 			t.Errorf("Due(%v, %v) = %v", c.due, c.fired, got)
 		}
+	}
+}
+
+func TestEventsAreWrittenInUTC(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := time.Date(2026, 9, 28, 19, 6, 26, 0, time.FixedZone("CEST", 2*60*60))
+	if err := s.Update(func(st *State) ([]Event, error) {
+		return []Event{{At: local, Verb: "note.add"}}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Log(Event{At: local, Verb: verbRunStart}, Event{At: local, Verb: "hook.allow"}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(s.path("events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var e struct{ At, Verb string }
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			t.Fatal(err)
+		}
+		if e.At != "2026-09-28T17:06:26Z" {
+			t.Errorf("%s at = %q, want UTC", e.Verb, e.At)
+		}
+		lines++
+	}
+	if lines != 3 {
+		t.Errorf("%d events, want 3", lines)
 	}
 }
