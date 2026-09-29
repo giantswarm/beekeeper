@@ -108,6 +108,17 @@ the notes, timers, session records and relays to the supervisor's watch,
 and it never reads the alerts, so it takes nothing from the supervisor's
 view.
 
+The quiet rules keep what is noise for the supervisor out of the output:
+other teams' alerts matching alerts.quiet (by default their e2e test
+clusters, t-*), an alert back after a reading that missed it with its old
+start, and the start, end and restart of the short-lived sessions in
+watch.quietSessions (by default beekeeper's tests, "test: *"). A rule
+never holds back an alert of alerts.team, one on an installation in play
+(leased, claimed or merged into within the last half hour, or with a merge
+settling), or a page unless the rule names a cluster. What they hold back
+is logged (beekeeper log --verb watch.quiet) and counted in the snapshot;
+everything else is said as before.
+
 What a watch has said is kept per caller (seen.watch.<caller>.json): a
 restarted watch of the same session says no open condition, runaway or
 stale lease again, only its end or what is new. Runs until killed. --once
@@ -704,36 +715,60 @@ func (w *watcher) sessionChanges(sessions []*claude.Session) {
 		w.sessions = cur
 		return
 	}
-	var started, ended, restarted []string
+	var started, ended, restarted, quiet []string
 	for k, s := range cur {
 		prev, ok := w.sessions[k]
 		switch {
 		case !ok:
-			started = append(started, fmt.Sprintf("%q", s.Name))
+			started = append(started, s.Name)
 		case prev.PID != s.PID:
-			restarted = append(restarted, fmt.Sprintf("%q", s.Name))
+			restarted = append(restarted, s.Name)
 		}
 	}
 	for k, s := range w.sessions {
 		_, ok := cur[k]
 		recorded := slices.ContainsFunc(w.records, func(r state.Record) bool { return r.Session.Is(s.Party()) })
 		if !ok && !recorded {
-			ended = append(ended, fmt.Sprintf("%q", s.Name))
+			ended = append(ended, s.Name)
 		}
 	}
-	for _, l := range [][]string{started, ended, restarted} {
-		slices.Sort(l)
+	for _, c := range []struct {
+		what  string
+		names []string
+	}{{"started", started}, {"ended", ended}, {"restarted", restarted}} {
+		loud, held := w.quietSessions(c.names)
+		if len(loud) > 0 {
+			w.emitNow("sessions", "SESSIONS %s: %s", c.what, quoted(loud))
+		}
+		if len(held) > 0 {
+			quiet = append(quiet, fmt.Sprintf("SESSIONS %s: %s (quiet: watch.quietSessions)", c.what, quoted(held)))
+		}
 	}
-	if len(started) > 0 {
-		w.emitNow("sessions", "SESSIONS started: %s", strings.Join(started, ", "))
-	}
-	if len(ended) > 0 {
-		w.emitNow("sessions", "SESSIONS ended: %s", strings.Join(ended, ", "))
-	}
-	if len(restarted) > 0 {
-		w.emitNow("sessions", "SESSIONS restarted: %s", strings.Join(restarted, ", "))
-	}
+	w.logQuiet(quiet...)
 	w.sessions = cur
+}
+
+// quoted is the names quoted and sorted, comma-separated.
+func quoted(names []string) string {
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = fmt.Sprintf("%q", n)
+	}
+	slices.Sort(out)
+	return strings.Join(out, ", ")
+}
+
+// quietSessions splits session names into those that wake and the
+// short-lived ones in watch.quietSessions.
+func (w *watcher) quietSessions(names []string) (loud, quiet []string) {
+	for _, n := range names {
+		if slices.ContainsFunc(w.cfg.Watch.QuietSessions, func(p string) bool { return alerts.Glob(p, n) }) {
+			quiet = append(quiet, n)
+		} else {
+			loud = append(loud, n)
+		}
+	}
+	return loud, quiet
 }
 
 // watchParty is who the watch's events are by.

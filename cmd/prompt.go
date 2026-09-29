@@ -291,6 +291,9 @@ func (a *app) promptAlerts(p printer, al *alertsView) {
 	}
 	p("\nThe baseline is %s: the next beekeeper watch compares against it and reads every %s.", alerts.NewStore(a.cfg.StateDir).Path(), al.Every)
 	p("Ignored alert names: %s.", strings.Join(al.Ignore, ", "))
+	if len(al.Quiet) > 0 {
+		p("%s", quietText(al.Quiet))
+	}
 	if al.Team != "" {
 		p("Marked team: %s; more than %d changes of one alertname are one line.", al.Team, al.Collapse)
 	}

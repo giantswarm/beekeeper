@@ -3,8 +3,11 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/alerts"
 )
 
 func TestLoadDefaults(t *testing.T) {
@@ -63,6 +66,28 @@ supervisor: {relayAt: 1.5M}
 	if len(al.Ignore) != 3 || al.Collapse != 3 || al.Every.Duration != 5*time.Minute || al.Timeout.Duration != time.Minute ||
 		al.Flap.Changes != 3 || al.Flap.Window.Duration != time.Hour {
 		t.Errorf("alerts defaults = %+v", al)
+	}
+	if !slices.Equal(al.Quiet, DefaultQuiet) || !slices.Equal(c.Watch.QuietSessions, DefaultQuietSessions) {
+		t.Errorf("quiet defaults = %+v, %q", al.Quiet, c.Watch.QuietSessions)
+	}
+}
+
+func TestQuietRulesReplaceTheDefaults(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	raw := `alerts: {quiet: [{installation: alpha, alertname: "Karpenter*"}]}
+watch: {quietSessions: []}`
+	if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []alerts.Quiet{{Installation: "alpha", Alertname: "Karpenter*"}}; !slices.Equal(c.Alerts.Quiet, want) {
+		t.Errorf("quiet = %+v, want %+v", c.Alerts.Quiet, want)
+	}
+	if len(c.Watch.QuietSessions) != 0 {
+		t.Errorf("quietSessions = %q, want none", c.Watch.QuietSessions)
 	}
 }
 

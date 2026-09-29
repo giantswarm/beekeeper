@@ -84,7 +84,7 @@ func TestFirePendingReportsEachOnce(t *testing.T) {
 
 func TestSessionChangesLeavesARecordedEndToItsLine(t *testing.T) {
 	var out bytes.Buffer
-	w := &watcher{app: &app{out: &out}, records: []state.Record{{Session: four, Issue: issue}}}
+	w := &watcher{app: &app{out: &out, cfg: &config.Config{}}, records: []state.Record{{Session: four, Issue: issue}}}
 	w.sessions = map[string]*claude.Session{
 		hostFour:  {ID: "s4", HostID: hostFour, Name: agentFour},
 		"local_5": {ID: "s5", HostID: "local_5", Name: "Agent five"},
