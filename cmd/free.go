@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -20,6 +22,7 @@ func (a *app) freeCmd() *cobra.Command {
 		o                                  free.Options
 		only                               []string
 		staleH, orphanM, runawayM, runaway int
+		timeout                            time.Duration
 	)
 	c := &cobra.Command{
 		Use:   "free [--apply] [--only SECTIONS] [--summary]",
@@ -59,7 +62,19 @@ for a front end that lets the user pick (a dry run):
                                          service (stop the unit: Restart=
                                          undoes a kill); why is heavy,
                                          runaway:<cpu %> or heavy,runaway:<cpu %>
-  tab     <pid> <MiB> <up> renderer      a Chrome renderer above --tab-mib`,
+  tab     <pid> <MiB> <up> renderer      a Chrome renderer above --tab-mib
+
+One summary scan runs at a time, at nice 10: a second caller waits for the
+running scan and prints its rows, and a caller within 30 s of a finished
+scan with the same options reuses its rows. Two rows say so:
+
+  cached  <age s>                        first row: the rows below are
+                                         reused from a scan this old
+  partial <timeout s>                    last row: --timeout cut the scan
+                                         short, the rows above are what it
+                                         had collected (section rows come
+                                         last, so they may be missing);
+                                         a partial result is not reused`,
 		Args: cobra.NoArgs,
 		PersistentPreRunE: func(*cobra.Command, []string) error {
 			return a.loadConfig()
@@ -79,6 +94,9 @@ for a front end that lets the user pick (a dry run):
 			o.Orphan = time.Duration(orphanM) * time.Minute
 			o.Runaway = time.Duration(runawayM) * time.Minute
 			o.RunawayCPU = runaway
+			if o.Summary {
+				return a.freeSummary(o, timeout)
+			}
 			m, err := a.freeMachine()
 			if err != nil {
 				return err
@@ -97,7 +115,30 @@ for a front end that lets the user pick (a dry run):
 	f.IntVar(&runaway, "runaway-cpu", 50, "share of its lifetime (percent) a runaway process spent on the CPU")
 	f.IntVar(&runawayM, "runaway-minutes", 10, "CPU minutes a runaway process has burned")
 	f.IntVar(&o.TabMiB, "tab-mib", 250, "anonymous RSS from which a Chrome renderer is reported (0 turns it off)")
+	f.DurationVar(&timeout, "timeout", time.Minute, "with --summary: print what the scan has collected by then, with a partial row")
 	return c
+}
+
+// freeSummary prints the --summary rows through one shared, niced scan.
+func (a *app) freeSummary(o free.Options, timeout time.Duration) error {
+	if timeout <= 0 {
+		return usageErr("--timeout must be positive")
+	}
+	free.Nice(10)
+	s := free.Shared{
+		Dir:     filepath.Join(a.cfg.StateDir, "free"),
+		Key:     fmt.Sprintf("%+v", o),
+		MaxAge:  30 * time.Second,
+		Timeout: timeout,
+	}
+	return s.Print(a.out, func(w io.Writer) error {
+		m, err := a.freeMachine()
+		if err != nil {
+			return err
+		}
+		(&free.Run{Options: o, Machine: m, Out: w}).Do()
+		return nil
+	})
 }
 
 // freeMachine gathers what free reads: the process table, the sessions and
