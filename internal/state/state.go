@@ -491,7 +491,8 @@ func (m Merge) Key() string { return fmt.Sprintf("%s#%d", m.Repo, m.PR) }
 // place for its session's retry of the same pull request.
 func (m Merge) Retrying() bool { return m.Phase == Waiting && !m.Finished.IsZero() }
 
-// Event is one line of events.jsonl.
+// Event is one line of events.jsonl. At is written in UTC (RFC 3339 with a
+// trailing Z), so a reader can compare it as a string.
 type Event struct {
 	At     time.Time `json:"at"`
 	By     Party     `json:"by"`
@@ -598,6 +599,7 @@ func (s *Store) append(events []Event) error {
 	}
 	enc := json.NewEncoder(f)
 	for _, e := range events {
+		e.At = e.At.UTC()
 		if err := enc.Encode(e); err != nil {
 			_ = f.Close()
 			return err

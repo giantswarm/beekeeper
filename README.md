@@ -770,7 +770,8 @@ notify:                     # what watch --notify sends to the desktop
 ```
 
 State lives in `$XDG_STATE_HOME/beekeeper/` (`state.json`, which an older beekeeper still running
-writes back with the fields it does not know, `events.jsonl`, each caller's last
+writes back with the fields it does not know, `events.jsonl`, whose `at` is RFC 3339 in UTC while
+`beekeeper log` prints local times, each caller's last
 snapshot, the alert baseline `alerts.json` with its owner's `alerts.lock`, the notification ledger
 `notify.json` with `notify.lock`) and leases in `leases/`, one directory per held resource.
 

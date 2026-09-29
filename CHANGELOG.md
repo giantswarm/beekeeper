@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `events.jsonl` writes every event's `at` in UTC. `run.start`, `run.end` and `hook.allow` carried the local offset while every other verb was in UTC, so a reader comparing `at` as a string put hours of events in the wrong place. `beekeeper log` still prints local times.
+
 ### Added
 
 - The PreToolUse hook refuses a kubectl plugin's write to a `gazelle` cluster: `kubectl <plugin> …` and `kubectl-<plugin>` binaries such as `kubectl ate delete actor` or `kubectl-ate admin make-ca-pool`, by the same targets as kubectl, through the same shells, prefixes, variables and functions. Plugin subcommands that read (`get`, `logs`, `top`, …) and read-only plugins (`tree`, `resource-capacity`, …) pass.

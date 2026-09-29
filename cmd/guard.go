@@ -119,7 +119,7 @@ func (a *app) runRecorder() func(verb, detail string) {
 		by = state.Party{Name: noSession}
 	}
 	return func(verb, detail string) {
-		_ = st.Log(state.Event{At: time.Now(), By: by, Verb: verb, Detail: detail})
+		_ = st.Log(event(by, verb, "%s", detail))
 	}
 }
 
@@ -260,7 +260,7 @@ Register it in ~/.claude/settings.json:
 				return nil
 			}
 			if _, err := a.out.Write(out); err == nil && a.store != nil {
-				_ = a.store.Log(state.Event{At: time.Now(), By: start.Party, Verb: "hook.allow", Detail: req.Tool + " in " + start.Dir})
+				_ = a.store.Log(event(start.Party, "hook.allow", "%s in %s", req.Tool, start.Dir))
 			}
 			return nil
 		},
