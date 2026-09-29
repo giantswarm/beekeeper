@@ -14,6 +14,8 @@ import (
 	"github.com/gofrs/flock"
 )
 
+const verbRunStart = "run.start"
+
 func TestPartyIs(t *testing.T) {
 	const agentOne = "Agent one"
 	a := Party{Session: "s1", HostSession: "local_1", Name: agentOne}
@@ -85,7 +87,7 @@ func TestLogAppendsWithoutTouchingTheState(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Log(Event{Verb: "run.start", Detail: "a"}, Event{Verb: "run.end", Detail: "b"}); err != nil {
+	if err := s.Log(Event{Verb: verbRunStart, Detail: "a"}, Event{Verb: "run.end", Detail: "b"}); err != nil {
 		t.Fatal(err)
 	}
 	if st, _ := s.Read(); st.NextNote != 7 {
@@ -102,7 +104,7 @@ func TestLogAppendsWithoutTouchingTheState(t *testing.T) {
 	}
 	defer func() { _ = l.Unlock() }()
 	t0 := time.Now()
-	if err := s.Log(Event{Verb: "run.start"}); err == nil || time.Since(t0) > 3*logWait {
+	if err := s.Log(Event{Verb: verbRunStart}); err == nil || time.Since(t0) > 3*logWait {
 		t.Errorf("Log under a held lock = %v after %s", err, time.Since(t0))
 	}
 }
@@ -187,7 +189,7 @@ func TestEventsAreWrittenInUTC(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Log(Event{At: local, Verb: "run.start"}, Event{At: local, Verb: "hook.allow"}); err != nil {
+	if err := s.Log(Event{At: local, Verb: verbRunStart}, Event{At: local, Verb: "hook.allow"}); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(s.path("events.jsonl"))
