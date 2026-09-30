@@ -128,6 +128,7 @@ func TestStandbyStartsAGoneGuidesSuccessor(t *testing.T) {
 			})
 		},
 	}
+	t.Cleanup(w.stand.inflight.Wait)
 	guide := state.Party{Session: sessionG7, HostSession: hostG7, Name: guideSeven}
 	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Guide = &state.Role{Holder: &state.Supervisor{Party: guide, Since: relayNow.Add(-time.Hour)}, Run: 7,
