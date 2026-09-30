@@ -30,6 +30,9 @@ func TestModelServerRefusal(t *testing.T) {
 		"a lab test on the host models":   {"agentlab models-test --config lab.yaml", held("other"), true},
 		"a lab test without model turns":  {"agentlab platform-test", held("other"), false},
 		"a mention is no command":         {"grep -n 'ollama run' README.md", held("other"), false},
+		"a call quoted in a comment body": {"gh issue comment 1 --body \"the hook refuses `curl -s localhost:11434/api/generate`\"", held("other"), false},
+		"a chat call from a kind node":    {"docker exec agentlab-2-control-plane curl -s http://172.21.0.1:11434/api/chat -d @b", held("other"), true},
+		"a generate call after a list":    {"cd /tmp && curl localhost:11434/api/generate -d @b", held("other"), true},
 		"lease held under the desktop id": {"ollama run x", func() []lease.Holder { return []lease.Holder{{Env: modelServerLease, HostSession: "local_s1"}} }, false},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -40,9 +40,13 @@ func (m ModelServer) loader() *regexp.Regexp {
 		}
 		alts = append(alts, `agentlab\s+(?:`+strings.Join(tests, "|")+`)\b`)
 	}
-	http := `(?:curl|wget|xh|https?)\b[^;&|\n]*:` + regexp.QuoteMeta(u.Port()) +
-		`/(?:api/(?:generate|chat|embed|embeddings|pull|create|push|copy)|v1/)`
-	return regexp.MustCompile(`(?m)(?:` + pos + `(` + strings.Join(alts, "|") + `)|(` + http + `))`)
+	alts = append(alts, `(?:curl|wget|xh|https?)\b[^;&|\n]*:`+regexp.QuoteMeta(u.Port())+
+		`/(?:api/(?:generate|chat|embed|embeddings|pull|create|push|copy)|v1/)`)
+	// A command position, or the command a kubectl exec (after --) or a
+	// docker exec (after the container) runs: a mention in an argument, an
+	// issue comment's body say, is no command.
+	at := `(?:` + pos + `|\s--\s+|\bexec\s+(?:-\S+\s+)*[\w.-]+\s+)`
+	return regexp.MustCompile(`(?m)` + at + `(` + strings.Join(alts, "|") + `)`)
 }
 
 // modelServerRefusal returns why the hook refuses cmd, "" when it passes: a
@@ -65,7 +69,7 @@ func (h Hook) modelServerRefusal(cmd, session string) string {
 	}) {
 		return ""
 	}
-	return "Refused: `" + short(m[1]+m[2]) + "` makes the host's model server load a model into the iGPU's memory, RAM no cgroup " +
+	return "Refused: `" + short(m[1]) + "` makes the host's model server load a model into the iGPU's memory, RAM no cgroup " +
 		"counts or caps. Only the session holding the model-server lease loads one: ask your supervisor for \"model-server\" " +
 		"with the GiB your models need, claim it with `beekeeper lease claim model-server -p \"<purpose>\" --gib <n>` after its yes, " +
 		"use models within that budget with keep_alive 0, and release the lease right after. The watch unloads a model no lease covers."
