@@ -88,9 +88,12 @@ type Machine struct {
 	Clusters []machine.Cluster
 	// ClustersErr is set when docker cannot be asked.
 	ClustersErr error
-	SlotDir     string
-	Slots       int
-	Now         time.Time
+	// ClusterNotes says per cluster name which lab lease stands for it and
+	// whether it is held or idle.
+	ClusterNotes map[string]string
+	SlotDir      string
+	Slots        int
+	Now          time.Time
 }
 
 // Run is one invocation.

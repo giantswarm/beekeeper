@@ -101,7 +101,11 @@ func (r *Run) kind() {
 	r.say("  (memory of each cluster's node cgroups)")
 	for _, c := range r.Clusters {
 		r.emit("kind", c.Name, c.MemMiB, c.RunningFor)
-		r.say("  %-36s %6d MiB  up since %s", c.Name, c.MemMiB, c.RunningFor)
+		line := fmt.Sprintf("  %-36s %6d MiB  up since %s", c.Name, c.MemMiB, c.RunningFor)
+		if n := r.ClusterNotes[c.Name]; n != "" {
+			line += "  (" + n + ")"
+		}
+		r.say("%s", line)
 	}
 	if len(r.Clusters) > guard.MaxLabs {
 		r.say("  %d labs up; this machine holds %d beside a build or test session, tear the finished ones down (agentlab down)",

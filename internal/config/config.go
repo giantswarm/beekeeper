@@ -11,6 +11,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -41,6 +42,10 @@ type Config struct {
 	// Resources are the environments sessions lease besides the browser:
 	// kind labs and shared installations.
 	Resources []string `yaml:"resources"`
+	// Labs maps a lab lease (one of Resources) to the kind cluster it
+	// stands for: `lease list`, a claim and `free` name the cluster, and a
+	// running kind cluster no lab lease maps is reported as unmapped.
+	Labs map[string]string `yaml:"labs"`
 	// GrantTTL is how long a grant stays claimable once its resource is free.
 	GrantTTL Duration `yaml:"grantTTL"`
 
@@ -759,6 +764,9 @@ func (c *Config) validate() error {
 			return fmt.Errorf("resources: %q is not a valid resource name", r)
 		}
 	}
+	if err := c.validateLabs(); err != nil {
+		return err
+	}
 	if o := c.Ollama; (o.URL != "" || c.Lemonade.URL != "") && (o.BudgetGiB < 1 || o.BudgetGiB > o.MaxBudgetGiB) {
 		return fmt.Errorf("ollama.budgetGiB: %d is not between 1 and maxBudgetGiB %d", o.BudgetGiB, o.MaxBudgetGiB)
 	}
@@ -833,6 +841,41 @@ func (c *Config) Leasable() []string {
 		out = append(out, ModelServer)
 	}
 	return append(out, Browser)
+}
+
+// validateLabs checks that every lab lease is a configured resource and
+// that no two lab leases map one kind cluster.
+func (c *Config) validateLabs() error {
+	by := map[string]string{}
+	for _, res := range slices.Sorted(maps.Keys(c.Labs)) {
+		cl := c.Labs[res]
+		if !slices.Contains(c.Resources, res) {
+			return fmt.Errorf("labs: %q is not one of the resources %s", res, strings.Join(c.Resources, ", "))
+		}
+		if cl == "" {
+			return fmt.Errorf("labs: %q names no kind cluster", res)
+		}
+		if other, ok := by[cl]; ok {
+			return fmt.Errorf("labs: %q and %q both map the kind cluster %q", other, res, cl)
+		}
+		by[cl] = res
+	}
+	return nil
+}
+
+// LabCluster is the kind cluster the lab lease res stands for, "" when res
+// is no lab lease.
+func (c *Config) LabCluster(res string) string { return c.Labs[res] }
+
+// LabLease is the lab lease that stands for the kind cluster cluster, ""
+// when none maps it.
+func (c *Config) LabLease(cluster string) string {
+	for res, cl := range c.Labs {
+		if cl == cluster {
+			return res
+		}
+	}
+	return ""
 }
 
 // IsLeasable reports whether name is a configured resource or the browser.

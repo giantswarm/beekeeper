@@ -53,7 +53,10 @@ func (a *app) leaseCmd() *cobra.Command {
 		Short: "Hold a shared resource: a kind lab, an installation, the browser",
 		Long: `Hold one of the machine's shared resources, one session at a time: the
 environments listed under resources in the configuration (kind labs,
-shared installations) and the browser.
+shared installations) and the browser. A lab lease named under labs in the
+configuration stands for its kind cluster: the list shows whether that
+cluster runs, a claim names it, and a running kind cluster no lab lease maps
+is listed as unmapped.
 
 While a supervisor runs, a free lease is not permission: a session claims
 only what the supervisor granted it (` + "`beekeeper lease grant`" + `), in the order
@@ -123,6 +126,7 @@ model is RAM no cgroup counts, and the watch unloads what exceeds it.`,
 			if err != nil {
 				return err
 			}
+			lab := a.claimedLab(res)
 			dir := lease.Dir(a.cfg.LeaseDir)
 			var msg string
 			var refusal error
@@ -192,7 +196,7 @@ model is RAM no cgroup counts, and the watch unloads what exceeds it.`,
 				if idx >= 0 {
 					st.Grants = slices.Delete(st.Grants, idx, idx+1)
 				}
-				msg = "claimed " + res
+				msg = "claimed " + res + lab
 				if budget > 0 {
 					msg += fmt.Sprintf(" with a budget of %d GiB: use models within it, with keep_alive 0, and release it when done", budget)
 					return append(evs, event(me, "lease.claim", "%s: %s (%d GiB)", res, purpose, budget)), nil
@@ -337,6 +341,7 @@ type leaseList struct {
 	Held   []leaseView              `json:"held"`
 	Free   []string                 `json:"free"`
 	Queues map[string][]state.Grant `json:"queues,omitempty"`
+	labs
 }
 
 func (a *app) leases() (*leaseList, error) {
@@ -354,9 +359,13 @@ func (a *app) leases() (*leaseList, error) {
 	}
 	held := heldMap(holders)
 	l := &leaseList{Queues: map[string][]state.Grant{}}
+	names := map[string]string{}
 	for _, h := range holders {
-		l.Held = append(l.Held, a.leaseView(sessions, h))
+		v := a.leaseView(sessions, h)
+		l.Held = append(l.Held, v)
+		names[h.Env] = v.Name
 	}
+	l.labs = a.readLabs(names)
 	for _, r := range a.cfg.Leasable() {
 		if !held[r] {
 			l.Free = append(l.Free, r)
@@ -410,6 +419,7 @@ func (a *app) printLeases(l *leaseList) {
 		}
 		_, _ = fmt.Fprintf(a.out, "granted %s: %s\n", r, strings.Join(names, ", then "))
 	}
+	a.printLabs(l.labs)
 }
 
 // purposeText is a lease's purpose, with the upgrade unblock that admitted

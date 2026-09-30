@@ -377,6 +377,13 @@ installation. During the upgrade only such grants are claimed, in their order; a
 the supervisor itself and a person stay refused. The reason is kept on the grant and on the
 lease: `lease list`, `handover` and the log's `lease.grant` and `lease.claim` show it next to
 the claim's purpose.
+
+A lab lease names its kind cluster under `labs` (`agentlab-1: agentlab`). `lease list` and
+`handover` then show each lab lease with its cluster, whether that cluster runs and who holds
+the lease, and list a running kind cluster no lab lease maps as unmapped; a claim of a lab
+lease names the cluster it covers, and `free` marks a running cluster whose lease is free as
+idle, with its last holder from the event log. Without `labs` nothing asks docker.
+
 ## Desktop notifications
 
 `beekeeper watch --notify` sends the events that need a person to the desktop's notification
@@ -763,6 +770,7 @@ scope is capped at 48 GiB, so tune `watch` to your machine.
 
 ```yaml
 resources: [kind-1, kind-2, staging, production]   # leasable besides the browser
+labs: {kind-1: kind, kind-2: kind-2}   # a lab lease and the kind cluster it stands for
 grantTTL: 30m               # a grant expires this long after its resource is free
 github:
   floor: 2500               # budget under which GitHub work stops

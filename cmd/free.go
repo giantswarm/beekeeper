@@ -13,8 +13,10 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/free"
+	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 func (a *app) freeCmd() *cobra.Command {
@@ -155,19 +157,38 @@ func (a *app) freeMachine() (free.Machine, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	clusters, cerr := machine.KindClusters(ctx)
+	sessions := claude.Discover(a.cfg, t, a.now)
 	return free.Machine{
-		UID:         uid,
-		Home:        home,
-		TmpDir:      tmp,
-		Scratch:     filepath.Join(tmp, "claude-"+strconv.Itoa(uid)),
-		Projects:    a.cfg.Claude.ProjectsDir,
-		Table:       t,
-		Sessions:    claude.Discover(a.cfg, t, a.now),
-		Titles:      func() map[string]string { return claude.Titles(a.cfg) },
-		Clusters:    clusters,
-		ClustersErr: cerr,
-		SlotDir:     a.cfg.Memcap.SlotDir,
-		Slots:       a.cfg.Memcap.Slots,
-		Now:         a.now,
+		UID:          uid,
+		Home:         home,
+		TmpDir:       tmp,
+		Scratch:      filepath.Join(tmp, "claude-"+strconv.Itoa(uid)),
+		Projects:     a.cfg.Claude.ProjectsDir,
+		Table:        t,
+		Sessions:     sessions,
+		Titles:       func() map[string]string { return claude.Titles(a.cfg) },
+		Clusters:     clusters,
+		ClustersErr:  cerr,
+		ClusterNotes: a.freeClusterNotes(clusters, sessions),
+		SlotDir:      a.cfg.Memcap.SlotDir,
+		Slots:        a.cfg.Memcap.Slots,
+		Now:          a.now,
 	}, nil
+}
+
+// freeClusterNotes says of each running kind cluster which lab lease
+// stands for it and whether a session holds it; an unreadable lease
+// directory or event log leaves the holders or the last holder out.
+func (a *app) freeClusterNotes(clusters []machine.Cluster, sessions []*claude.Session) map[string]string {
+	if len(a.cfg.Labs) == 0 || len(clusters) == 0 {
+		return nil
+	}
+	hs, _ := lease.Dir(a.cfg.LeaseDir).List()
+	// free runs without the store (it reads only the configuration), so the
+	// event log is opened here.
+	var events []state.Event
+	if st, err := state.Open(a.cfg.StateDir); err == nil {
+		events, _ = st.Events(0, func(e state.Event) bool { return e.Verb == "lease.claim" })
+	}
+	return a.clusterNotes(clusters, a.namedHolders(sessions, hs), events)
 }
