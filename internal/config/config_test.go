@@ -96,10 +96,30 @@ watch: {quietSessions: []}`
 	}
 }
 
+func TestLabs(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(p, []byte("resources: [agentlab-1, agentlab-2, staging]\nlabs: {agentlab-1: agentlab, agentlab-2: agentlab-2}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.LabCluster("agentlab-1") != "agentlab" || c.LabCluster("staging") != "" {
+		t.Errorf("lab clusters = %v", c.Labs)
+	}
+	if c.LabLease("agentlab-2") != "agentlab-2" || c.LabLease("kind") != "" {
+		t.Errorf("lab leases = %v", c.Labs)
+	}
+}
+
 func TestLoadRejects(t *testing.T) {
 	for name, raw := range map[string]string{
 		"browser as resource": "resources: [browser]",
 		"path as resource":    "resources: [../x]",
+		"lab not a resource":  "resources: [kind-1]\nlabs: {kind-2: kind-2}",
+		"lab without cluster": "resources: [kind-1]\nlabs: {kind-1: \"\"}",
+		"lab cluster twice":   "resources: [kind-1, kind-2]\nlabs: {kind-1: kind, kind-2: kind}",
 		"nameless install":    "alerts: {installations: [{context: x}]}",
 		"unknown floor":       "alerts: {installations: [{name: x, floor: low}]}",
 		"flapping at once":    "alerts: {flap: {changes: 1}}",
