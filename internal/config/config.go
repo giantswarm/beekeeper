@@ -374,9 +374,16 @@ type Watch struct {
 	// in a row read it, and over which, like over LoadLimit, the machine is
 	// strained: the installation reads (upgrades, alerts, lane settling)
 	// then run four times less often and at nice 10 (READS SLOWED).
-	CPUPSIMax  float64 `yaml:"cpuPSIMax"`
-	TmpMaxMiB  int     `yaml:"tmpMaxMiB"`
-	DiskMinMiB int     `yaml:"diskMinMiB"`
+	CPUPSIMax float64 `yaml:"cpuPSIMax"`
+	// ForkRateMax is how far the fork rate (processes started per second,
+	// from /proc/stat) must exceed the machine's usual one for the watch to
+	// say PROCESS STORM, once two samples in a row read it; StackMax the number of copies of one command line
+	// (arguments included), each running over a minute, over which it says
+	// STACKED. A negative value turns the line off.
+	ForkRateMax float64 `yaml:"forkRateMax"`
+	StackMax    int     `yaml:"stackMax"`
+	TmpMaxMiB   int     `yaml:"tmpMaxMiB"`
+	DiskMinMiB  int     `yaml:"diskMinMiB"`
 	// QuietSessions are globs (* matches any run) of the names of
 	// short-lived sessions whose start, end and restart are no wake-up:
 	// the watch logs them (watch.quiet) instead of printing them. Setting
@@ -624,6 +631,10 @@ func (c *Config) defaults() error {
 	if w.CPUPSIMax == 0 {
 		w.CPUPSIMax = 40
 	}
+	if w.ForkRateMax == 0 {
+		w.ForkRateMax = 50
+	}
+	setInt(&w.StackMax, 3)
 	setInt(&w.TmpMaxMiB, 20000)
 	setInt(&w.DiskMinMiB, 102400)
 
