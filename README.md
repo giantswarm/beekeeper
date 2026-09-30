@@ -491,12 +491,24 @@ first import still runs, both import, the second drops the transcript's title an
 (the first touched the file), and the desktop keeps its untitled record: the session shows
 untitled in the sidebar and to ListAgents under a default name (`<dir>-<n>`), which a message by
 its name does not reach, even when the record file showed the title for a moment. The desktop
-rereads neither the transcript nor its record files, so `agents reopen` checks the record once the
-first turn has ended and, when it lacks the roster name, asks the session through its desktop
-CLI's socket (`$XDG_RUNTIME_DIR/cc-socks/<pid>.sock`) to call the desktop's `set_session_title`
-for itself, then waits up to 2 minutes for the desktop to record it (the unit's
-`TimeoutStopSec` is 5 minutes). A title set that way is the desktop's "set by an agent", which its
-own titling never overwrites.
+rereads neither the transcript nor its record files, and a record without a model gets no CLI
+when the desktop shows it (only a preview shell), so the session cannot be asked to retitle
+itself. Every CLI the desktop runs, though, has the desktop's session tools
+(`mcp__ccd_session_mgmt__set_session_title`, `archive_session`), and they act on any session by
+its id. So `agents reopen` checks the record once the first turn has ended and, when it lacks the
+roster name, asks a steward through its socket (`$XDG_RUNTIME_DIR/cc-socks/<pid>.sock`) to set
+it, then waits up to 2 minutes for the desktop to record it (the unit's `TimeoutStopSec` is 5
+minutes). The steward is the session's own desktop CLI when the desktop warmed one. Otherwise it
+is the idle desktop CLI of another session beekeeper started, idle longest: transcript quiet for
+30 seconds, no tool command, no headless turn, no task on the roster. It is never the supervisor,
+the guide, the spare or a session its person started. A title set that way is the desktop's "set
+by an agent", which its own titling never overwrites.
+
+`agents remove` archives the removed agent's desktop session the same way (`archive_session`;
+the desktop's Archived list brings it back), and prints and logs (`agents.archive`) what it did.
+It does so only for a session beekeeper started that holds no role and runs no turn;
+`--keep-desktop` leaves it in the sidebar. When no steward is idle it says so and the removal
+still stands.
 
 The desktop's import takes the session's model from the transcript's last reply and falls back to
 its own default model without one. So beekeeper imports the session only once the transcript
