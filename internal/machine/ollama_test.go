@@ -8,6 +8,12 @@ import (
 	"testing"
 )
 
+// labNode and otherNode are two kind nodes' addresses.
+const (
+	labNode   = "172.21.0.3"
+	otherNode = "172.18.0.2"
+)
+
 func TestParseOllamaLoads(t *testing.T) {
 	journal := `time=2026-09-30T16:34:22.164+03:00 level=INFO source=llama_server.go:434 msg="starting llama-server" cmd="/usr/lib/ollama/llama-server --model /var/lib/ollama/blobs/sha256-small --port 44597 --host 127.0.0.1"
 [GIN] 2026/09/30 - 16:35:49 | 200 |         1m27s |      172.21.0.3 | POST     "/v1/chat/completions"
@@ -15,7 +21,7 @@ time=2026-09-30T16:40:51.432+03:00 level=INFO source=llama_server.go:434 msg="st
 [GIN] 2026/09/30 - 16:40:52 | 200 | 512.1ms |      172.21.0.3 | POST     "/v1/chat/completions"
 [GIN] 2026/09/30 - 16:41:20 | 200 | 29.436412014s |      172.21.0.2 | POST     "/api/chat"`
 	got := ParseOllamaLoads(journal)
-	if got["/var/lib/ollama/blobs/sha256-small"] != "172.21.0.3" {
+	if got["/var/lib/ollama/blobs/sha256-small"] != labNode {
 		t.Errorf("small loaded by %q", got["/var/lib/ollama/blobs/sha256-small"])
 	}
 	// The first request after the big load started after it: the loader
@@ -49,7 +55,7 @@ time=2026-09-30T20:31:27.585+02:00 level=INFO source=llama_server.go:436 msg="st
 	}
 	journal += `
 [GIN] 2026/09/30 - 20:32:30 | 200 |         63.1s |      172.21.0.3 | POST     "/api/generate"`
-	if c := ParseOllamaLoads(journal)["/var/lib/ollama/blobs/sha256-new"]; c != "172.21.0.3" {
+	if c := ParseOllamaLoads(journal)["/var/lib/ollama/blobs/sha256-new"]; c != labNode {
 		t.Errorf("the finished load is attributed to %q", c)
 	}
 }
@@ -71,16 +77,16 @@ func TestPeersOf(t *testing.T) {
    3: 00000000000000000000000001000000:2CAA 00000000000000000000000001000000:C1A0 01 00000000:00000000 02:00000496 00000000   965        0 8 1 0000000000000000 20 4 30 10 -1
    4: 00000000000000000000000001000000:C1A0 00000000000000000000000001000000:2CAA 01 00000000:00000000 02:00000496 00000000  1000        0 9 1 0000000000000000 20 4 30 10 -1`
 	conns := append(parseTCPTable(v4), parseTCPTable(v6)...)
-	if got := peersOf(conns, 11434, nil); !slices.Equal(got, []string{"172.18.0.2", "172.21.0.3", "::1"}) {
+	if got := peersOf(conns, 11434, nil); !slices.Equal(got, []string{otherNode, labNode, "::1"}) {
 		t.Errorf("peers = %v", got)
 	}
 	// Only the other loopback client (C19E, whose client side is not in
 	// the table) stays once beekeeper's socket is left out.
-	if got := peersOf(conns, 11434, map[string]bool{"9": true}); !slices.Equal(got, []string{"172.18.0.2", "172.21.0.3", "::1"}) {
+	if got := peersOf(conns, 11434, map[string]bool{"9": true}); !slices.Equal(got, []string{otherNode, labNode, "::1"}) {
 		t.Errorf("peers without beekeeper = %v", got)
 	}
 	noOther := slices.DeleteFunc(slices.Clone(conns), func(c tcpConn) bool { return c.inode == "7" })
-	if got := peersOf(noOther, 11434, map[string]bool{"9": true}); !slices.Equal(got, []string{"172.18.0.2", "172.21.0.3"}) {
+	if got := peersOf(noOther, 11434, map[string]bool{"9": true}); !slices.Equal(got, []string{otherNode, labNode}) {
 		t.Errorf("peers without beekeeper's only loopback client = %v", got)
 	}
 	if got := peersOf(conns, 8080, nil); !slices.Equal(got, []string{"172.21.0.4"}) {
