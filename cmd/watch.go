@@ -90,8 +90,12 @@ of its own in flight.
 
 --notify also sends the events that need a person to the desktop's
 notification service (org.freedesktop.Notifications on the session bus):
-the kinds in notify.kinds, a note or timer falling due (due), the machine
-near its OOM line (oom-line), a kernel OOM kill outside a build slot or a
+the kinds in notify.kinds, a note or timer falling due (due), an imminent
+systemd-oomd swap kill (oom-line: under watch.oomdHeadroomMinMiB of swap
+growth left before its SwapUsedLimit, or the trigger within
+watch.oomdWithin at the last hour's rate; low RAM, swap, memory pressure
+and the desktop scope's anonymous memory are watch lines for the
+supervisor only), a kernel OOM kill outside a build slot or a
 systemd-oomd kill (oom-kill), the GitHub budget under the floor (budget), a
 stale lease (stale-lease) and a supervisor whose CLI stayed gone past
 supervisor.restartGrace with no relay open (no-supervisor, critical). Each
@@ -162,6 +166,9 @@ type watcher struct {
 	reported map[string]bool
 	// notifier sends the events that need a person (--notify); nil prints only.
 	notifier *notify.Notifier
+	// swapSamples are the last hour's swap readings, oldest first: the
+	// growth rate toward systemd-oomd's trigger.
+	swapSamples []swapSample
 	// standby leaves a running supervisor's events to its watch.
 	standby bool
 	// gap is the term of the gone supervisor this watch said, until a
@@ -366,14 +373,74 @@ func (w *watcher) notify(ctx context.Context, kind, key, summary, body string) {
 	}
 }
 
-// oomLine notifies a breach of the OOM line the poll printed; a check that
-// holds no breach, or one already said within watch.repeat, returns no line
+// swapSample is one poll's swap in use.
+type swapSample struct {
+	at      time.Time
+	usedMiB int
+}
+
+// swapWindow is how far back the swap growth rate looks, and minSwapSpan
+// the shortest span it is measured over.
+const (
+	swapWindow  = time.Hour
+	minSwapSpan = 5 * time.Minute
+)
+
+// swapRate records a reading and returns the swap growth in MiB per hour
+// over the last hour; ok is false until the readings span minSwapSpan.
+func (w *watcher) swapRate(now time.Time, usedMiB int) (perHour int, ok bool) {
+	w.swapSamples = append(w.swapSamples, swapSample{now, usedMiB})
+	i := 0
+	for i < len(w.swapSamples)-1 && now.Sub(w.swapSamples[i].at) > swapWindow {
+		i++
+	}
+	w.swapSamples = w.swapSamples[i:]
+	first := w.swapSamples[0]
+	span := now.Sub(first.at)
+	if span < minSwapSpan {
+		return 0, false
+	}
+	return int(float64(usedMiB-first.usedMiB) / span.Hours()), true
+}
+
+// swapLine says swap in use by its distance to systemd-oomd's trigger and
+// its growth rate: the numbers that decide whether oomd kills.
+func swapLine(m machine.Mem, limit, headroom, perHour int, rated bool) string {
+	line := fmt.Sprintf("SWAP: %d of %d MiB used, %d MiB before systemd-oomd's %d %% trigger", m.SwapUsedMiB, m.SwapTotalMiB, headroom, limit)
+	if !rated {
+		return line + ", growth not yet measured"
+	}
+	line += fmt.Sprintf(", %+d MiB/h over the last hour", perHour)
+	if perHour > 0 && headroom > 0 {
+		line += ", trigger in " + untilTrigger(headroom, perHour).Round(time.Minute).String()
+	}
+	return line
+}
+
+// untilTrigger is how long headroom lasts at perHour.
+func untilTrigger(headroom, perHour int) time.Duration {
+	return time.Duration(float64(headroom) / float64(perHour) * float64(time.Hour))
+}
+
+// oomdImminent reports whether systemd-oomd's swap kill is near enough to
+// need a person: headroom under watch.oomdHeadroomMinMiB, or the trigger
+// within watch.oomdWithin at the measured growth rate.
+func (w *watcher) oomdImminent(headroom, perHour int, rated bool) bool {
+	th := w.cfg.Watch
+	if headroom < th.OOMDHeadroomMinMiB {
+		return true
+	}
+	return rated && perHour > 0 && untilTrigger(headroom, perHour) < th.OOMDWithin.Duration
+}
+
+// oomLine notifies an imminent systemd-oomd kill the poll printed; a check
+// that holds none, or one already said within watch.repeat, returns no line
 // and notifies nothing.
 func (w *watcher) oomLine(ctx context.Context, line string) {
 	if line == "" {
 		return
 	}
-	w.notify(ctx, notify.OOMLine, "", "beekeeper: the machine is near its OOM line", line+"\nbeekeeper snapshot")
+	w.notify(ctx, notify.OOMLine, "", "beekeeper: systemd-oomd is about to kill the largest swap user", line+"\nbeekeeper free")
 }
 
 // emitNow prints an event that is never folded away.
@@ -395,14 +462,21 @@ func (w *watcher) poll(ctx context.Context) {
 	th := w.cfg.Watch
 
 	if m, err := machine.ReadMem(); err == nil {
-		w.oomLine(ctx, w.check("avail", m.AvailableMiB < th.AvailMinMiB, "LOW RAM: %d MiB available, swap %d MiB", m.AvailableMiB, m.SwapUsedMiB))
-		w.oomLine(ctx, w.check("swap", m.SwapUsedMiB > th.SwapMaxMiB, "SWAP: %d of %d MiB used", m.SwapUsedMiB, m.SwapTotalMiB))
+		w.check("avail", m.AvailableMiB < th.AvailMinMiB, "LOW RAM: %d MiB available, swap %d MiB", m.AvailableMiB, m.SwapUsedMiB)
+		limit := machine.OOMDSwapLimit()
+		headroom := m.OOMDHeadroomMiB(limit)
+		perHour, rated := w.swapRate(w.now, m.SwapUsedMiB)
+		line := swapLine(m, limit, headroom, perHour, rated)
+		w.check("swap", m.SwapUsedMiB > th.SwapMaxMiB, "%s", line)
+		if m.SwapTotalMiB > 0 {
+			w.oomLine(ctx, w.check("oomd", w.oomdImminent(headroom, perHour, rated), "OOMD IMMINENT: %s", line))
+		}
 	}
 	if l, err := machine.ReadLoad(); err == nil {
 		w.check("load", l[0] > th.LoadMax, "HIGH LOAD: %.0f", l[0])
 	}
 	if psi, err := machine.ReadPSIFull60(); err == nil {
-		w.oomLine(ctx, w.check("psi", psi > th.PSIMax, "MEMORY PRESSURE: full avg60 %.0f%%", psi))
+		w.check("psi", psi > th.PSIMax, "MEMORY PRESSURE: full avg60 %.0f%%", psi)
 	}
 	if d, err := machine.ReadDisk("/tmp"); err == nil {
 		w.check("tmp", d.UsedMiB > th.TmpMaxMiB, "TMPFS /tmp: %d MiB", d.UsedMiB)
@@ -412,7 +486,7 @@ func (w *watcher) poll(ctx context.Context) {
 	}
 	if p := machine.FindScope(); p != "" {
 		s := machine.ReadScope(p)
-		w.oomLine(ctx, w.check("scopeanon", s.AnonMiB > th.ScopeAnonMaxMiB, "DESKTOP SCOPE anon: %d MiB", s.AnonMiB))
+		w.check("scopeanon", s.AnonMiB > th.ScopeAnonMaxMiB, "DESKTOP SCOPE anon: %d MiB", s.AnonMiB)
 		if s.OOMKills != w.scopeOOM {
 			w.emitNow("scopeoom", "OOM KILL in the desktop scope: oom_kill %d -> %d", w.scopeOOM, s.OOMKills)
 			w.scopeOOM = s.OOMKills

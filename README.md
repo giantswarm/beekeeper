@@ -337,13 +337,13 @@ command that shows more.
 | Kind | Event | Urgency |
 |---|---|---|
 | `due` | a note or a timer falls due | normal |
-| `oom-line` | the machine near its OOM line: low RAM, swap near the systemd-oomd trigger, memory pressure, the desktop scope's anonymous memory near its cap (page cache never counts) | critical |
+| `oom-line` | a systemd-oomd swap kill is imminent: less than `watch.oomdHeadroomMinMiB` of swap growth left before its `SwapUsedLimit` (read from `oomd.conf`, 90 % by default), or the trigger reached within `watch.oomdWithin` at the last hour's growth rate. oomd kills on swap in use however much RAM is free. Low RAM, swap over `watch.swapMaxMiB`, memory pressure and the desktop scope's anonymous memory are watch lines for the supervisor, never a notification | critical |
 | `oom-kill` | a kernel OOM kill outside a build slot (a slot's cap killing its own command is its session's exit code), a systemd-oomd kill | critical |
 | `budget` | the GitHub budget under the floor | normal |
 | `stale-lease` | a lease whose holder's session is gone | normal |
 | `no-supervisor` | a supervisor whose CLI stayed gone past `supervisor.restartGrace` with no relay open: claims stay gated until a successor starts; again after `notify.repeat` while it lasts | critical |
 
-Nothing routine notifies: sessions starting or ending, thresholds of load, tmpfs and disk, alerts,
+Nothing routine notifies: sessions starting or ending, thresholds of memory, load, tmpfs and disk, alerts,
 relays. Each event is one notification however many watches run `--notify` on the same state: the
 first to claim it in `notify.json` (under `notify.lock`) sends it. A lasting condition (`oom-line`,
 `budget`) and a supervisor gone (`no-supervisor`, per supervisor) notify again after `notify.repeat`. Quiet hours hold every notification that is not
@@ -701,7 +701,9 @@ watch:
   repeat: 10m
   budgetEvery: 5m
   availMinMiB: 10240        # machine MemAvailable
-  swapMaxMiB: 10000         # systemd-oomd kills the largest swap user at 90 %
+  swapMaxMiB: 10000         # a watch line with the distance to systemd-oomd's trigger and the growth rate
+  oomdHeadroomMinMiB: 1024  # oom-line notifies under this much swap growth left before oomd's SwapUsedLimit
+  oomdWithin: 30m           # ... or when the last hour's growth rate reaches the trigger within this
   scopeAnonMaxMiB: 28000    # desktop scope anonymous memory (cache is reclaimable, anon is not)
   loadMax: 45
   psiMax: 10

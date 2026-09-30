@@ -1,8 +1,8 @@
 // Package notify sends the watch's events that need a person to the desktop
 // notification service, once per event however many watches share the
 // state directory: each event is claimed in notify.json under notify.lock,
-// and only the watch whose claim is first sends it. A lasting condition (the
-// machine near its OOM line, the GitHub budget under the floor) is one
+// and only the watch whose claim is first sends it. A lasting condition (an
+// imminent systemd-oomd kill, the GitHub budget under the floor) is one
 // notification per Repeat; quiet hours hold every kind but a critical one
 // until they end, then send what they held as one notification.
 package notify
@@ -20,9 +20,8 @@ import (
 const (
 	// Due is a note or a timer falling due.
 	Due = "due"
-	// OOMLine is the machine near its OOM line: low RAM, swap near the
-	// systemd-oomd trigger, memory pressure, the desktop scope's anonymous
-	// memory near its cap (its page cache is reclaimable and never counts).
+	// OOMLine is an imminent systemd-oomd swap kill: swap close to its
+	// SwapUsedLimit, or growing fast enough to reach it soon.
 	OOMLine = "oom-line"
 	// OOMKill is a kernel OOM kill outside a build slot, or a systemd-oomd kill.
 	OOMKill = "oom-kill"
