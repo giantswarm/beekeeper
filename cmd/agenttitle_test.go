@@ -115,6 +115,11 @@ func TestPickSteward(t *testing.T) {
 			st.Spare = &state.Party{Session: "a"}
 			return st
 		}(), sessions: []*claude.Session{session(1, "a", quiet)}},
+		{desc: "a relieved supervisor", st: func() *state.State {
+			st := started("a")
+			st.Relieved = []state.Relief{{Party: state.Party{Session: "a"}}}
+			return st
+		}(), sessions: []*claude.Session{session(1, "a", quiet)}},
 		{desc: "a headless CLI", st: started("a"), sessions: []*claude.Session{session(1, "a", quiet)}, table: func(t *proc.Table) {
 			t.ByPID[1].Args = []string{claudeComm, "-p", resumeFlag, "a"}
 		}},

@@ -500,8 +500,9 @@ roster name, asks a steward through its socket (`$XDG_RUNTIME_DIR/cc-socks/<pid>
 it, then waits up to 2 minutes for the desktop to record it (the unit's `TimeoutStopSec` is 5
 minutes). The steward is the session's own desktop CLI when the desktop warmed one. Otherwise it
 is the idle desktop CLI of another session beekeeper started, idle longest: transcript quiet for
-30 seconds, no tool command, no headless turn, no task on the roster. It is never the supervisor,
-the guide, the spare or a session its person started. A title set that way is the desktop's "set
+30 seconds, no tool command, no headless turn, no task on the roster. It is never the supervisor
+or the guide, nor one relieved within 7 days (it follows its role's rules still), the spare or
+a session its person started. A title set that way is the desktop's "set
 by an agent", which its own titling never overwrites.
 
 `agents remove` archives the removed agent's desktop session the same way (`archive_session`;

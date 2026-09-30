@@ -205,10 +205,19 @@ func stewards(st *state.State, t *proc.Table, s *claude.Session, target string, 
 	return len(s.Commands) == 0 && headlessTurn(t, s.ID) == "" && now.Sub(s.LastActive) >= stewardQuiet
 }
 
-// keepsRole reports whether p holds the supervisor's or the guide's role or
-// is the spare.
+// keepsRole reports whether p holds or held the supervisor's or the guide's
+// role, or is the spare: a relieved supervisor still follows its role's
+// rules, which leave archiving to the person.
 func keepsRole(st *state.State, p state.Party) bool {
-	return holdsRole(st, p) || st.Spare != nil && st.Spare.Is(p)
+	if holdsRole(st, p) || st.Spare != nil && st.Spare.Is(p) {
+		return true
+	}
+	for _, rl := range roles {
+		if slices.ContainsFunc(rl.get(st).Relieved, func(r state.Relief) bool { return r.Party.Is(p) }) {
+			return true
+		}
+	}
+	return false
 }
 
 // permissionPromptTool is the flag of every CLI the desktop runs: it answers
@@ -269,7 +278,7 @@ func (a *app) archiveDesktop(ctx context.Context, st *state.State, ag state.Part
 		return "its desktop session stays: beekeeper did not start it"
 	}
 	if keepsRole(st, ag) {
-		return "its desktop session stays: it holds the supervisor's, the guide's or the spare's role"
+		return "its desktop session stays: it holds or held the supervisor's or the guide's role, or is the spare"
 	}
 	host := st.Starts[i].HostSession
 	archived := func() (bool, bool) {
