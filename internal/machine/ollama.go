@@ -146,7 +146,11 @@ func ollamaCall(ctx context.Context, url, path string, body, into any) error {
 var (
 	modelFrom = regexp.MustCompile(`(?m)^FROM (\S*/blobs/\S+)`)
 	loadLine  = regexp.MustCompile(`^time=(\S+) .*msg="starting llama-server" cmd=".*?--model (\S+)`)
-	ginLine   = regexp.MustCompile(`^\[GIN\] (\d{4}/\d\d/\d\d - \d\d:\d\d:\d\d) \|\s*\d+ \|\s*(\S+) \|\s*(\S+) \| POST `)
+	ginLine   = regexp.MustCompile(`^\[GIN\] (\d{4}/\d\d/\d\d - \d\d:\d\d:\d\d) \|\s*\d+ \|\s*(\S+) \|\s*(\S+) \| POST\s+"([^"?]*)`)
+	// loadPath is a request that runs a model and so can load one; the
+	// others (/api/show, which beekeeper itself sends, /api/pull, ...) never
+	// do.
+	loadPath = regexp.MustCompile(`^/(?:api/(?:generate|chat|embed|embeddings)|v1/.+)$`)
 )
 
 // modelBlob is the weights blob a model's modelfile starts FROM.
@@ -158,8 +162,9 @@ func modelBlob(modelfile string) string {
 }
 
 // ParseOllamaLoads maps each model blob to the address of the client whose
-// request loaded it last: the first POST logged after the load that started
-// before it (gin logs a request when it ends, with its latency). A blob
+// request loaded it last: the first model request logged after the load
+// that started before it (gin logs a request when it ends, with its
+// latency). A blob
 // whose last load's request is still running maps to "": an earlier load's
 // client is not its.
 func ParseOllamaLoads(journal string) map[string]string {
@@ -178,12 +183,13 @@ func ParseOllamaLoads(journal string) map[string]string {
 			continue
 		}
 		m := ginLine.FindStringSubmatch(line)
-		if m == nil || len(open) == 0 {
+		if m == nil || len(open) == 0 || !loadPath.MatchString(m[4]) {
 			continue
 		}
-		// gin prints the server's local time without a zone: the load
-		// lines carry it.
-		end, err := time.ParseInLocation("2006/01/02 - 15:04:05", m[1], open[0].at.Location())
+		// gin prints the server's local time without a zone: the latest
+		// load line carries the zone the server runs in now, which an
+		// older one may not (the machine's zone changed since).
+		end, err := time.ParseInLocation("2006/01/02 - 15:04:05", m[1], open[len(open)-1].at.Location())
 		if err != nil {
 			continue
 		}
