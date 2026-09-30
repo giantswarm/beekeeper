@@ -27,7 +27,7 @@ func TestOpenerRunning(t *testing.T) {
 		"a command line Electron rewrote": {table(renderer, []string{"/usr/lib/claude-desktop/claude-desktop --ozone-platform=wayland --password-store=gnome-libsecret"}), at},
 		"only its helpers":                {table(renderer, []string{"/usr/lib/claude-desktop/chrome_crashpad_handler"}), time.Time{}},
 	} {
-		if got := (systemdOpener{app: desktopApp}.Running(tc.t)); !got.Equal(tc.want) {
+		if got := (systemdOpener{app: "claude-desktop"}.Running(tc.t)); !got.Equal(tc.want) {
 			t.Errorf("%s: Running = %v, want %v", name, got, tc.want)
 		}
 	}

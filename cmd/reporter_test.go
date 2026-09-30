@@ -197,7 +197,7 @@ func TestTurnPIDs(t *testing.T) {
 		10: {PID: 10, Comm: claudeComm, Args: []string{claudeComm, "-p", sessionIDFlag, "s1", "--", "brief"}},
 		11: {PID: 11, Comm: claudeComm, Args: []string{claudeComm, "--resume", "s1"}},
 		12: {PID: 12, Comm: claudeComm, Args: []string{claudeComm, sessionIDFlag, "s2"}},
-		13: {PID: 13, Comm: "zsh", Args: []string{"zsh", sessionIDFlag, "s1"}},
+		13: {PID: 13, Comm: testShell, Args: []string{testShell, sessionIDFlag, "s1"}},
 	}}
 	if got := turnPIDs(tb, "s1"); len(got) != 2 || got[0] != 10 || got[1] != 11 {
 		t.Errorf("turnPIDs = %v, want [10 11]", got)

@@ -150,5 +150,12 @@ type Platform struct {
 	NewNotifier func() Notifier
 }
 
+// Options are the configured parts of a platform.
+type Options struct {
+	// DesktopApp is the Claude desktop app's executable (claude.desktopApp):
+	// it starts the app, or hands a claude:// link to the running one.
+	DesktopApp string
+}
+
 // Current is the platform this build runs on.
-func Current() Platform { return current() }
+func Current(o Options) Platform { return current(o) }

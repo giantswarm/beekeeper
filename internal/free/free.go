@@ -92,9 +92,11 @@ type Machine struct {
 	// ClusterNotes says per cluster name which lab lease stands for it and
 	// whether it is held or idle.
 	ClusterNotes map[string]string
-	SlotDir      string
-	Slots        int
-	Now          time.Time
+	// MaxLabs is how many kind clusters the machine holds.
+	MaxLabs int
+	SlotDir string
+	Slots   int
+	Now     time.Time
 }
 
 // Run is one invocation.
@@ -137,7 +139,7 @@ func (r *Run) defaults() {
 	if r.cwd == nil {
 		r.cwd = proc.Cwd
 	}
-	host := platform.Current().Machine
+	host := platform.Current(platform.Options{}).Machine
 	if r.mem == nil {
 		r.mem = host.Mem
 	}

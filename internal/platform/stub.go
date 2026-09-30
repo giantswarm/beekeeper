@@ -13,7 +13,7 @@ import (
 )
 
 // current is the stub: every part is not available.
-func current() Platform {
+func current(Options) Platform {
 	return Platform{
 		Machine:     stubMachine{},
 		Launcher:    stubLauncher{},

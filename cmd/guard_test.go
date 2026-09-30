@@ -56,7 +56,7 @@ const expected = "[a]\n[b]\n<a b>\n<empty>\n<3>\n{l1}\n{l2}\n{A B}\nps=0 pid_ok=
 // counts as a build, and its cap kill reads as a test kill.
 func capped(t *testing.T) (state string, env []string) {
 	t.Helper()
-	if _, err := exec.LookPath("zsh"); err != nil {
+	if _, err := exec.LookPath(testShell); err != nil {
 		t.Skip("no zsh")
 	}
 	if !plat.Launcher.Available() {
@@ -73,13 +73,16 @@ func capped(t *testing.T) (state string, env []string) {
 // inside one does not take a slot.
 func zsh(t *testing.T, env []string, command string) (stdout, stderr string, rc int) {
 	t.Helper()
-	c := exec.Command("systemd-run", "--user", "--scope", "--quiet", "--expand-environment=no", "--", "zsh", "-c", command) //nolint:gosec // the test's own commands
+	c := exec.Command("systemd-run", "--user", "--scope", "--quiet", "--expand-environment=no", "--", testShell, "-c", command) //nolint:gosec // the test's own commands
 	c.Env = env
 	var o, e strings.Builder
 	c.Stdout, c.Stderr = &o, &e
 	_ = c.Run()
 	return o.String(), e.String(), c.ProcessState.ExitCode()
 }
+
+// testShell is the shell the tests' hook rewrites into.
+const testShell = "zsh"
 
 func rewrite(t *testing.T, command string) string {
 	t.Helper()
@@ -93,7 +96,7 @@ func rewrite(t *testing.T, command string) string {
 			UpdatedInput struct{ Command string } `json:"updatedInput"`
 		} `json:"hookSpecificOutput"`
 	}
-	if err := json.Unmarshal(guard.Hook{Self: self}.Decide(raw), &o); err != nil {
+	if err := json.Unmarshal(guard.Hook{Self: self, Shell: testShell}.Decide(raw), &o); err != nil {
 		t.Fatal(err)
 	}
 	return o.D.UpdatedInput.Command

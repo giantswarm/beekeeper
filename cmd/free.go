@@ -169,6 +169,7 @@ func (a *app) freeMachine() (free.Machine, error) {
 		Clusters:     clusters,
 		ClustersErr:  cerr,
 		ClusterNotes: a.freeClusterNotes(clusters, sessions),
+		MaxLabs:      a.cfg.KindClusters(ramMiB()),
 		SlotDir:      a.cfg.Memcap.SlotDir,
 		Slots:        a.cfg.Memcap.Slots,
 		Now:          a.now,

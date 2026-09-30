@@ -202,18 +202,18 @@ func TestOOMLineNotifiesOnlyAnImminentOOMDKill(t *testing.T) {
 	start := relayNow
 	for i := range 3 {
 		perHour, rated := w.swapRate(start.Add(time.Duration(i)*10*time.Minute), m.SwapUsedMiB+i*40)
-		w.oomLine(ctx, w.now, w.check("oomd", w.oomdImminent(headroom, perHour, rated), "OOMD IMMINENT: %s", swapLine(m, 90, headroom, perHour, rated)))
+		w.oomLine(ctx, w.now, w.check("oomd", w.oomdImminent(headroom, m.SwapTotalMiB, perHour, rated), "OOMD IMMINENT: %s", swapLine(m, 90, headroom, perHour, rated)))
 	}
 	if len(d.sent) != 0 {
 		t.Fatalf("4 GiB before the trigger at +240 MiB/h notified: %+v", d.sent)
 	}
 	perHour, rated := w.swapRate(start.Add(30*time.Minute), m.SwapUsedMiB+3000)
-	w.oomLine(ctx, w.now, w.check("oomd", w.oomdImminent(headroom-3000, perHour, rated), "OOMD IMMINENT: %s", swapLine(m, 90, headroom-3000, perHour, rated)))
+	w.oomLine(ctx, w.now, w.check("oomd", w.oomdImminent(headroom-3000, m.SwapTotalMiB, perHour, rated), "OOMD IMMINENT: %s", swapLine(m, 90, headroom-3000, perHour, rated)))
 	if len(d.sent) != 1 || !strings.HasPrefix(d.sent[0].Body, "OOMD IMMINENT: SWAP:") || d.sent[0].Urgency != notify.Critical {
 		t.Fatalf("a burst of 3 GiB in half an hour: %+v", d.sent)
 	}
-	if w.oomdImminent(1500, 0, false) || !w.oomdImminent(900, 0, false) {
-		t.Error("the headroom floor is watch.oomdHeadroomMinMiB")
+	if w.oomdImminent(1500, m.SwapTotalMiB, 0, false) || !w.oomdImminent(900, m.SwapTotalMiB, 0, false) {
+		t.Error("the headroom floor is 6% of the swap by default")
 	}
 }
 

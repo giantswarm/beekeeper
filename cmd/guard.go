@@ -15,6 +15,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/post"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -47,7 +48,7 @@ later (snapshot, watch) names them after the run has ended. Logging never
 fails or delays the run: an event the log cannot take within a second is
 dropped.
 
-Environment: MEMCAP_MAX (12G), MEMCAP_SWAP (0), MEMCAP_WAIT (8m),
+Environment: MEMCAP_MAX (memcap.max, default 14% of RAM), MEMCAP_SWAP (0), MEMCAP_WAIT (8m),
 MEMCAP_SLOTS and MEMCAP_STATE (the directory holding slots/) override the
 configuration; the flags override the environment. MEMCAP_TEST=1 marks a
 test's run: its scope is memcap-test-…, and snapshot and watch report a
@@ -57,7 +58,7 @@ kill in it as a test kill, not a build's.`,
 			return a.loadConfig()
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			o := guard.Options{Max: env("MEMCAP_MAX", "12G"), Swap: env("MEMCAP_SWAP", "0"),
+			o := guard.Options{Max: env("MEMCAP_MAX", a.cfg.MemcapMax(ramMiB())), Swap: env("MEMCAP_SWAP", "0"),
 				SlotDir: a.cfg.Memcap.SlotDir, Slots: a.cfg.Memcap.Slots, Stderr: os.Stderr, Record: a.runRecorder(),
 				Test: os.Getenv("MEMCAP_TEST") == "1"}
 			if s := os.Getenv("MEMCAP_STATE"); s != "" {
@@ -97,7 +98,7 @@ kill in it as a test kill, not a build's.`,
 		},
 	}
 	c.Flags().SetInterspersed(false)
-	c.Flags().StringVar(&maxFlag, "max", "", "the command's memory cap, a systemd size (default $MEMCAP_MAX or 12G)")
+	c.Flags().StringVar(&maxFlag, "max", "", "the command's memory cap, a systemd size (default $MEMCAP_MAX or memcap.max)")
 	c.Flags().StringVar(&swapFlag, "swap", "", "the command's swap cap (default $MEMCAP_SWAP or 0)")
 	c.Flags().StringVar(&waitFlag, "wait", "", "how long to wait for a slot and memory (default $MEMCAP_WAIT or 8m)")
 	return c
@@ -134,12 +135,16 @@ func (a *app) hookCmd() *cobra.Command {
 	}
 	c.AddCommand(&cobra.Command{
 		Use:   "pretooluse",
-		Short: "The PreToolUse hook: builds into a slot, at most two kind labs, the merge gate, Secret reads, questions via the guide, desktop sends by name, a repository's instructions on the first write",
+		Short: "The PreToolUse hook: builds into a slot, the kind lab limit, the merge gate, Secret reads, questions via the guide, desktop sends by name, a repository's instructions on the first write",
 		Long: `pretooluse reads a PreToolUse event on stdin. A build, test, lint or lab
-command is rewritten to run through "beekeeper run -- zsh -c '<command>'"
-(the absolute path of this binary), the tool timeout raised to 10 minutes;
-a background run gets a 60-minute wait instead. A command that would start a
-third kind cluster is refused with the running labs and the held leases.
+command is rewritten to run through "beekeeper run -- <shell> -c '<command>'"
+(the absolute path of this binary, the configured shell), the tool timeout
+raised to 10 minutes; a background run gets a 60-minute wait instead. A
+command that would start a kind cluster past maxKindClusters is refused with
+the running labs and the held leases. With kube.production set, the kube
+guard refuses writes to that installation and context switches of the
+machine kubeconfig. A configuration that does not load refuses every Bash
+call, naming the error.
 Every devctl pr merge gets "<this binary> gate --" in front of it (a
 background one "gate --wait 30m --"), the timeout raised the same way; see
 beekeeper lanes. That is behind prefix commands (flock <lock>, nohup, setsid,
@@ -187,7 +192,11 @@ Register it in ~/.claude/settings.json:
 			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, Peer: a.desktopPeer,
 				Project: os.Getenv("CLAUDE_PROJECT_DIR"), Reads: a.firstReads,
 				Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(),
-				ModelServer: a.modelServer}
+				ModelServer: a.modelServer, ConfigErr: a.loadConfig()}
+			if h.ConfigErr == nil {
+				h.Shell, h.Production, h.ContextHint = a.cfg.Shell, a.cfg.Kube.Production, a.cfg.Kube.Context("<installation>")
+				h.MaxLabs = func() int { return a.cfg.KindClusters(ramMiB()) }
+			}
 			if out := h.Decide(raw); out != nil {
 				_, _ = a.out.Write(out)
 			}
@@ -302,8 +311,17 @@ func (a *app) loadConfig() error {
 	if err != nil {
 		return err
 	}
-	a.cfg, err = config.Load(path)
-	return err
+	if a.cfg, err = config.Load(path); err != nil {
+		return err
+	}
+	plat = platform.Current(platform.Options{DesktopApp: a.cfg.Claude.DesktopApp})
+	return nil
+}
+
+// ramMiB is the machine's RAM, 0 when it cannot be read.
+func ramMiB() int {
+	m, _ := plat.Machine.Mem()
+	return m.TotalMiB
 }
 
 func kindClusterNames() []string {

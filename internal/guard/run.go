@@ -43,7 +43,7 @@ const (
 const LogPrefix = "beekeeper run: "
 
 // plat caps the runs and reads the machine.
-var plat = platform.Current()
+var plat = platform.Current(platform.Options{})
 
 // The event log verbs of a capped run. Their detail is
 // "<scope> <facts>: <command>": the scope's unit name exactly as the kernel

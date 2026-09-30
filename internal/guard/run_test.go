@@ -10,7 +10,7 @@ func TestCommandHead(t *testing.T) {
 		argv []string
 		want string
 	}{
-		{[]string{"zsh", "-c", "cd /x &&\n  go test ./...  "}, "cd /x && go test ./..."},
+		{[]string{testShell, "-c", "cd /x &&\n  go test ./...  "}, "cd /x && go test ./..."},
 		{[]string{"/usr/bin/bash", "-c", "make test", "arg0"}, "make test"},
 		{[]string{"python3", "-c", "bytearray(200<<20)"}, "python3 -c bytearray(200<<20)"},
 		{[]string{"go", "test", strings.Repeat("x", 200)}, "go test " + strings.Repeat("x", 91) + "…"},

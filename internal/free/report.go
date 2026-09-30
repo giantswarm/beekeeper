@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/proc"
 )
@@ -92,9 +91,9 @@ func (r *Run) kind() {
 		}
 		r.say("%s", line)
 	}
-	if len(r.Clusters) > guard.MaxLabs {
+	if len(r.Clusters) > r.MaxLabs {
 		r.say("  %d labs up; this machine holds %d beside a build or test session, tear the finished ones down (agentlab down)",
-			len(r.Clusters), guard.MaxLabs)
+			len(r.Clusters), r.MaxLabs)
 	}
 }
 

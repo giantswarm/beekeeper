@@ -431,6 +431,9 @@ func (a *app) printSnapshot(s *snapshot) {
 	if s.KubeContext != "" {
 		p("machine kubeconfig has a current context: %s (unset it: kubectl config unset current-context)", s.KubeContext)
 	}
+	if off := guard.KubeGuardOff(a.cfg.Kube.Production); off != "" {
+		p("%s", off)
+	}
 	var cl []string
 	for _, c := range s.Clusters {
 		cl = append(cl, fmt.Sprintf("%s (%d node, %d MiB)", c.Name, c.Nodes, c.MemMiB))

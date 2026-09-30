@@ -314,3 +314,21 @@ func TestCurrentContext(t *testing.T) {
 		}
 	}
 }
+
+// Without a production installation the kube guard is off; op item get's
+// refusal stays.
+func TestKubeGuardOffWithoutProduction(t *testing.T) {
+	h := kubeHook(machineKC)
+	h.Production = ""
+	for _, cmd := range []string{
+		"kubectl --context teleport.giantswarm.io-gazelle apply -f x.yaml",
+		"kubectl config use-context teleport.giantswarm.io-gazelle",
+		"tsh kube login gazelle",
+	} {
+		wantPassed(t, h, cmd)
+	}
+	wantRefused(t, h, "op item get x", opMsg)
+	if KubeGuardOff("") == "" || KubeGuardOff("gazelle") != "" {
+		t.Error("KubeGuardOff reports the guard wrong")
+	}
+}

@@ -115,9 +115,8 @@ and it never reads the alerts, so it takes nothing from the supervisor's
 view.
 
 The quiet rules keep what is noise for the supervisor out of the output:
-other teams' alerts matching alerts.quiet (by default their e2e test
-clusters, t-*, and, once alerts.team is set, every other team's and
-team-less notify alert), an alert back after a reading that missed it with its old
+other teams' alerts matching alerts.quiet (by default, once alerts.team is
+set, every other team's and team-less notify alert), an alert back after a reading that missed it with its old
 start, and the start, end and restart of the short-lived sessions in
 watch.quietSessions (by default beekeeper's tests, "test: *"). A rule
 never holds back an alert of alerts.team, one on an installation in play
@@ -554,11 +553,12 @@ func untilTrigger(headroom, perHour int) time.Duration {
 }
 
 // oomdImminent reports whether systemd-oomd's swap kill is near enough to
-// need a person: headroom under watch.oomdHeadroomMinMiB, or the trigger
-// within watch.oomdWithin at the measured growth rate.
-func (w *watcher) oomdImminent(headroom, perHour int, rated bool) bool {
+// need a person: headroom under watch.oomdHeadroomMinMiB (a fraction of
+// swapMiB by default), or the trigger within watch.oomdWithin at the
+// measured growth rate.
+func (w *watcher) oomdImminent(headroom, swapMiB, perHour int, rated bool) bool {
 	th := w.cfg.Watch
-	if headroom < th.OOMDHeadroomMinMiB {
+	if headroom < th.OOMDHeadroomMin(swapMiB) {
 		return true
 	}
 	return rated && perHour > 0 && untilTrigger(headroom, perHour) < th.OOMDWithin.Duration
@@ -616,24 +616,25 @@ func (w *watcher) sample(ctx context.Context) {
 	if merr == nil {
 		w.modelServer(ctx, models)
 	}
+	m, merr := plat.Machine.Mem()
 	var cause string
-	if gpus := machine.ReadGPUs(); machine.GTTUsedMiB(gpus) > th.GTTMaxMiB {
+	if gpus := machine.ReadGPUs(); machine.GTTUsedMiB(gpus) > th.GTTMax(m.TotalMiB) {
 		cause = gttLine(gpus, models)
 	}
 	w.check("gtt", cause != "", "IGPU %s", strings.TrimPrefix(cause, "iGPU "))
-	if m, err := plat.Machine.Mem(); err == nil {
-		w.check("avail", m.AvailableMiB < th.AvailMinMiB, "LOW RAM: %d MiB available, swap %d MiB%s", m.AvailableMiB, m.SwapUsedMiB, because(cause))
+	if merr == nil {
+		w.check("avail", m.AvailableMiB < th.AvailMin(m.TotalMiB), "LOW RAM: %d MiB available, swap %d MiB%s", m.AvailableMiB, m.SwapUsedMiB, because(cause))
 		limit := plat.Machine.OOMDSwapLimit()
 		headroom := m.OOMDHeadroomMiB(limit)
 		perHour, rated := w.swapRate(now, m.SwapUsedMiB)
 		line := swapLine(m, limit, headroom, perHour, rated) + because(cause)
-		w.check("swap", m.SwapUsedMiB > th.SwapMaxMiB, "%s", line)
+		w.check("swap", m.SwapUsedMiB > th.SwapMax(m.SwapTotalMiB), "%s", line)
 		// A running swapoff shrinks SwapTotal ahead of the pages it drains:
 		// swap reads full while it empties, and oomd is no nearer.
 		swapoff := plat.Machine.SwapoffRuns()
 		w.check("swapoff", swapoff, "SWAPOFF IN PROGRESS: %s", line)
 		if m.SwapTotalMiB > 0 {
-			w.oomLine(ctx, now, w.check("oomd", !swapoff && w.oomdImminent(headroom, perHour, rated), "OOMD IMMINENT: %s", line))
+			w.oomLine(ctx, now, w.check("oomd", !swapoff && w.oomdImminent(headroom, m.SwapTotalMiB, perHour, rated), "OOMD IMMINENT: %s", line))
 		}
 	}
 	w.sampleCPU(now)
@@ -641,13 +642,13 @@ func (w *watcher) sample(ctx context.Context) {
 		w.check("psi", psi > th.PSIMax, "MEMORY PRESSURE: full avg60 %.0f%%", psi)
 	}
 	if d, err := machine.ReadDisk("/tmp"); err == nil {
-		w.check("tmp", d.UsedMiB > th.TmpMaxMiB, "TMPFS /tmp: %d MiB", d.UsedMiB)
+		w.check("tmp", d.UsedMiB > th.TmpMax(d.TotalMiB), "TMPFS /tmp: %d MiB", d.UsedMiB)
 	}
 	if d, err := machine.ReadDisk("/"); err == nil {
-		w.check("disk", d.FreeMiB < th.DiskMinMiB, "LOW DISK: / %d GiB free", d.FreeMiB/1024)
+		w.check("disk", d.FreeMiB < th.DiskMin(d.TotalMiB), "LOW DISK: / %d GiB free", d.FreeMiB/1024)
 	}
 	if s := plat.Machine.DesktopScope(); s != nil {
-		w.check("scopeanon", s.AnonMiB > th.ScopeAnonMaxMiB, "DESKTOP SCOPE anon: %d MiB", s.AnonMiB)
+		w.check("scopeanon", s.AnonMiB > th.ScopeAnonMax(m.TotalMiB), "DESKTOP SCOPE anon: %d MiB", s.AnonMiB)
 		if s.OOMKills != w.scopeOOM {
 			w.emitNow("scopeoom", "OOM KILL in the desktop scope: oom_kill %d -> %d", w.scopeOOM, s.OOMKills)
 			w.scopeOOM = s.OOMKills

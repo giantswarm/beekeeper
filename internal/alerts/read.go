@@ -23,9 +23,6 @@ import (
 // Normalize keeps the team's alerts inhibited by working hours only.
 const query = "active=true&silenced=false&inhibited=true"
 
-// teleportPrefix is the context `tsh kube login` writes for an installation.
-const teleportPrefix = "teleport.giantswarm.io-"
-
 const (
 	// forwardWithin bounds the wait for a port-forward's local port.
 	forwardWithin = 15 * time.Second
@@ -39,8 +36,9 @@ const (
 var retryPause = 2 * time.Second
 
 // endpoint is an Alertmanager service, in the order they are tried: Mimir's
-// with the tenant header (the tenant "anonymous" holds nothing, and the API
-// server's service proxy cannot send the header), else a plain one.
+// with the tenant header when a tenant is configured (the tenant
+// "anonymous" holds nothing, and the API server's service proxy cannot send
+// the header), else a plain one.
 type endpoint struct {
 	namespace, service string
 	port               int
@@ -48,9 +46,15 @@ type endpoint struct {
 	header             map[string]string
 }
 
-var endpoints = []endpoint{
-	{"mimir", "mimir-alertmanager", 8080, "/alertmanager/api/v2/alerts", map[string]string{"X-Scope-OrgID": "giantswarm"}},
-	{"monitoring", "kube-prometheus-stack-alertmanager", 9093, "/api/v2/alerts", nil},
+var plain = endpoint{"monitoring", "kube-prometheus-stack-alertmanager", 9093, "/api/v2/alerts", nil}
+
+// endpoints are the Alertmanagers the reader tries, in order.
+func (r Reader) endpoints() []endpoint {
+	if r.Tenant == "" {
+		return []endpoint{plain}
+	}
+	mimir := endpoint{"mimir", "mimir-alertmanager", 8080, "/alertmanager/api/v2/alerts", map[string]string{"X-Scope-OrgID": r.Tenant}}
+	return []endpoint{mimir, plain}
 }
 
 var forwarding = regexp.MustCompile(`Forwarding from 127\.0\.0\.1:(\d+)`)
@@ -65,15 +69,15 @@ type Target struct {
 
 // Targets are the configured installations, then every leased one whose name
 // resolves to a kube context (a kind lab's or the browser's does not), each
-// with its context resolved.
-func Targets(configured []Target, leased map[string]string, contexts []string) []Target {
+// with its context resolved (template: ResolveContext's).
+func Targets(configured []Target, leased map[string]string, template func(string) string, contexts []string) []Target {
 	var out []Target
 	seen := map[string]int{}
 	for _, t := range configured {
 		if _, ok := seen[t.Name]; ok {
 			continue
 		}
-		t.Context, t.Why = ResolveContext(t.Name, t.Context, contexts), "configured"
+		t.Context, t.Why = ResolveContext(t.Name, t.Context, template, contexts), "configured"
 		seen[t.Name] = len(out)
 		out = append(out, t)
 	}
@@ -88,21 +92,22 @@ func Targets(configured []Target, leased map[string]string, contexts []string) [
 			out[i].Why += ", " + why
 			continue
 		}
-		if ctx := ResolveContext(name, "", contexts); ctx != "" {
+		if ctx := ResolveContext(name, "", template, contexts); ctx != "" {
 			out = append(out, Target{Name: name, Context: ctx, Why: why})
 		}
 	}
 	return out
 }
 
-// ResolveContext is the explicit context, else teleport.giantswarm.io-<name>,
-// else the context named <name>, else the one ending in @<name>.
-func ResolveContext(name, explicit string, contexts []string) string {
+// ResolveContext is the explicit context, else the templated one (template
+// maps a name to its context, "" for none), else the context named <name>,
+// else the one ending in @<name>.
+func ResolveContext(name, explicit string, template func(string) string, contexts []string) string {
 	if explicit != "" {
 		return explicit
 	}
-	for _, c := range []string{teleportPrefix + name, name} {
-		if slices.Contains(contexts, c) {
+	for _, c := range []string{template(name), name} {
+		if c != "" && slices.Contains(contexts, c) {
 			return c
 		}
 	}
@@ -120,6 +125,9 @@ type Reader struct {
 	Kubectl string
 	// Timeout bounds the reading of one installation, forwards included.
 	Timeout time.Duration
+	// Tenant is the Mimir tenant read first; empty, only the plain
+	// Alertmanager is read.
+	Tenant string
 }
 
 // Contexts are the kubeconfig's context names.
@@ -184,7 +192,7 @@ func (r Reader) fetch(ctx context.Context, t Target) Answer {
 // attempt reads the first Alertmanager the context has.
 func (r Reader) attempt(ctx context.Context, kubeContext string) Answer {
 	why := ""
-	for _, ep := range endpoints {
+	for _, ep := range r.endpoints() {
 		f, port, err := r.forward(ctx, kubeContext, ep)
 		if f == nil {
 			why = err

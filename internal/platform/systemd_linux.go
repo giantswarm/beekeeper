@@ -20,12 +20,12 @@ import (
 // current is linux_systemd: /proc, PSI and cgroup v2 for the machine,
 // systemd user units and scopes for the launcher and the capper, the
 // journal for the OOM kills, D-Bus for notifications.
-func current() Platform {
+func current(o Options) Platform {
 	return Platform{
 		Machine:     systemdMachine{},
 		Launcher:    systemdLauncher{},
 		Capper:      systemdCapper{},
-		Opener:      systemdOpener{app: desktopApp},
+		Opener:      systemdOpener{app: o.DesktopApp},
 		NewNotifier: func() Notifier { return &desktop{} },
 	}
 }
@@ -224,10 +224,6 @@ func (systemdCapper) Command(name string, c Cap, argv []string) (*exec.Cmd, erro
 		"-p", "OOMPolicy=continue", "--"}, argv...)
 	return exec.Command("systemd-run", args...), nil //nolint:gosec // running the caller's command is the purpose
 }
-
-// desktopApp is the Claude desktop app's executable: it starts the app, or
-// hands a claude:// link to the running one.
-const desktopApp = "claude-desktop"
 
 // systemdOpener hands links to the desktop app, starting it in a scope of
 // its own under app.slice when it does not run.

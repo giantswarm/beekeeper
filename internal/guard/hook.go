@@ -85,13 +85,24 @@ const (
 	backgroundKey = "run_in_background"
 )
 
-// MaxLabs is how many kind clusters the machine runs at most.
-const MaxLabs = 2
-
 // Hook decides one PreToolUse event.
 type Hook struct {
 	// Self is the absolute path of the beekeeper binary a rewrite names.
 	Self string
+	// ConfigErr is why the configuration did not load: every Bash call is
+	// refused with it, since the guards it configures cannot run.
+	ConfigErr error
+	// Shell is the shell a rewritten command runs in (sh -c semantics).
+	Shell string
+	// MaxLabs is how many kind clusters the machine runs at most; read
+	// only for a command that creates one.
+	MaxLabs func() int
+	// Production is the installation the kube guard protects; empty, the
+	// guard is off.
+	Production string
+	// ContextHint is how a refusal writes an installation's context
+	// ("login.example.com-<installation>"); empty, "<context>".
+	ContextHint string
 	// Clusters lists the running kind clusters.
 	Clusters func() []string
 	// Leases lists the held leases.
@@ -176,6 +187,10 @@ func (h Hook) decide(ev event) []byte {
 	if strings.TrimSpace(cmd) == "" || trivial.MatchString(cmd) {
 		return nil
 	}
+	if h.ConfigErr != nil {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused: beekeeper's configuration does not load, so its guards cannot run: " +
+			h.ConfigErr.Error() + ". Fix the file (the Edit tool still works), then rerun."})
+	}
 	if r := h.kubeRefusal(cmd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
@@ -205,11 +220,11 @@ func (h Hook) decide(ev event) []byte {
 	if m := lab.FindStringSubmatchIndex(cmd); m != nil {
 		running := h.Clusters()
 		target := labTarget(cmd, m, cwd)
-		if !slices.Contains(running, target) && len(running) >= MaxLabs {
+		if limit := h.MaxLabs(); !slices.Contains(running, target) && len(running) >= limit {
 			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: fmt.Sprintf(
-				"Refused: %d kind labs already run (%s) and this machine allows at most %d. `%s` would create a third (%s). "+
+				"Refused: %d kind labs already run (%s) and this machine allows at most %d. `%s` would create another (%s). "+
 					"Reuse a running lab — claim it with `beekeeper lease claim` — or wait until one is torn down; do not poll for it.\nleases:\n%s",
-				len(running), strings.Join(running, ", "), MaxLabs, strings.TrimSpace(cmd[m[2]:m[3]]), target, leaseLines(h.Leases()))})
+				len(running), strings.Join(running, ", "), limit, strings.TrimSpace(cmd[m[2]:m[3]]), target, leaseLines(h.Leases()))})
 		}
 	}
 
@@ -220,7 +235,7 @@ func (h Hook) decide(ev event) []byte {
 	if bg {
 		prefix = "MEMCAP_WAIT=60m "
 	}
-	return h.rewrite(ev.ToolInput, prefix+ShellQuote(h.Self)+" run -- zsh -c "+ShellQuote(cmd), true, bg)
+	return h.rewrite(ev.ToolInput, prefix+ShellQuote(h.Self)+" run -- "+ShellQuote(h.Shell)+" -c "+ShellQuote(cmd), true, bg)
 }
 
 // gate puts "beekeeper gate --" before every devctl pr merge at a command
