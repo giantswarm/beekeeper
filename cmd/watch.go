@@ -142,6 +142,16 @@ over its threshold or CPU pressure over watch.cpuPSIMax, the installation reads 
 alerts, lane settling) run every 4 × their interval at nice 10: one READS
 SLOWED line when that starts and one ENDED line when it ends.
 
+A fork storm is PROCESS STORM once two samples in a row read more forks a
+second (/proc/stat) than watch.forkRateMax (50) over the machine's usual
+rate (the last 10 minutes' average outside a storm), with the commands and
+sessions of the processes started since the last sample; more than
+watch.stackMax (3) copies of one command line from the same place in the
+process tree, each running over a minute, are one STACKED line with the
+count, the oldest's age, its parent and its session. Each ends with an
+ENDED line; a negative threshold turns it off. A printed command line
+keeps no value: the program, its subcommands and the flag names.
+
 What a watch has said is kept per caller (seen.watch.<caller>.json): a
 restarted watch of the same session says no open condition, runaway or
 stale lease again, only its end or what is new. Runs until killed. --once
@@ -217,6 +227,18 @@ type watcher struct {
 	cpuTable *proc.Table
 	cpuAt    time.Time
 	cpuOver  int
+	// forks is the fork counter the last machine sample read; forkUsual
+	// the machine's usual fork rate, a slow average of the rates outside a
+	// storm; forkOver counts the samples in a row more than
+	// watch.forkRateMax over it (PROCESS STORM).
+	forks     uint64
+	forkUsual float64
+	forkOver  int
+	// readForks reads the fork counter; nil is machine.ReadForks.
+	readForks func() (uint64, error)
+	// owners names the session of each CLI PID the last poll found: the
+	// machine sample attributes a storm or a stack with it.
+	owners atomic.Pointer[map[int]string]
 	// strained is the machine sample's verdict that the CPU is saturated:
 	// the installation reads slow down (READS SLOWED).
 	strained atomic.Bool
@@ -655,6 +677,7 @@ func (w *watcher) sampleCPU(now time.Time) {
 	if t, err := proc.Read(); err == nil {
 		span := now.Sub(w.cpuAt)
 		top = topCPULine(topCPU(w.cpuTable, t, span, topCPUCommands), span)
+		w.sampleProcs(now, span, w.cpuTable, t)
 		w.cpuTable, w.cpuAt = t, now
 	}
 	w.check("load", load[0] > limit, "HIGH LOAD: 1m %.0f over %.0f (%d cores)%s", load[0], limit, cores, top)
@@ -668,6 +691,70 @@ func (w *watcher) sampleCPU(now time.Time) {
 	w.strained.Store(strained)
 	w.check("slowed", strained, "READS SLOWED: machine under CPU pressure (load %.0f, CPU some avg10 %.0f%%): installation reads every %d× their interval, at nice %s",
 		load[0], cpu, slowReads, proc.Niceness)
+}
+
+// sampleProcs says PROCESS STORM once two samples in a row read a fork rate
+// more than watch.forkRateMax over the machine's usual one, and a STACKED line for each command line running
+// more than watch.stackMax times over, each with an ENDED line when it ends.
+// prev is the process table the last sample read, span ago.
+func (w *watcher) sampleProcs(now time.Time, span time.Duration, prev, t *proc.Table) {
+	th := w.cfg.Watch
+	var owners map[int]string
+	if o := w.owners.Load(); o != nil {
+		owners = *o
+	}
+	read := w.readForks
+	if read == nil {
+		read = machine.ReadForks
+	}
+	forks, err := read()
+	if err == nil && w.forks > 0 && span > 0 && forks >= w.forks {
+		rate := float64(forks-w.forks) / span.Seconds()
+		if w.forkUsual == 0 {
+			w.forkUsual = rate
+		}
+		if th.ForkRateMax > 0 && rate > w.forkUsual+th.ForkRateMax {
+			w.forkOver++
+		} else {
+			w.forkOver = 0
+			w.forkUsual += (rate - w.forkUsual) * min(1, span.Seconds()/forkUsualOver.Seconds())
+		}
+		// A restarted watch keeps a PROCESS STORM it said while it lasts.
+		w.mu.Lock()
+		_, said := w.active["forks"]
+		w.mu.Unlock()
+		if w.forkOver >= 2 || said && w.forkOver > 0 {
+			w.emit("forks", "%s", stormLine(rate, w.forkUsual, fresh(prev, t), t, owners))
+		} else {
+			w.clear("forks")
+		}
+	}
+	if err == nil {
+		w.forks = forks
+	}
+
+	var found []stack
+	if th.StackMax > 0 {
+		found = stacks(t, now, th.StackMax, owners)
+	}
+	cur := map[string]bool{}
+	for _, s := range found {
+		key := "stacked " + s.key
+		cur[key] = true
+		w.emit(key, "%s", s.line())
+	}
+	// The STACKED lines said, a restarted watch's among them.
+	w.mu.Lock()
+	var gone []string
+	for key := range w.active {
+		if strings.HasPrefix(key, "stacked ") && !cur[key] {
+			gone = append(gone, key)
+		}
+	}
+	w.mu.Unlock()
+	for _, key := range gone {
+		w.clear(key)
+	}
 }
 
 // poll does everything but the machine sample: the process table, the
@@ -688,6 +775,11 @@ func (w *watcher) poll(ctx context.Context) {
 	w.clear("proc")
 	w.table = t
 	sessions := claude.Discover(w.cfg, t, w.now)
+	owners := make(map[int]string, len(sessions))
+	for _, s := range sessions {
+		owners[s.PID] = s.Name
+	}
+	w.owners.Store(&owners)
 	w.kills(ctx, since, sessions, t)
 	w.tendReporter(ctx, sessions)
 	w.pending(ctx, sessions)

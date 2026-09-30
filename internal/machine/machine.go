@@ -7,6 +7,7 @@ package machine
 import (
 	"bufio"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -66,6 +67,21 @@ func ReadLoad() ([3]float64, error) {
 		l[i], _ = strconv.ParseFloat(f[i], 64)
 	}
 	return l, nil
+}
+
+// ReadForks returns the processes forked since boot: the "processes" line of
+// /proc/stat.
+func ReadForks() (uint64, error) {
+	raw, err := os.ReadFile(filepath.Clean("/proc/stat"))
+	if err != nil {
+		return 0, err
+	}
+	for line := range strings.Lines(string(raw)) {
+		if v, ok := strings.CutPrefix(line, "processes "); ok {
+			return strconv.ParseUint(strings.TrimSpace(v), 10, 64)
+		}
+	}
+	return 0, errors.New("no processes line in /proc/stat")
 }
 
 // ReadPSIFull60 returns memory pressure "full avg60" in percent: the share of
