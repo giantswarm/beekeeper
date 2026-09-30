@@ -221,24 +221,42 @@ func interactiveShell(p *proc.Process) bool {
 // words before the first flag (its subcommands), and the flags without
 // their values. A word after a flag may be the flag's value, a password
 // among them, and is left out, as is a word that may carry a credential
-// (a URL's user info, a key=value).
+// (a URL's user info, a key=value) and what follows a short option's
+// letter (-psecret).
 func display(args []string) string {
+	s, _ := masked(args)
+	return s
+}
+
+// masked is display's command line and whether it left anything out.
+func masked(args []string) (string, bool) {
+	if len(args) == 1 {
+		// A program that rewrote its argv into one line (Electron,
+		// setproctitle) keeps its words in the first argument.
+		args = strings.Fields(args[0])
+	}
 	if len(args) == 0 {
-		return ""
+		return "", false
 	}
 	out := []string{filepath.Base(args[0])}
-	flags := false
+	flags, cut := false, false
 	for _, a := range args[1:] {
 		switch {
 		case strings.HasPrefix(a, "-"):
 			flags = true
-			name, _, _ := strings.Cut(a, "=")
+			name, _, eq := strings.Cut(a, "=")
+			if !eq && !strings.HasPrefix(a, "--") && len(a) > 2 {
+				name = a[:2]
+			}
+			cut = cut || name != a
 			if !slices.Contains(out, name) {
 				out = append(out, name)
 			}
 		case !flags && !strings.ContainsAny(a, ":@="):
 			out = append(out, a)
+		default:
+			cut = true
 		}
 	}
-	return truncate(strings.Join(out, " "), 80)
+	return truncate(strings.Join(out, " "), 80), cut
 }
