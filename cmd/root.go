@@ -80,6 +80,9 @@ type app struct {
 	store *state.Store
 	now   time.Time
 	out   io.Writer
+
+	// kindClusters lists the running kind clusters; nil asks docker.
+	kindClusters func() ([]string, error)
 }
 
 // New returns the root command.

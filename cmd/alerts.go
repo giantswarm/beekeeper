@@ -397,7 +397,7 @@ func (a *app) ownerHints(now time.Time) func(string) []string {
 	var events []state.Event
 	if a.store != nil {
 		events, _ = a.store.Events(0, func(e state.Event) bool {
-			return strings.HasPrefix(e.Verb, "merg") || e.Verb == "lease.claim"
+			return strings.HasPrefix(e.Verb, "merg") || e.Verb == verbLeaseClaim
 		})
 	}
 	return func(installation string) []string {
@@ -423,7 +423,7 @@ func ownerHints(events []state.Event, laneOf func(string) config.Lane, installat
 		}
 		key, text := "", ""
 		switch {
-		case e.Verb == "lease.claim":
+		case e.Verb == verbLeaseClaim:
 			if !strings.HasPrefix(e.Detail, installation+":") {
 				continue
 			}

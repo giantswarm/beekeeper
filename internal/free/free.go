@@ -89,6 +89,9 @@ type Machine struct {
 	Clusters []machine.Cluster
 	// ClustersErr is set when docker cannot be asked.
 	ClustersErr error
+	// ClusterNotes says per cluster name which lab lease stands for it and
+	// whether it is held or idle.
+	ClusterNotes map[string]string
 	// MaxLabs is how many kind clusters the machine holds.
 	MaxLabs int
 	SlotDir string
