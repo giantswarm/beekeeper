@@ -741,9 +741,10 @@ watch:
   oomdWithin: 30m           # ... or when the last hour's growth rate reaches the trigger within this
   scopeAnonMaxMiB: 28000    # desktop scope anonymous memory (cache is reclaimable, anon is not)
   gttMaxMiB: 24576          # iGPU GTT (RAM the GPU driver pins, in no cgroup); above it LOW RAM and OOMD IMMINENT name it and ollama's models
-  loadMax: 45               # HIGH LOAD over this 1-minute load average; also strains the machine (below)
+  loadPerCoreMax: 1.5       # HIGH LOAD over this × cores (36 on 24 cores) of 1-minute load average; also strains the machine (below)
+  # loadMax: 45             # an absolute HIGH LOAD threshold instead; set, it replaces loadPerCoreMax
   psiMax: 10
-  cpuPSIMax: 40             # CPU pressure (some avg10, %) that strains the machine: installation reads every 4 × their interval at nice 10 (READS SLOWED)
+  cpuPSIMax: 40             # CPU PRESSURE over this some avg10 (%) for two samples; also strains the machine: installation reads every 4 × their interval at nice 10 (READS SLOWED)
   tmpMaxMiB: 20000
   diskMinMiB: 102400
   quietSessions: ["test: *"]   # the default; short-lived sessions whose start and end are logged, not said (* matches any run)
