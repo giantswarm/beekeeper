@@ -1,10 +1,7 @@
 package free
 
 import (
-	"context"
 	"fmt"
-	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"slices"
@@ -23,23 +20,21 @@ func (r *Run) state() {
 	r.say("  RAM available %6d MiB of %d MiB   swap used %5d MiB of %d MiB   tmpfs /tmp %5d MiB   shmem %5d MiB",
 		m.AvailableMiB, m.TotalMiB, m.SwapUsedMiB, m.SwapTotalMiB, tmp.UsedMiB, m.ShmemMiB)
 	if m.SwapTotalMiB > 0 {
-		limit := machine.OOMDSwapLimit()
+		limit := r.swapLimit()
 		r.say("  systemd-oomd swap trigger (%d %%): %d MiB of swap growth left before it kills the largest scope",
 			limit, m.OOMDHeadroomMiB(limit))
 	}
-	path := r.scope()
-	if path == "" {
+	s := r.scope()
+	if s == nil {
 		return
 	}
-	s := machine.ReadScope(path)
-	procs, _ := os.ReadFile(filepath.Clean(filepath.Join(path, "cgroup.procs")))
 	r.say("  Claude Desktop scope: %d MiB RAM, %d MiB swap, %d processes, %d Claude CLIs",
-		s.CurrentMiB, s.SwapMiB, strings.Count(string(procs), "\n"), r.claudeCount())
+		s.CurrentMiB, s.SwapMiB, len(r.scopePIDs(s.Path)), r.claudeCount())
 	if s.Max == "max" {
 		r.say("  memory guard: none on the scope (no MemoryMax): the first kernel OOM kill can take every session with it")
 		return
 	}
-	pol := oomPolicy(filepath.Base(path))
+	pol := r.oomPolicy(filepath.Base(s.Path))
 	warn := ""
 	if pol != "continue" {
 		warn = "  <- must be continue, or the first kernel kill stops the whole scope"
@@ -63,16 +58,6 @@ func capMiB(v string) string {
 		return "none"
 	}
 	return v + " MiB"
-}
-
-func oomPolicy(unit string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "systemctl", "--user", "show", unit, "-p", "OOMPolicy", "--value").Output() // #nosec G204 -- the unit is the desktop scope's cgroup name, one argument
-	if err != nil {
-		return "?"
-	}
-	return strings.TrimSpace(string(out))
 }
 
 // slots prints who holds the build slots `beekeeper run` hands out.
@@ -217,21 +202,6 @@ func (r *Run) cgroupAnonKiB(cg string) int {
 		kib += r.anonKiB(pid)
 	}
 	return kib
-}
-
-// cgroupPIDs lists the processes of a cgroup v2 path.
-func cgroupPIDs(cg string) []int {
-	raw, err := os.ReadFile(filepath.Clean(filepath.Join("/sys/fs/cgroup", cg, "cgroup.procs")))
-	if err != nil {
-		return nil
-	}
-	var out []int
-	for _, f := range strings.Fields(string(raw)) {
-		if pid, err := strconv.Atoi(f); err == nil {
-			out = append(out, pid)
-		}
-	}
-	return out
 }
 
 // isBrowser matches Chrome's and Chromium's processes by their command line,

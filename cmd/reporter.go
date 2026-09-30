@@ -293,7 +293,7 @@ func (w *watcher) endReport(ctx context.Context, outcome, detail string) {
 // stopTurn stops the turn of session id and every process under it, by
 // PID; 0 when none runs.
 func stopTurn(ctx context.Context, id string) (int, error) {
-	t, err := proc.Read()
+	t, err := plat.Machine.Processes()
 	if err != nil {
 		return 0, err
 	}

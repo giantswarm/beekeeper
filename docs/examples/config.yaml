@@ -128,6 +128,9 @@ reporter:                   # the scheduled status reporter the standby watch st
   dir: ~/projects/notebook  # the session's working directory; default: home
   timeout: 20m              # a reporter that has not posted by then is stopped
 
+claude:
+  desktopApp: claude-desktop   # the default; the desktop app's executable, which opens claude:// links
+
 metrics:
   models:                   # USD per million tokens and the context window; an entry replaces the default of its id
     my-model: {input: 1, output: 5, cacheWrite5m: 1.25, cacheWrite1h: 2, cacheRead: 0.1, fast: 2, contextWindow: 200000}   # fast: fast mode's multiplier

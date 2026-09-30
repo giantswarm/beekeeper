@@ -58,7 +58,7 @@ func newRun(t *testing.T, o Options) (*Run, *bytes.Buffer) {
 		cgroup:   func(int) string { return "" },
 		cwd:      func(int) string { return "" },
 		mem:      func() (machine.Mem, error) { return machine.Mem{AvailableMiB: 40000, SwapUsedMiB: 100}, nil },
-		scope:    func() string { return "" },
+		scope:    func() *machine.Scope { return nil },
 		unitPIDs: func(string) []int { return nil },
 		kill:     func([]int) { t.Fatal("kill in a test") },
 	}

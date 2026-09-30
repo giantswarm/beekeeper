@@ -15,8 +15,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/post"
-	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -311,13 +311,16 @@ func (a *app) loadConfig() error {
 	if err != nil {
 		return err
 	}
-	a.cfg, err = config.Load(path)
-	return err
+	if a.cfg, err = config.Load(path); err != nil {
+		return err
+	}
+	plat = platform.Current(platform.Options{DesktopApp: a.cfg.Claude.DesktopApp})
+	return nil
 }
 
 // ramMiB is the machine's RAM, 0 when it cannot be read.
 func ramMiB() int {
-	m, _ := machine.ReadMem()
+	m, _ := plat.Machine.Mem()
 	return m.TotalMiB
 }
 
@@ -370,7 +373,7 @@ func (a *app) heldLeases() []lease.Holder {
 	}
 	hs, _ := lease.Dir(a.cfg.LeaseDir).List()
 	var sessions []*claude.Session
-	if t, err := proc.Read(); err == nil {
+	if t, err := plat.Machine.Processes(); err == nil {
 		sessions = claude.Discover(a.cfg, t, time.Now())
 	}
 	return a.namedHolders(sessions, hs)

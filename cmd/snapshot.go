@@ -198,17 +198,15 @@ func sinceTime(now time.Time, s string) (time.Time, error) {
 func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, withAlerts bool) (*snapshot, error) {
 	s := &snapshot{At: a.now.UTC(), OOMSince: oomSince.UTC()}
 	var err error
-	if s.Mem, err = machine.ReadMem(); err != nil {
+	if s.Mem, err = plat.Machine.Mem(); err != nil {
 		return nil, err
 	}
-	s.Load, _ = machine.ReadLoad()
+	s.Load, _ = plat.Machine.Load()
 	s.Cores = runtime.NumCPU()
 	s.LoadLimit = a.cfg.Watch.LoadLimit(s.Cores)
-	s.CPUPSI10, _ = machine.ReadCPUPSISome10()
-	s.PSIFull60, _ = machine.ReadPSIFull60()
-	if p := machine.FindScope(); p != "" {
-		s.Scope = machine.ReadScope(p)
-	}
+	s.CPUPSI10, _ = plat.Machine.CPUPressure()
+	s.PSIFull60, _ = plat.Machine.MemoryPressure()
+	s.Scope = plat.Machine.DesktopScope()
 	s.GPUs = machine.ReadGPUs()
 	s.Models, _ = hostModels(ctx, a.cfg)
 	s.Tmp, _ = machine.ReadDisk("/tmp")
@@ -218,7 +216,7 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 	if s.Clusters, err = machine.KindClusters(ctx); err != nil {
 		s.ClustersErr = err.Error()
 	}
-	t, err := proc.Read()
+	t, err := plat.Machine.Processes()
 	if err != nil {
 		return nil, err
 	}
@@ -229,7 +227,7 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 	}
 	slices.Sort(s.Sessions)
 	s.Waits = findWaits(t, sessions, a.now)
-	kills, err := machine.OOMKills(ctx, oomSince)
+	kills, err := plat.Machine.OOMKills(ctx, oomSince)
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +235,7 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 	for _, k := range kills {
 		s.OOM = append(s.OOM, oomKill{OOMKill: k, Owner: oomOwner(k, s.Clusters, sessions, t, runs)})
 	}
-	s.Oomd, _ = machine.OomdKills(ctx, oomSince)
+	s.Oomd, _ = plat.Machine.OomdKills(ctx, oomSince)
 	holders, err := lease.Dir(a.cfg.LeaseDir).List()
 	if err != nil {
 		return nil, err

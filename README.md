@@ -780,6 +780,7 @@ The organisation and desk keys, and their defaults:
 | `github.floor` | `2500` | The budget under which GitHub work stops |
 | `merge.devctlOwners` | none: every merge is the plain squash merge | The owners whose repositories `devctl pr merge` serves |
 | `supervisor.skill`, `guide.skill`, `guide.person` | unset | The roles' skills and the person the guide walks through their notes |
+| `claude.desktopApp` | `claude-desktop` | The desktop app's executable, which opens `claude://` links and starts the app |
 | `shell` | `$SHELL`, else `sh` | The shell the hook runs a rewritten build, test or lint command in |
 | `maxKindClusters` | one per 40 GiB of RAM, at least one | The kind clusters the hook lets the machine run |
 | `memcap.max` | 14% of RAM | A `beekeeper run` command's MemoryMax |

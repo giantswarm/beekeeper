@@ -14,7 +14,6 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/free"
 	"github.com/giantswarm/beekeeper/internal/machine"
-	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 func (a *app) freeCmd() *cobra.Command {
@@ -145,7 +144,7 @@ func (a *app) freeSummary(o free.Options, timeout time.Duration) error {
 // the kind clusters.
 func (a *app) freeMachine() (free.Machine, error) {
 	a.now = time.Now()
-	t, err := proc.Read()
+	t, err := plat.Machine.Processes()
 	if err != nil {
 		return free.Machine{}, err
 	}

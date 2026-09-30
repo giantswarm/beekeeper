@@ -602,9 +602,16 @@ func isDigits(s string) bool {
 	return s != "" && strings.Trim(s, "0123456789") == ""
 }
 
+// DefaultDesktopApp is claude.desktopApp's default, the desktop app's
+// executable on Linux.
+const DefaultDesktopApp = "claude-desktop"
+
 // Claude locates what Claude Code and the desktop app keep on disk.
 type Claude struct {
 	ProjectsDir string `yaml:"projectsDir"`
+	// DesktopApp is the desktop app's executable, which starts the app or
+	// hands a claude:// link to the running one.
+	DesktopApp string `yaml:"desktopApp"`
 	// SessionsDir holds the record every running CLI keeps of the session
 	// it runs (<pid>.json), what `claude agents` lists.
 	SessionsDir string `yaml:"sessionsDir"`
@@ -764,6 +771,7 @@ func (c *Config) defaults() error {
 	setInt(&w.StackMax, 3)
 
 	setStr(&c.Claude.ProjectsDir, filepath.Join(home, ".claude", "projects"))
+	setStr(&c.Claude.DesktopApp, DefaultDesktopApp)
 	setStr(&c.Claude.SessionsDir, filepath.Join(home, ".claude", "sessions"))
 	cfg, err := os.UserConfigDir()
 	if err != nil {

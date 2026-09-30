@@ -330,7 +330,7 @@ func (a *app) present(m state.Merge) bool {
 
 // arrived is when a gate call's process started, false when it is gone.
 func arrived(pid int) (time.Time, bool) {
-	t, err := proc.Started(pid)
+	t, err := plat.Machine.Started(pid)
 	return t, err == nil
 }
 

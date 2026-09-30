@@ -47,7 +47,7 @@ masked command line or the process name. The match never sees an unmasked
 value.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(_ *cobra.Command, args []string) error {
-			t, err := proc.Read()
+			t, err := plat.Machine.Processes()
 			if err != nil {
 				return err
 			}

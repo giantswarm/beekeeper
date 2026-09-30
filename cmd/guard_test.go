@@ -13,7 +13,6 @@ import (
 	"github.com/gofrs/flock"
 
 	"github.com/giantswarm/beekeeper/internal/guard"
-	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -60,7 +59,7 @@ func capped(t *testing.T) (state string, env []string) {
 	if _, err := exec.LookPath("zsh"); err != nil {
 		t.Skip("no zsh")
 	}
-	if !guard.UserSystemd() {
+	if !plat.Launcher.Available() {
 		t.Skip("no user systemd")
 	}
 	state = t.TempDir()
@@ -165,7 +164,7 @@ func TestRunNamesTheCapsVictim(t *testing.T) {
 		!strings.Contains(evs[1].Detail, "exit 137") || !strings.Contains(evs[1].Detail, "the 64M cap killed") {
 		t.Fatalf("events %+v", evs)
 	}
-	kills, err := machine.OOMKills(context.Background(), start.Add(-time.Second))
+	kills, err := plat.Machine.OOMKills(context.Background(), start.Add(-time.Second))
 	if err != nil {
 		t.Skipf("no kernel journal: %v", err)
 	}

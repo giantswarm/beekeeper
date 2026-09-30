@@ -16,6 +16,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
@@ -102,14 +103,17 @@ type Run struct {
 	Out io.Writer
 
 	// Readers of the live machine, replaced in tests.
-	anonKiB  func(pid int) int
-	uid      func(pid int) int
-	cgroup   func(pid int) string
-	cwd      func(pid int) string
-	mem      func() (machine.Mem, error)
-	kill     func(pids []int)
-	scope    func() string
-	unitPIDs func(cgroup string) []int
+	anonKiB   func(pid int) int
+	uid       func(pid int) int
+	cgroup    func(pid int) string
+	cwd       func(pid int) string
+	mem       func() (machine.Mem, error)
+	kill      func(pids []int)
+	scope     func() *machine.Scope
+	unitPIDs  func(cgroup string) []int
+	scopePIDs func(path string) []int
+	oomPolicy func(unit string) string
+	swapLimit func() int
 
 	sumKiB   map[string]int
 	sumN     map[string]int
@@ -132,17 +136,27 @@ func (r *Run) defaults() {
 	if r.cwd == nil {
 		r.cwd = proc.Cwd
 	}
+	host := platform.Current(platform.Options{}).Machine
 	if r.mem == nil {
-		r.mem = machine.ReadMem
+		r.mem = host.Mem
 	}
 	if r.kill == nil {
 		r.kill = terminate
 	}
 	if r.scope == nil {
-		r.scope = machine.FindScope
+		r.scope = host.DesktopScope
 	}
 	if r.unitPIDs == nil {
-		r.unitPIDs = cgroupPIDs
+		r.unitPIDs = host.CgroupPIDs
+	}
+	if r.scopePIDs == nil {
+		r.scopePIDs = host.ScopePIDs
+	}
+	if r.oomPolicy == nil {
+		r.oomPolicy = host.OOMPolicy
+	}
+	if r.swapLimit == nil {
+		r.swapLimit = host.OOMDSwapLimit
 	}
 	r.sumKiB, r.sumN = map[string]int{}, map[string]int{}
 }

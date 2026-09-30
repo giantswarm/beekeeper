@@ -46,6 +46,20 @@ var lasting = map[string]bool{OOMLine: true, Budget: true}
 // the lasting ones, and a supervisor gone, per supervisor term.
 var repeating = map[string]bool{OOMLine: true, Budget: true, NoSupervisor: true}
 
+// Message is one desktop notification.
+type Message struct {
+	Summary string
+	Body    string
+	// Urgency is low, normal or critical.
+	Urgency string
+}
+
+// Sender delivers a message and returns the id the notification service
+// gave it.
+type Sender interface {
+	Send(ctx context.Context, m Message) (uint32, error)
+}
+
 // The urgency levels of the Desktop Notifications Specification.
 const (
 	Low      = "low"

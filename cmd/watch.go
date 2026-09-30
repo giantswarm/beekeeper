@@ -161,7 +161,7 @@ polls once, keeps no mark and says every condition it finds.`,
 			defer stop()
 			w := a.newWatcher(standby, !once)
 			if notifyDesktop {
-				d := &notify.Desktop{}
+				d := plat.NewNotifier()
 				defer func() { _ = d.Close() }()
 				w.notifier = notify.New(a.cfg.Notify.Policy(), a.cfg.StateDir, d, func(l string) { w.emitNow("notify", "%s", l) })
 			}
@@ -233,7 +233,7 @@ type watcher struct {
 	forks     uint64
 	forkUsual float64
 	forkOver  int
-	// readForks reads the fork counter; nil is machine.ReadForks.
+	// readForks reads the fork counter; nil is plat.Machine.Forks.
 	readForks func() (uint64, error)
 	// owners names the session of each CLI PID the last poll found: the
 	// machine sample attributes a storm or a stack with it.
@@ -259,11 +259,11 @@ func (w *watcher) helmReleases(ctx context.Context, lane config.Lane) ([]merge.H
 
 func (w *watcher) run(ctx context.Context, once bool) error {
 	w.lastPoll = time.Now().Add(-w.cfg.Watch.Interval.Duration)
-	p := machine.FindScope()
-	if p != "" {
-		w.scopeOOM = machine.ReadScope(p).OOMKills
+	s := plat.Machine.DesktopScope()
+	if s != nil {
+		w.scopeOOM = s.OOMKills
 	}
-	w.check("noscope", p == "", "no Claude Desktop scope found; watching the machine numbers only")
+	w.check("noscope", s == nil, "no Claude Desktop scope found; watching the machine numbers only")
 	interval := w.cfg.Watch.Interval.Duration
 	if once {
 		if !w.standby {
@@ -467,7 +467,7 @@ type watchMark struct {
 func (a *app) newWatcher(standby, keep bool) *watcher {
 	w := &watcher{app: a, standby: standby, last: map[string]time.Time{}, seenKills: map[string]bool{},
 		reported: map[string]bool{}, active: map[string]condition{}}
-	w.stand = standbyWatch{send: a.peerSend, open: openDesktop, succeed: a.succeedFromWatch, turning: unitsTurning}
+	w.stand = standbyWatch{send: a.peerSend, open: plat.Opener.Open, succeed: a.succeedFromWatch, turning: unitsTurning}
 	if me, err := a.caller(); keep && err == nil {
 		w.markFile = "seen.watch." + fileKey(me) + ".json"
 		var m watchMark
@@ -616,7 +616,7 @@ func (w *watcher) sample(ctx context.Context) {
 	if merr == nil {
 		w.modelServer(ctx, models)
 	}
-	m, merr := machine.ReadMem()
+	m, merr := plat.Machine.Mem()
 	var cause string
 	if gpus := machine.ReadGPUs(); machine.GTTUsedMiB(gpus) > th.GTTMax(m.TotalMiB) {
 		cause = gttLine(gpus, models)
@@ -624,21 +624,21 @@ func (w *watcher) sample(ctx context.Context) {
 	w.check("gtt", cause != "", "IGPU %s", strings.TrimPrefix(cause, "iGPU "))
 	if merr == nil {
 		w.check("avail", m.AvailableMiB < th.AvailMin(m.TotalMiB), "LOW RAM: %d MiB available, swap %d MiB%s", m.AvailableMiB, m.SwapUsedMiB, because(cause))
-		limit := machine.OOMDSwapLimit()
+		limit := plat.Machine.OOMDSwapLimit()
 		headroom := m.OOMDHeadroomMiB(limit)
 		perHour, rated := w.swapRate(now, m.SwapUsedMiB)
 		line := swapLine(m, limit, headroom, perHour, rated) + because(cause)
 		w.check("swap", m.SwapUsedMiB > th.SwapMax(m.SwapTotalMiB), "%s", line)
 		// A running swapoff shrinks SwapTotal ahead of the pages it drains:
 		// swap reads full while it empties, and oomd is no nearer.
-		swapoff := machine.SwapoffRuns()
+		swapoff := plat.Machine.SwapoffRuns()
 		w.check("swapoff", swapoff, "SWAPOFF IN PROGRESS: %s", line)
 		if m.SwapTotalMiB > 0 {
 			w.oomLine(ctx, now, w.check("oomd", !swapoff && w.oomdImminent(headroom, m.SwapTotalMiB, perHour, rated), "OOMD IMMINENT: %s", line))
 		}
 	}
 	w.sampleCPU(now)
-	if psi, err := machine.ReadPSIFull60(); err == nil {
+	if psi, err := plat.Machine.MemoryPressure(); err == nil {
 		w.check("psi", psi > th.PSIMax, "MEMORY PRESSURE: full avg60 %.0f%%", psi)
 	}
 	if d, err := machine.ReadDisk("/tmp"); err == nil {
@@ -647,8 +647,7 @@ func (w *watcher) sample(ctx context.Context) {
 	if d, err := machine.ReadDisk("/"); err == nil {
 		w.check("disk", d.FreeMiB < th.DiskMin(d.TotalMiB), "LOW DISK: / %d GiB free", d.FreeMiB/1024)
 	}
-	if p := machine.FindScope(); p != "" {
-		s := machine.ReadScope(p)
+	if s := plat.Machine.DesktopScope(); s != nil {
 		w.check("scopeanon", s.AnonMiB > th.ScopeAnonMax(m.TotalMiB), "DESKTOP SCOPE anon: %d MiB", s.AnonMiB)
 		if s.OOMKills != w.scopeOOM {
 			w.emitNow("scopeoom", "OOM KILL in the desktop scope: oom_kill %d -> %d", w.scopeOOM, s.OOMKills)
@@ -667,15 +666,15 @@ func (w *watcher) sampleCPU(now time.Time) {
 	th := w.cfg.Watch
 	cores := runtime.NumCPU()
 	limit := th.LoadLimit(cores)
-	load, _ := machine.ReadLoad()
-	cpu, _ := machine.ReadCPUPSISome10()
+	load, _ := plat.Machine.Load()
+	cpu, _ := plat.Machine.CPUPressure()
 	if cpu > th.CPUPSIMax {
 		w.cpuOver++
 	} else {
 		w.cpuOver = 0
 	}
 	var top string
-	if t, err := proc.Read(); err == nil {
+	if t, err := plat.Machine.Processes(); err == nil {
 		span := now.Sub(w.cpuAt)
 		top = topCPULine(topCPU(w.cpuTable, t, span, topCPUCommands), span)
 		w.sampleProcs(now, span, w.cpuTable, t)
@@ -706,7 +705,7 @@ func (w *watcher) sampleProcs(now time.Time, span time.Duration, prev, t *proc.T
 	}
 	read := w.readForks
 	if read == nil {
-		read = machine.ReadForks
+		read = plat.Machine.Forks
 	}
 	forks, err := read()
 	if err == nil && w.forks > 0 && span > 0 && forks >= w.forks {
@@ -768,7 +767,7 @@ func (w *watcher) poll(ctx context.Context) {
 	w.lastPoll = w.now
 	th := w.cfg.Watch
 
-	t, err := proc.Read()
+	t, err := plat.Machine.Processes()
 	if err != nil {
 		w.emit("proc", "cannot read the process table: %v", err)
 		return
@@ -1001,7 +1000,7 @@ const commandTimeout = 20 * time.Second
 func (w *watcher) kills(ctx context.Context, since time.Time, sessions []*claude.Session, t *proc.Table) {
 	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
-	kills, err := machine.OOMKills(ctx, since.Add(-2*time.Second))
+	kills, err := plat.Machine.OOMKills(ctx, since.Add(-2*time.Second))
 	if err != nil {
 		if ctx.Err() != nil {
 			return
@@ -1032,7 +1031,7 @@ func (w *watcher) kills(ctx context.Context, since time.Time, sessions []*claude
 		w.emitNow("testkill", "test kill: %s", line)
 	}
 	w.notifyKills(ctx, fresh)
-	if lines, err := machine.OomdKills(ctx, since.Add(-2*time.Second)); err == nil {
+	if lines, err := plat.Machine.OomdKills(ctx, since.Add(-2*time.Second)); err == nil {
 		for _, l := range lines {
 			if !w.seenKills[l] {
 				w.seenKills[l] = true
