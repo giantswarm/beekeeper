@@ -71,16 +71,27 @@ func ReadLoad() ([3]float64, error) {
 // ReadPSIFull60 returns memory pressure "full avg60" in percent: the share of
 // the last minute in which every task stalled on memory.
 func ReadPSIFull60() (float64, error) {
-	raw, err := os.ReadFile(filepath.Clean("/proc/pressure/memory"))
+	return readPSI("/proc/pressure/memory", "full", "avg60")
+}
+
+// ReadCPUPSISome10 returns CPU pressure "some avg10" in percent: the share of
+// the last ten seconds in which at least one runnable task waited for a CPU.
+func ReadCPUPSISome10() (float64, error) {
+	return readPSI("/proc/pressure/cpu", "some", "avg10")
+}
+
+// readPSI returns one average of one line of a pressure file.
+func readPSI(file, kind, avg string) (float64, error) {
+	raw, err := os.ReadFile(filepath.Clean(file))
 	if err != nil {
 		return 0, err
 	}
 	for line := range strings.SplitSeq(string(raw), "\n") {
-		if !strings.HasPrefix(line, "full ") {
+		if !strings.HasPrefix(line, kind+" ") {
 			continue
 		}
 		for _, f := range strings.Fields(line) {
-			if v, ok := strings.CutPrefix(f, "avg60="); ok {
+			if v, ok := strings.CutPrefix(f, avg+"="); ok {
 				return strconv.ParseFloat(v, 64)
 			}
 		}

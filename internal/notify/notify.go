@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -136,7 +137,10 @@ type Notifier struct {
 	ledger *Ledger
 	sender Sender
 	// say prints one watch line: the service gone, and back.
-	say  func(string)
+	say func(string)
+	// mu guards down: the machine sample and the rest of a watch's poll
+	// deliver from their own loops.
+	mu   sync.Mutex
 	down bool
 }
 
@@ -234,6 +238,8 @@ func (n *Notifier) deliver(ctx context.Context, now time.Time, kind string, m Me
 	id, err := n.sender.Send(sendCtx, m)
 	cancel()
 	d := Delivery{At: now.UTC(), Kind: kind, Summary: m.Summary, Urgency: m.Urgency, ID: id}
+	n.mu.Lock()
+	defer n.mu.Unlock()
 	switch {
 	case err != nil && !n.down:
 		n.down = true

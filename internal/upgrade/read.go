@@ -6,11 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // Target is an installation to read and the kube context that reaches it.
@@ -179,7 +180,7 @@ func (r Reader) from(ctx context.Context, kubeContext string, u Upgrade) string 
 func (r Reader) kubectl(ctx context.Context, kubeContext string, args ...string) ([]byte, error) {
 	args = append([]string{"--context", kubeContext, "--request-timeout", r.Timeout.String()}, args...)
 	var stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, r.Kubectl, args...) //nolint:gosec // kubectl from the configuration
+	cmd := proc.Command(ctx, r.Kubectl, args...) //nolint:gosec // kubectl from the configuration
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err == nil {

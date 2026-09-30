@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -124,6 +125,15 @@ settling), or a page unless the rule names a cluster. What they hold back
 is logged (beekeeper log --verb watch.quiet) and counted in the snapshot;
 everything else is said as before.
 
+The machine's numbers are sampled in a loop of their own, so a slow
+installation read, a subprocess or a TLS timeout never delays a memory or
+load line. The rest of a poll waits for a lane read or the budget probe one
+watch.interval at most, and skips one whose previous run still goes instead
+of starting a second. While the load is over watch.loadMax or CPU pressure
+(some avg10) over watch.cpuPSIMax, the installation reads (upgrades,
+alerts, lane settling) run every 4 × their interval at nice 10: one READS
+SLOWED line when that starts and one ENDED line when it ends.
+
 What a watch has said is kept per caller (seen.watch.<caller>.json): a
 restarted watch of the same session says no open condition, runaway or
 stale lease again, only its end or what is new. Runs until killed. --once
@@ -192,6 +202,15 @@ type watcher struct {
 	zone func() (*time.Location, error)
 	// readHRs reads a lane installation's HelmReleases; nil is kubectl.
 	readHRs func(context.Context, config.Lane) ([]merge.HelmRelease, error)
+	// strained is the machine sample's verdict that the CPU is saturated:
+	// the installation reads slow down (READS SLOWED).
+	strained atomic.Bool
+	// settling and budgeting are set while a lane read or a budget probe
+	// runs: the next poll skips it instead of queueing a second one.
+	settling, budgeting atomic.Bool
+	lastSettle          time.Time
+	// polls counts the polls begun.
+	polls atomic.Int64
 }
 
 // helmReleases reads the lane installation's HelmReleases.
@@ -209,28 +228,93 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 		w.scopeOOM = machine.ReadScope(p).OOMKills
 	}
 	w.check("noscope", p == "", "no Claude Desktop scope found; watching the machine numbers only")
-	var wg sync.WaitGroup
-	switch {
-	case w.standby:
-	case once:
-		w.upgradeCycle(ctx)
-	default:
-		wg.Go(func() { w.watchAlerts(ctx) })
-		wg.Go(func() { w.watchUpgrades(ctx) })
-	}
-	defer wg.Wait()
-	tick := time.NewTicker(w.cfg.Watch.Interval.Duration)
-	defer tick.Stop()
-	for {
+	interval := w.cfg.Watch.Interval.Duration
+	if once {
+		if !w.standby {
+			w.upgradeCycle(ctx)
+		}
+		w.sample(ctx)
 		w.poll(ctx)
-		if once {
-			return nil
+		return nil
+	}
+	// The machine is sampled in a loop of its own, so no network read or
+	// subprocess of the rest of the poll ever delays a memory or load line.
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	wg.Go(func() { w.loop(ctx, interval, false, w.sample) })
+	if !w.standby {
+		wg.Go(func() { w.watchAlerts(ctx) })
+		wg.Go(func() { w.loop(ctx, interval, true, w.upgradeCycle) })
+	}
+	w.loop(ctx, interval, false, w.poll)
+	return nil
+}
+
+// slowReads is how many times less often the installation reads run while
+// the machine is strained.
+const slowReads = 4
+
+// loop runs fn every interval until ctx ends. A run that overruns skips the
+// ticks it missed instead of queueing them. An installation read (reads)
+// runs every slowReads × interval, at nice 10, while the machine is
+// strained.
+func (w *watcher) loop(ctx context.Context, interval time.Duration, reads bool, fn func(context.Context)) {
+	for {
+		start, every, rctx := time.Now(), interval, ctx
+		if reads {
+			every, rctx = w.readEvery(interval), w.readCtx(ctx)
+		}
+		fn(rctx)
+		next := start.Add(every)
+		for now := time.Now(); !next.After(now); {
+			next = next.Add(every)
 		}
 		select {
 		case <-ctx.Done():
-			return nil
-		case <-tick.C:
+			return
+		case <-time.After(time.Until(next)):
 		}
+	}
+}
+
+// readEvery is an installation read's interval: slowReads times longer while
+// the machine is strained.
+func (w *watcher) readEvery(interval time.Duration) time.Duration {
+	if w.strained.Load() {
+		return slowReads * interval
+	}
+	return interval
+}
+
+// readCtx runs an installation read's commands at nice 10 while the machine
+// is strained.
+func (w *watcher) readCtx(ctx context.Context) context.Context {
+	if w.strained.Load() {
+		return proc.Background(ctx)
+	}
+	return ctx
+}
+
+// inFlight runs fn unless its previous run (running) still goes, and waits
+// for it at most wait: a hung read holds the poll up for one wait at most,
+// and the next poll skips it instead of starting a second one. fn keeps
+// running on ctx, within its own timeouts.
+func inFlight(ctx context.Context, wait time.Duration, running *atomic.Bool, fn func(context.Context)) {
+	if !running.CompareAndSwap(false, true) {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		defer running.Store(false)
+		defer close(done)
+		fn(ctx)
+	}()
+	t := time.NewTimer(wait)
+	defer t.Stop()
+	select {
+	case <-done:
+	case <-t.C:
+	case <-ctx.Done():
 	}
 }
 
@@ -241,8 +325,7 @@ func (w *watcher) watchAlerts(ctx context.Context) {
 	store := alerts.NewStore(w.cfg.StateDir)
 	defer func() { _ = store.Release() }()
 	other := 0
-	for {
-		start := time.Now()
+	w.loop(ctx, w.cfg.Alerts.Every.Duration, true, func(ctx context.Context) {
 		owned, owner, err := store.Own()
 		switch {
 		case err != nil:
@@ -263,12 +346,7 @@ func (w *watcher) watchAlerts(ctx context.Context) {
 				w.emitNow("alerts", "%s", l)
 			}
 		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(max(time.Until(start.Add(w.cfg.Alerts.Every.Duration)), 0)):
-		}
-	}
+	})
 }
 
 // emit says a lasting condition once, when it starts. While it lasts it is
@@ -368,8 +446,13 @@ func (w *watcher) saveMark() {
 // notify sends one event that needs a person (--notify): a lasting kind
 // takes no key.
 func (w *watcher) notify(ctx context.Context, kind, key, summary, body string) {
+	w.notifyAt(ctx, w.now, kind, key, summary, body)
+}
+
+// notifyAt is notify for a loop of its own, which keeps its own time.
+func (w *watcher) notifyAt(ctx context.Context, now time.Time, kind, key, summary, body string) {
 	if w.notifier != nil && body != "" {
-		w.notifier.Notify(ctx, w.now, kind, key, summary, body)
+		w.notifier.Notify(ctx, now, kind, key, summary, body)
 	}
 }
 
@@ -436,11 +519,11 @@ func (w *watcher) oomdImminent(headroom, perHour int, rated bool) bool {
 // oomLine notifies an imminent systemd-oomd kill the poll printed; a check
 // that holds none, or one already said within watch.repeat, returns no line
 // and notifies nothing.
-func (w *watcher) oomLine(ctx context.Context, line string) {
+func (w *watcher) oomLine(ctx context.Context, now time.Time, line string) {
 	if line == "" {
 		return
 	}
-	w.notify(ctx, notify.OOMLine, "", "beekeeper: systemd-oomd is about to kill the largest swap user", line+"\nbeekeeper free")
+	w.notifyAt(ctx, now, notify.OOMLine, "", "beekeeper: systemd-oomd is about to kill the largest swap user", line+"\nbeekeeper free")
 }
 
 // emitNow prints an event that is never folded away.
@@ -455,10 +538,11 @@ func (w *watcher) emitLine(line string) {
 	_, _ = fmt.Fprintln(w.out, line)
 }
 
-func (w *watcher) poll(ctx context.Context) {
-	w.now = time.Now()
-	since := w.lastPoll
-	w.lastPoll = w.now
+// sample reads the machine's numbers (memory, swap, load, pressure, disk,
+// the desktop scope) from /proc and /sys, and decides whether the machine
+// is strained. It keeps its own time: it runs in a loop of its own.
+func (w *watcher) sample(ctx context.Context) {
+	now := time.Now()
 	th := w.cfg.Watch
 
 	// GTT is RAM the iGPU pins outside every cgroup: above its threshold
@@ -473,7 +557,7 @@ func (w *watcher) poll(ctx context.Context) {
 		w.check("avail", m.AvailableMiB < th.AvailMinMiB, "LOW RAM: %d MiB available, swap %d MiB%s", m.AvailableMiB, m.SwapUsedMiB, because(cause))
 		limit := machine.OOMDSwapLimit()
 		headroom := m.OOMDHeadroomMiB(limit)
-		perHour, rated := w.swapRate(w.now, m.SwapUsedMiB)
+		perHour, rated := w.swapRate(now, m.SwapUsedMiB)
 		line := swapLine(m, limit, headroom, perHour, rated) + because(cause)
 		w.check("swap", m.SwapUsedMiB > th.SwapMaxMiB, "%s", line)
 		// A running swapoff shrinks SwapTotal ahead of the pages it drains:
@@ -481,12 +565,19 @@ func (w *watcher) poll(ctx context.Context) {
 		swapoff := machine.SwapoffRuns()
 		w.check("swapoff", swapoff, "SWAPOFF IN PROGRESS: %s", line)
 		if m.SwapTotalMiB > 0 {
-			w.oomLine(ctx, w.check("oomd", !swapoff && w.oomdImminent(headroom, perHour, rated), "OOMD IMMINENT: %s", line))
+			w.oomLine(ctx, now, w.check("oomd", !swapoff && w.oomdImminent(headroom, perHour, rated), "OOMD IMMINENT: %s", line))
 		}
 	}
+	var load, cpu float64
 	if l, err := machine.ReadLoad(); err == nil {
-		w.check("load", l[0] > th.LoadMax, "HIGH LOAD: %.0f", l[0])
+		load = l[0]
+		w.check("load", load > th.LoadMax, "HIGH LOAD: %.0f", load)
 	}
+	cpu, _ = machine.ReadCPUPSISome10()
+	strained := load > th.LoadMax || cpu > th.CPUPSIMax
+	w.strained.Store(strained)
+	w.check("slowed", strained, "READS SLOWED: machine under CPU pressure (load %.0f, CPU some avg10 %.0f%%): installation reads every %d× their interval, at nice %s",
+		load, cpu, slowReads, proc.Niceness)
 	if psi, err := machine.ReadPSIFull60(); err == nil {
 		w.check("psi", psi > th.PSIMax, "MEMORY PRESSURE: full avg60 %.0f%%", psi)
 	}
@@ -504,6 +595,18 @@ func (w *watcher) poll(ctx context.Context) {
 			w.scopeOOM = s.OOMKills
 		}
 	}
+	w.saveMark()
+}
+
+// poll does everything but the machine sample: the process table, the
+// sessions, the lanes and the budget. It waits for a lane read or a budget
+// probe for one watch.interval at most.
+func (w *watcher) poll(ctx context.Context) {
+	w.polls.Add(1)
+	w.now = time.Now()
+	since := w.lastPoll
+	w.lastPoll = w.now
+	th := w.cfg.Watch
 
 	t, err := proc.Read()
 	if err != nil {
@@ -522,25 +625,33 @@ func (w *watcher) poll(ctx context.Context) {
 	w.lostMerges(ctx)
 	w.closeToolWindow(ctx, watchParty)
 	w.stalls()
-	w.settled(ctx)
-
-	if w.now.Sub(w.lastBudget) >= th.BudgetEvery.Duration {
-		w.lastBudget = w.now
-		b, err := w.probeBudget(ctx)
-		switch {
-		case err != nil && ctx.Err() != nil:
-		case err != nil:
-			w.emit("budget-error", "GitHub budget unknown: %v", err)
-		default:
-			w.clear("budget-error")
-			l := w.check("budget", b.Remaining < w.cfg.GitHub.Floor, "GITHUB BUDGET %d of %d: hold GitHub work until %s",
-				b.Remaining, b.Limit, b.Reset.Local().Format("15:04"))
-			w.notify(ctx, notify.Budget, "", "beekeeper: GitHub budget under the floor", l+"\nbeekeeper budget")
-		}
+	now := w.now
+	if now.Sub(w.lastSettle) >= w.readEvery(th.Interval.Duration) {
+		w.lastSettle = now
+		inFlight(w.readCtx(ctx), th.Interval.Duration, &w.settling, func(ctx context.Context) { w.settled(ctx, now) })
+	}
+	if now.Sub(w.lastBudget) >= th.BudgetEvery.Duration {
+		w.lastBudget = now
+		inFlight(ctx, th.Interval.Duration, &w.budgeting, func(ctx context.Context) { w.budget(ctx, now) })
 	}
 	w.saveMark()
 	if w.notifier != nil {
 		w.notifier.Flush(ctx, w.now)
+	}
+}
+
+// budget probes the GitHub budget and says when it is under the floor.
+func (w *watcher) budget(ctx context.Context, now time.Time) {
+	b, err := w.probeBudget(ctx)
+	switch {
+	case err != nil && ctx.Err() != nil:
+	case err != nil:
+		w.emit("budget-error", "GitHub budget unknown: %v", err)
+	default:
+		w.clear("budget-error")
+		l := w.check("budget", b.Remaining < w.cfg.GitHub.Floor, "GITHUB BUDGET %d of %d: hold GitHub work until %s",
+			b.Remaining, b.Limit, b.Reset.Local().Format("15:04"))
+		w.notifyAt(ctx, now, notify.Budget, "", "beekeeper: GitHub budget under the floor", l+"\nbeekeeper budget")
 	}
 }
 
@@ -645,7 +756,7 @@ func (w *watcher) lostMerges(ctx context.Context) {
 // are Ready is done, however late. A merge not settled past
 // merge.settleTimeout is one LANE STUCK line with what the lane waits for,
 // and one ENDED line once it settles or the lane is cleared.
-func (w *watcher) settled(ctx context.Context) {
+func (w *watcher) settled(ctx context.Context, now time.Time) {
 	st, err := w.store.Read()
 	if err != nil {
 		return
@@ -674,13 +785,13 @@ func (w *watcher) settled(ctx context.Context) {
 		why := ""
 		if r.err != nil {
 			why = fmt.Sprintf("the HelmReleases of %s cannot be read (%v)", lane.Installation, r.err)
-		} else if ready, wait := merge.Ready(lane, r.hrs, &m, w.now, w.cfg.Merge.Settle.Duration); ready {
+		} else if ready, wait := merge.Ready(lane, r.hrs, &m, now, w.cfg.Merge.Settle.Duration); ready {
 			done[m.Key()] = "rolled, HelmReleases of " + lane.Installation + " Ready"
 			continue
 		} else {
 			why = wait
 		}
-		if since := w.now.Sub(m.Finished); since > w.cfg.Merge.SettleTimeout.Duration {
+		if since := now.Sub(m.Finished); since > w.cfg.Merge.SettleTimeout.Duration {
 			key := "stuck:" + lane.Name + ":" + m.Key()
 			stuck[key] = true
 			w.emit(key, "LANE STUCK %s: %s has not settled %s after its merge: %s; fix the installation or clear the lane (beekeeper lanes clear %s)",

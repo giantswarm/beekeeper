@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // query keeps the active, unsilenced alerts, the inhibited ones included:
@@ -124,7 +126,7 @@ type Reader struct {
 func (r Reader) Contexts(ctx context.Context) []string {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, r.Kubectl, "config", "get-contexts", "-o", "name").Output() //nolint:gosec // kubectl from the configuration
+	out, err := proc.Command(ctx, r.Kubectl, "config", "get-contexts", "-o", "name").Output() //nolint:gosec // kubectl from the configuration
 	if err != nil {
 		return nil
 	}
@@ -238,7 +240,7 @@ type portForward struct {
 // on failure it returns nil and the last line kubectl printed.
 func (r Reader) forward(ctx context.Context, kubeContext string, ep endpoint) (*portForward, int, string) {
 	fctx, cancel := context.WithCancel(ctx)
-	cmd := exec.CommandContext(fctx, r.Kubectl, "--context", kubeContext, "-n", ep.namespace, //nolint:gosec // kubectl from the configuration
+	cmd := proc.Command(fctx, r.Kubectl, "--context", kubeContext, "-n", ep.namespace, //nolint:gosec // kubectl from the configuration
 		"port-forward", "svc/"+ep.service, fmt.Sprintf(":%d", ep.port))
 	ownGroup(cmd)
 	cmd.WaitDelay = stopGrace

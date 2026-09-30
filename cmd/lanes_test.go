@@ -123,8 +123,8 @@ func TestWatchSettlesALaneReadyAfterTheSettleTimeout(t *testing.T) {
 		return len(st.Merges) == 1
 	}
 
-	w.settled(context.Background())
-	w.settled(context.Background())
+	w.settled(context.Background(), now)
+	w.settled(context.Background(), now)
 	if !settling() || strings.Count(out.String(), "LANE STUCK agent-platform: giantswarm/agent-platform#701 has not settled 40m after its merge: flux-giantswarm/agent-platform is on 4.78.0, rolling to 4.79.0") != 1 {
 		t.Fatalf("a release that has not rolled is not one LANE STUCK line:\n%s", out.String())
 	}
@@ -136,14 +136,14 @@ func TestWatchSettlesALaneReadyAfterTheSettleTimeout(t *testing.T) {
 
 	out.Reset()
 	readErr = errors.New("exec: tsh: not logged in")
-	w.settled(context.Background())
+	w.settled(context.Background(), now)
 	if !settling() {
 		t.Fatal("an unreadable installation settled the merge")
 	}
 
 	out.Reset()
 	raw, readErr = gazelleHRs("4.79.0", "True"), nil
-	w.settled(context.Background())
+	w.settled(context.Background(), now)
 	if settling() {
 		t.Fatalf("the lane Ready on 4.79.0+5848dde334c3 past the settle timeout still settles:\n%s", out.String())
 	}
