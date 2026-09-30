@@ -17,6 +17,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
@@ -24,7 +25,7 @@ import (
 var (
 	pullState     = github.PullState
 	devctlVersion = toolVersion
-	userSystemd   = guard.UserSystemd
+	userSystemd   = plat.Launcher.Available
 	selfExe       = os.Executable
 )
 
@@ -203,15 +204,10 @@ func startChild(base string) error {
 	}
 	if userSystemd() {
 		unit := fmt.Sprintf("beekeeper-merge-%s-%d", filepath.Base(base), time.Now().UnixNano())
-		out, err := exec.Command("systemd-run", "--user", "--collect", "--quiet", "--unit="+unit, //nolint:gosec // this binary and its own file
-			"-p", "KillMode=mixed", "--", self, mergeChildCmd, base).CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("systemd-run: %w: %s", err, strings.TrimSpace(string(out)))
-		}
-		return nil
+		return plat.Launcher.Start(platform.Unit{Name: unit, Argv: []string{self, mergeChildCmd, base}})
 	}
 	c := exec.Command(self, mergeChildCmd, base) //nolint:gosec // as above
-	detach(c)
+	platform.Detach(c)
 	if err := c.Start(); err != nil {
 		return err
 	}

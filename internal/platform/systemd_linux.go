@@ -1,0 +1,261 @@
+//go:build linux && !nosystemd
+
+package platform
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/proc"
+)
+
+// current is linux_systemd: /proc, PSI and cgroup v2 for the machine,
+// systemd user units and scopes for the launcher and the capper, the
+// journal for the OOM kills, D-Bus for notifications.
+func current() Platform {
+	return Platform{
+		Machine:     systemdMachine{},
+		Launcher:    systemdLauncher{},
+		Capper:      systemdCapper{},
+		Opener:      systemdOpener{app: desktopApp},
+		NewNotifier: func() Notifier { return &desktop{} },
+	}
+}
+
+// userManager points systemctl and systemd-run at the user's service manager.
+const userManager = "--user"
+
+// cgroupRoot is where cgroup v2 is mounted.
+const cgroupRoot = "/sys/fs/cgroup"
+
+type systemdMachine struct{}
+
+func (systemdMachine) Mem() (machine.Mem, error)          { return machine.ReadMem() }
+func (systemdMachine) Load() ([3]float64, error)          { return machine.ReadLoad() }
+func (systemdMachine) Forks() (uint64, error)             { return machine.ReadForks() }
+func (systemdMachine) MemoryPressure() (float64, error)   { return machine.ReadPSIFull60() }
+func (systemdMachine) CPUPressure() (float64, error)      { return machine.ReadCPUPSISome10() }
+func (systemdMachine) Processes() (*proc.Table, error)    { return proc.Read() }
+func (systemdMachine) Started(pid int) (time.Time, error) { return proc.Started(pid) }
+func (systemdMachine) OOMDSwapLimit() int                 { return machine.OOMDSwapLimit() }
+func (systemdMachine) SwapoffRuns() bool                  { return machine.SwapoffRuns() }
+
+func (systemdMachine) DesktopScope() *machine.Scope {
+	if p := machine.FindScope(); p != "" {
+		return machine.ReadScope(p)
+	}
+	return nil
+}
+
+func (systemdMachine) MemcapScope(unit string) *machine.Scope {
+	if p := machine.FindMemcapScope(unit); p != "" {
+		return machine.ReadScope(p)
+	}
+	return nil
+}
+
+func (systemdMachine) ScopePIDs(path string) []int { return pidsIn(path) }
+
+func (systemdMachine) CgroupPIDs(cg string) []int { return pidsIn(filepath.Join(cgroupRoot, cg)) }
+
+// pidsIn lists the processes of the cgroup v2 directory dir.
+func pidsIn(dir string) []int {
+	raw, err := os.ReadFile(filepath.Clean(filepath.Join(dir, "cgroup.procs")))
+	if err != nil {
+		return nil
+	}
+	var out []int
+	for _, f := range strings.Fields(string(raw)) {
+		if pid, err := strconv.Atoi(f); err == nil {
+			out = append(out, pid)
+		}
+	}
+	return out
+}
+
+func (systemdMachine) OOMPolicy(unit string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "systemctl", userManager, "show", unit, "-p", "OOMPolicy", "--value").Output() // #nosec G204 -- the unit is the desktop scope's cgroup name, one argument
+	if err != nil {
+		return "?"
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func (systemdMachine) OOMKills(ctx context.Context, since time.Time) ([]machine.OOMKill, error) {
+	out, err := exec.CommandContext(ctx, "journalctl", "-k", "--no-pager", "-o", "short-iso", //nolint:gosec // fixed arguments and a formatted time
+		"--since", since.Local().Format("2006-01-02 15:04:05")).Output()
+	if err != nil {
+		return nil, err
+	}
+	return machine.ParseOOM(string(out)), nil
+}
+
+func (systemdMachine) OomdKills(ctx context.Context, since time.Time) ([]string, error) {
+	out, err := exec.CommandContext(ctx, "journalctl", "-u", "systemd-oomd", "--no-pager", "-o", "short-iso", //nolint:gosec // fixed arguments and a formatted time
+		"--since", since.Local().Format("2006-01-02 15:04:05")).Output()
+	if err != nil {
+		return nil, err
+	}
+	return machine.ParseOomd(string(out)), nil
+}
+
+func (systemdMachine) ServiceLog(ctx context.Context, unit, grep string) ([]byte, error) {
+	return exec.CommandContext(ctx, "journalctl", "-u", unit, "--no-pager", "-o", "cat", "--since", "-24h", "-g", grep).Output() //nolint:gosec // the configured unit name
+}
+
+// systemdLauncher runs units as transient systemd user services: they get
+// the user manager's environment, not the caller's session variables, and
+// outlive the caller.
+type systemdLauncher struct{}
+
+func (systemdLauncher) Available() bool { return userSystemd() }
+
+func (systemdLauncher) Start(u Unit) error {
+	args := []string{userManager, "--collect", "--quiet", "--unit=" + u.Name}
+	if u.KeepChildren {
+		args = append(args, "-p", "KillMode=process")
+	} else {
+		args = append(args, "-p", "KillMode=mixed")
+	}
+	if u.TermIsSuccess {
+		args = append(args, "-p", "SuccessExitStatus=143 SIGTERM")
+	}
+	if u.Dir != "" {
+		args = append(args, "--working-directory="+u.Dir)
+	}
+	if len(u.StopPost) > 0 {
+		args = append(args, "-p", "ExecStopPost="+strings.Join(u.StopPost, " "), "-p", "TimeoutStopSec="+strconv.Itoa(int(u.StopTimeout.Seconds())))
+	}
+	for _, e := range u.Env {
+		args = append(args, "--setenv="+e)
+	}
+	args = append(append(args, "--"), u.Argv...)
+	out, err := exec.Command("systemd-run", args...).CombinedOutput() //nolint:gosec // starting the unit is the purpose
+	if err != nil {
+		return fmt.Errorf("systemd-run: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func (systemdLauncher) Freeze(ctx context.Context, name string) error {
+	return systemctlUser(ctx, "freeze", name)
+}
+
+func (systemdLauncher) Thaw(ctx context.Context, name string) error {
+	return systemctlUser(ctx, "thaw", name)
+}
+
+// systemctlUser runs one systemctl --user verb on unit.
+func systemctlUser(ctx context.Context, verb, unit string) error {
+	out, err := exec.CommandContext(ctx, "systemctl", userManager, verb, unit).CombinedOutput() //nolint:gosec // the unit beekeeper named
+	if err != nil {
+		return fmt.Errorf("systemctl --user %s: %w: %s", verb, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func (systemdLauncher) State(ctx context.Context, name string) string {
+	out, _ := exec.CommandContext(ctx, "systemctl", userManager, "show", "-p", "ActiveState", "--value", name).Output() //nolint:gosec // the unit beekeeper named
+	return strings.TrimSpace(string(out))
+}
+
+func (systemdLauncher) Running(ctx context.Context, stopping bool, patterns ...string) []string {
+	states := "--state=active,activating"
+	if stopping {
+		states += ",deactivating"
+	}
+	args := append([]string{userManager, "list-units", "--plain", "--no-legend", states}, patterns...)
+	out, _ := exec.CommandContext(ctx, "systemctl", args...).Output() //nolint:gosec // the units beekeeper named
+	var units []string
+	for line := range strings.Lines(string(out)) {
+		if f := strings.Fields(line); len(f) > 0 {
+			units = append(units, f[0])
+		}
+	}
+	return units
+}
+
+// userSystemd reports whether a user service manager can start units and
+// scopes. "degraded" (one failed unit somewhere) is a desktop's normal state.
+func userSystemd() bool {
+	if _, err := exec.LookPath("systemd-run"); err != nil {
+		return false
+	}
+	out, _ := exec.Command("systemctl", userManager, "is-system-running").Output()
+	switch strings.TrimSpace(string(out)) {
+	case "running", "degraded", "starting", "maintenance":
+		return true
+	}
+	return false
+}
+
+// memcapSlice is the slice capped runs' scopes sit in.
+const memcapSlice = "memcap.slice"
+
+// systemdCapper runs commands in transient scopes under memcap.slice.
+type systemdCapper struct{}
+
+func (systemdCapper) Available() bool { return userSystemd() }
+
+// Capped: a Makefile or script that runs a capped command again runs inside
+// the outer scope, which already holds the slot and the cap.
+func (systemdCapper) Capped() bool {
+	raw, err := os.ReadFile("/proc/self/cgroup")
+	return err == nil && strings.Contains(string(raw), "/"+memcapSlice+"/")
+}
+
+// Command is argv in a transient scope under memcap.slice. systemd-run's
+// own ${VAR} expansion is off (default-on for --scope since systemd 258):
+// the argument list reaches the command verbatim, so a wrapped `zsh -c`
+// keeps ${=files}, ${(f)x}, ${pipestatus[1]} and $$.
+func (systemdCapper) Command(name string, c Cap, argv []string) (*exec.Cmd, error) {
+	args := append([]string{userManager, "--scope", "--quiet", "--expand-environment=no", "--unit=" + name,
+		"--slice=" + memcapSlice, "-p", "MemoryMax=" + c.Max, "-p", "MemorySwapMax=" + c.Swap,
+		"-p", "OOMPolicy=continue", "--"}, argv...)
+	return exec.Command("systemd-run", args...), nil //nolint:gosec // running the caller's command is the purpose
+}
+
+// desktopApp is the Claude desktop app's executable: it starts the app, or
+// hands a claude:// link to the running one.
+const desktopApp = "claude-desktop"
+
+// systemdOpener hands links to the desktop app, starting it in a scope of
+// its own under app.slice when it does not run.
+type systemdOpener struct{ app string }
+
+// Running: Electron rewrites its command line into one string, so the
+// arguments are its fields; the helpers carry --type=.
+func (o systemdOpener) Running(t *proc.Table) time.Time {
+	for _, p := range t.ByPID {
+		args := strings.Fields(p.Cmdline())
+		if len(args) > 0 && filepath.Base(args[0]) == o.app &&
+			!slices.ContainsFunc(args, func(a string) bool { return strings.HasPrefix(a, "--type=") }) {
+			return p.Start
+		}
+	}
+	return time.Time{}
+}
+
+// Open starts the app where the desktop starts it too, so it outlives the
+// unit or watch that started it.
+func (o systemdOpener) Open(ctx context.Context, url string, running bool) error {
+	if running {
+		return exec.CommandContext(ctx, o.app, url).Run() //nolint:gosec // a claude:// link built from the state's local_ id
+	}
+	c := exec.Command("systemd-run", userManager, "--scope", "--quiet", "--slice=app.slice", //nolint:gosec // as above
+		"--unit=app-com.anthropic.Claude-beekeeper-"+strconv.FormatInt(time.Now().Unix(), 10), o.app, url)
+	if err := c.Start(); err != nil {
+		return err
+	}
+	return c.Process.Release()
+}

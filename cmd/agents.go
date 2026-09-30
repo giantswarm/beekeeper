@@ -9,7 +9,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
-	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -314,7 +313,7 @@ func findParty(parties []state.Party, q, one, many string) (int, error) {
 
 func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentView {
 	out := make([]agentView, 0, len(st.Agents))
-	t, _ := proc.Read() // unreadable: no headless turn is named
+	t, _ := plat.Machine.Processes() // unreadable: no headless turn is named
 	for _, ag := range st.Agents {
 		v := agentView{Agent: ag, Reachable: "not running"}
 		if s, ok := claude.Live(sessions, ag.Party); ok {

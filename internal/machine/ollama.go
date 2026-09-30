@@ -2,7 +2,6 @@ package machine
 
 import (
 	"context"
-	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
@@ -10,11 +9,11 @@ import (
 )
 
 // OllamaModels asks the ollama at url which models it holds (GET /api/ps)
-// and finds each one's loading client in the journal of unit. A load whose
+// and finds each one's loading client in the log of unit (serviceLog). A load whose
 // request still runs is not in the journal yet: its client is the one peer
 // connected to url's port, and none when several are. An empty url means
 // none is watched.
-func OllamaModels(ctx context.Context, url, unit string) ([]HostModel, error) {
+func OllamaModels(ctx context.Context, url, unit string, serviceLog func(ctx context.Context, unit, grep string) ([]byte, error)) ([]HostModel, error) {
 	if url == "" {
 		return nil, nil
 	}
@@ -38,7 +37,7 @@ func OllamaModels(ctx context.Context, url, unit string) ([]HostModel, error) {
 	if len(out) == 0 || unit == "" {
 		return out, nil
 	}
-	journal, err := exec.CommandContext(ctx, "journalctl", "-u", unit, "--no-pager", "-o", "cat", "--since", "-24h", "-g", `starting llama-server|\[GIN\].*POST`).Output() //nolint:gosec // the configured unit name
+	journal, err := serviceLog(ctx, unit, `starting llama-server|\[GIN\].*POST`)
 	if err != nil {
 		return out, nil
 	}

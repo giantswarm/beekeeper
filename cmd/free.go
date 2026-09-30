@@ -15,7 +15,6 @@ import (
 	"github.com/giantswarm/beekeeper/internal/free"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/machine"
-	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -147,7 +146,7 @@ func (a *app) freeSummary(o free.Options, timeout time.Duration) error {
 // the kind clusters.
 func (a *app) freeMachine() (free.Machine, error) {
 	a.now = time.Now()
-	t, err := proc.Read()
+	t, err := plat.Machine.Processes()
 	if err != nil {
 		return free.Machine{}, err
 	}

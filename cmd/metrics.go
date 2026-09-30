@@ -12,7 +12,6 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
-	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -158,11 +157,11 @@ func (a *app) sessionMetrics(sessions []*claude.Session, t *proc.Table, holders 
 	}
 	for unit, e := range open {
 		i := index(e.By)
-		path := machine.FindMemcapScope(unit)
-		if i < 0 || path == "" {
+		s := plat.Machine.MemcapScope(unit)
+		if i < 0 || s == nil {
 			continue
 		}
-		out[i].Scopes = append(out[i].Scopes, runScope{Unit: unit, Command: guard.RunCommand(e.Detail), MemMiB: machine.ReadScope(path).CurrentMiB})
+		out[i].Scopes = append(out[i].Scopes, runScope{Unit: unit, Command: guard.RunCommand(e.Detail), MemMiB: s.CurrentMiB})
 	}
 	return work, out
 }

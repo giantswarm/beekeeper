@@ -1,0 +1,154 @@
+// Package platform is the one place beekeeper reaches into the machine it
+// runs on: memory, pressure, processes and OOM kills (Machine), detached
+// units of work (Launcher), memory-capped runs (Capper), claude:// links
+// (Opener) and desktop notifications (Notifier). The build selects one
+// implementation: linux_systemd on Linux (systemd user units, cgroup v2,
+// /proc, D-Bus), a stub on other systems and on Linux built with the
+// nosystemd tag, whose parts return a NotAvailableError.
+package platform
+
+import (
+	"context"
+	"errors"
+	"os/exec"
+	"time"
+
+	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/notify"
+	"github.com/giantswarm/beekeeper/internal/proc"
+)
+
+// ErrNotAvailable is what every NotAvailableError is.
+var ErrNotAvailable = errors.New("not available on this platform")
+
+// NotAvailableError is a platform part this build does not have.
+type NotAvailableError struct {
+	// Part names what is missing, "Launcher.Start" for instance.
+	Part string
+}
+
+func (e *NotAvailableError) Error() string { return e.Part + ": " + ErrNotAvailable.Error() }
+
+// Is makes errors.Is(err, ErrNotAvailable) true.
+func (e *NotAvailableError) Is(target error) bool { return target == ErrNotAvailable }
+
+// Machine reads the machine: memory, pressure, processes, the scopes the
+// desktop app and the capped runs sit in, and the OOM kills.
+type Machine interface {
+	Mem() (machine.Mem, error)
+	// Load is the 1, 5 and 15 minute load average.
+	Load() ([3]float64, error)
+	// Forks is the machine's fork counter since boot.
+	Forks() (uint64, error)
+	// MemoryPressure is the share of the last minute every task stalled on
+	// memory (PSI memory full avg60).
+	MemoryPressure() (float64, error)
+	// CPUPressure is the share of the last 10 seconds some task waited for
+	// a CPU (PSI cpu some avg10).
+	CPUPressure() (float64, error)
+	Processes() (*proc.Table, error)
+	// Started is when process pid started.
+	Started(pid int) (time.Time, error)
+	// DesktopScope is the largest Claude Desktop scope, nil when none runs.
+	DesktopScope() *machine.Scope
+	// MemcapScope is the capped run's scope unit, nil when it has ended.
+	MemcapScope(unit string) *machine.Scope
+	// ScopePIDs lists the processes of the scope at path (a Scope's Path).
+	ScopePIDs(path string) []int
+	// CgroupPIDs lists the processes of cgroup cg as a process's cgroup
+	// names it.
+	CgroupPIDs(cg string) []int
+	// OOMPolicy is unit's OOM policy, "?" when unreadable.
+	OOMPolicy(unit string) string
+	// OOMDSwapLimit is the swap share in percent past which the userspace
+	// OOM killer acts.
+	OOMDSwapLimit() int
+	// SwapoffRuns reports whether a swapoff is running.
+	SwapoffRuns() bool
+	// OOMKills are the kernel's OOM kills since the given time, oldest first.
+	OOMKills(ctx context.Context, since time.Time) ([]machine.OOMKill, error)
+	// OomdKills are the userspace OOM killer's kill lines since the given time.
+	OomdKills(ctx context.Context, since time.Time) ([]string, error)
+	// ServiceLog is the last day of the system service unit's log, the lines
+	// matching the regular expression grep.
+	ServiceLog(ctx context.Context, unit, grep string) ([]byte, error)
+}
+
+// Unit is a detached, named unit of work: it outlives its starter.
+type Unit struct {
+	Name string
+	// Dir is the working directory, empty for the launcher's own.
+	Dir string
+	// Env are KEY=VALUE pairs set for Argv.
+	Env  []string
+	Argv []string
+	// KeepChildren leaves what Argv started running when Argv ends, as a
+	// terminal would; otherwise a stop ends them too.
+	KeepChildren bool
+	// TermIsSuccess counts an end by SIGTERM as success: a stop as asked.
+	TermIsSuccess bool
+	// StopPost runs once Argv has ended, for up to StopTimeout.
+	StopPost    []string
+	StopTimeout time.Duration
+}
+
+// Launcher starts and inspects units.
+type Launcher interface {
+	// Available reports whether units can be started here.
+	Available() bool
+	Start(u Unit) error
+	// Freeze suspends every process of the unit, Thaw resumes them.
+	Freeze(ctx context.Context, name string) error
+	Thaw(ctx context.Context, name string) error
+	// State is the unit's state ("active", "inactive", "failed", ...);
+	// empty when unreadable.
+	State(ctx context.Context, name string) string
+	// Running lists the units matching the patterns that are active or
+	// starting, and with stopping those running their stop too.
+	Running(ctx context.Context, stopping bool, patterns ...string) []string
+}
+
+// Cap bounds a capped run.
+type Cap struct {
+	// Max is the memory limit, Swap the swap limit ("12G", "0").
+	Max, Swap string
+}
+
+// Capper runs commands under a memory cap.
+type Capper interface {
+	// Available reports whether capped runs can be started here.
+	Available() bool
+	// Capped reports whether this process runs under a cap already.
+	Capped() bool
+	// Command is argv to run capped in the scope name; the caller starts
+	// and waits for it.
+	Command(name string, c Cap, argv []string) (*exec.Cmd, error)
+}
+
+// Opener hands claude:// links to the desktop app.
+type Opener interface {
+	// Running is when the desktop app's main process started, zero when it
+	// does not run.
+	Running(t *proc.Table) time.Time
+	// Open hands url to the running app, or starts the app on it.
+	Open(ctx context.Context, url string, running bool) error
+}
+
+// Notifier shows desktop notifications.
+type Notifier interface {
+	notify.Sender
+	Close() error
+}
+
+// Platform is one build's implementation of every part.
+type Platform struct {
+	Machine  Machine
+	Launcher Launcher
+	Capper   Capper
+	Opener   Opener
+	// NewNotifier opens a notifier; the caller closes it.
+	NewNotifier func() Notifier
+}
+
+// Current is the platform this build runs on.
+func Current() Platform { return current() }

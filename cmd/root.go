@@ -202,7 +202,7 @@ func (a *app) caller() (state.Party, error) {
 		}
 	}
 	if p.Name == "" {
-		if t, err := proc.Read(); err == nil {
+		if t, err := plat.Machine.Processes(); err == nil {
 			p.Name = claude.RecordName(a.cfg, t, p.Session)
 		}
 	}
@@ -214,7 +214,7 @@ func (a *app) caller() (state.Party, error) {
 
 // sessions reads the process table and the running sessions.
 func (a *app) sessions() ([]*claude.Session, *proc.Table, error) {
-	t, err := proc.Read()
+	t, err := plat.Machine.Processes()
 	if err != nil {
 		return nil, nil, err
 	}

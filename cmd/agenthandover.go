@@ -497,7 +497,7 @@ var claudeStop = func(ctx context.Context, id string) error {
 // what still runs after endWait. It returns how many processes it stopped.
 func endSession(ctx context.Context, s *claude.Session) (int, error) {
 	pid := s.PID
-	t, err := proc.Read()
+	t, err := plat.Machine.Processes()
 	if err != nil {
 		return 0, err
 	}

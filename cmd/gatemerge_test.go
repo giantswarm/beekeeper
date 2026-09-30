@@ -18,7 +18,6 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
-	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -108,7 +107,7 @@ func ancestors(pid int) []int {
 func TestAGatedMergeOutlivesItsCaller(t *testing.T) {
 	for _, systemd := range []bool{false, true} {
 		t.Run(fmt.Sprintf("user systemd %v", systemd), func(t *testing.T) {
-			if systemd && !guard.UserSystemd() {
+			if systemd && !plat.Launcher.Available() {
 				t.Skip("no user service manager")
 			}
 			was := userSystemd
@@ -367,7 +366,7 @@ func TestKeepOutput(t *testing.T) {
 // merge's child, not devctl, and the event names the route and the output.
 func TestAnUnservedRepositoryTakesThePlainSquashMerge(t *testing.T) {
 	userSystemd = func() bool { return false }
-	t.Cleanup(func() { userSystemd = guard.UserSystemd })
+	t.Cleanup(func() { userSystemd = plat.Launcher.Available })
 	fakeDevctl(t, `echo devctl ran >&2; exit 7`)
 	dir := t.TempDir()
 	args := filepath.Join(dir, "args")

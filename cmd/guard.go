@@ -16,7 +16,6 @@ import (
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/post"
-	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -356,7 +355,7 @@ func (a *app) heldLeases() []lease.Holder {
 	}
 	hs, _ := lease.Dir(a.cfg.LeaseDir).List()
 	var sessions []*claude.Session
-	if t, err := proc.Read(); err == nil {
+	if t, err := plat.Machine.Processes(); err == nil {
 		sessions = claude.Discover(a.cfg, t, time.Now())
 	}
 	return a.namedHolders(sessions, hs)

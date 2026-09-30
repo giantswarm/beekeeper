@@ -10,10 +10,15 @@ binary `dev`, which `self-update` refuses. To try `self-update` against the late
 an older version: `go build -ldflags "-X github.com/giantswarm/beekeeper/pkg/project.version=0.0.1" .`
 
 CI (`architect/go-build`) runs `make test` and cross-compiles for Linux, macOS and Windows, so
-every package has to compile everywhere. Linux-only reads stay behind `/proc` and cgroup paths
-that simply fail elsewhere, and the syscalls are split by build tag: `statfs`
-(`internal/machine/disk_*.go`) and the gate's re-exec of a replaced binary (`cmd/reexec_*.go`,
-Linux only, a no-op elsewhere). Pre-commit runs golangci-lint with gosec and goconst.
+every package has to compile everywhere. Everything beekeeper reads or starts on the machine goes
+through `internal/platform`: its `Machine`, `Launcher`, `Capper`, `Opener` and `Notifier`
+interfaces have one implementation per build, `linux_systemd` on Linux (`systemd_linux.go`,
+`notifier_linux.go`) and a stub elsewhere and under `-tags nosystemd` (`stub.go`) whose parts return
+a `platform.NotAvailableError`. `GOOS=darwin go build ./...` and `go build -tags nosystemd ./...`
+check both. The remaining syscalls are split by build tag: `statfs` (`internal/machine/disk_*.go`),
+the gate's re-exec of a replaced binary (`internal/platform/binary_*.go`, Linux only, a no-op
+elsewhere) and the detached merge child (`internal/platform/detach_*.go`). Pre-commit runs
+golangci-lint with gosec and goconst.
 
 The `run` tests (`cmd/guard_test.go`) need zsh and a user systemd: they skip in CI and run on a
 desktop. The test binary doubles as beekeeper (`BEEKEEPER_TEST_MAIN=1`), so the hook's rewrite runs
@@ -104,7 +109,7 @@ the lane `stalled` and `watch --once` prints one `LANE STALLED` line. The re-exe
 builds stamped with different versions (`-ldflags "-X …/pkg/project.version=…"`): start a
 waiting gate call from build A's path, rename build B over that path (`mv -f`, as `self-update`
 does), and within 5s the call prints `continuing under beekeeper <B>` and keeps its position in
-`lanes`. The test binary is not re-executed: `cmd/reexec_linux_test.go` covers noticing the
+`lanes`. The test binary is not re-executed: `internal/platform/binary_linux_test.go` covers noticing the
 replacement.
 
 `watch` finds a session by its process: a `claude` binary that is no subcommand (`daemon`,
@@ -237,14 +242,15 @@ measured with `beekeeper sessions --json` against the installed release on the s
 
 | Package | What it knows |
 |---|---|
+| `internal/platform` | The seam to the machine: `Machine` (memory, pressure, processes, the desktop and capped-run scopes, OOM kills), `Launcher` (detached units: agent, wake and merge units), `Capper` (the capped scope of `beekeeper run`), `Opener` (`claude://` links to the desktop app), `Notifier` (the D-Bus sender to `org.freedesktop.Notifications`, godbus, never `notify-send`, never an autolaunched bus). Commands call only these; the build tag picks the implementation. |
 | `internal/proc` | The process table from `/proc`, or a copy of it in testdata: parents, children, environment, start time. |
 | `internal/claude` | Sessions: CLI processes (desktop, background, headless, and the children a session starts), desktop session records, transcripts, git checkouts, what each is on and which overlap, and how each has been doing (turns, tool calls and errors, tokens and cost, context), read from the same 512 KiB window of its transcript in one pass. |
-| `internal/machine` | Memory, pressure, the desktop scope, disk, build slots, kind clusters, OOM kills. |
+| `internal/machine` | The Linux readers and parsers behind `platform.Machine` (memory, pressure, the desktop scope, OOM kill lines), disk, build slots, kind clusters, the model servers. |
 | `internal/github` | The budget from rate-limit headers; a pull request's state from `gh pr view`. |
 | `internal/lease` | Lease directories and the grant rule. |
 | `internal/peer` | The command-line send to a running Claude session: one headless `claude -p` turn whose only tool is SendMessage, by the session's ListAgents name. It rests on Claude Code's undocumented peer messaging, so it is kept here with a live test. |
 | `internal/state` | The shared state document (supervisor and its relay, the guide's role record (`Role`, the same shape the supervisor's flat fields read as through `SupervisorRole`), the relay due the watch reported, grants, holds, agents, notes, timers, session records, merges, the sessions `agents start` started with their mode) and the event log, under a file lock (`Peek` reads it without the lock, for the permission hook); `Log` appends the events that change no state (build runs) with a bounded wait for the lock. |
-| `internal/notify` | Desktop notifications: the kinds, urgencies and quiet hours, the ledger `notify.json` under `notify.lock` that makes each event one notification across watches and holds the quiet hours' ones, and the D-Bus sender to `org.freedesktop.Notifications` (godbus, never `notify-send`, never an autolaunched bus). |
+| `internal/notify` | Desktop notifications: the kinds, urgencies and quiet hours and the ledger `notify.json` under `notify.lock` that makes each event one notification across watches and holds the quiet hours' ones; the sender is `platform.Notifier`. |
 | `internal/alerts` | The installations' alerts: bounded `kubectl port-forward`s in their own process group, the Alertmanager reading, the NEW/RESOLVED/FLAPPING lines with the severity floors and the flap damper, and the grouped snapshot (pure, tested against Alertmanager-shaped fixtures, recorded answers in `testdata/` and a fake `kubectl`), the baseline with the damper's records and its single owner, and recorded answers for `alerts replay`. |
 | `internal/upgrade` | Cluster upgrades: the detection over an installation's Clusters, control planes and node pools (pure, tested against a real upgrade replayed from `testdata/prod/<phase>/`, stripped to the fields read), the bounded parallel `kubectl` reading with the events that name the release upgraded from, and the automatic `upgrade:<installation>/<cluster>` holds the merge gate and `lease claim` read. |
 | `internal/guard` | The build guard: a capped run in a build slot with its `run.start`/`run.end` events, the PreToolUse hook's rewrite and third-lab refusal, and the PermissionRequest hook's decision. |

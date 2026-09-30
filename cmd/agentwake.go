@@ -226,10 +226,8 @@ func wakeUnit(id string) string { return wakePrefix(id) + "-" + uuid.NewString()
 // wakeRunning is an active or activating wake unit of session id, "" for
 // none.
 func wakeRunning(ctx context.Context, id string) string {
-	out, _ := exec.CommandContext(ctx, "systemctl", "--user", "list-units", "--plain", "--no-legend", //nolint:gosec // the units beekeeper named
-		"--state=active,activating", wakePrefix(id)+"*").Output()
-	if f := strings.Fields(string(out)); len(f) > 0 {
-		return f[0]
+	if u := plat.Launcher.Running(ctx, false, wakePrefix(id)+"*"); len(u) > 0 {
+		return u[0]
 	}
 	return ""
 }
@@ -275,7 +273,7 @@ func (a *app) desktopPeer(host string) (string, error) {
 	if a.loadConfig() != nil {
 		return "", nil
 	}
-	t, err := proc.Read()
+	t, err := plat.Machine.Processes()
 	if err != nil {
 		return "", nil
 	}

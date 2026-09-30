@@ -1,4 +1,6 @@
-package notify
+//go:build linux && !nosystemd
+
+package platform
 
 import (
 	"context"
@@ -7,26 +9,14 @@ import (
 	"path/filepath"
 
 	"github.com/godbus/dbus/v5"
+
+	"github.com/giantswarm/beekeeper/internal/notify"
 )
 
-// Message is one desktop notification.
-type Message struct {
-	Summary string
-	Body    string
-	// Urgency is low, normal or critical.
-	Urgency string
-}
-
-// Sender delivers a message and returns the id the notification service
-// gave it.
-type Sender interface {
-	Send(ctx context.Context, m Message) (uint32, error)
-}
-
-// Desktop sends to org.freedesktop.Notifications on the session bus. It
+// desktop sends to org.freedesktop.Notifications on the session bus. It
 // connects on the first message and again after a failed one, so a service
 // that starts later is found.
-type Desktop struct {
+type desktop struct {
 	conn *dbus.Conn
 }
 
@@ -36,12 +26,12 @@ const (
 )
 
 // urgencies are the Desktop Notifications Specification's urgency levels.
-var urgencies = map[string]byte{Low: 0, Normal: 1, Critical: 2}
+var urgencies = map[string]byte{notify.Low: 0, notify.Normal: 1, notify.Critical: 2}
 
 // Send calls Notify with the urgency hint and the server's default timeout.
 // A connection the bus closed underneath (a bus restart) is replaced once
 // within the send, so the message is not lost.
-func (d *Desktop) Send(ctx context.Context, m Message) (uint32, error) {
+func (d *desktop) Send(ctx context.Context, m notify.Message) (uint32, error) {
 	id, err := d.notify(ctx, m)
 	if errors.Is(err, dbus.ErrClosed) {
 		id, err = d.notify(ctx, m)
@@ -51,7 +41,7 @@ func (d *Desktop) Send(ctx context.Context, m Message) (uint32, error) {
 
 // notify is one Notify call, on the open connection or a new one; a failed
 // call drops the connection.
-func (d *Desktop) notify(ctx context.Context, m Message) (uint32, error) {
+func (d *desktop) notify(ctx context.Context, m notify.Message) (uint32, error) {
 	if d.conn == nil {
 		c, err := connect()
 		if err != nil {
@@ -69,7 +59,7 @@ func (d *Desktop) notify(ctx context.Context, m Message) (uint32, error) {
 	return id, err
 }
 
-// connect opens the connection a Desktop keeps. It takes no send's
+// connect opens the connection a desktop keeps. It takes no send's
 // context: godbus closes a connection when the context it was opened with
 // ends, and each send's context ends with the send.
 func connect() (*dbus.Conn, error) {
@@ -81,7 +71,7 @@ func connect() (*dbus.Conn, error) {
 }
 
 // Close drops the connection.
-func (d *Desktop) Close() error {
+func (d *desktop) Close() error {
 	if d.conn == nil {
 		return nil
 	}
