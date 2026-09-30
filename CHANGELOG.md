@@ -9,7 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- A role's runs are numbered: every holder is "Supervisor run N" or "Guide run N", N one above the highest run recorded. `supervisor relay` and `guide relay` take no session any more: they start the next run as a fresh session (as `agents start` does, so its desktop title, roster name and messaging name are one) and open the relay to it; its first turn takes the role with `<role> start` and ends, and the standby watch resumes it in its desktop CLI (`RESUME`). A successor that does not start withdraws its relay. After a crash the standby watch starts the next run the same way, for the guide too (`GUIDE GONE`, `SUCCESSOR`), once per gone holder; a session between beekeeper's start or wake and its desktop CLI is not gone. A start in a session not named as its run records the next run, and a steward sets its desktop title to it; `supervisor status` and `guide status` name the run. A desktop title set later does not change the name a running CLI takes messages under, so a renamed role session was unreachable by its new name.
+
+### Removed
+
+- The spare: `supervisor spare`, its record, the standby watch's keep-awake and `supervisor.keepAwake`. Relays and crashes start fresh sessions instead of repurposing one kept awake.
+
 ### Fixed
+
+- A wake of a roster entry known by its CLI session id alone, whose session the desktop imported, gets the reopen after its turn: the supervisor's session ran headless for 45 minutes and never showed in the desktop, and opening it by hand started a second CLI on the session.
 
 - A desktop steward that declines a title or archive request (a model, which can refuse a request from another session, and did: an idle roster agent whose brief forbade archiving) no longer fails the request: it goes to the next steward, three at most, and a finished worker off the roster is asked before an idle roster agent. The request says it comes from beekeeper on the operator's behalf and that archiving is reversible.
 

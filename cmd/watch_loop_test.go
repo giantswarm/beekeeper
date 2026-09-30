@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,10 +73,15 @@ func loopWatcher(t *testing.T, interval, extra string, readHRs func(context.Cont
 	out := &syncBuffer{}
 	w := (&app{cfg: c, store: store, now: now, out: out}).newWatcher(true, false)
 	w.readHRs = readHRs
-	w.spare.send = func(context.Context, string, string) error {
+	w.stand.send = func(context.Context, string, string) error {
 		t.Error("the test watch sent a message")
 		return nil
 	}
+	w.stand.succeed = func(context.Context, role, state.Party) (state.Party, error) {
+		t.Error("the test watch started a successor")
+		return state.Party{}, errors.New("no successor in a test")
+	}
+	w.stand.turning = nil
 	// The budget probe is due at once and would ask GitHub.
 	w.lastBudget = now
 	return w, out

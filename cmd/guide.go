@@ -30,8 +30,8 @@ session and ` + "`supervisor start`" + ` in the guide's are refused. It has no g
 power; the grant rule stays the supervisor's.
 
 The role moves like the supervisor's, in two steps that leave no gap: the
-guide names its successor (relay), the successor starts
-(` + "`beekeeper guide handover --prompt`" + ` is its prompt). ` + "`beekeeper guide watch`" + `
+relay starts the next run, "Guide run N+1", as a fresh session, and its
+start takes the role (` + "`beekeeper guide handover --prompt`" + ` is its prompt). ` + "`beekeeper guide watch`" + `
 says GUIDE RELAY DUE once the guide's context reaches guide.relayAt.
 
 Its queue is every open note filed --for its person, guide.person
@@ -50,7 +50,7 @@ guide.relayAt (exit 3 when none runs, 4 in the session a relay relieved).`,
 		Use:   "start",
 		Short: "Make the calling session the guide, or take the role relayed to it",
 		Args:  cobra.NoArgs,
-		RunE:  func(*cobra.Command, []string) error { return a.runStart(guideRole, takeOver) },
+		RunE:  func(cmd *cobra.Command, _ []string) error { return a.runStart(cmd.Context(), guideRole, takeOver) },
 	}
 	start.Flags().BoolVar(&takeOver, "take-over", false, "replace a guide whose session still runs without its relay")
 	stop := &cobra.Command{
@@ -70,13 +70,14 @@ guide.relayAt (exit 3 when none runs, 4 in the session a relay relieved).`,
 	return c
 }
 
-const guideRelayLong = `Name the session that takes over the guide's role. Its
-` + "`beekeeper guide start`" + ` takes it; until then you stay the guide. The relay
+const guideRelayLong = `Start the next guide run, "Guide run N+1", as a fresh session and open
+the relay to it. Its first turn runs ` + "`beekeeper guide start`" + `, which takes the
+role, and ends; the standby watch then resumes it in its desktop CLI with
+` + "`beekeeper guide handover --prompt`" + `. Until then you stay the guide. The relay
 stays open for guide.relayTTL (default 15m), then expires and you simply
 keep guiding; --cancel withdraws it earlier. The supervisor's role is not
 touched. Once the successor has started, ` + "`beekeeper guide status`" + ` in your
-session exits 4. The successor is a name, a unique part of one, a session
-id or a PID.`
+session exits 4.`
 
 // queueItem is one open decision for the person: a note filed --for a
 // person, or a session the desktop files as waiting on its person.

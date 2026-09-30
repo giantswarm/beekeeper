@@ -157,6 +157,12 @@ type agentStart struct {
 	// replaces is the running session a hand-over ends: its roster entry,
 	// task and session record go to the new session.
 	replaces *state.Party
+	// id is the session id when the caller chose it (a role's successor,
+	// whose relay names it before it starts); empty: a new one.
+	id string
+	// by is who starts it when that is not the calling session (the
+	// standby watch); nil: the caller.
+	by *state.Party
 }
 
 // startedAgent is what startAgent started.
@@ -193,8 +199,10 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if err != nil {
 		return startedAgent{}, err
 	}
-	by, err := a.caller()
-	if err != nil {
+	var by state.Party
+	if sp.by != nil {
+		by = *sp.by
+	} else if by, err = a.caller(); err != nil {
 		return startedAgent{}, err
 	}
 	sessions, _, err := a.sessions()
@@ -208,7 +216,10 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 		_, ok := claude.Live(sessions, p)
 		return ok
 	}
-	id := uuid.NewString()
+	id := sp.id
+	if id == "" {
+		id = uuid.NewString()
+	}
 	s := state.Start{Party: state.Party{Session: id, HostSession: "local_" + id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC()}
 	var reg registration
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -542,7 +553,9 @@ func (a *app) reopenMissed(name string, why error) error {
 // roster entry still holds, and the entry's name, the session's title.
 func reopens(st *state.State, id string) (string, bool) {
 	if strings.HasPrefix(id, "local_") {
-		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.HostSession == id })
+		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool {
+			return ag.HostSession == id || ag.Session != "" && "local_"+ag.Session == id
+		})
 		if i < 0 {
 			return "", false
 		}
@@ -717,12 +730,34 @@ func launch(unit, dir, config string, stopPost, argv []string) error {
 	if config != "" {
 		args = append(args, "--setenv=BEEKEEPER_CONFIG="+config)
 	}
+	if dir, ok := devBuild(); ok {
+		// Its beekeeper commands run the build that started it.
+		args = append(args, "--setenv=PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	}
 	args = append(append(args, "--"), argv...)
 	out, err := exec.Command("systemd-run", args...).CombinedOutput() //nolint:gosec // starting the session is the purpose
 	if err != nil {
 		return fmt.Errorf("systemd-run: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// devBuild is the folder of the running beekeeper when it is not the one on
+// PATH: a development build, which the sessions it starts run too.
+func devBuild() (string, bool) {
+	self, err := os.Executable()
+	if err != nil {
+		return "", false
+	}
+	onPath, err := exec.LookPath("beekeeper")
+	if err == nil {
+		if a, err1 := os.Stat(self); err1 == nil {
+			if b, err2 := os.Stat(onPath); err2 == nil && os.SameFile(a, b) {
+				return "", false
+			}
+		}
+	}
+	return filepath.Dir(self), true
 }
 
 // awaitReply waits up to wait for the session's transcript to hold its

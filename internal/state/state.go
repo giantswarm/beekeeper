@@ -129,16 +129,18 @@ type Role struct {
 	// Fed are the keys of what the guide's feed reported: the open notes
 	// for a person and the sessions waiting on one, each said once.
 	Fed []string `json:"fed,omitempty"`
+	// Run is the highest run of the role numbered: "<Role> run <Run>".
+	Run int `json:"run,omitempty"`
 }
 
 // SupervisorRole is the supervisor's record.
 func (st *State) SupervisorRole() Role {
-	return Role{Holder: st.Supervisor, Relay: st.Relay, Relieved: st.Relieved, CLI: st.SupervisorCLI, RelayDue: st.RelayDue}
+	return Role{Holder: st.Supervisor, Relay: st.Relay, Relieved: st.Relieved, CLI: st.SupervisorCLI, RelayDue: st.RelayDue, Run: st.SupervisorRun}
 }
 
 // SetSupervisorRole stores the supervisor's record.
 func (st *State) SetSupervisorRole(r Role) {
-	st.Supervisor, st.Relay, st.Relieved, st.SupervisorCLI, st.RelayDue = r.Holder, r.Relay, r.Relieved, r.CLI, r.RelayDue
+	st.Supervisor, st.Relay, st.Relieved, st.SupervisorCLI, st.RelayDue, st.SupervisorRun = r.Holder, r.Relay, r.Relieved, r.CLI, r.RelayDue, r.Run
 }
 
 // GuideRole is the guide's record.
@@ -151,7 +153,7 @@ func (st *State) GuideRole() Role {
 
 // SetGuideRole stores the guide's record, none when it is empty.
 func (st *State) SetGuideRole(r Role) {
-	if r.Holder == nil && r.Relay == nil && len(r.Relieved) == 0 && len(r.Fed) == 0 {
+	if r.Holder == nil && r.Relay == nil && len(r.Relieved) == 0 && len(r.Fed) == 0 && r.Run == 0 {
 		st.Guide = nil
 		return
 	}
@@ -340,9 +342,8 @@ type State struct {
 	Relieved []Relief `json:"relieved,omitempty"`
 	// SupervisorCLI is what beekeeper saw of the supervisor's CLI.
 	SupervisorCLI *CLI `json:"supervisorCLI,omitempty"`
-	// Spare is the session the supervisor keeps ready to take over: the
-	// standby watch keeps it awake and, after a crash, hands it the role.
-	Spare *Party `json:"spare,omitempty"`
+	// SupervisorRun is the highest supervisor run numbered.
+	SupervisorRun int `json:"supervisorRun,omitempty"`
 	// RelayDue is the relay due the watch reported to the supervisor.
 	RelayDue *RelayDue `json:"relayDue,omitempty"`
 	// Guide is the guide's role, the supervisor's counterpart for the

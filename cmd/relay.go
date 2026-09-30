@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
@@ -12,8 +13,8 @@ import (
 )
 
 // A relayed role (the supervisor, the guide) moves in two steps: the
-// holder names its successor (relay), the successor takes the role with its
-// own start. Both are one state update under the lock each, so the
+// relay opens to a fresh session beekeeper starts as the next run, whose
+// own start takes the role. Both are one state update under the lock each, so the
 // supervisor's grant rule is in force throughout: the outgoing supervisor's
 // until the start, the successor's from it. A session holds one role at a
 // time.
@@ -22,9 +23,11 @@ import (
 // record and configuration live.
 type role struct {
 	name string // supervisor, guide
-	inf  string // supervise, guide
-	verb string // supervises, guides
-	ing  string // supervising, guiding
+	// title names its runs: "<title> run <n>".
+	title string
+	inf   string // supervise, guide
+	verb  string // supervises, guides
+	ing   string // supervising, guiding
 	// tag opens the role's watch lines ("" for the supervisor's).
 	tag string
 	// duty is what a successor takes over.
@@ -42,13 +45,13 @@ type role struct {
 
 var (
 	supervisorRole = role{
-		name: "supervisor", inf: "supervise", verb: "supervises", ing: "supervising", duty: "the supervisor's watch", handover: "beekeeper handover --prompt", grants: true,
+		name: "supervisor", title: "Supervisor", inf: "supervise", verb: "supervises", ing: "supervising", duty: "the supervisor's watch", handover: "beekeeper handover --prompt", grants: true,
 		gone: "claims wait for a successor's `beekeeper supervisor start`",
 		get:  (*state.State).SupervisorRole, set: (*state.State).SetSupervisorRole,
 		cfg: func(c *config.Config) config.Role { return c.Supervisor.Role },
 	}
 	guideRole = role{
-		name: "guide", inf: "guide", verb: "guides", ing: "guiding", tag: "GUIDE ", duty: "the guide's role", handover: "beekeeper guide handover --prompt",
+		name: "guide", title: "Guide", inf: "guide", verb: "guides", ing: "guiding", tag: "GUIDE ", duty: "the guide's role", handover: "beekeeper guide handover --prompt",
 		gone: "a successor's `beekeeper guide start` takes the role (beekeeper guide handover --prompt)",
 		get:  (*state.State).GuideRole, set: (*state.State).SetGuideRole,
 		cfg: func(c *config.Config) config.Role { return c.Guide.Role },
@@ -113,7 +116,7 @@ func (rl role) start(st *state.State, me state.Party, prevLive, takeOver bool, n
 		case rel != nil && rel.Taken.IsZero() && rel.From.Is(prev.Party) && rel.To.Is(me):
 			named = fmt.Sprintf("; its relay to you expired at %s", clock(now, rel.Expires))
 		}
-		return "", nil, refused("%q %s since %s and still runs%s: it relays the role with `beekeeper %s relay <you>`, or take over with --take-over",
+		return "", nil, refused("%q %s since %s and still runs%s: its `beekeeper %s relay` starts the successor, or take over with --take-over",
 			prev.Name, rl.verb, clock(now, prev.Since), named, rl.name)
 	default:
 		r.Relay = nil
@@ -122,12 +125,22 @@ func (rl role) start(st *state.State, me state.Party, prevLive, takeOver bool, n
 	// Holding the role again ends my relief; a relief nobody asked about
 	// for reliefTTL is dropped.
 	r.Relieved = slices.DeleteFunc(dropRelief(r.Relieved, me), func(rf state.Relief) bool { return now.Sub(rf.Taken) > reliefTTL })
+	restart, last := prev != nil && prev.Is(me), rl.lastRun(r)
 	r.Holder = &state.Supervisor{Party: me, Since: now.UTC()}
-	rl.set(st, r)
-	if rl.name == supervisorRole.name && st.Spare != nil && st.Spare.Is(me) {
-		st.Spare = nil // the spare supervises now; it records its own
+	// A run relayed to me, or named in my title, is mine; any other start
+	// of the role is the next run.
+	switch n := rl.runOf(me.Name); {
+	case n > 0:
+		r.Run = max(r.Run, n)
+	case !restart || r.Run == 0:
+		r.Run = last + 1
 	}
-	msg := fmt.Sprintf("%q %s now%s", me.Name, rl.verb, how)
+	rl.set(st, r)
+	as := ""
+	if run := rl.runName(r.Run); run != me.Name {
+		as = " as " + run
+	}
+	msg := fmt.Sprintf("%q %s now%s%s", me.Name, rl.verb, as, how)
 	return msg, []state.Event{event(me, rl.name+".start", "%s", msg)}, nil
 }
 
@@ -155,6 +168,7 @@ func (rl role) relay(st *state.State, me, to state.Party, now time.Time, ttl tim
 		replacing = fmt.Sprintf(", replacing the relay to %q", r.Relay.To.Name)
 	}
 	r.Relay = &state.Relay{From: me, To: to, At: now.UTC(), Expires: now.Add(ttl).UTC()}
+	r.Run = max(rl.lastRun(r), rl.runOf(to.Name))
 	rl.set(st, r)
 	until := clock(now, r.Relay.Expires)
 	grants := ""
@@ -324,7 +338,9 @@ func renameHolder(sup *state.Supervisor, sessions []*claude.Session) bool {
 		return false
 	}
 	s, live := claude.Live(sessions, sup.Party)
-	if !live || s.Name == "" || s.Name == sup.Name {
+	// A CLI the desktop runs before it recorded the title is known by its
+	// PID only: no rename.
+	if !live || s.Name == "" || s.Name == sup.Name || s.Name == "pid "+strconv.Itoa(s.PID) {
 		return false
 	}
 	sup.Name = s.Name
@@ -347,7 +363,7 @@ func (rl role) fireRelay(st *state.State, now time.Time) (lines []string, evs []
 		case !r.Taken.IsZero():
 			lines = append(lines, fmt.Sprintf("%sRELAY TAKEN: %q %s since %s, relieving %q", rl.tag, r.To.Name, rl.verb, clock(now, r.Taken), r.From.Name))
 		case !now.Before(r.Expires):
-			lines = append(lines, fmt.Sprintf("%sRELAY EXPIRED: %q did not take the role from %q by %s (beekeeper %s relay <successor> opens another)",
+			lines = append(lines, fmt.Sprintf("%sRELAY EXPIRED: %q did not take the role from %q by %s (beekeeper %s relay starts another)",
 				rl.tag, r.To.Name, r.From.Name, clock(now, r.Expires), rl.name))
 			evs = append(evs, event(watchParty, rl.name+".relay-expired", "to %s at %s", r.To.Name, clock(now, r.Expires)))
 			ro.RelayDue = nil
