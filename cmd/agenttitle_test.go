@@ -147,9 +147,9 @@ func TestPickSteward(t *testing.T) {
 			st.Agents = []state.Agent{{Party: state.Party{Session: "a"}, Task: "work"}}
 			return st
 		}(), sessions: []*claude.Session{session(1, "a", quiet)}},
-		{desc: "the spare", st: func() *state.State {
+		{desc: "the guide", st: func() *state.State {
 			st := started("a")
-			st.Spare = &state.Party{Session: "a"}
+			st.Guide = &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: "a"}}}
 			return st
 		}(), sessions: []*claude.Session{session(1, "a", quiet)}},
 		{desc: "a relieved supervisor", st: func() *state.State {
@@ -182,9 +182,9 @@ func TestArchiveDesktopKeeps(t *testing.T) {
 	if got := a.archiveDesktop(context.Background(), &state.State{}, ag); !strings.Contains(got, "did not start it") {
 		t.Errorf("not started: %q", got)
 	}
-	st := &state.State{Starts: []state.Start{{Party: ag}}, Spare: &ag}
+	st := &state.State{Starts: []state.Start{{Party: ag}}, Supervisor: &state.Supervisor{Party: ag}}
 	if got := a.archiveDesktop(context.Background(), st, ag); !strings.Contains(got, "role") {
-		t.Errorf("spare: %q", got)
+		t.Errorf("supervisor: %q", got)
 	}
 }
 

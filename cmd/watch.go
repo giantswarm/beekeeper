@@ -198,9 +198,9 @@ type watcher struct {
 	// stopped are the agents with a task this watch said have no running
 	// CLI, by session key, until their CLI runs again.
 	stopped map[string]bool
-	// spare is the standby watch's keep-awake and hand-over memory; table
-	// the last poll's process table.
-	spare spareWatch
+	// stand is the standby watch's memory of its messages, successors and
+	// reopens; table the last poll's process table.
+	stand standbyWatch
 	table *proc.Table
 	// runReport launches a reporter's turn; nil is launchReport.
 	runReport func(unit, id, name, prompt string) error
@@ -250,6 +250,7 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 		}
 		w.sample(ctx)
 		w.poll(ctx)
+		w.stand.inflight.Wait() // a successor's start outlives no watch
 		return nil
 	}
 	// The machine is sampled in a loop of its own, so no network read or
@@ -445,7 +446,7 @@ type watchMark struct {
 func (a *app) newWatcher(standby, keep bool) *watcher {
 	w := &watcher{app: a, standby: standby, last: map[string]time.Time{}, seenKills: map[string]bool{},
 		reported: map[string]bool{}, active: map[string]condition{}}
-	w.spare = spareWatch{send: a.peerSend, open: openDesktop, sent: map[string]time.Time{}, checked: map[string]bool{}}
+	w.stand = standbyWatch{send: a.peerSend, open: openDesktop, succeed: a.succeedFromWatch, turning: unitsTurning}
 	if me, err := a.caller(); keep && err == nil {
 		w.markFile = "seen.watch." + fileKey(me) + ".json"
 		var m watchMark
@@ -1057,10 +1058,11 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	w.records = st.Records
 	supervised := w.supervisorGone(ctx, st, sessions)
 	if w.standby {
-		w.tendSpare(ctx, st, sessions)
+		w.guideGone(ctx, st, sessions)
+		w.resumeRestarted(ctx, guideRole, st, sessions)
 	}
 	if w.standby && supervised {
-		w.resumeRestarted(ctx, st, sessions)
+		w.resumeRestarted(ctx, supervisorRole, st, sessions)
 		return // the supervisor's watch reports them
 	}
 	w.stoppedAgents(st, sessions)
@@ -1166,9 +1168,9 @@ func (w *watcher) supervisorGone(ctx context.Context, st *state.State, sessions 
 		key = s.Name + "@" + s.Since.UTC().Format(time.RFC3339)
 	}
 	if sv.live {
-		w.spare.liveTerm, w.spare.liveAt = key, w.now
+		w.stand.liveTerm, w.stand.liveAt = key, w.now
 	}
-	if !sv.down() || st.Relay.Open(w.now) {
+	if !sv.down() || relayPending(st, st.SupervisorRole(), w.now) || w.firstTurn(ctx, s.Party) {
 		switch {
 		case s == nil:
 			w.gap = ""
@@ -1178,15 +1180,12 @@ func (w *watcher) supervisorGone(ctx context.Context, st *state.State, sessions 
 		}
 		return sv.live
 	}
-	spare := ""
-	if w.standby {
-		spare = w.handOver(ctx, st, sessions, key)
-		if st.Spare == nil || strings.Contains(spare, "no running CLI") {
-			w.reopenAfterAppStart(ctx, st, sv.gone, key)
-		}
+	successor := ""
+	if w.standby && !w.reopenAfterAppStart(ctx, st, sv.gone, key) {
+		successor = w.succeedGone(ctx, supervisorRole, s.Party)
 	}
 	l := fmt.Sprintf("SUPERVISOR GONE: %q (supervising since %s) is gone since %s; claims stay gated until a successor's beekeeper supervisor start (beekeeper handover --prompt)%s",
-		s.Name, clock(w.now, s.Since), clock(w.now, sv.gone), spare)
+		s.Name, clock(w.now, s.Since), clock(w.now, sv.gone), successor)
 	if w.gap != key {
 		w.gap = key
 		w.emitNow("supervisor", "%s", l)

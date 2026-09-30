@@ -172,8 +172,7 @@ one "no change" line; --full prints everything.`,
 		Short: "Take an agent off the roster and archive the desktop session beekeeper started for it",
 		Long: `Takes an agent off the roster. When beekeeper started the agent's session,
 its desktop session is archived too (the desktop's Archived list brings it
-back), unless it runs a turn or holds the supervisor's, the guide's or the
-spare's role: an idle desktop CLI of a session beekeeper started is asked to
+back), unless it runs a turn or holds the supervisor's or the guide's role: an idle desktop CLI of a session beekeeper started is asked to
 archive it. A session its person started is never archived.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

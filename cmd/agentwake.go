@@ -136,6 +136,11 @@ func (a *app) wakeAgent(ctx context.Context, q, msg, mode string) error {
 // its bypass. A session with no transcript cannot be resumed.
 func resolveWake(cfg *config.Config, st *state.State, ag state.Agent) (wakeTarget, error) {
 	w := wakeTarget{name: ag.Name, id: ag.Session, host: ag.HostSession}
+	if _, ok := claude.ReadRecord(cfg, "local_"+ag.Session); w.host == "" && ag.Session != "" && ok {
+		// A session the roster knows by its CLI id alone, which the desktop
+		// imported: its wake gets the reopen too.
+		w.host = "local_" + ag.Session
+	}
 	if w.host != "" {
 		if r, ok := claude.ReadRecord(cfg, w.host); ok {
 			if r.CLISessionID != "" {

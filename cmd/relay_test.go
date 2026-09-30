@@ -108,7 +108,7 @@ func TestIssueRef(t *testing.T) {
 
 func TestPromptHasThePendingStateAndNoLiveValue(t *testing.T) {
 	st := pendingState()
-	st.Supervisor = &state.Supervisor{Party: state.Party{Session: "s0", Name: "Supervisor run 11"}}
+	st.Supervisor = &state.Supervisor{Party: state.Party{Session: "s0", Name: supA.Name}}
 	st.Records[1].Ended = relayNow.Add(-time.Minute)
 	st.Agents = []state.Agent{{Party: four, Task: "model-manager#180", AssignedAt: relayNow.Add(-time.Hour)}}
 	st.Holds = []state.Hold{

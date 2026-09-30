@@ -19,7 +19,7 @@ func TestOneSessionHoldsOneRole(t *testing.T) {
 		t.Fatalf("the supervisor's session took the guide role: %v", err)
 	}
 	msg, evs, err := guideRole.start(st, agentC, false, false, relayNow)
-	if err != nil || msg != `"Agent three" guides now` || evs[0].Verb != "guide.start" {
+	if err != nil || msg != `"Agent three" guides now as Guide run 1` || evs[0].Verb != "guide.start" {
 		t.Fatalf("guide start: %q %v %v", msg, evs, err)
 	}
 	if _, _, err := supervisorRole.start(st, agentC, true, true, relayNow); Code(err) != ExitRefused {

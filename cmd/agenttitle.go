@@ -207,8 +207,8 @@ func (a *app) findSteward(target string, tried []string) (steward, error) {
 
 // pickSteward picks the steward for target: an idle desktop CLI (its
 // transcript quiet for stewardQuiet, no tool command, no headless turn) of a
-// session beekeeper started, never the operator's own, the supervisor's,
-// the guide's or the spare's, nor a roster agent's with a task, nor one of
+// session beekeeper started, never the operator's own, the supervisor's or
+// the guide's, nor a roster agent's with a task, nor one of
 // the hosts tried. The target's own CLI goes first, then a finished worker
 // off the roster (a roster agent's brief can forbid the call), each the one
 // idle longest. sock is the peer socket of a CLI, "" for none.
@@ -257,10 +257,10 @@ func stewards(st *state.State, t *proc.Table, s *claude.Session, target string, 
 }
 
 // keepsRole reports whether p holds or held the supervisor's or the guide's
-// role, or is the spare: a relieved supervisor still follows its role's
-// rules, which leave archiving to the person.
+// role: a relieved supervisor still follows its role's rules, which leave
+// archiving to the person.
 func keepsRole(st *state.State, p state.Party) bool {
-	if holdsRole(st, p) || st.Spare != nil && st.Spare.Is(p) {
+	if holdsRole(st, p) {
 		return true
 	}
 	for _, rl := range roles {
@@ -329,7 +329,7 @@ func (a *app) archiveDesktop(ctx context.Context, st *state.State, ag state.Part
 		return "its desktop session stays: beekeeper did not start it"
 	}
 	if keepsRole(st, ag) {
-		return "its desktop session stays: it holds or held the supervisor's or the guide's role, or is the spare"
+		return "its desktop session stays: it holds or held the supervisor's or the guide's role"
 	}
 	host := st.Starts[i].HostSession
 	archived := func() (bool, bool) {

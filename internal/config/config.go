@@ -120,12 +120,6 @@ type Supervisor struct {
 	// Scope says what the supervisor watches, in a sentence or two; empty,
 	// the prompt names the resources, lanes and installations configured.
 	Scope string `yaml:"scope"`
-	// KeepAwake is how long the recorded spare may sit idle before the
-	// standby watch sends it a keep-awake message (25m): under the desktop
-	// app's 30-minute idle timeout for an off-screen CLI, so a command-line
-	// message still reaches it. The supervisor's restartGrace defaults to
-	// 30s: past it the standby watch hands the role to the spare.
-	KeepAwake Duration `yaml:"keepAwake"`
 }
 
 // Role configures a relayed role, the supervisor's or the guide's: the
@@ -588,7 +582,6 @@ func (c *Config) defaults() error {
 	// The desktop app never restarts a crashed CLI by itself: the grace only
 	// debounces a supervisor someone woke.
 	setDur(&c.Supervisor.RestartGrace, 30*time.Second)
-	setDur(&c.Supervisor.KeepAwake, 25*time.Minute)
 	c.Supervisor.defaults(home)
 	c.Guide.defaults(home)
 	if c.Agents.RelayAt == 0 {

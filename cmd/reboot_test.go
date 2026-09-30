@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -36,17 +37,31 @@ func TestReopenDue(t *testing.T) {
 }
 
 // standbyAfterBoot is a standby watch whose desktop app started at
-// appStart, recording the links it opens; the supervisor "Agent four" has
-// no spare.
-func standbyAfterBoot(t *testing.T, appStart time.Time) (*watcher, *[]string, *bytes.Buffer) {
+// appStart, recording the links it opens and counting the successors it
+// starts for the supervisor "Agent four".
+func standbyAfterBoot(t *testing.T, appStart time.Time) (*watcher, *[]string, *bytes.Buffer, *atomic.Int32) {
 	t.Helper()
 	w, _, out := notifyingWatch(t, t.TempDir(), true)
 	var opened []string
-	w.spare = spareWatch{
-		send:    func(context.Context, string, string) error { return nil },
-		open:    func(_ context.Context, url string, _ bool) error { opened = append(opened, url); return nil },
-		sent:    map[string]time.Time{},
-		checked: map[string]bool{},
+	var started atomic.Int32
+	w.stand = standbyWatch{
+		send: func(context.Context, string, string) error { return nil },
+		open: func(_ context.Context, url string, _ bool) error { opened = append(opened, url); return nil },
+		succeed: func(_ context.Context, rl role, from state.Party) (state.Party, error) {
+			if rl.name != supervisorRole.name || !from.Is(four) {
+				t.Errorf("successor of the %s %q", rl.name, from.Name)
+			}
+			started.Add(1)
+			to := state.Party{Session: "s5", Name: "Supervisor run 1"}
+			// As startSuccessor, it opens the relay its start takes and
+			// records the start.
+			err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Relay = &state.Relay{From: from, To: to, At: relayNow, Expires: relayNow.Add(time.Hour)}
+				st.Starts = append(st.Starts, state.Start{Party: to})
+				return nil, nil
+			})
+			return to, err
+		},
 	}
 	w.table = &proc.Table{ByPID: map[int]*proc.Process{
 		7: {PID: 7, Args: []string{"/opt/Claude/" + desktopApp, "--ozone-platform=wayland"}, Start: appStart},
@@ -57,14 +72,14 @@ func standbyAfterBoot(t *testing.T, appStart time.Time) (*watcher, *[]string, *b
 	if err := w.store.Update(func(s *state.State) ([]state.Event, error) { *s = *st; return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
-	return w, &opened, out
+	return w, &opened, out, &started
 }
 
 func TestStandbyReopensTheSupervisorAfterAReboot(t *testing.T) {
 	// The login started the app a second before the standby watch's first
 	// poll, which is the first to see the supervisor's CLI gone: it stopped
 	// with the machine.
-	w, opened, out := standbyAfterBoot(t, relayNow.Add(-time.Second))
+	w, opened, out, started := standbyAfterBoot(t, relayNow.Add(-time.Second))
 	for _, at := range []time.Duration{0, 20 * time.Second, 45 * time.Second, 2 * time.Minute} {
 		w.now = relayNow.Add(at)
 		w.pending(context.Background(), nil)
@@ -75,12 +90,21 @@ func TestStandbyReopensTheSupervisorAfterAReboot(t *testing.T) {
 	if !strings.Contains(out.String(), `REOPENED: "Agent four"`) {
 		t.Errorf("no REOPENED line:\n%s", out)
 	}
+	if n := started.Load(); n != 0 {
+		t.Errorf("%d successors started while the reopened supervisor may come back", n)
+	}
+	// Past reopenGrace it did not come back: its successor starts.
+	w.now = relayNow.Add(45*time.Second + reopenGrace) // reopened at 45s
+	w.pending(context.Background(), nil)
+	if !eventually(5*time.Second, func() bool { return started.Load() == 1 }) {
+		t.Errorf("%d successors after the grace, want 1:\n%s", started.Load(), out)
+	}
 }
 
 func TestStandbyLeavesACrashUnderTheRunningAppAlone(t *testing.T) {
 	// The watch saw the supervisor's CLI run under the app, then it
 	// stopped: the app did not restart, no reopen.
-	w, opened, out := standbyAfterBoot(t, relayNow.Add(-time.Hour))
+	w, opened, out, started := standbyAfterBoot(t, relayNow.Add(-time.Hour))
 	live := []*claude.Session{{ID: "s4", HostID: hostFour, Name: agentFour, PID: 4242}}
 	w.now = relayNow
 	w.pending(context.Background(), live)
@@ -91,8 +115,12 @@ func TestStandbyLeavesACrashUnderTheRunningAppAlone(t *testing.T) {
 	if len(*opened) != 0 {
 		t.Fatalf("reopened after a crash under the running app: %q\n%s", *opened, out)
 	}
-	if !strings.Contains(out.String(), "SUPERVISOR GONE") {
-		t.Errorf("no SUPERVISOR GONE line:\n%s", out)
+	if !strings.Contains(out.String(), "SUPERVISOR GONE") || !strings.Contains(out.String(), "starting its successor") {
+		t.Errorf("no SUPERVISOR GONE line starting a successor:\n%s", out)
+	}
+	// The polls while the start runs, and after, start one successor.
+	if !eventually(5*time.Second, func() bool { return strings.Contains(out.String(), `SUCCESSOR: started "Supervisor run 1"`) }) || started.Load() != 1 {
+		t.Errorf("%d successors started, want 1:\n%s", started.Load(), out)
 	}
 }
 
