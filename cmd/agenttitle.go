@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -15,9 +16,10 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// retitleWait bounds the wait for the desktop to record the title the
-// session set on beekeeper's request: one short desktop turn.
-const retitleWait = 2 * time.Minute
+// retitleWait bounds the wait for the desktop to record the title a steward
+// set on beekeeper's request: one short desktop turn. stewardTries of them
+// stay within the reopen unit's TimeoutStopSec.
+const retitleWait = 80 * time.Second
 
 // The desktop handles every claude://resume link twice, and when the second
 // delivery arrives while the first import still runs, both import: the
@@ -69,32 +71,64 @@ func (a *app) keepTitle(ctx context.Context, id, name string) (string, error) {
 		}
 		return ""
 	}
-	find := func(ctx context.Context) (steward, error) {
-		if sock := desktopSocket(ctx, id); sock != "" {
-			return steward{host: host, sock: sock}, nil
+	find := func(ctx context.Context, tried []string) (steward, error) {
+		if len(tried) == 0 {
+			if sock := desktopSocket(ctx, id); sock != "" {
+				return steward{host: host, sock: sock}, nil
+			}
 		}
-		return a.findSteward(host)
+		return a.findSteward(host, tried)
 	}
 	return retitle(ctx, host, name, record, find, a.peerSend, retitleWait)
 }
 
 // retitle is keepTitle's decision: title reads the desktop's record of host,
 // find picks the steward, send delivers the request.
-func retitle(ctx context.Context, host, name string, title func() string, find func(context.Context) (steward, error),
+func retitle(ctx context.Context, host, name string, title func() string, find stewardFinder,
 	send func(ctx context.Context, to, msg string) error, wait time.Duration,
 ) (string, error) {
 	was := title()
 	if was == name {
 		return fmt.Sprintf("the desktop keeps its title %q", name), nil
 	}
-	s, err := find(ctx)
+	msg := func(session string) string { return retitleRequest(session, name) }
+	s, err := delegate(ctx, host, find, msg, func() bool { return title() == name }, send, wait)
 	if err != nil {
 		return "", fmt.Errorf("the desktop recorded %s: %w", recorded(was, name), err)
 	}
-	if err := askSteward(ctx, s, retitleRequest(s.sessionArg(host), name), func() bool { return title() == name }, send, wait); err != nil {
-		return "", fmt.Errorf("the desktop recorded %s: %w", recorded(was, name), err)
-	}
 	return fmt.Sprintf("the desktop had recorded %s: %s retitled it %q", recorded(was, name), s.who(host), name), nil
+}
+
+// stewardFinder picks the steward for a request, none of the hosts tried.
+type stewardFinder func(ctx context.Context, tried []string) (steward, error)
+
+// stewardTries is how many stewards a request is handed to at most: a
+// steward is a model, which can decline a request from another session.
+const stewardTries = 3
+
+// delegate hands the request msg (given the session_id the steward passes)
+// about target to stewards find picks, one after another until done holds
+// or stewardTries of them were asked, each given wait. It returns the
+// steward that did it.
+func delegate(ctx context.Context, target string, find stewardFinder, msg func(session string) string, done func() bool,
+	send func(ctx context.Context, to, msg string) error, wait time.Duration,
+) (steward, error) {
+	var tried []string
+	var errs []error
+	for range stewardTries {
+		s, err := find(ctx, tried)
+		if err != nil {
+			errs = append(errs, err)
+			break
+		}
+		err = askSteward(ctx, s, msg(s.sessionArg(target)), done, send, wait)
+		if err == nil {
+			return s, nil
+		}
+		errs = append(errs, err)
+		tried = append(tried, s.host)
+	}
+	return steward{}, errors.Join(errs...)
 }
 
 // who names the steward in a line about target.
@@ -136,21 +170,25 @@ func recorded(title, name string) string {
 	return fmt.Sprintf("%q instead of %q", title, name)
 }
 
+// stewardPreamble says who asks a steward and why it: beekeeper's relay
+// turn has a name of its own, which a steward otherwise takes for a stranger.
+const stewardPreamble = "beekeeper, the machine's session coordinator, asks this idle session, which it started, for one desktop call on its operator's behalf: "
+
 // retitleRequest is the message that has a steward set the desktop title of
 // session (its local_ id, or "self").
 func retitleRequest(session, name string) string {
-	return fmt.Sprintf("beekeeper: the desktop lost a session's title. Call mcp__ccd_session_mgmt__set_session_title once with session_id %q and title %q, then end the turn without another tool call and without a reply.", session, name)
+	return fmt.Sprintf(stewardPreamble+"the desktop lost the title of a worker beekeeper started. Call mcp__ccd_session_mgmt__set_session_title once with session_id %q and title %q (its roster name), then end the turn without another tool call and without a reply.", session, name)
 }
 
 // archiveRequest is the message that has a steward archive session (its
 // local_ id, or "self").
 func archiveRequest(session, name string) string {
-	return fmt.Sprintf("beekeeper: agent %q is off the roster, its work is done. Call mcp__ccd_session_mgmt__archive_session once with session_id %q and reason %q, then end the turn without another tool call and without a reply.", name, session, "beekeeper agents remove")
+	return fmt.Sprintf(stewardPreamble+"the operator ran `beekeeper agents remove %s`: the worker beekeeper started for it is finished and off the roster, and remove archives its desktop session (reversible: the Archived list brings it back). Call mcp__ccd_session_mgmt__archive_session once with session_id %q and reason %q, then end the turn without another tool call and without a reply.", name, session, "beekeeper agents remove "+name)
 }
 
 // findSteward picks the steward for a request about the desktop session
-// target from the running sessions.
-func (a *app) findSteward(target string) (steward, error) {
+// target from the running sessions, none of the hosts tried.
+func (a *app) findSteward(target string, tried []string) (steward, error) {
 	st, err := a.store.Read()
 	if err != nil {
 		return steward{}, err
@@ -159,7 +197,7 @@ func (a *app) findSteward(target string) (steward, error) {
 	if err != nil {
 		return steward{}, err
 	}
-	return pickSteward(st, sessions, t, target, a.now, func(pid int) string {
+	return pickSteward(st, sessions, t, target, tried, a.now, func(pid int) string {
 		if sock := peerSocket(runtimeDir(), pid); fileExists(sock) {
 			return sock
 		}
@@ -170,26 +208,35 @@ func (a *app) findSteward(target string) (steward, error) {
 // pickSteward picks the steward for target: an idle desktop CLI (its
 // transcript quiet for stewardQuiet, no tool command, no headless turn) of a
 // session beekeeper started, never the operator's own, the supervisor's,
-// the guide's or the spare's, nor a roster agent's with a task. The
-// target's own CLI goes first, else the one idle longest. sock is the
-// peer socket of a CLI, "" for none.
-func pickSteward(st *state.State, sessions []*claude.Session, t *proc.Table, target string, now time.Time, sock func(pid int) string) (steward, error) {
-	var best *claude.Session
+// the guide's or the spare's, nor a roster agent's with a task, nor one of
+// the hosts tried. The target's own CLI goes first, then a finished worker
+// off the roster (a roster agent's brief can forbid the call), each the one
+// idle longest. sock is the peer socket of a CLI, "" for none.
+func pickSteward(st *state.State, sessions []*claude.Session, t *proc.Table, target string, tried []string, now time.Time, sock func(pid int) string) (steward, error) {
+	var picks []*claude.Session
 	for _, s := range sessions {
-		if !stewards(st, t, s, target, now) || sock(s.PID) == "" {
-			continue
-		}
-		if s.HostID == target {
-			best = s
-			break
-		}
-		if best == nil || s.LastActive.Before(best.LastActive) {
-			best = s
+		if stewards(st, t, s, target, now) && !slices.Contains(tried, s.HostID) && sock(s.PID) != "" {
+			picks = append(picks, s)
 		}
 	}
-	if best == nil {
-		return steward{}, errors.New("no idle desktop CLI of a session beekeeper started runs to ask")
+	if len(picks) == 0 {
+		return steward{}, errors.New("no idle desktop CLI of a session beekeeper started (and not asked yet) runs to ask")
 	}
+	rank := func(s *claude.Session) int {
+		switch {
+		case s.HostID == target:
+			return 0
+		case !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(s.Party()) }):
+			return 1
+		}
+		return 2
+	}
+	best := slices.MinFunc(picks, func(x, y *claude.Session) int {
+		if c := cmp.Compare(rank(x), rank(y)); c != 0 {
+			return c
+		}
+		return x.LastActive.Compare(y.LastActive)
+	})
 	return steward{host: best.HostID, sock: sock(best.PID)}, nil
 }
 
@@ -271,7 +318,7 @@ func fileExists(path string) bool {
 }
 
 // archiveWait bounds the wait for the desktop to record an archive.
-const archiveWait = time.Minute
+const archiveWait = 45 * time.Second
 
 // archiveDesktop archives the desktop session of agent ag, just taken off
 // the roster, through a steward: only a session beekeeper started, holding
@@ -298,10 +345,9 @@ func (a *app) archiveDesktop(ctx context.Context, st *state.State, ag state.Part
 	if s, ok := a.runningTurn(ag); ok {
 		return fmt.Sprintf("its desktop session stays: its CLI %d is in a turn", s.PID)
 	}
-	s, err := a.findSteward(host)
-	if err == nil {
-		err = askSteward(ctx, s, archiveRequest(s.sessionArg(host), ag.Name), func() bool { _, done := archived(); return done }, a.peerSend, archiveWait)
-	}
+	find := func(_ context.Context, tried []string) (steward, error) { return a.findSteward(host, tried) }
+	msg := func(session string) string { return archiveRequest(session, ag.Name) }
+	s, err := delegate(ctx, host, find, msg, func() bool { _, done := archived(); return done }, a.peerSend, archiveWait)
 	if err != nil {
 		return fmt.Sprintf("its desktop session %s stays: %v", host, err)
 	}

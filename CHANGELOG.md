@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A desktop steward that declines a title or archive request (a model, which can refuse a request from another session, and did: an idle roster agent whose brief forbade archiving) no longer fails the request: it goes to the next steward, three at most, and a finished worker off the roster is asked before an idle roster agent. The request says it comes from beekeeper on the operator's behalf and that archiving is reversible.
+
 ### Added
 
 - `watch` says CPU starvation before the machine saturates: `CPU PRESSURE: some avg10 N% over 40%` once two samples in a row read `/proc/pressure/cpu` over `watch.cpuPSIMax`, and `LOAD RISING: 1m N, 5m M (C cores)` once the 1-minute load passes one per core at more than twice the 5-minute load, each with an `ENDED` line. These and `HIGH LOAD` name the five commands that burned the most CPU since the last sample (`; top CPU over 30s: go 11.8 cores (8), …`). `snapshot` prints the cores, the HIGH LOAD threshold and CPU PSI some avg10. A load climb from 8 to 300 took two minutes, and the only line, `HIGH LOAD`, came when the desktop already lagged.
