@@ -468,8 +468,12 @@ func (w *watcher) poll(ctx context.Context) {
 		perHour, rated := w.swapRate(w.now, m.SwapUsedMiB)
 		line := swapLine(m, limit, headroom, perHour, rated)
 		w.check("swap", m.SwapUsedMiB > th.SwapMaxMiB, "%s", line)
+		// A running swapoff shrinks SwapTotal ahead of the pages it drains:
+		// swap reads full while it empties, and oomd is no nearer.
+		swapoff := machine.SwapoffRuns()
+		w.check("swapoff", swapoff, "SWAPOFF IN PROGRESS: %s", line)
 		if m.SwapTotalMiB > 0 {
-			w.oomLine(ctx, w.check("oomd", w.oomdImminent(headroom, perHour, rated), "OOMD IMMINENT: %s", line))
+			w.oomLine(ctx, w.check("oomd", !swapoff && w.oomdImminent(headroom, perHour, rated), "OOMD IMMINENT: %s", line))
 		}
 	}
 	if l, err := machine.ReadLoad(); err == nil {

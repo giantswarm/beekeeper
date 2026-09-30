@@ -324,3 +324,35 @@ func TestShowBrieflyHeldByFocus(t *testing.T) {
 		t.Errorf("showBriefly = %v, want errDesktopInUse", err)
 	}
 }
+
+// A reopen right after its start's import waits for the start's switch back
+// before it records where to return to.
+func TestAwaitFocusOff(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "main.log")
+	write := func(id string) {
+		f, err := os.OpenFile(log, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close() //nolint:errcheck // test
+		if _, err := fmt.Fprintf(f, "x [CCD] LocalSessions.setFocusedSession: sessionId=%s\n", id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("local_other")
+	if got := awaitFocusOff(t.Context(), log, "local_new", time.Second); got != "local_other" {
+		t.Errorf("window on another session: awaitFocusOff = %q", got)
+	}
+	write("local_new")
+	go func() { time.Sleep(300 * time.Millisecond); write("local_person") }()
+	if got := awaitFocusOff(t.Context(), log, "local_new", 3*time.Second); got != "local_person" {
+		t.Errorf("switch back landing: awaitFocusOff = %q, want local_person", got)
+	}
+	write("local_new")
+	if got := awaitFocusOff(t.Context(), log, "local_new", 300*time.Millisecond); got != "local_new" {
+		t.Errorf("window staying on host: awaitFocusOff = %q", got)
+	}
+	if got := awaitFocusOff(t.Context(), filepath.Join(t.TempDir(), "none.log"), "local_new", time.Second); got != "" {
+		t.Errorf("unreadable log: awaitFocusOff = %q", got)
+	}
+}
