@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `watch --notify` sends a memory notification (`oom-line`) only when a systemd-oomd swap kill is imminent: less than `watch.oomdHeadroomMinMiB` (1024) of swap growth left before oomd's `SwapUsedLimit`, read from `oomd.conf` and its drop-ins, or the trigger reached within `watch.oomdWithin` (30m) at the last hour's growth rate. Low RAM, swap over `watch.swapMaxMiB`, memory pressure and the desktop scope's anonymous memory stay watch lines for the supervisor. Cold pages parked in swap on a quiet machine notified the person every 30 minutes.
+- The watch's `SWAP` line says the distance to systemd-oomd's trigger and the growth rate over the last hour, e.g. `SWAP: 10627 of 16383 MiB used, 4117 MiB before systemd-oomd's 90 % trigger, +250 MiB/h over the last hour, trigger in 16h28m0s`. `beekeeper free` reads the trigger from `oomd.conf` too instead of assuming 90 %.
+
 - `watch` holds back other teams' and team-less `notify` alerts by default once `alerts.team` is set (`{severity: notify}` in the default `alerts.quiet`): logged as `watch.quiet`, while every page, the team's alerts and an installation in play still wake.
 
 ### Fixed

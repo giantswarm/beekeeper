@@ -10,6 +10,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/notify"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -191,20 +192,56 @@ func TestLiftedUpgradeHoldShowsWhoLiftedIt(t *testing.T) {
 	}
 }
 
-// A poll with no breach of the OOM line notifies nothing: the critical
-// notification says what crossed the line, and only while it does.
-func TestOOMLineNotifiesOnlyABreach(t *testing.T) {
+// Only an imminent systemd-oomd kill notifies: swap far from the trigger
+// and growing slowly is a watch line, never a desktop notification.
+func TestOOMLineNotifiesOnlyAnImminentOOMDKill(t *testing.T) {
 	w, d, _ := notifyingWatch(t, t.TempDir(), false)
 	ctx := context.Background()
-	for range 3 {
-		w.oomLine(ctx, w.check("avail", false, "LOW RAM: %d MiB available, swap %d MiB", 50000, 3000))
-		w.oomLine(ctx, w.check("scopeanon", false, "DESKTOP SCOPE anon: %d MiB", 5000))
+	m := machine.Mem{SwapTotalMiB: 16383, SwapUsedMiB: 10600}
+	headroom := m.OOMDHeadroomMiB(90)
+	start := relayNow
+	for i := range 3 {
+		perHour, rated := w.swapRate(start.Add(time.Duration(i)*10*time.Minute), m.SwapUsedMiB+i*40)
+		w.oomLine(ctx, w.check("oomd", w.oomdImminent(headroom, perHour, rated), "OOMD IMMINENT: %s", swapLine(m, 90, headroom, perHour, rated)))
 	}
 	if len(d.sent) != 0 {
-		t.Fatalf("no breach notified: %+v", d.sent)
+		t.Fatalf("4 GiB before the trigger at +240 MiB/h notified: %+v", d.sent)
 	}
-	w.oomLine(ctx, w.check("avail", true, "LOW RAM: %d MiB available, swap %d MiB", 9000, 3000))
-	if len(d.sent) != 1 || !strings.HasPrefix(d.sent[0].Body, "LOW RAM: 9000 MiB available") || d.sent[0].Urgency != notify.Critical {
-		t.Fatalf("a breach: %+v", d.sent)
+	perHour, rated := w.swapRate(start.Add(30*time.Minute), m.SwapUsedMiB+3000)
+	w.oomLine(ctx, w.check("oomd", w.oomdImminent(headroom-3000, perHour, rated), "OOMD IMMINENT: %s", swapLine(m, 90, headroom-3000, perHour, rated)))
+	if len(d.sent) != 1 || !strings.HasPrefix(d.sent[0].Body, "OOMD IMMINENT: SWAP:") || d.sent[0].Urgency != notify.Critical {
+		t.Fatalf("a burst of 3 GiB in half an hour: %+v", d.sent)
+	}
+	if w.oomdImminent(1500, 0, false) || !w.oomdImminent(900, 0, false) {
+		t.Error("the headroom floor is watch.oomdHeadroomMinMiB")
+	}
+}
+
+func TestSwapLineSaysDistanceAndRate(t *testing.T) {
+	m := machine.Mem{SwapTotalMiB: 16383, SwapUsedMiB: 10627}
+	if got, want := swapLine(m, 90, 4117, 0, false), "SWAP: 10627 of 16383 MiB used, 4117 MiB before systemd-oomd's 90 % trigger, growth not yet measured"; got != want {
+		t.Errorf("unrated:\n got %q\nwant %q", got, want)
+	}
+	if got, want := swapLine(m, 90, 4117, 250, true), "SWAP: 10627 of 16383 MiB used, 4117 MiB before systemd-oomd's 90 % trigger, +250 MiB/h over the last hour, trigger in 16h28m0s"; got != want {
+		t.Errorf("growing:\n got %q\nwant %q", got, want)
+	}
+	if got := swapLine(m, 90, 4117, -80, true); !strings.HasSuffix(got, ", -80 MiB/h over the last hour") {
+		t.Errorf("shrinking: %q", got)
+	}
+}
+
+func TestSwapRateOverTheLastHour(t *testing.T) {
+	w := &watcher{}
+	if _, ok := w.swapRate(relayNow, 1000); ok {
+		t.Fatal("one reading has no rate")
+	}
+	if _, ok := w.swapRate(relayNow.Add(time.Minute), 1010); ok {
+		t.Fatal("a minute is too short a span")
+	}
+	if r, ok := w.swapRate(relayNow.Add(30*time.Minute), 1500); !ok || r != 1000 {
+		t.Fatalf("500 MiB in 30 minutes: %d %v", r, ok)
+	}
+	if r, _ := w.swapRate(relayNow.Add(150*time.Minute), 1500); r != 0 || len(w.swapSamples) != 1 {
+		t.Fatalf("readings older than an hour are dropped: %d %d", r, len(w.swapSamples))
 	}
 }

@@ -24,8 +24,9 @@ func (r *Run) state() {
 	r.say("  RAM available %6d MiB of %d MiB   swap used %5d MiB of %d MiB   tmpfs /tmp %5d MiB   shmem %5d MiB",
 		m.AvailableMiB, m.TotalMiB, m.SwapUsedMiB, m.SwapTotalMiB, tmp.UsedMiB, m.ShmemMiB)
 	if m.SwapTotalMiB > 0 {
-		r.say("  systemd-oomd swap trigger (90 %%): %d MiB of swap growth left before it kills the largest scope",
-			m.SwapTotalMiB*90/100-m.SwapUsedMiB)
+		limit := machine.OOMDSwapLimit()
+		r.say("  systemd-oomd swap trigger (%d %%): %d MiB of swap growth left before it kills the largest scope",
+			limit, m.OOMDHeadroomMiB(limit))
 	}
 	path := r.scope()
 	if path == "" {

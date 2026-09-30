@@ -326,15 +326,23 @@ type Watch struct {
 	// Repeat paces how often a lasting condition is handed to the
 	// notifier (which sends it again after notify.repeat); the watch
 	// prints it once when it starts and once when it ends.
-	Repeat          Duration `yaml:"repeat"`
-	BudgetEvery     Duration `yaml:"budgetEvery"`
-	AvailMinMiB     int      `yaml:"availMinMiB"`
-	SwapMaxMiB      int      `yaml:"swapMaxMiB"`
-	ScopeAnonMaxMiB int      `yaml:"scopeAnonMaxMiB"`
-	LoadMax         float64  `yaml:"loadMax"`
-	PSIMax          float64  `yaml:"psiMax"`
-	TmpMaxMiB       int      `yaml:"tmpMaxMiB"`
-	DiskMinMiB      int      `yaml:"diskMinMiB"`
+	Repeat      Duration `yaml:"repeat"`
+	BudgetEvery Duration `yaml:"budgetEvery"`
+	AvailMinMiB int      `yaml:"availMinMiB"`
+	SwapMaxMiB  int      `yaml:"swapMaxMiB"`
+	// OOMDHeadroomMinMiB and OOMDWithin decide when systemd-oomd's swap
+	// kill is imminent, the one memory condition that notifies a person
+	// (oom-line): less swap growth left before its SwapUsedLimit than
+	// OOMDHeadroomMinMiB, or the trigger reached within OOMDWithin at the
+	// last hour's growth rate. Every other memory threshold is a watch
+	// line for the supervisor only.
+	OOMDHeadroomMinMiB int      `yaml:"oomdHeadroomMinMiB"`
+	OOMDWithin         Duration `yaml:"oomdWithin"`
+	ScopeAnonMaxMiB    int      `yaml:"scopeAnonMaxMiB"`
+	LoadMax            float64  `yaml:"loadMax"`
+	PSIMax             float64  `yaml:"psiMax"`
+	TmpMaxMiB          int      `yaml:"tmpMaxMiB"`
+	DiskMinMiB         int      `yaml:"diskMinMiB"`
 	// QuietSessions are globs (* matches any run) of the names of
 	// short-lived sessions whose start, end and restart are no wake-up:
 	// the watch logs them (watch.quiet) instead of printing them. Setting
@@ -554,6 +562,8 @@ func (c *Config) defaults() error {
 	setDur(&w.BudgetEvery, 5*time.Minute)
 	setInt(&w.AvailMinMiB, 10240)
 	setInt(&w.SwapMaxMiB, 10000)
+	setInt(&w.OOMDHeadroomMinMiB, 1024)
+	setDur(&w.OOMDWithin, 30*time.Minute)
 	setInt(&w.ScopeAnonMaxMiB, 28000)
 	if w.LoadMax == 0 {
 		w.LoadMax = 45
