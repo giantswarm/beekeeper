@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	neturl "net/url"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,14 +23,17 @@ type OllamaModel struct {
 	GPUMiB    int       `json:"gpuMiB"`
 	ExpiresAt time.Time `json:"expiresAt"`
 	// Client is who sent the request that loaded it, as the ollama
-	// journal shows it: an address, with the kind node's name when one
-	// has it.
+	// journal shows it or, while that request still runs, as the one
+	// client connected to the server: an address, with the kind node's
+	// name when one has it.
 	Client string `json:"client,omitempty"`
 }
 
 // OllamaModels asks the ollama at url which models it holds (GET /api/ps)
-// and finds each one's loading client in the journal of unit. An empty url
-// means none is watched.
+// and finds each one's loading client in the journal of unit. A load whose
+// request still runs is not in the journal yet: its client is the one peer
+// connected to url's port, and none when several are. An empty url means
+// none is watched.
 func OllamaModels(ctx context.Context, url, unit string) ([]OllamaModel, error) {
 	if url == "" {
 		return nil, nil
@@ -58,6 +64,7 @@ func OllamaModels(ctx context.Context, url, unit string) ([]OllamaModel, error) 
 	}
 	loaders := ParseOllamaLoads(string(journal))
 	names := kindNodeIPs(ctx)
+	running := sync.OnceValue(func() string { return onlyPeer(url) })
 	for i := range out {
 		var show struct {
 			Modelfile string `json:"modelfile"`
@@ -65,7 +72,11 @@ func OllamaModels(ctx context.Context, url, unit string) ([]OllamaModel, error) 
 		if ollamaCall(ctx, url, "/api/show", map[string]string{"model": out[i].Name}, &show) != nil {
 			continue
 		}
-		if ip := loaders[modelBlob(show.Modelfile)]; ip != "" {
+		ip, loaded := loaders[modelBlob(show.Modelfile)]
+		if loaded && ip == "" {
+			ip = running()
+		}
+		if ip != "" {
 			out[i].Client = ip
 			if n := names[ip]; n != "" {
 				out[i].Client = ip + " " + n
@@ -84,11 +95,32 @@ func UnloadOllama(ctx context.Context, url, model string) error {
 	return ollamaCall(ctx, url, "/api/generate", map[string]any{"model": model, "keep_alive": 0, "stream": false}, &out)
 }
 
+// onlyPeer is the address of the one client connected to the port of the
+// server at url, "" when none or several are.
+func onlyPeer(url string) string {
+	u, err := neturl.Parse(url)
+	if err != nil {
+		return ""
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil {
+		return ""
+	}
+	if peers := establishedPeers(port); len(peers) == 1 {
+		return peers[0]
+	}
+	return ""
+}
+
 // Node is the kind node's name in Client, "" when the client is none.
 func (m OllamaModel) Node() string {
 	_, name, _ := strings.Cut(m.Client, " ")
 	return name
 }
+
+// ollamaClient keeps no idle connection to the server: one would read as a
+// client of a running load, to this process and every other beekeeper.
+var ollamaClient = &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
 
 func ollamaCall(ctx context.Context, url, path string, body, into any) error {
 	method, payload := http.MethodGet, []byte(nil)
@@ -100,7 +132,7 @@ func ollamaCall(ctx context.Context, url, path string, body, into any) error {
 	if err != nil {
 		return err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := ollamaClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -114,7 +146,11 @@ func ollamaCall(ctx context.Context, url, path string, body, into any) error {
 var (
 	modelFrom = regexp.MustCompile(`(?m)^FROM (\S*/blobs/\S+)`)
 	loadLine  = regexp.MustCompile(`^time=(\S+) .*msg="starting llama-server" cmd=".*?--model (\S+)`)
-	ginLine   = regexp.MustCompile(`^\[GIN\] (\d{4}/\d\d/\d\d - \d\d:\d\d:\d\d) \|\s*\d+ \|\s*(\S+) \|\s*(\S+) \| POST `)
+	ginLine   = regexp.MustCompile(`^\[GIN\] (\d{4}/\d\d/\d\d - \d\d:\d\d:\d\d) \|\s*\d+ \|\s*(\S+) \|\s*(\S+) \| POST\s+"([^"?]*)`)
+	// loadPath is a request that runs a model and so can load one; the
+	// others (/api/show, which beekeeper itself sends, /api/pull, ...) never
+	// do.
+	loadPath = regexp.MustCompile(`^/(?:api/(?:generate|chat|embed|embeddings)|v1/.+)$`)
 )
 
 // modelBlob is the weights blob a model's modelfile starts FROM.
@@ -126,10 +162,11 @@ func modelBlob(modelfile string) string {
 }
 
 // ParseOllamaLoads maps each model blob to the address of the client whose
-// request loaded it last: the first POST logged after the load that started
-// before it (gin logs a request when it ends, with its latency). A blob
-// whose last load's request is still running has no client yet: an earlier
-// load's client is not its.
+// request loaded it last: the first model request logged after the load
+// that started before it (gin logs a request when it ends, with its
+// latency). A blob
+// whose last load's request is still running maps to "": an earlier load's
+// client is not its.
 func ParseOllamaLoads(journal string) map[string]string {
 	out := map[string]string{}
 	type load struct {
@@ -141,17 +178,18 @@ func ParseOllamaLoads(journal string) map[string]string {
 		if m := loadLine.FindStringSubmatch(line); m != nil {
 			if at, err := time.Parse(time.RFC3339Nano, m[1]); err == nil {
 				open = append(open, load{blob: m[2], at: at})
-				delete(out, m[2])
+				out[m[2]] = ""
 			}
 			continue
 		}
 		m := ginLine.FindStringSubmatch(line)
-		if m == nil || len(open) == 0 {
+		if m == nil || len(open) == 0 || !loadPath.MatchString(m[4]) {
 			continue
 		}
-		// gin prints the server's local time without a zone: the load
-		// lines carry it.
-		end, err := time.ParseInLocation("2006/01/02 - 15:04:05", m[1], open[0].at.Location())
+		// gin prints the server's local time without a zone: the latest
+		// load line carries the zone the server runs in now, which an
+		// older one may not (the machine's zone changed since).
+		end, err := time.ParseInLocation("2006/01/02 - 15:04:05", m[1], open[len(open)-1].at.Location())
 		if err != nil {
 			continue
 		}
