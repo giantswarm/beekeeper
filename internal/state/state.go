@@ -8,6 +8,7 @@ package state
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -593,8 +594,12 @@ func (s *Store) append(events []Event) error {
 	if len(events) == 0 {
 		return nil
 	}
-	f, err := os.OpenFile(s.path("events.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	f, err := os.OpenFile(s.path("events.jsonl"), os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
+		return err
+	}
+	if err := endLine(f); err != nil {
+		_ = f.Close()
 		return err
 	}
 	enc := json.NewEncoder(f)
@@ -606,6 +611,25 @@ func (s *Store) append(events []Event) error {
 		}
 	}
 	return f.Close()
+}
+
+// endLine writes a newline when the file does not end in one: an unclean
+// shutdown can leave an append's range as NUL bytes or a torn line, and the
+// next event must not share that line.
+func endLine(f *os.File) error {
+	fi, err := f.Stat()
+	if err != nil || fi.Size() == 0 {
+		return err
+	}
+	last := make([]byte, 1)
+	if _, err := f.ReadAt(last, fi.Size()-1); err != nil {
+		return err
+	}
+	if last[0] == '\n' {
+		return nil
+	}
+	_, err = f.Write([]byte{'\n'})
+	return err
 }
 
 // Events returns the last n events keep accepts, oldest first (all when
@@ -624,7 +648,10 @@ func (s *Store) Events(n int, keep func(Event) bool) ([]Event, error) {
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
 	for sc.Scan() {
 		var e Event
-		if json.Unmarshal(sc.Bytes(), &e) == nil && (keep == nil || keep(e)) {
+		// A write lost to an unclean shutdown leaves NUL bytes, and the next
+		// append lands right behind them on the same line.
+		line := bytes.TrimLeft(sc.Bytes(), "\x00")
+		if json.Unmarshal(line, &e) == nil && (keep == nil || keep(e)) {
 			out = append(out, e)
 		}
 	}
