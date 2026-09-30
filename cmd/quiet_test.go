@@ -24,7 +24,7 @@ const (
 func quietApp(t *testing.T, out *bytes.Buffer) *app {
 	t.Helper()
 	cfg := &config.Config{StateDir: t.TempDir(), LeaseDir: t.TempDir(),
-		Alerts: config.Alerts{Team: ourTeam, Collapse: 3, Quiet: config.DefaultQuiet},
+		Alerts: config.Alerts{Team: ourTeam, Collapse: 3, Quiet: config.DefaultQuietFor(ourTeam)},
 		Watch:  config.Watch{QuietSessions: config.DefaultQuietSessions}}
 	store, err := state.Open(cfg.StateDir)
 	if err != nil {

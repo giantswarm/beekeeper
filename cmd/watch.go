@@ -110,7 +110,8 @@ view.
 
 The quiet rules keep what is noise for the supervisor out of the output:
 other teams' alerts matching alerts.quiet (by default their e2e test
-clusters, t-*), an alert back after a reading that missed it with its old
+clusters, t-*, and, once alerts.team is set, every other team's and
+team-less notify alert), an alert back after a reading that missed it with its old
 start, and the start, end and restart of the short-lived sessions in
 watch.quietSessions (by default beekeeper's tests, "test: *"). A rule
 never holds back an alert of alerts.team, one on an installation in play
