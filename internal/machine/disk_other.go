@@ -9,6 +9,8 @@ type Disk struct {
 	Path    string `json:"path"`
 	UsedMiB int    `json:"usedMiB"`
 	FreeMiB int    `json:"freeMiB"`
+	// TotalMiB is the filesystem's size.
+	TotalMiB int `json:"totalMiB"`
 }
 
 // ReadDisk is not implemented off Unix.

@@ -16,7 +16,7 @@ func (a *app) readUpgrades(ctx context.Context, st *state.State, now time.Time) 
 	contexts := alerts.Reader{Kubectl: al.Kubectl}.Contexts(ctx)
 	targets := make([]upgrade.Target, 0, len(al.Installations))
 	for _, in := range al.Installations {
-		targets = append(targets, upgrade.Target{Name: in.Name, Context: alerts.ResolveContext(in.Name, in.Context, contexts)})
+		targets = append(targets, upgrade.Target{Name: in.Name, Context: alerts.ResolveContext(in.Name, in.Context, a.cfg.Kube.Context, contexts)})
 	}
 	r := upgrade.Reader{Kubectl: al.Kubectl, Timeout: al.Timeout.Duration}
 	return r.Read(ctx, targets, now, upgrade.HeldClusters(st, now))

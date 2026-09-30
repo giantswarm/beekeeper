@@ -17,8 +17,8 @@ const (
 	instB = "beta"
 	instC = "gamma"
 	instD = "delta"
-	ctxA  = teleportPrefix + instA
-	ctxB  = teleportPrefix + instB
+	ctxA  = "login.example.com-" + instA
+	ctxB  = "login.example.com-" + instB
 	ctxD  = "admin@" + instD
 )
 
@@ -26,6 +26,9 @@ var (
 	now   = time.Date(2026, 9, 24, 18, 50, 0, 0, time.UTC)
 	rules = Rules{Ignore: []string{"Heartbeat", "InhibitionOutsideWorkingHours", "Watchdog"}, Team: ourTeam, Collapse: 3}
 )
+
+// template is the tests' kube.contextTemplate.
+func template(name string) string { return "login.example.com-" + name }
 
 // alert is an alert shaped like the Alertmanager API's, labels as the
 // fleet's rules set them; kv are extra label pairs.
@@ -288,7 +291,7 @@ func TestTargetsConfiguredThenLeased(t *testing.T) {
 	got := Targets(
 		[]Target{{Name: instA}, {Name: instC}, {Name: instD, Context: "other"}, {Name: instA}},
 		map[string]string{instB: `"one"`, "lab-1": `"two"`, "browser": `"three"`, instA: `"four"`},
-		contexts)
+		template, contexts)
 	want := []Target{
 		{Name: instA, Context: ctxA, Why: `configured, leased by "four"`},
 		{Name: instC, Why: "configured"},
@@ -304,11 +307,15 @@ func TestResolveContext(t *testing.T) {
 	contexts := []string{ctxA, ctxD, instB, ctxB}
 	for name, want := range map[string]string{instA: ctxA, instD: ctxD,
 		instB: ctxB, instC: ""} {
-		if got := ResolveContext(name, "", contexts); got != want {
+		if got := ResolveContext(name, "", template, contexts); got != want {
 			t.Errorf("%s: %q, want %q", name, got, want)
 		}
 	}
-	if got := ResolveContext(instA, "explicit", contexts); got != "explicit" {
+	if got := ResolveContext(instA, "explicit", template, contexts); got != "explicit" {
 		t.Errorf("explicit: %q", got)
+	}
+	none := func(string) string { return "" }
+	if got := ResolveContext(instA, "", none, contexts); got != "" {
+		t.Errorf("without a template: %q", got)
 	}
 }

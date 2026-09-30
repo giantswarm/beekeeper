@@ -88,9 +88,11 @@ type Machine struct {
 	Clusters []machine.Cluster
 	// ClustersErr is set when docker cannot be asked.
 	ClustersErr error
-	SlotDir     string
-	Slots       int
-	Now         time.Time
+	// MaxLabs is how many kind clusters the machine holds.
+	MaxLabs int
+	SlotDir string
+	Slots   int
+	Now     time.Time
 }
 
 // Run is one invocation.

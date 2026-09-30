@@ -1,6 +1,7 @@
 package guard
 
 import (
+	"cmp"
 	"os"
 	"path"
 	"path/filepath"
@@ -15,12 +16,8 @@ import (
 // The machine kubeconfig keeps no current context, so that a command
 // without an explicit target fails instead of reaching production; a
 // command that would set one is refused. Reads stay allowed everywhere.
-// False positives beat a production write.
-
-// Production is the installation whose clusters agents never write to: a
-// context or cluster name with it as a component (teleport.giantswarm.io-
-// gazelle, gazelle-operations).
-const Production = "gazelle"
+// False positives beat a production write. Without a production
+// installation (Hook.Production) it is off, op item get's refusal aside.
 
 const (
 	envKubeconfig  = "KUBECONFIG"
@@ -88,6 +85,14 @@ type kubeEnv struct {
 	kubeconfig, helmContext, wrapped string
 }
 
+// KubeGuardOff says why the kube guard is off, "" while it is on.
+func KubeGuardOff(production string) string {
+	if production != "" {
+		return ""
+	}
+	return "kube guard off: kube.production is unset"
+}
+
 // kubeRefusal returns why the hook refuses cmd, "" when it passes.
 func (h Hook) kubeRefusal(cmd string) string {
 	return h.scanKube(cmd, kubeEnv{kubeconfig: h.Kubeconfig}, 0)
@@ -112,7 +117,7 @@ func (h Hook) scanKube(cmd string, env kubeEnv, depth int) string {
 		}
 	}
 	for _, m := range contextFlag.FindAllStringSubmatch(sc.plain, -1) {
-		if isProduction(m[1]) {
+		if isProduction(m[1], h.Production) {
 			env.wrapped = m[1]
 		}
 	}
@@ -200,6 +205,9 @@ func (h Hook) simpleKube(words []string, env *kubeEnv, aliases map[string]string
 			if plugin != "" {
 				args = append([]string{plugin}, args...)
 			}
+		}
+		if h.Production == "" && name != "op" {
+			continue
 		}
 		var r string
 		switch name {
@@ -334,7 +342,7 @@ func (h Hook) tshRefusal(args []string, env kubeEnv, at string) string {
 	}
 	return "Refused: `" + short(at) + "` sets the current context of the machine kubeconfig. " + noDefault +
 		" The machine kubeconfig already holds every installation's context: pass it on each command " +
-		"(kubectl --context teleport.giantswarm.io-<installation>). For a context it lacks, log in into a kubeconfig of your own: " +
+		"(kubectl --context " + cmp.Or(h.ContextHint, "<context>") + "). For a context it lacks, log in into a kubeconfig of your own: " +
 		"KUBECONFIG=<file> tsh kube login <cluster>."
 }
 
@@ -403,7 +411,7 @@ func (h Hook) writeReason(at, context, cluster, kubeconfig string) string {
 	}
 	target := ""
 	for _, n := range []string{context, cluster, kc.clusters[context]} {
-		if isProduction(n) {
+		if isProduction(n, h.Production) {
 			target = n
 			break
 		}
@@ -411,17 +419,20 @@ func (h Hook) writeReason(at, context, cluster, kubeconfig string) string {
 	if target == "" {
 		return ""
 	}
-	return "Refused: `" + short(at) + "` writes to " + target + ", a production cluster (" + Production + "). " +
+	return "Refused: `" + short(at) + "` writes to " + target + ", a production cluster (" + h.Production + "). " +
 		"Agents never change production directly: changes go through a GitOps pull request and platformctl. " +
 		"Reads stay allowed (kubectl get, describe, logs, top, auth can-i; helm list, status, get; flux get), " +
 		"and so do writes to a lab with --context kind-<lab>."
 }
 
-// isProduction reports whether a context or cluster name has Production as
+// isProduction reports whether a context or cluster name has production as
 // one of its components.
-func isProduction(name string) bool {
+func isProduction(name, production string) bool {
+	if production == "" {
+		return false
+	}
 	for _, p := range nameParts.Split(name, -1) {
-		if p == Production {
+		if p == production {
 			return true
 		}
 	}

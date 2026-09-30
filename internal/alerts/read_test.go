@@ -55,7 +55,7 @@ func newFake(t *testing.T) *fake {
 	if err := os.WriteFile(kubectl, []byte(fakeKubectl), 0o700); err != nil { //nolint:gosec // an executable test double
 		t.Fatal(err)
 	}
-	f := &fake{t: t, reader: Reader{Kubectl: kubectl, Timeout: 20 * time.Second}, pids: filepath.Join(dir, "pids")}
+	f := &fake{t: t, reader: Reader{Kubectl: kubectl, Timeout: 20 * time.Second, Tenant: "tenant-a"}, pids: filepath.Join(dir, "pids")}
 	t.Setenv("FAKE_PIDS", f.pids)
 	t.Setenv("FAKE_MIMIR", "")
 	t.Setenv("FAKE_PLAIN", "")
@@ -125,10 +125,22 @@ func TestReadMimirWithTenant(t *testing.T) {
 	if !got[0].OK || got[0].Alerts[0].Fingerprint != "b6dd" {
 		t.Fatalf("answer = %+v", got[0])
 	}
-	if want := "/alertmanager/api/v2/alerts?" + query + " giantswarm"; len(f.seen) != 1 || f.seen[0] != want {
+	if want := "/alertmanager/api/v2/alerts?" + query + " tenant-a"; len(f.seen) != 1 || f.seen[0] != want {
 		t.Errorf("requests = %q, want %q", f.seen, want)
 	}
 	f.noForwardLeft()
+}
+
+// Without a tenant, Mimir's Alertmanager is not asked: its anonymous
+// tenant would answer an empty set.
+func TestReadPlainAlertmanagerWithoutTenant(t *testing.T) {
+	f := newFake(t)
+	f.reader.Tenant, f.reader.Timeout = "", time.Second
+	f.serve("FAKE_MIMIR")
+	got := f.reader.Read(context.Background(), []Target{alpha})
+	if got[0].OK || len(f.seen) != 0 {
+		t.Fatalf("Mimir read without a tenant: %+v, requests %q", got[0], f.seen)
+	}
 }
 
 func TestReadPlainAlertmanagerWhenNoMimir(t *testing.T) {

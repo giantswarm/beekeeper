@@ -290,8 +290,7 @@ func (a *app) guideHandoverCmd() *cobra.Command {
 		Short: "Everything the next guide needs: the guide, its queue and an open relay",
 		Long: `Print the guide's hand-over: the guide and its context in tokens, an open
 relay and the queue. --prompt prints the successor's session prompt instead:
-the configured instructions (guide.skill, default guide, or
-guide.instructions), the queue, an open relay and the commands that read
+the configured instructions (guide.skill or guide.instructions), the queue, an open relay and the commands that read
 the live values; no standing rule and no live value. A caller that has read
 the hand-over before gets only what changed; --full prints everything.`,
 		Args: cobra.NoArgs,

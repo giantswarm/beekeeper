@@ -9,6 +9,8 @@ type Disk struct {
 	Path    string `json:"path"`
 	UsedMiB int    `json:"usedMiB"`
 	FreeMiB int    `json:"freeMiB"`
+	// TotalMiB is the filesystem's size.
+	TotalMiB int `json:"totalMiB"`
 }
 
 // ReadDisk returns the usage of the filesystem path lives on; free is what an
@@ -20,8 +22,9 @@ func ReadDisk(path string) (Disk, error) {
 	}
 	bs := uint64(s.Bsize) //nolint:gosec // block sizes are positive
 	return Disk{
-		Path:    path,
-		UsedMiB: int((s.Blocks - s.Bfree) * bs >> 20),
-		FreeMiB: int(s.Bavail * bs >> 20),
+		Path:     path,
+		UsedMiB:  int((s.Blocks - s.Bfree) * bs >> 20),
+		FreeMiB:  int(s.Bavail * bs >> 20),
+		TotalMiB: int(s.Blocks * bs >> 20),
 	}, nil
 }

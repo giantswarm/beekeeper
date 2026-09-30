@@ -235,7 +235,7 @@ func (a *app) alertRules() alerts.Rules {
 }
 
 func (a *app) alertReader() alerts.Reader {
-	return alerts.Reader{Kubectl: a.cfg.Alerts.Kubectl, Timeout: a.cfg.Alerts.Timeout.Duration}
+	return alerts.Reader{Kubectl: a.cfg.Alerts.Kubectl, Timeout: a.cfg.Alerts.Timeout.Duration, Tenant: a.cfg.Alerts.Tenant}
 }
 
 // alertTargets are the configured installations and the leased ones.
@@ -250,7 +250,7 @@ func (a *app) alertTargets(ctx context.Context) []alerts.Target {
 			leased[h.Env] = fmt.Sprintf("%q", cmp.Or(h.Name, h.Holder))
 		}
 	}
-	return alerts.Targets(configured, leased, a.alertReader().Contexts(ctx))
+	return alerts.Targets(configured, leased, a.cfg.Kube.Context, a.alertReader().Contexts(ctx))
 }
 
 // alertCycle reads every installation once, returns the lines of what

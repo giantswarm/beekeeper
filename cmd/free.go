@@ -166,6 +166,7 @@ func (a *app) freeMachine() (free.Machine, error) {
 		Titles:      func() map[string]string { return claude.Titles(a.cfg) },
 		Clusters:    clusters,
 		ClustersErr: cerr,
+		MaxLabs:     a.cfg.KindClusters(ramMiB()),
 		SlotDir:     a.cfg.Memcap.SlotDir,
 		Slots:       a.cfg.Memcap.Slots,
 		Now:         a.now,

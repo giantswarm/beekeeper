@@ -1,6 +1,7 @@
 package config
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -24,8 +25,12 @@ func TestLoadDefaults(t *testing.T) {
 	if len(c.Notify.Kinds) != 6 || c.Notify.Policy().Quiet != nil {
 		t.Errorf("notify defaults = %+v", c.Notify)
 	}
-	if !slices.Equal(c.Alerts.Quiet, DefaultQuiet) {
-		t.Errorf("quiet without a team = %+v, want only the test clusters", c.Alerts.Quiet)
+	if len(c.Alerts.Quiet) != 0 || !slices.Equal(c.Alerts.Ignore, DefaultIgnore) || c.Alerts.Tenant != "" {
+		t.Errorf("alerts without a team = %+v, want no quiet rule, Watchdog ignored, no tenant", c.Alerts)
+	}
+	if c.Kube != (Kube{}) || c.Kube.Context("alpha") != "" || len(c.Lanes) != 0 || len(c.Merge.DevctlOwners) != 0 ||
+		c.Guide.Skill != "" || c.Guide.Person != "" || c.Supervisor.Skill != "" || c.Ollama.URL != "" || c.Lemonade.URL != "" {
+		t.Errorf("organisation and desk defaults are set: %+v", c)
 	}
 	if !c.IsLeasable(Browser) || c.IsLeasable("kind-1") {
 		t.Error("only the browser is leasable without resources")
@@ -67,11 +72,11 @@ supervisor: {relayAt: 1.5M}
 		al.Installations[1] != (Installation{Name: "beta", Context: "admin@beta", Floor: "warning"}) {
 		t.Errorf("installations = %+v", al.Installations)
 	}
-	if len(al.Ignore) != 3 || al.Collapse != 3 || al.Every.Duration != 5*time.Minute || al.Timeout.Duration != time.Minute ||
+	if len(al.Ignore) != 1 || al.Collapse != 3 || al.Every.Duration != 5*time.Minute || al.Timeout.Duration != time.Minute ||
 		al.Flap.Changes != 3 || al.Flap.Window.Duration != time.Hour {
 		t.Errorf("alerts defaults = %+v", al)
 	}
-	if want := append(slices.Clone(DefaultQuiet), OtherTeamsNotify); !slices.Equal(al.Quiet, want) ||
+	if want := []alerts.Quiet{OtherTeamsNotify}; !slices.Equal(al.Quiet, want) ||
 		!slices.Equal(c.Watch.QuietSessions, DefaultQuietSessions) {
 		t.Errorf("quiet defaults = %+v, %q", al.Quiet, c.Watch.QuietSessions)
 	}
@@ -226,14 +231,18 @@ func TestLoadReporter(t *testing.T) {
 	}
 }
 
-// devctl serves the giantswarm organisation by default; any other owner's
-// repository takes the plain squash merge.
+// devctl serves the owners of merge.devctlOwners, none by default; any
+// other owner's repository takes the plain squash merge.
 func TestDevctlServes(t *testing.T) {
 	var c Config
 	if err := c.defaults(); err != nil {
 		t.Fatal(err)
 	}
-	for repo, want := range map[string]bool{"giantswarm/beekeeper": true, "GiantSwarm/x": true, "teemow/klaus-lab": false} {
+	if c.Merge.DevctlServes("example/x") {
+		t.Error("devctl serves an owner by default")
+	}
+	c.Merge.DevctlOwners = []string{"example"}
+	for repo, want := range map[string]bool{"example/beekeeper": true, "Example/x": true, "someone/notebook": false} {
 		if got := c.Merge.DevctlServes(repo); got != want {
 			t.Errorf("%s: %v, want %v", repo, got, want)
 		}
@@ -242,7 +251,7 @@ func TestDevctlServes(t *testing.T) {
 
 func TestModelServerLease(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "c.yaml")
-	if err := os.WriteFile(path, []byte("resources: [agentlab-1]\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("resources: [agentlab-1]\nollama: {url: http://localhost:11434}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	c, err := Load(path)
@@ -258,7 +267,7 @@ func TestModelServerLease(t *testing.T) {
 	if c.Lemonade.URL != "" {
 		t.Errorf("a machine without Lemonade configured watches one at %s", c.Lemonade.URL)
 	}
-	for _, bad := range []string{"resources: [model-server]\n", "ollama: {budgetGiB: 30}\n"} {
+	for _, bad := range []string{"resources: [model-server]\n", "ollama: {url: http://localhost:11434, budgetGiB: 30}\n"} {
 		if err := os.WriteFile(path, []byte(bad), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -266,4 +275,63 @@ func TestModelServerLease(t *testing.T) {
 			t.Errorf("%q loads", bad)
 		}
 	}
+}
+
+// The example configuration loads and sets what earlier releases compiled
+// in: the kube guard on, absolute thresholds, the rewrite shell, two kind
+// labs, the role skills, the ignored and quiet alerts, devctl's owner.
+func TestExampleConfig(t *testing.T) {
+	c, err := Load(filepath.Join("..", "..", "docs", "examples", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Kube.Production != "production" || c.Kube.Context("staging") != "login.example.com-staging" ||
+		c.Shell != "zsh" || c.KindClusters(1<<30) != 2 || c.MemcapMax(1<<30) != "12G" {
+		t.Errorf("kube %+v, shell %q, kind %d, memcap %s", c.Kube, c.Shell, c.KindClusters(1<<30), c.MemcapMax(1<<30))
+	}
+	w := c.Watch
+	for got, want := range map[int]int{w.AvailMin(1): 10240, w.SwapMax(1): 10000, w.OOMDHeadroomMin(1): 1024,
+		w.ScopeAnonMax(1): 28000, w.GTTMax(1): 24576, w.TmpMax(1): 20000, w.DiskMin(1): 102400} {
+		if got != want {
+			t.Errorf("threshold %d, want %d", got, want)
+		}
+	}
+	if c.Supervisor.Skill != "supervise" || c.Guide.Skill != "guide" || c.Guide.Person != "Ada" ||
+		c.GitHub.ProbeRepo != "example-org/tools" || !c.Merge.DevctlServes("giantswarm/x") || c.Ollama.URL == "" ||
+		c.Alerts.Tenant != "example-org" || len(c.Alerts.Installations) != 3 || len(c.Lanes) != 2 {
+		t.Errorf("config = %+v", c)
+	}
+	if want := []alerts.Quiet{{Cluster: "t-*"}, OtherTeamsNotify}; !slices.Equal(c.Alerts.Quiet, want) ||
+		!slices.Contains(c.Alerts.Ignore, "InhibitionOutsideWorkingHours") {
+		t.Errorf("alerts quiet %+v, ignore %q", c.Alerts.Quiet, c.Alerts.Ignore)
+	}
+}
+
+// Unset, the memory thresholds are fractions of what the machine has, and
+// an unknown total never fires.
+func TestThresholdsDefaultToFractions(t *testing.T) {
+	var c Config
+	if err := c.defaults(); err != nil {
+		t.Fatal(err)
+	}
+	w := c.Watch
+	if w.AvailMin(100_000) != 12_000 || w.ScopeAnonMax(100_000) != 32_000 || w.SwapMax(10_000) != 6_000 ||
+		w.DiskMin(1_000_000) != 50_000 || w.TmpMax(0) != math.MaxInt || w.AvailMin(0) != 0 {
+		t.Errorf("fractions: avail %d scope %d swap %d disk %d", w.AvailMin(100_000), w.ScopeAnonMax(100_000), w.SwapMax(10_000), w.DiskMin(1_000_000))
+	}
+	if c.KindClusters(88_000) != 2 || c.KindClusters(16_000) != 1 || c.MemcapMax(100_000) != "14000M" || c.MemcapMax(0) != "infinity" {
+		t.Errorf("kind %d/%d, memcap %s", c.KindClusters(88_000), c.KindClusters(16_000), c.MemcapMax(100_000))
+	}
+	if _, err := Load(writeTemp(t, "kube: {contextTemplate: login.example.com}\n")); err == nil {
+		t.Error("a context template without {installation} loads")
+	}
+}
+
+func writeTemp(t *testing.T, raw string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "c.yaml")
+	if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
 }

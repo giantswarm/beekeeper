@@ -58,7 +58,7 @@ the budget work on any system.
 | `beekeeper agents wake <agent> <message> [--permission-mode m]` | Messages a registered agent without Claude Desktop's `local_` route and its cap (a session's desktop sends pause after ten since its person last typed in it). A running CLI gets the message by name; a session with none is resumed headless, `claude -p --resume <id>` with the message as its turn, in its directory, permission mode (a start's bypass, else the desktop record's) and recorded model, in a transient unit `beekeeper-wake-<id>-<wake>`, one per wake; its `ExecStopPost` runs `agents reopen <local_ id>`, which warms the desktop's CLI again. `agents` shows `live, first turn running` or `live, wake turn running` while a headless turn is the session's CLI. See [Waking a session](#waking-a-session). |
 | `beekeeper agents handover <agent> [--prompt] [--model m] [--dir d]` | Hands a registered agent over to a fresh session near its context limit, one line per step: asks it by peer message for `beekeeper agents note "<what is in flight, what is next>"` (waiting `agents.noteWait` at most), builds the follow-up's prompt, starts the follow-up as `agents start` does under the agent's name (it takes over the roster entry, the task and the session record), stops the old session's CLI and the processes under it by PID (a `claude --bg` session through `claude stop` first, so its daemon does not resume it), and logs `agents.handover`. `--prompt` prints the prompt only. `watch` says `HANDOVER DUE` once per agent session at `agents.relayAt`. See [Agents handed over near their context limit](#agents-handed-over-near-their-context-limit). |
 | `beekeeper agents note <text>` | The calling agent's hand-over note, logged as an `agents.note` event; the next `agents handover` puts the latest one into the follow-up's prompt. |
-| `beekeeper note add\|answer\|done` | Open items that outlive a session: a decision waiting on a person with its deadline and what happens if nobody answers (`note add --for Timo --due 22:55 --default "the alert stays as is" <text>`), a deadline. `watch` reports a note once when it is due. `note answer <id> <answer>` records the person's answer word for word and closes the note; the `note.answered` event carries it for the owning session, the supervisor and the guide's feed. |
+| `beekeeper note add\|answer\|done` | Open items that outlive a session: a decision waiting on a person with its deadline and what happens if nobody answers (`note add --for Ada --due 22:55 --default "the alert stays as is" <text>`), a deadline. `watch` reports a note once when it is due. `note answer <id> <answer>` records the person's answer word for word and closes the note; the `note.answered` event carries it for the owning session, the supervisor and the guide's feed. |
 | `beekeeper reporter final\|pause\|resume` | Pauses the scheduled reporter: `final 06:45` (or `45m`) starts one last report at that time, covering the time since the last one, then pauses; `pause` pauses now; `resume` starts the current slot's report at the standby watch's next poll and the schedule again. |
 | `beekeeper reporter check` | Checks a report on stdin as the reporter's post hook does (see [The scheduled status reporter](#the-scheduled-status-reporter)): one line per problem and exit 3, or `ok`. |
 | `beekeeper reporter` | The scheduled status reporter (see [The scheduled status reporter](#the-scheduled-status-reporter)): its schedule, when the next one starts, and the current or last run with its outcome. |
@@ -137,17 +137,18 @@ beekeeper lease release model-server
 
 ## Kube contexts, production writes and op item get
 
-The machine kubeconfig (`~/.kube/config`) keeps no current context: a `kubectl`, `helm` or `flux`
-command without an explicit target fails instead of reaching production. The PreToolUse hook keeps it
-that way and refuses, with the reason and the explicit form:
+With `kube.production` set, the machine kubeconfig (`~/.kube/config`) keeps no current context: a
+`kubectl`, `helm` or `flux` command without an explicit target fails instead of reaching production.
+The PreToolUse hook keeps it that way and refuses, with the reason and the explicit form (unset, the
+kube guard is off, `beekeeper snapshot` says so, and only the `op item get` refusal stays):
 
 - A context switch: `kubectl config use-context`, `kubectl config set current-context`, `kubectl ctx`,
   `kubectx <name>`, `kubectl gs login` without `--self-contained`; and `tsh kube login`, `tsh login
   --kube-cluster`, `kind create cluster` and `kind export kubeconfig` when they write the machine
   kubeconfig (a `KUBECONFIG` or `--kubeconfig` of the command's own passes). `beekeeper snapshot` names a
   current context the machine kubeconfig gained anyway.
-- A write to production, the clusters of the installation `gazelle` (a context or cluster name with
-  `gazelle` as a component, its workload clusters included): `kubectl`
+- A write to production, the clusters of the installation `kube.production` (a context or cluster
+  name with it as a component, its workload clusters included): `kubectl`
   apply/create/patch/edit/delete/replace/scale/annotate/label/cordon/uncordon/drain/taint/set/expose/
   autoscale/run/exec/cp/attach/debug, `rollout restart|undo|pause|resume`; `helm`
   install/upgrade/uninstall/rollback/test; `flux` suspend/resume/reconcile/create/delete/bootstrap/
@@ -265,7 +266,7 @@ HelmRelease of the merged repository's chart that ran the newest version when th
 now reports the released version, or follows a range that never admits it: the HelmRelease's
 OCIRepository ref (`semver`, a `tag` as that one version) or its chart template's `version`. A
 merge that cuts only a release candidate (`v4.105.0-rc.3`) under a stable range (`>=4.0.0 <5.0.0`)
-settles at once, and the gate says `gazelle does not follow 4.105.0-rc.3: flux-giantswarm/…
+settles at once, and the gate says `production does not follow 4.105.0-rc.3: flux-giantswarm/…
 follows semver >=4.0.0 <5.0.0`; a wait names the range. A release devctl could not confirm (exit
 9, a run killed by the tool timeout) settles for `merge.settle` instead. Versions compare as semver: a tag `v4.74.0`
 matches a chart version `4.74.0+971d12027db0`. The installation is read with `kubectl
@@ -758,109 +759,34 @@ Prometheus export: nothing on the lab machine scrapes one.
 ## Configuration
 
 `$XDG_CONFIG_HOME/beekeeper/config.yaml` (or `--config`, or `$BEEKEEPER_CONFIG`). Every field is
-optional. The defaults are the numbers proven on an 86 GiB workstation whose Claude Desktop
-scope is capped at 48 GiB, so tune `watch` to your machine.
+optional, and an empty configuration works: `watch`, `snapshot`, `free`, the hook and the
+coordination commands run with neutral defaults. Memory and disk thresholds default to fractions of
+what the machine has, and every organisation or desk choice is unset until configured.
+[`docs/examples/config.yaml`](docs/examples/config.yaml) is a complete desk's configuration, every
+key annotated with what it guards and its default.
 
-```yaml
-resources: [kind-1, kind-2, staging, production]   # leasable besides the browser
-grantTTL: 30m               # a grant expires this long after its resource is free
-github:
-  floor: 2500               # budget under which GitHub work stops
-  probeRepo: giantswarm/devctl
-overlaps:
-  ignore: [giantswarm/giantswarm, giantswarm/roadmap]   # trackers every session mentions
-  activeWithin: 1h
-watch:
-  interval: 30s
-  repeat: 10m
-  budgetEvery: 5m
-  availMinMiB: 10240        # machine MemAvailable
-  swapMaxMiB: 10000         # a watch line with the distance to systemd-oomd's trigger and the growth rate
-  oomdHeadroomMinMiB: 1024  # oom-line notifies under this much swap growth left before oomd's SwapUsedLimit
-  oomdWithin: 30m           # ... or when the last hour's growth rate reaches the trigger within this
-  scopeAnonMaxMiB: 28000    # desktop scope anonymous memory (cache is reclaimable, anon is not)
-  gttMaxMiB: 24576          # iGPU GTT (RAM the GPU driver pins, in no cgroup); above it LOW RAM and OOMD IMMINENT name it and the model servers' models
-  loadPerCoreMax: 1.5       # HIGH LOAD over this × cores (36 on 24 cores) of 1-minute load average; also strains the machine (below)
-  # loadMax: 45             # an absolute HIGH LOAD threshold instead; set, it replaces loadPerCoreMax
-  psiMax: 10
-  cpuPSIMax: 40             # CPU PRESSURE over this some avg10 (%) for two samples; also strains the machine: installation reads every 4 × their interval at nice 10 (READS SLOWED)
-  forkRateMax: 50           # PROCESS STORM this many forks/s over the usual rate (10 minutes' average) for two samples, with the fresh processes' commands and sessions; negative: off
-  stackMax: 3               # STACKED over this many copies of one command line from one place in the process tree, each over a minute old; negative: off
-  tmpMaxMiB: 20000
-  diskMinMiB: 102400
-  quietSessions: ["test: *"]   # the default; short-lived sessions whose start and end are logged, not said (* matches any run)
-ollama:                     # the host's ollama, whose loaded models sit in the iGPU's GTT
-  url: http://localhost:11434   # GET /api/ps; a machine without ollama shows none
-  unit: ollama              # the systemd unit whose journal names the client that loaded a model
-  budgetGiB: 12             # a model-server claim's budget without --gib
-  maxBudgetGiB: 24          # the most a claim may ask for
-  nameOnly: false           # true: the watch names a model no lease covers and leaves it loaded
-  labTests: [models-test]   # agentlab subcommands that run turns on the host's models
-lemonade:                   # the host's Lemonade Server, under the same lease and budgets; unset, none
-  url: http://localhost:13305   # GET /api/v1/health, POST /api/v1/unload
-lanes:                      # merges that roll the same components of an installation
-  - name: serving
-    installation: gazelle
-    context: teleport.giantswarm.io-gazelle   # default: the context named after the installation
-    repositories: [giantswarm/model-manager, giantswarm/cluster-manager]
-merge:
-  cap: 5                    # devctl processes on the machine when a merge starts
-  queueTTL: 15m             # a queued merge keeps its place this long after its run ended
-  seedTTL: 12h              # a place queued with lanes queue --for, from its seeding or last arrival; a failed run's, from the failure
-  settle: 5m                # a lane waits this long after a merge whose release is unknown
-  settleTimeout: 30m        # then refuses its next merge while the release has not rolled
-  budgetFresh: 1m           # the last budget reading is used this long, then read afresh
-  stallAfter: 5m            # a lane's first arrived merge waits this long behind absent places, then the lane is stalled
-  devctlOwners: [giantswarm] # the owners devctl pr merge serves; any other owner's repository takes the plain squash merge
-alerts:
-  installations:            # read always; a held lease whose name has a kube context is read too
-    - production            # context teleport.giantswarm.io-<name>, else <name>, else *@<name>
-    - {name: lab, context: admin@lab, floor: warning}   # floor: the lowest severity shown (none, info, warning, notify, critical, page)
-  ignore: [Heartbeat, InhibitionOutsideWorkingHours, Watchdog]   # the default; setting it replaces it
-  team: my-team             # marked in capitals and counted; its alerts that only InhibitionOutsideWorkingHours inhibits are read too
-  collapse: 3               # more changes of one alertname in one reading are one line
-  every: 5m
-  timeout: 1m               # per installation, port-forwards included, a failed attempt tried again within it; also bounds the upgrade reading
-  flap: {changes: 4, window: 1h}   # an alert's 4th change within 1h is one FLAPPING line, then quiet until stable for 1h
-  quiet:                    # the default; setting it replaces it. Other teams' alerts whose changes are logged, not said
-    - {cluster: "t-*"}      # fields installation, cluster, alertname, severity, globs; a page only by a rule naming a cluster
-    - {severity: notify}    # in the default once team is set: other teams' and team-less notify alerts
-supervisor:                 # what handover --prompt tells the successor supervisor
-  skill: supervise          # the skill it runs; or instructions: ~/supervisor.md, a file that opens the prompt
-  scope: The lab machine's sessions, kind labs and merge lanes.   # default: the resources, lanes and installations configured
-  relayAt: 400k             # watch says RELAY DUE once the supervisor's context reaches this, at a quiet moment
-  relayTTL: 15m             # a relay not taken by the successor's start expires
-  restartGrace: 30s         # a CLI back within this of first seen gone is a restart; past it, SUPERVISOR GONE (claims stay gated) and a fresh successor
-guide:                      # the guide's role: what guide handover --prompt tells its successor, and its relay
-  person: Timo              # guide queue and guide watch show only the notes for this person (any case, an older note's "[for Timo]" prefix too); unset, every --for note
-  skill: guide              # the default; or instructions: ~/guide.md
-  relayAt: 400k             # guide watch says GUIDE RELAY DUE once the guide's context reaches this
-  relayTTL: 15m
-  restartGrace: 1m
-agents:                     # the hand-over of registered agents
-  relayAt: 400k             # watch says HANDOVER DUE once an agent's context reaches this; default: supervisor.relayAt
-  noteWait: 3m              # agents handover waits this long for the agent's note
-reporter:                   # the scheduled status reporter the standby watch starts; off without every and brief
-  every: 1h                 # one report per interval, on its multiples (on the hour)
-  brief: ~/reporter.md      # what to report and where to post it
-  model: claude-sonnet-5    # default: Claude Code's
-  person: Ada               # who the report is for; default: guide.person
-  dir: ~/                   # the session's working directory; default: home
-  timeout: 20m              # a reporter that has not posted by then is stopped
-metrics:
-  models:                   # USD per million tokens and the context window; an entry replaces the default of its id
-    claude-opus-5-5: {input: 4, output: 20, cacheWrite5m: 5, cacheWrite1h: 8, cacheRead: 0.2, contextWindow: 1000000}
-    my-model: {input: 1, output: 5, cacheWrite5m: 1.25, cacheWrite1h: 2, cacheRead: 0.1, fast: 2, contextWindow: 200000}   # fast: fast mode's multiplier
-  runaway:                  # watch says RUNAWAY once per session and figure over these; negative: off
-    githubCallsPerHour: 1000
-    sameErrorRepeats: 10    # the same failing tool call in the last hour
-    contextFill: 0.9
-notify:                     # what watch --notify sends to the desktop
-  kinds: [due, oom-line, oom-kill, budget, stale-lease, no-supervisor]   # the default: all
-  quietHours: "22:00-07:00" # local time; holds everything but critical; default: none
-  urgency: {oom-kill: critical, due: normal}   # low, normal, critical; oom-line and oom-kill default to critical
-  repeat: 30m               # a lasting condition (oom-line, budget) notifies again after this
-```
+The organisation and desk keys, and their defaults:
+
+| Key | Default | What it sets |
+|---|---|---|
+| `kube.production` | unset: the kube guard is off | The installation whose clusters agents never write to, and the no-current-context rule of the machine kubeconfig |
+| `kube.contextTemplate` | unset: the context named after the installation, else `*@<name>` | An installation's kube context, `{installation}` its name (`login.example.com-{installation}`) |
+| `alerts.installations`, `lanes`, `resources` | none | The installations whose alerts are read, the merge lanes, the leasable environments |
+| `alerts.installations[].floor` | every severity | The lowest severity printed of an installation's alerts |
+| `alerts.ignore` | `[Watchdog]` | Alert names that never appear |
+| `alerts.quiet` | `[{severity: notify}]` once `alerts.team` is set, else none | Alerts whose changes are logged, not said |
+| `alerts.tenant` | unset: only kube-prometheus-stack's Alertmanager | The Mimir tenant (`X-Scope-OrgID`) whose Alertmanager is read first |
+| `github.probeRepo` | `giantswarm/beekeeper` | The repository whose conditional GET reads the budget |
+| `github.floor` | `2500` | The budget under which GitHub work stops |
+| `merge.devctlOwners` | none: every merge is the plain squash merge | The owners whose repositories `devctl pr merge` serves |
+| `supervisor.skill`, `guide.skill`, `guide.person` | unset | The roles' skills and the person the guide walks through their notes |
+| `shell` | `$SHELL`, else `sh` | The shell the hook runs a rewritten build, test or lint command in |
+| `maxKindClusters` | one per 40 GiB of RAM, at least one | The kind clusters the hook lets the machine run |
+| `memcap.max` | 14% of RAM | A `beekeeper run` command's MemoryMax |
+| `watch.availMinMiB`, `watch.scopeAnonMaxMiB`, `watch.gttMaxMiB` | 12%, 32%, 28% of RAM | LOW RAM, DESKTOP SCOPE, IGPU GTT |
+| `watch.swapMaxMiB`, `watch.oomdHeadroomMinMiB` | 60%, 6% of swap | SWAP, and the headroom under which oom-line notifies |
+| `watch.tmpMaxMiB`, `watch.diskMinMiB` | 45% of `/tmp`, 5% of `/` | TMPFS, LOW DISK |
+| `ollama.url`, `lemonade.url` | unset: no model server | The host's model servers, watched and guarded under the `model-server` lease |
 
 State lives in `$XDG_STATE_HOME/beekeeper/` (`state.json`, which an older beekeeper still running
 writes back with the fields it does not know, `events.jsonl`, whose `at` is RFC 3339 in UTC while

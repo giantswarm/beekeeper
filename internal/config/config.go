@@ -4,13 +4,18 @@
 //
 // The file is $XDG_CONFIG_HOME/beekeeper/config.yaml (or --config, or
 // $BEEKEEPER_CONFIG). Every field is optional; a missing file is the
-// defaults. The defaults are the numbers proven on an 86 GiB workstation
-// running a Claude Desktop scope capped at 48 GiB: tune them to the machine.
+// defaults. The defaults are neutral: memory thresholds are fractions of the
+// machine's RAM, swap or filesystem, and every organisation or desk choice
+// (the production installation, the installations, the lanes, the role
+// names) is unset until configured. docs/examples/config.yaml is a complete
+// desk's configuration.
 package config
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -43,6 +48,14 @@ type Config struct {
 	Resources []string `yaml:"resources"`
 	// GrantTTL is how long a grant stays claimable once its resource is free.
 	GrantTTL Duration `yaml:"grantTTL"`
+	// Shell is the shell the hook runs a rewritten command in (default:
+	// $SHELL, else sh).
+	Shell string `yaml:"shell"`
+	// MaxKindClusters is how many kind clusters the machine runs at most
+	// (default: one per 40 GiB of RAM, at least one).
+	MaxKindClusters int `yaml:"maxKindClusters"`
+
+	Kube Kube `yaml:"kube"`
 
 	GitHub   GitHub   `yaml:"github"`
 	Watch    Watch    `yaml:"watch"`
@@ -70,6 +83,28 @@ type Config struct {
 	// Reporter is the one-off status reporter session the standby watch
 	// starts once per interval.
 	Reporter Reporter `yaml:"reporter"`
+}
+
+// Kube configures the kube guard and how an installation's name becomes its
+// kube context.
+type Kube struct {
+	// Production is the installation whose clusters agents never write to:
+	// a context or cluster name with it as a component. Empty, the kube
+	// guard is off.
+	Production string `yaml:"production"`
+	// ContextTemplate is the kube context of an installation, with
+	// {installation} for its name ("login.example.com-{installation}");
+	// empty, an installation's context is its name or the one ending in
+	// @<name>.
+	ContextTemplate string `yaml:"contextTemplate"`
+}
+
+// Context is the templated context of installation, "" without a template.
+func (k Kube) Context(installation string) string {
+	if k.ContextTemplate == "" {
+		return ""
+	}
+	return strings.ReplaceAll(k.ContextTemplate, "{installation}", installation)
 }
 
 // Reporter configures the scheduled status reporter: once per Every the
@@ -183,9 +218,9 @@ type Merge struct {
 	// places whose merges are not in the gate before the lane is stalled.
 	StallAfter Duration `yaml:"stallAfter"`
 	// DevctlOwners are the owners whose repositories devctl pr merge serves
-	// (its GitHub App login reaches the giantswarm organisation only); a
-	// repository of any other owner takes the plain squash merge as the gh
-	// login instead.
+	// (its GitHub App login reaches its own organisation only); a
+	// repository of any other owner, and every repository while it is
+	// empty, takes the plain squash merge as the gh login instead.
 	DevctlOwners []string `yaml:"devctlOwners"`
 }
 
@@ -225,8 +260,11 @@ type Alerts struct {
 	// kube context is read too.
 	Installations []Installation `yaml:"installations"`
 	// Ignore are alert names that never appear; setting it replaces the
-	// default (Heartbeat, InhibitionOutsideWorkingHours, Watchdog).
+	// default (Watchdog).
 	Ignore []string `yaml:"ignore"`
+	// Tenant is the Mimir tenant (X-Scope-OrgID) whose Alertmanager is read
+	// first; empty, only a plain Alertmanager is read.
+	Tenant string `yaml:"tenant"`
 	// Team is the team whose alerts are marked in capitals and counted.
 	Team string `yaml:"team"`
 	// Collapse is the number of changes of one alertname in one run above
@@ -245,10 +283,9 @@ type Alerts struct {
 	// quiets an alert of the team, one on an installation in play (leased,
 	// claimed or merged into within the last half hour, or with a merge
 	// settling), or a page unless it names a cluster. Setting it replaces
-	// the default, Giant Swarm's e2e test clusters ({cluster: "t-*"}) and,
-	// once Team is set, every other team's and team-less notify alert
-	// ({severity: notify}). An alert back after a reading that missed it,
-	// with its old start, is quiet too.
+	// the default: once Team is set, every other team's and team-less
+	// notify alert ({severity: notify}), else none. An alert back after a
+	// reading that missed it, with its old start, is quiet too.
 	Quiet []alerts.Quiet `yaml:"quiet"`
 }
 
@@ -263,7 +300,7 @@ type Flap struct {
 // Installation is an installation and, optionally, the kube context that
 // reaches it and the lowest severity printed of its alerts; written as a
 // name alone or as {name, context, floor}. Without a context it is
-// teleport.giantswarm.io-<name>, else <name>, else the one ending in @<name>.
+// kube.contextTemplate's, else <name>, else the one ending in @<name>.
 type Installation struct {
 	Name    string `yaml:"name"`
 	Context string `yaml:"context"`
@@ -281,35 +318,33 @@ func (i *Installation) UnmarshalYAML(n *yaml.Node) error {
 	return n.Decode((*plain)(i))
 }
 
-// DefaultQuiet are the alerts of other teams' e2e test clusters.
-var DefaultQuiet = []alerts.Quiet{{Cluster: "t-*"}}
-
 // OtherTeamsNotify are other teams' and team-less notify alerts: notify
 // pages nobody, and the rule never quiets the team's alerts, a page or an
 // installation in play.
 var OtherTeamsNotify = alerts.Quiet{Severity: "notify"}
 
-// DefaultQuietFor are the default quiet rules of team: DefaultQuiet, and
-// OtherTeamsNotify once there is a team whose alerts it leaves out.
+// DefaultQuietFor are the default quiet rules of team: OtherTeamsNotify
+// once there is a team whose alerts it leaves out, else none.
 func DefaultQuietFor(team string) []alerts.Quiet {
 	if team == "" {
-		return slices.Clone(DefaultQuiet)
+		return []alerts.Quiet{}
 	}
-	return append(slices.Clone(DefaultQuiet), OtherTeamsNotify)
+	return []alerts.Quiet{OtherTeamsNotify}
 }
 
 // DefaultQuietSessions are the sessions of beekeeper's own tests.
 var DefaultQuietSessions = []string{"test: *"}
 
-// DefaultIgnore are the alerts that always fire or only route others.
-var DefaultIgnore = []string{"Heartbeat", "InhibitionOutsideWorkingHours", "Watchdog"}
+// DefaultIgnore are the alerts that always fire: Alertmanager's dead man's
+// switch.
+var DefaultIgnore = []string{"Watchdog"}
 
 // GitHub configures the budget reading.
 type GitHub struct {
 	// Floor is the remaining core budget under which GitHub work stops.
 	Floor int `yaml:"floor"`
 	// ProbeRepo is the repository whose conditional GET reads the budget
-	// headers; any repository the token can read.
+	// headers; any repository the token can read (default: beekeeper's own).
 	ProbeRepo string `yaml:"probeRepo"`
 }
 
@@ -325,7 +360,8 @@ type Overlaps struct {
 // Ollama is the host's ollama server, whose loaded models live in the
 // iGPU's GTT.
 type Ollama struct {
-	// URL is its API; a machine without one answers nothing and shows none.
+	// URL is its API (http://localhost:11434); unset, the machine runs none
+	// and nothing watches or guards one.
 	URL string `yaml:"url"`
 	// Unit is its systemd unit, whose journal names the client that
 	// loaded a model.
@@ -350,7 +386,10 @@ type Lemonade struct {
 	URL string `yaml:"url"`
 }
 
-// Watch holds the thresholds of `beekeeper watch` (MiB unless noted).
+// Watch holds the thresholds of `beekeeper watch` (MiB unless noted). A
+// memory or disk threshold left unset is a fraction of what the machine has
+// (the Default* fractions): its absolute value is read with the method of
+// the same name.
 type Watch struct {
 	Interval Duration `yaml:"interval"`
 	// Repeat paces how often a lasting condition is handed to the
@@ -400,6 +439,86 @@ type Watch struct {
 	// the watch logs them (watch.quiet) instead of printing them. Setting
 	// it replaces the default, beekeeper's own tests ("test: *").
 	QuietSessions []string `yaml:"quietSessions"`
+}
+
+// The fractions a memory or disk threshold defaults to: of RAM (available
+// memory, the desktop scope, the iGPU GTT), of swap (its use and oomd's
+// headroom) and of the filesystem (/tmp's use, /'s free space).
+const (
+	DefaultAvailMin        = 0.12
+	DefaultSwapMax         = 0.6
+	DefaultOOMDHeadroomMin = 0.06
+	DefaultScopeAnonMax    = 0.32
+	DefaultGTTMax          = 0.28
+	DefaultTmpMax          = 0.45
+	DefaultDiskMin         = 0.05
+)
+
+// AvailMin is the LOW RAM threshold on a machine of ramMiB.
+func (w Watch) AvailMin(ramMiB int) int { return atLeast(w.AvailMinMiB, DefaultAvailMin, ramMiB) }
+
+// SwapMax is the SWAP threshold on a machine of swapMiB.
+func (w Watch) SwapMax(swapMiB int) int { return atMost(w.SwapMaxMiB, DefaultSwapMax, swapMiB) }
+
+// OOMDHeadroomMin is the oom-line headroom on a machine of swapMiB.
+func (w Watch) OOMDHeadroomMin(swapMiB int) int {
+	return atLeast(w.OOMDHeadroomMinMiB, DefaultOOMDHeadroomMin, swapMiB)
+}
+
+// ScopeAnonMax is the DESKTOP SCOPE threshold on a machine of ramMiB.
+func (w Watch) ScopeAnonMax(ramMiB int) int {
+	return atMost(w.ScopeAnonMaxMiB, DefaultScopeAnonMax, ramMiB)
+}
+
+// GTTMax is the IGPU GTT threshold on a machine of ramMiB.
+func (w Watch) GTTMax(ramMiB int) int { return atMost(w.GTTMaxMiB, DefaultGTTMax, ramMiB) }
+
+// TmpMax is the TMPFS threshold on a /tmp of tmpMiB.
+func (w Watch) TmpMax(tmpMiB int) int { return atMost(w.TmpMaxMiB, DefaultTmpMax, tmpMiB) }
+
+// DiskMin is the LOW DISK threshold on a / of diskMiB.
+func (w Watch) DiskMin(diskMiB int) int { return atLeast(w.DiskMinMiB, DefaultDiskMin, diskMiB) }
+
+// atLeast is a lower threshold: the configured one, else the fraction of
+// total (0 when total is unknown, which never fires).
+func atLeast(set int, fraction float64, total int) int {
+	if set > 0 {
+		return set
+	}
+	return int(fraction * float64(total))
+}
+
+// atMost is an upper threshold: the configured one, else the fraction of
+// total (unbounded when total is unknown, which never fires).
+func atMost(set int, fraction float64, total int) int {
+	if set > 0 {
+		return set
+	}
+	if total <= 0 {
+		return math.MaxInt
+	}
+	return int(fraction * float64(total))
+}
+
+// KindClusters is the most kind clusters a machine of ramMiB runs:
+// maxKindClusters, else one per 40 GiB, at least one.
+func (c *Config) KindClusters(ramMiB int) int {
+	if c.MaxKindClusters > 0 {
+		return c.MaxKindClusters
+	}
+	return max(1, ramMiB/(40<<10))
+}
+
+// DefaultMemcapMax is the fraction of RAM a capped command may use.
+const DefaultMemcapMax = 0.14
+
+// MemcapMax is a capped command's MemoryMax on a machine of ramMiB, a
+// systemd size: memcap.max, else DefaultMemcapMax of the RAM.
+func (c *Config) MemcapMax(ramMiB int) string {
+	if c.Memcap.Max != "" || ramMiB <= 0 {
+		return cmp.Or(c.Memcap.Max, "infinity")
+	}
+	return strconv.Itoa(int(DefaultMemcapMax*float64(ramMiB))) + "M"
 }
 
 // LoadLimit is the HIGH LOAD threshold on a machine of cores: LoadMax when
@@ -495,10 +614,14 @@ type Claude struct {
 	DesktopLog string `yaml:"desktopLog"`
 }
 
-// Memcap locates the build slots of the memcap wrapper.
+// Memcap locates the build slots of the memcap wrapper and caps the
+// commands `beekeeper run` runs.
 type Memcap struct {
 	SlotDir string `yaml:"slotDir"`
 	Slots   int    `yaml:"slots"`
+	// Max is a command's MemoryMax, a systemd size ("12G"; default: a
+	// fraction of RAM, DefaultMemcapMax).
+	Max string `yaml:"max"`
 }
 
 // Duration is a time.Duration written as "30s", "10m" in YAML.
@@ -607,26 +730,19 @@ func (c *Config) defaults() error {
 	}
 	setDur(&c.Agents.NoteWait, 3*time.Minute)
 	c.Reporter.defaults(home, c.Guide.Person)
-	if c.Guide.Skill == "" && c.Guide.Instructions == "" {
-		c.Guide.Skill = "guide"
-	}
+	setStr(&c.Shell, os.Getenv("SHELL"))
+	setStr(&c.Shell, "sh")
 
 	setDur(&c.Overlaps.ActiveWithin, time.Hour)
 
 	setInt(&c.GitHub.Floor, 2500)
-	setStr(&c.GitHub.ProbeRepo, "giantswarm/devctl")
+	setStr(&c.GitHub.ProbeRepo, "giantswarm/beekeeper")
 
 	w := &c.Watch
 	setDur(&w.Interval, 30*time.Second)
 	setDur(&w.Repeat, 10*time.Minute)
 	setDur(&w.BudgetEvery, 5*time.Minute)
-	setInt(&w.AvailMinMiB, 10240)
-	setInt(&w.SwapMaxMiB, 10000)
-	setInt(&w.OOMDHeadroomMinMiB, 1024)
 	setDur(&w.OOMDWithin, 30*time.Minute)
-	setInt(&w.ScopeAnonMaxMiB, 28000)
-	setInt(&w.GTTMaxMiB, 24576)
-	setStr(&c.Ollama.URL, "http://localhost:11434")
 	setStr(&c.Ollama.Unit, "ollama")
 	setInt(&c.Ollama.BudgetGiB, 12)
 	setInt(&c.Ollama.MaxBudgetGiB, 24)
@@ -646,8 +762,6 @@ func (c *Config) defaults() error {
 		w.ForkRateMax = 50
 	}
 	setInt(&w.StackMax, 3)
-	setInt(&w.TmpMaxMiB, 20000)
-	setInt(&w.DiskMinMiB, 102400)
 
 	setStr(&c.Claude.ProjectsDir, filepath.Join(home, ".claude", "projects"))
 	setStr(&c.Claude.SessionsDir, filepath.Join(home, ".claude", "sessions"))
@@ -680,9 +794,6 @@ func (c *Config) defaults() error {
 	setDur(&c.Merge.SettleTimeout, 30*time.Minute)
 	setDur(&c.Merge.BudgetFresh, time.Minute)
 	setDur(&c.Merge.StallAfter, 5*time.Minute)
-	if c.Merge.DevctlOwners == nil {
-		c.Merge.DevctlOwners = []string{"giantswarm"}
-	}
 
 	setStr(&c.Memcap.SlotDir, filepath.Join(state, "memcap", "slots"))
 	setInt(&c.Memcap.Slots, 2)
@@ -734,6 +845,9 @@ func (r *Reporter) defaults(home, person string) {
 func (c *Config) validate() error {
 	if r := c.Reporter; r.Every.Duration != 0 && (r.Every.Duration < time.Minute || r.Brief == "") {
 		return fmt.Errorf("reporter: every %s needs at least a minute and a brief", r.Every.Duration)
+	}
+	if t := c.Kube.ContextTemplate; t != "" && !strings.Contains(t, "{installation}") {
+		return fmt.Errorf("kube.contextTemplate: %q has no {installation}", t)
 	}
 	for name, r := range map[string]Role{"supervisor": c.Supervisor.Role, "guide": c.Guide.Role} {
 		if r.Skill != "" && r.Instructions != "" {

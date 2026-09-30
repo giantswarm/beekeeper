@@ -94,7 +94,7 @@ func rewrite(t *testing.T, command string) string {
 			UpdatedInput struct{ Command string } `json:"updatedInput"`
 		} `json:"hookSpecificOutput"`
 	}
-	if err := json.Unmarshal(guard.Hook{Self: self}.Decide(raw), &o); err != nil {
+	if err := json.Unmarshal(guard.Hook{Self: self, Shell: "zsh"}.Decide(raw), &o); err != nil {
 		t.Fatal(err)
 	}
 	return o.D.UpdatedInput.Command

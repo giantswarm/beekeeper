@@ -1,0 +1,143 @@
+# A complete beekeeper configuration: one desk running agents for an
+# organisation with three installations, one of them production, on an
+# 86 GiB workstation whose Claude Desktop scope is capped at 48 GiB.
+#
+# Copy it to $XDG_CONFIG_HOME/beekeeper/config.yaml (or pass --config, or set
+# $BEEKEEPER_CONFIG) and replace the placeholder names. Every key is
+# optional; the comment after a key names its default when it has one. The
+# organisation and desk keys (kube, alerts.installations, lanes, the role
+# names) are unset by default, and memory thresholds default to fractions of
+# the machine's RAM, swap or filesystem. The values below are absolute, sized
+# for the machine above: tune them to yours or delete them.
+
+# stateDir: /home/ada/.local/state/beekeeper   # default: $XDG_STATE_HOME/beekeeper
+# leaseDir: /home/ada/.local/state/beekeeper/leases   # default: <stateDir>/leases, one directory per held lease
+resources: [kind-1, kind-2, staging, production, homelab]   # leasable besides the browser (and the model server)
+grantTTL: 30m               # a grant expires this long after its resource is free
+shell: zsh                  # the shell the hook runs a rewritten build in; default: $SHELL, else sh
+maxKindClusters: 2          # kind clusters the machine runs at most; default: one per 40 GiB of RAM, at least one
+
+kube:
+  # The installation agents never write to: a context or cluster name with it
+  # as a component (login.example.com-production, production-ops). Unset, the
+  # kube guard is off (op item get stays refused) and snapshot says so.
+  production: production
+  # An installation's kube context; {installation} is its name. It resolves
+  # alerts.installations and leased installations without a context, and
+  # refusals name it. Unset: the context named after the installation, else
+  # the one ending in @<name>.
+  contextTemplate: login.example.com-{installation}
+
+github:
+  floor: 2500               # the default; budget under which GitHub work stops
+  probeRepo: example-org/tools   # default: giantswarm/beekeeper; any repository the token can read
+
+overlaps:
+  ignore: [example-org/issues, example-org/roadmap]   # trackers every session mentions
+  activeWithin: 1h
+
+watch:
+  interval: 30s
+  repeat: 10m
+  budgetEvery: 5m
+  availMinMiB: 10240        # LOW RAM under this MemAvailable; default: 12% of RAM
+  swapMaxMiB: 10000         # SWAP over this, with the distance to systemd-oomd's trigger; default: 60% of swap
+  oomdHeadroomMinMiB: 1024  # oom-line under this much swap growth left before oomd's SwapUsedLimit; default: 6% of swap
+  oomdWithin: 30m           # ... or when the last hour's growth rate reaches the trigger within this
+  scopeAnonMaxMiB: 28000    # DESKTOP SCOPE anon over this (cache is reclaimable, anon is not); default: 32% of RAM
+  gttMaxMiB: 24576          # IGPU GTT over this (RAM the GPU driver pins, in no cgroup); default: 28% of RAM
+  loadPerCoreMax: 1.5       # HIGH LOAD over this × cores of 1-minute load average; also strains the machine
+  # loadMax: 45             # an absolute HIGH LOAD threshold instead; set, it replaces loadPerCoreMax
+  psiMax: 10
+  cpuPSIMax: 40             # CPU PRESSURE over this some avg10 (%) for two samples; installation reads then slow down
+  forkRateMax: 50           # PROCESS STORM this many forks/s over the usual rate for two samples; negative: off
+  stackMax: 3               # STACKED over this many copies of one command line, each over a minute old; negative: off
+  tmpMaxMiB: 20000          # TMPFS /tmp over this; default: 45% of /tmp's size
+  diskMinMiB: 102400        # LOW DISK under this free on /; default: 5% of its size
+  quietSessions: ["test: *"]   # the default; short-lived sessions whose start and end are logged, not said
+
+memcap:                     # beekeeper run's build slots and cap
+  slots: 2                  # the default
+  max: 12G                  # a command's MemoryMax (systemd size); default: 14% of RAM; $MEMCAP_MAX and --max override
+
+ollama:                     # the host's ollama, whose loaded models sit in the iGPU's GTT; unset url, none
+  url: http://localhost:11434   # GET /api/ps
+  unit: ollama              # the systemd unit whose journal names the client that loaded a model
+  budgetGiB: 12             # a model-server claim's budget without --gib
+  maxBudgetGiB: 24          # the most a claim may ask for
+  nameOnly: false           # true: the watch names a model no lease covers and leaves it loaded
+  labTests: [models-test]   # lab subcommands that run turns on the host's models, refused outside the lease
+lemonade:                   # the host's Lemonade Server, under the same lease and budgets; unset, none
+  url: http://localhost:13305   # GET /api/v1/health, POST /api/v1/unload
+
+lanes:                      # merges that roll the same components of an installation, one at a time
+  - name: platform
+    installation: production
+    context: login.example.com-production   # default: kube.contextTemplate's, else the context named after it
+    repositories: [example-org/portal, example-org/platform-chart]
+  - name: serving
+    installation: production
+    repositories: [example-org/model-manager, example-org/cluster-manager]
+
+merge:
+  cap: 5                    # devctl processes on the machine when a merge starts
+  queueTTL: 15m             # a queued merge keeps its place this long after its run ended
+  seedTTL: 12h              # a place queued with lanes queue --for, from its seeding or last arrival; a failed run's, from the failure
+  settle: 5m                # a lane waits this long after a merge whose release is unknown
+  settleTimeout: 30m        # then refuses its next merge while the release has not rolled
+  budgetFresh: 1m           # the last budget reading is used this long, then read afresh
+  stallAfter: 5m            # a lane's first arrived merge waits this long behind absent places, then the lane is stalled
+  devctlOwners: [giantswarm]   # the owners devctl pr merge serves; default: none, every merge is the plain squash merge
+
+alerts:
+  installations:            # read always; a held lease whose name has a kube context is read too
+    - production            # context from kube.contextTemplate
+    - staging
+    - {name: homelab, context: admin@homelab, floor: warning}   # floor: the lowest severity shown
+  tenant: example-org       # the Mimir tenant (X-Scope-OrgID) read first; unset, only kube-prometheus-stack's Alertmanager
+  ignore: [Heartbeat, InhibitionOutsideWorkingHours, Watchdog, NoisyRuntimePolicyMatch]   # default: [Watchdog]
+  team: my-team             # marked in capitals and counted; its alerts that only InhibitionOutsideWorkingHours inhibits are read too
+  collapse: 3               # more changes of one alertname in one reading are one line
+  every: 5m
+  timeout: 1m               # per installation, port-forwards included, a failed attempt tried again within it; also bounds the upgrade reading
+  flap: {changes: 4, window: 1h}   # an alert's 4th change within 1h is one FLAPPING line, then quiet until stable for 1h
+  quiet:                    # alerts whose changes are logged, not said; default: [{severity: notify}] once team is set, else none
+    - {cluster: "t-*"}      # fields installation, cluster, alertname, severity, globs; a page only by a rule naming a cluster
+    - {severity: notify}    # other teams' and team-less notify alerts
+
+supervisor:                 # what handover --prompt tells the successor supervisor; unset skill and instructions, it opens without them
+  skill: supervise          # the skill it runs; or instructions: ~/supervisor.md, a file that opens the prompt
+  scope: The desk's sessions, kind labs and merge lanes.   # default: the resources, lanes and installations configured
+  relayAt: 400k             # watch says RELAY DUE once the supervisor's context reaches this, at a quiet moment
+  relayTTL: 15m             # a relay not taken by the successor's start expires
+  restartGrace: 30s         # a CLI back within this of first seen gone is a restart; past it, SUPERVISOR GONE and a fresh successor
+guide:                      # the guide's role: what guide handover --prompt tells its successor, and its relay
+  person: Ada               # guide queue and guide watch show only the notes for this person (any case); unset, every --for note
+  skill: guide              # the skill its successor runs; or instructions: ~/guide.md; unset, it opens without them
+  relayAt: 400k             # guide watch says GUIDE RELAY DUE once the guide's context reaches this
+  relayTTL: 15m
+  restartGrace: 1m
+agents:                     # the hand-over of registered agents
+  relayAt: 400k             # watch says HANDOVER DUE once an agent's context reaches this; default: supervisor.relayAt
+  noteWait: 3m              # agents handover waits this long for the agent's note
+reporter:                   # the scheduled status reporter the standby watch starts; off without every and brief
+  every: 1h                 # one report per interval, on its multiples (on the hour)
+  brief: ~/.local/state/desk/report-brief.md   # what to report and where to post it
+  model: claude-sonnet-5    # default: Claude Code's
+  person: Ada               # who the report is for; default: guide.person
+  dir: ~/projects/notebook  # the session's working directory; default: home
+  timeout: 20m              # a reporter that has not posted by then is stopped
+
+metrics:
+  models:                   # USD per million tokens and the context window; an entry replaces the default of its id
+    my-model: {input: 1, output: 5, cacheWrite5m: 1.25, cacheWrite1h: 2, cacheRead: 0.1, fast: 2, contextWindow: 200000}   # fast: fast mode's multiplier
+  runaway:                  # watch says RUNAWAY once per session and figure over these; negative: off
+    githubCallsPerHour: 1000
+    sameErrorRepeats: 10    # the same failing tool call in the last hour
+    contextFill: 0.9
+
+notify:                     # what watch --notify sends to the desktop
+  kinds: [due, oom-line, oom-kill, budget, stale-lease, no-supervisor]   # the default: all
+  quietHours: "22:00-07:00" # local time; holds everything but critical; default: none
+  urgency: {oom-kill: critical, due: normal}   # low, normal, critical; oom-line and oom-kill default to critical
+  repeat: 30m               # a lasting condition (oom-line, budget) notifies again after this

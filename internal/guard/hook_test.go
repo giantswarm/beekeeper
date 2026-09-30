@@ -2,6 +2,7 @@ package guard
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,7 +47,8 @@ func decideEvent(t *testing.T, h Hook, ev map[string]any) *decision {
 }
 
 func hook(clusters ...string) Hook {
-	return Hook{Self: self, Clusters: func() []string { return clusters },
+	return Hook{Self: self, Shell: "zsh", MaxLabs: func() int { return 2 }, Production: "gazelle",
+		ContextHint: "teleport.giantswarm.io-<installation>", Clusters: func() []string { return clusters },
 		Leases: func() []lease.Holder {
 			return []lease.Holder{{Env: "agentlab-1", Name: "Agent one", Purpose: "kagent e2e", Since: "2026-09-24T10:00:00Z"}}
 		}}
@@ -126,7 +128,7 @@ func TestThirdLabIsRefused(t *testing.T) {
 	if d == nil || d.PermissionDecision != decisionDeny {
 		t.Fatalf("want deny, got %+v", d)
 	}
-	for _, want := range []string{"2 kind labs already run (agentlab-1, agentlab-2)", "would create a third (spare)", "agentlab-1: Agent one since 2026-09-24T10:00:00Z — kagent e2e"} {
+	for _, want := range []string{"2 kind labs already run (agentlab-1, agentlab-2)", "would create another (spare)", "agentlab-1: Agent one since 2026-09-24T10:00:00Z — kagent e2e"} {
 		if !strings.Contains(d.Reason, want) {
 			t.Errorf("reason lacks %q:\n%s", want, d.Reason)
 		}
@@ -174,7 +176,7 @@ func TestParse(t *testing.T) {
 }
 
 func TestHookGatesMerges(t *testing.T) {
-	h := Hook{Self: self, Clusters: func() []string { return nil }, Leases: func() []lease.Holder { return nil }}
+	h := Hook{Self: self, Shell: "zsh", Clusters: func() []string { return nil }, Leases: func() []lease.Holder { return nil }}
 	g := self + " gate -- "
 	for _, c := range []struct {
 		cmd, want string
@@ -231,7 +233,7 @@ func TestHookGatesMerges(t *testing.T) {
 // number of merges a shell parser finds in it. Each merge is gated, and the
 // rewrite adds nothing but the gates.
 func TestHookGatesRealMerges(t *testing.T) {
-	h := Hook{Self: self, Clusters: func() []string { return nil }, Leases: func() []lease.Holder { return nil }}
+	h := Hook{Self: self, Shell: "zsh", Clusters: func() []string { return nil }, Leases: func() []lease.Holder { return nil }}
 	raw, err := os.ReadFile("testdata/merges.jsonl")
 	if err != nil {
 		t.Fatal(err)
@@ -272,7 +274,7 @@ func TestHookGatesRealMerges(t *testing.T) {
 }
 
 func TestHookRefusesHiddenMerges(t *testing.T) {
-	h := Hook{Self: self, Clusters: func() []string { return nil }, Leases: func() []lease.Holder { return nil }}
+	h := Hook{Self: self, Shell: "zsh", Clusters: func() []string { return nil }, Leases: func() []lease.Holder { return nil }}
 	g := self + " gate -- "
 	for _, c := range []struct {
 		cmd, fixed string
@@ -297,5 +299,15 @@ func TestHookRefusesHiddenMerges(t *testing.T) {
 		if d := decide(t, h, t.TempDir(), cmd, nil); d != nil && d.PermissionDecision == decisionDeny {
 			t.Errorf("%q is refused: %s", cmd, d.Reason)
 		}
+	}
+}
+
+// A configuration that does not load refuses every Bash call with its error.
+func TestBrokenConfigRefusesBash(t *testing.T) {
+	h := hook()
+	h.ConfigErr = errors.New("config.yaml: line 3: bad indentation")
+	d := decide(t, h, "/", "git status", nil)
+	if d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "line 3: bad indentation") {
+		t.Errorf("a broken configuration passes: %+v", d)
 	}
 }
