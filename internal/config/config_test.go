@@ -255,6 +255,9 @@ func TestModelServerLease(t *testing.T) {
 	if o := c.Ollama; o.BudgetGiB != 12 || o.MaxBudgetGiB != 24 || strings.Join(o.LabTests, ",") != "models-test" {
 		t.Errorf("model server defaults %+v", o)
 	}
+	if c.Lemonade.URL != "" {
+		t.Errorf("a machine without Lemonade configured watches one at %s", c.Lemonade.URL)
+	}
 	for _, bad := range []string{"resources: [model-server]\n", "ollama: {budgetGiB: 30}\n"} {
 		if err := os.WriteFile(path, []byte(bad), 0o600); err != nil {
 			t.Fatal(err)

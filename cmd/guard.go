@@ -347,7 +347,7 @@ func (a *app) modelServer() guard.ModelServer {
 	if a.loadConfig() != nil {
 		return guard.ModelServer{}
 	}
-	return guard.ModelServer{URL: a.cfg.Ollama.URL, LabTests: a.cfg.Ollama.LabTests}
+	return guard.ModelServer{URL: a.cfg.Ollama.URL, LemonadeURL: a.cfg.Lemonade.URL, LabTests: a.cfg.Ollama.LabTests}
 }
 
 func (a *app) heldLeases() []lease.Holder {

@@ -99,8 +99,9 @@ session's commands.
 
 ## The model server
 
-The host's model server (ollama) keeps a loaded model in the iGPU's GTT: system RAM the
-GPU driver pins, which no cgroup counts or caps. One lab request that names a large model
+The host's model servers (ollama, and Lemonade Server where `lemonade.url` is set) keep a
+loaded model in the iGPU's memory: system RAM the GPU driver pins, which no cgroup counts
+or caps. One lab request that names a large model
 can take the desktop into systemd-oomd. So the model server is a resource like a lab:
 a session that loads a model on it holds the `model-server` lease, and the claim says how
 much it may load.
@@ -121,10 +122,18 @@ beekeeper lease release model-server
   `MODEL SERVER` line. The watch unloads it (`keep_alive: 0`; the weights stay on disk),
   unless `ollama.nameOnly` is set. A load from the host itself without a lease is only
   named: a person may be using it.
+- Lemonade's loaded models (`/api/v1/health`, sized from `/api/v1/models`) count against
+  the same lease and budget as ollama's, and the watch unloads them through
+  `/api/v1/unload`. Lemonade logs no client address: a model's client is the one client
+  connected to its port, none when several are. `snapshot` and the `IGPU GTT` line list
+  every server's models under its name; one server not answering hides none of the
+  other's.
 - The PreToolUse hook refuses, outside the session holding `model-server`,
-  `ollama run|pull|create|push|cp`, an HTTP request to the model server's port on a
-  generate, chat, embed, pull or `/v1/` path, and the agentlab tests in `ollama.labTests`.
-  `ollama ps`, `ollama stop` and `/api/ps` pass.
+  `ollama run|pull|create|push|cp`, `lemonade run|launch|chat|load|pull|bench`, an HTTP
+  request to a model server's port on a generate, chat, embed, pull or `/v1/` path (for
+  Lemonade `/api/v1/` chat, completions, responses, embeddings, reranking, load, pull,
+  audio and images), and the agentlab tests in `ollama.labTests`. `ollama ps`,
+  `ollama stop`, `/api/ps`, `lemonade list|unload` and `/api/v1/health` pass.
 
 ## Kube contexts, production writes and op item get
 
@@ -766,7 +775,7 @@ watch:
   oomdHeadroomMinMiB: 1024  # oom-line notifies under this much swap growth left before oomd's SwapUsedLimit
   oomdWithin: 30m           # ... or when the last hour's growth rate reaches the trigger within this
   scopeAnonMaxMiB: 28000    # desktop scope anonymous memory (cache is reclaimable, anon is not)
-  gttMaxMiB: 24576          # iGPU GTT (RAM the GPU driver pins, in no cgroup); above it LOW RAM and OOMD IMMINENT name it and ollama's models
+  gttMaxMiB: 24576          # iGPU GTT (RAM the GPU driver pins, in no cgroup); above it LOW RAM and OOMD IMMINENT name it and the model servers' models
   loadPerCoreMax: 1.5       # HIGH LOAD over this × cores (36 on 24 cores) of 1-minute load average; also strains the machine (below)
   # loadMax: 45             # an absolute HIGH LOAD threshold instead; set, it replaces loadPerCoreMax
   psiMax: 10
@@ -783,6 +792,8 @@ ollama:                     # the host's ollama, whose loaded models sit in the 
   maxBudgetGiB: 24          # the most a claim may ask for
   nameOnly: false           # true: the watch names a model no lease covers and leaves it loaded
   labTests: [models-test]   # agentlab subcommands that run turns on the host's models
+lemonade:                   # the host's Lemonade Server, under the same lease and budgets; unset, none
+  url: http://localhost:13305   # GET /api/v1/health, POST /api/v1/unload
 lanes:                      # merges that roll the same components of an installation
   - name: serving
     installation: gazelle

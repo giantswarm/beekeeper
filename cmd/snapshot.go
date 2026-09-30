@@ -26,34 +26,34 @@ import (
 
 // snapshot is one tick of the machine and its sessions.
 type snapshot struct {
-	At          time.Time             `json:"at"`
-	Load        [3]float64            `json:"load"`
-	Cores       int                   `json:"cores"`
-	LoadLimit   float64               `json:"loadLimit"`
-	CPUPSI10    float64               `json:"cpuPSISome10"`
-	Mem         machine.Mem           `json:"mem"`
-	PSIFull60   float64               `json:"psiFull60"`
-	Scope       *machine.Scope        `json:"scope,omitempty"`
-	GPUs        []machine.GPU         `json:"gpus,omitempty"`
-	Ollama      []machine.OllamaModel `json:"ollama,omitempty"`
-	Tmp         machine.Disk          `json:"tmp"`
-	Root        machine.Disk          `json:"root"`
-	Slots       []machine.Slot        `json:"slots"`
-	Clusters    []machine.Cluster     `json:"clusters"`
-	ClustersErr string                `json:"clustersError,omitempty"`
-	Sessions    []string              `json:"sessions"`
-	CLIMemMiB   int                   `json:"cliMemMiB"`
-	Metrics     *metricsTotals        `json:"metrics,omitempty"`
-	Waits       []wait                `json:"waits,omitempty"`
-	OOMSince    time.Time             `json:"oomSince"`
-	OOM         []oomKill             `json:"oom,omitempty"`
-	Oomd        []string              `json:"oomd,omitempty"`
-	Leases      []leaseView           `json:"leases,omitempty"`
-	Holds       []state.Hold          `json:"holds,omitempty"`
-	Budget      *github.Budget        `json:"budget,omitempty"`
-	BudgetErr   string                `json:"budgetError,omitempty"`
-	Alerts      []string              `json:"alerts,omitempty"`
-	Upgrades    []upgrade.Status      `json:"upgrades,omitempty"`
+	At          time.Time           `json:"at"`
+	Load        [3]float64          `json:"load"`
+	Cores       int                 `json:"cores"`
+	LoadLimit   float64             `json:"loadLimit"`
+	CPUPSI10    float64             `json:"cpuPSISome10"`
+	Mem         machine.Mem         `json:"mem"`
+	PSIFull60   float64             `json:"psiFull60"`
+	Scope       *machine.Scope      `json:"scope,omitempty"`
+	GPUs        []machine.GPU       `json:"gpus,omitempty"`
+	Models      []machine.HostModel `json:"models,omitempty"`
+	Tmp         machine.Disk        `json:"tmp"`
+	Root        machine.Disk        `json:"root"`
+	Slots       []machine.Slot      `json:"slots"`
+	Clusters    []machine.Cluster   `json:"clusters"`
+	ClustersErr string              `json:"clustersError,omitempty"`
+	Sessions    []string            `json:"sessions"`
+	CLIMemMiB   int                 `json:"cliMemMiB"`
+	Metrics     *metricsTotals      `json:"metrics,omitempty"`
+	Waits       []wait              `json:"waits,omitempty"`
+	OOMSince    time.Time           `json:"oomSince"`
+	OOM         []oomKill           `json:"oom,omitempty"`
+	Oomd        []string            `json:"oomd,omitempty"`
+	Leases      []leaseView         `json:"leases,omitempty"`
+	Holds       []state.Hold        `json:"holds,omitempty"`
+	Budget      *github.Budget      `json:"budget,omitempty"`
+	BudgetErr   string              `json:"budgetError,omitempty"`
+	Alerts      []string            `json:"alerts,omitempty"`
+	Upgrades    []upgrade.Status    `json:"upgrades,omitempty"`
 	// Quiet is the count of watch lines the quiet rules held back in the
 	// last hour (beekeeper log --verb watch.quiet).
 	Quiet int `json:"quietLastHour,omitempty"`
@@ -210,7 +210,7 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 		s.Scope = machine.ReadScope(p)
 	}
 	s.GPUs = machine.ReadGPUs()
-	s.Ollama, _ = machine.OllamaModels(ctx, a.cfg.Ollama.URL, a.cfg.Ollama.Unit)
+	s.Models, _ = hostModels(ctx, a.cfg)
 	s.Tmp, _ = machine.ReadDisk("/tmp")
 	s.Root, _ = machine.ReadDisk("/")
 	s.Slots = machine.ReadSlots(a.cfg.Memcap.SlotDir, a.cfg.Memcap.Slots)
@@ -411,7 +411,7 @@ func (a *app) printSnapshot(s *snapshot) {
 	p("time %s  load %.1f %.1f %.1f (%d cores, HIGH LOAD over %.0f)  CPU PSI some avg10 %.1f%%  memory PSI full avg60 %.1f%%",
 		clock(a.now, s.At), s.Load[0], s.Load[1], s.Load[2], s.Cores, s.LoadLimit, s.CPUPSI10, s.PSIFull60)
 	p("RAM available %d of %d MiB  swap used %d of %d MiB", s.Mem.AvailableMiB, s.Mem.TotalMiB, s.Mem.SwapUsedMiB, s.Mem.SwapTotalMiB)
-	if l := gttLine(s.GPUs, s.Ollama); l != "" {
+	if l := gttLine(s.GPUs, s.Models); l != "" {
 		p("%s", l)
 	}
 	if sc := s.Scope; sc != nil {
