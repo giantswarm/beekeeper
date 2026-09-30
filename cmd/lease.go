@@ -199,13 +199,13 @@ model is RAM no cgroup counts, and the watch unloads what exceeds it.`,
 				msg = "claimed " + res + lab
 				if budget > 0 {
 					msg += fmt.Sprintf(" with a budget of %d GiB: use models within it, with keep_alive 0, and release it when done", budget)
-					return append(evs, event(me, "lease.claim", "%s: %s (%d GiB)", res, purpose, budget)), nil
+					return append(evs, event(me, verbLeaseClaim, "%s: %s (%d GiB)", res, purpose, budget)), nil
 				}
 				if unblock != "" {
 					msg += " to unblock its upgrade: " + unblock
-					return append(evs, event(me, "lease.claim", "%s: %s (upgrade unblock: %s)", res, purpose, unblock)), nil
+					return append(evs, event(me, verbLeaseClaim, "%s: %s (upgrade unblock: %s)", res, purpose, unblock)), nil
 				}
-				return append(evs, event(me, "lease.claim", "%s: %s", res, purpose)), nil
+				return append(evs, event(me, verbLeaseClaim, "%s: %s", res, purpose)), nil
 			})
 			if err == nil {
 				err = refusal

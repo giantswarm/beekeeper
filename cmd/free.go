@@ -188,7 +188,7 @@ func (a *app) freeClusterNotes(clusters []machine.Cluster, sessions []*claude.Se
 	// event log is opened here.
 	var events []state.Event
 	if st, err := state.Open(a.cfg.StateDir); err == nil {
-		events, _ = st.Events(0, func(e state.Event) bool { return e.Verb == "lease.claim" })
+		events, _ = st.Events(0, func(e state.Event) bool { return e.Verb == verbLeaseClaim })
 	}
 	return a.clusterNotes(clusters, a.namedHolders(sessions, hs), events)
 }

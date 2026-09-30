@@ -12,10 +12,16 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// The kind cluster of labOne and one no lab lease maps.
+const (
+	labCluster   = "agentlab"
+	strayCluster = "stray"
+)
+
 func labApp(out *bytes.Buffer, running ...string) *app {
 	return &app{out: out, cfg: &config.Config{
-		Resources: []string{"agentlab-1", "agentlab-2", graveler},
-		Labs:      map[string]string{"agentlab-1": "agentlab", "agentlab-2": "agentlab-2"},
+		Resources: []string{labOne, labTwo, graveler},
+		Labs:      map[string]string{labOne: labCluster, labTwo: labTwo},
 	}, kindClusters: func() ([]string, error) { return running, nil }}
 }
 
@@ -23,19 +29,19 @@ func labApp(out *bytes.Buffer, running ...string) *app {
 // lease it belongs to, running and free; a third is unmapped.
 func TestLabsList(t *testing.T) {
 	var out bytes.Buffer
-	a := labApp(&out, "agentlab-2", "agentlab", "scratch")
+	a := labApp(&out, labTwo, labCluster, strayCluster)
 	l := a.readLabs(map[string]string{graveler: agentFour})
-	want := []labView{{Lease: "agentlab-1", Cluster: "agentlab", Running: true}, {Lease: "agentlab-2", Cluster: "agentlab-2", Running: true}}
+	want := []labView{{Lease: labOne, Cluster: labCluster, Running: true}, {Lease: labTwo, Cluster: labTwo, Running: true}}
 	if len(l.Labs) != 2 || l.Labs[0] != want[0] || l.Labs[1] != want[1] {
 		t.Errorf("labs = %+v, want %+v", l.Labs, want)
 	}
-	if len(l.Unmapped) != 1 || l.Unmapped[0] != "scratch" {
-		t.Errorf("unmapped = %v, want [scratch]", l.Unmapped)
+	if len(l.Unmapped) != 1 || l.Unmapped[0] != strayCluster {
+		t.Errorf("unmapped = %v, want [stray]", l.Unmapped)
 	}
 	a.printLabs(l)
 	got := out.String()
 	for _, line := range []string{"agentlab-1  agentlab      running  free", "agentlab-2  agentlab-2    running  free",
-		"-           scratch       running  unmapped: no lab lease stands for it"} {
+		"-           stray         running  unmapped: no lab lease stands for it"} {
 		if !strings.Contains(got, line) {
 			t.Errorf("lease list lacks %q:\n%s", line, got)
 		}
@@ -44,8 +50,8 @@ func TestLabsList(t *testing.T) {
 
 func TestLabsHeldAndStopped(t *testing.T) {
 	var out bytes.Buffer
-	a := labApp(&out, "agentlab")
-	l := a.readLabs(map[string]string{"agentlab-1": agentFour})
+	a := labApp(&out, labCluster)
+	l := a.readLabs(map[string]string{labOne: agentFour})
 	if l.Labs[0].Holder != agentFour || !l.Labs[0].Running || l.Labs[1].Running || len(l.Unmapped) != 0 {
 		t.Errorf("labs = %+v", l)
 	}
@@ -74,18 +80,18 @@ func TestLabsDockerDown(t *testing.T) {
 	if !strings.Contains(out.String(), "kind clusters unknown (docker: not found)") {
 		t.Errorf("output %q", out.String())
 	}
-	if got := a.claimedLab("agentlab-1"); got != " (kind cluster agentlab)" {
+	if got := a.claimedLab(labOne); got != " (kind cluster agentlab)" {
 		t.Errorf("claim says %q", got)
 	}
 }
 
 // A claim of a lab lease states the cluster it covers.
 func TestClaimedLab(t *testing.T) {
-	a := labApp(nil, "agentlab")
+	a := labApp(nil, labCluster)
 	for res, want := range map[string]string{
-		"agentlab-1": " (kind cluster agentlab, running)",
-		"agentlab-2": " (kind cluster agentlab-2, not running)",
-		graveler:     "",
+		labOne:   " (kind cluster agentlab, running)",
+		labTwo:   " (kind cluster agentlab-2, not running)",
+		graveler: "",
 	} {
 		if got := a.claimedLab(res); got != want {
 			t.Errorf("claim of %s says %q, want %q", res, got, want)
@@ -98,22 +104,22 @@ func TestClaimedLab(t *testing.T) {
 func TestClusterNotes(t *testing.T) {
 	a := labApp(nil)
 	events := []state.Event{
-		{Verb: "lease.claim", By: state.Party{Name: "Board pull 1"}, Detail: "agentlab-2: proof"},
-		{Verb: "lease.claim", By: state.Party{Name: "Board pull 2"}, Detail: "agentlab-2: second proof"},
-		{Verb: "lease.claim", By: state.Party{Name: "Board pull 3"}, Detail: "agentlab-1: other"},
+		{Verb: verbLeaseClaim, By: state.Party{Name: "Board pull 1"}, Detail: "agentlab-2: proof"},
+		{Verb: verbLeaseClaim, By: state.Party{Name: "Board pull 2"}, Detail: "agentlab-2: second proof"},
+		{Verb: verbLeaseClaim, By: state.Party{Name: "Board pull 3"}, Detail: "agentlab-1: other"},
 	}
-	cs := []machine.Cluster{{Name: "agentlab"}, {Name: "agentlab-2"}, {Name: "scratch"}}
-	got := a.clusterNotes(cs, []lease.Holder{{Env: "agentlab-1", Name: agentFour}}, events)
+	cs := []machine.Cluster{{Name: labCluster}, {Name: labTwo}, {Name: strayCluster}}
+	got := a.clusterNotes(cs, []lease.Holder{{Env: labOne, Name: agentFour}}, events)
 	for cl, want := range map[string]string{
-		"agentlab":   `agentlab-1, held by "` + agentFour + `"`,
-		"agentlab-2": `idle: agentlab-2 is free, last held by "Board pull 2"`,
-		"scratch":    "unmapped: no lab lease stands for it",
+		labCluster:   `agentlab-1, held by "` + agentFour + `"`,
+		labTwo:       `idle: agentlab-2 is free, last held by "Board pull 2"`,
+		strayCluster: "unmapped: no lab lease stands for it",
 	} {
 		if got[cl] != want {
 			t.Errorf("%s: %q, want %q", cl, got[cl], want)
 		}
 	}
-	if n := a.clusterNotes(cs, nil, nil)["agentlab-2"]; n != "idle: agentlab-2 is free" {
+	if n := a.clusterNotes(cs, nil, nil)[labTwo]; n != "idle: agentlab-2 is free" {
 		t.Errorf("without events: %q", n)
 	}
 }
@@ -122,8 +128,8 @@ func TestClusterNotes(t *testing.T) {
 func TestFreeClusterNotesWithoutStore(t *testing.T) {
 	a := labApp(nil)
 	a.cfg.StateDir, a.cfg.LeaseDir = t.TempDir(), t.TempDir()
-	notes := a.freeClusterNotes([]machine.Cluster{{Name: "agentlab"}}, nil)
-	if notes["agentlab"] != "idle: agentlab-1 is free" {
+	notes := a.freeClusterNotes([]machine.Cluster{{Name: labCluster}}, nil)
+	if notes[labCluster] != "idle: agentlab-1 is free" {
 		t.Errorf("notes = %v", notes)
 	}
 }

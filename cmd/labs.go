@@ -12,6 +12,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// verbLeaseClaim is the event a granted claim logs.
+const verbLeaseClaim = "lease.claim"
+
 // labView is a lab lease with the kind cluster it stands for.
 type labView struct {
 	Lease   string `json:"lease"`
@@ -152,7 +155,7 @@ func (a *app) clusterNotes(clusters []machine.Cluster, holders []lease.Holder, e
 // lastHolder is who claimed res last in events, "" when none did.
 func lastHolder(events []state.Event, res string) string {
 	for _, e := range slices.Backward(events) {
-		if e.Verb == "lease.claim" && strings.HasPrefix(e.Detail, res+":") {
+		if e.Verb == verbLeaseClaim && strings.HasPrefix(e.Detail, res+":") {
 			return e.By.Name
 		}
 	}
