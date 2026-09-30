@@ -50,6 +50,7 @@ type Config struct {
 	Alerts   Alerts   `yaml:"alerts"`
 	Notify   Notify   `yaml:"notify"`
 	Metrics  Metrics  `yaml:"metrics"`
+	Ollama   Ollama   `yaml:"ollama"`
 	// Supervisor is what `handover --prompt` tells a successor supervisor,
 	// how long a relay to it stays open and at what context it is due.
 	Supervisor Supervisor `yaml:"supervisor"`
@@ -320,6 +321,16 @@ type Overlaps struct {
 	ActiveWithin Duration `yaml:"activeWithin"`
 }
 
+// Ollama is the host's ollama server, whose loaded models live in the
+// iGPU's GTT.
+type Ollama struct {
+	// URL is its API; a machine without one answers nothing and shows none.
+	URL string `yaml:"url"`
+	// Unit is its systemd unit, whose journal names the client that
+	// loaded a model.
+	Unit string `yaml:"unit"`
+}
+
 // Watch holds the thresholds of `beekeeper watch` (MiB unless noted).
 type Watch struct {
 	Interval Duration `yaml:"interval"`
@@ -339,10 +350,15 @@ type Watch struct {
 	OOMDHeadroomMinMiB int      `yaml:"oomdHeadroomMinMiB"`
 	OOMDWithin         Duration `yaml:"oomdWithin"`
 	ScopeAnonMaxMiB    int      `yaml:"scopeAnonMaxMiB"`
-	LoadMax            float64  `yaml:"loadMax"`
-	PSIMax             float64  `yaml:"psiMax"`
-	TmpMaxMiB          int      `yaml:"tmpMaxMiB"`
-	DiskMinMiB         int      `yaml:"diskMinMiB"`
+	// GTTMaxMiB is the iGPU GTT (system RAM the GPU driver pins, which no
+	// cgroup counts) above which the watch prints IGPU GTT and names it
+	// with the host ollama's models as the cause of LOW RAM and OOMD
+	// IMMINENT.
+	GTTMaxMiB  int     `yaml:"gttMaxMiB"`
+	LoadMax    float64 `yaml:"loadMax"`
+	PSIMax     float64 `yaml:"psiMax"`
+	TmpMaxMiB  int     `yaml:"tmpMaxMiB"`
+	DiskMinMiB int     `yaml:"diskMinMiB"`
 	// QuietSessions are globs (* matches any run) of the names of
 	// short-lived sessions whose start, end and restart are no wake-up:
 	// the watch logs them (watch.quiet) instead of printing them. Setting
@@ -565,6 +581,9 @@ func (c *Config) defaults() error {
 	setInt(&w.OOMDHeadroomMinMiB, 1024)
 	setDur(&w.OOMDWithin, 30*time.Minute)
 	setInt(&w.ScopeAnonMaxMiB, 28000)
+	setInt(&w.GTTMaxMiB, 24576)
+	setStr(&c.Ollama.URL, "http://localhost:11434")
+	setStr(&c.Ollama.Unit, "ollama")
 	if w.LoadMax == 0 {
 		w.LoadMax = 45
 	}
