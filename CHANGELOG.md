@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A merge lane settles once its HelmReleases are Ready on the merge's release or a later one in semver order. A merge cuts a release candidate `X.Y.Z-rc.N`, and an installation on a stable range runs its promotion `X.Y.Z`, never the candidate, so the lane never settled and the next merge was queued behind an installation already Ready on the promoted release.
 - `beekeeper watch --notify` keeps its desktop bus connection between notifications. The connection was opened with the first send's context, and godbus closed it once that send returned, so every other notification was lost to `dbus: connection closed by user`, and the watch alternated between `NOTIFY unavailable` and `answers again`. A connection the bus closes underneath is now replaced within the send.
 - `beekeeper agents wake` runs every wake in a unit of its own, `beekeeper-wake-<id>-<wake>`. An earlier wake's unit stays loaded while a process its turn started runs on, and systemd refused the next wake under the same name (`Unit … was already loaded or has a fragment file`).
 - `events.jsonl` writes every event's `at` in UTC. `run.start`, `run.end` and `hook.allow` carried the local offset while every other verb was in UTC, so a reader comparing `at` as a string put hours of events in the wrong place. `beekeeper log` still prints local times.

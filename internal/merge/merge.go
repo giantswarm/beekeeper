@@ -439,6 +439,20 @@ func ParseHelmReleases(raw []byte) ([]HelmRelease, error) {
 
 // bare is a version without a leading v and without build metadata: a tag
 // v1.2.3 and a chart version 1.2.3+1c161d9d name the same release.
+// reached says whether a HelmRelease on version have runs release or a
+// later one in semver order. A merge cuts a release candidate: an
+// installation on a stable range runs its promotion, X.Y.Z after X.Y.Z-rc.N,
+// never the candidate itself. Versions that are not semver compare equal or
+// not at all.
+func reached(have, release string) bool {
+	h, errH := semver.NewVersion(bare(have))
+	r, errR := semver.NewVersion(bare(release))
+	if errH != nil || errR != nil {
+		return bare(have) == bare(release)
+	}
+	return !h.LessThan(r)
+}
+
 func bare(v string) string {
 	v = strings.TrimPrefix(v, "v")
 	if i := strings.IndexByte(v, '+'); i >= 0 {
@@ -490,7 +504,7 @@ func RollSet(hrs []HelmRelease, repo string) []string {
 // Ready says whether the lane is free for its next merge: every HelmRelease
 // of its charts Ready and the settling merge rolled. A settling merge with
 // a known release has rolled when each HelmRelease of its roll set reports
-// that release; one whose release is unknown (merged without a confirmed
+// that release or a later one (reached); one whose release is unknown (merged without a confirmed
 // release, or its run lost) has settled once settle has passed since it
 // ended. why says what the lane waits for.
 func Ready(lane config.Lane, hrs []HelmRelease, settling *state.Merge, now time.Time, settle time.Duration) (bool, string) {
@@ -507,7 +521,7 @@ func Ready(lane config.Lane, hrs []HelmRelease, settling *state.Merge, now time.
 			switch {
 			case i < 0:
 				return false, fmt.Sprintf("HelmRelease %s is gone from %s", key, lane.Installation)
-			case mine[i].Version != bare(settling.Release):
+			case !reached(mine[i].Version, settling.Release):
 				return false, fmt.Sprintf("%s is on %s, rolling to %s", key, mine[i].Version, bare(settling.Release))
 			}
 		}

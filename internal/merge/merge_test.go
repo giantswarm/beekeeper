@@ -207,13 +207,16 @@ const hrJSON = `{"items":[
  {"metadata":{"namespace":"flux","name":"other"},"status":{"history":[{"chartName":"other","chartVersion":"1.0.0"}],"conditions":[{"type":"Ready","status":"False"}]}}
 ]}`
 
+// portalLane is backstage's and marge's lane on gazelle.
+var portalLane = config.Lane{Name: portal, Repositories: []string{backstage, "giantswarm/marge"}, Installation: "gazelle"}
+
 func TestReady(t *testing.T) {
 	hrs, err := ParseHelmReleases([]byte(hrJSON))
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	lane := config.Lane{Name: "portal", Repositories: []string{backstage, "giantswarm/marge"}, Installation: "gazelle"}
+	lane := portalLane
 	if ok, why := Ready(lane, hrs, nil, now, time.Minute); ok || !strings.Contains(why, "flux/marge is not Ready: upgrade retries exhausted") {
 		t.Errorf("a lane HelmRelease not Ready: %v %q", ok, why)
 	}
@@ -243,6 +246,29 @@ func TestReady(t *testing.T) {
 	s.Roll = roll
 	if ok, why := Ready(lane, hrs, s, now.Add(time.Minute), time.Minute); !ok {
 		t.Errorf("a merge with a roll set and an unknown release keeps the lane after the settle time: %q", why)
+	}
+}
+
+// A merge cuts a release candidate; an installation on a stable range runs
+// its promotion: the lane settles on the candidate, its stable release or
+// anything later, never on an earlier version.
+func TestReadyOnTheCandidatesPromotion(t *testing.T) {
+	hrs, err := ParseHelmReleases([]byte(hrJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hrs[2].Ready = true
+	lane := portalLane
+	now := time.Now()
+	s := &state.Merge{Repo: backstage, PR: 2669, Release: "v2.82.1-rc.2", Roll: RollSet(hrs, backstage), Finished: now}
+	for version, want := range map[string]bool{
+		"2.82.1": true, "2.82.1-rc.2": true, "2.83.0+971d12027db0": true, "2.82.1-rc.10": true,
+		"2.82.0": false, "2.82.1-rc.1": false,
+	} {
+		hrs[0].Version = version
+		if ok, why := Ready(lane, hrs, s, now, time.Minute); ok != want {
+			t.Errorf("settling on %s, the HelmRelease on %s: ready %v (%q), want %v", s.Release, version, ok, why, want)
+		}
 	}
 }
 
