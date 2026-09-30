@@ -387,6 +387,13 @@ type HelmRelease struct {
 	Version string // the chart version without build metadata
 	Ready   bool
 	Message string
+	// Source is the namespace/name of the OCIRepository the chart comes
+	// from (spec.chartRef), "" for any other source.
+	Source string
+	// Range is the semver range the HelmRelease follows: its OCIRepository's
+	// ref (semver, or a tag as an exact version) or its chart template's
+	// version. "" is unknown: every release counts as followed.
+	Range string
 }
 
 // ParseHelmReleases reads `kubectl get helmreleases -A -o json`.
@@ -400,9 +407,15 @@ func ParseHelmReleases(raw []byte) ([]HelmRelease, error) {
 			Spec struct {
 				Chart struct {
 					Spec struct {
-						Chart string `json:"chart"`
+						Chart   string `json:"chart"`
+						Version string `json:"version"`
 					} `json:"spec"`
 				} `json:"chart"`
+				ChartRef struct {
+					Kind      string `json:"kind"`
+					Name      string `json:"name"`
+					Namespace string `json:"namespace"`
+				} `json:"chartRef"`
 			} `json:"spec"`
 			Status struct {
 				History []struct {
@@ -423,7 +436,14 @@ func ParseHelmReleases(raw []byte) ([]HelmRelease, error) {
 	out := make([]HelmRelease, 0, len(list.Items))
 	for _, it := range list.Items {
 		hr := HelmRelease{Key: it.Metadata.Namespace + "/" + it.Metadata.Name, Chart: it.Spec.Chart.Spec.Chart,
-			Message: "no Ready condition yet"}
+			Range: it.Spec.Chart.Spec.Version, Message: "no Ready condition yet"}
+		if ref := it.Spec.ChartRef; ref.Kind == "OCIRepository" {
+			ns := ref.Namespace
+			if ns == "" {
+				ns = it.Metadata.Namespace
+			}
+			hr.Source = ns + "/" + ref.Name
+		}
 		if len(it.Status.History) > 0 {
 			hr.Chart, hr.Version = it.Status.History[0].ChartName, bare(it.Status.History[0].ChartVersion)
 		}
@@ -435,6 +455,62 @@ func ParseHelmReleases(raw []byte) ([]HelmRelease, error) {
 		out = append(out, hr)
 	}
 	return out, nil
+}
+
+// AttachRanges sets the Range of each HelmRelease with an OCIRepository
+// source from `kubectl get ocirepositories -A -o json`: the ref's semver
+// range, or its tag as the one version it follows. A digest ref or a
+// source that is not listed leaves the range unknown.
+func AttachRanges(hrs []HelmRelease, raw []byte) error {
+	var list struct {
+		Items []struct {
+			Metadata struct {
+				Namespace string `json:"namespace"`
+				Name      string `json:"name"`
+			} `json:"metadata"`
+			Spec struct {
+				Ref struct {
+					SemVer string `json:"semver"`
+					Tag    string `json:"tag"`
+					Digest string `json:"digest"`
+				} `json:"ref"`
+			} `json:"spec"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return fmt.Errorf("reading the OCIRepositories: %w", err)
+	}
+	ranges := map[string]string{}
+	for _, it := range list.Items {
+		ref := it.Spec.Ref
+		if ref.Digest != "" {
+			continue
+		}
+		r := ref.SemVer
+		if r == "" && ref.Tag != "" {
+			r = "=" + bare(ref.Tag)
+		}
+		ranges[it.Metadata.Namespace+"/"+it.Metadata.Name] = r
+	}
+	for i := range hrs {
+		if hrs[i].Source != "" {
+			hrs[i].Range = ranges[hrs[i].Source]
+		}
+	}
+	return nil
+}
+
+// follows says whether a HelmRelease on range rng ever runs release. Flux
+// picks versions with the same semver library, so a stable range excludes
+// every release candidate. A range or release that does not parse, or an
+// unknown range, counts as followed: the lane waits as before.
+func follows(rng, release string) bool {
+	c, errC := semver.NewConstraint(rng)
+	v, errV := semver.NewVersion(bare(release))
+	if rng == "" || errC != nil || errV != nil {
+		return true
+	}
+	return c.Check(v)
 }
 
 // bare is a version without a leading v and without build metadata: a tag
@@ -504,11 +580,15 @@ func RollSet(hrs []HelmRelease, repo string) []string {
 // Ready says whether the lane is free for its next merge: every HelmRelease
 // of its charts Ready and the settling merge rolled. A settling merge with
 // a known release has rolled when each HelmRelease of its roll set reports
-// that release or a later one (reached); one whose release is unknown (merged without a confirmed
-// release, or its run lost) has settled once settle has passed since it
-// ended. why says what the lane waits for.
+// that release or a later one (reached), or follows a range that never
+// admits it (a release candidate under a stable range); one whose release
+// is unknown (merged without a confirmed release, or its run lost) has
+// settled once settle has passed since it ended. why says what the lane
+// waits for; on a free lane it names the ranges that settled the merge
+// without a roll, "" when nothing did.
 func Ready(lane config.Lane, hrs []HelmRelease, settling *state.Merge, now time.Time, settle time.Duration) (bool, string) {
 	mine := laneReleases(lane, hrs)
+	var unfollowed []string
 	switch {
 	case settling == nil:
 	case settling.Release == "":
@@ -521,8 +601,14 @@ func Ready(lane config.Lane, hrs []HelmRelease, settling *state.Merge, now time.
 			switch {
 			case i < 0:
 				return false, fmt.Sprintf("HelmRelease %s is gone from %s", key, lane.Installation)
+			case !follows(mine[i].Range, settling.Release):
+				unfollowed = append(unfollowed, fmt.Sprintf("%s follows semver %s", key, mine[i].Range))
 			case !reached(mine[i].Version, settling.Release):
-				return false, fmt.Sprintf("%s is on %s, rolling to %s", key, mine[i].Version, bare(settling.Release))
+				why := fmt.Sprintf("%s is on %s, rolling to %s", key, mine[i].Version, bare(settling.Release))
+				if mine[i].Range != "" {
+					why += fmt.Sprintf(" (semver %s)", mine[i].Range)
+				}
+				return false, why
 			}
 		}
 	}
@@ -530,6 +616,9 @@ func Ready(lane config.Lane, hrs []HelmRelease, settling *state.Merge, now time.
 		if !hr.Ready {
 			return false, fmt.Sprintf("%s is not Ready: %s", hr.Key, strings.TrimSpace(hr.Message))
 		}
+	}
+	if len(unfollowed) > 0 {
+		return true, fmt.Sprintf("%s does not follow %s: %s", lane.Installation, bare(settling.Release), strings.Join(unfollowed, "; "))
 	}
 	return true, ""
 }

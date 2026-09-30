@@ -296,3 +296,88 @@ func TestReadyGazelleBuildMetadata(t *testing.T) {
 		}
 	}
 }
+
+const (
+	apHR         = "flux-giantswarm/agent-platform"
+	stableRange  = ">=4.0.0 <5.0.0"
+	candidate    = "v4.105.0-rc.3"
+	installation = "gazelle"
+)
+
+// ociJSON is the shape of gazelle's answer to kubectl get ocirepositories -A
+// -o json: a stable range, an exact tag and a digest.
+const ociJSON = `{"items":[
+ {"metadata":{"namespace":"flux-giantswarm","name":"agent-platform"},"spec":{"ref":{"semver":">=4.0.0 <5.0.0"}}},
+ {"metadata":{"namespace":"flux-giantswarm","name":"appcatalog"},"spec":{"ref":{"tag":"1.0.1"}}},
+ {"metadata":{"namespace":"flux-giantswarm","name":"pinned"},"spec":{"ref":{"digest":"sha256:abc"}}}
+]}`
+
+func TestAttachRanges(t *testing.T) {
+	hrs := []HelmRelease{
+		{Key: apHR, Source: apHR},
+		{Key: "flux-giantswarm/appcatalog-default", Source: "flux-giantswarm/appcatalog"},
+		{Key: "flux-giantswarm/pinned", Source: "flux-giantswarm/pinned"},
+		{Key: "flux-giantswarm/gone", Source: "flux-giantswarm/gone"},
+		{Key: "flux-giantswarm/event-exporter", Range: "0.2.3"},
+	}
+	if err := AttachRanges(hrs, []byte(ociJSON)); err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []string{stableRange, "=1.0.1", "", "", "0.2.3"} {
+		if hrs[i].Range != want {
+			t.Errorf("%s: range %q, want %q", hrs[i].Key, hrs[i].Range, want)
+		}
+	}
+}
+
+// A merge that cuts only a release candidate on a repository whose
+// installation follows a stable range settles its lane at once; a release
+// the range admits waits until the installation runs it, and the wait names
+// the range.
+func TestReadySettlesWhatNoRangeAdmits(t *testing.T) {
+	hrs, err := ParseHelmReleases(testdata(t, "helmreleases-gazelle.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := AttachRanges(hrs, []byte(ociJSON)); err != nil {
+		t.Fatal(err)
+	}
+	const repo = "giantswarm/agent-platform"
+	lane := config.Lane{Name: "ap", Installation: installation, Repositories: []string{repo}}
+	roll := RollSet(hrs, repo)
+	now := time.Now()
+	for release, want := range map[string]struct {
+		ready bool
+		why   string
+	}{
+		"v4.75.0-rc.3": {true, "gazelle does not follow 4.75.0-rc.3: flux-giantswarm/agent-platform follows semver >=4.0.0 <5.0.0"},
+		"v5.0.0":       {true, "gazelle does not follow 5.0.0: flux-giantswarm/agent-platform follows semver >=4.0.0 <5.0.0"},
+		"v4.75.0":      {false, "flux-giantswarm/agent-platform is on 4.74.0, rolling to 4.75.0 (semver >=4.0.0 <5.0.0)"},
+		"v4.74.0":      {true, ""},
+	} {
+		ready, why := Ready(lane, hrs, &state.Merge{Repo: repo, PR: 772, Release: release, Roll: roll, Finished: now}, now, 5*time.Minute)
+		if ready != want.ready || why != want.why {
+			t.Errorf("%s: ready %v %q, want %v %q", release, ready, why, want.ready, want.why)
+		}
+	}
+}
+
+func TestFollows(t *testing.T) {
+	for _, c := range []struct {
+		rng, release string
+		want         bool
+	}{
+		{stableRange, "v4.105.0", true},
+		{stableRange, candidate, false},
+		{">=4.0.0-0 <5.0.0", candidate, true},
+		{"=1.0.1", "v1.0.2", false},
+		{"0.x", "0.12.0", true},
+		{"", candidate, true},
+		{"not a range", "v1.0.0", true},
+		{">=1.0.0", "not-semver", true},
+	} {
+		if got := follows(c.rng, c.release); got != c.want {
+			t.Errorf("follows(%q, %q) = %v, want %v", c.rng, c.release, got, c.want)
+		}
+	}
+}

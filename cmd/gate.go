@@ -347,6 +347,9 @@ func (g *gateRun) laneReady(q merge.Lane) ([]merge.HelmRelease, string, error) {
 		ready, why := merge.Ready(g.lane, hrs, s, g.now, g.cfg.Merge.Settle.Duration)
 		switch {
 		case ready:
+			if why != "" {
+				gateLine("lane %s: %s settles without a roll, %s", g.lane.Name, s.Key(), why)
+			}
 			continue
 		case s != nil && g.now.Sub(s.Finished) > g.cfg.Merge.SettleTimeout.Duration:
 			return nil, "", g.refuse("lane %s has waited %s since %s: %s; fix the installation or clear the lane (beekeeper lanes clear %s), then run the same command again",
@@ -714,7 +717,8 @@ func kubeContext(ctx context.Context, lane config.Lane) (string, error) {
 	return found[0], nil
 }
 
-// readHelmReleases reads the lane installation's HelmReleases with kubectl.
+// readHelmReleases reads the lane installation's HelmReleases with kubectl,
+// each with the range its OCIRepository follows.
 func readHelmReleases(ctx context.Context, lane config.Lane) ([]merge.HelmRelease, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
@@ -722,8 +726,25 @@ func readHelmReleases(ctx context.Context, lane config.Lane) ([]merge.HelmReleas
 	if err != nil {
 		return nil, err
 	}
+	out, err := kubectlList(ctx, kctx, "helmreleases.helm.toolkit.fluxcd.io")
+	if err != nil {
+		return nil, err
+	}
+	hrs, err := merge.ParseHelmReleases(out)
+	if err != nil {
+		return nil, err
+	}
+	if out, err = kubectlList(ctx, kctx, "ocirepositories.source.toolkit.fluxcd.io"); err != nil {
+		return nil, err
+	}
+	return hrs, merge.AttachRanges(hrs, out)
+}
+
+// kubectlList is `kubectl get <resource> -A -o json` on context kctx, an
+// error naming its last stderr line.
+func kubectlList(ctx context.Context, kctx, resource string) ([]byte, error) {
 	var stderr bytes.Buffer
-	c := proc.Command(ctx, "kubectl", "--context", kctx, "get", "helmreleases.helm.toolkit.fluxcd.io", "-A", "-o", "json") //nolint:gosec // the configured context
+	c := proc.Command(ctx, "kubectl", "--context", kctx, "get", resource, "-A", "-o", "json") //nolint:gosec // the configured context
 	c.Stderr = &stderr
 	out, err := c.Output()
 	if err != nil {
@@ -733,7 +754,7 @@ func readHelmReleases(ctx context.Context, lane config.Lane) ([]merge.HelmReleas
 		}
 		return nil, fmt.Errorf("context %s: %v: %s", kctx, err, msg)
 	}
-	return merge.ParseHelmReleases(out)
+	return out, nil
 }
 
 // runChild runs the command with this process's stdin and stderr, its

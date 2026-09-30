@@ -951,6 +951,9 @@ func (w *watcher) settled(ctx context.Context, now time.Time) {
 			why = fmt.Sprintf("the HelmReleases of %s cannot be read (%v)", lane.Installation, r.err)
 		} else if ready, wait := merge.Ready(lane, r.hrs, &m, now, w.cfg.Merge.Settle.Duration); ready {
 			done[m.Key()] = "rolled, HelmReleases of " + lane.Installation + " Ready"
+			if wait != "" {
+				done[m.Key()] = "settled without a roll, " + wait
+			}
 			continue
 		} else {
 			why = wait

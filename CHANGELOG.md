@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The merge gate settles a lane at once when no installation range admits the merge's release: it reads each HelmRelease's OCIRepository (`semver`, or a `tag` as the one version it follows) or chart template `version`, and says `<installation> does not follow 4.105.0-rc.3: flux-giantswarm/agent-platform follows semver >=4.0.0 <5.0.0`; a wait names the range (`… rolling to 4.105.0 (semver >=4.0.0 <5.0.0)`). A merge that cut only a release candidate under a stable range held its lane until the settle timeout and a `lanes clear` by hand.
+
 - A printed command line (`STACKED`, `ps`) leaves out what follows a short option's letter (`-psecret`), and masks a program that rewrote its argv into one line (Electron, setproctitle), which it printed whole.
 
 - A wake of a roster entry known by its CLI session id alone, whose session the desktop imported, gets the reopen after its turn: the supervisor's session ran headless for 45 minutes and never showed in the desktop, and opening it by hand started a second CLI on the session.
