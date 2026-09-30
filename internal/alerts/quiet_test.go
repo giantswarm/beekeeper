@@ -97,6 +97,35 @@ func TestQuietRuleMatchesByNameAndSeverity(t *testing.T) {
 	}
 }
 
+// Other teams' notify alerts on a management cluster woke the supervisor
+// for nothing; the team's, a page, a team-less warning of a machine outside
+// the fleet and an installation in play still wake it.
+func TestOtherTeamsNotifyAlertsAreQuiet(t *testing.T) {
+	r := Rules{Team: ourTeam, Collapse: 3, Quiet: []Quiet{{Severity: "notify"}}}
+	teamless := alert("t1", "ClusterDNSZoneMissing", "notify", "", "", "cluster_id", mc)
+	oursNotify := alert("o2", "AgentPlatformMCPServerDown", "notify", ourTeam, "", "cluster_id", mc)
+	warning := alert("w1", "KubeJobFailed", "warning", "", "", "cluster_id", mc)
+	lines, quiet, _ := triage(t, r, nil, []Raw{notifyOnMC, teamless, oursNotify, pageOnMC, warning})
+	for _, name := range []string{"AgentPlatformMCPServerDown", "LoggingAgentMissingOnNode", "KubeJobFailed"} {
+		if !slices.ContainsFunc(lines, func(l string) bool { return strings.Contains(l, name) }) {
+			t.Errorf("%s did not wake: lines %q", name, lines)
+		}
+	}
+	if len(lines) != 3 || len(quiet) != 2 {
+		t.Fatalf("lines %q, quiet %q, want the notify alerts of phoenix and of no team quiet", lines, quiet)
+	}
+	for _, l := range quiet {
+		if !strings.HasSuffix(l, "(quiet: quiet rule severity notify)") {
+			t.Errorf("quiet line without its rule: %s", l)
+		}
+	}
+
+	r.InPlay = func(installation string) bool { return installation == mc }
+	if lines, quiet, _ := triage(t, r, nil, []Raw{notifyOnMC, teamless}); len(quiet) != 0 || len(lines) != 2 {
+		t.Errorf("in play: lines %q, quiet %q", lines, quiet)
+	}
+}
+
 // A reading that misses an alert (an Alertmanager restart, a reconnect)
 // resolves it; the next reading has it again with its old start. That NEW
 // is quiet, a real re-fire with a new start is not, and neither is the

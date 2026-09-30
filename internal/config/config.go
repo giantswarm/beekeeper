@@ -243,9 +243,10 @@ type Alerts struct {
 	// quiets an alert of the team, one on an installation in play (leased,
 	// claimed or merged into within the last half hour, or with a merge
 	// settling), or a page unless it names a cluster. Setting it replaces
-	// the default, Giant Swarm's e2e test clusters ({cluster: "t-*"}). An
-	// alert back after a reading that missed it, with its old start, is
-	// quiet too.
+	// the default, Giant Swarm's e2e test clusters ({cluster: "t-*"}) and,
+	// once Team is set, every other team's and team-less notify alert
+	// ({severity: notify}). An alert back after a reading that missed it,
+	// with its old start, is quiet too.
 	Quiet []alerts.Quiet `yaml:"quiet"`
 }
 
@@ -280,6 +281,20 @@ func (i *Installation) UnmarshalYAML(n *yaml.Node) error {
 
 // DefaultQuiet are the alerts of other teams' e2e test clusters.
 var DefaultQuiet = []alerts.Quiet{{Cluster: "t-*"}}
+
+// OtherTeamsNotify are other teams' and team-less notify alerts: notify
+// pages nobody, and the rule never quiets the team's alerts, a page or an
+// installation in play.
+var OtherTeamsNotify = alerts.Quiet{Severity: "notify"}
+
+// DefaultQuietFor are the default quiet rules of team: DefaultQuiet, and
+// OtherTeamsNotify once there is a team whose alerts it leaves out.
+func DefaultQuietFor(team string) []alerts.Quiet {
+	if team == "" {
+		return slices.Clone(DefaultQuiet)
+	}
+	return append(slices.Clone(DefaultQuiet), OtherTeamsNotify)
+}
 
 // DefaultQuietSessions are the sessions of beekeeper's own tests.
 var DefaultQuietSessions = []string{"test: *"}
@@ -591,7 +606,7 @@ func (c *Config) defaults() error {
 		al.Ignore = slices.Clone(DefaultIgnore)
 	}
 	if al.Quiet == nil {
-		al.Quiet = slices.Clone(DefaultQuiet)
+		al.Quiet = DefaultQuietFor(al.Team)
 	}
 	if c.Watch.QuietSessions == nil {
 		c.Watch.QuietSessions = slices.Clone(DefaultQuietSessions)

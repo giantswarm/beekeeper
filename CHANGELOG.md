@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `watch` holds back other teams' and team-less `notify` alerts by default once `alerts.team` is set (`{severity: notify}` in the default `alerts.quiet`): logged as `watch.quiet`, while every page, the team's alerts and an installation in play still wake.
+
 ### Fixed
 
 - `events.jsonl` writes every event's `at` in UTC. `run.start`, `run.end` and `hook.allow` carried the local offset while every other verb was in UTC, so a reader comparing `at` as a string put hours of events in the wrong place. `beekeeper log` still prints local times.

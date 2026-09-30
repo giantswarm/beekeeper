@@ -23,6 +23,9 @@ func TestLoadDefaults(t *testing.T) {
 	if len(c.Notify.Kinds) != 6 || c.Notify.Policy().Quiet != nil {
 		t.Errorf("notify defaults = %+v", c.Notify)
 	}
+	if !slices.Equal(c.Alerts.Quiet, DefaultQuiet) {
+		t.Errorf("quiet without a team = %+v, want only the test clusters", c.Alerts.Quiet)
+	}
 	if !c.IsLeasable(Browser) || c.IsLeasable("kind-1") {
 		t.Error("only the browser is leasable without resources")
 	}
@@ -67,7 +70,8 @@ supervisor: {relayAt: 1.5M}
 		al.Flap.Changes != 3 || al.Flap.Window.Duration != time.Hour {
 		t.Errorf("alerts defaults = %+v", al)
 	}
-	if !slices.Equal(al.Quiet, DefaultQuiet) || !slices.Equal(c.Watch.QuietSessions, DefaultQuietSessions) {
+	if want := append(slices.Clone(DefaultQuiet), OtherTeamsNotify); !slices.Equal(al.Quiet, want) ||
+		!slices.Equal(c.Watch.QuietSessions, DefaultQuietSessions) {
 		t.Errorf("quiet defaults = %+v, %q", al.Quiet, c.Watch.QuietSessions)
 	}
 }
