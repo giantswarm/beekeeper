@@ -461,12 +461,20 @@ func (w *watcher) poll(ctx context.Context) {
 	w.lastPoll = w.now
 	th := w.cfg.Watch
 
+	// GTT is RAM the iGPU pins outside every cgroup: above its threshold
+	// it is named as the cause of low memory, with ollama's models.
+	var cause string
+	if gpus := machine.ReadGPUs(); machine.GTTUsedMiB(gpus) > th.GTTMaxMiB {
+		models, _ := machine.OllamaModels(ctx, w.cfg.Ollama.URL, w.cfg.Ollama.Unit)
+		cause = gttLine(gpus, models)
+	}
+	w.check("gtt", cause != "", "IGPU %s", strings.TrimPrefix(cause, "iGPU "))
 	if m, err := machine.ReadMem(); err == nil {
-		w.check("avail", m.AvailableMiB < th.AvailMinMiB, "LOW RAM: %d MiB available, swap %d MiB", m.AvailableMiB, m.SwapUsedMiB)
+		w.check("avail", m.AvailableMiB < th.AvailMinMiB, "LOW RAM: %d MiB available, swap %d MiB%s", m.AvailableMiB, m.SwapUsedMiB, because(cause))
 		limit := machine.OOMDSwapLimit()
 		headroom := m.OOMDHeadroomMiB(limit)
 		perHour, rated := w.swapRate(w.now, m.SwapUsedMiB)
-		line := swapLine(m, limit, headroom, perHour, rated)
+		line := swapLine(m, limit, headroom, perHour, rated) + because(cause)
 		w.check("swap", m.SwapUsedMiB > th.SwapMaxMiB, "%s", line)
 		// A running swapoff shrinks SwapTotal ahead of the pages it drains:
 		// swap reads full while it empties, and oomd is no nearer.

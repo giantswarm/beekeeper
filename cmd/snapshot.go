@@ -25,29 +25,31 @@ import (
 
 // snapshot is one tick of the machine and its sessions.
 type snapshot struct {
-	At          time.Time         `json:"at"`
-	Load        [3]float64        `json:"load"`
-	Mem         machine.Mem       `json:"mem"`
-	PSIFull60   float64           `json:"psiFull60"`
-	Scope       *machine.Scope    `json:"scope,omitempty"`
-	Tmp         machine.Disk      `json:"tmp"`
-	Root        machine.Disk      `json:"root"`
-	Slots       []machine.Slot    `json:"slots"`
-	Clusters    []machine.Cluster `json:"clusters"`
-	ClustersErr string            `json:"clustersError,omitempty"`
-	Sessions    []string          `json:"sessions"`
-	CLIMemMiB   int               `json:"cliMemMiB"`
-	Metrics     *metricsTotals    `json:"metrics,omitempty"`
-	Waits       []wait            `json:"waits,omitempty"`
-	OOMSince    time.Time         `json:"oomSince"`
-	OOM         []oomKill         `json:"oom,omitempty"`
-	Oomd        []string          `json:"oomd,omitempty"`
-	Leases      []leaseView       `json:"leases,omitempty"`
-	Holds       []state.Hold      `json:"holds,omitempty"`
-	Budget      *github.Budget    `json:"budget,omitempty"`
-	BudgetErr   string            `json:"budgetError,omitempty"`
-	Alerts      []string          `json:"alerts,omitempty"`
-	Upgrades    []upgrade.Status  `json:"upgrades,omitempty"`
+	At          time.Time             `json:"at"`
+	Load        [3]float64            `json:"load"`
+	Mem         machine.Mem           `json:"mem"`
+	PSIFull60   float64               `json:"psiFull60"`
+	Scope       *machine.Scope        `json:"scope,omitempty"`
+	GPUs        []machine.GPU         `json:"gpus,omitempty"`
+	Ollama      []machine.OllamaModel `json:"ollama,omitempty"`
+	Tmp         machine.Disk          `json:"tmp"`
+	Root        machine.Disk          `json:"root"`
+	Slots       []machine.Slot        `json:"slots"`
+	Clusters    []machine.Cluster     `json:"clusters"`
+	ClustersErr string                `json:"clustersError,omitempty"`
+	Sessions    []string              `json:"sessions"`
+	CLIMemMiB   int                   `json:"cliMemMiB"`
+	Metrics     *metricsTotals        `json:"metrics,omitempty"`
+	Waits       []wait                `json:"waits,omitempty"`
+	OOMSince    time.Time             `json:"oomSince"`
+	OOM         []oomKill             `json:"oom,omitempty"`
+	Oomd        []string              `json:"oomd,omitempty"`
+	Leases      []leaseView           `json:"leases,omitempty"`
+	Holds       []state.Hold          `json:"holds,omitempty"`
+	Budget      *github.Budget        `json:"budget,omitempty"`
+	BudgetErr   string                `json:"budgetError,omitempty"`
+	Alerts      []string              `json:"alerts,omitempty"`
+	Upgrades    []upgrade.Status      `json:"upgrades,omitempty"`
 	// Quiet is the count of watch lines the quiet rules held back in the
 	// last hour (beekeeper log --verb watch.quiet).
 	Quiet int `json:"quietLastHour,omitempty"`
@@ -200,6 +202,8 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 	if p := machine.FindScope(); p != "" {
 		s.Scope = machine.ReadScope(p)
 	}
+	s.GPUs = machine.ReadGPUs()
+	s.Ollama, _ = machine.OllamaModels(ctx, a.cfg.Ollama.URL, a.cfg.Ollama.Unit)
 	s.Tmp, _ = machine.ReadDisk("/tmp")
 	s.Root, _ = machine.ReadDisk("/")
 	s.Slots = machine.ReadSlots(a.cfg.Memcap.SlotDir, a.cfg.Memcap.Slots)
@@ -399,6 +403,9 @@ func (a *app) printSnapshot(s *snapshot) {
 	p := func(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format+"\n", args...) }
 	p("time %s  load %.1f %.1f %.1f  memory PSI full avg60 %.1f%%", clock(a.now, s.At), s.Load[0], s.Load[1], s.Load[2], s.PSIFull60)
 	p("RAM available %d of %d MiB  swap used %d of %d MiB", s.Mem.AvailableMiB, s.Mem.TotalMiB, s.Mem.SwapUsedMiB, s.Mem.SwapTotalMiB)
+	if l := gttLine(s.GPUs, s.Ollama); l != "" {
+		p("%s", l)
+	}
 	if sc := s.Scope; sc != nil {
 		p("desktop scope anon %d MiB (current %d, high %s, max %s)  swap %d/%s MiB  oom_kill %d  high events %d",
 			sc.AnonMiB, sc.CurrentMiB, sc.High, sc.Max, sc.SwapMiB, sc.SwapMax, sc.OOMKills, sc.HighEvents)
@@ -555,6 +562,7 @@ func diffSnapshots(prev, cur *snapshot) []string {
 	}
 	num("RAM available", prev.Mem.AvailableMiB, cur.Mem.AvailableMiB, 2048, "MiB")
 	num("swap used", prev.Mem.SwapUsedMiB, cur.Mem.SwapUsedMiB, 1024, "MiB")
+	num("iGPU GTT", machine.GTTUsedMiB(prev.GPUs), machine.GTTUsedMiB(cur.GPUs), 4096, "MiB")
 	if prev.Scope != nil && cur.Scope != nil {
 		num("desktop scope anon", prev.Scope.AnonMiB, cur.Scope.AnonMiB, 2048, "MiB")
 		if cur.Scope.OOMKills != prev.Scope.OOMKills {

@@ -713,11 +713,15 @@ watch:
   oomdHeadroomMinMiB: 1024  # oom-line notifies under this much swap growth left before oomd's SwapUsedLimit
   oomdWithin: 30m           # ... or when the last hour's growth rate reaches the trigger within this
   scopeAnonMaxMiB: 28000    # desktop scope anonymous memory (cache is reclaimable, anon is not)
+  gttMaxMiB: 24576          # iGPU GTT (RAM the GPU driver pins, in no cgroup); above it LOW RAM and OOMD IMMINENT name it and ollama's models
   loadMax: 45
   psiMax: 10
   tmpMaxMiB: 20000
   diskMinMiB: 102400
   quietSessions: ["test: *"]   # the default; short-lived sessions whose start and end are logged, not said (* matches any run)
+ollama:                     # the host's ollama, whose loaded models sit in the iGPU's GTT
+  url: http://localhost:11434   # GET /api/ps; a machine without ollama shows none
+  unit: ollama              # the systemd unit whose journal names the client that loaded a model
 lanes:                      # merges that roll the same components of an installation
   - name: serving
     installation: gazelle
