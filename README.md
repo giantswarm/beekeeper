@@ -262,8 +262,12 @@ A merge runs when no merge before it in its lane's queue holds its place, nothin
 `merge.cap` devctl processes run on the machine, and the lane's installation is ready: every
 HelmRelease of the lane's charts Ready, and the previous merge rolled. Rolled means each
 HelmRelease of the merged repository's chart that ran the newest version when the merge started
-now reports the released version; a release devctl could not confirm (exit 9, a run killed by the
-tool timeout) settles for `merge.settle` instead. Versions compare as semver: a tag `v4.74.0`
+now reports the released version, or follows a range that never admits it: the HelmRelease's
+OCIRepository ref (`semver`, a `tag` as that one version) or its chart template's `version`. A
+merge that cuts only a release candidate (`v4.105.0-rc.3`) under a stable range (`>=4.0.0 <5.0.0`)
+settles at once, and the gate says `gazelle does not follow 4.105.0-rc.3: flux-giantswarm/…
+follows semver >=4.0.0 <5.0.0`; a wait names the range. A release devctl could not confirm (exit
+9, a run killed by the tool timeout) settles for `merge.settle` instead. Versions compare as semver: a tag `v4.74.0`
 matches a chart version `4.74.0+971d12027db0`. The installation is read with `kubectl
 --context <lanes[].context>` (default: the kubeconfig context named after the installation or
 ending in `-<installation>`). A merge whose lane has no installation has nothing to roll and
