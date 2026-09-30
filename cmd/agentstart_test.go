@@ -330,7 +330,7 @@ func TestShowBrieflyHeldByFocus(t *testing.T) {
 func TestAwaitFocusOff(t *testing.T) {
 	log := filepath.Join(t.TempDir(), "main.log")
 	write := func(id string) {
-		f, err := os.OpenFile(log, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		f, err := os.OpenFile(filepath.Clean(log), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 		if err != nil {
 			t.Fatal(err)
 		}
