@@ -19,6 +19,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/merge"
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/pkg/project"
@@ -123,7 +124,7 @@ func (a *app) gate(ctx context.Context, argv []string, wait time.Duration) error
 			gateLine("continuing under %s %s: %s#%d keeps its place in lane %s", project.Name, project.Version(), repo, pr, g.lane.Name)
 		}
 	}
-	bin := runningBinary()
+	bin := platform.RunningBinary()
 	for {
 		a.now = time.Now()
 		why, err := g.step()
@@ -139,9 +140,9 @@ func (a *app) gate(ctx context.Context, argv []string, wait time.Duration) error
 				why, kept, BackgroundGateWait)
 			return &exitError{code: ExitGateQueued}
 		}
-		if bin.replaced() {
-			gateLine("%s was replaced while the merge waited: re-executing it", bin.path)
-			err := bin.exec(gateDeadlineEnv + "=" + deadline.Format(time.RFC3339Nano))
+		if bin.Replaced() {
+			gateLine("%s was replaced while the merge waited: re-executing it", bin.Path)
+			err := bin.Exec(gateDeadlineEnv + "=" + deadline.Format(time.RFC3339Nano))
 			gateLine("the new binary does not start (%v): waiting on under %s", err, project.Version())
 		}
 		if why != g.lastWhy {
@@ -667,7 +668,7 @@ func devctlRuns(st *state.State) int {
 		}
 	}
 	n := len(running)
-	t, err := proc.Read()
+	t, err := plat.Machine.Processes()
 	if err != nil {
 		return n
 	}

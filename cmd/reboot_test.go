@@ -65,8 +65,8 @@ func standbyAfterBoot(t *testing.T, appStart time.Time) (*watcher, *[]string, *b
 	}
 	t.Cleanup(w.stand.inflight.Wait) // a successor's start writes the store
 	w.table = &proc.Table{ByPID: map[int]*proc.Process{
-		7: {PID: 7, Args: []string{"/opt/Claude/" + desktopApp, "--ozone-platform=wayland"}, Start: appStart},
-		8: {PID: 8, Args: []string{"/opt/Claude/" + desktopApp, "--type=renderer"}, Start: appStart},
+		7: {PID: 7, Args: []string{"/opt/Claude/claude-desktop", "--ozone-platform=wayland"}, Start: appStart},
+		8: {PID: 8, Args: []string{"/opt/Claude/claude-desktop", "--type=renderer"}, Start: appStart},
 	}}
 	st := &state.State{Supervisor: &state.Supervisor{Party: four, Since: relayNow.Add(-time.Hour)},
 		SupervisorCLI: &state.CLI{Supervisor: four, Since: relayNow.Add(-time.Hour), PID: 4242}}

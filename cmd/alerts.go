@@ -472,7 +472,7 @@ func ownerHints(events []state.Event, laneOf func(string) config.Lane, installat
 // sessions running a command against its context or name.
 func (a *app) onInstallation() func(alerts.Target) []string {
 	var sessions []*claude.Session
-	if t, err := proc.Read(); err == nil {
+	if t, err := plat.Machine.Processes(); err == nil {
 		sessions = claude.Discover(a.cfg, t, time.Now())
 	}
 	holders, _ := lease.Dir(a.cfg.LeaseDir).List()

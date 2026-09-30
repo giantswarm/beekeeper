@@ -284,7 +284,7 @@ func desktopSocket(ctx context.Context, id string) string {
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		if t, err := proc.Read(); err == nil {
+		if t, err := plat.Machine.Processes(); err == nil {
 			if p := desktopTwin(t, id); p != nil {
 				if sock := peerSocket(runtimeDir(), p.PID); fileExists(sock) {
 					return sock

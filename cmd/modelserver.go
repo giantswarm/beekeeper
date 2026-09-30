@@ -30,7 +30,7 @@ func (b modelBreach) String() string {
 // that does not answer adds none; the error is set only when none answered,
 // so one server down never hides the other's models.
 func hostModels(ctx context.Context, cfg *config.Config) ([]machine.HostModel, error) {
-	ollama, oerr := machine.OllamaModels(ctx, cfg.Ollama.URL, cfg.Ollama.Unit)
+	ollama, oerr := machine.OllamaModels(ctx, cfg.Ollama.URL, cfg.Ollama.Unit, plat.Machine.ServiceLog)
 	lemonade, lerr := machine.LemonadeModels(ctx, cfg.Lemonade.URL)
 	// An unconfigured server answers nothing and no error.
 	switch {

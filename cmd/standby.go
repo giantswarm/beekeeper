@@ -4,11 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os/exec"
-	"path/filepath"
 	"slices"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,7 +13,6 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/peer"
-	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -27,10 +22,6 @@ import (
 func (rl role) resumeMessage(why string) string {
 	return "beekeeper: " + why + ". Run `" + rl.handover + "` and follow it."
 }
-
-// desktopApp is the Claude desktop app's executable: it starts the app, or
-// hands a claude:// link to the running one.
-const desktopApp = "claude-desktop"
 
 // reopenGrace is how long the standby watch gives a supervisor whose row it
 // reopened after the desktop app started to come back before it starts a
@@ -42,7 +33,7 @@ const reopenGrace = 3 * time.Minute
 // starts afresh, and the relay a successor's start opens is in the state.
 type standbyWatch struct {
 	send func(ctx context.Context, to, msg string) error
-	// open hands a claude:// link to the desktop app (openDesktop).
+	// open hands a claude:// link to the desktop app (plat.Opener.Open).
 	open func(ctx context.Context, url string, running bool) error
 	// succeed starts rl's next run after its holder from is gone
 	// (app.startSuccessor).
@@ -94,11 +85,11 @@ session.`,
 				_, err := fmt.Fprintln(a.out, url)
 				return err
 			}
-			t, err := proc.Read()
+			t, err := plat.Machine.Processes()
 			if err != nil {
 				return err
 			}
-			if err := openDesktop(cmd.Context(), url, !desktopStart(t).IsZero()); err != nil {
+			if err := plat.Opener.Open(cmd.Context(), url, !plat.Opener.Running(t).IsZero()); err != nil {
 				return err
 			}
 			_, err = fmt.Fprintf(a.out, "opened %q: %s\n", st.Supervisor.Name, url)
@@ -110,35 +101,6 @@ session.`,
 }
 
 func continueURL(host string) string { return "claude://code/continue?session=" + host }
-
-// openDesktop hands url to the running app, or starts the app on it in a
-// scope of its own under app.slice, where the desktop starts it too: the
-// app outlives the unit or watch that started it.
-func openDesktop(ctx context.Context, url string, running bool) error {
-	if running {
-		return exec.CommandContext(ctx, desktopApp, url).Run() //nolint:gosec // a claude:// link built from the state's local_ id
-	}
-	c := exec.Command("systemd-run", "--user", "--scope", "--quiet", "--slice=app.slice", //nolint:gosec // as above
-		"--unit=app-com.anthropic.Claude-beekeeper-"+strconv.FormatInt(time.Now().Unix(), 10), desktopApp, url)
-	if err := c.Start(); err != nil {
-		return err
-	}
-	return c.Process.Release()
-}
-
-// desktopStart is when the desktop app's main process started, zero when
-// it does not run. Electron rewrites its command line into one string, so
-// the arguments are its fields.
-func desktopStart(t *proc.Table) time.Time {
-	for _, p := range t.ByPID {
-		args := strings.Fields(p.Cmdline())
-		if len(args) > 0 && filepath.Base(args[0]) == desktopApp &&
-			!slices.ContainsFunc(args, func(a string) bool { return strings.HasPrefix(a, "--type=") }) {
-			return p.Start
-		}
-	}
-	return time.Time{}
-}
 
 // startGrace is how long a relay may name a session no start of
 // beekeeper's recorded: the start records it before it launches the session.
@@ -177,9 +139,7 @@ func unitsTurning(ctx context.Context, id string) bool {
 	if len(id) < 8 {
 		return false
 	}
-	out, _ := exec.CommandContext(ctx, "systemctl", "--user", "list-units", "--plain", "--no-legend", //nolint:gosec // the units beekeeper named
-		"--state=active,activating,deactivating", "beekeeper-agent-"+id[:8]+".service", wakePrefix(id)+"*").Output()
-	return strings.TrimSpace(string(out)) != ""
+	return len(plat.Launcher.Running(ctx, true, "beekeeper-agent-"+id[:8]+".service", wakePrefix(id)+"*")) > 0
 }
 
 // guideGone says once when the guide's CLI stayed gone past its grace with
@@ -242,7 +202,7 @@ func (w *watcher) reopenAfterAppStart(ctx context.Context, st *state.State, gone
 	if w.stand.liveTerm != term {
 		liveAt = time.Time{}
 	}
-	if !reopenDue(desktopStart(w.table), gone, liveAt) {
+	if !reopenDue(plat.Opener.Running(w.table), gone, liveAt) {
 		return false
 	}
 	w.stand.reopened, w.stand.reopenedAt = term, w.now
