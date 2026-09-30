@@ -1,11 +1,15 @@
 package cmd
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
@@ -67,8 +71,43 @@ func TestWakeArgv(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("wakeArgv = %q, want %q", got, want)
 	}
-	if u := wakeUnit("0123456789ab"); u != "beekeeper-wake-01234567" {
-		t.Errorf("wakeUnit = %q", u)
+	a, b := wakeUnit("0123456789ab"), wakeUnit("0123456789ab")
+	if a == b || !strings.HasPrefix(a, "beekeeper-wake-01234567-") || !strings.HasPrefix(b, "beekeeper-wake-01234567-") {
+		t.Errorf("two wakes of one session run in %q and %q, want two names under beekeeper-wake-01234567-", a, b)
+	}
+}
+
+// An earlier wake's unit that ended with a process of its turn still
+// running stays loaded, dead; the next wake starts beside it, and a wake
+// unit that runs is found by its session.
+func TestWakeStartsBesideAStillLoadedWake(t *testing.T) {
+	id := "t" + uuid.NewString()[:7]
+	ctx := context.Background()
+	stop := func(unit string) { t.Cleanup(func() { _, _ = userCommand("systemctl", "--user", "stop", unit) }) }
+	earlier := wakeUnit(id)
+	if err := launch(earlier, t.TempDir(), "", nil, []string{"sh", "-c", "sleep 60 & exit 0"}); err != nil {
+		t.Skipf("no systemd user manager: %v", err)
+	}
+	stop(earlier)
+	for range 50 {
+		if unitEnded(ctx, earlier) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if out, _ := userCommand("systemctl", "--user", "show", "-p", "LoadState", "--value", earlier); strings.TrimSpace(string(out)) != "loaded" {
+		t.Fatalf("the earlier wake's unit is %q, want loaded with its lingering process", out)
+	}
+	if u := wakeRunning(ctx, id); u != "" {
+		t.Errorf("a dead wake unit counts as running: %q", u)
+	}
+	next := wakeUnit(id)
+	if err := launch(next, t.TempDir(), "", nil, []string{"sleep", "60"}); err != nil {
+		t.Fatalf("the next wake beside a loaded one: %v", err)
+	}
+	stop(next)
+	if u := wakeRunning(ctx, id); u != next+".service" {
+		t.Errorf("the running wake unit = %q, want %s.service", u, next)
 	}
 }
 

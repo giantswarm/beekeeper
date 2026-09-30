@@ -39,13 +39,21 @@ const (
 var urgencies = map[string]byte{Low: 0, Normal: 1, Critical: 2}
 
 // Send calls Notify with the urgency hint and the server's default timeout.
+// A connection the bus closed underneath (a bus restart) is replaced once
+// within the send, so the message is not lost.
 func (d *Desktop) Send(ctx context.Context, m Message) (uint32, error) {
+	id, err := d.notify(ctx, m)
+	if errors.Is(err, dbus.ErrClosed) {
+		id, err = d.notify(ctx, m)
+	}
+	return id, err
+}
+
+// notify is one Notify call, on the open connection or a new one; a failed
+// call drops the connection.
+func (d *Desktop) notify(ctx context.Context, m Message) (uint32, error) {
 	if d.conn == nil {
-		addr, err := sessionBus()
-		if err != nil {
-			return 0, err
-		}
-		c, err := dbus.Connect(addr, dbus.WithContext(ctx))
+		c, err := connect()
 		if err != nil {
 			return 0, err
 		}
@@ -59,6 +67,17 @@ func (d *Desktop) Send(ctx context.Context, m Message) (uint32, error) {
 		_ = d.Close()
 	}
 	return id, err
+}
+
+// connect opens the connection a Desktop keeps. It takes no send's
+// context: godbus closes a connection when the context it was opened with
+// ends, and each send's context ends with the send.
+func connect() (*dbus.Conn, error) {
+	addr, err := sessionBus()
+	if err != nil {
+		return nil, err
+	}
+	return dbus.Connect(addr)
 }
 
 // Close drops the connection.
