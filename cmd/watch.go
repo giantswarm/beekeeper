@@ -239,6 +239,9 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 	}
 	// The machine is sampled in a loop of its own, so no network read or
 	// subprocess of the rest of the poll ever delays a memory or load line.
+	// The first sample comes before the reads start: they begin knowing
+	// whether the machine is strained.
+	w.sample(ctx)
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	wg.Go(func() { w.loop(ctx, interval, false, w.sample) })
