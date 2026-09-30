@@ -109,9 +109,14 @@ func TestDisplayLeavesValuesOut(t *testing.T) {
 		"/home/u/.go/bin/beekeeper free --summary":                       "beekeeper free --summary",
 		"curl https://user:pw@example.com":                               "curl",
 		"nice -n 5 make":                                                 "nice -n",
+		"mysql -uroot -phunter2 db":                                      "mysql -u -p",
+		"app --token=s3cret --api-key s3cret -timeout=5m":                "app --token --api-key -timeout",
 	} {
 		if got := display(strings.Fields(args)); got != want {
 			t.Errorf("display(%q) = %q, want %q", args, got, want)
+		}
+		if got := display([]string{args}); got != want {
+			t.Errorf("display of the rewritten argv %q = %q, want %q", args, got, want)
 		}
 	}
 }

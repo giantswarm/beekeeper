@@ -218,7 +218,7 @@ func TestHookGatesMerges(t *testing.T) {
 		}
 	}
 	for _, cmd := range []string{"devctl pr wait o/r 1", "devctl version", "echo devctl pr merge o/r 1", g + "devctl pr merge o/r 1",
-		"flock x.lock " + g + "~/bin/devctl pr merge o/r 1", "sed -i 's/gs-pr-merge/devctl pr merge/g' f", "pgrep -af 'devctl pr merge'"} {
+		"flock x.lock " + g + "~/bin/devctl pr merge o/r 1", "sed -i 's/gs-pr-merge/devctl pr merge/g' f", "pgrep -f 'devctl pr merge'"} {
 		if d := decide(t, h, t.TempDir(), cmd, nil); d != nil {
 			t.Errorf("%q is rewritten: %v", cmd, d.UpdatedInput["command"])
 		}

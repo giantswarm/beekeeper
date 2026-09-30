@@ -157,9 +157,8 @@ func roleOf(st *state.State, s *claude.Session) string {
 func (a *app) sessionsCmd() *cobra.Command {
 	var all, full bool
 	c := &cobra.Command{
-		Use:     "sessions",
-		Aliases: []string{"ps"},
-		Short:   "List the running sessions: what each is on, what it runs, what it holds",
+		Use:   "sessions",
+		Short: "List the running sessions: what each is on, what it runs, what it holds",
 		Long: `List the running Claude Code sessions, most recently active first: the
 repository and the issues or pull requests its latest turns are about, when
 it was last active, the tool commands it runs right now (a devctl wait, a
