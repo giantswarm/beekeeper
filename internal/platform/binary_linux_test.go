@@ -1,4 +1,4 @@
-package cmd
+package platform
 
 import (
 	"os"
@@ -24,29 +24,29 @@ func TestBinaryReplaced(t *testing.T) {
 	if err := os.Link(path, filepath.Join(dir, "running")); err != nil {
 		t.Fatal(err)
 	}
-	b := &binary{path: path, self: self}
-	if b.replaced() {
+	b := &Binary{Path: path, self: self}
+	if b.Replaced() {
 		t.Error("the running file reads as replaced")
 	}
 	write(path+".new", 0o644)
 	if err := os.Rename(path+".new", path); err != nil {
 		t.Fatal(err)
 	}
-	if b.replaced() {
+	if b.Replaced() {
 		t.Error("a file that is not executable reads as a replacement")
 	}
 	write(path+".new", 0o755)
 	if err := os.Rename(path+".new", path); err != nil {
 		t.Fatal(err)
 	}
-	if !b.replaced() {
+	if !b.Replaced() {
 		t.Error("a new binary renamed over the path is not noticed")
 	}
-	var none *binary
-	if none.replaced() {
+	var none *Binary
+	if none.Replaced() {
 		t.Error("an unknown binary reads as replaced")
 	}
-	if runningBinary() == nil {
+	if RunningBinary() == nil {
 		t.Error("the test binary is not found")
 	}
 }

@@ -306,16 +306,6 @@ var (
 	killedLine = regexp.MustCompile(`Killed process (\d+) \(([^)]*)\).*?anon-rss:(\d+)kB`)
 )
 
-// OOMKills returns the kernel's OOM kills since the given time, oldest first.
-func OOMKills(ctx context.Context, since time.Time) ([]OOMKill, error) {
-	out, err := exec.CommandContext(ctx, "journalctl", "-k", "--no-pager", "-o", "short-iso", //nolint:gosec // fixed arguments and a formatted time
-		"--since", since.Local().Format("2006-01-02 15:04:05")).Output()
-	if err != nil {
-		return nil, err
-	}
-	return ParseOOM(string(out)), nil
-}
-
 // ParseOOM pairs the kernel's oom-kill and "Killed process" lines by pid.
 func ParseOOM(journal string) []OOMKill {
 	var kills []OOMKill
@@ -352,19 +342,14 @@ func journalTime(line string) time.Time {
 	return t
 }
 
-// OomdKills returns the lines where systemd-oomd killed a cgroup since the
-// given time: the event that takes every session down at once.
-func OomdKills(ctx context.Context, since time.Time) ([]string, error) {
-	out, err := exec.CommandContext(ctx, "journalctl", "-u", "systemd-oomd", "--no-pager", "-o", "short-iso", //nolint:gosec // fixed arguments and a formatted time
-		"--since", since.Local().Format("2006-01-02 15:04:05")).Output()
-	if err != nil {
-		return nil, err
-	}
+// ParseOomd keeps the lines of systemd-oomd's journal where it killed a
+// cgroup: the event that takes every session down at once.
+func ParseOomd(journal string) []string {
 	var lines []string
-	for line := range strings.SplitSeq(string(out), "\n") {
+	for line := range strings.SplitSeq(journal, "\n") {
 		if strings.Contains(strings.ToLower(line), "killed") {
 			lines = append(lines, line)
 		}
 	}
-	return lines, nil
+	return lines
 }

@@ -1,4 +1,6 @@
-package notify
+//go:build linux && !nosystemd
+
+package platform
 
 import (
 	"bufio"
@@ -11,6 +13,8 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+
+	"github.com/giantswarm/beekeeper/internal/notify"
 )
 
 // notifications is the notification service on a private bus: it records
@@ -76,13 +80,13 @@ func privateBus(t *testing.T) (string, *notifications) {
 func TestDesktopKeepsItsConnection(t *testing.T) {
 	addr, n := privateBus(t)
 	t.Setenv("DBUS_SESSION_BUS_ADDRESS", addr)
-	d := &Desktop{}
+	d := &desktop{}
 	t.Cleanup(func() { _ = d.Close() })
 	send := func(summary string) {
 		t.Helper()
-		ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if _, err := d.Send(ctx, Message{Summary: summary, Urgency: Normal}); err != nil {
+		if _, err := d.Send(ctx, notify.Message{Summary: summary, Urgency: notify.Normal}); err != nil {
 			t.Fatalf("sending %q: %v", summary, err)
 		}
 	}

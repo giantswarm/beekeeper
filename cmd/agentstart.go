@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -18,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -284,26 +284,17 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 // A unit no longer active (its first turn ended, or is ending) has no
 // writer and is not frozen.
 func whileFrozen(ctx context.Context, unit string, fn func() error) error {
-	if err := systemctlUser(ctx, "freeze", unit); err != nil {
-		if unitState(ctx, unit) != "active" {
+	if err := plat.Launcher.Freeze(ctx, unit); err != nil {
+		if plat.Launcher.State(ctx, unit) != "active" {
 			return fn()
 		}
 		return fmt.Errorf("freezing %s for the import: %w", unit, err)
 	}
 	err := fn()
-	if terr := systemctlUser(context.WithoutCancel(ctx), "thaw", unit); terr != nil {
+	if terr := plat.Launcher.Thaw(context.WithoutCancel(ctx), unit); terr != nil {
 		err = errors.Join(err, fmt.Errorf("thawing %s: %w (systemctl --user thaw %s resumes its first turn)", unit, terr, unit))
 	}
 	return err
-}
-
-// systemctlUser runs one systemctl --user verb on unit.
-func systemctlUser(ctx context.Context, verb, unit string) error {
-	out, err := exec.CommandContext(ctx, "systemctl", "--user", verb, unit).CombinedOutput() //nolint:gosec // the unit beekeeper named
-	if err != nil {
-		return fmt.Errorf("systemctl --user %s: %w: %s", verb, err, strings.TrimSpace(string(out)))
-	}
-	return nil
 }
 
 // endDesktopTwin stops the CLI the desktop warms for an imported session
@@ -319,7 +310,7 @@ func endDesktopTwin(ctx context.Context, id string) (int, error) {
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		t, err := proc.Read()
+		t, err := plat.Machine.Processes()
 		if err != nil {
 			return 0, err
 		}
@@ -442,11 +433,11 @@ func modelLine(model string) string {
 // session or follow (the session a hand-over ends), or was not running, is
 // left on the import.
 func (a *app) importSession(ctx context.Context, id, follow string) (string, error) {
-	t, err := proc.Read()
+	t, err := plat.Machine.Processes()
 	if err != nil {
 		return "", err
 	}
-	running := !desktopStart(t).IsZero()
+	running := !plat.Opener.Running(t).IsZero()
 	// startAgent waited for the window already.
 	prev, err := a.showBriefly(ctx, resumeURL(id), "local_"+id, follow, running, awayPoll)
 	if err != nil {
@@ -468,13 +459,13 @@ func (a *app) showBriefly(ctx context.Context, url, host, follow string, running
 		}
 		prev = awaitFocusOff(ctx, a.cfg.Claude.DesktopLog, host, settleWait)
 	}
-	if err := openDesktop(ctx, url, running); err != nil {
+	if err := plat.Opener.Open(ctx, url, running); err != nil {
 		return "", err
 	}
 	if prev == "" || prev == host || prev == follow || !awaitFocus(ctx, a.cfg.Claude.DesktopLog, host, focusWait) {
 		return "", nil
 	}
-	if err := openDesktop(ctx, continueURL(prev), true); err != nil {
+	if err := plat.Opener.Open(ctx, continueURL(prev), true); err != nil {
 		return "", fmt.Errorf("showing %s again: %w", prev, err)
 	}
 	return prev, nil
@@ -506,11 +497,11 @@ func (a *app) agentReopenCmd() *cobra.Command {
 				_, err := fmt.Fprintf(a.out, "reopen: %s is no start on the roster, left closed\n", id)
 				return err
 			}
-			t, err := proc.Read()
+			t, err := plat.Machine.Processes()
 			if err != nil {
 				return err
 			}
-			if desktopStart(t).IsZero() {
+			if plat.Opener.Running(t).IsZero() {
 				_, err := fmt.Fprintf(a.out, "reopen: the desktop does not run, %s waits for it\n", id)
 				return err
 			}
@@ -722,24 +713,17 @@ func agentArgv(bin, id, name, model, brief string, flags ...string) []string {
 // terminal would.
 func launch(unit, dir, config string, stopPost, argv []string) error {
 	// A session beekeeper stops (SIGTERM) ended as asked, not failed.
-	args := []string{"--user", "--collect", "--quiet", "--unit=" + unit, "-p", "KillMode=process", "-p", "SuccessExitStatus=143 SIGTERM", "--working-directory=" + dir}
-	if len(stopPost) > 0 {
+	u := platform.Unit{Name: unit, Dir: dir, Argv: argv, KeepChildren: true, TermIsSuccess: true, StopPost: stopPost,
 		// The reopen may wait for the session to retitle itself.
-		args = append(args, "-p", "ExecStopPost="+strings.Join(stopPost, " "), "-p", "TimeoutStopSec="+strconv.Itoa(int((reopenAwayWait+stopPostWait).Seconds())))
-	}
+		StopTimeout: reopenAwayWait + stopPostWait}
 	if config != "" {
-		args = append(args, "--setenv=BEEKEEPER_CONFIG="+config)
+		u.Env = append(u.Env, "BEEKEEPER_CONFIG="+config)
 	}
 	if dir, ok := devBuild(); ok {
 		// Its beekeeper commands run the build that started it.
-		args = append(args, "--setenv=PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		u.Env = append(u.Env, "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	}
-	args = append(append(args, "--"), argv...)
-	out, err := exec.Command("systemd-run", args...).CombinedOutput() //nolint:gosec // starting the session is the purpose
-	if err != nil {
-		return fmt.Errorf("systemd-run: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
+	return plat.Launcher.Start(u)
 }
 
 // devBuild is the folder of the running beekeeper when it is not the one on
@@ -840,12 +824,6 @@ func titleTranscript(projectsDir, id, name string) error {
 
 // unitEnded reports whether the transient unit has ended.
 func unitEnded(ctx context.Context, unit string) bool {
-	s := unitState(ctx, unit)
+	s := plat.Launcher.State(ctx, unit)
 	return s == "inactive" || s == "failed"
-}
-
-// unitState is the transient unit's ActiveState; empty when unreadable.
-func unitState(ctx context.Context, unit string) string {
-	out, _ := exec.CommandContext(ctx, "systemctl", "--user", "show", "-p", "ActiveState", "--value", unit).Output() //nolint:gosec // the unit beekeeper named
-	return strings.TrimSpace(string(out))
 }

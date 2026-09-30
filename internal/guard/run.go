@@ -28,6 +28,7 @@ import (
 	"github.com/gofrs/flock"
 
 	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/platform"
 )
 
 // Exit codes Run returns besides the command's own.
@@ -40,6 +41,9 @@ const (
 
 // LogPrefix starts every line Run writes, the cap's victim line included.
 const LogPrefix = "beekeeper run: "
+
+// plat caps the runs and reads the machine.
+var plat = platform.Current()
 
 // The event log verbs of a capped run. Their detail is
 // "<scope> <facts>: <command>": the scope's unit name exactly as the kernel
@@ -154,37 +158,16 @@ func ParseWait(s string) (time.Duration, error) {
 	return d, nil
 }
 
-// UserSystemd reports whether a user service manager can start scopes.
-// "degraded" (one failed unit somewhere) is a desktop's normal state.
-func UserSystemd() bool {
-	if _, err := exec.LookPath("systemd-run"); err != nil {
-		return false
-	}
-	out, _ := exec.Command("systemctl", "--user", "is-system-running").Output()
-	switch strings.TrimSpace(string(out)) {
-	case "running", "degraded", "starting", "maintenance":
-		return true
-	}
-	return false
-}
-
-// inMemcapScope: a Makefile or script that runs a capped command again runs
-// inside the outer scope, which already holds the slot and the cap.
-func inMemcapScope() bool {
-	raw, err := os.ReadFile("/proc/self/cgroup")
-	return err == nil && strings.Contains(string(raw), "/memcap.slice/")
-}
-
 // Run runs argv in a capped scope and returns its exit code: the command's,
 // 128+signal when a signal ended it, ExitBusy when the wait ran out.
 // Without a user systemd, or inside a capped scope already, it execs argv.
 func Run(o Options, argv []string) int {
 	logf := func(format string, a ...any) { _, _ = fmt.Fprintf(o.Stderr, LogPrefix+format+"\n", a...) }
-	if !UserSystemd() {
+	if !plat.Capper.Available() {
 		logf("no user systemd here, running uncapped: %s", argv[0])
 		return execve(argv, logf)
 	}
-	if inMemcapScope() {
+	if plat.Capper.Capped() {
 		return execve(argv, logf)
 	}
 	needKiB, err := ParseSize(o.Max)
@@ -241,7 +224,7 @@ func waitForSlot(o Options, needKiB int64, argv []string, logf func(string, ...a
 		}
 		var reason string
 		if lock != nil {
-			m, err := machine.ReadMem()
+			m, err := plat.Machine.Mem()
 			if err != nil || int64(m.AvailableMiB)<<10 >= needKiB {
 				break
 			}
@@ -323,15 +306,13 @@ func writeHolder(o Options, slot int, argv []string) {
 		Since: time.Now().UTC().Format("2006-01-02T15:04:05Z")})
 }
 
-// scope runs argv in a transient scope under memcap.slice. systemd-run's own
-// ${VAR} expansion is off (default-on for --scope since systemd 258): the
-// argument list reaches the command verbatim, so a wrapped `zsh -c` keeps
-// ${=files}, ${(f)x}, ${pipestatus[1]} and $$.
+// scope runs argv in the capped scope unit.
 func scope(unit string, o Options, argv []string, logf func(string, ...any)) int {
-	args := append([]string{"--user", "--scope", "--quiet", "--expand-environment=no", "--unit=" + unit,
-		"--slice=memcap.slice", "-p", "MemoryMax=" + o.Max, "-p", "MemorySwapMax=" + o.Swap,
-		"-p", "OOMPolicy=continue", "--"}, argv...)
-	c := exec.Command("systemd-run", args...) //nolint:gosec // running the caller's command is the purpose
+	c, err := plat.Capper.Command(unit, platform.Cap{Max: o.Max, Swap: o.Swap}, argv)
+	if err != nil {
+		logf("%v", err)
+		return ExitNotFound
+	}
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
@@ -345,7 +326,7 @@ func scope(unit string, o Options, argv []string, logf func(string, ...any)) int
 			_ = c.Process.Signal(s)
 		}
 	}()
-	err := c.Wait()
+	err = c.Wait()
 	var ee *exec.ExitError
 	if err != nil && !errors.As(err, &ee) {
 		logf("%v", err)
@@ -369,7 +350,7 @@ func victims(unit string, since time.Time, rc int) []string {
 			time.Sleep(300 * time.Millisecond)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		kills, err := machine.OOMKills(ctx, since)
+		kills, err := plat.Machine.OOMKills(ctx, since)
 		cancel()
 		if err != nil {
 			return nil
