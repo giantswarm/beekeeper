@@ -246,6 +246,29 @@ func TestReady(t *testing.T) {
 	}
 }
 
+// A merge cuts a release candidate; an installation on a stable range runs
+// its promotion: the lane settles on the candidate, its stable release or
+// anything later, never on an earlier version.
+func TestReadyOnTheCandidatesPromotion(t *testing.T) {
+	hrs, err := ParseHelmReleases([]byte(hrJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hrs[2].Ready = true
+	lane := config.Lane{Name: "portal", Repositories: []string{backstage, "giantswarm/marge"}, Installation: "gazelle"}
+	now := time.Now()
+	s := &state.Merge{Repo: backstage, PR: 2669, Release: "v2.82.1-rc.2", Roll: RollSet(hrs, backstage), Finished: now}
+	for version, want := range map[string]bool{
+		"2.82.1": true, "2.82.1-rc.2": true, "2.83.0+971d12027db0": true, "2.82.1-rc.10": true,
+		"2.82.0": false, "2.82.1-rc.1": false,
+	} {
+		hrs[0].Version = version
+		if ok, why := Ready(lane, hrs, s, now, time.Minute); ok != want {
+			t.Errorf("settling on %s, the HelmRelease on %s: ready %v (%q), want %v", s.Release, version, ok, why, want)
+		}
+	}
+}
+
 // testdata/helmreleases-gazelle.json is gazelle's real answer to kubectl get
 // helmreleases -A -o json, trimmed to the agent-platform lane's neighbours
 // and to what the roll check reads: every chart version carries build
