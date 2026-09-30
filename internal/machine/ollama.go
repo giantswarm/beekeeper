@@ -127,7 +127,9 @@ func modelBlob(modelfile string) string {
 
 // ParseOllamaLoads maps each model blob to the address of the client whose
 // request loaded it last: the first POST logged after the load that started
-// before it (gin logs a request when it ends, with its latency).
+// before it (gin logs a request when it ends, with its latency). A blob
+// whose last load's request is still running has no client yet: an earlier
+// load's client is not its.
 func ParseOllamaLoads(journal string) map[string]string {
 	out := map[string]string{}
 	type load struct {
@@ -139,6 +141,7 @@ func ParseOllamaLoads(journal string) map[string]string {
 		if m := loadLine.FindStringSubmatch(line); m != nil {
 			if at, err := time.Parse(time.RFC3339Nano, m[1]); err == nil {
 				open = append(open, load{blob: m[2], at: at})
+				delete(out, m[2])
 			}
 			continue
 		}

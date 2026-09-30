@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `snapshot` and `watch` no longer name a model's loader while the request that loaded it still runs: the journal logs a request when it ends, and the load took the client of the same model's earlier load, so a host request under the `model-server` lease read as a lab's and the watch unloaded it.
 - A reopen right after its start's import waits up to 5s for the start's switch back before it notes where the desktop was: a first turn that ended within a second left the desktop on the new session.
 - `watch` notifies no `OOMD IMMINENT` while a `swapoff` runs: the kernel takes the device out of SwapTotal before it drains its pages, so swap read 100 % full (`SWAP 1690 of 1690 MiB used`) while it was being emptied. The watch says `SWAPOFF IN PROGRESS` to the supervisor instead.
 - `events.jsonl` survives an unclean shutdown. An append lost to a power cut leaves its range as NUL bytes, and the next event landed on the same line behind them, so every reader dropped that event too. Readers now skip a line's leading NUL bytes, and an append starts a new line when the file does not end in one. An existing file is repaired once with `tr -d '\000'` while no beekeeper writes.
