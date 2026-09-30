@@ -354,13 +354,18 @@ type Watch struct {
 	// cgroup counts) above which the watch prints IGPU GTT and names it
 	// with the host ollama's models as the cause of LOW RAM and OOMD
 	// IMMINENT.
-	GTTMaxMiB int     `yaml:"gttMaxMiB"`
-	LoadMax   float64 `yaml:"loadMax"`
-	PSIMax    float64 `yaml:"psiMax"`
+	GTTMaxMiB int `yaml:"gttMaxMiB"`
+	// LoadMax is the 1-minute load average over which the watch says HIGH
+	// LOAD; unset (0), it is LoadPerCoreMax × the machine's cores
+	// (LoadLimit).
+	LoadMax        float64 `yaml:"loadMax"`
+	LoadPerCoreMax float64 `yaml:"loadPerCoreMax"`
+	PSIMax         float64 `yaml:"psiMax"`
 	// CPUPSIMax is the CPU pressure ("some avg10" of /proc/pressure/cpu,
-	// in percent) over which, like over LoadMax, the machine is strained:
-	// the installation reads (upgrades, alerts, lane settling) then run
-	// four times less often and at nice 10 (READS SLOWED).
+	// in percent) over which the watch says CPU PRESSURE once two samples
+	// in a row read it, and over which, like over LoadLimit, the machine is
+	// strained: the installation reads (upgrades, alerts, lane settling)
+	// then run four times less often and at nice 10 (READS SLOWED).
 	CPUPSIMax  float64 `yaml:"cpuPSIMax"`
 	TmpMaxMiB  int     `yaml:"tmpMaxMiB"`
 	DiskMinMiB int     `yaml:"diskMinMiB"`
@@ -369,6 +374,15 @@ type Watch struct {
 	// the watch logs them (watch.quiet) instead of printing them. Setting
 	// it replaces the default, beekeeper's own tests ("test: *").
 	QuietSessions []string `yaml:"quietSessions"`
+}
+
+// LoadLimit is the HIGH LOAD threshold on a machine of cores: LoadMax when
+// set, LoadPerCoreMax × cores otherwise.
+func (w Watch) LoadLimit(cores int) float64 {
+	if w.LoadMax > 0 {
+		return w.LoadMax
+	}
+	return w.LoadPerCoreMax * float64(cores)
 }
 
 // Metrics prices the tokens of the sessions' transcripts and sets the
@@ -589,8 +603,8 @@ func (c *Config) defaults() error {
 	setInt(&w.GTTMaxMiB, 24576)
 	setStr(&c.Ollama.URL, "http://localhost:11434")
 	setStr(&c.Ollama.Unit, "ollama")
-	if w.LoadMax == 0 {
-		w.LoadMax = 45
+	if w.LoadPerCoreMax == 0 {
+		w.LoadPerCoreMax = 1.5
 	}
 	if w.PSIMax == 0 {
 		w.PSIMax = 10

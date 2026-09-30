@@ -11,10 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `watch` says CPU starvation before the machine saturates: `CPU PRESSURE: some avg10 N% over 40%` once two samples in a row read `/proc/pressure/cpu` over `watch.cpuPSIMax`, and `LOAD RISING: 1m N, 5m M (C cores)` once the 1-minute load passes one per core at more than twice the 5-minute load, each with an `ENDED` line. These and `HIGH LOAD` name the five commands that burned the most CPU since the last sample (`; top CPU over 30s: go 11.8 cores (8), …`). `snapshot` prints the cores, the HIGH LOAD threshold and CPU PSI some avg10. A load climb from 8 to 300 took two minutes, and the only line, `HIGH LOAD`, came when the desktop already lagged.
+
 - `snapshot` and `watch` count the iGPU's GTT: system RAM the amdgpu driver pins for the GPU, which no cgroup counts. `snapshot` prints `iGPU GTT <used> of <total> MiB` with the host ollama's loaded models (`/api/ps`) and, where ollama's journal shows it, the client whose request loaded each one (a kind node by name). `watch` prints `IGPU GTT` above `watch.gttMaxMiB` (24 GiB) and names GTT and the models as the cause in its `LOW RAM`, `SWAP` and `OOMD IMMINENT` lines: a lab's request loaded a 30B model next to a small one, GTT reached 42 GiB and systemd-oomd killed a desktop scope while every cgroup looked modest. New settings `ollama.url` and `ollama.unit`.
 
 ### Changed
 
+- `HIGH LOAD` fires over `watch.loadPerCoreMax` (1.5) × cores, 36 on 24 cores, instead of a fixed 45; a configured `watch.loadMax` still replaces it.
 - `agents start`, and the reopen after a start's or a wake's turn, open their `claude://` links only while Claude Desktop's window is without the focus (Hyprland's active window): each link switched the desktop's main window to another session and back under the person typing there. A start whose import waits out 2 minutes leaves it to the reopen after its first turn, which imports the session and waits up to 25 minutes.
 - The PreToolUse hook refuses a command that opens a page in the person's browser (`muster auth login`, `gh auth login --web`, `xdg-open`) outside the session holding the `browser` lease: a worker's sign-in tab opened in front of the person, who closed it as a stray pop-up.
 

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"path"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -27,6 +28,9 @@ import (
 type snapshot struct {
 	At          time.Time             `json:"at"`
 	Load        [3]float64            `json:"load"`
+	Cores       int                   `json:"cores"`
+	LoadLimit   float64               `json:"loadLimit"`
+	CPUPSI10    float64               `json:"cpuPSISome10"`
 	Mem         machine.Mem           `json:"mem"`
 	PSIFull60   float64               `json:"psiFull60"`
 	Scope       *machine.Scope        `json:"scope,omitempty"`
@@ -198,6 +202,9 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 		return nil, err
 	}
 	s.Load, _ = machine.ReadLoad()
+	s.Cores = runtime.NumCPU()
+	s.LoadLimit = a.cfg.Watch.LoadLimit(s.Cores)
+	s.CPUPSI10, _ = machine.ReadCPUPSISome10()
 	s.PSIFull60, _ = machine.ReadPSIFull60()
 	if p := machine.FindScope(); p != "" {
 		s.Scope = machine.ReadScope(p)
@@ -401,7 +408,8 @@ func oomOwner(k machine.OOMKill, clusters []machine.Cluster, sessions []*claude.
 
 func (a *app) printSnapshot(s *snapshot) {
 	p := func(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format+"\n", args...) }
-	p("time %s  load %.1f %.1f %.1f  memory PSI full avg60 %.1f%%", clock(a.now, s.At), s.Load[0], s.Load[1], s.Load[2], s.PSIFull60)
+	p("time %s  load %.1f %.1f %.1f (%d cores, HIGH LOAD over %.0f)  CPU PSI some avg10 %.1f%%  memory PSI full avg60 %.1f%%",
+		clock(a.now, s.At), s.Load[0], s.Load[1], s.Load[2], s.Cores, s.LoadLimit, s.CPUPSI10, s.PSIFull60)
 	p("RAM available %d of %d MiB  swap used %d of %d MiB", s.Mem.AvailableMiB, s.Mem.TotalMiB, s.Mem.SwapUsedMiB, s.Mem.SwapTotalMiB)
 	if l := gttLine(s.GPUs, s.Ollama); l != "" {
 		p("%s", l)
