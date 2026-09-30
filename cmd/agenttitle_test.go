@@ -20,6 +20,7 @@ import (
 // desktop to record it; a record that kept the name is left alone.
 func TestRetitle(t *testing.T) {
 	const name, host = "test: title after turn", "local_1"
+	const ownTo, selfArg = "uds:/s/42.sock", `"` + selfSession + `"`
 	own := func(context.Context) (steward, error) { return steward{host: host, sock: "/s/42.sock"}, nil }
 	other := func(context.Context) (steward, error) { return steward{host: "local_2", sock: "/s/43.sock"}, nil }
 	for _, c := range []struct {
@@ -33,12 +34,12 @@ func TestRetitle(t *testing.T) {
 		wantErr bool
 	}{
 		{desc: "kept", titles: []string{name}, find: own, want: "keeps its title"},
-		{desc: "lost, then retitled", titles: []string{"", "", name}, find: own, wantTo: "uds:/s/42.sock", wantArg: `"` + selfSession + `"`, want: "the session retitled it"},
+		{desc: "lost, then retitled", titles: []string{"", "", name}, find: own, wantTo: ownTo, wantArg: selfArg, want: "the session retitled it"},
 		{desc: "retitled by another steward", titles: []string{"", name}, find: other, wantTo: "uds:/s/43.sock", wantArg: `"local_1"`, want: "steward local_2 retitled it"},
-		{desc: "replaced, then retitled", titles: []string{"klaus-lab", name}, find: own, wantTo: "uds:/s/42.sock", wantArg: `"` + selfSession + `"`, want: `"klaus-lab" instead of`},
+		{desc: "replaced, then retitled", titles: []string{"klaus-lab", name}, find: own, wantTo: ownTo, wantArg: selfArg, want: `"klaus-lab" instead of`},
 		{desc: "no steward", titles: []string{""}, find: func(context.Context) (steward, error) { return steward{}, errors.New("no idle desktop CLI") }, want: "no idle desktop CLI", wantErr: true},
-		{desc: "send fails", titles: []string{""}, find: own, sendErr: errors.New("not sent"), wantTo: "uds:/s/42.sock", wantArg: `"` + selfSession + `"`, want: "not sent", wantErr: true},
-		{desc: "never recorded", titles: []string{""}, find: own, wantTo: "uds:/s/42.sock", wantArg: `"` + selfSession + `"`, want: "did not record it", wantErr: true},
+		{desc: "send fails", titles: []string{""}, find: own, sendErr: errors.New("not sent"), wantTo: ownTo, wantArg: selfArg, want: "not sent", wantErr: true},
+		{desc: "never recorded", titles: []string{""}, find: own, wantTo: ownTo, wantArg: selfArg, want: "did not record it", wantErr: true},
 	} {
 		t.Run(c.desc, func(t *testing.T) {
 			var reads atomic.Int32
