@@ -39,7 +39,7 @@ func Command(ctx context.Context, name string, arg ...string) *exec.Cmd {
 			name = nice
 		}
 	}
-	c := exec.CommandContext(ctx, name, arg...)
+	c := exec.CommandContext(ctx, name, arg...) // #nosec G204 -- the caller's configured read (kubectl), optionally through nice
 	c.WaitDelay = waitDelay
 	return c
 }
