@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
@@ -35,7 +36,7 @@ A session with no running CLI (after a reboot, a crash, the desktop's idle
 drop) is resumed from the command line: "claude -p --resume <id>" with the
 message as its turn, in the session's directory, permission mode (a
 start's bypassPermissions, else the mode the desktop recorded for it;
---permission-mode overrides) and the model the desktop recorded for it, in a transient user unit beekeeper-wake-<id>
+--permission-mode overrides) and the model the desktop recorded for it, in a transient user unit beekeeper-wake-<id>-<wake>
 (its output in journalctl --user -u <unit>) the caller does not take down.
 The turn continues the session's own transcript. Once it ends, the session
 is shown in the desktop for a moment, which warms the desktop's CLI of it,
@@ -101,10 +102,10 @@ func (a *app) wakeAgent(ctx context.Context, q, msg, mode string) error {
 		_, err = fmt.Fprintf(a.out, "wake: %s runs (CLI %d): sent by name, it runs the message at its next tool call or as its next turn\n", ag.Name, s.PID)
 		return err
 	}
-	unit := wakeUnit(w.id)
-	if s := unitState(ctx, unit); s == "active" || s == "activating" {
-		return refused("%s: its wake turn %s is starting and not yet reachable by name: send again in a minute", ag.Name, unit)
+	if u := wakeRunning(ctx, w.id); u != "" {
+		return refused("%s: its wake turn %s is starting and not yet reachable by name: send again in a minute", ag.Name, u)
 	}
+	unit := wakeUnit(w.id)
 	bin, err := exec.LookPath("claude")
 	if err != nil {
 		return err
@@ -208,8 +209,25 @@ func uniqueName(sessions []*claude.Session, s *claude.Session) (string, error) {
 // resumeFlag continues a session in a new CLI.
 const resumeFlag = "--resume"
 
-// wakeUnit is the transient unit a wake of session id runs in.
-func wakeUnit(id string) string { return "beekeeper-wake-" + id[:min(8, len(id))] }
+// wakePrefix starts the name of every wake unit of session id.
+func wakePrefix(id string) string { return "beekeeper-wake-" + id[:min(8, len(id))] }
+
+// wakeUnit is the transient unit a wake of session id runs in, a new name
+// for every wake: an earlier wake's unit stays loaded while a process its
+// turn started runs on (KillMode=process), and systemd refuses a transient
+// unit under a loaded unit's name.
+func wakeUnit(id string) string { return wakePrefix(id) + "-" + uuid.NewString()[:8] }
+
+// wakeRunning is an active or activating wake unit of session id, "" for
+// none.
+func wakeRunning(ctx context.Context, id string) string {
+	out, _ := exec.CommandContext(ctx, "systemctl", "--user", "list-units", "--plain", "--no-legend", //nolint:gosec // the units beekeeper named
+		"--state=active,activating", wakePrefix(id)+"*").Output()
+	if f := strings.Fields(string(out)); len(f) > 0 {
+		return f[0]
+	}
+	return ""
+}
 
 // wakeArgv is a wake's command line: one headless turn resuming session id
 // in its mode and on its model, the message as the turn; flags go before the
