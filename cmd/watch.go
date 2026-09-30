@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"os/signal"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -36,8 +37,8 @@ func (a *app) watchCmd() *cobra.Command {
 silent otherwise: made to be the source of a Monitor, so the supervisor
 wakes only when something needs a look.
 
-Threshold breaches (RAM, swap, desktop scope, load, memory pressure, tmpfs,
-disk, the GitHub budget) and unreadable sources are one line when they
+Threshold breaches (RAM, swap, desktop scope, load, CPU and memory
+pressure, tmpfs, disk, the GitHub budget) and unreadable sources are one line when they
 start and one ENDED line when they end, never repeated while they last.
 OOM kills are never folded away: every poll reports every kill since the
 last one, grouped by whose limit they hit; a cap kill whose scope no
@@ -129,8 +130,15 @@ The machine's numbers are sampled in a loop of their own, so a slow
 installation read, a subprocess or a TLS timeout never delays a memory or
 load line. The rest of a poll waits for a lane read or the budget probe one
 watch.interval at most, and skips one whose previous run still goes instead
-of starting a second. While the load is over watch.loadMax or CPU pressure
-(some avg10) over watch.cpuPSIMax, the installation reads (upgrades,
+of starting a second.
+
+The CPU is said before it saturates: HIGH LOAD once the 1-minute load
+passes watch.loadMax (unset: watch.loadPerCoreMax, 1.5, × cores), LOAD
+RISING once it passes one per core at more than twice the 5-minute load,
+CPU PRESSURE once two samples in a row read some avg10 of
+/proc/pressure/cpu over watch.cpuPSIMax (40 %); each names the five
+commands that burned the most CPU since the last sample. While the load is
+over its threshold or CPU pressure over watch.cpuPSIMax, the installation reads (upgrades,
 alerts, lane settling) run every 4 × their interval at nice 10: one READS
 SLOWED line when that starts and one ENDED line when it ends.
 
@@ -202,6 +210,13 @@ type watcher struct {
 	zone func() (*time.Location, error)
 	// readHRs reads a lane installation's HelmReleases; nil is kubectl.
 	readHRs func(context.Context, config.Lane) ([]merge.HelmRelease, error)
+	// cpuTable is the process table the last machine sample read, at
+	// cpuAt: the next one's top CPU consumers are measured against it.
+	// cpuOver counts the samples in a row with CPU pressure over
+	// watch.cpuPSIMax.
+	cpuTable *proc.Table
+	cpuAt    time.Time
+	cpuOver  int
 	// strained is the machine sample's verdict that the CPU is saturated:
 	// the installation reads slow down (READS SLOWED).
 	strained atomic.Bool
@@ -240,11 +255,18 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 	// The machine is sampled in a loop of its own, so no network read or
 	// subprocess of the rest of the poll ever delays a memory or load line.
 	// The first sample comes before the reads start: they begin knowing
-	// whether the machine is strained.
+	// whether the machine is strained. The loop's own first sample is one
+	// interval later: two samples in a row span one (CPU PRESSURE).
 	w.sample(ctx)
 	var wg sync.WaitGroup
 	defer wg.Wait()
-	wg.Go(func() { w.loop(ctx, interval, false, w.sample) })
+	wg.Go(func() {
+		select {
+		case <-ctx.Done():
+		case <-time.After(interval):
+			w.loop(ctx, interval, false, w.sample)
+		}
+	})
 	if !w.standby {
 		wg.Go(func() { w.watchAlerts(ctx) })
 		wg.Go(func() { w.loop(ctx, interval, true, w.upgradeCycle) })
@@ -571,16 +593,7 @@ func (w *watcher) sample(ctx context.Context) {
 			w.oomLine(ctx, now, w.check("oomd", !swapoff && w.oomdImminent(headroom, perHour, rated), "OOMD IMMINENT: %s", line))
 		}
 	}
-	var load, cpu float64
-	if l, err := machine.ReadLoad(); err == nil {
-		load = l[0]
-		w.check("load", load > th.LoadMax, "HIGH LOAD: %.0f", load)
-	}
-	cpu, _ = machine.ReadCPUPSISome10()
-	strained := load > th.LoadMax || cpu > th.CPUPSIMax
-	w.strained.Store(strained)
-	w.check("slowed", strained, "READS SLOWED: machine under CPU pressure (load %.0f, CPU some avg10 %.0f%%): installation reads every %d× their interval, at nice %s",
-		load, cpu, slowReads, proc.Niceness)
+	w.sampleCPU(now)
 	if psi, err := machine.ReadPSIFull60(); err == nil {
 		w.check("psi", psi > th.PSIMax, "MEMORY PRESSURE: full avg60 %.0f%%", psi)
 	}
@@ -599,6 +612,41 @@ func (w *watcher) sample(ctx context.Context) {
 		}
 	}
 	w.saveMark()
+}
+
+// sampleCPU says the CPU lines: HIGH LOAD over watch.loadMax (or
+// watch.loadPerCoreMax × cores), LOAD RISING on a steep climb, CPU PRESSURE
+// once two samples in a row read some avg10 over watch.cpuPSIMax, each
+// with the top CPU consumers since the last sample; and READS SLOWED while
+// the machine is strained.
+func (w *watcher) sampleCPU(now time.Time) {
+	th := w.cfg.Watch
+	cores := runtime.NumCPU()
+	limit := th.LoadLimit(cores)
+	load, _ := machine.ReadLoad()
+	cpu, _ := machine.ReadCPUPSISome10()
+	if cpu > th.CPUPSIMax {
+		w.cpuOver++
+	} else {
+		w.cpuOver = 0
+	}
+	var top string
+	if t, err := proc.Read(); err == nil {
+		span := now.Sub(w.cpuAt)
+		top = topCPULine(topCPU(w.cpuTable, t, span, topCPUCommands), span)
+		w.cpuTable, w.cpuAt = t, now
+	}
+	w.check("load", load[0] > limit, "HIGH LOAD: 1m %.0f over %.0f (%d cores)%s", load[0], limit, cores, top)
+	w.check("loadrising", loadRising(load, cores), "LOAD RISING: 1m %.0f, 5m %.0f (%d cores)%s", load[0], load[1], cores, top)
+	// A restarted watch keeps a CPU PRESSURE it said while it lasts.
+	w.mu.Lock()
+	_, said := w.active["cpupsi"]
+	w.mu.Unlock()
+	w.check("cpupsi", w.cpuOver >= 2 || said && w.cpuOver > 0, "CPU PRESSURE: some avg10 %.0f%% over %.0f%%%s", cpu, th.CPUPSIMax, top)
+	strained := load[0] > limit || cpu > th.CPUPSIMax
+	w.strained.Store(strained)
+	w.check("slowed", strained, "READS SLOWED: machine under CPU pressure (load %.0f, CPU some avg10 %.0f%%): installation reads every %d× their interval, at nice %s",
+		load[0], cpu, slowReads, proc.Niceness)
 }
 
 // poll does everything but the machine sample: the process table, the
