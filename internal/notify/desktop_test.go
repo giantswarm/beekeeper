@@ -24,7 +24,7 @@ func (n *notifications) Notify(_ string, _ uint32, _, summary, _ string, _ []str
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.got = append(n.got, summary)
-	return uint32(len(n.got)), nil
+	return 1, nil
 }
 
 func (n *notifications) summaries() []string {
