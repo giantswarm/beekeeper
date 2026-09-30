@@ -29,8 +29,8 @@ func (h Hook) browserRefusal(cmd, session string) string {
 	}) {
 		return ""
 	}
-	return "Refused: `" + short(m[1]) + "` opens a page in Timo's browser, in front of whatever he is working in, " +
-		"and he closes it as a stray pop-up. Only the session holding the browser lease opens one: ask your supervisor " +
+	return "Refused: `" + short(m[1]) + "` opens a page in the person's browser, in front of whatever they are working in, " +
+		"and they close it as a stray pop-up. Only the session holding the browser lease opens one: ask your supervisor " +
 		"for \"browser\", claim it with `beekeeper lease claim browser -p \"<purpose>\"` after its yes, run the sign-in, " +
 		"and release the lease right after."
 }
