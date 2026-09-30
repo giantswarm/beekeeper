@@ -125,7 +125,7 @@ func (a *app) wakeAgent(ctx context.Context, q, msg, mode string) error {
 	_, err = fmt.Fprintf(a.out, "wake: %s had no running CLI: resumed session %s headless in %s, %s, with the message as its turn (journalctl --user -u %s)\n",
 		ag.Name, w.id, w.dir, w.mode, unit)
 	if err == nil && w.host != "" {
-		_, err = fmt.Fprintf(a.out, "once the turn ends, %s is shown in the desktop for a moment, which warms its desktop CLI\n", w.host)
+		_, err = fmt.Fprintf(a.out, "once the turn ends, %s is shown in the desktop for a moment, which warms its desktop CLI; the moment waits while the desktop's window has the focus\n", w.host)
 	}
 	return err
 }

@@ -288,3 +288,39 @@ func TestTitleLine(t *testing.T) {
 		}
 	}
 }
+
+// A claude:// link waits while the desktop's window has the focus, and goes
+// once it lost it; a window that keeps it, or a compositor that cannot be
+// asked, holds the link past the wait.
+func TestAwaitDesktopAway(t *testing.T) {
+	saved := desktopWindowActive
+	t.Cleanup(func() { desktopWindowActive = saved })
+	for name, tc := range map[string]struct {
+		active func(n int) (bool, error)
+		want   bool
+	}{
+		"away at once":          {func(int) (bool, error) { return false, nil }, true},
+		"leaves after a moment": {func(n int) (bool, error) { return n < 2, nil }, true},
+		"keeps the focus":       {func(int) (bool, error) { return true, nil }, false},
+		"cannot be asked":       {func(int) (bool, error) { return false, errors.New("hyprctl: no socket") }, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var n int
+			desktopWindowActive = func(context.Context) (bool, error) { n++; return tc.active(n - 1) }
+			if got := awaitDesktopAway(t.Context(), 3*awayPoll); got != tc.want {
+				t.Errorf("awaitDesktopAway = %v after %d asks, want %v", got, n, tc.want)
+			}
+		})
+	}
+}
+
+// A showBriefly while the desktop's window keeps the focus opens no link.
+func TestShowBrieflyHeldByFocus(t *testing.T) {
+	saved := desktopWindowActive
+	t.Cleanup(func() { desktopWindowActive = saved })
+	desktopWindowActive = func(context.Context) (bool, error) { return true, nil }
+	a := &app{}
+	if _, err := a.showBriefly(t.Context(), "claude://nowhere", "local_x", "", true, awayPoll); !errors.Is(err, errDesktopInUse) {
+		t.Errorf("showBriefly = %v, want errDesktopInUse", err)
+	}
+}

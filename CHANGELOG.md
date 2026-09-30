@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `agents start`, and the reopen after a start's or a wake's turn, open their `claude://` links only while Claude Desktop's window is without the focus (Hyprland's active window): each link switched the desktop's main window to another session and back under the person typing there. A start whose import waits out 2 minutes leaves it to the reopen after its first turn, which imports the session and waits up to 25 minutes.
+- The PreToolUse hook refuses a command that opens a page in the person's browser (`muster auth login`, `gh auth login --web`, `xdg-open`) outside the session holding the `browser` lease: a worker's sign-in tab opened in front of the person, who closed it as a stray pop-up.
+
 - `watch --notify` sends a memory notification (`oom-line`) only when a systemd-oomd swap kill is imminent: less than `watch.oomdHeadroomMinMiB` (1024) of swap growth left before oomd's `SwapUsedLimit`, read from `oomd.conf` and its drop-ins, or the trigger reached within `watch.oomdWithin` (30m) at the last hour's growth rate. Low RAM, swap over `watch.swapMaxMiB`, memory pressure and the desktop scope's anonymous memory stay watch lines for the supervisor. Cold pages parked in swap on a quiet machine notified the person every 30 minutes.
 - The watch's `SWAP` line says the distance to systemd-oomd's trigger and the growth rate over the last hour, e.g. `SWAP: 10627 of 16383 MiB used, 4117 MiB before systemd-oomd's 90 % trigger, +250 MiB/h over the last hour, trigger in 16h28m0s`. `beekeeper free` reads the trigger from `oomd.conf` too instead of assuming 90 %.
 
