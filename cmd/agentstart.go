@@ -50,6 +50,9 @@ const (
 	// reopenAwayWait bounds how long a reopen waits for the person to leave
 	// the desktop's window.
 	reopenAwayWait = 25 * time.Minute
+	// settleWait bounds the wait for the desktop's main window to leave the
+	// session a link is about to show, a switch back still landing.
+	settleWait = 5 * time.Second
 	// awayPoll is how often a wait for the desktop's window asks the
 	// compositor which window has focus.
 	awayPoll = 500 * time.Millisecond
@@ -452,7 +455,7 @@ func (a *app) showBriefly(ctx context.Context, url, host, follow string, running
 		if !awaitDesktopAway(ctx, away) {
 			return "", errDesktopInUse
 		}
-		prev, _ = claude.DesktopFocus(a.cfg.Claude.DesktopLog) // unreadable: nothing to go back to
+		prev = awaitFocusOff(ctx, a.cfg.Claude.DesktopLog, host, settleWait)
 	}
 	if err := openDesktop(ctx, url, running); err != nil {
 		return "", err
@@ -554,6 +557,29 @@ func reopens(st *state.State, id string) (string, bool) {
 		return "", false
 	}
 	return st.Agents[i].Name, true
+}
+
+// awaitFocusOff is the session the desktop's main window shows once it
+// shows another than host, waiting up to wait; host when it stays, empty
+// when the log is unreadable (nothing to go back to). A reopen right after
+// its start's import finds the window on host until the start's switch
+// back lands, and would otherwise leave it there.
+func awaitFocusOff(ctx context.Context, log, host string, wait time.Duration) string {
+	ctx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	tick := time.NewTicker(250 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		f, err := claude.DesktopFocus(log)
+		if err != nil || f != host {
+			return f
+		}
+		select {
+		case <-ctx.Done():
+			return f
+		case <-tick.C:
+		}
+	}
 }
 
 // awaitFocus reports whether the desktop's main window shows host within
