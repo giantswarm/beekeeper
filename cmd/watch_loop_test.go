@@ -17,6 +17,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// The lane and repository of the merge a loop test's watch settles.
+const loopLane, loopRepo = "loop-lane", "giantswarm/loop-repo"
+
 // syncBuffer is a watch's output read while the watch writes it.
 type syncBuffer struct {
 	mu sync.Mutex
@@ -44,7 +47,7 @@ func loopWatcher(t *testing.T, interval, extra string, readHRs func(context.Cont
 	path := filepath.Join(dir, "config.yaml")
 	cfg := "stateDir: " + dir + "\n" +
 		"claude: {projectsDir: " + filepath.Join(dir, "projects") + ", sessionsDir: " + filepath.Join(dir, "sessions") + "}\n" +
-		"lanes: [{name: agent-platform, installation: gazelle, repositories: [giantswarm/agent-platform]}]\n" +
+		"lanes: [{name: " + loopLane + ", installation: gazelle, repositories: [" + loopRepo + "]}]\n" +
 		"watch: {interval: " + interval + ", budgetEvery: 24h" + extra + "}\n"
 	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
@@ -59,7 +62,7 @@ func loopWatcher(t *testing.T, interval, extra string, readHRs func(context.Cont
 	}
 	now := time.Now()
 	err = store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Merges = []state.Merge{{Repo: "giantswarm/agent-platform", PR: 701, Lane: "agent-platform", Phase: state.Settling,
+		st.Merges = []state.Merge{{Repo: loopRepo, PR: 701, Lane: loopLane, Phase: state.Settling,
 			Release: "v4.79.0", Roll: []string{"flux-giantswarm/agent-platform"}, Finished: now}}
 		return nil, nil
 	})
