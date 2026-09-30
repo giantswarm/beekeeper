@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/upgrade"
@@ -92,17 +93,27 @@ func (a *app) supervision(st *state.State, sessions []*claude.Session) supervisi
 
 func (a *app) leaseClaimCmd() *cobra.Command {
 	var purpose string
+	var gib int
 	c := &cobra.Command{
 		Use:   "claim <resource>",
 		Short: "Claim a resource (exit 3 when it is held or not granted to you)",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		Long: `Claim a resource (exit 3 when it is held or not granted to you).
+
+A model-server claim carries the GiB its models may hold on the host's model
+server (--gib, default ollama.budgetGiB, at most ollama.maxBudgetGiB): a loaded
+model is RAM no cgroup counts, and the watch unloads what exceeds it.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
 			res := args[0]
 			if err := a.checkResource(res); err != nil {
 				return err
 			}
 			if strings.TrimSpace(purpose) == "" {
 				return &exitError{code: ExitUsage, msg: "--purpose is required: say what the resource is for"}
+			}
+			budget, err := a.claimBudget(res, gib, cmd.Flags().Changed("gib"))
+			if err != nil {
+				return err
 			}
 			me, err := a.caller()
 			if err != nil {
@@ -170,6 +181,7 @@ func (a *app) leaseClaimCmd() *cobra.Command {
 					Since:       a.now.UTC().Format("2006-01-02T15:04:05Z"),
 
 					UpgradeUnblock: unblock,
+					BudgetGiB:      budget,
 				})
 				if err != nil {
 					return nil, err
@@ -181,6 +193,10 @@ func (a *app) leaseClaimCmd() *cobra.Command {
 					st.Grants = slices.Delete(st.Grants, idx, idx+1)
 				}
 				msg = "claimed " + res
+				if budget > 0 {
+					msg += fmt.Sprintf(" with a budget of %d GiB: use models within it, with keep_alive 0, and release it when done", budget)
+					return append(evs, event(me, "lease.claim", "%s: %s (%d GiB)", res, purpose, budget)), nil
+				}
 				if unblock != "" {
 					msg += " to unblock its upgrade: " + unblock
 					return append(evs, event(me, "lease.claim", "%s: %s (upgrade unblock: %s)", res, purpose, unblock)), nil
@@ -198,7 +214,25 @@ func (a *app) leaseClaimCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVarP(&purpose, "purpose", "p", "", "what the resource is for (required)")
+	c.Flags().IntVar(&gib, "gib", 0, "model-server only: the GiB your models may hold (default ollama.budgetGiB)")
 	return c
+}
+
+// claimBudget is the GiB a claim of res carries: set only on the model
+// server, within its maximum.
+func (a *app) claimBudget(res string, gib int, set bool) (int, error) {
+	o := a.cfg.Ollama
+	switch {
+	case res != config.ModelServer && set:
+		return 0, usageErr("--gib is the model server's budget: %s carries none", res)
+	case res != config.ModelServer:
+		return 0, nil
+	case !set:
+		return o.BudgetGiB, nil
+	case gib < 1 || gib > o.MaxBudgetGiB:
+		return 0, usageErr("--gib %d: a model-server claim holds 1 to %d GiB (ollama.maxBudgetGiB)", gib, o.MaxBudgetGiB)
+	}
+	return gib, nil
 }
 
 func (a *app) heldBy(v leaseView) error {
@@ -353,7 +387,7 @@ func (a *app) printLeases(l *leaseList) {
 		w := a.table()
 		_, _ = fmt.Fprintln(w, "RESOURCE\tHOLDER\tSINCE\tSTATE\tPURPOSE")
 		for _, h := range l.Held {
-			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", h.Env, truncate(h.Name, 40), clock(a.now, h.SinceTime()), h.State, truncate(h.Purpose, 60))
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", h.Label(), truncate(h.Name, 40), clock(a.now, h.SinceTime()), h.State, truncate(h.Purpose, 60))
 		}
 		_ = w.Flush()
 		for _, h := range l.Held {

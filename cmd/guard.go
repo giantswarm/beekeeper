@@ -187,7 +187,8 @@ Register it in ~/.claude/settings.json:
 			self, _ := os.Executable()
 			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, Peer: a.desktopPeer,
 				Project: os.Getenv("CLAUDE_PROJECT_DIR"), Reads: a.firstReads,
-				Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig()}
+				Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(),
+				ModelServer: a.modelServer}
 			if out := h.Decide(raw); out != nil {
 				_, _ = a.out.Write(out)
 			}
@@ -341,6 +342,14 @@ func (a *app) isGuide(session string) (bool, string) {
 // heldLeases lists the held leases for the third-lab refusal, each holder
 // named as `lease list` names it. The configuration is read only when a
 // refusal needs it: a broken one must not block a tool call.
+// modelServer is the host's model server as the hook guards it.
+func (a *app) modelServer() guard.ModelServer {
+	if a.loadConfig() != nil {
+		return guard.ModelServer{}
+	}
+	return guard.ModelServer{URL: a.cfg.Ollama.URL, LabTests: a.cfg.Ollama.LabTests}
+}
+
 func (a *app) heldLeases() []lease.Holder {
 	if a.loadConfig() != nil {
 		return nil

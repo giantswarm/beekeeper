@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -235,6 +236,31 @@ func TestDevctlServes(t *testing.T) {
 	for repo, want := range map[string]bool{"giantswarm/beekeeper": true, "GiantSwarm/x": true, "teemow/klaus-lab": false} {
 		if got := c.Merge.DevctlServes(repo); got != want {
 			t.Errorf("%s: %v, want %v", repo, got, want)
+		}
+	}
+}
+
+func TestModelServerLease(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.yaml")
+	if err := os.WriteFile(path, []byte("resources: [agentlab-1]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(c.Leasable(), ","); got != "agentlab-1,model-server,browser" {
+		t.Errorf("leasable %s", got)
+	}
+	if o := c.Ollama; o.BudgetGiB != 12 || o.MaxBudgetGiB != 24 || strings.Join(o.LabTests, ",") != "models-test" {
+		t.Errorf("model server defaults %+v", o)
+	}
+	for _, bad := range []string{"resources: [model-server]\n", "ollama: {budgetGiB: 30}\n"} {
+		if err := os.WriteFile(path, []byte(bad), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(path); err == nil {
+			t.Errorf("%q loads", bad)
 		}
 	}
 }

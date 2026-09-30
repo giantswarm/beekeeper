@@ -114,6 +114,10 @@ type Hook struct {
 	// MachineKubeconfig is the machine kubeconfig (~/.kube/config), which
 	// keeps no current context.
 	MachineKubeconfig string
+	// ModelServer reads the host's model server, whose loads need its
+	// lease; called only for a command that may load a model, nil guards
+	// nothing.
+	ModelServer func() ModelServer
 }
 
 // event is the part of a PreToolUse event the hook reads.
@@ -176,6 +180,9 @@ func (h Hook) decide(ev event) []byte {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	if r := h.browserRefusal(cmd, ev.Session); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
+	if r := h.modelServerRefusal(cmd, ev.Session); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	if l := secretLeak(cmd); l != nil {

@@ -529,6 +529,23 @@ func (w *watcher) oomLine(ctx context.Context, now time.Time, line string) {
 	w.notifyAt(ctx, now, notify.OOMLine, "", "beekeeper: systemd-oomd is about to kill the largest swap user", line+"\nbeekeeper free")
 }
 
+// modelServer says the host models no model-server lease covers and
+// unloads those a lab loaded or a budget exceeds, unless ollama.nameOnly.
+func (w *watcher) modelServer(ctx context.Context, models []machine.OllamaModel) {
+	holders, err := lease.Dir(w.cfg.LeaseDir).List()
+	if err != nil {
+		return
+	}
+	bs := modelBreaches(models, holders, w.cfg.Resources, w.cfg.Ollama.BudgetGiB)
+	unloaded := map[string]error{}
+	for _, b := range bs {
+		if b.Unload && !w.cfg.Ollama.NameOnly {
+			unloaded[b.Model.Name] = machine.UnloadOllama(ctx, w.cfg.Ollama.URL, b.Model.Name)
+		}
+	}
+	w.check("modelserver", len(bs) > 0, "MODEL SERVER: %s", modelServerLine(bs, unloaded))
+}
+
 // emitNow prints an event that is never folded away.
 func (w *watcher) emitNow(_ string, format string, args ...any) {
 	w.emitLine(time.Now().Format("15:04:05") + " " + fmt.Sprintf(format, args...))
@@ -550,9 +567,12 @@ func (w *watcher) sample(ctx context.Context) {
 
 	// GTT is RAM the iGPU pins outside every cgroup: above its threshold
 	// it is named as the cause of low memory, with ollama's models.
+	models, merr := machine.OllamaModels(ctx, w.cfg.Ollama.URL, w.cfg.Ollama.Unit)
+	if merr == nil {
+		w.modelServer(ctx, models)
+	}
 	var cause string
 	if gpus := machine.ReadGPUs(); machine.GTTUsedMiB(gpus) > th.GTTMaxMiB {
-		models, _ := machine.OllamaModels(ctx, w.cfg.Ollama.URL, w.cfg.Ollama.Unit)
 		cause = gttLine(gpus, models)
 	}
 	w.check("gtt", cause != "", "IGPU %s", strings.TrimPrefix(cause, "iGPU "))
