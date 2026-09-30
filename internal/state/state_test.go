@@ -178,6 +178,43 @@ func TestDue(t *testing.T) {
 	}
 }
 
+func TestEventsSurviveAnUncleanShutdown(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The unclean end zeroed an append's range, and the next event landed
+	// right behind the zeros on the same line.
+	zeros := strings.Repeat("\x00", 275)
+	raw := `{"at":"2026-09-27T13:53:18Z","verb":"timer.add"}` + "\n" +
+		zeros + `{"at":"2026-09-27T14:09:56Z","verb":"reporter.start"}` + "\n" + zeros
+	if err := os.WriteFile(s.path("events.jsonl"), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Log(Event{At: time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC), Verb: "note.add"}); err != nil {
+		t.Fatal(err)
+	}
+	events, err := s.Events(0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var verbs []string
+	for _, e := range events {
+		verbs = append(verbs, e.Verb)
+	}
+	if got, want := strings.Join(verbs, " "), "timer.add reporter.start note.add"; got != want {
+		t.Errorf("events = %q, want %q", got, want)
+	}
+	after, err := os.ReadFile(s.path("events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(after), "\n"), "\n")
+	if last := lines[len(lines)-1]; !strings.HasPrefix(last, `{"at":"2026-09-30T10:00:00Z"`) {
+		t.Errorf("the new event shares a line with the zeros: %q", last)
+	}
+}
+
 func TestEventsAreWrittenInUTC(t *testing.T) {
 	s, err := Open(t.TempDir())
 	if err != nil {
