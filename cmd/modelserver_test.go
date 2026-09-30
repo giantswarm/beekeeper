@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -19,37 +22,37 @@ const (
 
 func TestModelBreaches(t *testing.T) {
 	resources := []string{labOne, labTwo}
-	lab1 := machine.OllamaModel{Name: bigModel, SizeMiB: 18000, Client: labOneNode}
-	lab2 := machine.OllamaModel{Name: "mid", SizeMiB: 6000, Client: "172.21.0.2 agentlab-2-control-plane"}
-	host := machine.OllamaModel{Name: "host", SizeMiB: 3000, Client: "127.0.0.1"}
+	lab1 := machine.HostModel{Name: bigModel, SizeMiB: 18000, Client: labOneNode}
+	lab2 := machine.HostModel{Name: "mid", SizeMiB: 6000, Client: "172.21.0.2 agentlab-2-control-plane"}
+	host := machine.HostModel{Name: "host", SizeMiB: 3000, Client: "127.0.0.1"}
 	a := lease.Holder{Env: labOne, Session: "a", Name: "Agent A"}
 	b := lease.Holder{Env: labTwo, Session: "b", Name: "Agent B"}
 	msA := func(gib int) lease.Holder {
 		return lease.Holder{Env: config.ModelServer, Session: "a", Name: "Agent A", BudgetGiB: gib}
 	}
 	for name, tc := range map[string]struct {
-		models  []machine.OllamaModel
+		models  []machine.HostModel
 		holders []lease.Holder
 		want    map[string]bool // model → unloaded
 		reason  string
 	}{
 		"no lease: a lab load is unloaded, a host load named": {
-			[]machine.OllamaModel{lab1, host}, []lease.Holder{a},
+			[]machine.HostModel{lab1, host}, []lease.Holder{a},
 			map[string]bool{bigModel: true, "host": false}, "nobody holds the model-server lease",
 		},
 		"the holder's lab within its budget": {
-			[]machine.OllamaModel{lab1}, []lease.Holder{a, msA(24)}, map[string]bool{}, "",
+			[]machine.HostModel{lab1}, []lease.Holder{a, msA(24)}, map[string]bool{}, "",
 		},
 		"another session's lab": {
-			[]machine.OllamaModel{lab2}, []lease.Holder{a, b, msA(24)},
+			[]machine.HostModel{lab2}, []lease.Holder{a, b, msA(24)},
 			map[string]bool{"mid": true}, `the model server is "Agent A"'s (lab agentlab-2, held by "Agent B")`,
 		},
 		"over budget: the largest goes": {
-			[]machine.OllamaModel{host, lab1}, []lease.Holder{a, msA(16)},
+			[]machine.HostModel{host, lab1}, []lease.Holder{a, msA(16)},
 			map[string]bool{bigModel: true}, `"Agent A"'s models hold 21000 MiB, over its model-server budget of 16 GiB`,
 		},
 		"a claim without budget takes the default": {
-			[]machine.OllamaModel{lab1}, []lease.Holder{a, msA(0)}, map[string]bool{bigModel: true}, "over its model-server budget of 12 GiB",
+			[]machine.HostModel{lab1}, []lease.Holder{a, msA(0)}, map[string]bool{bigModel: true}, "over its model-server budget of 12 GiB",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -79,14 +82,14 @@ func TestLabOf(t *testing.T) {
 		"172.21.0.5 agentlab-registry":        "",
 		"127.0.0.1":                           "",
 	} {
-		if got := labOf(machine.OllamaModel{Client: client}, res); got != want {
+		if got := labOf(machine.HostModel{Client: client}, res); got != want {
 			t.Errorf("labOf(%q) = %q, want %q", client, got, want)
 		}
 	}
 }
 
 func TestModelServerLine(t *testing.T) {
-	bs := []modelBreach{{Model: machine.OllamaModel{Name: bigModel, SizeMiB: 1, Client: "c"}, Reason: "r", Unload: true}, {Model: machine.OllamaModel{Name: "h", SizeMiB: 2}, Reason: "s"}}
+	bs := []modelBreach{{Model: machine.HostModel{Name: bigModel, SizeMiB: 1, Client: "c"}, Reason: "r", Unload: true}, {Model: machine.HostModel{Name: "h", SizeMiB: 2}, Reason: "s"}}
 	got := modelServerLine(bs, map[string]error{bigModel: nil})
 	if want := "big 1 MiB loaded by c: r; unloaded | h 2 MiB loaded by an unknown client: s"; got != want {
 		t.Errorf("line %q, want %q", got, want)
@@ -113,5 +116,35 @@ func TestClaimBudget(t *testing.T) {
 		if got != tc.want || (err == nil) != tc.ok {
 			t.Errorf("claimBudget(%s, %d, %v) = %d, %v", tc.res, tc.gib, tc.set, got, err)
 		}
+	}
+}
+
+func TestHostModels(t *testing.T) {
+	lemonade := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/health" {
+			_, _ = w.Write([]byte(`{"all_models_loaded":[{"model_name":"gemma3-4b-FLM"}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	defer lemonade.Close()
+	down := httptest.NewServer(http.NotFoundHandler())
+	down.Close()
+	cfg := func(ollama, lemonade string) *config.Config {
+		return &config.Config{Ollama: config.Ollama{URL: ollama}, Lemonade: config.Lemonade{URL: lemonade}}
+	}
+	// ollama down: Lemonade's models still count.
+	got, err := hostModels(context.Background(), cfg(down.URL, lemonade.URL))
+	if err != nil || len(got) != 1 || got[0].Server != machine.Lemonade {
+		t.Errorf("ollama down: %+v, %v", got, err)
+	}
+	if serverURL(cfg(down.URL, lemonade.URL), got[0]) != lemonade.URL {
+		t.Error("a Lemonade model is unloaded at ollama's URL")
+	}
+	if _, err := hostModels(context.Background(), cfg(down.URL, "")); err == nil {
+		t.Error("the only server down reads as no models")
+	}
+	if _, err := hostModels(context.Background(), cfg(down.URL, down.URL)); err == nil {
+		t.Error("both servers down read as no models")
 	}
 }

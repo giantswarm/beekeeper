@@ -13,7 +13,7 @@ func TestModelServerRefusal(t *testing.T) {
 			return []lease.Holder{{Env: "agentlab-1", Session: "s1"}, {Env: modelServerLease, Session: session}}
 		}
 	}
-	ms := ModelServer{URL: "http://localhost:11434", LabTests: []string{"models-test"}}
+	ms := ModelServer{URL: "http://localhost:11434", LemonadeURL: "http://localhost:13305", LabTests: []string{"models-test"}}
 	for name, tc := range map[string]struct {
 		cmd     string
 		leases  func() []lease.Holder
@@ -33,6 +33,14 @@ func TestModelServerRefusal(t *testing.T) {
 		"a call quoted in a comment body": {"gh issue comment 1 --body \"the hook refuses `curl -s localhost:11434/api/generate`\"", held("other"), false},
 		"a chat call from a kind node":    {"docker exec agentlab-2-control-plane curl -s http://172.21.0.1:11434/api/chat -d @b", held("other"), true},
 		"a generate call after a list":    {"cd /tmp && curl localhost:11434/api/generate -d @b", held("other"), true},
+		"lemonade run without the lease":  {"lemonade run gemma3-4b-FLM", held("other"), true},
+		"lemonade load under the lease":   {"lemonade load gemma3-4b-FLM", held("s1"), false},
+		"lemonade list passes":            {"lemonade list --downloaded", held("other"), false},
+		"lemonade unload passes":          {"lemonade unload gemma3-4b-FLM", held("other"), false},
+		"a lemonade chat call":            {`curl -s http://localhost:13305/api/v1/chat/completions -d @b`, held("other"), true},
+		"a lemonade load call":            {`curl -s -X POST localhost:13305/api/v1/load -d '{"model_name":"x"}'`, held("other"), true},
+		"reading lemonade's health":       {"curl -s localhost:13305/api/v1/health", held("other"), false},
+		"another port's chat call":        {"curl -s localhost:8080/v1/chat/completions -d @b", held("other"), false},
 		"lease held under the desktop id": {"ollama run x", func() []lease.Holder { return []lease.Holder{{Env: modelServerLease, HostSession: "local_s1"}} }, false},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -47,5 +55,9 @@ func TestModelServerRefusal(t *testing.T) {
 	}
 	if r := (Hook{Leases: held("other")}).modelServerRefusal("ollama run x", "s1"); r != "" {
 		t.Errorf("no model server configured, refused: %q", r)
+	}
+	ollamaOnly := Hook{Leases: held("other"), ModelServer: func() ModelServer { return ModelServer{URL: "http://localhost:11434"} }}
+	if r := ollamaOnly.modelServerRefusal("lemonade run x", "s1"); r != "" {
+		t.Errorf("no Lemonade configured, refused: %q", r)
 	}
 }

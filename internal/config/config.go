@@ -55,6 +55,9 @@ type Config struct {
 	Notify   Notify   `yaml:"notify"`
 	Metrics  Metrics  `yaml:"metrics"`
 	Ollama   Ollama   `yaml:"ollama"`
+	// Lemonade is the host's Lemonade Server, a second model server under
+	// the same model-server lease and ollama's budgets.
+	Lemonade Lemonade `yaml:"lemonade"`
 	// Supervisor is what `handover --prompt` tells a successor supervisor,
 	// how long a relay to it stays open and at what context it is due.
 	Supervisor Supervisor `yaml:"supervisor"`
@@ -337,6 +340,14 @@ type Ollama struct {
 	// LabTests are the agentlab subcommands that run turns on the host's
 	// models; the hook refuses them outside the model-server lease.
 	LabTests []string `yaml:"labTests"`
+}
+
+// Lemonade is the host's Lemonade Server, whose loaded models live in the
+// iGPU's memory like ollama's.
+type Lemonade struct {
+	// URL is its API (http://localhost:13305); unset, the machine runs
+	// none and nothing watches or guards one.
+	URL string `yaml:"url"`
 }
 
 // Watch holds the thresholds of `beekeeper watch` (MiB unless noted).
@@ -748,7 +759,7 @@ func (c *Config) validate() error {
 			return fmt.Errorf("resources: %q is not a valid resource name", r)
 		}
 	}
-	if o := c.Ollama; o.URL != "" && (o.BudgetGiB < 1 || o.BudgetGiB > o.MaxBudgetGiB) {
+	if o := c.Ollama; (o.URL != "" || c.Lemonade.URL != "") && (o.BudgetGiB < 1 || o.BudgetGiB > o.MaxBudgetGiB) {
 		return fmt.Errorf("ollama.budgetGiB: %d is not between 1 and maxBudgetGiB %d", o.BudgetGiB, o.MaxBudgetGiB)
 	}
 	names, repos := map[string]bool{}, map[string]string{}
@@ -818,7 +829,7 @@ func (c *Config) LaneNamed(name string) (Lane, bool) {
 // the model server when one is watched, the browser last.
 func (c *Config) Leasable() []string {
 	out := slices.Clone(c.Resources)
-	if c.Ollama.URL != "" {
+	if c.Ollama.URL != "" || c.Lemonade.URL != "" {
 		out = append(out, ModelServer)
 	}
 	return append(out, Browser)

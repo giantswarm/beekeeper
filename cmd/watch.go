@@ -576,7 +576,7 @@ func (w *watcher) oomLine(ctx context.Context, now time.Time, line string) {
 
 // modelServer says the host models no model-server lease covers and
 // unloads those a lab loaded or a budget exceeds, unless ollama.nameOnly.
-func (w *watcher) modelServer(ctx context.Context, models []machine.OllamaModel) {
+func (w *watcher) modelServer(ctx context.Context, models []machine.HostModel) {
 	holders, err := lease.Dir(w.cfg.LeaseDir).List()
 	if err != nil {
 		return
@@ -585,7 +585,7 @@ func (w *watcher) modelServer(ctx context.Context, models []machine.OllamaModel)
 	unloaded := map[string]error{}
 	for _, b := range bs {
 		if b.Unload && !w.cfg.Ollama.NameOnly {
-			unloaded[b.Model.Name] = machine.UnloadOllama(ctx, w.cfg.Ollama.URL, b.Model.Name)
+			unloaded[b.Model.Name] = b.Model.Unload(ctx, serverURL(w.cfg, b.Model))
 		}
 	}
 	w.check("modelserver", len(bs) > 0, "MODEL SERVER: %s", modelServerLine(bs, unloaded))
@@ -611,8 +611,8 @@ func (w *watcher) sample(ctx context.Context) {
 	th := w.cfg.Watch
 
 	// GTT is RAM the iGPU pins outside every cgroup: above its threshold
-	// it is named as the cause of low memory, with ollama's models.
-	models, merr := machine.OllamaModels(ctx, w.cfg.Ollama.URL, w.cfg.Ollama.Unit)
+	// it is named as the cause of low memory, with the model servers' models.
+	models, merr := hostModels(ctx, w.cfg)
 	if merr == nil {
 		w.modelServer(ctx, models)
 	}
