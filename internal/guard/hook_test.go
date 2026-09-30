@@ -46,8 +46,11 @@ func decideEvent(t *testing.T, h Hook, ev map[string]any) *decision {
 	return &o.D
 }
 
+// testShell is the shell the tests' hook rewrites into.
+const testShell = "zsh"
+
 func hook(clusters ...string) Hook {
-	return Hook{Self: self, Shell: "zsh", MaxLabs: func() int { return 2 }, Production: "gazelle",
+	return Hook{Self: self, Shell: testShell, MaxLabs: func() int { return 2 }, Production: "gazelle",
 		ContextHint: "teleport.giantswarm.io-<installation>", Clusters: func() []string { return clusters },
 		Leases: func() []lease.Holder {
 			return []lease.Holder{{Env: "agentlab-1", Name: "Agent one", Purpose: "kagent e2e", Since: "2026-09-24T10:00:00Z"}}
@@ -176,7 +179,7 @@ func TestParse(t *testing.T) {
 }
 
 func TestHookGatesMerges(t *testing.T) {
-	h := Hook{Self: self, Shell: "zsh", Clusters: func() []string { return nil }, Leases: func() []lease.Holder { return nil }}
+	h := Hook{Self: self, Shell: testShell, Clusters: func() []string { return nil }, Leases: func() []lease.Holder { return nil }}
 	g := self + " gate -- "
 	for _, c := range []struct {
 		cmd, want string
@@ -233,7 +236,7 @@ func TestHookGatesMerges(t *testing.T) {
 // number of merges a shell parser finds in it. Each merge is gated, and the
 // rewrite adds nothing but the gates.
 func TestHookGatesRealMerges(t *testing.T) {
-	h := Hook{Self: self, Shell: "zsh", Clusters: func() []string { return nil }, Leases: func() []lease.Holder { return nil }}
+	h := Hook{Self: self, Shell: testShell, Clusters: func() []string { return nil }, Leases: func() []lease.Holder { return nil }}
 	raw, err := os.ReadFile("testdata/merges.jsonl")
 	if err != nil {
 		t.Fatal(err)
@@ -274,7 +277,7 @@ func TestHookGatesRealMerges(t *testing.T) {
 }
 
 func TestHookRefusesHiddenMerges(t *testing.T) {
-	h := Hook{Self: self, Shell: "zsh", Clusters: func() []string { return nil }, Leases: func() []lease.Holder { return nil }}
+	h := Hook{Self: self, Shell: testShell, Clusters: func() []string { return nil }, Leases: func() []lease.Holder { return nil }}
 	g := self + " gate -- "
 	for _, c := range []struct {
 		cmd, fixed string
