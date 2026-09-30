@@ -36,6 +36,17 @@ type Holder struct {
 	// UpgradeUnblock is the reason of the upgrade-unblock grant the claim
 	// was admitted by during an upgrade, empty for any other claim.
 	UpgradeUnblock string `json:"upgradeUnblock,omitempty"`
+	// BudgetGiB is what the holder's models may hold on the model server,
+	// 0 on every other resource.
+	BudgetGiB int `json:"budgetGiB,omitempty"`
+}
+
+// Label is the resource with the budget its claim carries.
+func (h Holder) Label() string {
+	if h.BudgetGiB == 0 {
+		return h.Env
+	}
+	return fmt.Sprintf("%s (%d GiB)", h.Env, h.BudgetGiB)
 }
 
 // Party is the holder as the state names it.

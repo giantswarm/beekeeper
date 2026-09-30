@@ -75,6 +75,21 @@ func OllamaModels(ctx context.Context, url, unit string) ([]OllamaModel, error) 
 	return out, nil
 }
 
+// UnloadOllama asks the ollama at url to drop model from memory now; its
+// weights stay on disk and the next request loads it again.
+func UnloadOllama(ctx context.Context, url, model string) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	var out struct{}
+	return ollamaCall(ctx, url, "/api/generate", map[string]any{"model": model, "keep_alive": 0, "stream": false}, &out)
+}
+
+// Node is the kind node's name in Client, "" when the client is none.
+func (m OllamaModel) Node() string {
+	_, name, _ := strings.Cut(m.Client, " ")
+	return name
+}
+
 func ollamaCall(ctx context.Context, url, path string, body, into any) error {
 	method, payload := http.MethodGet, []byte(nil)
 	if body != nil {

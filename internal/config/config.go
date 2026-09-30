@@ -28,6 +28,10 @@ import (
 // Chrome extension drives.
 const Browser = "browser"
 
+// ModelServer is the resource of the host's model server: a claim carries
+// the GiB its models may hold.
+const ModelServer = "model-server"
+
 // Config is the parsed configuration with the defaults applied.
 type Config struct {
 	// StateDir holds state.json, events.jsonl and the last snapshot.
@@ -329,6 +333,16 @@ type Ollama struct {
 	// Unit is its systemd unit, whose journal names the client that
 	// loaded a model.
 	Unit string `yaml:"unit"`
+	// BudgetGiB is what a model-server claim may load without --gib;
+	// MaxBudgetGiB the most a claim may ask for.
+	BudgetGiB    int `yaml:"budgetGiB"`
+	MaxBudgetGiB int `yaml:"maxBudgetGiB"`
+	// NameOnly keeps the watch from unloading a model no lease covers: it
+	// only names it.
+	NameOnly bool `yaml:"nameOnly"`
+	// LabTests are the agentlab subcommands that run turns on the host's
+	// models; the hook refuses them outside the model-server lease.
+	LabTests []string `yaml:"labTests"`
 }
 
 // Watch holds the thresholds of `beekeeper watch` (MiB unless noted).
@@ -603,6 +617,11 @@ func (c *Config) defaults() error {
 	setInt(&w.GTTMaxMiB, 24576)
 	setStr(&c.Ollama.URL, "http://localhost:11434")
 	setStr(&c.Ollama.Unit, "ollama")
+	setInt(&c.Ollama.BudgetGiB, 12)
+	setInt(&c.Ollama.MaxBudgetGiB, 24)
+	if c.Ollama.LabTests == nil {
+		c.Ollama.LabTests = []string{"models-test"}
+	}
 	if w.LoadPerCoreMax == 0 {
 		w.LoadPerCoreMax = 1.5
 	}
@@ -721,9 +740,12 @@ func (c *Config) validate() error {
 		return err
 	}
 	for _, r := range c.Resources {
-		if r == "" || r == Browser || filepath.Base(r) != r || r[0] == '.' {
+		if r == "" || r == Browser || r == ModelServer || filepath.Base(r) != r || r[0] == '.' {
 			return fmt.Errorf("resources: %q is not a valid resource name", r)
 		}
+	}
+	if o := c.Ollama; o.URL != "" && (o.BudgetGiB < 1 || o.BudgetGiB > o.MaxBudgetGiB) {
+		return fmt.Errorf("ollama.budgetGiB: %d is not between 1 and maxBudgetGiB %d", o.BudgetGiB, o.MaxBudgetGiB)
 	}
 	names, repos := map[string]bool{}, map[string]string{}
 	for i, l := range c.Lanes {
@@ -788,9 +810,14 @@ func (c *Config) LaneNamed(name string) (Lane, bool) {
 	return Lane{}, false
 }
 
-// Leasable returns every resource a session can lease, the browser last.
+// Leasable returns every resource a session can lease: the configured ones,
+// the model server when one is watched, the browser last.
 func (c *Config) Leasable() []string {
-	return append(slices.Clone(c.Resources), Browser)
+	out := slices.Clone(c.Resources)
+	if c.Ollama.URL != "" {
+		out = append(out, ModelServer)
+	}
+	return append(out, Browser)
 }
 
 // IsLeasable reports whether name is a configured resource or the browser.

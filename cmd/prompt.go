@@ -177,7 +177,7 @@ func (a *app) promptLeases(p printer, l *leaseList) {
 		if h.State == holderGone {
 			gone = ", its session has ended"
 		}
-		p("- %s held by %q since %s%s: %s", h.Env, h.Name, a.stamp(h.SinceTime()), gone, oneLine(purposeText(h.Holder)))
+		p("- %s held by %q since %s%s: %s", h.Label(), h.Name, a.stamp(h.SinceTime()), gone, oneLine(purposeText(h.Holder)))
 	}
 	if len(l.Free) > 0 {
 		p("- free: %s", strings.Join(l.Free, ", "))
