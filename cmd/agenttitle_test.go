@@ -4,35 +4,42 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// A session whose desktop record lost its name is asked, through its
-// desktop CLI's socket, to set its own title, and keepTitle waits for the
+// A session whose desktop record lost its name has a steward set its title,
+// "self" when the steward is its own desktop CLI, and retitle waits for the
 // desktop to record it; a record that kept the name is left alone.
 func TestRetitle(t *testing.T) {
-	const name = "test: title after turn"
-	sock := func(context.Context) string { return "/run/user/1000/cc-socks/42.sock" }
+	const name, host = "test: title after turn", "local_1"
+	const ownTo, selfArg = "uds:/s/42.sock", `"` + selfSession + `"`
+	own := func(context.Context) (steward, error) { return steward{host: host, sock: "/s/42.sock"}, nil }
+	other := func(context.Context) (steward, error) { return steward{host: "local_2", sock: "/s/43.sock"}, nil }
 	for _, c := range []struct {
-		desc     string
-		titles   []string // the record's title, read by read
-		socket   func(context.Context) string
-		sendErr  error
-		wantSent bool
-		want     string // a substring of the line or the error
-		wantErr  bool
+		desc    string
+		titles  []string // the record's title, read by read
+		find    func(context.Context) (steward, error)
+		sendErr error
+		wantTo  string
+		wantArg string
+		want    string // a substring of the line or the error
+		wantErr bool
 	}{
-		{desc: "kept", titles: []string{name}, socket: sock, want: "keeps its title"},
-		{desc: "lost, then retitled", titles: []string{"", "", name}, socket: sock, wantSent: true, want: "the session retitled itself"},
-		{desc: "replaced, then retitled", titles: []string{"klaus-lab", name}, socket: sock, wantSent: true, want: `"klaus-lab" instead of`},
-		{desc: "no desktop CLI", titles: []string{""}, socket: func(context.Context) string { return "" }, want: "runs no CLI", wantErr: true},
-		{desc: "send fails", titles: []string{""}, socket: sock, sendErr: errors.New("not sent"), wantSent: true, want: "not sent", wantErr: true},
-		{desc: "never recorded", titles: []string{""}, socket: sock, wantSent: true, want: "did not retitle itself", wantErr: true},
+		{desc: "kept", titles: []string{name}, find: own, want: "keeps its title"},
+		{desc: "lost, then retitled", titles: []string{"", "", name}, find: own, wantTo: ownTo, wantArg: selfArg, want: "the session retitled it"},
+		{desc: "retitled by another steward", titles: []string{"", name}, find: other, wantTo: "uds:/s/43.sock", wantArg: `"local_1"`, want: "steward local_2 retitled it"},
+		{desc: "replaced, then retitled", titles: []string{"klaus-lab", name}, find: own, wantTo: ownTo, wantArg: selfArg, want: `"klaus-lab" instead of`},
+		{desc: "no steward", titles: []string{""}, find: func(context.Context) (steward, error) { return steward{}, errors.New("no idle desktop CLI") }, want: "no idle desktop CLI", wantErr: true},
+		{desc: "send fails", titles: []string{""}, find: own, sendErr: errors.New("not sent"), wantTo: ownTo, wantArg: selfArg, want: "not sent", wantErr: true},
+		{desc: "never recorded", titles: []string{""}, find: own, wantTo: ownTo, wantArg: selfArg, want: "did not record it", wantErr: true},
 	} {
 		t.Run(c.desc, func(t *testing.T) {
 			var reads atomic.Int32
@@ -45,7 +52,7 @@ func TestRetitle(t *testing.T) {
 				to, msg = t, m
 				return c.sendErr
 			}
-			line, err := retitle(context.Background(), name, title, c.socket, send, 3*time.Second)
+			line, err := retitle(context.Background(), host, name, title, c.find, send, 3*time.Second)
 			got := line
 			if err != nil {
 				got = err.Error()
@@ -53,13 +60,95 @@ func TestRetitle(t *testing.T) {
 			if (err != nil) != c.wantErr || !strings.Contains(got, c.want) {
 				t.Errorf("retitle = %q, %v; want %q, error %v", line, err, c.want, c.wantErr)
 			}
-			if sent := to != ""; sent != c.wantSent {
-				t.Fatalf("sent = %v, want %v", sent, c.wantSent)
+			if to != c.wantTo {
+				t.Fatalf("sent to %q, want %q", to, c.wantTo)
 			}
-			if c.wantSent && (to != "uds:/run/user/1000/cc-socks/42.sock" || !strings.Contains(msg, "set_session_title") || !strings.Contains(msg, `"`+name+`"`)) {
-				t.Errorf("sent %q to %q", msg, to)
+			if to != "" && (!strings.Contains(msg, "set_session_title") || !strings.Contains(msg, c.wantArg) || !strings.Contains(msg, `"`+name+`"`)) {
+				t.Errorf("sent %q", msg)
 			}
 		})
+	}
+}
+
+// A steward is an idle desktop CLI of a session beekeeper started: the
+// target's own first, else the one idle longest; never the operator's own
+// session, a role holder, a busy agent, a headless CLI or one in a turn.
+func TestPickSteward(t *testing.T) {
+	now := time.Date(2026, 9, 30, 18, 0, 0, 0, time.UTC)
+	quiet, recent := now.Add(-10*time.Minute), now.Add(-5*time.Second)
+	desktop := []string{claudeComm, "--output-format", "stream-json", permissionPromptTool, "stdio"}
+	session := func(pid int, id string, active time.Time) *claude.Session {
+		return &claude.Session{PID: pid, ID: id, HostID: "local_" + id, LastActive: active}
+	}
+	table := func(ss ...*claude.Session) *proc.Table {
+		t := &proc.Table{ByPID: map[int]*proc.Process{}}
+		for _, s := range ss {
+			t.ByPID[s.PID] = &proc.Process{PID: s.PID, Comm: claudeComm, Args: desktop}
+		}
+		return t
+	}
+	started := func(ids ...string) *state.State {
+		st := &state.State{}
+		for _, id := range ids {
+			st.Starts = append(st.Starts, state.Start{Party: state.Party{Session: id, HostSession: "local_" + id}})
+		}
+		return st
+	}
+	sock := func(pid int) string { return fmt.Sprintf("/s/%d.sock", pid) }
+	for _, c := range []struct {
+		desc     string
+		st       *state.State
+		sessions []*claude.Session
+		table    func(*proc.Table)
+		want     string // the steward's host, "" for none
+	}{
+		{desc: "the target's own", st: started("a", "t"), sessions: []*claude.Session{session(1, "a", quiet.Add(-time.Hour)), session(2, "t", quiet)}, want: "local_t"},
+		{desc: "the one idle longest", st: started("a", "b"), sessions: []*claude.Session{session(1, "a", quiet), session(2, "b", quiet.Add(-time.Hour))}, want: "local_b"},
+		{desc: "the operator's own session", st: started(), sessions: []*claude.Session{session(1, "a", quiet)}},
+		{desc: "in a turn", st: started("a"), sessions: []*claude.Session{session(1, "a", recent)}},
+		{desc: "a busy agent", st: func() *state.State {
+			st := started("a")
+			st.Agents = []state.Agent{{Party: state.Party{Session: "a"}, Task: "work"}}
+			return st
+		}(), sessions: []*claude.Session{session(1, "a", quiet)}},
+		{desc: "the spare", st: func() *state.State {
+			st := started("a")
+			st.Spare = &state.Party{Session: "a"}
+			return st
+		}(), sessions: []*claude.Session{session(1, "a", quiet)}},
+		{desc: "a relieved supervisor", st: func() *state.State {
+			st := started("a")
+			st.Relieved = []state.Relief{{Party: state.Party{Session: "a"}}}
+			return st
+		}(), sessions: []*claude.Session{session(1, "a", quiet)}},
+		{desc: "a headless CLI", st: started("a"), sessions: []*claude.Session{session(1, "a", quiet)}, table: func(t *proc.Table) {
+			t.ByPID[1].Args = []string{claudeComm, "-p", resumeFlag, "a"}
+		}},
+	} {
+		t.Run(c.desc, func(t *testing.T) {
+			tb := table(c.sessions...)
+			if c.table != nil {
+				c.table(tb)
+			}
+			s, err := pickSteward(c.st, c.sessions, tb, "local_t", now, sock)
+			if s.host != c.want || (err != nil) != (c.want == "") {
+				t.Errorf("pickSteward = %+v, %v; want %q", s, err, c.want)
+			}
+		})
+	}
+}
+
+// A removed agent's desktop session stays when beekeeper did not start it
+// or it keeps a role.
+func TestArchiveDesktopKeeps(t *testing.T) {
+	a := &app{}
+	ag := state.Party{Session: "a", Name: "worker"}
+	if got := a.archiveDesktop(context.Background(), &state.State{}, ag); !strings.Contains(got, "did not start it") {
+		t.Errorf("not started: %q", got)
+	}
+	st := &state.State{Starts: []state.Start{{Party: ag}}, Spare: &ag}
+	if got := a.archiveDesktop(context.Background(), st, ag); !strings.Contains(got, "role") {
+		t.Errorf("spare: %q", got)
 	}
 }
 

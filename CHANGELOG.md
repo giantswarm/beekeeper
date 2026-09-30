@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `agents remove` archives the desktop session beekeeper started for the agent, unless it runs a turn or holds a role (`--keep-desktop` keeps it): an idle desktop CLI of another session beekeeper started calls the desktop's `archive_session` on it. Finished workers piled up in the sidebar.
+- `agents reopen` restores a start's lost desktop title through any idle desktop CLI of a session beekeeper started, not only the session's own: the desktop starts no CLI for an import that lost its title and model, so the session could not retitle itself, and dozens of workers a day showed as untitled "General coding session" rows.
 - `HIGH LOAD` fires over `watch.loadPerCoreMax` (1.5) × cores, 36 on 24 cores, instead of a fixed 45; a configured `watch.loadMax` still replaces it.
 - `agents start`, and the reopen after a start's or a wake's turn, open their `claude://` links only while Claude Desktop's window is without the focus (Hyprland's active window): each link switched the desktop's main window to another session and back under the person typing there. A start whose import waits out 2 minutes leaves it to the reopen after its first turn, which imports the session and waits up to 25 minutes.
 - The PreToolUse hook refuses a command that opens a page in the person's browser (`muster auth login`, `gh auth login --web`, `xdg-open`) outside the session holding the `browser` lease: a worker's sign-in tab opened in front of the person, who closed it as a stray pop-up.

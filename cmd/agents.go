@@ -166,32 +166,50 @@ one "no change" line; --full prints everything.`,
 			return err
 		},
 	}
+	var keepDesktop bool
 	remove := &cobra.Command{
 		Use:   "remove <agent>",
-		Short: "Take an agent off the roster",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		Short: "Take an agent off the roster and archive the desktop session beekeeper started for it",
+		Long: `Takes an agent off the roster. When beekeeper started the agent's session,
+its desktop session is archived too (the desktop's Archived list brings it
+back), unless it runs a turn or holds the supervisor's, the guide's or the
+spare's role: an idle desktop CLI of a session beekeeper started is asked to
+archive it. A session its person started is never archived.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
 			me, err := a.caller()
 			if err != nil {
 				return err
 			}
-			var who string
+			var gone state.Party
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				i, err := findAgent(st, args[0])
 				if err != nil {
 					return nil, err
 				}
-				who = st.Agents[i].Name
+				gone = st.Agents[i].Party
 				st.Agents = slices.Delete(st.Agents, i, i+1)
-				return []state.Event{event(me, "agents.remove", "%s", who)}, nil
+				return []state.Event{event(me, "agents.remove", "%s", gone.Name)}, nil
 			})
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(a.out, "removed %s\n", who)
+			if _, err := fmt.Fprintf(a.out, "removed %s\n", gone.Name); err != nil || keepDesktop {
+				return err
+			}
+			st, err := a.store.Read()
+			if err != nil {
+				return err
+			}
+			line := a.archiveDesktop(cmd.Context(), st, gone)
+			_ = a.store.Update(func(*state.State) ([]state.Event, error) {
+				return []state.Event{event(me, "agents.archive", "%s: %s", gone.Name, line)}, nil
+			})
+			_, err = fmt.Fprintf(a.out, "%s: %s\n", gone.Name, line)
 			return err
 		},
 	}
+	remove.Flags().BoolVar(&keepDesktop, "keep-desktop", false, "leave the agent's desktop session in the sidebar")
 	list := listCmd("List the agents, idle ones first", func() error { return a.agentList(full) })
 	fullFlag(list, &full)
 	c.AddCommand(register, a.agentStartCmd(), a.agentWakeCmd(), a.agentReopenCmd(), a.agentHandoverCmd(), a.agentNoteCmd(), assign, idle, remove, list)
