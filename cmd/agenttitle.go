@@ -40,11 +40,15 @@ type steward struct {
 	host, sock string
 }
 
-// sessionArg is the session_id a steward passes for target: "self" when the
-// steward runs the target.
+// selfSession is the session_id by which a desktop session tool acts on the
+// calling session.
+const selfSession = "self"
+
+// sessionArg is the session_id a steward passes for target: selfSession
+// when the steward runs the target.
 func (s steward) sessionArg(target string) string {
 	if s.host == target {
-		return "self"
+		return selfSession
 	}
 	return target
 }
