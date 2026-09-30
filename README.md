@@ -111,7 +111,9 @@ beekeeper lease release model-server
 
 - The budget defaults to `ollama.budgetGiB` (12); a claim above `ollama.maxBudgetGiB` (24) is refused.
 - `beekeeper watch` compares ollama's loaded models (`/api/ps`) with the lease on every
-  sample. Ollama's journal names the client of each load; a kind node's address maps to
+  sample. Ollama's journal names the client of each load once its request ends; while it
+  still runs, the one client connected to the model server's port is its client (none when
+  several are connected). A kind node's address maps to
   its lab (the cluster's name, or `<name>-1` for the first of a numbered series) and to
   the lab's holder. A model loaded while nobody holds `model-server`, loaded by a lab
   another session holds, or beyond the holder's budget (the largest first) is a

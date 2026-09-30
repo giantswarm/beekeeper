@@ -3,6 +3,7 @@ package machine
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -29,8 +30,32 @@ func TestParseOllamaLoadsInFlight(t *testing.T) {
 	journal := `time=2026-09-30T17:20:00.000+02:00 level=INFO source=llama_server.go:434 msg="starting llama-server" cmd="/usr/lib/ollama/llama-server --model /var/lib/ollama/blobs/sha256-mid --port 40001"
 [GIN] 2026/09/30 - 17:20:30 | 200 | 31s |      172.21.0.3 | POST     "/v1/chat/completions"
 time=2026-09-30T17:36:40.000+02:00 level=INFO source=llama_server.go:434 msg="starting llama-server" cmd="/usr/lib/ollama/llama-server --model /var/lib/ollama/blobs/sha256-mid --port 40002"`
-	if c, ok := ParseOllamaLoads(journal)["/var/lib/ollama/blobs/sha256-mid"]; ok {
-		t.Errorf("an in-flight load is attributed to %q, the earlier load's client", c)
+	if c, ok := ParseOllamaLoads(journal)["/var/lib/ollama/blobs/sha256-mid"]; !ok || c != "" {
+		t.Errorf("an in-flight load is attributed to %q (known %v), not left to its running request", c, ok)
+	}
+}
+
+func TestParseTCPPeers(t *testing.T) {
+	// 11434 is 2CAA. The v4 table: a lab node's connection, one to another
+	// port and a closing one. The v6 table: a v4-mapped client of the
+	// dual-stack listener, a loopback client and the listener itself.
+	v4 := `  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:2CAA 00000000:0000 0A 00000000:00000000 00:00000000 00000000   965        0 1 1 0000000000000000 100 0 0 10 0
+   1: 010015AC:2CAA 030015AC:D431 01 00000000:00000000 00:00000000 00000000   965        0 2 1 0000000000000000 20 4 30 10 -1
+   2: 010015AC:1F90 040015AC:D432 01 00000000:00000000 00:00000000 00000000   965        0 3 1 0000000000000000 20 4 30 10 -1
+   3: 010015AC:2CAA 050015AC:D433 06 00000000:00000000 00:00000000 00000000   965        0 4 1 0000000000000000 20 4 30 10 -1`
+	v6 := `  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 00000000000000000000000000000000:2CAA 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000   965        0 5 1 0000000000000000 100 0 0 10 0
+   1: 0000000000000000FFFF0000010012AC:2CAA 0000000000000000FFFF0000020012AC:C196 01 00000000:00000000 02:00000496 00000000   965        0 6 1 0000000000000000 20 4 30 10 -1
+   2: 00000000000000000000000001000000:2CAA 00000000000000000000000001000000:C19E 01 00000000:00000000 02:00000496 00000000   965        0 7 1 0000000000000000 20 4 30 10 -1`
+	if got := parseTCPPeers(v4, 11434); !slices.Equal(got, []string{"172.21.0.3"}) {
+		t.Errorf("v4 peers = %v", got)
+	}
+	if got := parseTCPPeers(v6, 11434); !slices.Equal(got, []string{"172.18.0.2", "::1"}) {
+		t.Errorf("v6 peers = %v", got)
+	}
+	if got := parseTCPPeers(v4, 8080); !slices.Equal(got, []string{"172.21.0.4"}) {
+		t.Errorf("peers on 8080 = %v", got)
 	}
 }
 
