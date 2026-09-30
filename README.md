@@ -497,9 +497,12 @@ itself. Every CLI the desktop runs, though, has the desktop's session tools
 (`mcp__ccd_session_mgmt__set_session_title`, `archive_session`), and they act on any session by
 its id. So `agents reopen` checks the record once the first turn has ended and, when it lacks the
 roster name, asks a steward through its socket (`$XDG_RUNTIME_DIR/cc-socks/<pid>.sock`) to set
-it, then waits up to 2 minutes for the desktop to record it (the unit's `TimeoutStopSec` is 5
-minutes). The steward is the session's own desktop CLI when the desktop warmed one. Otherwise it
-is the idle desktop CLI of another session beekeeper started, idle longest: transcript quiet for
+it, then waits up to 80 seconds for the desktop to record it. A steward is a model and can
+decline a request from another session, so an unanswered request goes to the next steward, three
+at most (the unit's `TimeoutStopSec` is 5 minutes). The steward is the session's own desktop CLI
+when the desktop warmed one. Otherwise it is the idle desktop CLI of another session beekeeper
+started, a finished worker off the roster before an idle roster agent (whose brief can forbid the
+call), each idle longest: transcript quiet for
 30 seconds, no tool command, no headless turn, no task on the roster. It is never the supervisor
 or the guide, nor one relieved within 7 days (it follows its role's rules still), the spare or
 a session its person started. A title set that way is the desktop's "set

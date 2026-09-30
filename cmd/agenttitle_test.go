@@ -19,14 +19,16 @@ import (
 // "self" when the steward is its own desktop CLI, and retitle waits for the
 // desktop to record it; a record that kept the name is left alone.
 func TestRetitle(t *testing.T) {
-	const name, host = "test: title after turn", "local_1"
+	const name, host = "test: title after turn", "local_retitled"
 	const ownTo, selfArg = "uds:/s/42.sock", `"` + selfSession + `"`
-	own := func(context.Context) (steward, error) { return steward{host: host, sock: "/s/42.sock"}, nil }
-	other := func(context.Context) (steward, error) { return steward{host: "local_2", sock: "/s/43.sock"}, nil }
+	own := func(context.Context, []string) (steward, error) { return steward{host: host, sock: "/s/42.sock"}, nil }
+	other := func(context.Context, []string) (steward, error) {
+		return steward{host: "local_2", sock: "/s/43.sock"}, nil
+	}
 	for _, c := range []struct {
 		desc    string
 		titles  []string // the record's title, read by read
-		find    func(context.Context) (steward, error)
+		find    stewardFinder
 		sendErr error
 		wantTo  string
 		wantArg string
@@ -35,9 +37,9 @@ func TestRetitle(t *testing.T) {
 	}{
 		{desc: "kept", titles: []string{name}, find: own, want: "keeps its title"},
 		{desc: "lost, then retitled", titles: []string{"", "", name}, find: own, wantTo: ownTo, wantArg: selfArg, want: "the session retitled it"},
-		{desc: "retitled by another steward", titles: []string{"", name}, find: other, wantTo: "uds:/s/43.sock", wantArg: `"local_1"`, want: "steward local_2 retitled it"},
+		{desc: "retitled by another steward", titles: []string{"", name}, find: other, wantTo: "uds:/s/43.sock", wantArg: `"local_retitled"`, want: "steward local_2 retitled it"},
 		{desc: "replaced, then retitled", titles: []string{"klaus-lab", name}, find: own, wantTo: ownTo, wantArg: selfArg, want: `"klaus-lab" instead of`},
-		{desc: "no steward", titles: []string{""}, find: func(context.Context) (steward, error) { return steward{}, errors.New("no idle desktop CLI") }, want: "no idle desktop CLI", wantErr: true},
+		{desc: "no steward", titles: []string{""}, find: func(context.Context, []string) (steward, error) { return steward{}, errors.New("no idle desktop CLI") }, want: "no idle desktop CLI", wantErr: true},
 		{desc: "send fails", titles: []string{""}, find: own, sendErr: errors.New("not sent"), wantTo: ownTo, wantArg: selfArg, want: "not sent", wantErr: true},
 		{desc: "never recorded", titles: []string{""}, find: own, wantTo: ownTo, wantArg: selfArg, want: "did not record it", wantErr: true},
 	} {
@@ -70,10 +72,37 @@ func TestRetitle(t *testing.T) {
 	}
 }
 
+// A request a steward declines goes to the next one, up to stewardTries.
+func TestDelegate(t *testing.T) {
+	var asked []string
+	done := false
+	find := func(_ context.Context, tried []string) (steward, error) {
+		if len(tried) == stewardTries {
+			t.Fatal("asked past stewardTries")
+		}
+		return steward{host: fmt.Sprintf("steward-%d", len(tried)), sock: "/s"}, nil
+	}
+	send := func(context.Context, string, string) error {
+		asked = append(asked, "x")
+		done = len(asked) == 2 // the first declines
+		return nil
+	}
+	s, err := delegate(context.Background(), "local_t", find, func(string) string { return "m" }, func() bool { return done }, send, 2*time.Second)
+	if err != nil || s.host != "steward-1" || len(asked) != 2 {
+		t.Errorf("delegate = %+v, %v after %d asks; want local_1 after 2", s, err, len(asked))
+	}
+	asked, done = nil, false
+	send = func(context.Context, string, string) error { asked = append(asked, "x"); return nil }
+	if _, err := delegate(context.Background(), "local_t", find, func(string) string { return "m" }, func() bool { return false }, send, time.Second); err == nil || len(asked) != stewardTries {
+		t.Errorf("all decline: %v after %d asks", err, len(asked))
+	}
+}
+
 // A steward is an idle desktop CLI of a session beekeeper started: the
 // target's own first, else the one idle longest; never the operator's own
 // session, a role holder, a busy agent, a headless CLI or one in a turn.
 func TestPickSteward(t *testing.T) {
+	const stewardA = "local_a"
 	now := time.Date(2026, 9, 30, 18, 0, 0, 0, time.UTC)
 	quiet, recent := now.Add(-10*time.Minute), now.Add(-5*time.Second)
 	desktop := []string{claudeComm, "--output-format", "stream-json", permissionPromptTool, "stdio"}
@@ -100,10 +129,17 @@ func TestPickSteward(t *testing.T) {
 		st       *state.State
 		sessions []*claude.Session
 		table    func(*proc.Table)
+		tried    []string
 		want     string // the steward's host, "" for none
 	}{
 		{desc: "the target's own", st: started("a", "t"), sessions: []*claude.Session{session(1, "a", quiet.Add(-time.Hour)), session(2, "t", quiet)}, want: "local_t"},
 		{desc: "the one idle longest", st: started("a", "b"), sessions: []*claude.Session{session(1, "a", quiet), session(2, "b", quiet.Add(-time.Hour))}, want: "local_b"},
+		{desc: "a finished worker before a roster agent", st: func() *state.State {
+			st := started("a", "b")
+			st.Agents = []state.Agent{{Party: state.Party{Session: "b"}}}
+			return st
+		}(), sessions: []*claude.Session{session(1, "a", quiet), session(2, "b", quiet.Add(-time.Hour))}, want: stewardA},
+		{desc: "not one tried", st: started("a", "b"), sessions: []*claude.Session{session(1, "a", quiet), session(2, "b", quiet.Add(-time.Hour))}, tried: []string{"local_b"}, want: stewardA},
 		{desc: "the operator's own session", st: started(), sessions: []*claude.Session{session(1, "a", quiet)}},
 		{desc: "in a turn", st: started("a"), sessions: []*claude.Session{session(1, "a", recent)}},
 		{desc: "a busy agent", st: func() *state.State {
@@ -130,7 +166,7 @@ func TestPickSteward(t *testing.T) {
 			if c.table != nil {
 				c.table(tb)
 			}
-			s, err := pickSteward(c.st, c.sessions, tb, "local_t", now, sock)
+			s, err := pickSteward(c.st, c.sessions, tb, "local_t", c.tried, now, sock)
 			if s.host != c.want || (err != nil) != (c.want == "") {
 				t.Errorf("pickSteward = %+v, %v; want %q", s, err, c.want)
 			}
