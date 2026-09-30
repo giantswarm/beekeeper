@@ -158,6 +158,9 @@ func pipelineBefore(cmd string, segs []segment, i int) string {
 
 // sourceLeak returns the leak when the simple command prints secret values.
 func sourceLeak(words []string, before string, aliases map[string]bool) *leak {
+	if l := procFileLeak(words); l != nil {
+		return l
+	}
 	for k, w := range words {
 		args := words[k+1:]
 		name := path.Base(w)
@@ -181,6 +184,13 @@ func sourceLeak(words []string, before string, aliases map[string]bool) *leak {
 			}
 		case "vault":
 			if l := vaultLeak(args); l != nil {
+				return l
+			}
+		case "ps", "pgrep", "pstree", dockerCmd, podmanCmd:
+			if k > 0 && subcommandHosts[path.Base(words[k-1])] {
+				continue
+			}
+			if l := procLeak(name, args); l != nil {
 				return l
 			}
 		case "base64":

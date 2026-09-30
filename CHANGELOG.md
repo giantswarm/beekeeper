@@ -11,10 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `ps [name|pid...]`: the process table (PID, parent, age, CPU, memory) with every command line masked like the `STACKED` line, a masked line marked `(masked)`. The PreToolUse hook refuses the reads that print whole command lines or environments, as Secret reads naming `beekeeper ps`: `ps` with its args column (`ps aux`, `ps -ef`, `-o args`), `pgrep -a`, `pstree -a`, `/proc/<pid>/cmdline` and `environ`, `docker|podman inspect` without a narrow `--format`, `docker ps --no-trunc`. A process started with `-e PASSWORD=…`, `--token …` or `-p …` showed the values to every agent debugging load.
+
 - `watch` says `PROCESS STORM: N forks/s (usual M/s), top: kubectl 40 %, …; sessions: "…" 70 %` once two samples in a row read a fork rate (the `processes` counter of `/proc/stat`) more than `watch.forkRateMax` (50/s) over the machine's usual rate (the last 10 minutes' average outside a storm; a machine with 35 sessions forks 70–130 a second at rest), naming the commands and sessions of the processes started since the last sample that still run at it; a Go program's pidfd probe child counts as its parent. It says `STACKED N × <command>: oldest …, parent …, session "…"` for more than `watch.stackMax` (3) copies of one command line from the same place in the process tree, each running over a minute; one MCP server under each CLI and interactive shells are none. Both end with an `ENDED` line; a negative threshold turns its line off. A printed command line keeps the program, its subcommands and flag names, never a value. A fork storm of 2,025 `kubectl`, 1,168 `helm` and 655 `tsh` in ten minutes and seven stacked `beekeeper free --summary` had no line.
 
 ### Changed
 
+- `ps` is no alias of `sessions` any more: it is the masked process table.
 - A role's runs are numbered: every holder is "Supervisor run N" or "Guide run N", N one above the highest run recorded. `supervisor relay` and `guide relay` take no session any more: they start the next run as a fresh session (as `agents start` does, so its desktop title, roster name and messaging name are one) and open the relay to it; its first turn takes the role with `<role> start` and ends, and the standby watch resumes it in its desktop CLI (`RESUME`). A successor that does not start withdraws its relay. After a crash the standby watch starts the next run the same way, for the guide too (`GUIDE GONE`, `SUCCESSOR`), once per gone holder; a session between beekeeper's start or wake and its desktop CLI is not gone. A start in a session not named as its run records the next run, and a steward sets its desktop title to it; `supervisor status` and `guide status` name the run. A desktop title set later does not change the name a running CLI takes messages under, so a renamed role session was unreachable by its new name.
 
 ### Removed
@@ -22,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The spare: `supervisor spare`, its record, the standby watch's keep-awake and `supervisor.keepAwake`. Relays and crashes start fresh sessions instead of repurposing one kept awake.
 
 ### Fixed
+
+- A printed command line (`STACKED`, `ps`) leaves out what follows a short option's letter (`-psecret`), and masks a program that rewrote its argv into one line (Electron, setproctitle), which it printed whole.
 
 - A wake of a roster entry known by its CLI session id alone, whose session the desktop imported, gets the reopen after its turn: the supervisor's session ran headless for 45 minutes and never showed in the desktop, and opening it by hand started a second CLI on the session.
 
