@@ -7,8 +7,8 @@ import (
 	"os/exec"
 )
 
-// DesktopWindowClass is the Wayland app id of Claude Desktop's windows.
-const DesktopWindowClass = "com.anthropic.Claude"
+// DesktopAppID is the Wayland app id of Claude Desktop's windows.
+const DesktopAppID = "com.anthropic.Claude"
 
 // DesktopWindowActive reports whether the compositor's focused window is
 // Claude Desktop's: the person is reading or typing in it, and a claude://
@@ -35,5 +35,5 @@ func activeIsDesktop(out []byte) (bool, error) {
 	if err := json.Unmarshal(out, &w); err != nil {
 		return false, err
 	}
-	return w.Class == DesktopWindowClass, nil
+	return w.Class == DesktopAppID, nil
 }
