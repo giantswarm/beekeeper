@@ -698,7 +698,7 @@ func kubeContext(ctx context.Context, lane config.Lane) (string, error) {
 	if lane.Context != "" {
 		return lane.Context, nil
 	}
-	out, err := exec.CommandContext(ctx, "kubectl", "config", "get-contexts", "-o", "name").Output()
+	out, err := proc.Command(ctx, "kubectl", "config", "get-contexts", "-o", "name").Output()
 	if err != nil {
 		return "", fmt.Errorf("kubectl config get-contexts: %w", err)
 	}
@@ -723,7 +723,7 @@ func readHelmReleases(ctx context.Context, lane config.Lane) ([]merge.HelmReleas
 		return nil, err
 	}
 	var stderr bytes.Buffer
-	c := exec.CommandContext(ctx, "kubectl", "--context", kctx, "get", "helmreleases.helm.toolkit.fluxcd.io", "-A", "-o", "json") //nolint:gosec // the configured context
+	c := proc.Command(ctx, "kubectl", "--context", kctx, "get", "helmreleases.helm.toolkit.fluxcd.io", "-A", "-o", "json") //nolint:gosec // the configured context
 	c.Stderr = &stderr
 	out, err := c.Output()
 	if err != nil {

@@ -22,19 +22,6 @@ func (a *app) readUpgrades(ctx context.Context, st *state.State, now time.Time) 
 	return r.Read(ctx, targets, now, upgrade.HeldClusters(st, now))
 }
 
-// watchUpgrades reads the upgrades every watch.interval.
-func (w *watcher) watchUpgrades(ctx context.Context) {
-	for {
-		start := time.Now()
-		w.upgradeCycle(ctx)
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(max(time.Until(start.Add(w.cfg.Watch.Interval.Duration)), 0)):
-		}
-	}
-}
-
 // upgradeCycle makes the upgrade holds those of the running upgrades. The
 // watch whose update sets a hold says UPGRADE, the one whose update lifts it
 // UPGRADE ENDED, so a second or restarted watch says neither again. An

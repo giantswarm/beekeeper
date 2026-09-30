@@ -354,9 +354,14 @@ type Watch struct {
 	// cgroup counts) above which the watch prints IGPU GTT and names it
 	// with the host ollama's models as the cause of LOW RAM and OOMD
 	// IMMINENT.
-	GTTMaxMiB  int     `yaml:"gttMaxMiB"`
-	LoadMax    float64 `yaml:"loadMax"`
-	PSIMax     float64 `yaml:"psiMax"`
+	GTTMaxMiB int     `yaml:"gttMaxMiB"`
+	LoadMax   float64 `yaml:"loadMax"`
+	PSIMax    float64 `yaml:"psiMax"`
+	// CPUPSIMax is the CPU pressure ("some avg10" of /proc/pressure/cpu,
+	// in percent) over which, like over LoadMax, the machine is strained:
+	// the installation reads (upgrades, alerts, lane settling) then run
+	// four times less often and at nice 10 (READS SLOWED).
+	CPUPSIMax  float64 `yaml:"cpuPSIMax"`
 	TmpMaxMiB  int     `yaml:"tmpMaxMiB"`
 	DiskMinMiB int     `yaml:"diskMinMiB"`
 	// QuietSessions are globs (* matches any run) of the names of
@@ -589,6 +594,9 @@ func (c *Config) defaults() error {
 	}
 	if w.PSIMax == 0 {
 		w.PSIMax = 10
+	}
+	if w.CPUPSIMax == 0 {
+		w.CPUPSIMax = 40
 	}
 	setInt(&w.TmpMaxMiB, 20000)
 	setInt(&w.DiskMinMiB, 102400)
