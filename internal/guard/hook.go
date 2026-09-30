@@ -175,6 +175,9 @@ func (h Hook) decide(ev event) []byte {
 	if r := h.kubeRefusal(cmd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	if r := h.browserRefusal(cmd, ev.Session); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
 	if l := secretLeak(cmd); l != nil {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: l.reason()})
 	}

@@ -43,7 +43,26 @@ const (
 	// stopPostWait bounds the reopen after the first turn: the desktop's
 	// CLI, the retitle request and the desktop recording the title.
 	stopPostWait = 5 * time.Minute
+	// importAwayWait bounds how long a start's import waits for the person
+	// to leave the desktop's window; past it the reopen after the first
+	// turn imports the session.
+	importAwayWait = 2 * time.Minute
+	// reopenAwayWait bounds how long a reopen waits for the person to leave
+	// the desktop's window.
+	reopenAwayWait = 25 * time.Minute
+	// awayPoll is how often a wait for the desktop's window asks the
+	// compositor which window has focus.
+	awayPoll = 500 * time.Millisecond
 )
+
+// errDesktopInUse is a claude:// link not opened: the desktop's window kept
+// the focus, and the link would have switched its main window under the
+// person working there.
+var errDesktopInUse = errors.New("the desktop's window kept the focus")
+
+// desktopWindowActive reports whether the desktop's window has the focus;
+// tests replace it.
+var desktopWindowActive = claude.DesktopWindowActive
 
 func (a *app) agentStartCmd() *cobra.Command {
 	var model, dir, task string
@@ -69,7 +88,11 @@ handles the link twice and sometimes keeps an untitled record: once the
 first turn has ended, beekeeper has the session set its own title with the
 desktop's set_session_title. The import switches the desktop's main window to the
 new session; beekeeper switches it back to the session it showed before
-(claude://code/continue), so the person working there stays on it.
+(claude://code/continue), so the person working there stays on it. Both
+links wait while the desktop's window has the focus (Hyprland's active
+window), so the switch never happens under someone reading or typing
+there: up to 2 minutes, after which the start leaves the import to the
+reopen once the first turn has ended, which waits up to 25 minutes more.
 
 Its first turn runs the brief from the command line in bypass. The desktop
 runs every later turn in acceptEdits (its import always drops bypass), so
@@ -98,6 +121,10 @@ desktop starts a new CLI when the person opens the session.`,
 			_, err = fmt.Fprintf(a.out, "started %s: session %s, desktop local_%s, bypassPermissions, in %s, busy with %q\n"+
 				"its first turn runs from the command line (journalctl --user -u %s); later turns are desktop turns in acceptEdits\n",
 				name, sa.id, sa.id, sa.dir, sa.task, sa.unit)
+			if err == nil && sa.deferred {
+				_, err = fmt.Fprintln(a.out, "the desktop's window kept the focus: not imported yet, the reopen after its first turn imports it")
+				return err
+			}
 			if err == nil && sa.kept != "" {
 				_, err = fmt.Fprintf(a.out, "the desktop still shows %s\n", sa.kept)
 			}
@@ -143,6 +170,9 @@ type startedAgent struct {
 	// twin is the desktop's CLI of the session the start stopped while the
 	// first turn runs; 0: none.
 	twin int
+	// deferred: the desktop's window kept the focus, and the reopen after
+	// the first turn imports the session.
+	deferred bool
 }
 
 // startAgent records and registers the session, starts its first turn in a
@@ -208,6 +238,10 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 		follow = sp.replaces.HostSession
 	}
 	sa := startedAgent{id: id, unit: unit, dir: dir, task: reg.task}
+	if !awaitDesktopAway(ctx, importAwayWait) {
+		sa.deferred = true
+		return sa, nil
+	}
 	err = whileFrozen(ctx, unit, func() error {
 		if err := titleTranscript(a.cfg.Claude.ProjectsDir, id, sp.name); err != nil {
 			return fmt.Errorf("%w, not imported into the desktop", err)
@@ -399,7 +433,8 @@ func (a *app) importSession(ctx context.Context, id, follow string) (string, err
 		return "", err
 	}
 	running := !desktopStart(t).IsZero()
-	prev, err := a.showBriefly(ctx, resumeURL(id), "local_"+id, follow, running)
+	// startAgent waited for the window already.
+	prev, err := a.showBriefly(ctx, resumeURL(id), "local_"+id, follow, running, awayPoll)
 	if err != nil {
 		return "", fmt.Errorf("importing %s into the desktop: %w", id, err)
 	}
@@ -409,10 +444,14 @@ func (a *app) importSession(ctx context.Context, id, follow string) (string, err
 // showBriefly opens url, which shows host in the desktop's main window, and
 // once it does, shows the session the window showed before again and
 // returns it; empty when there was none to go back to, or it was host or
-// follow.
-func (a *app) showBriefly(ctx context.Context, url, host, follow string, running bool) (string, error) {
+// follow. A running desktop gets the link only once its window has lost
+// the focus, waiting up to away: errDesktopInUse when it kept it.
+func (a *app) showBriefly(ctx context.Context, url, host, follow string, running bool, away time.Duration) (string, error) {
 	var prev string
 	if running {
+		if !awaitDesktopAway(ctx, away) {
+			return "", errDesktopInUse
+		}
 		prev, _ = claude.DesktopFocus(a.cfg.Claude.DesktopLog) // unreadable: nothing to go back to
 	}
 	if err := openDesktop(ctx, url, running); err != nil {
@@ -461,7 +500,13 @@ func (a *app) agentReopenCmd() *cobra.Command {
 				_, err := fmt.Fprintf(a.out, "reopen: the desktop does not run, %s waits for it\n", id)
 				return err
 			}
-			if _, err := a.showBriefly(cmd.Context(), continueURL("local_"+id), "local_"+id, "", true); err != nil {
+			// A start whose import waited out the focus has no desktop
+			// record yet: the reopen imports it.
+			url := continueURL("local_" + id)
+			if _, ok := claude.ReadRecord(a.cfg, "local_"+id); !ok {
+				url = resumeURL(id)
+			}
+			if _, err := a.showBriefly(cmd.Context(), url, "local_"+id, "", true, reopenAwayWait); err != nil {
 				return a.reopenMissed(name, fmt.Errorf("reopening %s in the desktop: %w", id, err))
 			}
 			if _, err := fmt.Fprintf(a.out, "reopen: showed local_%s in the desktop, which warms its CLI\n", id); err != nil {
@@ -520,6 +565,26 @@ func awaitFocus(ctx context.Context, log, host string, wait time.Duration) bool 
 	defer tick.Stop()
 	for {
 		if f, _ := claude.DesktopFocus(log); f == host {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-tick.C:
+		}
+	}
+}
+
+// awaitDesktopAway reports whether the desktop's window is without the
+// focus within wait. A compositor that cannot be asked counts as the window
+// keeping it.
+func awaitDesktopAway(ctx context.Context, wait time.Duration) bool {
+	ctx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	tick := time.NewTicker(awayPoll)
+	defer tick.Stop()
+	for {
+		if active, err := desktopWindowActive(ctx); err == nil && !active {
 			return true
 		}
 		select {
@@ -621,7 +686,7 @@ func launch(unit, dir, config string, stopPost, argv []string) error {
 	args := []string{"--user", "--collect", "--quiet", "--unit=" + unit, "-p", "KillMode=process", "-p", "SuccessExitStatus=143 SIGTERM", "--working-directory=" + dir}
 	if len(stopPost) > 0 {
 		// The reopen may wait for the session to retitle itself.
-		args = append(args, "-p", "ExecStopPost="+strings.Join(stopPost, " "), "-p", "TimeoutStopSec="+strconv.Itoa(int(stopPostWait.Seconds())))
+		args = append(args, "-p", "ExecStopPost="+strings.Join(stopPost, " "), "-p", "TimeoutStopSec="+strconv.Itoa(int((reopenAwayWait+stopPostWait).Seconds())))
 	}
 	if config != "" {
 		args = append(args, "--setenv=BEEKEEPER_CONFIG="+config)

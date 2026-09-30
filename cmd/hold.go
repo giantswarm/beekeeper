@@ -26,7 +26,7 @@ whose components it exercises and not the others), "merges" every merge,
 "github" every GitHub call (the budget is spent). A merge hold can let one
 repository or pull request through (--except owner/repo or owner/repo#n): a
 window that stops a lane but for the one merge it waits for. The gate on
-/home/teemow/.go/bin/beekeeper gate -- devctl pr merge refuses a held merge with the hold's reason. A merge of giantswarm/devctl
+beekeeper gate -- devctl pr merge refuses a held merge with the hold's reason. A merge of giantswarm/devctl
 opens a tool-release window by itself: a "merges" hold that lets only
 giantswarm/devctl through and lifts once the local devctl reports another
 version.
