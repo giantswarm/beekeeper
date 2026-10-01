@@ -63,9 +63,9 @@ func TestSessionsViewRows(t *testing.T) {
 	d := fixture()
 	got := stripANSI(sessionsView(d, 130, 40, 0))
 	for _, want := range []string{
-		"bee", "wasp", "spare", "1.5 GiB", "45%·90k", "10t 1e $1.23",
+		tBee, tWasp, "spare", "1.5 GiB", "45%·90k", "10t 1e $1.23",
 		"[WARN] answer to the question",
-		"giantswarm/beekeeper#1", "overlap",
+		tIssue, "overlap",
 		"name", "role", "idle", "mem", "ctx", "hour",
 	} {
 		if !strings.Contains(got, want) {
@@ -76,10 +76,10 @@ func TestSessionsViewRows(t *testing.T) {
 	// "0t 0e $0.00" noise is gone. wasp is idle, priced nothing.
 	wasp := strings.Split(got, "\n")
 	for _, l := range wasp {
-		if strings.Contains(l, "wasp") && strings.Contains(l, "0t") {
+		if strings.Contains(l, tWasp) && strings.Contains(l, "0t") {
 			t.Errorf("an idle session still shouts its empty hour: %q", l)
 		}
-		if strings.Contains(l, "wasp") && strings.Contains(l, "$0.00") {
+		if strings.Contains(l, tWasp) && strings.Contains(l, "$0.00") {
 			t.Errorf("an idle session still prints a zero cost: %q", l)
 		}
 	}
@@ -91,7 +91,7 @@ func TestSessionsViewRows(t *testing.T) {
 func TestSharingViewRendersLeasesHoldsLanes(t *testing.T) {
 	got := stripANSI(sharingView(fixture(), 110, 40, 0))
 	for _, want := range []string{
-		"repo/beekeeper", "push", "bee", "repo/fork", "wasp", "by sup",
+		tRepo, "push", tBee, "repo/fork", tWasp, "by sup",
 		"release", "until ", "helm-apps", "5.3.0",
 		"giantswarm/beekeeper#2", "settling  1", "waiting  4", "giantswarm/beekeeper#4", "waits behind",
 		"unblocks beekeeper",
@@ -109,10 +109,10 @@ func TestSharingViewRendersLeasesHoldsLanes(t *testing.T) {
 func TestSupervisingViewRendersRolesAgentsNotes(t *testing.T) {
 	got := stripANSI(supervisingView(fixture(), 110, 40, 1))
 	for _, want := range []string{
-		"supervisor", "sup", "live", "120k", "relay at  400k",
-		"guide", "gone 5m", "waiting on person", "fix #9",
+		tSupervisor, tSup, "live", "120k", "relay at  400k",
+		tGuide, "gone 5m", "waiting on person", "fix #9",
 		"#3", "approve the bump", "overdue", "(default: yes)",
-		"check the rollout", "bee", "giantswarm/beekeeper#1", "waits: review",
+		"check the rollout", tBee, tIssue, "waits: review",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("supervising view misses %q:\n%s", want, got)
@@ -123,7 +123,7 @@ func TestSupervisingViewRendersRolesAgentsNotes(t *testing.T) {
 func TestAlertsViewRendersBudgetAndUpgrades(t *testing.T) {
 	got := stripANSI(alertsView(fixture(), 110, 40, 0))
 	for _, want := range []string{
-		"giantswarm", "unreachable", "mgmt", "critical", "TargetDown", "warning",
+		tOrg, "unreachable", "mgmt", "critical", "TargetDown", "warning",
 		"KubePodCrashLooping", "devctl 1.2.0 -> 1.3.0", "4000/5000", "held: release window",
 		"gh pr list",
 	} {
@@ -151,13 +151,13 @@ func TestEventsViewIsNewestFirst(t *testing.T) {
 	lines := strings.Split(got, "\n")
 	var seen []string
 	for _, l := range lines {
-		for _, verb := range []string{"grant", "claim", "hold-set"} {
+		for _, verb := range []string{tGrant, tClaim, tHoldSet} {
 			if strings.Contains(l, verb) {
 				seen = append(seen, verb)
 			}
 		}
 	}
-	if len(seen) != 3 || seen[0] != "grant" || seen[1] != "claim" || seen[2] != "hold-set" {
+	if len(seen) != 3 || seen[0] != tGrant || seen[1] != tClaim || seen[2] != tHoldSet {
 		t.Errorf("events not newest first: %v", seen)
 	}
 }
@@ -166,7 +166,7 @@ func TestEventsViewIsNewestFirst(t *testing.T) {
 // role badge and merge counts read as words, not as m:3q2m2f.
 func TestBadgesAndMergeCountsReadAsWords(t *testing.T) {
 	for role, want := range map[string]string{
-		"supervisor": "sup", "guide": "guide", "agent: fix #9": "agent",
+		tSupervisor: tSup, tGuide: tGuide, "agent: fix #9": "agent",
 		"agent (idle)": "agent", "": "-",
 	} {
 		if got := roleBadge(role); got != want {
@@ -242,7 +242,7 @@ func TestNothingOverflowsTheWidth(t *testing.T) {
 func TestBodyScrollsWithinHeight(t *testing.T) {
 	d := fixture()
 	for i := range 40 {
-		d.Events = append(d.Events, Event{At: testAt.Add(-time.Duration(i) * time.Minute), Verb: "note-add", By: "bee", Detail: "a long note line to make the list scroll and overflow the window"})
+		d.Events = append(d.Events, Event{At: testAt.Add(-time.Duration(i) * time.Minute), Verb: "note-add", By: tBee, Detail: "a long note line to make the list scroll and overflow the window"})
 	}
 	m := newTestModel(t, &fakeSource{data: d})
 	m.tab = 5

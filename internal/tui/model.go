@@ -7,9 +7,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// tabAlerts is the alerts tab's name.
+const tabAlerts = "alerts"
+
 // tabs are the six views in key order: the digit keys pick one and
 // tab/shift+tab cycle through them.
-var tabs = [...]string{"watching", "sessions", "sharing", "supervising", "alerts", "events"}
+var tabs = [...]string{"watching", "sessions", "sharing", "supervising", tabAlerts, "events"}
 
 // tailTurns is how many transcript turns the detail pane asks the Source
 // for.
@@ -265,12 +268,6 @@ func (m *model) page() int {
 		return h - 1
 	}
 	return 1
-}
-
-// openDetail opens a named session's pane (tests drive what enter would
-// open for).
-func (m *model) openDetail(name string) {
-	m.detail, m.tail, m.tailOff, m.tailState = name, nil, 0, 1
 }
 
 // closeDetail dismisses the pane.

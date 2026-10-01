@@ -10,6 +10,21 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// Fixture names shared by the model and view tests.
+const (
+	tBee        = "bee"
+	tWasp       = "wasp"
+	tSup        = "sup"
+	tGuide      = "guide"
+	tSupervisor = "supervisor"
+	tOrg        = "giantswarm"
+	tClaim      = "claim"
+	tGrant      = "grant"
+	tHoldSet    = "hold-set"
+	tRepo       = "repo/beekeeper"
+	tIssue      = "giantswarm/beekeeper#1"
+)
+
 // testAt is the clock every fixture shares, so ages and clocks in the
 // renders are fixed.
 var testAt = time.Date(2026, 9, 26, 15, 4, 5, 0, time.Local)
@@ -44,7 +59,7 @@ func fixtureData() *Data {
 	return &Data{
 		At: testAt,
 		Status: Status{
-			Supervisor: "sup", SupervisorLive: true,
+			Supervisor: tSup, SupervisorLive: true,
 			LeaseCount: 1, HoldCount: 1, Due: 2,
 		},
 		Machine: Machine{
@@ -53,24 +68,24 @@ func fixtureData() *Data {
 			Scope:    &Scope{CurrentMiB: 4096, High: "12G", Max: "16G", OOMKills: 1},
 			Tmp:      Disk{Path: "/tmp", UsedMiB: 100, FreeMiB: 19000},
 			Root:     Disk{Path: "/", UsedMiB: 9000, FreeMiB: 20000},
-			Slots:    []Slot{{N: 1, Holder: "bee"}, {N: 2, Free: true}},
+			Slots:    []Slot{{N: 1, Holder: tBee}, {N: 2, Free: true}},
 			Clusters: []Cluster{{Name: "giantswarm-yolo", Nodes: 3, MemMiB: 2048, RunningFor: "2h"}},
-			Waits:    []Wait{{PID: 42, Session: "bee", Args: "go test ./...", Elapsed: 13 * time.Second}},
+			Waits:    []Wait{{PID: 42, Session: tBee, Args: "go test ./...", Elapsed: 13 * time.Second}},
 			OOM:      []OOMKill{{At: testAt.Add(-1 * time.Hour), PID: 7, Task: "chrome", AnonMiB: 8000, Constraint: "memcg limit", Memcg: "user.slice", Owner: "scope"}},
 			Oomd:     []string{"oomd: dry run"},
 		},
 		Budget: Budget{
 			At: testAt, Limit: 5000, Remaining: 4000, Reset: testAt.Add(time.Hour), Floor: 500,
 			Held: true, HoldReason: "release window",
-			Pollers: []Poller{{PID: 9, Session: "bee", Args: "gh pr list", Elapsed: 4 * time.Second}},
+			Pollers: []Poller{{PID: 9, Session: tBee, Args: "gh pr list", Elapsed: 4 * time.Second}},
 		},
 		Sessions: []Session{
 			{
-				PID: 100, Name: "bee", Role: "worker", Cwd: "/home/me/bee", Repo: "giantswarm/beekeeper",
+				PID: 100, Name: tBee, Role: "worker", Cwd: "/home/me/bee", Repo: "giantswarm/beekeeper",
 				Branch: "main", Model: "opus", Permission: "acceptEdits", Started: testAt.Add(-3 * time.Hour),
 				LastActive: testAt.Add(-30 * time.Second), MemMiB: 1500, Waiting: "answer to the question",
-				Work: []string{"giantswarm/beekeeper#1"}, Serves: "#1", Idle: 4 * time.Second,
-				Leases: []string{"repo/beekeeper"}, Context: 90000, ContextWindow: 200000, ContextFill: 0.45,
+				Work: []string{tIssue}, Serves: "#1", Idle: 4 * time.Second,
+				Leases: []string{tRepo}, Context: 90000, ContextWindow: 200000, ContextFill: 0.45,
 				LastHour: Counter{Turns: 10, ToolErrors: 1, Cost: &cost},
 				Total:    Counter{Turns: 99, ToolCalls: 50, ToolErrors: 3, Cost: &cost},
 				Commands: []Command{{PID: 55, Args: "sleep 60", Elapsed: 2 * time.Second, Remaining: 58 * time.Second}},
@@ -78,35 +93,35 @@ func fixtureData() *Data {
 				Merges:   Merges{Queued: 1, Failed: 1}, GitHubProcesses: 2,
 			},
 			{
-				PID: 101, Name: "wasp", Role: "spare", Idle: 90 * time.Minute, MemMiB: 300,
+				PID: 101, Name: tWasp, Role: "spare", Idle: 90 * time.Minute, MemMiB: 300,
 				LastHour: Counter{Turns: 0, ToolErrors: 0},
 			},
 		},
 		Totals:   Totals{LastHour: Counter{Turns: 10, ToolErrors: 1}, GitHubProcesses: 2},
-		Overlaps: []Overlap{{Kind: "ref", Key: "giantswarm/beekeeper#1", Sessions: []string{"bee", "wasp"}}},
+		Overlaps: []Overlap{{Kind: "ref", Key: tIssue, Sessions: []string{tBee, tWasp}}},
 		Leases: Leases{
-			Held:   []Lease{{Resource: "repo/beekeeper", Holder: "bee", Purpose: "push", State: "live", Since: testAt.Add(-2 * time.Hour), UpgradeUnblock: "beekeeper"}},
+			Held:   []Lease{{Resource: tRepo, Holder: tBee, Purpose: "push", State: "live", Since: testAt.Add(-2 * time.Hour), UpgradeUnblock: "beekeeper"}},
 			Free:   []string{"repo/fork"},
-			Queues: map[string][]Grant{"repo/beekeeper": {{Resource: "repo/beekeeper", To: "wasp", By: "sup", At: testAt.Add(-time.Minute)}}},
+			Queues: map[string][]Grant{tRepo: {{Resource: tRepo, To: tWasp, By: tSup, At: testAt.Add(-time.Minute)}}},
 		},
-		Holds: []Hold{{Target: "repo/beekeeper", Reason: "release", By: "me", At: testAt, Until: testAt.Add(3 * time.Hour), Except: "notes", Tool: "helm-apps", ToolFrom: "5.2.0", ToolRelease: "5.3.0"}},
+		Holds: []Hold{{Target: tRepo, Reason: "release", By: "me", At: testAt, Until: testAt.Add(3 * time.Hour), Except: "notes", Tool: "helm-apps", ToolFrom: "5.2.0", ToolRelease: "5.3.0"}},
 		Lanes: []Lane{{
-			Name: "main", Installation: "giantswarm",
-			Running:  &Merge{Key: "giantswarm/beekeeper#2", By: "bee", Started: testAt.Add(-time.Minute)},
+			Name: "main", Installation: tOrg,
+			Running:  &Merge{Key: "giantswarm/beekeeper#2", By: tBee, Started: testAt.Add(-time.Minute)},
 			Settling: []*Merge{{Key: "giantswarm/beekeeper#3"}},
 			Waiting:  []Merge{{Key: "giantswarm/beekeeper#4"}, {Key: "giantswarm/beekeeper#5"}, {Key: "#6"}, {Key: "#7"}},
 			Stall:    "#4 waits behind #5",
 		}},
 		Roles: []Role{
-			{Name: "supervisor", Holder: "sup", Live: true, Since: testAt.Add(-24 * time.Hour), Context: 120000, RelayAt: 400000},
-			{Name: "guide", Holder: "gui", Gone: testAt.Add(-5 * time.Minute), Context: 1000},
+			{Name: tSupervisor, Holder: tSup, Live: true, Since: testAt.Add(-24 * time.Hour), Context: 120000, RelayAt: 400000},
+			{Name: tGuide, Holder: "gui", Gone: testAt.Add(-5 * time.Minute), Context: 1000},
 		},
-		Agents:  []Agent{{Name: "wasp", Task: "fix #9", AssignedAt: testAt.Add(-time.Hour), Reachable: "waiting on person"}},
-		Notes:   []Note{{ID: 3, For: "me", Text: "approve the bump", Default: "yes", Due: testAt.Add(-time.Hour), By: "bee"}},
+		Agents:  []Agent{{Name: tWasp, Task: "fix #9", AssignedAt: testAt.Add(-time.Hour), Reachable: "waiting on person"}},
+		Notes:   []Note{{ID: 3, For: "me", Text: "approve the bump", Default: "yes", Due: testAt.Add(-time.Hour), By: tBee}},
 		Timers:  []Timer{{ID: 4, Due: testAt.Add(30 * time.Minute), What: "check the rollout", By: "me"}},
-		Records: []Record{{Session: "bee", Issue: "giantswarm/beekeeper#1", Waits: "review"}},
+		Records: []Record{{Session: tBee, Issue: tIssue, Waits: "review"}},
 		Alerts: []AlertsFor{
-			{Installation: "giantswarm", Reachable: true, Alerts: []Alert{
+			{Installation: tOrg, Reachable: true, Alerts: []Alert{
 				{Severity: "warning", Team: "tiger", Alertname: "KubePodCrashLooping", Cluster: "w-1", Since: "2h"},
 				{Severity: "critical", Team: "atlas", Alertname: "TargetDown", Cluster: "w-2", Since: "10m"},
 			}},
@@ -114,9 +129,9 @@ func fixtureData() *Data {
 		},
 		Upgrades: []string{"devctl 1.2.0 -> 1.3.0 on giantswarm"},
 		Events: []Event{
-			{At: testAt.Add(-time.Minute), Verb: "claim", By: "bee", Detail: "repo/beekeeper"},
-			{At: testAt, Verb: "grant", By: "sup", Detail: "repo/beekeeper to wasp"},
-			{At: testAt.Add(-2 * time.Minute), Verb: "hold-set", By: "me", Detail: "repo/beekeeper release"},
+			{At: testAt.Add(-time.Minute), Verb: tClaim, By: tBee, Detail: tRepo},
+			{At: testAt, Verb: tGrant, By: tSup, Detail: "repo/beekeeper to wasp"},
+			{At: testAt.Add(-2 * time.Minute), Verb: tHoldSet, By: "me", Detail: "repo/beekeeper release"},
 		},
 	}
 }
@@ -327,21 +342,21 @@ func TestEnterOpensSessionPaneOnlyThere(t *testing.T) {
 		{At: testAt, Role: "user", Text: "the second turn"},
 	}}
 	m := newTestModel(t, src)
-	_, c := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if m.detail != "" {
 		t.Fatal("enter on the watching tab opened a pane")
 	}
 
 	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
-	_, c = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if m.detail != "bee" || m.tailState != 1 {
+	_, c := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.detail != tBee || m.tailState != 1 {
 		t.Fatalf("detail = %q state %d, want bee loading", m.detail, m.tailState)
 	}
 	got := msgs(c)
 	if len(got) != 1 {
 		t.Fatalf("enter asked for %d messages, want one tail", len(got))
 	}
-	if src.tailCall != "bee" || src.tailN != tailTurns {
+	if src.tailCall != tBee || src.tailN != tailTurns {
 		t.Errorf("Tail(%q, %d), want bee, %d", src.tailCall, src.tailN, tailTurns)
 	}
 	if body := m.View(); !strings.Contains(body, "transcript") || !strings.Contains(body, "…") {
@@ -350,7 +365,7 @@ func TestEnterOpensSessionPaneOnlyThere(t *testing.T) {
 
 	m.Update(got[0])
 	body := m.View()
-	for _, want := range []string{"bee", "on it", "answer to the question", "$1.23", "sleep 60", "45%"} {
+	for _, want := range []string{tBee, "on it", "answer to the question", "$1.23", "sleep 60", "45%"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the pane shows no %q:\n%s", want, body)
 		}
@@ -407,7 +422,7 @@ func TestLateTailForClosedPaneIsDropped(t *testing.T) {
 	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m.key(tea.KeyMsg{Type: tea.KeyEsc})
-	m.Update(tailMsg{session: "bee", turns: []Turn{{Text: "late"}}})
+	m.Update(tailMsg{session: tBee, turns: []Turn{{Text: "late"}}})
 	if m.tailState != 0 || len(m.tail) != 0 {
 		t.Errorf("a late tail reopened the pane: state %d, %d turns", m.tailState, len(m.tail))
 	}

@@ -12,6 +12,9 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+// noneLabel is what a section without entries shows.
+const noneLabel = "none"
+
 // The screen's whole palette lives here. lipgloss v1 carries adaptive
 // light/dark colours instead of a LightDark helper, so every colour is an
 // AdaptiveColor and lipgloss picks the pair the terminal's background
@@ -52,7 +55,7 @@ var (
 
 // tabShort names the tabs when the window is too narrow for the full
 // names; the digits stay while they fit, because they are the keys.
-var tabShort = [...]string{"watch", "sess", "share", "supvise", "alerts", "events"}
+var tabShort = [...]string{"watch", "sess", "share", "supvise", tabAlerts, "events"}
 
 // render assembles the window: two header lines, the scrolling body and
 // a footer, each cut to the terminal's width so nothing wraps.
@@ -372,7 +375,7 @@ func watchingView(d *Data, w, h, sel int) string {
 			free++
 		}
 	}
-	badge := "none"
+	badge := noneLabel
 	if len(m.Slots) > 0 {
 		badge = fmt.Sprintf("%d/%d free", free, len(m.Slots))
 	}
@@ -400,7 +403,7 @@ func watchingView(d *Data, w, h, sel int) string {
 		t.rule("clusters", "")
 		t.head(style.Warn.Render("cannot ask docker: " + m.ClustersErr))
 	case len(m.Clusters) == 0:
-		t.rule("clusters", "none")
+		t.rule("clusters", noneLabel)
 	default:
 		t.rule("clusters", fmt.Sprintf("%d", len(m.Clusters)))
 		for _, c := range m.Clusters {
@@ -417,7 +420,7 @@ func watchingView(d *Data, w, h, sel int) string {
 	t.dim("")
 	badge = fmt.Sprintf("%d", len(m.Waits))
 	if len(m.Waits) == 0 {
-		badge = "none"
+		badge = noneLabel
 	}
 	t.rule("waits", badge)
 	for i, wt := range m.Waits {
@@ -426,7 +429,7 @@ func watchingView(d *Data, w, h, sel int) string {
 	}
 	badge = fmt.Sprintf("%d", len(m.OOM))
 	if len(m.OOM) == 0 {
-		badge = "none"
+		badge = noneLabel
 	}
 	t.rule("oom kills", badge)
 	for _, o := range m.OOM {
@@ -733,7 +736,7 @@ func detailView(d *Data, s Session, w, h int, tail []Turn, state, off int, err s
 	}
 	t.dim("")
 	n := len(s.Work) + len(s.Leases) + len(s.Commands) + len(s.Scopes)
-	badge := "none"
+	badge := noneLabel
 	if n > 0 {
 		badge = fmt.Sprintf("%d", n)
 	}
@@ -802,7 +805,7 @@ func detailView(d *Data, s Session, w, h int, tail []Turn, state, off int, err s
 // free resources, the grant queues, holds and the merge lanes.
 func sharingView(d *Data, w, h, sel int) string {
 	t := newTabLines(w, sel)
-	badge := "none"
+	badge := noneLabel
 	if len(d.Leases.Held) > 0 {
 		badge = fmt.Sprintf("%d", len(d.Leases.Held))
 	}
@@ -827,7 +830,7 @@ func sharingView(d *Data, w, h, sel int) string {
 		}
 		t.row(i, strings.Join(cells, "  "))
 	}
-	badge = "none"
+	badge = noneLabel
 	if len(d.Leases.Free) > 0 {
 		badge = fmt.Sprintf("%d", len(d.Leases.Free))
 	}
@@ -846,7 +849,7 @@ func sharingView(d *Data, w, h, sel int) string {
 			t.dim(cols(fit(res, 24), strings.Join(gs, "  ")))
 		}
 	}
-	badge = "none"
+	badge = noneLabel
 	if len(d.Holds) > 0 {
 		badge = fmt.Sprintf("%d", len(d.Holds))
 	}
@@ -875,7 +878,7 @@ func sharingView(d *Data, w, h, sel int) string {
 		}
 		t.head(cell.Render(strings.Join(cells, "  ")))
 	}
-	badge = "none"
+	badge = noneLabel
 	if len(d.Lanes) > 0 {
 		badge = fmt.Sprintf("%d", len(d.Lanes))
 	}
@@ -912,7 +915,7 @@ func sharingView(d *Data, w, h, sel int) string {
 // timers and which session serves which issue.
 func supervisingView(d *Data, w, h, sel int) string {
 	t := newTabLines(w, sel)
-	badge := "none"
+	badge := noneLabel
 	if len(d.Roles) > 0 {
 		badge = fmt.Sprintf("%d", len(d.Roles))
 	}
@@ -943,7 +946,7 @@ func supervisingView(d *Data, w, h, sel int) string {
 		}
 		t.row(i, strings.Join(cells, "  "))
 	}
-	badge = "none"
+	badge = noneLabel
 	if len(d.Agents) > 0 {
 		badge = fmt.Sprintf("%d", len(d.Agents))
 	}
@@ -959,7 +962,7 @@ func supervisingView(d *Data, w, h, sel int) string {
 		t.dim(cols(pad(fit(a.Name, 14), 14), pad(reach, 18), trimWord(a.Task, 34),
 			style.Dim.Render("assigned "+clock(a.AssignedAt, d.At))))
 	}
-	badge = "none"
+	badge = noneLabel
 	if len(d.Notes) > 0 {
 		badge = fmt.Sprintf("%d", len(d.Notes))
 	}
@@ -980,7 +983,7 @@ func supervisingView(d *Data, w, h, sel int) string {
 		}
 		t.head(cell)
 	}
-	badge = "none"
+	badge = noneLabel
 	if len(d.Timers) > 0 {
 		badge = fmt.Sprintf("%d", len(d.Timers))
 	}
@@ -996,7 +999,7 @@ func supervisingView(d *Data, w, h, sel int) string {
 		}
 		t.head(cell)
 	}
-	badge = "none"
+	badge = noneLabel
 	if len(d.Records) > 0 {
 		badge = fmt.Sprintf("%d", len(d.Records))
 	}
@@ -1016,7 +1019,7 @@ func supervisingView(d *Data, w, h, sel int) string {
 // upgrades and the GitHub budget.
 func alertsView(d *Data, w, h, sel int) string {
 	t := newTabLines(w, sel)
-	badge := "none"
+	badge := noneLabel
 	if len(d.Alerts) > 0 {
 		badge = fmt.Sprintf("%d", len(d.Alerts))
 	}
@@ -1027,7 +1030,7 @@ func alertsView(d *Data, w, h, sel int) string {
 		if !a.Reachable {
 			cell = cols(cell, style.Gone.Render("unreachable"))
 		} else {
-			noun := "alerts"
+			noun := tabAlerts
 			if len(rows) == 1 {
 				noun = "alert"
 			}
@@ -1051,7 +1054,7 @@ func alertsView(d *Data, w, h, sel int) string {
 				count))
 		}
 	}
-	badge = "none"
+	badge = noneLabel
 	if len(d.Upgrades) > 0 {
 		badge = fmt.Sprintf("%d", len(d.Upgrades))
 	}
@@ -1182,7 +1185,7 @@ func eventsView(d *Data, w, h, sel int) string {
 	copy(evs, d.Events)
 	sort.SliceStable(evs, func(i, j int) bool { return evs[i].At.After(evs[j].At) })
 	t := newTabLines(w, sel)
-	badge := "none"
+	badge := noneLabel
 	if len(evs) > 0 {
 		badge = fmt.Sprintf("%d", len(evs))
 	}
