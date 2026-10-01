@@ -92,7 +92,7 @@ func TestNextFreeHoldsAnEpicsSubIssuesToItsOwners(t *testing.T) {
 			{Session: running, Issue: "o/r#20", At: listed.Add(-time.Hour)},
 			{Session: running, Issue: "o/r#21", At: listed.Add(-time.Hour)},
 		},
-		Notes: []state.Note{{ID: 704, For: "Supervisor", Pinned: true, Text: "skip the slices of https://github.com/o/r/issues/10"}},
+		Notes: []state.Note{{ID: 704, For: "Pat", Pinned: true, Text: "skip the slices of https://github.com/o/r/issues/10"}},
 	}
 	sub := func(n int, epic string) board.Candidate {
 		return board.Candidate{Item: board.Item{Ref: fmt.Sprintf("o/r#%d", n)}, Step: "In Progress", Epic: epic}
@@ -105,8 +105,8 @@ func TestNextFreeHoldsAnEpicsSubIssuesToItsOwners(t *testing.T) {
 		got = append(got, c.Ref+": "+c.Skip)
 	}
 	want := []string{
-		`o/r#11: note #704 (waits on Supervisor), on epic o/r#10`,
-		`o/r#12: note #704 (waits on Supervisor), on epic O/R#10`,
+		`o/r#11: note #704 (waits on Pat), on epic o/r#10`,
+		`o/r#12: note #704 (waits on Pat), on epic O/R#10`,
 		`o/r#21: served by "Worker one"`,
 		`o/r#22: served by "Worker one", on epic o/r#20`,
 	}
