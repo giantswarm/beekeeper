@@ -36,10 +36,10 @@ const mergePos = start + `(?:(?:` +
 	`|nohup|time(?:\s+-p)?|command|exec|\w+=\S*` +
 	`)\s+)*`
 
-// devctlOwned is one of devctl's blocking commands the gate runs (pr merge,
-// pr wait, release wait, rollout wait), devctl by name or by a path that
-// starts with /, ~/, ./, ../ or a variable ($HOME/bin/devctl).
-const devctlOwned = `(?:(?:~|\.\.?|\$\{?\w+\}?)?/(?:[^\s;&|()'"<>=]*/)?)?devctl\s+(?:pr\s+(?:merge|wait)|(?:release|rollout)\s+wait)\b`
+// devctlOwned is one of devctl's commands the gate runs (pr merge, release
+// promote, pr wait, release wait, rollout wait), devctl by name or by a path
+// that starts with /, ~/, ./, ../ or a variable ($HOME/bin/devctl).
+const devctlOwned = `(?:(?:~|\.\.?|\$\{?\w+\}?)?/(?:[^\s;&|()'"<>=]*/)?)?devctl\s+(?:pr\s+(?:merge|wait)|release\s+(?:wait|promote)|rollout\s+wait)\b`
 
 var (
 	heavy = regexp.MustCompile(`(?m)` + pos + `(` + strings.Join([]string{
@@ -208,7 +208,7 @@ func (h Hook) decide(ev event) []byte {
 	bg, _ := ev.ToolInput[backgroundKey].(bool)
 	cmd, gated := h.gate(cmd, bg)
 	if fixed, ok := h.hiddenMerges(cmd, bg); ok {
-		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused: a devctl pr merge, pr wait, release wait or rollout wait " +
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused: a devctl pr merge, release promote, pr wait, release wait or rollout wait " +
 			"inside a shell's -c string runs outside the gate. Run it as its own command, or with the gate written in:\n" + fixed})
 	}
 	if wrapped.MatchString(cmd) {

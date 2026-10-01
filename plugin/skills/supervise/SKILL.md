@@ -91,7 +91,7 @@ machine has a supervisor at all times: the role moves to a successor by relay an
   uses `--full` or `--json`, since it reads as this session. Messages to and from the supervisor
   are one line; a tick with no change is one or two lines. Every number in a report is from this
   tick's snapshot, and every PR state from a live `gh pr view`.
-- **The supervisor never blocks its own turn.** Every grant, clear and go depends on its next tick,
+- **The supervisor never blocks its own turn.** Every grant and go depends on its next tick,
   so nothing may hold that turn: no `AskUserQuestion` or other dialog that waits for an answer;
   long waits run only in the background.
 - **Decisions go to the guide, never to the person directly.** A decision the supervisor meets, its
@@ -125,7 +125,7 @@ machine has a supervisor at all times: the role moves to a successor by relay an
   and notifies the guide. Another team's alert in its own area is noted in the tick and left alone.
   A `RUNAWAY` session is told its figure in one message; a `LANE STALLED` lane gets its absent
   place checked with that place's session and dropped (`lanes drop`) only when that merge will not
-  come. At `HANDOVER DUE "<agent>"`, `beekeeper agents handover "<agent>"` hands that agent to a
+  come (a place whose pull request merged or closed leaves by itself). At `HANDOVER DUE "<agent>"`, `beekeeper agents handover "<agent>"` hands that agent to a
   fresh session in its place.
 - **Consent boundaries.** Bounding or waiting beats killing; never kill a busy session's work; never
   archive or stop a session or take over a held lab without the person's explicit ask. RAM-backed
@@ -148,11 +148,12 @@ machine has a supervisor at all times: the role moves to a successor by relay an
   set`, `--lane <name>` for a lane) and with the config's `lanes`, which the gate enforces
   (`beekeeper lanes`; `lanes queue <repo> <n> --for <session>` seeds a place, `lanes settle <repo>
   <n> --for <session>` registers a merge that ran outside the gate, `hold set --lane <name> --except
-  <repo#n>` keeps a proving window open for the one merge it waits for): one merge at a time per
-  lane, the lane's HelmReleases Ready on the release before the next, `clear <repo>` when a lane is
-  free. A `clear` unanswered for 20 minutes holds nothing: the session merges once it sees the lane
-  Ready itself. A hold reaches a session only before its merge started; after that the merge is a
-  fact to sequence around. Resources are handed over as `yours <env>` / `browser yours` (recorded
+  <repo#n>` keeps a proving window open for the one merge it waits for): one merge or promotion at
+  a time per lane, the lane's HelmReleases Ready on the release before the next. A merge behind a
+  busy lane waits on in its own run and wakes its session with the outcome, so the lane needs no
+  `clear` message and a promotion no separate `go`; only a hold stops a merge, and `lanes clear` is
+  the repair for a lane whose release will not roll. A hold reaches a merge only before its devctl
+  started; after that the merge is a fact to sequence around. Resources are handed over as `yours <env>` / `browser yours` (recorded
   as a grant) and returned as `<env> free` / `browser free`; the session's claim follows. The
   worker's side of the vocabulary is the `worker-rules` skill.
 - **Reading is a worker's task.** Board sweeps, epic re-queries and research run as workers; the

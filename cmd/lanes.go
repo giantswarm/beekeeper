@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strconv"
@@ -434,4 +435,61 @@ func (a *app) printLanes(views []laneView) {
 			p("%s %d. %s by %q, %s since %s", label, i+1, m.Key(), m.By.Name, how, clock(a.now, m.Joined))
 		}
 	}
+}
+
+// checkPlaces asks GitHub, at now, about the waiting places of lane (every lane for
+// "") whose merge is not in the gate, other than repo#pr, last checked more
+// than every ago: a merged pull request settles its lane as a merge outside
+// the gate, a closed one leaves it, each with an event naming it. It
+// returns GitHub's error for a place settled with lanes settle, which heads
+// its lane; other places are asked again at the next check.
+func (a *app) checkPlaces(ctx context.Context, by state.Party, now time.Time, lane, repo string, pr int, every time.Duration) error {
+	st, err := a.store.Read()
+	if err != nil {
+		return nil
+	}
+	pulls := map[string]github.Pull{}
+	for _, m := range st.Merges {
+		if m.Phase != state.Waiting || m.PR == 0 || proc.Alive(m.PID) || (lane != "" && m.Lane != lane) ||
+			(m.Repo == repo && m.PR == pr) || now.Sub(m.Checked) < every {
+			continue
+		}
+		p, err := pullState(ctx, m.Repo, m.PR)
+		if err != nil {
+			if m.Outside {
+				return err
+			}
+			continue
+		}
+		pulls[m.Key()] = p
+	}
+	if len(pulls) == 0 {
+		return nil
+	}
+	return a.store.Update(func(st *state.State) ([]state.Event, error) {
+		var ev []state.Event
+		st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool {
+			p, ok := pulls[m.Key()]
+			if !ok || m.Phase != state.Waiting || proc.Alive(m.PID) || p.State != github.Closed {
+				return false
+			}
+			ev = append(ev, event(by, "merge.dropped", "%s: closed without a merge, its place in lane %s is dropped", m.Key(), m.Lane))
+			return true
+		})
+		for i := range st.Merges {
+			m := &st.Merges[i]
+			p, ok := pulls[m.Key()]
+			if !ok || m.Phase != state.Waiting || proc.Alive(m.PID) {
+				continue
+			}
+			if p.State != github.Merged {
+				m.Checked = now.UTC()
+				continue
+			}
+			merge.Merged(m, p.MergedAt)
+			ev = append(ev, event(by, "merged", "%s outside the gate at %s, release unknown: its place in lane %s settles the lane",
+				m.Key(), p.MergedAt.UTC().Format(time.RFC3339), m.Lane))
+		}
+		return ev, nil
+	})
 }

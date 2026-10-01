@@ -486,8 +486,14 @@ type Merge struct {
 	Roll []string `json:"roll,omitempty"`
 }
 
-// Key is the merge's repository and number, owner/repo#n.
-func (m Merge) Key() string { return fmt.Sprintf("%s#%d", m.Repo, m.PR) }
+// Key is the merge's repository and number, owner/repo#n, or owner/repo
+// promote for a promotion (PR 0).
+func (m Merge) Key() string {
+	if m.PR == 0 {
+		return m.Repo + " promote"
+	}
+	return fmt.Sprintf("%s#%d", m.Repo, m.PR)
+}
 
 // Retrying says whether a waiting merge is a failed attempt that keeps its
 // place for its session's retry of the same pull request.

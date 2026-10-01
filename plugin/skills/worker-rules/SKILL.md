@@ -26,8 +26,7 @@ task needs lives only in this session: the next task goes to a fresh one.
   serves and what it waits on, kept current as the wait changes.
 - **The supervisor's words.** `yours <env>` / `<env> free` for a resource of the config's
   `resources` (a lab, an installation) and `browser yours` / `browser free` for the browser;
-  `hold <repo>` / `release <repo>` for merges into a repository; `clear <repo>` before a merge into
-  a lane of the config's `lanes`; `go` for an announced step. The worker's words: `need <env>` with
+  `hold <repo>` / `release <repo>` for merges into a repository; `go` for an announced step. The worker's words: `need <env>` with
   purpose and duration, `merging <n>` before and `merged <n> <version>` after every own merge,
   `tagging <v>` before a tag that rolls installations. Where the supervisor states a different rule
   for its watch, the supervisor's rule wins.
@@ -40,10 +39,11 @@ task needs lives only in this session: the next task goes to a fresh one.
   supervisor's `yours <env>`, released with `beekeeper lease release <env>` and returned with
   `<env> free` when done. A held lease is another session's.
 - **Merges.** One merge command per PR, through the gate (`devctl pr merge <owner/repo> <n>` for the
-  owners under `merge.devctlOwners`), acting on its exit code and never around it: 76 queued, rerun
-  in the background; 77 refused, its `beekeeper gate:` line says why. A merge into a lane waits for
-  the supervisor's `clear <repo>`; a `hold <repo>` stands until `release <repo>`; nothing rolls onto
-  an installation while one of its clusters upgrades. A teammate's open PR that overlaps the task is
+  owners under `merge.devctlOwners`, `devctl release promote <owner/repo>` likewise), acting on its
+  exit code and never around it: 76 queued, the merge waits on in its lane by itself and its
+  outcome wakes the worker, never run it again; 77 refused, its `beekeeper gate:` line says why. A
+  `hold <repo>` stands until `release <repo>`; nothing rolls onto an installation while one of its
+  clusters upgrades. A teammate's open PR that overlaps the task is
   a hard stop: tell the supervisor. Before a non-mechanical change, read the repository's open PRs
   and recent commits.
 - **Git.** Conventional commit subjects of at most 72 characters; no major version bumps; never a

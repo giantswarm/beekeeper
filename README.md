@@ -77,7 +77,7 @@ a relayed successor opens with the plugin's role.
 | `beekeeper budget` | The GitHub core budget from the headers of a real, conditional request (a 304 costs nothing), and every `gh` and `devctl` process with its session. `--gate` exits 3 under the floor. |
 | `beekeeper lease claim\|release\|status\|grant\|revoke` | One holder per resource: the environments in the configuration, the host's model server (`model-server`, whose claim carries `--gib <n>`: the GiB its models may hold, see [The model server](#the-model-server)) and the browser. While a supervisor runs, a session claims only what the supervisor granted it, in grant order. While a cluster upgrade runs on the installation of the resource's name, nobody claims it except by the supervisor's `lease grant <installation> <session> --upgrade-unblock "<why>"`, for the work that unblocks the upgrade (see [Cluster upgrades](#cluster-upgrades)). |
 | `beekeeper hold set\|lift\|check` | Stop merges into a repository (a broken main), one lane (`--lane serving`: a proving window such as a model load stops the lane whose components it exercises, not the others), every merge (`merges`) or every GitHub call (`github`) until lifted or a time passes. A merge hold lets one repository or pull request through with `--except owner/repo[#n]`: `hold set --lane serving --except giantswarm/model-manager#172` stops the lane but for the merge it waits for. A lane hold that excepts one pull request (`owner/repo#n`) is also its fix window: that merge runs without the lane's HelmReleases Ready or the previous release rolled, for the fix of a rollout only the fix can repair, logged as `merge.window`. The merge gate enforces them. |
-| `beekeeper lanes [queue\|settle\|drop\|clear]` | Each merge lane: the running merge, the one settling until its release rolled, and the waiting ones in turn order, so who is next is never prose. `queue <owner/repo> <n> --for <session>` gives a session's merge its place now so an agreed order carries over (kept until that merge runs, through refusals, for `merge.seedTTL`, 12h; seeds keep their order, an arrived unseeded merge passes one whose merge has not arrived); a run with nothing merged stays in its place as `retrying` for its session's retry; `settle <owner/repo> <n> [--for <session>]` registers a merge run outside the gate (in flight when the gate went live, run without the hook): it heads its lane until it merges, then settles the lane like a gated merge; `drop` takes a waiting merge out; `clear` frees a lane whose settling release will not roll, after a look at the installation. A lane where no merge runs and whose first arrived merge has waited longer than `merge.stallAfter` (5m) behind places whose merges are not in the gate (seeds that have not arrived, merges that left it) is `stalled`, with the waiting merge and those places named. |
+| `beekeeper lanes [queue\|settle\|drop\|clear]` | Each merge lane: the running merge, the one settling until its release rolled, and the waiting ones in turn order, so who is next is never prose. `queue <owner/repo> <n> --for <session>` gives a session's merge its place now so an agreed order carries over (kept until that merge runs, through refusals, for `merge.seedTTL`, 12h; seeds keep their order, an arrived unseeded merge passes one whose merge has not arrived); a run with nothing merged stays in its place as `retrying` for its session's retry; `settle <owner/repo> <n> [--for <session>]` registers a merge run outside the gate (in flight when the gate went live, run without the hook): it heads its lane until it merges, then settles the lane like a gated merge; `drop` takes a waiting merge out (a place whose pull request merged or closed leaves by itself at the next `watch` poll); `clear` is the repair for a lane whose settling release will not roll, after a look at the installation. A lane where no merge runs and whose first arrived merge has waited longer than `merge.stallAfter` (5m) behind places whose merges are not in the gate (seeds that have not arrived, merges that left it) is `stalled`, with the waiting merge and those places named. |
 | `beekeeper supervisor start\|stop` | Make a session the supervisor. The grant rule applies from its start until a deliberate `supervisor stop` (which ends supervision and starts no successor) or a successor's `supervisor start`: a supervisor whose CLI crashed keeps it in force, its grants and queue stay recorded, and every claim waits for the successor. A CLI back under the same session id or desktop record within `supervisor.restartGrace` (30s) of beekeeper first seeing it gone (a claim or a watch's poll) is a restart and keeps the role and an open relay without a new start; `supervisor status` and `status` show it restarting, then gone. Another session's start is refused while it runs or restarts, unless the supervisor relayed the role to it; past the grace a successor's start takes the role. |
 | `beekeeper supervisor reopen` | Open the recorded supervisor's desktop session, starting the app if needed (the login unit, see [Fresh successors](#fresh-successors-and-a-supervisor-started-again-without-a-click)). |
 | `beekeeper supervisor relay [--cancel]` | Hand the role over without a gap: beekeeper starts the next run, "Supervisor run N+1", as a fresh session (as `agents start` does, so its desktop title, roster name and messaging name are one) and opens the relay to it; its first turn's `supervisor start` takes the role, the grant queue and the pending grants in one step, and the event log shows both. Until then the outgoing supervisor keeps the role and the grant rule; a relay not taken expires after `supervisor.relayTTL` (15m) or is withdrawn with `--cancel`, and a successor that does not start withdraws it. `supervisor status` in the relieved session exits 4, also after the successor relays onward, cancels a relay or is relieved in turn, until that session supervises again (or for 7 days). |
@@ -253,6 +253,10 @@ state it cannot read counts as not the guide.
 ## The merge gate
 
 Sessions keep typing `devctl pr merge <owner/repo> <n> [flags]`; beekeeper never replaces devctl.
+`devctl release promote <owner/repo>` (one repository, no `--dry-run`) passes the same gate: it
+queues in its repository's lane and runs like a merge, and the stable release it dispatches
+settles the lane as a merge's release does; a promotion of several repositories or of a `--team`
+runs ungated.
 The PreToolUse hook rewrites the call to `<this binary> gate -- devctl pr merge …` (a background
 call gets `--wait 30m`), and the gate decides. The hook finds the merge wherever it runs as a
 command: in any part of a pipeline or a `;`, `&&` or `||` list, in a subshell or a loop, behind the
@@ -269,12 +273,16 @@ refusal naming the command with the gate written in.
   the repository, its lane, `merges` or `github` is held, or a cluster upgrade runs on the lane's
   installation (the hold's reason); the GitHub budget is
   under `github.floor`, or unknown, checked before devctl makes a single request; the lane's
-  installation cannot be read (a lapsed `tsh` login); the lane waited `merge.settleTimeout` for a
-  release that did not roll.
+  installation cannot be read (a lapsed `tsh` login). Nothing else stops a merge: a lane whose
+  release has not rolled past `merge.settleTimeout` keeps it waiting, and `watch` says `LANE STUCK`.
 - **Queued, exit 76**, one line starting `beekeeper gate: queued,` with the merge's position and
-  whom it waits behind; when the machine-wide devctl cap is the reason, the line says
-  `<n> devctl processes run machine-wide (cap <n>), not a lane problem`. The merge keeps its place for `merge.queueTTL` (15m): run the same
-  command again, best with `run_in_background`, where the wait is 30 minutes instead of 2.
+  whom it waits behind (when the machine-wide devctl cap is the reason, `<n> devctl processes run
+  machine-wide (cap <n>), not a lane problem`), once the merge has waited `--wait` (2 minutes, 30
+  in the background). The merge is not dropped: the gate hands it to a run of its own outside the
+  caller, the same gate under `--queued`, which keeps its place for up to `merge.seedTTL`, runs
+  devctl when its turn comes and wakes the owner with the outcome (`devctl.unheard`, as below).
+  Nobody runs it again; a second `devctl pr merge` of the pull request while it waits is refused
+  with exit 3.
 - **Otherwise devctl runs once**, its JSON document and exit code (devctl's own 0–9) unchanged,
   and the event log records `merging` and `merged` with the release. devctl serves the
   repositories of `merge.devctlOwners` only (its GitHub App login reaches the giantswarm
@@ -322,7 +330,10 @@ the others wait behind it, through a lane hold's refusal too. Once merged throug
 settles like any gated merge; merged outside it, GitHub reports no release, so the lane settles for
 `merge.settle` from the merge and then frees once its HelmReleases are Ready. A merge waiting
 behind the entry asks GitHub (`gh pr view`) at most once a minute; a pull request closed without a
-merge leaves the lane.
+merge leaves the lane. The same holds for every place whose merge is not in the gate (a seed, a
+failed run's retry place, a place kept after its gate left): `watch` asks GitHub about it at every
+poll, a pull request merged outside the gate settles the lane (`merged … outside the gate`) and a
+closed one drops the place (`merge.dropped`), so no place waits for a `lanes drop`.
 
 A gate call keeps deciding by the code it started with only until the binary is replaced: a call
 waiting for its turn when `beekeeper self-update` renames a new binary over its path re-executes

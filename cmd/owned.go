@@ -161,6 +161,9 @@ func (a *app) tellOwner(ctx context.Context, r childResult) {
 // merge's release), else devctl's last stderr line.
 func (r childResult) outcome() string {
 	argv := r.spec.Argv
+	if i := slices.Index(argv, "--"); i >= 0 && slices.Contains(argv[:i], "gate") {
+		argv = argv[i+1:] // a queued merge's run: the devctl command it gates
+	}
 	if len(argv) == 0 {
 		argv = []string{"devctl"}
 	}
