@@ -97,6 +97,12 @@ func (f fakeTsh) login(ctx context.Context, home string, log *os.File) error {
 	return os.WriteFile(filepath.Join(home, "profile"), []byte(f.until.Format(time.RFC3339)), 0o600)
 }
 
+// homeUntil is the expiry of the profile renewal's home starts with.
+const homeUntil = "2026-10-01T12:30:00Z"
+
+// loginFailed is the error of a login whose tsh exited 1.
+const loginFailed = "tsh login: exit status 1"
+
 func readProfile(_ context.Context, home string) (Profile, error) {
 	raw, err := os.ReadFile(filepath.Clean(filepath.Join(home, "profile")))
 	if err != nil {
@@ -113,7 +119,7 @@ func renewal(t *testing.T, f fakeTsh) Renewal {
 	if err := os.Mkdir(home, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(home, "profile"), []byte("2026-10-01T12:30:00Z"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, "profile"), []byte(homeUntil), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return Renewal{Home: home, Dir: filepath.Join(dir, "state", "teleport"), Timeout: time.Second, Login: f.login, Status: readProfile}
@@ -132,7 +138,7 @@ func TestRenewSwapsTheStagingHomeIn(t *testing.T) {
 	if got, _ := readProfile(context.Background(), r.Home); !got.ValidUntil.Equal(p.ValidUntil) {
 		t.Fatalf("home holds %s", got.ValidUntil)
 	}
-	if prev, _ := readProfile(context.Background(), r.Previous()); prev.ValidUntil.Format(time.RFC3339) != "2026-10-01T12:30:00Z" {
+	if prev, _ := readProfile(context.Background(), r.Previous()); prev.ValidUntil.Format(time.RFC3339) != homeUntil {
 		t.Fatalf("previous holds %s", prev.ValidUntil)
 	}
 	if _, err := os.Stat(filepath.Join(r.Home, kubeconfig)); !errors.Is(err, os.ErrNotExist) {
@@ -170,7 +176,7 @@ func TestRenewFailureLeavesTheHome(t *testing.T) {
 		f    fakeTsh
 		want string
 	}{
-		"login fails": {fakeTsh{err: errors.New("exit status 1")}, "tsh login: exit status 1"},
+		"login fails": {fakeTsh{err: errors.New("exit status 1")}, loginFailed},
 		"timeout":     {fakeTsh{hang: true}, "did not complete within 1s"},
 		"expired":     {fakeTsh{until: now.Add(-time.Minute)}, "expired"},
 	}
@@ -183,7 +189,7 @@ func TestRenewFailureLeavesTheHome(t *testing.T) {
 		if strings.Contains(err.Error(), "secret=") {
 			t.Errorf("%s: the login URL reached the error: %v", name, err)
 		}
-		if got, _ := readProfile(context.Background(), r.Home); got.ValidUntil.Format(time.RFC3339) != "2026-10-01T12:30:00Z" {
+		if got, _ := readProfile(context.Background(), r.Home); got.ValidUntil.Format(time.RFC3339) != homeUntil {
 			t.Errorf("%s: home changed to %s", name, got.ValidUntil)
 		}
 		if left, _ := filepath.Glob(filepath.Join(r.Dir, "staging-*")); len(left) > 0 {
@@ -228,9 +234,9 @@ func TestRenewRetriesTheCallbackTimeoutOnce(t *testing.T) {
 		retried  bool
 	}{
 		"retry succeeds":      {[]fakeTsh{failed, ok}, []bool{true, false}, "", 2, true},
-		"retry fails":         {[]fakeTsh{failed, failed}, []bool{true, false}, "tsh login: exit status 1", 2, true},
+		"retry fails":         {[]fakeTsh{failed, failed}, []bool{true, false}, loginFailed, 2, true},
 		"retry times out too": {[]fakeTsh{failed, failed, ok}, []bool{true, true, false}, "SSO callback timed out", 2, true},
-		"other failure":       {[]fakeTsh{failed, ok}, []bool{false, false}, "tsh login: exit status 1", 1, false},
+		"other failure":       {[]fakeTsh{failed, ok}, []bool{false, false}, loginFailed, 1, false},
 		"login times out":     {[]fakeTsh{{hang: true}, ok}, []bool{false, false}, "did not complete within 1s", 1, false},
 	}
 	for name, c := range cases {
@@ -253,7 +259,7 @@ func TestRenewRetriesTheCallbackTimeoutOnce(t *testing.T) {
 			t.Errorf("%s: Retry heard %v", name, retried)
 		}
 		home, _ := readProfile(context.Background(), r.Home)
-		if c.want == "" && !home.ValidUntil.Equal(p.ValidUntil) || c.want != "" && home.ValidUntil.Format(time.RFC3339) != "2026-10-01T12:30:00Z" {
+		if c.want == "" && !home.ValidUntil.Equal(p.ValidUntil) || c.want != "" && home.ValidUntil.Format(time.RFC3339) != homeUntil {
 			t.Errorf("%s: home holds %s", name, home.ValidUntil)
 		}
 		raw, _ := os.ReadFile(r.Log())
