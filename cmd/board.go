@@ -51,8 +51,10 @@ the reason, even when its epic is in progress. The first item that is free
 is picked: not served by a running session (a sessions serve record, a busy
 agent's task) and named by no open note (it waits on the note's person),
 not assigned to anybody outside board.people, without an open recorded
-blocker, and active within board.staleAfter. It prints the item, why it is picked, and why every item
-above it was skipped.
+blocker, and active within board.staleAfter. A sub-issue offered through
+an epic passes the same checks, and a serve record, task or note naming
+the epic covers it too ("…, on epic owner/repo#n"). It prints the item,
+why it is picked, and why every item above it was skipped.
 
 --claim records the pick as the calling session's sessions serve record
 under the state lock, after checking again that nobody claimed it since:
@@ -120,18 +122,26 @@ type nextResult struct {
 // nextFree walks the candidates in order and returns the first free one.
 // An item is owned by a record of a running session (or of one that
 // started after listed, the moment the running sessions were listed),
-// unless the session is a registered agent reporting idle, and by a busy
-// agent whose task names it.
+// unless the session is a registered agent reporting idle, by a busy
+// agent whose task names it and by an open note naming it. A sub-issue
+// offered through an epic is owned by whatever owns the epic too.
 func nextFree(st *state.State, cands []board.Candidate, me state.Party, alive func(state.Party) bool, listed time.Time) nextResult {
 	owners := boardOwners(st, me, alive, listed)
 	var res nextResult
+	owned := func(ref string) string {
+		o, ok := owners[strings.ToLower(ref)]
+		if ok && !strings.HasPrefix(o, "note ") {
+			o = "served by " + o
+		}
+		return o
+	}
 	for _, c := range cands {
 		if c.Skip == "" {
-			if o, ok := owners[strings.ToLower(c.Ref)]; ok {
-				c.Skip = o
-				if !strings.HasPrefix(o, "note ") {
-					c.Skip = "served by " + o
-				}
+			c.Skip = owned(c.Ref)
+		}
+		if c.Skip == "" && c.Epic != "" {
+			if o := owned(c.Epic); o != "" {
+				c.Skip = o + ", on epic " + c.Epic
 			}
 		}
 		if c.Skip == "" {
