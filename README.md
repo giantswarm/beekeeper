@@ -583,6 +583,16 @@ is kept in reserve or repurposed: a relay and a crash both start a fresh session
   GONE` (and `GUIDE GONE`) say so, and `SUCCESSOR` (`SUCCESSOR FAILED`) says how the start went.
   A session between beekeeper's start or wake and its desktop CLI (its headless turn, or the
   reopen after it) is not gone. Claims stay gated until the successor's `supervisor start`.
+- **A successor that does not come up:** a successor starts in `<role>.dir`, else in the folder
+  its predecessor's desktop session started from: never in the worktree the desktop made for
+  the predecessor, whose branch the desktop cannot check out for a second worktree, so it would
+  never warm the successor's CLI. The resume goes to the desktop CLI, never to a headless turn
+  of beekeeper's. A successor whose first turn and reopen ended with no desktop CLI (the import
+  waited out the focus, the desktop did not warm it) is not replaced: the standby watch resumes
+  it headless with the same message (`agents wake`), and that turn keeps the role's watch and
+  its CLI. One that goes down after that did not come up (`SUCCESSOR DOWN`): the first is one
+  note for `guide.person`, the next successor starts 5 minutes later, the one after 10 minutes,
+  and after three none starts until a holder runs again.
 - **Reboot or app restart:** the login unit
   [`contrib/systemd/beekeeper-supervisor-open.service`](contrib/systemd/beekeeper-supervisor-open.service)
   runs `beekeeper supervisor reopen`, which starts the app on the recorded supervisor's session

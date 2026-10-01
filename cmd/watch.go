@@ -511,7 +511,7 @@ type watchMark struct {
 func (a *app) newWatcher(standby, keep bool) *watcher {
 	w := &watcher{app: a, standby: standby, last: map[string]time.Time{}, seenKills: map[string]bool{},
 		reported: map[string]bool{}, active: map[string]condition{}, chores: keep, retitled: map[string]time.Time{}}
-	w.stand = standbyWatch{send: a.peerSend, open: plat.Opener.Open, succeed: a.succeedFromWatch, turning: unitsTurning}
+	w.stand = standbyWatch{send: a.peerSend, open: plat.Opener.Open, succeed: a.succeedFromWatch, revive: a.reviveFromWatch, turning: unitsTurning}
 	if me, err := a.caller(); keep && err == nil {
 		w.markFile = "seen.watch." + fileKey(me) + ".json"
 		var m watchMark
@@ -1341,6 +1341,7 @@ func (w *watcher) supervisorGone(ctx context.Context, st *state.State, sessions 
 	}
 	if sv.live {
 		w.stand.liveTerm, w.stand.liveAt = key, w.now
+		w.upAgain(supervisorRole, s.Party)
 	}
 	if !sv.down() || relayPending(st, st.SupervisorRole(), w.now) || w.firstTurn(ctx, s.Party) {
 		switch {
@@ -1354,7 +1355,7 @@ func (w *watcher) supervisorGone(ctx context.Context, st *state.State, sessions 
 	}
 	successor := ""
 	if w.standby && !w.reopenAfterAppStart(ctx, st, sv.gone, key) {
-		successor = w.succeedGone(ctx, supervisorRole, s.Party)
+		successor = w.standIn(ctx, supervisorRole, st, s.Party, key)
 	}
 	l := fmt.Sprintf("SUPERVISOR GONE: %q (supervising since %s) is gone since %s; claims stay gated until a successor's beekeeper supervisor start (beekeeper handover --prompt)%s",
 		s.Name, clock(w.now, s.Since), clock(w.now, sv.gone), successor)

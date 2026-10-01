@@ -97,7 +97,9 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   ends. A relay not taken expires and the guide carries on. After a crash the standby unit starts
   the next run the same way. `beekeeper guide stop` runs only on the person's word.
 - **The watch runs in a desktop turn only.** A headless turn (a first turn, an `agents wake`) that
-  arms a Monitor never ends, so the desktop never gets the session's CLI.
+  arms a Monitor never ends, so the desktop never gets the session's CLI. The one exception is the standby
+  watch's headless resume, whose message says the desktop runs no CLI of the session: that turn
+  keeps the watch.
 - **A first guide** started from the person's message runs `beekeeper guide start` (`--take-over`
   only for a predecessor whose session still runs without a relay), arms `beekeeper guide watch`,
   and reads `beekeeper guide queue --full`; beekeeper records it as the next "Guide run N" and titles
