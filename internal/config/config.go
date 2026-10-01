@@ -99,6 +99,9 @@ type Config struct {
 	// Outbound is what the hook refuses to let leave the machine and where
 	// the watch looks for credentials left exposed on disk.
 	Outbound Outbound `yaml:"outbound"`
+	// Scan is where the transcript value scanner's index takes its values
+	// from.
+	Scan Scan `yaml:"scan"`
 	// Board is the project board `beekeeper board` picks work from.
 	Board Board `yaml:"board"`
 	// Plans are the repositories whose pull requests a note for a person
@@ -185,6 +188,22 @@ type Outbound struct {
 	// files and git remote URLs that carry a credential.
 	SweepRoots []string `yaml:"sweepRoots"`
 	SweepDepth int      `yaml:"sweepDepth"`
+}
+
+// Scan configures the transcript value scanner: beekeeper scan index
+// fingerprints the values of these sources into the index under the state
+// directory (scan/), which the PostToolUse hook and beekeeper scan sweep
+// match against.
+type Scan struct {
+	// SOPS are globs (~/ allowed) of SOPS files whose values are indexed,
+	// decrypted with the sops binary in beekeeper's own process.
+	SOPS []string `yaml:"sops"`
+	// Vaults are 1Password vaults whose concealed fields are indexed, read
+	// with the op binary.
+	Vaults []string `yaml:"vaults"`
+	// MinLength is the shortest value indexed (default 12): shorter ones
+	// would match ordinary output.
+	MinLength int `yaml:"minLength"`
 }
 
 // StoreRule refuses a secret-store write (op item or document create and
@@ -985,6 +1004,10 @@ func (c *Config) defaults() error {
 	setStr(&c.Agents.Shell.Globs, GlobsLiteral)
 	c.Reporter.defaults(home, c.Guide.Person)
 	c.Outbound.defaults(home)
+	setInt(&c.Scan.MinLength, 12)
+	for i := range c.Scan.SOPS {
+		c.Scan.SOPS[i] = homePath(home, c.Scan.SOPS[i])
+	}
 	setStr(&c.Plans.Check, DefaultPlansCheck)
 	c.Teleport.defaults(home)
 	setStr(&c.Shell, os.Getenv("SHELL"))

@@ -168,6 +168,11 @@ outbound:                   # what the hook refuses to let leave the machine (RE
   sweepRoots: [~]           # the watch looks here for world-readable private keys and credentials in git remote URLs
   sweepDepth: 5
 
+scan:                       # the value scanner's index (README: What reaches the model); beekeeper scan index reads these
+  sops: [~/projects/configs/*/secrets/*.enc.yaml]   # SOPS file globs (no **), decrypted by sops in beekeeper's process
+  vaults: [Team Shared]     # 1Password vaults whose concealed fields are fingerprinted (op item get --reveal)
+  minLength: 12             # shorter values are not indexed
+
 plans:                      # note add --for <guide.person> links an open pull request here only once its stage check is green
   repositories: [example-org/plans]   # owner/repo; unset, nothing is read
   check: plan-stages        # the stage check's name (default)

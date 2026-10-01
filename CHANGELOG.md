@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The transcript value scanner. `beekeeper hook posttooluse`, the PostToolUse hook `install` now registers for every tool, replaces a tool result that carries a secret value before the model sees it: each indexed value (keyed fingerprints of the SOPS files in `scan.sops` and the 1Password vaults in `scan.vaults`, built by `beekeeper scan index`, or one value by `beekeeper scan add <ref>`) and each token pattern of the outbound guard becomes `[redacted: <reference or rule>]`, the session goes on, and an indexed reference gets a rotation note. Claude Code writes the redacted result to the transcript on disk too. `beekeeper scan sweep` counts each reference and token rule in every existing transcript, never printing a value.
+
 ### Changed
 
 - The Secret guard is an allow list for credential tools. `sops` and `op` are refused in every form (encryption, `op run` and `op item list` included; `helm secrets`, `age -d` and `gpg --decrypt` too), and so is `vault` beyond its listing and metadata commands. A Secret read, `vault kv get`, `base64 -d` of a secret's data or a render fed with secret values (`helm template -f secrets.yaml`, `kustomize build --enable-alpha-plugins`) passes only into key names, metadata or a length, a consumer that prints nothing, or, for a render, a filter that blanks the Secret data, so a diff of blanked renders passes. A file, `tee`, a variable, a hash, `grep -c|-q` and the clipboard are refused as ends, and a hash or diff of a plaintext secret file is refused. `kubectl edit secret`, `kubectl get --raw …/secrets`, `kubectl create secret … -o yaml` and templates naming annotations are refused; an unknown shape is refused by default. Every refusal names `beekeeper secret compare|fingerprint|set|copy|rotate` and no longer offers plaintext files or unkeyed hashes. The kube guard's own `op item get` refusal is gone: the Secret guard covers all of op.

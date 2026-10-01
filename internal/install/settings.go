@@ -34,8 +34,8 @@ type hookCommand struct {
 
 // Hooks are the entries install adds for the binary exe: the guard before
 // every tool call it rewrites or refuses, the permission requests of the
-// agents beekeeper starts, and the agent shell's prelude at every session's
-// start.
+// agents beekeeper starts, the value scan of every tool result, and the
+// agent shell's prelude at every session's start.
 func Hooks(exe string) []Hook {
 	hook := func(event, matcher, sub string, timeout int) Hook {
 		var b bytes.Buffer
@@ -47,6 +47,7 @@ func Hooks(exe string) []Hook {
 	return []Hook{
 		hook("PreToolUse", "Bash|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage|mcp__.*", "pretooluse", 30),
 		hook("PermissionRequest", "*", "permissionrequest", 300),
+		hook("PostToolUse", "*", "posttooluse", 10),
 		hook("SessionStart", "", "sessionstart", 10),
 	}
 }
