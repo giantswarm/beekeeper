@@ -124,21 +124,10 @@ func (c *collector) Data(ctx context.Context) (*tui.Data, error) {
 	return d, nil
 }
 
-// Tail reads the last turns of one session's transcript, the way
-// `beekeeper tail` does: its own words, the person's and its peers'.
+// Tail reads the last turns of one session's transcript, as `beekeeper
+// tail` does, with its tool calls among them: what it does right now.
 func (c *collector) Tail(_ context.Context, session string, turns int) ([]tui.Turn, error) {
-	raw, _, err := c.a.sessions()
-	if err != nil {
-		return nil, err
-	}
-	s, err := claude.Resolve(raw, session)
-	if err != nil {
-		return nil, err
-	}
-	if s.Transcript == "" {
-		return nil, fmt.Errorf("no transcript found for %q", s.Name)
-	}
-	ts, err := claude.Tail(s.Transcript, turns)
+	ts, err := c.a.sessionTail(session, turns, true)
 	if err != nil {
 		return nil, err
 	}
@@ -158,8 +147,9 @@ func (a *app) uiCmd() *cobra.Command {
 machine's memory, swap, pressure, build slots and kind labs, the GitHub
 budget and who is drawing on it, the leases, holds and merge lanes, the
 supervisor and the guide, the agents, notes and timers, the installations'
-alerts and the event log. Press q to quit, and read a session's last turns
-from its row.
+alerts and the event log. Press q to quit. Enter on a session follows it
+live: its history, then the current turn with its tool calls as they land;
+k and j scroll back and forward, G follows again.
 
 Reads only: the screen takes no lease and lifts no hold — those stay with
 the commands, whose exit codes the sessions gate on. It refreshes every
@@ -360,7 +350,7 @@ func uiSessions(v *view, waits map[string]string) []tui.Session {
 	out := make([]tui.Session, 0, len(v.Sessions))
 	for _, s := range v.Sessions {
 		x := tui.Session{
-			PID: s.PID, Name: s.Name, Role: s.Role, Cwd: s.Cwd, Repo: s.Repo, Branch: s.Branch,
+			PID: s.PID, Name: s.Name, Role: s.Role, Harness: s.Harness, State: s.State, Cwd: s.Cwd, Repo: s.Repo, Branch: s.Branch,
 			Model: s.Model, Permission: s.Permission, Started: s.Started, LastActive: s.LastActive,
 			MemMiB: s.MemMiB, Leases: slices.Clone(s.Leases), Waits: waits[s.Name],
 		}

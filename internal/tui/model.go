@@ -15,8 +15,8 @@ const tabAlerts = "alerts"
 var tabs = [...]string{"watching", "sessions", "sharing", "supervising", tabAlerts, "events"}
 
 // tailTurns is how many transcript turns the detail pane asks the Source
-// for.
-const tailTurns = 10
+// for: the history above the current turn.
+const tailTurns = 60
 
 // Messages between the program and the screen's data source. A tick only
 // starts a refresh while none is outstanding, so slow reads never stack.
@@ -31,6 +31,7 @@ type (
 	}
 	// tailMsg carries a detail pane's transcript; session names whose
 	// transcript it is, so a late answer about a closed pane is dropped.
+	// The open pane asks again at every tick: it follows the turn live.
 	tailMsg struct {
 		session string
 		turns   []Turn
@@ -64,7 +65,12 @@ type model struct {
 	tail      []Turn
 	tailState int // 0 closed, 1 loading, 2 ready, 3 failed
 	tailErr   string
-	tailOff   int
+	// tailBack is how many turns the pane is scrolled back from the
+	// newest: 0 follows the session live, more holds the view where the
+	// person scrolled to while new turns arrive below it.
+	tailBack int
+	// tailing says a tail read is outstanding: a tick starts no second.
+	tailing bool
 
 	width, height int
 	quitting      bool
@@ -111,8 +117,13 @@ func (m *model) refreshCmd() tea.Cmd {
 	}
 }
 
-// tailCmd reads one session's transcript tail under the model's context.
+// tailCmd reads one session's transcript tail under the model's context
+// and marks the read outstanding until its result lands.
 func (m *model) tailCmd(session string) tea.Cmd {
+	if m.tailing {
+		return nil
+	}
+	m.tailing = true
 	return func() tea.Msg {
 		turns, err := m.src.Tail(m.ctx, session, tailTurns)
 		return tailMsg{session: session, turns: turns, err: err}
@@ -126,10 +137,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		return m, nil
 	case tickMsg:
-		if m.refreshing {
-			return m, m.tick()
+		cmds := []tea.Cmd{m.refreshCmd(), m.tick()}
+		if m.detail != "" {
+			cmds = append(cmds, m.tailCmd(m.detail))
 		}
-		return m, tea.Batch(m.refreshCmd(), m.tick())
+		return m, tea.Batch(cmds...)
 	case refreshMsg:
 		m.refreshing = false
 		if msg.err != nil {
@@ -145,17 +157,41 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.session != m.detail {
 			return m, nil
 		}
-		if msg.err != nil {
-			m.tailState, m.tail, m.tailErr = 3, nil, msg.err.Error()
-		} else {
-			m.tailState, m.tail, m.tailErr = 2, msg.turns, ""
-		}
-		m.tailOff = 0
+		m.tailing = false
+		m.takeTail(msg)
 		return m, nil
 	case tea.KeyMsg:
 		return m.key(msg)
 	}
 	return m, nil
+}
+
+// takeTail lands a tail read in the open pane. A failed re-read keeps the
+// turns already shown and says why; a pane scrolled back keeps its place
+// by the turns that arrived after its newest.
+func (m *model) takeTail(msg tailMsg) {
+	if msg.err != nil {
+		m.tailErr = msg.err.Error()
+		if m.tailState != 2 {
+			m.tailState, m.tail = 3, nil
+		}
+		return
+	}
+	if m.tailBack > 0 && len(m.tail) > 0 {
+		m.tailBack += newer(msg.turns, m.tail[len(m.tail)-1])
+	}
+	m.tailState, m.tail, m.tailErr = 2, msg.turns, ""
+	m.tailBack = min(m.tailBack, maxRow(len(m.tail)))
+}
+
+// newer counts the turns of ts after last: the ones a re-read added.
+func newer(ts []Turn, last Turn) int {
+	for i := len(ts) - 1; i >= 0; i-- {
+		if ts[i] == last {
+			return len(ts) - 1 - i
+		}
+	}
+	return 0
 }
 
 // key routes a key press. With the detail pane open j/k scroll its
@@ -193,22 +229,30 @@ func (m *model) enter() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	name := s[m.sel[m.tab]].Name
-	m.detail, m.tail, m.tailErr, m.tailOff, m.tailState = name, nil, "", 0, 1
+	m.detail, m.tail, m.tailErr, m.tailBack, m.tailState, m.tailing = name, nil, "", 0, 1, false
 	return m, m.tailCmd(name)
 }
 
-// scrollDetail moves the transcript window of an open pane.
+// scrollDetail moves the transcript window of an open pane: k and up go
+// back to older turns, j and down forward; G and end follow live again,
+// g and home go to the oldest turn read.
 func (m *model) scrollDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	turns := len(m.tail)
+	oldest := maxRow(len(m.tail))
 	switch msg.String() {
-	case "j", "down":
-		if m.tailOff < maxRow(turns) {
-			m.tailOff++
-		}
 	case "k", "up":
-		if m.tailOff > 0 {
-			m.tailOff--
-		}
+		m.tailBack = min(m.tailBack+1, oldest)
+	case "j", "down":
+		m.tailBack = max(m.tailBack-1, 0)
+	case "pgup":
+		m.tailBack = min(m.tailBack+m.page(), oldest)
+	case "pgdown":
+		m.tailBack = max(m.tailBack-m.page(), 0)
+	case "g", "home":
+		m.tailBack = oldest
+	case "G", "end":
+		m.tailBack = 0
+	case "r":
+		return m, m.refreshCmd()
 	}
 	return m, nil
 }
@@ -270,9 +314,9 @@ func (m *model) page() int {
 	return 1
 }
 
-// closeDetail dismisses the pane.
+// closeDetail dismisses the pane; a read still out lands nowhere.
 func (m *model) closeDetail() {
-	m.detail, m.tail, m.tailOff, m.tailState = "", nil, 0, 0
+	m.detail, m.tail, m.tailBack, m.tailState, m.tailing = "", nil, 0, 0, false
 }
 
 // clampAll pulls every tab's selection into range after a refresh, when

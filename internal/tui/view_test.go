@@ -88,6 +88,36 @@ func TestSessionsViewRows(t *testing.T) {
 		t.Errorf("wasp's 90m idle did not render as 1h30m:\n%s", got)
 	}
 }
+func TestSessionsViewStates(t *testing.T) {
+	d := fixture()
+	d.Sessions = append(d.Sessions, Session{Name: "omp in lab", Harness: "omp", State: "busy", Idle: time.Hour})
+	got := stripANSI(sessionsView(d, 130, 40, 0))
+	for _, want := range []string{"state", "waiting", "idle", "omp·busy"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("sessions view misses state %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestTurnLinesFillFromTheNewest(t *testing.T) {
+	turns := []Turn{
+		{At: testAt, Role: "user", Text: "first"},
+		{At: testAt, Role: "assistant", Text: "two\nlines"},
+		{At: testAt, Role: "tool", Text: "Bash: go test ./..."},
+	}
+	got := turnLines(turns, 80, 3, testAt)
+	if len(got) != 3 {
+		t.Fatalf("turnLines gave %d lines for a room of 3:\n%s", len(got), strings.Join(got, "\n"))
+	}
+	plain := stripANSI(strings.Join(got, "\n"))
+	if strings.Contains(plain, "first") || !strings.Contains(plain, "lines") || !strings.HasSuffix(plain, "Bash: go test ./...") {
+		t.Errorf("turnLines did not keep the newest turns, newest last:\n%s", plain)
+	}
+	if got := turnLines(turns, 80, 0, testAt); len(got) != 0 {
+		t.Errorf("no room gave %d lines", len(got))
+	}
+}
+
 func TestSharingViewRendersLeasesHoldsLanes(t *testing.T) {
 	got := stripANSI(sharingView(fixture(), 110, 40, 0))
 	for _, want := range []string{
