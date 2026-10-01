@@ -63,8 +63,11 @@ func fixture() []Item {
 	waiting := it(19, inProgress, "", 30, 1)
 	waiting.Blockers, waiting.OpenBlockers = 1, 1
 	inProgressEpic := it(4, inProgress, epic, 60, 1)
-	inProgressEpic.OpenSubIssues = 1
-	inProgressEpic.SubIssues = []Item{it(40, "", "", 50, 2)}
+	// A sub-issue off the board with its recorded blockers open.
+	waitingSub := it(41, "", "", 50, 2)
+	waitingSub.Blockers, waitingSub.OpenBlockers = 4, 4
+	inProgressEpic.OpenSubIssues = 2
+	inProgressEpic.SubIssues = []Item{it(40, "", "", 50, 2), waitingSub}
 	stillBlocked := it(5, blocked, "", 30, 1)
 	stillBlocked.Blockers, stillBlocked.OpenBlockers = 2, 1
 	cleared := it(6, blocked, "", 30, 1)
@@ -78,11 +81,14 @@ func fixture() []Item {
 	// a fresh and an old one in Backlog, one in Inbox. The read of an
 	// epic's sub-issues has no board fields.
 	mixedEpic := it(15, inProgress, epic, 200, 1)
-	mixedEpic.OpenSubIssues = 3
-	mixedEpic.SubIssues = []Item{it(16, "", "", 20, 1), it(17, "", "", 99, 1), it(18, "", "", 5, 1)}
+	mixedEpic.OpenSubIssues = 4
+	mixedEpic.SubIssues = []Item{it(16, "", "", 20, 1), it(17, "", "", 99, 1), it(18, "", "", 5, 1), it(20, "", "", 5, 1)}
+	// A fresh Backlog item a step offers, its recorded blockers open.
+	blockedSlice := it(20, backlog, "", 5, 1)
+	blockedSlice.Blockers, blockedSlice.OpenBlockers = 4, 3
 	return []Item{stale, theirs, mine, waiting, inProgressEpic, stillBlocked, cleared, waitingOnPeople, epicItem, closableEpic,
 		it(10, upNext, "", 20, 1), it(11, backlog, bug, 400, 3), it(12, backlog, "", 100, 1), it(13, backlog, "", 10, 1), it(14, "Done ✅", "", 10, 1),
-		mixedEpic, it(16, backlog, "", 20, 1), it(17, backlog, "", 99, 1), it(18, statuses[0], "", 5, 1)}
+		mixedEpic, it(16, backlog, "", 20, 1), it(17, backlog, "", 99, 1), it(18, statuses[0], "", 5, 1), blockedSlice}
 }
 
 func snapshot(t *testing.T) *Snapshot {
@@ -112,9 +118,11 @@ func TestRankAppliesTheOrderToAFixtureBoard(t *testing.T) {
 		"o/r#3 In Progress",
 		"o/r#19 In Progress: 1 of 1 blockers open",
 		"o/r#40 In Progress < o/r#4",
+		"o/r#41 In Progress < o/r#4: 4 of 4 blockers open",
 		"o/r#16 In Progress < o/r#15",
 		"o/r#17 In Progress < o/r#15: created 2026-06-24: Backlog takes items created within 90 days",
 		"o/r#18 In Progress < o/r#15: no step of board.order offers Inbox 📥",
+		"o/r#20 In Progress < o/r#15: 3 of 4 blockers open",
 		"o/r#6 blocker cleared",
 		"o/r#80 Up Next epic < o/r#8",
 		"o/r#9 Up Next epic",
