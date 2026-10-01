@@ -263,6 +263,10 @@ beekeeper keeps that login:
   session is gone, or the sign-in needs a click) leaves the profile as it was. The keeper does not
   try that login again: it leaves a sign-in note for `guide.person` that closes by itself once the
   login is renewed, and the watch says `TELEPORT RENEWAL FAILED`.
+- A login whose SSO callback exchange with the proxy timed out after the browser's sign-in
+  (`identity provider callback failed` … `Client.Timeout exceeded while awaiting headers`) is
+  retried once, in the same staging home, before the renewal fails: the first attempt is logged as
+  `teleport.retry`, and the second appends its output to `teleport/login.log`.
 
 What the keeper needs: a graphical session whose default browser holds the SSO session (the keeper's
 unit starts after `graphical-session.target` and inherits the user manager's display variables), and

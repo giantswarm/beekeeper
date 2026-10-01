@@ -194,7 +194,9 @@ when it is free and granted to nobody, and waits for its next run otherwise.
 
 --keeper is how the keeper's unit runs it: it renews only once less than
 teleport.renewBefore is left, and not again after its renewal of the same
-login failed; a failure leaves a sign-in note for the guide's person.`,
+login failed; a failure leaves a sign-in note for the guide's person. A
+login whose SSO callback exchange with the proxy timed out after the
+browser's sign-in is retried once first, both attempts in the log.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			t := a.cfg.Teleport
@@ -231,7 +233,8 @@ login failed; a failure leaves a sign-in note for the guide's person.`,
 			}
 			defer release()
 			r := teleport.Renewal{Tsh: t.Tsh, Home: t.Home, Dir: filepath.Join(a.cfg.StateDir, "teleport"),
-				Proxy: t.Proxy, Auth: t.Auth, Timeout: t.LoginTimeout.Duration}
+				Proxy: t.Proxy, Auth: t.Auth, Timeout: t.LoginTimeout.Duration,
+				Retry: func(first error) { a.teleportRetry(me, first) }}
 			after, err := r.Renew(ctx, a.now)
 			if err != nil {
 				return a.teleportFailed(me, keeper, before, perr, err)
@@ -255,6 +258,15 @@ login failed; a failure leaves a sign-in note for the guide's person.`,
 	}
 	c.Flags().BoolVar(&keeper, "keeper", false, "as the keeper's unit: only under teleport.renewBefore, never again after a failed renewal of the same login")
 	return c
+}
+
+// teleportRetry logs the first login's failure that the renewal retries
+// once.
+func (a *app) teleportRetry(me state.Party, first error) {
+	_ = a.store.Update(func(*state.State) ([]state.Event, error) {
+		return []state.Event{event(me, "teleport.retry", "%s", first)}, nil
+	})
+	_, _ = fmt.Fprintf(a.out, "teleport: the login failed (%s): retrying once\n", first)
 }
 
 // teleportFailed records the failed renewal of the profile before (read
