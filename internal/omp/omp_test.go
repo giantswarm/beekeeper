@@ -206,6 +206,16 @@ func TestTail(t *testing.T) {
 	}
 }
 
+func TestFollow(t *testing.T) {
+	turns, err := Follow(filepath.Join("testdata", "busy.jsonl"), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turns) != 3 || turns[2].Role != claude.RoleTool || turns[2].Text != "bash: gh issue view 999 --repo giantswarm/beekeeper" {
+		t.Fatalf("turns = %+v, want the reply's text, then its bash call", turns)
+	}
+}
+
 func TestReadTranscript(t *testing.T) {
 	at, _ := time.Parse(time.RFC3339, "2026-10-01T10:30:00Z")
 	w, a := ReadTranscript(filepath.Join("testdata", "busy.jsonl"), at)
