@@ -143,7 +143,7 @@ status after a relay), 125 a newer release (self-update --check).`,
 		c.GroupID = "guarding"
 		root.AddCommand(c)
 	}
-	root.AddCommand(a.selfUpdateCmd(), a.versionCmd(), a.mergeChildCmd(), a.squashMergeCmd())
+	root.AddCommand(a.installCmd(), a.uninstallCmd(), a.selfUpdateCmd(), a.versionCmd(), a.mergeChildCmd(), a.squashMergeCmd())
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
 		return &exitError{code: ExitUsage, msg: err.Error()}
 	})
