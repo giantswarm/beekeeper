@@ -37,8 +37,9 @@ machine has a supervisor at all times: the role moves to a successor by relay an
   `Monitor` source: silent until something needs a look — thresholds, OOM kills, sessions that
   start, end or restart, stale leases, `RUNAWAY` sessions, `LANE STALLED`, notes and timers falling
   due, the end of a session with a record, `RELAY DUE`, a relay taken or expired, `HANDOVER DUE
-  "<agent>"`, `UPGRADE` and `UPGRADE ENDED`, and `ALERT NEW|RESOLVED|FLAPPING`. It runs as
-  `beekeeper watch --notify`, so what needs the person also reaches their desktop, armed with a
+  "<agent>"`, `UPGRADE` and `UPGRADE ENDED`, `WATCH STALE` (re-arm that watch), and
+  `ALERT NEW|RESOLVED|FLAPPING`. It runs as `beekeeper watch --notify`, so what needs the person
+  also reaches their desktop, armed with a
   30-minute timeout and re-armed on every expiry: the expiry is the half-hourly tick.
   `ScheduleWakeup` is not a reliable tick; nothing depends on it.
 - **The watch's own state is on disk, not in the transcript.** `beekeeper supervisor start` makes

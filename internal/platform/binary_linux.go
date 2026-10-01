@@ -3,7 +3,9 @@
 package platform
 
 import (
+	"fmt"
 	"os"
+	"strings"
 	"syscall"
 )
 
@@ -18,16 +20,23 @@ type Binary struct {
 }
 
 // RunningBinary is this process's executable, nil when /proc cannot say.
-func RunningBinary() *Binary {
-	path, err := os.Executable()
+func RunningBinary() *Binary { return ProcessBinary(os.Getpid()) }
+
+// ProcessBinary is the executable process pid runs, nil when /proc cannot
+// say: its path, and the file it runs, which stays reachable at
+// /proc/<pid>/exe after the path names another.
+func ProcessBinary(pid int) *Binary {
+	exe := fmt.Sprintf("/proc/%d/exe", pid)
+	path, err := os.Readlink(exe)
 	if err != nil {
 		return nil
 	}
-	self, err := os.Stat("/proc/self/exe")
+	self, err := os.Stat(exe)
 	if err != nil {
 		return nil
 	}
-	return &Binary{Path: path, self: self}
+	// The link of a file renamed over or removed names its path with this.
+	return &Binary{Path: strings.TrimSuffix(path, " (deleted)"), self: self}
 }
 
 // Replaced says whether the path now names another executable file than
