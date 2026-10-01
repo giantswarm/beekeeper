@@ -5,13 +5,16 @@ import (
 	"testing"
 )
 
+// dGlob is the issue's target: every entry under a variable that may be empty.
+const dGlob = `"$D"/*`
+
 // deleteCorpus: every command and the target its refusal names, "" for a
 // command that passes.
 var deleteCorpus = []struct{ cmd, target string }{
 	// a target under a variable that may be empty
-	{`rm -rf "$D"/*`, `"$D"/*`},
-	{`shred -u "$D"/*`, `"$D"/*`},
-	{`cd /nowhere && F=x && D=$(mktemp -d -p ~/.local/state/x) && cp a "$D"/plain; shred -u "$D"/*; rmdir "$D"`, `"$D"/*`},
+	{`rm -rf "$D"/*`, dGlob},
+	{`shred -u "$D"/*`, dGlob},
+	{`cd /nowhere && F=x && D=$(mktemp -d -p ~/.local/state/x) && cp a "$D"/plain; shred -u "$D"/*; rmdir "$D"`, dGlob},
 	{`rm -rf $D/*`, `$D/*`},
 	{`rm -rf $DIR/`, `$DIR/`},
 	{`rm -rf "${X}/cache"`, `"${X}/cache"`},
@@ -24,16 +27,16 @@ var deleteCorpus = []struct{ cmd, target string }{
 	{`truncate -s 0 "$D"/log`, `"$D"/log`},
 	{`find "$D"/ -name '*.tmp' -delete`, `"$D"/`},
 	{`find -L "$D"/x -type f -exec rm -f {} +`, `"$D"/x`},
-	{`sudo rm -rf "$D"/*`, `"$D"/*`},
-	{`/usr/bin/rm -rf "$D"/*`, `"$D"/*`},
-	{`\rm -rf "$D"/*`, `"$D"/*`},
+	{`sudo rm -rf "$D"/*`, dGlob},
+	{`/usr/bin/rm -rf "$D"/*`, dGlob},
+	{`\rm -rf "$D"/*`, dGlob},
 	{`timeout 60 xargs rm -rf "$D"/x`, `"$D"/x`},
-	{`bash -c 'rm -rf "$D"/*'`, `"$D"/*`},
+	{`bash -c 'rm -rf "$D"/*'`, dGlob},
 	{`zsh -lc "cd x; shred -u $D/*"`, `$D/*`},
-	{"bash <<'EOF'\nrm -rf \"$D\"/*\nEOF", `"$D"/*`},
-	{`x=$(rm -rf "$D"/* && echo ok)`, `"$D"/*`},
+	{"bash <<'EOF'\nrm -rf \"$D\"/*\nEOF", dGlob},
+	{`x=$(rm -rf "$D"/* && echo ok)`, dGlob},
 	{`for f in a b; do rm -f "$T"/"$f"; done`, `"$T"/"$f"`},
-	{`set -e; rm -rf "$D"/*`, `"$D"/*`},
+	{`set -e; rm -rf "$D"/*`, dGlob},
 	// the root, a top-level directory, the home directory, every entry of one
 	{`rm -rf /`, `/`},
 	{`rm -rf /*`, `/*`},

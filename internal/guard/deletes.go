@@ -17,6 +17,13 @@ import (
 const deleteFix = "Guard the variable so that the shell stops on an empty one (`${D:?}`: `rm -rf \"${D:?}\"/*`), " +
 	"run the cleanup from a `set -euo pipefail` script with an `EXIT` trap, or move the files aside instead of deleting them."
 
+// The delete commands named more than once.
+const (
+	rmCmd     = "rm"
+	shredCmd  = "shred"
+	unlinkCmd = "unlink"
+)
+
 // Placeholders in a target's resolved form: the home directory, and a part
 // that is never empty but unknown (a guarded variable, $PWD, $$).
 const (
@@ -27,7 +34,7 @@ const (
 var (
 	// deleteValues: the options of the delete commands that take a value.
 	deleteValues = map[string]map[string]bool{
-		"shred":    {"-n": true, "-s": true, "--iterations": true, "--size": true, "--random-source": true},
+		shredCmd:   {"-n": true, "-s": true, "--iterations": true, "--size": true, "--random-source": true},
 		"truncate": {"-s": true, "-r": true, "--size": true, "--reference": true},
 	}
 	// findValues: find's leading options that take a value.
@@ -160,7 +167,7 @@ func (st *deleteState) assign(raw, words []string) {
 // nil for any other command.
 func deleteTargets(name string, args []string) []string {
 	switch name {
-	case "rm", "shred", "unlink", "truncate":
+	case rmCmd, shredCmd, unlinkCmd, "truncate":
 		var out []string
 		operands := false
 		for i := 0; i < len(args); i++ {
@@ -184,7 +191,7 @@ func deleteTargets(name string, args []string) []string {
 				next = path.Base(strings.Join(shellWords(args[i+1]), ""))
 			}
 			if a == "-delete" || (a == "-exec" || a == "-execdir" || a == "-ok" || a == "-okdir") &&
-				(next == "rm" || next == "shred" || next == "unlink") {
+				(next == rmCmd || next == shredCmd || next == unlinkCmd) {
 				deletes = true
 			}
 		}
