@@ -9,7 +9,11 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-var archiveNow = time.Date(2026, 10, 1, 14, 0, 0, 0, time.UTC)
+var (
+	archiveNow = time.Date(2026, 10, 1, 14, 0, 0, 0, time.UTC)
+	// worker is a finished worker off the roster.
+	worker = state.Party{Session: "w", Name: "test: finished"}
+)
 
 func unarchived(string) (*claude.Record, bool) { return &claude.Record{}, true }
 
@@ -17,7 +21,6 @@ func unarchived(string) (*claude.Record, bool) { return &claude.Record{}, true }
 // try counted; the doctor waits while the turn runs and asks once it ended.
 func TestOwedArchiveInATurn(t *testing.T) {
 	st := &state.State{}
-	worker := state.Party{Session: "w", Name: "worker"}
 	lines := owe(st, []archiveOutcome{{agent: worker, line: "its desktop session stays: its CLI 7 is in a turn", host: "local_w"}}, archiveNow)
 	if len(st.Archives) != 1 || st.Archives[0].Tries != 0 || !strings.HasSuffix(lines[0], "; the doctor asks again") {
 		t.Fatalf("owed %+v, line %q", st.Archives, lines[0])
@@ -41,7 +44,6 @@ func TestOwedArchiveInATurn(t *testing.T) {
 // later, and the doctor gives the archive up after archiveTries turns.
 func TestOwedArchiveStewardTimeout(t *testing.T) {
 	st := &state.State{}
-	worker := state.Party{Session: "w", Name: "worker"}
 	timeout := archiveOutcome{agent: worker, line: "its desktop session local_w stays: local_s was asked and the desktop did not record it within 45s", host: "local_w", asked: true}
 	idle := func(state.Party) bool { return false }
 	now := archiveNow
@@ -74,21 +76,21 @@ func TestPlanArchivesDrops(t *testing.T) {
 		return state.Archive{Party: state.Party{Session: id, Name: id}, Host: "local_" + id, Since: since}
 	}
 	st := &state.State{
-		Archives: []state.Archive{owed("archived", archiveNow), owed("lost", archiveNow), owed("back", archiveNow),
+		Archives: []state.Archive{owed("put-away", archiveNow), owed("lost", archiveNow), owed("back", archiveNow),
 			owed("role", archiveNow), owed("old", archiveNow.Add(-archiveOwedFor)), owed("due", archiveNow)},
 		Agents:     []state.Agent{{Party: state.Party{Session: "back"}, Task: "more"}},
 		Supervisor: &state.Supervisor{Party: state.Party{Session: "role"}},
 	}
 	record := func(host string) (*claude.Record, bool) {
 		switch host {
-		case "local_archived":
+		case "local_put-away":
 			return &claude.Record{IsArchived: true}, true
 		case "local_lost":
 			return nil, false
 		}
 		return &claude.Record{}, true
 	}
-	want := []string{"archived", "no session", "roster again", "role", "owed 24h00m", ""}
+	want := []string{"has it archived", "no session", "roster again", "role", "owed 24h00m", ""}
 	for i, p := range planArchives(st, record, func(state.Party) bool { return false }, archiveNow) {
 		if !strings.Contains(p.drop, want[i]) || (want[i] == "") != (p.drop == "") {
 			t.Errorf("%s: drop %q, want %q", p.ar.Name, p.drop, want[i])
@@ -113,16 +115,16 @@ func TestSeedArchives(t *testing.T) {
 	run := start("run")
 	run.Name = "Supervisor run 7"
 	st := &state.State{
-		Starts: []state.Start{start("warm"), start("roster"), start("stopped"), start("archived"), run, omp, start("owed")},
+		Starts: []state.Start{start("warm"), start("roster"), start("stopped"), start("shelved"), run, omp, start("owed")},
 		Agents: []state.Agent{{Party: state.Party{Session: "roster"}}},
 	}
 	st.Archives = []state.Archive{{Party: state.Party{Session: "owed"}, Host: "local_owed", Tries: 2}}
 	var sessions []*claude.Session
-	for _, id := range []string{"warm", "roster", "archived", "run", "omp", "owed"} {
+	for _, id := range []string{"warm", "roster", "shelved", "run", "omp", "owed"} {
 		sessions = append(sessions, &claude.Session{ID: id, HostID: "local_" + id})
 	}
 	record := func(host string) (*claude.Record, bool) {
-		return &claude.Record{IsArchived: host == "local_archived"}, true
+		return &claude.Record{IsArchived: host == "local_shelved"}, true
 	}
 	seedArchives(st, sessions, record, archiveNow)
 	if len(st.Archives) != 2 || st.Archives[1].Host != "local_warm" || st.Archives[0].Tries != 2 || !st.ArchivesSeeded {
