@@ -87,6 +87,8 @@ type app struct {
 
 	// kindClusters lists the running kind clusters; nil asks docker.
 	kindClusters func() ([]string, error)
+	// zone reads the machine's time zone; nil is machine.Zone.
+	zone func() (*time.Location, error)
 }
 
 // New returns the root command.
