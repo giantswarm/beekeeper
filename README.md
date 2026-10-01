@@ -934,7 +934,9 @@ roster as `omp_<id>`. A message is one line of omp's rpc protocol, a `steer` com
 it at the agent's next tool round while a turn runs and starts a turn with it while the agent is
 idle. The brief is the first message; `agents wake <name> <message>` writes the next. Writers take a
 lock file beside the inbox, so two senders' lines never interleave. A wake of an agent whose process ended is
-refused (exit 3): nothing reads its inbox, and nothing resumes it. `agents handover` refuses omp
+refused (exit 3): nothing reads its inbox, and nothing resumes it. Taking the agent off the roster
+(`agents remove`, the doctor) removes its inbox and lock file: a process still running keeps its open end, but no
+message reaches it any more. `agents handover` refuses omp
 agents, and no desktop import happens.
 
 An omp session the person started in a terminal shows in `sessions` and can be followed, but takes

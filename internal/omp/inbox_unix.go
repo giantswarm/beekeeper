@@ -71,3 +71,18 @@ func setBlocking(f *os.File) error {
 	}
 	return serr
 }
+
+// RemoveInbox removes the inbox at path and its lock file; removed is
+// false when there was none. A process that still reads the inbox keeps
+// its open end, but no message reaches it any more.
+func RemoveInbox(path string) (removed bool, err error) {
+	if err := os.Remove(path); errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	if err := os.Remove(path + ".lock"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return true, err
+	}
+	return true, nil
+}

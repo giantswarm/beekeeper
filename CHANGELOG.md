@@ -57,6 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Taking an omp agent off the roster (`agents remove`, the doctor) removes its inbox FIFO and lock file, also while its process still runs (no wake reaches an agent off the roster); they stayed in the state folder, one pair per agent ever started.
+
 - A role's successor comes up instead of being replaced in a loop. It starts in `supervisor.dir` (`guide.dir`), else in the folder its predecessor's desktop session started from, not the desktop's worktree of it: the desktop could not warm a session there (the worktree's branch is checked out already), so no successor got a desktop CLI and each was declared gone within the grace, nine in 33 minutes. The resume goes to the desktop CLI, never to the headless first turn. A successor with no desktop CLI after its first turn (the import waited out the focus overnight, nine successors 25 minutes apart) is resumed headless (`agents wake`) and keeps the watch there; one that still goes down is one note, and the next successors start 5 and 10 minutes later, none after three.
 
 - The merge gate settles a lane at once when no installation range admits the merge's release: it reads each HelmRelease's OCIRepository (`semver`, or a `tag` as the one version it follows) or chart template `version`, and says `<installation> does not follow 4.105.0-rc.3: flux-giantswarm/agent-platform follows semver >=4.0.0 <5.0.0`; a wait names the range (`… rolling to 4.105.0 (semver >=4.0.0 <5.0.0)`). A merge that cut only a release candidate under a stable range held its lane until the settle timeout and a `lanes clear` by hand.
