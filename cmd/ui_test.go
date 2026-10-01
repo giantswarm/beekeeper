@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -33,6 +34,9 @@ const (
 // baseline into one refresh without touching the network: the budget
 // probe and the upgrade read are off.
 func TestUICollectorReadsTheMachineState(t *testing.T) {
+	if _, err := plat.Machine.Processes(); platform.Missing(err) {
+		t.Skip(err)
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	yaml := "stateDir: " + dir + "\nleaseDir: " + filepath.Join(dir, "leases") +

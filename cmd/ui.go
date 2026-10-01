@@ -16,6 +16,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/merge"
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/tui"
@@ -78,7 +79,7 @@ func (c *collector) Data(ctx context.Context) (*tui.Data, error) {
 	}
 	st := v.st
 	sv := a.supervision(st, v.raw)
-	t, terr := proc.Read()
+	t, terr := plat.Machine.Processes()
 	var errs []string
 	if terr != nil {
 		errs = append(errs, "process table: "+terr.Error())
@@ -166,6 +167,11 @@ two seconds; the GitHub budget and the installations' upgrades are
 re-read at most every minute.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
+			// The screen is built on the process table: without it, refuse
+			// as sessions does instead of opening an empty screen.
+			if _, err := plat.Machine.Processes(); platform.Missing(err) {
+				return err
+			}
 			return tui.Run(newCollector(a), tui.Options{Interval: uiRefreshEvery})
 		},
 	}
