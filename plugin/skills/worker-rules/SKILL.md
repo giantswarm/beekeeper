@@ -5,8 +5,9 @@ description: The rules a worker on a beekeeper desk follows from its first tool 
 
 # worker-rules — how a worker on a beekeeper desk works its task
 
-A worker takes one task from the supervisor its brief names and works it to the finish. These
-rules hold for every worker on the desk. The desk's own conventions (the project's CLAUDE.md and
+A worker takes one task from the supervisor and works it to the finish. These rules hold for
+every worker on the desk; `beekeeper agents start` gives them to the worker ahead of its task, so a
+brief carries only the task. The desk's own conventions (the project's CLAUDE.md and
 rules: which repositories, boards, installations and release flows are ours) apply alongside them
 and win where they are more specific; nothing here relaxes them.
 
@@ -20,8 +21,10 @@ task needs lives only in this session: the next task goes to a fresh one.
 
 ## Context
 
-- **The supervisor** is the session `beekeeper supervisor status` names, or its successor; messages
-  go to it by name with `SendMessage`. It reaches a worker whose turn has ended by `beekeeper agents
+- **The supervisor** is the session `beekeeper supervisor status` names. A worker addresses it as
+  `the supervisor` (`SendMessage` to `the supervisor`): beekeeper's hook delivers the message to
+  whoever holds the role at the time, across relays, so no brief names a run. `the guide` reaches
+  the guide the same way. The supervisor reaches a worker whose turn has ended by `beekeeper agents
   wake`. `beekeeper agents register` puts the session on the roster under its name at the start;
   `beekeeper sessions serve "<name>" <owner/repo#n> --waits "<what>"` records the item the session
   serves and what it waits on, kept current as the wait changes.

@@ -20,6 +20,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/pkg/project"
+	"github.com/giantswarm/beekeeper/plugin"
 )
 
 const (
@@ -106,7 +108,12 @@ window), so the switch never happens under someone reading or typing
 there: up to 2 minutes, after which the start leaves the import to the
 reopen once the first turn has ended, which waits up to 25 minutes more.
 
-Its first turn runs the brief from the command line in bypass. The desktop
+The first prompt is the worker rules beekeeper ships with its role skills
+(the worker-rules skill, under the binary's version), then the brief as the
+task: a brief carries only its task, and a worker reports to "the
+supervisor", which the PreToolUse hook delivers to the role's holder.
+
+Its first turn runs that prompt from the command line in bypass. The desktop
 runs every later turn in acceptEdits (its import always drops bypass), so
 requests no allow rule covers would stop at a card: beekeeper hook
 permissionrequest answers them, for beekeeper's starts only. While the first
@@ -126,7 +133,7 @@ desktop starts a new CLI when the person opens the session.`,
 			if task = strings.TrimSpace(task); task == "" {
 				task = briefTask(brief)
 			}
-			sa, err := a.startAgent(cmd.Context(), agentStart{name: name, brief: brief, task: task, dir: dir, model: model})
+			sa, err := a.startAgent(cmd.Context(), agentStart{name: name, brief: workerPrompt(taskPrompt(brief)), task: task, dir: dir, model: model})
 			if err != nil {
 				return err
 			}
@@ -733,6 +740,20 @@ func readBrief(path string) (string, error) {
 		return "", usageErr("%s has %d bytes, more than %d: point the brief at a file instead", path, len(brief), maxBrief)
 	}
 	return brief, nil
+}
+
+// taskPrompt is the part of a worker's first prompt that is its task: the
+// brief, enclosed so that a hand-over passes on the brief alone.
+func taskPrompt(brief string) string {
+	return "Your task:\n" + briefOpen + "\n" + brief + "\n" + briefClose
+}
+
+// workerPrompt is a worker's first prompt: the worker rules beekeeper
+// ships with its role skills, versioned, ahead of prompt. A brief carries
+// only its task.
+func workerPrompt(prompt string) string {
+	return fmt.Sprintf("Beekeeper %s gives every worker it starts these rules; they hold for the whole task.\n\n%s\n\n%s",
+		project.Version(), plugin.WorkerRules(), prompt)
 }
 
 // briefTask is the roster's task for a brief: its first line without a

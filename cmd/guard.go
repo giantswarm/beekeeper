@@ -160,6 +160,10 @@ turn, an agents wake), and every send by local_ id counts against the
 desktop's cap on messages between sessions. A name two running CLIs carry is
 refused, naming them. A send to a session with no running CLI passes: the
 desktop starts it.
+A SendMessage to "the supervisor" or "the guide" (any case, "the" optional)
+goes to the session holding that role now: its running CLI by name, else
+its desktop session. A brief names the role, so a relay never makes it
+stale; with nobody holding the role the send is refused.
 Anything else, malformed input included, passes unchanged.
 
 What leaves the machine is scanned for secret values: the command line
@@ -215,7 +219,7 @@ Register it in ~/.claude/settings.json:
 				return nil
 			}
 			self, _ := os.Executable()
-			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, CheckQuestion: checkQuestion, Peer: a.desktopPeer,
+			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, CheckQuestion: checkQuestion, Role: a.roleTarget, Peer: a.desktopPeer,
 				Project: os.Getenv("CLAUDE_PROJECT_DIR"), Reads: a.firstReads,
 				Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(),
 				ModelServer: a.modelServer, ConfigErr: a.loadConfig()}
@@ -228,6 +232,34 @@ Register it in ~/.claude/settings.json:
 				_, _ = a.out.Write(out)
 			}
 			return nil
+		},
+	})
+	c.AddCommand(&cobra.Command{
+		Use:   "sessionstart",
+		Short: "The SessionStart hook: the agent shell's prelude",
+		Long: `sessionstart writes the agent shell's prelude into the session's
+environment file ($CLAUDE_ENV_FILE), which Claude Code sources before each
+Bash command, before it parses the command: the aliases and shell functions
+of agents.shell.unalias (default grep, find, ls, cp, mv, rm, among them the
+harness's own grep and find shadows) are removed, so each name runs the tool
+on PATH, and with agents.shell.globs literal (the default) an unmatched glob
+stays as written instead of failing the command (zsh's "no matches found").
+The person's interactive setup stays theirs; an agent's commands are written
+for the plain tools. It replaces only its own block, so other hooks' lines
+stay, and prints nothing. beekeeper install registers it in
+~/.claude/settings.json:
+
+  "SessionStart": [{"matcher": "", "hooks": [{"type": "command",
+    "command": "~/.go/bin/beekeeper hook sessionstart"}]}]`,
+		Args: cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			_, _ = io.Copy(io.Discard, os.Stdin)
+			env := os.Getenv("CLAUDE_ENV_FILE")
+			if env == "" || a.loadConfig() != nil {
+				return nil // a broken configuration must not block a session's start
+			}
+			sh := a.cfg.Agents.Shell
+			return guard.WritePrelude(env, guard.Prelude(sh.Unalias, sh.Globs == config.GlobsLiteral))
 		},
 	})
 	c.AddCommand(&cobra.Command{

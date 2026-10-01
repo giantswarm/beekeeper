@@ -335,7 +335,7 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 	}
 	p := h.prompt()
 	a.say("prompt: %d bytes: %s", len(p), h.summary())
-	sa, err := a.startAgent(ctx, agentStart{name: ag.Name, brief: p, task: h.task(), dir: h.dir, model: h.model, replaces: &ag.Party})
+	sa, err := a.startAgent(ctx, agentStart{name: ag.Name, brief: workerPrompt(p), task: h.task(), dir: h.dir, model: h.model, replaces: &ag.Party})
 	if err != nil {
 		return err
 	}

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
@@ -270,6 +271,45 @@ func headlessTurn(t *proc.Table, id string) string {
 // printsTurn reports whether p is a headless claude turn (-p, --print).
 func printsTurn(p *proc.Process) bool {
 	return p.Comm == claudeComm && (slices.Contains(p.Args, "-p") || slices.Contains(p.Args, "--print"))
+}
+
+// roleTarget is the PreToolUse hook's lookup for a message to a role (the
+// supervisor, the guide): roleAddress of its holder now. A relay moves the
+// role, so a brief names the role, never the holder.
+func (a *app) roleTarget(name string) (string, error) {
+	if err := a.loadConfig(); err != nil {
+		return "", fmt.Errorf("beekeeper's configuration does not load, so the %s is unknown: %w", name, err)
+	}
+	rl := supervisorRole
+	if name == guard.RoleGuide {
+		rl = guideRole
+	}
+	store, err := state.Open(a.cfg.StateDir)
+	if err != nil {
+		return "", err
+	}
+	st, err := store.Read()
+	if err != nil {
+		return "", err
+	}
+	var sessions []*claude.Session
+	if t, err := plat.Machine.Processes(); err == nil {
+		sessions = claude.Discover(a.cfg, t, time.Now())
+	}
+	return roleAddress(rl.get(st).Holder, rl, sessions)
+}
+
+// roleAddress is where a message to rl's holder goes: the name its running
+// CLI takes messages under, else its desktop session id, which the desktop
+// starts, else its name.
+func roleAddress(holder *state.Supervisor, rl role, sessions []*claude.Session) (string, error) {
+	if holder == nil {
+		return "", fmt.Errorf("no session holds the %s's role (beekeeper %s status): the message has nobody to go to", rl.name, rl.name)
+	}
+	if s, ok := claude.Live(sessions, holder.Party); ok {
+		return uniqueName(sessions, s)
+	}
+	return cmp.Or(holder.HostSession, holder.Name), nil
 }
 
 // desktopPeer is the PreToolUse hook's lookup for a SendMessage to a

@@ -116,6 +116,11 @@ type Hook struct {
 	// CheckQuestion names what one of the guide's questions lacks for its
 	// person to answer it, as `note add` checks a note; nil checks nothing.
 	CheckQuestion func(Question) []string
+	// Role names the session a message to a role (RoleOf) goes to: the
+	// name its running CLI takes messages under, else its desktop session
+	// id; an error (no holder, an ambiguous name) refuses the send. Nil
+	// leaves a role's name as written.
+	Role func(role string) (string, error)
 	// Peer names the running CLI of a desktop session id, "" when none
 	// runs; an error refuses the send. Nil passes every SendMessage.
 	Peer func(host string) (string, error)

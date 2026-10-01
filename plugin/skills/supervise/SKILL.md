@@ -167,8 +167,9 @@ machine has a supervisor at all times: the role moves to a successor by relay an
   tick carries it, and the end summary repeats it per epic. When an epic's last sub-issue closes, a
   closing worker checks the criteria, runs the live proof and moves the epic on.
 - **A fresh worker per task.** A task goes to a worker started with `beekeeper agents start "<task>"
-  <brief file> --task "<task>"`, a model chosen for the task and a standalone brief that names this
-  supervisor and the `worker-rules` skill; it shows in the desktop's sidebar under its name and on
+  <brief file> --task "<task>"`, a model chosen for the task and a brief that carries only the
+  task: `agents start` puts the shipped worker rules ahead of it, and the worker reports to `the
+  supervisor`, which reaches whoever holds the role then; it shows in the desktop's sidebar under its name and on
   the roster busy from its start. Every new session starts that way, no session is kept in reserve
   or given a second task. An empty session the person started and registered with
   `/register-agent` takes one task by `beekeeper agents assign`. A message to an agent whose CLI
