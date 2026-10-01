@@ -131,6 +131,9 @@ type Role struct {
 	Fed []string `json:"fed,omitempty"`
 	// Run is the highest run of the role numbered: "<Role> run <Run>".
 	Run int `json:"run,omitempty"`
+	// Asking is the note the guide asks its person now (beekeeper guide
+	// next): served again until it is answered or done.
+	Asking int `json:"asking,omitempty"`
 }
 
 // SupervisorRole is the supervisor's record.
@@ -153,7 +156,7 @@ func (st *State) GuideRole() Role {
 
 // SetGuideRole stores the guide's record, none when it is empty.
 func (st *State) SetGuideRole(r Role) {
-	if r.Holder == nil && r.Relay == nil && len(r.Relieved) == 0 && len(r.Fed) == 0 && r.Run == 0 {
+	if r.Holder == nil && r.Relay == nil && len(r.Relieved) == 0 && len(r.Fed) == 0 && r.Run == 0 && r.Asking == 0 {
 		st.Guide = nil
 		return
 	}

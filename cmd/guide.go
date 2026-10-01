@@ -66,7 +66,7 @@ guide.relayAt (exit 3 when none runs, 4 in the session a relay relieved).`,
 		Args:  cobra.NoArgs,
 		RunE:  func(*cobra.Command, []string) error { return a.roleStatus(guideRole) },
 	}
-	c.AddCommand(start, a.relayCmd(guideRole, guideRelayLong), stop, status, a.guideQueueCmd(), a.guideHandoverCmd(), a.guideWatchCmd())
+	c.AddCommand(start, a.relayCmd(guideRole, guideRelayLong), stop, status, a.guideQueueCmd(), a.guideNextCmd(), a.guideHandoverCmd(), a.guideWatchCmd())
 	return c
 }
 
@@ -265,6 +265,102 @@ the queue before gets only what changed.`,
 	return c
 }
 
+func (a *app) guideNextCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "next",
+		Short: "Serve the one decision to ask the person now, due first, and mark it as being asked",
+		Long: `Serve one open decision for the guide's person and mark it as being asked:
+the open note filed for the person that is due first (by due time, then the
+undated in filing order; a pinned note is no decision). The same note is
+served again until it is answered (` + "`beekeeper note answer <id> <answer>`" + `) or
+closed (note done); only then comes the next. Only the guide's session
+serves decisions. With no open note it says so, and names how many sessions
+wait on the person (` + "`beekeeper guide queue`" + `).`,
+		Args: cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			me, err := a.caller()
+			if err != nil {
+				return err
+			}
+			sessions, _, err := a.sessions()
+			if err != nil {
+				return err
+			}
+			var lines []string
+			var item *queueItem
+			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+				var evs []state.Event
+				item, lines, evs, err = a.guideNext(st, sessions, me)
+				return evs, err
+			})
+			if err != nil {
+				return err
+			}
+			if a.json {
+				return a.printJSON(item)
+			}
+			_, err = fmt.Fprintln(a.out, strings.Join(lines, "\n"))
+			return err
+		},
+	}
+}
+
+// guideNext serves me, the guide, the decision to ask now (nextDecision),
+// marks it in st and returns it with its lines and events.
+func (a *app) guideNext(st *state.State, sessions []*claude.Session, me state.Party) (*queueItem, []string, []state.Event, error) {
+	r := guideRole.get(st)
+	if r.Holder == nil || !r.Holder.Is(me) {
+		return nil, nil, nil, refused("only the guide serves its person's decisions: `beekeeper guide status` names it")
+	}
+	q := a.guideQueue(st, sessions)
+	it := nextDecision(q, r.Asking)
+	if it == nil {
+		r.Asking = 0
+		guideRole.set(st, r)
+		waiting := len(q)
+		line := "no open decision for " + cmp.Or(a.cfg.Guide.Person, "the person")
+		if waiting > 0 {
+			line += fmt.Sprintf("; %d session(s) wait on their person: beekeeper guide queue", waiting)
+		}
+		return nil, []string{line}, nil, nil
+	}
+	n := *it.Note
+	it.Note = &n
+	lines := []string{"asking " + a.queueText(*it),
+		fmt.Sprintf("record the answer word for word: beekeeper note answer %d \"<answer>\"; the next decision comes after it", n.ID)}
+	if n.ID == r.Asking {
+		lines[0] = "still " + lines[0]
+		return it, lines, nil, nil
+	}
+	r.Asking = n.ID
+	guideRole.set(st, r)
+	return it, lines, []state.Event{event(me, "guide.asking", "#%d %s", n.ID, n.Text)}, nil
+}
+
+// nextDecision is the note the guide asks now: asking while it is open in
+// q, else the note in q due first, by due time, then the undated in filing
+// order; nil when q holds no note.
+func nextDecision(q []queueItem, asking int) *queueItem {
+	var next *queueItem
+	for i := range q {
+		it := &q[i]
+		switch {
+		case it.Note == nil:
+			continue
+		case it.Note.ID == asking:
+			return it
+		case next == nil, dueBefore(it.Note, next.Note):
+			next = it
+		}
+	}
+	return next
+}
+
+// dueBefore says whether n is due before o: an undated note is due last.
+func dueBefore(n, o *state.Note) bool {
+	return !n.Due.IsZero() && (o.Due.IsZero() || n.Due.Before(o.Due))
+}
+
 func (a *app) printQueue(q []queueItem) {
 	if len(q) == 0 {
 		_, _ = fmt.Fprintln(a.out, "nothing waits on the person")
@@ -350,6 +446,7 @@ func (a *app) relayLine(rl role, r state.Role) string {
 // guideLiveCommands read what the guide's prompt leaves out.
 var guideLiveCommands = [][2]string{
 	{"beekeeper guide watch", "one line per new decision, waiting session, answer and guide relay: the source of a Monitor"},
+	{"beekeeper guide next", "the one decision to ask now, due first; the next after its note answer"},
 	{"beekeeper guide queue", "the decisions waiting on the person now"},
 	{"beekeeper guide status", "the guide and its context against guide.relayAt"},
 	{"beekeeper log --verb note.", "the notes filed, answered and closed"},

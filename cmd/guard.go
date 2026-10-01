@@ -179,6 +179,19 @@ An AskUserQuestion call is refused in every session but the guide's (the
 one beekeeper guide names): the agent files beekeeper note add --for
 <guide.person> and carries on.
 
+The guide asks and relays, it never works itself: in the guide's session
+an Edit, Write or NotebookEdit, a git commit or push, a devctl pr merge or
+release promote, a gh pr merge or review, a GitHub connector tool that
+merges, reviews or pushes, and a browser (claude-in-chrome) action other
+than opening, reading or looking at a page are refused with the hint to
+hand the work to the supervisor in one line. Its AskUserQuestion is checked
+as note add checks a note for the person: every question asks, carries a
+"Status quo: …" and a "Why: …" part, a "Checked: …" part for a claim that
+something is merged, green, released, rolled or closed, the full URL of
+every #N or owner/repo#N, and a consequence as every option's description.
+Questions, notes, SendMessage, reads and beekeeper pass. Other sessions
+are not affected.
+
 A session's first Edit, Write or NotebookEdit, or first git commit, in a
 git repository other than its own project ($CLAUDE_PROJECT_DIR) carries
 that repository's instructions as additional context, once per session
@@ -202,7 +215,7 @@ Register it in ~/.claude/settings.json:
 				return nil
 			}
 			self, _ := os.Executable()
-			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, Peer: a.desktopPeer,
+			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, CheckQuestion: checkQuestion, Peer: a.desktopPeer,
 				Project: os.Getenv("CLAUDE_PROJECT_DIR"), Reads: a.firstReads,
 				Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(),
 				ModelServer: a.modelServer, ConfigErr: a.loadConfig()}
@@ -363,6 +376,12 @@ func kindClusterNames() []string {
 // isGuide reports whether the session (its CLI id, or the desktop id in
 // the environment) holds the guide role, and the person the guide asks. A
 // broken configuration or state reads as not the guide.
+// checkQuestion checks one of the guide's questions as note add checks a
+// note for the person.
+func checkQuestion(q guard.Question) []string {
+	return noteDraft{Question: q.Text, StatusQuo: q.StatusQuo, Why: q.Why, Checked: q.Checked, Options: q.Options}.lacks()
+}
+
 func (a *app) isGuide(session string) (bool, string) {
 	if a.loadConfig() != nil {
 		return false, ""
