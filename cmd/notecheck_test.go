@@ -26,7 +26,7 @@ func noteApp(t *testing.T) (*app, *bytes.Buffer) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	return &app{store: store, out: &out, as: "Agent one", now: relayNow, cfg: &config.Config{Guide: config.Guide{Person: "Pat"}}}, &out
+	return &app{store: store, out: &out, as: agentOne, now: relayNow, cfg: &config.Config{Guide: config.Guide{Person: "Pat"}}}, &out
 }
 
 func addNote(a *app, args ...string) error {
@@ -53,7 +53,7 @@ func TestNoteForPersonRefusesWhatItLacks(t *testing.T) {
 		"no why":            {func(d *noteDraft) { d.Why = " " }, "--why"},
 		"option, no effect": {func(d *noteDraft) { d.Options = []string{"publish"} }, `--option "publish" has no`},
 		"default wait":      {func(d *noteDraft) { d.Default = "Wait." }, `--default "Wait." is no action`},
-		"default none":      {func(d *noteDraft) { d.Default = "none" }, "is no action"},
+		"default nothing":   {func(d *noteDraft) { d.Default = "nothing" }, "is no action"},
 		"no default":        {func(d *noteDraft) { d.Default = "" }, "is no action"},
 		"claim unchecked":   {func(d *noteDraft) { d.StatusQuo = "CI is green" }, `"green" without --checked`},
 		"login, no probe":   {func(d *noteDraft) { d.Kind = noteLogin }, "--until"},
