@@ -394,8 +394,8 @@ func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []sta
 	return lines
 }
 
-// dropInbox removes the inbox of the omp agent started under id once its
-// process is gone, and says what it did.
+// dropInbox removes the inbox of the omp agent started under id, which
+// left the roster, and says what it did.
 func (a *app) dropInbox(id string) string {
 	removed, err := omp.RemoveInbox(omp.InboxPath(a.cfg.StateDir, id))
 	switch {

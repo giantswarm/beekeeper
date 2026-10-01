@@ -72,22 +72,13 @@ func setBlocking(f *os.File) error {
 	return serr
 }
 
-// RemoveInbox removes the inbox at path and its lock file once no process
-// reads it; removed is false for an inbox that is gone already or that a
-// running agent still reads.
+// RemoveInbox removes the inbox at path and its lock file; removed is
+// false when there was none. A process that still reads the inbox keeps
+// its open end, but no message reaches it any more.
 func RemoveInbox(path string) (removed bool, err error) {
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+	if err := os.Remove(path); errors.Is(err, os.ErrNotExist) {
 		return false, nil
-	}
-	f, err := os.OpenFile(path, os.O_WRONLY|syscall.O_NONBLOCK, 0) //nolint:gosec // the agent's inbox under the state folder
-	if err == nil {
-		_ = f.Close()
-		return false, nil
-	}
-	if !errors.Is(err, syscall.ENXIO) {
-		return false, err
-	}
-	if err := os.Remove(path); err != nil {
+	} else if err != nil {
 		return false, err
 	}
 	if err := os.Remove(path + ".lock"); err != nil && !errors.Is(err, os.ErrNotExist) {

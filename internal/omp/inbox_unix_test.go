@@ -66,19 +66,19 @@ func TestRemoveInbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { _ = r.Close() }()
 	if err := Send(inbox, "hi"); err != nil {
 		t.Fatal(err)
 	}
-	if removed, err := RemoveInbox(inbox); removed || err != nil {
-		t.Fatalf("a read inbox: removed %v, %v, want kept", removed, err)
-	}
-	_ = r.Close()
 	if removed, err := RemoveInbox(inbox); !removed || err != nil {
-		t.Fatalf("an unread inbox: removed %v, %v", removed, err)
+		t.Fatalf("removed %v, %v", removed, err)
 	}
 	for _, p := range []string{inbox, inbox + ".lock"} {
 		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("%s stays: %v", p, err)
 		}
+	}
+	if err := Send(inbox, "after"); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("a send after the removal: %v, want ErrNotRunning", err)
 	}
 }
