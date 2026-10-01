@@ -114,12 +114,14 @@ supervisor:                 # what handover --prompt tells the successor supervi
   relayAt: 400k             # watch says RELAY DUE once the supervisor's context reaches this, at a quiet moment
   relayTTL: 15m             # a relay not taken by the successor's start expires
   restartGrace: 30s         # a CLI back within this of first seen gone is a restart; past it, SUPERVISOR GONE and a fresh successor
+  dir: ~/src/desk            # the folder a successor starts in (default: where its predecessor's desktop session started, never its worktree)
 guide:                      # the guide's role: what guide handover --prompt tells its successor, and its relay
   person: Ada               # guide queue and guide watch show only the notes for this person (any case); unset, every --for note
   skill: beekeeper:guide    # the skill its successor runs; or instructions: ~/guide.md; unset, it opens without them
   relayAt: 150k             # guide watch says GUIDE RELAY DUE once the guide's context reaches this
   relayTTL: 15m
   restartGrace: 1m
+  dir: ~/src/desk
 agents:                     # the hand-over of registered agents
   relayAt: 400k             # watch says HANDOVER DUE once an agent's context reaches this; default: supervisor.relayAt
   noteWait: 3m              # agents handover waits this long for the agent's note

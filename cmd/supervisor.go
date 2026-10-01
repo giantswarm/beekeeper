@@ -121,7 +121,7 @@ func (a *app) relayCmd(rl role, long string) *cobra.Command {
 	return c
 }
 
-// relayToSuccessor has the holder me start rl's next run in its own folder.
+// relayToSuccessor has the holder me start rl's next run (successorDir).
 func (a *app) relayToSuccessor(ctx context.Context, rl role, me state.Party) error {
 	st, err := a.store.Read()
 	if err != nil {
@@ -130,7 +130,7 @@ func (a *app) relayToSuccessor(ctx context.Context, rl role, me state.Party) err
 	if err := rl.mustHold(rl.get(st), me); err != nil {
 		return err
 	}
-	to, msg, err := a.startSuccessor(ctx, rl, me, me, ".")
+	to, msg, err := a.startSuccessor(ctx, rl, me, me, "")
 	if err != nil {
 		return err
 	}

@@ -74,8 +74,29 @@ func (d noteDraft) asks() bool {
 	return strings.Contains(q, "?") || len(d.Options) > 0 || asking.MatchString(q)
 }
 
-// missing names what d lacks for its person to answer it, one part each.
+// missing names what d lacks for its person to answer it, one part each:
+// what any question lacks, and a note's default and kind.
 func (d noteDraft) missing() []string {
+	out := d.lacks()
+	if dflt := strings.Trim(strings.TrimSpace(d.Default), ".!"); noAction.MatchString(dflt) {
+		out = append(out, fmt.Sprintf("--default %q is no action: name what happens unanswered", d.Default))
+	}
+	switch {
+	case d.Kind != "" && d.Kind != noteLogin:
+		out = append(out, fmt.Sprintf("--kind %q (only %q)", d.Kind, noteLogin))
+	case d.Kind == noteLogin && strings.TrimSpace(d.Until) == "":
+		out = append(out, `--until "<probe command that exits 0 once signed in>"`)
+	case d.Kind != noteLogin && d.Until != "":
+		out = append(out, "--until without --kind login")
+	}
+	return out
+}
+
+// lacks names what the question d puts to its person lacks, a note's or
+// the guide's own (AskUserQuestion): that it asks, the status quo, the why,
+// every option's consequence, the full URL of every issue and PR, and where
+// a state claim was checked.
+func (d noteDraft) lacks() []string {
 	var out []string
 	if !d.asks() {
 		out = append(out, "a question: it asks nothing (no ?, no --option, no request verb); a status line goes to `beekeeper log add \"<text>\"`")
@@ -91,9 +112,6 @@ func (d noteDraft) missing() []string {
 			out = append(out, fmt.Sprintf("--option %q has no \": <consequence>\"", o))
 		}
 	}
-	if dflt := strings.Trim(strings.TrimSpace(d.Default), ".!"); noAction.MatchString(dflt) {
-		out = append(out, fmt.Sprintf("--default %q is no action: name what happens unanswered", d.Default))
-	}
 	all := d.text() + " " + d.Default
 	for _, r := range unlinked(all) {
 		out = append(out, r+" without its full URL")
@@ -103,14 +121,6 @@ func (d noteDraft) missing() []string {
 		if len(claims) > 0 {
 			out = append(out, fmt.Sprintf("%q without --checked \"<where it was checked>\"", strings.ToLower(claims[0])))
 		}
-	}
-	switch {
-	case d.Kind != "" && d.Kind != noteLogin:
-		out = append(out, fmt.Sprintf("--kind %q (only %q)", d.Kind, noteLogin))
-	case d.Kind == noteLogin && strings.TrimSpace(d.Until) == "":
-		out = append(out, `--until "<probe command that exits 0 once signed in>"`)
-	case d.Kind != noteLogin && d.Until != "":
-		out = append(out, "--until without --kind login")
 	}
 	return out
 }

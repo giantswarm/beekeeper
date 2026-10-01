@@ -311,6 +311,11 @@ type Role struct {
 	// restart and keeps the role; past it, the watch says the supervisor
 	// is gone and notifies. The grant rule holds throughout.
 	RestartGrace Duration `yaml:"restartGrace"`
+	// Dir is the folder a successor starts in (~/ allowed; default: the
+	// folder its predecessor's desktop session started from, not the
+	// worktree the desktop made for it, whose branch the desktop cannot
+	// check out a second time).
+	Dir string `yaml:"dir"`
 }
 
 // Lane is a set of repositories whose merges roll the same components of an
@@ -995,6 +1000,7 @@ func (r *Role) defaults(home string) {
 		r.RelayAt = 400_000
 	}
 	r.Instructions = homePath(home, r.Instructions)
+	r.Dir = homePath(home, r.Dir)
 }
 
 // homePath is p with a leading ~/ resolved against home.

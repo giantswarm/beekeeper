@@ -254,7 +254,7 @@ func headlessTurn(t *proc.Table, id string) string {
 		return ""
 	}
 	for _, p := range t.ByPID {
-		if p.Comm != claudeComm || !slices.Contains(p.Args, "-p") && !slices.Contains(p.Args, "--print") {
+		if !printsTurn(p) {
 			continue
 		}
 		switch {
@@ -265,6 +265,11 @@ func headlessTurn(t *proc.Table, id string) string {
 		}
 	}
 	return ""
+}
+
+// printsTurn reports whether p is a headless claude turn (-p, --print).
+func printsTurn(p *proc.Process) bool {
+	return p.Comm == claudeComm && (slices.Contains(p.Args, "-p") || slices.Contains(p.Args, "--print"))
 }
 
 // desktopPeer is the PreToolUse hook's lookup for a SendMessage to a
