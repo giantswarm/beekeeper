@@ -15,6 +15,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 )
 
+// reload is the fake service manager's reload command.
+const reload = "reload"
+
 // fakeSetup is a service manager whose service is a unit file in the
 // home's unit directory and a guard file beside it.
 type fakeSetup struct {
@@ -33,7 +36,7 @@ func (*fakeSetup) Files(s platform.SetupSpec) ([]platform.File, []string) {
 }
 
 func (f *fakeSetup) Started(context.Context, string) bool { return f.started }
-func (*fakeSetup) Reload() []string                       { return []string{"reload"} }
+func (*fakeSetup) Reload() []string                       { return []string{reload} }
 func (*fakeSetup) Start(p string) []string                { return []string{"start", filepath.Base(p)} }
 func (*fakeSetup) Stop(p string) []string                 { return []string{"stop", filepath.Base(p)} }
 
@@ -67,16 +70,18 @@ func env(t *testing.T, home string, setup platform.Setup, run func(context.Conte
 func tree(t *testing.T, root string) map[string]string {
 	t.Helper()
 	m := map[string]string{}
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+	fsys := os.DirFS(root)
+	err := fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
+		path := filepath.Join(root, p)
 		if d.IsDir() {
-			m[p+"/"] = ""
+			m[path+"/"] = ""
 			return nil
 		}
-		raw, err := os.ReadFile(p)
-		m[p] = string(raw)
+		raw, err := fs.ReadFile(fsys, p)
+		m[path] = string(raw)
 		return err
 	})
 	if err != nil {
@@ -251,10 +256,10 @@ func TestKeepsWhatItDidNotWrite(t *testing.T) {
 			t.Errorf("install lacks %q:\n%s", want, out)
 		}
 	}
-	if raw, _ := os.ReadFile(service); string(raw) != before[service] {
+	if raw, _ := os.ReadFile(filepath.Clean(service)); string(raw) != before[service] {
 		t.Errorf("install changed a unit it did not write")
 	}
-	if len(f.ran) != 1 || f.ran[0] != "reload" {
+	if len(f.ran) != 1 || f.ran[0] != reload {
 		t.Errorf("install ran %v: a reload for the guard only, nothing for a service it did not write", f.ran)
 	}
 	f.ran = nil
@@ -269,7 +274,7 @@ func TestKeepsWhatItDidNotWrite(t *testing.T) {
 			t.Errorf("uninstall changed %s: %q", k, after[k])
 		}
 	}
-	if len(f.ran) != 1 || f.ran[0] != "reload" {
+	if len(f.ran) != 1 || f.ran[0] != reload {
 		t.Errorf("uninstall ran %v", f.ran)
 	}
 }

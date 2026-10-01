@@ -16,6 +16,9 @@ import (
 // notifyUnit is the standby service's unit.
 const notifyUnit = "beekeeper-notify.service"
 
+// systemctl is the service manager's command.
+const systemctl = "systemctl"
+
 // The memory guard's shares of RAM and swap. The slice bounds every capped
 // run together (two build slots of 14% each); the desktop scope's limits
 // leave the rest of the machine its share when the sessions grow.
@@ -101,16 +104,16 @@ func (systemdSetup) Started(ctx context.Context, path string) bool {
 
 // systemctlIs reports whether systemctl --user verb says want of unit.
 func systemctlIs(ctx context.Context, verb, unit, want string) bool {
-	out, _ := exec.CommandContext(ctx, "systemctl", userManager, verb, unit).Output() //nolint:gosec // a fixed verb and the unit install writes
+	out, _ := exec.CommandContext(ctx, systemctl, userManager, verb, unit).Output() //nolint:gosec // a fixed verb and the unit install writes
 	return strings.TrimSpace(string(out)) == want
 }
 
-func (systemdSetup) Reload() []string { return []string{"systemctl", userManager, "daemon-reload"} }
+func (systemdSetup) Reload() []string { return []string{systemctl, userManager, "daemon-reload"} }
 
 func (systemdSetup) Start(path string) []string {
-	return []string{"systemctl", userManager, "enable", "--now", filepath.Base(path)}
+	return []string{systemctl, userManager, "enable", "--now", filepath.Base(path)}
 }
 
 func (systemdSetup) Stop(path string) []string {
-	return []string{"systemctl", userManager, "disable", "--now", filepath.Base(path)}
+	return []string{systemctl, userManager, "disable", "--now", filepath.Base(path)}
 }
