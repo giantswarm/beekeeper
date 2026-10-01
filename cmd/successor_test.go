@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -249,5 +251,178 @@ func TestADanglingRelayStandsForNoSuccessor(t *testing.T) {
 	}
 	if relayPending(st, r, relayNow.Add(15*time.Minute)) {
 		t.Error("an expired relay stands")
+	}
+}
+
+// A successor starts in the configured folder, else where its predecessor's
+// desktop session started, never in the desktop's worktree of it.
+func TestSuccessorDir(t *testing.T) {
+	wt := &claude.Record{Cwd: "/repo/.claude/worktrees/w1", OriginCwd: "/repo"}
+	for _, c := range []struct {
+		name  string
+		cfg   config.Role
+		rec   *claude.Record
+		start string
+		want  string
+	}{
+		{"configured", config.Role{Dir: "/desk"}, wt, "/started", "/desk"},
+		{"a desktop worktree: its origin", config.Role{}, wt, "/started", "/repo"},
+		{"no worktree", config.Role{}, &claude.Record{Cwd: "/repo"}, "/started", "/repo"},
+		{"no desktop record: beekeeper's start", config.Role{}, nil, "/started", "/started"},
+		{"nothing recorded: the caller's", config.Role{}, nil, "", "."},
+	} {
+		if got := successorDir(c.cfg, c.rec, c.start); got != c.want {
+			t.Errorf("%s: successorDir = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// supervisedBy makes p, one of beekeeper's starts, the supervisor since
+// since, its CLI gone two minutes before w.now.
+func supervisedBy(t *testing.T, w *watcher, p state.Party, since time.Time) {
+	t.Helper()
+	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Relay = nil
+		st.Supervisor = &state.Supervisor{Party: p, Since: since}
+		st.SupervisorCLI = &state.CLI{Supervisor: p, Since: since, PID: 50, Gone: w.now.Add(-2 * time.Minute)}
+		st.Starts = append(st.Starts, state.Start{Party: p, Mode: state.ModeBypass, At: since})
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A successor whose first turn ended without a desktop CLI is resumed
+// headless, not replaced; one that does not come up is one note, and the
+// next successors start a bounded number of times, further and further
+// apart.
+func TestStandbyResumesAndBoundsSuccessorsThatDoNotComeUp(t *testing.T) {
+	w, _, out := notifyingWatch(t, t.TempDir(), true)
+	w.cfg.Guide.Person = "Pat"
+	var revived []string
+	var succeeded atomic.Int32
+	w.stand = standbyWatch{
+		send: func(context.Context, string, string) error { t.Error("a resume message by name"); return nil },
+		revive: func(_ context.Context, rl role, holder state.Party, msg string) error {
+			if rl.name != supervisorRole.name || !strings.Contains(msg, "`beekeeper handover --prompt`") {
+				t.Errorf("revive %s %q: %q", rl.name, holder.Name, msg)
+			}
+			revived = append(revived, holder.Name)
+			return nil
+		},
+		succeed: func(context.Context, role, state.Party) (state.Party, error) {
+			succeeded.Add(1)
+			return state.Party{Name: "next"}, nil
+		},
+	}
+	t.Cleanup(w.stand.inflight.Wait)
+	poll := func(at time.Time) {
+		w.now = at
+		w.pending(context.Background(), nil)
+		eventually(2*time.Second, func() bool { return !w.stand.starting.Load() })
+	}
+	at := relayNow
+	for i, wait := range []time.Duration{successorBackoff, 2 * successorBackoff, time.Hour} {
+		run := state.Party{Session: fmt.Sprintf("s%d", 12+i), Name: supervisorRole.runName(12 + i)}
+		w.now = at
+		supervisedBy(t, w, run, at.Add(-time.Minute))
+		poll(at)
+		if len(revived) != i+1 || revived[i] != run.Name || succeeded.Load() != int32(i) {
+			t.Fatalf("%s: revived %v, %d successors", run.Name, revived, succeeded.Load())
+		}
+		poll(at.Add(time.Minute)) // its headless resume ended too
+		poll(at.Add(wait - time.Second))
+		if n := succeeded.Load(); n != int32(i) {
+			t.Fatalf("%s: %d successors before the backoff", run.Name, n)
+		}
+		at = at.Add(time.Minute + wait)
+		poll(at)
+	}
+	if n := succeeded.Load(); n != 2 {
+		t.Errorf("%d successors, want 2 (the third failed one ends the chain)", n)
+	}
+	st, _ := w.store.Read()
+	if len(st.Notes) != 1 || !strings.Contains(st.Notes[0].Text, `"Supervisor run 12"`) || st.Notes[0].For != "Pat" {
+		t.Errorf("notes: %+v", st.Notes)
+	}
+	if l := out.String(); !strings.Contains(l, "3 successors did not come up, none further starts (note #1)") || strings.Count(l, "SUCCESSOR DOWN") != 3 {
+		t.Errorf("watch lines:\n%s", l)
+	}
+}
+
+// A holder that is no start of beekeeper's gets its successor at once, and
+// a holder up again ends a chain of failed successors.
+func TestStandbySucceedsAGoneDesktopSupervisorAtOnce(t *testing.T) {
+	w, _, _ := notifyingWatch(t, t.TempDir(), true)
+	var succeeded atomic.Int32
+	w.stand = standbyWatch{
+		revive: func(context.Context, role, state.Party, string) error { t.Error("revived a desktop session"); return nil },
+		succeed: func(context.Context, role, state.Party) (state.Party, error) {
+			succeeded.Add(1)
+			return state.Party{}, nil
+		},
+		chains: map[string]*successorChain{supervisorRole.name: {failures: 1, next: relayNow.Add(time.Hour)}},
+	}
+	t.Cleanup(w.stand.inflight.Wait)
+	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Supervisor = &state.Supervisor{Party: four, Since: relayNow.Add(-time.Hour)}
+		st.SupervisorCLI = &state.CLI{Supervisor: four, Since: relayNow.Add(-time.Hour), PID: 44}
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.now = relayNow
+	w.pending(context.Background(), []*claude.Session{{ID: four.Session, HostID: hostFour, Name: agentFour, PID: 44}})
+	if w.stand.chains[supervisorRole.name] != nil {
+		t.Fatalf("a supervisor up again kept the chain: %+v", w.stand.chains[supervisorRole.name])
+	}
+	_ = w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.SupervisorCLI.Gone = relayNow
+		return nil, nil
+	})
+	w.now = relayNow.Add(2 * time.Minute)
+	w.pending(context.Background(), nil)
+	eventually(2*time.Second, func() bool { return succeeded.Load() == 1 })
+	if n := succeeded.Load(); n != 1 {
+		t.Errorf("%d successors, want 1", n)
+	}
+}
+
+// The resume goes to the holder's desktop CLI, never to the headless first
+// turn that took the role.
+func TestStandbyResumesTheDesktopCLINotTheFirstTurn(t *testing.T) {
+	w, _, _ := notifyingWatch(t, t.TempDir(), true)
+	sent := make(chan string, 2)
+	w.stand = standbyWatch{send: func(_ context.Context, to, msg string) error { sent <- to; return nil }}
+	guide := state.Party{Session: sessionG7, HostSession: hostG7, Name: guideSeven}
+	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Guide = &state.Role{Holder: &state.Supervisor{Party: guide, Since: relayNow.Add(-time.Minute)},
+			CLI: &state.CLI{Supervisor: guide, Since: relayNow.Add(-time.Minute), PID: 77}}
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.table = &proc.Table{ByPID: map[int]*proc.Process{
+		78: {PID: 78, Comm: claudeComm, Args: []string{claudeComm, "-p", sessionIDFlag, sessionG7, "--", "brief"}},
+		79: {PID: 79, Comm: claudeComm, Args: []string{claudeComm, "--output-format", "stream-json", resumeFlag, sessionG7}},
+	}}
+	w.now = relayNow
+	w.pending(context.Background(), []*claude.Session{{ID: sessionG7, HostID: hostG7, Name: guideSeven, PID: 78}})
+	select {
+	case to := <-sent:
+		t.Fatalf("resumed the first turn: %s", to)
+	case <-time.After(200 * time.Millisecond):
+	}
+	w.pending(context.Background(), []*claude.Session{{ID: sessionG7, HostID: hostG7, Name: guideSeven, PID: 79}})
+	select {
+	case to := <-sent:
+		if to != guideSeven {
+			t.Errorf("resumed %q", to)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the desktop CLI got no resume")
 	}
 }

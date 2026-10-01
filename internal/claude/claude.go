@@ -102,9 +102,12 @@ type Command struct {
 
 // Record is the part of a desktop session record beekeeper reads.
 type Record struct {
-	SessionID      string `json:"sessionId"`
-	CLISessionID   string `json:"cliSessionId"`
-	Cwd            string `json:"cwd"`
+	SessionID    string `json:"sessionId"`
+	CLISessionID string `json:"cliSessionId"`
+	Cwd          string `json:"cwd"`
+	// OriginCwd is the folder the session started from when the desktop
+	// runs it in a worktree of its own (Cwd).
+	OriginCwd      string `json:"originCwd"`
 	Branch         string `json:"branch"`
 	Title          string `json:"title"`
 	IsArchived     bool   `json:"isArchived"`
