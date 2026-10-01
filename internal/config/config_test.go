@@ -143,6 +143,8 @@ func TestLoadRejects(t *testing.T) {
 		"negative relayAt":    "supervisor: {relayAt: -1}",
 		"bad store glob":      "outbound: {storeDeny: [{vault: \"[\"}]}",
 		"bad outbound path":   "outbound: {paths: [\"[\"]}",
+		"nameless board step": "board: {order: [{status: [backlog]}]}",
+		"search with fields":  "board: {order: [{name: q, search: \"repo:o/r\", status: [backlog]}]}",
 	} {
 		p := filepath.Join(t.TempDir(), "c.yaml")
 		if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
@@ -329,7 +331,8 @@ func TestExampleConfig(t *testing.T) {
 	}
 	if c.Supervisor.Skill != "beekeeper:supervise" || c.Guide.Skill != "beekeeper:guide" || c.Guide.Person != "Ada" ||
 		c.GitHub.ProbeRepo != "example-org/tools" || !c.Merge.DevctlServes("giantswarm/x") || c.Ollama.URL == "" ||
-		c.Alerts.Tenant != "example-org" || len(c.Alerts.Installations) != 3 || len(c.Lanes) != 2 {
+		c.Alerts.Tenant != "example-org" || len(c.Alerts.Installations) != 3 || len(c.Lanes) != 2 ||
+		c.Board.Project != 12 || len(c.Board.Order) != 8 || !c.Board.Order[1].SubIssues || c.Board.StaleAfter.Hours() != 8760 {
 		t.Errorf("config = %+v", c)
 	}
 	if want := []alerts.Quiet{{Cluster: "t-*"}, OtherTeamsNotify}; !slices.Equal(c.Alerts.Quiet, want) ||
