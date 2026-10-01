@@ -13,5 +13,10 @@ func Name() string {
 	return runtime.GOOS
 }
 
-// current is the stub: every part is not available.
-func current(Options) Platform { return Stub() }
+// current is the stub: every part is not available but the system's own
+// service manager for the standby service, where it has one.
+func current(Options) Platform {
+	p := Stub()
+	p.Setup = nativeSetup()
+	return p
+}

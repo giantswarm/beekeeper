@@ -25,6 +25,26 @@ curl -fsSL -o "$dir/beekeeper" https://github.com/giantswarm/beekeeper/releases/
 chmod +x "$dir/beekeeper"
 ```
 
+Then put it in place for your user, after a look at what it would do:
+
+```bash
+beekeeper install --dry-run   # every file, hook and service step; changes nothing
+beekeeper install
+```
+
+`install` merges the PreToolUse and PermissionRequest hooks into Claude Code's user settings
+(`~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR`) with the binary's absolute path, writes and
+starts the [standby service](#desktop-notifications) (a systemd user unit, a launch agent on
+macOS), and on systemd the memory guard sized to the machine's RAM: `memcap.slice` for `beekeeper
+run`'s capped commands and a drop-in for the Claude Desktop scope that runs (run install again
+with the app running when it does not). Without a config it writes a starter one, the [example
+configuration](docs/examples/config.yaml) with every key commented out. A file already as install
+writes it stays, and one that differs and that install did not write it keeps and names; a second
+run changes nothing. A new Claude Code session picks the hooks up. `beekeeper uninstall` (also
+with `--dry-run`) stops the service and removes exactly what install wrote, as `install.json` in
+the state directory records it, and leaves the config and the state unless `--purge`. On Linux
+without systemd install writes the hooks and the config and says the service is not available.
+
 From then on `beekeeper self-update` keeps it current: it verifies the release binary's Sigstore
 signature and renames it over the old one in one step, so a running `beekeeper watch` keeps
 running, and a `devctl pr merge` gate call waiting for its turn re-executes the new binary at its
@@ -456,16 +476,8 @@ When no supervisor runs, the same watch runs as a systemd user unit,
 `--standby`: while a supervisor's session runs it leaves the notes, timers, session records and
 relays to the supervisor's watch and never reads the alerts, so it takes nothing from the
 supervisor's view; what both see (the machine, OOM kills, the budget, stale leases) is sent once.
-A supervisor runs its own watch with `--notify` too. To install the unit:
-
-```bash
-mkdir -p ~/.config/systemd/user
-curl -fsSL https://raw.githubusercontent.com/giantswarm/beekeeper/main/contrib/systemd/beekeeper-notify.service |
-  sed "s|%h/.local/bin/beekeeper|$(command -v beekeeper)|" > ~/.config/systemd/user/beekeeper-notify.service
-systemctl --user daemon-reload
-systemctl --user enable --now beekeeper-notify.service
-journalctl --user -u beekeeper-notify -f   # its lines
-```
+A supervisor runs its own watch with `--notify` too. `beekeeper install` writes and starts the
+unit with the binary's path; `journalctl --user -u beekeeper-notify -f` shows its lines.
 
 ### A supervisor gone
 

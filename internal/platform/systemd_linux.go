@@ -29,6 +29,7 @@ func current(o Options) Platform {
 		Launcher:    systemdLauncher{},
 		Capper:      systemdCapper{},
 		Opener:      systemdOpener{app: o.DesktopApp},
+		Setup:       systemdSetup{},
 		NewNotifier: func() Notifier { return &desktop{} },
 	}
 }
