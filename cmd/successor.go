@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -70,14 +71,18 @@ Once the desktop runs your CLI, beekeeper's standby watch tells you so there: th
 // startSuccessor starts rl's next run as a fresh session and opens the
 // relay from from to it, so its `<role> start` takes the role; by is who
 // asks: the holder's relay, or the standby watch once from is gone. The
-// successor runs in dir with from's model. A start that fails withdraws
-// the relay. It returns the successor and the relay's line.
+// successor runs in dir (empty: successorDir) with from's model. A start
+// that fails withdraws the relay. It returns the successor and the relay's
+// line.
 func (a *app) startSuccessor(ctx context.Context, rl role, from, by state.Party, dir string) (state.Party, string, error) {
 	id := uuid.NewString()
 	var to state.Party
-	var msg string
+	var msg, startDir string
 	fromLabel := from.Name
 	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		if s, ok := st.BypassStart(from.Session); ok {
+			startDir = s.Dir
+		}
 		r := rl.get(st)
 		n := max(rl.lastRun(r), a.titledRun(rl, r.Holder)) + 1
 		to = state.Party{Session: id, HostSession: "local_" + id, Name: rl.runName(n)}
@@ -95,15 +100,13 @@ func (a *app) startSuccessor(ctx context.Context, rl role, from, by state.Party,
 	if err != nil {
 		return state.Party{}, "", err
 	}
-	model := ""
-	if r, ok := claude.ReadRecord(a.cfg, desktopID(from)); ok {
-		model = r.Model
-		if dir == "" {
-			dir = r.Cwd
-		}
+	rec, _ := claude.ReadRecord(a.cfg, desktopID(from))
+	var model string
+	if rec != nil {
+		model = rec.Model
 	}
 	if dir == "" {
-		dir = "."
+		dir = successorDir(rl.cfg(a.cfg), rec, startDir)
 	}
 	_, err = a.startAgent(ctx, agentStart{id: id, by: &by, name: to.Name, brief: rl.successorBrief(to.Name, fromLabel),
 		task: fmt.Sprintf("%s as %s", rl.duty, to.Name), dir: dir, model: model})
@@ -112,6 +115,28 @@ func (a *app) startSuccessor(ctx context.Context, rl role, from, by state.Party,
 		return state.Party{}, "", fmt.Errorf("starting %q: %w (its relay is withdrawn)", to.Name, err)
 	}
 	return to, msg, nil
+}
+
+// successorDir is the folder a successor of the holder whose desktop
+// record is rec (nil: none) starts in: the role's configured dir, else the
+// folder the holder's desktop session started from, else the folder
+// beekeeper started the holder in (start), else the caller's. Never the
+// worktree the desktop made for the holder: the desktop warms a session in
+// such a folder on a worktree of the folder's branch, which the holder's
+// worktree still has checked out, so the successor's desktop CLI never
+// starts.
+func successorDir(cfg config.Role, rec *claude.Record, start string) string {
+	switch {
+	case cfg.Dir != "":
+		return cfg.Dir
+	case rec != nil && rec.OriginCwd != "":
+		return rec.OriginCwd
+	case rec != nil && rec.Cwd != "":
+		return rec.Cwd
+	case start != "":
+		return start
+	}
+	return "."
 }
 
 // withdrawRelay drops rl's relay to to while it is not taken.
