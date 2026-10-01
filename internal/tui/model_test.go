@@ -339,8 +339,8 @@ func TestSelectionMovement(t *testing.T) {
 
 func TestEnterOpensSessionPaneOnlyThere(t *testing.T) {
 	src := &fakeSource{data: fixtureData(), turns: []Turn{
-		{At: testAt, Role: "assistant", Text: "on it"},
-		{At: testAt, Role: "user", Text: "the second turn"},
+		{At: testAt, Role: roleAssistant, Text: "on it"},
+		{At: testAt, Role: roleUser, Text: "the second turn"},
 	}}
 	m := newTestModel(t, src)
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -407,8 +407,8 @@ func TestEnterOpensSessionPaneOnlyThere(t *testing.T) {
 
 func TestOpenPaneFollowsLive(t *testing.T) {
 	first := []Turn{
-		{At: testAt, Role: "user", Text: "fix it"},
-		{At: testAt, Role: "assistant", Text: "reading"},
+		{At: testAt, Role: roleUser, Text: "fix it"},
+		{At: testAt, Role: roleAssistant, Text: "reading"},
 	}
 	src := &fakeSource{data: fixtureData(), turns: first}
 	m := newTestModel(t, src)
@@ -424,7 +424,7 @@ func TestOpenPaneFollowsLive(t *testing.T) {
 
 	// A tick while the pane is open re-reads its tail; the new turn shows
 	// at the bottom.
-	src.turns = append(slices.Clone(first), Turn{At: testAt, Role: "tool", Text: "Bash: go test ./..."})
+	src.turns = append(slices.Clone(first), Turn{At: testAt, Role: roleTool, Text: "Bash: go test ./..."})
 	src.tailCall = ""
 	_, c = m.Update(tickMsg{})
 	if c == nil {
@@ -454,7 +454,7 @@ func TestOpenPaneFollowsLive(t *testing.T) {
 
 	// Scrolled back, the view keeps its place as turns arrive.
 	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
-	src.turns = append(slices.Clone(src.turns), Turn{At: testAt, Role: "assistant", Text: "green"})
+	src.turns = append(slices.Clone(src.turns), Turn{At: testAt, Role: roleAssistant, Text: "green"})
 	m.Update(tailMsg{session: tBee, turns: src.turns})
 	if m.tailBack != 2 {
 		t.Errorf("scrolled back %d after one new turn, want 2 (the place kept)", m.tailBack)
@@ -479,11 +479,11 @@ func TestStateOf(t *testing.T) {
 		s    Session
 		want string
 	}{
-		{Session{Harness: "omp", State: "idle", Idle: time.Second}, "idle"},
-		{Session{Waiting: "approve the merge", Idle: time.Second}, "waiting"},
-		{Session{Idle: 10 * time.Second}, "busy"},
-		{Session{Idle: time.Hour, Commands: []Command{{Args: "devctl pr wait"}}}, "busy"},
-		{Session{Idle: time.Hour}, "idle"},
+		{Session{Harness: "omp", State: stateIdle, Idle: time.Second}, stateIdle},
+		{Session{Waiting: "approve the merge", Idle: time.Second}, stateWaiting},
+		{Session{Idle: 10 * time.Second}, stateBusy},
+		{Session{Idle: time.Hour, Commands: []Command{{Args: "devctl pr wait"}}}, stateBusy},
+		{Session{Idle: time.Hour}, stateIdle},
 	}
 	for _, c := range cases {
 		if got := stateOf(c.s); got != c.want {

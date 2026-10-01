@@ -66,7 +66,7 @@ func TestSessionsViewRows(t *testing.T) {
 		tBee, tWasp, "spare", "1.5 GiB", "45%·90k", "10t 1e $1.23",
 		"[WARN] answer to the question",
 		tIssue, "overlap",
-		"name", "role", "idle", "mem", "ctx", "hour",
+		"name", "role", stateIdle, "mem", "ctx", "hour",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("sessions view misses %q:\n%s", want, got)
@@ -90,9 +90,9 @@ func TestSessionsViewRows(t *testing.T) {
 }
 func TestSessionsViewStates(t *testing.T) {
 	d := fixture()
-	d.Sessions = append(d.Sessions, Session{Name: "omp in lab", Harness: "omp", State: "busy", Idle: time.Hour})
+	d.Sessions = append(d.Sessions, Session{Name: "omp in lab", Harness: "omp", State: stateBusy, Idle: time.Hour})
 	got := stripANSI(sessionsView(d, 130, 40, 0))
-	for _, want := range []string{"state", "waiting", "idle", "omp·busy"} {
+	for _, want := range []string{"state", stateWaiting, stateIdle, "omp·busy"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("sessions view misses state %q:\n%s", want, got)
 		}
@@ -101,9 +101,9 @@ func TestSessionsViewStates(t *testing.T) {
 
 func TestTurnLinesFillFromTheNewest(t *testing.T) {
 	turns := []Turn{
-		{At: testAt, Role: "user", Text: "first"},
-		{At: testAt, Role: "assistant", Text: "two\nlines"},
-		{At: testAt, Role: "tool", Text: "Bash: go test ./..."},
+		{At: testAt, Role: roleUser, Text: "first"},
+		{At: testAt, Role: roleAssistant, Text: "two\nlines"},
+		{At: testAt, Role: roleTool, Text: "Bash: go test ./..."},
 	}
 	got := turnLines(turns, 80, 3, testAt)
 	if len(got) != 3 {

@@ -673,6 +673,13 @@ func sessionRow(s Session, w int, now time.Time) string {
 	return strings.Join(cells, "  ")
 }
 
+// The roles of the transcript turns the pane shows.
+const (
+	roleUser      = "user"
+	roleAssistant = "assistant"
+	roleTool      = "tool"
+)
+
 // The states a session row shows.
 const (
 	stateBusy    = "busy"
@@ -857,9 +864,9 @@ func turnLines(turns []Turn, w, room int, now time.Time) []string {
 		tu := turns[i]
 		role := style.Dim.Render(pad(tu.Role, 10))
 		switch tu.Role {
-		case "assistant":
+		case roleAssistant:
 			role = style.OK.Render(pad(tu.Role, 10))
-		case "tool":
+		case roleTool:
 			role = style.Run.Render(pad(tu.Role, 10))
 		}
 		// A turn's text can carry its own newlines (a pasted block, a
