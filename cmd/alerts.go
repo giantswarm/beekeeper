@@ -441,7 +441,7 @@ func ownerHints(events []state.Event, laneOf func(string) config.Lane, installat
 			switch e.Verb {
 			case "merging":
 				text = fmt.Sprintf("during merging %s by %q since %s", key, e.By.Name, e.At.UTC().Format("15:04Z"))
-			case "merged":
+			case verbMerged:
 				text = fmt.Sprintf("during merged %s by %q at %s", key, e.By.Name, e.At.UTC().Format("15:04Z"))
 			case "merge.queued":
 				continue

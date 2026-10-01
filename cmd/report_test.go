@@ -14,10 +14,10 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// fixtureEvents reads a JSONL event log from testdata.
-func fixtureEvents(t *testing.T, name string) []state.Event {
+// fixtureEvents reads the fixture event log of the report.
+func fixtureEvents(t *testing.T) []state.Event {
 	t.Helper()
-	f, err := os.Open("testdata/" + name)
+	f, err := os.Open("testdata/report-events.jsonl")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func reportFixture(t *testing.T) *reportFacts {
 	}
 	f := &reportFacts{
 		From: from, To: to, Zone: zone, Person: "Ada",
-		Merged: windowMerges(fixtureEvents(t, "report-events.jsonl"), lanes, from, to),
+		Merged: windowMerges(fixtureEvents(t), lanes, from, to),
 		Workers: []reportWorker{
 			{Name: "Supervisor run 3", Doing: "supervisor"},
 			{Name: "Worker tools#43", Issue: "example/tools#39", Doing: "CI on #43", Leases: []string{"lab-1"}},

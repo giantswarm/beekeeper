@@ -1042,7 +1042,7 @@ func (w *watcher) settled(ctx context.Context, now time.Time) {
 			if !ok || m.Phase != state.Settling {
 				return false
 			}
-			ev = append(ev, event(watchParty, "lane.settled", "%s: %s %s", m.Lane, m.Key(), why))
+			ev = append(ev, event(watchParty, verbLaneSettled, "%s: %s %s", m.Lane, m.Key(), why))
 			return true
 		})
 		return ev, nil

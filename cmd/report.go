@@ -180,7 +180,7 @@ func (a *app) gatherReport(ctx context.Context, from, to time.Time, zone *time.L
 		return nil, err
 	}
 	st := v.st
-	events, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "merged" || e.Verb == "lane.settled" })
+	events, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == verbMerged || e.Verb == verbLaneSettled })
 	if err != nil {
 		return nil, err
 	}
@@ -277,7 +277,7 @@ func windowMerges(events []state.Event, lanes []state.Merge, from, to time.Time)
 	var out []reportMerge
 	key := func(m reportMerge) string { return state.Merge{Repo: m.Repo, PR: m.N}.Key() }
 	for _, e := range events {
-		if e.Verb != "merged" || e.At.Before(from) || !e.At.Before(to) {
+		if e.Verb != verbMerged || e.At.Before(from) || !e.At.Before(to) {
 			continue
 		}
 		head, rest, _ := strings.Cut(e.Detail, " ")
@@ -297,7 +297,7 @@ func windowMerges(events []state.Event, lanes []state.Merge, from, to time.Time)
 	for i := range out {
 		k := key(out[i])
 		for _, e := range events {
-			if _, rest, _ := strings.Cut(e.Detail, ": "); e.Verb == "lane.settled" && !e.At.Before(from) && strings.HasPrefix(rest, k+" ") {
+			if _, rest, _ := strings.Cut(e.Detail, ": "); e.Verb == verbLaneSettled && !e.At.Before(from) && strings.HasPrefix(rest, k+" ") {
 				switch why := strings.TrimPrefix(rest, k+" "); {
 				case strings.HasPrefix(why, "rolled"):
 					out[i].Rollout = "rolled"
