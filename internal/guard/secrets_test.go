@@ -86,6 +86,8 @@ var secretCorpus = []struct{ cmd, safe string }{
 	{"KUBE_EDITOR=cat kubectl edit secret/app -n x", keysForm},
 	{"kubectl create secret generic x --from-literal=a=b --dry-run=client -o yaml", keysForm},
 	{"kubectl apply -f s.yaml secret/app -o yaml", keysForm},
+	{"kubectl get secret app -o yaml | kubectl --context b apply -f - -o yaml", keysForm},
+	{"kubectl get secret app -o yaml | kubectl --context b get -f -", keysForm},
 	// sops and op, in every form
 	{"sops -d secrets.enc.yaml", sopsForm},
 	{"sops --decrypt --extract '[\"data\"]' x.yaml", sopsForm},
@@ -195,6 +197,9 @@ var secretCorpus = []struct{ cmd, safe string }{
 	{"kubectl get secret app -o jsonpath='{.data.token}' | base64 -d | wc -c", ""},
 	{"kubectl get secret app -o yaml >/dev/null", ""},
 	{"kubectl get secret app -n a -o yaml | kubectl apply -n b -f -", ""},
+	{"kubectl get secret app -n a -o yaml | kubectl --context b -n c apply -f -", ""},
+	{"kubectl get secret app -n a -o yaml | kubectl --kubeconfig=k replace --force -f -", ""},
+	{"K=op://Employee/x/credential op run -- sh -c 'printenv K | kubectl --context kind-agentlab -n kagent create secret generic s --from-file=K=/dev/stdin --dry-run=client -o yaml | kubectl --context kind-agentlab apply -f -'", ""},
 	{"kubectl create secret generic x --from-literal=a=b --dry-run=client -o yaml | kubectl apply -f -", ""},
 	{`kc(){ kubectl --context a "$@"; }; kc get secret app -o json | jq '.data|keys'`, ""},
 	{"kubectl get configmap x -o yaml", ""},

@@ -531,13 +531,33 @@ func safeSink(words []string, l *leak) bool {
 		filter, ok := jqFilter(args)
 		return ok && (filterSafe(filter) || l.render && blanksSecrets(filter))
 	case name == kubectlCmd:
-		sub := nonFlags(args)
-		return len(sub) > 0 && (sub[0] == "apply" || sub[0] == verbCreate || sub[0] == "replace") && readsStdin(args) && !printsObject(args)
+		verb := kubectlVerb(args)
+		return (verb == "apply" || verb == verbCreate || verb == "replace") && readsStdin(args) && !printsObject(args)
 	case name == "gh":
 		sub := nonFlags(args)
 		return len(sub) > 1 && sub[0] == "secret" && sub[1] == verbSet
 	}
 	return false
+}
+
+// kubectlVerb returns the verb of a kubectl command: its first word that is
+// no flag and no flag's value (kubectl --context x apply …).
+func kubectlVerb(args []string) string {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		name, _, eq := strings.Cut(a, "=")
+		switch {
+		case a == "--":
+			return ""
+		case strings.HasPrefix(a, "-"):
+			if kubectlValue[name] && !eq {
+				i++
+			}
+		default:
+			return a
+		}
+	}
+	return ""
 }
 
 func readsStdin(args []string) bool {
