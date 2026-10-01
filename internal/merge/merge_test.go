@@ -381,3 +381,42 @@ func TestFollows(t *testing.T) {
 		}
 	}
 }
+
+func TestParsePromote(t *testing.T) {
+	const repo = "o/r"
+	for _, c := range []struct {
+		argv string
+		repo string
+	}{
+		{"devctl release promote " + repo, repo},
+		{"/usr/bin/devctl release promote " + repo + " --progress", repo},
+		{"devctl release promote o/r o/s", ""},
+		{"devctl release promote --team team-x", ""},
+		{"devctl release promote o/r --dry-run", ""},
+		{"devctl release promote --help", ""},
+		{"devctl release wait o/r v1.0.0", ""},
+	} {
+		repo, ok := ParsePromote(strings.Fields(c.argv))
+		if repo != c.repo || ok != (c.repo != "") {
+			t.Errorf("%s: %q %v, want %q", c.argv, repo, ok, c.repo)
+		}
+	}
+}
+
+func TestParsePromoteDocument(t *testing.T) {
+	doc := func(state string) []byte {
+		return []byte(`{"repositories":[{"repository":"o/r","stable":"v0.49.0","candidate":"v0.49.1-rc.2","state":"` + state + `"}]}`)
+	}
+	if o, ok := ParsePromoteDocument(doc("dispatched")); !ok || !o.Merged || o.Release != "v0.49.1" {
+		t.Errorf("dispatched: %+v %v", o, ok)
+	}
+	if o, ok := ParsePromoteDocument(doc("nothing_to_promote")); !ok || o.Merged || !o.NoRelease {
+		t.Errorf("nothing to promote: %+v %v", o, ok)
+	}
+	if o, ok := ParsePromoteDocument(doc("not_built")); !ok || o.Merged || o.NoRelease || o.Release != "" {
+		t.Errorf("not built: %+v %v", o, ok)
+	}
+	if _, ok := ParsePromoteDocument([]byte("not json")); ok {
+		t.Errorf("no document parsed")
+	}
+}

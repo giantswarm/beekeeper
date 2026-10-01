@@ -56,9 +56,9 @@ the supervisor (PR links, release versions, the proof, what remains open, all re
 - **The task is worked under the `worker-rules` skill** and the desk's own conventions (the
   project's CLAUDE.md and rules), with the supervisor its brief or message names; nothing here
   restates or relaxes them. The session moves its own board item at the start and the close.
-- **An unanswered grant is no reason to sit still.** When a grant, `clear` or go stays unanswered
-  for 20 minutes, the session carries on with the work that needs none. A merge into a lane goes
-  ahead, announced as always, once the session sees the lane's HelmReleases Ready itself. An
+- **An unanswered grant is no reason to sit still.** When a grant or go stays unanswered
+  for 20 minutes, the session carries on with the work that needs none. A merge needs no word: the
+  gate queues it in its lane and wakes the session with the outcome. An
   explicit `hold <repo>` still stands until `release <repo>`, and a lab or the browser is still
   never claimed without `yours <env>` or `browser yours`.
 - **Subagents** only when the supervisor's brief allows them.
