@@ -32,7 +32,8 @@ const (
 	// ExitGateQueued: the merge waits on for its turn in a run of its own,
 	// which wakes its owner with the outcome.
 	ExitGateQueued = 76
-	// ExitGateRefused: a hold, the budget floor or an unreadable installation.
+	// ExitGateRefused: a hold or an unreadable installation; under the
+	// budget floor the merge is queued for the reset (enqueue).
 	ExitGateRefused = 77
 	// ExitGateDuplicate: the pull request's merge already runs, devctl's
 	// "not applicable".
@@ -62,8 +63,10 @@ every devctl release promote of one repository; a session never calls it. A
 promotion queues and runs in its repository's lane like a merge, its stable
 release settling the lane. Only a hold refuses (exit 77): the repository,
 its lane, "merges" or "github" held (a cluster upgrade on the lane's
-installation holds it too); so do a GitHub budget under the floor or
-unknown and a lane installation that cannot be read. Otherwise the merge
+installation holds it too); so do a GitHub budget unknown and a lane
+installation that cannot be read. Under the budget floor the merge is
+queued for the reset (exit 77, a "queued" line): a run of its own waits
+for the budget and merges as below. Otherwise the merge
 joins its lane's queue (a merge registered with lanes settle heads it) and
 runs when no merge before it holds its place (one in the gate or within
 merge.queueTTL of its last run; for a seeded place also the seeds before
@@ -87,7 +90,9 @@ unconfirmed. A second merge of a pull request whose merge runs is refused
 (exit 3) with that run's start, owner and last line.
 
 /home/teemow/.go/bin/beekeeper gate -- devctl pr wait, release wait and rollout wait run the same way outside
-their caller, without a queue. Whichever command it is, its outcome reaches
+their caller, without a queue; one whose identical command already runs on
+the machine follows that run (follow-run: its stderr, document and exit
+code) instead of polling GitHub a second time. Whichever command it is, its outcome reaches
 the session that started it: the caller sees the output and exit code as
 ever while it listens, and when it no longer does (a headless turn that
 ended, a caller killed, its CLI gone, a queued merge) the run wakes its
@@ -182,7 +187,7 @@ func (a *app) gate(ctx context.Context, argv []string, wait time.Duration, queue
 			if g.queued {
 				return g.refuse("waited %s for its turn, %s; its place is dropped: run the same command again once the lane moves", wait, why)
 			}
-			return g.enqueue(why)
+			return g.enqueue(ExitGateQueued, why)
 		}
 		if bin.Replaced() {
 			gateLine("%s was replaced while the merge waited: re-executing it", bin.Path)
@@ -204,9 +209,10 @@ func (a *app) gate(ctx context.Context, argv []string, wait time.Duration, queue
 // enqueue hands the merge's wait to a run of its own outside the caller
 // (launchChild), the same gate under --queued: it keeps the merge's place, merges
 // when its turn comes and wakes the owner with the outcome (tellOwner), as
-// this gate leaves without its heard marker. It returns exit 76.
-func (g *gateRun) enqueue(why string) error {
-	queued := &exitError{code: ExitGateQueued}
+// this gate leaves without its heard marker. It returns exit code: 76 for
+// a merge that waited its turn, 77 for one under the budget floor.
+func (g *gateRun) enqueue(code int, why string) error {
+	queued := &exitError{code: code}
 	self, err := selfExe()
 	if err == nil {
 		argv := []string{self}
@@ -216,7 +222,7 @@ func (g *gateRun) enqueue(why string) error {
 		argv = append(append(argv, "gate", "--queued", "--wait", g.cfg.Merge.SeedTTL.String(), "--"), g.argv...)
 		_ = os.Setenv(gateFromEnv, strconv.Itoa(g.pid))
 		var pid int
-		if pid, err = launchChild(childSpec{Argv: argv, Owner: g.me, Config: g.explicitConfig()}, ownedBase(g.store.Dir(), g.argv, g.pid)); err == nil {
+		if pid, err = launchChild(childSpec{Argv: argv, Command: g.argv, Owner: g.me, Config: g.explicitConfig()}, ownedBase(g.store.Dir(), g.argv, g.pid)); err == nil {
 			to := "its outcome is logged (beekeeper log --verb merged)"
 			if g.me.Session != "" {
 				to = fmt.Sprintf("its outcome wakes %q", g.me.Name)
@@ -323,8 +329,11 @@ func (g *gateRun) step() (string, error) {
 		return "", g.refuse("the GitHub budget is unknown (%v): fix that (gh auth status), then run the same command again", err)
 	}
 	if b.Remaining < g.cfg.GitHub.Floor {
-		return "", g.refuse("the GitHub budget %d is under the floor %d: merge after the reset at %s, do not poll",
-			b.Remaining, g.cfg.GitHub.Floor, clock(g.now, b.Reset))
+		why := fmt.Sprintf("the GitHub budget %d is under the floor %d until the reset at %s", b.Remaining, g.cfg.GitHub.Floor, clock(g.now, b.Reset))
+		if g.queued {
+			return why, nil
+		}
+		return "", g.enqueue(ExitGateRefused, why)
 	}
 	return g.start(q.SettlingKeys(), hrs)
 }

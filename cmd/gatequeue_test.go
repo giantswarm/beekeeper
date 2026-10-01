@@ -42,6 +42,37 @@ func queueApp(t *testing.T, merges ...state.Merge) *app {
 	return &app{cfg: cfg, store: store, now: time.Now()}
 }
 
+// stubSelf stands in for this binary as merge-child: it records its pid and
+// the spec it was given, which launched returns.
+func stubSelf(t *testing.T) (self string, launched func() childSpec) {
+	t.Helper()
+	noSystemd(t)
+	dir := t.TempDir()
+	self = filepath.Join(dir, "beekeeper")
+	script := "#!/bin/sh\necho $$ > \"$2.pid\"\ncp \"$2.spec\" " + filepath.Join(dir, "spec") + "\n"
+	if err := os.WriteFile(self, []byte(script), 0o700); err != nil { //nolint:gosec // a test script
+		t.Fatal(err)
+	}
+	was := selfExe
+	selfExe = func() (string, error) { return self, nil }
+	t.Cleanup(func() { selfExe = was })
+	return self, func() childSpec {
+		t.Helper()
+		var raw []byte
+		var err error
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+			if raw, err = os.ReadFile(filepath.Join(dir, "spec")); err == nil && json.Valid(raw) { //nolint:gosec // the test's file
+				break
+			}
+		}
+		var spec childSpec
+		if err := json.Unmarshal(raw, &spec); err != nil {
+			t.Fatalf("no spec: %v", err)
+		}
+		return spec
+	}
+}
+
 // sleeper is a live process that is not the test, ended with the test.
 func sleeper(t *testing.T) int {
 	t.Helper()
@@ -57,18 +88,8 @@ func sleeper(t *testing.T) int {
 // gate hands its wait to a run of its own, the same gate under --queued with
 // the caller as owner, and exits 76.
 func TestAMergeBehindABusyLaneWaitsOnInARunOfItsOwn(t *testing.T) {
-	noSystemd(t)
 	stubGitHub(t, github.Open, "")
-	dir := t.TempDir()
-	self := filepath.Join(dir, "beekeeper")
-	// merge-child's stand-in records its pid and the spec it was given.
-	script := "#!/bin/sh\necho $$ > \"$2.pid\"\ncp \"$2.spec\" " + filepath.Join(dir, "spec") + "\n"
-	if err := os.WriteFile(self, []byte(script), 0o700); err != nil { //nolint:gosec // a test script
-		t.Fatal(err)
-	}
-	was := selfExe
-	selfExe = func() (string, error) { return self, nil }
-	t.Cleanup(func() { selfExe = was })
+	self, launched := stubSelf(t)
 	busy := sleeper(t)
 	a := queueApp(t, state.Merge{Repo: scratchRepo, PR: 6, Lane: scratchRepo, By: state.Party{Name: "ahead"}, PID: busy,
 		Phase: state.Waiting, Joined: time.Now().Add(-time.Minute), Seen: time.Now()})
@@ -77,19 +98,10 @@ func TestAMergeBehindABusyLaneWaitsOnInARunOfItsOwn(t *testing.T) {
 	if Code(err) != ExitGateQueued {
 		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateQueued)
 	}
-	var raw []byte
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
-		if raw, err = os.ReadFile(filepath.Join(dir, "spec")); err == nil && json.Valid(raw) { //nolint:gosec // the test's file
-			break
-		}
-	}
-	var spec childSpec
-	if err := json.Unmarshal(raw, &spec); err != nil {
-		t.Fatalf("no spec: %v", err)
-	}
+	spec := launched()
 	want := append([]string{self, "gate", "--queued", "--wait", "1h0m0s", "--"}, mergeArgv(scratchRepo)...)
-	if spec.Argv[0] != self || !slices.Equal(spec.Argv[1:], want[1:]) {
-		t.Errorf("argv %q, want %q", spec.Argv, want)
+	if !slices.Equal(spec.Argv, want) || !slices.Equal(spec.Command, mergeArgv(scratchRepo)) {
+		t.Errorf("argv %q, command %q, want %q", spec.Argv, spec.Command, want)
 	}
 	if spec.Owner.Session != "s1" || spec.Gate != os.Getpid() {
 		t.Errorf("owner %+v, gate %d", spec.Owner, spec.Gate)
@@ -186,5 +198,36 @@ func TestClosedAndMergedPlacesLeaveTheirLane(t *testing.T) {
 	}
 	if d := lastEventOf(t, a, "merged"); !strings.HasPrefix(d, "o/r#2 outside the gate at ") {
 		t.Errorf("merged %q", d)
+	}
+}
+
+// A merge under the budget floor is not refused for good: it is queued for
+// the reset in a run of its own (exit 77), which waits while the budget is
+// under the floor.
+func TestAMergeUnderTheBudgetFloorIsQueuedForTheReset(t *testing.T) {
+	stubGitHub(t, github.Open, "")
+	_, launched := stubSelf(t)
+	a := queueApp(t)
+	a.cfg.Merge.BudgetFresh = config.Duration{Duration: time.Hour}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Budget = &state.Budget{Remaining: 40, Limit: 5000, Reset: time.Now().Add(30 * time.Minute), At: time.Now()}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, false); Code(err) != ExitGateRefused {
+		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateRefused)
+	}
+	if spec := launched(); !slices.Contains(spec.Argv, "--queued") {
+		t.Errorf("not queued: %q", spec.Argv)
+	}
+	if d := lastEventOf(t, a, "merge.queued"); !strings.Contains(d, "the GitHub budget 40 is under the floor 100 until the reset") {
+		t.Errorf("queued event %q", d)
+	}
+	// The queued run waits under the floor instead of refusing.
+	g := &gateRun{app: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo),
+		me: state.Party{Session: "s1", Name: ownerName}, pid: os.Getpid(), queued: true}
+	if why, err := g.step(); err != nil || !strings.Contains(why, "under the floor") {
+		t.Errorf("queued run: %q, %v; want a wait for the reset", why, err)
 	}
 }

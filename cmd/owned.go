@@ -2,16 +2,22 @@ package cmd
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -49,9 +55,157 @@ func (a *app) ownedRun(argv []string) error {
 		gateLine("%v: this runs unowned, its outcome reaches nobody if your turn ends first", err)
 		return exitCode(runChild(argv, os.Stdout))
 	}
-	r := runDetached(childSpec{Argv: argv, Owner: me, Config: a.explicitConfig()}, base, func(int) {})
+	spec := childSpec{Argv: argv, Owner: me, Config: a.explicitConfig()}
+	if lead, ok := claimLead(a.store.Dir(), argv, base); ok {
+		defer releaseLead(a.store.Dir(), argv, base)
+	} else if self, err := selfExe(); err == nil {
+		spec.Argv, spec.Command = []string{self, followRunCmd, lead}, argv
+		gateLine("the same command already polls GitHub on this machine (%s): following its outcome instead of polling again", filepath.Base(lead))
+	}
+	r := runDetached(spec, base, func(int) {})
 	handOver(base, r, cli)
 	return exitCode(r.rc)
+}
+
+// resultKept is how long a finished wait's result file stays for the runs
+// that followed it.
+const resultKept = time.Hour
+
+// leadFile records the run that polls for argv: one devctl wait per command
+// line on the machine, every other run of it follows that one (followRun).
+func leadFile(stateDir string, argv []string) string {
+	sum := sha256.Sum256([]byte(strings.Join(argv[1:], "\x00")))
+	return filepath.Join(stateDir, ownedRuns, "lead-"+hex.EncodeToString(sum[:8]))
+}
+
+// claimLead makes the run at base the poller for argv unless another run of
+// it polls: one whose merge-child runs and has left no result, or that
+// claimed the lead within childStart and has not started yet. It returns
+// that run's base, false, or base, true. It prunes the result files older
+// than resultKept.
+func claimLead(stateDir string, argv []string, base string) (string, bool) {
+	dir := filepath.Join(stateDir, ownedRuns)
+	if old, err := filepath.Glob(filepath.Join(dir, "*"+resultExt)); err == nil {
+		for _, f := range old {
+			if info, err := os.Stat(f); err == nil && time.Since(info.ModTime()) > resultKept {
+				_ = os.Remove(f)
+			}
+		}
+	}
+	lf := leadFile(stateDir, argv)
+	if raw, err := os.ReadFile(lf); err == nil { //nolint:gosec // the gate's own file
+		lead := string(raw)
+		_, finished := readResult(lead)
+		info, _ := os.Stat(lf)
+		pid := readPID(lead)
+		if !finished && (pid != 0 && proc.Alive(pid) || pid == 0 && info != nil && time.Since(info.ModTime()) < childStart) {
+			return lead, false
+		}
+	}
+	if os.WriteFile(lf+".tmp", []byte(base), 0o600) == nil {
+		_ = os.Rename(lf+".tmp", lf)
+	}
+	return base, true
+}
+
+// releaseLead removes argv's lead file while it still names base.
+func releaseLead(stateDir string, argv []string, base string) {
+	lf := leadFile(stateDir, argv)
+	if raw, err := os.ReadFile(lf); err == nil && string(raw) == base { //nolint:gosec // the gate's own file
+		_ = os.Remove(lf)
+	}
+}
+
+// readPID is the pid a run's merge-child recorded, 0 for none.
+func readPID(base string) int {
+	raw, err := os.ReadFile(base + ".pid") //nolint:gosec // the gate's own file
+	if err != nil {
+		return 0
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
+	return pid
+}
+
+// resultExt is the extension of the result a wait's merge-child leaves for
+// the runs that follow it; it outlives the run's other files.
+const resultExt = ".result"
+
+// runResult is a finished wait's outcome for its followers.
+type runResult struct {
+	RC   int    `json:"rc"`
+	Doc  string `json:"doc"`
+	Kept string `json:"kept,omitempty"`
+}
+
+// writeResult leaves r for the runs that follow base, written whole.
+func writeResult(base string, r runResult) {
+	raw, _ := json.Marshal(r)
+	if os.WriteFile(base+resultExt+".tmp", raw, 0o600) == nil { //nolint:gosec // the gate's own file
+		_ = os.Rename(base+resultExt+".tmp", base+resultExt) //nolint:gosec // as above
+	}
+}
+
+// readResult reads the result the run at base left, false while it has none.
+func readResult(base string) (runResult, bool) {
+	var r runResult
+	raw, err := os.ReadFile(base + resultExt) //nolint:gosec // the gate's own file
+	return r, err == nil && json.Unmarshal(raw, &r) == nil
+}
+
+// followRunCmd is the hidden command a run of a command another run already
+// polls for runs instead of devctl.
+const followRunCmd = "follow-run"
+
+func (a *app) followRunCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:    followRunCmd + " <base>",
+		Short:  "Follow another run's devctl wait: its stderr, document and exit code",
+		Hidden: true,
+		Args:   cobra.ExactArgs(1),
+		PersistentPreRunE: func(*cobra.Command, []string) error {
+			return nil
+		},
+		RunE: func(_ *cobra.Command, args []string) error {
+			return exitCode(followRun(args[0], os.Stdout, os.Stderr))
+		},
+	}
+}
+
+// followRun copies the stderr of the run at lead onto stderr as it grows,
+// then writes the run's document to stdout and returns its exit code, 137
+// when the run is gone without a result.
+func followRun(lead string, stdout, stderr io.Writer) int {
+	log, err := os.Open(lead + ".log") //nolint:gosec // the gate's own file
+	if err == nil {
+		defer func() { _ = log.Close() }()
+	}
+	for gone := 0; ; {
+		if log == nil {
+			if log, err = os.Open(lead + ".log"); err == nil { //nolint:gosec // as above
+				defer func() { _ = log.Close() }()
+			}
+		}
+		if log != nil {
+			_, _ = io.Copy(stderr, log)
+		}
+		if r, ok := readResult(lead); ok {
+			if log != nil {
+				_, _ = io.Copy(stderr, log)
+			}
+			_, _ = io.WriteString(stdout, r.Doc)
+			if r.Kept != "" {
+				_, _ = fmt.Fprintf(stderr, "%sthe followed run's output is kept in %s\n", GatePrefix, r.Kept)
+			}
+			return r.RC
+		}
+		if pid := readPID(lead); pid != 0 && !proc.Alive(pid) {
+			if gone++; gone > 5 { // its result may still be on its way
+				_, _ = fmt.Fprintf(stderr, "%sthe followed run (pid %d) is gone without its outcome: run the command again\n", GatePrefix, pid)
+				return 128 + int(syscall.SIGKILL)
+			}
+		}
+		time.Sleep(followPoll)
+	}
 }
 
 // unsafeName is what a file name of a run leaves out.
@@ -161,8 +315,8 @@ func (a *app) tellOwner(ctx context.Context, r childResult) {
 // merge's release), else devctl's last stderr line.
 func (r childResult) outcome() string {
 	argv := r.spec.Argv
-	if i := slices.Index(argv, "--"); i >= 0 && slices.Contains(argv[:i], "gate") {
-		argv = argv[i+1:] // a queued merge's run: the devctl command it gates
+	if len(r.spec.Command) > 0 {
+		argv = r.spec.Command
 	}
 	if len(argv) == 0 {
 		argv = []string{"devctl"}
