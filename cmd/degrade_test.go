@@ -136,6 +136,9 @@ func TestMissingPartRefuses(t *testing.T) {
 	if got, want := err.Error(), "Machine.Processes: not available on "+platform.Name(); got != want {
 		t.Errorf("the refusal says %q, want %q", got, want)
 	}
+	if err := a.uiCmd().RunE(nil, nil); !platform.Missing(err) || Code(err) != ExitRefused {
+		t.Errorf("ui on the stub = %v (exit %d), want not available, exit %d", err, Code(err), ExitRefused)
+	}
 	if err := plat.Launcher.Start(platform.Unit{Name: "x"}); Code(err) != ExitRefused {
 		t.Errorf("an agent's unit start on the stub exits %d, want %d", Code(err), ExitRefused)
 	}
