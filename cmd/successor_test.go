@@ -357,7 +357,10 @@ func TestStandbySucceedsAGoneDesktopSupervisorAtOnce(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), true)
 	var succeeded atomic.Int32
 	w.stand = standbyWatch{
-		revive: func(context.Context, role, state.Party, string) error { t.Error("revived a desktop session"); return nil },
+		revive: func(context.Context, role, state.Party, string) error {
+			t.Error("revived a desktop session")
+			return nil
+		},
 		succeed: func(context.Context, role, state.Party) (state.Party, error) {
 			succeeded.Add(1)
 			return state.Party{}, nil
