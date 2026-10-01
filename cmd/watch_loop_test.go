@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -102,6 +103,109 @@ func runWatch(t *testing.T, w *watcher) {
 	})
 }
 
+// fakeClock is a watch's time that moves only when its test steps it: no
+// loop test waits on the wall clock, which a loaded machine stretches.
+// Every wait on it ends in a failure after a minute, the one bound.
+type fakeClock struct {
+	t     *testing.T
+	guard <-chan time.Time
+	mu    sync.Mutex
+	now   time.Time
+	// timers are the armed timers; armed is signalled when one is added.
+	timers map[*fakeTimer]bool
+	armed  chan struct{}
+}
+
+type fakeTimer struct {
+	at   time.Time
+	fire chan time.Time
+}
+
+func newFakeClock(t *testing.T) *fakeClock {
+	return &fakeClock{t: t, guard: time.After(time.Minute), now: time.Now(),
+		timers: map[*fakeTimer]bool{}, armed: make(chan struct{}, 1)}
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *fakeClock) Timer(d time.Duration) (<-chan time.Time, func()) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	tm := &fakeTimer{at: c.now.Add(d), fire: make(chan time.Time, 1)}
+	if d <= 0 {
+		tm.fire <- c.now
+		return tm.fire, func() {}
+	}
+	c.timers[tm] = true
+	select {
+	case c.armed <- struct{}{}:
+	default:
+	}
+	return tm.fire, func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		delete(c.timers, tm)
+	}
+}
+
+// advance moves the time by d and fires the timers due.
+func (c *fakeClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.moveTo(c.now.Add(d))
+}
+
+func (c *fakeClock) moveTo(at time.Time) {
+	c.now = at
+	for tm := range c.timers {
+		if !tm.at.After(at) {
+			tm.fire <- at
+			delete(c.timers, tm)
+		}
+	}
+}
+
+// settle waits until n timers are armed: every loop of the watch waits.
+func (c *fakeClock) settle(n int) {
+	c.t.Helper()
+	for {
+		c.mu.Lock()
+		k := len(c.timers)
+		c.mu.Unlock()
+		if k >= n {
+			return
+		}
+		select {
+		case <-c.armed:
+		case <-c.guard:
+			c.t.Fatalf("%d of %d timers armed after a minute", k, n)
+		}
+	}
+}
+
+// step waits until n timers are armed and moves the time to the earliest.
+func (c *fakeClock) step(n int) {
+	c.t.Helper()
+	c.settle(n)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var next time.Time
+	for tm := range c.timers {
+		if next.IsZero() || tm.at.Before(next) {
+			next = tm.at
+		}
+	}
+	c.moveTo(next)
+}
+
+// loopTimers are the timers a standby watch's loops arm when they all wait:
+// the machine sample's and the poll's.
+const loopTimers = 2
+
 // eventually waits up to within for cond.
 func eventually(within time.Duration, cond func() bool) bool {
 	for end := time.Now().Add(within); time.Now().Before(end); time.Sleep(10 * time.Millisecond) {
@@ -114,8 +218,8 @@ func eventually(within time.Duration, cond func() bool) bool {
 
 // A lane read that hangs, as kubectl does on a starved machine, delays
 // neither the machine's lines nor the next poll: the memory breach is said
-// within one interval, the polls go on, and the hung read is not started a
-// second time while it runs.
+// before the first interval ends, the polls go on, and the hung read is not
+// started a second time while it runs.
 func TestWatchSamplesTheMachineWhileALaneReadHangs(t *testing.T) {
 	needsPlatform(t)
 	release := make(chan struct{})
@@ -131,13 +235,22 @@ func TestWatchSamplesTheMachineWhileALaneReadHangs(t *testing.T) {
 		<-release
 		return nil, nil
 	})
-	start := time.Now()
+	clk := newFakeClock(t)
+	w.clock = clk
 	runWatch(t, w)
-	if !eventually(200*time.Millisecond, func() bool { return strings.Contains(out.String(), "LOW RAM") }) {
+	clk.settle(loopTimers)
+	if !strings.Contains(out.String(), "LOW RAM") {
 		t.Fatalf("no LOW RAM line within one watch.interval while a lane read hangs:\n%s", out.String())
 	}
-	if !eventually(2*time.Second, func() bool { return w.polls.Load() >= 4 }) {
-		t.Fatalf("%d polls in %s while a lane read hangs", w.polls.Load(), time.Since(start).Round(time.Millisecond))
+	start := clk.Now()
+	for w.polls.Load() < 4 {
+		clk.step(loopTimers)
+		clk.settle(loopTimers)
+	}
+	// The hung read holds its poll up for at most one interval of the wall
+	// clock, inside the poll's own: the polls at 0 to 3 intervals.
+	if took := clk.Now().Sub(start); took != 3*200*time.Millisecond {
+		t.Fatalf("%d polls in %s while a lane read hangs", w.polls.Load(), took)
 	}
 	if n := reads.Load(); n != 1 {
 		t.Fatalf("the hung lane read was started %d times, want once", n)
@@ -148,6 +261,7 @@ func TestWatchSamplesTheMachineWhileALaneReadHangs(t *testing.T) {
 // times less often and at nice 10, said once as READS SLOWED.
 func TestWatchSlowsInstallationReadsUnderCPUPressure(t *testing.T) {
 	needsPlatform(t)
+	const intervals = 12
 	count := func(extra string) (reads, niced int32, out string) {
 		var r, n atomic.Int32
 		w, o := loopWatcher(t, "250ms", extra, func(ctx context.Context, _ config.Lane) ([]merge.HelmRelease, error) {
@@ -157,16 +271,24 @@ func TestWatchSlowsInstallationReadsUnderCPUPressure(t *testing.T) {
 			}
 			return nil, nil
 		})
+		clk := newFakeClock(t)
+		w.clock = clk
 		runWatch(t, w)
-		time.Sleep(3 * time.Second)
+		for end := clk.Now().Add(intervals * 250 * time.Millisecond); clk.Now().Before(end); {
+			clk.step(loopTimers)
+		}
+		// The last poll is done once its loop waits again.
+		clk.settle(loopTimers)
 		return r.Load(), n.Load(), o.String()
 	}
 	idle, idleNiced, _ := count(", loadMax: 1000000, cpuPSIMax: 1000")
 	strained, strainedNiced, out := count(", loadMax: 1000000, cpuPSIMax: -1")
-	if idle < 8 || strained*2 >= idle {
-		t.Errorf("%d lane reads under CPU pressure against %d idle in 3s, want about a quarter", strained, idle)
+	// A read every poll, at 0 to 12 intervals, against one every slowReads.
+	if idle != intervals+1 || strained != intervals/slowReads+1 {
+		t.Errorf("%d lane reads under CPU pressure against %d idle in %d intervals, want %d and %d",
+			strained, idle, intervals, intervals/slowReads+1, intervals+1)
 	}
-	if idleNiced != 0 || strained == 0 || strainedNiced < strained-1 {
+	if idleNiced != 0 || strainedNiced != strained {
 		t.Errorf("%d of %d reads niced under CPU pressure, %d of %d idle", strainedNiced, strained, idleNiced, idle)
 	}
 	if strings.Count(out, "READS SLOWED: machine under CPU pressure") != 1 {
@@ -176,22 +298,32 @@ func TestWatchSlowsInstallationReadsUnderCPUPressure(t *testing.T) {
 
 // A loop whose run overruns its interval skips the ticks it missed.
 func TestLoopSkipsMissedTicks(t *testing.T) {
-	w := &watcher{}
-	ctx, cancel := context.WithTimeout(context.Background(), 450*time.Millisecond)
+	clk := newFakeClock(t)
+	w := &watcher{clock: clk}
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	var runs []time.Time
-	w.loop(ctx, 100*time.Millisecond, false, func(context.Context) {
-		runs = append(runs, time.Now())
-		if len(runs) == 1 {
-			time.Sleep(250 * time.Millisecond)
-		}
-	})
+	start := clk.Now()
+	var runs []time.Duration
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		w.loop(ctx, 100*time.Millisecond, false, func(context.Context) {
+			runs = append(runs, clk.Now().Sub(start))
+			switch len(runs) {
+			case 1:
+				clk.advance(250 * time.Millisecond)
+			case 3:
+				cancel()
+			}
+		})
+	}()
+	clk.step(1)
+	clk.step(1)
+	<-done
 	// Runs at 0 (overrunning to 250ms), 300 and 400: the ticks at 100 and
 	// 200 are skipped, not run back to back at 250.
-	if len(runs) != 3 {
-		t.Fatalf("%d runs, want 3", len(runs))
-	}
-	if gap := runs[1].Sub(runs[0]); gap < 290*time.Millisecond {
-		t.Fatalf("the run after an overrun started %s after it, a queued tick", gap)
+	want := []time.Duration{0, 300 * time.Millisecond, 400 * time.Millisecond}
+	if !slices.Equal(runs, want) {
+		t.Fatalf("runs at %v, want %v", runs, want)
 	}
 }
