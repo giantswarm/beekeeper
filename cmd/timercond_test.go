@@ -12,9 +12,16 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// The probes that hold and fail, and a condition the tests wait on.
+const (
+	probeHolds = "true"
+	probeFails = "false"
+	prMerged7  = "pr-merged o/r#7"
+)
+
 func TestTimerConditionsProbeTheirReference(t *testing.T) {
 	for when, want := range map[string]string{
-		"pr-merged o/r#7":    "gh api repos/o/r/pulls/7 --jq .merged",
+		prMerged7:            "gh api repos/o/r/pulls/7 --jq .merged",
 		"issue-closed o/r#8": "gh api repos/o/r/issues/8 --jq .state",
 		"helmrelease-ready teleport.example.io-mc/flux-giantswarm/backstage": "kubectl --context teleport.example.io-mc -n flux-giantswarm get helmrelease backstage",
 		"controlplane-ready admin@mc/org-x/wc1":                              "get kubeadmcontrolplane wc1",
@@ -29,7 +36,7 @@ func TestTimerConditionsProbeTheirReference(t *testing.T) {
 			t.Errorf("%q passed", when)
 		}
 	}
-	if _, github, _ := conditionProbe("pr-merged o/r#7"); !github {
+	if _, github, _ := conditionProbe(prMerged7); !github {
 		t.Error("pr-merged does not read GitHub")
 	}
 }
@@ -43,9 +50,10 @@ func TestTimersOnOneReferenceShareOneCheck(t *testing.T) {
 	for i := range 10 {
 		timers = append(timers, state.Timer{ID: i + 1, Due: relayNow.Add(-time.Minute), Probe: probe})
 	}
-	timers = append(timers, state.Timer{ID: 11, Due: relayNow.Add(time.Minute), Probe: "true"})
+	timers = append(timers, state.Timer{ID: 11, Due: relayNow.Add(time.Minute), Probe: probeHolds})
 	held := checkTimers(context.Background(), timers, relayNow, false)
-	if b, _ := os.ReadFile(count); string(b) != "x\n" || len(held) != 10 || held[1] {
+	b, _ := os.ReadFile(count) //nolint:gosec // the test's temp file
+	if string(b) != "x\n" || len(held) != 10 || held[1] {
 		t.Fatalf("ran %q, held %v", b, held)
 	}
 	for i := range timers {
@@ -54,7 +62,7 @@ func TestTimersOnOneReferenceShareOneCheck(t *testing.T) {
 	if held := checkTimers(context.Background(), timers, relayNow.Add(time.Minute), false); len(held) != 0 {
 		t.Fatalf("checked again within the interval: %v", held)
 	}
-	gh := []state.Timer{{ID: 1, Due: relayNow, When: "pr-merged o/r#7"}}
+	gh := []state.Timer{{ID: 1, Due: relayNow, When: prMerged7}}
 	if held := checkTimers(context.Background(), gh, relayNow, true); len(held) != 0 {
 		t.Fatalf("read GitHub under the floor: %v", held)
 	}
@@ -77,7 +85,7 @@ func TestConditionalTimerWakesItsAgentOnceItHolds(t *testing.T) {
 	t.Cleanup(func() { wakeOwner = wasWake })
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{{Party: state.Party{Session: "s9", Name: "BK 228"}}}
-		st.Timers = []state.Timer{{ID: 1, Due: relayNow.Add(-time.Minute), When: "pr-merged o/r#7", Wake: "BK 228", What: "rebase on it"}}
+		st.Timers = []state.Timer{{ID: 1, Due: relayNow.Add(-time.Minute), When: prMerged7, Wake: "BK 228", What: "rebase on it"}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -110,11 +118,11 @@ func TestConditionalTimerWakesItsAgentOnceItHolds(t *testing.T) {
 func TestTimersTimeOutExpireAndFireAtTheirTime(t *testing.T) {
 	past := relayNow.Add(-time.Hour)
 	st := &state.State{Timers: []state.Timer{
-		{ID: 1, Due: past, Probe: "false", Until: relayNow, Wake: "a", What: "late"},
-		{ID: 2, Due: past, Probe: "false", Until: relayNow, Expire: true, What: "moot"},
+		{ID: 1, Due: past, Probe: probeFails, Until: relayNow, Wake: "a", What: "late"},
+		{ID: 2, Due: past, Probe: probeFails, Until: relayNow, Expire: true, What: "moot"},
 		{ID: 3, Due: past, What: "plain"},
 		{ID: 4, Due: past, Wake: "a", What: "now"},
-		{ID: 5, Due: past, Probe: "false", Until: relayNow.Add(time.Hour), What: "waits"},
+		{ID: 5, Due: past, Probe: probeFails, Until: relayNow.Add(time.Hour), What: "waits"},
 		{ID: 6, Due: relayNow.Add(time.Hour), Wake: "a", What: "later"},
 	}}
 	lines, evs, fires, changed := settleTimers(st, map[int]bool{5: false}, relayNow)
@@ -161,8 +169,8 @@ func TestTimerAddRefusesWhatCannotFire(t *testing.T) {
 	due := relayNow.Add(time.Minute)
 	for name, spec := range map[string]timerSpec{
 		"until without a condition": {until: "1h"},
-		"expire without until":      {probe: "true", expire: true},
-		"until before the time":     {probe: "true", until: "30s"},
+		"expire without until":      {probe: probeHolds, expire: true},
+		"until before the time":     {probe: probeHolds, until: "30s"},
 		"an unknown condition":      {when: "pr-open o/r#1"},
 		"an unknown agent":          {wake: "nobody"},
 	} {
@@ -170,8 +178,8 @@ func TestTimerAddRefusesWhatCannotFire(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	tm, err := a.timerFrom(timerSpec{when: "pr-merged o/r#7", until: "2h", expire: true}, due)
-	if err != nil || tm.When != "pr-merged o/r#7" || !tm.Until.Equal(relayNow.Add(2*time.Hour).UTC()) {
+	tm, err := a.timerFrom(timerSpec{when: prMerged7, until: "2h", expire: true}, due)
+	if err != nil || tm.When != prMerged7 || !tm.Until.Equal(relayNow.Add(2*time.Hour).UTC()) {
 		t.Fatalf("%+v, %v", tm, err)
 	}
 	if s := timerWhen(relayNow, tm); s != "from 02:01 when pr-merged o/r#7, until 04:00 (then expires)" {

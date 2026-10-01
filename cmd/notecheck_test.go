@@ -59,7 +59,7 @@ func TestNoteForPersonRefusesWhatItLacks(t *testing.T) {
 		"no default":         {func(d *noteDraft) { d.Default = "" }, "is no action"},
 		"claim unchecked":    {func(d *noteDraft) { d.StatusQuo = "CI is green" }, `"green" without --checked`},
 		"login, no probe":    {func(d *noteDraft) { d.Kind = noteLogin }, "--until"},
-		"probe, no login":    {func(d *noteDraft) { d.Until = "true" }, "--until without --kind login"},
+		"probe, no login":    {func(d *noteDraft) { d.Until = probeHolds }, "--until without --kind login"},
 		"status only":        {func(d *noteDraft) { d.Question = "Board pull 83 finished its epic." }, "asks nothing"},
 		"status, to the log": {func(d *noteDraft) { d.Question = "worker done" }, "beekeeper log add"},
 	} {
@@ -137,8 +137,8 @@ func TestNoteOnTheSameRefAndVerbFolds(t *testing.T) {
 
 func TestLoginNoteClosesOnceItsProbePasses(t *testing.T) {
 	st := &state.State{Notes: []state.Note{
-		{ID: 1, Kind: noteLogin, Until: "true", Text: "sign in"},
-		{ID: 2, Kind: noteLogin, Until: "false", Text: "sign in elsewhere"},
+		{ID: 1, Kind: noteLogin, Until: probeHolds, Text: "sign in"},
+		{ID: 2, Kind: noteLogin, Until: probeFails, Text: "sign in elsewhere"},
 		{ID: 3, Text: "no probe"},
 	}}
 	passed := probeLogins(context.Background(), st.Notes)
