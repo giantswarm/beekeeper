@@ -192,7 +192,101 @@ const stewardPreamble = "beekeeper, the machine's session coordinator, asks this
 // retitleRequest is the message that has a steward set the desktop title of
 // session (its local_ id, or "self").
 func retitleRequest(session, name string) string {
-	return fmt.Sprintf(stewardPreamble+"the desktop lost the title of a worker beekeeper started. Call mcp__ccd_session_mgmt__set_session_title once with session_id %q and title %q (its roster name), then end the turn without another tool call and without a reply.", session, name)
+	return restoreRequest(session, name, "")
+}
+
+// restoreRequest is the message that has a steward set what the desktop
+// lost of a worker's session (its local_ id, or "self" for the title only):
+// the title, unless empty, and the model, unless empty. The desktop refuses
+// a session's switch of its own model, so a model goes to another session.
+func restoreRequest(session, title, model string) string {
+	var calls, lost []string
+	if title != "" {
+		lost = append(lost, "title")
+		calls = append(calls, fmt.Sprintf("mcp__ccd_session_mgmt__set_session_title once with session_id %q and title %q (its roster name)", session, title))
+	}
+	if model != "" {
+		lost = append(lost, "model")
+		calls = append(calls, fmt.Sprintf("mcp__ccd_session_mgmt__set_session_model with session_id %q and model %q (the model its first turn ran on; when the result lists the offered ids instead, once more with the id it lists for that model)", session, model))
+	}
+	return fmt.Sprintf(stewardPreamble+"the desktop lost the %s of a worker beekeeper started. Call %s, then end the turn without another tool call and without a reply.", strings.Join(lost, " and "), strings.Join(calls, ", then "))
+}
+
+// The desktop's import of a start, handling its link twice, often keeps the
+// record of the import that lost the transcript's read: no title and no
+// model, and a session without a model runs every desktop turn on the
+// desktop's default instead of the model its first turn ran on.
+
+// keepImport gives the desktop record of a started session, once imported,
+// the title (its name) and the model (its first turn's) the import dropped,
+// through a steward other than the session itself, and puts the record as
+// the desktop keeps it then into sa. It returns what it found or did, one
+// line, empty when the import kept both.
+func (a *app) keepImport(ctx context.Context, id, name string, sa *startedAgent) string {
+	host := "local_" + id
+	record := func() claude.Record {
+		if r, ok := claude.ReadRecord(a.cfg, host); ok {
+			return *r
+		}
+		return claude.Record{}
+	}
+	var model string
+	if m, _ := filepath.Glob(filepath.Join(a.cfg.Claude.ProjectsDir, "*", id+".jsonl")); len(m) > 0 {
+		model, _ = claude.Model(m[0])
+	}
+	find := func(_ context.Context, tried []string) (steward, error) {
+		return a.findSteward(host, append(tried, host))
+	}
+	line, err := restoreImport(ctx, host, name, model, record, find, a.peerSend, retitleWait)
+	if err != nil {
+		line = err.Error()
+	}
+	r := record()
+	sa.title, sa.model = r.Title, r.Model
+	return line
+}
+
+// restoreImport is keepImport's decision: record reads the desktop's record
+// of host, name and model are what it should hold, find picks the steward,
+// send delivers the request. A record holding a model holds the one the
+// steward set: the desktop records the id its picker offers, which can
+// differ from the transcript's.
+func restoreImport(ctx context.Context, host, name, model string, record func() claude.Record, find stewardFinder,
+	send func(ctx context.Context, to, msg string) error, wait time.Duration,
+) (string, error) {
+	lost := func() (title, mdl string) {
+		r := record()
+		if r.Title != name {
+			title = name
+		}
+		if r.Model == "" {
+			mdl = model
+		}
+		return title, mdl
+	}
+	title, mdl := lost()
+	if title == "" && mdl == "" {
+		return "", nil
+	}
+	var what []string
+	if title != "" {
+		what = append(what, "title")
+	}
+	if mdl != "" {
+		what = append(what, "model "+mdl)
+	}
+	dropped := strings.Join(what, " and ")
+	msg := func(steward) string { return restoreRequest(host, title, mdl) }
+	done := func() bool { t, m := lost(); return t == "" && m == "" }
+	s, err := delegate(ctx, find, msg, done, send, wait)
+	if err != nil {
+		return "", fmt.Errorf("the desktop's import dropped its %s: %w", dropped, err)
+	}
+	them := "it"
+	if len(what) > 1 {
+		them = "them"
+	}
+	return fmt.Sprintf("the desktop's import dropped its %s: %s set %s", dropped, s.who(host), them), nil
 }
 
 // archiveRequest is the message that has steward s archive the desktop
