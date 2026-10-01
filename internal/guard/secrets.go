@@ -3,6 +3,7 @@ package guard
 import (
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -61,7 +62,8 @@ var (
 		"  kubectl get secret <name> -o jsonpath='{.data.<key>}' | base64 -d | wc -c   (the length)"
 	sopsSafe = "  sops runs only in beekeeper, never in an agent session, encryption included.\n" +
 		"  yq '.stringData|keys' <file>   (a SOPS file keeps its key names in plaintext)"
-	opSafe     = "  op runs only in beekeeper, never in an agent session: beekeeper secret reads the shared vault."
+	opSafe = "  op run -- <command>   (masks the values in the output; the command it runs is checked on its own)\n" +
+		"  Every other op command runs only in beekeeper, never in an agent session: beekeeper secret reads the shared vault."
 	cryptSafe  = "  Decryption runs only in beekeeper, never in an agent session."
 	vaultSafe  = "  vault kv get -format=json <path> | jq '.data.data|keys'\n  vault kv metadata get <path>\n  vault kv list <path>"
 	base64Safe = "  … | base64 -d | wc -c   (the length)"
@@ -258,6 +260,14 @@ func toolLeak(words []string) *leak {
 	case name == sopsCmd:
 		return &leak{what: "sops, which runs only in beekeeper", safe: sopsSafe, never: true}
 	case name == "op":
+		// op run masks the values in its command's output; the command it
+		// runs is a command of its own, with the same guard.
+		if len(sub) > 0 && sub[0] == "run" && !hasAny(args, "--no-masking") {
+			if i := slices.Index(args, "--"); i >= 0 {
+				return toolLeak(args[i+1:])
+			}
+			return nil
+		}
 		return &leak{what: "op, which runs only in beekeeper", safe: opSafe, never: true}
 	case name == "vault":
 		return vaultLeak(args)

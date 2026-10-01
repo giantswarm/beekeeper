@@ -292,8 +292,10 @@ Refused in every form, since beekeeper is the only process that reads, creates, 
 decrypts secrets:
 
 - `sops` (decrypting and encrypting alike, `helm secrets` included) and `op` (`op read`, `op item`,
-  `op run`, `op whoami`, …), also behind `sudo`, `env`, `timeout`, `xargs` and `beekeeper run`;
-  `age -d` and `gpg --decrypt`.
+  `op whoami`, `op run --no-masking`, …), also behind `sudo`, `env`, `timeout`, `xargs` and
+  `beekeeper run`; `age -d` and `gpg --decrypt`. The one exception until `beekeeper secret` ships:
+  `op run -- <command>`, whose output op masks; the command it runs is checked as a command of its
+  own (`op run -- sops -d x` and `op run -- kubectl get secret x -o yaml` are refused).
 - `kubectl edit` of a Secret and `kubectl view-secret`.
 - A hash (`sha*sum`, `md5sum`, `b2sum`, `cksum`, `openssl dgst`) or a diff (`diff`, `cmp`, `git diff
   --no-index`, …) of a file whose name says it holds secrets in plaintext (`secrets.yaml`,
