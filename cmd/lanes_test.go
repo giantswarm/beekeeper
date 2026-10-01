@@ -19,6 +19,7 @@ import (
 // stalled in lanes and one LANE STALLED line of the watch, folded while it
 // lasts.
 func TestLanesAndWatchSayAStall(t *testing.T) {
+	needsPlatform(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, []byte("stateDir: "+dir+"\nlanes: [{name: ap, repositories: [giantswarm/klaus]}]\n"), 0o600); err != nil {
