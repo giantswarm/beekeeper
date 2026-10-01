@@ -32,7 +32,7 @@ beekeeper install --dry-run   # every file, hook and service step; changes nothi
 beekeeper install
 ```
 
-`install` merges the PreToolUse, PermissionRequest and SessionStart hooks into Claude Code's user settings
+`install` merges the PreToolUse, PermissionRequest, PostToolUse and SessionStart hooks into Claude Code's user settings
 (`~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR`) with the binary's absolute path, writes and
 starts the [standby service](#desktop-notifications) (a systemd user unit, a launch agent on
 macOS), with `teleport.proxy` set the [Teleport login's keeper](#the-teleport-login), and on systemd the memory guard sized to the machine's RAM: `memcap.slice` for `beekeeper
@@ -131,6 +131,8 @@ a relayed successor opens with the plugin's role.
 | `beekeeper log [--verb PREFIX]` | Every claim, grant, hold, registration, note, timer, session record and build run, as they happened; `--verb run.` shows only the runs. |
 | `beekeeper run [--max SIZE] [--wait DURATION] -- <command>` | Run a build, test or lint command in one of the machine's build slots (memcap's, shared with the `memcap` wrapper) inside a memory-capped systemd scope. When every slot is held it waits once, then exits 75 with the holders; when the cap fires the kernel kills the biggest process in the scope only, and `run` exits 137 with one line starting `beekeeper run: the <SIZE> cap killed:`. Each run leaves `run.start` and `run.end` in `beekeeper log` with its scope, session and command, so `snapshot` and `watch` name a cap kill's session and command after the run has ended. `MEMCAP_TEST=1` marks a test's run: its scope is `memcap-test-…`, and a kill in it is reported as a test kill (one quiet `test kill:` line in `watch`), never as a build's. |
 | `beekeeper hook pretooluse` | The PreToolUse hook (matcher `Bash|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage|mcp__.*`): rewrites build, test, lint and lab commands to `<this binary> run -- zsh -c '<command>'` with the command verbatim and the tool timeout at 10 minutes (a background run waits 60 minutes), and refuses a third kind cluster, listing the held leases. It puts the gate in front of every `devctl pr merge`, `pr wait`, `release wait` and `rollout wait`, behind prefix commands and in pipelines and lists, and refuses one hidden in a `-c` string (below); every other devctl command passes untouched. It refuses a command that would print secret values (below, [Secret reads](#secret-reads)) and a call that would send one off the machine ([What leaves the machine](#what-leaves-the-machine)), a kube context switch, a write to production and `op item get` ([Kube contexts, production writes and op item get](#kube-contexts-production-writes-and-op-item-get)), a command that opens a page in the person's browser (`muster auth login`, `gh auth login --web`, `xdg-open`) outside the session holding the `browser` lease, a command that loads a model on the host's model server outside the session holding `model-server` ([The model server](#the-model-server)), an `AskUserQuestion` call outside the guide's session ([Questions go to the guide](#questions-go-to-the-guide)), and in the guide's session the calls that do work and a question without its status quo, why and full links ([The guide asks and relays](#the-guide-asks-and-relays-it-never-works-itself)). A `SendMessage` to `the supervisor` or `the guide` goes to the session holding that role now, by the name its running CLI answers to (else its desktop session), so a brief names the role and a relay never makes it stale. A `SendMessage` to a desktop id (`local_…`) whose session has a running CLI goes to that CLI by name, so a headless turn gets no second copy beside it (below, [Waking a session](#waking-a-session)). A session's first write or `git commit` in another repository carries that repository's `CLAUDE.md`, `AGENTS.md`, rules and mandatory reads ([A repository's instructions on the first write](#a-repositorys-instructions-on-the-first-write)). |
+| `beekeeper hook posttooluse` | The PostToolUse hook (matcher `*`): replaces a tool result that carries an indexed secret value or a token pattern with its redacted copy before the model sees it, logs `scan.redact` and files one rotation note per indexed reference (see [What reaches the model](#what-reaches-the-model)). |
+| `beekeeper scan [index\|add <ref>\|sweep]` | The transcript value scanner: without a subcommand what the fingerprint index holds; `index` rebuilds it from `scan.sops` and `scan.vaults`, `add` indexes one value from stdin, `sweep` counts each reference and token rule in every transcript, never a value (see [What reaches the model](#what-reaches-the-model)). |
 | `beekeeper hook sessionstart` | The SessionStart hook: writes the agent shell's prelude into the session's environment file (`$CLAUDE_ENV_FILE`), which Claude Code sources before parsing each Bash command. It removes the aliases and shell functions of `agents.shell.unalias` (default `grep`, `find`, `ls`, `cp`, `mv`, `rm`, the harness's own `grep` and `find` shadows among them), so each name runs the tool on `PATH`, and with `agents.shell.globs: literal` (the default) an unmatched glob stays as written instead of failing the command with zsh's `no matches found`. The person's interactive setup stays theirs; an agent writes its commands for the plain tools. |
 | `beekeeper lint briefs <file or folder>...` | Refuses dated lines, "until X ships" clauses, notes on the release that fixed something, workarounds and role run numbers in skills and briefs (every Markdown file below a folder), one `path:line: rule: why` per finding, exit 3 on any. |
 | `beekeeper hook permissionrequest` | The PermissionRequest hook: answers `allow` only for a session `agents start` started in bypass that now runs in `acceptEdits`; every other request gets no answer, so the person sees the normal card. Below. |
@@ -342,6 +344,38 @@ The watch sweeps `outbound.sweepRoots` (the home directory) `outbound.sweepDepth
 interval for world-readable private keys (`id_*`, `*.pem`, `*.key`, `*.ppk` with a private key header)
 and git repositories whose remote URL carries a credential, skipping caches and dependency trees: one
 `EXPOSED <path>: <what>` line each, never the content, and an ENDED line once it is fixed.
+
+## What reaches the model
+
+The guards above refuse command shapes they know; a shape they do not know still prints. The value
+scanner matches the values themselves. beekeeper keeps an index of keyed fingerprints (HMAC-SHA256
+under a key only it reads, `scan/key` in the state directory, both files `0600`) of every value it can
+reach, each naming the reference to rotate. The index never holds a value. `beekeeper scan index`
+fills it from the SOPS files `scan.sops` names (decrypted by `sops -d` in beekeeper's own process) and
+the concealed fields of the 1Password vaults `scan.vaults` names (`op item get --reveal`), replacing
+what earlier runs indexed from them; `beekeeper scan add <ref>` indexes one value read from stdin.
+Each value is indexed as written, in its base64 forms, line by line (and the value of a `key: value`
+or `KEY=value` line), and, for base64 text, decoded; values shorter than `scan.minLength` (12) are
+not, since they would match ordinary output. `beekeeper scan` prints what the index holds.
+
+The PostToolUse hook, `beekeeper hook posttooluse` (`beekeeper install` registers it for every
+tool), runs on each tool result before the model sees it. It splits every string of the result into
+candidate strings (the tokens between whitespace, quotes and brackets, and their parts between `=`,
+`:`, `@` and `/`), fingerprints the candidates of an indexed length, and runs the outbound guard's
+token patterns beside them for values the index does not hold (a line marked `gitleaks:allow` keeps
+its pattern matches). With a hit, the hook replaces the result with the same result, each hit
+replaced by `[redacted: <reference or rule>]`, and the session goes on: the value never reached the
+model, so ending the session would protect nothing more. Claude Code writes the replaced result to
+the transcript on disk as well (checked with Claude Code 2.1.286), so the value is in neither. Each
+redaction is a `scan.redact` event naming the tool and the references and rules with their counts;
+an indexed reference also gets a rotation note for `guide.person`, one open note per reference. It is
+still a filter, matching known values in known encodings: a value split across tokens or encoded
+otherwise passes.
+
+`beekeeper scan sweep` reads every transcript under `claude.projectsDir` (the sessions' and
+subagents' `.jsonl` files, each line's strings decoded, and the spilled tool results in
+`tool-results/`) and prints each reference and token rule it finds, with how often and in how many
+files, never a value or where it was: the list of what leaked before the hook ran.
 
 ## Questions go to the guide
 
@@ -1067,6 +1101,7 @@ The organisation and desk keys, and their defaults:
 | `watch.tmpMaxMiB`, `watch.diskMinMiB` | 45% of `/tmp`, 5% of `/` | TMPFS, LOW DISK |
 | `ollama.url`, `lemonade.url` | unset: no model server | The host's model servers, watched and guarded under the `model-server` lease |
 | `outbound.phrases`, `outbound.paths`, `outbound.storeDeny` | none | What never leaves the machine, the plan files whose writes are outbound, the refused secret-store writes ([What leaves the machine](#what-leaves-the-machine)) |
+| `scan.sops`, `scan.vaults`, `scan.minLength` | none, none, 12 | The SOPS file globs and 1Password vaults `beekeeper scan index` fingerprints, and the shortest value it takes ([What reaches the model](#what-reaches-the-model)) |
 | `plans.repositories`, `plans.check` | none, `plan-stages` | The plans repositories whose open pull requests a note for `guide.person` links only once their stage check is green |
 | `outbound.sweepRoots`, `outbound.sweepDepth` | the home directory, 5 | Where the watch looks for exposed keys and credentials in remote URLs |
 

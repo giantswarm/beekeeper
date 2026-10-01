@@ -238,6 +238,40 @@ Register it in ~/.claude/settings.json:
 		},
 	})
 	c.AddCommand(&cobra.Command{
+		Use:   "posttooluse",
+		Short: "The PostToolUse hook: a tool result carrying a secret value is redacted before the model sees it",
+		Long: `posttooluse reads a PostToolUse event on stdin and scans every string of
+the tool's result against the fingerprint index (beekeeper scan) and the
+outbound guard's token patterns (gitleaks' rules; a line marked
+gitleaks:allow keeps its pattern matches). With a hit, its answer replaces
+the result before the model sees it: the same result, each hit replaced by
+"[redacted: <reference or rule>]". The session goes on. Each redaction is
+a scan.redact event in beekeeper log, naming the tool, the references and
+rules and their counts, never a value; an indexed reference gets a
+rotation note for guide.person unless an open one names it. Claude Code
+writes the redacted result to the session's transcript on disk too: the
+value reaches neither the model nor the transcript.
+
+Malformed input, an unreadable configuration or index, any error: no
+answer, the result unchanged (an unreadable index still runs the
+patterns). beekeeper install registers it in ~/.claude/settings.json:
+
+  "PostToolUse": [{"matcher": "*", "hooks": [{"type": "command",
+    "command": "~/.go/bin/beekeeper hook posttooluse", "timeout": 10}]}]`,
+		Args: cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			defer func() { _ = recover() }() // a broken hook must not break the tool's result
+			raw, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				return nil
+			}
+			if out := a.postToolUse(raw); out != nil {
+				_, _ = a.out.Write(out)
+			}
+			return nil
+		},
+	})
+	c.AddCommand(&cobra.Command{
 		Use:   "sessionstart",
 		Short: "The SessionStart hook: the agent shell's prelude",
 		Long: `sessionstart writes the agent shell's prelude into the session's

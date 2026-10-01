@@ -81,7 +81,7 @@ var tokenRules = []tokenRule{
 	rule("private-key", `-----BEGIN[ A-Z0-9_-]{0,100}PRIVATE KEY(?: BLOCK)?-----`, "PRIVATE KEY"),
 	rule("jwt", `\beyJ[0-9A-Za-z_-]{10,}\.eyJ[0-9A-Za-z_-]{10,}\.[0-9A-Za-z_-]{10,}`, "eyJ"),
 	// A password in a URL; a placeholder ($VAR, <token>, {x}, %s, ***) is none.
-	rule("url-credentials", `\b[a-z][a-z0-9+.-]*://[^\s/:@'"]+:[^\s/@'"$<{%*][^\s/@'"]*@[0-9A-Za-z]`, "://"),
+	rule(urlCredentials, `\b[a-z][a-z0-9+.-]*://[^\s/:@'"]+:[^\s/@'"$<{%*][^\s/@'"]*@[0-9A-Za-z]`, "://"),
 }
 
 // hits are the names of what text carries: the rule ids and the numbers of
