@@ -100,3 +100,15 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
 )
+
+replace github.com/klauspost/compress v1.18.6 => github.com/klauspost/compress v1.20.1
+
+replace github.com/prometheus/prometheus v0.51.0 => github.com/prometheus/prometheus v0.315.0
+
+replace go.etcd.io/etcd/v3 v3.6.8 => go.etcd.io/etcd/v3 v3.7.2
+
+replace go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.34.0 => go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.46.0
+
+replace go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.34.0 => go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.46.0
+
+replace go.opentelemetry.io/otel/sdk v1.44.0 => go.opentelemetry.io/otel/sdk v1.46.0
