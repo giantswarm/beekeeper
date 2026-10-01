@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -44,6 +45,14 @@ type (
 		where   string
 		err     error
 	}
+	// actMsg carries a take-over's, a release's or an answer's result:
+	// done says what happened, err why it did not.
+	actMsg struct {
+		done string
+		err  error
+		// took is the session id a take-over took, "" for anything else.
+		took string
+	}
 )
 
 // model is the screen's state: which tab is up, what it shows, the open
@@ -80,13 +89,26 @@ type model struct {
 	tailing bool
 
 	// composing says the pane's message line has the keys; draft is
-	// what the person typed. sending says a message is on its way, and
-	// sent is the last one's outcome, sendErr set when it failed.
+	// what the person typed. sending says a message is on its way.
 	composing bool
 	draft     []rune
 	sending   bool
-	sent      string
-	sendErr   bool
+	// outcome is the pane's last action's result (a message, a take-over,
+	// an answer, a request handed back), outcomeErr set when it failed.
+	outcome    string
+	outcomeErr bool
+	// acting says a take-over, release or answer is on its way.
+	acting bool
+
+	// taken are the sessions (by id) this screen took over: quitting
+	// hands them back. seen are the approvals the screen showed, by
+	// request id, that it did not answer: one that goes away went back to
+	// its session's window.
+	taken map[string]bool
+	seen  map[string]Approval
+	// answered are the requests the screen answered and the hook has
+	// not yet let go of.
+	answered map[string]bool
 
 	width, height int
 	quitting      bool
@@ -168,6 +190,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.updated = time.Now()
 		m.clampAll()
+		m.noticeHandedBack()
 		return m, nil
 	case tailMsg:
 		if msg.session != m.detail {
@@ -179,11 +202,25 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sentMsg:
 		m.sending = false
 		if msg.err != nil {
-			m.sent, m.sendErr = "not sent: "+msg.err.Error(), true
+			m.outcome, m.outcomeErr = "not sent: "+msg.err.Error(), true
 		} else {
-			m.sent, m.sendErr = "sent: "+msg.where, false
+			m.outcome, m.outcomeErr = "sent: "+msg.where, false
 		}
 		return m, nil
+	case actMsg:
+		m.acting = false
+		if msg.err != nil {
+			m.outcome, m.outcomeErr = msg.err.Error(), true
+			return m, m.refreshCmd()
+		}
+		m.outcome, m.outcomeErr = msg.done, false
+		if msg.took != "" {
+			if m.taken == nil {
+				m.taken = map[string]bool{}
+			}
+			m.taken[msg.took] = true
+		}
+		return m, m.refreshCmd()
 	case tea.KeyMsg:
 		return m.key(msg)
 	}
@@ -279,7 +316,7 @@ func (m *model) compose(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if text == "" {
 			return m, nil
 		}
-		m.composing, m.draft, m.sent = false, nil, ""
+		m.composing, m.draft, m.outcome = false, nil, ""
 		return m, m.sendCmd(m.detail, text)
 	case tea.KeyEsc:
 		m.composing, m.draft = false, nil
@@ -321,8 +358,98 @@ func (m *model) scrollDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if !m.sending {
 			m.composing, m.draft = true, nil
 		}
+	case "t":
+		return m, m.toggleTakeOver()
+	case "a", "d":
+		return m, m.answer(msg.String() == "a")
 	}
 	return m, nil
+}
+
+// paneSession is the open pane's session in the current data, nil when it
+// is gone.
+func (m *model) paneSession() *Session {
+	if m.data == nil || m.detail == "" {
+		return nil
+	}
+	return sessionNamed(m.data.Sessions, m.detail)
+}
+
+// toggleTakeOver takes the pane's session over, or hands it back when this
+// screen holds it.
+func (m *model) toggleTakeOver() tea.Cmd {
+	s := m.paneSession()
+	if s == nil || m.acting {
+		return nil
+	}
+	m.acting = true
+	id, name := s.ID, s.Name
+	if s.TakenOver {
+		delete(m.taken, id)
+		return func() tea.Msg {
+			if err := m.src.Release(m.ctx, id); err != nil {
+				return actMsg{err: err}
+			}
+			return actMsg{done: "handed back: " + name + "'s approvals go to its own window"}
+		}
+	}
+	return func() tea.Msg {
+		if err := m.src.TakeOver(m.ctx, id); err != nil {
+			return actMsg{err: err}
+		}
+		return actMsg{done: "taken over: " + name + "'s approvals come here", took: id}
+	}
+}
+
+// answer allows or denies the oldest approval the pane's session waits on.
+func (m *model) answer(allow bool) tea.Cmd {
+	s := m.paneSession()
+	if s == nil || len(s.Approvals) == 0 || m.acting {
+		return nil
+	}
+	m.acting = true
+	ap := s.Approvals[0]
+	if m.answered == nil {
+		m.answered = map[string]bool{}
+	}
+	m.answered[ap.ID] = true
+	verb := "denied"
+	if allow {
+		verb = "allowed"
+	}
+	id := s.ID
+	return func() tea.Msg {
+		if err := m.src.Answer(m.ctx, id, ap.ID, allow); err != nil {
+			return actMsg{err: fmt.Errorf("%s: %w", ap.Gist, err)}
+		}
+		return actMsg{done: verb + ": " + ap.Gist}
+	}
+}
+
+// noticeHandedBack keeps the approvals of this refresh and says so when one
+// the screen showed went away without its answer: its session's window has
+// it now (the hook gave up, the person answered it there, or the take-over
+// ended).
+func (m *model) noticeHandedBack() {
+	now := map[string]Approval{}
+	if m.data != nil {
+		for _, s := range m.data.Sessions {
+			for _, ap := range s.Approvals {
+				now[ap.ID] = ap
+			}
+		}
+	}
+	for id, ap := range m.seen {
+		if _, ok := now[id]; !ok && !m.answered[id] {
+			m.outcome, m.outcomeErr = "handed back to its window: "+ap.Gist, true
+		}
+	}
+	for id := range m.answered {
+		if _, ok := now[id]; !ok {
+			delete(m.answered, id)
+		}
+	}
+	m.seen = now
 }
 
 // navigate moves between tabs and within the current tab's list.
@@ -390,20 +517,30 @@ type pane struct {
 	composing   bool
 	draft       string
 	sending     bool
-	sent        string
-	sendErr     bool
+	outcome     string
+	outcomeErr  bool
+	acting      bool
 }
 
 // pane is the open pane's state for the view.
 func (m *model) pane() pane {
 	return pane{tail: m.tail, state: m.tailState, back: m.tailBack, err: m.tailErr,
-		composing: m.composing, draft: string(m.draft), sending: m.sending, sent: m.sent, sendErr: m.sendErr}
+		composing: m.composing, draft: string(m.draft), sending: m.sending, outcome: m.outcome, outcomeErr: m.outcomeErr, acting: m.acting}
 }
 
 // closeDetail dismisses the pane; a read still out lands nowhere.
 func (m *model) closeDetail() {
 	m.detail, m.tail, m.tailBack, m.tailState, m.tailing = "", nil, 0, 0, false
-	m.composing, m.draft, m.sent, m.sendErr = false, nil, "", false
+	m.composing, m.draft, m.outcome, m.outcomeErr = false, nil, "", false
+}
+
+// releaseAll hands back every session this screen took over: the screen
+// is closing.
+func (m *model) releaseAll() {
+	for id := range m.taken {
+		_ = m.src.Release(context.Background(), id)
+	}
+	m.taken = nil
 }
 
 // clampAll pulls every tab's selection into range after a refresh, when

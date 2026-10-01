@@ -31,6 +31,12 @@ type Source interface {
 	// Send delivers the person's message to one session and says where
 	// it went; a session that takes no message is an error.
 	Send(ctx context.Context, session, text string) (string, error)
+	// TakeOver brings the approvals of the session with id to this
+	// screen; Release hands them back to its own window.
+	TakeOver(ctx context.Context, id string) error
+	Release(ctx context.Context, id string) error
+	// Answer allows or denies the held request of the session with id.
+	Answer(ctx context.Context, id, request string, allow bool) error
 }
 
 // Options tunes the run.
@@ -45,7 +51,10 @@ func Run(src Source, opts Options) error {
 		opts.Interval = 2 * time.Second
 	}
 	p := tea.NewProgram(newModel(src, opts))
-	_, err := p.Run()
+	final, err := p.Run()
+	if m, ok := final.(*model); ok {
+		m.releaseAll() // a closed screen answers nothing
+	}
 	return err
 }
 
@@ -197,7 +206,9 @@ type Poller struct {
 
 // Session is one running agent session: Claude Code, or omp.
 type Session struct {
-	PID  int
+	PID int
+	// ID is the session id its permission requests carry.
+	ID   string
 	Name string
 	Role string
 	// Harness is "" for Claude Code, "omp" for an omp session.
@@ -241,6 +252,20 @@ type Session struct {
 	// GitHubProcesses are its gh and devctl processes now.
 	GitHubProcesses int
 	Merges          Merges
+	// TakenOver says a screen holds the session's approvals; Approvals
+	// are the requests held for it, oldest first.
+	TakenOver bool
+	Approvals []Approval
+}
+
+// Approval is a permission request a taken-over session waits on.
+type Approval struct {
+	ID string
+	At time.Time
+	// Gist is the call in one line ("Bash: Run the tests"), Detail its
+	// input, a line per field.
+	Gist   string
+	Detail []string
 }
 
 type Counter struct {

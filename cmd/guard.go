@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
@@ -17,7 +18,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/post"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/takeover"
 )
 
 func (a *app) runCmd() *cobra.Command {
@@ -292,9 +295,17 @@ session id is in beekeeper's record of starts) and the session now runs in
 acceptEdits, the mode Claude Desktop's import gives it. Each allow is a
 hook.allow event in beekeeper log.
 
-Every other request gets no answer and the person gets the normal card:
-sessions beekeeper did not start, desktop sessions, and beekeeper's starts
-the person set to default or plan. Deny rules still win: Claude Code
+A session the person took over on beekeeper ui (a flag in beekeeper's
+take-over folder naming the running screen) has its request held for the
+screen: the screen's allow or deny is the answer. No answer within 290 s,
+the screen gone, or the take-over released: no answer, and the request
+goes to the session's own window. Each is a takeover.answer or
+takeover.back event.
+
+Every other request gets no answer at once and the person gets the normal
+card: sessions beekeeper did not start, desktop sessions, and beekeeper's
+starts the person set to default or plan. Telling a session not taken over
+reads one file without a lock. Deny rules still win: Claude Code
 refuses a denied call before it asks, so the hook never sees it. Malformed
 input, an unreadable configuration or state, any error: no answer, never an
 allow. A request in any mode but acceptEdits is decided without reading the
@@ -303,7 +314,10 @@ state.
 Register it in ~/.claude/settings.json:
 
   "PermissionRequest": [{"matcher": "*", "hooks": [{"type": "command",
-    "command": "~/.go/bin/beekeeper hook permissionrequest", "timeout": 10}]}]`,
+    "command": "~/.go/bin/beekeeper hook permissionrequest", "timeout": 300}]}]
+
+The timeout is above the 290 s a held request waits, so the hook, not
+Claude Code, ends the wait.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			defer func() { _ = recover() }() // a broken hook gives no answer: the person's card
@@ -311,22 +325,60 @@ Register it in ~/.claude/settings.json:
 			if err != nil {
 				return nil
 			}
-			var start state.Start
-			out, req := guard.Permission(raw, func(session string) bool {
-				var ok bool
-				start, ok = a.bypassStart(session)
-				return ok
-			})
-			if out == nil {
-				return nil
-			}
-			if _, err := a.out.Write(out); err == nil && a.store != nil {
-				_ = a.store.Log(event(start.Party, "hook.allow", "%s in %s", req.Tool, start.Dir))
-			}
+			_, _ = a.out.Write(a.permissionRequest(context.Background(), raw))
 			return nil
 		},
 	})
 	return c
+}
+
+// takeoverGiveUp and takeoverPoll pace a held request; tests shorten them.
+var (
+	takeoverGiveUp = takeover.GiveUp
+	takeoverPoll   = takeover.Poll
+)
+
+// permissionRequest decides one PermissionRequest event: beekeeper's own
+// bypass starts are allowed, a taken-over session's request is held for the
+// screen, every other one gets no answer (nil) at once.
+func (a *app) permissionRequest(ctx context.Context, raw []byte) []byte {
+	var start state.Start
+	out, req := guard.Permission(raw, func(session string) bool {
+		var ok bool
+		start, ok = a.bypassStart(session)
+		return ok
+	})
+	if out != nil {
+		if a.store != nil {
+			_ = a.store.Log(event(start.Party, "hook.allow", "%s in %s", req.Tool, start.Dir))
+		}
+		return out
+	}
+	if req.Event != guard.PermissionEvent || req.Session == "" || a.loadConfig() != nil {
+		return nil
+	}
+	dir := takeover.Dir(a.cfg.StateDir)
+	f, ok := takeover.Taken(dir, req.Session, proc.Alive)
+	if !ok {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, takeoverGiveUp)
+	defer cancel()
+	r := takeover.Request{ID: uuid.NewString(), Session: req.Session, Tool: req.Tool, Input: req.Input, At: time.Now().UTC()}
+	d, answered, err := takeover.Hold(ctx, dir, r, proc.Alive, takeoverPoll)
+	answered = answered && err == nil
+	if store, serr := state.Open(a.cfg.StateDir); serr == nil {
+		who := state.Party{Session: req.Session, Name: f.By}
+		if answered {
+			_ = store.Log(event(who, "takeover.answer", "%s: %s %s on the screen", req.Session, req.Tool, d.Behavior))
+		} else {
+			_ = store.Log(event(who, "takeover.back", "%s: %s went to the session's window", req.Session, req.Tool))
+		}
+	}
+	if !answered {
+		return nil
+	}
+	return guard.PermissionDecision(d.Behavior, d.Message)
 }
 
 // reportCheck decides a reporter's PreToolUse event: a post failing the

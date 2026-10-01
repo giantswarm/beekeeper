@@ -46,7 +46,7 @@ func Hooks(exe string) []Hook {
 	}
 	return []Hook{
 		hook("PreToolUse", "Bash|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage|mcp__.*", "pretooluse", 30),
-		hook("PermissionRequest", "*", "permissionrequest", 10),
+		hook("PermissionRequest", "*", "permissionrequest", 300),
 		hook("SessionStart", "", "sessionstart", 10),
 	}
 }

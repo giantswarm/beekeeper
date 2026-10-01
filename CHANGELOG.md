@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `ui` takes a Claude Code session over from its pane (`t`): its permission requests come to the screen with its turns beside them, `a` allows and `d` denies the oldest, and the session's row says `approval`. The PermissionRequest hook holds a taken-over session's request for the screen and gives up itself after 290 s; unanswered, released (`t` again, or quitting the screen) or with the screen gone, the request goes to the session's own window and the pane says it was handed back. A session not taken over is decided at once without a lock, as before. `install` writes the hook's timeout as 300 s; omp sessions ask for no approvals and are refused.
+
 - `ui` messages a session from its pane: `m` opens a message line, `enter` sends it stamped `From <guide.person> through beekeeper ui:`, by name to a Claude Code session's CLI (at its next tool call or as its next turn) or into the inbox of an omp agent beekeeper started; an omp session the person runs in its own terminal, and a name two CLIs share, are refused with the reason on the line. Each message is a `ui.message` event.
 
 - `ui` follows a session live: its pane re-reads the transcript at every refresh and shows the history, then the current turn with its tool calls, newest at the bottom; `k`/`j` scroll back and forward and hold their place while turns arrive, `G` follows again. The sessions table has a `state` column (busy, idle, waiting on its person, an omp session's own), and an omp session's pane reads omp's session file. The pane showed the last ten turns once, without tool calls, and an omp session's not at all.

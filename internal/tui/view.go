@@ -203,7 +203,13 @@ func footerView(m *model, w int) string {
 	hints := []string{"1-6 tabs", "j/k move", "enter details", "r refresh", "q quit",
 		"g/G ends", "pgup/pgdn page"}
 	if m.detail != "" {
-		hints = []string{"m message", "k/j older/newer", "G live", "esc close", "q quit", "g oldest"}
+		hints = []string{"m message", "t take over", "k/j older/newer", "G live", "esc close", "q quit", "g oldest"}
+		if s := m.paneSession(); s != nil && s.TakenOver {
+			hints[1] = "t hand back"
+			if len(s.Approvals) > 0 {
+				hints = append([]string{"a allow", "d deny"}, hints...)
+			}
+		}
 		if m.composing {
 			hints = []string{"enter send", "esc drop", "ctrl+u clear"}
 		}
@@ -574,7 +580,7 @@ func sessionsView(d *Data, w, h, sel int) string {
 	}
 	for i, s := range d.Sessions {
 		line := sessionRow(s, w, d.At)
-		if s.Waiting != "" {
+		if s.Waiting != "" || len(s.Approvals) > 0 {
 			line = style.Waiting.Render(line)
 		}
 		t.row(i, line)
@@ -647,10 +653,14 @@ func sessionRow(s Session, w int, now time.Time) string {
 			left = max(0, left-n-2)
 			return n
 		}
-		if s.Waiting != "" && left >= 12 {
+		waiting := s.Waiting
+		if len(s.Approvals) > 0 {
+			waiting = "approve? " + s.Approvals[0].Gist
+		}
+		if waiting != "" && left >= 12 {
 			tail = append(tail, style.Waiting.Render("[WARN] ")+
-				trimWord(s.Waiting, max(0, left-7)))
-		} else if s.Waiting != "" {
+				trimWord(waiting, max(0, left-7)))
+		} else if waiting != "" {
 			// No room for the text: the flag still says someone
 			// is waiting on this one.
 			tail = append(tail, style.Waiting.Render("[WARN]"))
@@ -688,19 +698,28 @@ const (
 	stateBusy    = "busy"
 	stateIdle    = "idle"
 	stateWaiting = "waiting"
-	stateEnded   = "ended"
+	// stateApproval is a taken-over session waiting on the screen's
+	// answer; stateTaken one whose approvals come to the screen.
+	stateApproval = "approval"
+	stateTaken    = "taken"
+	stateEnded    = "ended"
 )
 
 // busyWithin is how recently a Claude Code session's transcript changed
 // for the screen to call it busy.
 const busyWithin = time.Minute
 
-// stateOf is what a session does: an omp session says so itself; a
+// stateOf is what a session does: one taken over waits on the screen's
+// answer or is just taken; an omp session says so itself; a
 // Claude Code session waits on its person when the desktop says so, is
 // busy while it runs a command or wrote its transcript within busyWithin,
 // and idle otherwise.
 func stateOf(s Session) string {
 	switch {
+	case len(s.Approvals) > 0:
+		return stateApproval
+	case s.TakenOver:
+		return stateTaken
 	case s.State != "":
 		return s.State
 	case s.Waiting != "":
@@ -721,8 +740,10 @@ func stateCell(s Session) string {
 	switch st {
 	case stateBusy:
 		return style.OK.Render(word)
-	case stateWaiting:
+	case stateWaiting, stateApproval:
 		return style.Waiting.Render(word)
+	case stateTaken:
+		return style.Run.Render(word)
 	case stateEnded:
 		return style.Gone.Render(word)
 	}
@@ -829,6 +850,9 @@ func detailView(d *Data, s Session, w, h int, p pane) string {
 	for _, sc := range s.Scopes {
 		t.dim(cols(style.Dim.Render("run"), fit(sc.Unit, 30), fit(sc.Command, 30), mib(sc.MemMiB)))
 	}
+	if s.TakenOver || len(s.Approvals) > 0 {
+		approvalLines(t, s, w, d.At)
+	}
 	t.dim("")
 	badge = "…"
 	switch {
@@ -868,6 +892,27 @@ func detailView(d *Data, s Session, w, h int, p pane) string {
 	return t.show(h)
 }
 
+// approvalLines is the take-over section: that the session's approvals
+// come to this screen, and the oldest one it waits on with its input, the
+// call the person answers with a or d; any later ones as one line each.
+func approvalLines(t *tabLines, s Session, w int, now time.Time) {
+	badge := "approvals come here"
+	if n := len(s.Approvals); n > 0 {
+		badge = style.Waiting.Render(fmt.Sprintf("%d waiting · a allow  d deny", n))
+	}
+	t.rule("taken over", badge)
+	for i, ap := range s.Approvals {
+		if i > 0 {
+			t.dim(cols(clock(ap.At, now), pad("then", 10), trimWord(ap.Gist, w-24)))
+			continue
+		}
+		t.head(style.Waiting.Render(cols(clock(ap.At, now), pad("approve?", 10), trimWord(ap.Gist, w-24))))
+		for _, l := range ap.Detail[:min(len(ap.Detail), 6)] {
+			t.dim(pad("", 20) + trimWord(l, w-24))
+		}
+	}
+}
+
 // messageLine is the pane's last line: the draft with its cursor while
 // the person writes, the delivery while it runs, then its outcome; ""
 // when there is none of these.
@@ -878,10 +923,12 @@ func messageLine(p pane, w int) string {
 		return fit(style.Head.Render("message › ")+draft+"█", w)
 	case p.sending:
 		return fit(style.Dim.Render("message › sending…"), w)
-	case p.sent != "" && p.sendErr:
-		return fit(style.Warn.Render(trimWord(p.sent, w)), w)
-	case p.sent != "":
-		return fit(style.OK.Render(trimWord(p.sent, w)), w)
+	case p.acting:
+		return fit(style.Dim.Render("…"), w)
+	case p.outcome != "" && p.outcomeErr:
+		return fit(style.Warn.Render(trimWord(p.outcome, w)), w)
+	case p.outcome != "":
+		return fit(style.OK.Render(trimWord(p.outcome, w)), w)
 	}
 	return ""
 }

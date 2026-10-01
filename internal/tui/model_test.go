@@ -43,6 +43,42 @@ type fakeSource struct {
 
 	sendTo, sendText string
 	sendErr          error
+
+	took, released []string
+	answers        []string
+	answerErr      error
+}
+
+// TakeOver records the take-over and marks the session in the data.
+func (f *fakeSource) TakeOver(_ context.Context, id string) error {
+	f.took = append(f.took, id)
+	for i := range f.data.Sessions {
+		if f.data.Sessions[i].ID == id {
+			f.data.Sessions[i].TakenOver = true
+		}
+	}
+	return nil
+}
+
+// Release records the hand-back and unmarks the session.
+func (f *fakeSource) Release(_ context.Context, id string) error {
+	f.released = append(f.released, id)
+	for i := range f.data.Sessions {
+		if f.data.Sessions[i].ID == id {
+			f.data.Sessions[i].TakenOver, f.data.Sessions[i].Approvals = false, nil
+		}
+	}
+	return nil
+}
+
+// Answer records "id/request allow|deny".
+func (f *fakeSource) Answer(_ context.Context, id, request string, allow bool) error {
+	verb := "deny"
+	if allow {
+		verb = "allow"
+	}
+	f.answers = append(f.answers, id+"/"+request+" "+verb)
+	return f.answerErr
 }
 
 // Send records the message and answers as told.
@@ -550,8 +586,96 @@ func TestMessageFromThePane(t *testing.T) {
 		t.Errorf("a refusal is not shown:\n%s", m.View())
 	}
 	m.key(tea.KeyMsg{Type: tea.KeyEsc})
-	if m.sent != "" {
+	if m.outcome != "" {
 		t.Error("closing the pane kept the last outcome")
+	}
+}
+
+// run feeds a command's messages back into the model, and the commands
+// those answer with, as the program does; the test's tickFn arms no tick.
+func run(m *model, c tea.Cmd) {
+	for queue := []tea.Cmd{c}; len(queue) > 0; queue = queue[1:] {
+		for _, msg := range msgs(queue[0]) {
+			_, next := m.Update(msg)
+			queue = append(queue, next)
+		}
+	}
+}
+
+func TestTakeOverFromThePane(t *testing.T) {
+	src := &fakeSource{data: fixtureData(), turns: []Turn{{At: testAt, Role: roleAssistant, Text: "about to clean"}}}
+	src.data.Sessions[0].ID = "sid-bee"
+	m := newTestModel(t, src)
+	m.tickFn = func() tea.Cmd { return nil }
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
+	_, c := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	run(m, c)
+
+	_, c = m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	run(m, c)
+	if len(src.took) != 1 || src.took[0] != "sid-bee" || !m.taken["sid-bee"] {
+		t.Fatalf("t took %v (screen holds %v), want bee's id", src.took, m.taken)
+	}
+	if v := m.View(); !strings.Contains(v, "taken over") || !strings.Contains(v, "t hand back") {
+		t.Errorf("the pane does not show the take-over:\n%s", v)
+	}
+
+	// An approval arrives: the pane shows it with its input and the keys.
+	ap := Approval{ID: "req-1", At: testAt, Gist: "Bash: Clean the build", Detail: []string{"command: rm -r build"}}
+	src.data.Sessions[0].Approvals = []Approval{ap}
+	run(m, m.refreshCmd())
+	v := m.View()
+	for _, want := range []string{"approve?", "Bash: Clean the build", "command: rm -r build", "a allow", "about to clean"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("the pane misses %q:\n%s", want, v)
+		}
+	}
+	_, c = m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	run(m, c)
+	if len(src.answers) != 1 || src.answers[0] != "sid-bee/req-1 allow" {
+		t.Fatalf("a answered %v", src.answers)
+	}
+	if !strings.Contains(m.View(), "allowed: Bash: Clean the build") {
+		t.Errorf("the answer is not shown:\n%s", m.View())
+	}
+	// The hook lets go of the answered request: that is no hand-back.
+	src.data.Sessions[0].Approvals = nil
+	run(m, m.refreshCmd())
+	if strings.Contains(m.View(), "handed back") {
+		t.Errorf("an answered request read as handed back:\n%s", m.View())
+	}
+
+	// One the screen did not answer goes away: it went back to the window.
+	ap.ID, ap.Gist = "req-2", "Write: /w/notes.md"
+	src.data.Sessions[0].Approvals = []Approval{ap}
+	run(m, m.refreshCmd())
+	src.data.Sessions[0].Approvals = nil
+	run(m, m.refreshCmd())
+	if !strings.Contains(m.View(), "handed back to its window: Write: /w/notes.md") {
+		t.Errorf("the hand-back is not said:\n%s", m.View())
+	}
+
+	// d denies; a late answer says why it did not land.
+	ap.ID = "req-3"
+	src.data.Sessions[0].Approvals = []Approval{ap}
+	run(m, m.refreshCmd())
+	src.answerErr = errors.New("the request is no longer held")
+	_, c = m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	run(m, c)
+	if src.answers[len(src.answers)-1] != "sid-bee/req-3 deny" || !strings.Contains(m.View(), "no longer held") {
+		t.Errorf("d answered %v; pane:\n%s", src.answers, m.View())
+	}
+
+	// t again hands back; quitting hands back what is still taken.
+	_, c = m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	run(m, c)
+	if len(src.released) != 1 || m.taken["sid-bee"] {
+		t.Fatalf("t did not hand back: released %v, taken %v", src.released, m.taken)
+	}
+	m.taken = map[string]bool{"sid-wasp": true}
+	m.releaseAll()
+	if len(src.released) != 2 || src.released[1] != "sid-wasp" {
+		t.Errorf("closing released %v, want wasp's too", src.released)
 	}
 }
 
@@ -565,6 +689,8 @@ func TestStateOf(t *testing.T) {
 		{Session{Idle: 10 * time.Second}, stateBusy},
 		{Session{Idle: time.Hour, Commands: []Command{{Args: "devctl pr wait"}}}, stateBusy},
 		{Session{Idle: time.Hour}, stateIdle},
+		{Session{TakenOver: true, Idle: time.Second}, stateTaken},
+		{Session{TakenOver: true, Approvals: []Approval{{ID: "r"}}, Waiting: "x"}, stateApproval},
 	}
 	for _, c := range cases {
 		if got := stateOf(c.s); got != c.want {
