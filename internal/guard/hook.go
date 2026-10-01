@@ -110,8 +110,12 @@ type Hook struct {
 	// Leases lists the held leases.
 	Leases func() []lease.Holder
 	// Guide reports whether the session is the guide's, and the person the
-	// guide asks; read only for an AskUserQuestion call.
+	// guide asks; read only for an AskUserQuestion call and a call that
+	// does work (guide.go).
 	Guide func(session string) (bool, string)
+	// CheckQuestion names what one of the guide's questions lacks for its
+	// person to answer it, as `note add` checks a note; nil checks nothing.
+	CheckQuestion func(Question) []string
 	// Peer names the running CLI of a desktop session id, "" when none
 	// runs; an error refuses the send. Nil passes every SendMessage.
 	Peer func(host string) (string, error)
@@ -179,8 +183,11 @@ func (h Hook) Decide(input []byte) []byte {
 }
 
 func (h Hook) decide(ev event) []byte {
+	if r := h.guideRefusal(ev); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
 	if ev.ToolName == AskTool {
-		return h.ask(ev.Session)
+		return h.ask(ev.Session, ev.ToolInput)
 	}
 	if ev.ToolName == SendMessageTool {
 		return h.sendMessage(ev.ToolInput)

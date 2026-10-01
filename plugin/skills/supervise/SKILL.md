@@ -208,7 +208,9 @@ a numbered run, "Supervisor run N": its desktop title, roster name and the name 
   `supervisor.relayTTL` or is withdrawn with `supervisor relay --cancel`, and the watch carries on.
 - **Where the watch runs:** only in a desktop turn. A headless turn (a first turn, an `agents
   wake`) that arms a Monitor never ends, so the desktop never gets the session's CLI; such a turn
-  takes the role or answers and ends.
+  takes the role or answers and ends. The one exception is the standby
+  watch's headless resume, whose message says the desktop runs no CLI of the session: that turn
+  keeps the watch.
 - **After a crash:** `supervisor.restartGrace` after this session's CLI is gone, the standby unit
   starts the next run the same way; claims stay gated until its `beekeeper supervisor start`. A
   supervisor reopened after a reboot (`beekeeper supervisor reopen`) has lost its watch; the

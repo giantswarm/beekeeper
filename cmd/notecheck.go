@@ -6,9 +6,12 @@ import (
 	"os/exec"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -32,6 +35,8 @@ var (
 	shortRef = regexp.MustCompile(`(?i)(?:^|[^\w/#])((?:note|timer)\s+)?((?:([\w.-]+/[\w.-]+))?#(\d+))\b`)
 	// refURL is the full URL of an issue or PR.
 	refURL = regexp.MustCompile(`(?i)https?://github\.com/([\w.-]+/[\w.-]+)/(?:issues|pull)/(\d+)`)
+	// pullURL is the full URL of a pull request.
+	pullURL = regexp.MustCompile(`(?i)https?://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)`)
 	// stateClaim is a claim about a state the person cannot see from the
 	// note: it needs where it was checked.
 	stateClaim = regexp.MustCompile(`(?i)\b(merged|green|released|rolled|closed)\b`)
@@ -69,8 +74,29 @@ func (d noteDraft) asks() bool {
 	return strings.Contains(q, "?") || len(d.Options) > 0 || asking.MatchString(q)
 }
 
-// missing names what d lacks for its person to answer it, one part each.
+// missing names what d lacks for its person to answer it, one part each:
+// what any question lacks, and a note's default and kind.
 func (d noteDraft) missing() []string {
+	out := d.lacks()
+	if dflt := strings.Trim(strings.TrimSpace(d.Default), ".!"); noAction.MatchString(dflt) {
+		out = append(out, fmt.Sprintf("--default %q is no action: name what happens unanswered", d.Default))
+	}
+	switch {
+	case d.Kind != "" && d.Kind != noteLogin:
+		out = append(out, fmt.Sprintf("--kind %q (only %q)", d.Kind, noteLogin))
+	case d.Kind == noteLogin && strings.TrimSpace(d.Until) == "":
+		out = append(out, `--until "<probe command that exits 0 once signed in>"`)
+	case d.Kind != noteLogin && d.Until != "":
+		out = append(out, "--until without --kind login")
+	}
+	return out
+}
+
+// lacks names what the question d puts to its person lacks, a note's or
+// the guide's own (AskUserQuestion): that it asks, the status quo, the why,
+// every option's consequence, the full URL of every issue and PR, and where
+// a state claim was checked.
+func (d noteDraft) lacks() []string {
 	var out []string
 	if !d.asks() {
 		out = append(out, "a question: it asks nothing (no ?, no --option, no request verb); a status line goes to `beekeeper log add \"<text>\"`")
@@ -86,9 +112,6 @@ func (d noteDraft) missing() []string {
 			out = append(out, fmt.Sprintf("--option %q has no \": <consequence>\"", o))
 		}
 	}
-	if dflt := strings.Trim(strings.TrimSpace(d.Default), ".!"); noAction.MatchString(dflt) {
-		out = append(out, fmt.Sprintf("--default %q is no action: name what happens unanswered", d.Default))
-	}
 	all := d.text() + " " + d.Default
 	for _, r := range unlinked(all) {
 		out = append(out, r+" without its full URL")
@@ -99,15 +122,50 @@ func (d noteDraft) missing() []string {
 			out = append(out, fmt.Sprintf("%q without --checked \"<where it was checked>\"", strings.ToLower(claims[0])))
 		}
 	}
-	switch {
-	case d.Kind != "" && d.Kind != noteLogin:
-		out = append(out, fmt.Sprintf("--kind %q (only %q)", d.Kind, noteLogin))
-	case d.Kind == noteLogin && strings.TrimSpace(d.Until) == "":
-		out = append(out, `--until "<probe command that exits 0 once signed in>"`)
-	case d.Kind != noteLogin && d.Until != "":
-		out = append(out, "--until without --kind login")
-	}
 	return out
+}
+
+// notesGH is the gh CLI the plan stage check reads through; a seam for
+// tests.
+var notesGH github.GH = github.RunGH
+
+// planStages names, for every open pull request of a plans repository that
+// s links, its stage check that is not green: a plan revision goes to the
+// person once its stage outputs are in. A pull request GitHub does not
+// answer for is an error, never a pass.
+func planStages(ctx context.Context, plans config.Plans, s string) ([]string, error) {
+	var out []string
+	var seen []string
+	for _, m := range pullURL.FindAllStringSubmatch(s, -1) {
+		ref := strings.ToLower(m[1]) + "#" + m[2]
+		if !plans.Covers(m[1]) || slices.Contains(seen, ref) {
+			continue
+		}
+		seen = append(seen, ref)
+		n, err := strconv.Atoi(m[2])
+		if err != nil {
+			return nil, err
+		}
+		c, err := github.PullCheck(ctx, notesGH, m[1], n, plans.Check)
+		if err != nil {
+			return nil, fmt.Errorf("%s: reading its %s check: %w", m[0], plans.Check, err)
+		}
+		if c.State != github.Open || c.Outcome == github.CheckPass {
+			continue
+		}
+		why := c.Outcome
+		switch c.Outcome {
+		case github.CheckMissing:
+			why = "none on its head"
+		case github.CheckFail:
+			why = strings.Join(append([]string{"red"}, c.Annotations...), ": ")
+		}
+		if c.URL != "" {
+			why += ", " + c.URL
+		}
+		out = append(out, fmt.Sprintf("a green %s check on %s (%s): the revision's stage outputs first", plans.Check, m[0], why))
+	}
+	return out, nil
 }
 
 // unlinked lists the issue and PR references in s that have no full URL

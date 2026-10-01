@@ -38,6 +38,12 @@ type standbyWatch struct {
 	// succeed starts rl's next run after its holder from is gone
 	// (app.startSuccessor).
 	succeed func(ctx context.Context, rl role, from state.Party) (state.Party, error)
+	// revive resumes rl's holder headless with msg (app.wakeAgent): a
+	// successor whose first turn ended and whose desktop CLI never came.
+	revive func(ctx context.Context, rl role, holder state.Party, msg string) error
+	// chains are the successors of each role, by its name, that did not
+	// come up.
+	chains map[string]*successorChain
 	// turning reports whether a unit of beekeeper's start or wake of
 	// session id runs a turn or the reopen after it (unitsTurning); nil:
 	// none does.
@@ -150,15 +156,173 @@ func (w *watcher) guideGone(ctx context.Context, st *state.State, sessions []*cl
 	if !sv.down() || relayPending(st, r, w.now) || w.firstTurn(ctx, r.Holder.Party) {
 		if sv.live {
 			w.stand.guideGap = ""
+			w.upAgain(guideRole, r.Holder.Party)
 		}
 		return
 	}
 	key := r.Holder.Name + "@" + r.Holder.Since.UTC().Format(time.RFC3339)
-	successor := w.succeedGone(ctx, guideRole, r.Holder.Party)
+	successor := w.standIn(ctx, guideRole, st, r.Holder.Party, key)
 	if w.stand.guideGap != key {
 		w.stand.guideGap = key
 		w.emitNow("guide", "GUIDE GONE: %q (guiding since %s) is gone since %s%s", r.Holder.Name, clock(w.now, r.Holder.Since), clock(w.now, sv.gone), successor)
 	}
+}
+
+// Successors that do not come up are retried a bounded number of times:
+// the next one starts successorBackoff after the first failed, twice that
+// after the second, none after maxFailedSuccessors.
+const (
+	successorBackoff    = 5 * time.Minute
+	maxFailedSuccessors = 3
+)
+
+// successorStarting is what the GONE line adds while a successor's start or
+// a headless resume runs.
+const successorStarting = "; its successor is starting"
+
+// successorChain is what the standby watch remembers of a role's
+// successors that did not come up: the holder term it resumed headless,
+// the last failed one, how many failed, when the next may start, and the
+// note it filed after the first.
+type successorChain struct {
+	revived, failed string
+	failures        int
+	next            time.Time
+	note            int
+}
+
+// chain is rl's successorChain.
+func (w *watcher) chain(rl role) *successorChain {
+	if w.stand.chains == nil {
+		w.stand.chains = map[string]*successorChain{}
+	}
+	c := w.stand.chains[rl.name]
+	if c == nil {
+		c = &successorChain{}
+		w.stand.chains[rl.name] = c
+	}
+	return c
+}
+
+// upAgain forgets rl's failed successors once its live holder's CLI is no
+// start's first turn: a successor whose desktop CLI or headless resume
+// runs, or any holder that is no successor.
+func (w *watcher) upAgain(rl role, holder state.Party) {
+	if headlessTurn(w.table, holder.Session) == "first turn" {
+		return
+	}
+	if c := w.stand.chains[rl.name]; c != nil && c.failures > 0 {
+		w.emitNow(rl.name+"-successor", "%sSUCCESSOR UP: the %s runs again after %d successor(s) that did not come up", rl.tag, rl.name, c.failures)
+	}
+	delete(w.stand.chains, rl.name)
+}
+
+// standIn acts for rl's holder, gone past the grace with no relay open and
+// no first turn running (standby watch), the holder's term being key. A
+// successor beekeeper started, whose first turn took the role and ended
+// and whose desktop CLI never came (the desktop did not import it, or did
+// not warm it), is resumed headless once: that turn arms the role's watch
+// and keeps its CLI, so no further successor starts while it runs. One that
+// went down after that failed: one note after the first, and the next
+// successor waits out the backoff; past maxFailedSuccessors none starts.
+// Any other holder gets its successor at once. It returns what the GONE
+// line adds.
+func (w *watcher) standIn(ctx context.Context, rl role, st *state.State, holder state.Party, key string) string {
+	if w.stand.starting.Load() {
+		return successorStarting
+	}
+	c := w.chain(rl)
+	if started(st, holder) {
+		if c.revived != key && w.stand.revive != nil {
+			c.revived = key
+			return w.reviveGone(ctx, rl, holder)
+		}
+		if c.failed != key {
+			c.failed, c.failures = key, c.failures+1
+			c.next = w.now.Add(successorBackoff << (c.failures - 1))
+			if c.failures == 1 {
+				c.note = w.noteFailedSuccessor(rl, holder)
+			}
+			w.emitNow(rl.name+"-successor", "%sSUCCESSOR DOWN: %q did not come up%s", rl.tag, holder.Name, c.outlook(w.now))
+		}
+	}
+	if c.failures >= maxFailedSuccessors || w.now.Before(c.next) {
+		return c.outlook(w.now)
+	}
+	return w.succeedGone(ctx, rl, holder)
+}
+
+// outlook says what follows c's failed successors.
+func (c *successorChain) outlook(now time.Time) string {
+	note := ""
+	if c.note > 0 {
+		note = fmt.Sprintf(" (note #%d)", c.note)
+	}
+	if c.failures >= maxFailedSuccessors {
+		return fmt.Sprintf("; %d successors did not come up, none further starts%s", c.failures, note)
+	}
+	return fmt.Sprintf("; %d successor(s) did not come up, the next starts at %s%s", c.failures, clock(now, c.next), note)
+}
+
+// started reports whether p's session is one of beekeeper's starts.
+func started(st *state.State, p state.Party) bool {
+	return p.Session != "" && slices.ContainsFunc(st.Starts, func(s state.Start) bool { return s.Session == p.Session })
+}
+
+// reviveGone resumes rl's gone holder headless outside the poll, as
+// succeedGone starts a successor. It returns what the GONE line adds.
+func (w *watcher) reviveGone(ctx context.Context, rl role, holder state.Party) string {
+	if !w.stand.starting.CompareAndSwap(false, true) {
+		return successorStarting
+	}
+	w.stand.inflight.Add(1)
+	go func() {
+		defer w.stand.inflight.Done()
+		defer w.stand.starting.Store(false)
+		msg := rl.resumeMessage("your first turn ended and the desktop runs no CLI of yours: this headless turn keeps " + rl.duty)
+		if err := w.stand.revive(ctx, rl, holder, msg); err != nil {
+			w.emitNow(rl.name+"-successor", "%sRESUME FAILED: %q has no desktop CLI and did not resume headless: %v", rl.tag, holder.Name, err)
+			return
+		}
+		w.emitNow(rl.name+"-successor", "%sRESUME: %q has no desktop CLI: resumed it headless, its turn keeps %s", rl.tag, holder.Name, rl.duty)
+	}()
+	return "; resuming it headless (the desktop runs no CLI of it)"
+}
+
+// reviveFromWatch resumes rl's holder headless with msg for the standby
+// watch.
+func (a *app) reviveFromWatch(ctx context.Context, _ role, holder state.Party, msg string) error {
+	q := holder.Session
+	if q == "" {
+		q = holder.Name
+	}
+	return a.wakeAgent(ctx, watchParty, q, msg, "")
+}
+
+// noteFailedSuccessor files the one note for the person on rl's first
+// successor that did not come up, and returns its number (0: none filed).
+func (w *watcher) noteFailedSuccessor(rl role, holder state.Party) int {
+	person := w.cfg.Guide.Person
+	if person == "" {
+		return 0
+	}
+	d := noteDraft{
+		Question: fmt.Sprintf("%q, the %s's successor beekeeper started, did not come up: no desktop CLI after its first turn, and its headless resume ended. Take the role over from a running desktop session (`beekeeper %s start --take-over`)?",
+			holder.Name, rl.name, rl.name),
+		StatusQuo: fmt.Sprintf("%s holds the role in name only: %s", holder.Name, rl.gone),
+		Why:       "the desktop did not run the successor's CLI (`journalctl --user -u beekeeper-notify` and the desktop's main.log say why)",
+		Options:   []string{"take over: the running session holds the role and arms its watch", "leave it: the standby watch retries"},
+	}
+	var id int
+	_ = w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.NextNote++
+		id = st.NextNote
+		n := state.Note{ID: id, For: person, Text: d.text(), By: watchParty, At: w.now.UTC(),
+			Default: fmt.Sprintf("the standby watch starts at most %d successors, %s apart and doubling", maxFailedSuccessors, dur(successorBackoff))}
+		st.Notes = append(st.Notes, n)
+		return []state.Event{event(watchParty, "note.add", "#%d %s", n.ID, n.Text)}, nil
+	})
+	return id
 }
 
 // succeedGone starts rl's next run once its holder's CLI stayed gone past
@@ -170,7 +334,7 @@ func (w *watcher) succeedGone(ctx context.Context, rl role, holder state.Party) 
 		return ""
 	}
 	if !w.stand.starting.CompareAndSwap(false, true) {
-		return "; its successor is starting"
+		return successorStarting
 	}
 	w.stand.inflight.Add(1)
 	go func() {
@@ -227,7 +391,9 @@ func reopenDue(start, gone, liveAt time.Time) bool {
 // resumeRestarted records a CLI of rl's holder back under a new PID
 // (standby watch) and tells it to resume the role: a restarted CLI has lost
 // its watch. A fresh successor's desktop CLI, which follows the headless
-// first turn that took the role, is such a restart.
+// first turn that took the role, is such a restart. A headless CLI of
+// beekeeper's is recorded and not told: a first turn ends once it took the
+// role, and a headless resume's turn is the resume.
 func (w *watcher) resumeRestarted(ctx context.Context, rl role, st *state.State, sessions []*claude.Session) {
 	r := rl.get(st)
 	if r.Holder == nil {
@@ -247,7 +413,7 @@ func (w *watcher) resumeRestarted(ctx context.Context, rl role, st *state.State,
 		return
 	}
 	s, live := claude.Live(sessions, sup.Party)
-	if !live {
+	if !live || w.headless(s.PID) {
 		return
 	}
 	_ = w.sendAsync(ctx, s.Name, rl.resumeMessage("your CLI restarted ("+restarted[0].Detail+") and its watch is gone"), func(err error) {
@@ -257,6 +423,16 @@ func (w *watcher) resumeRestarted(ctx context.Context, rl role, st *state.State,
 		}
 		w.emitNow(rl.name+"-resume", "%sRESUME: sent %q the hand-over from the command line (%s)", rl.tag, s.Name, restarted[0].Detail)
 	})
+}
+
+// headless reports whether the CLI pid is a headless turn of beekeeper's
+// (agents start's first turn, a wake) in the last poll's process table.
+func (w *watcher) headless(pid int) bool {
+	if w.table == nil {
+		return false
+	}
+	p := w.table.ByPID[pid]
+	return p != nil && printsTurn(p)
 }
 
 // sendAsync sends one message at a time from the command line, outside the

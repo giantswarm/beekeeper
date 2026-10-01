@@ -7,13 +7,17 @@ import "fmt"
 const AskTool = "AskUserQuestion"
 
 // ask decides an AskUserQuestion call: only the guide puts questions to the
-// person; every other session files a note for the guide and carries on.
-func (h Hook) ask(session string) []byte {
+// person, each with what the person needs to answer it; every other session
+// files a note for the guide and carries on.
+func (h Hook) ask(session string, input map[string]any) []byte {
 	guide, person := false, ""
 	if h.Guide != nil {
 		guide, person = h.Guide(session)
 	}
 	if guide {
+		if r := h.questionRefusal(input, person); r != "" {
+			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+		}
 		return nil
 	}
 	if person == "" {
