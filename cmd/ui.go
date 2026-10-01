@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"maps"
@@ -16,6 +17,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/merge"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -124,10 +126,24 @@ func (c *collector) Data(ctx context.Context) (*tui.Data, error) {
 	return d, nil
 }
 
+// running discovers the running sessions on its own clock: Tail and Send
+// run beside a refresh, which owns the app's.
+func (c *collector) running() ([]*claude.Session, error) {
+	t, err := plat.Machine.Processes()
+	if err != nil {
+		return nil, err
+	}
+	return discover(c.a.cfg, t, time.Now()), nil
+}
+
 // Tail reads the last turns of one session's transcript, as `beekeeper
 // tail` does, with its tool calls among them: what it does right now.
 func (c *collector) Tail(_ context.Context, session string, turns int) ([]tui.Turn, error) {
-	ts, err := c.a.sessionTail(session, turns, true)
+	raw, err := c.running()
+	if err != nil {
+		return nil, err
+	}
+	ts, err := sessionTail(raw, session, turns, true)
 	if err != nil {
 		return nil, err
 	}
@@ -136,6 +152,51 @@ func (c *collector) Tail(_ context.Context, session string, turns int) ([]tui.Tu
 		out = append(out, tui.Turn{At: t.At, Role: t.Role, Text: t.Text})
 	}
 	return out, nil
+}
+
+// Send delivers the person's message to one running session, stamped as
+// theirs through the screen: by name to a Claude Code session's CLI, as
+// SendMessage does, or into the inbox of an omp agent beekeeper started.
+// It returns where the message went.
+func (c *collector) Send(ctx context.Context, session, text string) (string, error) {
+	a := c.a
+	raw, err := c.running()
+	if err != nil {
+		return "", err
+	}
+	s, err := claude.Resolve(raw, session)
+	if err != nil {
+		return "", err
+	}
+	return a.messageSession(ctx, raw, s, text)
+}
+
+// messageSession delivers the person's text to s, one of the running
+// sessions, and says where it went.
+func (a *app) messageSession(ctx context.Context, sessions []*claude.Session, s *claude.Session, text string) (string, error) {
+	person := cmp.Or(a.cfg.Guide.Person, "the person")
+	msg := fmt.Sprintf("From %s through beekeeper ui: %s", person, strings.TrimSpace(text))
+	by := state.Party{Name: person}
+	if s.Harness == omp.Harness {
+		id, ok := strings.CutPrefix(s.HostID, omp.HostPrefix)
+		if !ok {
+			return "", refused("%s: an omp session beekeeper did not start takes no message: omp has no way into an interactive session", s.Name)
+		}
+		if err := a.sendOmp(s.Name, id, msg); err != nil {
+			return "", err
+		}
+		_ = a.store.Log(event(by, "ui.message", "%s: written to its omp inbox", s.Name))
+		return "in its omp inbox: it runs at the next tool round or as the next turn", nil
+	}
+	name, err := uniqueName(sessions, s)
+	if err != nil {
+		return "", err
+	}
+	if err := a.peerSend(ctx, name, msg); err != nil {
+		return "", err
+	}
+	_ = a.store.Log(event(by, "ui.message", "%s: sent by name to its CLI %d", s.Name, s.PID))
+	return "queued in its CLI: it runs at the next tool call or as the next turn", nil
 }
 
 // uiCmd is `beekeeper ui`: the person's screen.
@@ -149,9 +210,13 @@ budget and who is drawing on it, the leases, holds and merge lanes, the
 supervisor and the guide, the agents, notes and timers, the installations'
 alerts and the event log. Press q to quit. Enter on a session follows it
 live: its history, then the current turn with its tool calls as they land;
-k and j scroll back and forward, G follows again.
+k and j scroll back and forward, G follows again. m there writes it a
+message, stamped as the person's through the screen: a Claude Code session
+gets it by name at its next tool call or as its next turn, an omp agent
+beekeeper started in its inbox; an omp session the person runs in its own
+terminal takes none.
 
-Reads only: the screen takes no lease and lifts no hold — those stay with
+Besides the messages it sends, it reads only: the screen takes no lease and lifts no hold — those stay with
 the commands, whose exit codes the sessions gate on. It refreshes every
 two seconds; the GitHub budget and the installations' upgrades are
 re-read at most every minute.`,
