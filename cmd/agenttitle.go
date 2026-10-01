@@ -351,29 +351,40 @@ const (
 	archiveEach = 5 * time.Second
 )
 
-// archiveDesktops archives the desktop sessions of agents just taken off
-// the roster by the command by, through one steward's turn: only sessions
-// beekeeper started, holding no role and running no turn. It returns a line
-// per agent saying what it did or why not.
-func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []state.Party, by string) []string {
-	lines := make([]string, len(agents))
+// archiveOutcome is what archiving the desktop session of agent did, said
+// by line. host is the desktop session left to archive later, "" when it
+// is archived or never to be; asked says a steward was asked for it in vain.
+type archiveOutcome struct {
+	agent state.Party
+	line  string
+	host  string
+	asked bool
+}
+
+// archiveDesktops archives the desktop sessions of agents taken off the
+// roster by the command by, through one steward's turn: only sessions
+// beekeeper started, holding no role and running no turn. It returns an
+// outcome per agent.
+func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []state.Party, by string) []archiveOutcome {
+	out := make([]archiveOutcome, len(agents))
 	var hosts []string
 	at := map[string]int{}
 	for i, ag := range agents {
+		out[i].agent = ag
 		if id, ok := strings.CutPrefix(ag.HostSession, omp.HostPrefix); ok {
-			lines[i] = a.endOmp(ctx, id)
+			out[i].line = a.endOmp(ctx, id)
 			continue
 		}
 		host, why := a.archivable(st, ag)
 		if why != "" {
-			lines[i] = why
+			out[i].line, out[i].host = why, host
 			continue
 		}
 		at[host] = i
 		hosts = append(hosts, host)
 	}
 	if len(hosts) == 0 {
-		return lines
+		return out
 	}
 	archived := func(host string) bool {
 		r, ok := claude.ReadRecord(a.cfg, host)
@@ -385,13 +396,14 @@ func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []sta
 	wait := archiveWait + time.Duration(len(hosts)-1)*archiveEach
 	s, err := delegate(ctx, find, msg, func() bool { return len(left()) == 0 }, a.peerSend, wait)
 	for _, h := range hosts {
+		o := &out[at[h]]
 		if archived(h) {
-			lines[at[h]] = fmt.Sprintf("archived its desktop session %s (%s archived it)", h, s.who(h))
+			o.line = fmt.Sprintf("archived its desktop session %s (%s archived it)", h, s.who(h))
 		} else {
-			lines[at[h]] = fmt.Sprintf("its desktop session %s stays: %v", h, err)
+			o.line, o.host, o.asked = fmt.Sprintf("its desktop session %s stays: %v", h, err), h, true
 		}
 	}
-	return lines
+	return out
 }
 
 // endOmp stops the unit of the omp agent started under id, which left the
@@ -418,8 +430,9 @@ func (a *app) endOmp(ctx context.Context, id string) string {
 	return strings.Join(done, ", ")
 }
 
-// archivable is the desktop session of agent ag when the doctor or remove
-// may archive it, else why it stays.
+// archivable is the desktop session of agent ag the doctor or remove may
+// archive, and why it stays now: a why without a host is never archived,
+// one with a host only once its CLI runs no turn.
 func (a *app) archivable(st *state.State, ag state.Party) (host, why string) {
 	if strings.HasPrefix(ag.HostSession, omp.HostPrefix) {
 		return "", "an omp agent has no desktop session"
@@ -439,7 +452,7 @@ func (a *app) archivable(st *state.State, ag state.Party) (host, why string) {
 		return "", "the desktop has its session archived already"
 	}
 	if s, ok := a.runningTurn(ag); ok {
-		return "", fmt.Sprintf("its desktop session stays: its CLI %d is in a turn", s.PID)
+		return host, fmt.Sprintf("its desktop session stays: its CLI %d is in a turn", s.PID)
 	}
 	return host, ""
 }

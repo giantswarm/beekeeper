@@ -331,6 +331,22 @@ type Start struct {
 	Harness string `json:"harness,omitempty"`
 }
 
+// Archive is the desktop session of an agent that left the roster while
+// its archive could not be done (its CLI ran a turn, no steward recorded
+// it): the doctor asks for it again until the desktop records it.
+type Archive struct {
+	// Party is the agent that left the roster.
+	Party
+	// Host is its desktop session.
+	Host  string    `json:"host"`
+	Since time.Time `json:"since"`
+	// Why says why it stayed the last time.
+	Why string `json:"why"`
+	// Tries counts the stewards' turns asked for it, Tried the last.
+	Tries int       `json:"tries,omitempty"`
+	Tried time.Time `json:"tried,omitzero"`
+}
+
 // Report is one run of the scheduled status reporter: the session the
 // standby watch started for an interval's slot, until it posted, timed out
 // or failed to start.
@@ -411,6 +427,12 @@ type State struct {
 	// Starts are the sessions beekeeper started, what the permission hook
 	// answers for.
 	Starts []Start `json:"starts,omitempty"`
+	// Archives are the desktop sessions of agents off the roster the
+	// doctor still owes an archive.
+	Archives []Archive `json:"archives,omitempty"`
+	// ArchivesSeeded says the doctor owed the archives of the finished
+	// workers whose desktop CLI ran on before it kept Archives.
+	ArchivesSeeded bool `json:"archivesSeeded,omitempty"`
 	// BudgetETag makes the budget probe a conditional request (a 304
 	// costs no budget).
 	BudgetETag string `json:"budgetETag,omitempty"`

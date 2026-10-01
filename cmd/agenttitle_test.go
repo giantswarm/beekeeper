@@ -180,7 +180,7 @@ func TestArchiveDesktopKeeps(t *testing.T) {
 	a := &app{}
 	ag := state.Party{Session: "a", Name: "worker"}
 	archive := func(st *state.State, ag state.Party) string {
-		return a.archiveDesktops(context.Background(), st, []state.Party{ag}, "test")[0]
+		return a.archiveDesktops(context.Background(), st, []state.Party{ag}, "test")[0].line
 	}
 	if got := archive(&state.State{}, ag); !strings.Contains(got, "did not start it") {
 		t.Errorf("not started: %q", got)

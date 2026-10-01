@@ -725,14 +725,19 @@ by an agent", which its own titling never overwrites.
 the desktop's Archived list brings it back), and prints and logs (`agents.archive`) what it did.
 It does so only for a session beekeeper started that holds no role and runs no turn;
 `--keep-desktop` leaves it in the sidebar. When no steward is idle it says so and the removal
-still stands.
+still stands; the doctor then owes the archive (below).
 
 `beekeeper doctor` does these chores by rule, and every watch poll (not `--once`) runs it in the
 background, one `DOCTOR` line per thing it did. It takes an agent off the roster once it reported
 its work finished with `agents idle --done` and its CLI runs no turn, once it was relieved of the
 supervisor's or the guide's role (a relieved role relays, it never hands over), or once it stayed
 idle `agents.staleAfter` (24h) with no CLI running; the desktop sessions beekeeper started for the
-finished and the stale ones are archived in one steward's turn, under the rules above. A session
+finished and the stale ones are archived in one steward's turn, under the rules above. An archive
+that stayed (the CLI ran a turn, no steward recorded it, also after `agents remove`) is owed: the
+doctor asks for it again on its later runs while the CLI runs no turn, in the same steward's turn,
+until the desktop records it, up to 5 stewards' turns 10 minutes apart within 24 hours, each try a
+`DOCTOR` line and an `agents.archive` event with its reason; an agent back on the roster or the
+session archived by hand is owed nothing. A session
 beekeeper started whose desktop record shows another title than its roster name gets the name
 back through a steward, at most every 30 minutes per session. Each fault of `doctor.faults` is
 probed (the probe exits 0 while the fault is absent); a failing one whose remedy may run

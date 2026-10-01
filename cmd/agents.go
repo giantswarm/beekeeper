@@ -218,8 +218,10 @@ archive it. A session its person started is never archived.`,
 			if err != nil {
 				return err
 			}
-			line := a.archiveDesktops(cmd.Context(), st, []state.Party{gone}, "beekeeper agents remove "+gone.Name)[0]
-			_ = a.store.Update(func(*state.State) ([]state.Event, error) {
+			outcomes := a.archiveDesktops(cmd.Context(), st, []state.Party{gone}, "beekeeper agents remove "+gone.Name)
+			line := outcomes[0].line
+			_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+				line = owe(st, outcomes, a.now)[0]
 				return []state.Event{event(me, "agents.archive", "%s: %s", gone.Name, line)}, nil
 			})
 			_, err = fmt.Fprintf(a.out, "%s: %s\n", gone.Name, line)
