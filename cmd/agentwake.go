@@ -49,7 +49,11 @@ desktop send to its local_ id by name to it, so no second copy starts.`,
 			if msg == "" {
 				return usageErr("an empty message wakes nothing")
 			}
-			return a.wakeAgent(cmd.Context(), args[0], msg, mode)
+			by, err := a.caller()
+			if err != nil {
+				return err
+			}
+			return a.wakeAgent(cmd.Context(), by, args[0], msg, mode)
 		},
 	}
 	c.Flags().StringVar(&mode, "permission-mode", "", "the resumed turn's permission mode (default: the start's, else the desktop record's)")
@@ -65,11 +69,8 @@ type wakeTarget struct {
 	model string
 }
 
-func (a *app) wakeAgent(ctx context.Context, q, msg, mode string) error {
-	by, err := a.caller()
-	if err != nil {
-		return err
-	}
+// wakeAgent delivers msg from by to the registered agent q (wake).
+func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string) error {
 	st, err := a.store.Read()
 	if err != nil {
 		return err

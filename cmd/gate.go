@@ -31,6 +31,9 @@ const (
 	ExitGateQueued = 76
 	// ExitGateRefused: a hold, the budget floor or an unreadable installation.
 	ExitGateRefused = 77
+	// ExitGateDuplicate: the pull request's merge already runs, devctl's
+	// "not applicable".
+	ExitGateDuplicate = 3
 	// GatePrefix starts every line the gate prints.
 	GatePrefix = "beekeeper gate: "
 	// DefaultGateWait is a foreground merge's wait for its turn; the hook
@@ -45,8 +48,8 @@ const (
 func (a *app) gateCmd() *cobra.Command {
 	var wait time.Duration
 	c := &cobra.Command{
-		Use:   "gate [--wait DURATION] -- devctl pr merge <owner/repo> <n> [flags]",
-		Short: "The PreToolUse hook's gate on devctl pr merge",
+		Use:   "gate [--wait DURATION] -- devctl pr merge|pr wait|release wait|rollout wait <args>",
+		Short: "The PreToolUse hook's gate on devctl's blocking commands",
 		Long: `gate is what the PreToolUse hook puts in front of every devctl pr merge; a
 session never calls it. It refuses the merge (exit 77) when the repository,
 its lane, "merges" or "github" is held (a cluster upgrade on the lane's
@@ -65,12 +68,26 @@ in a session of its own, so it merges on when the caller's session ends
 (only SIGINT reaches it); its document and exit code pass through unchanged.
 A run with nothing merged keeps its place for the retry (merge.seedTTL),
 except devctl's refusal (exit 5). A run without its document or ended by a
-signal is judged by GitHub: merged, its release is unconfirmed.`,
+signal is judged by GitHub: merged, its release is unconfirmed. A second
+merge of a pull request whose merge runs is refused (exit 3) with that run's
+start, owner and last line.
+
+devctl pr wait, release wait and rollout wait run the same way outside
+their caller, without a queue. Whichever command it is, its outcome reaches
+the session that started it: the caller sees the output and exit code as
+ever while it listens, and when it no longer does (a headless turn that
+ended, a caller killed, its CLI gone) the run wakes its owner, a registered
+agent, with one line: "<command> exit N: <reason> (output in <file>)",
+logged as devctl.unheard.`,
 		Hidden: true,
 		Args:   cobra.MinimumNArgs(1),
-		PersistentPreRunE: func(*cobra.Command, []string) error {
+		PersistentPreRunE: func(_ *cobra.Command, args []string) error {
 			if err := a.load(); err != nil {
-				return gateRefused("the configuration does not load (%v): fix it, then run the same command again", err)
+				if _, _, ok := merge.ParseArgs(args); ok {
+					return gateRefused("the configuration does not load (%v): fix it, then run the same command again", err)
+				}
+				gateLine("the configuration does not load (%v): this runs unowned, its outcome reaches nobody if your turn ends first", err)
+				a.store = nil
 			}
 			return nil
 		},
@@ -88,8 +105,12 @@ func gateLine(format string, args ...any) {
 }
 
 func gateRefused(format string, args ...any) error {
+	return gateRefusedWith(ExitGateRefused, format, args...)
+}
+
+func gateRefusedWith(code int, format string, args ...any) error {
 	gateLine("refused, "+format, args...)
-	return &exitError{code: ExitGateRefused}
+	return &exitError{code: code}
 }
 
 // gateRun is one gated merge.
@@ -102,6 +123,7 @@ type gateRun struct {
 	lane    config.Lane
 	me      state.Party
 	pid     int
+	cli     int // the caller's CLI (callerCLI)
 	lastWhy string
 	seeded  bool // the merge's place was queued on the session's behalf
 }
@@ -109,13 +131,16 @@ type gateRun struct {
 func (a *app) gate(ctx context.Context, argv []string, wait time.Duration) error {
 	repo, pr, ok := merge.ParseArgs(argv)
 	if !ok {
+		if a.store != nil && merge.ParseOwned(argv) {
+			return a.ownedRun(argv)
+		}
 		return exitCode(runChild(argv, os.Stdout))
 	}
 	me, err := a.caller()
 	if err != nil {
 		me = state.Party{Name: fmt.Sprintf("pid %d", os.Getppid())}
 	}
-	g := &gateRun{app: a, ctx: ctx, argv: argv, repo: repo, pr: pr, lane: a.cfg.LaneOf(repo), me: me, pid: os.Getpid()}
+	g := &gateRun{app: a, ctx: ctx, argv: argv, repo: repo, pr: pr, lane: a.cfg.LaneOf(repo), me: me, pid: os.Getpid(), cli: callerCLI()}
 	deadline := time.Now().Add(wait)
 	if v, ok := os.LookupEnv(gateDeadlineEnv); ok {
 		_ = os.Unsetenv(gateDeadlineEnv) // devctl must not inherit it
@@ -200,7 +225,12 @@ func (g *gateRun) step() (string, error) {
 		return "", g.refuse("%s is held (%s) by %q until %s: %s; merge after the hold lifts (beekeeper hold), do not poll",
 			g.repo, holdTarget(hold), hold.By.Name, untilText(g.app, hold), hold.Reason)
 	case dup != nil:
-		return "", g.refuse("%s#%d is already merging in %q (pid %d): let that run finish", g.repo, g.pr, dup.By.Name, dup.PID)
+		last := lastLine(mergeBase(g.store.Dir(), g.repo, g.pr) + ".log")
+		if last == "" {
+			last = "none yet"
+		}
+		return "", g.refuseWith(ExitGateDuplicate, "%s#%d is already merging: started %s by %q (pid %d), last line: %s; its outcome reaches %q, do not merge again",
+			g.repo, g.pr, clock(g.now, dup.Started), dup.By.Name, dup.PID, last, dup.By.Name)
 	}
 	if ahead, ok := q.Ahead(g.repo, g.pr, g.present); ok {
 		if q.Running != nil {
@@ -309,12 +339,17 @@ func (g *gateRun) drop(st *state.State) {
 
 // refuse removes the merge from its queue, logs the refusal and refuses it.
 func (g *gateRun) refuse(format string, args ...any) error {
+	return g.refuseWith(ExitGateRefused, format, args...)
+}
+
+// refuseWith is refuse with exit code code.
+func (g *gateRun) refuseWith(code int, format string, args ...any) error {
 	why := fmt.Sprintf(format, args...)
 	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
 		g.drop(st)
 		return []state.Event{event(g.me, "merge.refused", "%s#%d: %s", g.repo, g.pr, why)}, nil
 	})
-	return gateRefused("%s", why)
+	return gateRefusedWith(code, "%s", why)
 }
 
 // laneReady reads the lane's installation: why is what the lane waits for,
@@ -423,30 +458,27 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 // judge: merged, its release is unconfirmed; unanswered, the lane settles by
 // the settle rule as for a lost merge.
 func (g *gateRun) runMerge() error {
-	// The caller going away ends neither the merge nor its record: a write
-	// to its closed pipes fails instead.
-	away := make(chan os.Signal, 1)
-	signal.Notify(away, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGPIPE)
-	defer signal.Stop(away)
-	var doc []byte
-	rc := guard.ExitNotFound
-	argv, note, output := g.argv, "", ""
+	defer outliveCaller()()
+	run := childRun{rc: guard.ExitNotFound}
+	argv, note := g.argv, ""
 	if !g.cfg.Merge.DevctlServes(g.repo) {
 		self, err := selfExe()
 		if err != nil {
 			gateLine("%v", err)
-			return exitCode(rc)
+			return exitCode(run.rc)
 		}
 		argv, note = squashArgv(self, g.repo, g.pr, g.argv), ", "+github.SquashRoute
 		gateLine("devctl serves the repositories of %s only (merge.devctlOwners): %s#%d takes the %s as the gh login, green first, no release wait",
 			strings.Join(g.cfg.Merge.DevctlOwners, ", "), g.repo, g.pr, github.SquashRoute)
 	}
-	if base, err := g.mergeFiles(); err != nil {
+	base, err := g.mergeFiles()
+	if err != nil {
 		gateLine("%v", err)
 	} else {
-		doc, rc, output = runDetached(argv, base, g.started)
-		_, _ = os.Stdout.Write(doc) // the caller's pipe may be gone
+		run = runDetached(childSpec{Argv: argv, Owner: g.me, Config: g.explicitConfig()}, base, g.started)
+		defer handOver(base, run, g.cli)
 	}
+	doc, rc, output := run.doc, run.rc, run.kept
 	if output != "" {
 		note += ", output in " + output
 	}

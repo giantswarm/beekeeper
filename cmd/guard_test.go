@@ -29,7 +29,7 @@ func TestMain(m *testing.M) {
 		os.Exit(int(b[0]) - 1)
 	}
 	if len(os.Args) > 2 && os.Args[1] == mergeChildCmd {
-		os.Exit(mergeChild(os.Args[2]))
+		os.Exit(mergeChild(os.Args[2]).rc)
 	}
 	if os.Getenv("BEEKEEPER_TEST_MAIN") == "1" {
 		os.Exit(Main())

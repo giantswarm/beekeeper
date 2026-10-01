@@ -59,6 +59,27 @@ func ParseArgs(argv []string) (repo string, pr int, ok bool) {
 	return "", 0, false
 }
 
+// owned are the subcommands of devctl that block until an outcome, which
+// the gate runs outside their caller so that the outcome reaches its owner.
+var owned = [][2]string{{"pr", "merge"}, {"pr", waitVerb}, {"release", waitVerb}, {"rollout", waitVerb}}
+
+const waitVerb = "wait"
+
+// ParseOwned reports whether argv is devctl pr merge, pr wait, release wait
+// or rollout wait, not a help call.
+func ParseOwned(argv []string) bool {
+	if slices.Contains(argv, "-h") || slices.Contains(argv, "--help") {
+		return false
+	}
+	for i := 1; i+1 < len(argv); i++ {
+		if strings.HasPrefix(argv[i], "-") {
+			continue
+		}
+		return slices.Contains(owned, [2]string{argv[i], argv[i+1]})
+	}
+	return false
+}
+
 // Outcome is what devctl's document says about the merge.
 type Outcome struct {
 	// Merged is true when the document names a merge commit.
