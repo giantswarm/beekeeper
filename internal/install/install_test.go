@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/platform"
@@ -29,10 +30,14 @@ func (*fakeSetup) Available() bool { return true }
 
 func (*fakeSetup) Files(s platform.SetupSpec) ([]platform.File, []string) {
 	dir := filepath.Join(s.ConfigDir, "units")
-	return []platform.File{
+	files := []platform.File{
 		{Path: filepath.Join(dir, "notify.service"), Content: []byte("ExecStart=" + s.Exe + " watch\n"), Service: true},
 		{Path: filepath.Join(dir, "guard.d", "guard.conf"), Content: []byte("MemoryMax=1M\n")},
-	}, []string{"something: not on this machine"}
+	}
+	if s.TeleportEvery > 0 {
+		files = append(files, platform.File{Path: filepath.Join(dir, "keeper.timer"), Content: []byte("OnUnitActiveSec=" + s.TeleportEvery.String() + "\n"), Service: true})
+	}
+	return files, []string{"something: not on this machine"}
 }
 
 func (f *fakeSetup) Started(context.Context, string) bool { return f.started }
@@ -250,7 +255,7 @@ func TestKeepsWhatItDidNotWrite(t *testing.T) {
 		"keep    ~/.claude/settings.json: PreToolUse hook: a beekeeper hook with another command",
 		"add     ~/.claude/settings.json: PermissionRequest hook",
 		"ok      ~/.config/beekeeper/config.yaml: a config exists",
-		"keep    standby service",
+		"keep    notify.service: its definition is not beekeeper install's",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("install lacks %q:\n%s", want, out)
@@ -338,5 +343,46 @@ func TestStarterIsTheDefaults(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the starter config sets keys")
+	}
+}
+
+// The keeper's timer is a second unit install starts and uninstall stops.
+func TestInstallsTheKeeper(t *testing.T) {
+	home := t.TempDir()
+	f := &fakeSetup{}
+	e, out := env(t, home, f, f.run)
+	e.Spec.TeleportEvery = 10 * time.Minute
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{reload, "start notify.service", "start keeper.timer"}; !reflect.DeepEqual(f.ran, want) {
+		t.Fatalf("ran %q, want %q\n%s", f.ran, want, out)
+	}
+	m, err := readManifest(e.manifest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Services) != 2 || !strings.HasSuffix(m.Services[1], "keeper.timer") {
+		t.Fatalf("services %q", m.Services)
+	}
+	f.ran = nil
+	if err := Uninstall(context.Background(), e, false); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"stop notify.service", "stop keeper.timer", reload}; !reflect.DeepEqual(f.ran, want) {
+		t.Errorf("uninstall ran %q, want %q", f.ran, want)
+	}
+}
+
+// A manifest an earlier install wrote names the standby service alone.
+func TestReadsTheEarlierManifest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "install.json")
+	write(t, path, `{"service": "/u/notify.service"}`)
+	m, err := readManifest(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(m.Services, []string{"/u/notify.service"}) || m.Service != "" {
+		t.Errorf("manifest %+v", m)
 	}
 }

@@ -29,6 +29,22 @@ kube:
   # the one ending in @<name>.
   contextTemplate: login.example.com-{installation}
 
+# The Teleport login the kube contexts run `tsh kube credentials` with. Set,
+# beekeeper install adds the keeper (beekeeper-teleport.timer), which renews
+# the SSO login before it expires: a fresh tsh login in a staging home under
+# the browser lease (tsh opens the login URL in the default browser, whose
+# SSO session completes it), swapped into the profile directory in one step.
+# watch and snapshot show the expiry. Unset, no keeper runs.
+teleport:
+  proxy: login.example.com:443   # tsh login --proxy
+  auth: github              # tsh login --auth, the SSO connector; default: the cluster's
+  # tsh: tsh                # the default
+  # home: /home/ada/.tsh    # the profile directory; default: $TELEPORT_HOME, else ~/.tsh
+  renewBefore: 90m          # the default; the keeper renews this long before the expiry
+  warnBefore: 1h            # the default; watch says TELEPORT LOGIN under this, at most renewBefore
+  loginTimeout: 3m          # the default; one login, the browser's round trip included
+  every: 10m                # the default; how often the keeper's timer reads the expiry
+
 github:
   floor: 2500               # the default; budget under which GitHub work stops
   probeRepo: example-org/tools   # default: giantswarm/beekeeper; any repository the token can read

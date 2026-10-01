@@ -1,0 +1,13 @@
+# Starts beekeeper-teleport.service every teleport.every: the service
+# renews only once the login is close to its expiry.
+[Unit]
+Description=beekeeper: read the Teleport login's expiry
+Documentation=https://github.com/giantswarm/beekeeper#the-teleport-login
+
+[Timer]
+OnStartupSec=2min
+OnUnitActiveSec=10m
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

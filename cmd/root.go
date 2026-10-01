@@ -130,7 +130,7 @@ status after a relay), 125 a newer release (self-update --check).`,
 		&cobra.Group{ID: supervisorRole.ing, Title: "Supervising:"},
 		&cobra.Group{ID: "guarding", Title: "Guarding:"},
 	)
-	for _, c := range []*cobra.Command{a.statusCmd(), a.sessionsCmd(), a.tailCmd(), a.snapshotCmd(), a.uiCmd(), a.watchCmd(), a.alertsCmd(), a.budgetCmd(), a.psCmd()} {
+	for _, c := range []*cobra.Command{a.statusCmd(), a.sessionsCmd(), a.tailCmd(), a.snapshotCmd(), a.uiCmd(), a.watchCmd(), a.alertsCmd(), a.budgetCmd(), a.teleportCmd(), a.psCmd()} {
 		c.GroupID = "watching"
 		root.AddCommand(c)
 	}

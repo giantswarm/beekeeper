@@ -255,6 +255,10 @@ type watcher struct {
 	// sweeping is set while the exposure sweep runs, lastSweep when it began.
 	sweeping  atomic.Bool
 	lastSweep time.Time
+	// teleporting is set while the Teleport login is read, lastTeleport
+	// when it began.
+	teleporting  atomic.Bool
+	lastTeleport time.Time
 	// polls counts the polls begun.
 	polls atomic.Int64
 	// missing are the sections whose platform part this build does not
@@ -891,6 +895,10 @@ func (w *watcher) poll(ctx context.Context) {
 		w.lastBudget = now
 		inFlight(ctx, th.Interval.Duration, &w.budgeting, func(ctx context.Context) { w.budget(ctx, now) })
 	}
+	if now.Sub(w.lastTeleport) >= w.readEvery(th.Interval.Duration) {
+		w.lastTeleport = now
+		inFlight(ctx, th.Interval.Duration, &w.teleporting, w.teleport)
+	}
 	if now.Sub(w.lastSweep) >= w.readEvery(th.Interval.Duration) {
 		w.lastSweep = now
 		// The sweep takes a while on a big home directory: the poll does not wait.
@@ -899,6 +907,24 @@ func (w *watcher) poll(ctx context.Context) {
 	w.saveMark()
 	if w.notifier != nil {
 		w.notifier.Flush(ctx, w.now)
+	}
+}
+
+// teleport says the Teleport login's trouble, one line when it starts and
+// one ENDED line when it ends: about to expire, expired, or its keeper's
+// renewal failed.
+func (w *watcher) teleport(ctx context.Context) {
+	v := w.readTeleport(ctx)
+	if v == nil {
+		return
+	}
+	for _, k := range teleportKeys {
+		if k != v.Key {
+			w.clear(k)
+		}
+	}
+	if v.Key != "" {
+		w.emit(v.Key, "%s", v.line(time.Now()))
 	}
 }
 

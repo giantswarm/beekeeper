@@ -411,6 +411,9 @@ func (g *gateRun) laneReady(q merge.Lane) ([]merge.HelmRelease, string, error) {
 	}
 	hrs, err := readHelmReleases(g.ctx, g.lane)
 	if err != nil {
+		if cause := g.teleportCause(g.ctx); cause != "" {
+			return nil, "", g.refuse("lane %s cannot read the HelmReleases of %s: %s; then run the same command again", g.lane.Name, g.lane.Installation, cause)
+		}
 		return nil, "", g.refuse("lane %s cannot read the HelmReleases of %s (%v): log in (tsh kube login %s), then run the same command again",
 			g.lane.Name, g.lane.Installation, err, g.lane.Installation)
 	}
