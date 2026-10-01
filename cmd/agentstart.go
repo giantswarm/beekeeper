@@ -63,9 +63,18 @@ const (
 // person working there.
 var errDesktopInUse = errors.New("the desktop's window kept the focus")
 
+// errTyping is a claude:// link not opened: the person kept typing or
+// pointing within desktop.typingQuiet, and a stray keystroke would have
+// gone into the window the link switches.
+var errTyping = errors.New("the person kept typing within desktop.typingQuiet")
+
 // desktopWindowActive reports whether the desktop's window has the focus;
 // tests replace it.
 var desktopWindowActive = claude.DesktopWindowActive
+
+// desktopInput watches the person's keyboards and pointers; tests replace
+// it.
+var desktopInput = func(ctx context.Context) (func() time.Time, error) { return plat.Input.Watch(ctx) }
 
 func (a *app) agentStartCmd() *cobra.Command {
 	var model, dir, task string
@@ -124,8 +133,8 @@ desktop starts a new CLI when the person opens the session.`,
 			_, err = fmt.Fprintf(a.out, "started %s: session %s, desktop local_%s, bypassPermissions, in %s, busy with %q\n"+
 				"its first turn runs from the command line (journalctl --user -u %s); later turns are desktop turns in acceptEdits\n",
 				name, sa.id, sa.id, sa.dir, sa.task, sa.unit)
-			if err == nil && sa.deferred {
-				_, err = fmt.Fprintln(a.out, "the desktop's window kept the focus: not imported yet, the reopen after its first turn imports it")
+			if err == nil && sa.deferred != nil {
+				_, err = fmt.Fprintf(a.out, "%v: not imported yet, the reopen after its first turn imports it\n", sa.deferred)
 				return err
 			}
 			if err == nil && sa.kept != "" {
@@ -179,9 +188,10 @@ type startedAgent struct {
 	// twin is the desktop's CLI of the session the start stopped while the
 	// first turn runs; 0: none.
 	twin int
-	// deferred: the desktop's window kept the focus, and the reopen after
-	// the first turn imports the session.
-	deferred bool
+	// deferred is what held the import (the desktop's window kept the
+	// focus, the person kept typing): the reopen after the first turn
+	// imports the session.
+	deferred error
 }
 
 // startAgent records and registers the session, starts its first turn in a
@@ -194,6 +204,14 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	}
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		return startedAgent{}, usageErr("--dir %s: not a directory", dir)
+	}
+	// Watched from the start, the person's input has mostly been quiet
+	// for desktop.typingQuiet by the first reply, or not.
+	deskCtx, stopDesk := context.WithCancel(ctx)
+	defer stopDesk()
+	d, err := a.watchDesk(deskCtx)
+	if err != nil {
+		return startedAgent{}, err
 	}
 	bin, err := exec.LookPath("claude")
 	if err != nil {
@@ -252,8 +270,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 		follow = sp.replaces.HostSession
 	}
 	sa := startedAgent{id: id, unit: unit, dir: dir, task: reg.task}
-	if !awaitDesktopAway(ctx, importAwayWait) {
-		sa.deferred = true
+	if sa.deferred = d.await(ctx, importAwayWait); sa.deferred != nil {
 		return sa, nil
 	}
 	err = whileFrozen(ctx, unit, func() error {
@@ -261,7 +278,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 			return fmt.Errorf("%w, not imported into the desktop", err)
 		}
 		var err error
-		if sa.kept, err = a.importSession(ctx, id, follow); err != nil {
+		if sa.kept, err = a.importSession(ctx, d, id, follow); err != nil {
 			return err
 		}
 		if r := a.desktopRecord(ctx, "local_"+id); r != nil {
@@ -432,14 +449,14 @@ func modelLine(model string) string {
 // it showed before, which importSession returns. A desktop that showed no
 // session or follow (the session a hand-over ends), or was not running, is
 // left on the import.
-func (a *app) importSession(ctx context.Context, id, follow string) (string, error) {
+func (a *app) importSession(ctx context.Context, d desk, id, follow string) (string, error) {
 	t, err := plat.Machine.Processes()
 	if err != nil {
 		return "", err
 	}
 	running := !plat.Opener.Running(t).IsZero()
 	// startAgent waited for the window already.
-	prev, err := a.showBriefly(ctx, resumeURL(id), "local_"+id, follow, running, awayPoll)
+	prev, err := a.showBriefly(ctx, d, resumeURL(id), "local_"+id, follow, running, awayPoll)
 	if err != nil {
 		return "", fmt.Errorf("importing %s into the desktop: %w", id, err)
 	}
@@ -449,13 +466,13 @@ func (a *app) importSession(ctx context.Context, id, follow string) (string, err
 // showBriefly opens url, which shows host in the desktop's main window, and
 // once it does, shows the session the window showed before again and
 // returns it; empty when there was none to go back to, or it was host or
-// follow. A running desktop gets the link only once its window has lost
-// the focus, waiting up to away: errDesktopInUse when it kept it.
-func (a *app) showBriefly(ctx context.Context, url, host, follow string, running bool, away time.Duration) (string, error) {
+// follow. A running desktop gets the link only once d takes it, waiting up
+// to away: errDesktopInUse or errTyping when it did not.
+func (a *app) showBriefly(ctx context.Context, d desk, url, host, follow string, running bool, away time.Duration) (string, error) {
 	var prev string
 	if running {
-		if !awaitDesktopAway(ctx, away) {
-			return "", errDesktopInUse
+		if err := d.await(ctx, away); err != nil {
+			return "", err
 		}
 		prev = awaitFocusOff(ctx, a.cfg.Claude.DesktopLog, host, settleWait)
 	}
@@ -511,7 +528,11 @@ func (a *app) agentReopenCmd() *cobra.Command {
 			if _, ok := claude.ReadRecord(a.cfg, "local_"+id); !ok {
 				url = resumeURL(id)
 			}
-			if _, err := a.showBriefly(cmd.Context(), url, "local_"+id, "", true, reopenAwayWait); err != nil {
+			d, err := a.watchDesk(cmd.Context())
+			if err != nil {
+				return a.reopenMissed(name, err)
+			}
+			if _, err := a.showBriefly(cmd.Context(), d, url, "local_"+id, "", true, reopenAwayWait); err != nil {
 				return a.reopenMissed(name, fmt.Errorf("reopening %s in the desktop: %w", id, err))
 			}
 			if _, err := fmt.Fprintf(a.out, "reopen: showed local_%s in the desktop, which warms its CLI\n", id); err != nil {
@@ -605,21 +626,49 @@ func awaitFocus(ctx context.Context, log, host string, wait time.Duration) bool 
 	}
 }
 
-// awaitDesktopAway reports whether the desktop's window is without the
-// focus within wait. A compositor that cannot be asked counts as the window
-// keeping it.
-func awaitDesktopAway(ctx context.Context, wait time.Duration) bool {
+// desk is the desktop as a claude:// link finds it: whether its window has
+// the focus, and when the person last typed or pointed.
+type desk struct {
+	// quiet is desktop.typingQuiet; negative, input is not watched.
+	quiet time.Duration
+	last  func() time.Time
+}
+
+// watchDesk watches the person's input until ctx ends, unless
+// desktop.typingQuiet is negative.
+func (a *app) watchDesk(ctx context.Context) (desk, error) {
+	d := desk{quiet: a.cfg.Desktop.TypingQuiet.Duration}
+	if d.quiet < 0 {
+		return d, nil
+	}
+	last, err := desktopInput(ctx)
+	if err != nil {
+		return d, fmt.Errorf("watching the person's input before a desktop link (desktop.typingQuiet: -1s opens links without it): %w", err)
+	}
+	d.last = last
+	return d, nil
+}
+
+// await waits up to wait for the desktop to take a link: its window without
+// the focus, and the person's input quiet for desktop.typingQuiet. It
+// returns what held the link at the end, errDesktopInUse or errTyping. A
+// compositor that cannot be asked counts as the window keeping the focus.
+func (d desk) await(ctx context.Context, wait time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	tick := time.NewTicker(awayPoll)
 	defer tick.Stop()
 	for {
+		held := errDesktopInUse
 		if active, err := desktopWindowActive(ctx); err == nil && !active {
-			return true
+			if d.last == nil || time.Since(d.last()) >= d.quiet {
+				return nil
+			}
+			held = errTyping
 		}
 		select {
 		case <-ctx.Done():
-			return false
+			return held
 		case <-tick.C:
 		}
 	}

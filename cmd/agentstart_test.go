@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -268,25 +269,59 @@ func TestTitleLine(t *testing.T) {
 // A claude:// link waits while the desktop's window has the focus, and goes
 // once it lost it; a window that keeps it, or a compositor that cannot be
 // asked, holds the link past the wait.
-func TestAwaitDesktopAway(t *testing.T) {
+func TestDeskAwaitsTheFocus(t *testing.T) {
 	saved := desktopWindowActive
 	t.Cleanup(func() { desktopWindowActive = saved })
 	for name, tc := range map[string]struct {
 		active func(n int) (bool, error)
-		want   bool
+		want   error
 	}{
-		"away at once":          {func(int) (bool, error) { return false, nil }, true},
-		"leaves after a moment": {func(n int) (bool, error) { return n < 2, nil }, true},
-		"keeps the focus":       {func(int) (bool, error) { return true, nil }, false},
-		"cannot be asked":       {func(int) (bool, error) { return false, errors.New("hyprctl: no socket") }, false},
+		"away at once":          {func(int) (bool, error) { return false, nil }, nil},
+		"leaves after a moment": {func(n int) (bool, error) { return n < 2, nil }, nil},
+		"keeps the focus":       {func(int) (bool, error) { return true, nil }, errDesktopInUse},
+		"cannot be asked":       {func(int) (bool, error) { return false, errors.New("hyprctl: no socket") }, errDesktopInUse},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var n int
 			desktopWindowActive = func(context.Context) (bool, error) { n++; return tc.active(n - 1) }
-			if got := awaitDesktopAway(t.Context(), 3*awayPoll); got != tc.want {
-				t.Errorf("awaitDesktopAway = %v after %d asks, want %v", got, n, tc.want)
+			if got := (desk{quiet: -1}).await(t.Context(), 3*awayPoll); !errors.Is(got, tc.want) {
+				t.Errorf("await = %v after %d asks, want %v", got, n, tc.want)
 			}
 		})
+	}
+}
+
+// A start issued while the person types imports only once their input has
+// been quiet for desktop.typingQuiet, the window long without the focus.
+func TestDeskAwaitsQuietInput(t *testing.T) {
+	saved, savedInput := desktopWindowActive, desktopInput
+	t.Cleanup(func() { desktopWindowActive, desktopInput = saved, savedInput })
+	desktopWindowActive = func(context.Context) (bool, error) { return false, nil }
+	typedAt := time.Now()
+	desktopInput = func(context.Context) (func() time.Time, error) { return func() time.Time { return typedAt }, nil }
+	a := &app{cfg: &config.Config{Desktop: config.Desktop{TypingQuiet: config.Duration{Duration: 2 * awayPoll}}}}
+	d, err := a.watchDesk(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if err := d.await(t.Context(), awayPoll); !errors.Is(err, errTyping) {
+		t.Fatalf("await while typing = %v, want errTyping", err)
+	}
+	if err := d.await(t.Context(), 4*awayPoll); err != nil {
+		t.Fatalf("await once input went quiet = %v", err)
+	}
+	if quiet := time.Since(start); quiet < 2*awayPoll {
+		t.Errorf("the link went %s after the last input, before desktop.typingQuiet", quiet)
+	}
+	// Input that cannot be read stops a start before anything runs.
+	desktopInput = func(context.Context) (func() time.Time, error) { return nil, errors.New("permission denied") }
+	if _, err := a.watchDesk(t.Context()); err == nil || !strings.Contains(err.Error(), "desktop.typingQuiet: -1s") {
+		t.Errorf("unreadable input: %v", err)
+	}
+	a.cfg.Desktop.TypingQuiet.Duration = -1
+	if _, err := a.watchDesk(t.Context()); err != nil {
+		t.Errorf("a negative desktop.typingQuiet still watches the input: %v", err)
 	}
 }
 
@@ -296,7 +331,7 @@ func TestShowBrieflyHeldByFocus(t *testing.T) {
 	t.Cleanup(func() { desktopWindowActive = saved })
 	desktopWindowActive = func(context.Context) (bool, error) { return true, nil }
 	a := &app{}
-	if _, err := a.showBriefly(t.Context(), "claude://nowhere", "local_x", "", true, awayPoll); !errors.Is(err, errDesktopInUse) {
+	if _, err := a.showBriefly(t.Context(), desk{quiet: -1}, "claude://nowhere", "local_x", "", true, awayPoll); !errors.Is(err, errDesktopInUse) {
 		t.Errorf("showBriefly = %v, want errDesktopInUse", err)
 	}
 }

@@ -48,7 +48,7 @@ alerts:
   team: bumblebee
   flap: {changes: 3}
 notify:
-  kinds: [due, oom-kill]
+  kinds: [due, budget]
   quietHours: "22:00-07:00"
   urgency: {due: critical}
 supervisor: {relayAt: 1.5M}
@@ -131,6 +131,8 @@ func TestLoadRejects(t *testing.T) {
 		"bad duration":        "grantTTL: soon",
 		"skill and file":      "supervisor: {skill: supervise, instructions: /x.md}",
 		"unknown notify kind": "notify: {kinds: [due, alerts]}",
+		"machine notify kind": "notify: {kinds: [due, oom-line]}",
+		"machine urgency":     "notify: {urgency: {oom-kill: critical}}",
 		"unknown urgency":     "notify: {urgency: {due: urgent}}",
 		"urgency of no kind":  "notify: {urgency: {sessions: low}}",
 		"bad quiet hours":     "notify: {quietHours: 22-7}",

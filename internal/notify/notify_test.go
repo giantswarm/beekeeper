@@ -54,22 +54,22 @@ func TestOneNotificationPerEventAcrossWatches(t *testing.T) {
 		t.Fatalf("one event, two watches: a sent %d, b sent %d; want 1 and 0", len(sa.sent), len(sb.sent))
 	}
 	// A lasting condition: once per repeat, whichever watch sees it.
-	b.Notify(ctx, noon, OOMLine, "", "s", "LOW RAM")
-	a.Notify(ctx, noon.Add(10*time.Minute), OOMLine, "", "s", "LOW RAM")
-	a.Notify(ctx, noon.Add(29*time.Minute), OOMLine, "", "s", "SWAP")
+	b.Notify(ctx, noon, Budget, "", "s", "GITHUB BUDGET")
+	a.Notify(ctx, noon.Add(10*time.Minute), Budget, "", "s", "GITHUB BUDGET")
+	a.Notify(ctx, noon.Add(29*time.Minute), Budget, "", "s", "GITHUB BUDGET")
 	if len(sa.sent) != 1 || len(sb.sent) != 1 {
-		t.Fatalf("oom-line within the repeat: a sent %d, b sent %d; want 1 and 1", len(sa.sent), len(sb.sent))
+		t.Fatalf("budget within the repeat: a sent %d, b sent %d; want 1 and 1", len(sa.sent), len(sb.sent))
 	}
-	a.Notify(ctx, noon.Add(31*time.Minute), OOMLine, "", "s", "LOW RAM")
-	if len(sa.sent) != 2 || sa.sent[1].Urgency != "critical" {
-		t.Fatalf("oom-line after the repeat: %+v", sa.sent)
+	a.Notify(ctx, noon.Add(31*time.Minute), Budget, "", "s", "GITHUB BUDGET")
+	if len(sa.sent) != 2 || sa.sent[1].Urgency != "normal" {
+		t.Fatalf("budget after the repeat: %+v", sa.sent)
 	}
-	// Claim returns only the keys no watch claimed: kills seen by both.
-	if got := b.Claim(ctx, noon, OOMKill, "1@1", "2@1"); len(got) != 2 {
-		t.Fatalf("fresh kills: %v", got)
+	// Claim returns only the keys no watch claimed: leases seen by both.
+	if got := b.Claim(ctx, noon, StaleLease, "1@1", "2@1"); len(got) != 2 {
+		t.Fatalf("fresh leases: %v", got)
 	}
-	if got := a.Claim(ctx, noon, OOMKill, "2@1", "3@1"); len(got) != 1 || got[0] != "3@1" {
-		t.Fatalf("kills partly claimed by the other watch: %v, want [3@1]", got)
+	if got := a.Claim(ctx, noon, StaleLease, "2@1", "3@1"); len(got) != 1 || got[0] != "3@1" {
+		t.Fatalf("leases partly claimed by the other watch: %v, want [3@1]", got)
 	}
 }
 

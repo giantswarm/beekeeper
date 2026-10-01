@@ -260,3 +260,29 @@ func masked(args []string) (string, bool) {
 	}
 	return truncate(strings.Join(out, " "), 80), cut
 }
+
+// toolLoadLine is the LOAD line when more than max processes of the CLIs
+// named in tools run in t, with their commands and the sessions that run
+// them by share; "" while they stay at or under max.
+func toolLoadLine(t *proc.Table, tools []string, max int, owners map[int]string) string {
+	comms, sessions := map[string]int{}, map[string]int{}
+	n := 0
+	for _, p := range t.ByPID {
+		if !slices.Contains(tools, p.Comm) {
+			continue
+		}
+		n++
+		comms[p.Comm]++
+		if s := owner(t, p.PID, owners); s != "" {
+			sessions[s]++
+		}
+	}
+	if n <= max {
+		return ""
+	}
+	line := fmt.Sprintf("LOAD: %d CLI processes over %d, top: %s", n, max, sharesLine(shares(comms, n, stormNames), false))
+	if len(sessions) > 0 {
+		line += "; sessions: " + sharesLine(shares(sessions, n, stormNames), true)
+	}
+	return line
+}

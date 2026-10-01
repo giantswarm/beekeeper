@@ -19,6 +19,7 @@ func Stub() Platform {
 		Launcher:    stubLauncher{},
 		Capper:      stubCapper{},
 		Opener:      stubOpener{},
+		Input:       stubInput{},
 		Setup:       stubSetup{},
 		NewNotifier: func() Notifier { return stubNotifier{} },
 	}
@@ -80,6 +81,12 @@ func (stubCapper) Available() bool { return false }
 func (stubCapper) Capped() bool    { return false }
 func (stubCapper) Command(string, Cap, []string) (*exec.Cmd, error) {
 	return nil, missing("Capper.Command")
+}
+
+type stubInput struct{}
+
+func (stubInput) Watch(context.Context) (func() time.Time, error) {
+	return nil, missing("Input.Watch")
 }
 
 type stubOpener struct{}

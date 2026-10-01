@@ -192,28 +192,27 @@ func TestLiftedUpgradeHoldShowsWhoLiftedIt(t *testing.T) {
 	}
 }
 
-// Only an imminent systemd-oomd kill notifies: swap far from the trigger
-// and growing slowly is a watch line, never a desktop notification.
-func TestOOMLineNotifiesOnlyAnImminentOOMDKill(t *testing.T) {
-	w, d, _ := notifyingWatch(t, t.TempDir(), false)
-	ctx := context.Background()
-	m := machine.Mem{SwapTotalMiB: 16383, SwapUsedMiB: 10600}
-	headroom := m.OOMDHeadroomMiB(90)
-	start := relayNow
-	for i := range 3 {
-		perHour, rated := w.swapRate(start.Add(time.Duration(i)*10*time.Minute), m.SwapUsedMiB+i*40)
-		w.oomLine(ctx, w.now, w.check("oomd", w.oomdImminent(headroom, m.SwapTotalMiB, perHour, rated), "OOMD IMMINENT: %s", swapLine(m, 90, headroom, perHour, rated)))
+// The machine's lines are the supervisor's: a watch --notify prints them
+// and sends none of them to the desktop, an imminent systemd-oomd kill
+// among them.
+func TestMachineLinesNeverNotify(t *testing.T) {
+	needsPlatform(t)
+	w, d, out := notifyingWatch(t, t.TempDir(), false)
+	th := &w.cfg.Watch
+	th.AvailMinMiB, th.LoadMax = 1<<30, 0.001
+	w.sample(context.Background())
+	for _, l := range []string{"LOW RAM", "HIGH LOAD"} {
+		if !strings.Contains(out.String(), l) {
+			t.Errorf("no %s line:\n%s", l, out)
+		}
+	}
+	m := machine.Mem{SwapTotalMiB: 16383, SwapUsedMiB: 15000}
+	w.check("oomd", w.oomdImminent(m.OOMDHeadroomMiB(90), m.SwapTotalMiB, 0, false), "OOMD IMMINENT: %s", swapLine(m, 90, m.OOMDHeadroomMiB(90), 0, false))
+	if !strings.Contains(out.String(), "OOMD IMMINENT") {
+		t.Errorf("no OOMD IMMINENT line:\n%s", out)
 	}
 	if len(d.sent) != 0 {
-		t.Fatalf("4 GiB before the trigger at +240 MiB/h notified: %+v", d.sent)
-	}
-	perHour, rated := w.swapRate(start.Add(30*time.Minute), m.SwapUsedMiB+3000)
-	w.oomLine(ctx, w.now, w.check("oomd", w.oomdImminent(headroom-3000, m.SwapTotalMiB, perHour, rated), "OOMD IMMINENT: %s", swapLine(m, 90, headroom-3000, perHour, rated)))
-	if len(d.sent) != 1 || !strings.HasPrefix(d.sent[0].Body, "OOMD IMMINENT: SWAP:") || d.sent[0].Urgency != notify.Critical {
-		t.Fatalf("a burst of 3 GiB in half an hour: %+v", d.sent)
-	}
-	if w.oomdImminent(1500, m.SwapTotalMiB, 0, false) || !w.oomdImminent(900, m.SwapTotalMiB, 0, false) {
-		t.Error("the headroom floor is 6% of the swap by default")
+		t.Fatalf("machine lines notified: %+v", d.sent)
 	}
 }
 
