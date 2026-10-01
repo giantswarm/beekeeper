@@ -45,6 +45,19 @@ func passed(t *testing.T, d *decision, what string) {
 	}
 }
 
+// The input keys and the ref the tests name more than once.
+const (
+	messageKey = "message"
+	newString  = "new_string"
+	oldString  = "old_string"
+	headRef    = "HEAD"
+)
+
+// toolEvent is a PreToolUse event of the tool.
+func toolEvent(tool string, input map[string]any) map[string]any {
+	return map[string]any{"tool_name": tool, "tool_input": input}
+}
+
 func outboundHook(o Outbound) Hook {
 	h := hook()
 	h.Outbound = o
@@ -118,18 +131,18 @@ func TestOutboundScansWhatAPushPublishes(t *testing.T) {
 	}
 	log += "+leaked " + fakeAWS + "\n"
 	refused(t, decide(t, outboundHook(o), "/repo", "git -C sub push", nil), "a push that adds a token", "aws-access-token", fakeAWS)
-	if got[0] != "/repo/sub" || !slices.Contains(got, "HEAD") {
+	if got[0] != "/repo/sub" || !slices.Contains(got, headRef) {
 		t.Errorf("git ran as %q, want -C sub resolved and HEAD pushed", got)
 	}
 }
 
 func TestPushRefs(t *testing.T) {
 	for args, want := range map[string][]string{
-		"":                       {"HEAD"},
-		"origin":                 {"HEAD"},
+		"":                       {headRef},
+		"origin":                 {headRef},
 		"-u origin feat/x":       {"feat/x"},
 		"origin +a:b c":          {"a", "c"},
-		"origin :gone":           {"HEAD"},
+		"origin :gone":           {headRef},
 		"--all origin":           {"--branches"},
 		"--force-with-lease o x": {"x"},
 	} {
@@ -141,15 +154,13 @@ func TestPushRefs(t *testing.T) {
 
 func TestOutboundScansConnectorCalls(t *testing.T) {
 	h := outboundHook(fakeOutside)
-	ev := func(tool string, input map[string]any) map[string]any {
-		return map[string]any{"tool_name": tool, "tool_input": input, "cwd": "/"}
-	}
-	refused(t, decideEvent(t, h, ev("mcp__claude_ai_Slack__slack_send_message", map[string]any{"channel_id": "C1", "message": "here: " + fakeSlack})),
+	ev := toolEvent
+	refused(t, decideEvent(t, h, ev("mcp__claude_ai_Slack__slack_send_message", map[string]any{"channel_id": "C1", messageKey: "here: " + fakeSlack})),
 		"a Slack post", "slack-token", fakeSlack)
 	refused(t, decideEvent(t, h, ev("mcp__github__create_issue", map[string]any{"labels": []any{"x"}, "body": map[string]any{"text": fakePhrase}})),
 		"a nested connector input", "phrase 2", fakePhrase)
-	passed(t, decideEvent(t, h, ev("mcp__claude_ai_Slack__slack_send_message", map[string]any{"message": "merged #12, v1.2.0"})), "an ordinary post")
-	passed(t, decideEvent(t, h, ev("SendMessage", map[string]any{"to": "peer", "message": fakePhrase})), "a message between local sessions")
+	passed(t, decideEvent(t, h, ev("mcp__claude_ai_Slack__slack_send_message", map[string]any{messageKey: "merged #12, v1.2.0"})), "an ordinary post")
+	passed(t, decideEvent(t, h, ev("SendMessage", map[string]any{"to": "peer", messageKey: fakePhrase})), "a message between local sessions")
 }
 
 func TestOutboundScansWritesToConfiguredPaths(t *testing.T) {
@@ -157,13 +168,13 @@ func TestOutboundScansWritesToConfiguredPaths(t *testing.T) {
 	h := outboundHook(Outbound{Phrases: []string{fakePhrase}, Paths: []string{plans, "/srv/posts/*.md"}})
 	write := func(tool, file string, input map[string]any) *decision {
 		input["file_path"] = file
-		return decideEvent(t, h, map[string]any{"tool_name": tool, "tool_input": input, "cwd": "/"})
+		return decideEvent(t, h, toolEvent(tool, input))
 	}
 	refused(t, write("Write", filepath.Join(plans, "a/plan.md"), map[string]any{"content": "status of " + fakePhrase}), "a plan Write", "phrase 1", fakePhrase)
-	refused(t, write("Edit", "/srv/posts/today.md", map[string]any{"old_string": "x", "new_string": fakeKey}), "a post Edit", "private-key", fakeKey)
-	refused(t, write("MultiEdit", "/srv/posts/today.md", map[string]any{"edits": []any{map[string]any{"old_string": "x", "new_string": fakePAT}}}),
+	refused(t, write("Edit", "/srv/posts/today.md", map[string]any{oldString: "x", newString: fakeKey}), "a post Edit", "private-key", fakeKey)
+	refused(t, write("MultiEdit", "/srv/posts/today.md", map[string]any{"edits": []any{map[string]any{oldString: "x", newString: fakePAT}}}),
 		"a MultiEdit", "github-pat", fakePAT)
-	passed(t, write("Edit", "/srv/posts/today.md", map[string]any{"old_string": fakePAT, "new_string": "<removed>"}), "an Edit that removes a token")
+	passed(t, write("Edit", "/srv/posts/today.md", map[string]any{oldString: fakePAT, newString: "<removed>"}), "an Edit that removes a token")
 	passed(t, write("Write", "/srv/notes/today.md", map[string]any{"content": fakePhrase}), "a Write outside the paths")
 }
 

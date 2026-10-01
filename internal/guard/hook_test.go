@@ -27,7 +27,9 @@ func decide(t *testing.T, h Hook, cwd, command string, extra map[string]any) *de
 	for k, v := range extra {
 		ti[k] = v
 	}
-	return decideEvent(t, h, map[string]any{"tool_name": "Bash", "tool_input": ti, "cwd": cwd})
+	ev := toolEvent(bashTool, ti)
+	ev["cwd"] = cwd
+	return decideEvent(t, h, ev)
 }
 
 // decideEvent feeds any PreToolUse event to the hook.
