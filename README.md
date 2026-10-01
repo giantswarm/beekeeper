@@ -292,8 +292,9 @@ refusal naming the command with the gate written in.
 
 - **Refused, exit 77**, one line starting `beekeeper gate: refused,` that says why and what to do:
   the repository, its lane, `merges` or `github` is held, or a cluster upgrade runs on the lane's
-  installation (the hold's reason); the GitHub budget is
-  under `github.floor`, or unknown, checked before devctl makes a single request; the lane's
+  installation (the hold's reason); the GitHub budget is unknown, checked before devctl makes a
+  single request (under `github.floor` the line says `queued` instead: the merge waits for the
+  reset in a run of its own, as for exit 76 below, and wakes its owner); the lane's
   installation cannot be read (a lapsed `tsh` login). Nothing else stops a merge: a lane whose
   release has not rolled past `merge.settleTimeout` keeps it waiting, and `watch` says `LANE STUCK`.
 - **Queued, exit 76**, one line starting `beekeeper gate: queued,` with the merge's position and
@@ -381,7 +382,10 @@ settles its lane with its release unconfirmed and the gate line names `devctl re
 GitHub unanswered, the lane settles as for a lost merge.
 
 devctl's blocking waits, `pr wait`, `release wait` and `rollout wait`, run the same way outside
-their caller, without a queue, their files under `runs/`. Whichever of the four it is, its outcome
+their caller, without a queue, their files under `runs/`. One poller per command on the machine:
+a wait whose identical command line already runs follows that run (the hidden `follow-run`, its
+stderr, document and exit code) instead of starting a second devctl, so five sessions waiting on
+one pull request cost the budget of one. Whichever of the four it is, its outcome
 reaches the session that started it. A caller still listening sees the output and exit code as
 ever; the gate then leaves merge-child a marker. When it does not (a headless turn that ended with
 the command in the background, a caller killed, its CLI gone), merge-child logs `devctl.unheard`

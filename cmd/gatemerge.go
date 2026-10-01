@@ -116,14 +116,16 @@ const (
 // working directory, in base.spec (0600: the environment carries tokens).
 // Owner is the session the outcome goes to, Gate the pid of the gate that
 // hands it over while its caller listens, Config the configuration a wake of
-// the owner loads.
+// the owner loads, Command the devctl command Argv stands for when Argv is
+// beekeeper's own (a queued merge, a wait that follows another's poller).
 type childSpec struct {
-	Argv   []string    `json:"argv"`
-	Env    []string    `json:"env"`
-	Dir    string      `json:"dir"`
-	Owner  state.Party `json:"owner,omitzero"`
-	Gate   int         `json:"gate,omitempty"`
-	Config string      `json:"config,omitempty"`
+	Argv    []string    `json:"argv"`
+	Command []string    `json:"command,omitempty"`
+	Env     []string    `json:"env"`
+	Dir     string      `json:"dir"`
+	Owner   state.Party `json:"owner,omitzero"`
+	Gate    int         `json:"gate,omitempty"`
+	Config  string      `json:"config,omitempty"`
 }
 
 // childRun is how a detached run ended for its gate: devctl's document and
@@ -383,6 +385,9 @@ func mergeChild(base string) childResult {
 	// Written whole or not at all: the gate reads it while it appears.
 	if os.WriteFile(base+".rc.tmp", []byte(strconv.Itoa(rc)), 0o600) == nil { //nolint:gosec // as above
 		_ = os.Rename(base+".rc.tmp", base+".rc") //nolint:gosec // as above
+	}
+	if filepath.Base(filepath.Dir(base)) == ownedRuns {
+		writeResult(base, runResult{RC: rc, Doc: string(r.doc), Kept: r.kept})
 	}
 	return r
 }
