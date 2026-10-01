@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The transcript value scanner. `beekeeper hook posttooluse`, the PostToolUse hook `install` now registers for every tool, replaces a tool result that carries a secret value before the model sees it: each indexed value (keyed fingerprints of the SOPS files in `scan.sops` and the 1Password vaults in `scan.vaults`, built by `beekeeper scan index`, or one value by `beekeeper scan add <ref>`) and each token pattern of the outbound guard becomes `[redacted: <reference or rule>]`, the session goes on, and an indexed reference gets a rotation note. Claude Code writes the redacted result to the transcript on disk too. `beekeeper scan sweep` counts each reference and token rule in every existing transcript, never printing a value.
+
 ### Changed
 
 - `agents start --harness omp` names the agent's model on omp's command line: `--model`, else `omp.model`, an exact `provider/id` selector `omp models` lists. With neither, or a model omp does not list, the start is refused before anything is recorded. An omp agent started without a model ran on omp's own default, which answered nothing while its server was busy with other work, and a pattern could match a model nobody meant.
