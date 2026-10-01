@@ -185,8 +185,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.err = msg.err
 		} else {
+			picked := m.selectedSession()
 			m.data = msg.data
 			m.err = nil
+			m.keepSelection(picked)
 		}
 		m.updated = time.Now()
 		m.clampAll()
@@ -299,7 +301,7 @@ func (m *model) enter() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	s := m.sessions()
-	if m.tab != 1 || m.sel[m.tab] >= len(s) {
+	if m.tab != sessionsTab || m.sel[m.tab] >= len(s) {
 		return m, nil
 	}
 	name := s[m.sel[m.tab]].Name
@@ -579,6 +581,33 @@ func (m *model) rowsFor(t int) int {
 		return len(m.data.Events)
 	}
 	return 0
+}
+
+// sessionsTab is the sessions tab's index.
+const sessionsTab = 1
+
+// selectedSession is the name of the session the sessions tab selects, ""
+// when it selects none.
+func (m *model) selectedSession() string {
+	if s := m.sessions(); m.sel[sessionsTab] < len(s) {
+		return s[m.sel[sessionsTab]].Name
+	}
+	return ""
+}
+
+// keepSelection moves the sessions tab's selection to name's new row: the
+// list reorders as sessions get busy, and enter, t and a must act on the
+// session the person picked, not on whichever took its place.
+func (m *model) keepSelection(name string) {
+	if name == "" {
+		return
+	}
+	for i, s := range m.sessions() {
+		if s.Name == name {
+			m.sel[sessionsTab] = i
+			return
+		}
+	}
 }
 
 // sessions is the current data's session list, empty before the first

@@ -679,6 +679,21 @@ func TestTakeOverFromThePane(t *testing.T) {
 	}
 }
 
+func TestSelectionFollowsTheSessionAcrossReorders(t *testing.T) {
+	src := &fakeSource{data: fixtureData()}
+	m := newTestModel(t, src)
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	picked := m.selectedSession()
+	d := *src.data
+	d.Sessions = slices.Clone(d.Sessions)
+	slices.Reverse(d.Sessions)
+	m.Update(refreshMsg{data: &d})
+	if got := m.selectedSession(); got != picked {
+		t.Errorf("after a reorder the selection is on %q, want %q", got, picked)
+	}
+}
+
 func TestStateOf(t *testing.T) {
 	cases := []struct {
 		s    Session
