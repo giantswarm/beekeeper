@@ -29,7 +29,7 @@ func TestPullCheck(t *testing.T) {
 		outcome string
 		notes   []string
 	}{
-		"none":            {other, CheckMissing, nil},
+		"no check":        {other, CheckMissing, nil},
 		"green":           {other + "," + old, CheckPass, nil},
 		"pending, newest": {old + `,{"__typename":"CheckRun","name":"plan-stages","status":"IN_PROGRESS","startedAt":"2026-10-01T11:00:00Z","detailsUrl":"new"}`, CheckPending, nil},
 		"red, newest":     {`{"__typename":"CheckRun","name":"plan-stages","status":"COMPLETED","conclusion":"FAILURE","startedAt":"2026-10-01T11:00:00Z","detailsUrl":"` + job + `"},` + old, CheckFail, []string{"p: contrarian missing: no p/contrarian"}},
