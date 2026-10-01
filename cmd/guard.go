@@ -217,14 +217,7 @@ registered in the person's settings.`,
 			if err != nil {
 				return err
 			}
-			check := func(msg string) []string {
-				zone, err := reportZone(a.cfg.Reporter.TZ, nil)
-				if err != nil {
-					return []string{err.Error()}
-				}
-				return post.Report(msg, zone, time.Now())
-			}
-			if out := guard.ReportCheck(raw, check); out != nil {
+			if out := a.reportCheck(raw); out != nil {
 				_, err = a.out.Write(out)
 			}
 			return err
@@ -275,6 +268,24 @@ Register it in ~/.claude/settings.json:
 		},
 	})
 	return c
+}
+
+// reportCheck decides a reporter's PreToolUse event: a post failing the
+// report check in the report's zone is refused. The hook runs without a
+// loaded configuration; one that loads sets reporter.tz, else the zone is
+// the machine's.
+func (a *app) reportCheck(raw []byte) []byte {
+	tz := ""
+	if a.loadConfig() == nil {
+		tz = a.cfg.Reporter.TZ
+	}
+	return guard.ReportCheck(raw, func(msg string) []string {
+		zone, err := reportZone(tz, a.zone)
+		if err != nil {
+			return []string{err.Error()}
+		}
+		return post.Report(msg, zone, time.Now())
+	})
 }
 
 // bypassStart returns the record of session when beekeeper agents start

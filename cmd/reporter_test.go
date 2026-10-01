@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -300,5 +301,30 @@ func TestReporterFinalThenPaused(t *testing.T) {
 	w.tendReporter(ctx, nil)
 	if len(*launched) != 3 {
 		t.Errorf("after resume: launched %v", *launched)
+	}
+}
+
+// TestReportCheckWithoutConfig runs the reporter's post hook as Claude Code
+// does, without a loaded configuration: the check still decides, in the
+// machine's zone, or in reporter.tz once a configuration loads.
+func TestReportCheckWithoutConfig(t *testing.T) {
+	event := func(msg string) []byte {
+		return []byte(`{"tool_name":"mcp__claude_ai_Slack__slack_send_message","tool_input":{"channel_id":"U1","message":` + strconv.Quote(msg) + `}}`)
+	}
+	athens, _ := time.LoadLocation("Europe/Athens")
+	a := &app{cfgPath: filepath.Join(t.TempDir(), "none.yaml"), zone: func() (*time.Location, error) { return athens, nil }}
+	if out := string(a.reportCheck(event("**01:00–02:00 UTC**\nmerged #109"))); !strings.Contains(out, "not a link") || !strings.Contains(out, "EEST") {
+		t.Errorf("no config: %s", out)
+	}
+	if out := a.reportCheck(event("**01:00–02:00 EEST**\n[beekeeper#109](https://github.com/giantswarm/beekeeper/pull/109) merged")); out != nil {
+		t.Errorf("no config, a good post: %s", out)
+	}
+	cfg := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(cfg, []byte("reporter: {every: 1h, brief: b.md, tz: Pacific/Honolulu}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a = &app{cfgPath: cfg}
+	if out := string(a.reportCheck(event("**01:00–02:00 EEST**\nall quiet"))); !strings.Contains(out, "HST") {
+		t.Errorf("reporter.tz: %s", out)
 	}
 }
