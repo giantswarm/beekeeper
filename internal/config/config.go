@@ -96,6 +96,28 @@ type Config struct {
 	Outbound Outbound `yaml:"outbound"`
 	// Board is the project board `beekeeper board` picks work from.
 	Board Board `yaml:"board"`
+	// Plans are the repositories whose pull requests a note for a person
+	// names only once their stage check is green.
+	Plans Plans `yaml:"plans"`
+}
+
+// Plans configures the plans repositories: a note for the guide's person
+// that links one of their open pull requests is refused while the pull
+// request's stage check is red, pending or missing.
+type Plans struct {
+	// Repositories are owner/repo; empty, no note is checked.
+	Repositories []string `yaml:"repositories"`
+	// Check is the name of the stage check (default plan-stages).
+	Check string `yaml:"check"`
+}
+
+// DefaultPlansCheck is the stage check's name unless plans.check says
+// otherwise.
+const DefaultPlansCheck = "plan-stages"
+
+// Covers reports whether repo (owner/repo, any case) is a plans repository.
+func (p Plans) Covers(repo string) bool {
+	return slices.ContainsFunc(p.Repositories, func(r string) bool { return strings.EqualFold(r, repo) })
 }
 
 // Board is a GitHub project board and the order its work is picked in.
@@ -868,6 +890,7 @@ func (c *Config) defaults() error {
 	setDur(&c.Agents.StaleAfter, 24*time.Hour)
 	c.Reporter.defaults(home, c.Guide.Person)
 	c.Outbound.defaults(home)
+	setStr(&c.Plans.Check, DefaultPlansCheck)
 	setStr(&c.Shell, os.Getenv("SHELL"))
 	setStr(&c.Shell, "sh")
 
@@ -1022,10 +1045,11 @@ func (c *Config) validate() error {
 			return fmt.Errorf("reporter.tz: %w", err)
 		}
 	}
-	for _, r := range c.Reporter.Reviews {
-		if o, name, ok := strings.Cut(r, "/"); !ok || o == "" || name == "" || strings.ContainsAny(name, "/ ") {
-			return fmt.Errorf("reporter.reviews: %q is not owner/repo", r)
-		}
+	if err := ownerRepos("reporter.reviews", c.Reporter.Reviews); err != nil {
+		return err
+	}
+	if err := ownerRepos("plans.repositories", c.Plans.Repositories); err != nil {
+		return err
 	}
 	for i, st := range c.Board.Order {
 		if st.Name == "" {
@@ -1200,6 +1224,16 @@ func (c *Config) LabLease(cluster string) string {
 // IsLeasable reports whether name is a configured resource or the browser.
 func (c *Config) IsLeasable(name string) bool {
 	return slices.Contains(c.Leasable(), name)
+}
+
+// ownerRepos refuses an entry of field that is not owner/repo.
+func ownerRepos(field string, repos []string) error {
+	for _, r := range repos {
+		if o, name, ok := strings.Cut(r, "/"); !ok || o == "" || name == "" || strings.ContainsAny(name, "/ ") {
+			return fmt.Errorf("%s: %q is not owner/repo", field, r)
+		}
+	}
+	return nil
 }
 
 func setStr(p *string, v string) {

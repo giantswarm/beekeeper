@@ -147,6 +147,10 @@ outbound:                   # what the hook refuses to let leave the machine (RE
   sweepRoots: [~]           # the watch looks here for world-readable private keys and credentials in git remote URLs
   sweepDepth: 5
 
+plans:                      # note add --for <guide.person> links an open pull request here only once its stage check is green
+  repositories: [example-org/plans]   # owner/repo; unset, nothing is read
+  check: plan-stages        # the stage check's name (default)
+
 board:                      # the project board `beekeeper board next` picks work from
   owner: example-org        # the organisation (or user) and the board's number
   project: 12
