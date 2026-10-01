@@ -25,6 +25,26 @@ curl -fsSL -o "$dir/beekeeper" https://github.com/giantswarm/beekeeper/releases/
 chmod +x "$dir/beekeeper"
 ```
 
+Then put it in place for your user, after a look at what it would do:
+
+```bash
+beekeeper install --dry-run   # every file, hook and service step; changes nothing
+beekeeper install
+```
+
+`install` merges the PreToolUse and PermissionRequest hooks into Claude Code's user settings
+(`~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR`) with the binary's absolute path, writes and
+starts the [standby service](#desktop-notifications) (a systemd user unit, a launch agent on
+macOS), and on systemd the memory guard sized to the machine's RAM: `memcap.slice` for `beekeeper
+run`'s capped commands and a drop-in for the Claude Desktop scope that runs (run install again
+with the app running when it does not). Without a config it writes a starter one, the [example
+configuration](docs/examples/config.yaml) with every key commented out. A file already as install
+writes it stays, and one that differs and that install did not write it keeps and names; a second
+run changes nothing. A new Claude Code session picks the hooks up. `beekeeper uninstall` (also
+with `--dry-run`) stops the service and removes exactly what install wrote, as `install.json` in
+the state directory records it, and leaves the config and the state unless `--purge`. On Linux
+without systemd install writes the hooks and the config and says the service is not available.
+
 From then on `beekeeper self-update` keeps it current: it verifies the release binary's Sigstore
 signature and renames it over the old one in one step, so a running `beekeeper watch` keeps
 running, and a `devctl pr merge` gate call waiting for its turn re-executes the new binary at its
@@ -89,7 +109,7 @@ a relayed successor opens with the plugin's role.
 | `beekeeper agents wake <agent> <message> [--permission-mode m]` | Messages a registered agent without Claude Desktop's `local_` route and its cap (a session's desktop sends pause after ten since its person last typed in it). A running CLI gets the message by name; a session with none is resumed headless, `claude -p --resume <id>` with the message as its turn, in its directory, permission mode (a start's bypass, else the desktop record's) and recorded model, in a transient unit `beekeeper-wake-<id>-<wake>`, one per wake; its `ExecStopPost` runs `agents reopen <local_ id>`, which warms the desktop's CLI again. `agents` shows `live, first turn running` or `live, wake turn running` while a headless turn is the session's CLI. See [Waking a session](#waking-a-session). |
 | `beekeeper agents handover <agent> [--prompt] [--model m] [--dir d]` | Hands a registered agent over to a fresh session near its context limit, one line per step: asks it by peer message for `beekeeper agents note "<what is in flight, what is next>"` (waiting `agents.noteWait` at most), builds the follow-up's prompt, starts the follow-up as `agents start` does under the agent's name (it takes over the roster entry, the task and the session record), stops the old session's CLI and the processes under it by PID (a `claude --bg` session through `claude stop` first, so its daemon does not resume it), and logs `agents.handover`. `--prompt` prints the prompt only. `watch` says `HANDOVER DUE` once per agent session at `agents.relayAt`. See [Agents handed over near their context limit](#agents-handed-over-near-their-context-limit). |
 | `beekeeper agents note <text>` | The calling agent's hand-over note, logged as an `agents.note` event; the next `agents handover` puts the latest one into the follow-up's prompt. |
-| `beekeeper note add\|answer\|done` | Open items that outlive a session: a decision waiting on a person with its deadline and what happens if nobody answers (`note add --for Ada --due 22:55 --default "the alert stays as is" <text>`), a deadline. `watch` reports a note once when it is due. `note answer <id> <answer>` records the person's answer word for word and closes the note; the `note.answered` event carries it for the owning session, the supervisor and the guide's feed. |
+| `beekeeper note add\|answer\|done` | Open items that outlive a session: a decision waiting on a person with its deadline and what happens if nobody answers (`note add --for Ada --due 22:55 --status-quo "<what is true now>" --why "<why it needs Ada>" --default "the alert stays as is" <text>`), a deadline. A note for `guide.person` (any `--for` with it unset) is refused, naming what it lacks, without `--status-quo`, `--why`, a `--default` that is an action (not `wait` or `none`), every `--option` as `<choice>: <consequence>`, the full URL of every `#N` or `owner/repo#N`, and `--checked "<source>"` for a claim that something is merged, green, released, rolled or closed; one on an issue or PR an open note for the same person names, with the same verb (the text's first word), folds into it (`note.folded`). `--kind login --until "<probe>"`: the watch runs the probe each tick and closes the note once it exits 0. Notes without `--for` are memos, unchecked. `watch` reports a note once when it is due. `note answer <id> <answer>` records the person's answer word for word and closes the note; the `note.answered` event carries it for the owning session, the supervisor and the guide's feed. |
 | `beekeeper reporter final\|pause\|resume` | Pauses the scheduled reporter: `final 06:45` (or `45m`) starts one last report at that time, covering the time since the last one, then pauses; `pause` pauses now; `resume` starts the current slot's report at the standby watch's next poll and the schedule again. |
 | `beekeeper reporter check` | Checks a report on stdin as the reporter's post hook does (see [The scheduled status reporter](#the-scheduled-status-reporter)): one line per problem and exit 3, or `ok`. |
 | `beekeeper reporter` | The scheduled status reporter (see [The scheduled status reporter](#the-scheduled-status-reporter)): its schedule, when the next one starts, and the current or last run with its outcome. |
@@ -244,7 +264,7 @@ every session but the one holding the guide role (`beekeeper guide`, matched by 
 or the desktop id), and tells the agent to file the question for the guide and carry on:
 
 ```
-beekeeper note add --for <guide.person> "<status quo, the options, your recommendation>" --default "<what you do if nobody answers>"
+beekeeper note add --for <guide.person> "<the question, every issue or PR as its full URL>" --status-quo "<what is true now>" --why "<why it needs them>" --option "<choice>: <consequence>" --default "<the action if nobody answers>"
 ```
 
 With no guide running, every session is refused. The hook reads the state only for this tool, and a
@@ -467,16 +487,8 @@ When no supervisor runs, the same watch runs as a systemd user unit,
 `--standby`: while a supervisor's session runs it leaves the notes, timers, session records and
 relays to the supervisor's watch and never reads the alerts, so it takes nothing from the
 supervisor's view; what both see (the machine, OOM kills, the budget, stale leases) is sent once.
-A supervisor runs its own watch with `--notify` too. To install the unit:
-
-```bash
-mkdir -p ~/.config/systemd/user
-curl -fsSL https://raw.githubusercontent.com/giantswarm/beekeeper/main/contrib/systemd/beekeeper-notify.service |
-  sed "s|%h/.local/bin/beekeeper|$(command -v beekeeper)|" > ~/.config/systemd/user/beekeeper-notify.service
-systemctl --user daemon-reload
-systemctl --user enable --now beekeeper-notify.service
-journalctl --user -u beekeeper-notify -f   # its lines
-```
+A supervisor runs its own watch with `--notify` too. `beekeeper install` writes and starts the
+unit with the binary's path; `journalctl --user -u beekeeper-notify -f` shows its lines.
 
 ### A supervisor gone
 

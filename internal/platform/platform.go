@@ -1,10 +1,12 @@
 // Package platform is the one place beekeeper reaches into the machine it
 // runs on: memory, pressure, processes and OOM kills (Machine), detached
 // units of work (Launcher), memory-capped runs (Capper), claude:// links
-// (Opener) and desktop notifications (Notifier). The build selects one
-// implementation: linux_systemd on Linux (systemd user units, cgroup v2,
+// (Opener), desktop notifications (Notifier), and the standby service and
+// memory guard beekeeper install puts in place (Setup). The build selects
+// one implementation: linux_systemd on Linux (systemd user units, cgroup v2,
 // /proc, D-Bus), a stub on other systems and on Linux built with the
-// nosystemd tag, whose parts return a NotAvailableError.
+// nosystemd tag, whose parts return a NotAvailableError; the stub installs
+// the standby service as a launch agent on darwin.
 package platform
 
 import (
@@ -149,12 +151,57 @@ type Notifier interface {
 	Close() error
 }
 
+// File is one file beekeeper install writes.
+type File struct {
+	Path    string
+	Content []byte
+	// Service marks the file that defines the standby service.
+	Service bool
+}
+
+// SetupSpec is the machine beekeeper install sets up.
+type SetupSpec struct {
+	// Home is the user's home, ConfigDir their configuration directory
+	// ($XDG_CONFIG_HOME, else ~/.config).
+	Home, ConfigDir string
+	// Exe is the absolute path of the binary the standby service runs.
+	Exe string
+	// RAMMiB and SwapMiB size the memory guard; zero RAM writes none.
+	RAMMiB, SwapMiB int
+	// DesktopScope is the unit name of the running Claude Desktop scope,
+	// empty when none runs.
+	DesktopScope string
+}
+
+// Setup is what beekeeper install puts in place for this platform beside
+// the hooks and the config: the standby service (beekeeper watch --notify
+// --standby) and the memory guard, as files and the service manager's
+// commands. A command is an argument vector.
+type Setup interface {
+	// Available reports whether this platform runs the standby service.
+	Available() bool
+	// Files are the standby service's and the memory guard's files for
+	// spec, and a line for each part this machine gets none of.
+	Files(spec SetupSpec) (files []File, skipped []string)
+	// Started reports whether the standby service defined by the file at
+	// path is enabled and running.
+	Started(ctx context.Context, path string) bool
+	// Reload makes the service manager read changed files, nil when it
+	// needs no command for that.
+	Reload() []string
+	// Start enables and starts the service defined by the file at path;
+	// Stop stops and disables it.
+	Start(path string) []string
+	Stop(path string) []string
+}
+
 // Platform is one build's implementation of every part.
 type Platform struct {
 	Machine  Machine
 	Launcher Launcher
 	Capper   Capper
 	Opener   Opener
+	Setup    Setup
 	// NewNotifier opens a notifier; the caller closes it.
 	NewNotifier func() Notifier
 }
