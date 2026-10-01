@@ -133,6 +133,11 @@ type Reporter struct {
 	// Timeout is how long a reporter may run without posting before it is
 	// stopped (20m).
 	Timeout Duration `yaml:"timeout"`
+	// TZ is the report's time zone, an IANA name (default: the machine's).
+	TZ string `yaml:"tz"`
+	// Reviews are the repositories (owner/repo) whose open draft pull
+	// requests wait for the person's review.
+	Reviews []string `yaml:"reviews"`
 }
 
 // Enabled reports whether a reporter is scheduled.
@@ -886,6 +891,16 @@ func (r *Reporter) defaults(home, person string) {
 func (c *Config) validate() error {
 	if r := c.Reporter; r.Every.Duration != 0 && (r.Every.Duration < time.Minute || r.Brief == "") {
 		return fmt.Errorf("reporter: every %s needs at least a minute and a brief", r.Every.Duration)
+	}
+	if tz := c.Reporter.TZ; tz != "" {
+		if _, err := time.LoadLocation(tz); err != nil {
+			return fmt.Errorf("reporter.tz: %w", err)
+		}
+	}
+	for _, r := range c.Reporter.Reviews {
+		if o, name, ok := strings.Cut(r, "/"); !ok || o == "" || name == "" || strings.ContainsAny(name, "/ ") {
+			return fmt.Errorf("reporter.reviews: %q is not owner/repo", r)
+		}
 	}
 	if t := c.Kube.ContextTemplate; t != "" && !strings.Contains(t, "{installation}") {
 		return fmt.Errorf("kube.contextTemplate: %q has no {installation}", t)

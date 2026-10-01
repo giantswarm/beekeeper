@@ -487,7 +487,7 @@ func (a *app) checkPlaces(ctx context.Context, by state.Party, now time.Time, la
 				continue
 			}
 			merge.Merged(m, p.MergedAt)
-			ev = append(ev, event(by, "merged", "%s outside the gate at %s, release unknown: its place in lane %s settles the lane",
+			ev = append(ev, event(by, verbMerged, "%s outside the gate at %s, release unknown: its place in lane %s settles the lane",
 				m.Key(), p.MergedAt.UTC().Format(time.RFC3339), m.Lane))
 		}
 		return ev, nil

@@ -218,7 +218,7 @@ registered in the person's settings.`,
 				return err
 			}
 			check := func(msg string) []string {
-				zone, err := machine.Zone()
+				zone, err := reportZone(a.cfg.Reporter.TZ, nil)
 				if err != nil {
 					return []string{err.Error()}
 				}

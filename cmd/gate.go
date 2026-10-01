@@ -342,6 +342,12 @@ func (g *gateRun) step() (string, error) {
 // places before it that wait without their merge.
 const outsideCheck = time.Minute
 
+// The verbs of a merge that merged and of a lane that settled after it.
+const (
+	verbMerged      = "merged"
+	verbLaneSettled = "lane.settled"
+)
+
 // checkOutside settles or drops the lane's places that wait without their
 // merge and whose pull request merged or closed (checkPlaces). It returns
 // what the merge waits for when GitHub does not answer for a place that
@@ -675,7 +681,7 @@ func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOu
 			e.Detail += fmt.Sprintf(", its place in lane %s is kept for the retry", lane.Name)
 		}
 	default:
-		e = event(by, "merged", "%s exit %d, release %s", key, rc, release)
+		e = event(by, verbMerged, "%s exit %d, release %s", key, rc, release)
 	}
 	e.Detail += note
 	return append(ev, e), kept

@@ -147,7 +147,7 @@ func (a *app) sessionMetrics(sessions []*claude.Session, t *proc.Table, holders 
 		switch e.Verb {
 		case "merge.queued":
 			out[i].Merges.Queued++
-		case "merged":
+		case verbMerged:
 			out[i].Merges.Merged++
 		case "merge.refused":
 			out[i].Merges.Refused++

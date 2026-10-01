@@ -7,6 +7,7 @@ package post
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -100,4 +101,77 @@ func Zone(text string, zone *time.Location, now time.Time) []string {
 // Report is every check a report passes: Check and Zone.
 func Report(text string, zone *time.Location, now time.Time) []string {
 	return append(Check(text), Zone(text, zone, now)...)
+}
+
+// note is a beekeeper note or timer named with a #: "note #84".
+var note = regexp.MustCompile(`(?i)\b(note|timer)\s+#(\d+)`)
+
+// Linked rewrites text so it passes Check: every [owner/]repo#n or bare #n
+// outside a link and a code span becomes a link to its issue, its owner the
+// one owners has for the repository, a bare #n in here (owner/repo); a
+// beekeeper note or timer is "note <n>"; a reference it cannot place loses
+// its # ("repo 12").
+func Linked(text string, owners map[string]string, here string) string {
+	text = note.ReplaceAllString(text, "$1 $2")
+	var b strings.Builder
+	last := 0
+	for _, span := range spans(text) {
+		b.WriteString(linkRefs(text[last:span[0]], owners, here))
+		b.WriteString(text[span[0]:span[1]])
+		last = span[1]
+	}
+	b.WriteString(linkRefs(text[last:], owners, here))
+	return b.String()
+}
+
+// spans are the links and code spans of text, in order, not overlapping.
+func spans(text string) [][2]int {
+	var out [][2]int
+	for _, re := range []*regexp.Regexp{codeSpan, link} {
+		for _, m := range re.FindAllStringIndex(text, -1) {
+			if !slices.ContainsFunc(out, func(s [2]int) bool { return m[0] < s[1] && s[0] < m[1] }) {
+				out = append(out, [2]int{m[0], m[1]})
+			}
+		}
+	}
+	slices.SortFunc(out, func(a, b [2]int) int { return a[0] - b[0] })
+	return out
+}
+
+// linkRefs links the references of plain text.
+func linkRefs(text string, owners map[string]string, here string) string {
+	return ref.ReplaceAllStringFunc(text, func(m string) string {
+		sub := ref.FindStringSubmatch(m)
+		lead, whole, n := sub[1], sub[2], sub[3]
+		repo, _, _ := strings.Cut(whole, "#")
+		full := ""
+		switch owner, name, hasOwner := strings.Cut(repo, "/"); {
+		case repo == "":
+			full = here
+		case hasOwner && owner != "" && name != "":
+			full = repo
+		case !hasOwner && owners[strings.ToLower(repo)] != "":
+			full = owners[strings.ToLower(repo)] + "/" + repo
+		}
+		if full == "" {
+			if strings.HasSuffix(repo, "/") {
+				return lead + repo + n
+			}
+			return lead + strings.TrimSpace(repo+" "+n)
+		}
+		_, name, _ := strings.Cut(full, "/")
+		return fmt.Sprintf("%s[%s#%s](https://github.com/%s/issues/%s)", lead, name, n, full, n)
+	})
+}
+
+// Owners maps each repository name of the owner/repo names to its owner,
+// lowercased, for Linked.
+func Owners(repos ...string) map[string]string {
+	out := map[string]string{}
+	for _, r := range repos {
+		if o, name, ok := strings.Cut(r, "/"); ok && o != "" && name != "" {
+			out[strings.ToLower(name)] = o
+		}
+	}
+	return out
 }

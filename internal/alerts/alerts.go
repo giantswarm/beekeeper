@@ -491,26 +491,45 @@ func (r Rules) missing(installation string, a, b Set) map[string]Alert {
 	return out
 }
 
+// shownAlerts are the alerts of an answer, keyed by fingerprint, and those of
+// them the snapshot shows, in the answer's order.
+func (r Rules) shownAlerts(installation string, ans Answer) (map[string]Alert, []Alert) {
+	current, order := r.normalize(ans.Alerts, installation)
+	var shown []Alert
+	for _, fp := range order {
+		if a := current[fp]; r.shown(installation, a) {
+			shown = append(shown, a)
+		}
+	}
+	return current, shown
+}
+
+// Count is how many alerts the snapshot shows of an answer and how many of
+// them page.
+func (r Rules) Count(installation string, ans Answer) (active, paging int) {
+	_, shown := r.shownAlerts(installation, ans)
+	for _, a := range shown {
+		if a.Severity == Page {
+			paging++
+		}
+	}
+	return len(shown), paging
+}
+
 // SnapshotLines is the current set grouped by severity, team, alertname and
 // cluster, pages and the team's alerts first.
 func (r Rules) SnapshotLines(installation string, ans Answer, now time.Time) []string {
 	if !ans.OK {
 		return []string{fmt.Sprintf("%s unreachable: %s", installation, ans.Why)}
 	}
-	current, order := r.normalize(ans.Alerts, installation)
-	shown := 0
+	current, shown := r.shownAlerts(installation, ans)
 	type group struct {
 		Alert
 		n int
 	}
 	var groups []*group
 	byKey := map[[4]string]*group{}
-	for _, fp := range order {
-		a := current[fp]
-		if !r.shown(installation, a) {
-			continue
-		}
-		shown++
+	for _, a := range shown {
 		k := [4]string{a.Severity, a.Team, a.Alertname, a.Cluster}
 		if g, ok := byKey[k]; ok {
 			g.n++
@@ -526,7 +545,7 @@ func (r Rules) SnapshotLines(installation string, ans Answer, now time.Time) []s
 			cmp.Compare(b.n, a.n),
 			strings.Compare(a.Alertname, b.Alertname))
 	})
-	lines := []string{fmt.Sprintf("%s at %s: %d active%s", installation, now.UTC().Format("15:04Z"), shown, r.hidden(installation, current))}
+	lines := []string{fmt.Sprintf("%s at %s: %d active%s", installation, now.UTC().Format("15:04Z"), len(shown), r.hidden(installation, current))}
 	for _, g := range groups {
 		s, t := r.mark(g.Alert)
 		lines = append(lines, fmt.Sprintf("  %-7s %-11s %-50s %-12s %3d", s, t, g.Alertname, g.Cluster, g.n))
