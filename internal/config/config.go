@@ -66,6 +66,7 @@ type Config struct {
 	Watch    Watch    `yaml:"watch"`
 	Overlaps Overlaps `yaml:"overlaps"`
 	Claude   Claude   `yaml:"claude"`
+	Desktop  Desktop  `yaml:"desktop"`
 	Memcap   Memcap   `yaml:"memcap"`
 	Lanes    []Lane   `yaml:"lanes"`
 	Merge    Merge    `yaml:"merge"`
@@ -266,16 +267,17 @@ func (m Merge) DevctlServes(repo string) bool {
 // Notify configures what `watch --notify` sends to the desktop.
 type Notify struct {
 	// Kinds are the kinds that notify (notify.Kinds, the default: due,
-	// oom-line, oom-kill, budget, stale-lease, no-supervisor).
+	// budget, stale-lease, no-supervisor). The machine's lines never
+	// notify: the supervisor's watch says them.
 	Kinds []string `yaml:"kinds"`
 	// QuietHours ("22:00-07:00", local time) hold every notification but a
 	// critical one until they end.
 	QuietHours string `yaml:"quietHours"`
-	// Urgency is a kind's urgency (low, normal, critical); oom-line,
-	// oom-kill and no-supervisor are critical, the others normal.
+	// Urgency is a kind's urgency (low, normal, critical); no-supervisor
+	// is critical, the others normal.
 	Urgency map[string]string `yaml:"urgency"`
-	// Repeat is how often a lasting condition (oom-line, budget,
-	// no-supervisor) notifies again while it lasts.
+	// Repeat is how often a lasting condition (budget, no-supervisor)
+	// notifies again while it lasts.
 	Repeat Duration `yaml:"repeat"`
 }
 
@@ -433,11 +435,9 @@ type Watch struct {
 	AvailMinMiB int      `yaml:"availMinMiB"`
 	SwapMaxMiB  int      `yaml:"swapMaxMiB"`
 	// OOMDHeadroomMinMiB and OOMDWithin decide when systemd-oomd's swap
-	// kill is imminent, the one memory condition that notifies a person
-	// (oom-line): less swap growth left before its SwapUsedLimit than
-	// OOMDHeadroomMinMiB, or the trigger reached within OOMDWithin at the
-	// last hour's growth rate. Every other memory threshold is a watch
-	// line for the supervisor only.
+	// kill is imminent (OOMD IMMINENT): less swap growth left before its
+	// SwapUsedLimit than OOMDHeadroomMinMiB, or the trigger reached within
+	// OOMDWithin at the last hour's growth rate.
 	OOMDHeadroomMinMiB int      `yaml:"oomdHeadroomMinMiB"`
 	OOMDWithin         Duration `yaml:"oomdWithin"`
 	ScopeAnonMaxMiB    int      `yaml:"scopeAnonMaxMiB"`
@@ -465,8 +465,14 @@ type Watch struct {
 	// STACKED. A negative value turns the line off.
 	ForkRateMax float64 `yaml:"forkRateMax"`
 	StackMax    int     `yaml:"stackMax"`
-	TmpMaxMiB   int     `yaml:"tmpMaxMiB"`
-	DiskMinMiB  int     `yaml:"diskMinMiB"`
+	// ToolProcsMax is how many processes of the CLIs named in Tools may run
+	// machine-wide before the watch says LOAD with the commands and the
+	// sessions that run them: thirty sessions' kubectl, helm and tsh load
+	// the CPU while no memory line fires. A negative value turns it off.
+	ToolProcsMax int      `yaml:"toolProcsMax"`
+	Tools        []string `yaml:"tools"`
+	TmpMaxMiB    int      `yaml:"tmpMaxMiB"`
+	DiskMinMiB   int      `yaml:"diskMinMiB"`
 	// QuietSessions are globs (* matches any run) of the names of
 	// short-lived sessions whose start, end and restart are no wake-up:
 	// the watch logs them (watch.quiet) instead of printing them. Setting
@@ -493,7 +499,7 @@ func (w Watch) AvailMin(ramMiB int) int { return atLeast(w.AvailMinMiB, DefaultA
 // SwapMax is the SWAP threshold on a machine of swapMiB.
 func (w Watch) SwapMax(swapMiB int) int { return atMost(w.SwapMaxMiB, DefaultSwapMax, swapMiB) }
 
-// OOMDHeadroomMin is the oom-line headroom on a machine of swapMiB.
+// OOMDHeadroomMin is the OOMD IMMINENT headroom on a machine of swapMiB.
 func (w Watch) OOMDHeadroomMin(swapMiB int) int {
 	return atLeast(w.OOMDHeadroomMinMiB, DefaultOOMDHeadroomMin, swapMiB)
 }
@@ -654,6 +660,16 @@ type Claude struct {
 	DesktopLog string `yaml:"desktopLog"`
 }
 
+// Desktop is how beekeeper shares the person's desktop.
+type Desktop struct {
+	// TypingQuiet is how long the person's keyboards and pointers stay
+	// idle before a claude:// link switches the desktop's window (the
+	// import of agents start, a reopen): a stray keystroke goes into the
+	// window the link opens. A negative value opens links without
+	// watching the input.
+	TypingQuiet Duration `yaml:"typingQuiet"`
+}
+
 // Memcap locates the build slots of the memcap wrapper and caps the
 // commands `beekeeper run` runs.
 type Memcap struct {
@@ -807,6 +823,10 @@ func (c *Config) defaults() error {
 		w.ForkRateMax = 50
 	}
 	setInt(&w.StackMax, 3)
+	setInt(&w.ToolProcsMax, 1000)
+	if w.Tools == nil {
+		w.Tools = []string{"kubectl", "helm", "tsh", "gh", "flux", "devctl"}
+	}
 
 	setStr(&c.Claude.ProjectsDir, filepath.Join(home, ".claude", "projects"))
 	setStr(&c.Claude.DesktopApp, DefaultDesktopApp)
@@ -817,6 +837,7 @@ func (c *Config) defaults() error {
 	}
 	setStr(&c.Claude.DesktopDir, filepath.Join(cfg, "Claude", "claude-code-sessions"))
 	setStr(&c.Claude.DesktopLog, filepath.Join(cfg, "Claude", "logs", "main.log"))
+	setDur(&c.Desktop.TypingQuiet, 30*time.Second)
 
 	if c.Metrics.Models == nil {
 		c.Metrics.Models = map[string]Model{}
@@ -961,15 +982,29 @@ func (c *Config) validate() error {
 	return nil
 }
 
+// machineKinds are the kinds that notified before the machine's lines went
+// to the supervisor only: a config naming one is told so.
+var machineKinds = []string{"oom-line", "oom-kill"}
+
+func notifyKind(field, k string) error {
+	if slices.Contains(machineKinds, k) {
+		return fmt.Errorf("%s: %q is a machine line, said to the supervisor's watch and never notified: remove it", field, k)
+	}
+	if !slices.Contains(notify.Kinds, k) {
+		return fmt.Errorf("%s: %q is none of %s", field, k, strings.Join(notify.Kinds, ", "))
+	}
+	return nil
+}
+
 func (n Notify) validate() error {
 	for _, k := range n.Kinds {
-		if !slices.Contains(notify.Kinds, k) {
-			return fmt.Errorf("notify.kinds: %q is none of %s", k, strings.Join(notify.Kinds, ", "))
+		if err := notifyKind("notify.kinds", k); err != nil {
+			return err
 		}
 	}
 	for k, u := range n.Urgency {
-		if !slices.Contains(notify.Kinds, k) {
-			return fmt.Errorf("notify.urgency: %q is none of %s", k, strings.Join(notify.Kinds, ", "))
+		if err := notifyKind("notify.urgency", k); err != nil {
+			return err
 		}
 		if !slices.Contains(notify.Urgencies, u) {
 			return fmt.Errorf("notify.urgency.%s: %q is none of %s", k, u, strings.Join(notify.Urgencies, ", "))

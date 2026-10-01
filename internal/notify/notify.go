@@ -1,10 +1,12 @@
 // Package notify sends the watch's events that need a person to the desktop
 // notification service, once per event however many watches share the
 // state directory: each event is claimed in notify.json under notify.lock,
-// and only the watch whose claim is first sends it. A lasting condition (an
-// imminent systemd-oomd kill, the GitHub budget under the floor) is one
-// notification per Repeat; quiet hours hold every kind but a critical one
-// until they end, then send what they held as one notification.
+// and only the watch whose claim is first sends it. A lasting condition (the
+// GitHub budget under the floor) is one notification per Repeat; quiet hours
+// hold every kind but a critical one until they end, then send what they
+// held as one notification. The machine's lines (memory, swap, OOM kills,
+// load) are never among them: the supervisor acts on those, through its
+// watch.
 package notify
 
 import (
@@ -21,11 +23,6 @@ import (
 const (
 	// Due is a note or a timer falling due.
 	Due = "due"
-	// OOMLine is an imminent systemd-oomd swap kill: swap close to its
-	// SwapUsedLimit, or growing fast enough to reach it soon.
-	OOMLine = "oom-line"
-	// OOMKill is a kernel OOM kill outside a build slot, or a systemd-oomd kill.
-	OOMKill = "oom-kill"
 	// Budget is the GitHub budget under the floor.
 	Budget = "budget"
 	// StaleLease is a lease whose holder's session is gone.
@@ -36,15 +33,15 @@ const (
 )
 
 // Kinds are every kind, the default of notify.kinds.
-var Kinds = []string{Due, OOMLine, OOMKill, Budget, StaleLease, NoSupervisor}
+var Kinds = []string{Due, Budget, StaleLease, NoSupervisor}
 
 // lasting are the kinds that are a condition, not an event with an identity:
 // one notification per Repeat.
-var lasting = map[string]bool{OOMLine: true, Budget: true}
+var lasting = map[string]bool{Budget: true}
 
 // repeating are the kinds that notify again after Repeat while they last:
 // the lasting ones, and a supervisor gone, per supervisor term.
-var repeating = map[string]bool{OOMLine: true, Budget: true, NoSupervisor: true}
+var repeating = map[string]bool{Budget: true, NoSupervisor: true}
 
 // Message is one desktop notification.
 type Message struct {
@@ -71,10 +68,9 @@ const (
 var Urgencies = []string{Low, Normal, Critical}
 
 // DefaultUrgency is the urgency of a kind notify.urgency does not set:
-// critical for the two that end sessions and a machine without a supervisor,
-// else normal.
+// critical for a machine without a supervisor, else normal.
 func DefaultUrgency(kind string) string {
-	if kind == OOMLine || kind == OOMKill || kind == NoSupervisor {
+	if kind == NoSupervisor {
 		return Critical
 	}
 	return Normal
@@ -166,8 +162,7 @@ func New(p Policy, dir string, s Sender, say func(string)) *Notifier {
 // Claim records the events of kind identified by keys and returns the keys
 // no watch had claimed before, or claimed longer than Repeat ago for a
 // repeating kind; a lasting kind is claimed as the kind itself and takes no
-// keys. A kind notify.kinds leaves out claims
-// nothing.
+// keys. A kind notify.kinds leaves out claims nothing.
 func (n *Notifier) Claim(ctx context.Context, now time.Time, kind string, keys ...string) []string {
 	if !slices.Contains(n.policy.Kinds, kind) {
 		return nil

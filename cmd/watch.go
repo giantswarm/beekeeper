@@ -98,15 +98,12 @@ of its own in flight.
 
 --notify also sends the events that need a person to the desktop's
 notification service (org.freedesktop.Notifications on the session bus):
-the kinds in notify.kinds, a note or timer falling due (due), an imminent
-systemd-oomd swap kill (oom-line: under watch.oomdHeadroomMinMiB of swap
-growth left before its SwapUsedLimit, or the trigger within
-watch.oomdWithin at the last hour's rate; low RAM, swap, memory pressure
-and the desktop scope's anonymous memory are watch lines for the
-supervisor only), a kernel OOM kill outside a build slot or a
-systemd-oomd kill (oom-kill), the GitHub budget under the floor (budget), a
-stale lease (stale-lease) and a supervisor whose CLI stayed gone past
-supervisor.restartGrace with no relay open (no-supervisor, critical). Each
+the kinds in notify.kinds, a note or timer falling due (due), the GitHub
+budget under the floor (budget), a stale lease (stale-lease) and a
+supervisor whose CLI stayed gone past supervisor.restartGrace with no relay
+open (no-supervisor, critical). The machine's lines (memory, swap, OOMD
+IMMINENT, OOM kills, load, processes) never notify: the supervisor acts on
+them, and its watch says them. Each
 event is one notification however many watches notify: the first to claim
 it in notify.json sends it. A lasting condition and a supervisor gone
 notify again after notify.repeat (30m); notify.quietHours hold
@@ -153,8 +150,11 @@ rate (the last 10 minutes' average outside a storm), with the commands and
 sessions of the processes started since the last sample; more than
 watch.stackMax (3) copies of one command line from the same place in the
 process tree, each running over a minute, are one STACKED line with the
-count, the oldest's age, its parent and its session. Each ends with an
-ENDED line; a negative threshold turns it off. A printed command line
+count, the oldest's age, its parent and its session. More than
+watch.toolProcsMax (1000) processes of the CLIs in watch.tools (kubectl,
+helm, tsh, gh, flux, devctl) running machine-wide are one LOAD line with
+their commands and the sessions that run them. Each ends with an ENDED
+line; a negative threshold turns it off. A printed command line
 keeps no value: the program, its subcommands and the flag names.
 
 What a watch has said is kept per caller (seen.watch.<caller>.json): a
@@ -601,16 +601,6 @@ func (w *watcher) oomdImminent(headroom, swapMiB, perHour int, rated bool) bool 
 	return rated && perHour > 0 && untilTrigger(headroom, perHour) < th.OOMDWithin.Duration
 }
 
-// oomLine notifies an imminent systemd-oomd kill the poll printed; a check
-// that holds none, or one already said within watch.repeat, returns no line
-// and notifies nothing.
-func (w *watcher) oomLine(ctx context.Context, now time.Time, line string) {
-	if line == "" {
-		return
-	}
-	w.notifyAt(ctx, now, notify.OOMLine, "", "beekeeper: systemd-oomd is about to kill the largest swap user", line+"\nbeekeeper free")
-}
-
 // modelServer says the host models no model-server lease covers and
 // unloads those a lab loaded or a budget exceeds, unless ollama.nameOnly.
 func (w *watcher) modelServer(ctx context.Context, models []machine.HostModel) {
@@ -672,7 +662,7 @@ func (w *watcher) sample(ctx context.Context) {
 		swapoff := plat.Machine.SwapoffRuns()
 		w.check("swapoff", swapoff, "SWAPOFF IN PROGRESS: %s", line)
 		if m.SwapTotalMiB > 0 {
-			w.oomLine(ctx, now, w.check("oomd", !swapoff && w.oomdImminent(headroom, m.SwapTotalMiB, perHour, rated), "OOMD IMMINENT: %s", line))
+			w.check("oomd", !swapoff && w.oomdImminent(headroom, m.SwapTotalMiB, perHour, rated), "OOMD IMMINENT: %s", line)
 		}
 	}
 	w.sampleCPU(now)
@@ -738,8 +728,10 @@ func (w *watcher) sampleCPU(now time.Time) {
 }
 
 // sampleProcs says PROCESS STORM once two samples in a row read a fork rate
-// more than watch.forkRateMax over the machine's usual one, and a STACKED line for each command line running
-// more than watch.stackMax times over, each with an ENDED line when it ends.
+// more than watch.forkRateMax over the machine's usual one, LOAD while more
+// than watch.toolProcsMax processes of watch.tools run, and a STACKED line
+// for each command line running more than watch.stackMax times over, each
+// with an ENDED line when it ends.
 // prev is the process table the last sample read, span ago.
 func (w *watcher) sampleProcs(now time.Time, span time.Duration, prev, t *proc.Table) {
 	th := w.cfg.Watch
@@ -776,6 +768,12 @@ func (w *watcher) sampleProcs(now time.Time, span time.Duration, prev, t *proc.T
 	if err == nil {
 		w.forks = forks
 	}
+
+	var load string
+	if th.ToolProcsMax >= 0 {
+		load = toolLoadLine(t, th.Tools, th.ToolProcsMax, owners)
+	}
+	w.check("toolprocs", load != "", "%s", load)
 
 	var found []stack
 	if th.StackMax > 0 {
@@ -1086,44 +1084,13 @@ func (w *watcher) kills(ctx context.Context, since time.Time, sessions []*claude
 	for _, line := range groupKills(tests) {
 		w.emitNow("testkill", "test kill: %s", line)
 	}
-	w.notifyKills(ctx, fresh)
 	if lines, err := plat.Machine.OomdKills(ctx, since.Add(-2*time.Second)); err == nil {
 		for _, l := range lines {
 			if !w.seenKills[l] {
 				w.seenKills[l] = true
 				w.emitNow("oomd", "SYSTEMD-OOMD: %s", truncate(l, 200))
-				w.notify(ctx, notify.OOMKill, l, "beekeeper: systemd-oomd killed a unit", truncate(l, 200)+"\nbeekeeper snapshot")
 			}
 		}
-	}
-}
-
-// notifyKills sends the kernel OOM kills no other watch has claimed, as one
-// notification; a build slot's cap killing its own command is left out,
-// its session sees the exit.
-func (w *watcher) notifyKills(ctx context.Context, kills []oomKill) {
-	if w.notifier == nil {
-		return
-	}
-	var keys []string
-	byKey := map[string]oomKill{}
-	for _, k := range kills {
-		if strings.Contains(k.Memcg, "memcap") {
-			continue
-		}
-		key := fmt.Sprintf("%d@%d", k.PID, k.At.Unix())
-		keys = append(keys, key)
-		byKey[key] = k
-	}
-	if len(keys) == 0 {
-		return
-	}
-	var claimed []oomKill
-	for _, key := range w.notifier.Claim(ctx, w.now, notify.OOMKill, keys...) {
-		claimed = append(claimed, byKey[key])
-	}
-	if len(claimed) > 0 {
-		w.notifier.Send(ctx, w.now, notify.OOMKill, "beekeeper: kernel OOM kill", strings.Join(groupKills(claimed), "\n")+"\nbeekeeper snapshot")
 	}
 }
 

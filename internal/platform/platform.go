@@ -1,8 +1,9 @@
 // Package platform is the one place beekeeper reaches into the machine it
 // runs on: memory, pressure, processes and OOM kills (Machine), detached
 // units of work (Launcher), memory-capped runs (Capper), claude:// links
-// (Opener), desktop notifications (Notifier), and the standby service and
-// memory guard beekeeper install puts in place (Setup). The build selects
+// (Opener), the person's input (Input), desktop notifications (Notifier),
+// and the standby service and memory guard beekeeper install puts in place
+// (Setup). The build selects
 // one implementation: linux_systemd on Linux (systemd user units, cgroup v2,
 // /proc, D-Bus), a stub on other systems and on Linux built with the
 // nosystemd tag, whose parts return a NotAvailableError; the stub installs
@@ -145,6 +146,13 @@ type Opener interface {
 	Open(ctx context.Context, url string, running bool) error
 }
 
+// Input tells when the person last typed or pointed.
+type Input interface {
+	// Watch watches the keyboards and pointers until ctx ends and returns
+	// when input last arrived: the start of the watch until the first.
+	Watch(ctx context.Context) (last func() time.Time, err error)
+}
+
 // Notifier shows desktop notifications.
 type Notifier interface {
 	notify.Sender
@@ -201,6 +209,7 @@ type Platform struct {
 	Launcher Launcher
 	Capper   Capper
 	Opener   Opener
+	Input    Input
 	Setup    Setup
 	// NewNotifier opens a notifier; the caller closes it.
 	NewNotifier func() Notifier

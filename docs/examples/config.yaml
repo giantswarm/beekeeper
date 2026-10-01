@@ -43,7 +43,7 @@ watch:
   budgetEvery: 5m
   availMinMiB: 10240        # LOW RAM under this MemAvailable; default: 12% of RAM
   swapMaxMiB: 10000         # SWAP over this, with the distance to systemd-oomd's trigger; default: 60% of swap
-  oomdHeadroomMinMiB: 1024  # oom-line under this much swap growth left before oomd's SwapUsedLimit; default: 6% of swap
+  oomdHeadroomMinMiB: 1024  # OOMD IMMINENT under this much swap growth left before oomd's SwapUsedLimit; default: 6% of swap
   oomdWithin: 30m           # ... or when the last hour's growth rate reaches the trigger within this
   scopeAnonMaxMiB: 28000    # DESKTOP SCOPE anon over this (cache is reclaimable, anon is not); default: 32% of RAM
   gttMaxMiB: 24576          # IGPU GTT over this (RAM the GPU driver pins, in no cgroup); default: 28% of RAM
@@ -53,6 +53,8 @@ watch:
   cpuPSIMax: 40             # CPU PRESSURE over this some avg10 (%) for two samples; installation reads then slow down
   forkRateMax: 50           # PROCESS STORM this many forks/s over the usual rate for two samples; negative: off
   stackMax: 3               # STACKED over this many copies of one command line, each over a minute old; negative: off
+  toolProcsMax: 1000        # LOAD over this many processes of the tools below, machine-wide; negative: off
+  tools: [kubectl, helm, tsh, gh, flux, devctl]   # the default
   tmpMaxMiB: 20000          # TMPFS /tmp over this; default: 45% of /tmp's size
   diskMinMiB: 102400        # LOW DISK under this free on /; default: 5% of its size
   quietSessions: ["test: *"]   # the default; short-lived sessions whose start and end are logged, not said
@@ -141,6 +143,9 @@ reporter:                   # the scheduled status reporter the standby watch st
 claude:
   desktopApp: claude-desktop   # the default; the desktop app's executable, which opens claude:// links
 
+desktop:
+  typingQuiet: 30s          # the default; a claude:// link waits for this much idle keyboard and pointer input; negative: no wait
+
 metrics:
   models:                   # USD per million tokens and the context window; an entry replaces the default of its id
     my-model: {input: 1, output: 5, cacheWrite5m: 1.25, cacheWrite1h: 2, cacheRead: 0.1, fast: 2, contextWindow: 200000}   # fast: fast mode's multiplier
@@ -149,8 +154,8 @@ metrics:
     sameErrorRepeats: 10    # the same failing tool call in the last hour
     contextFill: 0.9
 
-notify:                     # what watch --notify sends to the desktop
-  kinds: [due, oom-line, oom-kill, budget, stale-lease, no-supervisor]   # the default: all
+notify:                     # what watch --notify sends to the desktop; the machine's lines never notify
+  kinds: [due, budget, stale-lease, no-supervisor]   # the default: all
   quietHours: "22:00-07:00" # local time; holds everything but critical; default: none
-  urgency: {oom-kill: critical, due: normal}   # low, normal, critical; oom-line and oom-kill default to critical
-  repeat: 30m               # a lasting condition (oom-line, budget) notifies again after this
+  urgency: {stale-lease: critical, due: normal}   # low, normal, critical; no-supervisor defaults to critical
+  repeat: 30m               # a lasting condition (budget) notifies again after this

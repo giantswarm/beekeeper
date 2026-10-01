@@ -197,6 +197,49 @@ func TestSampleProcsSaysAStormAndAStackOnce(t *testing.T) {
 	}
 }
 
+// 1,200 short-lived tsh and helm processes of two sessions, seen by
+// three samples in a row, are one LOAD line naming the commands and the
+// sessions, and one ENDED line once they are gone; a negative
+// watch.toolProcsMax turns it off.
+func TestSampleProcsSaysLoadOnce(t *testing.T) {
+	var out bytes.Buffer
+	cfg := &config.Config{}
+	cfg.Watch.Repeat.Duration = 10 * time.Minute
+	cfg.Watch.ForkRateMax, cfg.Watch.StackMax, cfg.Watch.ToolProcsMax = -1, -1, 1000
+	cfg.Watch.Tools = []string{"tsh", "helm"}
+	w := &watcher{app: &app{out: &out, cfg: cfg}, last: map[string]time.Time{}}
+	w.readForks = func() (uint64, error) { return 0, nil }
+	owners := map[int]string{1: agentOne, 2: agentFour}
+	w.owners.Store(&owners)
+
+	now := time.Now()
+	busy := table(&proc.Process{PID: 1, Args: strings.Fields("claude")}, &proc.Process{PID: 2, Args: strings.Fields("claude")},
+		&proc.Process{PID: 3, Args: strings.Fields("sleep 60")})
+	for i := range 1200 {
+		cli, parent := "tsh kube login", 1
+		if i%4 == 0 {
+			cli, parent = "helm list", 2
+		}
+		busy.ByPID[100+i] = &proc.Process{PID: 100 + i, PPID: parent, Args: strings.Fields(cli), Start: now}
+	}
+	named(busy)
+	for range 3 {
+		w.sampleProcs(now, 30*time.Second, nil, busy)
+	}
+	w.sampleProcs(now, 30*time.Second, nil, table())
+	want := "LOAD: 1200 CLI processes over 1000, top: tsh 75 %, helm 25 %; sessions: \"Agent one\" 75 %, \"Agent four\" 25 %\n"
+	if got := out.String(); !strings.Contains(got, want) || strings.Count(got, "\n") != 2 || !strings.Contains(got, "ENDED LOAD (since ") {
+		t.Errorf("the watch said:\n%s", got)
+	}
+
+	out.Reset()
+	cfg.Watch.ToolProcsMax = -1
+	w.sampleProcs(now, 30*time.Second, nil, busy)
+	if out.Len() != 0 {
+		t.Errorf("turned off, the watch said:\n%s", out.String())
+	}
+}
+
 // named gives each process its command name, the base of its program.
 func named(t *proc.Table) *proc.Table {
 	for _, p := range t.ByPID {

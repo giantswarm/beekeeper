@@ -22,13 +22,15 @@ func Name() string { return "linux_systemd" }
 
 // current is linux_systemd: /proc, PSI and cgroup v2 for the machine,
 // systemd user units and scopes for the launcher and the capper, the
-// journal for the OOM kills, D-Bus for notifications.
+// journal for the OOM kills, evdev for the person's input, D-Bus for
+// notifications.
 func current(o Options) Platform {
 	return Platform{
 		Machine:     systemdMachine{},
 		Launcher:    systemdLauncher{},
 		Capper:      systemdCapper{},
 		Opener:      systemdOpener{app: o.DesktopApp},
+		Input:       evdevInput{},
 		Setup:       systemdSetup{},
 		NewNotifier: func() Notifier { return &desktop{} },
 	}
