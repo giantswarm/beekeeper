@@ -20,13 +20,16 @@ func (a *app) noteCmd() *cobra.Command {
 transcript: the decisions waiting on a person, a deadline to check. A
 decision carries its default, what happens when nobody answers by its due
 time; beekeeper watch reports a note once when it is due. Notes appear in
-every hand-over until marked done.
+every hand-over until marked done. A pinned note (--pin) is a standing
+instruction: every hand-over, the supervisor's and the guide's, carries it
+in full until it is unpinned or done.
 
 Without a subcommand, lists the open notes.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error { return a.noteList() },
 	}
 	var forWho, due string
+	var pin bool
 	var draft noteDraft
 	add := &cobra.Command{
 		Use:   "add <text>",
@@ -41,9 +44,12 @@ released, rolled or closed. Such a note on an issue or PR that an open
 note for the same person names, asking the same verb (the first word of
 the text), folds into that note (note.folded). A --kind login note closes
 once its --until probe, a shell command the watch runs every tick, exits 0.
-Notes without --for are memos and are not checked.`,
+Notes without --for are memos and are not checked. A note for a person
+that asks again what was answered for that person within the last 72
+hours (the same verb on one of the same issues or PRs) is filed with a
+warning that quotes the answer.`,
 		Args: cobra.MinimumNArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			d, err := untilTime(a.now, due)
 			if err != nil {
 				return err
@@ -53,11 +59,16 @@ Notes without --for are memos and are not checked.`,
 				return err
 			}
 			draft.Question = strings.Join(args, " ")
-			n := state.Note{For: forWho, Text: draft.text(), Due: d.UTC(), Default: draft.Default, By: me, At: a.now.UTC(), Kind: draft.Kind, Until: draft.Until}
+			n := state.Note{For: forWho, Text: draft.text(), Due: d.UTC(), Default: draft.Default, By: me, At: a.now.UTC(), Kind: draft.Kind, Until: draft.Until, Pinned: pin}
 			checked := forWho != "" && guides(a.cfg.Guide.Person, &n)
 			if checked {
 				if m := draft.missing(); len(m) > 0 {
 					return usageErr("note for %s refused, it lacks: %s", forWho, strings.Join(m, "; "))
+				}
+			}
+			if forWho != "" {
+				if err := a.warnAnswered(cmd, n, draft.Question); err != nil {
+					return err
 				}
 			}
 			var folded *state.Note
@@ -92,6 +103,7 @@ Notes without --for are memos and are not checked.`,
 	add.Flags().StringVar(&draft.Why, "why", "", "why it needs the person")
 	add.Flags().StringArrayVar(&draft.Options, "option", nil, `a choice and its consequence, "<choice>: <consequence>" (repeatable)`)
 	add.Flags().StringVar(&draft.Checked, "checked", "", "where a state claim (merged, green, released, rolled, closed) was checked")
+	add.Flags().BoolVar(&pin, "pin", false, "a standing instruction: every hand-over carries it until unpinned")
 	add.Flags().StringVar(&draft.Kind, "kind", "", `"login": a sign-in, closed once --until passes`)
 	add.Flags().StringVar(&draft.Until, "until", "", "a login note's probe: a shell command that exits 0 once signed in")
 	done := &cobra.Command{
@@ -163,7 +175,7 @@ the guide's feed read it from the log (beekeeper log --verb note.answered).`,
 		},
 	}
 	list := listCmd("List the open notes", a.noteList)
-	c.AddCommand(add, answer, done, list)
+	c.AddCommand(add, answer, done, a.notePinCmd("pin", true), a.notePinCmd("unpin", false), list)
 	return c
 }
 
@@ -186,6 +198,9 @@ func (a *app) printNotes(notes []state.Note) {
 	}
 	for _, n := range notes {
 		var tags []string
+		if n.Pinned {
+			tags = append(tags, "pinned")
+		}
 		if n.For != "" {
 			tags = append(tags, "for "+n.For)
 		}
@@ -205,6 +220,60 @@ func (a *app) printNotes(notes []state.Note) {
 		}
 		_, _ = fmt.Fprintf(a.out, "#%d%s %s%s\n", n.ID, tag, n.Text, dflt)
 	}
+}
+
+// notePinCmd pins or unpins notes: a pinned note is in every hand-over.
+func (a *app) notePinCmd(name string, pin bool) *cobra.Command {
+	short := "Pin notes: every hand-over carries them until unpinned"
+	if !pin {
+		short = "Unpin notes: they are open notes again"
+	}
+	return &cobra.Command{
+		Use:   name + " <id>...",
+		Short: short,
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			me, err := a.caller()
+			if err != nil {
+				return err
+			}
+			ids, err := parseIDs(args, "note")
+			if err != nil {
+				return err
+			}
+			var evs []state.Event
+			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+				for i := range st.Notes {
+					if n := &st.Notes[i]; slices.Contains(ids, n.ID) {
+						n.Pinned = pin
+						evs = append(evs, event(me, "note."+name, "#%d %s", n.ID, n.Text))
+					}
+				}
+				return evs, nil
+			})
+			if err != nil {
+				return err
+			}
+			if len(evs) < len(ids) {
+				return refused("%d of the %d notes were open", len(evs), len(ids))
+			}
+			return nil
+		},
+	}
+}
+
+// warnAnswered warns when n asks again what was answered for the same
+// person within answeredWindow; the note is filed all the same.
+func (a *app) warnAnswered(cmd *cobra.Command, n state.Note, question string) error {
+	recent, err := a.answeredSince(a.now.Add(-answeredWindow))
+	if err != nil {
+		return err
+	}
+	if an, ref := repeats(recent, n, question); an != nil {
+		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "warning: note #%d asked %s on %s and was answered %s for %s: %q\n",
+			an.ID, verb(an.Question), ref, a.stamp(an.At), an.For, oneLine(an.Answer))
+	}
+	return err
 }
 
 // parseIDs reads note or timer ids, with or without their #.

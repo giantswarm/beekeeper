@@ -35,7 +35,7 @@ var liveCommands = [][2]string{
 // the live values. It carries no standing rule and no live value (a version,
 // a memory figure, a pull request's state): those belong to the instructions
 // and to the commands, and a prompt that restates them goes stale.
-func (a *app) printPrompt(ctx context.Context, v *view, l *leaseList, al *alertsView) error {
+func (a *app) printPrompt(ctx context.Context, v *view, l *leaseList, al *alertsView, ans answers) error {
 	intro, err := a.instructions(v.st)
 	if err != nil {
 		return err
@@ -44,7 +44,10 @@ func (a *app) printPrompt(ctx context.Context, v *view, l *leaseList, al *alerts
 	p("%s\n", intro)
 	p("## Scope\n\n%s\n", a.scope(al))
 	p("## Pending state, %s\n", a.stamp(a.now))
-	a.promptNotes(p, v.st.Notes)
+	notes := a.splitNotes(v.st.Notes)
+	a.promptPinned(p, notes.Pinned)
+	a.promptNotes(p, notes)
+	a.promptAnswers(p, ans)
 	a.promptTimers(p, v.st.Timers)
 	a.promptLeases(p, l)
 	a.promptHolds(p, a.activeHolds(v.st))
@@ -127,10 +130,40 @@ func section(p printer, title string, empty bool, none string) bool {
 	return !empty
 }
 
-func (a *app) promptNotes(p printer, notes []state.Note) {
-	if !section(p, "Decisions and notes", len(notes) == 0, "None open.") {
+// promptPinned lists the standing instructions: they stand until unpinned.
+func (a *app) promptPinned(p printer, notes []state.Note) {
+	if len(notes) == 0 {
 		return
 	}
+	section(p, "Standing instructions (pinned notes)", false, "")
+	a.promptNoteLines(p, notes)
+	p("")
+}
+
+// promptNotes lists the supervisor's own notes and the line for the
+// guide's.
+func (a *app) promptNotes(p printer, s noteSplit) {
+	if !section(p, "Decisions and notes", len(s.Own)+s.guided() == 0, "None open.") {
+		return
+	}
+	a.promptNoteLines(p, s.Own)
+	if s.guided() > 0 {
+		p("- %s", guidedText(s))
+	}
+	p("")
+}
+
+// promptAnswers lists the decisions answered since the last relay: they
+// are not to be asked again.
+func (a *app) promptAnswers(p printer, s answers) {
+	if !section(p, "Answered since the last relay", len(s.All) == 0, "None.") {
+		return
+	}
+	a.printAnswers(s, false)
+	p("")
+}
+
+func (a *app) promptNoteLines(p printer, notes []state.Note) {
 	for _, n := range notes {
 		var tags []string
 		if n.For != "" {
@@ -153,7 +186,6 @@ func (a *app) promptNotes(p printer, notes []state.Note) {
 		}
 		p("%s", line)
 	}
-	p("")
 }
 
 func (a *app) promptTimers(p printer, timers []state.Timer) {
@@ -248,8 +280,9 @@ func (a *app) promptLanes(p printer, lanes []laneView) {
 	p("")
 }
 
-func (a *app) promptRecords(p printer, records []state.Record, sessions []*claude.Session) {
-	if !section(p, "Session records", len(records) == 0, "None.") {
+func (a *app) promptRecords(p printer, all []state.Record, sessions []*claude.Session) {
+	records, dropped := a.liveRecords(all, sessions)
+	if !section(p, "Session records", len(all) == 0, "None.") {
 		return
 	}
 	for _, r := range records {
@@ -259,6 +292,9 @@ func (a *app) promptRecords(p printer, records []state.Record, sessions []*claud
 			continue
 		}
 		p("- %q %s", r.Session.Name, oneLine(recordText(r)))
+	}
+	if dropped > 0 {
+		p("- %s", droppedText(dropped))
 	}
 	p("")
 }

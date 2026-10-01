@@ -135,7 +135,8 @@ func guideQueue(st *state.State, sessions []*claude.Session, person string) []qu
 	var out []queueItem
 	for i := range st.Notes {
 		n := &st.Notes[i]
-		if !guides(person, n) {
+		// A pinned note is a standing instruction, not a decision.
+		if !guides(person, n) || n.Pinned {
 			continue
 		}
 		_, live := claude.Live(sessions, n.By)
@@ -292,7 +293,8 @@ func (a *app) guideHandoverCmd() *cobra.Command {
 relay and the queue. --prompt prints the successor's session prompt instead:
 the configured instructions (guide.skill or guide.instructions), the queue, an open relay and the commands that read
 the live values; no standing rule and no live value. A caller that has read
-the hand-over before gets only what changed; --full prints everything.`,
+the hand-over before gets only what changed; --full prints everything. The
+pinned notes (note add --pin) are in both.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			st, err := a.store.Read()
@@ -306,7 +308,7 @@ the hand-over before gets only what changed; --full prints everything.`,
 			q := a.guideQueue(st, sessions)
 			r := guideRole.get(st)
 			if prompt {
-				return a.printGuidePrompt(r, q)
+				return a.printGuidePrompt(r, q, a.splitNotes(st.Notes).Pinned)
 			}
 			sv := readHolder(r, sessions, a.now, a.cfg.Guide.RestartGrace.Duration)
 			head := "No guide is recorded."
@@ -317,12 +319,16 @@ the hand-over before gets only what changed; --full prints everything.`,
 				}
 			}
 			relay := a.relayLine(guideRole, r)
+			pinned := a.splitNotes(st.Notes).Pinned
 			facts := append(textFacts("guide", head+"\n"+relay), a.queueFacts(q)...)
+			facts = append(facts, textFacts("pinned", a.capture(func() { a.printPinned(pinned) }))...)
 			return a.delta("guide-handover", full, facts, func() {
 				_, _ = fmt.Fprintf(a.out, "# Guide hand-over, %s\n\n%s\n", a.now.Format("2006-01-02 15:04 MST"), head)
 				if relay != "" {
 					_, _ = fmt.Fprintln(a.out, relay)
 				}
+				_, _ = fmt.Fprintln(a.out, "\n## Pinned notes")
+				a.printPinned(pinned)
 				_, _ = fmt.Fprintln(a.out, "\n## Queue")
 				a.printQueue(q)
 			})
@@ -349,7 +355,7 @@ var guideLiveCommands = [][2]string{
 	{"beekeeper log --verb note.", "the notes filed, answered and closed"},
 }
 
-func (a *app) printGuidePrompt(r state.Role, q []queueItem) error {
+func (a *app) printGuidePrompt(r state.Role, q []queueItem, pinned []state.Note) error {
 	intro, err := a.roleInstructions(guideRole, r)
 	if err != nil {
 		return err
@@ -357,6 +363,7 @@ func (a *app) printGuidePrompt(r state.Role, q []queueItem) error {
 	p := func(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format+"\n", args...) }
 	p("%s\n", intro)
 	p("## Pending state, %s\n", a.stamp(a.now))
+	a.promptPinned(p, pinned)
 	if section(p, "Decisions waiting on the person", len(q) == 0, "None open.") {
 		for _, it := range q {
 			p("- %s", a.queueText(it))

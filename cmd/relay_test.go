@@ -140,14 +140,14 @@ func TestPromptHasThePendingStateAndNoLiveValue(t *testing.T) {
 			"a": {Alertname: "AppWithoutTeamAnnotation"}, "b": {Alertname: "AppWithoutTeamAnnotation"}, "c": {Alertname: "ChartOrphanConfigMap"},
 		}}},
 	}
-	if err := a.printPrompt(context.Background(), &view{st: st, raw: []*claude.Session{{ID: "s4", HostID: hostFour, Name: agentFour}}}, l, al); err != nil {
+	if err := a.printPrompt(context.Background(), &view{st: st, raw: []*claude.Session{{ID: "s4", HostID: hostFour, Name: agentFour}}}, l, al, answers{}); err != nil {
 		t.Fatal(err)
 	}
 	got := out.String()
 	for _, want := range []string{
 		`Run /supervise: you take over the supervisor's watch from "Supervisor run 11".`,
 		"## Scope", "the leases of agentlab-1, graveler, browser; the merge lanes serving, portal; the alerts of gazelle",
-		"#1 (for Timo, due", "overdue): pick a threshold; if unanswered: the alert stays as is", "#3: no deadline",
+		"- 1 notes the guide serves (1 for Timo)", "#3: no deadline", "### Answered since the last relay\n\nNone.",
 		`#1 (at`, rollout, "not yet",
 		`graveler held by "Agent four"`, "PR dev artifacts", `graveler is granted to "Continue #37639"`, "free: agentlab-1, browser",
 		"lane:serving, until lifted", "L4 round first", "the release window of devctl",

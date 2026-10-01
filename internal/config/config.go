@@ -175,7 +175,8 @@ type Role struct {
 	// instead.
 	Instructions string `yaml:"instructions"`
 	// RelayAt is the role's session context, in tokens, at which the watch
-	// reports the relay due ("400k").
+	// reports the relay due ("400k"; the guide's default is 150k, the
+	// supervisor's 400k).
 	RelayAt Tokens `yaml:"relayAt"`
 	// RelayTTL is how long a relay stays open for the successor's start.
 	RelayTTL Duration `yaml:"relayTTL"`
@@ -736,6 +737,10 @@ func (c *Config) defaults() error {
 	// debounces a supervisor someone woke.
 	setDur(&c.Supervisor.RestartGrace, 30*time.Second)
 	c.Supervisor.defaults(home)
+	// The guide's context is the person's conversation: it relays early.
+	if c.Guide.RelayAt == 0 {
+		c.Guide.RelayAt = 150_000
+	}
 	c.Guide.defaults(home)
 	if c.Agents.RelayAt == 0 {
 		c.Agents.RelayAt = c.Supervisor.RelayAt

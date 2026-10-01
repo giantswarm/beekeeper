@@ -194,11 +194,13 @@ a numbered run, "Supervisor run N": its desktop title, roster name and the name 
   reaches `supervisor.relayAt` and the machine is quiet (no gated merge running or settling, no
   grant waiting to be claimed, no claim queued).
 - **How:** everything pending is in beekeeper first (notes with defaults, timers, session records,
-  holds, grants, lane seeds). Then `beekeeper supervisor relay` starts "Supervisor run N+1" and
-  opens the relay to it. Its headless first turn only takes the role with `beekeeper supervisor
-  start`; the standby unit then resumes it in its desktop CLI, where it reads `beekeeper handover
-  --prompt`, arms its watch and acknowledges by name. What is not in beekeeper (the rules this watch
-  agreed on) goes to it by `SendMessage` after that acknowledgement. Once `beekeeper supervisor
+  holds, grants, lane seeds); a standing rule this watch agreed on is a pinned note (`beekeeper note
+  add --pin`), which every hand-over carries. Then `beekeeper supervisor relay` starts "Supervisor
+  run N+1" and opens the relay to it. Its headless first turn only takes the role with `beekeeper
+  supervisor start`, which tells every running agent the new name; the standby unit then resumes
+  it in its desktop CLI, where it reads `beekeeper handover --prompt` (one part in full: `--section
+  <name>`), arms its watch and acknowledges by name. A decision listed there as answered is not
+  asked again. Once `beekeeper supervisor
   status` exits 4 in this session, it is relieved. A relay not taken expires after
   `supervisor.relayTTL` or is withdrawn with `supervisor relay --cancel`, and the watch carries on.
 - **Where the watch runs:** only in a desktop turn. A headless turn (a first turn, an `agents
