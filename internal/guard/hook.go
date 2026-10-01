@@ -223,6 +223,9 @@ func (h Hook) decide(ev event) []byte {
 	if l := secretLeak(cmd); l != nil {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: l.reason()})
 	}
+	if r := deleteRefusal(cmd); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
 	cwd := ev.CWD
 	if cwd == "" {
 		cwd, _ = os.Getwd()
