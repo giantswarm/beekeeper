@@ -388,3 +388,7 @@ func cost(msgs []message, m config.Metrics, since time.Time) (*float64, []string
 	}
 	return &usd, nil
 }
+
+// InvokesGitHub says a shell command runs gh or devctl as one of its
+// commands.
+func InvokesGitHub(cmd string) bool { return invokesGitHub(cmd) }

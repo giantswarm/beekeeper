@@ -276,3 +276,11 @@ func Overlaps(sessions []*Session, work map[int]Work, o OverlapOptions) []Overla
 	}
 	return out
 }
+
+// ReadWindow returns the last 512 KiB of a session file and whether they
+// are all of it, for another harness's reader.
+func ReadWindow(path string) ([]byte, bool) { return readWindow(path) }
+
+// ScanWork finds the issues, pull requests and repositories text is
+// about, as a transcript's are found.
+func ScanWork(text string) Work { return scanWork(text) }

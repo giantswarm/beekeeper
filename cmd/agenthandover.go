@@ -17,6 +17,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/peer"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -141,6 +142,9 @@ func (a *app) readHandover(q string) (handover, error) {
 	}
 	h := handover{agent: st.Agents[i]}
 	p := h.agent.Party
+	if strings.HasPrefix(p.HostSession, omp.HostPrefix) {
+		return handover{}, refused("%q is an omp agent: a hand-over starts a Claude Code successor from a Claude transcript", p.Name)
+	}
 	for _, rl := range roles {
 		if r := rl.get(st); r.Holder != nil && r.Holder.Is(p) {
 			return handover{}, refused("%q holds the %s role: it moves by relay (%s)", p.Name, rl.name, rl.handover)

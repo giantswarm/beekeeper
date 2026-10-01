@@ -15,6 +15,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -224,7 +225,13 @@ func (a *app) sessions() ([]*claude.Session, *proc.Table, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return claude.Discover(a.cfg, t, a.now), t, nil
+	return discover(a.cfg, t, a.now), t, nil
+}
+
+// discover returns the running sessions of every harness: Claude Code's,
+// then omp's.
+func discover(cfg *config.Config, t *proc.Table, now time.Time) []*claude.Session {
+	return append(claude.Discover(cfg, t, now), omp.Discover(cfg.Omp.SessionsDir, t, now)...)
 }
 
 func (a *app) printJSON(v any) error {
