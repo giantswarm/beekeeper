@@ -45,7 +45,7 @@ of its statuses, kinds and labels (the open sub-issues of the epics it
 matches, with subIssues; only items whose recorded blockers all closed, with
 unblocked; only items created within createdWithin), or a GitHub search's
 open issues. A sub-issue that is a board item is held to the order by its
-own Status: one no step offers on its own (a Backlog item older than the
+own Status, whatever its Team: one no step offers on its own (a Backlog item older than the
 Backlog step's createdWithin, a blocked one, one in Inbox) is skipped with
 the reason, even when its epic is in progress. The first item that is free
 is picked: not served by a running session (a sessions serve record, a busy

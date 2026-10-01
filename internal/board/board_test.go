@@ -52,8 +52,9 @@ func deskBoard() config.Board {
 // order.
 func fixture() []Item {
 	it := func(n int, status, kind string, created, updated int) Item {
+		// Every item of the fixture with a Status is a board item.
 		return Item{Ref: fmt.Sprintf("o/r#%d", n), URL: fmt.Sprintf("https://github.com/o/r/issues/%d", n), Title: fmt.Sprintf("item %d", n),
-			Status: status, Kind: kind, Created: days(created), Updated: days(updated)}
+			OnBoard: status != "", Status: status, Kind: kind, Created: days(created), Updated: days(updated)}
 	}
 	stale := it(1, inProgress, "", 800, 400)
 	theirs := it(2, inProgress, "", 30, 1)
@@ -77,15 +78,20 @@ func fixture() []Item {
 	epicItem.OpenSubIssues = 2
 	epicItem.SubIssues = []Item{it(80, "", "", 10, 1), it(3, inProgress, "", 30, 1)}
 	closableEpic := it(9, upNext, epic, 20, 1)
-	// The sub-issues of an epic in progress are board items of their own:
-	// a fresh and an old one in Backlog, one in Inbox. The read of an
-	// epic's sub-issues has no board fields.
-	mixedEpic := it(15, inProgress, epic, 200, 1)
-	mixedEpic.OpenSubIssues = 4
-	mixedEpic.SubIssues = []Item{it(16, "", "", 20, 1), it(17, "", "", 99, 1), it(18, "", "", 5, 1), it(20, "", "", 5, 1)}
 	// A fresh Backlog item a step offers, its recorded blockers open.
 	blockedSlice := it(20, backlog, "", 5, 1)
 	blockedSlice.Blockers, blockedSlice.OpenBlockers = 4, 3
+	// The sub-issues of an epic in progress are board items of their own:
+	// a fresh and an old one in Backlog, one in Inbox, the blocked slice.
+	// Those without a Team (21, 22, 23: in Inbox, old in Backlog, still
+	// blocked) are missing from the team's snapshot, held to the order all
+	// the same.
+	teamless := it(23, blocked, "", 5, 1)
+	teamless.Blockers, teamless.OpenBlockers = 2, 1
+	mixedEpic := it(15, inProgress, epic, 200, 1)
+	mixedEpic.OpenSubIssues = 7
+	mixedEpic.SubIssues = []Item{it(16, backlog, "", 20, 1), it(17, backlog, "", 99, 1), it(18, statuses[0], "", 5, 1), blockedSlice,
+		it(21, statuses[0], "", 5, 1), it(22, backlog, "", 99, 1), teamless}
 	return []Item{stale, theirs, mine, waiting, inProgressEpic, stillBlocked, cleared, waitingOnPeople, epicItem, closableEpic,
 		it(10, upNext, "", 20, 1), it(11, backlog, bug, 400, 3), it(12, backlog, "", 100, 1), it(13, backlog, "", 10, 1), it(14, "Done ✅", "", 10, 1),
 		mixedEpic, it(16, backlog, "", 20, 1), it(17, backlog, "", 99, 1), it(18, statuses[0], "", 5, 1), blockedSlice}
@@ -123,6 +129,9 @@ func TestRankAppliesTheOrderToAFixtureBoard(t *testing.T) {
 		"o/r#17 In Progress < o/r#15: created 2026-06-24: Backlog takes items created within 90 days",
 		"o/r#18 In Progress < o/r#15: no step of board.order offers Inbox 📥",
 		"o/r#20 In Progress < o/r#15: 3 of 4 blockers open",
+		"o/r#21 In Progress < o/r#15: no step of board.order offers Inbox 📥",
+		"o/r#22 In Progress < o/r#15: created 2026-06-24: Backlog takes items created within 90 days",
+		"o/r#23 In Progress < o/r#15: 1 of 2 blockers open",
 		"o/r#6 blocker cleared",
 		"o/r#80 Up Next epic < o/r#8",
 		"o/r#9 Up Next epic",
@@ -244,13 +253,14 @@ func (f *fakeGH) run(_ context.Context, args ...string) ([]byte, error) {
 			page = 1
 		}
 		return []byte(f.pages[page]), nil
-	case strings.Contains(q, "projectItems"):
-		return []byte(f.item), nil
 	case strings.Contains(q, "subIssues(first:50)") || strings.Contains(q, "search("):
-		if !strings.Contains(q, `e1:repository(owner:"o",name:"r"){issue(number:2)`) || !strings.Contains(q, `s2:search(query:"repo:o/q is:issue is:open sort:created-asc"`) {
+		if !strings.Contains(q, `e1:repository(owner:"o",name:"r"){issue(number:2){subIssues(first:50){nodes{...I projectItems(`) ||
+			!strings.Contains(q, `s2:search(query:"repo:o/q is:issue is:open sort:created-asc"`) {
 			f.t.Errorf("extras query %s", q)
 		}
 		return []byte(f.extras), nil
+	case strings.Contains(q, "projectItems"):
+		return []byte(f.item), nil
 	}
 	f.t.Fatalf("unexpected request %v", args)
 	return nil, nil
@@ -272,7 +282,12 @@ func TestReadPagesTheBoardAndReadsSubIssuesAndSearches(t *testing.T) {
 			`{"status":{"name":"Up Next ➡️"},"content":{}}]}}}}}`,
 		`{"data":{"repositoryOwner":{"projectV2":{"items":{"pageInfo":{"hasNextPage":false},"nodes":[` +
 			node(upNext, "null", strings.Replace(issue(3, ""), "OPEN", "CLOSED", 1)) + "," + node(upNext, "null", issue(4, "")) + `]}}}}}`,
-	}, extras: `{"data":{"e1":{"issue":{"subIssues":{"nodes":[` + issue(20, "") + "," + strings.Replace(issue(21, ""), "OPEN", "CLOSED", 1) + `]}}},"s2":{"nodes":[` + issue(30, "") + `]}}}`}
+	}, extras: `{"data":{"e1":{"issue":{"subIssues":{"nodes":[` +
+		// 20 is on another board only, 22 on this one in Inbox without a Team.
+		issue(20, `,"projectItems":{"nodes":[{"project":{"id":"Q"},"status":{"name":"Inbox 📥"}}]}`) + "," +
+		strings.Replace(issue(21, ""), "OPEN", "CLOSED", 1) + "," +
+		issue(22, `,"projectItems":{"nodes":[{"project":{"id":"Q"}},{"project":{"id":"P"},"status":{"name":"Inbox 📥"},"kind":null}]}`) +
+		`]}}},"s2":{"nodes":[` + issue(30, "") + `]}}}`}
 	b := config.Board{Owner: "o", Project: 7, Team: "X", People: []string{"me"}, Order: []config.BoardStep{
 		{Name: "In Progress", Status: []string{"progress"}},
 		{Name: upNextEpic, Status: []string{typedNext}, Kind: []string{"epic"}, SubIssues: true},
@@ -290,6 +305,7 @@ func TestReadPagesTheBoardAndReadsSubIssuesAndSearches(t *testing.T) {
 	want := []string{
 		"o/r#1 In Progress (In Progress ⛏️) assigned to pat",
 		"o/r#20 Up Next epic, sub-issue of o/r#2 ",
+		"o/r#22 Up Next epic, sub-issue of o/r#2 (Inbox 📥) no step of board.order offers Inbox 📥",
 		"o/r#30 queue ",
 		"o/r#4 Up Next (Up Next ➡️) ",
 	}
