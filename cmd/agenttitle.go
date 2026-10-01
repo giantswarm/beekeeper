@@ -195,6 +195,12 @@ func retitleRequest(session, name string) string {
 	return restoreRequest(session, name, "")
 }
 
+// The desktop's session tools a steward sets a record's title and model with.
+const (
+	setTitleTool = "mcp__ccd_session_mgmt__set_session_title"
+	setModelTool = "mcp__ccd_session_mgmt__set_session_model"
+)
+
 // restoreRequest is the message that has a steward set what the desktop
 // lost of a worker's session (its local_ id, or "self" for the title only):
 // the title, unless empty, and the model, unless empty. The desktop refuses
@@ -203,11 +209,11 @@ func restoreRequest(session, title, model string) string {
 	var calls, lost []string
 	if title != "" {
 		lost = append(lost, "title")
-		calls = append(calls, fmt.Sprintf("mcp__ccd_session_mgmt__set_session_title once with session_id %q and title %q (its roster name)", session, title))
+		calls = append(calls, fmt.Sprintf("%s once with session_id %q and title %q (its roster name)", setTitleTool, session, title))
 	}
 	if model != "" {
 		lost = append(lost, "model")
-		calls = append(calls, fmt.Sprintf("mcp__ccd_session_mgmt__set_session_model with session_id %q and model %q (the model its first turn ran on; when the result lists the offered ids instead, once more with the id it lists for that model)", session, model))
+		calls = append(calls, fmt.Sprintf("%s with session_id %q and model %q (the model its first turn ran on; when the result lists the offered ids instead, once more with the id it lists for that model)", setModelTool, session, model))
 	}
 	return fmt.Sprintf(stewardPreamble+"the desktop lost the %s of a worker beekeeper started. Call %s, then end the turn without another tool call and without a reply.", strings.Join(lost, " and "), strings.Join(calls, ", then "))
 }
