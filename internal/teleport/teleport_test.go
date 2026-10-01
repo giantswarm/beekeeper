@@ -194,3 +194,71 @@ func TestRenewFailureLeavesTheHome(t *testing.T) {
 		}
 	}
 }
+
+// callbackTimeoutOutput is tsh login's output when the proxy's SSO callback
+// exchange times out after the browser's sign-in.
+const callbackTimeoutOutput = "ERROR: identity provider callback failed: Get \"https://proxy.example.com/v1/webapi/github/callback\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)\n"
+
+// attempts is a login that plays one fakeTsh per attempt, the timeouts
+// among them writing callbackTimeoutOutput.
+type attempts struct {
+	logins  []fakeTsh
+	timeout []bool
+	n       *int
+}
+
+func (a attempts) login(ctx context.Context, home string, log *os.File) error {
+	i := *a.n
+	*a.n++
+	if a.timeout[i] {
+		_, _ = log.WriteString(callbackTimeoutOutput)
+	}
+	return a.logins[i].login(ctx, home, log)
+}
+
+func TestRenewRetriesTheCallbackTimeoutOnce(t *testing.T) {
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	failed := fakeTsh{err: errors.New("exit status 1")}
+	ok := fakeTsh{until: now.Add(12 * time.Hour)}
+	cases := map[string]struct {
+		logins   []fakeTsh
+		timeout  []bool
+		want     string // the error, "" for a renewal
+		attempts int
+		retried  bool
+	}{
+		"retry succeeds":      {[]fakeTsh{failed, ok}, []bool{true, false}, "", 2, true},
+		"retry fails":         {[]fakeTsh{failed, failed}, []bool{true, false}, "tsh login: exit status 1", 2, true},
+		"retry times out too": {[]fakeTsh{failed, failed, ok}, []bool{true, true, false}, "SSO callback timed out", 2, true},
+		"other failure":       {[]fakeTsh{failed, ok}, []bool{false, false}, "tsh login: exit status 1", 1, false},
+		"login times out":     {[]fakeTsh{{hang: true}, ok}, []bool{false, false}, "did not complete within 1s", 1, false},
+	}
+	for name, c := range cases {
+		n := 0
+		r := renewal(t, fakeTsh{})
+		r.Login = attempts{logins: c.logins, timeout: c.timeout, n: &n}.login
+		var retried error
+		r.Retry = func(first error) { retried = first }
+		p, err := r.Renew(context.Background(), now)
+		switch {
+		case c.want == "" && err != nil:
+			t.Errorf("%s: %v", name, err)
+		case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+			t.Errorf("%s: %v, want %q", name, err, c.want)
+		}
+		if n != c.attempts {
+			t.Errorf("%s: %d logins, want %d", name, n, c.attempts)
+		}
+		if c.retried != (retried != nil) || retried != nil && !errors.Is(retried, ErrCallbackTimeout) {
+			t.Errorf("%s: Retry heard %v", name, retried)
+		}
+		home, _ := readProfile(context.Background(), r.Home)
+		if c.want == "" && !home.ValidUntil.Equal(p.ValidUntil) || c.want != "" && home.ValidUntil.Format(time.RFC3339) != "2026-10-01T12:30:00Z" {
+			t.Errorf("%s: home holds %s", name, home.ValidUntil)
+		}
+		raw, _ := os.ReadFile(r.Log())
+		if got := strings.Count(string(raw), "secret=one-time"); got != c.attempts {
+			t.Errorf("%s: the log holds %d logins, want %d", name, got, c.attempts)
+		}
+	}
+}
