@@ -68,10 +68,10 @@ func procRoot(t *testing.T, now time.Time, ps ...fakeProc) *proc.Table {
 
 func write(t *testing.T, path, content string) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil { //nolint:gosec // under the test's temporary folder
 		t.Fatal(err)
 	}
 }
@@ -86,13 +86,18 @@ func sessionsDir(t *testing.T, now time.Time, busy, idle recorded) string {
 	t.Helper()
 	dir := t.TempDir()
 	project := filepath.Join(dir, "-work-beekeeper")
-	for name, r := range map[string]recorded{"busy": busy, "idle": idle} {
-		raw, err := os.ReadFile(filepath.Join("testdata", name+".jsonl"))
+	for _, f := range []struct {
+		file, id, header string
+		r                recorded
+	}{
+		{"busy.jsonl", busyID, "2026-10-01T10:00:00.000Z", busy},
+		{"idle.jsonl", idleID, "2026-10-01T09:00:00.000Z", idle},
+	} {
+		raw, err := os.ReadFile(filepath.Join("testdata", f.file)) //nolint:gosec // the test's recorded files
 		if err != nil {
 			t.Fatal(err)
 		}
-		id := map[string]string{"busy": busyID, "idle": idleID}[name]
-		header := map[string]string{"busy": "2026-10-01T10:00:00.000Z", "idle": "2026-10-01T09:00:00.000Z"}[name]
+		id, header, r := f.id, f.header, f.r
 		content := strings.Replace(string(raw), `"timestamp":"`+header+`"`, `"timestamp":"`+now.Add(-r.created).UTC().Format(time.RFC3339Nano)+`"`, 1)
 		path := filepath.Join(project, "2026-10-01T10-00-00-000Z_"+id+".jsonl")
 		write(t, path, content)
@@ -112,11 +117,11 @@ func TestDiscover(t *testing.T) {
 	dir := sessionsDir(t, now, recorded{5*time.Minute - time.Second, 10 * time.Second}, recorded{30 * time.Minute, 20 * time.Minute})
 	tab := procRoot(t, now,
 		// beekeeper's agent: rpc mode behind its inbox, started 5 minutes ago.
-		fakeProc{pid: 100, ppid: 1, args: []string{"omp", "--mode", "rpc", "--no-ui"}, cwd: repo, age: 5 * time.Minute,
+		fakeProc{pid: 100, ppid: 1, args: []string{Comm, "--mode", "rpc", "--no-ui"}, cwd: repo, age: 5 * time.Minute,
 			env: []string{EnvAgent + "=1234abcd-0000-4000-8000-000000000000", EnvName + "=omp worker"}},
 		// a subagent it runs, and a helper: no sessions.
-		fakeProc{pid: 101, ppid: 100, args: []string{"omp", "--mode", "rpc"}, cwd: repo, age: time.Minute},
-		fakeProc{pid: 200, ppid: 1, args: []string{"omp", "models", "ls"}, cwd: repo, age: time.Minute},
+		fakeProc{pid: 101, ppid: 100, args: []string{Comm, "--mode", "rpc"}, cwd: repo, age: time.Minute},
+		fakeProc{pid: 200, ppid: 1, args: []string{Comm, "models", "ls"}, cwd: repo, age: time.Minute},
 		// the person's interactive omp, started a minute ago and not yet
 		// prompted: idle's file was written before it started.
 		fakeProc{pid: 300, ppid: 1, args: []string{"/usr/bin/omp", "--model", "opus"}, cwd: repo, age: time.Minute},
@@ -157,7 +162,7 @@ func TestDiscoverIdle(t *testing.T) {
 	// The person resumed idle a minute ago and it replied since; busy ended
 	// two hours ago.
 	dir := sessionsDir(t, now, recorded{3 * time.Hour, 2 * time.Hour}, recorded{30 * time.Minute, 10 * time.Second})
-	tab := procRoot(t, now, fakeProc{pid: 300, ppid: 1, args: []string{"omp", "--resume", idleID}, cwd: repo, age: time.Minute})
+	tab := procRoot(t, now, fakeProc{pid: 300, ppid: 1, args: []string{Comm, "--resume", idleID}, cwd: repo, age: time.Minute})
 	ss := Discover(dir, tab, now)
 	if len(ss) != 1 || ss[0].ID != idleID || ss[0].State != StateIdle || ss[0].Name != "Ping pong" {
 		t.Fatalf("got %+v, want the idle session titled by its title change", ss)

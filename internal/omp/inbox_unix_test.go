@@ -26,7 +26,7 @@ func TestSend(t *testing.T) {
 		t.Fatalf("send with no reader: %v, want ErrNotRunning", err)
 	}
 	// The agent's shell opens its inbox for reading and writing.
-	r, err := os.OpenFile(inbox, os.O_RDWR, 0)
+	r, err := os.OpenFile(inbox, os.O_RDWR, 0) //nolint:gosec // the test's inbox
 	if err != nil {
 		t.Fatal(err)
 	}

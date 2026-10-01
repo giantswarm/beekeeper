@@ -256,6 +256,9 @@ type block struct {
 	Arguments json.RawMessage `json:"arguments"`
 }
 
+// typeMessage is the entry type of a message.
+const typeMessage = "message"
+
 const (
 	roleUser       = "user"
 	roleAssistant  = "assistant"
@@ -326,7 +329,7 @@ func fillFromFile(s *claude.Session, path string, running bool) {
 		case e.Type == "title_change" && e.Title != "" && s.Name == h.title:
 			s.Name = e.Title
 			h.title = e.Title
-		case e.Type == "message" && e.Message != nil:
+		case e.Type == typeMessage && e.Message != nil:
 			last = e
 		}
 	})
@@ -398,7 +401,7 @@ func Tail(path string, n int) ([]claude.Turn, error) {
 	}
 	var turns []claude.Turn
 	eachEntry(buf, func(e *entry) {
-		if e.Type != "message" || e.Message == nil {
+		if e.Type != typeMessage || e.Message == nil {
 			return
 		}
 		role := e.Message.Role
@@ -424,7 +427,7 @@ func ReadTranscript(path string, now time.Time) (claude.Work, claude.Activity) {
 	var total, hour float64
 	var priced bool
 	eachEntry(buf, func(e *entry) {
-		if e.Type != "message" || e.Message == nil {
+		if e.Type != typeMessage || e.Message == nil {
 			return
 		}
 		if a.Since.IsZero() {

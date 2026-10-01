@@ -34,7 +34,7 @@ func TestWakeOmp(t *testing.T) {
 	if err := a.wakeOmp(state.Party{Name: "test"}, ag, id, "hello"); err == nil || !strings.Contains(err.Error(), "no longer runs") {
 		t.Fatalf("wake with no reader = %v, want the refusal", err)
 	}
-	r, err := os.OpenFile(inbox, os.O_RDWR, 0)
+	r, err := os.OpenFile(inbox, os.O_RDWR, 0) //nolint:gosec // the test's inbox
 	if err != nil {
 		t.Fatal(err)
 	}
