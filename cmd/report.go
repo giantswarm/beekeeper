@@ -276,6 +276,9 @@ func (a *app) gatherReport(ctx context.Context, from, to time.Time, zone *time.L
 func windowMerges(events []state.Event, lanes []state.Merge, from, to time.Time) []reportMerge {
 	var out []reportMerge
 	key := func(m reportMerge) string { return state.Merge{Repo: m.Repo, PR: m.N}.Key() }
+	// same says whether two merges are one: the pull request, or the
+	// promotion of one release (a repository promotes more than once an hour).
+	same := func(a, b reportMerge) bool { return key(a) == key(b) && (a.N != 0 || a.Release == b.Release) }
 	for _, e := range events {
 		if e.Verb != verbMerged || e.At.Before(from) || !e.At.Before(to) {
 			continue
@@ -291,7 +294,7 @@ func windowMerges(events []state.Event, lanes []state.Merge, from, to time.Time)
 		if r := releaseWord.FindStringSubmatch(e.Detail); r != nil {
 			m.Release = strings.TrimRight(r[1], ".,")
 		}
-		out = slices.DeleteFunc(out, func(o reportMerge) bool { return key(o) == key(m) })
+		out = slices.DeleteFunc(out, func(o reportMerge) bool { return same(o, m) })
 		out = append(out, m)
 	}
 	for i := range out {

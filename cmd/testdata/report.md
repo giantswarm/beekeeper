@@ -6,6 +6,7 @@
 |---|---|---|---|
 | [tools#41](https://github.com/example/tools/pull/41) | queue merges \| promotions | v1.4.0-rc.1 |  |
 | [portal#7](https://github.com/example/portal/pull/7) | the portal's login | v2.0.1 | rolled |
+| [tools v1.3.0](https://github.com/example/tools/releases/tag/v1.3.0) | promoted to stable | v1.3.0 |  |
 | [tools v1.4.0](https://github.com/example/tools/releases/tag/v1.4.0) | promoted to stable | v1.4.0 |  |
 | [portal#8](https://github.com/example/portal/pull/8) | bump x | v2.0.2 | rolling |
 | [notebook#12](https://github.com/other/notebook/pull/12) | [tools#41](https://github.com/example/tools/issues/41) in the notebook |  |  |
