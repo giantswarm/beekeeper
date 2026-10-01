@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `watch` says `WATCH STALE` once for each running watch, itself included, whose binary `self-update` replaced, naming the version it runs, the one installed and that a re-arm picks it up; `watch --once` says it for the running watches too. A watch kept the code it started with after an install, silently, until something restarted it, so a fix in its poll (the doctor's chores) reached the machine only then. No watch re-executes itself.
 - `board next` holds a sub-issue that is a board item to the order by its own Status whatever its Team: the Status, Kind and project of an epic's sub-issues are read with them, so a sub-issue without a Team (missing from the team's board read) in Inbox, too old for its step or still blocked is skipped with the reason instead of offered.
 - `ui` keeps the sessions tab's selection on the picked session when the list reorders between refreshes; `enter` could open whichever session had taken its row.
 
