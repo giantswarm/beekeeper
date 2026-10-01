@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -35,6 +36,12 @@ type (
 	tailMsg struct {
 		session string
 		turns   []Turn
+		err     error
+	}
+	// sentMsg carries a message's delivery: where it went, or why not.
+	sentMsg struct {
+		session string
+		where   string
 		err     error
 	}
 )
@@ -71,6 +78,15 @@ type model struct {
 	tailBack int
 	// tailing says a tail read is outstanding: a tick starts no second.
 	tailing bool
+
+	// composing says the pane's message line has the keys; draft is
+	// what the person typed. sending says a message is on its way, and
+	// sent is the last one's outcome, sendErr set when it failed.
+	composing bool
+	draft     []rune
+	sending   bool
+	sent      string
+	sendErr   bool
 
 	width, height int
 	quitting      bool
@@ -160,6 +176,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tailing = false
 		m.takeTail(msg)
 		return m, nil
+	case sentMsg:
+		m.sending = false
+		if msg.err != nil {
+			m.sent, m.sendErr = "not sent: "+msg.err.Error(), true
+		} else {
+			m.sent, m.sendErr = "sent: "+msg.where, false
+		}
+		return m, nil
 	case tea.KeyMsg:
 		return m.key(msg)
 	}
@@ -194,10 +218,23 @@ func newer(ts []Turn, last Turn) int {
 	return 0
 }
 
+// sendCmd delivers text to session under the model's context.
+func (m *model) sendCmd(session, text string) tea.Cmd {
+	m.sending = true
+	return func() tea.Msg {
+		where, err := m.src.Send(m.ctx, session, text)
+		return sentMsg{session: session, where: where, err: err}
+	}
+}
+
 // key routes a key press. With the detail pane open j/k scroll its
-// transcript and enter/esc close it; otherwise they move the tab's
-// selection, which also drives the body's scroll.
+// transcript and enter/esc close it, and while the person writes a
+// message every key but ctrl+c is the message's; otherwise they move the
+// tab's selection, which also drives the body's scroll.
 func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.composing && msg.String() != "ctrl+c" {
+		return m.compose(msg)
+	}
 	switch msg.String() {
 	case "q", "ctrl+c":
 		m.quitting = true
@@ -233,6 +270,33 @@ func (m *model) enter() (tea.Model, tea.Cmd) {
 	return m, m.tailCmd(name)
 }
 
+// compose edits the message line: enter sends a non-empty draft, esc
+// drops it, backspace and ctrl+u take back a character or everything.
+func (m *model) compose(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEnter:
+		text := strings.TrimSpace(string(m.draft))
+		if text == "" {
+			return m, nil
+		}
+		m.composing, m.draft, m.sent = false, nil, ""
+		return m, m.sendCmd(m.detail, text)
+	case tea.KeyEsc:
+		m.composing, m.draft = false, nil
+	case tea.KeyBackspace:
+		if len(m.draft) > 0 {
+			m.draft = m.draft[:len(m.draft)-1]
+		}
+	case tea.KeyCtrlU:
+		m.draft = nil
+	case tea.KeySpace:
+		m.draft = append(m.draft, ' ')
+	case tea.KeyRunes:
+		m.draft = append(m.draft, msg.Runes...)
+	}
+	return m, nil
+}
+
 // scrollDetail moves the transcript window of an open pane: k and up go
 // back to older turns, j and down forward; G and end follow live again,
 // g and home go to the oldest turn read.
@@ -253,6 +317,10 @@ func (m *model) scrollDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.tailBack = 0
 	case "r":
 		return m, m.refreshCmd()
+	case "m":
+		if !m.sending {
+			m.composing, m.draft = true, nil
+		}
 	}
 	return m, nil
 }
@@ -314,9 +382,28 @@ func (m *model) page() int {
 	return 1
 }
 
+// pane is what the open pane shows beyond the session's facts.
+type pane struct {
+	tail        []Turn
+	state, back int
+	err         string
+	composing   bool
+	draft       string
+	sending     bool
+	sent        string
+	sendErr     bool
+}
+
+// pane is the open pane's state for the view.
+func (m *model) pane() pane {
+	return pane{tail: m.tail, state: m.tailState, back: m.tailBack, err: m.tailErr,
+		composing: m.composing, draft: string(m.draft), sending: m.sending, sent: m.sent, sendErr: m.sendErr}
+}
+
 // closeDetail dismisses the pane; a read still out lands nowhere.
 func (m *model) closeDetail() {
 	m.detail, m.tail, m.tailBack, m.tailState, m.tailing = "", nil, 0, 0, false
+	m.composing, m.draft, m.sent, m.sendErr = false, nil, "", false
 }
 
 // clampAll pulls every tab's selection into range after a refresh, when
