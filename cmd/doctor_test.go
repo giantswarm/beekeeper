@@ -29,11 +29,11 @@ func TestPlanChores(t *testing.T) {
 	task.Task = "a task"
 	st := &state.State{
 		Agents: []state.Agent{done, doneBusy, agent("relieved", 0), agent("stale", 48*time.Hour), agent("stale-live", 48*time.Hour),
-			agent("fresh", time.Hour), task, agent("sup", 48*time.Hour), agent("untitled", 0), agent("titled", 0), agent("own", 0), agent("archived", 0)},
-		Supervisor: &state.Supervisor{Party: state.Party{Session: "sup"}},
+			agent("fresh", time.Hour), task, agent("holder", 48*time.Hour), agent("untitled", 0), agent("titled", 0), agent("own", 0), agent("archived", 0)},
+		Supervisor: &state.Supervisor{Party: state.Party{Session: "holder"}},
 		Relieved:   []state.Relief{{Party: state.Party{Session: "relieved"}}},
 	}
-	for _, id := range []string{"untitled", "titled", "archived", "sup"} {
+	for _, id := range []string{"untitled", "titled", "archived", "holder"} {
 		st.Starts = append(st.Starts, state.Start{Party: state.Party{Session: id, HostSession: "local_" + id}})
 	}
 	sessions := []*claude.Session{{ID: "stale-live"}, {ID: "untitled"}, {ID: "titled"}, {ID: "own"}}
@@ -71,13 +71,14 @@ func TestPlanChores(t *testing.T) {
 // unattended is remedied and probed again, one that may not is only
 // remedied when named; a remedy that does not fix it says so.
 func TestCheckFaults(t *testing.T) {
-	broken := map[string]bool{"login": true, "manual": true, "stuck": true}
+	const stuck, unit = "stuck", "unit"
+	broken := map[string]bool{unit: true, "manual": true, stuck: true}
 	var ran []string
 	run := func(_ context.Context, command string, _ time.Duration) error {
 		name, verb, _ := strings.Cut(command, " ")
 		if verb == "fix" {
 			ran = append(ran, name)
-			if name != "stuck" {
+			if name != stuck {
 				broken[name] = false
 			}
 			return nil
@@ -89,16 +90,16 @@ func TestCheckFaults(t *testing.T) {
 	}
 	faults := []config.Fault{
 		{Name: "ok", Probe: "ok probe", Remedy: "ok fix", Unattended: true},
-		{Name: "login", Probe: "login probe", Remedy: "login fix", Unattended: true},
+		{Name: unit, Probe: unit + " probe", Remedy: unit + " fix", Unattended: true},
 		{Name: "manual", Probe: "manual probe", Remedy: "manual fix"},
-		{Name: "stuck", Probe: "stuck probe", Remedy: "stuck fix", Unattended: true},
+		{Name: stuck, Probe: stuck + " probe", Remedy: stuck + " fix", Unattended: true},
 	}
 	fix := func(f config.Fault) bool { return f.Unattended }
 	got := checkFaults(context.Background(), faults, fix, run)
-	if !slices.Equal(ran, []string{"login", "stuck"}) {
-		t.Errorf("remedies ran: %v, want login and stuck", ran)
+	if !slices.Equal(ran, []string{unit, stuck}) {
+		t.Errorf("remedies ran: %v, want unit and stuck", ran)
 	}
-	for i, want := range []string{"absent", `fixed fault "login"`, "runs attended only: beekeeper doctor --fault manual", "also after its remedy"} {
+	for i, want := range []string{"absent", `fixed fault "unit"`, "runs attended only: beekeeper doctor --fault manual", "also after its remedy"} {
 		if !strings.Contains(got[i].String(), want) {
 			t.Errorf("fault %s: %q, want %q", faults[i].Name, got[i], want)
 		}
@@ -114,23 +115,23 @@ func TestCheckFaults(t *testing.T) {
 func TestNoteFaults(t *testing.T) {
 	st := &state.State{}
 	now := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
-	failing := []faultFinding{{fault: config.Fault{Name: "login", Probe: "p", Remedy: "r"}}}
+	failing := []faultFinding{{fault: config.Fault{Name: "unit", Probe: "p", Remedy: "r"}}}
 	for range 3 {
-		noteFaults(st, failing, "Pat", now)
+		noteFaults(st, failing, notePerson, now)
 	}
-	if len(st.Notes) != 1 || st.Notes[0].For != "Pat" || !strings.Contains(st.Notes[0].Text, "beekeeper doctor --fault login") {
+	if len(st.Notes) != 1 || st.Notes[0].For != notePerson || !strings.Contains(st.Notes[0].Text, "beekeeper doctor --fault unit") {
 		t.Fatalf("notes after three sightings: %+v", st.Notes)
 	}
 	failing[0].healthy = true
-	if lines, _ := noteFaults(st, failing, "Pat", now); len(st.Notes) != 0 || len(lines) != 1 {
+	if lines, _ := noteFaults(st, failing, notePerson, now); len(st.Notes) != 0 || len(lines) != 1 {
 		t.Errorf("absent again: notes %+v, lines %v", st.Notes, lines)
 	}
 }
 
 // One steward's turn archives a batch, its own session last as "self".
 func TestArchiveRequest(t *testing.T) {
-	msg := archiveRequest(steward{host: "local_b"}, []string{"local_a", "local_b", "local_c"}, "beekeeper doctor")
-	if !strings.Contains(msg, `"local_a", "local_c", "self"`) || !strings.Contains(msg, "archive_session") {
+	msg := archiveRequest(steward{host: "local_y"}, []string{"local_x", "local_y", "local_z"}, "beekeeper doctor")
+	if !strings.Contains(msg, `"local_x", "local_z", "self"`) || !strings.Contains(msg, "archive_session") {
 		t.Errorf("request: %q", msg)
 	}
 }

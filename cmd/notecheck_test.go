@@ -16,6 +16,8 @@ const (
 	sqNow  = "the PR waits for review"
 	whyNow = "only Pat approves releases"
 	dfltOK = "the release stays unpublished"
+	// notePerson is the guide's person of noteApp.
+	notePerson = "Pat"
 )
 
 // noteApp is an app with guide.person Pat and a scratch store.
@@ -26,7 +28,7 @@ func noteApp(t *testing.T) (*app, *bytes.Buffer) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	return &app{store: store, out: &out, as: agentOne, now: relayNow, cfg: &config.Config{Guide: config.Guide{Person: "Pat"}}}, &out
+	return &app{store: store, out: &out, as: agentOne, now: relayNow, cfg: &config.Config{Guide: config.Guide{Person: notePerson}}}, &out
 }
 
 func addNote(a *app, args ...string) error {
@@ -95,7 +97,7 @@ func TestNoteAddRefusesAndAcceptsForThePerson(t *testing.T) {
 	if err := addNote(a, "a memo on #7"); err != nil {
 		t.Fatalf("a memo is not checked: %v", err)
 	}
-	if err := addNote(a, "--for", "Pat", "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "approve "+prURL); err != nil {
+	if err := addNote(a, "--for", notePerson, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "approve "+prURL); err != nil {
 		t.Fatalf("a complete note: %v", err)
 	}
 	st, _ := a.store.Read()
@@ -109,7 +111,7 @@ func TestNoteAddRefusesAndAcceptsForThePerson(t *testing.T) {
 
 func TestNoteOnTheSameRefAndVerbFolds(t *testing.T) {
 	a, out := noteApp(t)
-	args := []string{"--for", "Pat", "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK}
+	args := []string{"--for", notePerson, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK}
 	if err := addNote(a, append(args, "approve "+prURL)...); err != nil {
 		t.Fatal(err)
 	}
