@@ -5,10 +5,14 @@ package platform
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
+// testExe is the binary the tested units run.
+const testExe = "/b/beekeeper"
+
 func TestSystemdSetupFiles(t *testing.T) {
-	files, skipped := systemdSetup{}.Files(SetupSpec{ConfigDir: "/c", Exe: "/b/beekeeper", RAMMiB: 100 << 10, SwapMiB: 16 << 10,
+	files, skipped := systemdSetup{}.Files(SetupSpec{ConfigDir: "/c", Exe: testExe, RAMMiB: 100 << 10, SwapMiB: 16 << 10,
 		DesktopScope: "app-Hyprland-com.anthropic.Claude-5776.scope"})
 	if len(skipped) > 0 || len(files) != 3 {
 		t.Fatalf("files %v, skipped %v", files, skipped)
@@ -23,8 +27,25 @@ func TestSystemdSetupFiles(t *testing.T) {
 		}
 	}
 
-	files, skipped = systemdSetup{}.Files(SetupSpec{ConfigDir: "/c", Exe: "/b/beekeeper", RAMMiB: 100 << 10})
+	files, skipped = systemdSetup{}.Files(SetupSpec{ConfigDir: "/c", Exe: testExe, RAMMiB: 100 << 10})
 	if len(files) != 2 || len(skipped) != 1 || !strings.Contains(skipped[0], "no Claude Desktop scope runs") {
 		t.Errorf("without a desktop scope: files %d, skipped %v", len(files), skipped)
+	}
+
+	files, _ = systemdSetup{}.Files(SetupSpec{ConfigDir: "/c", Exe: testExe, TeleportEvery: 5 * time.Minute})
+	if len(files) != 3 {
+		t.Fatalf("with the keeper: files %v", files)
+	}
+	for i, want := range []struct {
+		path, content string
+		service       bool
+	}{
+		{"/c/systemd/user/beekeeper-teleport.service", `ExecStart=/b/beekeeper --as "teleport keeper" teleport renew --keeper` + "\n", false},
+		{"/c/systemd/user/beekeeper-teleport.timer", "OnUnitActiveSec=300s\n", true},
+	} {
+		f := files[i+1]
+		if f.Path != want.path || !strings.Contains(string(f.Content), want.content) || f.Service != want.service {
+			t.Errorf("keeper file %d: %s %v\n%s", i, f.Path, f.Service, f.Content)
+		}
 	}
 }

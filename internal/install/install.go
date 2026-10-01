@@ -75,8 +75,12 @@ func Uninstall(ctx context.Context, e Env, purge bool) error {
 		return err
 	}
 	p := &plan{home: e.Spec.Home}
-	if m.Service != "" && e.Setup.Available() && e.Setup.Started(ctx, m.Service) {
-		p.command(ctx, e, e.Setup.Stop(m.Service))
+	if e.Setup.Available() {
+		for _, svc := range m.Services {
+			if e.Setup.Started(ctx, svc) {
+				p.command(ctx, e, e.Setup.Stop(svc))
+			}
+		}
 	}
 	removed := map[string]bool{}
 	for _, path := range slices.Sorted(maps.Keys(m.Files)) {
@@ -190,8 +194,8 @@ func (e Env) planFile(p *plan, m *Manifest, f platform.File) fileState {
 	return state
 }
 
-// planSetup writes the standby service's and the memory guard's files and
-// starts the service.
+// planSetup writes the standby service's, the memory guard's and the
+// keeper's files and starts their units.
 func (e Env) planSetup(ctx context.Context, p *plan, m *Manifest) {
 	if !e.Setup.Available() {
 		p.add("skip", platform.Unavailable("standby service"), "", nil)
@@ -199,12 +203,13 @@ func (e Env) planSetup(ctx context.Context, p *plan, m *Manifest) {
 	}
 	files, skipped := e.Setup.Files(e.Spec)
 	written := false
-	service, state := "", fileKept
+	var units []platform.File
+	states := map[string]fileState{}
 	for _, f := range files {
 		s := e.planFile(p, m, f)
 		written = written || s == fileNew || s == fileUpdated
 		if f.Service {
-			service, state = f.Path, s
+			units, states[f.Path] = append(units, f), s
 		}
 	}
 	for _, s := range skipped {
@@ -213,20 +218,30 @@ func (e Env) planSetup(ctx context.Context, p *plan, m *Manifest) {
 	if written {
 		p.command(ctx, e, e.Setup.Reload())
 	}
+	for _, u := range units {
+		e.planStart(ctx, p, m, u.Path, states[u.Path])
+	}
+}
+
+// planStart starts the unit defined by the file at path, which install
+// found in state, and restarts it when install updated it.
+func (e Env) planStart(ctx context.Context, p *plan, m *Manifest, path string, state fileState) {
+	name := filepath.Base(path)
 	switch {
-	case service == "":
 	case state == fileKept:
-		p.add("keep", "standby service", "its definition is not beekeeper install's", nil)
-	case state != fileNew && e.Setup.Started(ctx, service):
+		p.add("keep", name, "its definition is not beekeeper install's", nil)
+	case state != fileNew && e.Setup.Started(ctx, path):
 		if state == fileUpdated {
-			p.command(ctx, e, e.Setup.Stop(service))
-			p.command(ctx, e, e.Setup.Start(service))
+			p.command(ctx, e, e.Setup.Stop(path))
+			p.command(ctx, e, e.Setup.Start(path))
 		} else {
-			p.add("ok", "standby service", "running", nil)
+			p.add("ok", name, "running", nil)
 		}
 	default:
-		m.Service = service
-		p.command(ctx, e, e.Setup.Start(service))
+		if !slices.Contains(m.Services, path) {
+			m.Services = append(m.Services, path)
+		}
+		p.command(ctx, e, e.Setup.Start(path))
 	}
 }
 
@@ -289,7 +304,11 @@ type Manifest struct {
 	Files map[string]string `json:"files,omitempty"`
 	// Dirs are the directories install created.
 	Dirs []string `json:"dirs,omitempty"`
-	// Service is the definition of the standby service install started.
+	// Services are the definitions of the units install started: the
+	// standby service, the keeper's timer.
+	Services []string `json:"services,omitempty"`
+	// Service is the standby service's definition as earlier installs
+	// recorded it, read into Services.
 	Service string `json:"service,omitempty"`
 	// Hooks are the settings entries install added.
 	Hooks []Hook `json:"hooks,omitempty"`
@@ -314,6 +333,10 @@ func readManifest(path string) (Manifest, error) {
 	if m.Files == nil {
 		m.Files = map[string]string{}
 	}
+	if m.Service != "" && !slices.Contains(m.Services, m.Service) {
+		m.Services = append(m.Services, m.Service)
+	}
+	m.Service = ""
 	return m, nil
 }
 

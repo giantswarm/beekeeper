@@ -62,6 +62,9 @@ type Config struct {
 	MaxKindClusters int `yaml:"maxKindClusters"`
 
 	Kube Kube `yaml:"kube"`
+	// Teleport is the login the kube contexts reach the installations
+	// through, and its keeper.
+	Teleport Teleport `yaml:"teleport"`
 
 	GitHub   GitHub   `yaml:"github"`
 	Watch    Watch    `yaml:"watch"`
@@ -205,6 +208,45 @@ type Kube struct {
 	// empty, an installation's context is its name or the one ending in
 	// @<name>.
 	ContextTemplate string `yaml:"contextTemplate"`
+}
+
+// Teleport configures the Teleport login's keeper: a periodic user unit
+// that renews the SSO login before it expires, under the browser lease.
+type Teleport struct {
+	// Proxy is tsh login's --proxy (login.example.com:443); empty, no
+	// keeper runs and the watch reads no login.
+	Proxy string `yaml:"proxy"`
+	// Auth is tsh login's --auth, the SSO connector; empty, the cluster's
+	// default.
+	Auth string `yaml:"auth"`
+	// Tsh is the tsh binary (default tsh).
+	Tsh string `yaml:"tsh"`
+	// Home is the profile directory the kube contexts' tsh reads (default
+	// $TELEPORT_HOME, else ~/.tsh).
+	Home string `yaml:"home"`
+	// RenewBefore is how long before the expiry the keeper renews (default
+	// 90m); WarnBefore is when the watch says the login is about to expire
+	// (default 1h), at most RenewBefore.
+	RenewBefore Duration `yaml:"renewBefore"`
+	WarnBefore  Duration `yaml:"warnBefore"`
+	// LoginTimeout bounds one login, the browser's round trip included
+	// (default 3m).
+	LoginTimeout Duration `yaml:"loginTimeout"`
+	// Every is how often the keeper's timer checks the expiry (default 10m).
+	Every Duration `yaml:"every"`
+}
+
+// Enabled reports whether a keeper is configured.
+func (t Teleport) Enabled() bool { return t.Proxy != "" }
+
+func (t *Teleport) defaults(home string) {
+	setStr(&t.Tsh, "tsh")
+	setStr(&t.Home, os.Getenv("TELEPORT_HOME"))
+	setStr(&t.Home, filepath.Join(home, ".tsh"))
+	setDur(&t.RenewBefore, 90*time.Minute)
+	setDur(&t.WarnBefore, time.Hour)
+	setDur(&t.LoginTimeout, 3*time.Minute)
+	setDur(&t.Every, 10*time.Minute)
 }
 
 // Context is the templated context of installation, "" without a template.
@@ -944,6 +986,7 @@ func (c *Config) defaults() error {
 	c.Reporter.defaults(home, c.Guide.Person)
 	c.Outbound.defaults(home)
 	setStr(&c.Plans.Check, DefaultPlansCheck)
+	c.Teleport.defaults(home)
 	setStr(&c.Shell, os.Getenv("SHELL"))
 	setStr(&c.Shell, "sh")
 
@@ -1121,6 +1164,9 @@ func (c *Config) validate() error {
 		if st.Search != "" && (len(st.Status)+len(st.Kind)+len(st.Labels) > 0 || st.SubIssues || st.Unblocked) {
 			return fmt.Errorf("board.order[%d] %q: a search step matches no board fields", i, st.Name)
 		}
+	}
+	if t := c.Teleport; t.WarnBefore.Duration > t.RenewBefore.Duration {
+		return fmt.Errorf("teleport: warnBefore %s is past renewBefore %s: the watch would warn before the keeper renews", t.WarnBefore.Duration, t.RenewBefore.Duration)
 	}
 	if t := c.Kube.ContextTemplate; t != "" && !strings.Contains(t, "{installation}") {
 		return fmt.Errorf("kube.contextTemplate: %q has no {installation}", t)

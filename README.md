@@ -35,13 +35,13 @@ beekeeper install
 `install` merges the PreToolUse, PermissionRequest and SessionStart hooks into Claude Code's user settings
 (`~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR`) with the binary's absolute path, writes and
 starts the [standby service](#desktop-notifications) (a systemd user unit, a launch agent on
-macOS), and on systemd the memory guard sized to the machine's RAM: `memcap.slice` for `beekeeper
+macOS), with `teleport.proxy` set the [Teleport login's keeper](#the-teleport-login), and on systemd the memory guard sized to the machine's RAM: `memcap.slice` for `beekeeper
 run`'s capped commands and a drop-in for the Claude Desktop scope that runs (run install again
 with the app running when it does not). Without a config it writes a starter one, the [example
 configuration](docs/examples/config.yaml) with every key commented out. A file already as install
 writes it stays, and one that differs and that install did not write it keeps and names; a second
 run changes nothing. A new Claude Code session picks the hooks up. `beekeeper uninstall` (also
-with `--dry-run`) stops the service and removes exactly what install wrote, as `install.json` in
+with `--dry-run`) stops the units and removes exactly what install wrote, as `install.json` in
 the state directory records it, and leaves the config and the state unless `--purge`. On Linux
 without systemd install writes the hooks and the config and says the service is not available.
 
@@ -230,6 +230,44 @@ kube guard is off, `beekeeper snapshot` says so, and only the `op item get` refu
 Each guard sees through prefix commands, pipelines and lists, `$( )`, shell `-c` strings and
 here-documents fed to a shell, and kubectl or a kubectl plugin run through a shell function or a variable. Quoted text
 (a commit message, an issue body) passes.
+
+## The Teleport login
+
+When the kube contexts reach the installations through Teleport (`tsh kube credentials` as their exec
+plugin), all of them hang on one `tsh` login, and an SSO login's certificate lives only as long as
+the role's maximum session TTL. With `teleport.proxy` set (and `teleport.auth`, the SSO connector),
+beekeeper keeps that login:
+
+- `beekeeper teleport` prints the active profile's user, cluster and expiry from `tsh status
+  --format=json` (metadata only, never key material) and what the keeper last did; it exits 3 while
+  the login needs a person (expired, under `teleport.warnBefore`, or the keeper's renewal failed).
+  `beekeeper snapshot` shows the same line, and `beekeeper watch` says `TELEPORT LOGIN` once under
+  `teleport.warnBefore` (default 1h), `TELEPORT LOGIN EXPIRED` once it expired and `TELEPORT RENEWAL
+  FAILED` after a failed renewal, each with one ENDED line once renewed. A merge gate refusal for an
+  unreadable installation names an expired login as its cause.
+- `beekeeper install` writes the keeper, `beekeeper-teleport.timer`, which runs `beekeeper teleport
+  renew --keeper` every `teleport.every` (default 10m); it renews once less than
+  `teleport.renewBefore` (default 90m) is left. `uninstall` stops and removes it with the other units.
+- A renewal runs `tsh login --proxy=<proxy> --auth=<connector>` in an empty staging home, because a
+  valid profile makes `tsh login` print its status only. tsh opens the login URL in the default
+  browser, and a browser holding the SSO session completes it without a click; nothing types
+  credentials. Once the new profile is valid, the staging home and the profile directory
+  (`teleport.home`, default `$TELEPORT_HOME` or `~/.tsh`) swap in one step, so the old certificate
+  serves until the new one is in place; the profile before is kept as `teleport/previous` in the
+  state directory, and the person's kubeconfig is not touched. tsh's output carries the one-time
+  login URL: it goes to `teleport/login.log` (mode 0600) and is never printed.
+- The renewal holds the browser lease. A session renewing by hand (`beekeeper teleport renew`) claims
+  it first; the keeper claims it itself when it is free and granted to nobody, and otherwise waits
+  for its next run, which the `TELEPORT LOGIN` line names.
+- A login that does not complete within `teleport.loginTimeout` (default 3m: the browser's SSO
+  session is gone, or the sign-in needs a click) leaves the profile as it was. The keeper does not
+  try that login again: it leaves a sign-in note for `guide.person` that closes by itself once the
+  login is renewed, and the watch says `TELEPORT RENEWAL FAILED`.
+
+What the keeper needs: a graphical session whose default browser holds the SSO session (the keeper's
+unit starts after `graphical-session.target` and inherits the user manager's display variables), and
+the profile directory on the same filesystem as the state directory. A headless desk needs a
+Machine ID bot (`tbot`) from the Teleport administrators instead; beekeeper does not run one.
 
 ## Secret reads
 

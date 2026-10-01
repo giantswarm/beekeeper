@@ -58,7 +58,11 @@ func (launchdSetup) Files(s SetupSpec) ([]File, []string) {
 </dict>
 </plist>
 `, notifyLabel, escapeXML(s.Exe), escapeXML(filepath.Join(s.Home, "Library", "Logs", "beekeeper-notify.log")))
-	return []File{{Path: path, Content: plist, Service: true}}, []string{"memory guard: not available on " + Name()}
+	skipped := []string{"memory guard: not available on " + Name()}
+	if s.TeleportEvery > 0 {
+		skipped = append(skipped, "teleport keeper: not available on "+Name())
+	}
+	return []File{{Path: path, Content: plist, Service: true}}, skipped
 }
 
 func escapeXML(s string) string {

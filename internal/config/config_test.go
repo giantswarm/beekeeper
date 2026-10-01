@@ -338,6 +338,10 @@ func TestExampleConfig(t *testing.T) {
 		c.Board.Project != 12 || len(c.Board.Order) != 8 || !c.Board.Order[1].SubIssues || c.Board.StaleAfter.Hours() != 8760 {
 		t.Errorf("config = %+v", c)
 	}
+	if tp := c.Teleport; !tp.Enabled() || tp.Proxy != "login.example.com:443" || tp.Auth != "github" || tp.Tsh != "tsh" ||
+		tp.RenewBefore.Duration != 90*time.Minute || tp.WarnBefore.Duration != time.Hour || tp.Every.Duration != 10*time.Minute {
+		t.Errorf("teleport %+v", tp)
+	}
 	if want := []alerts.Quiet{{Cluster: "t-*"}, OtherTeamsNotify}; !slices.Equal(c.Alerts.Quiet, want) ||
 		!slices.Contains(c.Alerts.Ignore, "InhibitionOutsideWorkingHours") {
 		t.Errorf("alerts quiet %+v, ignore %q", c.Alerts.Quiet, c.Alerts.Ignore)
