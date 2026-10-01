@@ -21,7 +21,7 @@ maxKindClusters: 2          # kind clusters the machine runs at most; default: o
 kube:
   # The installation agents never write to: a context or cluster name with it
   # as a component (login.example.com-production, production-ops). Unset, the
-  # kube guard is off (op item get stays refused) and snapshot says so.
+  # kube guard is off and snapshot says so.
   production: production
   # An installation's kube context; {installation} is its name. It resolves
   # alerts.installations and leased installations without a context, and
