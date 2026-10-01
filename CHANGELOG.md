@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `ui` keeps the sessions tab's selection on the picked session when the list reorders between refreshes; `enter` could open whichever session had taken its row.
+
 - An omp agent's beekeeper commands act as its roster entry, so `agents idle --done` finishes it; they were refused as an unregistered session. Taking an omp agent off the roster stops its unit: its process ran on, holding its model, after its work was done.
 
 ### Added
