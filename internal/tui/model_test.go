@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -338,8 +339,8 @@ func TestSelectionMovement(t *testing.T) {
 
 func TestEnterOpensSessionPaneOnlyThere(t *testing.T) {
 	src := &fakeSource{data: fixtureData(), turns: []Turn{
-		{At: testAt, Role: "assistant", Text: "on it"},
-		{At: testAt, Role: "user", Text: "the second turn"},
+		{At: testAt, Role: roleAssistant, Text: "on it"},
+		{At: testAt, Role: roleUser, Text: "the second turn"},
 	}}
 	m := newTestModel(t, src)
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -371,14 +372,15 @@ func TestEnterOpensSessionPaneOnlyThere(t *testing.T) {
 		}
 	}
 
-	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	if m.tailOff != 1 {
-		t.Errorf("j scrolled to %d, want 1", m.tailOff)
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	if m.tailBack != 1 {
+		t.Errorf("k past the oldest turn scrolled back %d, want 1", m.tailBack)
 	}
-	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
-	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
-	if m.tailOff != 0 {
-		t.Errorf("k below zero scrolled to %d", m.tailOff)
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	if m.tailBack != 0 {
+		t.Errorf("j past the newest turn scrolled back %d", m.tailBack)
 	}
 	m.key(tea.KeyMsg{Type: tea.KeyEsc})
 	if m.detail != "" {
@@ -400,6 +402,93 @@ func TestEnterOpensSessionPaneOnlyThere(t *testing.T) {
 	m.key(tea.KeyMsg{Type: tea.KeyEnter})
 	if m.detail != "" {
 		t.Errorf("enter did not close the pane")
+	}
+}
+
+func TestOpenPaneFollowsLive(t *testing.T) {
+	first := []Turn{
+		{At: testAt, Role: roleUser, Text: "fix it"},
+		{At: testAt, Role: roleAssistant, Text: "reading"},
+	}
+	src := &fakeSource{data: fixtureData(), turns: first}
+	m := newTestModel(t, src)
+	m.tickFn = func() tea.Cmd { return nil }
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
+	_, c := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	for _, msg := range msgs(c) {
+		m.Update(msg)
+	}
+	if !strings.Contains(m.View(), "live") {
+		t.Errorf("a pane at the newest turn is not marked live:\n%s", m.View())
+	}
+
+	// A tick while the pane is open re-reads its tail; the new turn shows
+	// at the bottom.
+	src.turns = append(slices.Clone(first), Turn{At: testAt, Role: roleTool, Text: "Bash: go test ./..."})
+	src.tailCall = ""
+	_, c = m.Update(tickMsg{})
+	if c == nil {
+		t.Fatal("a tick with the pane open asked for nothing")
+	}
+	got := msgs(c)
+	if src.tailCall != tBee {
+		t.Fatalf("the tick did not re-read the tail: Tail(%q)", src.tailCall)
+	}
+	for _, msg := range got {
+		m.Update(msg)
+	}
+	lines := strings.Split(m.View(), "\n")
+	if body := strings.Join(lines[len(lines)-3:], "\n"); !strings.Contains(body, "Bash: go test ./...") {
+		t.Errorf("the new tool call is not at the pane's bottom:\n%s", m.View())
+	}
+
+	// A second tick while a read is out starts no second read.
+	m.tailing = true
+	src.tailCall = ""
+	_, c = m.Update(tickMsg{})
+	_ = msgs(c)
+	if src.tailCall != "" {
+		t.Errorf("a tick started a second tail read while one was out")
+	}
+	m.tailing = false
+
+	// Scrolled back, the view keeps its place as turns arrive.
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	src.turns = append(slices.Clone(src.turns), Turn{At: testAt, Role: roleAssistant, Text: "green"})
+	m.Update(tailMsg{session: tBee, turns: src.turns})
+	if m.tailBack != 2 {
+		t.Errorf("scrolled back %d after one new turn, want 2 (the place kept)", m.tailBack)
+	}
+	if v := m.View(); !strings.Contains(v, "2 back") || strings.Contains(v, "green") {
+		t.Errorf("the scrolled-back pane moved or lost its mark:\n%s", v)
+	}
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("G")})
+	if m.tailBack != 0 || !strings.Contains(m.View(), "green") {
+		t.Errorf("G did not follow live again: back %d", m.tailBack)
+	}
+
+	// A failed re-read keeps the turns shown and says why.
+	m.Update(tailMsg{session: tBee, err: errors.New("transcript moved")})
+	if v := m.View(); m.tailState != 2 || !strings.Contains(v, "green") || !strings.Contains(v, "transcript moved") {
+		t.Errorf("a failed re-read dropped the turns or the reason (state %d):\n%s", m.tailState, v)
+	}
+}
+
+func TestStateOf(t *testing.T) {
+	cases := []struct {
+		s    Session
+		want string
+	}{
+		{Session{Harness: "omp", State: stateIdle, Idle: time.Second}, stateIdle},
+		{Session{Waiting: "approve the merge", Idle: time.Second}, stateWaiting},
+		{Session{Idle: 10 * time.Second}, stateBusy},
+		{Session{Idle: time.Hour, Commands: []Command{{Args: "devctl pr wait"}}}, stateBusy},
+		{Session{Idle: time.Hour}, stateIdle},
+	}
+	for _, c := range cases {
+		if got := stateOf(c.s); got != c.want {
+			t.Errorf("stateOf(%+v) = %q, want %q", c.s, got, c.want)
+		}
 	}
 }
 

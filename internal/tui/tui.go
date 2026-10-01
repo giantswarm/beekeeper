@@ -191,11 +191,16 @@ type Poller struct {
 	Elapsed time.Duration
 }
 
-// Session is one running Claude Code session.
+// Session is one running agent session: Claude Code, or omp.
 type Session struct {
-	PID    int
-	Name   string
-	Role   string
+	PID  int
+	Name string
+	Role string
+	// Harness is "" for Claude Code, "omp" for an omp session.
+	Harness string
+	// State is an omp session's own: busy, idle or ended; "" for Claude
+	// Code, whose state the screen reads off its activity (stateOf).
+	State  string
 	Cwd    string
 	Repo   string
 	Branch string

@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `ui` follows a session live: its pane re-reads the transcript at every refresh and shows the history, then the current turn with its tool calls, newest at the bottom; `k`/`j` scroll back and forward and hold their place while turns arrive, `G` follows again. The sessions table has a `state` column (busy, idle, waiting on its person, an omp session's own), and an omp session's pane reads omp's session file. The pane showed the last ten turns once, without tool calls, and an omp session's not at all.
+
 - `agents start` gives every worker the worker rules beekeeper ships with its role skills (the `worker-rules` skill, under the binary's version) ahead of its brief, and `agents handover` puts them ahead of the follow-up's prompt again: a brief carries only its task. A `SendMessage` to `the supervisor` or `the guide` goes to the session holding that role now, by the name its running CLI answers to, else its desktop session, and is refused while nobody holds it: a brief no longer names a run that the next relay makes stale. Workers started with 10 to 17k characters of brief, two disagreeing copies of the rules and the boilerplate of every task file repeated in each.
 
 - `lint briefs <file or folder>...` refuses what makes a skill or brief go stale: a dated line, an "until X ships" clause, a note on the release that fixed something (`(v0.53.0: …)`, `since v…`), a workaround and a role's run number, one `path:line: rule: why` per finding, exit 3 on any. The shipped skills pass it in CI.

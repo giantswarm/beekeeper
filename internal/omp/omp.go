@@ -270,6 +270,9 @@ type block struct {
 	Arguments json.RawMessage `json:"arguments"`
 }
 
+// blockToolCall is the content block type of a tool call.
+const blockToolCall = "toolCall"
+
 // typeMessage is the entry type of a message.
 const typeMessage = "message"
 
@@ -406,7 +409,13 @@ func texts(raw json.RawMessage) (string, []block) {
 // Tail returns the last n turns of an omp session file: the person's and
 // beekeeper's messages and the agent's words, without thinking, tool calls
 // and tool results.
-func Tail(path string, n int) ([]claude.Turn, error) {
+func Tail(path string, n int) ([]claude.Turn, error) { return tail(path, n, false) }
+
+// Follow is Tail with the agent's tool calls among the turns, as
+// claude.Follow returns them.
+func Follow(path string, n int) ([]claude.Turn, error) { return tail(path, n, true) }
+
+func tail(path string, n int, tools bool) ([]claude.Turn, error) {
 	buf, whole := claude.ReadWindow(path)
 	if buf == nil && !whole {
 		if _, err := os.Stat(path); err != nil {
@@ -422,8 +431,17 @@ func Tail(path string, n int) ([]claude.Turn, error) {
 		if role != roleUser && role != roleAssistant {
 			return
 		}
-		if text, _ := texts(e.Message.Content); strings.TrimSpace(text) != "" {
+		text, bs := texts(e.Message.Content)
+		if strings.TrimSpace(text) != "" {
 			turns = append(turns, claude.Turn{At: e.Timestamp, Role: role, Text: strings.TrimSpace(text)})
+		}
+		if !tools {
+			return
+		}
+		for _, b := range bs {
+			if b.Type == blockToolCall && b.Name != "" {
+				turns = append(turns, claude.Turn{At: e.Timestamp, Role: claude.RoleTool, Text: claude.ToolGist(b.Name, b.Arguments)})
+			}
 		}
 	})
 	return turns[max(0, len(turns)-n):], nil
@@ -465,7 +483,7 @@ func ReadTranscript(path string, now time.Time) (claude.Work, claude.Activity) {
 				}
 			case roleAssistant:
 				for _, b := range blocks {
-					if b.Type == "toolCall" {
+					if b.Type == blockToolCall {
 						c.ToolCalls++
 						if b.Name == "bash" && invokesGitHub(b.Arguments) {
 							c.GitHubCalls++

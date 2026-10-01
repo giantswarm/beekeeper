@@ -271,7 +271,7 @@ func scanActivity(buf []byte, whole bool, now time.Time) Activity {
 // line of a message id being its final usage.
 func (a *Activity) assistant(e activityEntry, blocks []activityBlock, spans []*spanCounter, calls map[string]toolCall, byID map[string]int) {
 	for _, b := range blocks {
-		if b.Type != "tool_use" {
+		if b.Type != blockToolUse {
 			continue
 		}
 		call, github := describeCall(b)

@@ -484,6 +484,33 @@ func commandName(args string) string {
 	return strings.Join(f[:min(4, len(f))], " ")
 }
 
+// sessionTail reads the last n turns of the session q names (a name, id or
+// PID) from its harness's transcript; with tools, the tool calls are turns
+// too.
+func (a *app) sessionTail(q string, n int, tools bool) ([]claude.Turn, error) {
+	raw, _, err := a.sessions()
+	if err != nil {
+		return nil, err
+	}
+	s, err := claude.Resolve(raw, q)
+	if err != nil {
+		return nil, err
+	}
+	if s.Transcript == "" {
+		return nil, fmt.Errorf("no transcript found for %q", s.Name)
+	}
+	read := claude.Tail
+	switch {
+	case s.Harness == omp.Harness && tools:
+		read = omp.Follow
+	case s.Harness == omp.Harness:
+		read = omp.Tail
+	case tools:
+		read = claude.Follow
+	}
+	return read(s.Transcript, n)
+}
+
 func (a *app) tailCmd() *cobra.Command {
 	var n int
 	c := &cobra.Command{
@@ -494,22 +521,7 @@ results: its own words, the person's and its peers' messages. The session is
 a name (or a unique part of it), a session id or a PID.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			raw, _, err := a.sessions()
-			if err != nil {
-				return err
-			}
-			s, err := claude.Resolve(raw, args[0])
-			if err != nil {
-				return err
-			}
-			if s.Transcript == "" {
-				return fmt.Errorf("no transcript found for %q", s.Name)
-			}
-			tail := claude.Tail
-			if s.Harness == omp.Harness {
-				tail = omp.Tail
-			}
-			turns, err := tail(s.Transcript, n)
+			turns, err := a.sessionTail(args[0], n, false)
 			if err != nil {
 				return err
 			}
