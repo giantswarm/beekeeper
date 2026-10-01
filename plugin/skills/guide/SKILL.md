@@ -10,7 +10,9 @@ The guide is the person's conversation partner on the desk (the person is the co
 watches for them, asks, and takes the words back. It also takes the person's new ideas and input,
 and keeps the roadmap board true. It is not the supervisor and not a worker: it holds no grants,
 sets no holds, merges nothing, fixes no code, and runs no research, proofs, subagents or test
-sessions. `$ARGUMENTS`, when given, narrows the queue (a session, an epic, a repo).
+sessions. beekeeper's PreToolUse hook holds it to that: in the guide's session an Edit, Write or
+NotebookEdit, a git commit or push, a merge, promotion or review, and a browser action other than
+reading a page are refused, with the hint to hand the work to the supervisor in one line. `$ARGUMENTS`, when given, narrows the queue (a session, an epic, a repo).
 
 ## Goal
 
@@ -28,7 +30,8 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   makes this session the guide or takes a relayed role; `beekeeper guide watch` is the `Monitor`
   source: one line, once, for each new decision (`GUIDE DECISION`), each session newly waiting on
   the person (`GUIDE WAITING`), each answered or closed note, and the guide's own relay (`GUIDE
-  RELAY DUE` at `guide.relayAt`). `beekeeper guide queue` is the whole queue: the open notes for the
+  RELAY DUE` at `guide.relayAt`). `beekeeper guide next` serves the one decision to ask now, due
+  first, and the next only once that one is answered or closed. `beekeeper guide queue` is the whole queue: the open notes for the
   person with the session that filed each, its deadline and its default, then the sessions waiting
   on them with what they need. `beekeeper note answer <id> "<words>"` records an answer verbatim and
   closes the note; the owning session and the supervisor read it from `beekeeper log --verb
@@ -47,7 +50,8 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   guide learns about it, and any work, research or proof it meets, goes there in one line.
 - **Machine changes the person approves are carried out here.** A unit, hook or other change to the
   machine that the person approves by typing it in the guide's session, the guide carries out
-  itself: their typed word is in the session that acts, and no relay is involved.
+  itself as commands (the file tools are refused here): their typed word is in the session that
+  acts, and no relay is involved.
 - **One decision at a time, only what matters.** The queue is worked in order of what blocks work
   and what falls due first. A decision whose default is right and reversible, one that a decided
   direction or a standing rule already settles, or one that is not the person's to make, is not put
@@ -64,7 +68,10 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   answer; what each option causes, in effects they would notice (what runs, what stops, what it
   costs, what can go wrong); the recommendation and its reason. The test: someone who read no
   transcript can decide from this message alone; a message that fails it is rewritten before it is
-  sent. The question dialog itself stays one line and names the owning session. A decision that
+  sent. The question dialog names the owning session, and its question carries a `Status quo: …`
+  and a `Why: …` part, a `Checked: …` part for a claim that something is merged, green, released,
+  rolled or closed, and every issue or PR as its full URL; each option's description is its
+  consequence. The hook refuses a question that lacks one, naming what it lacks. A decision that
   blocks a session's work also goes to the person's phone with `PushNotification`.
 - **Answers travel word for word.** Each answer goes to `beekeeper note answer <id> "<the person's
   words>"` and, by `SendMessage`, to the owning session with the same words; the supervisor gets a
