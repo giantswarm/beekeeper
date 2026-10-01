@@ -59,7 +59,7 @@ func TestPostToolUseRedactsAndFilesOneRotationNote(t *testing.T) {
 		t.Fatalf("notes = %+v, want one rotation note", st.Notes)
 	}
 	n := st.Notes[0]
-	if n.For != notePerson || !strings.HasPrefix(n.Text, rotateNote+scanRef+":") || strings.Contains(n.Text, scanValue) {
+	if n.For != notePerson || !strings.HasPrefix(n.Text, rotateNote+scanRef+": its value was in a Bash result of session scan-session.") || strings.Contains(n.Text, scanValue) {
 		t.Fatalf("note = %+v", n)
 	}
 	evs, err := store.Events(0, func(e state.Event) bool { return e.Verb == "scan.redact" })

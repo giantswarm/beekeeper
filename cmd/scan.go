@@ -224,6 +224,15 @@ func (a *app) redactResult(raw []byte) []byte {
 	return out
 }
 
+// sessionLabel names the session a result came from: its name and id, or
+// its id alone when no running CLI names it.
+func sessionLabel(p state.Party) string {
+	if p.Name == noSession || p.Name == "" {
+		return "session " + p.Session
+	}
+	return fmt.Sprintf("session %q (%s)", p.Name, p.Session)
+}
+
 // rotateNote opens the text of a rotation note; one per reference is open.
 const rotateNote = "Rotate "
 
@@ -248,8 +257,8 @@ func (a *app) recordRedaction(r guard.ToolResult, found []guard.Finding) error {
 			if f.Ref == "" {
 				continue
 			}
-			text := fmt.Sprintf("%s%s: its value was in a %s result of session %s (%s). The PostToolUse hook replaced it before the model and the transcript got it, but the command that printed it had it in reach. Rotate the value at its source, then mark this note done.",
-				rotateNote, f.Ref, r.Tool, who.Name, r.Session)
+			text := fmt.Sprintf("%s%s: its value was in a %s result of %s. The PostToolUse hook replaced it before the model and the transcript got it, but the command that printed it had it in reach. Rotate the value at its source, then mark this note done.",
+				rotateNote, f.Ref, r.Tool, sessionLabel(who))
 			if slices.ContainsFunc(st.Notes, func(n state.Note) bool { return strings.HasPrefix(n.Text, rotateNote+f.Ref+":") }) {
 				continue
 			}
