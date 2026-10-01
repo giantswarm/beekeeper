@@ -5,6 +5,7 @@
 package board
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"strings"
@@ -81,22 +82,29 @@ func (c Candidate) Why() string {
 // Rank returns the candidates of every step in order, each item once, in
 // the first step that matches it. A SubIssues step offers an item with open
 // sub-issues through them (its remainder) and is the item's only step; an
-// item without is offered itself. Items without activity for b.StaleAfter
-// and items assigned to anybody outside b.People are marked skipped.
+// item without is offered itself. A sub-issue that is a board item is held
+// to the order like any other: one no step offers on its own (an old
+// Backlog item, a blocked one) is marked skipped with the reason. Items
+// without activity for b.StaleAfter and items assigned to anybody outside
+// b.People are marked skipped too.
 func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
+	onBoard := make(map[string]Item, len(snap.Items))
+	for _, it := range snap.Items {
+		onBoard[it.Ref] = it
+	}
 	seen := map[string]bool{}
 	var out []Candidate
-	offer := func(it Item, step, epic string) {
+	offer := func(it Item, step, epic, skip string) {
 		if seen[it.Ref] {
 			return
 		}
 		seen[it.Ref] = true
-		out = append(out, Candidate{Item: it, Step: step, Epic: epic, Skip: skipReason(it, b, now)})
+		out = append(out, Candidate{Item: it, Step: step, Epic: epic, Skip: cmp.Or(skip, skipReason(it, b, now))})
 	}
 	for i, st := range snap.Order {
 		if st.Search != "" {
 			for _, it := range snap.Search[i] {
-				offer(it, st.Name, "")
+				offer(it, st.Name, "", "")
 			}
 			continue
 		}
@@ -105,12 +113,16 @@ func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 				continue
 			}
 			if !st.SubIssues || it.OpenSubIssues == 0 {
-				offer(it, st.Name, "")
+				offer(it, st.Name, "", "")
 				continue
 			}
 			seen[it.Ref] = true
 			for _, sub := range it.SubIssues {
-				offer(sub, st.Name, it.Ref)
+				skip := ""
+				if bi, ok := onBoard[sub.Ref]; ok {
+					sub, skip = bi, Unoffered(snap.Order, bi, now)
+				}
+				offer(sub, st.Name, it.Ref, skip)
 			}
 		}
 	}
@@ -119,15 +131,53 @@ func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 
 // Matches reports whether the step st offers the board item it.
 func Matches(st config.BoardStep, it Item, now time.Time) bool {
-	switch {
-	case len(st.Status) > 0 && !slices.Contains(st.Status, it.Status),
-		len(st.Kind) > 0 && !slices.Contains(st.Kind, it.Kind),
-		len(st.Labels) > 0 && !slices.ContainsFunc(it.Labels, func(l string) bool { return containsFold(st.Labels, l) }),
-		st.Unblocked && (it.Blockers == 0 || it.OpenBlockers > 0),
-		st.CreatedWithin.Duration > 0 && now.Sub(it.Created) > st.CreatedWithin.Duration:
-		return false
+	return selects(st, it) && refusal(st, it, now) == ""
+}
+
+// Unoffered says why no step of order offers the board item it on its own,
+// the first refusal of a step that selects it; empty when a step offers it.
+func Unoffered(order []config.BoardStep, it Item, now time.Time) string {
+	why := ""
+	for _, st := range order {
+		if st.Search != "" || !selects(st, it) {
+			continue
+		}
+		r := refusal(st, it, now)
+		if r == "" {
+			return ""
+		}
+		why = cmp.Or(why, r)
 	}
-	return true
+	return cmp.Or(why, "no step of board.order offers "+cmp.Or(it.Status, "an item without a Status"))
+}
+
+// selects reports whether st's statuses, kinds and labels take it.
+func selects(st config.BoardStep, it Item) bool {
+	return (len(st.Status) == 0 || slices.Contains(st.Status, it.Status)) &&
+		(len(st.Kind) == 0 || slices.Contains(st.Kind, it.Kind)) &&
+		(len(st.Labels) == 0 || slices.ContainsFunc(it.Labels, func(l string) bool { return containsFold(st.Labels, l) }))
+}
+
+// refusal says why st turns away an item it selects: its blockers or its
+// age; empty when st offers it.
+func refusal(st config.BoardStep, it Item, now time.Time) string {
+	switch {
+	case st.Unblocked && it.Blockers == 0:
+		return st.Name + " takes items with recorded blockers, it has none"
+	case st.Unblocked && it.OpenBlockers > 0:
+		return fmt.Sprintf("%d of %d blockers open", it.OpenBlockers, it.Blockers)
+	case st.CreatedWithin.Duration > 0 && now.Sub(it.Created) > st.CreatedWithin.Duration:
+		return fmt.Sprintf("created %s: %s takes items created within %s", it.Created.Format(time.DateOnly), st.Name, span(st.CreatedWithin.Duration))
+	}
+	return ""
+}
+
+// span is d in days when it is whole days.
+func span(d time.Duration) string {
+	if day := 24 * time.Hour; d%day == 0 {
+		return fmt.Sprintf("%d days", d/day)
+	}
+	return d.String()
 }
 
 func skipReason(it Item, b config.Board, now time.Time) string {

@@ -128,3 +128,18 @@ func TestConcurrentClaimsNeverGetTheSameItem(t *testing.T) {
 		t.Errorf("records after the re-claim %+v", st.Records)
 	}
 }
+
+func TestClaimTakesNoSkippedItem(t *testing.T) {
+	store, err := state.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cands := boardCandidates(1)
+	cands[0].Skip = "created 2026-06-24: Backlog takes items created within 90 days"
+	me := state.Party{Session: "s1", Name: "Board pull"}
+	res, err := claimNext(store, cands, me, func(state.Party) bool { return true }, time.Now(), "")
+	st, _ := store.Read()
+	if err != nil || res.Pick != nil || res.Claimed || len(st.Records) != 0 || len(res.Skipped) != 1 {
+		t.Errorf("claim over a skipped item: %+v, %v; records %+v", res, err, st.Records)
+	}
+}

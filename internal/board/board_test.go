@@ -72,8 +72,15 @@ func fixture() []Item {
 	epicItem.OpenSubIssues = 2
 	epicItem.SubIssues = []Item{it(80, "", "", 10, 1), it(3, inProgress, "", 30, 1)}
 	closableEpic := it(9, upNext, epic, 20, 1)
+	// The sub-issues of an epic in progress are board items of their own:
+	// a fresh and an old one in Backlog, one in Inbox. The read of an
+	// epic's sub-issues has no board fields.
+	mixedEpic := it(15, inProgress, epic, 200, 1)
+	mixedEpic.OpenSubIssues = 3
+	mixedEpic.SubIssues = []Item{it(16, "", "", 20, 1), it(17, "", "", 99, 1), it(18, "", "", 5, 1)}
 	return []Item{stale, theirs, mine, inProgressEpic, stillBlocked, cleared, waitingOnPeople, epicItem, closableEpic,
-		it(10, upNext, "", 20, 1), it(11, backlog, bug, 400, 3), it(12, backlog, "", 100, 1), it(13, backlog, "", 10, 1), it(14, "Done ✅", "", 10, 1)}
+		it(10, upNext, "", 20, 1), it(11, backlog, bug, 400, 3), it(12, backlog, "", 100, 1), it(13, backlog, "", 10, 1), it(14, "Done ✅", "", 10, 1),
+		mixedEpic, it(16, backlog, "", 20, 1), it(17, backlog, "", 99, 1), it(18, statuses[0], "", 5, 1)}
 }
 
 func snapshot(t *testing.T) *Snapshot {
@@ -102,6 +109,9 @@ func TestRankAppliesTheOrderToAFixtureBoard(t *testing.T) {
 		"o/r#2 In Progress: assigned to pat",
 		"o/r#3 In Progress",
 		"o/r#40 In Progress < o/r#4",
+		"o/r#16 In Progress < o/r#15",
+		"o/r#17 In Progress < o/r#15: created 2026-06-24: Backlog takes items created within 90 days",
+		"o/r#18 In Progress < o/r#15: no step of board.order offers Inbox 📥",
 		"o/r#6 blocker cleared",
 		"o/r#80 Up Next epic < o/r#8",
 		"o/r#9 Up Next epic",
@@ -112,6 +122,25 @@ func TestRankAppliesTheOrderToAFixtureBoard(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("rank:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestUnofferedSaysWhyNoStepTakesAnItem(t *testing.T) {
+	o := snapshot(t).Order
+	for _, tc := range []struct {
+		it   Item
+		want string
+	}{
+		{Item{Status: backlog, Created: days(10)}, ""},
+		{Item{Status: backlog, Kind: bug, Created: days(400)}, ""},
+		{Item{Status: backlog, Created: days(100)}, "created 2026-06-23: Backlog takes items created within 90 days"},
+		{Item{Status: blocked}, "blocker cleared takes items with recorded blockers, it has none"},
+		{Item{Status: blocked, Blockers: 3, OpenBlockers: 2}, "2 of 3 blockers open"},
+		{Item{}, "no step of board.order offers an item without a Status"},
+	} {
+		if got := Unoffered(o, tc.it, now); got != tc.want {
+			t.Errorf("Unoffered(%s %s) = %q, want %q", tc.it.Status, tc.it.Kind, got, tc.want)
+		}
 	}
 }
 

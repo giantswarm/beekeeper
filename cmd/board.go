@@ -44,17 +44,22 @@ func (a *app) boardNextCmd() *cobra.Command {
 of its statuses, kinds and labels (the open sub-issues of the epics it
 matches, with subIssues; only items whose recorded blockers all closed, with
 unblocked; only items created within createdWithin), or a GitHub search's
-open issues. The first item that is free is picked: not served by a running
-session (a sessions serve record, a busy agent's task) and named by no open
-note (it waits on the note's person), not assigned to
-anybody outside board.people, and active within board.staleAfter. It prints
-the item, why it is picked, and why every item above it was skipped.
+open issues. A sub-issue that is a board item is held to the order by its
+own Status: one no step offers on its own (a Backlog item older than the
+Backlog step's createdWithin, a blocked one, one in Inbox) is skipped with
+the reason, even when its epic is in progress. The first item that is free
+is picked: not served by a running session (a sessions serve record, a busy
+agent's task) and named by no open note (it waits on the note's person),
+not assigned to anybody outside board.people, and active within
+board.staleAfter. It prints the item, why it is picked, and why every item
+above it was skipped.
 
 --claim records the pick as the calling session's sessions serve record
 under the state lock, after checking again that nobody claimed it since:
-two concurrent claims never get the same item. The claim ends when the
-session ends, when its agent reports idle (agents idle) or with sessions
-unserve. Exit 3 when no item is free.`,
+two concurrent claims never get the same item. It changes nothing on the
+board: the item keeps its Status until the caller, having judged it, moves
+it with board move. The claim ends when the session ends, when its agent
+reports idle (agents idle) or with sessions unserve. Exit 3 when no item is free.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			var me state.Party
@@ -209,7 +214,7 @@ func (a *app) printNext(res nextResult, offered int) error {
 			p := res.Pick
 			_, _ = fmt.Fprintf(a.out, "%s %s\n  %s\n  picked: %s\n", p.Ref, p.Title, p.URL, p.Why())
 			if res.Claimed {
-				_, _ = fmt.Fprintf(a.out, "  claimed: you serve %s now (sessions unserve releases it)\n", p.Ref)
+				_, _ = fmt.Fprintf(a.out, "  claimed: you serve %s now, its Status unchanged (board move %s %q once you take it on; sessions unserve releases it)\n", p.Ref, p.Ref, "in progress")
 			}
 		}
 		if len(res.Skipped) > 0 {

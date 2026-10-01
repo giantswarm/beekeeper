@@ -57,6 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `board next` holds a sub-issue reached through an epic to the order like any board item, by its own Status: one no step offers on its own (a Backlog item older than the Backlog step's `createdWithin`, a blocked one, one in Inbox) is skipped with the reason instead of being picked as the epic's remainder. `--claim` documents and prints that it leaves the item's Status alone: the caller moves it with `board move` once it judged the item. Board pulls were picking a 99-day-old Backlog sub-issue of an epic in progress, which the Backlog step's 90 days ruled out.
+
 - A desktop notification sent after the session bus closed the connection is no longer lost: the notifier replaces a connection that is no longer connected before it calls, and retries once whenever a failed call left the connection closed. A call on a closed connection could fail with godbus's read error instead of `dbus.ErrClosed`, which skipped the retry; `TestDesktopKeepsItsConnection` failed about 1 in 12 runs under `go test -race` on a loaded machine.
 - The watch's loop tests (`TestWatchSamplesTheMachineWhileALaneReadHangs`, `TestWatchSlowsInstallationReadsUnderCPUPressure`, `TestLoopSkipsMissedTicks`) run on a clock they step: the watch's loops wait on an injectable clock, the wall clock outside the tests. Under `go test -race` on a machine at load 8 to 10 they failed on the wall-clock time a starved poll took.
 
