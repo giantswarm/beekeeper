@@ -92,6 +92,12 @@ run still going, the poll skips it): one DOCTOR line per agent it took off
 the roster, desktop session it archived or retitled, fault it fixed or
 note it filed, and one DOCTOR FAULT line while a known fault lasts.
 
+A running beekeeper watch, this one included, whose binary self-update
+replaced keeps the code it started with: one WATCH STALE line names the
+watch, the version it runs and the one installed, and that a re-arm (a
+restart) picks it up; one ENDED line follows once it exits. No watch
+re-executes itself. --once says the stale watches it finds as well.
+
 A registered agent whose session's context reaches agents.relayAt gets one
 HANDOVER DUE "<agent>" at <n>k: beekeeper agents handover "<agent>" at its
 first quiet moment: no tool command of its own running and no gated merge
@@ -272,6 +278,11 @@ type watcher struct {
 	retitled  map[string]time.Time
 	// timerActs are the fired timers' wakes and commands under way.
 	timerActs sync.WaitGroup
+	// replaced says whether a process's binary was replaced, and its path;
+	// nil is platform.ProcessBinary. versionOf is the version a binary file
+	// reports; nil runs it.
+	replaced  func(pid int) (string, bool)
+	versionOf func(ctx context.Context, file string) string
 }
 
 // unavailable reports whether err is a platform part this build does not
@@ -526,6 +537,31 @@ func (w *watcher) clear(key string) {
 	}
 }
 
+// isActive reports whether the watch has said the condition key and not yet
+// its end.
+func (w *watcher) isActive(key string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	_, active := w.active[key]
+	return active
+}
+
+// clearMissing ends each condition said under prefix that found no longer
+// holds: one ENDED line each.
+func (w *watcher) clearMissing(prefix string, found map[string]bool) {
+	w.mu.Lock()
+	var gone []string
+	for k := range w.active {
+		if strings.HasPrefix(k, prefix) && !found[k] {
+			gone = append(gone, k)
+		}
+	}
+	w.mu.Unlock()
+	for _, k := range gone {
+		w.clear(k)
+	}
+}
+
 // condition is a lasting condition a watch has said: since when, and the
 // line's head that names it.
 type condition struct {
@@ -760,9 +796,7 @@ func (w *watcher) sampleCPU(now time.Time) {
 	w.check("load", load[0] > limit, "HIGH LOAD: 1m %.0f over %.0f (%d cores)%s", load[0], limit, cores, top)
 	w.check("loadrising", loadRising(load, cores), "LOAD RISING: 1m %.0f, 5m %.0f (%d cores)%s", load[0], load[1], cores, top)
 	// A restarted watch keeps a CPU PRESSURE it said while it lasts.
-	w.mu.Lock()
-	_, said := w.active["cpupsi"]
-	w.mu.Unlock()
+	said := w.isActive("cpupsi")
 	w.check("cpupsi", w.cpuOver >= 2 || said && w.cpuOver > 0, "CPU PRESSURE: some avg10 %.0f%% over %.0f%%%s", cpu, th.CPUPSIMax, top)
 	strained := load[0] > limit || cpu > th.CPUPSIMax
 	w.strained.Store(strained)
@@ -799,9 +833,7 @@ func (w *watcher) sampleProcs(now time.Time, span time.Duration, prev, t *proc.T
 			w.forkUsual += (rate - w.forkUsual) * min(1, span.Seconds()/forkUsualOver.Seconds())
 		}
 		// A restarted watch keeps a PROCESS STORM it said while it lasts.
-		w.mu.Lock()
-		_, said := w.active["forks"]
-		w.mu.Unlock()
+		said := w.isActive("forks")
 		if w.forkOver >= 2 || said && w.forkOver > 0 {
 			w.emit("forks", "%s", stormLine(rate, w.forkUsual, fresh(prev, t), t, owners))
 		} else {
@@ -857,6 +889,7 @@ func (w *watcher) pollSessions(ctx context.Context, since time.Time, t *proc.Tab
 	w.sessionChanges(sessions)
 	w.staleLeases(ctx, sessions)
 	w.runaways(sessions, t)
+	w.staleWatches(ctx, t)
 }
 
 // poll does everything but the machine sample: the process table, the
@@ -942,17 +975,7 @@ func (w *watcher) exposures() {
 		found[key] = true
 		w.emit(key, "EXPOSED %s: %s", e.Path, e.What)
 	}
-	w.mu.Lock()
-	var gone []string
-	for k := range w.active {
-		if strings.HasPrefix(k, exposedKey) && !found[k] {
-			gone = append(gone, k)
-		}
-	}
-	w.mu.Unlock()
-	for _, k := range gone {
-		w.clear(k)
-	}
+	w.clearMissing(exposedKey, found)
 }
 
 // budget probes the GitHub budget and says when it is under the floor.
@@ -985,17 +1008,7 @@ func (w *watcher) stalls() {
 			w.emit(key, "LANE STALLED %s: %s", v.Name, w.stallText(*v.Stall))
 		}
 	}
-	w.mu.Lock()
-	var over []string
-	for k := range w.active {
-		if strings.HasPrefix(k, "stall:") && !stalled[k] {
-			over = append(over, k)
-		}
-	}
-	w.mu.Unlock()
-	for _, k := range over {
-		w.clear(k)
-	}
+	w.clearMissing("stall:", stalled)
 }
 
 // lostMerges records the outcome of each running merge whose gate process
@@ -1116,17 +1129,7 @@ func (w *watcher) settled(ctx context.Context, now time.Time) {
 				lane.Name, m.Key(), dur(since), why, lane.Name)
 		}
 	}
-	w.mu.Lock()
-	var over []string
-	for k := range w.active {
-		if strings.HasPrefix(k, "stuck:") && !stuck[k] {
-			over = append(over, k)
-		}
-	}
-	w.mu.Unlock()
-	for _, k := range over {
-		w.clear(k)
-	}
+	w.clearMissing("stuck:", stuck)
 	if len(done) == 0 {
 		return
 	}
