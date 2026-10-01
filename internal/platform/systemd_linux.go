@@ -17,6 +17,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
+// Name is the platform this build runs on.
+func Name() string { return "linux_systemd" }
+
 // current is linux_systemd: /proc, PSI and cgroup v2 for the machine,
 // systemd user units and scopes for the launcher and the capper, the
 // journal for the OOM kills, D-Bus for notifications.
@@ -48,11 +51,11 @@ func (systemdMachine) Started(pid int) (time.Time, error) { return proc.Started(
 func (systemdMachine) OOMDSwapLimit() int                 { return machine.OOMDSwapLimit() }
 func (systemdMachine) SwapoffRuns() bool                  { return machine.SwapoffRuns() }
 
-func (systemdMachine) DesktopScope() *machine.Scope {
+func (systemdMachine) DesktopScope() (*machine.Scope, error) {
 	if p := machine.FindScope(); p != "" {
-		return machine.ReadScope(p)
+		return machine.ReadScope(p), nil
 	}
-	return nil
+	return nil, nil
 }
 
 func (systemdMachine) MemcapScope(unit string) *machine.Scope {

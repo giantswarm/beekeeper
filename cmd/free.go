@@ -15,6 +15,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/free"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/platform"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -147,7 +149,11 @@ func (a *app) freeSummary(o free.Options, timeout time.Duration) error {
 func (a *app) freeMachine() (free.Machine, error) {
 	a.now = time.Now()
 	t, err := plat.Machine.Processes()
-	if err != nil {
+	var terr error
+	switch {
+	case platform.Missing(err):
+		t, terr = &proc.Table{}, err
+	case err != nil:
 		return free.Machine{}, err
 	}
 	home, _ := os.UserHomeDir()
@@ -168,6 +174,7 @@ func (a *app) freeMachine() (free.Machine, error) {
 		Titles:       func() map[string]string { return claude.Titles(a.cfg) },
 		Clusters:     clusters,
 		ClustersErr:  cerr,
+		TableErr:     terr,
 		ClusterNotes: a.freeClusterNotes(clusters, sessions),
 		MaxLabs:      a.cfg.KindClusters(ramMiB()),
 		SlotDir:      a.cfg.Memcap.SlotDir,

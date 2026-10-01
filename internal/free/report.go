@@ -10,21 +10,29 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // state prints RAM, swap, tmpfs, the oomd headroom and the desktop scope.
 func (r *Run) state() {
-	m, _ := r.mem()
+	m, err := r.mem()
 	tmp, _ := machine.ReadDisk(r.TmpDir)
-	r.say("  RAM available %6d MiB of %d MiB   swap used %5d MiB of %d MiB   tmpfs /tmp %5d MiB   shmem %5d MiB",
-		m.AvailableMiB, m.TotalMiB, m.SwapUsedMiB, m.SwapTotalMiB, tmp.UsedMiB, m.ShmemMiB)
+	if platform.Missing(err) {
+		r.say("  %s   tmpfs /tmp %5d MiB", platform.Unavailable("memory"), tmp.UsedMiB)
+	} else {
+		r.say("  RAM available %6d MiB of %d MiB   swap used %5d MiB of %d MiB   tmpfs /tmp %5d MiB   shmem %5d MiB",
+			m.AvailableMiB, m.TotalMiB, m.SwapUsedMiB, m.SwapTotalMiB, tmp.UsedMiB, m.ShmemMiB)
+	}
 	if m.SwapTotalMiB > 0 {
 		limit := r.swapLimit()
 		r.say("  systemd-oomd swap trigger (%d %%): %d MiB of swap growth left before it kills the largest scope",
 			limit, m.OOMDHeadroomMiB(limit))
 	}
-	s := r.scope()
+	s, err := r.scope()
+	if platform.Missing(err) {
+		r.say("  %s", platform.Unavailable("desktop scope"))
+	}
 	if s == nil {
 		return
 	}
@@ -101,6 +109,9 @@ func (r *Run) kind() {
 // action. Its scratch stays: only a dead session's is freed.
 func (r *Run) clis() {
 	r.head("Claude CLIs alive (each keeps its MCP servers; archive idle sessions in the desktop)")
+	if !r.tableRead() {
+		return
+	}
 	n, mib := 0, 0
 	for _, s := range r.Sessions {
 		var idle time.Duration
@@ -133,6 +144,9 @@ func (r *Run) heavy() {
 		return
 	}
 	r.head("heavy or runaway processes (not touched; the dialog offers them, or kill them yourself)")
+	if !r.tableRead() {
+		return
+	}
 	type row struct {
 		anon                  int
 		pid                   int
@@ -229,6 +243,9 @@ func (r *Run) tabs() {
 		return
 	}
 	r.head(fmt.Sprintf("Chrome renderers above %d MiB (not touched; a killed renderer shows 'Aw, Snap!' in its tabs until reloaded)", r.TabMiB))
+	if !r.tableRead() {
+		return
+	}
 	type row struct{ anon, pid int }
 	var rows []row
 	tabKiB := r.TabMiB * 1024
