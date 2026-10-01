@@ -72,6 +72,7 @@ func (stubLauncher) Available() bool                                   { return 
 func (stubLauncher) Start(Unit) error                                  { return missing("Launcher.Start") }
 func (stubLauncher) Freeze(context.Context, string) error              { return missing("Launcher.Freeze") }
 func (stubLauncher) Thaw(context.Context, string) error                { return missing("Launcher.Thaw") }
+func (stubLauncher) Stop(context.Context, string) error                { return missing("Launcher.Stop") }
 func (stubLauncher) State(context.Context, string) string              { return "" }
 func (stubLauncher) Running(context.Context, bool, ...string) []string { return nil }
 

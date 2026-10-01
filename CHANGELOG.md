@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `agents start --harness omp` names the agent's model on omp's command line: `--model`, else `omp.model`, an exact `provider/id` selector `omp models` lists. With neither, or a model omp does not list, the start is refused before anything is recorded. An omp agent started without a model ran on omp's own default, which answered nothing while its server was busy with other work, and a pattern could match a model nobody meant.
 - `agents` and `sessions` have a `MODEL` column; an omp session's model comes from its command line until its session file records one, so an agent not yet answered shows its model too.
 
+### Fixed
+
+- An omp agent's beekeeper commands act as its roster entry, so `agents idle --done` finishes it; they were refused as an unregistered session. Taking an omp agent off the roster stops its unit: its process ran on, holding its model, after its work was done.
+
 ### Added
 
 - `ui` follows a session live: its pane re-reads the transcript at every refresh and shows the history, then the current turn with its tool calls, newest at the bottom; `k`/`j` scroll back and forward and hold their place while turns arrive, `G` follows again. The sessions table has a `state` column (busy, idle, waiting on its person, an omp session's own), and an omp session's pane reads omp's session file. The pane showed the last ten turns once, without tool calls, and an omp session's not at all.
