@@ -316,7 +316,7 @@ func TestExampleConfig(t *testing.T) {
 			t.Errorf("threshold %d, want %d", got, want)
 		}
 	}
-	if c.Supervisor.Skill != "supervise" || c.Guide.Skill != "guide" || c.Guide.Person != "Ada" ||
+	if c.Supervisor.Skill != "beekeeper:supervise" || c.Guide.Skill != "beekeeper:guide" || c.Guide.Person != "Ada" ||
 		c.GitHub.ProbeRepo != "example-org/tools" || !c.Merge.DevctlServes("giantswarm/x") || c.Ollama.URL == "" ||
 		c.Alerts.Tenant != "example-org" || len(c.Alerts.Installations) != 3 || len(c.Lanes) != 2 {
 		t.Errorf("config = %+v", c)

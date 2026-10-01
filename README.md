@@ -33,6 +33,37 @@ place. `beekeeper self-update --check` exits 125 while a newer release is out.
 The session and machine views need Linux (`/proc`, cgroup v2, the journal). Leases, holds and
 the budget work on any system.
 
+### The role plugin
+
+The commands are half of a desk; the roles that drive them are the other half. The repository is
+also a Claude Code plugin marketplace whose plugin [`plugin/`](plugin) carries them as skills:
+`/beekeeper:supervise` (the supervisor), `/beekeeper:guide` (the session that walks the person
+through their decisions), `/beekeeper:register-agent` (an empty session joining the roster) and
+`/beekeeper:worker-rules` (what every worker follows; a brief names it). Their text is generic:
+the desk's installations, resources, lanes and person are the configuration's keys (below), and
+the desk's own conventions — which board, which repositories, local traps — stay in the project
+the sessions run in, which the skills defer to.
+
+```bash
+claude plugin marketplace add giantswarm/beekeeper
+claude plugin install beekeeper@beekeeper   # --scope project for one project only
+```
+
+or, for a project's shared settings (`.claude/settings.json`):
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "beekeeper": {"source": {"source": "github", "repo": "giantswarm/beekeeper"}}
+  },
+  "enabledPlugins": {"beekeeper@beekeeper": true}
+}
+```
+
+The plugin follows the default branch; `"ref": "<release tag>"` in the source pins it to the
+binary's release. With `supervisor.skill: beekeeper:supervise` and `guide.skill: beekeeper:guide`
+a relayed successor opens with the plugin's role.
+
 ## What it does
 
 | Command | For |

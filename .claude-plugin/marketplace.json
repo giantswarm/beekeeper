@@ -1,0 +1,15 @@
+{
+  "name": "beekeeper",
+  "description": "The Claude Code plugin shipped with beekeeper: the supervisor, guide and worker roles.",
+  "owner": {
+    "name": "Giant Swarm",
+    "url": "https://github.com/giantswarm"
+  },
+  "plugins": [
+    {
+      "name": "beekeeper",
+      "source": "./plugin",
+      "description": "The roles that run a beekeeper desk: the supervisor, the guide, a registered agent and the rules every worker follows."
+    }
+  ]
+}
