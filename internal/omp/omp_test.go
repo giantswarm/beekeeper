@@ -117,7 +117,7 @@ func TestDiscover(t *testing.T) {
 	dir := sessionsDir(t, now, recorded{5*time.Minute - time.Second, 10 * time.Second}, recorded{30 * time.Minute, 20 * time.Minute})
 	tab := procRoot(t, now,
 		// beekeeper's agent: rpc mode behind its inbox, started 5 minutes ago.
-		fakeProc{pid: 100, ppid: 1, args: []string{Comm, "--mode", "rpc", "--no-ui"}, cwd: repo, age: 5 * time.Minute,
+		fakeProc{pid: 100, ppid: 1, args: []string{Comm, "--mode", "rpc", "--no-ui", "--model=local/qwen3-4b"}, cwd: repo, age: 5 * time.Minute,
 			env: []string{EnvAgent + "=1234abcd-0000-4000-8000-000000000000", EnvName + "=omp worker"}},
 		// a subagent it runs, and a helper: no sessions.
 		fakeProc{pid: 101, ppid: 100, args: []string{Comm, "--mode", "rpc"}, cwd: repo, age: time.Minute},
@@ -149,8 +149,8 @@ func TestDiscover(t *testing.T) {
 	if p == nil {
 		t.Fatal("the interactive omp not discovered")
 	}
-	if p.Transcript != "" || p.Name != "omp in beekeeper" || p.State != StateIdle {
-		t.Errorf("unprompted session = transcript %q name %q state %q", p.Transcript, p.Name, p.State)
+	if p.Transcript != "" || p.Name != "omp in beekeeper" || p.State != StateIdle || p.Model != "opus" {
+		t.Errorf("unprompted session = transcript %q name %q state %q model %q", p.Transcript, p.Name, p.State, p.Model)
 	}
 	if !a.Party().Is(state.Party{HostSession: HostPrefix + "1234abcd-0000-4000-8000-000000000000", Name: "omp worker"}) {
 		t.Error("the agent's party does not match its roster entry")

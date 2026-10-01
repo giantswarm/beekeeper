@@ -123,7 +123,8 @@ first turn is the session's only CLI and a message by name reaches it; the
 desktop starts a new CLI when the person opens the session.
 
 --harness omp starts an omp (oh-my-pi) agent instead: "omp --mode rpc"
-in yolo approval mode on --model (default: omp.model, else omp's own), in
+in yolo approval mode on --model (default: omp.model; with neither, or a
+model omp does not list as provider/id, the start is refused), in
 a transient user unit beekeeper-omp-<id>, with its stdin on a FIFO inbox
 in beekeeper's state folder and the brief as its first message. It is
 registered on the roster as omp_<id> under <name> and shows in sessions
@@ -179,7 +180,7 @@ is involved and no import happens.`,
 			return err
 		},
 	}
-	c.Flags().StringVar(&model, "model", "", "the session's model (default: Claude Code's)")
+	c.Flags().StringVar(&model, "model", "", "the session's model (default: Claude Code's; omp: omp.model)")
 	c.Flags().StringVar(&dir, "dir", ".", "the session's working directory")
 	c.Flags().StringVar(&task, "task", "", "the task the roster shows it busy with (default: the brief's first line)")
 	c.Flags().StringVar(&harness, "harness", "claude", "the agent harness: claude or omp")
@@ -790,7 +791,7 @@ func briefTask(brief string) string {
 func agentArgv(bin, id, name, model, brief string, flags ...string) []string {
 	argv := []string{bin, "-p", sessionIDFlag, id, "--permission-mode", state.ModeBypass, "-n", name}
 	if model != "" {
-		argv = append(argv, "--model", model)
+		argv = append(argv, modelFlag, model)
 	}
 	argv = append(argv, flags...)
 	return append(argv, "--", brief)

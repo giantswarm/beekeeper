@@ -802,8 +802,8 @@ type Omp struct {
 	// directory.
 	SessionsDir string `yaml:"sessionsDir"`
 	// Model is the model `agents start --harness omp` starts an agent on
-	// without --model, omp's model pattern ("local/qwen3-8b",
-	// "opus"); empty: omp's own default.
+	// without --model, an exact selector omp lists ("ollama/qwen3.5:9b");
+	// empty: such a start is refused.
 	Model string `yaml:"model"`
 }
 

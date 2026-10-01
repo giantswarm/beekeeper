@@ -266,7 +266,7 @@ func wakeArgv(bin string, w wakeTarget, msg string) []string {
 		argv = append(argv, "-n", w.name)
 	}
 	if w.model != "" {
-		argv = append(argv, "--model", w.model)
+		argv = append(argv, modelFlag, w.model)
 	}
 	return append(argv, "--", msg)
 }

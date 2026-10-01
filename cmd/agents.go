@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"strings"
@@ -20,6 +21,8 @@ type agentView struct {
 	// reachable), or "not running" (paused or closed: agents wake brings it
 	// back).
 	Reachable string `json:"reachable"`
+	// Model is the model its running session is on.
+	Model string `json:"model,omitempty"`
 }
 
 // The agents command's name and its reopen subcommand's, which a start's and
@@ -332,7 +335,7 @@ func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentVie
 	for _, ag := range st.Agents {
 		v := agentView{Agent: ag, Reachable: "not running"}
 		if s, ok := claude.Live(sessions, ag.Party); ok {
-			v.Reachable = "live"
+			v.Reachable, v.Model = "live", s.Model
 			for _, c := range s.Commands {
 				if c.Remaining > 0 {
 					v.Reachable = "waiting, " + dur(c.Remaining) + " left"
@@ -402,13 +405,13 @@ func (a *app) printAgents(views []agentView) {
 		return
 	}
 	w := a.table()
-	_, _ = fmt.Fprintln(w, "AGENT\tTASK\tSINCE\tREACHABLE")
+	_, _ = fmt.Fprintln(w, "AGENT\tTASK\tSINCE\tMODEL\tREACHABLE")
 	for _, v := range views {
 		task, since := "(idle)", v.IdleSince
 		if v.Task != "" {
 			task, since = v.Task, v.AssignedAt
 		}
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", truncate(v.Name, 30), truncate(task, 60), clock(a.now, since), v.Reachable)
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", truncate(v.Name, 30), truncate(task, 60), clock(a.now, since), cmp.Or(truncate(v.Model, 32), "-"), v.Reachable)
 	}
 	_ = w.Flush()
 }
