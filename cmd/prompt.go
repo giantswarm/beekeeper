@@ -193,11 +193,13 @@ func (a *app) promptTimers(p printer, timers []state.Timer) {
 		return
 	}
 	for _, t := range timers {
-		due := a.stamp(t.Due)
-		if !t.Due.After(a.now) {
+		due := "at " + a.stamp(t.Due)
+		if t.Auto() {
+			due = timerWhen(a.now, t)
+		} else if t.Looked(a.now) {
 			due += ", due"
 		}
-		p("- #%d (at %s, set by %q): %s", t.ID, due, t.By.Name, oneLine(t.What))
+		p("- #%d (%s, set by %q): %s", t.ID, due, t.By.Name, oneLine(t.What))
 	}
 	p("")
 }

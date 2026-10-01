@@ -122,7 +122,7 @@ func dueCount(st *state.State, now time.Time) int {
 		}
 	}
 	for _, t := range st.Timers {
-		if !t.Due.After(now) {
+		if t.Looked(now) {
 			n++
 		}
 	}
