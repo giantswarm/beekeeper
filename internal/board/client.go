@@ -76,6 +76,10 @@ type issueJSON struct {
 	} `json:"subIssuesSummary"`
 }
 
+// open reports whether j is an open issue; a pull request or a draft has
+// no URL.
+func (j issueJSON) open() bool { return j.URL != "" && j.State == "OPEN" }
+
 func (j issueJSON) item() Item {
 	it := Item{
 		Ref: fmt.Sprintf("%s#%d", j.Repository.NameWithOwner, j.Number), URL: j.URL, Title: j.Title,
@@ -252,7 +256,7 @@ content{...I}}}}}}}`+issueFields, vs)
 		}
 		items := r.Owner.Project.Items
 		for _, n := range items.Nodes {
-			if n.Content.URL == "" || n.Content.State != "OPEN" {
+			if !n.Content.open() {
 				continue
 			}
 			it := n.Content.item()
@@ -306,7 +310,7 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 	open := func(ns []issueJSON) []Item {
 		var out []Item
 		for _, n := range ns {
-			if n.URL != "" && n.State == "OPEN" {
+			if n.open() {
 				out = append(out, n.item())
 			}
 		}
@@ -330,7 +334,7 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 			continue
 		}
 		for _, n := range e.Issue.SubIssues.Nodes {
-			if n.URL == "" || n.State != "OPEN" {
+			if !n.open() {
 				continue
 			}
 			it := n.item()
