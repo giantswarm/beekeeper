@@ -256,12 +256,12 @@ func TestSecretGuardCorpus(t *testing.T) {
 
 func TestCommandAt(t *testing.T) {
 	for cmd, want := range map[string]string{
-		"sops -d x":                     "sops",
-		"A=1 B=2 sops -d x":             "sops",
-		"timeout -k 5 30 sops -d x":     "sops",
+		"sops -d x":                     sopsCmd,
+		"A=1 B=2 sops -d x":             sopsCmd,
+		"timeout -k 5 30 sops -d x":     sopsCmd,
 		"sudo -u root nice -n 10 op x":  "op",
-		"beekeeper run -- sops -d x":    "sops",
-		"xargs -I{} sops -d {}":         "sops",
+		"beekeeper run -- sops -d x":    sopsCmd,
+		"xargs -I{} sops -d {}":         sopsCmd,
 		"ls ~/.config/sops":             "ls",
 		"env":                           "",
 		"/usr/local/bin/op item get a ": "/usr/local/bin/op",

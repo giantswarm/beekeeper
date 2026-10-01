@@ -17,7 +17,14 @@ import (
 
 const (
 	kubectlCmd = "kubectl"
+	sopsCmd    = "sops"
+	helmCmd    = "helm"
 	verbGet    = "get"
+	verbSet    = "set"
+	verbCreate = "create"
+	verbEdit   = "edit"
+	verbList   = "list"
+	flagOutput = "--output"
 )
 
 // A leak names the command that would expose secret values and the safe forms.
@@ -109,7 +116,7 @@ var (
 var kubectlValue = map[string]bool{
 	"-n": true, "--namespace": true, "--context": true, "--kubeconfig": true, "--cluster": true, "--user": true,
 	"-s": true, "--server": true, "--as": true, "--as-group": true, "--token": true, "--request-timeout": true,
-	"-l": true, "--selector": true, "-o": true, "--output": true, "--field-selector": true, "--template": true,
+	"-l": true, "--selector": true, "-o": true, flagOutput: true, "--field-selector": true, "--template": true,
 	"-f": true, "--filename": true, "-c": true, "--container": true, "--sort-by": true, "--chunk-size": true, "--label-columns": true, "-L": true,
 	"--raw": true,
 }
@@ -248,13 +255,13 @@ func toolLeak(words []string) *leak {
 	name, args := path.Base(words[k]), words[k+1:]
 	sub := nonFlags(args)
 	switch {
-	case name == "sops":
+	case name == sopsCmd:
 		return &leak{what: "sops, which runs only in beekeeper", safe: sopsSafe, never: true}
 	case name == "op":
 		return &leak{what: "op, which runs only in beekeeper", safe: opSafe, never: true}
 	case name == "vault":
 		return vaultLeak(args)
-	case name == "helm" && len(sub) > 0 && sub[0] == "secrets":
+	case name == helmCmd && len(sub) > 0 && sub[0] == "secrets":
 		return &leak{what: "helm secrets", safe: sopsSafe, never: true}
 	case (name == "age" || name == "rage" || name == "gpg" || name == "gpg2") && hasAny(args, "-d", "--decrypt"):
 		return &leak{what: name + " --decrypt", safe: cryptSafe, never: true}
@@ -266,7 +273,7 @@ func toolLeak(words []string) *leak {
 		if f := secretFileArg(args); f != "" {
 			return &leak{what: "a diff of " + f + ", which prints its values", safe: fileSafe, never: true}
 		}
-	case name == "helm" && len(sub) > 0 && (sub[0] == "template" || sub[0] == "install" || sub[0] == "upgrade"):
+	case name == helmCmd && len(sub) > 0 && (sub[0] == "template" || sub[0] == "install" || sub[0] == "upgrade"):
 		if f := secretValues(args); f != "" {
 			return &leak{what: "helm " + sub[0] + " with the secret values of " + f, safe: renderSafe, render: true}
 		}
@@ -343,7 +350,7 @@ func kubectlLeak(args []string, before string) *leak {
 				}
 			}
 			switch name {
-			case "-o", "--output":
+			case "-o", flagOutput:
 				output = val
 			case "--template":
 				template = val
@@ -372,7 +379,7 @@ func kubectlLeak(args []string, before string) *leak {
 	switch verb {
 	case "view-secret":
 		return &leak{what: "kubectl view-secret", safe: kubectlSafe, never: true}
-	case "edit":
+	case verbEdit:
 		if secret {
 			return &leak{what: "kubectl edit of a Secret", safe: kubectlSafe, never: true}
 		}
@@ -389,7 +396,7 @@ func kubectlLeak(args []string, before string) *leak {
 		if !secret && (!unknown || !strings.Contains(strings.ToLower(before), "secret")) {
 			return nil
 		}
-	case "create", "apply", "replace", "patch", "annotate", "label", "set":
+	case verbCreate, "apply", "replace", "patch", "annotate", "label", verbSet:
 		// They print the object they write with -o.
 		if !secret {
 			return nil
@@ -447,9 +454,9 @@ func vaultLeak(args []string) *leak {
 		return nil
 	}
 	switch {
-	case sub[0] == "status", sub[0] == "version", sub[0] == "list",
-		sub[0] == "kv" && len(sub) > 1 && (sub[1] == "list" || sub[1] == "metadata" && len(sub) > 2 && sub[2] == verbGet),
-		len(sub) > 1 && sub[1] == "list" && (sub[0] == "secrets" || sub[0] == "auth" || sub[0] == "policy" || sub[0] == "audit"):
+	case sub[0] == "status", sub[0] == "version", sub[0] == verbList,
+		sub[0] == "kv" && len(sub) > 1 && (sub[1] == verbList || sub[1] == "metadata" && len(sub) > 2 && sub[2] == verbGet),
+		len(sub) > 1 && sub[1] == verbList && (sub[0] == "secrets" || sub[0] == "auth" || sub[0] == "policy" || sub[0] == "audit"):
 		return nil
 	case sub[0] == "kv" && len(sub) > 1 && sub[1] == verbGet:
 		return &leak{what: "vault kv get", safe: vaultSafe}
@@ -515,10 +522,10 @@ func safeSink(words []string, l *leak) bool {
 		return ok && (filterSafe(filter) || l.render && blanksSecrets(filter))
 	case name == kubectlCmd:
 		sub := nonFlags(args)
-		return len(sub) > 0 && (sub[0] == "apply" || sub[0] == "create" || sub[0] == "replace") && readsStdin(args) && !printsObject(args)
+		return len(sub) > 0 && (sub[0] == "apply" || sub[0] == verbCreate || sub[0] == "replace") && readsStdin(args) && !printsObject(args)
 	case name == "gh":
 		sub := nonFlags(args)
-		return len(sub) > 1 && sub[0] == "secret" && sub[1] == "set"
+		return len(sub) > 1 && sub[0] == "secret" && sub[1] == verbSet
 	}
 	return false
 }
@@ -535,7 +542,7 @@ func readsStdin(args []string) bool {
 // printsObject reports whether a kubectl write prints the object (-o).
 func printsObject(args []string) bool {
 	for _, a := range args {
-		if strings.HasPrefix(a, "-o") || a == "--output" || strings.HasPrefix(a, "--output=") {
+		if strings.HasPrefix(a, "-o") || a == flagOutput || strings.HasPrefix(a, "--output=") {
 			return true
 		}
 	}
