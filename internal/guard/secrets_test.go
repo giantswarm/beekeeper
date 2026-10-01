@@ -10,7 +10,7 @@ const (
 	keysForm   = "jq '.data|keys'"
 	lengthForm = "base64 -d | wc -c"
 	sopsForm   = "sops runs only in beekeeper"
-	opForm     = "op runs only in beekeeper"
+	opForm     = "op run -- <command>"
 	cryptForm  = "Decryption runs only in beekeeper"
 	vaultForm  = "vault kv metadata get"
 	renderForm = "yq 'del(.data, .stringData)'"
@@ -115,7 +115,11 @@ var secretCorpus = []struct{ cmd, safe string }{
 	{"op document get kubeconfig", opForm},
 	{"op inject -i tpl.yaml", opForm},
 	{"op run --no-masking -- env", opForm},
-	{"op run --env-file .env -- make test", opForm},
+	{"op run -- sops -d x.yaml", sopsForm},
+	{"op run -- op read op://v/i/f", opForm},
+	{"op run -- kubectl get secret app -o yaml", keysForm},
+	{"op run -- bash -c 'kubectl get secret app -o yaml'", keysForm},
+	{"op run -- helm template app ./chart -f secrets.yaml", renderForm},
 	{"op item list --vault x", opForm},
 	{"op item get app", opForm},
 	{"op item get app --fields label=password --reveal", opForm},
@@ -204,6 +208,10 @@ var secretCorpus = []struct{ cmd, safe string }{
 	{"vault kv get -format=json secret/app | jq '.data.data|keys'", ""},
 	{"vault kv metadata get secret/app", ""},
 	{"echo aGk= | base64 -d", ""},
+	{"op run -- make test", ""},
+	{"op run --env-file .env -- make test", ""},
+	{"op-unlock && op run -- ./scripts/release.sh", ""},
+	{"op run -- kubectl get secret app -o json | jq '.data|keys'", ""},
 	{"helm template app ./chart -f values.yaml", ""},
 	{"helm template app ./chart -f secrets.yaml | yq 'del(.data, .stringData)'", ""},
 	{"helm template app ./chart -f secrets.yaml | yq '.data |= keys | .stringData |= keys' > out.yaml", ""},
