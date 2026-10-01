@@ -57,9 +57,24 @@ func (d noteDraft) text() string {
 	return strings.Join(parts, " ")
 }
 
+// asking is a question that asks the person for something: a request
+// opened by one of these verbs.
+var asking = regexp.MustCompile(`(?i)^(please\s+)?(approve|decide|choose|pick|confirm|answer|review|merge|close|allow|grant|enable|disable|switch|sign|run|restart|delete|remove|rotate|reply|say|tell|give|set|add|accept|reject|unblock|check)\b`)
+
+// asks reports whether d asks its person something: a question mark, an
+// --option to choose, or a request verb opening it. Status text asks
+// nothing: it goes to `beekeeper log add`.
+func (d noteDraft) asks() bool {
+	q := strings.TrimSpace(d.Question)
+	return strings.Contains(q, "?") || len(d.Options) > 0 || asking.MatchString(q)
+}
+
 // missing names what d lacks for its person to answer it, one part each.
 func (d noteDraft) missing() []string {
 	var out []string
+	if !d.asks() {
+		out = append(out, "a question: it asks nothing (no ?, no --option, no request verb); a status line goes to `beekeeper log add \"<text>\"`")
+	}
 	if strings.TrimSpace(d.StatusQuo) == "" {
 		out = append(out, `--status-quo "<what is true now>"`)
 	}

@@ -225,6 +225,10 @@ type Agent struct {
 	AssignedAt time.Time `json:"assignedAt,omitzero"`
 	IdleSince  time.Time `json:"idleSince,omitzero"`
 	LastTask   string    `json:"lastTask,omitempty"`
+	// Done says the agent reported its work finished (agents idle --done):
+	// the doctor takes it off the roster and archives its desktop session
+	// once its CLI is idle.
+	Done bool `json:"done,omitempty"`
 }
 
 // Note is an open item: a question for a person, a deadline.

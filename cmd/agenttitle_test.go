@@ -87,13 +87,13 @@ func TestDelegate(t *testing.T) {
 		done = len(asked) == 2 // the first declines
 		return nil
 	}
-	s, err := delegate(context.Background(), "local_t", find, func(string) string { return "m" }, func() bool { return done }, send, 2*time.Second)
+	s, err := delegate(context.Background(), find, func(steward) string { return "m" }, func() bool { return done }, send, 2*time.Second)
 	if err != nil || s.host != "steward-1" || len(asked) != 2 {
 		t.Errorf("delegate = %+v, %v after %d asks; want local_1 after 2", s, err, len(asked))
 	}
 	asked, done = nil, false
 	send = func(context.Context, string, string) error { asked = append(asked, "x"); return nil }
-	if _, err := delegate(context.Background(), "local_t", find, func(string) string { return "m" }, func() bool { return false }, send, time.Second); err == nil || len(asked) != stewardTries {
+	if _, err := delegate(context.Background(), find, func(steward) string { return "m" }, func() bool { return false }, send, time.Second); err == nil || len(asked) != stewardTries {
 		t.Errorf("all decline: %v after %d asks", err, len(asked))
 	}
 }
@@ -175,16 +175,23 @@ func TestPickSteward(t *testing.T) {
 }
 
 // A removed agent's desktop session stays when beekeeper did not start it
-// or it keeps a role.
+// or it keeps a role, also a role's run whose relief was forgotten.
 func TestArchiveDesktopKeeps(t *testing.T) {
 	a := &app{}
 	ag := state.Party{Session: "a", Name: "worker"}
-	if got := a.archiveDesktop(context.Background(), &state.State{}, ag); !strings.Contains(got, "did not start it") {
+	archive := func(st *state.State, ag state.Party) string {
+		return a.archiveDesktops(context.Background(), st, []state.Party{ag}, "test")[0]
+	}
+	if got := archive(&state.State{}, ag); !strings.Contains(got, "did not start it") {
 		t.Errorf("not started: %q", got)
 	}
 	st := &state.State{Starts: []state.Start{{Party: ag}}, Supervisor: &state.Supervisor{Party: ag}}
-	if got := a.archiveDesktop(context.Background(), st, ag); !strings.Contains(got, "role") {
+	if got := archive(st, ag); !strings.Contains(got, "role") {
 		t.Errorf("supervisor: %q", got)
+	}
+	run := state.Party{Session: "r", Name: "Supervisor run 7"}
+	if got := archive(&state.State{Starts: []state.Start{{Party: run}}}, run); !strings.Contains(got, "role") {
+		t.Errorf("a role's run, its relief forgotten: %q", got)
 	}
 }
 

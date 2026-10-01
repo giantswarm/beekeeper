@@ -129,7 +129,7 @@ one "no change" line; --full prints everything.`,
 				if ag.Task != "" {
 					return nil, refused("%q is busy with %q since %s", ag.Name, ag.Task, clock(a.now, ag.AssignedAt))
 				}
-				ag.Task, ag.AssignedAt = task, a.now.UTC()
+				ag.Task, ag.AssignedAt, ag.Done = task, a.now.UTC(), false
 				who = ag.Name
 				return []state.Event{event(me, "agents.assign", "%s: %s", who, task)}, nil
 			})
@@ -140,10 +140,15 @@ one "no change" line; --full prints everything.`,
 			return err
 		},
 	}
+	var finished bool
 	idle := &cobra.Command{
 		Use:   "idle",
 		Short: "Report the calling agent's task done: idle again",
-		Args:  cobra.NoArgs,
+		Long: `Reports the calling agent's task done: idle again, ready for the next.
+With --done its work is finished: the watch's doctor takes it off the
+roster and archives the desktop session beekeeper started for it once its
+CLI is idle (beekeeper doctor; the desktop's Archived list brings it back).`,
+		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			me, err := a.caller()
 			if err != nil {
@@ -156,15 +161,25 @@ one "no change" line; --full prints everything.`,
 				}
 				ag := &st.Agents[i]
 				reportIdle(ag, a.now)
-				return []state.Event{event(me, "agents.idle", "%s done: %s", ag.Name, ag.LastTask)}, nil
+				ag.Done = finished
+				verb := "agents.idle"
+				if finished {
+					verb = "agents.done"
+				}
+				return []state.Event{event(me, verb, "%s done: %s", ag.Name, ag.LastTask)}, nil
 			})
 			if err != nil {
+				return err
+			}
+			if finished {
+				_, err = fmt.Fprintf(a.out, "register: %s finished: off the roster and archived once its turn ends\n", me.Name)
 				return err
 			}
 			_, err = fmt.Fprintf(a.out, "register: %s idle, ready for a task\n", me.Name)
 			return err
 		},
 	}
+	idle.Flags().BoolVar(&finished, "done", false, "the work is finished: the doctor removes and archives the agent once idle")
 	var keepDesktop bool
 	remove := &cobra.Command{
 		Use:   "remove <agent>",
@@ -199,7 +214,7 @@ archive it. A session its person started is never archived.`,
 			if err != nil {
 				return err
 			}
-			line := a.archiveDesktop(cmd.Context(), st, gone)
+			line := a.archiveDesktops(cmd.Context(), st, []state.Party{gone}, "beekeeper agents remove "+gone.Name)[0]
 			_ = a.store.Update(func(*state.State) ([]state.Event, error) {
 				return []state.Event{event(me, "agents.archive", "%s: %s", gone.Name, line)}, nil
 			})

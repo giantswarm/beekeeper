@@ -121,6 +121,13 @@ guide:                      # the guide's role: what guide handover --prompt tel
 agents:                     # the hand-over of registered agents
   relayAt: 400k             # watch says HANDOVER DUE once an agent's context reaches this; default: supervisor.relayAt
   noteWait: 3m              # agents handover waits this long for the agent's note
+  staleAfter: 24h           # the doctor takes an idle agent with no CLI running off the roster after this; 0: never
+doctor:                     # known faults the doctor (beekeeper doctor, every watch poll) probes and remedies
+  faults:
+    - name: registry-login  # an example: a login unit answering 401, fixed by a restart
+      probe: systemctl --user is-active --quiet registry-login.service   # exits 0 while the fault is absent
+      remedy: systemctl --user restart registry-login.service
+      unattended: true      # the watch runs the remedy by itself; false: one note for guide.person
 reporter:                   # the scheduled status reporter the standby watch starts; off without every and brief
   every: 1h                 # one report per interval, on its multiples (on the hour)
   brief: ~/.local/state/desk/report-brief.md   # what to report and where to post it

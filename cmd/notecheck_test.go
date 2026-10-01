@@ -47,17 +47,19 @@ func TestNoteForPersonRefusesWhatItLacks(t *testing.T) {
 		edit func(*noteDraft)
 		want string
 	}{
-		"bare #N":           {func(d *noteDraft) { d.Question = "approve #7" }, "#7 without its full URL"},
-		"owner/repo#N":      {func(d *noteDraft) { d.StatusQuo = "x/y#7 is open" }, "x/y#7 without its full URL"},
-		"no status quo":     {func(d *noteDraft) { d.StatusQuo = "" }, "--status-quo"},
-		"no why":            {func(d *noteDraft) { d.Why = " " }, "--why"},
-		"option, no effect": {func(d *noteDraft) { d.Options = []string{"publish"} }, `--option "publish" has no`},
-		"default wait":      {func(d *noteDraft) { d.Default = "Wait." }, `--default "Wait." is no action`},
-		"default nothing":   {func(d *noteDraft) { d.Default = "nothing" }, "is no action"},
-		"no default":        {func(d *noteDraft) { d.Default = "" }, "is no action"},
-		"claim unchecked":   {func(d *noteDraft) { d.StatusQuo = "CI is green" }, `"green" without --checked`},
-		"login, no probe":   {func(d *noteDraft) { d.Kind = noteLogin }, "--until"},
-		"probe, no login":   {func(d *noteDraft) { d.Until = "true" }, "--until without --kind login"},
+		"bare #N":            {func(d *noteDraft) { d.Question = "approve #7" }, "#7 without its full URL"},
+		"owner/repo#N":       {func(d *noteDraft) { d.StatusQuo = "x/y#7 is open" }, "x/y#7 without its full URL"},
+		"no status quo":      {func(d *noteDraft) { d.StatusQuo = "" }, "--status-quo"},
+		"no why":             {func(d *noteDraft) { d.Why = " " }, "--why"},
+		"option, no effect":  {func(d *noteDraft) { d.Options = []string{"publish"} }, `--option "publish" has no`},
+		"default wait":       {func(d *noteDraft) { d.Default = "Wait." }, `--default "Wait." is no action`},
+		"default nothing":    {func(d *noteDraft) { d.Default = "nothing" }, "is no action"},
+		"no default":         {func(d *noteDraft) { d.Default = "" }, "is no action"},
+		"claim unchecked":    {func(d *noteDraft) { d.StatusQuo = "CI is green" }, `"green" without --checked`},
+		"login, no probe":    {func(d *noteDraft) { d.Kind = noteLogin }, "--until"},
+		"probe, no login":    {func(d *noteDraft) { d.Until = "true" }, "--until without --kind login"},
+		"status only":        {func(d *noteDraft) { d.Question = "Board pull 83 finished its epic." }, "asks nothing"},
+		"status, to the log": {func(d *noteDraft) { d.Question = "worker done" }, "beekeeper log add"},
 	} {
 		d := full
 		c.edit(&d)
@@ -71,6 +73,13 @@ func TestNoteForPersonRefusesWhatItLacks(t *testing.T) {
 	ok.Question += " like note #3, timer #4 and " + prURL + "#issuecomment-1"
 	if m := ok.missing(); len(m) != 0 {
 		t.Fatalf("checked claims, note and timer ids and URL fragments are fine, lacks %q", m)
+	}
+	for _, q := range []string{"Which lab gets the run?", "Please merge " + prURL} {
+		d := full
+		d.Question = q
+		if m := d.missing(); len(m) != 0 {
+			t.Errorf("%q asks, lacks %q", q, m)
+		}
 	}
 }
 
