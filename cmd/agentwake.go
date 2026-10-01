@@ -143,16 +143,25 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 
 // wakeOmp writes msg to the inbox of the omp agent ag, started under id.
 func (a *app) wakeOmp(by state.Party, ag state.Agent, id, msg string) error {
-	err := omp.Send(omp.InboxPath(a.cfg.StateDir, id), msg)
-	if errors.Is(err, omp.ErrNotRunning) {
-		return refused("%s: its omp agent no longer runs (%s ended): start it again with agents start --harness omp", ag.Name, ompUnit(id))
-	}
-	if err != nil {
-		return fmt.Errorf("waking %s: %w", ag.Name, err)
+	if err := a.sendOmp(ag.Name, id, msg); err != nil {
+		return err
 	}
 	_ = a.store.Log(event(by, "agents.wake", "%s: written to its omp inbox", ag.Name))
-	_, err = fmt.Fprintf(a.out, "wake: %s runs (omp): written to its inbox, it runs the message at its next tool round or as its next turn\n", ag.Name)
+	_, err := fmt.Fprintf(a.out, "wake: %s runs (omp): written to its inbox, it runs the message at its next tool round or as its next turn\n", ag.Name)
 	return err
+}
+
+// sendOmp writes msg to the inbox of the omp agent name, started under id;
+// one whose process ended is refused.
+func (a *app) sendOmp(name, id, msg string) error {
+	err := omp.Send(omp.InboxPath(a.cfg.StateDir, id), msg)
+	if errors.Is(err, omp.ErrNotRunning) {
+		return refused("%s: its omp agent no longer runs (%s ended): start it again with agents start --harness omp", name, ompUnit(id))
+	}
+	if err != nil {
+		return fmt.Errorf("messaging %s: %w", name, err)
+	}
+	return nil
 }
 
 // resolveWake finds the session an agent's wake resumes. A desktop session

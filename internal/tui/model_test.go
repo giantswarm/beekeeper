@@ -40,6 +40,18 @@ type fakeSource struct {
 	dataCalls int
 	tailCall  string
 	tailN     int
+
+	sendTo, sendText string
+	sendErr          error
+}
+
+// Send records the message and answers as told.
+func (f *fakeSource) Send(_ context.Context, session, text string) (string, error) {
+	f.sendTo, f.sendText = session, text
+	if f.sendErr != nil {
+		return "", f.sendErr
+	}
+	return "queued in its CLI", nil
 }
 
 // Data records the call and answers with what the test set up.
@@ -471,6 +483,75 @@ func TestOpenPaneFollowsLive(t *testing.T) {
 	m.Update(tailMsg{session: tBee, err: errors.New("transcript moved")})
 	if v := m.View(); m.tailState != 2 || !strings.Contains(v, "green") || !strings.Contains(v, "transcript moved") {
 		t.Errorf("a failed re-read dropped the turns or the reason (state %d):\n%s", m.tailState, v)
+	}
+}
+
+func TestMessageFromThePane(t *testing.T) {
+	src := &fakeSource{data: fixtureData(), turns: []Turn{{At: testAt, Role: roleAssistant, Text: "working"}}}
+	m := newTestModel(t, src)
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
+	_, c := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	for _, msg := range msgs(c) {
+		m.Update(msg)
+	}
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m")})
+	if !m.composing {
+		t.Fatal("m did not open the message line")
+	}
+	// Every key is the message's now: q, j and G are letters, not
+	// commands.
+	for _, k := range []tea.KeyMsg{
+		{Type: tea.KeyRunes, Runes: []rune("q")}, {Type: tea.KeySpace},
+		{Type: tea.KeyRunes, Runes: []rune("jGx")}, {Type: tea.KeyBackspace},
+	} {
+		m.key(k)
+	}
+	if m.quitting || string(m.draft) != "q jG" {
+		t.Fatalf("draft = %q (quitting %v), want the keys typed", string(m.draft), m.quitting)
+	}
+	if v := m.View(); !strings.Contains(v, "message › q jG") || !strings.Contains(v, "enter send") {
+		t.Errorf("the pane shows no message line or hints:\n%s", v)
+	}
+	_, c = m.key(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.composing || !m.sending || c == nil {
+		t.Fatalf("enter did not send: composing %v sending %v", m.composing, m.sending)
+	}
+	if !strings.Contains(m.View(), "sending…") {
+		t.Errorf("a message on its way is not shown:\n%s", m.View())
+	}
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m")})
+	if m.composing {
+		t.Error("m opened a second message while one is on its way")
+	}
+	m.Update(c())
+	if src.sendTo != tBee || src.sendText != "q jG" {
+		t.Errorf("Send(%q, %q), want bee and the draft", src.sendTo, src.sendText)
+	}
+	if v := m.View(); m.sending || !strings.Contains(v, "sent: queued in its CLI") {
+		t.Errorf("the outcome is not shown (sending %v):\n%s", m.sending, v)
+	}
+
+	// An empty draft sends nothing; esc drops a draft; a refusal says why.
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m")})
+	if _, c := m.key(tea.KeyMsg{Type: tea.KeyEnter}); c != nil || !m.composing {
+		t.Error("an empty draft was sent")
+	}
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hi")})
+	m.key(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.composing || len(m.draft) != 0 || m.detail == "" {
+		t.Errorf("esc did not drop just the draft: composing %v draft %q pane %q", m.composing, string(m.draft), m.detail)
+	}
+	src.sendErr = errors.New("an omp session beekeeper did not start takes no message")
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m")})
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hi")})
+	_, c = m.key(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(c())
+	if !strings.Contains(m.View(), "not sent: an omp session") {
+		t.Errorf("a refusal is not shown:\n%s", m.View())
+	}
+	m.key(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.sent != "" {
+		t.Error("closing the pane kept the last outcome")
 	}
 }
 

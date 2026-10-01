@@ -485,14 +485,10 @@ func commandName(args string) string {
 }
 
 // sessionTail reads the last n turns of the session q names (a name, id or
-// PID) from its harness's transcript; with tools, the tool calls are turns
-// too.
-func (a *app) sessionTail(q string, n int, tools bool) ([]claude.Turn, error) {
-	raw, _, err := a.sessions()
-	if err != nil {
-		return nil, err
-	}
-	s, err := claude.Resolve(raw, q)
+// PID) among sessions from its harness's transcript; with tools, the tool
+// calls are turns too.
+func sessionTail(sessions []*claude.Session, q string, n int, tools bool) ([]claude.Turn, error) {
+	s, err := claude.Resolve(sessions, q)
 	if err != nil {
 		return nil, err
 	}
@@ -521,7 +517,11 @@ results: its own words, the person's and its peers' messages. The session is
 a name (or a unique part of it), a session id or a PID.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			turns, err := a.sessionTail(args[0], n, false)
+			raw, _, err := a.sessions()
+			if err != nil {
+				return err
+			}
+			turns, err := sessionTail(raw, args[0], n, false)
 			if err != nil {
 				return err
 			}

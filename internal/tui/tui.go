@@ -4,8 +4,9 @@
 // lanes, the supervisor and guide, the agents, notes and timers, the
 // GitHub budget, the installations' alerts and the event log.
 //
-// It reads only: it takes no lease and lifts no hold — those stay with the
-// commands, whose exit codes the sessions gate on. The data comes through
+// Besides the person's messages to a session it reads only: it takes no
+// lease and lifts no hold — those stay with the commands, whose exit codes
+// the sessions gate on. The data comes through
 // a Source, so the model is testable without a machine; cmd supplies one
 // built from the same view code the commands print.
 package tui
@@ -27,6 +28,9 @@ type Source interface {
 	// said and what it was told. session is a name, id or PID as in
 	// `beekeeper tail`.
 	Tail(ctx context.Context, session string, turns int) ([]Turn, error)
+	// Send delivers the person's message to one session and says where
+	// it went; a session that takes no message is an error.
+	Send(ctx context.Context, session, text string) (string, error)
 }
 
 // Options tunes the run.

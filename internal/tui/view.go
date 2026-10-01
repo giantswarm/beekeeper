@@ -78,7 +78,7 @@ func bodyView(m *model, w, h int) string {
 	d := m.data
 	if m.detail != "" {
 		if s := sessionNamed(d.Sessions, m.detail); s != nil {
-			return detailView(d, *s, w, h, m.tail, m.tailState, m.tailBack, m.tailErr)
+			return detailView(d, *s, w, h, m.pane())
 		}
 	}
 	switch m.tab {
@@ -203,7 +203,10 @@ func footerView(m *model, w int) string {
 	hints := []string{"1-6 tabs", "j/k move", "enter details", "r refresh", "q quit",
 		"g/G ends", "pgup/pgdn page"}
 	if m.detail != "" {
-		hints = []string{"k/j older/newer", "G live", "esc close", "q quit", "g oldest"}
+		hints = []string{"m message", "k/j older/newer", "G live", "esc close", "q quit", "g oldest"}
+		if m.composing {
+			hints = []string{"enter send", "esc drop", "ctrl+u clear"}
+		}
 	}
 	used := ansiWidth(line)
 	for _, hint := range hints {
@@ -767,9 +770,10 @@ func mergeCell(m Merges) string {
 // detailView is a session's pane: its facts in two aligned columns
 // under section rules, absolute time with the age beside it, and the
 // transcript in the rest of the height, newest at the bottom: the
-// history, then the current turn as it runs. back is how many turns the
-// person scrolled back from the newest; 0 follows live.
-func detailView(d *Data, s Session, w, h int, tail []Turn, state, back int, err string) string {
+// history, then the current turn as it runs, and under it the message
+// line while the person writes, sends or has sent one.
+func detailView(d *Data, s Session, w, h int, p pane) string {
+	tail, state, back, err := p.tail, p.state, p.back, p.err
 	t := newTabLines(w, -1)
 	t.rule(style.Head.Render(fit(s.Name, w-30)), "esc close  k/j scroll")
 	lab := func(l string) string { return style.Dim.Render(pad(l, 9)) }
@@ -836,6 +840,7 @@ func detailView(d *Data, s Session, w, h int, tail []Turn, state, back int, err 
 		badge = "failed"
 	}
 	t.rule("transcript", badge)
+	msg := messageLine(p, w)
 	switch state {
 	case 1:
 		t.dim("loading…")
@@ -849,9 +854,36 @@ func detailView(d *Data, s Session, w, h int, tail []Turn, state, back int, err 
 			t.dim("empty")
 		}
 		room := h - len(t.all)
+		if msg != "" {
+			room--
+		}
 		t.all = append(t.all, turnLines(tail[:len(tail)-min(back, len(tail))], w, room, d.At)...)
 	}
+	if msg != "" {
+		// The message line stays in sight: the pane's last line, even
+		// when the facts above fill the window.
+		lines := t.all[:min(len(t.all), max(0, h-1))]
+		return strings.Join(append(lines, msg), "\n")
+	}
 	return t.show(h)
+}
+
+// messageLine is the pane's last line: the draft with its cursor while
+// the person writes, the delivery while it runs, then its outcome; ""
+// when there is none of these.
+func messageLine(p pane, w int) string {
+	switch {
+	case p.composing:
+		draft := fitLeft(p.draft, max(1, w-12))
+		return fit(style.Head.Render("message › ")+draft+"█", w)
+	case p.sending:
+		return fit(style.Dim.Render("message › sending…"), w)
+	case p.sent != "" && p.sendErr:
+		return fit(style.Warn.Render(trimWord(p.sent, w)), w)
+	case p.sent != "":
+		return fit(style.OK.Render(trimWord(p.sent, w)), w)
+	}
+	return ""
 }
 
 // turnLines lays out turns in at most room lines, the newest last: each
