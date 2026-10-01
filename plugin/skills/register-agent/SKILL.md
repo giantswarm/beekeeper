@@ -20,8 +20,9 @@ session, and beekeeper takes this one off the roster and archives it once its tu
 
 ## Context
 
-- **The supervisor** is the session `beekeeper supervisor status` names (exit 3: none runs); its
-  title in `ListAgents` is the address, and messages go to it by name with `SendMessage`.
+- **The supervisor** is the session `beekeeper supervisor status` names (exit 3: none runs); messages
+  go to it by `SendMessage` to `the supervisor`, which beekeeper's hook delivers to the current
+  holder.
 - **The registration** is `beekeeper agents register [--name <name>]`, which puts the session on the
   roster under its title and prints the message's first line, which stands alone: `register:
   <session name> idle, ready for a task`. `beekeeper agents idle` marks a finished task and prints
@@ -55,7 +56,7 @@ session, and beekeeper takes this one off the roster and archives it once its tu
 ## Constraints
 
 - **The task is worked under the `worker-rules` skill** and the desk's own conventions (the
-  project's CLAUDE.md and rules), with the supervisor its brief or message names; nothing here
+  project's CLAUDE.md and rules), with the supervisor as the one it reports to; nothing here
   restates or relaxes them. The session moves its own board item at the start and the close.
 - **An unanswered grant is no reason to sit still.** When a grant or go stays unanswered
   for 20 minutes, the session carries on with the work that needs none. A merge needs no word: the

@@ -391,3 +391,22 @@ func TestOutbound(t *testing.T) {
 		t.Errorf("sweep defaults: roots %q depth %d, want the home directory 5 deep", o.SweepRoots, o.SweepDepth)
 	}
 }
+
+func TestAgentShell(t *testing.T) {
+	c := &Config{}
+	if err := c.defaults(); err != nil {
+		t.Fatal(err)
+	}
+	if sh := c.Agents.Shell; !slices.Equal(sh.Unalias, DefaultUnalias) || sh.Globs != GlobsLiteral {
+		t.Errorf("defaults: %+v", sh)
+	}
+	for _, bad := range []AgentShell{{Globs: "nullglob"}, {Unalias: []string{"grep; rm -rf ~"}}} {
+		if err := (&Config{Agents: Agents{Shell: bad}}).validate(); err == nil {
+			t.Errorf("%+v: want an error", bad)
+		}
+	}
+	none := &Config{Agents: Agents{Shell: AgentShell{Unalias: []string{}, Globs: GlobsShell}}}
+	if err := none.defaults(); err != nil || len(none.Agents.Shell.Unalias) != 0 || none.Agents.Shell.Globs != GlobsShell {
+		t.Errorf("an empty list and shell stay: %+v %v", none.Agents.Shell, err)
+	}
+}

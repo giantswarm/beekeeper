@@ -52,3 +52,44 @@ func TestSendMessageRefusedWhenTheNameIsAmbiguous(t *testing.T) {
 		t.Fatalf("want a refusal, got %+v", d)
 	}
 }
+
+const guideHost = "local_g"
+
+func TestSendMessageToARoleGoesToItsHolder(t *testing.T) {
+	holders := map[string]string{RoleSupervisor: "Supervisor run 60", RoleGuide: guideHost}
+	var peered string
+	h := Hook{
+		Role: func(r string) (string, error) { return holders[r], nil },
+		Peer: func(host string) (string, error) { peered = host; return "", nil },
+	}
+	for _, to := range []string{"the supervisor", "Supervisor", "  The  Supervisor "} {
+		d := decideSend(t, h, to)
+		if d == nil || d.PermissionDecision != decisionAllow || d.UpdatedInput["to"] != "Supervisor run 60" || d.UpdatedInput["message"] != "hi" {
+			t.Fatalf("%q: want the holder, got %+v", to, d)
+		}
+		if !strings.Contains(d.Reason, "the supervisor is Supervisor run 60 now") {
+			t.Errorf("%q: reason %q", to, d.Reason)
+		}
+	}
+	// A holder whose CLI is not running is its desktop session, which the
+	// desktop starts.
+	d := decideSend(t, h, "the guide")
+	if d == nil || d.UpdatedInput["to"] != guideHost || peered != guideHost {
+		t.Fatalf("guide: %+v (peered %q)", d, peered)
+	}
+	// A session's own name is no role.
+	if d := decideSend(t, h, "supervisor run 59"); d != nil {
+		t.Fatalf("a name passes: %+v", d)
+	}
+}
+
+func TestSendMessageToARoleWithoutAHolderIsRefused(t *testing.T) {
+	h := Hook{Role: func(string) (string, error) { return "", errors.New("no session holds the supervisor's role") }}
+	d := decideSend(t, h, "the supervisor")
+	if d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "no session holds") {
+		t.Fatalf("want a refusal, got %+v", d)
+	}
+	if d := decideSend(t, Hook{}, "the supervisor"); d != nil {
+		t.Fatalf("no role lookup: pass, got %+v", d)
+	}
+}

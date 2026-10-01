@@ -19,6 +19,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -254,7 +255,38 @@ type Agents struct {
 	// StaleAfter is how long an idle agent whose CLI no longer runs stays on
 	// the roster before the doctor takes it off (24h).
 	StaleAfter Duration `yaml:"staleAfter"`
+	// Shell is the prelude of every agent shell (beekeeper hook
+	// sessionstart).
+	Shell AgentShell `yaml:"shell"`
 }
+
+// AgentShell configures the prelude Claude Code runs before each Bash
+// command of a session: the person's interactive shell setup (aliases, the
+// harness's own tool shadows, zsh's nomatch) breaks the commands agents
+// write for the plain tools.
+type AgentShell struct {
+	// Unalias are the commands whose alias or shell function the prelude
+	// removes, so the name runs the tool on PATH (default: grep, find, ls,
+	// cp, mv, rm; an empty list removes none).
+	Unalias []string `yaml:"unalias"`
+	// Globs is what an unmatched glob does: GlobsLiteral (the default)
+	// passes it on as written, GlobsShell leaves the shell's own behaviour
+	// (zsh: "no matches found", the command does not run).
+	Globs string `yaml:"globs"`
+}
+
+// The values of agents.shell.globs.
+const (
+	GlobsLiteral = "literal"
+	GlobsShell   = "shell"
+)
+
+// DefaultUnalias are the commands an agent shell runs unshadowed by default.
+var DefaultUnalias = []string{"grep", "find", "ls", "cp", "mv", "rm"}
+
+// commandName is what agents.shell.unalias takes: a name, nothing a shell
+// would read as more.
+var commandName = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.+-]*$`)
 
 // Doctor configures the known faults the doctor probes and remedies.
 type Doctor struct {
@@ -905,6 +937,10 @@ func (c *Config) defaults() error {
 	}
 	setDur(&c.Agents.NoteWait, 3*time.Minute)
 	setDur(&c.Agents.StaleAfter, 24*time.Hour)
+	if c.Agents.Shell.Unalias == nil {
+		c.Agents.Shell.Unalias = DefaultUnalias
+	}
+	setStr(&c.Agents.Shell.Globs, GlobsLiteral)
 	c.Reporter.defaults(home, c.Guide.Person)
 	c.Outbound.defaults(home)
 	setStr(&c.Plans.Check, DefaultPlansCheck)
@@ -1044,6 +1080,14 @@ func (r *Reporter) defaults(home, person string) {
 }
 
 func (c *Config) validate() error {
+	if g := c.Agents.Shell.Globs; g != "" && g != GlobsLiteral && g != GlobsShell {
+		return fmt.Errorf("agents.shell.globs: %q: want %s or %s", g, GlobsLiteral, GlobsShell)
+	}
+	for _, n := range c.Agents.Shell.Unalias {
+		if !commandName.MatchString(n) {
+			return fmt.Errorf("agents.shell.unalias: %q is no command name", n)
+		}
+	}
 	for i, r := range c.Outbound.StoreDeny {
 		for _, g := range []string{r.Vault, r.Item} {
 			if _, err := filepath.Match(g, ""); err != nil {
