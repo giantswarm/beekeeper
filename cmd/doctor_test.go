@@ -14,7 +14,7 @@ import (
 )
 
 // The doctor takes a finished worker off the roster once its CLI is idle,
-// a relieved role holder at once and an idle worker without a CLI once it
+// a desktop CLI kept warm included, a relieved role holder at once and an idle worker without a CLI once it
 // went stale, archiving the desktop sessions of the finished and the stale
 // ones; it retitles a started session the desktop dropped the title of,
 // and leaves busy agents, role holders and sessions a person started alone.
@@ -25,18 +25,19 @@ func TestPlanChores(t *testing.T) {
 	}
 	done, doneBusy := agent("done", time.Minute), agent("done-busy", time.Minute)
 	done.Done, doneBusy.Done = true, true
-	task := agent("task", 48*time.Hour)
-	task.Task = "a task"
+	task, doneTask := agent("task", 48*time.Hour), agent("done-task", time.Minute)
+	task.Task, doneTask.Task, doneTask.Done = "a task", "a new task", true
 	st := &state.State{
 		Agents: []state.Agent{done, doneBusy, agent("relieved", 0), agent("stale", 48*time.Hour), agent("stale-live", 48*time.Hour),
-			agent("fresh", time.Hour), task, agent("holder", 48*time.Hour), agent("untitled", 0), agent("titled", 0), agent("own", 0), agent("archived", 0)},
+			agent("fresh", time.Hour), task, agent("holder", 48*time.Hour), agent("untitled", 0), agent("titled", 0), agent("own", 0), agent("archived", 0), doneTask},
 		Supervisor: &state.Supervisor{Party: state.Party{Session: "holder"}},
 		Relieved:   []state.Relief{{Party: state.Party{Session: "relieved"}}},
 	}
 	for _, id := range []string{"untitled", "titled", "archived", "holder"} {
 		st.Starts = append(st.Starts, state.Start{Party: state.Party{Session: id, HostSession: "local_" + id}})
 	}
-	sessions := []*claude.Session{{ID: "stale-live"}, {ID: "untitled"}, {ID: "titled"}, {ID: "own"}}
+	// done's CLI still runs, idle: the desktop keeps the session warm.
+	sessions := []*claude.Session{{ID: "done"}, {ID: "done-busy"}, {ID: "done-task"}, {ID: "stale-live"}, {ID: "untitled"}, {ID: "titled"}, {ID: "own"}}
 	record := func(host string) (*claude.Record, bool) {
 		switch host {
 		case "local_untitled":
