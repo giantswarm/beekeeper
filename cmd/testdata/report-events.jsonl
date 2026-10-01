@@ -1,0 +1,10 @@
+{"at":"2026-09-27T21:55:00Z","by":{"name":"worker one"},"verb":"merged","detail":"example/tools#40 exit 0, release v1.3.0-rc.1, output in /x"}
+{"at":"2026-09-27T22:05:00Z","by":{"name":"worker one"},"verb":"merged","detail":"example/tools#41 exit 0, release v1.4.0-rc.1, output in /x"}
+{"at":"2026-09-27T22:10:00Z","by":{"name":"worker two"},"verb":"merge.failed","detail":"example/portal#7 exit 1, nothing merged"}
+{"at":"2026-09-27T22:12:00Z","by":{"name":"worker two"},"verb":"merged","detail":"example/portal#7 exit 0, release v2.0.1, output in /x"}
+{"at":"2026-09-27T22:20:00Z","by":{"name":"beekeeper watch"},"verb":"lane.settled","detail":"example/portal: example/portal#7 rolled, HelmReleases of staging Ready"}
+{"at":"2026-09-27T22:30:00Z","by":{"name":"worker one"},"verb":"merged","detail":"example/tools promote exit 0, release v1.4.0, output in /x"}
+{"at":"2026-09-27T22:40:00Z","by":{"name":"worker three"},"verb":"merged","detail":"other/notebook#12 exit 0, release unknown, plain squash merge, output in /x"}
+{"at":"2026-09-27T22:45:00Z","by":{"name":"worker two"},"verb":"merged","detail":"example/portal#8 exit 0, release v2.0.2, output in /x"}
+{"at":"2026-09-27T22:58:00Z","by":{"name":"worker three"},"verb":"merged","detail":"other/notebook#12 exit 0, release unknown, plain squash merge, output in /x"}
+{"at":"2026-09-27T23:01:00Z","by":{"name":"worker one"},"verb":"merged","detail":"example/tools#42 exit 0, release v1.5.0-rc.1, output in /x"}

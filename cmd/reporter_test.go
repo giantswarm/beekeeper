@@ -73,7 +73,7 @@ func reportingWatch(t *testing.T, dir string) (*watcher, *[]string, *bytes.Buffe
 	w.turnEnded = func(context.Context, string) bool { return false }
 	w.zone = func() (*time.Location, error) { return time.LoadLocation("Europe/Athens") }
 	w.runReport = func(unit, id, name, prompt string) error {
-		if !strings.HasPrefix(unit, "beekeeper-report-"+id[:8]) || !strings.Contains(prompt, "to Ada") || !strings.Contains(prompt, "–"+strings.TrimPrefix(name, "Status report ")+" EEST; every time in the post is in Europe/Athens") || !strings.Contains(prompt, "beekeeper reporter check") || !strings.HasSuffix(prompt, "Post it.") {
+		if !strings.HasPrefix(unit, "beekeeper-report-"+id[:8]) || !strings.Contains(prompt, "to Ada") || !strings.Contains(prompt, "–"+strings.TrimPrefix(name, "Status report ")+" EEST, every time in Europe/Athens") || !regexp.MustCompile("`beekeeper report --since \\S+\\+03:00 --until \\S+T"+strings.TrimPrefix(name, "Status report ")+":00\\+03:00`").MatchString(prompt) || !strings.Contains(prompt, "beekeeper reporter check") || !strings.HasSuffix(prompt, "Post it.") {
 			t.Errorf("launch %s %s %q", unit, name, prompt)
 		}
 		launched = append(launched, name)

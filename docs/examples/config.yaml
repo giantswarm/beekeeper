@@ -135,6 +135,8 @@ reporter:                   # the scheduled status reporter the standby watch st
   person: Ada               # who the report is for; default: guide.person
   dir: ~/projects/notebook  # the session's working directory; default: home
   timeout: 20m              # a reporter that has not posted by then is stopped
+  tz: Europe/Berlin         # the report's time zone; default: the machine's
+  reviews: [example/plans]  # repositories whose open draft pull requests wait for the person's review
 
 claude:
   desktopApp: claude-desktop   # the default; the desktop app's executable, which opens claude:// links

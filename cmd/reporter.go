@@ -19,7 +19,6 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
-	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/post"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -133,11 +132,7 @@ func (w *watcher) startReport(ctx context.Context, sessions []*claude.Session, a
 	if err != nil {
 		return err
 	}
-	readZone := w.zone
-	if readZone == nil {
-		readZone = machine.Zone
-	}
-	zone, err := readZone()
+	zone, err := reportZone(rc.TZ, w.zone)
 	if err != nil {
 		return err
 	}
@@ -224,24 +219,25 @@ func reportSettings(self string) string {
 	return string(raw)
 }
 
-// reportPrompt is the reporter's first prompt: who the report is for, what
-// it covers in the person's time zone (the machine's), and how the post must
-// look, then the brief.
+// reportPrompt is the reporter's first prompt: who the report is for, the
+// beekeeper report command that renders it for the interval, in the
+// report's time zone, and how the post must look, then the brief.
 func reportPrompt(rc config.Reporter, from, to time.Time, zone *time.Location, final bool, brief string) string {
-	from, to = from.In(zone), to.In(zone)
-	span := from.Format("15:04") + "–" + to.Format("15:04 MST")
+	span := from.In(zone).Format("15:04") + "–" + to.In(zone).Format("15:04 MST")
 	last := ""
 	if final {
 		last = fmt.Sprintf("This is the last report before the %s reports pause until they are resumed: say so in one line at its end. ", dur(rc.Every.Duration))
 	}
-	return fmt.Sprintf("You are beekeeper's scheduled status reporter. %sReport %s to %s, "+
-		"posted exactly once. Its first line gives the range %s; every time in the post is in %s (%s), never UTC. "+
-		"The connector's message is standard Markdown, which it converts for Slack: every pull request or issue is a link "+
-		"to it in its own repository, [<repo>#<n>](https://github.com/<owner>/<repo>/pull/<n>), never a bare #<n>, not even in a session's name; a beekeeper note is \"note <n>\": "+
-		"check the text with `beekeeper reporter check` (it reads stdin) before posting; a post that fails the check is refused "+
-		"with what to fix. Once the post has gone out, end your turn: beekeeper sees the post, "+
-		"takes you off the roster and stops this session.\n\n%s",
-		last, span, rc.Person, span, zone, to.Format("MST"), brief)
+	render := fmt.Sprintf("beekeeper report --since %s --until %s", from.In(zone).Format(time.RFC3339), to.In(zone).Format(time.RFC3339))
+	return fmt.Sprintf("You are beekeeper's scheduled status reporter. %sReport %s to %s, posted exactly once. "+
+		"Run `%s` once: it renders the whole report from beekeeper's own state, its first line the range %s, "+
+		"every time in %s (%s), never UTC, every pull request or issue a link to its own repository, and it passes "+
+		"`beekeeper reporter check`. Post its output unchanged; you may add at most three sentences of your own judgement "+
+		"at its end, or none, and run nothing else. The connector's message is standard Markdown, which it converts for Slack: "+
+		"a pull request or issue you name is [<repo>#<n>](https://github.com/<owner>/<repo>/pull/<n>), never a bare #<n>; "+
+		"a beekeeper note is \"note <n>\". A post that fails the check is refused with what to fix. Once the post has gone out, "+
+		"end your turn: beekeeper sees the post, takes you off the roster and stops this session.\n\n%s",
+		last, span, rc.Person, render, span, zone, to.In(zone).Format("MST"), brief)
 }
 
 // skipReport records, once per slot, that the slot's reporter was not
@@ -384,15 +380,15 @@ syntax, every #<n> or [owner/]repo#<n> outside a link, session names
 included (a beekeeper note or timer is "note <n>", without the #), a
 GitHub pull request or issue
 link whose label does not name its repository and number, a first line
-that does not name the machine's time zone (read live, as timedatectl sets
-it), and a time in UTC.`,
+that does not name the report's time zone (reporter.tz, else the machine's,
+read live as timedatectl sets it), and a time in UTC.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			raw, err := io.ReadAll(os.Stdin)
 			if err != nil {
 				return err
 			}
-			zone, err := machine.Zone()
+			zone, err := reportZone(a.cfg.Reporter.TZ, nil)
 			if err != nil {
 				return err
 			}

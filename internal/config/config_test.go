@@ -244,7 +244,11 @@ func TestLoadReporter(t *testing.T) {
 	if c, err := Load(write("")); err != nil || c.Reporter.Enabled() {
 		t.Errorf("no reporter section: %+v, %v", c.Reporter, err)
 	}
-	for _, raw := range []string{"reporter: {every: 1h}\n", "reporter: {every: 10s, brief: b.md}\n"} {
+	if c, err := Load(write("reporter: {every: 1h, brief: b.md, tz: Europe/Athens, reviews: [example/plans]}\n")); err != nil || c.Reporter.TZ != "Europe/Athens" || c.Reporter.Reviews[0] != "example/plans" {
+		t.Errorf("tz and reviews: %+v, %v", c.Reporter, err)
+	}
+	for _, raw := range []string{"reporter: {every: 1h}\n", "reporter: {every: 10s, brief: b.md}\n",
+		"reporter: {every: 1h, brief: b.md, tz: Mars/Olympus}\n", "reporter: {every: 1h, brief: b.md, reviews: [plans]}\n"} {
 		if _, err := Load(write(raw)); err == nil {
 			t.Errorf("%q loads", raw)
 		}
