@@ -12,12 +12,12 @@ import (
 )
 
 // The kube guard refuses a Bash command that switches a kubeconfig's
-// current context, writes to a production cluster, or runs op item get.
+// current context or writes to a production cluster.
 // The machine kubeconfig keeps no current context, so that a command
 // without an explicit target fails instead of reaching production; a
 // command that would set one is refused. Reads stay allowed everywhere.
 // False positives beat a production write. Without a production
-// installation (Hook.Production) it is off, op item get's refusal aside.
+// installation (Hook.Production) it is off.
 
 const (
 	envKubeconfig  = "KUBECONFIG"
@@ -206,7 +206,7 @@ func (h Hook) simpleKube(words []string, env *kubeEnv, aliases map[string]string
 				args = append([]string{plugin}, args...)
 			}
 		}
-		if h.Production == "" && name != "op" {
+		if h.Production == "" {
 			continue
 		}
 		var r string
@@ -223,8 +223,6 @@ func (h Hook) simpleKube(words []string, env *kubeEnv, aliases map[string]string
 			r = h.tshRefusal(args, local, at)
 		case "kind":
 			r = h.kindRefusal(args, local, at)
-		case "op":
-			r = opRefusal(args, at)
 		default:
 			continue
 		}
@@ -375,22 +373,6 @@ func switcherRefusal(args []string, at string) string {
 		}
 	}
 	return ""
-}
-
-func opRefusal(args []string, at string) string {
-	sub := nonFlags(args)
-	get := false
-	for i := 0; i+1 < len(sub) && !get; i++ {
-		get = sub[i] == "item" && sub[i+1] == verbGet
-	}
-	if !get {
-		return ""
-	}
-	return "Refused: `" + short(at) + "`: op item get is refused in every form, its output can carry a credential into the transcript " +
-		"and from there to the model API. Read the one field a command needs, never printing it:\n" +
-		"  op read op://<vault>/<item>/<field> | <consumer that prints nothing>\n" +
-		"  op read --out-file <file> op://<vault>/<item>/<field>\n" +
-		"  op run -- <command>   (with op:// references in the environment)"
 }
 
 const noDefault = "The machine kubeconfig has no current context, so that a command without an explicit target fails instead of reaching production."

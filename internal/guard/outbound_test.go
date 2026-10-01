@@ -93,7 +93,6 @@ func TestOutboundPassesOrdinaryCommands(t *testing.T) {
 		"gh issue comment 1 --body 'fixture " + fakePAT + " # gitleaks:allow'",
 		"git log --oneline -3",
 		"curl -sf -H 'Authorization: Bearer " + fakeJWT + "' -d '{\"q\":1}' https://example.com/api",
-		"op item list --vault Shared",
 	} {
 		passed(t, decide(t, outboundHook(fakeOutside), "/", cmd, nil), cmd)
 	}
@@ -178,8 +177,10 @@ func TestOutboundScansWritesToConfiguredPaths(t *testing.T) {
 	passed(t, write("Write", "/srv/notes/today.md", map[string]any{"content": fakePhrase}), "a Write outside the paths")
 }
 
+// The Secret guard refuses op and vault writes in agent sessions before the
+// outbound guard sees them; storeDeny is checked on the outbound guard alone.
 func TestOutboundRefusesDeniedStoreWrites(t *testing.T) {
-	h := outboundHook(Outbound{StoreDeny: []StoreRule{{Vault: "Shared*"}, {Vault: "secret", Item: "personal/*"}}})
+	o := Outbound{StoreDeny: []StoreRule{{Vault: "Shared*"}, {Vault: "secret", Item: "personal/*"}}}
 	for _, cmd := range []string{
 		"op item create --category login --vault Shared --title x",
 		"op item edit 'Deploy key' --vault=shared-team",
@@ -188,7 +189,9 @@ func TestOutboundRefusesDeniedStoreWrites(t *testing.T) {
 		"vault kv put secret/personal/x token=@f",
 		"vault kv patch -mount=secret personal/y a=b",
 	} {
-		refused(t, decide(t, h, "/", cmd, nil), cmd, "storeDeny rule")
+		if r := o.bashRefusal(cmd, "/"); !strings.Contains(r, "storeDeny rule") {
+			t.Errorf("%s: want a storeDeny refusal, got %q", cmd, r)
+		}
 	}
 	for _, cmd := range []string{
 		"op item create --vault Private --title x",
@@ -196,7 +199,9 @@ func TestOutboundRefusesDeniedStoreWrites(t *testing.T) {
 		"vault kv put secret/team/x a=b",
 		"vault kv get secret/personal/x > f",
 	} {
-		passed(t, decide(t, h, "/", cmd, nil), cmd)
+		if r := o.bashRefusal(cmd, "/"); r != "" {
+			t.Errorf("%s is refused:\n%s", cmd, r)
+		}
 	}
 }
 

@@ -130,7 +130,7 @@ a relayed successor opens with the plugin's role.
 | `beekeeper handover [--prompt] [--section <name>]` | Everything the next supervisor needs, as Markdown, from the live state: leases and grants, holds and their exceptions, agents, session records, pinned notes, notes with their defaults, the decisions answered since the last relay, timers, the merge lanes with their queues and settling merges, and what the alert watch reads (the installations and why, the ignored alert names, the baseline). `--prompt` prints the successor's session prompt: the configured instructions (`supervisor.skill` or `supervisor.instructions`), the scope, the pending state and the commands that read the live values; no live value (version, memory figure, pull request state). Both show what a successor acts on in its first minutes: the notes the guide serves (for `guide.person` and for the guide) are one count line, records of sessions ended over an hour ago one line, and the answered decisions those since the predecessor's start with a count of the rest of 72 hours. `--section <name>` prints one section with everything it holds (`notes`, `records`, `answers`, …). |
 | `beekeeper log [--verb PREFIX]` | Every claim, grant, hold, registration, note, timer, session record and build run, as they happened; `--verb run.` shows only the runs. |
 | `beekeeper run [--max SIZE] [--wait DURATION] -- <command>` | Run a build, test or lint command in one of the machine's build slots (memcap's, shared with the `memcap` wrapper) inside a memory-capped systemd scope. When every slot is held it waits once, then exits 75 with the holders; when the cap fires the kernel kills the biggest process in the scope only, and `run` exits 137 with one line starting `beekeeper run: the <SIZE> cap killed:`. Each run leaves `run.start` and `run.end` in `beekeeper log` with its scope, session and command, so `snapshot` and `watch` name a cap kill's session and command after the run has ended. `MEMCAP_TEST=1` marks a test's run: its scope is `memcap-test-…`, and a kill in it is reported as a test kill (one quiet `test kill:` line in `watch`), never as a build's. |
-| `beekeeper hook pretooluse` | The PreToolUse hook (matcher `Bash|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage|mcp__.*`): rewrites build, test, lint and lab commands to `<this binary> run -- zsh -c '<command>'` with the command verbatim and the tool timeout at 10 minutes (a background run waits 60 minutes), and refuses a third kind cluster, listing the held leases. It puts the gate in front of every `devctl pr merge`, `pr wait`, `release wait` and `rollout wait`, behind prefix commands and in pipelines and lists, and refuses one hidden in a `-c` string (below); every other devctl command passes untouched. It refuses a command that would print secret values (below, [Secret reads](#secret-reads)) and a call that would send one off the machine ([What leaves the machine](#what-leaves-the-machine)), a kube context switch, a write to production and `op item get` ([Kube contexts, production writes and op item get](#kube-contexts-production-writes-and-op-item-get)), a command that opens a page in the person's browser (`muster auth login`, `gh auth login --web`, `xdg-open`) outside the session holding the `browser` lease, a command that loads a model on the host's model server outside the session holding `model-server` ([The model server](#the-model-server)), an `AskUserQuestion` call outside the guide's session ([Questions go to the guide](#questions-go-to-the-guide)), and in the guide's session the calls that do work and a question without its status quo, why and full links ([The guide asks and relays](#the-guide-asks-and-relays-it-never-works-itself)). A `SendMessage` to `the supervisor` or `the guide` goes to the session holding that role now, by the name its running CLI answers to (else its desktop session), so a brief names the role and a relay never makes it stale. A `SendMessage` to a desktop id (`local_…`) whose session has a running CLI goes to that CLI by name, so a headless turn gets no second copy beside it (below, [Waking a session](#waking-a-session)). A session's first write or `git commit` in another repository carries that repository's `CLAUDE.md`, `AGENTS.md`, rules and mandatory reads ([A repository's instructions on the first write](#a-repositorys-instructions-on-the-first-write)). |
+| `beekeeper hook pretooluse` | The PreToolUse hook (matcher `Bash|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage|mcp__.*`): rewrites build, test, lint and lab commands to `<this binary> run -- zsh -c '<command>'` with the command verbatim and the tool timeout at 10 minutes (a background run waits 60 minutes), and refuses a third kind cluster, listing the held leases. It puts the gate in front of every `devctl pr merge`, `pr wait`, `release wait` and `rollout wait`, behind prefix commands and in pipelines and lists, and refuses one hidden in a `-c` string (below); every other devctl command passes untouched. It refuses a command that would print secret values (below, [Secret reads](#secret-reads)) and a call that would send one off the machine ([What leaves the machine](#what-leaves-the-machine)), a kube context switch and a write to production ([Kube contexts and production writes](#kube-contexts-and-production-writes)), a command that opens a page in the person's browser (`muster auth login`, `gh auth login --web`, `xdg-open`) outside the session holding the `browser` lease, a command that loads a model on the host's model server outside the session holding `model-server` ([The model server](#the-model-server)), an `AskUserQuestion` call outside the guide's session ([Questions go to the guide](#questions-go-to-the-guide)), and in the guide's session the calls that do work and a question without its status quo, why and full links ([The guide asks and relays](#the-guide-asks-and-relays-it-never-works-itself)). A `SendMessage` to `the supervisor` or `the guide` goes to the session holding that role now, by the name its running CLI answers to (else its desktop session), so a brief names the role and a relay never makes it stale. A `SendMessage` to a desktop id (`local_…`) whose session has a running CLI goes to that CLI by name, so a headless turn gets no second copy beside it (below, [Waking a session](#waking-a-session)). A session's first write or `git commit` in another repository carries that repository's `CLAUDE.md`, `AGENTS.md`, rules and mandatory reads ([A repository's instructions on the first write](#a-repositorys-instructions-on-the-first-write)). |
 | `beekeeper hook sessionstart` | The SessionStart hook: writes the agent shell's prelude into the session's environment file (`$CLAUDE_ENV_FILE`), which Claude Code sources before parsing each Bash command. It removes the aliases and shell functions of `agents.shell.unalias` (default `grep`, `find`, `ls`, `cp`, `mv`, `rm`, the harness's own `grep` and `find` shadows among them), so each name runs the tool on `PATH`, and with `agents.shell.globs: literal` (the default) an unmatched glob stays as written instead of failing the command with zsh's `no matches found`. The person's interactive setup stays theirs; an agent writes its commands for the plain tools. |
 | `beekeeper lint briefs <file or folder>...` | Refuses dated lines, "until X ships" clauses, notes on the release that fixed something, workarounds and role run numbers in skills and briefs (every Markdown file below a folder), one `path:line: rule: why` per finding, exit 3 on any. |
 | `beekeeper hook permissionrequest` | The PermissionRequest hook: answers `allow` only for a session `agents start` started in bypass that now runs in `acceptEdits`; every other request gets no answer, so the person sees the normal card. Below. |
@@ -199,12 +199,12 @@ beekeeper lease release model-server
   audio and images), and the agentlab tests in `ollama.labTests`. `ollama ps`,
   `ollama stop`, `/api/ps`, `lemonade list|unload` and `/api/v1/health` pass.
 
-## Kube contexts, production writes and op item get
+## Kube contexts and production writes
 
 With `kube.production` set, the machine kubeconfig (`~/.kube/config`) keeps no current context: a
 `kubectl`, `helm` or `flux` command without an explicit target fails instead of reaching production.
 The PreToolUse hook keeps it that way and refuses, with the reason and the explicit form (unset, the
-kube guard is off, `beekeeper snapshot` says so, and only the `op item get` refusal stays):
+kube guard is off and `beekeeper snapshot` says so):
 
 - A context switch: `kubectl config use-context`, `kubectl config set current-context`, `kubectl ctx`,
   `kubectx <name>`, `kubectl gs login` without `--self-contained`; and `tsh kube login`, `tsh login
@@ -228,7 +228,6 @@ kube guard is off, `beekeeper snapshot` says so, and only the `op item get` refu
   `logs`, `top`, `status`, `version`, `template`, …) and the read-only plugins (`tree`,
   `access-matrix`, `resource-capacity`, `who-can`, `neat`, `krew`, `oidc-login`, `ns`) pass. Every other
   plugin subcommand counts as a write.
-- `op item get` in every form: `op read op://<vault>/<item>/<field>` into a pipe or a file, or `op run`.
 
 Each guard sees through prefix commands, pipelines and lists, `$( )`, shell `-c` strings and
 here-documents fed to a shell, and kubectl or a kubectl plugin run through a shell function or a variable. Quoted text
@@ -279,37 +278,60 @@ Machine ID bot (`tbot`) from the Teleport administrators instead; beekeeper does
 ## Secret reads
 
 A value a command prints lands in the session's transcript and goes to the model API with the next
-turn; one printed credential is one rotation. The PreToolUse hook refuses a Bash command that would
-print secret values, names the part that would, and gives the safe forms:
+turn; a value written to a file, a variable or the clipboard, hashed or diffed, is one any later
+command can read or brute-force. One exposed credential is one rotation. For credential tools the
+PreToolUse hook is an allow list: it refuses every command that touches a secret except the forms
+below, names the part it refused and gives the safe forms. Every refusal names `beekeeper secret`:
+`compare` or `fingerprint` for equality, `set`, `copy` or `rotate` for changes (not released yet:
+[#136](https://github.com/giantswarm/beekeeper/issues/136),
+[#137](https://github.com/giantswarm/beekeeper/issues/137)).
 
-- `kubectl get` of Secrets (by kind, `secret/<name>`, or in a list such as `cm,secret`) with
-  `-o yaml|json`, or with a `jsonpath`, `go-template` or `custom-columns` template that prints the data
-  or the whole object; `kubectl view-secret`; also through a shell function or variable that runs
-  kubectl (`kc(){ kubectl --context x "$@"; }`, `K="kubectl …"`), and `kubectl get -o yaml` of names
-  piped in from a Secret listing.
-- `sops -d` / `sops decrypt` to stdout; `op read`, `op inject` and `op document get` without
-  `--out-file`, `op run --no-masking` (`op item get` is refused in every form, [Kube contexts, production writes and op item get](#kube-contexts-production-writes-and-op-item-get)); `vault kv get` and
-  `vault read`; `base64 -d` of a secret's `.data`.
+Refused in every form, since beekeeper is the only process that reads, creates, rotates, encrypts and
+decrypts secrets:
+
+- `sops` (decrypting and encrypting alike, `helm secrets` included) and `op` (`op read`, `op item`,
+  `op run`, `op whoami`, …), also behind `sudo`, `env`, `timeout`, `xargs` and `beekeeper run`;
+  `age -d` and `gpg --decrypt`.
+- `kubectl edit` of a Secret and `kubectl view-secret`.
+- A hash (`sha*sum`, `md5sum`, `b2sum`, `cksum`, `openssl dgst`) or a diff (`diff`, `cmp`, `git diff
+  --no-index`, …) of a file whose name says it holds secrets in plaintext (`secrets.yaml`,
+  `token.txt`, a kubeconfig; code files and SOPS-encrypted `*.enc.*` or `*.sops.*` files pass).
+- `vault` beyond `status`, `version`, `list`, `kv list`, `kv metadata get` and the `kv get`/`read`
+  forms below.
+
+Refused unless their output ends in an allowed form:
+
+- `kubectl get` of Secrets (by kind, `secret/<name>`, in a list such as `cm,secret`, by `--raw` path)
+  with `-o yaml|json` or a `jsonpath`, `go-template` or `custom-columns` template that names more than
+  the kind, the type and the metadata other than annotations (which carry the last applied object);
+  `kubectl create|apply|replace|patch secret … -o yaml|json`; also through a shell function or variable
+  that runs kubectl (`kc(){ kubectl --context x "$@"; }`, `K="kubectl …"`), and `kubectl get -o yaml` of
+  names piped in from a Secret listing.
+- `vault kv get` and `vault read`; `base64 -d` of a secret's `.data`.
+- A render fed with secret values: `helm template|install|upgrade` with a values file (`-f`,
+  `--values`, `--set-file`) whose name says it holds secrets, `kustomize build` or `kubectl kustomize`
+  with `--enable-alpha-plugins` or `--enable-exec` (which run decrypting plugins).
 - Whole command lines and environments, readable by every process: a program started with
   `-e PASSWORD=…`, `--token …` or `-p …` carries the credential there. `ps` with its `args`/`cmd`/`command`
   column (`ps aux`, `ps -ef`, `ps -eo pid,args`, BSD-style words without `c`, BSD `e`), `pgrep -a`,
   `pstree -a`, a read of `/proc/<pid>/cmdline` or `environ` (`ls`, `stat` and `wc` pass), `docker|podman
   inspect` without a `--format` limited to names and state, and `docker ps --no-trunc` with the
   command column. The safe forms: `beekeeper ps` (below), `ps -eo pid,ppid,etime,time,rss,comm`,
-  `pgrep -l`, `docker inspect --format '{{.Name}} {{.State.Status}}'`.
-- The same inside `sh|bash|zsh -c`, `ssh`, `eval` and `watch` strings and here-documents fed to a
-  shell. Quoted text, comments and other here-documents (a commit message, an issue body) are not
-  commands and pass.
+  `pgrep -l`, `pgrep -c`, `docker inspect --format '{{.Name}} {{.State.Status}}'`.
 
-A command passes when the values never reach the terminal: the pipeline ends in a hash (`sha256sum`,
-`md5sum`, `openssl dgst`), `wc`, `grep -q|-c`, a `jq`/`yq` filter that keeps only keys or metadata
-(`jq '.data|keys'`, `.items[].metadata.name`, `(.value|length)`), a consumer that prints nothing of it
-(`kubectl apply -f -`, `--password-stdin`, `gh secret set`, `sops -e`, `openssl x509 -noout`,
-`age-keygen -y`), or a file (`> file`, `sops -d --output`, `op read --out-file`); or when the output is
-captured in a variable or a flag's value (`T=$(…)`, `--from-literal=k=$(…)`). A template ranging over
-`.data` that prints only the keys passes, as do `-o name`, `-o wide`, the table and `kubectl describe
-secret` (sizes only). Anything else that reads a secret is refused: false positives beat leaks, and
-the refusal says how to write the command safely.
+The allowed forms: a `jq`/`yq` filter that keeps only keys or metadata (`jq '.data|keys'`,
+`.items[].metadata.name`, `(.value|length)`; no `del(…)` or assignment, which print the rest), `wc`,
+a consumer that prints nothing of it (`kubectl apply|create|replace -f -` without `-o`,
+`--password-stdin`, `gh secret set`, `kubeseal`, `openssl x509 -noout`, `age-keygen -y`), or
+`> /dev/null`; for a render also a filter that blanks the Secret data (`yq 'del(.data, .stringData)'`,
+`.data |= keys` with `.stringData |= keys`), so a diff of two blanked renders passes. A file, `tee`,
+a variable or a flag's value (`T=$(…)`, `--from-literal=k=$(…)`), a hash, `grep -c|-q` and the
+clipboard are no allowed end. `-o name`, `-o wide`, the table and `kubectl describe secret` (sizes
+only) pass.
+
+The same holds inside `sh|bash|zsh -c`, `ssh`, `eval` and `watch` strings and here-documents fed to a
+shell. Quoted text, comments and other here-documents (a commit message, an issue body) are not
+commands and pass.
 
 ## What leaves the machine
 
@@ -336,7 +358,8 @@ by number). A line marked `gitleaks:allow` is skipped, for a test fixture that o
 
 An `op item|document create|edit` or a `vault kv put|patch` that an `outbound.storeDeny` rule matches
 (vault and item globs; a write naming no vault may go to the default one and matches) is refused: some
-credentials do not belong in a shared store.
+credentials do not belong in a shared store. In an agent session the Secret guard refuses these writes
+first ([Secret reads](#secret-reads)).
 
 The watch sweeps `outbound.sweepRoots` (the home directory) `outbound.sweepDepth` (5) levels deep every
 interval for world-readable private keys (`id_*`, `*.pem`, `*.key`, `*.ppk` with a private key header)
