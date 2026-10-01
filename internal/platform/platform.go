@@ -27,10 +27,18 @@ type NotAvailableError struct {
 	Part string
 }
 
-func (e *NotAvailableError) Error() string { return e.Part + ": " + ErrNotAvailable.Error() }
+func (e *NotAvailableError) Error() string { return e.Part + ": not available on " + Name() }
 
 // Is makes errors.Is(err, ErrNotAvailable) true.
 func (e *NotAvailableError) Is(target error) bool { return target == ErrNotAvailable }
+
+// Missing reports whether err is a platform part this build does not have.
+func Missing(err error) bool { return errors.Is(err, ErrNotAvailable) }
+
+// Unavailable is the one line a section prints in place of what it reads
+// through a part this build does not have: "<section>: not available on
+// <platform>".
+func Unavailable(section string) string { return section + ": not available on " + Name() }
 
 // Machine reads the machine: memory, pressure, processes, the scopes the
 // desktop app and the capped runs sit in, and the OOM kills.
@@ -49,8 +57,9 @@ type Machine interface {
 	Processes() (*proc.Table, error)
 	// Started is when process pid started.
 	Started(pid int) (time.Time, error)
-	// DesktopScope is the largest Claude Desktop scope, nil when none runs.
-	DesktopScope() *machine.Scope
+	// DesktopScope is the largest Claude Desktop scope, nil when none runs;
+	// an error when this build cannot read scopes.
+	DesktopScope() (*machine.Scope, error)
 	// MemcapScope is the capped run's scope unit, nil when it has ended.
 	MemcapScope(unit string) *machine.Scope
 	// ScopePIDs lists the processes of the scope at path (a Scope's Path).

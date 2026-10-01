@@ -15,15 +15,16 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
 // Exit codes: 0 done, 1 error, 2 usage, 3 refused (a lease held or not
-// granted, a hold set, the budget under its floor), 4 relieved (supervisor
-// status in the session a relay relieved), 125 outdated (a newer
-// release exists: self-update --check, the status devctl's version check and
+// granted, a hold set, the budget under its floor, a platform part this
+// build does not have), 4 relieved (supervisor status in the session a
+// relay relieved), 125 outdated (a newer release exists: self-update --check, the status devctl's version check and
 // muster's self-update --check use).
 const (
 	ExitError    = 1
@@ -46,6 +47,9 @@ func Code(err error) int {
 	var e *exitError
 	if errors.As(err, &e) {
 		return e.code
+	}
+	if platform.Missing(err) {
+		return ExitRefused
 	}
 	return ExitError
 }

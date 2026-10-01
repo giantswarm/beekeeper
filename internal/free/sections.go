@@ -11,6 +11,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
@@ -23,6 +24,9 @@ const minKiB = 1024
 // it is: the session still reads it when it resumes work.
 func (r *Run) sessionDirs() {
 	r.head(fmt.Sprintf("dead sessions' dirs in %s (tmpfs; a live session's are kept however idle)", r.Scratch))
+	if !r.tableRead() {
+		return
+	}
 	live := map[string]*claude.Session{}
 	for _, s := range r.Sessions {
 		if s.ID != "" {
@@ -90,6 +94,9 @@ var tmpPatterns = []string{"vmm-e2e-*", "go-build*", "tmp.*", "pytest-of-*", "je
 // use; jest's cache stays while jest runs.
 func (r *Run) tmpDirs() {
 	r.head(fmt.Sprintf("known throwaway temp dirs in %s older than %d h", r.TmpDir, int(r.Stale.Hours())))
+	if !r.tableRead() {
+		return
+	}
 	n := 0
 	for _, pat := range tmpPatterns {
 		dirs, _ := filepath.Glob(filepath.Join(r.TmpDir, pat))
@@ -149,6 +156,9 @@ func (r *Run) remove(d string, kib int) {
 // whose desktop died.
 func (r *Run) orphans() {
 	r.head(fmt.Sprintf("orphaned workers (parent gone, reparented to systemd) older than %d min", int(r.Orphan.Minutes())))
+	if !r.tableRead() {
+		return
+	}
 	var pids []int
 	for _, p := range r.procs() {
 		if !r.orphaned(p) || p.Elapsed(r.Now) < r.Orphan || r.uid(p.PID) != r.UID {
@@ -203,7 +213,11 @@ func terminate(pids []int) {
 func (r *Run) swap() {
 	r.head("swap")
 	m, err := r.mem()
-	if err != nil {
+	switch {
+	case platform.Missing(err):
+		r.say("  %s", platform.Unavailable("memory"))
+		return
+	case err != nil:
 		r.say("  cannot read /proc/meminfo: %v", err)
 		return
 	}

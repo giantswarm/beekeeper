@@ -89,6 +89,9 @@ type Machine struct {
 	Clusters []machine.Cluster
 	// ClustersErr is set when docker cannot be asked.
 	ClustersErr error
+	// TableErr is set when the platform cannot list processes: Table is
+	// empty, and every section that reads it says so instead.
+	TableErr error
 	// ClusterNotes says per cluster name which lab lease stands for it and
 	// whether it is held or idle.
 	ClusterNotes map[string]string
@@ -112,7 +115,7 @@ type Run struct {
 	cwd       func(pid int) string
 	mem       func() (machine.Mem, error)
 	kill      func(pids []int)
-	scope     func() *machine.Scope
+	scope     func() (*machine.Scope, error)
 	unitPIDs  func(cgroup string) []int
 	scopePIDs func(path string) []int
 	oomPolicy func(unit string) string
@@ -273,6 +276,17 @@ func (r *Run) tilde(p string) string {
 		return "~" + p[len(r.Home):]
 	}
 	return p
+}
+
+// tableRead reports whether the process table was read; a section that
+// needs it says otherwise in one line and neither reports nor frees: with
+// no process known, every dir would look unused.
+func (r *Run) tableRead() bool {
+	if r.TableErr == nil {
+		return true
+	}
+	r.say("  %s", platform.Unavailable("processes"))
+	return false
 }
 
 // procs returns the table's processes in pid order.
