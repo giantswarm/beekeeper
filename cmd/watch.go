@@ -834,7 +834,10 @@ func (w *watcher) poll(ctx context.Context) {
 	now := w.now
 	if now.Sub(w.lastSettle) >= w.readEvery(th.Interval.Duration) {
 		w.lastSettle = now
-		inFlight(w.readCtx(ctx), th.Interval.Duration, &w.settling, func(ctx context.Context) { w.settled(ctx, now) })
+		inFlight(w.readCtx(ctx), th.Interval.Duration, &w.settling, func(ctx context.Context) {
+			_ = w.checkPlaces(ctx, watchParty, now, "", "", 0, th.Interval.Duration)
+			w.settled(ctx, now)
+		})
 	}
 	if now.Sub(w.lastBudget) >= th.BudgetEvery.Duration {
 		w.lastBudget = now
@@ -909,7 +912,7 @@ func (w *watcher) lostMerges(ctx context.Context) {
 		doc, rc := finishedRun(mergeBase(w.store.Dir(), m.Repo, m.PR))
 		r := runOutcome{rc: rc}
 		var ok bool
-		if r.out, ok = merge.ParseDocument(doc); merge.NeedsJudging(ok, rc) {
+		if r.out, ok = parseOutcome(m.PR, doc); merge.NeedsJudging(ok, rc) {
 			if r.out, r.unanswered = judgeRun(ctx, m.Repo, m.PR, 1); r.unanswered != nil {
 				continue
 			}

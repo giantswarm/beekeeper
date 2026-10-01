@@ -148,30 +148,12 @@ type childRun struct {
 // SIGHUP, a caller going away, do not (outliveCaller keeps them from ending
 // the gate). started gets merge-child's pid.
 func runDetached(spec childSpec, base string, started func(pid int)) (r childRun) {
-	removeMergeFiles(base)
 	defer removeMergeFiles(base)
 	r.rc = guard.ExitNotFound
-	path, err := exec.LookPath(spec.Argv[0])
-	if err != nil {
-		gateLine("%v", err)
-		return r
-	}
-	spec.Argv = append([]string{path}, spec.Argv[1:]...)
-	spec.Env, spec.Gate = os.Environ(), os.Getpid()
-	spec.Dir, _ = os.Getwd()
-	raw, _ := json.Marshal(spec)
-	if err := os.WriteFile(base+".spec", raw, 0o600); err != nil {
-		gateLine("%v", err)
-		return r
-	}
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(sig)
-	if err := startChild(base); err != nil {
-		gateLine("devctl does not start: %v", err)
-		return r
-	}
-	pid, err := awaitPID(base)
+	pid, err := launchChild(spec, base)
 	if err != nil {
 		gateLine("devctl does not start: %v", err)
 		return r
@@ -224,6 +206,30 @@ func runDetached(spec childSpec, base string, started func(pid int)) (r childRun
 	}
 }
 
+// launchChild writes spec, with this process's environment, directory and pid as
+// its gate, to base.spec, starts merge-child on it and returns its pid.
+func launchChild(spec childSpec, base string) (int, error) {
+	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
+		return 0, err
+	}
+	removeMergeFiles(base)
+	path, err := exec.LookPath(spec.Argv[0])
+	if err != nil {
+		return 0, err
+	}
+	spec.Argv = append([]string{path}, spec.Argv[1:]...)
+	spec.Env, spec.Gate = os.Environ(), os.Getpid()
+	spec.Dir, _ = os.Getwd()
+	raw, _ := json.Marshal(spec)
+	if err := os.WriteFile(base+".spec", raw, 0o600); err != nil {
+		return 0, err
+	}
+	if err := startChild(base); err != nil {
+		return 0, err
+	}
+	return awaitPID(base)
+}
+
 // startChild starts merge-child for base: in a transient user service, else
 // in a session of its own, reaped in the background.
 func startChild(base string) error {
@@ -274,6 +280,9 @@ func (a *app) mergeChildCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			r := mergeChild(args[0])
 			a.tellOwner(cmd.Context(), r)
+			if filepath.Base(filepath.Dir(r.base)) == ownedRuns && !proc.Alive(r.spec.Gate) {
+				removeMergeFiles(r.base) // a gate gone leaves a wait's or queued merge's files to its run
+			}
 			return exitCode(unitExit(r.rc))
 		},
 	}

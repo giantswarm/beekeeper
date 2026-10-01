@@ -59,6 +59,48 @@ func ParseArgs(argv []string) (repo string, pr int, ok bool) {
 	return "", 0, false
 }
 
+// ParsePromote finds the one repository of a devctl release promote
+// argument vector; ok is false for anything else (several repositories,
+// --team, --dry-run, --help), which runs ungated.
+func ParsePromote(argv []string) (repo string, ok bool) {
+	i := slices.Index(argv, "promote")
+	if i < 2 || argv[i-1] != "release" {
+		return "", false
+	}
+	for _, a := range argv[i+1:] {
+		switch {
+		case a == "--progress" || strings.HasPrefix(a, "--log-level"):
+		case strings.HasPrefix(a, "-") || repo != "" || !repoArg.MatchString(a):
+			return "", false
+		default:
+			repo = a
+		}
+	}
+	return repo, repo != ""
+}
+
+// ParsePromoteDocument reads devctl release promote's JSON document: a
+// dispatched candidate (vX.Y.Z-rc.N) is a merge whose release is its stable
+// version (vX.Y.Z), a repository with nothing to promote warrants no
+// release. ok is false when it is none.
+func ParsePromoteDocument(raw []byte) (Outcome, bool) {
+	var doc struct {
+		Repositories []struct {
+			Candidate string `json:"candidate"`
+			State     string `json:"state"`
+		} `json:"repositories"`
+	}
+	if json.Unmarshal(raw, &doc) != nil || len(doc.Repositories) != 1 {
+		return Outcome{}, false
+	}
+	r := doc.Repositories[0]
+	o := Outcome{Merged: r.State == "dispatched", NoRelease: r.State == "nothing_to_promote"}
+	if o.Merged {
+		o.Release, _, _ = strings.Cut(r.Candidate, "-")
+	}
+	return o, true
+}
+
 // owned are the subcommands of devctl that block until an outcome, which
 // the gate runs outside their caller so that the outcome reaches its owner.
 var owned = [][2]string{{"pr", "merge"}, {"pr", waitVerb}, {"release", waitVerb}, {"rollout", waitVerb}}
