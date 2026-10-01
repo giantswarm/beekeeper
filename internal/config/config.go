@@ -88,6 +88,8 @@ type Config struct {
 	// Reporter is the one-off status reporter session the standby watch
 	// starts once per interval.
 	Reporter Reporter `yaml:"reporter"`
+	// Doctor is what `beekeeper doctor` and the watch fix by themselves.
+	Doctor Doctor `yaml:"doctor"`
 }
 
 // Kube configures the kube guard and how an installation's name becomes its
@@ -144,6 +146,26 @@ type Agents struct {
 	// NoteWait bounds how long `agents handover` waits for the agent's
 	// note on what is in flight (3m).
 	NoteWait Duration `yaml:"noteWait"`
+	// StaleAfter is how long an idle agent whose CLI no longer runs stays on
+	// the roster before the doctor takes it off (24h).
+	StaleAfter Duration `yaml:"staleAfter"`
+}
+
+// Doctor configures the known faults the doctor probes and remedies.
+type Doctor struct {
+	Faults []Fault `yaml:"faults"`
+}
+
+// Fault is a known fault with a known remedy.
+type Fault struct {
+	Name string `yaml:"name"`
+	// Probe is a shell command that exits 0 while the fault is absent.
+	Probe string `yaml:"probe"`
+	// Remedy is the shell command that fixes the fault.
+	Remedy string `yaml:"remedy"`
+	// Unattended lets the watch run the remedy by itself; otherwise a
+	// sighting is one note for guide.person.
+	Unattended bool `yaml:"unattended"`
 }
 
 // Guide configures the guide: its role and the person it guides.
@@ -746,6 +768,7 @@ func (c *Config) defaults() error {
 		c.Agents.RelayAt = c.Supervisor.RelayAt
 	}
 	setDur(&c.Agents.NoteWait, 3*time.Minute)
+	setDur(&c.Agents.StaleAfter, 24*time.Hour)
 	c.Reporter.defaults(home, c.Guide.Person)
 	setStr(&c.Shell, os.Getenv("SHELL"))
 	setStr(&c.Shell, "sh")
@@ -896,6 +919,13 @@ func (c *Config) validate() error {
 	}
 	if o := c.Ollama; (o.URL != "" || c.Lemonade.URL != "") && (o.BudgetGiB < 1 || o.BudgetGiB > o.MaxBudgetGiB) {
 		return fmt.Errorf("ollama.budgetGiB: %d is not between 1 and maxBudgetGiB %d", o.BudgetGiB, o.MaxBudgetGiB)
+	}
+	faults := map[string]bool{}
+	for i, f := range c.Doctor.Faults {
+		if f.Name == "" || f.Probe == "" || f.Remedy == "" || faults[f.Name] {
+			return fmt.Errorf("doctor.faults[%d]: a fault needs a name of its own, a probe and a remedy", i)
+		}
+		faults[f.Name] = true
 	}
 	names, repos := map[string]bool{}, map[string]string{}
 	for i, l := range c.Lanes {

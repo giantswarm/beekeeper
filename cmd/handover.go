@@ -231,5 +231,19 @@ func (a *app) logCmd() *cobra.Command {
 	}
 	c.Flags().IntVarP(&n, "lines", "n", 50, "how many of the latest events (0: all)")
 	c.Flags().StringVar(&verb, "verb", "", "only the events whose verb starts with this (run.: the build runs)")
+	c.AddCommand(&cobra.Command{
+		Use:   "add <text>",
+		Short: "Log a status line: what happened, for whoever reads the log (verb status)",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			me, err := a.caller()
+			if err != nil {
+				return err
+			}
+			return a.store.Update(func(*state.State) ([]state.Event, error) {
+				return []state.Event{event(me, "status", "%s", strings.Join(args, " "))}, nil
+			})
+		},
+	})
 	return c
 }

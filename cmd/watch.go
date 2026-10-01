@@ -86,6 +86,11 @@ quiet moment: no gated merge running or settling, no grant waiting to be
 claimed, no claim queued and no relay open. It is said once per supervisor,
 and again only after a relay is cancelled or expires.
 
+Every poll but --once's runs beekeeper doctor in the background (its last
+run still going, the poll skips it): one DOCTOR line per agent it took off
+the roster, desktop session it archived or retitled, fault it fixed or
+note it filed, and one DOCTOR FAULT line while a known fault lasts.
+
 A registered agent whose session's context reaches agents.relayAt gets one
 HANDOVER DUE "<agent>" at <n>k: beekeeper agents handover "<agent>" at its
 first quiet moment: no tool command of its own running and no gated merge
@@ -251,6 +256,12 @@ type watcher struct {
 	// missing are the sections whose platform part this build does not
 	// have, said once each.
 	missing map[string]bool
+	// chores runs the doctor every poll (not for --once); doctoring is set
+	// while its run goes, and retitled holds when it last retitled each
+	// desktop session.
+	chores    bool
+	doctoring atomic.Bool
+	retitled  map[string]time.Time
 }
 
 // unavailable reports whether err is a platform part this build does not
@@ -492,7 +503,7 @@ type watchMark struct {
 // again. --once and a watch outside a Claude session keep none.
 func (a *app) newWatcher(standby, keep bool) *watcher {
 	w := &watcher{app: a, standby: standby, last: map[string]time.Time{}, seenKills: map[string]bool{},
-		reported: map[string]bool{}, active: map[string]condition{}}
+		reported: map[string]bool{}, active: map[string]condition{}, chores: keep, retitled: map[string]time.Time{}}
 	w.stand = standbyWatch{send: a.peerSend, open: plat.Opener.Open, succeed: a.succeedFromWatch, turning: unitsTurning}
 	if me, err := a.caller(); keep && err == nil {
 		w.markFile = "seen.watch." + fileKey(me) + ".json"
@@ -1208,6 +1219,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	w.stoppedAgents(st, sessions)
 	q := w.quietness(ctx, st, sessions)
 	w.handoversDue(st, sessions)
+	w.doctor(ctx)
 	signedIn := probeLogins(ctx, st.Notes)
 	fire := func(st *state.State) ([]string, []state.Event, bool) {
 		seen, ce := observeCLI(st, sessions, w.now)

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
@@ -65,19 +66,30 @@ const stewardQuiet = 30 * time.Second
 // It returns what it found or did, one line.
 func (a *app) keepTitle(ctx context.Context, id, name string) (string, error) {
 	host := "local_" + id
-	record := func() string {
-		if r, ok := claude.ReadRecord(a.cfg, host); ok {
-			return r.Title
-		}
-		return ""
-	}
-	find := func(ctx context.Context, tried []string) (steward, error) {
+	return a.retitleWith(ctx, host, name, func(ctx context.Context, tried []string) (steward, error) {
 		if len(tried) == 0 {
 			if sock := desktopSocket(ctx, id); sock != "" {
 				return steward{host: host, sock: sock}, nil
 			}
 		}
 		return a.findSteward(host, tried)
+	})
+}
+
+// restoreTitle gives the desktop session host the name its record dropped
+// back through a steward of the running ones.
+func (a *app) restoreTitle(ctx context.Context, host, name string) (string, error) {
+	return a.retitleWith(ctx, host, name, func(_ context.Context, tried []string) (steward, error) {
+		return a.findSteward(host, tried)
+	})
+}
+
+func (a *app) retitleWith(ctx context.Context, host, name string, find stewardFinder) (string, error) {
+	record := func() string {
+		if r, ok := claude.ReadRecord(a.cfg, host); ok {
+			return r.Title
+		}
+		return ""
 	}
 	return retitle(ctx, host, name, record, find, a.peerSend, retitleWait)
 }
@@ -91,8 +103,8 @@ func retitle(ctx context.Context, host, name string, title func() string, find s
 	if was == name {
 		return fmt.Sprintf("the desktop keeps its title %q", name), nil
 	}
-	msg := func(session string) string { return retitleRequest(session, name) }
-	s, err := delegate(ctx, host, find, msg, func() bool { return title() == name }, send, wait)
+	msg := func(s steward) string { return retitleRequest(s.sessionArg(host), name) }
+	s, err := delegate(ctx, find, msg, func() bool { return title() == name }, send, wait)
 	if err != nil {
 		return "", fmt.Errorf("the desktop recorded %s: %w", recorded(was, name), err)
 	}
@@ -106,11 +118,10 @@ type stewardFinder func(ctx context.Context, tried []string) (steward, error)
 // steward is a model, which can decline a request from another session.
 const stewardTries = 3
 
-// delegate hands the request msg (given the session_id the steward passes)
-// about target to stewards find picks, one after another until done holds
-// or stewardTries of them were asked, each given wait. It returns the
-// steward that did it.
-func delegate(ctx context.Context, target string, find stewardFinder, msg func(session string) string, done func() bool,
+// delegate hands the request msg (made for the steward asked) to stewards
+// find picks, one after another until done holds or stewardTries of them
+// were asked, each given wait. It returns the steward that did it.
+func delegate(ctx context.Context, find stewardFinder, msg func(steward) string, done func() bool,
 	send func(ctx context.Context, to, msg string) error, wait time.Duration,
 ) (steward, error) {
 	var tried []string
@@ -121,7 +132,7 @@ func delegate(ctx context.Context, target string, find stewardFinder, msg func(s
 			errs = append(errs, err)
 			break
 		}
-		err = askSteward(ctx, s, msg(s.sessionArg(target)), done, send, wait)
+		err = askSteward(ctx, s, msg(s), done, send, wait)
 		if err == nil {
 			return s, nil
 		}
@@ -133,8 +144,11 @@ func delegate(ctx context.Context, target string, find stewardFinder, msg func(s
 
 // who names the steward in a line about target.
 func (s steward) who(target string) string {
-	if s.host == target {
+	switch s.host {
+	case target:
 		return "the session"
+	case "":
+		return "a steward"
 	}
 	return "steward " + s.host
 }
@@ -180,10 +194,20 @@ func retitleRequest(session, name string) string {
 	return fmt.Sprintf(stewardPreamble+"the desktop lost the title of a worker beekeeper started. Call mcp__ccd_session_mgmt__set_session_title once with session_id %q and title %q (its roster name), then end the turn without another tool call and without a reply.", session, name)
 }
 
-// archiveRequest is the message that has a steward archive session (its
-// local_ id, or "self").
-func archiveRequest(session, name string) string {
-	return fmt.Sprintf(stewardPreamble+"the operator ran `beekeeper agents remove %s`: the worker beekeeper started for it is finished and off the roster, and remove archives its desktop session (reversible: the Archived list brings it back). Call mcp__ccd_session_mgmt__archive_session once with session_id %q and reason %q, then end the turn without another tool call and without a reply.", name, session, "beekeeper agents remove "+name)
+// archiveRequest is the message that has steward s archive the desktop
+// sessions hosts (local_ ids; its own last, as "self"), off the roster by
+// the command by.
+func archiveRequest(s steward, hosts []string, by string) string {
+	var ids []string
+	for _, h := range hosts {
+		if h != s.host {
+			ids = append(ids, strconv.Quote(h))
+		}
+	}
+	if slices.Contains(hosts, s.host) {
+		ids = append(ids, strconv.Quote(selfSession))
+	}
+	return fmt.Sprintf(stewardPreamble+"`%s` took finished workers beekeeper started off the roster, and archives their desktop sessions (reversible: the Archived list brings one back). Call mcp__ccd_session_mgmt__archive_session once for each session_id of %s, in that order, with reason %q, then end the turn without another tool call and without a reply.", by, strings.Join(ids, ", "), by)
 }
 
 // findSteward picks the steward for a request about the desktop session
@@ -258,13 +282,15 @@ func stewards(st *state.State, t *proc.Table, s *claude.Session, target string, 
 
 // keepsRole reports whether p holds or held the supervisor's or the guide's
 // role: a relieved supervisor still follows its role's rules, which leave
-// archiving to the person.
+// archiving to the person. A session named as a role's run held it, also
+// once its relief is forgotten.
 func keepsRole(st *state.State, p state.Party) bool {
 	if holdsRole(st, p) {
 		return true
 	}
 	for _, rl := range roles {
-		if slices.ContainsFunc(rl.get(st).Relieved, func(r state.Relief) bool { return r.Party.Is(p) }) {
+		if strings.HasPrefix(p.Name, rl.title+" run ") ||
+			slices.ContainsFunc(rl.get(st).Relieved, func(r state.Relief) bool { return r.Party.Is(p) }) {
 			return true
 		}
 	}
@@ -317,41 +343,73 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-// archiveWait bounds the wait for the desktop to record an archive.
-const archiveWait = 45 * time.Second
+// archiveWait bounds the wait for the desktop to record an archive, and
+// archiveEach the time a steward's turn takes for each further session.
+const (
+	archiveWait = 45 * time.Second
+	archiveEach = 5 * time.Second
+)
 
-// archiveDesktop archives the desktop session of agent ag, just taken off
-// the roster, through a steward: only a session beekeeper started, holding
-// no role and running no turn. It returns what it did or why not, one line.
-func (a *app) archiveDesktop(ctx context.Context, st *state.State, ag state.Party) string {
+// archiveDesktops archives the desktop sessions of agents just taken off
+// the roster by the command by, through one steward's turn: only sessions
+// beekeeper started, holding no role and running no turn. It returns a line
+// per agent saying what it did or why not.
+func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []state.Party, by string) []string {
+	lines := make([]string, len(agents))
+	var hosts []string
+	at := map[string]int{}
+	for i, ag := range agents {
+		host, why := a.archivable(st, ag)
+		if why != "" {
+			lines[i] = why
+			continue
+		}
+		at[host] = i
+		hosts = append(hosts, host)
+	}
+	if len(hosts) == 0 {
+		return lines
+	}
+	archived := func(host string) bool {
+		r, ok := claude.ReadRecord(a.cfg, host)
+		return ok && r.IsArchived
+	}
+	left := func() []string { return slices.DeleteFunc(slices.Clone(hosts), archived) }
+	find := func(_ context.Context, tried []string) (steward, error) { return a.findSteward(hosts[0], tried) }
+	msg := func(s steward) string { return archiveRequest(s, left(), by) }
+	wait := archiveWait + time.Duration(len(hosts)-1)*archiveEach
+	s, err := delegate(ctx, find, msg, func() bool { return len(left()) == 0 }, a.peerSend, wait)
+	for _, h := range hosts {
+		if archived(h) {
+			lines[at[h]] = fmt.Sprintf("archived its desktop session %s (%s archived it)", h, s.who(h))
+		} else {
+			lines[at[h]] = fmt.Sprintf("its desktop session %s stays: %v", h, err)
+		}
+	}
+	return lines
+}
+
+// archivable is the desktop session of agent ag when the doctor or remove
+// may archive it, else why it stays.
+func (a *app) archivable(st *state.State, ag state.Party) (host, why string) {
 	i := slices.IndexFunc(st.Starts, func(x state.Start) bool { return x.Session != "" && x.Session == ag.Session })
 	if i < 0 {
-		return "its desktop session stays: beekeeper did not start it"
+		return "", "its desktop session stays: beekeeper did not start it"
 	}
 	if keepsRole(st, ag) {
-		return "its desktop session stays: it holds or held the supervisor's or the guide's role"
+		return "", "its desktop session stays: it holds or held the supervisor's or the guide's role"
 	}
-	host := st.Starts[i].HostSession
-	archived := func() (bool, bool) {
-		r, ok := claude.ReadRecord(a.cfg, host)
-		return ok, ok && r.IsArchived
-	}
-	switch ok, done := archived(); {
+	host = st.Starts[i].HostSession
+	switch r, ok := claude.ReadRecord(a.cfg, host); {
 	case !ok:
-		return "the desktop has no session of it to archive"
-	case done:
-		return "the desktop has its session archived already"
+		return "", "the desktop has no session of it to archive"
+	case r.IsArchived:
+		return "", "the desktop has its session archived already"
 	}
 	if s, ok := a.runningTurn(ag); ok {
-		return fmt.Sprintf("its desktop session stays: its CLI %d is in a turn", s.PID)
+		return "", fmt.Sprintf("its desktop session stays: its CLI %d is in a turn", s.PID)
 	}
-	find := func(_ context.Context, tried []string) (steward, error) { return a.findSteward(host, tried) }
-	msg := func(session string) string { return archiveRequest(session, ag.Name) }
-	s, err := delegate(ctx, host, find, msg, func() bool { _, done := archived(); return done }, a.peerSend, archiveWait)
-	if err != nil {
-		return fmt.Sprintf("its desktop session %s stays: %v", host, err)
-	}
-	return fmt.Sprintf("archived its desktop session %s (%s archived it)", host, s.who(host))
+	return host, ""
 }
 
 // runningTurn is the CLI of p when one runs a turn: a headless turn, a tool
@@ -361,8 +419,13 @@ func (a *app) runningTurn(p state.Party) (*claude.Session, bool) {
 	if err != nil {
 		return nil, false
 	}
+	return turnRunning(sessions, t, p, a.now)
+}
+
+// turnRunning is runningTurn on the sessions and process table read.
+func turnRunning(sessions []*claude.Session, t *proc.Table, p state.Party, now time.Time) (*claude.Session, bool) {
 	for _, s := range sessions {
-		if p.Is(s.Party()) && (headlessTurn(t, s.ID) != "" || len(s.Commands) > 0 || a.now.Sub(s.LastActive) < stewardQuiet) {
+		if p.Is(s.Party()) && (headlessTurn(t, s.ID) != "" || len(s.Commands) > 0 || now.Sub(s.LastActive) < stewardQuiet) {
 			return s, true
 		}
 	}

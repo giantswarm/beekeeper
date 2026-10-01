@@ -35,8 +35,10 @@ Without a subcommand, lists the open notes.`,
 		Use:   "add <text>",
 		Short: "Add a note",
 		Long: `Add a note. A note for the guide's person (guide.person; with it unset,
-any --for) is refused, naming what it lacks, unless it carries what the
-person needs to answer without asking back: --status-quo and --why, every
+any --for) is refused, naming what it lacks, unless it asks something (a
+question mark, an --option or a request verb opening it; a status line goes
+to beekeeper log add) and carries what the person needs to answer without
+asking back: --status-quo and --why, every
 --option as "<choice>: <consequence>", a --default that is an action (not
 "wait" or "none"), the full URL of every #N or owner/repo#N it names, and
 --checked "<source>" for a claim that something is merged, green,

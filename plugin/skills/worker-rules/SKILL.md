@@ -14,7 +14,8 @@ and win where they are more specific; nothing here relaxes them.
 
 The task ends merged, released, rolled and proven live, and the supervisor learns it from one
 message: PR links, release versions, the live proof, what is still open, every fact re-queried
-live at the time of the report. Then `beekeeper agents idle` and the turn ends. Nothing the next
+live at the time of the report. Then `beekeeper agents idle --done` and the turn ends; beekeeper
+takes the session off the roster and archives it. Nothing the next
 task needs lives only in this session: the next task goes to a fresh one.
 
 ## Context

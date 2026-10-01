@@ -539,13 +539,14 @@ type dueAgent struct {
 // handoversDue are the registered agents whose running session's context
 // reached relayAt, at a quiet moment: no tool command of their own running
 // and no gated merge of their own in flight. It skips the agents said
-// already and those holding a relayed role, which relay instead.
+// already and those holding or relieved of a relayed role, which relay
+// instead.
 func handoversDue(st *state.State, sessions []*claude.Session, relayAt config.Tokens, said func(state.Party) bool,
 	contextOf func(*claude.Session) int64, alive func(int) bool,
 ) []dueAgent {
 	var out []dueAgent
 	for _, ag := range st.Agents {
-		if said(ag.Party) || holdsRole(st, ag.Party) {
+		if said(ag.Party) || keepsRole(st, ag.Party) {
 			continue
 		}
 		s, ok := claude.Live(sessions, ag.Party)

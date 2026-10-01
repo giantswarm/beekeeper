@@ -15,7 +15,8 @@ The supervisor knows that this session exists, what it can reach and that it is 
 person telling it. The session takes the task the supervisor sends and works it to the finish under
 the `worker-rules` skill: merged, released, rolled and proven live. Done, it reports the outcome to
 the supervisor (PR links, release versions, the proof, what remains open, all re-queried live), runs
-`beekeeper agents idle` and ends its turn. It is not reused: the next task goes to a fresh session.
+`beekeeper agents idle --done` and ends its turn. It is not reused: the next task goes to a fresh
+session, and beekeeper takes this one off the roster and archives it once its turn ended.
 
 ## Context
 
@@ -24,7 +25,7 @@ the supervisor (PR links, release versions, the proof, what remains open, all re
 - **The registration** is `beekeeper agents register [--name <name>]`, which puts the session on the
   roster under its title and prints the message's first line, which stands alone: `register:
   <session name> idle, ready for a task`. `beekeeper agents idle` marks a finished task and prints
-  the same line. The body says what the supervisor routes work by: the worktree and its branch, the
+  the same line; `--done` marks the work finished, so beekeeper retires the session. The body says what the supervisor routes work by: the worktree and its branch, the
   permission mode, and which connectors this session has (the browser extension, GitHub, chat, the
   board tools). A connector can attach only at the next turn boundary, so one missing in the first
   turn is looked for again before it is reported missing.

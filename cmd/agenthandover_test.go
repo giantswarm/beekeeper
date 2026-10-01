@@ -27,13 +27,14 @@ const (
 func TestHandoversDue(t *testing.T) {
 	party := func(id string) state.Party { return state.Party{Session: id, Name: "test: " + id} }
 	agents := []state.Agent{}
-	ids := []string{dueID, "tool", "merging", "small", "said", "sup", "gone"}
+	ids := []string{dueID, "tool", "merging", "small", "said", "sup", "relieved", "gone"}
 	for _, id := range ids {
 		agents = append(agents, state.Agent{Party: party(id)})
 	}
 	st := &state.State{
 		Agents:     agents,
 		Supervisor: &state.Supervisor{Party: party("sup")},
+		Relieved:   []state.Relief{{Party: party("relieved")}},
 		Merges:     []state.Merge{{Repo: scratchRepo, PR: 1, By: party("merging"), Phase: state.Running, PID: 42}},
 	}
 	var sessions []*claude.Session

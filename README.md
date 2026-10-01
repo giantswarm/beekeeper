@@ -615,6 +615,21 @@ It does so only for a session beekeeper started that holds no role and runs no t
 `--keep-desktop` leaves it in the sidebar. When no steward is idle it says so and the removal
 still stands.
 
+`beekeeper doctor` does these chores by rule, and every watch poll (not `--once`) runs it in the
+background, one `DOCTOR` line per thing it did. It takes an agent off the roster once it reported
+its work finished with `agents idle --done` and its CLI runs no turn, once it was relieved of the
+supervisor's or the guide's role (a relieved role relays, it never hands over), or once it stayed
+idle `agents.staleAfter` (24h) with no CLI running; the desktop sessions beekeeper started for the
+finished and the stale ones are archived in one steward's turn, under the rules above. A session
+beekeeper started whose desktop record shows another title than its roster name gets the name
+back through a steward, at most every 30 minutes per session. Each fault of `doctor.faults` is
+probed (the probe exits 0 while the fault is absent); a failing one whose remedy may run
+unattended is remedied and probed again, any other only with `doctor --fault <name>`, and a fault
+still failing is one note for `guide.person`, closed once its probe passes, and one `DOCTOR FAULT`
+line while it lasts. `--dry-run` says what it would do. A note for the person that asks nothing
+(no question mark, no `--option`, no request verb opening it) is refused: a status line goes to
+`beekeeper log add "<text>"`.
+
 The desktop's import takes the session's model from the transcript's last reply and falls back to
 its own default model without one. So beekeeper imports the session only once the transcript
 holds its first reply and has stayed unchanged for 2 seconds (up to 5 minutes), and says which
