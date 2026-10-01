@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -210,6 +211,11 @@ func TestHookGatesMerges(t *testing.T) {
 		{"export V=1; ~/bin/devctl pr merge o/r 7", "export V=1; " + g + "~/bin/devctl pr merge o/r 7", false},
 		{"cd ~/.local/state/d && ./devctl pr merge o/r 7", "cd ~/.local/state/d && " + g + "./devctl pr merge o/r 7", false},
 		{"for x in 1 2; do $HOME/bin/devctl pr merge o/r $x; done", "for x in 1 2; do " + g + "$HOME/bin/devctl pr merge o/r $x; done", false},
+		// The blocking waits are gated too.
+		{"devctl pr wait o/r 1", g + "devctl pr wait o/r 1", false},
+		{"devctl release wait o/r --pr 1 | tail -3", g + "devctl release wait o/r --pr 1 | tail -3", false},
+		{"devctl rollout wait inst o/r --pr 1 >| r.json", g + "devctl rollout wait inst o/r --pr 1 >| r.json", false},
+		{"devctl pr wait o/r 1", self + " gate --wait 30m -- devctl pr wait o/r 1", true},
 		// A merge on a line of its own in a multi-line -c string is gated in place.
 		{"bash -c '\ntrap restore EXIT\ndevctl pr merge o/r 7\n'", "bash -c '\ntrap restore EXIT\n" + g + "devctl pr merge o/r 7\n'", false},
 	} {
@@ -222,7 +228,7 @@ func TestHookGatesMerges(t *testing.T) {
 			t.Errorf("%q: timeout %v in the background=%v", c.cmd, d.UpdatedInput["timeout"], c.bg)
 		}
 	}
-	for _, cmd := range []string{"devctl pr wait o/r 1", "devctl version", "echo devctl pr merge o/r 1", g + "devctl pr merge o/r 1",
+	for _, cmd := range []string{"devctl pr view o/r 1", "devctl release list o/r", "devctl version", "echo devctl pr merge o/r 1", g + "devctl pr merge o/r 1",
 		"flock x.lock " + g + "~/bin/devctl pr merge o/r 1", "sed -i 's/gs-pr-merge/devctl pr merge/g' f", "pgrep -f 'devctl pr merge'"} {
 		if d := decide(t, h, t.TempDir(), cmd, nil); d != nil {
 			t.Errorf("%q is rewritten: %v", cmd, d.UpdatedInput["command"])
@@ -233,8 +239,11 @@ func TestHookGatesMerges(t *testing.T) {
 // TestHookGatesRealMerges feeds every devctl pr merge statement from the
 // transcripts of the machine the hook runs on, reduced to its shell skeleton
 // (words outside the shell structure are x, repositories o/r), with the
-// number of merges a shell parser finds in it. Each merge is gated, and the
-// rewrite adds nothing but the gates.
+// number of merges a shell parser finds in it. Each merge is gated, as is
+// each blocking wait beside it, and the rewrite adds nothing but the gates.
+// waits are the blocking waits in a command, mentions included.
+var waits = regexp.MustCompile(`devctl\s+(?:pr|release|rollout)\s+wait\b`)
+
 func TestHookGatesRealMerges(t *testing.T) {
 	h := Hook{Self: self, Shell: testShell, Clusters: func() []string { return nil }, Leases: func() []lease.Holder { return nil }}
 	raw, err := os.ReadFile("testdata/merges.jsonl")
@@ -263,9 +272,9 @@ func TestHookGatesRealMerges(t *testing.T) {
 		}
 		// A mention after a | or ; inside a quoted string is gated too (a
 		// grep pattern): more gates than merges only where there are mentions.
-		k := strings.Count(got, self+" gate -- ")
-		if k < c.Merges || k > c.Merges && strings.Count(c.Command, "devctl pr merge") == c.Merges {
-			t.Errorf("%q: %d gates, want %d: %s", c.Command, k, c.Merges, got)
+		k, want := strings.Count(got, self+" gate -- "), c.Merges+len(waits.FindAllString(c.Command, -1))
+		if k < want || k > want && len(anyOwned.FindAllString(c.Command, -1)) == want {
+			t.Errorf("%q: %d gates, want %d: %s", c.Command, k, want, got)
 		}
 		if strings.ReplaceAll(got, self+" gate -- ", "") != c.Command {
 			t.Errorf("%q: rewritten beyond the gate: %s", c.Command, got)
@@ -287,6 +296,7 @@ func TestHookRefusesHiddenMerges(t *testing.T) {
 		{`zsh -lc "flock x.lock ~/bin/devctl pr merge o/r 7 >| \"$S/m.json\""`, `zsh -lc "flock x.lock ` + g + `~/bin/devctl pr merge o/r 7 >| \"$S/m.json\""`, false},
 		{`timeout 600 sh -c "devctl pr merge o/r 7"`, `timeout 600 sh -c "` + self + ` gate --wait 30m -- devctl pr merge o/r 7"`, true},
 		{self + ` run -- zsh -c 'devctl pr merge o/r 7'`, self + ` run -- zsh -c '` + g + `devctl pr merge o/r 7'`, false},
+		{`bash -c 'devctl pr wait o/r 7'`, `bash -c '` + g + `devctl pr wait o/r 7'`, false},
 	} {
 		d := decide(t, h, t.TempDir(), c.cmd, map[string]any{backgroundKey: c.bg})
 		if d == nil || d.PermissionDecision != decisionDeny || !strings.HasSuffix(d.Reason, "\n"+c.fixed) {
@@ -298,7 +308,7 @@ func TestHookRefusesHiddenMerges(t *testing.T) {
 			t.Errorf("%q: the gated form is refused too: %s", c.fixed, d.Reason)
 		}
 	}
-	for _, cmd := range []string{`bash -c 'devctl pr wait o/r 7'`, `bash -c 'echo ok' && echo "devctl pr merge o/r 7"`, `ssh -c aes x`} {
+	for _, cmd := range []string{`bash -c 'devctl pr view o/r 7'`, `bash -c 'echo ok' && echo "devctl pr merge o/r 7"`, `ssh -c aes x`} {
 		if d := decide(t, h, t.TempDir(), cmd, nil); d != nil && d.PermissionDecision == decisionDeny {
 			t.Errorf("%q is refused: %s", cmd, d.Reason)
 		}

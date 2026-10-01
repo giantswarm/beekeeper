@@ -401,7 +401,7 @@ func TestHelperMergeChild(t *testing.T) {
 	if i < 0 {
 		t.Skip("run by TestAnUnservedRepositoryTakesThePlainSquashMerge")
 	}
-	os.Exit(mergeChild(os.Args[i+1]))
+	os.Exit(mergeChild(os.Args[i+1]).rc)
 }
 
 // A fix window lets its pull request through a lane whose installation

@@ -36,9 +36,10 @@ const mergePos = start + `(?:(?:` +
 	`|nohup|time(?:\s+-p)?|command|exec|\w+=\S*` +
 	`)\s+)*`
 
-// devctlMerge is devctl pr merge, devctl by name or by a path that starts
-// with /, ~/, ./, ../ or a variable ($HOME/bin/devctl).
-const devctlMerge = `(?:(?:~|\.\.?|\$\{?\w+\}?)?/(?:[^\s;&|()'"<>=]*/)?)?devctl\s+pr\s+merge\b`
+// devctlOwned is one of devctl's blocking commands the gate runs (pr merge,
+// pr wait, release wait, rollout wait), devctl by name or by a path that
+// starts with /, ~/, ./, ../ or a variable ($HOME/bin/devctl).
+const devctlOwned = `(?:(?:~|\.\.?|\$\{?\w+\}?)?/(?:[^\s;&|()'"<>=]*/)?)?devctl\s+(?:pr\s+(?:merge|wait)|(?:release|rollout)\s+wait)\b`
 
 var (
 	heavy = regexp.MustCompile(`(?m)` + pos + `(` + strings.Join([]string{
@@ -57,10 +58,11 @@ var (
 	}, "|") + `)`)
 	// lightMake: make targets that build nothing (RE2 has no lookahead).
 	lightMake = regexp.MustCompile(`^\s+(?:-n\b|--dry-run\b|help\b|version\b|clean\b|fmt\b|print-|list\b)`)
-	// merge: devctl pr merge at a command position, the gate goes before it.
-	merge = regexp.MustCompile(`(?m)` + mergePos + `(` + devctlMerge + `)`)
-	// anyMerge: devctl pr merge anywhere; gated: the gate ends the text before it.
-	anyMerge = regexp.MustCompile(devctlMerge)
+	// owned: a blocking devctl command at a command position, the gate goes
+	// before it.
+	owned = regexp.MustCompile(`(?m)` + mergePos + `(` + devctlOwned + `)`)
+	// anyOwned: one anywhere; gated: the gate ends the text before it.
+	anyOwned = regexp.MustCompile(devctlOwned)
 	gated    = regexp.MustCompile(`\bgate\s+(?:--wait\s+\S+\s+)?--\s+$`)
 	// shellC: a shell's -c option up to the quote opening its command string.
 	shellC  = regexp.MustCompile(`(?:^|[\s;&|(/])(?:ba|z|da|k)?sh\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*c[a-zA-Z]*\s+(['"])`)
@@ -206,8 +208,8 @@ func (h Hook) decide(ev event) []byte {
 	bg, _ := ev.ToolInput[backgroundKey].(bool)
 	cmd, gated := h.gate(cmd, bg)
 	if fixed, ok := h.hiddenMerges(cmd, bg); ok {
-		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused: a devctl pr merge inside a shell's -c string " +
-			"runs outside the merge gate. Run it as its own command, or with the gate written in:\n" + fixed})
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused: a devctl pr merge, pr wait, release wait or rollout wait " +
+			"inside a shell's -c string runs outside the gate. Run it as its own command, or with the gate written in:\n" + fixed})
 	}
 	if wrapped.MatchString(cmd) {
 		return h.rewrite(ev.ToolInput, cmd, gated, bg)
@@ -238,26 +240,27 @@ func (h Hook) decide(ev event) []byte {
 	return h.rewrite(ev.ToolInput, prefix+ShellQuote(h.Self)+" run -- "+ShellQuote(h.Shell)+" -c "+ShellQuote(cmd), true, bg)
 }
 
-// gate puts "beekeeper gate --" before every devctl pr merge at a command
-// position, behind its prefix commands, so that only the devctl invocation
-// is wrapped and pipelines and lists run as written.
+// gate puts "beekeeper gate --" before every blocking devctl command at a
+// command position, behind its prefix commands, so that only the devctl
+// invocation is wrapped and pipelines and lists run as written.
 func (h Hook) gate(cmd string, bg bool) (string, bool) {
 	var at []int
-	for _, m := range merge.FindAllStringSubmatchIndex(cmd, -1) {
+	for _, m := range owned.FindAllStringSubmatchIndex(cmd, -1) {
 		at = append(at, m[2])
 	}
 	return h.insertGate(cmd, at, bg), len(at) > 0
 }
 
-// hiddenMerges returns cmd with the gate before each devctl pr merge the gate
-// rewrite left inside a sh, bash or zsh -c string, and whether there was one.
+// hiddenMerges returns cmd with the gate before each blocking devctl command
+// the gate rewrite left inside a sh, bash or zsh -c string, and whether there
+// was one.
 // The hook refuses such a command rather than rewriting a quoted string.
 func (h Hook) hiddenMerges(cmd string, bg bool) (string, bool) {
 	var at []int
 	for _, m := range shellC.FindAllStringSubmatchIndex(cmd, -1) {
 		body := cmd[m[1]:]
 		end := closingQuote(body, cmd[m[2]])
-		for _, mm := range anyMerge.FindAllStringIndex(body[:end], -1) {
+		for _, mm := range anyOwned.FindAllStringIndex(body[:end], -1) {
 			if !gated.MatchString(body[:mm[0]]) {
 				at = append(at, m[1]+mm[0])
 			}
@@ -267,7 +270,7 @@ func (h Hook) hiddenMerges(cmd string, bg bool) (string, bool) {
 }
 
 // insertGate puts the gate before each offset in at, in ascending order; a
-// background merge waits up to 30 minutes for its turn.
+// background merge waits up to 30 minutes for its turn (a wait has none).
 func (h Hook) insertGate(cmd string, at []int, bg bool) string {
 	gate := ShellQuote(h.Self) + " gate -- "
 	if bg {
