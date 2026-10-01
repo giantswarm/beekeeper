@@ -27,7 +27,7 @@ func TestMessageSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := &config.Config{StateDir: dir}
-	cfg.Guide.Person = "Grace"
+	cfg.Guide.Person = tPerson
 	a := &app{cfg: cfg, store: store, out: &bytes.Buffer{}}
 	inbox := omp.InboxPath(dir, id)
 	if err := omp.MakeInbox(inbox); err != nil {
@@ -48,7 +48,7 @@ func TestMessageSession(t *testing.T) {
 		t.Fatalf("inbox got %q, want the person's stamped message", line)
 	}
 	evs, err := store.Events(10, nil)
-	if err != nil || len(evs) != 1 || evs[0].Verb != "ui.message" || evs[0].By.Name != "Grace" {
+	if err != nil || len(evs) != 1 || evs[0].Verb != "ui.message" || evs[0].By.Name != tPerson {
 		t.Errorf("events = %+v, %v, want one ui.message by Grace", evs, err)
 	}
 
@@ -57,7 +57,7 @@ func TestMessageSession(t *testing.T) {
 		t.Errorf("message to the person's own omp = %v, want the refusal", err)
 	}
 
-	twin := []*claude.Session{{Name: "bee", PID: 1}, {Name: "bee", PID: 2}}
+	twin := []*claude.Session{{Name: tBeeName, PID: 1}, {Name: tBeeName, PID: 2}}
 	if _, err := a.messageSession(context.Background(), twin, twin[0], "hi"); err == nil || !strings.Contains(err.Error(), "2 running CLIs") {
 		t.Errorf("message to one of two namesakes = %v, want the refusal", err)
 	}

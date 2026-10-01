@@ -16,10 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `ui` keeps the sessions tab's selection on the picked session when the list reorders between refreshes; `enter` could open whichever session had taken its row.
+
 - `board next` holds an epic's sub-issues to the epic's owners: a serve record, a busy agent's task or an open note naming the epic skips each sub-issue offered through it, with the reason and the epic (`note #n (waits on …), on epic owner/repo#n`). One note or serve on an epic covered none of its sub-issues, so a board pull was offered a teammate's slices one after another.
 - An omp agent's beekeeper commands act as its roster entry, so `agents idle --done` finishes it; they were refused as an unregistered session. Taking an omp agent off the roster stops its unit: its process ran on, holding its model, after its work was done.
 
 ### Added
+
+- `ui` takes a Claude Code session over from its pane (`t`): its permission requests come to the screen with its turns beside them, `a` allows and `d` denies the oldest, and the session's row says `approval`. The PermissionRequest hook holds a taken-over session's request for the screen and gives up itself after 290 s; unanswered, released (`t` again, or quitting the screen) or with the screen gone, the request goes to the session's own window and the pane says it was handed back. A session not taken over is decided at once without a lock, as before. `install` writes the hook's timeout as 300 s; omp sessions ask for no approvals and are refused.
 
 - `ui` messages a session from its pane: `m` opens a message line, `enter` sends it stamped `From <guide.person> through beekeeper ui:`, by name to a Claude Code session's CLI (at its next tool call or as its next turn) or into the inbox of an omp agent beekeeper started; an omp session the person runs in its own terminal, and a name two CLIs share, are refused with the reason on the line. Each message is a `ui.message` event.
 
