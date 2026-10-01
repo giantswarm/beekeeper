@@ -162,6 +162,7 @@ func TestWatchSaysAConditionsStartAndEndOnce(t *testing.T) {
 // A second read with nothing changed is one "no change" line; a moving
 // figure is no change, --full prints everything.
 func TestSecondReadSaysNoChange(t *testing.T) {
+	needsPlatform(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, []byte("stateDir: "+dir+"\nlanes: [{name: ap, repositories: [giantswarm/klaus]}]\n"), 0o600); err != nil {

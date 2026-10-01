@@ -184,6 +184,7 @@ func TestHandoverRefusedWithoutThePermissionHook(t *testing.T) {
 }
 
 func TestEndSessionStopsABackgroundSessionThroughItsDaemon(t *testing.T) {
+	needsPlatform(t)
 	for _, bg := range []bool{true, false} {
 		cli := exec.Command("sleep", "60")
 		if err := cli.Start(); err != nil {

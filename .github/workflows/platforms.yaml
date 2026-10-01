@@ -1,0 +1,45 @@
+# Builds and tests the platforms beside the Linux systemd one, which CircleCI's
+# go-build covers: macOS, and Linux built with the nosystemd tag, both on the
+# stub platform (internal/platform). Tests that drive the machine itself skip
+# there (needsPlatform in cmd).
+name: platforms
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-latest
+            tags: ""
+          - name: Linux without systemd
+            os: ubuntu-24.04
+            tags: nosystemd
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go environment
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Vet
+        run: go vet -tags "${{ matrix.tags }}" ./...
+      - name: Test
+        run: go test -race -tags "${{ matrix.tags }}" ./...

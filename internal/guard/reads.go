@@ -194,7 +194,8 @@ func (h Hook) repoReads(ev event) string {
 // in it: CLAUDE.md and AGENTS.md with their @imports, .claude/rules, the
 // hooks and permissions of .claude/settings.json, and the files these name
 // as mandatory reading; within budget bytes, "" when the repository has
-// none. Only regular text files inside repo are read, never a secret name.
+// none. Only regular text files inside repo are read, never a secret name;
+// repo is a RepoRoot, its symlinks resolved.
 func MandatoryReads(repo string, budget int) string {
 	r := reader{repo: repo, seen: map[string]bool{}}
 	for _, name := range []string{claudeMD, "AGENTS.md", filepath.Join(".claude", claudeMD)} {
