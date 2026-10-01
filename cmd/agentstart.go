@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -77,7 +78,7 @@ var desktopWindowActive = claude.DesktopWindowActive
 var desktopInput = func(ctx context.Context) (func() time.Time, error) { return plat.Input.Watch(ctx) }
 
 func (a *app) agentStartCmd() *cobra.Command {
-	var model, dir, task string
+	var model, dir, task, harness string
 	c := &cobra.Command{
 		Use:   "start <name> <brief file>",
 		Short: "Start an agent session in bypass from the command line and import it into the desktop",
@@ -112,7 +113,16 @@ requests no allow rule covers would stop at a card: beekeeper hook
 permissionrequest answers them, for beekeeper's starts only. While the first
 turn runs, beekeeper stops the CLI the desktop warms for the import, so the
 first turn is the session's only CLI and a message by name reaches it; the
-desktop starts a new CLI when the person opens the session.`,
+desktop starts a new CLI when the person opens the session.
+
+--harness omp starts an omp (oh-my-pi) agent instead: "omp --mode rpc"
+in yolo approval mode on --model (default: omp.model, else omp's own), in
+a transient user unit beekeeper-omp-<id>, with its stdin on a FIFO inbox
+in beekeeper's state folder and the brief as its first message. It is
+registered on the roster as omp_<id> under <name> and shows in sessions
+and agents with harness omp; agents wake writes a message to its inbox,
+which omp delivers at its next tool round or as its next turn. No desktop
+is involved and no import happens.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := strings.TrimSpace(args[0])
@@ -125,6 +135,13 @@ desktop starts a new CLI when the person opens the session.`,
 			}
 			if task = strings.TrimSpace(task); task == "" {
 				task = briefTask(brief)
+			}
+			switch harness {
+			case omp.Harness:
+				return a.startOmpAgent(cmd.Context(), agentStart{name: name, brief: brief, task: task, dir: dir, model: model})
+			case "", "claude":
+			default:
+				return usageErr("--harness %q: claude or omp", harness)
 			}
 			sa, err := a.startAgent(cmd.Context(), agentStart{name: name, brief: brief, task: task, dir: dir, model: model})
 			if err != nil {
@@ -155,6 +172,7 @@ desktop starts a new CLI when the person opens the session.`,
 	c.Flags().StringVar(&model, "model", "", "the session's model (default: Claude Code's)")
 	c.Flags().StringVar(&dir, "dir", ".", "the session's working directory")
 	c.Flags().StringVar(&task, "task", "", "the task the roster shows it busy with (default: the brief's first line)")
+	c.Flags().StringVar(&harness, "harness", "claude", "the agent harness: claude or omp")
 	return c
 }
 
@@ -757,14 +775,15 @@ func agentArgv(bin, id, name, model, brief string, flags ...string) []string {
 // launch runs argv in a transient user service: it gets the user manager's
 // environment, not the caller's session variables, and outlives the caller;
 // a configuration file the caller named is passed on as $BEEKEEPER_CONFIG,
-// and stopPost runs once argv has ended.
+// env (KEY=value) is added, and stopPost runs once argv has ended.
 // KillMode=process leaves what the turn started running when it ends, as a
 // terminal would.
-func launch(unit, dir, config string, stopPost, argv []string) error {
+func launch(unit, dir, config string, stopPost, argv []string, env ...string) error {
 	// A session beekeeper stops (SIGTERM) ended as asked, not failed.
 	u := platform.Unit{Name: unit, Dir: dir, Argv: argv, KeepChildren: true, TermIsSuccess: true, StopPost: stopPost,
 		// The reopen may wait for the session to retitle itself.
 		StopTimeout: reopenAwayWait + stopPostWait}
+	u.Env = append(u.Env, env...)
 	if config != "" {
 		u.Env = append(u.Env, "BEEKEEPER_CONFIG="+config)
 	}
