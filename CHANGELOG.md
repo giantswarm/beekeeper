@@ -57,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A desktop notification sent after the session bus closed the connection is no longer lost: the notifier replaces a connection that is no longer connected before it calls, and retries once whenever a failed call left the connection closed. A call on a closed connection could fail with godbus's read error instead of `dbus.ErrClosed`, which skipped the retry; `TestDesktopKeepsItsConnection` failed about 1 in 12 runs under `go test -race` on a loaded machine.
 - The watch's loop tests (`TestWatchSamplesTheMachineWhileALaneReadHangs`, `TestWatchSlowsInstallationReadsUnderCPUPressure`, `TestLoopSkipsMissedTicks`) run on a clock they step: the watch's loops wait on an injectable clock, the wall clock outside the tests. Under `go test -race` on a machine at load 8 to 10 they failed on the wall-clock time a starved poll took.
 
 - Taking an omp agent off the roster (`agents remove`, the doctor) removes its inbox FIFO and lock file, also while its process still runs (no wake reaches an agent off the roster); they stayed in the state folder, one pair per agent ever started.
