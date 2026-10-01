@@ -118,8 +118,11 @@ func TestWatchSaysMissingSectionsOnce(t *testing.T) {
 			t.Errorf("the watch raised %q for a part it does not have:\n%s", alert, out)
 		}
 	}
-	if len(w.active) != 0 {
-		t.Errorf("open conditions %v, want none", w.active)
+	// The conditions a platform part feeds; tmpfs and disk are portable.
+	for _, key := range []string{"proc", "journal", "noscope", "avail", "swap", "swapoff", "oomd", "psi", "load", "loadrising", "cpupsi", "slowed", "scopeanon"} {
+		if c, ok := w.active[key]; ok {
+			t.Errorf("open condition %q (%s) for a part the stub does not have", key, c.Label)
+		}
 	}
 }
 
