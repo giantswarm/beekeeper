@@ -83,6 +83,20 @@ func runsSession(p *proc.Process) bool {
 	return true
 }
 
+// modelArg is the model an omp command line starts on (--model), until
+// its session file records one.
+func modelArg(args []string) string {
+	for i, a := range args {
+		if v, ok := strings.CutPrefix(a, "--model="); ok {
+			return v
+		}
+		if a == "--model" && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
 // Discover returns the running omp sessions, newest first. A session's
 // process may not have written its session file yet (omp creates it with
 // the first message): it is listed without a transcript. A process that
@@ -101,7 +115,7 @@ func Discover(sessionsDir string, t *proc.Table, now time.Time) []*claude.Sessio
 	files := assign(sessionFiles(sessionsDir, procs[len(procs)-1].Start.Add(-startSlack)), procs, t.Cwd)
 	var out []*claude.Session
 	for _, p := range procs {
-		s := &claude.Session{PID: p.PID, Started: p.Start, Cwd: t.Cwd(p.PID), Harness: Harness, State: StateIdle}
+		s := &claude.Session{PID: p.PID, Started: p.Start, Cwd: t.Cwd(p.PID), Harness: Harness, State: StateIdle, Model: modelArg(p.Args)}
 		if env, err := t.Environ(p.PID); err == nil {
 			if id := env[EnvAgent]; id != "" {
 				s.HostID = HostPrefix + id

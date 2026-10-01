@@ -926,7 +926,11 @@ it resumed). omp writes the file at the first reply, so a session not yet answer
 without a transcript.
 
 `agents start <name> <brief> --harness omp [--model m]` starts `omp --mode rpc --no-ui
---approval-mode yolo` on `--model` (default `omp.model`, else omp's own) in a transient user unit
+--approval-mode yolo --model <m>` on `--model`, else `omp.model`: an exact selector `omp models`
+lists (`provider/id`, such as `ollama/qwen3.5:9b`). With neither, or a model omp does not list, the
+start is refused before anything is recorded: omp's own default and a fuzzy pattern would pick a
+model nobody named, which may not be served right now. `agents` and `sessions` show each session's
+model, an omp session's from its command line until its session file records one. It runs in a transient user unit
 `beekeeper-omp-<id>`, with its stdin on a FIFO inbox (`<stateDir>/omp/<id>.in`) the unit opens for
 reading and writing, so the inbox never ends while the agent runs. The agent carries its start id and
 name in its environment (`BEEKEEPER_OMP_AGENT`, `BEEKEEPER_AGENT_NAME`) and is registered on the

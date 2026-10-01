@@ -5,7 +5,9 @@ package cmd
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -59,4 +61,36 @@ func TestRoleTextNamesTheHarness(t *testing.T) {
 
 func newOmpSession() *claude.Session {
 	return &claude.Session{Harness: omp.Harness, State: omp.StateBusy}
+}
+
+// An omp agent's model is named, from --model or omp.model, and is one
+// omp lists by its exact selector: no default, no pattern.
+func TestOmpModel(t *testing.T) {
+	const local, remote = "ollama/qwen3.5:9b", "vllm/qwen3-8b"
+	listed := func() ([]string, error) { return []string{local, remote}, nil }
+	for _, tc := range []struct {
+		flag, configured, want, err string
+	}{
+		{configured: local, want: local},
+		{flag: remote, configured: local, want: remote},
+		{err: "needs its model"},
+		{configured: "qwen3.5", err: `lists no model "qwen3.5"`},
+	} {
+		got, err := ompModel(tc.flag, tc.configured, listed)
+		if tc.err != "" {
+			if err == nil || !strings.Contains(err.Error(), tc.err) {
+				t.Errorf("ompModel(%q, %q) = %q, %v; want the error %q", tc.flag, tc.configured, got, err, tc.err)
+			}
+			continue
+		}
+		if err != nil || got != tc.want {
+			t.Errorf("ompModel(%q, %q) = %q, %v; want %q", tc.flag, tc.configured, got, err, tc.want)
+		}
+	}
+	if _, err := ompModel("", local, func() ([]string, error) { return nil, errors.New("omp failed") }); err == nil {
+		t.Error("an unreadable model list passed")
+	}
+	if argv := ompArgv("omp", local); !slices.Equal(argv[len(argv)-2:], []string{modelFlag, local}) {
+		t.Errorf("ompArgv = %v", argv)
+	}
 }

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"fmt"
 	"regexp"
 	"slices"
@@ -392,7 +393,7 @@ func (a *app) printRecords(records []state.Record, sessions []*claude.Session) {
 
 func (a *app) printSessions(v *view) {
 	w := a.table()
-	_, _ = fmt.Fprintln(w, "SESSION\tON\tACTIVE\tRUNNING\tMEM\tCTX\tLAST HOUR\tROLE / LEASES")
+	_, _ = fmt.Fprintln(w, "SESSION\tON\tACTIVE\tRUNNING\tMEM\tCTX\tMODEL\tLAST HOUR\tROLE / LEASES")
 	for _, s := range v.Sessions {
 		role := s.Role
 		if role == "" && s.Parent != "" {
@@ -402,9 +403,9 @@ func (a *app) printSessions(v *view) {
 		if s.Metrics != nil {
 			hour = hourText(s.Metrics.LastHour)
 		}
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%dM\t%s\t%s\t%s\n",
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%dM\t%s\t%s\t%s\t%s\n",
 			truncate(s.Name, 44), truncate(on(s), 44), ago(a.now, s.LastActive),
-			truncate(running(s.Commands), 40), s.MemMiB, contextText(s.Metrics), hour, truncate(roleText(s, role), 40))
+			truncate(running(s.Commands), 40), s.MemMiB, contextText(s.Metrics), cmp.Or(truncate(s.Model, 32), "-"), hour, truncate(roleText(s, role), 40))
 	}
 	_ = w.Flush()
 	if t := v.Totals; t != nil {
