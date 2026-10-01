@@ -235,7 +235,7 @@ func (w *watcher) runTimer(ctx context.Context, f timerFire) {
 	defer cancel()
 	c := exec.CommandContext(rctx, "sh", "-c", f.t.Run) //nolint:gosec // the command its timer's setter gave on this machine
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err == nil {
-		if out, err := os.Create(path); err == nil {
+		if out, err := os.Create(path); err == nil { //nolint:gosec // under the state directory, named by the timer id
 			defer func() { _ = out.Close() }()
 			c.Stdout, c.Stderr = out, out
 		}
