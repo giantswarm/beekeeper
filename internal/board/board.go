@@ -25,9 +25,12 @@ const (
 // Item is an open issue: a board item or a sub-issue or search result.
 type Item struct {
 	// Ref is owner/repo#n.
-	Ref       string    `json:"ref"`
-	URL       string    `json:"url"`
-	Title     string    `json:"title"`
+	Ref   string `json:"ref"`
+	URL   string `json:"url"`
+	Title string `json:"title"`
+	// OnBoard says it is an item of the board project, Status and Kind
+	// its board fields.
+	OnBoard   bool      `json:"onBoard,omitempty"`
 	Status    string    `json:"status,omitempty"`
 	Kind      string    `json:"kind,omitempty"`
 	Labels    []string  `json:"labels,omitempty"`
@@ -82,16 +85,13 @@ func (c Candidate) Why() string {
 // Rank returns the candidates of every step in order, each item once, in
 // the first step that matches it. A SubIssues step offers an item with open
 // sub-issues through them (its remainder) and is the item's only step; an
-// item without is offered itself. A sub-issue that is a board item is held
-// to the order like any other: one no step offers on its own (an old
-// Backlog item, a blocked one) is marked skipped with the reason. Items
-// with an open recorded blocker, without activity for b.StaleAfter or
-// assigned to anybody outside b.People are marked skipped too.
+// item without is offered itself. A sub-issue that is a board item, of
+// any Team or Status, is held to the order like any other: one no step
+// offers on its own (an old Backlog item, a blocked one, one in Inbox) is
+// marked skipped with the reason. Items with an open recorded blocker,
+// without activity for b.StaleAfter or assigned to anybody outside
+// b.People are marked skipped too.
 func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
-	onBoard := make(map[string]Item, len(snap.Items))
-	for _, it := range snap.Items {
-		onBoard[it.Ref] = it
-	}
 	seen := map[string]bool{}
 	var out []Candidate
 	offer := func(it Item, step, epic, skip string) {
@@ -119,8 +119,8 @@ func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 			seen[it.Ref] = true
 			for _, sub := range it.SubIssues {
 				skip := ""
-				if bi, ok := onBoard[sub.Ref]; ok {
-					sub, skip = bi, Unoffered(snap.Order, bi, now)
+				if sub.OnBoard {
+					skip = Unoffered(snap.Order, sub, now)
 				}
 				offer(sub, st.Name, it.Ref, skip)
 			}

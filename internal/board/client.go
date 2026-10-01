@@ -46,6 +46,10 @@ type meta struct {
 const issueFields = `fragment I on Issue{number url title state createdAt updatedAt repository{nameWithOwner}
 labels(first:20){nodes{name}} assignees(first:10){nodes{login}} issueDependenciesSummary{blockedBy totalBlockedBy} subIssuesSummary{total completed}}`
 
+// boardFields is what every read takes of a board item.
+const boardFields = `status:fieldValueByName(name:"` + StatusField + `"){...on ProjectV2ItemFieldSingleSelectValue{name}}
+kind:fieldValueByName(name:"` + KindField + `"){...on ProjectV2ItemFieldSingleSelectValue{name}}`
+
 type issueJSON struct {
 	Number     int       `json:"number"`
 	URL        string    `json:"url"`
@@ -71,6 +75,10 @@ type issueJSON struct {
 		Completed int `json:"completed"`
 	} `json:"subIssuesSummary"`
 }
+
+// open reports whether j is an open issue; a pull request or a draft has
+// no URL.
+func (j issueJSON) open() bool { return j.URL != "" && j.State == "OPEN" }
 
 func (j issueJSON) item() Item {
 	it := Item{
@@ -213,7 +221,7 @@ func (c *Client) Read(ctx context.Context, now time.Time) (*Snapshot, error) {
 	if snap.Items, err = c.items(ctx, filter(c.Board, order)); err != nil {
 		return nil, err
 	}
-	return snap, c.extras(ctx, snap, now)
+	return snap, c.extras(ctx, snap, m.ID, now)
 }
 
 func (c *Client) items(ctx context.Context, q string) ([]Item, error) {
@@ -228,8 +236,7 @@ func (c *Client) items(ctx context.Context, q string) ([]Item, error) {
 							EndCursor   string `json:"endCursor"`
 						} `json:"pageInfo"`
 						Nodes []struct {
-							Status *struct{ Name string } `json:"status"`
-							Kind   *struct{ Name string } `json:"kind"`
+							projectItem
 							// Content is empty for a pull request or a draft.
 							Content issueJSON `json:"content"`
 						} `json:"nodes"`
@@ -242,25 +249,18 @@ func (c *Client) items(ctx context.Context, q string) ([]Item, error) {
 			vs["c"] = cursor
 		}
 		err := c.graphql(ctx, &r, `query($o:String!,$n:Int!,$q:String!,$c:String){repositoryOwner(login:$o){...on ProjectV2Owner{projectV2(number:$n){
-items(first:100,after:$c,query:$q){pageInfo{hasNextPage endCursor} nodes{
-status:fieldValueByName(name:"`+StatusField+`"){...on ProjectV2ItemFieldSingleSelectValue{name}}
-kind:fieldValueByName(name:"`+KindField+`"){...on ProjectV2ItemFieldSingleSelectValue{name}}
+items(first:100,after:$c,query:$q){pageInfo{hasNextPage endCursor} nodes{`+boardFields+`
 content{...I}}}}}}}`+issueFields, vs)
 		if err != nil {
 			return nil, err
 		}
 		items := r.Owner.Project.Items
 		for _, n := range items.Nodes {
-			if n.Content.URL == "" || n.Content.State != "OPEN" {
+			if !n.Content.open() {
 				continue
 			}
 			it := n.Content.item()
-			if n.Status != nil {
-				it.Status = n.Status.Name
-			}
-			if n.Kind != nil {
-				it.Kind = n.Kind.Name
-			}
+			n.onto(&it)
 			out = append(out, it)
 		}
 		if !items.PageInfo.HasNextPage {
@@ -271,8 +271,10 @@ content{...I}}}}}}}`+issueFields, vs)
 }
 
 // extras reads in one request the open sub-issues of the items with any a
-// SubIssues step matches and the search steps' issues.
-func (c *Client) extras(ctx context.Context, snap *Snapshot, now time.Time) error {
+// SubIssues step matches, with their board fields when they are items of
+// the board project, whatever their Team or Status, and the search steps'
+// issues.
+func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now time.Time) error {
 	var q strings.Builder
 	var epics []int
 	for _, st := range snap.Order {
@@ -286,7 +288,7 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, now time.Time) erro
 				if err != nil {
 					return err
 				}
-				fmt.Fprintf(&q, "e%d:repository(owner:%s,name:%s){issue(number:%d){subIssues(first:50){nodes{...I}}}}", i, quote(owner), quote(repo), n)
+				fmt.Fprintf(&q, "e%d:repository(owner:%s,name:%s){issue(number:%d){subIssues(first:50){nodes{...I projectItems(first:20){nodes{project{id} "+boardFields+"}}}}}}", i, quote(owner), quote(repo), n)
 			}
 		}
 	}
@@ -308,7 +310,7 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, now time.Time) erro
 	open := func(ns []issueJSON) []Item {
 		var out []Item
 		for _, n := range ns {
-			if n.URL != "" && n.State == "OPEN" {
+			if n.open() {
 				out = append(out, n.item())
 			}
 		}
@@ -317,11 +319,29 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, now time.Time) erro
 	for _, i := range epics {
 		var e struct {
 			Issue struct {
-				SubIssues nodes `json:"subIssues"`
+				SubIssues struct {
+					Nodes []struct {
+						issueJSON
+						ProjectItems struct {
+							Nodes []projectItem `json:"nodes"`
+						} `json:"projectItems"`
+					} `json:"nodes"`
+				} `json:"subIssues"`
 			} `json:"issue"`
 		}
-		if raw, ok := r[fmt.Sprintf("e%d", i)]; ok && json.Unmarshal(raw, &e) == nil {
-			snap.Items[i].SubIssues = open(e.Issue.SubIssues.Nodes)
+		raw, ok := r[fmt.Sprintf("e%d", i)]
+		if !ok || json.Unmarshal(raw, &e) != nil {
+			continue
+		}
+		for _, n := range e.Issue.SubIssues.Nodes {
+			if !n.open() {
+				continue
+			}
+			it := n.item()
+			if j := slices.IndexFunc(n.ProjectItems.Nodes, func(p projectItem) bool { return p.Project.ID == project }); j >= 0 {
+				n.ProjectItems.Nodes[j].onto(&it)
+			}
+			snap.Items[i].SubIssues = append(snap.Items[i].SubIssues, it)
 		}
 	}
 	for i := range snap.Order {
@@ -383,7 +403,7 @@ func (c *Client) Move(ctx context.Context, ref, in string) (*Moved, error) {
 		} `json:"repository"`
 	}
 	err = c.graphql(ctx, &r, `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){projectItems(first:50){nodes{
-id project{id} status:fieldValueByName(name:"`+StatusField+`"){...on ProjectV2ItemFieldSingleSelectValue{name}}}}}}}`,
+id project{id} `+boardFields+`}}}}}`,
 		vars{"o": owner, "r": repo, "n": n})
 	if err != nil {
 		return nil, err
@@ -418,6 +438,18 @@ type projectItem struct {
 	ID      string                 `json:"id"`
 	Project struct{ ID string }    `json:"project"`
 	Status  *struct{ Name string } `json:"status"`
+	Kind    *struct{ Name string } `json:"kind"`
+}
+
+// onto marks it a board item with the board fields of p.
+func (p projectItem) onto(it *Item) {
+	it.OnBoard = true
+	if p.Status != nil {
+		it.Status = p.Status.Name
+	}
+	if p.Kind != nil {
+		it.Kind = p.Kind.Name
+	}
 }
 
 // Refusal is a move the board's values or items do not allow.

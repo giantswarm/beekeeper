@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `board next` holds a sub-issue that is a board item to the order by its own Status whatever its Team: the Status, Kind and project of an epic's sub-issues are read with them, so a sub-issue without a Team (missing from the team's board read) in Inbox, too old for its step or still blocked is skipped with the reason instead of offered.
 - `ui` keeps the sessions tab's selection on the picked session when the list reorders between refreshes; `enter` could open whichever session had taken its row.
 
 - `board next` holds an epic's sub-issues to the epic's owners: a serve record, a busy agent's task or an open note naming the epic skips each sub-issue offered through it, with the reason and the epic (`note #n (waits on …), on epic owner/repo#n`). One note or serve on an epic covered none of its sub-issues, so a board pull was offered a teammate's slices one after another.
