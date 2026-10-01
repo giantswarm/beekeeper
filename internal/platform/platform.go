@@ -112,6 +112,8 @@ type Launcher interface {
 	// Freeze suspends every process of the unit, Thaw resumes them.
 	Freeze(ctx context.Context, name string) error
 	Thaw(ctx context.Context, name string) error
+	// Stop stops the unit and every process in it.
+	Stop(ctx context.Context, name string) error
 	// State is the unit's state ("active", "inactive", "failed", ...);
 	// empty when unreadable.
 	State(ctx context.Context, name string) string

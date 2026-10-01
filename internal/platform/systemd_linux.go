@@ -161,6 +161,10 @@ func (systemdLauncher) Thaw(ctx context.Context, name string) error {
 	return systemctlUser(ctx, "thaw", name)
 }
 
+func (systemdLauncher) Stop(ctx context.Context, name string) error {
+	return systemctlUser(ctx, "stop", name)
+}
+
 // systemctlUser runs one systemctl --user verb on unit.
 func systemctlUser(ctx context.Context, verb, unit string) error {
 	out, err := exec.CommandContext(ctx, "systemctl", userManager, verb, unit).CombinedOutput() //nolint:gosec // the unit beekeeper named

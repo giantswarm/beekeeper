@@ -94,3 +94,27 @@ func TestOmpModel(t *testing.T) {
 		t.Errorf("ompArgv = %v", argv)
 	}
 }
+
+// An omp agent's beekeeper commands act as its roster entry, even where its
+// tool shell carries another session's variables: agents idle --done
+// finishes it.
+func TestOmpAgentIsTheCaller(t *testing.T) {
+	const id = "1234abcd-0000-4000-8000-000000000000"
+	dir := t.TempDir()
+	store, err := state.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "some-other-session")
+	t.Setenv(omp.EnvAgent, id)
+	t.Setenv(omp.EnvName, "omp worker")
+	a := &app{cfg: &config.Config{StateDir: dir}, store: store, out: &bytes.Buffer{}}
+	me, err := a.caller()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ag := state.Agent{Party: state.Party{HostSession: omp.HostPrefix + id, Name: "omp worker"}}
+	if !ag.Is(me) || me.Session != "" {
+		t.Fatalf("caller = %+v, want the omp agent's roster entry", me)
+	}
+}

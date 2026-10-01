@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `agents start --harness omp` names the agent's model on omp's command line: `--model`, else `omp.model`, an exact `provider/id` selector `omp models` lists. With neither, or a model omp does not list, the start is refused before anything is recorded. An omp agent started without a model ran on omp's own default, which answered nothing while its server was busy with other work, and a pattern could match a model nobody meant.
 - `agents` and `sessions` have a `MODEL` column; an omp session's model comes from its command line until its session file records one, so an agent not yet answered shows its model too.
 
+### Fixed
+
+- An omp agent's beekeeper commands act as its roster entry, so `agents idle --done` finishes it; they were refused as an unregistered session. Taking an omp agent off the roster stops its unit: its process ran on, holding its model, after its work was done.
+
 ### Added
 
 - `agents start` gives every worker the worker rules beekeeper ships with its role skills (the `worker-rules` skill, under the binary's version) ahead of its brief, and `agents handover` puts them ahead of the follow-up's prompt again: a brief carries only its task. A `SendMessage` to `the supervisor` or `the guide` goes to the session holding that role now, by the name its running CLI answers to, else its desktop session, and is refused while nobody holds it: a brief no longer names a run that the next relay makes stale. Workers started with 10 to 17k characters of brief, two disagreeing copies of the rules and the boilerplate of every task file repeated in each.

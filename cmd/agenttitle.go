@@ -361,7 +361,7 @@ func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []sta
 	at := map[string]int{}
 	for i, ag := range agents {
 		if id, ok := strings.CutPrefix(ag.HostSession, omp.HostPrefix); ok {
-			lines[i] = a.dropInbox(id)
+			lines[i] = a.endOmp(ctx, id)
 			continue
 		}
 		host, why := a.archivable(st, ag)
@@ -394,17 +394,28 @@ func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []sta
 	return lines
 }
 
-// dropInbox removes the inbox of the omp agent started under id, which
-// left the roster, and says what it did.
-func (a *app) dropInbox(id string) string {
+// endOmp stops the unit of the omp agent started under id, which left the
+// roster, and removes its inbox, and says what it did: nothing resumes an
+// omp agent, so a process left running would only hold its model.
+func (a *app) endOmp(ctx context.Context, id string) string {
+	var done []string
+	if unit := ompUnit(id); plat.Launcher.State(ctx, unit) == "active" {
+		if err := plat.Launcher.Stop(ctx, unit); err != nil {
+			return fmt.Sprintf("its omp unit %s runs on: %v", unit, err)
+		}
+		done = append(done, "stopped its omp unit "+unit)
+	}
 	removed, err := omp.RemoveInbox(omp.InboxPath(a.cfg.StateDir, id))
 	switch {
 	case err != nil:
-		return fmt.Sprintf("its omp inbox stays: %v", err)
+		done = append(done, fmt.Sprintf("its omp inbox stays: %v", err))
 	case removed:
-		return "removed its omp inbox"
+		done = append(done, "removed its omp inbox")
 	}
-	return "an omp agent has no desktop session"
+	if len(done) == 0 {
+		return "an omp agent has no desktop session"
+	}
+	return strings.Join(done, ", ")
 }
 
 // archivable is the desktop session of agent ag when the doctor or remove
