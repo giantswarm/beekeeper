@@ -53,3 +53,32 @@ func TestMakeInboxRefusesAFile(t *testing.T) {
 		t.Fatal("a regular file taken for an inbox")
 	}
 }
+
+func TestRemoveInbox(t *testing.T) {
+	inbox := InboxPath(t.TempDir(), "1234abcd")
+	if removed, err := RemoveInbox(inbox); removed || err != nil {
+		t.Fatalf("no inbox: removed %v, %v", removed, err)
+	}
+	if err := MakeInbox(inbox); err != nil {
+		t.Fatal(err)
+	}
+	r, err := os.OpenFile(inbox, os.O_RDWR, 0) //nolint:gosec // the test's inbox
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Send(inbox, "hi"); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := RemoveInbox(inbox); removed || err != nil {
+		t.Fatalf("a read inbox: removed %v, %v, want kept", removed, err)
+	}
+	_ = r.Close()
+	if removed, err := RemoveInbox(inbox); !removed || err != nil {
+		t.Fatalf("an unread inbox: removed %v, %v", removed, err)
+	}
+	for _, p := range []string{inbox, inbox + ".lock"} {
+		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s stays: %v", p, err)
+		}
+	}
+}

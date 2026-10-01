@@ -360,6 +360,10 @@ func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []sta
 	var hosts []string
 	at := map[string]int{}
 	for i, ag := range agents {
+		if id, ok := strings.CutPrefix(ag.HostSession, omp.HostPrefix); ok {
+			lines[i] = a.dropInbox(id)
+			continue
+		}
 		host, why := a.archivable(st, ag)
 		if why != "" {
 			lines[i] = why
@@ -388,6 +392,19 @@ func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []sta
 		}
 	}
 	return lines
+}
+
+// dropInbox removes the inbox of the omp agent started under id once its
+// process is gone, and says what it did.
+func (a *app) dropInbox(id string) string {
+	removed, err := omp.RemoveInbox(omp.InboxPath(a.cfg.StateDir, id))
+	switch {
+	case err != nil:
+		return fmt.Sprintf("its omp inbox stays: %v", err)
+	case removed:
+		return "removed its omp inbox"
+	}
+	return "an omp agent has no desktop session"
 }
 
 // archivable is the desktop session of agent ag when the doctor or remove
