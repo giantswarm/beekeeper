@@ -180,7 +180,12 @@ func TestReadsBesideARewriteAndNotOnADeny(t *testing.T) {
 }
 
 func TestReadsBounded(t *testing.T) {
-	root := t.TempDir()
+	// MandatoryReads takes a RepoRoot: on macOS the temporary directory is
+	// behind a symlink (/var is /private/var).
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	big := strings.Repeat("line of the big file\n", 1000)
 	other := repoWith(t, filepath.Join(root, "other"), map[string]string{
 		claudeMD:              big,
@@ -201,7 +206,7 @@ func TestReadsBounded(t *testing.T) {
 	}
 	for _, want := range []string{"[truncated at ", "of 21000 bytes: read " + filepath.Join(other, claudeMD), "Left out for size, read them yourself: AGENTS.md, .claude/rules/a.md, .claude/rules/b.md"} {
 		if !strings.Contains(got, want) {
-			t.Errorf("want %q in:\n%s", want, got[len(got)-400:])
+			t.Errorf("want %q in:\n%s", want, got[max(0, len(got)-400):])
 		}
 	}
 	for _, not := range []string{"hidden", "outside the repository"} {

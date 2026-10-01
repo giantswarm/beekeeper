@@ -77,6 +77,7 @@ func standbyAfterBoot(t *testing.T, appStart time.Time) (*watcher, *[]string, *b
 }
 
 func TestStandbyReopensTheSupervisorAfterAReboot(t *testing.T) {
+	needsPlatform(t)
 	// The login started the app a second before the standby watch's first
 	// poll, which is the first to see the supervisor's CLI gone: it stopped
 	// with the machine.

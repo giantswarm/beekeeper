@@ -19,6 +19,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/upgrade"
@@ -60,6 +61,24 @@ type snapshot struct {
 	// KubeContext is the machine kubeconfig's current context, which
 	// should stay unset.
 	KubeContext string `json:"kubeContext,omitempty"`
+	// Unavailable are the sections whose platform part this build does not
+	// have: each prints one "not available" line instead.
+	Unavailable []string `json:"unavailable,omitempty"`
+}
+
+// has reports whether the section was read.
+func (s *snapshot) has(section string) bool { return !slices.Contains(s.Unavailable, section) }
+
+// missing notes section as unavailable when err is a missing platform part
+// and returns what is left of err: nil then, err otherwise.
+func (s *snapshot) missing(section string, err error) error {
+	if !platform.Missing(err) {
+		return err
+	}
+	if s.has(section) {
+		s.Unavailable = append(s.Unavailable, section)
+	}
+	return nil
 }
 
 // wait is a long-running command a session sits on: a devctl wait or merge,
@@ -198,15 +217,19 @@ func sinceTime(now time.Time, s string) (time.Time, error) {
 func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, withAlerts bool) (*snapshot, error) {
 	s := &snapshot{At: a.now.UTC(), OOMSince: oomSince.UTC()}
 	var err error
-	if s.Mem, err = plat.Machine.Mem(); err != nil {
+	if s.Mem, err = plat.Machine.Mem(); s.missing(secMemory, err) != nil {
 		return nil, err
 	}
-	s.Load, _ = plat.Machine.Load()
+	s.Load, err = plat.Machine.Load()
+	_ = s.missing(secLoad, err)
 	s.Cores = runtime.NumCPU()
 	s.LoadLimit = a.cfg.Watch.LoadLimit(s.Cores)
-	s.CPUPSI10, _ = plat.Machine.CPUPressure()
-	s.PSIFull60, _ = plat.Machine.MemoryPressure()
-	s.Scope = plat.Machine.DesktopScope()
+	s.CPUPSI10, err = plat.Machine.CPUPressure()
+	_ = s.missing(secPressure, err)
+	s.PSIFull60, err = plat.Machine.MemoryPressure()
+	_ = s.missing(secPressure, err)
+	s.Scope, err = plat.Machine.DesktopScope()
+	_ = s.missing(secScope, err)
 	s.GPUs = machine.ReadGPUs()
 	s.Models, _ = hostModels(ctx, a.cfg)
 	s.Tmp, _ = machine.ReadDisk("/tmp")
@@ -217,8 +240,11 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 		s.ClustersErr = err.Error()
 	}
 	t, err := plat.Machine.Processes()
-	if err != nil {
+	if s.missing(secSessions, err) != nil {
 		return nil, err
+	}
+	if t == nil {
+		t = &proc.Table{}
 	}
 	sessions := claude.Discover(a.cfg, t, a.now)
 	for _, ss := range sessions {
@@ -228,7 +254,7 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 	slices.Sort(s.Sessions)
 	s.Waits = findWaits(t, sessions, a.now)
 	kills, err := plat.Machine.OOMKills(ctx, oomSince)
-	if err != nil {
+	if s.missing(secOOM, err) != nil {
 		return nil, err
 	}
 	runs := &runIndex{store: a.store}
@@ -241,10 +267,16 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 		return nil, err
 	}
 	for _, h := range holders {
-		s.Leases = append(s.Leases, a.leaseView(sessions, h))
+		v := a.leaseView(sessions, h)
+		if !s.has(secSessions) && v.State == holderGone {
+			v.State = holderUnknown
+		}
+		s.Leases = append(s.Leases, v)
 	}
-	_, ms := a.sessionMetrics(sessions, t, holders)
-	s.Metrics = totals(sessions, ms)
+	if s.has(secSessions) {
+		_, ms := a.sessionMetrics(sessions, t, holders)
+		s.Metrics = totals(sessions, ms)
+	}
 	st, err := a.store.Read()
 	if err != nil {
 		return nil, err
@@ -406,16 +438,33 @@ func oomOwner(k machine.OOMKill, clusters []machine.Cluster, sessions []*claude.
 
 func (a *app) printSnapshot(s *snapshot) {
 	p := func(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format+"\n", args...) }
-	p("time %s  load %.1f %.1f %.1f (%d cores, HIGH LOAD over %.0f)  CPU PSI some avg10 %.1f%%  memory PSI full avg60 %.1f%%",
-		clock(a.now, s.At), s.Load[0], s.Load[1], s.Load[2], s.Cores, s.LoadLimit, s.CPUPSI10, s.PSIFull60)
-	p("RAM available %d of %d MiB  swap used %d of %d MiB", s.Mem.AvailableMiB, s.Mem.TotalMiB, s.Mem.SwapUsedMiB, s.Mem.SwapTotalMiB)
+	head := []string{"time " + clock(a.now, s.At)}
+	if s.has(secLoad) {
+		head = append(head, fmt.Sprintf("load %.1f %.1f %.1f (%d cores, HIGH LOAD over %.0f)", s.Load[0], s.Load[1], s.Load[2], s.Cores, s.LoadLimit))
+	} else {
+		head = append(head, platform.Unavailable(secLoad))
+	}
+	if s.has(secPressure) {
+		head = append(head, fmt.Sprintf("CPU PSI some avg10 %.1f%%  memory PSI full avg60 %.1f%%", s.CPUPSI10, s.PSIFull60))
+	} else {
+		head = append(head, platform.Unavailable(secPressure))
+	}
+	p("%s", strings.Join(head, "  "))
+	if s.has(secMemory) {
+		p("RAM available %d of %d MiB  swap used %d of %d MiB", s.Mem.AvailableMiB, s.Mem.TotalMiB, s.Mem.SwapUsedMiB, s.Mem.SwapTotalMiB)
+	} else {
+		p("%s", platform.Unavailable(secMemory))
+	}
 	if l := gttLine(s.GPUs, s.Models); l != "" {
 		p("%s", l)
 	}
-	if sc := s.Scope; sc != nil {
+	switch sc := s.Scope; {
+	case !s.has(secScope):
+		p("%s", platform.Unavailable(secScope))
+	case sc != nil:
 		p("desktop scope anon %d MiB (current %d, high %s, max %s)  swap %d/%s MiB  oom_kill %d  high events %d",
 			sc.AnonMiB, sc.CurrentMiB, sc.High, sc.Max, sc.SwapMiB, sc.SwapMax, sc.OOMKills, sc.HighEvents)
-	} else {
+	default:
 		p("desktop scope: none found")
 	}
 	p("tmpfs /tmp %d MiB used  disk / %d GiB free", s.Tmp.UsedMiB, s.Root.FreeMiB/1024)
@@ -446,7 +495,11 @@ func (a *app) printSnapshot(s *snapshot) {
 	default:
 		p("kind clusters: %s", strings.Join(cl, ", "))
 	}
-	p("sessions: %d CLIs, %d MiB anonymous", len(s.Sessions), s.CLIMemMiB)
+	if s.has(secSessions) {
+		p("sessions: %d CLIs, %d MiB anonymous", len(s.Sessions), s.CLIMemMiB)
+	} else {
+		p("%s", platform.Unavailable(secSessions))
+	}
 	if m := s.Metrics; m != nil {
 		p("last hour: %s; %d gh/devctl processes now; merges %d queued, %d merged", hourText(m.LastHour), m.GitHubProcesses, m.Merges.Queued, m.Merges.Merged)
 		for _, t := range m.Top {
@@ -463,7 +516,11 @@ func (a *app) printSnapshot(s *snapshot) {
 			p("  %s  %s  (%s)", dur(w.Elapsed), truncate(commandName(w.Args)+" "+tailArgs(w.Args), 70), truncate(owner, 40))
 		}
 	}
-	p("OOM kills since %s: %d", clock(a.now, s.OOMSince), len(s.OOM))
+	if s.has(secOOM) {
+		p("OOM kills since %s: %d", clock(a.now, s.OOMSince), len(s.OOM))
+	} else {
+		p("%s", platform.Unavailable(secOOM))
+	}
 	for _, k := range groupKills(s.OOM) {
 		p("  %s", k)
 	}

@@ -19,9 +19,10 @@ import (
 
 // The states of a held lease.
 const (
-	holderLive   = "live"   // the holder's session runs
-	holderGone   = "gone"   // it does not: the lease is stale
-	holderPerson = "person" // held by a person or script
+	holderLive    = "live"    // the holder's session runs
+	holderGone    = "gone"    // it does not: the lease is stale
+	holderPerson  = "person"  // held by a person or script
+	holderUnknown = "unknown" // the platform lists no sessions to tell
 )
 
 // leaseView is a held lease with whether its holder still runs.

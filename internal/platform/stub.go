@@ -1,5 +1,3 @@
-//go:build !linux || nosystemd
-
 package platform
 
 import (
@@ -12,8 +10,10 @@ import (
 	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
-// current is the stub: every part is not available.
-func current(Options) Platform {
+// Stub is the platform with every part not available: the build's own on
+// other systems and with the nosystemd tag, and in every build the one the
+// degrade paths are tested against.
+func Stub() Platform {
 	return Platform{
 		Machine:     stubMachine{},
 		Launcher:    stubLauncher{},
@@ -34,7 +34,9 @@ func (stubMachine) MemoryPressure() (float64, error) { return 0, missing("Machin
 func (stubMachine) CPUPressure() (float64, error)    { return 0, missing("Machine.CPUPressure") }
 func (stubMachine) Processes() (*proc.Table, error)  { return nil, missing("Machine.Processes") }
 func (stubMachine) Started(int) (time.Time, error)   { return time.Time{}, missing("Machine.Started") }
-func (stubMachine) DesktopScope() *machine.Scope     { return nil }
+func (stubMachine) DesktopScope() (*machine.Scope, error) {
+	return nil, missing("Machine.DesktopScope")
+}
 func (stubMachine) MemcapScope(string) *machine.Scope {
 	return nil
 }

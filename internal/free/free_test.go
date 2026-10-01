@@ -11,6 +11,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
@@ -58,7 +59,7 @@ func newRun(t *testing.T, o Options) (*Run, *bytes.Buffer) {
 		cgroup:   func(int) string { return "" },
 		cwd:      func(int) string { return "" },
 		mem:      func() (machine.Mem, error) { return machine.Mem{AvailableMiB: 40000, SwapUsedMiB: 100}, nil },
-		scope:    func() *machine.Scope { return nil },
+		scope:    func() (*machine.Scope, error) { return nil, nil },
 		unitPIDs: func(string) []int { return nil },
 		kill:     func([]int) { t.Fatal("kill in a test") },
 	}
@@ -220,5 +221,36 @@ func TestUptime(t *testing.T) {
 		if got := uptime(d); got != want {
 			t.Errorf("uptime(%v) = %q, want %q", d, got, want)
 		}
+	}
+}
+
+// Without a process table and memory reads, every section that needs them
+// says so in one line and frees nothing: no dir can be told unused.
+func TestMissingPartsFreeNothing(t *testing.T) {
+	stub := platform.Stub().Machine
+	r, out := newRun(t, Options{Apply: true, HeavyMiB: 1, TabMiB: 1})
+	_, r.TableErr = stub.Processes()
+	r.mem, r.scope = stub.Mem, stub.DesktopScope
+	r.Sessions = nil
+	dead, stale := sessionDir(deadSID), "go-build123"
+	fixture(t, r.TmpDir, filepath.Join(dead, "scratchpad", "a"), 2048, 5*time.Hour)
+	fixture(t, r.TmpDir, filepath.Join(stale, "a"), 2048, 5*time.Hour)
+	r.Do()
+	for _, dir := range []string{dead, stale} {
+		if _, err := os.Stat(filepath.Join(r.TmpDir, dir)); err != nil {
+			t.Errorf("%s removed without a process table:\n%s", dir, out)
+		}
+	}
+	for line, want := range map[string]int{
+		platform.Unavailable("processes"):     6, // CLIs, heavy, tabs, session dirs, temp dirs, orphans
+		platform.Unavailable("memory"):        3, // before, swap, after
+		platform.Unavailable("desktop scope"): 2, // before, after
+	} {
+		if n := strings.Count(out.String(), line); n != want {
+			t.Errorf("%q said %d times, want %d:\n%s", line, n, want, out)
+		}
+	}
+	if strings.Contains(out.String(), "remove ") || strings.Contains(out.String(), "RAM available") {
+		t.Errorf("free acted on or reported what it cannot read:\n%s", out)
 	}
 }

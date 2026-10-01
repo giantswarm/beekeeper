@@ -216,6 +216,7 @@ func TestTitleTranscriptReachesTheImportWindow(t *testing.T) {
 // The import runs with the first turn's unit frozen and the unit is thawed
 // after it, also when the import failed; a unit that ended is not frozen.
 func TestWhileFrozenThawsAfterTheImport(t *testing.T) {
+	needsPlatform(t)
 	unit := "beekeeper-test-freeze-" + uuid.NewString()[:8]
 	if out, err := userCommand("systemd-run", "--user", "--collect", "--quiet", "--unit="+unit, "--", "sleep", "60"); err != nil {
 		t.Skipf("no systemd user manager: %v: %s", err, out)

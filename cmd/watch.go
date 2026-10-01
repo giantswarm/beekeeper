@@ -24,6 +24,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/notify"
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -247,6 +248,29 @@ type watcher struct {
 	lastSettle          time.Time
 	// polls counts the polls begun.
 	polls atomic.Int64
+	// missing are the sections whose platform part this build does not
+	// have, said once each.
+	missing map[string]bool
+}
+
+// unavailable reports whether err is a platform part this build does not
+// have. The first time per section the watch says so in one line, never
+// as a condition or an alert.
+func (w *watcher) unavailable(section string, err error) bool {
+	if !platform.Missing(err) {
+		return false
+	}
+	w.mu.Lock()
+	said := w.missing[section]
+	if w.missing == nil {
+		w.missing = map[string]bool{}
+	}
+	w.missing[section] = true
+	w.mu.Unlock()
+	if !said {
+		w.emitNow("unavailable", "%s", platform.Unavailable(section))
+	}
+	return true
 }
 
 // helmReleases reads the lane installation's HelmReleases.
@@ -259,11 +283,13 @@ func (w *watcher) helmReleases(ctx context.Context, lane config.Lane) ([]merge.H
 
 func (w *watcher) run(ctx context.Context, once bool) error {
 	w.lastPoll = time.Now().Add(-w.cfg.Watch.Interval.Duration)
-	s := plat.Machine.DesktopScope()
+	s, err := plat.Machine.DesktopScope()
 	if s != nil {
 		w.scopeOOM = s.OOMKills
 	}
-	w.check("noscope", s == nil, "no Claude Desktop scope found; watching the machine numbers only")
+	if !w.unavailable(secScope, err) {
+		w.check("noscope", s == nil, "no Claude Desktop scope found; watching the machine numbers only")
+	}
 	interval := w.cfg.Watch.Interval.Duration
 	if once {
 		if !w.standby {
@@ -617,6 +643,7 @@ func (w *watcher) sample(ctx context.Context) {
 		w.modelServer(ctx, models)
 	}
 	m, merr := plat.Machine.Mem()
+	w.unavailable(secMemory, merr)
 	var cause string
 	if gpus := machine.ReadGPUs(); machine.GTTUsedMiB(gpus) > th.GTTMax(m.TotalMiB) {
 		cause = gttLine(gpus, models)
@@ -638,7 +665,9 @@ func (w *watcher) sample(ctx context.Context) {
 		}
 	}
 	w.sampleCPU(now)
-	if psi, err := plat.Machine.MemoryPressure(); err == nil {
+	psi, err := plat.Machine.MemoryPressure()
+	w.unavailable(secPressure, err)
+	if err == nil {
 		w.check("psi", psi > th.PSIMax, "MEMORY PRESSURE: full avg60 %.0f%%", psi)
 	}
 	if d, err := machine.ReadDisk("/tmp"); err == nil {
@@ -647,7 +676,9 @@ func (w *watcher) sample(ctx context.Context) {
 	if d, err := machine.ReadDisk("/"); err == nil {
 		w.check("disk", d.FreeMiB < th.DiskMin(d.TotalMiB), "LOW DISK: / %d GiB free", d.FreeMiB/1024)
 	}
-	if s := plat.Machine.DesktopScope(); s != nil {
+	s, err := plat.Machine.DesktopScope()
+	w.unavailable(secScope, err)
+	if s != nil {
 		w.check("scopeanon", s.AnonMiB > th.ScopeAnonMax(m.TotalMiB), "DESKTOP SCOPE anon: %d MiB", s.AnonMiB)
 		if s.OOMKills != w.scopeOOM {
 			w.emitNow("scopeoom", "OOM KILL in the desktop scope: oom_kill %d -> %d", w.scopeOOM, s.OOMKills)
@@ -666,8 +697,10 @@ func (w *watcher) sampleCPU(now time.Time) {
 	th := w.cfg.Watch
 	cores := runtime.NumCPU()
 	limit := th.LoadLimit(cores)
-	load, _ := plat.Machine.Load()
-	cpu, _ := plat.Machine.CPUPressure()
+	load, err := plat.Machine.Load()
+	w.unavailable(secLoad, err)
+	cpu, err := plat.Machine.CPUPressure()
+	w.unavailable(secPressure, err)
 	if cpu > th.CPUPSIMax {
 		w.cpuOver++
 	} else {
@@ -757,22 +790,8 @@ func (w *watcher) sampleProcs(now time.Time, span time.Duration, prev, t *proc.T
 	}
 }
 
-// poll does everything but the machine sample: the process table, the
-// sessions, the lanes and the budget. It waits for a lane read or a budget
-// probe for one watch.interval at most.
-func (w *watcher) poll(ctx context.Context) {
-	w.polls.Add(1)
-	w.now = time.Now()
-	since := w.lastPoll
-	w.lastPoll = w.now
-	th := w.cfg.Watch
-
-	t, err := plat.Machine.Processes()
-	if err != nil {
-		w.emit("proc", "cannot read the process table: %v", err)
-		return
-	}
-	w.clear("proc")
+// pollSessions does what the process table and the sessions in it tell.
+func (w *watcher) pollSessions(ctx context.Context, since time.Time, t *proc.Table) {
 	w.table = t
 	sessions := claude.Discover(w.cfg, t, w.now)
 	owners := make(map[int]string, len(sessions))
@@ -786,6 +805,29 @@ func (w *watcher) poll(ctx context.Context) {
 	w.sessionChanges(sessions)
 	w.staleLeases(ctx, sessions)
 	w.runaways(sessions, t)
+}
+
+// poll does everything but the machine sample: the process table, the
+// sessions, the lanes and the budget. It waits for a lane read or a budget
+// probe for one watch.interval at most.
+func (w *watcher) poll(ctx context.Context) {
+	w.polls.Add(1)
+	w.now = time.Now()
+	since := w.lastPoll
+	w.lastPoll = w.now
+	th := w.cfg.Watch
+
+	t, err := plat.Machine.Processes()
+	switch {
+	case w.unavailable(secSessions, err):
+		// No session is known: what reads them is left out, not guessed.
+	case err != nil:
+		w.emit("proc", "cannot read the process table: %v", err)
+		return
+	default:
+		w.clear("proc")
+		w.pollSessions(ctx, since, t)
+	}
 	w.lostMerges(ctx)
 	w.closeToolWindow(ctx, watchParty)
 	w.stalls()
@@ -1002,7 +1044,7 @@ func (w *watcher) kills(ctx context.Context, since time.Time, sessions []*claude
 	defer cancel()
 	kills, err := plat.Machine.OOMKills(ctx, since.Add(-2*time.Second))
 	if err != nil {
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || w.unavailable(secOOM, err) {
 			return
 		}
 		w.emit("journal", "cannot read the kernel journal: %v", err)

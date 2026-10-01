@@ -3,6 +3,7 @@ package proc
 import (
 	"context"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -12,9 +13,14 @@ func TestCommandNicesBackgroundReads(t *testing.T) {
 	if _, err := exec.LookPath("nice"); err != nil {
 		t.Skip("no nice on this machine")
 	}
-	// Field 19 of /proc/self/stat is the nice value of the process reading it.
+	// The nice value of the shell: field 19 of /proc/self/stat on Linux, ps
+	// elsewhere.
+	read := "ps -o nice= -p $$"
+	if runtime.GOOS == "linux" {
+		read = "cut -d' ' -f19 /proc/self/stat"
+	}
 	nice := func(ctx context.Context) (int, *exec.Cmd) {
-		c := Command(ctx, "sh", "-c", "cut -d' ' -f19 /proc/self/stat")
+		c := Command(ctx, "sh", "-c", read)
 		out, err := c.Output()
 		if err != nil {
 			t.Fatal(err)

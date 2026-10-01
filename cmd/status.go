@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/lease"
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -27,7 +28,8 @@ contract is fixed: five fields, always present, in this order:
 
   supervisor  the supervising session's name; - when none is recorded;
               ~<name> while its CLI restarts (the grant rule holds);
-              !<name> when the recorded one's session no longer runs
+              !<name> when the recorded one's session no longer runs;
+              ?<name> when the platform cannot list sessions
   leases      the number of leases held
   holds       the number of holds in force
   due         the number of notes and timers whose time has come
@@ -60,6 +62,9 @@ type statusView struct {
 	Supervisor string `json:"supervisor"`
 	// SupervisorLive is whether its session runs.
 	SupervisorLive bool `json:"supervisorLive"`
+	// SupervisorUnknown is set when the platform cannot list sessions to
+	// tell whether it runs.
+	SupervisorUnknown bool `json:"supervisorUnknown,omitempty"`
 	// RestartUntil is set while its CLI may still come back as a restart.
 	RestartUntil time.Time `json:"restartUntil,omitzero"`
 	Leases       []string  `json:"leases"`
@@ -81,13 +86,18 @@ func (a *app) status() (*statusView, error) {
 	}
 	v := &statusView{Leases: []string{}, Holds: []string{}, Due: dueCount(st, a.now)}
 	if st.Supervisor != nil {
+		v.Supervisor = st.Supervisor.Name
 		sessions, _, err := a.sessions()
-		if err != nil {
+		switch {
+		case platform.Missing(err):
+			v.SupervisorUnknown = true
+		case err != nil:
 			return nil, err
+		default:
+			renameHolder(st.Supervisor, sessions)
+			sv := a.supervision(st, sessions)
+			v.Supervisor, v.SupervisorLive, v.RestartUntil = st.Supervisor.Name, sv.live, sv.until
 		}
-		renameHolder(st.Supervisor, sessions)
-		sv := a.supervision(st, sessions)
-		v.Supervisor, v.SupervisorLive, v.RestartUntil = st.Supervisor.Name, sv.live, sv.until
 	}
 	for _, h := range holders {
 		v.Leases = append(v.Leases, h.Env)
@@ -125,6 +135,8 @@ func (v *statusView) bar() string {
 	switch {
 	case v.Supervisor != "" && v.SupervisorLive:
 		sup = v.Supervisor
+	case v.Supervisor != "" && v.SupervisorUnknown:
+		sup = "?" + v.Supervisor
 	case v.Supervisor != "" && !v.RestartUntil.IsZero():
 		sup = "~" + v.Supervisor
 	case v.Supervisor != "":
@@ -143,6 +155,8 @@ func (v *statusView) line() string {
 	switch {
 	case v.Supervisor != "" && v.SupervisorLive:
 		sup = fmt.Sprintf("%q supervises", v.Supervisor)
+	case v.Supervisor != "" && v.SupervisorUnknown:
+		sup = fmt.Sprintf("%q supervises (whether it runs is unknown; %s)", v.Supervisor, platform.Unavailable(secSessions))
 	case v.Supervisor != "" && !v.RestartUntil.IsZero():
 		sup = fmt.Sprintf("%q supervises (its CLI is restarting, grace until %s)", v.Supervisor, stamp(v.RestartUntil))
 	case v.Supervisor != "":

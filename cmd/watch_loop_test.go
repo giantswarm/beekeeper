@@ -117,6 +117,7 @@ func eventually(within time.Duration, cond func() bool) bool {
 // within one interval, the polls go on, and the hung read is not started a
 // second time while it runs.
 func TestWatchSamplesTheMachineWhileALaneReadHangs(t *testing.T) {
+	needsPlatform(t)
 	release := make(chan struct{})
 	var reads atomic.Int32
 	w, out := loopWatcher(t, "200ms", ", availMinMiB: 1000000000", func(context.Context, config.Lane) ([]merge.HelmRelease, error) {
@@ -143,6 +144,7 @@ func TestWatchSamplesTheMachineWhileALaneReadHangs(t *testing.T) {
 // While the CPU is under pressure the installation reads run slowReads
 // times less often and at nice 10, said once as READS SLOWED.
 func TestWatchSlowsInstallationReadsUnderCPUPressure(t *testing.T) {
+	needsPlatform(t)
 	count := func(extra string) (reads, niced int32, out string) {
 		var r, n atomic.Int32
 		w, o := loopWatcher(t, "250ms", extra, func(ctx context.Context, _ config.Lane) ([]merge.HelmRelease, error) {
