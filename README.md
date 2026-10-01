@@ -925,7 +925,7 @@ name in its environment (`BEEKEEPER_OMP_AGENT`, `BEEKEEPER_AGENT_NAME`) and is r
 roster as `omp_<id>`. A message is one line of omp's rpc protocol, a `steer` command: omp delivers
 it at the agent's next tool round while a turn runs and starts a turn with it while the agent is
 idle. The brief is the first message; `agents wake <name> <message>` writes the next. Writers take a
-lock on the inbox, so two senders' lines never interleave. A wake of an agent whose process ended is
+lock file beside the inbox, so two senders' lines never interleave. A wake of an agent whose process ended is
 refused (exit 3): nothing reads its inbox, and nothing resumes it. `agents handover` refuses omp
 agents, and no desktop import happens.
 

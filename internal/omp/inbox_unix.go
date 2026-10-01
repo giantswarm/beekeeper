@@ -25,25 +25,33 @@ func MakeInbox(path string) error {
 }
 
 // Send writes msg to the inbox at path as one steer command. It never
-// blocks: an inbox no process reads refuses it (ErrNotRunning). Writes are
-// serialized by a lock on the inbox, so two senders' lines never
-// interleave, whatever their length.
+// blocks on an inbox no process reads: that refuses it (ErrNotRunning).
+// Writes are serialized by a lock file beside the inbox (macOS locks no
+// FIFO), so two senders' lines never interleave, whatever their length.
 func Send(path, msg string) error {
 	line, err := steerLine(msg)
 	if err != nil {
 		return err
 	}
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return ErrNotRunning
+	}
+	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // beside the agent's inbox under the state folder
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Close() }()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
 	f, err := os.OpenFile(path, os.O_WRONLY|syscall.O_NONBLOCK, 0) //nolint:gosec // the agent's inbox under the state folder
-	if errors.Is(err, syscall.ENXIO) || errors.Is(err, os.ErrNotExist) {
+	if errors.Is(err, syscall.ENXIO) {
 		return ErrNotRunning
 	}
 	if err != nil {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		return err
-	}
 	// A full pipe blocks the write until omp reads: the agent is alive.
 	if err := setBlocking(f); err != nil {
 		return err
