@@ -837,9 +837,12 @@ The desktop's import takes the session's model from the transcript's last reply 
 its own default model without one. So beekeeper imports the session only once the transcript
 holds its first reply and has stayed unchanged for 2 seconds (up to 5 minutes), and says which
 model the desktop recorded for the desktop turns. Claude Desktop on Linux currently handles each
-`claude://` link twice, and the second of the two concurrent imports records no model: until
-the desktop handles a link once, the desktop turns run on the desktop's default model, and the
-start says so.
+`claude://` link twice, and the second of the two concurrent imports records no title and no
+model. So once the import is done, the start has a steward, an idle desktop CLI of another
+session beekeeper started (the desktop refuses a session's switch of its own model), set what
+the record dropped: the title to the agent's name and the model to the one its first turn ran
+on (`set_session_title`, `set_session_model`), and says which steward did, or why none could;
+the reopen after the first turn tries again for a model still missing.
 
 The import switches the desktop's main window to the new session. Once it has (up to 15s),
 beekeeper switches the window back to the session it showed before, the last focus change in the

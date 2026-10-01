@@ -44,8 +44,8 @@ const (
 	// twinWait bounds the wait for the CLI the desktop warms for an import.
 	twinWait = 15 * time.Second
 	// stopPostWait bounds the reopen after the first turn: the desktop's
-	// CLI, the retitle request and the desktop recording the title.
-	stopPostWait = 5 * time.Minute
+	// CLI, the retitle and model requests and the desktop recording them.
+	stopPostWait = 10 * time.Minute
 	// importAwayWait bounds how long a start's import waits for the person
 	// to leave the desktop's window; past it the reopen after the first
 	// turn imports the session.
@@ -168,6 +168,9 @@ is involved and no import happens.`,
 			if err == nil && sa.kept != "" {
 				_, err = fmt.Fprintf(a.out, "the desktop still shows %s\n", sa.kept)
 			}
+			if err == nil && sa.restored != "" {
+				_, err = fmt.Fprintln(a.out, sa.restored)
+			}
 			if err == nil {
 				_, err = fmt.Fprintln(a.out, titleLine(name, sa.title))
 			}
@@ -217,6 +220,9 @@ type startedAgent struct {
 	// twin is the desktop's CLI of the session the start stopped while the
 	// first turn runs; 0: none.
 	twin int
+	// restored says how a steward gave the desktop's record the title and
+	// model its import dropped; empty: the import kept both.
+	restored string
 	// deferred is what held the import (the desktop's window kept the
 	// focus, the person kept typing): the reopen after the first turn
 	// imports the session.
@@ -318,8 +324,11 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if err != nil {
 		return startedAgent{}, err
 	}
-	sa.twin, err = endDesktopTwin(ctx, id)
-	return sa, err
+	if sa.twin, err = endDesktopTwin(ctx, id); err != nil {
+		return sa, err
+	}
+	sa.restored = a.keepImport(ctx, id, sp.name, &sa)
+	return sa, nil
 }
 
 // whileFrozen runs fn with the first turn's unit frozen, and thaws it once
@@ -571,7 +580,15 @@ func (a *app) agentReopenCmd() *cobra.Command {
 			if err != nil {
 				return a.reopenMissed(name, err)
 			}
-			_, err = fmt.Fprintln(a.out, "reopen: "+line)
+			if _, err := fmt.Fprintln(a.out, "reopen: "+line); err != nil {
+				return err
+			}
+			// A start whose import waited for the reopen, or whose steward
+			// did not set its model, has none yet.
+			var sa startedAgent
+			if line := a.keepImport(cmd.Context(), id, name, &sa); line != "" {
+				_, err = fmt.Fprintln(a.out, "reopen: "+line)
+			}
 			return err
 		},
 	}
