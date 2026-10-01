@@ -86,7 +86,7 @@ func OpenIndex(dir string) (*Index, error) {
 // yet, the index is empty and matches nothing.
 func LoadIndex(dir string) (*Index, error) {
 	ix := &Index{dir: dir, MinLen: MinSecretLen, data: indexData{Entries: map[string]string{}}}
-	key, err := os.ReadFile(filepath.Join(dir, indexKeyFile))
+	key, err := os.ReadFile(filepath.Join(dir, indexKeyFile)) //nolint:gosec // beekeeper's own state directory
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return ix, nil
@@ -96,7 +96,7 @@ func LoadIndex(dir string) (*Index, error) {
 		return nil, fmt.Errorf("%s: the index key is too short", filepath.Join(dir, indexKeyFile))
 	}
 	ix.key = key
-	raw, err := os.ReadFile(filepath.Join(dir, indexFile))
+	raw, err := os.ReadFile(filepath.Join(dir, indexFile)) //nolint:gosec // beekeeper's own state directory
 	if errors.Is(err, fs.ErrNotExist) {
 		return ix, nil
 	}

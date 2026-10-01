@@ -112,10 +112,10 @@ func leaves(v any, path string, fn func(key, value string)) {
 	}
 }
 
-// quietRun runs a command and returns its output. Its stderr is kept out of
-// the error, which names the exit status only: a tool may echo what it read.
+// quietRun runs a command and returns its output. Its error names the exit
+// status and the first stderr line, redacted: a tool may echo what it read.
 func quietRun(ctx context.Context, stdin io.Reader, name string, args ...string) ([]byte, error) {
-	c := exec.CommandContext(ctx, name, args...)
+	c := exec.CommandContext(ctx, name, args...) //nolint:gosec // sops and op with the configured sources
 	c.Stdin = stdin
 	var stderr bytes.Buffer
 	c.Stderr = &stderr

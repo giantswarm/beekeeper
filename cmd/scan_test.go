@@ -28,8 +28,11 @@ func scanApp(t *testing.T) *app {
 
 func bashResult(t *testing.T, stdout string) []byte {
 	t.Helper()
-	raw, err := json.Marshal(map[string]any{"hook_event_name": "PostToolUse", "session_id": "s-1", "tool_name": "Bash",
-		"tool_response": map[string]any{"stdout": stdout, "stderr": "", "interrupted": false}})
+	resp, err := json.Marshal(map[string]any{"stdout": stdout, "stderr": "", "interrupted": false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(guard.ToolResult{Event: guard.PostToolUseEvent, Session: "scan-session", Tool: tToolBash, Response: resp})
 	if err != nil {
 		t.Fatal(err)
 	}

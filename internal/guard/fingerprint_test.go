@@ -70,7 +70,7 @@ func TestRedactNamesATokenPatternWithoutAnIndex(t *testing.T) {
 	if strings.Contains(out, tok) || !strings.Contains(out, "[redacted: github-pat]") {
 		t.Fatalf("the token survived: %q", out)
 	}
-	if len(found) != 1 || found[0].Rule != "github-pat" || found[0].Name() != "pattern github-pat" {
+	if rule := tokenRules[0].id; len(found) != 1 || found[0].Rule != rule || found[0].Name() != "pattern "+rule {
 		t.Fatalf("findings = %+v", found)
 	}
 	allowedLine := "fixture " + tok + " // " + allowMarker
@@ -105,7 +105,7 @@ func TestIndexHoldsNoValueAndOnlyTheUserReadsIt(t *testing.T) {
 			t.Errorf("%s mode %v, want 0600", f, info.Mode().Perm())
 		}
 	}
-	raw, _ := os.ReadFile(filepath.Join(dir, indexFile))
+	raw, _ := os.ReadFile(filepath.Join(dir, indexFile)) //nolint:gosec // the test's own directory
 	if strings.Contains(string(raw), planted) || strings.Contains(string(raw), base64.StdEncoding.EncodeToString([]byte(planted))) {
 		t.Fatal("the index file holds the value")
 	}
@@ -134,12 +134,8 @@ func TestLoadIndexWithoutKeyMatchesPatternsOnly(t *testing.T) {
 
 func TestPostToolUseRedactsTheResultInItsShape(t *testing.T) {
 	ix := plantedIndex(t)
-	event := map[string]any{
-		"hook_event_name": PostToolUseEvent, "session_id": "s1", "tool_name": "Bash",
-		"tool_input":    map[string]any{"command": "cat creds"},
-		"tool_response": map[string]any{"stdout": "user=me\npass=" + planted + "\n", "stderr": "", "interrupted": false, "isImage": false, "exitCode": 0},
-	}
-	raw, _ := json.Marshal(event)
+	resp, _ := json.Marshal(map[string]any{"stdout": "user=me\npass=" + planted + "\n", "stderr": "", "interrupted": false, "isImage": false, "exitCode": 0})
+	raw, _ := json.Marshal(ToolResult{Event: PostToolUseEvent, Session: "s1", Tool: "Bash", Response: resp})
 	out, r, found := PostToolUse(raw, ix)
 	if out == nil || r.Tool != "Bash" || r.Session != "s1" {
 		t.Fatalf("no answer: %s %+v", out, r)
