@@ -153,3 +153,45 @@ func TestLoginNoteClosesOnceItsProbePasses(t *testing.T) {
 		t.Fatalf("open %+v", st.Notes)
 	}
 }
+
+func TestNoteOnAPlanPullNeedsItsStageCheckGreen(t *testing.T) {
+	rollups := map[string]string{
+		"1": `{"state":"OPEN","statusCheckRollup":[]}`,
+		"2": `{"state":"OPEN","statusCheckRollup":[{"__typename":"CheckRun","name":"plan-stages","status":"COMPLETED","conclusion":"FAILURE","detailsUrl":"https://github.com/o/plans/actions/runs/1/job/9"}]}`,
+		"3": `{"state":"OPEN","statusCheckRollup":[{"__typename":"CheckRun","name":"plan-stages","status":"COMPLETED","conclusion":"SUCCESS"}]}`,
+		"4": `{"state":"MERGED","statusCheckRollup":[]}`,
+	}
+	var calls []string
+	prev := notesGH
+	t.Cleanup(func() { notesGH = prev })
+	notesGH = func(_ context.Context, args ...string) ([]byte, error) {
+		calls = append(calls, strings.Join(args, " "))
+		if args[0] == "api" {
+			return []byte(`["p: website missing: no p/index.html"]`), nil
+		}
+		return []byte(rollups[args[2]]), nil
+	}
+	a, _ := noteApp(t)
+	a.cfg.Plans = config.Plans{Repositories: []string{"O/Plans"}, Check: config.DefaultPlansCheck}
+	add := func(url string) error {
+		return addNote(a, "--for", notePerson, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "approve the revision "+url+"?")
+	}
+	plan := "https://github.com/o/plans/pull/"
+	if err := add(plan + "1"); Code(err) != ExitUsage || !strings.Contains(err.Error(), "a green plan-stages check on "+plan+"1 (none on its head)") {
+		t.Fatalf("no check on the head: %v", err)
+	}
+	if err := add(plan + "2"); Code(err) != ExitUsage || !strings.Contains(err.Error(), "(red: p: website missing: no p/index.html, https://github.com/o/plans/actions/runs/1/job/9)") {
+		t.Fatalf("a red check names the missing stage: %v", err)
+	}
+	for _, url := range []string{plan + "3", plan + "4", prURL} {
+		if err := add(url); err != nil {
+			t.Fatalf("%s: a green check, a merged plan or another repository: %v", url, err)
+		}
+	}
+	if err := addNote(a, "a memo on "+plan+"1"); err != nil {
+		t.Fatalf("a memo is not checked: %v", err)
+	}
+	if len(calls) != 5 {
+		t.Fatalf("one read per plans pull request and one for the red check's annotations: %q", calls)
+	}
+}

@@ -42,7 +42,10 @@ asking back: --status-quo and --why, every
 --option as "<choice>: <consequence>", a --default that is an action (not
 "wait" or "none"), the full URL of every #N or owner/repo#N it names, and
 --checked "<source>" for a claim that something is merged, green,
-released, rolled or closed. Such a note on an issue or PR that an open
+released, rolled or closed. A note that links an open pull request of a
+plans repository (plans.repositories) is refused while that pull request's
+stage check (plans.check, default plan-stages) is red, pending or missing,
+naming what the check found. A checked note on an issue or PR that an open
 note for the same person names, asking the same verb (the first word of
 the text), folds into that note (note.folded). A --kind login note closes
 once its --until probe, a shell command the watch runs every tick, exits 0.
@@ -64,7 +67,12 @@ warning that quotes the answer.`,
 			n := state.Note{For: forWho, Text: draft.text(), Due: d.UTC(), Default: draft.Default, By: me, At: a.now.UTC(), Kind: draft.Kind, Until: draft.Until, Pinned: pin}
 			checked := forWho != "" && guides(a.cfg.Guide.Person, &n)
 			if checked {
-				if m := draft.missing(); len(m) > 0 {
+				m := draft.missing()
+				stages, err := planStages(cmd.Context(), a.cfg.Plans, draft.text())
+				if err != nil {
+					return err
+				}
+				if m = append(m, stages...); len(m) > 0 {
 					return usageErr("note for %s refused, it lacks: %s", forWho, strings.Join(m, "; "))
 				}
 			}
