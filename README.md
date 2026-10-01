@@ -939,8 +939,10 @@ it at the agent's next tool round while a turn runs and starts a turn with it wh
 idle. The brief is the first message; `agents wake <name> <message>` writes the next. Writers take a
 lock file beside the inbox, so two senders' lines never interleave. A wake of an agent whose process ended is
 refused (exit 3): nothing reads its inbox, and nothing resumes it. Taking the agent off the roster
-(`agents remove`, the doctor) removes its inbox and lock file: a process still running keeps its open end, but no
-message reaches it any more. `agents handover` refuses omp
+(`agents remove`, the doctor) stops its unit and removes its inbox and lock file: nothing resumes an omp agent,
+so a process left running would only hold its model. The agent's own beekeeper commands act as its roster entry
+(`BEEKEEPER_OMP_AGENT` wins over any session variable its tool shell carries), so it reports its work done with
+`agents idle --done` like any worker. `agents handover` refuses omp
 agents, and no desktop import happens.
 
 An omp session the person started in a terminal shows in `sessions` and can be followed, but takes

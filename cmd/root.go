@@ -195,6 +195,11 @@ func (a *app) caller() (state.Party, error) {
 	if a.as != "" {
 		return state.Party{Name: a.as}, nil
 	}
+	// An omp agent beekeeper started is its roster entry, whatever session
+	// variables its tool shell carries.
+	if id := os.Getenv(omp.EnvAgent); id != "" {
+		return state.Party{HostSession: omp.HostPrefix + id, Name: os.Getenv(omp.EnvName)}, nil
+	}
 	p := state.Party{
 		Session:     os.Getenv("CLAUDE_CODE_SESSION_ID"),
 		HostSession: os.Getenv("CLAUDE_CODE_HOST_SESSION_ID"),
