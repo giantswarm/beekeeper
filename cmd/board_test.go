@@ -82,6 +82,39 @@ func TestNextFreeSkipsOwnedItems(t *testing.T) {
 	}
 }
 
+func TestNextFreeHoldsAnEpicsSubIssuesToItsOwners(t *testing.T) {
+	listed := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	me := state.Party{Session: "me", Name: "Me"}
+	running := state.Party{Session: "s1", Name: "Worker one"}
+	alive := func(p state.Party) bool { return p.Is(running) || p.Is(me) }
+	st := &state.State{
+		Records: []state.Record{
+			{Session: running, Issue: "o/r#20", At: listed.Add(-time.Hour)},
+			{Session: running, Issue: "o/r#21", At: listed.Add(-time.Hour)},
+		},
+		Notes: []state.Note{{ID: 704, For: "Supervisor", Pinned: true, Text: "skip the slices of https://github.com/o/r/issues/10"}},
+	}
+	sub := func(n int, epic string) board.Candidate {
+		return board.Candidate{Item: board.Item{Ref: fmt.Sprintf("o/r#%d", n)}, Step: "In Progress", Epic: epic}
+	}
+	// A sub-issue's own record names it ahead of its epic's.
+	cands := []board.Candidate{sub(11, "o/r#10"), sub(12, "O/R#10"), sub(21, "o/r#20"), sub(22, "o/r#20"), sub(31, "o/r#30")}
+	res := nextFree(st, cands, me, alive, listed)
+	var got []string
+	for _, c := range res.Skipped {
+		got = append(got, c.Ref+": "+c.Skip)
+	}
+	want := []string{
+		`o/r#11: note #704 (waits on Supervisor), on epic o/r#10`,
+		`o/r#12: note #704 (waits on Supervisor), on epic O/R#10`,
+		`o/r#21: served by "Worker one"`,
+		`o/r#22: served by "Worker one", on epic o/r#20`,
+	}
+	if !slices.Equal(got, want) || res.Pick == nil || res.Pick.Ref != "o/r#31" {
+		t.Errorf("pick %v, skipped:\n%s\nwant o/r#31 after:\n%s", res.Pick, strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
 func TestConcurrentClaimsNeverGetTheSameItem(t *testing.T) {
 	store, err := state.Open(t.TempDir())
 	if err != nil {

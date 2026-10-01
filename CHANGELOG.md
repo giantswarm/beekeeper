@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `board next` holds an epic's sub-issues to the epic's owners: a serve record, a busy agent's task or an open note naming the epic skips each sub-issue offered through it, with the reason and the epic (`note #n (waits on …), on epic owner/repo#n`). One note or serve on an epic covered none of its sub-issues, so a board pull was offered a teammate's slices one after another.
 - An omp agent's beekeeper commands act as its roster entry, so `agents idle --done` finishes it; they were refused as an unregistered session. Taking an omp agent off the roster stops its unit: its process ran on, holding its model, after its work was done.
 
 ### Added
