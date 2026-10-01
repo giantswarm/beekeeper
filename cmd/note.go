@@ -26,11 +26,23 @@ Without a subcommand, lists the open notes.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error { return a.noteList() },
 	}
-	var forWho, due, dflt string
+	var forWho, due string
+	var draft noteDraft
 	add := &cobra.Command{
 		Use:   "add <text>",
 		Short: "Add a note",
-		Args:  cobra.MinimumNArgs(1),
+		Long: `Add a note. A note for the guide's person (guide.person; with it unset,
+any --for) is refused, naming what it lacks, unless it carries what the
+person needs to answer without asking back: --status-quo and --why, every
+--option as "<choice>: <consequence>", a --default that is an action (not
+"wait" or "none"), the full URL of every #N or owner/repo#N it names, and
+--checked "<source>" for a claim that something is merged, green,
+released, rolled or closed. Such a note on an issue or PR that an open
+note for the same person names, asking the same verb (the first word of
+the text), folds into that note (note.folded). A --kind login note closes
+once its --until probe, a shell command the watch runs every tick, exits 0.
+Notes without --for are memos and are not checked.`,
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			d, err := untilTime(a.now, due)
 			if err != nil {
@@ -40,8 +52,23 @@ Without a subcommand, lists the open notes.`,
 			if err != nil {
 				return err
 			}
-			n := state.Note{For: forWho, Text: strings.Join(args, " "), Due: d.UTC(), Default: dflt, By: me, At: a.now.UTC()}
+			draft.Question = strings.Join(args, " ")
+			n := state.Note{For: forWho, Text: draft.text(), Due: d.UTC(), Default: draft.Default, By: me, At: a.now.UTC(), Kind: draft.Kind, Until: draft.Until}
+			checked := forWho != "" && guides(a.cfg.Guide.Person, &n)
+			if checked {
+				if m := draft.missing(); len(m) > 0 {
+					return usageErr("note for %s refused, it lacks: %s", forWho, strings.Join(m, "; "))
+				}
+			}
+			var folded *state.Note
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+				if checked {
+					if o, ref := foldTarget(st.Notes, n, draft.Question); o != nil {
+						o.Text += fmt.Sprintf(" | Also from %s: %s", me.Name, n.Text)
+						folded = o
+						return []state.Event{event(me, "note.folded", "into #%d (%s, %s): %s", o.ID, ref, verb(draft.Question), n.Text)}, nil
+					}
+				}
 				st.NextNote++
 				n.ID = st.NextNote
 				st.Notes = append(st.Notes, n)
@@ -50,13 +77,23 @@ Without a subcommand, lists the open notes.`,
 			if err != nil {
 				return err
 			}
+			if folded != nil {
+				_, err = fmt.Fprintf(a.out, "note #%d (folded: it asks the same on the same issue or PR)\n", folded.ID)
+				return err
+			}
 			_, err = fmt.Fprintf(a.out, "note #%d\n", n.ID)
 			return err
 		},
 	}
 	add.Flags().StringVar(&forWho, "for", "", "who has to act (a person's name)")
 	add.Flags().StringVar(&due, "due", "", "when it is due: a time (22:55) or a duration (3h)")
-	add.Flags().StringVar(&dflt, "default", "", "what happens if nobody answers by the due time")
+	add.Flags().StringVar(&draft.Default, "default", "", "what happens if nobody answers by the due time: an action")
+	add.Flags().StringVar(&draft.StatusQuo, "status-quo", "", "what is true now")
+	add.Flags().StringVar(&draft.Why, "why", "", "why it needs the person")
+	add.Flags().StringArrayVar(&draft.Options, "option", nil, `a choice and its consequence, "<choice>: <consequence>" (repeatable)`)
+	add.Flags().StringVar(&draft.Checked, "checked", "", "where a state claim (merged, green, released, rolled, closed) was checked")
+	add.Flags().StringVar(&draft.Kind, "kind", "", `"login": a sign-in, closed once --until passes`)
+	add.Flags().StringVar(&draft.Until, "until", "", "a login note's probe: a shell command that exits 0 once signed in")
 	done := &cobra.Command{
 		Use:   "done <id>...",
 		Short: "Mark notes done",
