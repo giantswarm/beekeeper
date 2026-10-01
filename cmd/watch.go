@@ -1205,9 +1205,12 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	w.stoppedAgents(st, sessions)
 	q := w.quietness(ctx, st, sessions)
 	w.handoversDue(st, sessions)
+	signedIn := probeLogins(ctx, st.Notes)
 	fire := func(st *state.State) ([]string, []state.Event, bool) {
 		seen, ce := observeCLI(st, sessions, w.now)
-		lines, evs := firePending(st, sessions, w.now)
+		lines, evs := closeProbed(st, signedIn)
+		pl, pe := firePending(st, sessions, w.now)
+		lines, evs = append(lines, pl...), append(evs, pe...)
 		for _, e := range ce {
 			lines = append(lines, fmt.Sprintf("SUPERVISOR RESTARTED: %q, %s; it keeps the role", e.By.Name, e.Detail))
 		}

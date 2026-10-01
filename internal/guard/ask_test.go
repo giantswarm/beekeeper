@@ -21,7 +21,7 @@ func TestHookLeavesQuestionsToTheGuide(t *testing.T) {
 	if d == nil || d.PermissionDecision != decisionDeny {
 		t.Fatalf("a worker's question: want a refusal, got %+v", d)
 	}
-	if !strings.Contains(d.Reason, `beekeeper note add --for Timo "<status quo, the options, your recommendation>" --default`) {
+	if !strings.Contains(d.Reason, `beekeeper note add --for Timo "<the question, every issue or PR as its full URL>" --status-quo "<what is true now>" --why`) {
 		t.Errorf("the refusal does not name the note:\n%s", d.Reason)
 	}
 	// No guide running, or no lookup: still refused.

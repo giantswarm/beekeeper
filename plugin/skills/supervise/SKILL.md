@@ -46,7 +46,8 @@ machine has a supervisor at all times: the role moves to a successor by relay an
   successor's start; a crash of this session's CLI leaves the rule in force. A `yours <env>` is
   recorded with `beekeeper lease grant <resource> <session>` (grants queue in order), a hold with
   `beekeeper hold set <repo|github>`, a decision for the person with `beekeeper note add --for
-  <person> --due <time> --default "<what happens unanswered>"`, a point in time to look at
+  <person> --due <time> --status-quo "<what is true now>" --why "<why it needs them>" --default
+  "<the action if unanswered>"` (every issue or PR as its full URL; `note add --help` names the checks), a point in time to look at
   something with `beekeeper timer add <time> "<what>"` (`timer done` once looked at), what each
   session serves and waits on with `beekeeper sessions serve`, the registered agents with
   `beekeeper agents`. `beekeeper handover` prints all of it with the sessions; `beekeeper handover
@@ -95,8 +96,9 @@ machine has a supervisor at all times: the role moves to a successor by relay an
   so nothing may hold that turn: no `AskUserQuestion` or other dialog that waits for an answer;
   long waits run only in the background.
 - **Decisions go to the guide, never to the person directly.** A decision the supervisor meets, its
-  own or a session's, is filed as `beekeeper note add --for <person> --due <time> --default "<what
-  happens unanswered>"`, its text carrying the status quo and why it needs them. At the deadline,
+  own or a session's, is filed as `beekeeper note add --for <person> --due <time> --status-quo "<what
+  is true now>" --why "<why it needs them>" --default "<the action if unanswered>"`; a note lacking
+  one of them, a full URL or `--checked` for a state claim is refused, naming what is missing. At the deadline,
   the default for anything irreversible or production-facing is not to do it; a reversible default
   proceeds. An answer relayed by the guide is the person's word, followed without asking again.
 - **Five to ten agents are busy.** Busy is a roster agent with a task that is not parked; the
