@@ -8,6 +8,9 @@ type Binary struct{ Path string }
 // RunningBinary is nil off Linux.
 func RunningBinary() *Binary { return nil }
 
+// ProcessBinary is nil off Linux.
+func ProcessBinary(int) *Binary { return nil }
+
 // Replaced is false off Linux.
 func (*Binary) Replaced() bool { return false }
 

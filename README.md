@@ -48,7 +48,10 @@ without systemd install writes the hooks and the config and says the service is 
 From then on `beekeeper self-update` keeps it current: it verifies the release binary's Sigstore
 signature and renames it over the old one in one step, so a running `beekeeper watch` keeps
 running, and a `devctl pr merge` gate call waiting for its turn re-executes the new binary at its
-place. `beekeeper self-update --check` exits 125 while a newer release is out.
+place. A running watch keeps the code it started with: every watch, `--once` included, says
+`WATCH STALE` once per watch whose binary was replaced, naming the version it runs and the one
+installed, and that a re-arm (a restart) picks the new one up; no watch re-executes itself.
+`beekeeper self-update --check` exits 125 while a newer release is out.
 
 The session and machine views need Linux (`/proc`, cgroup v2, the journal). Leases, holds and
 the budget work on any system.
