@@ -482,7 +482,7 @@ func (a *app) closedNotes(st *state.State) (map[int]state.Event, error) {
 	if len(gone) == 0 {
 		return out, nil
 	}
-	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "note.answered" || e.Verb == "note.done" })
+	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == noteAnswered || e.Verb == "note.done" })
 	if err != nil {
 		return nil, err
 	}
@@ -519,7 +519,7 @@ func (a *app) feedLines(st *state.State, sessions []*claude.Session, closed map[
 				continue // still in the queue, or open and filed for someone else
 			}
 			switch e, ok := closed[id]; {
-			case ok && e.Verb == "note.answered":
+			case ok && e.Verb == noteAnswered:
 				lines = append(lines, fmt.Sprintf("GUIDE ANSWERED (%s): %s", truncate(e.By.Name, 30), truncate(oneLine(e.Detail), 240)))
 			default:
 				lines = append(lines, fmt.Sprintf("GUIDE CLOSED: note #%d, without an answer", id))

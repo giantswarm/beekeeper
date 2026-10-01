@@ -121,13 +121,16 @@ type answered struct {
 	By       string
 }
 
+// noteAnswered is the event of a person's answer on a note.
+const noteAnswered = "note.answered"
+
 // answeredDetail is note.answered's detail, as `note answer` writes it.
 var answeredDetail = regexp.MustCompile(`(?s)^#(\d+) answered for (.*?): (.*?) \(asked by (.*?): (.*)\)$`)
 
 // parseAnswered reads a note.answered event; ok is false for another one.
 func parseAnswered(e state.Event) (answered, bool) {
 	m := answeredDetail.FindStringSubmatch(e.Detail)
-	if e.Verb != "note.answered" || m == nil {
+	if e.Verb != noteAnswered || m == nil {
 		return answered{}, false
 	}
 	id, _ := strconv.Atoi(m[1])
@@ -136,7 +139,7 @@ func parseAnswered(e state.Event) (answered, bool) {
 
 // answeredSince is the decisions answered since since, oldest first.
 func (a *app) answeredSince(since time.Time) ([]answered, error) {
-	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "note.answered" && e.At.After(since) })
+	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == noteAnswered && e.At.After(since) })
 	if err != nil {
 		return nil, err
 	}

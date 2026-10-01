@@ -199,7 +199,11 @@ func (a *app) runStart(ctx context.Context, rl role, takeOver bool) error {
 			return err
 		}
 	}
-	return a.startSummary(after, sessions)
+	l, err := a.leases()
+	if err != nil {
+		return err
+	}
+	return a.startSummary(after, sessions, l)
 }
 
 // titleRun has a steward title me's desktop session with its run name

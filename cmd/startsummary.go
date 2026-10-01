@@ -11,11 +11,7 @@ import (
 // holder's first look in a few KB (leases, holds, lanes, what waits on
 // it, the agents and their tasks), each part one `handover --section`
 // away in full.
-func (a *app) startSummary(st *state.State, sessions []*claude.Session) error {
-	l, err := a.leases()
-	if err != nil {
-		return err
-	}
+func (a *app) startSummary(st *state.State, sessions []*claude.Session, l *leaseList) error {
 	ans, err := a.handoverAnswers(st)
 	if err != nil {
 		return err

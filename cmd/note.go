@@ -163,7 +163,7 @@ the guide's feed read it from the log (beekeeper log --verb note.answered).`,
 					return nil, refused("note #%d is not open", ids[0])
 				}
 				n = &st.Notes[i]
-				ev := event(me, "note.answered", "#%d answered for %s: %s (asked by %s: %s)", n.ID, cmp.Or(n.For, "nobody named"), text, n.By.Name, n.Text)
+				ev := event(me, noteAnswered, "#%d answered for %s: %s (asked by %s: %s)", n.ID, cmp.Or(n.For, "nobody named"), text, n.By.Name, n.Text)
 				st.Notes = slices.Delete(st.Notes, i, i+1)
 				return []state.Event{ev}, nil
 			})

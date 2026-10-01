@@ -98,7 +98,7 @@ always complete.`,
 			notes := a.splitNotes(v.st.Notes)
 			sections := []handoverSection{
 				{"supervisor", "", func(bool) { a.printSupervisor(v) }},
-				{"sessions", fmt.Sprintf("Sessions (%d running)", len(v.Sessions)), func(bool) { a.printSessions(v) }},
+				{secSessions, fmt.Sprintf("Sessions (%d running)", len(v.Sessions)), func(bool) { a.printSessions(v) }},
 				{"leases", "Leases", func(bool) { a.printLeases(l) }},
 				{"holds", "Holds", func(bool) { a.printHolds(holds) }},
 				{"lanes", "Merge lanes", func(bool) { a.printLanes(lanes) }},
@@ -147,7 +147,7 @@ always complete.`,
 			var facts []fact
 			for _, s := range sections {
 				switch s.key {
-				case "sessions":
+				case secSessions:
 					facts = append(facts, a.sessionFacts(v)...)
 				case "agents":
 					facts = append(facts, a.agentFacts(agents)...)
