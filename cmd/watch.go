@@ -224,6 +224,8 @@ type watcher struct {
 	turnEnded func(context.Context, string) bool
 	// readHRs reads a lane installation's HelmReleases; nil is kubectl.
 	readHRs func(context.Context, config.Lane) ([]merge.HelmRelease, error)
+	// clock paces the loops and dates the polls; nil is the wall clock.
+	clock watchClock
 	// cpuTable is the process table the last machine sample read, at
 	// cpuAt: the next one's top CPU consumers are measured against it.
 	// cpuOver counts the samples in a row with CPU pressure over
@@ -296,8 +298,32 @@ func (w *watcher) helmReleases(ctx context.Context, lane config.Lane) ([]merge.H
 	return readHelmReleases(ctx, lane)
 }
 
+// watchClock is a watch's time: its loops wait on its timers.
+type watchClock interface {
+	Now() time.Time
+	// Timer fires once after d; stop releases it.
+	Timer(d time.Duration) (fire <-chan time.Time, stop func())
+}
+
+// wallClock is the time a watch keeps outside its tests.
+type wallClock struct{}
+
+func (wallClock) Now() time.Time { return time.Now() }
+
+func (wallClock) Timer(d time.Duration) (<-chan time.Time, func()) {
+	t := time.NewTimer(d)
+	return t.C, func() { t.Stop() }
+}
+
+func (w *watcher) clk() watchClock {
+	if w.clock != nil {
+		return w.clock
+	}
+	return wallClock{}
+}
+
 func (w *watcher) run(ctx context.Context, once bool) error {
-	w.lastPoll = time.Now().Add(-w.cfg.Watch.Interval.Duration)
+	w.lastPoll = w.clk().Now().Add(-w.cfg.Watch.Interval.Duration)
 	s, err := plat.Machine.DesktopScope()
 	if s != nil {
 		w.scopeOOM = s.OOMKills
@@ -327,9 +353,11 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	wg.Go(func() {
+		fire, stop := w.clk().Timer(interval)
+		defer stop()
 		select {
 		case <-ctx.Done():
-		case <-time.After(interval):
+		case <-fire:
 			w.loop(ctx, interval, false, w.sample)
 		}
 	})
@@ -350,20 +378,24 @@ const slowReads = 4
 // runs every slowReads × interval, at nice 10, while the machine is
 // strained.
 func (w *watcher) loop(ctx context.Context, interval time.Duration, reads bool, fn func(context.Context)) {
+	clk := w.clk()
 	for {
-		start, every, rctx := time.Now(), interval, ctx
+		start, every, rctx := clk.Now(), interval, ctx
 		if reads {
 			every, rctx = w.readEvery(interval), w.readCtx(ctx)
 		}
 		fn(rctx)
 		next := start.Add(every)
-		for now := time.Now(); !next.After(now); {
+		now := clk.Now()
+		for !next.After(now) {
 			next = next.Add(every)
 		}
+		fire, stop := clk.Timer(next.Sub(now))
 		select {
 		case <-ctx.Done():
+			stop()
 			return
-		case <-time.After(time.Until(next)):
+		case <-fire:
 		}
 	}
 }
@@ -828,7 +860,7 @@ func (w *watcher) pollSessions(ctx context.Context, since time.Time, t *proc.Tab
 // probe for one watch.interval at most.
 func (w *watcher) poll(ctx context.Context) {
 	w.polls.Add(1)
-	w.now = time.Now()
+	w.now = w.clk().Now()
 	since := w.lastPoll
 	w.lastPoll = w.now
 	th := w.cfg.Watch
