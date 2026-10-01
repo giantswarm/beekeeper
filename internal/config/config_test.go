@@ -141,6 +141,8 @@ func TestLoadRejects(t *testing.T) {
 		"bad quiet hours":     "notify: {quietHours: 22-7}",
 		"bad relayAt":         "supervisor: {relayAt: 400kb}",
 		"negative relayAt":    "supervisor: {relayAt: -1}",
+		"bad store glob":      "outbound: {storeDeny: [{vault: \"[\"}]}",
+		"bad outbound path":   "outbound: {paths: [\"[\"]}",
 	} {
 		p := filepath.Join(t.TempDir(), "c.yaml")
 		if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
@@ -363,4 +365,23 @@ func writeTemp(t *testing.T, raw string) string {
 		t.Fatal(err)
 	}
 	return p
+}
+
+func TestOutbound(t *testing.T) {
+	home, _ := os.UserHomeDir()
+	p := filepath.Join(t.TempDir(), "c.yaml")
+	if err := os.WriteFile(p, []byte("outbound: {phrases: [x], paths: [~/plans, /srv/*.md], storeDeny: [{vault: Private}]}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := c.Outbound
+	if o.Paths[0] != filepath.Join(home, "plans") || o.Paths[1] != "/srv/*.md" || o.StoreDeny[0].Vault != "Private" {
+		t.Errorf("outbound %+v", o)
+	}
+	if len(o.SweepRoots) != 1 || o.SweepRoots[0] != home || o.SweepDepth != 5 {
+		t.Errorf("sweep defaults: roots %q depth %d, want the home directory 5 deep", o.SweepRoots, o.SweepDepth)
+	}
 }

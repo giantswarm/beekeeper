@@ -121,7 +121,7 @@ a relayed successor opens with the plugin's role.
 | `beekeeper handover [--prompt] [--section <name>]` | Everything the next supervisor needs, as Markdown, from the live state: leases and grants, holds and their exceptions, agents, session records, pinned notes, notes with their defaults, the decisions answered since the last relay, timers, the merge lanes with their queues and settling merges, and what the alert watch reads (the installations and why, the ignored alert names, the baseline). `--prompt` prints the successor's session prompt: the configured instructions (`supervisor.skill` or `supervisor.instructions`), the scope, the pending state and the commands that read the live values; no live value (version, memory figure, pull request state). Both show what a successor acts on in its first minutes: the notes the guide serves (for `guide.person` and for the guide) are one count line, records of sessions ended over an hour ago one line, and the answered decisions those since the predecessor's start with a count of the rest of 72 hours. `--section <name>` prints one section with everything it holds (`notes`, `records`, `answers`, …). |
 | `beekeeper log [--verb PREFIX]` | Every claim, grant, hold, registration, note, timer, session record and build run, as they happened; `--verb run.` shows only the runs. |
 | `beekeeper run [--max SIZE] [--wait DURATION] -- <command>` | Run a build, test or lint command in one of the machine's build slots (memcap's, shared with the `memcap` wrapper) inside a memory-capped systemd scope. When every slot is held it waits once, then exits 75 with the holders; when the cap fires the kernel kills the biggest process in the scope only, and `run` exits 137 with one line starting `beekeeper run: the <SIZE> cap killed:`. Each run leaves `run.start` and `run.end` in `beekeeper log` with its scope, session and command, so `snapshot` and `watch` name a cap kill's session and command after the run has ended. `MEMCAP_TEST=1` marks a test's run: its scope is `memcap-test-…`, and a kill in it is reported as a test kill (one quiet `test kill:` line in `watch`), never as a build's. |
-| `beekeeper hook pretooluse` | The PreToolUse hook (matcher `Bash|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage`): rewrites build, test, lint and lab commands to `<this binary> run -- zsh -c '<command>'` with the command verbatim and the tool timeout at 10 minutes (a background run waits 60 minutes), and refuses a third kind cluster, listing the held leases. It puts the gate in front of every `devctl pr merge`, `pr wait`, `release wait` and `rollout wait`, behind prefix commands and in pipelines and lists, and refuses one hidden in a `-c` string (below); every other devctl command passes untouched. It refuses a command that would print secret values (below, [Secret reads](#secret-reads)), a kube context switch, a write to production and `op item get` ([Kube contexts, production writes and op item get](#kube-contexts-production-writes-and-op-item-get)), a command that opens a page in the person's browser (`muster auth login`, `gh auth login --web`, `xdg-open`) outside the session holding the `browser` lease, a command that loads a model on the host's model server outside the session holding `model-server` ([The model server](#the-model-server)), and an `AskUserQuestion` call outside the guide's session ([Questions go to the guide](#questions-go-to-the-guide)). A `SendMessage` to a desktop id (`local_…`) whose session has a running CLI goes to that CLI by name, so a headless turn gets no second copy beside it (below, [Waking a session](#waking-a-session)). A session's first write or `git commit` in another repository carries that repository's `CLAUDE.md`, `AGENTS.md`, rules and mandatory reads ([A repository's instructions on the first write](#a-repositorys-instructions-on-the-first-write)). |
+| `beekeeper hook pretooluse` | The PreToolUse hook (matcher `Bash|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage|mcp__.*`): rewrites build, test, lint and lab commands to `<this binary> run -- zsh -c '<command>'` with the command verbatim and the tool timeout at 10 minutes (a background run waits 60 minutes), and refuses a third kind cluster, listing the held leases. It puts the gate in front of every `devctl pr merge`, `pr wait`, `release wait` and `rollout wait`, behind prefix commands and in pipelines and lists, and refuses one hidden in a `-c` string (below); every other devctl command passes untouched. It refuses a command that would print secret values (below, [Secret reads](#secret-reads)) and a call that would send one off the machine ([What leaves the machine](#what-leaves-the-machine)), a kube context switch, a write to production and `op item get` ([Kube contexts, production writes and op item get](#kube-contexts-production-writes-and-op-item-get)), a command that opens a page in the person's browser (`muster auth login`, `gh auth login --web`, `xdg-open`) outside the session holding the `browser` lease, a command that loads a model on the host's model server outside the session holding `model-server` ([The model server](#the-model-server)), and an `AskUserQuestion` call outside the guide's session ([Questions go to the guide](#questions-go-to-the-guide)). A `SendMessage` to a desktop id (`local_…`) whose session has a running CLI goes to that CLI by name, so a headless turn gets no second copy beside it (below, [Waking a session](#waking-a-session)). A session's first write or `git commit` in another repository carries that repository's `CLAUDE.md`, `AGENTS.md`, rules and mandatory reads ([A repository's instructions on the first write](#a-repositorys-instructions-on-the-first-write)). |
 | `beekeeper hook permissionrequest` | The PermissionRequest hook: answers `allow` only for a session `agents start` started in bypass that now runs in `acceptEdits`; every other request gets no answer, so the person sees the normal card. Below. |
 | `beekeeper free [--apply] [--only SECTIONS] [--summary]` | Show where the memory is and, with `--apply`, free what no running work needs: dead sessions' dirs in the tmpfs `/tmp` (the CLI is gone; an idle session's stay), throwaway temp dirs and orphaned jest or Claude workers. Kind clusters, idle CLIs, heavy or runaway processes and Chrome renderers are only reported. Never runs as root: the swap reset and root-owned leftovers are printed as the commands to run. `--summary` prints the TSV rows a desktop front end parses. |
 | `beekeeper self-update` | Install the latest signed release over this binary; `--check` only asks. |
@@ -257,6 +257,38 @@ captured in a variable or a flag's value (`T=$(…)`, `--from-literal=k=$(…)`)
 `.data` that prints only the keys passes, as do `-o name`, `-o wide`, the table and `kubectl describe
 secret` (sizes only). Anything else that reads a secret is refused: false positives beat leaks, and
 the refusal says how to write the command safely.
+
+## What leaves the machine
+
+The same holds for what a session sends out: an issue body, a commit, a chat post, a plan. The
+PreToolUse hook scans what a call would send for secret values and refuses the call, naming the rule
+or the phrase that matched and never the match, since the refusal lands in the transcript too:
+
+- the command line, here-documents included, of `gh`, `devctl`, `git commit`, `git tag` and
+  `git remote`, also inside `sh|bash|zsh -c` strings; the body of `curl`, `wget`, `http` or `xh` (its
+  data flags; a header or URL carries the client's own credential to its service and passes);
+- the files these send: `--body-file`, `-F`, `--notes-file`, `--input`, `@file`, `field=@file` and
+  `$(cat file)`;
+- for `git push`, the messages and added lines of the commits no remote has yet (removed lines pass);
+- the input of every connector tool (`mcp__…`: Slack, GitHub, mail, documents), which needs
+  `|mcp__.*` in the hook's matcher;
+- a `Write`, `Edit`, `MultiEdit` or `NotebookEdit` of a file under `outbound.paths` (what it writes,
+  not what it replaces).
+
+The patterns are gitleaks' rules by their names: GitHub (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`,
+`github_pat_`), GitLab, AWS, GCP, Slack tokens and webhooks, Anthropic, OpenAI, npm, 1Password service
+account and age keys, private keys, JWTs and a password in a URL (a placeholder such as `${TOKEN}` or
+`<token>` passes); `outbound.phrases` adds what is specific to the machine (case-insensitive, named
+by number). A line marked `gitleaks:allow` is skipped, for a test fixture that only looks like a token.
+
+An `op item|document create|edit` or a `vault kv put|patch` that an `outbound.storeDeny` rule matches
+(vault and item globs; a write naming no vault may go to the default one and matches) is refused: some
+credentials do not belong in a shared store.
+
+The watch sweeps `outbound.sweepRoots` (the home directory) `outbound.sweepDepth` (5) levels deep every
+interval for world-readable private keys (`id_*`, `*.pem`, `*.key`, `*.ppk` with a private key header)
+and git repositories whose remote URL carries a credential, skipping caches and dependency trees: one
+`EXPOSED <path>: <what>` line each, never the content, and an ENDED line once it is fixed.
 
 ## Questions go to the guide
 
@@ -754,7 +786,7 @@ inject once; a session's markers go 7 days after its last first write.
 Register the hook for its six tools:
 
 ```json
-"PreToolUse": [{"matcher": "Bash|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage", "hooks": [{"type": "command",
+"PreToolUse": [{"matcher": "Bash|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage|mcp__.*", "hooks": [{"type": "command",
   "command": "~/.go/bin/beekeeper hook pretooluse"}]}]
 ```
 
@@ -890,6 +922,8 @@ The organisation and desk keys, and their defaults:
 | `desktop.typingQuiet` | `30s` | How long the person's input stays idle before a `claude://` link switches the desktop's window; negative: links do not wait for it |
 | `watch.tmpMaxMiB`, `watch.diskMinMiB` | 45% of `/tmp`, 5% of `/` | TMPFS, LOW DISK |
 | `ollama.url`, `lemonade.url` | unset: no model server | The host's model servers, watched and guarded under the `model-server` lease |
+| `outbound.phrases`, `outbound.paths`, `outbound.storeDeny` | none | What never leaves the machine, the plan files whose writes are outbound, the refused secret-store writes ([What leaves the machine](#what-leaves-the-machine)) |
+| `outbound.sweepRoots`, `outbound.sweepDepth` | the home directory, 5 | Where the watch looks for exposed keys and credentials in remote URLs |
 
 State lives in `$XDG_STATE_HOME/beekeeper/` (`state.json`, which an older beekeeper still running
 writes back with the fields it does not know, `events.jsonl`, whose `at` is RFC 3339 in UTC while
