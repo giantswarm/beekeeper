@@ -262,7 +262,37 @@ type Timer struct {
 	At   time.Time `json:"at"`
 	// Fired is when a watch reported the timer; it reports it once.
 	Fired time.Time `json:"fired,omitzero"`
+	// When is a typed condition (pr-merged owner/repo#n, …) and Probe a
+	// shell command that exits 0 once its condition holds: from Due, the
+	// watch checks it every Every and fires the timer once it holds.
+	When  string        `json:"when,omitempty"`
+	Probe string        `json:"probe,omitempty"`
+	Every time.Duration `json:"every,omitempty"`
+	// Checked is when a watch last found the condition not holding.
+	Checked time.Time `json:"checked,omitzero"`
+	// Until is the end of the wait: past it the timer fires as timed out,
+	// or closes unfired when Expire is set.
+	Until  time.Time `json:"until,omitzero"`
+	Expire bool      `json:"expire,omitempty"`
+	// Wake is the agent the firing wakes with What; Run a shell command it
+	// runs, its exit code logged. Without either the watch's line says it.
+	Wake string `json:"wake,omitempty"`
+	Run  string `json:"run,omitempty"`
 }
+
+// Auto reports whether the watch acts on the timer itself and closes it
+// when it fires: a condition to wait on, an agent to wake or a command to
+// run. A plain timer stays open until marked done.
+func (t Timer) Auto() bool {
+	return t.Conditional() || t.Wake != "" || t.Run != ""
+}
+
+// Conditional reports whether the timer waits on a condition.
+func (t Timer) Conditional() bool { return t.When != "" || t.Probe != "" }
+
+// Looked reports whether someone has to look at the timer by now: a plain
+// timer whose time has come. An auto timer is the watch's to act on.
+func (t Timer) Looked(now time.Time) bool { return !t.Auto() && !t.Due.After(now) }
 
 // Due reports whether a watch has yet to report something due by now.
 func Due(due, fired, now time.Time) bool {

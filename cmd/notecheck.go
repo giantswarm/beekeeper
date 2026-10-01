@@ -16,7 +16,7 @@ import (
 // watch closes it once its --until probe passes.
 const noteLogin = "login"
 
-// probeTimeout bounds one run of a login note's probe.
+// probeTimeout bounds one run of a probe: a login note's, a timer's.
 const probeTimeout = 10 * time.Second
 
 // noteDraft is what `note add` was given for a person: the question and the
@@ -179,14 +179,19 @@ func probeLogins(ctx context.Context, notes []state.Note) []int {
 		if n.Kind != noteLogin || n.Until == "" {
 			continue
 		}
-		pctx, cancel := context.WithTimeout(ctx, probeTimeout)
-		err := exec.CommandContext(pctx, "sh", "-c", n.Until).Run() //nolint:gosec // the probe its filer gave on this machine
-		cancel()
-		if err == nil {
+		if probePasses(ctx, n.Until) {
 			passed = append(passed, n.ID)
 		}
 	}
 	return passed
+}
+
+// probePasses reports whether a probe, a shell command given on this
+// machine, exits 0 within probeTimeout.
+func probePasses(ctx context.Context, probe string) bool {
+	pctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	return exec.CommandContext(pctx, "sh", "-c", probe).Run() == nil //nolint:gosec // the probe its filer gave on this machine
 }
 
 // closeProbed closes the open login notes among passed and returns their

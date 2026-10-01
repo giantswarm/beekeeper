@@ -264,6 +264,8 @@ type watcher struct {
 	chores    bool
 	doctoring atomic.Bool
 	retitled  map[string]time.Time
+	// timerActs are the fired timers' wakes and commands under way.
+	timerActs sync.WaitGroup
 }
 
 // unavailable reports whether err is a platform part this build does not
@@ -313,6 +315,7 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 		w.exposures()
 		w.poll(ctx)
 		w.stand.inflight.Wait() // a successor's start outlives no watch
+		w.timerActs.Wait()      // nor a timer's wake or command
 		return nil
 	}
 	// The machine is sampled in a loop of its own, so no network read or
@@ -1224,9 +1227,14 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	w.handoversDue(st, sessions)
 	w.doctor(ctx)
 	signedIn := probeLogins(ctx, st.Notes)
+	held := checkTimers(ctx, st.Timers, w.now, lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now))
+	var fires []timerFire
 	fire := func(st *state.State) ([]string, []state.Event, bool) {
 		seen, ce := observeCLI(st, sessions, w.now)
 		lines, evs := closeProbed(st, signedIn)
+		tl, te, tf, touched := settleTimers(st, held, w.now)
+		lines, evs, fires = append(lines, tl...), append(evs, te...), tf
+		seen = seen || touched
 		pl, pe := firePending(st, sessions, w.now)
 		lines, evs = append(lines, pl...), append(evs, pe...)
 		for _, e := range ce {
@@ -1261,6 +1269,12 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	for _, d := range due {
 		w.notify(ctx, notify.Due, d.key, d.summary, d.body)
 	}
+	for _, f := range fires {
+		if f.t.Wake == "" && f.t.Run == "" {
+			w.notify(ctx, notify.Due, fmt.Sprintf("timer#%d", f.t.ID), fmt.Sprintf("beekeeper: timer #%d: %s", f.t.ID, truncate(f.reason, 60)), truncate(f.t.What, 200))
+		}
+	}
+	w.actTimers(ctx, fires)
 }
 
 // stoppedAgents says once which agents with a task have no running CLI: a
@@ -1402,7 +1416,7 @@ func firePending(st *state.State, sessions []*claude.Session, now time.Time) ([]
 	}
 	for i := range st.Timers {
 		t := &st.Timers[i]
-		if !state.Due(t.Due, t.Fired, now) {
+		if t.Auto() || !state.Due(t.Due, t.Fired, now) {
 			continue
 		}
 		t.Fired = now.UTC()

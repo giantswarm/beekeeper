@@ -24,7 +24,7 @@ func (a *app) startSummary(st *state.State, sessions []*claude.Session, l *lease
 	notes := a.splitNotes(st.Notes)
 	due := 0
 	for _, t := range st.Timers {
-		if !t.Due.After(a.now) {
+		if t.Looked(a.now) {
 			due++
 		}
 	}

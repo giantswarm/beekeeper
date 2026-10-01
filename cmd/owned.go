@@ -35,7 +35,8 @@ const ownerWait = 5 * time.Minute
 // gateParty logs what a run's merge-child does for its owner.
 var gateParty = state.Party{Name: "beekeeper gate"}
 
-// wakeOwner wakes a run's owner; a seam for the tests.
+// wakeOwner wakes an agent beekeeper owes a message, a run's owner or a
+// timer's agent; a seam for the tests.
 var wakeOwner = (*app).wakeAgent
 
 // ownedRun runs one of devctl's blocking waits (pr wait, release wait,
