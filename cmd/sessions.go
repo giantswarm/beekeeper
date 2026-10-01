@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -299,10 +300,11 @@ name, a unique part of one, a session id or a PID.`,
 
 func (a *app) unserveCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "unserve <session>",
+		Use:   "unserve <session|owner/repo#n>",
 		Short: "Remove a session's record: its work is done or handed on",
 		Long: `Remove a session's record, running or ended. The session is a name, a
-unique part of one or a session id.`,
+unique part of one or a session id; an issue, owner/repo#n, removes the one
+record serving it (a board next --claim given back).`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			me, err := a.caller()
@@ -311,11 +313,7 @@ unique part of one or a session id.`,
 			}
 			var r state.Record
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-				parties := make([]state.Party, len(st.Records))
-				for i, r := range st.Records {
-					parties[i] = r.Session
-				}
-				i, err := findParty(parties, args[0], "session record", "session records")
+				i, err := findRecord(st.Records, args[0])
 				if err != nil {
 					return nil, err
 				}
@@ -330,6 +328,33 @@ unique part of one or a session id.`,
 			return err
 		},
 	}
+}
+
+// findRecord is the index of the record of the session q names, or of the
+// one record serving q when it is an issue.
+func findRecord(records []state.Record, q string) (int, error) {
+	if !issueRef.MatchString(q) {
+		parties := make([]state.Party, len(records))
+		for i, r := range records {
+			parties[i] = r.Session
+		}
+		return findParty(parties, q, "session record", "session records")
+	}
+	var names []string
+	i := -1
+	for j, r := range records {
+		if strings.EqualFold(r.Issue, q) {
+			i = j
+			names = append(names, strconv.Quote(r.Session.Name))
+		}
+	}
+	switch len(names) {
+	case 0:
+		return -1, refused("no session record serves %s", q)
+	case 1:
+		return i, nil
+	}
+	return -1, refused("%s is served by %s: name the session", q, strings.Join(names, ", "))
 }
 
 // recordText says what a record's session serves.
