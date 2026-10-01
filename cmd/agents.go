@@ -150,7 +150,8 @@ one "no change" line; --full prints everything.`,
 		Long: `Reports the calling agent's task done: idle again, ready for the next.
 With --done its work is finished: the watch's doctor takes it off the
 roster and archives the desktop session beekeeper started for it once its
-CLI is idle (beekeeper doctor; the desktop's Archived list brings it back).`,
+CLI runs no turn, a desktop CLI kept warm included (beekeeper doctor; the
+desktop's Archived list brings it back).`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			me, err := a.caller()
