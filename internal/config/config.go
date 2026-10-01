@@ -94,6 +94,52 @@ type Config struct {
 	// Outbound is what the hook refuses to let leave the machine and where
 	// the watch looks for credentials left exposed on disk.
 	Outbound Outbound `yaml:"outbound"`
+	// Board is the project board `beekeeper board` picks work from.
+	Board Board `yaml:"board"`
+}
+
+// Board is a GitHub project board and the order its work is picked in.
+type Board struct {
+	// Owner is the organisation and Project the number of its board;
+	// unset, the board commands refuse.
+	Owner   string `yaml:"owner"`
+	Project int    `yaml:"project"`
+	// Team is the value of the board's Team field whose items are the
+	// desk's; empty, every item is.
+	Team string `yaml:"team"`
+	// People are the logins whose assigned items are free; an item
+	// assigned to anybody else is skipped.
+	People []string `yaml:"people"`
+	// StaleAfter skips an item without activity for longer (default a
+	// year).
+	StaleAfter Duration `yaml:"staleAfter"`
+	// Order is the picking order: the first free item of the first step
+	// that offers one is picked.
+	Order []BoardStep `yaml:"order"`
+}
+
+// BoardStep is one step of the picking order: the open board items whose
+// status, kind and labels match (each list matches any of its values, an
+// empty one everything), or the open issues of a GitHub search.
+type BoardStep struct {
+	// Name says why an item of the step is picked.
+	Name string `yaml:"name"`
+	// Status and Kind are the board's Status and Kind values; an
+	// unambiguous part of one ("up next") stands for it.
+	Status []string `yaml:"status"`
+	Kind   []string `yaml:"kind"`
+	Labels []string `yaml:"labels"`
+	// SubIssues offers the open sub-issues of a matching item that has
+	// any (an epic's remainder) instead of the item, in their order.
+	SubIssues bool `yaml:"subIssues"`
+	// Unblocked offers only items with recorded blockers, all of them
+	// closed: a blocked item whose blocker cleared.
+	Unblocked bool `yaml:"unblocked"`
+	// CreatedWithin offers only items created within the duration.
+	CreatedWithin Duration `yaml:"createdWithin"`
+	// Search is a GitHub issue search whose open issues the step offers
+	// (oldest first) instead of board items.
+	Search string `yaml:"search"`
 }
 
 // Outbound configures the outbound secret guard. The token patterns are
@@ -826,6 +872,7 @@ func (c *Config) defaults() error {
 	setStr(&c.Shell, "sh")
 
 	setDur(&c.Overlaps.ActiveWithin, time.Hour)
+	setDur(&c.Board.StaleAfter, 365*24*time.Hour)
 
 	setInt(&c.GitHub.Floor, 2500)
 	setStr(&c.GitHub.ProbeRepo, "giantswarm/beekeeper")
@@ -978,6 +1025,14 @@ func (c *Config) validate() error {
 	for _, r := range c.Reporter.Reviews {
 		if o, name, ok := strings.Cut(r, "/"); !ok || o == "" || name == "" || strings.ContainsAny(name, "/ ") {
 			return fmt.Errorf("reporter.reviews: %q is not owner/repo", r)
+		}
+	}
+	for i, st := range c.Board.Order {
+		if st.Name == "" {
+			return fmt.Errorf("board.order[%d]: no name", i)
+		}
+		if st.Search != "" && (len(st.Status)+len(st.Kind)+len(st.Labels) > 0 || st.SubIssues || st.Unblocked) {
+			return fmt.Errorf("board.order[%d] %q: a search step matches no board fields", i, st.Name)
 		}
 	}
 	if t := c.Kube.ContextTemplate; t != "" && !strings.Contains(t, "{installation}") {

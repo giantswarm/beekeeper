@@ -133,7 +133,7 @@ status after a relay), 125 a newer release (self-update --check).`,
 		c.GroupID = "watching"
 		root.AddCommand(c)
 	}
-	for _, c := range []*cobra.Command{a.leaseCmd(), a.holdCmd(), a.lanesCmd()} {
+	for _, c := range []*cobra.Command{a.leaseCmd(), a.holdCmd(), a.lanesCmd(), a.boardCmd()} {
 		c.GroupID = "sharing"
 		root.AddCommand(c)
 	}
