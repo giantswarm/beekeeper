@@ -137,6 +137,13 @@ reporter:                   # the scheduled status reporter the standby watch st
   timeout: 20m              # a reporter that has not posted by then is stopped
   tz: Europe/Berlin         # the report's time zone; default: the machine's
   reviews: [example/plans]  # repositories whose open draft pull requests wait for the person's review
+outbound:                   # what the hook refuses to let leave the machine (README: What leaves the machine)
+  phrases: [Project Nightjar]   # never in an issue, commit, post or plan; case-insensitive, named by number in a refusal
+  paths: [~/projects/notebook/plans]   # files whose Write and Edit are scanned like a post; a directory covers what is under it
+  storeDeny:                # op item|document create|edit, vault kv put|patch refused (globs; empty: any)
+    - {vault: Shared*, item: "*personal*"}
+  sweepRoots: [~]           # the watch looks here for world-readable private keys and credentials in git remote URLs
+  sweepDepth: 5
 
 claude:
   desktopApp: claude-desktop   # the default; the desktop app's executable, which opens claude:// links

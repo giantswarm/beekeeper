@@ -131,6 +131,9 @@ type Hook struct {
 	// lease; called only for a command that may load a model, nil guards
 	// nothing.
 	ModelServer func() ModelServer
+	// Outbound is the outbound secret guard's configuration; its token
+	// patterns apply without one.
+	Outbound Outbound
 }
 
 // event is the part of a PreToolUse event the hook reads.
@@ -183,6 +186,9 @@ func (h Hook) decide(ev event) []byte {
 		return h.sendMessage(ev.ToolInput)
 	}
 	if ev.ToolName != bashTool {
+		if r := h.Outbound.toolRefusal(ev.ToolName, ev.ToolInput); r != "" {
+			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+		}
 		return nil
 	}
 	cmd, _ := ev.ToolInput["command"].(string)
@@ -205,6 +211,13 @@ func (h Hook) decide(ev event) []byte {
 	if l := secretLeak(cmd); l != nil {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: l.reason()})
 	}
+	cwd := ev.CWD
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
+	if r := h.Outbound.bashRefusal(cmd, cwd); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
 	bg, _ := ev.ToolInput[backgroundKey].(bool)
 	cmd, gated := h.gate(cmd, bg)
 	if fixed, ok := h.hiddenMerges(cmd, bg); ok {
@@ -213,10 +226,6 @@ func (h Hook) decide(ev event) []byte {
 	}
 	if wrapped.MatchString(cmd) {
 		return h.rewrite(ev.ToolInput, cmd, gated, bg)
-	}
-	cwd := ev.CWD
-	if cwd == "" {
-		cwd, _ = os.Getwd()
 	}
 
 	if m := lab.FindStringSubmatchIndex(cmd); m != nil {

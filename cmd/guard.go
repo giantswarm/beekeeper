@@ -135,7 +135,7 @@ func (a *app) hookCmd() *cobra.Command {
 	}
 	c.AddCommand(&cobra.Command{
 		Use:   "pretooluse",
-		Short: "The PreToolUse hook: builds into a slot, the kind lab limit, the merge gate, Secret reads, questions via the guide, desktop sends by name, a repository's instructions on the first write",
+		Short: "The PreToolUse hook: builds into a slot, the kind lab limit, the merge gate, Secret reads, outbound secrets, questions via the guide, desktop sends by name, a repository's instructions on the first write",
 		Long: `pretooluse reads a PreToolUse event on stdin. A build, test, lint or lab
 command is rewritten to run through "beekeeper run -- <shell> -c '<command>'"
 (the absolute path of this binary, the configured shell), the tool timeout
@@ -162,6 +162,19 @@ refused, naming them. A send to a session with no running CLI passes: the
 desktop starts it.
 Anything else, malformed input included, passes unchanged.
 
+What leaves the machine is scanned for secret values: the command line
+(here-documents included) of gh, devctl, git commit, tag and remote, and of
+curl or wget sending a body; the files these send (--body-file, -F, @file,
+$(cat file)); for git push the messages and added lines of the commits no
+remote has yet; the input of every connector (mcp__) tool; and a Write or
+Edit of a file under outbound.paths. A token pattern (gitleaks' rules: a
+GitHub, GitLab, Slack, AWS, GCP, npm, OpenAI, Anthropic or 1Password token,
+a private key, a JWT, a password in a URL) or one of outbound.phrases
+refuses the call, naming the rule or the phrase's number, never the match.
+A line marked gitleaks:allow is skipped. An op item or document create or
+edit, or a vault kv put or patch, that an outbound.storeDeny rule matches is
+refused. The connector tools need "|mcp__.*" in the matcher.
+
 An AskUserQuestion call is refused in every session but the guide's (the
 one beekeeper guide names): the agent files beekeeper note add --for
 <guide.person> and carries on.
@@ -179,7 +192,7 @@ under <stateDir>/reads.
 
 Register it in ~/.claude/settings.json:
 
-  "PreToolUse": [{"matcher": "Bash|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage", "hooks": [{"type": "command",
+  "PreToolUse": [{"matcher": "Bash|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage|mcp__.*", "hooks": [{"type": "command",
     "command": "~/.go/bin/beekeeper hook pretooluse"}]}]`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
@@ -196,6 +209,7 @@ Register it in ~/.claude/settings.json:
 			if h.ConfigErr == nil {
 				h.Shell, h.Production, h.ContextHint = a.cfg.Shell, a.cfg.Kube.Production, a.cfg.Kube.Context("<installation>")
 				h.MaxLabs = func() int { return a.cfg.KindClusters(ramMiB()) }
+				h.Outbound = outboundGuard(a.cfg.Outbound)
 			}
 			if out := h.Decide(raw); out != nil {
 				_, _ = a.out.Write(out)
@@ -409,4 +423,13 @@ func machineKubeconfig() string {
 // kubeconfigList is the kubeconfig list kubectl reads by default.
 func kubeconfigList() string {
 	return env("KUBECONFIG", machineKubeconfig())
+}
+
+// outboundGuard is the hook's outbound guard from its configuration.
+func outboundGuard(o config.Outbound) guard.Outbound {
+	g := guard.Outbound{Phrases: o.Phrases, Paths: o.Paths}
+	for _, r := range o.StoreDeny {
+		g.StoreDeny = append(g.StoreDeny, guard.StoreRule{Vault: r.Vault, Item: r.Item})
+	}
+	return g
 }

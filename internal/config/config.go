@@ -90,6 +90,36 @@ type Config struct {
 	Reporter Reporter `yaml:"reporter"`
 	// Doctor is what `beekeeper doctor` and the watch fix by themselves.
 	Doctor Doctor `yaml:"doctor"`
+	// Outbound is what the hook refuses to let leave the machine and where
+	// the watch looks for credentials left exposed on disk.
+	Outbound Outbound `yaml:"outbound"`
+}
+
+// Outbound configures the outbound secret guard. The token patterns are
+// built in; these add what is specific to the machine.
+type Outbound struct {
+	// Phrases never leave the machine: outbound text that contains one
+	// (case-insensitive) is refused, naming its number, never the phrase.
+	Phrases []string `yaml:"phrases"`
+	// Paths are globs (~/ allowed) of files whose Write and Edit count as
+	// outbound (plans, posts); a directory covers every file under it.
+	Paths []string `yaml:"paths"`
+	// StoreDeny are the secret-store writes the hook refuses.
+	StoreDeny []StoreRule `yaml:"storeDeny"`
+	// SweepRoots are the directories (~/ allowed; default: home) the watch
+	// sweeps, SweepDepth levels deep (default 5), for world-readable key
+	// files and git remote URLs that carry a credential.
+	SweepRoots []string `yaml:"sweepRoots"`
+	SweepDepth int      `yaml:"sweepDepth"`
+}
+
+// StoreRule refuses a secret-store write (op item or document create and
+// edit, vault kv put and patch) whose vault and item match its globs
+// (case-insensitive); an empty glob matches any, as does a write that names
+// no vault.
+type StoreRule struct {
+	Vault string `yaml:"vault"`
+	Item  string `yaml:"item"`
 }
 
 // Kube configures the kube guard and how an installation's name becomes its
@@ -775,6 +805,7 @@ func (c *Config) defaults() error {
 	setDur(&c.Agents.NoteWait, 3*time.Minute)
 	setDur(&c.Agents.StaleAfter, 24*time.Hour)
 	c.Reporter.defaults(home, c.Guide.Person)
+	c.Outbound.defaults(home)
 	setStr(&c.Shell, os.Getenv("SHELL"))
 	setStr(&c.Shell, "sh")
 
@@ -872,8 +903,26 @@ func (r *Role) defaults(home string) {
 	if r.RelayAt == 0 {
 		r.RelayAt = 400_000
 	}
-	if rest, ok := strings.CutPrefix(r.Instructions, "~/"); ok {
-		r.Instructions = filepath.Join(home, rest)
+	r.Instructions = homePath(home, r.Instructions)
+}
+
+// homePath is p with a leading ~/ resolved against home.
+func homePath(home, p string) string {
+	if rest, ok := strings.CutPrefix(p, "~/"); ok {
+		return filepath.Join(home, rest)
+	}
+	return p
+}
+
+func (o *Outbound) defaults(home string) {
+	if len(o.SweepRoots) == 0 {
+		o.SweepRoots = []string{home}
+	}
+	setInt(&o.SweepDepth, 5)
+	for _, ps := range [][]string{o.Paths, o.SweepRoots} {
+		for i := range ps {
+			ps[i] = homePath(home, ps[i])
+		}
 	}
 }
 
@@ -881,14 +930,22 @@ func (r *Reporter) defaults(home, person string) {
 	setDur(&r.Timeout, 20*time.Minute)
 	setStr(&r.Person, person)
 	setStr(&r.Dir, home)
-	for _, p := range []*string{&r.Brief, &r.Dir} {
-		if rest, ok := strings.CutPrefix(*p, "~/"); ok {
-			*p = filepath.Join(home, rest)
-		}
-	}
+	r.Brief, r.Dir = homePath(home, r.Brief), homePath(home, r.Dir)
 }
 
 func (c *Config) validate() error {
+	for i, r := range c.Outbound.StoreDeny {
+		for _, g := range []string{r.Vault, r.Item} {
+			if _, err := filepath.Match(g, ""); err != nil {
+				return fmt.Errorf("outbound.storeDeny[%d]: %q: %w", i, g, err)
+			}
+		}
+	}
+	for _, g := range c.Outbound.Paths {
+		if _, err := filepath.Match(g, ""); err != nil {
+			return fmt.Errorf("outbound.paths: %q: %w", g, err)
+		}
+	}
 	if r := c.Reporter; r.Every.Duration != 0 && (r.Every.Duration < time.Minute || r.Brief == "") {
 		return fmt.Errorf("reporter: every %s needs at least a minute and a brief", r.Every.Duration)
 	}

@@ -20,6 +20,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/merge"
@@ -251,6 +252,9 @@ type watcher struct {
 	// runs: the next poll skips it instead of queueing a second one.
 	settling, budgeting atomic.Bool
 	lastSettle          time.Time
+	// sweeping is set while the exposure sweep runs, lastSweep when it began.
+	sweeping  atomic.Bool
+	lastSweep time.Time
 	// polls counts the polls begun.
 	polls atomic.Int64
 	// missing are the sections whose platform part this build does not
@@ -307,6 +311,8 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 			w.upgradeCycle(ctx)
 		}
 		w.sample(ctx)
+		w.lastSweep = time.Now() // swept here, not in the poll's background
+		w.exposures()
 		w.poll(ctx)
 		w.stand.inflight.Wait() // a successor's start outlives no watch
 		return nil
@@ -854,9 +860,41 @@ func (w *watcher) poll(ctx context.Context) {
 		w.lastBudget = now
 		inFlight(ctx, th.Interval.Duration, &w.budgeting, func(ctx context.Context) { w.budget(ctx, now) })
 	}
+	if now.Sub(w.lastSweep) >= w.readEvery(th.Interval.Duration) {
+		w.lastSweep = now
+		// The sweep takes a while on a big home directory: the poll does not wait.
+		inFlight(ctx, 0, &w.sweeping, func(context.Context) { w.exposures() })
+	}
 	w.saveMark()
 	if w.notifier != nil {
 		w.notifier.Flush(ctx, w.now)
+	}
+}
+
+// exposedKey starts the condition key of a credential exposed on disk.
+const exposedKey = "exposed "
+
+// exposures says each credential left exposed on disk (guard.Sweep), one
+// EXPOSED line naming the file when it is found, never its content, and one
+// ENDED line once it is fixed.
+func (w *watcher) exposures() {
+	o := w.cfg.Outbound
+	found := map[string]bool{}
+	for _, e := range guard.Sweep(o.SweepRoots, o.SweepDepth) {
+		key := exposedKey + e.Path
+		found[key] = true
+		w.emit(key, "EXPOSED %s: %s", e.Path, e.What)
+	}
+	w.mu.Lock()
+	var gone []string
+	for k := range w.active {
+		if strings.HasPrefix(k, exposedKey) && !found[k] {
+			gone = append(gone, k)
+		}
+	}
+	w.mu.Unlock()
+	for _, k := range gone {
+		w.clear(k)
 	}
 }
 
