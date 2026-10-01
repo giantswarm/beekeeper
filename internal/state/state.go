@@ -243,6 +243,9 @@ type Note struct {
 	// command, exits 0.
 	Kind  string `json:"kind,omitempty"`
 	Until string `json:"until,omitempty"`
+	// Pinned is a standing instruction: every hand-over carries it until it
+	// is unpinned or done.
+	Pinned bool `json:"pinned,omitempty"`
 }
 
 // Timer is a point in time the supervisor has to look at something ("check

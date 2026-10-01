@@ -155,6 +155,8 @@ func (a *app) runStart(ctx context.Context, rl role, takeOver bool) error {
 	dir := lease.Dir(a.cfg.LeaseDir)
 	var msg string
 	var run int
+	var took bool
+	var after *state.State
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		if rl.grants {
 			holders, err := dir.List()
@@ -166,10 +168,12 @@ func (a *app) runStart(ctx context.Context, rl role, takeOver bool) error {
 		// A holder restarting its CLI still holds the role.
 		sv := readHolder(rl.get(st), sessions, a.now, rl.cfg(a.cfg).RestartGrace.Duration)
 		var evs []state.Event
+		was := rl.get(st).Holder
 		msg, evs, err = rl.start(st, me, sv.live || sv.restarting(), takeOver, a.now)
 		if err != nil {
 			return nil, err
 		}
+		took, after = was == nil || !was.Is(me), st
 		run = rl.get(st).Run
 		_, cli := rl.observeCLI(st, sessions, a.now)
 		return append(evs, cli...), nil
@@ -181,9 +185,25 @@ func (a *app) runStart(ctx context.Context, rl role, takeOver bool) error {
 		return err
 	}
 	if line := a.titleRun(ctx, me, rl.runName(run)); line != "" {
-		_, err = fmt.Fprintln(a.out, line)
+		if _, err := fmt.Fprintln(a.out, line); err != nil {
+			return err
+		}
 	}
-	return err
+	if !rl.grants {
+		return nil
+	}
+	// The supervisor's first look, and every agent told whom to report to
+	// when the holder changed.
+	if took {
+		if _, err := fmt.Fprintln(a.out, a.announce(rl.runName(run))); err != nil {
+			return err
+		}
+	}
+	l, err := a.leases()
+	if err != nil {
+		return err
+	}
+	return a.startSummary(after, sessions, l)
 }
 
 // titleRun has a steward title me's desktop session with its run name

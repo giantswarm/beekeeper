@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -9,30 +10,48 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// handoverSection is one section of the hand-over: print shows what a
+// successor acts on, all (handover --section) everything of it.
+type handoverSection struct {
+	key, title string
+	print      func(all bool)
+}
+
 func (a *app) handoverCmd() *cobra.Command {
 	var events int
 	var prompt, full bool
+	var only string
 	c := &cobra.Command{
 		Use:   "handover",
 		Short: "Everything the next supervisor needs, from the live state",
 		Long: `Print the hand-over as Markdown: the supervisor and its context in tokens,
-the running sessions and what each is on, overlaps, leases and grant
-queues, holds, the merge lanes, registered agents, session records, open
-notes with their defaults, timers, what the alert watch reads and the
-latest events. Everything comes from the
-state and the machine, so a successor (or the same supervisor after a
-restart) reads it instead of a prose brief.
+the running sessions and what each is on, leases and grant queues, holds,
+the merge lanes, registered agents, session records, pinned notes, open
+notes with their defaults, the decisions answered since the last relay,
+timers, what the alert watch reads and the latest events. Everything comes
+from the state and the machine, so a successor (or the same supervisor
+after a restart) reads it instead of a prose brief.
+
+It shows what a successor acts on in its first minutes: the notes the
+guide serves (those for guide.person and for the guide) are one line, the
+records of sessions ended over an hour ago are one line, and the answered
+decisions are those since the predecessor's start, with a count of the
+others answered within 72 hours. Pinned notes, the standing instructions
+(note add --pin), are in every hand-over until unpinned.
+--section <name> prints one section with everything it holds: ` + "`" + `--section
+notes` + "`" + ` every open note, ` + "`" + `--section records` + "`" + ` every record, ` + "`" + `--section
+answers` + "`" + ` every decision answered within 72 hours.
 
 --prompt prints the successor's session prompt instead: the configured
 instructions (supervisor.skill or supervisor.instructions), the scope
-(supervisor.scope), the pending state in full and the commands that read
-the live values. It carries no standing rule and no live value: no version,
-memory figure or pull request state.
+(supervisor.scope), the pending state as selected above and the commands
+that read the live values. It carries no live value: no version, memory
+figure or pull request state.
 
 A caller that has read the hand-over before gets only what changed since:
 the lines that are new or changed, the keys of those gone, or one "no
-change" line. --full prints everything; --prompt and --json are always
-complete.`,
+change" line. --full prints everything; --prompt, --section and --json are
+always complete.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			v, err := a.collect(!prompt) // the prompt names no session's current work
@@ -47,6 +66,10 @@ complete.`,
 			if err != nil {
 				return err
 			}
+			ans, err := a.handoverAnswers(v.st)
+			if err != nil {
+				return err
+			}
 			agents := a.agentViews(v.st, v.raw)
 			holds := a.activeHolds(v.st)
 			al, err := a.alertsHandover(cmd.Context())
@@ -54,69 +77,88 @@ complete.`,
 				return err
 			}
 			if prompt {
-				return a.printPrompt(cmd.Context(), v, l, al)
+				return a.printPrompt(cmd.Context(), v, l, al, ans)
 			}
 			if a.json {
 				return a.printJSON(struct {
 					*view
-					Leases  *leaseList     `json:"leases"`
-					Holds   []state.Hold   `json:"holds"`
-					Lanes   []laneView     `json:"lanes"`
-					Agents  []agentView    `json:"agents"`
-					Records []state.Record `json:"records"`
-					Notes   []state.Note   `json:"notes"`
-					Timers  []state.Timer  `json:"timers"`
-					Alerts  *alertsView    `json:"alerts"`
-					Events  []state.Event  `json:"events"`
-				}{v, l, holds, a.laneViews(v.st), agents, v.st.Records, v.st.Notes, v.st.Timers, al, evs})
+					Leases   *leaseList     `json:"leases"`
+					Holds    []state.Hold   `json:"holds"`
+					Lanes    []laneView     `json:"lanes"`
+					Agents   []agentView    `json:"agents"`
+					Records  []state.Record `json:"records"`
+					Notes    []state.Note   `json:"notes"`
+					Answered []answered     `json:"answered"`
+					Timers   []state.Timer  `json:"timers"`
+					Alerts   *alertsView    `json:"alerts"`
+					Events   []state.Event  `json:"events"`
+				}{v, l, holds, a.laneViews(v.st), agents, v.st.Records, v.st.Notes, ans.All, v.st.Timers, al, evs})
 			}
 			lanes := a.laneViews(v.st)
-			sup := a.capture(func() { a.printSupervisor(v) })
-			printFull := func() {
-				p := func(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format+"\n", args...) }
-				p("# Hand-over, %s (%s UTC)\n", a.now.Format("2006-01-02 15:04 MST"), a.now.UTC().Format("15:04"))
-				_, _ = fmt.Fprint(a.out, sup)
-				p("\n## Sessions (%d running)\n", len(v.Sessions))
-				a.printSessions(v)
-				p("\n## Leases\n")
-				a.printLeases(l)
-				p("\n## Holds\n")
-				a.printHolds(holds)
-				p("\n## Merge lanes\n")
-				a.printLanes(lanes)
-				p("\n## Agents\n")
-				a.printAgents(agents)
-				p("\n## Session records\n")
-				a.printRecords(v.st.Records, v.raw)
-				p("\n## Open notes\n")
-				a.printNotes(v.st.Notes)
-				p("\n## Timers\n")
-				a.printTimers(v.st.Timers)
-				p("\n## Alerts\n")
-				a.printAlerts(al)
-				if len(evs) > 0 {
-					p("\n## Latest events\n")
-					for _, e := range evs {
-						p("- %s", eventText(a, e))
+			notes := a.splitNotes(v.st.Notes)
+			sections := []handoverSection{
+				{"supervisor", "", func(bool) { a.printSupervisor(v) }},
+				{secSessions, fmt.Sprintf("Sessions (%d running)", len(v.Sessions)), func(bool) { a.printSessions(v) }},
+				{"leases", "Leases", func(bool) { a.printLeases(l) }},
+				{"holds", "Holds", func(bool) { a.printHolds(holds) }},
+				{"lanes", "Merge lanes", func(bool) { a.printLanes(lanes) }},
+				{"agents", "Agents", func(bool) { a.printAgents(agents) }},
+				{"records", "Session records", func(all bool) {
+					if all {
+						a.printRecords(v.st.Records, v.raw)
+						return
 					}
+					a.printLiveRecords(v.st.Records, v.raw)
+				}},
+				{"pinned", "Pinned notes", func(bool) { a.printPinned(notes.Pinned) }},
+				{"notes", "Open notes", func(all bool) {
+					if all {
+						a.printNotes(v.st.Notes)
+						return
+					}
+					a.printOwnNotes(notes)
+				}},
+				{"answers", "Answered decisions", func(all bool) { a.printAnswers(ans, all) }},
+				{"timers", "Timers", func(bool) { a.printTimers(v.st.Timers) }},
+				{"alerts", "Alerts", func(bool) { a.printAlerts(al) }},
+				{"events", "Latest events", func(bool) {
+					for _, e := range evs {
+						_, _ = fmt.Fprintf(a.out, "- %s\n", eventText(a, e))
+					}
+				}},
+			}
+			if only != "" {
+				i := slices.IndexFunc(sections, func(s handoverSection) bool { return s.key == only })
+				if i < 0 {
+					return usageErr("--section %q is none of %s", only, sectionKeys(sections))
+				}
+				sections[i].print(true)
+				return nil
+			}
+			printFull := func() {
+				_, _ = fmt.Fprintf(a.out, "# Hand-over, %s (%s UTC)\n\n", a.now.Format("2006-01-02 15:04 MST"), a.now.UTC().Format("15:04"))
+				for _, s := range sections {
+					if s.title != "" {
+						_, _ = fmt.Fprintf(a.out, "\n## %s\n\n", s.title)
+					}
+					s.print(false)
 				}
 			}
-			facts := textFacts("supervisor", sup)
-			facts = append(facts, a.sessionFacts(v)...)
-			for section, text := range map[string]string{
-				"lease": a.capture(func() { a.printLeases(l) }),
-				"hold":  a.capture(func() { a.printHolds(holds) }),
-				"lane":  a.capture(func() { a.printLanes(lanes) }),
-				"note":  a.capture(func() { a.printNotes(v.st.Notes) }),
-				"timer": a.capture(func() { a.printTimers(v.st.Timers) }),
-				"alert": a.capture(func() { a.printAlerts(al) }),
-			} {
-				facts = append(facts, textFacts(section, text)...)
-			}
-			facts = append(facts, a.agentFacts(agents)...)
-			for _, e := range evs {
-				l := "event " + eventText(a, e)
-				facts = append(facts, fact{Key: l, Sig: l, Line: l})
+			var facts []fact
+			for _, s := range sections {
+				switch s.key {
+				case secSessions:
+					facts = append(facts, a.sessionFacts(v)...)
+				case "agents":
+					facts = append(facts, a.agentFacts(agents)...)
+				case "events":
+					for _, e := range evs {
+						l := "event " + eventText(a, e)
+						facts = append(facts, fact{Key: l, Sig: l, Line: l})
+					}
+				default:
+					facts = append(facts, textFacts(s.key, a.capture(func() { s.print(false) }))...)
+				}
 			}
 			return a.delta("handover", full, facts, printFull)
 		},
@@ -124,7 +166,20 @@ complete.`,
 	fullFlag(c, &full)
 	c.Flags().IntVar(&events, "events", 20, "how many of the latest events to include")
 	c.Flags().BoolVar(&prompt, "prompt", false, "print the successor's session prompt: instructions, scope and the pending state")
+	c.Flags().StringVar(&only, "section", "", "print one section with everything it holds: "+handoverSections)
 	return c
+}
+
+// handoverSections names the sections --section takes, in their order.
+const handoverSections = "supervisor, sessions, leases, holds, lanes, agents, records, pinned, notes, answers, timers, alerts, events"
+
+// sectionKeys names the sections --section takes.
+func sectionKeys(sections []handoverSection) string {
+	keys := make([]string, len(sections))
+	for i, s := range sections {
+		keys[i] = s.key
+	}
+	return strings.Join(keys, ", ")
 }
 
 // printSupervisor says who supervises and an open relay.
