@@ -22,8 +22,11 @@ func TestLoadDefaults(t *testing.T) {
 		c.Watch.Interval.Duration != 30*time.Second || c.Watch.LoadMax != 0 || c.Watch.LoadLimit(24) != 36 || c.Supervisor.RelayAt != 400_000 || c.Guide.RelayAt != 150_000 {
 		t.Errorf("defaults = %+v", c)
 	}
-	if len(c.Notify.Kinds) != 6 || c.Notify.Policy().Quiet != nil {
+	if len(c.Notify.Kinds) != 4 || c.Notify.Policy().Quiet != nil {
 		t.Errorf("notify defaults = %+v", c.Notify)
+	}
+	if w := c.Watch; w.ToolProcsMax != 1000 || len(w.Tools) != 6 || c.Desktop.TypingQuiet.Duration != 30*time.Second {
+		t.Errorf("LOAD and typing defaults = %d %v %s", w.ToolProcsMax, w.Tools, c.Desktop.TypingQuiet)
 	}
 	if len(c.Alerts.Quiet) != 0 || !slices.Equal(c.Alerts.Ignore, DefaultIgnore) || c.Alerts.Tenant != "" {
 		t.Errorf("alerts without a team = %+v, want no quiet rule, Watchdog ignored, no tenant", c.Alerts)
