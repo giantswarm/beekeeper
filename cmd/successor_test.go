@@ -257,7 +257,8 @@ func TestADanglingRelayStandsForNoSuccessor(t *testing.T) {
 // A successor starts in the configured folder, else where its predecessor's
 // desktop session started, never in the desktop's worktree of it.
 func TestSuccessorDir(t *testing.T) {
-	wt := &claude.Record{Cwd: "/repo/.claude/worktrees/w1", OriginCwd: "/repo"}
+	const repo, startDir = "/repo", "/started"
+	wt := &claude.Record{Cwd: repo + "/.claude/worktrees/w1", OriginCwd: repo}
 	for _, c := range []struct {
 		name  string
 		cfg   config.Role
@@ -265,10 +266,10 @@ func TestSuccessorDir(t *testing.T) {
 		start string
 		want  string
 	}{
-		{"configured", config.Role{Dir: "/desk"}, wt, "/started", "/desk"},
-		{"a desktop worktree: its origin", config.Role{}, wt, "/started", "/repo"},
-		{"no worktree", config.Role{}, &claude.Record{Cwd: "/repo"}, "/started", "/repo"},
-		{"no desktop record: beekeeper's start", config.Role{}, nil, "/started", "/started"},
+		{"configured", config.Role{Dir: "/desk"}, wt, startDir, "/desk"},
+		{"a desktop worktree: its origin", config.Role{}, wt, startDir, repo},
+		{"no worktree", config.Role{}, &claude.Record{Cwd: repo}, startDir, repo},
+		{"no desktop record: beekeeper's start", config.Role{}, nil, startDir, startDir},
 		{"nothing recorded: the caller's", config.Role{}, nil, "", "."},
 	} {
 		if got := successorDir(c.cfg, c.rec, c.start); got != c.want {
@@ -299,7 +300,7 @@ func supervisedBy(t *testing.T, w *watcher, p state.Party, since time.Time) {
 // apart.
 func TestStandbyResumesAndBoundsSuccessorsThatDoNotComeUp(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), true)
-	w.cfg.Guide.Person = "Pat"
+	w.cfg.Guide.Person = pat
 	var revived []string
 	var succeeded atomic.Int32
 	w.stand = standbyWatch{
@@ -343,7 +344,7 @@ func TestStandbyResumesAndBoundsSuccessorsThatDoNotComeUp(t *testing.T) {
 		t.Errorf("%d successors, want 2 (the third failed one ends the chain)", n)
 	}
 	st, _ := w.store.Read()
-	if len(st.Notes) != 1 || !strings.Contains(st.Notes[0].Text, `"Supervisor run 12"`) || st.Notes[0].For != "Pat" {
+	if len(st.Notes) != 1 || !strings.Contains(st.Notes[0].Text, `"Supervisor run 12"`) || st.Notes[0].For != pat {
 		t.Errorf("notes: %+v", st.Notes)
 	}
 	if l := out.String(); !strings.Contains(l, "3 successors did not come up, none further starts (note #1)") || strings.Count(l, "SUCCESSOR DOWN") != 3 {
@@ -409,8 +410,8 @@ func TestStandbyResumesTheDesktopCLINotTheFirstTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	w.table = &proc.Table{ByPID: map[int]*proc.Process{
-		78: {PID: 78, Comm: claudeComm, Args: []string{claudeComm, "-p", sessionIDFlag, sessionG7, "--", "brief"}},
-		79: {PID: 79, Comm: claudeComm, Args: []string{claudeComm, "--output-format", "stream-json", resumeFlag, sessionG7}},
+		78: {PID: 78, Comm: claudeComm, Args: []string{claudeComm, "-p", sessionIDFlag, sessionG7}},
+		79: {PID: 79, Comm: claudeComm, Args: []string{claudeComm, resumeFlag, sessionG7}},
 	}}
 	w.now = relayNow
 	w.pending(context.Background(), []*claude.Session{{ID: sessionG7, HostID: hostG7, Name: guideSeven, PID: 78}})

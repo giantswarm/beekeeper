@@ -176,6 +176,10 @@ const (
 	maxFailedSuccessors = 3
 )
 
+// successorStarting is what the GONE line adds while a successor's start or
+// a headless resume runs.
+const successorStarting = "; its successor is starting"
+
 // successorChain is what the standby watch remembers of a role's
 // successors that did not come up: the holder term it resumed headless,
 // the last failed one, how many failed, when the next may start, and the
@@ -225,7 +229,7 @@ func (w *watcher) upAgain(rl role, holder state.Party) {
 // line adds.
 func (w *watcher) standIn(ctx context.Context, rl role, st *state.State, holder state.Party, key string) string {
 	if w.stand.starting.Load() {
-		return "; its successor is starting"
+		return successorStarting
 	}
 	c := w.chain(rl)
 	if started(st, holder) {
@@ -269,7 +273,7 @@ func started(st *state.State, p state.Party) bool {
 // succeedGone starts a successor. It returns what the GONE line adds.
 func (w *watcher) reviveGone(ctx context.Context, rl role, holder state.Party) string {
 	if !w.stand.starting.CompareAndSwap(false, true) {
-		return "; its successor is starting"
+		return successorStarting
 	}
 	w.stand.inflight.Add(1)
 	go func() {
@@ -330,7 +334,7 @@ func (w *watcher) succeedGone(ctx context.Context, rl role, holder state.Party) 
 		return ""
 	}
 	if !w.stand.starting.CompareAndSwap(false, true) {
-		return "; its successor is starting"
+		return successorStarting
 	}
 	w.stand.inflight.Add(1)
 	go func() {
