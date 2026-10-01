@@ -60,6 +60,8 @@ func fixture() []Item {
 	theirs.Assignees = []string{"pat"}
 	mine := it(3, inProgress, "", 30, 1)
 	mine.Assignees = []string{"Me"}
+	waiting := it(19, inProgress, "", 30, 1)
+	waiting.Blockers, waiting.OpenBlockers = 1, 1
 	inProgressEpic := it(4, inProgress, epic, 60, 1)
 	inProgressEpic.OpenSubIssues = 1
 	inProgressEpic.SubIssues = []Item{it(40, "", "", 50, 2)}
@@ -78,7 +80,7 @@ func fixture() []Item {
 	mixedEpic := it(15, inProgress, epic, 200, 1)
 	mixedEpic.OpenSubIssues = 3
 	mixedEpic.SubIssues = []Item{it(16, "", "", 20, 1), it(17, "", "", 99, 1), it(18, "", "", 5, 1)}
-	return []Item{stale, theirs, mine, inProgressEpic, stillBlocked, cleared, waitingOnPeople, epicItem, closableEpic,
+	return []Item{stale, theirs, mine, waiting, inProgressEpic, stillBlocked, cleared, waitingOnPeople, epicItem, closableEpic,
 		it(10, upNext, "", 20, 1), it(11, backlog, bug, 400, 3), it(12, backlog, "", 100, 1), it(13, backlog, "", 10, 1), it(14, "Done ✅", "", 10, 1),
 		mixedEpic, it(16, backlog, "", 20, 1), it(17, backlog, "", 99, 1), it(18, statuses[0], "", 5, 1)}
 }
@@ -108,6 +110,7 @@ func TestRankAppliesTheOrderToAFixtureBoard(t *testing.T) {
 		"o/r#1 In Progress: no activity since 2025-08-27",
 		"o/r#2 In Progress: assigned to pat",
 		"o/r#3 In Progress",
+		"o/r#19 In Progress: 1 of 1 blockers open",
 		"o/r#40 In Progress < o/r#4",
 		"o/r#16 In Progress < o/r#15",
 		"o/r#17 In Progress < o/r#15: created 2026-06-24: Backlog takes items created within 90 days",

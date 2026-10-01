@@ -50,8 +50,8 @@ Backlog step's createdWithin, a blocked one, one in Inbox) is skipped with
 the reason, even when its epic is in progress. The first item that is free
 is picked: not served by a running session (a sessions serve record, a busy
 agent's task) and named by no open note (it waits on the note's person),
-not assigned to anybody outside board.people, and active within
-board.staleAfter. It prints the item, why it is picked, and why every item
+not assigned to anybody outside board.people, without an open recorded
+blocker, and active within board.staleAfter. It prints the item, why it is picked, and why every item
 above it was skipped.
 
 --claim records the pick as the calling session's sessions serve record
@@ -59,7 +59,8 @@ under the state lock, after checking again that nobody claimed it since:
 two concurrent claims never get the same item. It changes nothing on the
 board: the item keeps its Status until the caller, having judged it, moves
 it with board move. The claim ends when the session ends, when its agent
-reports idle (agents idle) or with sessions unserve. Exit 3 when no item is free.`,
+reports idle (agents idle) or with sessions unserve <owner/repo#n>; a
+second claim replaces the first. Exit 3 when no item is free.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			var me state.Party
@@ -214,7 +215,7 @@ func (a *app) printNext(res nextResult, offered int) error {
 			p := res.Pick
 			_, _ = fmt.Fprintf(a.out, "%s %s\n  %s\n  picked: %s\n", p.Ref, p.Title, p.URL, p.Why())
 			if res.Claimed {
-				_, _ = fmt.Fprintf(a.out, "  claimed: you serve %s now, its Status unchanged (board move %s %q once you take it on; sessions unserve releases it)\n", p.Ref, p.Ref, "in progress")
+				_, _ = fmt.Fprintf(a.out, "  claimed: you serve %s now, its Status unchanged (board move %s %q once you take it on; sessions unserve %s releases it)\n", p.Ref, p.Ref, "in progress", p.Ref)
 			}
 		}
 		if len(res.Skipped) > 0 {

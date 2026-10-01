@@ -143,3 +143,22 @@ func TestClaimTakesNoSkippedItem(t *testing.T) {
 		t.Errorf("claim over a skipped item: %+v, %v; records %+v", res, err, st.Records)
 	}
 }
+
+func TestFindRecordTakesASessionOrTheIssueItServes(t *testing.T) {
+	const own, shared, pull = "o/s#1", "o/s#2", "Pull two"
+	records := []state.Record{
+		{Session: state.Party{Session: "s1", Name: "Pull one"}, Issue: own},
+		{Session: state.Party{Session: "s2", Name: pull}, Issue: shared},
+		{Session: state.Party{Session: "s3", Name: "Review"}, Issue: shared},
+	}
+	for q, want := range map[string]int{"O/S#1": 0, pull: 1, "review": 2} {
+		if i, err := findRecord(records, q); err != nil || i != want {
+			t.Errorf("findRecord(%q) = %d, %v; want %d", q, i, err, want)
+		}
+	}
+	for q, want := range map[string]string{"o/s#3": "no session record serves o/s#3", shared: shared + ` is served by "` + pull + `", "Review": name the session`} {
+		if _, err := findRecord(records, q); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("findRecord(%q) = %v, want %q", q, err, want)
+		}
+	}
+}

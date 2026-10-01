@@ -85,8 +85,8 @@ func (c Candidate) Why() string {
 // item without is offered itself. A sub-issue that is a board item is held
 // to the order like any other: one no step offers on its own (an old
 // Backlog item, a blocked one) is marked skipped with the reason. Items
-// without activity for b.StaleAfter and items assigned to anybody outside
-// b.People are marked skipped too.
+// with an open recorded blocker, without activity for b.StaleAfter or
+// assigned to anybody outside b.People are marked skipped too.
 func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 	onBoard := make(map[string]Item, len(snap.Items))
 	for _, it := range snap.Items {
@@ -165,11 +165,15 @@ func refusal(st config.BoardStep, it Item, now time.Time) string {
 	case st.Unblocked && it.Blockers == 0:
 		return st.Name + " takes items with recorded blockers, it has none"
 	case st.Unblocked && it.OpenBlockers > 0:
-		return fmt.Sprintf("%d of %d blockers open", it.OpenBlockers, it.Blockers)
+		return blockersOpen(it)
 	case st.CreatedWithin.Duration > 0 && now.Sub(it.Created) > st.CreatedWithin.Duration:
 		return fmt.Sprintf("created %s: %s takes items created within %s", it.Created.Format(time.DateOnly), st.Name, span(st.CreatedWithin.Duration))
 	}
 	return ""
+}
+
+func blockersOpen(it Item) string {
+	return fmt.Sprintf("%d of %d blockers open", it.OpenBlockers, it.Blockers)
 }
 
 // span is d in days when it is whole days.
@@ -181,6 +185,9 @@ func span(d time.Duration) string {
 }
 
 func skipReason(it Item, b config.Board, now time.Time) string {
+	if it.OpenBlockers > 0 {
+		return blockersOpen(it)
+	}
 	if d := b.StaleAfter.Duration; d > 0 && now.Sub(it.Updated) > d {
 		return "no activity since " + it.Updated.Format(time.DateOnly)
 	}
