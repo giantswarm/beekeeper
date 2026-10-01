@@ -327,6 +327,8 @@ type Start struct {
 	Dir  string    `json:"dir"`
 	By   Party     `json:"by"`
 	At   time.Time `json:"at"`
+	// Harness is the agent harness started: "" for Claude Code, "omp".
+	Harness string `json:"harness,omitempty"`
 }
 
 // Report is one run of the scheduled status reporter: the session the

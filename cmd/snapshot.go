@@ -246,7 +246,7 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 	if t == nil {
 		t = &proc.Table{}
 	}
-	sessions := claude.Discover(a.cfg, t, a.now)
+	sessions := discover(a.cfg, t, a.now)
 	for _, ss := range sessions {
 		s.Sessions = append(s.Sessions, ss.Name)
 		s.CLIMemMiB += ss.MemMiB

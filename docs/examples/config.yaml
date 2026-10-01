@@ -175,6 +175,10 @@ board:                      # the project board `beekeeper board next` picks wor
 claude:
   desktopApp: claude-desktop   # the default; the desktop app's executable, which opens claude:// links
 
+omp:
+  sessionsDir: ~/.omp/agent/sessions   # the default; omp's session files, one folder per working directory
+  model: ""                 # agents start --harness omp without --model: omp's model pattern; empty: omp's own default
+
 desktop:
   typingQuiet: 30s          # the default; a claude:// link waits for this much idle keyboard and pointer input; negative: no wait
 

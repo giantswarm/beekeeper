@@ -50,6 +50,12 @@ type Session struct {
 	// it resumes the session by itself when its CLI dies, so only `claude
 	// stop` ends it.
 	Background bool `json:"background,omitempty"`
+	// Harness is the agent harness that runs the session: "" for Claude
+	// Code, "omp" for oh-my-pi (package omp), whose Transcript is omp's
+	// session file.
+	Harness string `json:"harness,omitempty"`
+	// State is an omp session's: busy, idle or ended; "" for Claude Code.
+	State string `json:"state,omitempty"`
 }
 
 // Aside says why the guide leaves the session out of its feed: "archived",
@@ -370,14 +376,32 @@ func newSession(cfg *config.Config, t *proc.Table, p *proc.Process, rec *cliReco
 			}
 		}
 	}
-	tree := ownTree(t, p.PID, clis)
-	kib := t.AnonKiB(p.PID)
+	s.MemMiB, s.Commands = processTree(t, p.PID, clis, now)
+	return s
+}
+
+// processTree is the memory of the process pid with the processes below it
+// that are its session's, and the tool commands among them.
+func processTree(t *proc.Table, pid int, clis map[int]bool, now time.Time) (memMiB int, cmds []Command) {
+	tree := ownTree(t, pid, clis)
+	kib := t.AnonKiB(pid)
 	for _, d := range tree {
 		kib += t.AnonKiB(d.PID)
 	}
-	s.MemMiB = kib / 1024
-	s.Commands = toolCommands(t, tree, now)
-	return s
+	return kib / 1024, toolCommands(t, tree, now)
+}
+
+// ProcessTree is the memory of another harness's agent process pid with
+// the processes below it, and its tool commands: the first non-shell
+// process under each shell the agent started.
+func ProcessTree(t *proc.Table, pid int, now time.Time) (memMiB int, cmds []Command) {
+	memMiB, _ = processTree(t, pid, nil, now)
+	for _, c := range t.Children(pid) {
+		if shells[c.Comm] {
+			cmds = append(cmds, shellCommands(t, c, now)...)
+		}
+	}
+	return memMiB, cmds
 }
 
 // ownTree returns the processes below pid that are its session's: the
@@ -488,29 +512,33 @@ var shells = map[string]bool{"zsh": true, "bash": true, "sh": true, "dash": true
 // each: `devctl pr merge …`, `sleep 1500`, `memcap -- …`.
 func toolCommands(t *proc.Table, tree []*proc.Process, now time.Time) []Command {
 	var out []Command
-	var descend func(*proc.Process)
-	descend = func(p *proc.Process) {
-		for _, c := range t.Children(p.PID) {
-			if c.PID == os.Getpid() {
-				continue // this beekeeper call
-			}
-			if shells[c.Comm] {
-				descend(c)
-				continue
-			}
-			cmd := Command{PID: c.PID, Args: c.Cmdline(), Elapsed: c.Elapsed(now).Round(time.Second)}
-			if c.Comm == "sleep" && len(c.Args) > 1 {
-				if d, ok := sleepDuration(c.Args[1:]); ok && d > cmd.Elapsed {
-					cmd.Remaining = (d - cmd.Elapsed).Round(time.Second)
-				}
-			}
-			out = append(out, cmd)
-		}
-	}
 	for _, p := range tree {
 		if shells[p.Comm] && strings.Contains(p.Cmdline(), "shell-snapshots/snapshot-") && !isToolShellChild(t, p) {
-			descend(p)
+			out = append(out, shellCommands(t, p, now)...)
 		}
+	}
+	return out
+}
+
+// shellCommands reports the first non-shell process under each branch of
+// the shell sh.
+func shellCommands(t *proc.Table, sh *proc.Process, now time.Time) []Command {
+	var out []Command
+	for _, c := range t.Children(sh.PID) {
+		if c.PID == os.Getpid() {
+			continue // this beekeeper call
+		}
+		if shells[c.Comm] {
+			out = append(out, shellCommands(t, c, now)...)
+			continue
+		}
+		cmd := Command{PID: c.PID, Args: c.Cmdline(), Elapsed: c.Elapsed(now).Round(time.Second)}
+		if c.Comm == "sleep" && len(c.Args) > 1 {
+			if d, ok := sleepDuration(c.Args[1:]); ok && d > cmd.Elapsed {
+				cmd.Remaining = (d - cmd.Elapsed).Round(time.Second)
+			}
+		}
+		out = append(out, cmd)
 	}
 	return out
 }

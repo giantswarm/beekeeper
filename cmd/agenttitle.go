@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -392,6 +393,9 @@ func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []sta
 // archivable is the desktop session of agent ag when the doctor or remove
 // may archive it, else why it stays.
 func (a *app) archivable(st *state.State, ag state.Party) (host, why string) {
+	if strings.HasPrefix(ag.HostSession, omp.HostPrefix) {
+		return "", "an omp agent has no desktop session"
+	}
 	i := slices.IndexFunc(st.Starts, func(x state.Start) bool { return x.Session != "" && x.Session == ag.Session })
 	if i < 0 {
 		return "", "its desktop session stays: beekeeper did not start it"

@@ -11,6 +11,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/lease"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -159,7 +160,8 @@ func (a *app) sessionsCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "sessions",
 		Short: "List the running sessions: what each is on, what it runs, what it holds",
-		Long: `List the running Claude Code sessions, most recently active first: the
+		Long: `List the running sessions, Claude Code's and omp's (oh-my-pi, marked
+"omp busy" or "omp idle"), most recently active first: the
 repository and the issues or pull requests its latest turns are about, when
 it was last active, the tool commands it runs right now (a devctl wait, a
 bounded sleep with the time left), its memory, how full its context is,
@@ -181,7 +183,8 @@ unknown".
 
 Overlaps name the issues, pull requests and repositories more than one
 session is on now. --all adds the sessions of the last 24 hours that run no
-CLI (paused or closed, not archived): a message to them does not arrive.
+CLI (paused or closed, not archived) and the omp sessions no process runs:
+a message to them does not arrive.
 
 The session records (sessions serve) follow the table: which session serves
 which issue and what it waits on, and the records whose session has ended.
@@ -197,15 +200,18 @@ moving is no change), or one "no change" line. --full prints everything.`,
 				return err
 			}
 			var paused []*claude.Record
+			var ended []*claude.Session
 			if all {
 				paused = claude.StoppedRecords(a.cfg, v.raw, a.now.Add(-24*time.Hour))
+				ended = omp.Ended(a.cfg.Omp.SessionsDir, v.raw, a.now.Add(-24*time.Hour))
 			}
 			if a.json {
 				return a.printJSON(struct {
 					*view
-					Records []state.Record   `json:"records,omitempty"`
-					Paused  []*claude.Record `json:"paused,omitempty"`
-				}{v, v.st.Records, paused})
+					Records []state.Record    `json:"records,omitempty"`
+					Paused  []*claude.Record  `json:"paused,omitempty"`
+					Ended   []*claude.Session `json:"ended,omitempty"`
+				}{v, v.st.Records, paused, ended})
 			}
 			printFull := func() {
 				a.printSessions(v)
@@ -213,12 +219,15 @@ moving is no change), or one "no change" line. --full prints everything.`,
 					_, _ = fmt.Fprintf(a.out, "\nSession records:\n")
 					a.printRecords(v.st.Records, v.raw)
 				}
-				if len(paused) > 0 {
+				if len(paused)+len(ended) > 0 {
 					_, _ = fmt.Fprintf(a.out, "\nNot running (paused or closed):\n")
 					w := a.table()
 					for _, r := range paused {
 						_, _ = fmt.Fprintf(w, "  %s\t%s\tactive %s ago\t%s\n", truncate(r.Title, 50), r.Branch,
 							ago(a.now, time.UnixMilli(r.LastActivityAt)), r.Aside())
+					}
+					for _, e := range ended {
+						_, _ = fmt.Fprintf(w, "  %s\t%s\tactive %s ago\tomp\n", truncate(e.Name, 50), e.Cwd, ago(a.now, e.LastActive))
 					}
 					_ = w.Flush()
 				}
@@ -226,6 +235,10 @@ moving is no change), or one "no change" line. --full prints everything.`,
 			facts := a.sessionFacts(v)
 			for _, r := range paused {
 				l := fmt.Sprintf("paused %q %s", r.Title, r.Branch)
+				facts = append(facts, fact{Key: l, Sig: l, Line: l})
+			}
+			for _, e := range ended {
+				l := fmt.Sprintf("ended omp %q %s", e.Name, e.Cwd)
 				facts = append(facts, fact{Key: l, Sig: l, Line: l})
 			}
 			return a.delta("sessions", full, facts, printFull)
@@ -380,13 +393,14 @@ func (a *app) printSessions(v *view) {
 	}
 }
 
-// roleText is role and the session's leases, after "archived" or "test"
-// for a session the guide's feed leaves out.
+// roleText is role and the session's leases, after an omp session's
+// harness and state and "archived" or "test" for a session the guide's
+// feed leaves out.
 func roleText(s *sessionView, role string) string {
 	if len(s.Leases) > 0 {
 		role = strings.TrimPrefix(role+" holds "+strings.Join(s.Leases, ","), " ")
 	}
-	return strings.TrimSpace(s.Aside() + " " + role)
+	return strings.Join(strings.Fields(strings.Join([]string{s.Harness, s.State, s.Aside(), role}, " ")), " ")
 }
 
 // parentName names the session that started a child session: its name
@@ -465,7 +479,11 @@ a name (or a unique part of it), a session id or a PID.`,
 			if s.Transcript == "" {
 				return fmt.Errorf("no transcript found for %q", s.Name)
 			}
-			turns, err := claude.Tail(s.Transcript, n)
+			tail := claude.Tail
+			if s.Harness == omp.Harness {
+				tail = omp.Tail
+			}
+			turns, err := tail(s.Transcript, n)
 			if err != nil {
 				return err
 			}

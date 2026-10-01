@@ -162,7 +162,7 @@ func (a *app) freeMachine() (free.Machine, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	clusters, cerr := machine.KindClusters(ctx)
-	sessions := claude.Discover(a.cfg, t, a.now)
+	sessions := discover(a.cfg, t, a.now)
 	return free.Machine{
 		UID:          uid,
 		Home:         home,

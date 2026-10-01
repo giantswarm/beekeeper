@@ -67,6 +67,7 @@ type Config struct {
 	Watch    Watch    `yaml:"watch"`
 	Overlaps Overlaps `yaml:"overlaps"`
 	Claude   Claude   `yaml:"claude"`
+	Omp      Omp      `yaml:"omp"`
 	Desktop  Desktop  `yaml:"desktop"`
 	Memcap   Memcap   `yaml:"memcap"`
 	Lanes    []Lane   `yaml:"lanes"`
@@ -795,6 +796,17 @@ type Claude struct {
 	DesktopLog string `yaml:"desktopLog"`
 }
 
+// Omp locates what omp (oh-my-pi), the second local harness, keeps on disk.
+type Omp struct {
+	// SessionsDir holds omp's session files, one folder per working
+	// directory.
+	SessionsDir string `yaml:"sessionsDir"`
+	// Model is the model `agents start --harness omp` starts an agent on
+	// without --model, omp's model pattern ("local/qwen3-8b",
+	// "opus"); empty: omp's own default.
+	Model string `yaml:"model"`
+}
+
 // Desktop is how beekeeper shares the person's desktop.
 type Desktop struct {
 	// TypingQuiet is how long the person's keyboards and pointers stay
@@ -973,6 +985,7 @@ func (c *Config) defaults() error {
 	setStr(&c.Claude.ProjectsDir, filepath.Join(home, ".claude", "projects"))
 	setStr(&c.Claude.DesktopApp, DefaultDesktopApp)
 	setStr(&c.Claude.SessionsDir, filepath.Join(home, ".claude", "sessions"))
+	setStr(&c.Omp.SessionsDir, filepath.Join(home, ".omp", "agent", "sessions"))
 	cfg, err := os.UserConfigDir()
 	if err != nil {
 		return err

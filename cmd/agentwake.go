@@ -3,6 +3,7 @@ package cmd
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -17,6 +18,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/peer"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -30,6 +32,10 @@ func (a *app) agentWakeCmd() *cobra.Command {
 		Long: `wake delivers a message to a registered agent without Claude Desktop's
 route, whose cap pauses a session's messages to local_ ids after ten sends
 since its person last typed in it.
+
+An omp agent (agents start --harness omp) gets the message in its inbox,
+at its next tool round or as its next turn; one whose process ended is
+refused: nothing resumes it.
 
 A session whose CLI runs gets the message by name, as SendMessage by name
 does: it queues and runs at the session's next tool call or as its next turn.
@@ -81,6 +87,9 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 		return err
 	}
 	ag := st.Agents[i]
+	if id, ok := strings.CutPrefix(ag.HostSession, omp.HostPrefix); ok {
+		return a.wakeOmp(by, ag, id, msg)
+	}
 	sessions, _, err := a.sessions()
 	if err != nil {
 		return err
@@ -129,6 +138,20 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 	if err == nil && w.host != "" {
 		_, err = fmt.Fprintf(a.out, "once the turn ends, %s is shown in the desktop for a moment, which warms its desktop CLI; the moment waits while the desktop's window has the focus\n", w.host)
 	}
+	return err
+}
+
+// wakeOmp writes msg to the inbox of the omp agent ag, started under id.
+func (a *app) wakeOmp(by state.Party, ag state.Agent, id, msg string) error {
+	err := omp.Send(omp.InboxPath(a.cfg.StateDir, id), msg)
+	if errors.Is(err, omp.ErrNotRunning) {
+		return refused("%s: its omp agent no longer runs (%s ended): start it again with agents start --harness omp", ag.Name, ompUnit(id))
+	}
+	if err != nil {
+		return fmt.Errorf("waking %s: %w", ag.Name, err)
+	}
+	_ = a.store.Log(event(by, "agents.wake", "%s: written to its omp inbox", ag.Name))
+	_, err = fmt.Fprintf(a.out, "wake: %s runs (omp): written to its inbox, it runs the message at its next tool round or as its next turn\n", ag.Name)
 	return err
 }
 
