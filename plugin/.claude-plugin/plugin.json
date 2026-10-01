@@ -1,0 +1,12 @@
+{
+  "name": "beekeeper",
+  "description": "The roles that run a beekeeper desk: the supervisor, the guide, a registered agent and the rules every worker follows.",
+  "author": {
+    "name": "Giant Swarm",
+    "url": "https://github.com/giantswarm"
+  },
+  "homepage": "https://github.com/giantswarm/beekeeper",
+  "repository": "https://github.com/giantswarm/beekeeper",
+  "license": "Apache-2.0",
+  "keywords": ["beekeeper", "supervisor", "multi-session", "claude-code"]
+}

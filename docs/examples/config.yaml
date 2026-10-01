@@ -107,14 +107,14 @@ alerts:
     - {severity: notify}    # other teams' and team-less notify alerts
 
 supervisor:                 # what handover --prompt tells the successor supervisor; unset skill and instructions, it opens without them
-  skill: supervise          # the skill it runs; or instructions: ~/supervisor.md, a file that opens the prompt
+  skill: beekeeper:supervise   # the skill it runs (the plugin's role, see the README); or instructions: ~/supervisor.md, a file that opens the prompt
   scope: The desk's sessions, kind labs and merge lanes.   # default: the resources, lanes and installations configured
   relayAt: 400k             # watch says RELAY DUE once the supervisor's context reaches this, at a quiet moment
   relayTTL: 15m             # a relay not taken by the successor's start expires
   restartGrace: 30s         # a CLI back within this of first seen gone is a restart; past it, SUPERVISOR GONE and a fresh successor
 guide:                      # the guide's role: what guide handover --prompt tells its successor, and its relay
   person: Ada               # guide queue and guide watch show only the notes for this person (any case); unset, every --for note
-  skill: guide              # the skill its successor runs; or instructions: ~/guide.md; unset, it opens without them
+  skill: beekeeper:guide    # the skill its successor runs; or instructions: ~/guide.md; unset, it opens without them
   relayAt: 400k             # guide watch says GUIDE RELAY DUE once the guide's context reaches this
   relayTTL: 15m
   restartGrace: 1m
