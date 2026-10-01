@@ -239,6 +239,10 @@ type Note struct {
 	At      time.Time `json:"at"`
 	// Fired is when a watch reported the note due; it reports it once.
 	Fired time.Time `json:"fired,omitzero"`
+	// Kind is "login" for a sign-in the watch closes once Until, a shell
+	// command, exits 0.
+	Kind  string `json:"kind,omitempty"`
+	Until string `json:"until,omitempty"`
 }
 
 // Timer is a point in time the supervisor has to look at something ("check
