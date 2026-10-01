@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestBinaryReplaced(t *testing.T) {
@@ -72,12 +73,20 @@ func TestProcessBinary(t *testing.T) {
 	}
 }
 
-func TestProcessBinaryReplaced(t *testing.T) {
-	sleep, err := exec.LookPath("sleep")
-	if err != nil {
-		t.Skip("no sleep to run")
+// TestHelperSleep is the process TestProcessBinaryReplaced runs: a copy of
+// this test binary that waits to be killed.
+func TestHelperSleep(*testing.T) {
+	if os.Getenv("BEEKEEPER_TEST_SLEEP") == "1" {
+		time.Sleep(time.Minute)
 	}
-	raw, err := os.ReadFile(sleep) //nolint:gosec // the system's sleep, copied to run as a stand-in
+}
+
+func TestProcessBinaryReplaced(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(self) //nolint:gosec // this test binary, copied to run as a stand-in
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +97,8 @@ func TestProcessBinaryReplaced(t *testing.T) {
 		}
 	}
 	write(path)
-	cmd := exec.Command(path, "60") //nolint:gosec // the copy written above
+	cmd := exec.Command(path, "-test.run=^TestHelperSleep$") //nolint:gosec // the copy written above
+	cmd.Env = append(os.Environ(), "BEEKEEPER_TEST_SLEEP=1")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
