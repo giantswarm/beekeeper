@@ -125,13 +125,13 @@ func TestPickSteward(t *testing.T) {
 		return st
 	}
 	// handedOver is a chain of hand-overs of worker: a to b to the target.
-	const worker = "Agent seven"
+	const worker, task = "Agent seven", "work"
 	handedOver := func() *state.State {
 		st := &state.State{}
 		for i, id := range []string{"a", "b", "t"} {
 			st.Starts = append(st.Starts, state.Start{Party: state.Party{Session: id, HostSession: "local_" + id, Name: worker}, At: now.Add(time.Duration(i-3) * time.Hour)})
 		}
-		st.Agents = []state.Agent{{Party: state.Party{Session: "t", Name: worker}, Task: "work"}}
+		st.Agents = []state.Agent{{Party: state.Party{Session: "t", Name: worker}, Task: task}}
 		return st
 	}
 	sock := func(pid int) string { return fmt.Sprintf("/s/%d.sock", pid) }
@@ -155,7 +155,7 @@ func TestPickSteward(t *testing.T) {
 		{desc: "in a turn", st: started("a"), sessions: []*claude.Session{session(1, "a", recent)}},
 		{desc: "a busy agent", st: func() *state.State {
 			st := started("a")
-			st.Agents = []state.Agent{{Party: state.Party{Session: "a"}, Task: "work"}}
+			st.Agents = []state.Agent{{Party: state.Party{Session: "a"}, Task: task}}
 			return st
 		}(), sessions: []*claude.Session{session(1, "a", quiet)}},
 		{desc: "the guide", st: func() *state.State {
@@ -178,7 +178,7 @@ func TestPickSteward(t *testing.T) {
 		{desc: "a session handed over before", st: func() *state.State {
 			st := handedOver()
 			st.Starts = append(st.Starts, state.Start{Party: state.Party{Session: "c", HostSession: "local_c", Name: worker}, At: now.Add(-time.Minute)})
-			st.Agents = []state.Agent{{Party: state.Party{Session: "c", Name: worker}, Task: "work"}}
+			st.Agents = []state.Agent{{Party: state.Party{Session: "c", Name: worker}, Task: task}}
 			return st
 		}(), sessions: []*claude.Session{session(1, "a", quiet), session(2, "b", quiet)}},
 		{desc: "a session whose name a roster agent holds", st: func() *state.State {
@@ -189,7 +189,7 @@ func TestPickSteward(t *testing.T) {
 		}(), sessions: []*claude.Session{session(1, "a", quiet)}},
 		{desc: "a finished worker whose name stayed its own", st: func() *state.State {
 			st := handedOver()
-			st.Starts = append(st.Starts, state.Start{Party: state.Party{Session: "e", HostSession: "local_e", Name: "other"}, At: now.Add(-3 * time.Hour)})
+			st.Starts = append(st.Starts, state.Start{Party: state.Party{Session: "e", HostSession: "local_e", Name: "Agent eight"}, At: now.Add(-3 * time.Hour)})
 			return st
 		}(), sessions: []*claude.Session{session(1, "a", quiet), session(2, "b", quiet), session(3, "e", quiet)}, want: "local_e"},
 	} {
