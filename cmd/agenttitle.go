@@ -333,7 +333,7 @@ func (a *app) findSteward(target string, tried []string) (steward, error) {
 // pickSteward picks the steward for target: an idle desktop CLI (its
 // transcript quiet for stewardQuiet, no tool command, no headless turn) of a
 // session beekeeper started, never the operator's own, the supervisor's or
-// the guide's, nor a roster agent's with a task, nor one of
+// the guide's, nor a handed-over one, nor a roster agent's with a task, nor one of
 // the hosts tried. The target's own CLI goes first, then a finished worker
 // off the roster (a roster agent's brief can forbid the call), each the one
 // idle longest. sock is the peer socket of a CLI, "" for none.
@@ -368,17 +368,34 @@ func pickSteward(st *state.State, sessions []*claude.Session, t *proc.Table, tar
 // stewards reports whether s may steward a request about target.
 func stewards(st *state.State, t *proc.Table, s *claude.Session, target string, now time.Time) bool {
 	p := t.ByPID[s.PID]
+	i := slices.IndexFunc(st.Starts, func(x state.Start) bool { return x.Session == s.ID })
 	switch {
 	case s.HostID == "" || s.Archived || p == nil || !slices.Contains(p.Args, permissionPromptTool):
 		return false // not the desktop's CLI: no desktop session tools
-	case !slices.ContainsFunc(st.Starts, func(x state.Start) bool { return x.Session == s.ID }):
+	case i < 0:
 		return false // the operator's own session
+	case handedOver(st, st.Starts[i]):
+		return false
 	case keepsRole(st, s.Party()):
 		return false
 	case s.HostID != target && slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Task != "" && ag.Is(s.Party()) }):
 		return false // busy with its own task
 	}
 	return len(s.Commands) == 0 && headlessTurn(t, s.ID) == "" && now.Sub(s.LastActive) >= stewardQuiet
+}
+
+// handedOver reports whether the session of start was handed over: a later
+// start, or another session on the roster, carries its name. Its desktop
+// CLI is a leftover the hand-over ends, and a request would have the desktop
+// run a turn of it, and start its CLI again, beside the follow-up under the
+// same name.
+func handedOver(st *state.State, start state.Start) bool {
+	if start.Name == "" {
+		return false
+	}
+	other := func(p state.Party) bool { return p.Name == start.Name && p.Session != start.Session }
+	return slices.ContainsFunc(st.Starts, func(x state.Start) bool { return other(x.Party) && x.At.After(start.At) }) ||
+		slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return other(ag.Party) })
 }
 
 // keepsRole reports whether p holds or held the supervisor's or the guide's
