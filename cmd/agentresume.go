@@ -57,11 +57,11 @@ func resumedForTask(ag state.Agent) bool {
 	return !ag.ResumedWait.IsZero() && !ag.ResumedWait.Before(ag.AssignedAt)
 }
 
-// unitLeftovers are the command lines of the processes a headless turn's
+// unitLeftovers are the argument lists of the processes a headless turn's
 // unit still runs once its CLI ended (KillMode=process keeps them), apart
 // from the reopen calling it; nil outside a start's or wake's unit of
 // session id. Tests replace it.
-var unitLeftovers = func(id string) []string {
+var unitLeftovers = func(id string) [][]string {
 	self := os.Getpid()
 	cg := proc.Cgroup(self)
 	if !turnUnit(path.Base(cg), id) {
@@ -71,10 +71,10 @@ var unitLeftovers = func(id string) []string {
 	if err != nil {
 		return nil
 	}
-	var out []string
+	var out [][]string
 	for _, pid := range plat.Machine.CgroupPIDs(cg) {
 		if p := t.ByPID[pid]; pid != self && p != nil && len(p.Args) > 0 {
-			out = append(out, strings.Join(p.Args, " "))
+			out = append(out, p.Args)
 		}
 	}
 	return out
@@ -89,7 +89,9 @@ func turnUnit(unit, id string) bool {
 
 // endedOnWait names the background wait session id's headless turn ended on:
 // a background Bash its transcript launched with no completion notice after
-// it, else a process its unit still runs; "" for none. A devctl wait or
+// it, else a process its unit still runs, named by its masked command line
+// (a process's arguments may carry a secret, its own commands do not); ""
+// for none. A devctl wait or
 // merge the gate runs is none: its outcome wakes its owner (devctl.unheard).
 func (a *app) endedOnWait(id string) string {
 	var waits []string
@@ -101,9 +103,9 @@ func (a *app) endedOnWait(id string) string {
 			}
 		}
 	}
-	for _, c := range unitLeftovers(id) {
-		if !guard.Owned(c) && !strings.Contains(c, "beekeeper gate") {
-			waits = append(waits, c)
+	for _, args := range unitLeftovers(id) {
+		if c := strings.Join(args, " "); !guard.Owned(c) && !strings.Contains(c, "beekeeper gate") {
+			waits = append(waits, display(args))
 		}
 	}
 	if len(waits) == 0 {

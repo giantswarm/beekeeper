@@ -60,7 +60,7 @@ func waitApp(t *testing.T, transcript, waits string) (*app, *[]string) {
 		resumes = append(resumes, msg)
 		return nil
 	}
-	unitLeftovers = func(string) []string { return nil }
+	unitLeftovers = func(string) [][]string { return nil }
 	plat.Machine = tableMachine{plat.Machine}
 	return a, &resumes
 }
@@ -102,12 +102,15 @@ func TestReopenResumesATurnThatEndedOnAWait(t *testing.T) {
 	}
 }
 
-// A process the turn's unit still runs is a wait too.
+// A process the turn's unit still runs is a wait too, named without its
+// arguments' values.
 func TestReopenResumesOnALeftoverProcess(t *testing.T) {
 	a, resumes := waitApp(t, "{}\n", "")
-	unitLeftovers = func(string) []string { return []string{"curl -o model.bin https://example.com/model"} }
+	unitLeftovers = func(string) [][]string {
+		return [][]string{{"/usr/bin/curl", "-H", "Authorization: Bearer s3cr3t", "-o", "model.bin", "https://example.com/model"}}
+	}
 	reopen(t, a)
-	if len(*resumes) != 1 || !strings.Contains((*resumes)[0], "curl -o model.bin") {
+	if len(*resumes) != 1 || !strings.Contains((*resumes)[0], `"curl -H -o"`) || strings.Contains((*resumes)[0], "s3cr3t") {
 		t.Errorf("resumes = %q", *resumes)
 	}
 }
