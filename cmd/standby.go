@@ -141,11 +141,15 @@ func (w *watcher) firstTurn(ctx context.Context, p state.Party) bool {
 
 // unitsTurning reports whether a start or wake unit of session id is
 // active, starting or running its reopen (deactivating).
-func unitsTurning(ctx context.Context, id string) bool {
+func unitsTurning(ctx context.Context, id string) bool { return len(turningUnits(ctx, id)) > 0 }
+
+// turningUnits are the start and wake units of session id that are active,
+// starting or running their reopen (deactivating).
+func turningUnits(ctx context.Context, id string) []string {
 	if len(id) < 8 {
-		return false
+		return nil
 	}
-	return len(plat.Launcher.Running(ctx, true, "beekeeper-agent-"+id[:8]+".service", wakePrefix(id)+"*")) > 0
+	return plat.Launcher.Running(ctx, true, "beekeeper-agent-"+id[:8]+".service", wakePrefix(id)+"*")
 }
 
 // guideGone says once when the guide's CLI stayed gone past its grace with

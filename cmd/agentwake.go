@@ -198,12 +198,12 @@ func resolveWake(cfg *config.Config, st *state.State, ag state.Agent) (wakeTarge
 	if w.id == "" {
 		return wakeTarget{}, refused("%s has no session id to resume", ag.Name)
 	}
-	m, _ := filepath.Glob(filepath.Join(cfg.Claude.ProjectsDir, "*", w.id+".jsonl"))
-	if len(m) == 0 {
+	transcript := transcriptOf(cfg, w.id)
+	if transcript == "" {
 		return wakeTarget{}, refused("%s: session %s has no transcript under %s to resume", ag.Name, w.id, cfg.Claude.ProjectsDir)
 	}
 	if w.dir == "" {
-		w.dir, _ = claude.TranscriptCwd(m[0])
+		w.dir, _ = claude.TranscriptCwd(transcript)
 	}
 	if w.dir == "" {
 		return wakeTarget{}, refused("%s: no directory is recorded for session %s", ag.Name, w.id)
@@ -212,6 +212,18 @@ func resolveWake(cfg *config.Config, st *state.State, ag state.Agent) (wakeTarge
 		w.mode = guard.ModeAcceptEdits
 	}
 	return w, nil
+}
+
+// transcriptOf is the transcript of session id under the projects
+// directory, "" for none.
+func transcriptOf(cfg *config.Config, id string) string {
+	if id == "" {
+		return ""
+	}
+	if m, _ := filepath.Glob(filepath.Join(cfg.Claude.ProjectsDir, "*", id+".jsonl")); len(m) > 0 {
+		return m[0]
+	}
+	return ""
 }
 
 // wakeLive is the running CLI of the agent: its party's, or one that runs
