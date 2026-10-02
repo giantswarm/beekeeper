@@ -381,7 +381,7 @@ func (a *app) removeAgents(chores []chore, by state.Party) ([]chore, error) {
 			if c.kind != choreRemove || i < 0 {
 				continue
 			}
-			st.Agents = slices.Delete(st.Agents, i, i+1)
+			removeAgent(st, i)
 			removed = append(removed, c)
 			evs = append(evs, event(by, "agents.remove", "%s: %s", c.agent.Name, c.why))
 		}

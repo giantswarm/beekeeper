@@ -133,6 +133,7 @@ supervisor:                 # what handover --prompt tells the successor supervi
   dir: ~/src/desk            # the folder a successor starts in (default: where its predecessor's desktop session started, never its worktree)
 guide:                      # the guide's role: what guide handover --prompt tells its successor, and its relay
   person: Ada               # guide queue and guide watch show only the notes for this person (any case); unset, every --for note
+  waitingTTL: 2h            # a session that waits on the person and stopped longer ago folds into one line (guide queue --full lists it); 0: never
   skill: beekeeper:guide    # the skill its successor runs; or instructions: ~/guide.md; unset, it opens without them
   relayAt: 150k             # guide watch says GUIDE RELAY DUE once the guide's context reaches this
   relayTTL: 15m

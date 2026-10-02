@@ -205,7 +205,7 @@ archive it. A session its person started is never archived.`,
 					return nil, err
 				}
 				gone = st.Agents[i].Party
-				st.Agents = slices.Delete(st.Agents, i, i+1)
+				removeAgent(st, i)
 				return []state.Event{event(me, "agents.remove", "%s", gone.Name)}, nil
 			})
 			if err != nil {
@@ -285,6 +285,17 @@ func registerAgent(st *state.State, me state.Party, live func(state.Party) bool,
 
 // reportIdle ends ag's task. An agent reporting idle again keeps its last
 // task and since when it is idle.
+// removeAgent takes the agent at i off the roster; its session no longer
+// waits on anyone.
+func removeAgent(st *state.State, i int) {
+	for j := range st.Records {
+		if st.Records[j].Session.Is(st.Agents[i].Party) {
+			st.Records[j].Waits = ""
+		}
+	}
+	st.Agents = slices.Delete(st.Agents, i, i+1)
+}
+
 func reportIdle(ag *state.Agent, now time.Time) {
 	if ag.Task != "" {
 		ag.LastTask, ag.Task, ag.IdleSince = ag.Task, "", now.UTC()
