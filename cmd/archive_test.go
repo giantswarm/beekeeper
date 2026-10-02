@@ -135,3 +135,86 @@ func TestSeedArchives(t *testing.T) {
 		t.Errorf("seeded twice: %+v", st.Archives)
 	}
 }
+
+// A chain of three hand-overs owes the archive of each old session, never
+// the follow-up's, so once the desktop records them exactly one row of the
+// name is left; a session beekeeper did not start is owed nothing.
+func TestHandoverChainOwesEachOldSession(t *testing.T) {
+	name := "test: chain"
+	start := func(id string, at time.Duration) state.Start {
+		return state.Start{Party: state.Party{Session: id, HostSession: "local_" + id, Name: name}, At: archiveNow.Add(at)}
+	}
+	st := &state.State{
+		Starts: []state.Start{start("chain-1", 0), start("chain-2", time.Hour), start("chain-3", 2*time.Hour)},
+		Agents: []state.Agent{{Party: state.Party{Session: "chain-3", HostSession: "local_chain-3", Name: name}, Task: "go on"}},
+	}
+	for _, id := range []string{"chain-1", "chain-2"} {
+		if host := oweArchive(st, state.Party{Session: id, Name: name}, "handed over", archiveNow); host != "local_"+id {
+			t.Fatalf("%s: owed %q", id, host)
+		}
+	}
+	oweArchive(st, state.Party{Session: "chain-2", Name: name}, "handed over", archiveNow)
+	if host := oweArchive(st, state.Party{Session: "person", Name: name}, "handed over", archiveNow); host != "" || len(st.Archives) != 2 {
+		t.Fatalf("owed %q, archives %+v", host, st.Archives)
+	}
+	archived := map[string]bool{}
+	record := func(host string) (*claude.Record, bool) { return &claude.Record{IsArchived: archived[host]}, true }
+	idle := func(state.Party) bool { return false }
+	for _, o := range planArchives(st, record, idle, archiveNow.Add(time.Minute)) {
+		if o.wait != "" || o.drop != "" {
+			t.Errorf("%s not asked for: %s", o.ar.Host, o)
+		}
+		archived[o.ar.Host] = true
+	}
+	for _, o := range planArchives(st, record, idle, archiveNow.Add(2*time.Minute)) {
+		if !strings.Contains(o.drop, "has it archived") {
+			t.Errorf("%s: %s", o.ar.Host, o)
+		}
+	}
+	var visible []string
+	for _, s := range st.Starts {
+		if !archived[s.HostSession] {
+			visible = append(visible, s.HostSession)
+		}
+	}
+	if len(visible) != 1 || visible[0] != "local_chain-3" {
+		t.Errorf("visible rows %v, want only the follow-up's", visible)
+	}
+}
+
+// A relay's successor taking the role owes the relieved run's archive,
+// which the doctor asks for once the run's CLI runs no turn; the holder's
+// own session, and a run no relay relieved, stay.
+func TestRelievedRunIsArchived(t *testing.T) {
+	st := handOverState()
+	st.Starts = []state.Start{{Party: supA}, {Party: supB}}
+	if _, _, err := relayRole(st, supA, supB, relayNow, 15*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Archives) != 0 {
+		t.Fatalf("owed before the successor took the role: %+v", st.Archives)
+	}
+	msg, _, err := startRole(st, supB, true, false, relayNow.Add(time.Minute))
+	if err != nil || !strings.Contains(msg, "archives its desktop session local_A once its CLI runs no turn") {
+		t.Fatalf("start: %q, %v", msg, err)
+	}
+	if len(st.Archives) != 1 || st.Archives[0].Host != "local_A" {
+		t.Fatalf("archives %+v", st.Archives)
+	}
+	inTurn := func(state.Party) bool { return true }
+	if p := planArchives(st, unarchived, inTurn, relayNow.Add(2*time.Minute)); p[0].wait == "" {
+		t.Errorf("in a turn: %s", p[0])
+	}
+	idle := func(state.Party) bool { return false }
+	if p := planArchives(st, unarchived, idle, relayNow.Add(2*time.Minute)); p[0].wait != "" || p[0].drop != "" {
+		t.Errorf("idle: %s", p[0])
+	}
+	if !roleKeeps(st, supB) || roleKeeps(st, supA) {
+		t.Errorf("roleKeeps: holder %v, relieved %v", roleKeeps(st, supB), roleKeeps(st, supA))
+	}
+	// The relieved run supervises again: its archive is owed no longer.
+	st.Supervisor = &state.Supervisor{Party: supA}
+	if p := planArchives(st, unarchived, idle, relayNow.Add(3*time.Minute)); !strings.Contains(p[0].drop, "role") {
+		t.Errorf("holding again: %s", p[0])
+	}
+}
