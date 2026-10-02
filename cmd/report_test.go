@@ -63,7 +63,7 @@ func reportFixture(t *testing.T) *reportFacts {
 		Timers: []state.Timer{{ID: 7, Due: to.Add(30 * time.Minute), What: "check the rollout of portal#8, see note #12"}},
 		Machine: &snapshot{
 			OOMSince: from, Load: [3]float64{3.2, 2.5, 2}, Cores: 24, LoadLimit: 36, CPUPSI10: 0.4,
-			Mem:    machine.Mem{TotalMiB: 88064, AvailableMiB: 50176, SwapTotalMiB: 16384, SwapUsedMiB: 2048},
+			Mem:    machine.Mem{TotalMiB: 88064, AvailableMiB: 50176, SwapTotalMiB: 16384, SwapUsedMiB: 2048, ZswappedMiB: 1536},
 			Root:   machine.Disk{UsedMiB: 1767424, FreeMiB: 71680, TotalMiB: 1921024},
 			OOM:    []oomKill{{OOMKill: machine.OOMKill{Task: "go", Memcg: "/memcap.slice/run-1.scope"}}},
 			Budget: &github.Budget{Limit: 5000, Remaining: 4800, Reset: to.Add(20 * time.Minute)},

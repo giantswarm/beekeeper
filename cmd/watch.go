@@ -646,10 +646,10 @@ func (w *watcher) notifyAt(ctx context.Context, now time.Time, kind, key, summar
 	}
 }
 
-// swapSample is one poll's swap in use.
+// swapSample is one poll's swap and MemAvailable.
 type swapSample struct {
-	at      time.Time
-	usedMiB int
+	at                         time.Time
+	usedMiB, diskMiB, availMiB int
 }
 
 // swapWindow is how far back the swap growth rate looks, and minSwapSpan
@@ -659,10 +659,24 @@ const (
 	minSwapSpan = 5 * time.Minute
 )
 
-// swapRate records a reading and returns the swap growth in MiB per hour
-// over the last hour; ok is false until the readings span minSwapSpan.
-func (w *watcher) swapRate(now time.Time, usedMiB int) (perHour int, ok bool) {
-	w.swapSamples = append(w.swapSamples, swapSample{now, usedMiB})
+// swapTrend is the swap's movement over the last hour: disk swap's growth,
+// the growth of all swap in use (what systemd-oomd measures), and whether
+// MemAvailable fell. Rated once the readings span minSwapSpan.
+type swapTrend struct {
+	DiskPerHourMiB int
+	UsedPerHourMiB int
+	AvailFalling   bool
+	Rated          bool
+}
+
+// pressing reports disk swap growing while MemAvailable falls: the only
+// swap reading that means memory pressure. Swapped pages stay in swap long
+// after the burst that pushed them out, and zswap's share sits in RAM.
+func (t swapTrend) pressing() bool { return t.Rated && t.DiskPerHourMiB > 0 && t.AvailFalling }
+
+// swapTrend records a reading and returns the movement over the last hour.
+func (w *watcher) swapTrend(now time.Time, m machine.Mem) swapTrend {
+	w.swapSamples = append(w.swapSamples, swapSample{now, m.SwapUsedMiB, m.DiskSwapMiB(), m.AvailableMiB})
 	i := 0
 	for i < len(w.swapSamples)-1 && now.Sub(w.swapSamples[i].at) > swapWindow {
 		i++
@@ -671,23 +685,44 @@ func (w *watcher) swapRate(now time.Time, usedMiB int) (perHour int, ok bool) {
 	first := w.swapSamples[0]
 	span := now.Sub(first.at)
 	if span < minSwapSpan {
-		return 0, false
+		return swapTrend{}
 	}
-	return int(float64(usedMiB-first.usedMiB) / span.Hours()), true
+	perHour := func(from, to int) int { return int(float64(to-from) / span.Hours()) }
+	return swapTrend{
+		DiskPerHourMiB: perHour(first.diskMiB, m.DiskSwapMiB()),
+		UsedPerHourMiB: perHour(first.usedMiB, m.SwapUsedMiB),
+		AvailFalling:   m.AvailableMiB < first.availMiB,
+		Rated:          true,
+	}
 }
 
-// swapLine says swap in use by its distance to systemd-oomd's trigger and
-// its growth rate: the numbers that decide whether oomd kills.
-func swapLine(m machine.Mem, limit, headroom, perHour int, rated bool) string {
-	line := fmt.Sprintf("SWAP: %d of %d MiB used, %d MiB before systemd-oomd's %d %% trigger", m.SwapUsedMiB, m.SwapTotalMiB, headroom, limit)
-	if !rated {
+// swapLine says swap in use as disk plus zswap, systemd-oomd's swap rule
+// (its trigger only when it watches a cgroup for swap) and disk swap's
+// growth: the numbers that decide whether swap means pressure.
+func swapLine(m machine.Mem, oomd *machine.OOMDSwap, t swapTrend) string {
+	line := fmt.Sprintf("SWAP: %d of %d MiB used, %s", m.SwapUsedMiB, m.SwapTotalMiB, m.SwapSplit())
+	if oomd == nil {
+		line += ", systemd-oomd swap rule unknown"
+	} else {
+		line += ", " + oomd.Line(m)
+	}
+	if !t.Rated {
 		return line + ", growth not yet measured"
 	}
-	line += fmt.Sprintf(", %+d MiB/h over the last hour", perHour)
-	if perHour > 0 && headroom > 0 {
-		line += ", trigger in " + untilTrigger(headroom, perHour).Round(time.Minute).String()
+	line += fmt.Sprintf(", disk %+d MiB/h over the last hour", t.DiskPerHourMiB)
+	if t.pressing() {
+		line += " while MemAvailable falls"
+	}
+	if oomd != nil && oomd.Watched() && t.UsedPerHourMiB > 0 && oomd.HeadroomMiB(m) > 0 {
+		line += ", trigger in " + untilTrigger(oomd.HeadroomMiB(m), t.UsedPerHourMiB).Round(time.Minute).String()
 	}
 	return line
+}
+
+// swapOver reports disk swap over maxMiB and pressing; zswap's share,
+// held in RAM, never counts.
+func swapOver(m machine.Mem, t swapTrend, maxMiB int) bool {
+	return m.DiskSwapMiB() > maxMiB && t.pressing()
 }
 
 // untilTrigger is how long headroom lasts at perHour.
@@ -696,15 +731,20 @@ func untilTrigger(headroom, perHour int) time.Duration {
 }
 
 // oomdImminent reports whether systemd-oomd's swap kill is near enough to
-// need a person: headroom under watch.oomdHeadroomMinMiB (a fraction of
-// swapMiB by default), or the trigger within watch.oomdWithin at the
-// measured growth rate.
-func (w *watcher) oomdImminent(headroom, swapMiB, perHour int, rated bool) bool {
+// need a person: oomd watches a cgroup for swap, disk swap grows while
+// MemAvailable falls, and the headroom is under watch.oomdHeadroomMinMiB
+// (a fraction of SwapTotal by default) or the trigger within
+// watch.oomdWithin at the growth of the swap in use.
+func (w *watcher) oomdImminent(m machine.Mem, oomd *machine.OOMDSwap, t swapTrend) bool {
+	if oomd == nil || !oomd.Watched() || !t.pressing() {
+		return false
+	}
 	th := w.cfg.Watch
-	if headroom < th.OOMDHeadroomMin(swapMiB) {
+	headroom := oomd.HeadroomMiB(m)
+	if headroom < th.OOMDHeadroomMin(m.SwapTotalMiB) {
 		return true
 	}
-	return rated && perHour > 0 && untilTrigger(headroom, perHour) < th.OOMDWithin.Duration
+	return t.UsedPerHourMiB > 0 && untilTrigger(headroom, t.UsedPerHourMiB) < th.OOMDWithin.Duration
 }
 
 // modelServer says the host models no model-server lease covers and
@@ -757,20 +797,23 @@ func (w *watcher) sample(ctx context.Context) {
 	}
 	w.check("gtt", cause != "", "IGPU %s", strings.TrimPrefix(cause, "iGPU "))
 	if merr == nil {
-		w.check("avail", m.AvailableMiB < th.AvailMin(m.TotalMiB), "LOW RAM: %d MiB available, swap %d MiB%s", m.AvailableMiB, m.SwapUsedMiB, because(cause))
-		limit := plat.Machine.OOMDSwapLimit()
-		headroom := m.OOMDHeadroomMiB(limit)
-		perHour, rated := w.swapRate(now, m.SwapUsedMiB)
-		line := swapLine(m, limit, headroom, perHour, rated) + because(cause)
-		w.check("swap", m.SwapUsedMiB > th.SwapMax(m.SwapTotalMiB), "%s", line)
+		w.check("avail", m.AvailableMiB < th.AvailMin(m.TotalMiB), "LOW RAM: %d MiB available, swap %s%s", m.AvailableMiB, m.SwapSplit(), because(cause))
+		var oomd *machine.OOMDSwap
+		if o, err := plat.Machine.OOMDSwap(ctx); err == nil {
+			oomd = &o
+		}
+		t := w.swapTrend(now, m)
+		line := swapLine(m, oomd, t) + because(cause)
+		w.check("swap", swapOver(m, t, th.SwapMax(m.SwapTotalMiB)), "%s", line)
 		// A running swapoff shrinks SwapTotal ahead of the pages it drains:
 		// swap reads full while it empties, and oomd is no nearer.
 		swapoff := plat.Machine.SwapoffRuns()
 		w.check("swapoff", swapoff, "SWAPOFF IN PROGRESS: %s", line)
 		if m.SwapTotalMiB > 0 {
-			w.check("oomd", !swapoff && w.oomdImminent(headroom, m.SwapTotalMiB, perHour, rated), "OOMD IMMINENT: %s", line)
+			w.check("oomd", !swapoff && w.oomdImminent(m, oomd, t), "OOMD IMMINENT: %s", line)
 		}
-		w.keepSwap(&swapReading{At: now, UsedMiB: m.SwapUsedMiB, PerHourMiB: perHour, Rated: rated})
+		w.keepSwap(&swapReading{At: now, UsedMiB: m.SwapUsedMiB, DiskMiB: m.DiskSwapMiB(), ZswapMiB: m.ZswappedMiB,
+			PerHourMiB: t.DiskPerHourMiB, AvailFalling: t.AvailFalling, Rated: t.Rated})
 	}
 	w.sampleCPU(now)
 	psi, err := plat.Machine.MemoryPressure()

@@ -27,9 +27,15 @@ func (r *Run) state() {
 			m.AvailableMiB, m.TotalMiB, m.SwapUsedMiB, m.SwapTotalMiB, tmp.UsedMiB, m.ShmemMiB)
 	}
 	if m.SwapTotalMiB > 0 {
-		limit := r.swapLimit()
-		r.say("  systemd-oomd swap trigger (%d %%): %d MiB of swap growth left before it kills the largest scope",
-			limit, m.OOMDHeadroomMiB(limit))
+		r.say("  swap: %s", m.SwapSplit())
+		switch o, err := r.oomd(); {
+		case err != nil:
+			r.say("  systemd-oomd swap rule unknown: %v", err)
+		case o.Watched():
+			r.say("  %s: the swap growth left before it kills the largest swap user", o.Line(m))
+		default:
+			r.say("  %s: it never kills for swap", o.Line(m))
+		}
 	}
 	s, err := r.scope()
 	if platform.Missing(err) {

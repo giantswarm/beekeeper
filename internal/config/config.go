@@ -690,9 +690,10 @@ type Watch struct {
 	AvailMinMiB int      `yaml:"availMinMiB"`
 	SwapMaxMiB  int      `yaml:"swapMaxMiB"`
 	// OOMDHeadroomMinMiB and OOMDWithin decide when systemd-oomd's swap
-	// kill is imminent (OOMD IMMINENT): less swap growth left before its
-	// SwapUsedLimit than OOMDHeadroomMinMiB, or the trigger reached within
-	// OOMDWithin at the last hour's growth rate.
+	// kill is imminent (OOMD IMMINENT), only while oomd watches a cgroup
+	// for swap and disk swap grows as MemAvailable falls: less swap growth
+	// left before its SwapUsedLimit than OOMDHeadroomMinMiB, or the trigger
+	// reached within OOMDWithin at the last hour's growth rate.
 	OOMDHeadroomMinMiB int      `yaml:"oomdHeadroomMinMiB"`
 	OOMDWithin         Duration `yaml:"oomdWithin"`
 	ScopeAnonMaxMiB    int      `yaml:"scopeAnonMaxMiB"`

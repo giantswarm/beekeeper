@@ -61,6 +61,7 @@ func newRun(t *testing.T, o Options) (*Run, *bytes.Buffer) {
 		mem:      func() (machine.Mem, error) { return machine.Mem{AvailableMiB: 40000, SwapUsedMiB: 100}, nil },
 		scope:    func() (*machine.Scope, error) { return nil, nil },
 		unitPIDs: func(string) []int { return nil },
+		oomd:     func() (machine.OOMDSwap, error) { return machine.OOMDSwap{LimitPercent: 90}, nil },
 		kill:     func([]int) { t.Fatal("kill in a test") },
 	}
 	if o.Stale == 0 {
@@ -252,5 +253,27 @@ func TestMissingPartsFreeNothing(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "remove ") || strings.Contains(out.String(), "RAM available") {
 		t.Errorf("free acted on or reported what it cannot read:\n%s", out)
+	}
+}
+
+func TestStateSplitsSwapAndNamesOomdRule(t *testing.T) {
+	mem := machine.Mem{TotalMiB: 88064, AvailableMiB: 40000, SwapTotalMiB: 16383, SwapUsedMiB: 16000, ZswappedMiB: 13000, ZswapPoolMiB: 4000}
+	r, out := newRun(t, Options{Only: []string{Swap}})
+	r.mem = func() (machine.Mem, error) { return mem, nil }
+	r.Do()
+	if !strings.Contains(out.String(), "  swap: disk 3000 MiB + zswap 13000 MiB in a 4000 MiB pool\n") {
+		t.Errorf("swap is not split into disk and zswap:\n%s", out)
+	}
+	if strings.Contains(out.String(), "trigger") || !strings.Contains(out.String(), "systemd-oomd watches no cgroup for swap") {
+		t.Errorf("an oomd trigger without a swap-monitored cgroup:\n%s", out)
+	}
+	r, out = newRun(t, Options{Only: []string{Swap}})
+	r.mem = func() (machine.Mem, error) { return mem, nil }
+	r.oomd = func() (machine.OOMDSwap, error) {
+		return machine.OOMDSwap{LimitPercent: 90, Monitored: []string{"/user.slice"}}, nil
+	}
+	r.Do()
+	if !strings.Contains(out.String(), "-1256 MiB before systemd-oomd's 90 % swap trigger") {
+		t.Errorf("the oomd trigger of a swap-monitored cgroup is not named:\n%s", out)
 	}
 }

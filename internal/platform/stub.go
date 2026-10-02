@@ -54,8 +54,10 @@ func (stubMachine) MemcapScope(string) *machine.Scope {
 func (stubMachine) ScopePIDs(string) []int  { return nil }
 func (stubMachine) CgroupPIDs(string) []int { return nil }
 func (stubMachine) OOMPolicy(string) string { return "?" }
-func (stubMachine) OOMDSwapLimit() int      { return machine.DefaultOOMDSwapLimit }
-func (stubMachine) SwapoffRuns() bool       { return false }
+func (stubMachine) OOMDSwap(context.Context) (machine.OOMDSwap, error) {
+	return machine.OOMDSwap{}, missing("Machine.OOMDSwap")
+}
+func (stubMachine) SwapoffRuns() bool { return false }
 func (stubMachine) OOMKills(context.Context, time.Time) ([]machine.OOMKill, error) {
 	return nil, missing("Machine.OOMKills")
 }

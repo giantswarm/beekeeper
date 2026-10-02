@@ -482,7 +482,8 @@ func renderReport(f *reportFacts) string {
 		lines = append(lines, l)
 	}
 	if s.has(secMemory) && s.Mem.SwapTotalMiB > 0 {
-		lines = append(lines, fmt.Sprintf("swap %.1f of %.1f GiB used", float64(s.Mem.SwapUsedMiB)/1024, float64(s.Mem.SwapTotalMiB)/1024))
+		lines = append(lines, fmt.Sprintf("swap %.1f of %.1f GiB used: %.1f GiB on disk, %.1f GiB in zswap", float64(s.Mem.SwapUsedMiB)/1024,
+			float64(s.Mem.SwapTotalMiB)/1024, float64(s.Mem.DiskSwapMiB())/1024, float64(s.Mem.SwapUsedMiB-s.Mem.DiskSwapMiB())/1024))
 	}
 	switch names := clusterNames(s.Clusters); {
 	case s.ClustersErr != "":

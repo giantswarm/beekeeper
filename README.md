@@ -1280,7 +1280,7 @@ The organisation and desk keys, and their defaults:
 | `maxKindClusters` | one per 40 GiB of RAM, at least one | The kind clusters the hook lets the machine run |
 | `memcap.max` | 14% of RAM | A `beekeeper run` command's MemoryMax |
 | `watch.availMinMiB`, `watch.scopeAnonMaxMiB`, `watch.gttMaxMiB` | 12%, 32%, 28% of RAM | LOW RAM, DESKTOP SCOPE, IGPU GTT |
-| `watch.swapMaxMiB`, `watch.oomdHeadroomMinMiB` | 60%, 6% of swap | SWAP, and the headroom under which OOMD IMMINENT is said |
+| `watch.swapMaxMiB`, `watch.oomdHeadroomMinMiB` | 60%, 6% of swap | SWAP (disk swap, zswap's share not counted, while it grows and MemAvailable falls), and the headroom under which OOMD IMMINENT is said (only while systemd-oomd watches a cgroup for swap) |
 | `watch.toolProcsMax`, `watch.tools` | `1000`; kubectl, helm, tsh, gh, flux, devctl | LOAD over this many processes of these CLIs machine-wide; negative: off |
 | `desktop.typingQuiet` | `30s` | How long the person's input stays idle before a `claude://` link switches the desktop's window; negative: links do not wait for it |
 | `watch.tmpMaxMiB`, `watch.diskMinMiB` | 45% of `/tmp`, 5% of `/` | TMPFS, LOW DISK |

@@ -8,6 +8,8 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,8 +27,26 @@ type Mem struct {
 	TotalMiB     int `json:"totalMiB"`
 	AvailableMiB int `json:"availableMiB"`
 	SwapTotalMiB int `json:"swapTotalMiB"`
-	SwapUsedMiB  int `json:"swapUsedMiB"`
+	// SwapUsedMiB is SwapTotal − SwapFree: the swap slots in use, on disk
+	// and in zswap alike.
+	SwapUsedMiB int `json:"swapUsedMiB"`
+	// ZswappedMiB is the swapped-out memory zswap holds compressed in RAM
+	// (Zswapped), ZswapPoolMiB the RAM its pool takes for it (Zswap).
+	ZswappedMiB  int `json:"zswappedMiB,omitempty"`
+	ZswapPoolMiB int `json:"zswapPoolMiB,omitempty"`
 	ShmemMiB     int `json:"shmemMiB"`
+}
+
+// DiskSwapMiB is the swap in use that zswap does not hold: the pages
+// written to the swap device, the share that costs a disk read to bring back.
+func (m Mem) DiskSwapMiB() int {
+	return max(0, m.SwapUsedMiB-m.ZswappedMiB)
+}
+
+// SwapSplit says the swap in use as disk plus zswap, the two adding up to
+// SwapUsedMiB.
+func (m Mem) SwapSplit() string {
+	return fmt.Sprintf("disk %d MiB + zswap %d MiB in a %d MiB pool", m.DiskSwapMiB(), m.SwapUsedMiB-m.DiskSwapMiB(), m.ZswapPoolMiB)
 }
 
 // ReadMem parses /proc/meminfo.
@@ -36,8 +56,13 @@ func ReadMem() (Mem, error) {
 		return Mem{}, err
 	}
 	defer func() { _ = f.Close() }()
+	return parseMem(f)
+}
+
+// parseMem reads a /proc/meminfo listing.
+func parseMem(r io.Reader) (Mem, error) {
 	kb := map[string]int{}
-	sc := bufio.NewScanner(f)
+	sc := bufio.NewScanner(r)
 	for sc.Scan() {
 		k, v, ok := strings.Cut(sc.Text(), ":")
 		if !ok {
@@ -51,6 +76,8 @@ func ReadMem() (Mem, error) {
 		AvailableMiB: kb["MemAvailable"] / 1024,
 		SwapTotalMiB: kb["SwapTotal"] / 1024,
 		SwapUsedMiB:  (kb["SwapTotal"] - kb["SwapFree"]) / 1024,
+		ZswappedMiB:  kb["Zswapped"] / 1024,
+		ZswapPoolMiB: kb["Zswap"] / 1024,
 		ShmemMiB:     kb["Shmem"] / 1024,
 	}, sc.Err()
 }

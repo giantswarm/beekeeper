@@ -37,7 +37,7 @@
 | Disk | ▓▓▓▓▓▓▓▓▓░ 1726 of 1876 GiB | 70 GiB |
 
 - load 3.2/2.5/2.0 on 24 cores, CPU pressure 0.4%, memory pressure 0.0%
-- swap 2.0 of 16.0 GiB used
+- swap 2.0 of 16.0 GiB used: 0.5 GiB on disk, 1.5 GiB in zswap
 - kind labs: none
 - 1 OOM kill since 01:00
 - alerts: staging 3 active, 1 paging; lab 0 active; far unreachable

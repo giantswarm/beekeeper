@@ -230,7 +230,7 @@ func (r *Run) swap() {
 		return
 	}
 	r.tally(Swap, m.SwapUsedMiB*1024)
-	r.say("  %d MiB of cold pages in swap; RAM has room, the reset needs root:", m.SwapUsedMiB)
+	r.say("  %d MiB of cold pages in swap (%s); RAM has room, the reset needs root:", m.SwapUsedMiB, m.SwapSplit())
 	r.sudo = append(r.sudo, SwapResetCmd)
 }
 

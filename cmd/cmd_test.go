@@ -66,7 +66,7 @@ func TestDiffSnapshots(t *testing.T) {
 		Budget: &github.Budget{Remaining: 3500, Reset: reset},
 	}
 	got := strings.Join(diffSnapshots(prev, cur), "\n")
-	for _, want := range []string{"swap used 5000 → 7000", "OOM KILL in the desktop scope", "disk / free 200 → 180", "sessions +1: c", "sessions -1: a", "1 kernel OOM kills", "2 test kills in " + testKillOwner, "GitHub budget 4000 → 3500"} {
+	for _, want := range []string{"disk swap 5000 → 7000", "OOM KILL in the desktop scope", "disk / free 200 → 180", "sessions +1: c", "sessions -1: a", "1 kernel OOM kills", "2 test kills in " + testKillOwner, "GitHub budget 4000 → 3500"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("diff lacks %q:\n%s", want, got)
 		}
