@@ -51,8 +51,8 @@ func TestNoteForPersonRefusesWhatItLacks(t *testing.T) {
 	}{
 		"bare #N":            {func(d *noteDraft) { d.Question = "approve #7" }, "#7 without its full URL"},
 		"owner/repo#N":       {func(d *noteDraft) { d.StatusQuo = "x/y#7 is open" }, "x/y#7 without its full URL"},
-		"no status quo":      {func(d *noteDraft) { d.StatusQuo = "" }, "--status-quo"},
-		"no why":             {func(d *noteDraft) { d.Why = " " }, "--why"},
+		"no status quo":      {func(d *noteDraft) { d.StatusQuo = "" }, flagStatusQuo},
+		"no why":             {func(d *noteDraft) { d.Why = " " }, flagWhy},
 		"option, no effect":  {func(d *noteDraft) { d.Options = []string{"publish"} }, `--option "publish" has no`},
 		"default wait":       {func(d *noteDraft) { d.Default = "Wait." }, `--default "Wait." is no action`},
 		"default nothing":    {func(d *noteDraft) { d.Default = "nothing" }, "is no action"},

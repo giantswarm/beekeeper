@@ -10,8 +10,14 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// The flags of a question's status quo and why.
+const (
+	flagStatusQuo = "--status-quo"
+	flagWhy       = "--why"
+)
+
 // decisionArgs are the parts a complete decision for the person carries.
-var decisionArgs = []string{"--for", notePerson, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "--due", "3h"}
+var decisionArgs = []string{"--for", notePerson, flagStatusQuo, sqNow, flagWhy, whyNow, "--default", dfltOK, "--due", "3h"}
 
 func TestNoteKindDefaultsByWhomItIsFor(t *testing.T) {
 	a, _ := noteApp(t)
@@ -44,12 +50,12 @@ func TestNoteKindOfAnOlderNote(t *testing.T) {
 	}{
 		{state.Note{For: "pat"}, noteDecision},
 		{state.Note{Text: "[for Pat] an older note"}, noteDecision},
-		{state.Note{For: "Pat", Pinned: true}, noteMemo},
+		{state.Note{For: notePerson, Pinned: true}, noteMemo},
 		{state.Note{For: supervisorRole.title}, noteMemo},
 		{state.Note{For: guideRole.title}, noteMemo},
 		{state.Note{}, noteMemo},
-		{state.Note{For: "Pat", Kind: noteLogin}, noteLogin},
-		{state.Note{For: "Pat", Kind: noteMemo}, noteMemo},
+		{state.Note{For: notePerson, Kind: noteLogin}, noteLogin},
+		{state.Note{For: notePerson, Kind: noteMemo}, noteMemo},
 		{state.Note{For: supervisorRole.title, Kind: noteDecision}, noteDecision},
 	} {
 		if got := noteKind(notePerson, &c.n); got != c.want {
@@ -99,7 +105,7 @@ func TestMemoNeverReachesTheGuide(t *testing.T) {
 	if len(q) != 1 || q[0].Note.ID != 1 {
 		t.Fatalf("the queue holds the decision only: %+v", q)
 	}
-	lines, _ := a.feedLines(st, nil, nil, []overtake{{1, "gone"}, {2, "gone"}})
+	lines, _ := a.feedLines(st, nil, nil, []overtake{{1, "its filer is archived"}, {2, "its filer is archived"}})
 	for _, l := range lines {
 		if strings.Contains(l, "#2") {
 			t.Fatalf("the feed says the memo: %q", lines)
