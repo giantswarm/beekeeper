@@ -1379,8 +1379,8 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	fire := func(st *state.State) ([]string, []state.Event, bool) {
 		seen, ce := observeCLI(st, sessions, w.now)
 		lines, evs := closeProbed(st, signedIn)
-		dl, de, dn := closeDefaulted(st, w.cfg.Guide.Person, watchParty, w.now)
-		lines, evs, defaulted = append(lines, dl...), append(evs, de...), dn
+		nl, ne, nd := closeDefaulted(st, w.cfg.Guide.Person, watchParty, w.now)
+		lines, evs, defaulted = append(lines, nl...), append(evs, ne...), nd
 		ol, oe := closeOvertaken(st, over, watchParty)
 		lines, evs = append(lines, ol...), append(evs, oe...)
 		tl, te, tf, touched := settleTimers(st, held, w.now)
