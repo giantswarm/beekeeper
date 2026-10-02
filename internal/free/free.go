@@ -18,6 +18,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 // The sections --apply acts on, in the order they run and are summarized.
@@ -62,6 +63,9 @@ type Options struct {
 	Only []string
 	// Stale is how long a session's scratch or a temp dir must be untouched.
 	Stale time.Duration
+	// CLIStale is how long a CLI's session must be untouched for the CLI to
+	// be reported stale (0: none is).
+	CLIStale time.Duration
 	// Orphan is how old an orphaned worker must be.
 	Orphan time.Duration
 	// HeavyMiB is the anonymous RSS from which a process is heavy (0: off).
@@ -84,6 +88,9 @@ type Machine struct {
 	TmpDir, Scratch, Projects string
 	Table                     *proc.Table
 	Sessions                  []*claude.Session
+	// Desk is beekeeper's state: the roster and the roles; nil when it
+	// cannot be read, and then no CLI has either.
+	Desk *state.State
 	// Titles maps CLI session ids to desktop titles, read when needed.
 	Titles   func() map[string]string
 	Clusters []machine.Cluster
