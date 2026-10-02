@@ -24,6 +24,8 @@ const (
 	countTask = "count the files"
 	dueID     = "due"
 	countName = "test: count"
+	issue61   = "o/r#61"
+	noteAB    = "a and b done; c next"
 )
 
 func TestHandoversDue(t *testing.T) {
@@ -48,7 +50,7 @@ func TestHandoversDue(t *testing.T) {
 	}
 	sessions[1].Commands = []claude.Command{{PID: 7, Args: "sleep 60"}}
 	contextOf := func(ag state.Agent, s *claude.Session) int64 {
-		if (s == nil) != strings.HasPrefix(ag.Session, "parked") && ag.Session != "gone" {
+		if (s == nil) != strings.HasPrefix(ag.Session, "parked") && ag.Session != ids[7] {
 			t.Errorf("%s: session %v", ag.Session, s)
 		}
 		if strings.HasSuffix(ag.Session, "small") {
@@ -79,15 +81,15 @@ func TestHandoverPromptPassesOnTheBrief(t *testing.T) {
 	h := handover{
 		agent:   state.Agent{Party: state.Party{Session: oldID, Name: countName}, Task: countTask},
 		context: 25_400,
-		record:  &state.Record{Issue: "o/r#61", Waits: "CI"},
+		record:  &state.Record{Issue: issue61, Waits: "CI"},
 		merges:  []state.Merge{{Repo: scratchRepo, PR: 7, Lane: "main", Phase: state.Waiting}},
 		events:  []state.Event{{At: at, Verb: "lease.claim", Detail: "lab-a"}},
-		note:    "a and b done; c next",
+		note:    noteAB,
 		brief:   "# Count\n\n## Steps\ncount a, b, c",
 	}
 	p := h.prompt()
 	for _, want := range []string{`You are "` + countName + `"`, "session " + oldID, "at 25k tokens", "Task: " + countTask,
-		"Serves: o/r#61, waiting on CI", "a and b done; c next", "o/r#7 in lane main: waiting", "lease.claim lab-a",
+		"Serves: o/r#61, waiting on CI", noteAB, "o/r#7 in lane main: waiting", "lease.claim lab-a",
 		briefOpen + "\n# Count"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("prompt lacks %q:\n%s", want, p)
@@ -121,7 +123,7 @@ func TestHandoverStartTakesOverTheRunningEntry(t *testing.T) {
 	old := state.Party{Session: oldID, HostSession: "local_" + oldID, Name: countName}
 	st := &state.State{
 		Agents:  []state.Agent{{Party: old, Task: countTask, AssignedAt: now.Add(-time.Hour)}},
-		Records: []state.Record{{Session: old, Issue: "o/r#61"}},
+		Records: []state.Record{{Session: old, Issue: issue61}},
 	}
 	running := func(p state.Party) bool { return p.Is(old) }
 	s := state.Start{Party: state.Party{Session: newID, HostSession: "local_" + newID, Name: old.Name}, Mode: state.ModeBypass, At: now}
@@ -274,7 +276,7 @@ func TestHandoverAsksAParkedAgentInAHeadlessTurn(t *testing.T) {
 	sendNote = func(context.Context, string, string, string) (peer.Result, error) {
 		return peer.Result{}, peer.ErrUnreachable
 	}
-	h := handover{agent: state.Agent{Party: old, Task: countTask}, context: 410_000, record: &state.Record{Issue: "o/r#61", Waits: "the supervisor's go"}}
+	h := handover{agent: state.Agent{Party: old, Task: countTask}, context: 410_000, record: &state.Record{Issue: issue61, Waits: "the supervisor's go"}}
 
 	// No transcript: nothing to resume, the hand-over goes on without a note.
 	if note, ok, err := a.askNote(t.Context(), h); err != nil || ok || note != "" || len(l.units) != 0 {
@@ -290,7 +292,7 @@ func TestHandoverAsksAParkedAgentInAHeadlessTurn(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(projects, oldID+".jsonl"), []byte("{}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	l.write = func() { _ = a.store.Log(event(old, verbNote, "%s", "a and b done; c next")) }
+	l.write = func() { _ = a.store.Log(event(old, verbNote, "%s", noteAB)) }
 	for _, live := range []bool{false, true} {
 		out.Reset()
 		l.units = nil
@@ -299,7 +301,7 @@ func TestHandoverAsksAParkedAgentInAHeadlessTurn(t *testing.T) {
 			h.session = &claude.Session{ID: oldID, PID: 99, Name: countName}
 		}
 		note, ok, err := a.askNote(t.Context(), h)
-		if err != nil || !ok || note != "a and b done; c next" {
+		if err != nil || !ok || note != noteAB {
 			t.Fatalf("live %v: note %q, %v, %v\n%s", live, note, ok, err, out)
 		}
 		if len(l.units) != 1 {
