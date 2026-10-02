@@ -218,7 +218,7 @@ before the watch gets it. The baseline is read, never owned or written.`,
 		},
 	}
 	replay.Flags().DurationVar(&every, "every", 0, "the time between two readings (default alerts.every)")
-	c.AddCommand(watch, snapshot, imp, capture, replay)
+	c.AddCommand(watch, snapshot, imp, capture, replay, a.alertsOwnCmd())
 	return c
 }
 

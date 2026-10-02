@@ -30,10 +30,12 @@ const (
 	// NoSupervisor is a supervisor whose CLI stayed gone past the restart
 	// grace with no successor: claims wait for one.
 	NoSupervisor = "no-supervisor"
+	// PageUnowned is a page no session has owned for alerts.ownerGrace.
+	PageUnowned = "page-unowned"
 )
 
 // Kinds are every kind, the default of notify.kinds.
-var Kinds = []string{Due, Budget, StaleLease, NoSupervisor}
+var Kinds = []string{Due, Budget, StaleLease, NoSupervisor, PageUnowned}
 
 // lasting are the kinds that are a condition, not an event with an identity:
 // one notification per Repeat.
@@ -68,9 +70,10 @@ const (
 var Urgencies = []string{Low, Normal, Critical}
 
 // DefaultUrgency is the urgency of a kind notify.urgency does not set:
-// critical for a machine without a supervisor, else normal.
+// critical for a machine without a supervisor and an unowned page, which
+// quiet hours do not hold, else normal.
 func DefaultUrgency(kind string) string {
-	if kind == NoSupervisor {
+	if kind == NoSupervisor || kind == PageUnowned {
 		return Critical
 	}
 	return Normal

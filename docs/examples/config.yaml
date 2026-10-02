@@ -120,6 +120,8 @@ alerts:
   every: 5m
   timeout: 1m               # per installation, port-forwards included, a failed attempt tried again within it; also bounds the upgrade reading
   flap: {changes: 4, window: 1h}   # an alert's 4th change within 1h is one FLAPPING line, then quiet until stable for 1h
+  pageSeverity: page        # a firing alert at it (team's, when set) with no owner (alerts own) for ownerGrace is PAGE UNOWNED, again every ownerGrace
+  ownerGrace: 15m
   quiet:                    # alerts whose changes are logged, not said; default: [{severity: notify}] once team is set, else none
     - {cluster: "t-*"}      # fields installation, cluster, alertname, severity, globs; a page only by a rule naming a cluster
     - {severity: notify}    # other teams' and team-less notify alerts
@@ -213,7 +215,7 @@ metrics:
     contextFill: 0.9
 
 notify:                     # what watch --notify sends to the desktop; the machine's lines never notify
-  kinds: [due, budget, stale-lease, no-supervisor]   # the default: all
+  kinds: [due, budget, stale-lease, no-supervisor, page-unowned]   # the default: all
   quietHours: "22:00-07:00" # local time; holds everything but critical; default: none
-  urgency: {stale-lease: critical, due: normal}   # low, normal, critical; no-supervisor defaults to critical
+  urgency: {stale-lease: critical, due: normal}   # low, normal, critical; no-supervisor and page-unowned default to critical
   repeat: 30m               # a lasting condition (budget) notifies again after this

@@ -67,6 +67,12 @@ a second or restarted watch stays silent about them. The
 installations' alerts are read every alerts.every and each NEW or RESOLVED
 one at or above its installation's floor is a line, a flapping one a single
 FLAPPING line (beekeeper alerts watch); only one watch at a time reads them.
+Every poll, a firing alert at alerts.pageSeverity in the baseline, of
+alerts.team when it is set, that no session has owned (beekeeper alerts own) for alerts.ownerGrace is one line,
+PAGE UNOWNED <installation> <alertname> <where> for <duration> (one per
+alertname, the longest unowned, "(+n)" for the others), again every
+alerts.ownerGrace while it stays unowned (page-unowned, critical, under
+--notify); --once says each one due and writes nothing.
 
 Every watch.interval the same installations' Cluster API clusters are read
 (one list each of Clusters, KubeadmControlPlanes, MachinePools and
@@ -106,9 +112,9 @@ of its own in flight.
 --notify also sends the events that need a person to the desktop's
 notification service (org.freedesktop.Notifications on the session bus):
 the kinds in notify.kinds, a note or timer falling due (due), the GitHub
-budget under the floor (budget), a stale lease (stale-lease) and a
+budget under the floor (budget), a stale lease (stale-lease), a
 supervisor whose CLI stayed gone past supervisor.restartGrace with no relay
-open (no-supervisor, critical). The machine's lines (memory, swap, OOMD
+open (no-supervisor, critical) and an unowned page (page-unowned, critical). The machine's lines (memory, swap, OOMD
 IMMINENT, OOM kills, load, processes) never notify: the supervisor acts on
 them, and its watch says them. Each
 event is one notification however many watches notify: the first to claim
@@ -888,6 +894,7 @@ func (w *watcher) pollSessions(ctx context.Context, since time.Time, t *proc.Tab
 	w.pending(ctx, sessions)
 	w.sessionChanges(sessions)
 	w.staleLeases(ctx, sessions)
+	w.unownedPages(ctx, sessions)
 	w.runaways(sessions, t)
 	w.staleWatches(ctx, t)
 }
