@@ -16,15 +16,16 @@ func (a *app) statusCmd() *cobra.Command {
 	var bar bool
 	c := &cobra.Command{
 		Use:   "status [--bar]",
-		Short: "One line: the supervisor, the leases held, the holds and what is due",
+		Short: "One line: the supervisor, the leases held, the holds, what is due and the busy agents",
 		Long: `Print the machine's coordination state in one line: who supervises, the
-leases held, the holds in force and the notes and timers that are due.
+leases held, the holds in force, the notes and timers that are due and the
+busy agents against capacity.floor and capacity.ceiling.
 
 --bar prints it for a desktop bar as one tab-separated row, the same shape
 as the rows of ` + "`free --summary`" + `, so one bar module reads both. The
-contract is fixed: five fields, always present, in this order:
+contract is fixed: six fields, always present, in this order:
 
-  beekeeper  <supervisor>  <leases>  <holds>  <due>
+  beekeeper  <supervisor>  <leases>  <holds>  <due>  <busy>
 
   supervisor  the supervising session's name; - when none is recorded;
               ~<name> while its CLI restarts (the grant rule holds);
@@ -33,6 +34,8 @@ contract is fixed: five fields, always present, in this order:
   leases      the number of leases held
   holds       the number of holds in force
   due         the number of notes and timers whose time has come
+  busy        the busy agents against capacity.floor, <n>/<floor>
+              (beekeeper capacity)
 
 The exit code is 0 whenever the state can be read.`,
 		Args: cobra.NoArgs,
@@ -73,6 +76,10 @@ type statusView struct {
 	// who lifted them.
 	Lifted []string `json:"lifted,omitempty"`
 	Due    int      `json:"due"`
+	// Busy are the busy agents, against Floor and Ceiling (capacity).
+	Busy    int `json:"busy"`
+	Floor   int `json:"floor"`
+	Ceiling int `json:"ceiling"`
 }
 
 func (a *app) status() (*statusView, error) {
@@ -84,16 +91,18 @@ func (a *app) status() (*statusView, error) {
 	if err != nil {
 		return nil, err
 	}
-	v := &statusView{Leases: []string{}, Holds: []string{}, Due: dueCount(st, a.now)}
+	v := &statusView{Leases: []string{}, Holds: []string{}, Due: dueCount(st, a.now), Floor: a.cfg.Capacity.Floor, Ceiling: a.cfg.Capacity.Ceiling}
+	sessions, _, err := a.sessions()
+	missing := platform.Missing(err)
+	if err != nil && !missing {
+		return nil, err
+	}
+	v.Busy = len(countAgents(st, sessions, a.now).Busy)
 	if st.Supervisor != nil {
 		v.Supervisor = st.Supervisor.Name
-		sessions, _, err := a.sessions()
-		switch {
-		case platform.Missing(err):
+		if missing {
 			v.SupervisorUnknown = true
-		case err != nil:
-			return nil, err
-		default:
+		} else {
 			renameHolder(st.Supervisor, sessions)
 			sv := a.supervision(st, sessions)
 			v.Supervisor, v.SupervisorLive, v.RestartUntil = st.Supervisor.Name, sv.live, sv.until
@@ -142,7 +151,7 @@ func (v *statusView) bar() string {
 	case v.Supervisor != "":
 		sup = "!" + v.Supervisor
 	}
-	fields := []string{"beekeeper", sup, fmt.Sprint(len(v.Leases)), fmt.Sprint(len(v.Holds)), fmt.Sprint(v.Due)}
+	fields := []string{"beekeeper", sup, fmt.Sprint(len(v.Leases)), fmt.Sprint(len(v.Holds)), fmt.Sprint(v.Due), fmt.Sprintf("%d/%d", v.Busy, v.Floor)}
 	for i, f := range fields {
 		fields[i] = strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace(f)
 	}
@@ -176,5 +185,5 @@ func (v *statusView) line() string {
 	if len(v.Lifted) > 0 {
 		holds += "; " + list(len(v.Lifted), "lifted", "lifted", v.Lifted)
 	}
-	return fmt.Sprintf("%s; %s; %s; %d due", sup, list(len(v.Leases), "lease held", "leases held", v.Leases), holds, v.Due)
+	return fmt.Sprintf("%s; %s; %s; %d due; busy %d/%d-%d", sup, list(len(v.Leases), "lease held", "leases held", v.Leases), holds, v.Due, v.Busy, v.Floor, v.Ceiling)
 }
