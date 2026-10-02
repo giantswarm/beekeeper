@@ -270,6 +270,12 @@ const newerSchema = `{
   "rota": {"next": "Supervisor run 13"}
 }`
 
+// The members of the document the test looks up.
+const (
+	keySupervisor = "supervisor"
+	keyAgents     = "agents"
+)
+
 // TestOlderSaveKeepsANewerSchema loads and saves a newer beekeeper's state
 // with this binary's types, which lack a member in every object, while it
 // changes the roster: every member it does not know is written back where
@@ -319,14 +325,14 @@ func TestOlderSaveKeepsANewerSchema(t *testing.T) {
 	}{
 		{[]any{"writer", "version"}, "v9.0.0"},
 		{[]any{"writer", "build"}, "b1"},
-		{[]any{"supervisor", "term"}, 9.0},
+		{[]any{keySupervisor, "term"}, 9.0},
 		{[]any{"guide", "mood"}, "calm"},
 		{[]any{"grants", 0, "ttl"}, "2h"},
 		{[]any{"holds", 0, "scope"}, "merge"},
-		{[]any{"agents", 0, "badge"}, "two"},
-		{[]any{"agents", 1, "lane"}, "x"},
-		{[]any{"agents", 1, "keep", "ticket"}, "o/r#1"},
-		{[]any{"agents", 1, "keep", "reason"}, "parked"},
+		{[]any{keyAgents, 0, "badge"}, "two"},
+		{[]any{keyAgents, 1, "lane"}, "x"},
+		{[]any{keyAgents, 1, "keep", "ticket"}, "o/r#1"},
+		{[]any{keyAgents, 1, "keep", "reason"}, "parked"},
 		{[]any{"notes", 0, "urgency"}, "high"},
 		{[]any{"timers", 0, "jitter"}, "1m"},
 		{[]any{"records", 0, "phase"}, "ci"},
@@ -340,12 +346,13 @@ func TestOlderSaveKeepsANewerSchema(t *testing.T) {
 			t.Errorf("%v = %v, want %v", w.path, v, w.v)
 		}
 	}
-	if n := len(at("agents", 2).(map[string]any)); n != 3 {
-		t.Errorf("a new entry carries members of another: %v", at("agents", 2))
+	if n := len(at(keyAgents, 2).(map[string]any)); n != 3 {
+		t.Errorf("a new entry carries members of another: %v", at(keyAgents, 2))
 	}
 }
 
 func TestAStaleWriterIsLoggedOnce(t *testing.T) {
+	const newest = "v0.73.0"
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(`{"writer":{"version":"v0.72.0"},"nextNote":1}`), 0o600); err != nil {
 		t.Fatal(err)
@@ -375,18 +382,18 @@ func TestAStaleWriterIsLoggedOnce(t *testing.T) {
 		t.Errorf("state = %+v, writer %+v, stale %+v", st, st.Writer, st.StaleWriters)
 	}
 
-	s.version = "v0.73.0"
+	s.version = newest
 	if err := s.Update(func(*State) ([]Event, error) { return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
-	if st, _ := s.Read(); st.Writer.Version != "v0.73.0" {
+	if st, _ := s.Read(); st.Writer.Version != newest {
 		t.Errorf("a newer writer did not stamp: %+v", st.Writer)
 	}
 	s.version = "dev"
 	if err := s.Update(func(*State) ([]Event, error) { return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
-	if st, _ := s.Read(); st.Writer.Version != "v0.73.0" {
+	if st, _ := s.Read(); st.Writer.Version != newest {
 		t.Errorf("a dev build stamped: %+v", st.Writer)
 	}
 }
