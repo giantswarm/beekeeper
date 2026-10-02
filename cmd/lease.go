@@ -432,6 +432,26 @@ func purposeText(h lease.Holder) string {
 	return h.Purpose + " (upgrade unblock: " + h.UpgradeUnblock + ")"
 }
 
+// grantee is the session a grant goes to: a running one, else an agent on
+// the roster whose CLI does not run (its headless turn ended, its import
+// waits), whose grant waits for its next turn, with what says so.
+func (a *app) grantee(sessions []*claude.Session, q string) (*claude.Session, string, error) {
+	to, err := claude.Resolve(sessions, q)
+	if err == nil {
+		return to, "", nil
+	}
+	st, rerr := a.store.Read()
+	if rerr != nil {
+		return nil, "", err
+	}
+	i, ferr := findAgent(st, q)
+	if ferr != nil {
+		return nil, "", err
+	}
+	ag := st.Agents[i]
+	return &claude.Session{ID: ag.Session, HostID: ag.HostSession, Name: ag.Name}, noCLI(ag, a.now) + "; it claims once a CLI of it runs", nil
+}
+
 // unblockText marks a grant an upgrade hold admits.
 func unblockText(g state.Grant) string {
 	if g.UpgradeUnblock == "" {
@@ -471,7 +491,7 @@ and the log. Such grants are claimed during the upgrade in their order.`,
 			if err != nil {
 				return err
 			}
-			to, err := claude.Resolve(sessions, args[1])
+			to, absent, err := a.grantee(sessions, args[1])
 			if err != nil {
 				return err
 			}
@@ -531,6 +551,9 @@ and the log. Such grants are claimed during the upgrade in their order.`,
 			})
 			if err != nil {
 				return err
+			}
+			if absent != "" {
+				msg += "; " + absent
 			}
 			_, err = fmt.Fprintln(a.out, msg)
 			return err

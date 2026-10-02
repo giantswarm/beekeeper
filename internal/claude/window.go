@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"slices"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // DesktopAppID is the Wayland app id of Claude Desktop's windows.
@@ -24,6 +27,22 @@ func DesktopWindowActive(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	return activeIsDesktop(out)
+}
+
+// screenLockers are the Wayland screen lockers (ext-session-lock) whose
+// running process is the lock: the compositor keeps naming the window that
+// had the focus before, and logind's LockedHint stays unset under them.
+var screenLockers = []string{"hyprlock", "swaylock", "gtklock", "waylock"}
+
+// ScreenLocked reports whether a screen locker runs: nobody reads or types
+// in the desktop's window, whatever the compositor names as focused.
+func ScreenLocked(t *proc.Table) bool {
+	for _, p := range t.ByPID {
+		if slices.Contains(screenLockers, p.Comm) {
+			return true
+		}
+	}
+	return false
 }
 
 // activeIsDesktop reports whether hyprctl's activewindow JSON names the

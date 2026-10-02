@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDesktopFocus(t *testing.T) {
@@ -37,5 +38,21 @@ func TestDesktopFocus(t *testing.T) {
 	}
 	if _, err := DesktopFocus(filepath.Join(t.TempDir(), "none.log")); err == nil {
 		t.Error("DesktopFocus of a missing log: no error")
+	}
+}
+
+// A warm spawn the desktop's CLI governor declined since a show reads as
+// its cap; an older one, or none, as 0.
+func TestAtCap(t *testing.T) {
+	since := time.Date(2026, 10, 2, 13, 41, 30, 0, time.Local)
+	log := []byte("2026-10-02 13:41:24 [info] [CliGovernor] at cap=27; would evict local_y (idle 1s) for warm spawn\n" +
+		"2026-10-02 13:41:24 [info] [CliGovernor] at cap; yielding warm spawn\n" +
+		"2026-10-02 13:41:30 [info] [CliGovernor] at cap=28; would evict local_x (idle 83238s) for warm spawn\n" +
+		"2026-10-02 13:41:30 [info] [CliGovernor] at cap; yielding warm spawn\n")
+	if n, ok := atCap(log, since); !ok || n != 28 {
+		t.Errorf("atCap = %d, %v, want 28", n, ok)
+	}
+	if n, ok := atCap(log, since.Add(time.Second)); ok {
+		t.Errorf("atCap after the decline = %d, want none", n)
 	}
 }

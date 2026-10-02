@@ -124,6 +124,10 @@ type Hook struct {
 	// Peer names the running CLI of a desktop session id, "" when none
 	// runs; an error refuses the send. Nil passes every SendMessage.
 	Peer func(host string) (string, error)
+	// Absent says why a message by name reaches nobody: the name is a
+	// roster agent's whose CLI does not run (its headless turn ended, its
+	// import waits); "" passes the send. Nil passes every one.
+	Absent func(name string) string
 	// Project is the session's own project ($CLAUDE_PROJECT_DIR), whose
 	// instructions Claude Code loads itself; "" takes the call's cwd.
 	Project string

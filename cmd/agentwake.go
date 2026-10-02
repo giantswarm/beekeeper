@@ -384,3 +384,31 @@ func (a *app) desktopPeer(host string) (string, error) {
 	}
 	return name, nil
 }
+
+// absentPeer is the PreToolUse hook's lookup for a SendMessage by name: what
+// says that the roster agent of that name (or session id) runs no CLI and
+// whether its import is pending, "" when a CLI carries the name or no agent
+// does.
+func (a *app) absentPeer(name string) string {
+	if a.loadConfig() != nil {
+		return ""
+	}
+	t, err := plat.Machine.Processes()
+	if err != nil {
+		return ""
+	}
+	for _, s := range discover(a.cfg, t, time.Now()) {
+		if strings.EqualFold(s.Name, name) || s.ID == name {
+			return ""
+		}
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		return ""
+	}
+	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return strings.EqualFold(ag.Name, name) || ag.Session == name })
+	if i < 0 {
+		return ""
+	}
+	return noCLI(st.Agents[i], time.Now()) + ". A message by name reaches it once a CLI of it runs"
+}

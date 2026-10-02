@@ -232,7 +232,28 @@ type Agent struct {
 	// the doctor takes it off the roster and archives its desktop session
 	// once its CLI is idle.
 	Done bool `json:"done,omitempty"`
+	// DesktopTurn is when the agent asked for a desktop turn (agents
+	// desktop, agents start --desktop): the import or reopen after its
+	// headless turn shows it in the desktop without waiting for the
+	// desktop's window to lose the focus. Zero: none asked, or the desktop
+	// was given it.
+	DesktopTurn time.Time `json:"desktopTurn,omitzero"`
+	// Import is the wait of the reopen that shows the agent in the desktop,
+	// while it waits; nil: none waits.
+	Import *ImportWait `json:"import,omitempty"`
 }
+
+// ImportWait is a reopen waiting to show a session in the desktop: what
+// holds it, since when, and its bound.
+type ImportWait struct {
+	On    string    `json:"on"`
+	Since time.Time `json:"since"`
+	Until time.Time `json:"until"`
+}
+
+// Pending reports whether the wait still runs at now: a reopen that died
+// leaves its record behind, past its bound.
+func (w *ImportWait) Pending(now time.Time) bool { return w != nil && now.Before(w.Until) }
 
 // Note is an open item: a question for a person, a deadline.
 type Note struct {

@@ -19,8 +19,9 @@ type agentView struct {
 	// Reachable: "live" (the CLI runs), "live, first turn running" or
 	// "live, wake turn running" (a headless turn of agents start or agents
 	// wake is its CLI), "waiting <t> left" (a bounded wait keeps it
-	// reachable), or "not running" (paused or closed: agents wake brings it
-	// back).
+	// reachable), "not running, import waits until <t>" (its reopen waits
+	// to show it in the desktop), or "not running" (paused or closed: agents
+	// wake brings it back).
 	Reachable string `json:"reachable"`
 	// Model is the model its running session is on.
 	Model string `json:"model,omitempty"`
@@ -260,7 +261,7 @@ archive it. A session its person started is never archived.`,
 	remove.Flags().BoolVar(&keepDesktop, "keep-desktop", false, "leave the agent's desktop session in the sidebar")
 	list := listCmd("List the agents, idle ones first", func() error { return a.agentList(full) })
 	fullFlag(list, &full)
-	c.AddCommand(register, a.agentStartCmd(), a.agentWakeCmd(), a.agentReopenCmd(), a.agentHandoverCmd(), a.agentNoteCmd(), a.agentBroadcastCmd(), assign, idle, remove, list)
+	c.AddCommand(register, a.agentStartCmd(), a.agentWakeCmd(), a.agentReopenCmd(), a.agentDesktopCmd(), a.agentHandoverCmd(), a.agentNoteCmd(), a.agentBroadcastCmd(), assign, idle, remove, list)
 	return c
 }
 
@@ -377,6 +378,9 @@ func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentVie
 	t, _ := plat.Machine.Processes() // unreadable: no headless turn is named
 	for _, ag := range st.Agents {
 		v := agentView{Agent: ag, Reachable: "not running", Browser: agentBrowser(a.cfg, ag)}
+		if w := ag.Import; w.Pending(a.now) {
+			v.Reachable = "not running, import waits until " + clock(a.now, w.Until)
+		}
 		if s, ok := claude.Live(sessions, ag.Party); ok {
 			v.Reachable, v.Model = "live", s.Model
 			for _, c := range s.Commands {
