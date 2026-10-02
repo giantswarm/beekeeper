@@ -169,3 +169,15 @@ func TestIdleDone(t *testing.T) {
 		t.Errorf("an assignment keeps done: %+v", st.Agents[0])
 	}
 }
+
+func TestLiveStaleWriters(t *testing.T) {
+	st := &state.State{StaleWriters: []state.StaleWriter{
+		{PID: 1, Command: "beekeeper agents start", Version: "v0.71.0", Newer: "v0.72.0"},
+		{PID: 2, Command: "beekeeper watch", Version: "v0.71.0", Newer: "v0.72.0"},
+	}}
+	got := liveStaleWriters(st, func(pid int) bool { return pid == 1 })
+	if len(got) != 1 || staleLine(got[0]) != "stale writer: pid 1 (beekeeper agents start) runs beekeeper v0.71.0, older than the v0.72.0 that wrote the state; "+
+		"it keeps the fields it does not know but saves by its older rules until it ends or is restarted" {
+		t.Errorf("stale writers = %v", got)
+	}
+}

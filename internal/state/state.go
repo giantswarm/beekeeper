@@ -15,11 +15,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/gofrs/flock"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
 // Party names a session (or a person) in the state.
@@ -49,6 +53,8 @@ func (p Party) Is(o Party) bool {
 type Supervisor struct {
 	Party
 	Since time.Time `json:"since"`
+
+	rest rest
 }
 
 // Relay is the supervisor naming its successor: the successor's
@@ -65,6 +71,8 @@ type Relay struct {
 	// Reported is when a watch said the relay was taken or expired; it says
 	// it once.
 	Reported time.Time `json:"reported,omitzero"`
+
+	rest rest
 }
 
 // Open reports whether the relay can still be taken at now.
@@ -82,6 +90,8 @@ type Relief struct {
 	By    Party     `json:"by"`
 	At    time.Time `json:"at"`
 	Taken time.Time `json:"taken"`
+
+	rest rest
 }
 
 // CLI is what beekeeper saw of the supervisor's CLI process in the term
@@ -93,6 +103,8 @@ type CLI struct {
 	Since      time.Time `json:"since"`
 	PID        int       `json:"pid,omitempty"`
 	Gone       time.Time `json:"gone,omitzero"`
+
+	rest rest
 }
 
 // Of reports whether the record is about sup's current term.
@@ -109,6 +121,8 @@ type RelayDue struct {
 	Reported   time.Time `json:"reported"`
 	// Context is the supervisor's context in tokens when it was reported.
 	Context int64 `json:"contextTokens"`
+
+	rest rest
 }
 
 // Of reports whether the record is about sup's current term.
@@ -134,6 +148,8 @@ type Role struct {
 	// Asking is the note the guide asks its person now (beekeeper guide
 	// next): served again until it is answered or done.
 	Asking int `json:"asking,omitempty"`
+
+	rest rest
 }
 
 // SupervisorRole is the supervisor's record.
@@ -172,6 +188,8 @@ type Grant struct {
 	// UpgradeUnblock is why the supervisor granted a claim that the
 	// resource's upgrade hold admits: the work that unblocks the upgrade.
 	UpgradeUnblock string `json:"upgradeUnblock,omitempty"`
+
+	rest rest
 }
 
 // Hold stops work on a target (a repository's merges, "github" for every
@@ -203,6 +221,8 @@ type Hold struct {
 	// keeps a lifted hold, inactive, for as long as its upgrade runs.
 	LiftedBy *Party    `json:"liftedBy,omitempty"`
 	LiftedAt time.Time `json:"liftedAt,omitzero"`
+
+	rest rest
 }
 
 // Active reports whether the hold still applies at now.
@@ -227,6 +247,8 @@ type Keep struct {
 	At     time.Time `json:"at"`
 	Until  time.Time `json:"until,omitzero"`
 	Reason string    `json:"reason,omitempty"`
+
+	rest rest
 }
 
 // Holds reports whether the marker still keeps its entry at now.
@@ -258,6 +280,8 @@ type Agent struct {
 	// Import is the wait of the reopen that shows the agent in the desktop,
 	// while it waits; nil: none waits.
 	Import *ImportWait `json:"import,omitempty"`
+
+	rest rest
 }
 
 // ImportWait is a reopen waiting to show a session in the desktop: what
@@ -266,6 +290,8 @@ type ImportWait struct {
 	On    string    `json:"on"`
 	Since time.Time `json:"since"`
 	Until time.Time `json:"until"`
+
+	rest rest
 }
 
 // Pending reports whether the wait still runs at now: a reopen that died
@@ -297,6 +323,8 @@ type Note struct {
 	// as overtaken. Without refs the note is linked to its filing session,
 	// and closes once that session is archived.
 	Refs []string `json:"refs,omitempty"`
+
+	rest rest
 }
 
 // Timer is a point in time the supervisor has to look at something ("check
@@ -325,6 +353,8 @@ type Timer struct {
 	// runs, its exit code logged. Without either the watch's line says it.
 	Wake string `json:"wake,omitempty"`
 	Run  string `json:"run,omitempty"`
+
+	rest rest
 }
 
 // Auto reports whether the watch acts on the timer itself and closes it
@@ -356,6 +386,8 @@ type Record struct {
 	At      time.Time `json:"at"`
 	// Ended is when a watch saw the session's CLI gone; it reports it once.
 	Ended time.Time `json:"ended,omitzero"`
+
+	rest rest
 }
 
 // AlertOwner is the session that owns a firing alert (alerts own), until the
@@ -369,6 +401,8 @@ type AlertOwner struct {
 	At    time.Time `json:"at"`
 	// Ended is when a watch saw the owner's session gone.
 	Ended time.Time `json:"ended,omitzero"`
+
+	rest rest
 }
 
 // Person reports whether the owner is a person rather than a session.
@@ -389,6 +423,8 @@ type Start struct {
 	At   time.Time `json:"at"`
 	// Harness is the agent harness started: "" for Claude Code, "omp".
 	Harness string `json:"harness,omitempty"`
+
+	rest rest
 }
 
 // Archive is the desktop session of an agent that left the roster while
@@ -405,6 +441,8 @@ type Archive struct {
 	// Tries counts the stewards' turns asked for it, Tried the last.
 	Tries int       `json:"tries,omitempty"`
 	Tried time.Time `json:"tried,omitzero"`
+
+	rest rest
 }
 
 // Report is one run of the scheduled status reporter: the session the
@@ -423,6 +461,8 @@ type Report struct {
 	Outcome string `json:"outcome,omitempty"`
 	// Skipped is the latest slot skipped while it ran.
 	Skipped time.Time `json:"skipped,omitzero"`
+
+	rest rest
 }
 
 // ReportPause pauses the scheduled reporter until it is resumed: from Since,
@@ -431,6 +471,8 @@ type ReportPause struct {
 	Final time.Time `json:"final,omitzero"`
 	Since time.Time `json:"since,omitzero"`
 	By    Party     `json:"by"`
+
+	rest rest
 }
 
 // Paused reports whether no scheduled report starts.
@@ -532,63 +574,39 @@ type State struct {
 	AlertOwners []AlertOwner `json:"alertOwners,omitempty"`
 	// ReportPause pauses the scheduled reporter, after one final report.
 	ReportPause *ReportPause `json:"reportPause,omitempty"`
+	// Writer is the newest beekeeper that saved the state.
+	Writer *Writer `json:"writer,omitempty"`
+	// StaleWriters are the processes of an older beekeeper seen saving the
+	// state after a newer one, one per process while it runs.
+	StaleWriters []StaleWriter `json:"staleWriters,omitempty"`
 
-	// unknown are the fields a newer beekeeper wrote: an older binary still
-	// running (a watch, a gated merge) writes them back unchanged instead of
-	// dropping the newer one's state.
-	unknown map[string]json.RawMessage
+	rest rest
 }
 
-// plainState is State without its JSON methods.
-type plainState State
+// Writer is the version of the newest beekeeper that saved the state.
+type Writer struct {
+	Version string `json:"version"`
 
-// knownKeys are the JSON names of State's fields.
-var knownKeys = func() map[string]bool {
-	out := map[string]bool{}
-	t := reflect.TypeFor[plainState]()
-	for i := range t.NumField() {
-		if name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ","); name != "" && name != "-" {
-			out[name] = true
-		}
-	}
-	return out
-}()
-
-// UnmarshalJSON decodes the state and keeps the fields it does not know.
-func (s *State) UnmarshalJSON(raw []byte) error {
-	if err := json.Unmarshal(raw, (*plainState)(s)); err != nil {
-		return err
-	}
-	var all map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &all); err != nil {
-		return err
-	}
-	for k := range all {
-		if knownKeys[k] {
-			delete(all, k)
-		}
-	}
-	s.unknown = nil
-	if len(all) > 0 {
-		s.unknown = all
-	}
-	return nil
+	rest rest
 }
 
-// MarshalJSON encodes the state with the fields it did not know.
-func (s State) MarshalJSON() ([]byte, error) {
-	raw, err := json.Marshal(plainState(s))
-	if err != nil || len(s.unknown) == 0 {
-		return raw, err
-	}
-	var all map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &all); err != nil {
-		return nil, err
-	}
-	for k, v := range s.unknown {
-		all[k] = v
-	}
-	return json.Marshal(all)
+// StaleWriter is a process of an older beekeeper that saved the state after
+// a newer one had: it keeps the fields it does not know, yet it acts on the
+// state by its older rules until it is restarted.
+type StaleWriter struct {
+	PID     int    `json:"pid"`
+	Command string `json:"command"`
+	Version string `json:"version"`
+	// Newer is the version of the writer it followed.
+	Newer string    `json:"newer"`
+	At    time.Time `json:"at"`
+
+	rest rest
+}
+
+// String names the process and its versions.
+func (w StaleWriter) String() string {
+	return fmt.Sprintf("pid %d (%s) runs beekeeper %s, older than the %s that wrote the state", w.PID, w.Command, w.Version, w.Newer)
 }
 
 // Budget is one reading of the GitHub core budget.
@@ -597,6 +615,8 @@ type Budget struct {
 	Limit     int       `json:"limit"`
 	Reset     time.Time `json:"reset"`
 	At        time.Time `json:"at"`
+
+	rest rest
 }
 
 // The phases of a Merge.
@@ -639,6 +659,8 @@ type Merge struct {
 	// Roll names the HelmReleases (namespace/name) that must reach Release
 	// before the lane frees.
 	Roll []string `json:"roll,omitempty"`
+
+	rest rest
 }
 
 // Key is the merge's repository and number, owner/repo#n, or owner/repo
@@ -664,14 +686,18 @@ type Event struct {
 }
 
 // Store is the state directory.
-type Store struct{ dir string }
+type Store struct {
+	dir string
+	// version is the binary's, which every save stamps or judges.
+	version string
+}
 
 // Open returns the store in dir, creating the directory.
 func Open(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	return &Store{dir: dir}, nil
+	return &Store{dir: dir, version: project.Version()}, nil
 }
 
 // Dir is the store's directory.
@@ -711,6 +737,7 @@ func (s *Store) Update(fn func(*State) ([]Event, error)) error {
 	if err != nil {
 		return err
 	}
+	events = append(events, s.stamp(st, time.Now())...)
 	if err := writeJSON(s.path("state.json"), st); err != nil {
 		return err
 	}
@@ -736,6 +763,56 @@ func (s *Store) Log(events ...Event) error {
 }
 
 const logWait = time.Second
+
+// VerbStaleWriter is the event of an older beekeeper's first save after a
+// newer one's.
+const VerbStaleWriter = "state.stale-writer"
+
+// stamp records the binary as the state's writer, unless a newer one wrote
+// it: then the save goes on with the fields this binary does not know kept,
+// and its process is recorded and logged once as a stale writer. A build
+// without a release version (dev) neither stamps nor judges.
+func (s *Store) stamp(st *State, now time.Time) []Event {
+	own, err := semver.NewVersion(s.version)
+	if err != nil {
+		return nil
+	}
+	st.StaleWriters = slices.DeleteFunc(st.StaleWriters, func(w StaleWriter) bool { return !proc.Alive(w.PID) })
+	if st.Writer != nil {
+		if newer, err := semver.NewVersion(st.Writer.Version); err == nil && own.LessThan(newer) {
+			pid := os.Getpid()
+			if slices.ContainsFunc(st.StaleWriters, func(w StaleWriter) bool { return w.PID == pid && w.Version == s.version }) {
+				return nil
+			}
+			w := StaleWriter{PID: pid, Command: command(os.Args), Version: s.version, Newer: st.Writer.Version, At: now}
+			st.StaleWriters = append(st.StaleWriters, w)
+			return []Event{{At: now, By: Party{Name: w.Command}, Verb: VerbStaleWriter, Detail: w.String() + ": it keeps the fields it does not know; restart it"}}
+		}
+	}
+	st.Writer = &Writer{Version: s.version, rest: writerRest(st.Writer)}
+	return nil
+}
+
+func writerRest(w *Writer) rest {
+	if w == nil {
+		return nil
+	}
+	return w.rest
+}
+
+// command is a process's beekeeper command, its subcommand words only: the
+// arguments behind them are a timer's text, a note, a start's whole brief.
+// "beekeeper agents start".
+func command(args []string) string {
+	words := []string{filepath.Base(args[0])}
+	for _, a := range args[1:] {
+		if strings.HasPrefix(a, "-") || len(words) == 3 {
+			break
+		}
+		words = append(words, a)
+	}
+	return strings.Join(words, " ")
+}
 
 func (s *Store) load() (*State, error) {
 	st := &State{}
