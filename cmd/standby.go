@@ -45,8 +45,7 @@ type standbyWatch struct {
 	// come up.
 	chains map[string]*successorChain
 	// turning reports whether a unit of beekeeper's start or wake of
-	// session id runs a turn or the reopen after it (unitsTurning); nil:
-	// none does.
+	// session id runs its headless turn (unitsTurning); nil: none does.
 	turning func(ctx context.Context, id string) bool
 	busy    atomic.Bool
 	// guideGap is the term of the gone guide this watch said.
@@ -132,24 +131,30 @@ func (a *app) succeedFromWatch(ctx context.Context, rl role, from state.Party) (
 	return to, err
 }
 
-// firstTurn reports whether p's session is between beekeeper's start or
-// wake and its desktop CLI: its headless turn runs, or the reopen after it.
-// Its CLI is gone meanwhile without the session being gone.
+// firstTurn reports whether p's session runs the headless turn of
+// beekeeper's start or wake, before its CLI shows among the sessions. The
+// reopen after the turn is none: it waits while the desktop's window has
+// the focus, up to reopenAwayWait, so the holder's restart grace covers it
+// and past the grace the standby resumes the holder headless.
 func (w *watcher) firstTurn(ctx context.Context, p state.Party) bool {
 	return p.Session != "" && w.stand.turning != nil && w.stand.turning(ctx, p.Session)
 }
 
 // unitsTurning reports whether a start or wake unit of session id is
-// active, starting or running its reopen (deactivating).
-func unitsTurning(ctx context.Context, id string) bool { return len(turningUnits(ctx, id)) > 0 }
+// active or starting: its headless turn runs.
+func unitsTurning(ctx context.Context, id string) bool { return len(sessionUnits(ctx, id, false)) > 0 }
 
 // turningUnits are the start and wake units of session id that are active,
 // starting or running their reopen (deactivating).
-func turningUnits(ctx context.Context, id string) []string {
+func turningUnits(ctx context.Context, id string) []string { return sessionUnits(ctx, id, true) }
+
+// sessionUnits are the start and wake units of session id that are active
+// or starting, and with stopping those running their reopen too.
+func sessionUnits(ctx context.Context, id string, stopping bool) []string {
 	if len(id) < 8 {
 		return nil
 	}
-	return plat.Launcher.Running(ctx, true, "beekeeper-agent-"+id[:8]+".service", wakePrefix(id)+"*")
+	return plat.Launcher.Running(ctx, stopping, "beekeeper-agent-"+id[:8]+".service", wakePrefix(id)+"*")
 }
 
 // guideGone says once when the guide's CLI stayed gone past its grace with
@@ -225,10 +230,13 @@ func (w *watcher) upAgain(rl role, holder state.Party) {
 // no first turn running (standby watch), the holder's term being key. A
 // successor beekeeper started, whose first turn took the role and ended
 // and whose desktop CLI never came (the desktop did not import it, or did
-// not warm it), is resumed headless once: that turn arms the role's watch
-// and keeps its CLI, so no further successor starts while it runs. One that
-// went down after that failed: one note after the first, and the next
-// successor waits out the backoff; past maxFailedSuccessors none starts.
+// not warm it: its reopen waits while the person works in the desktop's
+// window), is resumed headless: that turn arms the role's watch and keeps
+// its CLI, so no further successor starts while it runs, and a resume seen
+// running ends the chain (upAgain), so the next gap resumes it again until
+// the desktop runs its CLI. One whose resume never ran failed: one note
+// after the first, and the next successor waits out the backoff; past
+// maxFailedSuccessors none starts.
 // Any other holder gets its successor at once. It returns what the GONE
 // line adds.
 func (w *watcher) standIn(ctx context.Context, rl role, st *state.State, holder state.Party, key string) string {
@@ -283,7 +291,7 @@ func (w *watcher) reviveGone(ctx context.Context, rl role, holder state.Party) s
 	go func() {
 		defer w.stand.inflight.Done()
 		defer w.stand.starting.Store(false)
-		msg := rl.resumeMessage("your first turn ended and the desktop runs no CLI of yours: this headless turn keeps " + rl.duty)
+		msg := rl.resumeMessage("your headless turn ended and the desktop runs no CLI of yours: this headless turn keeps " + rl.duty)
 		if err := w.stand.revive(ctx, rl, holder, msg); err != nil {
 			w.emitNow(rl.name+"-successor", "%sRESUME FAILED: %q has no desktop CLI and did not resume headless: %v", rl.tag, holder.Name, err)
 			return

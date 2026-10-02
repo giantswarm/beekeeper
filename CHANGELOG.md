@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A relay's successor whose headless first turn took the role while a person worked in the desktop's window now gets a running CLI and its watch without anyone's click: the standby watch no longer counts the start's reopen, which waits up to 25 minutes for the window to lose the focus, as a running turn, so past the `restartGrace` it resumes the holder headless (`RESUME`) and that turn keeps the role's watch. The waiting reopen yields to that turn instead of warming a second desktop CLI beside it, and every later gap without a CLI is resumed headless again until the desktop runs the holder's CLI.
 - `beekeeper agents` shows in a new BROWSER column whether the desktop holds an agent's navigate to a new site for a person's site request (`asks`) or runs it without one (`skips`, Chrome permission mode `skip_all_permission_checks`), read from the agent's desktop record; `agents start` says which Chrome mode the import recorded. An imported start keeps no browser bypass: the desktop gives it `skip_all_permission_checks` only when a person allowed all browser actions, and its site requests reach no hook. The README states the mechanism.
 
 ### Added
