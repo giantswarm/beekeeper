@@ -10,12 +10,16 @@ import (
 )
 
 // Work is what a session's recent transcript is about: the GitHub issues and
-// pull requests it mentions and the repositories it works in, most recent
-// first. It is read from the transcript's tail, so a brief read hours ago
-// does not count and the session's latest turns do.
+// pull requests it acted on and the repositories it acted in (Acts), most
+// recent first, and the refs it only mentions. It is read from the
+// transcript's tail, so a brief read hours ago does not count and the
+// session's latest turns do.
 type Work struct {
 	Repos []string `json:"repos,omitempty"`
 	Refs  []string `json:"refs,omitempty"`
+	// Mentioned are the refs its window names that it did not act on:
+	// quoted in a message, read in a tool's output.
+	Mentioned []string `json:"mentioned,omitempty"`
 }
 
 // Current is how many of the most recent refs count as what a session is on
@@ -24,12 +28,6 @@ const Current = 3
 
 // workWindow is how much of a transcript's end ReadWork scans.
 const workWindow = 512 << 10
-
-// ReadWork scans the tail of the transcript at path.
-func ReadWork(path string) Work {
-	buf, _ := readWindow(path)
-	return scanWork(string(buf))
-}
 
 // readWindow returns the last workWindow bytes of the transcript at path
 // and whether they are all of it.
@@ -192,6 +190,23 @@ func byRecency(pos map[string]int) []string {
 	return out
 }
 
+// Serve puts ref, the issue a session's record says it serves, first among
+// its refs and its repository first among its repositories: serving an
+// issue is acting on it.
+func (w Work) Serve(ref string) Work {
+	repo, num, ok := strings.Cut(ref, "#")
+	if r, n := ownerRepo(repo); !ok || r == "" || n != len(repo) || num == "" || leadingDigits(num) != num {
+		return w
+	}
+	first := func(list []string, k string) []string {
+		return append([]string{k}, slices.DeleteFunc(slices.Clone(list), func(s string) bool { return s == k })...)
+	}
+	w.Refs = first(w.Refs, ref)
+	w.Repos = first(w.Repos, repo)
+	w.Mentioned = slices.DeleteFunc(slices.Clone(w.Mentioned), func(s string) bool { return s == ref })
+	return w
+}
+
 // Overlap is something two or more sessions are on at once.
 type Overlap struct {
 	// Kind is "ref" (the same issue or pull request) or "repo".
@@ -213,7 +228,7 @@ type OverlapOptions struct {
 }
 
 // Primary is the repository a session works in now: the most recently
-// mentioned one outside ignore.
+// acted-in one outside ignore.
 func (w Work) Primary(ignore []string) string {
 	for _, r := range w.Repos {
 		if !slices.Contains(ignore, r) {
@@ -280,7 +295,3 @@ func Overlaps(sessions []*Session, work map[int]Work, o OverlapOptions) []Overla
 // ReadWindow returns the last 512 KiB of a session file and whether they
 // are all of it, for another harness's reader.
 func ReadWindow(path string) ([]byte, bool) { return readWindow(path) }
-
-// ScanWork finds the issues, pull requests and repositories text is
-// about, as a transcript's are found.
-func ScanWork(text string) Work { return scanWork(text) }

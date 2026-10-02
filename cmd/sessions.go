@@ -114,13 +114,16 @@ func (a *app) collect(withWork bool) (*view, error) {
 	}
 	for i, s := range raw {
 		sv := &sessionView{Session: s}
-		if withWork {
-			sv.Work, sv.Metrics = works[i], ms[i]
-			work[s.PID] = sv.Work
-		}
 		sv.Role = roleOf(st, s)
 		if i := slices.IndexFunc(st.Records, func(r state.Record) bool { return r.Session.Is(s.Party()) }); i >= 0 {
 			sv.Serves = &st.Records[i]
+		}
+		if withWork {
+			sv.Work, sv.Metrics = works[i], ms[i]
+			if sv.Serves != nil && sv.Serves.Ended.IsZero() {
+				sv.Work = sv.Work.Serve(sv.Serves.Issue)
+			}
+			work[s.PID] = sv.Work
 		}
 		for _, h := range holders {
 			if h.Party().Is(s.Party()) {
@@ -164,8 +167,10 @@ func (a *app) sessionsCmd() *cobra.Command {
 		Short: "List the running sessions: what each is on, what it runs, what it holds",
 		Long: `List the running sessions, Claude Code's and omp's (oh-my-pi, marked
 "omp busy" or "omp idle"), most recently active first: the
-repository and the issues or pull requests its latest turns are about, when
-it was last active, the tool commands it runs right now (a devctl wait, a
+issue its record serves and the issues or pull requests its latest turns
+acted on (named in its gh and devctl commands and GitHub tool calls, or
+created; a ref it only quoted or read is no act), else the repository it
+acted in or its checkout, when it was last active, the tool commands it runs right now (a devctl wait, a
 bounded sleep with the time left), its memory, how full its context is,
 its last hour (turns, tool calls and their errors, GitHub calls, cost),
 and its role and leases, after "archived" or "test" for a session the
@@ -184,7 +189,8 @@ Cost is priced from metrics.models; a model without a price is "cost
 unknown".
 
 Overlaps name the issues, pull requests and repositories more than one
-session is on now. --all adds the sessions of the last 24 hours that run no
+session acts on now. --json keeps the refs a session only mentioned in
+its work's "mentioned". --all adds the sessions of the last 24 hours that run no
 CLI (paused or closed, not archived) and the omp sessions no process runs:
 a message to them does not arrive.
 
