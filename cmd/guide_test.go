@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -155,7 +156,8 @@ func TestGuideQueueHoldsOnlyItsPersonsNotes(t *testing.T) {
 		{Session: state.Party{Session: "s3", Name: agentC.Name}, Waits: "pat: " + approveADR},
 		{Session: state.Party{Session: "s1", Name: agentOne}, Waits: "Supervisor: the lease"},
 	}
-	a.printQueue(guideQueue(st, sessions, "Pat"))
+	q, _ := guideQueue(st, sessions, "Pat", time.Time{})
+	a.printQueue(q)
 	want := `#84 for Pat from "Agent three": refine the proposal: the split or one issue?
 #99 for Pat from "Agent three": merge the context bump?; if unanswered: it waits
 #100 for pat from "Agent one": relay due: pick the successor
@@ -165,7 +167,8 @@ func TestGuideQueueHoldsOnlyItsPersonsNotes(t *testing.T) {
 		t.Fatalf("queue for Pat:\n%s\nwant:\n%s", out.String(), want)
 	}
 	var ids []int
-	for _, it := range guideQueue(st, sessions, "") {
+	all, _ := guideQueue(st, sessions, "", time.Time{})
+	for _, it := range all {
 		if it.Note != nil {
 			ids = append(ids, it.Note.ID)
 		}
@@ -229,7 +232,8 @@ func TestGuideQueueSkipsArchivedTestAndOwnSessions(t *testing.T) {
 	}
 	var out strings.Builder
 	a := &app{out: &out, now: relayNow, cfg: &config.Config{}}
-	a.printQueue(guideQueue(st, sessions, personTimo))
+	q, _ := guideQueue(st, sessions, personTimo, time.Time{})
+	a.printQueue(q)
 	want := `"Agent three" waits on its person: approve the ADR
 "Land the follow-ups" (stopped) waits on its person: merge it
 `
@@ -252,7 +256,7 @@ func TestGuideQueueIgnoresTheDesktopsTurnSummary(t *testing.T) {
 	sup := state.Party{Session: "sP", Name: "Supervisor run 17"}
 	st := &state.State{Records: []state.Record{{Session: sup, Issue: "o/r#1"}}}
 	sessions := []*claude.Session{{ID: "sP", Name: sup.Name, Waiting: &claude.Waiting{Turn: "t1", Action: "clarify: is klaus-lab-67 an agent"}}}
-	if q := guideQueue(st, sessions, personTimo); len(q) != 0 {
+	if q, _ := guideQueue(st, sessions, personTimo, time.Time{}); len(q) != 0 {
 		t.Fatalf("a report read as an ask is queued: %+v", q)
 	}
 	a := &app{now: relayNow, cfg: &config.Config{Guide: config.Guide{Person: personTimo}}}
@@ -276,5 +280,90 @@ func TestWaitsOnReadsTheAskOfThePerson(t *testing.T) {
 		if ask, ok := waitsOn(c.person, c.waits); ask != c.ask || ok != c.ok {
 			t.Errorf("waitsOn(%q, %q) = %q %v, want %q %v", c.person, c.waits, ask, ok, c.ask, c.ok)
 		}
+	}
+}
+
+// stoppedWaits are three sessions waiting on Timo: one runs, one stopped
+// 30m ago, one stopped 3h ago, and one whose wait is 3h old and whose end
+// no watch saw.
+func stoppedWaits() (*state.State, []*claude.Session, *app) {
+	ask := personTimo + ": " + approveADR
+	st := &state.State{Records: []state.Record{
+		{Session: state.Party{Session: "sR", Name: "Runs"}, Waits: ask, At: relayNow.Add(-5 * time.Hour)},
+		{Session: state.Party{Session: "sN", Name: "Stopped lately"}, Waits: ask, At: relayNow.Add(-time.Hour), Ended: relayNow.Add(-30 * time.Minute)},
+		{Session: state.Party{Session: "sO", Name: "Stopped long ago"}, Waits: ask, At: relayNow.Add(-4 * time.Hour), Ended: relayNow.Add(-3 * time.Hour)},
+		{Session: state.Party{Session: "sU", Name: "Ended unseen"}, Waits: ask, At: relayNow.Add(-3 * time.Hour)},
+	}}
+	sessions := []*claude.Session{{ID: "sR", Name: "Runs"}}
+	var out strings.Builder
+	a := &app{out: &out, now: relayNow, cfg: &config.Config{Guide: config.Guide{Person: personTimo, WaitingTTL: config.Duration{Duration: 2 * time.Hour}}}}
+	return st, sessions, a
+}
+
+func TestGuideQueueFoldsSessionsStoppedPastTheTTL(t *testing.T) {
+	st, sessions, a := stoppedWaits()
+	q, stopped := a.guideQueue(st, sessions)
+	a.printQueue(q)
+	_, _ = fmt.Fprintln(a.out, a.stoppedLine(stopped))
+	want := `"Runs" waits on its person: approve the ADR
+"Stopped lately" (stopped) waits on its person: approve the ADR
+2 stopped session(s) waited on Timo, stopped over 2h ago: beekeeper guide queue --full lists them
+`
+	if got := a.out.(*strings.Builder).String(); got != want {
+		t.Fatalf("queue:\n%s\nwant:\n%s", got, want)
+	}
+	if len(stopped) != 2 || stopped[0].Owner != "Stopped long ago" || stopped[1].Owner != "Ended unseen" {
+		t.Fatalf("folded: %+v", stopped)
+	}
+	a.cfg.Guide.WaitingTTL.Duration = 0
+	if q, stopped := a.guideQueue(st, sessions); len(q) != 4 || stopped != nil {
+		t.Fatalf("guide.waitingTTL 0 folds: %d kept, %d folded", len(q), len(stopped))
+	}
+}
+
+func TestGuideFeedSaysNothingForSessionsThatAgedOut(t *testing.T) {
+	st, sessions, a := stoppedWaits()
+	lines, _ := a.feedLines(st, sessions, nil)
+	if !slices.Equal(lines, []string{
+		`GUIDE WAITING: "Runs" needs its person: approve the ADR`,
+		`GUIDE WAITING: "Stopped lately" (stopped) needs its person: approve the ADR`,
+	}) {
+		t.Fatalf("first poll: %q", lines)
+	}
+	a.now = relayNow.Add(2 * time.Hour) // "Stopped lately" ages out
+	lines, changed := a.feedLines(st, sessions, nil)
+	if lines != nil || !changed {
+		t.Fatalf("an aged-out session is news: %q (changed %v)", lines, changed)
+	}
+	if fed := st.GuideRole().Fed; len(fed) != 1 || !strings.Contains(fed[0], "sR") {
+		t.Fatalf("fed: %q", fed)
+	}
+}
+
+func TestGuideQueueSkipsAgentsThatReportedAfterTheWait(t *testing.T) {
+	ask := personTimo + ": " + approveADR
+	done := state.Party{Session: "sD", Name: "Finished"}
+	idle := state.Party{Session: "sI", Name: "Reported"}
+	busy := state.Party{Session: "sB", Name: "Asks again"}
+	st := &state.State{
+		Records: []state.Record{
+			{Session: done, Waits: ask, At: relayNow.Add(-time.Hour)},
+			{Session: idle, Waits: ask, At: relayNow.Add(-time.Hour)},
+			{Session: busy, Waits: ask, At: relayNow.Add(-time.Hour)},
+		},
+		Agents: []state.Agent{
+			{Party: done, Done: true, IdleSince: relayNow.Add(-30 * time.Minute)},
+			{Party: idle, IdleSince: relayNow.Add(-30 * time.Minute)},
+			{Party: busy, Task: "the next task", IdleSince: relayNow.Add(-2 * time.Hour)},
+		},
+	}
+	sessions := []*claude.Session{{ID: "sD", Name: done.Name}, {ID: "sI", Name: idle.Name}, {ID: "sB", Name: busy.Name}}
+	q, _ := guideQueue(st, sessions, personTimo, time.Time{})
+	if len(q) != 1 || q[0].Owner != busy.Name {
+		t.Fatalf("queue: %+v", q)
+	}
+	removeAgent(st, slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(busy) }))
+	if q, _ := guideQueue(st, sessions, personTimo, time.Time{}); len(q) != 0 {
+		t.Fatalf("an agent off the roster waits: %+v", q)
 	}
 }

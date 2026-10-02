@@ -218,7 +218,8 @@ func (a *app) gatherReport(ctx context.Context, from, to time.Time, zone *time.L
 		}
 		f.Workers = append(f.Workers, w)
 	}
-	for _, q := range guideQueue(st, v.raw, rc.Person) {
+	waiting, _ := guideQueue(st, v.raw, rc.Person, a.waitingSince(to))
+	for _, q := range waiting {
 		if q.Note == nil {
 			f.Asking = append(f.Asking, q.Owner)
 			continue

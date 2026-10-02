@@ -374,6 +374,9 @@ type Guide struct {
 	// to case. Its queue and feed show only that person's notes; empty,
 	// they show every note filed --for anyone.
 	Person string `yaml:"person"`
+	// WaitingTTL is how long a stopped session that waits on the person
+	// stays in the queue and the feed; older ones fold into one line.
+	WaitingTTL Duration `yaml:"waitingTTL"`
 }
 
 // Supervisor configures the supervisor: its role and the scope it
@@ -993,6 +996,7 @@ func (c *Config) defaults() error {
 		c.Guide.RelayAt = 150_000
 	}
 	c.Guide.defaults(home)
+	setDur(&c.Guide.WaitingTTL, 2*time.Hour)
 	if c.Agents.RelayAt == 0 {
 		c.Agents.RelayAt = c.Supervisor.RelayAt
 	}
