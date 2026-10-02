@@ -182,6 +182,9 @@ model is RAM no cgroup counts, and the watch unloads what exceeds it.`,
 					Session:     me.Session,
 					HostSession: me.HostSession,
 					Name:        me.Name,
+					Person:      me.Person,
+					Team:        me.Team,
+					Host:        me.Host,
 					Purpose:     purpose,
 					Since:       a.now.UTC().Format("2006-01-02T15:04:05Z"),
 
@@ -397,7 +400,7 @@ func (a *app) printLeases(l *leaseList) {
 		w := a.table()
 		_, _ = fmt.Fprintln(w, "RESOURCE\tHOLDER\tSINCE\tSTATE\tPURPOSE")
 		for _, h := range l.Held {
-			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", h.Label(), truncate(h.Name, 40), clock(a.now, h.SinceTime()), h.State, truncate(h.Purpose, 60))
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", h.Label(), withOwner(truncate(h.Name, 40), h.Party()), clock(a.now, h.SinceTime()), h.State, truncate(h.Purpose, 60))
 		}
 		_ = w.Flush()
 		for _, h := range l.Held {
@@ -416,7 +419,7 @@ func (a *app) printLeases(l *leaseList) {
 		}
 		names := make([]string, len(q))
 		for i, g := range q {
-			names[i] = fmt.Sprintf("%q (granted %s%s)", g.To.Name, clock(a.now, g.At), unblockText(g))
+			names[i] = fmt.Sprintf("%s (granted %s%s)", quotedOwner(g.To), clock(a.now, g.At), unblockText(g))
 		}
 		_, _ = fmt.Fprintf(a.out, "granted %s: %s\n", r, strings.Join(names, ", then "))
 	}

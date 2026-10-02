@@ -210,7 +210,7 @@ func TestRunRecordsItsStartAndEnd(t *testing.T) {
 	}
 }
 
-func stateStore(dir string) (*state.Store, error) {
+func stateStore(dir string) (*state.FileStore, error) {
 	return state.Open(filepath.Join(dir, "beekeeper"))
 }
 
