@@ -71,7 +71,7 @@ func TestCountAgents(t *testing.T) {
 // roomy is a headroom with memory, swap, slots and labs to spare.
 func roomy() *headroom {
 	return &headroom{AvailableMiB: 45 << 10, AvailMinMiB: 20 << 10, SwapGrowthMaxMiB: 256,
-		Swap: &swapReading{Rated: true, PerHourMiB: 10}, SlotsFree: 1, Slots: 2, Labs: 1, MaxLabs: 2}
+		Swap: &swapReading{Rated: true, AvailFalling: true, PerHourMiB: 10}, SlotsFree: 1, Slots: 2, Labs: 1, MaxLabs: 2}
 }
 
 // The verdict is room up to the ceiling within the guards, else every guard
@@ -95,7 +95,8 @@ func TestCapacityVerdict(t *testing.T) {
 		{"one", 9, func(*headroom) {}, "room for 1 start"},
 		{"ceiling", 10, func(*headroom) {}, "no start: 10 busy at the ceiling of 10"},
 		{"memory", 3, func(h *headroom) { h.AvailableMiB = 15 << 10 }, "no start: MemAvailable 15.0 GiB under 20 GiB"},
-		{"swap", 3, func(h *headroom) { h.Swap.PerHourMiB = 900 }, "no start: swap growing +900 MiB/h, over 256"},
+		{"swap", 3, func(h *headroom) { h.Swap.PerHourMiB = 900 }, "no start: disk swap growing +900 MiB/h while MemAvailable falls, over 256"},
+		{"swap growing, RAM recovers", 3, func(h *headroom) { h.Swap.PerHourMiB, h.Swap.AvailFalling = 900, false }, roomSeven},
 		{"swap unrated", 3, func(h *headroom) { h.Swap = &swapReading{PerHourMiB: 900} }, roomSeven},
 		{"swap full, flat", 3, func(h *headroom) { h.Swap.UsedMiB, h.Swap.PerHourMiB = 16<<10, 0 }, roomSeven},
 		{"slots", 3, func(h *headroom) { h.SlotsFree = 0 }, "no start: no free build slot"},
@@ -110,7 +111,7 @@ func TestCapacityVerdict(t *testing.T) {
 		}
 	}
 	h := roomy()
-	if got, want := h.line(), "headroom: MemAvailable 45.0 GiB (floor 20 GiB), swap +10 MiB/h (max 256), build slots 1 of 2 free, kind labs 1 of 2"; got != want {
+	if got, want := h.line(), "headroom: MemAvailable 45.0 GiB (floor 20 GiB), disk swap 0 MiB +10 MiB/h (max 256), zswap 0 MiB, build slots 1 of 2 free, kind labs 1 of 2"; got != want {
 		t.Errorf("line %q, want %q", got, want)
 	}
 	h.Swap = nil

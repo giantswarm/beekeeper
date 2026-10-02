@@ -49,12 +49,14 @@ type snapshot struct {
 	OOMSince    time.Time           `json:"oomSince"`
 	OOM         []oomKill           `json:"oom,omitempty"`
 	Oomd        []string            `json:"oomd,omitempty"`
-	Leases      []leaseView         `json:"leases,omitempty"`
-	Holds       []state.Hold        `json:"holds,omitempty"`
-	Budget      *github.Budget      `json:"budget,omitempty"`
-	BudgetErr   string              `json:"budgetError,omitempty"`
-	Alerts      []string            `json:"alerts,omitempty"`
-	Upgrades    []upgrade.Status    `json:"upgrades,omitempty"`
+	// OOMDSwap is systemd-oomd's swap rule, nil when oomd does not answer.
+	OOMDSwap  *machine.OOMDSwap `json:"oomdSwap,omitempty"`
+	Leases    []leaseView       `json:"leases,omitempty"`
+	Holds     []state.Hold      `json:"holds,omitempty"`
+	Budget    *github.Budget    `json:"budget,omitempty"`
+	BudgetErr string            `json:"budgetError,omitempty"`
+	Alerts    []string          `json:"alerts,omitempty"`
+	Upgrades  []upgrade.Status  `json:"upgrades,omitempty"`
 	// Quiet is the count of watch lines the quiet rules held back in the
 	// last hour (beekeeper log --verb watch.quiet).
 	Quiet int `json:"quietLastHour,omitempty"`
@@ -265,6 +267,9 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 		s.OOM = append(s.OOM, oomKill{OOMKill: k, Owner: oomOwner(k, s.Clusters, sessions, t, runs)})
 	}
 	s.Oomd, _ = plat.Machine.OomdKills(ctx, oomSince)
+	if o, err := plat.Machine.OOMDSwap(ctx); err == nil {
+		s.OOMDSwap = &o
+	}
 	holders, err := lease.Dir(a.cfg.LeaseDir).List()
 	if err != nil {
 		return nil, err
@@ -454,7 +459,14 @@ func (a *app) printSnapshot(s *snapshot) {
 	}
 	p("%s", strings.Join(head, "  "))
 	if s.has(secMemory) {
-		p("RAM available %d of %d MiB  swap used %d of %d MiB", s.Mem.AvailableMiB, s.Mem.TotalMiB, s.Mem.SwapUsedMiB, s.Mem.SwapTotalMiB)
+		p("RAM available %d of %d MiB  swap used %d of %d MiB: %s", s.Mem.AvailableMiB, s.Mem.TotalMiB, s.Mem.SwapUsedMiB, s.Mem.SwapTotalMiB, s.Mem.SwapSplit())
+		if s.Mem.SwapTotalMiB > 0 {
+			oomd := "systemd-oomd swap rule unknown"
+			if s.OOMDSwap != nil {
+				oomd = s.OOMDSwap.Line(s.Mem)
+			}
+			p("%s", oomd)
+		}
 	} else {
 		p("%s", platform.Unavailable(secMemory))
 	}
@@ -633,7 +645,7 @@ func diffSnapshots(prev, cur *snapshot) []string {
 		}
 	}
 	num("RAM available", prev.Mem.AvailableMiB, cur.Mem.AvailableMiB, 2048, "MiB")
-	num("swap used", prev.Mem.SwapUsedMiB, cur.Mem.SwapUsedMiB, 1024, "MiB")
+	num("disk swap", prev.Mem.DiskSwapMiB(), cur.Mem.DiskSwapMiB(), 1024, "MiB")
 	num("iGPU GTT", machine.GTTUsedMiB(prev.GPUs), machine.GTTUsedMiB(cur.GPUs), 4096, "MiB")
 	if prev.Scope != nil && cur.Scope != nil {
 		num("desktop scope anon", prev.Scope.AnonMiB, cur.Scope.AnonMiB, 2048, "MiB")

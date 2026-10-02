@@ -72,9 +72,9 @@ type Machine interface {
 	CgroupPIDs(cg string) []int
 	// OOMPolicy is unit's OOM policy, "?" when unreadable.
 	OOMPolicy(unit string) string
-	// OOMDSwapLimit is the swap share in percent past which the userspace
-	// OOM killer acts.
-	OOMDSwapLimit() int
+	// OOMDSwap is the userspace OOM killer's swap rule: the share of swap
+	// past which it kills and the cgroups it watches for it.
+	OOMDSwap(ctx context.Context) (machine.OOMDSwap, error)
 	// SwapoffRuns reports whether a swapoff is running.
 	SwapoffRuns() bool
 	// OOMKills are the kernel's OOM kills since the given time, oldest first.

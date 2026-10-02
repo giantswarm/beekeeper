@@ -89,15 +89,22 @@ type headroom struct {
 	LabsErr          string       `json:"labsError,omitempty"`
 }
 
-// swapReading is a watch's latest machine swap sample: in use and its
-// growth per hour over the watch's readings (Rated once they span
-// minSwapSpan). The growth bounds a start, never the figure in use: swap
-// may sit full for days without a byte moving.
+// swapReading is a watch's latest machine swap sample: in use, split into
+// disk and zswap, and disk swap's growth per hour over the watch's readings
+// with whether MemAvailable fell (Rated once they span minSwapSpan). Disk
+// swap growing while MemAvailable falls bounds a start, never the figure in
+// use: swap may sit full for days without a byte moving, and zswap's share
+// is held in RAM.
 type swapReading struct {
-	At         time.Time `json:"at"`
-	UsedMiB    int       `json:"usedMiB"`
-	PerHourMiB int       `json:"perHourMiB"`
-	Rated      bool      `json:"rated"`
+	At      time.Time `json:"at"`
+	UsedMiB int       `json:"usedMiB"`
+	DiskMiB int       `json:"diskMiB"`
+	// ZswapMiB is the swap zswap holds compressed in RAM.
+	ZswapMiB int `json:"zswapMiB"`
+	// PerHourMiB is disk swap's growth.
+	PerHourMiB   int  `json:"perHourMiB"`
+	AvailFalling bool `json:"availFalling"`
+	Rated        bool `json:"rated"`
 }
 
 // swapFile is the state's side file the watch keeps its latest swap reading
@@ -116,8 +123,8 @@ func (h *headroom) blocks() []string {
 	case h.AvailableMiB < h.AvailMinMiB:
 		out = append(out, fmt.Sprintf("MemAvailable %.1f GiB under %d GiB", float64(h.AvailableMiB)/1024, gib(h.AvailMinMiB)))
 	}
-	if s := h.Swap; s != nil && s.Rated && s.PerHourMiB > h.SwapGrowthMaxMiB {
-		out = append(out, fmt.Sprintf("swap growing %+d MiB/h, over %d", s.PerHourMiB, h.SwapGrowthMaxMiB))
+	if s := h.Swap; s != nil && s.Rated && s.AvailFalling && s.PerHourMiB > h.SwapGrowthMaxMiB {
+		out = append(out, fmt.Sprintf("disk swap growing %+d MiB/h while MemAvailable falls, over %d", s.PerHourMiB, h.SwapGrowthMaxMiB))
 	}
 	if h.Slots > 0 && h.SlotsFree == 0 {
 		out = append(out, "no free build slot")
@@ -135,11 +142,11 @@ func (h *headroom) line() string {
 		mem = fmt.Sprintf("MemAvailable %.1f GiB (floor %d GiB)", float64(h.AvailableMiB)/1024, gib(h.AvailMinMiB))
 	}
 	swap := "swap growth not measured (no watch reading)"
-	switch s := h.Swap; {
-	case s != nil && s.Rated:
-		swap = fmt.Sprintf("swap %+d MiB/h (max %d)", s.PerHourMiB, h.SwapGrowthMaxMiB)
-	case s != nil:
-		swap = "swap growth not yet measured"
+	if s := h.Swap; s != nil {
+		swap = fmt.Sprintf("disk swap %d MiB, zswap %d MiB, growth not yet measured", s.DiskMiB, s.ZswapMiB)
+		if s.Rated {
+			swap = fmt.Sprintf("disk swap %d MiB %+d MiB/h (max %d), zswap %d MiB", s.DiskMiB, s.PerHourMiB, h.SwapGrowthMaxMiB, s.ZswapMiB)
+		}
 	}
 	labs := fmt.Sprintf("kind labs %d of %d", h.Labs, h.MaxLabs)
 	if h.LabsErr != "" {
@@ -219,8 +226,9 @@ are parked; one without a task, or done, is idle. The supervisor, the guide
 and a role's successor are not counted.
 
 The headroom bounds a start: MemAvailable against capacity.availMinMiB,
-the machine swap's growth over the watch's readings against
-capacity.swapGrowthMaxMiB (never the swap in use), the free build
+disk swap's growth over the watch's readings against
+capacity.swapGrowthMaxMiB while MemAvailable falls (never the swap in
+use, and never zswap's share, which sits in RAM), the free build
 slots and the kind labs against their cap. The verdict is "room for N
 starts" up to the ceiling, or what blocks one. capacity reads the roster,
 the sessions and the machine and changes nothing; it makes no GitHub call.`,

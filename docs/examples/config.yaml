@@ -58,8 +58,8 @@ watch:
   repeat: 10m
   budgetEvery: 5m
   availMinMiB: 10240        # LOW RAM under this MemAvailable; default: 12% of RAM
-  swapMaxMiB: 10000         # SWAP over this, with the distance to systemd-oomd's trigger; default: 60% of swap
-  oomdHeadroomMinMiB: 1024  # OOMD IMMINENT under this much swap growth left before oomd's SwapUsedLimit; default: 6% of swap
+  swapMaxMiB: 10000         # SWAP over this much disk swap (zswap's share not counted) while it grows and MemAvailable falls; default: 60% of swap
+  oomdHeadroomMinMiB: 1024  # OOMD IMMINENT, only when oomd watches a cgroup for swap and disk swap grows while MemAvailable falls: under this much swap growth left before oomd's SwapUsedLimit; default: 6% of swap
   oomdWithin: 30m           # ... or when the last hour's growth rate reaches the trigger within this
   scopeAnonMaxMiB: 28000    # DESKTOP SCOPE anon over this (cache is reclaimable, anon is not); default: 32% of RAM
   gttMaxMiB: 24576          # IGPU GTT over this (RAM the GPU driver pins, in no cgroup); default: 28% of RAM
@@ -152,7 +152,7 @@ capacity:                   # the busy agents the supervisor keeps (beekeeper ca
   floor: 5                  # CAPACITY LOW under this many busy agents, when the headroom allows a start
   ceiling: 10               # CAPACITY FULL at this many; no start past it
   availMinMiB: 20480        # a start needs this MemAvailable
-  swapGrowthMaxMiB: 256     # no start while the machine swap grows faster than this per hour over the watch's readings
+  swapGrowthMaxMiB: 256     # no start while disk swap grows faster than this per hour over the watch's readings and MemAvailable falls
 doctor:                     # known faults the doctor (beekeeper doctor, every watch poll) probes and remedies
   faults:
     - name: registry-login  # an example: a login unit answering 401, fixed by a restart

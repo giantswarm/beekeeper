@@ -1,6 +1,9 @@
 package machine
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseOOM(t *testing.T) {
 	journal := `2026-09-24T19:58:04+0300 demiurg kernel: node invoked oom-killer: gfp_mask=0xcc0(GFP_KERNEL), order=0, oom_score_adj=200
@@ -18,5 +21,29 @@ func TestParseOOM(t *testing.T) {
 	}
 	if kills[1].PID != 42 || kills[1].Task != "jest worker" || kills[1].AnonMiB != 2 {
 		t.Errorf("second kill = %+v", kills[1])
+	}
+}
+
+func TestParseMem(t *testing.T) {
+	const base = "MemTotal:       90177536 kB\nMemAvailable:   41943040 kB\nShmem:           1048576 kB\nSwapTotal:      16777212 kB\nSwapFree:        8222972 kB\n"
+	m, err := parseMem(strings.NewReader(base + "Zswap:           1719720 kB\nZswapped:        3177092 kB\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.SwapUsedMiB != 8353 || m.ZswappedMiB != 3102 || m.ZswapPoolMiB != 1679 || m.DiskSwapMiB() != 5251 {
+		t.Fatalf("zswap: %+v disk %d", m, m.DiskSwapMiB())
+	}
+	if m.DiskSwapMiB()+m.ZswappedMiB != m.SwapUsedMiB {
+		t.Errorf("disk %d + zswap %d is not the %d in use", m.DiskSwapMiB(), m.ZswappedMiB, m.SwapUsedMiB)
+	}
+	if got, want := m.SwapSplit(), "disk 5251 MiB + zswap 3102 MiB in a 1679 MiB pool"; got != want {
+		t.Errorf("split %q, want %q", got, want)
+	}
+	m, _ = parseMem(strings.NewReader(base))
+	if m.ZswappedMiB != 0 || m.DiskSwapMiB() != m.SwapUsedMiB {
+		t.Errorf("no zswap: %+v", m)
+	}
+	if (Mem{SwapUsedMiB: 100, ZswappedMiB: 120}).DiskSwapMiB() != 0 {
+		t.Error("disk swap below zero")
 	}
 }

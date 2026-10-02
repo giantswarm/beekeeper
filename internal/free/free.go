@@ -8,6 +8,7 @@
 package free
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"slices"
@@ -126,7 +127,7 @@ type Run struct {
 	unitPIDs  func(cgroup string) []int
 	scopePIDs func(path string) []int
 	oomPolicy func(unit string) string
-	swapLimit func() int
+	oomd      func() (machine.OOMDSwap, error)
 
 	sumKiB   map[string]int
 	sumN     map[string]int
@@ -168,8 +169,8 @@ func (r *Run) defaults() {
 	if r.oomPolicy == nil {
 		r.oomPolicy = host.OOMPolicy
 	}
-	if r.swapLimit == nil {
-		r.swapLimit = host.OOMDSwapLimit
+	if r.oomd == nil {
+		r.oomd = func() (machine.OOMDSwap, error) { return host.OOMDSwap(context.Background()) }
 	}
 	r.sumKiB, r.sumN = map[string]int{}, map[string]int{}
 }
