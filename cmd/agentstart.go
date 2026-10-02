@@ -596,6 +596,17 @@ func (a *app) agentReopenCmd() *cobra.Command {
 			if err != nil {
 				return a.reopenMissed(name, err)
 			}
+			if err := d.await(cmd.Context(), reopenAwayWait); err != nil {
+				return a.reopenMissed(name, fmt.Errorf("reopening %s in the desktop: %w", id, err))
+			}
+			// The standby watch resumes a role's holder headless while this
+			// reopen waits for the person to leave the desktop's window: the
+			// desktop warms no second CLI beside that turn, whose own reopen
+			// follows it.
+			if u := wakeRunning(cmd.Context(), id); u != "" {
+				_, err := fmt.Fprintf(a.out, "reopen: %s was resumed headless meanwhile (%s), whose reopen follows its turn\n", id, u)
+				return err
+			}
 			if _, err := a.showBriefly(cmd.Context(), d, url, "local_"+id, "", true, reopenAwayWait); err != nil {
 				return a.reopenMissed(name, fmt.Errorf("reopening %s in the desktop: %w", id, err))
 			}
