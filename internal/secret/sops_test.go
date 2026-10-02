@@ -18,13 +18,13 @@ func TestRealSOPSCopy(t *testing.T) {
 			t.Skipf("%s is not installed", bin)
 		}
 	}
-	const password = "planted-Pass-real-3e8a51"
+	const password, pwPath = "planted-Pass-real-3e8a51", "stringData.password"
 	dir := t.TempDir()
 	key := filepath.Join(dir, "age.key")
-	if out, err := exec.Command("age-keygen", "-o", key).CombinedOutput(); err != nil {
+	if out, err := exec.Command("age-keygen", "-o", key).CombinedOutput(); err != nil { //nolint:gosec // the test's scratch key
 		t.Fatalf("age-keygen: %v: %s", err, out)
 	}
-	recipient, err := exec.Command("age-keygen", "-y", key).Output()
+	recipient, err := exec.Command("age-keygen", "-y", key).Output() //nolint:gosec // the test's scratch key
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,10 +53,10 @@ func TestRealSOPSCopy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(keys) != 1 || keys[0] != (Key{Name: "stringData.password", Bytes: len(password)}) {
+	if len(keys) != 1 || keys[0] != (Key{Name: pwPath, Bytes: len(password)}) {
 		t.Errorf("keys = %+v", keys)
 	}
-	raw, err := os.ReadFile(dst)
+	raw, err := os.ReadFile(dst) //nolint:gosec // the test's scratch file
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,11 +68,11 @@ func TestRealSOPSCopy(t *testing.T) {
 	if strings.Contains(string(raw), password) {
 		t.Fatal("the copy holds the value in plaintext")
 	}
-	vs, err := o.Compare(ctx, Ref{File: src, Path: "stringData.password"}, Ref{File: dst, Path: "stringData.password"})
+	vs, err := o.Compare(ctx, Ref{File: src, Path: pwPath}, Ref{File: dst, Path: pwPath})
 	if err != nil || vs[0].State != Equal {
 		t.Errorf("compare = %+v, %v", vs, err)
 	}
-	if _, err := o.CopyValue(ctx, Ref{File: dst, Path: "stringData.password"}, Ref{File: dst, Path: "stringData.again"}); err != nil {
+	if _, err := o.CopyValue(ctx, Ref{File: dst, Path: pwPath}, Ref{File: dst, Path: "stringData.again"}); err != nil {
 		t.Fatal(err)
 	}
 	if v, err := o.values(ctx, Ref{File: dst}); err != nil || v["stringData.again"] != password || v["metadata.name"] != "app-copy" {

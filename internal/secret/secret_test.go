@@ -18,10 +18,13 @@ import (
 // The planted values: none may appear in an answer, an error or a file.
 const (
 	password = "planted-Pass-7c1d0e9b2a"
-	token    = "planted-Token-55e3a1f0c8"
+	token    = "planted-Token-55e3a1f0c8" //nolint:gosec // a planted test value
 	vaultRef = "op://Shared/api/credential"
+	pwPath   = "stringData.password"
+	aFile    = "a.sops.yaml"
 )
 
+//nolint:gosec // a template of planted test values
 const srcSecret = `apiVersion: v1
 kind: Secret
 metadata:
@@ -86,12 +89,12 @@ func TestCopyFileRewritesTheMetadataAndAnswersKeysAndLengths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []secret.Key{{Name: "data.token", Bytes: len(token)}, {Name: "stringData.password", Bytes: len(password)}}
+	want := []secret.Key{{Name: "data.token", Bytes: len(token)}, {Name: pwPath, Bytes: len(password)}}
 	if !slices.Equal(keys, want) {
 		t.Errorf("keys = %+v, want %+v", keys, want)
 	}
 	noValue(t, "copy", keys)
-	raw, err := os.ReadFile(dst)
+	raw, err := os.ReadFile(dst) //nolint:gosec // the test's own scratch file
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,11 +162,11 @@ func TestCompareAnswersPerKey(t *testing.T) {
 	for _, v := range vs {
 		got[v.Key] = v.State
 	}
-	if got["stringData.password"] != secret.Equal || got["data.token"] != secret.Equal || got["metadata.name"] != secret.Different || got["metadata.namespace"] != secret.Equal {
+	if got[pwPath] != secret.Equal || got["data.token"] != secret.Equal || got["metadata.name"] != secret.Different || got["metadata.namespace"] != secret.Equal {
 		t.Errorf("compare = %+v", vs)
 	}
 	noValue(t, "compare", vs)
-	one, err := o.Compare(ctx, secret.Ref{Op: vaultRef}, secret.Ref{File: src, Path: "stringData.password"})
+	one, err := o.Compare(ctx, secret.Ref{Op: vaultRef}, secret.Ref{File: src, Path: pwPath})
 	if err != nil || len(one) != 1 || one[0].State != secret.Equal {
 		t.Errorf("compare vault with SOPS path = %+v, %v", one, err)
 	}
@@ -175,7 +178,7 @@ func TestCompareAnswersPerKey(t *testing.T) {
 func TestFingerprintsAreKeyedAndNameNoValue(t *testing.T) {
 	tools := secrettest.New(nil)
 	_, src := scratch(t)
-	ps, err := ops(tools).Fingerprints(context.Background(), secret.Ref{File: src, Path: "stringData.password"})
+	ps, err := ops(tools).Fingerprints(context.Background(), secret.Ref{File: src, Path: pwPath})
 	if err != nil || len(ps) != 1 || ps[0].Fingerprint != fmt.Sprintf("fp-%d", len(password)*7) {
 		t.Fatalf("fingerprints = %+v, %v", ps, err)
 	}
@@ -215,7 +218,7 @@ func TestCopyValueIntoASOPSPathKeepsTheOthers(t *testing.T) {
 		t.Errorf("the file after the copy:\n%s", plain)
 	}
 	fresh := filepath.Join(dir, "new.sops.yaml")
-	if _, err := o.CopyValue(ctx, secret.Ref{File: src, Path: "stringData.password"}, secret.Ref{File: fresh, Path: "a.b"}); err != nil {
+	if _, err := o.CopyValue(ctx, secret.Ref{File: src, Path: pwPath}, secret.Ref{File: fresh, Path: "a.b"}); err != nil {
 		t.Fatal(err)
 	}
 	if plain := decrypted(t, tools, fresh); plain != "a:\n  b: "+password+"\n" {
@@ -246,7 +249,8 @@ func TestCopyToConsumerRedactsItsOutput(t *testing.T) {
 	dir := t.TempDir()
 	// A consumer that echoes what it read: its output is redacted.
 	gh := filepath.Join(dir, "gh")
-	if err := os.WriteFile(gh, []byte("#!/bin/sh\nread v\necho \"stored $v\"\nexit 3\n"), 0o700); err != nil {
+	if err := os.WriteFile(gh, //nolint:gosec // an executable test consumer
+		[]byte("#!/bin/sh\nread v\necho \"stored $v\"\nexit 3\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	code, out, err := ops(tools).CopyToConsumer(context.Background(), secret.Ref{Op: vaultRef}, []string{gh, "secret", "set", "X"})
@@ -264,7 +268,7 @@ func TestCopyToConsumerRedactsItsOutput(t *testing.T) {
 func TestSetWritesTheVaultFirst(t *testing.T) {
 	tools := secrettest.New(nil)
 	dir, _ := scratch(t)
-	dst := secret.Ref{File: filepath.Join(dir, "gen.sops.yaml"), Path: "stringData.password"}
+	dst := secret.Ref{File: filepath.Join(dir, "gen.sops.yaml"), Path: pwPath}
 	fp, err := ops(tools).Set(context.Background(), dst, secret.Ref{Op: "op://Shared/app/password"}, 24, "alnum")
 	if err != nil {
 		t.Fatal(err)
@@ -304,8 +308,8 @@ func TestSetWritesTheVaultFirst(t *testing.T) {
 func TestParseRef(t *testing.T) {
 	for in, want := range map[string]secret.Ref{
 		"a.sops.yaml":                {File: "a.sops.yaml"},
-		"a.sops.yaml#data.x":         {File: "a.sops.yaml", Path: "data.x"},
-		"sops://a.sops.yaml#data.x":  {File: "a.sops.yaml", Path: "data.x"},
+		"a.sops.yaml#data.x":         {File: aFile, Path: "data.x"},
+		"sops://a.sops.yaml#data.x":  {File: aFile, Path: "data.x"},
 		"op://Shared/item/field":     {Op: "op://Shared/item/field"},
 		"op://Shared/item/sec/field": {Op: "op://Shared/item/sec/field"},
 	} {
