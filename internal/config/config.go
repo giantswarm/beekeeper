@@ -457,6 +457,30 @@ type Serve struct {
 	// server's invoke_agent_instance, x_<server>_invoke_agent_instance: the
 	// installations a kagent: address may name.
 	Kagent map[string]string `yaml:"kagent"`
+	// People maps the name a decision is filed for (note add --for <name>)
+	// to the person's email: who may answer it, and whom Slack messages.
+	// A --for that is an email needs no entry.
+	People map[string]string `yaml:"people"`
+	// Channels maps a team to the Slack channel ID its decisions (--for
+	// team:<name>) are posted to; any member of the team's Dex group (teams)
+	// may answer.
+	Channels map[string]string `yaml:"channels"`
+	// Gateway is the klaus-gateway that puts decisions to their addressee
+	// in Slack; without its URL, decisions stay in beekeeper.
+	Gateway Gateway `yaml:"gateway"`
+}
+
+// Gateway configures the decisions' delivery through klaus-gateway's
+// POST /decisions.
+type Gateway struct {
+	// URL is klaus-gateway's base URL.
+	URL string `yaml:"url"`
+	// TokenFile is the projected ServiceAccount token (audience
+	// klaus-gateway) every request carries, read anew for each.
+	TokenFile string `yaml:"tokenFile"`
+	// AnswerTool is the muster tool a click calls as the person who
+	// answers: beekeeper's note_answer behind muster.
+	AnswerTool string `yaml:"answerTool"`
 }
 
 // Guide configures the guide: its role and the person it guides.
@@ -1096,6 +1120,8 @@ func (c *Config) defaults() error {
 	// debounces a supervisor someone woke.
 	setDur(&c.Supervisor.RestartGrace, 30*time.Second)
 	c.Supervisor.defaults(home)
+	setStr(&c.Serve.Gateway.TokenFile, "/var/run/secrets/klaus-gateway/token")
+	setStr(&c.Serve.Gateway.AnswerTool, "x_beekeeper_note_answer")
 	// The guide's context is the person's conversation: it relays early.
 	if c.Guide.RelayAt == 0 {
 		c.Guide.RelayAt = 150_000

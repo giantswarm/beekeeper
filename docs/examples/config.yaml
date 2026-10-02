@@ -26,6 +26,12 @@ identity:
 #   supervisors: {platform: example:platform-supervisors}   # who releases a team's leases and lifts its holds
 #   muster: https://muster.example.com/mcp   # the muster a send_message to a kagent: address goes through, as the caller
 #   kagent: {staging: x_kagent_invoke_agent_instance}   # an installation and its kagent's invoke tool on that muster
+#   people: {ada: ada@example.com}           # a name decisions are filed --for, and the person's email
+#   channels: {platform: C0123456789}        # a team's Slack channel its decisions (--for team:<name>) go to
+#   gateway:                                 # klaus-gateway, which puts decisions to their addressee in Slack
+#     url: http://klaus-gateway.klaus-gateway.svc   # without it, decisions stay in beekeeper
+#     tokenFile: /var/run/secrets/klaus-gateway/token   # the default: the projected ServiceAccount token, audience klaus-gateway
+#     answerTool: x_beekeeper_note_answer    # the default: the muster tool an answer in Slack calls, as the person
 # leaseDir: /home/ada/.local/state/beekeeper/leases   # default: <stateDir>/leases, one directory per held lease
 resources: [kind-1, kind-2, staging, production, homelab]   # leasable besides the browser (and the model server)
 labs: {kind-1: kind, kind-2: kind-2}   # a lab lease and the kind cluster it stands for

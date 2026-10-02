@@ -22,7 +22,8 @@ const (
 	paramEnvironment = "environment"
 	paramRepo        = "repo"
 	paramReason      = "reason"
-	paramAnswer      = "answer"
+	paramChoice      = "choice"
+	paramVia         = "via"
 	paramAgent       = "agent"
 	paramHost        = "host"
 	paramPurpose     = "purpose"
@@ -71,22 +72,27 @@ func (s *server) tools() []serveTool {
 		{newTool("lane_settle", "Register a merge run outside the gate as its lane's head, running or merged.", false,
 			append(prOptions(), mcp.WithBoolean("merged", mcp.Description("the pull request is merged: the lane settles")))...), toolLaneSettle},
 		{newTool("lane_turn", "Whether a queued merge is its lane's next, and what is ahead of it.", true, prOptions()...), toolLaneTurn},
-		{newTool("note_add", "File a note: a decision for a person, or a memo.", false,
-			mcp.WithString(paramText, mcp.Required(), mcp.Description("the question or the memo")),
-			mcp.WithString(paramFor, mcp.Description("who decides")),
+		{newTool("note_add", "File a note: a decision for a person or a team, put to them in Slack, or a memo.", false,
+			mcp.WithString(paramText, mcp.Required(), mcp.Description("the question (one line, at most 150 characters) or the memo")),
+			mcp.WithString(paramFor, mcp.Description("who decides: a person's name or email, or team:<name>")),
 			mcp.WithString(paramKind, mcp.Description("decision, memo or login")),
 			mcp.WithString("due", mcp.Description("when it is due: a time (22:55) or a duration (3h)")),
 			mcp.WithString("default", mcp.Description("the action if nobody answers by the due time")),
 			mcp.WithString("status_quo", mcp.Description("what is true now")),
 			mcp.WithString("why", mcp.Description("why it needs the person")),
-			mcp.WithArray("options", mcp.WithStringItems(), mcp.Description(`"<choice>: <consequence>" each`)),
+			mcp.WithArray("options", mcp.WithStringItems(), mcp.Description(`"<choice>: <consequence>" each, at most 10, labels at most 75 characters`)),
+			mcp.WithNumber("recommend", mcp.Description("the option recommended, 1-based")),
 			mcp.WithString("checked", mcp.Description("where a merged, green, released, rolled or closed claim was checked")),
 			mcp.WithArray("refs", mcp.WithStringItems(), mcp.Description("the issues and pull requests it asks about, owner/repo#n")),
 			mcp.WithBoolean("pin", mcp.Description("a standing instruction"))), toolNoteAdd},
 		{newTool("note_list", "The open notes, decisions apart from memos.", true), toolNoteList},
-		{newTool("note_answer", "Answer a note, word for word, and close it: as the person it is for, or its filer.", false,
+		{newTool("note_answer", "Answer a decision, word for word, and close it: as the person it is for, or a member of the team it is for.", false,
 			mcp.WithNumber(paramNote, mcp.Required(), mcp.Description("the note's number")),
-			mcp.WithString(paramAnswer, mcp.Required(), mcp.Description("the answer, word for word"))), toolNoteAnswer},
+			mcp.WithNumber(paramChoice, mcp.Description("the option chosen, 1-based")),
+			mcp.WithString(paramText, mcp.Description("the answer in the person's own words")),
+			mcp.WithString(paramVia, mcp.Description("how the answer came: cli (the default) or slack"))), toolNoteAnswer},
+		{newTool("note_done", "Close a note without an answer: its decision is withdrawn. Its filer's, or the filer's team's supervisor role's.", false,
+			mcp.WithNumber(paramNote, mcp.Required(), mcp.Description("the note's number"))), toolNoteDone},
 		{newTool("agents_register", "Register the calling agent on its team's roster, idle unless it holds an open task.", false), toolAgentsRegister},
 		{newTool("list_agents", "The agent roster.", true,
 			mcp.WithString("scope", mcp.Description("all (default) or team: only the caller's team"))), toolListAgents},
@@ -587,6 +593,9 @@ func toolNoteAdd(c *call, req mcp.CallToolRequest) (any, error) {
 	if req.GetBool("pin", false) {
 		args = append(args, "--pin")
 	}
+	if r := req.GetInt("recommend", 0); r != 0 {
+		args = append(args, "--recommend", strconv.Itoa(r))
+	}
 	if err := c.verb(c.app.noteCmd(), args...); err != nil {
 		return nil, err
 	}
@@ -595,7 +604,14 @@ func toolNoteAdd(c *call, req mcp.CallToolRequest) (any, error) {
 		return nil, fmt.Errorf("the note's number in %q: %w", c.out.String(), err)
 	}
 	c.concern = kube.NoteObject(c.me.Team, id)
-	return c.note(id)
+	n, err := c.note(id)
+	if err != nil || n == nil || n.Posted != "" {
+		return n, err // a folded note was posted with its first filing
+	}
+	if err := c.s.postDecision(c.ctx, c.me, n); err != nil {
+		return nil, err
+	}
+	return n, nil
 }
 
 func (c *call) note(id int) (*state.Note, error) {
@@ -636,25 +652,55 @@ func toolNoteAnswer(c *call, req mcp.CallToolRequest) (any, error) {
 	if id <= 0 {
 		return nil, usageErr("note is required: the note's number")
 	}
-	answer, err := required(req, paramAnswer, "the answer, word for word")
-	if err != nil {
-		return nil, err
-	}
+	choice := req.GetInt(paramChoice, 0)
+	text := strings.TrimSpace(req.GetString(paramText, ""))
 	n, err := c.note(id)
 	if err != nil {
 		return nil, err
 	}
 	if n != nil {
 		c.concern = kube.NoteObject(n.By.Team, id)
-		addressee := strings.EqualFold(n.For, c.who.Email) || (n.For == "team:"+c.who.Team && c.who.Team != "")
-		if !addressee && n.By.Person != c.who.Email {
-			return nil, refused("note #%d is for %s: only that person, or %s who filed it, answers it", id, cmp.Or(n.For, "nobody named"), cmp.Or(n.By.Person, n.By.Name))
+		if !decidesNote(c.s.cfg.Serve, n, c.who) {
+			return nil, refused("note #%d is for %s: only its addressee answers it", id, cmp.Or(n.For, "nobody named"))
 		}
 	}
-	if err := c.verb(c.app.noteCmd(), "answer", strconv.Itoa(id), answer); err != nil {
+	args := []string{"answer", strconv.Itoa(id), "--via", cmp.Or(req.GetString(paramVia, ""), viaCLI)}
+	if choice != 0 {
+		args = append(args, "--choice", strconv.Itoa(choice))
+	}
+	if text != "" {
+		args = append(args, text)
+	}
+	if err := c.verb(c.app.noteCmd(), args...); err != nil {
 		return nil, err
 	}
+	answer, _ := answerText(n, choice, text) // the verb took it
+	c.s.closeDecision(c.ctx, n, outcomeAnswered, answer)
 	return map[string]any{"note": id, "answer": answer, "answeredBy": c.who.Email}, nil
+}
+
+func toolNoteDone(c *call, req mcp.CallToolRequest) (any, error) {
+	id := req.GetInt(paramNote, 0)
+	if id <= 0 {
+		return nil, usageErr("note is required: the note's number")
+	}
+	n, err := c.note(id)
+	if err != nil {
+		return nil, err
+	}
+	if n == nil {
+		return nil, refused("note #%d is not open", id)
+	}
+	c.concern = kube.NoteObject(n.By.Team, id)
+	if err := c.may(fmt.Sprintf("note #%d", id), n.By); err != nil {
+		return nil, err
+	}
+	if err := c.verb(c.app.noteCmd(), "done", strconv.Itoa(id)); err != nil {
+		return nil, err
+	}
+	c.s.closeDecision(c.ctx, n, outcomeWithdrawn, "")
+	_, err = fmt.Fprintf(c.out, "note #%d done\n", id)
+	return map[string]any{"note": id}, err
 }
 
 func toolAgentsRegister(c *call, req mcp.CallToolRequest) (any, error) {

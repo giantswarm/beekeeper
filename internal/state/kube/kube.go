@@ -610,7 +610,8 @@ func (snap *snapshot) state() *state.State {
 		n := snap.notes[k]
 		st.Notes = append(st.Notes, state.Note{ID: n.Spec.ID, For: n.Spec.For, Text: n.Spec.Text, Due: timeOf(n.Spec.Due),
 			Default: n.Spec.Default, By: party(n.Status.By), At: n.Status.At.Time, Fired: timeOf(n.Status.Fired),
-			Kind: n.Spec.Kind, Until: n.Spec.Until, Pinned: n.Spec.Pinned, Refs: n.Spec.Refs})
+			Kind: n.Spec.Kind, Until: n.Spec.Until, Pinned: n.Spec.Pinned, Refs: n.Spec.Refs,
+			Question: n.Spec.Question, StatusQuo: n.Spec.StatusQuo, Options: n.Spec.Options, Recommend: n.Spec.Recommend, Posted: n.Status.Posted})
 		st.NextNote = max(st.NextNote, n.Spec.ID)
 	}
 	for _, k := range sortedKeys(snap.roster) {
@@ -732,7 +733,8 @@ func (snap *snapshot) apply(st *state.State) (*snapshot, error) {
 		}
 		note.Spec.ID, note.Spec.For, note.Spec.Text, note.Spec.Due = n.ID, n.For, n.Text, apiTime(n.Due)
 		note.Spec.Default, note.Spec.Kind, note.Spec.Until, note.Spec.Pinned, note.Spec.Refs = n.Default, n.Kind, n.Until, n.Pinned, n.Refs
-		note.Status.By, note.Status.At, note.Status.Fired = apiParty(n.By), metav1.Time{Time: n.At}, apiTime(n.Fired)
+		note.Spec.Question, note.Spec.StatusQuo, note.Spec.Options, note.Spec.Recommend = n.Question, n.StatusQuo, n.Options, n.Recommend
+		note.Status.By, note.Status.At, note.Status.Fired, note.Status.Posted = apiParty(n.By), metav1.Time{Time: n.At}, apiTime(n.Fired), n.Posted
 		if note.Status.State == "" {
 			note.Status.State = "open"
 		}

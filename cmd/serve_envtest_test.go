@@ -307,9 +307,9 @@ func TestEnvtestServeTools(t *testing.T) {
 		t.Errorf("note_add %v", note)
 	}
 	e.expect(t, pia, "note_list", map[string]any{}, false, "which lane for muster?")
-	e.expect(t, pia, "note_answer", map[string]any{paramNote: 1, paramAnswer: "the merge lane"}, true, "only that person")
-	e.expect(t, bo, "note_answer", map[string]any{paramNote: 1, paramAnswer: "the portal lane"}, false, "note #1 answered and closed")
-	e.expect(t, bo, "note_answer", map[string]any{paramNote: 1, paramAnswer: "again"}, true, "not open")
+	e.expect(t, pia, "note_answer", map[string]any{paramNote: 1, paramText: "the merge lane"}, true, "only its addressee")
+	e.expect(t, bo, "note_answer", map[string]any{paramNote: 1, paramText: "the portal lane"}, false, "note #1 answered and closed")
+	e.expect(t, bo, "note_answer", map[string]any{paramNote: 1, paramText: "again"}, true, "not open")
 
 	// The roster.
 	e.expect(t, ana, "agents_register", map[string]any{paramAgent: anaAgent}, true, "host is required")

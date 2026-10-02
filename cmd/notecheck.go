@@ -53,6 +53,8 @@ const probeTimeout = 10 * time.Second
 type noteDraft struct {
 	Question, StatusQuo, Why, Default, Due, Checked, Kind, Until string
 	Options                                                      []string
+	// Recommend is the recommended option, 1-based; 0 recommends none.
+	Recommend int
 }
 
 var (
@@ -67,8 +69,13 @@ var (
 	// note: it needs where it was checked.
 	stateClaim = regexp.MustCompile(`(?i)\b(merged|green|released|rolled|closed)\b`)
 	// noAction is a default that does nothing.
-	noAction = regexp.MustCompile(`(?i)^(|-|wait\b.*|waiting\b.*|keep waiting\b.*|none|nothing( happens)?|no default|n/?a|tbd|unknown|ask( again)?|it waits)$`)
+	noAction = regexp.MustCompile(`(?i)^(|-|waits?\b.*|waiting\b.*|keep waiting\b.*|none|nothing( happens)?|no default|n/?a|tbd|unknown|ask( again)?|it waits)$`)
 )
+
+// isAction reports whether a default does something when it applies.
+func isAction(dflt string) bool {
+	return !noAction.MatchString(strings.Trim(strings.TrimSpace(dflt), ".!"))
+}
 
 // text is the note's one-line text: the question, then its status quo,
 // why, options and where its claims were checked.
@@ -117,7 +124,7 @@ func (d noteDraft) missing() []string {
 // is an action and, for a decision, its due time.
 func (d noteDraft) unanswered() []string {
 	var out []string
-	if dflt := strings.Trim(strings.TrimSpace(d.Default), ".!"); noAction.MatchString(dflt) {
+	if !isAction(d.Default) {
 		out = append(out, fmt.Sprintf("--default %q is no action: name what happens unanswered", d.Default))
 	}
 	if d.Kind == noteDecision && strings.TrimSpace(d.Due) == "" {
