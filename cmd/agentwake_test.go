@@ -115,17 +115,13 @@ func TestWakeStartsBesideAStillLoadedWake(t *testing.T) {
 // Only a headless claude of the session is a beekeeper turn: the desktop's
 // CLI resumes it too, without -p.
 func TestHeadlessTurn(t *testing.T) {
-	tb := &proc.Table{ByPID: map[int]*proc.Process{
-		1: {PID: 1, Comm: claudeComm, Args: []string{claudeComm, "-p", sessionIDFlag, "first", "--", "brief"}},
-		2: {PID: 2, Comm: claudeComm, Args: []string{claudeComm, "-p", resumeFlag, "woken", "--", "msg"}},
-		3: {PID: 3, Comm: claudeComm, Args: []string{claudeComm, "--input-format", "stream-json", "--resume=on-screen"}},
-	}}
-	for id, want := range map[string]string{"first": "first turn", "woken": "wake turn", "on-screen": "", "none": "", "": ""} {
+	tb := turnTable()
+	for id, want := range map[string]string{firstTurn: "first turn", "woken": "wake turn", onScreen: "", "none": "", "": ""} {
 		if got := headlessTurn(tb, id); got != want {
 			t.Errorf("headlessTurn(%q) = %q, want %q", id, got, want)
 		}
 	}
-	if headlessTurn(nil, "first") != "" {
+	if headlessTurn(nil, firstTurn) != "" {
 		t.Error("no table: no turn")
 	}
 }
@@ -155,16 +151,27 @@ func TestUniqueNameAndWakeLive(t *testing.T) {
 	}
 }
 
-// turnMachine's process table holds the headless first turn of session
-// "first" and the desktop's CLI of session "on-screen".
+// The sessions of turnTable: one in a headless first turn, one the desktop's
+// CLI resumes.
+const (
+	firstTurn = "first"
+	onScreen  = "on-screen"
+)
+
+// turnTable holds a headless first turn, a headless wake turn and the
+// desktop's CLI of a session.
+func turnTable() *proc.Table {
+	return &proc.Table{ByPID: map[int]*proc.Process{
+		1: {PID: 1, Comm: claudeComm, Args: []string{claudeComm, "-p", sessionIDFlag, firstTurn, "--", "brief"}},
+		2: {PID: 2, Comm: claudeComm, Args: []string{claudeComm, "-p", resumeFlag, "woken", "--", "msg"}},
+		3: {PID: 3, Comm: claudeComm, Args: []string{claudeComm, "--input-format", "stream-json", "--resume=" + onScreen}},
+	}}
+}
+
+// turnMachine's process table is turnTable.
 type turnMachine struct{ platform.Machine }
 
-func (m turnMachine) Processes() (*proc.Table, error) {
-	return &proc.Table{ByPID: map[int]*proc.Process{
-		1: {PID: 1, Comm: claudeComm, Args: []string{claudeComm, "-p", sessionIDFlag, "first", "--", "brief"}},
-		2: {PID: 2, Comm: claudeComm, Args: []string{claudeComm, "--input-format", "stream-json", "--resume=on-screen"}},
-	}}, nil
-}
+func (m turnMachine) Processes() (*proc.Table, error) { return turnTable(), nil }
 
 // An agent in a headless turn is marked, and the list says that the desktop's
 // sidebar shows its row idle and the roster is the busy view.
@@ -172,13 +179,13 @@ func TestAgentsNameTheRosterTheBusyView(t *testing.T) {
 	a, out := stubApp(t)
 	plat.Machine = turnMachine{Machine: plat.Machine}
 	st := &state.State{Agents: []state.Agent{
-		{Party: state.Party{Session: "first", Name: "Starting"}, Task: "brief"},
-		{Party: state.Party{Session: "on-screen", Name: "On screen"}, Task: "follow-up"},
+		{Party: state.Party{Session: firstTurn, Name: "Starting"}, Task: "a brief"},
+		{Party: state.Party{Session: onScreen, Name: "On screen"}, Task: "a follow-up"},
 	}}
-	sessions := []*claude.Session{{ID: "first", Name: "Starting"}, {ID: "on-screen", Name: "On screen"}}
+	sessions := []*claude.Session{{ID: firstTurn, Name: "Starting"}, {ID: onScreen, Name: "On screen"}}
 	views := a.agentViews(st, sessions)
 	for _, v := range views {
-		if want := v.Session == "first"; v.HeadlessTurn != want {
+		if want := v.Session == firstTurn; v.HeadlessTurn != want {
 			t.Errorf("%s: HeadlessTurn = %v, want %v", v.Name, v.HeadlessTurn, want)
 		}
 	}
