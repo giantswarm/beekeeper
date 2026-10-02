@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `board next` counts the `sessions serve` record of an agent on the roster busy with its task as covering its item while the agent's CLI is gone (the desktop warmed none, the watch marked the record ended), so `--claim` no longer hands it to a second worker; it is offered again once the agent reports idle or leaves the roster.
 - Two parties of different people or hosts are never the same party, whatever their names: a central lease or roster entry of one person's agent no longer passes as another's of the same name.
 
 - `beekeeper board next --claim` keeps a session's open serve: a second claim while the issue or pull request its record names is open exits 3, prints the record and changes nothing; `--claim --replace` takes the next item and replaces the record as before, and a record whose item closed, or of an agent reporting done, is replaced without it. A worker's second claim swapped its open item for a new one, and the first showed as free to every other pull.
