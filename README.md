@@ -824,6 +824,18 @@ brief carries only its task and reports to `the supervisor`, whoever holds the r
 hand-over puts the rules ahead of the follow-up's prompt again. The first turn runs from the command
 line in bypass, and the roster shows it busy with its `--task` from the moment it is started. The session is then a desktop session as well: the person reads and answers it in the sidebar.
 
+**The roster is the view of which agents work, not the sidebar.** Claude Desktop marks a row
+working only while its own CLI of the session runs a turn; its session record holds no state another
+process could set. A first turn (and a wake turn of `agents wake`) is a `claude -p` outside the
+desktop, so the row shows the session idle while it works. The desktop has no route that runs the
+brief as a desktop turn of the imported session instead: `claude://resume` imports a session without
+a prompt, `claude://code/new?q=` fills the composer of a new session under an id of the desktop's,
+and a message to `local_<id>` (`SendMessage`, the session tools' `send_message`) is a turn another
+desktop session's model sends, labelled as that session's message, under the desktop's cap of CLIs
+and of sends since the person last typed. `beekeeper agents` shows such an agent `live, first turn
+running` or `live, wake turn running` and says under its table how many agents are in a headless
+turn; `--json` marks each with `headlessTurn`.
+
 The import makes the desktop warm a CLI of its own for the session (`--resume=<id>`) while the
 first turn still runs. Two CLIs on one session id are two peers under one name, and a message by
 name could reach the desktop's copy, which would run a turn beside the first turn. So once the

@@ -32,6 +32,10 @@ type agentView struct {
 	// Kept says what keeps the idle entry on the roster past
 	// agents.staleAfter (keptBy); empty when nothing does.
 	Kept string `json:"kept,omitempty"`
+	// HeadlessTurn: a headless turn of agents start or agents wake is its
+	// CLI, which Claude Desktop does not run, so its sidebar row shows the
+	// session idle while it works.
+	HeadlessTurn bool `json:"headlessTurn,omitempty"`
 }
 
 // An agent's Browser.
@@ -78,7 +82,12 @@ or skips (Chrome permission mode skip_all_permission_checks). A caller that has 
 before gets only the agents whose task or reachability changed since, or
 one "no change" line; --full prints everything. KEPT says what keeps an
 entry on the roster past agents.staleAfter: its keep marker with its reason
-(agents keep) or a timer that wakes it by name.`,
+(agents keep) or a timer that wakes it by name.
+
+This roster is the view of which agents work. A first turn of agents start
+and a wake turn of agents wake run headless, outside Claude Desktop: its
+sidebar shows such a session idle while REACHABLE says "first turn running"
+or "wake turn running".`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error { return a.agentList(full) },
 	}
@@ -398,7 +407,7 @@ func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentVie
 				}
 			}
 			if turn := headlessTurn(t, s.ID); turn != "" {
-				v.Reachable = "live, " + turn + " running"
+				v.Reachable, v.HeadlessTurn = "live, "+turn+" running", true
 			}
 		}
 		out = append(out, v)
@@ -460,14 +469,18 @@ func (a *app) printAgents(views []agentView) {
 		_, _ = fmt.Fprintln(a.out, "no agent is registered")
 		return
 	}
-	w := a.table()
+	w, headless := a.table(), 0
 	_, _ = fmt.Fprintln(w, "AGENT\tTASK\tSINCE\tMODEL\tBROWSER\tREACHABLE\tKEPT")
 	for _, v := range views {
 		task, since := "(idle)", v.IdleSince
 		if v.Task != "" {
 			task, since = v.Task, v.AssignedAt
 		}
+		headless += boolInt(v.HeadlessTurn)
 		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", truncate(v.Name, 30), truncate(task, 60), clock(a.now, since), cmp.Or(truncate(v.Model, 32), "-"), cmp.Or(v.Browser, "-"), v.Reachable, cmp.Or(truncate(v.Kept, 50), "-"))
 	}
 	_ = w.Flush()
+	if headless > 0 {
+		_, _ = fmt.Fprintf(a.out, "%s in a headless turn: Claude Desktop's sidebar shows the row idle, this roster is the busy view\n", plural(headless, "agent"))
+	}
 }

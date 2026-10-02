@@ -13,6 +13,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -151,5 +152,43 @@ func TestUniqueNameAndWakeLive(t *testing.T) {
 	}
 	if _, ok := wakeLive(sessions, state.Party{HostSession: "local_s3"}, "s3"); ok {
 		t.Error("a stopped session has no CLI")
+	}
+}
+
+// turnMachine's process table holds the headless first turn of session
+// "first" and the desktop's CLI of session "on-screen".
+type turnMachine struct{ platform.Machine }
+
+func (m turnMachine) Processes() (*proc.Table, error) {
+	return &proc.Table{ByPID: map[int]*proc.Process{
+		1: {PID: 1, Comm: claudeComm, Args: []string{claudeComm, "-p", sessionIDFlag, "first", "--", "brief"}},
+		2: {PID: 2, Comm: claudeComm, Args: []string{claudeComm, "--input-format", "stream-json", "--resume=on-screen"}},
+	}}, nil
+}
+
+// An agent in a headless turn is marked, and the list says that the desktop's
+// sidebar shows its row idle and the roster is the busy view.
+func TestAgentsNameTheRosterTheBusyView(t *testing.T) {
+	a, out := stubApp(t)
+	plat.Machine = turnMachine{Machine: plat.Machine}
+	st := &state.State{Agents: []state.Agent{
+		{Party: state.Party{Session: "first", Name: "Starting"}, Task: "brief"},
+		{Party: state.Party{Session: "on-screen", Name: "On screen"}, Task: "follow-up"},
+	}}
+	sessions := []*claude.Session{{ID: "first", Name: "Starting"}, {ID: "on-screen", Name: "On screen"}}
+	views := a.agentViews(st, sessions)
+	for _, v := range views {
+		if want := v.Session == "first"; v.HeadlessTurn != want {
+			t.Errorf("%s: HeadlessTurn = %v, want %v", v.Name, v.HeadlessTurn, want)
+		}
+	}
+	a.printAgents(views)
+	if s := out.String(); !strings.Contains(s, "live, first turn running") || !strings.Contains(s, "1 agent in a headless turn: Claude Desktop's sidebar shows the row idle, this roster is the busy view") {
+		t.Errorf("list:\n%s", s)
+	}
+	out.Reset()
+	a.printAgents(views[1:])
+	if strings.Contains(out.String(), "headless turn") {
+		t.Errorf("no headless turn, still the note:\n%s", out)
 	}
 }
