@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -277,22 +278,19 @@ func TestGrantToAnAgentWithoutACLI(t *testing.T) {
 // whether its import is pending; one with no pending import names the
 // commands that bring it back.
 func TestMessageByNameToAnAgentWithoutACLI(t *testing.T) {
-	a, _ := stubApp(t)
-	plat.Machine = tableMachine{plat.Machine}
-	rosterAgent(t, a, waitingAgent(time.Now()))
-	if r := a.absentPeer("rotation login"); !strings.Contains(r, `no CLI of "Rotation login" runs; its import is pending`) {
+	now := time.Now()
+	st := &state.State{Agents: []state.Agent{waitingAgent(now)}}
+	if r := absentAgent(st, nil, "rotation login", now); !strings.Contains(r, `no CLI of "Rotation login" runs; its import is pending`) {
 		t.Errorf("pending import: %q", r)
 	}
-	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents[0].Import = nil
-		return nil, nil
-	}); err != nil {
-		t.Fatal(err)
+	if r := absentAgent(st, []*claude.Session{{ID: rotationLogin, Name: rotationName}}, rotationName, now); r != "" {
+		t.Errorf("a running CLI of the name: %q", r)
 	}
-	if r := a.absentPeer("Rotation login"); !strings.Contains(r, "no import is pending") || !strings.Contains(r, `beekeeper agents desktop "Rotation login"`) {
+	st.Agents[0].Import = nil
+	if r := absentAgent(st, nil, rotationName, now); !strings.Contains(r, "no import is pending") || !strings.Contains(r, `beekeeper agents desktop "Rotation login"`) {
 		t.Errorf("no pending import: %q", r)
 	}
-	if r := a.absentPeer("Nobody"); r != "" {
+	if r := absentAgent(st, nil, "Nobody", now); r != "" {
 		t.Errorf("a name no agent carries: %q", r)
 	}
 }

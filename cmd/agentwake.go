@@ -397,18 +397,28 @@ func (a *app) absentPeer(name string) string {
 	if err != nil {
 		return ""
 	}
-	for _, s := range discover(a.cfg, t, time.Now()) {
+	store, err := state.Open(a.cfg.StateDir)
+	if err != nil {
+		return ""
+	}
+	st, err := store.Read()
+	if err != nil {
+		return ""
+	}
+	return absentAgent(st, discover(a.cfg, t, time.Now()), name, time.Now())
+}
+
+// absentAgent is absentPeer's answer from the state and the running
+// sessions.
+func absentAgent(st *state.State, sessions []*claude.Session, name string, now time.Time) string {
+	for _, s := range sessions {
 		if strings.EqualFold(s.Name, name) || s.ID == name {
 			return ""
 		}
-	}
-	st, err := a.store.Read()
-	if err != nil {
-		return ""
 	}
 	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return strings.EqualFold(ag.Name, name) || ag.Session == name })
 	if i < 0 {
 		return ""
 	}
-	return noCLI(st.Agents[i], time.Now()) + ". A message by name reaches it once a CLI of it runs"
+	return noCLI(st.Agents[i], now) + ". A message by name reaches it once a CLI of it runs"
 }
