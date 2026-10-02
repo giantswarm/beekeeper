@@ -65,6 +65,18 @@ place. A running watch keeps the code it started with: every watch, `--once` inc
 installed, and that a re-arm (a restart) picks the new one up; no watch re-executes itself.
 `beekeeper self-update --check` exits 125 while a newer release is out.
 
+An install leaves the older binaries already running on their old code until they end or are
+re-armed: the `agents start` of a worker started before it (its desktop reopen saves the state
+after the first turn), a watch, the standby unit, a waiting gate call. Their saves keep what the
+new release recorded: every object of `state.json` that carries per-entry data (the state itself,
+roster entries and their keep markers, notes, timers, grants, holds, lanes, session records,
+starts, archives, the roles) writes the members its binary does not know back unchanged, with its
+entry. The state carries the version of the newest beekeeper that saved it (`writer`); an older
+process's first save after it is logged once as `state.stale-writer`, naming the process, its
+command and its version, and `beekeeper doctor` (a `DOCTOR stale writer` line in the watch) lists
+each such process while it runs, since it still acts by its older rules. A process older than this
+mechanism (v0.71.1 and before) keeps only the state's top-level members and drops the nested ones.
+
 The session and machine views need Linux (`/proc`, cgroup v2, the journal). Leases, holds and
 the budget work on any system.
 
@@ -106,7 +118,8 @@ a relayed successor opens with the plugin's role.
 
 | Command | For |
 |---|---|
-| `beekeeper status [--bar]` | One line: who supervises, the leases held, the holds in force and the notes and timers that are due. `--bar` prints it as the fixed tab-separated row a desktop bar reads (see [Desktop notifications](#desktop-notifications)). |
+| `beekeeper capacity` | The busy, parked and idle agents against `capacity.floor` and `capacity.ceiling`, the headroom that bounds a new start (MemAvailable, the swap's growth over the watch's readings, the free build slots, the kind labs against their cap) and one verdict: `room for N starts` or what blocks one. Read-only, no GitHub call. |
+| `beekeeper status [--bar]` | One line: who supervises, the leases held, the holds in force, the notes and timers that are due and the busy agents against the target (`busy 4/5-10`). `--bar` prints it as the fixed tab-separated row a desktop bar reads (see [Desktop notifications](#desktop-notifications)). |
 | `beekeeper sessions` | Every running session, Claude Code's and omp's (marked `omp busy` or `omp idle`, see [omp agents](#omp-agents)): the issues and pull requests its latest turns acted on (its `sessions serve` record, its `gh` and `devctl` commands and GitHub tool calls, what it created; a ref it only quoted or read is a mention, kept in `--json` as `mentioned`), when it was last active, the commands it runs right now (a `devctl` wait, a bounded `sleep` with the time left), its memory, how full its context is, its last hour (turns, tool calls and their errors, GitHub calls, cost), role and leases, after `archived` or `test` for a session the guide's feed leaves out. Overlaps name what more than one session acts on. `--all` adds the paused ones and the omp sessions of the last 24 hours no process runs: a message to them does not arrive. `--json` has every figure per session and their totals (see [Session metrics](#session-metrics)). |
 | `beekeeper tail <session>` | A session's last turns without tool calls: what it said and what it was told. |
 | `beekeeper snapshot` | One tick: load, RAM, swap, memory pressure, the desktop scope, tmpfs and disk, build slots, kind clusters, the sessions' last hour and the three that spent the most in it, the commands sessions sit on, every kernel OOM kill since your last snapshot with whose limit it hit (a memcap scope no `run.start` names says `cap unknown`, never the default cap; a test run's scope is a test kill), leases, holds, the GitHub budget, the installations' alerts and their running upgrades (`upgrades: prod/mc 35.0.1 → 35.1.1 for 9m (control plane 3/4, node pools 15/15) · test none`). A caller inside a Claude session that has taken one before gets only what changed since, or one `no change` line; `--full` prints the whole screen and then what changed. |
@@ -797,6 +810,18 @@ is kept in reserve or repurposed: a relay and a crash both start a fresh session
   how to resume it: `claude --bg --resume <session> "…"` for a background worker, its
   `claude://code/continue` link for a desktop session. Nothing is resumed automatically: a burst
   of resumed workers after a login is the supervisor's call against the machine's memory.
+- **Capacity:** the supervisor keeps `capacity.floor` to `capacity.ceiling` agents busy (5 and 10).
+  Busy is a roster agent with a task that is neither parked nor kept: an agent kept on purpose
+  (`agents keep`), one a timer wakes and one whose session waits on its person are parked; the
+  supervisor, the guide and a role's successor are not counted. `beekeeper capacity` (and
+  `--json`) prints the count, the headroom that bounds a new start (MemAvailable against
+  `capacity.availMinMiB`, the machine swap's growth over the watch's readings against
+  `capacity.swapGrowthMaxMiB`, never the swap in use, the free build slots, the kind labs against their
+  cap) and one verdict, `room for N starts` or what blocks one; it reads, changes nothing and makes
+  no GitHub call. `watch` says `CAPACITY LOW <busy> of <floor>` once while busy stays under the
+  floor with room for a start, and `CAPACITY FULL <busy> of <ceiling>` at the ceiling, each with
+  the headroom line and one `ENDED` line when the count recovers. The `handover --prompt` carries
+  the count, `status` shows `busy <n>/<floor>-<ceiling>`.
 
 The command-line send is one headless `claude -p` turn whose only tool is SendMessage, addressed
 by the name ListAgents shows (the session's title): Claude Code has no send command, and its
@@ -810,7 +835,7 @@ systemctl --user enable beekeeper-supervisor-open.service   # runs at the next l
 ```
 
 `beekeeper status --bar` prints one row for a desktop bar (waybar, polybar, i3blocks), the same
-shape as the rows of `free --summary`, so one bar module reads both. The contract is fixed: five
+shape as the rows of `free --summary`, so one bar module reads both. The contract is fixed: six
 tab-separated fields, always present, in this order.
 
 | Field | Value |
@@ -820,6 +845,7 @@ tab-separated fields, always present, in this order.
 | 3 | the number of leases held |
 | 4 | the number of holds in force |
 | 5 | the number of notes and timers whose time has come |
+| 6 | the busy agents against `capacity.floor`, `<n>/<floor>` |
 
 ### Agents started without a click
 
@@ -1284,7 +1310,7 @@ The organisation and desk keys, and their defaults:
 | `outbound.sweepRoots`, `outbound.sweepDepth` | the home directory, 5 | Where the watch looks for exposed keys and credentials in remote URLs |
 
 State lives in `$XDG_STATE_HOME/beekeeper/` (`state.json`, which an older beekeeper still running
-writes back with the fields it does not know, `events.jsonl`, whose `at` is RFC 3339 in UTC while
+writes back with the fields it does not know at every level, `events.jsonl`, whose `at` is RFC 3339 in UTC while
 `beekeeper log` prints local times, each caller's last
 snapshot, the alert baseline `alerts.json` with its owner's `alerts.lock`, the notification ledger
 `notify.json` with `notify.lock`) and leases in `leases/`, one directory per held resource.

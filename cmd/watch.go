@@ -57,7 +57,10 @@ and one ENDED line when it ends. A running merge whose gate process is
 gone is one MERGE LOST line: it settles with an unknown release. A
 registered agent with a task and no running CLI is one AGENTS STOPPED
 line with how to resume it, unless it is kept (agents keep, or a timer
-that wakes it). A reopen that waits to show an agent in the desktop (the
+that wakes it). Fewer busy agents than capacity.floor, with the headroom
+for a start, is one CAPACITY LOW line, and capacity.ceiling reached one
+CAPACITY FULL line, each with the headroom (beekeeper capacity) and one
+ENDED line when the count recovers. A reopen that waits to show an agent in the desktop (the
 window has the person's focus) is one IMPORT WAITS line per wait, with
 what it waits for and until when. A settling merge leaves its lane
 once the lane has settled (its release rolled and its HelmReleases Ready,
@@ -225,6 +228,11 @@ type watcher struct {
 	// swapSamples are the last hour's swap readings, oldest first: the
 	// growth rate toward systemd-oomd's trigger.
 	swapSamples []swapSample
+	// swap is the machine sample's latest swap reading, under mu: the
+	// poll's CAPACITY lines weigh a start against it.
+	swap *swapReading
+	// readHeadroom reads the headroom of a start; nil is app.readHeadroom.
+	readHeadroom func(context.Context, *swapReading) *headroom
 	// standby leaves a running supervisor's events to its watch.
 	standby bool
 	// gap is the term of the gone supervisor this watch said, until a
@@ -762,6 +770,7 @@ func (w *watcher) sample(ctx context.Context) {
 		if m.SwapTotalMiB > 0 {
 			w.check("oomd", !swapoff && w.oomdImminent(headroom, m.SwapTotalMiB, perHour, rated), "OOMD IMMINENT: %s", line)
 		}
+		w.keepSwap(&swapReading{At: now, UsedMiB: m.SwapUsedMiB, PerHourMiB: perHour, Rated: rated})
 	}
 	w.sampleCPU(now)
 	psi, err := plat.Machine.MemoryPressure()
@@ -1304,6 +1313,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		return // the supervisor's watch reports them
 	}
 	w.stoppedAgents(st, sessions)
+	w.capacity(ctx, st, sessions)
 	w.importWaits(st)
 	q := w.quietness(ctx, st, sessions)
 	w.handoversDue(st, sessions)
