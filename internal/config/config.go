@@ -48,6 +48,8 @@ type Config struct {
 	// Identity is whose agents run here: every party this machine's
 	// commands record carries it.
 	Identity Identity `yaml:"identity"`
+	// Serve configures the central instance (beekeeper serve).
+	Serve Serve `yaml:"serve"`
 	// Resources are the environments sessions lease besides the browser:
 	// kind labs and shared installations.
 	Resources []string `yaml:"resources"`
@@ -428,6 +430,26 @@ type Identity struct {
 	Team string `yaml:"team"`
 	// Host names the machine (default: its host name, without the domain).
 	Host string `yaml:"host"`
+}
+
+// Serve configures `beekeeper serve`, the central instance behind muster:
+// whose Dex tokens it accepts and what their groups authorize.
+type Serve struct {
+	// Issuer is the Dex issuer URL every caller's ID token is checked
+	// against (its JWKS).
+	Issuer string `yaml:"issuer"`
+	// ClientIDs are the audiences accepted: the client muster forwards the
+	// person's token for, and the one the installations exchange tokens for.
+	ClientIDs []string `yaml:"clientIDs"`
+	// Organization is the Dex group every member of the organization
+	// carries: a caller without it is refused.
+	Organization string `yaml:"organization"`
+	// Teams maps a Dex group to the team its members belong to; a caller
+	// in none is refused.
+	Teams map[string]string `yaml:"teams"`
+	// Supervisors maps a team to the Dex group of its supervisor role, which
+	// may release the team's leases and lift its holds.
+	Supervisors map[string]string `yaml:"supervisors"`
 }
 
 // Guide configures the guide: its role and the person it guides.

@@ -59,9 +59,14 @@ func (p Party) Owner() string {
 	return strings.Join(parts, ", ")
 }
 
-// Is reports whether p and o name the same session or person.
+// Is reports whether p and o name the same session or person. Parties of
+// two people, or on two hosts, are never the same, whatever their names.
 func (p Party) Is(o Party) bool {
 	switch {
+	case p.Person != "" && o.Person != "" && !strings.EqualFold(p.Person, o.Person):
+		return false
+	case p.Host != "" && o.Host != "" && p.Host != o.Host:
+		return false
 	case p.Session != "" && p.Session == o.Session:
 		return true
 	case p.HostSession != "" && p.HostSession == o.HostSession:

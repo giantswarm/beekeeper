@@ -7,11 +7,14 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/ansi v0.10.1
+	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/creativeprojects/go-selfupdate v1.6.0
 	github.com/giantswarm/selfupdate-cosign v0.3.2
+	github.com/go-jose/go-jose/v4 v4.1.5
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/gofrs/flock v0.13.1
 	github.com/google/uuid v1.6.0
+	github.com/mark3labs/mcp-go v1.1.1
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/sys v0.48.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -75,6 +78,7 @@ require (
 	github.com/google/go-containerregistry v0.21.7 // indirect
 	github.com/google/go-github/v86 v86.0.0 // indirect
 	github.com/google/go-querystring v1.2.0 // indirect
+	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
 	github.com/hashicorp/go-retryablehttp v0.7.8 // indirect
@@ -102,6 +106,7 @@ require (
 	github.com/prometheus/common v0.70.0 // indirect
 	github.com/prometheus/procfs v0.21.1 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	github.com/secure-systems-lab/go-securesystemslib v0.11.0 // indirect
 	github.com/shibumi/go-pathspec v1.3.0 // indirect
 	github.com/sigstore/protobuf-specs v0.5.1 // indirect
@@ -110,6 +115,7 @@ require (
 	github.com/sigstore/sigstore v1.10.8 // indirect
 	github.com/sigstore/sigstore-go v1.3.0 // indirect
 	github.com/sigstore/timestamp-authority/v2 v2.1.3 // indirect
+	github.com/spf13/cast v1.10.0 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/theupdateframework/go-tuf/v2 v2.4.2 // indirect
 	github.com/transparency-dev/formats v0.1.1 // indirect
@@ -117,6 +123,7 @@ require (
 	github.com/ulikunitz/xz v0.5.15 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
+	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	gitlab.com/gitlab-org/api/client-go v1.46.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
@@ -159,3 +166,5 @@ replace go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.34.0 => go.opentele
 replace go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.34.0 => go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.46.0
 
 replace go.opentelemetry.io/otel/sdk v1.44.0 => go.opentelemetry.io/otel/sdk v1.46.0
+
+replace github.com/mark3labs/mcp-go v1.1.1 => github.com/giantswarm/mcp-go v1.1.2-0.20261002145805-7391a80c86e6

@@ -14,6 +14,6 @@ check-crds: generate-crds ## Fail when the committed CRDs or deepcopy code are n
 	git diff --exit-code -- config/crd pkg/apis
 
 .PHONY: test-envtest
-test-envtest: ## Run the envtest-backed tests of the Kubernetes store (downloads a kube-apiserver via setup-envtest).
+test-envtest: ## Run the envtest-backed tests of the Kubernetes store and beekeeper serve (downloads a kube-apiserver via setup-envtest).
 	KUBEBUILDER_ASSETS="$$(go run sigs.k8s.io/controller-runtime/tools/setup-envtest@$(ENVTEST_VERSION) use $(ENVTEST_K8S_VERSION) -p path)" \
-		go test ./internal/state/kube/ -run Envtest -count=1 -v
+		go test ./internal/state/kube/ ./cmd/ -run Envtest -count=1 -v
