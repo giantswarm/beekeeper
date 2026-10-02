@@ -142,6 +142,13 @@ func browserNote(browser string) string {
 	return ""
 }
 
+func keptNote(kept string) string {
+	if kept == "" {
+		return ""
+	}
+	return ", " + kept
+}
+
 func (a *app) agentFacts(views []agentView) []fact {
 	facts := make([]fact, 0, len(views))
 	for _, v := range views {
@@ -153,8 +160,8 @@ func (a *app) agentFacts(views []agentView) []fact {
 		key := fmt.Sprintf("agent %q", v.Name)
 		facts = append(facts, fact{
 			Key:  key,
-			Sig:  strings.Join([]string{task, clock(a.now, since), reach, v.Browser}, "|"),
-			Line: fmt.Sprintf("%s %s since %s, %s%s", key, task, clock(a.now, since), v.Reachable, browserNote(v.Browser)),
+			Sig:  strings.Join([]string{task, clock(a.now, since), reach, v.Browser, v.Kept}, "|"),
+			Line: fmt.Sprintf("%s %s since %s, %s%s%s", key, task, clock(a.now, since), v.Reachable, browserNote(v.Browser), keptNote(v.Kept)),
 		})
 	}
 	return facts
