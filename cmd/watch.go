@@ -63,7 +63,14 @@ late; one not settled past merge.settleTimeout is one LANE STUCK line
 with what the lane waits for and one ENDED line when it ends. A note or a
 timer that falls due, the end of a session with a record (sessions serve)
 and a supervisor relay taken or expired are one line each, once: the state keeps that they were reported, so
-a second or restarted watch stays silent about them. The
+a second or restarted watch stays silent about them. An open note for
+someone, not pinned and not a login, is overtaken once every issue and pull
+request it names with note add --ref is closed or merged (one GraphQL read
+a poll, none under the budget floor), or, with no --ref, once the session
+that filed it is archived in the desktop (a stopped session is not; a
+role's run never is the link): one NOTE OVERTAKEN line with the reason,
+the note closed and note.overtaken logged; --once names each one it would
+close and writes nothing. The
 installations' alerts are read every alerts.every and each NEW or RESOLVED
 one at or above its installation's floor is a line, a flapping one a single
 FLAPPING line (beekeeper alerts watch); only one watch at a time reads them.
@@ -1295,11 +1302,18 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	w.handoversDue(st, sessions)
 	w.doctor(ctx)
 	signedIn := probeLogins(ctx, st.Notes)
+	over := w.overtakenNow(ctx, st)
+	if !w.chores {
+		w.wouldOvertake(st, over)
+		over = nil
+	}
 	held := checkTimers(ctx, st.Timers, w.now, lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now))
 	var fires []timerFire
 	fire := func(st *state.State) ([]string, []state.Event, bool) {
 		seen, ce := observeCLI(st, sessions, w.now)
 		lines, evs := closeProbed(st, signedIn)
+		ol, oe := closeOvertaken(st, over, watchParty)
+		lines, evs = append(lines, ol...), append(evs, oe...)
 		tl, te, tf, touched := settleTimers(st, held, w.now)
 		lines, evs, fires = append(lines, tl...), append(evs, te...), tf
 		seen = seen || touched

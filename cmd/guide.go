@@ -614,7 +614,8 @@ func (a *app) guideFeed(ctx context.Context) ([]string, error) {
 }
 
 // closedNotes are the events that closed the notes the feed reported and
-// that are no longer open, by note id: their answer, or their done.
+// that are no longer open, by note id: their answer, their done, or their
+// overtaken.
 func (a *app) closedNotes(st *state.State) (map[int]state.Event, error) {
 	gone := map[int]bool{}
 	for _, k := range st.GuideRole().Fed {
@@ -626,7 +627,9 @@ func (a *app) closedNotes(st *state.State) (map[int]state.Event, error) {
 	if len(gone) == 0 {
 		return out, nil
 	}
-	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == noteAnswered || e.Verb == "note.done" })
+	evs, err := a.store.Events(0, func(e state.Event) bool {
+		return e.Verb == noteAnswered || e.Verb == "note.done" || e.Verb == noteOvertaken
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -667,6 +670,8 @@ func (a *app) feedLines(st *state.State, sessions []*claude.Session, closed map[
 			switch e, ok := closed[id]; {
 			case ok && e.Verb == noteAnswered:
 				lines = append(lines, fmt.Sprintf("GUIDE ANSWERED (%s): %s", truncate(e.By.Name, 30), truncate(oneLine(e.Detail), 240)))
+			case ok && e.Verb == noteOvertaken:
+				lines = append(lines, fmt.Sprintf("GUIDE CLOSED #%d overtaken: %s", id, truncate(oneLine(overtakenReason(e)), 200)))
 			default:
 				lines = append(lines, fmt.Sprintf("GUIDE CLOSED: note #%d, without an answer", id))
 			}
