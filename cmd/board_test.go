@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"sync"
@@ -129,7 +131,7 @@ func TestConcurrentClaimsNeverGetTheSameItem(t *testing.T) {
 	for i := range workers {
 		wg.Go(func() {
 			me := state.Party{Session: fmt.Sprintf("s%d", i), Name: fmt.Sprintf("Board pull %d", i)}
-			res, err := claimNext(store, cands, me, alive, listed, "")
+			res, err := claimNext(store, cands, me, alive, listed, "", func(string) bool { return false })
 			if err != nil {
 				t.Error(err)
 			}
@@ -148,17 +150,77 @@ func TestConcurrentClaimsNeverGetTheSameItem(t *testing.T) {
 	if len(st.Records) != len(cands) {
 		t.Errorf("records %+v", st.Records)
 	}
-	// A second claim by a session takes the next item and replaces its
-	// record: it serves one item.
-	me := st.Records[0].Session
-	res, err := claimNext(store, boardCandidates(workers-1), me, alive, listed, "the review")
-	if err != nil || res.Pick == nil || res.Pick.Ref != fmt.Sprintf("o/r#%d", workers-1) {
-		t.Fatalf("re-claim: %+v, %v", res, err)
+}
+
+func TestSecondClaimKeepsAnOpenServe(t *testing.T) {
+	store, err := state.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
 	}
+	cands := boardCandidates(2)
+	listed := time.Now()
+	alive := func(state.Party) bool { return true }
+	me := state.Party{Session: "s1", Name: "Board pull"}
+	open := func(string) bool { return true }
+	if res, err := claimNext(store, cands, me, alive, listed, "picking up", open); err != nil || !res.Claimed || res.Pick.Ref != "o/r#1" {
+		t.Fatalf("first claim: %+v, %v", res, err)
+	}
+	before, _ := store.Read()
+
+	// While o/r#1 is open, a second claim changes nothing and names it.
+	res, err := claimNext(store, cands, me, alive, listed, "the review", open)
+	st, _ := store.Read()
+	if err != nil || res.Claimed || res.Pick != nil || res.Held == nil || res.Held.Issue != "o/r#1" || !slices.EqualFunc(st.Records, before.Records, recordsEqual) {
+		t.Fatalf("second claim over an open serve: %+v, %v; records %+v", res, err, st.Records)
+	}
+	if err := (&app{out: io.Discard}).printNext(res, len(cands)); Code(err) != ExitRefused {
+		t.Errorf("refused claim exits %v, want %d", err, ExitRefused)
+	}
+
+	// --replace (or a served item since closed) takes the next item and
+	// replaces the record: the session serves one item.
+	res, err = claimNext(store, cands, me, alive, listed, "the review", func(string) bool { return false })
 	st, _ = store.Read()
-	mine := slices.DeleteFunc(slices.Clone(st.Records), func(r state.Record) bool { return !r.Session.Is(me) })
-	if len(mine) != 1 || mine[0].Issue != res.Pick.Ref || mine[0].Waits != "the review" || len(st.Records) != len(cands) {
-		t.Errorf("records after the re-claim %+v", st.Records)
+	if err != nil || !res.Claimed || res.Held != nil || res.Pick.Ref != "o/r#2" || len(st.Records) != 1 || st.Records[0].Issue != "o/r#2" || st.Records[0].Waits != "the review" {
+		t.Errorf("replacing claim: %+v, %v; records %+v", res, err, st.Records)
+	}
+
+	// An agent reporting done holds nothing: its next claim replaces.
+	_ = store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = append(st.Agents, state.Agent{Party: me, Task: "board pull", Done: true})
+		return nil, nil
+	})
+	if res, err := claimNext(store, cands, me, alive, listed, "", open); err != nil || !res.Claimed || res.Held != nil {
+		t.Errorf("claim of a done agent: %+v, %v", res, err)
+	}
+}
+
+func recordsEqual(a, b state.Record) bool {
+	return a.Session.Is(b.Session) && a.Issue == b.Issue && a.Waits == b.Waits && a.At.Equal(b.At)
+}
+
+func TestServedOpenAsksGitHubPerRecord(t *testing.T) {
+	store, err := state.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	me := state.Party{Session: "s1", Name: "Board pull"}
+	other := state.Party{Session: "s2", Name: "Other"}
+	_ = store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Records = []state.Record{{Session: me, Issue: "o/r#1"}, {Session: other, Issue: "o/r#2"}}
+		return nil, nil
+	})
+	var asked []string
+	gh := func(_ context.Context, args ...string) ([]byte, error) {
+		asked = append(asked, strings.Join(args[4:], " "))
+		return []byte(`{"data":{"repository":{"issueOrPullRequest":{"state":"CLOSED"}}}}`), nil
+	}
+	open, err := servedOpen(t.Context(), &board.Client{GH: gh}, store, me)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if open("O/R#1") || !open("o/r#9") || len(asked) != 1 || asked[0] != "-f o=o -f r=r -F n=1" {
+		t.Errorf("open o/r#1 %v, o/r#9 %v; asked %q", open("o/r#1"), open("o/r#9"), asked)
 	}
 }
 
@@ -170,7 +232,7 @@ func TestClaimTakesNoSkippedItem(t *testing.T) {
 	cands := boardCandidates(1)
 	cands[0].Skip = "created 2026-06-24: Backlog takes items created within 90 days"
 	me := state.Party{Session: "s1", Name: "Board pull"}
-	res, err := claimNext(store, cands, me, func(state.Party) bool { return true }, time.Now(), "")
+	res, err := claimNext(store, cands, me, func(state.Party) bool { return true }, time.Now(), "", func(string) bool { return false })
 	st, _ := store.Read()
 	if err != nil || res.Pick != nil || res.Claimed || len(st.Records) != 0 || len(res.Skipped) != 1 {
 		t.Errorf("claim over a skipped item: %+v, %v; records %+v", res, err, st.Records)
