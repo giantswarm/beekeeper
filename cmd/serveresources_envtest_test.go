@@ -28,6 +28,12 @@ const (
 	// keyRole is an A2A Message's role; purposeProof a test lease's purpose.
 	keyRole      = "role"
 	purposeProof = "proof"
+	// piaTeam is the other team; laptop, boAgent and sessionID the
+	// tests' other agents' host and names.
+	piaTeam   = "planeteers"
+	laptop    = "laptop"
+	boAgent   = "bo-agent"
+	sessionID = "sess-1"
 )
 
 // read reads a resource: its JSON, or the error.
@@ -288,7 +294,7 @@ func TestEnvtestServeMessages(t *testing.T) {
 	e.expect(t, ana, "agents_register", map[string]any{paramAgent: anaAgent, paramHost: lab}, false, "register: ana-agent idle")
 
 	// ana's agent on her laptop messages her agent on the lab.
-	sent := e.expect(t, ana, "send_message", map[string]any{"to": anaAddress, paramMessage: a2a("m1", "hello"), paramAgent: "ana-laptop", paramHost: "laptop"}, false, "delivery")
+	sent := e.expect(t, ana, "send_message", map[string]any{"to": anaAddress, paramMessage: a2a("m1", "hello"), paramAgent: "ana-laptop", paramHost: laptop}, false, "delivery")
 	again := e.expect(t, ana, "send_message", map[string]any{"to": anaAddress, paramMessage: a2a("m1", "hello")}, false, "not queued again")
 	if again["duplicate"] != true || again["id"] != sent["id"] {
 		t.Errorf("the resend %v of %v", again, sent)
@@ -309,7 +315,7 @@ func TestEnvtestServeMessages(t *testing.T) {
 	}
 	first := msgs[0].(map[string]any)
 	env := first["envelope"].(map[string]any)
-	if from := env["from"].(map[string]any); from["person"] != anaEmail || from["agent"] != "ana-laptop" || from["host"] != "laptop" ||
+	if from := env["from"].(map[string]any); from["person"] != anaEmail || from["agent"] != "ana-laptop" || from["host"] != laptop ||
 		env["to"] != anaAddress || env[paramMessage].(map[string]any)["messageId"] != "m1" {
 		t.Errorf("the envelope %v", env)
 	}
@@ -404,7 +410,7 @@ func TestEnvtestServeSendsToKagentThroughMusterAsTheCaller(t *testing.T) {
 	if f.token != tok {
 		t.Error("muster was not called with the caller's token")
 	}
-	if f.tool != "x_kagent_invoke_agent_instance" || f.args["agent_instance_id"] != "sess-1" || f.args["message"] != "status?" || f.args["message_id"] != "k1" {
+	if f.tool != "x_kagent_invoke_agent_instance" || f.args["agent_instance_id"] != sessionID || f.args["message"] != "status?" || f.args["message_id"] != "k1" {
 		t.Errorf("muster saw %s %v", f.tool, f.args)
 	}
 	e.expect(t, ana, "send_message", map[string]any{"to": "kagent:glean/kagent/sess-1", paramMessage: a2a("k2", "x")}, true, "not one serve.kagent routes to")
@@ -433,12 +439,12 @@ func TestEnvtestServeRosterScope(t *testing.T) {
 
 	// ana's agent works on no shared installation: only ana reads it.
 	e.expect(t, ana, "agents_register", map[string]any{paramAgent: anaAgent, paramHost: lab}, false, "register: ana-agent idle")
-	e.expect(t, bo, "agents_register", map[string]any{paramAgent: "bo-agent", paramHost: "bo-laptop"}, false, "register: bo-agent idle")
+	e.expect(t, bo, "agents_register", map[string]any{paramAgent: boAgent, paramHost: "bo-laptop"}, false, "register: "+boAgent+" idle")
 	boUp.expect(resourceRoster)
 	e.expect(t, pia, "note_add", map[string]any{paramText: "marker", paramFor: boEmail, paramKind: noteMemo}, false, "note #1")
 	boUp.expect(resourceNotes + boEmail)
 	boUp.none(resourceRoster)
-	for who, want := range map[*mcpCaller]string{ana: anaAgent, bo: "bo-agent", pia: ""} {
+	for who, want := range map[*mcpCaller]string{ana: anaAgent, bo: boAgent, pia: ""} {
 		_, got, _ := who.call("list_agents", map[string]any{})
 		roster, err := who.read(resourceRoster)
 		if err != nil {
@@ -459,7 +465,7 @@ func TestEnvtestServeRosterScope(t *testing.T) {
 		}
 		return strings.Join(lines, "\n")
 	}
-	if f := feedOf(bo); strings.Contains(f, anaAgent) || !strings.Contains(f, "bo-agent on bo-laptop") {
+	if f := feedOf(bo); strings.Contains(f, anaAgent) || !strings.Contains(f, boAgent+" on bo-laptop") {
 		t.Errorf("bo's feed:\n%s", f)
 	}
 	if f := feedOf(ana); !strings.Contains(f, "ana-agent on lab") {
@@ -471,7 +477,7 @@ func TestEnvtestServeRosterScope(t *testing.T) {
 	// ana messages it.
 	e.expect(t, ana, "lease_claim", map[string]any{paramAgent: anaAgent, paramHost: lab, paramEnvironment: graveler, paramPurpose: purposeProof}, false, "claimed graveler")
 	boUp.expect(resourceRoster)
-	if got := e.expect(t, bo, "list_agents", map[string]any{}, false, anaAgent); strings.Join(agentNames(got), " ") != "bo-agent "+anaAgent {
+	if got := e.expect(t, bo, "list_agents", map[string]any{}, false, anaAgent); strings.Join(agentNames(got), " ") != boAgent+" "+anaAgent {
 		t.Errorf("bo's list_agents %v", agentNames(got))
 	}
 	e.expect(t, bo, "send_message", map[string]any{"to": anaAddress, paramMessage: a2a("b2", "x")}, true, "ana@example.com's local agent: only its person messages it")
