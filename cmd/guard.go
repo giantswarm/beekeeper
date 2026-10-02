@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -130,7 +131,16 @@ func (a *app) hookCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "hook",
 		Short: "Claude Code hooks",
-		Args:  cobra.NoArgs,
+		Long: `The Claude Code hooks beekeeper install registers user-wide. They act
+only in the desk's scope: a session beekeeper started or knows (an agents
+start, the supervisor's or the guide's holder, an agent on the roster), or
+one whose working directory or project ($CLAUDE_PROJECT_DIR) lies under one
+of hooks.scope.dirs. Every other session, a person's own project, gets
+nothing from them: no refusal, no rewrite, no redaction, no prelude, no
+answer to a permission card; the hook exits 0 at once. With
+hooks.scope.dirs unset every session is in scope; a configuration or state
+that does not load keeps the guards on.`,
+		Args: cobra.NoArgs,
 		PersistentPreRunE: func(*cobra.Command, []string) error {
 			return nil
 		},
@@ -218,7 +228,7 @@ Register it in ~/.claude/settings.json:
 		RunE: func(*cobra.Command, []string) error {
 			defer func() { _ = recover() }() // a broken hook must not block the tool call
 			raw, err := io.ReadAll(os.Stdin)
-			if err != nil {
+			if err != nil || !a.inScope(raw) {
 				return nil
 			}
 			self, _ := os.Executable()
@@ -262,7 +272,7 @@ patterns). beekeeper install registers it in ~/.claude/settings.json:
 		RunE: func(*cobra.Command, []string) error {
 			defer func() { _ = recover() }() // a broken hook must not break the tool's result
 			raw, err := io.ReadAll(os.Stdin)
-			if err != nil {
+			if err != nil || !a.inScope(raw) {
 				return nil
 			}
 			if out := a.postToolUse(raw); out != nil {
@@ -290,9 +300,9 @@ stay, and prints nothing. beekeeper install registers it in
     "command": "~/.go/bin/beekeeper hook sessionstart"}]}]`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
-			_, _ = io.Copy(io.Discard, os.Stdin)
+			raw, _ := io.ReadAll(os.Stdin)
 			env := os.Getenv("CLAUDE_ENV_FILE")
-			if env == "" || a.loadConfig() != nil {
+			if env == "" || a.loadConfig() != nil || !a.inScope(raw) {
 				return nil // a broken configuration must not block a session's start
 			}
 			sh := a.cfg.Agents.Shell
@@ -356,7 +366,7 @@ Claude Code, ends the wait.`,
 		RunE: func(*cobra.Command, []string) error {
 			defer func() { _ = recover() }() // a broken hook gives no answer: the person's card
 			raw, err := io.ReadAll(os.Stdin)
-			if err != nil {
+			if err != nil || !a.inScope(raw) {
 				return nil
 			}
 			_, _ = a.out.Write(a.permissionRequest(context.Background(), raw))
@@ -364,6 +374,34 @@ Claude Code, ends the wait.`,
 		},
 	})
 	return c
+}
+
+// inScope reports whether the hook event in raw is in the hooks' scope:
+// its working directory or the session's project ($CLAUDE_PROJECT_DIR)
+// under one of hooks.scope.dirs, or a session beekeeper knows (state.Knows).
+// No dirs configured, every session is; a configuration or state that does
+// not load keeps the guards on.
+func (a *app) inScope(raw []byte) bool {
+	if a.loadConfig() != nil || len(a.cfg.Hooks.Scope.Dirs) == 0 {
+		return true
+	}
+	var ev struct {
+		CWD     string `json:"cwd"`
+		Session string `json:"session_id"`
+	}
+	_ = json.Unmarshal(raw, &ev)
+	if guard.Under(a.cfg.Hooks.Scope.Dirs, ev.CWD, os.Getenv("CLAUDE_PROJECT_DIR")) {
+		return true
+	}
+	store, err := state.Open(a.cfg.StateDir)
+	if err != nil {
+		return true
+	}
+	st, err := store.Peek()
+	if err != nil {
+		return true
+	}
+	return st.Knows(state.Party{Session: ev.Session, HostSession: os.Getenv("CLAUDE_CODE_HOST_SESSION_ID")})
 }
 
 // takeoverGiveUp and takeoverPoll pace a held request; tests shorten them.

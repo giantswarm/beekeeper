@@ -45,6 +45,18 @@ with `--dry-run`) stops the units and removes exactly what install wrote, as `in
 the state directory records it, and leaves the config and the state unless `--purge`. On Linux
 without systemd install writes the hooks and the config and says the service is not available.
 
+The hooks are user-wide, but they act only in the desk's scope: a session beekeeper started or knows
+(an `agents start`, the supervisor's or the guide's holder, an agent on the roster), or one whose
+working directory or project lies under one of `hooks.scope.dirs`. A session on the person's own
+projects outside these gets nothing from them: no refusal, rewrite, redaction, prelude or permission
+answer. Unset, every session is in scope.
+
+```yaml
+hooks:
+  scope:
+    dirs: [~/projects/notebook, ~/projects/work]
+```
+
 From then on `beekeeper self-update` keeps it current: it verifies the release binary's Sigstore
 signature and renames it over the old one in one step, so a running `beekeeper watch` keeps
 running, and a `devctl pr merge` gate call waiting for its turn re-executes the new binary at its

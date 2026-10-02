@@ -99,6 +99,8 @@ type Config struct {
 	// Outbound is what the hook refuses to let leave the machine and where
 	// the watch looks for credentials left exposed on disk.
 	Outbound Outbound `yaml:"outbound"`
+	// Hooks says where beekeeper's Claude Code hooks act.
+	Hooks Hooks `yaml:"hooks"`
 	// Scan is where the transcript value scanner's index takes its values
 	// from.
 	Scan Scan `yaml:"scan"`
@@ -172,6 +174,22 @@ type BoardStep struct {
 	// Search is a GitHub issue search whose open issues the step offers
 	// (oldest first) instead of board items.
 	Search string `yaml:"search"`
+}
+
+// Hooks configures where beekeeper's Claude Code hooks act.
+type Hooks struct {
+	// Scope is the desk's part of the machine; out of it the hooks are
+	// inert.
+	Scope HookScope `yaml:"scope"`
+}
+
+// HookScope is where the hooks act: in a session beekeeper started or
+// knows (an agents start, a role holder, an agent on the roster), and in a
+// session whose working directory or project lies under one of Dirs.
+type HookScope struct {
+	// Dirs are the desk's directories (~/ allowed); empty, every session
+	// is in scope.
+	Dirs []string `yaml:"dirs"`
 }
 
 // Outbound configures the outbound secret guard. The token patterns are
@@ -1028,6 +1046,9 @@ func (c *Config) defaults() error {
 	setStr(&c.Agents.Shell.Globs, GlobsLiteral)
 	c.Reporter.defaults(home, c.Guide.Person)
 	c.Outbound.defaults(home)
+	for i, d := range c.Hooks.Scope.Dirs {
+		c.Hooks.Scope.Dirs[i] = filepath.Clean(homePath(home, d))
+	}
 	setInt(&c.Scan.MinLength, 12)
 	c.Secret.TokenFile = homePath(home, c.Secret.TokenFile)
 	for i := range c.Scan.SOPS {
