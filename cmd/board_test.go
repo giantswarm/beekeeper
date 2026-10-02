@@ -152,6 +152,9 @@ func TestConcurrentClaimsNeverGetTheSameItem(t *testing.T) {
 	}
 }
 
+// boardPull is a claiming worker's name.
+const boardPull = "Board pull"
+
 func TestSecondClaimKeepsAnOpenServe(t *testing.T) {
 	store, err := state.Open(t.TempDir())
 	if err != nil {
@@ -160,9 +163,9 @@ func TestSecondClaimKeepsAnOpenServe(t *testing.T) {
 	cands := boardCandidates(2)
 	listed := time.Now()
 	alive := func(state.Party) bool { return true }
-	me := state.Party{Session: "s1", Name: "Board pull"}
+	me := state.Party{Session: "s1", Name: boardPull}
 	open := func(string) bool { return true }
-	if res, err := claimNext(store, cands, me, alive, listed, "picking up", open); err != nil || !res.Claimed || res.Pick.Ref != "o/r#1" {
+	if res, err := claimNext(store, cands, me, alive, listed, "picking up", open); err != nil || !res.Claimed || res.Pick.Ref != refOne {
 		t.Fatalf("first claim: %+v, %v", res, err)
 	}
 	before, _ := store.Read()
@@ -170,7 +173,7 @@ func TestSecondClaimKeepsAnOpenServe(t *testing.T) {
 	// While o/r#1 is open, a second claim changes nothing and names it.
 	res, err := claimNext(store, cands, me, alive, listed, "the review", open)
 	st, _ := store.Read()
-	if err != nil || res.Claimed || res.Pick != nil || res.Held == nil || res.Held.Issue != "o/r#1" || !slices.EqualFunc(st.Records, before.Records, recordsEqual) {
+	if err != nil || res.Claimed || res.Pick != nil || res.Held == nil || res.Held.Issue != refOne || !slices.EqualFunc(st.Records, before.Records, recordsEqual) {
 		t.Fatalf("second claim over an open serve: %+v, %v; records %+v", res, err, st.Records)
 	}
 	if err := (&app{out: io.Discard}).printNext(res, len(cands)); Code(err) != ExitRefused {
@@ -181,7 +184,7 @@ func TestSecondClaimKeepsAnOpenServe(t *testing.T) {
 	// replaces the record: the session serves one item.
 	res, err = claimNext(store, cands, me, alive, listed, "the review", func(string) bool { return false })
 	st, _ = store.Read()
-	if err != nil || !res.Claimed || res.Held != nil || res.Pick.Ref != "o/r#2" || len(st.Records) != 1 || st.Records[0].Issue != "o/r#2" || st.Records[0].Waits != "the review" {
+	if err != nil || !res.Claimed || res.Held != nil || res.Pick.Ref != cands[1].Ref || len(st.Records) != 1 || st.Records[0].Issue != cands[1].Ref || st.Records[0].Waits != "the review" {
 		t.Errorf("replacing claim: %+v, %v; records %+v", res, err, st.Records)
 	}
 
@@ -204,10 +207,10 @@ func TestServedOpenAsksGitHubPerRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	me := state.Party{Session: "s1", Name: "Board pull"}
+	me := state.Party{Session: "s1", Name: boardPull}
 	other := state.Party{Session: "s2", Name: "Other"}
 	_ = store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Records = []state.Record{{Session: me, Issue: "o/r#1"}, {Session: other, Issue: "o/r#2"}}
+		st.Records = []state.Record{{Session: me, Issue: refOne}, {Session: other, Issue: "o/r#2"}}
 		return nil, nil
 	})
 	var asked []string
@@ -231,7 +234,7 @@ func TestClaimTakesNoSkippedItem(t *testing.T) {
 	}
 	cands := boardCandidates(1)
 	cands[0].Skip = "created 2026-06-24: Backlog takes items created within 90 days"
-	me := state.Party{Session: "s1", Name: "Board pull"}
+	me := state.Party{Session: "s1", Name: boardPull}
 	res, err := claimNext(store, cands, me, func(state.Party) bool { return true }, time.Now(), "", func(string) bool { return false })
 	st, _ := store.Read()
 	if err != nil || res.Pick != nil || res.Claimed || len(st.Records) != 0 || len(res.Skipped) != 1 {
