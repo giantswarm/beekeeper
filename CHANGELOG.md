@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The model and title steward of `agents start`, `agents handover` and `agents reopen` never asks a handed-over session (a later start or another roster session carries its name): asking it had the desktop run a turn of it, and start its CLI again, beside the follow-up, so the agent's name named two CLIs.
+
 - `guide queue` and `guide watch` no longer show long-ended sessions as waiting on the person: a session that waits on its person is listed while its CLI runs or stopped less than `guide.waitingTTL` ago (default 2h); older stopped ones fold into one line (`--full` lists them), and `guide watch` says nothing for a session that only aged out. An agent that reported its task after the wait (`agents idle`, `--done`) is not waiting, and taking an agent off the roster clears its session's wait.
 
 - A started agent's desktop turns run on its `--model`. Claude Desktop handles each import link twice and often keeps the record of the import that lost the transcript's title and model, so every desktop turn ran on the desktop's default. Once the import is done, `agents start` and `agents handover` (and the reopen after a first turn that deferred its import) have a steward, an idle desktop CLI of another session beekeeper started, set the dropped title and the model the first turn ran on through the desktop's session tools, and say so.

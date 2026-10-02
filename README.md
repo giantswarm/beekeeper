@@ -805,7 +805,9 @@ started, a finished worker off the roster before an idle roster agent (whose bri
 call), each idle longest: transcript quiet for
 30 seconds, no tool command, no headless turn, no task on the roster. It is never the supervisor
 or the guide, nor one relieved within 7 days (it follows its role's rules still), nor
-a session its person started. A title set that way is the desktop's "set
+a session its person started, nor a session handed over (a later start or another roster
+session carries its name): a request would have the desktop run a turn of it, and start its CLI
+again, beside its follow-up under the same name. A title set that way is the desktop's "set
 by an agent", which its own titling never overwrites.
 
 `agents remove` archives the removed agent's desktop session the same way (`archive_session`;
