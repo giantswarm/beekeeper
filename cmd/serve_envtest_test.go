@@ -249,7 +249,7 @@ func TestEnvtestServeRefusesWithoutAValidToken(t *testing.T) {
 func TestEnvtestServeTools(t *testing.T) {
 	e := newServeEnv(t)
 	ana := e.as(t, e.token(t, "ana@example.com", teamGroup))
-	bo := e.as(t, e.token(t, "bo@example.com", teamGroup))
+	bo := e.as(t, e.token(t, boEmail, teamGroup))
 	sup := e.as(t, e.token(t, "sup@example.com", teamGroup, "giantswarm:bumblebee-supervisors"))
 	pia := e.as(t, e.token(t, "pia@example.com", "giantswarm:team-planeteers"))
 	agent := func(args map[string]any) map[string]any {
@@ -302,7 +302,7 @@ func TestEnvtestServeTools(t *testing.T) {
 	e.expect(t, pia, "lanes", map[string]any{}, false, "giantswarm/backstage#2")
 
 	// Notes: filed into the filer's team; answered by its addressee.
-	note := e.expect(t, ana, "note_add", map[string]any{paramText: "which lane for muster?", paramFor: "bo@example.com", paramKind: noteMemo}, false, "note #1")
+	note := e.expect(t, ana, "note_add", map[string]any{paramText: "which lane for muster?", paramFor: boEmail, paramKind: noteMemo}, false, "note #1")
 	if by, _ := note["by"].(map[string]any); by["team"] != ourTeam {
 		t.Errorf("note_add %v", note)
 	}

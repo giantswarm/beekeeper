@@ -676,7 +676,7 @@ func toolNoteAnswer(c *call, req mcp.CallToolRequest) (any, error) {
 	}
 	answer, _ := answerText(n, choice, text) // the verb took it
 	c.s.closeDecision(c.ctx, n, outcomeAnswered, answer)
-	return map[string]any{"note": id, "answer": answer, "answeredBy": c.who.Email}, nil
+	return map[string]any{paramNote: id, "answer": answer, "answeredBy": c.who.Email}, nil
 }
 
 func toolNoteDone(c *call, req mcp.CallToolRequest) (any, error) {
@@ -700,7 +700,7 @@ func toolNoteDone(c *call, req mcp.CallToolRequest) (any, error) {
 	}
 	c.s.closeDecision(c.ctx, n, outcomeWithdrawn, "")
 	_, err = fmt.Fprintf(c.out, "note #%d done\n", id)
-	return map[string]any{"note": id}, err
+	return map[string]any{paramNote: id}, err
 }
 
 func toolAgentsRegister(c *call, req mcp.CallToolRequest) (any, error) {

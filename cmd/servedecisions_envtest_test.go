@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,14 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
+)
+
+// The decisions test's team channel, its question and the note_add keys.
+const (
+	teamChannel  = "C0123"
+	whichLane    = "Which lane?"
+	keyStatusQuo = "status_quo"
+	keyDefault   = "default"
 )
 
 // fakeGateway is klaus-gateway's decisions surface: it keeps what it was
@@ -46,7 +55,7 @@ func (g *fakeGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		g.posted = append(g.posted, d)
 		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"id":"d` + string(rune('0'+len(g.posted))) + `","channel":"D1","ts":"1.2"}`))
+		_, _ = fmt.Fprintf(w, `{"id":"d%d","channel":"D1","ts":"1.2"}`, len(g.posted))
 	case strings.HasPrefix(r.URL.Path, "/decisions/") && strings.HasSuffix(r.URL.Path, "/close"):
 		var c struct{ Outcome, Text string }
 		_ = json.Unmarshal(body, &c)
@@ -72,18 +81,18 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	if err := os.WriteFile(tokenFile, []byte("sa-token\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	e.srv.cfg.Serve.People = map[string]string{"bo": "bo@example.com"}
-	e.srv.cfg.Serve.Channels = map[string]string{ourTeam: "C0123"}
+	e.srv.cfg.Serve.People = map[string]string{"bo": boEmail}
+	e.srv.cfg.Serve.Channels = map[string]string{ourTeam: teamChannel}
 	e.srv.cfg.Serve.Gateway = config.Gateway{URL: srv.URL, TokenFile: tokenFile, AnswerTool: "x_beekeeper_note_answer"}
 	e.srv.gw = newGateway(e.srv.cfg.Serve.Gateway)
 
 	ana := e.as(t, e.token(t, "ana@example.com", teamGroup))
-	bo := e.as(t, e.token(t, "bo@example.com", "giantswarm:team-planeteers"))
+	bo := e.as(t, e.token(t, boEmail, "giantswarm:team-planeteers"))
 	kim := e.as(t, e.token(t, "kim@example.com", teamGroup))
 	ask := func(forWho, due string) int {
-		args := map[string]any{paramText: "Which lane for muster?", paramFor: forWho, paramKind: noteDecision, paramAgent: anaAgent, paramHost: "lab",
-			"status_quo": "muster has no lane", "options": []any{"portal: it rolls with backstage", "own: a lane of its own"}, "recommend": 2,
-			"due": due, "default": "muster gets its own lane"}
+		args := map[string]any{paramText: "Which lane for muster?", paramFor: forWho, paramKind: noteDecision, paramAgent: anaAgent, paramHost: lab,
+			keyStatusQuo: "muster has no lane", "options": []any{"portal: it rolls with backstage", "own: a lane of its own"}, "recommend": 2,
+			"due": due, keyDefault: "muster gets its own lane"}
 		id, _ := e.expect(t, ana, "note_add", args, false, "note #")["id"].(float64)
 		return int(id)
 	}
@@ -95,7 +104,7 @@ func TestEnvtestServeDecisions(t *testing.T) {
 		t.Fatalf("posted %+v", posted)
 	}
 	d := posted[0]
-	if d.Person != "bo@example.com" || d.Team != "" || d.Question != "Which lane for muster?" || d.StatusQuo != "muster has no lane" ||
+	if d.Person != boEmail || d.Team != "" || d.Question != "Which lane for muster?" || d.StatusQuo != "muster has no lane" ||
 		len(d.Options) != 2 || d.Options[1].Label != "own" || d.Options[1].Consequence != "a lane of its own" || d.Recommend != 2 ||
 		d.Default != "muster gets its own lane" || d.Note != "note #"+strconv.Itoa(n) || d.AskedBy != "ana@example.com/ana-agent on lab" ||
 		d.Answer.Tool != "x_beekeeper_note_answer" || d.Answer.Arguments[paramVia] != viaSlack {
@@ -110,17 +119,17 @@ func TestEnvtestServeDecisions(t *testing.T) {
 		t.Fatalf("closed %q", closed)
 	}
 	evs, err := e.store.Events(0, func(ev state.Event) bool { return ev.Verb == noteAnswered })
-	if err != nil || len(evs) != 1 || evs[0].By.Person != "bo@example.com" || !strings.Contains(evs[0].Detail, "via slack: own — until Friday") {
+	if err != nil || len(evs) != 1 || evs[0].By.Person != boEmail || !strings.Contains(evs[0].Detail, "via slack: own — until Friday") {
 		t.Fatalf("note.answered %+v %v", evs, err)
 	}
 
 	// A team's decision: posted to its channel, any member answers.
 	n = ask("team:"+ourTeam, "3h")
 	posted, _ = gw.seen()
-	if d := posted[1]; d.Team != ourTeam || d.Channel != "C0123" || d.Person != "" {
+	if d := posted[1]; d.Team != ourTeam || d.Channel != teamChannel || d.Person != "" {
 		t.Fatalf("team decision %+v", d)
 	}
-	e.expect(t, bo, "note_answer", map[string]any{paramNote: n, paramText: "portal"}, true, "only its addressee")
+	e.expect(t, bo, "note_answer", map[string]any{paramNote: n, paramText: portalLane}, true, "only its addressee")
 	e.expect(t, kim, "note_answer", map[string]any{paramNote: n, paramText: "portal, after the release"}, false, "answered and closed")
 
 	// Withdrawn by its filer; defaulted at its due time.
@@ -141,18 +150,18 @@ func TestEnvtestServeDecisions(t *testing.T) {
 
 	// A decision that renders not, or reaches nobody, is refused and not kept.
 	if text, _, failed := ana.call("note_add", map[string]any{paramText: strings.Repeat("x", questionMax+1), paramFor: "bo", paramKind: noteDecision,
-		"status_quo": "s", "due": "3h", "default": "muster gets its own lane"}); !failed || !strings.Contains(text, "cannot render") {
+		keyStatusQuo: "s", "due": "3h", keyDefault: "muster gets its own lane"}); !failed || !strings.Contains(text, "cannot render") {
 		t.Fatalf("long question: %v %s", failed, text)
 	}
-	if text, _, failed := ana.call("note_add", map[string]any{paramText: "Which lane?", paramFor: "eve", paramKind: noteDecision,
-		"status_quo": "s", "due": "3h", "default": "muster gets its own lane"}); !failed || !strings.Contains(text, "nobody's name") {
+	if text, _, failed := ana.call("note_add", map[string]any{paramText: whichLane, paramFor: "eve", paramKind: noteDecision,
+		keyStatusQuo: "s", "due": "3h", keyDefault: "muster gets its own lane"}); !failed || !strings.Contains(text, "nobody's name") {
 		t.Fatalf("unknown person: %v %s", failed, text)
 	}
 	gw.mu.Lock()
 	gw.refuses = true
 	gw.mu.Unlock()
-	if text, _, failed := ana.call("note_add", map[string]any{paramText: "Which lane?", paramFor: "bo", paramKind: noteDecision,
-		"status_quo": "s", "due": "3h", "default": "muster gets its own lane"}); !failed || !strings.Contains(text, "not delivered, withdrawn") {
+	if text, _, failed := ana.call("note_add", map[string]any{paramText: whichLane, paramFor: "bo", paramKind: noteDecision,
+		keyStatusQuo: "s", "due": "3h", keyDefault: "muster gets its own lane"}); !failed || !strings.Contains(text, "not delivered, withdrawn") {
 		t.Fatalf("refused by the gateway: %v %s", failed, text)
 	}
 	if st, _ := e.store.Read(); len(st.Notes) != 0 {

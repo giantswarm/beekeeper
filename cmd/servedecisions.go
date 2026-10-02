@@ -99,7 +99,7 @@ func (g *gateway) close(ctx context.Context, id, outcome, text string) error {
 // answer into out; a status other than 2xx is an error carrying the
 // gateway's reason.
 func (g *gateway) do(ctx context.Context, path string, body, out any) error {
-	token, err := os.ReadFile(g.cfg.TokenFile)
+	token, err := os.ReadFile(g.cfg.TokenFile) //nolint:gosec // the configured token file
 	if err != nil {
 		return fmt.Errorf("klaus-gateway token: %w", err)
 	}
@@ -107,13 +107,13 @@ func (g *gateway) do(ctx context.Context, path string, body, out any) error {
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(g.cfg.URL, "/")+path, bytes.NewReader(b))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(g.cfg.URL, "/")+path, bytes.NewReader(b)) //nolint:gosec // the configured klaus-gateway
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
-	resp, err := g.http.Do(req)
+	resp, err := g.http.Do(req) //nolint:gosec // the configured klaus-gateway
 	if err != nil {
 		return fmt.Errorf("klaus-gateway %s: %w", path, err)
 	}

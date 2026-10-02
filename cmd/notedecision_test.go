@@ -12,10 +12,11 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// A decision's two options, the first recommended.
+// A decision's two options, the first recommended, and a name nobody has.
 const (
-	optMerge = "merge: the release ships tonight"
-	optWait  = "wait: the release ships Monday"
+	nobodyNamed = "nobody"
+	optMerge    = "merge: the release ships tonight"
+	optWait     = "wait: the release ships Monday"
 )
 
 func decisionNote(args ...string) []string {
@@ -164,7 +165,7 @@ func TestDecisionAddressee(t *testing.T) {
 	cfg := config.Serve{
 		Teams:    map[string]string{teamGroup: ourTeam},
 		People:   map[string]string{"Pat": "pat@example.com"},
-		Channels: map[string]string{ourTeam: "C0123"},
+		Channels: map[string]string{ourTeam: teamChannel},
 	}
 	pat := identity.Caller{Email: "Pat@example.com"}
 	member := identity.Caller{Email: "kim@example.com", Groups: []string{teamGroup}}
@@ -179,7 +180,7 @@ func TestDecisionAddressee(t *testing.T) {
 		{"team:" + ourTeam, member, true},
 		{"team:" + ourTeam, pat, false},
 		{"team:planeteers", member, false},
-		{"nobody", pat, false},
+		{nobodyNamed, pat, false},
 	} {
 		if got := decidesNote(cfg, &state.Note{For: c.forWho}, c.who); got != c.want {
 			t.Errorf("%s answered by %s: %v, want %v", c.forWho, c.who.Email, got, c.want)
@@ -188,10 +189,10 @@ func TestDecisionAddressee(t *testing.T) {
 	if email, _, _, err := addressee(cfg, "pat"); email != "pat@example.com" || err != nil {
 		t.Errorf("pat: %q %v", email, err)
 	}
-	if _, team, ch, err := addressee(cfg, "team:"+ourTeam); team != ourTeam || ch != "C0123" || err != nil {
+	if _, team, ch, err := addressee(cfg, "team:"+ourTeam); team != ourTeam || ch != teamChannel || err != nil {
 		t.Errorf("team: %q %q %v", team, ch, err)
 	}
-	for _, f := range []string{"team:planeteers", "nobody"} {
+	for _, f := range []string{"team:planeteers", nobodyNamed} {
 		if _, _, _, err := addressee(cfg, f); Code(err) != ExitRefused {
 			t.Errorf("%s: %v", f, err)
 		}
