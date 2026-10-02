@@ -253,7 +253,7 @@ func TestNoteAddRefAndDoneOvertaken(t *testing.T) {
 	if err := done("1", "--overtaken", "the session came back by itself"); err != nil {
 		t.Fatal(err)
 	}
-	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == noteOvertaken || e.Verb == "note.done" })
+	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == noteOvertaken || e.Verb == noteDone })
 	if err != nil || len(evs) != 1 || evs[0].Verb != noteOvertaken || overtakenReason(evs[0]) != "the session came back by itself" {
 		t.Fatalf("events %+v, %v", evs, err)
 	}

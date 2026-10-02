@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sort"
 	"strings"
@@ -29,7 +30,7 @@ func IndexSOPS(ctx context.Context, ix *Index, files []string) (int, error) {
 	n := 0
 	var errs []error
 	for _, f := range files {
-		out, err := quietRun(ctx, nil, "sops", "-d", "--output-type", "json", f)
+		out, err := quietRun(ctx, nil, nil, "sops", "-d", "--output-type", "json", f)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", f, err))
 			continue
@@ -48,13 +49,14 @@ func IndexSOPS(ctx context.Context, ix *Index, files []string) (int, error) {
 
 // IndexVault adds the concealed fields (passwords, credentials, keys) of
 // every item in the 1Password vault, read with op item list and op item get
-// --reveal, under op://<vault>/<item>/<field>.
-func IndexVault(ctx context.Context, ix *Index, vault string) (int, error) {
-	list, err := quietRun(ctx, nil, "op", "item", "list", "--vault", vault, "--format", "json")
+// --reveal, under op://<vault>/<item>/<field>. env is added to op's
+// environment: the service account's token for the shared vault.
+func IndexVault(ctx context.Context, ix *Index, vault string, env []string) (int, error) {
+	list, err := quietRun(ctx, nil, env, "op", "item", "list", "--vault", vault, "--format", "json")
 	if err != nil {
 		return 0, fmt.Errorf("op item list --vault %q: %w", vault, err)
 	}
-	items, err := quietRun(ctx, bytes.NewReader(list), "op", "item", "get", "-", "--reveal", "--format", "json")
+	items, err := quietRun(ctx, bytes.NewReader(list), env, "op", "item", "get", "-", "--reveal", "--format", "json")
 	if err != nil {
 		return 0, fmt.Errorf("op item get in %q: %w", vault, err)
 	}
@@ -112,10 +114,14 @@ func leaves(v any, path string, fn func(key, value string)) {
 	}
 }
 
-// quietRun runs a command and returns its output. Its error names the exit
-// status and the first stderr line, redacted: a tool may echo what it read.
-func quietRun(ctx context.Context, stdin io.Reader, name string, args ...string) ([]byte, error) {
+// quietRun runs a command, its environment plus env, and returns its
+// output. Its error names the exit status and the first stderr line,
+// redacted: a tool may echo what it read.
+func quietRun(ctx context.Context, stdin io.Reader, env []string, name string, args ...string) ([]byte, error) {
 	c := exec.CommandContext(ctx, name, args...) //nolint:gosec // sops and op with the configured sources
+	if env != nil {
+		c.Env = append(os.Environ(), env...)
+	}
 	c.Stdin = stdin
 	var stderr bytes.Buffer
 	c.Stderr = &stderr

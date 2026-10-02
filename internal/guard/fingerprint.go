@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -56,6 +57,10 @@ type indexData struct {
 	// Lengths are the byte lengths of the indexed forms: a candidate of
 	// another length is not fingerprinted.
 	Lengths []int `json:"lengths"`
+	// Values maps a reference to the fingerprint of its value as indexed,
+	// the value itself and no other form: what beekeeper secret rotate
+	// finds the carriers of a value by once its source holds a new one.
+	Values map[string]string `json:"values,omitempty"`
 }
 
 // OpenIndex reads the index in dir, creating its key on first use. The key
@@ -85,7 +90,7 @@ func OpenIndex(dir string) (*Index, error) {
 // LoadIndex reads the index in dir without creating anything: with no key
 // yet, the index is empty and matches nothing.
 func LoadIndex(dir string) (*Index, error) {
-	ix := &Index{dir: dir, MinLen: MinSecretLen, data: indexData{Entries: map[string]string{}}}
+	ix := &Index{dir: dir, MinLen: MinSecretLen, data: indexData{Entries: map[string]string{}, Values: map[string]string{}}}
 	key, err := os.ReadFile(filepath.Join(dir, indexKeyFile)) //nolint:gosec // beekeeper's own state directory
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -108,6 +113,9 @@ func LoadIndex(dir string) (*Index, error) {
 	}
 	if ix.data.Entries == nil {
 		ix.data.Entries = map[string]string{}
+	}
+	if ix.data.Values == nil {
+		ix.data.Values = map[string]string{}
 	}
 	return ix, nil
 }
@@ -139,8 +147,12 @@ func (ix *Index) Add(ref, value string) int {
 	if ix.key == nil {
 		return 0
 	}
+	value = strings.TrimSpace(value)
+	if len(value) >= ix.MinLen {
+		ix.data.Values[ref] = ix.fingerprint(value)
+	}
 	n := 0
-	for _, f := range forms(strings.TrimSpace(value), ix.MinLen) {
+	for _, f := range forms(value, ix.MinLen) {
 		fp := ix.fingerprint(f)
 		if _, ok := ix.data.Entries[fp]; !ok {
 			n++
@@ -155,14 +167,18 @@ func (ix *Index) Add(ref, value string) int {
 
 // Drop removes every entry whose reference starts with one of prefixes.
 func (ix *Index) Drop(prefixes ...string) {
-	for fp, ref := range ix.data.Entries {
-		for _, p := range prefixes {
-			if strings.HasPrefix(ref, p) {
-				delete(ix.data.Entries, fp)
-				break
-			}
-		}
+	has := func(ref string) bool {
+		return slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(ref, p) })
 	}
+	maps.DeleteFunc(ix.data.Entries, func(_, ref string) bool { return has(ref) })
+	maps.DeleteFunc(ix.data.Values, func(ref, _ string) bool { return has(ref) })
+}
+
+// ValueFingerprint is the fingerprint of ref's value when it was indexed
+// ([Index.Fingerprint] of the value itself); false when ref was not.
+func (ix *Index) ValueFingerprint(ref string) (string, bool) {
+	fp, ok := ix.data.Values[ref]
+	return fp, ok
 }
 
 // Save writes the index, readable by the user only.
