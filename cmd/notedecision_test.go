@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -17,7 +18,7 @@ const (
 	optWait  = "wait: the release ships Monday"
 )
 
-func decision(args ...string) []string {
+func decisionNote(args ...string) []string {
 	return append(append(slices.Clone(decisionArgs), "--option", optMerge, "--option", optWait), args...)
 }
 
@@ -27,12 +28,12 @@ func TestDecisionIsRefusedUnlessItRenders(t *testing.T) {
 		args []string
 		want string
 	}{
-		"a long question":          {decision("approve " + prURL + " " + long(questionMax)), "at most 150"},
-		"two lines":                {decision("approve " + prURL + "?\nand more"), "one line"},
-		"a long status quo":        {decision("--status-quo", long(statusQuoMax+1), "approve "+prURL), "at most 3000"},
-		"a long label":             {decision("--option", long(labelMax+1)+": a consequence", "approve "+prURL), "at most 75"},
-		"eleven options":           {append(decision(), slices.Repeat([]string{"--option", optWait}, 9)...), "11 options, at most 10"},
-		"a recommendation of none": {decision("--recommend", "3", "approve "+prURL), "--recommend 3 names none of the 2 options"},
+		"a long question":          {decisionNote("approve " + prURL + " " + long(questionMax)), "at most 150"},
+		"two lines":                {decisionNote("approve " + prURL + "?\nand more"), "one line"},
+		"a long status quo":        {decisionNote("--status-quo", long(statusQuoMax+1), "approve "+prURL), "at most 3000"},
+		"a long label":             {decisionNote("--option", long(labelMax+1)+": a consequence", "approve "+prURL), "at most 75"},
+		"eleven options":           {append(decisionNote(), slices.Repeat([]string{"--option", optWait}, 9)...), "11 options, at most 10"},
+		"a recommendation of none": {decisionNote("--recommend", "3", "approve "+prURL), "--recommend 3 names none of the 2 options"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			a, _ := noteApp(t)
@@ -50,7 +51,7 @@ func TestDecisionIsRefusedUnlessItRenders(t *testing.T) {
 
 func TestDecisionKeepsItsParts(t *testing.T) {
 	a, _ := noteApp(t)
-	if err := addNote(a, decision("--recommend", "1", "approve "+prURL)...); err != nil {
+	if err := addNote(a, decisionNote("--recommend", "1", "approve "+prURL)...); err != nil {
 		t.Fatal(err)
 	}
 	st, _ := a.store.Read()
@@ -77,8 +78,8 @@ func TestDecisionKeepsItsParts(t *testing.T) {
 
 func TestNoteAnswerRecordsTheChoiceAndTheWords(t *testing.T) {
 	a, _ := noteApp(t)
-	for range 4 {
-		if err := addNote(a, decision("approve "+prURL)...); err != nil {
+	for i := range 4 {
+		if err := addNote(a, decisionNote(fmt.Sprintf("approve %s%d", prURL, i))...); err != nil {
 			t.Fatal(err)
 		}
 	}

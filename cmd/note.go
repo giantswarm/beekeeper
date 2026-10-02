@@ -113,13 +113,6 @@ and tells the session that filed it.`,
 				return usageErr("a decision names who decides: --for <person>")
 			}
 			n.Kind, draft.Due = draft.Kind, due
-			if n.Kind == noteDecision {
-				if m := draft.unrenderable(forWho); len(m) > 0 {
-					return usageErr("decision for %s refused, it cannot render: %s", forWho, strings.Join(m, "; "))
-				}
-			} else if draft.Recommend != 0 {
-				return usageErr("--recommend is a decision's: a %s recommends nothing", n.Kind)
-			}
 			checked := forWho != "" && n.Kind != noteMemo && guides(person, &n)
 			if checked {
 				m := draft.missing()
@@ -132,6 +125,13 @@ and tells the session that filed it.`,
 				}
 			} else if m := draft.unanswered(); n.Kind == noteDecision && len(m) > 0 {
 				return usageErr("decision for %s refused, it lacks: %s", forWho, strings.Join(m, "; "))
+			}
+			if n.Kind == noteDecision {
+				if m := draft.unrenderable(forWho); len(m) > 0 {
+					return usageErr("decision for %s refused, it cannot render: %s", forWho, strings.Join(m, "; "))
+				}
+			} else if draft.Recommend != 0 {
+				return usageErr("--recommend is a decision's: a %s recommends nothing", n.Kind)
 			}
 			if forWho != "" && n.Kind != noteMemo {
 				if err := a.warnAnswered(cmd, n, draft.Question); err != nil {

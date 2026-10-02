@@ -1417,6 +1417,9 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	for _, l := range lines {
 		w.emitNow("pending", "%s", l)
 	}
+	for _, n := range defaulted {
+		due = append(due, defaultedItem(&n))
+	}
 	for _, d := range due {
 		w.notify(ctx, notify.Due, d.key, d.summary, d.body)
 	}
@@ -1523,6 +1526,15 @@ func (w *watcher) importWaits(st *state.State) {
 
 // dueItem is a note or timer this poll reported due.
 type dueItem struct{ key, summary, body string }
+
+// defaultedItem is the notification of a decision closed with its default.
+func defaultedItem(n *state.Note) dueItem {
+	body := truncate(n.Text, 200)
+	if n.For != "" {
+		body = "for " + n.For + ": " + body
+	}
+	return dueItem{fmt.Sprintf("note#%d", n.ID), fmt.Sprintf("beekeeper: note #%d defaulted", n.ID), body + "\napplied: " + truncate(n.Default, 120)}
+}
 
 // firedNow are the notes and timers fired at now.
 func firedNow(st *state.State, now time.Time) []dueItem {
