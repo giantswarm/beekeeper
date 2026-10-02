@@ -84,7 +84,10 @@ func TestDecisionNeedsItsDueAndDefault(t *testing.T) {
 	if err := addNote(a, "--kind", "status", "a line"); Code(err) != ExitUsage || !strings.Contains(err.Error(), noteMemo) {
 		t.Fatalf("an unknown kind: %v", err)
 	}
-	if err := addNote(a, "--kind", noteDecision, "--for", "Sam", "--default", dfltOK, "--due", "3h", "Pick the lab?"); err != nil {
+	if err := addNote(a, "--kind", noteDecision, "--for", "Sam", "--default", dfltOK, "--due", "3h", "Pick the lab?"); err == nil || !strings.Contains(err.Error(), "--status-quo") {
+		t.Fatalf("a decision for another person without its status quo: %v", err)
+	}
+	if err := addNote(a, "--kind", noteDecision, "--for", "Sam", "--status-quo", sqNow, "--default", dfltOK, "--due", "3h", "Pick the lab?"); err != nil {
 		t.Fatalf("a complete decision for another person: %v", err)
 	}
 	if st, _ := a.store.Read(); len(st.Notes) != 1 {

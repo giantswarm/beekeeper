@@ -316,6 +316,22 @@ type NoteSpec struct {
 	// Environment is the Environment the note concerns.
 	// +optional
 	Environment string `json:"environment,omitempty"`
+	// Question is a decision's question, one line.
+	// +kubebuilder:validation:MaxLength=150
+	// +optional
+	Question string `json:"question,omitempty"`
+	// StatusQuo is what is true now and why the decision arises.
+	// +kubebuilder:validation:MaxLength=3000
+	// +optional
+	StatusQuo string `json:"statusQuo,omitempty"`
+	// Options are a decision's choices, "<label>: <consequence>" each.
+	// +kubebuilder:validation:MaxItems=10
+	// +optional
+	Options []string `json:"options,omitempty"`
+	// Recommend is the recommended option, 1-based.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	Recommend int `json:"recommend,omitempty"`
 }
 
 // NoteStatus is who filed the note and where it stands.
@@ -324,10 +340,13 @@ type NoteStatus struct {
 	ObservedGeneration int64       `json:"observedGeneration,omitempty"`
 	By                 Party       `json:"by"`
 	At                 metav1.Time `json:"at"`
-	// State is open, answered or closed.
-	// +kubebuilder:validation:Enum=open;answered;closed
+	// State is open, answered, defaulted or closed.
+	// +kubebuilder:validation:Enum=open;answered;defaulted;closed
 	// +optional
 	State string `json:"state,omitempty"`
+	// Posted is klaus-gateway's handle on the decision's message.
+	// +optional
+	Posted string `json:"posted,omitempty"`
 	// Answer is the answer word for word.
 	// +optional
 	Answer string `json:"answer,omitempty"`

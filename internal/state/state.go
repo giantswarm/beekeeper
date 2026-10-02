@@ -356,8 +356,27 @@ type Note struct {
 	// as overtaken. Without refs the note is linked to its filing session,
 	// and closes once that session is archived.
 	Refs []string `json:"refs,omitempty"`
+	// Question, StatusQuo, Options ("<label>: <consequence>" each) and
+	// Recommend (the recommended option, 1-based) are a decision's parts as
+	// its message renders them; Text joins them for the terminal.
+	Question  string   `json:"question,omitempty"`
+	StatusQuo string   `json:"statusQuo,omitempty"`
+	Options   []string `json:"options,omitempty"`
+	Recommend int      `json:"recommend,omitempty"`
+	// Posted is the gateway's handle on the decision's message, once posted.
+	Posted string `json:"posted,omitempty"`
 
 	rest rest
+}
+
+// Option is a decision's option i (1-based) split into its label and its
+// consequence; ok is false for none.
+func (n *Note) Option(i int) (label, consequence string, ok bool) {
+	if i < 1 || i > len(n.Options) {
+		return "", "", false
+	}
+	label, consequence, _ = strings.Cut(n.Options[i-1], ":")
+	return strings.TrimSpace(label), strings.TrimSpace(consequence), true
 }
 
 // Timer is a point in time the supervisor has to look at something ("check

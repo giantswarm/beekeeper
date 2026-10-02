@@ -177,10 +177,29 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
+                "channels": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
                 "clientIDs": {
                     "type": "array",
                     "items": {
                         "type": "string"
+                    }
+                },
+                "gateway": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "answerTool": {
+                            "type": "string"
+                        },
+                        "tokenFile": {
+                            "type": "string"
+                        },
+                        "url": {
+                            "type": "string"
+                        }
                     }
                 },
                 "issuer": {
@@ -195,6 +214,10 @@
                 },
                 "organization": {
                     "type": "string"
+                },
+                "people": {
+                    "type": "object",
+                    "additionalProperties": true
                 },
                 "supervisors": {
                     "type": "object",

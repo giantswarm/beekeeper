@@ -75,14 +75,33 @@ spec:
               kind:
                 description: Kind is decision, memo or login.
                 type: string
+              options:
+                description: 'Options are a decision''s choices, "<label>: <consequence>"
+                  each.'
+                items:
+                  type: string
+                maxItems: 10
+                type: array
               pinned:
                 description: Pinned is a standing instruction carried by every hand-over.
                 type: boolean
+              question:
+                description: Question is a decision's question, one line.
+                maxLength: 150
+                type: string
+              recommend:
+                description: Recommend is the recommended option, 1-based.
+                minimum: 0
+                type: integer
               refs:
                 description: Refs are the issues and pull requests the note asks about.
                 items:
                   type: string
                 type: array
+              statusQuo:
+                description: StatusQuo is what is true now and why the decision arises.
+                maxLength: 3000
+                type: string
               text:
                 type: string
               until:
@@ -200,11 +219,15 @@ spec:
               observedGeneration:
                 format: int64
                 type: integer
+              posted:
+                description: Posted is klaus-gateway's handle on the decision's message.
+                type: string
               state:
-                description: State is open, answered or closed.
+                description: State is open, answered, defaulted or closed.
                 enum:
                 - open
                 - answered
+                - defaulted
                 - closed
                 type: string
             required:

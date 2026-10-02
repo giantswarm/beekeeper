@@ -106,6 +106,7 @@ func (s *server) watch(ctx context.Context, rc *rest.Config) error {
 		return ctx.Err()
 	}
 	go s.expireLoop(ctx)
+	go s.defaultLoop(ctx)
 	return nil
 }
 

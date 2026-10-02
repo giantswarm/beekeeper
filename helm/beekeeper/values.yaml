@@ -27,6 +27,19 @@ serve:
   # Installation -> the muster tool of its kagent MCP server's
   # invoke_agent_instance.
   kagent: {}  # @schema additionalProperties: true
+  # Name -> email: the people decisions are filed for (note add --for <name>).
+  people: {}  # @schema additionalProperties: true
+  # Team -> the Slack channel ID its decisions (--for team:<name>) go to.
+  channels: {}  # @schema additionalProperties: true
+  # klaus-gateway, which puts decisions to their addressee in Slack.
+  gateway:
+    # Its base URL; empty keeps decisions in beekeeper and mounts no token.
+    url: ""
+    # Where the projected ServiceAccount token (audience klaus-gateway) is
+    # mounted.
+    tokenFile: /var/run/secrets/klaus-gateway/token
+    # The muster tool an answer in Slack calls, as the person who answers.
+    answerTool: x_beekeeper_note_answer
 
 # The watch serve runs in-process (the watch: section of its config.yaml).
 watch:

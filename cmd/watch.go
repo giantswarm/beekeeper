@@ -303,8 +303,13 @@ type watcher struct {
 	chores    bool
 	doctoring atomic.Bool
 	retitled  map[string]time.Time
-	// timerActs are the fired timers' wakes and commands under way.
+	// timerActs are the fired timers' wakes and commands under way, and
+	// the defaulted decisions' filers being told.
 	timerActs sync.WaitGroup
+	// openNotes are the notes open at the last tick, answersSince the time
+	// up to which their answers were said.
+	openNotes    map[int]bool
+	answersSince time.Time
 	// replaced says whether a process's binary was replaced, and its path;
 	// nil is platform.ProcessBinary. versionOf is the version a binary file
 	// reports; nil runs it.
@@ -1355,6 +1360,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		w.resumeRestarted(ctx, supervisorRole, st, sessions)
 		return // the supervisor's watch reports them
 	}
+	w.noteAnswers(st)
 	w.stoppedAgents(st, sessions)
 	w.capacity(ctx, st, sessions)
 	w.importWaits(st)
@@ -1369,9 +1375,12 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	}
 	held := checkTimers(ctx, st.Timers, w.now, lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now))
 	var fires []timerFire
+	var defaulted []state.Note
 	fire := func(st *state.State) ([]string, []state.Event, bool) {
 		seen, ce := observeCLI(st, sessions, w.now)
 		lines, evs := closeProbed(st, signedIn)
+		nl, ne, nd := closeDefaulted(st, w.cfg.Guide.Person, watchParty, w.now)
+		lines, evs, defaulted = append(lines, nl...), append(evs, ne...), nd
 		ol, oe := closeOvertaken(st, over, watchParty)
 		lines, evs = append(lines, ol...), append(evs, oe...)
 		tl, te, tf, touched := settleTimers(st, held, w.now)
@@ -1408,6 +1417,9 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	for _, l := range lines {
 		w.emitNow("pending", "%s", l)
 	}
+	for _, n := range defaulted {
+		due = append(due, defaultedItem(&n))
+	}
 	for _, d := range due {
 		w.notify(ctx, notify.Due, d.key, d.summary, d.body)
 	}
@@ -1417,6 +1429,42 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		}
 	}
 	w.actTimers(ctx, fires)
+	for _, n := range defaulted {
+		w.timerActs.Go(func() { w.tellFiler(ctx, watchParty, &n, defaultedLine(&n)) })
+	}
+}
+
+// noteAnswers says the answers of the notes that closed since the last
+// tick, once: NOTE ANSWERED. The log is read only when a note closed.
+func (w *watcher) noteAnswers(st *state.State) {
+	open := make(map[int]bool, len(st.Notes))
+	for _, n := range st.Notes {
+		open[n.ID] = true
+	}
+	prev := w.openNotes
+	w.openNotes = open
+	if prev == nil {
+		w.answersSince = w.now
+		return
+	}
+	closed := false
+	for id := range prev {
+		closed = closed || !open[id]
+	}
+	if !closed {
+		return
+	}
+	since := w.answersSince
+	evs, err := w.store.Events(0, func(e state.Event) bool { return e.Verb == noteAnswered && e.At.After(since) })
+	if err != nil {
+		return // the next close reads them again
+	}
+	for _, e := range evs {
+		w.answersSince = e.At
+		if an, ok := parseAnswered(e); ok && prev[an.ID] {
+			w.emitNow("pending", "%s", answeredLine(an.ID, cmp.Or(e.By.Person, e.By.Name), truncate(an.Answer, 300)))
+		}
+	}
 }
 
 // stoppedAgents says once which agents with a task have no running CLI: a
@@ -1478,6 +1526,15 @@ func (w *watcher) importWaits(st *state.State) {
 
 // dueItem is a note or timer this poll reported due.
 type dueItem struct{ key, summary, body string }
+
+// defaultedItem is the notification of a decision closed with its default.
+func defaultedItem(n *state.Note) dueItem {
+	body := truncate(n.Text, 200)
+	if n.For != "" {
+		body = "for " + n.For + ": " + body
+	}
+	return dueItem{fmt.Sprintf("note#%d", n.ID), fmt.Sprintf("beekeeper: note #%d defaulted", n.ID), body + "\napplied: " + truncate(n.Default, 120)}
+}
 
 // firedNow are the notes and timers fired at now.
 func firedNow(st *state.State, now time.Time) []dueItem {

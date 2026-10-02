@@ -29,6 +29,11 @@ beekeeper serve, the central instance - leases, holds, merge lanes, notes and th
 | serve.supervisors | object | `{}` |  |
 | serve.muster | string | `""` |  |
 | serve.kagent | object | `{}` |  |
+| serve.people | object | `{}` |  |
+| serve.channels | object | `{}` |  |
+| serve.gateway.url | string | `""` |  |
+| serve.gateway.tokenFile | string | `"/var/run/secrets/klaus-gateway/token"` |  |
+| serve.gateway.answerTool | string | `"x_beekeeper_note_answer"` |  |
 | watch.interval | string | `"30s"` |  |
 | database.secretName | string | `""` |  |
 | database.secretKey | string | `"uri"` |  |

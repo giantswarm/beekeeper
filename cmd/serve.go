@@ -46,7 +46,19 @@ the token's verified email, a member of serve.organization, of the team its
 group in serve.teams names. Releasing another person's lease or lifting
 their hold is that person's, or the owning team's supervisor role's
 (serve.supervisors). Every call leaves one Kubernetes Event on the resource
-it concerns (the caller's team namespace for a list) and one log line.`,
+it concerns (the caller's team namespace for a list) and one log line.
+
+A decision (note_add --kind decision, --for a person of serve.people or an
+email, or team:<name> of serve.channels) is put to its addressee as one
+Slack message through klaus-gateway (serve.gateway, POST /decisions, with
+the projected ServiceAccount token): a direct message, or the team's
+channel. A click, the modal or a thread reply calls note_answer through
+muster as the person who answered; only the addressee answers (the
+person's email, or a member of the team's Dex group in serve.teams; the
+first answer closes a team's). A decision klaus-gateway does not take is
+withdrawn at once. Its message is closed on every path: answered, withdrawn
+(note_done) or at its due time, when serve closes it with its default
+(note.defaulted).`,
 		Args: cobra.NoArgs,
 		PersistentPreRunE: func(*cobra.Command, []string) error {
 			return a.loadConfig()
@@ -113,10 +125,12 @@ type server struct {
 	ids   *identity.Verifier
 	log   *slog.Logger
 	now   func() time.Time
+	// gw puts the decisions to their addressee; nil keeps them here.
+	gw *gateway
 }
 
 func newServer(cfg *config.Config, store *kube.Store, mail *mailbox.Store, ids *identity.Verifier, log *slog.Logger) *server {
-	s := &server{cfg: cfg, store: store, mail: mail, hub: newHub(), ids: ids, log: log, now: time.Now}
+	s := &server{cfg: cfg, store: store, mail: mail, hub: newHub(), ids: ids, log: log, now: time.Now, gw: newGateway(cfg.Serve.Gateway)}
 	s.hub.dropped = func(who identity.Caller, uri string) {
 		log.Warn("notify", "caller", who.Email, "uri", uri, "outcome", "dropped", "detail", "the stream's queue is full")
 	}
@@ -209,7 +223,7 @@ func (s *server) newCall(ctx context.Context, who identity.Caller, req mcp.CallT
 	st := &auditStore{Store: s.store}
 	out := &bytes.Buffer{}
 	return &call{s: s, ctx: ctx, who: who, me: me, store: st, out: out,
-		app: &app{cfg: &cfg, as: me.Name, store: st, now: s.now(), out: out}}
+		app: &app{cfg: &cfg, as: me.Name, store: st, now: s.now(), out: out, central: true}}
 }
 
 // handle runs a tool for the authenticated caller and audits it: the Event

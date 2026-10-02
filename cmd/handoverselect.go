@@ -115,6 +115,7 @@ func shortDur(d time.Duration) string {
 type answered struct {
 	ID       int
 	For      string
+	Via      string
 	Answer   string
 	Asker    string
 	Question string
@@ -125,8 +126,9 @@ type answered struct {
 // noteAnswered is the event of a person's answer on a note.
 const noteAnswered = "note.answered"
 
-// answeredDetail is note.answered's detail, as `note answer` writes it.
-var answeredDetail = regexp.MustCompile(`(?s)^#(\d+) answered for (.*?): (.*?) \(asked by (.*?): (.*)\)$`)
+// answeredDetail is note.answered's detail, as `note answer` writes it
+// (answeredEvent); one written before answers named their way has no via.
+var answeredDetail = regexp.MustCompile(`(?s)^#(\d+) answered for (.*?)(?: via (\w+))?: (.*?) \(asked by (.*?): (.*)\)$`)
 
 // parseAnswered reads a note.answered event; ok is false for another one.
 func parseAnswered(e state.Event) (answered, bool) {
@@ -135,7 +137,7 @@ func parseAnswered(e state.Event) (answered, bool) {
 		return answered{}, false
 	}
 	id, _ := strconv.Atoi(m[1])
-	return answered{ID: id, For: m[2], Answer: m[3], Asker: m[4], Question: m[5], At: e.At, By: e.By.Name}, true
+	return answered{ID: id, For: m[2], Via: m[3], Answer: m[4], Asker: m[5], Question: m[6], At: e.At, By: e.By.Name}, true
 }
 
 // answeredSince is the decisions answered since since, oldest first.

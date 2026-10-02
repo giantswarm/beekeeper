@@ -64,12 +64,27 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            {{- if .Values.serve.gateway.url }}
+            - name: klaus-gateway-token
+              mountPath: {{ dir .Values.serve.gateway.tokenFile }}
+              readOnly: true
+            {{- end }}
       volumes:
         - name: config
           configMap:
             name: {{ include "beekeeper.name" . }}
         - name: tmp
           emptyDir: {}
+        {{- if .Values.serve.gateway.url }}
+        # klaus-gateway admits beekeeper by this token (TokenReview).
+        - name: klaus-gateway-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: klaus-gateway
+                  expirationSeconds: 3600
+                  path: {{ base .Values.serve.gateway.tokenFile }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

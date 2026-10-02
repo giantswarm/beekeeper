@@ -71,7 +71,15 @@ archived, guide watch names it to the guide as orphaned (GUIDE ORPHANED),
 to ask or close by hand; a role's run never orphans its notes.
 
 --replaces <id> closes the named open note in the same step (note.replaced)
-and carries its pin over, so a state memo is one open note at a time.`,
+and carries its pin over, so a state memo is one open note at a time.
+
+A decision is put to its addressee as one message (beekeeper serve, through
+klaus-gateway): --for a person, or --for team:<name> for any member of the
+team. It is refused unless it renders: the question one line of at most 150
+characters, --status-quo at most 3000, at most 10 --option with labels of at
+most 75 characters, --recommend <n> naming one of them. At its due time
+beekeeper watch closes it with its default (note.defaulted, NOTE DEFAULTED)
+and tells the session that filed it.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			d, err := untilTime(a.now, due)
@@ -93,7 +101,8 @@ and carries its pin over, so a state memo is one open note at a time.`,
 					linked = append(linked, name)
 				}
 			}
-			n := state.Note{For: forWho, Text: draft.text(), Due: d.UTC(), Default: draft.Default, By: me, At: a.now.UTC(), Until: draft.Until, Pinned: pin, Refs: slices.Clip(linked)}
+			n := state.Note{For: forWho, Text: draft.text(), Due: d.UTC(), Default: draft.Default, By: me, At: a.now.UTC(), Until: draft.Until, Pinned: pin, Refs: slices.Clip(linked),
+				Question: strings.TrimSpace(draft.Question), StatusQuo: draft.StatusQuo, Options: draft.Options, Recommend: draft.Recommend}
 			person := a.cfg.Guide.Person
 			switch {
 			case draft.Kind == "":
@@ -116,6 +125,13 @@ and carries its pin over, so a state memo is one open note at a time.`,
 				}
 			} else if m := draft.unanswered(); n.Kind == noteDecision && len(m) > 0 {
 				return usageErr("decision for %s refused, it lacks: %s", forWho, strings.Join(m, "; "))
+			}
+			if n.Kind == noteDecision {
+				if m := draft.unrenderable(forWho); len(m) > 0 {
+					return usageErr("decision for %s refused, it cannot render: %s", forWho, strings.Join(m, "; "))
+				}
+			} else if draft.Recommend != 0 {
+				return usageErr("--recommend is a decision's: a %s recommends nothing", n.Kind)
 			}
 			if forWho != "" && n.Kind != noteMemo {
 				if err := a.warnAnswered(cmd, n, draft.Question); err != nil {
@@ -173,12 +189,13 @@ and carries its pin over, so a state memo is one open note at a time.`,
 			return err
 		},
 	}
-	add.Flags().StringVar(&forWho, "for", "", "who has to act (a person's name)")
+	add.Flags().StringVar(&forWho, "for", "", "who has to act: a person's name or email, or team:<name>")
 	add.Flags().StringVar(&due, "due", "", "when it is due: a time (22:55) or a duration (3h)")
 	add.Flags().StringVar(&draft.Default, "default", "", "what happens if nobody answers by the due time: an action")
 	add.Flags().StringVar(&draft.StatusQuo, "status-quo", "", "what is true now")
 	add.Flags().StringVar(&draft.Why, "why", "", "why it needs the person")
 	add.Flags().StringArrayVar(&draft.Options, "option", nil, `a choice and its consequence, "<choice>: <consequence>" (repeatable)`)
+	add.Flags().IntVar(&draft.Recommend, "recommend", 0, "the option recommended, 1-based (why goes into --status-quo)")
 	add.Flags().StringVar(&draft.Checked, "checked", "", "where a state claim (merged, green, released, rolled, closed) was checked")
 	add.Flags().BoolVar(&pin, "pin", false, "a standing instruction: every hand-over carries it until unpinned")
 	add.Flags().StringVar(&draft.Kind, "kind", "", `"decision" (the default for the guide's person), "memo" (the default otherwise) or "login" (a sign-in, closed once --until passes)`)
@@ -230,14 +247,19 @@ note.overtaken with the reason, as the watch does.`,
 		},
 	}
 	done.Flags().StringVar(&overtaken, "overtaken", "", "close them as overtaken: why what they ask is settled")
+	var choice int
+	var via string
 	answer := &cobra.Command{
-		Use:   "answer <id> <answer>",
+		Use:   "answer <id> [<answer>]",
 		Short: "Record a person's answer on a note, word for word, and close it",
-		Long: `Close the note with the person's answer. The note.answered event carries
-the answer verbatim, so the session that filed the note, the supervisor and
-the guide's feed read it from the log (beekeeper log --verb note.answered).`,
-		Args: cobra.MinimumNArgs(2),
-		RunE: func(_ *cobra.Command, args []string) error {
+		Long: `Close the note with the person's answer: --choice <n>, one of its options
+(1-based), the person's own words, or both. The note.answered event carries
+the answer verbatim, with the way it came (--via, cli unless it came from
+Slack), so the session that filed the note, the supervisor and the guide's
+feed read it from the log (beekeeper log --verb note.answered); the session
+that filed it is told at once.`,
+		Args: cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
 			me, err := a.caller()
 			if err != nil {
 				return err
@@ -246,25 +268,34 @@ the guide's feed read it from the log (beekeeper log --verb note.answered).`,
 			if err != nil {
 				return err
 			}
-			text := strings.Join(args[1:], " ")
-			var n *state.Note
+			if via != viaCLI && via != viaSlack {
+				return usageErr("--via %q is none of %s, %s", via, viaCLI, viaSlack)
+			}
+			var n state.Note
+			var text string
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				i := slices.IndexFunc(st.Notes, func(n state.Note) bool { return n.ID == ids[0] })
 				if i < 0 {
 					return nil, refused("note #%d is not open", ids[0])
 				}
-				n = &st.Notes[i]
-				ev := event(me, noteAnswered, "#%d answered for %s: %s (asked by %s: %s)", n.ID, cmp.Or(n.For, "nobody named"), text, n.By.Name, n.Text)
+				n = st.Notes[i]
+				var err error
+				if text, err = answerText(&n, choice, strings.Join(args[1:], " ")); err != nil {
+					return nil, err
+				}
 				st.Notes = slices.Delete(st.Notes, i, i+1)
-				return []state.Event{ev}, nil
+				return []state.Event{answeredEvent(me, &n, via, text)}, nil
 			})
 			if err != nil {
 				return err
 			}
+			a.tellFiler(cmd.Context(), me, &n, answeredLine(n.ID, cmp.Or(me.Person, me.Name), text))
 			_, err = fmt.Fprintf(a.out, "note #%d answered and closed\n", ids[0])
 			return err
 		},
 	}
+	answer.Flags().IntVar(&choice, "choice", 0, "the option chosen, 1-based")
+	answer.Flags().StringVar(&via, "via", viaCLI, "how the answer came: cli or slack")
 	list := listCmd("List the open notes", a.noteList)
 	c.AddCommand(add, answer, done, a.notePinCmd("pin", true), a.notePinCmd("unpin", false), list)
 	return c

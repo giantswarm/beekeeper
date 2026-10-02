@@ -90,6 +90,9 @@ type app struct {
 	kindClusters func() ([]string, error)
 	// zone reads the machine's time zone; nil is machine.Zone.
 	zone func() (*time.Location, error)
+	// central is an app of beekeeper serve: its notes' filers run on other
+	// machines and learn of an outcome from its feed.
+	central bool
 }
 
 // New returns the root command.

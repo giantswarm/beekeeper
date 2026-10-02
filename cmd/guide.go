@@ -634,7 +634,7 @@ func (a *app) closedNotes(st *state.State) (map[int]state.Event, error) {
 		return out, nil
 	}
 	evs, err := a.store.Events(0, func(e state.Event) bool {
-		return e.Verb == noteAnswered || e.Verb == noteDone || e.Verb == noteOvertaken || e.Verb == noteReplaced
+		return e.Verb == noteAnswered || e.Verb == noteDefaulted || e.Verb == noteDone || e.Verb == noteOvertaken || e.Verb == noteReplaced
 	})
 	if err != nil {
 		return nil, err
@@ -691,6 +691,8 @@ func (a *app) feedLines(st *state.State, sessions []*claude.Session, closed map[
 			switch e, ok := closed[id]; {
 			case ok && e.Verb == noteAnswered:
 				lines = append(lines, fmt.Sprintf("GUIDE ANSWERED (%s): %s", truncate(e.By.Name, 30), truncate(oneLine(e.Detail), 240)))
+			case ok && e.Verb == noteDefaulted:
+				lines = append(lines, "GUIDE DEFAULTED: "+truncate(oneLine(e.Detail), 240))
 			case ok && e.Verb == noteReplaced:
 				lines = append(lines, "GUIDE REPLACED: "+truncate(oneLine(e.Detail), 240))
 			case ok && e.Verb == noteOvertaken:
