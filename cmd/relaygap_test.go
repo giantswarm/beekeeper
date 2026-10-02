@@ -12,6 +12,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// runSixtySeven is the session of a relay's successor.
+const runSixtySeven = "4579230b-e90f-41da-bfea-c92b8aab2f90"
+
 // unitLauncher reports units by their state: active ones always, stopping
 // ones (a start's reopen after its turn) only when asked for those too.
 type unitLauncher struct {
@@ -39,7 +42,7 @@ func useLauncher(t *testing.T, l platform.Launcher) {
 // past the restart grace: the reopen is no turn.
 func TestStandbyResumesASuccessorWhoseReopenWaitsOnTheFocus(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), true)
-	run := state.Party{Session: "4579230b-e90f-41da-bfea-c92b8aab2f90", HostSession: "local_4579230b-e90f-41da-bfea-c92b8aab2f90", Name: supervisorRole.runName(67)}
+	run := state.Party{Session: runSixtySeven, HostSession: "local_" + runSixtySeven, Name: supervisorRole.runName(67)}
 	l := &unitLauncher{stopping: []string{"beekeeper-agent-4579230b.service"}}
 	useLauncher(t, l)
 	var revived atomic.Int32
@@ -73,7 +76,7 @@ func TestStandbyResumesASuccessorWhoseReopenWaitsOnTheFocus(t *testing.T) {
 // While the headless turn of a start or wake runs, its holder is not gone.
 func TestStandbyWaitsForARunningTurn(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), true)
-	run := state.Party{Session: "4579230b-e90f-41da-bfea-c92b8aab2f90", Name: supervisorRole.runName(67)}
+	run := state.Party{Session: runSixtySeven, Name: supervisorRole.runName(67)}
 	useLauncher(t, &unitLauncher{active: []string{"beekeeper-wake-4579230b-0a1b2c3d.service"}})
 	w.stand = standbyWatch{
 		turning: unitsTurning,
@@ -96,7 +99,7 @@ func TestStandbyWaitsForARunningTurn(t *testing.T) {
 func TestReopenYieldsToAHeadlessResume(t *testing.T) {
 	a, out := stubApp(t)
 	a.cfg.Desktop.TypingQuiet.Duration = -1
-	id := "4579230b-e90f-41da-bfea-c92b8aab2f90"
+	id := runSixtySeven
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		p := state.Party{Session: id, Name: supervisorRole.runName(67)}
 		st.Starts = append(st.Starts, state.Start{Party: p, Mode: state.ModeBypass, At: time.Now()})
@@ -128,7 +131,9 @@ func TestReopenYieldsToAHeadlessResume(t *testing.T) {
 // tableMachine reads an empty process table.
 type tableMachine struct{ platform.Machine }
 
-func (tableMachine) Processes() (*proc.Table, error) { return &proc.Table{ByPID: map[int]*proc.Process{}}, nil }
+func (tableMachine) Processes() (*proc.Table, error) {
+	return &proc.Table{ByPID: map[int]*proc.Process{}}, nil
+}
 
 // recordingOpener is a running desktop that records the links it opens.
 type recordingOpener struct{ opened []string }
