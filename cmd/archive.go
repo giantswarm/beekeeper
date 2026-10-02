@@ -120,7 +120,7 @@ func (o owedArchive) String() string {
 
 // planArchives sorts the archives st owes at now. One is owed no longer once
 // the desktop has it archived or no session of it, the agent is on the
-// roster again or keeps a role, or it is past its bounds; it waits while its
+// roster again or keeps a role unrelieved, or it is past its bounds; it waits while its
 // CLI is busy, or archiveAgain after a steward's turn did not record it.
 // record reads a desktop session's record.
 func planArchives(st *state.State, record func(host string) (*claude.Record, bool), busy func(state.Party) bool, now time.Time) []owedArchive {
@@ -135,8 +135,8 @@ func planArchives(st *state.State, record func(host string) (*claude.Record, boo
 			o.drop = "the desktop has it archived"
 		case slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(ar.Party) }):
 			o.drop = "it is on the roster again"
-		case keepsRole(st, ar.Party):
-			o.drop = "it holds or held the supervisor's or the guide's role"
+		case roleKeeps(st, ar.Party):
+			o.drop = "it holds or held the supervisor's or the guide's role, and no relay relieved it"
 		case givenUp(ar, now) != "":
 			o.drop = "the doctor gives it up: " + givenUp(ar, now)
 		case busy(ar.Party):
@@ -147,4 +147,20 @@ func planArchives(st *state.State, record func(host string) (*claude.Record, boo
 		out = append(out, o)
 	}
 	return out
+}
+
+// oweArchive owes from now the archive of the desktop session beekeeper
+// started for p, which a hand-over or a relay left behind: the doctor asks
+// a steward for it while its CLI runs no turn. It returns the session, ""
+// when beekeeper started none for p (a person's session, an omp agent).
+func oweArchive(st *state.State, p state.Party, why string, now time.Time) string {
+	i := slices.IndexFunc(st.Starts, func(x state.Start) bool { return x.Session != "" && x.Session == p.Session })
+	if i < 0 || st.Starts[i].HostSession == "" || st.Starts[i].Harness != "" {
+		return ""
+	}
+	s := st.Starts[i]
+	if !slices.ContainsFunc(st.Archives, func(x state.Archive) bool { return x.Host == s.HostSession }) {
+		st.Archives = append(st.Archives, state.Archive{Party: s.Party, Host: s.HostSession, Since: now.UTC(), Why: why})
+	}
+	return s.HostSession
 }

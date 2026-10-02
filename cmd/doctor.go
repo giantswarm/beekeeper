@@ -24,7 +24,8 @@ import (
 // probes and remedies the known faults of doctor.faults. Each is
 // reversible (the desktop's Archived list brings a session back, a worker
 // registers again), and it never archives or retitles a session a person
-// started or one that holds or held the supervisor's or the guide's role.
+// started or one that holds or held the supervisor's or the guide's role;
+// a run a relay relieved it archives, and a handed-over session.
 
 // remedyTimeout bounds one run of a fault's remedy.
 const remedyTimeout = 2 * time.Minute
@@ -425,6 +426,8 @@ line:
 - asks again for an archive that stayed (its CLI ran a turn, no steward
   recorded it) on its later runs while the CLI runs no turn, until the
   desktop records it, up to 5 stewards' turns 10 minutes apart within 24h;
+  so are archived the session an agents handover ended and the run of the
+  supervisor or the guide a relay relieved, which frees its desktop CLI;
 - gives a session beekeeper started the roster name back when the desktop
   recorded another title, through a steward;
 - probes each fault of doctor.faults (a probe exits 0 while the fault is
@@ -433,7 +436,8 @@ line:
   guide.person, closed once its probe passes.
 
 A session a person started is never archived or retitled, nor one that
-holds or held the supervisor's or the guide's role. The watch runs the
+holds or held the supervisor's or the guide's role unless a relay
+relieved it. The watch runs the
 doctor every tick (beekeeper watch); --dry-run says what it would do,
 the archives it owes and the kept entries it leaves included, probing the
 faults but remedying none.`,

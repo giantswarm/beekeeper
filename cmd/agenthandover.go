@@ -79,9 +79,11 @@ it asks the agent (a peer message) to record what is in flight with
 beekeeper agents note, waiting agents.noteWait (3m) at most; builds the
 follow-up's prompt; starts the follow-up as agents start does, under the
 agent's name, taking over its roster entry, task and session record; stops
-the old session's CLI and what it left running, so the desktop shows it
-stopped (a claude --bg session through claude stop first, so its daemon
-does not resume it); and logs agents.handover. watch says HANDOVER DUE once an agent's
+the old session's CLI and what it left running (a claude --bg session
+through claude stop first, so its daemon does not resume it); once that CLI
+has exited, archives the old session's desktop row through a steward, as
+the doctor does, so only the follow-up's row carries the name (an archive
+not done now the doctor owes and asks for again); and logs agents.handover. watch says HANDOVER DUE once an agent's
 context reached agents.relayAt, at its first quiet moment.
 
 The follow-up runs in the old session's folder and model (--dir, --model
@@ -367,6 +369,7 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 		}
 		a.say("stopped %s of session %s, so the desktop does not reopen it", u, ag.Session)
 	}
+	a.say("%s", a.archiveHandedOver(ctx, me, ag.Party, sa.id))
 	took := time.Since(began)
 	if err := a.store.Log(event(me, "agents.handover", "%s: session %s at %s tokens to %s, %s, in %s",
 		ag.Name, ag.Session, tokensText(h.context), sa.id, noted, dur(took))); err != nil {
@@ -374,6 +377,42 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 	}
 	a.say("handed over %q in %s: logged as agents.handover", ag.Name, dur(took))
 	return nil
+}
+
+// archiveHandedOver archives the desktop session of the handed-over p once
+// its CLI has exited, so only the follow-up's row carries its name; the
+// follow-up's session is to. What it cannot archive now the doctor owes,
+// and asks a steward for while no CLI of p runs a turn. It returns the
+// step's line.
+func (a *app) archiveHandedOver(ctx context.Context, by, p state.Party, to string) string {
+	var host string
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		host = oweArchive(st, p, "handed over to session "+to, a.now)
+		return nil, nil
+	}); err != nil {
+		return fmt.Sprintf("its desktop session stays: %v", err)
+	}
+	if host == "" {
+		return "its desktop session stays: beekeeper started none"
+	}
+	sessions, _, err := a.sessions()
+	if err != nil {
+		return fmt.Sprintf("its desktop session %s stays: %v; the doctor owes it the archive", host, err)
+	}
+	if s, live := claude.Live(sessions, p); live {
+		return fmt.Sprintf("its desktop session %s stays while its CLI %d runs; the doctor owes it the archive", host, s.PID)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		return fmt.Sprintf("its desktop session %s stays: %v; the doctor owes it the archive", host, err)
+	}
+	outcomes := a.archiveDesktops(ctx, st, []state.Party{p}, "beekeeper agents handover")
+	line := outcomes[0].line
+	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		line = owe(st, outcomes, a.now)[0]
+		return []state.Event{event(by, "agents.archive", "%s: %s", p.Name, line)}, nil
+	})
+	return line
 }
 
 // hookSettings is the part of a Claude Code settings file permissionHook

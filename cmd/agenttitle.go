@@ -399,9 +399,8 @@ func handedOver(st *state.State, start state.Start) bool {
 }
 
 // keepsRole reports whether p holds or held the supervisor's or the guide's
-// role: a relieved supervisor still follows its role's rules, which leave
-// archiving to the person. A session named as a role's run held it, also
-// once its relief is forgotten.
+// role: a relieved supervisor still follows its role's rules. A session
+// named as a role's run held it, also once its relief is forgotten.
 func keepsRole(st *state.State, p state.Party) bool {
 	if holdsRole(st, p) {
 		return true
@@ -414,6 +413,23 @@ func keepsRole(st *state.State, p state.Party) bool {
 	}
 	return false
 }
+
+// relieved reports whether a relay relieved p of a role it no longer holds:
+// its successor's start took the relay.
+func relieved(st *state.State, p state.Party) bool {
+	if holdsRole(st, p) {
+		return false
+	}
+	return slices.ContainsFunc(roles, func(rl role) bool {
+		r := relievedIn(rl.get(st), p)
+		return r != nil && !r.Taken.IsZero()
+	})
+}
+
+// roleKeeps reports whether p's desktop session stays for its role: p holds
+// or held one and no taken relay relieved it. A relieved run's session is
+// archived like a finished worker's, which frees its desktop CLI slot.
+func roleKeeps(st *state.State, p state.Party) bool { return keepsRole(st, p) && !relieved(st, p) }
 
 // permissionPromptTool is the flag of every CLI the desktop runs: it answers
 // the CLI's permission prompts, and serves it the desktop's own tools.
@@ -480,7 +496,7 @@ type archiveOutcome struct {
 
 // archiveDesktops archives the desktop sessions of agents taken off the
 // roster by the command by, through one steward's turn: only sessions
-// beekeeper started, holding no role and running no turn. It returns an
+// beekeeper started, keeping no role (roleKeeps) and running no turn. It returns an
 // outcome per agent.
 func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []state.Party, by string) []archiveOutcome {
 	out := make([]archiveOutcome, len(agents))
@@ -558,8 +574,8 @@ func (a *app) archivable(st *state.State, ag state.Party) (host, why string) {
 	if i < 0 {
 		return "", "its desktop session stays: beekeeper did not start it"
 	}
-	if keepsRole(st, ag) {
-		return "", "its desktop session stays: it holds or held the supervisor's or the guide's role"
+	if roleKeeps(st, ag) {
+		return "", "its desktop session stays: it holds or held the supervisor's or the guide's role, and no relay relieved it"
 	}
 	host = st.Starts[i].HostSession
 	switch r, ok := claude.ReadRecord(a.cfg, host); {
