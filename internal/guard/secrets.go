@@ -44,7 +44,8 @@ type leak struct {
 const secretOps = "Equality: `beekeeper secret compare <a> <b>` or `beekeeper secret fingerprint <ref>`. " +
 	"Changes: `beekeeper secret copy <src.sops.yaml> <dst.sops.yaml> [--name n --namespace ns]`, " +
 	"`copy <ref> <file#path>`, `copy <ref> -- <consumer>`, `set <file> <path> --generate --vault op://…`. " +
-	"A rotation is the person's, in their own shell, until `beekeeper secret rotate` is released (giantswarm/beekeeper#320)."
+	"Rotations: `beekeeper secret rotate op://… --generate` (a value beekeeper made), `rotate op://…` (a value its issuer " +
+	"rotated into the vault), `rotate platform://<installation>/<capability>/<name> --reason …` (a platform manager credential)."
 
 func (l leak) reason() string {
 	at := strings.Join(strings.Fields(l.at), " ")

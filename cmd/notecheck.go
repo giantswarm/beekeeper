@@ -262,7 +262,7 @@ func closeProbed(st *state.State, passed []int) ([]string, []state.Event) {
 			return false
 		}
 		lines = append(lines, fmt.Sprintf("NOTE CLOSED: #%d, its probe passed: %s", n.ID, truncate(n.Text, 200)))
-		evs = append(evs, event(watchParty, "note.done", "#%d closed, its probe passed (%s): %s", n.ID, n.Until, n.Text))
+		evs = append(evs, event(watchParty, noteDone, "#%d closed, its probe passed (%s): %s", n.ID, n.Until, n.Text))
 		return true
 	})
 	return lines, evs
