@@ -123,7 +123,8 @@ machine has a supervisor at all times: the role moves to a successor by relay an
 - **Alerts go to whoever changed the area.** A new alert on an installation in play, in an area a
   session handed out or changed, goes at once to that session by name, with the alert and where it
   fires. A page has an owning session within one tick: the session that changed the area,
-  otherwise a worker started for it. A page caused by a teammate's resource on our installation is
+  otherwise a worker started for it, which records it with `beekeeper alerts own`; `PAGE UNOWNED`
+  is a page nobody took. A page caused by a teammate's resource on our installation is
   contained at once by a worker, reversibly (suspend, scale to 0, revert), which tells the owner
   and notifies the guide. Another team's alert in its own area is noted in the tick and left alone.
   A `RUNAWAY` session is told its figure in one message; a `LANE STALLED` lane gets its absent

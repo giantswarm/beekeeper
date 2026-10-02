@@ -522,6 +522,12 @@ type Alerts struct {
 	// notify alert ({severity: notify}), else none. An alert back after a
 	// reading that missed it, with its old start, is quiet too.
 	Quiet []alerts.Quiet `yaml:"quiet"`
+	// PageSeverity is the severity that pages the on-call person (default
+	// page): a firing alert at it that no session owns (alerts own) for
+	// OwnerGrace is a PAGE UNOWNED line, again every OwnerGrace.
+	PageSeverity string `yaml:"pageSeverity"`
+	// OwnerGrace is how long a page may go unowned (default 15m).
+	OwnerGrace Duration `yaml:"ownerGrace"`
 }
 
 // Flap holds back an alert that changes too often: its Changes-th NEW or
@@ -1105,6 +1111,8 @@ func (c *Config) defaults() error {
 	setStr(&al.Kubectl, "kubectl")
 	setInt(&al.Flap.Changes, 4)
 	setDur(&al.Flap.Window, time.Hour)
+	setStr(&al.PageSeverity, alerts.Page)
+	setDur(&al.OwnerGrace, 15*time.Minute)
 	if c.Notify.Kinds == nil {
 		c.Notify.Kinds = slices.Clone(notify.Kinds)
 	}
@@ -1213,6 +1221,12 @@ func (c *Config) validate() error {
 	}
 	if n := c.Alerts.Flap.Changes; n < 0 || n == 1 {
 		return fmt.Errorf("alerts.flap.changes: %d; an alert is flapping from its second change on at the earliest", n)
+	}
+	if p := c.Alerts.PageSeverity; p != "" && !slices.Contains(alerts.Severities, p) {
+		return fmt.Errorf("alerts.pageSeverity: %q is none of %s", p, strings.Join(alerts.Severities, ", "))
+	}
+	if g := c.Alerts.OwnerGrace.Duration; g != 0 && g < time.Minute {
+		return fmt.Errorf("alerts.ownerGrace: %s; a page has at least a minute to be owned", g)
 	}
 	if err := c.Notify.validate(); err != nil {
 		return err

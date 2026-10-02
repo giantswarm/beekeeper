@@ -314,6 +314,22 @@ type Record struct {
 	Ended time.Time `json:"ended,omitzero"`
 }
 
+// AlertOwner is the session that owns a firing alert (alerts own), until the
+// session ends or the alert resolves. A party without a session id is a
+// person, who owns it until it resolves.
+type AlertOwner struct {
+	// Alert is the alert's key in the alert baseline (fingerprint@start).
+	Alert string    `json:"alert"`
+	Name  string    `json:"name"`
+	By    Party     `json:"by"`
+	At    time.Time `json:"at"`
+	// Ended is when a watch saw the owner's session gone.
+	Ended time.Time `json:"ended,omitzero"`
+}
+
+// Person reports whether the owner is a person rather than a session.
+func (o AlertOwner) Person() bool { return o.By.Session == "" && o.By.HostSession == "" }
+
 // ModeBypass is Claude Code's bypassPermissions mode.
 const ModeBypass = "bypassPermissions"
 
@@ -443,6 +459,8 @@ type State struct {
 	Merges []Merge `json:"merges,omitempty"`
 	// Report is the scheduled status reporter's current or last run.
 	Report *Report `json:"report,omitempty"`
+	// AlertOwners are the owners of the firing alerts, one per alert.
+	AlertOwners []AlertOwner `json:"alertOwners,omitempty"`
 	// ReportPause pauses the scheduled reporter, after one final report.
 	ReportPause *ReportPause `json:"reportPause,omitempty"`
 
