@@ -108,7 +108,7 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	d := posted[0]
 	if d.Person != boEmail || d.Team != "" || d.Question != "Which lane for muster?" || d.StatusQuo != "muster has no lane" ||
 		len(d.Options) != 2 || d.Options[1].Label != "own" || d.Options[1].Consequence != "a lane of its own" || d.Recommend != 2 ||
-		d.Default != ownLane || d.Note != "note #"+strconv.Itoa(n) || d.AskedBy != "ana@example.com/ana-agent on lab" ||
+		d.Default != ownLane || d.Note != strconv.Itoa(n) || d.AskedBy != "ana@example.com/ana-agent on lab" ||
 		d.Answer.Tool != "x_beekeeper_note_answer" || d.Answer.Arguments[paramVia] != viaSlack {
 		t.Fatalf("decision %+v", d)
 	}
