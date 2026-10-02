@@ -21,8 +21,10 @@ const desktopPrefix = "local_"
 // counts against the desktop's cap on messages between sessions. peer
 // returns the name the session's running CLI takes messages under, "" when
 // none runs; an error is a send the hook refuses. A running session's
-// message is redirected to its name, which queues it in that CLI; every
-// other call passes unchanged.
+// message is redirected to its name, which queues it in that CLI. A message
+// by name to a roster agent whose CLI does not run is refused with what
+// Absent says: no CLI runs, and whether an import is pending. Every other
+// call passes unchanged.
 func (h Hook) sendMessage(input map[string]any) []byte {
 	to, _ := input["to"].(string)
 	to = strings.TrimSpace(to)
@@ -34,6 +36,11 @@ func (h Hook) sendMessage(input map[string]any) []byte {
 		}
 		why = append(why, "the "+role+" is "+holder+" now")
 		to = holder
+	}
+	if len(why) == 0 && h.Absent != nil && !strings.HasPrefix(to, desktopPrefix) {
+		if r := h.Absent(to); r != "" {
+			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused by beekeeper: " + r})
+		}
 	}
 	if h.Peer != nil && strings.HasPrefix(to, desktopPrefix) {
 		name, err := h.Peer(to)

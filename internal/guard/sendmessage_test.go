@@ -93,3 +93,19 @@ func TestSendMessageToARoleWithoutAHolderIsRefused(t *testing.T) {
 		t.Fatalf("no role lookup: pass, got %+v", d)
 	}
 }
+
+func TestSendMessageByNameToAnAgentWithoutACLIIsRefused(t *testing.T) {
+	h := Hook{Absent: func(name string) string {
+		if name == "Rotation login" {
+			return `no CLI of "Rotation login" runs; its import is pending`
+		}
+		return ""
+	}}
+	d := decideSend(t, h, "Rotation login")
+	if d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "its import is pending") {
+		t.Fatalf("want a refusal saying the import is pending, got %+v", d)
+	}
+	if d := decideSend(t, h, "gpm worker"); d != nil {
+		t.Fatalf("a running name passes: %+v", d)
+	}
+}

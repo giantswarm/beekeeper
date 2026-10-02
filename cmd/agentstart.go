@@ -53,6 +53,10 @@ const (
 	// reopenAwayWait bounds how long a reopen waits for the person to leave
 	// the desktop's window.
 	reopenAwayWait = 25 * time.Minute
+	// desktopTurnWait bounds how long a link for an agent that asked for a
+	// desktop turn waits for the person's input to pause; the window's focus
+	// does not hold it.
+	desktopTurnWait = time.Minute
 	// settleWait bounds the wait for the desktop's main window to leave the
 	// session a link is about to show, a switch back still landing.
 	settleWait = 5 * time.Second
@@ -75,12 +79,21 @@ var errTyping = errors.New("the person kept typing within desktop.typingQuiet")
 // tests replace it.
 var desktopWindowActive = claude.DesktopWindowActive
 
+// screenLocked reports whether a screen locker runs: nobody reads or types
+// in the desktop's window, whatever the compositor still names as focused,
+// and keystrokes go to the locker.
+func screenLocked() bool {
+	t, err := plat.Machine.Processes()
+	return err == nil && claude.ScreenLocked(t)
+}
+
 // desktopInput watches the person's keyboards and pointers; tests replace
 // it.
 var desktopInput = func(ctx context.Context) (func() time.Time, error) { return plat.Input.Watch(ctx) }
 
 func (a *app) agentStartCmd() *cobra.Command {
 	var model, dir, task, harness string
+	var desktop bool
 	c := &cobra.Command{
 		Use:   "start <name> <brief file>",
 		Short: "Start an agent session in bypass from the command line and import it into the desktop",
@@ -107,7 +120,14 @@ new session; beekeeper switches it back to the session it showed before
 links wait while the desktop's window has the focus (Hyprland's active
 window), so the switch never happens under someone reading or typing
 there: up to 2 minutes, after which the start leaves the import to the
-reopen once the first turn has ended, which waits up to 25 minutes more.
+reopen once the first turn has ended, which waits up to 25 minutes more
+(agents and the watch's IMPORT WAITS show it waiting). A locked screen
+(a running hyprlock, swaylock, gtklock or waylock) holds no link: nobody
+works in the window and keystrokes go to the locker. An agent
+that needs a desktop turn, its browser's (the Claude in Chrome tools exist
+only in a desktop CLI), is started with --desktop or asks with agents
+desktop: its import and reopen do not wait for the window's focus, and wait
+for the person's typing to pause for 1 minute at most.
 
 The first prompt is the worker rules beekeeper ships with its role skills
 (the worker-rules skill, under the binary's version), then the brief as the
@@ -153,7 +173,7 @@ is involved and no import happens.`,
 			}
 			// Every worker gets the shipped rules ahead of its task, whatever
 			// its harness.
-			sp := agentStart{name: name, brief: workerPrompt(taskPrompt(brief)), task: task, dir: dir, model: model}
+			sp := agentStart{name: name, brief: workerPrompt(taskPrompt(brief)), task: task, dir: dir, model: model, desktop: desktop}
 			switch harness {
 			case omp.Harness:
 				return a.startOmpAgent(cmd.Context(), sp)
@@ -197,6 +217,7 @@ is involved and no import happens.`,
 	c.Flags().StringVar(&dir, "dir", ".", "the session's working directory")
 	c.Flags().StringVar(&task, "task", "", "the task the roster shows it busy with (default: the brief's first line)")
 	c.Flags().StringVar(&harness, "harness", "claude", "the agent harness: claude or omp")
+	c.Flags().BoolVar(&desktop, "desktop", false, "the task needs desktop turns (the browser): import it past the desktop window's focus, as agents desktop does")
 	return c
 }
 
@@ -214,6 +235,8 @@ type agentStart struct {
 	// by is who starts it when that is not the calling session (the
 	// standby watch); nil: the caller.
 	by *state.Party
+	// desktop asks for its desktop turn from the start (--desktop).
+	desktop bool
 }
 
 // startedAgent is what startAgent started.
@@ -294,6 +317,9 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 		if err != nil {
 			return nil, err
 		}
+		if sp.desktop {
+			st.Agents[len(st.Agents)-1].DesktopTurn = s.At
+		}
 		if sp.replaces != nil {
 			moveRecord(st, *sp.replaces, s.Party)
 		}
@@ -318,7 +344,8 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 		follow = sp.replaces.HostSession
 	}
 	sa := startedAgent{id: id, unit: unit, dir: dir, task: reg.task}
-	if sa.deferred = d.await(ctx, importAwayWait); sa.deferred != nil {
+	d.urgent = a.asksDesktop(id)
+	if sa.deferred = d.await(ctx, importAwayWait, nil); sa.deferred != nil {
 		return sa, nil
 	}
 	err = whileFrozen(ctx, unit, func() error {
@@ -535,7 +562,7 @@ func (a *app) importSession(ctx context.Context, d desk, id, follow string) (str
 func (a *app) showBriefly(ctx context.Context, d desk, url, host, follow string, running bool, away time.Duration) (string, error) {
 	var prev string
 	if running {
-		if err := d.await(ctx, away); err != nil {
+		if err := d.await(ctx, away, nil); err != nil {
 			return "", err
 		}
 		prev = awaitFocusOff(ctx, a.cfg.Claude.DesktopLog, host, settleWait)
@@ -565,70 +592,83 @@ func (a *app) agentReopenCmd() *cobra.Command {
 		Short:  "Warm the desktop's CLI of a started session once its first turn ended",
 		Hidden: true,
 		Args:   cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			// A wake names the desktop id (local_…), a start its session id,
-			// which is the desktop id's too.
-			id := strings.TrimPrefix(args[0], "local_")
-			st, err := a.store.Read()
-			if err != nil {
-				return err
-			}
-			name, ok := reopens(st, args[0])
-			if !ok {
-				_, err := fmt.Fprintf(a.out, "reopen: %s is no start on the roster, left closed\n", id)
-				return err
-			}
-			t, err := plat.Machine.Processes()
-			if err != nil {
-				return err
-			}
-			if plat.Opener.Running(t).IsZero() {
-				_, err := fmt.Fprintf(a.out, "reopen: the desktop does not run, %s waits for it\n", id)
-				return err
-			}
-			// A start whose import waited out the focus has no desktop
-			// record yet: the reopen imports it.
-			url := continueURL("local_" + id)
-			if _, ok := claude.ReadRecord(a.cfg, "local_"+id); !ok {
-				url = resumeURL(id)
-			}
-			d, err := a.watchDesk(cmd.Context())
-			if err != nil {
-				return a.reopenMissed(name, err)
-			}
-			if err := d.await(cmd.Context(), reopenAwayWait); err != nil {
-				return a.reopenMissed(name, fmt.Errorf("reopening %s in the desktop: %w", id, err))
-			}
-			// The standby watch resumes a role's holder headless while this
-			// reopen waits for the person to leave the desktop's window: the
-			// desktop warms no second CLI beside that turn, whose own reopen
-			// follows it.
-			if u := wakeRunning(cmd.Context(), id); u != "" {
-				_, err := fmt.Fprintf(a.out, "reopen: %s was resumed headless meanwhile (%s), whose reopen follows its turn\n", id, u)
-				return err
-			}
-			if _, err := a.showBriefly(cmd.Context(), d, url, "local_"+id, "", true, reopenAwayWait); err != nil {
-				return a.reopenMissed(name, fmt.Errorf("reopening %s in the desktop: %w", id, err))
-			}
-			if _, err := fmt.Fprintf(a.out, "reopen: showed local_%s in the desktop, which warms its CLI\n", id); err != nil {
-				return err
-			}
-			line, err := a.keepTitle(cmd.Context(), id, name)
-			if err != nil {
-				return a.reopenMissed(name, err)
-			}
-			if _, err := fmt.Fprintln(a.out, "reopen: "+line); err != nil {
-				return err
-			}
-			// A start whose import waited for the reopen, or whose steward
-			// did not set its model, has none yet.
-			var sa startedAgent
-			if line := a.keepImport(cmd.Context(), id, name, &sa); line != "" {
-				_, err = fmt.Fprintln(a.out, "reopen: "+line)
-			}
-			return err
-		},
+		RunE:   func(cmd *cobra.Command, args []string) error { return a.reopenSession(cmd.Context(), args[0]) },
 	}
+}
+
+// reopenSession shows the session of a start or wake (its session id, or a
+// desktop id local_…) in the desktop once its headless turn ended. Its wait
+// for the person to leave the desktop's window is recorded on the agent
+// (agents, the watch's IMPORT WAITS) while it runs, and skipped for an agent
+// that asked for a desktop turn.
+func (a *app) reopenSession(ctx context.Context, arg string) error {
+	// A wake names the desktop id (local_…), a start its session id, which
+	// is the desktop id's too.
+	id := strings.TrimPrefix(arg, "local_")
+	st, err := a.store.Read()
+	if err != nil {
+		return err
+	}
+	name, ok := reopens(st, arg)
+	if !ok {
+		_, err := fmt.Fprintf(a.out, "reopen: %s is no start on the roster, left closed\n", id)
+		return err
+	}
+	t, err := plat.Machine.Processes()
+	if err != nil {
+		return err
+	}
+	if plat.Opener.Running(t).IsZero() {
+		_, err := fmt.Fprintf(a.out, "reopen: the desktop does not run, %s waits for it\n", id)
+		return err
+	}
+	// A start whose import waited out the focus has no desktop record yet:
+	// the reopen imports it.
+	url := continueURL("local_" + id)
+	if _, ok := claude.ReadRecord(a.cfg, "local_"+id); !ok {
+		url = resumeURL(id)
+	}
+	d, err := a.watchDesk(ctx)
+	if err != nil {
+		return a.reopenMissed(name, err)
+	}
+	d.urgent = a.asksDesktop(id)
+	err = d.await(ctx, reopenAwayWait, a.importWaits(id, name, reopenAwayWait))
+	a.importEnded(id)
+	if err != nil {
+		return a.reopenMissed(name, fmt.Errorf("reopening %s in the desktop: %w", id, err))
+	}
+	// The standby watch resumes a role's holder headless while this reopen
+	// waits for the person to leave the desktop's window: the desktop warms
+	// no second CLI beside that turn, whose own reopen follows it.
+	if u := wakeRunning(ctx, id); u != "" {
+		_, err := fmt.Fprintf(a.out, "reopen: %s was resumed headless meanwhile (%s), whose reopen follows its turn\n", id, u)
+		return err
+	}
+	shownAt := time.Now()
+	if _, err := a.showBriefly(ctx, d, url, "local_"+id, "", true, reopenAwayWait); err != nil {
+		return a.reopenMissed(name, fmt.Errorf("reopening %s in the desktop: %w", id, err))
+	}
+	if _, err := fmt.Fprintf(a.out, "reopen: showed local_%s in the desktop, which warms its CLI\n", id); err != nil {
+		return err
+	}
+	if err := a.awaitWarmed(ctx, id, name, shownAt); err != nil {
+		return err
+	}
+	line, err := a.keepTitle(ctx, id, name)
+	if err != nil {
+		return a.reopenMissed(name, err)
+	}
+	if _, err := fmt.Fprintln(a.out, "reopen: "+line); err != nil {
+		return err
+	}
+	// A start whose import waited for the reopen, or whose steward did not
+	// set its model, has none yet.
+	var sa startedAgent
+	if line := a.keepImport(ctx, id, name, &sa); line != "" {
+		_, err = fmt.Fprintln(a.out, "reopen: "+line)
+	}
+	return err
 }
 
 // reopenMissed records a reopen the desktop did not take (not shown, its
@@ -715,12 +755,19 @@ type desk struct {
 	// quiet is desktop.typingQuiet; negative, input is not watched.
 	quiet time.Duration
 	last  func() time.Time
+	// locked reports whether the screen is locked (screenLocked); nil: it
+	// is not asked.
+	locked func() bool
+	// urgent reports whether the session the link shows asked for a desktop
+	// turn: the window's focus does not hold the link, and the person's
+	// typing holds it for desktopTurnWait at most. Nil: none asked.
+	urgent func() bool
 }
 
 // watchDesk watches the person's input until ctx ends, unless
 // desktop.typingQuiet is negative.
 func (a *app) watchDesk(ctx context.Context) (desk, error) {
-	d := desk{quiet: a.cfg.Desktop.TypingQuiet.Duration}
+	d := desk{quiet: a.cfg.Desktop.TypingQuiet.Duration, locked: screenLocked}
 	if d.quiet < 0 {
 		return d, nil
 	}
@@ -734,20 +781,24 @@ func (a *app) watchDesk(ctx context.Context) (desk, error) {
 
 // await waits up to wait for the desktop to take a link: its window without
 // the focus, and the person's input quiet for desktop.typingQuiet. It
-// returns what held the link at the end, errDesktopInUse or errTyping. A
-// compositor that cannot be asked counts as the window keeping the focus.
-func (d desk) await(ctx context.Context, wait time.Duration) error {
+// returns what held the link at the end, errDesktopInUse or errTyping, and
+// tells onHeld (when not nil) each time what holds it changes. A compositor
+// that cannot be asked counts as the window keeping the focus.
+func (d desk) await(ctx context.Context, wait time.Duration, onHeld func(error)) error {
+	start := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	tick := time.NewTicker(awayPoll)
 	defer tick.Stop()
+	var said error
 	for {
-		held := errDesktopInUse
-		if active, err := desktopWindowActive(ctx); err == nil && !active {
-			if d.last == nil || time.Since(d.last()) >= d.quiet {
-				return nil
-			}
-			held = errTyping
+		held := d.holds(ctx, start)
+		if held == nil {
+			return nil
+		}
+		if onHeld != nil && held != said {
+			onHeld(held)
+			said = held
 		}
 		select {
 		case <-ctx.Done():
@@ -755,6 +806,26 @@ func (d desk) await(ctx context.Context, wait time.Duration) error {
 		case <-tick.C:
 		}
 	}
+}
+
+// holds is what holds a link a wait that began at start, nil when nothing
+// does: under a locked screen nothing; else the window's focus, unless the
+// session asked for a desktop turn, then the person's typing, for
+// desktopTurnWait at most when it did.
+func (d desk) holds(ctx context.Context, start time.Time) error {
+	if d.locked != nil && d.locked() {
+		return nil
+	}
+	urgent := d.urgent != nil && d.urgent()
+	if !urgent {
+		if active, err := desktopWindowActive(ctx); err != nil || active {
+			return errDesktopInUse
+		}
+	}
+	if d.last == nil || time.Since(d.last()) >= d.quiet || urgent && time.Since(start) >= desktopTurnWait {
+		return nil
+	}
+	return errTyping
 }
 
 // moveRecord gives from's session record to to.

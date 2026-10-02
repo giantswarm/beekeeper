@@ -284,7 +284,7 @@ func TestDeskAwaitsTheFocus(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			var n int
 			desktopWindowActive = func(context.Context) (bool, error) { n++; return tc.active(n - 1) }
-			if got := (desk{quiet: -1}).await(t.Context(), 3*awayPoll); !errors.Is(got, tc.want) {
+			if got := (desk{quiet: -1}).await(t.Context(), 3*awayPoll, nil); !errors.Is(got, tc.want) {
 				t.Errorf("await = %v after %d asks, want %v", got, n, tc.want)
 			}
 		})
@@ -304,11 +304,12 @@ func TestDeskAwaitsQuietInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	d.locked = nil // the test machine's own screen lock does not count
 	start := time.Now()
-	if err := d.await(t.Context(), awayPoll); !errors.Is(err, errTyping) {
+	if err := d.await(t.Context(), awayPoll, nil); !errors.Is(err, errTyping) {
 		t.Fatalf("await while typing = %v, want errTyping", err)
 	}
-	if err := d.await(t.Context(), 4*awayPoll); err != nil {
+	if err := d.await(t.Context(), 4*awayPoll, nil); err != nil {
 		t.Fatalf("await once input went quiet = %v", err)
 	}
 	if quiet := time.Since(start); quiet < 2*awayPoll {

@@ -57,7 +57,9 @@ and one ENDED line when it ends. A running merge whose gate process is
 gone is one MERGE LOST line: it settles with an unknown release. A
 registered agent with a task and no running CLI is one AGENTS STOPPED
 line with how to resume it, unless it is kept (agents keep, or a timer
-that wakes it). A settling merge leaves its lane
+that wakes it). A reopen that waits to show an agent in the desktop (the
+window has the person's focus) is one IMPORT WAITS line per wait, with
+what it waits for and until when. A settling merge leaves its lane
 once the lane has settled (its release rolled and its HelmReleases Ready,
 or no installation to roll), logged as lane.settled, silently, however
 late; one not settled past merge.settleTimeout is one LANE STUCK line
@@ -234,6 +236,9 @@ type watcher struct {
 	// stopped are the agents with a task this watch said have no running
 	// CLI, by session key, until their CLI runs again.
 	stopped map[string]bool
+	// waits are the reopen waits this watch said, by agent session and the
+	// wait's start, until they end.
+	waits map[string]time.Time
 	// stand is the standby watch's memory of its messages, successors and
 	// reopens; table the last poll's process table.
 	stand standbyWatch
@@ -1299,6 +1304,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		return // the supervisor's watch reports them
 	}
 	w.stoppedAgents(st, sessions)
+	w.importWaits(st)
 	q := w.quietness(ctx, st, sessions)
 	w.handoversDue(st, sessions)
 	w.doctor(ctx)
@@ -1376,12 +1382,39 @@ func (w *watcher) stoppedAgents(st *state.State, sessions []*claude.Session) {
 		k := cmp.Or(ag.Session, ag.Name)
 		stopped[k] = true
 		if !w.stopped[k] {
-			now = append(now, fmt.Sprintf("%q (%s)", ag.Name, resumeHint(ag)))
+			hint := resumeHint(ag)
+			if ag.Import.Pending(w.now) {
+				hint = importStatus(ag, w.now)
+			}
+			now = append(now, fmt.Sprintf("%q (%s)", ag.Name, hint))
 		}
 	}
 	w.stopped = stopped
 	if len(now) > 0 {
 		w.emitNow("agents", "AGENTS STOPPED with a task and no running CLI: %s", strings.Join(now, ", "))
+	}
+}
+
+// importWaits says once per wait which reopen waits to show its agent in
+// the desktop, on what and until when: an import held by a person working
+// in the desktop's window shows here instead of as an agent that never
+// comes back.
+func (w *watcher) importWaits(st *state.State) {
+	waits := map[string]time.Time{}
+	var now []string
+	for _, ag := range st.Agents {
+		if !ag.Import.Pending(w.now) {
+			continue
+		}
+		k := cmp.Or(ag.Session, ag.Name)
+		waits[k] = ag.Import.Since
+		if !w.waits[k].Equal(ag.Import.Since) {
+			now = append(now, fmt.Sprintf("%q (%s)", ag.Name, importStatus(ag, w.now)))
+		}
+	}
+	w.waits = waits
+	if len(now) > 0 {
+		w.emitNow("agents-import", "IMPORT WAITS: %s", strings.Join(now, ", "))
 	}
 }
 

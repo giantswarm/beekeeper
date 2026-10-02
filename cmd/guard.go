@@ -172,7 +172,9 @@ second CLI of the session beside a headless turn (an agents start's first
 turn, an agents wake), and every send by local_ id counts against the
 desktop's cap on messages between sessions. A name two running CLIs carry is
 refused, naming them. A send to a session with no running CLI passes: the
-desktop starts it.
+desktop starts it. A send by name to an agent on the roster whose CLI does
+not run (its headless turn ended, its import into the desktop waits) is
+refused, saying so and whether an import is pending.
 A SendMessage to "the supervisor" or "the guide" (any case, "the" optional)
 goes to the session holding that role now: its running CLI by name, else
 its desktop session. A brief names the role, so a relay never makes it
@@ -232,7 +234,7 @@ Register it in ~/.claude/settings.json:
 				return nil
 			}
 			self, _ := os.Executable()
-			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, CheckQuestion: checkQuestion, Role: a.roleTarget, Peer: a.desktopPeer,
+			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, CheckQuestion: checkQuestion, Role: a.roleTarget, Peer: a.desktopPeer, Absent: a.absentPeer,
 				Project: os.Getenv("CLAUDE_PROJECT_DIR"), Reads: a.firstReads,
 				Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(),
 				ModelServer: a.modelServer, ConfigErr: a.loadConfig()}
