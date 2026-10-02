@@ -1436,8 +1436,13 @@ func (w *watcher) stoppedAgents(st *state.State, sessions []*claude.Session) {
 		stopped[k] = true
 		if !w.stopped[k] {
 			hint := resumeHint(ag)
-			if ag.Import.Pending(w.now) {
+			switch on := parkedOn(waitsOf(st.Records, ag), w.cfg.Guide.Person); {
+			case ag.Import.Pending(w.now):
 				hint = importStatus(ag, w.now)
+			case on != "":
+				hint = fmt.Sprintf("parked on a person: %s; their answer resumes it", on)
+			case resumedForTask(ag):
+				hint = fmt.Sprintf("ended on a wait again after its resume at %s on %s: %s", clock(w.now, ag.ResumedWait), ag.ResumedOn, hint)
 			}
 			now = append(now, fmt.Sprintf("%q (%s)", ag.Name, hint))
 		}

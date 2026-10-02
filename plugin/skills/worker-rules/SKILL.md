@@ -62,8 +62,10 @@ task needs lives only in this session: the next task goes to a fresh one.
   pattern. Agents never hard-delete: what goes away is moved aside.
 - **GitHub.** GitHub work stops while `beekeeper budget --gate` refuses and resumes after the
   reset. No `--watch` and no sleep loop over `gh` or `devctl`: `devctl pr wait` and `devctl pr
-  merge` block by themselves, and in a headless turn (a first turn, a `wake` turn) they run in the
-  foreground, since the CLI ends with the turn. A headless turn has no browser tools: a worker whose
+  merge` block by themselves. A headless turn (a first turn, a `wake` turn) never ends on a
+  background task or wait, whose completion never wakes it: it waits in the foreground (`devctl pr
+  wait`, `devctl pr merge`, a foreground Bash with a bounded timeout) and ends only when the task is
+  done or parked on a person. A headless turn has no browser tools: a worker whose
   next step needs the desktop (a browser proof, a sign-in) runs `beekeeper agents desktop` before
   its headless turn ends, which imports it into the desktop at once. A rollout is checked once, when a `beekeeper timer
   add` set for it falls due, never polled.

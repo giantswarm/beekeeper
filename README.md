@@ -809,7 +809,11 @@ is kept in reserve or repurposed: a relay and a crash both start a fresh session
   `AGENTS STOPPED` once per agent, and the `handover --prompt` Agents section marks it, each with
   how to resume it: `claude --bg --resume <session> "…"` for a background worker, its
   `claude://code/continue` link for a desktop session. Nothing is resumed automatically: a burst
-  of resumed workers after a login is the supervisor's call against the machine's memory.
+  of resumed workers after a login is the supervisor's call against the machine's memory. The
+  line tells a worker parked on a person (its serve record's `--waits` names the person, a note,
+  the supervisor or the guide: `parked on a person: …`) apart from one whose headless turn ended
+  on a background wait again after the reopen resumed it once (`ended on a wait again after its
+  resume at …`).
 - **Capacity:** the supervisor keeps `capacity.floor` to `capacity.ceiling` agents busy (5 and 10).
   Busy is a roster agent with a task that is neither parked nor kept: an agent kept on purpose
   (`agents keep`), one a timer wakes and one whose session waits on its person are parked; the
@@ -880,6 +884,14 @@ takes a follow-up task by message as a desktop turn. It reopens only a start the
 holds, never one a hand-over or `agents remove` took off. A reopen the desktop did not take (the
 session not shown, its title not restored) is an `agent.reopen` event and ends the unit
 successfully: the turn ended as it should.
+
+A headless turn's end is the end of its process, so a background Bash it launched never wakes it.
+When a start's or wake's turn ended with its task open on a background wait (a `run_in_background`
+Bash its transcript holds no completion notice for, or a process the unit still runs), the reopen
+resumes the session headless instead, once per task, with a turn that names the wait and tells it
+to wait in the foreground; the event log says `agent.resumed-wait`, and the resumed turn's reopen
+shows it in the desktop. A worker done, kept, or parked on a person is left alone, and so is a
+`devctl` wait or merge the gate runs, whose outcome wakes its owner by itself (`devctl.unheard`).
 
 The desktop handles each `claude://resume` link twice. When the second delivery arrives while the
 first import still runs, both import, the second drops the transcript's title and model as stale
