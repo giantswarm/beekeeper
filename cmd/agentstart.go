@@ -117,7 +117,14 @@ supervisor", which the PreToolUse hook delivers to the role's holder.
 Its first turn runs that prompt from the command line in bypass. The desktop
 runs every later turn in acceptEdits (its import always drops bypass), so
 requests no allow rule covers would stop at a card: beekeeper hook
-permissionrequest answers them, for beekeeper's starts only. While the first
+permissionrequest answers them, for beekeeper's starts only. The browser is
+the desktop's own: the import gives the session the Chrome permission mode
+skip_all_permission_checks only when the desktop allows all browser actions
+(a person's "Allow all sites" on a Claude in Chrome site request turns that
+on for every session), and otherwise each navigate to a site the session
+was not allowed on yet waits on a site request in its desktop row, which no
+hook answers. start says which mode the desktop recorded, and agents shows
+it per agent (BROWSER asks or skips). While the first
 turn runs, beekeeper stops the CLI the desktop warms for the import, so the
 first turn is the session's only CLI and a message by name reaches it; the
 desktop starts a new CLI when the person opens the session.
@@ -178,6 +185,9 @@ is involved and no import happens.`,
 				_, err = fmt.Fprintln(a.out, modelLine(sa.model))
 			}
 			if err == nil {
+				_, err = fmt.Fprintln(a.out, browserLine(sa.chrome))
+			}
+			if err == nil {
 				_, err = fmt.Fprintln(a.out, twinLine(sa.twin))
 			}
 			return err
@@ -217,6 +227,9 @@ type startedAgent struct {
 	// model is the model the desktop recorded for the session's later
 	// turns; empty: none, they run on the desktop's default.
 	model string
+	// chrome is the Chrome permission mode the desktop recorded for the
+	// session's later turns; empty: none, its browser actions ask.
+	chrome string
 	// twin is the desktop's CLI of the session the start stopped while the
 	// first turn runs; 0: none.
 	twin int
@@ -317,7 +330,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 			return err
 		}
 		if r := a.desktopRecord(ctx, "local_"+id); r != nil {
-			sa.title, sa.model = r.Title, r.Model
+			sa.title, sa.model, sa.chrome = r.Title, r.Model, r.ChromePermissionMode
 		}
 		return nil
 	})
@@ -464,6 +477,19 @@ func titleLine(name, title string) string {
 		return fmt.Sprintf("the desktop recorded no title: the sidebar shows it untitled, not as %q, until the session retitles itself after its first turn", name)
 	}
 	return fmt.Sprintf("the desktop titled it %q, not %q, until the session retitles itself after its first turn", title, name)
+}
+
+// browserLine says whether the session's browser actions wait on its
+// person: the desktop holds every navigate to a site not allowed yet unless
+// it recorded the Chrome permission mode skip_all_permission_checks.
+func browserLine(chrome string) string {
+	switch chrome {
+	case claude.ChromeSkipAll:
+		return "its browser actions run without the desktop's site requests (Chrome permission mode " + chrome + ")"
+	case "":
+		return "the desktop recorded no Chrome permission mode: each navigate to a site it was not allowed on yet waits on a person's site request in its desktop row"
+	}
+	return fmt.Sprintf("the desktop recorded the Chrome permission mode %s: each navigate to a site it was not allowed on yet waits on a person's site request in its desktop row", chrome)
 }
 
 // twinLine says whether the first turn is the session's only CLI.

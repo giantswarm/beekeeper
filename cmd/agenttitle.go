@@ -248,7 +248,7 @@ func (a *app) keepImport(ctx context.Context, id, name string, sa *startedAgent)
 		line = err.Error()
 	}
 	r := record()
-	sa.title, sa.model = r.Title, r.Model
+	sa.title, sa.model, sa.chrome = r.Title, r.Model, r.ChromePermissionMode
 	return line
 }
 

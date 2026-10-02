@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `beekeeper agents` shows in a new BROWSER column whether the desktop holds an agent's navigate to a new site for a person's site request (`asks`) or runs it without one (`skips`, Chrome permission mode `skip_all_permission_checks`), read from the agent's desktop record; `agents start` says which Chrome mode the import recorded. An imported start keeps no browser bypass: the desktop gives it `skip_all_permission_checks` only when a person allowed all browser actions, and its site requests reach no hook. The README states the mechanism.
+
 ### Added
 
 - `beekeeper note add --ref owner/repo#n` (repeatable) links a note to the issues and pull requests it asks about; `beekeeper watch` closes an open note for someone as overtaken (`NOTE OVERTAKEN`, `note.overtaken` with the reason) once every linked one is closed or merged. `watch --once` names the notes it would close and writes nothing. `beekeeper note done <id> --overtaken "<why>"` closes one so by hand, and `guide watch` says `GUIDE CLOSED #<id> overtaken: <reason>` once. Answered, pinned and login notes, and the note the guide asks now, are never overtaken. A note without `--ref` is never closed by the watch: once the worker session that filed it is archived (stopped is not archived), `guide watch` says `GUIDE ORPHANED #<id> for <person>, its filing session "<name>" is archived; ask it, or close it with note done <id> --overtaken: <text>` once, and the guide asks it or closes it; a role's run, current or relieved, never orphans its notes.
