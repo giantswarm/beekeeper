@@ -162,7 +162,7 @@ note.overtaken with the reason, as the watch does.`,
 						if why != "" {
 							evs = append(evs, overtakenEvent(me, n, why))
 						} else {
-							evs = append(evs, event(me, "note.done", "#%d %s", n.ID, n.Text))
+							evs = append(evs, event(me, noteDone, "#%d %s", n.ID, n.Text))
 						}
 						return true
 					}

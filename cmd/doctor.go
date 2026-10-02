@@ -196,7 +196,7 @@ func noteFaults(st *state.State, findings []faultFinding, person string, now tim
 			n := st.Notes[i]
 			st.Notes = slices.Delete(st.Notes, i, i+1)
 			lines = append(lines, fmt.Sprintf("closed note #%d: fault %q is absent again", n.ID, f.fault.Name))
-			evs = append(evs, event(watchParty, "note.done", "#%d closed, its fault is absent again: %s", n.ID, n.Text))
+			evs = append(evs, event(watchParty, noteDone, "#%d closed, its fault is absent again: %s", n.ID, n.Text))
 		case !f.healthy && i < 0 && person != "":
 			d := noteDraft{
 				Question:  fmt.Sprintf("%s run `beekeeper doctor --fault %s` (its remedy: `%s`)?", prefix, f.fault.Name, f.fault.Remedy),

@@ -146,7 +146,7 @@ func TestLoginNoteClosesOnceItsProbePasses(t *testing.T) {
 		t.Fatalf("passed %v", passed)
 	}
 	lines, evs := closeProbed(st, append(passed, 3))
-	if len(lines) != 1 || !strings.HasPrefix(lines[0], "NOTE CLOSED: #1") || len(evs) != 1 || evs[0].Verb != "note.done" {
+	if len(lines) != 1 || !strings.HasPrefix(lines[0], "NOTE CLOSED: #1") || len(evs) != 1 || evs[0].Verb != noteDone {
 		t.Fatalf("lines %q, events %+v", lines, evs)
 	}
 	if len(st.Notes) != 2 || st.Notes[0].ID != 2 {

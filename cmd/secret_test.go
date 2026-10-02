@@ -160,7 +160,7 @@ func TestSecretRotateClosesTheRotationNotes(t *testing.T) {
 	if len(st.Notes) != 1 || st.Notes[0].Text != other {
 		t.Errorf("open notes = %+v, want only #3", st.Notes)
 	}
-	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "secret.rotate" || e.Verb == "note.done" })
+	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "secret.rotate" || e.Verb == noteDone })
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -16,6 +16,9 @@ import (
 // given by hand. Its detail is "#<id> overtaken: <reason>; the note: <text>".
 const noteOvertaken = "note.overtaken"
 
+// noteDone is the verb of a note marked done.
+const noteDone = "note.done"
+
 // overtakenSep separates an overtaken event's reason from the note's text.
 const overtakenSep = "; the note: "
 

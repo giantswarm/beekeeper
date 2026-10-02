@@ -366,7 +366,7 @@ func (a *app) closeRotationNotes(refs []string) {
 		st.Notes = slices.DeleteFunc(st.Notes, func(n state.Note) bool {
 			done := slices.ContainsFunc(refs, func(r string) bool { return strings.HasPrefix(n.Text, rotateNote+r+":") })
 			if done {
-				evs = append(evs, event(who, "note.done", "#%d %s", n.ID, n.Text))
+				evs = append(evs, event(who, noteDone, "#%d %s", n.ID, n.Text))
 			}
 			return done
 		})
