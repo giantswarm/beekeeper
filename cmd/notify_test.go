@@ -207,7 +207,7 @@ func TestMachineLinesNeverNotify(t *testing.T) {
 		}
 	}
 	m := machine.Mem{SwapTotalMiB: 16383, SwapUsedMiB: 15000}
-	oomd, grow := &machine.OOMDSwap{LimitPercent: 90, Monitored: []string{"/user.slice"}}, swapTrend{DiskPerHourMiB: 100, AvailFalling: true, Rated: true}
+	oomd, grow := &machine.OOMDSwap{LimitPercent: 90, Monitored: []string{swapCgroup}}, swapTrend{DiskPerHourMiB: 100, AvailFalling: true, Rated: true}
 	w.check("oomd", w.oomdImminent(m, oomd, grow), "OOMD IMMINENT: %s", swapLine(m, oomd, grow))
 	if !strings.Contains(out.String(), "OOMD IMMINENT") {
 		t.Errorf("no OOMD IMMINENT line:\n%s", out)
@@ -226,7 +226,7 @@ func TestSwapLineSaysDiskZswapAndOomdRule(t *testing.T) {
 	if got := swapLine(m, unwatched, swapTrend{DiskPerHourMiB: 250, UsedPerHourMiB: 250, AvailFalling: true, Rated: true}); strings.Contains(got, "trigger") {
 		t.Errorf("a trigger without a swap-monitored cgroup: %q", got)
 	}
-	watched := &machine.OOMDSwap{LimitPercent: 90, Monitored: []string{"/user.slice"}}
+	watched := &machine.OOMDSwap{LimitPercent: 90, Monitored: []string{swapCgroup}}
 	if got, want := swapLine(m, watched, swapTrend{DiskPerHourMiB: 250, UsedPerHourMiB: 250, AvailFalling: true, Rated: true}), "SWAP: 10627 of 16383 MiB used, disk 2627 MiB + zswap 8000 MiB in a 2500 MiB pool, 4117 MiB before systemd-oomd's 90 % swap trigger (1 swap-monitored cgroups), disk +250 MiB/h over the last hour while MemAvailable falls, trigger in 16h28m0s"; got != want {
 		t.Errorf("watched, growing:\n got %q\nwant %q", got, want)
 	}
@@ -265,7 +265,7 @@ func TestOomdImminentNeedsAWatchedCgroupAndDiskGrowth(t *testing.T) {
 	w := &watcher{app: &app{cfg: cfg}}
 	full := machine.Mem{SwapTotalMiB: 16383, SwapUsedMiB: 16383, ZswappedMiB: 14000}
 	grow := swapTrend{DiskPerHourMiB: 100, UsedPerHourMiB: 100, AvailFalling: true, Rated: true}
-	watched := &machine.OOMDSwap{LimitPercent: 90, Monitored: []string{"/user.slice"}}
+	watched := &machine.OOMDSwap{LimitPercent: 90, Monitored: []string{swapCgroup}}
 	for name, c := range map[string]struct {
 		oomd *machine.OOMDSwap
 		t    swapTrend
@@ -299,3 +299,6 @@ func TestSwapOverIgnoresZswap(t *testing.T) {
 		t.Error("disk swap that does not grow is over its max")
 	}
 }
+
+// swapCgroup is a swap-monitored cgroup of the tests' oomd.
+const swapCgroup = "/user.slice"
