@@ -27,7 +27,7 @@ func overtakingWatch(t *testing.T, refs map[string]string) (*watcher, *bytes.Buf
 	dir := t.TempDir()
 	w, _, out := notifyingWatch(t, dir, false)
 	w.chores = true
-	w.as = agentOne // the note commands run outside a Claude session in CI
+	w.as = agentOne         // the note commands run outside a Claude session in CI
 	w.doctoring.Store(true) // the doctor is not under test
 	w.cfg.Claude.DesktopDir = filepath.Join(dir, "desktop")
 	prev := refStates
