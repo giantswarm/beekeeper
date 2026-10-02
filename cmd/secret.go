@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -19,7 +21,7 @@ var secretRun secret.Runner = secret.Exec
 func (a *app) secretCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "secret",
-		Short: "Credential operations that never return a value: compare, fingerprint, copy, set",
+		Short: "Credential operations that never return a value: compare, fingerprint, copy, set, rotate",
 		Long: `beekeeper is the only process that reads, creates, encrypts and decrypts
 secrets; an agent asks it with beekeeper secret. sops and op run in
 beekeeper's process, a value stays in its memory for the one operation and
@@ -101,7 +103,7 @@ can make one.`,
 			return a.secretPrint(ps, b.String())
 		},
 	})
-	c.AddCommand(a.secretCopyCmd(), a.secretSetCmd())
+	c.AddCommand(a.secretCopyCmd(), a.secretSetCmd(), a.secretRotateCmd())
 	return c
 }
 
@@ -234,6 +236,147 @@ the recipients of its .sops.yaml), and answers its fingerprint.`,
 	return c
 }
 
+func (a *app) secretRotateCmd() *cobra.Command {
+	var charset, reason string
+	var length int
+	var generate, dryRun bool
+	c := &cobra.Command{
+		Use:   "rotate op://<vault>/<item>/<field> [--generate] | rotate platform://<installation>/<capability>/<name> --reason <text>",
+		Short: "Replace a value everywhere it is carried",
+		Long: `rotate op://… --generate replaces a value beekeeper generated: a new one
+goes into the shared vault's field first, then into every path of the SOPS
+files scan.sops names that carried the old one (the value itself, or its
+base64 form in a Secret's data), matched by fingerprint.
+
+rotate op://… without --generate carries a value a third party issued:
+the person rotates it at its issuer into the vault's field, and rotate
+writes the vault's new value into every path that carried the old one,
+known by the fingerprint beekeeper scan index recorded before the change.
+
+rotate platform://<installation>/<capability>/<name> --reason <text> runs
+the platform manager's own rotation on the host (platformctl installation
+reconcile --commit --rotate <name>): the manager writes the new value into
+the installation's SOPS files in a pull request, and no copy goes to the
+vault. --dry-run shows the files that hold it.
+
+A rotation answers the new value's fingerprint and the paths it went to,
+or platformctl's answer, and closes the open rotation notes of the
+reference and of each path. Every SOPS file is read before anything is
+written: one that cannot be read stops the rotation with nothing changed.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if strings.HasPrefix(args[0], secret.PlatformPrefix) {
+				if generate {
+					return usageErr("--generate: the platform manager generates its credentials itself")
+				}
+				return a.secretRotatePlatform(cmd, args[0], reason, dryRun)
+			}
+			if dryRun || reason != "" {
+				return usageErr("--dry-run and --reason are for a platform:// reference")
+			}
+			r, err := parseRefs(args[0])
+			if err != nil {
+				return err
+			}
+			ops, ix, err := a.secretOpsIndexed()
+			if err != nil {
+				return err
+			}
+			files, err := a.scanFiles()
+			if err != nil {
+				return err
+			}
+			var rot secret.Rotation
+			if generate {
+				rot, err = ops.RotateGenerated(cmd.Context(), r[0], files, ix, length, charset)
+			} else {
+				rot, err = ops.RotateIssued(cmd.Context(), r[0], files, ix)
+			}
+			if rot.Ref != "" {
+				if serr := ix.Save(a.now); serr != nil {
+					err = errors.Join(err, serr)
+				}
+			}
+			a.secretLog("rotate", "%s: %s", r[0], outcome(err, fmt.Sprintf("%s into %d carriers", rot.Fingerprint, len(rot.Carriers))))
+			if rot.Ref != "" {
+				refs := []string{rot.Ref}
+				for _, c := range rot.Carriers {
+					refs = append(refs, guard.SOPSRef+c.Ref)
+				}
+				a.closeRotationNotes(refs)
+			}
+			if err != nil {
+				return err
+			}
+			var b strings.Builder
+			fmt.Fprintf(&b, "rotated %s: %s, %d carriers\n", rot.Ref, rot.Fingerprint, len(rot.Carriers))
+			for _, c := range rot.Carriers {
+				form := ""
+				if c.Base64 {
+					form = " (base64)"
+				}
+				fmt.Fprintf(&b, "  %s%s\n", c.Ref, form)
+			}
+			return a.secretPrint(rot, b.String())
+		},
+	}
+	f := c.Flags()
+	f.BoolVar(&generate, "generate", false, "generate the new value (a value beekeeper made)")
+	f.IntVar(&length, "length", 32, "the generated value's length")
+	f.StringVar(&charset, "charset", "alnum", "the generated value's characters: "+strings.Join(secret.Charsets(), ", "))
+	f.StringVar(&reason, "reason", "", "why a platform credential is rotated, for the manager's record")
+	f.BoolVar(&dryRun, "dry-run", false, "show a platform credential's rotation without committing it")
+	return c
+}
+
+// secretRotatePlatform is rotate of a platform:// reference.
+func (a *app) secretRotatePlatform(cmd *cobra.Command, arg, reason string, dryRun bool) error {
+	r, err := secret.ParsePlatformRef(arg)
+	if err != nil {
+		return usageErr("%v", err)
+	}
+	ops, err := a.secretOps()
+	if err != nil {
+		return err
+	}
+	out, err := ops.RotatePlatform(cmd.Context(), r, reason, dryRun)
+	mode := "committed"
+	if dryRun {
+		mode = "dry run"
+	}
+	a.secretLog("rotate", "%s: %s", r, outcome(err, mode))
+	if err != nil {
+		return err
+	}
+	if !dryRun {
+		a.closeRotationNotes([]string{r.String()})
+	}
+	_, err = io.WriteString(a.out, out)
+	return err
+}
+
+// closeRotationNotes marks done the open rotation notes of refs.
+func (a *app) closeRotationNotes(refs []string) {
+	who, err := a.caller()
+	if err != nil {
+		who = state.Party{Name: noSession}
+	}
+	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		var evs []state.Event
+		st.Notes = slices.DeleteFunc(st.Notes, func(n state.Note) bool {
+			done := slices.ContainsFunc(refs, func(r string) bool { return strings.HasPrefix(n.Text, rotateNote+r+":") })
+			if done {
+				evs = append(evs, event(who, "note.done", "#%d %s", n.ID, n.Text))
+			}
+			return done
+		})
+		return evs, nil
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, guard.LogPrefix+"secret: the rotation notes stay open: "+err.Error())
+	}
+}
+
 func parseRefs(args ...string) ([]secret.Ref, error) {
 	out := make([]secret.Ref, len(args))
 	for i, s := range args {
@@ -264,16 +407,24 @@ func (a *app) secretOps() (*secret.Ops, error) {
 // secretOpsKeyed are the operations with the fingerprint key, created on
 // first use.
 func (a *app) secretOpsKeyed() (*secret.Ops, error) {
+	ops, _, err := a.secretOpsIndexed()
+	return ops, err
+}
+
+// secretOpsIndexed are [app.secretOpsKeyed] and the index whose key they
+// fingerprint with.
+func (a *app) secretOpsIndexed() (*secret.Ops, *guard.Index, error) {
 	ix, err := guard.OpenIndex(a.scanDir())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	ix.MinLen = a.cfg.Scan.MinLength
 	ops, err := a.secretOps()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	ops.Fingerprint = func(v string) string { return "hmac:" + ix.Fingerprint(v)[:16] }
-	return ops, nil
+	return ops, ix, nil
 }
 
 // secretPrint prints text, or v with --json.

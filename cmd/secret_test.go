@@ -129,3 +129,49 @@ func TestSecretOperationsReturnNoValueAndAreLogged(t *testing.T) {
 		}
 	}
 }
+
+func TestSecretRotateClosesTheRotationNotes(t *testing.T) {
+	a, tools, repo := secretApp(t)
+	src := filepath.Join(repo, "db.sops.yaml")
+	a.cfg.Scan.SOPS = []string{filepath.Join(repo, "*.sops.yaml")}
+	carrier := "Rotate sops://" + src + "#data.password: its value was in a Bash result."
+	other := "Rotate op://Shared/other/password: its value was in a Bash result."
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Notes = []state.Note{{ID: 1, Text: "Rotate " + dbRef + ": its value was in a Bash result."}, {ID: 2, Text: carrier}, {ID: 3, Text: other}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runSecret(a, "rotate", dbRef, "--generate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	noSecret(t, "rotate", out)
+	if !strings.HasPrefix(out, "rotated "+dbRef+": hmac:") || !strings.Contains(out, src+"#data.password (base64)") {
+		t.Errorf("rotate answers %q", out)
+	}
+	if tools.Vault[dbRef] == secretValue {
+		t.Error("the vault holds the old value")
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Notes) != 1 || st.Notes[0].Text != other {
+		t.Errorf("open notes = %+v, want only #3", st.Notes)
+	}
+	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "secret.rotate" || e.Verb == "note.done" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 3 {
+		t.Errorf("%d events, want the rotation and two notes done", len(evs))
+	}
+	for _, e := range evs {
+		noSecret(t, "the log", e.Detail)
+	}
+	a.out = &bytes.Buffer{}
+	if _, err := runSecret(a, "rotate", "platform://hazel/muster/x", "--generate"); Code(err) != ExitUsage {
+		t.Errorf("--generate on a platform credential = %v, want usage", err)
+	}
+}

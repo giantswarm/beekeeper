@@ -258,7 +258,7 @@ func TestIndexSOPSAndVaultReadTheirSourcesQuietly(t *testing.T) {
 	if _, f := ix.Redact("8080"); f != nil {
 		t.Fatal("a short value was indexed")
 	}
-	if _, err := IndexVault(t.Context(), ix, "Shared"); err != nil {
+	if _, err := IndexVault(t.Context(), ix, "Shared", nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, f := ix.Redact(planted); len(f) != 1 || f[0].Ref != plantedRef {
