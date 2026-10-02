@@ -23,7 +23,15 @@ golangci-lint with gosec and goconst.
 The Kubernetes store's tests (`internal/state/kube`) and `beekeeper serve`'s (`cmd/serve_envtest_test.go`,
 every tool over streamable HTTP behind a test Dex from `internal/identity/identitytest`) run against
 envtest's kube-apiserver and skip without `KUBEBUILDER_ASSETS`: `make test-envtest` downloads it and runs them, as CI's
-`test-envtest` job does after `make check-crds`. The CRDs in `config/crd` and the deepcopy code are
+`test-envtest` job does after `make check-crds`. The mailboxes' tests (`internal/mailbox`, and serve's, which need
+both) run against the Postgres `BEEKEEPER_TEST_DATABASE_URL` names, each in a database of its own, and skip without it;
+CI's job runs one beside it, and locally the same image does:
+
+```bash
+docker run -d --rm --name beekeeper-pg -e POSTGRES_HOST_AUTH_METHOD=trust -p 127.0.0.1:55432:5432 \
+  gsoci.azurecr.io/giantswarm/postgres:18.6-alpine
+BEEKEEPER_TEST_DATABASE_URL='postgres://postgres@127.0.0.1:55432/postgres?sslmode=disable' make test-envtest
+``` The CRDs in `config/crd` and the deepcopy code are
 generated from `pkg/apis` by `make generate-crds`; edit the types, never the YAML.
 
 The `run` tests (`cmd/guard_test.go`) need zsh and a user systemd: they skip in CI and run on a
@@ -259,6 +267,8 @@ measured with `beekeeper sessions --json` against the installed release on the s
 | `pkg/apis/beekeeper/v1alpha1` | The `beekeeper.giantswarm.io` kinds of `beekeeper serve`, little spec and lots of status: `Environment`, `MergeLane` and `Hold` cluster-scoped, `Note` and `RosterEntry` in the team's namespace `beekeeper-<team>`; queues capped at `MaxQueue`. `config/crd` embeds their CRDs. |
 | `internal/state/kube` | The Kubernetes `state.Store`: the shared records of the state document (grants and release times as Environments, merges as MergeLanes, holds, notes, agents) as those resources. An update writes the one object it changes under the resourceVersion it read and reruns on a lost race; an update of two objects, or of anything the resources do not carry (the supervisor, timers, side files), is refused. `Claim` and `Release` set an Environment's holder by compare-and-swap, the loser told the holder. Events are Kubernetes Events on the object. |
 | `internal/identity` | Who calls `beekeeper serve`: a Dex ID token checked against the issuer's JWKS and `serve.clientIDs`, the person its verified email (never `sub`), a member of `serve.organization`, the team of its group in `serve.teams`, a team's supervisor role its group in `serve.supervisors`; `identitytest` is the Dex stand-in of the tests. |
+| `internal/feed` | The versioned shape of `beekeeper://feed` ([docs/feed.md](feed.md)): event ids, kinds, subject, actor, time and the line the watch prints. |
+| `internal/mailbox` | The mailboxes of `beekeeper serve` in Postgres: one `messages` table and a dedupe table, migrated at start; at least once and in order, `Cap` per mailbox, expiry with a notice to the sender, `LISTEN`/`NOTIFY` on every change; `mailboxtest` gives a test a database of its own. |
 | `internal/notify` | Desktop notifications: the kinds, urgencies and quiet hours and the ledger `notify.json` under `notify.lock` that makes each event one notification across watches and holds the quiet hours' ones; the sender is `platform.Notifier`. |
 | `internal/alerts` | The installations' alerts: bounded `kubectl port-forward`s in their own process group, the Alertmanager reading, the NEW/RESOLVED/FLAPPING lines with the severity floors and the flap damper, and the grouped snapshot (pure, tested against Alertmanager-shaped fixtures, recorded answers in `testdata/` and a fake `kubectl`), the baseline with the damper's records and its single owner, and recorded answers for `alerts replay`. |
 | `internal/upgrade` | Cluster upgrades: the detection over an installation's Clusters, control planes and node pools (pure, tested against a real upgrade replayed from `testdata/prod/<phase>/`, stripped to the fields read), the bounded parallel `kubectl` reading with the events that name the release upgraded from, and the automatic `upgrade:<installation>/<cluster>` holds the merge gate and `lease claim` read. |

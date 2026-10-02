@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -13,17 +12,22 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-logr/logr"
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/rest"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/identity"
 	"github.com/giantswarm/beekeeper/internal/identity/identitytest"
+	"github.com/giantswarm/beekeeper/internal/mailbox"
+	"github.com/giantswarm/beekeeper/internal/mailbox/mailboxtest"
 	"github.com/giantswarm/beekeeper/internal/state/kube"
 	"github.com/giantswarm/beekeeper/pkg/apis/beekeeper/v1alpha1"
 )
@@ -43,7 +47,9 @@ type serveEnv struct {
 	url   string
 	iss   *identitytest.Issuer
 	store *kube.Store
-	log   *bytes.Buffer
+	srv   *server
+	rc    *rest.Config
+	log   *syncBuffer
 }
 
 func newServeEnv(t *testing.T) *serveEnv {
@@ -104,10 +110,22 @@ func newServeEnv(t *testing.T) *serveEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	log := &bytes.Buffer{}
-	srv := httptest.NewServer(newServer(cfg, store, ids, slog.New(slog.NewJSONHandler(log, nil))).handler())
+	mail, err := mailbox.Open(ctx, mailboxtest.URL(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(mail.Close)
+	log := &syncBuffer{}
+	ctrllog.SetLogger(logr.Discard())
+	s := newServer(cfg, store, mail, ids, slog.New(slog.NewJSONHandler(log, nil)))
+	wctx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+	if err := s.watch(wctx, rc); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(s.handler())
 	t.Cleanup(srv.Close)
-	return &serveEnv{url: srv.URL + "/mcp", iss: iss, store: store, log: log}
+	return &serveEnv{url: srv.URL + "/mcp", iss: iss, store: store, srv: s, rc: rc, log: log}
 }
 
 func (e *serveEnv) token(t *testing.T, email string, groups ...string) string {
@@ -127,6 +145,9 @@ func (e *serveEnv) as(t *testing.T, token string) *mcpCaller {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = c.Close() })
+	if err := c.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	init := mcp.InitializeRequest{}
 	init.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
 	init.Params.ClientInfo = mcp.Implementation{Name: "serve-test", Version: "0"}
@@ -281,7 +302,7 @@ func TestEnvtestServeTools(t *testing.T) {
 	e.expect(t, pia, "lanes", map[string]any{}, false, "giantswarm/backstage#2")
 
 	// Notes: filed into the filer's team; answered by its addressee.
-	note := e.expect(t, ana, "note_add", map[string]any{"text": "which lane for muster?", "for": "bo@example.com", "kind": "memo"}, false, "note #1")
+	note := e.expect(t, ana, "note_add", map[string]any{paramText: "which lane for muster?", paramFor: "bo@example.com", paramKind: noteMemo}, false, "note #1")
 	if by, _ := note["by"].(map[string]any); by["team"] != ourTeam {
 		t.Errorf("note_add %v", note)
 	}

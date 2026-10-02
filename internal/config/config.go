@@ -450,6 +450,13 @@ type Serve struct {
 	// Supervisors maps a team to the Dex group of its supervisor role, which
 	// may release the team's leases and lift its holds.
 	Supervisors map[string]string `yaml:"supervisors"`
+	// Muster is the URL of the muster (its /mcp) a send_message to a
+	// kagent: address goes through, as the caller.
+	Muster string `yaml:"muster"`
+	// Kagent maps an installation to the muster tool of its kagent MCP
+	// server's invoke_agent_instance, x_<server>_invoke_agent_instance: the
+	// installations a kagent: address may name.
+	Kagent map[string]string `yaml:"kagent"`
 }
 
 // Guide configures the guide: its role and the person it guides.
