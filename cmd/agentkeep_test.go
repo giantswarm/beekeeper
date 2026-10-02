@@ -15,6 +15,9 @@ import (
 
 var keepNow = time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
 
+// keeper is who sets the keep markers of these tests.
+const keeper = "test: keeper"
+
 // staleAgent is an idle roster entry with no CLI, stale past 24h.
 func staleAgent(name string) state.Agent {
 	return state.Agent{Party: state.Party{Session: "s-" + name, Name: name}, IdleSince: keepNow.Add(-48 * time.Hour)}
@@ -111,7 +114,7 @@ func TestAgentsKeep(t *testing.T) {
 		t.Fatal(err)
 	}
 	newApp := func() *app {
-		return &app{cfg: &config.Config{StateDir: dir}, store: store, now: keepNow, out: &bytes.Buffer{}, as: "test: supervisor"}
+		return &app{cfg: &config.Config{StateDir: dir}, store: store, now: keepNow, out: &bytes.Buffer{}, as: keeper}
 	}
 	out, err := runAgents(newApp(), "keep", "judge", "--until", "6h", "--reason", "a person  returns to it")
 	if err != nil || !strings.Contains(out, "Judge: kept until") || !strings.Contains(out, ": a person returns to it") {
@@ -119,7 +122,7 @@ func TestAgentsKeep(t *testing.T) {
 	}
 	st, _ := store.Read()
 	k := st.Agents[0].Keep
-	if k == nil || !k.Until.Equal(keepNow.Add(6*time.Hour)) || k.By.Name != "test: supervisor" || !k.Holds(keepNow) || k.Holds(keepNow.Add(6*time.Hour)) {
+	if k == nil || !k.Until.Equal(keepNow.Add(6*time.Hour)) || k.By.Name != keeper || !k.Holds(keepNow) || k.Holds(keepNow.Add(6*time.Hour)) {
 		t.Errorf("marker %+v", k)
 	}
 	a := newApp()
@@ -149,12 +152,12 @@ func TestAgentsKeep(t *testing.T) {
 
 // A session registering again keeps its entry's marker.
 func TestRegisterAgentCarriesTheKeep(t *testing.T) {
-	me := state.Party{Session: "s-1", Name: "Judge"}
-	st := &state.State{Agents: []state.Agent{{Party: me, Keep: &state.Keep{Reason: "kept"}}}}
+	me := state.Party{Session: "s-judge", Name: "Judge"}
+	st := &state.State{Agents: []state.Agent{{Party: me, Keep: &state.Keep{Reason: "a judge"}}}}
 	if _, err := registerAgent(st, me, func(state.Party) bool { return false }, keepNow); err != nil {
 		t.Fatal(err)
 	}
-	if len(st.Agents) != 1 || st.Agents[0].Keep == nil || st.Agents[0].Keep.Reason != "kept" {
+	if len(st.Agents) != 1 || st.Agents[0].Keep == nil || st.Agents[0].Keep.Reason != "a judge" {
 		t.Errorf("roster %+v", st.Agents)
 	}
 }
@@ -163,7 +166,7 @@ func TestRegisterAgentCarriesTheKeep(t *testing.T) {
 func TestStoppedAgentsLeaveKeptEntriesOut(t *testing.T) {
 	w, _, out := reportingWatch(t, t.TempDir())
 	kept, woken, stopped := staleAgent("Judge"), staleAgent("BK 1"), staleAgent("Crashed")
-	kept.Task, woken.Task, stopped.Task = "review", "o/r#1", "o/r#2"
+	kept.Task, woken.Task, stopped.Task = "review", "a batch job", "a crash"
 	kept.Keep = &state.Keep{}
 	st := &state.State{Agents: []state.Agent{kept, woken, stopped}, Timers: []state.Timer{{ID: 1, Wake: "BK 1"}}}
 	w.stoppedAgents(st, nil)
@@ -186,23 +189,27 @@ func TestNextFreeCoversParkedAgentsItems(t *testing.T) {
 		Agents: []state.Agent{parked, woken, idle, done},
 		Timers: []state.Timer{{ID: 4, Wake: "BK 1"}},
 		Records: []state.Record{
-			{Session: parked.Party, Issue: "o/r#1", At: listed.Add(-time.Hour)},
-			{Session: woken.Party, Issue: "o/r#2", At: listed.Add(-time.Hour), Ended: listed.Add(-time.Minute)},
-			{Session: idle.Party, Issue: "o/r#3", At: listed.Add(-time.Hour)},
-			{Session: done.Party, Issue: "o/r#4", At: listed.Add(-time.Hour)},
+			{Session: parked.Party, At: listed.Add(-time.Hour)},
+			{Session: woken.Party, At: listed.Add(-time.Hour), Ended: listed.Add(-time.Minute)},
+			{Session: idle.Party, At: listed.Add(-time.Hour)},
+			{Session: done.Party, At: listed.Add(-time.Hour)},
 		},
 	}
-	res := nextFree(st, boardCandidates(4), me, alive, listed)
+	cands := boardCandidates(4)
+	for i := range st.Records {
+		st.Records[i].Issue = cands[i].Ref
+	}
+	res := nextFree(st, cands, me, alive, listed)
 	var got []string
 	for _, c := range res.Skipped {
 		got = append(got, c.Ref+": "+c.Skip)
 	}
-	want := []string{`o/r#1: served by "Judge" (parked, kept: reviews)`, `o/r#2: served by "BK 1" (parked, timer #4 wakes it)`}
-	if !slices.Equal(got, want) || res.Pick == nil || res.Pick.Ref != "o/r#3" {
+	want := []string{cands[0].Ref + `: served by "Judge" (parked, kept: reviews)`, cands[1].Ref + `: served by "BK 1" (parked, timer #4 wakes it)`}
+	if !slices.Equal(got, want) || res.Pick == nil || res.Pick.Ref != cands[2].Ref {
 		t.Errorf("pick %v, skipped:\n%s\nwant:\n%s", res.Pick, strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 	st.Agents[0].Keep, st.Timers = nil, nil
-	if res = nextFree(st, boardCandidates(4), me, alive, listed); res.Pick == nil || res.Pick.Ref != "o/r#1" {
+	if res = nextFree(st, cands, me, alive, listed); res.Pick == nil || res.Pick.Ref != cands[0].Ref {
 		t.Errorf("nothing keeps them any more: pick %v, skipped %+v", res.Pick, res.Skipped)
 	}
 }
