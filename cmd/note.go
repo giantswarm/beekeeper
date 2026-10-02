@@ -321,6 +321,9 @@ func (a *app) printNoteLines(notes []state.Note) {
 		if n.For != "" {
 			tags = append(tags, "for "+n.For)
 		}
+		if n.By.Owner() != "" {
+			tags = append(tags, "by "+quotedOwner(n.By))
+		}
 		if !n.Due.IsZero() {
 			tags = append(tags, "due "+clock(a.now, n.Due))
 			if n.Due.Before(a.now) {

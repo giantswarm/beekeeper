@@ -45,6 +45,9 @@ type Config struct {
 	StateDir string `yaml:"stateDir"`
 	// LeaseDir holds one directory per held lease (mkdir is the lock).
 	LeaseDir string `yaml:"leaseDir"`
+	// Identity is whose agents run here: every party this machine's
+	// commands record carries it.
+	Identity Identity `yaml:"identity"`
 	// Resources are the environments sessions lease besides the browser:
 	// kind labs and shared installations.
 	Resources []string `yaml:"resources"`
@@ -413,6 +416,18 @@ type Fault struct {
 	// Unattended lets the watch run the remedy by itself; otherwise a
 	// sighting is one note for guide.person.
 	Unattended bool `yaml:"unattended"`
+}
+
+// Identity names the person, team and host this machine's sessions act
+// for.
+type Identity struct {
+	// Person is the person's verified email, stable across identity
+	// providers.
+	Person string `yaml:"person"`
+	// Team is the person's team.
+	Team string `yaml:"team"`
+	// Host names the machine (default: its host name, without the domain).
+	Host string `yaml:"host"`
 }
 
 // Guide configures the guide: its role and the person it guides.
@@ -1043,6 +1058,11 @@ func (c *Config) defaults() error {
 	setStr(&c.StateDir, filepath.Join(state, "beekeeper"))
 	setStr(&c.LeaseDir, filepath.Join(c.StateDir, "leases"))
 	setDur(&c.GrantTTL, 30*time.Minute)
+	if c.Identity.Host == "" {
+		if h, err := os.Hostname(); err == nil {
+			c.Identity.Host, _, _ = strings.Cut(h, ".")
+		}
+	}
 	// The desktop app never restarts a crashed CLI by itself: the grace only
 	// debounces a supervisor someone woke.
 	setDur(&c.Supervisor.RestartGrace, 30*time.Second)

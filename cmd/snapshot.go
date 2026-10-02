@@ -384,7 +384,7 @@ func isTestKill(k machine.OOMKill) bool {
 // runIndex finds the run.start event of a memcap scope. It reads the event
 // log once, when the first kill asks: kills are rare, the log is long.
 type runIndex struct {
-	store  *state.Store
+	store  state.Store
 	starts map[string]state.Event
 }
 

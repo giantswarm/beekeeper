@@ -383,7 +383,7 @@ func (a *app) printLanes(views []laneView) {
 		status := "free"
 		switch {
 		case v.Running != nil:
-			status = fmt.Sprintf("running %s by %q since %s", v.Running.Key(), v.Running.By.Name, clock(a.now, v.Running.Started))
+			status = fmt.Sprintf("running %s by %s since %s", v.Running.Key(), quotedOwner(v.Running.By), clock(a.now, v.Running.Started))
 		case v.Settling != nil:
 			status = a.settlingText(*v.Settling)
 		}
@@ -400,7 +400,7 @@ func (a *app) printLanes(views []laneView) {
 			if v.Hold.Except != "" {
 				except = ", except " + v.Hold.Except
 			}
-			p("  held by %q until %s%s: %s", v.Hold.By.Name, untilText(a, *v.Hold), except, v.Hold.Reason)
+			p("  held by %s until %s%s: %s", quotedOwner(v.Hold.By), untilText(a, *v.Hold), except, v.Hold.Reason)
 		}
 		if v.Stall != nil {
 			p("  %s", a.stallText(*v.Stall))
@@ -432,7 +432,7 @@ func (a *app) printLanes(views []laneView) {
 			default:
 				how = "not arrived, queued"
 			}
-			p("%s %d. %s by %q, %s since %s", label, i+1, m.Key(), m.By.Name, how, clock(a.now, m.Joined))
+			p("%s %d. %s by %s, %s since %s", label, i+1, m.Key(), quotedOwner(m.By), how, clock(a.now, m.Joined))
 		}
 	}
 }

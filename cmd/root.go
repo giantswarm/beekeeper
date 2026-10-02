@@ -82,7 +82,7 @@ type app struct {
 	json    bool
 
 	cfg   *config.Config
-	store *state.Store
+	store state.Store
 	now   time.Time
 	out   io.Writer
 
@@ -188,10 +188,18 @@ func (a *app) load() error {
 }
 
 // caller is who runs this command: the Claude Code session it runs in, or
-// the --as name. The session's name is its desktop title, else the name in
-// the environment, else the name its CLI's record holds (a `claude --bg`
-// worker's tool commands inherit neither), else its id.
+// the --as name, with the configured person, team and host.
 func (a *app) caller() (state.Party, error) {
+	p, err := a.callerSession()
+	p.Person, p.Team, p.Host = a.cfg.Identity.Person, a.cfg.Identity.Team, a.cfg.Identity.Host
+	return p, err
+}
+
+// callerSession is the session or --as name that runs this command. The
+// session's name is its desktop title, else the name in the environment,
+// else the name its CLI's record holds (a `claude --bg` worker's tool
+// commands inherit neither), else its id.
+func (a *app) callerSession() (state.Party, error) {
 	if a.as != "" {
 		return state.Party{Name: a.as}, nil
 	}
@@ -314,6 +322,18 @@ func truncate(s string, n int) string {
 	}
 	return string([]rune(s)[:n-1]) + "…"
 }
+
+// withOwner is s followed by whose agent p is, of which team, on which
+// host, when the state knows it.
+func withOwner(s string, p state.Party) string {
+	if o := p.Owner(); o != "" {
+		return s + " (" + o + ")"
+	}
+	return s
+}
+
+// quotedOwner is p's quoted name with whose agent it is, as withOwner.
+func quotedOwner(p state.Party) string { return withOwner(fmt.Sprintf("%q", p.Name), p) }
 
 func event(by state.Party, verb, format string, a ...any) state.Event {
 	return state.Event{At: time.Now().UTC(), By: by, Verb: verb, Detail: fmt.Sprintf(format, a...)}

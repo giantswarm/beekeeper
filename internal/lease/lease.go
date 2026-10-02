@@ -31,8 +31,12 @@ type Holder struct {
 	Session     string `json:"session"`
 	HostSession string `json:"hostSession,omitempty"`
 	Name        string `json:"name,omitempty"`
-	Purpose     string `json:"purpose"`
-	Since       string `json:"since"`
+	// Person, Team and Host are the holder party's.
+	Person  string `json:"person,omitempty"`
+	Team    string `json:"team,omitempty"`
+	Host    string `json:"host,omitempty"`
+	Purpose string `json:"purpose"`
+	Since   string `json:"since"`
 	// UpgradeUnblock is the reason of the upgrade-unblock grant the claim
 	// was admitted by during an upgrade, empty for any other claim.
 	UpgradeUnblock string `json:"upgradeUnblock,omitempty"`
@@ -51,7 +55,7 @@ func (h Holder) Label() string {
 
 // Party is the holder as the state names it.
 func (h Holder) Party() state.Party {
-	return state.Party{Session: h.Session, HostSession: h.HostSession, Name: h.Name}
+	return state.Party{Session: h.Session, HostSession: h.HostSession, Name: h.Name, Person: h.Person, Team: h.Team, Host: h.Host}
 }
 
 // SinceTime parses Since.

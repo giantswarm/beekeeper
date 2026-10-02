@@ -428,3 +428,52 @@ func TestCommand(t *testing.T) {
 		}
 	}
 }
+
+const worker = "Worker"
+
+func TestPartyIdentityIsPersisted(t *testing.T) {
+	var s Store
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	by := Party{Session: "s1", Name: worker, Person: "alex@example.com", Team: "bumblebee", Host: "lab"}
+	if err := s.Update(func(st *State) ([]Event, error) {
+		st.Notes = append(st.Notes, Note{ID: 1, Text: "q", By: by})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := s.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Notes[0].By; got != by {
+		t.Errorf("By = %+v, want %+v", got, by)
+	}
+	if got, want := by.Owner(), "alex@example.com, team bumblebee, on lab"; got != want {
+		t.Errorf("Owner() = %q, want %q", got, want)
+	}
+	if got := (Party{Name: worker}).Owner(); got != "" {
+		t.Errorf("Owner() of a party without identity = %q", got)
+	}
+}
+
+func TestStateWithoutIdentityLoads(t *testing.T) {
+	dir := t.TempDir()
+	doc := `{"notes":[{"id":1,"text":"q","by":{"session":"s1","name":worker}}]}`
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := s.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := st.Notes[0].By, (Party{Session: "s1", Name: worker}); got != want {
+		t.Errorf("By = %+v, want %+v", got, want)
+	}
+}

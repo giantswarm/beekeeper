@@ -127,7 +127,7 @@ replaces the record. Exit 3 when no item is free or the claim is refused.`,
 // servedOpen asks GitHub whether each item me's records serve is open, ahead
 // of the claim's state lock. It reports an item it did not ask about as
 // open: a record written since is the session's own, and is kept.
-func servedOpen(ctx context.Context, cl *board.Client, store *state.Store, me state.Party) (func(string) bool, error) {
+func servedOpen(ctx context.Context, cl *board.Client, store state.Store, me state.Party) (func(string) bool, error) {
 	st, err := store.Read()
 	if err != nil {
 		return nil, err
@@ -197,7 +197,7 @@ func nextFree(st *state.State, cands []board.Candidate, me state.Party, alive fu
 // in one update of the state, so a concurrent claim sees it. While me
 // serves an item open reports open, and me is no agent reporting idle,
 // it changes nothing and returns that record as Held.
-func claimNext(store *state.Store, cands []board.Candidate, me state.Party, alive func(state.Party) bool, listed time.Time, waits string, open func(string) bool) (nextResult, error) {
+func claimNext(store state.Store, cands []board.Candidate, me state.Party, alive func(state.Party) bool, listed time.Time, waits string, open func(string) bool) (nextResult, error) {
 	var res nextResult
 	err := store.Update(func(st *state.State) ([]state.Event, error) {
 		if i := slices.IndexFunc(st.Records, func(r state.Record) bool {

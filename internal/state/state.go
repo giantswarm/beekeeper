@@ -34,6 +34,29 @@ type Party struct {
 	// CLI restart that changes Session.
 	HostSession string `json:"hostSession,omitempty"`
 	Name        string `json:"name"`
+	// Person is whose agent the party is: a verified email, stable across
+	// identity providers.
+	Person string `json:"person,omitempty"`
+	// Team is the person's team.
+	Team string `json:"team,omitempty"`
+	// Host is the machine or installation the party runs on.
+	Host string `json:"host,omitempty"`
+}
+
+// Owner names whose agent the party is, of which team, on which host
+// ("timo@example.com, team bumblebee, on lab"); empty when none is known.
+func (p Party) Owner() string {
+	var parts []string
+	if p.Person != "" {
+		parts = append(parts, p.Person)
+	}
+	if p.Team != "" {
+		parts = append(parts, "team "+p.Team)
+	}
+	if p.Host != "" {
+		parts = append(parts, "on "+p.Host)
+	}
+	return strings.Join(parts, ", ")
 }
 
 // Is reports whether p and o name the same session or person.
@@ -690,28 +713,53 @@ type Event struct {
 	Detail string    `json:"detail"`
 }
 
-// Store is the state directory.
-type Store struct {
+// Store is the seam every command reads and changes the state through.
+type Store interface {
+	// Dir is the machine-local directory beside the state: the merge
+	// gate's and the timers' side files.
+	Dir() string
+	// Read returns the current state.
+	Read() (*State, error)
+	// Peek returns the current state without waiting on a writer.
+	Peek() (*State, error)
+	// Update runs fn on the state and saves the result together with the
+	// events fn returns; when fn fails nothing is saved.
+	Update(fn func(*State) ([]Event, error)) error
+	// Log appends events that change no state.
+	Log(events ...Event) error
+	// Events returns the last n events keep accepts, oldest first.
+	Events(n int, keep func(Event) bool) ([]Event, error)
+	// ReadFile decodes a JSON side file; found is false when it is missing.
+	ReadFile(name string, v any) (found bool, err error)
+	// WriteFile replaces a JSON side file.
+	WriteFile(name string, v any) error
+}
+
+// FileStore is the Store in a directory of the machine: state.json under a
+// flock, events.jsonl beside it.
+type FileStore struct {
 	dir string
 	// version is the binary's, which every save stamps or judges.
 	version string
 }
 
-// Open returns the store in dir, creating the directory.
-func Open(dir string) (*Store, error) {
+var _ Store = (*FileStore)(nil)
+
+// Open returns the file store in dir, creating the directory.
+func Open(dir string) (*FileStore, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	return &Store{dir: dir, version: project.Version()}, nil
+	return &FileStore{dir: dir, version: project.Version()}, nil
 }
 
 // Dir is the store's directory.
-func (s *Store) Dir() string { return s.dir }
+func (s *FileStore) Dir() string { return s.dir }
 
-func (s *Store) path(name string) string { return filepath.Join(s.dir, name) }
+func (s *FileStore) path(name string) string { return filepath.Join(s.dir, name) }
 
 // Read returns the current state under a shared lock.
-func (s *Store) Read() (*State, error) {
+func (s *FileStore) Read() (*State, error) {
 	l := flock.New(s.path("state.lock"))
 	if err := l.RLock(); err != nil {
 		return nil, err
@@ -723,12 +771,12 @@ func (s *Store) Read() (*State, error) {
 // Peek returns the current state without taking the lock, for a caller
 // that must never wait on it (a permission hook): a write replaces the file
 // in one rename, so the document read is always a whole one.
-func (s *Store) Peek() (*State, error) { return s.load() }
+func (s *FileStore) Peek() (*State, error) { return s.load() }
 
 // Update runs fn on the state under the exclusive lock and writes the result
 // back atomically together with the events fn returns. When fn fails nothing
 // is written.
-func (s *Store) Update(fn func(*State) ([]Event, error)) error {
+func (s *FileStore) Update(fn func(*State) ([]Event, error)) error {
 	l := flock.New(s.path("state.lock"))
 	if err := l.Lock(); err != nil {
 		return err
@@ -752,7 +800,7 @@ func (s *Store) Update(fn func(*State) ([]Event, error)) error {
 // Log appends events that change no state, a build's run for one, under
 // the state lock. It waits at most logWait for the lock, so that a caller on
 // every build's path never queues behind a slow update.
-func (s *Store) Log(events ...Event) error {
+func (s *FileStore) Log(events ...Event) error {
 	ctx, cancel := context.WithTimeout(context.Background(), logWait)
 	defer cancel()
 	l := flock.New(s.path("state.lock"))
@@ -777,7 +825,7 @@ const VerbStaleWriter = "state.stale-writer"
 // it: then the save goes on with the fields this binary does not know kept,
 // and its process is recorded and logged once as a stale writer. A build
 // without a release version (dev) neither stamps nor judges.
-func (s *Store) stamp(st *State, now time.Time) []Event {
+func (s *FileStore) stamp(st *State, now time.Time) []Event {
 	own, err := semver.NewVersion(s.version)
 	if err != nil {
 		return nil
@@ -819,7 +867,7 @@ func command(args []string) string {
 	return strings.Join(words, " ")
 }
 
-func (s *Store) load() (*State, error) {
+func (s *FileStore) load() (*State, error) {
 	st := &State{}
 	raw, err := os.ReadFile(s.path("state.json"))
 	if errors.Is(err, os.ErrNotExist) {
@@ -834,7 +882,7 @@ func (s *Store) load() (*State, error) {
 	return st, nil
 }
 
-func (s *Store) append(events []Event) error {
+func (s *FileStore) append(events []Event) error {
 	if len(events) == 0 {
 		return nil
 	}
@@ -878,7 +926,7 @@ func endLine(f *os.File) error {
 
 // Events returns the last n events keep accepts, oldest first (all when
 // n <= 0, every event when keep is nil).
-func (s *Store) Events(n int, keep func(Event) bool) ([]Event, error) {
+func (s *FileStore) Events(n int, keep func(Event) bool) ([]Event, error) {
 	f, err := os.Open(s.path("events.jsonl"))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -907,7 +955,7 @@ func (s *Store) Events(n int, keep func(Event) bool) ([]Event, error) {
 
 // ReadFile decodes a JSON side file of the store (the last snapshot);
 // found is false when it does not exist yet.
-func (s *Store) ReadFile(name string, v any) (found bool, err error) {
+func (s *FileStore) ReadFile(name string, v any) (found bool, err error) {
 	raw, err := os.ReadFile(s.path(name))
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
@@ -919,7 +967,7 @@ func (s *Store) ReadFile(name string, v any) (found bool, err error) {
 }
 
 // WriteFile atomically replaces a JSON side file of the store.
-func (s *Store) WriteFile(name string, v any) error {
+func (s *FileStore) WriteFile(name string, v any) error {
 	return writeJSON(s.path(name), v)
 }
 
