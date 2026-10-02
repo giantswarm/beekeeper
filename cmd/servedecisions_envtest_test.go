@@ -27,6 +27,7 @@ const (
 	keyDefault   = "default"
 	keyWhy       = "why"
 	ownLane      = "muster gets its own lane"
+	museLane     = "Which lane for muster?"
 )
 
 // fakeGateway is klaus-gateway's decisions surface: it keeps what it was
@@ -91,7 +92,7 @@ func (g *fakeGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal(body, &m)
 		g.said = append(g.said, id+": "+m.Text)
 		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"id":"` + id + `","channel":"D1","ts":"9.9"}`))
+		_ = json.NewEncoder(w).Encode(map[string]string{"id": id, "channel": "D1", "ts": "9.9"})
 	default:
 		http.NotFound(w, r)
 	}
@@ -128,7 +129,7 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	bo := e.as(t, e.token(t, boEmail, "giantswarm:team-planeteers"))
 	kim := e.as(t, e.token(t, "kim@example.com", teamGroup))
 	ask := func(forWho, due string) int {
-		args := map[string]any{paramText: "Which lane for muster?", paramFor: forWho, paramKind: noteDecision, paramAgent: anaAgent, paramHost: lab,
+		args := map[string]any{paramText: museLane, paramFor: forWho, paramKind: noteDecision, paramAgent: anaAgent, paramHost: lab,
 			keyStatusQuo: "muster has no lane", keyWhy: "only its owners pick its lane", "options": []any{"portal: it rolls with backstage", "own: a lane of its own"}, "recommend": 2,
 			dueID: due, keyDefault: ownLane}
 		id, _ := e.expect(t, ana, "note_add", args, false, "note #")["id"].(float64)
@@ -142,7 +143,7 @@ func TestEnvtestServeDecisions(t *testing.T) {
 		t.Fatalf("posted %+v", posted)
 	}
 	d := posted[0]
-	if d.Person != boEmail || d.Team != "" || d.Question != "Which lane for muster?" || d.StatusQuo != "muster has no lane" ||
+	if d.Person != boEmail || d.Team != "" || d.Question != museLane || d.StatusQuo != "muster has no lane" ||
 		len(d.Options) != 2 || d.Options[1].Label != "own" || d.Options[1].Consequence != "a lane of its own" || d.Recommend != 2 ||
 		d.Default != ownLane || d.Note != strconv.Itoa(n) || d.AskedBy != "ana@example.com/ana-agent on lab" ||
 		d.Answer.Tool != "x_beekeeper_note_answer" || d.Answer.Arguments[paramVia] != viaSlack {
