@@ -588,6 +588,10 @@ func (a *app) guideFeed(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	var archived map[string]bool
+	if sessionLinked(st) {
+		archived = claude.Archived(a.cfg)
+	}
 	fire := func(st *state.State) ([]string, []state.Event, bool) {
 		seen, ce := guideRole.observeCLI(st, sessions, a.now)
 		var lines []string
@@ -596,7 +600,7 @@ func (a *app) guideFeed(ctx context.Context) ([]string, error) {
 		}
 		rl, re := guideRole.fireRelay(st, a.now)
 		dl, de := guideRole.fireRelayDue(st, q, a.now)
-		fl, fed := a.feedLines(st, sessions, closed)
+		fl, fed := a.feedLines(st, sessions, closed, findOrphaned(st, archived))
 		lines = append(append(append(lines, rl...), dl...), fl...)
 		evs := append(append(ce, re...), de...)
 		return lines, evs, seen || fed || len(lines) > 0 || len(evs) > 0
@@ -642,10 +646,11 @@ func (a *app) closedNotes(st *state.State) (map[int]state.Event, error) {
 	return out, nil
 }
 
-// feedLines says each queue item the feed has not said yet and each note it
-// said that is closed now, and records what it said in the guide's Fed. It
-// reports whether Fed changed.
-func (a *app) feedLines(st *state.State, sessions []*claude.Session, closed map[int]state.Event) (lines []string, changed bool) {
+// feedLines says each queue item the feed has not said yet, each orphaned
+// note (findOrphaned) it has not said yet and each note it said that is
+// closed now, and records what it said in the guide's Fed. It reports
+// whether Fed changed.
+func (a *app) feedLines(st *state.State, sessions []*claude.Session, closed map[int]state.Event, orphans []overtake) (lines []string, changed bool) {
 	guideRole.update(st, func(r *state.Role) {
 		var cur []string
 		// A session that only aged out of the queue is no news.
@@ -661,6 +666,17 @@ func (a *app) feedLines(st *state.State, sessions []*claude.Session, closed map[
 			} else {
 				lines = append(lines, fmt.Sprintf("GUIDE WAITING: %s needs its person: %s", waiter(it), truncate(oneLine(it.Waiting), 200)))
 			}
+		}
+		for _, o := range orphans {
+			k := fmt.Sprintf("orphan#%d", o.id)
+			cur = append(cur, k)
+			i := slices.IndexFunc(st.Notes, func(n state.Note) bool { return n.ID == o.id })
+			if i < 0 || slices.Contains(r.Fed, k) {
+				continue
+			}
+			who, text := noteFor(&st.Notes[i])
+			lines = append(lines, fmt.Sprintf("GUIDE ORPHANED #%d for %s, %s; ask it, or close it with note done %d --overtaken: %s",
+				o.id, who, o.reason, o.id, truncate(oneLine(text), 200)))
 		}
 		for _, k := range r.Fed {
 			id, err := strconv.Atoi(strings.TrimPrefix(k, "note#"))
