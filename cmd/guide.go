@@ -634,7 +634,7 @@ func (a *app) closedNotes(st *state.State) (map[int]state.Event, error) {
 		return out, nil
 	}
 	evs, err := a.store.Events(0, func(e state.Event) bool {
-		return e.Verb == noteAnswered || e.Verb == "note.done" || e.Verb == noteOvertaken || e.Verb == noteReplaced
+		return e.Verb == noteAnswered || e.Verb == noteDone || e.Verb == noteOvertaken || e.Verb == noteReplaced
 	})
 	if err != nil {
 		return nil, err

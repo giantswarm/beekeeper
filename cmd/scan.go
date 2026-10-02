@@ -107,22 +107,31 @@ func builtAt(t time.Time) string {
 	return t.Local().Format(time.RFC3339)
 }
 
+// scanFiles are the SOPS files scan.sops names, sorted; a glob's match of
+// sops' own configuration, .sops.yaml, is none.
+func (a *app) scanFiles() ([]string, error) {
+	var files []string
+	for _, g := range a.cfg.Scan.SOPS {
+		m, err := filepath.Glob(g)
+		if err != nil {
+			return nil, usageErr("scan.sops: %q: %v", g, err)
+		}
+		files = append(files, slices.DeleteFunc(m, func(f string) bool { return filepath.Base(f) == ".sops.yaml" })...)
+	}
+	slices.Sort(files)
+	return slices.Compact(files), nil
+}
+
 func (a *app) scanIndex(cmd *cobra.Command) error {
 	ix, err := guard.OpenIndex(a.scanDir())
 	if err != nil {
 		return err
 	}
 	ix.MinLen = a.cfg.Scan.MinLength
-	var files []string
-	for _, g := range a.cfg.Scan.SOPS {
-		m, err := filepath.Glob(g)
-		if err != nil {
-			return usageErr("scan.sops: %q: %v", g, err)
-		}
-		files = append(files, m...)
+	files, err := a.scanFiles()
+	if err != nil {
+		return err
 	}
-	slices.Sort(files)
-	files = slices.Compact(files)
 	ix.Drop(guard.SOPSRef, guard.OpRef)
 	var failed []string
 	var b strings.Builder
@@ -131,8 +140,16 @@ func (a *app) scanIndex(cmd *cobra.Command) error {
 		failed = append(failed, err.Error())
 	}
 	fmt.Fprintf(&b, "sops: %d files, %d fingerprints\n", len(files), n)
+	ops, err := a.secretOps()
+	if err != nil {
+		return err
+	}
 	for _, v := range a.cfg.Scan.Vaults {
-		n, err := guard.IndexVault(cmd.Context(), ix, v)
+		var env []string
+		if v == ops.Vault && ops.Token != "" {
+			env = []string{"OP_SERVICE_ACCOUNT_TOKEN=" + ops.Token}
+		}
+		n, err := guard.IndexVault(cmd.Context(), ix, v, env)
 		if err != nil {
 			failed = append(failed, err.Error())
 		}
