@@ -20,8 +20,9 @@ the gate's re-exec of a replaced binary (`internal/platform/binary_*.go`, Linux 
 elsewhere) and the detached merge child (`internal/platform/detach_*.go`). Pre-commit runs
 golangci-lint with gosec and goconst.
 
-The Kubernetes store's tests (`internal/state/kube`) run against envtest's kube-apiserver and
-skip without `KUBEBUILDER_ASSETS`: `make test-envtest` downloads it and runs them, as CI's
+The Kubernetes store's tests (`internal/state/kube`) and `beekeeper serve`'s (`cmd/serve_envtest_test.go`,
+every tool over streamable HTTP behind a test Dex from `internal/identity/identitytest`) run against
+envtest's kube-apiserver and skip without `KUBEBUILDER_ASSETS`: `make test-envtest` downloads it and runs them, as CI's
 `test-envtest` job does after `make check-crds`. The CRDs in `config/crd` and the deepcopy code are
 generated from `pkg/apis` by `make generate-crds`; edit the types, never the YAML.
 
@@ -257,6 +258,7 @@ measured with `beekeeper sessions --json` against the installed release on the s
 | `internal/state` | The shared state document (supervisor and its relay, the guide's role record (`Role`, the same shape the supervisor's flat fields read as through `SupervisorRole`), the relay due the watch reported, grants, holds, agents, notes, timers, session records, merges, the sessions `agents start` started with their mode) and the event log, under a file lock (`Peek` reads it without the lock, for the permission hook); `Log` appends the events that change no state (build runs) with a bounded wait for the lock. |
 | `pkg/apis/beekeeper/v1alpha1` | The `beekeeper.giantswarm.io` kinds of `beekeeper serve`, little spec and lots of status: `Environment`, `MergeLane` and `Hold` cluster-scoped, `Note` and `RosterEntry` in the team's namespace `beekeeper-<team>`; queues capped at `MaxQueue`. `config/crd` embeds their CRDs. |
 | `internal/state/kube` | The Kubernetes `state.Store`: the shared records of the state document (grants and release times as Environments, merges as MergeLanes, holds, notes, agents) as those resources. An update writes the one object it changes under the resourceVersion it read and reruns on a lost race; an update of two objects, or of anything the resources do not carry (the supervisor, timers, side files), is refused. `Claim` and `Release` set an Environment's holder by compare-and-swap, the loser told the holder. Events are Kubernetes Events on the object. |
+| `internal/identity` | Who calls `beekeeper serve`: a Dex ID token checked against the issuer's JWKS and `serve.clientIDs`, the person its verified email (never `sub`), a member of `serve.organization`, the team of its group in `serve.teams`, a team's supervisor role its group in `serve.supervisors`; `identitytest` is the Dex stand-in of the tests. |
 | `internal/notify` | Desktop notifications: the kinds, urgencies and quiet hours and the ledger `notify.json` under `notify.lock` that makes each event one notification across watches and holds the quiet hours' ones; the sender is `platform.Notifier`. |
 | `internal/alerts` | The installations' alerts: bounded `kubectl port-forward`s in their own process group, the Alertmanager reading, the NEW/RESOLVED/FLAPPING lines with the severity floors and the flap damper, and the grouped snapshot (pure, tested against Alertmanager-shaped fixtures, recorded answers in `testdata/` and a fake `kubectl`), the baseline with the damper's records and its single owner, and recorded answers for `alerts replay`. |
 | `internal/upgrade` | Cluster upgrades: the detection over an installation's Clusters, control planes and node pools (pure, tested against a real upgrade replayed from `testdata/prod/<phase>/`, stripped to the fields read), the bounded parallel `kubectl` reading with the events that name the release upgraded from, and the automatic `upgrade:<installation>/<cluster>` holds the merge gate and `lease claim` read. |

@@ -221,19 +221,105 @@ func (s *Store) Claim(name string, h v1alpha1.Holder) error {
 // Release frees the Environment held by p and records the release time; a
 // release by anyone else is refused with the holder named.
 func (s *Store) Release(name string, p state.Party, now time.Time) error {
+	return s.Free(name, p, p, now)
+}
+
+// Free frees the Environment while holder holds it, recorded as by's: the
+// holder's own release, or another's (the owning team's supervisor) as a
+// forced one. Another holder than holder is refused with the holder named.
+func (s *Store) Free(name string, holder, by state.Party, now time.Time) error {
+	ev := state.Event{At: now, By: by, Verb: "lease.release", Detail: name}
+	if own := holder.Is(by) || (holder.Person != "" && holder.Person == by.Person); !own {
+		ev.Verb, ev.Detail = "lease.force-release", name+" held by "+holder.Name
+	}
 	return s.holder(name, func(env *v1alpha1.Environment) (bool, error) {
 		cur := env.Status.Holder
 		if cur == nil {
 			return false, nil
 		}
-		if !party(cur.Party).Is(p) {
+		if !party(cur.Party).Is(holder) {
 			return false, &HeldError{Environment: name, Holder: *cur}
 		}
 		env.Status.Holder = nil
 		env.Status.Released = &metav1.Time{Time: now}
 		return true, nil
-	}, state.Event{At: now, By: p, Verb: "lease.release", Detail: name})
+	}, ev)
 }
+
+// Environments returns every Environment, by name.
+func (s *Store) Environments() ([]v1alpha1.Environment, error) {
+	ctx, cancel := s.ctx()
+	defer cancel()
+	l := &v1alpha1.EnvironmentList{}
+	if err := s.c.List(ctx, l); err != nil {
+		return nil, err
+	}
+	slices.SortFunc(l.Items, func(a, b v1alpha1.Environment) int { return strings.Compare(a.Name, b.Name) })
+	return l.Items, nil
+}
+
+// Lanes returns every MergeLane, by name.
+func (s *Store) Lanes() ([]v1alpha1.MergeLane, error) {
+	ctx, cancel := s.ctx()
+	defer cancel()
+	l := &v1alpha1.MergeLaneList{}
+	if err := s.c.List(ctx, l); err != nil {
+		return nil, err
+	}
+	slices.SortFunc(l.Items, func(a, b v1alpha1.MergeLane) int { return strings.Compare(a.Name, b.Name) })
+	return l.Items, nil
+}
+
+// Audit records e as a Kubernetes Event on obj (its kind, namespace and
+// name; the rest is read), or, without obj or once obj is gone, on the
+// namespace of team: a call that changed nothing still leaves its Event.
+func (s *Store) Audit(obj client.Object, team string, e state.Event) error {
+	ctx, cancel := s.ctx()
+	defer cancel()
+	if obj != nil {
+		err := s.c.Get(ctx, client.ObjectKeyFromObject(obj), obj)
+		if err == nil {
+			return s.record(ctx, obj, []state.Event{e})
+		}
+		if !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
+	ns := &corev1.Namespace{}
+	if err := s.c.Get(ctx, client.ObjectKey{Name: TeamNamespace(team)}, ns); err != nil {
+		return fmt.Errorf("auditing %s: the team namespace: %w", e.Verb, err)
+	}
+	return s.record(ctx, ns, []state.Event{e})
+}
+
+// HoldObject is the Hold of target. It and the other *Object functions name
+// a record of the state document for Audit.
+func HoldObject(target string) client.Object {
+	return &v1alpha1.Hold{ObjectMeta: metav1.ObjectMeta{Name: holdName(target)}}
+}
+
+// NoteObject is note id of team's namespace.
+func NoteObject(team string, id int) client.Object {
+	return &v1alpha1.Note{ObjectMeta: metav1.ObjectMeta{Namespace: teamNamespace(team), Name: "note-" + strconv.Itoa(id)}}
+}
+
+// RosterObject is p's roster entry.
+func RosterObject(p state.Party) client.Object {
+	return &v1alpha1.RosterEntry{ObjectMeta: metav1.ObjectMeta{Namespace: teamNamespace(p.Team), Name: rosterName(p)}}
+}
+
+// EnvironmentObject is the Environment name.
+func EnvironmentObject(name string) client.Object {
+	return &v1alpha1.Environment{ObjectMeta: metav1.ObjectMeta{Name: name}}
+}
+
+// LaneObject is the MergeLane name.
+func LaneObject(name string) client.Object {
+	return &v1alpha1.MergeLane{ObjectMeta: metav1.ObjectMeta{Name: name}}
+}
+
+// TeamNamespace is a team's namespace, beekeeper-<team>.
+func TeamNamespace(team string) string { return teamNamespace(team) }
 
 // holder changes an Environment's holder by compare-and-swap: a conflict
 // rereads, so the loser of a race judges the winner's holder.
@@ -917,6 +1003,12 @@ func dnsLabel(s string) string {
 	}
 	return s
 }
+
+// PartyOf is p as the state document's party.
+func PartyOf(p v1alpha1.Party) state.Party { return party(p) }
+
+// APIParty is p as the resources' party.
+func APIParty(p state.Party) v1alpha1.Party { return apiParty(p) }
 
 func party(p v1alpha1.Party) state.Party {
 	return state.Party{Session: p.Session, HostSession: p.HostSession, Name: p.Name, Person: p.Person, Team: p.Team, Host: p.Host}
