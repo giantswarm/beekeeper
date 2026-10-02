@@ -6,12 +6,14 @@ import (
 	"time"
 )
 
+const restarting = "PodRestarting"
+
 func pageState(start time.Time) *State {
 	since := start.UTC().Format(time.RFC3339Nano)
 	return &State{Installations: map[string]*Installation{
 		"alpha": {Reachable: true, Alerts: Set{
-			"fp1": {Severity: Page, Team: "t", Alertname: "PodRestarting", Where: "ns/app", Since: since},
-			"fp2": {Severity: "notify", Team: "t", Alertname: "DiskFilling", Where: "ns/vol", Since: since},
+			"fp1": {Severity: Page, Team: "t", Alertname: restarting, Where: "ns/app", Since: since},
+			"fp2": {Severity: notify, Team: "t", Alertname: "DiskFilling", Where: "ns/vol", Since: since},
 		}},
 		"beta": {Reachable: false, Alerts: Set{
 			"fp3": {Severity: Page, Team: "t", Alertname: "Stale", Where: "ns/x", Since: since},
@@ -56,7 +58,7 @@ func TestUnownedPagesOncePerGrace(t *testing.T) {
 func TestUnownedPagesOnePerAlertname(t *testing.T) {
 	start := time.Date(2026, 10, 2, 3, 11, 0, 0, time.UTC)
 	st := pageState(start)
-	st.Installations["alpha"].Alerts["fp4"] = Alert{Severity: Page, Team: "t", Alertname: "PodRestarting", Where: "ns/other",
+	st.Installations["alpha"].Alerts["fp4"] = Alert{Severity: Page, Team: "t", Alertname: restarting, Where: "ns/other",
 		Since: start.Add(-time.Hour).Format(time.RFC3339Nano)}
 	got := UnownedPages(st.Firing(Page), 15*time.Minute, neverOwned, start.Add(20*time.Minute))
 	if len(got) != 1 || got[0].Line() != "PAGE UNOWNED alpha PodRestarting ns/other (+1) for 1h20m: beekeeper alerts own alpha/PodRestarting" {
@@ -97,7 +99,7 @@ func TestKeyChangesWithTheStart(t *testing.T) {
 
 func TestMatch(t *testing.T) {
 	firing := pageState(time.Now()).Firing("")
-	for q, want := range map[string]int{"alpha/PodRestarting": 1, "PodRestarting": 1, "fp2": 1, "alpha/Nope": 0, "beta/Stale": 0} {
+	for q, want := range map[string]int{"alpha/PodRestarting": 1, restarting: 1, "fp2": 1, "alpha/Nope": 0, "beta/Stale": 0} {
 		if got := len(Match(firing, q)); got != want {
 			t.Errorf("Match(%q) = %d alerts, want %d", q, got, want)
 		}

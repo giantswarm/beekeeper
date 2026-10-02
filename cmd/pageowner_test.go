@@ -12,6 +12,11 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const (
+	otherTeam = "other-team"
+	ownedPage = "alpha/PodRestarting"
+)
+
 // pageApp is stubApp with an alert baseline of one page and one notify
 // alert on the installation alpha, both firing since start.
 func pageApp(t *testing.T, start time.Time) (*app, *bytes.Buffer) {
@@ -21,7 +26,7 @@ func pageApp(t *testing.T, start time.Time) (*app, *bytes.Buffer) {
 	base := &alerts.State{Installations: map[string]*alerts.Installation{"alpha": {Reachable: true, Alerts: alerts.Set{
 		"fp1": {Severity: alerts.Page, Team: "t", Alertname: "PodRestarting", Where: "ns/app", Since: since},
 		"fp2": {Severity: "notify", Team: "t", Alertname: "DiskFilling", Where: "ns/vol", Since: since},
-		"fp3": {Severity: alerts.Page, Team: "other", Alertname: "TheirPage", Where: "ns/x", Since: since},
+		"fp3": {Severity: alerts.Page, Team: otherTeam, Alertname: "TheirPage", Where: "ns/x", Since: since},
 	}}}}
 	a.cfg.Alerts.Team = "t"
 	if err := alerts.NewStore(a.cfg.StateDir).Save(base); err != nil {
@@ -75,9 +80,9 @@ func TestWatchSaysUnownedPageOncePerGrace(t *testing.T) {
 func TestAlertsOwnStopsTheLinesUntilTheOwnerEnds(t *testing.T) {
 	start := time.Now().Add(-2 * time.Hour)
 	a, out := pageApp(t, start)
-	owner := &claude.Session{ID: "s2", Name: "worker"}
+	owner := &claude.Session{ID: "s2", Name: ownerName}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.AlertOwners = []state.AlertOwner{{Alert: "fp1@" + start.UTC().Format(time.RFC3339Nano), Name: "alpha/PodRestarting", By: owner.Party(), At: start}}
+		st.AlertOwners = []state.AlertOwner{{Alert: "fp1@" + start.UTC().Format(time.RFC3339Nano), Name: ownedPage, By: owner.Party(), At: start}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -105,7 +110,7 @@ func TestWatchOnceRecordsNoOwnerEnd(t *testing.T) {
 	start := time.Now().Add(-2 * time.Hour)
 	a, out := pageApp(t, start)
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.AlertOwners = []state.AlertOwner{{Alert: "fp1@" + start.UTC().Format(time.RFC3339Nano), By: state.Party{Session: "gone", Name: "w"}, At: start}}
+		st.AlertOwners = []state.AlertOwner{{Alert: "fp1@" + start.UTC().Format(time.RFC3339Nano), By: state.Party{Session: holderGone, Name: "w"}, At: start}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -124,19 +129,19 @@ func TestWatchOnceRecordsNoOwnerEnd(t *testing.T) {
 func TestAlertsOwnCommand(t *testing.T) {
 	start := time.Now().Add(-20 * time.Minute)
 	a, out := pageApp(t, start)
-	c := a.alertsCmd()
-	c.SetArgs([]string{"own", "alpha/Nope"})
+	c := a.alertsOwnCmd()
+	c.SetArgs([]string{"alpha/Nope"})
 	c.SetOut(out)
 	c.SetErr(out)
-	if err := c.Execute(); err == nil || !strings.Contains(err.Error(), "firing pages: alpha/PodRestarting") {
+	if err := c.Execute(); err == nil || !strings.Contains(err.Error(), "firing pages: "+ownedPage) {
 		t.Fatalf("own of no alert: %v", err)
 	}
-	c.SetArgs([]string{"own", "alpha/PodRestarting"})
+	c.SetArgs([]string{ownedPage})
 	if err := c.Execute(); err != nil {
 		t.Fatal(err)
 	}
 	st, _ := a.store.Read()
-	if len(st.AlertOwners) != 1 || st.AlertOwners[0].By.Name != agentOne || st.AlertOwners[0].Name != "alpha/PodRestarting" {
+	if len(st.AlertOwners) != 1 || st.AlertOwners[0].By.Name != agentOne || st.AlertOwners[0].Name != ownedPage {
 		t.Fatalf("owners: %+v", st.AlertOwners)
 	}
 	if got := lastEventOf(t, a, verbAlertOwned); !strings.Contains(got, "alpha/PodRestarting ns/app") {
