@@ -16,8 +16,15 @@ import (
 )
 
 // rotationLogin is the session of a worker whose next turn needs the
-// desktop's browser.
-const rotationLogin = "26c5814d-1c8e-42dc-9103-51893d720905"
+// desktop's browser, rotationName its name and rotationTask its task.
+const (
+	rotationLogin = "26c5814d-1c8e-42dc-9103-51893d720905"
+	rotationName  = "Rotation login"
+	rotationTask  = "log in"
+)
+
+// rotationParty is the worker's party.
+var rotationParty = state.Party{Session: rotationLogin, HostSession: "local_" + rotationLogin, Name: rotationName}
 
 // lockMachine's process table holds a screen locker, or none.
 type lockMachine struct {
@@ -116,8 +123,8 @@ func TestReopenShowsADesktopTurnAtOnce(t *testing.T) {
 	a, out := stubApp(t)
 	a.cfg.Desktop.TypingQuiet.Duration = -1
 	a.cfg.Claude.DesktopLog = filepath.Join(t.TempDir(), "main.log")
-	p := state.Party{Session: rotationLogin, HostSession: "local_" + rotationLogin, Name: "Rotation login"}
-	rosterAgent(t, a, state.Agent{Party: p, Task: "log in", DesktopTurn: time.Now()})
+	p := rotationParty
+	rosterAgent(t, a, state.Agent{Party: p, Task: rotationTask, DesktopTurn: time.Now()})
 	saved := desktopWindowActive
 	t.Cleanup(func() { desktopWindowActive = saved })
 	desktopWindowActive = func(context.Context) (bool, error) { return true, nil }
@@ -167,8 +174,8 @@ func TestReopenSaysTheDesktopIsAtItsCap(t *testing.T) {
 	a, out := stubApp(t)
 	a.cfg.Desktop.TypingQuiet.Duration = -1
 	a.cfg.Claude.DesktopLog = filepath.Join(t.TempDir(), "main.log")
-	p := state.Party{Session: rotationLogin, HostSession: "local_" + rotationLogin, Name: "Rotation login"}
-	rosterAgent(t, a, state.Agent{Party: p, Task: "log in", DesktopTurn: time.Now()})
+	p := rotationParty
+	rosterAgent(t, a, state.Agent{Party: p, Task: rotationTask, DesktopTurn: time.Now()})
 	plat.Machine = tableMachine{plat.Machine}
 	plat.Launcher = &unitLauncher{}
 	plat.Opener = capOpener{log: a.cfg.Claude.DesktopLog}
@@ -204,8 +211,8 @@ func (o capOpener) Open(context.Context, string, bool) error {
 func TestReopenRecordsItsWait(t *testing.T) {
 	a, _ := stubApp(t)
 	a.cfg.Desktop.TypingQuiet.Duration = -1
-	p := state.Party{Session: rotationLogin, HostSession: "local_" + rotationLogin, Name: "Rotation login"}
-	rosterAgent(t, a, state.Agent{Party: p, Task: "log in"})
+	p := rotationParty
+	rosterAgent(t, a, state.Agent{Party: p, Task: rotationTask})
 	saved := desktopWindowActive
 	t.Cleanup(func() { desktopWindowActive = saved })
 	desktopWindowActive = func(context.Context) (bool, error) { return true, nil }
@@ -237,8 +244,8 @@ func TestReopenRecordsItsWait(t *testing.T) {
 // waitingAgent is a worker whose reopen waits on the window's focus.
 func waitingAgent(now time.Time) state.Agent {
 	return state.Agent{
-		Party: state.Party{Session: rotationLogin, HostSession: "local_" + rotationLogin, Name: "Rotation login"},
-		Task:  "log in",
+		Party: rotationParty,
+		Task:  rotationTask,
 		Import: &state.ImportWait{On: "the desktop's window to lose the focus",
 			Since: now.Add(-time.Minute), Until: now.Add(24 * time.Minute)},
 	}
@@ -251,7 +258,7 @@ func TestGrantToAnAgentWithoutACLI(t *testing.T) {
 	plat.Machine = tableMachine{plat.Machine}
 	rosterAgent(t, a, waitingAgent(a.now))
 	c := a.leaseGrantCmd()
-	c.SetArgs([]string{"browser", "Rotation login"})
+	c.SetArgs([]string{"browser", rotationName})
 	if err := c.ExecuteContext(t.Context()); err != nil {
 		t.Fatal(err)
 	}
