@@ -34,6 +34,7 @@ beekeeper serve, the central instance - leases, holds, merge lanes, notes and th
 | serve.gateway.url | string | `""` |  |
 | serve.gateway.tokenFile | string | `"/var/run/secrets/klaus-gateway/token"` |  |
 | serve.gateway.answerTool | string | `"x_beekeeper_note_answer"` |  |
+| serve.gateway.sendTool | string | `"x_beekeeper_send_message"` |  |
 | watch.interval | string | `"30s"` |  |
 | database.secretName | string | `""` |  |
 | database.secretKey | string | `"uri"` |  |

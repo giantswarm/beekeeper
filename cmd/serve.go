@@ -53,6 +53,13 @@ their team's local agents that hold a lease (work on a shared
 installation) and every remote agent; a send_message to a local agent is
 its person's alone (docs/feed.md).
 
+converse lets one of a person's agents on the roster (the guide) talk to
+its person in Slack: its first message opens a klaus-gateway conversation
+(POST /conversations, the thread kept on the agent's roster entry), later
+ones go into the thread (POST /conversations/{id}/messages). The person's
+replies call serve.gateway.sendTool through muster as the person, to the
+agent's address: they arrive in the person's mailbox from source slack.
+
 A decision (note_add --kind decision, --for a person of serve.people or an
 email, or team:<name> of serve.channels) is put to its addressee as one
 Slack message through klaus-gateway (serve.gateway, POST /decisions, with

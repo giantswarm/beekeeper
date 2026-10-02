@@ -481,6 +481,10 @@ type Gateway struct {
 	// AnswerTool is the muster tool a click calls as the person who
 	// answers: beekeeper's note_answer behind muster.
 	AnswerTool string `yaml:"answerTool"`
+	// SendTool is the muster tool a person's reply in a conversation with
+	// one of their agents calls as the person: beekeeper's send_message
+	// behind muster, to the agent's local: address.
+	SendTool string `yaml:"sendTool"`
 }
 
 // Guide configures the guide: its role and the person it guides.
@@ -1122,6 +1126,7 @@ func (c *Config) defaults() error {
 	c.Supervisor.defaults(home)
 	setStr(&c.Serve.Gateway.TokenFile, "/var/run/secrets/klaus-gateway/token")
 	setStr(&c.Serve.Gateway.AnswerTool, "x_beekeeper_note_answer")
+	setStr(&c.Serve.Gateway.SendTool, "x_beekeeper_send_message")
 	// The guide's context is the person's conversation: it relays early.
 	if c.Guide.RelayAt == 0 {
 		c.Guide.RelayAt = 150_000

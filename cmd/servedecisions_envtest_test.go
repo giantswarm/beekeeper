@@ -27,6 +27,7 @@ const (
 	keyDefault   = "default"
 	keyWhy       = "why"
 	ownLane      = "muster gets its own lane"
+	museLane     = "Which lane for muster?"
 )
 
 // fakeGateway is klaus-gateway's decisions surface: it keeps what it was
@@ -37,6 +38,11 @@ type fakeGateway struct {
 	closed  []string
 	tokens  []string
 	refuses bool
+	// The conversations opened, the messages said into them ("<id>: <text>")
+	// and the ids the gateway no longer holds.
+	opened []conversation
+	said   []string
+	gone   map[string]bool
 }
 
 func (g *fakeGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -63,9 +69,40 @@ func (g *fakeGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal(body, &c)
 		g.closed = append(g.closed, strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/decisions/"), "/close")+" "+c.Outcome+": "+c.Text)
 		_, _ = w.Write([]byte(`{"channel":"D1","ts":"1.2"}`))
+	case r.URL.Path == "/conversations" && g.refuses:
+		http.Error(w, "person: no Slack user has this email", http.StatusUnprocessableEntity)
+	case r.URL.Path == "/conversations":
+		var c conversation
+		dec := json.NewDecoder(strings.NewReader(string(body)))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&c); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		g.opened = append(g.opened, c)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = fmt.Fprintf(w, `{"id":"D1-%d.0","channel":"D1","ts":"%d.0"}`, len(g.opened), len(g.opened))
+	case strings.HasPrefix(r.URL.Path, "/conversations/") && strings.HasSuffix(r.URL.Path, "/messages"):
+		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/conversations/"), "/messages")
+		if g.gone[id] {
+			http.Error(w, "conversation not found", http.StatusNotFound)
+			return
+		}
+		var m struct{ Text string }
+		_ = json.Unmarshal(body, &m)
+		g.said = append(g.said, id+": "+m.Text)
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]string{"id": id, "channel": "D1", "ts": "9.9"})
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// conversations is what the gateway was asked to open and to say.
+func (g *fakeGateway) conversations() ([]conversation, []string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]conversation{}, g.opened...), append([]string{}, g.said...)
 }
 
 func (g *fakeGateway) seen() ([]decision, []string) {
@@ -92,7 +129,7 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	bo := e.as(t, e.token(t, boEmail, "giantswarm:team-planeteers"))
 	kim := e.as(t, e.token(t, "kim@example.com", teamGroup))
 	ask := func(forWho, due string) int {
-		args := map[string]any{paramText: "Which lane for muster?", paramFor: forWho, paramKind: noteDecision, paramAgent: anaAgent, paramHost: lab,
+		args := map[string]any{paramText: museLane, paramFor: forWho, paramKind: noteDecision, paramAgent: anaAgent, paramHost: lab,
 			keyStatusQuo: "muster has no lane", keyWhy: "only its owners pick its lane", "options": []any{"portal: it rolls with backstage", "own: a lane of its own"}, "recommend": 2,
 			dueID: due, keyDefault: ownLane}
 		id, _ := e.expect(t, ana, "note_add", args, false, "note #")["id"].(float64)
@@ -106,7 +143,7 @@ func TestEnvtestServeDecisions(t *testing.T) {
 		t.Fatalf("posted %+v", posted)
 	}
 	d := posted[0]
-	if d.Person != boEmail || d.Team != "" || d.Question != "Which lane for muster?" || d.StatusQuo != "muster has no lane" ||
+	if d.Person != boEmail || d.Team != "" || d.Question != museLane || d.StatusQuo != "muster has no lane" ||
 		len(d.Options) != 2 || d.Options[1].Label != "own" || d.Options[1].Consequence != "a lane of its own" || d.Recommend != 2 ||
 		d.Default != ownLane || d.Note != strconv.Itoa(n) || d.AskedBy != "ana@example.com/ana-agent on lab" ||
 		d.Answer.Tool != "x_beekeeper_note_answer" || d.Answer.Arguments[paramVia] != viaSlack {

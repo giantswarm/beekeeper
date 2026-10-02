@@ -81,7 +81,8 @@ messages in order, each with its `id`, and `ack_messages` with those ids.
 
 - `send_message(to, message)` takes an A2A Message (`messageId`, `role`, `parts`). To
   `local:<machine>/<name>`, only from the agent's own person, it is queued in that person's
-  mailbox, in an envelope `{"to", "from": {"person", "agent", "host"}, "message"}`. To
+  mailbox, in an envelope `{"to", "from": {"person", "agent", "host", "source"}, "message"}`;
+  `source` is the message's `metadata.source`, `slack` for a reply in a conversation. To
   `kagent:<installation>/<namespace>/<session>` it is sent through muster (`serve.muster`, the
   installation's tool in `serve.kagent`) to the session's `invoke_agent_instance`, with the
   caller's token.
@@ -91,6 +92,16 @@ messages in order, each with its `id`, and `ack_messages` with those ids.
 - A message is kept until it is acked or its deadline passes (`deadline`, else 24 h). An expired
   message leaves a `message.expired` event on the feed and an `expired` notice in the sender's
   mailbox, which does not count against the cap.
+- `converse(text)`, called as one of the person's agents on the roster (`agent`, `host`), writes
+  to the person in Slack through klaus-gateway (`serve.gateway`): the first message opens a
+  conversation, a direct message whose thread is bound to the agent and kept on its roster entry
+  (`status.conversation`); later ones go into that thread, and a new one opens once klaus-gateway
+  no longer holds it. A reply of the person's in the thread calls `serve.gateway.sendTool`
+  (`send_message` behind muster) as the person, to the agent's address, so it arrives in their
+  mailbox from `source` `slack` with the conversation's id as the message's `contextId`. A reply
+  to an agent not on the roster is refused, `<address> is not running`, and klaus-gateway says in
+  the thread that it was not delivered and why; another person's reply never reaches the agent.
+  This is how the person talks to their guide in Slack.
 - The mailboxes live in the `beekeeper` database of the platform's Postgres, whose URL
   `BEEKEEPER_DATABASE_URL` names; `beekeeper serve` migrates the schema at start and refuses to
   start without it.

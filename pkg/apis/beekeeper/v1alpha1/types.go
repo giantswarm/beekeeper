@@ -418,6 +418,10 @@ type RosterEntryStatus struct {
 	// Cwd is the agent's checkout.
 	// +optional
 	Cwd string `json:"cwd,omitempty"`
+	// Conversation is klaus-gateway's conversation the agent holds with its
+	// person, a Slack thread.
+	// +optional
+	Conversation string `json:"conversation,omitempty"`
 	// +optional
 	// +listType=map
 	// +listMapKey=type
