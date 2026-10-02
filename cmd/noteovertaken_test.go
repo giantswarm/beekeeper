@@ -165,11 +165,11 @@ func TestNoteWithoutRefsClosesOnceItsSessionIsArchived(t *testing.T) {
 	desktopRecord(t, w.cfg.Claude.DesktopDir, hostArc, "cli-archived", true)
 	desktopRecord(t, w.cfg.Claude.DesktopDir, "local_stopped", "cli-stopped", false)
 	desktopRecord(t, w.cfg.Claude.DesktopDir, "local_run", "cli-run", true)
-	worker := state.Party{Session: "cli-archived", HostSession: hostArc, Name: "Agent nine"}
+	worker := state.Party{Session: "cli-archived", HostSession: hostArc, Name: uiAgentName}
 	setNotes(t, w,
 		state.Note{ID: 1, For: personTimo, Text: askedQ, By: worker},
 		state.Note{ID: 2, For: personTimo, Text: askedQ, By: state.Party{Session: "cli-stopped", HostSession: "local_stopped", Name: "Agent ten"}},
-		state.Note{ID: 3, For: personTimo, Text: askedQ, By: state.Party{Session: "cli-run", HostSession: "local_run", Name: "Supervisor run 3"}},
+		state.Note{ID: 3, For: personTimo, Text: askedQ, By: state.Party{Session: "cli-run", HostSession: "local_run", Name: supRun3}},
 		state.Note{ID: 4, For: personTimo, Text: askedQ, By: worker, Pinned: true},
 		state.Note{ID: 5, Text: "a memo", By: worker},
 		// With a ref the ref decides, not the session.
@@ -179,7 +179,7 @@ func TestNoteWithoutRefsClosesOnceItsSessionIsArchived(t *testing.T) {
 	if ids := openIDs(t, w); !slices.Equal(ids, []int{2, 3, 4, 5, 6}) {
 		t.Fatalf("open %v", ids)
 	}
-	if evs := overtakenEvents(t, w); len(evs) != 1 || overtakenReason(evs[0]) != `its filing session "Agent nine" is archived` {
+	if evs := overtakenEvents(t, w); len(evs) != 1 || overtakenReason(evs[0]) != `its filing session "`+uiAgentName+`" is archived` {
 		t.Fatalf("events %+v", evs)
 	}
 }
