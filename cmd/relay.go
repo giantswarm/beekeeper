@@ -107,7 +107,12 @@ func (rl role) start(st *state.State, me state.Party, prevLive, takeOver bool, n
 			}
 			grants = fmt.Sprintf("; %d grant(s) move over", len(st.Grants))
 		}
-		how = fmt.Sprintf(" (relieving %q, relayed at %s%s)", prev.Name, clock(now, r.Relay.At), grants)
+		// The relieved run's desktop session would hold a desktop CLI slot.
+		archive := ""
+		if host := oweArchive(st, prev.Party, fmt.Sprintf("relieved by %q", me.Name), now); host != "" {
+			archive = fmt.Sprintf("; the doctor archives its desktop session %s once its CLI runs no turn", host)
+		}
+		how = fmt.Sprintf(" (relieving %q, relayed at %s%s%s)", prev.Name, clock(now, r.Relay.At), grants, archive)
 	case prevLive && !takeOver:
 		named := ""
 		switch rel := r.Relay; {
