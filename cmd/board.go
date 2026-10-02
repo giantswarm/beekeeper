@@ -49,7 +49,8 @@ own Status, whatever its Team: one no step offers on its own (a Backlog item old
 Backlog step's createdWithin, a blocked one, one in Inbox) is skipped with
 the reason, even when its epic is in progress. The first item that is free
 is picked: not served by a running session (a sessions serve record, a busy
-agent's task) and named by no open note (it waits on the note's person),
+agent's task) nor by a parked agent kept on the roster (agents keep, or an
+open timer that wakes it by name), and named by no open note (it waits on the note's person),
 not assigned to anybody outside board.people, without an open recorded
 blocker, and active within board.staleAfter. A sub-issue offered through
 an epic passes the same checks, and a serve record, task or note naming
@@ -122,8 +123,9 @@ type nextResult struct {
 // nextFree walks the candidates in order and returns the first free one.
 // An item is owned by a record of a running session (or of one that
 // started after listed, the moment the running sessions were listed),
-// unless the session is a registered agent reporting idle, by a busy
-// agent whose task names it and by an open note naming it. A sub-issue
+// unless the session is a registered agent reporting idle, by the record
+// of an agent kept on the roster (keptBy) whether its CLI runs or not, by a
+// busy agent whose task names it and by an open note naming it. A sub-issue
 // offered through an epic is owned by whatever owns the epic too.
 func nextFree(st *state.State, cands []board.Candidate, me state.Party, alive func(state.Party) bool, listed time.Time) nextResult {
 	owners := boardOwners(st, me, alive, listed)
@@ -187,9 +189,20 @@ func boardOwners(st *state.State, me state.Party, alive func(state.Party) bool, 
 		}
 		return fmt.Sprintf("%q", p.Name)
 	}
+	// kept says what keeps the record's session on the roster, parked.
+	kept := func(p state.Party) string {
+		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) })
+		if i < 0 || st.Agents[i].Done {
+			return ""
+		}
+		return keptBy(st, st.Agents[i], listed)
+	}
 	out := map[string]string{}
 	for _, r := range st.Records {
-		if r.Ended.IsZero() && (alive(r.Session) || r.At.After(listed)) && !idle(r.Session) {
+		switch k := kept(r.Session); {
+		case k != "":
+			out[strings.ToLower(r.Issue)] = fmt.Sprintf("%s (parked, %s)", name(r.Session), k)
+		case r.Ended.IsZero() && (alive(r.Session) || r.At.After(listed)) && !idle(r.Session):
 			out[strings.ToLower(r.Issue)] = name(r.Session)
 		}
 	}

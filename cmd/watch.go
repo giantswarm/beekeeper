@@ -56,7 +56,8 @@ not in the gate (beekeeper lanes) is one LANE STALLED line when it starts
 and one ENDED line when it ends. A running merge whose gate process is
 gone is one MERGE LOST line: it settles with an unknown release. A
 registered agent with a task and no running CLI is one AGENTS STOPPED
-line with how to resume it. A settling merge leaves its lane
+line with how to resume it, unless it is kept (agents keep, or a timer
+that wakes it). A settling merge leaves its lane
 once the lane has settled (its release rolled and its HelmReleases Ready,
 or no installation to roll), logged as lane.settled, silently, however
 late; one not settled past merge.settleTimeout is one LANE STUCK line
@@ -1368,6 +1369,9 @@ func (w *watcher) stoppedAgents(st *state.State, sessions []*claude.Session) {
 	for _, ag := range stoppedAgents(st.Agents, sessions) {
 		if st.Report.Running() && ag.Is(st.Report.Party) {
 			continue // the reporter's turn ended: tendReporter ends it, nobody resumes it
+		}
+		if keptBy(st, ag, w.now) != "" {
+			continue // parked on purpose: a person or its timer brings it back
 		}
 		k := cmp.Or(ag.Session, ag.Name)
 		stopped[k] = true

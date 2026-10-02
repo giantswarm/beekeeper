@@ -28,6 +28,9 @@ type agentView struct {
 	// allowed on yet: browserAsks or browserSkips; empty without a desktop
 	// session.
 	Browser string `json:"browser,omitempty"`
+	// Kept says what keeps the idle entry on the roster past
+	// agents.staleAfter (keptBy); empty when nothing does.
+	Kept string `json:"kept,omitempty"`
 }
 
 // An agent's Browser.
@@ -72,7 +75,9 @@ answers an agent's navigate to a site it was not allowed on yet: asks (a
 site request waits for a person in its desktop row, which no hook answers)
 or skips (Chrome permission mode skip_all_permission_checks). A caller that has read the list
 before gets only the agents whose task or reachability changed since, or
-one "no change" line; --full prints everything.`,
+one "no change" line; --full prints everything. KEPT says what keeps an
+entry on the roster past agents.staleAfter: its keep marker with its reason
+(agents keep) or a timer that wakes it by name.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error { return a.agentList(full) },
 	}
@@ -260,7 +265,7 @@ archive it. A session its person started is never archived.`,
 	remove.Flags().BoolVar(&keepDesktop, "keep-desktop", false, "leave the agent's desktop session in the sidebar")
 	list := listCmd("List the agents, idle ones first", func() error { return a.agentList(full) })
 	fullFlag(list, &full)
-	c.AddCommand(register, a.agentStartCmd(), a.agentWakeCmd(), a.agentReopenCmd(), a.agentHandoverCmd(), a.agentNoteCmd(), a.agentBroadcastCmd(), assign, idle, remove, list)
+	c.AddCommand(register, a.agentStartCmd(), a.agentWakeCmd(), a.agentReopenCmd(), a.agentHandoverCmd(), a.agentNoteCmd(), a.agentBroadcastCmd(), a.agentKeepCmd(), assign, idle, remove, list)
 	return c
 }
 
@@ -284,6 +289,7 @@ type registration struct {
 func registerAgent(st *state.State, me state.Party, live func(state.Party) bool, now time.Time) (registration, error) {
 	var reg registration
 	var holder, lastTask string
+	var keep *state.Keep
 	for _, x := range st.Agents {
 		own := x.Is(me)
 		if !own && !strings.EqualFold(x.Name, me.Name) {
@@ -291,6 +297,9 @@ func registerAgent(st *state.State, me state.Party, live func(state.Party) bool,
 		}
 		if x.LastTask != "" && (own || lastTask == "") {
 			lastTask = x.LastTask
+		}
+		if x.Keep != nil && (own || keep == nil) {
+			keep = x.Keep
 		}
 		if !own {
 			if live(x.Party) {
@@ -308,7 +317,7 @@ func registerAgent(st *state.State, me state.Party, live func(state.Party) bool,
 		reg.task, reg.assignedAt, reg.own, holder = x.Task, x.AssignedAt, own, x.Session
 	}
 	st.Agents = slices.DeleteFunc(st.Agents, func(x state.Agent) bool { return x.Is(me) || strings.EqualFold(x.Name, me.Name) })
-	st.Agents = append(st.Agents, state.Agent{Party: me, Registered: now, IdleSince: now, Task: reg.task, AssignedAt: reg.assignedAt, LastTask: lastTask})
+	st.Agents = append(st.Agents, state.Agent{Party: me, Registered: now, IdleSince: now, Task: reg.task, AssignedAt: reg.assignedAt, LastTask: lastTask, Keep: keep})
 	return reg, nil
 }
 
@@ -376,7 +385,7 @@ func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentVie
 	out := make([]agentView, 0, len(st.Agents))
 	t, _ := plat.Machine.Processes() // unreadable: no headless turn is named
 	for _, ag := range st.Agents {
-		v := agentView{Agent: ag, Reachable: "not running", Browser: agentBrowser(a.cfg, ag)}
+		v := agentView{Agent: ag, Reachable: "not running", Browser: agentBrowser(a.cfg, ag), Kept: keptBy(st, ag, a.now)}
 		if s, ok := claude.Live(sessions, ag.Party); ok {
 			v.Reachable, v.Model = "live", s.Model
 			for _, c := range s.Commands {
@@ -448,13 +457,13 @@ func (a *app) printAgents(views []agentView) {
 		return
 	}
 	w := a.table()
-	_, _ = fmt.Fprintln(w, "AGENT\tTASK\tSINCE\tMODEL\tBROWSER\tREACHABLE")
+	_, _ = fmt.Fprintln(w, "AGENT\tTASK\tSINCE\tMODEL\tBROWSER\tREACHABLE\tKEPT")
 	for _, v := range views {
 		task, since := "(idle)", v.IdleSince
 		if v.Task != "" {
 			task, since = v.Task, v.AssignedAt
 		}
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", truncate(v.Name, 30), truncate(task, 60), clock(a.now, since), cmp.Or(truncate(v.Model, 32), "-"), cmp.Or(v.Browser, "-"), v.Reachable)
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", truncate(v.Name, 30), truncate(task, 60), clock(a.now, since), cmp.Or(truncate(v.Model, 32), "-"), cmp.Or(v.Browser, "-"), v.Reachable, cmp.Or(truncate(v.Kept, 50), "-"))
 	}
 	_ = w.Flush()
 }
