@@ -215,14 +215,20 @@ func TestServedOpenAsksGitHubPerRecord(t *testing.T) {
 	})
 	var asked []string
 	gh := func(_ context.Context, args ...string) ([]byte, error) {
-		asked = append(asked, strings.Join(args[4:], " "))
+		// The variables come in map order: sort them.
+		var vs []string
+		for i := 5; i < len(args); i += 2 {
+			vs = append(vs, args[i])
+		}
+		slices.Sort(vs)
+		asked = append(asked, strings.Join(vs, " "))
 		return []byte(`{"data":{"repository":{"issueOrPullRequest":{"state":"CLOSED"}}}}`), nil
 	}
 	open, err := servedOpen(t.Context(), &board.Client{GH: gh}, store, me)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if open("O/R#1") || !open("o/r#9") || len(asked) != 1 || asked[0] != "-f o=o -f r=r -F n=1" {
+	if open("O/R#1") || !open("o/r#9") || len(asked) != 1 || asked[0] != "n=1 o=o r=r" {
 		t.Errorf("open o/r#1 %v, o/r#9 %v; asked %q", open("o/r#1"), open("o/r#9"), asked)
 	}
 }
