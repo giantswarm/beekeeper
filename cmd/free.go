@@ -22,10 +22,10 @@ import (
 
 func (a *app) freeCmd() *cobra.Command {
 	var (
-		o                                  free.Options
-		only                               []string
-		staleH, orphanM, runawayM, runaway int
-		timeout                            time.Duration
+		o                                             free.Options
+		only                                          []string
+		staleH, cliStaleH, orphanM, runawayM, runaway int
+		timeout                                       time.Duration
 	)
 	c := &cobra.Command{
 		Use:   "free [--apply] [--only SECTIONS] [--summary]",
@@ -48,6 +48,14 @@ What only a person decides on is reported with the memory the action would
 return, never touched: kind clusters, idle Claude CLIs, heavy or runaway
 processes and Chrome renderers.
 
+Each Claude CLI is listed with its session (title and id), its roster state
+(busy with a task, parked on its person with one, idle without), its role
+(the supervisor, the guide, or the spare an open relay of either names) and
+the hours since its transcript last changed. A CLI whose session is
+untouched for --cli-stale-hours and that has no role and is not busy or
+parked is marked stale, with the memory its exit returns; --apply stops
+none: archiving the session stays a person's decision.
+
 free never runs as root. What needs root, the swap reset and root-owned
 leftovers, is printed at the end as the commands to run (` + free.SwapResetCmd + `).
 
@@ -57,7 +65,12 @@ for a front end that lets the user pick (a dry run):
   section <key> <MiB> <count> <label>    what --apply --only <key> frees
                                          (swap: what the reset pulls back)
   kind    <name> <MiB> <up since>        a kind cluster
-  cli     <pid> <MiB> <idle min> <cwd>   an idle Claude CLI
+  cli     <pid> <MiB> <idle min> <cwd> <session id> <title> <roster>
+          <role> <idle h> <stale>        a Claude CLI idle for --stale-hours
+                                         or stale; roster is busy, parked,
+                                         idle or - (off the roster), role
+                                         supervisor, guide, spare or -,
+                                         stale is stale or -
   proc    <pid> <MiB> <up> <comm> <unit:NAME | cmdline> <why>
                                          a heavy or runaway process; MiB is
                                          its anonymous RSS, what a kill
@@ -94,6 +107,7 @@ scan with the same options reuses its rows. Two rows say so:
 				o.Apply = false
 			}
 			o.Stale = time.Duration(staleH) * time.Hour
+			o.CLIStale = time.Duration(cliStaleH) * time.Hour
 			o.Orphan = time.Duration(orphanM) * time.Minute
 			o.Runaway = time.Duration(runawayM) * time.Minute
 			o.RunawayCPU = runaway
@@ -113,6 +127,7 @@ scan with the same options reuses its rows. Two rows say so:
 	f.StringSliceVar(&only, "only", nil, "act only on these sections (comma-separated: session-dirs, tmp-dirs, orphans, swap)")
 	f.BoolVar(&o.Summary, "summary", false, "print the candidates as TSV instead of the report; a dry run")
 	f.IntVar(&staleH, "stale-hours", 3, "hours a session's dirs or a temp dir must be untouched to count as stale")
+	f.IntVar(&cliStaleH, "cli-stale-hours", 12, "hours a Claude CLI's session must be untouched for the CLI to be marked stale (0 marks none)")
 	f.IntVar(&orphanM, "orphan-minutes", 30, "age after which an orphaned worker is killed")
 	f.IntVar(&o.HeavyMiB, "heavy-mib", 500, "anonymous RSS from which a process is reported as heavy (0 turns it off)")
 	f.IntVar(&runaway, "runaway-cpu", 50, "share of its lifetime (percent) a runaway process spent on the CPU")
@@ -164,6 +179,7 @@ func (a *app) freeMachine() (free.Machine, error) {
 	clusters, cerr := machine.KindClusters(ctx)
 	sessions := discover(a.cfg, t, a.now)
 	return free.Machine{
+		Desk:         a.freeDesk(),
 		UID:          uid,
 		Home:         home,
 		TmpDir:       tmp,
@@ -181,6 +197,20 @@ func (a *app) freeMachine() (free.Machine, error) {
 		Slots:        a.cfg.Memcap.Slots,
 		Now:          a.now,
 	}, nil
+}
+
+// freeDesk is the state free reads the roster and the roles from, read
+// without the lock (free must never wait on a writer); nil when unreadable.
+func (a *app) freeDesk() *state.State {
+	st, err := state.Open(a.cfg.StateDir)
+	if err != nil {
+		return nil
+	}
+	s, err := st.Peek()
+	if err != nil {
+		return nil
+	}
+	return s
 }
 
 // freeClusterNotes says of each running kind cluster which lab lease
