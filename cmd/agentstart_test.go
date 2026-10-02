@@ -367,3 +367,14 @@ func TestAwaitFocusOff(t *testing.T) {
 		t.Errorf("unreadable log: awaitFocusOff = %q", got)
 	}
 }
+
+// start says whether the imported session's browser waits on a person: only
+// skip_all_permission_checks spares it the desktop's site requests.
+func TestBrowserLine(t *testing.T) {
+	for chrome, asks := range map[string]bool{"": true, "ask": true, "follow_a_plan": true, claude.ChromeSkipAll: false} {
+		line := browserLine(chrome)
+		if got := strings.Contains(line, "waits on a person's site request"); got != asks {
+			t.Errorf("browserLine(%q) = %q, asks = %v, want %v", chrome, line, got, asks)
+		}
+	}
+}

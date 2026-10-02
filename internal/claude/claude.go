@@ -119,7 +119,11 @@ type Record struct {
 	IsArchived     bool   `json:"isArchived"`
 	LastActivityAt int64  `json:"lastActivityAt"`
 	PermissionMode string `json:"permissionMode"`
-	Model          string `json:"model"`
+	// ChromePermissionMode is how the desktop answers the session's Claude
+	// in Chrome actions: ChromeSkipAll without asking, anything else (empty
+	// included) with a site request for its person.
+	ChromePermissionMode string `json:"chromePermissionMode"`
+	Model                string `json:"model"`
 	// PriorCLISessionIDs are the CLI sessions the desktop session ran before
 	// a restart gave it a new one.
 	PriorCLISessionIDs []string `json:"priorCliSessionIds"`
@@ -129,6 +133,16 @@ type Record struct {
 	PostTurnSummaryFor string       `json:"postTurnSummaryFor"`
 	LastAssistantUUID  string       `json:"lastAssistantUuid"`
 }
+
+// ChromeSkipAll is the Chrome permission mode under which the desktop runs
+// a session's browser actions without a site request.
+const ChromeSkipAll = "skip_all_permission_checks"
+
+// BrowserAsks reports whether the desktop holds the session's navigate to a
+// site it was not allowed on yet for its person's approval: a request
+// Claude Code's permission layer never sees, so neither bypassPermissions
+// nor a PermissionRequest hook answers it.
+func (r *Record) BrowserAsks() bool { return r.ChromePermissionMode != ChromeSkipAll }
 
 // TurnSummary is the desktop's summary of a turn: the status it files the
 // session under (blocked: it needs its person) and what it needs.

@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -23,6 +24,31 @@ type agentView struct {
 	Reachable string `json:"reachable"`
 	// Model is the model its running session is on.
 	Model string `json:"model,omitempty"`
+	// Browser is how the desktop answers its navigate to a site it was not
+	// allowed on yet: browserAsks or browserSkips; empty without a desktop
+	// session.
+	Browser string `json:"browser,omitempty"`
+}
+
+// An agent's Browser.
+const (
+	browserAsks  = "asks"
+	browserSkips = "skips"
+)
+
+// agentBrowser is the agent's Browser, read from its desktop record.
+func agentBrowser(cfg *config.Config, ag state.Agent) string {
+	if !strings.HasPrefix(ag.HostSession, "local_") {
+		return ""
+	}
+	r, ok := claude.ReadRecord(cfg, ag.HostSession)
+	switch {
+	case !ok:
+		return ""
+	case r.BrowserAsks():
+		return browserAsks
+	}
+	return browserSkips
 }
 
 // The agents command's name and its reopen subcommand's, which a start's and
@@ -41,7 +67,10 @@ func (a *app) agentsCmd() *cobra.Command {
 before it spawns new sessions. An agent registers, gets a task assigned,
 reports back idle, and clears its context between tasks.
 
-Without a subcommand, lists the agents. A caller that has read the list
+Without a subcommand, lists the agents. BROWSER says how the desktop
+answers an agent's navigate to a site it was not allowed on yet: asks (a
+site request waits for a person in its desktop row, which no hook answers)
+or skips (Chrome permission mode skip_all_permission_checks). A caller that has read the list
 before gets only the agents whose task or reachability changed since, or
 one "no change" line; --full prints everything.`,
 		Args: cobra.NoArgs,
@@ -347,7 +376,7 @@ func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentVie
 	out := make([]agentView, 0, len(st.Agents))
 	t, _ := plat.Machine.Processes() // unreadable: no headless turn is named
 	for _, ag := range st.Agents {
-		v := agentView{Agent: ag, Reachable: "not running"}
+		v := agentView{Agent: ag, Reachable: "not running", Browser: agentBrowser(a.cfg, ag)}
 		if s, ok := claude.Live(sessions, ag.Party); ok {
 			v.Reachable, v.Model = "live", s.Model
 			for _, c := range s.Commands {
@@ -419,13 +448,13 @@ func (a *app) printAgents(views []agentView) {
 		return
 	}
 	w := a.table()
-	_, _ = fmt.Fprintln(w, "AGENT\tTASK\tSINCE\tMODEL\tREACHABLE")
+	_, _ = fmt.Fprintln(w, "AGENT\tTASK\tSINCE\tMODEL\tBROWSER\tREACHABLE")
 	for _, v := range views {
 		task, since := "(idle)", v.IdleSince
 		if v.Task != "" {
 			task, since = v.Task, v.AssignedAt
 		}
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", truncate(v.Name, 30), truncate(task, 60), clock(a.now, since), cmp.Or(truncate(v.Model, 32), "-"), v.Reachable)
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", truncate(v.Name, 30), truncate(task, 60), clock(a.now, since), cmp.Or(truncate(v.Model, 32), "-"), cmp.Or(v.Browser, "-"), v.Reachable)
 	}
 	_ = w.Flush()
 }

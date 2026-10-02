@@ -904,6 +904,19 @@ a permission request never waits on beekeeper.
 A session cannot add itself: its id enters the record only through the start that created it,
 written under the state lock before the session existed.
 
+**The browser is the desktop's, not a permission request.** Claude in Chrome's site requests
+(`browser:navigate`, one per session and site) are held by Claude Desktop itself, in the session's
+desktop row; Claude Code's permission layer never sees them, so neither `bypassPermissions` nor the
+hook answers them. The import gives a start the Chrome permission mode
+`skip_all_permission_checks` only when the desktop allows all browser actions, a desktop-wide
+choice a person makes with "Allow all sites" on one site request; otherwise it records no Chrome
+mode, and each navigate to a site the session was not allowed on yet waits for a person (with
+nobody there, until the desktop aborts it hours later and the model reads "Claude in Chrome is not
+connected"). Read-only calls such as `tabs_context_mcp` never ask. beekeeper does not raise the mode
+itself: switching another session's permissions takes the person's approval in the desktop.
+`agents start` says which Chrome mode the desktop recorded, and `beekeeper agents` shows it per
+agent in its BROWSER column: `asks` or `skips`.
+
 The same hook serves the person's take-over on `beekeeper ui`: while a running screen has taken a
 session over (a flag file per session in the state folder's `takeover/`, naming the screen's
 process), the hook holds that session's request for the screen and answers with the screen's allow

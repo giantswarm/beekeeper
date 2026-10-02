@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -105,5 +107,31 @@ func TestIdleAgentKeepsItsLastTask(t *testing.T) {
 	}
 	if got := st.Agents[0]; got.Session != "b" || got.LastTask != staleTask {
 		t.Errorf("after a take-over: %+v", got)
+	}
+}
+
+// An imported start asks a person before each navigate to a new site unless
+// the desktop recorded skip_all_permission_checks for it: agents says which,
+// from the agent's desktop record, and nothing for an agent without one.
+func TestAgentBrowser(t *testing.T) {
+	root := t.TempDir()
+	cfg := &config.Config{Claude: config.Claude{DesktopDir: filepath.Join(root, "desk")}}
+	writeFile(t, filepath.Join(cfg.Claude.DesktopDir, "a", "b", "local_imported.json"),
+		`{"sessionId":"local_imported","cliSessionId":"imported","permissionMode":"acceptEdits","chromePermissionMode":null}`)
+	writeFile(t, filepath.Join(cfg.Claude.DesktopDir, "a", "b", "local_followed.json"),
+		`{"sessionId":"local_followed","cliSessionId":"followed","permissionMode":"acceptEdits","chromePermissionMode":"follow_a_plan"}`)
+	writeFile(t, filepath.Join(cfg.Claude.DesktopDir, "a", "b", "local_bypass.json"),
+		`{"sessionId":"local_bypass","cliSessionId":"bypass","permissionMode":"bypassPermissions","chromePermissionMode":"skip_all_permission_checks"}`)
+	for host, want := range map[string]string{
+		"local_imported": browserAsks,
+		"local_followed": browserAsks,
+		"local_bypass":   browserSkips,
+		"local_gone":     "",
+		"omp_x":          "",
+		"":               "",
+	} {
+		if got := agentBrowser(cfg, state.Agent{Party: state.Party{HostSession: host}}); got != want {
+			t.Errorf("agentBrowser(%q) = %q, want %q", host, got, want)
+		}
 	}
 }
