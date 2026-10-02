@@ -58,7 +58,7 @@ func TestEnvtestServeConversations(t *testing.T) {
 	reply := a2a("slack-D1-2.0", "its own lane")
 	reply["contextId"], reply["metadata"] = firstThread, map[string]any{"source": viaSlack}
 	e.expect(t, ana, "send_message", map[string]any{"to": anaAddress, paramMessage: reply}, false, "delivery")
-	msgs := e.expect(t, ana, "receive_messages", map[string]any{}, false, "slack-D1-2.0")["messages"].([]any)
+	msgs := e.expect(t, ana, "receive_messages", map[string]any{}, false, "from "+anaEmail+" via slack: slack-D1-2.0")["messages"].([]any)
 	env := msgs[0].(map[string]any)["envelope"].(map[string]any)
 	if from := env["from"].(map[string]any); from["person"] != anaEmail || from["source"] != "slack" ||
 		env[paramMessage].(map[string]any)["contextId"] != firstThread {

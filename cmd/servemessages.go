@@ -246,9 +246,23 @@ func toolReceiveMessages(c *call, req mcp.CallToolRequest) (any, error) {
 		_, _ = fmt.Fprintln(c.out, "no message waits")
 	}
 	for _, d := range ds {
-		_, _ = fmt.Fprintf(c.out, "%d %s from %s: %s, expires %s\n", d.Seq, d.Kind, d.Sender, d.MessageID, d.Deadline.Format(time.RFC3339))
+		_, _ = fmt.Fprintf(c.out, "%d %s from %s%s: %s, expires %s\n", d.Seq, d.Kind, d.Sender, via(d.Envelope), d.MessageID, d.Deadline.Format(time.RFC3339))
 	}
 	return map[string]any{keyMailbox: mb, "messages": ds}, nil
+}
+
+// via names where a delivery's person wrote it (" via slack"); empty when
+// its envelope names no source.
+func via(envelope json.RawMessage) string {
+	var env struct {
+		From struct {
+			Source string `json:"source"`
+		} `json:"from"`
+	}
+	if json.Unmarshal(envelope, &env) != nil || env.From.Source == "" {
+		return ""
+	}
+	return " via " + env.From.Source
 }
 
 func toolAckMessages(c *call, req mcp.CallToolRequest) (any, error) {
