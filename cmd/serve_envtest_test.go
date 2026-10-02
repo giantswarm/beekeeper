@@ -103,7 +103,7 @@ func newServeEnv(t *testing.T) *serveEnv {
 	}
 	cfg.Serve = config.Serve{
 		Issuer: iss.URL, ClientIDs: []string{"muster"}, Organization: "giantswarm:giantswarm",
-		Teams:       map[string]string{teamGroup: ourTeam, "giantswarm:team-planeteers": "planeteers"},
+		Teams:       map[string]string{teamGroup: ourTeam, "giantswarm:team-planeteers": piaTeam},
 		Supervisors: map[string]string{ourTeam: "giantswarm:bumblebee-supervisors"},
 	}
 	ids, err := identity.New(ctx, cfg.Serve)
@@ -316,8 +316,8 @@ func TestEnvtestServeTools(t *testing.T) {
 	e.expect(t, ana, "agents_register", agent(map[string]any{}), false, "register: ana-agent idle")
 	e.expect(t, ana, "agents_register", agent(map[string]any{}), false, "register: ana-agent idle")
 	e.expect(t, pia, "agents_register", map[string]any{paramAgent: anaAgent, paramHost: lab}, true, "ana-agent on lab is ana@example.com's agent")
-	e.expect(t, pia, "agents_register", map[string]any{paramAgent: anaAgent, paramHost: "laptop"}, false, "register: ana-agent idle")
-	e.expect(t, pia, "list_agents", map[string]any{"scope": "team"}, false, "planeteers")
+	e.expect(t, pia, "agents_register", map[string]any{paramAgent: anaAgent, paramHost: laptop}, false, "register: ana-agent idle")
+	e.expect(t, pia, "list_agents", map[string]any{"scope": "team"}, false, piaTeam)
 	e.expect(t, ana, "list_agents", map[string]any{}, false, "ana@example.com")
 
 	snap := e.expect(t, ana, "snapshot", map[string]any{}, false, "== Agents")

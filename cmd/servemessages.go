@@ -22,7 +22,7 @@ import (
 // federates, and kagent sessions reached through muster.
 func (s *server) messageTools() []serveTool {
 	return []serveTool{
-		{newTool("send_message", "Send an A2A message to an agent: local:<machine>/<name> into its person's mailbox, kagent:<installation>/<namespace>/<session> through muster as you.", false,
+		{newTool("send_message", "Send an A2A message to an agent: local:<machine>/<name>, one of your own local agents, into your mailbox; kagent:<installation>/<namespace>/<session> through muster as you.", false,
 			mcp.WithString("to", mcp.Required(), mcp.Description("the address: local:<machine>/<name> or kagent:<installation>/<namespace>/<session>")),
 			mcp.WithObject(paramMessage, mcp.Required(), mcp.Description("the A2A Message: messageId, role and parts")),
 			mcp.WithString("deadline", mcp.Description("when an unacked local: message expires: an RFC 3339 time or a duration (2h); default 24h"))), toolSendMessage},
@@ -91,8 +91,13 @@ func toolSendMessage(c *call, req mcp.CallToolRequest) (any, error) {
 	return nil, usageErr("to %q: local:<machine>/<name> or kagent:<installation>/<namespace>/<session>", to)
 }
 
-// sendLocal queues the message in the mailbox of the agent's person.
+// sendLocal queues the message in the mailbox of the agent's person, who
+// alone messages their local agents.
 func (c *call) sendLocal(req mcp.CallToolRequest, to string, msg a2aMessage, raw json.RawMessage) (any, error) {
+	sc, err := c.s.scope(c.who)
+	if err != nil {
+		return nil, err
+	}
 	st, err := c.app.store.Read()
 	if err != nil {
 		return nil, err
@@ -104,8 +109,11 @@ func (c *call) sendLocal(req mcp.CallToolRequest, to string, msg a2aMessage, raw
 			break
 		}
 	}
-	if agent == nil || agent.Person == "" {
+	if agent == nil || agent.Person == "" || !sc.reads(agent.Party) {
 		return nil, refused("%s is not on the roster", to)
+	}
+	if !sc.own(agent.Party) {
+		return nil, refused("%s is %s's local agent: only its person messages it", to, agent.Person)
 	}
 	c.concern = kube.RosterObject(agent.Party)
 	deadline, err := deadlineArg(c.app.now, req.GetString("deadline", ""))

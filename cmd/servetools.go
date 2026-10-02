@@ -94,7 +94,7 @@ func (s *server) tools() []serveTool {
 		{newTool("note_done", "Close a note without an answer: its decision is withdrawn. Its filer's, or the filer's team's supervisor role's.", false,
 			mcp.WithNumber(paramNote, mcp.Required(), mcp.Description("the note's number"))), toolNoteDone},
 		{newTool("agents_register", "Register the calling agent on its team's roster, idle unless it holds an open task.", false), toolAgentsRegister},
-		{newTool("list_agents", "The agent roster.", true,
+		{newTool("list_agents", "The agent roster as you may read it: your own local agents, your team's that work on a shared installation (hold a lease), and every remote agent.", true,
 			mcp.WithString("scope", mcp.Description("all (default) or team: only the caller's team"))), toolListAgents},
 		{newTool("snapshot", "Everything at once: leases, holds, lanes, notes and the roster.", true), toolSnapshot},
 	}
@@ -751,15 +751,9 @@ func toolListAgents(c *call, req mcp.CallToolRequest) (any, error) {
 }
 
 func (c *call) agentList(team bool) ([]addressedAgent, error) {
-	st, err := c.app.store.Read()
+	agents, err := c.s.agentsFor(c.who, team)
 	if err != nil {
 		return nil, err
-	}
-	agents := []addressedAgent{}
-	for _, ag := range st.Agents {
-		if !team || ag.Team == c.me.Team {
-			agents = append(agents, addressed(ag))
-		}
 	}
 	if len(agents) == 0 {
 		_, _ = fmt.Fprintln(c.out, "no agent is registered")

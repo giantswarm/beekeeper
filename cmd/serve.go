@@ -48,6 +48,11 @@ their hold is that person's, or the owning team's supervisor role's
 (serve.supervisors). Every call leaves one Kubernetes Event on the resource
 it concerns (the caller's team namespace for a list) and one log line.
 
+list_agents, the roster and the feed show a person their own local agents,
+their team's local agents that hold a lease (work on a shared
+installation) and every remote agent; a send_message to a local agent is
+its person's alone (docs/feed.md).
+
 A decision (note_add --kind decision, --for a person of serve.people or an
 email, or team:<name> of serve.channels) is put to its addressee as one
 Slack message through klaus-gateway (serve.gateway, POST /decisions, with

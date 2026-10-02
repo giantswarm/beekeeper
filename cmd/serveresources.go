@@ -34,11 +34,12 @@ const (
 )
 
 // mayRead refuses a resource the caller may not read: the notes and the
-// mailbox are their person's, the rest the organization's.
+// mailbox are their person's, the rest the organization's; the roster and
+// the feed show each reader only what rosterScope lets them read.
 func mayRead(who identity.Caller, uri string) error {
 	switch {
 	case uri == resourceRoster, uri == resourceFeed:
-		return nil
+		return nil // each reader's share of them: rosterScope
 	case strings.HasPrefix(uri, resourceEnvironments) && len(uri) > len(resourceEnvironments),
 		strings.HasPrefix(uri, resourceLanes) && len(uri) > len(resourceLanes):
 		return nil
@@ -161,10 +162,10 @@ func (s *server) subscriptionHooks() *mcpserver.Hooks {
 
 // addResources registers the resources and their readers.
 func (s *server) addResources(m *mcpserver.MCPServer) {
-	m.AddResource(mcp.NewResource(resourceRoster, "roster", mcp.WithResourceDescription("The agent roster: every local agent the persons' machines publish."), mcp.WithMIMEType("application/json")),
-		s.read(func(context.Context, identity.Caller, string) (any, error) { return s.roster() }))
-	m.AddResource(mcp.NewResource(resourceFeed, "feed", mcp.WithResourceDescription("The most recent events of the shared state, oldest first, schema "+feed.Schema+"."), mcp.WithMIMEType("application/json")),
-		s.read(func(context.Context, identity.Caller, string) (any, error) { return s.feed() }))
+	m.AddResource(mcp.NewResource(resourceRoster, "roster", mcp.WithResourceDescription("The agent roster: your own local agents, your team's that work on a shared installation, and every remote agent."), mcp.WithMIMEType("application/json")),
+		s.read(func(_ context.Context, who identity.Caller, _ string) (any, error) { return s.roster(who) }))
+	m.AddResource(mcp.NewResource(resourceFeed, "feed", mcp.WithResourceDescription("The most recent events of the shared state you may read, oldest first, schema "+feed.Schema+"."), mcp.WithMIMEType("application/json")),
+		s.read(func(_ context.Context, who identity.Caller, _ string) (any, error) { return s.feed(who) }))
 	m.AddResourceTemplate(mcp.NewResourceTemplate(resourceEnvironments+"{name}", "environment", mcp.WithTemplateDescription("An installation's Environment: its holder, grants and upgrades."), mcp.WithTemplateMIMEType("application/json")),
 		s.readTemplate(func(_ context.Context, _ identity.Caller, uri string) (any, error) {
 			return s.environment(strings.TrimPrefix(uri, resourceEnvironments))
@@ -228,7 +229,7 @@ func addressed(a state.Agent) addressedAgent {
 		State: agentState(a), Task: a.Task, Registered: a.Registered, IdleSince: a.IdleSince}
 }
 
-func agentAddress(a state.Agent) string { return "local:" + a.Host + "/" + a.Name }
+func agentAddress(a state.Agent) string { return localPrefix + a.Host + "/" + a.Name }
 
 func agentState(a state.Agent) string {
 	switch {
@@ -240,24 +241,54 @@ func agentState(a state.Agent) string {
 	return "idle"
 }
 
-func (s *server) roster() (map[string]any, error) {
+func (s *server) roster(who identity.Caller) (map[string]any, error) {
+	agents, err := s.agentsFor(who, false)
+	return map[string]any{agentsName: agents}, err
+}
+
+// agentsFor is the roster as who reads it, only their team's with team.
+func (s *server) agentsFor(who identity.Caller, team bool) ([]addressedAgent, error) {
+	sc, err := s.scope(who)
+	if err != nil {
+		return nil, err
+	}
 	st, err := s.store.Read()
 	if err != nil {
 		return nil, err
 	}
-	agents := make([]addressedAgent, 0, len(st.Agents))
+	agents := []addressedAgent{}
 	for _, a := range st.Agents {
-		agents = append(agents, addressed(a))
+		if ag := addressed(a); sc.readsAgent(ag) && (!team || ag.Team == who.Team) {
+			agents = append(agents, ag)
+		}
 	}
-	return map[string]any{agentsName: agents}, nil
+	return agents, nil
 }
 
-func (s *server) feed() (*feed.Feed, error) {
-	evs, err := s.store.Feed(feedLength)
+// feed is the most recent events who reads, at most feedLength.
+func (s *server) feed(who identity.Caller) (*feed.Feed, error) {
+	sc, err := s.scope(who)
 	if err != nil {
 		return nil, err
 	}
-	return &feed.Feed{Schema: feed.Schema, Events: evs}, nil
+	st, err := s.store.Read()
+	if err != nil {
+		return nil, err
+	}
+	evs, err := s.store.Feed(0)
+	if err != nil {
+		return nil, err
+	}
+	out := []feed.Event{}
+	for _, ev := range evs {
+		if sc.readsEvent(ev, st.Agents) {
+			out = append(out, ev)
+		}
+	}
+	if len(out) > feedLength {
+		out = out[len(out)-feedLength:]
+	}
+	return &feed.Feed{Schema: feed.Schema, Events: out}, nil
 }
 
 // record is a resource's view of an Environment or MergeLane.
