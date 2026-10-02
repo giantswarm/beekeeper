@@ -41,15 +41,16 @@ func (s noteSplit) guided() int {
 	return n
 }
 
-// splitNotes splits notes for the supervisor's hand-over: those filed for
-// the guide's person or for the guide itself are the guide's.
+// splitNotes splits notes for the supervisor's hand-over: the decisions
+// filed for the guide's person and the notes for the guide itself are the
+// guide's; a memo for the person stays the role's own.
 func (a *app) splitNotes(notes []state.Note) noteSplit {
 	s := noteSplit{Guided: map[string]int{}}
 	for _, n := range notes {
 		switch {
 		case n.Pinned:
 			s.Pinned = append(s.Pinned, n)
-		case guides(a.cfg.Guide.Person, &n) || forGuide(&n):
+		case guides(a.cfg.Guide.Person, &n) && decides(a.cfg.Guide.Person, &n) || forGuide(&n):
 			who, _ := noteFor(&n)
 			if p := a.cfg.Guide.Person; strings.EqualFold(who, p) {
 				who = p

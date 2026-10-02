@@ -96,14 +96,14 @@ func TestAnswersSinceTheLastRelayAndWithin72h(t *testing.T) {
 	}
 
 	// A new note asking #2 again is filed with the warning.
-	stderr, err := noteCommand(a, "add", "--for", pat, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "Approve "+prURL)
+	stderr, err := noteCommand(a, "add", "--for", pat, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "--due", "3h", "Approve "+prURL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if want := `warning: note #2 asked approve on o/r#7 and was answered`; !strings.Contains(stderr, want) || !strings.Contains(stderr, `"Yes, ship it"`) {
 		t.Errorf("stderr %q, want %q", stderr, want)
 	}
-	if stderr, _ := noteCommand(a, "add", "--for", pat, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "review "+prURL); stderr != "" {
+	if stderr, _ := noteCommand(a, "add", "--for", pat, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "--due", "3h", "review "+prURL); stderr != "" {
 		t.Errorf("another verb warned: %q", stderr)
 	}
 }

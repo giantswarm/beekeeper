@@ -48,7 +48,9 @@ machine has a supervisor at all times: the role moves to a successor by relay an
   recorded with `beekeeper lease grant <resource> <session>` (grants queue in order), a hold with
   `beekeeper hold set <repo|github>`, a decision for the person with `beekeeper note add --for
   <person> --due <time> --status-quo "<what is true now>" --why "<why it needs them>" --default
-  "<the action if unanswered>"` (every issue or PR as its full URL; `note add --help` names the checks), a point in time to look at
+  "<the action if unanswered>"` (every issue or PR as its full URL; `note add --help` names the checks), its own
+  record (a state summary, a board skip, deferred work) as a memo, `beekeeper note add --kind memo
+  --replaces <the memo it supersedes>`, so each such memo is one open note, a point in time to look at
   something with `beekeeper timer add <time> "<what>"` (`timer done` once looked at), what each
   session serves and waits on with `beekeeper sessions serve`, the registered agents with
   `beekeeper agents`. `beekeeper handover` prints all of it with the sessions; `beekeeper handover
