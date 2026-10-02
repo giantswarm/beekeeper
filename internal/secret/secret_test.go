@@ -1,0 +1,321 @@
+package secret_test
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/giantswarm/beekeeper/internal/secret"
+	"github.com/giantswarm/beekeeper/internal/secret/secrettest"
+)
+
+// The planted values: none may appear in an answer, an error or a file.
+const (
+	password = "planted-Pass-7c1d0e9b2a"
+	token    = "planted-Token-55e3a1f0c8"
+	vaultRef = "op://Shared/api/credential"
+)
+
+const srcSecret = `apiVersion: v1
+kind: Secret
+metadata:
+  name: app-credentials
+  namespace: team-a
+type: Opaque
+stringData:
+  password: %s
+data:
+  token: %s
+`
+
+// scratch is a repository with a .sops.yaml and the source Secret.
+func scratch(t *testing.T) (dir, src string) {
+	t.Helper()
+	dir = t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".sops.yaml"), []byte("creation_rules: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	src = filepath.Join(dir, "src.sops.yaml")
+	plain := fmt.Sprintf(srcSecret, password, base64.StdEncoding.EncodeToString([]byte(token)))
+	if err := os.WriteFile(src, secrettest.Encrypt(plain), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir, src
+}
+
+func ops(tools *secrettest.Tools) *secret.Ops {
+	return &secret.Ops{Run: tools.Run, Vault: "Shared", Token: "sa-token", Fingerprint: func(v string) string { return fmt.Sprintf("fp-%d", len(v)*7) }}
+}
+
+// noValue fails when any planted value is in what an operation answered.
+func noValue(t *testing.T, what string, v any) {
+	t.Helper()
+	raw, _ := json.Marshal(v)
+	s := fmt.Sprintf("%s %+v", raw, v)
+	for _, p := range []string{password, token, base64.StdEncoding.EncodeToString([]byte(token)), base64.StdEncoding.EncodeToString([]byte(password))} {
+		if strings.Contains(s, p) {
+			t.Errorf("%s answers a value: %s", what, s)
+		}
+	}
+}
+
+// decrypted reads a file the fake encrypted.
+func decrypted(t *testing.T, tools *secrettest.Tools, file string) string {
+	t.Helper()
+	out, err := tools.Run(context.Background(), "", nil, nil, "sops", "decrypt", "--output-type", "yaml", file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
+}
+
+func TestCopyFileRewritesTheMetadataAndAnswersKeysAndLengths(t *testing.T) {
+	tools := secrettest.New(nil)
+	dir, src := scratch(t)
+	dst := filepath.Join(dir, "other", "dst.sops.yaml")
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := ops(tools).CopyFile(context.Background(), secret.Ref{File: src}, dst, "app-copy", "team-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []secret.Key{{Name: "data.token", Bytes: len(token)}, {Name: "stringData.password", Bytes: len(password)}}
+	if !slices.Equal(keys, want) {
+		t.Errorf("keys = %+v, want %+v", keys, want)
+	}
+	noValue(t, "copy", keys)
+	raw, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), password) {
+		t.Fatal("the copy holds a value in plaintext")
+	}
+	plain := decrypted(t, tools, dst)
+	for _, w := range []string{"name: app-copy", "namespace: team-b", "password: " + password, "kind: Secret"} {
+		if !strings.Contains(plain, w) {
+			t.Errorf("the copy lacks %q:\n%s", w, plain)
+		}
+	}
+	// The encryption ran where the creation rules are, the path relative.
+	if !slices.ContainsFunc(tools.Calls, func(c string) bool {
+		return strings.Contains(c, "--filename-override "+filepath.Join("other", "dst.sops.yaml"))
+	}) {
+		t.Errorf("calls = %q", tools.Calls)
+	}
+	entries, _ := os.ReadDir(filepath.Dir(dst))
+	if len(entries) != 1 {
+		t.Errorf("the copy left more than its file: %v", entries)
+	}
+}
+
+func TestCopyFileRefusesAnExistingDestinationAndAnObjectWithoutMetadata(t *testing.T) {
+	tools := secrettest.New(nil)
+	dir, src := scratch(t)
+	if _, err := ops(tools).CopyFile(context.Background(), secret.Ref{File: src}, src, "x", ""); err == nil || !strings.Contains(err.Error(), "exists") {
+		t.Errorf("copy onto itself = %v", err)
+	}
+	plain := filepath.Join(dir, "plain.sops.yaml")
+	if err := os.WriteFile(plain, secrettest.Encrypt("password: "+password+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ops(tools).CopyFile(context.Background(), secret.Ref{File: plain}, filepath.Join(dir, "n.sops.yaml"), "x", "")
+	if err == nil || !strings.Contains(err.Error(), "Kubernetes object") {
+		t.Errorf("rename of a plain file = %v", err)
+	}
+	noValue(t, "the refusal", err)
+}
+
+func TestCopyFileNeedsCreationRules(t *testing.T) {
+	tools := secrettest.New(nil)
+	_, src := scratch(t)
+	_, err := ops(tools).CopyFile(context.Background(), secret.Ref{File: src}, filepath.Join(t.TempDir(), "x.sops.yaml"), "", "")
+	if err == nil || !strings.Contains(err.Error(), ".sops.yaml") {
+		t.Errorf("copy outside a .sops.yaml = %v", err)
+	}
+}
+
+func TestCompareAnswersPerKey(t *testing.T) {
+	tools := secrettest.New(map[string]string{vaultRef: password})
+	dir, src := scratch(t)
+	dst := filepath.Join(dir, "dst.sops.yaml")
+	o := ops(tools)
+	ctx := context.Background()
+	if _, err := o.CopyFile(ctx, secret.Ref{File: src}, dst, "app-copy", ""); err != nil {
+		t.Fatal(err)
+	}
+	vs, err := o.Compare(ctx, secret.Ref{File: src}, secret.Ref{File: dst})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, v := range vs {
+		got[v.Key] = v.State
+	}
+	if got["stringData.password"] != secret.Equal || got["data.token"] != secret.Equal || got["metadata.name"] != secret.Different || got["metadata.namespace"] != secret.Equal {
+		t.Errorf("compare = %+v", vs)
+	}
+	noValue(t, "compare", vs)
+	one, err := o.Compare(ctx, secret.Ref{Op: vaultRef}, secret.Ref{File: src, Path: "stringData.password"})
+	if err != nil || len(one) != 1 || one[0].State != secret.Equal {
+		t.Errorf("compare vault with SOPS path = %+v, %v", one, err)
+	}
+	if _, err := o.Compare(ctx, secret.Ref{Op: vaultRef}, secret.Ref{File: src}); err == nil {
+		t.Error("compare of a value with a whole file passes")
+	}
+}
+
+func TestFingerprintsAreKeyedAndNameNoValue(t *testing.T) {
+	tools := secrettest.New(nil)
+	_, src := scratch(t)
+	ps, err := ops(tools).Fingerprints(context.Background(), secret.Ref{File: src, Path: "stringData.password"})
+	if err != nil || len(ps) != 1 || ps[0].Fingerprint != fmt.Sprintf("fp-%d", len(password)*7) {
+		t.Fatalf("fingerprints = %+v, %v", ps, err)
+	}
+	noValue(t, "fingerprint", ps)
+}
+
+func TestOnlyTheSharedVault(t *testing.T) {
+	tools := secrettest.New(map[string]string{"op://Private/x/y": password})
+	o := ops(tools)
+	if _, err := o.Fingerprints(context.Background(), secret.Ref{Op: "op://Private/x/y"}); err == nil || !strings.Contains(err.Error(), "only the shared vault") {
+		t.Errorf("another vault = %v", err)
+	}
+	o.Token = ""
+	if _, err := o.Fingerprints(context.Background(), secret.Ref{Op: vaultRef}); err == nil || !strings.Contains(err.Error(), "secret.tokenFile") {
+		t.Errorf("no service account = %v", err)
+	}
+	o.Vault = ""
+	if _, err := o.Fingerprints(context.Background(), secret.Ref{Op: vaultRef}); err == nil || !strings.Contains(err.Error(), "secret.vault") {
+		t.Errorf("no vault configured = %v", err)
+	}
+	if len(tools.Calls) != 0 {
+		t.Errorf("op ran: %q", tools.Calls)
+	}
+}
+
+func TestCopyValueIntoASOPSPathKeepsTheOthers(t *testing.T) {
+	tools := secrettest.New(map[string]string{vaultRef: token})
+	dir, src := scratch(t)
+	o := ops(tools)
+	ctx := context.Background()
+	n, err := o.CopyValue(ctx, secret.Ref{Op: vaultRef}, secret.Ref{File: src, Path: "stringData.apiToken"})
+	if err != nil || n != len(token) {
+		t.Fatalf("copy = %d, %v", n, err)
+	}
+	plain := decrypted(t, tools, src)
+	if !strings.Contains(plain, "apiToken: "+token) || !strings.Contains(plain, "password: "+password) {
+		t.Errorf("the file after the copy:\n%s", plain)
+	}
+	fresh := filepath.Join(dir, "new.sops.yaml")
+	if _, err := o.CopyValue(ctx, secret.Ref{File: src, Path: "stringData.password"}, secret.Ref{File: fresh, Path: "a.b"}); err != nil {
+		t.Fatal(err)
+	}
+	if plain := decrypted(t, tools, fresh); plain != "a:\n  b: "+password+"\n" {
+		t.Errorf("the new file:\n%s", plain)
+	}
+}
+
+func TestConsumerAllowList(t *testing.T) {
+	for argv, ok := range map[string]bool{
+		"gh secret set TOKEN --repo o/r":                   true,
+		"docker login ghcr.example --password-stdin -u me": true,
+		"tool build --secret id=-":                         true,
+		"tool build --secret=id=-":                         true,
+		"cat":                                              false,
+		"sh -c cat":                                        false,
+		"tee /tmp/x":                                       false,
+		"gh secret list":                                   false,
+		"tool --secret id=file":                            false,
+	} {
+		if err := secret.Consumer(strings.Fields(argv)); (err == nil) != ok {
+			t.Errorf("Consumer(%q) = %v, want allowed %v", argv, err, ok)
+		}
+	}
+}
+
+func TestCopyToConsumerRedactsItsOutput(t *testing.T) {
+	tools := secrettest.New(map[string]string{vaultRef: token})
+	dir := t.TempDir()
+	// A consumer that echoes what it read: its output is redacted.
+	gh := filepath.Join(dir, "gh")
+	if err := os.WriteFile(gh, []byte("#!/bin/sh\nread v\necho \"stored $v\"\nexit 3\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	code, out, err := ops(tools).CopyToConsumer(context.Background(), secret.Ref{Op: vaultRef}, []string{gh, "secret", "set", "X"})
+	if err != nil || code != 3 {
+		t.Fatalf("consumer = %d, %q, %v", code, out, err)
+	}
+	if strings.Contains(out, token) || !strings.Contains(out, "[redacted: "+vaultRef+"]") {
+		t.Errorf("output = %q", out)
+	}
+	if _, _, err := ops(tools).CopyToConsumer(context.Background(), secret.Ref{Op: vaultRef}, []string{"cat"}); err == nil {
+		t.Error("cat took a value")
+	}
+}
+
+func TestSetWritesTheVaultFirst(t *testing.T) {
+	tools := secrettest.New(nil)
+	dir, _ := scratch(t)
+	dst := secret.Ref{File: filepath.Join(dir, "gen.sops.yaml"), Path: "stringData.password"}
+	fp, err := ops(tools).Set(context.Background(), dst, secret.Ref{Op: "op://Shared/app/password"}, 24, "alnum")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := tools.Vault["op://Shared/app/password"]
+	if len(v) != 24 || fp != fmt.Sprintf("fp-%d", 24*7) {
+		t.Fatalf("vault value of %d bytes, fingerprint %q", len(v), fp)
+	}
+	if slices.ContainsFunc(tools.Tokens, func(s string) bool { return s != "sa-token" }) {
+		t.Errorf("op ran as %q, not the service account", tools.Tokens)
+	}
+	if !strings.Contains(decrypted(t, tools, dst.File), "password: "+v) {
+		t.Error("the SOPS file does not hold the vault's value")
+	}
+	vaultCall := slices.IndexFunc(tools.Calls, func(c string) bool { return strings.HasPrefix(c, "op item create") })
+	sopsCall := slices.IndexFunc(tools.Calls, func(c string) bool { return strings.HasPrefix(c, "sops --config") })
+	if vaultCall < 0 || sopsCall < vaultCall {
+		t.Errorf("calls = %q: the vault is written first", tools.Calls)
+	}
+	for _, c := range tools.Calls {
+		if strings.Contains(c, v) {
+			t.Errorf("a command line carries the value: %q", c)
+		}
+	}
+	// A second set edits the item it made.
+	if _, err := ops(tools).Set(context.Background(), dst, secret.Ref{Op: "op://Shared/app/password"}, 24, "hex"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(tools.Calls, func(c string) bool { return strings.HasPrefix(c, "op item edit id-app") }) {
+		t.Errorf("calls = %q", tools.Calls)
+	}
+	if _, err := ops(tools).Set(context.Background(), dst, secret.Ref{Op: "op://Other/app/password"}, 24, "hex"); err == nil {
+		t.Error("set into another vault passes")
+	}
+}
+
+func TestParseRef(t *testing.T) {
+	for in, want := range map[string]secret.Ref{
+		"a.sops.yaml":                {File: "a.sops.yaml"},
+		"a.sops.yaml#data.x":         {File: "a.sops.yaml", Path: "data.x"},
+		"sops://a.sops.yaml#data.x":  {File: "a.sops.yaml", Path: "data.x"},
+		"op://Shared/item/field":     {Op: "op://Shared/item/field"},
+		"op://Shared/item/sec/field": {Op: "op://Shared/item/sec/field"},
+	} {
+		if got, err := secret.ParseRef(in); err != nil || got != want {
+			t.Errorf("ParseRef(%q) = %+v, %v", in, got, err)
+		}
+	}
+	for _, bad := range []string{"op://Shared/item", "#x", "op:///a/b"} {
+		if _, err := secret.ParseRef(bad); err == nil {
+			t.Errorf("ParseRef(%q) passes", bad)
+		}
+	}
+}

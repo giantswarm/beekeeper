@@ -240,6 +240,11 @@ var secretCorpus = []struct{ cmd, safe string }{
 	{"grep -rn 'kubectl get secret' docs/ # kubectl get secret x -o yaml", ""},
 	{"rg -n \"op read\" .", ""},
 	{"rg -n 'op item get' .", ""},
+	{"beekeeper secret copy a/src.sops.yaml b/dst.sops.yaml --name x --namespace y", ""},
+	{"beekeeper secret compare a.sops.yaml b.sops.yaml#data.password", ""},
+	{"beekeeper secret fingerprint op://Shared/item/password", ""},
+	{"beekeeper secret copy op://Shared/item/password -- gh secret set TOKEN --repo o/r", ""},
+	{"beekeeper secret set a.sops.yaml stringData.password --generate --vault op://Shared/item/password", ""},
 }
 
 func TestSecretGuardCorpus(t *testing.T) {

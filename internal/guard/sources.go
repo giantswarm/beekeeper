@@ -123,16 +123,16 @@ func quietRun(ctx context.Context, stdin io.Reader, name string, args ...string)
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
-			return nil, fmt.Errorf("exit %d (%s)", ee.ExitCode(), firstLine(stderr.String()))
+			return nil, fmt.Errorf("exit %d (%s)", ee.ExitCode(), FirstLine(stderr.String()))
 		}
 		return nil, err
 	}
 	return out, nil
 }
 
-// firstLine is a tool's first stderr line, cut short and stripped of what
+// FirstLine is a tool's first stderr line, cut short and stripped of what
 // a pattern would redact.
-func firstLine(s string) string {
+func FirstLine(s string) string {
 	s, _, _ = strings.Cut(strings.TrimSpace(s), "\n")
 	if len(s) > 160 {
 		s = s[:160] + "…"
