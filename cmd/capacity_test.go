@@ -14,6 +14,13 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// The capacity tests' busy workers and their roomy verdict.
+const (
+	busyOne   = "W 1"
+	busyTwo   = "W 2"
+	roomSeven = "room for 7 starts"
+)
+
 // tasked is a roster entry with a task.
 func tasked(name string) state.Agent {
 	return state.Agent{Party: state.Party{Session: "s-" + name, Name: name}, Task: "fix o/r#1"}
@@ -24,7 +31,7 @@ func tasked(name string) state.Agent {
 // wakes, one waiting on its person, an idle one, a done one and two role
 // runs relieved since.
 func capacityRoster() (*state.State, []*claude.Session) {
-	sup, guide, kept, woken, waits := tasked("supervisor"), tasked("guide"), tasked("Judge"), tasked("BK 3"), tasked("BK 4")
+	sup, guide, kept, woken, waits := tasked("Supervisor run 68"), tasked("Guide run 9"), tasked("Judge"), tasked("BK 3"), tasked("BK 4")
 	kept.Keep = &state.Keep{Reason: "a person returns to it"}
 	done := tasked("BK 5")
 	done.Done = true
@@ -33,10 +40,10 @@ func capacityRoster() (*state.State, []*claude.Session) {
 	st := &state.State{
 		Supervisor: &state.Supervisor{Party: sup.Party},
 		Guide:      &state.Role{Holder: &state.Supervisor{Party: guide.Party}},
-		Agents:     []state.Agent{sup, guide, tasked("BK 1"), tasked("BK 2"), kept, woken, waits, {Party: state.Party{Session: "s-spare", Name: "spare"}}, done, relieved, guideRun},
+		Agents:     []state.Agent{sup, guide, tasked(busyOne), tasked(busyTwo), kept, woken, waits, {Party: state.Party{Session: "s-spare", Name: "spare"}}, done, relieved, guideRun},
 		Timers:     []state.Timer{{ID: 7, Due: keepNow.Add(time.Hour), What: "the batch job ended", Wake: "BK 3"}},
 	}
-	sessions := []*claude.Session{{ID: "s-BK 1"}, {ID: "s-BK 4", Waiting: &claude.Waiting{Action: "approve the plan"}}}
+	sessions := []*claude.Session{{ID: "s-" + busyOne}, {ID: "s-BK 4", Waiting: &claude.Waiting{Action: "approve the plan"}}}
 	return st, sessions
 }
 
@@ -47,7 +54,7 @@ func TestCountAgents(t *testing.T) {
 	st, sessions := capacityRoster()
 	c := countAgents(st, sessions, keepNow)
 	want := agentCount{
-		Busy:   []string{"BK 1", "BK 2"},
+		Busy:   []string{busyOne, busyTwo},
 		Parked: []string{"Judge (kept: a person returns to it)", "BK 3 (timer #7 wakes it)", "BK 4 (waits on its person)"},
 		Idle:   []string{"spare", "BK 5"},
 	}
@@ -56,8 +63,8 @@ func TestCountAgents(t *testing.T) {
 	}
 	// The successor of an open relay is the role's, not a worker.
 	st.Relay = &state.Relay{To: st.Agents[2].Party, Expires: keepNow.Add(time.Minute)}
-	if c := countAgents(st, sessions, keepNow); !slices.Equal(c.Busy, []string{"BK 2"}) {
-		t.Errorf("busy with a relay open to BK 1: %v", c.Busy)
+	if c := countAgents(st, sessions, keepNow); !slices.Equal(c.Busy, []string{busyTwo}) {
+		t.Errorf("busy with a relay open to %s: %v", busyOne, c.Busy)
 	}
 }
 
@@ -84,16 +91,16 @@ func TestCapacityVerdict(t *testing.T) {
 		edit func(*headroom)
 		want string
 	}{
-		{"room", 3, func(*headroom) {}, "room for 7 starts"},
+		{"room", 3, func(*headroom) {}, roomSeven},
 		{"one", 9, func(*headroom) {}, "room for 1 start"},
 		{"ceiling", 10, func(*headroom) {}, "no start: 10 busy at the ceiling of 10"},
 		{"memory", 3, func(h *headroom) { h.AvailableMiB = 15 << 10 }, "no start: MemAvailable 15.0 GiB under 20 GiB"},
 		{"swap", 3, func(h *headroom) { h.Swap.PerHourMiB = 900 }, "no start: swap growing +900 MiB/h, over 256"},
-		{"swap unrated", 3, func(h *headroom) { h.Swap = &swapReading{PerHourMiB: 900} }, "room for 7 starts"},
-		{"swap full, flat", 3, func(h *headroom) { h.Swap.UsedMiB, h.Swap.PerHourMiB = 16<<10, 0 }, "room for 7 starts"},
+		{"swap unrated", 3, func(h *headroom) { h.Swap = &swapReading{PerHourMiB: 900} }, roomSeven},
+		{"swap full, flat", 3, func(h *headroom) { h.Swap.UsedMiB, h.Swap.PerHourMiB = 16<<10, 0 }, roomSeven},
 		{"slots", 3, func(h *headroom) { h.SlotsFree = 0 }, "no start: no free build slot"},
 		{"labs", 3, func(h *headroom) { h.Labs = 3 }, "no start: 3 kind labs over the cap of 2"},
-		{"labs at the cap", 3, func(h *headroom) { h.Labs = 2 }, "room for 7 starts"},
+		{"labs at the cap", 3, func(h *headroom) { h.Labs = 2 }, roomSeven},
 		{"two", 3, func(h *headroom) { h.AvailableMiB, h.SlotsFree = 10<<10, 0 }, "no start: MemAvailable 10.0 GiB under 20 GiB; no free build slot"},
 	} {
 		h := roomy()
@@ -121,7 +128,7 @@ func TestWatchCapacity(t *testing.T) {
 	reads := 0
 	w.readHeadroom = func(context.Context, *swapReading) *headroom { reads++; return room }
 	roster := func(n int) *state.State {
-		st := &state.State{Supervisor: &state.Supervisor{Party: state.Party{Session: "s-sup", Name: "supervisor"}}}
+		st := &state.State{Supervisor: &state.Supervisor{Party: state.Party{Session: "s-sup", Name: "Supervisor run 68"}}}
 		for i := range n {
 			st.Agents = append(st.Agents, tasked(fmt.Sprint("BK ", i)))
 		}
@@ -175,7 +182,7 @@ func TestPromptCapacity(t *testing.T) {
 	a := &app{out: &buf, now: keepNow, cfg: &config.Config{Capacity: config.Capacity{Floor: 5, Ceiling: 10}}}
 	a.promptCapacity(func(f string, args ...any) { buf.WriteString(fmt.Sprintf(f, args...) + "\n") }, st, sessions)
 	if p := buf.String(); !strings.Contains(p, "### Capacity") ||
-		!strings.Contains(p, "2 busy of floor 5, ceiling 10: BK 1, BK 2; 3 parked, 2 idle; `beekeeper capacity` says whether a start fits.") {
+		!strings.Contains(p, "2 busy of floor 5, ceiling 10: "+busyOne+", "+busyTwo+"; 3 parked, 2 idle; `beekeeper capacity` says whether a start fits.") {
 		t.Errorf("prompt:\n%s", p)
 	}
 }
