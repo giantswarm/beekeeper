@@ -1,0 +1,32 @@
+# Repo-specific CircleCI jobs, merged into the generated workflows.yml by the
+# setup workflow in config.yml.
+#
+# The generated go-build job runs only `make test`, where the envtest-backed
+# tests of the Kubernetes store skip without KUBEBUILDER_ASSETS. This job runs
+# them against a real kube-apiserver from setup-envtest, after checking that
+# the committed CRDs are what pkg/apis generates.
+version: 2.1
+
+jobs:
+  test-envtest:
+    executor: architect/architect
+    resource_class: medium
+    steps:
+    - checkout
+    - architect/tools-info
+    - architect/go-cache-restore
+    - run:
+        name: Check the CRDs are generated from pkg/apis
+        command: make check-crds
+    - run:
+        name: Run the envtest-backed tests (the Kubernetes store)
+        command: make test-envtest
+    - architect/go-cache-save
+
+workflows:
+  build:
+    jobs:
+    - test-envtest:
+        filters:
+          tags:
+            only: /^v.*/
