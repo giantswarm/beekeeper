@@ -132,6 +132,7 @@ a relayed successor opens with the plugin's role.
 | `beekeeper run [--max SIZE] [--wait DURATION] -- <command>` | Run a build, test or lint command in one of the machine's build slots (memcap's, shared with the `memcap` wrapper) inside a memory-capped systemd scope. When every slot is held it waits once, then exits 75 with the holders; when the cap fires the kernel kills the biggest process in the scope only, and `run` exits 137 with one line starting `beekeeper run: the <SIZE> cap killed:`. Each run leaves `run.start` and `run.end` in `beekeeper log` with its scope, session and command, so `snapshot` and `watch` name a cap kill's session and command after the run has ended. `MEMCAP_TEST=1` marks a test's run: its scope is `memcap-test-…`, and a kill in it is reported as a test kill (one quiet `test kill:` line in `watch`), never as a build's. |
 | `beekeeper hook pretooluse` | The PreToolUse hook (matcher `Bash|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage|mcp__.*`): rewrites build, test, lint and lab commands to `<this binary> run -- zsh -c '<command>'` with the command verbatim and the tool timeout at 10 minutes (a background run waits 60 minutes), and refuses a third kind cluster, listing the held leases. It puts the gate in front of every `devctl pr merge`, `pr wait`, `release wait` and `rollout wait`, behind prefix commands and in pipelines and lists, and refuses one hidden in a `-c` string (below); every other devctl command passes untouched. It refuses a delete that reaches further than it names ([Deletes](#deletes)), a command that would print secret values (below, [Secret reads](#secret-reads)) and a call that would send one off the machine ([What leaves the machine](#what-leaves-the-machine)), a kube context switch and a write to production ([Kube contexts and production writes](#kube-contexts-and-production-writes)), a command that opens a page in the person's browser (`muster auth login`, `gh auth login --web`, `xdg-open`) outside the session holding the `browser` lease, a command that loads a model on the host's model server outside the session holding `model-server` ([The model server](#the-model-server)), an `AskUserQuestion` call outside the guide's session ([Questions go to the guide](#questions-go-to-the-guide)), and in the guide's session the calls that do work and a question without its status quo, why and full links ([The guide asks and relays](#the-guide-asks-and-relays-it-never-works-itself)). A `SendMessage` to `the supervisor` or `the guide` goes to the session holding that role now, by the name its running CLI answers to (else its desktop session), so a brief names the role and a relay never makes it stale. A `SendMessage` to a desktop id (`local_…`) whose session has a running CLI goes to that CLI by name, so a headless turn gets no second copy beside it (below, [Waking a session](#waking-a-session)). A session's first write or `git commit` in another repository carries that repository's `CLAUDE.md`, `AGENTS.md`, rules and mandatory reads ([A repository's instructions on the first write](#a-repositorys-instructions-on-the-first-write)). |
 | `beekeeper hook posttooluse` | The PostToolUse hook (matcher `*`): replaces a tool result that carries an indexed secret value or a token pattern with its redacted copy before the model sees it, logs `scan.redact` and files one rotation note per indexed reference (see [What reaches the model](#what-reaches-the-model)). |
+| `beekeeper secret compare\|fingerprint\|copy\|set` | The credential operations no agent runs itself: equality, keyed fingerprints, a SOPS file copied under a new name and namespace, a value into a SOPS path or a consumer's stdin, a generated value into the shared vault and a SOPS path. They answer key names, lengths, equality and fingerprints, never a value (see [Secret operations](#secret-operations)). |
 | `beekeeper scan [index\|add <ref>\|sweep]` | The transcript value scanner: without a subcommand what the fingerprint index holds; `index` rebuilds it from `scan.sops` and `scan.vaults`, `add` indexes one value from stdin, `sweep` counts each reference and token rule in every transcript, never a value (see [What reaches the model](#what-reaches-the-model)). |
 | `beekeeper hook sessionstart` | The SessionStart hook: writes the agent shell's prelude into the session's environment file (`$CLAUDE_ENV_FILE`), which Claude Code sources before parsing each Bash command. It removes the aliases and shell functions of `agents.shell.unalias` (default `grep`, `find`, `ls`, `cp`, `mv`, `rm`, the harness's own `grep` and `find` shadows among them), so each name runs the tool on `PATH`, and with `agents.shell.globs: literal` (the default) an unmatched glob stays as written instead of failing the command with zsh's `no matches found`. The person's interactive setup stays theirs; an agent writes its commands for the plain tools. |
 | `beekeeper lint briefs <file or folder>...` | Refuses dated lines, "until X ships" clauses, notes on the release that fixed something, workarounds and role run numbers in skills and briefs (every Markdown file below a folder), one `path:line: rule: why` per finding, exit 3 on any. |
@@ -304,16 +305,16 @@ turn; a value written to a file, a variable or the clipboard, hashed or diffed, 
 command can read or brute-force. One exposed credential is one rotation. For credential tools the
 PreToolUse hook is an allow list: it refuses every command that touches a secret except the forms
 below, names the part it refused and gives the safe forms. Every refusal names `beekeeper secret`:
-`compare` or `fingerprint` for equality, `set`, `copy` or `rotate` for changes (not released yet:
-[#136](https://github.com/giantswarm/beekeeper/issues/136),
-[#137](https://github.com/giantswarm/beekeeper/issues/137)).
+`compare` or `fingerprint` for equality, `copy` or `set` for changes ([Secret
+operations](#secret-operations)); `rotate` is not released yet
+([#320](https://github.com/giantswarm/beekeeper/issues/320)).
 
 Refused in every form, since beekeeper is the only process that reads, creates, rotates, encrypts and
 decrypts secrets:
 
 - `sops` (decrypting and encrypting alike, `helm secrets` included) and `op` (`op read`, `op item`,
   `op whoami`, `op run --no-masking`, …), also behind `sudo`, `env`, `timeout`, `xargs` and
-  `beekeeper run`; `age -d` and `gpg --decrypt`. The one exception until `beekeeper secret` ships:
+  `beekeeper run`; `age -d` and `gpg --decrypt`. The one exception until `beekeeper secret rotate` ships:
   `op run -- <command>`, whose output op masks; the command it runs is checked as a command of its
   own (`op run -- sops -d x` and `op run -- kubectl get secret x -o yaml` are refused).
 - `kubectl edit` of a Secret and `kubectl view-secret`.
@@ -356,6 +357,38 @@ only) pass.
 The same holds inside `sh|bash|zsh -c`, `ssh`, `eval` and `watch` strings and here-documents fed to a
 shell. Quoted text, comments and other here-documents (a commit message, an issue body) are not
 commands and pass.
+
+## Secret operations
+
+`beekeeper secret` is how an agent gets a credential job done without reading a value: sops and op
+run in beekeeper's process, a value stays in its memory for the one operation and is written nowhere
+in plaintext (sops gets the plaintext on stdin, the file is written from its ciphertext), and an
+answer is key names, lengths, equality or keyed fingerprints. Every call is a `secret.<operation>`
+event in `beekeeper log` with the session, the references and the outcome, never a value.
+
+A reference is a SOPS file (every value in it), one value of a SOPS file (`file#a.b.c`, the dotted key
+path; `sops://` in front optional) or a field of the shared 1Password vault
+(`op://<vault>/<item>/<field>`). beekeeper reads only the vault `secret.vault` names, and only as its
+service account, whose token it reads from `secret.tokenFile` and gives to its own `op` calls alone;
+with either unset, an `op://` reference is refused. A SOPS file is encrypted under the creation rules
+of the `.sops.yaml` nearest above it, run from that directory, so a `path_regex` relative to the
+repository matches.
+
+| Command | What it does |
+|---|---|
+| `compare <a> <b>` | `equal` or `different` for two values, and for two files each key's state (`equal`, `different`, `only in a`, `only in b`); exit 1 when anything is not equal. |
+| `fingerprint <ref>` | HMAC-SHA256 of each value under the value scanner's key (`scan/key`), cut to 16 hex digits: equal values, equal fingerprints; only beekeeper can make one. |
+| `copy <src.sops.yaml> <dst.sops.yaml> [--name n] [--namespace ns]` | A new SOPS file with src's values, encrypted under dst's rules; `--name` and `--namespace` rewrite a Kubernetes object's metadata. It answers each key and its length (a Secret's `data` decoded); dst must not exist. |
+| `copy <ref> <file#path>` | One value into a SOPS path, creating the file or the key when absent, the file's other values kept. |
+| `copy <ref> -- <consumer…>` | One value on the stdin of `gh secret set`, a command with `--password-stdin` or one with `--secret <name>=-`; any other consumer is refused. It answers the consumer's exit code and its output with the value redacted. |
+| `set <file> <path> --generate --vault op://…` | A new value (`--length`, 32; `--charset`, `alnum`, `hex` or `ascii`) written to the vault field first (the item or field created when absent, the item passed as a JSON template on stdin, never on a command line), then into the SOPS path; it answers the fingerprint. |
+
+```console
+$ beekeeper secret copy team-a/app.sops.yaml team-b/app.sops.yaml --name app-copy --namespace team-b
+wrote team-b/app.sops.yaml: 2 keys
+  data.token                                                 40 bytes
+  stringData.password                                        32 bytes
+```
 
 ## What leaves the machine
 
@@ -1178,6 +1211,7 @@ The organisation and desk keys, and their defaults:
 | `watch.tmpMaxMiB`, `watch.diskMinMiB` | 45% of `/tmp`, 5% of `/` | TMPFS, LOW DISK |
 | `ollama.url`, `lemonade.url` | unset: no model server | The host's model servers, watched and guarded under the `model-server` lease |
 | `outbound.phrases`, `outbound.paths`, `outbound.storeDeny` | none | What never leaves the machine, the plan files whose writes are outbound, the refused secret-store writes ([What leaves the machine](#what-leaves-the-machine)) |
+| `secret.vault`, `secret.tokenFile` | none | The shared 1Password vault `beekeeper secret` reads and writes, and the file with its service account's token ([Secret operations](#secret-operations)) |
 | `scan.sops`, `scan.vaults`, `scan.minLength` | none, none, 12 | The SOPS file globs and 1Password vaults `beekeeper scan index` fingerprints, and the shortest value it takes ([What reaches the model](#what-reaches-the-model)) |
 | `plans.repositories`, `plans.check` | none, `plan-stages` | The plans repositories whose open pull requests a note for `guide.person` links only once their stage check is green |
 | `outbound.sweepRoots`, `outbound.sweepDepth` | the home directory, 5 | Where the watch looks for exposed keys and credentials in remote URLs |

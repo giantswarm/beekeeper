@@ -42,8 +42,9 @@ type leak struct {
 
 // secretOps names the beekeeper secret operations every refusal points to.
 const secretOps = "Equality: `beekeeper secret compare <a> <b>` or `beekeeper secret fingerprint <ref>`. " +
-	"Changes: `beekeeper secret set`, `copy` or `rotate`. " +
-	"Until they are released (giantswarm/beekeeper#136, giantswarm/beekeeper#137), such a step is the person's, in their own shell."
+	"Changes: `beekeeper secret copy <src.sops.yaml> <dst.sops.yaml> [--name n --namespace ns]`, " +
+	"`copy <ref> <file#path>`, `copy <ref> -- <consumer>`, `set <file> <path> --generate --vault op://…`. " +
+	"A rotation is the person's, in their own shell, until `beekeeper secret rotate` is released (giantswarm/beekeeper#320)."
 
 func (l leak) reason() string {
 	at := strings.Join(strings.Fields(l.at), " ")

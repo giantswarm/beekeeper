@@ -102,6 +102,8 @@ type Config struct {
 	// Scan is where the transcript value scanner's index takes its values
 	// from.
 	Scan Scan `yaml:"scan"`
+	// Secret configures beekeeper secret.
+	Secret Secret `yaml:"secret"`
 	// Board is the project board `beekeeper board` picks work from.
 	Board Board `yaml:"board"`
 	// Plans are the repositories whose pull requests a note for a person
@@ -188,6 +190,18 @@ type Outbound struct {
 	// files and git remote URLs that carry a credential.
 	SweepRoots []string `yaml:"sweepRoots"`
 	SweepDepth int      `yaml:"sweepDepth"`
+}
+
+// Secret configures beekeeper secret, the credential operations beekeeper
+// runs so that no agent reads a value.
+type Secret struct {
+	// Vault is the team's shared 1Password vault, the only one an op://
+	// reference may name; unset, beekeeper secret reads SOPS files only.
+	Vault string `yaml:"vault"`
+	// TokenFile (~/ allowed) holds the vault's service account token,
+	// which beekeeper gives only to its own op calls. Agents reach it
+	// nowhere: it lies outside every agent container's mounts.
+	TokenFile string `yaml:"tokenFile"`
 }
 
 // Scan configures the transcript value scanner: beekeeper scan index
@@ -1015,6 +1029,7 @@ func (c *Config) defaults() error {
 	c.Reporter.defaults(home, c.Guide.Person)
 	c.Outbound.defaults(home)
 	setInt(&c.Scan.MinLength, 12)
+	c.Secret.TokenFile = homePath(home, c.Secret.TokenFile)
 	for i := range c.Scan.SOPS {
 		c.Scan.SOPS[i] = homePath(home, c.Scan.SOPS[i])
 	}

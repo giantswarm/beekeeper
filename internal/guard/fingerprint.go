@@ -183,6 +183,15 @@ func (ix *Index) Save(now time.Time) error {
 	return os.Rename(tmp, filepath.Join(ix.dir, indexFile))
 }
 
+// Fingerprint is the keyed hash of s, comparable only through beekeeper;
+// empty while the index has no key.
+func (ix *Index) Fingerprint(s string) string {
+	if ix.key == nil {
+		return ""
+	}
+	return ix.fingerprint(s)
+}
+
 func (ix *Index) fingerprint(s string) string {
 	m := hmac.New(sha256.New, ix.key)
 	m.Write([]byte(s))
