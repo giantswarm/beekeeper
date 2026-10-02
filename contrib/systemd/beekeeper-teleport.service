@@ -1,0 +1,19 @@
+# The Teleport login's keeper, started by beekeeper-teleport.timer: it reads
+# the login's expiry and, once less than teleport.renewBefore is left,
+# renews it under the browser lease: a fresh tsh login in a staging home
+# (tsh opens the login URL in the default browser, whose SSO session
+# completes it), swapped into the profile directory in one step. A renewal
+# that fails leaves the profile as it was and a note for the person; the
+# keeper does not try that login again. beekeeper install writes it when
+# teleport.proxy is set.
+[Unit]
+Description=beekeeper: renew the Teleport login before it expires
+Documentation=https://github.com/giantswarm/beekeeper#the-teleport-login
+After=graphical-session.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/beekeeper --as "teleport keeper" teleport renew --keeper
+# Past teleport.loginTimeout: the renewal bounds its own login.
+TimeoutStartSec=15min
+MemoryMax=512M

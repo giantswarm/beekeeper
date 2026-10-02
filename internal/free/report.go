@@ -9,9 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 // state prints RAM, swap, tmpfs, the oomd headroom and the desktop scope.
@@ -105,10 +107,13 @@ func (r *Run) kind() {
 	}
 }
 
-// clis reports the live Claude CLIs; archiving an idle one is a desktop
-// action. Its scratch stays: only a dead session's is freed.
+// clis reports the live Claude CLIs with the session each runs and what
+// that session is to the desk; archiving one is a desktop action, so nothing
+// is killed. A CLI is stale when its session is untouched for CLIStale and
+// neither holds a role nor is a busy or parked roster agent: its exit
+// returns its memory. Its scratch stays: only a dead session's is freed.
 func (r *Run) clis() {
-	r.head("Claude CLIs alive (each keeps its MCP servers; archive idle sessions in the desktop)")
+	r.head("Claude CLIs alive (each keeps its MCP servers; archive stale sessions in the desktop)")
 	if !r.tableRead() {
 		return
 	}
@@ -118,18 +123,93 @@ func (r *Run) clis() {
 		if !s.LastActive.IsZero() {
 			idle = r.Now.Sub(s.LastActive)
 		}
-		mark := ""
-		if idle >= r.Stale {
+		roster, role, agent := standing(r.Desk, s, r.Now)
+		stale := r.CLIStale > 0 && idle >= r.CLIStale && role == "" && roster != rosterBusy && roster != rosterParked
+		mark, col := "", "-"
+		if stale {
 			n++
 			mib += s.MemMiB
-			mark = "   <- idle, archive it"
-			r.emit("cli", s.PID, s.MemMiB, int(idle.Minutes()), r.tilde(s.Cwd))
+			mark, col = fmt.Sprintf("   <- stale, its exit returns %d MiB", s.MemMiB), "stale"
 		}
-		r.say("  pid %-8d %5d MiB  idle %5d min  %s  (%s)%s", s.PID, s.MemMiB, int(idle.Minutes()), s.Name, r.tilde(s.Cwd), mark)
+		if stale || idle >= r.Stale {
+			r.emit("cli", s.PID, s.MemMiB, int(idle.Minutes()), r.tilde(s.Cwd),
+				dash(s.ID), dash(r.sessionTitle(s)), dash(roster), dash(role), int(idle.Hours()), col)
+		}
+		title := r.sessionTitle(s)
+		if agent != "" && agent != title {
+			roster += fmt.Sprintf(" as %q", agent)
+		}
+		r.say("  pid %-8d %5d MiB  idle %5.1f h  %q (%s)  roster %s  role %s  (%s)%s",
+			s.PID, s.MemMiB, idle.Hours(), title, dash(s.ID), dash(roster), dash(role), r.tilde(s.Cwd), mark)
 	}
 	if n > 0 {
-		r.say("  %d idle CLIs hold %d MiB; archiving their sessions in the desktop frees it", n, mib)
+		r.say("  %d stale CLIs (sessions untouched for %d h, no role, not busy or parked) hold %d MiB; archiving their sessions in the desktop frees it",
+			n, int(r.CLIStale.Hours()), mib)
 	}
+}
+
+// The roster states and the roles a CLI's session can have.
+const (
+	rosterBusy   = "busy"
+	rosterParked = "parked"
+	rosterIdle   = "idle"
+
+	roleSupervisor = "supervisor"
+	roleGuide      = "guide"
+	roleSpare      = "spare"
+)
+
+// standing says what s is to the desk: its roster state (busy with a task,
+// parked on its person with one, idle without; "" off the roster) and the
+// agent's roster name, and its role (the supervisor, the guide, or the
+// spare an open relay of either names; "" for none). An unread state knows
+// neither.
+func standing(st *state.State, s *claude.Session, now time.Time) (roster, role, agent string) {
+	if st == nil {
+		return "", "", ""
+	}
+	p := s.Party()
+	if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) }); i >= 0 {
+		ag := st.Agents[i]
+		agent = ag.Name
+		switch {
+		case ag.Task == "" || ag.Done:
+			roster = rosterIdle
+		case s.Waiting != nil:
+			roster = rosterParked
+		default:
+			roster = rosterBusy
+		}
+	}
+	sup, guide := st.SupervisorRole(), state.Role{}
+	if st.Guide != nil {
+		guide = *st.Guide
+	}
+	switch {
+	case sup.Holder != nil && sup.Holder.Is(p):
+		role = roleSupervisor
+	case guide.Holder != nil && guide.Holder.Is(p):
+		role = roleGuide
+	case sup.Relay.Open(now) && sup.Relay.To.Is(p), guide.Relay.Open(now) && guide.Relay.To.Is(p):
+		role = roleSpare
+	}
+	return roster, role, agent
+}
+
+// sessionTitle is the session's desktop title, else its CLI's name.
+func (r *Run) sessionTitle(s *claude.Session) string {
+	if t := r.title(s.ID); t != "" {
+		return t
+	}
+	return s.Name
+}
+
+// dash stands in for an empty field.
+func dash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }
 
 // heavy reports the user's processes above HeavyMiB of anonymous RSS or

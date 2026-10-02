@@ -52,6 +52,8 @@ func TestHookRefusesCommandLineReads(t *testing.T) {
 		"docker container ls --no-trunc",
 		"bash -c 'ps aux | grep x'",
 		"timeout 5 ps -ef",
+		"ps -ef | grep -c claude",
+		"cat /proc/1234/cmdline | sha256sum",
 	} {
 		d := decide(t, hook(), "/", cmd, nil)
 		if d == nil || d.PermissionDecision != decisionDeny {
@@ -77,7 +79,7 @@ func TestHookPassesMaskedProcessReads(t *testing.T) {
 		"ps axc",
 		"ps axo pid,comm",
 		"ps aux | wc -l",
-		"ps -ef | grep -c claude",
+		"pgrep -c claude",
 		"pgrep claude",
 		"pgrep -f 'devctl pr wait'",
 		"pgrep -l claude",
@@ -86,7 +88,7 @@ func TestHookPassesMaskedProcessReads(t *testing.T) {
 		"pstree",
 		"ls /proc/1234/cmdline",
 		"wc -c /proc/1234/cmdline",
-		"cat /proc/1234/cmdline | sha256sum",
+		"cat /proc/1234/cmdline | wc -c",
 		"cat /proc/1234/status",
 		"cat /proc/loadavg",
 		"docker inspect --format '{{.Name}} {{.State.Status}}' ollama",

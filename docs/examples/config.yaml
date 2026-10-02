@@ -21,13 +21,29 @@ maxKindClusters: 2          # kind clusters the machine runs at most; default: o
 kube:
   # The installation agents never write to: a context or cluster name with it
   # as a component (login.example.com-production, production-ops). Unset, the
-  # kube guard is off (op item get stays refused) and snapshot says so.
+  # kube guard is off and snapshot says so.
   production: production
   # An installation's kube context; {installation} is its name. It resolves
   # alerts.installations and leased installations without a context, and
   # refusals name it. Unset: the context named after the installation, else
   # the one ending in @<name>.
   contextTemplate: login.example.com-{installation}
+
+# The Teleport login the kube contexts run `tsh kube credentials` with. Set,
+# beekeeper install adds the keeper (beekeeper-teleport.timer), which renews
+# the SSO login before it expires: a fresh tsh login in a staging home under
+# the browser lease (tsh opens the login URL in the default browser, whose
+# SSO session completes it), swapped into the profile directory in one step.
+# watch and snapshot show the expiry. Unset, no keeper runs.
+teleport:
+  proxy: login.example.com:443   # tsh login --proxy
+  auth: github              # tsh login --auth, the SSO connector; default: the cluster's
+  # tsh: tsh                # the default
+  # home: /home/ada/.tsh    # the profile directory; default: $TELEPORT_HOME, else ~/.tsh
+  renewBefore: 90m          # the default; the keeper renews this long before the expiry
+  warnBefore: 1h            # the default; watch says TELEPORT LOGIN under this, at most renewBefore
+  loginTimeout: 3m          # the default; one login, the browser's round trip included
+  every: 10m                # the default; how often the keeper's timer reads the expiry
 
 github:
   floor: 2500               # the default; budget under which GitHub work stops
@@ -104,6 +120,8 @@ alerts:
   every: 5m
   timeout: 1m               # per installation, port-forwards included, a failed attempt tried again within it; also bounds the upgrade reading
   flap: {changes: 4, window: 1h}   # an alert's 4th change within 1h is one FLAPPING line, then quiet until stable for 1h
+  pageSeverity: page        # a firing alert at it (team's, when set) with no owner (alerts own) for ownerGrace is PAGE UNOWNED, again every ownerGrace
+  ownerGrace: 15m
   quiet:                    # alerts whose changes are logged, not said; default: [{severity: notify}] once team is set, else none
     - {cluster: "t-*"}      # fields installation, cluster, alertname, severity, globs; a page only by a rule naming a cluster
     - {severity: notify}    # other teams' and team-less notify alerts
@@ -117,6 +135,7 @@ supervisor:                 # what handover --prompt tells the successor supervi
   dir: ~/src/desk            # the folder a successor starts in (default: where its predecessor's desktop session started, never its worktree)
 guide:                      # the guide's role: what guide handover --prompt tells its successor, and its relay
   person: Ada               # guide queue and guide watch show only the notes for this person (any case); unset, every --for note
+  waitingTTL: 2h            # a session that waits on the person and stopped longer ago folds into one line (guide queue --full lists it); 0: never
   skill: beekeeper:guide    # the skill its successor runs; or instructions: ~/guide.md; unset, it opens without them
   relayAt: 150k             # guide watch says GUIDE RELAY DUE once the guide's context reaches this
   relayTTL: 15m
@@ -126,6 +145,9 @@ agents:                     # the hand-over of registered agents
   relayAt: 400k             # watch says HANDOVER DUE once an agent's context reaches this; default: supervisor.relayAt
   noteWait: 3m              # agents handover waits this long for the agent's note
   staleAfter: 24h           # the doctor takes an idle agent with no CLI running off the roster after this; 0: never
+  shell:                    # the agent shell's prelude, written by beekeeper hook sessionstart before each Bash command
+    unalias: [grep, find, ls, cp, mv, rm]   # aliases and shell functions removed, so each runs the tool on PATH; []: none
+    globs: literal          # an unmatched glob stays as written; shell: the shell's own behaviour (zsh: no matches found)
 doctor:                     # known faults the doctor (beekeeper doctor, every watch poll) probes and remedies
   faults:
     - name: registry-login  # an example: a login unit answering 401, fixed by a restart
@@ -148,6 +170,11 @@ outbound:                   # what the hook refuses to let leave the machine (RE
     - {vault: Shared*, item: "*personal*"}
   sweepRoots: [~]           # the watch looks here for world-readable private keys and credentials in git remote URLs
   sweepDepth: 5
+
+scan:                       # the value scanner's index (README: What reaches the model); beekeeper scan index reads these
+  sops: [~/projects/configs/*/secrets/*.enc.yaml]   # SOPS file globs (no **), decrypted by sops in beekeeper's process
+  vaults: [Team Shared]     # 1Password vaults whose concealed fields are fingerprinted (op item get --reveal)
+  minLength: 12             # shorter values are not indexed
 
 plans:                      # note add --for <guide.person> links an open pull request here only once its stage check is green
   repositories: [example-org/plans]   # owner/repo; unset, nothing is read
@@ -172,6 +199,10 @@ board:                      # the project board `beekeeper board next` picks wor
 claude:
   desktopApp: claude-desktop   # the default; the desktop app's executable, which opens claude:// links
 
+omp:
+  sessionsDir: ~/.omp/agent/sessions   # the default; omp's session files, one folder per working directory
+  model: ""                 # agents start --harness omp without --model: omp's model pattern; empty: omp's own default
+
 desktop:
   typingQuiet: 30s          # the default; a claude:// link waits for this much idle keyboard and pointer input; negative: no wait
 
@@ -184,7 +215,7 @@ metrics:
     contextFill: 0.9
 
 notify:                     # what watch --notify sends to the desktop; the machine's lines never notify
-  kinds: [due, budget, stale-lease, no-supervisor]   # the default: all
+  kinds: [due, budget, stale-lease, no-supervisor, page-unowned]   # the default: all
   quietHours: "22:00-07:00" # local time; holds everything but critical; default: none
-  urgency: {stale-lease: critical, due: normal}   # low, normal, critical; no-supervisor defaults to critical
+  urgency: {stale-lease: critical, due: normal}   # low, normal, critical; no-supervisor and page-unowned default to critical
   repeat: 30m               # a lasting condition (budget) notifies again after this

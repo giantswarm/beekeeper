@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"cmp"
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/lease"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -111,13 +114,16 @@ func (a *app) collect(withWork bool) (*view, error) {
 	}
 	for i, s := range raw {
 		sv := &sessionView{Session: s}
-		if withWork {
-			sv.Work, sv.Metrics = works[i], ms[i]
-			work[s.PID] = sv.Work
-		}
 		sv.Role = roleOf(st, s)
 		if i := slices.IndexFunc(st.Records, func(r state.Record) bool { return r.Session.Is(s.Party()) }); i >= 0 {
 			sv.Serves = &st.Records[i]
+		}
+		if withWork {
+			sv.Work, sv.Metrics = works[i], ms[i]
+			if sv.Serves != nil && sv.Serves.Ended.IsZero() {
+				sv.Work = sv.Work.Serve(sv.Serves.Issue)
+			}
+			work[s.PID] = sv.Work
 		}
 		for _, h := range holders {
 			if h.Party().Is(s.Party()) {
@@ -159,9 +165,12 @@ func (a *app) sessionsCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "sessions",
 		Short: "List the running sessions: what each is on, what it runs, what it holds",
-		Long: `List the running Claude Code sessions, most recently active first: the
-repository and the issues or pull requests its latest turns are about, when
-it was last active, the tool commands it runs right now (a devctl wait, a
+		Long: `List the running sessions, Claude Code's and omp's (oh-my-pi, marked
+"omp busy" or "omp idle"), most recently active first: the
+issue its record serves and the issues or pull requests its latest turns
+acted on (named in its gh and devctl commands and GitHub tool calls, or
+created; a ref it only quoted or read is no act), else the repository it
+acted in or its checkout, when it was last active, the tool commands it runs right now (a devctl wait, a
 bounded sleep with the time left), its memory, how full its context is,
 its last hour (turns, tool calls and their errors, GitHub calls, cost),
 and its role and leases, after "archived" or "test" for a session the
@@ -180,8 +189,10 @@ Cost is priced from metrics.models; a model without a price is "cost
 unknown".
 
 Overlaps name the issues, pull requests and repositories more than one
-session is on now. --all adds the sessions of the last 24 hours that run no
-CLI (paused or closed, not archived): a message to them does not arrive.
+session acts on now. --json keeps the refs a session only mentioned in
+its work's "mentioned". --all adds the sessions of the last 24 hours that run no
+CLI (paused or closed, not archived) and the omp sessions no process runs:
+a message to them does not arrive.
 
 The session records (sessions serve) follow the table: which session serves
 which issue and what it waits on, and the records whose session has ended.
@@ -197,15 +208,18 @@ moving is no change), or one "no change" line. --full prints everything.`,
 				return err
 			}
 			var paused []*claude.Record
+			var ended []*claude.Session
 			if all {
 				paused = claude.StoppedRecords(a.cfg, v.raw, a.now.Add(-24*time.Hour))
+				ended = omp.Ended(a.cfg.Omp.SessionsDir, v.raw, a.now.Add(-24*time.Hour))
 			}
 			if a.json {
 				return a.printJSON(struct {
 					*view
-					Records []state.Record   `json:"records,omitempty"`
-					Paused  []*claude.Record `json:"paused,omitempty"`
-				}{v, v.st.Records, paused})
+					Records []state.Record    `json:"records,omitempty"`
+					Paused  []*claude.Record  `json:"paused,omitempty"`
+					Ended   []*claude.Session `json:"ended,omitempty"`
+				}{v, v.st.Records, paused, ended})
 			}
 			printFull := func() {
 				a.printSessions(v)
@@ -213,12 +227,15 @@ moving is no change), or one "no change" line. --full prints everything.`,
 					_, _ = fmt.Fprintf(a.out, "\nSession records:\n")
 					a.printRecords(v.st.Records, v.raw)
 				}
-				if len(paused) > 0 {
+				if len(paused)+len(ended) > 0 {
 					_, _ = fmt.Fprintf(a.out, "\nNot running (paused or closed):\n")
 					w := a.table()
 					for _, r := range paused {
 						_, _ = fmt.Fprintf(w, "  %s\t%s\tactive %s ago\t%s\n", truncate(r.Title, 50), r.Branch,
 							ago(a.now, time.UnixMilli(r.LastActivityAt)), r.Aside())
+					}
+					for _, e := range ended {
+						_, _ = fmt.Fprintf(w, "  %s\t%s\tactive %s ago\tomp\n", truncate(e.Name, 50), e.Cwd, ago(a.now, e.LastActive))
 					}
 					_ = w.Flush()
 				}
@@ -226,6 +243,10 @@ moving is no change), or one "no change" line. --full prints everything.`,
 			facts := a.sessionFacts(v)
 			for _, r := range paused {
 				l := fmt.Sprintf("paused %q %s", r.Title, r.Branch)
+				facts = append(facts, fact{Key: l, Sig: l, Line: l})
+			}
+			for _, e := range ended {
+				l := fmt.Sprintf("ended omp %q %s", e.Name, e.Cwd)
 				facts = append(facts, fact{Key: l, Sig: l, Line: l})
 			}
 			return a.delta("sessions", full, facts, printFull)
@@ -286,10 +307,11 @@ name, a unique part of one, a session id or a PID.`,
 
 func (a *app) unserveCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "unserve <session>",
+		Use:   "unserve <session|owner/repo#n>",
 		Short: "Remove a session's record: its work is done or handed on",
 		Long: `Remove a session's record, running or ended. The session is a name, a
-unique part of one or a session id.`,
+unique part of one or a session id; an issue, owner/repo#n, removes the one
+record serving it (a board next --claim given back).`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			me, err := a.caller()
@@ -298,11 +320,7 @@ unique part of one or a session id.`,
 			}
 			var r state.Record
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-				parties := make([]state.Party, len(st.Records))
-				for i, r := range st.Records {
-					parties[i] = r.Session
-				}
-				i, err := findParty(parties, args[0], "session record", "session records")
+				i, err := findRecord(st.Records, args[0])
 				if err != nil {
 					return nil, err
 				}
@@ -317,6 +335,33 @@ unique part of one or a session id.`,
 			return err
 		},
 	}
+}
+
+// findRecord is the index of the record of the session q names, or of the
+// one record serving q when it is an issue.
+func findRecord(records []state.Record, q string) (int, error) {
+	if !issueRef.MatchString(q) {
+		parties := make([]state.Party, len(records))
+		for i, r := range records {
+			parties[i] = r.Session
+		}
+		return findParty(parties, q, "session record", "session records")
+	}
+	var names []string
+	i := -1
+	for j, r := range records {
+		if strings.EqualFold(r.Issue, q) {
+			i = j
+			names = append(names, strconv.Quote(r.Session.Name))
+		}
+	}
+	switch len(names) {
+	case 0:
+		return -1, refused("no session record serves %s", q)
+	case 1:
+		return i, nil
+	}
+	return -1, refused("%s is served by %s: name the session", q, strings.Join(names, ", "))
 }
 
 // recordText says what a record's session serves.
@@ -354,7 +399,7 @@ func (a *app) printRecords(records []state.Record, sessions []*claude.Session) {
 
 func (a *app) printSessions(v *view) {
 	w := a.table()
-	_, _ = fmt.Fprintln(w, "SESSION\tON\tACTIVE\tRUNNING\tMEM\tCTX\tLAST HOUR\tROLE / LEASES")
+	_, _ = fmt.Fprintln(w, "SESSION\tON\tACTIVE\tRUNNING\tMEM\tCTX\tMODEL\tLAST HOUR\tROLE / LEASES")
 	for _, s := range v.Sessions {
 		role := s.Role
 		if role == "" && s.Parent != "" {
@@ -364,9 +409,9 @@ func (a *app) printSessions(v *view) {
 		if s.Metrics != nil {
 			hour = hourText(s.Metrics.LastHour)
 		}
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%dM\t%s\t%s\t%s\n",
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%dM\t%s\t%s\t%s\t%s\n",
 			truncate(s.Name, 44), truncate(on(s), 44), ago(a.now, s.LastActive),
-			truncate(running(s.Commands), 40), s.MemMiB, contextText(s.Metrics), hour, truncate(roleText(s, role), 40))
+			truncate(running(s.Commands), 40), s.MemMiB, contextText(s.Metrics), cmp.Or(truncate(s.Model, 32), "-"), hour, truncate(roleText(s, role), 40))
 	}
 	_ = w.Flush()
 	if t := v.Totals; t != nil {
@@ -380,13 +425,14 @@ func (a *app) printSessions(v *view) {
 	}
 }
 
-// roleText is role and the session's leases, after "archived" or "test"
-// for a session the guide's feed leaves out.
+// roleText is role and the session's leases, after an omp session's
+// harness and state and "archived" or "test" for a session the guide's
+// feed leaves out.
 func roleText(s *sessionView, role string) string {
 	if len(s.Leases) > 0 {
 		role = strings.TrimPrefix(role+" holds "+strings.Join(s.Leases, ","), " ")
 	}
-	return strings.TrimSpace(s.Aside() + " " + role)
+	return strings.Join(strings.Fields(strings.Join([]string{s.Harness, s.State, s.Aside(), role}, " ")), " ")
 }
 
 // parentName names the session that started a child session: its name
@@ -444,6 +490,29 @@ func commandName(args string) string {
 	return strings.Join(f[:min(4, len(f))], " ")
 }
 
+// sessionTail reads the last n turns of the session q names (a name, id or
+// PID) among sessions from its harness's transcript; with tools, the tool
+// calls are turns too.
+func sessionTail(sessions []*claude.Session, q string, n int, tools bool) ([]claude.Turn, error) {
+	s, err := claude.Resolve(sessions, q)
+	if err != nil {
+		return nil, err
+	}
+	if s.Transcript == "" {
+		return nil, fmt.Errorf("no transcript found for %q", s.Name)
+	}
+	read := claude.Tail
+	switch {
+	case s.Harness == omp.Harness && tools:
+		read = omp.Follow
+	case s.Harness == omp.Harness:
+		read = omp.Tail
+	case tools:
+		read = claude.Follow
+	}
+	return read(s.Transcript, n)
+}
+
 func (a *app) tailCmd() *cobra.Command {
 	var n int
 	c := &cobra.Command{
@@ -458,14 +527,7 @@ a name (or a unique part of it), a session id or a PID.`,
 			if err != nil {
 				return err
 			}
-			s, err := claude.Resolve(raw, args[0])
-			if err != nil {
-				return err
-			}
-			if s.Transcript == "" {
-				return fmt.Errorf("no transcript found for %q", s.Name)
-			}
-			turns, err := claude.Tail(s.Transcript, n)
+			turns, err := sessionTail(raw, args[0], n, false)
 			if err != nil {
 				return err
 			}

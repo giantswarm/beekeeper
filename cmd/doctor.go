@@ -250,11 +250,18 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 	if r.dryRun {
 		for _, c := range chores {
 			if c.archive {
-				if _, why := a.archivable(st, c.agent.Party); why != "" {
+				if host, why := a.archivable(st, c.agent.Party); why != "" {
 					c.archive, c.stays = false, why
+					if host != "" {
+						c.stays += "; the doctor owes it the archive"
+					}
 				}
 			}
 			rep.chores = append(rep.chores, "would "+c.String())
+		}
+		seedArchives(st, sessions, record, a.now)
+		for _, o := range planArchives(st, record, busy, a.now) {
+			rep.chores = append(rep.chores, "would "+o.String())
 		}
 		return rep, nil
 	}
@@ -280,14 +287,27 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 			archive = append(archive, c.agent.Party)
 		}
 	}
-	if len(archive) > 0 {
-		lines := a.archiveDesktops(ctx, st, archive, "beekeeper doctor")
-		evs := make([]state.Event, len(lines))
-		for i, l := range lines {
-			rep.chores = append(rep.chores, fmt.Sprintf("%q: %s", archive[i].Name, l))
-			evs[i] = event(r.by, "agents.archive", "%s: %s", archive[i].Name, l)
+	owed, err := a.owedArchives(sessions, record, busy, r.by)
+	if err != nil {
+		return rep, err
+	}
+	rep.chores = append(rep.chores, owed.lines...)
+	for _, p := range owed.retry {
+		if !slices.ContainsFunc(archive, p.Is) {
+			archive = append(archive, p)
 		}
-		_ = a.store.Update(func(*state.State) ([]state.Event, error) { return evs, nil })
+	}
+	if len(archive) > 0 {
+		outcomes := a.archiveDesktops(ctx, st, archive, "beekeeper doctor")
+		_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+			lines := owe(st, outcomes, a.now)
+			evs := make([]state.Event, len(lines))
+			for i, l := range lines {
+				rep.chores = append(rep.chores, fmt.Sprintf("%q: %s", archive[i].Name, l))
+				evs[i] = event(r.by, "agents.archive", "%s: %s", archive[i].Name, l)
+			}
+			return evs, nil
+		})
 	}
 	for _, c := range chores {
 		if c.kind != choreRetitle || (r.retry != nil && !r.retry(c.host)) {
@@ -305,6 +325,47 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 	return rep, nil
 }
 
+// owedRun is what the doctor's run found of the archives owed: the agents
+// whose archive it asks for again, and a line for each it owes no longer.
+type owedRun struct {
+	retry []state.Party
+	lines []string
+}
+
+// owedArchives seeds the archives owed once, drops those owed no longer and
+// returns the agents whose archive is due again. It writes the state only
+// when it changes.
+func (a *app) owedArchives(sessions []*claude.Session, record func(host string) (*claude.Record, bool), busy func(state.Party) bool, by state.Party) (owedRun, error) {
+	var run owedRun
+	sort := func(st *state.State) []state.Event {
+		run = owedRun{}
+		seedArchives(st, sessions, record, a.now)
+		var evs []state.Event
+		for _, o := range planArchives(st, record, busy, a.now) {
+			switch {
+			case o.drop != "":
+				st.Archives = slices.DeleteFunc(st.Archives, func(x state.Archive) bool { return x.Host == o.ar.Host })
+				line := fmt.Sprintf("its desktop session %s is owed no archive any more: %s", o.ar.Host, o.drop)
+				run.lines = append(run.lines, fmt.Sprintf("%q: %s", o.ar.Name, line))
+				evs = append(evs, event(by, "agents.archive", "%s: %s", o.ar.Name, line))
+			case o.wait == "":
+				run.retry = append(run.retry, o.ar.Party)
+			}
+		}
+		return evs
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		return run, err
+	}
+	seeded := st.ArchivesSeeded
+	if sort(st); seeded && len(run.lines) == 0 {
+		return run, nil
+	}
+	err = a.store.Update(func(st *state.State) ([]state.Event, error) { return sort(st), nil })
+	return run, err
+}
+
 // removeAgents takes the agents of the remove chores off the roster, those
 // still idle, and returns the chores it did.
 func (a *app) removeAgents(chores []chore, by state.Party) ([]chore, error) {
@@ -320,7 +381,7 @@ func (a *app) removeAgents(chores []chore, by state.Party) ([]chore, error) {
 			if c.kind != choreRemove || i < 0 {
 				continue
 			}
-			st.Agents = slices.Delete(st.Agents, i, i+1)
+			removeAgent(st, i)
 			removed = append(removed, c)
 			evs = append(evs, event(by, "agents.remove", "%s: %s", c.agent.Name, c.why))
 		}
@@ -344,6 +405,9 @@ line:
   agents.staleAfter (24h) with no CLI running; the desktop sessions
   beekeeper started for the finished and the stale ones are archived in
   one steward's turn (the desktop's Archived list brings one back);
+- asks again for an archive that stayed (its CLI ran a turn, no steward
+  recorded it) on its later runs while the CLI runs no turn, until the
+  desktop records it, up to 5 stewards' turns 10 minutes apart within 24h;
 - gives a session beekeeper started the roster name back when the desktop
   recorded another title, through a steward;
 - probes each fault of doctor.faults (a probe exits 0 while the fault is
@@ -354,7 +418,7 @@ line:
 A session a person started is never archived or retitled, nor one that
 holds or held the supervisor's or the guide's role. The watch runs the
 doctor every tick (beekeeper watch); --dry-run says what it would do,
-probing the faults but remedying none.`,
+the archives it owes included, probing the faults but remedying none.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			for _, n := range attended {

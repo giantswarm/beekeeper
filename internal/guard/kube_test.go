@@ -43,7 +43,6 @@ const (
 	switchMsg = "switches a kubeconfig's current context"
 	prodMsg   = "a production cluster"
 	gitopsMsg = "GitOps pull request and platformctl"
-	opMsg     = "op item get is refused in every form"
 	setMsg    = "sets the current context of the machine kubeconfig"
 )
 
@@ -272,35 +271,6 @@ func TestKubeRefusesProductionPluginWrites(t *testing.T) {
 	wantPassed(t, kubeHook(gazelleKC), "kubectl-ate --context kind-agentlab delete actor x")
 }
 
-func TestKubeRefusesOpItemGet(t *testing.T) {
-	h := kubeHook(machineKC)
-	for _, cmd := range []string{
-		"op item get app",
-		"op item get app --fields password",
-		"op item get app --fields label=password --reveal",
-		"op item get app --format json | jq '.fields|length'",
-		"op item get app --vault v > out.json",
-		"op --account a item get app",
-		"X=$(op item get app --fields token)",
-		"bash -c 'op item get app'",
-		"/usr/local/bin/op item get app",
-		`"op" 'item' get app`,
-		"xargs op item get <<< app",
-	} {
-		wantRefused(t, h, cmd, opMsg)
-	}
-	for _, cmd := range []string{
-		"op item list --vault v",
-		"op read op://v/i/f | sha256sum",
-		"op read --out-file ~/.local/state/x/f op://v/i/f",
-		"op run -- make test",
-		"op vault list",
-		"rg -n 'op item get' .",
-	} {
-		wantPassed(t, h, cmd)
-	}
-}
-
 func TestCurrentContext(t *testing.T) {
 	for kc, want := range map[string]string{
 		machineKC:                         "",
@@ -315,8 +285,7 @@ func TestCurrentContext(t *testing.T) {
 	}
 }
 
-// Without a production installation the kube guard is off; op item get's
-// refusal stays.
+// Without a production installation the kube guard is off.
 func TestKubeGuardOffWithoutProduction(t *testing.T) {
 	h := kubeHook(machineKC)
 	h.Production = ""
@@ -327,7 +296,6 @@ func TestKubeGuardOffWithoutProduction(t *testing.T) {
 	} {
 		wantPassed(t, h, cmd)
 	}
-	wantRefused(t, h, "op item get x", opMsg)
 	if KubeGuardOff("") == "" || KubeGuardOff("gazelle") != "" {
 		t.Error("KubeGuardOff reports the guard wrong")
 	}

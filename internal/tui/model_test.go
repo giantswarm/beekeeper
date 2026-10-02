@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -39,6 +40,54 @@ type fakeSource struct {
 	dataCalls int
 	tailCall  string
 	tailN     int
+
+	sendTo, sendText string
+	sendErr          error
+
+	took, released []string
+	answers        []string
+	answerErr      error
+}
+
+// TakeOver records the take-over and marks the session in the data.
+func (f *fakeSource) TakeOver(_ context.Context, id string) error {
+	f.took = append(f.took, id)
+	for i := range f.data.Sessions {
+		if f.data.Sessions[i].ID == id {
+			f.data.Sessions[i].TakenOver = true
+		}
+	}
+	return nil
+}
+
+// Release records the hand-back and unmarks the session.
+func (f *fakeSource) Release(_ context.Context, id string) error {
+	f.released = append(f.released, id)
+	for i := range f.data.Sessions {
+		if f.data.Sessions[i].ID == id {
+			f.data.Sessions[i].TakenOver, f.data.Sessions[i].Approvals = false, nil
+		}
+	}
+	return nil
+}
+
+// Answer records "id/request allow|deny".
+func (f *fakeSource) Answer(_ context.Context, id, request string, allow bool) error {
+	verb := "deny"
+	if allow {
+		verb = "allow"
+	}
+	f.answers = append(f.answers, id+"/"+request+" "+verb)
+	return f.answerErr
+}
+
+// Send records the message and answers as told.
+func (f *fakeSource) Send(_ context.Context, session, text string) (string, error) {
+	f.sendTo, f.sendText = session, text
+	if f.sendErr != nil {
+		return "", f.sendErr
+	}
+	return "queued in its CLI", nil
 }
 
 // Data records the call and answers with what the test set up.
@@ -338,8 +387,8 @@ func TestSelectionMovement(t *testing.T) {
 
 func TestEnterOpensSessionPaneOnlyThere(t *testing.T) {
 	src := &fakeSource{data: fixtureData(), turns: []Turn{
-		{At: testAt, Role: "assistant", Text: "on it"},
-		{At: testAt, Role: "user", Text: "the second turn"},
+		{At: testAt, Role: roleAssistant, Text: "on it"},
+		{At: testAt, Role: roleUser, Text: "the second turn"},
 	}}
 	m := newTestModel(t, src)
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -371,14 +420,15 @@ func TestEnterOpensSessionPaneOnlyThere(t *testing.T) {
 		}
 	}
 
-	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	if m.tailOff != 1 {
-		t.Errorf("j scrolled to %d, want 1", m.tailOff)
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	if m.tailBack != 1 {
+		t.Errorf("k past the oldest turn scrolled back %d, want 1", m.tailBack)
 	}
-	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
-	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
-	if m.tailOff != 0 {
-		t.Errorf("k below zero scrolled to %d", m.tailOff)
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	if m.tailBack != 0 {
+		t.Errorf("j past the newest turn scrolled back %d", m.tailBack)
 	}
 	m.key(tea.KeyMsg{Type: tea.KeyEsc})
 	if m.detail != "" {
@@ -400,6 +450,267 @@ func TestEnterOpensSessionPaneOnlyThere(t *testing.T) {
 	m.key(tea.KeyMsg{Type: tea.KeyEnter})
 	if m.detail != "" {
 		t.Errorf("enter did not close the pane")
+	}
+}
+
+func TestOpenPaneFollowsLive(t *testing.T) {
+	first := []Turn{
+		{At: testAt, Role: roleUser, Text: "fix it"},
+		{At: testAt, Role: roleAssistant, Text: "reading"},
+	}
+	src := &fakeSource{data: fixtureData(), turns: first}
+	m := newTestModel(t, src)
+	m.tickFn = func() tea.Cmd { return nil }
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
+	_, c := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	for _, msg := range msgs(c) {
+		m.Update(msg)
+	}
+	if !strings.Contains(m.View(), "live") {
+		t.Errorf("a pane at the newest turn is not marked live:\n%s", m.View())
+	}
+
+	// A tick while the pane is open re-reads its tail; the new turn shows
+	// at the bottom.
+	src.turns = append(slices.Clone(first), Turn{At: testAt, Role: roleTool, Text: "Bash: go test ./..."})
+	src.tailCall = ""
+	_, c = m.Update(tickMsg{})
+	if c == nil {
+		t.Fatal("a tick with the pane open asked for nothing")
+	}
+	got := msgs(c)
+	if src.tailCall != tBee {
+		t.Fatalf("the tick did not re-read the tail: Tail(%q)", src.tailCall)
+	}
+	for _, msg := range got {
+		m.Update(msg)
+	}
+	lines := strings.Split(m.View(), "\n")
+	if body := strings.Join(lines[len(lines)-3:], "\n"); !strings.Contains(body, "Bash: go test ./...") {
+		t.Errorf("the new tool call is not at the pane's bottom:\n%s", m.View())
+	}
+
+	// A second tick while a read is out starts no second read.
+	m.tailing = true
+	src.tailCall = ""
+	_, c = m.Update(tickMsg{})
+	_ = msgs(c)
+	if src.tailCall != "" {
+		t.Errorf("a tick started a second tail read while one was out")
+	}
+	m.tailing = false
+
+	// Scrolled back, the view keeps its place as turns arrive.
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	src.turns = append(slices.Clone(src.turns), Turn{At: testAt, Role: roleAssistant, Text: "green"})
+	m.Update(tailMsg{session: tBee, turns: src.turns})
+	if m.tailBack != 2 {
+		t.Errorf("scrolled back %d after one new turn, want 2 (the place kept)", m.tailBack)
+	}
+	if v := m.View(); !strings.Contains(v, "2 back") || strings.Contains(v, "green") {
+		t.Errorf("the scrolled-back pane moved or lost its mark:\n%s", v)
+	}
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("G")})
+	if m.tailBack != 0 || !strings.Contains(m.View(), "green") {
+		t.Errorf("G did not follow live again: back %d", m.tailBack)
+	}
+
+	// A failed re-read keeps the turns shown and says why.
+	m.Update(tailMsg{session: tBee, err: errors.New("transcript moved")})
+	if v := m.View(); m.tailState != 2 || !strings.Contains(v, "green") || !strings.Contains(v, "transcript moved") {
+		t.Errorf("a failed re-read dropped the turns or the reason (state %d):\n%s", m.tailState, v)
+	}
+}
+
+func TestMessageFromThePane(t *testing.T) {
+	src := &fakeSource{data: fixtureData(), turns: []Turn{{At: testAt, Role: roleAssistant, Text: "working"}}}
+	m := newTestModel(t, src)
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
+	_, c := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	for _, msg := range msgs(c) {
+		m.Update(msg)
+	}
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m")})
+	if !m.composing {
+		t.Fatal("m did not open the message line")
+	}
+	// Every key is the message's now: q, j and G are letters, not
+	// commands.
+	for _, k := range []tea.KeyMsg{
+		{Type: tea.KeyRunes, Runes: []rune("q")}, {Type: tea.KeySpace},
+		{Type: tea.KeyRunes, Runes: []rune("jGx")}, {Type: tea.KeyBackspace},
+	} {
+		m.key(k)
+	}
+	if m.quitting || string(m.draft) != "q jG" {
+		t.Fatalf("draft = %q (quitting %v), want the keys typed", string(m.draft), m.quitting)
+	}
+	if v := m.View(); !strings.Contains(v, "message › q jG") || !strings.Contains(v, "enter send") {
+		t.Errorf("the pane shows no message line or hints:\n%s", v)
+	}
+	_, c = m.key(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.composing || !m.sending || c == nil {
+		t.Fatalf("enter did not send: composing %v sending %v", m.composing, m.sending)
+	}
+	if !strings.Contains(m.View(), "sending…") {
+		t.Errorf("a message on its way is not shown:\n%s", m.View())
+	}
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m")})
+	if m.composing {
+		t.Error("m opened a second message while one is on its way")
+	}
+	m.Update(c())
+	if src.sendTo != tBee || src.sendText != "q jG" {
+		t.Errorf("Send(%q, %q), want bee and the draft", src.sendTo, src.sendText)
+	}
+	if v := m.View(); m.sending || !strings.Contains(v, "sent: queued in its CLI") {
+		t.Errorf("the outcome is not shown (sending %v):\n%s", m.sending, v)
+	}
+
+	// An empty draft sends nothing; esc drops a draft; a refusal says why.
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m")})
+	if _, c := m.key(tea.KeyMsg{Type: tea.KeyEnter}); c != nil || !m.composing {
+		t.Error("an empty draft was sent")
+	}
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hi")})
+	m.key(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.composing || len(m.draft) != 0 || m.detail == "" {
+		t.Errorf("esc did not drop just the draft: composing %v draft %q pane %q", m.composing, string(m.draft), m.detail)
+	}
+	src.sendErr = errors.New("an omp session beekeeper did not start takes no message")
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m")})
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hi")})
+	_, c = m.key(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(c())
+	if !strings.Contains(m.View(), "not sent: an omp session") {
+		t.Errorf("a refusal is not shown:\n%s", m.View())
+	}
+	m.key(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.outcome != "" {
+		t.Error("closing the pane kept the last outcome")
+	}
+}
+
+// run feeds a command's messages back into the model, and the commands
+// those answer with, as the program does; the test's tickFn arms no tick.
+func run(m *model, c tea.Cmd) {
+	for queue := []tea.Cmd{c}; len(queue) > 0; queue = queue[1:] {
+		for _, msg := range msgs(queue[0]) {
+			_, next := m.Update(msg)
+			queue = append(queue, next)
+		}
+	}
+}
+
+func TestTakeOverFromThePane(t *testing.T) {
+	src := &fakeSource{data: fixtureData(), turns: []Turn{{At: testAt, Role: roleAssistant, Text: "about to clean"}}}
+	src.data.Sessions[0].ID = "sid-bee"
+	m := newTestModel(t, src)
+	m.tickFn = func() tea.Cmd { return nil }
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
+	_, c := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	run(m, c)
+
+	_, c = m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	run(m, c)
+	if len(src.took) != 1 || src.took[0] != "sid-bee" || !m.taken["sid-bee"] {
+		t.Fatalf("t took %v (screen holds %v), want bee's id", src.took, m.taken)
+	}
+	if v := m.View(); !strings.Contains(v, "taken over") || !strings.Contains(v, "t hand back") {
+		t.Errorf("the pane does not show the take-over:\n%s", v)
+	}
+
+	// An approval arrives: the pane shows it with its input and the keys.
+	ap := Approval{ID: "req-1", At: testAt, Gist: "Bash: Clean the build", Detail: []string{"command: rm -r build"}}
+	src.data.Sessions[0].Approvals = []Approval{ap}
+	run(m, m.refreshCmd())
+	v := m.View()
+	for _, want := range []string{"approve?", "Bash: Clean the build", "command: rm -r build", "a allow", "about to clean"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("the pane misses %q:\n%s", want, v)
+		}
+	}
+	_, c = m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	run(m, c)
+	if len(src.answers) != 1 || src.answers[0] != "sid-bee/req-1 allow" {
+		t.Fatalf("a answered %v", src.answers)
+	}
+	if !strings.Contains(m.View(), "allowed: Bash: Clean the build") {
+		t.Errorf("the answer is not shown:\n%s", m.View())
+	}
+	// The hook lets go of the answered request: that is no hand-back.
+	src.data.Sessions[0].Approvals = nil
+	run(m, m.refreshCmd())
+	if strings.Contains(m.View(), "handed back") {
+		t.Errorf("an answered request read as handed back:\n%s", m.View())
+	}
+
+	// One the screen did not answer goes away: it went back to the window.
+	ap.ID, ap.Gist = "req-2", "Write: /w/notes.md"
+	src.data.Sessions[0].Approvals = []Approval{ap}
+	run(m, m.refreshCmd())
+	src.data.Sessions[0].Approvals = nil
+	run(m, m.refreshCmd())
+	if !strings.Contains(m.View(), "handed back to its window: Write: /w/notes.md") {
+		t.Errorf("the hand-back is not said:\n%s", m.View())
+	}
+
+	// d denies; a late answer says why it did not land.
+	ap.ID = "req-3"
+	src.data.Sessions[0].Approvals = []Approval{ap}
+	run(m, m.refreshCmd())
+	src.answerErr = errors.New("the request is no longer held")
+	_, c = m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	run(m, c)
+	if src.answers[len(src.answers)-1] != "sid-bee/req-3 deny" || !strings.Contains(m.View(), "no longer held") {
+		t.Errorf("d answered %v; pane:\n%s", src.answers, m.View())
+	}
+
+	// t again hands back; quitting hands back what is still taken.
+	_, c = m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	run(m, c)
+	if len(src.released) != 1 || m.taken["sid-bee"] {
+		t.Fatalf("t did not hand back: released %v, taken %v", src.released, m.taken)
+	}
+	m.taken = map[string]bool{"sid-wasp": true}
+	m.releaseAll()
+	if len(src.released) != 2 || src.released[1] != "sid-wasp" {
+		t.Errorf("closing released %v, want wasp's too", src.released)
+	}
+}
+
+func TestSelectionFollowsTheSessionAcrossReorders(t *testing.T) {
+	src := &fakeSource{data: fixtureData()}
+	m := newTestModel(t, src)
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	picked := m.selectedSession()
+	d := *src.data
+	d.Sessions = slices.Clone(d.Sessions)
+	slices.Reverse(d.Sessions)
+	m.Update(refreshMsg{data: &d})
+	if got := m.selectedSession(); got != picked {
+		t.Errorf("after a reorder the selection is on %q, want %q", got, picked)
+	}
+}
+
+func TestStateOf(t *testing.T) {
+	cases := []struct {
+		s    Session
+		want string
+	}{
+		{Session{Harness: "omp", State: stateIdle, Idle: time.Second}, stateIdle},
+		{Session{Waiting: "approve the merge", Idle: time.Second}, stateWaiting},
+		{Session{Idle: 10 * time.Second}, stateBusy},
+		{Session{Idle: time.Hour, Commands: []Command{{Args: "devctl pr wait"}}}, stateBusy},
+		{Session{Idle: time.Hour}, stateIdle},
+		{Session{TakenOver: true, Idle: time.Second}, stateTaken},
+		{Session{TakenOver: true, Approvals: []Approval{{ID: "r"}}, Waiting: "x"}, stateApproval},
+	}
+	for _, c := range cases {
+		if got := stateOf(c.s); got != c.want {
+			t.Errorf("stateOf(%+v) = %q, want %q", c.s, got, c.want)
+		}
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/peer"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -84,8 +85,12 @@ does not resume it); and logs agents.handover. watch says HANDOVER DUE once an a
 context reached agents.relayAt, at its first quiet moment.
 
 The follow-up runs in the old session's folder and model (--dir, --model
-override them). A stopped agent is handed over without the note and the
-stop.
+override them). An agent whose CLI does not run (its headless turn ended)
+or does not take the message by name is asked in one headless turn resumed
+from its transcript, as agents wake does, without the desktop's reopen. With
+no note, the follow-up's prompt rests on the roster: the task, the sessions
+serve record (the issue and what it waited on) and the last events, and the
+command says so. It exits non-zero when no follow-up was started.
 
 --prompt prints the follow-up's prompt and changes nothing: the roster task,
 the brief it was started with, its session record, its gated merges, its
@@ -141,6 +146,9 @@ func (a *app) readHandover(q string) (handover, error) {
 	}
 	h := handover{agent: st.Agents[i]}
 	p := h.agent.Party
+	if strings.HasPrefix(p.HostSession, omp.HostPrefix) {
+		return handover{}, refused("%q is an omp agent: a hand-over starts a Claude Code successor from a Claude transcript", p.Name)
+	}
 	for _, rl := range roles {
 		if r := rl.get(st); r.Holder != nil && r.Holder.Is(p) {
 			return handover{}, refused("%q holds the %s role: it moves by relay (%s)", p.Name, rl.name, rl.handover)
@@ -155,9 +163,11 @@ func (a *app) readHandover(q string) (handover, error) {
 		h.session, h.dir, h.model, transcript = s, s.Cwd, s.Model, s.Transcript
 		h.context = transcriptContext(s, a.now)
 	}
-	if transcript == "" && p.Session != "" {
-		if m, _ := filepath.Glob(filepath.Join(a.cfg.Claude.ProjectsDir, "*", p.Session+".jsonl")); len(m) > 0 {
-			transcript = m[0]
+	if transcript == "" {
+		// A session whose CLI does not run: its context is its transcript's.
+		if transcript = transcriptOf(a.cfg, p.Session); transcript != "" {
+			_, act := claude.ReadTranscript(transcript, a.now)
+			h.context = act.Context
 		}
 	}
 	if s, ok := st.BypassStart(p.Session); ok {
@@ -312,34 +322,25 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 			"install the hook there (README: Agents started without a click) or pass --dir a folder whose settings have it", ag.Name, strings.Join(files, ", "))
 	}
 	noted := "no note"
-	if h.session == nil {
-		a.say("note: not asked, the CLI of %q does not run", ag.Name)
+	note, ok, err := a.askNote(ctx, h)
+	if err != nil {
+		return err
+	}
+	if ok {
+		h.note, noted = note, "noted"
 	} else {
-		since := time.Now().UTC()
-		// Its running CLI answers peer messages under its own name, which an
-		// imported session's desktop derives: not always the roster's.
-		res, err := peer.Sender{Dir: a.cfg.StateDir}.Send(ctx, h.session.Name, a.noteRequest(h))
-		if err != nil {
-			return fmt.Errorf("asking %q for its note: %w (nothing changed)", ag.Name, err)
-		}
-		note, ok, err := a.awaitNote(ctx, ag.Party, since, a.cfg.Agents.NoteWait.Duration)
-		if err != nil {
-			return err
-		}
-		if ok {
-			h.note, noted = note, "noted"
-			a.say("note: written after %s (the ask cost $%.2f)", dur(time.Since(since)), res.CostUSD)
-		} else {
-			a.say("note: none after %s, handing over without it (the ask cost $%.2f)", a.cfg.Agents.NoteWait.Duration, res.CostUSD)
-		}
+		a.say("note: none, so the follow-up's prompt rests on the roster: %s", h.roster())
 	}
 	p := h.prompt()
 	a.say("prompt: %d bytes: %s", len(p), h.summary())
-	sa, err := a.startAgent(ctx, agentStart{name: ag.Name, brief: p, task: h.task(), dir: h.dir, model: h.model, replaces: &ag.Party})
+	sa, err := a.startAgent(ctx, agentStart{name: ag.Name, brief: workerPrompt(p), task: h.task(), dir: h.dir, model: h.model, replaces: &ag.Party})
 	if err != nil {
 		return err
 	}
 	a.say("started %q: session %s, desktop local_%s, in %s, busy with %q", ag.Name, sa.id, sa.id, sa.dir, sa.task)
+	if sa.restored != "" {
+		a.say("%s", sa.restored)
+	}
 	a.say("%s", titleLine(ag.Name, sa.title))
 	a.say("%s", modelLine(sa.model))
 	a.say("%s", twinLine(sa.twin))
@@ -356,6 +357,15 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 			how = "claude stop, so its daemon does not resume it; "
 		}
 		a.say("ended session %s: %sits CLI %d and %d processes it left stopped", ag.Session, how, h.session.PID, n-1)
+	}
+	// A start or wake unit of the old session that still runs its reopen
+	// would show it in the desktop and warm a CLI of it again.
+	for _, u := range turningUnits(ctx, ag.Session) {
+		if err := plat.Launcher.Stop(ctx, u); err != nil {
+			a.say("stopping %s of session %s: %v", u, ag.Session, err)
+			continue
+		}
+		a.say("stopped %s of session %s, so the desktop does not reopen it", u, ag.Session)
 	}
 	took := time.Since(began)
 	if err := a.store.Log(event(me, "agents.handover", "%s: session %s at %s tokens to %s, %s, in %s",
@@ -424,6 +434,108 @@ func projectDirs(dir string) []string {
 		}
 		if filepath.Dir(d) == d {
 			return out
+		}
+	}
+}
+
+// roster says what the roster tells the follow-up without a note.
+func (h handover) roster() string {
+	r := h.record
+	switch {
+	case r == nil:
+		return "its task and last events (no sessions serve record)"
+	case r.Waits == "":
+		return "serves " + r.Issue
+	}
+	return "serves " + r.Issue + ", waiting on " + r.Waits
+}
+
+// sendNote sends the note request to the running CLI named to.
+var sendNote = func(ctx context.Context, dir, to, msg string) (peer.Result, error) {
+	return peer.Sender{Dir: dir}.Send(ctx, to, msg)
+}
+
+// askNote asks the agent for its hand-over note and waits for it: by name
+// when its CLI runs and takes the message, else in one headless turn resumed
+// from its transcript, as agents wake does, so a worker whose turn has ended
+// writes its note too. ok is false when no note came: the session could not
+// be resumed, or the turn wrote none (its context exhausted).
+func (a *app) askNote(ctx context.Context, h handover) (string, bool, error) {
+	since := time.Now().UTC()
+	wait := a.cfg.Agents.NoteWait.Duration
+	if s := h.session; s != nil {
+		// Its running CLI answers peer messages under its own name, which an
+		// imported session's desktop derives: not always the roster's.
+		res, err := sendNote(ctx, a.cfg.StateDir, s.Name, a.noteRequest(h))
+		if err == nil {
+			note, ok, err := a.awaitNote(ctx, h.agent.Party, since, wait)
+			if err == nil {
+				a.say("note: %s (the ask cost $%.2f)", noteOutcome(ok, since, wait), res.CostUSD)
+			}
+			return note, ok, err
+		}
+		a.say("note: its CLI %d did not take the message by name (%v): resuming the session headless for it", s.PID, err)
+	} else {
+		a.say("note: the CLI of %q does not run: resuming the session headless for it", h.agent.Name)
+	}
+	unit, err := a.resumeForNote(ctx, h)
+	if err != nil {
+		a.say("note: not asked, the session cannot be resumed: %v", err)
+		return "", false, nil
+	}
+	note, ok, err := a.awaitNote(ctx, h.agent.Party, since, wait)
+	a.endNoteTurn(ctx, unit)
+	if err == nil {
+		a.say("note: %s (headless turn %s)", noteOutcome(ok, since, wait), unit)
+	}
+	return note, ok, err
+}
+
+// noteOutcome is the note step's result for its line.
+func noteOutcome(ok bool, since time.Time, wait time.Duration) string {
+	if ok {
+		return "written after " + dur(time.Since(since))
+	}
+	return "none after " + dur(wait)
+}
+
+// resumeForNote starts one headless turn of the agent's session with the
+// note request, in a wake unit without the desktop's reopen: the session
+// ends with the hand-over. It returns the unit.
+func (a *app) resumeForNote(ctx context.Context, h handover) (string, error) {
+	st, err := a.store.Read()
+	if err != nil {
+		return "", err
+	}
+	w, err := resolveWake(a.cfg, st, h.agent)
+	if err != nil {
+		return "", err
+	}
+	if u := wakeRunning(ctx, w.id); u != "" {
+		return "", refused("its wake turn %s runs", u)
+	}
+	bin, err := exec.LookPath("claude")
+	if err != nil {
+		return "", err
+	}
+	unit := wakeUnit(w.id)
+	if err := launch(unit, w.dir, a.explicitConfig(), nil, wakeArgv(bin, w, a.noteRequest(h))); err != nil {
+		return "", err
+	}
+	return unit, nil
+}
+
+// endNoteTurn gives the note turn endWait to end by itself, then stops its
+// unit: the turn has nothing left to do once the note is written, or the
+// wait for it is over.
+func (a *app) endNoteTurn(ctx context.Context, unit string) {
+	deadline := time.Now().Add(endWait)
+	for time.Now().Before(deadline) && len(plat.Launcher.Running(ctx, false, unit+"*")) > 0 {
+		time.Sleep(200 * time.Millisecond)
+	}
+	if len(plat.Launcher.Running(ctx, false, unit+"*")) > 0 {
+		if err := plat.Launcher.Stop(ctx, unit); err != nil {
+			a.say("note: stopping the headless turn %s: %v", unit, err)
 		}
 	}
 }
@@ -530,31 +642,38 @@ func endSession(ctx context.Context, s *claude.Session) (int, error) {
 	return len(pids), nil
 }
 
-// dueAgent is a registered agent whose hand-over is due.
+// dueAgent is a registered agent whose hand-over is due; parked when its
+// CLI does not run.
 type dueAgent struct {
 	agent   state.Agent
 	context int64
+	parked  bool
 }
 
-// handoversDue are the registered agents whose running session's context
-// reached relayAt, at a quiet moment: no tool command of their own running
-// and no gated merge of their own in flight. It skips the agents said
+// handoversDue are the registered agents whose context reached relayAt, at a
+// quiet moment: no tool command of their own running and no gated merge of
+// their own in flight. An agent with a task whose CLI no longer runs (its
+// headless turn ended, waiting on a grant or a person) is due too, with its
+// transcript's context: nothing else relieves it. It skips the agents said
 // already and those holding or relieved of a relayed role, which relay
-// instead.
+// instead. contextOf gets a nil session for an agent whose CLI does not run.
 func handoversDue(st *state.State, sessions []*claude.Session, relayAt config.Tokens, said func(state.Party) bool,
-	contextOf func(*claude.Session) int64, alive func(int) bool,
+	contextOf func(state.Agent, *claude.Session) int64, alive func(int) bool,
 ) []dueAgent {
 	var out []dueAgent
 	for _, ag := range st.Agents {
-		if said(ag.Party) || keepsRole(st, ag.Party) {
+		if said(ag.Party) || keepsRole(st, ag.Party) || mergeInFlight(st, ag.Party, alive) {
 			continue
 		}
-		s, ok := claude.Live(sessions, ag.Party)
-		if !ok || len(s.Commands) > 0 || mergeInFlight(st, ag.Party, alive) {
+		s, live := claude.Live(sessions, ag.Party)
+		switch {
+		case live && len(s.Commands) > 0, !live && ag.Task == "":
 			continue
+		case !live:
+			s = nil
 		}
-		if c := contextOf(s); c >= int64(relayAt) {
-			out = append(out, dueAgent{agent: ag, context: c})
+		if c := contextOf(ag, s); c >= int64(relayAt) {
+			out = append(out, dueAgent{agent: ag, context: c, parked: !live})
 		}
 	}
 	return out
@@ -580,9 +699,18 @@ func mergeInFlight(st *state.State, p state.Party, alive func(int) bool) bool {
 func (w *watcher) handoversDue(st *state.State, sessions []*claude.Session) {
 	key := func(p state.Party) string { return "handover " + p.Session }
 	said := func(p state.Party) bool { return w.reported[key(p)] }
-	contextOf := func(s *claude.Session) int64 { return transcriptContext(s, w.now) }
+	contextOf := func(ag state.Agent, s *claude.Session) int64 {
+		if s == nil {
+			s = &claude.Session{Transcript: transcriptOf(w.cfg, ag.Session)}
+		}
+		return transcriptContext(s, w.now)
+	}
 	for _, d := range handoversDue(st, sessions, w.cfg.Agents.RelayAt, said, contextOf, proc.Alive) {
 		w.reported[key(d.agent.Party)], w.dirty = true, true
-		w.emitNow("handover", "HANDOVER DUE %q at %s: beekeeper agents handover %q", d.agent.Name, tokensText(d.context), d.agent.Name)
+		parked := ""
+		if d.parked {
+			parked = " (its CLI does not run: the hand-over resumes it headless for its note)"
+		}
+		w.emitNow("handover", "HANDOVER DUE %q at %s%s: beekeeper agents handover %q", d.agent.Name, tokensText(d.context), parked, d.agent.Name)
 	}
 }

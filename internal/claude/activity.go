@@ -3,6 +3,7 @@ package claude
 import (
 	"bytes"
 	"encoding/json"
+	"path"
 	"slices"
 	"strings"
 	"time"
@@ -114,6 +115,7 @@ type activityEntry struct {
 	Timestamp   time.Time `json:"timestamp"`
 	IsMeta      bool      `json:"isMeta"`
 	IsSidechain bool      `json:"isSidechain"`
+	Cwd         string    `json:"cwd"`
 	Message     struct {
 		ID      string          `json:"id"`
 		Model   string          `json:"model"`
@@ -152,13 +154,14 @@ type activityBlock struct {
 	Input     json.RawMessage `json:"input"`
 	ToolUseID string          `json:"tool_use_id"`
 	IsError   bool            `json:"is_error"`
+	Content   json.RawMessage `json:"content"`
 }
 
 // ReadTranscript reads the window of the transcript at path once for what
 // the session is on and how it has been doing.
 func ReadTranscript(path string, now time.Time) (Work, Activity) {
 	buf, whole := readWindow(path)
-	return scanWork(string(buf)), scanActivity(buf, whole, now)
+	return scanTranscript(buf, whole, now)
 }
 
 // spanCounter adds up one span of the window.
@@ -190,8 +193,12 @@ func (s *spanCounter) failed(call toolCall) {
 // input.
 type toolCall struct{ key, label string }
 
-func scanActivity(buf []byte, whole bool, now time.Time) Activity {
+// scanTranscript reads a window for what the session acted on and how it
+// has been doing.
+func scanTranscript(window []byte, whole bool, now time.Time) (Work, Activity) {
 	a := Activity{Whole: whole, window: now.Add(-time.Hour)}
+	acts := NewActs()
+	buf := window
 	if !whole {
 		if i := bytes.IndexByte(buf, '\n'); i >= 0 {
 			buf = buf[i+1:] // a partial first line
@@ -236,15 +243,21 @@ func scanActivity(buf []byte, whole bool, now time.Time) Activity {
 		}
 		if e.Type == roleAssistant {
 			a.assistant(e, blocks, spans, calls, byID)
+			for _, b := range blocks {
+				if b.Type == blockToolUse {
+					acts.Call(b.ID, b.Name, b.Input, e.Cwd)
+				}
+			}
 			continue
 		}
 		turn := !e.IsMeta && isTurn(text)
 		for _, b := range blocks {
 			switch b.Type {
-			case "text":
+			case blockText:
 				turn = turn || (!e.IsMeta && isTurn(b.Text))
 			case "tool_result":
 				turn = false
+				acts.Result(b.ToolUseID, resultText(b.Content))
 				if b.IsError {
 					for _, s := range spans {
 						s.failed(calls[b.ToolUseID])
@@ -264,14 +277,31 @@ func scanActivity(buf []byte, whole bool, now time.Time) Activity {
 			a.LastHour.Tokens.add(m.tokens)
 		}
 	}
-	return a
+	return acts.Work(string(window)), a
+}
+
+// resultText is a tool result's content: a string, or its text blocks.
+func resultText(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	var blocks []activityBlock
+	_ = json.Unmarshal(raw, &blocks)
+	var parts []string
+	for _, b := range blocks {
+		if b.Type == blockText {
+			parts = append(parts, b.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 // assistant counts a response's tool calls and keeps its usage, the last
 // line of a message id being its final usage.
 func (a *Activity) assistant(e activityEntry, blocks []activityBlock, spans []*spanCounter, calls map[string]toolCall, byID map[string]int) {
 	for _, b := range blocks {
-		if b.Type != "tool_use" {
+		if b.Type != blockToolUse {
 			continue
 		}
 		call, github := describeCall(b)
@@ -339,10 +369,13 @@ func invokesGitHub(cmd string) bool {
 	f := strings.FieldsFunc(cmd, func(r rune) bool {
 		return r == ' ' || r == '\t' || r == '\n' || r == ';' || r == '|' || r == '&' || r == '(' || r == ')' || r == '`' || r == '$'
 	})
-	return slices.ContainsFunc(f, func(w string) bool {
-		w = w[strings.LastIndex(w, "/")+1:]
-		return w == "gh" || w == "devctl"
-	})
+	return slices.ContainsFunc(f, isGitHubCLI)
+}
+
+// isGitHubCLI says a command word runs gh or devctl.
+func isGitHubCLI(w string) bool {
+	w = path.Base(w)
+	return w == "gh" || w == "devctl"
 }
 
 // Price sets the costs and the context window from the configured models.
@@ -388,3 +421,7 @@ func cost(msgs []message, m config.Metrics, since time.Time) (*float64, []string
 	}
 	return &usd, nil
 }
+
+// InvokesGitHub says a shell command runs gh or devctl as one of its
+// commands.
+func InvokesGitHub(cmd string) bool { return invokesGitHub(cmd) }

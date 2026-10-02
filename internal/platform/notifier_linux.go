@@ -32,20 +32,26 @@ var urgencies = map[string]byte{notify.Low: 0, notify.Normal: 1, notify.Critical
 // A connection the bus closed underneath (a bus restart) is replaced once
 // within the send, so the message is not lost.
 func (d *desktop) Send(ctx context.Context, m notify.Message) (uint32, error) {
-	id, err := d.notify(ctx, m)
-	if errors.Is(err, dbus.ErrClosed) {
-		id, err = d.notify(ctx, m)
+	id, closed, err := d.notify(ctx, m)
+	if closed {
+		id, _, err = d.notify(ctx, m)
 	}
 	return id, err
 }
 
 // notify is one Notify call, on the open connection or a new one; a failed
-// call drops the connection.
-func (d *desktop) notify(ctx context.Context, m notify.Message) (uint32, error) {
+// call drops the connection and reports whether it failed because the
+// connection was closed. A connection closed since the last call is replaced
+// first: godbus cancels its context synchronously on close, while a call on
+// it may fail with the reader's error rather than dbus.ErrClosed.
+func (d *desktop) notify(ctx context.Context, m notify.Message) (uint32, bool, error) {
+	if d.conn != nil && !d.conn.Connected() {
+		_ = d.Close()
+	}
 	if d.conn == nil {
 		c, err := connect()
 		if err != nil {
-			return 0, err
+			return 0, false, err
 		}
 		d.conn = c
 	}
@@ -54,9 +60,11 @@ func (d *desktop) notify(ctx context.Context, m notify.Message) (uint32, error) 
 	err := d.conn.Object(service, object).CallWithContext(ctx, service+".Notify", 0,
 		"beekeeper", uint32(0), "", m.Summary, m.Body, []string{}, hints, int32(-1)).Store(&id)
 	if err != nil {
+		closed := errors.Is(err, dbus.ErrClosed) || !d.conn.Connected()
 		_ = d.Close()
+		return id, closed, err
 	}
-	return id, err
+	return id, false, nil
 }
 
 // connect opens the connection a desktop keeps. It takes no send's

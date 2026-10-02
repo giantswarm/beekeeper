@@ -158,7 +158,7 @@ func TestSummaryRows(t *testing.T) {
 	r.Do()
 	want := strings.Join([]string{
 		"kind\tagentlab\t9000\t2 hours ago",
-		"cli\t4242\t300\t240\t~/work",
+		"cli\t4242\t300\t240\t~/work\t" + liveSID + "\tAgent one\t-\t-\t4\t-",
 		"proc\t12\t800\t01:00\tgo\tgo test\theavy,runaway:98%",
 		"proc\t20\t700\t01:00\ttumblerd\tunit:tumblerd.service\theavy",
 		"proc\t10\t600\t01:00\tnode\tnode big job\theavy",

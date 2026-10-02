@@ -17,9 +17,12 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/pkg/project"
+	"github.com/giantswarm/beekeeper/plugin"
 )
 
 const (
@@ -41,8 +44,8 @@ const (
 	// twinWait bounds the wait for the CLI the desktop warms for an import.
 	twinWait = 15 * time.Second
 	// stopPostWait bounds the reopen after the first turn: the desktop's
-	// CLI, the retitle request and the desktop recording the title.
-	stopPostWait = 5 * time.Minute
+	// CLI, the retitle and model requests and the desktop recording them.
+	stopPostWait = 10 * time.Minute
 	// importAwayWait bounds how long a start's import waits for the person
 	// to leave the desktop's window; past it the reopen after the first
 	// turn imports the session.
@@ -77,7 +80,7 @@ var desktopWindowActive = claude.DesktopWindowActive
 var desktopInput = func(ctx context.Context) (func() time.Time, error) { return plat.Input.Watch(ctx) }
 
 func (a *app) agentStartCmd() *cobra.Command {
-	var model, dir, task string
+	var model, dir, task, harness string
 	c := &cobra.Command{
 		Use:   "start <name> <brief file>",
 		Short: "Start an agent session in bypass from the command line and import it into the desktop",
@@ -106,13 +109,35 @@ window), so the switch never happens under someone reading or typing
 there: up to 2 minutes, after which the start leaves the import to the
 reopen once the first turn has ended, which waits up to 25 minutes more.
 
-Its first turn runs the brief from the command line in bypass. The desktop
+The first prompt is the worker rules beekeeper ships with its role skills
+(the worker-rules skill, under the binary's version), then the brief as the
+task: a brief carries only its task, and a worker reports to "the
+supervisor", which the PreToolUse hook delivers to the role's holder.
+
+Its first turn runs that prompt from the command line in bypass. The desktop
 runs every later turn in acceptEdits (its import always drops bypass), so
 requests no allow rule covers would stop at a card: beekeeper hook
-permissionrequest answers them, for beekeeper's starts only. While the first
+permissionrequest answers them, for beekeeper's starts only. The browser is
+the desktop's own: the import gives the session the Chrome permission mode
+skip_all_permission_checks only when the desktop allows all browser actions
+(a person's "Allow all sites" on a Claude in Chrome site request turns that
+on for every session), and otherwise each navigate to a site the session
+was not allowed on yet waits on a site request in its desktop row, which no
+hook answers. start says which mode the desktop recorded, and agents shows
+it per agent (BROWSER asks or skips). While the first
 turn runs, beekeeper stops the CLI the desktop warms for the import, so the
 first turn is the session's only CLI and a message by name reaches it; the
-desktop starts a new CLI when the person opens the session.`,
+desktop starts a new CLI when the person opens the session.
+
+--harness omp starts an omp (oh-my-pi) agent instead: "omp --mode rpc"
+in yolo approval mode on --model (default: omp.model; with neither, or a
+model omp does not list as provider/id, the start is refused), in
+a transient user unit beekeeper-omp-<id>, with its stdin on a FIFO inbox
+in beekeeper's state folder and the brief as its first message. It is
+registered on the roster as omp_<id> under <name> and shows in sessions
+and agents with harness omp; agents wake writes a message to its inbox,
+which omp delivers at its next tool round or as its next turn. No desktop
+is involved and no import happens.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := strings.TrimSpace(args[0])
@@ -126,7 +151,17 @@ desktop starts a new CLI when the person opens the session.`,
 			if task = strings.TrimSpace(task); task == "" {
 				task = briefTask(brief)
 			}
-			sa, err := a.startAgent(cmd.Context(), agentStart{name: name, brief: brief, task: task, dir: dir, model: model})
+			// Every worker gets the shipped rules ahead of its task, whatever
+			// its harness.
+			sp := agentStart{name: name, brief: workerPrompt(taskPrompt(brief)), task: task, dir: dir, model: model}
+			switch harness {
+			case omp.Harness:
+				return a.startOmpAgent(cmd.Context(), sp)
+			case "", "claude":
+			default:
+				return usageErr("--harness %q: claude or omp", harness)
+			}
+			sa, err := a.startAgent(cmd.Context(), sp)
 			if err != nil {
 				return err
 			}
@@ -140,6 +175,9 @@ desktop starts a new CLI when the person opens the session.`,
 			if err == nil && sa.kept != "" {
 				_, err = fmt.Fprintf(a.out, "the desktop still shows %s\n", sa.kept)
 			}
+			if err == nil && sa.restored != "" {
+				_, err = fmt.Fprintln(a.out, sa.restored)
+			}
 			if err == nil {
 				_, err = fmt.Fprintln(a.out, titleLine(name, sa.title))
 			}
@@ -147,14 +185,18 @@ desktop starts a new CLI when the person opens the session.`,
 				_, err = fmt.Fprintln(a.out, modelLine(sa.model))
 			}
 			if err == nil {
+				_, err = fmt.Fprintln(a.out, browserLine(sa.chrome))
+			}
+			if err == nil {
 				_, err = fmt.Fprintln(a.out, twinLine(sa.twin))
 			}
 			return err
 		},
 	}
-	c.Flags().StringVar(&model, "model", "", "the session's model (default: Claude Code's)")
+	c.Flags().StringVar(&model, "model", "", "the session's model (default: Claude Code's; omp: omp.model)")
 	c.Flags().StringVar(&dir, "dir", ".", "the session's working directory")
 	c.Flags().StringVar(&task, "task", "", "the task the roster shows it busy with (default: the brief's first line)")
+	c.Flags().StringVar(&harness, "harness", "claude", "the agent harness: claude or omp")
 	return c
 }
 
@@ -185,9 +227,15 @@ type startedAgent struct {
 	// model is the model the desktop recorded for the session's later
 	// turns; empty: none, they run on the desktop's default.
 	model string
+	// chrome is the Chrome permission mode the desktop recorded for the
+	// session's later turns; empty: none, its browser actions ask.
+	chrome string
 	// twin is the desktop's CLI of the session the start stopped while the
 	// first turn runs; 0: none.
 	twin int
+	// restored says how a steward gave the desktop's record the title and
+	// model its import dropped; empty: the import kept both.
+	restored string
 	// deferred is what held the import (the desktop's window kept the
 	// focus, the person kept typing): the reopen after the first turn
 	// imports the session.
@@ -282,15 +330,18 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 			return err
 		}
 		if r := a.desktopRecord(ctx, "local_"+id); r != nil {
-			sa.title, sa.model = r.Title, r.Model
+			sa.title, sa.model, sa.chrome = r.Title, r.Model, r.ChromePermissionMode
 		}
 		return nil
 	})
 	if err != nil {
 		return startedAgent{}, err
 	}
-	sa.twin, err = endDesktopTwin(ctx, id)
-	return sa, err
+	if sa.twin, err = endDesktopTwin(ctx, id); err != nil {
+		return sa, err
+	}
+	sa.restored = a.keepImport(ctx, id, sp.name, &sa)
+	return sa, nil
 }
 
 // whileFrozen runs fn with the first turn's unit frozen, and thaws it once
@@ -428,6 +479,19 @@ func titleLine(name, title string) string {
 	return fmt.Sprintf("the desktop titled it %q, not %q, until the session retitles itself after its first turn", title, name)
 }
 
+// browserLine says whether the session's browser actions wait on its
+// person: the desktop holds every navigate to a site not allowed yet unless
+// it recorded the Chrome permission mode skip_all_permission_checks.
+func browserLine(chrome string) string {
+	switch chrome {
+	case claude.ChromeSkipAll:
+		return "its browser actions run without the desktop's site requests (Chrome permission mode " + chrome + ")"
+	case "":
+		return "the desktop recorded no Chrome permission mode: each navigate to a site it was not allowed on yet waits on a person's site request in its desktop row"
+	}
+	return fmt.Sprintf("the desktop recorded the Chrome permission mode %s: each navigate to a site it was not allowed on yet waits on a person's site request in its desktop row", chrome)
+}
+
 // twinLine says whether the first turn is the session's only CLI.
 func twinLine(twin int) string {
 	if twin == 0 {
@@ -542,7 +606,15 @@ func (a *app) agentReopenCmd() *cobra.Command {
 			if err != nil {
 				return a.reopenMissed(name, err)
 			}
-			_, err = fmt.Fprintln(a.out, "reopen: "+line)
+			if _, err := fmt.Fprintln(a.out, "reopen: "+line); err != nil {
+				return err
+			}
+			// A start whose import waited for the reopen, or whose steward
+			// did not set its model, has none yet.
+			var sa startedAgent
+			if line := a.keepImport(cmd.Context(), id, name, &sa); line != "" {
+				_, err = fmt.Fprintln(a.out, "reopen: "+line)
+			}
 			return err
 		},
 	}
@@ -735,6 +807,20 @@ func readBrief(path string) (string, error) {
 	return brief, nil
 }
 
+// taskPrompt is the part of a worker's first prompt that is its task: the
+// brief, enclosed so that a hand-over passes on the brief alone.
+func taskPrompt(brief string) string {
+	return "Your task:\n" + briefOpen + "\n" + brief + "\n" + briefClose
+}
+
+// workerPrompt is a worker's first prompt: the worker rules beekeeper
+// ships with its role skills, versioned, ahead of prompt. A brief carries
+// only its task.
+func workerPrompt(prompt string) string {
+	return fmt.Sprintf("Beekeeper %s gives every worker it starts these rules; they hold for the whole task.\n\n%s\n\n%s",
+		project.Version(), plugin.WorkerRules(), prompt)
+}
+
 // briefTask is the roster's task for a brief: its first line without a
 // Markdown heading's hashes.
 func briefTask(brief string) string {
@@ -748,7 +834,7 @@ func briefTask(brief string) string {
 func agentArgv(bin, id, name, model, brief string, flags ...string) []string {
 	argv := []string{bin, "-p", sessionIDFlag, id, "--permission-mode", state.ModeBypass, "-n", name}
 	if model != "" {
-		argv = append(argv, "--model", model)
+		argv = append(argv, modelFlag, model)
 	}
 	argv = append(argv, flags...)
 	return append(argv, "--", brief)
@@ -757,14 +843,15 @@ func agentArgv(bin, id, name, model, brief string, flags ...string) []string {
 // launch runs argv in a transient user service: it gets the user manager's
 // environment, not the caller's session variables, and outlives the caller;
 // a configuration file the caller named is passed on as $BEEKEEPER_CONFIG,
-// and stopPost runs once argv has ended.
+// env (KEY=value) is added, and stopPost runs once argv has ended.
 // KillMode=process leaves what the turn started running when it ends, as a
 // terminal would.
-func launch(unit, dir, config string, stopPost, argv []string) error {
+func launch(unit, dir, config string, stopPost, argv []string, env ...string) error {
 	// A session beekeeper stops (SIGTERM) ended as asked, not failed.
 	u := platform.Unit{Name: unit, Dir: dir, Argv: argv, KeepChildren: true, TermIsSuccess: true, StopPost: stopPost,
 		// The reopen may wait for the session to retitle itself.
 		StopTimeout: reopenAwayWait + stopPostWait}
+	u.Env = append(u.Env, env...)
 	if config != "" {
 		u.Env = append(u.Env, "BEEKEEPER_CONFIG="+config)
 	}

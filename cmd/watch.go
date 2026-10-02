@@ -63,10 +63,23 @@ late; one not settled past merge.settleTimeout is one LANE STUCK line
 with what the lane waits for and one ENDED line when it ends. A note or a
 timer that falls due, the end of a session with a record (sessions serve)
 and a supervisor relay taken or expired are one line each, once: the state keeps that they were reported, so
-a second or restarted watch stays silent about them. The
+a second or restarted watch stays silent about them. An open note for
+someone, not pinned and not a login, is overtaken once every issue and pull
+request it names with note add --ref is closed or merged (one GraphQL read
+a poll, none under the budget floor; a note with no --ref never is, guide
+watch names it once its filing session is archived): one NOTE OVERTAKEN
+line with the reason,
+the note closed and note.overtaken logged; --once names each one it would
+close and writes nothing. The
 installations' alerts are read every alerts.every and each NEW or RESOLVED
 one at or above its installation's floor is a line, a flapping one a single
 FLAPPING line (beekeeper alerts watch); only one watch at a time reads them.
+Every poll, a firing alert at alerts.pageSeverity in the baseline, of
+alerts.team when it is set, that no session has owned (beekeeper alerts own) for alerts.ownerGrace is one line,
+PAGE UNOWNED <installation> <alertname> <where> for <duration> (one per
+alertname, the longest unowned, "(+n)" for the others), again every
+alerts.ownerGrace while it stays unowned (page-unowned, critical, under
+--notify); --once says each one due and writes nothing.
 
 Every watch.interval the same installations' Cluster API clusters are read
 (one list each of Clusters, KubeadmControlPlanes, MachinePools and
@@ -92,6 +105,12 @@ run still going, the poll skips it): one DOCTOR line per agent it took off
 the roster, desktop session it archived or retitled, fault it fixed or
 note it filed, and one DOCTOR FAULT line while a known fault lasts.
 
+A running beekeeper watch, this one included, whose binary self-update
+replaced keeps the code it started with: one WATCH STALE line names the
+watch, the version it runs and the one installed, and that a re-arm (a
+restart) picks it up; one ENDED line follows once it exits. No watch
+re-executes itself. --once says the stale watches it finds as well.
+
 A registered agent whose session's context reaches agents.relayAt gets one
 HANDOVER DUE "<agent>" at <n>k: beekeeper agents handover "<agent>" at its
 first quiet moment: no tool command of its own running and no gated merge
@@ -100,9 +119,9 @@ of its own in flight.
 --notify also sends the events that need a person to the desktop's
 notification service (org.freedesktop.Notifications on the session bus):
 the kinds in notify.kinds, a note or timer falling due (due), the GitHub
-budget under the floor (budget), a stale lease (stale-lease) and a
+budget under the floor (budget), a stale lease (stale-lease), a
 supervisor whose CLI stayed gone past supervisor.restartGrace with no relay
-open (no-supervisor, critical). The machine's lines (memory, swap, OOMD
+open (no-supervisor, critical) and an unowned page (page-unowned, critical). The machine's lines (memory, swap, OOMD
 IMMINENT, OOM kills, load, processes) never notify: the supervisor acts on
 them, and its watch says them. Each
 event is one notification however many watches notify: the first to claim
@@ -224,6 +243,8 @@ type watcher struct {
 	turnEnded func(context.Context, string) bool
 	// readHRs reads a lane installation's HelmReleases; nil is kubectl.
 	readHRs func(context.Context, config.Lane) ([]merge.HelmRelease, error)
+	// clock paces the loops and dates the polls; nil is the wall clock.
+	clock watchClock
 	// cpuTable is the process table the last machine sample read, at
 	// cpuAt: the next one's top CPU consumers are measured against it.
 	// cpuOver counts the samples in a row with CPU pressure over
@@ -253,6 +274,10 @@ type watcher struct {
 	// sweeping is set while the exposure sweep runs, lastSweep when it began.
 	sweeping  atomic.Bool
 	lastSweep time.Time
+	// teleporting is set while the Teleport login is read, lastTeleport
+	// when it began.
+	teleporting  atomic.Bool
+	lastTeleport time.Time
 	// polls counts the polls begun.
 	polls atomic.Int64
 	// missing are the sections whose platform part this build does not
@@ -266,6 +291,11 @@ type watcher struct {
 	retitled  map[string]time.Time
 	// timerActs are the fired timers' wakes and commands under way.
 	timerActs sync.WaitGroup
+	// replaced says whether a process's binary was replaced, and its path;
+	// nil is platform.ProcessBinary. versionOf is the version a binary file
+	// reports; nil runs it.
+	replaced  func(pid int) (string, bool)
+	versionOf func(ctx context.Context, file string) string
 }
 
 // unavailable reports whether err is a platform part this build does not
@@ -296,8 +326,32 @@ func (w *watcher) helmReleases(ctx context.Context, lane config.Lane) ([]merge.H
 	return readHelmReleases(ctx, lane)
 }
 
+// watchClock is a watch's time: its loops wait on its timers.
+type watchClock interface {
+	Now() time.Time
+	// Timer fires once after d; stop releases it.
+	Timer(d time.Duration) (fire <-chan time.Time, stop func())
+}
+
+// wallClock is the time a watch keeps outside its tests.
+type wallClock struct{}
+
+func (wallClock) Now() time.Time { return time.Now() }
+
+func (wallClock) Timer(d time.Duration) (<-chan time.Time, func()) {
+	t := time.NewTimer(d)
+	return t.C, func() { t.Stop() }
+}
+
+func (w *watcher) clk() watchClock {
+	if w.clock != nil {
+		return w.clock
+	}
+	return wallClock{}
+}
+
 func (w *watcher) run(ctx context.Context, once bool) error {
-	w.lastPoll = time.Now().Add(-w.cfg.Watch.Interval.Duration)
+	w.lastPoll = w.clk().Now().Add(-w.cfg.Watch.Interval.Duration)
 	s, err := plat.Machine.DesktopScope()
 	if s != nil {
 		w.scopeOOM = s.OOMKills
@@ -327,9 +381,11 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	wg.Go(func() {
+		fire, stop := w.clk().Timer(interval)
+		defer stop()
 		select {
 		case <-ctx.Done():
-		case <-time.After(interval):
+		case <-fire:
 			w.loop(ctx, interval, false, w.sample)
 		}
 	})
@@ -350,20 +406,24 @@ const slowReads = 4
 // runs every slowReads × interval, at nice 10, while the machine is
 // strained.
 func (w *watcher) loop(ctx context.Context, interval time.Duration, reads bool, fn func(context.Context)) {
+	clk := w.clk()
 	for {
-		start, every, rctx := time.Now(), interval, ctx
+		start, every, rctx := clk.Now(), interval, ctx
 		if reads {
 			every, rctx = w.readEvery(interval), w.readCtx(ctx)
 		}
 		fn(rctx)
 		next := start.Add(every)
-		for now := time.Now(); !next.After(now); {
+		now := clk.Now()
+		for !next.After(now) {
 			next = next.Add(every)
 		}
+		fire, stop := clk.Timer(next.Sub(now))
 		select {
 		case <-ctx.Done():
+			stop()
 			return
-		case <-time.After(time.Until(next)):
+		case <-fire:
 		}
 	}
 }
@@ -487,6 +547,31 @@ func (w *watcher) clear(key string) {
 	w.mu.Unlock()
 	if active {
 		w.emitNow("ended", "ENDED %s (since %s)", c.Label, c.Since.Local().Format("15:04"))
+	}
+}
+
+// isActive reports whether the watch has said the condition key and not yet
+// its end.
+func (w *watcher) isActive(key string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	_, active := w.active[key]
+	return active
+}
+
+// clearMissing ends each condition said under prefix that found no longer
+// holds: one ENDED line each.
+func (w *watcher) clearMissing(prefix string, found map[string]bool) {
+	w.mu.Lock()
+	var gone []string
+	for k := range w.active {
+		if strings.HasPrefix(k, prefix) && !found[k] {
+			gone = append(gone, k)
+		}
+	}
+	w.mu.Unlock()
+	for _, k := range gone {
+		w.clear(k)
 	}
 }
 
@@ -724,9 +809,7 @@ func (w *watcher) sampleCPU(now time.Time) {
 	w.check("load", load[0] > limit, "HIGH LOAD: 1m %.0f over %.0f (%d cores)%s", load[0], limit, cores, top)
 	w.check("loadrising", loadRising(load, cores), "LOAD RISING: 1m %.0f, 5m %.0f (%d cores)%s", load[0], load[1], cores, top)
 	// A restarted watch keeps a CPU PRESSURE it said while it lasts.
-	w.mu.Lock()
-	_, said := w.active["cpupsi"]
-	w.mu.Unlock()
+	said := w.isActive("cpupsi")
 	w.check("cpupsi", w.cpuOver >= 2 || said && w.cpuOver > 0, "CPU PRESSURE: some avg10 %.0f%% over %.0f%%%s", cpu, th.CPUPSIMax, top)
 	strained := load[0] > limit || cpu > th.CPUPSIMax
 	w.strained.Store(strained)
@@ -763,9 +846,7 @@ func (w *watcher) sampleProcs(now time.Time, span time.Duration, prev, t *proc.T
 			w.forkUsual += (rate - w.forkUsual) * min(1, span.Seconds()/forkUsualOver.Seconds())
 		}
 		// A restarted watch keeps a PROCESS STORM it said while it lasts.
-		w.mu.Lock()
-		_, said := w.active["forks"]
-		w.mu.Unlock()
+		said := w.isActive("forks")
 		if w.forkOver >= 2 || said && w.forkOver > 0 {
 			w.emit("forks", "%s", stormLine(rate, w.forkUsual, fresh(prev, t), t, owners))
 		} else {
@@ -820,7 +901,9 @@ func (w *watcher) pollSessions(ctx context.Context, since time.Time, t *proc.Tab
 	w.pending(ctx, sessions)
 	w.sessionChanges(sessions)
 	w.staleLeases(ctx, sessions)
+	w.unownedPages(ctx, sessions)
 	w.runaways(sessions, t)
+	w.staleWatches(ctx, t)
 }
 
 // poll does everything but the machine sample: the process table, the
@@ -828,7 +911,7 @@ func (w *watcher) pollSessions(ctx context.Context, since time.Time, t *proc.Tab
 // probe for one watch.interval at most.
 func (w *watcher) poll(ctx context.Context) {
 	w.polls.Add(1)
-	w.now = time.Now()
+	w.now = w.clk().Now()
 	since := w.lastPoll
 	w.lastPoll = w.now
 	th := w.cfg.Watch
@@ -859,6 +942,10 @@ func (w *watcher) poll(ctx context.Context) {
 		w.lastBudget = now
 		inFlight(ctx, th.Interval.Duration, &w.budgeting, func(ctx context.Context) { w.budget(ctx, now) })
 	}
+	if now.Sub(w.lastTeleport) >= w.readEvery(th.Interval.Duration) {
+		w.lastTeleport = now
+		inFlight(ctx, th.Interval.Duration, &w.teleporting, w.teleport)
+	}
 	if now.Sub(w.lastSweep) >= w.readEvery(th.Interval.Duration) {
 		w.lastSweep = now
 		// The sweep takes a while on a big home directory: the poll does not wait.
@@ -867,6 +954,24 @@ func (w *watcher) poll(ctx context.Context) {
 	w.saveMark()
 	if w.notifier != nil {
 		w.notifier.Flush(ctx, w.now)
+	}
+}
+
+// teleport says the Teleport login's trouble, one line when it starts and
+// one ENDED line when it ends: about to expire, expired, or its keeper's
+// renewal failed.
+func (w *watcher) teleport(ctx context.Context) {
+	v := w.readTeleport(ctx)
+	if v == nil {
+		return
+	}
+	for _, k := range teleportKeys {
+		if k != v.Key {
+			w.clear(k)
+		}
+	}
+	if v.Key != "" {
+		w.emit(v.Key, "%s", v.line(time.Now()))
 	}
 }
 
@@ -884,17 +989,7 @@ func (w *watcher) exposures() {
 		found[key] = true
 		w.emit(key, "EXPOSED %s: %s", e.Path, e.What)
 	}
-	w.mu.Lock()
-	var gone []string
-	for k := range w.active {
-		if strings.HasPrefix(k, exposedKey) && !found[k] {
-			gone = append(gone, k)
-		}
-	}
-	w.mu.Unlock()
-	for _, k := range gone {
-		w.clear(k)
-	}
+	w.clearMissing(exposedKey, found)
 }
 
 // budget probes the GitHub budget and says when it is under the floor.
@@ -927,17 +1022,7 @@ func (w *watcher) stalls() {
 			w.emit(key, "LANE STALLED %s: %s", v.Name, w.stallText(*v.Stall))
 		}
 	}
-	w.mu.Lock()
-	var over []string
-	for k := range w.active {
-		if strings.HasPrefix(k, "stall:") && !stalled[k] {
-			over = append(over, k)
-		}
-	}
-	w.mu.Unlock()
-	for _, k := range over {
-		w.clear(k)
-	}
+	w.clearMissing("stall:", stalled)
 }
 
 // lostMerges records the outcome of each running merge whose gate process
@@ -1058,17 +1143,7 @@ func (w *watcher) settled(ctx context.Context, now time.Time) {
 				lane.Name, m.Key(), dur(since), why, lane.Name)
 		}
 	}
-	w.mu.Lock()
-	var over []string
-	for k := range w.active {
-		if strings.HasPrefix(k, "stuck:") && !stuck[k] {
-			over = append(over, k)
-		}
-	}
-	w.mu.Unlock()
-	for _, k := range over {
-		w.clear(k)
-	}
+	w.clearMissing("stuck:", stuck)
 	if len(done) == 0 {
 		return
 	}
@@ -1227,11 +1302,18 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	w.handoversDue(st, sessions)
 	w.doctor(ctx)
 	signedIn := probeLogins(ctx, st.Notes)
+	over := w.overtakenNow(ctx, st)
+	if !w.chores {
+		w.wouldOvertake(st, over)
+		over = nil
+	}
 	held := checkTimers(ctx, st.Timers, w.now, lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now))
 	var fires []timerFire
 	fire := func(st *state.State) ([]string, []state.Event, bool) {
 		seen, ce := observeCLI(st, sessions, w.now)
 		lines, evs := closeProbed(st, signedIn)
+		ol, oe := closeOvertaken(st, over, watchParty)
+		lines, evs = append(lines, ol...), append(evs, oe...)
 		tl, te, tf, touched := settleTimers(st, held, w.now)
 		lines, evs, fires = append(lines, tl...), append(evs, te...), tf
 		seen = seen || touched

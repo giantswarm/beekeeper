@@ -1,9 +1,12 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -16,9 +19,11 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/merge"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/takeover"
 	"github.com/giantswarm/beekeeper/internal/tui"
 )
 
@@ -91,7 +96,7 @@ func (c *collector) Data(ctx context.Context) (*tui.Data, error) {
 	d := &tui.Data{
 		At:       a.now,
 		Machine:  c.uiMachineView(ctx, v, t, waits, &errs),
-		Sessions: uiSessions(v, waitsBy(waits)),
+		Sessions: c.withApprovals(uiSessions(v, waitsBy(waits))),
 		Totals:   uiTotals(v.Totals),
 		Overlaps: uiOverlaps(v.Overlaps),
 		Holds:    uiHolds(a.activeHolds(st)),
@@ -124,21 +129,24 @@ func (c *collector) Data(ctx context.Context) (*tui.Data, error) {
 	return d, nil
 }
 
-// Tail reads the last turns of one session's transcript, the way
-// `beekeeper tail` does: its own words, the person's and its peers'.
+// running discovers the running sessions on its own clock: Tail and Send
+// run beside a refresh, which owns the app's.
+func (c *collector) running() ([]*claude.Session, error) {
+	t, err := plat.Machine.Processes()
+	if err != nil {
+		return nil, err
+	}
+	return discover(c.a.cfg, t, time.Now()), nil
+}
+
+// Tail reads the last turns of one session's transcript, as `beekeeper
+// tail` does, with its tool calls among them: what it does right now.
 func (c *collector) Tail(_ context.Context, session string, turns int) ([]tui.Turn, error) {
-	raw, _, err := c.a.sessions()
+	raw, err := c.running()
 	if err != nil {
 		return nil, err
 	}
-	s, err := claude.Resolve(raw, session)
-	if err != nil {
-		return nil, err
-	}
-	if s.Transcript == "" {
-		return nil, fmt.Errorf("no transcript found for %q", s.Name)
-	}
-	ts, err := claude.Tail(s.Transcript, turns)
+	ts, err := sessionTail(raw, session, turns, true)
 	if err != nil {
 		return nil, err
 	}
@@ -147,6 +155,147 @@ func (c *collector) Tail(_ context.Context, session string, turns int) ([]tui.Tu
 		out = append(out, tui.Turn{At: t.At, Role: t.Role, Text: t.Text})
 	}
 	return out, nil
+}
+
+// Send delivers the person's message to one running session, stamped as
+// theirs through the screen: by name to a Claude Code session's CLI, as
+// SendMessage does, or into the inbox of an omp agent beekeeper started.
+// It returns where the message went.
+func (c *collector) Send(ctx context.Context, session, text string) (string, error) {
+	a := c.a
+	raw, err := c.running()
+	if err != nil {
+		return "", err
+	}
+	s, err := claude.Resolve(raw, session)
+	if err != nil {
+		return "", err
+	}
+	return a.messageSession(ctx, raw, s, text)
+}
+
+// messageSession delivers the person's text to s, one of the running
+// sessions, and says where it went.
+func (a *app) messageSession(ctx context.Context, sessions []*claude.Session, s *claude.Session, text string) (string, error) {
+	person := a.uiPerson()
+	msg := fmt.Sprintf("From %s through beekeeper ui: %s", person, strings.TrimSpace(text))
+	by := state.Party{Name: person}
+	if s.Harness == omp.Harness {
+		id, ok := strings.CutPrefix(s.HostID, omp.HostPrefix)
+		if !ok {
+			return "", refused("%s: an omp session beekeeper did not start takes no message: omp has no way into an interactive session", s.Name)
+		}
+		if err := a.sendOmp(s.Name, id, msg); err != nil {
+			return "", err
+		}
+		_ = a.store.Log(event(by, "ui.message", "%s: written to its omp inbox", s.Name))
+		return "in its omp inbox: it runs at the next tool round or as the next turn", nil
+	}
+	name, err := uniqueName(sessions, s)
+	if err != nil {
+		return "", err
+	}
+	if err := a.peerSend(ctx, name, msg); err != nil {
+		return "", err
+	}
+	_ = a.store.Log(event(by, "ui.message", "%s: sent by name to its CLI %d", s.Name, s.PID))
+	return "queued in its CLI: it runs at the next tool call or as the next turn", nil
+}
+
+// uiPerson is the name the screen acts under: guide.person, else "the
+// person".
+func (a *app) uiPerson() string { return cmp.Or(a.cfg.Guide.Person, "the person") }
+
+// takeoverDir is the take-over folder the hook reads.
+func (c *collector) takeoverDir() string { return takeover.Dir(c.a.cfg.StateDir) }
+
+// TakeOver brings the approvals of the Claude Code session id to this
+// screen: the PermissionRequest hook holds them for its answer while the
+// screen runs. An omp session has none: omp agents run in yolo mode.
+func (c *collector) TakeOver(_ context.Context, id string) error {
+	raw, err := c.running()
+	if err != nil {
+		return err
+	}
+	s, err := claude.Resolve(raw, id)
+	if err != nil {
+		return err
+	}
+	if s.Harness == omp.Harness {
+		return refused("%s: an omp session asks for no approvals (beekeeper's omp agents run in yolo mode): nothing to take over", s.Name)
+	}
+	if s.ID == "" {
+		return refused("%s: no session id is known, so its approvals cannot be told apart", s.Name)
+	}
+	person := c.a.uiPerson()
+	if err := takeover.Take(c.takeoverDir(), s.ID, takeover.Flag{PID: os.Getpid(), By: person, Since: time.Now().UTC()}); err != nil {
+		return err
+	}
+	_ = c.a.store.Log(event(state.Party{Name: person}, "ui.takeover", "%s: its approvals come to the screen", s.Name))
+	return nil
+}
+
+// Release hands the approvals of session id back to its own window.
+func (c *collector) Release(_ context.Context, id string) error {
+	if err := takeover.Release(c.takeoverDir(), id); err != nil {
+		return err
+	}
+	_ = c.a.store.Log(event(state.Party{Name: c.a.uiPerson()}, "ui.release", "%s: its approvals go to its own window", id))
+	return nil
+}
+
+// Answer allows or denies the request the hook holds for session id.
+func (c *collector) Answer(_ context.Context, id, request string, allow bool) error {
+	d := takeover.Decision{Behavior: takeover.Allow}
+	if !allow {
+		d = takeover.Decision{Behavior: takeover.Deny, Message: "Denied by " + c.a.uiPerson() + " on beekeeper ui."}
+	}
+	return takeover.Answer(c.takeoverDir(), id, request, d)
+}
+
+// withApprovals marks the sessions a running screen took over and the
+// requests the hook holds for each.
+func (c *collector) withApprovals(ss []tui.Session) []tui.Session {
+	dir := c.takeoverDir()
+	for i := range ss {
+		s := &ss[i]
+		if s.ID == "" {
+			continue
+		}
+		if _, ok := takeover.Taken(dir, s.ID, proc.Alive); !ok {
+			continue
+		}
+		s.TakenOver = true
+		rs, _ := takeover.Pending(dir, s.ID)
+		for _, r := range rs {
+			s.Approvals = append(s.Approvals, tui.Approval{ID: r.ID, At: r.At,
+				Gist: claude.ToolGist(r.Tool, r.Input), Detail: inputLines(r.Input)})
+		}
+	}
+	return ss
+}
+
+// inputLines is a tool call's input as the screen shows it: a line per
+// field, its text's lines under it, the fields in name order.
+func inputLines(raw json.RawMessage) []string {
+	var in map[string]any
+	if json.Unmarshal(raw, &in) != nil {
+		return nil
+	}
+	var out []string
+	for _, k := range slices.Sorted(maps.Keys(in)) {
+		v, ok := in[k].(string)
+		if !ok {
+			b, _ := json.Marshal(in[k])
+			v = string(b)
+		}
+		lines := strings.Split(strings.TrimSpace(v), "\n")
+		out = append(out, k+": "+lines[0])
+		for _, l := range lines[1:] {
+			out = append(out, "  "+l)
+		}
+	}
+	return out
 }
 
 // uiCmd is `beekeeper ui`: the person's screen.
@@ -158,10 +307,24 @@ func (a *app) uiCmd() *cobra.Command {
 machine's memory, swap, pressure, build slots and kind labs, the GitHub
 budget and who is drawing on it, the leases, holds and merge lanes, the
 supervisor and the guide, the agents, notes and timers, the installations'
-alerts and the event log. Press q to quit, and read a session's last turns
-from its row.
+alerts and the event log. Press q to quit. Enter on a session follows it
+live: its history, then the current turn with its tool calls as they land;
+k and j scroll back and forward, G follows again. m there writes it a
+message, stamped as the person's through the screen: a Claude Code session
+gets it by name at its next tool call or as its next turn, an omp agent
+beekeeper started in its inbox; an omp session the person runs in its own
+terminal takes none.
 
-Reads only: the screen takes no lease and lifts no hold — those stay with
+t there takes a Claude Code session over: its permission requests come to
+the screen, with its turns beside them, and a allows, d denies the oldest.
+The PermissionRequest hook holds a taken-over session's request for the
+screen up to 290 s; unanswered, or once t hands the session back or the
+screen quits, the request goes to the session's own window, and the pane
+says so. Everything else in that window stays as it was, and a session not
+taken over is decided at once, as before. The hook entry needs a timeout
+of 300 s (beekeeper install writes it).
+
+Besides the messages it sends, it reads only: the screen takes no lease and lifts no hold — those stay with
 the commands, whose exit codes the sessions gate on. It refreshes every
 two seconds; the GitHub budget and the installations' upgrades are
 re-read at most every minute.`,
@@ -360,7 +523,7 @@ func uiSessions(v *view, waits map[string]string) []tui.Session {
 	out := make([]tui.Session, 0, len(v.Sessions))
 	for _, s := range v.Sessions {
 		x := tui.Session{
-			PID: s.PID, Name: s.Name, Role: s.Role, Cwd: s.Cwd, Repo: s.Repo, Branch: s.Branch,
+			PID: s.PID, ID: s.ID, Name: s.Name, Role: s.Role, Harness: s.Harness, State: s.State, Cwd: s.Cwd, Repo: s.Repo, Branch: s.Branch,
 			Model: s.Model, Permission: s.Permission, Started: s.Started, LastActive: s.LastActive,
 			MemMiB: s.MemMiB, Leases: slices.Clone(s.Leases), Waits: waits[s.Name],
 		}

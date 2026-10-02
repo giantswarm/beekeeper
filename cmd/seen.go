@@ -134,6 +134,14 @@ func (a *app) sessionFacts(v *view) []fact {
 
 // agentFacts are the registered agents: an agent is news when its task or
 // its reachability changes, not when its reply window counts down.
+// browserNote is the agent fact's note of a browser that asks.
+func browserNote(browser string) string {
+	if browser == browserAsks {
+		return ", browser asks"
+	}
+	return ""
+}
+
 func (a *app) agentFacts(views []agentView) []fact {
 	facts := make([]fact, 0, len(views))
 	for _, v := range views {
@@ -145,8 +153,8 @@ func (a *app) agentFacts(views []agentView) []fact {
 		key := fmt.Sprintf("agent %q", v.Name)
 		facts = append(facts, fact{
 			Key:  key,
-			Sig:  strings.Join([]string{task, clock(a.now, since), reach}, "|"),
-			Line: fmt.Sprintf("%s %s since %s, %s", key, task, clock(a.now, since), v.Reachable),
+			Sig:  strings.Join([]string{task, clock(a.now, since), reach, v.Browser}, "|"),
+			Line: fmt.Sprintf("%s %s since %s, %s%s", key, task, clock(a.now, since), v.Reachable, browserNote(v.Browser)),
 		})
 	}
 	return facts

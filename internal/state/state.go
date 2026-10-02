@@ -253,6 +253,11 @@ type Note struct {
 	// Pinned is a standing instruction: every hand-over carries it until it
 	// is unpinned or done.
 	Pinned bool `json:"pinned,omitempty"`
+	// Refs are the issues and pull requests (owner/repo#n) the note asks
+	// about: once every one is closed or merged, the watch closes the note
+	// as overtaken. Without refs the note is linked to its filing session,
+	// and closes once that session is archived.
+	Refs []string `json:"refs,omitempty"`
 }
 
 // Timer is a point in time the supervisor has to look at something ("check
@@ -314,6 +319,22 @@ type Record struct {
 	Ended time.Time `json:"ended,omitzero"`
 }
 
+// AlertOwner is the session that owns a firing alert (alerts own), until the
+// session ends or the alert resolves. A party without a session id is a
+// person, who owns it until it resolves.
+type AlertOwner struct {
+	// Alert is the alert's key in the alert baseline (fingerprint@start).
+	Alert string    `json:"alert"`
+	Name  string    `json:"name"`
+	By    Party     `json:"by"`
+	At    time.Time `json:"at"`
+	// Ended is when a watch saw the owner's session gone.
+	Ended time.Time `json:"ended,omitzero"`
+}
+
+// Person reports whether the owner is a person rather than a session.
+func (o AlertOwner) Person() bool { return o.By.Session == "" && o.By.HostSession == "" }
+
 // ModeBypass is Claude Code's bypassPermissions mode.
 const ModeBypass = "bypassPermissions"
 
@@ -327,6 +348,24 @@ type Start struct {
 	Dir  string    `json:"dir"`
 	By   Party     `json:"by"`
 	At   time.Time `json:"at"`
+	// Harness is the agent harness started: "" for Claude Code, "omp".
+	Harness string `json:"harness,omitempty"`
+}
+
+// Archive is the desktop session of an agent that left the roster while
+// its archive could not be done (its CLI ran a turn, no steward recorded
+// it): the doctor asks for it again until the desktop records it.
+type Archive struct {
+	// Party is the agent that left the roster.
+	Party
+	// Host is its desktop session.
+	Host  string    `json:"host"`
+	Since time.Time `json:"since"`
+	// Why says why it stayed the last time.
+	Why string `json:"why"`
+	// Tries counts the stewards' turns asked for it, Tried the last.
+	Tries int       `json:"tries,omitempty"`
+	Tried time.Time `json:"tried,omitzero"`
 }
 
 // Report is one run of the scheduled status reporter: the session the
@@ -409,6 +448,12 @@ type State struct {
 	// Starts are the sessions beekeeper started, what the permission hook
 	// answers for.
 	Starts []Start `json:"starts,omitempty"`
+	// Archives are the desktop sessions of agents off the roster the
+	// doctor still owes an archive.
+	Archives []Archive `json:"archives,omitempty"`
+	// ArchivesSeeded says the doctor owed the archives of the finished
+	// workers whose desktop CLI ran on before it kept Archives.
+	ArchivesSeeded bool `json:"archivesSeeded,omitempty"`
 	// BudgetETag makes the budget probe a conditional request (a 304
 	// costs no budget).
 	BudgetETag string `json:"budgetETag,omitempty"`
@@ -419,6 +464,8 @@ type State struct {
 	Merges []Merge `json:"merges,omitempty"`
 	// Report is the scheduled status reporter's current or last run.
 	Report *Report `json:"report,omitempty"`
+	// AlertOwners are the owners of the firing alerts, one per alert.
+	AlertOwners []AlertOwner `json:"alertOwners,omitempty"`
 	// ReportPause pauses the scheduled reporter, after one final report.
 	ReportPause *ReportPause `json:"reportPause,omitempty"`
 

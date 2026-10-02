@@ -12,7 +12,8 @@ import (
 )
 
 // Turn is one message of a transcript: what a person, a peer or the model
-// said, without tool calls and tool results.
+// said, without tool results. Follow adds the model's tool calls as turns
+// of RoleTool, the call's name and its gist.
 type Turn struct {
 	At   time.Time `json:"at"`
 	Role string    `json:"role"`
@@ -24,7 +25,14 @@ type Turn struct {
 const tailWindow = 2 << 20
 
 // Tail returns the last n turns of the transcript at path.
-func Tail(path string, n int) ([]Turn, error) {
+func Tail(path string, n int) ([]Turn, error) { return tail(path, n, false) }
+
+// Follow returns the last n turns of the transcript at path with the
+// model's tool calls among them: what a session does right now, as the
+// person's screen follows it.
+func Follow(path string, n int) ([]Turn, error) { return tail(path, n, true) }
+
+func tail(path string, n int, tools bool) ([]Turn, error) {
 	f, err := os.Open(filepath.Clean(path))
 	if err != nil {
 		return nil, err
@@ -47,9 +55,7 @@ func Tail(path string, n int) ([]Turn, error) {
 	var turns []Turn
 	for {
 		line, err := r.ReadBytes('\n')
-		if t, ok := parseTurn(bytes.TrimSpace(line)); ok {
-			turns = append(turns, t)
-		}
+		turns = append(turns, parseTurns(bytes.TrimSpace(line), tools)...)
 		if err == io.EOF {
 			break
 		}
@@ -95,6 +101,15 @@ const (
 	roleAssistant = "assistant"
 )
 
+// RoleTool is the role of a tool call's turn in what Follow returns.
+const RoleTool = "tool"
+
+// The content block types of a tool call and of text.
+const (
+	blockToolUse = "tool_use"
+	blockText    = "text"
+)
+
 type entry struct {
 	Type      string    `json:"type"`
 	Timestamp time.Time `json:"timestamp"`
@@ -106,38 +121,74 @@ type entry struct {
 }
 
 type block struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type  string          `json:"type"`
+	Text  string          `json:"text"`
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input"`
 }
 
 func parseTurn(line []byte) (Turn, bool) {
-	if len(line) == 0 {
+	ts := parseTurns(line, false)
+	if len(ts) == 0 {
 		return Turn{}, false
+	}
+	return ts[0], true
+}
+
+// parseTurns reads one transcript line: its text as one turn and, with
+// tools, a turn for each tool call after it.
+func parseTurns(line []byte, tools bool) []Turn {
+	if len(line) == 0 {
+		return nil
 	}
 	var e entry
 	if json.Unmarshal(line, &e) != nil || e.IsMeta || (e.Type != roleUser && e.Type != roleAssistant) {
-		return Turn{}, false
+		return nil
 	}
 	var text []string
+	var calls []Turn
 	var s string
 	if json.Unmarshal(e.Message.Content, &s) == nil {
 		text = append(text, s)
 	} else {
 		var blocks []block
 		if json.Unmarshal(e.Message.Content, &blocks) != nil {
-			return Turn{}, false
+			return nil
 		}
 		for _, b := range blocks {
-			if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
+			switch {
+			case b.Type == blockText && strings.TrimSpace(b.Text) != "":
 				text = append(text, b.Text)
+			case tools && b.Type == blockToolUse && b.Name != "":
+				calls = append(calls, Turn{At: e.Timestamp, Role: RoleTool, Text: ToolGist(b.Name, b.Input)})
 			}
 		}
 	}
+	var out []Turn
 	joined := strings.TrimSpace(strings.Join(text, "\n"))
-	if joined == "" || strings.HasPrefix(joined, "<system-reminder>") {
-		return Turn{}, false
+	if joined != "" && !strings.HasPrefix(joined, "<system-reminder>") {
+		out = append(out, Turn{At: e.Timestamp, Role: e.Type, Text: joined})
 	}
-	return Turn{At: e.Timestamp, Role: e.Type, Text: joined}, true
+	return append(out, calls...)
+}
+
+// gistKeys are the tool input fields that say what a call does, the most
+// telling first: a command's description before the command itself.
+var gistKeys = []string{"description", "command", "file_path", "path", "pattern", "url", "query", "prompt", "to", "skill"}
+
+// ToolGist is one line naming a tool call: its name and the first of its
+// input's telling fields ("Bash: Run the tests").
+func ToolGist(name string, input json.RawMessage) string {
+	var in map[string]any
+	if json.Unmarshal(input, &in) == nil {
+		for _, k := range gistKeys {
+			if v, ok := in[k].(string); ok && strings.TrimSpace(v) != "" {
+				first, _, _ := strings.Cut(strings.TrimSpace(v), "\n")
+				return name + ": " + first
+			}
+		}
+	}
+	return name
 }
 
 // modelWindow is how much of a transcript's end Model reads: the window
@@ -208,7 +259,7 @@ func Called(path, suffix string) (bool, error) {
 		if json.Unmarshal(bytes.TrimSpace(line), &e) == nil && json.Unmarshal(e.Message.Content, &blocks) == nil {
 			for _, b := range blocks {
 				switch {
-				case b.Type == "tool_use" && strings.HasSuffix(b.Name, suffix):
+				case b.Type == blockToolUse && strings.HasSuffix(b.Name, suffix):
 					calls[b.ID] = true
 				case b.Type == "tool_result" && calls[b.ToolUseID] && !b.IsError:
 					return true, nil

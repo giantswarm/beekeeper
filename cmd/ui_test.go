@@ -194,8 +194,8 @@ func TestUICommandIsTheWatchingScreen(t *testing.T) {
 	if ui.GroupID != "watching" {
 		t.Errorf("ui is in group %q, want watching", ui.GroupID)
 	}
-	if !strings.Contains(ui.Long, "Reads only") {
-		t.Errorf("the help does not say the screen reads only:\n%s", ui.Long)
+	if !strings.Contains(ui.Long, "it reads only") || !strings.Contains(ui.Long, "writes it a\nmessage") {
+		t.Errorf("the help does not say the screen reads only, besides its messages:\n%s", ui.Long)
 	}
 	if err := ui.Args(ui, []string{"extra"}); err == nil {
 		t.Error("ui takes arguments")

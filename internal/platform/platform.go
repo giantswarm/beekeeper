@@ -112,6 +112,8 @@ type Launcher interface {
 	// Freeze suspends every process of the unit, Thaw resumes them.
 	Freeze(ctx context.Context, name string) error
 	Thaw(ctx context.Context, name string) error
+	// Stop stops the unit and every process in it.
+	Stop(ctx context.Context, name string) error
 	// State is the unit's state ("active", "inactive", "failed", ...);
 	// empty when unreadable.
 	State(ctx context.Context, name string) string
@@ -163,7 +165,8 @@ type Notifier interface {
 type File struct {
 	Path    string
 	Content []byte
-	// Service marks the file that defines the standby service.
+	// Service marks a file that defines a unit install enables and starts:
+	// the standby service, the Teleport keeper's timer.
 	Service bool
 }
 
@@ -179,25 +182,28 @@ type SetupSpec struct {
 	// DesktopScope is the unit name of the running Claude Desktop scope,
 	// empty when none runs.
 	DesktopScope string
+	// TeleportEvery is how often the Teleport login's keeper reads the
+	// expiry (teleport.every); zero writes no keeper.
+	TeleportEvery time.Duration
 }
 
 // Setup is what beekeeper install puts in place for this platform beside
 // the hooks and the config: the standby service (beekeeper watch --notify
-// --standby) and the memory guard, as files and the service manager's
-// commands. A command is an argument vector.
+// --standby), the memory guard and the Teleport login's keeper, as files
+// and the service manager's commands. A command is an argument vector.
 type Setup interface {
 	// Available reports whether this platform runs the standby service.
 	Available() bool
-	// Files are the standby service's and the memory guard's files for
-	// spec, and a line for each part this machine gets none of.
+	// Files are the standby service's, the memory guard's and the keeper's
+	// files for spec, and a line for each part this machine gets none of.
 	Files(spec SetupSpec) (files []File, skipped []string)
-	// Started reports whether the standby service defined by the file at
-	// path is enabled and running.
+	// Started reports whether the unit defined by the file at path is
+	// enabled and running.
 	Started(ctx context.Context, path string) bool
 	// Reload makes the service manager read changed files, nil when it
 	// needs no command for that.
 	Reload() []string
-	// Start enables and starts the service defined by the file at path;
+	// Start enables and starts the unit defined by the file at path;
 	// Stop stops and disables it.
 	Start(path string) []string
 	Stop(path string) []string

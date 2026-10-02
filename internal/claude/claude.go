@@ -50,6 +50,12 @@ type Session struct {
 	// it resumes the session by itself when its CLI dies, so only `claude
 	// stop` ends it.
 	Background bool `json:"background,omitempty"`
+	// Harness is the agent harness that runs the session: "" for Claude
+	// Code, "omp" for oh-my-pi (package omp), whose Transcript is omp's
+	// session file.
+	Harness string `json:"harness,omitempty"`
+	// State is an omp session's: busy, idle or ended; "" for Claude Code.
+	State string `json:"state,omitempty"`
 }
 
 // Aside says why the guide leaves the session out of its feed: "archived",
@@ -113,7 +119,11 @@ type Record struct {
 	IsArchived     bool   `json:"isArchived"`
 	LastActivityAt int64  `json:"lastActivityAt"`
 	PermissionMode string `json:"permissionMode"`
-	Model          string `json:"model"`
+	// ChromePermissionMode is how the desktop answers the session's Claude
+	// in Chrome actions: ChromeSkipAll without asking, anything else (empty
+	// included) with a site request for its person.
+	ChromePermissionMode string `json:"chromePermissionMode"`
+	Model                string `json:"model"`
 	// PriorCLISessionIDs are the CLI sessions the desktop session ran before
 	// a restart gave it a new one.
 	PriorCLISessionIDs []string `json:"priorCliSessionIds"`
@@ -123,6 +133,16 @@ type Record struct {
 	PostTurnSummaryFor string       `json:"postTurnSummaryFor"`
 	LastAssistantUUID  string       `json:"lastAssistantUuid"`
 }
+
+// ChromeSkipAll is the Chrome permission mode under which the desktop runs
+// a session's browser actions without a site request.
+const ChromeSkipAll = "skip_all_permission_checks"
+
+// BrowserAsks reports whether the desktop holds the session's navigate to a
+// site it was not allowed on yet for its person's approval: a request
+// Claude Code's permission layer never sees, so neither bypassPermissions
+// nor a PermissionRequest hook answers it.
+func (r *Record) BrowserAsks() bool { return r.ChromePermissionMode != ChromeSkipAll }
 
 // TurnSummary is the desktop's summary of a turn: the status it files the
 // session under (blocked: it needs its person) and what it needs.
@@ -370,14 +390,32 @@ func newSession(cfg *config.Config, t *proc.Table, p *proc.Process, rec *cliReco
 			}
 		}
 	}
-	tree := ownTree(t, p.PID, clis)
-	kib := t.AnonKiB(p.PID)
+	s.MemMiB, s.Commands = processTree(t, p.PID, clis, now)
+	return s
+}
+
+// processTree is the memory of the process pid with the processes below it
+// that are its session's, and the tool commands among them.
+func processTree(t *proc.Table, pid int, clis map[int]bool, now time.Time) (memMiB int, cmds []Command) {
+	tree := ownTree(t, pid, clis)
+	kib := t.AnonKiB(pid)
 	for _, d := range tree {
 		kib += t.AnonKiB(d.PID)
 	}
-	s.MemMiB = kib / 1024
-	s.Commands = toolCommands(t, tree, now)
-	return s
+	return kib / 1024, toolCommands(t, tree, now)
+}
+
+// ProcessTree is the memory of another harness's agent process pid with
+// the processes below it, and its tool commands: the first non-shell
+// process under each shell the agent started.
+func ProcessTree(t *proc.Table, pid int, now time.Time) (memMiB int, cmds []Command) {
+	memMiB, _ = processTree(t, pid, nil, now)
+	for _, c := range t.Children(pid) {
+		if shells[c.Comm] {
+			cmds = append(cmds, shellCommands(t, c, now)...)
+		}
+	}
+	return memMiB, cmds
 }
 
 // ownTree returns the processes below pid that are its session's: the
@@ -444,6 +482,25 @@ func Titles(cfg *config.Config) map[string]string {
 	return out
 }
 
+// Archived is the set of the archived desktop sessions: their desktop ids
+// and their CLI session ids, current and prior. A stopped session is not
+// in it.
+func Archived(cfg *config.Config) map[string]bool {
+	out := map[string]bool{}
+	for _, path := range recordFiles(cfg) {
+		r, ok := readRecord(path)
+		if !ok || !r.IsArchived {
+			continue
+		}
+		for _, id := range append(r.PriorCLISessionIDs, r.CLISessionID, r.SessionID) {
+			if id != "" {
+				out[id] = true
+			}
+		}
+	}
+	return out
+}
+
 // StoppedRecords returns the unarchived desktop records active since since
 // whose session runs no CLI (paused or closed), most recently active first.
 func StoppedRecords(cfg *config.Config, running []*Session, since time.Time) []*Record {
@@ -488,29 +545,33 @@ var shells = map[string]bool{"zsh": true, "bash": true, "sh": true, "dash": true
 // each: `devctl pr merge …`, `sleep 1500`, `memcap -- …`.
 func toolCommands(t *proc.Table, tree []*proc.Process, now time.Time) []Command {
 	var out []Command
-	var descend func(*proc.Process)
-	descend = func(p *proc.Process) {
-		for _, c := range t.Children(p.PID) {
-			if c.PID == os.Getpid() {
-				continue // this beekeeper call
-			}
-			if shells[c.Comm] {
-				descend(c)
-				continue
-			}
-			cmd := Command{PID: c.PID, Args: c.Cmdline(), Elapsed: c.Elapsed(now).Round(time.Second)}
-			if c.Comm == "sleep" && len(c.Args) > 1 {
-				if d, ok := sleepDuration(c.Args[1:]); ok && d > cmd.Elapsed {
-					cmd.Remaining = (d - cmd.Elapsed).Round(time.Second)
-				}
-			}
-			out = append(out, cmd)
-		}
-	}
 	for _, p := range tree {
 		if shells[p.Comm] && strings.Contains(p.Cmdline(), "shell-snapshots/snapshot-") && !isToolShellChild(t, p) {
-			descend(p)
+			out = append(out, shellCommands(t, p, now)...)
 		}
+	}
+	return out
+}
+
+// shellCommands reports the first non-shell process under each branch of
+// the shell sh.
+func shellCommands(t *proc.Table, sh *proc.Process, now time.Time) []Command {
+	var out []Command
+	for _, c := range t.Children(sh.PID) {
+		if c.PID == os.Getpid() {
+			continue // this beekeeper call
+		}
+		if shells[c.Comm] {
+			out = append(out, shellCommands(t, c, now)...)
+			continue
+		}
+		cmd := Command{PID: c.PID, Args: c.Cmdline(), Elapsed: c.Elapsed(now).Round(time.Second)}
+		if c.Comm == "sleep" && len(c.Args) > 1 {
+			if d, ok := sleepDuration(c.Args[1:]); ok && d > cmd.Elapsed {
+				cmd.Remaining = (d - cmd.Elapsed).Round(time.Second)
+			}
+		}
+		out = append(out, cmd)
 	}
 	return out
 }

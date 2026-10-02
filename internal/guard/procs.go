@@ -16,7 +16,7 @@ import (
 
 var procSafe = "  beekeeper ps [name|pid…]   (PID, parent, age, CPU, memory and the command line masked)\n" +
 	"  ps -eo pid,ppid,etime,time,rss,comm\n" +
-	"  pgrep -l <name>   (pgrep -f <pattern> prints PIDs only)\n" +
+	"  pgrep -l <name>   (pgrep -f <pattern> prints PIDs only, pgrep -c a count)\n" +
 	"  docker inspect --format '{{.Name}} {{.State.Status}}' <container>"
 
 var (
@@ -78,7 +78,7 @@ func procLeak(name string, args []string) *leak {
 // procFileLeak returns the leak when the simple command reads a process's
 // command line or environment under /proc.
 func procFileLeak(words []string) *leak {
-	if len(words) == 0 || procReaders[path.Base(words[0])] || hashes[path.Base(words[0])] {
+	if len(words) == 0 || procReaders[path.Base(words[0])] {
 		return nil
 	}
 	for _, w := range words {

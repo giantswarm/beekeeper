@@ -82,6 +82,39 @@ func TestNextFreeSkipsOwnedItems(t *testing.T) {
 	}
 }
 
+func TestNextFreeHoldsAnEpicsSubIssuesToItsOwners(t *testing.T) {
+	listed := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	me := state.Party{Session: "me", Name: "Me"}
+	running := state.Party{Session: "s1", Name: "Worker one"}
+	alive := func(p state.Party) bool { return p.Is(running) || p.Is(me) }
+	st := &state.State{
+		Records: []state.Record{
+			{Session: running, Issue: "o/r#20", At: listed.Add(-time.Hour)},
+			{Session: running, Issue: "o/r#21", At: listed.Add(-time.Hour)},
+		},
+		Notes: []state.Note{{ID: 704, For: "Pat", Pinned: true, Text: "skip the slices of https://github.com/o/r/issues/10"}},
+	}
+	sub := func(n int, epic string) board.Candidate {
+		return board.Candidate{Item: board.Item{Ref: fmt.Sprintf("o/r#%d", n)}, Step: "In Progress", Epic: epic}
+	}
+	// A sub-issue's own record names it ahead of its epic's.
+	cands := []board.Candidate{sub(11, "o/r#10"), sub(12, "O/R#10"), sub(21, "o/r#20"), sub(22, "o/r#20"), sub(31, "o/r#30")}
+	res := nextFree(st, cands, me, alive, listed)
+	var got []string
+	for _, c := range res.Skipped {
+		got = append(got, c.Ref+": "+c.Skip)
+	}
+	want := []string{
+		`o/r#11: note #704 (waits on Pat), on epic o/r#10`,
+		`o/r#12: note #704 (waits on Pat), on epic O/R#10`,
+		`o/r#21: served by "Worker one"`,
+		`o/r#22: served by "Worker one", on epic o/r#20`,
+	}
+	if !slices.Equal(got, want) || res.Pick == nil || res.Pick.Ref != "o/r#31" {
+		t.Errorf("pick %v, skipped:\n%s\nwant o/r#31 after:\n%s", res.Pick, strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
 func TestConcurrentClaimsNeverGetTheSameItem(t *testing.T) {
 	store, err := state.Open(t.TempDir())
 	if err != nil {
@@ -126,5 +159,39 @@ func TestConcurrentClaimsNeverGetTheSameItem(t *testing.T) {
 	mine := slices.DeleteFunc(slices.Clone(st.Records), func(r state.Record) bool { return !r.Session.Is(me) })
 	if len(mine) != 1 || mine[0].Issue != res.Pick.Ref || mine[0].Waits != "the review" || len(st.Records) != len(cands) {
 		t.Errorf("records after the re-claim %+v", st.Records)
+	}
+}
+
+func TestClaimTakesNoSkippedItem(t *testing.T) {
+	store, err := state.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cands := boardCandidates(1)
+	cands[0].Skip = "created 2026-06-24: Backlog takes items created within 90 days"
+	me := state.Party{Session: "s1", Name: "Board pull"}
+	res, err := claimNext(store, cands, me, func(state.Party) bool { return true }, time.Now(), "")
+	st, _ := store.Read()
+	if err != nil || res.Pick != nil || res.Claimed || len(st.Records) != 0 || len(res.Skipped) != 1 {
+		t.Errorf("claim over a skipped item: %+v, %v; records %+v", res, err, st.Records)
+	}
+}
+
+func TestFindRecordTakesASessionOrTheIssueItServes(t *testing.T) {
+	const own, shared, pull = "o/s#1", "o/s#2", "Pull two"
+	records := []state.Record{
+		{Session: state.Party{Session: "s1", Name: "Pull one"}, Issue: own},
+		{Session: state.Party{Session: "s2", Name: pull}, Issue: shared},
+		{Session: state.Party{Session: "s3", Name: "Review"}, Issue: shared},
+	}
+	for q, want := range map[string]int{"O/S#1": 0, pull: 1, "review": 2} {
+		if i, err := findRecord(records, q); err != nil || i != want {
+			t.Errorf("findRecord(%q) = %d, %v; want %d", q, i, err, want)
+		}
+	}
+	for q, want := range map[string]string{"o/s#3": "no session record serves o/s#3", shared: shared + ` is served by "` + pull + `", "Review": name the session`} {
+		if _, err := findRecord(records, q); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("findRecord(%q) = %v, want %q", q, err, want)
+		}
 	}
 }

@@ -4,8 +4,9 @@
 // lanes, the supervisor and guide, the agents, notes and timers, the
 // GitHub budget, the installations' alerts and the event log.
 //
-// It reads only: it takes no lease and lifts no hold — those stay with the
-// commands, whose exit codes the sessions gate on. The data comes through
+// Besides the person's messages to a session it reads only: it takes no
+// lease and lifts no hold — those stay with the commands, whose exit codes
+// the sessions gate on. The data comes through
 // a Source, so the model is testable without a machine; cmd supplies one
 // built from the same view code the commands print.
 package tui
@@ -27,6 +28,15 @@ type Source interface {
 	// said and what it was told. session is a name, id or PID as in
 	// `beekeeper tail`.
 	Tail(ctx context.Context, session string, turns int) ([]Turn, error)
+	// Send delivers the person's message to one session and says where
+	// it went; a session that takes no message is an error.
+	Send(ctx context.Context, session, text string) (string, error)
+	// TakeOver brings the approvals of the session with id to this
+	// screen; Release hands them back to its own window.
+	TakeOver(ctx context.Context, id string) error
+	Release(ctx context.Context, id string) error
+	// Answer allows or denies the held request of the session with id.
+	Answer(ctx context.Context, id, request string, allow bool) error
 }
 
 // Options tunes the run.
@@ -41,7 +51,10 @@ func Run(src Source, opts Options) error {
 		opts.Interval = 2 * time.Second
 	}
 	p := tea.NewProgram(newModel(src, opts))
-	_, err := p.Run()
+	final, err := p.Run()
+	if m, ok := final.(*model); ok {
+		m.releaseAll() // a closed screen answers nothing
+	}
 	return err
 }
 
@@ -191,11 +204,18 @@ type Poller struct {
 	Elapsed time.Duration
 }
 
-// Session is one running Claude Code session.
+// Session is one running agent session: Claude Code, or omp.
 type Session struct {
-	PID    int
-	Name   string
-	Role   string
+	PID int
+	// ID is the session id its permission requests carry.
+	ID   string
+	Name string
+	Role string
+	// Harness is "" for Claude Code, "omp" for an omp session.
+	Harness string
+	// State is an omp session's own: busy, idle or ended; "" for Claude
+	// Code, whose state the screen reads off its activity (stateOf).
+	State  string
 	Cwd    string
 	Repo   string
 	Branch string
@@ -232,6 +252,20 @@ type Session struct {
 	// GitHubProcesses are its gh and devctl processes now.
 	GitHubProcesses int
 	Merges          Merges
+	// TakenOver says a screen holds the session's approvals; Approvals
+	// are the requests held for it, oldest first.
+	TakenOver bool
+	Approvals []Approval
+}
+
+// Approval is a permission request a taken-over session waits on.
+type Approval struct {
+	ID string
+	At time.Time
+	// Gist is the call in one line ("Bash: Run the tests"), Detail its
+	// input, a line per field.
+	Gist   string
+	Detail []string
 }
 
 type Counter struct {

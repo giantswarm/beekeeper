@@ -19,7 +19,7 @@ func (a *app) installCmd() *cobra.Command {
 	var binary string
 	c := &cobra.Command{
 		Use:   "install",
-		Short: "Put the hooks, the standby service, the memory guard and a starter config in place",
+		Short: "Put the hooks, the standby service, the keeper, the memory guard and a starter config in place",
 		Long: `Install puts beekeeper in place for this user, with the absolute path of the
 binary it runs from (or --binary):
 
@@ -28,6 +28,9 @@ binary it runs from (or --binary):
     into what is there;
   - the standby service (beekeeper watch --notify --standby): a systemd
     user unit on Linux, a launch agent on macOS, enabled and started;
+  - with systemd and teleport.proxy set, the Teleport login's keeper:
+    beekeeper-teleport.timer, enabled and started, and the service it
+    starts every teleport.every (beekeeper teleport renew --keeper);
   - with systemd, the memory guard sized to the machine's RAM: memcap.slice,
     which beekeeper run's capped commands sit in, and a drop-in for the
     Claude Desktop scope that runs;
@@ -62,7 +65,7 @@ func (a *app) uninstallCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "uninstall",
 		Short: "Remove what install put in place",
-		Long: `Uninstall stops the standby service install started and removes the files,
+		Long: `Uninstall stops the units install started and removes the files,
 directories and hooks install wrote, as install.json in the state directory
 records them; a file changed since install wrote it stays. The config and
 the state stay too, unless --purge.`,
@@ -115,6 +118,9 @@ func (a *app) installEnv(e *install.Env, binary string) error {
 	}
 	if s, err := plat.Machine.DesktopScope(); err == nil && s != nil {
 		e.Spec.DesktopScope = filepath.Base(s.Path)
+	}
+	if a.cfg.Teleport.Enabled() {
+		e.Spec.TeleportEvery = a.cfg.Teleport.Every.Duration
 	}
 	e.Setup = plat.Setup
 	e.Run = runCommand

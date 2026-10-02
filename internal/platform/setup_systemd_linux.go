@@ -13,8 +13,12 @@ import (
 	"github.com/giantswarm/beekeeper/contrib/systemd"
 )
 
-// notifyUnit is the standby service's unit.
-const notifyUnit = "beekeeper-notify.service"
+// The units install writes: the standby service and the Teleport keeper.
+const (
+	notifyUnit          = "beekeeper-notify.service"
+	teleportServiceUnit = "beekeeper-teleport.service"
+	teleportTimerUnit   = "beekeeper-teleport.timer"
+)
 
 // systemctl is the service manager's command.
 const systemctl = "systemctl"
@@ -33,19 +37,23 @@ const (
 // memoryGuard is the desktop scope's drop-in file name.
 const memoryGuard = "50-memory-guard.conf"
 
-// systemdSetup installs systemd user units: the standby service, the slice
-// capped runs sit in, and the desktop scope's memory guard.
+// systemdSetup installs systemd user units: the standby service, the
+// Teleport login's keeper, the slice capped runs sit in, and the desktop
+// scope's memory guard.
 type systemdSetup struct{}
 
 func (systemdSetup) Available() bool { return userSystemd() }
 
 func (systemdSetup) Files(s SetupSpec) ([]File, []string) {
 	dir := filepath.Join(s.ConfigDir, "systemd", "user")
-	files := []File{{
-		Path:    filepath.Join(dir, notifyUnit),
-		Content: []byte(strings.ReplaceAll(systemd.NotifyService, systemd.NotifyServiceExe, s.Exe)),
-		Service: true,
-	}}
+	exe := func(unit string) []byte { return []byte(strings.ReplaceAll(unit, systemd.NotifyServiceExe, s.Exe)) }
+	files := []File{{Path: filepath.Join(dir, notifyUnit), Content: exe(systemd.NotifyService), Service: true}}
+	if s.TeleportEvery > 0 {
+		every := "OnUnitActiveSec=" + strconv.Itoa(int(s.TeleportEvery.Seconds())) + "s"
+		files = append(files,
+			File{Path: filepath.Join(dir, teleportServiceUnit), Content: exe(systemd.TeleportService)},
+			File{Path: filepath.Join(dir, teleportTimerUnit), Content: []byte(strings.Replace(systemd.TeleportTimer, systemd.TeleportTimerEvery, every, 1)), Service: true})
+	}
 	if s.RAMMiB <= 0 {
 		return files, []string{"memory guard: the machine's RAM is unreadable"}
 	}

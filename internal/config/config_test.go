@@ -22,8 +22,11 @@ func TestLoadDefaults(t *testing.T) {
 		c.Watch.Interval.Duration != 30*time.Second || c.Watch.LoadMax != 0 || c.Watch.LoadLimit(24) != 36 || c.Supervisor.RelayAt != 400_000 || c.Guide.RelayAt != 150_000 {
 		t.Errorf("defaults = %+v", c)
 	}
-	if len(c.Notify.Kinds) != 4 || c.Notify.Policy().Quiet != nil {
+	if len(c.Notify.Kinds) != 5 || c.Notify.Policy().Quiet != nil {
 		t.Errorf("notify defaults = %+v", c.Notify)
+	}
+	if al := c.Alerts; al.PageSeverity != "page" || al.OwnerGrace.Duration != 15*time.Minute {
+		t.Errorf("page owner defaults = %q %s", al.PageSeverity, al.OwnerGrace)
 	}
 	if w := c.Watch; w.ToolProcsMax != 1000 || len(w.Tools) != 6 || c.Desktop.TypingQuiet.Duration != 30*time.Second {
 		t.Errorf("LOAD and typing defaults = %d %v %s", w.ToolProcsMax, w.Tools, c.Desktop.TypingQuiet)
@@ -123,28 +126,30 @@ func TestLabs(t *testing.T) {
 
 func TestLoadRejects(t *testing.T) {
 	for name, raw := range map[string]string{
-		"browser as resource": "resources: [browser]",
-		"path as resource":    "resources: [../x]",
-		"lab not a resource":  "resources: [kind-1]\nlabs: {kind-2: kind-2}",
-		"lab without cluster": "resources: [kind-1]\nlabs: {kind-1: \"\"}",
-		"lab cluster twice":   "resources: [kind-1, kind-2]\nlabs: {kind-1: kind, kind-2: kind}",
-		"nameless install":    "alerts: {installations: [{context: x}]}",
-		"unknown floor":       "alerts: {installations: [{name: x, floor: low}]}",
-		"flapping at once":    "alerts: {flap: {changes: 1}}",
-		"bad duration":        "grantTTL: soon",
-		"skill and file":      "supervisor: {skill: supervise, instructions: /x.md}",
-		"unknown notify kind": "notify: {kinds: [due, alerts]}",
-		"machine notify kind": "notify: {kinds: [due, oom-line]}",
-		"machine urgency":     "notify: {urgency: {oom-kill: critical}}",
-		"unknown urgency":     "notify: {urgency: {due: urgent}}",
-		"urgency of no kind":  "notify: {urgency: {sessions: low}}",
-		"bad quiet hours":     "notify: {quietHours: 22-7}",
-		"bad relayAt":         "supervisor: {relayAt: 400kb}",
-		"negative relayAt":    "supervisor: {relayAt: -1}",
-		"bad store glob":      "outbound: {storeDeny: [{vault: \"[\"}]}",
-		"bad outbound path":   "outbound: {paths: [\"[\"]}",
-		"nameless board step": "board: {order: [{status: [backlog]}]}",
-		"search with fields":  "board: {order: [{name: q, search: \"repo:o/r\", status: [backlog]}]}",
+		"browser as resource":  "resources: [browser]",
+		"path as resource":     "resources: [../x]",
+		"lab not a resource":   "resources: [kind-1]\nlabs: {kind-2: kind-2}",
+		"lab without cluster":  "resources: [kind-1]\nlabs: {kind-1: \"\"}",
+		"lab cluster twice":    "resources: [kind-1, kind-2]\nlabs: {kind-1: kind, kind-2: kind}",
+		"nameless install":     "alerts: {installations: [{context: x}]}",
+		"unknown floor":        "alerts: {installations: [{name: x, floor: low}]}",
+		"unknown pageSeverity": "alerts: {pageSeverity: urgent}",
+		"short ownerGrace":     "alerts: {ownerGrace: 10s}",
+		"flapping at once":     "alerts: {flap: {changes: 1}}",
+		"bad duration":         "grantTTL: soon",
+		"skill and file":       "supervisor: {skill: supervise, instructions: /x.md}",
+		"unknown notify kind":  "notify: {kinds: [due, alerts]}",
+		"machine notify kind":  "notify: {kinds: [due, oom-line]}",
+		"machine urgency":      "notify: {urgency: {oom-kill: critical}}",
+		"unknown urgency":      "notify: {urgency: {due: urgent}}",
+		"urgency of no kind":   "notify: {urgency: {sessions: low}}",
+		"bad quiet hours":      "notify: {quietHours: 22-7}",
+		"bad relayAt":          "supervisor: {relayAt: 400kb}",
+		"negative relayAt":     "supervisor: {relayAt: -1}",
+		"bad store glob":       "outbound: {storeDeny: [{vault: \"[\"}]}",
+		"bad outbound path":    "outbound: {paths: [\"[\"]}",
+		"nameless board step":  "board: {order: [{status: [backlog]}]}",
+		"search with fields":   "board: {order: [{name: q, search: \"repo:o/r\", status: [backlog]}]}",
 	} {
 		p := filepath.Join(t.TempDir(), "c.yaml")
 		if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
@@ -338,6 +343,10 @@ func TestExampleConfig(t *testing.T) {
 		c.Board.Project != 12 || len(c.Board.Order) != 8 || !c.Board.Order[1].SubIssues || c.Board.StaleAfter.Hours() != 8760 {
 		t.Errorf("config = %+v", c)
 	}
+	if tp := c.Teleport; !tp.Enabled() || tp.Proxy != "login.example.com:443" || tp.Auth != "github" || tp.Tsh != "tsh" ||
+		tp.RenewBefore.Duration != 90*time.Minute || tp.WarnBefore.Duration != time.Hour || tp.Every.Duration != 10*time.Minute {
+		t.Errorf("teleport %+v", tp)
+	}
 	if want := []alerts.Quiet{{Cluster: "t-*"}, OtherTeamsNotify}; !slices.Equal(c.Alerts.Quiet, want) ||
 		!slices.Contains(c.Alerts.Ignore, "InhibitionOutsideWorkingHours") {
 		t.Errorf("alerts quiet %+v, ignore %q", c.Alerts.Quiet, c.Alerts.Ignore)
@@ -389,5 +398,24 @@ func TestOutbound(t *testing.T) {
 	}
 	if len(o.SweepRoots) != 1 || o.SweepRoots[0] != home || o.SweepDepth != 5 {
 		t.Errorf("sweep defaults: roots %q depth %d, want the home directory 5 deep", o.SweepRoots, o.SweepDepth)
+	}
+}
+
+func TestAgentShell(t *testing.T) {
+	c := &Config{}
+	if err := c.defaults(); err != nil {
+		t.Fatal(err)
+	}
+	if sh := c.Agents.Shell; !slices.Equal(sh.Unalias, DefaultUnalias) || sh.Globs != GlobsLiteral {
+		t.Errorf("defaults: %+v", sh)
+	}
+	for _, bad := range []AgentShell{{Globs: "nullglob"}, {Unalias: []string{"grep; rm -rf ~"}}} {
+		if err := (&Config{Agents: Agents{Shell: bad}}).validate(); err == nil {
+			t.Errorf("%+v: want an error", bad)
+		}
+	}
+	none := &Config{Agents: Agents{Shell: AgentShell{Unalias: []string{}, Globs: GlobsShell}}}
+	if err := none.defaults(); err != nil || len(none.Agents.Shell.Unalias) != 0 || none.Agents.Shell.Globs != GlobsShell {
+		t.Errorf("an empty list and shell stay: %+v %v", none.Agents.Shell, err)
 	}
 }

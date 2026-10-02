@@ -19,6 +19,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -61,11 +62,15 @@ type Config struct {
 	MaxKindClusters int `yaml:"maxKindClusters"`
 
 	Kube Kube `yaml:"kube"`
+	// Teleport is the login the kube contexts reach the installations
+	// through, and its keeper.
+	Teleport Teleport `yaml:"teleport"`
 
 	GitHub   GitHub   `yaml:"github"`
 	Watch    Watch    `yaml:"watch"`
 	Overlaps Overlaps `yaml:"overlaps"`
 	Claude   Claude   `yaml:"claude"`
+	Omp      Omp      `yaml:"omp"`
 	Desktop  Desktop  `yaml:"desktop"`
 	Memcap   Memcap   `yaml:"memcap"`
 	Lanes    []Lane   `yaml:"lanes"`
@@ -94,6 +99,9 @@ type Config struct {
 	// Outbound is what the hook refuses to let leave the machine and where
 	// the watch looks for credentials left exposed on disk.
 	Outbound Outbound `yaml:"outbound"`
+	// Scan is where the transcript value scanner's index takes its values
+	// from.
+	Scan Scan `yaml:"scan"`
 	// Board is the project board `beekeeper board` picks work from.
 	Board Board `yaml:"board"`
 	// Plans are the repositories whose pull requests a note for a person
@@ -182,6 +190,22 @@ type Outbound struct {
 	SweepDepth int      `yaml:"sweepDepth"`
 }
 
+// Scan configures the transcript value scanner: beekeeper scan index
+// fingerprints the values of these sources into the index under the state
+// directory (scan/), which the PostToolUse hook and beekeeper scan sweep
+// match against.
+type Scan struct {
+	// SOPS are globs (~/ allowed) of SOPS files whose values are indexed,
+	// decrypted with the sops binary in beekeeper's own process.
+	SOPS []string `yaml:"sops"`
+	// Vaults are 1Password vaults whose concealed fields are indexed, read
+	// with the op binary.
+	Vaults []string `yaml:"vaults"`
+	// MinLength is the shortest value indexed (default 12): shorter ones
+	// would match ordinary output.
+	MinLength int `yaml:"minLength"`
+}
+
 // StoreRule refuses a secret-store write (op item or document create and
 // edit, vault kv put and patch) whose vault and item match its globs
 // (case-insensitive); an empty glob matches any, as does a write that names
@@ -203,6 +227,45 @@ type Kube struct {
 	// empty, an installation's context is its name or the one ending in
 	// @<name>.
 	ContextTemplate string `yaml:"contextTemplate"`
+}
+
+// Teleport configures the Teleport login's keeper: a periodic user unit
+// that renews the SSO login before it expires, under the browser lease.
+type Teleport struct {
+	// Proxy is tsh login's --proxy (login.example.com:443); empty, no
+	// keeper runs and the watch reads no login.
+	Proxy string `yaml:"proxy"`
+	// Auth is tsh login's --auth, the SSO connector; empty, the cluster's
+	// default.
+	Auth string `yaml:"auth"`
+	// Tsh is the tsh binary (default tsh).
+	Tsh string `yaml:"tsh"`
+	// Home is the profile directory the kube contexts' tsh reads (default
+	// $TELEPORT_HOME, else ~/.tsh).
+	Home string `yaml:"home"`
+	// RenewBefore is how long before the expiry the keeper renews (default
+	// 90m); WarnBefore is when the watch says the login is about to expire
+	// (default 1h), at most RenewBefore.
+	RenewBefore Duration `yaml:"renewBefore"`
+	WarnBefore  Duration `yaml:"warnBefore"`
+	// LoginTimeout bounds one login, the browser's round trip included
+	// (default 3m).
+	LoginTimeout Duration `yaml:"loginTimeout"`
+	// Every is how often the keeper's timer checks the expiry (default 10m).
+	Every Duration `yaml:"every"`
+}
+
+// Enabled reports whether a keeper is configured.
+func (t Teleport) Enabled() bool { return t.Proxy != "" }
+
+func (t *Teleport) defaults(home string) {
+	setStr(&t.Tsh, "tsh")
+	setStr(&t.Home, os.Getenv("TELEPORT_HOME"))
+	setStr(&t.Home, filepath.Join(home, ".tsh"))
+	setDur(&t.RenewBefore, 90*time.Minute)
+	setDur(&t.WarnBefore, time.Hour)
+	setDur(&t.LoginTimeout, 3*time.Minute)
+	setDur(&t.Every, 10*time.Minute)
 }
 
 // Context is the templated context of installation, "" without a template.
@@ -253,7 +316,38 @@ type Agents struct {
 	// StaleAfter is how long an idle agent whose CLI no longer runs stays on
 	// the roster before the doctor takes it off (24h).
 	StaleAfter Duration `yaml:"staleAfter"`
+	// Shell is the prelude of every agent shell (beekeeper hook
+	// sessionstart).
+	Shell AgentShell `yaml:"shell"`
 }
+
+// AgentShell configures the prelude Claude Code runs before each Bash
+// command of a session: the person's interactive shell setup (aliases, the
+// harness's own tool shadows, zsh's nomatch) breaks the commands agents
+// write for the plain tools.
+type AgentShell struct {
+	// Unalias are the commands whose alias or shell function the prelude
+	// removes, so the name runs the tool on PATH (default: grep, find, ls,
+	// cp, mv, rm; an empty list removes none).
+	Unalias []string `yaml:"unalias"`
+	// Globs is what an unmatched glob does: GlobsLiteral (the default)
+	// passes it on as written, GlobsShell leaves the shell's own behaviour
+	// (zsh: "no matches found", the command does not run).
+	Globs string `yaml:"globs"`
+}
+
+// The values of agents.shell.globs.
+const (
+	GlobsLiteral = "literal"
+	GlobsShell   = "shell"
+)
+
+// DefaultUnalias are the commands an agent shell runs unshadowed by default.
+var DefaultUnalias = []string{"grep", "find", "ls", "cp", "mv", "rm"}
+
+// commandName is what agents.shell.unalias takes: a name, nothing a shell
+// would read as more.
+var commandName = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.+-]*$`)
 
 // Doctor configures the known faults the doctor probes and remedies.
 type Doctor struct {
@@ -280,6 +374,9 @@ type Guide struct {
 	// to case. Its queue and feed show only that person's notes; empty,
 	// they show every note filed --for anyone.
 	Person string `yaml:"person"`
+	// WaitingTTL is how long a stopped session that waits on the person
+	// stays in the queue and the feed; older ones fold into one line.
+	WaitingTTL Duration `yaml:"waitingTTL"`
 }
 
 // Supervisor configures the supervisor: its role and the scope it
@@ -425,6 +522,12 @@ type Alerts struct {
 	// notify alert ({severity: notify}), else none. An alert back after a
 	// reading that missed it, with its old start, is quiet too.
 	Quiet []alerts.Quiet `yaml:"quiet"`
+	// PageSeverity is the severity that pages the on-call person (default
+	// page): a firing alert at it that no session owns (alerts own) for
+	// OwnerGrace is a PAGE UNOWNED line, again every OwnerGrace.
+	PageSeverity string `yaml:"pageSeverity"`
+	// OwnerGrace is how long a page may go unowned (default 15m).
+	OwnerGrace Duration `yaml:"ownerGrace"`
 }
 
 // Flap holds back an alert that changes too often: its Changes-th NEW or
@@ -763,6 +866,17 @@ type Claude struct {
 	DesktopLog string `yaml:"desktopLog"`
 }
 
+// Omp locates what omp (oh-my-pi), the second local harness, keeps on disk.
+type Omp struct {
+	// SessionsDir holds omp's session files, one folder per working
+	// directory.
+	SessionsDir string `yaml:"sessionsDir"`
+	// Model is the model `agents start --harness omp` starts an agent on
+	// without --model, an exact selector omp lists ("ollama/qwen3.5:9b");
+	// empty: such a start is refused.
+	Model string `yaml:"model"`
+}
+
 // Desktop is how beekeeper shares the person's desktop.
 type Desktop struct {
 	// TypingQuiet is how long the person's keyboards and pointers stay
@@ -888,14 +1002,24 @@ func (c *Config) defaults() error {
 		c.Guide.RelayAt = 150_000
 	}
 	c.Guide.defaults(home)
+	setDur(&c.Guide.WaitingTTL, 2*time.Hour)
 	if c.Agents.RelayAt == 0 {
 		c.Agents.RelayAt = c.Supervisor.RelayAt
 	}
 	setDur(&c.Agents.NoteWait, 3*time.Minute)
 	setDur(&c.Agents.StaleAfter, 24*time.Hour)
+	if c.Agents.Shell.Unalias == nil {
+		c.Agents.Shell.Unalias = DefaultUnalias
+	}
+	setStr(&c.Agents.Shell.Globs, GlobsLiteral)
 	c.Reporter.defaults(home, c.Guide.Person)
 	c.Outbound.defaults(home)
+	setInt(&c.Scan.MinLength, 12)
+	for i := range c.Scan.SOPS {
+		c.Scan.SOPS[i] = homePath(home, c.Scan.SOPS[i])
+	}
 	setStr(&c.Plans.Check, DefaultPlansCheck)
+	c.Teleport.defaults(home)
 	setStr(&c.Shell, os.Getenv("SHELL"))
 	setStr(&c.Shell, "sh")
 
@@ -937,6 +1061,7 @@ func (c *Config) defaults() error {
 	setStr(&c.Claude.ProjectsDir, filepath.Join(home, ".claude", "projects"))
 	setStr(&c.Claude.DesktopApp, DefaultDesktopApp)
 	setStr(&c.Claude.SessionsDir, filepath.Join(home, ".claude", "sessions"))
+	setStr(&c.Omp.SessionsDir, filepath.Join(home, ".omp", "agent", "sessions"))
 	cfg, err := os.UserConfigDir()
 	if err != nil {
 		return err
@@ -986,6 +1111,8 @@ func (c *Config) defaults() error {
 	setStr(&al.Kubectl, "kubectl")
 	setInt(&al.Flap.Changes, 4)
 	setDur(&al.Flap.Window, time.Hour)
+	setStr(&al.PageSeverity, alerts.Page)
+	setDur(&al.OwnerGrace, 15*time.Minute)
 	if c.Notify.Kinds == nil {
 		c.Notify.Kinds = slices.Clone(notify.Kinds)
 	}
@@ -1031,6 +1158,14 @@ func (r *Reporter) defaults(home, person string) {
 }
 
 func (c *Config) validate() error {
+	if g := c.Agents.Shell.Globs; g != "" && g != GlobsLiteral && g != GlobsShell {
+		return fmt.Errorf("agents.shell.globs: %q: want %s or %s", g, GlobsLiteral, GlobsShell)
+	}
+	for _, n := range c.Agents.Shell.Unalias {
+		if !commandName.MatchString(n) {
+			return fmt.Errorf("agents.shell.unalias: %q is no command name", n)
+		}
+	}
 	for i, r := range c.Outbound.StoreDeny {
 		for _, g := range []string{r.Vault, r.Item} {
 			if _, err := filepath.Match(g, ""); err != nil {
@@ -1065,6 +1200,9 @@ func (c *Config) validate() error {
 			return fmt.Errorf("board.order[%d] %q: a search step matches no board fields", i, st.Name)
 		}
 	}
+	if t := c.Teleport; t.WarnBefore.Duration > t.RenewBefore.Duration {
+		return fmt.Errorf("teleport: warnBefore %s is past renewBefore %s: the watch would warn before the keeper renews", t.WarnBefore.Duration, t.RenewBefore.Duration)
+	}
 	if t := c.Kube.ContextTemplate; t != "" && !strings.Contains(t, "{installation}") {
 		return fmt.Errorf("kube.contextTemplate: %q has no {installation}", t)
 	}
@@ -1083,6 +1221,12 @@ func (c *Config) validate() error {
 	}
 	if n := c.Alerts.Flap.Changes; n < 0 || n == 1 {
 		return fmt.Errorf("alerts.flap.changes: %d; an alert is flapping from its second change on at the earliest", n)
+	}
+	if p := c.Alerts.PageSeverity; p != "" && !slices.Contains(alerts.Severities, p) {
+		return fmt.Errorf("alerts.pageSeverity: %q is none of %s", p, strings.Join(alerts.Severities, ", "))
+	}
+	if g := c.Alerts.OwnerGrace.Duration; g != 0 && g < time.Minute {
+		return fmt.Errorf("alerts.ownerGrace: %s; a page has at least a minute to be owned", g)
 	}
 	if err := c.Notify.validate(); err != nil {
 		return err

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -191,7 +192,107 @@ const stewardPreamble = "beekeeper, the machine's session coordinator, asks this
 // retitleRequest is the message that has a steward set the desktop title of
 // session (its local_ id, or "self").
 func retitleRequest(session, name string) string {
-	return fmt.Sprintf(stewardPreamble+"the desktop lost the title of a worker beekeeper started. Call mcp__ccd_session_mgmt__set_session_title once with session_id %q and title %q (its roster name), then end the turn without another tool call and without a reply.", session, name)
+	return restoreRequest(session, name, "")
+}
+
+// The desktop's session tools a steward sets a record's title and model with.
+const (
+	setTitleTool = "mcp__ccd_session_mgmt__set_session_title"
+	setModelTool = "mcp__ccd_session_mgmt__set_session_model"
+)
+
+// restoreRequest is the message that has a steward set what the desktop
+// lost of a worker's session (its local_ id, or "self" for the title only):
+// the title, unless empty, and the model, unless empty. The desktop refuses
+// a session's switch of its own model, so a model goes to another session.
+func restoreRequest(session, title, model string) string {
+	var calls, lost []string
+	if title != "" {
+		lost = append(lost, "title")
+		calls = append(calls, fmt.Sprintf("%s once with session_id %q and title %q (its roster name)", setTitleTool, session, title))
+	}
+	if model != "" {
+		lost = append(lost, "model")
+		calls = append(calls, fmt.Sprintf("%s with session_id %q and model %q (the model its first turn ran on; when the result lists the offered ids instead, once more with the id it lists for that model)", setModelTool, session, model))
+	}
+	return fmt.Sprintf(stewardPreamble+"the desktop lost the %s of a worker beekeeper started. Call %s, then end the turn without another tool call and without a reply.", strings.Join(lost, " and "), strings.Join(calls, ", then "))
+}
+
+// The desktop's import of a start, handling its link twice, often keeps the
+// record of the import that lost the transcript's read: no title and no
+// model, and a session without a model runs every desktop turn on the
+// desktop's default instead of the model its first turn ran on.
+
+// keepImport gives the desktop record of a started session, once imported,
+// the title (its name) and the model (its first turn's) the import dropped,
+// through a steward other than the session itself, and puts the record as
+// the desktop keeps it then into sa. It returns what it found or did, one
+// line, empty when the import kept both.
+func (a *app) keepImport(ctx context.Context, id, name string, sa *startedAgent) string {
+	host := "local_" + id
+	record := func() claude.Record {
+		if r, ok := claude.ReadRecord(a.cfg, host); ok {
+			return *r
+		}
+		return claude.Record{}
+	}
+	var model string
+	if m, _ := filepath.Glob(filepath.Join(a.cfg.Claude.ProjectsDir, "*", id+".jsonl")); len(m) > 0 {
+		model, _ = claude.Model(m[0])
+	}
+	find := func(_ context.Context, tried []string) (steward, error) {
+		return a.findSteward(host, append(tried, host))
+	}
+	line, err := restoreImport(ctx, host, name, model, record, find, a.peerSend, retitleWait)
+	if err != nil {
+		line = err.Error()
+	}
+	r := record()
+	sa.title, sa.model, sa.chrome = r.Title, r.Model, r.ChromePermissionMode
+	return line
+}
+
+// restoreImport is keepImport's decision: record reads the desktop's record
+// of host, name and model are what it should hold, find picks the steward,
+// send delivers the request. A record holding a model holds the one the
+// steward set: the desktop records the id its picker offers, which can
+// differ from the transcript's.
+func restoreImport(ctx context.Context, host, name, model string, record func() claude.Record, find stewardFinder,
+	send func(ctx context.Context, to, msg string) error, wait time.Duration,
+) (string, error) {
+	lost := func() (title, mdl string) {
+		r := record()
+		if r.Title != name {
+			title = name
+		}
+		if r.Model == "" {
+			mdl = model
+		}
+		return title, mdl
+	}
+	title, mdl := lost()
+	if title == "" && mdl == "" {
+		return "", nil
+	}
+	var what []string
+	if title != "" {
+		what = append(what, "title")
+	}
+	if mdl != "" {
+		what = append(what, "model "+mdl)
+	}
+	dropped := strings.Join(what, " and ")
+	msg := func(steward) string { return restoreRequest(host, title, mdl) }
+	done := func() bool { t, m := lost(); return t == "" && m == "" }
+	s, err := delegate(ctx, find, msg, done, send, wait)
+	if err != nil {
+		return "", fmt.Errorf("the desktop's import dropped its %s: %w", dropped, err)
+	}
+	them := "it"
+	if len(what) > 1 {
+		them = "them"
+	}
+	return fmt.Sprintf("the desktop's import dropped its %s: %s set %s", dropped, s.who(host), them), nil
 }
 
 // archiveRequest is the message that has steward s archive the desktop
@@ -232,7 +333,7 @@ func (a *app) findSteward(target string, tried []string) (steward, error) {
 // pickSteward picks the steward for target: an idle desktop CLI (its
 // transcript quiet for stewardQuiet, no tool command, no headless turn) of a
 // session beekeeper started, never the operator's own, the supervisor's or
-// the guide's, nor a roster agent's with a task, nor one of
+// the guide's, nor a handed-over one, nor a roster agent's with a task, nor one of
 // the hosts tried. The target's own CLI goes first, then a finished worker
 // off the roster (a roster agent's brief can forbid the call), each the one
 // idle longest. sock is the peer socket of a CLI, "" for none.
@@ -267,17 +368,34 @@ func pickSteward(st *state.State, sessions []*claude.Session, t *proc.Table, tar
 // stewards reports whether s may steward a request about target.
 func stewards(st *state.State, t *proc.Table, s *claude.Session, target string, now time.Time) bool {
 	p := t.ByPID[s.PID]
+	i := slices.IndexFunc(st.Starts, func(x state.Start) bool { return x.Session == s.ID })
 	switch {
 	case s.HostID == "" || s.Archived || p == nil || !slices.Contains(p.Args, permissionPromptTool):
 		return false // not the desktop's CLI: no desktop session tools
-	case !slices.ContainsFunc(st.Starts, func(x state.Start) bool { return x.Session == s.ID }):
+	case i < 0:
 		return false // the operator's own session
+	case handedOver(st, st.Starts[i]):
+		return false
 	case keepsRole(st, s.Party()):
 		return false
 	case s.HostID != target && slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Task != "" && ag.Is(s.Party()) }):
 		return false // busy with its own task
 	}
 	return len(s.Commands) == 0 && headlessTurn(t, s.ID) == "" && now.Sub(s.LastActive) >= stewardQuiet
+}
+
+// handedOver reports whether the session of start was handed over: a later
+// start, or another session on the roster, carries its name. Its desktop
+// CLI is a leftover the hand-over ends, and a request would have the desktop
+// run a turn of it, and start its CLI again, beside the follow-up under the
+// same name.
+func handedOver(st *state.State, start state.Start) bool {
+	if start.Name == "" {
+		return false
+	}
+	other := func(p state.Party) bool { return p.Name == start.Name && p.Session != start.Session }
+	return slices.ContainsFunc(st.Starts, func(x state.Start) bool { return other(x.Party) && x.At.After(start.At) }) ||
+		slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return other(ag.Party) })
 }
 
 // keepsRole reports whether p holds or held the supervisor's or the guide's
@@ -350,25 +468,40 @@ const (
 	archiveEach = 5 * time.Second
 )
 
-// archiveDesktops archives the desktop sessions of agents just taken off
-// the roster by the command by, through one steward's turn: only sessions
-// beekeeper started, holding no role and running no turn. It returns a line
-// per agent saying what it did or why not.
-func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []state.Party, by string) []string {
-	lines := make([]string, len(agents))
+// archiveOutcome is what archiving the desktop session of agent did, said
+// by line. host is the desktop session left to archive later, "" when it
+// is archived or never to be; asked says a steward was asked for it in vain.
+type archiveOutcome struct {
+	agent state.Party
+	line  string
+	host  string
+	asked bool
+}
+
+// archiveDesktops archives the desktop sessions of agents taken off the
+// roster by the command by, through one steward's turn: only sessions
+// beekeeper started, holding no role and running no turn. It returns an
+// outcome per agent.
+func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []state.Party, by string) []archiveOutcome {
+	out := make([]archiveOutcome, len(agents))
 	var hosts []string
 	at := map[string]int{}
 	for i, ag := range agents {
+		out[i].agent = ag
+		if id, ok := strings.CutPrefix(ag.HostSession, omp.HostPrefix); ok {
+			out[i].line = a.endOmp(ctx, id)
+			continue
+		}
 		host, why := a.archivable(st, ag)
 		if why != "" {
-			lines[i] = why
+			out[i].line, out[i].host = why, host
 			continue
 		}
 		at[host] = i
 		hosts = append(hosts, host)
 	}
 	if len(hosts) == 0 {
-		return lines
+		return out
 	}
 	archived := func(host string) bool {
 		r, ok := claude.ReadRecord(a.cfg, host)
@@ -380,18 +513,47 @@ func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []sta
 	wait := archiveWait + time.Duration(len(hosts)-1)*archiveEach
 	s, err := delegate(ctx, find, msg, func() bool { return len(left()) == 0 }, a.peerSend, wait)
 	for _, h := range hosts {
+		o := &out[at[h]]
 		if archived(h) {
-			lines[at[h]] = fmt.Sprintf("archived its desktop session %s (%s archived it)", h, s.who(h))
+			o.line = fmt.Sprintf("archived its desktop session %s (%s archived it)", h, s.who(h))
 		} else {
-			lines[at[h]] = fmt.Sprintf("its desktop session %s stays: %v", h, err)
+			o.line, o.host, o.asked = fmt.Sprintf("its desktop session %s stays: %v", h, err), h, true
 		}
 	}
-	return lines
+	return out
 }
 
-// archivable is the desktop session of agent ag when the doctor or remove
-// may archive it, else why it stays.
+// endOmp stops the unit of the omp agent started under id, which left the
+// roster, and removes its inbox, and says what it did: nothing resumes an
+// omp agent, so a process left running would only hold its model.
+func (a *app) endOmp(ctx context.Context, id string) string {
+	var done []string
+	if unit := ompUnit(id); plat.Launcher.State(ctx, unit) == "active" {
+		if err := plat.Launcher.Stop(ctx, unit); err != nil {
+			return fmt.Sprintf("its omp unit %s runs on: %v", unit, err)
+		}
+		done = append(done, "stopped its omp unit "+unit)
+	}
+	removed, err := omp.RemoveInbox(omp.InboxPath(a.cfg.StateDir, id))
+	switch {
+	case err != nil:
+		done = append(done, fmt.Sprintf("its omp inbox stays: %v", err))
+	case removed:
+		done = append(done, "removed its omp inbox")
+	}
+	if len(done) == 0 {
+		return "an omp agent has no desktop session"
+	}
+	return strings.Join(done, ", ")
+}
+
+// archivable is the desktop session of agent ag the doctor or remove may
+// archive, and why it stays now: a why without a host is never archived,
+// one with a host only once its CLI runs no turn.
 func (a *app) archivable(st *state.State, ag state.Party) (host, why string) {
+	if strings.HasPrefix(ag.HostSession, omp.HostPrefix) {
+		return "", "an omp agent has no desktop session"
+	}
 	i := slices.IndexFunc(st.Starts, func(x state.Start) bool { return x.Session != "" && x.Session == ag.Session })
 	if i < 0 {
 		return "", "its desktop session stays: beekeeper did not start it"
@@ -407,7 +569,7 @@ func (a *app) archivable(st *state.State, ag state.Party) (host, why string) {
 		return "", "the desktop has its session archived already"
 	}
 	if s, ok := a.runningTurn(ag); ok {
-		return "", fmt.Sprintf("its desktop session stays: its CLI %d is in a turn", s.PID)
+		return host, fmt.Sprintf("its desktop session stays: its CLI %d is in a turn", s.PID)
 	}
 	return host, ""
 }

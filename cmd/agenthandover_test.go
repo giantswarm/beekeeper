@@ -12,6 +12,8 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/peer"
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -22,15 +24,20 @@ const (
 	countTask = "count the files"
 	dueID     = "due"
 	countName = "test: count"
+	issue61   = "o/r#61"
+	noteAB    = "a and b done; c next"
 )
 
 func TestHandoversDue(t *testing.T) {
 	party := func(id string) state.Party { return state.Party{Session: id, Name: "test: " + id} }
 	agents := []state.Agent{}
-	ids := []string{dueID, "tool", "merging", "small", "said", "sup", "relieved", "gone"}
+	ids := []string{dueID, "tool", "merging", "small", "said", "sup", "relieved", "gone", "parked", "parked-small"}
 	for _, id := range ids {
 		agents = append(agents, state.Agent{Party: party(id)})
 	}
+	// Two agents with a task whose headless turn ended: their CLI does not
+	// run.
+	agents[8].Task, agents[9].Task = countTask, countTask
 	st := &state.State{
 		Agents:     agents,
 		Supervisor: &state.Supervisor{Party: party("sup")},
@@ -38,12 +45,15 @@ func TestHandoversDue(t *testing.T) {
 		Merges:     []state.Merge{{Repo: scratchRepo, PR: 1, By: party("merging"), Phase: state.Running, PID: 42}},
 	}
 	var sessions []*claude.Session
-	for _, id := range ids[:len(ids)-1] { // "gone" does not run
+	for _, id := range ids[:7] { // "gone" and the parked ones do not run
 		sessions = append(sessions, &claude.Session{ID: id, Name: "test: " + id})
 	}
 	sessions[1].Commands = []claude.Command{{PID: 7, Args: "sleep 60"}}
-	contextOf := func(s *claude.Session) int64 {
-		if s.ID == "small" {
+	contextOf := func(ag state.Agent, s *claude.Session) int64 {
+		if (s == nil) != strings.HasPrefix(ag.Session, "parked") && ag.Session != ids[7] {
+			t.Errorf("%s: session %v", ag.Session, s)
+		}
+		if strings.HasSuffix(ag.Session, "small") {
 			return 19_000
 		}
 		return 25_000
@@ -52,11 +62,16 @@ func TestHandoversDue(t *testing.T) {
 	alive := func(pid int) bool { return pid == 42 }
 
 	due := handoversDue(st, sessions, 20_000, said, contextOf, alive)
-	if len(due) != 1 || due[0].agent.Session != dueID || due[0].context != 25_000 {
-		t.Fatalf("due = %+v, want only the quiet agent past relayAt", due)
+	if len(due) != 2 || due[0].agent.Session != dueID || due[0].context != 25_000 || due[0].parked {
+		t.Fatalf("due = %+v, want the quiet agent past relayAt first", due)
+	}
+	// The agent whose turn ended with its task open is due too; the one
+	// without a task ("gone") is not.
+	if due[1].agent.Session != "parked" || !due[1].parked {
+		t.Errorf("due = %+v, want the parked agent past relayAt second", due)
 	}
 	// The merge ended: the merging agent is quiet now.
-	if due := handoversDue(st, sessions, 20_000, said, contextOf, func(int) bool { return false }); len(due) != 2 {
+	if due := handoversDue(st, sessions, 20_000, said, contextOf, func(int) bool { return false }); len(due) != 3 {
 		t.Errorf("after the merge: due = %+v", due)
 	}
 }
@@ -66,15 +81,15 @@ func TestHandoverPromptPassesOnTheBrief(t *testing.T) {
 	h := handover{
 		agent:   state.Agent{Party: state.Party{Session: oldID, Name: countName}, Task: countTask},
 		context: 25_400,
-		record:  &state.Record{Issue: "o/r#61", Waits: "CI"},
+		record:  &state.Record{Issue: issue61, Waits: "CI"},
 		merges:  []state.Merge{{Repo: scratchRepo, PR: 7, Lane: "main", Phase: state.Waiting}},
 		events:  []state.Event{{At: at, Verb: "lease.claim", Detail: "lab-a"}},
-		note:    "a and b done; c next",
+		note:    noteAB,
 		brief:   "# Count\n\n## Steps\ncount a, b, c",
 	}
 	p := h.prompt()
 	for _, want := range []string{`You are "` + countName + `"`, "session " + oldID, "at 25k tokens", "Task: " + countTask,
-		"Serves: o/r#61, waiting on CI", "a and b done; c next", "o/r#7 in lane main: waiting", "lease.claim lab-a",
+		"Serves: o/r#61, waiting on CI", noteAB, "o/r#7 in lane main: waiting", "lease.claim lab-a",
 		briefOpen + "\n# Count"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("prompt lacks %q:\n%s", want, p)
@@ -108,7 +123,7 @@ func TestHandoverStartTakesOverTheRunningEntry(t *testing.T) {
 	old := state.Party{Session: oldID, HostSession: "local_" + oldID, Name: countName}
 	st := &state.State{
 		Agents:  []state.Agent{{Party: old, Task: countTask, AssignedAt: now.Add(-time.Hour)}},
-		Records: []state.Record{{Session: old, Issue: "o/r#61"}},
+		Records: []state.Record{{Session: old, Issue: issue61}},
 	}
 	running := func(p state.Party) bool { return p.Is(old) }
 	s := state.Start{Party: state.Party{Session: newID, HostSession: "local_" + newID, Name: old.Name}, Mode: state.ModeBypass, At: now}
@@ -212,5 +227,113 @@ func TestEndSessionStopsABackgroundSessionThroughItsDaemon(t *testing.T) {
 		if want := map[bool]int{true: 1, false: 0}[bg]; len(stopped) != want {
 			t.Errorf("background %v: claude stop ran for %v, want %d", bg, stopped, want)
 		}
+	}
+}
+
+// noteLauncher records the units started and has each write the agent's
+// note, as the resumed turn does.
+type noteLauncher struct {
+	platform.Launcher
+	units []platform.Unit
+	write func()
+}
+
+func (l *noteLauncher) Start(u platform.Unit) error {
+	l.units = append(l.units, u)
+	if l.write != nil {
+		l.write()
+	}
+	return nil
+}
+
+func (l *noteLauncher) Running(context.Context, bool, ...string) []string { return nil }
+
+// A worker whose headless turn has ended, or whose CLI does not take the
+// message by name, is asked for its note in a headless turn resumed from its
+// transcript, without the desktop's reopen; with no note the hand-over says
+// what the roster tells the follow-up.
+func TestHandoverAsksAParkedAgentInAHeadlessTurn(t *testing.T) {
+	a, out := stubApp(t)
+	a.cfg.Agents.NoteWait.Duration = 3 * time.Second
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\n"), 0o700); err != nil { //nolint:gosec // a fake claude
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	old := state.Party{Session: oldID, Name: countName}
+	dir := t.TempDir()
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{{Party: old, Task: countTask}}
+		st.Starts = []state.Start{{Party: old, Mode: state.ModeBypass, Dir: dir}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	l := &noteLauncher{Launcher: plat.Launcher}
+	plat.Launcher = l
+	origSend := sendNote
+	t.Cleanup(func() { sendNote = origSend })
+	sendNote = func(context.Context, string, string, string) (peer.Result, error) {
+		return peer.Result{}, peer.ErrUnreachable
+	}
+	h := handover{agent: state.Agent{Party: old, Task: countTask}, context: 410_000, record: &state.Record{Issue: issue61, Waits: "the supervisor's go"}}
+
+	// No transcript: nothing to resume, the hand-over goes on without a note.
+	if note, ok, err := a.askNote(t.Context(), h); err != nil || ok || note != "" || len(l.units) != 0 {
+		t.Fatalf("without a transcript: %q, %v, %v, units %v", note, ok, err, l.units)
+	}
+	if !strings.Contains(out.String(), "cannot be resumed") {
+		t.Errorf("output:\n%s", out)
+	}
+	projects := filepath.Join(a.cfg.Claude.ProjectsDir, "p")
+	if err := os.MkdirAll(projects, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projects, oldID+".jsonl"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l.write = func() { _ = a.store.Log(event(old, verbNote, "%s", noteAB)) }
+	for _, live := range []bool{false, true} {
+		out.Reset()
+		l.units = nil
+		h.session = nil
+		if live {
+			h.session = &claude.Session{ID: oldID, PID: 99, Name: countName}
+		}
+		note, ok, err := a.askNote(t.Context(), h)
+		if err != nil || !ok || note != noteAB {
+			t.Fatalf("live %v: note %q, %v, %v\n%s", live, note, ok, err, out)
+		}
+		if len(l.units) != 1 {
+			t.Fatalf("live %v: units %+v", live, l.units)
+		}
+		u := l.units[0]
+		argv := strings.Join(u.Argv, " ")
+		if !strings.HasPrefix(u.Name, wakePrefix(oldID)) || u.Dir != dir || u.StopPost != nil ||
+			!strings.Contains(argv, "-p --resume "+oldID+" --permission-mode "+state.ModeBypass) || !strings.Contains(argv, "agents note") {
+			t.Errorf("live %v: unit %+v", live, u)
+		}
+		want := map[bool]string{false: "does not run: resuming", true: "did not take the message by name"}[live]
+		if !strings.Contains(out.String(), want) || !strings.Contains(out.String(), "note: written after") {
+			t.Errorf("live %v: output:\n%s", live, out)
+		}
+	}
+
+	// The resumed turn writes no note: the follow-up rests on the roster,
+	// which names the served issue and what the predecessor waited on.
+	l.write = nil
+	a.cfg.Agents.NoteWait.Duration = 100 * time.Millisecond
+	h.agent.Party = state.Party{Session: oldID, Name: "test: silent"}
+	if _, ok, err := a.askNote(t.Context(), h); ok || err != nil {
+		t.Fatalf("a silent turn: %v, %v", ok, err)
+	}
+	if got := h.roster(); got != "serves o/r#61, waiting on the supervisor's go" {
+		t.Errorf("roster = %q", got)
+	}
+	if p := h.prompt(); !strings.Contains(p, "Serves: o/r#61, waiting on the supervisor's go") {
+		t.Errorf("prompt:\n%s", p)
+	}
+	if got := (handover{}).roster(); !strings.Contains(got, "no sessions serve record") {
+		t.Errorf("roster without a record = %q", got)
 	}
 }

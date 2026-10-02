@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -123,6 +124,16 @@ func TestPickSteward(t *testing.T) {
 		}
 		return st
 	}
+	// handedOver is a chain of hand-overs of worker: a to b to the target.
+	const worker, task = "Agent seven", "work"
+	handedOver := func() *state.State {
+		st := &state.State{}
+		for i, id := range []string{"a", "b", "t"} {
+			st.Starts = append(st.Starts, state.Start{Party: state.Party{Session: id, HostSession: "local_" + id, Name: worker}, At: now.Add(time.Duration(i-3) * time.Hour)})
+		}
+		st.Agents = []state.Agent{{Party: state.Party{Session: "t", Name: worker}, Task: task}}
+		return st
+	}
 	sock := func(pid int) string { return fmt.Sprintf("/s/%d.sock", pid) }
 	for _, c := range []struct {
 		desc     string
@@ -144,7 +155,7 @@ func TestPickSteward(t *testing.T) {
 		{desc: "in a turn", st: started("a"), sessions: []*claude.Session{session(1, "a", recent)}},
 		{desc: "a busy agent", st: func() *state.State {
 			st := started("a")
-			st.Agents = []state.Agent{{Party: state.Party{Session: "a"}, Task: "work"}}
+			st.Agents = []state.Agent{{Party: state.Party{Session: "a"}, Task: task}}
 			return st
 		}(), sessions: []*claude.Session{session(1, "a", quiet)}},
 		{desc: "the guide", st: func() *state.State {
@@ -160,6 +171,27 @@ func TestPickSteward(t *testing.T) {
 		{desc: "a headless CLI", st: started("a"), sessions: []*claude.Session{session(1, "a", quiet)}, table: func(t *proc.Table) {
 			t.ByPID[1].Args = []string{claudeComm, "-p", resumeFlag, "a"}
 		}},
+		{desc: "no running CLI", st: started("a"), sessions: []*claude.Session{session(1, "a", quiet)}, table: func(t *proc.Table) {
+			delete(t.ByPID, 1)
+		}},
+		{desc: "a session handed over to a later start", st: handedOver(), sessions: []*claude.Session{session(1, "a", quiet), session(2, "b", quiet)}},
+		{desc: "a session handed over before", st: func() *state.State {
+			st := handedOver()
+			st.Starts = append(st.Starts, state.Start{Party: state.Party{Session: "c", HostSession: "local_c", Name: worker}, At: now.Add(-time.Minute)})
+			st.Agents = []state.Agent{{Party: state.Party{Session: "c", Name: worker}, Task: task}}
+			return st
+		}(), sessions: []*claude.Session{session(1, "a", quiet), session(2, "b", quiet)}},
+		{desc: "a session whose name a roster agent holds", st: func() *state.State {
+			st := started("a")
+			st.Starts[0].Name = worker
+			st.Agents = []state.Agent{{Party: state.Party{Session: "d", Name: worker}}}
+			return st
+		}(), sessions: []*claude.Session{session(1, "a", quiet)}},
+		{desc: "a finished worker whose name stayed its own", st: func() *state.State {
+			st := handedOver()
+			st.Starts = append(st.Starts, state.Start{Party: state.Party{Session: "e", HostSession: "local_e", Name: "Agent eight"}, At: now.Add(-3 * time.Hour)})
+			return st
+		}(), sessions: []*claude.Session{session(1, "a", quiet), session(2, "b", quiet), session(3, "e", quiet)}, want: "local_e"},
 	} {
 		t.Run(c.desc, func(t *testing.T) {
 			tb := table(c.sessions...)
@@ -180,7 +212,7 @@ func TestArchiveDesktopKeeps(t *testing.T) {
 	a := &app{}
 	ag := state.Party{Session: "a", Name: "worker"}
 	archive := func(st *state.State, ag state.Party) string {
-		return a.archiveDesktops(context.Background(), st, []state.Party{ag}, "test")[0]
+		return a.archiveDesktops(context.Background(), st, []state.Party{ag}, "test")[0].line
 	}
 	if got := archive(&state.State{}, ag); !strings.Contains(got, "did not start it") {
 		t.Errorf("not started: %q", got)
@@ -219,5 +251,76 @@ func TestAMissedReopenFailsNoUnit(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "reopen: missed") {
 		t.Errorf("printed %q", out.String())
+	}
+}
+
+// A start whose import dropped its title or model has a steward other than
+// the session itself set what was dropped, and restoreImport waits for the
+// desktop to record it; an import that kept both is left alone.
+func TestRestoreImport(t *testing.T) {
+	const name, host, model = "Probe", "local_probe", "claude-sonnet-5-5"
+	other := func(_ context.Context, tried []string) (steward, error) {
+		return steward{host: "local_steward", sock: "/s/43.sock"}, nil
+	}
+	kept := claude.Record{Title: name, Model: model}
+	for _, c := range []struct {
+		desc      string
+		records   []claude.Record // the record, read by record
+		model     string          // the first turn's
+		find      stewardFinder
+		wantCalls []string // the session tools the request names
+		want      string   // a substring of the line or the error
+		wantErr   bool
+	}{
+		{desc: "both kept", records: []claude.Record{kept}, model: model, find: other},
+		{desc: "no model, then set", records: []claude.Record{{Title: name}, {Title: name}, kept}, model: model, find: other,
+			wantCalls: []string{setModelTool}, want: "dropped its model claude-sonnet-5-5: steward local_steward set it"},
+		{desc: "neither, then both set", records: []claude.Record{{}, {Title: name, Model: "claude-sonnet-5-5[1m]"}}, model: model, find: other,
+			wantCalls: []string{setTitleTool, setModelTool}, want: "dropped its title and model claude-sonnet-5-5: steward local_steward set them"},
+		{desc: "no title, no model replied", records: []claude.Record{{}, {Title: name}}, find: other,
+			wantCalls: []string{setTitleTool}, want: "dropped its title: steward local_steward set it"},
+		{desc: "no steward", records: []claude.Record{{Title: name}}, model: model,
+			find: func(context.Context, []string) (steward, error) { return steward{}, errors.New("no idle desktop CLI") },
+			want: "no idle desktop CLI", wantErr: true},
+		{desc: "never recorded", records: []claude.Record{{Title: name}}, model: model, find: other,
+			wantCalls: []string{setModelTool}, want: "did not record it", wantErr: true},
+	} {
+		t.Run(c.desc, func(t *testing.T) {
+			var reads atomic.Int32
+			record := func() claude.Record {
+				i := int(reads.Add(1)) - 1
+				return c.records[min(i, len(c.records)-1)]
+			}
+			var to, msg string
+			send := func(_ context.Context, t, m string) error {
+				to, msg = t, m
+				return nil
+			}
+			line, err := restoreImport(context.Background(), host, name, c.model, record, c.find, send, 2*time.Second)
+			got := line
+			if err != nil {
+				got = err.Error()
+			}
+			if (err != nil) != c.wantErr || !strings.Contains(got, c.want) || c.want == "" && got != "" {
+				t.Errorf("restoreImport = %q, %v; want %q, error %v", line, err, c.want, c.wantErr)
+			}
+			if len(c.wantCalls) == 0 {
+				if to != "" {
+					t.Fatalf("sent %q to %q, want nothing sent", msg, to)
+				}
+				return
+			}
+			if to != "uds:/s/43.sock" || !strings.Contains(msg, `session_id "`+host+`"`) || strings.Contains(msg, selfSession) {
+				t.Fatalf("sent %q to %q", msg, to)
+			}
+			for _, call := range []string{setTitleTool, setModelTool} {
+				if strings.Contains(msg, call) != slices.Contains(c.wantCalls, call) {
+					t.Errorf("sent %q, want the calls %v", msg, c.wantCalls)
+				}
+			}
+			if slices.Contains(c.wantCalls, setModelTool) && !strings.Contains(msg, `model "`+model+`"`) {
+				t.Errorf("sent %q, want model %q", msg, model)
+			}
+		})
 	}
 }

@@ -92,12 +92,12 @@ func TestDesktopKeepsItsConnection(t *testing.T) {
 	}
 	send("first")
 	first := d.conn
-	// godbus closes a connection whose context ended in a goroutine of its own.
-	time.Sleep(100 * time.Millisecond)
 	send("second")
-	if d.conn != first {
+	if d.conn != first || !first.Connected() {
 		t.Error("the second send opened a new connection: the first one was closed with its send")
 	}
+	// Close returns before godbus's reader has failed the pending calls with
+	// its read error; the third send must not be one of them.
 	_ = d.conn.Close()
 	send("third")
 	if got := n.summaries(); strings.Join(got, ",") != "first,second,third" {

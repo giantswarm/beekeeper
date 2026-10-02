@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
@@ -17,7 +18,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/post"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/takeover"
 )
 
 func (a *app) runCmd() *cobra.Command {
@@ -160,6 +163,10 @@ turn, an agents wake), and every send by local_ id counts against the
 desktop's cap on messages between sessions. A name two running CLIs carry is
 refused, naming them. A send to a session with no running CLI passes: the
 desktop starts it.
+A SendMessage to "the supervisor" or "the guide" (any case, "the" optional)
+goes to the session holding that role now: its running CLI by name, else
+its desktop session. A brief names the role, so a relay never makes it
+stale; with nobody holding the role the send is refused.
 Anything else, malformed input included, passes unchanged.
 
 What leaves the machine is scanned for secret values: the command line
@@ -215,7 +222,7 @@ Register it in ~/.claude/settings.json:
 				return nil
 			}
 			self, _ := os.Executable()
-			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, CheckQuestion: checkQuestion, Peer: a.desktopPeer,
+			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, CheckQuestion: checkQuestion, Role: a.roleTarget, Peer: a.desktopPeer,
 				Project: os.Getenv("CLAUDE_PROJECT_DIR"), Reads: a.firstReads,
 				Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(),
 				ModelServer: a.modelServer, ConfigErr: a.loadConfig()}
@@ -228,6 +235,68 @@ Register it in ~/.claude/settings.json:
 				_, _ = a.out.Write(out)
 			}
 			return nil
+		},
+	})
+	c.AddCommand(&cobra.Command{
+		Use:   "posttooluse",
+		Short: "The PostToolUse hook: a tool result carrying a secret value is redacted before the model sees it",
+		Long: `posttooluse reads a PostToolUse event on stdin and scans every string of
+the tool's result against the fingerprint index (beekeeper scan) and the
+outbound guard's token patterns (gitleaks' rules; a line marked
+gitleaks:allow keeps its pattern matches). With a hit, its answer replaces
+the result before the model sees it: the same result, each hit replaced by
+"[redacted: <reference or rule>]". The session goes on. Each redaction is
+a scan.redact event in beekeeper log, naming the tool, the references and
+rules and their counts, never a value; an indexed reference gets a
+rotation note for guide.person unless an open one names it. Claude Code
+writes the redacted result to the session's transcript on disk too: the
+value reaches neither the model nor the transcript.
+
+Malformed input, an unreadable configuration or index, any error: no
+answer, the result unchanged (an unreadable index still runs the
+patterns). beekeeper install registers it in ~/.claude/settings.json:
+
+  "PostToolUse": [{"matcher": "*", "hooks": [{"type": "command",
+    "command": "~/.go/bin/beekeeper hook posttooluse", "timeout": 10}]}]`,
+		Args: cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			defer func() { _ = recover() }() // a broken hook must not break the tool's result
+			raw, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				return nil
+			}
+			if out := a.postToolUse(raw); out != nil {
+				_, _ = a.out.Write(out)
+			}
+			return nil
+		},
+	})
+	c.AddCommand(&cobra.Command{
+		Use:   "sessionstart",
+		Short: "The SessionStart hook: the agent shell's prelude",
+		Long: `sessionstart writes the agent shell's prelude into the session's
+environment file ($CLAUDE_ENV_FILE), which Claude Code sources before each
+Bash command, before it parses the command: the aliases and shell functions
+of agents.shell.unalias (default grep, find, ls, cp, mv, rm, among them the
+harness's own grep and find shadows) are removed, so each name runs the tool
+on PATH, and with agents.shell.globs literal (the default) an unmatched glob
+stays as written instead of failing the command (zsh's "no matches found").
+The person's interactive setup stays theirs; an agent's commands are written
+for the plain tools. It replaces only its own block, so other hooks' lines
+stay, and prints nothing. beekeeper install registers it in
+~/.claude/settings.json:
+
+  "SessionStart": [{"matcher": "", "hooks": [{"type": "command",
+    "command": "~/.go/bin/beekeeper hook sessionstart"}]}]`,
+		Args: cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			_, _ = io.Copy(io.Discard, os.Stdin)
+			env := os.Getenv("CLAUDE_ENV_FILE")
+			if env == "" || a.loadConfig() != nil {
+				return nil // a broken configuration must not block a session's start
+			}
+			sh := a.cfg.Agents.Shell
+			return guard.WritePrelude(env, guard.Prelude(sh.Unalias, sh.Globs == config.GlobsLiteral))
 		},
 	})
 	c.AddCommand(&cobra.Command{
@@ -260,9 +329,17 @@ session id is in beekeeper's record of starts) and the session now runs in
 acceptEdits, the mode Claude Desktop's import gives it. Each allow is a
 hook.allow event in beekeeper log.
 
-Every other request gets no answer and the person gets the normal card:
-sessions beekeeper did not start, desktop sessions, and beekeeper's starts
-the person set to default or plan. Deny rules still win: Claude Code
+A session the person took over on beekeeper ui (a flag in beekeeper's
+take-over folder naming the running screen) has its request held for the
+screen: the screen's allow or deny is the answer. No answer within 290 s,
+the screen gone, or the take-over released: no answer, and the request
+goes to the session's own window. Each is a takeover.answer or
+takeover.back event.
+
+Every other request gets no answer at once and the person gets the normal
+card: sessions beekeeper did not start, desktop sessions, and beekeeper's
+starts the person set to default or plan. Telling a session not taken over
+reads one file without a lock. Deny rules still win: Claude Code
 refuses a denied call before it asks, so the hook never sees it. Malformed
 input, an unreadable configuration or state, any error: no answer, never an
 allow. A request in any mode but acceptEdits is decided without reading the
@@ -271,7 +348,10 @@ state.
 Register it in ~/.claude/settings.json:
 
   "PermissionRequest": [{"matcher": "*", "hooks": [{"type": "command",
-    "command": "~/.go/bin/beekeeper hook permissionrequest", "timeout": 10}]}]`,
+    "command": "~/.go/bin/beekeeper hook permissionrequest", "timeout": 300}]}]
+
+The timeout is above the 290 s a held request waits, so the hook, not
+Claude Code, ends the wait.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			defer func() { _ = recover() }() // a broken hook gives no answer: the person's card
@@ -279,22 +359,60 @@ Register it in ~/.claude/settings.json:
 			if err != nil {
 				return nil
 			}
-			var start state.Start
-			out, req := guard.Permission(raw, func(session string) bool {
-				var ok bool
-				start, ok = a.bypassStart(session)
-				return ok
-			})
-			if out == nil {
-				return nil
-			}
-			if _, err := a.out.Write(out); err == nil && a.store != nil {
-				_ = a.store.Log(event(start.Party, "hook.allow", "%s in %s", req.Tool, start.Dir))
-			}
+			_, _ = a.out.Write(a.permissionRequest(context.Background(), raw))
 			return nil
 		},
 	})
 	return c
+}
+
+// takeoverGiveUp and takeoverPoll pace a held request; tests shorten them.
+var (
+	takeoverGiveUp = takeover.GiveUp
+	takeoverPoll   = takeover.Poll
+)
+
+// permissionRequest decides one PermissionRequest event: beekeeper's own
+// bypass starts are allowed, a taken-over session's request is held for the
+// screen, every other one gets no answer (nil) at once.
+func (a *app) permissionRequest(ctx context.Context, raw []byte) []byte {
+	var start state.Start
+	out, req := guard.Permission(raw, func(session string) bool {
+		var ok bool
+		start, ok = a.bypassStart(session)
+		return ok
+	})
+	if out != nil {
+		if a.store != nil {
+			_ = a.store.Log(event(start.Party, "hook.allow", "%s in %s", req.Tool, start.Dir))
+		}
+		return out
+	}
+	if req.Event != guard.PermissionEvent || req.Session == "" || a.loadConfig() != nil {
+		return nil
+	}
+	dir := takeover.Dir(a.cfg.StateDir)
+	f, ok := takeover.Taken(dir, req.Session, proc.Alive)
+	if !ok {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, takeoverGiveUp)
+	defer cancel()
+	r := takeover.Request{ID: uuid.NewString(), Session: req.Session, Tool: req.Tool, Input: req.Input, At: time.Now().UTC()}
+	d, answered, err := takeover.Hold(ctx, dir, r, proc.Alive, takeoverPoll)
+	answered = answered && err == nil
+	if store, serr := state.Open(a.cfg.StateDir); serr == nil {
+		who := state.Party{Session: req.Session, Name: f.By}
+		if answered {
+			_ = store.Log(event(who, "takeover.answer", "%s: %s %s on the screen", req.Session, req.Tool, d.Behavior))
+		} else {
+			_ = store.Log(event(who, "takeover.back", "%s: %s went to the session's window", req.Session, req.Tool))
+		}
+	}
+	if !answered {
+		return nil
+	}
+	return guard.PermissionDecision(d.Behavior, d.Message)
 }
 
 // reportCheck decides a reporter's PreToolUse event: a post failing the

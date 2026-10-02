@@ -61,6 +61,8 @@ type snapshot struct {
 	// KubeContext is the machine kubeconfig's current context, which
 	// should stay unset.
 	KubeContext string `json:"kubeContext,omitempty"`
+	// Teleport is the Teleport login, nil when no keeper is configured.
+	Teleport *teleportView `json:"teleport,omitempty"`
 	// Unavailable are the sections whose platform part this build does not
 	// have: each prints one "not available" line instead.
 	Unavailable []string `json:"unavailable,omitempty"`
@@ -236,6 +238,7 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 	s.Root, _ = machine.ReadDisk("/")
 	s.Slots = machine.ReadSlots(a.cfg.Memcap.SlotDir, a.cfg.Memcap.Slots)
 	s.KubeContext = guard.CurrentContext(machineKubeconfig())
+	s.Teleport = a.readTeleport(ctx)
 	if s.Clusters, err = machine.KindClusters(ctx); err != nil {
 		s.ClustersErr = err.Error()
 	}
@@ -246,7 +249,7 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 	if t == nil {
 		t = &proc.Table{}
 	}
-	sessions := claude.Discover(a.cfg, t, a.now)
+	sessions := discover(a.cfg, t, a.now)
 	for _, ss := range sessions {
 		s.Sessions = append(s.Sessions, ss.Name)
 		s.CLIMemMiB += ss.MemMiB
@@ -477,6 +480,9 @@ func (a *app) printSnapshot(s *snapshot) {
 		}
 	}
 	p("build slots: %s", strings.Join(slots, "; "))
+	if s.Teleport != nil {
+		p("%s", s.Teleport.line(a.now))
+	}
 	if s.KubeContext != "" {
 		p("machine kubeconfig has a current context: %s (unset it: kubectl config unset current-context)", s.KubeContext)
 	}
@@ -662,6 +668,9 @@ func diffSnapshots(prev, cur *snapshot) []string {
 	setDiff("waits", waitKeys(prev.Waits), waitKeys(cur.Waits))
 	setDiff("holds", holdKeys(prev.Holds), holdKeys(cur.Holds))
 	setDiff("upgrades", upgradeWords(prev.Upgrades, time.Time{}), upgradeWords(cur.Upgrades, time.Time{}))
+	if cur.Teleport != nil && (prev.Teleport == nil || cur.Teleport.Key != prev.Teleport.Key || !cur.Teleport.ValidUntil.Equal(prev.Teleport.ValidUntil)) {
+		out = append(out, cur.Teleport.line(cur.At.Local()))
+	}
 	if cur.KubeContext != "" && cur.KubeContext != prev.KubeContext {
 		out = append(out, "MACHINE KUBECONFIG current context set: "+cur.KubeContext)
 	}

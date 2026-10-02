@@ -128,11 +128,12 @@ func guides(person string, n *state.Note) bool {
 // guideQueue is the queue of the guide of person: the open notes filed for
 // person in filing order, then the sessions whose record says they wait on
 // person (`beekeeper sessions serve --waits "<person>: …"`), in record
-// order, running or stopped. Only these explicit asks count: the desktop's
-// summary of a turn reads a status report as an ask. The guide's own
-// session, an archived one and a test are left out.
-func guideQueue(st *state.State, sessions []*claude.Session, person string) []queueItem {
-	var out []queueItem
+// order, running or stopped since (its record's end, else its wait) after
+// since; those stopped before since are stopped, apart. Only these explicit
+// asks count: the desktop's summary of a turn reads a status report as an
+// ask. The guide's own session, an archived one, a test and an agent that
+// reported its task after the wait (agents idle) are left out.
+func guideQueue(st *state.State, sessions []*claude.Session, person string, since time.Time) (q, stopped []queueItem) {
 	for i := range st.Notes {
 		n := &st.Notes[i]
 		// A pinned note is a standing instruction, not a decision.
@@ -140,13 +141,13 @@ func guideQueue(st *state.State, sessions []*claude.Session, person string) []qu
 			continue
 		}
 		_, live := claude.Live(sessions, n.By)
-		out = append(out, queueItem{Note: n, Owner: n.By.Name, OwnerLive: live, Key: "note#" + strconv.Itoa(n.ID)})
+		q = append(q, queueItem{Note: n, Owner: n.By.Name, OwnerLive: live, Key: "note#" + strconv.Itoa(n.ID)})
 	}
 	guide := guideRole.get(st).Holder
 	for i := range st.Records {
 		r := &st.Records[i]
 		ask, ok := waitsOn(person, r.Waits)
-		if !ok || (guide != nil && guide.Is(r.Session)) {
+		if !ok || (guide != nil && guide.Is(r.Session)) || reported(st, r) {
 			continue
 		}
 		owner := r.Session.Name
@@ -160,9 +161,21 @@ func guideQueue(st *state.State, sessions []*claude.Session, person string) []qu
 			continue
 		}
 		key := cmp.Or(r.Session.HostSession, r.Session.Session, r.Session.Name)
-		out = append(out, queueItem{Owner: owner, OwnerLive: live, Waiting: ask, Key: "wait:" + key + ":" + r.Waits})
+		it := queueItem{Owner: owner, OwnerLive: live, Waiting: ask, Key: "wait:" + key + ":" + r.Waits}
+		if !live && cmp.Or(r.Ended, r.At).Before(since) {
+			stopped = append(stopped, it)
+			continue
+		}
+		q = append(q, it)
 	}
-	return out
+	return q, stopped
+}
+
+// reported says whether r's session is an agent that reported its task
+// after r's wait: finished (agents idle --done), or idle since.
+func reported(st *state.State, r *state.Record) bool {
+	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(r.Session) })
+	return i >= 0 && (st.Agents[i].Done || st.Agents[i].IdleSince.After(r.At))
 }
 
 // waitsOn reads a record's --waits as an ask of person: "<person>: <ask>",
@@ -183,9 +196,19 @@ func waitsOn(person, waits string) (string, bool) {
 	return cmp.Or(strings.TrimSpace(ask), waits), true
 }
 
-// guideQueue is the queue of the guide of the configured person.
-func (a *app) guideQueue(st *state.State, sessions []*claude.Session) []queueItem {
-	return guideQueue(st, sessions, a.cfg.Guide.Person)
+// guideQueue is the queue of the guide of the configured person, and the
+// sessions waiting on it that stopped longer than guide.waitingTTL ago.
+func (a *app) guideQueue(st *state.State, sessions []*claude.Session) (q, stopped []queueItem) {
+	return guideQueue(st, sessions, a.cfg.Guide.Person, a.waitingSince(a.now))
+}
+
+// waitingSince is the stop time before which a waiting session folds at
+// now: guide.waitingTTL before it, never with the TTL 0.
+func (a *app) waitingSince(now time.Time) time.Time {
+	if a.cfg.Guide.WaitingTTL.Duration <= 0 {
+		return time.Time{}
+	}
+	return now.Add(-a.cfg.Guide.WaitingTTL.Duration)
 }
 
 // waiter is a waiting session's item owner: its name, "(stopped)" when it
@@ -230,11 +253,14 @@ func (a *app) guideQueueCmd() *cobra.Command {
 		Long: `Every open note filed for the guide's person, guide.person (note add --for,
 or an older note's "[for <person>]" prefix, in any case), with the session
 that filed it (its owner, and whether it still runs), its deadline and its
-default, then every session the desktop files as waiting on its person with
-what it needs, running or stopped, except the guide's own session, an
-archived one and a test (titled "test: …"). With guide.person unset, every
-note filed --for anyone, and a line that says so. A caller that has read
-the queue before gets only what changed.`,
+default, then every session that serves a wait on its person (sessions serve
+--waits "<person>: …") with what it needs, while its CLI runs or stopped
+less than guide.waitingTTL (default 2h) ago, except the guide's own session,
+an archived one, a test (titled "test: …") and an agent that reported its
+task after the wait (agents idle, or off the roster). The sessions stopped
+longer ago fold into one line; --full lists them. With guide.person unset,
+every note filed --for anyone, and a line that says so. A caller that has
+read the queue before gets only what changed.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			st, err := a.store.Read()
@@ -245,11 +271,14 @@ the queue before gets only what changed.`,
 			if err != nil {
 				return err
 			}
-			q := a.guideQueue(st, sessions)
+			q, stopped := a.guideQueue(st, sessions)
 			if a.json {
+				if full {
+					q = append(q, stopped...)
+				}
 				return a.printJSON(q)
 			}
-			facts := a.queueFacts(q)
+			facts := append(a.queueFacts(q), textFacts("stopped", a.stoppedLine(stopped))...)
 			if a.cfg.Guide.Person == "" {
 				facts = append(textFacts("person", personUnset), facts...)
 			}
@@ -258,6 +287,14 @@ the queue before gets only what changed.`,
 					_, _ = fmt.Fprintln(a.out, personUnset)
 				}
 				a.printQueue(q)
+				if l := a.stoppedLine(stopped); l != "" {
+					_, _ = fmt.Fprintln(a.out, l)
+				}
+				if full {
+					for _, it := range stopped {
+						_, _ = fmt.Fprintln(a.out, "  "+a.queueText(it))
+					}
+				}
 			})
 		},
 	}
@@ -312,7 +349,7 @@ func (a *app) guideNext(st *state.State, sessions []*claude.Session, me state.Pa
 	if r.Holder == nil || !r.Holder.Is(me) {
 		return nil, nil, nil, refused("only the guide serves its person's decisions: `beekeeper guide status` names it")
 	}
-	q := a.guideQueue(st, sessions)
+	q, _ := a.guideQueue(st, sessions)
 	it := nextDecision(q, r.Asking)
 	if it == nil {
 		r.Asking = 0
@@ -361,6 +398,16 @@ func dueBefore(n, o *state.Note) bool {
 	return !n.Due.IsZero() && (o.Due.IsZero() || n.Due.Before(o.Due))
 }
 
+// stoppedLine is the one line that stands for the waiting sessions stopped
+// longer than guide.waitingTTL ago, "" when there are none.
+func (a *app) stoppedLine(stopped []queueItem) string {
+	if len(stopped) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d stopped session(s) waited on %s, stopped over %s ago: beekeeper guide queue --full lists them",
+		len(stopped), cmp.Or(a.cfg.Guide.Person, "their person"), strings.TrimSuffix(strings.TrimSuffix(a.cfg.Guide.WaitingTTL.String(), "0s"), "0m"))
+}
+
 func (a *app) printQueue(q []queueItem) {
 	if len(q) == 0 {
 		_, _ = fmt.Fprintln(a.out, "nothing waits on the person")
@@ -401,7 +448,7 @@ pinned notes (note add --pin) are in both.`,
 			if err != nil {
 				return err
 			}
-			q := a.guideQueue(st, sessions)
+			q, _ := a.guideQueue(st, sessions)
 			r := guideRole.get(st)
 			if prompt {
 				return a.printGuidePrompt(r, q, a.splitNotes(st.Notes).Pinned)
@@ -541,6 +588,10 @@ func (a *app) guideFeed(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	var archived map[string]bool
+	if sessionLinked(st) {
+		archived = claude.Archived(a.cfg)
+	}
 	fire := func(st *state.State) ([]string, []state.Event, bool) {
 		seen, ce := guideRole.observeCLI(st, sessions, a.now)
 		var lines []string
@@ -549,7 +600,7 @@ func (a *app) guideFeed(ctx context.Context) ([]string, error) {
 		}
 		rl, re := guideRole.fireRelay(st, a.now)
 		dl, de := guideRole.fireRelayDue(st, q, a.now)
-		fl, fed := a.feedLines(st, sessions, closed)
+		fl, fed := a.feedLines(st, sessions, closed, findOrphaned(st, archived))
 		lines = append(append(append(lines, rl...), dl...), fl...)
 		evs := append(append(ce, re...), de...)
 		return lines, evs, seen || fed || len(lines) > 0 || len(evs) > 0
@@ -567,7 +618,8 @@ func (a *app) guideFeed(ctx context.Context) ([]string, error) {
 }
 
 // closedNotes are the events that closed the notes the feed reported and
-// that are no longer open, by note id: their answer, or their done.
+// that are no longer open, by note id: their answer, their done, or their
+// overtaken.
 func (a *app) closedNotes(st *state.State) (map[int]state.Event, error) {
 	gone := map[int]bool{}
 	for _, k := range st.GuideRole().Fed {
@@ -579,7 +631,9 @@ func (a *app) closedNotes(st *state.State) (map[int]state.Event, error) {
 	if len(gone) == 0 {
 		return out, nil
 	}
-	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == noteAnswered || e.Verb == "note.done" })
+	evs, err := a.store.Events(0, func(e state.Event) bool {
+		return e.Verb == noteAnswered || e.Verb == "note.done" || e.Verb == noteOvertaken
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -592,13 +646,16 @@ func (a *app) closedNotes(st *state.State) (map[int]state.Event, error) {
 	return out, nil
 }
 
-// feedLines says each queue item the feed has not said yet and each note it
-// said that is closed now, and records what it said in the guide's Fed. It
-// reports whether Fed changed.
-func (a *app) feedLines(st *state.State, sessions []*claude.Session, closed map[int]state.Event) (lines []string, changed bool) {
+// feedLines says each queue item the feed has not said yet, each orphaned
+// note (findOrphaned) it has not said yet and each note it said that is
+// closed now, and records what it said in the guide's Fed. It reports
+// whether Fed changed.
+func (a *app) feedLines(st *state.State, sessions []*claude.Session, closed map[int]state.Event, orphans []overtake) (lines []string, changed bool) {
 	guideRole.update(st, func(r *state.Role) {
 		var cur []string
-		for _, it := range guideQueue(st, sessions, a.cfg.Guide.Person) {
+		// A session that only aged out of the queue is no news.
+		q, _ := a.guideQueue(st, sessions)
+		for _, it := range q {
 			k := it.Key
 			cur = append(cur, k)
 			if slices.Contains(r.Fed, k) {
@@ -610,6 +667,17 @@ func (a *app) feedLines(st *state.State, sessions []*claude.Session, closed map[
 				lines = append(lines, fmt.Sprintf("GUIDE WAITING: %s needs its person: %s", waiter(it), truncate(oneLine(it.Waiting), 200)))
 			}
 		}
+		for _, o := range orphans {
+			k := fmt.Sprintf("orphan#%d", o.id)
+			cur = append(cur, k)
+			i := slices.IndexFunc(st.Notes, func(n state.Note) bool { return n.ID == o.id })
+			if i < 0 || slices.Contains(r.Fed, k) {
+				continue
+			}
+			who, text := noteFor(&st.Notes[i])
+			lines = append(lines, fmt.Sprintf("GUIDE ORPHANED #%d for %s, %s; ask it, or close it with note done %d --overtaken: %s",
+				o.id, who, o.reason, o.id, truncate(oneLine(text), 200)))
+		}
 		for _, k := range r.Fed {
 			id, err := strconv.Atoi(strings.TrimPrefix(k, "note#"))
 			if err != nil || slices.Contains(cur, k) || slices.ContainsFunc(st.Notes, func(n state.Note) bool { return n.ID == id }) {
@@ -618,6 +686,8 @@ func (a *app) feedLines(st *state.State, sessions []*claude.Session, closed map[
 			switch e, ok := closed[id]; {
 			case ok && e.Verb == noteAnswered:
 				lines = append(lines, fmt.Sprintf("GUIDE ANSWERED (%s): %s", truncate(e.By.Name, 30), truncate(oneLine(e.Detail), 240)))
+			case ok && e.Verb == noteOvertaken:
+				lines = append(lines, fmt.Sprintf("GUIDE CLOSED #%d overtaken: %s", id, truncate(oneLine(overtakenReason(e)), 200)))
 			default:
 				lines = append(lines, fmt.Sprintf("GUIDE CLOSED: note #%d, without an answer", id))
 			}

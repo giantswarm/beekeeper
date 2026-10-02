@@ -15,6 +15,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -129,7 +130,7 @@ status after a relay), 125 a newer release (self-update --check).`,
 		&cobra.Group{ID: supervisorRole.ing, Title: "Supervising:"},
 		&cobra.Group{ID: "guarding", Title: "Guarding:"},
 	)
-	for _, c := range []*cobra.Command{a.statusCmd(), a.sessionsCmd(), a.tailCmd(), a.snapshotCmd(), a.uiCmd(), a.watchCmd(), a.alertsCmd(), a.budgetCmd(), a.psCmd()} {
+	for _, c := range []*cobra.Command{a.statusCmd(), a.sessionsCmd(), a.tailCmd(), a.snapshotCmd(), a.uiCmd(), a.watchCmd(), a.alertsCmd(), a.budgetCmd(), a.teleportCmd(), a.psCmd()} {
 		c.GroupID = "watching"
 		root.AddCommand(c)
 	}
@@ -137,11 +138,11 @@ status after a relay), 125 a newer release (self-update --check).`,
 		c.GroupID = "sharing"
 		root.AddCommand(c)
 	}
-	for _, c := range []*cobra.Command{a.supervisorCmd(), a.guideCmd(), a.agentsCmd(), a.doctorCmd(), a.noteCmd(), a.timerCmd(), a.reporterCmd(), a.reportCmd(), a.handoverCmd(), a.logCmd()} {
+	for _, c := range []*cobra.Command{a.supervisorCmd(), a.guideCmd(), a.agentsCmd(), a.doctorCmd(), a.noteCmd(), a.timerCmd(), a.reporterCmd(), a.reportCmd(), a.handoverCmd(), a.logCmd(), a.lintCmd()} {
 		c.GroupID = "supervising"
 		root.AddCommand(c)
 	}
-	for _, c := range []*cobra.Command{a.runCmd(), a.hookCmd(), a.freeCmd(), a.gateCmd()} {
+	for _, c := range []*cobra.Command{a.runCmd(), a.hookCmd(), a.freeCmd(), a.gateCmd(), a.scanCmd()} {
 		c.GroupID = "guarding"
 		root.AddCommand(c)
 	}
@@ -194,6 +195,11 @@ func (a *app) caller() (state.Party, error) {
 	if a.as != "" {
 		return state.Party{Name: a.as}, nil
 	}
+	// An omp agent beekeeper started is its roster entry, whatever session
+	// variables its tool shell carries.
+	if id := os.Getenv(omp.EnvAgent); id != "" {
+		return state.Party{HostSession: omp.HostPrefix + id, Name: os.Getenv(omp.EnvName)}, nil
+	}
 	p := state.Party{
 		Session:     os.Getenv("CLAUDE_CODE_SESSION_ID"),
 		HostSession: os.Getenv("CLAUDE_CODE_HOST_SESSION_ID"),
@@ -224,7 +230,13 @@ func (a *app) sessions() ([]*claude.Session, *proc.Table, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return claude.Discover(a.cfg, t, a.now), t, nil
+	return discover(a.cfg, t, a.now), t, nil
+}
+
+// discover returns the running sessions of every harness: Claude Code's,
+// then omp's.
+func discover(cfg *config.Config, t *proc.Table, now time.Time) []*claude.Session {
+	return append(claude.Discover(cfg, t, now), omp.Discover(cfg.Omp.SessionsDir, t, now)...)
 }
 
 func (a *app) printJSON(v any) error {

@@ -78,7 +78,7 @@ func bodyView(m *model, w, h int) string {
 	d := m.data
 	if m.detail != "" {
 		if s := sessionNamed(d.Sessions, m.detail); s != nil {
-			return detailView(d, *s, w, h, m.tail, m.tailState, m.tailOff, m.tailErr)
+			return detailView(d, *s, w, h, m.pane())
 		}
 	}
 	switch m.tab {
@@ -203,7 +203,16 @@ func footerView(m *model, w int) string {
 	hints := []string{"1-6 tabs", "j/k move", "enter details", "r refresh", "q quit",
 		"g/G ends", "pgup/pgdn page"}
 	if m.detail != "" {
-		hints = []string{"j/k scroll", "esc close", "r refresh", "q quit"}
+		hints = []string{"m message", "t take over", "k/j older/newer", "G live", "esc close", "q quit", "g oldest"}
+		if s := m.paneSession(); s != nil && s.TakenOver {
+			hints[1] = "t hand back"
+			if len(s.Approvals) > 0 {
+				hints = append([]string{"a allow", "d deny"}, hints...)
+			}
+		}
+		if m.composing {
+			hints = []string{"enter send", "esc drop", "ctrl+u clear"}
+		}
 	}
 	used := ansiWidth(line)
 	for _, hint := range hints {
@@ -492,11 +501,11 @@ func slotHolder(raw string) string {
 // tableCols is the sessions table's column layout: the optional columns
 // drop out of a too-narrow window, the least useful first.
 type tableCols struct {
-	role, idle, mem, ctx, hour int
+	role, state, idle, mem, ctx, hour int
 }
 
 func sessionCols(w int) tableCols {
-	c := tableCols{role: 5, idle: 6, mem: 8, ctx: 9, hour: 12}
+	c := tableCols{role: 5, state: 8, idle: 6, mem: 8, ctx: 9, hour: 12}
 	for c.rest(w) < 26 {
 		switch {
 		case c.hour > 0 && w < 96:
@@ -515,8 +524,8 @@ func sessionCols(w int) tableCols {
 // rest is what the name and the what columns share after the gutter,
 // the live columns and the two-column gaps between all of them.
 func (c tableCols) rest(w int) int {
-	sum, gaps := 0, 12
-	for _, v := range []int{c.role, c.idle, c.mem, c.ctx, c.hour} {
+	sum, gaps := 0, 14
+	for _, v := range []int{c.role, c.state, c.idle, c.mem, c.ctx, c.hour} {
 		if v == 0 {
 			gaps -= 2
 			continue
@@ -551,6 +560,9 @@ func sessionsView(d *Data, w, h, sel int) string {
 	if c.role > 0 {
 		head = append(head, pad(style.Dim.Render("role"), c.role))
 	}
+	if c.state > 0 {
+		head = append(head, pad(style.Dim.Render("state"), c.state))
+	}
 	if c.idle > 0 {
 		head = append(head, pad(style.Dim.Render("idle"), c.idle))
 	}
@@ -568,7 +580,7 @@ func sessionsView(d *Data, w, h, sel int) string {
 	}
 	for i, s := range d.Sessions {
 		line := sessionRow(s, w, d.At)
-		if s.Waiting != "" {
+		if s.Waiting != "" || len(s.Approvals) > 0 {
 			line = style.Waiting.Render(line)
 		}
 		t.row(i, line)
@@ -595,6 +607,9 @@ func sessionRow(s Session, w int, now time.Time) string {
 	cells := []string{pad(trimWord(s.Name, nameW), nameW)}
 	if c.role > 0 {
 		cells = append(cells, pad(roleBadge(s.Role), c.role))
+	}
+	if c.state > 0 {
+		cells = append(cells, pad(stateCell(s), c.state))
 	}
 	if c.idle > 0 {
 		idle := dur(s.Idle)
@@ -638,10 +653,14 @@ func sessionRow(s Session, w int, now time.Time) string {
 			left = max(0, left-n-2)
 			return n
 		}
-		if s.Waiting != "" && left >= 12 {
+		waiting := s.Waiting
+		if len(s.Approvals) > 0 {
+			waiting = "approve? " + s.Approvals[0].Gist
+		}
+		if waiting != "" && left >= 12 {
 			tail = append(tail, style.Waiting.Render("[WARN] ")+
-				trimWord(s.Waiting, max(0, left-7)))
-		} else if s.Waiting != "" {
+				trimWord(waiting, max(0, left-7)))
+		} else if waiting != "" {
 			// No room for the text: the flag still says someone
 			// is waiting on this one.
 			tail = append(tail, style.Waiting.Render("[WARN]"))
@@ -665,6 +684,70 @@ func sessionRow(s Session, w int, now time.Time) string {
 		cells = append(cells, strings.Join(tail, "  "))
 	}
 	return strings.Join(cells, "  ")
+}
+
+// The roles of the transcript turns the pane shows.
+const (
+	roleUser      = "user"
+	roleAssistant = "assistant"
+	roleTool      = "tool"
+)
+
+// The states a session row shows.
+const (
+	stateBusy    = "busy"
+	stateIdle    = "idle"
+	stateWaiting = "waiting"
+	// stateApproval is a taken-over session waiting on the screen's
+	// answer; stateTaken one whose approvals come to the screen.
+	stateApproval = "approval"
+	stateTaken    = "taken"
+	stateEnded    = "ended"
+)
+
+// busyWithin is how recently a Claude Code session's transcript changed
+// for the screen to call it busy.
+const busyWithin = time.Minute
+
+// stateOf is what a session does: one taken over waits on the screen's
+// answer or is just taken; an omp session says so itself; a
+// Claude Code session waits on its person when the desktop says so, is
+// busy while it runs a command or wrote its transcript within busyWithin,
+// and idle otherwise.
+func stateOf(s Session) string {
+	switch {
+	case len(s.Approvals) > 0:
+		return stateApproval
+	case s.TakenOver:
+		return stateTaken
+	case s.State != "":
+		return s.State
+	case s.Waiting != "":
+		return stateWaiting
+	case len(s.Commands) > 0 || s.Idle < busyWithin:
+		return stateBusy
+	}
+	return stateIdle
+}
+
+// stateCell is a row's state, coloured, with omp's harness ahead of it.
+func stateCell(s Session) string {
+	st := stateOf(s)
+	word := st
+	if s.Harness != "" {
+		word = s.Harness + "·" + st
+	}
+	switch st {
+	case stateBusy:
+		return style.OK.Render(word)
+	case stateWaiting, stateApproval:
+		return style.Waiting.Render(word)
+	case stateTaken:
+		return style.Run.Render(word)
+	case stateEnded:
+		return style.Gone.Render(word)
+	}
+	return style.Dim.Render(word)
 }
 
 // roleBadge is the session's role as a short, legible badge.
@@ -707,13 +790,16 @@ func mergeCell(m Merges) string {
 
 // detailView is a session's pane: its facts in two aligned columns
 // under section rules, absolute time with the age beside it, and the
-// transcript tail with the role words coloured.
-func detailView(d *Data, s Session, w, h int, tail []Turn, state, off int, err string) string {
+// transcript in the rest of the height, newest at the bottom: the
+// history, then the current turn as it runs, and under it the message
+// line while the person writes, sends or has sent one.
+func detailView(d *Data, s Session, w, h int, p pane) string {
+	tail, state, back, err := p.tail, p.state, p.back, p.err
 	t := newTabLines(w, -1)
-	t.rule(style.Head.Render(fit(s.Name, w-30)), "esc close  j/k scroll")
+	t.rule(style.Head.Render(fit(s.Name, w-30)), "esc close  k/j scroll")
 	lab := func(l string) string { return style.Dim.Render(pad(l, 9)) }
 	t.head(cols(lab("pid"), fmt.Sprintf("%d", s.PID),
-		pad(fit(roleBadge(s.Role), 5), 5), fit(s.Model, 18), fit(s.Permission, 12)))
+		pad(fit(roleBadge(s.Role), 5), 5), stateCell(s), fit(s.Model, 18), fit(s.Permission, 12)))
 	t.dim(cols(lab("role"), plainOrDim(s.Role)))
 	t.dim(cols(lab("cwd"), fitLeft(s.Cwd, w-14)))
 	t.dim(cols(lab("repo"), fitLeft(s.Repo, 30), fit(s.Branch, 20),
@@ -764,41 +850,115 @@ func detailView(d *Data, s Session, w, h int, tail []Turn, state, off int, err s
 	for _, sc := range s.Scopes {
 		t.dim(cols(style.Dim.Render("run"), fit(sc.Unit, 30), fit(sc.Command, 30), mib(sc.MemMiB)))
 	}
+	if s.TakenOver || len(s.Approvals) > 0 {
+		approvalLines(t, s, w, d.At)
+	}
 	t.dim("")
 	badge = "…"
-	switch state {
-	case 2:
-		badge = fmt.Sprintf("%d", len(tail))
-	case 3:
+	switch {
+	case state == 2 && back > 0:
+		badge = fmt.Sprintf("%d back · G live", back)
+	case state == 2:
+		badge = style.OK.Render("live")
+	case state == 3:
 		badge = "failed"
 	}
 	t.rule("transcript", badge)
+	msg := messageLine(p, w)
 	switch state {
 	case 1:
 		t.dim("loading…")
 	case 3:
 		t.head(style.Warn.Render("tail: " + err))
 	case 2:
+		if err != "" {
+			t.head(style.Warn.Render("tail: " + trimWord(err, w-8)))
+		}
 		if len(tail) == 0 {
 			t.dim("empty")
 		}
-		for i := off; i < len(tail); i++ {
-			tu := tail[i]
-			role := style.Dim.Render(pad(tu.Role, 10))
-			if tu.Role == "assistant" {
-				role = style.OK.Render(pad(tu.Role, 10))
-			}
-			// A turn's text can carry its own newlines (a pasted
-			// block, a tool payload); each physical line goes out as
-			// its own fitted line so nothing ever wraps.
-			lines := strings.Split(tu.Text, "\n")
-			t.dim(cols(clock(tu.At, d.At), role, trimWord(lines[0], w-24)))
-			for _, extra := range lines[1:min(len(lines), 4)] {
-				t.dim(pad("", 20) + trimWord(extra, w-24))
-			}
+		room := h - len(t.all)
+		if msg != "" {
+			room--
 		}
+		t.all = append(t.all, turnLines(tail[:len(tail)-min(back, len(tail))], w, room, d.At)...)
+	}
+	if msg != "" {
+		// The message line stays in sight: the pane's last line, even
+		// when the facts above fill the window.
+		lines := t.all[:min(len(t.all), max(0, h-1))]
+		return strings.Join(append(lines, msg), "\n")
 	}
 	return t.show(h)
+}
+
+// approvalLines is the take-over section: that the session's approvals
+// come to this screen, and the oldest one it waits on with its input, the
+// call the person answers with a or d; any later ones as one line each.
+func approvalLines(t *tabLines, s Session, w int, now time.Time) {
+	badge := "approvals come here"
+	if n := len(s.Approvals); n > 0 {
+		badge = style.Waiting.Render(fmt.Sprintf("%d waiting · a allow  d deny", n))
+	}
+	t.rule("taken over", badge)
+	for i, ap := range s.Approvals {
+		if i > 0 {
+			t.dim(cols(clock(ap.At, now), pad("then", 10), trimWord(ap.Gist, w-24)))
+			continue
+		}
+		t.head(style.Waiting.Render(cols(clock(ap.At, now), pad("approve?", 10), trimWord(ap.Gist, w-24))))
+		for _, l := range ap.Detail[:min(len(ap.Detail), 6)] {
+			t.dim(pad("", 20) + trimWord(l, w-24))
+		}
+	}
+}
+
+// messageLine is the pane's last line: the draft with its cursor while
+// the person writes, the delivery while it runs, then its outcome; ""
+// when there is none of these.
+func messageLine(p pane, w int) string {
+	switch {
+	case p.composing:
+		draft := fitLeft(p.draft, max(1, w-12))
+		return fit(style.Head.Render("message › ")+draft+"█", w)
+	case p.sending:
+		return fit(style.Dim.Render("message › sending…"), w)
+	case p.acting:
+		return fit(style.Dim.Render("…"), w)
+	case p.outcome != "" && p.outcomeErr:
+		return fit(style.Warn.Render(trimWord(p.outcome, w)), w)
+	case p.outcome != "":
+		return fit(style.OK.Render(trimWord(p.outcome, w)), w)
+	}
+	return ""
+}
+
+// turnLines lays out turns in at most room lines, the newest last: each
+// turn's first line with its time and role, up to three more of its own
+// lines under it, and a tool call as one quiet line. The oldest turns
+// give way when the window is short.
+func turnLines(turns []Turn, w, room int, now time.Time) []string {
+	var out []string
+	for i := len(turns) - 1; i >= 0 && len(out) < room; i-- {
+		tu := turns[i]
+		role := style.Dim.Render(pad(tu.Role, 10))
+		switch tu.Role {
+		case roleAssistant:
+			role = style.OK.Render(pad(tu.Role, 10))
+		case roleTool:
+			role = style.Run.Render(pad(tu.Role, 10))
+		}
+		// A turn's text can carry its own newlines (a pasted block, a
+		// tool payload); each physical line goes out as its own fitted
+		// line so nothing ever wraps.
+		lines := strings.Split(tu.Text, "\n")
+		block := []string{fit(style.Dim.Render(cols(clock(tu.At, now), role, trimWord(lines[0], w-24))), w)}
+		for _, extra := range lines[1:min(len(lines), 4)] {
+			block = append(block, fit(style.Dim.Render(pad("", 20)+trimWord(extra, w-24)), w))
+		}
+		out = append(block, out...)
+	}
+	return out[max(0, len(out)-max(room, 0)):]
 }
 
 // sharingView is the sharing tab: held leases (the selectable rows),

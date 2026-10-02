@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,6 +18,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/peer"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -29,6 +32,10 @@ func (a *app) agentWakeCmd() *cobra.Command {
 		Long: `wake delivers a message to a registered agent without Claude Desktop's
 route, whose cap pauses a session's messages to local_ ids after ten sends
 since its person last typed in it.
+
+An omp agent (agents start --harness omp) gets the message in its inbox,
+at its next tool round or as its next turn; one whose process ended is
+refused: nothing resumes it.
 
 A session whose CLI runs gets the message by name, as SendMessage by name
 does: it queues and runs at the session's next tool call or as its next turn.
@@ -80,6 +87,9 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 		return err
 	}
 	ag := st.Agents[i]
+	if id, ok := strings.CutPrefix(ag.HostSession, omp.HostPrefix); ok {
+		return a.wakeOmp(by, ag, id, msg)
+	}
 	sessions, _, err := a.sessions()
 	if err != nil {
 		return err
@@ -131,6 +141,29 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 	return err
 }
 
+// wakeOmp writes msg to the inbox of the omp agent ag, started under id.
+func (a *app) wakeOmp(by state.Party, ag state.Agent, id, msg string) error {
+	if err := a.sendOmp(ag.Name, id, msg); err != nil {
+		return err
+	}
+	_ = a.store.Log(event(by, "agents.wake", "%s: written to its omp inbox", ag.Name))
+	_, err := fmt.Fprintf(a.out, "wake: %s runs (omp): written to its inbox, it runs the message at its next tool round or as its next turn\n", ag.Name)
+	return err
+}
+
+// sendOmp writes msg to the inbox of the omp agent name, started under id;
+// one whose process ended is refused.
+func (a *app) sendOmp(name, id, msg string) error {
+	err := omp.Send(omp.InboxPath(a.cfg.StateDir, id), msg)
+	if errors.Is(err, omp.ErrNotRunning) {
+		return refused("%s: its omp agent no longer runs (%s ended): start it again with agents start --harness omp", name, ompUnit(id))
+	}
+	if err != nil {
+		return fmt.Errorf("messaging %s: %w", name, err)
+	}
+	return nil
+}
+
 // resolveWake finds the session an agent's wake resumes. A desktop session
 // runs under the CLI session id its record names now (a restart gives it a
 // new one), in the record's directory and mode; beekeeper's own start keeps
@@ -165,12 +198,12 @@ func resolveWake(cfg *config.Config, st *state.State, ag state.Agent) (wakeTarge
 	if w.id == "" {
 		return wakeTarget{}, refused("%s has no session id to resume", ag.Name)
 	}
-	m, _ := filepath.Glob(filepath.Join(cfg.Claude.ProjectsDir, "*", w.id+".jsonl"))
-	if len(m) == 0 {
+	transcript := transcriptOf(cfg, w.id)
+	if transcript == "" {
 		return wakeTarget{}, refused("%s: session %s has no transcript under %s to resume", ag.Name, w.id, cfg.Claude.ProjectsDir)
 	}
 	if w.dir == "" {
-		w.dir, _ = claude.TranscriptCwd(m[0])
+		w.dir, _ = claude.TranscriptCwd(transcript)
 	}
 	if w.dir == "" {
 		return wakeTarget{}, refused("%s: no directory is recorded for session %s", ag.Name, w.id)
@@ -179,6 +212,18 @@ func resolveWake(cfg *config.Config, st *state.State, ag state.Agent) (wakeTarge
 		w.mode = guard.ModeAcceptEdits
 	}
 	return w, nil
+}
+
+// transcriptOf is the transcript of session id under the projects
+// directory, "" for none.
+func transcriptOf(cfg *config.Config, id string) string {
+	if id == "" {
+		return ""
+	}
+	if m, _ := filepath.Glob(filepath.Join(cfg.Claude.ProjectsDir, "*", id+".jsonl")); len(m) > 0 {
+		return m[0]
+	}
+	return ""
 }
 
 // wakeLive is the running CLI of the agent: its party's, or one that runs
@@ -242,7 +287,7 @@ func wakeArgv(bin string, w wakeTarget, msg string) []string {
 		argv = append(argv, "-n", w.name)
 	}
 	if w.model != "" {
-		argv = append(argv, "--model", w.model)
+		argv = append(argv, modelFlag, w.model)
 	}
 	return append(argv, "--", msg)
 }
@@ -270,6 +315,45 @@ func headlessTurn(t *proc.Table, id string) string {
 // printsTurn reports whether p is a headless claude turn (-p, --print).
 func printsTurn(p *proc.Process) bool {
 	return p.Comm == claudeComm && (slices.Contains(p.Args, "-p") || slices.Contains(p.Args, "--print"))
+}
+
+// roleTarget is the PreToolUse hook's lookup for a message to a role (the
+// supervisor, the guide): roleAddress of its holder now. A relay moves the
+// role, so a brief names the role, never the holder.
+func (a *app) roleTarget(name string) (string, error) {
+	if err := a.loadConfig(); err != nil {
+		return "", fmt.Errorf("beekeeper's configuration does not load, so the %s is unknown: %w", name, err)
+	}
+	rl := supervisorRole
+	if name == guard.RoleGuide {
+		rl = guideRole
+	}
+	store, err := state.Open(a.cfg.StateDir)
+	if err != nil {
+		return "", err
+	}
+	st, err := store.Read()
+	if err != nil {
+		return "", err
+	}
+	var sessions []*claude.Session
+	if t, err := plat.Machine.Processes(); err == nil {
+		sessions = claude.Discover(a.cfg, t, time.Now())
+	}
+	return roleAddress(rl.get(st).Holder, rl, sessions)
+}
+
+// roleAddress is where a message to rl's holder goes: the name its running
+// CLI takes messages under, else its desktop session id, which the desktop
+// starts, else its name.
+func roleAddress(holder *state.Supervisor, rl role, sessions []*claude.Session) (string, error) {
+	if holder == nil {
+		return "", fmt.Errorf("no session holds the %s's role (beekeeper %s status): the message has nobody to go to", rl.name, rl.name)
+	}
+	if s, ok := claude.Live(sessions, holder.Party); ok {
+		return uniqueName(sessions, s)
+	}
+	return cmp.Or(holder.HostSession, holder.Name), nil
 }
 
 // desktopPeer is the PreToolUse hook's lookup for a SendMessage to a

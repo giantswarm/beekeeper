@@ -37,8 +37,9 @@ machine has a supervisor at all times: the role moves to a successor by relay an
   `Monitor` source: silent until something needs a look — thresholds, OOM kills, sessions that
   start, end or restart, stale leases, `RUNAWAY` sessions, `LANE STALLED`, notes and timers falling
   due, the end of a session with a record, `RELAY DUE`, a relay taken or expired, `HANDOVER DUE
-  "<agent>"`, `UPGRADE` and `UPGRADE ENDED`, and `ALERT NEW|RESOLVED|FLAPPING`. It runs as
-  `beekeeper watch --notify`, so what needs the person also reaches their desktop, armed with a
+  "<agent>"`, `UPGRADE` and `UPGRADE ENDED`, `WATCH STALE` (re-arm that watch), and
+  `ALERT NEW|RESOLVED|FLAPPING`. It runs as `beekeeper watch --notify`, so what needs the person
+  also reaches their desktop, armed with a
   30-minute timeout and re-armed on every expiry: the expiry is the half-hourly tick.
   `ScheduleWakeup` is not a reliable tick; nothing depends on it.
 - **The watch's own state is on disk, not in the transcript.** `beekeeper supervisor start` makes
@@ -122,7 +123,8 @@ machine has a supervisor at all times: the role moves to a successor by relay an
 - **Alerts go to whoever changed the area.** A new alert on an installation in play, in an area a
   session handed out or changed, goes at once to that session by name, with the alert and where it
   fires. A page has an owning session within one tick: the session that changed the area,
-  otherwise a worker started for it. A page caused by a teammate's resource on our installation is
+  otherwise a worker started for it, which records it with `beekeeper alerts own`; `PAGE UNOWNED`
+  is a page nobody took. A page caused by a teammate's resource on our installation is
   contained at once by a worker, reversibly (suspend, scale to 0, revert), which tells the owner
   and notifies the guide. Another team's alert in its own area is noted in the tick and left alone.
   A `RUNAWAY` session is told its figure in one message; a `LANE STALLED` lane gets its absent
@@ -167,8 +169,9 @@ machine has a supervisor at all times: the role moves to a successor by relay an
   tick carries it, and the end summary repeats it per epic. When an epic's last sub-issue closes, a
   closing worker checks the criteria, runs the live proof and moves the epic on.
 - **A fresh worker per task.** A task goes to a worker started with `beekeeper agents start "<task>"
-  <brief file> --task "<task>"`, a model chosen for the task and a standalone brief that names this
-  supervisor and the `worker-rules` skill; it shows in the desktop's sidebar under its name and on
+  <brief file> --task "<task>"`, a model chosen for the task and a brief that carries only the
+  task: `agents start` puts the shipped worker rules ahead of it, and the worker reports to `the
+  supervisor`, which reaches whoever holds the role then; it shows in the desktop's sidebar under its name and on
   the roster busy from its start. Every new session starts that way, no session is kept in reserve
   or given a second task. An empty session the person started and registered with
   `/register-agent` takes one task by `beekeeper agents assign`. A message to an agent whose CLI

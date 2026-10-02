@@ -28,8 +28,9 @@ Without a subcommand, lists the open notes.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error { return a.noteList() },
 	}
-	var forWho, due string
+	var forWho, due, overtaken string
 	var pin bool
+	var refs []string
 	var draft noteDraft
 	add := &cobra.Command{
 		Use:   "add <text>",
@@ -52,7 +53,14 @@ once its --until probe, a shell command the watch runs every tick, exits 0.
 Notes without --for are memos and are not checked. A note for a person
 that asks again what was answered for that person within the last 72
 hours (the same verb on one of the same issues or PRs) is filed with a
-warning that quotes the answer.`,
+warning that quotes the answer.
+
+--ref links the note to an issue or pull request it asks about
+(owner/repo#n or its URL, repeatable): once every linked one is closed or
+merged, beekeeper watch closes the note as overtaken (note.overtaken).
+A note without --ref stays open: once the session that filed it is
+archived, guide watch names it to the guide as orphaned (GUIDE ORPHANED),
+to ask or close by hand; a role's run never orphans its notes.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			d, err := untilTime(a.now, due)
@@ -64,7 +72,17 @@ warning that quotes the answer.`,
 				return err
 			}
 			draft.Question = strings.Join(args, " ")
-			n := state.Note{For: forWho, Text: draft.text(), Due: d.UTC(), Default: draft.Default, By: me, At: a.now.UTC(), Kind: draft.Kind, Until: draft.Until, Pinned: pin}
+			linked := make([]string, 0, len(refs))
+			for _, s := range refs {
+				r, ok := parseRef(s)
+				if !ok {
+					return usageErr("--ref %q: an issue or pull request is owner/repo#n or its URL", s)
+				}
+				if name := refName(r); !slices.Contains(linked, name) {
+					linked = append(linked, name)
+				}
+			}
+			n := state.Note{For: forWho, Text: draft.text(), Due: d.UTC(), Default: draft.Default, By: me, At: a.now.UTC(), Kind: draft.Kind, Until: draft.Until, Pinned: pin, Refs: slices.Clip(linked)}
 			checked := forWho != "" && guides(a.cfg.Guide.Person, &n)
 			if checked {
 				m := draft.missing()
@@ -116,11 +134,15 @@ warning that quotes the answer.`,
 	add.Flags().BoolVar(&pin, "pin", false, "a standing instruction: every hand-over carries it until unpinned")
 	add.Flags().StringVar(&draft.Kind, "kind", "", `"login": a sign-in, closed once --until passes`)
 	add.Flags().StringVar(&draft.Until, "until", "", "a login note's probe: a shell command that exits 0 once signed in")
+	add.Flags().StringArrayVar(&refs, "ref", nil, "an issue or pull request the note asks about, owner/repo#n (repeatable): the note closes once all are closed or merged")
 	done := &cobra.Command{
 		Use:   "done <id>...",
 		Short: "Mark notes done",
-		Args:  cobra.MinimumNArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		Long: `Mark notes done. --overtaken "<why>" closes them as overtaken
+instead: what they ask about is settled without an answer, logged as
+note.overtaken with the reason, as the watch does.`,
+		Args: cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
 			me, err := a.caller()
 			if err != nil {
 				return err
@@ -129,11 +151,19 @@ warning that quotes the answer.`,
 			if err != nil {
 				return err
 			}
+			why := strings.TrimSpace(overtaken)
+			if cmd.Flags().Changed("overtaken") && why == "" {
+				return usageErr("--overtaken needs the reason")
+			}
 			var evs []state.Event
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Notes = slices.DeleteFunc(st.Notes, func(n state.Note) bool {
 					if slices.Contains(ids, n.ID) {
-						evs = append(evs, event(me, "note.done", "#%d %s", n.ID, n.Text))
+						if why != "" {
+							evs = append(evs, overtakenEvent(me, n, why))
+						} else {
+							evs = append(evs, event(me, "note.done", "#%d %s", n.ID, n.Text))
+						}
 						return true
 					}
 					return false
@@ -149,6 +179,7 @@ warning that quotes the answer.`,
 			return nil
 		},
 	}
+	done.Flags().StringVar(&overtaken, "overtaken", "", "close them as overtaken: why what they ask is settled")
 	answer := &cobra.Command{
 		Use:   "answer <id> <answer>",
 		Short: "Record a person's answer on a note, word for word, and close it",
