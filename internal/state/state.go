@@ -253,6 +253,11 @@ type Note struct {
 	// Pinned is a standing instruction: every hand-over carries it until it
 	// is unpinned or done.
 	Pinned bool `json:"pinned,omitempty"`
+	// Refs are the issues and pull requests (owner/repo#n) the note asks
+	// about: once every one is closed or merged, the watch closes the note
+	// as overtaken. Without refs the note is linked to its filing session,
+	// and closes once that session is archived.
+	Refs []string `json:"refs,omitempty"`
 }
 
 // Timer is a point in time the supervisor has to look at something ("check

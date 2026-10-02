@@ -468,6 +468,25 @@ func Titles(cfg *config.Config) map[string]string {
 	return out
 }
 
+// Archived is the set of the archived desktop sessions: their desktop ids
+// and their CLI session ids, current and prior. A stopped session is not
+// in it.
+func Archived(cfg *config.Config) map[string]bool {
+	out := map[string]bool{}
+	for _, path := range recordFiles(cfg) {
+		r, ok := readRecord(path)
+		if !ok || !r.IsArchived {
+			continue
+		}
+		for _, id := range append(r.PriorCLISessionIDs, r.CLISessionID, r.SessionID) {
+			if id != "" {
+				out[id] = true
+			}
+		}
+	}
+	return out
+}
+
 // StoppedRecords returns the unarchived desktop records active since since
 // whose session runs no CLI (paused or closed), most recently active first.
 func StoppedRecords(cfg *config.Config, running []*Session, since time.Time) []*Record {
