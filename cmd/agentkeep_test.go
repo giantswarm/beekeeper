@@ -213,3 +213,42 @@ func TestNextFreeCoversParkedAgentsItems(t *testing.T) {
 		t.Errorf("nothing keeps them any more: pick %v, skipped %+v", res.Pick, res.Skipped)
 	}
 }
+
+// An agent on the roster busy with its task owns its serve record while its
+// CLI is gone and the watch marked the record ended, without a keep marker:
+// board next skips its item and a claim refuses it, until the agent reports
+// idle.
+func TestNextFreeCoversABusyAgentWithoutACLI(t *testing.T) {
+	listed := keepNow
+	me := state.Party{Session: "me", Name: "Me"}
+	busy := staleAgent("Board pull 153")
+	busy.Task, busy.IdleSince = "the next free board item to done", time.Time{}
+	cands := boardCandidates(2)
+	st := &state.State{
+		Agents:  []state.Agent{busy},
+		Records: []state.Record{{Session: busy.Party, Issue: cands[0].Ref, At: listed.Add(-time.Hour), Ended: listed.Add(-time.Minute)}},
+	}
+	gone := func(state.Party) bool { return false }
+	res := nextFree(st, cands, me, gone, listed)
+	want := `served by "Board pull 153" (busy, no CLI)`
+	if res.Pick == nil || res.Pick.Ref != cands[1].Ref || len(res.Skipped) != 1 || res.Skipped[0].Skip != want {
+		t.Errorf("pick %v, skipped %+v; want %s skipped with %q", res.Pick, res.Skipped, cands[0].Ref, want)
+	}
+
+	store, err := state.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Update(func(s *state.State) ([]state.Event, error) { *s = *st; return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	only := cands[:1]
+	if res, err := claimNext(store, only, me, gone, listed, "picking up", func(string) bool { return true }); err != nil || res.Claimed || res.Pick != nil {
+		t.Errorf("claim over a busy agent's item: %+v, %v", res, err)
+	}
+
+	st.Agents[0].Task, st.Agents[0].IdleSince = "", listed
+	if res = nextFree(st, cands, me, gone, listed); res.Pick == nil || res.Pick.Ref != cands[0].Ref {
+		t.Errorf("the agent reported idle: pick %v, skipped %+v", res.Pick, res.Skipped)
+	}
+}
