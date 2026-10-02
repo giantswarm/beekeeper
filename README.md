@@ -872,7 +872,15 @@ background, one `DOCTOR` line per thing it did. It takes an agent off the roster
 its work finished with `agents idle --done` and its CLI runs no turn, once it was relieved of the
 supervisor's or the guide's role (a relieved role relays, it never hands over), or once it stayed
 idle `agents.staleAfter` (24h) with no CLI running; the desktop sessions beekeeper started for the
-finished and the stale ones are archived in one steward's turn, under the rules above. An archive
+finished and the stale ones are archived in one steward's turn, under the rules above. An entry
+kept on purpose is never removed for staleness and its desktop session never archived by the
+doctor: `beekeeper agents keep <agent> [--until <time>] [--reason <text>]` marks a judge or
+reviewer session a person returns to, a spare or a worker parked on a long external wait, and an
+open timer that wakes the agent by name (`timer add --wake`) keeps it the same way until the timer
+is done. `agents` shows what keeps an entry in its KEPT column, `doctor --dry-run` names each kept
+entry it leaves, the watch says no `AGENTS STOPPED` line for one, and `board next` counts its
+`sessions serve` record as covering its item. `agents keep <agent> --no-keep` lifts the marker and
+returns the entry to `agents.staleAfter`. An archive
 that stayed (the CLI ran a turn, no steward recorded it, also after `agents remove`) is owed: the
 doctor asks for it again on its later runs while the CLI runs no turn, in the same steward's turn,
 until the desktop records it, up to 5 stewards' turns 10 minutes apart within 24 hours, each try a

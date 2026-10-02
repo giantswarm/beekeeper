@@ -220,6 +220,20 @@ func (h Hold) Excepts(repo string, pr int) bool {
 	return h.Except != "" && (strings.EqualFold(h.Except, repo) || strings.EqualFold(h.Except, fmt.Sprintf("%s#%d", repo, pr)))
 }
 
+// Keep is a roster entry's keep marker: who set it, when, why, and until
+// when (zero: until lifted).
+type Keep struct {
+	By     Party     `json:"by"`
+	At     time.Time `json:"at"`
+	Until  time.Time `json:"until,omitzero"`
+	Reason string    `json:"reason,omitempty"`
+}
+
+// Holds reports whether the marker still keeps its entry at now.
+func (k *Keep) Holds(now time.Time) bool {
+	return k != nil && (k.Until.IsZero() || now.Before(k.Until))
+}
+
 // Agent is an empty session registered as spare capacity.
 type Agent struct {
 	Party
@@ -228,6 +242,9 @@ type Agent struct {
 	AssignedAt time.Time `json:"assignedAt,omitzero"`
 	IdleSince  time.Time `json:"idleSince,omitzero"`
 	LastTask   string    `json:"lastTask,omitempty"`
+	// Keep marks an idle entry kept on purpose (agents keep): the doctor
+	// never removes it for staleness nor archives its desktop session.
+	Keep *Keep `json:"keep,omitempty"`
 	// Done says the agent reported its work finished (agents idle --done):
 	// the doctor takes it off the roster and archives its desktop session
 	// once its CLI is idle.

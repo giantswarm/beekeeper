@@ -144,7 +144,7 @@ guide:                      # the guide's role: what guide handover --prompt tel
 agents:                     # the hand-over of registered agents
   relayAt: 400k             # watch says HANDOVER DUE once an agent's context reaches this; default: supervisor.relayAt
   noteWait: 3m              # agents handover waits this long for the agent's note
-  staleAfter: 24h           # the doctor takes an idle agent with no CLI running off the roster after this; 0: never
+  staleAfter: 24h           # the doctor takes an idle agent with no CLI running off the roster after this, unless kept (agents keep, a timer that wakes it); 0: never
   shell:                    # the agent shell's prelude, written by beekeeper hook sessionstart before each Bash command
     unalias: [grep, find, ls, cp, mv, rm]   # aliases and shell functions removed, so each runs the tool on PATH; []: none
     globs: literal          # an unmatched glob stays as written; shell: the shell's own behaviour (zsh: no matches found)

@@ -38,6 +38,9 @@ type choreKind int
 const (
 	choreRemove choreKind = iota
 	choreRetitle
+	// choreKeep is a stale entry the doctor leaves, since something keeps
+	// it (keptBy): only a dry run says it.
+	choreKeep
 )
 
 // chore is one roster or desktop fix the doctor found: an agent to take off
@@ -49,14 +52,20 @@ type chore struct {
 	archive bool
 	host    string // the desktop session to retitle
 	why     string
+	// stale says the agent is removed for staleness, which a keep marker
+	// set since the plan stops.
+	stale bool
 	// stays says why a dry run would leave the desktop session.
 	stays string
 }
 
 // String says the chore as the doctor would do it.
 func (c chore) String() string {
-	if c.kind == choreRetitle {
+	switch c.kind {
+	case choreRetitle:
 		return fmt.Sprintf("retitle %s %q (%s)", c.host, c.agent.Name, c.why)
+	case choreKeep:
+		return fmt.Sprintf("leave %q on the roster and its desktop session unarchived (%s)", c.agent.Name, c.why)
 	}
 	s := fmt.Sprintf("take %q off the roster", c.agent.Name)
 	switch {
@@ -71,7 +80,8 @@ func (c chore) String() string {
 // planChores finds the doctor's roster and desktop chores. An agent is
 // taken off the roster once it reported its work done and its CLI is idle
 // (busy: a turn or a gated merge of its own runs), once it was relieved of
-// a role, or once it stayed idle staleAfter (0: never) with no CLI running.
+// a role, or once it stayed idle staleAfter (0: never) with no CLI running,
+// unless a keep marker or a timer that wakes it keeps it (a keep chore).
 // A started session the roster keeps whose desktop record shows another
 // title than its roster name is retitled while its CLI runs no turn.
 // record reads a desktop session's record.
@@ -95,8 +105,13 @@ func planChores(st *state.State, sessions []*claude.Session, record func(host st
 			out = append(out, chore{kind: choreRemove, agent: ag, why: "it was relieved of its role, which relays instead"})
 			continue
 		case !live && staleAfter > 0 && idle >= staleAfter:
-			out = append(out, chore{kind: choreRemove, agent: ag, archive: true, why: fmt.Sprintf("idle %s, its CLI no longer runs", dur(idle))})
-			continue
+			stale := fmt.Sprintf("idle %s, its CLI no longer runs", dur(idle))
+			kept := keptBy(st, ag, now)
+			if kept == "" {
+				out = append(out, chore{kind: choreRemove, agent: ag, archive: true, why: stale, stale: true})
+				continue
+			}
+			out = append(out, chore{kind: choreKeep, agent: ag, why: stale + ", but " + kept})
 		}
 		i := slices.IndexFunc(st.Starts, func(x state.Start) bool { return x.Session != "" && x.Session == ag.Session })
 		if i < 0 || st.Starts[i].HostSession == "" {
@@ -378,7 +393,7 @@ func (a *app) removeAgents(chores []chore, by state.Party) ([]chore, error) {
 		var evs []state.Event
 		for _, c := range chores {
 			i := slices.IndexFunc(st.Agents, func(x state.Agent) bool { return x.Task == "" && x.Is(c.agent.Party) })
-			if c.kind != choreRemove || i < 0 {
+			if c.kind != choreRemove || i < 0 || c.stale && keptBy(st, st.Agents[i], a.now) != "" {
 				continue
 			}
 			removeAgent(st, i)
@@ -404,7 +419,9 @@ line:
   supervisor's or the guide's role, or once it stayed idle
   agents.staleAfter (24h) with no CLI running; the desktop sessions
   beekeeper started for the finished and the stale ones are archived in
-  one steward's turn (the desktop's Archived list brings one back);
+  one steward's turn (the desktop's Archived list brings one back); a
+  stale entry kept on purpose (agents keep, or an open timer that wakes it
+  by name) stays, and so does its desktop session;
 - asks again for an archive that stayed (its CLI ran a turn, no steward
   recorded it) on its later runs while the CLI runs no turn, until the
   desktop records it, up to 5 stewards' turns 10 minutes apart within 24h;
@@ -418,7 +435,8 @@ line:
 A session a person started is never archived or retitled, nor one that
 holds or held the supervisor's or the guide's role. The watch runs the
 doctor every tick (beekeeper watch); --dry-run says what it would do,
-the archives it owes included, probing the faults but remedying none.`,
+the archives it owes and the kept entries it leaves included, probing the
+faults but remedying none.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			for _, n := range attended {
