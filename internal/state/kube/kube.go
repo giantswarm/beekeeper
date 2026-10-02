@@ -393,6 +393,21 @@ func (s *Store) Events(n int, keep func(state.Event) bool) ([]state.Event, error
 	return out, nil
 }
 
+// FeedEvent is a beekeeper Event in the feed's schema.
+func FeedEvent(ev *corev1.Event) (feed.Event, error) {
+	var by v1alpha1.Party
+	if raw := ev.Annotations[byAnnotation]; raw != "" {
+		if err := json.Unmarshal([]byte(raw), &by); err != nil {
+			return feed.Event{}, fmt.Errorf("event %s/%s: %s: %w", ev.Namespace, ev.Name, byAnnotation, err)
+		}
+	}
+	actor := feed.Party{Name: by.Name, Person: by.Person, Team: by.Team, Host: by.Host}
+	return feed.Event{
+		ID: eventID(ev), Kind: ev.Reason, Subject: ev.InvolvedObject.Kind + "/" + ev.InvolvedObject.Name,
+		Actor: actor, Time: ev.EventTime.UTC(), Line: feed.Line(ev.Reason, actor, ev.Message),
+	}, nil
+}
+
 // Feed returns the last n events of the shared state in the feed's schema,
 // oldest first: the changes, not the audit of the calls that changed
 // nothing (serve.*).
@@ -409,17 +424,11 @@ func (s *Store) Feed(n int) ([]feed.Event, error) {
 		if strings.HasPrefix(ev.Reason, "serve.") {
 			continue
 		}
-		var by v1alpha1.Party
-		if raw := ev.Annotations[byAnnotation]; raw != "" {
-			if err := json.Unmarshal([]byte(raw), &by); err != nil {
-				return nil, fmt.Errorf("event %s/%s: %s: %w", ev.Namespace, ev.Name, byAnnotation, err)
-			}
+		fe, err := FeedEvent(ev)
+		if err != nil {
+			return nil, err
 		}
-		actor := feed.Party{Name: by.Name, Person: by.Person, Team: by.Team, Host: by.Host}
-		out = append(out, feed.Event{
-			ID: eventID(ev), Kind: ev.Reason, Subject: ev.InvolvedObject.Kind + "/" + ev.InvolvedObject.Name,
-			Actor: actor, Time: ev.EventTime.UTC(), Line: feed.Line(ev.Reason, actor, ev.Message),
-		})
+		out = append(out, fe)
 	}
 	slices.SortFunc(out, func(a, b feed.Event) int { return strings.Compare(a.ID, b.ID) })
 	if n > 0 && len(out) > n {

@@ -8,14 +8,32 @@ each resource that changed, and reads it. Nothing is polled.
 |---|---|---|
 | `beekeeper://environments/<name>` | every member | the Environment changes: holder, grants, upgrades |
 | `beekeeper://lanes/<name>` | every member | the MergeLane changes: its merge, its queue |
-| `beekeeper://roster` | every member | a RosterEntry is added, changed or removed |
-| `beekeeper://feed` | every member | an event is recorded |
+| `beekeeper://roster` | every member, [the agents they may read](#who-reads-which-agents) | a RosterEntry they may read is added, changed or removed, or a lease of their team's is taken or freed |
+| `beekeeper://feed` | every member, the events they may read | an event they may read is recorded |
 | `beekeeper://notes/<person>` | that person | a note for them, for their team (`team:<team>`) or filed by them changes |
 | `beekeeper://mailbox/<person>` | that person | a message arrives, is acked or expires |
 
 A read or a subscription of a person's resource by anyone else is refused, and a subscription
 naming one such URI is refused as a whole. Every update carries the `subscriptions/listen`
 request's id in `_meta` (`io.modelcontextprotocol/subscriptionId`).
+
+## Who reads which agents
+
+`list_agents`, `beekeeper://roster` and `beekeeper://feed` show each person the same agents, and
+their notifications reach only who may read the change:
+
+- **Their own local agents** (`local:<machine>/<name>`), from every machine they federate.
+- **Their team's local agents that work on a shared installation**: an agent holding the lease of
+  an Environment. One that works on none is its person's alone; it becomes its team's when it claims
+  a lease and its person's alone again when it frees it, and the team's roster subscriptions are
+  told of both.
+- **Every remote agent** (`kagent:<installation>/…`): its installation's kagent authorizes the
+  caller itself.
+
+A feed event about a roster entry (`agents.register`, subject `RosterEntry/<name>`) is read with
+that entry; once the entry is gone, only by its actor's person. Every other event is the
+organization's. `send_message` to a `local:` address is accepted only from the agent's person; to
+anyone else the agent is `not on the roster`, or, where they read it, refused as another person's.
 
 ## The feed
 
@@ -62,8 +80,8 @@ update the person's local beekeeper calls `receive_messages`, which returns the 
 messages in order, each with its `id`, and `ack_messages` with those ids.
 
 - `send_message(to, message)` takes an A2A Message (`messageId`, `role`, `parts`). To
-  `local:<machine>/<name>` it is queued in the mailbox of the person whose agent the roster names
-  there, in an envelope `{"to", "from": {"person", "agent", "host"}, "message"}`. To
+  `local:<machine>/<name>`, only from the agent's own person, it is queued in that person's
+  mailbox, in an envelope `{"to", "from": {"person", "agent", "host"}, "message"}`. To
   `kagent:<installation>/<namespace>/<session>` it is sent through muster (`serve.muster`, the
   installation's tool in `serve.kagent`) to the session's `invoke_agent_instance`, with the
   caller's token.

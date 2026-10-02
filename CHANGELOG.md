@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `beekeeper serve` shows each person only the agents they may read, alike in `list_agents`, `beekeeper://roster`, `beekeeper://feed` and their notifications: their own local agents, their team's local agents that hold an Environment's lease (work on a shared installation), and every remote agent; a feed event about a roster entry follows that entry. `send_message` to a `local:` address is accepted only from the agent's person. Every member read every person's local agents, and any member could queue messages into another person's mailbox ([docs/feed.md](docs/feed.md#who-reads-which-agents)).
+
 ### Added
 
 - `beekeeper serve` offers its state as MCP resources a client subscribes to with `subscriptions/listen` and is told of by `notifications/resources/updated`: `beekeeper://environments/<name>`, `beekeeper://lanes/<name>`, `beekeeper://roster` and `beekeeper://feed` for every member, `beekeeper://notes/<person>` and `beekeeper://mailbox/<person>` for that person only (a read or a subscription by anyone else is refused). The feed has a versioned schema, `beekeeper.giantswarm.io/feed/v1` ([docs/feed.md](docs/feed.md)): event ids that only grow, across restarts too, kind, subject, actor, time and the line the watch prints. `send_message(to, message)`, `receive_messages(for)` and `ack_messages(for, ids)` carry A2A messages: to `local:<machine>/<name>` into the mailbox of the agent's person, in the `beekeeper` Postgres database `BEEKEEPER_DATABASE_URL` names (at least once, ordered per sender and receiver, 50 unacked per mailbox, kept until acked or expired with an `expired` event to the sender, a sender's `messageId` accepted once in 24 h, `LISTEN`/`NOTIFY` driving the mailbox's update); to `kagent:<installation>/<namespace>/<session>` through muster (`serve.muster`, `serve.kagent`) with the caller's token. `list_agents` and the roster name each agent by its address and state.
