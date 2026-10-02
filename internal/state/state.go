@@ -284,8 +284,9 @@ type Note struct {
 	At      time.Time `json:"at"`
 	// Fired is when a watch reported the note due; it reports it once.
 	Fired time.Time `json:"fired,omitzero"`
-	// Kind is "login" for a sign-in the watch closes once Until, a shell
-	// command, exits 0.
+	// Kind is "decision" for a note that waits on a person, "memo" for a
+	// session's own record, "login" for a sign-in the watch closes once
+	// Until, a shell command, exits 0; a note filed before kinds has none.
 	Kind  string `json:"kind,omitempty"`
 	Until string `json:"until,omitempty"`
 	// Pinned is a standing instruction: every hand-over carries it until it

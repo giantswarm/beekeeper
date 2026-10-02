@@ -12,15 +12,21 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// noteReplaced is the event of a note closed by the note that replaces it.
+const noteReplaced = "note.replaced"
+
 func (a *app) noteCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "note",
 		Short: "Open items that outlive a session: questions for a person, deadlines",
 		Long: `Notes are the open items a supervisor would otherwise carry only in its
-transcript: the decisions waiting on a person, a deadline to check. A
-decision carries its default, what happens when nobody answers by its due
-time; beekeeper watch reports a note once when it is due. Notes appear in
-every hand-over until marked done. A pinned note (--pin) is a standing
+transcript. A decision waits on a person and carries its due time and its
+default, what happens when nobody answers by then; only open decisions
+reach the guide (guide queue, guide watch). A memo is a session's own
+record, a state summary, a board skip, a list of deferred work: it asks
+nobody, and a successor memo replaces its predecessor (add --replaces).
+beekeeper watch reports a note once when it is due. Notes appear in every
+hand-over, decisions and memos apart, until marked done. A pinned note (--pin) is a standing
 instruction: every hand-over, the supervisor's and the guide's, carries it
 in full until it is unpinned or done.
 
@@ -28,15 +34,17 @@ Without a subcommand, lists the open notes.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error { return a.noteList() },
 	}
-	var forWho, due, overtaken string
+	var forWho, due, overtaken, replaces string
 	var pin bool
 	var refs []string
 	var draft noteDraft
 	add := &cobra.Command{
 		Use:   "add <text>",
 		Short: "Add a note",
-		Long: `Add a note. A note for the guide's person (guide.person; with it unset,
-any --for) is refused, naming what it lacks, unless it asks something (a
+		Long: `Add a note. --kind is decision for the guide's person (guide.person; with
+it unset, any --for) and memo otherwise. A decision names who decides
+(--for) and is refused without --due and a --default that is an action. A
+decision for the guide's person is refused, naming what it lacks, unless it asks something (a
 question mark, an --option or a request verb opening it; a status line goes
 to beekeeper log add) and carries what the person needs to answer without
 asking back: --status-quo and --why, every
@@ -50,7 +58,7 @@ naming what the check found. A checked note on an issue or PR that an open
 note for the same person names, asking the same verb (the first word of
 the text), folds into that note (note.folded). A --kind login note closes
 once its --until probe, a shell command the watch runs every tick, exits 0.
-Notes without --for are memos and are not checked. A note for a person
+A memo is not checked. A note for a person
 that asks again what was answered for that person within the last 72
 hours (the same verb on one of the same issues or PRs) is filed with a
 warning that quotes the answer.
@@ -60,7 +68,10 @@ warning that quotes the answer.
 merged, beekeeper watch closes the note as overtaken (note.overtaken).
 A note without --ref stays open: once the session that filed it is
 archived, guide watch names it to the guide as orphaned (GUIDE ORPHANED),
-to ask or close by hand; a role's run never orphans its notes.`,
+to ask or close by hand; a role's run never orphans its notes.
+
+--replaces <id> closes the named open note in the same step (note.replaced)
+and carries its pin over, so a state memo is one open note at a time.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			d, err := untilTime(a.now, due)
@@ -82,8 +93,18 @@ to ask or close by hand; a role's run never orphans its notes.`,
 					linked = append(linked, name)
 				}
 			}
-			n := state.Note{For: forWho, Text: draft.text(), Due: d.UTC(), Default: draft.Default, By: me, At: a.now.UTC(), Kind: draft.Kind, Until: draft.Until, Pinned: pin, Refs: slices.Clip(linked)}
-			checked := forWho != "" && guides(a.cfg.Guide.Person, &n)
+			n := state.Note{For: forWho, Text: draft.text(), Due: d.UTC(), Default: draft.Default, By: me, At: a.now.UTC(), Until: draft.Until, Pinned: pin, Refs: slices.Clip(linked)}
+			person := a.cfg.Guide.Person
+			switch {
+			case draft.Kind == "":
+				draft.Kind = noteKind(person, &n)
+			case !slices.Contains(noteKinds, draft.Kind):
+				return usageErr("--kind %q is none of %s", draft.Kind, strings.Join(noteKinds, ", "))
+			case draft.Kind == noteDecision && forWho == "":
+				return usageErr("a decision names who decides: --for <person>")
+			}
+			n.Kind, draft.Due = draft.Kind, due
+			checked := forWho != "" && n.Kind != noteMemo && guides(person, &n)
 			if checked {
 				m := draft.missing()
 				stages, err := planStages(cmd.Context(), a.cfg.Plans, draft.text())
@@ -93,15 +114,35 @@ to ask or close by hand; a role's run never orphans its notes.`,
 				if m = append(m, stages...); len(m) > 0 {
 					return usageErr("note for %s refused, it lacks: %s", forWho, strings.Join(m, "; "))
 				}
+			} else if m := draft.unanswered(); n.Kind == noteDecision && len(m) > 0 {
+				return usageErr("decision for %s refused, it lacks: %s", forWho, strings.Join(m, "; "))
 			}
-			if forWho != "" {
+			if forWho != "" && n.Kind != noteMemo {
 				if err := a.warnAnswered(cmd, n, draft.Question); err != nil {
 					return err
 				}
 			}
+			old := 0
+			if replaces != "" {
+				ids, err := parseIDs([]string{replaces}, "note")
+				if err != nil {
+					return err
+				}
+				old = ids[0]
+			}
 			var folded *state.Note
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-				if checked {
+				var replaced *state.Note
+				if old != 0 {
+					i := slices.IndexFunc(st.Notes, func(o state.Note) bool { return o.ID == old })
+					if i < 0 {
+						return nil, refused("note #%d is not open: nothing to replace", old)
+					}
+					r := st.Notes[i]
+					replaced = &r
+					st.Notes = slices.Delete(st.Notes, i, i+1)
+					n.Pinned = n.Pinned || r.Pinned
+				} else if checked {
 					if o, ref := foldTarget(st.Notes, n, draft.Question); o != nil {
 						o.Text += fmt.Sprintf(" | Also from %s: %s", me.Name, n.Text)
 						folded = o
@@ -111,13 +152,21 @@ to ask or close by hand; a role's run never orphans its notes.`,
 				st.NextNote++
 				n.ID = st.NextNote
 				st.Notes = append(st.Notes, n)
-				return []state.Event{event(me, "note.add", "#%d %s", n.ID, n.Text)}, nil
+				evs := []state.Event{event(me, "note.add", "#%d %s", n.ID, n.Text)}
+				if replaced != nil {
+					evs = append(evs, event(me, noteReplaced, "#%d replaced by #%d: %s", replaced.ID, n.ID, replaced.Text))
+				}
+				return evs, nil
 			})
 			if err != nil {
 				return err
 			}
 			if folded != nil {
 				_, err = fmt.Fprintf(a.out, "note #%d (folded: it asks the same on the same issue or PR)\n", folded.ID)
+				return err
+			}
+			if old != 0 {
+				_, err = fmt.Fprintf(a.out, "note #%d (replaces #%d)\n", n.ID, old)
 				return err
 			}
 			_, err = fmt.Fprintf(a.out, "note #%d\n", n.ID)
@@ -132,7 +181,8 @@ to ask or close by hand; a role's run never orphans its notes.`,
 	add.Flags().StringArrayVar(&draft.Options, "option", nil, `a choice and its consequence, "<choice>: <consequence>" (repeatable)`)
 	add.Flags().StringVar(&draft.Checked, "checked", "", "where a state claim (merged, green, released, rolled, closed) was checked")
 	add.Flags().BoolVar(&pin, "pin", false, "a standing instruction: every hand-over carries it until unpinned")
-	add.Flags().StringVar(&draft.Kind, "kind", "", `"login": a sign-in, closed once --until passes`)
+	add.Flags().StringVar(&draft.Kind, "kind", "", `"decision" (the default for the guide's person), "memo" (the default otherwise) or "login" (a sign-in, closed once --until passes)`)
+	add.Flags().StringVar(&replaces, "replaces", "", "a note this one replaces: it closes in the same step (note.replaced)")
 	add.Flags().StringVar(&draft.Until, "until", "", "a login note's probe: a shell command that exits 0 once signed in")
 	add.Flags().StringArrayVar(&refs, "ref", nil, "an issue or pull request the note asks about, owner/repo#n (repeatable): the note closes once all are closed or merged")
 	done := &cobra.Command{
@@ -226,17 +276,43 @@ func (a *app) noteList() error {
 		return err
 	}
 	if a.json {
-		return a.printJSON(st.Notes)
+		notes := slices.Clone(st.Notes)
+		for i := range notes {
+			notes[i].Kind = noteKind(a.cfg.Guide.Person, &notes[i])
+		}
+		return a.printJSON(notes)
 	}
 	a.printNotes(st.Notes)
 	return nil
 }
 
+// printNotes lists notes, the decisions apart from the memos once both
+// are among them.
 func (a *app) printNotes(notes []state.Note) {
 	if len(notes) == 0 {
 		_, _ = fmt.Fprintln(a.out, "no open notes")
 		return
 	}
+	var decisions, memos []state.Note
+	for _, n := range notes {
+		if decides(a.cfg.Guide.Person, &n) {
+			decisions = append(decisions, n)
+		} else {
+			memos = append(memos, n)
+		}
+	}
+	if len(decisions) == 0 || len(memos) == 0 {
+		a.printNoteLines(notes)
+		return
+	}
+	_, _ = fmt.Fprintf(a.out, "Decisions (%d):\n", len(decisions))
+	a.printNoteLines(decisions)
+	_, _ = fmt.Fprintf(a.out, "Memos (%d):\n", len(memos))
+	a.printNoteLines(memos)
+}
+
+// printNoteLines prints one line per note.
+func (a *app) printNoteLines(notes []state.Note) {
 	for _, n := range notes {
 		var tags []string
 		if n.Pinned {

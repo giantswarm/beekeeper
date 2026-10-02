@@ -97,7 +97,7 @@ func TestNoteAddRefusesAndAcceptsForThePerson(t *testing.T) {
 	if err := addNote(a, "a memo on #7"); err != nil {
 		t.Fatalf("a memo is not checked: %v", err)
 	}
-	if err := addNote(a, "--for", notePerson, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "approve "+prURL); err != nil {
+	if err := addNote(a, "--for", notePerson, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "--due", "3h", "approve "+prURL); err != nil {
 		t.Fatalf("a complete note: %v", err)
 	}
 	st, _ := a.store.Read()
@@ -111,7 +111,7 @@ func TestNoteAddRefusesAndAcceptsForThePerson(t *testing.T) {
 
 func TestNoteOnTheSameRefAndVerbFolds(t *testing.T) {
 	a, out := noteApp(t)
-	args := []string{"--for", notePerson, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK}
+	args := []string{"--for", notePerson, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "--due", "3h"}
 	if err := addNote(a, append(args, "approve "+prURL)...); err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestNoteOnAPlanPullNeedsItsStageCheckGreen(t *testing.T) {
 	a, _ := noteApp(t)
 	a.cfg.Plans = config.Plans{Repositories: []string{"O/Plans"}, Check: config.DefaultPlansCheck}
 	add := func(url string) error {
-		return addNote(a, "--for", notePerson, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "approve the revision "+url+"?")
+		return addNote(a, "--for", notePerson, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "--due", "3h", "approve the revision "+url+"?")
 	}
 	plan := "https://github.com/o/plans/pull/"
 	if err := add(plan + "1"); Code(err) != ExitUsage || !strings.Contains(err.Error(), "a green plan-stages check on "+plan+"1 (none on its head)") {

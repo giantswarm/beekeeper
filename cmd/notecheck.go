@@ -15,9 +15,35 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// noteLogin is the kind of a note that asks its person to sign in; the
-// watch closes it once its --until probe passes.
-const noteLogin = "login"
+// The kinds of a note. A decision waits on a person, who answers it by its
+// due time or lets its default run; a memo is a session's own record (a
+// state summary, a board skip, a list of deferred work) that asks nobody;
+// a login asks its person to sign in, and the watch closes it once its
+// --until probe passes.
+const (
+	noteDecision = "decision"
+	noteMemo     = "memo"
+	noteLogin    = "login"
+)
+
+// noteKinds are the kinds `note add --kind` takes.
+var noteKinds = []string{noteDecision, noteMemo, noteLogin}
+
+// noteKind is n's kind: the one it was filed with, else, for a note filed
+// without one, a decision when it is for person (guides) and not pinned (a
+// standing instruction), a memo otherwise.
+func noteKind(person string, n *state.Note) string {
+	if slices.Contains(noteKinds, n.Kind) {
+		return n.Kind
+	}
+	if !n.Pinned && guides(person, n) {
+		return noteDecision
+	}
+	return noteMemo
+}
+
+// decides says whether n waits on its person: a decision or a sign-in.
+func decides(person string, n *state.Note) bool { return noteKind(person, n) != noteMemo }
 
 // probeTimeout bounds one run of a probe: a login note's, a timer's.
 const probeTimeout = 10 * time.Second
@@ -25,8 +51,8 @@ const probeTimeout = 10 * time.Second
 // noteDraft is what `note add` was given for a person: the question and the
 // parts the person needs to answer it without asking back.
 type noteDraft struct {
-	Question, StatusQuo, Why, Default, Checked, Kind, Until string
-	Options                                                 []string
+	Question, StatusQuo, Why, Default, Due, Checked, Kind, Until string
+	Options                                                      []string
 }
 
 var (
@@ -75,19 +101,27 @@ func (d noteDraft) asks() bool {
 }
 
 // missing names what d lacks for its person to answer it, one part each:
-// what any question lacks, and a note's default and kind.
+// what any question lacks, what happens unanswered, and a login's probe.
 func (d noteDraft) missing() []string {
-	out := d.lacks()
-	if dflt := strings.Trim(strings.TrimSpace(d.Default), ".!"); noAction.MatchString(dflt) {
-		out = append(out, fmt.Sprintf("--default %q is no action: name what happens unanswered", d.Default))
-	}
+	out := append(d.lacks(), d.unanswered()...)
 	switch {
-	case d.Kind != "" && d.Kind != noteLogin:
-		out = append(out, fmt.Sprintf("--kind %q (only %q)", d.Kind, noteLogin))
 	case d.Kind == noteLogin && strings.TrimSpace(d.Until) == "":
 		out = append(out, `--until "<probe command that exits 0 once signed in>"`)
 	case d.Kind != noteLogin && d.Until != "":
 		out = append(out, "--until without --kind login")
+	}
+	return out
+}
+
+// unanswered names what d lacks for when nobody answers: a default that
+// is an action and, for a decision, its due time.
+func (d noteDraft) unanswered() []string {
+	var out []string
+	if dflt := strings.Trim(strings.TrimSpace(d.Default), ".!"); noAction.MatchString(dflt) {
+		out = append(out, fmt.Sprintf("--default %q is no action: name what happens unanswered", d.Default))
+	}
+	if d.Kind == noteDecision && strings.TrimSpace(d.Due) == "" {
+		out = append(out, `--due "<when the default runs: 22:55 or 3h>"`)
 	}
 	return out
 }

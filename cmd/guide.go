@@ -34,7 +34,7 @@ relay starts the next run, "Guide run N+1", as a fresh session, and its
 start takes the role (` + "`beekeeper guide handover --prompt`" + ` is its prompt). ` + "`beekeeper guide watch`" + `
 says GUIDE RELAY DUE once the guide's context reaches guide.relayAt.
 
-Its queue is every open note filed --for its person, guide.person
+Its queue is every open decision filed --for its person, guide.person
 (` + "`beekeeper guide queue`" + `), and every session the desktop files as waiting
 on its person;
 ` + "`beekeeper note answer <id> <answer>`" + ` records an answer word for word and closes
@@ -136,8 +136,9 @@ func guides(person string, n *state.Note) bool {
 func guideQueue(st *state.State, sessions []*claude.Session, person string, since time.Time) (q, stopped []queueItem) {
 	for i := range st.Notes {
 		n := &st.Notes[i]
-		// A pinned note is a standing instruction, not a decision.
-		if !guides(person, n) || n.Pinned {
+		// A pinned note is a standing instruction and a memo asks nobody:
+		// neither is a decision.
+		if !guides(person, n) || n.Pinned || !decides(person, n) {
 			continue
 		}
 		_, live := claude.Live(sessions, n.By)
@@ -250,8 +251,9 @@ func (a *app) guideQueueCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "queue",
 		Short: "The decisions waiting on the person: its open notes and waiting sessions, with their owners",
-		Long: `Every open note filed for the guide's person, guide.person (note add --for,
-or an older note's "[for <person>]" prefix, in any case), with the session
+		Long: `Every open decision filed for the guide's person, guide.person (note add
+--for, or an older note's "[for <person>]" prefix, in any case; a memo or a
+pinned note is none), with the session
 that filed it (its owner, and whether it still runs), its deadline and its
 default, then every session that serves a wait on its person (sessions serve
 --waits "<person>: …") with what it needs, while its CLI runs or stopped
@@ -632,7 +634,7 @@ func (a *app) closedNotes(st *state.State) (map[int]state.Event, error) {
 		return out, nil
 	}
 	evs, err := a.store.Events(0, func(e state.Event) bool {
-		return e.Verb == noteAnswered || e.Verb == "note.done" || e.Verb == noteOvertaken
+		return e.Verb == noteAnswered || e.Verb == "note.done" || e.Verb == noteOvertaken || e.Verb == noteReplaced
 	})
 	if err != nil {
 		return nil, err
@@ -668,10 +670,13 @@ func (a *app) feedLines(st *state.State, sessions []*claude.Session, closed map[
 			}
 		}
 		for _, o := range orphans {
+			i := slices.IndexFunc(st.Notes, func(n state.Note) bool { return n.ID == o.id })
+			if i < 0 || !decides(a.cfg.Guide.Person, &st.Notes[i]) {
+				continue // a memo is its filer's record, not the guide's
+			}
 			k := fmt.Sprintf("orphan#%d", o.id)
 			cur = append(cur, k)
-			i := slices.IndexFunc(st.Notes, func(n state.Note) bool { return n.ID == o.id })
-			if i < 0 || slices.Contains(r.Fed, k) {
+			if slices.Contains(r.Fed, k) {
 				continue
 			}
 			who, text := noteFor(&st.Notes[i])
@@ -686,6 +691,8 @@ func (a *app) feedLines(st *state.State, sessions []*claude.Session, closed map[
 			switch e, ok := closed[id]; {
 			case ok && e.Verb == noteAnswered:
 				lines = append(lines, fmt.Sprintf("GUIDE ANSWERED (%s): %s", truncate(e.By.Name, 30), truncate(oneLine(e.Detail), 240)))
+			case ok && e.Verb == noteReplaced:
+				lines = append(lines, "GUIDE REPLACED: "+truncate(oneLine(e.Detail), 240))
 			case ok && e.Verb == noteOvertaken:
 				lines = append(lines, fmt.Sprintf("GUIDE CLOSED #%d overtaken: %s", id, truncate(oneLine(overtakenReason(e)), 200)))
 			default:

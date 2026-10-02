@@ -200,6 +200,7 @@ func TestNoteWithoutRefsStaysOpenOnceItsSessionIsArchived(t *testing.T) {
 func TestGuideFeedSaysOrphanedNotesOnce(t *testing.T) {
 	a, _ := noteApp(t)
 	a.cfg.Claude.DesktopDir = filepath.Join(t.TempDir(), "desktop")
+	a.cfg.Guide.Person = personTimo
 	st := &state.State{Notes: archivedNotes(t, a.cfg.Claude.DesktopDir)}
 	orphans := findOrphaned(st, claude.Archived(a.cfg))
 	if len(orphans) != 1 || orphans[0].id != 1 {
