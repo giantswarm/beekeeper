@@ -64,7 +64,7 @@ func TestStandbyResumesASuccessorWhoseReopenWaitsOnTheFocus(t *testing.T) {
 	w.now = relayNow
 	supervisedBy(t, w, run, relayNow.Add(-3*time.Minute))
 	w.pending(context.Background(), nil)
-	eventually(2*time.Second, func() bool { return revived.Load() == 1 })
+	eventually(2*time.Second, func() bool { return revived.Load() == 1 && !w.stand.starting.Load() })
 	if n := revived.Load(); n != 1 {
 		t.Fatalf("%d headless resumes, want 1:\n%s", n, out)
 	}
