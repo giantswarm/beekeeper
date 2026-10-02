@@ -25,6 +25,8 @@ const (
 	whichLane    = "Which lane?"
 	keyStatusQuo = "status_quo"
 	keyDefault   = "default"
+	keyWhy       = "why"
+	ownLane      = "muster gets its own lane"
 )
 
 // fakeGateway is klaus-gateway's decisions surface: it keeps what it was
@@ -91,8 +93,8 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	kim := e.as(t, e.token(t, "kim@example.com", teamGroup))
 	ask := func(forWho, due string) int {
 		args := map[string]any{paramText: "Which lane for muster?", paramFor: forWho, paramKind: noteDecision, paramAgent: anaAgent, paramHost: lab,
-			keyStatusQuo: "muster has no lane", "why": "only its owners pick its lane", "options": []any{"portal: it rolls with backstage", "own: a lane of its own"}, "recommend": 2,
-			"due": due, keyDefault: "muster gets its own lane"}
+			keyStatusQuo: "muster has no lane", keyWhy: "only its owners pick its lane", "options": []any{"portal: it rolls with backstage", "own: a lane of its own"}, "recommend": 2,
+			dueID: due, keyDefault: ownLane}
 		id, _ := e.expect(t, ana, "note_add", args, false, "note #")["id"].(float64)
 		return int(id)
 	}
@@ -106,7 +108,7 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	d := posted[0]
 	if d.Person != boEmail || d.Team != "" || d.Question != "Which lane for muster?" || d.StatusQuo != "muster has no lane" ||
 		len(d.Options) != 2 || d.Options[1].Label != "own" || d.Options[1].Consequence != "a lane of its own" || d.Recommend != 2 ||
-		d.Default != "muster gets its own lane" || d.Note != "note #"+strconv.Itoa(n) || d.AskedBy != "ana@example.com/ana-agent on lab" ||
+		d.Default != ownLane || d.Note != "note #"+strconv.Itoa(n) || d.AskedBy != "ana@example.com/ana-agent on lab" ||
 		d.Answer.Tool != "x_beekeeper_note_answer" || d.Answer.Arguments[paramVia] != viaSlack {
 		t.Fatalf("decision %+v", d)
 	}
@@ -141,7 +143,7 @@ func TestEnvtestServeDecisions(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.expect(t, bo, "note_answer", map[string]any{paramNote: n, paramChoice: 1}, true, "not open")
-	if _, closed := gw.seen(); len(closed) != 4 || closed[2] != "d3 withdrawn: " || closed[3] != "d4 defaulted: muster gets its own lane" {
+	if _, closed := gw.seen(); len(closed) != 4 || closed[2] != "d3 withdrawn: " || closed[3] != "d4 defaulted: "+ownLane {
 		t.Fatalf("closed %q", closed)
 	}
 	if evs, _ := e.store.Events(0, func(ev state.Event) bool { return ev.Verb == noteDefaulted }); len(evs) != 1 {
@@ -150,18 +152,18 @@ func TestEnvtestServeDecisions(t *testing.T) {
 
 	// A decision that renders not, or reaches nobody, is refused and not kept.
 	if text, _, failed := ana.call("note_add", map[string]any{paramText: strings.Repeat("x", questionMax+1), paramFor: "bo", paramKind: noteDecision,
-		keyStatusQuo: "s", "why": "w", "due": "3h", keyDefault: "muster gets its own lane"}); !failed || !strings.Contains(text, "cannot render") {
+		keyStatusQuo: "s", keyWhy: "w", dueID: "3h", keyDefault: ownLane}); !failed || !strings.Contains(text, "cannot render") {
 		t.Fatalf("long question: %v %s", failed, text)
 	}
 	if text, _, failed := ana.call("note_add", map[string]any{paramText: whichLane, paramFor: "eve", paramKind: noteDecision,
-		keyStatusQuo: "s", "why": "w", "due": "3h", keyDefault: "muster gets its own lane"}); !failed || !strings.Contains(text, "nobody's name") {
+		keyStatusQuo: "s", keyWhy: "w", dueID: "3h", keyDefault: ownLane}); !failed || !strings.Contains(text, "nobody's name") {
 		t.Fatalf("unknown person: %v %s", failed, text)
 	}
 	gw.mu.Lock()
 	gw.refuses = true
 	gw.mu.Unlock()
 	if text, _, failed := ana.call("note_add", map[string]any{paramText: whichLane, paramFor: "bo", paramKind: noteDecision,
-		keyStatusQuo: "s", "why": "w", "due": "3h", keyDefault: "muster gets its own lane"}); !failed || !strings.Contains(text, "not delivered, withdrawn") {
+		keyStatusQuo: "s", keyWhy: "w", dueID: "3h", keyDefault: ownLane}); !failed || !strings.Contains(text, "not delivered, withdrawn") {
 		t.Fatalf("refused by the gateway: %v %s", failed, text)
 	}
 	if st, _ := e.store.Read(); len(st.Notes) != 0 {
