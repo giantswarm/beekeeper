@@ -19,6 +19,7 @@ import (
 // values that go stale within minutes.
 var liveCommands = [][2]string{
 	{"beekeeper sessions", "the running sessions, what each is on and runs, their memory"},
+	{"beekeeper capacity", "the busy agents against the floor and ceiling, the headroom and whether a start fits"},
 	{"beekeeper snapshot", "the machine's memory, swap, load and OOM kills, and what changed"},
 	{"beekeeper watch", "one line per change, silent otherwise: the source of a Monitor"},
 	{"beekeeper lanes", "the merge lanes now: the running merge, the settling rollout, who is next"},
@@ -54,6 +55,7 @@ func (a *app) printPrompt(ctx context.Context, v *view, l *leaseList, al *alerts
 	a.promptLanes(p, a.laneViews(v.st))
 	a.promptRecords(p, v.st.Records, v.raw)
 	a.promptAgents(p, v.st.Agents, v.raw)
+	a.promptCapacity(p, v.st, v.raw)
 	a.promptAlerts(p, al)
 	p("## Live values\n\nRead them when you need them; this prompt holds none:\n")
 	for _, c := range liveCommands {
@@ -317,6 +319,13 @@ func (a *app) promptAgents(p printer, agents []state.Agent, sessions []*claude.S
 		p("- %q idle since %s", ag.Name, a.stamp(cmp.Or(ag.IdleSince, ag.Registered)))
 	}
 	p("")
+}
+
+// promptCapacity says the roster's count against the target; the headroom
+// is a live value, read with beekeeper capacity.
+func (a *app) promptCapacity(p printer, st *state.State, sessions []*claude.Session) {
+	section(p, "Capacity", false, "")
+	p("%s; `beekeeper capacity` says whether a start fits.\n", countAgents(st, sessions, a.now).line(a.cfg.Capacity))
 }
 
 func (a *app) promptAlerts(p printer, al *alertsView) {
