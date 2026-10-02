@@ -1,0 +1,62 @@
+suite: rbac
+templates:
+  - rbac.yaml
+tests:
+  - it: lets the ServiceAccount write only beekeeper's resources and create Events
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: ClusterRole
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["beekeeper.giantswarm.io"]
+              resources: ["environments", "holds", "mergelanes", "notes", "rosterentries"]
+              verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+            - apiGroups: ["beekeeper.giantswarm.io"]
+              resources: ["environments/status", "holds/status", "mergelanes/status", "notes/status", "rosterentries/status"]
+              verbs: ["get", "update", "patch"]
+            - apiGroups: [""]
+              resources: ["events"]
+              verbs: ["get", "list", "watch", "create"]
+            - apiGroups: [""]
+              resources: ["namespaces"]
+              verbs: ["get", "list", "watch"]
+  - it: binds the writer role to beekeeper's ServiceAccount only
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: ClusterRoleBinding
+      - equal:
+          path: subjects
+          value:
+            - kind: ServiceAccount
+              name: RELEASE-NAME
+              namespace: NAMESPACE
+  - it: gives the read role read verbs only, aggregated into view
+    documentIndex: 2
+    asserts:
+      - equal:
+          path: metadata.labels["rbac.authorization.k8s.io/aggregate-to-view"]
+          value: "true"
+      - equal:
+          path: rules[0].verbs
+          value: ["get", "list", "watch"]
+  - it: binds no reader group by default
+    asserts:
+      - hasDocuments:
+          count: 3
+  - it: binds the reader groups to the read role
+    set:
+      rbac.readerGroups: [giantswarm-ad:everyone]
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: roleRef.name
+          value: RELEASE-NAME-read
+      - equal:
+          path: subjects
+          value:
+            - apiGroup: rbac.authorization.k8s.io
+              kind: Group
+              name: giantswarm-ad:everyone

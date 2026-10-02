@@ -1,0 +1,69 @@
+# beekeeper's ServiceAccount is the only writer of the beekeeper.giantswarm.io
+# resources and their Events; it reads the namespaces to audit a list in the
+# caller's team namespace. Nothing else.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "beekeeper.name" . }}
+  labels:
+    {{- include "beekeeper.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["beekeeper.giantswarm.io"]
+    resources: ["environments", "holds", "mergelanes", "notes", "rosterentries"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["beekeeper.giantswarm.io"]
+    resources: ["environments/status", "holds/status", "mergelanes/status", "notes/status", "rosterentries/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch", "create"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "beekeeper.name" . }}
+  labels:
+    {{- include "beekeeper.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "beekeeper.name" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "beekeeper.name" . }}
+    namespace: {{ .Release.Namespace }}
+---
+# People and agents read the resources; they write through serve's tools.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "beekeeper.name" . }}-read
+  labels:
+    {{- include "beekeeper.labels" . | nindent 4 }}
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
+rules:
+  - apiGroups: ["beekeeper.giantswarm.io"]
+    resources: ["environments", "holds", "mergelanes", "notes", "rosterentries"]
+    verbs: ["get", "list", "watch"]
+{{- with .Values.rbac.readerGroups }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "beekeeper.name" $ }}-read
+  labels:
+    {{- include "beekeeper.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "beekeeper.name" $ }}-read
+subjects:
+  {{- range . }}
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: {{ . }}
+  {{- end }}
+{{- end }}

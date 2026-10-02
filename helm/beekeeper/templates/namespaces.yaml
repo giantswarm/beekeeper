@@ -1,0 +1,14 @@
+{{- if .Values.teamNamespaces.create }}
+{{- range include "beekeeper.teamNamespaces" . | fromJsonArray }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ . }}
+  labels:
+    {{- include "beekeeper.labels" $ | nindent 4 }}
+  annotations:
+    # The team's notes and agents live here: an uninstall keeps them.
+    helm.sh/resource-policy: keep
+{{- end }}
+{{- end }}
