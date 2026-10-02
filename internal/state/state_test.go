@@ -461,7 +461,7 @@ func TestPartyIdentityIsPersisted(t *testing.T) {
 
 func TestStateWithoutIdentityLoads(t *testing.T) {
 	dir := t.TempDir()
-	doc := `{"notes":[{"id":1,"text":"q","by":{"session":"s1","name":worker}}]}`
+	doc := `{"notes":[{"id":1,"text":"q","by":{"session":"s1","name":"Worker"}}]}`
 	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(doc), 0o600); err != nil {
 		t.Fatal(err)
 	}
