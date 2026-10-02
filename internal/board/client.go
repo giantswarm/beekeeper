@@ -369,6 +369,28 @@ func searchQuery(s string) string {
 	return s
 }
 
+// Open reports whether the issue or pull request ref is open.
+func (c *Client) Open(ctx context.Context, ref string) (bool, error) {
+	owner, repo, n, err := Ref(ref)
+	if err != nil {
+		return false, err
+	}
+	var r struct {
+		Repository struct {
+			Item *struct{ State string } `json:"issueOrPullRequest"`
+		} `json:"repository"`
+	}
+	err = c.graphql(ctx, &r, `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issueOrPullRequest(number:$n){...on Issue{state} ...on PullRequest{state}}}}`,
+		vars{"o": owner, "r": repo, "n": n})
+	if err != nil {
+		return false, err
+	}
+	if r.Repository.Item == nil {
+		return false, &Refusal{fmt.Sprintf("%s/%s#%d is no issue", owner, repo, n)}
+	}
+	return r.Repository.Item.State == "OPEN", nil
+}
+
 // Moved is a move of an item to a status.
 type Moved struct {
 	Ref  string `json:"ref"`

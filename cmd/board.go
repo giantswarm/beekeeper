@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"cmp"
+	"context"
 	"errors"
 	"fmt"
 	"regexp"
@@ -35,7 +36,7 @@ sets an item's Status by the board's canonical names.`,
 }
 
 func (a *app) boardNextCmd() *cobra.Command {
-	var claim bool
+	var claim, replace bool
 	var waits string
 	c := &cobra.Command{
 		Use:   "next",
@@ -62,8 +63,10 @@ under the state lock, after checking again that nobody claimed it since:
 two concurrent claims never get the same item. It changes nothing on the
 board: the item keeps its Status until the caller, having judged it, moves
 it with board move. The claim ends when the session ends, when its agent
-reports idle (agents idle) or with sessions unserve <owner/repo#n>; a
-second claim replaces the first. Exit 3 when no item is free.`,
+reports idle (agents idle) or with sessions unserve <owner/repo#n>. A
+second claim while the session still serves an open item is refused with
+its record, which stays as it was; --replace takes the next item and
+replaces the record. Exit 3 when no item is free or the claim is refused.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			var me state.Party
@@ -75,6 +78,8 @@ second claim replaces the first. Exit 3 when no item is free.`,
 				if me.Session == "" {
 					return usageErr("--claim records a session's serve: run it inside a Claude Code session, not --as")
 				}
+			} else if replace {
+				return usageErr("--replace replaces the record of a --claim: pass --claim too")
 			} else {
 				me, _ = a.caller()
 			}
@@ -94,7 +99,13 @@ second claim replaces the first. Exit 3 when no item is free.`,
 			}
 			var res nextResult
 			if claim {
-				res, err = claimNext(a.store, cands, me, alive, listed, waits)
+				open := func(string) bool { return false }
+				if !replace {
+					if open, err = servedOpen(cmd.Context(), cl, a.store, me); err != nil {
+						return err
+					}
+				}
+				res, err = claimNext(a.store, cands, me, alive, listed, waits, open)
 			} else {
 				var st *state.State
 				if st, err = a.store.Read(); err == nil {
@@ -108,15 +119,42 @@ second claim replaces the first. Exit 3 when no item is free.`,
 		},
 	}
 	c.Flags().BoolVar(&claim, "claim", false, "record the item as the calling session's (sessions serve), atomically")
+	c.Flags().BoolVar(&replace, "replace", false, "with --claim: replace the session's record even while the item it serves is open")
 	c.Flags().StringVar(&waits, "waits", "", "what the session waits on, for the record")
 	return c
+}
+
+// servedOpen asks GitHub whether each item me's records serve is open, ahead
+// of the claim's state lock. It reports an item it did not ask about as
+// open: a record written since is the session's own, and is kept.
+func servedOpen(ctx context.Context, cl *board.Client, store *state.Store, me state.Party) (func(string) bool, error) {
+	st, err := store.Read()
+	if err != nil {
+		return nil, err
+	}
+	asked := map[string]bool{}
+	for _, r := range st.Records {
+		if !r.Session.Is(me) || !r.Ended.IsZero() {
+			continue
+		}
+		if asked[strings.ToLower(r.Issue)], err = cl.Open(ctx, r.Issue); err != nil {
+			return nil, fmt.Errorf("is %s, the item this session serves, open: %w", r.Issue, err)
+		}
+	}
+	return func(ref string) bool {
+		o, ok := asked[strings.ToLower(ref)]
+		return o || !ok
+	}, nil
 }
 
 // nextResult is the pick, nil when no item is free, and the candidates
 // skipped above it with the reason.
 type nextResult struct {
-	Pick    *board.Candidate  `json:"pick"`
-	Claimed bool              `json:"claimed,omitempty"`
+	Pick    *board.Candidate `json:"pick"`
+	Claimed bool             `json:"claimed,omitempty"`
+	// Held is the record a claim was refused for: the open item the
+	// session serves.
+	Held    *state.Record     `json:"held,omitempty"`
 	Skipped []board.Candidate `json:"skipped,omitempty"`
 }
 
@@ -156,10 +194,18 @@ func nextFree(st *state.State, cands []board.Candidate, me state.Party, alive fu
 }
 
 // claimNext picks the next free candidate and records it as me's serve
-// in one update of the state, so a concurrent claim sees it.
-func claimNext(store *state.Store, cands []board.Candidate, me state.Party, alive func(state.Party) bool, listed time.Time, waits string) (nextResult, error) {
+// in one update of the state, so a concurrent claim sees it. While me
+// serves an item open reports open, and me is no agent reporting idle,
+// it changes nothing and returns that record as Held.
+func claimNext(store *state.Store, cands []board.Candidate, me state.Party, alive func(state.Party) bool, listed time.Time, waits string, open func(string) bool) (nextResult, error) {
 	var res nextResult
 	err := store.Update(func(st *state.State) ([]state.Event, error) {
+		if i := slices.IndexFunc(st.Records, func(r state.Record) bool {
+			return r.Session.Is(me) && r.Ended.IsZero() && open(r.Issue)
+		}); i >= 0 && !agentIdle(st, me) {
+			res.Held = &st.Records[i]
+			return nil, nil
+		}
 		res = nextFree(st, cands, me, alive, listed)
 		if res.Pick == nil {
 			return nil, nil
@@ -173,16 +219,19 @@ func claimNext(store *state.Store, cands []board.Candidate, me state.Party, aliv
 	return res, err
 }
 
+// agentIdle reports whether p is a registered agent reporting idle: without
+// a task, or done with it.
+func agentIdle(st *state.State, p state.Party) bool {
+	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) })
+	return i >= 0 && (st.Agents[i].Task == "" || st.Agents[i].Done)
+}
+
 // taskRef finds the issues an agent's task names: owner/repo#n or a URL.
 var taskRef = regexp.MustCompile(`([\w.-]+/[\w.-]+)#(\d+)|github\.com/([\w.-]+/[\w.-]+)/(?:issues|pull)/(\d+)`)
 
 // boardOwners maps each issue (lower-cased owner/repo#n) a live session
 // serves, or an open note waits on, to who serves it or whom it waits on.
 func boardOwners(st *state.State, me state.Party, alive func(state.Party) bool, listed time.Time) map[string]string {
-	idle := func(p state.Party) bool {
-		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) })
-		return i >= 0 && (st.Agents[i].Task == "" || st.Agents[i].Done)
-	}
 	name := func(p state.Party) string {
 		if p.Is(me) {
 			return "you"
@@ -202,7 +251,7 @@ func boardOwners(st *state.State, me state.Party, alive func(state.Party) bool, 
 		switch k := kept(r.Session); {
 		case k != "":
 			out[strings.ToLower(r.Issue)] = fmt.Sprintf("%s (parked, %s)", name(r.Session), k)
-		case r.Ended.IsZero() && (alive(r.Session) || r.At.After(listed)) && !idle(r.Session):
+		case r.Ended.IsZero() && (alive(r.Session) || r.At.After(listed)) && !agentIdle(st, r.Session):
 			out[strings.ToLower(r.Issue)] = name(r.Session)
 		}
 	}
@@ -234,6 +283,9 @@ func (a *app) printNext(res nextResult, offered int) error {
 			return err
 		}
 	} else {
+		if h := res.Held; h != nil {
+			_, _ = fmt.Fprintf(a.out, "this session %s: finish it, release it with sessions unserve %s, or claim with --replace\n", recordText(*h), h.Issue)
+		}
 		if res.Pick != nil {
 			p := res.Pick
 			_, _ = fmt.Fprintf(a.out, "%s %s\n  %s\n  picked: %s\n", p.Ref, p.Title, p.URL, p.Why())
@@ -253,6 +305,9 @@ func (a *app) printNext(res nextResult, offered int) error {
 			}
 			_ = w.Flush()
 		}
+	}
+	if h := res.Held; h != nil {
+		return refused("no claim: this session serves %s, still open", h.Issue)
 	}
 	if res.Pick == nil {
 		return refused("no free board item: the order offered %d, all skipped", offered)
