@@ -168,7 +168,7 @@ func (s *auditStore) Update(fn func(*state.State) ([]state.Event, error)) error 
 }
 
 func (s *server) newCall(ctx context.Context, who identity.Caller, req mcp.CallToolRequest) *call {
-	me := state.Party{Name: cmp.Or(strings.TrimSpace(req.GetString("agent", "")), who.Email), Person: who.Email, Team: who.Team, Host: strings.TrimSpace(req.GetString("host", ""))}
+	me := state.Party{Name: cmp.Or(strings.TrimSpace(req.GetString(paramAgent, "")), who.Email), Person: who.Email, Team: who.Team, Host: strings.TrimSpace(req.GetString(paramHost, ""))}
 	cfg := *s.cfg
 	cfg.Identity = config.Identity{Person: me.Person, Team: me.Team, Host: me.Host}
 	st := &auditStore{Store: s.store}
@@ -277,7 +277,7 @@ func required(req mcp.CallToolRequest, key, what string) (string, error) {
 }
 
 func prArg(req mcp.CallToolRequest) (string, int, error) {
-	repo, err := required(req, "repo", "the repository, owner/repo")
+	repo, err := required(req, paramRepo, "the repository, owner/repo")
 	if err != nil {
 		return "", 0, err
 	}

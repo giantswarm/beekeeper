@@ -28,6 +28,15 @@ import (
 	"github.com/giantswarm/beekeeper/pkg/apis/beekeeper/v1alpha1"
 )
 
+const (
+	anaAgent  = "ana-agent"
+	backstage = "giantswarm/backstage"
+	glean     = "glean"
+	// portalLane is the test's MergeLane; teamGroup the Dex group of ourTeam.
+	portalLane = "portal"
+	teamGroup  = "giantswarm:team-bumblebee"
+)
+
 // serveEnv is beekeeper serve over a kube-apiserver with beekeeper's CRDs,
 // behind a test Dex.
 type serveEnv struct {
@@ -68,9 +77,9 @@ func newServeEnv(t *testing.T) *serveEnv {
 	for _, o := range []ctrlclient.Object{
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "beekeeper-bumblebee"}},
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "beekeeper-planeteers"}},
-		&v1alpha1.Environment{ObjectMeta: metav1.ObjectMeta{Name: "graveler"}, Spec: v1alpha1.EnvironmentSpec{Installation: "graveler", Team: "bumblebee"}},
-		&v1alpha1.Environment{ObjectMeta: metav1.ObjectMeta{Name: "glean"}, Spec: v1alpha1.EnvironmentSpec{Installation: "glean", Team: "bumblebee"}},
-		&v1alpha1.MergeLane{ObjectMeta: metav1.ObjectMeta{Name: "portal"}, Spec: v1alpha1.MergeLaneSpec{Installation: "gazelle", Repositories: []string{"giantswarm/backstage"}}},
+		&v1alpha1.Environment{ObjectMeta: metav1.ObjectMeta{Name: graveler}, Spec: v1alpha1.EnvironmentSpec{Installation: graveler, Team: ourTeam}},
+		&v1alpha1.Environment{ObjectMeta: metav1.ObjectMeta{Name: glean}, Spec: v1alpha1.EnvironmentSpec{Installation: glean, Team: ourTeam}},
+		&v1alpha1.MergeLane{ObjectMeta: metav1.ObjectMeta{Name: portalLane}, Spec: v1alpha1.MergeLaneSpec{Installation: "gazelle", Repositories: []string{backstage}}},
 	} {
 		if err := c.Create(ctx, o); err != nil {
 			t.Fatal(err)
@@ -88,8 +97,8 @@ func newServeEnv(t *testing.T) *serveEnv {
 	}
 	cfg.Serve = config.Serve{
 		Issuer: iss.URL, ClientIDs: []string{"muster"}, Organization: "giantswarm:giantswarm",
-		Teams:       map[string]string{"giantswarm:team-bumblebee": "bumblebee", "giantswarm:team-planeteers": "planeteers"},
-		Supervisors: map[string]string{"bumblebee": "giantswarm:bumblebee-supervisors"},
+		Teams:       map[string]string{teamGroup: ourTeam, "giantswarm:team-planeteers": "planeteers"},
+		Supervisors: map[string]string{ourTeam: "giantswarm:bumblebee-supervisors"},
 	}
 	ids, err := identity.New(ctx, cfg.Serve)
 	if err != nil {
@@ -120,7 +129,7 @@ func (e *serveEnv) as(t *testing.T, token string) *mcpCaller {
 	t.Cleanup(func() { _ = c.Close() })
 	init := mcp.InitializeRequest{}
 	init.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
-	init.Params.ClientInfo = mcp.Implementation{Name: "test", Version: "0"}
+	init.Params.ClientInfo = mcp.Implementation{Name: "serve-test", Version: "0"}
 	if _, err := c.Initialize(context.Background(), init); err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +204,7 @@ func TestEnvtestServeRefusesWithoutAValidToken(t *testing.T) {
 	for name, header := range map[string]string{
 		"no token":     "",
 		"garbage":      "Bearer x.y.z",
-		"not a member": "Bearer " + e.iss.Token(t, "muster", identitytest.Claims{Email: "eve@example.com", EmailVerified: identitytest.Verified(), Groups: []string{"giantswarm:team-bumblebee"}}),
+		"not a member": "Bearer " + e.iss.Token(t, "muster", identitytest.Claims{Email: "eve@example.com", EmailVerified: identitytest.Verified(), Groups: []string{teamGroup}}),
 	} {
 		req, _ := http.NewRequest(http.MethodPost, e.url, body)
 		req.Header.Set("Content-Type", "application/json")
@@ -218,75 +227,75 @@ func TestEnvtestServeRefusesWithoutAValidToken(t *testing.T) {
 
 func TestEnvtestServeTools(t *testing.T) {
 	e := newServeEnv(t)
-	ana := e.as(t, e.token(t, "ana@example.com", "giantswarm:team-bumblebee"))
-	bo := e.as(t, e.token(t, "bo@example.com", "giantswarm:team-bumblebee"))
-	sup := e.as(t, e.token(t, "sup@example.com", "giantswarm:team-bumblebee", "giantswarm:bumblebee-supervisors"))
+	ana := e.as(t, e.token(t, "ana@example.com", teamGroup))
+	bo := e.as(t, e.token(t, "bo@example.com", teamGroup))
+	sup := e.as(t, e.token(t, "sup@example.com", teamGroup, "giantswarm:bumblebee-supervisors"))
 	pia := e.as(t, e.token(t, "pia@example.com", "giantswarm:team-planeteers"))
 	agent := func(args map[string]any) map[string]any {
-		args["agent"], args["host"] = "ana-agent", "lab"
+		args[paramAgent], args[paramHost] = anaAgent, lab
 		return args
 	}
 
 	// Leases: one holder, the holder or the team's supervisor releases.
-	got := e.expect(t, ana, "lease_claim", agent(map[string]any{"environment": "graveler", "purpose": "e2e for #123"}), false, "claimed graveler")
-	if h, _ := got["holder"].(map[string]any); h["person"] != "ana@example.com" || h["team"] != "bumblebee" || h["name"] != "ana-agent" {
+	got := e.expect(t, ana, "lease_claim", agent(map[string]any{paramEnvironment: graveler, paramPurpose: "e2e for #123"}), false, "claimed graveler")
+	if h, _ := got["holder"].(map[string]any); h["person"] != "ana@example.com" || h["team"] != ourTeam || h["name"] != "ana-agent" {
 		t.Errorf("the lease's holder %v", got["holder"])
 	}
-	e.expect(t, ana, "lease_claim", agent(map[string]any{"environment": "graveler", "purpose": "again"}), false, "already yours")
-	e.expect(t, bo, "lease_claim", map[string]any{"environment": "graveler", "purpose": "mine"}, true, `graveler is held by "ana@example.com/ana-agent"`)
-	e.expect(t, bo, "lease_claim", agent(map[string]any{"environment": "graveler", "purpose": "same agent name"}), true, `graveler is held by "ana@example.com/ana-agent"`)
-	e.expect(t, bo, "lease_claim", map[string]any{"environment": "nowhere", "purpose": "x"}, true, "not an Environment")
-	e.expect(t, bo, "lease_release", map[string]any{"environment": "graveler"}, true, "only that person or team bumblebee's supervisor role")
+	e.expect(t, ana, "lease_claim", agent(map[string]any{paramEnvironment: graveler, paramPurpose: "again"}), false, "already yours")
+	e.expect(t, bo, "lease_claim", map[string]any{paramEnvironment: graveler, paramPurpose: "mine"}, true, `graveler is held by "ana@example.com/ana-agent"`)
+	e.expect(t, bo, "lease_claim", agent(map[string]any{paramEnvironment: graveler, paramPurpose: "same agent name"}), true, `graveler is held by "ana@example.com/ana-agent"`)
+	e.expect(t, bo, "lease_claim", map[string]any{paramEnvironment: "nowhere", paramPurpose: "x"}, true, "not an Environment")
+	e.expect(t, bo, "lease_release", map[string]any{paramEnvironment: graveler}, true, "only that person or team bumblebee's supervisor role")
 	list := e.expect(t, pia, "lease_list", map[string]any{}, false, "free: glean")
 	if held, _ := list["held"].([]any); len(held) != 1 {
 		t.Errorf("lease_list held %v", list["held"])
 	}
-	e.expect(t, sup, "lease_release", map[string]any{"environment": "graveler"}, false, `released graveler (held by "ana@example.com/ana-agent": e2e for #123)`)
-	e.expect(t, ana, "lease_release", map[string]any{"environment": "graveler"}, false, "graveler was free")
-	e.expect(t, ana, "lease_claim", map[string]any{"environment": "glean", "purpose": "proof"}, false, "claimed glean")
-	e.expect(t, ana, "lease_release", agent(map[string]any{"environment": "glean"}), false, "released glean")
+	e.expect(t, sup, "lease_release", map[string]any{paramEnvironment: graveler}, false, `released graveler (held by "ana@example.com/ana-agent": e2e for #123)`)
+	e.expect(t, ana, "lease_release", map[string]any{paramEnvironment: graveler}, false, "graveler was free")
+	e.expect(t, ana, "lease_claim", map[string]any{paramEnvironment: glean, paramPurpose: "proof"}, false, "claimed glean")
+	e.expect(t, ana, "lease_release", agent(map[string]any{paramEnvironment: glean}), false, "released glean")
 
 	// Holds: anyone sets one; its setter or the setter's team's supervisor lifts it.
-	e.expect(t, ana, "hold_set", map[string]any{"target": "giantswarm/backstage", "reason": "portal upgrade"}, false, "held giantswarm/backstage until lifted: portal upgrade")
-	e.expect(t, pia, "hold_set", map[string]any{"target": "giantswarm/backstage", "reason": "mine now"}, true, "ana@example.com's")
+	e.expect(t, ana, "hold_set", map[string]any{paramTarget: backstage, paramReason: "portal upgrade"}, false, "held giantswarm/backstage until lifted: portal upgrade")
+	e.expect(t, pia, "hold_set", map[string]any{paramTarget: backstage, paramReason: "mine now"}, true, "ana@example.com's")
 	e.expect(t, ana, "hold_list", map[string]any{}, false, "portal upgrade")
-	e.expect(t, pia, "hold_lift", map[string]any{"target": "giantswarm/backstage"}, true, "only that person or team bumblebee's supervisor role")
-	e.expect(t, ana, "hold_set", map[string]any{"target": "lane:nowhere", "reason": "x"}, true, "no lane")
-	e.expect(t, ana, "hold_lift", map[string]any{"target": "giantswarm/backstage"}, false, "lifted the hold on giantswarm/backstage")
-	e.expect(t, ana, "hold_lift", map[string]any{"target": "giantswarm/backstage"}, false, "was not held")
+	e.expect(t, pia, "hold_lift", map[string]any{paramTarget: backstage}, true, "only that person or team bumblebee's supervisor role")
+	e.expect(t, ana, "hold_set", map[string]any{paramTarget: "lane:nowhere", paramReason: "x"}, true, "no lane")
+	e.expect(t, ana, "hold_lift", map[string]any{paramTarget: backstage}, false, "lifted the hold on giantswarm/backstage")
+	e.expect(t, ana, "hold_lift", map[string]any{paramTarget: backstage}, false, "was not held")
 
 	// Lanes: queue, turn, settle.
-	e.expect(t, ana, "lane_queue", map[string]any{"repo": "giantswarm/backstage", "pr": 1}, false, "queued giantswarm/backstage#1 in lane portal, number 1")
-	e.expect(t, bo, "lane_queue", map[string]any{"repo": "giantswarm/backstage", "pr": 2}, false, "number 2")
-	e.expect(t, bo, "lane_queue", map[string]any{"repo": "giantswarm/backstage", "pr": 2}, false, "already number 2")
-	e.expect(t, bo, "lane_turn", map[string]any{"repo": "giantswarm/backstage", "pr": 2}, false, "behind giantswarm/backstage#1")
-	turn := e.expect(t, ana, "lane_turn", map[string]any{"repo": "giantswarm/backstage", "pr": 1}, false, "your turn")
+	e.expect(t, ana, "lane_queue", map[string]any{paramRepo: backstage, "pr": 1}, false, "queued giantswarm/backstage#1 in lane portal, number 1")
+	e.expect(t, bo, "lane_queue", map[string]any{paramRepo: backstage, "pr": 2}, false, "number 2")
+	e.expect(t, bo, "lane_queue", map[string]any{paramRepo: backstage, "pr": 2}, false, "already number 2")
+	e.expect(t, bo, "lane_turn", map[string]any{paramRepo: backstage, "pr": 2}, false, "behind giantswarm/backstage#1")
+	turn := e.expect(t, ana, "lane_turn", map[string]any{paramRepo: backstage, "pr": 1}, false, "your turn")
 	if turn["turn"] != true {
 		t.Errorf("lane_turn %v", turn)
 	}
-	e.expect(t, ana, "lane_turn", map[string]any{"repo": "giantswarm/backstage", "pr": 9}, true, "not queued")
-	e.expect(t, ana, "lane_queue", map[string]any{"repo": "giantswarm/muster", "pr": 1}, true, "no MergeLane carries giantswarm/muster")
-	e.expect(t, bo, "lane_settle", map[string]any{"repo": "giantswarm/backstage", "pr": 2}, false, "heads lane portal")
-	e.expect(t, ana, "lane_settle", map[string]any{"repo": "giantswarm/backstage", "pr": 1}, true, "lane portal is busy")
-	e.expect(t, ana, "lane_turn", map[string]any{"repo": "giantswarm/backstage", "pr": 1}, false, "behind giantswarm/backstage#2")
+	e.expect(t, ana, "lane_turn", map[string]any{paramRepo: backstage, "pr": 9}, true, "not queued")
+	e.expect(t, ana, "lane_queue", map[string]any{paramRepo: "giantswarm/muster", "pr": 1}, true, "no MergeLane carries giantswarm/muster")
+	e.expect(t, bo, "lane_settle", map[string]any{paramRepo: backstage, "pr": 2}, false, "heads lane portal")
+	e.expect(t, ana, "lane_settle", map[string]any{paramRepo: backstage, "pr": 1}, true, "lane portal is busy")
+	e.expect(t, ana, "lane_turn", map[string]any{paramRepo: backstage, "pr": 1}, false, "behind giantswarm/backstage#2")
 	e.expect(t, pia, "lanes", map[string]any{}, false, "giantswarm/backstage#2")
 
 	// Notes: filed into the filer's team; answered by its addressee.
 	note := e.expect(t, ana, "note_add", map[string]any{"text": "which lane for muster?", "for": "bo@example.com", "kind": "memo"}, false, "note #1")
-	if by, _ := note["by"].(map[string]any); by["team"] != "bumblebee" {
+	if by, _ := note["by"].(map[string]any); by["team"] != ourTeam {
 		t.Errorf("note_add %v", note)
 	}
 	e.expect(t, pia, "note_list", map[string]any{}, false, "which lane for muster?")
-	e.expect(t, pia, "note_answer", map[string]any{"note": 1, "answer": "portal"}, true, "only that person")
-	e.expect(t, bo, "note_answer", map[string]any{"note": 1, "answer": "the portal lane"}, false, "note #1 answered and closed")
-	e.expect(t, bo, "note_answer", map[string]any{"note": 1, "answer": "again"}, true, "not open")
+	e.expect(t, pia, "note_answer", map[string]any{paramNote: 1, paramAnswer: "the merge lane"}, true, "only that person")
+	e.expect(t, bo, "note_answer", map[string]any{paramNote: 1, paramAnswer: "the portal lane"}, false, "note #1 answered and closed")
+	e.expect(t, bo, "note_answer", map[string]any{paramNote: 1, paramAnswer: "again"}, true, "not open")
 
 	// The roster.
-	e.expect(t, ana, "agents_register", map[string]any{"agent": "ana-agent"}, true, "host is required")
+	e.expect(t, ana, "agents_register", map[string]any{paramAgent: anaAgent}, true, "host is required")
 	e.expect(t, ana, "agents_register", agent(map[string]any{}), false, "register: ana-agent idle")
 	e.expect(t, ana, "agents_register", agent(map[string]any{}), false, "register: ana-agent idle")
-	e.expect(t, pia, "agents_register", map[string]any{"agent": "ana-agent", "host": "lab"}, true, "ana-agent on lab is ana@example.com's agent")
-	e.expect(t, pia, "agents_register", map[string]any{"agent": "ana-agent", "host": "laptop"}, false, "register: ana-agent idle")
+	e.expect(t, pia, "agents_register", map[string]any{paramAgent: anaAgent, paramHost: lab}, true, "ana-agent on lab is ana@example.com's agent")
+	e.expect(t, pia, "agents_register", map[string]any{paramAgent: anaAgent, paramHost: "laptop"}, false, "register: ana-agent idle")
 	e.expect(t, pia, "list_agents", map[string]any{"scope": "team"}, false, "planeteers")
 	e.expect(t, ana, "list_agents", map[string]any{}, false, "ana@example.com")
 

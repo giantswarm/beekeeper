@@ -17,11 +17,25 @@ import (
 	"github.com/giantswarm/beekeeper/pkg/apis/beekeeper/v1alpha1"
 )
 
+// The tools' parameters that more than one tool takes or the tests name.
+const (
+	paramEnvironment = "environment"
+	paramRepo        = "repo"
+	paramReason      = "reason"
+	paramAnswer      = "answer"
+	paramAgent       = "agent"
+	paramHost        = "host"
+	paramPurpose     = "purpose"
+	paramTarget      = "target"
+	paramNote        = "note"
+	lanesName        = "lanes"
+)
+
 // The options every tool takes: who the calling agent is and where it runs.
 func callerOptions() []mcp.ToolOption {
 	return []mcp.ToolOption{
-		mcp.WithString("agent", mcp.Description("the calling agent's name (default: the person's email)")),
-		mcp.WithString("host", mcp.Description("the machine or installation the agent runs on")),
+		mcp.WithString(paramAgent, mcp.Description("the calling agent's name (default: the person's email)")),
+		mcp.WithString(paramHost, mcp.Description("the machine or installation the agent runs on")),
 	}
 }
 
@@ -34,18 +48,18 @@ func (s *server) tools() []serveTool {
 	return []serveTool{
 		{newTool("lease_list", "The installations: who holds each, since when and what for, and which are free.", true), toolLeaseList},
 		{newTool("lease_claim", "Claim an installation; refused while another holds it or it upgrades.", false,
-			mcp.WithString("environment", mcp.Required(), mcp.Description("the Environment, an installation's name")),
-			mcp.WithString("purpose", mcp.Required(), mcp.Description("what the installation is for"))), toolLeaseClaim},
+			mcp.WithString(paramEnvironment, mcp.Required(), mcp.Description("the Environment, an installation's name")),
+			mcp.WithString(paramPurpose, mcp.Required(), mcp.Description("what the installation is for"))), toolLeaseClaim},
 		{newTool("lease_release", "Release an installation: your own, or as the holder's team's supervisor role.", false,
-			mcp.WithString("environment", mcp.Required(), mcp.Description("the Environment"))), toolLeaseRelease},
+			mcp.WithString(paramEnvironment, mcp.Required(), mcp.Description("the Environment"))), toolLeaseRelease},
 		{newTool("hold_list", "The holds: merges into a repository or lane, or all GitHub work, held until lifted.", true), toolHoldList},
 		{newTool("hold_set", "Hold a target: owner/repo, lane:<name>, merges or github.", false,
-			mcp.WithString("target", mcp.Required(), mcp.Description("owner/repo, lane:<name>, merges or github")),
-			mcp.WithString("reason", mcp.Required(), mcp.Description("why")),
+			mcp.WithString(paramTarget, mcp.Required(), mcp.Description("owner/repo, lane:<name>, merges or github")),
+			mcp.WithString(paramReason, mcp.Required(), mcp.Description("why")),
 			mcp.WithString("until", mcp.Description("when it ends by itself: a time (15:30) or a duration (2h)")),
 			mcp.WithString("except", mcp.Description("the one owner/repo or owner/repo#n the hold lets through"))), toolHoldSet},
 		{newTool("hold_lift", "Lift a hold: your own, or as its setter's team's supervisor role.", false,
-			mcp.WithString("target", mcp.Required(), mcp.Description("the held target"))), toolHoldLift},
+			mcp.WithString(paramTarget, mcp.Required(), mcp.Description("the held target"))), toolHoldLift},
 		{newTool("lanes", "The merge lanes: the running merge, the settling one and the queue.", true), toolLanes},
 		{newTool("lane_queue", "Queue a pull request's merge at the end of its lane.", false, prOptions()...), toolLaneQueue},
 		{newTool("lane_settle", "Register a merge run outside the gate as its lane's head, running or merged.", false,
@@ -65,8 +79,8 @@ func (s *server) tools() []serveTool {
 			mcp.WithBoolean("pin", mcp.Description("a standing instruction"))), toolNoteAdd},
 		{newTool("note_list", "The open notes, decisions apart from memos.", true), toolNoteList},
 		{newTool("note_answer", "Answer a note, word for word, and close it: as the person it is for, or its filer.", false,
-			mcp.WithNumber("note", mcp.Required(), mcp.Description("the note's number")),
-			mcp.WithString("answer", mcp.Required(), mcp.Description("the answer, word for word"))), toolNoteAnswer},
+			mcp.WithNumber(paramNote, mcp.Required(), mcp.Description("the note's number")),
+			mcp.WithString(paramAnswer, mcp.Required(), mcp.Description("the answer, word for word"))), toolNoteAnswer},
 		{newTool("agents_register", "Register the calling agent on its team's roster, idle unless it holds an open task.", false), toolAgentsRegister},
 		{newTool("list_agents", "The agent roster.", true,
 			mcp.WithString("scope", mcp.Description("all (default) or team: only the caller's team"))), toolListAgents},
@@ -76,7 +90,7 @@ func (s *server) tools() []serveTool {
 
 func prOptions() []mcp.ToolOption {
 	return []mcp.ToolOption{
-		mcp.WithString("repo", mcp.Required(), mcp.Description("the repository, owner/repo")),
+		mcp.WithString(paramRepo, mcp.Required(), mcp.Description("the repository, owner/repo")),
 		mcp.WithNumber("pr", mcp.Required(), mcp.Description("the pull request's number")),
 	}
 }
@@ -147,12 +161,12 @@ func (c *call) heldBy(env string, h v1alpha1.Holder) error {
 }
 
 func toolLeaseClaim(c *call, req mcp.CallToolRequest) (any, error) {
-	name, err := required(req, "environment", "the installation to claim")
+	name, err := required(req, paramEnvironment, "the installation to claim")
 	if err != nil {
 		return nil, err
 	}
 	c.concern = kube.EnvironmentObject(name)
-	purpose, err := required(req, "purpose", "say what the installation is for")
+	purpose, err := required(req, paramPurpose, "say what the installation is for")
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +197,7 @@ func toolLeaseClaim(c *call, req mcp.CallToolRequest) (any, error) {
 }
 
 func toolLeaseRelease(c *call, req mcp.CallToolRequest) (any, error) {
-	name, err := required(req, "environment", "the installation to release")
+	name, err := required(req, paramEnvironment, "the installation to release")
 	if err != nil {
 		return nil, err
 	}
@@ -269,12 +283,12 @@ func (c *call) hold(target string) (*state.Hold, error) {
 }
 
 func toolHoldSet(c *call, req mcp.CallToolRequest) (any, error) {
-	target, err := required(req, "target", "owner/repo, lane:<name>, merges or github")
+	target, err := required(req, paramTarget, "owner/repo, lane:<name>, merges or github")
 	if err != nil {
 		return nil, err
 	}
 	c.concern = kube.HoldObject(target)
-	args := []string{"set", target, "--reason", req.GetString("reason", "")}
+	args := []string{"set", target, "--reason", req.GetString(paramReason, "")}
 	if u := req.GetString("until", ""); u != "" {
 		args = append(args, "--until", u)
 	}
@@ -301,7 +315,7 @@ func toolHoldSet(c *call, req mcp.CallToolRequest) (any, error) {
 }
 
 func toolHoldLift(c *call, req mcp.CallToolRequest) (any, error) {
-	target, err := required(req, "target", "the held target")
+	target, err := required(req, paramTarget, "the held target")
 	if err != nil {
 		return nil, err
 	}
@@ -336,7 +350,7 @@ type centralLane struct {
 
 func toolLanes(c *call, _ mcp.CallToolRequest) (any, error) {
 	lanes, err := c.laneList()
-	return map[string]any{"lanes": lanes}, err
+	return map[string]any{lanesName: lanes}, err
 }
 
 func (c *call) laneList() ([]centralLane, error) {
@@ -612,11 +626,11 @@ func (c *call) noteList() ([]state.Note, error) {
 }
 
 func toolNoteAnswer(c *call, req mcp.CallToolRequest) (any, error) {
-	id := req.GetInt("note", 0)
+	id := req.GetInt(paramNote, 0)
 	if id <= 0 {
 		return nil, usageErr("note is required: the note's number")
 	}
-	answer, err := required(req, "answer", "the answer, word for word")
+	answer, err := required(req, paramAnswer, "the answer, word for word")
 	if err != nil {
 		return nil, err
 	}
@@ -638,10 +652,10 @@ func toolNoteAnswer(c *call, req mcp.CallToolRequest) (any, error) {
 }
 
 func toolAgentsRegister(c *call, req mcp.CallToolRequest) (any, error) {
-	if _, err := required(req, "agent", "the name to register under"); err != nil {
+	if _, err := required(req, paramAgent, "the name to register under"); err != nil {
 		return nil, err
 	}
-	if _, err := required(req, "host", "the machine or installation the agent runs on"); err != nil {
+	if _, err := required(req, paramHost, "the machine or installation the agent runs on"); err != nil {
 		return nil, err
 	}
 	c.concern = kube.RosterObject(c.me)
@@ -681,7 +695,7 @@ func toolListAgents(c *call, req mcp.CallToolRequest) (any, error) {
 		return nil, usageErr("scope %q: all or team", scope)
 	}
 	agents, err := c.agentList(scope == "team")
-	return map[string]any{"agents": agents}, err
+	return map[string]any{agentsName: agents}, err
 }
 
 func (c *call) agentList(team bool) ([]state.Agent, error) {

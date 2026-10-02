@@ -12,11 +12,19 @@ import (
 	"github.com/giantswarm/beekeeper/internal/identity/identitytest"
 )
 
+const (
+	org       = "giantswarm:giantswarm"
+	bumblebee = "bumblebee"
+	ana       = "ana@example.com"
+	notValid  = "not valid"
+	teamGroup = "giantswarm:team-bumblebee"
+)
+
 func serveConfig(issuer string) config.Serve {
 	return config.Serve{
-		Issuer: issuer, ClientIDs: []string{"muster", "exchanged"}, Organization: "giantswarm:giantswarm",
-		Teams:       map[string]string{"giantswarm:team-bumblebee": "bumblebee", "giantswarm:team-planeteers": "planeteers"},
-		Supervisors: map[string]string{"bumblebee": "giantswarm:bumblebee-supervisors"},
+		Issuer: issuer, ClientIDs: []string{"muster", "exchanged"}, Organization: org,
+		Teams:       map[string]string{teamGroup: bumblebee, "giantswarm:team-planeteers": "planeteers"},
+		Supervisors: map[string]string{bumblebee: "giantswarm:bumblebee-supervisors"},
 	}
 }
 
@@ -28,24 +36,24 @@ func TestVerify(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	member := []string{"giantswarm:giantswarm", "giantswarm:team-bumblebee"}
+	member := []string{org, teamGroup}
 	no := false
 
 	c, err := v.Verify(ctx, iss.Token(t, "muster", identitytest.Claims{Email: "Ana@Example.com", EmailVerified: identitytest.Verified(), Groups: member}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Email != "ana@example.com" || c.Team != "bumblebee" {
+	if c.Email != ana || c.Team != bumblebee {
 		t.Errorf("caller %+v, want ana@example.com of bumblebee", c)
 	}
-	if v.Supervises(c, "bumblebee") {
+	if v.Supervises(c, bumblebee) {
 		t.Error("a member without the supervisors' group supervises")
 	}
 	sup, err := v.Verify(ctx, iss.Token(t, "exchanged", identitytest.Claims{Email: "sup@example.com", EmailVerified: identitytest.Verified(), Groups: append(member, "giantswarm:bumblebee-supervisors")}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !v.Supervises(sup, "bumblebee") || v.Supervises(sup, "planeteers") {
+	if !v.Supervises(sup, bumblebee) || v.Supervises(sup, "planeteers") {
 		t.Error("the supervisors' group supervises its team only")
 	}
 
@@ -53,15 +61,15 @@ func TestVerify(t *testing.T) {
 		name, token, want string
 	}{
 		{"no token", "", "no bearer token"},
-		{"garbage", "not.a.token", "not valid"},
-		{"another issuer's key", other.Token(t, "muster", identitytest.Claims{Issuer: iss.URL, Email: "ana@example.com", EmailVerified: identitytest.Verified(), Groups: member}), "not valid"},
-		{"expired", iss.Token(t, "muster", identitytest.Claims{Email: "ana@example.com", EmailVerified: identitytest.Verified(), Groups: member, Expiry: time.Now().Add(-time.Minute).Unix()}), "not valid"},
-		{"another audience", iss.Token(t, "grafana", identitytest.Claims{Email: "ana@example.com", EmailVerified: identitytest.Verified(), Groups: member}), "not for any of"},
+		{"garbage", "not.a.token", notValid},
+		{"another issuer's key", other.Token(t, "muster", identitytest.Claims{Issuer: iss.URL, Email: ana, EmailVerified: identitytest.Verified(), Groups: member}), notValid},
+		{"expired", iss.Token(t, "muster", identitytest.Claims{Email: ana, EmailVerified: identitytest.Verified(), Groups: member, Expiry: time.Now().Add(-time.Minute).Unix()}), notValid},
+		{"another audience", iss.Token(t, "grafana", identitytest.Claims{Email: ana, EmailVerified: identitytest.Verified(), Groups: member}), "not for any of"},
 		{"no email", iss.Token(t, "muster", identitytest.Claims{Groups: member}), "no email"},
-		{"unverified email", iss.Token(t, "muster", identitytest.Claims{Email: "ana@example.com", EmailVerified: &no, Groups: member}), "not verified"},
-		{"no email_verified", iss.Token(t, "muster", identitytest.Claims{Email: "ana@example.com", Groups: member}), "not verified"},
-		{"not a member", iss.Token(t, "muster", identitytest.Claims{Email: "eve@example.com", EmailVerified: identitytest.Verified(), Groups: []string{"giantswarm:team-bumblebee"}}), "not a member"},
-		{"no team", iss.Token(t, "muster", identitytest.Claims{Email: "ana@example.com", EmailVerified: identitytest.Verified(), Groups: []string{"giantswarm:giantswarm"}}), "no team"},
+		{"unverified email", iss.Token(t, "muster", identitytest.Claims{Email: ana, EmailVerified: &no, Groups: member}), "not verified"},
+		{"no email_verified", iss.Token(t, "muster", identitytest.Claims{Email: ana, Groups: member}), "not verified"},
+		{"not a member", iss.Token(t, "muster", identitytest.Claims{Email: "eve@example.com", EmailVerified: identitytest.Verified(), Groups: []string{teamGroup}}), "not a member"},
+		{"no team", iss.Token(t, "muster", identitytest.Claims{Email: ana, EmailVerified: identitytest.Verified(), Groups: []string{org}}), "no team"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := v.Verify(ctx, tc.token)
