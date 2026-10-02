@@ -416,6 +416,31 @@ func (st *State) BypassStart(session string) (Start, bool) {
 	return Start{}, false
 }
 
+// Knows reports whether p is a session beekeeper started (any mode), holds
+// the supervisor's or the guide's role, or is an agent on the roster: the
+// sessions the hooks act in wherever they run.
+func (st *State) Knows(p Party) bool {
+	if p.Session == "" && p.HostSession == "" {
+		return false
+	}
+	for _, s := range st.Starts {
+		if s.Is(p) {
+			return true
+		}
+	}
+	for _, h := range []*Supervisor{st.Supervisor, st.GuideRole().Holder} {
+		if h != nil && h.Is(p) {
+			return true
+		}
+	}
+	for _, a := range st.Agents {
+		if a.Is(p) {
+			return true
+		}
+	}
+	return false
+}
+
 // State is the whole document.
 type State struct {
 	Supervisor *Supervisor `json:"supervisor,omitempty"`

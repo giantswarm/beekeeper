@@ -171,6 +171,10 @@ outbound:                   # what the hook refuses to let leave the machine (RE
   sweepRoots: [~]           # the watch looks here for world-readable private keys and credentials in git remote URLs
   sweepDepth: 5
 
+hooks:
+  scope:                    # where the Claude Code hooks act; unset, in every session
+    dirs: [~/projects/notebook, ~/projects/work]   # a session whose cwd or project lies under one; beekeeper's own starts, roles and roster agents always
+
 scan:                       # the value scanner's index (README: What reaches the model); beekeeper scan index reads these
   sops: [~/projects/configs/*/secrets/*.enc.yaml]   # SOPS file globs (no **), decrypted by sops in beekeeper's process
   vaults: [Team Shared]     # 1Password vaults whose concealed fields are fingerprinted (op item get --reveal)
