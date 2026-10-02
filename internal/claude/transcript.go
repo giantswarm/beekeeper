@@ -107,8 +107,9 @@ const RoleTool = "tool"
 
 // The content block types of a tool call and of text.
 const (
-	blockToolUse = "tool_use"
-	blockText    = "text"
+	blockToolUse    = "tool_use"
+	blockToolResult = "tool_result"
+	blockText       = "text"
 )
 
 type entry struct {
@@ -262,7 +263,7 @@ func Called(path, suffix string) (bool, error) {
 				switch {
 				case b.Type == blockToolUse && strings.HasSuffix(b.Name, suffix):
 					calls[b.ID] = true
-				case b.Type == "tool_result" && calls[b.ToolUseID] && !b.IsError:
+				case b.Type == blockToolResult && calls[b.ToolUseID] && !b.IsError:
 					return true, nil
 				}
 			}
@@ -353,7 +354,7 @@ func OpenBackground(path string) ([]Background, error) {
 				switch {
 				case b.Type == blockToolUse && b.Name == "Bash" && b.Input.RunInBackground:
 					launched[b.ID] = Background{Command: b.Input.Command, Description: b.Input.Description}
-				case b.Type == "tool_result" && res.BackgroundTaskID != "":
+				case b.Type == blockToolResult && res.BackgroundTaskID != "":
 					if _, ok := launched[b.ToolUseID]; ok {
 						byTask[res.BackgroundTaskID] = b.ToolUseID
 						tasks = append(tasks, b.ToolUseID)

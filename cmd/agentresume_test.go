@@ -31,7 +31,7 @@ func waitApp(t *testing.T, transcript, waits string) (*app, *[]string) {
 	t.Helper()
 	a, _ := stubApp(t)
 	a.cfg.Desktop.TypingQuiet.Duration = -1
-	a.cfg.Guide.Person = "Timo"
+	a.cfg.Guide.Person = personTimo
 	dir := filepath.Join(a.cfg.Claude.ProjectsDir, "-work")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -125,7 +125,7 @@ func TestReopenLeavesAloneWhatNeedsNoResume(t *testing.T) {
 	}{
 		"parked on the person":   {backgroundTurn("sleep 600"), "Timo's answer on the rollout", false},
 		"parked on a note":       {backgroundTurn("sleep 600"), "note #12", false},
-		"done":                   {backgroundTurn("sleep 600"), "", true},
+		"finished":               {backgroundTurn("sleep 600"), "", true},
 		"no wait":                {"{}\n", "CI", false},
 		"a gated devctl wait":    {backgroundTurn("devctl pr wait giantswarm/beekeeper 340"), "CI", false},
 		"a completed background": {backgroundTurn("make test") + `{"type":"user","message":{"role":"user","content":"<task-notification>\n<task-id>b1</task-id>\n</task-notification>"}}` + "\n", "", false},
@@ -152,7 +152,7 @@ func TestReopenLeavesAloneWhatNeedsNoResume(t *testing.T) {
 // from one that ended on a wait again after its resume.
 func TestStoppedAgentsTellParkedFromEndedOnAWait(t *testing.T) {
 	w, _, out := reportingWatch(t, t.TempDir())
-	w.cfg.Guide.Person = "Timo"
+	w.cfg.Guide.Person = personTimo
 	parked, again := staleAgent("Parked"), staleAgent("Again")
 	parked.Task, again.Task = "a rollout", "a proof"
 	again.AssignedAt = w.now.Add(-time.Hour)
@@ -179,7 +179,7 @@ func TestParkedOn(t *testing.T) {
 		"timothy's branch builds": false,
 		"":                        false,
 	} {
-		if got := parkedOn(waits, "Timo") != ""; got != want {
+		if got := parkedOn(waits, personTimo) != ""; got != want {
 			t.Errorf("parkedOn(%q) = %v, want %v", waits, got, want)
 		}
 	}

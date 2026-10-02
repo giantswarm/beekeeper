@@ -255,7 +255,7 @@ func scanTranscript(window []byte, whole bool, now time.Time) (Work, Activity) {
 			switch b.Type {
 			case blockText:
 				turn = turn || (!e.IsMeta && isTurn(b.Text))
-			case "tool_result":
+			case blockToolResult:
 				turn = false
 				acts.Result(b.ToolUseID, resultText(b.Content))
 				if b.IsError {
