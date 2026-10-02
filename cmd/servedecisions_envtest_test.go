@@ -151,7 +151,7 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	}
 
 	// A decision that renders not, or reaches nobody, is refused and not kept.
-	if text, _, failed := ana.call("note_add", map[string]any{paramText: strings.Repeat("x", questionMax+1), paramFor: "bo", paramKind: noteDecision,
+	if text, _, failed := ana.call("note_add", map[string]any{paramText: whichLane + strings.Repeat("x", questionMax), paramFor: "bo", paramKind: noteDecision,
 		keyStatusQuo: "s", keyWhy: "w", dueID: "3h", keyDefault: ownLane}); !failed || !strings.Contains(text, "cannot render") {
 		t.Fatalf("long question: %v %s", failed, text)
 	}
