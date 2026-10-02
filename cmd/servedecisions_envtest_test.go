@@ -91,7 +91,7 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	kim := e.as(t, e.token(t, "kim@example.com", teamGroup))
 	ask := func(forWho, due string) int {
 		args := map[string]any{paramText: "Which lane for muster?", paramFor: forWho, paramKind: noteDecision, paramAgent: anaAgent, paramHost: lab,
-			keyStatusQuo: "muster has no lane", "options": []any{"portal: it rolls with backstage", "own: a lane of its own"}, "recommend": 2,
+			keyStatusQuo: "muster has no lane", "why": "only its owners pick its lane", "options": []any{"portal: it rolls with backstage", "own: a lane of its own"}, "recommend": 2,
 			"due": due, keyDefault: "muster gets its own lane"}
 		id, _ := e.expect(t, ana, "note_add", args, false, "note #")["id"].(float64)
 		return int(id)
@@ -150,18 +150,18 @@ func TestEnvtestServeDecisions(t *testing.T) {
 
 	// A decision that renders not, or reaches nobody, is refused and not kept.
 	if text, _, failed := ana.call("note_add", map[string]any{paramText: strings.Repeat("x", questionMax+1), paramFor: "bo", paramKind: noteDecision,
-		keyStatusQuo: "s", "due": "3h", keyDefault: "muster gets its own lane"}); !failed || !strings.Contains(text, "cannot render") {
+		keyStatusQuo: "s", "why": "w", "due": "3h", keyDefault: "muster gets its own lane"}); !failed || !strings.Contains(text, "cannot render") {
 		t.Fatalf("long question: %v %s", failed, text)
 	}
 	if text, _, failed := ana.call("note_add", map[string]any{paramText: whichLane, paramFor: "eve", paramKind: noteDecision,
-		keyStatusQuo: "s", "due": "3h", keyDefault: "muster gets its own lane"}); !failed || !strings.Contains(text, "nobody's name") {
+		keyStatusQuo: "s", "why": "w", "due": "3h", keyDefault: "muster gets its own lane"}); !failed || !strings.Contains(text, "nobody's name") {
 		t.Fatalf("unknown person: %v %s", failed, text)
 	}
 	gw.mu.Lock()
 	gw.refuses = true
 	gw.mu.Unlock()
 	if text, _, failed := ana.call("note_add", map[string]any{paramText: whichLane, paramFor: "bo", paramKind: noteDecision,
-		keyStatusQuo: "s", "due": "3h", keyDefault: "muster gets its own lane"}); !failed || !strings.Contains(text, "not delivered, withdrawn") {
+		keyStatusQuo: "s", "why": "w", "due": "3h", keyDefault: "muster gets its own lane"}); !failed || !strings.Contains(text, "not delivered, withdrawn") {
 		t.Fatalf("refused by the gateway: %v %s", failed, text)
 	}
 	if st, _ := e.store.Read(); len(st.Notes) != 0 {
