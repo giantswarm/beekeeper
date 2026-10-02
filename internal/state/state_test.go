@@ -248,3 +248,176 @@ func TestEventsAreWrittenInUTC(t *testing.T) {
 		t.Errorf("%d events, want 3", lines)
 	}
 }
+
+// newerSchema is a state a newer beekeeper wrote: every object that carries
+// per-entry data has a member this binary does not know.
+const newerSchema = `{
+  "writer": {"version": "v9.0.0", "build": "b1"},
+  "supervisor": {"session": "s0", "name": "Supervisor run 9", "since": "2026-10-02T14:00:00Z", "term": 9},
+  "guide": {"holder": {"session": "g0", "name": "Guide", "since": "2026-10-02T14:00:00Z"}, "mood": "calm"},
+  "grants": [{"resource": "agentlab-1", "to": {"name": "a"}, "by": {"name": "s"}, "at": "2026-10-02T14:00:00Z", "ttl": "2h"}],
+  "holds": [{"target": "o/r", "reason": "x", "by": {"name": "s"}, "at": "2026-10-02T14:00:00Z", "scope": "merge"}],
+  "agents": [
+    {"session": "s1", "name": "Agent one", "registered": "2026-10-02T14:00:00Z", "keep": {"by": {"name": "s"}, "at": "2026-10-02T14:22:00Z", "ticket": "o/r#1"}, "lane": "x"},
+    {"session": "s2", "name": "Agent two", "registered": "2026-10-02T14:00:00Z", "badge": "two"}
+  ],
+  "notes": [{"id": 1, "text": "q", "by": {"name": "s"}, "at": "2026-10-02T14:00:00Z", "urgency": "high"}],
+  "timers": [{"id": 1, "due": "2026-10-02T15:00:00Z", "what": "w", "by": {"name": "s"}, "at": "2026-10-02T14:00:00Z", "jitter": "1m"}],
+  "records": [{"session": {"name": "a"}, "issue": "o/r#1", "by": {"name": "a"}, "at": "2026-10-02T14:00:00Z", "phase": "ci"}],
+  "starts": [{"session": "s1", "name": "Agent one", "mode": "bypassPermissions", "dir": "/w", "by": {"name": "s"}, "at": "2026-10-02T14:00:00Z", "model": "m"}],
+  "merges": [{"repo": "o/r", "pr": 1, "lane": "l", "by": {"name": "a"}, "pid": 1, "phase": "waiting", "joined": "2026-10-02T14:00:00Z", "seen": "2026-10-02T14:00:00Z", "priority": 2}],
+  "budget": {"remaining": 1, "limit": 2, "reset": "2026-10-02T15:00:00Z", "at": "2026-10-02T14:00:00Z", "graphql": 3},
+  "rota": {"next": "Supervisor run 13"}
+}`
+
+// TestOlderSaveKeepsANewerSchema loads and saves a newer beekeeper's state
+// with this binary's types, which lack a member in every object, while it
+// changes the roster: every member it does not know is written back where
+// it was, with its entry.
+func TestOlderSaveKeepsANewerSchema(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(newerSchema), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.version = "v8.0.0"
+	err = s.Update(func(st *State) ([]Event, error) {
+		st.Agents = []Agent{st.Agents[1], st.Agents[0], {Party: Party{Session: "s3", Name: "Agent three"}}}
+		st.Agents[1].Keep.Reason = "parked"
+		st.Notes = append(st.Notes, Note{ID: 2, Text: "r"})
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Clean(filepath.Join(dir, "state.json")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	at := func(path ...any) any {
+		var v any = got
+		for _, p := range path {
+			switch k := p.(type) {
+			case string:
+				v = v.(map[string]any)[k]
+			case int:
+				v = v.([]any)[k]
+			}
+		}
+		return v
+	}
+	want := []struct {
+		path []any
+		v    any
+	}{
+		{[]any{"writer", "version"}, "v9.0.0"},
+		{[]any{"writer", "build"}, "b1"},
+		{[]any{"supervisor", "term"}, 9.0},
+		{[]any{"guide", "mood"}, "calm"},
+		{[]any{"grants", 0, "ttl"}, "2h"},
+		{[]any{"holds", 0, "scope"}, "merge"},
+		{[]any{"agents", 0, "badge"}, "two"},
+		{[]any{"agents", 1, "lane"}, "x"},
+		{[]any{"agents", 1, "keep", "ticket"}, "o/r#1"},
+		{[]any{"agents", 1, "keep", "reason"}, "parked"},
+		{[]any{"notes", 0, "urgency"}, "high"},
+		{[]any{"timers", 0, "jitter"}, "1m"},
+		{[]any{"records", 0, "phase"}, "ci"},
+		{[]any{"starts", 0, "model"}, "m"},
+		{[]any{"merges", 0, "priority"}, 2.0},
+		{[]any{"budget", "graphql"}, 3.0},
+		{[]any{"rota", "next"}, "Supervisor run 13"},
+	}
+	for _, w := range want {
+		if v := at(w.path...); v != w.v {
+			t.Errorf("%v = %v, want %v", w.path, v, w.v)
+		}
+	}
+	if n := len(at("agents", 2).(map[string]any)); n != 3 {
+		t.Errorf("a new entry carries members of another: %v", at("agents", 2))
+	}
+}
+
+func TestAStaleWriterIsLoggedOnce(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(`{"writer":{"version":"v0.72.0"},"nextNote":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.version = "v0.71.1"
+	for range 2 {
+		if err := s.Update(func(st *State) ([]Event, error) { st.NextNote++; return nil, nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	evs, err := s.Events(0, func(e Event) bool { return e.Verb == VerbStaleWriter })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 1 || !strings.Contains(evs[0].Detail, "pid "+strconv.Itoa(os.Getpid())) || !strings.Contains(evs[0].Detail, "v0.71.1, older than the v0.72.0") {
+		t.Fatalf("stale-writer events = %+v", evs)
+	}
+	st, err := s.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.NextNote != 3 || st.Writer.Version != "v0.72.0" || len(st.StaleWriters) != 1 || st.StaleWriters[0].PID != os.Getpid() {
+		t.Errorf("state = %+v, writer %+v, stale %+v", st, st.Writer, st.StaleWriters)
+	}
+
+	s.version = "v0.73.0"
+	if err := s.Update(func(*State) ([]Event, error) { return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := s.Read(); st.Writer.Version != "v0.73.0" {
+		t.Errorf("a newer writer did not stamp: %+v", st.Writer)
+	}
+	s.version = "dev"
+	if err := s.Update(func(*State) ([]Event, error) { return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := s.Read(); st.Writer.Version != "v0.73.0" {
+		t.Errorf("a dev build stamped: %+v", st.Writer)
+	}
+}
+
+func TestStaleWritersOfEndedProcessesGo(t *testing.T) {
+	dir := t.TempDir()
+	gone := `{"writer":{"version":"v0.72.0"},"staleWriters":[{"pid":2147483646,"command":"beekeeper watch","version":"v0.71.0","newer":"v0.72.0","at":"2026-10-02T14:00:00Z"}]}`
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(gone), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.version = "v0.72.0"
+	if err := s.Update(func(*State) ([]Event, error) { return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := s.Read(); len(st.StaleWriters) != 0 {
+		t.Errorf("stale writers = %+v", st.StaleWriters)
+	}
+}
+
+func TestCommand(t *testing.T) {
+	for args, want := range map[string]string{
+		"/home/u/.go/bin/beekeeper agents start --task brief": "beekeeper agents start",
+		"beekeeper timer add 23:58 a timer's text":            "beekeeper timer add",
+		"beekeeper watch --once":                              "beekeeper watch",
+	} {
+		if got := command(strings.Fields(args)); got != want {
+			t.Errorf("command(%s) = %q", args, got)
+		}
+	}
+}

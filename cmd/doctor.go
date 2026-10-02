@@ -238,6 +238,25 @@ type doctorReport struct {
 	chores []string
 	faults []faultFinding
 	notes  []string
+	// stale are the running processes of an older beekeeper that saved the
+	// state after a newer one.
+	stale []state.StaleWriter
+}
+
+// staleLine says a stale writer and what ends it.
+func staleLine(w state.StaleWriter) string {
+	return "stale writer: " + w.String() + "; it keeps the fields it does not know but saves by its older rules until it ends or is restarted"
+}
+
+// liveStaleWriters are the stale writers whose process still runs.
+func liveStaleWriters(st *state.State, alive func(int) bool) []state.StaleWriter {
+	var out []state.StaleWriter
+	for _, w := range st.StaleWriters {
+		if alive(w.PID) {
+			out = append(out, w)
+		}
+	}
+	return out
 }
 
 // doctor finds the chores and the faults, and fixes what it may.
@@ -247,6 +266,7 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 	if err != nil {
 		return rep, err
 	}
+	rep.stale = liveStaleWriters(st, proc.Alive)
 	sessions, t, err := a.sessions()
 	if err != nil {
 		return rep, err
@@ -433,7 +453,11 @@ line:
 - probes each fault of doctor.faults (a probe exits 0 while the fault is
   absent) and runs the remedy of a failing one that may run unattended,
   or the faults named with --fault; a fault still failing is one note for
-  guide.person, closed once its probe passes.
+  guide.person, closed once its probe passes;
+- reports a stale writer: a running process of an older beekeeper that
+  saved the state after a newer one (state.stale-writer in the log). Its
+  saves keep the fields it does not know, yet it acts by its older rules
+  until it ends or is restarted.
 
 A session a person started is never archived or retitled, nor one that
 holds or held the supervisor's or the guide's role unless a relay
@@ -459,6 +483,9 @@ faults but remedying none.`,
 			lines := append(slices.Clone(rep.chores), rep.notes...)
 			for _, f := range rep.faults {
 				lines = append(lines, f.String())
+			}
+			for _, w := range rep.stale {
+				lines = append(lines, staleLine(w))
 			}
 			if len(lines) == 0 {
 				lines = []string{"doctor: nothing to fix"}
@@ -513,5 +540,12 @@ func (w *watcher) doctor(ctx context.Context) {
 			}
 			w.check("doctor-fault "+f.fault.Name, !f.healthy, "DOCTOR FAULT %s", f)
 		}
+		stale := map[string]bool{}
+		for _, s := range rep.stale {
+			key := fmt.Sprintf("doctor-stale %d", s.PID)
+			stale[key] = true
+			w.check(key, true, "DOCTOR %s", staleLine(s))
+		}
+		w.clearMissing("doctor-stale ", stale)
 	}()
 }

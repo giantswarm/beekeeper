@@ -65,6 +65,18 @@ place. A running watch keeps the code it started with: every watch, `--once` inc
 installed, and that a re-arm (a restart) picks the new one up; no watch re-executes itself.
 `beekeeper self-update --check` exits 125 while a newer release is out.
 
+An install leaves the older binaries already running on their old code until they end or are
+re-armed: the `agents start` of a worker started before it (its desktop reopen saves the state
+after the first turn), a watch, the standby unit, a waiting gate call. Their saves keep what the
+new release recorded: every object of `state.json` that carries per-entry data (the state itself,
+roster entries and their keep markers, notes, timers, grants, holds, lanes, session records,
+starts, archives, the roles) writes the members its binary does not know back unchanged, with its
+entry. The state carries the version of the newest beekeeper that saved it (`writer`); an older
+process's first save after it is logged once as `state.stale-writer`, naming the process, its
+command and its version, and `beekeeper doctor` (a `DOCTOR stale writer` line in the watch) lists
+each such process while it runs, since it still acts by its older rules. A process older than this
+mechanism (v0.71.1 and before) keeps only the state's top-level members and drops the nested ones.
+
 The session and machine views need Linux (`/proc`, cgroup v2, the journal). Leases, holds and
 the budget work on any system.
 
@@ -1278,7 +1290,7 @@ The organisation and desk keys, and their defaults:
 | `outbound.sweepRoots`, `outbound.sweepDepth` | the home directory, 5 | Where the watch looks for exposed keys and credentials in remote URLs |
 
 State lives in `$XDG_STATE_HOME/beekeeper/` (`state.json`, which an older beekeeper still running
-writes back with the fields it does not know, `events.jsonl`, whose `at` is RFC 3339 in UTC while
+writes back with the fields it does not know at every level, `events.jsonl`, whose `at` is RFC 3339 in UTC while
 `beekeeper log` prints local times, each caller's last
 snapshot, the alert baseline `alerts.json` with its owner's `alerts.lock`, the notification ledger
 `notify.json` with `notify.lock`) and leases in `leases/`, one directory per held resource.
