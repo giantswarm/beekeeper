@@ -145,15 +145,15 @@ func TestHandoverChainOwesEachOldSession(t *testing.T) {
 		return state.Start{Party: state.Party{Session: id, HostSession: "local_" + id, Name: name}, At: archiveNow.Add(at)}
 	}
 	st := &state.State{
-		Starts: []state.Start{start("first", 0), start("second", time.Hour), start("third", 2*time.Hour)},
-		Agents: []state.Agent{{Party: state.Party{Session: "third", HostSession: "local_third", Name: name}, Task: "go on"}},
+		Starts: []state.Start{start("chain-1", 0), start("chain-2", time.Hour), start("chain-3", 2*time.Hour)},
+		Agents: []state.Agent{{Party: state.Party{Session: "chain-3", HostSession: "local_chain-3", Name: name}, Task: "go on"}},
 	}
-	for _, id := range []string{"first", "second"} {
+	for _, id := range []string{"chain-1", "chain-2"} {
 		if host := oweArchive(st, state.Party{Session: id, Name: name}, "handed over", archiveNow); host != "local_"+id {
 			t.Fatalf("%s: owed %q", id, host)
 		}
 	}
-	oweArchive(st, state.Party{Session: "second", Name: name}, "handed over", archiveNow)
+	oweArchive(st, state.Party{Session: "chain-2", Name: name}, "handed over", archiveNow)
 	if host := oweArchive(st, state.Party{Session: "person", Name: name}, "handed over", archiveNow); host != "" || len(st.Archives) != 2 {
 		t.Fatalf("owed %q, archives %+v", host, st.Archives)
 	}
@@ -177,7 +177,7 @@ func TestHandoverChainOwesEachOldSession(t *testing.T) {
 			visible = append(visible, s.HostSession)
 		}
 	}
-	if len(visible) != 1 || visible[0] != "local_third" {
+	if len(visible) != 1 || visible[0] != "local_chain-3" {
 		t.Errorf("visible rows %v, want only the follow-up's", visible)
 	}
 }
