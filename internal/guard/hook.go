@@ -341,6 +341,10 @@ func (h Hook) rewrite(input map[string]any, cmd string, changed, bg bool) []byte
 	return answer(hookOutput{PermissionDecision: decisionAllow, UpdatedInput: updated})
 }
 
+// Owned reports whether cmd runs one of the devctl commands the gate runs
+// outside its caller, whose outcome reaches its owner unheard or not.
+func Owned(cmd string) bool { return anyOwned.MatchString(cmd) }
+
 func isHeavy(cmd string) bool {
 	for _, m := range heavy.FindAllStringSubmatchIndex(cmd, -1) {
 		if cmd[m[2]:m[3]] != "make" || !lightMake.MatchString(cmd[m[1]:]) {

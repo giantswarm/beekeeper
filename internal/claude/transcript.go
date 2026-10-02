@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -299,4 +300,82 @@ func TranscriptCwd(path string) (string, error) {
 			return "", err
 		}
 	}
+}
+
+// Background is a Bash command a session started in the background
+// (run_in_background) whose completion notice its transcript does not hold.
+type Background struct {
+	Command, Description string
+}
+
+// taskNotice is the id a background task's completion notice names.
+var taskNotice = regexp.MustCompile(`<task-id>([^<\\]+)</task-id>`)
+
+// OpenBackground lists the background Bash commands of the transcript at path
+// that no completion notice followed: a headless turn that ended on one never
+// hears it finish, since the end of the turn is the end of its process.
+func OpenBackground(path string) ([]Background, error) {
+	f, err := os.Open(filepath.Clean(path))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	launched := map[string]Background{} // by tool use id
+	var tasks []string                  // tool use ids in launch order
+	byTask := map[string]string{}       // task id → tool use id
+	r := bufio.NewReaderSize(f, 1<<20)
+	for {
+		line, err := r.ReadBytes('\n')
+		var e struct {
+			Message struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+			ToolUseResult json.RawMessage `json:"toolUseResult"`
+		}
+		var blocks []struct {
+			Type      string `json:"type"`
+			ID        string `json:"id"`
+			Name      string `json:"name"`
+			ToolUseID string `json:"tool_use_id"`
+			Input     struct {
+				Command         string `json:"command"`
+				Description     string `json:"description"`
+				RunInBackground bool   `json:"run_in_background"`
+			} `json:"input"`
+		}
+		if json.Unmarshal(bytes.TrimSpace(line), &e) == nil {
+			_ = json.Unmarshal(e.Message.Content, &blocks)
+			var res struct {
+				BackgroundTaskID string `json:"backgroundTaskId"`
+			}
+			_ = json.Unmarshal(e.ToolUseResult, &res)
+			for _, b := range blocks {
+				switch {
+				case b.Type == blockToolUse && b.Name == "Bash" && b.Input.RunInBackground:
+					launched[b.ID] = Background{Command: b.Input.Command, Description: b.Input.Description}
+				case b.Type == "tool_result" && res.BackgroundTaskID != "":
+					if _, ok := launched[b.ToolUseID]; ok {
+						byTask[res.BackgroundTaskID] = b.ToolUseID
+						tasks = append(tasks, b.ToolUseID)
+					}
+				}
+			}
+			for _, m := range taskNotice.FindAllSubmatch(line, -1) {
+				delete(launched, byTask[string(m[1])])
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	var out []Background
+	for _, id := range tasks {
+		if b, ok := launched[id]; ok {
+			out = append(out, b)
+		}
+	}
+	return out, nil
 }

@@ -280,6 +280,11 @@ type Agent struct {
 	// Import is the wait of the reopen that shows the agent in the desktop,
 	// while it waits; nil: none waits.
 	Import *ImportWait `json:"import,omitempty"`
+	// ResumedWait is when the reopen after a headless turn that ended on a
+	// background wait, its task open, resumed the agent headless (once per
+	// task), and ResumedOn the wait it named; zero: never.
+	ResumedWait time.Time `json:"resumedWait,omitzero"`
+	ResumedOn   string    `json:"resumedOn,omitempty"`
 
 	rest rest
 }

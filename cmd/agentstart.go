@@ -614,6 +614,14 @@ func (a *app) reopenSession(ctx context.Context, arg string) error {
 		_, err := fmt.Fprintf(a.out, "reopen: %s is no start on the roster, left closed\n", id)
 		return err
 	}
+	// A headless turn that ended on a background wait, its task open, is
+	// resumed headless instead: the wait's completion notice never wakes it.
+	if resumed, err := a.resumeOnWait(ctx, id); resumed || err != nil {
+		if err != nil {
+			return a.reopenMissed(name, err)
+		}
+		return nil
+	}
 	t, err := plat.Machine.Processes()
 	if err != nil {
 		return err
