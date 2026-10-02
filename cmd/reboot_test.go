@@ -114,6 +114,7 @@ func TestStandbyLeavesACrashUnderTheRunningAppAlone(t *testing.T) {
 		w.now = relayNow.Add(at)
 		w.pending(context.Background(), nil)
 	}
+	w.stand.inflight.Wait() // the successor's start writes to out
 	if len(*opened) != 0 {
 		t.Fatalf("reopened after a crash under the running app: %q\n%s", *opened, out)
 	}

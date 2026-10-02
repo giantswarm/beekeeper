@@ -7,14 +7,13 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 // noteOvertaken is the event of a note closed because what it asks about
-// is settled: its issues and pull requests closed, or its filing session
-// archived. Its detail is "#<id> overtaken: <reason>; the note: <text>".
+// is settled: its issues and pull requests closed or merged, or a reason
+// given by hand. Its detail is "#<id> overtaken: <reason>; the note: <text>".
 const noteOvertaken = "note.overtaken"
 
 // overtakenSep separates an overtaken event's reason from the note's text.
@@ -99,21 +98,14 @@ func roleRun(st *state.State, p state.Party) bool {
 
 // findOvertaken returns the open notes of st that are overtaken: a note
 // with refs once every one of them is closed or merged (states, as GitHub
-// answered; an unanswered ref keeps the note open), a note without refs
-// once the session that filed it is archived (archived; stopped is not
-// archived, and a role's run never closes its notes).
-func findOvertaken(st *state.State, states map[github.PR]string, archived map[string]bool) []overtake {
+// answered; an unanswered ref keeps the note open). A note without refs is
+// never overtaken: its filing session archived says the asker is gone, not
+// that the question is settled (findOrphaned).
+func findOvertaken(st *state.State, states map[github.PR]string) []overtake {
 	var out []overtake
 	asking := st.GuideRole().Asking
 	for _, n := range st.Notes {
-		if !overtakable(n, asking) {
-			continue
-		}
-		if len(n.Refs) == 0 {
-			by := n.By
-			if (archived[by.HostSession] || archived[by.Session]) && !roleRun(st, by) {
-				out = append(out, overtake{n.ID, fmt.Sprintf("its filing session %q is archived", by.Name)})
-			}
+		if !overtakable(n, asking) || len(n.Refs) == 0 {
 			continue
 		}
 		var settled []string
@@ -133,9 +125,25 @@ func findOvertaken(st *state.State, states map[github.PR]string, archived map[st
 	return out
 }
 
+// findOrphaned returns the open notes of st without refs whose filing
+// session is archived (archived; stopped is not archived), the guide's
+// candidates to ask or close by hand. A role's run never orphans its
+// notes: the role owns them.
+func findOrphaned(st *state.State, archived map[string]bool) []overtake {
+	var out []overtake
+	asking := st.GuideRole().Asking
+	for _, n := range st.Notes {
+		by := n.By
+		if overtakable(n, asking) && len(n.Refs) == 0 && (archived[by.HostSession] || archived[by.Session]) && !roleRun(st, by) {
+			out = append(out, overtake{n.ID, fmt.Sprintf("its filing session %q is archived", by.Name)})
+		}
+	}
+	return out
+}
+
 // overtakenNow reads what findOvertaken needs, GitHub only for notes with
-// refs and while the budget is over its floor, the desktop's records only
-// for notes linked to their session, and returns the overtaken notes.
+// refs and while the budget is over its floor, and returns the overtaken
+// notes.
 func (w *watcher) overtakenNow(ctx context.Context, st *state.State) []overtake {
 	var states map[github.PR]string
 	if refs := overtakeRefs(st); len(refs) > 0 && !lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now) {
@@ -143,11 +151,7 @@ func (w *watcher) overtakenNow(ctx context.Context, st *state.State) []overtake 
 		w.check("note-refs", s == nil, "cannot read the notes' issues and pull requests: %v", err)
 		states = s
 	}
-	var archived map[string]bool
-	if sessionLinked(st) {
-		archived = claude.Archived(w.cfg)
-	}
-	return findOvertaken(st, states, archived)
+	return findOvertaken(st, states)
 }
 
 // closeOvertaken closes the open notes of st among over as overtaken and

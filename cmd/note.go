@@ -58,8 +58,9 @@ warning that quotes the answer.
 --ref links the note to an issue or pull request it asks about
 (owner/repo#n or its URL, repeatable): once every linked one is closed or
 merged, beekeeper watch closes the note as overtaken (note.overtaken).
-Without --ref the note is linked to the session that files it and closes
-once that session is archived; a role's run never closes its notes.`,
+A note without --ref stays open: once the session that filed it is
+archived, guide watch names it to the guide as orphaned (GUIDE ORPHANED),
+to ask or close by hand; a role's run never orphans its notes.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			d, err := untilTime(a.now, due)

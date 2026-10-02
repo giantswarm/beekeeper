@@ -66,9 +66,9 @@ and a supervisor relay taken or expired are one line each, once: the state keeps
 a second or restarted watch stays silent about them. An open note for
 someone, not pinned and not a login, is overtaken once every issue and pull
 request it names with note add --ref is closed or merged (one GraphQL read
-a poll, none under the budget floor), or, with no --ref, once the session
-that filed it is archived in the desktop (a stopped session is not; a
-role's run never is the link): one NOTE OVERTAKEN line with the reason,
+a poll, none under the budget floor; a note with no --ref never is, guide
+watch names it once its filing session is archived): one NOTE OVERTAKEN
+line with the reason,
 the note closed and note.overtaken logged; --once names each one it would
 close and writes nothing. The
 installations' alerts are read every alerts.every and each NEW or RESOLVED

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -160,27 +161,56 @@ func desktopRecord(t *testing.T, dir, host, cli string, archived bool) {
 	}
 }
 
-func TestNoteWithoutRefsClosesOnceItsSessionIsArchived(t *testing.T) {
-	w, _ := overtakingWatch(t, nil)
-	desktopRecord(t, w.cfg.Claude.DesktopDir, hostArc, "cli-archived", true)
-	desktopRecord(t, w.cfg.Claude.DesktopDir, "local_stopped", "cli-stopped", false)
-	desktopRecord(t, w.cfg.Claude.DesktopDir, "local_run", "cli-run", true)
+// archivedNotes are notes filed by sessions of the desktop records under
+// dir: an archived worker, a stopped one and an archived supervisor run.
+func archivedNotes(t *testing.T, dir string) []state.Note {
+	t.Helper()
+	desktopRecord(t, dir, hostArc, "cli-archived", true)
+	desktopRecord(t, dir, "local_stopped", "cli-stopped", false)
+	desktopRecord(t, dir, "local_run", "cli-run", true)
 	worker := state.Party{Session: "cli-archived", HostSession: hostArc, Name: uiAgentName}
-	setNotes(t, w,
-		state.Note{ID: 1, For: personTimo, Text: askedQ, By: worker},
-		state.Note{ID: 2, For: personTimo, Text: askedQ, By: state.Party{Session: "cli-stopped", HostSession: "local_stopped", Name: "Agent ten"}},
-		state.Note{ID: 3, For: personTimo, Text: askedQ, By: state.Party{Session: "cli-run", HostSession: "local_run", Name: supRun3}},
-		state.Note{ID: 4, For: personTimo, Text: askedQ, By: worker, Pinned: true},
-		state.Note{ID: 5, Text: "a memo", By: worker},
+	return []state.Note{
+		{ID: 1, For: personTimo, Text: askedQ, By: worker},
+		{ID: 2, For: personTimo, Text: askedQ, By: state.Party{Session: "cli-stopped", HostSession: "local_stopped", Name: "Agent ten"}},
+		{ID: 3, For: personTimo, Text: askedQ, By: state.Party{Session: "cli-run", HostSession: "local_run", Name: supRun3}},
+		{ID: 4, For: personTimo, Text: askedQ, By: worker, Pinned: true},
+		{ID: 5, Text: "a memo", By: worker},
 		// With a ref the ref decides, not the session.
-		state.Note{ID: 6, For: personTimo, Text: askedQ, By: worker, Refs: []string{refOne}},
-	)
-	w.pending(context.Background(), nil)
-	if ids := openIDs(t, w); !slices.Equal(ids, []int{2, 3, 4, 5, 6}) {
+		{ID: 6, For: personTimo, Text: askedQ, By: worker, Refs: []string{refOne}},
+	}
+}
+
+func TestNoteWithoutRefsStaysOpenOnceItsSessionIsArchived(t *testing.T) {
+	w, out := overtakingWatch(t, nil)
+	setNotes(t, w, archivedNotes(t, w.cfg.Claude.DesktopDir)...)
+	for range 2 {
+		w.pending(context.Background(), nil)
+	}
+	if ids := openIDs(t, w); !slices.Equal(ids, []int{1, 2, 3, 4, 5, 6}) {
 		t.Fatalf("open %v", ids)
 	}
-	if evs := overtakenEvents(t, w); len(evs) != 1 || overtakenReason(evs[0]) != `its filing session "`+uiAgentName+`" is archived` {
+	if evs := overtakenEvents(t, w); len(evs) != 0 {
 		t.Fatalf("events %+v", evs)
+	}
+	if said := out.String(); strings.Contains(said, "OVERTAKEN") {
+		t.Fatalf("watch said %q", said)
+	}
+}
+
+func TestGuideFeedSaysOrphanedNotesOnce(t *testing.T) {
+	a, _ := noteApp(t)
+	a.cfg.Claude.DesktopDir = filepath.Join(t.TempDir(), "desktop")
+	st := &state.State{Notes: archivedNotes(t, a.cfg.Claude.DesktopDir)}
+	orphans := findOrphaned(st, claude.Archived(a.cfg))
+	if len(orphans) != 1 || orphans[0].id != 1 {
+		t.Fatalf("orphans %+v", orphans)
+	}
+	want := `GUIDE ORPHANED #1 for ` + personTimo + `, its filing session "` + uiAgentName + `" is archived; ask it, or close it with note done 1 --overtaken: ` + askedQ
+	if lines, _ := a.feedLines(st, nil, nil, orphans); !slices.Contains(lines, want) {
+		t.Fatalf("first poll: %q", lines)
+	}
+	if lines, _ := a.feedLines(st, nil, nil, orphans); slices.ContainsFunc(lines, func(l string) bool { return strings.HasPrefix(l, "GUIDE ORPHANED") }) {
+		t.Fatalf("said twice: %q", lines)
 	}
 }
 
@@ -232,15 +262,15 @@ func TestNoteAddRefAndDoneOvertaken(t *testing.T) {
 func TestGuideFeedSaysOvertakenOnce(t *testing.T) {
 	a, _ := noteApp(t)
 	st := &state.State{Notes: []state.Note{{ID: 4, For: notePerson, Text: askedQ, By: state.Party{Name: agentOne}}}}
-	if lines, _ := a.feedLines(st, nil, nil); len(lines) != 1 {
+	if lines, _ := a.feedLines(st, nil, nil, nil); len(lines) != 1 {
 		t.Fatalf("first poll: %q", lines)
 	}
 	st.Notes = nil
 	closed := map[int]state.Event{4: overtakenEvent(watchParty, state.Note{ID: 4, Text: askedQ}, "o/r#1 merged")}
-	if lines, _ := a.feedLines(st, nil, closed); !slices.Equal(lines, []string{"GUIDE CLOSED #4 overtaken: o/r#1 merged"}) {
+	if lines, _ := a.feedLines(st, nil, closed, nil); !slices.Equal(lines, []string{"GUIDE CLOSED #4 overtaken: o/r#1 merged"}) {
 		t.Fatalf("closed: %q", lines)
 	}
-	if lines, _ := a.feedLines(st, nil, closed); lines != nil {
+	if lines, _ := a.feedLines(st, nil, closed, nil); lines != nil {
 		t.Fatalf("said twice: %q", lines)
 	}
 }
