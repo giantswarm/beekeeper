@@ -34,6 +34,7 @@ func TestStaleCLIOffTheRoster(t *testing.T) {
 
 func TestRolesBusyAndParkedNeverStale(t *testing.T) {
 	r, out := newRun(t, Options{Summary: true, CLIStale: 12 * time.Hour})
+	const task = "a task"
 	long := 100 * time.Hour
 	parked := cli(5, "s-parked", "Parked", long)
 	parked.Waiting = &claude.Waiting{}
@@ -55,10 +56,10 @@ func TestRolesBusyAndParkedNeverStale(t *testing.T) {
 			Relay:  &state.Relay{To: state.Party{Session: "s-gspare"}, Expires: now.Add(time.Minute)},
 		},
 		Agents: []state.Agent{
-			{Party: state.Party{Session: "s-busy", Name: "Agent thirty"}, Task: "a task"},
-			{Party: state.Party{Session: "s-parked"}, Task: "a task"},
+			{Party: state.Party{Session: "s-busy", Name: "Agent thirty"}, Task: task},
+			{Party: state.Party{Session: "s-parked"}, Task: task},
 			{Party: state.Party{Session: "s-idle"}},
-			{Party: state.Party{Session: "s-done"}, Task: "a task", Done: true},
+			{Party: state.Party{Session: "s-done"}, Task: task, Done: true},
 		},
 	}
 	r.Do()
