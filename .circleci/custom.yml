@@ -7,6 +7,10 @@
 # against a real kube-apiserver from setup-envtest and a Postgres beside it,
 # after checking that the committed CRDs are what pkg/apis generates. Its
 # first image is the one the architect orb's executor runs.
+#
+# chart-test lints helm/beekeeper and runs its helm-unittest suites, in a plain
+# container: the dependencies are helm and its plugin, not Go tooling. The
+# versions are pinned so a plugin release cannot turn an unrelated PR red.
 version: 2.1
 
 jobs:
@@ -35,10 +39,33 @@ jobs:
         command: make test-envtest
     - architect/go-cache-save
 
+  chart-test:
+    docker:
+    - image: cimg/base:current
+    resource_class: small
+    environment:
+      HELM_VERSION: v3.16.0
+    steps:
+    - checkout
+    - run:
+        name: Install helm
+        command: |
+          set -euxo pipefail
+          curl -sSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" | tar -xz -C /tmp
+          sudo install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm
+          helm version --short
+    - run:
+        name: Lint the chart and run its unit tests
+        command: make helm-test
+
 workflows:
   build:
     jobs:
     - test-envtest:
+        filters:
+          tags:
+            only: /^v.*/
+    - chart-test:
         filters:
           tags:
             only: /^v.*/

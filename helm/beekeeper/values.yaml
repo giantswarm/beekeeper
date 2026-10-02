@@ -1,0 +1,84 @@
+image:
+  registry: gsoci.azurecr.io
+  repository: giantswarm/beekeeper
+  # Empty: the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# beekeeper serve's configuration (the serve: section of its config.yaml).
+# Every caller's Dex ID token is checked against issuer and clientIDs; the
+# caller must carry the organization group and a group teams names.
+serve:
+  # The Dex issuer URL, e.g. https://dex.<installation base domain>.
+  issuer: ""
+  # The audiences accepted: the client muster forwards the person's token for.
+  clientIDs: []  # @schema item: string
+  # The Dex group every member of the organization carries.
+  organization: ""
+  # Dex group -> team. Each team gets its namespace, beekeeper-<team>, for its
+  # notes and agents (teamNamespaces.create).
+  teams: {}  # @schema additionalProperties: true
+  # Team -> the Dex group of its supervisor role (may release the team's
+  # leases and lift its holds).
+  supervisors: {}  # @schema additionalProperties: true
+  # The URL of the muster (its /mcp) a send_message to a kagent: address goes
+  # through, as the caller.
+  muster: ""
+  # Installation -> the muster tool of its kagent MCP server's
+  # invoke_agent_instance.
+  kagent: {}  # @schema additionalProperties: true
+
+# The watch serve runs in-process (the watch: section of its config.yaml).
+watch:
+  # How often the watch reads; a Go duration.
+  interval: 30s
+
+# The beekeeper database the mailboxes live in: a Secret key holding its URL
+# (BEEKEEPER_DATABASE_URL), e.g. the <cluster>-app Secret CloudNativePG
+# writes for the database's role.
+database:
+  secretName: ""
+  secretKey: uri
+
+# Create the namespace beekeeper-<team> of every team in serve.teams. The
+# namespaces outlive an uninstall: they hold the teams' notes.
+teamNamespaces:
+  create: true
+
+rbac:
+  # Groups granted read access to every beekeeper.giantswarm.io resource. The
+  # read ClusterRole also aggregates into the cluster's view role. Writes go
+  # through serve's tools only.
+  readerGroups: []  # @schema item: string
+
+serviceAccount:
+  # Annotations on beekeeper's ServiceAccount, its only non-human identity.
+  annotations: {}  # @schema additionalProperties: true
+
+service:
+  port: 8080
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+nodeSelector: {}  # @schema additionalProperties: true
+tolerations: []  # @schema item: object
+affinity: {}  # @schema additionalProperties: true

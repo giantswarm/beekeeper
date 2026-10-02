@@ -1,0 +1,60 @@
+suite: deployment
+templates:
+  - deployment.yaml
+  - configmap.yaml
+tests:
+  - it: runs serve as one instance with the chart's image
+    template: deployment.yaml
+    chart:
+      appVersion: 1.2.3
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: gsoci.azurecr.io/giantswarm/beekeeper:1.2.3
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value: [serve, --http=:8080]
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: RELEASE-NAME
+  - it: reads the database URL from the named Secret key
+    template: deployment.yaml
+    set:
+      database.secretName: beekeeper-db-app
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BEEKEEPER_DATABASE_URL
+            valueFrom:
+              secretKeyRef:
+                name: beekeeper-db-app
+                key: uri
+  - it: leaves the database URL unset without a Secret
+    template: deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: BEEKEEPER_DATABASE_URL
+  - it: renders the issuer, the teams and the watch interval into config.yaml
+    template: configmap.yaml
+    set:
+      serve.issuer: https://dex.example.io
+      serve.clientIDs: [muster]
+      serve.teams: {gs-bumblebee: bumblebee}
+      watch.interval: 1m
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "issuer: https://dex.example.io"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "gs-bumblebee: bumblebee"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'interval: "1m"'
