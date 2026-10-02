@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,9 +39,10 @@ const (
 // the modal or a thread reply, each of which calls Answer.Tool through
 // muster as the person who answered.
 type decision struct {
-	Person    string           `json:"person,omitempty"`
-	Team      string           `json:"team,omitempty"`
-	Channel   string           `json:"channel,omitempty"`
+	Person  string `json:"person,omitempty"`
+	Team    string `json:"team,omitempty"`
+	Channel string `json:"channel,omitempty"`
+	// Note is the note's number; the message reads "note #<Note>".
 	Note      string           `json:"note"`
 	Question  string           `json:"question"`
 	StatusQuo string           `json:"statusQuo"`
@@ -189,7 +191,7 @@ func (s *server) decisionOf(n *state.Note) (decision, error) {
 	if err != nil {
 		return decision{}, err
 	}
-	d := decision{Person: email, Team: team, Channel: channel, Note: fmt.Sprintf("note #%d", n.ID),
+	d := decision{Person: email, Team: team, Channel: channel, Note: strconv.Itoa(n.ID),
 		Question: n.Question, StatusQuo: n.StatusQuo, Recommend: n.Recommend, Due: n.Due, Default: n.Default,
 		AskedBy: partyName(n.By) + " on " + n.By.Host,
 		Answer:  toolInvocation{Tool: s.cfg.Serve.Gateway.AnswerTool, Arguments: map[string]any{paramNote: n.ID, paramVia: viaSlack}}}
