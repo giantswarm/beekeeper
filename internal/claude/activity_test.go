@@ -22,7 +22,7 @@ func TestScanActivityRealWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	last := time.Date(2026, 9, 24, 15, 8, 34, 689e6, time.UTC)
-	a := scanActivity(buf, true, last.Add(10*time.Minute))
+	_, a := scanTranscript(buf, true, last.Add(10*time.Minute))
 	a.Price(prices)
 
 	want := Tokens{Input: 90, CacheWrite1h: 66155, CacheRead: 5855326, Output: 34750}
@@ -48,7 +48,7 @@ func TestScanActivityRealWindow(t *testing.T) {
 		t.Errorf("the whole window is in the last hour: %+v", a.LastHour)
 	}
 
-	later := scanActivity(buf, true, last.Add(2*time.Hour))
+	_, later := scanTranscript(buf, true, last.Add(2*time.Hour))
 	later.Price(prices)
 	if later.LastHour.Tokens.Sum() != 0 || later.LastHour.ToolCalls != 0 || *later.LastHour.CostUSD != 0 {
 		t.Errorf("two hours on, the last hour is empty: %+v", later.LastHour)
@@ -57,7 +57,7 @@ func TestScanActivityRealWindow(t *testing.T) {
 
 func TestScanActivityDropsThePartialFirstLine(t *testing.T) {
 	buf := []byte(`sage":{"input_tokens":5}}}` + "\n" + assistant("m1", "claude-opus-5-5", `"input_tokens":1,"output_tokens":2`, ""))
-	a := scanActivity(buf, false, testNow)
+	_, a := scanTranscript(buf, false, testNow)
 	if a.Whole || a.Total.Tokens != (Tokens{Input: 1, Output: 2}) {
 		t.Errorf("whole %v tokens %+v", a.Whole, a.Total.Tokens)
 	}
@@ -103,7 +103,7 @@ func TestScanActivityRepeatsAndGitHubCalls(t *testing.T) {
 	b.WriteString(`{"type":"user","timestamp":"2026-09-25T11:51:00Z","message":{"content":"<system-reminder>x"}}` + "\n")
 	b.WriteString(`{"type":"user","timestamp":"2026-09-25T11:51:00Z","message":{"content":"<bash-input>ls</bash-input>"}}` + "\n")
 
-	a := scanActivity([]byte(b.String()), true, testNow)
+	_, a := scanTranscript([]byte(b.String()), true, testNow)
 	c := a.LastHour
 	if c.ToolCalls != 7 || c.ToolErrors != 4 || c.GitHubCalls != 3 || c.Turns != 1 {
 		t.Errorf("calls %d errors %d github %d turns %d, want 7 4 3 1", c.ToolCalls, c.ToolErrors, c.GitHubCalls, c.Turns)
@@ -118,13 +118,13 @@ func TestPriceUnknownModelsAndFastMode(t *testing.T) {
 		assistant("m2", "claude-opus-9", `"input_tokens":10`, "") +
 		assistant("m3", "claude-opus-5-5", `"input_tokens":10,"speed":"fast"`, "") +
 		assistant("m4", "<synthetic>", `"input_tokens":0`, "")
-	a := scanActivity([]byte(buf), true, testNow)
+	_, a := scanTranscript([]byte(buf), true, testNow)
 	a.Price(prices)
 	if a.Total.CostUSD != nil || strings.Join(a.Total.CostUnknown, ",") != "claude-opus-9,claude-opus-5-5 (fast)" {
 		t.Errorf("cost %v unknown %v", a.Total.CostUSD, a.Total.CostUnknown)
 	}
 
-	known := scanActivity([]byte(assistant("m1", "claude-haiku-4-5-20251001", `"input_tokens":1000000,"cache_creation_input_tokens":1000000`, "")), true, testNow)
+	_, known := scanTranscript([]byte(assistant("m1", "claude-haiku-4-5-20251001", `"input_tokens":1000000,"cache_creation_input_tokens":1000000`, "")), true, testNow)
 	known.Price(prices)
 	// A usage without the TTL split wrote the 5-minute TTL: 1 + 1.25.
 	if known.Total.CostUSD == nil || math.Abs(*known.Total.CostUSD-2.25) > 1e-9 || known.ContextWindow != 200_000 {

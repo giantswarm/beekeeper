@@ -104,8 +104,11 @@ const (
 // RoleTool is the role of a tool call's turn in what Follow returns.
 const RoleTool = "tool"
 
-// blockToolUse is the content block type of a tool call.
-const blockToolUse = "tool_use"
+// The content block types of a tool call and of text.
+const (
+	blockToolUse = "tool_use"
+	blockText    = "text"
+)
 
 type entry struct {
 	Type      string    `json:"type"`
@@ -154,7 +157,7 @@ func parseTurns(line []byte, tools bool) []Turn {
 		}
 		for _, b := range blocks {
 			switch {
-			case b.Type == "text" && strings.TrimSpace(b.Text) != "":
+			case b.Type == blockText && strings.TrimSpace(b.Text) != "":
 				text = append(text, b.Text)
 			case tools && b.Type == blockToolUse && b.Name != "":
 				calls = append(calls, Turn{At: e.Timestamp, Role: RoleTool, Text: ToolGist(b.Name, b.Input)})

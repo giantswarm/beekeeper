@@ -244,6 +244,7 @@ type entry struct {
 		StopReason string          `json:"stopReason"`
 		IsError    bool            `json:"isError"`
 		ToolName   string          `json:"toolName"`
+		ToolCallID string          `json:"toolCallId"`
 		Model      string          `json:"model"`
 		Usage      *usage          `json:"usage"`
 		Snapshot   *struct {
@@ -265,6 +266,7 @@ type usage struct {
 // block is a message content block: text, thinking or toolCall.
 type block struct {
 	Type      string          `json:"type"`
+	ID        string          `json:"id"`
 	Text      string          `json:"text"`
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments"`
@@ -455,10 +457,14 @@ func ReadTranscript(path string, now time.Time) (claude.Work, claude.Activity) {
 	buf, whole := claude.ReadWindow(path)
 	a := claude.Activity{Whole: whole}
 	hourStart := now.Add(-time.Hour)
-	var said strings.Builder
+	acts := claude.NewActs()
+	var cwd string
 	var total, hour float64
 	var priced bool
 	eachEntry(buf, func(e *entry) {
+		if e.Type == "session" && e.Cwd != "" {
+			cwd = e.Cwd
+		}
 		if e.Type != typeMessage || e.Message == nil {
 			return
 		}
@@ -471,8 +477,16 @@ func ReadTranscript(path string, now time.Time) (claude.Work, claude.Activity) {
 		}
 		m := e.Message
 		text, blocks := texts(m.Content)
-		said.WriteString(text)
-		said.WriteByte('\n')
+		switch m.Role {
+		case roleAssistant:
+			for _, b := range blocks {
+				if b.Type == blockToolCall {
+					acts.Call(b.ID, b.Name, b.Arguments, cwd)
+				}
+			}
+		case roleToolResult:
+			acts.Result(m.ToolCallID, text)
+		}
 		for _, c := range counts {
 			switch m.Role {
 			case roleUser:
@@ -519,7 +533,7 @@ func ReadTranscript(path string, now time.Time) (claude.Work, claude.Activity) {
 	if priced {
 		a.Total.CostUSD, a.LastHour.CostUSD = &total, &hour
 	}
-	return claude.ScanWork(said.String()), a
+	return acts.Work(string(buf)), a
 }
 
 // invokesGitHub says a bash tool call's command runs gh or devctl.
