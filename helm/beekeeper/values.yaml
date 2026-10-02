@@ -40,6 +40,9 @@ serve:
     tokenFile: /var/run/secrets/klaus-gateway/token
     # The muster tool an answer in Slack calls, as the person who answers.
     answerTool: x_beekeeper_note_answer
+    # The muster tool a person's reply in a conversation with one of their
+    # agents calls, as the person.
+    sendTool: x_beekeeper_send_message
 
 # The watch serve runs in-process (the watch: section of its config.yaml).
 watch:

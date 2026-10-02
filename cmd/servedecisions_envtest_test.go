@@ -37,6 +37,11 @@ type fakeGateway struct {
 	closed  []string
 	tokens  []string
 	refuses bool
+	// The conversations opened, the messages said into them ("<id>: <text>")
+	// and the ids the gateway no longer holds.
+	opened []conversation
+	said   []string
+	gone   map[string]bool
 }
 
 func (g *fakeGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -63,9 +68,40 @@ func (g *fakeGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal(body, &c)
 		g.closed = append(g.closed, strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/decisions/"), "/close")+" "+c.Outcome+": "+c.Text)
 		_, _ = w.Write([]byte(`{"channel":"D1","ts":"1.2"}`))
+	case r.URL.Path == "/conversations" && g.refuses:
+		http.Error(w, "person: no Slack user has this email", http.StatusUnprocessableEntity)
+	case r.URL.Path == "/conversations":
+		var c conversation
+		dec := json.NewDecoder(strings.NewReader(string(body)))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&c); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		g.opened = append(g.opened, c)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = fmt.Fprintf(w, `{"id":"D1-%d.0","channel":"D1","ts":"%d.0"}`, len(g.opened), len(g.opened))
+	case strings.HasPrefix(r.URL.Path, "/conversations/") && strings.HasSuffix(r.URL.Path, "/messages"):
+		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/conversations/"), "/messages")
+		if g.gone[id] {
+			http.Error(w, "conversation not found", http.StatusNotFound)
+			return
+		}
+		var m struct{ Text string }
+		_ = json.Unmarshal(body, &m)
+		g.said = append(g.said, id+": "+m.Text)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":"` + id + `","channel":"D1","ts":"9.9"}`))
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// conversations is what the gateway was asked to open and to say.
+func (g *fakeGateway) conversations() ([]conversation, []string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]conversation{}, g.opened...), append([]string{}, g.said...)
 }
 
 func (g *fakeGateway) seen() ([]decision, []string) {

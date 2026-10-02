@@ -32,6 +32,8 @@ func (s *server) messageTools() []serveTool {
 		{newTool("ack_messages", "Ack received messages of your mailbox by their ids: they are not delivered again.", false,
 			mcp.WithString(paramFor, mcp.Description("the mailbox: your email (default)")),
 			mcp.WithArray("ids", mcp.Required(), mcp.WithNumberItems(), mcp.Description("the ids receive_messages returned"))), toolAckMessages},
+		{newTool("converse", "Write to your person in Slack as the calling agent, in its conversation thread (the first message opens it); the person's replies there arrive in your mailbox from source slack.", false,
+			mcp.WithString(paramText, mcp.Required(), mcp.Description(fmt.Sprintf("the message, Slack markdown of at most %d characters", conversationText)))), toolConverse},
 	}
 }
 
@@ -53,6 +55,11 @@ type a2aMessage struct {
 		Kind string `json:"kind"`
 		Text string `json:"text"`
 	} `json:"parts"`
+	// Metadata.Source is where the person wrote it: slack for a reply in a
+	// conversation's thread.
+	Metadata struct {
+		Source string `json:"source"`
+	} `json:"metadata"`
 }
 
 // text is the message's text parts, one per line.
@@ -110,7 +117,7 @@ func (c *call) sendLocal(req mcp.CallToolRequest, to string, msg a2aMessage, raw
 		}
 	}
 	if agent == nil || agent.Person == "" || !sc.reads(agent.Party) {
-		return nil, refused("%s is not on the roster", to)
+		return nil, refused("%s is not running: it is not on the roster", to)
 	}
 	if !sc.own(agent.Party) {
 		return nil, refused("%s is %s's local agent: only its person messages it", to, agent.Person)
@@ -120,10 +127,11 @@ func (c *call) sendLocal(req mcp.CallToolRequest, to string, msg a2aMessage, raw
 	if err != nil {
 		return nil, err
 	}
-	env, err := json.Marshal(map[string]any{
-		"to": agentAddress(*agent), "from": map[string]string{"person": c.who.Email, "agent": c.me.Name, "host": c.me.Host},
-		paramMessage: raw,
-	})
+	from := map[string]string{"person": c.who.Email, "agent": c.me.Name, "host": c.me.Host}
+	if msg.Metadata.Source != "" {
+		from["source"] = msg.Metadata.Source
+	}
+	env, err := json.Marshal(map[string]any{"to": agentAddress(*agent), "from": from, paramMessage: raw})
 	if err != nil {
 		return nil, err
 	}

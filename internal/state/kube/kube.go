@@ -626,7 +626,7 @@ func (snap *snapshot) state() *state.State {
 	for _, k := range sortedKeys(snap.roster) {
 		r := snap.roster[k]
 		st.Agents = append(st.Agents, state.Agent{Party: party(r.Spec.Party), Registered: r.Spec.Registered.Time,
-			Task: r.Status.Task, IdleSince: timeOf(r.Status.IdleSince), Done: r.Status.State == "ended"})
+			Task: r.Status.Task, IdleSince: timeOf(r.Status.IdleSince), Done: r.Status.State == "ended", Conversation: r.Status.Conversation})
 	}
 	canonical(st)
 	return st
@@ -763,7 +763,7 @@ func (snap *snapshot) apply(st *state.State) (*snapshot, error) {
 			r = cur.DeepCopy()
 		}
 		r.Spec.Address, r.Spec.Party, r.Spec.Registered = "local:"+a.Host+"/"+a.Name, apiParty(a.Party), metav1.Time{Time: a.Registered}
-		r.Status.Task, r.Status.IdleSince = a.Task, apiTime(a.IdleSince)
+		r.Status.Task, r.Status.IdleSince, r.Status.Conversation = a.Task, apiTime(a.IdleSince), a.Conversation
 		switch {
 		case a.Done:
 			r.Status.State = "ended"

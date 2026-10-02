@@ -313,6 +313,9 @@ type Agent struct {
 	// task), and ResumedOn the wait it named; zero: never.
 	ResumedWait time.Time `json:"resumedWait,omitzero"`
 	ResumedOn   string    `json:"resumedOn,omitempty"`
+	// Conversation is klaus-gateway's conversation the agent holds with its
+	// person, a Slack thread; empty: none is open.
+	Conversation string `json:"conversation,omitempty"`
 
 	rest rest
 }
