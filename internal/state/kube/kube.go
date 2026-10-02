@@ -28,6 +28,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -39,6 +40,7 @@ import (
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/giantswarm/beekeeper/internal/feed"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/pkg/apis/beekeeper/v1alpha1"
 )
@@ -54,6 +56,13 @@ type Store struct {
 	timeout time.Duration
 	// attempts bounds the reruns of one Update after lost races.
 	attempts int
+
+	// idMu guards lastID, the id of the last Event recorded or found: ids
+	// only grow, across restarts too (the first record reads the Events'
+	// highest).
+	idMu    sync.Mutex
+	lastID  int64
+	idsRead bool
 }
 
 var _ state.Store = (*Store)(nil)
@@ -384,10 +393,82 @@ func (s *Store) Events(n int, keep func(state.Event) bool) ([]state.Event, error
 	return out, nil
 }
 
+// Feed returns the last n events of the shared state in the feed's schema,
+// oldest first: the changes, not the audit of the calls that changed
+// nothing (serve.*).
+func (s *Store) Feed(n int) ([]feed.Event, error) {
+	ctx, cancel := s.ctx()
+	defer cancel()
+	list := &corev1.EventList{}
+	if err := s.c.List(ctx, list, client.MatchingLabels{managedBy: beekeeper}); err != nil {
+		return nil, err
+	}
+	out := []feed.Event{}
+	for i := range list.Items {
+		ev := &list.Items[i]
+		if strings.HasPrefix(ev.Reason, "serve.") {
+			continue
+		}
+		var by v1alpha1.Party
+		if raw := ev.Annotations[byAnnotation]; raw != "" {
+			if err := json.Unmarshal([]byte(raw), &by); err != nil {
+				return nil, fmt.Errorf("event %s/%s: %s: %w", ev.Namespace, ev.Name, byAnnotation, err)
+			}
+		}
+		actor := feed.Party{Name: by.Name, Person: by.Person, Team: by.Team, Host: by.Host}
+		out = append(out, feed.Event{
+			ID: eventID(ev), Kind: ev.Reason, Subject: ev.InvolvedObject.Kind + "/" + ev.InvolvedObject.Name,
+			Actor: actor, Time: ev.EventTime.UTC(), Line: feed.Line(ev.Reason, actor, ev.Message),
+		})
+	}
+	slices.SortFunc(out, func(a, b feed.Event) int { return strings.Compare(a.ID, b.ID) })
+	if n > 0 && len(out) > n {
+		out = out[len(out)-n:]
+	}
+	return out, nil
+}
+
+// EventLabels are the labels of every Event beekeeper records.
+func EventLabels() map[string]string { return map[string]string{managedBy: beekeeper} }
+
+// eventID is an Event's feed id: its annotation, else (an Event recorded
+// before ids) its time.
+func eventID(ev *corev1.Event) string {
+	if id := ev.Annotations[idAnnotation]; id != "" {
+		return id
+	}
+	return feed.ID(ev.EventTime.UnixNano())
+}
+
+// nextID is the id of the next Event: its time in nanoseconds, or one
+// above the last id when the clock has not moved past it, so ids only grow.
+// The first call reads the highest id of the Events kept: a restart
+// continues from them.
+func (s *Store) nextID(ctx context.Context, at time.Time) (string, error) {
+	s.idMu.Lock()
+	defer s.idMu.Unlock()
+	if !s.idsRead {
+		list := &corev1.EventList{}
+		if err := s.c.List(ctx, list, client.MatchingLabels{managedBy: beekeeper}); err != nil {
+			return "", err
+		}
+		for i := range list.Items {
+			id, err := strconv.ParseInt(eventID(&list.Items[i]), 10, 64)
+			if err == nil && id > s.lastID {
+				s.lastID = id
+			}
+		}
+		s.idsRead = true
+	}
+	s.lastID = max(at.UnixNano(), s.lastID+1)
+	return feed.ID(s.lastID), nil
+}
+
 const (
 	managedBy    = "app.kubernetes.io/managed-by"
 	beekeeper    = "beekeeper"
 	byAnnotation = "beekeeper.giantswarm.io/by"
+	idAnnotation = "beekeeper.giantswarm.io/id"
 )
 
 // record writes events as Kubernetes Events on obj; the cluster-scoped
@@ -410,12 +491,16 @@ func (s *Store) record(ctx context.Context, obj client.Object, events []state.Ev
 		if at.IsZero() {
 			at = time.Now()
 		}
+		id, err := s.nextID(ctx, at)
+		if err != nil {
+			return fmt.Errorf("recording %s on %s: the feed id: %w", e.Verb, obj.GetName(), err)
+		}
 		ev := &corev1.Event{
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace:   ns,
 				Name:        fmt.Sprintf("%s.%x", obj.GetName(), at.UnixNano()),
 				Labels:      map[string]string{managedBy: beekeeper},
-				Annotations: map[string]string{byAnnotation: string(by)},
+				Annotations: map[string]string{byAnnotation: string(by), idAnnotation: id},
 			},
 			InvolvedObject: corev1.ObjectReference{
 				APIVersion:      gvk.GroupVersion().String(),

@@ -13,14 +13,17 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/client/config"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/identity"
+	"github.com/giantswarm/beekeeper/internal/mailbox"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/state/kube"
 	"github.com/giantswarm/beekeeper/pkg/project"
@@ -63,8 +66,22 @@ it concerns (the caller's team namespace for a list) and one log line.`,
 			if err != nil {
 				return err
 			}
+			dsn := os.Getenv(databaseEnv)
+			if dsn == "" {
+				return usageErr("%s is not set: the URL of the beekeeper database the mailboxes live in", databaseEnv)
+			}
+			mail, err := mailbox.Open(ctx, dsn)
+			if err != nil {
+				return err
+			}
+			defer mail.Close()
 			log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-			srv := &http.Server{Addr: addr, Handler: newServer(a.cfg, store, ids, log).handler(), ReadHeaderTimeout: 10 * time.Second}
+			ctrllog.SetLogger(logr.FromSlogHandler(log.Handler()))
+			s := newServer(a.cfg, store, mail, ids, log)
+			if err := s.watch(ctx, rc); err != nil {
+				return err
+			}
+			srv := &http.Server{Addr: addr, Handler: s.handler(), ReadHeaderTimeout: 10 * time.Second}
 			go func() {
 				<-ctx.Done()
 				sctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -83,26 +100,43 @@ it concerns (the caller's team namespace for a list) and one log line.`,
 	return c
 }
 
-// server is beekeeper serve: the MCP tools over the Kubernetes store.
+// databaseEnv names the URL of the beekeeper database: the mailboxes.
+const databaseEnv = "BEEKEEPER_DATABASE_URL"
+
+// server is beekeeper serve: the MCP tools and resources over the
+// Kubernetes store and the mailboxes.
 type server struct {
 	cfg   *config.Config
 	store *kube.Store
+	mail  *mailbox.Store
+	hub   *hub
 	ids   *identity.Verifier
 	log   *slog.Logger
 	now   func() time.Time
 }
 
-func newServer(cfg *config.Config, store *kube.Store, ids *identity.Verifier, log *slog.Logger) *server {
-	return &server{cfg: cfg, store: store, ids: ids, log: log, now: time.Now}
+func newServer(cfg *config.Config, store *kube.Store, mail *mailbox.Store, ids *identity.Verifier, log *slog.Logger) *server {
+	s := &server{cfg: cfg, store: store, mail: mail, hub: newHub(), ids: ids, log: log, now: time.Now}
+	s.hub.dropped = func(who identity.Caller, uri string) {
+		log.Warn("notify", "caller", who.Email, "uri", uri, "outcome", "dropped", "detail", "the stream's queue is full")
+	}
+	return s
 }
 
-type callerKey struct{}
+// callerKey carries the authenticated caller, tokenKey the token it came
+// with (forwarded to muster as the caller's).
+type (
+	callerKey struct{}
+	tokenKey  struct{}
+)
 
 func (s *server) handler() http.Handler {
-	m := mcpserver.NewMCPServer(project.Name, project.Version(), mcpserver.WithToolCapabilities(false))
-	for _, t := range s.tools() {
+	m := mcpserver.NewMCPServer(project.Name, project.Version(), mcpserver.WithToolCapabilities(false),
+		mcpserver.WithResourceCapabilities(true, false), mcpserver.WithHooks(s.subscriptionHooks()))
+	for _, t := range append(s.tools(), s.messageTools()...) {
 		m.AddTool(t.tool, s.handle(t))
 	}
+	s.addResources(m)
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", s.authenticate(mcpserver.NewStreamableHTTPServer(m, mcpserver.WithStateLess(true))))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
@@ -121,7 +155,8 @@ func (s *server) authenticate(next http.Handler) http.Handler {
 			http.Error(w, err.Error(), http.StatusUnauthorized)
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerKey{}, who)))
+		ctx := context.WithValue(context.WithValue(r.Context(), callerKey{}, who), tokenKey{}, strings.TrimSpace(raw))
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 

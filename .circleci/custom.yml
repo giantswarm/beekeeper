@@ -2,14 +2,23 @@
 # setup workflow in config.yml.
 #
 # The generated go-build job runs only `make test`, where the envtest-backed
-# tests of the Kubernetes store skip without KUBEBUILDER_ASSETS. This job runs
-# them against a real kube-apiserver from setup-envtest, after checking that
-# the committed CRDs are what pkg/apis generates.
+# tests of the Kubernetes store skip without KUBEBUILDER_ASSETS and the
+# mailbox tests without BEEKEEPER_TEST_DATABASE_URL. This job runs them
+# against a real kube-apiserver from setup-envtest and a Postgres beside it,
+# after checking that the committed CRDs are what pkg/apis generates. Its
+# first image is the one the architect orb's executor runs.
 version: 2.1
 
 jobs:
   test-envtest:
-    executor: architect/architect
+    docker:
+    - image: gsoci.azurecr.io/giantswarm/architect:8.5.0
+      entrypoint: /bin/bash
+    - image: gsoci.azurecr.io/giantswarm/postgres:18.6-alpine
+      environment:
+        POSTGRES_HOST_AUTH_METHOD: trust
+    environment:
+      BEEKEEPER_TEST_DATABASE_URL: postgres://postgres@localhost:5432/postgres?sslmode=disable
     resource_class: medium
     steps:
     - checkout
@@ -19,7 +28,10 @@ jobs:
         name: Check the CRDs are generated from pkg/apis
         command: make check-crds
     - run:
-        name: Run the envtest-backed tests (the Kubernetes store)
+        name: Wait for the Postgres
+        command: for i in $(seq 60); do (echo > /dev/tcp/localhost/5432) 2>/dev/null && exit 0; sleep 1; done; exit 1
+    - run:
+        name: Run the envtest-backed and Postgres-backed tests (the Kubernetes store, serve, the mailboxes)
         command: make test-envtest
     - architect/go-cache-save
 

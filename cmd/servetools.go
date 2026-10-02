@@ -28,6 +28,12 @@ const (
 	paramPurpose     = "purpose"
 	paramTarget      = "target"
 	paramNote        = "note"
+	paramFor         = "for"
+	paramKind        = "kind"
+	paramText        = "text"
+	paramMessage     = "message"
+	keyMailbox       = "mailbox"
+	keyNotes         = "notes"
 	lanesName        = "lanes"
 )
 
@@ -66,9 +72,9 @@ func (s *server) tools() []serveTool {
 			append(prOptions(), mcp.WithBoolean("merged", mcp.Description("the pull request is merged: the lane settles")))...), toolLaneSettle},
 		{newTool("lane_turn", "Whether a queued merge is its lane's next, and what is ahead of it.", true, prOptions()...), toolLaneTurn},
 		{newTool("note_add", "File a note: a decision for a person, or a memo.", false,
-			mcp.WithString("text", mcp.Required(), mcp.Description("the question or the memo")),
-			mcp.WithString("for", mcp.Description("who decides")),
-			mcp.WithString("kind", mcp.Description("decision, memo or login")),
+			mcp.WithString(paramText, mcp.Required(), mcp.Description("the question or the memo")),
+			mcp.WithString(paramFor, mcp.Description("who decides")),
+			mcp.WithString(paramKind, mcp.Description("decision, memo or login")),
 			mcp.WithString("due", mcp.Description("when it is due: a time (22:55) or a duration (3h)")),
 			mcp.WithString("default", mcp.Description("the action if nobody answers by the due time")),
 			mcp.WithString("status_quo", mcp.Description("what is true now")),
@@ -607,7 +613,7 @@ func (c *call) note(id int) (*state.Note, error) {
 
 func toolNoteList(c *call, _ mcp.CallToolRequest) (any, error) {
 	notes, err := c.noteList()
-	return map[string]any{"notes": notes}, err
+	return map[string]any{keyNotes: notes}, err
 }
 
 func (c *call) noteList() ([]state.Note, error) {
@@ -698,15 +704,15 @@ func toolListAgents(c *call, req mcp.CallToolRequest) (any, error) {
 	return map[string]any{agentsName: agents}, err
 }
 
-func (c *call) agentList(team bool) ([]state.Agent, error) {
+func (c *call) agentList(team bool) ([]addressedAgent, error) {
 	st, err := c.app.store.Read()
 	if err != nil {
 		return nil, err
 	}
-	agents := []state.Agent{}
+	agents := []addressedAgent{}
 	for _, ag := range st.Agents {
 		if !team || ag.Team == c.me.Team {
-			agents = append(agents, ag)
+			agents = append(agents, addressed(ag))
 		}
 	}
 	if len(agents) == 0 {
@@ -714,16 +720,9 @@ func (c *call) agentList(team bool) ([]state.Agent, error) {
 		return agents, nil
 	}
 	w := c.app.table()
-	_, _ = fmt.Fprintln(w, "AGENT\tPERSON\tTEAM\tHOST\tSTATE\tTASK")
+	_, _ = fmt.Fprintln(w, "ADDRESS\tPERSON\tTEAM\tSTATE\tTASK")
 	for _, ag := range agents {
-		st := "idle"
-		switch {
-		case ag.Done:
-			st = "ended"
-		case ag.Task != "":
-			st = "busy"
-		}
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", ag.Name, dash(ag.Person), dash(ag.Team), dash(ag.Host), st, dash(truncate(ag.Task, 60)))
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", ag.Address, dash(ag.Person), dash(ag.Team), ag.State, dash(truncate(ag.Task, 60)))
 	}
 	_ = w.Flush()
 	return agents, nil
@@ -731,11 +730,11 @@ func (c *call) agentList(team bool) ([]state.Agent, error) {
 
 // snapshotView is everything the central state holds.
 type snapshotView struct {
-	Leases *leaseListView `json:"leases"`
-	Holds  []state.Hold   `json:"holds"`
-	Lanes  []centralLane  `json:"lanes"`
-	Notes  []state.Note   `json:"notes"`
-	Agents []state.Agent  `json:"agents"`
+	Leases *leaseListView   `json:"leases"`
+	Holds  []state.Hold     `json:"holds"`
+	Lanes  []centralLane    `json:"lanes"`
+	Notes  []state.Note     `json:"notes"`
+	Agents []addressedAgent `json:"agents"`
 }
 
 func toolSnapshot(c *call, _ mcp.CallToolRequest) (any, error) {
