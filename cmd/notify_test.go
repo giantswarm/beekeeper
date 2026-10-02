@@ -156,9 +156,9 @@ func TestStatusBar(t *testing.T) {
 		v    statusView
 		want string
 	}{
-		{statusView{}, "beekeeper\t-\t0\t0\t0"},
-		{statusView{Supervisor: "night\twatch", SupervisorLive: true, Leases: []string{"a", "b"}, Holds: []string{"merges"}, Due: 3}, "beekeeper\tnight watch\t2\t1\t3"},
-		{statusView{Supervisor: "run 11"}, "beekeeper\t!run 11\t0\t0\t0"},
+		{statusView{}, "beekeeper\t-\t0\t0\t0\t0/0"},
+		{statusView{Supervisor: "night\twatch", SupervisorLive: true, Leases: []string{"a", "b"}, Holds: []string{"merges"}, Due: 3, Busy: 3, Floor: 5, Ceiling: 10}, "beekeeper\tnight watch\t2\t1\t3\t3/5"},
+		{statusView{Supervisor: "run 11", Floor: 5}, "beekeeper\t!run 11\t0\t0\t0\t0/5"},
 	} {
 		if got := c.v.bar(); got != c.want {
 			t.Errorf("bar() = %q, want %q", got, c.want)

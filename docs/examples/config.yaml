@@ -148,6 +148,11 @@ agents:                     # the hand-over of registered agents
   shell:                    # the agent shell's prelude, written by beekeeper hook sessionstart before each Bash command
     unalias: [grep, find, ls, cp, mv, rm]   # aliases and shell functions removed, so each runs the tool on PATH; []: none
     globs: literal          # an unmatched glob stays as written; shell: the shell's own behaviour (zsh: no matches found)
+capacity:                   # the busy agents the supervisor keeps (beekeeper capacity, watch's CAPACITY LOW / FULL)
+  floor: 5                  # CAPACITY LOW under this many busy agents, when the headroom allows a start
+  ceiling: 10               # CAPACITY FULL at this many; no start past it
+  availMinMiB: 20480        # a start needs this MemAvailable
+  swapGrowthMaxMiB: 256     # no start while the machine swap grows faster than this per hour over the watch's readings
 doctor:                     # known faults the doctor (beekeeper doctor, every watch poll) probes and remedies
   faults:
     - name: registry-login  # an example: a login unit answering 401, fixed by a restart

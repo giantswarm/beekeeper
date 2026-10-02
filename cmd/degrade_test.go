@@ -84,7 +84,7 @@ func TestStatusWithoutSessions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status on the stub: %v", err)
 	}
-	if got, want := v.bar(), "beekeeper\t?"+agentOne+"\t1\t0\t0"; got != want {
+	if got, want := v.bar(), "beekeeper\t?"+agentOne+"\t1\t0\t0\t0/5"; got != want {
 		t.Errorf("status --bar = %q, want %q", got, want)
 	}
 	if got := v.line(); !strings.Contains(got, platform.Unavailable(secSessions)) {

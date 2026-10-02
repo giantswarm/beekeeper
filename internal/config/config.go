@@ -91,6 +91,9 @@ type Config struct {
 	// Agents configures how a registered agent near its context limit is
 	// handed over to a fresh session.
 	Agents Agents `yaml:"agents"`
+	// Capacity is how many agents the supervisor keeps busy and the
+	// headroom a new start needs.
+	Capacity Capacity `yaml:"capacity"`
 	// Reporter is the one-off status reporter session the standby watch
 	// starts once per interval.
 	Reporter Reporter `yaml:"reporter"`
@@ -351,6 +354,20 @@ type Agents struct {
 	// Shell is the prelude of every agent shell (beekeeper hook
 	// sessionstart).
 	Shell AgentShell `yaml:"shell"`
+}
+
+// Capacity is the supervisor's target of busy agents and the memory guards
+// that bound a new start (beekeeper capacity, the watch's CAPACITY lines).
+type Capacity struct {
+	// Floor is the fewest busy agents the supervisor keeps (5); Ceiling
+	// the most it starts (10).
+	Floor   int `yaml:"floor"`
+	Ceiling int `yaml:"ceiling"`
+	// AvailMinMiB is the MemAvailable a start needs (20 GiB).
+	AvailMinMiB int `yaml:"availMinMiB"`
+	// SwapGrowthMaxMiB is the machine swap's growth per hour, over the
+	// watch's readings, above which no start fits (256).
+	SwapGrowthMaxMiB int `yaml:"swapGrowthMaxMiB"`
 }
 
 // AgentShell configures the prelude Claude Code runs before each Bash
@@ -1131,6 +1148,10 @@ func (c *Config) defaults() error {
 
 	setStr(&c.Memcap.SlotDir, filepath.Join(state, "memcap", "slots"))
 	setInt(&c.Memcap.Slots, 2)
+	setInt(&c.Capacity.Floor, 5)
+	setInt(&c.Capacity.Ceiling, 10)
+	setInt(&c.Capacity.AvailMinMiB, 20<<10)
+	setInt(&c.Capacity.SwapGrowthMaxMiB, 256)
 	al := &c.Alerts
 	if al.Ignore == nil {
 		al.Ignore = slices.Clone(DefaultIgnore)
@@ -1271,6 +1292,9 @@ func (c *Config) validate() error {
 		if r == "" || r == Browser || r == ModelServer || filepath.Base(r) != r || r[0] == '.' {
 			return fmt.Errorf("resources: %q is not a valid resource name", r)
 		}
+	}
+	if k := c.Capacity; k.Floor < 0 || k.Ceiling < k.Floor {
+		return fmt.Errorf("capacity: floor %d and ceiling %d; the ceiling is at least the floor", k.Floor, k.Ceiling)
 	}
 	if err := c.validateLabs(); err != nil {
 		return err
