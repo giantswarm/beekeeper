@@ -243,6 +243,20 @@ func Runs(m state.Merge, alive func(pid int) bool) bool {
 	return alive(m.PID) || alive(m.Child)
 }
 
+// Hung says whether a running merge whose devctl still runs has outlived
+// its pull request p at now: closed without a merge, or merged more than
+// after ago. devctl confirms a merge's release within its --timeout, so one
+// running on past it holds its lane for nothing.
+func Hung(p github.Pull, now time.Time, after time.Duration) bool {
+	switch p.State {
+	case github.Closed:
+		return true
+	case github.Merged:
+		return now.Sub(p.MergedAt) > after
+	}
+	return false
+}
+
 // Lane is one lane's queue.
 type Lane struct {
 	Name    string       `json:"name"`

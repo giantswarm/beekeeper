@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -418,5 +419,23 @@ func TestParsePromoteDocument(t *testing.T) {
 	}
 	if _, ok := ParsePromoteDocument([]byte("not json")); ok {
 		t.Errorf("no document parsed")
+	}
+}
+
+func TestHung(t *testing.T) {
+	now := time.Now()
+	for _, c := range []struct {
+		name string
+		p    github.Pull
+		want bool
+	}{
+		{"open", github.Pull{State: github.Open}, false},
+		{"merged within hungAfter", github.Pull{State: github.Merged, MergedAt: now.Add(-time.Minute)}, false},
+		{"merged before hungAfter", github.Pull{State: github.Merged, MergedAt: now.Add(-time.Hour)}, true},
+		{"closed", github.Pull{State: github.Closed}, true},
+	} {
+		if got := Hung(c.p, now, 45*time.Minute); got != c.want {
+			t.Errorf("%s: Hung = %v, want %v", c.name, got, c.want)
+		}
 	}
 }

@@ -646,6 +646,10 @@ type Merge struct {
 	// StallAfter is how long a lane's first arrived merge may wait behind
 	// places whose merges are not in the gate before the lane is stalled.
 	StallAfter Duration `yaml:"stallAfter"`
+	// HungAfter is how long a running merge's devctl may outlive its pull
+	// request's merge before the watch ends it: devctl confirms the release
+	// within its own --timeout, so one running on past it hangs in its lane.
+	HungAfter Duration `yaml:"hungAfter"`
 	// DevctlOwners are the owners whose repositories devctl pr merge serves
 	// (its GitHub App login reaches its own organisation only); a
 	// repository of any other owner, and every repository while it is
@@ -1313,6 +1317,7 @@ func (c *Config) defaults() error {
 	setDur(&c.Merge.SettleTimeout, 30*time.Minute)
 	setDur(&c.Merge.BudgetFresh, time.Minute)
 	setDur(&c.Merge.StallAfter, 5*time.Minute)
+	setDur(&c.Merge.HungAfter, 45*time.Minute)
 
 	setStr(&c.Memcap.SlotDir, filepath.Join(state, "memcap", "slots"))
 	setInt(&c.Memcap.Slots, 2)

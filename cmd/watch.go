@@ -56,6 +56,10 @@ waited longer than merge.stallAfter (5m) behind places whose merges are
 not in the gate (beekeeper lanes) is one LANE STALLED line when it starts
 and one ENDED line when it ends. A running merge whose gate process is
 gone is one MERGE LOST line: it settles with an unknown release. A
+running merge whose devctl runs on merge.hungAfter (45m) after its pull
+request merged, or that long after its start once the pull request is
+closed, is one MERGE HUNG line: the watch ends its devctl and records the
+merge at the next poll. A
 registered agent with a task and no running CLI is one AGENTS STOPPED
 line with how to resume it, unless it is kept (agents keep, or a timer
 that wakes it). Fewer busy agents than capacity.floor, with the headroom
@@ -1012,6 +1016,7 @@ func (w *watcher) poll(ctx context.Context) {
 		w.lastSettle = now
 		inFlight(w.readCtx(ctx), th.Interval.Duration, &w.settling, func(ctx context.Context) {
 			_ = w.checkPlaces(ctx, watchParty, now, "", "", 0, th.Interval.Duration)
+			w.hungMerges(ctx, now)
 			w.settled(ctx, now)
 		})
 	}
@@ -1107,69 +1112,30 @@ func (w *watcher) stalls() {
 }
 
 // lostMerges records the outcome of each running merge whose gate process
-// and devctl are gone: from the document and exit code its runner left in
-// the state directory, or from GitHub when there is no document (a gate
-// killed with its caller while devctl merged on). A merge nothing can judge
-// (GitHub unanswered) is lost: it settles, once. The gate itself prunes a
-// lost merge only when the lane's next merge arrives, and until then the
-// lane shows a merge running that no process runs.
+// and devctl are gone (recordGone), one MERGE RECORDED or MERGE LOST line
+// each. The gate itself prunes a lost merge only when the lane's next merge
+// arrives, and until then the lane shows a merge running that no process
+// runs.
 func (w *watcher) lostMerges(ctx context.Context) {
-	st, err := w.store.Read()
-	if err != nil {
-		return
-	}
-	runs := map[string]runOutcome{}
-	for _, m := range st.Merges {
-		if m.Phase != state.Running || merge.Runs(m, proc.Alive) {
-			continue
-		}
-		doc, rc := finishedRun(mergeBase(w.store.Dir(), m.Repo, m.PR))
-		r := runOutcome{rc: rc}
-		var ok bool
-		if r.out, ok = parseOutcome(m.PR, doc); merge.NeedsJudging(ok, rc) {
-			if r.out, r.unanswered = judgeRun(ctx, m.Repo, m.PR, 1); r.unanswered != nil {
-				continue
-			}
-		}
-		runs[m.Key()] = r
-	}
-	if len(runs) == 0 && !slices.ContainsFunc(st.Merges, func(m state.Merge) bool { return m.Phase == state.Running && !merge.Runs(m, proc.Alive) }) {
-		return
-	}
-	var lost []state.Merge
-	var recorded []string
-	err = w.store.Update(func(st *state.State) ([]state.Event, error) {
-		var evs []state.Event
-		for key, r := range runs {
-			i := slices.IndexFunc(st.Merges, func(m state.Merge) bool {
-				return m.Key() == key && m.Phase == state.Running && !merge.Runs(m, proc.Alive)
-			})
-			if i < 0 {
-				continue
-			}
-			m := st.Merges[i]
-			lane, _ := w.cfg.LaneNamed(m.Lane)
-			lane.Name = m.Lane
-			ev, _ := recordRun(st, i, lane, watchParty, r, w.now.UTC(), fmt.Sprintf(" (for %q, whose gate, pid %d, is gone)", m.By.Name, m.PID))
-			evs = append(evs, ev...)
-			recorded = append(recorded, ev[len(ev)-1].Detail)
-			removeMergeFiles(mergeBase(w.store.Dir(), m.Repo, m.PR))
-		}
-		lost = merge.Lost(st, w.now, proc.Alive)
-		for _, m := range lost {
-			evs = append(evs, event(watchParty, "merge.lost", "%s in lane %s: its gate (pid %d) and devctl are gone", m.Key(), m.Lane, m.PID))
-		}
-		return evs, nil
-	})
-	if err != nil {
-		return
-	}
+	recorded, lost := w.recordGone(ctx)
 	for _, d := range recorded {
 		w.emitNow("lanes", "MERGE RECORDED: %s", d)
 	}
 	for _, m := range lost {
 		w.emitNow("lanes", "MERGE LOST: %s in lane %s by %q: its gate (pid %d) and devctl are gone, whether it merged is unknown; the lane settles until %s, then frees once its HelmReleases are Ready",
 			m.Key(), m.Lane, m.By.Name, m.PID, clock(w.now, w.now.Add(w.cfg.Merge.Settle.Duration)))
+	}
+}
+
+// hungMerges ends the devctl of each running merge that has outlived its
+// pull request (endHung), one MERGE HUNG line each; the next poll records
+// it (lostMerges), or its gate does.
+func (w *watcher) hungMerges(ctx context.Context, now time.Time) {
+	for _, h := range w.endHung(ctx, watchParty, now, w.cfg.Merge.HungAfter.Duration, func(m state.Merge) bool {
+		return now.Sub(m.Started) > w.cfg.Merge.HungAfter.Duration
+	}) {
+		w.emitNow("lanes", "MERGE HUNG: %s in lane %s by %q: %s, its devctl (pid %d) still ran: ended, the lane records it next",
+			h.merge.Key(), h.merge.Lane, h.merge.By.Name, w.pullText(h.pull), h.merge.Child)
 	}
 }
 
