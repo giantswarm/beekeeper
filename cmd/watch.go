@@ -1378,6 +1378,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	w.handoversDue(st, sessions)
 	w.doctor(ctx)
 	signedIn := probeLogins(ctx, st.Notes)
+	probed := probeHoldLifts(ctx, st.Holds, w.now)
 	over := w.overtakenNow(ctx, st)
 	if !w.chores {
 		w.wouldOvertake(st, over)
@@ -1389,6 +1390,8 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	fire := func(st *state.State) ([]string, []state.Event, bool) {
 		seen, ce := observeCLI(st, sessions, w.now)
 		lines, evs := closeProbed(st, signedIn)
+		hl, he := liftProbed(st, probed)
+		lines, evs = append(lines, hl...), append(evs, he...)
 		nl, ne, nd := closeDefaulted(st, w.cfg.Guide.Person, watchParty, w.now)
 		lines, evs, defaulted = append(lines, nl...), append(evs, ne...), nd
 		ol, oe := closeOvertaken(st, over, watchParty)
