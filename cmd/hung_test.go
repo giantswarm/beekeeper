@@ -16,6 +16,12 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// The repositories and lane of the hung-merge tests.
+const (
+	hungRepo, openRepo, freshRepo, nextRepo = "o/hung", "o/open", "o/fresh", "o/next"
+	hungLane                                = "scratch"
+)
+
 // hungChild starts a process standing in for a merge's merge-child, records
 // it as repo#pr's in the state directory and returns its pid; it is reaped
 // once it ends.
@@ -64,15 +70,15 @@ func TestWatchEndsAHungMerge(t *testing.T) {
 		2: {State: github.Open},
 		3: {State: github.Merged, MergedAt: relayNow.Add(-time.Minute)},
 	})
-	hung, open, fresh := hungChild(t, dir, "o/hung", 1), hungChild(t, dir, "o/open", 2), hungChild(t, dir, "o/fresh", 3)
+	hung, open, fresh := hungChild(t, dir, hungRepo, 1), hungChild(t, dir, openRepo, 2), hungChild(t, dir, freshRepo, 3)
 	long := relayNow.Add(-2 * hungAfter)
 	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges = []state.Merge{
 			// Its gate was killed with its caller; devctl runs on.
-			{Repo: "o/hung", PR: 1, Lane: "scratch", By: four, Child: hung, Phase: state.Running, Started: long},
-			{Repo: "o/next", PR: 4, Lane: "scratch", By: four, Phase: state.Waiting, Joined: relayNow, Seen: relayNow},
-			{Repo: "o/open", PR: 2, Lane: "open", By: four, Child: open, Phase: state.Running, Started: long},
-			{Repo: "o/fresh", PR: 3, Lane: "fresh", By: four, Child: fresh, Phase: state.Running, Started: long},
+			{Repo: hungRepo, PR: 1, Lane: hungLane, By: four, Child: hung, Phase: state.Running, Started: long},
+			{Repo: nextRepo, PR: 4, Lane: hungLane, By: four, Phase: state.Waiting, Joined: relayNow, Seen: relayNow},
+			{Repo: openRepo, PR: 2, Lane: "open", By: four, Child: open, Phase: state.Running, Started: long},
+			{Repo: freshRepo, PR: 3, Lane: "fresh", By: four, Child: fresh, Phase: state.Running, Started: long},
 		}
 		return nil, nil
 	})
@@ -98,7 +104,7 @@ func TestWatchEndsAHungMerge(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, m := range st.Merges {
-		want := map[string]string{"o/next": state.Waiting, "o/open": state.Running, "o/fresh": state.Running}[m.Repo]
+		want := map[string]string{nextRepo: state.Waiting, openRepo: state.Running, freshRepo: state.Running}[m.Repo]
 		if m.Phase != want {
 			t.Errorf("%s is %s, want %s", m.Key(), m.Phase, want)
 		}
@@ -119,11 +125,11 @@ func TestLanesDropEndsAHungRun(t *testing.T) {
 		1: {State: github.Merged, MergedAt: a.now.Add(-time.Minute)},
 		2: {State: github.Open},
 	})
-	hung, open := hungChild(t, dir, "o/hung", 1), hungChild(t, dir, "o/open", 2)
+	hung, open := hungChild(t, dir, hungRepo, 1), hungChild(t, dir, openRepo, 2)
 	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges = []state.Merge{
-			{Repo: "o/hung", PR: 1, Lane: "scratch", By: four, Child: hung, Phase: state.Running, Started: a.now},
-			{Repo: "o/open", PR: 2, Lane: "open", By: four, Child: open, Phase: state.Running, Started: a.now},
+			{Repo: hungRepo, PR: 1, Lane: hungLane, By: four, Child: hung, Phase: state.Running, Started: a.now},
+			{Repo: openRepo, PR: 2, Lane: "open", By: four, Child: open, Phase: state.Running, Started: a.now},
 		}
 		return nil, nil
 	})
@@ -132,7 +138,7 @@ func TestLanesDropEndsAHungRun(t *testing.T) {
 	}
 	drop := func(n string) error {
 		c := a.lanesCmd()
-		c.SetArgs([]string{"drop", "o/" + map[string]string{"1": "hung", "2": "open"}[n], n})
+		c.SetArgs([]string{"drop", map[string]string{"1": hungRepo, "2": openRepo}[n], n})
 		c.SetOut(out)
 		return c.Execute()
 	}
@@ -152,7 +158,7 @@ func TestLanesDropEndsAHungRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(st.Merges) != 1 || st.Merges[0].Repo != "o/open" || st.Merges[0].Phase != state.Running {
+	if len(st.Merges) != 1 || st.Merges[0].Repo != openRepo || st.Merges[0].Phase != state.Running {
 		t.Errorf("merges: %+v", st.Merges)
 	}
 }
