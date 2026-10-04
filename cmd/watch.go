@@ -150,7 +150,9 @@ watch runs on, prints its lines and says so once.
 beekeeper-notify user unit): while a supervisor's session runs it leaves
 the notes, timers, session records and relays to the supervisor's watch,
 and it never reads the alerts, so it takes nothing from the supervisor's
-view.
+view. It reads the upgrades and sets and lifts their holds only while no
+supervisor's watch has begun an upgrade cycle within five watch.interval
+(upgrades-watch.json), and says so once.
 
 The quiet rules keep what is noise for the supervisor out of the output:
 other teams' alerts matching alerts.quiet (by default, once alerts.team is
@@ -397,9 +399,7 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 	}
 	interval := w.cfg.Watch.Interval.Duration
 	if once {
-		if !w.standby {
-			w.upgradeCycle(ctx)
-		}
+		w.upgradeCycle(ctx)
 		w.sample(ctx)
 		w.lastSweep = time.Now() // swept here, not in the poll's background
 		w.exposures()
@@ -427,8 +427,8 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 	})
 	if !w.standby {
 		wg.Go(func() { w.watchAlerts(ctx) })
-		wg.Go(func() { w.loop(ctx, interval, true, w.upgradeCycle) })
 	}
+	wg.Go(func() { w.loop(ctx, interval, true, w.upgradeCycle) })
 	w.loop(ctx, interval, false, w.poll)
 	return nil
 }
