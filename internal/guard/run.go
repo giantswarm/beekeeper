@@ -5,7 +5,8 @@
 //
 // The slots are memcap's: flock files <slotDir>/<i>.lock with a <i>.holder
 // record in memcap's format, so beekeeper and the memcap shell wrapper share
-// them.
+// them. A slot is a slice too, capped like one run: a session's runs share
+// the slot it holds, and its cap, instead of taking a second one.
 package guard
 
 import (
@@ -13,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"os"
 	"os/exec"
@@ -61,6 +63,16 @@ const (
 	ScopePrefix     = "memcap-"
 	TestScopePrefix = "memcap-test-"
 )
+
+// SlotSlice is the slice of slot n of the slot directory, under
+// memcap.slice (systemd nests a slice by the dashes in its name, so the rest
+// has none): a test's or a scratch state's slot never shares a cap with the
+// machine's own slot of the same number.
+func SlotSlice(dir string, n int) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(filepath.Clean(dir)))
+	return fmt.Sprintf("memcap-slot%d_%08x.slice", n, h.Sum32())
+}
 
 // IsTestScope reports whether a scope's unit name is a test run's.
 func IsTestScope(unit string) bool {
@@ -161,6 +173,8 @@ func ParseWait(s string) (time.Duration, error) {
 // Run runs argv in a capped scope and returns its exit code: the command's,
 // 128+signal when a signal ended it, ExitBusy when the wait ran out.
 // Without a user systemd, or inside a capped scope already, it execs argv.
+// A run of a session that holds a slot already joins that slot at once: its
+// scope goes into the slot's slice and shares the slot's cap.
 func Run(o Options, argv []string) int {
 	logf := func(format string, a ...any) { _, _ = fmt.Fprintf(o.Stderr, LogPrefix+format+"\n", a...) }
 	if !plat.Capper.Available() {
@@ -180,13 +194,22 @@ func Run(o Options, argv []string) int {
 		return 1
 	}
 
-	lock, slot := waitForSlot(o, needKiB, argv, logf)
-	if lock == nil {
+	lock, slot := waitForSlot(o, needKiB, sessionID(), argv, logf)
+	shared := lock == nil
+	switch {
+	case slot == 0:
 		return ExitBusy
+	case shared:
+		logf("joining slot %d, which this session holds: the command shares the slot's cap", slot)
+	default:
+		defer func() { _ = lock.Unlock() }()
+		holder := filepath.Join(o.SlotDir, strconv.Itoa(slot)+".holder")
+		defer func() { _ = os.Remove(holder) }()
+		if err := plat.Capper.CapSlot(platform.Cap{Max: o.Max, Swap: o.Swap, Slice: SlotSlice(o.SlotDir, slot)}); err != nil {
+			logf("%v", err)
+			return 1
+		}
 	}
-	defer func() { _ = lock.Unlock() }()
-	holder := filepath.Join(o.SlotDir, strconv.Itoa(slot)+".holder")
-	defer func() { _ = os.Remove(holder) }()
 
 	prefix := ScopePrefix
 	if o.Test {
@@ -194,9 +217,13 @@ func Run(o Options, argv []string) int {
 	}
 	unit := fmt.Sprintf("%s%d-%06d", prefix, os.Getpid(), time.Now().Nanosecond()%1000000)
 	head := CommandHead(argv)
-	o.record(VerbStart, fmt.Sprintf("%s.scope slot %d max %s: %s", unit, slot, o.Max, head))
+	how := "slot"
+	if shared {
+		how = "shared slot"
+	}
+	o.record(VerbStart, fmt.Sprintf("%s.scope %s %d max %s: %s", unit, how, slot, o.Max, head))
 	start := time.Now()
-	rc := scope(unit, o, argv, logf)
+	rc := scope(unit, o, slot, argv, logf)
 	end := fmt.Sprintf("%s.scope exit %d after %s", unit, rc, time.Since(start).Round(time.Second))
 	if rc != 0 {
 		if v := victims(unit, start, rc); len(v) > 0 {
@@ -209,8 +236,10 @@ func Run(o Options, argv []string) int {
 }
 
 // waitForSlot takes a free slot and waits until MemAvailable covers the cap,
-// both within o.Wait: one line when the wait starts, one when it ends.
-func waitForSlot(o Options, needKiB int64, argv []string, logf func(string, ...any)) (*flock.Flock, int) {
+// both within o.Wait: one line when the wait starts, one when it ends. A
+// slot the session holds, before or during the wait, is shared at once: the
+// slot without a lock. No slot within the wait: 0.
+func waitForSlot(o Options, needKiB int64, session string, argv []string, logf func(string, ...any)) (*flock.Flock, int) {
 	deadline := time.Now().Add(o.Wait)
 	t0 := time.Now()
 	waited := false
@@ -218,6 +247,9 @@ func waitForSlot(o Options, needKiB int64, argv []string, logf func(string, ...a
 	slot := 0
 	for {
 		if lock == nil {
+			if n := sessionSlot(o, session); n > 0 {
+				return nil, n
+			}
 			if lock, slot = acquire(o.SlotDir, o.Slots); lock != nil {
 				writeHolder(o, slot, argv)
 			}
@@ -275,6 +307,29 @@ func holders(o Options) string {
 	return b.String()
 }
 
+// sessionSlot is the slot a run of the session holds, 0 for none or no
+// session.
+func sessionSlot(o Options, session string) int {
+	if session == "" {
+		return 0
+	}
+	for _, s := range machine.ReadSlots(o.SlotDir, o.Slots) {
+		var h holderRecord
+		if !s.Free && json.Unmarshal([]byte(s.Holder), &h) == nil && h.Session == session {
+			return s.N
+		}
+	}
+	return 0
+}
+
+// sessionID is the Claude Code session running this process, "" outside one.
+func sessionID() string {
+	if s := os.Getenv("CLAUDE_CODE_SESSION_ID"); s != "" {
+		return s
+	}
+	return os.Getenv("CLAUDE_SESSION_ID")
+}
+
 // holderRecord is memcap's <i>.holder, field for field.
 type holderRecord struct {
 	PID     int    `json:"pid"`
@@ -290,10 +345,6 @@ func writeHolder(o Options, slot int, argv []string) {
 	if r := []rune(cmd); len(r) > 140 {
 		cmd = string(r[:140])
 	}
-	session := os.Getenv("CLAUDE_CODE_SESSION_ID")
-	if session == "" {
-		session = os.Getenv("CLAUDE_SESSION_ID")
-	}
 	cwd, _ := os.Getwd()
 	f, err := os.OpenFile(filepath.Join(o.SlotDir, strconv.Itoa(slot)+".holder"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
@@ -302,13 +353,13 @@ func writeHolder(o Options, slot int, argv []string) {
 	defer func() { _ = f.Close() }()
 	enc := json.NewEncoder(f)
 	enc.SetEscapeHTML(false)
-	_ = enc.Encode(holderRecord{PID: os.Getpid(), Session: session, CWD: cwd, Cmd: cmd, Max: o.Max,
+	_ = enc.Encode(holderRecord{PID: os.Getpid(), Session: sessionID(), CWD: cwd, Cmd: cmd, Max: o.Max,
 		Since: time.Now().UTC().Format("2006-01-02T15:04:05Z")})
 }
 
-// scope runs argv in the capped scope unit.
-func scope(unit string, o Options, argv []string, logf func(string, ...any)) int {
-	c, err := plat.Capper.Command(unit, platform.Cap{Max: o.Max, Swap: o.Swap}, argv)
+// scope runs argv in the capped scope unit, in the slot's slice.
+func scope(unit string, o Options, slot int, argv []string, logf func(string, ...any)) int {
+	c, err := plat.Capper.Command(unit, platform.Cap{Max: o.Max, Swap: o.Swap, Slice: SlotSlice(o.SlotDir, slot)}, argv)
 	if err != nil {
 		logf("%v", err)
 		return ExitNotFound
@@ -357,7 +408,7 @@ func victims(unit string, since time.Time, rc int) []string {
 		}
 		var out []string
 		for _, k := range kills {
-			if strings.HasSuffix(k.Memcg, "/"+unit+".scope") {
+			if strings.HasSuffix(k.RunMemcg(), "/"+unit+".scope") {
 				out = append(out, fmt.Sprintf("%d (%s) %d MiB", k.PID, k.Task, k.AnonMiB))
 			}
 		}

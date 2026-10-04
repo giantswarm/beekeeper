@@ -47,3 +47,12 @@ func TestParseMem(t *testing.T) {
 		t.Error("disk swap below zero")
 	}
 }
+
+func TestParseOOMAtASlotSlice(t *testing.T) {
+	const slice = "/user.slice/user-1000.slice/user@1000.service/memcap.slice/memcap-slot2.slice"
+	journal := `2026-10-04T16:00:00+0300 demiurg kernel: oom-kill:constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=user.slice,mems_allowed=0,oom_memcg=` + slice + `,task_memcg=` + slice + `/memcap-42-000001.scope,task=node,pid=43,uid=1000`
+	kills := ParseOOM(journal)
+	if len(kills) != 1 || kills[0].Memcg != slice || kills[0].RunMemcg() != slice+"/memcap-42-000001.scope" || kills[0].Task != "node" || kills[0].PID != 43 {
+		t.Errorf("kills = %+v", kills)
+	}
+}

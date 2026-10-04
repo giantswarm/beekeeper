@@ -80,8 +80,9 @@ func (stubLauncher) Running(context.Context, bool, ...string) []string { return 
 
 type stubCapper struct{}
 
-func (stubCapper) Available() bool { return false }
-func (stubCapper) Capped() bool    { return false }
+func (stubCapper) Available() bool   { return false }
+func (stubCapper) Capped() bool      { return false }
+func (stubCapper) CapSlot(Cap) error { return missing("Capper.CapSlot") }
 func (stubCapper) Command(string, Cap, []string) (*exec.Cmd, error) {
 	return nil, missing("Capper.Command")
 }

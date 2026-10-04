@@ -227,13 +227,31 @@ func (systemdCapper) Capped() bool {
 	return err == nil && strings.Contains(string(raw), "/"+memcapSlice+"/")
 }
 
-// Command is argv in a transient scope under memcap.slice. systemd-run's
+// slice is the cap's slice, memcap.slice itself for none.
+func (c Cap) slice() string {
+	if c.Slice == "" {
+		return memcapSlice
+	}
+	return c.Slice
+}
+
+// CapSlot sets the slot slice's limits for this boot.
+func (systemdCapper) CapSlot(c Cap) error {
+	out, err := exec.Command("systemctl", userManager, "set-property", "--runtime", c.slice(), //nolint:gosec // our own sizes
+		"MemoryMax="+c.Max, "MemorySwapMax="+c.Swap).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("capping %s: %v: %s", c.slice(), err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// Command is argv in a transient scope in the slot's slice. systemd-run's
 // own ${VAR} expansion is off (default-on for --scope since systemd 258):
 // the argument list reaches the command verbatim, so a wrapped `zsh -c`
 // keeps ${=files}, ${(f)x}, ${pipestatus[1]} and $$.
 func (systemdCapper) Command(name string, c Cap, argv []string) (*exec.Cmd, error) {
 	args := append([]string{userManager, "--scope", "--quiet", "--expand-environment=no", "--unit=" + name,
-		"--slice=" + memcapSlice, "-p", "MemoryMax=" + c.Max, "-p", "MemorySwapMax=" + c.Swap,
+		"--slice=" + c.slice(), "-p", "MemoryMax=" + c.Max, "-p", "MemorySwapMax=" + c.Swap,
 		"-p", "OOMPolicy=continue", "--"}, argv...)
 	return exec.Command("systemd-run", args...), nil //nolint:gosec // running the caller's command is the purpose
 }
