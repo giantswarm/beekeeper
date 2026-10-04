@@ -289,6 +289,10 @@ func (in *LaneEntry) DeepCopyInto(out *LaneEntry) {
 	*out = *in
 	out.By = in.By
 	in.Arrived.DeepCopyInto(&out.Arrived)
+	if in.Seen != nil {
+		in, out := &in.Seen, &out.Seen
+		*out = (*in).DeepCopy()
+	}
 	if in.Started != nil {
 		in, out := &in.Started, &out.Started
 		*out = (*in).DeepCopy()

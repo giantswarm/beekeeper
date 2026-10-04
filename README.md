@@ -1335,6 +1335,20 @@ to the central roster on their transitions only (registered, a task taken or end
 answers again; what was not published meanwhile is published then. A watch with nothing to
 publish asks every five minutes.
 
+A lane whose installation is central queues centrally too, so two people's merges into it roll
+one after the other. The gate queues the merge in the central lane (`lane_queue`) as well as
+the machine's, asks for its turn there every 15 seconds while it waits, and runs devctl only when
+the merge is next in both. It makes it the central lane's running merge (`lane_settle`), reports
+its outcome (merged: the lane settles; otherwise it leaves with `lane_leave`), and the watch takes
+it out once its release rolled on the installation. A waiting place whose gate stopped asking
+for `merge.queueTTL` holds up nobody. A hold on a central lane (`hold set --lane`) or on a
+repository in one is central: `hold set|lift|check|list` go to the central instance, and its gate
+refuses the merge with the hold (exit 77) on every machine; `--lift-when`, a probe on one
+machine, is refused for a central target. `lanes central` lists the central lanes,
+and `lanes leave owner/repo#n` takes a merge out of its central lane by hand (its person's, or the
+team's supervisor role's). A gate that cannot reach the central instance refuses the merge with
+exit 69 and queues nothing.
+
 ## Configuration
 
 `$XDG_CONFIG_HOME/beekeeper/config.yaml` (or `--config`, or `$BEEKEEPER_CONFIG`). Every field is

@@ -1220,6 +1220,7 @@ func (w *watcher) settled(ctx context.Context, now time.Time) {
 	if len(done) == 0 {
 		return
 	}
+	var settled []state.Merge
 	_ = w.store.Update(func(st *state.State) ([]state.Event, error) {
 		var ev []state.Event
 		st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool {
@@ -1227,11 +1228,15 @@ func (w *watcher) settled(ctx context.Context, now time.Time) {
 			if !ok || m.Phase != state.Settling {
 				return false
 			}
+			settled = append(settled, m)
 			ev = append(ev, event(watchParty, verbLaneSettled, "%s: %s %s", m.Lane, m.Key(), why))
 			return true
 		})
 		return ev, nil
 	})
+	for _, m := range settled {
+		w.leaveCentral(ctx, []state.Merge{m}, done[m.Key()])
+	}
 }
 
 // commandTimeout bounds one journalctl or docker call of a poll: a wedged

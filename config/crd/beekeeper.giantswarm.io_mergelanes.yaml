@@ -196,6 +196,12 @@ spec:
                       items:
                         type: string
                       type: array
+                    seen:
+                      description: |-
+                        Seen is when the waiting merge's gate last asked for its turn: a
+                        place unseen for the queue's TTL holds up nobody.
+                      format: date-time
+                      type: string
                     started:
                       format: date-time
                       type: string
