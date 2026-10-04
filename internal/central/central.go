@@ -74,7 +74,7 @@ func New(cfg config.Central, run Runner) *Client {
 func (c *Client) Context() string { return c.cfg.Context }
 
 func (c *Client) muster(ctx context.Context, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, c.cfg.Muster, args...)
+	cmd := exec.CommandContext(ctx, c.cfg.Muster, args...) //nolint:gosec // the configured muster binary, with beekeeper's own arguments
 	cmd.Env = append(os.Environ(), "MUSTER_NO_UPDATE_CHECK=1")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

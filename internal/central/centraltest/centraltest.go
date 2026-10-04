@@ -112,7 +112,7 @@ auth) cat '%s' ;;
 *) echo "unknown command $1" >&2; exit 1 ;;
 esac
 `, endpoint, tokenFile)
-	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil { //nolint:gosec // an executable under the test's temporary folder
 		t.Fatal(err)
 	}
 	return bin, tokenFile
