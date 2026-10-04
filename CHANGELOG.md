@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `beekeeper watch` reads the installations' Cluster API upgrades every `upgrades.every` (5m) instead of every `watch.interval`, all four kinds in one `kubectl` call per installation (one call per kind only on an installation that does not serve them all); an installation an upgrade runs on or holds is read every `watch.interval` until `UPGRADE ENDED`. The readings are shared in `upgrades.json`: a second watch, `snapshot` and `ui` use one younger than `upgrades.every`. One watch over five installations starts 5 `kubectl` per 5 minutes for upgrades instead of 21 every 30 seconds ([README](README.md#cluster-upgrades)).
 - `beekeeper serve` shows each person only the agents they may read, alike in `list_agents`, `beekeeper://roster`, `beekeeper://feed` and their notifications: their own local agents, their team's local agents that hold an Environment's lease (work on a shared installation), and every remote agent; a feed event about a roster entry follows that entry. `send_message` to a `local:` address is accepted only from the agent's person. Every member read every person's local agents, and any member could queue messages into another person's mailbox ([docs/feed.md](docs/feed.md#who-reads-which-agents)).
 
 ### Added

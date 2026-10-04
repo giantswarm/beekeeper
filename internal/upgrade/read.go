@@ -84,8 +84,8 @@ const notServed = "the server doesn't have a resource type"
 // errNotServed is a kind the installation does not serve.
 var errNotServed = errors.New("not served")
 
-// Read reads every target in parallel, each within r.Timeout: one list per
-// kind, and for an upgrade whose hold does not exist yet and whose from
+// Read reads every target in parallel, each within r.Timeout: one list of
+// all kinds, and for an upgrade whose hold does not exist yet and whose from
 // release is unknown, its cluster's events. held says which clusters hold
 // an upgrade.
 func (r Reader) Read(ctx context.Context, targets []Target, now time.Time, held func(installation, cluster string) bool) []Status {
@@ -108,31 +108,10 @@ func (r Reader) readOne(ctx context.Context, t Target, now time.Time, held func(
 	}
 	ctx, cancel := context.WithTimeout(ctx, r.Timeout)
 	defer cancel()
-	lists := make([][]Object, len(Kinds))
-	errs := make([]error, len(Kinds))
-	var wg sync.WaitGroup
-	for i, kind := range Kinds {
-		wg.Go(func() {
-			raw, err := r.kubectl(ctx, t.Context, "get", kind, "-A", "-o", "json")
-			if err == nil {
-				lists[i], err = Parse(raw)
-			}
-			errs[i] = err
-		})
-	}
-	wg.Wait()
-	var objs []Object
-	served := 0
-	for i, err := range errs {
-		switch {
-		case errors.Is(err, errNotServed):
-		case err != nil:
-			s.Err = err.Error()
-			return s
-		default:
-			served++
-			objs = append(objs, lists[i]...)
-		}
+	objs, served, err := r.list(ctx, t.Context)
+	if err != nil {
+		s.Err = err.Error()
+		return s
 	}
 	s.NoClusterAPI = served == 0
 	s.Upgrades = Detect(objs, now, held)
@@ -142,6 +121,44 @@ func (r Reader) readOne(ctx context.Context, t Target, now time.Time, held func(
 		}
 	}
 	return s
+}
+
+// list reads every kind in one call. An installation that does not serve one
+// of them fails it; it is read one call per kind, the kinds it does not serve
+// left out. served counts the kinds it serves.
+func (r Reader) list(ctx context.Context, kubeContext string) (objs []Object, served int, err error) {
+	raw, err := r.kubectl(ctx, kubeContext, "get", strings.Join(Kinds, ","), "-A", "-o", "json")
+	if err == nil {
+		objs, err = Parse(raw)
+		return objs, len(Kinds), err
+	}
+	if !errors.Is(err, errNotServed) {
+		return nil, 0, err
+	}
+	lists := make([][]Object, len(Kinds))
+	errs := make([]error, len(Kinds))
+	var wg sync.WaitGroup
+	for i, kind := range Kinds {
+		wg.Go(func() {
+			raw, err := r.kubectl(ctx, kubeContext, "get", kind, "-A", "-o", "json")
+			if err == nil {
+				lists[i], err = Parse(raw)
+			}
+			errs[i] = err
+		})
+	}
+	wg.Wait()
+	for i, err := range errs {
+		switch {
+		case errors.Is(err, errNotServed):
+		case err != nil:
+			return nil, 0, err
+		default:
+			served++
+			objs = append(objs, lists[i]...)
+		}
+	}
+	return objs, served, nil
 }
 
 // upgradingEvent is cluster-api-events' message on an upgrade's start.

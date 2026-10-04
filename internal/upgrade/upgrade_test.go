@@ -2,9 +2,13 @@ package upgrade
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -152,23 +156,81 @@ func TestReconcileKeepsOthers(t *testing.T) {
 	}
 }
 
-// fakeKubectl answers `get <kind>` with dir/<kind>.json, else as a server
-// that does not serve the kind.
-func fakeKubectl(t *testing.T, dir string) string {
+// fakeKubectl answers `get <kinds>` with the items of dir/<kind>.json for
+// each comma-separated kind, else as a server that does not serve a kind,
+// and logs each call's kinds to its log: the test binary itself, run as
+// kubectl (TestMain).
+func fakeKubectl(t *testing.T, dir string) (kubectl, log string) {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), "kubectl")
-	script := `#!/bin/sh
-while [ $# -gt 0 ]; do [ "$1" = get ] && break; shift; done
-kind="${2%%.*}"
-[ -n "$FAIL" ] && { echo "error: $FAIL" >&2; exit 1; }
-[ -f "` + dir + `/$kind.json" ] && exec cat "` + dir + `/$kind.json"
-echo "error: the server doesn't have a resource type \"$kind\"" >&2
-exit 1
-`
-	if err := os.WriteFile(p, []byte(script), 0o700); err != nil { //nolint:gosec // a test's script
+	log = filepath.Join(t.TempDir(), "calls")
+	t.Setenv(fakeDir, dir)
+	t.Setenv(fakeLog, log)
+	exe, err := os.Executable()
+	if err != nil {
 		t.Fatal(err)
 	}
-	return p
+	return exe, log
+}
+
+const (
+	fakeDir = "BEEKEEPER_FAKE_KUBECTL_DIR"
+	fakeLog = "BEEKEEPER_FAKE_KUBECTL_LOG"
+)
+
+func TestMain(m *testing.M) {
+	if dir := os.Getenv(fakeDir); dir != "" {
+		os.Exit(kubectl(dir, os.Getenv(fakeLog), os.Args[1:]))
+	}
+	os.Exit(m.Run())
+}
+
+func kubectl(dir, log string, args []string) int {
+	for len(args) > 0 && args[0] != "get" {
+		args = args[1:]
+	}
+	kinds := strings.Split(args[1], ",")
+	if f, err := os.OpenFile(log, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil { //nolint:gosec // a test's log
+		_, _ = fmt.Fprintln(f, args[1])
+		_ = f.Close()
+	}
+	if msg := os.Getenv("FAIL"); msg != "" {
+		fmt.Fprintln(os.Stderr, "error: "+msg)
+		return 1
+	}
+	list := struct {
+		Kind  string            `json:"kind"`
+		Items []json.RawMessage `json:"items"`
+	}{Kind: "List", Items: []json.RawMessage{}}
+	for _, k := range kinds {
+		raw, err := os.ReadFile(filepath.Join(dir, kindFile(k)+".json")) //nolint:gosec // testdata
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: the server doesn't have a resource type %q\n", kindFile(k))
+			return 1
+		}
+		var l struct {
+			Items []json.RawMessage `json:"items"`
+		}
+		if err := json.Unmarshal(raw, &l); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		list.Items = append(list.Items, l.Items...)
+	}
+	_ = json.NewEncoder(os.Stdout).Encode(list)
+	return 0
+}
+
+// calls are the kinds of each call in the fake kubectl's log.
+func calls(t *testing.T, log string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(log) //nolint:gosec // a test's log
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Fields(string(raw))
 }
 
 func TestRead(t *testing.T) {
@@ -176,7 +238,8 @@ func TestRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := Reader{Kubectl: fakeKubectl(t, dir), Timeout: 10 * time.Second}
+	exe, log := fakeKubectl(t, dir)
+	r := Reader{Kubectl: exe, Timeout: 10 * time.Second}
 	none := func(string, string) bool { return false }
 	ss := r.Read(context.Background(), []Target{{Name: prod, Context: prod}, {Name: "far"}}, at, none)
 	if len(ss) != 2 || len(ss[0].Upgrades) != 1 || ss[0].Upgrades[0].From != "35.0.1" {
@@ -188,19 +251,56 @@ func TestRead(t *testing.T) {
 	if ss[1].Err == "" {
 		t.Errorf("an installation without a context is readable: %+v", ss[1])
 	}
+	// One call lists every kind; one more reads the events of the upgrade
+	// whose from is not known yet.
+	if c := calls(t, log); len(c) != 2 || c[0] != strings.Join(Kinds, ",") || c[1] != "events" {
+		t.Errorf("kubectl calls %q", c)
+	}
 	// A held upgrade's from is in its hold's reason: the events are not read.
 	held := func(i, c string) bool { return i == prod && c == "mc" }
 	if ss = r.Read(context.Background(), []Target{{Name: prod, Context: prod}}, at, held); ss[0].Upgrades[0].From != "" {
 		t.Errorf("the events of a held upgrade were read: %+v", ss[0])
 	}
 
-	empty := Reader{Kubectl: fakeKubectl(t, t.TempDir()), Timeout: 10 * time.Second}
+	exe, _ = fakeKubectl(t, t.TempDir())
+	empty := Reader{Kubectl: exe, Timeout: 10 * time.Second}
 	if ss = empty.Read(context.Background(), []Target{{Name: "lab", Context: "lab"}}, at, none); !ss[0].NoClusterAPI || ss[0].Words(at) != "lab none (no Cluster API)" {
 		t.Errorf("an installation without the Cluster API: %+v", ss[0])
 	}
+	t.Setenv(fakeDir, dir)
 	t.Setenv("FAIL", "Unauthorized")
 	if ss = r.Read(context.Background(), []Target{{Name: prod, Context: prod}}, at, none); ss[0].Err != "error: Unauthorized" || len(ss[0].Upgrades) != 0 {
 		t.Errorf("an unreadable installation: %+v", ss[0])
+	}
+}
+
+// An installation that does not serve one of the kinds fails the one call
+// of all of them; it is read one call per kind, and the kinds it serves
+// still show the upgrade.
+func TestReadServesSomeKinds(t *testing.T) {
+	dir := t.TempDir()
+	for _, k := range Kinds[:3] {
+		raw, err := os.ReadFile(filepath.Join("testdata", prod, "0827-during", kindFile(k)+".json")) //nolint:gosec // testdata
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, kindFile(k)+".json"), raw, 0o600); err != nil { //nolint:gosec // a test directory
+			t.Fatal(err)
+		}
+	}
+	exe, log := fakeKubectl(t, dir)
+	r := Reader{Kubectl: exe, Timeout: 10 * time.Second}
+	held := func(string, string) bool { return true }
+	ss := r.Read(context.Background(), []Target{{Name: prod, Context: prod}}, at, held)
+	if ss[0].Err != "" || ss[0].NoClusterAPI || len(ss[0].Upgrades) != 1 || ss[0].Upgrades[0].Cluster != "mc" {
+		t.Fatalf("statuses %+v", ss)
+	}
+	c := calls(t, log)
+	if len(c) != 1+len(Kinds) || c[0] != strings.Join(Kinds, ",") {
+		t.Fatalf("kubectl calls %q", c)
+	}
+	if rest := slices.Sorted(slices.Values(c[1:])); !slices.Equal(rest, slices.Sorted(slices.Values(Kinds))) {
+		t.Errorf("one call per kind: %q", rest)
 	}
 }
 

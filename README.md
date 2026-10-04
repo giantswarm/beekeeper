@@ -700,11 +700,16 @@ costs nothing when GitHub answers 304; a failed read refuses.
 ## Cluster upgrades
 
 While an installation's clusters upgrade, work on it waits. `watch` reads the Cluster API
-clusters of `alerts.installations` every `watch.interval` (30s), read-only: one list each of
+clusters of `alerts.installations` every `upgrades.every` (5m), read-only: one list of
 Clusters, KubeadmControlPlanes, MachinePools and MachineDeployments (`v1beta2`) per
-installation, in parallel, each installation within `alerts.timeout`; an installation that
-serves none of them has no cluster to upgrade. That is 4 lists per installation per 30s, and one
-list of a cluster's events when its upgrade begins.
+installation in one `kubectl` call, in parallel, each installation within `alerts.timeout`; an
+installation that does not serve one of the kinds is read one call per kind, and one that
+serves none of them has no cluster to upgrade. An installation an upgrade runs on or holds is
+read every `watch.interval` (30s) until it ends, so `UPGRADE ENDED` and the hold's lift come
+within one interval. That is one `kubectl` per installation per 5 minutes while nothing
+upgrades, and one list of a cluster's events when its upgrade begins. The readings are kept in
+`upgrades.json` in the state directory: a second watch, `snapshot` and `ui` use a reading younger
+than `upgrades.every` instead of reading the installation again.
 
 A cluster's upgrade begins when its release changes: its `release.giantswarm.io/version` label
 differs from the release cluster-api-events last recorded
