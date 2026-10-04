@@ -601,7 +601,7 @@ func (snap *snapshot) state() *state.State {
 		for _, e := range snap.lanes[name].Status.Queue {
 			st.Merges = append(st.Merges, state.Merge{
 				Repo: e.Repo, PR: e.PR, Lane: name, By: party(e.By), Phase: e.Phase, Joined: e.Arrived.Time,
-				Started: timeOf(e.Started), Finished: timeOf(e.Finished), Exit: e.Exit, Release: e.Release, Roll: e.Roll,
+				Seen: timeOf(e.Seen), Started: timeOf(e.Started), Finished: timeOf(e.Finished), Exit: e.Exit, Release: e.Release, Roll: e.Roll,
 			})
 		}
 	}
@@ -690,7 +690,7 @@ func (snap *snapshot) apply(st *state.State) (*snapshot, error) {
 			return nil, fmt.Errorf("the merge of %s: %s is not a MergeLane on this installation", m.Key(), m.Lane)
 		}
 		lane.Status.Queue = append(lane.Status.Queue, v1alpha1.LaneEntry{By: apiParty(m.By), Repo: m.Repo, PR: m.PR, Phase: m.Phase,
-			Arrived: metav1.Time{Time: m.Joined}, Started: apiTime(m.Started), Finished: apiTime(m.Finished),
+			Arrived: metav1.Time{Time: m.Joined}, Seen: apiTime(m.Seen), Started: apiTime(m.Started), Finished: apiTime(m.Finished),
 			Exit: m.Exit, Release: m.Release, Roll: m.Roll})
 		switch m.Phase {
 		case state.Running:

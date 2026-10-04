@@ -144,6 +144,12 @@ type Central struct {
 // Enabled says whether a central instance is configured.
 func (c Central) Enabled() bool { return c.Context != "" }
 
+// CentralLane says whether the lane's merges queue in the central
+// instance: its installation is central.
+func (c *Config) CentralLane(l Lane) bool {
+	return l.Installation != "" && c.IsCentral(l.Installation)
+}
+
 // IsCentral says whether res is a central resource: a central instance is
 // configured and res is none of the machine's own (Leasable), whose leases
 // stay local. The central instance knows which names are its Environments.

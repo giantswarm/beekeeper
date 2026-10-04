@@ -52,6 +52,9 @@ Without a subcommand, lists the holds.`,
 			if strings.TrimSpace(reason) == "" {
 				return &exitError{code: ExitUsage, msg: "--reason is required"}
 			}
+			if a.centralTarget(args[0]) {
+				return a.setCentral(args[0], reason, until, except)
+			}
 			u, err := untilTime(a.now, until)
 			if err != nil {
 				return err
@@ -84,6 +87,9 @@ Without a subcommand, lists the holds.`,
 		Args:  liftLane.args,
 		RunE: func(_ *cobra.Command, args []string) error {
 			args = liftLane.target(args)
+			if a.centralTarget(args[0]) {
+				return a.liftCentral(args[0])
+			}
 			me, err := a.caller()
 			if err != nil {
 				return err
@@ -139,6 +145,9 @@ lane, "merges" or "github" is, unless it is the hold's exception.`,
 			}
 			if ok {
 				return refused("%s is held by %q until %s: %s", h.Target, h.By.Name, untilText(a, h), h.Reason)
+			}
+			if a.centralTarget(args[0]) {
+				return a.checkCentral(args[0])
 			}
 			return nil
 		},
@@ -282,11 +291,26 @@ func (a *app) holdList() error {
 	}
 	holds := a.activeHolds(st)
 	holds = append(holds, liftedHolds(st, a.now)...)
+	// The central instance's holds follow the machine's; unreachable, the
+	// list fails after the machine's.
+	var central []state.Hold
+	var cerr error
+	if a.cfg.Central.Enabled() {
+		me, _ := a.caller()
+		central, cerr = a.centralHolds(me)
+	}
 	if a.json {
-		return a.printJSON(holds)
+		if err := a.printJSON(append(holds, central...)); err != nil {
+			return err
+		}
+		return cerr
 	}
 	a.printHolds(holds)
-	return nil
+	if cerr == nil && a.cfg.Central.Enabled() {
+		_, _ = fmt.Fprintf(a.out, "\ncentral (muster context %s):\n", a.cfg.Central.Context)
+		a.printHolds(central)
+	}
+	return cerr
 }
 
 func (a *app) printHolds(holds []state.Hold) {

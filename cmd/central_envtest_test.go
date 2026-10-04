@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/giantswarm/beekeeper/internal/central/centraltest"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -39,7 +41,8 @@ leaseDir: %s
 resources: [kind-1]
 identity: {person: %s, team: %s, host: %s}
 central: {context: lab, muster: %s}
-`, p.state, filepath.Join(dir, "leases"), email, team, host, bin)
+lanes: [{name: %s, installation: gazelle, repositories: [%s]}]
+`, p.state, filepath.Join(dir, "leases"), email, team, host, bin, portalLane, backstage)
 	if err := os.WriteFile(p.cfg, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +58,7 @@ func (p *person) run(args ...string) (string, int) {
 	if err := a.load(); err != nil {
 		p.t.Fatal(err)
 	}
-	cmd := a.leaseCmd()
+	cmd := map[string]func() *cobra.Command{"lease": a.leaseCmd, "hold": a.holdCmd, "lanes": a.lanesCmd}[args[0]]()
 	cmd.SetArgs(args[1:])
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
@@ -191,5 +194,101 @@ func TestCentralEnvtest(t *testing.T) {
 	}
 	if a := roster()["local:ana-laptop/Agent three"]; a == nil {
 		t.Errorf("Agent three, registered while unreachable, is not published once it answers")
+	}
+}
+
+// gate is the person's gate on backstage#pr, its central calls only.
+func (p *person) gate(pr int) *gateRun {
+	p.t.Helper()
+	a := &app{cfgPath: p.cfg, as: p.agent, out: &bytes.Buffer{}}
+	if err := a.load(); err != nil {
+		p.t.Fatal(err)
+	}
+	me, err := a.caller()
+	if err != nil {
+		p.t.Fatal(err)
+	}
+	g := &gateRun{app: a, ctx: context.Background(), repo: backstage, pr: pr, lane: a.cfg.LaneOf(backstage), me: me}
+	g.central = a.cfg.CentralLane(g.lane)
+	return g
+}
+
+// Two people's merges into one central lane roll one after the other: the
+// second's turn comes only once the first merged and its release rolled; a
+// central hold refuses the gate; a place nobody asks for any longer holds
+// up nobody; an unreachable central instance refuses with ExitCentral.
+func TestCentralLanesEnvtest(t *testing.T) {
+	e := newServeEnv(t)
+	m := centraltest.New(t, e.url, "beekeeper")
+	ana := newPerson(t, m, e.token(t, anaEmail, teamGroup), anaEmail, ourTeam, "ana-laptop", anaAgent)
+	pia := newPerson(t, m, e.token(t, piaEmail, "giantswarm:team-planeteers"), piaEmail, piaTeam, "pia-laptop", "pia-agent")
+
+	first, second := ana.gate(1), pia.gate(2)
+	if !first.central {
+		t.Fatal("the lane on gazelle, a central installation, is not central")
+	}
+	turn := func(g *gateRun) string {
+		t.Helper()
+		g.centralAsked = time.Time{}
+		why, err := g.centralTurn()
+		if err != nil {
+			t.Fatalf("%s: %v", g.key(), err)
+		}
+		return why
+	}
+	if why := turn(first); why != "" {
+		t.Errorf("the first merge waits: %s", why)
+	}
+	if why := turn(second); !strings.Contains(why, "position 2 in central lane "+portalLane+" behind "+backstage+"#1") {
+		t.Errorf("the second merge: %q", why)
+	}
+	if why, err := first.centralStart(); why != "" || err != nil {
+		t.Fatalf("the first start: %q, %v", why, err)
+	}
+	if why := turn(second); !strings.Contains(why, "behind "+backstage+"#1") {
+		t.Errorf("the second behind a running merge: %q", why)
+	}
+	if why, err := second.centralStart(); why == "" || err != nil {
+		t.Errorf("the second started beside a running merge: %q, %v", why, err)
+	}
+	first.centralRecord(true, "")
+	if why := turn(second); why == "" {
+		t.Error("the second's turn came while the first settles")
+	}
+	ana.gate(1).leaveCentral(context.Background(), []state.Merge{{Repo: backstage, PR: 1, Lane: portalLane, By: first.me}}, "rolled")
+	if why := turn(second); why != "" {
+		t.Errorf("the second waits after the first rolled: %s", why)
+	}
+	second.centralLeave("test done")
+
+	// A central hold refuses the gate and is listed and checked as central.
+	if out, code := ana.run("hold", "set", "--lane", portalLane, "-r", "proving window"); code != 0 || !strings.Contains(out, "held lane:"+portalLane) {
+		t.Fatalf("hold set: exit %d: %s", code, out)
+	}
+	if out, code := pia.run("hold", "check", backstage+"#2"); code != ExitRefused || !strings.Contains(out, "proving window") {
+		t.Errorf("hold check on the other machine: exit %d: %s", code, out)
+	}
+	if out, code := pia.run("hold", "list"); code != 0 || !strings.Contains(out, "central (muster context lab)") || !strings.Contains(out, "proving window") {
+		t.Errorf("hold list: exit %d: %s", code, out)
+	}
+	if _, err := pia.gate(2).centralTurn(); Code(err) != ExitGateRefused {
+		t.Errorf("a held lane's gate: %v (exit %d), want %d", err, Code(err), ExitGateRefused)
+	}
+	if out, code := ana.run("hold", "lift", "--lane", portalLane); code != 0 {
+		t.Fatalf("hold lift: exit %d: %s", code, out)
+	}
+
+	// A waiting place unseen for merge.queueTTL holds up nobody.
+	if why := turn(first); why != "" {
+		t.Fatalf("first again: %s", why)
+	}
+	e.srv.cfg.Merge.QueueTTL.Duration = time.Nanosecond
+	if why := turn(second); why != "" {
+		t.Errorf("a stale place holds up the second: %s", why)
+	}
+
+	m.Down(true)
+	if _, err := pia.gate(3).centralTurn(); Code(err) != ExitCentral {
+		t.Errorf("unreachable: %v (exit %d), want %d", err, Code(err), ExitCentral)
 	}
 }

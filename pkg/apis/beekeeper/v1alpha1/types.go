@@ -148,6 +148,10 @@ type LaneEntry struct {
 	Phase string `json:"phase"`
 	// Arrived orders the queue.
 	Arrived metav1.Time `json:"arrived"`
+	// Seen is when the waiting merge's gate last asked for its turn: a
+	// place unseen for the queue's TTL holds up nobody.
+	// +optional
+	Seen *metav1.Time `json:"seen,omitempty"`
 	// +optional
 	Started *metav1.Time `json:"started,omitempty"`
 	// Finished and Exit are when and how the merge's run ended.
