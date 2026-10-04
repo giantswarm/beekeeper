@@ -19,6 +19,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// reportTS is the report post's ts in the tests.
+const reportTS = "100.000001"
+
 // slackStandIn is a Slack MCP server stand-in: read_thread answers the
 // thread set for a ts, add_reaction records its target.
 type slackStandIn struct {
@@ -57,10 +60,10 @@ func feedbackWatch(t *testing.T) (*watcher, *slackStandIn, *[]string, *bytes.Buf
 	t.Helper()
 	dir := t.TempDir()
 	w, _, out := reportingWatch(t, dir)
-	slack := &slackStandIn{threads: map[string]string{"100.000001": feedbackThread}}
+	slack := &slackStandIn{threads: map[string]string{reportTS: feedbackThread}}
 	m := centraltest.New(t, slack.url(t), "slack")
 	bin, _ := centraltest.Binary(t, m.URL, "token")
-	w.cfg.Feedback.Context, w.cfg.Feedback.Server = "gazelle", "slack"
+	w.cfg.Feedback.Context, w.cfg.Feedback.Server = gazelle, viaSlack
 	w.cfg.Feedback.Every.Duration, w.cfg.Feedback.Window.Duration = 5*time.Minute, 24*time.Hour
 	w.cfg.Central.Muster, w.cfg.Central.Timeout.Duration = bin, 10*time.Second
 	var sent []string
@@ -72,7 +75,7 @@ func feedbackWatch(t *testing.T) (*watcher, *slackStandIn, *[]string, *bytes.Buf
 		st.Supervisor = &state.Supervisor{Party: state.Party{Name: "Supervisor run 1", Session: "sup"}}
 		st.Agents = []state.Agent{{Party: state.Party{Name: "Board pull 9", Session: "bp9"}}}
 		st.ReportThreads = []state.ReportThread{
-			{Report: "Status report 15:00", Channel: "C1", TS: "100.000001", Posted: w.now.Add(-time.Hour)},
+			{Report: "Status report 15:00", Channel: "C1", TS: reportTS, Posted: w.now.Add(-time.Hour)},
 			{Report: "Status report yesterday", Channel: "C1", TS: "50.000001", Posted: w.now.Add(-25 * time.Hour)},
 		}
 		return nil, nil
@@ -148,7 +151,7 @@ func TestFeedbackUnreadableIsSaidOnce(t *testing.T) {
 func TestReporterPostRecordsItsThread(t *testing.T) {
 	dir := t.TempDir()
 	w, _, _ := reportingWatch(t, dir)
-	w.cfg.Feedback.Context = "gazelle"
+	w.cfg.Feedback.Context = gazelle
 	ctx := context.Background()
 	w.tendReporter(ctx, nil)
 	st, _ := w.store.Read()
@@ -165,7 +168,7 @@ func TestReporterPostRecordsItsThread(t *testing.T) {
 	w.now = reportNow.Add(3 * time.Minute)
 	w.tendReporter(ctx, nil)
 	st, _ = w.store.Read()
-	if len(st.ReportThreads) != 1 || st.ReportThreads[0].Channel != "D1" || st.ReportThreads[0].TS != "100.000001" || st.ReportThreads[0].Report != st.Report.Name {
+	if len(st.ReportThreads) != 1 || st.ReportThreads[0].Channel != "D1" || st.ReportThreads[0].TS != reportTS || st.ReportThreads[0].Report != st.Report.Name {
 		t.Errorf("threads %+v", st.ReportThreads)
 	}
 }

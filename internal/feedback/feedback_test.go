@@ -7,6 +7,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/feedback"
 )
 
+// replyTS is a reply's ts in the tests.
+const replyTS = "1791126240.000100"
+
 func TestParsePost(t *testing.T) {
 	p, err := feedback.ParsePost(`{"message_link":"https:\/\/x.slack.com\/archives\/D1\/p1791126073108809","message_context":{"message_ts":"1791126073.108809","channel_id":"D1"}}`)
 	if err != nil || p != (feedback.Post{Channel: "D1", TS: "1791126073.108809"}) {
@@ -59,7 +62,7 @@ hi
 		t.Errorf("parent %+v", th.Parent)
 	}
 	want := []feedback.Message{
-		{User: "U1", TS: "1791126240.000100", Text: "Board pull 9: look at the CI first\n\nand then merge."},
+		{User: "U1", TS: replyTS, Text: "Board pull 9: look at the CI first\n\nand then merge."},
 		{User: "U2", TS: "1791126300.000200", Text: "hi"},
 	}
 	if len(th.Replies) != len(want) || th.Replies[0] != want[0] || th.Replies[1] != want[1] {
@@ -77,9 +80,9 @@ func TestLater(t *testing.T) {
 		a, b string
 		want bool
 	}{
-		{"1791126240.000100", "", true},
-		{"1791126240.000100", "1791126240.000100", false},
-		{"1791126240.000200", "1791126240.000100", true},
+		{replyTS, "", true},
+		{replyTS, replyTS, false},
+		{"1791126240.000200", replyTS, true},
 		{"1791126241.000000", "1791126240.999999", true},
 		{"999999999.000000", "1000000000.000000", false},
 	} {
