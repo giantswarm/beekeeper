@@ -75,7 +75,7 @@ Without a subcommand, lists the leases.`,
 }
 
 func (a *app) checkResource(res string) error {
-	if !a.cfg.IsLeasable(res) {
+	if !a.cfg.IsLeasable(res) && !a.cfg.IsCentral(res) {
 		return &exitError{code: ExitUsage, msg: fmt.Sprintf("unknown resource %q (configured: %s)", res, strings.Join(a.cfg.Leasable(), ", "))}
 	}
 	return nil
@@ -114,6 +114,12 @@ model is RAM no cgroup counts, and the watch unloads what exceeds it.`,
 			}
 			if strings.TrimSpace(purpose) == "" {
 				return &exitError{code: ExitUsage, msg: "--purpose is required: say what the resource is for"}
+			}
+			if a.cfg.IsCentral(res) {
+				if cmd.Flags().Changed("gib") {
+					return usageErr("--gib is the model server's budget: %s carries none", res)
+				}
+				return a.claimCentral(res, purpose)
 			}
 			budget, err := a.claimBudget(res, gib, cmd.Flags().Changed("gib"))
 			if err != nil {
@@ -262,6 +268,9 @@ func (a *app) leaseReleaseCmd() *cobra.Command {
 			if err := a.checkResource(res); err != nil {
 				return err
 			}
+			if a.cfg.IsCentral(res) {
+				return a.releaseCentral(res, force)
+			}
 			me, err := a.caller()
 			if err != nil {
 				return err
@@ -316,6 +325,9 @@ func (a *app) leaseStatusCmd() *cobra.Command {
 			if err := a.checkResource(res); err != nil {
 				return err
 			}
+			if a.cfg.IsCentral(res) {
+				return a.statusCentral(res)
+			}
 			cur, err := lease.Dir(a.cfg.LeaseDir).Get(res)
 			if err != nil {
 				return err
@@ -346,6 +358,8 @@ type leaseList struct {
 	Free   []string                 `json:"free"`
 	Queues map[string][]state.Grant `json:"queues,omitempty"`
 	labs
+	// Central are the central instance's leases, with central configured.
+	Central *centralLeases `json:"central,omitempty"`
 }
 
 func (a *app) leases() (*leaseList, error) {
@@ -381,16 +395,29 @@ func (a *app) leases() (*leaseList, error) {
 	return l, nil
 }
 
+// leaseList lists the machine's leases, then the central instance's; an
+// unreachable central instance fails the list after the machine's.
 func (a *app) leaseList() error {
 	l, err := a.leases()
 	if err != nil {
 		return err
 	}
+	var cerr error
+	if a.cfg.Central.Enabled() {
+		me, _ := a.caller()
+		l.Central, cerr = a.centralLeases(me)
+	}
 	if a.json {
-		return a.printJSON(l)
+		if err := a.printJSON(l); err != nil {
+			return err
+		}
+		return cerr
 	}
 	a.printLeases(l)
-	return nil
+	if l.Central != nil {
+		a.printCentralLeases(l.Central)
+	}
+	return cerr
 }
 
 func (a *app) printLeases(l *leaseList) {

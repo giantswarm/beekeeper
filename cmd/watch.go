@@ -292,6 +292,12 @@ type watcher struct {
 	// when it began.
 	teleporting  atomic.Bool
 	lastTeleport time.Time
+	// centraling is set while the roster is published to the central
+	// instance, lastCentral when that last started and centralChecked when
+	// the central instance was last called.
+	centraling     atomic.Bool
+	lastCentral    time.Time
+	centralChecked time.Time
 	// polls counts the polls begun.
 	polls atomic.Int64
 	// missing are the sections whose platform part this build does not
@@ -1008,6 +1014,10 @@ func (w *watcher) poll(ctx context.Context) {
 	if now.Sub(w.lastTeleport) >= w.readEvery(th.Interval.Duration) {
 		w.lastTeleport = now
 		inFlight(ctx, th.Interval.Duration, &w.teleporting, w.teleport)
+	}
+	if w.cfg.Central.Enabled() && now.Sub(w.lastCentral) >= w.readEvery(th.Interval.Duration) {
+		w.lastCentral = now
+		inFlight(ctx, th.Interval.Duration, &w.centraling, w.syncRoster)
 	}
 	if now.Sub(w.lastSweep) >= w.readEvery(th.Interval.Duration) {
 		w.lastSweep = now
