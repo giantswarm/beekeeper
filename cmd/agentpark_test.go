@@ -13,6 +13,7 @@ import (
 
 const (
 	parkTask   = "beekeeper#86: agents park"
+	resumer    = "the supervisor"
 	parkAnswer = "yes, roll it after 18:00, not before"
 )
 
@@ -164,13 +165,13 @@ func TestMergedPullRequestMakesTheParkResumable(t *testing.T) {
 	if len(*woke) > 0 {
 		t.Fatalf("resumed without agents.autoResume: %q", *woke)
 	}
-	if err := w.resumeParked(context.Background(), state.Party{Name: "supervisor"}, agentOne); err != nil {
+	if err := w.resumeParked(context.Background(), state.Party{Name: resumer}, agentOne); err != nil {
 		t.Fatal(err)
 	}
 	if len(*woke) != 1 || !strings.Contains((*woke)[0], "Your park on o/r#1 (the merge ahead of mine) is over: o/r#1 merged.") {
 		t.Errorf("woke %q", *woke)
 	}
-	if err := w.resumeParked(context.Background(), state.Party{Name: "supervisor"}, agentOne); err == nil || !strings.Contains(err.Error(), "is not parked") {
+	if err := w.resumeParked(context.Background(), state.Party{Name: resumer}, agentOne); err == nil || !strings.Contains(err.Error(), "is not parked") {
 		t.Errorf("second resume: %v", err)
 	}
 }
@@ -182,10 +183,10 @@ func TestResumeByHand(t *testing.T) {
 	if err := park(t, w, "the supervisor's go"); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.resumeParked(context.Background(), state.Party{Name: "supervisor"}, agentOne); err != nil {
+	if err := w.resumeParked(context.Background(), state.Party{Name: resumer}, agentOne); err != nil {
 		t.Fatal(err)
 	}
-	want := "supervisor → " + agentOne + ": Your park on the supervisor's go is over: supervisor resumed you by hand. Re-query the live state of your task and continue it."
+	want := resumer + " → " + agentOne + ": Your park on the supervisor's go is over: " + resumer + " resumed you by hand. Re-query the live state of your task and continue it."
 	if !slices.Equal(*woke, []string{want}) {
 		t.Errorf("woke %q", *woke)
 	}
