@@ -31,6 +31,10 @@ const (
 	editTool        = "Edit"
 	writeTool       = "Write"
 	notebookTool    = "NotebookEdit"
+	multiEditTool   = "MultiEdit"
+	readTool        = "Read"
+	grepTool        = "Grep"
+	globTool        = "Glob"
 	commandKey      = "command"
 	filePathKey     = "file_path"
 	notebookPathKey = "notebook_path"
@@ -110,7 +114,7 @@ func (m ReadsMarker) prune(now time.Time) {
 func writeTarget(tool string, input map[string]any, cwd string) string {
 	var p string
 	switch tool {
-	case editTool, writeTool, "MultiEdit":
+	case editTool, writeTool, multiEditTool:
 		p, _ = input[filePathKey].(string)
 	case notebookTool:
 		p, _ = input[notebookPathKey].(string)

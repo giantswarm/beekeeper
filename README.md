@@ -159,6 +159,7 @@ a relayed successor opens with the plugin's role.
 | `beekeeper hook pretooluse` | The PreToolUse hook (matcher `Bash|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage|mcp__.*`): rewrites build, test, lint and lab commands to `<this binary> run -- zsh -c '<command>'` with the command verbatim and the tool timeout at 10 minutes (a background run waits 60 minutes), and refuses a third kind cluster, listing the held leases. It puts the gate in front of every `devctl pr merge`, `pr wait`, `release wait` and `rollout wait`, behind prefix commands and in pipelines and lists, and refuses one hidden in a `-c` string (below); every other devctl command passes untouched. It refuses a delete that reaches further than it names ([Deletes](#deletes)), a command that would print secret values (below, [Secret reads](#secret-reads)) and a call that would send one off the machine ([What leaves the machine](#what-leaves-the-machine)), a kube context switch and a write to production ([Kube contexts and production writes](#kube-contexts-and-production-writes)), a command that opens a page in the person's browser (`muster auth login`, `gh auth login --web`, `xdg-open`) outside the session holding the `browser` lease, a command that loads a model on the host's model server outside the session holding `model-server` ([The model server](#the-model-server)), an `AskUserQuestion` call outside the guide's session ([Questions go to the guide](#questions-go-to-the-guide)), and in the guide's session the calls that do work and a question without its status quo, why and full links ([The guide asks and relays](#the-guide-asks-and-relays-it-never-works-itself)). A `SendMessage` to `the supervisor` or `the guide` goes to the session holding that role now, by the name its running CLI answers to (else its desktop session), so a brief names the role and a relay never makes it stale. A `SendMessage` to a desktop id (`local_…`) whose session has a running CLI goes to that CLI by name, so a headless turn gets no second copy beside it (below, [Waking a session](#waking-a-session)). A session's first write or `git commit` in another repository carries that repository's `CLAUDE.md`, `AGENTS.md`, rules and mandatory reads ([A repository's instructions on the first write](#a-repositorys-instructions-on-the-first-write)). |
 | `beekeeper hook posttooluse` | The PostToolUse hook (matcher `*`): replaces a tool result that carries an indexed secret value or a token pattern with its redacted copy before the model sees it, logs `scan.redact` and files one rotation note per indexed reference (see [What reaches the model](#what-reaches-the-model)). |
 | `beekeeper secret compare\|fingerprint\|copy\|set\|rotate` | The credential operations no agent runs itself: equality, keyed fingerprints, a SOPS file copied under a new name and namespace, a value into a SOPS path or a consumer's stdin, a generated value into the shared vault and a SOPS path, a rotation into every SOPS path that carried the old value. They answer key names, lengths, equality and fingerprints, never a value (see [Secret operations](#secret-operations)). |
+| `beekeeper sandbox render\|install` | The agent sandbox: the policy Claude Code enforces on every session's commands, rendered as a managed-settings drop-in, and the root command that installs it (see [The agent sandbox](#the-agent-sandbox)). |
 | `beekeeper scan [index\|add <ref>\|sweep]` | The transcript value scanner: without a subcommand what the fingerprint index holds; `index` rebuilds it from `scan.sops` and `scan.vaults`, `add` indexes one value from stdin, `sweep` counts each reference and token rule in every transcript, never a value (see [What reaches the model](#what-reaches-the-model)). |
 | `beekeeper hook sessionstart` | The SessionStart hook: writes the agent shell's prelude into the session's environment file (`$CLAUDE_ENV_FILE`), which Claude Code sources before parsing each Bash command. It removes the aliases and shell functions of `agents.shell.unalias` (default `grep`, `find`, `ls`, `cp`, `mv`, `rm`, the harness's own `grep` and `find` shadows among them), so each name runs the tool on `PATH`, and with `agents.shell.globs: literal` (the default) an unmatched glob stays as written instead of failing the command with zsh's `no matches found`. The directories of `agents.shell.path` go first on `PATH`, in their order and once each: the agent's own programs, such as a `gh` link to devctl that acts with the devctl App's short-lived token in place of the person's long-lived `gh` login. The person's interactive setup stays theirs; an agent writes its commands for the plain tools. |
 | `beekeeper lint briefs <file or folder>...` | Refuses dated lines, "until X ships" clauses, notes on the release that fixed something, workarounds and role run numbers in skills and briefs (every Markdown file below a folder), one `path:line: rule: why` per finding, exit 3 on any. |
@@ -422,6 +423,34 @@ wrote team-b/app.sops.yaml: 2 keys
   data.token                                                 40 bytes
   stringData.password                                        32 bytes
 ```
+
+## The agent sandbox
+
+An agent's commands run as the person's Unix user. A deny list of credential paths leaves every path
+nobody listed readable, so the agent sandbox turns it around: the home directory is denied and only what
+a session needs is re-allowed. `beekeeper sandbox render` prints the policy as Claude Code settings;
+`beekeeper sandbox install` stages it and prints the one root command that puts it into Claude Code's
+managed settings (`/etc/claude-code/managed-settings.d/beekeeper-sandbox.json` on Linux,
+`/Library/Application Support/ClaudeCode/managed-settings.d/` on macOS). From there it holds every
+Claude Code session on the machine, the headless turns beekeeper starts and the CLI the desktop app
+spawns alike, enforced by Anthropic's sandbox runtime (bubblewrap on Linux, Seatbelt on macOS). The
+same file passed to `claude --settings` holds one session to it, to try a change first.
+
+- **Reads:** the home directory is denied; beekeeper's binary, config and state, the harness's
+  transcripts, plans, skills and plugins, git's config and `sandbox.allowRead` are re-allowed.
+  Kubeconfigs, the Teleport profile, the GitHub CLI's token file and every other credential nobody
+  listed stay unreadable. Only the managed settings' read paths count.
+- **Writes:** the session's working directory (when it is readable itself), the temporary directory,
+  beekeeper's state and `sandbox.allowWrite`.
+- **Egress:** GitHub and `sandbox.domains`, nothing else, with no prompt to widen it.
+- **The GitHub token:** `GH_TOKEN` and `GITHUB_TOKEN` (`sandbox.mask`) are masked: commands see a
+  placeholder, and the sandbox proxy puts the real value into requests to GitHub's hosts only.
+- **No way out:** unsandboxed retries are off, and a session whose sandbox cannot start does not start.
+- **The file tools.** Read, Grep, Glob, Edit, Write and NotebookEdit run in the harness, outside the
+  sandbox. The policy runs `beekeeper hook pretooluse` for them and sets `BEEKEEPER_SANDBOX`, and the
+  hook holds them to the same lists in every session, in the hooks' scope or not: a path is resolved
+  (symlinks included, a missing one through its nearest parent) and refused outside the lists. The file
+  tools may also write the sessions' memory and plans, which no command may.
 
 ## What leaves the machine
 
@@ -1342,6 +1371,7 @@ The organisation and desk keys, and their defaults:
 | `ollama.url`, `lemonade.url` | unset: no model server | The host's model servers, watched and guarded under the `model-server` lease |
 | `outbound.phrases`, `outbound.paths`, `outbound.storeDeny` | none | What never leaves the machine, the plan files whose writes are outbound, the refused secret-store writes ([What leaves the machine](#what-leaves-the-machine)) |
 | `secret.vault`, `secret.tokenFile` | none | The shared 1Password vault `beekeeper secret` reads and writes, and the file with its service account's token ([Secret operations](#secret-operations)) |
+| `sandbox.allowRead`, `sandbox.allowWrite`, `sandbox.domains`, `sandbox.mask` | none; `GH_TOKEN` and `GITHUB_TOKEN` to GitHub | The paths under the home directory the agent sandbox re-allows for reading and writing, the hosts commands reach besides GitHub, the masked environment variables and their hosts ([The agent sandbox](#the-agent-sandbox)) |
 | `scan.sops`, `scan.vaults`, `scan.minLength` | none, none, 12 | The SOPS file globs and 1Password vaults `beekeeper scan index` fingerprints, and the shortest value it takes ([What reaches the model](#what-reaches-the-model)) |
 | `plans.repositories`, `plans.check` | none, `plan-stages` | The plans repositories whose open pull requests a note for `guide.person` links only once their stage check is green |
 | `outbound.sweepRoots`, `outbound.sweepDepth` | the home directory, 5 | Where the watch looks for exposed keys and credentials in remote URLs |
