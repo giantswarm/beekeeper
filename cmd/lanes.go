@@ -3,9 +3,11 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -124,9 +126,16 @@ an arrived unseeded merge, not an earlier pull request of its own session.`,
 	queue.Flags().StringVar(&forName, "for", "", "the session whose merge this is")
 	drop := &cobra.Command{
 		Use:   "drop <owner/repo> <n>",
-		Short: "Take a waiting merge out of its lane's queue",
-		Args:  cobra.ExactArgs(2),
-		RunE: func(_ *cobra.Command, args []string) error {
+		Short: "Take a waiting merge out of its lane, or end a running one whose pull request merged",
+		Long: `drop takes a waiting merge out of its lane's queue. A running merge whose
+pull request GitHub reports merged or closed while its devctl runs on (hung
+after the merge) has its devctl ended; its outcome is recorded as when its
+gate ends it: a merge settles its lane by the settle rule, its release
+unconfirmed. A running merge whose pull request is open is refused: devctl
+merges it on. The watch ends such a hung run by itself merge.hungAfter (45m)
+after the merge.`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
 			pr, err := strconv.Atoi(args[1])
 			if err != nil {
 				return usageErr("%s is not a pull request number", args[1])
@@ -135,8 +144,11 @@ an arrived unseeded merge, not an earlier pull request of its own session.`,
 			if err != nil {
 				return err
 			}
-			found := false
+			found, running := false, false
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+				running = slices.ContainsFunc(st.Merges, func(m state.Merge) bool {
+					return m.Repo == args[0] && m.PR == pr && m.Phase == state.Running
+				})
 				st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool {
 					hit := m.Repo == args[0] && m.PR == pr && m.Phase == state.Waiting
 					found = found || hit
@@ -147,14 +159,16 @@ an arrived unseeded merge, not an earlier pull request of its own session.`,
 				}
 				return []state.Event{event(me, "merge.dropped", "%s#%d", args[0], pr)}, nil
 			})
-			if err != nil {
+			switch {
+			case err != nil:
 				return err
-			}
-			if !found {
-				_, err = fmt.Fprintf(a.out, "%s#%d is not waiting in any lane\n", args[0], pr)
+			case found:
+				_, err = fmt.Fprintf(a.out, "dropped %s#%d from its lane\n", args[0], pr)
 				return err
+			case running:
+				return a.dropRunning(cmd.Context(), me, args[0], pr)
 			}
-			_, err = fmt.Fprintf(a.out, "dropped %s#%d from its lane\n", args[0], pr)
+			_, err = fmt.Fprintf(a.out, "%s#%d is not waiting in any lane\n", args[0], pr)
 			return err
 		},
 	}
@@ -492,4 +506,159 @@ func (a *app) checkPlaces(ctx context.Context, by state.Party, now time.Time, la
 		}
 		return ev, nil
 	})
+}
+
+// recordGone records the outcome of each running merge whose gate process
+// and devctl are gone: from the document and exit code its runner left in
+// the state directory, or from GitHub when there is no document (a gate
+// killed with its caller while devctl merged on, a hung devctl ended). A
+// merge nothing can judge (GitHub unanswered) is lost: it settles, once. It
+// returns what it recorded and the lost merges.
+func (a *app) recordGone(ctx context.Context) (recorded []string, lost []state.Merge) {
+	st, err := a.store.Read()
+	if err != nil {
+		return nil, nil
+	}
+	gone := func(m state.Merge) bool { return m.Phase == state.Running && !merge.Runs(m, proc.Alive) }
+	runs := map[string]runOutcome{}
+	for _, m := range st.Merges {
+		if !gone(m) {
+			continue
+		}
+		doc, rc := finishedRun(mergeBase(a.store.Dir(), m.Repo, m.PR))
+		r := runOutcome{rc: rc}
+		var ok bool
+		if r.out, ok = parseOutcome(m.PR, doc); merge.NeedsJudging(ok, rc) {
+			if r.out, r.unanswered = judgeRun(ctx, m.Repo, m.PR, 1); r.unanswered != nil {
+				continue
+			}
+		}
+		runs[m.Key()] = r
+	}
+	if len(runs) == 0 && !slices.ContainsFunc(st.Merges, gone) {
+		return nil, nil
+	}
+	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		var evs []state.Event
+		for key, r := range runs {
+			i := slices.IndexFunc(st.Merges, func(m state.Merge) bool { return m.Key() == key && gone(m) })
+			if i < 0 {
+				continue
+			}
+			m := st.Merges[i]
+			lane, _ := a.cfg.LaneNamed(m.Lane)
+			lane.Name = m.Lane
+			ev, _ := recordRun(st, i, lane, watchParty, r, a.now.UTC(), fmt.Sprintf(" (for %q, whose gate, pid %d, is gone)", m.By.Name, m.PID))
+			evs = append(evs, ev...)
+			recorded = append(recorded, ev[len(ev)-1].Detail)
+			removeMergeFiles(mergeBase(a.store.Dir(), m.Repo, m.PR))
+		}
+		lost = merge.Lost(st, a.now, proc.Alive)
+		for _, m := range lost {
+			evs = append(evs, event(watchParty, "merge.lost", "%s in lane %s: its gate (pid %d) and devctl are gone", m.Key(), m.Lane, m.PID))
+		}
+		return evs, nil
+	})
+	if err != nil {
+		return nil, nil
+	}
+	return recorded, lost
+}
+
+// dropWait bounds how long lanes drop waits for an ended devctl, and its
+// gate, to go.
+var dropWait = 30 * time.Second
+
+// dropRunning ends the devctl of repo#pr's running merge when its pull
+// request merged or closed, waits for it and its gate to go, and records the
+// run if its gate did not.
+func (a *app) dropRunning(ctx context.Context, by state.Party, repo string, pr int) error {
+	ended := a.endHung(ctx, by, a.now, 0, func(m state.Merge) bool { return m.Repo == repo && m.PR == pr })
+	if len(ended) == 0 {
+		return refused("%s#%d is running and its pull request is open, or GitHub does not answer: devctl merges it on", repo, pr)
+	}
+	h := ended[0]
+	for deadline := time.Now().Add(dropWait); merge.Runs(h.merge, proc.Alive) && time.Now().Before(deadline); {
+		time.Sleep(followPoll)
+	}
+	if merge.Runs(h.merge, proc.Alive) {
+		_, err := fmt.Fprintf(a.out, "ended the devctl of %s (%s): its gate (pid %d) records it once devctl is gone\n", h.merge.Key(), a.pullText(h.pull), h.merge.PID)
+		return err
+	}
+	a.recordGone(ctx)
+	_, err := fmt.Fprintf(a.out, "ended the devctl of %s (%s): %s\n", h.merge.Key(), a.pullText(h.pull), a.laneAfter(h.merge))
+	return err
+}
+
+// laneAfter says where an ended merge left its lane.
+func (a *app) laneAfter(m state.Merge) string {
+	st, err := a.store.Read()
+	if err != nil {
+		return "lane " + m.Lane + " is unread"
+	}
+	q := merge.Queue(st, m.Lane)
+	for _, s := range q.AllSettling {
+		if s.Key() == m.Key() {
+			return a.settlingText(*s)
+		}
+	}
+	return "lane " + m.Lane + " no longer holds it"
+}
+
+// endChild ends a merge's devctl: merge-child passes SIGTERM on to it.
+var endChild = func(pid int) error {
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	return p.Signal(syscall.SIGTERM)
+}
+
+// hungRun is a running merge whose devctl was ended, with its pull request.
+type hungRun struct {
+	merge state.Merge
+	pull  github.Pull
+}
+
+// endHung asks GitHub about each running merge that pick takes and whose
+// devctl runs, and ends the devctl of those that outlived their pull
+// request by after (merge.Hung), with a merge.hung event each. A pid that
+// is not the merge's recorded merge-child is never signalled. The merge
+// stays running until its gate, or recordGone once the gate is gone,
+// records how devctl ended.
+func (a *app) endHung(ctx context.Context, by state.Party, now time.Time, after time.Duration, pick func(state.Merge) bool) []hungRun {
+	st, err := a.store.Read()
+	if err != nil {
+		return nil
+	}
+	var ended []hungRun
+	for _, m := range st.Merges {
+		if m.Phase != state.Running || m.PR == 0 || !proc.Alive(m.Child) || !pick(m) ||
+			readPID(mergeBase(a.store.Dir(), m.Repo, m.PR)) != m.Child {
+			continue
+		}
+		p, err := pullState(ctx, m.Repo, m.PR)
+		if err != nil || !merge.Hung(p, now, after) || endChild(m.Child) != nil {
+			continue
+		}
+		ended = append(ended, hungRun{merge: m, pull: p})
+	}
+	if len(ended) > 0 {
+		_ = a.store.Update(func(*state.State) ([]state.Event, error) {
+			evs := make([]state.Event, 0, len(ended))
+			for _, h := range ended {
+				evs = append(evs, event(by, "merge.hung", "%s in lane %s: %s, its devctl (pid %d) ended", h.merge.Key(), h.merge.Lane, a.pullText(h.pull), h.merge.Child))
+			}
+			return evs, nil
+		})
+	}
+	return ended
+}
+
+// pullText says what GitHub reports of a hung merge's pull request.
+func (a *app) pullText(p github.Pull) string {
+	if p.State == github.Closed {
+		return "closed without a merge"
+	}
+	return "merged at " + clock(a.now, p.MergedAt)
 }

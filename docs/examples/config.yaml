@@ -133,6 +133,7 @@ merge:
   settleTimeout: 30m        # then refuses its next merge while the release has not rolled
   budgetFresh: 1m           # the last budget reading is used this long, then read afresh
   stallAfter: 5m            # a lane's first arrived merge waits this long behind absent places, then the lane is stalled
+  hungAfter: 45m            # the watch ends a running merge's devctl this long after its pull request merged (a closed one's this long after its start)
   devctlOwners: [giantswarm]   # the owners devctl pr merge serves; default: none, every merge is the plain squash merge
 
 alerts:
