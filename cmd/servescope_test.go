@@ -1,8 +1,13 @@
 package cmd
 
 import (
+	"bytes"
+	"context"
+	"os"
 	"slices"
 	"testing"
+
+	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/feed"
 	"github.com/giantswarm/beekeeper/internal/identity"
@@ -77,5 +82,18 @@ func TestRosterScope(t *testing.T) {
 		if got := boSc.readsEvent(tc.ev, agents); got != tc.bob {
 			t.Errorf("%s: bo reads it %v", tc.name, got)
 		}
+	}
+}
+
+// A verb run without arguments reads none, never serve's own command line.
+func TestVerbWithoutArgs(t *testing.T) {
+	prev := os.Args
+	t.Cleanup(func() { os.Args = prev })
+	os.Args = []string{"beekeeper", "serve", "--http=:8080"}
+	ran := false
+	cmd := &cobra.Command{Use: "hold", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error { ran = true; return nil }}
+	c := &call{ctx: context.Background(), out: &bytes.Buffer{}}
+	if err := c.verb(cmd); err != nil || !ran {
+		t.Errorf("verb without args: %v (ran %v)", err, ran)
 	}
 }
