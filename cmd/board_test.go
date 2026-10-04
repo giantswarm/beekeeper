@@ -271,15 +271,15 @@ func TestFindRecordTakesASessionOrTheIssueItServes(t *testing.T) {
 func TestSkipHeldLeases(t *testing.T) {
 	me := state.Party{Session: "me", Name: "Me"}
 	cands := boardCandidates(4)
-	cands[0].Labels = []string{"team/bumblebee", "lease/agentlab-1"}
+	cands[0].Labels = []string{"team/bumblebee", board.LeaseLabel + labOne}
 	cands[1].Labels = []string{"Lease/Graveler"}
 	cands[2].Labels = []string{"lease/agentlab-2"}
 	cands[3].Labels = []string{"lease/glean"}
 	cands[3].Skip = "assigned to pat"
 	holders := []lease.Holder{
-		{Env: "agentlab-1", Session: "s1", Name: "Worker one"},
-		{Env: "graveler", Session: "me", Name: "Me"},
-		{Env: "glean", Session: "s1", Name: "Worker one"},
+		{Env: labOne, Session: "s1", Name: "Lab holder"},
+		{Env: graveler, Session: "me", Name: "Me"},
+		{Env: "glean", Session: "s1", Name: "Lab holder"},
 	}
 	skipHeldLeases(cands, holders, me)
 	var got []string
@@ -287,7 +287,7 @@ func TestSkipHeldLeases(t *testing.T) {
 		got = append(got, c.Ref+": "+c.Skip)
 	}
 	want := []string{
-		`o/r#1: needs lease agentlab-1, held by "Worker one"`,
+		`o/r#1: needs lease ` + labOne + `, held by "Lab holder"`,
 		"o/r#2: ",
 		"o/r#3: ",
 		"o/r#4: assigned to pat",
