@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `beekeeper hold set --lift-when "<shell command>"`: the watch runs the probe every tick and lifts the hold once it exits 0, logged as `hold.lift` with the probe; `hold` lists the probe as the hold's end.
+- A devctl release window installs its release: once the window's merge merged, the gate runs `devctl version update` right after it and the watch retries every 2 minutes while devctl still reports the version the window opened on (a failed update is logged as `hold.update`), so the window lifts without anybody updating devctl or lifting it by hand.
 - `central: {context: <muster context>}` puts the leases of the shared installations in the central instance: `lease claim|release|status` of a name that is none of the machine's own resources goes to `beekeeper serve` through muster as the person (its endpoint from the muster context, the token from `muster auth token` at each call), and `lease list` shows the central leases below the machine's. Another person's lease is refused with its holder; an unreachable central instance refuses the verb with exit 69 and no local fallback. `beekeeper watch` publishes the machine's agents to the central roster on their transitions and says `CENTRAL UNREACHABLE <context>: <reason>` once ([README](README.md#the-central-instance)).
 - `beekeeper serve`'s `agents_register` takes `task` and `done` from a machine publishing its agents, and `agents_leave` takes an agent off the roster; a failed tool result carries beekeeper's exit code (`code`) beside its outcome.
 - `agents.shell.path`: directories the agent shell's prelude puts first on `PATH`, in their order and once each, so an agent's own programs (a `gh` link to devctl that acts with the App's short-lived token) shadow the person's.
@@ -25,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A devctl merge that warrants no release lifts its release window at once; the window waited for a devctl version that never came.
 - `board next` counts the `sessions serve` record of an agent on the roster busy with its task as covering its item while the agent's CLI is gone (the desktop warmed none, the watch marked the record ended), so `--claim` no longer hands it to a second worker; it is offered again once the agent reports idle or leaves the roster.
 - Two parties of different people or hosts are never the same party, whatever their names: a central lease or roster entry of one person's agent no longer passes as another's of the same name.
 

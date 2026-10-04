@@ -4,6 +4,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -36,6 +37,9 @@ func fakeDevctl(t *testing.T, script string) {
 
 // labRepo is a repository devctl does not serve.
 const labRepo = "teemow/lab"
+
+// devctlTo is the release a devctl window's merge produced.
+const devctlTo = "v8.1.0"
 
 // mergeArgv is devctl pr merge repo 7 with extra flags.
 func mergeArgv(repo string, extra ...string) []string {
@@ -266,7 +270,7 @@ func TestADeadMergesToolWindowCloses(t *testing.T) {
 		{"not merged", github.Open, devctlFrom, true, false},
 		{"closed", github.Closed, "", true, false},
 		{"merged, devctl not updated", github.Merged, devctlFrom, false, true},
-		{"devctl updated", github.Merged, "v8.1.0", true, false},
+		{"devctl updated", github.Merged, devctlTo, true, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			stubGitHub(t, c.pull, c.version)
@@ -422,5 +426,68 @@ func TestAFixWindowWaivesTheLanesReadiness(t *testing.T) {
 	}
 	if d := lastEvent(t, g, "merge.window"); !strings.Contains(d, "o/r#7 in lane portal-tools") || !strings.Contains(d, "the outage fix") {
 		t.Errorf("merge.window event: %q", d)
+	}
+}
+
+// A merged window installs the release itself: the update runs once per
+// toolUpdateEvery, a failed one is logged, and the window lifts once devctl
+// reports the release.
+func TestAMergedToolWindowUpdatesDevctl(t *testing.T) {
+	stubGitHub(t, github.Merged, devctlFrom)
+	version, updates, fail := devctlFrom, 0, error(nil)
+	devctlVersion = func(context.Context) string { return version }
+	devctlUpdate = func(context.Context) error {
+		updates++
+		if fail != nil {
+			return fail
+		}
+		version = devctlTo
+		return nil
+	}
+	g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
+	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Merges = nil
+		st.Holds[0].ToolMerged, st.Holds[0].ToolRelease = true, devctlTo
+		return nil, nil
+	})
+
+	fail = errors.New("no release asset yet")
+	g.closeToolWindow(context.Background(), watchParty)
+	g.closeToolWindow(context.Background(), watchParty)
+	if st := gateState(t, g); len(st.Holds) != 1 || updates != 1 {
+		t.Fatalf("after a failed update: %d updates, holds %+v", updates, st.Holds)
+	}
+	if d := lastEvent(t, g, "hold.update"); !strings.Contains(d, "no release asset yet") {
+		t.Errorf("hold.update event: %q", d)
+	}
+
+	fail = nil
+	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Holds[0].ToolUpdated = time.Now().Add(-toolUpdateEvery)
+		return nil, nil
+	})
+	g.closeToolWindow(context.Background(), watchParty)
+	if st := gateState(t, g); len(st.Holds) != 0 || updates != 2 {
+		t.Fatalf("after the update: %d updates, holds %+v", updates, st.Holds)
+	}
+	if d := lastEvent(t, g, "hold.lift"); !strings.Contains(d, "devctl now reports "+devctlTo) {
+		t.Errorf("hold.lift event: %q", d)
+	}
+}
+
+// A devctl merge that warrants no release lifts its window: no update is
+// coming.
+func TestANoReleaseToolMergeLiftsItsWindow(t *testing.T) {
+	stubGitHub(t, github.Merged, devctlFrom)
+	g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
+	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+		ev, _ := recordRun(st, 0, g.lane, g.me, runOutcome{out: merge.Outcome{Merged: true, NoRelease: true}}, time.Now(), "")
+		return ev, nil
+	})
+	if st := gateState(t, g); len(st.Holds) != 0 {
+		t.Fatalf("window left: %+v", st.Holds)
+	}
+	if d := lastEvent(t, g, "hold.lift"); !strings.Contains(d, "warranted no release") {
+		t.Errorf("hold.lift event: %q", d)
 	}
 }
