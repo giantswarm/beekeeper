@@ -1314,7 +1314,8 @@ its outcome (merged: the lane settles; otherwise it leaves with `lane_leave`), a
 it out once its release rolled on the installation. A waiting place whose gate stopped asking
 for `merge.queueTTL` holds up nobody. A hold on a central lane (`hold set --lane`) or on a
 repository in one is central: `hold set|lift|check|list` go to the central instance, and its gate
-refuses the merge with the hold (exit 77) on every machine. `lanes central` lists the central lanes,
+refuses the merge with the hold (exit 77) on every machine; `--lift-when`, a probe on one
+machine, is refused for a central target. `lanes central` lists the central lanes,
 and `lanes leave owner/repo#n` takes a merge out of its central lane by hand (its person's, or the
 team's supervisor role's). A gate that cannot reach the central instance refuses the merge with
 exit 69 and queues nothing.
