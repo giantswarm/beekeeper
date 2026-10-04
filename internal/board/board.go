@@ -46,6 +46,21 @@ type Item struct {
 	SubIssues     []Item `json:"subIssues,omitempty"`
 }
 
+// LeaseLabel is the prefix of an issue label naming a lease the work needs:
+// lease/agentlab-1.
+const LeaseLabel = "lease/"
+
+// Leases are the leases the item's labels say its work needs.
+func (it Item) Leases() []string {
+	var out []string
+	for _, l := range it.Labels {
+		if res, ok := strings.CutPrefix(strings.ToLower(l), LeaseLabel); ok && res != "" {
+			out = append(out, res)
+		}
+	}
+	return out
+}
+
 // Snapshot is what one read of the board returned.
 type Snapshot struct {
 	// Order is the configured order, its Status and Kind values the

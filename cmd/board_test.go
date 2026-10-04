@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/board"
+	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -264,5 +265,39 @@ func TestFindRecordTakesASessionOrTheIssueItServes(t *testing.T) {
 		if _, err := findRecord(records, q); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("findRecord(%q) = %v, want %q", q, err, want)
 		}
+	}
+}
+
+func TestSkipHeldLeases(t *testing.T) {
+	me := state.Party{Session: "me", Name: "Me"}
+	cands := boardCandidates(4)
+	cands[0].Labels = []string{"team/bumblebee", board.LeaseLabel + labOne}
+	cands[1].Labels = []string{"Lease/Graveler"}
+	cands[2].Labels = []string{"lease/agentlab-2"}
+	cands[3].Labels = []string{"lease/glean"}
+	cands[3].Skip = "assigned to pat"
+	holders := []lease.Holder{
+		{Env: labOne, Session: "s1", Name: "Lab holder"},
+		{Env: graveler, Session: "me", Name: "Me"},
+		{Env: "glean", Session: "s1", Name: "Lab holder"},
+	}
+	skipHeldLeases(cands, holders, me)
+	var got []string
+	for _, c := range cands {
+		got = append(got, c.Ref+": "+c.Skip)
+	}
+	want := []string{
+		`o/r#1: needs lease ` + labOne + `, held by "Lab holder"`,
+		"o/r#2: ",
+		"o/r#3: ",
+		"o/r#4: assigned to pat",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("lease skips:\n got %q\nwant %q", got, want)
+	}
+	// The held item is passed over; the one behind it is picked.
+	res := nextFree(&state.State{}, cands, me, func(state.Party) bool { return false }, time.Now())
+	if res.Pick == nil || res.Pick.Ref != "o/r#2" || len(res.Skipped) != 1 {
+		t.Errorf("pick %v, skipped %+v", res.Pick, res.Skipped)
 	}
 }
