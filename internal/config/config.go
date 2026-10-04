@@ -418,6 +418,11 @@ type AgentShell struct {
 	// passes it on as written, GlobsShell leaves the shell's own behaviour
 	// (zsh: "no matches found", the command does not run).
 	Globs string `yaml:"globs"`
+	// Path are directories the prelude puts first on PATH, in their order
+	// (a leading ~/ is the home directory): the agent's own programs, such
+	// as a gh link to devctl that acts with the GitHub App's short-lived
+	// token, in place of the person's (default: none).
+	Path []string `yaml:"path"`
 }
 
 // The values of agents.shell.globs.

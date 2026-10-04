@@ -317,7 +317,7 @@ stay, and prints nothing. beekeeper install registers it in
 				return nil // a broken configuration must not block a session's start
 			}
 			sh := a.cfg.Agents.Shell
-			return guard.WritePrelude(env, guard.Prelude(sh.Unalias, sh.Globs == config.GlobsLiteral))
+			return guard.WritePrelude(env, guard.Prelude(sh.Unalias, sh.Globs == config.GlobsLiteral, sh.Path))
 		},
 	})
 	c.AddCommand(&cobra.Command{
