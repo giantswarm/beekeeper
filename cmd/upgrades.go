@@ -76,13 +76,42 @@ func (w *watcher) upgradeFresh(st *state.State, now time.Time) func(string) time
 	}
 }
 
+// upgradeWatchFile is the state store's side file in which the
+// supervisor's watch (a watch without --standby) says when its upgrade cycle
+// last began.
+const upgradeWatchFile = "upgrades-watch.json"
+
+// upgradeBeat is upgradeWatchFile's content.
+type upgradeBeat struct {
+	At time.Time `json:"at"`
+}
+
+// upgradeWatchLive says whether a supervisor's watch began an upgrade cycle
+// within slowReads+1 intervals of now: its cycles run every interval, every
+// slowReads intervals while the machine is strained.
+func (w *watcher) upgradeWatchLive(now time.Time) bool {
+	var b upgradeBeat
+	found, err := w.store.ReadFile(upgradeWatchFile, &b)
+	return found && err == nil && now.Sub(b.At) < (slowReads+1)*w.cfg.Watch.Interval.Duration
+}
+
 // upgradeCycle makes the upgrade holds those of the running upgrades. The
 // watch whose update sets a hold says UPGRADE, the one whose update lifts it
 // UPGRADE ENDED, so a second or restarted watch says neither again. An
 // unreadable installation is one line until it is readable again and keeps
-// its holds as they are.
+// its holds as they are. The standby watch runs it only while no
+// supervisor's watch does, and says so once.
 func (w *watcher) upgradeCycle(ctx context.Context) {
 	now := w.clk().Now()
+	if w.standby {
+		live := w.upgradeWatchLive(now)
+		w.check("upgrades-standby", !live, "UPGRADES read by the standby watch: no supervisor's watch reads them, so this one sets and lifts the upgrade holds")
+		if live {
+			return
+		}
+	} else {
+		_ = w.store.WriteFile(upgradeWatchFile, upgradeBeat{At: now})
+	}
 	st, err := w.store.Read()
 	if err != nil {
 		w.emit("upgrades", "UPGRADES unknown: the state does not load (%v)", err)

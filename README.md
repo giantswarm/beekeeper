@@ -711,7 +711,9 @@ read every `watch.interval` (30s) until it ends, so `UPGRADE ENDED` and the hold
 within one interval. That is one `kubectl` per installation per 5 minutes while nothing
 upgrades, and one list of a cluster's events when its upgrade begins. The readings are kept in
 `upgrades.json` in the state directory: a second watch, `snapshot` and `ui` use a reading younger
-than `upgrades.every` instead of reading the installation again.
+than `upgrades.every` instead of reading the installation again. The supervisor's watch reads them; while none
+runs (a relay, a crash, a frozen desktop) the [standby watch](#desktop-notifications) does, so
+an upgrade is held within one `upgrades.every` either way.
 
 A cluster's upgrade begins when its release changes: its `release.giantswarm.io/version` label
 differs from the release cluster-api-events last recorded
@@ -783,6 +785,10 @@ When no supervisor runs, the same watch runs as a systemd user unit,
 `--standby`: while a supervisor's session runs it leaves the notes, timers, session records and
 relays to the supervisor's watch and never reads the alerts, so it takes nothing from the
 supervisor's view; what both see (the budget, stale leases) is sent once.
+The upgrade holds never wait on a supervisor: while no supervisor's watch has begun an upgrade
+cycle within five `watch.interval` (it says so in `upgrades-watch.json`), the standby watch reads
+the upgrades on the same shared schedule, sets and lifts their holds and says
+`UPGRADES read by the standby watch` once; beside a running supervisor's watch it reads none.
 A supervisor runs its own watch with `--notify` too. `beekeeper install` writes and starts the
 unit with the binary's path; `journalctl --user -u beekeeper-notify -f` shows its lines.
 
