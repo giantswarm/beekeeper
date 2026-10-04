@@ -700,11 +700,16 @@ costs nothing when GitHub answers 304; a failed read refuses.
 ## Cluster upgrades
 
 While an installation's clusters upgrade, work on it waits. `watch` reads the Cluster API
-clusters of `alerts.installations` every `watch.interval` (30s), read-only: one list each of
+clusters of `alerts.installations` every `upgrades.every` (5m), read-only: one list of
 Clusters, KubeadmControlPlanes, MachinePools and MachineDeployments (`v1beta2`) per
-installation, in parallel, each installation within `alerts.timeout`; an installation that
-serves none of them has no cluster to upgrade. That is 4 lists per installation per 30s, and one
-list of a cluster's events when its upgrade begins.
+installation in one `kubectl` call, in parallel, each installation within `alerts.timeout`; an
+installation that does not serve one of the kinds is read one call per kind, and one that
+serves none of them has no cluster to upgrade. An installation an upgrade runs on or holds is
+read every `watch.interval` (30s) until it ends, so `UPGRADE ENDED` and the hold's lift come
+within one interval. That is one `kubectl` per installation per 5 minutes while nothing
+upgrades, and one list of a cluster's events when its upgrade begins. The readings are kept in
+`upgrades.json` in the state directory: a second watch, `snapshot` and `ui` use a reading younger
+than `upgrades.every` instead of reading the installation again.
 
 A cluster's upgrade begins when its release changes: its `release.giantswarm.io/version` label
 differs from the release cluster-api-events last recorded
@@ -1334,6 +1339,20 @@ to the central roster on their transitions only (registered, a task taken or end
 <context>: <reason>` once when the central instance stops answering, and its `ENDED` line once it
 answers again; what was not published meanwhile is published then. A watch with nothing to
 publish asks every five minutes.
+
+A lane whose installation is central queues centrally too, so two people's merges into it roll
+one after the other. The gate queues the merge in the central lane (`lane_queue`) as well as
+the machine's, asks for its turn there every 15 seconds while it waits, and runs devctl only when
+the merge is next in both. It makes it the central lane's running merge (`lane_settle`), reports
+its outcome (merged: the lane settles; otherwise it leaves with `lane_leave`), and the watch takes
+it out once its release rolled on the installation. A waiting place whose gate stopped asking
+for `merge.queueTTL` holds up nobody. A hold on a central lane (`hold set --lane`) or on a
+repository in one is central: `hold set|lift|check|list` go to the central instance, and its gate
+refuses the merge with the hold (exit 77) on every machine; `--lift-when`, a probe on one
+machine, is refused for a central target. `lanes central` lists the central lanes,
+and `lanes leave owner/repo#n` takes a merge out of its central lane by hand (its person's, or the
+team's supervisor role's). A gate that cannot reach the central instance refuses the merge with
+exit 69 and queues nothing.
 
 ## Configuration
 

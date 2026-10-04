@@ -12,6 +12,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/state/kube"
 	"github.com/giantswarm/beekeeper/pkg/apis/beekeeper/v1alpha1"
@@ -35,6 +36,7 @@ const (
 	paramMessage     = "message"
 	paramTask        = "task"
 	scopeTeam        = "team"
+	keyLeft          = "left"
 	paramDone        = "done"
 	keyMailbox       = "mailbox"
 	keyNotes         = "notes"
@@ -75,6 +77,8 @@ func (s *server) tools() []serveTool {
 		{newTool("lane_settle", "Register a merge run outside the gate as its lane's head, running or merged.", false,
 			append(prOptions(), mcp.WithBoolean("merged", mcp.Description("the pull request is merged: the lane settles")))...), toolLaneSettle},
 		{newTool("lane_turn", "Whether a queued merge is its lane's next, and what is ahead of it.", true, prOptions()...), toolLaneTurn},
+		{newTool("lane_leave", "Take a merge out of its lane: it merged and rolled, failed, or its gate gave up. Its person's, or the team's supervisor role's.", false,
+			append(prOptions(), mcp.WithString(paramReason, mcp.Description("why it leaves: rolled, nothing merged, refused")))...), toolLaneLeave},
 		{newTool("note_add", "File a note: a decision for a person or a team, put to them in Slack, or a memo.", false,
 			mcp.WithString(paramText, mcp.Required(), mcp.Description("the question (one line, at most 150 characters) or the memo")),
 			mcp.WithString(paramFor, mcp.Description("who decides: a person's name or email, or team:<name>")),
@@ -447,6 +451,12 @@ type laneTurn struct {
 }
 
 func turnOf(st *state.State, lane, repo string, pr int) (laneTurn, bool) {
+	return turnAt(st, lane, repo, pr, time.Time{}, 0)
+}
+
+// turnAt is turnOf, where a waiting place of another merge unseen since
+// ttl before now holds up nobody (ttl 0: every place counts).
+func turnAt(st *state.State, lane, repo string, pr int, now time.Time, ttl time.Duration) (laneTurn, bool) {
 	t := laneTurn{Lane: lane, Merge: fmt.Sprintf("%s#%d", repo, pr), Ahead: []string{}}
 	busy := false
 	for _, m := range st.Merges {
@@ -458,12 +468,35 @@ func turnOf(st *state.State, lane, repo string, pr int) (laneTurn, bool) {
 			t.Turn = m.Phase == state.Waiting && len(t.Ahead) == 0 && !busy
 			return t, true
 		}
+		if stale(m, now, ttl) {
+			continue
+		}
 		if m.Phase != state.Waiting {
 			busy = true
 		}
 		t.Ahead = append(t.Ahead, m.Key())
 	}
 	return t, false
+}
+
+// stale says whether a waiting place went unseen (its gate stopped asking)
+// for ttl before now.
+func stale(m state.Merge, now time.Time, ttl time.Duration) bool {
+	return ttl > 0 && m.Phase == state.Waiting && now.Sub(cmp.Or(m.Seen, m.Joined)) > ttl
+}
+
+// laneHeld refuses a merge of repo#pr in lane while a central hold stops
+// it: the repository's, the lane's, or one on every merge.
+func (c *call) laneHeld(lane, repo string, pr int) error {
+	st, err := c.app.store.Read()
+	if err != nil {
+		return err
+	}
+	l, _ := c.app.cfg.LaneNamed(lane)
+	if h, held := merge.Blocking(st, c.app.now, repo, pr, l); held {
+		return refused("%s is held (%s) by %q until %s: %s", repo, holdTarget(h), partyName(h.By), untilText(c.app, h), h.Reason)
+	}
+	return nil
 }
 
 func toolLaneQueue(c *call, req mcp.CallToolRequest) (any, error) {
@@ -475,15 +508,25 @@ func toolLaneQueue(c *call, req mcp.CallToolRequest) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := c.laneHeld(lane, repo, pr); err != nil {
+		return nil, err
+	}
+	now, ttl := c.app.now.UTC(), c.app.cfg.Merge.QueueTTL.Duration
 	var t laneTurn
 	queued := false
 	err = c.app.store.Update(func(st *state.State) ([]state.Event, error) {
+		// Asking again keeps the place: its gate still waits.
+		for i, m := range st.Merges {
+			if m.Lane == lane && strings.EqualFold(m.Repo, repo) && m.PR == pr && m.Phase == state.Waiting {
+				st.Merges[i].Seen = now
+			}
+		}
 		var ok bool
-		if t, ok = turnOf(st, lane, repo, pr); ok {
+		if t, ok = turnAt(st, lane, repo, pr, now, ttl); ok {
 			return nil, nil
 		}
-		st.Merges = append(st.Merges, state.Merge{Repo: repo, PR: pr, Lane: lane, By: c.me, Phase: state.Waiting, Joined: c.app.now.UTC()})
-		t, _ = turnOf(st, lane, repo, pr)
+		st.Merges = append(st.Merges, state.Merge{Repo: repo, PR: pr, Lane: lane, By: c.me, Phase: state.Waiting, Joined: now, Seen: now})
+		t, _ = turnAt(st, lane, repo, pr, now, ttl)
 		queued = true
 		return []state.Event{event(c.me, "merge.queue", "%s#%d in lane %s, number %d", repo, pr, lane, t.Position)}, nil
 	})
@@ -507,11 +550,14 @@ func toolLaneTurn(c *call, req mcp.CallToolRequest) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := c.laneHeld(lane, repo, pr); err != nil {
+		return nil, err
+	}
 	st, err := c.app.store.Read()
 	if err != nil {
 		return nil, err
 	}
-	t, ok := turnOf(st, lane, repo, pr)
+	t, ok := turnAt(st, lane, repo, pr, c.app.now, c.app.cfg.Merge.QueueTTL.Duration)
 	switch {
 	case !ok:
 		return nil, refused("%s is not queued in lane %s: lane_queue first", t.Merge, lane)
@@ -577,6 +623,45 @@ func toolLaneSettle(c *call, req mcp.CallToolRequest) (any, error) {
 		_, err = fmt.Fprintf(c.out, "%s heads lane %s outside the gate until it merges: the lane's other merges wait\n", key, lane)
 	}
 	return t, err
+}
+
+func toolLaneLeave(c *call, req mcp.CallToolRequest) (any, error) {
+	repo, pr, err := prArg(req)
+	if err != nil {
+		return nil, err
+	}
+	lane, err := c.laneOf(repo)
+	if err != nil {
+		return nil, err
+	}
+	key := fmt.Sprintf("%s#%d", repo, pr)
+	st, err := c.app.store.Read()
+	if err != nil {
+		return nil, err
+	}
+	i := slices.IndexFunc(st.Merges, func(m state.Merge) bool {
+		return m.Lane == lane && strings.EqualFold(m.Repo, repo) && m.PR == pr
+	})
+	if i < 0 {
+		_, err := fmt.Fprintf(c.out, "%s is not in lane %s\n", key, lane)
+		return map[string]any{"lane": lane, "merge": key, keyLeft: false}, err
+	}
+	m := st.Merges[i]
+	if err := c.may(key+"'s place in lane "+lane, m.By); err != nil {
+		return nil, err
+	}
+	reason := strings.TrimSpace(req.GetString(paramReason, ""))
+	err = c.app.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Merges = slices.DeleteFunc(st.Merges, func(x state.Merge) bool {
+			return x.Lane == lane && strings.EqualFold(x.Repo, repo) && x.PR == pr
+		})
+		return []state.Event{event(c.me, verbLaneSettled, "%s: %s %s", lane, key, cmp.Or(reason, "left the lane"))}, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	_, err = fmt.Fprintf(c.out, "%s left lane %s (%s)\n", key, lane, m.Phase)
+	return map[string]any{"lane": lane, "merge": key, keyLeft: true, "phase": m.Phase}, err
 }
 
 func toolNoteAdd(c *call, req mcp.CallToolRequest) (any, error) {
@@ -801,7 +886,7 @@ func toolAgentsLeave(c *call, req mcp.CallToolRequest) (any, error) {
 	} else {
 		_, err = fmt.Fprintf(c.out, "%s on %s was not on the roster\n", c.me.Name, c.me.Host)
 	}
-	return map[string]any{paramAgent: c.me, "left": left}, err
+	return map[string]any{paramAgent: c.me, keyLeft: left}, err
 }
 
 func toolListAgents(c *call, req mcp.CallToolRequest) (any, error) {

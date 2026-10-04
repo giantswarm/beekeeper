@@ -149,6 +149,13 @@ type gateRun struct {
 	seeded  bool // the merge's place was queued on the session's behalf
 	queued  bool // the merge's own run, which waits on after exit 76
 	from    int  // the gate a queued run took the merge's place from
+	// central says the merge's lane queues in the central instance: joined
+	// once the merge has its place there, centralWhy what it waits for
+	// there as of centralAsked.
+	central      bool
+	joined       bool
+	centralWhy   string
+	centralAsked time.Time
 }
 
 func (a *app) gate(ctx context.Context, argv []string, wait time.Duration, queued bool) error {
@@ -164,6 +171,7 @@ func (a *app) gate(ctx context.Context, argv []string, wait time.Duration, queue
 		me = state.Party{Name: fmt.Sprintf("pid %d", os.Getppid())}
 	}
 	g := &gateRun{app: a, ctx: ctx, argv: argv, repo: repo, pr: pr, lane: a.cfg.LaneOf(repo), me: me, pid: os.Getpid(), cli: callerCLI(), queued: queued}
+	g.central = pr != 0 && a.cfg.CentralLane(g.lane)
 	if v, ok := os.LookupEnv(gateFromEnv); ok {
 		_ = os.Unsetenv(gateFromEnv)
 		g.from, _ = strconv.Atoi(v)
@@ -298,6 +306,11 @@ func (g *gateRun) step() (string, error) {
 		return "", g.refuseWith(ExitGateDuplicate, "%s is already merging: started %s by %q (pid %d), last line: %s; its outcome reaches %q, do not merge again",
 			g.key(), clock(g.now, dup.Started), dup.By.Name, dup.PID, last, dup.By.Name)
 	}
+	if g.central {
+		if why, err := g.centralTurn(); err != nil || why != "" {
+			return why, err
+		}
+	}
 	if ahead, ok := q.Ahead(g.repo, g.pr, g.present); ok {
 		if q.Running != nil {
 			ahead = *q.Running
@@ -384,6 +397,7 @@ func (g *gateRun) refuse(format string, args ...any) error {
 // refuseWith is refuse with exit code code.
 func (g *gateRun) refuseWith(code int, format string, args ...any) error {
 	why := fmt.Sprintf(format, args...)
+	g.centralLeave("refused: " + why)
 	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
 		g.drop(st)
 		return []state.Event{event(g.me, "merge.refused", "%s: %s", g.key(), why)}, nil
@@ -447,6 +461,7 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 		toolFrom = devctlVersion(g.ctx)
 	}
 	why := ""
+	var settled []state.Merge
 	err := g.store.Update(func(st *state.State) ([]state.Event, error) {
 		q := merge.Queue(st, g.lane.Name)
 		i := g.mine(st, state.Waiting)
@@ -464,7 +479,13 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 				n, g.cfg.Merge.Cap, g.key(), g.lane.Name)
 			return nil, nil
 		}
-		st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool { return m.Lane == g.lane.Name && m.Phase == state.Settling })
+		st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool {
+			if m.Lane == g.lane.Name && m.Phase == state.Settling {
+				settled = append(settled, m)
+				return true
+			}
+			return false
+		})
 		i = g.mine(st, state.Waiting)
 		passed := q.Passed(g.repo, g.pr)
 		m := &st.Merges[i]
@@ -489,7 +510,24 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 	if why != "" {
 		return why, nil
 	}
+	g.leaveCentral(g.ctx, settled, "rolled, HelmReleases of "+g.lane.Installation+" Ready")
+	if g.central {
+		if why, err := g.centralStart(); err != nil || why != "" {
+			return why, err
+		}
+	}
 	return "", g.runMerge()
+}
+
+// unstart puts the merge back to waiting in its local lane when its central
+// lane did not let it start: it keeps its place in both.
+func (g *gateRun) unstart() {
+	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+		if i := g.mine(st, state.Running); i >= 0 {
+			st.Merges[i].Phase, st.Merges[i].Started, st.Merges[i].Roll = state.Waiting, time.Time{}, nil
+		}
+		return nil, nil
+	})
 }
 
 // runMerge runs devctl once, detached from its caller (runDetached), its
@@ -529,7 +567,7 @@ func (g *gateRun) runMerge() error {
 	if r.out, ok = parseOutcome(g.pr, doc); merge.NeedsJudging(ok, rc) {
 		r.out, r.unanswered = judgeRun(g.ctx, g.repo, g.pr, judgeTries)
 	}
-	kept := false
+	kept, settles := false, false
 	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
 		i := g.mine(st, state.Running)
 		if i < 0 {
@@ -537,8 +575,14 @@ func (g *gateRun) runMerge() error {
 		}
 		var ev []state.Event
 		ev, kept = recordRun(st, i, g.lane, g.me, r, time.Now().UTC(), note)
+		settles = slices.ContainsFunc(st.Merges, func(m state.Merge) bool {
+			return m.Repo == g.repo && m.PR == g.pr && m.Phase == state.Settling
+		})
 		return ev, nil
 	})
+	if g.central {
+		g.centralRecord(settles, fmt.Sprintf("devctl exit %d, nothing to roll", rc))
+	}
 	out, unanswered := r.out, r.unanswered
 	if g.toolMerge() && out.Merged {
 		// The release is out: install it now rather than on the watch's tick.

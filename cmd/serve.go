@@ -289,7 +289,8 @@ func firstLine(s string) string {
 // into the call's out.
 func (c *call) verb(cmd *cobra.Command, args ...string) error {
 	usageArgs(cmd)
-	cmd.SetArgs(args)
+	// Never nil: cobra reads a nil list from os.Args, serve's own.
+	cmd.SetArgs(append([]string{}, args...))
 	cmd.SetOut(c.out)
 	cmd.SetErr(c.out)
 	cmd.SilenceErrors, cmd.SilenceUsage = true, true
