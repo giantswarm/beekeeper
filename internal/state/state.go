@@ -289,6 +289,22 @@ func (k *Keep) Holds(now time.Time) bool {
 	return k != nil && (k.Until.IsZero() || now.Before(k.Until))
 }
 
+// Park is an agent's park: what it waits for, on which note (#<id>) or
+// issue or pull request (owner/repo#n), and once that settled, since when
+// it is resumable and the words its resume carries.
+type Park struct {
+	By    Party     `json:"by"`
+	At    time.Time `json:"at"`
+	On    string    `json:"on,omitempty"`
+	Waits string    `json:"waits"`
+	// Resumable is when the watch saw On settle; Answer is what settled it,
+	// a person's answer word for word or the pull request's state.
+	Resumable time.Time `json:"resumable,omitzero"`
+	Answer    string    `json:"answer,omitempty"`
+
+	rest rest
+}
+
 // Agent is an empty session registered as spare capacity.
 type Agent struct {
 	Party
@@ -300,6 +316,9 @@ type Agent struct {
 	// Keep marks an idle entry kept on purpose (agents keep): the doctor
 	// never removes it for staleness nor archives its desktop session.
 	Keep *Keep `json:"keep,omitempty"`
+	// Park marks an agent that keeps its task but waits on a note, a pull
+	// request or a person without holding a busy slot (agents park).
+	Park *Park `json:"park,omitempty"`
 	// Done says the agent reported its work finished (agents idle --done):
 	// the doctor takes it off the roster and archives its desktop session
 	// once its CLI is idle.

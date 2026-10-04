@@ -101,6 +101,7 @@ type (
 	plainGrant        Grant
 	plainHold         Hold
 	plainKeep         Keep
+	plainPark         Park
 	plainAgent        Agent
 	plainImportWait   ImportWait
 	plainNote         Note
@@ -142,6 +143,8 @@ func (v *Hold) UnmarshalJSON(b []byte) error    { return decodeKeeping(b, (*plai
 func (v Hold) MarshalJSON() ([]byte, error)     { return encodeKeeping(plainHold(v), v.rest) }
 func (v *Keep) UnmarshalJSON(b []byte) error    { return decodeKeeping(b, (*plainKeep)(v), &v.rest) }
 func (v Keep) MarshalJSON() ([]byte, error)     { return encodeKeeping(plainKeep(v), v.rest) }
+func (v *Park) UnmarshalJSON(b []byte) error    { return decodeKeeping(b, (*plainPark)(v), &v.rest) }
+func (v Park) MarshalJSON() ([]byte, error)     { return encodeKeeping(plainPark(v), v.rest) }
 func (v *Agent) UnmarshalJSON(b []byte) error   { return decodeKeeping(b, (*plainAgent)(v), &v.rest) }
 func (v Agent) MarshalJSON() ([]byte, error)    { return encodeKeeping(plainAgent(v), v.rest) }
 func (v *ImportWait) UnmarshalJSON(b []byte) error {
