@@ -378,7 +378,7 @@ const testKillOwner = "a test's own memcap scope (a deliberate test kill, not a 
 
 // isTestKill: the kill hit a test run's scope (guard.TestScopePrefix).
 func isTestKill(k machine.OOMKill) bool {
-	return strings.Contains(k.Memcg, "memcap") && guard.IsTestScope(path.Base(k.Memcg))
+	return strings.Contains(k.Memcg, "memcap") && guard.IsTestScope(path.Base(k.RunMemcg()))
 }
 
 // runIndex finds the run.start event of a memcap scope. It reads the event
@@ -405,7 +405,8 @@ func (r *runIndex) start(scope string) (state.Event, bool) {
 
 // oomOwner names whose limit an OOM kill hit. A memcap cap's kill names the
 // session and the command of the run that started the scope, from its
-// run.start event (the memcg path ends in the scope's unit name). A scope no
+// run.start event (the killed task's memcg path ends in the scope's unit
+// name, also when the cap of the slot slice it shares was hit). A scope no
 // event names has an unknown cap, never the default: its session by the
 // process that started it, if that is still there. A test run's scope is a
 // test kill, whatever its events.
@@ -414,10 +415,10 @@ func oomOwner(k machine.OOMKill, clusters []machine.Cluster, sessions []*claude.
 	case isTestKill(k):
 		return testKillOwner
 	case strings.Contains(k.Memcg, "memcap"):
-		if e, ok := runs.start(path.Base(k.Memcg)); ok {
+		if e, ok := runs.start(path.Base(k.RunMemcg())); ok {
 			return fmt.Sprintf("memcap cap of %q's `%s`", e.By.Name, truncate(guard.RunCommand(e.Detail), 60))
 		}
-		if m := memcapScope.FindStringSubmatch(k.Memcg); m != nil {
+		if m := memcapScope.FindStringSubmatch(k.RunMemcg()); m != nil {
 			pid, _ := strconv.Atoi(m[1])
 			if s, ok := claude.OwnerOf(sessions, pid); ok {
 				return fmt.Sprintf("memcap scope of %q's command, cap unknown (no run.start)", s.Name)

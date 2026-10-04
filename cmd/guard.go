@@ -30,8 +30,12 @@ func (a *app) runCmd() *cobra.Command {
 		Use:   "run [--max SIZE] [--wait DURATION] -- command [args...]",
 		Short: "Run a build, test or lint command in a build slot under a memory cap",
 		Long: `run takes one of the machine's build slots and runs the command in a
-transient systemd user scope under memcap.slice with MemoryMax=SIZE,
-MemorySwapMax=0 and OOMPolicy=continue. When the command's process tree
+transient systemd user scope in the slot's slice under memcap.slice, both
+with MemoryMax=SIZE and MemorySwapMax=0, the scope with OOMPolicy=continue.
+A run of a Claude Code session that holds a slot already (a lab proof in
+the background, a test suite in the foreground) takes no second slot: it
+joins the session's slot at once, its scope in the same slice, and shares
+the slot's cap. A command a capped run starts runs inside that run's scope. When the command's process tree
 reaches the cap the kernel kills its biggest process and nothing outside the
 scope notices; run then names the victim in one line starting with
 "` + guard.LogPrefix + `" and exits 137 (or the tool's own failure code).

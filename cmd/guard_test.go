@@ -118,8 +118,8 @@ func TestRunKeepsTheCallersShellSemantics(t *testing.T) {
 
 func TestRunHoldsASlotInACappedScope(t *testing.T) {
 	state, env := capped(t)
-	out, errOut, rc := zsh(t, env, rewrite(t, `grep -o 'memcap.slice/memcap-test-[0-9]*-[0-9]*' /proc/self/cgroup; cat "$MEMCAP_STATE/slots/1.holder"; if false; then go test; fi`))
-	if rc != 0 || !strings.HasPrefix(out, "memcap.slice/"+guard.TestScopePrefix) {
+	out, errOut, rc := zsh(t, env, rewrite(t, `grep -o 'memcap.slice/memcap-slot1_test.slice/memcap-test-[0-9]*-[0-9]*' /proc/self/cgroup; cat "$MEMCAP_STATE/slots/1.holder"; if false; then go test; fi`))
+	if rc != 0 || !strings.HasPrefix(out, "memcap.slice/memcap-slot1_test.slice/"+guard.TestScopePrefix) {
 		t.Fatalf("rc %d, stdout %q, stderr %q", rc, out, errOut)
 	}
 	var h struct {
@@ -177,7 +177,7 @@ func TestRunNamesTheCapsVictim(t *testing.T) {
 	store, _ := stateStore(dir)
 	runs := &runIndex{store: store}
 	for _, k := range kills {
-		if strings.HasSuffix(k.Memcg, "/"+guard.RunScope(evs[0].Detail)) {
+		if strings.HasSuffix(k.RunMemcg(), "/"+guard.RunScope(evs[0].Detail)) {
 			if got := oomOwner(k, nil, nil, &proc.Table{ByPID: map[int]*proc.Process{}}, runs); got != testKillOwner {
 				t.Errorf("owner %q", got)
 			}

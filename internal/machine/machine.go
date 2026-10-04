@@ -176,16 +176,18 @@ func FindScope() string {
 const memcapSlice = "/sys/fs/cgroup/user.slice/user-*.slice/user@*.service/memcap.slice/"
 
 // FindMemcapScope returns the cgroup of the capped run's scope unit (as a
-// run event names it, "memcap-….scope"), or "" when it has ended.
+// run event names it, "memcap-….scope") in its slot's slice or in
+// memcap.slice itself, or "" when it has ended.
 func FindMemcapScope(unit string) string {
 	if unit == "" || strings.ContainsAny(unit, "/*?[") {
 		return ""
 	}
-	m, _ := filepath.Glob(memcapSlice + unit)
-	if len(m) == 0 {
-		return ""
+	for _, glob := range []string{memcapSlice + "memcap-slot*.slice/" + unit, memcapSlice + unit} {
+		if m, _ := filepath.Glob(glob); len(m) > 0 {
+			return m[0]
+		}
 	}
-	return m[0]
+	return ""
 }
 
 // ReadScope reads the cgroup at path.
@@ -323,13 +325,25 @@ type OOMKill struct {
 	Task       string    `json:"task"`
 	AnonMiB    int       `json:"anonMiB"`
 	Constraint string    `json:"constraint,omitempty"`
-	// Memcg is the cgroup whose limit was hit: a memcap scope, a kind
-	// lab's pod, or the desktop scope.
+	// Memcg is the cgroup whose limit was hit: a memcap scope or slot
+	// slice, a kind lab's pod, or the desktop scope.
 	Memcg string `json:"memcg,omitempty"`
+	// TaskMemcg is the killed task's cgroup: its run's scope when the cap
+	// of the slot slice the run shares was hit.
+	TaskMemcg string `json:"taskMemcg,omitempty"`
+}
+
+// RunMemcg is the cgroup that names the killed run: the task's scope,
+// whichever cap of the run's slot was hit.
+func (k OOMKill) RunMemcg() string {
+	if k.TaskMemcg != "" {
+		return k.TaskMemcg
+	}
+	return k.Memcg
 }
 
 var (
-	oomLine    = regexp.MustCompile(`oom-kill:constraint=([A-Z_]+),.*?oom_memcg=([^,]*),.*?task=([^,]*),pid=(\d+)`)
+	oomLine    = regexp.MustCompile(`oom-kill:constraint=([A-Z_]+),.*?oom_memcg=([^,]*),(?:task_memcg=([^,]*),)?.*?task=([^,]*),pid=(\d+)`)
 	killedLine = regexp.MustCompile(`Killed process (\d+) \(([^)]*)\).*?anon-rss:(\d+)kB`)
 )
 
@@ -340,9 +354,9 @@ func ParseOOM(journal string) []OOMKill {
 	for line := range strings.SplitSeq(journal, "\n") {
 		at := journalTime(line)
 		if m := oomLine.FindStringSubmatch(line); m != nil {
-			pid, _ := strconv.Atoi(m[4])
+			pid, _ := strconv.Atoi(m[5])
 			idx[pid] = len(kills)
-			kills = append(kills, OOMKill{At: at, PID: pid, Task: m[3], Constraint: m[1], Memcg: m[2]})
+			kills = append(kills, OOMKill{At: at, PID: pid, Task: m[4], Constraint: m[1], Memcg: m[2], TaskMemcg: m[3]})
 			continue
 		}
 		if m := killedLine.FindStringSubmatch(line); m != nil {

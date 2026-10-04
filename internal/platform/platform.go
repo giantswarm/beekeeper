@@ -126,6 +126,9 @@ type Launcher interface {
 type Cap struct {
 	// Max is the memory limit, Swap the swap limit ("12G", "0").
 	Max, Swap string
+	// Slice is the slice of the build slot the run holds or shares, under
+	// memcap.slice: every run of the slot shares its cap. "": memcap.slice.
+	Slice string
 }
 
 // Capper runs commands under a memory cap.
@@ -134,8 +137,11 @@ type Capper interface {
 	Available() bool
 	// Capped reports whether this process runs under a cap already.
 	Capped() bool
-	// Command is argv to run capped in the scope name; the caller starts
-	// and waits for it.
+	// CapSlot caps c.Slice at c before its slot holder's run starts: the
+	// runs that share the slot share that cap.
+	CapSlot(c Cap) error
+	// Command is argv to run capped in the scope name, in c.Slice; the
+	// caller starts and waits for it.
 	Command(name string, c Cap, argv []string) (*exec.Cmd, error)
 }
 
