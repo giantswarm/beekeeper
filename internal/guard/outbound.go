@@ -145,7 +145,7 @@ func (o Outbound) toolRefusal(tool string, input map[string]any) string {
 	switch {
 	case strings.HasPrefix(tool, mcpPrefix):
 		text, what = strings.Join(stringValues(input), "\n"), "the "+tool+" call"
-	case tool == writeTool || tool == editTool || tool == "MultiEdit" || tool == notebookTool:
+	case tool == writeTool || tool == editTool || tool == multiEditTool || tool == notebookTool:
 		file, _ := input[filePathKey].(string)
 		if file == "" {
 			file, _ = input[notebookPathKey].(string)

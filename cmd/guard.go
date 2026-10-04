@@ -230,14 +230,23 @@ Register it in ~/.claude/settings.json:
 		RunE: func(*cobra.Command, []string) error {
 			defer func() { _ = recover() }() // a broken hook must not block the tool call
 			raw, err := io.ReadAll(os.Stdin)
-			if err != nil || !a.inScope(raw) {
+			if err != nil {
+				return nil
+			}
+			cfgErr := a.loadConfig()
+			sandboxed := a.sandboxed(cfgErr)
+			if !a.inScope(raw) {
+				// the sandbox holds every session, the desk's or not
+				if out := (guard.Hook{Sandbox: sandboxed}).DecideSandbox(raw); out != nil {
+					_, _ = a.out.Write(out)
+				}
 				return nil
 			}
 			self, _ := os.Executable()
 			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, CheckQuestion: checkQuestion, Role: a.roleTarget, Peer: a.desktopPeer, Absent: a.absentPeer,
 				Project: os.Getenv("CLAUDE_PROJECT_DIR"), Reads: a.firstReads,
 				Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(),
-				ModelServer: a.modelServer, ConfigErr: a.loadConfig()}
+				ModelServer: a.modelServer, ConfigErr: cfgErr, Sandbox: sandboxed}
 			if h.ConfigErr == nil {
 				h.Shell, h.Production, h.ContextHint = a.cfg.Shell, a.cfg.Kube.Production, a.cfg.Kube.Context("<installation>")
 				h.MaxLabs = func() int { return a.cfg.KindClusters(ramMiB()) }
