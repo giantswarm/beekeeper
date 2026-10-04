@@ -15,6 +15,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -54,7 +55,10 @@ agent's task) nor by an agent on the roster, its CLI running or not, while it is
 busy with its task or parked and kept (agents keep, or an open timer that
 wakes it by name), and named by no open note (it waits on the note's person),
 not assigned to anybody outside board.people, without an open recorded
-blocker, and active within board.staleAfter. A sub-issue offered through
+blocker, active within board.staleAfter, and with every lease its labels
+name (lease/<resource>, lease/agentlab-1) free or the caller's: an item
+whose lease another session holds is passed over until it is released,
+the items behind it offered meanwhile. A sub-issue offered through
 an epic passes the same checks, and a serve record, task or note naming
 the epic covers it too ("…, on epic owner/repo#n"). It prints the item,
 why it is picked, and why every item above it was skipped.
@@ -98,6 +102,11 @@ replaces the record. Exit 3 when no item is free or the claim is refused.`,
 			alive := func(p state.Party) bool {
 				return slices.ContainsFunc(sessions, func(s *claude.Session) bool { return s.Party().Is(p) })
 			}
+			holders, err := lease.Dir(a.cfg.LeaseDir).List()
+			if err != nil {
+				return err
+			}
+			skipHeldLeases(cands, holders, me)
 			var res nextResult
 			if claim {
 				open := func(string) bool { return false }
@@ -146,6 +155,23 @@ func servedOpen(ctx context.Context, cl *board.Client, store state.Store, me sta
 		o, ok := asked[strings.ToLower(ref)]
 		return o || !ok
 	}, nil
+}
+
+// skipHeldLeases marks every free candidate skipped whose labels name a
+// lease another party holds; the caller's own lease is no obstacle.
+func skipHeldLeases(cands []board.Candidate, holders []lease.Holder, me state.Party) {
+	for i := range cands {
+		if cands[i].Skip != "" {
+			continue
+		}
+		for _, res := range cands[i].Leases() {
+			j := slices.IndexFunc(holders, func(h lease.Holder) bool { return strings.EqualFold(h.Env, res) })
+			if j >= 0 && !holders[j].Party().Is(me) {
+				cands[i].Skip = fmt.Sprintf("needs lease %s, held by %q", res, holders[j].Name)
+				break
+			}
+		}
+	}
 }
 
 // nextResult is the pick, nil when no item is free, and the candidates
@@ -301,6 +327,9 @@ func (a *app) printNext(res nextResult, offered int) error {
 		if res.Pick != nil {
 			p := res.Pick
 			_, _ = fmt.Fprintf(a.out, "%s %s\n  %s\n  picked: %s\n", p.Ref, p.Title, p.URL, p.Why())
+			if ls := p.Leases(); len(ls) > 0 {
+				_, _ = fmt.Fprintf(a.out, "  needs lease %s: free now, claim it on the supervisor's word\n", strings.Join(ls, ", "))
+			}
 			if res.Claimed {
 				_, _ = fmt.Fprintf(a.out, "  claimed: you serve %s now, its Status unchanged (board move %s %q once you take it on; sessions unserve %s releases it)\n", p.Ref, p.Ref, "in progress", p.Ref)
 			}

@@ -344,3 +344,10 @@ func TestGraphQLErrorsAreReported(t *testing.T) {
 		t.Errorf("Read = %v", err)
 	}
 }
+
+func TestItemLeases(t *testing.T) {
+	it := Item{Labels: []string{"team/bumblebee", "Lease/AgentLab-1", "lease/", "lease/graveler"}}
+	if got := it.Leases(); !slices.Equal(got, []string{"agentlab-1", "graveler"}) {
+		t.Errorf("leases %q", got)
+	}
+}
