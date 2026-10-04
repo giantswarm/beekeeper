@@ -8,13 +8,18 @@ import (
 	"testing"
 )
 
+// bash and agentShells are the shells the prelude is tested in.
+const bash = "bash"
+
+var agentShells = []string{"zsh", bash}
+
 // The prelude is sourced before a command is parsed, as Claude Code does
 // with a session's environment file: the shell's aliases and functions of
 // the names are gone and an unmatched glob is a literal, in zsh and bash.
 func TestPreludeInAgentShells(t *testing.T) {
 	prelude := Prelude([]string{"grep", "ls"}, true, nil)
 	setup := "alias ls='echo ALIASED'\ngrep() { echo SHADOWED; }\n"
-	for _, sh := range []string{"zsh", "bash"} {
+	for _, sh := range agentShells {
 		bin, err := exec.LookPath(sh)
 		if err != nil {
 			t.Logf("%s not installed", sh)
@@ -29,7 +34,7 @@ func TestPreludeInAgentShells(t *testing.T) {
 			// file, then the command, parsed only once the file ran.
 			script := setup + "source " + env + "\n" + `eval 'echo "$?"; type ls grep; echo /nonexistent/*.x'`
 			args := []string{"-c", script}
-			if sh == "bash" {
+			if sh == bash {
 				args = []string{"-O", "expand_aliases", "-O", "failglob", "-c", script}
 			}
 			out, err := exec.Command(bin, args...).CombinedOutput() //nolint:gosec // the test's own shells
@@ -85,7 +90,7 @@ func TestPreludePath(t *testing.T) {
 		t.Skip("no home directory")
 	}
 	prelude := Prelude(nil, false, []string{"~/agent-bin", "/opt/it's"})
-	for _, sh := range []string{"zsh", "bash"} {
+	for _, sh := range agentShells {
 		bin, err := exec.LookPath(sh)
 		if err != nil {
 			t.Logf("%s not installed", sh)
