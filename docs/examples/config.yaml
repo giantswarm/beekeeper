@@ -170,6 +170,7 @@ agents:                     # the hand-over of registered agents
   shell:                    # the agent shell's prelude, written by beekeeper hook sessionstart before each Bash command
     unalias: [grep, find, ls, cp, mv, rm]   # aliases and shell functions removed, so each runs the tool on PATH; []: none
     globs: literal          # an unmatched glob stays as written; shell: the shell's own behaviour (zsh: no matches found)
+    path: [~/.local/share/devctl/agent-bin]   # directories first on PATH, in this order: the agent's own programs (a gh link to devctl acts with the App's short-lived token); default: none
 capacity:                   # the busy agents the supervisor keeps (beekeeper capacity, watch's CAPACITY LOW / FULL)
   floor: 5                  # CAPACITY LOW under this many busy agents, when the headroom allows a start
   ceiling: 10               # CAPACITY FULL at this many; no start past it
