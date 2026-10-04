@@ -31,6 +31,9 @@ type Tools struct {
 	Tokens []string
 }
 
+// Kubeconfig is what the fake kind answers for a cluster's kubeconfig.
+func Kubeconfig(cluster string) string { return "kubeconfig of kind-" + cluster }
+
 // New is the fake with a vault.
 func New(vault map[string]string) *Tools {
 	if vault == nil {
@@ -90,6 +93,8 @@ func (t *Tools) Run(_ context.Context, dir string, env []string, stdin io.Reader
 		return []byte(v), nil
 	case name == "op" && args[0] == "item":
 		return t.item(args[1:], stdin)
+	case name == "kind" && len(args) == 4 && args[0] == "get" && args[1] == "kubeconfig":
+		return []byte(Kubeconfig(args[3])), nil
 	}
 	return nil, fmt.Errorf("exit 2 (the fake does not know %s %s)", name, strings.Join(args, " "))
 }

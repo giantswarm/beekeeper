@@ -186,9 +186,9 @@ func TestFingerprintsAreKeyedAndNameNoValue(t *testing.T) {
 }
 
 func TestOnlyTheSharedVault(t *testing.T) {
-	tools := secrettest.New(map[string]string{"op://Private/x/y": password})
+	tools := secrettest.New(map[string]string{otherVaultRef: password})
 	o := ops(tools)
-	if _, err := o.Fingerprints(context.Background(), secret.Ref{Op: "op://Private/x/y"}); err == nil || !strings.Contains(err.Error(), "only the shared vault") {
+	if _, err := o.Fingerprints(context.Background(), secret.Ref{Op: otherVaultRef}); err == nil || !strings.Contains(err.Error(), "only the shared vault") {
 		t.Errorf("another vault = %v", err)
 	}
 	o.Token = ""

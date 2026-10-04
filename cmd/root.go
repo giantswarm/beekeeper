@@ -27,13 +27,16 @@ import (
 // granted, a hold set, the budget under its floor, a platform part this
 // build does not have), 4 relieved (supervisor status in the session a
 // relay relieved), 69 central unreachable (ExitCentral: a central verb
-// whose instance did not answer), 125 outdated (a newer release exists: self-update --check, the status devctl's version check and
+// whose instance did not answer), 78 vault (ExitVault: beekeeper secret
+// could not read the shared vault: none configured, no token, op failing
+// or silent), 125 outdated (a newer release exists: self-update --check, the status devctl's version check and
 // muster's self-update --check use).
 const (
 	ExitError    = 1
 	ExitUsage    = 2
 	ExitRefused  = 3
 	ExitRelieved = 4
+	ExitVault    = 78
 	ExitOutdated = 125
 )
 
