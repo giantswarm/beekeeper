@@ -91,31 +91,32 @@ func jsonKeys(t reflect.Type) map[string]bool {
 // Party has no rest of its own: its fields are flattened into the types that
 // embed it, whose rest keeps them.
 type (
-	plainState       State
-	plainSupervisor  Supervisor
-	plainRelay       Relay
-	plainRelief      Relief
-	plainCLI         CLI
-	plainRelayDue    RelayDue
-	plainRole        Role
-	plainGrant       Grant
-	plainHold        Hold
-	plainKeep        Keep
-	plainPark        Park
-	plainAgent       Agent
-	plainImportWait  ImportWait
-	plainNote        Note
-	plainTimer       Timer
-	plainRecord      Record
-	plainAlertOwner  AlertOwner
-	plainStart       Start
-	plainArchive     Archive
-	plainReport      Report
-	plainReportPause ReportPause
-	plainBudget      Budget
-	plainMerge       Merge
-	plainWriter      Writer
-	plainStaleWriter StaleWriter
+	plainState        State
+	plainSupervisor   Supervisor
+	plainRelay        Relay
+	plainRelief       Relief
+	plainCLI          CLI
+	plainRelayDue     RelayDue
+	plainRole         Role
+	plainGrant        Grant
+	plainHold         Hold
+	plainKeep         Keep
+	plainPark         Park
+	plainAgent        Agent
+	plainImportWait   ImportWait
+	plainNote         Note
+	plainTimer        Timer
+	plainRecord       Record
+	plainAlertOwner   AlertOwner
+	plainStart        Start
+	plainArchive      Archive
+	plainReport       Report
+	plainReportPause  ReportPause
+	plainReportThread ReportThread
+	plainBudget       Budget
+	plainMerge        Merge
+	plainWriter       Writer
+	plainStaleWriter  StaleWriter
 )
 
 func (v *State) UnmarshalJSON(b []byte) error { return decodeKeeping(b, (*plainState)(v), &v.rest) }
@@ -166,6 +167,12 @@ func (v *Archive) UnmarshalJSON(b []byte) error   { return decodeKeeping(b, (*pl
 func (v Archive) MarshalJSON() ([]byte, error)    { return encodeKeeping(plainArchive(v), v.rest) }
 func (v *Report) UnmarshalJSON(b []byte) error    { return decodeKeeping(b, (*plainReport)(v), &v.rest) }
 func (v Report) MarshalJSON() ([]byte, error)     { return encodeKeeping(plainReport(v), v.rest) }
+func (v *ReportThread) UnmarshalJSON(b []byte) error {
+	return decodeKeeping(b, (*plainReportThread)(v), &v.rest)
+}
+func (v ReportThread) MarshalJSON() ([]byte, error) {
+	return encodeKeeping(plainReportThread(v), v.rest)
+}
 func (v *ReportPause) UnmarshalJSON(b []byte) error {
 	return decodeKeeping(b, (*plainReportPause)(v), &v.rest)
 }

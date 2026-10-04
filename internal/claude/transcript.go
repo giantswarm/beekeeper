@@ -241,9 +241,17 @@ func Model(path string) (string, error) {
 // whose name ends in suffix that returned without an error: a posted
 // Slack message is a slack_send_message call's result.
 func Called(path, suffix string) (bool, error) {
+	_, ok, err := CallResult(path, suffix)
+	return ok, err
+}
+
+// CallResult is the text of the first result without an error of a call of
+// a tool whose name ends in suffix in the transcript at path: a posted Slack
+// message's channel and ts.
+func CallResult(path, suffix string) (string, bool, error) {
 	f, err := os.Open(filepath.Clean(path))
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	defer func() { _ = f.Close() }()
 	calls := map[string]bool{}
@@ -252,11 +260,12 @@ func Called(path, suffix string) (bool, error) {
 		line, err := r.ReadBytes('\n')
 		var e entry
 		var blocks []struct {
-			Type      string `json:"type"`
-			ID        string `json:"id"`
-			Name      string `json:"name"`
-			ToolUseID string `json:"tool_use_id"`
-			IsError   bool   `json:"is_error"`
+			Type      string          `json:"type"`
+			ID        string          `json:"id"`
+			Name      string          `json:"name"`
+			ToolUseID string          `json:"tool_use_id"`
+			IsError   bool            `json:"is_error"`
+			Content   json.RawMessage `json:"content"`
 		}
 		if json.Unmarshal(bytes.TrimSpace(line), &e) == nil && json.Unmarshal(e.Message.Content, &blocks) == nil {
 			for _, b := range blocks {
@@ -264,15 +273,15 @@ func Called(path, suffix string) (bool, error) {
 				case b.Type == blockToolUse && strings.HasSuffix(b.Name, suffix):
 					calls[b.ID] = true
 				case b.Type == blockToolResult && calls[b.ToolUseID] && !b.IsError:
-					return true, nil
+					return resultText(b.Content), true, nil
 				}
 			}
 		}
 		if err == io.EOF {
-			return false, nil
+			return "", false, nil
 		}
 		if err != nil {
-			return false, err
+			return "", false, err
 		}
 	}
 }
