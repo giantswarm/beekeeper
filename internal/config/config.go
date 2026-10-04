@@ -114,6 +114,9 @@ type Config struct {
 	Scan Scan `yaml:"scan"`
 	// Secret configures beekeeper secret.
 	Secret Secret `yaml:"secret"`
+	// Sandbox is the agent sandbox beekeeper renders into Claude Code's
+	// managed settings (beekeeper sandbox).
+	Sandbox Sandbox `yaml:"sandbox"`
 	// Board is the project board `beekeeper board` picks work from.
 	Board Board `yaml:"board"`
 	// Plans are the repositories whose pull requests a note for a person
@@ -228,6 +231,33 @@ type Secret struct {
 	// which beekeeper gives only to its own op calls. Agents reach it
 	// nowhere: it lies outside every agent container's mounts.
 	TokenFile string `yaml:"tokenFile"`
+}
+
+// Sandbox is the agent sandbox: the paths and hosts an agent session's
+// commands and file tools reach besides beekeeper's own. The home directory
+// is denied, so a path nobody lists stays unreadable.
+type Sandbox struct {
+	// AllowRead are the paths (~/ allowed) under the home directory
+	// commands and file tools may read: the checkouts, toolchains and lab
+	// kubeconfigs sessions need.
+	AllowRead []string `yaml:"allowRead"`
+	// AllowWrite are the paths (~/ allowed) they may write, readable too:
+	// the checkouts and worktrees, build and module caches.
+	AllowWrite []string `yaml:"allowWrite"`
+	// Domains are the hosts commands reach besides GitHub's: muster, the
+	// registries and module proxies builds need, the labs' API servers.
+	Domains []string `yaml:"domains"`
+	// Mask are the environment variables commands see only as a
+	// placeholder, the sandbox proxy putting the real value into requests
+	// to their hosts; unset, GH_TOKEN and GITHUB_TOKEN go to GitHub.
+	Mask []SandboxMask `yaml:"mask"`
+}
+
+// SandboxMask is one masked environment variable and the hosts its real
+// value goes to.
+type SandboxMask struct {
+	Name  string   `yaml:"name"`
+	Hosts []string `yaml:"hosts"`
 }
 
 // Scan configures the transcript value scanner: beekeeper scan index
@@ -1149,6 +1179,7 @@ func (c *Config) defaults() error {
 	}
 	setInt(&c.Scan.MinLength, 12)
 	c.Secret.TokenFile = homePath(home, c.Secret.TokenFile)
+	c.Sandbox.defaults(home)
 	for i := range c.Scan.SOPS {
 		c.Scan.SOPS[i] = homePath(home, c.Scan.SOPS[i])
 	}
@@ -1268,6 +1299,38 @@ func (r *Role) defaults(home string) {
 	r.Dir = homePath(home, r.Dir)
 }
 
+// GitHubHosts are the hosts the GitHub token goes to.
+var GitHubHosts = []string{"github.com", "api.github.com", "uploads.github.com"}
+
+var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+func (s *Sandbox) validate() error {
+	for key, ps := range map[string][]string{"sandbox.allowRead": s.AllowRead, "sandbox.allowWrite": s.AllowWrite} {
+		for _, p := range ps {
+			if !filepath.IsAbs(p) {
+				return fmt.Errorf("%s: %q is neither absolute nor under ~/", key, p)
+			}
+		}
+	}
+	for i, m := range s.Mask {
+		if !envName.MatchString(m.Name) || len(m.Hosts) == 0 {
+			return fmt.Errorf("sandbox.mask[%d]: want an environment variable's name and at least one host", i)
+		}
+	}
+	return nil
+}
+
+func (s *Sandbox) defaults(home string) {
+	for _, ps := range [][]string{s.AllowRead, s.AllowWrite} {
+		for i := range ps {
+			ps[i] = filepath.Clean(homePath(home, ps[i]))
+		}
+	}
+	if s.Mask == nil {
+		s.Mask = []SandboxMask{{Name: "GH_TOKEN", Hosts: GitHubHosts}, {Name: "GITHUB_TOKEN", Hosts: GitHubHosts}}
+	}
+}
+
 // homePath is p with a leading ~/ resolved against home.
 func homePath(home, p string) string {
 	if rest, ok := strings.CutPrefix(p, "~/"); ok {
@@ -1315,6 +1378,9 @@ func (c *Config) validate() error {
 		if _, err := filepath.Match(g, ""); err != nil {
 			return fmt.Errorf("outbound.paths: %q: %w", g, err)
 		}
+	}
+	if err := c.Sandbox.validate(); err != nil {
+		return err
 	}
 	if r := c.Reporter; r.Every.Duration != 0 && (r.Every.Duration < time.Minute || r.Brief == "") {
 		return fmt.Errorf("reporter: every %s needs at least a minute and a brief", r.Every.Duration)

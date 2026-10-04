@@ -419,3 +419,27 @@ func TestAgentShell(t *testing.T) {
 		t.Errorf("an empty list and shell stay: %+v %v", none.Agents.Shell, err)
 	}
 }
+
+func TestSandbox(t *testing.T) {
+	dir := t.TempDir()
+	write := func(body string) string {
+		p := filepath.Join(dir, "c.yaml")
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	home, _ := os.UserHomeDir()
+	c, err := Load(write("sandbox: {allowRead: [~/projects], allowWrite: [/var/tmp/x]}\n"))
+	if err != nil || c.Sandbox.AllowRead[0] != filepath.Join(home, "projects") || c.Sandbox.AllowWrite[0] != "/var/tmp/x" {
+		t.Fatalf("%+v, %v", c.Sandbox, err)
+	}
+	if len(c.Sandbox.Mask) != 2 || c.Sandbox.Mask[0].Name != "GH_TOKEN" {
+		t.Errorf("default mask = %+v", c.Sandbox.Mask)
+	}
+	for _, bad := range []string{"sandbox: {allowRead: [projects]}\n", "sandbox: {mask: [{name: GH-TOKEN, hosts: [github.com]}]}\n", "sandbox: {mask: [{name: X}]}\n"} {
+		if _, err := Load(write(bad)); err == nil {
+			t.Errorf("%q loads", bad)
+		}
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/giantswarm/beekeeper/internal/lease"
+	"github.com/giantswarm/beekeeper/internal/sandbox"
 )
 
 // start is where a command starts: start of line, after ; & | ( $( or
@@ -147,6 +148,9 @@ type Hook struct {
 	// Outbound is the outbound secret guard's configuration; its token
 	// patterns apply without one.
 	Outbound Outbound
+	// Sandbox is the agent sandbox's policy, which the file tools are held
+	// to; nil in a session no sandbox holds.
+	Sandbox *sandbox.Policy
 }
 
 // event is the part of a PreToolUse event the hook reads.
@@ -193,6 +197,9 @@ func (h Hook) Decide(input []byte) []byte {
 
 func (h Hook) decide(ev event) []byte {
 	if r := h.guideRefusal(ev); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
+	if r := h.sandboxRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	if ev.ToolName == AskTool {
