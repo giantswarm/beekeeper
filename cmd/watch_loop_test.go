@@ -203,8 +203,8 @@ func (c *fakeClock) step(n int) {
 }
 
 // loopTimers are the timers a standby watch's loops arm when they all wait:
-// the machine sample's and the poll's.
-const loopTimers = 2
+// the machine sample's, the upgrade cycle's and the poll's.
+const loopTimers = 3
 
 // eventually waits up to within for cond.
 func eventually(within time.Duration, cond func() bool) bool {

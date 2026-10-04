@@ -182,3 +182,79 @@ func TestWatchReadsUpgradesOncePerEvery(t *testing.T) {
 		t.Errorf("a stale reading was not read again: %v", got)
 	}
 }
+
+// With no supervisor's watch, the standby watch reads the upgrades, holds
+// the installation at UPGRADE and lifts the hold at UPGRADE ENDED; once a
+// supervisor's watch runs, it reads none of its own until that watch stops.
+func TestStandbyWatchHoldsUpgradesWithoutSupervisorWatch(t *testing.T) {
+	a, out := stubApp(t)
+	dir := t.TempDir()
+	const upgrading = "prod"
+	kubectl, log := upgradeKubectl(t, dir, upgrading)
+	a.cfg.Alerts.Kubectl = kubectl
+	a.cfg.Alerts.Installations = []config.Installation{{Name: upgrading, Context: upgrading}, {Name: "b", Context: "b"}}
+	a.cfg.Watch.Interval.Duration = 30 * time.Second
+	clk := &stepClock{now: time.Date(2026, 9, 25, 8, 30, 0, 0, time.UTC)}
+	standby := a.newWatcher(true, false)
+	standby.clock = clk
+	held := func() bool {
+		t.Helper()
+		st, err := a.store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, ok := upgrade.Held(st, upgrading, clk.now)
+		return ok
+	}
+
+	// 08:30: no supervisor's watch; the standby watch reads and holds.
+	phase(t, dir, "0827-during")
+	standby.upgradeCycle(context.Background())
+	if got := takeCalls(t, log); got[upgrading] == 0 || got["b"] != 1 {
+		t.Fatalf("the standby watch did not read: %v", got)
+	}
+	if !held() || !strings.Contains(out.String(), "UPGRADE prod/mc 35.0.1 → 35.1.1") {
+		t.Fatalf("no hold at UPGRADE:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "UPGRADES read by the standby watch") {
+		t.Fatalf("the takeover is not said:\n%s", out.String())
+	}
+	// 08:30:30: the upgrade ended; the held installation is read again
+	// within one interval and its hold lifted.
+	phase(t, dir, "0843-after")
+	clk.now = clk.now.Add(30 * time.Second)
+	standby.upgradeCycle(context.Background())
+	if got := takeCalls(t, log); got[upgrading] != 1 || got["b"] != 0 {
+		t.Fatalf("after the upgrade: %v", got)
+	}
+	if held() || !strings.Contains(out.String(), "UPGRADE ENDED prod/mc") {
+		t.Fatalf("the hold outlived UPGRADE ENDED:\n%s", out.String())
+	}
+
+	// 08:35 to 08:45: a supervisor's watch runs; the standby watch reads
+	// nothing, however stale the readings, and its takeover ends.
+	super := a.newWatcher(false, false)
+	super.clock = clk
+	clk.now = clk.now.Add(4*time.Minute + 30*time.Second)
+	for range 20 {
+		super.upgradeCycle(context.Background())
+		takeCalls(t, log)
+		_ = os.Remove(filepath.Join(a.cfg.StateDir, upgrade.ReadingsFile))
+		standby.upgradeCycle(context.Background())
+		if got := takeCalls(t, log); len(got) != 0 {
+			t.Fatalf("the standby watch read beside a supervisor's watch at %s: %v", clk.now.Format("15:04:05"), got)
+		}
+		clk.now = clk.now.Add(30 * time.Second)
+	}
+	if !strings.Contains(out.String(), "ENDED UPGRADES read by the standby watch") {
+		t.Fatalf("the takeover's end is not said:\n%s", out.String())
+	}
+
+	// Five intervals after the supervisor's watch's last cycle, the standby
+	// watch reads again.
+	clk.now = clk.now.Add(2 * time.Minute)
+	standby.upgradeCycle(context.Background())
+	if got := takeCalls(t, log); len(got) != 2 {
+		t.Fatalf("the standby watch did not take over again: %v", got)
+	}
+}
