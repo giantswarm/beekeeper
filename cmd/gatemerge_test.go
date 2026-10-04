@@ -38,6 +38,9 @@ func fakeDevctl(t *testing.T, script string) {
 // labRepo is a repository devctl does not serve.
 const labRepo = "teemow/lab"
 
+// devctlTo is the release a devctl window's merge produced.
+const devctlTo = "v8.1.0"
+
 // mergeArgv is devctl pr merge repo 7 with extra flags.
 func mergeArgv(repo string, extra ...string) []string {
 	return append([]string{merge.Tool, "pr", "merge", repo, "7"}, extra...)
@@ -267,7 +270,7 @@ func TestADeadMergesToolWindowCloses(t *testing.T) {
 		{"not merged", github.Open, devctlFrom, true, false},
 		{"closed", github.Closed, "", true, false},
 		{"merged, devctl not updated", github.Merged, devctlFrom, false, true},
-		{"devctl updated", github.Merged, "v8.1.0", true, false},
+		{"devctl updated", github.Merged, devctlTo, true, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			stubGitHub(t, c.pull, c.version)
@@ -438,13 +441,13 @@ func TestAMergedToolWindowUpdatesDevctl(t *testing.T) {
 		if fail != nil {
 			return fail
 		}
-		version = "v8.1.0"
+		version = devctlTo
 		return nil
 	}
 	g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
 	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges = nil
-		st.Holds[0].ToolMerged, st.Holds[0].ToolRelease = true, "v8.1.0"
+		st.Holds[0].ToolMerged, st.Holds[0].ToolRelease = true, devctlTo
 		return nil, nil
 	})
 
@@ -467,7 +470,7 @@ func TestAMergedToolWindowUpdatesDevctl(t *testing.T) {
 	if st := gateState(t, g); len(st.Holds) != 0 || updates != 2 {
 		t.Fatalf("after the update: %d updates, holds %+v", updates, st.Holds)
 	}
-	if d := lastEvent(t, g, "hold.lift"); !strings.Contains(d, "devctl now reports v8.1.0") {
+	if d := lastEvent(t, g, "hold.lift"); !strings.Contains(d, "devctl now reports "+devctlTo) {
 		t.Errorf("hold.lift event: %q", d)
 	}
 }

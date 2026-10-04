@@ -19,6 +19,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/update"
@@ -334,27 +335,28 @@ func TestHoldsLiftWhenTheirProbePasses(t *testing.T) {
 	now := time.Now()
 	probe := runProbe
 	t.Cleanup(func() { runProbe = probe })
-	runProbe = func(_ context.Context, p string) bool { return p == "true" }
+	const green, red = "test 1 -eq 1", "test 1 -eq 0"
+	runProbe = func(_ context.Context, p string) bool { return p == green }
 	holds := []state.Hold{
-		{Target: "merges", Reason: "devctl window", LiftWhen: "true"},
-		{Target: "lane:gpu", Reason: "model load", LiftWhen: "false"},
+		{Target: merge.AllMerges, Reason: "devctl window", LiftWhen: green},
+		{Target: "lane:gpu", Reason: "model load", LiftWhen: red},
 		{Target: "o/r", Reason: "no probe"},
-		{Target: "o/expired", Reason: "expired", LiftWhen: "true", Until: now.Add(-time.Minute)},
+		{Target: "o/past", Reason: "past its time", LiftWhen: green, Until: now.Add(-time.Minute)},
 	}
 	passed := probeHoldLifts(context.Background(), holds, now)
-	if len(passed) != 1 || passed["merges"] != "true" {
+	if len(passed) != 1 || passed[merge.AllMerges] != green {
 		t.Fatalf("passed %v", passed)
 	}
 	st := &state.State{Holds: slices.Clone(holds)}
 	lines, evs := liftProbed(st, passed)
-	if len(st.Holds) != 3 || slices.ContainsFunc(st.Holds, func(h state.Hold) bool { return h.Target == "merges" }) {
+	if len(st.Holds) != 3 || slices.ContainsFunc(st.Holds, func(h state.Hold) bool { return h.Target == merge.AllMerges }) {
 		t.Errorf("holds left: %+v", st.Holds)
 	}
-	if len(lines) != 1 || len(evs) != 1 || evs[0].Verb != "hold.lift" || !strings.Contains(evs[0].Detail, "its probe passed (true)") {
+	if len(lines) != 1 || len(evs) != 1 || evs[0].Verb != "hold.lift" || !strings.Contains(evs[0].Detail, "its probe passed ("+green+")") {
 		t.Errorf("lines %v, events %+v", lines, evs)
 	}
 	// A hold set again with another probe since stays.
-	st = &state.State{Holds: []state.Hold{{Target: "merges", LiftWhen: "test -f /x"}}}
+	st = &state.State{Holds: []state.Hold{{Target: merge.AllMerges, LiftWhen: "test -f /x"}}}
 	if _, evs := liftProbed(st, passed); len(st.Holds) != 1 || len(evs) != 0 {
 		t.Errorf("a re-set hold was lifted: %+v", st.Holds)
 	}
