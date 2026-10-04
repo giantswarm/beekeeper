@@ -525,6 +525,20 @@ type Report struct {
 	rest rest
 }
 
+// ReportThread is the Slack thread of a posted status report, whose
+// replies by the report's author the feedback watch delivers.
+type ReportThread struct {
+	// Report is the reporter's name.
+	Report  string    `json:"report"`
+	Channel string    `json:"channel"`
+	TS      string    `json:"ts"`
+	Posted  time.Time `json:"posted"`
+	// Seen is the ts of the last reply delivered.
+	Seen string `json:"seen,omitempty"`
+
+	rest rest
+}
+
 // ReportPause pauses the scheduled reporter until it is resumed: from Since,
 // or, while Final is set, from the start of one final report due then.
 type ReportPause struct {
@@ -630,6 +644,9 @@ type State struct {
 	Merges []Merge `json:"merges,omitempty"`
 	// Report is the scheduled status reporter's current or last run.
 	Report *Report `json:"report,omitempty"`
+	// ReportThreads are the posted reports' Slack threads the feedback
+	// watch reads, while feedback.window lasts.
+	ReportThreads []ReportThread `json:"reportThreads,omitempty"`
 	// AlertOwners are the owners of the firing alerts, one per alert.
 	AlertOwners []AlertOwner `json:"alertOwners,omitempty"`
 	// ReportPause pauses the scheduled reporter, after one final report.

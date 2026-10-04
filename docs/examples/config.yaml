@@ -199,6 +199,11 @@ reporter:                   # the scheduled status reporter the standby watch st
   timeout: 20m              # a reporter that has not posted by then is stopped
   tz: Europe/Berlin         # the report's time zone; default: the machine's
   reviews: [example/plans]  # repositories whose open draft pull requests wait for the person's review
+feedback:                   # the person's replies to the reports in Slack, to the supervisor or the agent they name; off without context
+  context: gazelle          # the muster context whose Slack MCP server is read, as the person
+  server: slack             # its muster name: x_<server>_<tool>
+  every: 5m                 # how often the report threads are read
+  window: 24h               # how long after its post a report's thread is read
 outbound:                   # what the hook refuses to let leave the machine (README: What leaves the machine)
   phrases: [Project Nightjar]   # never in an issue, commit, post or plan; case-insensitive, named by number in a refusal
   paths: [~/projects/notebook/plans]   # files whose Write and Edit are scanned like a post; a directory covers what is under it
