@@ -20,9 +20,12 @@ const (
 // each name runs the tool on PATH, and with literalGlobs an unmatched glob
 // stays as written instead of failing the command. Claude Code sources it
 // before parsing the command, so a removed alias is not expanded in it.
+// The directories of path go first on PATH, in their order, each once (a
+// leading ~/ is the home directory): an agent's own programs, such as a gh
+// that acts with a short-lived token, shadow the person's.
 // Every line ends with exit status 0. Empty when there is nothing to do.
-func Prelude(unalias []string, literalGlobs bool) string {
-	if len(unalias) == 0 && !literalGlobs {
+func Prelude(unalias []string, literalGlobs bool, path []string) string {
+	if len(unalias) == 0 && !literalGlobs && len(path) == 0 {
 		return ""
 	}
 	var b strings.Builder
@@ -33,6 +36,10 @@ func Prelude(unalias []string, literalGlobs bool) string {
 	}
 	if literalGlobs {
 		b.WriteString(`if [ -n "${ZSH_VERSION-}" ]; then setopt no_nomatch; elif [ -n "${BASH_VERSION-}" ]; then shopt -u failglob nullglob; fi` + "\n")
+	}
+	for i := len(path) - 1; i >= 0; i-- {
+		dir := strings.ReplaceAll(expandHome(path[i]), "'", `'\''`)
+		fmt.Fprintf(&b, "case \":$PATH:\" in *':%[1]s:'*) ;; *) PATH='%[1]s':\"$PATH\"; export PATH ;; esac\n", dir)
 	}
 	b.WriteString(preludeEnd + "\n")
 	return b.String()
