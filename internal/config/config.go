@@ -81,6 +81,9 @@ type Config struct {
 	Lanes    []Lane   `yaml:"lanes"`
 	Merge    Merge    `yaml:"merge"`
 	Alerts   Alerts   `yaml:"alerts"`
+	// Upgrades paces the reading of the installations' Cluster API
+	// upgrades.
+	Upgrades Upgrades `yaml:"upgrades"`
 	Notify   Notify   `yaml:"notify"`
 	Metrics  Metrics  `yaml:"metrics"`
 	Ollama   Ollama   `yaml:"ollama"`
@@ -722,6 +725,15 @@ type Alerts struct {
 	OwnerGrace Duration `yaml:"ownerGrace"`
 }
 
+// Upgrades paces the reading of alerts.installations' Cluster API clusters
+// for running upgrades: each installation is read every Every, and every
+// watch.interval while an upgrade runs on it or holds it.
+type Upgrades struct {
+	// Every is how old an installation's last reading may grow before it is
+	// read again (default 5m).
+	Every Duration `yaml:"every"`
+}
+
 // Flap holds back an alert that changes too often: its Changes-th NEW or
 // RESOLVED within Window is one FLAPPING line, and its changes print nothing
 // until it has been stable for Window.
@@ -1326,6 +1338,7 @@ func (c *Config) defaults() error {
 	setDur(&al.Flap.Window, time.Hour)
 	setStr(&al.PageSeverity, alerts.Page)
 	setDur(&al.OwnerGrace, 15*time.Minute)
+	setDur(&c.Upgrades.Every, 5*time.Minute)
 	if c.Notify.Kinds == nil {
 		c.Notify.Kinds = slices.Clone(notify.Kinds)
 	}
@@ -1475,6 +1488,9 @@ func (c *Config) validate() error {
 	}
 	if g := c.Alerts.OwnerGrace.Duration; g != 0 && g < time.Minute {
 		return fmt.Errorf("alerts.ownerGrace: %s; a page has at least a minute to be owned", g)
+	}
+	if e := c.Upgrades.Every.Duration; e < 0 {
+		return fmt.Errorf("upgrades.every: %s; an installation is read at most this long apart", e)
 	}
 	if err := c.Notify.validate(); err != nil {
 		return err

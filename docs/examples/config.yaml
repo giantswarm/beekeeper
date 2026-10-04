@@ -153,6 +153,9 @@ alerts:
     - {cluster: "t-*"}      # fields installation, cluster, alertname, severity, globs; a page only by a rule naming a cluster
     - {severity: notify}    # other teams' and team-less notify alerts
 
+upgrades:
+  every: 5m                 # each installation's Cluster API upgrades are read this often; every watch.interval while one runs on it
+
 supervisor:                 # what handover --prompt tells the successor supervisor; unset skill and instructions, it opens without them
   skill: beekeeper:supervise   # the skill it runs (the plugin's role, see the README); or instructions: ~/supervisor.md, a file that opens the prompt
   scope: The desk's sessions, kind labs and merge lanes.   # default: the resources, lanes and installations configured

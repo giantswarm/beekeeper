@@ -28,6 +28,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/upgrade"
 )
 
 func (a *app) watchCmd() *cobra.Command {
@@ -87,9 +88,13 @@ alertname, the longest unowned, "(+n)" for the others), again every
 alerts.ownerGrace while it stays unowned (page-unowned, critical, under
 --notify); --once says each one due and writes nothing.
 
-Every watch.interval the same installations' Cluster API clusters are read
-(one list each of Clusters, KubeadmControlPlanes, MachinePools and
-MachineDeployments per installation, within alerts.timeout, in parallel). A
+Every upgrades.every (5m) the same installations' Cluster API clusters are
+read, and every watch.interval an installation an upgrade runs on or holds
+(one list of Clusters, KubeadmControlPlanes, MachinePools and
+MachineDeployments per installation, one per kind on one that does not serve
+them all, within alerts.timeout, in parallel). The readings are shared
+(upgrades.json): a second watch, snapshot and ui use a fresh one instead of
+reading again. A
 cluster whose release changes begins an upgrade: its release label differs
 from the one cluster-api-events recorded, cluster-api-events marks it
 upgrading, or its scheduled upgrade is due. It ends once none of that holds
@@ -235,6 +240,8 @@ type watcher struct {
 	readHeadroom func(context.Context, *swapReading) *headroom
 	// standby leaves a running supervisor's events to its watch.
 	standby bool
+	// upgrades are the last upgrade readings of the installations.
+	upgrades upgrade.Readings
 	// gap is the term of the gone supervisor this watch said, until a
 	// supervisor is back.
 	gap string
@@ -620,7 +627,8 @@ type watchMark struct {
 // again. --once and a watch outside a Claude session keep none.
 func (a *app) newWatcher(standby, keep bool) *watcher {
 	w := &watcher{app: a, standby: standby, last: map[string]time.Time{}, seenKills: map[string]bool{},
-		reported: map[string]bool{}, active: map[string]condition{}, chores: keep, retitled: map[string]time.Time{}}
+		reported: map[string]bool{}, active: map[string]condition{}, chores: keep, retitled: map[string]time.Time{},
+		upgrades: upgrade.Readings{}}
 	w.stand = standbyWatch{send: a.peerSend, open: plat.Opener.Open, succeed: a.succeedFromWatch, revive: a.reviveFromWatch, turning: unitsTurning}
 	if me, err := a.caller(); keep && err == nil {
 		w.markFile = "seen.watch." + fileKey(me) + ".json"
