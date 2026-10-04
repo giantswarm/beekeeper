@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/guard"
 )
@@ -36,7 +37,13 @@ type Ops struct {
 	Token string
 	// Fingerprint is the keyed hash fingerprint answers with.
 	Fingerprint func(value string) string
+	// Apply writes a key of a Secret; nil is [ApplySecret].
+	Apply SecretApplier
 }
+
+// opTimeout bounds one read of the shared vault: op that answers nothing
+// in time fails like a locked vault, never hangs the caller.
+const opTimeout = time.Minute
 
 // Exec is the Runner of the real tools.
 func Exec(ctx context.Context, dir string, env []string, stdin io.Reader, name string, args ...string) ([]byte, error) {
@@ -114,15 +121,16 @@ func (r Ref) vault() string {
 	return v
 }
 
-// checkVault refuses an op:// reference outside the shared vault.
+// checkVault refuses an op:// reference outside the shared vault, with
+// [ErrVault] when the vault is not configured.
 func (o *Ops) checkVault(r Ref) error {
 	switch {
 	case r.Op == "":
 		return nil
 	case o.Vault == "":
-		return fmt.Errorf("%s: no shared vault is configured (secret.vault): beekeeper reads no op:// reference", r.Op)
+		return fmt.Errorf("%w: %s: no shared vault is configured (secret.vault): beekeeper reads no op:// reference", ErrVault, r.Op)
 	case o.Token == "":
-		return fmt.Errorf("%s: no service account token (secret.tokenFile): beekeeper reads the shared vault only through its own service account", r.Op)
+		return fmt.Errorf("%w: %s: no service account token (secret.tokenFile): beekeeper reads the shared vault only through its own service account", ErrVault, r.Op)
 	case r.vault() != o.Vault:
 		return fmt.Errorf("%s: beekeeper reads only the shared vault %q", r.Op, o.Vault)
 	}
@@ -136,9 +144,14 @@ func (o *Ops) values(ctx context.Context, r Ref) (map[string]string, error) {
 		return nil, err
 	}
 	if r.Op != "" {
+		ctx, cancel := context.WithTimeout(ctx, opTimeout)
+		defer cancel()
 		out, err := o.op(ctx, nil, "read", "--no-newline", r.Op)
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("%w: %s: op answered nothing in %s", ErrVault, r.Op, opTimeout)
+		}
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", r.Op, err)
+			return nil, fmt.Errorf("%w: %s: %w", ErrVault, r.Op, err)
 		}
 		return map[string]string{r.Op: string(out)}, nil
 	}

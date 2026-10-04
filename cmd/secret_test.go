@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/lease"
+	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/secret/secrettest"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -173,5 +175,50 @@ func TestSecretRotateClosesTheRotationNotes(t *testing.T) {
 	a.out = &bytes.Buffer{}
 	if _, err := runSecret(a, "rotate", "platform://hazel/muster/x", "--generate"); Code(err) != ExitUsage {
 		t.Errorf("--generate on a platform credential = %v, want usage", err)
+	}
+}
+
+func TestSecretCopyToSecretOnlyIntoAHeldLab(t *testing.T) {
+	a, _, _ := secretApp(t)
+	a.cfg.LeaseDir = t.TempDir()
+	a.cfg.Resources = []string{labOne, labTwo}
+	a.cfg.Labs = map[string]string{labOne: labCluster, labTwo: labTwo}
+	var applied []string
+	prev := secretApply
+	secretApply = func(_ context.Context, _ []byte, tg secret.KubeTarget, v []byte) error {
+		applied = append(applied, fmt.Sprintf("%s %d", tg, len(v)))
+		return nil
+	}
+	t.Cleanup(func() { secretApply = prev })
+	if _, err := lease.Dir(a.cfg.LeaseDir).Claim(labOne, lease.Holder{Env: labOne, Name: a.as}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lease.Dir(a.cfg.LeaseDir).Claim(labTwo, lease.Holder{Env: labTwo, Name: "another session"}); err != nil {
+		t.Fatal(err)
+	}
+	const key = "kagent/kagent-anthropic/ANTHROPIC_API_KEY"
+	out, err := runSecret(a, copyOp, dbRef, "--to-secret", "kind-agentlab/"+key)
+	if err != nil || out != fmt.Sprintf("wrote kind-agentlab/%s: %d bytes\n", key, len(secretValue)) {
+		t.Errorf("copy into the held lab answers %q, %v", out, err)
+	}
+	for _, ctx := range []string{"kind-agentlab-2", "kind-aps-282", "teleport.giantswarm.io-gazelle"} {
+		a.out = &bytes.Buffer{}
+		out, err := runSecret(a, copyOp, dbRef, "--to-secret", ctx+"/"+key)
+		if Code(err) != ExitRefused {
+			t.Errorf("copy into %s = %q, %v, want refused", ctx, out, err)
+		}
+		noSecret(t, "the refusal", fmt.Sprint(out, err))
+	}
+	if len(applied) != 1 || applied[0] != fmt.Sprintf("kind-agentlab/%s %d", key, len(secretValue)) {
+		t.Errorf("applied %q", applied)
+	}
+	a.out = &bytes.Buffer{}
+	if _, err := runSecret(a, copyOp, "op://Shared/absent/field", "--to-secret", "kind-agentlab/"+key); Code(err) != ExitVault {
+		t.Errorf("a value the vault cannot give = %v (exit %d), want exit %d", err, Code(err), ExitVault)
+	}
+	a.cfg.Secret.TokenFile = ""
+	a.out = &bytes.Buffer{}
+	if _, err := runSecret(a, "fingerprint", dbRef); Code(err) != ExitVault {
+		t.Errorf("no vault token = %v (exit %d), want exit %d", err, Code(err), ExitVault)
 	}
 }
