@@ -122,6 +122,36 @@ type Config struct {
 	// Plans are the repositories whose pull requests a note for a person
 	// names only once their stage check is green.
 	Plans Plans `yaml:"plans"`
+	// Central is the central instance (beekeeper serve behind muster) that
+	// holds the leases of the shared installations and the roster of every
+	// machine's agents; without its context, all of it stays on the machine.
+	Central Central `yaml:"central"`
+}
+
+// Central configures the central instance, reached through muster as the
+// person.
+type Central struct {
+	// Context is the muster context of the installation it runs on
+	// (muster context list): its endpoint, and the person's token from
+	// muster auth token, taken anew for each call.
+	Context string `yaml:"context"`
+	// Server is the name muster registered it under: its tools are
+	// x_<server>_<tool> (default beekeeper).
+	Server string `yaml:"server"`
+	// Muster is the muster binary (default muster).
+	Muster string `yaml:"muster"`
+	// Timeout bounds one call (default 30s).
+	Timeout Duration `yaml:"timeout"`
+}
+
+// Enabled says whether a central instance is configured.
+func (c Central) Enabled() bool { return c.Context != "" }
+
+// IsCentral says whether res is a central resource: a central instance is
+// configured and res is none of the machine's own (Leasable), whose leases
+// stay local. The central instance knows which names are its Environments.
+func (c *Config) IsCentral(res string) bool {
+	return c.Central.Enabled() && res != "" && !c.IsLeasable(res)
 }
 
 // Plans configures the plans repositories: a note for the guide's person
@@ -1162,6 +1192,9 @@ func (c *Config) defaults() error {
 	setStr(&c.Serve.Gateway.TokenFile, "/var/run/secrets/klaus-gateway/token")
 	setStr(&c.Serve.Gateway.AnswerTool, "x_beekeeper_note_answer")
 	setStr(&c.Serve.Gateway.SendTool, "x_beekeeper_send_message")
+	setStr(&c.Central.Server, "beekeeper")
+	setStr(&c.Central.Muster, "muster")
+	setDur(&c.Central.Timeout, 30*time.Second)
 	// The guide's context is the person's conversation: it relays early.
 	if c.Guide.RelayAt == 0 {
 		c.Guide.RelayAt = 150_000

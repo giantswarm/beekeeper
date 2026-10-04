@@ -33,6 +33,11 @@ identity:
 #     tokenFile: /var/run/secrets/klaus-gateway/token   # the default: the projected ServiceAccount token, audience klaus-gateway
 #     answerTool: x_beekeeper_note_answer    # the default: the muster tool an answer in Slack calls, as the person
 #     sendTool: x_beekeeper_send_message     # the default: the muster tool a reply in an agent's conversation calls, as the person
+# central:                  # the central instance (beekeeper serve behind muster): the shared installations' leases and the roster
+#   context: staging        # the muster context it is reached through, as the person (muster auth login --context staging)
+#   server: beekeeper       # the default: its name in muster, whose tools are x_<server>_<tool>
+#   muster: muster          # the default: the muster binary
+#   timeout: 30s            # the default: the bound of one call
 # leaseDir: /home/ada/.local/state/beekeeper/leases   # default: <stateDir>/leases, one directory per held lease
 resources: [kind-1, kind-2, staging, production, homelab]   # leasable besides the browser (and the model server)
 labs: {kind-1: kind, kind-2: kind-2}   # a lab lease and the kind cluster it stands for
