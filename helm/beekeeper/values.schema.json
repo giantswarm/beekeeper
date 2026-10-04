@@ -194,6 +194,9 @@
                         "answerTool": {
                             "type": "string"
                         },
+                        "sendTool": {
+                            "type": "string"
+                        },
                         "tokenFile": {
                             "type": "string"
                         },

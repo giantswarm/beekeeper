@@ -103,3 +103,6 @@ tests:
       - matchRegex:
           path: data["config.yaml"]
           pattern: "answerTool: x_beekeeper_note_answer"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "sendTool: x_beekeeper_send_message"
