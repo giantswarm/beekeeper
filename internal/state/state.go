@@ -236,12 +236,17 @@ type Hold struct {
 	// that opened it, ToolMerged whether it merged and ToolRelease the release
 	// it produced. The window closes once the tool reports another version
 	// than ToolFrom and no merge of its repository runs, or once its merge
-	// ended with nothing merged.
-	Tool        string `json:"tool,omitempty"`
-	ToolFrom    string `json:"toolFrom,omitempty"`
-	ToolPR      int    `json:"toolPR,omitempty"`
-	ToolMerged  bool   `json:"toolMerged,omitempty"`
-	ToolRelease string `json:"toolRelease,omitempty"`
+	// ended with nothing merged or no release warranted. ToolUpdated is when
+	// beekeeper last ran the tool's update for a merged window.
+	Tool        string    `json:"tool,omitempty"`
+	ToolFrom    string    `json:"toolFrom,omitempty"`
+	ToolPR      int       `json:"toolPR,omitempty"`
+	ToolMerged  bool      `json:"toolMerged,omitempty"`
+	ToolRelease string    `json:"toolRelease,omitempty"`
+	ToolUpdated time.Time `json:"toolUpdated,omitzero"`
+	// LiftWhen is a shell command on this machine; the watch lifts the hold
+	// once it exits 0.
+	LiftWhen string `json:"liftWhen,omitempty"`
 	// UpgradeTo is the target release of the upgrade an automatic upgrade
 	// hold stands for.
 	UpgradeTo string `json:"upgradeTo,omitempty"`

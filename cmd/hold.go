@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strconv"
@@ -31,11 +32,14 @@ opens a tool-release window by itself: a "merges" hold that lets only
 giantswarm/devctl through and lifts once the local devctl reports another
 version.
 
+--lift-when takes a shell command on this machine: the watch lifts the hold
+once it exits 0, and logs the lift.
+
 Without a subcommand, lists the holds.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error { return a.holdList() },
 	}
-	var reason, until, except string
+	var reason, until, except, liftWhen string
 	var lane laneFlag
 	set := &cobra.Command{
 		Use:   "set <target> | --lane <name>",
@@ -53,6 +57,9 @@ Without a subcommand, lists the holds.`,
 				return &exitError{code: ExitUsage, msg: "--reason is required"}
 			}
 			if a.centralTarget(args[0]) {
+				if liftWhen != "" {
+					return usageErr("--lift-when is a probe on this machine; %s is held in the central instance for every machine: lift it with hold lift", args[0])
+				}
 				return a.setCentral(args[0], reason, until, except)
 			}
 			u, err := untilTime(a.now, until)
@@ -63,7 +70,7 @@ Without a subcommand, lists the holds.`,
 			if err != nil {
 				return err
 			}
-			h := state.Hold{Target: args[0], Reason: reason, By: me, At: a.now.UTC(), Until: u.UTC(), Except: except}
+			h := state.Hold{Target: args[0], Reason: reason, By: me, At: a.now.UTC(), Until: u.UTC(), Except: except, LiftWhen: strings.TrimSpace(liftWhen)}
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Holds = slices.DeleteFunc(st.Holds, func(x state.Hold) bool { return x.Target == h.Target || x.Expired(a.now) })
 				st.Holds = append(st.Holds, h)
@@ -79,6 +86,7 @@ Without a subcommand, lists the holds.`,
 	set.Flags().StringVarP(&reason, "reason", "r", "", "why (required)")
 	set.Flags().StringVar(&until, "until", "", "when the hold ends by itself: a time (15:30) or a duration (2h); default: until lifted")
 	set.Flags().StringVar(&except, "except", "", "the one owner/repo or owner/repo#n the merge hold lets through")
+	set.Flags().StringVar(&liftWhen, "lift-when", "", "a shell command; the watch lifts the hold once it exits 0")
 	lane.register(set)
 	var liftLane, checkLane laneFlag
 	lift := &cobra.Command{
@@ -257,6 +265,13 @@ func untilText(a *app, h state.Hold) string {
 	if upgrade.Is(h) {
 		return "the upgrade ends"
 	}
+	if h.LiftWhen != "" {
+		probe := "`" + truncate(h.LiftWhen, 60) + "` passes"
+		if h.Until.IsZero() {
+			return probe
+		}
+		return probe + " or " + clock(a.now, h.Until)
+	}
 	if h.Until.IsZero() {
 		return "lifted"
 	}
@@ -324,4 +339,32 @@ func (a *app) printHolds(holds []state.Hold) {
 		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", holdTarget(h), untilText(a, h), truncate(h.By.Name, 30), clock(a.now, h.At), truncate(h.Reason, 60))
 	}
 	_ = w.Flush()
+}
+
+// probeHoldLifts runs the lift probe of every active hold and returns the
+// probes that passed by target.
+func probeHoldLifts(ctx context.Context, holds []state.Hold, now time.Time) map[string]string {
+	passed := map[string]string{}
+	for _, h := range holds {
+		if h.LiftWhen != "" && h.Active(now) && runProbe(ctx, h.LiftWhen) {
+			passed[h.Target] = h.LiftWhen
+		}
+	}
+	return passed
+}
+
+// liftProbed lifts the holds whose probe passed, as long as they still carry
+// that probe, and returns their watch lines and events.
+func liftProbed(st *state.State, passed map[string]string) ([]string, []state.Event) {
+	var lines []string
+	var evs []state.Event
+	st.Holds = slices.DeleteFunc(st.Holds, func(h state.Hold) bool {
+		if probe, ok := passed[h.Target]; !ok || probe != h.LiftWhen {
+			return false
+		}
+		lines = append(lines, fmt.Sprintf("HOLD LIFTED: %s, its probe passed: %s", holdTarget(h), truncate(h.Reason, 200)))
+		evs = append(evs, event(watchParty, "hold.lift", "%s: its probe passed (%s)", h.Target, h.LiftWhen))
+		return true
+	})
+	return lines, evs
 }
