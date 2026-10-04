@@ -14,7 +14,11 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-const piaEmail = "pia@example.com"
+const (
+	piaEmail  = "pia@example.com"
+	agentTwo  = "Agent two"
+	stateIdle = "idle"
+)
 
 // person is one person's machine: its configuration with the central
 // instance behind the test muster, and its state.
@@ -126,7 +130,7 @@ func TestCentralEnvtest(t *testing.T) {
 	reader := e.as(t, anaToken)
 	roster := func() map[string]map[string]any {
 		t.Helper()
-		_, got, _ := reader.call("list_agents", map[string]any{"scope": "team"})
+		_, got, _ := reader.call("list_agents", map[string]any{"scope": scopeTeam})
 		out := map[string]map[string]any{}
 		agents, _ := got[agentsName].([]any)
 		for _, a := range agents {
@@ -137,14 +141,14 @@ func TestCentralEnvtest(t *testing.T) {
 	}
 	var lines bytes.Buffer
 	w := ana.watcher(&lines)
-	setAgents(state.Agent{Party: state.Party{Name: "Agent one"}, Task: "giantswarm/beekeeper#157", Registered: time.Now()},
-		state.Agent{Party: state.Party{Name: "Agent two"}, Registered: time.Now()})
+	setAgents(state.Agent{Party: state.Party{Name: agentOne}, Task: "giantswarm/beekeeper#157", Registered: time.Now()},
+		state.Agent{Party: state.Party{Name: agentTwo}, Registered: time.Now()})
 	w.syncRoster(context.Background())
 	got := roster()
-	if a := got["local:ana-laptop/Agent one"]; a == nil || a["state"] != "busy" || a["task"] != "giantswarm/beekeeper#157" || a["person"] != anaEmail {
+	if a := got["local:ana-laptop/"+agentOne]; a == nil || a["state"] != "busy" || a["task"] != "giantswarm/beekeeper#157" || a["person"] != anaEmail {
 		t.Errorf("Agent one on the roster: %v", got)
 	}
-	if a := got["local:ana-laptop/Agent two"]; a == nil || a["state"] != "idle" {
+	if a := got["local:ana-laptop/"+agentTwo]; a == nil || a["state"] != stateIdle {
 		t.Errorf("Agent two on the roster: %v", got)
 	}
 	before := e.events(t)
@@ -152,13 +156,13 @@ func TestCentralEnvtest(t *testing.T) {
 	if n := e.events(t) - before; n != 0 {
 		t.Errorf("a sync without a transition wrote %d events", n)
 	}
-	setAgents(state.Agent{Party: state.Party{Name: "Agent one"}, Done: true, Registered: time.Now()})
+	setAgents(state.Agent{Party: state.Party{Name: agentOne}, Done: true, Registered: time.Now()})
 	w.syncRoster(context.Background())
 	got = roster()
-	if a := got["local:ana-laptop/Agent one"]; a == nil || a["state"] != "ended" {
+	if a := got["local:ana-laptop/"+agentOne]; a == nil || a["state"] != "ended" {
 		t.Errorf("Agent one done: %v", got)
 	}
-	if _, ok := got["local:ana-laptop/Agent two"]; ok {
+	if _, ok := got["local:ana-laptop/"+agentTwo]; ok {
 		t.Errorf("Agent two is gone from the machine, still on the roster: %v", got)
 	}
 

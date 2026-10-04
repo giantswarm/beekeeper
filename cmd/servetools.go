@@ -34,6 +34,7 @@ const (
 	paramText        = "text"
 	paramMessage     = "message"
 	paramTask        = "task"
+	scopeTeam        = "team"
 	paramDone        = "done"
 	keyMailbox       = "mailbox"
 	keyNotes         = "notes"
@@ -800,15 +801,15 @@ func toolAgentsLeave(c *call, req mcp.CallToolRequest) (any, error) {
 	} else {
 		_, err = fmt.Fprintf(c.out, "%s on %s was not on the roster\n", c.me.Name, c.me.Host)
 	}
-	return map[string]any{"agent": c.me, "left": left}, err
+	return map[string]any{paramAgent: c.me, "left": left}, err
 }
 
 func toolListAgents(c *call, req mcp.CallToolRequest) (any, error) {
 	scope := req.GetString("scope", "all")
-	if scope != "all" && scope != "team" {
+	if scope != "all" && scope != scopeTeam {
 		return nil, usageErr("scope %q: all or team", scope)
 	}
-	agents, err := c.agentList(scope == "team")
+	agents, err := c.agentList(scope == scopeTeam)
 	return map[string]any{agentsName: agents}, err
 }
 
