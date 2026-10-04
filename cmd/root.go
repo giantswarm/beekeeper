@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/central"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/omp"
@@ -25,7 +26,8 @@ import (
 // Exit codes: 0 done, 1 error, 2 usage, 3 refused (a lease held or not
 // granted, a hold set, the budget under its floor, a platform part this
 // build does not have), 4 relieved (supervisor status in the session a
-// relay relieved), 125 outdated (a newer release exists: self-update --check, the status devctl's version check and
+// relay relieved), 69 central unreachable (ExitCentral: a central verb
+// whose instance did not answer), 125 outdated (a newer release exists: self-update --check, the status devctl's version check and
 // muster's self-update --check use).
 const (
 	ExitError    = 1
@@ -93,6 +95,8 @@ type app struct {
 	// central is an app of beekeeper serve: its notes' filers run on other
 	// machines and learn of an outcome from its feed.
 	central bool
+	// centralClient calls the central instance (hub); nil until first used.
+	centralClient *central.Client
 }
 
 // New returns the root command.
@@ -113,7 +117,8 @@ session records) lives on disk and survives restarts: a supervisor's
 successor starts from beekeeper handover --prompt instead of a prose brief.
 
 Exit codes: 0 done, 1 error, 2 usage, 3 refused, 4 relieved (supervisor
-status after a relay), 125 a newer release (self-update --check).`,
+status after a relay), 69 the central instance unreachable (a central verb,
+with central configured), 125 a newer release (self-update --check).`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       project.VersionLine(),

@@ -270,7 +270,7 @@ func (s *server) handle(t serveTool) mcpserver.ToolHandlerFunc {
 		s.log.Info("call", "caller", who.Email, "team", who.Team, "agent", c.me.Name, "tool", t.tool.Name, "outcome", outcome, "detail", firstLine(text))
 		if err != nil {
 			res := mcp.NewToolResultError(text)
-			res.StructuredContent = map[string]string{"outcome": outcome, "message": text}
+			res.StructuredContent = map[string]any{"outcome": outcome, "message": text, "code": Code(err)}
 			return res, nil
 		}
 		if structured == nil {
