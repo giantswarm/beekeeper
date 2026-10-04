@@ -129,7 +129,32 @@ type Config struct {
 	// holds the leases of the shared installations and the roster of every
 	// machine's agents; without its context, all of it stays on the machine.
 	Central Central `yaml:"central"`
+	// Feedback is the Slack feedback watch: the person's replies in the
+	// threads of the reporter's posts, read through muster as the person.
+	Feedback Feedback `yaml:"feedback"`
 }
+
+// Feedback configures the Slack feedback watch of the standby watch. It
+// reads the thread of every report the reporter posted, through the Slack
+// MCP server behind muster as the person, and delivers each reply of the
+// report's author to the supervisor, or to the agent the reply names first
+// ("<agent>: <message>").
+type Feedback struct {
+	// Context is the muster context whose Slack server it reads; unset, no
+	// feedback watch runs. The binary and the call timeout are central's.
+	Context string `yaml:"context"`
+	// Server is the name muster registered the Slack MCP server under: its
+	// tools are x_<server>_<tool> (default slack).
+	Server string `yaml:"server"`
+	// Every is how often the threads are read (default 5m).
+	Every Duration `yaml:"every"`
+	// Window is how long after its post a report's thread is read (default
+	// 24h).
+	Window Duration `yaml:"window"`
+}
+
+// Enabled says whether the feedback watch runs.
+func (f Feedback) Enabled() bool { return f.Context != "" }
 
 // Central configures the central instance, reached through muster as the
 // person.
@@ -1217,6 +1242,9 @@ func (c *Config) defaults() error {
 	setStr(&c.Central.Server, "beekeeper")
 	setStr(&c.Central.Muster, "muster")
 	setDur(&c.Central.Timeout, 30*time.Second)
+	setStr(&c.Feedback.Server, "slack")
+	setDur(&c.Feedback.Every, 5*time.Minute)
+	setDur(&c.Feedback.Window, 24*time.Hour)
 	// The guide's context is the person's conversation: it relays early.
 	if c.Guide.RelayAt == 0 {
 		c.Guide.RelayAt = 150_000
@@ -1446,6 +1474,9 @@ func (c *Config) validate() error {
 	}
 	if r := c.Reporter; r.Every.Duration != 0 && (r.Every.Duration < time.Minute || r.Brief == "") {
 		return fmt.Errorf("reporter: every %s needs at least a minute and a brief", r.Every.Duration)
+	}
+	if c.Feedback.Enabled() && !c.Reporter.Enabled() {
+		return fmt.Errorf("feedback.context: the feedback watch reads the reporter's posts: set reporter.every and reporter.brief")
 	}
 	if tz := c.Reporter.TZ; tz != "" {
 		if _, err := time.LoadLocation(tz); err != nil {

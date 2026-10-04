@@ -104,6 +104,7 @@ func (w *watcher) tendReporter(ctx context.Context, sessions []*claude.Session) 
 	case reportSkip:
 		w.skipReport()
 	case reportPosted:
+		w.recordReportThread(*r)
 		w.endReport(ctx, "posted", "posted its report")
 	case reportUnposted:
 		w.endReport(ctx, "unposted", "its turn ended without a post")

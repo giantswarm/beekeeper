@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/alerts"
+	"github.com/giantswarm/beekeeper/internal/central"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
@@ -264,6 +265,14 @@ type watcher struct {
 	// reopens; table the last poll's process table.
 	stand standbyWatch
 	table *proc.Table
+	// feedbackNext is when the feedback watch reads the report threads
+	// next; feedbackBusy is set while a read runs.
+	feedbackNext time.Time
+	feedbackBusy atomic.Bool
+	// deliver sends a reply to an agent; nil is agents wake's.
+	deliver func(ctx context.Context, q, msg string) error
+	// musterRun runs muster for the feedback watch; nil is the binary.
+	musterRun central.Runner
 	// runReport launches a reporter's turn; nil is launchReport.
 	runReport func(unit, id, name, prompt string) error
 	// turnEnded reports whether a reporter's unit ended; nil is unitEnded.
@@ -979,6 +988,7 @@ func (w *watcher) pollSessions(ctx context.Context, since time.Time, t *proc.Tab
 	w.owners.Store(&owners)
 	w.kills(ctx, since, sessions, t)
 	w.tendReporter(ctx, sessions)
+	w.tendFeedback(ctx)
 	w.pending(ctx, sessions)
 	w.sessionChanges(sessions)
 	w.staleLeases(ctx, sessions)

@@ -1268,6 +1268,24 @@ multiples (on the hour for `1h`), whether or not a supervisor runs:
    after its end starts the next one; the state's `report` keeps the current or last run, so two
    standby watches start one reporter per slot.
 
+### Feedback on the reports from Slack
+
+With `feedback.context` set, the standby watch reads the person's replies to the reports through
+the Slack MCP server behind muster (`feedback.server`, default `slack`), as the person, with
+central's muster binary and timeout:
+
+1. **The thread.** A report's post (its `slack_send_message` result) names its channel and ts; the
+   watch keeps it in the state's `reportThreads` for `feedback.window` (24h).
+2. **The replies.** Every `feedback.every` (5m) it reads each thread (`x_<server>_read_thread`)
+   beside the poll. A reply by the report's author that came after the last one delivered goes, as
+   a message (`agents wake`), to the agent it names first, `<agent name>: <message>`, or else to the
+   supervisor. A delivered reply gets an :eyes: reaction, `feedback.delivered` in the log and a
+   `FEEDBACK to <agent>` line; one not delivered is said and read again the next time.
+3. **Unreadable.** A thread that cannot be read is said once, `FEEDBACK UNREADABLE <context>:
+   <reason>`, and `ENDED` once it reads again. The Slack connector reads what its scopes allow:
+   a report posted as a direct message needs `im:history`, one in a public channel
+   `channels:history`.
+
 ## omp agents
 
 omp (oh-my-pi) is beekeeper's second local harness beside Claude Code, for agents on a locally served
