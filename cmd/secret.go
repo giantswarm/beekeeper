@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"cmp"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -11,12 +13,17 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 // secretRun is the runner of sops and op; tests replace it.
 var secretRun secret.Runner = secret.Exec
+
+// secretApply writes a lab Secret's key; nil is the real cluster's, tests
+// replace it.
+var secretApply secret.SecretApplier
 
 func (a *app) secretCmd() *cobra.Command {
 	c := &cobra.Command{
@@ -104,14 +111,27 @@ can make one.`,
 		},
 	})
 	c.AddCommand(a.secretCopyCmd(), a.secretSetCmd(), a.secretRotateCmd())
+	for _, sub := range c.Commands() {
+		run := sub.RunE
+		sub.RunE = func(cmd *cobra.Command, args []string) error { return vaultExit(run(cmd, args)) }
+	}
 	return c
 }
 
+// vaultExit gives an error reading the shared vault its own exit code,
+// ExitVault, so that a caller tells a locked vault from a refusal.
+func vaultExit(err error) error {
+	if errors.Is(err, secret.ErrVault) {
+		return &exitError{code: ExitVault, msg: err.Error()}
+	}
+	return err
+}
+
 func (a *app) secretCopyCmd() *cobra.Command {
-	var name, namespace string
+	var name, namespace, toSecret string
 	c := &cobra.Command{
-		Use:   "copy <from> <to> | copy <from> -- <consumer…>",
-		Short: "Copy a SOPS file, or one value into a SOPS path or a consumer's stdin",
+		Use:   "copy <from> <to> | copy <from> -- <consumer…> | copy <from> --to-secret <context>/<namespace>/<name>/<key>",
+		Short: "Copy a SOPS file, or one value into a SOPS path, a consumer's stdin or a lab's Secret",
 		Long: `copy <src.sops.yaml> <dst.sops.yaml> writes a new SOPS file with the
 values of src, encrypted under dst's creation rules; --name and --namespace
 rewrite a Kubernetes object's metadata.name and metadata.namespace on the
@@ -123,8 +143,24 @@ or the key when absent, the file's other values kept.
 
 copy <ref> -- <command…> runs a consumer with the value on stdin: gh secret
 set, a command with --password-stdin, or one with --secret <name>=-. It
-answers the consumer's output with the value redacted, and its exit code.`,
+answers the consumer's output with the value redacted, and its exit code.
+
+copy <ref> --to-secret <context>/<namespace>/<name>/<key> writes one value
+into a key of a Secret in a kind lab, kind-<cluster>, whose lab lease the
+caller holds: a server-side apply that creates the Secret when absent and
+keeps its other keys. kind's admin kubeconfig stays in beekeeper's memory
+like the value; it answers the value's length. A context of a lab the
+caller holds no lease for is refused.
+
+An op:// value the shared vault cannot give (none configured, no token, op
+failing or answering nothing within a minute) exits 78.`,
 		Args: func(cmd *cobra.Command, args []string) error {
+			if cmd.Flags().Changed("to-secret") {
+				if cmd.ArgsLenAtDash() >= 0 {
+					return fmt.Errorf("copy <from> --to-secret <context>/<namespace>/<name>/<key> takes no consumer")
+				}
+				return cobra.ExactArgs(1)(cmd, args)
+			}
 			if dash := cmd.ArgsLenAtDash(); dash >= 0 {
 				if dash != 1 || len(args) < 2 {
 					return fmt.Errorf("copy <from> -- <consumer…>")
@@ -143,6 +179,12 @@ answers the consumer's output with the value redacted, and its exit code.`,
 				return err
 			}
 			ctx := cmd.Context()
+			if cmd.Flags().Changed("to-secret") {
+				if name != "" || namespace != "" {
+					return usageErr("--name and --namespace rewrite a copied file, not a Secret's key")
+				}
+				return a.secretCopyToSecret(ctx, ops, src[0], toSecret)
+			}
 			if cmd.ArgsLenAtDash() == 1 {
 				if name != "" || namespace != "" {
 					return usageErr("--name and --namespace rewrite a copied file, not a consumer's value")
@@ -191,7 +233,58 @@ answers the consumer's output with the value redacted, and its exit code.`,
 	}
 	c.Flags().StringVar(&name, "name", "", "the copy's metadata.name")
 	c.Flags().StringVar(&namespace, "namespace", "", "the copy's metadata.namespace")
+	c.Flags().StringVar(&toSecret, "to-secret", "", "a key of a Secret in a lab you hold: <context>/<namespace>/<name>/<key>")
 	return c
+}
+
+// secretCopyToSecret is copy --to-secret: one value into a key of a
+// Secret in a lab whose lease the caller holds.
+func (a *app) secretCopyToSecret(ctx context.Context, ops *secret.Ops, src secret.Ref, spec string) error {
+	t, err := secret.ParseKubeTarget(spec)
+	if err != nil {
+		return usageErr("--to-secret: %v", err)
+	}
+	if err := a.checkLabHeld(t); err != nil {
+		a.secretLog("copy", "%s to %s: %s", src, t, outcome(err, ""))
+		return err
+	}
+	n, err := ops.CopyToSecret(ctx, src, t)
+	a.secretLog("copy", "%s to %s: %s", src, t, outcome(err, fmt.Sprintf("%d bytes", n)))
+	if err != nil {
+		return err
+	}
+	return a.secretPrint(secret.Key{Name: t.String(), Bytes: n}, fmt.Sprintf("wrote %s: %d bytes\n", t, n))
+}
+
+// checkLabHeld refuses a Secret's context unless it is a kind lab's whose
+// lab lease the caller holds.
+func (a *app) checkLabHeld(t secret.KubeTarget) error {
+	res := a.cfg.LabLease(t.KindCluster())
+	if res == "" {
+		labs := make([]string, 0, len(a.cfg.Labs))
+		for _, res := range a.cfg.Resources {
+			if cl := a.cfg.LabCluster(res); cl != "" {
+				labs = append(labs, "kind-"+cl)
+			}
+		}
+		return refused("%s: a Secret is written only into a lab's context (%s), held under its lease", t.Context, strings.Join(labs, ", "))
+	}
+	me, err := a.caller()
+	if err != nil {
+		return err
+	}
+	h, err := lease.Dir(a.cfg.LeaseDir).Get(res)
+	if err != nil {
+		return err
+	}
+	if h == nil || !h.Party().Is(me) {
+		holder := "nobody"
+		if h != nil {
+			holder = fmt.Sprintf("%q", cmp.Or(h.Name, h.Holder))
+		}
+		return refused("%s: the lab lease %s is held by %s, not by you: claim it first (beekeeper lease claim %s)", t.Context, res, holder, res)
+	}
+	return nil
 }
 
 func (a *app) secretSetCmd() *cobra.Command {
@@ -392,7 +485,7 @@ func parseRefs(args ...string) ([]secret.Ref, error) {
 // secretOps are the operations with the service account's token, read
 // from secret.tokenFile when the shared vault is configured.
 func (a *app) secretOps() (*secret.Ops, error) {
-	ops := &secret.Ops{Run: secretRun, Vault: a.cfg.Secret.Vault}
+	ops := &secret.Ops{Run: secretRun, Apply: secretApply, Vault: a.cfg.Secret.Vault}
 	if ops.Vault == "" || a.cfg.Secret.TokenFile == "" {
 		return ops, nil
 	}

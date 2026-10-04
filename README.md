@@ -397,7 +397,8 @@ A reference is a SOPS file (every value in it), one value of a SOPS file (`file#
 path; `sops://` in front optional) or a field of the shared 1Password vault
 (`op://<vault>/<item>/<field>`). beekeeper reads only the vault `secret.vault` names, and only as its
 service account, whose token it reads from `secret.tokenFile` and gives to its own `op` calls alone;
-with either unset, an `op://` reference is refused. A SOPS file is encrypted under the creation rules
+with either unset, an `op://` reference is refused. Every command exits 78 when the vault cannot give a
+value: none configured, no token, or `op` failing or answering nothing within a minute. A SOPS file is encrypted under the creation rules
 of the `.sops.yaml` nearest above it, run from that directory, so a `path_regex` relative to the
 repository matches.
 
@@ -408,6 +409,7 @@ repository matches.
 | `copy <src.sops.yaml> <dst.sops.yaml> [--name n] [--namespace ns]` | A new SOPS file with src's values, encrypted under dst's rules; `--name` and `--namespace` rewrite a Kubernetes object's metadata. It answers each key and its length (a Secret's `data` decoded); dst must not exist. |
 | `copy <ref> <file#path>` | One value into a SOPS path, creating the file or the key when absent, the file's other values kept. |
 | `copy <ref> -- <consumer…>` | One value on the stdin of `gh secret set`, a command with `--password-stdin` or one with `--secret <name>=-`; any other consumer is refused. It answers the consumer's exit code and its output with the value redacted. |
+| `copy <ref> --to-secret <context>/<namespace>/<name>/<key>` | One value into a key of a Secret in a kind lab (`kind-<cluster>`) whose lab lease (`labs`) the caller holds: a server-side apply under the field manager `beekeeper-secret` that creates the Secret when absent and keeps its other keys, through the admin kubeconfig `kind get kubeconfig` answers, which stays in beekeeper's memory like the value. Any other context, and a lab the caller does not hold, is refused (exit 3). It answers the value's length. |
 | `set <file> <path> --generate --vault op://…` | A new value (`--length`, 32; `--charset`, `alnum`, `hex` or `ascii`) written to the vault field first (the item or field created when absent, the item passed as a JSON template on stdin, never on a command line), then into the SOPS path; it answers the fingerprint. |
 | `rotate op://… --generate` | A value beekeeper made gets a new one (`--length`, `--charset` as for `set`): the vault field first, then every path of the SOPS files `scan.sops` names that carried the old value, the value itself or its base64 form (a Secret's `data`), matched by fingerprint. |
 | `rotate op://…` | A value a third party issues: the person rotates it at its issuer into the vault field, and `rotate` writes the vault's new value into every path that carried the old one, known by the fingerprint `beekeeper scan index` recorded before the change. It refuses while the vault still holds the recorded value. |
