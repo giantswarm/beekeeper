@@ -26,6 +26,7 @@ import (
 var (
 	pullState     = github.PullState
 	devctlVersion = toolVersion
+	devctlUpdate  = toolUpdate
 	userSystemd   = plat.Launcher.Available
 	selfExe       = os.Executable
 )

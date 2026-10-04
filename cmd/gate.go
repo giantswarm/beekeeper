@@ -540,6 +540,10 @@ func (g *gateRun) runMerge() error {
 		return ev, nil
 	})
 	out, unanswered := r.out, r.unanswered
+	if g.toolMerge() && out.Merged {
+		// The release is out: install it now rather than on the watch's tick.
+		g.closeToolWindow(context.WithoutCancel(g.ctx), g.me)
+	}
 	switch {
 	case unanswered != nil:
 		gateLine("devctl ended with exit %d without its document and GitHub does not answer (%v): whether %s merged is unknown, lane %s settles by the settle rule; check the pull request, do not rerun blindly",
@@ -654,12 +658,19 @@ func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOu
 				st.Holds[j].ToolRelease, st.Holds[j].ToolMerged = out.Release, true
 			}
 		}
-		if !out.Merged {
+		why := ""
+		switch {
+		case !out.Merged:
+			why = "merged nothing"
+		case out.NoRelease:
+			why = "warranted no release"
+		}
+		if why != "" {
 			st.Holds = slices.DeleteFunc(st.Holds, func(h state.Hold) bool {
 				if h.Tool == "" {
 					return false
 				}
-				ev = append(ev, event(by, "hold.lift", "%s: %s merged nothing", h.Target, key))
+				ev = append(ev, event(by, "hold.lift", "%s: %s %s", h.Target, key, why))
 				return true
 			})
 		}
@@ -694,7 +705,8 @@ func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOu
 // repository runs and the tool reports another version than at its opening,
 // or GitHub reports the window's pull request not merged: its merge ended
 // without the gate recording it (a gate killed, GitHub unanswered). A window
-// whose merge merged waits for the tool's update.
+// whose merge merged updates the tool (updateTool) and lifts once it reports
+// the release.
 func (a *app) closeToolWindow(ctx context.Context, by state.Party) {
 	st, err := a.store.Read()
 	if err != nil || !slices.ContainsFunc(st.Holds, func(h state.Hold) bool { return h.Tool != "" }) {
@@ -706,6 +718,9 @@ func (a *app) closeToolWindow(ctx context.Context, by state.Party) {
 		return
 	}
 	v := devctlVersion(ctx)
+	if v != "" && a.updateTool(ctx, v, by) {
+		v = devctlVersion(ctx)
+	}
 	pulls := map[int]github.Pull{}
 	for _, h := range st.Holds {
 		if h.Tool != "" && h.ToolPR != 0 && !h.ToolMerged && (v == "" || v == h.ToolFrom) {
@@ -779,6 +794,47 @@ func devctlRuns(st *state.State) int {
 		}
 	}
 	return n
+}
+
+// toolUpdateEvery is how long beekeeper waits between two updates of the
+// tool for one merged window.
+const toolUpdateEvery = 2 * time.Minute
+
+// updateTool runs the tool's update for a window whose merge merged while
+// the tool still reports v, the version the window opened on, at most once
+// per toolUpdateEvery and window, so the window does not wait for somebody
+// to install the release. A failed update is logged. It reports whether it
+// ran the update.
+func (a *app) updateTool(ctx context.Context, v string, by state.Party) bool {
+	now := time.Now().UTC()
+	due := false
+	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		for i, h := range st.Holds {
+			if h.Tool != "" && h.ToolMerged && h.ToolFrom == v && now.Sub(h.ToolUpdated) >= toolUpdateEvery {
+				st.Holds[i].ToolUpdated, due = now, true
+			}
+		}
+		return nil, nil
+	})
+	if !due {
+		return false
+	}
+	if err := devctlUpdate(ctx); err != nil {
+		_ = a.store.Log(event(by, "hold.update", "%s update from %s failed, retried in %s: %v", merge.Tool, v, toolUpdateEvery, err))
+	}
+	return true
+}
+
+// toolUpdate runs `devctl version update`, which installs the newest
+// release in place of the running binary.
+func toolUpdate(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, merge.Tool, "version", "update").CombinedOutput() //nolint:gosec // the merge tool, a constant
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, truncate(strings.TrimSpace(string(out)), 200))
+	}
+	return nil
 }
 
 // toolVersion is what `devctl version` reports, "" when it does not run.

@@ -313,8 +313,9 @@ func TestCheckExcept(t *testing.T) {
 func stubGitHub(t *testing.T, pullAt string, version string) *int {
 	t.Helper()
 	asked := new(int)
-	pull, ver, wait := pullState, devctlVersion, judgeWait
-	t.Cleanup(func() { pullState, devctlVersion, judgeWait = pull, ver, wait })
+	pull, ver, upd, wait := pullState, devctlVersion, devctlUpdate, judgeWait
+	t.Cleanup(func() { pullState, devctlVersion, devctlUpdate, judgeWait = pull, ver, upd, wait })
+	devctlUpdate = func(context.Context) error { return nil }
 	judgeWait = 0
 	pullState = func(context.Context, string, int) (github.Pull, error) {
 		*asked++
@@ -325,4 +326,36 @@ func stubGitHub(t *testing.T, pullAt string, version string) *int {
 	}
 	devctlVersion = func(context.Context) string { return version }
 	return asked
+}
+
+// The watch lifts a hold once its probe passes, and only the hold that
+// still carries the probe that passed.
+func TestHoldsLiftWhenTheirProbePasses(t *testing.T) {
+	now := time.Now()
+	probe := runProbe
+	t.Cleanup(func() { runProbe = probe })
+	runProbe = func(_ context.Context, p string) bool { return p == "true" }
+	holds := []state.Hold{
+		{Target: "merges", Reason: "devctl window", LiftWhen: "true"},
+		{Target: "lane:gpu", Reason: "model load", LiftWhen: "false"},
+		{Target: "o/r", Reason: "no probe"},
+		{Target: "o/expired", Reason: "expired", LiftWhen: "true", Until: now.Add(-time.Minute)},
+	}
+	passed := probeHoldLifts(context.Background(), holds, now)
+	if len(passed) != 1 || passed["merges"] != "true" {
+		t.Fatalf("passed %v", passed)
+	}
+	st := &state.State{Holds: slices.Clone(holds)}
+	lines, evs := liftProbed(st, passed)
+	if len(st.Holds) != 3 || slices.ContainsFunc(st.Holds, func(h state.Hold) bool { return h.Target == "merges" }) {
+		t.Errorf("holds left: %+v", st.Holds)
+	}
+	if len(lines) != 1 || len(evs) != 1 || evs[0].Verb != "hold.lift" || !strings.Contains(evs[0].Detail, "its probe passed (true)") {
+		t.Errorf("lines %v, events %+v", lines, evs)
+	}
+	// A hold set again with another probe since stays.
+	st = &state.State{Holds: []state.Hold{{Target: "merges", LiftWhen: "test -f /x"}}}
+	if _, evs := liftProbed(st, passed); len(st.Holds) != 1 || len(evs) != 0 {
+		t.Errorf("a re-set hold was lifted: %+v", st.Holds)
+	}
 }

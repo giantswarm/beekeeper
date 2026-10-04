@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `beekeeper hold set --lift-when "<shell command>"`: the watch runs the probe every tick and lifts the hold once it exits 0, logged as `hold.lift` with the probe; `hold` lists the probe as the hold's end.
+- A devctl release window installs its release: once the window's merge merged, the gate runs `devctl version update` right after it and the watch retries every 2 minutes while devctl still reports the version the window opened on (a failed update is logged as `hold.update`), so the window lifts without anybody updating devctl or lifting it by hand.
 - `agents.shell.path`: directories the agent shell's prelude puts first on `PATH`, in their order and once each, so an agent's own programs (a `gh` link to devctl that acts with the App's short-lived token) shadow the person's.
 - `beekeeper serve`'s `converse(text)` lets one of a person's agents on the roster, their guide above all, talk to them in Slack through klaus-gateway: the first message opens a conversation (`POST /conversations`), a direct message whose thread is kept on the agent's roster entry (`status.conversation`), later ones go into it (`POST /conversations/{id}/messages`), and a new thread opens once klaus-gateway dropped the old one. The person's reply there calls `serve.gateway.sendTool` (default `x_beekeeper_send_message`) through muster as the person and arrives in their mailbox with `from.source` `slack`; a reply to an agent not on the roster is refused as not running, which klaus-gateway says in the thread ([docs/feed.md](docs/feed.md#the-mailbox)).
 
@@ -23,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A devctl merge that warrants no release lifts its release window at once; the window waited for a devctl version that never came.
 - `board next` counts the `sessions serve` record of an agent on the roster busy with its task as covering its item while the agent's CLI is gone (the desktop warmed none, the watch marked the record ended), so `--claim` no longer hands it to a second worker; it is offered again once the agent reports idle or leaves the roster.
 - Two parties of different people or hosts are never the same party, whatever their names: a central lease or roster entry of one person's agent no longer passes as another's of the same name.
 
