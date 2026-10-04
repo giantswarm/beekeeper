@@ -425,6 +425,11 @@ type Agents struct {
 	// StaleAfter is how long an idle agent whose CLI no longer runs stays on
 	// the roster before the doctor takes it off (24h).
 	StaleAfter Duration `yaml:"staleAfter"`
+	// AutoResume has the watch resume a parked agent (agents park) with
+	// what settled its wait, once the note it parked on is closed or the
+	// pull request merged or closed; off, the watch only says AGENT
+	// RESUMABLE and agents resume does it by hand.
+	AutoResume bool `yaml:"autoResume"`
 	// Shell is the prelude of every agent shell (beekeeper hook
 	// sessionstart).
 	Shell AgentShell `yaml:"shell"`

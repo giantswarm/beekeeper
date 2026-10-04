@@ -11,9 +11,12 @@ import (
 )
 
 // keptBy says what keeps ag on the roster past agents.staleAfter at now: its
-// keep marker while it holds, or an open timer that wakes it by name until
+// park (agents park), its keep marker while it holds, or an open timer that wakes it by name until
 // the timer is done. Empty when nothing keeps it.
 func keptBy(st *state.State, ag state.Agent, now time.Time) string {
+	if ag.Park != nil {
+		return parkedText(ag.Park, now)
+	}
 	if k := ag.Keep; k.Holds(now) {
 		s := "kept"
 		if !k.Until.IsZero() {

@@ -1350,6 +1350,9 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		return // the supervisor's watch reports them
 	}
 	w.noteAnswers(st)
+	if w.chores {
+		w.autoResume(ctx, st) // the parks an earlier poll marked resumable
+	}
 	w.stoppedAgents(st, sessions)
 	w.capacity(ctx, st, sessions)
 	w.importWaits(st)
@@ -1359,6 +1362,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	signedIn := probeLogins(ctx, st.Notes)
 	probed := probeHoldLifts(ctx, st.Holds, w.now)
 	over := w.overtakenNow(ctx, st)
+	parks := w.settledParks(ctx, st)
 	if !w.chores {
 		w.wouldOvertake(st, over)
 		over = nil
@@ -1375,6 +1379,8 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		lines, evs, defaulted = append(lines, nl...), append(evs, ne...), nd
 		ol, oe := closeOvertaken(st, over, watchParty)
 		lines, evs = append(lines, ol...), append(evs, oe...)
+		kl, ke := markResumable(st, parks, w.cfg.Agents.AutoResume, w.now)
+		lines, evs = append(lines, kl...), append(evs, ke...)
 		tl, te, tf, touched := settleTimers(st, held, w.now)
 		lines, evs, fires = append(lines, tl...), append(evs, te...), tf
 		seen = seen || touched

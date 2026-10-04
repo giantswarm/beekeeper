@@ -80,7 +80,10 @@ task needs lives only in this session: the next task goes to a fresh one.
   production installation (`kube.production`) is never written to.
 - **No waiting on the person.** No `AskUserQuestion`, no wait on a permission prompt, a browser
   approval or a settings change: each becomes a one-line question to the supervisor, and the worker
-  carries on with what needs no answer or reports and ends its turn with the task open.
+  carries on with what needs no answer or reports and ends its turn with the task open. A worker
+  that can go no further until the answer, a merge ahead of it in the lane or a release comes
+  parks (`beekeeper agents park --on <#note|owner/repo#n> "<what>"`) and ends its turn, never
+  sleeps on it: the resume carries what settled the wait.
 - **Subagents** only when the brief allows them. Each one gets these rules in its prompt, at least
   the force-push and secret rules, since a subagent reads none of this.
 - **Context stays lean.** Near the supervisor's `agents.relayAt`, the worker writes a handover file,

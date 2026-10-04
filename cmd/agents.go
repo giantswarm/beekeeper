@@ -275,7 +275,7 @@ archive it. A session its person started is never archived.`,
 	remove.Flags().BoolVar(&keepDesktop, "keep-desktop", false, "leave the agent's desktop session in the sidebar")
 	list := listCmd("List the agents, idle ones first", func() error { return a.agentList(full) })
 	fullFlag(list, &full)
-	c.AddCommand(register, a.agentStartCmd(), a.agentWakeCmd(), a.agentReopenCmd(), a.agentDesktopCmd(), a.agentHandoverCmd(), a.agentNoteCmd(), a.agentBroadcastCmd(), a.agentKeepCmd(), assign, idle, remove, list)
+	c.AddCommand(register, a.agentStartCmd(), a.agentWakeCmd(), a.agentReopenCmd(), a.agentDesktopCmd(), a.agentHandoverCmd(), a.agentNoteCmd(), a.agentBroadcastCmd(), a.agentKeepCmd(), a.agentParkCmd(), a.agentResumeCmd(), assign, idle, remove, list)
 	return c
 }
 
@@ -287,6 +287,7 @@ type registration struct {
 	replaced   []state.Agent
 	task       string
 	assignedAt time.Time
+	park       *state.Park
 	own        bool
 }
 
@@ -324,14 +325,14 @@ func registerAgent(st *state.State, me state.Party, live func(state.Party) bool,
 			return registration{}, refused("the entries of sessions %s and %s both hold an open task (%q, %q): finish one, or take it off with `beekeeper agents remove`",
 				holder, x.Session, reg.task, x.Task)
 		}
-		reg.task, reg.assignedAt, reg.own, holder = x.Task, x.AssignedAt, own, x.Session
+		reg.task, reg.assignedAt, reg.park, reg.own, holder = x.Task, x.AssignedAt, x.Park, own, x.Session
 	}
 	st.Agents = slices.DeleteFunc(st.Agents, func(x state.Agent) bool { return x.Is(me) || strings.EqualFold(x.Name, me.Name) })
-	st.Agents = append(st.Agents, state.Agent{Party: me, Registered: now, IdleSince: now, Task: reg.task, AssignedAt: reg.assignedAt, LastTask: lastTask, Keep: keep})
+	st.Agents = append(st.Agents, state.Agent{Party: me, Registered: now, IdleSince: now, Task: reg.task, AssignedAt: reg.assignedAt, Park: reg.park, LastTask: lastTask, Keep: keep})
 	return reg, nil
 }
 
-// reportIdle ends ag's task. An agent reporting idle again keeps its last
+// reportIdle ends ag's task and its park. An agent reporting idle again keeps its last
 // task and since when it is idle.
 // removeAgent takes the agent at i off the roster; its session no longer
 // waits on anyone.
@@ -345,6 +346,7 @@ func removeAgent(st *state.State, i int) {
 }
 
 func reportIdle(ag *state.Agent, now time.Time) {
+	ag.Park = nil
 	if ag.Task != "" {
 		ag.LastTask, ag.Task, ag.IdleSince = ag.Task, "", now.UTC()
 	}
