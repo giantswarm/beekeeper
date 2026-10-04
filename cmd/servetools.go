@@ -33,6 +33,8 @@ const (
 	paramKind        = "kind"
 	paramText        = "text"
 	paramMessage     = "message"
+	paramTask        = "task"
+	paramDone        = "done"
 	keyMailbox       = "mailbox"
 	keyNotes         = "notes"
 	lanesName        = "lanes"
@@ -93,7 +95,10 @@ func (s *server) tools() []serveTool {
 			mcp.WithString(paramVia, mcp.Description("how the answer came: cli (the default) or slack"))), toolNoteAnswer},
 		{newTool("note_done", "Close a note without an answer: its decision is withdrawn. Its filer's, or the filer's team's supervisor role's.", false,
 			mcp.WithNumber(paramNote, mcp.Required(), mcp.Description("the note's number"))), toolNoteDone},
-		{newTool("agents_register", "Register the calling agent on its team's roster, idle unless it holds an open task.", false), toolAgentsRegister},
+		{newTool("agents_register", "Register the calling agent on its team's roster, idle unless it holds an open task; a machine publishing its agents names each one's task and whether it is done.", false,
+			mcp.WithString(paramTask, mcp.Description("the agent's task (a machine's agent): empty is idle")),
+			mcp.WithBoolean(paramDone, mcp.Description("the agent reported its work finished: ended on the roster"))), toolAgentsRegister},
+		{newTool("agents_leave", "Take the calling agent off the roster: its machine no longer runs it.", false), toolAgentsLeave},
 		{newTool("list_agents", "The agent roster as you may read it: your own local agents, your team's that work on a shared installation (hold a lease), and every remote agent.", true,
 			mcp.WithString("scope", mcp.Description("all (default) or team: only the caller's team"))), toolListAgents},
 		{newTool("snapshot", "Everything at once: leases, holds, lanes, notes and the roster.", true), toolSnapshot},
@@ -711,6 +716,11 @@ func toolAgentsRegister(c *call, req mcp.CallToolRequest) (any, error) {
 		return nil, err
 	}
 	c.concern = kube.RosterObject(c.me)
+	// A machine publishing its agent names its task and whether it is
+	// done; an agent registering itself names neither and keeps its task.
+	_, published := req.GetArguments()[paramTask]
+	published = published || req.GetArguments()[paramDone] != nil
+	pubTask, done := strings.TrimSpace(req.GetString(paramTask, "")), req.GetBool(paramDone, false)
 	task := ""
 	err := c.app.store.Update(func(st *state.State) ([]state.Event, error) {
 		for i, x := range st.Agents {
@@ -725,9 +735,16 @@ func toolAgentsRegister(c *call, req mcp.CallToolRequest) (any, error) {
 			// within the same second nothing the resource stores changes.
 			task = x.Task
 			st.Agents[i].Party, st.Agents[i].Registered = c.me, c.app.now.UTC()
+			if published {
+				task = pubTask
+				publish(&st.Agents[i], pubTask, done, c.app.now.UTC())
+			}
 			return nil, nil
 		}
-		st.Agents = append(st.Agents, state.Agent{Party: c.me, Registered: c.app.now.UTC(), IdleSince: c.app.now.UTC()})
+		ag := state.Agent{Party: c.me, Registered: c.app.now.UTC(), IdleSince: c.app.now.UTC()}
+		publish(&ag, pubTask, done, c.app.now.UTC())
+		task = ag.Task
+		st.Agents = append(st.Agents, ag)
 		return []state.Event{event(c.me, "agents.register", "%s on %s", c.me.Name, c.me.Host)}, nil
 	})
 	if err != nil {
@@ -739,6 +756,51 @@ func toolAgentsRegister(c *call, req mcp.CallToolRequest) (any, error) {
 		_, err = fmt.Fprintf(c.out, "register: %s idle, ready for a task\n", c.me.Name)
 	}
 	return map[string]any{"agent": c.me, "task": task}, err
+}
+
+// publish sets a machine's agent's task and whether it is done, the fields
+// a RosterEntry carries: an agent with a task is busy, one whose task ended
+// is idle since now.
+func publish(a *state.Agent, task string, done bool, now time.Time) {
+	switch {
+	case task != "":
+		a.IdleSince = time.Time{}
+	case a.Task != "" || a.IdleSince.IsZero():
+		a.IdleSince = now
+	}
+	a.Task, a.Done = task, done
+}
+
+func toolAgentsLeave(c *call, req mcp.CallToolRequest) (any, error) {
+	if _, err := required(req, paramAgent, "the name it is registered under"); err != nil {
+		return nil, err
+	}
+	if _, err := required(req, paramHost, "the machine or installation the agent runs on"); err != nil {
+		return nil, err
+	}
+	c.concern = kube.RosterObject(c.me)
+	left := false
+	err := c.app.store.Update(func(st *state.State) ([]state.Event, error) {
+		i := slices.IndexFunc(st.Agents, func(x state.Agent) bool { return strings.EqualFold(x.Name, c.me.Name) && x.Host == c.me.Host })
+		if i < 0 {
+			return nil, nil
+		}
+		if x := st.Agents[i]; x.Person != c.me.Person {
+			return nil, refused("%s on %s is %s's agent", x.Name, x.Host, cmp.Or(x.Person, x.Team))
+		}
+		st.Agents = slices.Delete(st.Agents, i, i+1)
+		left = true
+		return []state.Event{event(c.me, "agents.leave", "%s on %s", c.me.Name, c.me.Host)}, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if left {
+		_, err = fmt.Fprintf(c.out, "left: %s on %s is off the roster\n", c.me.Name, c.me.Host)
+	} else {
+		_, err = fmt.Fprintf(c.out, "%s on %s was not on the roster\n", c.me.Name, c.me.Host)
+	}
+	return map[string]any{"agent": c.me, "left": left}, err
 }
 
 func toolListAgents(c *call, req mcp.CallToolRequest) (any, error) {
