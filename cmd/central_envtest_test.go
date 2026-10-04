@@ -17,6 +17,7 @@ import (
 )
 
 const (
+	verbHold  = "hold"
 	piaEmail  = "pia@example.com"
 	agentTwo  = "Agent two"
 	stateIdle = "idle"
@@ -58,7 +59,7 @@ func (p *person) run(args ...string) (string, int) {
 	if err := a.load(); err != nil {
 		p.t.Fatal(err)
 	}
-	cmd := map[string]func() *cobra.Command{"lease": a.leaseCmd, "hold": a.holdCmd, "lanes": a.lanesCmd}[args[0]]()
+	cmd := map[string]func() *cobra.Command{"lease": a.leaseCmd, verbHold: a.holdCmd, lanesName: a.lanesCmd}[args[0]]()
 	cmd.SetArgs(args[1:])
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
@@ -262,19 +263,19 @@ func TestCentralLanesEnvtest(t *testing.T) {
 	second.centralLeave("test done")
 
 	// A central hold refuses the gate and is listed and checked as central.
-	if out, code := ana.run("hold", "set", "--lane", portalLane, "-r", "proving window"); code != 0 || !strings.Contains(out, "held lane:"+portalLane) {
+	if out, code := ana.run(verbHold, "set", "--lane", portalLane, "-r", "proving window"); code != 0 || !strings.Contains(out, "held lane:"+portalLane) {
 		t.Fatalf("hold set: exit %d: %s", code, out)
 	}
-	if out, code := pia.run("hold", "check", backstage+"#2"); code != ExitRefused || !strings.Contains(out, "proving window") {
+	if out, code := pia.run(verbHold, "check", backstage+"#2"); code != ExitRefused || !strings.Contains(out, "proving window") {
 		t.Errorf("hold check on the other machine: exit %d: %s", code, out)
 	}
-	if out, code := pia.run("hold", "list"); code != 0 || !strings.Contains(out, "central (muster context lab)") || !strings.Contains(out, "proving window") {
+	if out, code := pia.run(verbHold, "list"); code != 0 || !strings.Contains(out, "central (muster context lab)") || !strings.Contains(out, "proving window") {
 		t.Errorf("hold list: exit %d: %s", code, out)
 	}
 	if _, err := pia.gate(2).centralTurn(); Code(err) != ExitGateRefused {
 		t.Errorf("a held lane's gate: %v (exit %d), want %d", err, Code(err), ExitGateRefused)
 	}
-	if out, code := ana.run("hold", "lift", "--lane", portalLane); code != 0 {
+	if out, code := ana.run(verbHold, "lift", "--lane", portalLane); code != 0 {
 		t.Fatalf("hold lift: exit %d: %s", code, out)
 	}
 

@@ -91,7 +91,7 @@ func TestVerbWithoutArgs(t *testing.T) {
 	t.Cleanup(func() { os.Args = prev })
 	os.Args = []string{"beekeeper", "serve", "--http=:8080"}
 	ran := false
-	cmd := &cobra.Command{Use: "hold", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error { ran = true; return nil }}
+	cmd := &cobra.Command{Use: verbHold, Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error { ran = true; return nil }}
 	c := &call{ctx: context.Background(), out: &bytes.Buffer{}}
 	if err := c.verb(cmd); err != nil || !ran {
 		t.Errorf("verb without args: %v (ran %v)", err, ran)
