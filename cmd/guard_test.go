@@ -118,8 +118,8 @@ func TestRunKeepsTheCallersShellSemantics(t *testing.T) {
 
 func TestRunHoldsASlotInACappedScope(t *testing.T) {
 	state, env := capped(t)
-	out, errOut, rc := zsh(t, env, rewrite(t, `grep -o 'memcap.slice/memcap-slot1_[0-9a-f]*.slice/memcap-test-[0-9]*-[0-9]*' /proc/self/cgroup; cat "$MEMCAP_STATE/slots/1.holder"; if false; then go test; fi`))
-	if rc != 0 || !strings.HasPrefix(out, "memcap.slice/"+guard.SlotSlice(filepath.Join(state, "slots"), 1)+"/"+guard.TestScopePrefix) {
+	out, errOut, rc := zsh(t, env, rewrite(t, `grep -o 'memcap.slice/memcap-slot1_test.slice/memcap-test-[0-9]*-[0-9]*' /proc/self/cgroup; cat "$MEMCAP_STATE/slots/1.holder"; if false; then go test; fi`))
+	if rc != 0 || !strings.HasPrefix(out, "memcap.slice/memcap-slot1_test.slice/"+guard.TestScopePrefix) {
 		t.Fatalf("rc %d, stdout %q, stderr %q", rc, out, errOut)
 	}
 	var h struct {

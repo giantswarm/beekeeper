@@ -64,13 +64,18 @@ const (
 	TestScopePrefix = "memcap-test-"
 )
 
-// SlotSlice is the slice of slot n of the slot directory, under
-// memcap.slice (systemd nests a slice by the dashes in its name, so the rest
-// has none): a test's or a scratch state's slot never shares a cap with the
-// machine's own slot of the same number.
-func SlotSlice(dir string, n int) string {
+// SlotSlice is the slice of the run's slot n under memcap.slice (systemd
+// nests a slice by the dashes in its name, so the rest has none), named by
+// the slot directory: a scratch state's slot never shares a cap with the
+// machine's slot of the same number. A test's run (Test) takes one slice
+// per slot number for every test, so that the temporary slot directories of
+// tests leave no slice behind each.
+func (o Options) SlotSlice(n int) string {
+	if o.Test {
+		return fmt.Sprintf("memcap-slot%d_test.slice", n)
+	}
 	h := fnv.New32a()
-	_, _ = h.Write([]byte(filepath.Clean(dir)))
+	_, _ = h.Write([]byte(filepath.Clean(o.SlotDir)))
 	return fmt.Sprintf("memcap-slot%d_%08x.slice", n, h.Sum32())
 }
 
@@ -205,7 +210,7 @@ func Run(o Options, argv []string) int {
 		defer func() { _ = lock.Unlock() }()
 		holder := filepath.Join(o.SlotDir, strconv.Itoa(slot)+".holder")
 		defer func() { _ = os.Remove(holder) }()
-		if err := plat.Capper.CapSlot(platform.Cap{Max: o.Max, Swap: o.Swap, Slice: SlotSlice(o.SlotDir, slot)}); err != nil {
+		if err := plat.Capper.CapSlot(platform.Cap{Max: o.Max, Swap: o.Swap, Slice: o.SlotSlice(slot)}); err != nil {
 			logf("%v", err)
 			return 1
 		}
@@ -359,7 +364,7 @@ func writeHolder(o Options, slot int, argv []string) {
 
 // scope runs argv in the capped scope unit, in the slot's slice.
 func scope(unit string, o Options, slot int, argv []string, logf func(string, ...any)) int {
-	c, err := plat.Capper.Command(unit, platform.Cap{Max: o.Max, Swap: o.Swap, Slice: SlotSlice(o.SlotDir, slot)}, argv)
+	c, err := plat.Capper.Command(unit, platform.Cap{Max: o.Max, Swap: o.Swap, Slice: o.SlotSlice(slot)}, argv)
 	if err != nil {
 		logf("%v", err)
 		return ExitNotFound

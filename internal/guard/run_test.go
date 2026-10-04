@@ -92,7 +92,7 @@ func TestRunSharesItsSessionsSlot(t *testing.T) {
 	if time.Since(start) > 2*time.Second {
 		t.Errorf("a run inside its session's slot waited %s", time.Since(start))
 	}
-	if len(f.capped) != 0 || !slices.Equal(f.ran, []string{SlotSlice(dir, 2)}) {
+	if len(f.capped) != 0 || !slices.Equal(f.ran, []string{o.SlotSlice(2)}) {
 		t.Errorf("capped slots %v, ran in %v: want none capped, ran in the shared slot 2", f.capped, f.ran)
 	}
 	raw, _ := os.ReadFile(filepath.Join(dir, "2.holder")) //nolint:gosec // the test's own temp dir
@@ -122,7 +122,7 @@ func TestRunTakesAndCapsAFreeSlot(t *testing.T) {
 	if rc := Run(o, trueCmd); rc != 0 {
 		t.Fatalf("exit %d, want 0", rc)
 	}
-	if !slices.Equal(f.capped, []string{SlotSlice(dir, 2)}) || !slices.Equal(f.ran, []string{SlotSlice(dir, 2)}) {
+	if !slices.Equal(f.capped, []string{o.SlotSlice(2)}) || !slices.Equal(f.ran, []string{o.SlotSlice(2)}) {
 		t.Errorf("capped slots %v, ran in %v: want slot 2 capped and run in", f.capped, f.ran)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "2.holder")); !os.IsNotExist(err) {
@@ -150,17 +150,21 @@ func TestRunJoinsTheSlotItsSessionTakesDuringTheWait(t *testing.T) {
 	if rc := Run(o, trueCmd); rc != 0 {
 		t.Fatalf("exit %d, want 0", rc)
 	}
-	if len(f.capped) != 0 || !slices.Equal(f.ran, []string{SlotSlice(dir, 1)}) {
+	if len(f.capped) != 0 || !slices.Equal(f.ran, []string{o.SlotSlice(1)}) {
 		t.Errorf("capped slots %v, ran in %v: want none capped, ran in the shared slot 1", f.capped, f.ran)
 	}
 }
 
 func TestSlotSliceIsTheSlotDirectorysOwn(t *testing.T) {
-	a, b := SlotSlice("/home/u/.local/state/memcap/slots", 1), SlotSlice("/tmp/test/slots", 1)
+	machine, scratch := Options{SlotDir: "/home/u/.local/state/memcap/slots"}, Options{SlotDir: "/tmp/test/slots"}
+	a, b := machine.SlotSlice(1), scratch.SlotSlice(1)
 	if a == b || strings.Count(a, "-") != 1 || !strings.HasPrefix(a, "memcap-slot1_") || !strings.HasSuffix(a, ".slice") {
 		t.Errorf("SlotSlice: %q and %q", a, b)
 	}
-	if SlotSlice("/tmp/test/slots/", 1) != b || SlotSlice("/tmp/test/slots", 2) == b {
+	if (Options{SlotDir: "/tmp/test/slots/"}).SlotSlice(1) != b || scratch.SlotSlice(2) == b {
 		t.Error("SlotSlice: want one slice per clean directory and slot")
+	}
+	if got := (Options{SlotDir: t.TempDir(), Test: true}).SlotSlice(1); got != "memcap-slot1_test.slice" {
+		t.Errorf("a test's SlotSlice = %q", got)
 	}
 }
