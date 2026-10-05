@@ -219,6 +219,16 @@ func TestASymlinkedPathIsListedAtItsTarget(t *testing.T) {
 	if !slices.Contains(p.Read, link) || !slices.Contains(p.Read, dotfiles) {
 		t.Errorf("read %v lacks the link or its target", p.Read)
 	}
+	if err := os.WriteFile(filepath.Join(dotfiles, "config.yaml"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p = New(config.Sandbox{}, Paths{Home: home, ConfigFile: filepath.Join(link, "config.yaml"), StateDir: filepath.Join(home, ".local/state/beekeeper")})
+	if got := p.Vars["BEEKEEPER_CONFIG"]; got != filepath.Join(dotfiles, "config.yaml") || p.Vars[Env] != "1" {
+		t.Errorf("vars %v: the session is not pointed at the config's target", p.Vars)
+	}
+	if _, ok := p.Vars["GIT_CONFIG_GLOBAL"]; ok {
+		t.Errorf("vars %v name a git config that is no symlink", p.Vars)
+	}
 	if !p.Readable(filepath.Join(dotfiles, "config.yaml"), home) {
 		t.Error("the config's target is not readable")
 	}

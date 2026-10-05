@@ -70,6 +70,9 @@ type Policy struct {
 	Mask []config.SandboxMask
 	// Exe is the beekeeper binary the policy's hook runs.
 	Exe string
+	// Vars are the environment variables the policy sets besides Env: a
+	// symlinked config's target, which the sandbox mounts without the link.
+	Vars map[string]string
 }
 
 // Paths are where beekeeper and its configuration live, and the build
@@ -105,6 +108,14 @@ func New(cfg config.Sandbox, e Paths) Policy {
 		Mask:      cfg.Mask,
 		Exe:       e.Exe,
 	}
+	// the home directory is empty inside the sandbox but for the paths it
+	// mounts, at their targets: a symlinked config is named by its target
+	p.Vars = map[string]string{Env: "1"}
+	for name, path := range map[string]string{"BEEKEEPER_CONFIG": e.ConfigFile, "GIT_CONFIG_GLOBAL": filepath.Join(e.Home, ".gitconfig")} {
+		if r, err := filepath.EvalSymlinks(path); err == nil && r != filepath.Clean(path) {
+			p.Vars[name] = r
+		}
+	}
 	for _, ps := range []*[]string{&p.Read, &p.Write, &p.Deny, &p.ToolWrite} {
 		*ps = slices.DeleteFunc(*ps, func(q string) bool { return q == "" })
 		for i, q := range *ps {
@@ -128,7 +139,7 @@ func (p Policy) Settings() map[string]any {
 		envVars = append(envVars, map[string]any{"name": m.Name, "mode": "mask", "injectHosts": m.Hosts})
 	}
 	return map[string]any{
-		"env": map[string]string{Env: "1"},
+		"env": p.Vars,
 		"sandbox": map[string]any{
 			"enabled":                  true,
 			"failIfUnavailable":        true,
