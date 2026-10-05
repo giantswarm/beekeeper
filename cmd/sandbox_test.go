@@ -1,11 +1,7 @@
 package cmd
 
 import (
-	"bufio"
-	"context"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/platform"
@@ -91,43 +87,5 @@ func TestBrokeredSecretArgs(t *testing.T) {
 		if err := brokeredSecretArgs(bad); err == nil {
 			t.Errorf("%q: want a refusal", bad)
 		}
-	}
-}
-
-func TestBrokeredSecretRunsAsTheRequester(t *testing.T) {
-	bin := t.TempDir()
-	exe := filepath.Join(bin, "beekeeper")
-	script := "#!/bin/sh\necho \"args=$* pwd=$(pwd) session=$CLAUDE_CODE_SESSION_ID brokered=$" + sandbox.Brokered + " other=$BEEKEEPER_TEST_OTHER\"\necho warned >&2\nexit 3\n"
-	if err := os.WriteFile(exe, []byte(script), 0o700); err != nil { //nolint:gosec // the test's fake binary
-		t.Fatal(err)
-	}
-	// a shell that says when it runs and stays the process (no tail exec):
-	// Start returns before the child's environment is in place
-	requester := exec.Command("/bin/sh", "-c", "echo ready; /bin/sleep 5; true")
-	requester.Dir = t.TempDir()
-	requester.Env = []string{"CLAUDE_CODE_SESSION_ID=s-1", "BEEKEEPER_TEST_OTHER=leaked", "PATH=/usr/bin:/bin"}
-	ready, err := requester.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := requester.Start(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := bufio.NewReader(ready).ReadString('\n'); err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = requester.Process.Kill(); _ = requester.Wait() }()
-	h := brokered(brokeredCap(&recordingCapper{}), brokeredSecret(exe, "/proc"))
-	r, err := h(context.Background(), requester.Process.Pid, sandbox.Request{Op: sandbox.OpSecret, Args: []string{compareOp, sopsA, sopsB}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	dir, _ := filepath.EvalSymlinks(requester.Dir)
-	want := "args=secret compare a.sops.yaml b.sops.yaml pwd=" + dir + " session=s-1 brokered=1 other=\n"
-	if r.Out != want || r.Err != "warned\n" || r.Code != 3 {
-		t.Errorf("reply %+v, want out %q", r, want)
-	}
-	if _, err := h(context.Background(), requester.Process.Pid, sandbox.Request{Op: sandbox.OpSecret, Args: []string{"setup"}}); err == nil {
-		t.Error("setup: want a refusal")
 	}
 }

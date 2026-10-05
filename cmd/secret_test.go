@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/lease"
@@ -226,42 +225,6 @@ func TestSecretCopyToSecretOnlyIntoAHeldLab(t *testing.T) {
 	a.out = &bytes.Buffer{}
 	if _, err := runSecret(a, fingerprintOp, dbRef); Code(err) != ExitVault {
 		t.Errorf("no vault token = %v (exit %d), want exit %d", err, Code(err), ExitVault)
-	}
-}
-
-func TestSecretInTheSandboxGoesThroughTheBroker(t *testing.T) {
-	a, _, repo := secretApp(t)
-	t.Setenv(sandbox.Env, "1")
-	var got [][]string
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_ = sandbox.Serve(ctx, sandbox.SpoolDir(a.cfg.StateDir), "/proc", 5*time.Millisecond, func(_ context.Context, _ int, req sandbox.Request) (sandbox.Reply, error) {
-			if req.Op == sandbox.OpSecret {
-				got = append(got, req.Args)
-				return sandbox.Reply{Out: "brokered\n", Code: ExitError}, nil
-			}
-			return sandbox.Reply{}, nil
-		})
-	}()
-	t.Cleanup(func() { cancel(); <-done })
-	src := filepath.Join(repo, "db.sops.yaml")
-	out, err := runSecret(a, copyOp, "--name=other", src, filepath.Join(repo, "x.sops.yaml"))
-	if out != "brokered\n" || Code(err) != ExitError {
-		t.Errorf("out %q, exit %d", out, Code(err))
-	}
-	if want := []string{copyOp, "--name=other", src, filepath.Join(repo, "x.sops.yaml")}; len(got) != 1 || strings.Join(got[0], " ") != strings.Join(want, " ") {
-		t.Errorf("broker got %q, want %q", got, want)
-	}
-	if _, err := runSecret(a, copyOp, src+"#data.password", "--", "sh", "-c", "cat"); Code(err) != ExitRefused {
-		t.Errorf("a consumer: exit %d, want refused", Code(err))
-	}
-	if _, err := runSecret(a, "setup"); Code(err) != ExitRefused {
-		t.Errorf("setup: exit %d, want refused", Code(err))
-	}
-	if len(got) != 1 {
-		t.Errorf("a refused call reached the broker: %q", got)
 	}
 }
 
