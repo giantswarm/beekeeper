@@ -16,6 +16,7 @@ import (
 // The units install writes: the standby service and the Teleport keeper.
 const (
 	notifyUnit          = "beekeeper-notify.service"
+	sandboxUnit         = "beekeeper-sandbox.service"
 	teleportServiceUnit = "beekeeper-teleport.service"
 	teleportTimerUnit   = "beekeeper-teleport.timer"
 )
@@ -38,7 +39,7 @@ const (
 const memoryGuard = "50-memory-guard.conf"
 
 // systemdSetup installs systemd user units: the standby service, the
-// Teleport login's keeper, the slice capped runs sit in, and the desktop
+// sandbox broker, the Teleport login's keeper, the slice capped runs sit in, and the desktop
 // scope's memory guard.
 type systemdSetup struct{}
 
@@ -47,7 +48,10 @@ func (systemdSetup) Available() bool { return userSystemd() }
 func (systemdSetup) Files(s SetupSpec) ([]File, []string) {
 	dir := filepath.Join(s.ConfigDir, "systemd", "user")
 	exe := func(unit string) []byte { return []byte(strings.ReplaceAll(unit, systemd.NotifyServiceExe, s.Exe)) }
-	files := []File{{Path: filepath.Join(dir, notifyUnit), Content: exe(systemd.NotifyService), Service: true}}
+	files := []File{
+		{Path: filepath.Join(dir, notifyUnit), Content: exe(systemd.NotifyService), Service: true},
+		{Path: filepath.Join(dir, sandboxUnit), Content: exe(systemd.SandboxService), Service: true},
+	}
 	if s.TeleportEvery > 0 {
 		every := "OnUnitActiveSec=" + strconv.Itoa(int(s.TeleportEvery.Seconds())) + "s"
 		files = append(files,

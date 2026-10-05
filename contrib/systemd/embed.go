@@ -13,6 +13,12 @@ var NotifyService string
 // NotifyServiceExe is the binary the shipped units run.
 const NotifyServiceExe = "%h/.local/bin/beekeeper"
 
+// SandboxService is beekeeper-sandbox.service, the agent sandbox's
+// broker; its ExecStart names NotifyServiceExe.
+//
+//go:embed beekeeper-sandbox.service
+var SandboxService string
+
 // TeleportService is beekeeper-teleport.service, the Teleport login's
 // keeper; its ExecStart names NotifyServiceExe.
 //

@@ -28,6 +28,8 @@ binary it runs from (or --binary):
     into what is there;
   - the standby service (beekeeper watch --notify --standby): a systemd
     user unit on Linux, a launch agent on macOS, enabled and started;
+  - with systemd, the agent sandbox's broker (beekeeper sandbox broker):
+    beekeeper-sandbox.service, enabled and started;
   - with systemd and teleport.proxy set, the Teleport login's keeper:
     beekeeper-teleport.timer, enabled and started, and the service it
     starts every teleport.every (beekeeper teleport renew --keeper);

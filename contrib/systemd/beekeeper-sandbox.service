@@ -1,0 +1,19 @@
+# beekeeper sandbox broker as a systemd user unit: the host side of the
+# agent sandbox. The sandbox blocks every Unix socket, the user bus
+# included, so a sandboxed beekeeper run asks this broker for its capped
+# scope through request files in beekeeper's state directory.
+#
+# beekeeper install writes it with ExecStart pointing at the binary and
+# enables it.
+[Unit]
+Description=beekeeper: capped runs for the agent sandbox's sessions
+Documentation=https://github.com/giantswarm/beekeeper#the-agent-sandbox
+
+[Service]
+ExecStart=%h/.local/bin/beekeeper sandbox broker
+Restart=on-failure
+RestartSec=5s
+MemoryMax=128M
+
+[Install]
+WantedBy=default.target

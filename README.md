@@ -35,7 +35,7 @@ beekeeper install
 `install` merges the PreToolUse, PermissionRequest, PostToolUse and SessionStart hooks into Claude Code's user settings
 (`~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR`) with the binary's absolute path, writes and
 starts the [standby service](#desktop-notifications) (a systemd user unit, a launch agent on
-macOS), with `teleport.proxy` set the [Teleport login's keeper](#the-teleport-login), and on systemd the memory guard sized to the machine's RAM: `memcap.slice` for `beekeeper
+macOS), with `teleport.proxy` set the [Teleport login's keeper](#the-teleport-login), and on systemd the [agent sandbox](#the-agent-sandbox)'s broker (`beekeeper-sandbox.service`) and the memory guard sized to the machine's RAM: `memcap.slice` for `beekeeper
 run`'s capped commands and a drop-in for the Claude Desktop scope that runs (run install again
 with the app running when it does not). Without a config it writes a starter one, the [example
 configuration](docs/examples/config.yaml) with every key commented out. A file already as install
@@ -444,7 +444,7 @@ same file passed to `claude --settings` holds one session to it, to try a change
   Kubeconfigs, the Teleport profile, the GitHub CLI's token file and every other credential nobody
   listed stay unreadable. Only the managed settings' read paths count.
 - **Writes:** the session's working directory (when it is readable itself), the temporary directory,
-  beekeeper's state and `sandbox.allowWrite`.
+  beekeeper's state, the build slots and `sandbox.allowWrite`.
 - **Egress:** GitHub and `sandbox.domains`, nothing else, with no prompt to widen it.
 - **The GitHub token:** `GH_TOKEN` and `GITHUB_TOKEN` (`sandbox.mask`) are masked: commands see a
   placeholder, and the sandbox proxy puts the real value into requests to GitHub's hosts only.
@@ -454,6 +454,14 @@ same file passed to `claude --settings` holds one session to it, to try a change
   hook holds them to the same lists in every session, in the hooks' scope or not: a path is resolved
   (symlinks included, a missing one through its nearest parent) and refused outside the lists. The file
   tools may also write the sessions' memory and plans, which no command may.
+- **Capped runs.** On Linux the sandbox blocks every Unix socket (seccomp cannot filter them by path),
+  the user bus included, so `beekeeper run` cannot start its scope there. It asks the broker instead,
+  `beekeeper sandbox broker` on the host (the user unit `beekeeper-sandbox.service`, which `beekeeper
+  install` puts in place), through request files in `<stateDir>/sandbox`. The broker caps the slot's
+  slice and moves the asking process into its memcap scope; the command runs there, still in the
+  sandbox. It answers each request as the one process of the user that holds it open, never a process
+  the request names, and only for memcap's own slices and scopes. With no broker answering, a
+  sandboxed `beekeeper run` refuses (exit 1) instead of running a build uncapped.
 
 ## What leaves the machine
 

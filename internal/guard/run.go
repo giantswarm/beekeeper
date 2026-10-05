@@ -129,6 +129,9 @@ type Options struct {
 	// Test names the scope TestScopePrefix…: a test's run, whose cap kill
 	// snapshot and watch report as a test kill.
 	Test bool
+	// Sandbox caps the run when the agent sandbox keeps the service
+	// manager out of reach (the host's broker); nil outside the sandbox.
+	Sandbox platform.Capper
 }
 
 func (o Options) record(verb, detail string) {
@@ -178,15 +181,26 @@ func ParseWait(s string) (time.Duration, error) {
 // Run runs argv in a capped scope and returns its exit code: the command's,
 // 128+signal when a signal ended it, ExitBusy when the wait ran out.
 // Without a user systemd, or inside a capped scope already, it execs argv.
+// In the agent sandbox (o.Sandbox), which keeps the user systemd out of
+// reach, the host's broker caps it; without a broker it refuses, 1.
 // A run of a session that holds a slot already joins that slot at once: its
 // scope goes into the slot's slice and shares the slot's cap.
 func Run(o Options, argv []string) int {
 	logf := func(format string, a ...any) { _, _ = fmt.Fprintf(o.Stderr, LogPrefix+format+"\n", a...) }
-	if !plat.Capper.Available() {
+	capper := plat.Capper
+	switch {
+	case capper.Available():
+	case o.Sandbox == nil:
 		logf("no user systemd here, running uncapped: %s", argv[0])
 		return execve(argv, logf)
+	case !o.Sandbox.Available():
+		logf("refused: the agent sandbox keeps the user systemd out of reach and no sandbox broker answers; " +
+			"the host runs it as beekeeper-sandbox.service (beekeeper install), an uncapped build would put the machine at risk")
+		return 1
+	default:
+		capper = o.Sandbox
 	}
-	if plat.Capper.Capped() {
+	if capper.Capped() {
 		return execve(argv, logf)
 	}
 	needKiB, err := ParseSize(o.Max)
@@ -210,7 +224,7 @@ func Run(o Options, argv []string) int {
 		defer func() { _ = lock.Unlock() }()
 		holder := filepath.Join(o.SlotDir, strconv.Itoa(slot)+".holder")
 		defer func() { _ = os.Remove(holder) }()
-		if err := plat.Capper.CapSlot(platform.Cap{Max: o.Max, Swap: o.Swap, Slice: o.SlotSlice(slot)}); err != nil {
+		if err := capper.CapSlot(platform.Cap{Max: o.Max, Swap: o.Swap, Slice: o.SlotSlice(slot)}); err != nil {
 			logf("%v", err)
 			return 1
 		}
@@ -228,7 +242,7 @@ func Run(o Options, argv []string) int {
 	}
 	o.record(VerbStart, fmt.Sprintf("%s.scope %s %d max %s: %s", unit, how, slot, o.Max, head))
 	start := time.Now()
-	rc := scope(unit, o, slot, argv, logf)
+	rc := scope(capper, unit, o, slot, argv, logf)
 	end := fmt.Sprintf("%s.scope exit %d after %s", unit, rc, time.Since(start).Round(time.Second))
 	if rc != 0 {
 		if v := victims(unit, start, rc); len(v) > 0 {
@@ -363,8 +377,8 @@ func writeHolder(o Options, slot int, argv []string) {
 }
 
 // scope runs argv in the capped scope unit, in the slot's slice.
-func scope(unit string, o Options, slot int, argv []string, logf func(string, ...any)) int {
-	c, err := plat.Capper.Command(unit, platform.Cap{Max: o.Max, Swap: o.Swap, Slice: o.SlotSlice(slot)}, argv)
+func scope(capper platform.Capper, unit string, o Options, slot int, argv []string, logf func(string, ...any)) int {
+	c, err := capper.Command(unit, platform.Cap{Max: o.Max, Swap: o.Swap, Slice: o.SlotSlice(slot)}, argv)
 	if err != nil {
 		logf("%v", err)
 		return ExitNotFound

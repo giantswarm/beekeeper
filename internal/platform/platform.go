@@ -143,6 +143,10 @@ type Capper interface {
 	// Command is argv to run capped in the scope name, in c.Slice; the
 	// caller starts and waits for it.
 	Command(name string, c Cap, argv []string) (*exec.Cmd, error)
+	// Adopt moves the running process pid into a new capped scope name, in
+	// c.Slice, and returns once it is there: a command the sandbox keeps
+	// from the service manager asks the host for its scope this way.
+	Adopt(pid int, name string, c Cap) error
 }
 
 // Opener hands claude:// links to the desktop app.
