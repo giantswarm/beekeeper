@@ -47,10 +47,13 @@ var trueCmd = []string{"true"}
 // to cap and to run in.
 type fakeCapper struct {
 	capped, ran []string
+	// down makes it unavailable: no user systemd, no broker.
+	down bool
 }
 
-func (*fakeCapper) Available() bool { return true }
-func (*fakeCapper) Capped() bool    { return false }
+func (f *fakeCapper) Available() bool                     { return !f.down }
+func (*fakeCapper) Capped() bool                          { return false }
+func (*fakeCapper) Adopt(int, string, platform.Cap) error { return nil }
 func (f *fakeCapper) CapSlot(c platform.Cap) error {
 	f.capped = append(f.capped, c.Slice)
 	return nil
@@ -166,5 +169,27 @@ func TestSlotSliceIsTheSlotDirectorysOwn(t *testing.T) {
 	}
 	if got := (Options{SlotDir: t.TempDir(), Test: true}).SlotSlice(1); got != "memcap-slot1_test.slice" {
 		t.Errorf("a test's SlotSlice = %q", got)
+	}
+}
+
+func TestRunInTheSandboxGoesThroughTheBroker(t *testing.T) {
+	host := &fakeCapper{down: true}
+	saved := plat.Capper
+	plat.Capper = host
+	t.Cleanup(func() { plat.Capper = saved })
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "sandboxed")
+	broker := &fakeCapper{}
+	o := Options{Max: "1M", Swap: "0", SlotDir: t.TempDir(), Slots: 1, Stderr: io.Discard, Sandbox: broker}
+	if rc := Run(o, trueCmd); rc != 0 {
+		t.Fatalf("a sandboxed run with a broker: exit %d, want 0", rc)
+	}
+	if !slices.Equal(broker.capped, []string{o.SlotSlice(1)}) || !slices.Equal(broker.ran, []string{o.SlotSlice(1)}) || len(host.ran) != 0 {
+		t.Errorf("broker capped %v, ran %v; host ran %v", broker.capped, broker.ran, host.ran)
+	}
+
+	var stderr strings.Builder
+	o.Sandbox, o.Stderr = &fakeCapper{down: true}, &stderr
+	if rc := Run(o, []string{"false-is-never-run"}); rc != 1 || !strings.Contains(stderr.String(), "refused: the agent sandbox") {
+		t.Errorf("a sandboxed run without a broker: exit %d, %q; want 1 and the refusal", rc, stderr.String())
 	}
 }

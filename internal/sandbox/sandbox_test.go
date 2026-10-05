@@ -30,7 +30,7 @@ func policy(t *testing.T) (Policy, string) {
 		Domains: []string{"muster.example.com"}, Mask: []config.SandboxMask{{Name: "GH_TOKEN", Hosts: config.GitHubHosts}}}
 	return New(cfg, Paths{Home: home, ConfigFile: filepath.Join(home, ".config/beekeeper/config.yaml"),
 		StateDir: filepath.Join(home, ".local/state/beekeeper"), LeaseDir: filepath.Join(home, ".local/state/beekeeper/leases"),
-		Exe: filepath.Join(home, ".go/bin/beekeeper")}), home
+		SlotDir: filepath.Join(home, ".local/state/memcap/slots"), Exe: filepath.Join(home, ".go/bin/beekeeper")}), home
 }
 
 func TestSettings(t *testing.T) {
@@ -47,6 +47,7 @@ func TestSettings(t *testing.T) {
 			Network                                              struct {
 				AllowedDomains          []string
 				AllowManagedDomainsOnly bool
+				AllowAllUnixSockets     bool
 				TLSTerminate            map[string]any
 			}
 			Credentials struct {
@@ -77,10 +78,11 @@ func TestSettings(t *testing.T) {
 			t.Errorf("allowRead re-allows %s", deny)
 		}
 	}
-	if !slices.Contains(sb.Filesystem.AllowWrite, "~/go/pkg/mod") || !slices.Contains(sb.Filesystem.AllowWrite, "~/.local/state/beekeeper") {
+	if !slices.Contains(sb.Filesystem.AllowWrite, "~/go/pkg/mod") || !slices.Contains(sb.Filesystem.AllowWrite, "~/.local/state/beekeeper") ||
+		!slices.Contains(sb.Filesystem.AllowWrite, "~/.local/state/memcap/slots") {
 		t.Errorf("allowWrite = %v", sb.Filesystem.AllowWrite)
 	}
-	if !sb.Network.AllowManagedDomainsOnly || sb.Network.TLSTerminate == nil || !slices.Contains(sb.Network.AllowedDomains, "muster.example.com") ||
+	if !sb.Network.AllowManagedDomainsOnly || sb.Network.AllowAllUnixSockets || sb.Network.TLSTerminate == nil || !slices.Contains(sb.Network.AllowedDomains, "muster.example.com") ||
 		!slices.Contains(sb.Network.AllowedDomains, "api.github.com") && !slices.Contains(sb.Network.AllowedDomains, "*.github.com") {
 		t.Errorf("network = %+v", sb.Network)
 	}

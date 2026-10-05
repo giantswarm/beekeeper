@@ -5,6 +5,7 @@ package platform
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/godbus/dbus/v5"
 
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -254,6 +257,83 @@ func (systemdCapper) Command(name string, c Cap, argv []string) (*exec.Cmd, erro
 		"--slice=" + c.slice(), "-p", "MemoryMax=" + c.Max, "-p", "MemorySwapMax=" + c.Swap,
 		"-p", "OOMPolicy=continue", "--"}, argv...)
 	return exec.Command("systemd-run", args...), nil //nolint:gosec // running the caller's command is the purpose
+}
+
+// Adopt starts the transient scope name around the running process pid
+// (the service manager's StartTransientUnit with PIDs, which systemd-run
+// --scope uses for itself) and waits until the process is in it.
+func (systemdCapper) Adopt(pid int, name string, c Cap) error {
+	limit, err := sizeBytes(c.Max)
+	if err != nil {
+		return err
+	}
+	swap, err := sizeBytes(c.Swap)
+	if err != nil {
+		return err
+	}
+	conn, err := connect()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	type property struct {
+		Name  string
+		Value dbus.Variant
+	}
+	props := []property{
+		{"PIDs", dbus.MakeVariant([]uint32{uint32(pid)})}, //nolint:gosec // a process id
+		{"Slice", dbus.MakeVariant(c.slice())},
+		{"MemoryMax", dbus.MakeVariant(limit)},
+		{"MemorySwapMax", dbus.MakeVariant(swap)},
+		{"OOMPolicy", dbus.MakeVariant("continue")},
+	}
+	var job dbus.ObjectPath
+	err = conn.Object("org.freedesktop.systemd1", "/org/freedesktop/systemd1").
+		Call("org.freedesktop.systemd1.Manager.StartTransientUnit", 0, name+".scope", "fail", props, []struct {
+			Name  string
+			Props []property
+		}{}).Store(&job)
+	if err != nil {
+		return fmt.Errorf("starting %s.scope: %w", name, err)
+	}
+	cgroup := filepath.Join("/proc", strconv.Itoa(pid), "cgroup")
+	for range 250 {
+		if raw, err := os.ReadFile(cgroup); err != nil { //nolint:gosec // the adopted process's cgroup
+			return fmt.Errorf("process %d: %w", pid, err)
+		} else if strings.Contains(string(raw), "/"+name+".scope") {
+			return nil
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return fmt.Errorf("process %d is not in %s.scope after 5s", pid, name)
+}
+
+// sizeBytes is a systemd size with base-1024 suffixes, or "infinity", in
+// bytes, as the service manager's memory properties take it.
+func sizeBytes(s string) (uint64, error) {
+	if s == "infinity" {
+		return math.MaxUint64, nil
+	}
+	shift := 0
+	switch {
+	case strings.HasSuffix(s, "K"), strings.HasSuffix(s, "k"):
+		shift = 10
+	case strings.HasSuffix(s, "M"), strings.HasSuffix(s, "m"):
+		shift = 20
+	case strings.HasSuffix(s, "G"), strings.HasSuffix(s, "g"):
+		shift = 30
+	case strings.HasSuffix(s, "T"), strings.HasSuffix(s, "t"):
+		shift = 40
+	}
+	digits := s
+	if shift > 0 {
+		digits = s[:len(s)-1]
+	}
+	n, err := strconv.ParseUint(digits, 10, 64)
+	if err != nil || n > math.MaxUint64>>shift {
+		return 0, fmt.Errorf("invalid size %q: want a number with an optional K, M, G or T suffix, or infinity", s)
+	}
+	return n << shift, nil
 }
 
 // systemdOpener hands links to the desktop app, starting it in a scope of

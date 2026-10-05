@@ -64,9 +64,10 @@ type Policy struct {
 	Exe string
 }
 
-// Paths are where beekeeper and its configuration live.
+// Paths are where beekeeper and its configuration live, and the build
+// slots beekeeper run takes.
 type Paths struct {
-	Home, ConfigFile, StateDir, LeaseDir, Exe string
+	Home, ConfigFile, StateDir, LeaseDir, SlotDir, Exe string
 }
 
 // New is the policy for cfg: beekeeper's own paths and GitHub, and the
@@ -87,13 +88,14 @@ func New(cfg config.Sandbox, e Paths) Policy {
 			filepath.Join(claude, "CLAUDE.md"),
 			filepath.Join(e.Home, ".gitconfig"), filepath.Join(e.Home, ".config", "git"),
 		}, cfg.AllowRead...),
-		Write:     append([]string{e.StateDir, e.LeaseDir}, cfg.AllowWrite...),
+		Write:     append([]string{e.StateDir, e.LeaseDir, e.SlotDir}, cfg.AllowWrite...),
 		ToolWrite: []string{filepath.Join(claude, "projects", "*", "memory"), filepath.Join(claude, "plans")},
 		Domains:   append([]string{"github.com", "*.github.com", "*.githubusercontent.com"}, cfg.Domains...),
 		Mask:      cfg.Mask,
 		Exe:       e.Exe,
 	}
 	for _, ps := range []*[]string{&p.Read, &p.Write, &p.ToolWrite} {
+		*ps = slices.DeleteFunc(*ps, func(q string) bool { return q == "" })
 		for i, q := range *ps {
 			(*ps)[i] = filepath.Clean(q)
 		}

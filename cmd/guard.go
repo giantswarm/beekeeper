@@ -20,6 +20,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/post"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/takeover"
 )
@@ -48,7 +49,11 @@ instead (the PreToolUse hook then sets a 60m wait), never poll.
 
 The slots are memcap's flock files, shared with the memcap wrapper. The
 command's arguments reach it verbatim: systemd-run's own ${VAR} expansion is
-off. Without a user systemd (containers, CI) the command runs uncapped.
+off. Without a user systemd (containers, CI) the command runs uncapped. In
+the agent sandbox, which keeps the user systemd out of reach, the host's
+broker (beekeeper sandbox broker) caps the slot and moves the command into
+its scope, the command still in the sandbox; with no broker answering, run
+refuses (exit 1) rather than run a build uncapped.
 
 Every capped run leaves a run.start and a run.end event in beekeeper log,
 naming the scope, the session and the command, so that a cap kill found
@@ -69,6 +74,10 @@ kill in it as a test kill, not a build's.`,
 			o := guard.Options{Max: env("MEMCAP_MAX", a.cfg.MemcapMax(ramMiB())), Swap: env("MEMCAP_SWAP", "0"),
 				SlotDir: a.cfg.Memcap.SlotDir, Slots: a.cfg.Memcap.Slots, Stderr: os.Stderr, Record: a.runRecorder(),
 				Test: os.Getenv("MEMCAP_TEST") == "1"}
+			if os.Getenv(sandbox.Env) != "" {
+				exe, _ := os.Executable()
+				o.Sandbox = sandbox.Capper{Dir: sandbox.SpoolDir(a.cfg.StateDir), Exe: exe}
+			}
 			if s := os.Getenv("MEMCAP_STATE"); s != "" {
 				o.SlotDir = filepath.Join(s, "slots")
 			}

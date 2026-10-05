@@ -3,6 +3,7 @@
 package platform
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -29,6 +30,19 @@ func TestOpenerRunning(t *testing.T) {
 	} {
 		if got := (systemdOpener{app: "claude-desktop"}.Running(tc.t)); !got.Equal(tc.want) {
 			t.Errorf("%s: Running = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+func TestSizeBytes(t *testing.T) {
+	for in, want := range map[string]uint64{"0": 0, "512": 512, "4K": 4 << 10, "12G": 12 << 30, "1536m": 1536 << 20, "1T": 1 << 40, "infinity": math.MaxUint64} {
+		if got, err := sizeBytes(in); err != nil || got != want {
+			t.Errorf("sizeBytes(%q) = %d, %v; want %d", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"", "G", "-1G", "1.5G", "12GB", "99999999999T"} {
+		if _, err := sizeBytes(in); err == nil {
+			t.Errorf("sizeBytes(%q): want an error", in)
 		}
 	}
 }

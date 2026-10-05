@@ -86,6 +86,7 @@ func (stubCapper) CapSlot(Cap) error { return missing("Capper.CapSlot") }
 func (stubCapper) Command(string, Cap, []string) (*exec.Cmd, error) {
 	return nil, missing("Capper.Command")
 }
+func (stubCapper) Adopt(int, string, Cap) error { return missing("Capper.Adopt") }
 
 type stubInput struct{}
 
