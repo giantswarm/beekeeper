@@ -33,6 +33,8 @@ type Keeper struct {
 	since    time.Time
 	until    time.Time
 	lifetime time.Duration
+	// end locks the session when its lifetime passes.
+	end *time.Timer
 	// changed hears the state after every unlock and lock.
 	changed func(VaultState)
 	// ready is closed when the vault unlocks and replaced by the next
@@ -64,36 +66,46 @@ func (k *Keeper) unlock(env string, now time.Time) {
 		close(k.ready)
 	}
 	k.unlocked, k.env, k.since, k.until = true, env, now, now.Add(k.lifetime)
+	if k.end != nil {
+		k.end.Stop()
+	}
+	k.end = time.AfterFunc(k.lifetime, func() { k.lockSession(now) })
 	st := k.stateLocked()
 	k.mu.Unlock()
 	k.changed(st)
 }
 
-// Lock forgets the session: the person's lock, its lifetime's end, or one
-// op no longer takes.
+// Lock forgets the session: the person's lock, or one op no longer takes.
 func (k *Keeper) Lock() {
 	k.mu.Lock()
+	k.lockLocked()
+}
+
+// lockSession forgets the session that unlocked at since, at the end of its
+// lifetime; a later session stays.
+func (k *Keeper) lockSession(since time.Time) {
+	k.mu.Lock()
+	if !k.since.Equal(since) {
+		k.mu.Unlock()
+		return
+	}
+	k.lockLocked()
+}
+
+// lockLocked forgets the session with k.mu held, and releases it.
+func (k *Keeper) lockLocked() {
 	if !k.unlocked {
 		k.mu.Unlock()
 		return
 	}
 	k.unlocked, k.env, k.since, k.until = false, "", time.Time{}, time.Time{}
+	if k.end != nil {
+		k.end.Stop()
+	}
 	k.ready = make(chan struct{})
 	st := k.stateLocked()
 	k.mu.Unlock()
 	k.changed(st)
-}
-
-// Expire forgets the session once its lifetime has passed at now, and
-// reports whether it did.
-func (k *Keeper) Expire(now time.Time) bool {
-	k.mu.Lock()
-	over := k.unlocked && !now.Before(k.until)
-	k.mu.Unlock()
-	if over {
-		k.Lock()
-	}
-	return over
 }
 
 // State is whether the keeper holds a session, since when and until when.

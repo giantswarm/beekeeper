@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The broker's vault session ends at the exact end of `secret.sessionLifetime`, not up to a minute later on the keeper's next look, so the watch's `VAULT UNLOCKED … until <t>` holds to the minute.
 - `beekeeper secret unlock` reached no broker: the broker is undumpable, so its `/proc/<pid>/exe` is root's and the peer check failed before anything was sent or logged. The check now identifies the broker as the main process of `beekeeper-sandbox.service` running this binary, from systemd, and a refused unlock is logged.
 - The watch no longer ends a waiting vault call with a bare ENDED line when it gave up: `VAULT LOCKED: <who>'s call on <ref> timed out …, still locked`.
 - The watch's doctor says an unchanged chore line once per watch instead of on every pass, and the finished workers waiting on an unset `agents.archiveAgreement` as one summary line (the count and the key to set), ended once none waits, instead of one line and event per agent every 30 s.

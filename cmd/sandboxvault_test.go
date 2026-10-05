@@ -131,8 +131,8 @@ func TestBrokeredVaultForgetsAnExpiredSession(t *testing.T) {
 	}
 }
 
-// The keeper touches the approval every vaultTouchEvery, forgets one op no
-// longer takes, and forgets it at the end of its lifetime.
+// The keeper touches the session every vaultTouchEvery and forgets one op
+// no longer takes.
 func TestTendVault(t *testing.T) {
 	now := time.Date(2026, 10, 5, 22, 10, 0, 0, time.UTC)
 	k := secret.NewKeeper(time.Hour, nil)
@@ -142,19 +142,14 @@ func TestTendVault(t *testing.T) {
 	touch := func(context.Context, string) error { touches++; return gone }
 	touched := tendVault(context.Background(), k, now.Add(time.Minute), time.Time{}, touch)
 	if touches != 0 || !touched.Equal(now) {
-		t.Fatalf("a fresh approval was touched: %d, %v", touches, touched)
+		t.Fatalf("a fresh session was touched: %d, %v", touches, touched)
 	}
 	touched = tendVault(context.Background(), k, now.Add(vaultTouchEvery), touched, touch)
 	if touches != 1 || !touched.Equal(now.Add(vaultTouchEvery)) || !k.State().Unlocked {
 		t.Fatalf("the touch: %d, %v, %+v", touches, touched, k.State())
 	}
-	tendVault(context.Background(), k, now.Add(time.Hour), touched, touch)
-	if k.State().Unlocked || touches != 1 {
-		t.Errorf("kept past its lifetime: %+v, %d touches", k.State(), touches)
-	}
-	_ = k.Unlock(testVaultSession, "tok", now)
 	gone = errors.New("You are not currently signed in")
-	tendVault(context.Background(), k, now.Add(vaultTouchEvery), now, touch)
+	tendVault(context.Background(), k, now.Add(2*vaultTouchEvery), touched, touch)
 	if k.State().Unlocked {
 		t.Error("kept a session op no longer takes")
 	}
