@@ -69,7 +69,7 @@ Without a subcommand, lists the leases.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error { return a.leaseList() },
 	}
-	c.AddCommand(a.leaseClaimCmd(), a.leaseReleaseCmd(), a.leaseStatusCmd(), a.leaseListCmd(),
+	c.AddCommand(a.leaseClaimCmd(), a.leaseReleaseCmd(), a.leaseStatusCmd(), a.leaseListCmd(), a.leaseKubeconfigCmd(),
 		a.leaseGrantCmd(), a.leaseRevokeCmd())
 	return c
 }
@@ -222,6 +222,9 @@ model is RAM no cgroup counts, and the watch unloads what exceeds it.`,
 			}
 			if err != nil {
 				return err
+			}
+			if a.cfg.LabCluster(res) != "" {
+				msg += a.claimKubeconfig(cmd.Context(), res)
 			}
 			_, err = fmt.Fprintln(a.out, msg)
 			return err
