@@ -9,11 +9,14 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
+	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -56,6 +59,9 @@ anything is not equal.`,
 			if err != nil {
 				return err
 			}
+			if err := a.sandboxFiles(r, nil); err != nil {
+				return err
+			}
 			ra, rb := r[0], r[1]
 			ops, err := a.secretOps()
 			if err != nil {
@@ -94,6 +100,9 @@ can make one.`,
 			if err != nil {
 				return err
 			}
+			if err := a.sandboxFiles(r, nil); err != nil {
+				return err
+			}
 			ops, err := a.secretOpsKeyed()
 			if err != nil {
 				return err
@@ -113,9 +122,84 @@ can make one.`,
 	c.AddCommand(a.secretCopyCmd(), a.secretSetCmd(), a.secretRotateCmd(), a.secretSetupCmd(), a.secretImportCmd())
 	for _, sub := range c.Commands() {
 		run := sub.RunE
-		sub.RunE = func(cmd *cobra.Command, args []string) error { return vaultExit(run(cmd, args)) }
+		sub.RunE = func(cmd *cobra.Command, args []string) error {
+			if os.Getenv(sandbox.Env) != "" && os.Getenv(sandbox.Brokered) == "" {
+				return a.secretBrokered(cmd, args)
+			}
+			return vaultExit(run(cmd, args))
+		}
 	}
 	return c
+}
+
+// secretBrokered is a secret call in the agent sandbox, which holds no
+// sops key and no op session: the host's broker runs it as this session
+// and answers its output and exit code through the spool.
+func (a *app) secretBrokered(cmd *cobra.Command, args []string) error {
+	if cmd.ArgsLenAtDash() >= 0 {
+		return refused("the agent sandbox runs no consumer on the host: copy <from> -- <consumer> runs outside the sandbox only")
+	}
+	argv := []string{cmd.Name()}
+	var err error
+	cmd.Flags().Visit(func(f *pflag.Flag) {
+		if f.Name == "as" || f.Name == "config" {
+			err = refused("--%s: a brokered secret call runs as this session, under the host's config", f.Name)
+		}
+		argv = append(argv, "--"+f.Name+"="+f.Value.String())
+	})
+	if err != nil {
+		return err
+	}
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			return usageErr("%s: an argument the broker would take for a flag", arg)
+		}
+	}
+	argv = append(argv, args...)
+	if err := brokeredSecretArgs(argv); err != nil {
+		return refused("%v; %s and %s run on the host, by the person", err, "setup", "import")
+	}
+	dir := sandbox.SpoolDir(a.cfg.StateDir)
+	if !(sandbox.Capper{Dir: dir}).Available() {
+		return refused("no sandbox broker answers in %s: beekeeper secret runs through beekeeper-sandbox.service on the host (beekeeper install)", dir)
+	}
+	r, err := sandbox.Call(dir, sandbox.Request{Op: sandbox.OpSecret, Args: argv}, secretCallTimeout+time.Minute)
+	if err != nil {
+		return refused("%v", err)
+	}
+	if _, err := io.WriteString(a.out, r.Out); err != nil {
+		return err
+	}
+	_, _ = io.WriteString(os.Stderr, r.Err)
+	if r.Code != 0 {
+		return &exitError{code: r.Code}
+	}
+	return nil
+}
+
+// sandboxFiles holds the SOPS files of a brokered call to the agent
+// sandbox's lists: through the broker a sandboxed session reads and writes
+// no file its sandbox closes to it.
+func (a *app) sandboxFiles(read, write []secret.Ref) error {
+	if os.Getenv(sandbox.Brokered) == "" {
+		return nil
+	}
+	p := a.sandboxPolicy()
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	for _, r := range read {
+		if r.File != "" && !p.Readable(r.File, cwd) {
+			return refused("the agent sandbox does not let this session read %s", r.File)
+		}
+	}
+	for _, r := range write {
+		if r.File != "" && !p.Writable(r.File, cwd) {
+			return refused("the agent sandbox does not let this session write %s", r.File)
+		}
+	}
+	return nil
 }
 
 // vaultExit gives an error reading the shared vault its own exit code,
@@ -174,6 +258,9 @@ failing or answering nothing within a minute) exits 78.`,
 			if err != nil {
 				return err
 			}
+			if err := a.sandboxFiles(src, nil); err != nil {
+				return err
+			}
 			ops, err := a.secretOps()
 			if err != nil {
 				return err
@@ -205,6 +292,9 @@ failing or answering nothing within a minute) exits 78.`,
 			}
 			dst, err := parseRefs(args[1])
 			if err != nil {
+				return err
+			}
+			if err := a.sandboxFiles(nil, dst); err != nil {
 				return err
 			}
 			if dst[0].Path != "" || dst[0].Op != "" {
@@ -308,6 +398,9 @@ the recipients of its .sops.yaml), and answers its fingerprint.`,
 				return usageErr("--vault: %v", err)
 			}
 			dst := secret.Ref{File: args[0], Path: args[1]}
+			if err := a.sandboxFiles(nil, []secret.Ref{dst}); err != nil {
+				return err
+			}
 			ops, err := a.secretOpsKeyed()
 			if err != nil {
 				return err

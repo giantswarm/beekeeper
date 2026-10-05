@@ -12,16 +12,21 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/lease"
+	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/secret/secrettest"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 const (
-	secretValue = "planted-Secret-Value-9d41b7"
-	dbRef       = "op://Shared/db/password"
-	jsonFlag    = "--json"
-	copyOp      = "copy"
+	secretValue   = "planted-Secret-Value-9d41b7"
+	dbRef         = "op://Shared/db/password"
+	jsonFlag      = "--json"
+	copyOp        = "copy"
+	compareOp     = "compare"
+	fingerprintOp = "fingerprint"
+	sopsA         = "a.sops.yaml"
+	sopsB         = "b.sops.yaml"
 )
 
 // secretApp is an app over a scratch repository with one encrypted Secret
@@ -84,10 +89,10 @@ func TestSecretOperationsReturnNoValueAndAreLogged(t *testing.T) {
 	}
 	for _, args := range [][]string{
 		{copyOp, src, dst, "--name", "db-copy", "--namespace", "team-b"},
-		{"compare", src, dst},
-		{"compare", src + "#data.password", dst + "#data.password"},
-		{"fingerprint", src},
-		{"fingerprint", dbRef},
+		{compareOp, src, dst},
+		{compareOp, src + "#data.password", dst + "#data.password"},
+		{fingerprintOp, src},
+		{fingerprintOp, dbRef},
 		{copyOp, dbRef, dst + "#stringData.extra"},
 		{copyOp, dbRef, "--", consumer, "secret", "set", "X"},
 		{"set", dst, "stringData.generated", "--generate", "--vault", "op://Shared/gen/password"},
@@ -110,7 +115,7 @@ func TestSecretOperationsReturnNoValueAndAreLogged(t *testing.T) {
 		t.Errorf("copy answers %q, %v", out, err)
 	}
 	a.out = &bytes.Buffer{}
-	if _, err := runSecret(a, "compare", src, dst); Code(err) != ExitError {
+	if _, err := runSecret(a, compareOp, src, dst); Code(err) != ExitError {
 		t.Errorf("compare of files with different names = %v, want exit 1", err)
 	}
 	a.out = &bytes.Buffer{}
@@ -218,7 +223,49 @@ func TestSecretCopyToSecretOnlyIntoAHeldLab(t *testing.T) {
 	}
 	a.cfg.Secret.TokenFile = ""
 	a.out = &bytes.Buffer{}
-	if _, err := runSecret(a, "fingerprint", dbRef); Code(err) != ExitVault {
+	if _, err := runSecret(a, fingerprintOp, dbRef); Code(err) != ExitVault {
 		t.Errorf("no vault token = %v (exit %d), want exit %d", err, Code(err), ExitVault)
+	}
+}
+
+func TestBrokeredSecretHoldsItsFilesToTheSandbox(t *testing.T) {
+	a, _, repo := secretApp(t)
+	// a home outside the temporary directory, which the sandbox opens, and
+	// the requester's working directory in the repository
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".sops.yaml"), []byte("creation_rules: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("TMPDIR", filepath.Join(base, "tmp"))
+	t.Chdir(repo)
+	t.Setenv(sandbox.Env, "1")
+	t.Setenv(sandbox.Brokered, "1")
+	closed := filepath.Join(home, "credentials.sops.yaml")
+	if err := os.WriteFile(closed, secrettest.Encrypt("token: "+secretValue+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(repo, "db.sops.yaml")
+	for _, args := range [][]string{
+		{fingerprintOp, closed},
+		{compareOp, src, closed},
+		{copyOp, closed + "#token", filepath.Join(repo, "x.sops.yaml") + "#token"},
+		{copyOp, src, filepath.Join(home, "out.sops.yaml")},
+		{copyOp, src + "#data.password", filepath.Join(home, "out.sops.yaml") + "#p"},
+	} {
+		a.out = &bytes.Buffer{}
+		out, err := runSecret(a, args...)
+		if Code(err) != ExitRefused || !strings.Contains(err.Error(), "agent sandbox does not let") {
+			t.Errorf("%q: exit %d, %v", args, Code(err), err)
+		}
+		noSecret(t, "a refused call", out)
+	}
+	a.out = &bytes.Buffer{}
+	if _, err := runSecret(a, copyOp, src, filepath.Join(repo, "copy.sops.yaml")); err != nil {
+		t.Errorf("a copy inside the sandbox's lists: %v", err)
 	}
 }

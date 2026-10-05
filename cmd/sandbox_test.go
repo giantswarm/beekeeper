@@ -65,3 +65,27 @@ func TestBrokeredCap(t *testing.T) {
 		t.Errorf("a refused request reached the host: slots %v, adopts %v", r.slots, r.adopts)
 	}
 }
+
+func TestBrokeredSecretArgs(t *testing.T) {
+	for _, ok := range [][]string{
+		{compareOp, sopsA, sopsB},
+		{copyOp, "--name=--config", sopsA, sopsB},
+		{"rotate", "op://Shared/db/password", "--generate=true", "--json=true"},
+	} {
+		if err := brokeredSecretArgs(ok); err != nil {
+			t.Errorf("%q: %v", ok, err)
+		}
+	}
+	for _, bad := range [][]string{
+		nil,
+		{"setup"},
+		{"import", "op://Private/x/y", "op://Shared/x/y"},
+		{copyOp, "a.sops.yaml#k", "--", "sh", "-c", "env"},
+		{compareOp, "--as", agentTwo, "a", "b"},
+		{compareOp, "--config=/tmp/other.yaml", "a", "b"},
+	} {
+		if err := brokeredSecretArgs(bad); err == nil {
+			t.Errorf("%q: want a refusal", bad)
+		}
+	}
+}

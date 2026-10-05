@@ -464,6 +464,13 @@ same file passed to `claude --settings` holds one session to it, to try a change
   sandbox. It answers each request as the one process of the user that holds it open, never a process
   the request names, and only for memcap's own slices and scopes. With no broker answering, a
   sandboxed `beekeeper run` refuses (exit 1) instead of running a build uncapped.
+- **Secret operations.** The sandbox holds no sops key and no op session, so a sandboxed
+  `beekeeper secret compare|fingerprint|copy|set|rotate` goes through the same broker: it runs on the
+  host as the session that holds the request (its name and id, nothing else of its environment), in
+  its working directory, and the SOPS files it reads and writes are held to the sandbox's lists. Its
+  output and exit code come back through the spool, and that output is never a value. A consumer
+  (`copy <ref> -- <command>`) would run on the host, outside the sandbox, so the sandbox refuses it,
+  as it refuses `--as`, `--config` and the vault's `setup` and `import`, which the person runs.
 
 ## What leaves the machine
 

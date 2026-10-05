@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -31,7 +32,7 @@ const (
 
 // Request is one ask of the broker.
 type Request struct {
-	// Op is OpPing, OpCapSlot or OpScope.
+	// Op is OpPing, OpCapSlot, OpScope or OpSecret.
 	Op string `json:"op"`
 	// Unit is the scope to put the requester into (OpScope).
 	Unit string `json:"unit,omitempty"`
@@ -39,6 +40,9 @@ type Request struct {
 	Slice string `json:"slice,omitempty"`
 	Max   string `json:"max,omitempty"`
 	Swap  string `json:"swap,omitempty"`
+	// Args are the beekeeper secret call's arguments after "secret"
+	// (OpSecret).
+	Args []string `json:"args,omitempty"`
 }
 
 // The broker's operations.
@@ -49,11 +53,18 @@ const (
 	OpCapSlot = "cap-slot"
 	// OpScope moves the requester into a capped scope.
 	OpScope = "scope"
+	// OpSecret runs a beekeeper secret call on the host, where sops and
+	// op reach their keys, and answers its output and exit code.
+	OpSecret = "secret"
 )
 
-// reply is the broker's answer: an empty Error is done.
-type reply struct {
+// Reply is the broker's answer: an empty Error is done, Out, Err and Code
+// are a call's output and exit code (OpSecret).
+type Reply struct {
 	Error string `json:"error,omitempty"`
+	Out   string `json:"out,omitempty"`
+	Err   string `json:"err,omitempty"`
+	Code  int    `json:"code,omitempty"`
 }
 
 // ErrNoBroker is a request no broker answered in time.
@@ -66,50 +77,57 @@ func SpoolDir(stateDir string) string { return filepath.Join(stateDir, "sandbox"
 // Ask sends req to the broker serving dir and waits up to timeout for its
 // answer: nil when done, the broker's refusal, or ErrNoBroker.
 func Ask(dir string, req Request, timeout time.Duration) error {
+	_, err := Call(dir, req, timeout)
+	return err
+}
+
+// Call is Ask that also returns the broker's reply.
+func Call(dir string, req Request, timeout time.Duration) (Reply, error) {
+	var r Reply
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
+		return r, err
 	}
 	var b [12]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return err
+		return r, err
 	}
 	base := filepath.Join(dir, hex.EncodeToString(b[:]))
 	tmp, path, answer := base+tmpSuffix, base+reqSuffix, base+replySuffix
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) //nolint:gosec // a new request in our own spool; O_EXCL refuses a planted symlink
 	if err != nil {
-		return err
+		return r, err
 	}
 	// the open file is the requester's proof: held until the answer is read
 	defer func() { _ = f.Close() }()
 	defer func() { _ = os.Remove(path); _ = os.Remove(tmp); _ = os.Remove(answer) }()
 	if err := json.NewEncoder(f).Encode(req); err != nil {
-		return err
+		return r, err
 	}
 	if err := os.Rename(tmp, path); err != nil {
-		return err
+		return r, err
 	}
 	deadline := time.Now().Add(timeout)
 	for {
 		raw, err := os.ReadFile(answer) //nolint:gosec // our own spool's answer
 		if err == nil {
-			var r reply
 			if err := json.Unmarshal(raw, &r); err != nil {
-				return fmt.Errorf("the broker's answer: %w", err)
+				return r, fmt.Errorf("the broker's answer: %w", err)
 			}
 			if r.Error != "" {
-				return errors.New(r.Error)
+				return r, errors.New(r.Error)
 			}
-			return nil
+			return r, nil
 		}
 		if !errors.Is(err, os.ErrNotExist) {
-			return err
+			return r, err
 		}
 		if !time.Now().Before(deadline) {
-			return fmt.Errorf("%w within %s (%s)", ErrNoBroker, timeout, dir)
+			return r, fmt.Errorf("%w within %s (%s)", ErrNoBroker, timeout, dir)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 }
 
-// Handler acts on one request of process pid, the request's holder.
-type Handler func(pid int, req Request) error
+// Handler acts on one request of process pid, the request's holder, and
+// answers the reply's output; an error is the refusal.
+type Handler func(ctx context.Context, pid int, req Request) (Reply, error)
