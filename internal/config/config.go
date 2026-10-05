@@ -649,6 +649,9 @@ type Role struct {
 	RelayAt Tokens `yaml:"relayAt"`
 	// RelayTTL is how long a relay stays open for the successor's start.
 	RelayTTL Duration `yaml:"relayTTL"`
+	// RelayGrace is how long a holder that stays over RelayAt has after
+	// the relay due to relay itself; past it, the standby watch relays it.
+	RelayGrace Duration `yaml:"relayGrace"`
 	// RestartGrace is how long beekeeper waits after it first saw the
 	// role's CLI gone: a CLI back under the same session within it is a
 	// restart and keeps the role; past it, the watch says the supervisor
@@ -1408,6 +1411,7 @@ func (c *Config) defaults() error {
 
 func (r *Role) defaults(home string) {
 	setDur(&r.RelayTTL, 15*time.Minute)
+	setDur(&r.RelayGrace, 30*time.Minute)
 	setDur(&r.RestartGrace, time.Minute)
 	if r.RelayAt == 0 {
 		r.RelayAt = 400_000
