@@ -32,7 +32,7 @@ const (
 
 // Request is one ask of the broker.
 type Request struct {
-	// Op is OpPing, OpCapSlot, OpScope or OpSecret.
+	// Op is OpPing, OpCapSlot, OpScope, OpSecret or OpKubeconfig.
 	Op string `json:"op"`
 	// Unit is the scope to put the requester into (OpScope).
 	Unit string `json:"unit,omitempty"`
@@ -43,6 +43,8 @@ type Request struct {
 	// Args are the beekeeper secret call's arguments after "secret"
 	// (OpSecret).
 	Args []string `json:"args,omitempty"`
+	// Resource is the lab lease whose kubeconfig to write (OpKubeconfig).
+	Resource string `json:"resource,omitempty"`
 }
 
 // The broker's operations.
@@ -56,6 +58,9 @@ const (
 	// OpSecret runs a beekeeper secret call on the host, where sops and
 	// op reach their keys, and answers its output and exit code.
 	OpSecret = "secret"
+	// OpKubeconfig writes a held lab lease's kubeconfig, which takes the
+	// container runtime's socket the sandbox closes.
+	OpKubeconfig = "kubeconfig"
 )
 
 // Reply is the broker's answer: an empty Error is done, Out, Err and Code

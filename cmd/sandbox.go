@@ -128,7 +128,10 @@ A sandboxed beekeeper secret call (compare, fingerprint, copy, set, rotate)
 runs here too, where sops and op reach their keys: as the asking session, in
 its working directory, with its files held to the sandbox's lists, and its
 output, never a value, goes back through the spool. A consumer (copy --), the
-vault's setup and import run on the host only, by the person.`,
+vault's setup and import run on the host only, by the person.
+
+A sandboxed beekeeper lease kubeconfig runs here as well, where kind reaches
+the container runtime: for the session that holds the lab's lease only.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if os.Getenv(sandbox.Env) != "" {
@@ -142,7 +145,10 @@ vault's setup and import run on the host only, by the person.`,
 			if err != nil {
 				return err
 			}
-			return sandbox.Serve(ctx, dir, "/proc", brokerTick, brokered(brokeredCap(plat.Capper), brokeredSecret(exe, "/proc")))
+			return sandbox.Serve(ctx, dir, "/proc", brokerTick, brokered(brokeredCap(plat.Capper), map[string]sandbox.Handler{
+				sandbox.OpSecret:     brokeredCall(exe, "/proc", brokeredSecretArgv),
+				sandbox.OpKubeconfig: brokeredCall(exe, "/proc", brokeredKubeconfigArgv),
+			}))
 		},
 	}
 }
@@ -154,12 +160,12 @@ var (
 	brokeredUnit = regexp.MustCompile(`^` + guard.ScopePrefix + `(test-)?[0-9]+-[0-9]{6}$`)
 )
 
-// brokered answers a sandboxed session's requests: a secret call with
-// secretCall, the rest with capRun.
-func brokered(capRun func(int, sandbox.Request) error, secretCall sandbox.Handler) sandbox.Handler {
+// brokered answers a sandboxed session's requests: the operations of calls
+// with their handler, the rest with capRun.
+func brokered(capRun func(int, sandbox.Request) error, calls map[string]sandbox.Handler) sandbox.Handler {
 	return func(ctx context.Context, pid int, req sandbox.Request) (sandbox.Reply, error) {
-		if req.Op == sandbox.OpSecret {
-			return secretCall(ctx, pid, req)
+		if h, ok := calls[req.Op]; ok {
+			return h(ctx, pid, req)
 		}
 		return sandbox.Reply{}, capRun(pid, req)
 	}
@@ -203,9 +209,9 @@ var brokeredSecretOps = []string{"compare", "fingerprint", "copy", "set", "rotat
 // of its environment a brokered call takes over.
 var callerEnv = []string{"CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_HOST_SESSION_ID", "CLAUDE_CODE_SESSION_NAME", "CLAUDE_CONFIG_DIR", omp.EnvAgent, omp.EnvName}
 
-// secretCallTimeout bounds a brokered secret call: op answers within a
-// minute, a rotation writes several files.
-const secretCallTimeout = 10 * time.Minute
+// brokeredCallTimeout bounds a brokered call: op answers within a minute, a
+// rotation writes several files.
+const brokeredCallTimeout = 10 * time.Minute
 
 // brokeredSecretArgs refuses a secret call the broker does not run: one
 // outside brokeredSecretOps, a consumer, or another caller or config.
@@ -226,21 +232,43 @@ func brokeredSecretArgs(args []string) error {
 	return nil
 }
 
-// brokeredSecret runs a sandboxed session's beekeeper secret call with exe
-// on the host: as the session that holds the request, in its working
-// directory, its files held to the sandbox's lists (sandbox.Brokered).
-func brokeredSecret(exe, procDir string) sandbox.Handler {
+// brokeredSecretArgv is the command line of a brokered secret call.
+func brokeredSecretArgv(req sandbox.Request) ([]string, error) {
+	if err := brokeredSecretArgs(req.Args); err != nil {
+		return nil, err
+	}
+	return append([]string{"secret"}, req.Args...), nil
+}
+
+// leaseName is a lease's resource name.
+var leaseName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+
+// brokeredKubeconfigArgv is the command line of a brokered lease
+// kubeconfig.
+func brokeredKubeconfigArgv(req sandbox.Request) ([]string, error) {
+	if !leaseName.MatchString(req.Resource) {
+		return nil, fmt.Errorf("%q is not a resource", req.Resource)
+	}
+	return []string{"lease", "kubeconfig", req.Resource}, nil
+}
+
+// brokeredCall runs a sandboxed session's beekeeper call, argv's for its
+// request, with exe on the host: as the session that holds the request, in
+// its working directory, marked sandbox.Brokered, so that the call holds
+// itself to the sandbox's lists and asks no broker.
+func brokeredCall(exe, procDir string, argv func(sandbox.Request) ([]string, error)) sandbox.Handler {
 	return func(ctx context.Context, pid int, req sandbox.Request) (sandbox.Reply, error) {
-		if err := brokeredSecretArgs(req.Args); err != nil {
+		args, err := argv(req)
+		if err != nil {
 			return sandbox.Reply{}, err
 		}
 		cwd, caller, err := sandbox.Origin(procDir, pid, callerEnv)
 		if err != nil {
 			return sandbox.Reply{}, fmt.Errorf("the requester: %w", err)
 		}
-		ctx, cancel := context.WithTimeout(ctx, secretCallTimeout)
+		ctx, cancel := context.WithTimeout(ctx, brokeredCallTimeout)
 		defer cancel()
-		c := exec.CommandContext(ctx, exe, append([]string{"secret"}, req.Args...)...) //nolint:gosec // this binary, the arguments checked above
+		c := exec.CommandContext(ctx, exe, args...) //nolint:gosec // this binary, the arguments checked by argv
 		c.Dir = cwd
 		c.Env = slices.DeleteFunc(os.Environ(), func(kv string) bool {
 			k, _, _ := strings.Cut(kv, "=")

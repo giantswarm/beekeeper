@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -15,7 +14,6 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/giantswarm/beekeeper/internal/guard"
-	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -159,11 +157,17 @@ func (a *app) secretBrokered(cmd *cobra.Command, args []string) error {
 	if err := brokeredSecretArgs(argv); err != nil {
 		return refused("%v; %s and %s run on the host, by the person", err, "setup", "import")
 	}
+	return a.brokeredReply(sandbox.Request{Op: sandbox.OpSecret, Args: argv})
+}
+
+// brokeredReply asks the host's broker for req and passes on its output
+// and exit code.
+func (a *app) brokeredReply(req sandbox.Request) error {
 	dir := sandbox.SpoolDir(a.cfg.StateDir)
 	if !(sandbox.Capper{Dir: dir}).Available() {
-		return refused("no sandbox broker answers in %s: beekeeper secret runs through beekeeper-sandbox.service on the host (beekeeper install)", dir)
+		return refused("no sandbox broker answers in %s: beekeeper-sandbox.service on the host runs this for the sandbox (beekeeper install)", dir)
 	}
-	r, err := sandbox.Call(dir, sandbox.Request{Op: sandbox.OpSecret, Args: argv}, secretCallTimeout+time.Minute)
+	r, err := sandbox.Call(dir, req, brokeredCallTimeout+time.Minute)
 	if err != nil {
 		return refused("%v", err)
 	}
@@ -359,22 +363,7 @@ func (a *app) checkLabHeld(t secret.KubeTarget) error {
 		}
 		return refused("%s: a Secret is written only into a lab's context (%s), held under its lease", t.Context, strings.Join(labs, ", "))
 	}
-	me, err := a.caller()
-	if err != nil {
-		return err
-	}
-	h, err := lease.Dir(a.cfg.LeaseDir).Get(res)
-	if err != nil {
-		return err
-	}
-	if h == nil || !h.Party().Is(me) {
-		holder := "nobody"
-		if h != nil {
-			holder = fmt.Sprintf("%q", cmp.Or(h.Name, h.Holder))
-		}
-		return refused("%s: the lab lease %s is held by %s, not by you: claim it first (beekeeper lease claim %s)", t.Context, res, holder, res)
-	}
-	return nil
+	return a.holdsLease(res, t.Context)
 }
 
 func (a *app) secretSetCmd() *cobra.Command {
