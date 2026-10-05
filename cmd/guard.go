@@ -265,6 +265,7 @@ Register it in ~/.claude/settings.json:
 				h.Shell, h.Production, h.ContextHint = a.cfg.Shell, a.cfg.Kube.Production, a.cfg.Kube.Context("<installation>")
 				h.MaxLabs = func() int { return a.cfg.KindClusters(ramMiB()) }
 				h.Outbound = outboundGuard(a.cfg.Outbound)
+				h.Labs = a.heldLabs
 				h.UnlockCommands = a.cfg.Secret.UnlockCommands
 			}
 			if out := h.Decide(raw); out != nil {
@@ -598,6 +599,12 @@ func (a *app) modelServer() guard.ModelServer {
 		return guard.ModelServer{}
 	}
 	return guard.ModelServer{URL: a.cfg.Ollama.URL, LemonadeURL: a.cfg.Lemonade.URL, LabTests: a.cfg.Ollama.LabTests}
+}
+
+// heldLabs lists the held leases of kind labs.
+func (a *app) heldLabs() []lease.Holder {
+	hs, _ := lease.Dir(a.cfg.LeaseDir).List()
+	return slices.DeleteFunc(hs, func(h lease.Holder) bool { return a.cfg.LabCluster(h.Env) == "" })
 }
 
 func (a *app) heldLeases() []lease.Holder {
