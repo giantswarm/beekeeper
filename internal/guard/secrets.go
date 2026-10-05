@@ -62,9 +62,9 @@ func (l leak) reason() string {
 	}
 	if l.unlock {
 		return "Refused: `" + at + "` (" + l.what + ") signs in to or unlocks a vault from an agent session. No agent session holds " +
-			"a vault session or opens one: it lives in beekeeper's broker alone, and the person unlocks it with `beekeeper secret unlock` " +
-			"in their own terminal. A `beekeeper secret` call that needs the vault waits for that (`vault locked: waiting for the person's " +
-			"approval`), so run the operation itself:\n" + secretOps
+			"a vault session or opens one: it lives in beekeeper's broker alone, which signs in by itself. A `beekeeper secret` call " +
+			"that needs the vault waits for that sign-in (`vault locked: waiting for the broker's sign-in`), so run the operation " +
+			"itself:\n" + secretOps
 	}
 	return "Refused: `" + at + "` (" + l.what + ") would put secret values where an agent can read them: the transcript " +
 		"and from there the model API, a file, a variable, a hash or a diff. Only key names, metadata and lengths reach an agent, " +
