@@ -638,6 +638,22 @@ func (w *watcher) clearMissing(prefix string, found map[string]bool) {
 	}
 }
 
+// drop forgets each condition said under prefix that found no longer holds,
+// without an ENDED line, and answers them.
+func (w *watcher) drop(prefix string, found map[string]bool) map[string]condition {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	gone := map[string]condition{}
+	for k, c := range w.active {
+		if strings.HasPrefix(k, prefix) && !found[k] {
+			gone[k] = c
+			delete(w.active, k)
+			w.dirty = true
+		}
+	}
+	return gone
+}
+
 // condition is a lasting condition a watch has said: since when, and the
 // line's head that names it.
 type condition struct {
@@ -663,7 +679,7 @@ func (a *app) newWatcher(standby, keep bool) *watcher {
 	if keep {
 		w.dues = relayDues{}
 	}
-	w.stand = standbyWatch{send: a.peerSend, open: plat.Opener.Open, succeed: a.succeedFromWatch, revive: a.reviveFromWatch, turning: unitsTurning, reopening: unitsReopening}
+	w.stand = standbyWatch{send: a.peerSend, open: plat.Opener.Open, succeed: a.succeedFromWatch, revive: a.reviveFromWatch, turning: unitsTurning, reopening: unitsReopening, importRow: a.importRowFromWatch}
 	if me, err := a.caller(); keep && err == nil {
 		w.markFile = "seen.watch." + fileKey(me) + ".json"
 		var m watchMark
@@ -1093,31 +1109,64 @@ func (w *watcher) teleport(ctx context.Context) {
 	}
 }
 
-// vaultKey starts the condition key of a call waiting on the vault.
-const vaultKey = "vault "
+// vaultKey starts the condition key of a call waiting on the vault, and
+// vaultUnlockedKey is the broker's approval.
+const (
+	vaultKey         = "vault "
+	vaultUnlockedKey = "vault-unlocked"
+	vaultReadKey     = "vault-read"
+	vaultSigninKey   = "vault-signin"
+)
 
-// vaultWaits says each call that waits on the person's unlock of the vault
-// (secret.session), one VAULT LOCKED line naming who waits on what, and one
-// ENDED line once it goes on or gives up. Nothing asks the person.
+// vaultWaits says the vault's state (secret.session): one VAULT UNLOCKED
+// line while the broker holds the session, until when, and its ENDED line
+// when the broker forgets it; a VAULT SIGN-IN FAILED line with the broker's
+// reason; one VAULT LOCKED line for each call that waits on the sign-in,
+// and once it goes on its ENDED line, or a line that it timed out with the
+// vault still locked. Nothing asks the person.
 func (w *watcher) vaultWaits() {
 	if !w.cfg.Secret.Session {
 		return
 	}
-	path, err := secret.WaitsPath()
+	statePath, err := secret.StatePath()
 	if err != nil {
 		return
 	}
-	ws, err := secret.ReadWaits(path)
+	st, err := secret.ReadState(statePath)
 	if err != nil {
-		w.emit(vaultKey+"read", "cannot read the vault's waiting calls: %v", err)
+		w.emit(vaultReadKey, "cannot read the vault's state: %v", err)
 		return
 	}
+	w.check(vaultUnlockedKey, st.Unlocked, "VAULT UNLOCKED: the broker holds the vault session since %s until %s",
+		st.Since.Local().Format("15:04"), st.Until.Local().Format("15:04"))
+	w.check(vaultSigninKey, st.Error != "", "VAULT SIGN-IN FAILED: %s", st.Error)
+	waitsPath, err := secret.WaitsPath()
+	if err != nil {
+		return
+	}
+	ws, err := secret.ReadWaits(waitsPath)
+	if err != nil {
+		w.emit(vaultReadKey, "cannot read the vault's waiting calls: %v", err)
+		return
+	}
+	w.clear(vaultReadKey)
 	found := map[string]bool{}
 	for _, v := range ws {
 		key := vaultKey + v.Who + " " + v.Ref
 		found[key] = true
-		w.emit(key, "VAULT LOCKED: %s waits on %s since %s; the person unlocks it with beekeeper secret unlock in their own terminal",
+		w.emit(key, "VAULT LOCKED: %s waits on %s since %s; the broker signs in",
 			v.Who, v.Ref, v.Since.Local().Format("15:04"))
+	}
+	if !st.Unlocked {
+		// a call gone while the vault is locked gave up: no ENDED line
+		for key, c := range w.drop(vaultKey, found) {
+			who, ref := key[len(vaultKey):], ""
+			if i := strings.LastIndexByte(who, ' '); i >= 0 {
+				who, ref = who[:i], who[i+1:]
+			}
+			w.emitNow("vault", "VAULT LOCKED: %s's call on %s timed out (seen waiting since %s), still locked",
+				who, ref, c.Since.Local().Format("15:04"))
+		}
 	}
 	w.clearMissing(vaultKey, found)
 }
@@ -1408,6 +1457,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		for _, rl := range roles {
 			w.relayOverdue(ctx, rl, st, sessions)
 		}
+		w.importRows(ctx, st)
 	}
 	if w.standby && supervised {
 		w.resumeRestarted(ctx, supervisorRole, st, sessions)

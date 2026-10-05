@@ -38,14 +38,16 @@ func (a *app) secretUnlockCmd() *cobra.Command {
 	var account string
 	c := &cobra.Command{
 		Use:   "unlock",
-		Short: "Unlock the vault for beekeeper's broker, in the person's own terminal",
-		Long: `unlock is the person's: with secret.session, the vault session lives in the
-broker's memory alone (beekeeper sandbox broker, beekeeper-sandbox.service),
-never in a file, a keyring entry or an agent's environment. unlock runs op
-signin on this terminal, where the person types the account password into
-op's own prompt, and hands the session it prints to the broker over its
-socket in the runtime directory, after checking that the listener is this
-beekeeper binary run as this user. Calls waiting on the vault go on at once.
+		Short: "Hand the broker an op signin session, where it cannot sign in by itself",
+		Long: `unlock is the person's, for a machine without secret.signinCommand: with
+one, the broker signs in by itself and nobody runs a command. unlock runs op signin on this
+terminal, where the person types the account password into op's own
+prompt, and hands the session it prints to the broker over its socket in
+the runtime directory, after checking that the listener is the main
+process of beekeeper-sandbox.service, running this beekeeper binary as
+this user. The session lives in the broker's memory alone, never in a
+file, a keyring entry or an agent's environment. Calls waiting on the
+vault go on at once.
 
 It refuses in an agent session and without a terminal, and the hook refuses
 it in agent sessions too: no agent command opens or completes the unlock.
@@ -64,6 +66,7 @@ forgotten by itself.`,
 				return err
 			}
 			if _, err := secret.AskVault(path, secret.VaultRequest{Op: secret.VaultStatus}); err != nil {
+				a.secretLog("unlock", "refused: %v", err)
 				return refused("%v", err)
 			}
 			args := []string{"signin"}
