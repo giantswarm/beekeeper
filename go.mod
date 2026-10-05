@@ -3,7 +3,7 @@ module github.com/giantswarm/beekeeper
 go 1.26.0
 
 require (
-	filippo.io/age v1.2.1
+	filippo.io/age v1.3.2
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
@@ -32,6 +32,7 @@ require (
 
 require (
 	code.gitea.io/sdk/gitea v0.23.2 // indirect
+	filippo.io/hpke v0.4.0 // indirect
 	github.com/42wim/httpsig v1.2.4 // indirect
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
