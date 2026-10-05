@@ -177,6 +177,7 @@ func testHome(t *testing.T) string {
 		t.Fatal(err)
 	}
 	t.Setenv("TMPDIR", filepath.Join(base, "tmp"))
+	t.Setenv("XDG_CONFIG_HOME", "")
 	return filepath.Join(base, "home")
 }
 
@@ -226,13 +227,39 @@ func TestASymlinkedPathIsListedAtItsTarget(t *testing.T) {
 	if got := p.Vars["BEEKEEPER_CONFIG"]; got != filepath.Join(dotfiles, "config.yaml") || p.Vars[Env] != "1" {
 		t.Errorf("vars %v: the session is not pointed at the config's target", p.Vars)
 	}
-	if _, ok := p.Vars["GIT_CONFIG_GLOBAL"]; ok {
-		t.Errorf("vars %v name a git config that is no symlink", p.Vars)
+	for _, name := range []string{"GIT_CONFIG_GLOBAL", "XDG_CONFIG_HOME"} {
+		if _, ok := p.Vars[name]; ok {
+			t.Errorf("vars %v name a %s that is no symlink", p.Vars, name)
+		}
 	}
 	if !p.Readable(filepath.Join(dotfiles, "config.yaml"), home) {
 		t.Error("the config's target is not readable")
 	}
 	if p.Readable(filepath.Join(home, "projects/dotfiles/.ssh"), home) {
 		t.Error("the target's neighbours opened")
+	}
+}
+
+func TestASymlinkedConfigHomeIsNamedByItsTarget(t *testing.T) {
+	home := testHome(t)
+	dotfiles := filepath.Join(home, "projects/dotfiles/.config")
+	if err := os.MkdirAll(filepath.Join(dotfiles, "git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dotfiles, "git/ignore"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(dotfiles, filepath.Join(home, ".config")); err != nil {
+		t.Fatal(err)
+	}
+	p := New(config.Sandbox{}, Paths{Home: home, ConfigFile: filepath.Join(home, ".config/beekeeper/config.yaml"), StateDir: filepath.Join(home, ".local/state/beekeeper")})
+	if got := p.Vars["XDG_CONFIG_HOME"]; got != dotfiles {
+		t.Errorf("XDG_CONFIG_HOME = %q, want the config directory's target %s", got, dotfiles)
+	}
+	if !slices.Contains(p.Read, filepath.Join(dotfiles, "git")) || !p.Readable(filepath.Join(dotfiles, "git/ignore"), home) {
+		t.Errorf("read %v: git's config directory is not readable at its target", p.Read)
+	}
+	if p.Readable(filepath.Join(dotfiles, "gh/hosts.yml"), home) {
+		t.Error("the config directory's neighbours of git opened")
 	}
 }

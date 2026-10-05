@@ -90,6 +90,10 @@ func New(cfg config.Sandbox, e Paths) Policy {
 	if claude == "" {
 		claude = filepath.Join(e.Home, ".claude")
 	}
+	xdg := os.Getenv("XDG_CONFIG_HOME")
+	if xdg == "" {
+		xdg = filepath.Join(e.Home, ".config")
+	}
 	p := Policy{
 		Home: e.Home,
 		Read: append([]string{
@@ -99,7 +103,7 @@ func New(cfg config.Sandbox, e Paths) Policy {
 			filepath.Join(claude, "projects"), filepath.Join(claude, "plans"),
 			filepath.Join(claude, "skills"), filepath.Join(claude, "plugins"),
 			filepath.Join(claude, "CLAUDE.md"),
-			filepath.Join(e.Home, ".gitconfig"), filepath.Join(e.Home, ".config", "git"),
+			filepath.Join(e.Home, ".gitconfig"), filepath.Join(xdg, "git"),
 		}, cfg.AllowRead...),
 		Write:     append([]string{e.StateDir, e.LeaseDir, e.SlotDir}, cfg.AllowWrite...),
 		Deny:      []string{e.ScanDir},
@@ -109,9 +113,10 @@ func New(cfg config.Sandbox, e Paths) Policy {
 		Exe:       e.Exe,
 	}
 	// the home directory is empty inside the sandbox but for the paths it
-	// mounts, at their targets: a symlinked config is named by its target
+	// mounts, at their targets: a symlinked config is named by its target,
+	// a symlinked config directory (git's ignore and attributes) as well
 	p.Vars = map[string]string{Env: "1"}
-	for name, path := range map[string]string{"BEEKEEPER_CONFIG": e.ConfigFile, "GIT_CONFIG_GLOBAL": filepath.Join(e.Home, ".gitconfig")} {
+	for name, path := range map[string]string{"BEEKEEPER_CONFIG": e.ConfigFile, "GIT_CONFIG_GLOBAL": filepath.Join(e.Home, ".gitconfig"), "XDG_CONFIG_HOME": xdg} {
 		if r, err := filepath.EvalSymlinks(path); err == nil && r != filepath.Clean(path) {
 			p.Vars[name] = r
 		}
