@@ -67,6 +67,14 @@ func (a *app) desktopTurn(ctx context.Context, ag state.Agent) error {
 		return err
 	}
 	if u := sessionUnits(ctx, ag.Session, false); len(u) > 0 {
+		if !a.hasRow(ag.Session) {
+			line, err := a.importRow(ctx, ag.Session, ag.Name)
+			if err != nil {
+				return fmt.Errorf("desktop: %s runs a headless turn (%s) and has no row: %w", ag.Name, u[0], err)
+			}
+			_, err = fmt.Fprintln(a.out, "desktop: "+line)
+			return err
+		}
 		_, err := fmt.Fprintf(a.out, "desktop: %s runs a headless turn (%s): once it ends, its reopen shows it in the desktop without waiting for the window's focus\n", ag.Name, u[0])
 		return err
 	}

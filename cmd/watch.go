@@ -679,7 +679,7 @@ func (a *app) newWatcher(standby, keep bool) *watcher {
 	if keep {
 		w.dues = relayDues{}
 	}
-	w.stand = standbyWatch{send: a.peerSend, open: plat.Opener.Open, succeed: a.succeedFromWatch, revive: a.reviveFromWatch, turning: unitsTurning, reopening: unitsReopening}
+	w.stand = standbyWatch{send: a.peerSend, open: plat.Opener.Open, succeed: a.succeedFromWatch, revive: a.reviveFromWatch, turning: unitsTurning, reopening: unitsReopening, importRow: a.importRowFromWatch}
 	if me, err := a.caller(); keep && err == nil {
 		w.markFile = "seen.watch." + fileKey(me) + ".json"
 		var m watchMark
@@ -1457,6 +1457,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		for _, rl := range roles {
 			w.relayOverdue(ctx, rl, st, sessions)
 		}
+		w.importRows(ctx, st)
 	}
 	if w.standby && supervised {
 		w.resumeRestarted(ctx, supervisorRole, st, sessions)
