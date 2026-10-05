@@ -20,6 +20,11 @@ import (
 
 const header = "FAKESOPS\n"
 
+const (
+	create = "create"
+	get    = "get"
+)
+
 // Tools are the fake tools and what they were asked.
 type Tools struct {
 	mu sync.Mutex
@@ -29,7 +34,17 @@ type Tools struct {
 	Calls []string
 	// Tokens are the service account tokens op calls were given.
 	Tokens []string
+	// Signed is whether the person's own op session is signed in: op
+	// without a service account token then runs as the person.
+	Signed bool
+	// Vaults map a vault's name to its ID.
+	Vaults map[string]string
+	// Accounts map a service account to the vault grants it was created with.
+	Accounts map[string]string
 }
+
+// AccountToken is the token the fake answers for a new service account.
+func AccountToken(name string) string { return "ops_planted-token-of-" + name }
 
 // Kubeconfig is what the fake kind answers for a cluster's kubeconfig.
 func Kubeconfig(cluster string) string { return "kubeconfig of kind-" + cluster }
@@ -57,10 +72,20 @@ func (t *Tools) Run(_ context.Context, dir string, env []string, stdin io.Reader
 		for _, e := range env {
 			token, _ = strings.CutPrefix(e, "OP_SERVICE_ACCOUNT_TOKEN=")
 		}
-		if token == "" {
+		switch {
+		case token != "":
+			t.Tokens = append(t.Tokens, token)
+		case !t.Signed:
 			return nil, errors.New("exit 1 (not signed in)")
+		case args[0] == "vault":
+			return t.vault(args[1:])
+		case args[0] == "service-account" && len(args) > 2 && args[1] == create:
+			if t.Accounts == nil {
+				t.Accounts = map[string]string{}
+			}
+			t.Accounts[args[2]] = args[slices.Index(args, "--vault")+1]
+			return []byte(AccountToken(args[2]) + "\n"), nil
 		}
-		t.Tokens = append(t.Tokens, token)
 	}
 	switch {
 	case name == "sops" && slices.Contains(args, "decrypt"):
@@ -99,6 +124,23 @@ func (t *Tools) Run(_ context.Context, dir string, env []string, stdin io.Reader
 	return nil, fmt.Errorf("exit 2 (the fake does not know %s %s)", name, strings.Join(args, " "))
 }
 
+func (t *Tools) vault(args []string) ([]byte, error) {
+	if t.Vaults == nil {
+		t.Vaults = map[string]string{}
+	}
+	id, ok := t.Vaults[args[1]]
+	switch {
+	case args[0] == get && !ok:
+		return nil, errors.New(`exit 1 (isn't a vault)`)
+	case args[0] == create && ok:
+		return nil, errors.New("exit 1 (vault exists)")
+	case args[0] == create:
+		id = "vid-" + args[1]
+		t.Vaults[args[1]] = id
+	}
+	return json.Marshal(map[string]string{"id": id, "name": args[1]})
+}
+
 func (t *Tools) item(args []string, stdin io.Reader) ([]byte, error) {
 	vault := args[slices.Index(args, "--vault")+1]
 	type field struct {
@@ -132,14 +174,14 @@ func (t *Tools) item(args []string, stdin io.Reader) ([]byte, error) {
 			out = append(out, item{ID: it.ID, Title: it.Title})
 		}
 		return json.Marshal(out)
-	case "get":
+	case get:
 		for _, it := range items {
 			if it.ID == args[1] {
 				return json.Marshal(it)
 			}
 		}
 		return nil, errors.New("exit 1 (isn't an item)")
-	case "create", "edit":
+	case create, "edit":
 		raw, err := io.ReadAll(stdin)
 		if err != nil {
 			return nil, err

@@ -22,6 +22,8 @@ const (
 	vaultRef = "op://Shared/api/credential"
 	pwPath   = "stringData.password"
 	aFile    = "a.sops.yaml"
+	shared   = "Shared"
+	saToken  = "sa-token"
 )
 
 //nolint:gosec // a template of planted test values
@@ -53,7 +55,7 @@ func scratch(t *testing.T) (dir, src string) {
 }
 
 func ops(tools *secrettest.Tools) *secret.Ops {
-	return &secret.Ops{Run: tools.Run, Vault: "Shared", Token: "sa-token", Fingerprint: func(v string) string { return fmt.Sprintf("fp-%d", len(v)*7) }}
+	return &secret.Ops{Run: tools.Run, Vault: shared, Token: saToken, Fingerprint: func(v string) string { return fmt.Sprintf("fp-%d", len(v)*7) }}
 }
 
 // noValue fails when any planted value is in what an operation answered.
