@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -22,13 +21,13 @@ const opGet = "get"
 // testToken is a token of the App's length, never a real one.
 const testToken = "ghu_" + "0123456789abcdefghijklmnopqrstuvwxyz"
 
-func inode(t *testing.T, path string) uint64 {
+func stat(t *testing.T, path string) os.FileInfo {
 	t.Helper()
 	fi, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return fi.Sys().(*syscall.Stat_t).Ino
+	return fi
 }
 
 func TestWriteGitHubRewritesInPlace(t *testing.T) {
@@ -37,13 +36,13 @@ func TestWriteGitHubRewritesInPlace(t *testing.T) {
 		t.Fatal(err)
 	}
 	hosts, git := filepath.Join(dir, GitHubHosts), filepath.Join(dir, GitHubGit)
-	before := []uint64{inode(t, hosts), inode(t, git)}
+	before := []os.FileInfo{stat(t, hosts), stat(t, git)}
 	renewed := strings.Replace(testToken, "0", "9", 1)
 	if err := WriteGitHub(dir, renewed); err != nil {
 		t.Fatal(err)
 	}
-	if after := []uint64{inode(t, hosts), inode(t, git)}; after[0] != before[0] || after[1] != before[1] {
-		t.Errorf("a renewal replaced the files (inodes %v, then %v): a mask holds the path's file", before, after)
+	if !os.SameFile(before[0], stat(t, hosts)) || !os.SameFile(before[1], stat(t, git)) {
+		t.Error("a renewal replaced the files: a mask holds the path's file")
 	}
 	raw, err := os.ReadFile(hosts) //nolint:gosec // the test's file
 	if err != nil {

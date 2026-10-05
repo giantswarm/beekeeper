@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -82,9 +81,13 @@ func WriteGitHub(dir, token string) error {
 }
 
 // writeInPlace writes content into path from its start and cuts it there,
-// keeping the file's inode; a symlink at path is refused.
+// keeping the file's inode; anything but a regular file at path is
+// refused (the directory is the user's alone).
 func writeInPlace(path, content string) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|syscall.O_NOFOLLOW, 0o600) //nolint:gosec // the broker's own file under the runtime directory
+	if fi, err := os.Lstat(path); err == nil && !fi.Mode().IsRegular() {
+		return fmt.Errorf("%s is not a regular file", path)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o600) //nolint:gosec // the broker's own file under the runtime directory
 	if err != nil {
 		return err
 	}
