@@ -265,3 +265,31 @@ func TestAStreamedCallEndsWithItsRequester(t *testing.T) {
 		t.Errorf("the spool keeps %v", left)
 	}
 }
+
+func TestAStreamedCallsAnswerWithoutItsRequesterIsDropped(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "s"+reqSuffix)
+	if err := os.WriteFile(path, []byte(`{"op":"agents","stream":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	requester := exec.Command("/bin/sh", "-c", "exec 3<"+path+"; echo ready; /bin/sleep 30") //nolint:gosec // the test's own spool
+	ready, err := requester.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := requester.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bufio.NewReader(ready).ReadString('\n'); err != nil {
+		t.Fatal(err)
+	}
+	// the call ends within the holder poll, right after its requester
+	answer(context.Background(), path, "/proc", func(context.Context, int, Request) (Reply, error) {
+		_ = requester.Process.Kill()
+		_ = requester.Wait()
+		return Reply{}, nil
+	})
+	if left, _ := os.ReadDir(dir); len(left) != 0 {
+		t.Errorf("the spool keeps %v", left)
+	}
+}

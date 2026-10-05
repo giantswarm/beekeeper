@@ -95,7 +95,7 @@ func answer(ctx context.Context, path, procDir string, h Handler) {
 const holderPoll = time.Second
 
 // handle acts on the request at path; gone says that a streamed call's
-// requester ended before its call did.
+// requester ended before its call's answer.
 func handle(ctx context.Context, path, procDir string, h Handler) (Reply, bool, error) {
 	raw, st, err := read(path)
 	if err != nil {
@@ -147,7 +147,8 @@ func handle(ctx context.Context, path, procDir string, h Handler) (Reply, bool, 
 		}
 	}()
 	r, err := h(ctx, pid, req)
-	return r, gone.Load(), err
+	// a requester that ended while the call ran reads no answer either
+	return r, gone.Load() || !holds(filepath.Join(procDir, strconv.Itoa(pid)), sys.Dev, sys.Ino), err
 }
 
 // read reads the request at path, closed again before its holders are
