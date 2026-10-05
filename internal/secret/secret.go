@@ -44,6 +44,9 @@ type Ops struct {
 	Fingerprint func(value string) string
 	// Apply writes a key of a Secret; nil is [ApplySecret].
 	Apply SecretApplier
+	// Ages are the age identities of the shared vault for the SOPS files
+	// sops' own sources hold none for.
+	Ages []AgeIdentity
 }
 
 // opTimeout bounds one read of the shared vault: op that answers nothing
@@ -196,7 +199,11 @@ func (o *Ops) op(ctx context.Context, stdin io.Reader, args ...string) ([]byte, 
 
 // decrypt reads a SOPS file into its document.
 func (o *Ops) decrypt(ctx context.Context, file string) (*document, error) {
-	out, err := o.Run(ctx, "", nil, nil, "sops", "decrypt", "--output-type", "yaml", file)
+	env, err := o.ageEnv(ctx, file)
+	if err != nil {
+		return nil, err
+	}
+	out, err := o.Run(ctx, "", env, nil, "sops", "decrypt", "--output-type", "yaml", file)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", file, err)
 	}

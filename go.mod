@@ -3,6 +3,7 @@ module github.com/giantswarm/beekeeper
 go 1.26.0
 
 require (
+	filippo.io/age v1.2.1
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
