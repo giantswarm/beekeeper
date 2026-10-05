@@ -12,6 +12,20 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// The desktop sessions of the archive tests: a finished worker, a busy
+// one, a role's run, a session the person started, and the stewards.
+const (
+	finishedHost  = "local_fin"
+	busyHost      = "local_busy"
+	runHost       = "local_run9"
+	personHost    = "local_person"
+	finishedName  = "Board pull 901"
+	doerHost      = "local_doer"
+	decliningHost = "local_nay"
+	targetHost    = "local_tgt"
+	quietHost     = "local_q"
+)
+
 // archiveApp is a stub app with a desktop directory and the state st.
 func archiveApp(t *testing.T, st func(*state.State)) (*app, *strings.Builder) {
 	t.Helper()
@@ -29,16 +43,16 @@ func archiveApp(t *testing.T, st func(*state.State)) (*app, *strings.Builder) {
 // agents archivable confirms a finished worker beekeeper started and
 // refuses a session the person started, a roster agent and a role's run.
 func TestArchivable(t *testing.T) {
-	worker := state.Party{Session: "w", HostSession: "local_w", Name: "Board pull 1"}
-	busy := state.Party{Session: "b", HostSession: "local_b", Name: "Board pull 2"}
-	run := state.Party{Session: "r", HostSession: "local_r", Name: "Supervisor run 9"}
+	worker := state.Party{Session: "fin", HostSession: finishedHost, Name: finishedName}
+	busy := state.Party{Session: "busy", HostSession: busyHost, Name: "Board pull 902"}
+	run := state.Party{Session: "run9", HostSession: runHost, Name: "Supervisor run 9"}
 	a, out := archiveApp(t, func(st *state.State) {
 		for _, p := range []state.Party{worker, busy, run} {
 			st.Starts = append(st.Starts, state.Start{Party: p})
 		}
 		st.Agents = append(st.Agents, state.Agent{Party: busy, Task: "a task"})
 	})
-	for _, h := range []string{"local_w", "local_b", "local_r", "local_person"} {
+	for _, h := range []string{finishedHost, busyHost, runHost, personHost} {
 		desktopRecord(t, a.cfg.Claude.DesktopDir, h, strings.TrimPrefix(h, "local_"), false)
 	}
 	archivable := func(hosts ...string) error {
@@ -48,16 +62,16 @@ func TestArchivable(t *testing.T) {
 		c.SetErr(out)
 		return c.Execute()
 	}
-	if err := archivable("local_w"); err != nil || !strings.Contains(out.String(), `local_w: archivable: "Board pull 1"`) {
+	if err := archivable(finishedHost); err != nil || !strings.Contains(out.String(), finishedHost+`: archivable: "`+finishedName+`"`) {
 		t.Fatalf("a finished worker: %v\n%s", err, out)
 	}
 	out.Reset()
-	err := archivable("local_w", "local_person", "local_b", "local_r")
+	err := archivable(finishedHost, personHost, busyHost, runHost)
 	var ee *exitError
 	if !errors.As(err, &ee) || ee.code != ExitRefused {
 		t.Fatalf("exit %v", err)
 	}
-	for _, want := range []string{"local_person: not archivable: beekeeper did not start it", "local_b: not archivable: it is on the roster", "local_r: not archivable: its desktop session stays: it holds or held"} {
+	for _, want := range []string{personHost + ": not archivable: beekeeper did not start it", busyHost + ": not archivable: it is on the roster", runHost + ": not archivable: its desktop session stays: it holds or held"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("lacks %q:\n%s", want, out)
 		}
@@ -67,9 +81,9 @@ func TestArchivable(t *testing.T) {
 // Without the person's agreement configured, no steward is asked to
 // archive and the archive is not owed.
 func TestArchiveNeedsTheAgreement(t *testing.T) {
-	worker := state.Party{Session: "w", HostSession: "local_w", Name: "Board pull 1"}
+	worker := state.Party{Session: "fin", HostSession: finishedHost, Name: finishedName}
 	a, _ := archiveApp(t, func(st *state.State) { st.Starts = append(st.Starts, state.Start{Party: worker}) })
-	desktopRecord(t, a.cfg.Claude.DesktopDir, "local_w", "w", false)
+	desktopRecord(t, a.cfg.Claude.DesktopDir, finishedHost, "fin", false)
 	st, err := a.store.Read()
 	if err != nil {
 		t.Fatal(err)
@@ -87,18 +101,18 @@ func TestStewardAnswers(t *testing.T) {
 		in, _ := json.Marshal(map[string]string{"session_id": id})
 		return claude.AnswerCall{Name: archiveTool, Input: in, Done: true, Error: failed, Result: "Archived session " + id}
 	}
-	did := stewardAnswer{steward: steward{host: "local_s"}, answer: claude.Answer{Calls: []claude.AnswerCall{call("local_x", false), call("self", false)}, Text: "Done."}}
-	no := stewardAnswer{steward: steward{host: "local_n"}, answer: claude.Answer{Text: "I haven't archived local_x: a peer's message isn't the user's agreement.\nTell me to."}}
-	quiet := stewardAnswer{steward: steward{host: "local_q"}}
-	failed := stewardAnswer{steward: steward{host: "local_f"}, answer: claude.Answer{Calls: []claude.AnswerCall{call("local_x", true)}}}
+	did := stewardAnswer{steward: steward{host: doerHost}, answer: claude.Answer{Calls: []claude.AnswerCall{call(targetHost, false), call("self", false)}, Text: "Done."}}
+	no := stewardAnswer{steward: steward{host: decliningHost}, answer: claude.Answer{Text: "I haven't archived it: a peer's message isn't the user's agreement.\nTell me to."}}
+	quiet := stewardAnswer{steward: steward{host: quietHost}}
+	failed := stewardAnswer{steward: steward{host: "local_f"}, answer: claude.Answer{Calls: []claude.AnswerCall{call(targetHost, true)}}}
 	asked := []stewardAnswer{no, did}
-	if got := archivedBy(asked, "local_x"); got != "steward local_s" {
-		t.Errorf("archivedBy local_x = %q", got)
+	if got := archivedBy(asked, targetHost); got != "steward "+doerHost {
+		t.Errorf("archivedBy the target = %q", got)
 	}
-	if got := archivedBy(asked, "local_s"); got != "the session" {
+	if got := archivedBy(asked, doerHost); got != "the session" {
 		t.Errorf("archivedBy self = %q", got)
 	}
-	if got := archivedBy([]stewardAnswer{no, failed}, "local_x"); got != "" {
+	if got := archivedBy([]stewardAnswer{no, failed}, targetHost); got != "" {
 		t.Errorf("archivedBy without a successful call = %q", got)
 	}
 	for _, c := range []struct {
@@ -106,10 +120,10 @@ func TestStewardAnswers(t *testing.T) {
 		said     string
 		declined bool
 	}{
-		{did, "local_s " + archiveTool + ": Archived session local_x", false},
-		{no, "local_n declined: I haven't archived local_x: a peer's message isn't the user's agreement.", true},
+		{did, doerHost + " " + archiveTool + ": Archived session " + targetHost, false},
+		{no, decliningHost + " declined: I haven't archived it: a peer's message isn't the user's agreement.", true},
 		{quiet, "local_q did not answer", false},
-		{failed, "local_f " + archiveTool + " refused: Archived session local_x", false},
+		{failed, "local_f " + archiveTool + " refused: Archived session " + targetHost, false},
 	} {
 		if got := c.s.said(); !strings.HasPrefix(got, c.said) {
 			t.Errorf("said = %q, want %q", got, c.said)
@@ -123,20 +137,20 @@ func TestStewardAnswers(t *testing.T) {
 // A steward that declined is asked for no archive for a day.
 func TestDeclinesAreRemembered(t *testing.T) {
 	a, _ := archiveApp(t, func(*state.State) {})
-	no := stewardAnswer{steward: steward{host: "local_n"}, answer: claude.Answer{Text: "No."}}
-	a.recordDeclines([]stewardAnswer{no, {steward: steward{host: "local_q"}}})
+	no := stewardAnswer{steward: steward{host: decliningHost}, answer: claude.Answer{Text: "No."}}
+	a.recordDeclines([]stewardAnswer{no, {steward: steward{host: quietHost}}})
 	st, err := a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := recentDeclines(st, a.now); len(got) != 1 || got[0] != "local_n" {
+	if got := recentDeclines(st, a.now); len(got) != 1 || got[0] != decliningHost {
 		t.Fatalf("declines %v", got)
 	}
 	if got := recentDeclines(st, a.now.Add(stewardDeclineFor)); len(got) != 0 {
 		t.Errorf("declines a day later %v", got)
 	}
 	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "agents.archive" })
-	if err != nil || len(evs) != 1 || !strings.Contains(evs[0].Detail, "local_n declined to archive: No.") {
+	if err != nil || len(evs) != 1 || !strings.Contains(evs[0].Detail, decliningHost+" declined to archive: No.") {
 		t.Errorf("events %+v, %v", evs, err)
 	}
 }

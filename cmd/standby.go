@@ -50,7 +50,7 @@ type standbyWatch struct {
 	// reopening reports whether a unit of beekeeper's start or wake of
 	// session id runs its turn or its reopen (turningUnits); nil: none does.
 	reopening func(ctx context.Context, id string) bool
-	busy    atomic.Bool
+	busy      atomic.Bool
 	// guideGap is the term of the gone guide this watch said.
 	guideGap string
 	// starting is the role whose successor is being started, one at a time;
