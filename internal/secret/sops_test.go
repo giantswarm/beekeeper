@@ -2,7 +2,9 @@ package secret
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -77,5 +79,44 @@ func TestRealSOPSCopy(t *testing.T) {
 	}
 	if v, err := o.values(ctx, Ref{File: dst}); err != nil || v["stringData.again"] != password || v["metadata.name"] != "app-copy" {
 		t.Errorf("after a copy into a path: %v (%d keys)", err, len(v))
+	}
+}
+
+// TestRealSOPSAgeIdentity decrypts with the real sops a file whose identity
+// only the vault holds: refused before sops without the mapping, decrypted
+// with it.
+func TestRealSOPSAgeIdentity(t *testing.T) {
+	if _, err := exec.LookPath("sops"); err != nil {
+		t.Skip("sops is not installed")
+	}
+	id := isolateAge(t)
+	dir := t.TempDir()
+	rules := fmt.Sprintf("creation_rules:\n  - path_regex: '\\.sops\\.yaml$'\n    age: %s\n", id.Recipient())
+	if err := os.WriteFile(filepath.Join(dir, ".sops.yaml"), []byte(rules), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := parseDocument([]byte("stringData:\n  password: planted-Pass-age-71c2\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	file := filepath.Join(dir, "app.sops.yaml")
+	if err := (&Ops{Run: Exec}).encrypt(ctx, doc, file); err != nil {
+		t.Fatal(err)
+	}
+	vault := func(ctx context.Context, dir string, env []string, stdin io.Reader, name string, args ...string) ([]byte, error) {
+		if name == "op" {
+			return []byte(id.String()), nil
+		}
+		return Exec(ctx, dir, env, stdin, name, args...)
+	}
+	o := &Ops{Run: vault, Vault: ageVault, Token: "t", Fingerprint: func(v string) string { return fmt.Sprint(len(v)) }}
+	if _, err := o.Fingerprints(ctx, Ref{File: file}); !errors.Is(err, ErrNoAgeIdentity) {
+		t.Fatalf("without the mapping: %v", err)
+	}
+	o.Ages = []AgeIdentity{{Recipient: id.Recipient().String(), Ref: ageRef}}
+	ps, err := o.Fingerprints(ctx, Ref{File: file})
+	if err != nil || len(ps) != 1 || ps[0].Fingerprint != fmt.Sprint(len("planted-Pass-age-71c2")) {
+		t.Fatalf("with the mapping: %+v, %v", ps, err)
 	}
 }

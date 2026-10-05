@@ -492,6 +492,33 @@ repository matches.
 | `status` | Whether the broker holds the vault session, never the session. |
 | `rotate platform://<installation>/<capability>/<name> --reason <text>` | A credential the platform manager generates: `platformctl installation reconcile <installation> <capability> --commit --rotate <name>` on the host, the manager writing the new value into the installation's SOPS files in a pull request; nothing is decrypted and no copy reaches the vault. `--dry-run` shows the files that hold it. |
 
+### Age identities
+
+sops decrypts a file encrypted to age recipients with an identity from its own sources:
+`SOPS_AGE_KEY`, the file `SOPS_AGE_KEY_FILE` names, and `sops/age/keys.txt` in the user's config
+directory. Before sops runs, beekeeper reads the file's recipients from its plaintext metadata and
+checks those sources for an identity of one of them; without one, the call fails before sops,
+naming the recipients, each source with what it held, and `secret.ageIdentities`. A file with
+another key group (KMS, PGP, Vault, key groups), an SSH or plugin recipient, or with
+`SOPS_AGE_KEY_CMD` or `SOPS_AGE_SSH_PRIVATE_KEY_FILE` set goes to sops unchecked.
+
+`secret.ageIdentities` supplies an identity no local source holds, from the shared vault:
+
+```yaml
+secret:
+  ageIdentities:
+    - recipient: age1…                       # the files encrypted to this recipient
+      ref: op://<vault>/<item>/<field>        # the AGE-SECRET-KEY-1… identity
+    - pathRegex: /installations/[^/]+/secrets/  # or every file under a path (absolute, unanchored)
+      ref: op://<vault>/<item>/<field>
+```
+
+The first entry whose recipient is one of the file's, or whose `pathRegex` matches the file's
+absolute path, is read like any `op://` reference (the vault must be `secret.vault`), checked to be
+the identity of one of the file's recipients, and given as `SOPS_AGE_KEY` to the one sops call's
+environment, never written anywhere. With `secret.session` such a call runs in the broker, like a
+call on an `op://` reference.
+
 ### The vault session
 
 With `secret.session`, no agent ever holds the vault session or opens one. It lives in the memory of
@@ -1647,6 +1674,7 @@ The organisation and desk keys, and their defaults:
 | `secret.vault`, `secret.tokenFile` | none | The shared 1Password vault `beekeeper secret` reads and writes, and the file with its service account's token ([Secret operations](#secret-operations)) |
 | `secret.session` | `false` | Read and write `secret.vault` through the person's `op` session, held by the broker alone, instead of a service account ([The vault session](#the-vault-session)) |
 | `secret.unlockWait` | `8m` | How long a call on the vault waits for the person's `beekeeper secret unlock` ([The vault session](#the-vault-session)) |
+| `secret.ageIdentities` | none | Age identities in the shared vault, by recipient or `pathRegex`, for the SOPS files no local sops identity decrypts ([Age identities](#age-identities)) |
 | `secret.unlockCommands` | none | The person's own vault unlock helpers, refused in agent sessions like `op signin` and unaliased in the agent shell ([Secret reads](#secret-reads)) |
 | `sandbox.allowRead`, `sandbox.allowWrite`, `sandbox.domains`, `sandbox.mask` | none; `GH_TOKEN` and `GITHUB_TOKEN` to GitHub | The paths under the home directory the agent sandbox re-allows for reading and writing, the hosts commands reach besides GitHub, the masked environment variables and their hosts ([The agent sandbox](#the-agent-sandbox)) |
 | `sandbox.devctl` | `devctl` on the broker's `PATH` | The devctl the broker runs on the host: it renews the sandboxed sessions' masked GitHub token and runs their gated devctl commands ([The agent sandbox](#the-agent-sandbox)) |

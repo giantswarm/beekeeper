@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -42,7 +43,15 @@ A reference is a SOPS file (every value in it), one value in a SOPS file
 (file#a.b.c, the dotted key path; sops:// in front optional) or a field of
 the shared 1Password vault (op://<vault>/<item>/<field>, the vault being
 secret.vault). A SOPS file is encrypted under the creation rules of the
-.sops.yaml nearest above it.`,
+.sops.yaml nearest above it.
+
+A SOPS file encrypted to age recipients decrypts with an identity from
+sops' own sources (SOPS_AGE_KEY, SOPS_AGE_KEY_FILE, sops/age/keys.txt in
+the user's config directory) or from secret.ageIdentities: entries that map
+a recipient or a pathRegex to the op:// field of the shared vault holding
+its identity, read in beekeeper's process for the one sops call. A file
+none of them has an identity for fails before sops runs, naming its
+recipients and the sources checked.`,
 		Args: cobra.NoArgs,
 	}
 	c.AddCommand(&cobra.Command{
@@ -128,7 +137,7 @@ can make one.`,
 				return vaultExit(run(cmd, args))
 			}
 			inSandbox := os.Getenv(sandbox.Env) != ""
-			if inSandbox || a.cfg.Secret.Session && secret.NeedsVault(callArgs(cmd, args)) {
+			if inSandbox || a.cfg.Secret.Session && a.secretNeedsVault(callArgs(cmd, args)) {
 				return a.secretBrokered(cmd, args, inSandbox)
 			}
 			return vaultExit(run(cmd, args))
@@ -175,7 +184,7 @@ func (a *app) secretBrokered(cmd *cobra.Command, args []string, inSandbox bool) 
 	if err := brokeredSecretArgs(argv, inSandbox); err != nil {
 		return refused("%v; %s and %s run on the host, by the person", err, "setup", "import")
 	}
-	if !a.cfg.Secret.Session || !secret.NeedsVault(argv) {
+	if !a.cfg.Secret.Session || !a.secretNeedsVault(argv) {
 		return a.brokeredReply(sandbox.Request{Op: sandbox.OpSecret, Args: argv})
 	}
 	r, err := sandbox.Call(sandbox.SpoolDir(a.cfg.StateDir), sandbox.Request{Op: sandbox.OpVault}, 10*time.Second)
@@ -637,7 +646,7 @@ func parseRefs(args ...string) ([]secret.Ref, error) {
 // secretOps are the operations with the service account's token, read
 // from secret.tokenFile when the shared vault is configured.
 func (a *app) secretOps() (*secret.Ops, error) {
-	ops := &secret.Ops{Run: secretRun, Apply: secretApply, Vault: a.cfg.Secret.Vault, Session: a.cfg.Secret.Session}
+	ops := &secret.Ops{Run: secretRun, Apply: secretApply, Vault: a.cfg.Secret.Vault, Session: a.cfg.Secret.Session, Ages: a.ageIdentities()}
 	if ops.Vault == "" || ops.Session || a.cfg.Secret.TokenFile == "" {
 		return ops, nil
 	}
@@ -647,6 +656,26 @@ func (a *app) secretOps() (*secret.Ops, error) {
 	}
 	ops.Token = strings.TrimSpace(string(raw))
 	return ops, nil
+}
+
+// ageIdentities are secret.ageIdentities, their path patterns compiled
+// (the config's validation compiled each once).
+func (a *app) ageIdentities() []secret.AgeIdentity {
+	out := make([]secret.AgeIdentity, 0, len(a.cfg.Secret.AgeIdentities))
+	for _, id := range a.cfg.Secret.AgeIdentities {
+		ai := secret.AgeIdentity{Recipient: id.Recipient, Ref: id.Ref}
+		if id.PathRegex != "" {
+			ai.Path = regexp.MustCompile(id.PathRegex)
+		}
+		out = append(out, ai)
+	}
+	return out
+}
+
+// secretNeedsVault reports whether a call's arguments take the shared
+// vault: an op:// reference, or a SOPS file whose age identity lives there.
+func (a *app) secretNeedsVault(args []string) bool {
+	return secret.NeedsVault(args) || (&secret.Ops{Ages: a.ageIdentities()}).AgeNeedsVault(args)
 }
 
 // secretOpsKeyed are the operations with the fingerprint key, created on

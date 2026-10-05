@@ -347,6 +347,8 @@ type watcher struct {
 	chores    bool
 	doctoring atomic.Bool
 	retitled  map[string]time.Time
+	// doctored are the chore lines the doctor said, each said once.
+	doctored map[string]bool
 	// timerActs are the fired timers' wakes and commands under way, and
 	// the defaulted decisions' filers being told.
 	timerActs sync.WaitGroup
@@ -656,7 +658,7 @@ type watchMark struct {
 // again. --once and a watch outside a Claude session keep none.
 func (a *app) newWatcher(standby, keep bool) *watcher {
 	w := &watcher{app: a, standby: standby, last: map[string]time.Time{}, seenKills: map[string]bool{},
-		reported: map[string]bool{}, active: map[string]condition{}, chores: keep, retitled: map[string]time.Time{},
+		reported: map[string]bool{}, active: map[string]condition{}, chores: keep, retitled: map[string]time.Time{}, doctored: map[string]bool{},
 		upgrades: upgrade.Readings{}}
 	if keep {
 		w.dues = relayDues{}

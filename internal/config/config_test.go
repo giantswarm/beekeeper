@@ -148,6 +148,10 @@ func TestLoadRejects(t *testing.T) {
 		"negative relayAt":     "supervisor: {relayAt: -1}",
 		"bad store glob":       "outbound: {storeDeny: [{vault: \"[\"}]}",
 		"bad outbound path":    "outbound: {paths: [\"[\"]}",
+		"age without match":    "secret: {ageIdentities: [{ref: op://V/i/f}]}",
+		"age bad recipient":    "secret: {ageIdentities: [{recipient: ssh-ed25519, ref: op://V/i/f}]}",
+		"age without op ref":   "secret: {ageIdentities: [{recipient: age1x, ref: ~/key.txt}]}",
+		"age bad pathRegex":    "secret: {ageIdentities: [{pathRegex: \"[\", ref: op://V/i/f}]}",
 		"nameless board step":  "board: {order: [{status: [backlog]}]}",
 		"search with fields":   "board: {order: [{name: q, search: \"repo:o/r\", status: [backlog]}]}",
 	} {

@@ -89,7 +89,7 @@ func TestArchiveNeedsTheAgreement(t *testing.T) {
 		t.Fatal(err)
 	}
 	o := a.archiveDesktops(context.Background(), st, []state.Party{worker}, "test")[0]
-	if !strings.Contains(o.line, "agents.archiveAgreement is not set") || o.host != "" || o.asked {
+	if !strings.Contains(o.line, "agents.archiveAgreement is not set") || o.host != "" || o.asked || !o.unagreed {
 		t.Errorf("outcome %+v", o)
 	}
 }
