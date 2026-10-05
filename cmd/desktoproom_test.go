@@ -20,7 +20,7 @@ func TestRoomFor(t *testing.T) {
 		return &claude.Session{PID: pid, ID: id, HostID: "local_" + id, LastActive: now.Add(-idle)}
 	}
 	// own is the person's own session, idle longest of all; fresh and
-	// stale are beekeeper's finished workers; waits is parked on its person;
+	// stale are beekeeper's finished workers; onhold is parked on its person;
 	// tasked is idle on its task; watcher supervises.
 	sessions := []*claude.Session{
 		session(1, "own", 90*time.Hour),
@@ -28,22 +28,22 @@ func TestRoomFor(t *testing.T) {
 		session(3, "stale", 5*time.Hour),
 		session(4, "tasked", 9*time.Hour),
 		session(5, "watcher", 8*time.Hour),
-		session(6, "waits", time.Hour),
+		session(6, "onhold", time.Hour),
 	}
 	tbl := &proc.Table{ByPID: map[int]*proc.Process{}}
 	for _, s := range sessions {
 		tbl.ByPID[s.PID] = &proc.Process{PID: s.PID, Comm: claudeComm, Args: desktop}
 	}
 	st := &state.State{}
-	for _, id := range []string{"fresh", "stale", "tasked", "watcher", "waits"} {
+	for _, id := range []string{"fresh", "stale", "tasked", "watcher", "onhold"} {
 		st.Starts = append(st.Starts, state.Start{Party: state.Party{Session: id, HostSession: "local_" + id}})
 	}
 	st.Agents = []state.Agent{
 		{Party: state.Party{Session: "tasked"}, Task: "its own task"},
-		{Party: state.Party{Session: "waits"}, Task: "its parked task", Park: &state.Park{}},
+		{Party: state.Party{Session: "onhold"}, Task: "its parked task", Park: &state.Park{}},
 	}
 	st.Supervisor = &state.Supervisor{Party: state.Party{Session: "watcher", HostSession: "local_watcher"}, Since: now.Add(-time.Hour)}
-	const stale, fresh, waiting = "local_stale", "local_fresh", "local_waits"
+	const stale, fresh, waiting = "local_stale", "local_fresh", "local_onhold"
 	if got := roomFor(st, sessions, tbl, now, nil); got == nil || got.HostID != stale {
 		t.Fatalf("ends %v, want beekeeper's finished worker idle longest, %s", got, stale)
 	}
