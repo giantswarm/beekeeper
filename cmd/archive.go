@@ -21,6 +21,9 @@ const (
 	// archiveAgain is how long the doctor leaves an archive a steward did
 	// not record before it asks again.
 	archiveAgain = 10 * time.Minute
+	// archiveBatch bounds the archives owed one doctor's run asks for: one
+	// steward's turn, archiveEach per session.
+	archiveBatch = 20
 )
 
 // owe records in st the outcomes of the archives asked for at now: one
@@ -72,15 +75,15 @@ func givenUp(ar state.Archive, now time.Time) string {
 	return ""
 }
 
-// seedArchives owes, once, the archives of the finished workers left with
-// a running CLI before the doctor kept owed archives: a session beekeeper
-// started, off the roster, holding no role, its CLI running and its desktop
-// record unarchived.
-func seedArchives(st *state.State, sessions []*claude.Session, record func(host string) (*claude.Record, bool), now time.Time) {
-	if st.ArchivesSeeded {
+// seedArchives owes, once, the archives of the finished workers whose
+// desktop records stayed unarchived: a session beekeeper started, off the
+// roster, holding no role, its record unarchived, its CLI running or not.
+// The doctor asks for at most archiveBatch of them per run.
+func seedArchives(st *state.State, record func(host string) (*claude.Record, bool), now time.Time) {
+	if st.FinishedSeeded {
 		return
 	}
-	st.ArchivesSeeded = true
+	st.ArchivesSeeded, st.FinishedSeeded = true, true
 	for _, s := range st.Starts {
 		switch {
 		case s.HostSession == "" || s.Harness != "" || keepsRole(st, s.Party),
@@ -88,11 +91,8 @@ func seedArchives(st *state.State, sessions []*claude.Session, record func(host 
 			slices.ContainsFunc(st.Archives, func(x state.Archive) bool { return x.Host == s.HostSession }):
 			continue
 		}
-		if _, live := claude.Live(sessions, s.Party); !live {
-			continue
-		}
 		if r, ok := record(s.HostSession); ok && !r.IsArchived {
-			st.Archives = append(st.Archives, state.Archive{Party: s.Party, Host: s.HostSession, Since: now, Why: "its CLI ran on off the roster"})
+			st.Archives = append(st.Archives, state.Archive{Party: s.Party, Host: s.HostSession, Since: now, Why: "a finished worker left unarchived"})
 		}
 	}
 }

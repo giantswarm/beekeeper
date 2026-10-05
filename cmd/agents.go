@@ -275,7 +275,7 @@ archive it. A session its person started is never archived.`,
 	remove.Flags().BoolVar(&keepDesktop, "keep-desktop", false, "leave the agent's desktop session in the sidebar")
 	list := listCmd("List the agents, idle ones first", func() error { return a.agentList(full) })
 	fullFlag(list, &full)
-	c.AddCommand(register, a.agentStartCmd(), a.agentWakeCmd(), a.agentReopenCmd(), a.agentDesktopCmd(), a.agentHandoverCmd(), a.agentNoteCmd(), a.agentBroadcastCmd(), a.agentKeepCmd(), a.agentParkCmd(), a.agentResumeCmd(), assign, idle, remove, list)
+	c.AddCommand(register, a.agentStartCmd(), a.agentWakeCmd(), a.agentReopenCmd(), a.agentDesktopCmd(), a.agentHandoverCmd(), a.agentNoteCmd(), a.agentBroadcastCmd(), a.agentKeepCmd(), a.agentParkCmd(), a.agentResumeCmd(), a.agentArchivableCmd(), assign, idle, remove, list)
 	return c
 }
 

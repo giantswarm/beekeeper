@@ -295,7 +295,7 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 			}
 			rep.chores = append(rep.chores, "would "+c.String())
 		}
-		seedArchives(st, sessions, record, a.now)
+		seedArchives(st, record, a.now)
 		for _, o := range planArchives(st, record, busy, a.now) {
 			rep.chores = append(rep.chores, "would "+o.String())
 		}
@@ -375,7 +375,7 @@ func (a *app) owedArchives(sessions []*claude.Session, record func(host string) 
 	var run owedRun
 	sort := func(st *state.State) []state.Event {
 		run = owedRun{}
-		seedArchives(st, sessions, record, a.now)
+		seedArchives(st, record, a.now)
 		var evs []state.Event
 		for _, o := range planArchives(st, record, busy, a.now) {
 			switch {
@@ -384,7 +384,7 @@ func (a *app) owedArchives(sessions []*claude.Session, record func(host string) 
 				line := fmt.Sprintf("its desktop session %s is owed no archive any more: %s", o.ar.Host, o.drop)
 				run.lines = append(run.lines, fmt.Sprintf("%q: %s", o.ar.Name, line))
 				evs = append(evs, event(by, "agents.archive", "%s: %s", o.ar.Name, line))
-			case o.wait == "":
+			case o.wait == "" && len(run.retry) < archiveBatch:
 				run.retry = append(run.retry, o.ar.Party)
 			}
 		}

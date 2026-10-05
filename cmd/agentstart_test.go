@@ -332,7 +332,7 @@ func TestShowBrieflyHeldByFocus(t *testing.T) {
 	t.Cleanup(func() { desktopWindowActive = saved })
 	desktopWindowActive = func(context.Context) (bool, error) { return true, nil }
 	a := &app{}
-	if _, err := a.showBriefly(t.Context(), desk{quiet: -1}, "claude://nowhere", "local_x", "", true, awayPoll); !errors.Is(err, errDesktopInUse) {
+	if _, err := a.showBriefly(t.Context(), desk{quiet: -1}, "claude://nowhere", "local_x", "", true, awayPoll, nil); !errors.Is(err, errDesktopInUse) {
 		t.Errorf("showBriefly = %v, want errDesktopInUse", err)
 	}
 }

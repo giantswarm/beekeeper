@@ -104,8 +104,8 @@ func TestPlanArchivesDrops(t *testing.T) {
 }
 
 // The doctor seeds, once, the archives of the started workers off the
-// roster whose CLI runs on unarchived; never a roster agent's, a role's,
-// an omp agent's, one whose CLI stopped or one archived.
+// roster left unarchived, their CLI running or not; never a roster agent's,
+// a role's, an omp agent's or one archived.
 func TestSeedArchives(t *testing.T) {
 	start := func(id string) state.Start {
 		return state.Start{Party: state.Party{Session: id, HostSession: "local_" + id, Name: id}}
@@ -119,19 +119,15 @@ func TestSeedArchives(t *testing.T) {
 		Agents: []state.Agent{{Party: state.Party{Session: "roster"}}},
 	}
 	st.Archives = []state.Archive{{Party: state.Party{Session: "owed"}, Host: "local_owed", Tries: 2}}
-	var sessions []*claude.Session
-	for _, id := range []string{"warm", "roster", "shelved", "run", "omp", "owed"} {
-		sessions = append(sessions, &claude.Session{ID: id, HostID: "local_" + id})
-	}
 	record := func(host string) (*claude.Record, bool) {
 		return &claude.Record{IsArchived: host == "local_shelved"}, true
 	}
-	seedArchives(st, sessions, record, archiveNow)
-	if len(st.Archives) != 2 || st.Archives[1].Host != "local_warm" || st.Archives[0].Tries != 2 || !st.ArchivesSeeded {
+	seedArchives(st, record, archiveNow)
+	if len(st.Archives) != 3 || st.Archives[1].Host != "local_warm" || st.Archives[2].Host != "local_stopped" || st.Archives[0].Tries != 2 || !st.FinishedSeeded {
 		t.Fatalf("seeded %+v", st.Archives)
 	}
 	st.Archives = nil
-	if seedArchives(st, sessions, record, archiveNow); len(st.Archives) != 0 {
+	if seedArchives(st, record, archiveNow); len(st.Archives) != 0 {
 		t.Errorf("seeded twice: %+v", st.Archives)
 	}
 }

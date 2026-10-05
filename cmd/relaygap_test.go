@@ -81,6 +81,36 @@ func TestStandbyResumesASuccessorWhoseReopenWaitsOnTheFocus(t *testing.T) {
 	}
 }
 
+// A successor that asked for a desktop turn (agents desktop) is not resumed
+// headless while its start unit runs the reopen: the reopen goes ahead at
+// once and warms the desktop's CLI, which a resume would run beside.
+func TestStandbyWaitsForAnUrgentReopen(t *testing.T) {
+	w, _, out := notifyingWatch(t, t.TempDir(), true)
+	run := state.Party{Session: runSixtySeven, HostSession: "local_" + runSixtySeven, Name: supervisorRole.runName(67)}
+	useLauncher(t, &unitLauncher{stopping: []string{"beekeeper-agent-4579230b.service"}})
+	w.stand = standbyWatch{
+		turning:   unitsTurning,
+		reopening: unitsReopening,
+		revive: func(context.Context, role, state.Party, string) error {
+			t.Error("resumed a holder whose reopen shows it at once")
+			return nil
+		},
+	}
+	w.now = relayNow
+	supervisedBy(t, w, run, relayNow.Add(-3*time.Minute))
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = append(st.Agents, state.Agent{Party: run, DesktopTurn: relayNow.Add(-time.Minute)})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w.pending(context.Background(), nil)
+	w.stand.inflight.Wait()
+	if strings.Contains(out.String(), "GONE") {
+		t.Errorf("an urgent reopen said gone:\n%s", out)
+	}
+}
+
 // While the headless turn of a start or wake runs, its holder is not gone.
 func TestStandbyWaitsForARunningTurn(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), true)
@@ -126,6 +156,57 @@ func TestReopenYieldsToAHeadlessResume(t *testing.T) {
 	o := &recordingOpener{}
 	plat.Opener = o
 	plat.Launcher = &unitLauncher{active: []string{wakeSixtySeven}}
+	c := a.agentReopenCmd()
+	c.SetArgs([]string{id})
+	if err := c.ExecuteContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(o.opened) > 0 {
+		t.Errorf("opened %v beside the headless resume", o.opened)
+	}
+	if !strings.Contains(out.String(), "resumed headless meanwhile") {
+		t.Errorf("output: %s", out)
+	}
+}
+
+// wakeLaterLauncher runs the wake unit from its second look on: a resume
+// the standby started while a reopen waited for the person.
+type wakeLaterLauncher struct {
+	platform.Launcher
+	looks atomic.Int32
+}
+
+func (l *wakeLaterLauncher) Running(context.Context, bool, ...string) []string {
+	if l.looks.Add(1) < 2 {
+		return nil
+	}
+	return []string{wakeSixtySeven}
+}
+
+// A resume that starts while the reopen waits for the person's typing to
+// pause is found right before the show: the reopen yields, and the desktop
+// warms no CLI beside it.
+func TestReopenYieldsToAResumeStartedDuringItsWait(t *testing.T) {
+	a, out := stubApp(t)
+	a.cfg.Desktop.TypingQuiet.Duration = -1
+	id := runSixtySeven
+	a.cfg.Claude.DesktopDir = t.TempDir()
+	desktopRecord(t, a.cfg.Claude.DesktopDir, "local_"+id, id, false)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		p := state.Party{Session: id, Name: supervisorRole.runName(67)}
+		st.Starts = append(st.Starts, state.Start{Party: p, Mode: state.ModeBypass, At: time.Now()})
+		st.Agents = append(st.Agents, state.Agent{Party: p})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	saved := desktopWindowActive
+	t.Cleanup(func() { desktopWindowActive = saved })
+	desktopWindowActive = func(context.Context) (bool, error) { return false, nil }
+	plat.Machine = tableMachine{plat.Machine}
+	o := &recordingOpener{}
+	plat.Opener = o
+	plat.Launcher = &wakeLaterLauncher{}
 	c := a.agentReopenCmd()
 	c.SetArgs([]string{id})
 	if err := c.ExecuteContext(t.Context()); err != nil {
