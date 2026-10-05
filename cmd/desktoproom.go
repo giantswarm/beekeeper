@@ -98,6 +98,7 @@ func (a *app) endOneForRoom(ctx context.Context, slots int, keep []string) (bool
 // agentRoomCmd frees room under the desktop's cap of CLIs by hand.
 func (a *app) agentRoomCmd() *cobra.Command {
 	var free int
+	var keep []string
 	c := &cobra.Command{
 		Use:    "room",
 		Short:  "Free room under the desktop's cap of CLIs from beekeeper's own finished CLIs",
@@ -107,10 +108,11 @@ func (a *app) agentRoomCmd() *cobra.Command {
 			if free < 1 {
 				return usageErr("--free %d: at least 1", free)
 			}
-			return a.makeRoomFor(cmd.Context(), free)
+			return a.makeRoomFor(cmd.Context(), free, keep...)
 		},
 	}
 	c.Flags().IntVar(&free, "free", 1, "the CLIs the desktop is to have room for")
+	c.Flags().StringSliceVar(&keep, "keep", nil, "desktop sessions (local_ ids) whose CLI is never ended")
 	return c
 }
 
