@@ -200,7 +200,8 @@ a numbered run, "Supervisor run N": its desktop title, roster name and the name 
 
 - **When:** by context, not by time. The watch says `RELAY DUE` once this session's context
   reaches `supervisor.relayAt` and the machine is quiet (no gated merge running or settling, no
-  grant waiting to be claimed, no claim queued).
+  grant waiting to be claimed, no claim queued). Still over it `supervisor.relayGrace` (30m) later,
+  the standby watch relays this session itself (`RELAYED`).
 - **How:** everything pending is in beekeeper first (notes with defaults, timers, session records,
   holds, grants, lane seeds); a standing rule this watch agreed on is a pinned note (`beekeeper note
   add --pin`), which every hand-over carries. Then `beekeeper supervisor relay` starts "Supervisor

@@ -141,14 +141,17 @@ func (c *CLI) Of(sup *Supervisor) bool {
 }
 
 // RelayDue is the watch's memory that it reported the relay due to the
-// supervisor's term Supervisor and Since, once: a relay cancelled or
-// expired removes it, so the next quiet moment reports it again.
+// supervisor's term Supervisor and Since at RelayAt: a relay cancelled or
+// expired removes it, so the next quiet moment reports it again, and a
+// changed relayAt reports it anew.
 type RelayDue struct {
 	Supervisor Party     `json:"supervisor"`
 	Since      time.Time `json:"since"`
 	Reported   time.Time `json:"reported"`
 	// Context is the supervisor's context in tokens when it was reported.
 	Context int64 `json:"contextTokens"`
+	// RelayAt is the relayAt in tokens it was reported at.
+	RelayAt int64 `json:"relayAt,omitempty"`
 
 	rest rest
 }
@@ -156,6 +159,11 @@ type RelayDue struct {
 // Of reports whether the record is about sup's current term.
 func (r *RelayDue) Of(sup *Supervisor) bool {
 	return r != nil && sup != nil && r.Supervisor.Is(sup.Party) && r.Since.Equal(sup.Since)
+}
+
+// At reports whether the record is about sup's current term at relayAt.
+func (r *RelayDue) At(sup *Supervisor, relayAt int64) bool {
+	return r.Of(sup) && r.RelayAt == relayAt
 }
 
 // Role is a relayed role's record: its holder and term, its last relay,

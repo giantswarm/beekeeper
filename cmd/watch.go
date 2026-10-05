@@ -114,8 +114,9 @@ line and keeps its holds.
 Once the supervisor session's context (its transcript's last request, the
 CTX column) reaches supervisor.relayAt, RELAY DUE is said at the first
 quiet moment: no gated merge running or settling, no grant waiting to be
-claimed, no claim queued and no relay open. It is said once per supervisor,
-and again only after a relay is cancelled or expires.
+claimed, no claim queued and no relay open. It is said once per supervisor
+and supervisor.relayAt, again after a relay is cancelled or expires, and
+once more by every watch that did not say it yet (a restarted watch).
 
 Every poll but --once's runs beekeeper doctor in the background (its last
 run still going, the poll skips it): one DOCTOR line per agent it took off
@@ -154,7 +155,11 @@ the notes, timers, session records and relays to the supervisor's watch,
 and it never reads the alerts, so it takes nothing from the supervisor's
 view. It reads the upgrades and sets and lifts their holds only while no
 supervisor's watch has begun an upgrade cycle within five watch.interval
-(upgrades-watch.json), and says so once.
+(upgrades-watch.json), and says so once. It relays a supervisor or guide
+that is still over its relayAt <role>.relayGrace (30m) after its relay
+due, with no relay open and, for the supervisor, at a quiet moment: it
+starts the successor as the holder's own relay does (RELAYED), and the
+successor's start takes the role.
 
 The quiet rules keep what is noise for the supervisor out of the output:
 other teams' alerts matching alerts.quiet (by default, once alerts.team is
@@ -262,6 +267,9 @@ type watcher struct {
 	// waits are the reopen waits this watch said, by agent session and the
 	// wait's start, until they end.
 	waits map[string]time.Time
+	// dues are the supervisor's relay dues this watch said; nil in a watch
+	// --once.
+	dues relayDues
 	// stand is the standby watch's memory of its messages, successors and
 	// reopens; table the last poll's process table.
 	stand standbyWatch
@@ -643,6 +651,9 @@ func (a *app) newWatcher(standby, keep bool) *watcher {
 	w := &watcher{app: a, standby: standby, last: map[string]time.Time{}, seenKills: map[string]bool{},
 		reported: map[string]bool{}, active: map[string]condition{}, chores: keep, retitled: map[string]time.Time{},
 		upgrades: upgrade.Readings{}}
+	if keep {
+		w.dues = relayDues{}
+	}
 	w.stand = standbyWatch{send: a.peerSend, open: plat.Opener.Open, succeed: a.succeedFromWatch, revive: a.reviveFromWatch, turning: unitsTurning, reopening: unitsReopening}
 	if me, err := a.caller(); keep && err == nil {
 		w.markFile = "seen.watch." + fileKey(me) + ".json"
@@ -1385,6 +1396,9 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	if w.standby {
 		w.guideGone(ctx, st, sessions)
 		w.resumeRestarted(ctx, guideRole, st, sessions)
+		for _, rl := range roles {
+			w.relayOverdue(ctx, rl, st, sessions)
+		}
 	}
 	if w.standby && supervised {
 		w.resumeRestarted(ctx, supervisorRole, st, sessions)
@@ -1432,7 +1446,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		}
 		evs = append(evs, ce...)
 		rl, re := fireRelay(st, w.now)
-		dl, de := fireRelayDue(st, q, w.now)
+		dl, de := fireRelayDue(st, q, w.dues, w.now)
 		lines, evs = append(append(lines, rl...), dl...), append(append(evs, re...), de...)
 		return lines, evs, seen || len(lines) > 0 || len(evs) > 0
 	}
@@ -1641,16 +1655,24 @@ func (w *watcher) supervisorGone(ctx context.Context, st *state.State, sessions 
 }
 
 // quietness reads whether the machine is at a quiet moment, once the
-// supervisor's context reached relayAt: outside the state lock, since a
-// settling merge's installation is read with kubectl.
+// supervisor's context reached relayAt and this watch did not say its relay
+// due yet.
 func (w *watcher) quietness(ctx context.Context, st *state.State, sessions []*claude.Session) quietness {
-	c := relayContext(st, sessions, w.now, w.cfg.Supervisor.RelayAt)
+	relayAt := w.cfg.Supervisor.RelayAt
+	c := relayContext(st, sessions, w.now, relayAt, w.dues)
 	if c == 0 {
 		return quietness{}
 	}
+	return quietness{checked: true, context: c, relayAt: relayAt, busy: w.busyNow(ctx, st)}
+}
+
+// busyNow says what keeps the machine from a quiet moment for a relay
+// (busyWith), "" when quiet: outside the state lock, since a settling
+// merge's installation is read with kubectl.
+func (w *watcher) busyNow(ctx context.Context, st *state.State) string {
 	holders, err := lease.Dir(w.cfg.LeaseDir).List()
 	if err != nil {
-		return quietness{checked: true, context: c, busy: fmt.Sprintf("the leases cannot be read: %v", err)}
+		return fmt.Sprintf("the leases cannot be read: %v", err)
 	}
 	hrs := map[string][]merge.HelmRelease{}
 	rolled := func(m state.Merge, lane config.Lane) bool {
@@ -1662,7 +1684,7 @@ func (w *watcher) quietness(ctx context.Context, st *state.State, sessions []*cl
 		ready, _ := merge.Ready(lane, h, &m, w.now, w.cfg.Merge.Settle.Duration)
 		return h != nil && ready
 	}
-	return quietness{checked: true, context: c, busy: busyWith(st, w.cfg, heldMap(holders), w.now, proc.Alive, rolled)}
+	return busyWith(st, w.cfg, heldMap(holders), w.now, proc.Alive, rolled)
 }
 
 // firePending marks what is due or ended in st as reported and returns its

@@ -100,6 +100,9 @@ type app struct {
 	central bool
 	// centralClient calls the central instance (hub); nil until first used.
 	centralClient *central.Client
+	// guideDues are the guide's relay dues its guide watch said; nil in a
+	// guide watch --once.
+	guideDues relayDues
 }
 
 // New returns the root command.
