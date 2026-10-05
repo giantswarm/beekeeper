@@ -504,6 +504,14 @@ type Agents struct {
 	// Shell is the prelude of every agent shell (beekeeper hook
 	// sessionstart).
 	Shell AgentShell `yaml:"shell"`
+	// Dir is the folder every agent beekeeper starts runs in (agents start,
+	// agents handover, a role's successor): the desk's checkout, whose
+	// project instructions every session loads. Empty: the caller's.
+	Dir string `yaml:"dir"`
+	// Roots are the folders under which an agent may run instead, with
+	// --dir: the worktrees of the desk's repositories. Any other folder is
+	// refused while Dir is set.
+	Roots []string `yaml:"roots"`
 }
 
 // Capacity is the supervisor's target of busy agents and the memory guards

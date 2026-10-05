@@ -105,6 +105,9 @@ func (a *app) startSuccessor(ctx context.Context, rl role, from, by state.Party,
 	if rec != nil {
 		model = rec.Model
 	}
+	if dir == "" && rl.cfg(a.cfg).Dir == "" {
+		dir = a.cfg.Agents.Dir
+	}
 	if dir == "" {
 		dir = successorDir(rl.cfg(a.cfg), rec, startDir)
 	}
