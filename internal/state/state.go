@@ -309,6 +309,9 @@ type Park struct {
 	// a person's answer word for word or the pull request's state.
 	Resumable time.Time `json:"resumable,omitzero"`
 	Answer    string    `json:"answer,omitempty"`
+	// Told is when the supervisor's watch said the park waits on a person;
+	// zero: not yet, or it waits on no person.
+	Told time.Time `json:"told,omitzero"`
 
 	rest rest
 }
@@ -733,21 +736,23 @@ type State struct {
 	// StaleWriters are the processes of an older beekeeper seen saving the
 	// state after a newer one, one per process while it runs.
 	StaleWriters []StaleWriter `json:"staleWriters,omitempty"`
-	// Problems are the findings workers reported with agents idle that the
-	// supervisor's watch has not printed yet.
-	Problems []Problem `json:"problems,omitempty"`
+	// WorkerReports are the reports workers finished with (agents idle
+	// --done) that the supervisor's watch has not printed yet.
+	WorkerReports []WorkerReport `json:"workerReports,omitempty"`
 
 	rest rest
 }
 
-// Problem is one finding a worker reported with its task: a broken
-// function, a workaround, a follow-up. The watch prints it once and drops
-// it; the event log keeps it (agents.problem).
-type Problem struct {
-	By   Party     `json:"by"`
-	At   time.Time `json:"at"`
-	Task string    `json:"task,omitempty"`
-	Text string    `json:"text"`
+// WorkerReport is the report a worker finished its task with: what it
+// delivered and the problems it found (broken functions, ways around them,
+// follow-ups). The supervisor's watch prints it once and drops it; the event
+// log keeps it (agents.report, agents.problem).
+type WorkerReport struct {
+	By       Party     `json:"by"`
+	At       time.Time `json:"at"`
+	Task     string    `json:"task,omitempty"`
+	Text     string    `json:"text"`
+	Problems []string  `json:"problems,omitempty"`
 
 	rest rest
 }

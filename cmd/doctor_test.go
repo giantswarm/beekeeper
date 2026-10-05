@@ -159,7 +159,7 @@ func TestIdleDone(t *testing.T) {
 		t.Fatal(err)
 	}
 	run("assign", agentOne, "a task")
-	run("idle", "--done", "--problem", "none")
+	run("idle", "--done", "--report", "merged #1", "--problem", "none")
 	st, err := a.store.Read()
 	if err != nil {
 		t.Fatal(err)
@@ -193,8 +193,10 @@ func TestIdleDoneProblemsFound(t *testing.T) {
 	}
 	for _, args := range [][]string{
 		{"idle", "--done"},
-		{"idle", "--done", "--problem", " "},
-		{"idle", "--done", "--problem", "none", "--problem", "the reconciler creates no repository"},
+		{"idle", "--done", "--report", "merged #1"},
+		{"idle", "--done", "--problem", "none"},
+		{"idle", "--done", "--report", "merged #1", "--problem", " "},
+		{"idle", "--done", "--report", "merged #1", "--problem", "none", "--problem", "the reconciler creates no repository"},
 	} {
 		if err := run(args...); err == nil {
 			t.Errorf("%v passed", args)
@@ -204,22 +206,41 @@ func TestIdleDoneProblemsFound(t *testing.T) {
 		t.Fatalf("a refused report changed the agent: %+v", st.Agents[0])
 	}
 	found := []string{"giantswarm/github: the reconciler creates no repository; worked around with gh", "follow-up: docs"}
-	if err := run("idle", "--done", "--problem", found[0], "--problem", found[1]); err != nil {
+	if err := run("idle", "--done", "--report", "merged #1, released v1.2.3", "--problem", found[0], "--problem", found[1]); err != nil {
 		t.Fatal(err)
 	}
 	st, err := a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(st.Problems) != 2 || st.Problems[0].Text != found[0] || st.Problems[0].Task != "a task" || st.Problems[0].By.Name != agentOne {
-		t.Fatalf("problems = %+v", st.Problems)
+	if rs := st.WorkerReports; len(rs) != 1 || rs[0].Text != "merged #1, released v1.2.3" || len(rs[0].Problems) != 2 || rs[0].Problems[0] != found[0] || rs[0].Task != "a task" || rs[0].By.Name != agentOne {
+		t.Fatalf("reports = %+v", st.WorkerReports)
 	}
 	lines, _ := firePending(st, nil, time.Now())
-	if len(lines) != 2 || !strings.HasPrefix(lines[0], `PROBLEM FOUND by "`+agentOne+`": `+found[0]) {
+	if len(lines) != 3 || !strings.HasPrefix(lines[0], `WORKER REPORT by "`+agentOne+`" (task: a task): merged #1`) ||
+		!strings.HasPrefix(lines[1], `PROBLEM FOUND by "`+agentOne+`": `+found[0]) {
 		t.Errorf("lines = %q", lines)
 	}
-	if lines, _ := firePending(st, nil, time.Now()); len(lines) != 0 || len(st.Problems) != 0 {
+	if lines, _ := firePending(st, nil, time.Now()); len(lines) != 0 || len(st.WorkerReports) != 0 {
 		t.Errorf("printed again: %q", lines)
+	}
+}
+
+// A park on a person reaches the supervisor's watch once; a park on a
+// merge ahead in the lane does not.
+func TestParkedOnPersonIsSaidOnce(t *testing.T) {
+	now := time.Now()
+	st := &state.State{Agents: []state.Agent{
+		{Party: state.Party{Name: "on a note"}, Task: "t", Park: &state.Park{On: "#12", Waits: "the rollout window"}},
+		{Party: state.Party{Name: "on Timo"}, Task: "t", Park: &state.Park{Waits: "Timo's go"}},
+		{Party: state.Party{Name: "on a merge"}, Task: "t", Park: &state.Park{On: "giantswarm/x#3", Waits: "the merge ahead of mine in the lane"}},
+	}}
+	lines, evs := parkedOnPerson(st, "Timo", now)
+	if len(lines) != 2 || len(evs) != 2 || !strings.HasPrefix(lines[0], `PARKED ON A PERSON: "on a note" parked on #12`) || !strings.Contains(lines[1], "tells Timo") {
+		t.Fatalf("lines = %q", lines)
+	}
+	if lines, _ := parkedOnPerson(st, "Timo", now); len(lines) != 0 {
+		t.Errorf("said again: %q", lines)
 	}
 }
 

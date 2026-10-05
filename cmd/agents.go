@@ -3,6 +3,7 @@ package cmd
 import (
 	"cmp"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"time"
@@ -190,6 +191,7 @@ or "wake turn running".`,
 	}
 	var finished bool
 	var problems []string
+	var report string
 	idle := &cobra.Command{
 		Use:   "idle",
 		Short: "Report the calling agent's task done: idle again",
@@ -199,15 +201,30 @@ roster and archives the desktop session beekeeper started for it once its
 CLI runs no turn, a desktop CLI kept warm included (beekeeper doctor; the
 desktop's Archived list brings it back).
 
---problem is the report's "Problems found": one line per broken function,
-workaround, follow-up or problem the task met, with its evidence and owning
-repository, or --problem none. --done refuses without it. The supervisor's
-watch prints each finding once (PROBLEM FOUND), for the supervisor to file.`,
+--done refuses without the final report: --report is what the supervisor
+learns (PR links, release versions, the live proof, what is still open;
+"-" reads it from stdin), and --problem its "Problems found": one line per
+broken function, workaround, follow-up or problem the task met, with its
+evidence and owning repository, or --problem none. beekeeper delivers both
+itself: the supervisor's watch prints the report once (WORKER REPORT) and
+each finding as a line of its own (PROBLEM FOUND), for the supervisor to
+file; the log keeps them (agents.report, agents.problem).`,
 		Args: cobra.NoArgs,
-		RunE: func(*cobra.Command, []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			found, err := problemsFound(problems, finished)
 			if err != nil {
 				return err
+			}
+			if report == "-" {
+				b, err := io.ReadAll(cmd.InOrStdin())
+				if err != nil {
+					return err
+				}
+				report = string(b)
+			}
+			report = strings.TrimSpace(report)
+			if finished && report == "" {
+				return refused("the final report is missing: --report \"<PR links, releases, the live proof, what is still open>\" (or --report - from stdin); beekeeper delivers it to the supervisor")
 			}
 			me, err := a.caller()
 			if err != nil {
@@ -226,8 +243,13 @@ watch prints each finding once (PROBLEM FOUND), for the supervisor to file.`,
 					verb = "agents.done"
 				}
 				evs := []state.Event{event(me, verb, "%s done: %s", ag.Name, ag.LastTask)}
+				if report != "" || len(found) > 0 {
+					st.WorkerReports = append(st.WorkerReports, state.WorkerReport{By: ag.Party, At: a.now.UTC(), Task: ag.LastTask, Text: report, Problems: found})
+				}
+				if report != "" {
+					evs = append(evs, event(me, "agents.report", "%s: %s", ag.Name, report))
+				}
 				for _, p := range found {
-					st.Problems = append(st.Problems, state.Problem{By: ag.Party, At: a.now.UTC(), Task: ag.LastTask, Text: p})
 					evs = append(evs, event(me, "agents.problem", "%s: %s", ag.Name, p))
 				}
 				return evs, nil
@@ -235,8 +257,8 @@ watch prints each finding once (PROBLEM FOUND), for the supervisor to file.`,
 			if err != nil {
 				return err
 			}
-			if len(found) > 0 {
-				if _, err := fmt.Fprintf(a.out, "register: %d problem(s) found go to the supervisor's watch\n", len(found)); err != nil {
+			if report != "" || len(found) > 0 {
+				if _, err := fmt.Fprintf(a.out, "register: the report and %d problem(s) found go to the supervisor's watch\n", len(found)); err != nil {
 					return err
 				}
 			}
@@ -249,6 +271,7 @@ watch prints each finding once (PROBLEM FOUND), for the supervisor to file.`,
 		},
 	}
 	idle.Flags().BoolVar(&finished, "done", false, "the work is finished: the doctor removes and archives the agent once idle")
+	idle.Flags().StringVar(&report, "report", "", `the final report for the supervisor, "-" from stdin (required with --done)`)
 	idle.Flags().StringArrayVar(&problems, "problem", nil, `a problem found: one line per broken function, workaround or follow-up, with evidence and owning repository; "none" when there was none (required with --done)`)
 	var keepDesktop bool
 	remove := &cobra.Command{

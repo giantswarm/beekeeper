@@ -1450,6 +1450,8 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		seen = seen || touched
 		pl, pe := firePending(st, sessions, w.now)
 		lines, evs = append(lines, pl...), append(evs, pe...)
+		ppl, ppe := parkedOnPerson(st, w.cfg.Guide.Person, w.now)
+		lines, evs = append(lines, ppl...), append(evs, ppe...)
 		for _, e := range ce {
 			lines = append(lines, fmt.Sprintf("SUPERVISOR RESTARTED: %q, %s; it keeps the role", e.By.Name, e.Detail))
 		}
@@ -1742,21 +1744,50 @@ func firePending(st *state.State, sessions []*claude.Session, now time.Time) ([]
 		lines = append(lines, fmt.Sprintf("SESSION ENDED: %q, which %s: re-query %s", r.Session.Name, truncate(recordText(*r), 200), r.Issue))
 		evs = append(evs, event(watchParty, "session.ended", "%s: %s", r.Session.Name, recordText(*r)))
 	}
-	for _, p := range st.Problems {
-		lines = append(lines, problemLine(p))
+	for _, r := range st.WorkerReports {
+		lines = append(lines, reportLines(r)...)
 	}
-	st.Problems = nil
+	st.WorkerReports = nil
 	return lines, evs
 }
 
-// problemLine is a finding a worker reported, for the supervisor to file
-// as an issue and hand to a worker.
-func problemLine(p state.Problem) string {
-	l := fmt.Sprintf("PROBLEM FOUND by %q: %s", p.By.Name, truncate(p.Text, 400))
-	if p.Task != "" {
-		l += " (task: " + truncate(p.Task, 80) + ")"
+// reportLines are a worker's final report and each problem it found, a line
+// of its own for the supervisor to file as an issue and hand to a worker.
+func reportLines(r state.WorkerReport) []string {
+	var lines []string
+	if r.Text != "" {
+		l := fmt.Sprintf("WORKER REPORT by %q", r.By.Name)
+		if r.Task != "" {
+			l += " (task: " + truncate(r.Task, 80) + ")"
+		}
+		lines = append(lines, l+": "+truncate(r.Text, 2000))
 	}
-	return l + "; file it and hand it to a worker"
+	for _, p := range r.Problems {
+		lines = append(lines, fmt.Sprintf("PROBLEM FOUND by %q: %s; file it and hand it to a worker", r.By.Name, truncate(p, 400)))
+	}
+	return lines
+}
+
+// parkedOnPerson says once per park which agents parked on a person (a note,
+// the person's or a colleague's answer, a review): the supervisor carries it
+// to the guide, who tells the person.
+func parkedOnPerson(st *state.State, person string, now time.Time) ([]string, []state.Event) {
+	var lines []string
+	var evs []state.Event
+	for i := range st.Agents {
+		ag := &st.Agents[i]
+		p := ag.Park
+		if p == nil || !p.Told.IsZero() {
+			continue
+		}
+		if _, note := parkNote(p.On); !note && parkedOn(p.Waits, person) == "" {
+			continue
+		}
+		p.Told = now.UTC()
+		lines = append(lines, fmt.Sprintf("PARKED ON A PERSON: %q %s; tell the guide, who tells %s", ag.Name, parkedText(p, now), cmp.Or(person, "the person")))
+		evs = append(evs, event(watchParty, "agents.parked-on-person", "%s: %s", ag.Name, p.Waits))
+	}
+	return lines, evs
 }
 
 // runaways prints one line for each session figure over its threshold in
