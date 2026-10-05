@@ -45,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A relayed role holder's import no longer misses on a keystroke: a desktop turn's import (a role's successor, `agents start --desktop`) gives the person's typing its bound again when the link checks the desktop once more, as its first wait did, instead of failing at once ([#395](https://github.com/giantswarm/beekeeper/issues/395)).
 - A relayed supervisor or guide is imported into the desktop's sidebar under its run title without a click: its import goes ahead past the desktop window's focus as a desktop turn's does, and a reopen that meets the standby's headless resume of a session the desktop never imported imports it beside that turn instead of leaving it to the end of a turn that keeps the role's watch. An import beside a headless turn (first turn or wake) freezes whichever runs and stops the desktop's CLI it warms; a wake turn is never taken for the desktop's CLI ([#395](https://github.com/giantswarm/beekeeper/issues/395)).
 - A reply the Slack feedback watch delivers no longer carries what the Slack MCP server and the connector append to its text: its `Reactions:` line and the claude.ai connector's `*Sent using* <@…|Claude>` attribution.
 - `beekeeper serve`'s `hold_list` lists the holds: it ran the `hold` verb with no arguments, which read serve's own command line (`serve --http=…`) and failed with `unknown flag: --http`.

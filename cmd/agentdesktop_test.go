@@ -78,6 +78,26 @@ func TestADesktopTurnGoesPastTheFocus(t *testing.T) {
 	}
 }
 
+// A desktop turn's import gives the person's typing its bound once more
+// when the link checks the desktop again: a keystroke between the wait and
+// the link delays the import, never misses it.
+func TestADesktopTurnsImportOutlastsTheTyping(t *testing.T) {
+	a, _ := stubApp(t)
+	saved := desktopWindowActive
+	t.Cleanup(func() { desktopWindowActive = saved })
+	desktopWindowActive = func(context.Context) (bool, error) { return true, nil }
+	plat.Machine = tableMachine{plat.Machine}
+	o := &recordingOpener{}
+	plat.Opener = o
+	typing := desk{quiet: time.Hour, last: time.Now, urgent: func() bool { return true }, turn: 2 * awayPoll}
+	if _, err := a.importSession(t.Context(), typing, rotationLogin, ""); err != nil {
+		t.Fatalf("a desktop turn's import under the person's typing: %v", err)
+	}
+	if len(o.opened) != 1 || o.opened[0] != resumeURL(rotationLogin) {
+		t.Errorf("opened %v, want the import", o.opened)
+	}
+}
+
 // rosterAgent puts ag on the roster as one of beekeeper's starts.
 func rosterAgent(t *testing.T, a *app, ag state.Agent) {
 	t.Helper()
