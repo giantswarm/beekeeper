@@ -63,7 +63,7 @@ func TestServeRefusesARequestNobodyHolds(t *testing.T) {
 	}
 	called := false
 	answer(path, "/proc", func(int, Request) error { called = true; return nil })
-	raw, err := os.ReadFile(filepath.Join(dir, "x"+replySuffix))
+	raw, err := os.ReadFile(filepath.Join(dir, "x"+replySuffix)) //nolint:gosec // the test's own spool
 	if err != nil || called || !strings.Contains(string(raw), "held by 0 processes") {
 		t.Errorf("reply %s, %v; handler called %v", raw, err, called)
 	}
@@ -91,7 +91,8 @@ func TestServeRefusesAnOversizedRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	answer(path, "/proc", func(int, Request) error { return nil })
-	if raw, _ := os.ReadFile(filepath.Join(dir, "big"+replySuffix)); !strings.Contains(string(raw), "over 4096 bytes") {
+	raw, _ := os.ReadFile(filepath.Join(dir, "big"+replySuffix)) //nolint:gosec // the test's own spool
+	if !strings.Contains(string(raw), "over 4096 bytes") {
 		t.Errorf("reply %s", raw)
 	}
 }

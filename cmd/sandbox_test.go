@@ -8,6 +8,13 @@ import (
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 )
 
+// The broker test's scope, slice and cap.
+const (
+	testRunUnit     = "memcap-4242-000123"
+	testMemcapSlice = "memcap.slice"
+	testMax         = "12G"
+)
+
 // recordingCapper records what the broker asks of the host.
 type recordingCapper struct {
 	slots  []platform.Cap
@@ -31,9 +38,9 @@ func TestBrokeredCap(t *testing.T) {
 	h := brokeredCap(r)
 	for _, ok := range []sandbox.Request{
 		{Op: sandbox.OpPing},
-		{Op: sandbox.OpCapSlot, Slice: "memcap-slot1_0a1b2c3d.slice", Max: "12G", Swap: "0"},
-		{Op: sandbox.OpScope, Unit: "memcap-4242-000123", Slice: "memcap-slot2_test.slice", Max: "infinity", Swap: "0"},
-		{Op: sandbox.OpScope, Unit: "memcap-test-4242-000123", Slice: "memcap.slice", Max: "512M", Swap: "0"},
+		{Op: sandbox.OpCapSlot, Slice: "memcap-slot1_0a1b2c3d.slice", Max: testMax, Swap: "0"},
+		{Op: sandbox.OpScope, Unit: testRunUnit, Slice: "memcap-slot2_test.slice", Max: "infinity", Swap: "0"},
+		{Op: sandbox.OpScope, Unit: "memcap-test-4242-000123", Slice: testMemcapSlice, Max: "512M", Swap: "0"},
 	} {
 		if err := h(7, ok); err != nil {
 			t.Errorf("%+v: %v", ok, err)
@@ -43,12 +50,12 @@ func TestBrokeredCap(t *testing.T) {
 		t.Errorf("slots %v, adopts %v", r.slots, r.adopts)
 	}
 	for _, bad := range []sandbox.Request{
-		{Op: sandbox.OpCapSlot, Slice: "app.slice", Max: "12G", Swap: "0"},
-		{Op: sandbox.OpCapSlot, Slice: "memcap-slot1_0a1b2c3d.slice/../app.slice", Max: "12G", Swap: "0"},
-		{Op: sandbox.OpScope, Unit: "app-com.anthropic.Claude-1", Slice: "memcap.slice", Max: "12G", Swap: "0"},
-		{Op: sandbox.OpScope, Unit: "memcap-4242-000123", Slice: "memcap.slice", Max: "lots", Swap: "0"},
-		{Op: sandbox.OpScope, Unit: "memcap-4242-000123", Slice: "memcap.slice", Max: "12G", Swap: ""},
-		{Op: "exec", Slice: "memcap.slice", Max: "12G", Swap: "0"},
+		{Op: sandbox.OpCapSlot, Slice: "app.slice", Max: testMax, Swap: "0"},
+		{Op: sandbox.OpCapSlot, Slice: "memcap-slot1_0a1b2c3d.slice/../app.slice", Max: testMax, Swap: "0"},
+		{Op: sandbox.OpScope, Unit: "app-com.anthropic.Claude-1", Slice: testMemcapSlice, Max: testMax, Swap: "0"},
+		{Op: sandbox.OpScope, Unit: testRunUnit, Slice: testMemcapSlice, Max: "lots", Swap: "0"},
+		{Op: sandbox.OpScope, Unit: testRunUnit, Slice: testMemcapSlice, Max: testMax, Swap: ""},
+		{Op: "exec", Slice: testMemcapSlice, Max: testMax, Swap: "0"},
 	} {
 		if err := h(7, bad); err == nil {
 			t.Errorf("%+v: want a refusal", bad)
