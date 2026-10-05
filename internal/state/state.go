@@ -440,15 +440,22 @@ type Timer struct {
 	rest rest
 }
 
+// The values of Timer.Repeat.
+const (
+	RepeatDaily    = "daily"
+	RepeatWeekdays = "weekdays"
+	RepeatWeekly   = "weekly"
+)
+
 // Repeats are the values of Timer.Repeat.
-var Repeats = []string{"daily", "weekdays", "weekly"}
+var Repeats = []string{RepeatDaily, RepeatWeekdays, RepeatWeekly}
 
 // Next is the first time after now the repeating timer is due again, at its
 // local time of day: a day or a week on, a weekday timer skipping the weekend.
 func (t Timer) Next(now time.Time) time.Time {
 	next := t.Due.Local()
-	for !next.After(now) || t.Repeat == "weekdays" && Weekend(next) {
-		if t.Repeat == "weekly" {
+	for !next.After(now) || t.Repeat == RepeatWeekdays && Weekend(next) {
+		if t.Repeat == RepeatWeekly {
 			next = next.AddDate(0, 0, 7)
 		} else {
 			next = next.AddDate(0, 0, 1)

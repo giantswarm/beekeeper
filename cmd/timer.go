@@ -163,8 +163,8 @@ func (a *app) printTimers(timers []state.Timer) {
 // timerSpec is what timer add was given beyond the time and the text.
 type timerSpec struct {
 	when, probe, until, wake, run, repeat string
-	every                         time.Duration
-	expire                        bool
+	every                                 time.Duration
+	expire                                bool
 }
 
 // timerFrom checks spec and returns the timer due at due it describes.
@@ -196,7 +196,7 @@ func (a *app) timerFrom(spec timerSpec, due time.Time) (state.Timer, error) {
 		return t, usageErr("--repeat takes no condition: a repeating timer fires at its time")
 	case spec.wake == "" && t.Run == "":
 		return t, usageErr("--repeat needs --wake or --run: a plain timer stays open until timer done")
-	case t.Repeat == "weekdays" && state.Weekend(t.Due.Local()):
+	case t.Repeat == state.RepeatWeekdays && state.Weekend(t.Due.Local()):
 		t.Due = t.Next(t.Due)
 	}
 	if q := strings.TrimSpace(spec.wake); q != "" {
