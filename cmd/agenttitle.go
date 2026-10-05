@@ -493,12 +493,15 @@ const (
 
 // archiveOutcome is what archiving the desktop session of agent did, said
 // by line. host is the desktop session left to archive later, "" when it
-// is archived or never to be; asked says a steward was asked for it in vain.
+// is archived or never to be; asked says a steward was asked for it in vain;
+// unagreed says the person's agreement is not configured, which the doctor
+// reports once for all agents, not per agent.
 type archiveOutcome struct {
-	agent state.Party
-	line  string
-	host  string
-	asked bool
+	agent    state.Party
+	line     string
+	host     string
+	asked    bool
+	unagreed bool
 }
 
 // stewardDeclineFor is how long the doctor asks a steward that declined
@@ -529,7 +532,7 @@ func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []sta
 			continue
 		}
 		if a.cfg.Agents.ArchiveAgreement == "" {
-			out[i].line = fmt.Sprintf("its desktop session %s stays: agents.archiveAgreement is not set, and a steward archives only on the person's agreement", host)
+			out[i].line, out[i].unagreed = fmt.Sprintf("its desktop session %s stays: agents.archiveAgreement is not set, and a steward archives only on the person's agreement", host), true
 			continue
 		}
 		at[host] = i

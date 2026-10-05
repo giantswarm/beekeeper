@@ -238,6 +238,9 @@ type doctorReport struct {
 	chores []string
 	faults []faultFinding
 	notes  []string
+	// unagreed counts the finished workers whose archive waits on
+	// agents.archiveAgreement, said once for all, not per agent.
+	unagreed int
 	// stale are the running processes of an older beekeeper that saved the
 	// state after a newer one.
 	stale []state.StaleWriter
@@ -337,10 +340,14 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 		outcomes := a.archiveDesktops(ctx, st, archive, "beekeeper doctor")
 		_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
 			lines := owe(st, outcomes, a.now)
-			evs := make([]state.Event, len(lines))
+			var evs []state.Event
 			for i, l := range lines {
+				if outcomes[i].unagreed {
+					rep.unagreed++
+					continue
+				}
 				rep.chores = append(rep.chores, fmt.Sprintf("%q: %s", archive[i].Name, l))
-				evs[i] = event(r.by, "agents.archive", "%s: %s", archive[i].Name, l)
+				evs = append(evs, event(r.by, "agents.archive", "%s: %s", archive[i].Name, l))
 			}
 			return evs, nil
 		})
@@ -481,6 +488,9 @@ faults but remedying none.`,
 				return err
 			}
 			lines := append(slices.Clone(rep.chores), rep.notes...)
+			if rep.unagreed > 0 {
+				lines = append(lines, unagreedLine(rep.unagreed))
+			}
 			for _, f := range rep.faults {
 				lines = append(lines, f.String())
 			}
@@ -531,9 +541,7 @@ func (w *watcher) doctor(ctx context.Context) {
 			return
 		}
 		w.clear("doctor")
-		for _, l := range append(rep.chores, rep.notes...) {
-			w.emitNow("doctor", "DOCTOR %s", l)
-		}
+		w.sayChores(rep)
 		for _, f := range rep.faults {
 			if f.fixed {
 				w.emitNow("doctor", "DOCTOR %s", f)
@@ -548,4 +556,29 @@ func (w *watcher) doctor(ctx context.Context) {
 		}
 		w.clearMissing("doctor-stale ", stale)
 	}()
+}
+
+// sayChores says the doctor's chore lines, each once per watch (a stay that
+// repeats is not said again), its notes, and the finished workers waiting on
+// agents.archiveAgreement as one summary while any do.
+func (w *watcher) sayChores(rep doctorReport) {
+	if w.doctored == nil {
+		w.doctored = map[string]bool{}
+	}
+	for _, l := range rep.chores {
+		if !w.doctored[l] {
+			w.doctored[l] = true
+			w.emitNow("doctor", "DOCTOR %s", l)
+		}
+	}
+	for _, l := range rep.notes {
+		w.emitNow("doctor", "DOCTOR %s", l)
+	}
+	w.check("doctor-unagreed", rep.unagreed > 0, "DOCTOR %s", unagreedLine(rep.unagreed))
+}
+
+// unagreedLine says how many finished workers' desktop sessions stay
+// unarchived for want of the person's agreement.
+func unagreedLine(n int) string {
+	return fmt.Sprintf("%d finished workers' desktop sessions stay unarchived: set agents.archiveAgreement to the person's agreement for a steward to archive them", n)
 }
