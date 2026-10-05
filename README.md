@@ -446,7 +446,9 @@ spawns alike, enforced by Anthropic's sandbox runtime (bubblewrap on Linux, Seat
 same file passed to `claude --settings` holds one session to it, to try a change first.
 
 - **Reads:** the home directory is denied; beekeeper's binary, config and state, the harness's
-  transcripts, plans, skills and plugins, git's config and `sandbox.allowRead` are re-allowed.
+  transcripts, plans, skills and plugins, git's config and `sandbox.allowRead` are re-allowed. A
+  symlinked config (the config directory, `~/.gitconfig`, beekeeper's config) is mounted at its target
+  only, so the policy names it there (`XDG_CONFIG_HOME`, `GIT_CONFIG_GLOBAL`, `BEEKEEPER_CONFIG`).
   Kubeconfigs, the Teleport profile, the GitHub CLI's token file and every other credential nobody
   listed stay unreadable. Only the managed settings' read paths count.
 - **Writes:** the session's working directory (when it is readable itself), the temporary directory,
