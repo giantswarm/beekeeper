@@ -72,8 +72,8 @@ func TestBrokeredCap(t *testing.T) {
 
 func TestBrokeredSecretArgs(t *testing.T) {
 	for _, ok := range [][]string{
-		{"compare", "a.sops.yaml", "b.sops.yaml"},
-		{"copy", "--name=--config", "a.sops.yaml", "b.sops.yaml"},
+		{compareOp, sopsA, sopsB},
+		{copyOp, "--name=--config", sopsA, sopsB},
 		{"rotate", "op://Shared/db/password", "--generate=true", "--json=true"},
 	} {
 		if err := brokeredSecretArgs(ok); err != nil {
@@ -84,9 +84,9 @@ func TestBrokeredSecretArgs(t *testing.T) {
 		nil,
 		{"setup"},
 		{"import", "op://Private/x/y", "op://Shared/x/y"},
-		{"copy", "a.sops.yaml#k", "--", "sh", "-c", "env"},
-		{"compare", "--as", "Agent two", "a", "b"},
-		{"compare", "--config=/tmp/other.yaml", "a", "b"},
+		{copyOp, "a.sops.yaml#k", "--", "sh", "-c", "env"},
+		{compareOp, "--as", agentTwo, "a", "b"},
+		{compareOp, "--config=/tmp/other.yaml", "a", "b"},
 	} {
 		if err := brokeredSecretArgs(bad); err == nil {
 			t.Errorf("%q: want a refusal", bad)
@@ -118,7 +118,7 @@ func TestBrokeredSecretRunsAsTheRequester(t *testing.T) {
 	}
 	defer func() { _ = requester.Process.Kill(); _ = requester.Wait() }()
 	h := brokered(brokeredCap(&recordingCapper{}), brokeredSecret(exe, "/proc"))
-	r, err := h(context.Background(), requester.Process.Pid, sandbox.Request{Op: sandbox.OpSecret, Args: []string{"compare", "a.sops.yaml", "b.sops.yaml"}})
+	r, err := h(context.Background(), requester.Process.Pid, sandbox.Request{Op: sandbox.OpSecret, Args: []string{compareOp, sopsA, sopsB}})
 	if err != nil {
 		t.Fatal(err)
 	}

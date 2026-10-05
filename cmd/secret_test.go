@@ -20,10 +20,14 @@ import (
 )
 
 const (
-	secretValue = "planted-Secret-Value-9d41b7"
-	dbRef       = "op://Shared/db/password"
-	jsonFlag    = "--json"
-	copyOp      = "copy"
+	secretValue   = "planted-Secret-Value-9d41b7"
+	dbRef         = "op://Shared/db/password"
+	jsonFlag      = "--json"
+	copyOp        = "copy"
+	compareOp     = "compare"
+	fingerprintOp = "fingerprint"
+	sopsA         = "a.sops.yaml"
+	sopsB         = "b.sops.yaml"
 )
 
 // secretApp is an app over a scratch repository with one encrypted Secret
@@ -86,10 +90,10 @@ func TestSecretOperationsReturnNoValueAndAreLogged(t *testing.T) {
 	}
 	for _, args := range [][]string{
 		{copyOp, src, dst, "--name", "db-copy", "--namespace", "team-b"},
-		{"compare", src, dst},
-		{"compare", src + "#data.password", dst + "#data.password"},
-		{"fingerprint", src},
-		{"fingerprint", dbRef},
+		{compareOp, src, dst},
+		{compareOp, src + "#data.password", dst + "#data.password"},
+		{fingerprintOp, src},
+		{fingerprintOp, dbRef},
 		{copyOp, dbRef, dst + "#stringData.extra"},
 		{copyOp, dbRef, "--", consumer, "secret", "set", "X"},
 		{"set", dst, "stringData.generated", "--generate", "--vault", "op://Shared/gen/password"},
@@ -112,7 +116,7 @@ func TestSecretOperationsReturnNoValueAndAreLogged(t *testing.T) {
 		t.Errorf("copy answers %q, %v", out, err)
 	}
 	a.out = &bytes.Buffer{}
-	if _, err := runSecret(a, "compare", src, dst); Code(err) != ExitError {
+	if _, err := runSecret(a, compareOp, src, dst); Code(err) != ExitError {
 		t.Errorf("compare of files with different names = %v, want exit 1", err)
 	}
 	a.out = &bytes.Buffer{}
@@ -220,7 +224,7 @@ func TestSecretCopyToSecretOnlyIntoAHeldLab(t *testing.T) {
 	}
 	a.cfg.Secret.TokenFile = ""
 	a.out = &bytes.Buffer{}
-	if _, err := runSecret(a, "fingerprint", dbRef); Code(err) != ExitVault {
+	if _, err := runSecret(a, fingerprintOp, dbRef); Code(err) != ExitVault {
 		t.Errorf("no vault token = %v (exit %d), want exit %d", err, Code(err), ExitVault)
 	}
 }
@@ -243,14 +247,14 @@ func TestSecretInTheSandboxGoesThroughTheBroker(t *testing.T) {
 	}()
 	t.Cleanup(func() { cancel(); <-done })
 	src := filepath.Join(repo, "db.sops.yaml")
-	out, err := runSecret(a, "copy", "--name=other", src, filepath.Join(repo, "x.sops.yaml"))
+	out, err := runSecret(a, copyOp, "--name=other", src, filepath.Join(repo, "x.sops.yaml"))
 	if out != "brokered\n" || Code(err) != ExitError {
 		t.Errorf("out %q, exit %d", out, Code(err))
 	}
-	if want := []string{"copy", "--name=other", src, filepath.Join(repo, "x.sops.yaml")}; len(got) != 1 || strings.Join(got[0], " ") != strings.Join(want, " ") {
+	if want := []string{copyOp, "--name=other", src, filepath.Join(repo, "x.sops.yaml")}; len(got) != 1 || strings.Join(got[0], " ") != strings.Join(want, " ") {
 		t.Errorf("broker got %q, want %q", got, want)
 	}
-	if _, err := runSecret(a, "copy", src+"#data.password", "--", "sh", "-c", "cat"); Code(err) != ExitRefused {
+	if _, err := runSecret(a, copyOp, src+"#data.password", "--", "sh", "-c", "cat"); Code(err) != ExitRefused {
 		t.Errorf("a consumer: exit %d, want refused", Code(err))
 	}
 	if _, err := runSecret(a, "setup"); Code(err) != ExitRefused {
@@ -284,11 +288,11 @@ func TestBrokeredSecretHoldsItsFilesToTheSandbox(t *testing.T) {
 	}
 	src := filepath.Join(repo, "db.sops.yaml")
 	for _, args := range [][]string{
-		{"fingerprint", closed},
-		{"compare", src, closed},
-		{"copy", closed + "#token", filepath.Join(repo, "x.sops.yaml") + "#token"},
-		{"copy", src, filepath.Join(home, "out.sops.yaml")},
-		{"copy", src + "#data.password", filepath.Join(home, "out.sops.yaml") + "#p"},
+		{fingerprintOp, closed},
+		{compareOp, src, closed},
+		{copyOp, closed + "#token", filepath.Join(repo, "x.sops.yaml") + "#token"},
+		{copyOp, src, filepath.Join(home, "out.sops.yaml")},
+		{copyOp, src + "#data.password", filepath.Join(home, "out.sops.yaml") + "#p"},
 	} {
 		a.out = &bytes.Buffer{}
 		out, err := runSecret(a, args...)
@@ -298,7 +302,7 @@ func TestBrokeredSecretHoldsItsFilesToTheSandbox(t *testing.T) {
 		noSecret(t, "a refused call", out)
 	}
 	a.out = &bytes.Buffer{}
-	if _, err := runSecret(a, "copy", src, filepath.Join(repo, "copy.sops.yaml")); err != nil {
+	if _, err := runSecret(a, copyOp, src, filepath.Join(repo, "copy.sops.yaml")); err != nil {
 		t.Errorf("a copy inside the sandbox's lists: %v", err)
 	}
 }
