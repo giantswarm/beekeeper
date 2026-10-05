@@ -65,14 +65,14 @@ func TestGuideRelayLeavesTheSupervisorUntouched(t *testing.T) {
 func TestGuideRelayDueFiresOncePerTerm(t *testing.T) {
 	st := &state.State{}
 	guideRole.set(st, state.Role{Holder: &state.Supervisor{Party: agentC, Since: relayNow}})
-	lines, evs := guideRole.fireRelayDue(st, quietness{checked: true, context: 50_000}, relayNow)
+	lines, evs := guideRole.fireRelayDue(st, quietness{checked: true, context: 50_000, relayAt: 40_000}, nil, relayNow)
 	if len(lines) != 1 || lines[0] != `GUIDE RELAY DUE: "Agent three" is at 50k tokens of context: beekeeper guide handover --prompt` || evs[0].Verb != "guide.relay-due" {
 		t.Fatalf("relay due: %q %v", lines, evs)
 	}
 	if st.RelayDue != nil {
 		t.Fatal("the guide's relay due landed in the supervisor's record")
 	}
-	if lines, _ := guideRole.fireRelayDue(st, quietness{checked: true, context: 60_000}, relayNow); lines != nil {
+	if lines, _ := guideRole.fireRelayDue(st, quietness{checked: true, context: 60_000, relayAt: 40_000}, nil, relayNow); lines != nil {
 		t.Fatalf("relay due said twice: %q", lines)
 	}
 }

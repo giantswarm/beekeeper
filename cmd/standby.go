@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/peer"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -61,6 +62,9 @@ type standbyWatch struct {
 	// liveTerm run.
 	liveTerm string
 	liveAt   time.Time
+	// overdueNext is when the next relay of a holder over its relayAt may
+	// start, by role name.
+	overdueNext map[string]time.Time
 }
 
 func (a *app) supervisorReopenCmd() *cobra.Command {
@@ -342,24 +346,74 @@ func (w *watcher) noteFailedSuccessor(rl role, holder state.Party) int {
 // the relay beekeeper opens to it, so a repeated poll and a restarted watch
 // see the relay and start none. It returns what the GONE line adds.
 func (w *watcher) succeedGone(ctx context.Context, rl role, holder state.Party) string {
-	if w.stand.succeed == nil {
-		return ""
-	}
-	if !w.stand.starting.CompareAndSwap(false, true) {
-		return successorStarting
-	}
-	w.stand.inflight.Add(1)
-	go func() {
-		defer w.stand.inflight.Done()
-		defer w.stand.starting.Store(false)
-		to, err := w.stand.succeed(ctx, rl, holder)
+	started := w.succeedAsync(ctx, rl, holder, func(to state.Party, err error) {
 		if err != nil {
 			w.emitNow(rl.name+"-successor", "%sSUCCESSOR FAILED: %q is gone and its successor did not start: %v", rl.tag, holder.Name, err)
 			return
 		}
 		w.emitNow(rl.name+"-successor", "%sSUCCESSOR: started %q, whose `beekeeper %s start` takes the role from the gone %q", rl.tag, to.Name, rl.name, holder.Name)
-	}()
+	})
+	switch {
+	case w.stand.succeed == nil:
+		return ""
+	case !started:
+		return successorStarting
+	}
 	return "; starting its successor"
+}
+
+// succeedAsync starts rl's next run after holder outside the poll, one at a
+// time, and hands done the outcome. It reports whether the start began:
+// none does without stand.succeed or while another runs.
+func (w *watcher) succeedAsync(ctx context.Context, rl role, holder state.Party, done func(state.Party, error)) bool {
+	if w.stand.succeed == nil || !w.stand.starting.CompareAndSwap(false, true) {
+		return false
+	}
+	w.stand.inflight.Add(1)
+	go func() {
+		defer w.stand.inflight.Done()
+		defer w.stand.starting.Store(false)
+		done(w.stand.succeed(ctx, rl, holder))
+	}()
+	return true
+}
+
+// relayOverdue relays rl's live holder that stayed over its relayAt for
+// relayGrace after its relay due (standby watch): it starts the successor
+// as the holder's own relay does, and the successor's start takes the role.
+// The hand-over is no one's decision. A role that takes the grants waits
+// for a quiet moment; a start that did not begin or failed is tried again
+// after successorBackoff.
+func (w *watcher) relayOverdue(ctx context.Context, rl role, st *state.State, sessions []*claude.Session) {
+	cfg, r := rl.cfg(w.cfg), rl.get(st)
+	if !pastRelayGrace(r, cfg, w.now) || w.now.Before(w.stand.overdueNext[rl.name]) {
+		return
+	}
+	c := sessionContext(sessions, r.Holder.Party, w.now)
+	if c < int64(cfg.RelayAt) || (rl.grants && w.busyNow(ctx, st) != "") {
+		return
+	}
+	if w.stand.overdueNext == nil {
+		w.stand.overdueNext = map[string]time.Time{}
+	}
+	w.stand.overdueNext[rl.name] = w.now.Add(successorBackoff)
+	holder, since := r.Holder.Party, clock(w.now, r.RelayDue.Reported)
+	w.succeedAsync(ctx, rl, holder, func(to state.Party, err error) {
+		if err != nil {
+			w.emitNow(rl.name+"-relayed", "%sRELAY FAILED: %q is at %s tokens of context, over %s since its relay due at %s, and its successor did not start: %v",
+				rl.tag, holder.Name, tokensText(c), tokensText(int64(cfg.RelayAt)), since, err)
+			return
+		}
+		w.emitNow(rl.name+"-relayed", "%sRELAYED: %q is at %s tokens of context, over %s since its relay due at %s: started %q, whose `beekeeper %s start` takes the role",
+			rl.tag, holder.Name, tokensText(c), tokensText(int64(cfg.RelayAt)), since, to.Name, rl.name)
+	})
+}
+
+// pastRelayGrace reports whether r's holder was told its relay due at the
+// configured relayAt at least relayGrace ago, with no relay open.
+func pastRelayGrace(r state.Role, cfg config.Role, now time.Time) bool {
+	return r.Holder != nil && !r.Relay.Open(now) && r.RelayDue.At(r.Holder, int64(cfg.RelayAt)) &&
+		!now.Before(r.RelayDue.Reported.Add(cfg.RelayGrace.Duration))
 }
 
 // reopenAfterAppStart opens the gone supervisor's row once when the desktop

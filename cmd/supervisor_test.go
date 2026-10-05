@@ -142,28 +142,28 @@ func TestRelayDueAtTheContextOnceAtAQuietMoment(t *testing.T) {
 	if c := sessionContext(sessions, supA, now); c != 163018 {
 		t.Fatalf("the supervisor's context from its transcript: %d", c)
 	}
-	if c := relayContext(st, sessions, now, 200_000); c != 0 {
+	if c := relayContext(st, sessions, now, 200_000, nil); c != 0 {
 		t.Fatalf("relay due under relayAt: %d", c)
 	}
 	const relayAt = 150_000
-	if relayContext(st, sessions, now, relayAt) != 163018 || relayContext(st, nil, now, relayAt) != 0 {
+	if relayContext(st, sessions, now, relayAt, nil) != 163018 || relayContext(st, nil, now, relayAt, nil) != 0 {
 		t.Fatal("relayContext")
 	}
 	never := func(int) bool { return false }
 	notRolled := func(state.Merge, config.Lane) bool { return false }
 	quiet := func() quietness {
-		c := relayContext(st, sessions, now, relayAt)
+		c := relayContext(st, sessions, now, relayAt, nil)
 		if c == 0 {
 			return quietness{}
 		}
-		return quietness{checked: true, context: c, busy: busyWith(st, cfg, map[string]bool{}, now, never, notRolled)}
+		return quietness{checked: true, context: c, relayAt: relayAt, busy: busyWith(st, cfg, map[string]bool{}, now, never, notRolled)}
 	}
 
 	st.Merges = []state.Merge{{Repo: modelManager, PR: 172, Lane: serving, Phase: state.Settling, Finished: now.Add(-time.Minute)}}
 	if q := quiet(); q.busy != "giantswarm/model-manager#172 settles" {
 		t.Fatalf("settling merge: %q", q.busy)
 	}
-	if lines, _ := fireRelayDue(st, quiet(), now); len(lines) != 0 || st.RelayDue != nil {
+	if lines, _ := fireRelayDue(st, quiet(), nil, now); len(lines) != 0 || st.RelayDue != nil {
 		t.Fatalf("relay due while a merge settles: %q", lines)
 	}
 	st.Merges = nil
@@ -172,16 +172,16 @@ func TestRelayDueAtTheContextOnceAtAQuietMoment(t *testing.T) {
 		t.Fatalf("waiting grant: %q", q.busy)
 	}
 	st.Grants = nil
-	lines, evs := fireRelayDue(st, quiet(), now)
+	lines, evs := fireRelayDue(st, quiet(), nil, now)
 	if want := `RELAY DUE: "Supervisor run 11" is at 163k tokens of context: beekeeper handover --prompt`; len(lines) != 1 || lines[0] != want || len(evs) != 1 {
 		t.Fatalf("relay due at a quiet moment: %q", lines)
 	}
 	if !st.RelayDue.Of(st.Supervisor) || st.RelayDue.Context != 163018 {
 		t.Fatalf("relay due record: %+v", st.RelayDue)
 	}
-	for i, q := range []quietness{quiet(), {checked: true, context: 170_000}, {checked: true, busy: "x merges"}, {checked: true, context: 170_000}} {
+	for i, q := range []quietness{quiet(), {checked: true, context: 170_000, relayAt: relayAt}, {checked: true, busy: "x merges", relayAt: relayAt}, {checked: true, context: 170_000, relayAt: relayAt}} {
 		now = now.Add(time.Minute)
-		if lines, evs := fireRelayDue(st, q, now); len(lines) != 0 || len(evs) != 0 {
+		if lines, evs := fireRelayDue(st, q, nil, now); len(lines) != 0 || len(evs) != 0 {
 			t.Fatalf("relay due again for the same supervisor (%d): %q", i, lines)
 		}
 	}
@@ -195,7 +195,7 @@ func TestRelayDueAtTheContextOnceAtAQuietMoment(t *testing.T) {
 	if _, _, err := cancelRelay(st, supA, now); err != nil {
 		t.Fatal(err)
 	}
-	if lines, _ := fireRelayDue(st, quiet(), now); len(lines) != 1 {
+	if lines, _ := fireRelayDue(st, quiet(), nil, now); len(lines) != 1 {
 		t.Fatalf("relay due not said again after a cancelled relay: %q", lines)
 	}
 	if _, _, err := relayRole(st, supA, supB, now, 15*time.Minute); err != nil {
@@ -205,13 +205,13 @@ func TestRelayDueAtTheContextOnceAtAQuietMoment(t *testing.T) {
 	if lines, _ := fireRelay(st, now); len(lines) != 1 || !strings.HasPrefix(lines[0], "RELAY EXPIRED:") || st.RelayDue != nil {
 		t.Fatalf("an expired relay: %q, %+v", lines, st.RelayDue)
 	}
-	if lines, _ := fireRelayDue(st, quiet(), now); len(lines) != 1 {
+	if lines, _ := fireRelayDue(st, quiet(), nil, now); len(lines) != 1 {
 		t.Fatalf("relay due not said again after an expired relay: %q", lines)
 	}
 
 	st.Supervisor = &state.Supervisor{Party: supB, Since: now}
 	sessions[0] = &claude.Session{ID: supB.Session, HostID: supB.HostSession, Name: supB.Name, Transcript: supervisorTranscript}
-	if lines, _ := fireRelayDue(st, quiet(), now); len(lines) != 1 || !strings.Contains(lines[0], supB.Name) {
+	if lines, _ := fireRelayDue(st, quiet(), nil, now); len(lines) != 1 || !strings.Contains(lines[0], supB.Name) {
 		t.Fatalf("relay due not said to the next supervisor: %q", lines)
 	}
 }

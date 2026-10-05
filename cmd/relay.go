@@ -381,23 +381,65 @@ func (rl role) fireRelay(st *state.State, now time.Time) (lines []string, evs []
 }
 
 // relayContext is the running supervisor's context in tokens once it has
-// reached relayAt, with no relay open and the relay due not reported yet to
-// its term; 0 otherwise. Only then does the watch ask whether the machine is
-// quiet.
-func relayContext(st *state.State, sessions []*claude.Session, now time.Time, relayAt config.Tokens) int64 {
-	return roleContext(st.SupervisorRole(), sessions, now, relayAt)
+// reached relayAt, with no relay open and the relay due not said yet to its
+// term at relayAt (relayDues.said); 0 otherwise. Only then does the watch ask
+// whether the machine is quiet.
+func relayContext(st *state.State, sessions []*claude.Session, now time.Time, relayAt config.Tokens, said relayDues) int64 {
+	return roleContext(st.SupervisorRole(), sessions, now, relayAt, said)
 }
 
 // roleContext is the same for r's holder.
-func roleContext(r state.Role, sessions []*claude.Session, now time.Time, relayAt config.Tokens) int64 {
+func roleContext(r state.Role, sessions []*claude.Session, now time.Time, relayAt config.Tokens, said relayDues) int64 {
 	sup := r.Holder
-	if sup == nil || r.Relay.Open(now) || r.RelayDue.Of(sup) {
+	if sup == nil || r.Relay.Open(now) || said.said(r, relayAt, now) {
 		return 0
 	}
 	if c := sessionContext(sessions, sup.Party, now); c >= int64(relayAt) {
 		return c
 	}
 	return 0
+}
+
+// relayDues is what one watch process said of the relay dues: when it said
+// each, by relayDueKey. A process that did not say a standing relay due
+// says it once more; nil keeps no memory, and the state's record alone
+// decides (a watch --once).
+type relayDues map[string]time.Time
+
+// relayDueKey names the relay due to sup's term at relayAt.
+func relayDueKey(sup *state.Supervisor, relayAt config.Tokens) string {
+	who := sup.Session
+	if who == "" {
+		who = sup.Name
+	}
+	return fmt.Sprintf("%s@%s@%d", who, sup.Since.UTC().Format(time.RFC3339Nano), relayAt)
+}
+
+// said reports whether the relay due to r's holder's term at relayAt is
+// said: the state records it at relayAt, and this process said it before
+// the poll at now. Within one poll it is not said yet, so the poll's write
+// under the lock says what its read found.
+func (d relayDues) said(r state.Role, relayAt config.Tokens, now time.Time) bool {
+	if !r.RelayDue.At(r.Holder, int64(relayAt)) {
+		return false
+	}
+	if d == nil {
+		return true
+	}
+	at, ok := d[relayDueKey(r.Holder, relayAt)]
+	return ok && at.Before(now)
+}
+
+// say records that this process said the relay due to sup's term at
+// relayAt at now.
+func (d relayDues) say(sup *state.Supervisor, relayAt config.Tokens, now time.Time) {
+	if d == nil {
+		return
+	}
+	k := relayDueKey(sup, relayAt)
+	if _, ok := d[k]; !ok {
+		d[k] = now
+	}
 }
 
 // sessionContext is the context in tokens of p's running session, read from
@@ -427,22 +469,28 @@ type quietness struct {
 	checked bool
 	busy    string
 	context int64
+	relayAt config.Tokens
 }
 
 // fireRelayDue reports the supervisor's relay due (role.fireRelayDue).
-func fireRelayDue(st *state.State, q quietness, now time.Time) ([]string, []state.Event) {
-	return supervisorRole.fireRelayDue(st, q, now)
+func fireRelayDue(st *state.State, q quietness, said relayDues, now time.Time) ([]string, []state.Event) {
+	return supervisorRole.fireRelayDue(st, q, said, now)
 }
 
 // fireRelayDue reports rl's relay due at the first quiet moment after its
-// holder's context reached relayAt, once per term.
-func (rl role) fireRelayDue(st *state.State, q quietness, now time.Time) (lines []string, evs []state.Event) {
+// holder's context reached q.relayAt: once per term and relayAt in the
+// state, and once more in a watch process that did not say it yet. The
+// record keeps when it was first reported at that relayAt.
+func (rl role) fireRelayDue(st *state.State, q quietness, said relayDues, now time.Time) (lines []string, evs []state.Event) {
 	rl.update(st, func(r *state.Role) {
 		sup := r.Holder
-		if !q.checked || q.busy != "" || sup == nil || r.Relay.Open(now) || r.RelayDue.Of(sup) {
+		if !q.checked || q.busy != "" || sup == nil || r.Relay.Open(now) || said.said(*r, q.relayAt, now) {
 			return
 		}
-		r.RelayDue = &state.RelayDue{Supervisor: sup.Party, Since: sup.Since, Reported: now.UTC(), Context: q.context}
+		if !r.RelayDue.At(sup, int64(q.relayAt)) {
+			r.RelayDue = &state.RelayDue{Supervisor: sup.Party, Since: sup.Since, Reported: now.UTC(), Context: q.context, RelayAt: int64(q.relayAt)}
+		}
+		said.say(sup, q.relayAt, now)
 		lines = append(lines, fmt.Sprintf("%sRELAY DUE: %q is at %s tokens of context: %s", rl.tag, sup.Name, tokensText(q.context), rl.handover))
 		evs = append(evs, event(watchParty, rl.name+".relay-due", "%s at %s tokens", sup.Name, tokensText(q.context)))
 	})
