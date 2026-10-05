@@ -26,6 +26,11 @@ import (
 // Env is set in every session the policy holds, for the hook to know it.
 const Env = "BEEKEEPER_SANDBOX"
 
+// Brokered is set, with Env, in a beekeeper secret call the broker runs on
+// the host for a sandboxed session: the call holds its files to the
+// policy's lists and asks no broker itself.
+const Brokered = "BEEKEEPER_SANDBOX_BROKERED"
+
 // DropIn is the policy's file in Claude Code's managed settings directory.
 const DropIn = "beekeeper-sandbox.json"
 

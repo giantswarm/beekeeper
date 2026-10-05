@@ -8,30 +8,50 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
 
 // Serve answers the requests in dir until ctx ends, polling every tick.
 // Each is answered as the one process of this user that holds it open; a
-// request no process or more than one holds is refused.
+// request no process or more than one holds is refused. Requests are
+// answered side by side, so a long secret call holds up no capped run.
 func Serve(ctx context.Context, dir, procDir string, tick time.Duration, h Handler) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 	t := time.NewTicker(tick)
 	defer t.Stop()
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	var mu sync.Mutex
+	busy := map[string]bool{}
 	for {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			return err
 		}
 		for _, e := range entries {
-			if strings.HasSuffix(e.Name(), reqSuffix) && e.Type().IsRegular() {
-				answer(filepath.Join(dir, e.Name()), procDir, h)
+			path := filepath.Join(dir, e.Name())
+			mu.Lock()
+			skip := busy[path]
+			mu.Unlock()
+			if skip || !strings.HasSuffix(e.Name(), reqSuffix) || !e.Type().IsRegular() {
+				continue
 			}
+			mu.Lock()
+			busy[path] = true
+			mu.Unlock()
+			wg.Go(func() {
+				answer(ctx, path, procDir, h)
+				mu.Lock()
+				delete(busy, path)
+				mu.Unlock()
+			})
 		}
 		select {
 		case <-ctx.Done():
@@ -42,15 +62,15 @@ func Serve(ctx context.Context, dir, procDir string, tick time.Duration, h Handl
 }
 
 // answer answers the request at path once: a request with an answer is
-// left to its requester.
-func answer(path, procDir string, h Handler) {
+// left to its requester, and an answer whose requester gave up is removed.
+func answer(ctx context.Context, path, procDir string, h Handler) {
 	out := strings.TrimSuffix(path, reqSuffix) + replySuffix
 	if _, err := os.Lstat(out); err == nil {
 		return
 	}
-	var r reply
-	if err := handle(path, procDir, h); err != nil {
-		r.Error = err.Error()
+	r, err := handle(ctx, path, procDir, h)
+	if err != nil {
+		r = Reply{Error: err.Error()}
 	}
 	b, _ := json.Marshal(r)
 	tmp := out + tmpSuffix
@@ -58,29 +78,32 @@ func answer(path, procDir string, h Handler) {
 		return
 	}
 	_ = os.Rename(tmp, out)
+	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+		_ = os.Remove(out)
+	}
 }
 
-func handle(path, procDir string, h Handler) error {
+func handle(ctx context.Context, path, procDir string, h Handler) (Reply, error) {
 	raw, st, err := read(path)
 	if err != nil {
-		return err
+		return Reply{}, err
 	}
 	if len(raw) > maxRequest {
-		return fmt.Errorf("request over %d bytes", maxRequest)
+		return Reply{}, fmt.Errorf("request over %d bytes", maxRequest)
 	}
 	var req Request
 	if err := json.Unmarshal(raw, &req); err != nil {
-		return fmt.Errorf("malformed request: %w", err)
+		return Reply{}, fmt.Errorf("malformed request: %w", err)
 	}
 	sys, ok := st.Sys().(*syscall.Stat_t)
 	if !ok {
-		return errors.New("request: no inode")
+		return Reply{}, errors.New("request: no inode")
 	}
 	pids := Holders(procDir, sys.Dev, sys.Ino)
 	if len(pids) != 1 {
-		return fmt.Errorf("request held by %d processes of this user, want one", len(pids))
+		return Reply{}, fmt.Errorf("request held by %d processes of this user, want one", len(pids))
 	}
-	return h(pids[0], req)
+	return h(ctx, pids[0], req)
 }
 
 // read reads the request at path, closed again before its holders are
@@ -135,4 +158,25 @@ func Holders(procDir string, dev, ino uint64) []int {
 		}
 	}
 	return out
+}
+
+// Origin is where process pid runs: its working directory and, of its
+// environment, the variables named in keys only.
+func Origin(procDir string, pid int, keys []string) (string, []string, error) {
+	dir := filepath.Join(procDir, strconv.Itoa(pid))
+	cwd, err := os.Readlink(filepath.Join(dir, "cwd"))
+	if err != nil {
+		return "", nil, err
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "environ")) //nolint:gosec // the holder's environment, of which only keys leave this function
+	if err != nil {
+		return "", nil, err
+	}
+	var env []string
+	for kv := range strings.SplitSeq(string(raw), "\x00") {
+		if k, _, ok := strings.Cut(kv, "="); ok && slices.Contains(keys, k) {
+			env = append(env, kv)
+		}
+	}
+	return cwd, env, nil
 }

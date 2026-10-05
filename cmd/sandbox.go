@@ -2,12 +2,16 @@ package cmd
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -15,6 +19,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 )
@@ -117,7 +122,13 @@ The broker caps a build slot's slice and moves the asking process into its
 memcap scope, then the command runs there, still in the sandbox. It answers
 each request as the one process of this user that holds it open, never a
 process the request names, and only for memcap's own slices and scopes, so
-a session can cap itself and nothing else.`,
+a session can cap itself and nothing else.
+
+A sandboxed beekeeper secret call (compare, fingerprint, copy, set, rotate)
+runs here too, where sops and op reach their keys: as the asking session, in
+its working directory, with its files held to the sandbox's lists, and its
+output, never a value, goes back through the spool. A consumer (copy --), the
+vault's setup and import run on the host only, by the person.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if os.Getenv(sandbox.Env) != "" {
@@ -127,7 +138,11 @@ a session can cap itself and nothing else.`,
 			defer stop()
 			dir := sandbox.SpoolDir(a.cfg.StateDir)
 			_, _ = fmt.Fprintf(a.out, "serving %s\n", dir)
-			return sandbox.Serve(ctx, dir, "/proc", brokerTick, brokeredCap(plat.Capper))
+			exe, err := os.Executable()
+			if err != nil {
+				return err
+			}
+			return sandbox.Serve(ctx, dir, "/proc", brokerTick, brokered(brokeredCap(plat.Capper), brokeredSecret(exe, "/proc")))
 		},
 	}
 }
@@ -139,9 +154,20 @@ var (
 	brokeredUnit = regexp.MustCompile(`^` + guard.ScopePrefix + `(test-)?[0-9]+-[0-9]{6}$`)
 )
 
+// brokered answers a sandboxed session's requests: a secret call with
+// secretCall, the rest with capRun.
+func brokered(capRun func(int, sandbox.Request) error, secretCall sandbox.Handler) sandbox.Handler {
+	return func(ctx context.Context, pid int, req sandbox.Request) (sandbox.Reply, error) {
+		if req.Op == sandbox.OpSecret {
+			return secretCall(ctx, pid, req)
+		}
+		return sandbox.Reply{}, capRun(pid, req)
+	}
+}
+
 // brokeredCap acts on a sandboxed run's request with the host's capper:
 // memcap's slices and scopes only, sizes as beekeeper run takes them.
-func brokeredCap(c platform.Capper) sandbox.Handler {
+func brokeredCap(c platform.Capper) func(int, sandbox.Request) error {
 	return func(pid int, req sandbox.Request) error {
 		if req.Op == sandbox.OpPing {
 			return nil
@@ -165,6 +191,70 @@ func brokeredCap(c platform.Capper) sandbox.Handler {
 			return c.Adopt(pid, req.Unit, cp)
 		}
 		return fmt.Errorf("unknown request %q", req.Op)
+	}
+}
+
+// brokeredSecretOps are the beekeeper secret subcommands a sandboxed
+// session runs through the broker. copy's consumer form is refused with
+// them: its consumer would run on the host, outside the sandbox.
+var brokeredSecretOps = []string{"compare", "fingerprint", "copy", "set", "rotate"}
+
+// callerEnv are the variables that name the calling session, the only part
+// of its environment a brokered call takes over.
+var callerEnv = []string{"CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_HOST_SESSION_ID", "CLAUDE_CODE_SESSION_NAME", "CLAUDE_CONFIG_DIR", omp.EnvAgent, omp.EnvName}
+
+// secretCallTimeout bounds a brokered secret call: op answers within a
+// minute, a rotation writes several files.
+const secretCallTimeout = 10 * time.Minute
+
+// brokeredSecretArgs refuses a secret call the broker does not run: one
+// outside brokeredSecretOps, a consumer, or another caller or config.
+func brokeredSecretArgs(args []string) error {
+	if len(args) == 0 || !slices.Contains(brokeredSecretOps, args[0]) {
+		return fmt.Errorf("the sandbox broker runs beekeeper secret %s only", strings.Join(brokeredSecretOps, ", "))
+	}
+	for _, a := range args[1:] {
+		if a == "--" {
+			return errors.New("a consumer runs on the host only: copy -- is not brokered")
+		}
+		for _, f := range []string{"--as", "--config"} {
+			if a == f || strings.HasPrefix(a, f+"=") {
+				return fmt.Errorf("%s: a brokered call runs as its session, under the broker's config", f)
+			}
+		}
+	}
+	return nil
+}
+
+// brokeredSecret runs a sandboxed session's beekeeper secret call with exe
+// on the host: as the session that holds the request, in its working
+// directory, its files held to the sandbox's lists (sandbox.Brokered).
+func brokeredSecret(exe, procDir string) sandbox.Handler {
+	return func(ctx context.Context, pid int, req sandbox.Request) (sandbox.Reply, error) {
+		if err := brokeredSecretArgs(req.Args); err != nil {
+			return sandbox.Reply{}, err
+		}
+		cwd, caller, err := sandbox.Origin(procDir, pid, callerEnv)
+		if err != nil {
+			return sandbox.Reply{}, fmt.Errorf("the requester: %w", err)
+		}
+		ctx, cancel := context.WithTimeout(ctx, secretCallTimeout)
+		defer cancel()
+		c := exec.CommandContext(ctx, exe, append([]string{"secret"}, req.Args...)...) //nolint:gosec // this binary, the arguments checked above
+		c.Dir = cwd
+		c.Env = slices.DeleteFunc(os.Environ(), func(kv string) bool {
+			k, _, _ := strings.Cut(kv, "=")
+			return k == sandbox.Env || k == sandbox.Brokered || slices.Contains(callerEnv, k)
+		})
+		c.Env = append(append(c.Env, caller...), sandbox.Env+"=1", sandbox.Brokered+"=1")
+		var out, errOut bytes.Buffer
+		c.Stdout, c.Stderr = &out, &errOut
+		err = c.Run()
+		var exit *exec.ExitError
+		if err != nil && !errors.As(err, &exit) {
+			return sandbox.Reply{}, err
+		}
+		return sandbox.Reply{Out: out.String(), Err: errOut.String(), Code: c.ProcessState.ExitCode()}, nil
 	}
 }
 
