@@ -112,6 +112,10 @@ func (rl role) start(st *state.State, me state.Party, prevLive, takeOver bool, n
 		if host := oweArchive(st, prev.Party, fmt.Sprintf("relieved by %q", me.Name), now); host != "" {
 			archive = fmt.Sprintf("; the doctor archives its desktop session %s once its CLI runs no turn", host)
 		}
+		// The relieved run's work ends with the relay: off the roster, nothing
+		// resumes it or shows it again (a background wait of its own dies with
+		// it).
+		st.Agents = slices.DeleteFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(prev.Party) })
 		how = fmt.Sprintf(" (relieving %q, relayed at %s%s%s)", prev.Name, clock(now, r.Relay.At), grants, archive)
 	case prevLive && !takeOver:
 		named := ""

@@ -646,6 +646,10 @@ func (a *app) reopenSession(ctx context.Context, arg string) error {
 		return err
 	}
 	name, ok := reopens(st, arg)
+	if ok && pastRun(st, state.Party{Session: id, HostSession: "local_" + id, Name: name}, a.now) {
+		_, err := fmt.Fprintf(a.out, "reopen: %s (%s) is a relieved role run: its work ended with the relay, left closed\n", name, id)
+		return err
+	}
 	if !ok {
 		_, err := fmt.Fprintf(a.out, "reopen: %s is no start on the roster, left closed\n", id)
 		return err
