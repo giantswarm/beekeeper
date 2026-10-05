@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -184,7 +185,7 @@ func localAgeIdentities(recipients []string) ([]string, bool) {
 	if keys, ok := readKeys(file); check(name, keys, ok) {
 		return checked, true
 	}
-	if dir, err := os.UserConfigDir(); err == nil {
+	if dir, err := sopsConfigDir(); err == nil {
 		def := filepath.Join(dir, "sops", "age", "keys.txt")
 		keys, ok := readKeys(def)
 		if check(def, keys, ok) {
@@ -195,6 +196,15 @@ func localAgeIdentities(recipients []string) ([]string, bool) {
 		}
 	}
 	return checked, false
+}
+
+// sopsConfigDir is the directory sops looks for age/keys.txt under: as
+// os.UserConfigDir, but XDG_CONFIG_HOME on macOS too when it is set.
+func sopsConfigDir() (string, error) {
+	if dir := os.Getenv("XDG_CONFIG_HOME"); runtime.GOOS == "darwin" && dir != "" {
+		return dir, nil
+	}
+	return os.UserConfigDir()
 }
 
 // readKeys is the content of an identity file, false when there is none.
