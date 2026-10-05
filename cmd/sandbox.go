@@ -77,33 +77,64 @@ to try a change before installing it.`,
 	})
 	c.AddCommand(&cobra.Command{
 		Use:   "install",
-		Short: "Stage the policy and print the root command that installs it",
-		Long: `install writes the policy to the state directory and prints the one root
-command that copies it into Claude Code's managed settings (` + sandbox.Path() + `);
-beekeeper never runs as root. Once installed, every new Claude Code session
-on the machine runs in the sandbox. Exit 0 with nothing to do when the
-installed policy is the current one.`,
+		Short: "Stage the policy and print the root commands that install it",
+		Long: `install writes the policy to the state directory and prints the root
+commands that copy it into Claude Code's managed settings (` + sandbox.Path() + `);
+beekeeper never runs as root. On a fresh machine they create the managed
+settings file (an empty ` + "`{}`" + `) and its drop-in directory first: the sandbox
+mounts both read-only and cannot create them, so a session held by
+claude --settings needs them too. Once installed, every new Claude Code
+session on the machine runs in the sandbox. Exit 0 with nothing to do when
+the installed policy is the current one.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			b, err := a.sandboxPolicy().JSON()
 			if err != nil {
 				return err
 			}
-			if cur, err := os.ReadFile(sandbox.Path()); err == nil && bytes.Equal(cur, b) {
-				_, err = fmt.Fprintf(a.out, "the policy in %s is current\n", sandbox.Path())
+			steps, err := sandboxInstallSteps(sandbox.ManagedDir(), a.cfg.StateDir, b)
+			if err != nil || len(steps) == 0 {
+				if err == nil {
+					_, err = fmt.Fprintf(a.out, "the policy in %s is current\n", sandbox.Path())
+				}
 				return err
 			}
-			staged := filepath.Join(a.cfg.StateDir, sandbox.DropIn)
-			if err := os.WriteFile(staged, b, 0o600); err != nil {
-				return err
-			}
-			_, err = fmt.Fprintf(a.out, "staged %s; install it as root:\n  sudo install -D -m 0644 -o root %s %s\n",
-				staged, guard.ShellQuote(staged), guard.ShellQuote(sandbox.Path()))
+			_, err = fmt.Fprintf(a.out, "staged in %s; install as root:\n  %s\n", a.cfg.StateDir, strings.Join(steps, "\n  "))
 			return err
 		},
 	})
 	c.AddCommand(a.sandboxBrokerCmd(), sandboxScopeCmd())
 	return c
+}
+
+// sandboxInstallSteps stages what the managed settings in dir lack for the
+// policy b in stateDir and returns the root commands that put it in place:
+// the managed settings file and the drop-in directory, which the sandbox
+// mounts read-only and cannot create, and the policy's drop-in. None when
+// all of it is current.
+func sandboxInstallSteps(dir, stateDir string, b []byte) ([]string, error) {
+	settings, dropIns := filepath.Join(dir, "managed-settings.json"), filepath.Join(dir, "managed-settings.d")
+	path := filepath.Join(dropIns, sandbox.DropIn)
+	var steps []string
+	if _, err := os.Stat(settings); errors.Is(err, os.ErrNotExist) {
+		staged := filepath.Join(stateDir, "managed-settings.json")
+		if err := os.WriteFile(staged, []byte("{}\n"), 0o600); err != nil {
+			return nil, err
+		}
+		steps = append(steps, "sudo install -d -m 0755 "+guard.ShellQuote(dir),
+			"sudo install -m 0644 -o root "+guard.ShellQuote(staged)+" "+guard.ShellQuote(settings))
+	}
+	if _, err := os.Stat(dropIns); errors.Is(err, os.ErrNotExist) {
+		steps = append(steps, "sudo install -d -m 0755 "+guard.ShellQuote(dropIns))
+	}
+	if cur, err := os.ReadFile(path); err != nil || !bytes.Equal(cur, b) {
+		staged := filepath.Join(stateDir, sandbox.DropIn)
+		if err := os.WriteFile(staged, b, 0o600); err != nil {
+			return nil, err
+		}
+		steps = append(steps, "sudo install -m 0644 -o root "+guard.ShellQuote(staged)+" "+guard.ShellQuote(path))
+	}
+	return steps, nil
 }
 
 // brokerTick is how often the broker reads its spool.

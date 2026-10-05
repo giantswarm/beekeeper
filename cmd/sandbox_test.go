@@ -1,7 +1,11 @@
 package cmd
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/platform"
@@ -87,5 +91,46 @@ func TestBrokeredSecretArgs(t *testing.T) {
 		if err := brokeredSecretArgs(bad); err == nil {
 			t.Errorf("%q: want a refusal", bad)
 		}
+	}
+}
+
+func TestSandboxInstallSteps(t *testing.T) {
+	dir, state := filepath.Join(t.TempDir(), "claude-code"), t.TempDir()
+	policy := []byte("{\"sandbox\":{}}\n")
+	steps, err := sandboxInstallSteps(dir, state, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, dropIns := filepath.Join(dir, "managed-settings.json"), filepath.Join(dir, "managed-settings.d")
+	want := []string{
+		"sudo install -d -m 0755 " + dir,
+		"sudo install -m 0644 -o root " + filepath.Join(state, "managed-settings.json") + " " + settings,
+		"sudo install -d -m 0755 " + dropIns,
+		"sudo install -m 0644 -o root " + filepath.Join(state, sandbox.DropIn) + " " + filepath.Join(dropIns, sandbox.DropIn),
+	}
+	if !slices.Equal(steps, want) {
+		t.Fatalf("a fresh machine's steps = %q, want %q", steps, want)
+	}
+	if b, _ := os.ReadFile(filepath.Join(state, "managed-settings.json")); string(b) != "{}\n" {
+		t.Errorf("staged managed settings = %q, want {}", b)
+	}
+	// the root steps run
+	for _, f := range []struct {
+		path string
+		b    []byte
+	}{{settings, []byte("{}\n")}, {filepath.Join(dropIns, sandbox.DropIn), policy}} {
+		if err := os.MkdirAll(filepath.Dir(f.path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(f.path, f.b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if steps, err := sandboxInstallSteps(dir, state, policy); err != nil || len(steps) != 0 {
+		t.Errorf("an installed policy's steps = %q, %v, want none", steps, err)
+	}
+	steps, err = sandboxInstallSteps(dir, state, []byte("{}\n"))
+	if err != nil || len(steps) != 1 || !strings.HasSuffix(steps[0], sandbox.DropIn) {
+		t.Errorf("a changed policy's steps = %q, %v, want the drop-in only", steps, err)
 	}
 }
