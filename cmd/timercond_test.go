@@ -186,3 +186,53 @@ func TestTimerAddRefusesWhatCannotFire(t *testing.T) {
 		t.Errorf("when %q", s)
 	}
 }
+
+func TestRepeatingTimerReArmsAtItsLocalTime(t *testing.T) {
+	// relayNow is Friday 2026-09-25 02:00; each timer was due an hour ago.
+	past := relayNow.Add(-time.Hour)
+	st := &state.State{Timers: []state.Timer{
+		{ID: 1, Due: past, Run: "true", Repeat: "daily", What: "overview"},
+		{ID: 2, Due: past, Run: "true", Repeat: "weekdays", What: "daily summary"},
+		{ID: 3, Due: past, Wake: "a", Repeat: "weekly", What: "weekly summary"},
+	}}
+	lines, _, fires, changed := settleTimers(st, nil, relayNow)
+	if !changed || len(fires) != 3 || len(st.Timers) != 3 {
+		t.Fatalf("fires %+v, open %+v", fires, st.Timers)
+	}
+	for i, want := range []time.Time{
+		past.AddDate(0, 0, 1), // Saturday 01:00
+		past.AddDate(0, 0, 3), // Monday 01:00, past the weekend
+		past.AddDate(0, 0, 7), // next Friday 01:00
+	} {
+		if !st.Timers[i].Due.Equal(want.UTC()) || !st.Timers[i].Fired.IsZero() {
+			t.Errorf("timer #%d due %s, want %s", st.Timers[i].ID, st.Timers[i].Due.Local(), want)
+		}
+	}
+	if !strings.Contains(lines[1], "next Sep 28 01:00") {
+		t.Errorf("line %q", lines[1])
+	}
+}
+
+func TestTimerAddRefusesARepeatThatCannotFire(t *testing.T) {
+	a := &app{now: relayNow}
+	w, _, _ := notifyingWatch(t, t.TempDir(), false)
+	a.store = w.store
+	due := relayNow.Add(time.Minute)
+	for name, spec := range map[string]timerSpec{
+		"an unknown repeat":       {run: "true", repeat: "hourly"},
+		"a repeat on a condition": {run: "true", repeat: "daily", probe: probeHolds},
+		"a repeat on a plain one": {repeat: "daily"},
+	} {
+		if _, err := a.timerFrom(spec, due); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	saturday := relayNow.AddDate(0, 0, 1)
+	tm, err := a.timerFrom(timerSpec{run: "true", repeat: "weekdays"}, saturday)
+	if err != nil || !tm.Due.Equal(relayNow.AddDate(0, 0, 3).UTC()) {
+		t.Fatalf("%+v, %v", tm, err)
+	}
+	if s := timerWhen(relayNow, tm); s != "at Sep 28 02:00, runs `true`, repeats weekdays" {
+		t.Errorf("when %q", s)
+	}
+}

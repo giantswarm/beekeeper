@@ -40,7 +40,8 @@ the firing wakes with the timer's text (as agents wake does); --run runs a
 shell command instead, its output in timers/<id>.log of the state
 directory and its exit code logged (timer.ran). Without either the watch's
 line says it. A timer with a condition, --wake or --run closes when it
-fires.
+fires. --repeat daily, weekdays or weekly re-arms a --wake or --run timer
+at the same local time instead; it stays open until timer done.
 
 The conditions of --when, each one read of its reference per check, shared
 by every timer on it; a GitHub one waits while the budget is under the
@@ -52,7 +53,8 @@ floor:
 --probe takes any shell command that exits 0 once the condition holds.`,
 		Example: `  beekeeper timer add 5m "PR 243 merged: rebase and merge yours" --when "pr-merged giantswarm/beekeeper#243" --wake "BK 229" --until 2h
   beekeeper timer add 23:00 "swap flat again" --probe "test $(awk '/SwapFree/{print $2}' /proc/meminfo) -gt 8000000" --until 06:00 --expire
-  beekeeper timer add 11:01 "budget reset" --run "beekeeper agents wake 'BK 228' 'the budget is back'"`,
+  beekeeper timer add 11:01 "budget reset" --run "beekeeper agents wake 'BK 228' 'the budget is back'"
+  beekeeper timer add 08:15 "morning overview" --run "beekeeper agents start Overview ~/brief.md" --repeat weekdays`,
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error {
 			due, err := untilTime(a.now, args[0])
@@ -92,6 +94,7 @@ floor:
 	f.BoolVar(&spec.expire, "expire", false, "at --until close the timer unfired instead")
 	f.StringVar(&spec.wake, "wake", "", "the registered agent the firing wakes with the timer's text")
 	f.StringVar(&spec.run, "run", "", "a shell command the firing runs, its exit code logged")
+	f.StringVar(&spec.repeat, "repeat", "", "re-arm a --wake or --run timer at the same local time: daily, weekdays or weekly")
 	add.MarkFlagsMutuallyExclusive("when", "probe")
 	add.MarkFlagsMutuallyExclusive("wake", "run")
 	done := &cobra.Command{
@@ -159,14 +162,14 @@ func (a *app) printTimers(timers []state.Timer) {
 
 // timerSpec is what timer add was given beyond the time and the text.
 type timerSpec struct {
-	when, probe, until, wake, run string
+	when, probe, until, wake, run, repeat string
 	every                         time.Duration
 	expire                        bool
 }
 
 // timerFrom checks spec and returns the timer due at due it describes.
 func (a *app) timerFrom(spec timerSpec, due time.Time) (state.Timer, error) {
-	t := state.Timer{Due: due.UTC(), When: strings.TrimSpace(spec.when), Probe: strings.TrimSpace(spec.probe), Every: spec.every, Expire: spec.expire, Run: strings.TrimSpace(spec.run)}
+	t := state.Timer{Due: due.UTC(), When: strings.TrimSpace(spec.when), Probe: strings.TrimSpace(spec.probe), Every: spec.every, Expire: spec.expire, Run: strings.TrimSpace(spec.run), Repeat: strings.TrimSpace(spec.repeat)}
 	if t.When != "" {
 		if _, _, err := conditionProbe(t.When); err != nil {
 			return t, err
@@ -186,6 +189,15 @@ func (a *app) timerFrom(spec timerSpec, due time.Time) (state.Timer, error) {
 		return t, usageErr("--expire needs --until")
 	case !t.Until.IsZero() && !t.Until.After(t.Due):
 		return t, usageErr("--until %s is not after the timer's time %s", clock(a.now, t.Until), clock(a.now, t.Due))
+	case t.Repeat == "":
+	case !slices.Contains(state.Repeats, t.Repeat):
+		return t, usageErr("--repeat %s: one of %s", t.Repeat, strings.Join(state.Repeats, ", "))
+	case t.Conditional():
+		return t, usageErr("--repeat takes no condition: a repeating timer fires at its time")
+	case spec.wake == "" && t.Run == "":
+		return t, usageErr("--repeat needs --wake or --run: a plain timer stays open until timer done")
+	case t.Repeat == "weekdays" && state.Weekend(t.Due.Local()):
+		t.Due = t.Next(t.Due)
 	}
 	if q := strings.TrimSpace(spec.wake); q != "" {
 		st, err := a.store.Read()
@@ -221,6 +233,9 @@ func timerWhen(now time.Time, t state.Timer) string {
 		s += fmt.Sprintf(", wakes %q", t.Wake)
 	case t.Run != "":
 		s += ", runs `" + truncate(t.Run, 60) + "`"
+	}
+	if t.Repeat != "" {
+		s += ", repeats " + t.Repeat
 	}
 	return s
 }
