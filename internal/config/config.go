@@ -295,6 +295,11 @@ type Secret struct {
 	// which beekeeper gives only to its own op calls. Agents reach it
 	// nowhere: it lies outside every agent container's mounts.
 	TokenFile string `yaml:"tokenFile"`
+	// Session reads the vault through the person's own signed-in op
+	// session instead of a service account (tokenFile then unused): for a
+	// vault no service account can be granted, such as an Employee vault.
+	// op fails while the person is signed out, which exits 78.
+	Session bool `yaml:"session"`
 }
 
 // Sandbox is the agent sandbox: the paths and hosts an agent session's

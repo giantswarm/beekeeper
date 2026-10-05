@@ -399,7 +399,10 @@ A reference is a SOPS file (every value in it), one value of a SOPS file (`file#
 path; `sops://` in front optional) or a field of the shared 1Password vault
 (`op://<vault>/<item>/<field>`). beekeeper reads only the vault `secret.vault` names, and only as its
 service account, whose token it reads from `secret.tokenFile` and gives to its own `op` calls alone;
-with either unset, an `op://` reference is refused. Every command exits 78 when the vault cannot give a
+with either unset, an `op://` reference is refused. `secret.session: true` reads and writes the vault
+through the person's own signed-in `op` session in the caller's environment instead (`tokenFile` unused,
+`setup` refused): the way to a vault no service account can be granted, such as a person's Employee vault;
+signed out, `op` fails and the command exits 78. Every command exits 78 when the vault cannot give a
 value: none configured, no token, or `op` failing or answering nothing within a minute. A SOPS file is encrypted under the creation rules
 of the `.sops.yaml` nearest above it, run from that directory, so a `path_regex` relative to the
 repository matches.
@@ -1462,6 +1465,7 @@ The organisation and desk keys, and their defaults:
 | `ollama.url`, `lemonade.url` | unset: no model server | The host's model servers, watched and guarded under the `model-server` lease |
 | `outbound.phrases`, `outbound.paths`, `outbound.storeDeny` | none | What never leaves the machine, the plan files whose writes are outbound, the refused secret-store writes ([What leaves the machine](#what-leaves-the-machine)) |
 | `secret.vault`, `secret.tokenFile` | none | The shared 1Password vault `beekeeper secret` reads and writes, and the file with its service account's token ([Secret operations](#secret-operations)) |
+| `secret.session` | `false` | Read and write `secret.vault` through the person's signed-in `op` session instead of a service account ([Secret operations](#secret-operations)) |
 | `sandbox.allowRead`, `sandbox.allowWrite`, `sandbox.domains`, `sandbox.mask` | none; `GH_TOKEN` and `GITHUB_TOKEN` to GitHub | The paths under the home directory the agent sandbox re-allows for reading and writing, the hosts commands reach besides GitHub, the masked environment variables and their hosts ([The agent sandbox](#the-agent-sandbox)) |
 | `scan.sops`, `scan.vaults`, `scan.minLength` | none, none, 12 | The SOPS file globs and 1Password vaults `beekeeper scan index` fingerprints, and the shortest value it takes ([What reaches the model](#what-reaches-the-model)) |
 | `plans.repositories`, `plans.check` | none, `plan-stages` | The plans repositories whose open pull requests a note for `guide.person` links only once their stage check is green |

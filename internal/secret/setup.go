@@ -38,6 +38,8 @@ func (o *Ops) Setup(ctx context.Context, account, tokenFile string) (Setup, erro
 		return s, fmt.Errorf("%w: no shared vault is configured (secret.vault)", ErrVault)
 	case tokenFile == "":
 		return s, fmt.Errorf("%w: no token file is configured (secret.tokenFile)", ErrVault)
+	case o.Session:
+		return s, fmt.Errorf("%w: secret.session reads the vault as the person, no service account to set up", ErrSetUp)
 	case account == "":
 		return s, errors.New("name the service account")
 	}
