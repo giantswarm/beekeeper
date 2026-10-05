@@ -892,15 +892,20 @@ const VerbStaleWriter = "state.stale-writer"
 // stamp records the binary as the state's writer, unless a newer one wrote
 // it: then the save goes on with the fields this binary does not know kept,
 // and its process is recorded and logged once as a stale writer. A build
-// without a release version (dev) neither stamps nor judges.
+// without a release version (dev, a release candidate, a +dirty branch
+// build) neither stamps nor judges, and a stamp of one is overwritten by
+// the next release that saves.
 func (s *FileStore) stamp(st *State, now time.Time) []Event {
-	own, err := semver.NewVersion(s.version)
-	if err != nil {
+	own, ok := release(s.version)
+	if !ok {
 		return nil
 	}
-	st.StaleWriters = slices.DeleteFunc(st.StaleWriters, func(w StaleWriter) bool { return !proc.Alive(w.PID) })
+	st.StaleWriters = slices.DeleteFunc(st.StaleWriters, func(w StaleWriter) bool {
+		_, newer := release(w.Newer)
+		return !newer || !proc.Alive(w.PID)
+	})
 	if st.Writer != nil {
-		if newer, err := semver.NewVersion(st.Writer.Version); err == nil && own.LessThan(newer) {
+		if newer, ok := release(st.Writer.Version); ok && own.LessThan(newer) {
 			pid := os.Getpid()
 			if slices.ContainsFunc(st.StaleWriters, func(w StaleWriter) bool { return w.PID == pid && w.Version == s.version }) {
 				return nil
@@ -912,6 +917,15 @@ func (s *FileStore) stamp(st *State, now time.Time) []Event {
 	}
 	st.Writer = &Writer{Version: s.version, rest: writerRest(st.Writer)}
 	return nil
+}
+
+// release is v as a release version: no prerelease, no build metadata.
+func release(v string) (*semver.Version, bool) {
+	r, err := semver.NewVersion(v)
+	if err != nil || r.Prerelease() != "" || r.Metadata() != "" {
+		return nil, false
+	}
+	return r, true
 }
 
 func writerRest(w *Writer) rest {
