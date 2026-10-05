@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 )
 
@@ -76,7 +75,7 @@ func Ask(dir string, req Request, timeout time.Duration) error {
 	}
 	base := filepath.Join(dir, hex.EncodeToString(b[:]))
 	tmp, path, answer := base+tmpSuffix, base+reqSuffix, base+replySuffix
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, 0o600) //nolint:gosec // a new request in our own spool
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) //nolint:gosec // a new request in our own spool; O_EXCL refuses a planted symlink
 	if err != nil {
 		return err
 	}
