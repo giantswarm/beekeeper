@@ -467,8 +467,31 @@ same file passed to `claude --settings` holds one session to it, to try a change
   listed by port only (`127.0.0.1:<port>`, a lab's API server): a bare loopback host or a wildcard port
   would open every listener on the host (other sessions' port-forwards, local servers), so the
   configuration refuses it.
-- **The GitHub token:** `GH_TOKEN` and `GITHUB_TOKEN` (`sandbox.mask`) are masked: commands see a
-  placeholder, and the sandbox proxy puts the real value into requests to GitHub's hosts only.
+- **The GitHub token:** `gh`, `git push` and `devctl` act with devctl's App user token (eight hours,
+  capped by the App's permissions), and commands see only a placeholder for it. The broker reads the
+  token every five minutes with `devctl auth exec` (`sandbox.devctl`) into two files under
+  `$XDG_RUNTIME_DIR/beekeeper/github`: gh's login (`hosts.yml`, which the policy's `GH_CONFIG_DIR`
+  names) and git's Basic credential. The policy masks both: a command reads them with a placeholder in
+  place of the token, and the sandbox proxy puts the real token into requests to GitHub's hosts only
+  (the credential to `github.com` alone). The proxy re-reads the files for every command, so a renewed
+  token reaches a running session without a restart; the broker rewrites them in place, never by a
+  rename. The files lie outside the home directory on purpose: Claude Code mounts no mask under a denied
+  path and injects none under a re-allowed one. The file tools never read them. git reaches GitHub over
+  HTTPS (`git@github.com:` is rewritten), and its credential helper is `beekeeper sandbox
+  git-credential`, which hands git the masked credential as an `authtype=Basic` credential (git 2.46 or
+  newer): GitHub's git endpoint takes Basic only, and the proxy finds the placeholder only as written,
+  never base64-encoded. `agents.shell.path` stays off `PATH` in the sandbox, since a `gh` link to devctl
+  reads the keychain. `GH_TOKEN` and `GITHUB_TOKEN` (`sandbox.mask`) are masked as well, should the CLI
+  carry them. **Open:** Claude Code's proxy substitutes the placeholder in request bodies too, not in
+  headers alone, so a command that sends the placeholder to a GitHub endpoint that echoes its input
+  (`POST /markdown`) reads the real token back. A deliberate exfiltration gets a token that dies within
+  eight hours; a proxy that only adds the header is the fix.
+- **devctl.** devctl's gated commands (`pr merge`, `pr wait`, `release promote`, `release wait`,
+  `rollout wait`) read the keychain over the user bus and start user units, both closed in the sandbox,
+  so a sandboxed `beekeeper gate` hands its command to the broker: it runs the same gate on the host, as
+  the session and in its working directory, with `sandbox.devctl`'s directory first on `PATH`, and its
+  output and exit code come back through the spool once it ends (up to three hours). Only those
+  commands are brokered, and a queued merge's own run is refused from the sandbox.
 - **No way out:** unsandboxed retries are off, and a session whose sandbox cannot start does not start.
 - **The file tools.** Read, Grep, Glob, Edit, Write and NotebookEdit run in the harness, outside the
   sandbox. The policy runs `beekeeper hook pretooluse` for them and sets `BEEKEEPER_SANDBOX`, and the
@@ -893,7 +916,13 @@ is kept in reserve or repurposed: a relay and a crash both start a fresh session
   wake`, `RESUME`), and that turn keeps the role's watch and its CLI, with no click or decision
   by a person. The pending reopen then yields to that turn, so the desktop warms no second CLI
   beside it; the wake's own reopen follows the turn, and each later gap without a CLI is resumed
-  headless again until the desktop runs the holder's CLI. One whose resume never ran did not
+  headless again until the desktop runs the holder's CLI. A successor is imported into the
+  desktop's sidebar under its run title without a click, whatever its turns do: its import goes
+  ahead past the desktop window's focus as an `agents start --desktop` agent's does (it waits
+  for the person's typing to pause, 1 minute at most), and a reopen that meets the resume of a
+  session the desktop never imported imports it beside that turn, the turn frozen while the
+  desktop reads the transcript and the desktop's CLI it warms stopped. A desktop at its cap of
+  CLIs still writes the row; it warms no CLI for it. One whose resume never ran did not
   come up (`SUCCESSOR DOWN`): the first is one
   note for `guide.person`, the next successor starts 5 minutes later, the one after 10 minutes,
   and after three none starts until a holder runs again.
@@ -1487,6 +1516,7 @@ The organisation and desk keys, and their defaults:
 | `secret.vault`, `secret.tokenFile` | none | The shared 1Password vault `beekeeper secret` reads and writes, and the file with its service account's token ([Secret operations](#secret-operations)) |
 | `secret.session` | `false` | Read and write `secret.vault` through the person's signed-in `op` session instead of a service account ([Secret operations](#secret-operations)) |
 | `sandbox.allowRead`, `sandbox.allowWrite`, `sandbox.domains`, `sandbox.mask` | none; `GH_TOKEN` and `GITHUB_TOKEN` to GitHub | The paths under the home directory the agent sandbox re-allows for reading and writing, the hosts commands reach besides GitHub, the masked environment variables and their hosts ([The agent sandbox](#the-agent-sandbox)) |
+| `sandbox.devctl` | `devctl` on the broker's `PATH` | The devctl the broker runs on the host: it renews the sandboxed sessions' masked GitHub token and runs their gated devctl commands ([The agent sandbox](#the-agent-sandbox)) |
 | `scan.sops`, `scan.vaults`, `scan.minLength` | none, none, 12 | The SOPS file globs and 1Password vaults `beekeeper scan index` fingerprints, and the shortest value it takes ([What reaches the model](#what-reaches-the-model)) |
 | `plans.repositories`, `plans.check` | none, `plan-stages` | The plans repositories whose open pull requests a note for `guide.person` links only once their stage check is green |
 | `outbound.sweepRoots`, `outbound.sweepDepth` | the home directory, 5 | Where the watch looks for exposed keys and credentials in remote URLs |

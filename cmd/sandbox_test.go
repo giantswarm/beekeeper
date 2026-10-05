@@ -134,3 +134,39 @@ func TestSandboxInstallSteps(t *testing.T) {
 		t.Errorf("a changed policy's steps = %q, %v, want the drop-in only", steps, err)
 	}
 }
+
+func TestBrokeredGateArgv(t *testing.T) {
+	for in, want := range map[string]string{
+		"devctl pr merge giantswarm/beekeeper 7":                  "gate --wait 2m0s -- devctl pr merge giantswarm/beekeeper 7",
+		"/home/u/.go/bin/devctl pr wait giantswarm/beekeeper 7":   "gate --wait 2m0s -- devctl pr wait giantswarm/beekeeper 7",
+		"devctl release promote giantswarm/beekeeper":             "gate --wait 2m0s -- devctl release promote giantswarm/beekeeper",
+		"devctl rollout wait gazelle giantswarm/backstage --pr 3": "gate --wait 2m0s -- devctl rollout wait gazelle giantswarm/backstage --pr 3",
+	} {
+		got, err := brokeredGateArgv(sandbox.Request{Op: sandbox.OpGate, Args: strings.Fields(in), Wait: "2m"})
+		if err != nil || strings.Join(got, " ") != want {
+			t.Errorf("%s: %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, bad := range []sandbox.Request{
+		{Args: strings.Fields("sh -c id"), Wait: "2m"},
+		{Args: strings.Fields("/tmp/x/devctl-evil pr merge giantswarm/beekeeper 7"), Wait: "2m"},
+		{Args: strings.Fields("devctl repo create giantswarm/x"), Wait: "2m"},
+		{Args: strings.Fields("devctl pr merge giantswarm/beekeeper 7"), Wait: "forever"},
+		{Args: strings.Fields("devctl pr merge giantswarm/beekeeper 7"), Wait: "24h"},
+		{},
+	} {
+		if got, err := brokeredGateArgv(bad); err == nil {
+			t.Errorf("%+v: %q, want a refusal", bad, got)
+		}
+	}
+}
+
+func TestDevctlPath(t *testing.T) {
+	t.Setenv("PATH", "/usr/bin")
+	if got := devctlPath("/home/u/.go/bin/devctl"); len(got) != 1 || got[0] != "PATH=/home/u/.go/bin:/usr/bin" {
+		t.Errorf("devctlPath = %q", got)
+	}
+	if got := devctlPath("devctl"); got != nil {
+		t.Errorf("devctl on PATH: %q, want the broker's PATH", got)
+	}
+}

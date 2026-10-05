@@ -321,6 +321,11 @@ type Sandbox struct {
 	// placeholder, the sandbox proxy putting the real value into requests
 	// to their hosts; unset, GH_TOKEN and GITHUB_TOKEN go to GitHub.
 	Mask []SandboxMask `yaml:"mask"`
+	// Devctl is the devctl binary the broker runs on the host (~/ allowed;
+	// default: devctl on the broker's PATH): it renews the masked GitHub
+	// token from devctl's App login and runs a sandboxed session's gated
+	// devctl commands, which read the keychain the sandbox closes.
+	Devctl string `yaml:"devctl"`
 }
 
 // SandboxMask is one masked environment variable and the hosts its real
@@ -1458,6 +1463,10 @@ func (s *Sandbox) defaults(home string) {
 	if s.Mask == nil {
 		s.Mask = []SandboxMask{{Name: "GH_TOKEN", Hosts: GitHubHosts}, {Name: "GITHUB_TOKEN", Hosts: GitHubHosts}}
 	}
+	if s.Devctl == "" {
+		s.Devctl = "devctl"
+	}
+	s.Devctl = homePath(home, s.Devctl)
 }
 
 // homePath is p with a leading ~/ resolved against home.

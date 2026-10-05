@@ -108,8 +108,12 @@ func (a *app) startSuccessor(ctx context.Context, rl role, from, by state.Party,
 	if dir == "" {
 		dir = successorDir(rl.cfg(a.cfg), rec, startDir)
 	}
+	// The successor's import goes ahead past the desktop window's focus, as
+	// a desktop turn's does: its role turn soon runs headless and may not
+	// end before the next relay, and the person sees the role's holder only
+	// in the desktop's sidebar.
 	_, err = a.startAgent(ctx, agentStart{id: id, by: &by, name: to.Name, brief: rl.successorBrief(to.Name, fromLabel),
-		task: fmt.Sprintf("%s as %s", rl.duty, to.Name), dir: dir, model: model})
+		task: fmt.Sprintf("%s as %s", rl.duty, to.Name), dir: dir, model: model, desktop: true})
 	if err != nil {
 		a.withdrawRelay(rl, to, by)
 		return state.Party{}, "", fmt.Errorf("starting %q: %w (its relay is withdrawn)", to.Name, err)
