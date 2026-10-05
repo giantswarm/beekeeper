@@ -206,8 +206,9 @@ a numbered run, "Supervisor run N": its desktop title, roster name and the name 
   holds, grants, lane seeds); a standing rule this watch agreed on is a pinned note (`beekeeper note
   add --pin`), which every hand-over carries. Then `beekeeper supervisor relay` starts "Supervisor
   run N+1" and opens the relay to it. Its headless first turn only takes the role with `beekeeper
-  supervisor start`, which tells every running agent the new name; the standby unit then resumes
-  it in its desktop CLI, where it reads `beekeeper handover --prompt` (one part in full: `--section
+  supervisor start`, which tells every running agent the new name. Once that turn ended, the
+  relay prints one SendMessage to the successor's `local_` id: this session makes exactly that
+  call, which has the desktop start the successor's CLI, where it reads `beekeeper handover --prompt` (one part in full: `--section
   <name>`), arms its watch and acknowledges by name. A decision listed there as answered is not
   asked again. Once `beekeeper supervisor
   status` exits 4 in this session, it is relieved. A relay not taken expires after

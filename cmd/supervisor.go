@@ -134,8 +134,51 @@ func (a *app) relayToSuccessor(ctx context.Context, rl role, me state.Party) err
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(a.out, "started %q (session %s, desktop %s): its first turn runs `beekeeper %s start`\n%s\n", to.Name, to.Session, to.HostSession, rl.name, msg)
+	if _, err := fmt.Fprintf(a.out, "started %q (session %s, desktop %s): its first turn runs `beekeeper %s start`\n%s\n", to.Name, to.Session, to.HostSession, rl.name, msg); err != nil {
+		return err
+	}
+	return a.handTurn(ctx, rl, me, to)
+}
+
+// firstTurnWait bounds how long a relay waits for its successor's headless
+// first turn to end.
+const firstTurnWait = 5 * time.Minute
+
+// handTurn tells the relaying holder me how its successor to gets its
+// desktop turn: the holder runs in a desktop CLI, whose session messaging
+// starts the successor's desktop CLI at once, whatever the window's focus,
+// the person's typing or the desktop's cap. It waits for the successor's
+// headless first turn to end (the desktop's CLI must not run beside it) and
+// makes room under the desktop's cap first.
+func (a *app) handTurn(ctx context.Context, rl role, me, to state.Party) error {
+	if err := awaitTurnEnd(ctx, to.Session, firstTurnWait); err != nil {
+		return fmt.Errorf("%q: %w: send it nothing, the standby watch gives it its desktop turn once it ends", to.Name, err)
+	}
+	if err := a.makeRoom(ctx, to.HostSession, me.HostSession); err != nil {
+		return fmt.Errorf("%q gets no desktop turn now: %w", to.Name, err)
+	}
+	turn := rl.resumeMessage("the desktop runs your CLI now, started by this message: this desktop turn keeps " + rl.duty)
+	_, err := fmt.Fprintf(a.out, "%q's first turn ended. Give it its desktop turn now: call SendMessage once with to %q and the message %q. "+
+		"The desktop starts its CLI for it (room is made under its cap); never resume it headless.\n", to.Name, to.HostSession, turn)
 	return err
+}
+
+// awaitTurnEnd waits up to wait for the headless turn of session id to end.
+func awaitTurnEnd(ctx context.Context, id string, wait time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	for {
+		if t, err := plat.Machine.Processes(); err == nil && headlessTurn(t, id) == "" {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("its headless first turn still runs after %s", wait)
+		case <-tick.C:
+		}
+	}
 }
 
 // runStart makes the calling session rl's holder, or takes the role
