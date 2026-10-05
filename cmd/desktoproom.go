@@ -8,6 +8,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -40,24 +42,41 @@ func desktopCLIs(t *proc.Table) int {
 // longest, never one of keep (local_ ids). With none to end it starts
 // nothing: the error names the cap.
 func (a *app) makeRoom(ctx context.Context, keep ...string) error {
+	return a.makeRoomFor(ctx, 1, keep...)
+}
+
+// makeRoomFor is makeRoom for slots CLIs the desktop is to start.
+func (a *app) makeRoomFor(ctx context.Context, slots int, keep ...string) error {
+	for {
+		ended, err := a.endOneForRoom(ctx, slots, keep)
+		if err != nil || !ended {
+			return err
+		}
+	}
+}
+
+// endOneForRoom ends one of beekeeper's finished desktop CLIs when the
+// desktop has fewer than slots free under its cap, and reports whether it
+// ended one.
+func (a *app) endOneForRoom(ctx context.Context, slots int, keep []string) (bool, error) {
 	limit := desktopCLICap
 	if n, ok := claude.DesktopCap(a.cfg.Claude.DesktopLog); ok {
 		limit = n
 	}
 	st, err := a.store.Read()
 	if err != nil {
-		return err
+		return false, err
 	}
 	sessions, t, err := a.sessions()
 	if err != nil {
-		return err
+		return false, err
 	}
-	if desktopCLIs(t) < limit {
-		return nil
+	if desktopCLIs(t)+slots <= limit {
+		return false, nil
 	}
 	s := roomFor(st, sessions, t, a.now, keep)
 	if s == nil {
-		return fmt.Errorf("the desktop runs its cap of %d CLIs and beekeeper runs none of its own finished to end: it starts none, "+
+		return false, fmt.Errorf("the desktop runs its cap of %d CLIs and beekeeper runs none of its own finished to end: it starts none, "+
 			"since at the cap the desktop pauses the CLI idle longest, the person's own sessions included", limit)
 	}
 	pr, err := os.FindProcess(s.PID)
@@ -65,11 +84,34 @@ func (a *app) makeRoom(ctx context.Context, keep ...string) error {
 		err = pr.Signal(syscall.SIGTERM)
 	}
 	if err != nil {
-		return fmt.Errorf("ending beekeeper's finished desktop CLI %d (%s) to stay under the desktop's cap of %d: %w", s.PID, s.HostID, limit, err)
+		return false, fmt.Errorf("ending beekeeper's finished desktop CLI %d (%s) to stay under the desktop's cap of %d: %w", s.PID, s.HostID, limit, err)
 	}
 	_ = a.store.Log(event(watchParty, "desktop.room", "ended the finished desktop CLI %d of %s, idle since %s: the desktop runs its cap of %d CLIs",
 		s.PID, s.HostID, s.LastActive.Format(time.DateTime), limit))
-	return awaitExit(ctx, s.PID, roomWait)
+	if _, err := fmt.Fprintf(a.out, "room: ended beekeeper's finished desktop CLI %d of %s (idle since %s), the desktop at its cap of %d CLIs\n",
+		s.PID, s.HostID, s.LastActive.Format(time.DateTime), limit); err != nil {
+		return false, err
+	}
+	return true, awaitExit(ctx, s.PID, roomWait)
+}
+
+// agentRoomCmd frees room under the desktop's cap of CLIs by hand.
+func (a *app) agentRoomCmd() *cobra.Command {
+	var free int
+	c := &cobra.Command{
+		Use:    "room",
+		Short:  "Free room under the desktop's cap of CLIs from beekeeper's own finished CLIs",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if free < 1 {
+				return usageErr("--free %d: at least 1", free)
+			}
+			return a.makeRoomFor(cmd.Context(), free)
+		},
+	}
+	c.Flags().IntVar(&free, "free", 1, "the CLIs the desktop is to have room for")
+	return c
 }
 
 // roomFor is the desktop CLI makeRoom ends: one of beekeeper's own finished
