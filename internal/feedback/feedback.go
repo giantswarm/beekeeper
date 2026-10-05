@@ -56,6 +56,10 @@ var (
 	ts     = regexp.MustCompile(`(?m)^Message TS: (\d+\.\d+)$`)
 	// replies closes the parent: the header of the replies' list.
 	replies = regexp.MustCompile(`(?m)^=== THREAD REPLIES \(\d+ total\) ===\n?`)
+	// trailer is what the server and the connector append to a message's
+	// text: its reactions, and the "Sent using Claude" attribution of a
+	// message posted through the claude.ai connector.
+	trailer = regexp.MustCompile(`(?:\n(?:Reactions: .*|\*Sent using\* <@\w+\|[^>\n]*>))+\s*$`)
 )
 
 // ParseThread reads slack_read_thread's result: a JSON object whose
@@ -93,13 +97,13 @@ func ParseThread(result string) (Thread, error) {
 }
 
 // parseMessage reads one message: its From, Time and Message TS lines, then
-// its text.
+// its text without the trailer.
 func parseMessage(s string) (Message, error) {
 	f, n := from.FindStringSubmatch(s), ts.FindStringSubmatchIndex(s)
 	if f == nil || n == nil {
 		return Message{}, fmt.Errorf("a message of the thread names no author or ts: %q", firstLine(s))
 	}
-	return Message{User: f[1], TS: s[n[2]:n[3]], Text: strings.TrimSpace(s[n[1]:])}, nil
+	return Message{User: f[1], TS: s[n[2]:n[3]], Text: strings.TrimSpace(trailer.ReplaceAllString(strings.TrimSpace(s[n[1]:]), ""))}, nil
 }
 
 // Later reports whether Slack ts a is after b; an empty b is before all.

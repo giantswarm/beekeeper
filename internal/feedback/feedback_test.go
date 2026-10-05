@@ -48,6 +48,8 @@ Message TS: 1791126240.000100
 Board pull 9: look at the CI first
 
 and then merge.
+*Sent using* <@U9|Claude>
+Reactions: eyes (1)
 
 --- Reply 2 of 2 ---
 From: Bob Smith (U2)
