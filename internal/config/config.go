@@ -311,6 +311,25 @@ type Secret struct {
 	// person's beekeeper secret unlock while the broker holds no session
 	// (8m, within the Bash tool's 10 minutes).
 	UnlockWait Duration `yaml:"unlockWait"`
+	// AgeIdentities are the age identities beekeeper reads from the shared
+	// vault for the SOPS files that sops' own sources (SOPS_AGE_KEY,
+	// SOPS_AGE_KEY_FILE, sops/age/keys.txt) hold none for: each read in
+	// beekeeper's process and given to the one sops call alone.
+	AgeIdentities []AgeIdentity `yaml:"ageIdentities"`
+}
+
+// AgeIdentity maps the SOPS files of an age recipient, or under a path, to
+// the vault field that holds the recipient's identity.
+type AgeIdentity struct {
+	// Recipient is the age recipient (age1…) as the files' sops metadata
+	// and .sops.yaml name it.
+	Recipient string `yaml:"recipient"`
+	// PathRegex matches a file's absolute path (unanchored), for the files
+	// of a repository or an installation whatever their recipient.
+	PathRegex string `yaml:"pathRegex"`
+	// Ref is the op:// field of the shared vault (secret.vault) holding the
+	// identity, AGE-SECRET-KEY-1….
+	Ref string `yaml:"ref"`
 }
 
 // Sandbox is the agent sandbox: the paths and hosts an agent session's
@@ -1529,6 +1548,19 @@ func (c *Config) validate() error {
 	for _, n := range c.Secret.UnlockCommands {
 		if !commandName.MatchString(n) {
 			return fmt.Errorf("secret.unlockCommands: %q is no command name", n)
+		}
+	}
+	for i, id := range c.Secret.AgeIdentities {
+		switch {
+		case id.Recipient == "" && id.PathRegex == "":
+			return fmt.Errorf("secret.ageIdentities[%d]: name a recipient or a pathRegex", i)
+		case id.Recipient != "" && !strings.HasPrefix(id.Recipient, "age1"):
+			return fmt.Errorf("secret.ageIdentities[%d]: recipient %q is no age recipient (age1…)", i, id.Recipient)
+		case !strings.HasPrefix(id.Ref, "op://"):
+			return fmt.Errorf("secret.ageIdentities[%d]: ref %q: want op://<vault>/<item>/<field>", i, id.Ref)
+		}
+		if _, err := regexp.Compile(id.PathRegex); err != nil {
+			return fmt.Errorf("secret.ageIdentities[%d]: pathRegex: %w", i, err)
 		}
 	}
 	for i, r := range c.Outbound.StoreDeny {
