@@ -98,3 +98,26 @@ func TestImportReadsAsThePersonAndWritesAsTheServiceAccount(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionModeReadsAndWritesAsThePerson(t *testing.T) {
+	tools := secrettest.New(map[string]string{employeeRef: password})
+	o := &secret.Ops{Run: tools.Run, Vault: "Employee", Session: true, Fingerprint: func(string) string { return "fp" }}
+	ref := secret.Ref{Op: employeeRef}
+	if _, err := o.Fingerprints(context.Background(), ref); !errors.Is(err, secret.ErrVault) {
+		t.Errorf("signed out: %v", err)
+	}
+	tools.Signed = true
+	ps, err := o.Fingerprints(context.Background(), ref)
+	if err != nil || len(ps) != 1 {
+		t.Fatalf("fingerprints = %v, %v", ps, err)
+	}
+	if len(tools.Tokens) != 0 {
+		t.Errorf("op got a service account token: %q", tools.Tokens)
+	}
+	if _, err := o.Fingerprints(context.Background(), secret.Ref{Op: "op://Other/x/y"}); err == nil {
+		t.Error("session mode reads outside secret.vault")
+	}
+	if _, err := o.Setup(context.Background(), "sa", filepath.Join(t.TempDir(), "tok")); !errors.Is(err, secret.ErrSetUp) {
+		t.Errorf("setup in session mode = %v", err)
+	}
+}

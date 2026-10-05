@@ -426,7 +426,7 @@ that holds a token is refused: revoke that account and move the file aside
 before a new one.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			ops := &secret.Ops{Run: secretRun, Apply: secretApply, Vault: a.cfg.Secret.Vault}
+			ops := &secret.Ops{Run: secretRun, Apply: secretApply, Vault: a.cfg.Secret.Vault, Session: a.cfg.Secret.Session}
 			s, err := ops.Setup(cmd.Context(), account, a.cfg.Secret.TokenFile)
 			a.secretLog("setup", "vault %s, service account %s: %s", s.Vault, account, outcome(err, fmt.Sprintf("token of %d bytes", s.TokenBytes)))
 			if errors.Is(err, secret.ErrSetUp) {
@@ -633,8 +633,8 @@ func parseRefs(args ...string) ([]secret.Ref, error) {
 // secretOps are the operations with the service account's token, read
 // from secret.tokenFile when the shared vault is configured.
 func (a *app) secretOps() (*secret.Ops, error) {
-	ops := &secret.Ops{Run: secretRun, Apply: secretApply, Vault: a.cfg.Secret.Vault}
-	if ops.Vault == "" || a.cfg.Secret.TokenFile == "" {
+	ops := &secret.Ops{Run: secretRun, Apply: secretApply, Vault: a.cfg.Secret.Vault, Session: a.cfg.Secret.Session}
+	if ops.Vault == "" || ops.Session || a.cfg.Secret.TokenFile == "" {
 		return ops, nil
 	}
 	raw, err := os.ReadFile(a.cfg.Secret.TokenFile)

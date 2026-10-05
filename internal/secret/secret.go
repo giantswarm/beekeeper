@@ -35,6 +35,11 @@ type Ops struct {
 	// Token is the vault's service account token, which only op's own
 	// environment gets; empty refuses every op:// reference.
 	Token string
+	// Session reads the vault through the person's own signed-in op
+	// session (OP_SESSION_* in the caller's environment) instead of a
+	// service account: the way to a vault no service account can be
+	// granted, such as a person's Employee vault.
+	Session bool
 	// Fingerprint is the keyed hash fingerprint answers with.
 	Fingerprint func(value string) string
 	// Apply writes a key of a Secret; nil is [ApplySecret].
@@ -129,7 +134,7 @@ func (o *Ops) checkVault(r Ref) error {
 		return nil
 	case o.Vault == "":
 		return fmt.Errorf("%w: %s: no shared vault is configured (secret.vault): beekeeper reads no op:// reference", ErrVault, r.Op)
-	case o.Token == "":
+	case o.Token == "" && !o.Session:
 		return fmt.Errorf("%w: %s: no service account token (secret.tokenFile): beekeeper reads the shared vault only through its own service account", ErrVault, r.Op)
 	case r.vault() != o.Vault:
 		return fmt.Errorf("%s: beekeeper reads only the shared vault %q", r.Op, o.Vault)
@@ -181,8 +186,11 @@ func (o *Ops) value(ctx context.Context, r Ref) (string, error) {
 	return vs[r.String()], nil
 }
 
-// op runs op as the service account.
+// op runs op as the service account, or as the person in session mode.
 func (o *Ops) op(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error) {
+	if o.Session {
+		return o.asPerson(ctx, stdin, args...)
+	}
 	return o.Run(ctx, "", []string{"OP_SERVICE_ACCOUNT_TOKEN=" + o.Token}, stdin, "op", args...)
 }
 
