@@ -16,8 +16,12 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// runSixtySeven is the session of a relay's successor.
-const runSixtySeven = "4579230b-e90f-41da-bfea-c92b8aab2f90"
+// runSixtySeven is the session of a relay's successor, wakeSixtySeven the
+// unit of its headless resume.
+const (
+	runSixtySeven  = "4579230b-e90f-41da-bfea-c92b8aab2f90"
+	wakeSixtySeven = "beekeeper-wake-4579230b-0a1b2c3d.service"
+)
 
 // unitLauncher reports units by their state: active ones always, stopping
 // ones (a start's reopen after its turn) only when asked for those too.
@@ -81,7 +85,7 @@ func TestStandbyResumesASuccessorWhoseReopenWaitsOnTheFocus(t *testing.T) {
 func TestStandbyWaitsForARunningTurn(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), true)
 	run := state.Party{Session: runSixtySeven, Name: supervisorRole.runName(67)}
-	useLauncher(t, &unitLauncher{active: []string{"beekeeper-wake-4579230b-0a1b2c3d.service"}})
+	useLauncher(t, &unitLauncher{active: []string{wakeSixtySeven}})
 	w.stand = standbyWatch{
 		turning: unitsTurning,
 		revive: func(context.Context, role, state.Party, string) error {
@@ -121,7 +125,7 @@ func TestReopenYieldsToAHeadlessResume(t *testing.T) {
 	plat.Machine = tableMachine{plat.Machine}
 	o := &recordingOpener{}
 	plat.Opener = o
-	plat.Launcher = &unitLauncher{active: []string{"beekeeper-wake-4579230b-0a1b2c3d.service"}}
+	plat.Launcher = &unitLauncher{active: []string{wakeSixtySeven}}
 	c := a.agentReopenCmd()
 	c.SetArgs([]string{id})
 	if err := c.ExecuteContext(t.Context()); err != nil {
@@ -189,8 +193,7 @@ func TestReopenImportsBesideAHeadlessResume(t *testing.T) {
 	t.Cleanup(func() { _ = twin.Process.Kill(); _ = twin.Wait() })
 	m := &importMachine{Machine: plat.Machine, id: id, twin: twin.Process.Pid}
 	plat.Machine = m
-	wake := "beekeeper-wake-4579230b-0a1b2c3d.service"
-	l := &freezingLauncher{unitLauncher: unitLauncher{active: []string{wake}}}
+	l := &freezingLauncher{unitLauncher: unitLauncher{active: []string{wakeSixtySeven}}}
 	plat.Launcher = l
 	o := &importingOpener{dir: a.cfg.Claude.DesktopDir, id: id, title: name, machine: m}
 	plat.Opener = o
@@ -202,7 +205,7 @@ func TestReopenImportsBesideAHeadlessResume(t *testing.T) {
 	if !slices.Equal(o.opened, []string{resumeURL(id)}) {
 		t.Errorf("opened %v, want the import\n%s", o.opened, out)
 	}
-	if !o.frozen || !slices.Equal(l.thawed, []string{wake}) {
+	if !o.frozen || !slices.Equal(l.thawed, []string{wakeSixtySeven}) {
 		t.Errorf("the resume frozen during the import %v, thawed %v", o.frozen, l.thawed)
 	}
 	if err := twin.Wait(); err == nil {
@@ -211,7 +214,7 @@ func TestReopenImportsBesideAHeadlessResume(t *testing.T) {
 	if !strings.Contains(out.String(), "imported local_"+id+" into the desktop beside its headless turn") {
 		t.Errorf("output:\n%s", out)
 	}
-	raw, _ := os.ReadFile(transcript)
+	raw, _ := os.ReadFile(filepath.Clean(transcript))
 	if !strings.Contains(string(raw), `"customTitle":"`+name+`"`) {
 		t.Errorf("the transcript is not titled: %s", raw)
 	}
@@ -249,7 +252,7 @@ func (m *importMachine) Processes() (*proc.Table, error) {
 		5: {PID: 5, Comm: claudeComm, Args: []string{claudeComm, "-p", resumeFlag, m.id, "--", "keep the watch"}},
 	}}
 	if m.imported {
-		t.ByPID[m.twin] = &proc.Process{PID: m.twin, Comm: claudeComm, Args: []string{claudeComm, "--output-format", "stream-json", resumeFlag, m.id}}
+		t.ByPID[m.twin] = &proc.Process{PID: m.twin, Comm: claudeComm, Args: []string{claudeComm, resumeFlag, m.id}}
 	}
 	return t, nil
 }
