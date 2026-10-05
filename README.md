@@ -438,9 +438,12 @@ wrote team-b/app.sops.yaml: 2 keys
 An agent's commands run as the person's Unix user. A deny list of credential paths leaves every path
 nobody listed readable, so the agent sandbox turns it around: the home directory is denied and only what
 a session needs is re-allowed. `beekeeper sandbox render` prints the policy as Claude Code settings;
-`beekeeper sandbox install` stages it and prints the one root command that puts it into Claude Code's
+`beekeeper sandbox install` stages it and prints the root commands that put it into Claude Code's
 managed settings (`/etc/claude-code/managed-settings.d/beekeeper-sandbox.json` on Linux,
-`/Library/Application Support/ClaudeCode/managed-settings.d/` on macOS). From there it holds every
+`/Library/Application Support/ClaudeCode/managed-settings.d/` on macOS). On a fresh machine they create
+the managed settings file (`managed-settings.json`, an empty `{}`) and its `managed-settings.d`
+directory first: the sandbox mounts both read-only and cannot create them, so a session held by
+`claude --settings` needs them as well. From there it holds every
 Claude Code session on the machine, the headless turns beekeeper starts and the CLI the desktop app
 spawns alike, enforced by Anthropic's sandbox runtime (bubblewrap on Linux, Seatbelt on macOS). The
 same file passed to `claude --settings` holds one session to it, to try a change first.
