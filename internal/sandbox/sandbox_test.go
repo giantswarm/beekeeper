@@ -201,3 +201,28 @@ func TestTheScannersDirectoryIsDeniedInsideTheState(t *testing.T) {
 		t.Error("the rest of the state directory is closed")
 	}
 }
+
+func TestASymlinkedPathIsListedAtItsTarget(t *testing.T) {
+	home := testHome(t)
+	dotfiles := filepath.Join(home, "projects/dotfiles/.config/beekeeper")
+	if err := os.MkdirAll(dotfiles, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".config"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(home, ".config/beekeeper")
+	if err := os.Symlink(dotfiles, link); err != nil {
+		t.Fatal(err)
+	}
+	p := New(config.Sandbox{}, Paths{Home: home, ConfigFile: filepath.Join(link, "config.yaml"), StateDir: filepath.Join(home, ".local/state/beekeeper")})
+	if !slices.Contains(p.Read, link) || !slices.Contains(p.Read, dotfiles) {
+		t.Errorf("read %v lacks the link or its target", p.Read)
+	}
+	if !p.Readable(filepath.Join(dotfiles, "config.yaml"), home) {
+		t.Error("the config's target is not readable")
+	}
+	if p.Readable(filepath.Join(home, "projects/dotfiles/.ssh"), home) {
+		t.Error("the target's neighbours opened")
+	}
+}
