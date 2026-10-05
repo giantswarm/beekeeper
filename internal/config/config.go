@@ -346,22 +346,15 @@ type Sandbox struct {
 	// Domains are the hosts commands reach besides GitHub's: muster, the
 	// registries and module proxies builds need, the labs' API servers.
 	Domains []string `yaml:"domains"`
-	// Mask are the environment variables commands see only as a
-	// placeholder, the sandbox proxy putting the real value into requests
-	// to their hosts; unset, GH_TOKEN and GITHUB_TOKEN go to GitHub.
-	Mask []SandboxMask `yaml:"mask"`
+	// ProxyPort is the port of the broker's egress proxy on the host's
+	// loopback (default 3190): the sandbox's only way out, which holds it
+	// to the domains and sets the GitHub token's header itself.
+	ProxyPort int `yaml:"proxyPort"`
 	// Devctl is the devctl binary the broker runs on the host (~/ allowed;
-	// default: devctl on the broker's PATH): it renews the masked GitHub
-	// token from devctl's App login and runs a sandboxed session's gated
-	// devctl commands, which read the keychain the sandbox closes.
+	// default: devctl on the broker's PATH): it renews the egress proxy's
+	// GitHub token from devctl's App login and runs a sandboxed session's
+	// gated devctl commands, which read the keychain the sandbox closes.
 	Devctl string `yaml:"devctl"`
-}
-
-// SandboxMask is one masked environment variable and the hosts its real
-// value goes to.
-type SandboxMask struct {
-	Name  string   `yaml:"name"`
-	Hosts []string `yaml:"hosts"`
 }
 
 // Scan configures the transcript value scanner: beekeeper scan index
@@ -1448,8 +1441,6 @@ func (r *Role) defaults(home string) {
 // GitHubHosts are the hosts the GitHub token goes to.
 var GitHubHosts = []string{"github.com", "api.github.com", "uploads.github.com"}
 
-var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-
 func (s *Sandbox) validate() error {
 	for key, ps := range map[string][]string{"sandbox.allowRead": s.AllowRead, "sandbox.allowWrite": s.AllowWrite} {
 		for _, p := range ps {
@@ -1458,14 +1449,15 @@ func (s *Sandbox) validate() error {
 			}
 		}
 	}
+	if s.ProxyPort < 0 || s.ProxyPort > 65535 {
+		return fmt.Errorf("sandbox.proxyPort: %d is no TCP port", s.ProxyPort)
+	}
 	for _, d := range s.Domains {
 		if openLoopback(d) {
 			return fmt.Errorf("sandbox.domains: %q opens every loopback listener on the host (other sessions' port-forwards, local servers) to the sandbox: name a lab's API server by its port, 127.0.0.1:<port>", d)
 		}
-	}
-	for i, m := range s.Mask {
-		if !envName.MatchString(m.Name) || len(m.Hosts) == 0 {
-			return fmt.Errorf("sandbox.mask[%d]: want an environment variable's name and at least one host", i)
+		if host, port, err := net.SplitHostPort(d); err == nil && Loopback(host) && port == strconv.Itoa(s.ProxyPort) {
+			return fmt.Errorf("sandbox.domains: %q is the egress proxy itself (sandbox.proxyPort)", d)
 		}
 	}
 	return nil
@@ -1500,8 +1492,8 @@ func (s *Sandbox) defaults(home string) {
 			ps[i] = filepath.Clean(homePath(home, ps[i]))
 		}
 	}
-	if s.Mask == nil {
-		s.Mask = []SandboxMask{{Name: "GH_TOKEN", Hosts: GitHubHosts}, {Name: "GITHUB_TOKEN", Hosts: GitHubHosts}}
+	if s.ProxyPort == 0 {
+		s.ProxyPort = 3190
 	}
 	if s.Devctl == "" {
 		s.Devctl = "devctl"

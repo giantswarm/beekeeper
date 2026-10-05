@@ -5,9 +5,9 @@
 //
 // The home directory is denied and only what a session needs is
 // re-allowed, so a credential path nobody listed stays unreadable. Egress
-// is an allow list, and the GitHub token is masked: commands see a
-// placeholder, the sandbox proxy puts the real token into requests to
-// GitHub only (github.go).
+// goes through beekeeper's egress proxy alone, which holds it to an allow
+// list and sets the GitHub token's header itself, so no command ever holds
+// the token (egress.go, github.go).
 package sandbox
 
 import (
@@ -56,6 +56,10 @@ func Path() string { return filepath.Join(ManagedDir(), "managed-settings.d", Dr
 type Policy struct {
 	// Home is denied for reading, apart from Read and Write.
 	Home string
+	// Runtime is the user's runtime directory, denied for reading like
+	// Home (the container runtime's registry login, the agents' sockets),
+	// apart from the egress proxy's directory.
+	Runtime string
 	// Read are the paths under Home that may be read.
 	Read []string
 	// Write are the paths that may be written, and read.
@@ -73,18 +77,17 @@ type Policy struct {
 	ToolWrite []string
 	// Domains are the hosts commands reach.
 	Domains []string
-	// Mask are the environment variables commands see as a placeholder.
-	Mask []config.SandboxMask
+	// ProxyPort is the egress proxy's port on the host's loopback.
+	ProxyPort int
 	// Exe is the beekeeper binary the policy's hook runs.
 	Exe string
 	// Vars are the environment variables the policy sets besides Env: a
 	// symlinked config's target, which the sandbox mounts without the link,
-	// and gh's and git's GitHub login.
+	// the egress proxy's CA and gh's and git's way to GitHub.
 	Vars map[string]string
-	// GitHub is the directory of the masked GitHub token files (GitHubDir),
-	// "" without a runtime directory. Commands read them masked; the file
-	// tools, which run outside the sandbox, never read them.
-	GitHub string
+	// Egress is the directory of the egress proxy's CA and gh's login
+	// (EgressDir), "" without a runtime directory.
+	Egress string
 }
 
 // Paths are where beekeeper and its configuration live, and the build
@@ -94,7 +97,7 @@ type Paths struct {
 	// ScanDir is the value scanner's key and index, which no session reads.
 	ScanDir string
 	// RuntimeDir is the user's runtime directory ($XDG_RUNTIME_DIR), where
-	// the broker keeps the masked GitHub token.
+	// the broker keeps the egress proxy's CA.
 	RuntimeDir string
 }
 
@@ -110,7 +113,8 @@ func New(cfg config.Sandbox, e Paths) Policy {
 		xdg = filepath.Join(e.Home, ".config")
 	}
 	p := Policy{
-		Home: e.Home,
+		Home:    e.Home,
+		Runtime: e.RuntimeDir,
 		Read: append([]string{
 			filepath.Dir(e.Exe), filepath.Dir(e.ConfigFile),
 			// the harness's state a session reads back: its transcripts and
@@ -125,16 +129,17 @@ func New(cfg config.Sandbox, e Paths) Policy {
 		Harness:   filepath.Clean(claude),
 		ToolWrite: []string{filepath.Join(claude, "projects", "*", "memory"), filepath.Join(claude, "plans")},
 		Domains:   append([]string{"github.com", "*.github.com", "*.githubusercontent.com"}, cfg.Domains...),
-		Mask:      cfg.Mask,
+		ProxyPort: cfg.ProxyPort,
 		Exe:       e.Exe,
-		GitHub:    GitHubDir(e.RuntimeDir),
+		Egress:    EgressDir(e.RuntimeDir),
 	}
 	// the home directory is empty inside the sandbox but for the paths it
 	// mounts, at their targets: a symlinked config is named by its target,
 	// a symlinked config directory (git's ignore and attributes) as well
 	p.Vars = map[string]string{Env: "1"}
-	if p.GitHub != "" {
-		maps.Copy(p.Vars, githubVars(p.GitHub, e.Exe))
+	if p.Egress != "" {
+		p.Read = append(p.Read, p.Egress)
+		maps.Copy(p.Vars, egressVars(p.Egress))
 	}
 	for name, path := range map[string]string{"BEEKEEPER_CONFIG": e.ConfigFile, "GIT_CONFIG_GLOBAL": filepath.Join(e.Home, ".gitconfig"), "XDG_CONFIG_HOME": xdg} {
 		if r, err := filepath.EvalSymlinks(path); err == nil && r != filepath.Clean(path) {
@@ -159,10 +164,6 @@ func New(cfg config.Sandbox, e Paths) Policy {
 
 // Settings is the policy as Claude Code managed settings.
 func (p Policy) Settings() map[string]any {
-	envVars := make([]map[string]any, 0, len(p.Mask))
-	for _, m := range p.Mask {
-		envVars = append(envVars, mask(map[string]any{"name": m.Name}, m.Hosts))
-	}
 	return map[string]any{
 		"env": p.Vars,
 		"sandbox": map[string]any{
@@ -171,7 +172,7 @@ func (p Policy) Settings() map[string]any {
 			"allowUnsandboxedCommands": false,
 			"autoAllowBashIfSandboxed": true,
 			"filesystem": map[string]any{
-				"denyRead":                  append([]string{p.setting(p.Home)}, p.settings(p.Deny)...),
+				"denyRead":                  append(p.settings(p.closed()), p.settings(p.Deny)...),
 				"denyWrite":                 append(p.settings(p.Deny), p.setting(p.Harness)),
 				"allowRead":                 p.settings(p.Read),
 				"allowWrite":                p.settings(p.Write),
@@ -181,9 +182,11 @@ func (p Policy) Settings() map[string]any {
 				"allowedDomains":          p.Domains,
 				"allowManagedDomainsOnly": true,
 				"strictAllowlist":         true,
-				"tlsTerminate":            map[string]any{},
+				// one port for both: Claude Code bridges its HTTP and SOCKS5
+				// proxies to beekeeper's, and runs no proxy of its own
+				"httpProxyPort":  p.ProxyPort,
+				"socksProxyPort": p.ProxyPort,
 			},
-			"credentials": p.credentials(envVars),
 		},
 		"hooks": map[string]any{
 			"PreToolUse": []map[string]any{{
@@ -194,38 +197,22 @@ func (p Policy) Settings() map[string]any {
 	}
 }
 
-// mask is a credentials entry masked towards hosts: commands see a
-// placeholder, the proxy puts the real value into requests to hosts.
-func mask(entry map[string]any, hosts []string) map[string]any {
-	entry["mode"], entry["injectHosts"] = "mask", hosts
-	return entry
-}
-
-// credentials are the masked variables and, with a runtime directory, the
-// masked GitHub token files.
-func (p Policy) credentials(envVars []map[string]any) map[string]any {
-	c := map[string]any{"envVars": envVars}
-	if p.GitHub != "" {
-		c["files"] = []map[string]any{
-			mask(map[string]any{"path": filepath.Join(p.GitHub, GitHubHosts), "extract": githubHostsExtract}, config.GitHubHosts),
-			mask(map[string]any{"path": filepath.Join(p.GitHub, GitHubGit), "extract": githubGitExtract}, []string{"github.com"}),
-		}
-	}
-	return c
-}
-
-// githubVars point gh at the masked login and git at GitHub over HTTPS with
-// beekeeper's credential helper: the sandbox has no SSH agent and its
-// proxy carries HTTPS only. The helper list is emptied first, so no
-// helper of the person's answers before it.
-func githubVars(dir, exe string) map[string]string {
+// egressVars point the clients that reach GitHub at the egress proxy's CA,
+// gh at a login the proxy completes, and git at GitHub over HTTPS: the
+// sandbox has no SSH agent, and the proxy authenticates git's first
+// request, so no credential helper of the person's runs for GitHub.
+func egressVars(dir string) map[string]string {
 	kv := [][2]string{
 		{"url.https://github.com/.insteadOf", "git@github.com:"},
 		{"url.https://github.com/.insteadOf", "ssh://git@github.com/"},
 		{"credential.https://github.com.helper", ""},
-		{"credential.https://github.com.helper", "!'" + strings.ReplaceAll(exe, "'", `'\''`) + "' sandbox git-credential"},
 	}
-	v := map[string]string{"GH_CONFIG_DIR": dir, "GIT_CONFIG_COUNT": strconv.Itoa(len(kv))}
+	bundle := filepath.Join(dir, EgressBundle)
+	v := map[string]string{
+		"GH_CONFIG_DIR": filepath.Join(dir, EgressGH), "GIT_CONFIG_COUNT": strconv.Itoa(len(kv)),
+		"SSL_CERT_FILE": bundle, "GIT_SSL_CAINFO": bundle, "CURL_CA_BUNDLE": bundle, "REQUESTS_CA_BUNDLE": bundle,
+		"NODE_EXTRA_CA_CERTS": filepath.Join(dir, EgressCA),
+	}
 	for i, e := range kv {
 		v["GIT_CONFIG_KEY_"+strconv.Itoa(i)], v["GIT_CONFIG_VALUE_"+strconv.Itoa(i)] = e[0], e[1]
 	}
@@ -287,19 +274,24 @@ func (p Policy) Writable(path, cwd string) bool {
 }
 
 // denied reports whether the resolved path lies under a path of Deny,
-// which holds inside every allow, or under the GitHub token's directory,
-// which commands read masked and the file tools not at all.
+// which holds inside every allow.
 func (p Policy) denied(path string) bool {
-	if p.GitHub != "" && under(path, resolve(p.GitHub, "")) {
-		return true
-	}
 	return slices.ContainsFunc(p.Deny, func(d string) bool { return under(path, resolve(d, "")) })
 }
 
-// listed reports whether the resolved path lies outside the home directory
+// closed are the directories denied for reading apart from Read and
+// Write: the home directory and the runtime directory.
+func (p Policy) closed() []string {
+	if p.Runtime == "" {
+		return []string{p.Home}
+	}
+	return []string{p.Home, filepath.Clean(p.Runtime)}
+}
+
+// listed reports whether the resolved path lies outside the closed directories
 // or under a path of Read or Write.
 func (p Policy) listed(path string) bool {
-	return !under(path, resolve(p.Home, "")) ||
+	return !slices.ContainsFunc(p.closed(), func(d string) bool { return under(path, resolve(d, "")) }) ||
 		slices.ContainsFunc(append(slices.Clone(p.Read), p.Write...), func(r string) bool { return under(path, resolve(r, "")) })
 }
 
