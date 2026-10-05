@@ -178,6 +178,7 @@ agents:                     # the hand-over of registered agents
   relayAt: 400k             # watch says HANDOVER DUE once an agent's context reaches this; default: supervisor.relayAt
   noteWait: 3m              # agents handover waits this long for the agent's note
   staleAfter: 24h           # the doctor takes an idle agent with no CLI running off the roster after this, unless kept (agents keep, a timer that wakes it); 0: never
+  archiveAgreement: ""      # where the person agreed that finished workers' desktop sessions are archived without asking, never their own (quoted to the steward, which confirms each with agents archivable); empty: no steward is asked to archive
   autoResume: false         # the watch resumes a parked agent (agents park --on) with what settled its note or pull request; false: it says AGENT RESUMABLE, agents resume does it by hand
   shell:                    # the agent shell's prelude, written by beekeeper hook sessionstart before each Bash command
     unalias: [grep, find, ls, cp, mv, rm]   # aliases and shell functions removed, so each runs the tool on PATH; []: none

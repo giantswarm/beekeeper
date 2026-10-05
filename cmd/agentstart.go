@@ -564,7 +564,7 @@ func (a *app) importSession(ctx context.Context, d desk, id, follow string) (str
 	if d.urgent != nil && d.urgent() {
 		away = d.turnWait() + awayPoll
 	}
-	prev, err := a.showBriefly(ctx, d, resumeURL(id), "local_"+id, follow, running, away)
+	prev, err := a.showBriefly(ctx, d, resumeURL(id), "local_"+id, follow, running, away, nil)
 	if err != nil {
 		return "", fmt.Errorf("importing %s into the desktop: %w", id, err)
 	}
@@ -575,14 +575,20 @@ func (a *app) importSession(ctx context.Context, d desk, id, follow string) (str
 // once it does, shows the session the window showed before again and
 // returns it; empty when there was none to go back to, or it was host or
 // follow. A running desktop gets the link only once d takes it, waiting up
-// to away: errDesktopInUse or errTyping when it did not.
-func (a *app) showBriefly(ctx context.Context, d desk, url, host, follow string, running bool, away time.Duration) (string, error) {
+// to away: errDesktopInUse or errTyping when it did not. ready, unless nil,
+// is asked right before the link opens, and its error ends the show.
+func (a *app) showBriefly(ctx context.Context, d desk, url, host, follow string, running bool, away time.Duration, ready func() error) (string, error) {
 	var prev string
 	if running {
 		if err := d.await(ctx, away, nil); err != nil {
 			return "", err
 		}
 		prev = awaitFocusOff(ctx, a.cfg.Claude.DesktopLog, host, settleWait)
+	}
+	if ready != nil {
+		if err := ready(); err != nil {
+			return "", err
+		}
 	}
 	if err := plat.Opener.Open(ctx, url, running); err != nil {
 		return "", err
@@ -663,20 +669,22 @@ func (a *app) reopenSession(ctx context.Context, arg string) error {
 	if err != nil {
 		return a.reopenMissed(name, fmt.Errorf("reopening %s in the desktop: %w", id, err))
 	}
-	// The standby watch resumes a role's holder headless while this reopen
-	// waits for the person to leave the desktop's window: the desktop warms
-	// no second CLI beside that turn, whose own reopen follows it. That turn
-	// keeps the role's watch and may not end before the next relay, so a
-	// session the desktop never imported gets its row and title now.
 	if u := wakeRunning(ctx, id); u != "" {
-		if _, ok := claude.ReadRecord(a.cfg, "local_"+id); ok {
-			_, err := fmt.Fprintf(a.out, "reopen: %s was resumed headless meanwhile (%s), whose reopen follows its turn\n", id, u)
-			return err
+		return a.yieldToWake(ctx, d, id, name, u)
+	}
+	// The show waits again for the person's typing to pause: a resume that
+	// started meanwhile is looked for right before it.
+	ready := func() error {
+		if u := wakeRunning(ctx, id); u != "" {
+			return wakeStarted(u)
 		}
-		return a.importBesideWake(ctx, d, id, name, u)
+		return nil
 	}
 	shownAt := time.Now()
-	if _, err := a.showBriefly(ctx, d, url, "local_"+id, "", true, reopenAwayWait); err != nil {
+	if _, err := a.showBriefly(ctx, d, url, "local_"+id, "", true, reopenAwayWait, ready); err != nil {
+		if u, ok := errors.AsType[wakeStarted](err); ok {
+			return a.yieldToWake(ctx, d, id, name, string(u))
+		}
 		return a.reopenMissed(name, fmt.Errorf("reopening %s in the desktop: %w", id, err))
 	}
 	if _, err := fmt.Fprintf(a.out, "reopen: showed local_%s in the desktop, which warms its CLI\n", id); err != nil {
@@ -699,6 +707,26 @@ func (a *app) reopenSession(ctx context.Context, arg string) error {
 		_, err = fmt.Fprintln(a.out, "reopen: "+line)
 	}
 	return err
+}
+
+// wakeStarted is the wake unit whose headless turn started before a reopen
+// showed its session.
+type wakeStarted string
+
+func (u wakeStarted) Error() string { return "its wake turn " + string(u) + " runs" }
+
+// yieldToWake ends the reopen of session id, whose wake turn runs in unit
+// u: the standby watch resumed a role's holder headless while the reopen
+// waited for the person to leave the desktop's window, and the desktop
+// warms no second CLI beside that turn, whose own reopen follows it. That
+// turn keeps the role's watch and may not end before the next relay, so a
+// session the desktop never imported gets its row and title now.
+func (a *app) yieldToWake(ctx context.Context, d desk, id, name, u string) error {
+	if _, ok := claude.ReadRecord(a.cfg, "local_"+id); ok {
+		_, err := fmt.Fprintf(a.out, "reopen: %s was resumed headless meanwhile (%s), whose reopen follows its turn\n", id, u)
+		return err
+	}
+	return a.importBesideWake(ctx, d, id, name, u)
 }
 
 // importBesideWake imports session id, which the desktop never imported,

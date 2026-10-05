@@ -566,6 +566,16 @@ type Archive struct {
 	rest rest
 }
 
+// Decline is a steward's answer to an archive request that archived
+// nothing: its desktop session, when, and the first line of its reply.
+type Decline struct {
+	Host string    `json:"host"`
+	At   time.Time `json:"at"`
+	Why  string    `json:"why"`
+
+	rest rest
+}
+
 // Report is one run of the scheduled status reporter: the session the
 // standby watch started for an interval's slot, until it posted, timed out
 // or failed to start.
@@ -695,6 +705,12 @@ type State struct {
 	// ArchivesSeeded says the doctor owed the archives of the finished
 	// workers whose desktop CLI ran on before it kept Archives.
 	ArchivesSeeded bool `json:"archivesSeeded,omitempty"`
+	// FinishedSeeded says the doctor owed the archives of all finished
+	// workers whose desktop record stayed unarchived, a CLI running or not.
+	FinishedSeeded bool `json:"finishedSeeded,omitempty"`
+	// Declines are the stewards that declined an archive request, which
+	// the doctor asks for none for a while.
+	Declines []Decline `json:"declines,omitempty"`
 	// BudgetETag makes the budget probe a conditional request (a 304
 	// costs no budget).
 	BudgetETag string `json:"budgetETag,omitempty"`

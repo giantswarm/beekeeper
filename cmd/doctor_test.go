@@ -129,11 +129,14 @@ func TestNoteFaults(t *testing.T) {
 	}
 }
 
-// One steward's turn archives a batch, its own session last as "self".
+// One steward's turn archives a batch, its own session last as "self",
+// under the person's agreement and after agents archivable confirmed it.
 func TestArchiveRequest(t *testing.T) {
-	msg := archiveRequest(steward{host: "local_y"}, []string{"local_x", "local_y", "local_z"}, "beekeeper doctor")
-	if !strings.Contains(msg, `"local_x", "local_z", "self"`) || !strings.Contains(msg, "archive_session") {
-		t.Errorf("request: %q", msg)
+	msg := archiveRequest(steward{host: "local_y"}, []string{"local_x", "local_y", "local_z"}, "beekeeper doctor", "the standing directive in ~/.claude/CLAUDE.md")
+	for _, want := range []string{`"local_x", "local_z", "self"`, "archive_session", "the standing directive in ~/.claude/CLAUDE.md", "beekeeper agents archivable local_x local_y local_z", "never for a session they started"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("request lacks %q: %q", want, msg)
+		}
 	}
 }
 

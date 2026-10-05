@@ -389,3 +389,77 @@ func OpenBackground(path string) ([]Background, error) {
 	}
 	return out, nil
 }
+
+// Answer is what a session did in the turns it ran since a message to it:
+// its tool calls, in order, and the last text it wrote.
+type Answer struct {
+	Calls []AnswerCall
+	Text  string
+}
+
+// AnswerCall is one tool call of an Answer: the tool, its input and its
+// result, Done once the result came.
+type AnswerCall struct {
+	Name   string
+	Input  json.RawMessage
+	Result string
+	Error  bool
+	Done   bool
+}
+
+// ReadAnswer reads from the end of the transcript at path what its session
+// did from since on.
+func ReadAnswer(path string, since time.Time) (Answer, error) {
+	f, err := os.Open(filepath.Clean(path))
+	if err != nil {
+		return Answer{}, err
+	}
+	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	if err != nil {
+		return Answer{}, err
+	}
+	off := max(fi.Size()-tailWindow, 0)
+	if _, err := f.Seek(off, io.SeekStart); err != nil {
+		return Answer{}, err
+	}
+	var a Answer
+	at := map[string]int{}
+	r := bufio.NewReaderSize(f, 1<<20)
+	for first := off > 0; ; first = false {
+		line, err := r.ReadBytes('\n')
+		if !first {
+			a.add(bytes.TrimSpace(line), since, at)
+		}
+		if err == io.EOF {
+			return a, nil
+		}
+		if err != nil {
+			return a, err
+		}
+	}
+}
+
+// add takes one transcript line into a, when written from since on; at
+// indexes a's calls by their tool_use id.
+func (a *Answer) add(line []byte, since time.Time, at map[string]int) {
+	var e entry
+	var blocks []activityBlock
+	if json.Unmarshal(line, &e) != nil || e.Timestamp.Before(since) || json.Unmarshal(e.Message.Content, &blocks) != nil {
+		return
+	}
+	for _, b := range blocks {
+		switch {
+		case e.Type == "assistant" && b.Type == blockText && strings.TrimSpace(b.Text) != "":
+			a.Text = strings.TrimSpace(b.Text)
+		case e.Type == "assistant" && b.Type == blockToolUse:
+			at[b.ID] = len(a.Calls)
+			a.Calls = append(a.Calls, AnswerCall{Name: b.Name, Input: b.Input})
+		case b.Type == blockToolResult:
+			if i, ok := at[b.ToolUseID]; ok {
+				c := &a.Calls[i]
+				c.Result, c.Error, c.Done = resultText(b.Content), b.IsError, true
+			}
+		}
+	}
+}

@@ -654,7 +654,7 @@ func (a *app) newWatcher(standby, keep bool) *watcher {
 	if keep {
 		w.dues = relayDues{}
 	}
-	w.stand = standbyWatch{send: a.peerSend, open: plat.Opener.Open, succeed: a.succeedFromWatch, revive: a.reviveFromWatch, turning: unitsTurning}
+	w.stand = standbyWatch{send: a.peerSend, open: plat.Opener.Open, succeed: a.succeedFromWatch, revive: a.reviveFromWatch, turning: unitsTurning, reopening: unitsReopening}
 	if me, err := a.caller(); keep && err == nil {
 		w.markFile = "seen.watch." + fileKey(me) + ".json"
 		var m watchMark
@@ -1630,7 +1630,7 @@ func (w *watcher) supervisorGone(ctx context.Context, st *state.State, sessions 
 		w.stand.liveTerm, w.stand.liveAt = key, w.now
 		w.upAgain(supervisorRole, s.Party)
 	}
-	if !sv.down() || relayPending(st, st.SupervisorRole(), w.now) || w.firstTurn(ctx, s.Party) {
+	if !sv.down() || relayPending(st, st.SupervisorRole(), w.now) || w.firstTurn(ctx, st, s.Party) {
 		switch {
 		case s == nil:
 			w.gap = ""

@@ -48,7 +48,10 @@ type standbyWatch struct {
 	// turning reports whether a unit of beekeeper's start or wake of
 	// session id runs its headless turn (unitsTurning); nil: none does.
 	turning func(ctx context.Context, id string) bool
-	busy    atomic.Bool
+	// reopening reports whether a unit of beekeeper's start or wake of
+	// session id runs its turn or its reopen (turningUnits); nil: none does.
+	reopening func(ctx context.Context, id string) bool
+	busy      atomic.Bool
 	// guideGap is the term of the gone guide this watch said.
 	guideGap string
 	// starting is the role whose successor is being started, one at a time;
@@ -139,10 +142,23 @@ func (a *app) succeedFromWatch(ctx context.Context, rl role, from state.Party) (
 // beekeeper's start or wake, before its CLI shows among the sessions. The
 // reopen after the turn is none: it waits while the desktop's window has
 // the focus, up to reopenAwayWait, so the holder's restart grace covers it
-// and past the grace the standby resumes the holder headless.
-func (w *watcher) firstTurn(ctx context.Context, p state.Party) bool {
-	return p.Session != "" && w.stand.turning != nil && w.stand.turning(ctx, p.Session)
+// and past the grace the standby resumes the holder headless; but a reopen
+// of a holder that asked for a desktop turn (agents desktop) goes ahead at
+// once, and counts.
+func (w *watcher) firstTurn(ctx context.Context, st *state.State, p state.Party) bool {
+	if p.Session == "" {
+		return false
+	}
+	if w.stand.turning != nil && w.stand.turning(ctx, p.Session) {
+		return true
+	}
+	i := agentOfSession(st, p.Session)
+	return i >= 0 && !st.Agents[i].DesktopTurn.IsZero() && w.stand.reopening != nil && w.stand.reopening(ctx, p.Session)
 }
+
+// unitsReopening reports whether a start or wake unit of session id runs
+// its turn or its reopen.
+func unitsReopening(ctx context.Context, id string) bool { return len(turningUnits(ctx, id)) > 0 }
 
 // unitsTurning reports whether a start or wake unit of session id is
 // active or starting: its headless turn runs.
@@ -166,7 +182,7 @@ func sessionUnits(ctx context.Context, id string, stopping bool) []string {
 func (w *watcher) guideGone(ctx context.Context, st *state.State, sessions []*claude.Session) {
 	r := guideRole.get(st)
 	sv := readHolder(r, sessions, w.now, w.cfg.Guide.RestartGrace.Duration)
-	if !sv.down() || relayPending(st, r, w.now) || w.firstTurn(ctx, r.Holder.Party) {
+	if !sv.down() || relayPending(st, r, w.now) || w.firstTurn(ctx, st, r.Holder.Party) {
 		if sv.live {
 			w.stand.guideGap = ""
 			w.upAgain(guideRole, r.Holder.Party)
