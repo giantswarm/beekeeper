@@ -109,6 +109,11 @@ func New(cfg config.Sandbox, e Paths) Policy {
 		*ps = slices.DeleteFunc(*ps, func(q string) bool { return q == "" })
 		for i, q := range *ps {
 			(*ps)[i] = filepath.Clean(q)
+			// the sandbox mounts what a path resolves to: a symlinked
+			// config or checkout is listed at its target too
+			if r, err := filepath.EvalSymlinks(q); err == nil && r != (*ps)[i] {
+				*ps = append(*ps, r)
+			}
 		}
 		slices.Sort(*ps)
 		*ps = slices.Compact(*ps)
