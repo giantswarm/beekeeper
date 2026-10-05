@@ -127,7 +127,7 @@ machine has a supervisor at all times: the role moves to a successor by relay an
   fires. A page has an owning session within one tick: the session that changed the area,
   otherwise a worker started for it, which records it with `beekeeper alerts own`; `PAGE UNOWNED`
   is a page nobody took. A page caused by a teammate's resource on our installation is
-  contained at once by a worker, reversibly (suspend, scale to 0, revert), which tells the owner
+  contained at once by a worker, reversibly (suspend, scale to 0), which tells the owner
   and notifies the guide. Another team's alert in its own area is noted in the tick and left alone.
   A `RUNAWAY` session is told its figure in one message; a `LANE STALLED` lane gets its absent
   place checked with that place's session and dropped (`lanes drop`) only when that merge will not
