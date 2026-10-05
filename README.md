@@ -451,6 +451,9 @@ same file passed to `claude --settings` holds one session to it, to try a change
   listed stay unreadable. Only the managed settings' read paths count.
 - **Writes:** the session's working directory (when it is readable itself), the temporary directory,
   beekeeper's state, the build slots and `sandbox.allowWrite`.
+- **The scanner's key and index** (`scan/` in beekeeper's state) are denied for reading and writing
+  inside the writable state directory: the narrower deny holds, so no session reads the fingerprint key
+  or rewrites the index the redaction matches against.
 - **Egress:** GitHub and `sandbox.domains`, nothing else, with no prompt to widen it.
 - **The GitHub token:** `GH_TOKEN` and `GITHUB_TOKEN` (`sandbox.mask`) are masked: commands see a
   placeholder, and the sandbox proxy puts the real value into requests to GitHub's hosts only.

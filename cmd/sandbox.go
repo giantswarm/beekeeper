@@ -38,6 +38,8 @@ Anthropic's sandbox runtime (bubblewrap on Linux, Seatbelt on macOS):
     config and sandbox.allowRead are re-allowed;
   - writes: the session's working directory, the temporary directory,
     beekeeper's state, the build slots and sandbox.allowWrite;
+  - denied inside them, for reading and writing: the value scanner's key
+    and index (scan/ in the state directory);
   - egress: GitHub and sandbox.domains, nothing else;
   - the GitHub token (sandbox.mask): commands see a placeholder, the
     sandbox proxy puts the real one into requests to GitHub only;
@@ -337,5 +339,5 @@ func (a *app) sandboxPolicy() sandbox.Policy {
 	home, _ := os.UserHomeDir()
 	exe, _ := os.Executable()
 	cfgFile, _ := config.Path(a.cfgPath)
-	return sandbox.New(a.cfg.Sandbox, sandbox.Paths{Home: home, ConfigFile: cfgFile, StateDir: a.cfg.StateDir, LeaseDir: a.cfg.LeaseDir, SlotDir: a.cfg.Memcap.SlotDir, Exe: exe})
+	return sandbox.New(a.cfg.Sandbox, sandbox.Paths{Home: home, ConfigFile: cfgFile, StateDir: a.cfg.StateDir, LeaseDir: a.cfg.LeaseDir, SlotDir: a.cfg.Memcap.SlotDir, Exe: exe, ScanDir: a.scanDir()})
 }

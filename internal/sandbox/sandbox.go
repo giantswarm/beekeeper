@@ -58,6 +58,9 @@ type Policy struct {
 	Read []string
 	// Write are the paths that may be written, and read.
 	Write []string
+	// Deny are paths inside Write that may be neither read nor written:
+	// the value scanner's key and index in beekeeper's state.
+	Deny []string
 	// ToolWrite are the paths only the harness's file tools may write:
 	// the sessions' memory and plans, never a command.
 	ToolWrite []string
@@ -73,6 +76,8 @@ type Policy struct {
 // slots beekeeper run takes.
 type Paths struct {
 	Home, ConfigFile, StateDir, LeaseDir, SlotDir, Exe string
+	// ScanDir is the value scanner's key and index, which no session reads.
+	ScanDir string
 }
 
 // New is the policy for cfg: beekeeper's own paths and GitHub, and the
@@ -94,12 +99,13 @@ func New(cfg config.Sandbox, e Paths) Policy {
 			filepath.Join(e.Home, ".gitconfig"), filepath.Join(e.Home, ".config", "git"),
 		}, cfg.AllowRead...),
 		Write:     append([]string{e.StateDir, e.LeaseDir, e.SlotDir}, cfg.AllowWrite...),
+		Deny:      []string{e.ScanDir},
 		ToolWrite: []string{filepath.Join(claude, "projects", "*", "memory"), filepath.Join(claude, "plans")},
 		Domains:   append([]string{"github.com", "*.github.com", "*.githubusercontent.com"}, cfg.Domains...),
 		Mask:      cfg.Mask,
 		Exe:       e.Exe,
 	}
-	for _, ps := range []*[]string{&p.Read, &p.Write, &p.ToolWrite} {
+	for _, ps := range []*[]string{&p.Read, &p.Write, &p.Deny, &p.ToolWrite} {
 		*ps = slices.DeleteFunc(*ps, func(q string) bool { return q == "" })
 		for i, q := range *ps {
 			(*ps)[i] = filepath.Clean(q)
@@ -124,7 +130,8 @@ func (p Policy) Settings() map[string]any {
 			"allowUnsandboxedCommands": false,
 			"autoAllowBashIfSandboxed": true,
 			"filesystem": map[string]any{
-				"denyRead":                  []string{p.setting(p.Home)},
+				"denyRead":                  append([]string{p.setting(p.Home)}, p.settings(p.Deny)...),
+				"denyWrite":                 p.settings(p.Deny),
 				"allowRead":                 p.settings(p.Read),
 				"allowWrite":                p.settings(p.Write),
 				"allowManagedReadPathsOnly": true,
@@ -177,7 +184,7 @@ func (p Policy) settings(paths []string) []string {
 // directory, or under a path of Read or Write, or writable.
 func (p Policy) Readable(path, cwd string) bool {
 	path = resolve(path, cwd)
-	return p.listed(path) || p.Writable(path, cwd)
+	return !p.denied(path) && (p.listed(path) || p.Writable(path, cwd))
 }
 
 // Writable reports whether a file tool may write path: under a path of
@@ -186,6 +193,9 @@ func (p Policy) Readable(path, cwd string) bool {
 // directory or a credential's).
 func (p Policy) Writable(path, cwd string) bool {
 	path = resolve(path, cwd)
+	if p.denied(path) {
+		return false
+	}
 	if under(path, resolve(os.TempDir(), "")) || slices.ContainsFunc(p.Write, func(w string) bool { return under(path, resolve(w, "")) }) {
 		return true
 	}
@@ -195,6 +205,12 @@ func (p Policy) Writable(path, cwd string) bool {
 		}
 	}
 	return slices.ContainsFunc(p.ToolWrite, func(w string) bool { return underGlob(path, w) })
+}
+
+// denied reports whether the resolved path lies under a path of Deny,
+// which holds inside every allow.
+func (p Policy) denied(path string) bool {
+	return slices.ContainsFunc(p.Deny, func(d string) bool { return under(path, resolve(d, "")) })
 }
 
 // listed reports whether the resolved path lies outside the home directory
