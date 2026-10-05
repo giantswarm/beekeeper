@@ -151,7 +151,7 @@ func (f timerFire) message() string {
 // settleTimers fires the auto timers of st due at now: a plain one at its
 // time, a conditional one once held says it holds and, past its Until, as
 // timed out, or closed unfired when it expires; a fired or expired timer is
-// closed. A check that found the condition not holding is recorded. It
+// closed, a repeating one re-armed at its next time. A check that found the condition not holding is recorded. It
 // returns the lines, events and fires, and whether it changed st.
 func settleTimers(st *state.State, held map[int]bool, now time.Time) ([]string, []state.Event, []timerFire, bool) {
 	var lines []string
@@ -194,6 +194,11 @@ func settleTimers(st *state.State, held map[int]bool, now time.Time) ([]string, 
 			act = fmt.Sprintf("waking %q: ", t.Wake)
 		case t.Run != "":
 			act = fmt.Sprintf("running `%s`: ", truncate(t.Run, 80))
+		}
+		if t.Repeat != "" {
+			t.Due, t.Checked = t.Next(now), time.Time{}
+			act += "next " + clock(now, t.Due) + ": "
+			kept = append(kept, t)
 		}
 		lines = append(lines, fmt.Sprintf("TIMER: #%d, %s: %s%s", t.ID, f.reason, act, truncate(t.What, 200)))
 		evs = append(evs, event(watchParty, "timer.fired", "#%d %s: %s%s", t.ID, f.reason, act, t.What))
