@@ -41,8 +41,10 @@ Anthropic's sandbox runtime (bubblewrap on Linux, Seatbelt on macOS):
   - denied inside them, for reading and writing: the value scanner's key
     and index (scan/ in the state directory);
   - egress: GitHub and sandbox.domains, nothing else;
-  - the GitHub token (sandbox.mask): commands see a placeholder, the
-    sandbox proxy puts the real one into requests to GitHub only;
+  - the GitHub token: the broker keeps devctl's App token in two masked
+    files under $XDG_RUNTIME_DIR (gh's login and git's credential), and
+    sandbox.mask masks variables; commands see a placeholder, the sandbox
+    proxy puts the real token into requests to GitHub only;
   - no command leaves the sandbox, and a session where it cannot start
     does not start.
 
@@ -53,7 +55,8 @@ lists in every session the policy sets ` + sandbox.Env + ` in.
 The sandbox blocks every Unix socket on Linux, the user bus included, so a
 sandboxed beekeeper run asks the host's broker (beekeeper sandbox broker,
 the unit beekeeper-sandbox.service) for its capped scope; the command
-stays in the sandbox.`,
+stays in the sandbox. The gated devctl commands run on the host through the
+same broker.`,
 		Args: cobra.NoArgs,
 		PersistentPreRunE: func(*cobra.Command, []string) error {
 			return a.loadConfig()
@@ -103,7 +106,7 @@ the installed policy is the current one.`,
 			return err
 		},
 	})
-	c.AddCommand(a.sandboxBrokerCmd(), sandboxScopeCmd())
+	c.AddCommand(a.sandboxBrokerCmd(), sandboxScopeCmd(), sandboxGitCredentialCmd())
 	return c
 }
 
@@ -167,7 +170,19 @@ output, never a value, goes back through the spool. A consumer (copy --), the
 vault's setup and import run on the host only, by the person.
 
 A sandboxed beekeeper lease kubeconfig runs here as well, where kind reaches
-the container runtime: for the session that holds the lab's lease only.`,
+the container runtime: for the session that holds the lab's lease only.
+
+The broker keeps the sandboxed sessions' GitHub token: every five minutes it
+reads devctl's App user token (devctl auth exec, sandbox.devctl) into gh's
+login and git's Basic credential under $XDG_RUNTIME_DIR/beekeeper/github,
+rewritten in place, which the policy masks. A renewed token reaches a
+running session at its next command.
+
+A sandboxed session's gated devctl command (pr merge, pr wait, release
+promote, release wait, rollout wait) runs here as beekeeper gate, as the
+session and in its working directory, where devctl reads its keychain and
+the gate starts its units; its output and exit code go back through the
+spool once it ends.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if os.Getenv(sandbox.Env) != "" {
@@ -181,9 +196,11 @@ the container runtime: for the session that holds the lab's lease only.`,
 			if err != nil {
 				return err
 			}
+			go a.keepGitHub(ctx)
 			return sandbox.Serve(ctx, dir, "/proc", brokerTick, brokered(brokeredCap(plat.Capper), map[string]sandbox.Handler{
-				sandbox.OpSecret:     brokeredCall(exe, "/proc", brokeredSecretArgv),
-				sandbox.OpKubeconfig: brokeredCall(exe, "/proc", brokeredKubeconfigArgv),
+				sandbox.OpSecret:     brokeredCall(exe, "/proc", brokeredCallTimeout, nil, brokeredSecretArgv),
+				sandbox.OpKubeconfig: brokeredCall(exe, "/proc", brokeredCallTimeout, nil, brokeredKubeconfigArgv),
+				sandbox.OpGate:       brokeredCall(exe, "/proc", gateBrokeredTimeout, devctlPath(a.cfg.Sandbox.Devctl), brokeredGateArgv),
 			}))
 		},
 	}
@@ -289,10 +306,11 @@ func brokeredKubeconfigArgv(req sandbox.Request) ([]string, error) {
 }
 
 // brokeredCall runs a sandboxed session's beekeeper call, argv's for its
-// request, with exe on the host: as the session that holds the request, in
-// its working directory, marked sandbox.Brokered, so that the call holds
+// request, with exe on the host for up to timeout: as the session that
+// holds the request, in its working directory, with env on top of the
+// broker's environment, marked sandbox.Brokered, so that the call holds
 // itself to the sandbox's lists and asks no broker.
-func brokeredCall(exe, procDir string, argv func(sandbox.Request) ([]string, error)) sandbox.Handler {
+func brokeredCall(exe, procDir string, timeout time.Duration, env []string, argv func(sandbox.Request) ([]string, error)) sandbox.Handler {
 	return func(ctx context.Context, pid int, req sandbox.Request) (sandbox.Reply, error) {
 		args, err := argv(req)
 		if err != nil {
@@ -302,7 +320,7 @@ func brokeredCall(exe, procDir string, argv func(sandbox.Request) ([]string, err
 		if err != nil {
 			return sandbox.Reply{}, fmt.Errorf("the requester: %w", err)
 		}
-		ctx, cancel := context.WithTimeout(ctx, brokeredCallTimeout)
+		ctx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 		c := exec.CommandContext(ctx, exe, args...) //nolint:gosec // this binary, the arguments checked by argv
 		c.Dir = cwd
@@ -310,7 +328,7 @@ func brokeredCall(exe, procDir string, argv func(sandbox.Request) ([]string, err
 			k, _, _ := strings.Cut(kv, "=")
 			return k == sandbox.Env || k == sandbox.Brokered || slices.Contains(callerEnv, k)
 		})
-		c.Env = append(append(c.Env, caller...), sandbox.Env+"=1", sandbox.Brokered+"=1")
+		c.Env = append(append(append(c.Env, env...), caller...), sandbox.Env+"=1", sandbox.Brokered+"=1")
 		var out, errOut bytes.Buffer
 		c.Stdout, c.Stderr = &out, &errOut
 		err = c.Run()
@@ -373,5 +391,6 @@ func (a *app) sandboxPolicy() sandbox.Policy {
 	home, _ := os.UserHomeDir()
 	exe, _ := os.Executable()
 	cfgFile, _ := config.Path(a.cfgPath)
-	return sandbox.New(a.cfg.Sandbox, sandbox.Paths{Home: home, ConfigFile: cfgFile, StateDir: a.cfg.StateDir, LeaseDir: a.cfg.LeaseDir, SlotDir: a.cfg.Memcap.SlotDir, Exe: exe, ScanDir: a.scanDir()})
+	return sandbox.New(a.cfg.Sandbox, sandbox.Paths{Home: home, ConfigFile: cfgFile, StateDir: a.cfg.StateDir, LeaseDir: a.cfg.LeaseDir, SlotDir: a.cfg.Memcap.SlotDir, Exe: exe, ScanDir: a.scanDir(),
+		RuntimeDir: os.Getenv("XDG_RUNTIME_DIR")})
 }

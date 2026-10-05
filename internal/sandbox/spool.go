@@ -32,7 +32,7 @@ const (
 
 // Request is one ask of the broker.
 type Request struct {
-	// Op is OpPing, OpCapSlot, OpScope, OpSecret or OpKubeconfig.
+	// Op is OpPing, OpCapSlot, OpScope, OpSecret, OpKubeconfig or OpGate.
 	Op string `json:"op"`
 	// Unit is the scope to put the requester into (OpScope).
 	Unit string `json:"unit,omitempty"`
@@ -41,8 +41,10 @@ type Request struct {
 	Max   string `json:"max,omitempty"`
 	Swap  string `json:"swap,omitempty"`
 	// Args are the beekeeper secret call's arguments after "secret"
-	// (OpSecret).
+	// (OpSecret), or the gated devctl command (OpGate).
 	Args []string `json:"args,omitempty"`
+	// Wait is how long a gated merge waits for its turn (OpGate).
+	Wait string `json:"wait,omitempty"`
 	// Resource is the lab lease whose kubeconfig to write (OpKubeconfig).
 	Resource string `json:"resource,omitempty"`
 }
@@ -61,6 +63,9 @@ const (
 	// OpKubeconfig writes a held lab lease's kubeconfig, which takes the
 	// container runtime's socket the sandbox closes.
 	OpKubeconfig = "kubeconfig"
+	// OpGate runs a gated devctl command (beekeeper gate) on the host,
+	// where devctl reads its keychain and the gate starts its units.
+	OpGate = "gate"
 )
 
 // Reply is the broker's answer: an empty Error is done, Out, Err and Code
@@ -129,7 +134,12 @@ func Call(dir string, req Request, timeout time.Duration) (Reply, error) {
 		if !time.Now().Before(deadline) {
 			return r, fmt.Errorf("%w within %s (%s)", ErrNoBroker, timeout, dir)
 		}
-		time.Sleep(20 * time.Millisecond)
+		// a capped run's answer comes at once, a merge's after an hour
+		if time.Since(deadline.Add(-timeout)) < 5*time.Second {
+			time.Sleep(20 * time.Millisecond)
+		} else {
+			time.Sleep(500 * time.Millisecond)
+		}
 	}
 }
 
