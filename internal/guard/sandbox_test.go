@@ -109,18 +109,18 @@ func testHome(t *testing.T) string {
 func TestLabProxyRefreshesHeldLabs(t *testing.T) {
 	h, home := sandboxHook(t)
 	h.Labs = func() []lease.Holder {
-		return []lease.Holder{{Env: "agentlab-2", Session: "s1"}, {Env: "agentlab-1", HostSession: "local_s1"}, {Env: "agentlab-3", Session: "other"}}
+		return []lease.Holder{{Env: "lab-b", Session: "s7"}, {Env: "lab-a", HostSession: "local_s7"}, {Env: "lab-c", Session: "other"}}
 	}
-	refresh := self + " lease kubeconfig --refresh agentlab-1 agentlab-2 >/dev/null 2>&1; "
+	refresh := self + " lease kubeconfig --refresh lab-a lab-b >/dev/null 2>&1; "
 	run := func(h Hook, session, cmd string) *decision {
-		ev := toolEvent(bashTool, map[string]any{"command": cmd})
+		ev := toolEvent(bashTool, map[string]any{commandKey: cmd})
 		ev["cwd"], ev["session_id"] = home, session
 		return decideEvent(t, h, ev)
 	}
-	if d := run(h, "s1", "kubectl get nodes"); d == nil || d.UpdatedInput["command"] != refresh+"kubectl get nodes" {
+	if d := run(h, "s7", "kubectl get nodes"); d == nil || d.UpdatedInput[commandKey] != refresh+"kubectl get nodes" {
 		t.Errorf("a lab lease's holder: %+v", d)
 	}
-	if d := run(h, "s1", "go test ./..."); d == nil || !strings.HasPrefix(d.UpdatedInput["command"].(string), refresh+ShellQuote(self)+" run -- ") {
+	if d := run(h, "s7", "go test ./..."); d == nil || !strings.HasPrefix(d.UpdatedInput[commandKey].(string), refresh+ShellQuote(self)+" run -- ") {
 		t.Errorf("the refresh goes in front of the build wrap: %+v", d)
 	}
 	if d := run(h, "s2", "kubectl get nodes"); d != nil {
@@ -128,12 +128,12 @@ func TestLabProxyRefreshesHeldLabs(t *testing.T) {
 	}
 	unsandboxed := h
 	unsandboxed.Sandbox = nil
-	if d := run(unsandboxed, "s1", "kubectl get nodes"); d != nil {
+	if d := run(unsandboxed, "s7", "kubectl get nodes"); d != nil {
 		t.Errorf("outside the sandbox: %+v", d)
 	}
 	broken := h
 	broken.ConfigErr = errors.New("bad")
-	if d := run(broken, "s1", "kubectl get nodes"); d == nil || d.PermissionDecision != decisionDeny {
+	if d := run(broken, "s7", "kubectl get nodes"); d == nil || d.PermissionDecision != decisionDeny {
 		t.Errorf("a refused call stays refused: %+v", d)
 	}
 }

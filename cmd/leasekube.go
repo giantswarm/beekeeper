@@ -43,6 +43,10 @@ every command of a sandboxed session that holds a lab lease (--refresh).`,
 				}
 				var errs []error
 				for _, res := range args {
+					if err := a.checkResource(res); err != nil {
+						errs = append(errs, err)
+						continue
+					}
 					if err := proxyLabKubeconfig(labKubeconfig(a.cfg.LeaseDir, res)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 						errs = append(errs, err)
 					}
@@ -92,8 +96,9 @@ func (a *app) brokeredKubeconfig(res string) (string, error) {
 
 // proxyLabKubeconfig points the lab kubeconfig at path at the SOCKS proxy
 // of the sandbox the process runs in, rewriting it only when that changes.
+// path is a lease's kubeconfig, its resource checked by the caller.
 func proxyLabKubeconfig(path string) error {
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // a lease's kubeconfig (labKubeconfig of a checked resource)
 	if err != nil {
 		return err
 	}
@@ -106,7 +111,7 @@ func proxyLabKubeconfig(path string) error {
 		return err
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, out, 0o600); err != nil {
+	if err := os.WriteFile(tmp, out, 0o600); err != nil { //nolint:gosec // beside the checked lease's kubeconfig
 		return err
 	}
 	return os.Rename(tmp, path)

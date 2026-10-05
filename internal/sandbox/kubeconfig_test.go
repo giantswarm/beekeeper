@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"net/url"
 	"strings"
 	"testing"
 
@@ -8,12 +9,15 @@ import (
 )
 
 func TestSOCKSProxy(t *testing.T) {
+	proxy := func(scheme, host string) string {
+		return (&url.URL{Scheme: scheme, User: url.UserPassword("srt", "placeholder"), Host: host}).String()
+	}
 	env := map[string]string{
-		"ALL_PROXY": "http://srt:tok@localhost:3128",
-		"FTP_PROXY": "socks5h://srt:tok@localhost:1080",
+		"ALL_PROXY": proxy("http", "localhost:3128"),
+		"FTP_PROXY": proxy("socks5h", "localhost:1080"),
 	}
 	got, err := SOCKSProxy(func(k string) string { return env[k] })
-	if err != nil || got != "socks5://srt:tok@localhost:1080" {
+	if err != nil || got != proxy("socks5", "localhost:1080") {
 		t.Errorf("SOCKSProxy = %q, %v", got, err)
 	}
 	if _, err := SOCKSProxy(func(string) string { return "" }); err == nil {
@@ -46,7 +50,7 @@ users:
 `
 
 func TestProxyKubeconfig(t *testing.T) {
-	const proxy = "socks5://srt:tok@localhost:1080"
+	proxy := (&url.URL{Scheme: "socks5", User: url.UserPassword("srt", "placeholder"), Host: "localhost:1080"}).String()
 	out, changed, err := ProxyKubeconfig([]byte(kindKubeconfig), proxy)
 	if err != nil || !changed {
 		t.Fatalf("changed %v, %v", changed, err)
@@ -68,7 +72,7 @@ func TestProxyKubeconfig(t *testing.T) {
 	if err != nil || changed || string(again) != string(out) {
 		t.Errorf("the same proxy again: changed %v, %v", changed, err)
 	}
-	if _, _, err := ProxyKubeconfig([]byte("clusters: ["), proxy); err == nil || strings.Contains(err.Error(), "tok") {
+	if _, _, err := ProxyKubeconfig([]byte("clusters: ["), proxy); err == nil || strings.Contains(err.Error(), "placeholder") {
 		t.Errorf("a broken kubeconfig: %v", err)
 	}
 }
