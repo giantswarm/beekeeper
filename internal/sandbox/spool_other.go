@@ -18,3 +18,8 @@ func Serve(context.Context, string, string, time.Duration, Handler) error {
 func Origin(string, int, []string) (string, []string, error) {
 	return "", nil, errors.New("the sandbox broker runs on Linux only")
 }
+
+// Sandboxed is the broker's, on Linux only.
+func Sandboxed(string, int) (bool, error) {
+	return true, errors.New("the sandbox broker runs on Linux only")
+}

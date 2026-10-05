@@ -76,9 +76,18 @@ func TestBrokeredSecretArgs(t *testing.T) {
 		{copyOp, "--name=--config", sopsA, sopsB},
 		{"rotate", "op://Shared/db/password", "--generate=true", "--json=true"},
 	} {
-		if err := brokeredSecretArgs(ok); err != nil {
+		if err := brokeredSecretArgs(ok, true); err != nil {
 			t.Errorf("%q: %v", ok, err)
 		}
+	}
+	// a requester outside the sandbox runs its consumer on the host anyway;
+	// copy's own consumer list holds it
+	consumer := strings.Fields(copyOp + " op://Shared/x/y -- gh secret set T")
+	if err := brokeredSecretArgs(consumer, false); err != nil {
+		t.Errorf("%q outside the sandbox: %v", consumer, err)
+	}
+	if err := brokeredSecretArgs(consumer, true); err == nil {
+		t.Errorf("%q in the sandbox: want a refusal", consumer)
 	}
 	for _, bad := range [][]string{
 		nil,
@@ -88,7 +97,7 @@ func TestBrokeredSecretArgs(t *testing.T) {
 		{compareOp, "--as", agentTwo, "a", "b"},
 		{compareOp, "--config=/tmp/other.yaml", "a", "b"},
 	} {
-		if err := brokeredSecretArgs(bad); err == nil {
+		if err := brokeredSecretArgs(bad, true); err == nil {
 			t.Errorf("%q: want a refusal", bad)
 		}
 	}
@@ -142,7 +151,7 @@ func TestBrokeredGateArgv(t *testing.T) {
 		"devctl release promote giantswarm/beekeeper":             "gate --wait 2m0s -- devctl release promote giantswarm/beekeeper",
 		"devctl rollout wait gazelle giantswarm/backstage --pr 3": "gate --wait 2m0s -- devctl rollout wait gazelle giantswarm/backstage --pr 3",
 	} {
-		got, err := brokeredGateArgv(sandbox.Request{Op: sandbox.OpGate, Args: strings.Fields(in), Wait: "2m"})
+		got, err := brokeredGateArgv(sandbox.Request{Op: sandbox.OpGate, Args: strings.Fields(in), Wait: "2m"}, true)
 		if err != nil || strings.Join(got, " ") != want {
 			t.Errorf("%s: %q, %v; want %q", in, got, err, want)
 		}
@@ -155,7 +164,7 @@ func TestBrokeredGateArgv(t *testing.T) {
 		{Args: strings.Fields("devctl pr merge giantswarm/beekeeper 7"), Wait: "24h"},
 		{},
 	} {
-		if got, err := brokeredGateArgv(bad); err == nil {
+		if got, err := brokeredGateArgv(bad, true); err == nil {
 			t.Errorf("%+v: %q, want a refusal", bad, got)
 		}
 	}
