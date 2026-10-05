@@ -557,8 +557,14 @@ func (a *app) importSession(ctx context.Context, d desk, id, follow string) (str
 		return "", err
 	}
 	running := !plat.Opener.Running(t).IsZero()
-	// startAgent waited for the window already.
-	prev, err := a.showBriefly(ctx, d, resumeURL(id), "local_"+id, follow, running, awayPoll)
+	// The caller waited for the window already; the link checks once more.
+	// A desktop turn's import gives the person's typing its bound again, as
+	// its first wait did, instead of failing on a keystroke in between.
+	away := awayPoll
+	if d.urgent != nil && d.urgent() {
+		away = d.turnWait() + awayPoll
+	}
+	prev, err := a.showBriefly(ctx, d, resumeURL(id), "local_"+id, follow, running, away)
 	if err != nil {
 		return "", fmt.Errorf("importing %s into the desktop: %w", id, err)
 	}
@@ -803,8 +809,19 @@ type desk struct {
 	locked func() bool
 	// urgent reports whether the session the link shows asked for a desktop
 	// turn: the window's focus does not hold the link, and the person's
-	// typing holds it for desktopTurnWait at most. Nil: none asked.
+	// typing holds it for turn at most. Nil: none asked.
 	urgent func() bool
+	// turn bounds how long the person's typing holds a desktop turn's link;
+	// zero: desktopTurnWait.
+	turn time.Duration
+}
+
+// turnWait is how long the person's typing holds a desktop turn's link.
+func (d desk) turnWait() time.Duration {
+	if d.turn > 0 {
+		return d.turn
+	}
+	return desktopTurnWait
 }
 
 // watchDesk watches the person's input until ctx ends, unless
@@ -854,7 +871,7 @@ func (d desk) await(ctx context.Context, wait time.Duration, onHeld func(error))
 // holds is what holds a link a wait that began at start, nil when nothing
 // does: under a locked screen nothing; else the window's focus, unless the
 // session asked for a desktop turn, then the person's typing, for
-// desktopTurnWait at most when it did.
+// d.turnWait() at most when it did.
 func (d desk) holds(ctx context.Context, start time.Time) error {
 	if d.locked != nil && d.locked() {
 		return nil
@@ -865,7 +882,7 @@ func (d desk) holds(ctx context.Context, start time.Time) error {
 			return errDesktopInUse
 		}
 	}
-	if d.last == nil || time.Since(d.last()) >= d.quiet || urgent && time.Since(start) >= desktopTurnWait {
+	if d.last == nil || time.Since(d.last()) >= d.quiet || urgent && time.Since(start) >= d.turnWait() {
 		return nil
 	}
 	return errTyping
