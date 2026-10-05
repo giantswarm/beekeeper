@@ -154,7 +154,7 @@ func awaitExit(ctx context.Context, pid int, wait time.Duration) error {
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		if syscall.Kill(pid, 0) != nil {
+		if !proc.Alive(pid) {
 			return nil
 		}
 		select {
