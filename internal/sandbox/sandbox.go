@@ -7,17 +7,19 @@
 // re-allowed, so a credential path nobody listed stays unreadable. Egress
 // is an allow list, and the GitHub token is masked: commands see a
 // placeholder, the sandbox proxy puts the real token into requests to
-// GitHub only.
+// GitHub only (github.go).
 package sandbox
 
 import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/giantswarm/beekeeper/internal/config"
@@ -76,8 +78,13 @@ type Policy struct {
 	// Exe is the beekeeper binary the policy's hook runs.
 	Exe string
 	// Vars are the environment variables the policy sets besides Env: a
-	// symlinked config's target, which the sandbox mounts without the link.
+	// symlinked config's target, which the sandbox mounts without the link,
+	// and gh's and git's GitHub login.
 	Vars map[string]string
+	// GitHub is the directory of the masked GitHub token files (GitHubDir),
+	// "" without a runtime directory. Commands read them masked; the file
+	// tools, which run outside the sandbox, never read them.
+	GitHub string
 }
 
 // Paths are where beekeeper and its configuration live, and the build
@@ -86,6 +93,9 @@ type Paths struct {
 	Home, ConfigFile, StateDir, LeaseDir, SlotDir, Exe string
 	// ScanDir is the value scanner's key and index, which no session reads.
 	ScanDir string
+	// RuntimeDir is the user's runtime directory ($XDG_RUNTIME_DIR), where
+	// the broker keeps the masked GitHub token.
+	RuntimeDir string
 }
 
 // New is the policy for cfg: beekeeper's own paths and GitHub, and the
@@ -117,11 +127,15 @@ func New(cfg config.Sandbox, e Paths) Policy {
 		Domains:   append([]string{"github.com", "*.github.com", "*.githubusercontent.com"}, cfg.Domains...),
 		Mask:      cfg.Mask,
 		Exe:       e.Exe,
+		GitHub:    GitHubDir(e.RuntimeDir),
 	}
 	// the home directory is empty inside the sandbox but for the paths it
 	// mounts, at their targets: a symlinked config is named by its target,
 	// a symlinked config directory (git's ignore and attributes) as well
 	p.Vars = map[string]string{Env: "1"}
+	if p.GitHub != "" {
+		maps.Copy(p.Vars, githubVars(p.GitHub, e.Exe))
+	}
 	for name, path := range map[string]string{"BEEKEEPER_CONFIG": e.ConfigFile, "GIT_CONFIG_GLOBAL": filepath.Join(e.Home, ".gitconfig"), "XDG_CONFIG_HOME": xdg} {
 		if r, err := filepath.EvalSymlinks(path); err == nil && r != filepath.Clean(path) {
 			p.Vars[name] = r
@@ -169,7 +183,7 @@ func (p Policy) Settings() map[string]any {
 				"strictAllowlist":         true,
 				"tlsTerminate":            map[string]any{},
 			},
-			"credentials": map[string]any{"envVars": envVars},
+			"credentials": p.credentials(envVars),
 		},
 		"hooks": map[string]any{
 			"PreToolUse": []map[string]any{{
@@ -178,6 +192,37 @@ func (p Policy) Settings() map[string]any {
 			}},
 		},
 	}
+}
+
+// credentials are the masked variables and, with a runtime directory, the
+// masked GitHub token files.
+func (p Policy) credentials(envVars []map[string]any) map[string]any {
+	c := map[string]any{"envVars": envVars}
+	if p.GitHub != "" {
+		c["files"] = []map[string]any{
+			{"path": filepath.Join(p.GitHub, GitHubHosts), "mode": "mask", "extract": githubHostsExtract, "injectHosts": config.GitHubHosts},
+			{"path": filepath.Join(p.GitHub, GitHubGit), "mode": "mask", "extract": githubGitExtract, "injectHosts": []string{"github.com"}},
+		}
+	}
+	return c
+}
+
+// githubVars point gh at the masked login and git at GitHub over HTTPS with
+// beekeeper's credential helper: the sandbox has no SSH agent and its
+// proxy carries HTTPS only. The helper list is emptied first, so no
+// helper of the person's answers before it.
+func githubVars(dir, exe string) map[string]string {
+	kv := [][2]string{
+		{"url.https://github.com/.insteadOf", "git@github.com:"},
+		{"url.https://github.com/.insteadOf", "ssh://git@github.com/"},
+		{"credential.https://github.com.helper", ""},
+		{"credential.https://github.com.helper", "!'" + strings.ReplaceAll(exe, "'", `'\''`) + "' sandbox git-credential"},
+	}
+	v := map[string]string{"GH_CONFIG_DIR": dir, "GIT_CONFIG_COUNT": strconv.Itoa(len(kv))}
+	for i, e := range kv {
+		v["GIT_CONFIG_KEY_"+strconv.Itoa(i)], v["GIT_CONFIG_VALUE_"+strconv.Itoa(i)] = e[0], e[1]
+	}
+	return v
 }
 
 // JSON is Settings, indented, with a final newline.
@@ -235,8 +280,12 @@ func (p Policy) Writable(path, cwd string) bool {
 }
 
 // denied reports whether the resolved path lies under a path of Deny,
-// which holds inside every allow.
+// which holds inside every allow, or under the GitHub token's directory,
+// which commands read masked and the file tools not at all.
 func (p Policy) denied(path string) bool {
+	if p.GitHub != "" && under(path, resolve(p.GitHub, "")) {
+		return true
+	}
 	return slices.ContainsFunc(p.Deny, func(d string) bool { return under(path, resolve(d, "")) })
 }
 

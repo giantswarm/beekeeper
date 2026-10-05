@@ -38,7 +38,7 @@ func TestBrokeredSecretRunsAsTheRequester(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = requester.Process.Kill(); _ = requester.Wait() }()
-	h := brokered(brokeredCap(&recordingCapper{}), map[string]sandbox.Handler{sandbox.OpSecret: brokeredCall(exe, "/proc", brokeredSecretArgv)})
+	h := brokered(brokeredCap(&recordingCapper{}), map[string]sandbox.Handler{sandbox.OpSecret: brokeredCall(exe, "/proc", brokeredCallTimeout, nil, brokeredSecretArgv)})
 	r, err := h(context.Background(), requester.Process.Pid, sandbox.Request{Op: sandbox.OpSecret, Args: []string{compareOp, sopsA, sopsB}})
 	if err != nil {
 		t.Fatal(err)
@@ -86,5 +86,34 @@ func TestSecretInTheSandboxGoesThroughTheBroker(t *testing.T) {
 	}
 	if len(got) != 1 {
 		t.Errorf("a refused call reached the broker: %q", got)
+	}
+}
+
+func TestGateInTheSandboxGoesThroughTheBroker(t *testing.T) {
+	a, _, _ := secretApp(t)
+	t.Setenv(sandbox.Env, "1")
+	var got []sandbox.Request
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = sandbox.Serve(ctx, sandbox.SpoolDir(a.cfg.StateDir), "/proc", 5*time.Millisecond, func(_ context.Context, _ int, req sandbox.Request) (sandbox.Reply, error) {
+			if req.Op != sandbox.OpGate {
+				return sandbox.Reply{}, nil
+			}
+			got = append(got, req)
+			return sandbox.Reply{Out: "{\"merged\":true}\n", Code: 9}, nil
+		})
+	}()
+	t.Cleanup(func() { cancel(); <-done })
+	argv := strings.Fields("devctl pr merge giantswarm/beekeeper 7")
+	if err := a.gate(context.Background(), argv, time.Minute, false); Code(err) != 9 {
+		t.Errorf("exit %d (%v), want the brokered gate's 9", Code(err), err)
+	}
+	if len(got) != 1 || got[0].Op != sandbox.OpGate || strings.Join(got[0].Args, " ") != strings.Join(argv, " ") || got[0].Wait != "1m0s" {
+		t.Errorf("broker got %+v", got)
+	}
+	if err := a.gate(context.Background(), argv, time.Minute, true); err == nil {
+		t.Error("a queued run from the sandbox: want a refusal")
 	}
 }

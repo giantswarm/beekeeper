@@ -163,11 +163,16 @@ func (a *app) secretBrokered(cmd *cobra.Command, args []string) error {
 // brokeredReply asks the host's broker for req and passes on its output
 // and exit code.
 func (a *app) brokeredReply(req sandbox.Request) error {
+	return a.brokeredReplyWithin(req, brokeredCallTimeout+time.Minute)
+}
+
+// brokeredReplyWithin is brokeredReply waiting up to timeout.
+func (a *app) brokeredReplyWithin(req sandbox.Request, timeout time.Duration) error {
 	dir := sandbox.SpoolDir(a.cfg.StateDir)
 	if !(sandbox.Capper{Dir: dir}).Available() {
 		return refused("no sandbox broker answers in %s: beekeeper-sandbox.service on the host runs this for the sandbox (beekeeper install)", dir)
 	}
-	r, err := sandbox.Call(dir, req, brokeredCallTimeout+time.Minute)
+	r, err := sandbox.Call(dir, req, timeout)
 	if err != nil {
 		return refused("%v", err)
 	}
