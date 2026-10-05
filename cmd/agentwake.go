@@ -27,7 +27,7 @@ import (
 func (a *app) agentWakeCmd() *cobra.Command {
 	var mode string
 	c := &cobra.Command{
-		Use:   "wake <agent> <message>",
+		Use:   agentWakeName + " <agent> <message>",
 		Short: "Message an agent, starting its CLI headless when none runs: no desktop cap",
 		Long: `wake delivers a message to a registered agent without Claude Desktop's
 route, whose cap pauses a session's messages to local_ ids after ten sends

@@ -95,7 +95,7 @@ func (a *app) agentStartCmd() *cobra.Command {
 	var model, dir, task, harness string
 	var desktop bool
 	c := &cobra.Command{
-		Use:   "start <name> <brief file>",
+		Use:   agentStartName + " <name> <brief file>",
 		Short: "Start an agent session in bypass from the command line and import it into the desktop",
 		Long: `start starts a Claude Code session without a click: "claude -p" in
 bypassPermissions under a session id beekeeper chooses, with the brief file
@@ -163,6 +163,11 @@ is involved and no import happens.`,
 			name := strings.TrimSpace(args[0])
 			if name == "" {
 				return usageErr("an agent needs a name")
+			}
+			// a sandboxed session's start reads its brief and gives the
+			// agent its directory through the broker, within its own lists
+			if err := a.sandboxPaths([]string{args[1]}, []string{dir}); err != nil {
+				return err
 			}
 			brief, err := readBrief(args[1])
 			if err != nil {
