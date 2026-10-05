@@ -159,14 +159,7 @@ func (a *app) secretBrokered(cmd *cobra.Command, args []string, inSandbox bool) 
 	if dash < 0 {
 		dash = len(args)
 	}
-	argv := []string{cmd.Name()}
-	var err error
-	cmd.Flags().Visit(func(f *pflag.Flag) {
-		if f.Name == "as" || f.Name == "config" {
-			err = refused("--%s: a brokered secret call runs as this session, under the host's config", f.Name)
-		}
-		argv = append(argv, "--"+f.Name+"="+f.Value.String())
-	})
+	argv, err := brokerFlags(cmd)
 	if err != nil {
 		return err
 	}
@@ -200,47 +193,21 @@ func (a *app) brokeredReply(req sandbox.Request) error {
 
 // brokeredReplyWithin is brokeredReply waiting up to timeout.
 func (a *app) brokeredReplyWithin(req sandbox.Request, timeout time.Duration) error {
-	dir := sandbox.SpoolDir(a.cfg.StateDir)
-	if !(sandbox.Capper{Dir: dir}).Available() {
-		return refused("no sandbox broker answers in %s: beekeeper-sandbox.service on the host runs this for the sandbox (beekeeper install)", dir)
-	}
-	r, err := sandbox.Call(dir, req, timeout)
-	if err != nil {
-		return refused("%v", err)
-	}
-	if _, err := io.WriteString(a.out, r.Out); err != nil {
-		return err
-	}
-	_, _ = io.WriteString(os.Stderr, r.Err)
-	if r.Code != 0 {
-		return &exitError{code: r.Code}
-	}
-	return nil
+	return a.brokeredAnswer(req, timeout, false)
 }
 
 // sandboxFiles holds the SOPS files of a sandboxed session's brokered call
 // to the agent sandbox's lists: through the broker it reads and writes no
 // file its sandbox closes to it.
 func (a *app) sandboxFiles(read, write []secret.Ref) error {
-	if os.Getenv(sandbox.Brokered) == "" || os.Getenv(sandbox.Env) == "" {
-		return nil
-	}
-	p := a.sandboxPolicy()
-	cwd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	for _, r := range read {
-		if r.File != "" && !p.Readable(r.File, cwd) {
-			return refused("the agent sandbox does not let this session read %s", r.File)
+	files := func(refs []secret.Ref) []string {
+		var out []string
+		for _, r := range refs {
+			out = append(out, r.File)
 		}
+		return out
 	}
-	for _, r := range write {
-		if r.File != "" && !p.Writable(r.File, cwd) {
-			return refused("the agent sandbox does not let this session write %s", r.File)
-		}
-	}
-	return nil
+	return a.sandboxPaths(files(read), files(write))
 }
 
 // vaultExit gives an error reading the shared vault its own exit code,

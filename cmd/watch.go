@@ -204,9 +204,16 @@ keeps no value: the program, its subcommands and the flag names.
 What a watch has said is kept per caller (seen.watch.<caller>.json): a
 restarted watch of the same session says no open condition, runaway or
 stale lease again, only its end or what is new. Runs until killed. --once
-polls once, keeps no mark and says every condition it finds.`,
+polls once, keeps no mark and says every condition it finds.
+
+In the agent sandbox, which closes the person's kubeconfig and Teleport
+login, the user bus and the notification service, the host's broker runs
+the watch as the session, in a scope of its own, and streams its lines
+back for as long as the sandboxed command runs: a Monitor reads them as
+it reads a watch on the host, and stopping it stops the watch.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			ownScope("watch", brokeredWatchCap)
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			w := a.newWatcher(standby, !once)
