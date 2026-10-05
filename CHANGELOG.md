@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A reply the Slack feedback watch delivers no longer carries what the Slack MCP server and the connector append to its text: its `Reactions:` line and the claude.ai connector's `*Sent using* <@…|Claude>` attribution.
 - `beekeeper serve`'s `hold_list` lists the holds: it ran the `hold` verb with no arguments, which read serve's own command line (`serve --http=…`) and failed with `unknown flag: --http`.
 - A devctl merge that warrants no release lifts its release window at once; the window waited for a devctl version that never came.
 - `board next` counts the `sessions serve` record of an agent on the roster busy with its task as covering its item while the agent's CLI is gone (the desktop warmed none, the watch marked the record ended), so `--claim` no longer hands it to a second worker; it is offered again once the agent reports idle or leaves the roster.
