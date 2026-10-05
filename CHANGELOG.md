@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The watch's doctor says an unchanged chore line once per watch instead of on every pass, and the finished workers waiting on an unset `agents.archiveAgreement` as one summary line (the count and the key to set), ended once none waits, instead of one line and event per agent every 30 s.
+
 ### Changed
 
 - The desktop sessions of finished workers are archived only under the person's agreement: `agents.archiveAgreement` says where they agreed (never for a session they started), the steward's request quotes it, and the steward runs the new `beekeeper agents archivable <local_id>…` first, which confirms each session is a finished worker beekeeper started and exits 3 for any other. Without it no steward is asked. The doctor reads each asked steward's turn: the line names the steward whose `archive_session` call archived a session, reports a decline with the first line of the reply, and asks a declining steward for no archive for 24 hours instead of again on every run ([README](README.md#agents-started-without-a-click)).
