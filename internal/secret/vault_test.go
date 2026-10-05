@@ -120,26 +120,39 @@ func TestVaultSocket(t *testing.T) {
 }
 
 func TestKeeperLifetime(t *testing.T) {
-	var states []VaultState
-	k := NewKeeper(time.Hour, func(st VaultState) { states = append(states, st) })
-	now := time.Date(2026, 10, 5, 22, 10, 0, 0, time.UTC)
+	const lifetime = 50 * time.Millisecond
+	changes := make(chan VaultState, 4)
+	k := NewKeeper(lifetime, func(st VaultState) { changes <- st })
+	now := time.Now()
 	if err := k.Unlock(testSession, "tok", now); err != nil {
 		t.Fatal(err)
 	}
-	if st := k.State(); !st.Unlocked || !st.Since.Equal(now) || !st.Until.Equal(now.Add(time.Hour)) {
+	if st := k.State(); !st.Unlocked || !st.Since.Equal(now) || !st.Until.Equal(now.Add(lifetime)) {
 		t.Fatalf("state after the unlock: %+v", st)
 	}
-	if k.Expire(now.Add(59 * time.Minute)) {
-		t.Fatal("expired within its lifetime")
+	var states []VaultState
+	for range 2 {
+		select {
+		case st := <-changes:
+			states = append(states, st)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("no lock at the end of the lifetime: %+v", k.State())
+		}
 	}
-	if !k.Expire(now.Add(time.Hour)) || k.State().Unlocked || k.Env() != "" {
-		t.Fatal("kept past its lifetime")
+	if locked := time.Since(now); locked < lifetime || locked > lifetime+time.Second {
+		t.Errorf("locked %s after the unlock, want %s", locked, lifetime)
 	}
-	if k.Expire(now.Add(2 * time.Hour)) {
-		t.Error("a locked keeper expired again")
+	if k.State().Unlocked || k.Env() != "" || !states[0].Unlocked || states[1].Unlocked {
+		t.Fatalf("after the lifetime: %+v, changes %+v", k.State(), states)
 	}
-	if len(states) != 2 || !states[0].Unlocked || states[1].Unlocked {
-		t.Errorf("changes heard: %+v", states)
+
+	// a session that came after keeps its own lifetime
+	k = NewKeeper(time.Hour, nil)
+	_ = k.Unlock(testSession, "old", now)
+	_ = k.Unlock(testSession, "new", now.Add(time.Minute))
+	k.lockSession(now)
+	if k.Env() != testSession+"=new" {
+		t.Error("the end of an earlier session's lifetime locked a later one")
 	}
 	if st, err := ReadState(filepath.Join(t.TempDir(), "absent.json")); err != nil || st.Unlocked {
 		t.Errorf("an absent state: %+v, %v", st, err)
@@ -148,7 +161,7 @@ func TestKeeperLifetime(t *testing.T) {
 	if err := WriteState(path, states[0]); err != nil {
 		t.Fatal(err)
 	}
-	if st, err := ReadState(path); err != nil || !st.Until.Equal(now.Add(time.Hour)) {
+	if st, err := ReadState(path); err != nil || !st.Until.Equal(now.Add(lifetime)) {
 		t.Errorf("state round trip: %+v, %v", st, err)
 	}
 	raw, _ := os.ReadFile(path) //nolint:gosec // the test's own file

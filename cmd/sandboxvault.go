@@ -146,16 +146,16 @@ func runSignin(ctx context.Context, argv []string) (string, string, error) {
 }
 
 // The keeper touches op's session every vaultTouchEvery, well inside op's
-// 30-minute idle timeout, and checks the lifetime every vaultExpireEvery.
+// 30-minute idle timeout, looking every vaultTendEvery.
 const (
-	vaultTouchEvery  = 10 * time.Minute
-	vaultExpireEvery = time.Minute
+	vaultTouchEvery = 10 * time.Minute
+	vaultTendEvery  = time.Minute
 )
 
-// keepVaultAlive forgets the session at the end of its lifetime and touches
-// it until then, so that op does not let it idle out.
+// keepVaultAlive touches the session within its lifetime, so that op does
+// not let it idle out; the keeper ends it at the end of its lifetime.
 func keepVaultAlive(ctx context.Context, k *secret.Keeper, touch func(context.Context, string) error) {
-	t := time.NewTicker(vaultExpireEvery)
+	t := time.NewTicker(vaultTendEvery)
 	defer t.Stop()
 	var touched time.Time
 	for {
@@ -168,15 +168,10 @@ func keepVaultAlive(ctx context.Context, k *secret.Keeper, touch func(context.Co
 	}
 }
 
-// tendVault is one look of keepVaultAlive at now: it forgets a session whose
-// lifetime has passed, touches one untouched for vaultTouchEvery and
-// forgets it when op no longer takes it. It answers when the session was
-// last touched.
+// tendVault is one look of keepVaultAlive at now: it touches a session
+// untouched for vaultTouchEvery and forgets it when op no longer takes it.
+// It answers when the session was last touched.
 func tendVault(ctx context.Context, k *secret.Keeper, now, touched time.Time, touch func(context.Context, string) error) time.Time {
-	if k.Expire(now) {
-		fmt.Fprintln(os.Stderr, "vault keeper: the session's lifetime ended")
-		return touched
-	}
 	st := k.State()
 	if st.Since.After(touched) {
 		touched = st.Since
