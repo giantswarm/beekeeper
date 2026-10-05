@@ -107,6 +107,9 @@ the installed policy is the current one.`,
 	return c
 }
 
+// emptyManagedSettings is the managed settings file a fresh machine gets.
+const emptyManagedSettings = "{}\n"
+
 // sandboxInstallSteps stages what the managed settings in dir lack for the
 // policy b in stateDir and returns the root commands that put it in place:
 // the managed settings file and the drop-in directory, which the sandbox
@@ -118,7 +121,7 @@ func sandboxInstallSteps(dir, stateDir string, b []byte) ([]string, error) {
 	var steps []string
 	if _, err := os.Stat(settings); errors.Is(err, os.ErrNotExist) {
 		staged := filepath.Join(stateDir, "managed-settings.json")
-		if err := os.WriteFile(staged, []byte("{}\n"), 0o600); err != nil {
+		if err := os.WriteFile(staged, []byte(emptyManagedSettings), 0o600); err != nil {
 			return nil, err
 		}
 		steps = append(steps, "sudo install -d -m 0755 "+guard.ShellQuote(dir),
@@ -127,7 +130,7 @@ func sandboxInstallSteps(dir, stateDir string, b []byte) ([]string, error) {
 	if _, err := os.Stat(dropIns); errors.Is(err, os.ErrNotExist) {
 		steps = append(steps, "sudo install -d -m 0755 "+guard.ShellQuote(dropIns))
 	}
-	if cur, err := os.ReadFile(path); err != nil || !bytes.Equal(cur, b) {
+	if cur, err := os.ReadFile(path); err != nil || !bytes.Equal(cur, b) { //nolint:gosec // the policy's own drop-in
 		staged := filepath.Join(stateDir, sandbox.DropIn)
 		if err := os.WriteFile(staged, b, 0o600); err != nil {
 			return nil, err

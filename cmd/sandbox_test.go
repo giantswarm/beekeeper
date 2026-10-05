@@ -111,25 +111,25 @@ func TestSandboxInstallSteps(t *testing.T) {
 	if !slices.Equal(steps, want) {
 		t.Fatalf("a fresh machine's steps = %q, want %q", steps, want)
 	}
-	if b, _ := os.ReadFile(filepath.Join(state, "managed-settings.json")); string(b) != "{}\n" {
+	if b, _ := os.ReadFile(filepath.Join(state, "managed-settings.json")); string(b) != emptyManagedSettings {
 		t.Errorf("staged managed settings = %q, want {}", b)
 	}
 	// the root steps run
 	for _, f := range []struct {
 		path string
 		b    []byte
-	}{{settings, []byte("{}\n")}, {filepath.Join(dropIns, sandbox.DropIn), policy}} {
-		if err := os.MkdirAll(filepath.Dir(f.path), 0o755); err != nil {
+	}{{settings, []byte(emptyManagedSettings)}, {filepath.Join(dropIns, sandbox.DropIn), policy}} {
+		if err := os.MkdirAll(filepath.Dir(f.path), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(f.path, f.b, 0o644); err != nil {
+		if err := os.WriteFile(f.path, f.b, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if steps, err := sandboxInstallSteps(dir, state, policy); err != nil || len(steps) != 0 {
 		t.Errorf("an installed policy's steps = %q, %v, want none", steps, err)
 	}
-	steps, err = sandboxInstallSteps(dir, state, []byte("{}\n"))
+	steps, err = sandboxInstallSteps(dir, state, []byte("{\"sandbox\":{\"enabled\":true}}\n"))
 	if err != nil || len(steps) != 1 || !strings.HasSuffix(steps[0], sandbox.DropIn) {
 		t.Errorf("a changed policy's steps = %q, %v, want the drop-in only", steps, err)
 	}
