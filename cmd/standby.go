@@ -68,6 +68,11 @@ type standbyWatch struct {
 	// overdueNext is when the next relay of a holder over its relayAt may
 	// start, by role name.
 	overdueNext map[string]time.Time
+	// importRow gives a session that runs headless with no desktop row its
+	// row (app.importRowFromWatch); nil: rows are not imported.
+	importRow func(ctx context.Context, id, name string) (string, error)
+	// importing holds the sessions whose import runs, by session id.
+	importing sync.Map
 }
 
 func (a *app) supervisorReopenCmd() *cobra.Command {
