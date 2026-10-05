@@ -442,4 +442,14 @@ func TestSandbox(t *testing.T) {
 			t.Errorf("%q loads", bad)
 		}
 	}
+	// loopback only by a lab's port: a bare loopback host opens every
+	// listener on the host through the sandbox proxy
+	for _, d := range []string{"127.0.0.1", "localhost", "127.0.0.1:*", "[::1]", "::1", "*.localhost", "127.0.0.2", "*"} {
+		if _, err := Load(write("sandbox: {domains: ['" + d + "']}\n")); err == nil || !strings.Contains(err.Error(), "127.0.0.1:<port>") {
+			t.Errorf("domain %q: %v", d, err)
+		}
+	}
+	if _, err := Load(write("sandbox: {domains: ['127.0.0.1:6443', '[::1]:6443', 'github.com', '*.circleci.com']}\n")); err != nil {
+		t.Errorf("a lab's port: %v", err)
+	}
 }

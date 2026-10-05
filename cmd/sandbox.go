@@ -40,7 +40,9 @@ Anthropic's sandbox runtime (bubblewrap on Linux, Seatbelt on macOS):
     beekeeper's state, the build slots and sandbox.allowWrite;
   - denied inside them, for reading and writing: the value scanner's key
     and index (scan/ in the state directory);
-  - egress: GitHub and sandbox.domains, nothing else;
+  - egress: GitHub and sandbox.domains, nothing else; loopback by port
+    only (127.0.0.1:<port>, a kind lab's API server, which a held lab's
+    kubeconfig reaches through the sandbox's SOCKS proxy);
   - the GitHub token (sandbox.mask): commands see a placeholder, the
     sandbox proxy puts the real one into requests to GitHub only;
   - no command leaves the sandbox, and a session where it cannot start
@@ -180,6 +182,17 @@ the container runtime: for the session that holds the lab's lease only.`,
 			exe, err := os.Executable()
 			if err != nil {
 				return err
+			}
+			// the calls it runs read the broker's configuration, not the
+			// default one
+			if a.cfgPath != "" {
+				abs, err := filepath.Abs(a.cfgPath)
+				if err != nil {
+					return err
+				}
+				if err := os.Setenv("BEEKEEPER_CONFIG", abs); err != nil {
+					return err
+				}
 			}
 			return sandbox.Serve(ctx, dir, "/proc", brokerTick, brokered(brokeredCap(plat.Capper), map[string]sandbox.Handler{
 				sandbox.OpSecret:     brokeredCall(exe, "/proc", brokeredSecretArgv),

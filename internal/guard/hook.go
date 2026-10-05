@@ -151,6 +151,9 @@ type Hook struct {
 	// Sandbox is the agent sandbox's policy, which the file tools are held
 	// to; nil in a session no sandbox holds.
 	Sandbox *sandbox.Policy
+	// Labs lists the held leases of kind labs, unnamed (a lease file read,
+	// no process scan); nil, none.
+	Labs func() []lease.Holder
 }
 
 // event is the part of a PreToolUse event the hook reads.
@@ -181,7 +184,7 @@ func (h Hook) Decide(input []byte) []byte {
 	if dec.Decode(&ev) != nil {
 		return nil
 	}
-	out := h.decide(ev)
+	out := h.labProxy(ev, h.decide(ev))
 	var o map[string]hookOutput
 	if out != nil && (json.Unmarshal(out, &o) != nil || o["hookSpecificOutput"].PermissionDecision == decisionDeny) {
 		return out

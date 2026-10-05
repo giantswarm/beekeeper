@@ -25,7 +25,7 @@ func (h Hook) browserRefusal(cmd, session string) string {
 		return ""
 	}
 	if slices.ContainsFunc(h.Leases(), func(l lease.Holder) bool {
-		return l.Env == browserLease && session != "" && (l.Session == session || l.HostSession == "local_"+session)
+		return l.Env == browserLease && heldBy(l, session)
 	}) {
 		return ""
 	}
@@ -33,4 +33,9 @@ func (h Hook) browserRefusal(cmd, session string) string {
 		"and they close it as a stray pop-up. Only the session holding the browser lease opens one: ask your supervisor " +
 		"for \"browser\", claim it with `beekeeper lease claim browser -p \"<purpose>\"` after its yes, run the sign-in, " +
 		"and release the lease right after."
+}
+
+// heldBy reports whether the session holds the lease l.
+func heldBy(l lease.Holder, session string) bool {
+	return session != "" && (l.Session == session || l.HostSession == "local_"+session)
 }

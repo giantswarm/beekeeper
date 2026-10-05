@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1412,12 +1413,40 @@ func (s *Sandbox) validate() error {
 			}
 		}
 	}
+	for _, d := range s.Domains {
+		if openLoopback(d) {
+			return fmt.Errorf("sandbox.domains: %q opens every loopback listener on the host (other sessions' port-forwards, local servers) to the sandbox: name a lab's API server by its port, 127.0.0.1:<port>", d)
+		}
+	}
 	for i, m := range s.Mask {
 		if !envName.MatchString(m.Name) || len(m.Hosts) == 0 {
 			return fmt.Errorf("sandbox.mask[%d]: want an environment variable's name and at least one host", i)
 		}
 	}
 	return nil
+}
+
+// openLoopback reports whether the egress entry d opens loopback beyond one
+// port: a bare loopback host or a wildcard port would open every listener on
+// the host through the sandbox proxy.
+func openLoopback(d string) bool {
+	if d == "*" {
+		return true
+	}
+	host, port, err := net.SplitHostPort(d)
+	if err != nil {
+		host, port = strings.Trim(d, "[]"), ""
+	}
+	return Loopback(strings.TrimPrefix(host, "*.")) && (port == "" || port == "*")
+}
+
+// Loopback reports whether host is a loopback name or address.
+func Loopback(host string) bool {
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	return host == "localhost" || strings.HasSuffix(host, ".localhost")
 }
 
 func (s *Sandbox) defaults(home string) {

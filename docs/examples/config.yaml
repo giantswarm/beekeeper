@@ -226,7 +226,7 @@ scan:                       # the value scanner's index (README: What reaches th
 sandbox:                    # the agent sandbox (README: The agent sandbox); beekeeper sandbox render prints the policy
   allowRead: [~/projects, ~/.go, ~/.local/bin]   # re-allowed under the denied home directory: checkouts, toolchains
   allowWrite: [~/projects, ~/.cache, ~/go/pkg/mod]   # writable too: checkouts and worktrees, build and module caches
-  domains: [proxy.golang.org, sum.golang.org, registry.npmjs.org]   # hosts commands reach besides GitHub
+  domains: [proxy.golang.org, sum.golang.org, registry.npmjs.org, 127.0.0.1:6443]   # hosts commands reach besides GitHub; loopback by port only (a kind lab's API server)
   mask:                     # the default: GH_TOKEN and GITHUB_TOKEN, to GitHub's hosts only
     - {name: GH_TOKEN, hosts: [github.com, api.github.com, uploads.github.com]}
 
