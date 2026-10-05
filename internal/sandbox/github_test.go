@@ -16,6 +16,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 )
 
+// opGet is the credential helper call git asks for a credential with.
+const opGet = "get"
+
 // testToken is a token of the App's length, never a real one.
 const testToken = "ghu_" + "0123456789abcdefghijklmnopqrstuvwxyz"
 
@@ -90,10 +93,10 @@ func TestGitCredential(t *testing.T) {
 		name, op, in, want string
 		err                bool
 	}{
-		{"github", "get", "capability[]=authtype\nprotocol=https\nhost=github.com\n\n", "capability[]=authtype\nauthtype=Basic\ncredential=" + basic + "\n", false},
-		{"other host", "get", "capability[]=authtype\nprotocol=https\nhost=gitlab.com\n\n", "", false},
-		{"plain http", "get", "capability[]=authtype\nprotocol=http\nhost=github.com\n\n", "", false},
-		{"old git", "get", "protocol=https\nhost=github.com\n\n", "", true},
+		{"github", opGet, "capability[]=authtype\nprotocol=https\nhost=github.com\n\n", "capability[]=authtype\nauthtype=Basic\ncredential=" + basic + "\n", false},
+		{"other host", opGet, "capability[]=authtype\nprotocol=https\nhost=gitlab.com\n\n", "", false},
+		{"plain http", opGet, "capability[]=authtype\nprotocol=http\nhost=github.com\n\n", "", false},
+		{"old git", opGet, "protocol=https\nhost=github.com\n\n", "", true},
 		{"store", "store", "protocol=https\nhost=github.com\nusername=x\npassword=y\n\n", "", false},
 	} {
 		var out bytes.Buffer
