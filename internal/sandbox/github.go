@@ -70,7 +70,7 @@ func WriteGitHub(dir, token string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	if err := os.Chmod(dir, 0o700); err != nil {
+	if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // a directory: the user's alone, searchable
 		return err
 	}
 	for name, content := range githubFiles(token) {
