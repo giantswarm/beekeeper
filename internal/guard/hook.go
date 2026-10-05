@@ -92,6 +92,9 @@ const (
 type Hook struct {
 	// Self is the absolute path of the beekeeper binary a rewrite names.
 	Self string
+	// UnlockCommands are the person's own vault unlock helpers
+	// (secret.unlockCommands), refused like op signin.
+	UnlockCommands []string
 	// ConfigErr is why the configuration did not load: every Bash call is
 	// refused with it, since the guards it configures cannot run.
 	ConfigErr error
@@ -231,15 +234,15 @@ func (h Hook) decide(ev event) []byte {
 	if r := h.modelServerRefusal(cmd, ev.Session); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
-	if l := secretLeak(cmd); l != nil {
+	cwd := ev.CWD
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
+	if l := (secretGuard{unlock: h.UnlockCommands, cwd: cwd}).leak(cmd); l != nil {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: l.reason()})
 	}
 	if r := deleteRefusal(cmd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
-	}
-	cwd := ev.CWD
-	if cwd == "" {
-		cwd, _ = os.Getwd()
 	}
 	if r := h.Outbound.bashRefusal(cmd, cwd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})

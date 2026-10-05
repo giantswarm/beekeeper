@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"time"
 
@@ -264,6 +265,7 @@ Register it in ~/.claude/settings.json:
 				h.Shell, h.Production, h.ContextHint = a.cfg.Shell, a.cfg.Kube.Production, a.cfg.Kube.Context("<installation>")
 				h.MaxLabs = func() int { return a.cfg.KindClusters(ramMiB()) }
 				h.Outbound = outboundGuard(a.cfg.Outbound)
+				h.UnlockCommands = a.cfg.Secret.UnlockCommands
 			}
 			if out := h.Decide(raw); out != nil {
 				_, _ = a.out.Write(out)
@@ -336,7 +338,8 @@ stay, and prints nothing. beekeeper install registers it in
 			if os.Getenv(sandbox.Env) != "" {
 				path = nil // gh takes the masked login; a gh link to devctl would read the keychain the sandbox closes
 			}
-			return guard.WritePrelude(env, guard.Prelude(sh.Unalias, sh.Globs == config.GlobsLiteral, path))
+			unalias := append(slices.Clone(sh.Unalias), a.cfg.Secret.UnlockCommands...)
+			return guard.WritePrelude(env, guard.Prelude(unalias, sh.Globs == config.GlobsLiteral, path))
 		},
 	})
 	c.AddCommand(&cobra.Command{

@@ -32,7 +32,7 @@ var (
 
 // subcommandHosts take ps as a subcommand of their own: docker ps is no
 // ps.
-var subcommandHosts = map[string]bool{dockerCmd: true, podmanCmd: true, "nerdctl": true, "crictl": true, "compose": true, "beekeeper": true}
+var subcommandHosts = map[string]bool{dockerCmd: true, podmanCmd: true, "nerdctl": true, "crictl": true, "compose": true, selfCmd: true}
 
 const (
 	dockerCmd = "docker"
