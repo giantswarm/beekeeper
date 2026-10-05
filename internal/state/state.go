@@ -432,8 +432,42 @@ type Timer struct {
 	// runs, its exit code logged. Without either the watch's line says it.
 	Wake string `json:"wake,omitempty"`
 	Run  string `json:"run,omitempty"`
+	// Repeat re-arms a timer that wakes or runs at the same local time:
+	// daily, weekdays (Monday to Friday) or weekly. Such a timer stays open
+	// until marked done.
+	Repeat string `json:"repeat,omitempty"`
 
 	rest rest
+}
+
+// The values of Timer.Repeat.
+const (
+	RepeatDaily    = "daily"
+	RepeatWeekdays = "weekdays"
+	RepeatWeekly   = "weekly"
+)
+
+// Repeats are the values of Timer.Repeat.
+var Repeats = []string{RepeatDaily, RepeatWeekdays, RepeatWeekly}
+
+// Next is the first time after now the repeating timer is due again, at its
+// local time of day: a day or a week on, a weekday timer skipping the weekend.
+func (t Timer) Next(now time.Time) time.Time {
+	next := t.Due.Local()
+	for !next.After(now) || t.Repeat == RepeatWeekdays && Weekend(next) {
+		if t.Repeat == RepeatWeekly {
+			next = next.AddDate(0, 0, 7)
+		} else {
+			next = next.AddDate(0, 0, 1)
+		}
+	}
+	return next.UTC()
+}
+
+// Weekend reports whether t falls on a Saturday or a Sunday.
+func Weekend(t time.Time) bool {
+	d := t.Weekday()
+	return d == time.Saturday || d == time.Sunday
 }
 
 // Auto reports whether the watch acts on the timer itself and closes it
@@ -892,15 +926,20 @@ const VerbStaleWriter = "state.stale-writer"
 // stamp records the binary as the state's writer, unless a newer one wrote
 // it: then the save goes on with the fields this binary does not know kept,
 // and its process is recorded and logged once as a stale writer. A build
-// without a release version (dev) neither stamps nor judges.
+// without a release version (dev, a release candidate, a +dirty branch
+// build) neither stamps nor judges, and a stamp of one is overwritten by
+// the next release that saves.
 func (s *FileStore) stamp(st *State, now time.Time) []Event {
-	own, err := semver.NewVersion(s.version)
-	if err != nil {
+	own, ok := release(s.version)
+	if !ok {
 		return nil
 	}
-	st.StaleWriters = slices.DeleteFunc(st.StaleWriters, func(w StaleWriter) bool { return !proc.Alive(w.PID) })
+	st.StaleWriters = slices.DeleteFunc(st.StaleWriters, func(w StaleWriter) bool {
+		_, newer := release(w.Newer)
+		return !newer || !proc.Alive(w.PID)
+	})
 	if st.Writer != nil {
-		if newer, err := semver.NewVersion(st.Writer.Version); err == nil && own.LessThan(newer) {
+		if newer, ok := release(st.Writer.Version); ok && own.LessThan(newer) {
 			pid := os.Getpid()
 			if slices.ContainsFunc(st.StaleWriters, func(w StaleWriter) bool { return w.PID == pid && w.Version == s.version }) {
 				return nil
@@ -912,6 +951,15 @@ func (s *FileStore) stamp(st *State, now time.Time) []Event {
 	}
 	st.Writer = &Writer{Version: s.version, rest: writerRest(st.Writer)}
 	return nil
+}
+
+// release is v as a release version: no prerelease, no build metadata.
+func release(v string) (*semver.Version, bool) {
+	r, err := semver.NewVersion(v)
+	if err != nil || r.Prerelease() != "" || r.Metadata() != "" {
+		return nil, false
+	}
+	return r, true
 }
 
 func writerRest(w *Writer) rest {

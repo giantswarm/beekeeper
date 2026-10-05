@@ -8,6 +8,11 @@ import (
 	"strings"
 )
 
+// vaultEnv matches the names of the variables that carry a 1Password
+// session or token: a signed-in CLI session, a service account's token, a
+// Connect server's token.
+const vaultEnv = "OP_SESSION_[A-Za-z0-9_]+|OP_SERVICE_ACCOUNT_TOKEN|OP_CONNECT_TOKEN"
+
 // preludeBegin and preludeEnd enclose beekeeper's prelude in a session's
 // environment file, which other hooks may write to as well.
 const (
@@ -23,13 +28,13 @@ const (
 // The directories of path go first on PATH, in their order, each once (a
 // leading ~/ is the home directory): an agent's own programs, such as a gh
 // that acts with a short-lived token, shadow the person's.
-// Every line ends with exit status 0. Empty when there is nothing to do.
+// It always drops the vault credentials of vaultEnv from the environment:
+// no agent command runs with a vault session or token.
+// Every line ends with exit status 0.
 func Prelude(unalias []string, literalGlobs bool, path []string) string {
-	if len(unalias) == 0 && !literalGlobs && len(path) == 0 {
-		return ""
-	}
 	var b strings.Builder
 	b.WriteString(preludeBegin + "\n")
+	fmt.Fprintf(&b, "for _bk_v in $(env | sed -nE 's/^(%s)=.*/\\1/p'); do unset \"$_bk_v\"; done; unset _bk_v\n", vaultEnv)
 	if len(unalias) > 0 {
 		fmt.Fprintf(&b, "for _bk_c in %s; do unalias \"$_bk_c\" 2>/dev/null; unset -f \"$_bk_c\" 2>/dev/null; done; unset _bk_c\n",
 			strings.Join(unalias, " "))

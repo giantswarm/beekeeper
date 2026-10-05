@@ -389,12 +389,33 @@ func TestAStaleWriterIsLoggedOnce(t *testing.T) {
 	if st, _ := s.Read(); st.Writer.Version != newest {
 		t.Errorf("a newer writer did not stamp: %+v", st.Writer)
 	}
-	s.version = "dev"
+	for _, v := range []string{"dev", "v0.74.0-rc.1", "v0.74.0-rc.1+dirty", "v0.74.0+dirty"} {
+		s.version = v
+		if err := s.Update(func(*State) ([]Event, error) { return nil, nil }); err != nil {
+			t.Fatal(err)
+		}
+		if st, _ := s.Read(); st.Writer.Version != newest {
+			t.Errorf("a %s build stamped: %+v", v, st.Writer)
+		}
+	}
+}
+
+// A branch build's stamp judges no release: the next release overwrites it.
+func TestABranchBuildsStampJudgesNoRelease(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(`{"writer":{"version":"v0.89.1-rc.1+dirty"},"staleWriters":[{"pid":`+strconv.Itoa(os.Getpid())+`,"command":"beekeeper watch","version":"v0.89.0","newer":"v0.89.1-rc.1+dirty","at":"2026-10-05T15:08:00Z"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.version = "v0.89.0"
 	if err := s.Update(func(*State) ([]Event, error) { return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
-	if st, _ := s.Read(); st.Writer.Version != newest {
-		t.Errorf("a dev build stamped: %+v", st.Writer)
+	if st, _ := s.Read(); st.Writer.Version != "v0.89.0" || len(st.StaleWriters) != 0 {
+		t.Errorf("writer %+v, stale %+v", st.Writer, st.StaleWriters)
 	}
 }
 

@@ -50,8 +50,35 @@ func TestPreludeInAgentShells(t *testing.T) {
 	}
 }
 
+// The prelude drops every vault credential from the environment, in zsh and
+// bash, and leaves the other variables.
+func TestPreludeDropsVaultCredentials(t *testing.T) {
+	env := filepath.Join(t.TempDir(), "env.sh")
+	if err := WritePrelude(env, Prelude(nil, false, nil)); err != nil {
+		t.Fatal(err)
+	}
+	for _, sh := range agentShells {
+		bin, err := exec.LookPath(sh)
+		if err != nil {
+			t.Logf("%s not installed", sh)
+			continue
+		}
+		c := exec.Command(bin, "-c", "source "+env+"\necho \"$?\"; env | cut -d= -f1 | sort") //nolint:gosec // the test's own shells
+		c.Env = append(os.Environ(), "OP_SESSION_ABC123=x", "OP_SERVICE_ACCOUNT_TOKEN=x", "OP_CONNECT_TOKEN=x", "OP_ACCOUNT=team")
+		out, err := c.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s: %v: %s", sh, err, out)
+		}
+		got := string(out)
+		if !strings.HasPrefix(got, "0\n") || strings.Contains(got, "OP_SESSION_") || strings.Contains(got, "OP_SERVICE_ACCOUNT_TOKEN") ||
+			strings.Contains(got, "OP_CONNECT_TOKEN") || !strings.Contains(got, "OP_ACCOUNT\n") {
+			t.Errorf("prelude in %s:\n%s", sh, got)
+		}
+	}
+}
+
 func TestPreludeOff(t *testing.T) {
-	if p := Prelude(nil, false, nil); p != "" {
+	if p := Prelude(nil, false, nil); strings.Contains(p, "unalias") || strings.Contains(p, "nomatch") || strings.Contains(p, "PATH") {
 		t.Errorf("Prelude(nil, false, nil) = %q", p)
 	}
 	if p := Prelude(nil, true, nil); strings.Contains(p, "unalias") || !strings.Contains(p, "no_nomatch") {
