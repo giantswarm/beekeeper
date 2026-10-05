@@ -110,7 +110,7 @@ can make one.`,
 			return a.secretPrint(ps, b.String())
 		},
 	})
-	c.AddCommand(a.secretCopyCmd(), a.secretSetCmd(), a.secretRotateCmd())
+	c.AddCommand(a.secretCopyCmd(), a.secretSetCmd(), a.secretRotateCmd(), a.secretSetupCmd(), a.secretImportCmd())
 	for _, sub := range c.Commands() {
 		run := sub.RunE
 		sub.RunE = func(cmd *cobra.Command, args []string) error { return vaultExit(run(cmd, args)) }
@@ -327,6 +327,72 @@ the recipients of its .sops.yaml), and answers its fingerprint.`,
 	f.IntVar(&length, "length", 32, "the value's length")
 	f.StringVar(&charset, "charset", "alnum", "the characters: "+strings.Join(secret.Charsets(), ", "))
 	return c
+}
+
+func (a *app) secretSetupCmd() *cobra.Command {
+	var account string
+	c := &cobra.Command{
+		Use:   "setup [--service-account <name>]",
+		Short: "Create the shared vault and beekeeper's service account, once",
+		Long: `setup gives beekeeper the shared vault: it creates secret.vault when the
+person's 1Password session finds none, creates a service account that reads
+and writes that vault only, and writes the account's token to
+secret.tokenFile (mode 0600), from op's output straight to the file. It
+runs op as the person, in the caller's signed-in session (op signin first),
+and answers the vault, the account and the token's length. A token file
+that holds a token is refused: revoke that account and move the file aside
+before a new one.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			ops := &secret.Ops{Run: secretRun, Apply: secretApply, Vault: a.cfg.Secret.Vault}
+			s, err := ops.Setup(cmd.Context(), account, a.cfg.Secret.TokenFile)
+			a.secretLog("setup", "vault %s, service account %s: %s", s.Vault, account, outcome(err, fmt.Sprintf("token of %d bytes", s.TokenBytes)))
+			if errors.Is(err, secret.ErrSetUp) {
+				return refused("%v", err)
+			}
+			if err != nil {
+				return err
+			}
+			created := "existing"
+			if s.VaultCreated {
+				created = "created"
+			}
+			return a.secretPrint(s, fmt.Sprintf("vault %s (%s, %s), service account %s: token of %d bytes in %s\n",
+				s.Vault, s.VaultID, created, s.ServiceAccount, s.TokenBytes, s.TokenFile))
+		},
+	}
+	host, _ := os.Hostname()
+	c.Flags().StringVar(&account, "service-account", "beekeeper-"+host, "the service account's name")
+	return c
+}
+
+func (a *app) secretImportCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "import op://<vault>/<item>/<field> op://<shared-vault>/<item>/<field>",
+		Short: "Copy a field of the person's vault into the shared vault",
+		Long: `import reads one field of a vault outside the shared vault with the
+person's own 1Password session (op signin first) and writes it into a field
+of the shared vault as beekeeper's service account, creating the item or
+the field when absent. It answers the value's length; from then on the
+shared vault's reference is the one to use.`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			r, err := parseRefs(args...)
+			if err != nil {
+				return err
+			}
+			ops, err := a.secretOps()
+			if err != nil {
+				return err
+			}
+			n, err := ops.Import(cmd.Context(), r[0], r[1])
+			a.secretLog("import", "%s to %s: %s", r[0], r[1], outcome(err, fmt.Sprintf("%d bytes", n)))
+			if err != nil {
+				return err
+			}
+			return a.secretPrint(secret.Key{Name: r[1].String(), Bytes: n}, fmt.Sprintf("wrote %s: %d bytes\n", r[1], n))
+		},
+	}
 }
 
 func (a *app) secretRotateCmd() *cobra.Command {
