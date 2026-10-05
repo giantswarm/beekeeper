@@ -163,7 +163,7 @@ a relayed successor opens with the plugin's role.
 | `beekeeper secret compare\|fingerprint\|copy\|set\|rotate` | The credential operations no agent runs itself: equality, keyed fingerprints, a SOPS file copied under a new name and namespace, a value into a SOPS path or a consumer's stdin, a generated value into the shared vault and a SOPS path, a rotation into every SOPS path that carried the old value. They answer key names, lengths, equality and fingerprints, never a value (see [Secret operations](#secret-operations)). |
 | `beekeeper sandbox render\|install` | The agent sandbox: the policy Claude Code enforces on every session's commands, rendered as a managed-settings drop-in, and the root command that installs it (see [The agent sandbox](#the-agent-sandbox)). |
 | `beekeeper scan [index\|add <ref>\|sweep]` | The transcript value scanner: without a subcommand what the fingerprint index holds; `index` rebuilds it from `scan.sops` and `scan.vaults`, `add` indexes one value from stdin, `sweep` counts each reference and token rule in every transcript, never a value (see [What reaches the model](#what-reaches-the-model)). |
-| `beekeeper hook sessionstart` | The SessionStart hook: writes the agent shell's prelude into the session's environment file (`$CLAUDE_ENV_FILE`), which Claude Code sources before parsing each Bash command. It removes the aliases and shell functions of `agents.shell.unalias` (default `grep`, `find`, `ls`, `cp`, `mv`, `rm`, the harness's own `grep` and `find` shadows among them), so each name runs the tool on `PATH`, and with `agents.shell.globs: literal` (the default) an unmatched glob stays as written instead of failing the command with zsh's `no matches found`. The directories of `agents.shell.path` go first on `PATH`, in their order and once each: the agent's own programs, such as a `gh` link to devctl that acts with the devctl App's short-lived token in place of the person's long-lived `gh` login. The person's interactive setup stays theirs; an agent writes its commands for the plain tools. |
+| `beekeeper hook sessionstart` | The SessionStart hook: writes the agent shell's prelude into the session's environment file (`$CLAUDE_ENV_FILE`), which Claude Code sources before parsing each Bash command. It drops the vault credentials (`OP_SESSION_*`, `OP_SERVICE_ACCOUNT_TOKEN`, `OP_CONNECT_TOKEN`) from the environment and removes the aliases and shell functions of `agents.shell.unalias` (default `grep`, `find`, `ls`, `cp`, `mv`, `rm`, the harness's own `grep` and `find` shadows among them), so each name runs the tool on `PATH`, and with `agents.shell.globs: literal` (the default) an unmatched glob stays as written instead of failing the command with zsh's `no matches found`. The directories of `agents.shell.path` go first on `PATH`, in their order and once each: the agent's own programs, such as a `gh` link to devctl that acts with the devctl App's short-lived token in place of the person's long-lived `gh` login. The person's interactive setup stays theirs; an agent writes its commands for the plain tools. |
 | `beekeeper lint briefs <file or folder>...` | Refuses dated lines, "until X ships" clauses, notes on the release that fixed something, workarounds and role run numbers in skills and briefs (every Markdown file below a folder), one `path:line: rule: why` per finding, exit 3 on any. |
 | `beekeeper hook permissionrequest` | The PermissionRequest hook: answers `allow` only for a session `agents start` started in bypass that now runs in `acceptEdits`; every other request gets no answer, so the person sees the normal card. Below. |
 | `beekeeper free [--apply] [--only SECTIONS] [--summary]` | Show where the memory is and, with `--apply`, free what no running work needs: dead sessions' dirs in the tmpfs `/tmp` (the CLI is gone; an idle session's stay), throwaway temp dirs and orphaned jest or Claude workers. Kind clusters, idle CLIs, heavy or runaway processes and Chrome renderers are only reported. Each Claude CLI is listed with its session's title and id, its roster state (busy, parked, idle), its role (supervisor, guide, relay spare) and the hours since its transcript changed; one whose session is untouched for `--cli-stale-hours` (12) with no role and not busy or parked is marked stale with the memory its exit returns, and stays running. Never runs as root: the swap reset and root-owned leftovers are printed as the commands to run. `--summary` prints the TSV rows a desktop front end parses. |
@@ -341,11 +341,13 @@ everywhere it is carried ([Secret operations](#secret-operations)).
 Refused in every form, since beekeeper is the only process that reads, creates, rotates, encrypts and
 decrypts secrets:
 
-- `sops` (decrypting and encrypting alike, `helm secrets` included) and `op` (`op read`, `op item`,
-  `op whoami`, `op run --no-masking`, …), also behind `sudo`, `env`, `timeout`, `xargs` and
-  `beekeeper run`; `age -d` and `gpg --decrypt`. The one exception until `beekeeper secret rotate` ships:
-  `op run -- <command>`, whose output op masks; the command it runs is checked as a command of its
-  own (`op run -- sops -d x` and `op run -- kubectl get secret x -o yaml` are refused).
+- `sops` (decrypting and encrypting alike, `helm secrets` included) and `op` in every form (`op read`,
+  `op item`, `op whoami`, `op run`, …), also behind `sudo`, `env`, `timeout`, `xargs` and
+  `beekeeper run`; `age -d` and `gpg --decrypt`.
+- Every sign-in to or unlock of a vault: `op signin`, `op account add`, `op unlock`, the person's own
+  unlock helpers (`secret.unlockCommands`, by name under any path), `beekeeper secret unlock`, which is
+  the person's; and keyring reads (`secret-tool lookup|search`, macOS `security find-*-password`). No
+  agent session holds or opens a vault session: it lives in beekeeper alone, and the refusal says so.
 - `kubectl edit` of a Secret and `kubectl view-secret`.
 - A hash (`sha*sum`, `md5sum`, `b2sum`, `cksum`, `openssl dgst`) or a diff (`diff`, `cmp`, `git diff
   --no-index`, …) of a file whose name says it holds secrets in plaintext (`secrets.yaml`,
@@ -383,9 +385,17 @@ a variable or a flag's value (`T=$(…)`, `--from-literal=k=$(…)`), a hash, `g
 clipboard are no allowed end. `-o name`, `-o wide`, the table and `kubectl describe secret` (sizes
 only) pass.
 
-The same holds inside `sh|bash|zsh -c`, `ssh`, `eval` and `watch` strings and here-documents fed to a
-shell. Quoted text, comments and other here-documents (a commit message, an issue body) are not
-commands and pass.
+The same holds inside what a command line runs besides itself: every argument of `sh|bash|zsh` (a
+`-c` or `-ic` string, a single word such as `zsh -ic <helper>` included, and `"$SHELL"`), `ssh` and
+`watch`; `eval`'s words; the body of a shell function or group on the line (`f(){ …; }; f`); here-documents
+fed to a shell; and a script it runs (`bash x.sh`, `./x.sh`, `source x.sh`, read from the session's
+working directory, a text file up to 64 KiB, nested scripts four deep). Quoted text, comments and other
+here-documents (a commit message, an issue body) are not commands and pass.
+
+The agent shell prelude (`beekeeper hook sessionstart`) also drops `OP_SESSION_*`,
+`OP_SERVICE_ACCOUNT_TOKEN` and `OP_CONNECT_TOKEN` from the environment before every command, and the
+aliases and shell functions of `secret.unlockCommands`, so a vault session the person's shell setup
+exports never reaches an agent's command.
 
 ## Secret operations
 

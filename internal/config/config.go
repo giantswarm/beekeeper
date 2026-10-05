@@ -300,6 +300,11 @@ type Secret struct {
 	// vault no service account can be granted, such as an Employee vault.
 	// op fails while the person is signed out, which exits 78.
 	Session bool `yaml:"session"`
+	// UnlockCommands are the names of the person's own commands that sign
+	// in to or unlock the vault (helpers around op signin): the hook
+	// refuses them in agent sessions under any path, like op signin, and
+	// the agent shell prelude removes their aliases and shell functions.
+	UnlockCommands []string `yaml:"unlockCommands"`
 }
 
 // Sandbox is the agent sandbox: the paths and hosts an agent session's
@@ -1474,6 +1479,11 @@ func (c *Config) validate() error {
 	for _, n := range c.Agents.Shell.Unalias {
 		if !commandName.MatchString(n) {
 			return fmt.Errorf("agents.shell.unalias: %q is no command name", n)
+		}
+	}
+	for _, n := range c.Secret.UnlockCommands {
+		if !commandName.MatchString(n) {
+			return fmt.Errorf("secret.unlockCommands: %q is no command name", n)
 		}
 	}
 	for i, r := range c.Outbound.StoreDeny {
