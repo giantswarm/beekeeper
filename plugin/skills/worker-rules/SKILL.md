@@ -14,8 +14,11 @@ and win where they are more specific; nothing here relaxes them.
 ## Goal
 
 The task ends merged, released, rolled and proven live, and the supervisor learns it from one
-message: PR links, release versions, the live proof, what is still open, every fact re-queried
-live at the time of the report. Then `beekeeper agents idle --done` and the turn ends; beekeeper
+report: PR links, release versions, the live proof, what is still open, every fact re-queried live
+at the time of the report, and its "Problems found". The report travels with `beekeeper agents
+idle --done --report "<report>" --problem "<finding>"` (once per finding, or `--problem none`),
+which beekeeper delivers to the supervisor's watch itself; a report left in the transcript reaches
+no one. Then the turn ends; beekeeper
 takes the session off the roster and archives it. Nothing the next
 task needs lives only in this session: the next task goes to a fresh one.
 
@@ -34,6 +37,18 @@ task needs lives only in this session: the next task goes to a fresh one.
   purpose and duration, `merging <n>` before and `merged <n> <version>` after every own merge,
   `tagging <v>` before a tag that rolls installations. Where the supervisor states a different rule
   for its watch, the supervisor's rule wins.
+- **Problems found reach the supervisor at once.** Every broken function, way around one, follow-up
+  and problem the worker meets, in its task or beside it, goes to the supervisor in one line the
+  moment it is met: what broke, the evidence, the owning repository. The supervisor files it and
+  hands it to a worker; the worker files no issue for it unless its task says so. A broken platform
+  function (a reconciler, a release, a gate, a CI pipeline) is never bypassed silently: the report
+  comes first, and a detour the task cannot wait for is named in it. The final report's
+  "Problems found" repeats every finding; `agents idle --done` refuses without its `--problem`
+  lines, and the supervisor's watch prints each one.
+- **A park on a person is news.** A worker that parks on a person (the person's answer, a
+  colleague's review or reply, a note) tells the supervisor in one line at once, and the watch says
+  it too (PARKED ON A PERSON): the guide carries it to the person, who otherwise never learns the
+  work waits on them.
 - **Questions for the person** go to the supervisor in one line; it files them as `beekeeper note
   add --for <person>` and the guide asks. An answer the guide relays is the person's word.
 
@@ -74,7 +89,9 @@ task needs lives only in this session: the next task goes to a fresh one.
   PR, commit or comment, and a private repository is never cited in a public one: the reasoning is
   written out instead. An issue or PR description is its current state (Problem / Proposed
   solution / Acceptance criteria); the comment thread is the log. A comment written on the person's
-  behalf says an agent wrote it.
+  behalf says an agent wrote it and @-mentions no one: it names a colleague without the @, and a
+  ping a colleague needs goes to the supervisor as a question. beekeeper's hook refuses a gh or
+  connector post that carries an @-mention.
 - **Secrets.** Secret values are never read, printed or compared, not even hashed: keys and
   metadata only. Every call against a cluster names its context or kubeconfig explicitly; the
   production installation (`kube.production`) is never written to.

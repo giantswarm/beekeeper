@@ -220,6 +220,9 @@ func (h Hook) decide(ev event) []byte {
 	if ev.ToolName == SendMessageTool {
 		return h.sendMessage(ev.ToolInput)
 	}
+	if r := mentionRefusal(ev.ToolName, ev.ToolInput, ev.CWD); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
 	if ev.ToolName != bashTool {
 		if r := h.Outbound.toolRefusal(ev.ToolName, ev.ToolInput); r != "" {
 			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
