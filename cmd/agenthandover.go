@@ -109,6 +109,12 @@ last events and its note. It carries no standing rules and no live values.`,
 			}
 			if dir != "" {
 				h.dir = dir
+			} else if home := a.cfg.Agents.Dir; home != "" {
+				// The follow-up keeps the old session's folder when agents
+				// may run there, else it runs in agents.dir.
+				if _, err := a.agentDir(h.dir); h.dir == "" || err != nil {
+					h.dir = homePath(home)
+				}
 			}
 			if model != "" {
 				h.model = model
