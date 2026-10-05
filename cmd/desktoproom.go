@@ -8,8 +8,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/spf13/cobra"
-
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -86,34 +84,18 @@ func (a *app) endOneForRoom(ctx context.Context, slots int, keep []string) (bool
 	if err != nil {
 		return false, fmt.Errorf("ending beekeeper's finished desktop CLI %d (%s) to stay under the desktop's cap of %d: %w", s.PID, s.HostID, limit, err)
 	}
-	_ = a.store.Log(event(watchParty, "desktop.room", "ended the finished desktop CLI %d of %s, idle since %s: the desktop runs its cap of %d CLIs",
-		s.PID, s.HostID, s.LastActive.Format(time.DateTime), limit))
-	if _, err := fmt.Fprintf(a.out, "room: ended beekeeper's finished desktop CLI %d of %s (idle since %s), the desktop at its cap of %d CLIs\n",
-		s.PID, s.HostID, s.LastActive.Format(time.DateTime), limit); err != nil {
+	by, cerr := a.caller()
+	if cerr != nil {
+		by = state.Party{Name: "beekeeper, outside a session"}
+	}
+	idle := clock(a.now, s.LastActive)
+	_ = a.store.Log(event(by, "desktop.room", "ended the idle desktop CLI %d of %s (%s, idle since %s) before a spawn: the desktop runs its cap of %d CLIs",
+		s.PID, s.HostID, s.Name, idle, limit))
+	if _, err := fmt.Fprintf(a.out, "room: ended the idle desktop CLI %d of %s (%s, idle since %s): the desktop runs its cap of %d CLIs\n",
+		s.PID, s.HostID, s.Name, idle, limit); err != nil {
 		return false, err
 	}
 	return true, awaitExit(ctx, s.PID, roomWait)
-}
-
-// agentRoomCmd frees room under the desktop's cap of CLIs by hand.
-func (a *app) agentRoomCmd() *cobra.Command {
-	var free int
-	var keep []string
-	c := &cobra.Command{
-		Use:    "room",
-		Short:  "Free room under the desktop's cap of CLIs from beekeeper's own finished CLIs",
-		Hidden: true,
-		Args:   cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if free < 1 {
-				return usageErr("--free %d: at least 1", free)
-			}
-			return a.makeRoomFor(cmd.Context(), free, keep...)
-		},
-	}
-	c.Flags().IntVar(&free, "free", 1, "the CLIs the desktop is to have room for")
-	c.Flags().StringSliceVar(&keep, "keep", nil, "desktop sessions (local_ ids) whose CLI is never ended")
-	return c
 }
 
 // roomFor is the desktop CLI makeRoom ends: one of beekeeper's own (roomRank),
@@ -135,11 +117,12 @@ func roomFor(st *state.State, sessions []*claude.Session, t *proc.Table, now tim
 }
 
 // roomRank ranks the desktop CLI of s for makeRoom: 0 a finished worker (off
-// the roster, or on it without a task), 1 a parked one, 2 one idle on its
-// task. Its session stays, and the desktop's send starts a CLI of it again.
-// False: never ended, since it is no desktop CLI, its session is not one
-// beekeeper started (the person's own), it holds a role, or it runs a turn
-// or a command or was active within stewardQuiet.
+// the roster, or on it without a task), 1 a parked one. Its session stays,
+// and the desktop's send starts a CLI of it again. False: never ended, since
+// it is no desktop CLI, its session is not one beekeeper started (the
+// person's own), it holds a role, it is busy on its task, a merge of it waits
+// or runs in the gate (whose outcome wakes it), or it runs a turn or a
+// command or was active within stewardQuiet.
 func roomRank(st *state.State, t *proc.Table, s *claude.Session, now time.Time) (int, bool) {
 	p := t.ByPID[s.PID]
 	switch {
@@ -148,6 +131,8 @@ func roomRank(st *state.State, t *proc.Table, s *claude.Session, now time.Time) 
 	case !slices.ContainsFunc(st.Starts, func(x state.Start) bool { return x.Session == s.ID }):
 		return 0, false
 	case keepsRole(st, s.Party()):
+		return 0, false
+	case slices.ContainsFunc(st.Merges, func(m state.Merge) bool { return m.Finished.IsZero() && m.By.Is(s.Party()) }):
 		return 0, false
 	case len(s.Commands) > 0 || headlessTurn(t, s.ID) != "" || now.Sub(s.LastActive) < stewardQuiet:
 		return 0, false
@@ -159,7 +144,7 @@ func roomRank(st *state.State, t *proc.Table, s *claude.Session, now time.Time) 
 	case st.Agents[i].Park != nil:
 		return 1, true
 	}
-	return 2, true
+	return 0, false
 }
 
 // awaitExit waits up to wait for process pid to exit.
