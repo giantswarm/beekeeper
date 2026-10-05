@@ -30,7 +30,8 @@ func policy(t *testing.T) (Policy, string) {
 		Domains: []string{"muster.example.com"}, Mask: []config.SandboxMask{{Name: "GH_TOKEN", Hosts: config.GitHubHosts}}}
 	return New(cfg, Paths{Home: home, ConfigFile: filepath.Join(home, ".config/beekeeper/config.yaml"),
 		StateDir: filepath.Join(home, ".local/state/beekeeper"), LeaseDir: filepath.Join(home, ".local/state/beekeeper/leases"),
-		SlotDir: filepath.Join(home, ".local/state/memcap/slots"), Exe: filepath.Join(home, ".go/bin/beekeeper")}), home
+		SlotDir: filepath.Join(home, ".local/state/memcap/slots"), Exe: filepath.Join(home, ".go/bin/beekeeper"),
+		ScanDir: filepath.Join(home, ".local/state/beekeeper/scan")}), home
 }
 
 func TestSettings(t *testing.T) {
@@ -43,7 +44,7 @@ func TestSettings(t *testing.T) {
 		Env     map[string]string `json:"env"`
 		Sandbox struct {
 			Enabled, FailIfUnavailable, AllowUnsandboxedCommands bool
-			Filesystem                                           struct{ DenyRead, AllowRead, AllowWrite []string }
+			Filesystem                                           struct{ DenyRead, DenyWrite, AllowRead, AllowWrite []string }
 			Network                                              struct {
 				AllowedDomains          []string
 				AllowManagedDomainsOnly bool
@@ -65,8 +66,11 @@ func TestSettings(t *testing.T) {
 	if s.Env[Env] != "1" || !sb.Enabled || !sb.FailIfUnavailable || sb.AllowUnsandboxedCommands {
 		t.Errorf("the sandbox is not on and closed: %s", b)
 	}
-	if !slices.Equal(sb.Filesystem.DenyRead, []string{"~/"}) {
-		t.Errorf("denyRead = %v, want the home directory", sb.Filesystem.DenyRead)
+	if !slices.Equal(sb.Filesystem.DenyRead, []string{"~/", "~/.local/state/beekeeper/scan"}) {
+		t.Errorf("denyRead = %v, want the home directory and the scanner's", sb.Filesystem.DenyRead)
+	}
+	if !slices.Equal(sb.Filesystem.DenyWrite, []string{"~/.local/state/beekeeper/scan"}) {
+		t.Errorf("denyWrite = %v, want the scanner's directory", sb.Filesystem.DenyWrite)
 	}
 	for _, want := range []string{"~/projects", "~/.go/bin", "~/.config/beekeeper", "~/.claude/projects"} {
 		if !slices.Contains(sb.Filesystem.AllowRead, want) {
@@ -155,6 +159,8 @@ func TestWritable(t *testing.T) {
 		filepath.Join(os.TempDir(), "probe"):                      true,
 		filepath.Join(home, ".local/state/beekeeper/state.json"):  true,
 		filepath.Join(home, ".local/state/beekeeper2/state.json"): false,
+		filepath.Join(home, ".local/state/beekeeper/scan/key"):    false,
+		filepath.Join(home, ".local/state/beekeeper/scan"):        false,
 	} {
 		if got := p.Writable(path, cwd); got != want {
 			t.Errorf("Writable(%s) = %v, want %v", path, got, want)
@@ -180,5 +186,18 @@ func TestHomeAsWorkingDirectoryOpensNothing(t *testing.T) {
 		if p.Readable(path, home) || p.Writable(path, home) {
 			t.Errorf("with the home directory as cwd, %s is open", path)
 		}
+	}
+}
+
+func TestTheScannersDirectoryIsDeniedInsideTheState(t *testing.T) {
+	p, home := policy(t)
+	state := filepath.Join(home, ".local/state/beekeeper")
+	for _, path := range []string{filepath.Join(state, "scan"), filepath.Join(state, "scan/key"), filepath.Join(state, "scan/index.json")} {
+		if p.Readable(path, state) || p.Writable(path, state) {
+			t.Errorf("%s is open to the sandbox", path)
+		}
+	}
+	if !p.Readable(filepath.Join(state, "state.json"), state) || !p.Writable(filepath.Join(state, "scanned.json"), state) {
+		t.Error("the rest of the state directory is closed")
 	}
 }

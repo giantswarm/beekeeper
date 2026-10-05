@@ -252,6 +252,7 @@ func TestBrokeredSecretHoldsItsFilesToTheSandbox(t *testing.T) {
 	src := filepath.Join(repo, "db.sops.yaml")
 	for _, args := range [][]string{
 		{fingerprintOp, closed},
+		{fingerprintOp, filepath.Join(a.cfg.StateDir, "scan", "planted.sops.yaml")},
 		{compareOp, src, closed},
 		{copyOp, closed + "#token", filepath.Join(repo, "x.sops.yaml") + "#token"},
 		{copyOp, src, filepath.Join(home, "out.sops.yaml")},
