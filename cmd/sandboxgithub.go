@@ -91,7 +91,7 @@ func (a *app) gateBrokered(argv []string, wait time.Duration, queued bool) error
 
 // brokeredGateArgv is the command line of a brokered gate: devctl by its
 // configured name, one of the gated commands, the wait bounded.
-func brokeredGateArgv(req sandbox.Request) ([]string, error) {
+func brokeredGateArgv(req sandbox.Request, _ bool) ([]string, error) {
 	if len(req.Args) == 0 || filepath.Base(req.Args[0]) != merge.Tool {
 		return nil, errors.New("the sandbox broker gates devctl only")
 	}

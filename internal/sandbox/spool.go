@@ -32,7 +32,7 @@ const (
 
 // Request is one ask of the broker.
 type Request struct {
-	// Op is OpPing, OpCapSlot, OpScope, OpSecret, OpKubeconfig or OpGate.
+	// Op is OpPing, OpCapSlot, OpScope, OpSecret, OpKubeconfig, OpVault or OpGate.
 	Op string `json:"op"`
 	// Unit is the scope to put the requester into (OpScope).
 	Unit string `json:"unit,omitempty"`
@@ -63,6 +63,9 @@ const (
 	// OpKubeconfig writes a held lab lease's kubeconfig, which takes the
 	// container runtime's socket the sandbox closes.
 	OpKubeconfig = "kubeconfig"
+	// OpVault answers whether the broker holds the vault session
+	// (secret.session), never the session itself.
+	OpVault = "vault"
 	// OpGate runs a gated devctl command (beekeeper gate) on the host,
 	// where devctl reads its keychain and the gate starts its units.
 	OpGate = "gate"

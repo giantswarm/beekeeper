@@ -121,21 +121,43 @@ can make one.`,
 	for _, sub := range c.Commands() {
 		run := sub.RunE
 		sub.RunE = func(cmd *cobra.Command, args []string) error {
-			if os.Getenv(sandbox.Env) != "" && os.Getenv(sandbox.Brokered) == "" {
-				return a.secretBrokered(cmd, args)
+			if os.Getenv(sandbox.Brokered) != "" {
+				// the broker's call: the vault session in its environment
+				// stays out of every other process's reach
+				_ = secret.Protect()
+				return vaultExit(run(cmd, args))
+			}
+			inSandbox := os.Getenv(sandbox.Env) != ""
+			if inSandbox || a.cfg.Secret.Session && secret.NeedsVault(callArgs(cmd, args)) {
+				return a.secretBrokered(cmd, args, inSandbox)
 			}
 			return vaultExit(run(cmd, args))
 		}
 	}
+	c.AddCommand(a.secretUnlockCmd(), a.secretLockCmd(), a.secretStatusCmd())
 	return c
 }
 
-// secretBrokered is a secret call in the agent sandbox, which holds no
-// sops key and no op session: the host's broker runs it as this session
-// and answers its output and exit code through the spool.
-func (a *app) secretBrokered(cmd *cobra.Command, args []string) error {
-	if cmd.ArgsLenAtDash() >= 0 {
+// callArgs are a call's arguments and its flags' values.
+func callArgs(cmd *cobra.Command, args []string) []string {
+	all := slices.Clone(args)
+	cmd.Flags().Visit(func(f *pflag.Flag) { all = append(all, f.Value.String()) })
+	return all
+}
+
+// secretBrokered is a secret call the host's broker runs as this session,
+// answering its output and exit code through the spool: every call in the
+// agent sandbox, which holds no sops key and no op session, and with
+// secret.session every call on the vault, whose session lives in the broker
+// alone. While the broker holds no session the call says so and waits for
+// the person's unlock.
+func (a *app) secretBrokered(cmd *cobra.Command, args []string, inSandbox bool) error {
+	dash := cmd.ArgsLenAtDash()
+	if inSandbox && dash >= 0 {
 		return refused("the agent sandbox runs no consumer on the host: copy <from> -- <consumer> runs outside the sandbox only")
+	}
+	if dash < 0 {
+		dash = len(args)
 	}
 	argv := []string{cmd.Name()}
 	var err error
@@ -148,16 +170,26 @@ func (a *app) secretBrokered(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	for _, arg := range args {
+	for _, arg := range args[:dash] {
 		if strings.HasPrefix(arg, "-") {
 			return usageErr("%s: an argument the broker would take for a flag", arg)
 		}
 	}
-	argv = append(argv, args...)
-	if err := brokeredSecretArgs(argv); err != nil {
+	argv = append(argv, args[:dash]...)
+	if dash < len(args) {
+		argv = append(append(argv, "--"), args[dash:]...)
+	}
+	if err := brokeredSecretArgs(argv, inSandbox); err != nil {
 		return refused("%v; %s and %s run on the host, by the person", err, "setup", "import")
 	}
-	return a.brokeredReply(sandbox.Request{Op: sandbox.OpSecret, Args: argv})
+	if !a.cfg.Secret.Session || !secret.NeedsVault(argv) {
+		return a.brokeredReply(sandbox.Request{Op: sandbox.OpSecret, Args: argv})
+	}
+	r, err := sandbox.Call(sandbox.SpoolDir(a.cfg.StateDir), sandbox.Request{Op: sandbox.OpVault}, 10*time.Second)
+	if err == nil && r.Out != vaultUnlocked {
+		_, _ = fmt.Fprintln(os.Stderr, guard.LogPrefix+secret.Locked)
+	}
+	return a.brokeredReplyWithin(sandbox.Request{Op: sandbox.OpSecret, Args: argv}, a.cfg.Secret.UnlockWait.Duration+brokeredCallTimeout+time.Minute)
 }
 
 // brokeredReply asks the host's broker for req and passes on its output
@@ -186,11 +218,11 @@ func (a *app) brokeredReplyWithin(req sandbox.Request, timeout time.Duration) er
 	return nil
 }
 
-// sandboxFiles holds the SOPS files of a brokered call to the agent
-// sandbox's lists: through the broker a sandboxed session reads and writes
-// no file its sandbox closes to it.
+// sandboxFiles holds the SOPS files of a sandboxed session's brokered call
+// to the agent sandbox's lists: through the broker it reads and writes no
+// file its sandbox closes to it.
 func (a *app) sandboxFiles(read, write []secret.Ref) error {
-	if os.Getenv(sandbox.Brokered) == "" {
+	if os.Getenv(sandbox.Brokered) == "" || os.Getenv(sandbox.Env) == "" {
 		return nil
 	}
 	p := a.sandboxPolicy()

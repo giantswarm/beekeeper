@@ -326,3 +326,21 @@ func TestBrokenConfigRefusesBash(t *testing.T) {
 		t.Errorf("a broken configuration passes: %+v", d)
 	}
 }
+
+// A beekeeper secret call on the vault may wait for the person's unlock:
+// it gets the Bash tool's 10 minutes, its command unchanged.
+func TestVaultCallGetsTheLongTimeout(t *testing.T) {
+	for cmd, long := range map[string]bool{
+		"beekeeper secret fingerprint op://Shared/i/f":                     true,
+		"cd x && beekeeper secret copy op://Shared/i/f a.sops.yaml#data.t": true,
+		"beekeeper secret compare a.sops.yaml b.sops.yaml":                 false,
+	} {
+		d := decide(t, hook(), "/", cmd, map[string]any{"timeout": 120000})
+		switch {
+		case long && (d == nil || d.UpdatedInput["timeout"] != float64(600000) || d.UpdatedInput["command"] != cmd):
+			t.Errorf("%q: %+v, want the command with the 10 minutes", cmd, d)
+		case !long && d != nil && d.UpdatedInput["timeout"] == float64(600000):
+			t.Errorf("%q: raised the timeout", cmd)
+		}
+	}
+}

@@ -180,3 +180,18 @@ func Origin(procDir string, pid int, keys []string) (string, []string, error) {
 	}
 	return cwd, env, nil
 }
+
+// Sandboxed reports whether process pid runs in another mount namespace
+// than procDir's own process: the agent sandbox (bubblewrap) always mounts
+// its own, which no process inside can leave or fake.
+func Sandboxed(procDir string, pid int) (bool, error) {
+	self, err := os.Readlink(filepath.Join(procDir, "self", "ns", "mnt"))
+	if err != nil {
+		return false, err
+	}
+	theirs, err := os.Readlink(filepath.Join(procDir, strconv.Itoa(pid), "ns", "mnt"))
+	if err != nil {
+		return false, err
+	}
+	return theirs != self, nil
+}

@@ -79,6 +79,9 @@ var (
 	cdArg     = regexp.MustCompile(`(?:^|[;&|]\s*)cd\s+(\S+)`)
 	clusterRe = regexp.MustCompile(`^\s*clusterName:\s*"?([\w.-]+)"?`)
 	shellSafe = regexp.MustCompile(`^[\w@%+=:,./-]+$`)
+	// vaultCall: a beekeeper secret call on the vault, which may wait for
+	// the person's unlock (secret.unlockWait) and gets the 10 minutes.
+	vaultCall = regexp.MustCompile(`(?:^|[\s;&|(/])beekeeper["']?\s+secret\s+(?:compare|fingerprint|copy|set|rotate)\b[^;&|\n]*op://`)
 )
 
 // The hook's permission decisions and the Bash tool's background flag.
@@ -269,7 +272,7 @@ func (h Hook) decide(ev event) []byte {
 	}
 
 	if !isHeavy(cmd) {
-		return h.rewrite(ev.ToolInput, cmd, gated, bg)
+		return h.rewrite(ev.ToolInput, cmd, gated || vaultCall.MatchString(cmd), bg)
 	}
 	prefix := ""
 	if bg {

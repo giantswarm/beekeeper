@@ -298,13 +298,18 @@ type Secret struct {
 	// Session reads the vault through the person's own signed-in op
 	// session instead of a service account (tokenFile then unused): for a
 	// vault no service account can be granted, such as an Employee vault.
-	// op fails while the person is signed out, which exits 78.
+	// The session lives in the broker's memory alone (beekeeper secret
+	// unlock, by the person); every call on an op:// reference runs there.
 	Session bool `yaml:"session"`
 	// UnlockCommands are the names of the person's own commands that sign
 	// in to or unlock the vault (helpers around op signin): the hook
 	// refuses them in agent sessions under any path, like op signin, and
 	// the agent shell prelude removes their aliases and shell functions.
 	UnlockCommands []string `yaml:"unlockCommands"`
+	// UnlockWait is how long a call that needs the vault waits for the
+	// person's beekeeper secret unlock while the broker holds no session
+	// (8m, within the Bash tool's 10 minutes).
+	UnlockWait Duration `yaml:"unlockWait"`
 }
 
 // Sandbox is the agent sandbox: the paths and hosts an agent session's
@@ -1366,6 +1371,7 @@ func (c *Config) defaults() error {
 	setDur(&c.Merge.BudgetFresh, time.Minute)
 	setDur(&c.Merge.StallAfter, 5*time.Minute)
 	setDur(&c.Merge.HungAfter, 45*time.Minute)
+	setDur(&c.Secret.UnlockWait, 8*time.Minute)
 
 	setStr(&c.Memcap.SlotDir, filepath.Join(state, "memcap", "slots"))
 	setInt(&c.Memcap.Slots, 2)

@@ -328,6 +328,59 @@ variable (`rm -rf "${D:?}"/*`), run the cleanup from a `set -euo pipefail` scrip
 or move the files aside instead of deleting them. `rm -rf "$D"` alone, `$HOME` and `$PWD` paths, `git
 clean`, `git rm`, `klausctl stop|delete` and beekeeper's own commands pass.
 
+## Threat model
+
+Agents act for the person but are not the person: a prompt injection, a confused plan or a wrong
+command must not reach a credential. The parties:
+
+| Party | Runs as | Reaches |
+|---|---|---|
+| The person | their Unix user, at their terminal | everything: the vault through their own sign-in, the keyring, the kubeconfigs |
+| beekeeper's broker (`beekeeper sandbox broker`) | the person's user, a systemd user unit no agent starts, undumpable | the vault session (in memory), the SOPS keys, the container runtime, devctl's keychain login |
+| A sandboxed agent session | the person's user inside the sandbox (bubblewrap, own mount namespace, no Unix sockets) | its working directory, the temporary directory, beekeeper's state outside `scan/`, GitHub and `sandbox.domains`; credentials only as masked placeholders |
+| An unsandboxed agent session | the person's user | what the person reaches, held back by the PreToolUse hook only |
+| Remote services (GitHub, the model API, chat) | elsewhere | what a session sends: the outbound guard refuses secret values ([What leaves the machine](#what-leaves-the-machine)) |
+
+The secrets and where they live:
+
+| Secret | Where | Who reads it |
+|---|---|---|
+| The vault session (`secret.session`) | the broker's memory; for one call, the environment of the broker's `op` child | the broker; the person opens it with `beekeeper secret unlock` |
+| The vault's service account token (`secret.tokenFile`) | a 0600 file outside the sandbox's lists | beekeeper's own `op` calls |
+| The SOPS keys | the person's key files, outside the sandbox's lists | sops in beekeeper's process |
+| The GitHub App token of sandboxed sessions | `$XDG_RUNTIME_DIR/beekeeper/github`, masked | the sandbox proxy, into requests to GitHub |
+| The value scanner's key and index | `scan/` in beekeeper's state, denied to sandboxed sessions | beekeeper |
+| Kubeconfigs, the Teleport profile, the GitHub CLI's token, the keyring | the person's home and session bus | the person; a lab kubeconfig for its lease holder |
+
+Why an agent reads no value and opens no vault: a value leaves beekeeper only as a key name, a
+length, an equality or a keyed fingerprint ([Secret operations](#secret-operations)); every op, sops
+and decryption command, every vault sign-in or unlock and every keyring read is refused in agent
+sessions ([Secret reads](#secret-reads)); the agent shell drops vault credentials from its environment;
+the vault session exists in the broker alone and only the person's sign-in at their own terminal puts
+it there ([The vault session](#the-vault-session)); a sandboxed session can neither read the
+credential files nor reach a Unix socket, the keeper's and the session bus included
+([The agent sandbox](#the-agent-sandbox)); and a tool result that carries a value is redacted before
+the model sees it ([What reaches the model](#what-reaches-the-model)).
+
+Residual risks:
+
+- **An unsandboxed session is not a boundary.** It runs as the person's user, and the hook reads
+  command lines: a compiled program, an interpreter's own code (`python -c`), a binary renamed or
+  written on the fly reaches what the user reaches, the keyring, the token file, the keeper's socket
+  (to lock it, or to hand it a session) and the environment of the broker's `op` child during a call.
+  The sandbox is the boundary; the hook is a guard rail that catches mistakes and the plain forms.
+- **The person's shell setup.** A vault session that the person's shell startup files export comes
+  back in every shell an agent's command starts (`zsh -c …` reads them again after the prelude). A
+  session belongs to the broker only, never in startup files or the keyring.
+- **The keeper's socket.** `unlock` hands the session only to a listener running this beekeeper
+  binary as this user; a process of the user that replaces the binary on disk defeats that check.
+- **The masked GitHub token** can be read back through a GitHub endpoint that echoes its request
+  body, since the sandbox proxy substitutes the placeholder in bodies too ([The agent
+  sandbox](#the-agent-sandbox)); the token dies within eight hours.
+- **A held lab's kubeconfig** is readable by every sandboxed session, not by its holder alone.
+- **Desktop control.** An agent that drives the desktop could type into the person's terminal; the
+  unlock still needs the account password, which no agent holds.
+
 ## Secret reads
 
 A value a command prints lands in the session's transcript and goes to the model API with the next
@@ -410,10 +463,12 @@ path; `sops://` in front optional) or a field of the shared 1Password vault
 (`op://<vault>/<item>/<field>`). beekeeper reads only the vault `secret.vault` names, and only as its
 service account, whose token it reads from `secret.tokenFile` and gives to its own `op` calls alone;
 with either unset, an `op://` reference is refused. `secret.session: true` reads and writes the vault
-through the person's own signed-in `op` session in the caller's environment instead (`tokenFile` unused,
-`setup` refused): the way to a vault no service account can be granted, such as a person's Employee vault;
-signed out, `op` fails and the command exits 78. Every command exits 78 when the vault cannot give a
-value: none configured, no token, or `op` failing or answering nothing within a minute. A SOPS file is encrypted under the creation rules
+through the person's own `op` session instead (`tokenFile` unused, `setup` refused): the way to a vault
+no service account can be granted, such as a person's Employee vault. That session lives in the broker's
+memory alone ([The vault session](#the-vault-session)), so every call on an `op://` reference runs
+there, from an agent session, a sandboxed one or the person's terminal alike. Every command exits 78
+when the vault cannot give a value: none configured, no token, the vault locked past
+`secret.unlockWait`, or `op` failing or answering nothing within a minute. A SOPS file is encrypted under the creation rules
 of the `.sops.yaml` nearest above it, run from that directory, so a `path_regex` relative to the
 repository matches.
 
@@ -430,7 +485,40 @@ repository matches.
 | `import op://<vault>/<item>/<field> op://<shared>/<item>/<field>` | One field of a vault outside the shared one, read with the person's session, into a field of the shared vault, written as the service account (the item or field created when absent); it answers the length. From then on the shared reference is the one to use. |
 | `rotate op://… --generate` | A value beekeeper made gets a new one (`--length`, `--charset` as for `set`): the vault field first, then every path of the SOPS files `scan.sops` names that carried the old value, the value itself or its base64 form (a Secret's `data`), matched by fingerprint. |
 | `rotate op://…` | A value a third party issues: the person rotates it at its issuer into the vault field, and `rotate` writes the vault's new value into every path that carried the old one, known by the fingerprint `beekeeper scan index` recorded before the change. It refuses while the vault still holds the recorded value. |
+| `unlock [--account <a>]` | The person's, in their own terminal: `op signin` on that terminal, the session handed to the broker ([The vault session](#the-vault-session)). Refused in an agent session and without a terminal; the hook refuses it in agent sessions too. |
+| `lock` | The broker forgets the vault session. |
+| `status` | Whether the broker holds the vault session, never the session. |
 | `rotate platform://<installation>/<capability>/<name> --reason <text>` | A credential the platform manager generates: `platformctl installation reconcile <installation> <capability> --commit --rotate <name>` on the host, the manager writing the new value into the installation's SOPS files in a pull request; nothing is decrypted and no copy reaches the vault. `--dry-run` shows the files that hold it. |
+
+### The vault session
+
+With `secret.session`, no agent ever holds the vault session or opens one. It lives in the memory of
+`beekeeper sandbox broker` (`beekeeper-sandbox.service`), a process of the host that no agent session
+starts; never in a file, a keyring entry or an agent's environment. The broker makes itself undumpable
+(no other process of the user reads its memory or environment), drops every vault credential from what
+its calls inherit, and gives the session to its own `op` calls alone, in their environment.
+
+The person unlocks it with `beekeeper secret unlock` in their own terminal: `op signin` runs on that
+terminal and the person types the account password into op's own prompt; the session op prints goes
+from beekeeper's memory to the broker over a Unix socket in the runtime directory
+(`$XDG_RUNTIME_DIR/beekeeper/vault.sock`, mode 0600 in a 0700 directory, which the sandbox can neither
+reach nor write), after `unlock` checked that the listener is this beekeeper binary run as this user.
+The socket answers only whether a session is held. `unlock` refuses in an agent session (Claude Code's,
+omp's or the sandbox's variables set) and without a terminal; the hook refuses it in agent sessions
+before it runs.
+
+While the broker holds no session, a call on the vault prints `vault locked: waiting for the person's
+approval` and waits up to `secret.unlockWait` (8 m; the hook gives such a call the Bash tool's 10
+minutes), then exits 78. Nothing asks the person: the watch says `VAULT LOCKED: <who> waits on <ref>`
+and an ENDED line once it goes on or gives up, and `beekeeper status` names the waiting sessions, so
+the supervisor and the guide see it. A session op no longer takes (expired after op's idle timeout) is
+forgotten and the call waits once more. `beekeeper secret lock` forgets it at once. The broker runs on
+Linux only, so `secret.session` needs it there.
+
+The 1Password desktop app's CLI integration (op asks the app, the app asks the person through the
+system authentication prompt) is not used: it lets any process of the user that calls op raise the
+prompt, so an unsandboxed agent calling op directly would raise the same prompt as beekeeper, and the
+person could not tell them apart.
 
 `rotate` reads every SOPS file before it writes anything, so one it cannot read stops the rotation with
 nothing changed; it answers the new value's fingerprint and the paths it went to, indexes the new value
@@ -519,7 +607,10 @@ same file passed to `claude --settings` holds one session to it, to try a change
   its working directory, and the SOPS files it reads and writes are held to the sandbox's lists. Its
   output and exit code come back through the spool, and that output is never a value. A consumer
   (`copy <ref> -- <command>`) would run on the host, outside the sandbox, so the sandbox refuses it,
-  as it refuses `--as`, `--config` and the vault's `setup` and `import`, which the person runs.
+  as it refuses `--as`, `--config` and the vault's `setup` and `import`, which the person runs. The
+  broker tells a sandboxed requester by its mount namespace, which no process in the sandbox leaves:
+  an unsandboxed session's vault call ([The vault session](#the-vault-session)) runs outside the
+  sandbox's lists, its consumer included.
 - **Lab kubeconfigs.** The machine kubeconfig stays denied, and kind needs the container runtime's
   socket, so a lab's kubeconfig exists only while its lease is held: the claim (or `beekeeper lease
   kubeconfig <lab>` once the lab runs) has the broker write it into the lease for the session that holds
@@ -1516,7 +1607,9 @@ The organisation and desk keys, and their defaults:
 | `ollama.url`, `lemonade.url` | unset: no model server | The host's model servers, watched and guarded under the `model-server` lease |
 | `outbound.phrases`, `outbound.paths`, `outbound.storeDeny` | none | What never leaves the machine, the plan files whose writes are outbound, the refused secret-store writes ([What leaves the machine](#what-leaves-the-machine)) |
 | `secret.vault`, `secret.tokenFile` | none | The shared 1Password vault `beekeeper secret` reads and writes, and the file with its service account's token ([Secret operations](#secret-operations)) |
-| `secret.session` | `false` | Read and write `secret.vault` through the person's signed-in `op` session instead of a service account ([Secret operations](#secret-operations)) |
+| `secret.session` | `false` | Read and write `secret.vault` through the person's `op` session, held by the broker alone, instead of a service account ([The vault session](#the-vault-session)) |
+| `secret.unlockWait` | `8m` | How long a call on the vault waits for the person's `beekeeper secret unlock` ([The vault session](#the-vault-session)) |
+| `secret.unlockCommands` | none | The person's own vault unlock helpers, refused in agent sessions like `op signin` and unaliased in the agent shell ([Secret reads](#secret-reads)) |
 | `sandbox.allowRead`, `sandbox.allowWrite`, `sandbox.domains`, `sandbox.mask` | none; `GH_TOKEN` and `GITHUB_TOKEN` to GitHub | The paths under the home directory the agent sandbox re-allows for reading and writing, the hosts commands reach besides GitHub, the masked environment variables and their hosts ([The agent sandbox](#the-agent-sandbox)) |
 | `sandbox.devctl` | `devctl` on the broker's `PATH` | The devctl the broker runs on the host: it renews the sandboxed sessions' masked GitHub token and runs their gated devctl commands ([The agent sandbox](#the-agent-sandbox)) |
 | `scan.sops`, `scan.vaults`, `scan.minLength` | none, none, 12 | The SOPS file globs and 1Password vaults `beekeeper scan index` fingerprints, and the shortest value it takes ([What reaches the model](#what-reaches-the-model)) |

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"regexp"
 	"strings"
 )
 
@@ -12,6 +13,9 @@ import (
 // session or token: a signed-in CLI session, a service account's token, a
 // Connect server's token.
 const vaultEnv = "OP_SESSION_[A-Za-z0-9_]+|OP_SERVICE_ACCOUNT_TOKEN|OP_CONNECT_TOKEN"
+
+// VaultVar matches the name of a variable that carries a vault credential.
+var VaultVar = regexp.MustCompile("^(?:" + vaultEnv + ")$")
 
 // preludeBegin and preludeEnd enclose beekeeper's prelude in a session's
 // environment file, which other hooks may write to as well.

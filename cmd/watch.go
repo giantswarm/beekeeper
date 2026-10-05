@@ -28,6 +28,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/notify"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/upgrade"
 )
@@ -1021,6 +1022,7 @@ func (w *watcher) poll(ctx context.Context) {
 	w.lostMerges(ctx)
 	w.closeToolWindow(ctx, watchParty)
 	w.stalls()
+	w.vaultWaits()
 	now := w.now
 	if now.Sub(w.lastSettle) >= w.readEvery(th.Interval.Duration) {
 		w.lastSettle = now
@@ -1069,6 +1071,35 @@ func (w *watcher) teleport(ctx context.Context) {
 	if v.Key != "" {
 		w.emit(v.Key, "%s", v.line(time.Now()))
 	}
+}
+
+// vaultKey starts the condition key of a call waiting on the vault.
+const vaultKey = "vault "
+
+// vaultWaits says each call that waits on the person's unlock of the vault
+// (secret.session), one VAULT LOCKED line naming who waits on what, and one
+// ENDED line once it goes on or gives up. Nothing asks the person.
+func (w *watcher) vaultWaits() {
+	if !w.cfg.Secret.Session {
+		return
+	}
+	path, err := secret.WaitsPath()
+	if err != nil {
+		return
+	}
+	ws, err := secret.ReadWaits(path)
+	if err != nil {
+		w.emit(vaultKey+"read", "cannot read the vault's waiting calls: %v", err)
+		return
+	}
+	found := map[string]bool{}
+	for _, v := range ws {
+		key := vaultKey + v.Who + " " + v.Ref
+		found[key] = true
+		w.emit(key, "VAULT LOCKED: %s waits on %s since %s; the person unlocks it with beekeeper secret unlock in their own terminal",
+			v.Who, v.Ref, v.Since.Local().Format("15:04"))
+	}
+	w.clearMissing(vaultKey, found)
 }
 
 // exposedKey starts the condition key of a credential exposed on disk.
