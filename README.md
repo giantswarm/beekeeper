@@ -885,7 +885,13 @@ is kept in reserve or repurposed: a relay and a crash both start a fresh session
   wake`, `RESUME`), and that turn keeps the role's watch and its CLI, with no click or decision
   by a person. The pending reopen then yields to that turn, so the desktop warms no second CLI
   beside it; the wake's own reopen follows the turn, and each later gap without a CLI is resumed
-  headless again until the desktop runs the holder's CLI. One whose resume never ran did not
+  headless again until the desktop runs the holder's CLI. A successor is imported into the
+  desktop's sidebar under its run title without a click, whatever its turns do: its import goes
+  ahead past the desktop window's focus as an `agents start --desktop` agent's does (it waits
+  for the person's typing to pause, 1 minute at most), and a reopen that meets the resume of a
+  session the desktop never imported imports it beside that turn, the turn frozen while the
+  desktop reads the transcript and the desktop's CLI it warms stopped. A desktop at its cap of
+  CLIs still writes the row; it warms no CLI for it. One whose resume never ran did not
   come up (`SUCCESSOR DOWN`): the first is one
   note for `guide.person`, the next successor starts 5 minutes later, the one after 10 minutes,
   and after three none starts until a holder runs again.
