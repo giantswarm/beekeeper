@@ -13,8 +13,8 @@ import (
 const testSession = "OP_SESSION_TESTACCOUNT"
 
 func TestKeeperWaitsForTheUnlock(t *testing.T) {
-	k := NewKeeper()
-	if ok, _ := k.Status(); ok || k.Env() != "" {
+	k := NewKeeper(time.Hour, nil)
+	if k.State().Unlocked || k.Env() != "" {
 		t.Fatal("a new keeper holds a session")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
@@ -34,7 +34,7 @@ func TestKeeperWaitsForTheUnlock(t *testing.T) {
 		t.Errorf("Env = %q", got)
 	}
 	k.Lock()
-	if ok, _ := k.Status(); ok || k.Env() != "" {
+	if k.State().Unlocked || k.Env() != "" {
 		t.Error("the lock kept the session")
 	}
 	for _, bad := range [][2]string{{"PATH", "x"}, {testSession, ""}, {testSession, "a\nb"}} {
@@ -87,7 +87,8 @@ func TestVaultSocket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	k := NewKeeper()
+	k := NewKeeper(time.Hour, nil)
+	asBroker(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() { _ = ServeVault(ctx, path, k) }()
@@ -115,6 +116,57 @@ func TestVaultSocket(t *testing.T) {
 	}
 	if st, err = AskVault(path, VaultRequest{Op: VaultLock}); err != nil || st.Unlocked || k.Env() != "" {
 		t.Errorf("lock: %+v, %v", st, err)
+	}
+}
+
+func TestKeeperLifetime(t *testing.T) {
+	const lifetime = 50 * time.Millisecond
+	changes := make(chan VaultState, 4)
+	k := NewKeeper(lifetime, func(st VaultState) { changes <- st })
+	now := time.Now()
+	if err := k.Unlock(testSession, "tok", now); err != nil {
+		t.Fatal(err)
+	}
+	if st := k.State(); !st.Unlocked || !st.Since.Equal(now) || !st.Until.Equal(now.Add(lifetime)) {
+		t.Fatalf("state after the unlock: %+v", st)
+	}
+	var states []VaultState
+	for range 2 {
+		select {
+		case st := <-changes:
+			states = append(states, st)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("no lock at the end of the lifetime: %+v", k.State())
+		}
+	}
+	if locked := time.Since(now); locked < lifetime || locked > lifetime+time.Second {
+		t.Errorf("locked %s after the unlock, want %s", locked, lifetime)
+	}
+	if k.State().Unlocked || k.Env() != "" || !states[0].Unlocked || states[1].Unlocked {
+		t.Fatalf("after the lifetime: %+v, changes %+v", k.State(), states)
+	}
+
+	// a session that came after keeps its own lifetime
+	k = NewKeeper(time.Hour, nil)
+	_ = k.Unlock(testSession, "old", now)
+	_ = k.Unlock(testSession, "new", now.Add(time.Minute))
+	k.lockSession(now)
+	if k.Env() != testSession+"=new" {
+		t.Error("the end of an earlier session's lifetime locked a later one")
+	}
+	if st, err := ReadState(filepath.Join(t.TempDir(), "absent.json")); err != nil || st.Unlocked {
+		t.Errorf("an absent state: %+v, %v", st, err)
+	}
+	path := filepath.Join(t.TempDir(), "d", "vault-state.json")
+	if err := WriteState(path, states[0]); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := ReadState(path); err != nil || !st.Until.Equal(now.Add(lifetime)) {
+		t.Errorf("state round trip: %+v, %v", st, err)
+	}
+	raw, _ := os.ReadFile(path) //nolint:gosec // the test's own file
+	if strings.Contains(string(raw), "tok") {
+		t.Error("the state file carries the session")
 	}
 }
 

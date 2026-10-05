@@ -219,7 +219,7 @@ is involved and no import happens.`,
 		},
 	}
 	c.Flags().StringVar(&model, "model", "", "the session's model (default: Claude Code's; omp: omp.model)")
-	c.Flags().StringVar(&dir, "dir", ".", "the session's working directory")
+	c.Flags().StringVar(&dir, "dir", "", "the session's working directory (default: agents.dir, else the current one)")
 	c.Flags().StringVar(&task, "task", "", "the task the roster shows it busy with (default: the brief's first line)")
 	c.Flags().StringVar(&harness, "harness", "claude", "the agent harness: claude or omp")
 	c.Flags().BoolVar(&desktop, "desktop", false, "the task needs desktop turns (the browser): import it past the desktop window's focus, as agents desktop does")
@@ -274,7 +274,7 @@ type startedAgent struct {
 // transient user unit and imports it into the desktop once the transcript
 // holds its first reply, which carries its model.
 func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, error) {
-	dir, err := filepath.Abs(sp.dir)
+	dir, err := a.agentDir(sp.dir)
 	if err != nil {
 		return startedAgent{}, err
 	}
@@ -563,11 +563,11 @@ func (a *app) importSession(ctx context.Context, d desk, id, follow string) (str
 	}
 	running := !plat.Opener.Running(t).IsZero()
 	// The caller waited for the window already; the link checks once more.
-	// A desktop turn's import gives the person's typing its bound again, as
-	// its first wait did, instead of failing on a keystroke in between.
+	// A desktop turn's link does not: the caller's wait gave the person's
+	// typing its bound, and a keystroke since then must not miss the import.
 	away := awayPoll
 	if d.urgent != nil && d.urgent() {
-		away = d.turnWait() + awayPoll
+		away = 0
 	}
 	prev, err := a.showBriefly(ctx, d, resumeURL(id), "local_"+id, follow, running, away, nil)
 	if err != nil {
@@ -580,18 +580,26 @@ func (a *app) importSession(ctx context.Context, d desk, id, follow string) (str
 // once it does, shows the session the window showed before again and
 // returns it; empty when there was none to go back to, or it was host or
 // follow. A running desktop gets the link only once d takes it, waiting up
-// to away: errDesktopInUse or errTyping when it did not. ready, unless nil,
+// to away (zero: the caller's wait stands): errDesktopInUse or errTyping
+// when it did not. ready, unless nil,
 // is asked right before the link opens, and its error ends the show.
 func (a *app) showBriefly(ctx context.Context, d desk, url, host, follow string, running bool, away time.Duration, ready func() error) (string, error) {
 	var prev string
 	if running {
-		if err := d.await(ctx, away, nil); err != nil {
-			return "", err
+		if away > 0 {
+			if err := d.await(ctx, away, nil); err != nil {
+				return "", err
+			}
 		}
 		prev = awaitFocusOff(ctx, a.cfg.Claude.DesktopLog, host, settleWait)
 	}
 	if ready != nil {
 		if err := ready(); err != nil {
+			return "", err
+		}
+	}
+	if running {
+		if err := a.makeRoom(ctx, host); err != nil {
 			return "", err
 		}
 	}

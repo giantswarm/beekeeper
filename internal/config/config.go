@@ -299,18 +299,28 @@ type Secret struct {
 	// Session reads the vault through the person's own signed-in op
 	// session instead of a service account (tokenFile then unused): for a
 	// vault no service account can be granted, such as an Employee vault.
-	// The session lives in the broker's memory alone (beekeeper secret
-	// unlock, by the person); every call on an op:// reference runs there.
+	// The broker signs in by itself (SigninCommand) and holds the session in
+	// its memory alone; every call on an op:// reference runs there.
 	Session bool `yaml:"session"`
 	// UnlockCommands are the names of the person's own commands that sign
 	// in to or unlock the vault (helpers around op signin): the hook
 	// refuses them in agent sessions under any path, like op signin, and
 	// the agent shell prelude removes their aliases and shell functions.
 	UnlockCommands []string `yaml:"unlockCommands"`
+	// SigninCommand is the command the broker runs to sign in to the vault
+	// without the person, when it starts and whenever a call waits while it
+	// holds no session: it prints the session as op signin does
+	// (export OP_SESSION_<id>="<token>") on stdout, its log on stderr. Empty
+	// leaves the sign-in to the person's beekeeper secret unlock.
+	SigninCommand []string `yaml:"signinCommand"`
 	// UnlockWait is how long a call that needs the vault waits for the
-	// person's beekeeper secret unlock while the broker holds no session
-	// (8m, within the Bash tool's 10 minutes).
+	// broker's sign-in while it holds no session (8m, within the Bash tool's
+	// 10 minutes).
 	UnlockWait Duration `yaml:"unlockWait"`
+	// SessionLifetime is how long the broker holds the session after the
+	// person's unlock (12h): it keeps op's session from idling out until
+	// then, and forgets it at the end.
+	SessionLifetime Duration `yaml:"sessionLifetime"`
 	// AgeIdentities are the age identities beekeeper reads from the shared
 	// vault for the SOPS files that sops' own sources (SOPS_AGE_KEY,
 	// SOPS_AGE_KEY_FILE, sops/age/keys.txt) hold none for: each read in
@@ -504,6 +514,14 @@ type Agents struct {
 	// Shell is the prelude of every agent shell (beekeeper hook
 	// sessionstart).
 	Shell AgentShell `yaml:"shell"`
+	// Dir is the folder every agent beekeeper starts runs in (agents start,
+	// agents handover, a role's successor): the desk's checkout, whose
+	// project instructions every session loads. Empty: the caller's.
+	Dir string `yaml:"dir"`
+	// Roots are the folders under which an agent may run instead, with
+	// --dir: the worktrees of the desk's repositories. Any other folder is
+	// refused while Dir is set.
+	Roots []string `yaml:"roots"`
 }
 
 // Capacity is the supervisor's target of busy agents and the memory guards
@@ -1401,6 +1419,7 @@ func (c *Config) defaults() error {
 	setDur(&c.Merge.StallAfter, 5*time.Minute)
 	setDur(&c.Merge.HungAfter, 45*time.Minute)
 	setDur(&c.Secret.UnlockWait, 8*time.Minute)
+	setDur(&c.Secret.SessionLifetime, 12*time.Hour)
 
 	setStr(&c.Memcap.SlotDir, filepath.Join(state, "memcap", "slots"))
 	setInt(&c.Memcap.Slots, 2)

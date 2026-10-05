@@ -15,10 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The broker's vault session ends at the exact end of `secret.sessionLifetime`, not up to a minute later on the keeper's next look, so the watch's `VAULT UNLOCKED … until <t>` holds to the minute.
+- `beekeeper secret unlock` reached no broker: the broker is undumpable, so its `/proc/<pid>/exe` is root's and the peer check failed before anything was sent or logged. The check now identifies the broker as the main process of `beekeeper-sandbox.service` running this binary, from systemd, and a refused unlock is logged.
+- The watch no longer ends a waiting vault call with a bare ENDED line when it gave up: `VAULT LOCKED: <who>'s call on <ref> timed out …, still locked`.
 - The watch's doctor says an unchanged chore line once per watch instead of on every pass, and the finished workers waiting on an unset `agents.archiveAgreement` as one summary line (the count and the key to set), ended once none waits, instead of one line and event per agent every 30 s.
 
 ### Changed
 
+- With `secret.session` the broker signs in to the vault by itself through the new `secret.signinCommand`, at its start and whenever a call waits, one sign-in for every waiting call, and holds the session for `secret.sessionLifetime` (12h), touching it every 10 minutes so that op does not let it idle out. The watch says `VAULT UNLOCKED … until <t>` for that lifetime and `VAULT SIGN-IN FAILED: <reason>`; no message sends the person to a terminal ([README](README.md#the-vault-session)).
 - The desktop sessions of finished workers are archived only under the person's agreement: `agents.archiveAgreement` says where they agreed (never for a session they started), the steward's request quotes it, and the steward runs the new `beekeeper agents archivable <local_id>…` first, which confirms each session is a finished worker beekeeper started and exits 3 for any other. Without it no steward is asked. The doctor reads each asked steward's turn: the line names the steward whose `archive_session` call archived a session, reports a decline with the first line of the reply, and asks a declining steward for no archive for 24 hours instead of again on every run ([README](README.md#agents-started-without-a-click)).
 - The doctor owes, once, the archive of every finished worker beekeeper started whose desktop record stayed unarchived, its CLI running or not, and asks for at most 20 owed archives per run.
 - A reopen never warms a desktop CLI beside a headless turn: it looks for the session's wake right before it shows the session, after its wait for the person, and the standby watch does not resume a role's holder whose reopen runs while it asked for a desktop turn (`agents desktop`), since that reopen shows it at once.

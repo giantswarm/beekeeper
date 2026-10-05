@@ -36,6 +36,7 @@ type VaultRequest struct {
 type VaultState struct {
 	Unlocked bool      `json:"unlocked"`
 	Since    time.Time `json:"since,omitzero"`
+	Until    time.Time `json:"until,omitzero"`
 	Error    string    `json:"error,omitempty"`
 }
 
@@ -104,7 +105,9 @@ func answerVault(c net.Conn, k *Keeper) {
 	case req.Op != VaultStatus:
 		st.Error = fmt.Sprintf("unknown request %q", req.Op)
 	}
-	st.Unlocked, st.Since = k.Status()
+	msg := st.Error
+	st = k.State()
+	st.Error = msg
 	_ = json.NewEncoder(c).Encode(st)
 }
 
@@ -171,6 +174,42 @@ func WriteWaits(path string, ws []VaultWait) error {
 		ws = []VaultWait{}
 	}
 	raw, err := json.Marshal(ws)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return writeSecretFile(path, raw)
+}
+
+// StatePath is the broker's vault state, next to the keeper's socket:
+// whether it holds a session, since and until when, never the session. The
+// watch reads it.
+func StatePath() (string, error) {
+	p, err := SocketPath()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(p), "vault-state.json"), nil
+}
+
+// ReadState reads the broker's vault state; locked when the file is absent.
+func ReadState(path string) (VaultState, error) {
+	var st VaultState
+	raw, err := os.ReadFile(path) //nolint:gosec // the broker's own state
+	if errors.Is(err, os.ErrNotExist) {
+		return st, nil
+	}
+	if err != nil {
+		return st, err
+	}
+	return st, json.Unmarshal(raw, &st)
+}
+
+// WriteState replaces the broker's vault state, through a rename.
+func WriteState(path string, st VaultState) error {
+	raw, err := json.Marshal(st)
 	if err != nil {
 		return err
 	}

@@ -64,7 +64,7 @@ func (rl role) successorBrief(name, from string) string {
 
 This first turn runs headless from the command line. In it, only take the role: run `+"`beekeeper %s start`"+`, then end the turn. Arm no Monitor, watch or background task in it: the desktop gets this session's CLI only once this turn has ended.
 
-Once the desktop runs your CLI, beekeeper's standby watch tells you so there: then run `+"`%s`"+` and follow it. Peers message you as %q.`,
+Once the desktop runs your CLI, a message tells you so there: then run `+"`%s`"+` and follow it. Peers message you as %q.`,
 		name, rl.name, rl.duty, from, rl.name, rl.handover, name)
 }
 
@@ -104,6 +104,9 @@ func (a *app) startSuccessor(ctx context.Context, rl role, from, by state.Party,
 	var model string
 	if rec != nil {
 		model = rec.Model
+	}
+	if dir == "" && rl.cfg(a.cfg).Dir == "" {
+		dir = a.cfg.Agents.Dir
 	}
 	if dir == "" {
 		dir = successorDir(rl.cfg(a.cfg), rec, startDir)

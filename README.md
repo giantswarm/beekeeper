@@ -347,7 +347,7 @@ The secrets and where they live:
 
 | Secret | Where | Who reads it |
 |---|---|---|
-| The vault session (`secret.session`) | the broker's memory; for one call, the environment of the broker's `op` child | the broker; the person opens it with `beekeeper secret unlock` |
+| The vault session (`secret.session`) | the broker's memory; for one call, the environment of the broker's `op` child | the broker, which signs in by itself (`secret.signinCommand`) |
 | The vault's service account token (`secret.tokenFile`) | a 0600 file outside the sandbox's lists | beekeeper's own `op` calls |
 | The SOPS keys | the person's key files, outside the sandbox's lists | sops in beekeeper's process |
 | The GitHub App token of sandboxed sessions | `$XDG_RUNTIME_DIR/beekeeper/github`, masked | the sandbox proxy, into requests to GitHub |
@@ -400,8 +400,8 @@ decrypts secrets:
   `op item`, `op whoami`, `op run`, …), also behind `sudo`, `env`, `timeout`, `xargs` and
   `beekeeper run`; `age -d` and `gpg --decrypt`.
 - Every sign-in to or unlock of a vault: `op signin`, `op account add`, `op unlock`, the person's own
-  unlock helpers (`secret.unlockCommands`, by name under any path), `beekeeper secret unlock`, which is
-  the person's; and keyring reads (`secret-tool lookup|search`, macOS `security find-*-password`). No
+  unlock helpers (`secret.unlockCommands`, by name under any path; the broker alone runs one, as
+  `secret.signinCommand`), `beekeeper secret unlock`, which is the person's; and keyring reads (`secret-tool lookup|search`, macOS `security find-*-password`). No
   agent session holds or opens a vault session: it lives in beekeeper alone, and the refusal says so.
 - `kubectl edit` of a Secret and `kubectl view-secret`.
 - A hash (`sha*sum`, `md5sum`, `b2sum`, `cksum`, `openssl dgst`) or a diff (`diff`, `cmp`, `git diff
@@ -527,22 +527,36 @@ starts; never in a file, a keyring entry or an agent's environment. The broker m
 (no other process of the user reads its memory or environment), drops every vault credential from what
 its calls inherit, and gives the session to its own `op` calls alone, in their environment.
 
-The person unlocks it with `beekeeper secret unlock` in their own terminal: `op signin` runs on that
-terminal and the person types the account password into op's own prompt; the session op prints goes
-from beekeeper's memory to the broker over a Unix socket in the runtime directory
-(`$XDG_RUNTIME_DIR/beekeeper/vault.sock`, mode 0600 in a 0700 directory, which the sandbox can neither
-reach nor write), after `unlock` checked that the listener is this beekeeper binary run as this user.
-The socket answers only whether a session is held. `unlock` refuses in an agent session (Claude Code's,
-omp's or the sandbox's variables set) and without a terminal; the hook refuses it in agent sessions
-before it runs.
+The broker signs in by itself: it runs `secret.signinCommand` when it starts and whenever a call needs
+the vault while it holds no session, one sign-in at a time that every waiting call shares. The command
+signs in without the person (a helper that reads the account password from a local password store,
+for example) and prints the session as `op signin` does (`export OP_SESSION_<id>="<token>"`) on
+stdout, which the broker reads into its memory; its stderr goes to the broker's journal. It runs with
+the broker's environment, the vault credentials removed; a command that needs more memory than the
+broker's unit allows runs in a unit of its own (`systemd-run --user --pipe --wait --quiet -p
+MemoryMax=1G -- <helper>`). The broker holds the session for `secret.sessionLifetime` (12 h), touches
+it every 10 minutes so that op does not let it idle out, and forgets it at the end of the lifetime or
+when op no longer takes it; the next call signs in again.
 
-While the broker holds no session, a call on the vault prints `vault locked: waiting for the person's
-approval` and waits up to `secret.unlockWait` (8 m; the hook gives such a call the Bash tool's 10
-minutes), then exits 78. Nothing asks the person: the watch says `VAULT LOCKED: <who> waits on <ref>`
-and an ENDED line once it goes on or gives up, and `beekeeper status` names the waiting sessions, so
-the supervisor and the guide see it. A session op no longer takes (expired after op's idle timeout) is
-forgotten and the call waits once more. `beekeeper secret lock` forgets it at once. The broker runs on
-Linux only, so `secret.session` needs it there.
+While the broker holds no session, a call on the vault prints `vault locked: waiting for the broker's
+sign-in` and waits up to `secret.unlockWait` (8 m; the hook gives such a call the Bash tool's 10
+minutes), then exits 78. Nothing asks the person. The watch says `VAULT UNLOCKED: the broker holds the
+vault session since <t> until <t>` for the session's lifetime and an ENDED line when the broker
+forgets it; `VAULT SIGN-IN FAILED: <reason>` with the command's last line; `VAULT LOCKED: <who> waits
+on <ref>` for each waiting call, with an ENDED line once it goes on, or `VAULT LOCKED: <who>'s call on
+<ref> timed out …, still locked` when it gives up. `beekeeper status` names the waiting sessions.
+`beekeeper secret lock` forgets the session at once. The broker runs on Linux only, so
+`secret.session` needs it there.
+
+Without `secret.signinCommand`, the person hands the broker a session with `beekeeper secret unlock`
+in their own terminal: `op signin` runs on that terminal and the person types the account password
+into op's own prompt; the session goes from beekeeper's memory to the broker over a Unix socket in the
+runtime directory (`$XDG_RUNTIME_DIR/beekeeper/vault.sock`, mode 0600 in a 0700 directory, which the
+sandbox can neither reach nor write), after `unlock` checked that the listener is the main process of
+`beekeeper-sandbox.service` running this beekeeper binary as this user (from systemd: the broker's own
+`/proc/<pid>/exe` is root's, since it is undumpable). The socket answers only whether a session is
+held. `unlock` refuses in an agent session (Claude Code's, omp's or the sandbox's variables set) and
+without a terminal, and logs a refusal; the hook refuses it in agent sessions before it runs.
 
 The 1Password desktop app's CLI integration (op asks the app, the app asks the person through the
 system authentication prompt) is not used: it lets any process of the user that calls op raise the
@@ -1673,7 +1687,9 @@ The organisation and desk keys, and their defaults:
 | `outbound.phrases`, `outbound.paths`, `outbound.storeDeny` | none | What never leaves the machine, the plan files whose writes are outbound, the refused secret-store writes ([What leaves the machine](#what-leaves-the-machine)) |
 | `secret.vault`, `secret.tokenFile` | none | The shared 1Password vault `beekeeper secret` reads and writes, and the file with its service account's token ([Secret operations](#secret-operations)) |
 | `secret.session` | `false` | Read and write `secret.vault` through the person's `op` session, held by the broker alone, instead of a service account ([The vault session](#the-vault-session)) |
-| `secret.unlockWait` | `8m` | How long a call on the vault waits for the person's `beekeeper secret unlock` ([The vault session](#the-vault-session)) |
+| `secret.signinCommand` | none | The command the broker runs to sign in to the vault without the person; it prints the session as `op signin` does ([The vault session](#the-vault-session)) |
+| `secret.sessionLifetime` | `12h` | How long the broker holds the vault session after a sign-in ([The vault session](#the-vault-session)) |
+| `secret.unlockWait` | `8m` | How long a call on the vault waits for the broker's sign-in ([The vault session](#the-vault-session)) |
 | `secret.ageIdentities` | none | Age identities in the shared vault, by recipient or `pathRegex`, for the SOPS files no local sops identity decrypts ([Age identities](#age-identities)) |
 | `secret.unlockCommands` | none | The person's own vault unlock helpers, refused in agent sessions like `op signin` and unaliased in the agent shell ([Secret reads](#secret-reads)) |
 | `sandbox.allowRead`, `sandbox.allowWrite`, `sandbox.domains`, `sandbox.mask` | none; `GH_TOKEN` and `GITHUB_TOKEN` to GitHub | The paths under the home directory the agent sandbox re-allows for reading and writing, the hosts commands reach besides GitHub, the masked environment variables and their hosts ([The agent sandbox](#the-agent-sandbox)) |
