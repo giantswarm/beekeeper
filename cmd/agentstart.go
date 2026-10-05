@@ -348,8 +348,22 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if sa.deferred = d.await(ctx, importAwayWait, nil); sa.deferred != nil {
 		return sa, nil
 	}
-	err = whileFrozen(ctx, unit, func() error {
-		if err := titleTranscript(a.cfg.Claude.ProjectsDir, id, sp.name); err != nil {
+	if err := a.importBeside(ctx, d, id, sp.name, follow, &sa); err != nil {
+		return sa, err
+	}
+	sa.restored = a.keepImport(ctx, id, sp.name, &sa)
+	return sa, nil
+}
+
+// importBeside titles session id name and imports it into the desktop
+// while a headless turn of it may run (the first turn, or a wake that keeps
+// a role's watch and does not end): the turns' units stay frozen until the
+// desktop wrote its record, and the CLI the desktop warms for the import is
+// stopped while a turn runs, so the session runs one CLI. It fills sa's
+// kept, title, model, chrome and twin.
+func (a *app) importBeside(ctx context.Context, d desk, id, name, follow string, sa *startedAgent) error {
+	err := whileFrozen(ctx, sessionUnits(ctx, id, false), func() error {
+		if err := titleTranscript(a.cfg.Claude.ProjectsDir, id, name); err != nil {
 			return fmt.Errorf("%w, not imported into the desktop", err)
 		}
 		var err error
@@ -362,43 +376,49 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 		return nil
 	})
 	if err != nil {
-		return startedAgent{}, err
+		return err
 	}
-	if sa.twin, err = endDesktopTwin(ctx, id); err != nil {
-		return sa, err
-	}
-	sa.restored = a.keepImport(ctx, id, sp.name, &sa)
-	return sa, nil
-}
-
-// whileFrozen runs fn with the first turn's unit frozen, and thaws it once
-// fn returned, whatever fn returned. The desktop's import reads the
-// transcript's identity and then its end for the session's title and model,
-// and drops that read when the transcript changed in between: a first turn
-// that appends a line meanwhile leaves the import untitled, without a model.
-// A unit no longer active (its first turn ended, or is ending) has no
-// writer and is not frozen.
-func whileFrozen(ctx context.Context, unit string, fn func() error) error {
-	if err := plat.Launcher.Freeze(ctx, unit); err != nil {
-		if plat.Launcher.State(ctx, unit) != "active" {
-			return fn()
-		}
-		return fmt.Errorf("freezing %s for the import: %w", unit, err)
-	}
-	err := fn()
-	if terr := plat.Launcher.Thaw(context.WithoutCancel(ctx), unit); terr != nil {
-		err = errors.Join(err, fmt.Errorf("thawing %s: %w (systemctl --user thaw %s resumes its first turn)", unit, terr, unit))
-	}
+	sa.twin, err = endDesktopTwin(ctx, id)
 	return err
 }
 
+// whileFrozen runs fn with the units of the session's headless turns
+// frozen, and thaws them once fn returned, whatever fn returned. The
+// desktop's import reads the transcript's identity and then its end for the
+// session's title and model, and drops that read when the transcript
+// changed in between: a turn that appends a line meanwhile leaves the import
+// untitled, without a model. A unit no longer active (its turn ended, or is
+// ending) has no writer and is not frozen.
+func whileFrozen(ctx context.Context, units []string, fn func() error) error {
+	var frozen []string
+	thaw := func(err error) error {
+		for _, u := range frozen {
+			if terr := plat.Launcher.Thaw(context.WithoutCancel(ctx), u); terr != nil {
+				err = errors.Join(err, fmt.Errorf("thawing %s: %w (systemctl --user thaw %s resumes its turn)", u, terr, u))
+			}
+		}
+		return err
+	}
+	for _, u := range units {
+		if err := plat.Launcher.Freeze(ctx, u); err != nil {
+			if plat.Launcher.State(ctx, u) != "active" {
+				continue
+			}
+			return thaw(fmt.Errorf("freezing %s for the import: %w", u, err))
+		}
+		frozen = append(frozen, u)
+	}
+	return thaw(fn())
+}
+
 // endDesktopTwin stops the CLI the desktop warms for an imported session
-// while its first turn still runs: two CLIs on one session id are two peers
-// under its name, and a message by name could reach the desktop's copy,
-// which would run a turn of its own beside the first turn. It waits up to
-// twinWait for the desktop's CLI and returns its PID, 0 when none came or
-// the first turn's process ended first: from then on the desktop's CLI is
-// the session's one (agents reopen warms it once the first turn ended).
+// while a headless turn of it (the first turn, a wake turn) still runs: two
+// CLIs on one session id are two peers under its name, and a message by
+// name could reach the desktop's copy, which would run a turn of its own
+// beside the headless one. It waits up to twinWait for the desktop's CLI
+// and returns its PID, 0 when none came (a desktop at its cap warms none)
+// or the headless turn ended first: from then on the desktop's CLI is the
+// session's one (agents reopen warms it once the headless turn ended).
 func endDesktopTwin(ctx context.Context, id string) (int, error) {
 	ctx, cancel := context.WithTimeout(ctx, twinWait)
 	defer cancel()
@@ -409,7 +429,7 @@ func endDesktopTwin(ctx context.Context, id string) (int, error) {
 		if err != nil {
 			return 0, err
 		}
-		if !firstTurnRuns(t, id) {
+		if headlessTurn(t, id) == "" {
 			return 0, nil
 		}
 		if p := desktopTwin(t, id); p != nil {
@@ -437,16 +457,6 @@ const (
 	sessionIDFlag = "--session-id"
 )
 
-// firstTurnRuns reports whether the first turn of session id runs.
-func firstTurnRuns(t *proc.Table, id string) bool {
-	for _, p := range t.ByPID {
-		if startsSession(p, id) {
-			return true
-		}
-	}
-	return false
-}
-
 // startsSession reports whether p is a first turn of session id: a claude
 // process started under --session-id <id>.
 func startsSession(p *proc.Process, id string) bool {
@@ -454,11 +464,12 @@ func startsSession(p *proc.Process, id string) bool {
 	return p.Comm == claudeComm && i >= 0 && i+1 < len(p.Args) && p.Args[i+1] == id
 }
 
-// desktopTwin is the CLI that resumes session id (the desktop's: the first
-// turn runs under --session-id), nil when none runs.
+// desktopTwin is the desktop's CLI of session id, nil when none runs: one
+// that resumes it and prints no turn (a first turn runs under --session-id,
+// a wake turn is a headless --resume).
 func desktopTwin(t *proc.Table, id string) *proc.Process {
 	for _, p := range t.ByPID {
-		if p.Comm == claudeComm && resumes(p.Args, id) {
+		if p.Comm == claudeComm && resumes(p.Args, id) && !printsTurn(p) {
 			return p
 		}
 	}
@@ -519,12 +530,12 @@ func browserLine(chrome string) string {
 	return fmt.Sprintf("the desktop recorded the Chrome permission mode %s: each navigate to a site it was not allowed on yet waits on a person's site request in its desktop row", chrome)
 }
 
-// twinLine says whether the first turn is the session's only CLI.
+// twinLine says whether the headless turn is the session's only CLI.
 func twinLine(twin int) string {
 	if twin == 0 {
-		return "the desktop warmed no CLI of its own while the first turn ran: messages by name reach the session's one CLI"
+		return "the desktop warmed no CLI of its own while the headless turn ran: messages by name reach the session's one CLI"
 	}
-	return fmt.Sprintf("stopped the desktop's CLI %d of the session: the first turn is its only CLI and the only peer under its name, until someone opens it in the desktop", twin)
+	return fmt.Sprintf("stopped the desktop's CLI %d of the session: the headless turn is its only CLI and the only peer under its name, until someone opens it in the desktop", twin)
 }
 
 // modelLine says which model the session's desktop turns run on.
@@ -648,10 +659,15 @@ func (a *app) reopenSession(ctx context.Context, arg string) error {
 	}
 	// The standby watch resumes a role's holder headless while this reopen
 	// waits for the person to leave the desktop's window: the desktop warms
-	// no second CLI beside that turn, whose own reopen follows it.
+	// no second CLI beside that turn, whose own reopen follows it. That turn
+	// keeps the role's watch and may not end before the next relay, so a
+	// session the desktop never imported gets its row and title now.
 	if u := wakeRunning(ctx, id); u != "" {
-		_, err := fmt.Fprintf(a.out, "reopen: %s was resumed headless meanwhile (%s), whose reopen follows its turn\n", id, u)
-		return err
+		if _, ok := claude.ReadRecord(a.cfg, "local_"+id); ok {
+			_, err := fmt.Fprintf(a.out, "reopen: %s was resumed headless meanwhile (%s), whose reopen follows its turn\n", id, u)
+			return err
+		}
+		return a.importBesideWake(ctx, d, id, name, u)
 	}
 	shownAt := time.Now()
 	if _, err := a.showBriefly(ctx, d, url, "local_"+id, "", true, reopenAwayWait); err != nil {
@@ -677,6 +693,25 @@ func (a *app) reopenSession(ctx context.Context, arg string) error {
 		_, err = fmt.Fprintln(a.out, "reopen: "+line)
 	}
 	return err
+}
+
+// importBesideWake imports session id, which the desktop never imported,
+// beside the wake turn of unit: the row and title appear in the desktop,
+// and the turn stays the session's only CLI.
+func (a *app) importBesideWake(ctx context.Context, d desk, id, name, unit string) error {
+	var sa startedAgent
+	if err := a.importBeside(ctx, d, id, name, "", &sa); err != nil {
+		return a.reopenMissed(name, fmt.Errorf("importing %s beside its headless turn %s: %w", id, unit, err))
+	}
+	if _, err := fmt.Fprintf(a.out, "reopen: imported local_%s into the desktop beside its headless turn (%s); %s; %s\n",
+		id, unit, titleLine(name, sa.title), twinLine(sa.twin)); err != nil {
+		return err
+	}
+	if line := a.keepImport(ctx, id, name, &sa); line != "" {
+		_, err := fmt.Fprintln(a.out, "reopen: "+line)
+		return err
+	}
+	return nil
 }
 
 // reopenMissed records a reopen the desktop did not take (not shown, its
