@@ -219,7 +219,7 @@ is involved and no import happens.`,
 		},
 	}
 	c.Flags().StringVar(&model, "model", "", "the session's model (default: Claude Code's; omp: omp.model)")
-	c.Flags().StringVar(&dir, "dir", ".", "the session's working directory")
+	c.Flags().StringVar(&dir, "dir", "", "the session's working directory (default: agents.dir, else the current one)")
 	c.Flags().StringVar(&task, "task", "", "the task the roster shows it busy with (default: the brief's first line)")
 	c.Flags().StringVar(&harness, "harness", "claude", "the agent harness: claude or omp")
 	c.Flags().BoolVar(&desktop, "desktop", false, "the task needs desktop turns (the browser): import it past the desktop window's focus, as agents desktop does")
@@ -274,7 +274,7 @@ type startedAgent struct {
 // transient user unit and imports it into the desktop once the transcript
 // holds its first reply, which carries its model.
 func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, error) {
-	dir, err := filepath.Abs(sp.dir)
+	dir, err := a.agentDir(sp.dir)
 	if err != nil {
 		return startedAgent{}, err
 	}
