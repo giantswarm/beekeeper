@@ -69,8 +69,8 @@ func TestSettings(t *testing.T) {
 	if !slices.Equal(sb.Filesystem.DenyRead, []string{"~/", "~/.local/state/beekeeper/scan"}) {
 		t.Errorf("denyRead = %v, want the home directory and the scanner's", sb.Filesystem.DenyRead)
 	}
-	if !slices.Equal(sb.Filesystem.DenyWrite, []string{"~/.local/state/beekeeper/scan"}) {
-		t.Errorf("denyWrite = %v, want the scanner's directory", sb.Filesystem.DenyWrite)
+	if !slices.Equal(sb.Filesystem.DenyWrite, []string{"~/.local/state/beekeeper/scan", "~/.claude"}) {
+		t.Errorf("denyWrite = %v, want the scanner's directory and the harness's", sb.Filesystem.DenyWrite)
 	}
 	for _, want := range []string{"~/projects", "~/.go/bin", "~/.config/beekeeper", "~/.claude/projects"} {
 		if !slices.Contains(sb.Filesystem.AllowRead, want) {

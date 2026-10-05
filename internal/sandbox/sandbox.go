@@ -61,6 +61,11 @@ type Policy struct {
 	// Deny are paths inside Write that may be neither read nor written:
 	// the value scanner's key and index in beekeeper's state.
 	Deny []string
+	// Harness is the harness's config directory, which commands never
+	// write: Claude Code mounts it writable in the sandbox, so a command
+	// could leave a file there the harness reads outside it. The file
+	// tools write its memory and plans through ToolWrite.
+	Harness string
 	// ToolWrite are the paths only the harness's file tools may write:
 	// the sessions' memory and plans, never a command.
 	ToolWrite []string
@@ -107,6 +112,7 @@ func New(cfg config.Sandbox, e Paths) Policy {
 		}, cfg.AllowRead...),
 		Write:     append([]string{e.StateDir, e.LeaseDir, e.SlotDir}, cfg.AllowWrite...),
 		Deny:      []string{e.ScanDir},
+		Harness:   filepath.Clean(claude),
 		ToolWrite: []string{filepath.Join(claude, "projects", "*", "memory"), filepath.Join(claude, "plans")},
 		Domains:   append([]string{"github.com", "*.github.com", "*.githubusercontent.com"}, cfg.Domains...),
 		Mask:      cfg.Mask,
@@ -152,7 +158,7 @@ func (p Policy) Settings() map[string]any {
 			"autoAllowBashIfSandboxed": true,
 			"filesystem": map[string]any{
 				"denyRead":                  append([]string{p.setting(p.Home)}, p.settings(p.Deny)...),
-				"denyWrite":                 p.settings(p.Deny),
+				"denyWrite":                 append(p.settings(p.Deny), p.setting(p.Harness)),
 				"allowRead":                 p.settings(p.Read),
 				"allowWrite":                p.settings(p.Write),
 				"allowManagedReadPathsOnly": true,
