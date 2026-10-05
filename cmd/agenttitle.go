@@ -433,6 +433,18 @@ func relieved(st *state.State, p state.Party) bool {
 	})
 }
 
+// pastRun reports whether p is a role's past run: a taken relay relieved it
+// and it holds no role again, and no open relay names it. Its session's work
+// ended with the relay: nothing resumes or reopens it.
+func pastRun(st *state.State, p state.Party, now time.Time) bool {
+	for _, rl := range roles {
+		if rel := rl.get(st).Relay; rel.Open(now) && rel.To.Is(p) {
+			return false
+		}
+	}
+	return relieved(st, p)
+}
+
 // roleKeeps reports whether p's desktop session stays for its role: p holds
 // or held one and no taken relay relieved it. A relieved run's session is
 // archived like a finished worker's, which frees its desktop CLI slot.
