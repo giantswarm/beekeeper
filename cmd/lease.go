@@ -50,7 +50,7 @@ func (a *app) leaseView(sessions []*claude.Session, h lease.Holder) leaseView {
 
 func (a *app) leaseCmd() *cobra.Command {
 	c := &cobra.Command{
-		Use:   "lease",
+		Use:   leaseName,
 		Short: "Hold a shared resource: a kind lab, an installation, the browser",
 		Long: `Hold one of the machine's shared resources, one session at a time: the
 environments listed under resources in the configuration (kind labs,
@@ -69,7 +69,7 @@ Without a subcommand, lists the leases.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error { return a.leaseList() },
 	}
-	c.AddCommand(a.leaseClaimCmd(), a.leaseReleaseCmd(), a.leaseStatusCmd(), a.leaseListCmd(), a.leaseKubeconfigCmd(),
+	c.AddCommand(a.leaseClaimCmd(), a.leaseReleaseCmd(), a.leaseStatusCmd(), a.leaseListCmd(), a.leaseKubeconfigCmd(), a.leaseLabCmd(labUp), a.leaseLabCmd(labDown),
 		a.leaseGrantCmd(), a.leaseRevokeCmd())
 	return c
 }

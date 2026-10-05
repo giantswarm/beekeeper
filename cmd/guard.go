@@ -75,7 +75,7 @@ kill in it as a test kill, not a build's.`,
 			o := guard.Options{Max: env("MEMCAP_MAX", a.cfg.MemcapMax(ramMiB())), Swap: env("MEMCAP_SWAP", "0"),
 				SlotDir: a.cfg.Memcap.SlotDir, Slots: a.cfg.Memcap.Slots, Stderr: os.Stderr, Record: a.runRecorder(),
 				Test: os.Getenv("MEMCAP_TEST") == "1"}
-			if os.Getenv(sandbox.Env) != "" {
+			if inSandbox() {
 				exe, _ := os.Executable()
 				o.Sandbox = sandbox.Capper{Dir: sandbox.SpoolDir(a.cfg.StateDir), Exe: exe}
 			}

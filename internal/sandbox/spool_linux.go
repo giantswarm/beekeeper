@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -64,11 +65,18 @@ func Serve(ctx context.Context, dir, procDir string, tick time.Duration, h Handl
 // answer answers the request at path once: a request with an answer is
 // left to its requester, and an answer whose requester gave up is removed.
 func answer(ctx context.Context, path, procDir string, h Handler) {
-	out := strings.TrimSuffix(path, reqSuffix) + replySuffix
+	base := strings.TrimSuffix(path, reqSuffix)
+	out := base + replySuffix
 	if _, err := os.Lstat(out); err == nil {
 		return
 	}
-	r, err := handle(ctx, path, procDir, h)
+	r, gone, err := handle(ctx, path, procDir, h)
+	if gone {
+		// a streamed call whose requester ended: nobody reads its answer
+		_ = os.Remove(path)
+		_ = os.Remove(base + outSuffix)
+		return
+	}
 	if err != nil {
 		r = Reply{Error: err.Error()}
 	}
@@ -83,27 +91,64 @@ func answer(ctx context.Context, path, procDir string, h Handler) {
 	}
 }
 
-func handle(ctx context.Context, path, procDir string, h Handler) (Reply, error) {
+// holderPoll is how often a streamed call's requester is looked for.
+const holderPoll = time.Second
+
+// handle acts on the request at path; gone says that a streamed call's
+// requester ended before its call's answer.
+func handle(ctx context.Context, path, procDir string, h Handler) (Reply, bool, error) {
 	raw, st, err := read(path)
 	if err != nil {
-		return Reply{}, err
+		return Reply{}, false, err
 	}
 	if len(raw) > maxRequest {
-		return Reply{}, fmt.Errorf("request over %d bytes", maxRequest)
+		return Reply{}, false, fmt.Errorf("request over %d bytes", maxRequest)
 	}
 	var req Request
 	if err := json.Unmarshal(raw, &req); err != nil {
-		return Reply{}, fmt.Errorf("malformed request: %w", err)
+		return Reply{}, false, fmt.Errorf("malformed request: %w", err)
 	}
 	sys, ok := st.Sys().(*syscall.Stat_t)
 	if !ok {
-		return Reply{}, errors.New("request: no inode")
+		return Reply{}, false, errors.New("request: no inode")
 	}
 	pids := Holders(procDir, sys.Dev, sys.Ino)
 	if len(pids) != 1 {
-		return Reply{}, fmt.Errorf("request held by %d processes of this user, want one", len(pids))
+		return Reply{}, false, fmt.Errorf("request held by %d processes of this user, want one", len(pids))
 	}
-	return h(ctx, pids[0], req)
+	pid := pids[0]
+	if !req.Stream {
+		r, err := h(ctx, pid, req)
+		return r, false, err
+	}
+	f, err := os.OpenFile(strings.TrimSuffix(path, reqSuffix)+outSuffix, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, 0o600) //nolint:gosec // the request's output in our own spool; O_EXCL refuses a planted file
+	if err != nil {
+		return Reply{}, false, err
+	}
+	defer func() { _ = f.Close() }()
+	req.out = f
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var gone atomic.Bool
+	go func() {
+		t := time.NewTicker(holderPoll)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+			if !holds(filepath.Join(procDir, strconv.Itoa(pid)), sys.Dev, sys.Ino) {
+				gone.Store(true)
+				cancel()
+				return
+			}
+		}
+	}()
+	r, err := h(ctx, pid, req)
+	// a requester that ended while the call ran reads no answer either
+	return r, gone.Load() || !holds(filepath.Join(procDir, strconv.Itoa(pid)), sys.Dev, sys.Ino), err
 }
 
 // read reads the request at path, closed again before its holders are
@@ -142,22 +187,30 @@ func Holders(procDir string, dev, ino uint64) []int {
 		} else if s, ok := st.Sys().(*syscall.Stat_t); !ok || s.Uid != uid {
 			continue
 		}
-		fds, err := os.ReadDir(filepath.Join(dir, "fd"))
-		if err != nil {
-			continue
-		}
-		for _, fd := range fds {
-			st, err := os.Stat(filepath.Join(dir, "fd", fd.Name()))
-			if err != nil {
-				continue
-			}
-			if s, ok := st.Sys().(*syscall.Stat_t); ok && s.Dev == dev && s.Ino == ino {
-				out = append(out, pid)
-				break
-			}
+		if holds(dir, dev, ino) {
+			out = append(out, pid)
 		}
 	}
 	return out
+}
+
+// holds reports whether the process at dir (/proc/<pid>) holds the file
+// dev:ino open.
+func holds(dir string, dev, ino uint64) bool {
+	fds, err := os.ReadDir(filepath.Join(dir, "fd"))
+	if err != nil {
+		return false
+	}
+	for _, fd := range fds {
+		st, err := os.Stat(filepath.Join(dir, "fd", fd.Name()))
+		if err != nil {
+			continue
+		}
+		if s, ok := st.Sys().(*syscall.Stat_t); ok && s.Dev == dev && s.Ino == ino {
+			return true
+		}
+	}
+	return false
 }
 
 // Origin is where process pid runs: its working directory and, of its

@@ -19,6 +19,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
@@ -144,7 +145,7 @@ with central configured), 125 a newer release (self-update --check).`,
 		&cobra.Group{ID: supervisorRole.ing, Title: "Supervising:"},
 		&cobra.Group{ID: "guarding", Title: "Guarding:"},
 	)
-	for _, c := range []*cobra.Command{a.statusCmd(), a.capacityCmd(), a.sessionsCmd(), a.tailCmd(), a.snapshotCmd(), a.uiCmd(), a.watchCmd(), a.alertsCmd(), a.budgetCmd(), a.teleportCmd(), a.psCmd()} {
+	for _, c := range []*cobra.Command{a.statusCmd(), a.capacityCmd(), a.sessionsCmd(), a.tailCmd(), a.snapshotCmd(), a.uiCmd(), a.onHost(a.watchCmd(), sandbox.OpWatch, 0), a.alertsCmd(), a.budgetCmd(), a.teleportCmd(), a.psCmd()} {
 		c.GroupID = "watching"
 		root.AddCommand(c)
 	}

@@ -36,7 +36,7 @@ with every Claude Code process, so beekeeper's hook refreshes them before
 every command of a sandboxed session that holds a lab lease (--refresh).`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			sandboxed := os.Getenv(sandbox.Env) != "" && os.Getenv(sandbox.Brokered) == ""
+			sandboxed := inSandbox()
 			if refresh {
 				if !sandboxed {
 					return nil
@@ -158,7 +158,7 @@ func (a *app) claimKubeconfig(ctx context.Context, res string) string {
 // caller holds, through the broker in the sandbox, and returns its export
 // line.
 func (a *app) labKubeconfigLine(ctx context.Context, res string) (string, error) {
-	if os.Getenv(sandbox.Env) != "" && os.Getenv(sandbox.Brokered) == "" {
+	if inSandbox() {
 		return a.brokeredKubeconfig(res)
 	}
 	path, err := a.writeLabKubeconfig(ctx, res)
