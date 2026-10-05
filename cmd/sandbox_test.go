@@ -111,7 +111,7 @@ func TestSandboxInstallSteps(t *testing.T) {
 	if !slices.Equal(steps, want) {
 		t.Fatalf("a fresh machine's steps = %q, want %q", steps, want)
 	}
-	if b, _ := os.ReadFile(filepath.Join(state, "managed-settings.json")); string(b) != emptyManagedSettings {
+	if b, _ := os.ReadFile(filepath.Join(state, "managed-settings.json")); string(b) != emptyManagedSettings { //nolint:gosec // the test's own temporary directory
 		t.Errorf("staged managed settings = %q, want {}", b)
 	}
 	// the root steps run
