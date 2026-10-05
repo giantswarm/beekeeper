@@ -187,7 +187,7 @@ func (a *app) secretBrokered(cmd *cobra.Command, args []string, inSandbox bool) 
 	}
 	r, err := sandbox.Call(sandbox.SpoolDir(a.cfg.StateDir), sandbox.Request{Op: sandbox.OpVault}, 10*time.Second)
 	if err == nil && r.Out != vaultUnlocked {
-		_, _ = fmt.Fprintln(os.Stderr, guard.LogPrefix+secret.Locked)
+		_, _ = fmt.Fprintln(os.Stderr, "beekeeper: "+secret.Locked)
 	}
 	return a.brokeredReplyWithin(sandbox.Request{Op: sandbox.OpSecret, Args: argv}, a.cfg.Secret.UnlockWait.Duration+brokeredCallTimeout+time.Minute)
 }
