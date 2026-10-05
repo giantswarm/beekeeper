@@ -118,6 +118,7 @@ type (
 	plainMerge        Merge
 	plainWriter       Writer
 	plainStaleWriter  StaleWriter
+	plainProblem      Problem
 )
 
 func (v *State) UnmarshalJSON(b []byte) error { return decodeKeeping(b, (*plainState)(v), &v.rest) }
@@ -190,3 +191,5 @@ func (v *StaleWriter) UnmarshalJSON(b []byte) error {
 	return decodeKeeping(b, (*plainStaleWriter)(v), &v.rest)
 }
 func (v StaleWriter) MarshalJSON() ([]byte, error) { return encodeKeeping(plainStaleWriter(v), v.rest) }
+func (v *Problem) UnmarshalJSON(b []byte) error    { return decodeKeeping(b, (*plainProblem)(v), &v.rest) }
+func (v Problem) MarshalJSON() ([]byte, error)     { return encodeKeeping(plainProblem(v), v.rest) }

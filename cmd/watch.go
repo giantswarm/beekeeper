@@ -1742,7 +1742,21 @@ func firePending(st *state.State, sessions []*claude.Session, now time.Time) ([]
 		lines = append(lines, fmt.Sprintf("SESSION ENDED: %q, which %s: re-query %s", r.Session.Name, truncate(recordText(*r), 200), r.Issue))
 		evs = append(evs, event(watchParty, "session.ended", "%s: %s", r.Session.Name, recordText(*r)))
 	}
+	for _, p := range st.Problems {
+		lines = append(lines, problemLine(p))
+	}
+	st.Problems = nil
 	return lines, evs
+}
+
+// problemLine is a finding a worker reported, for the supervisor to file
+// as an issue and hand to a worker.
+func problemLine(p state.Problem) string {
+	l := fmt.Sprintf("PROBLEM FOUND by %q: %s", p.By.Name, truncate(p.Text, 400))
+	if p.Task != "" {
+		l += " (task: " + truncate(p.Task, 80) + ")"
+	}
+	return l + "; file it and hand it to a worker"
 }
 
 // runaways prints one line for each session figure over its threshold in

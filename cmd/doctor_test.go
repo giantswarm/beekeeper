@@ -159,7 +159,7 @@ func TestIdleDone(t *testing.T) {
 		t.Fatal(err)
 	}
 	run("assign", agentOne, "a task")
-	run("idle", "--done")
+	run("idle", "--done", "--problem", "none")
 	st, err := a.store.Read()
 	if err != nil {
 		t.Fatal(err)
@@ -170,6 +170,56 @@ func TestIdleDone(t *testing.T) {
 	run("assign", agentOne, "another task")
 	if st, _ = a.store.Read(); st.Agents[0].Done {
 		t.Errorf("an assignment keeps done: %+v", st.Agents[0])
+	}
+}
+
+// agents idle --done requires the report's "Problems found", and each
+// finding reaches the supervisor's watch once.
+func TestIdleDoneProblemsFound(t *testing.T) {
+	a, out := noteApp(t)
+	run := func(args ...string) error {
+		t.Helper()
+		c := a.agentsCmd()
+		c.SetArgs(args)
+		c.SetOut(out)
+		c.SetErr(out)
+		return c.Execute()
+	}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{{Party: state.Party{Name: agentOne}, Task: "a task"}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"idle", "--done"},
+		{"idle", "--done", "--problem", " "},
+		{"idle", "--done", "--problem", "none", "--problem", "the reconciler creates no repository"},
+	} {
+		if err := run(args...); err == nil {
+			t.Errorf("%v passed", args)
+		}
+	}
+	if st, _ := a.store.Read(); st.Agents[0].Task != "a task" || st.Agents[0].Done {
+		t.Fatalf("a refused report changed the agent: %+v", st.Agents[0])
+	}
+	found := []string{"giantswarm/github: the reconciler creates no repository; worked around with gh", "follow-up: docs"}
+	if err := run("idle", "--done", "--problem", found[0], "--problem", found[1]); err != nil {
+		t.Fatal(err)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Problems) != 2 || st.Problems[0].Text != found[0] || st.Problems[0].Task != "a task" || st.Problems[0].By.Name != agentOne {
+		t.Fatalf("problems = %+v", st.Problems)
+	}
+	lines, _ := firePending(st, nil, time.Now())
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], `PROBLEM FOUND by "`+agentOne+`": `+found[0]) {
+		t.Errorf("lines = %q", lines)
+	}
+	if lines, _ := firePending(st, nil, time.Now()); len(lines) != 0 || len(st.Problems) != 0 {
+		t.Errorf("printed again: %q", lines)
 	}
 }
 

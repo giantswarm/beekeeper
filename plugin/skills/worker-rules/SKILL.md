@@ -14,8 +14,9 @@ and win where they are more specific; nothing here relaxes them.
 ## Goal
 
 The task ends merged, released, rolled and proven live, and the supervisor learns it from one
-message: PR links, release versions, the live proof, what is still open, every fact re-queried
-live at the time of the report. Then `beekeeper agents idle --done` and the turn ends; beekeeper
+message: PR links, release versions, the live proof, what is still open, the problems found,
+every fact re-queried live at the time of the report. Then `beekeeper agents idle --done
+--problem "<finding>"` (once per finding, or `--problem none`) and the turn ends; beekeeper
 takes the session off the roster and archives it. Nothing the next
 task needs lives only in this session: the next task goes to a fresh one.
 
@@ -34,6 +35,14 @@ task needs lives only in this session: the next task goes to a fresh one.
   purpose and duration, `merging <n>` before and `merged <n> <version>` after every own merge,
   `tagging <v>` before a tag that rolls installations. Where the supervisor states a different rule
   for its watch, the supervisor's rule wins.
+- **Problems found reach the supervisor at once.** Every broken function, way around one, follow-up
+  and problem the worker meets, in its task or beside it, goes to the supervisor in one line the
+  moment it is met: what broke, the evidence, the owning repository. The supervisor files it and
+  hands it to a worker; the worker files no issue for it unless its task says so. A broken platform
+  function (a reconciler, a release, a gate, a CI pipeline) is never bypassed silently: the report
+  comes first, and a detour the task cannot wait for is named in it. The final report's
+  "Problems found" repeats every finding; `agents idle --done` refuses without its `--problem`
+  lines, and the supervisor's watch prints each one.
 - **Questions for the person** go to the supervisor in one line; it files them as `beekeeper note
   add --for <person>` and the guide asks. An answer the guide relays is the person's word.
 

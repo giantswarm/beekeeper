@@ -179,7 +179,9 @@ machine has a supervisor at all times: the role moves to a successor by relay an
   `/register-agent` takes one task by `beekeeper agents assign`. A message to an agent whose CLI
   may have stopped is `beekeeper agents wake <agent> "<message>"`, never a `SendMessage` to its
   `local_` id, which the desktop caps when nobody types in the sender's session. Done, an agent
-  reports and runs `agents idle --done`: the watch's doctor takes it off the roster and archives
+  reports and runs `agents idle --done`, whose required `--problem` lines the watch prints as
+  `PROBLEM FOUND`: each finding, and each one a worker messages on the way, becomes an issue in
+  its owning repository and a worker. The doctor takes the agent off the roster and archives
   its session, as it does with relieved role holders and idle entries whose CLI is gone a day
   (`beekeeper doctor --dry-run` lists them); none of it is a note for the person. Briefs are standalone, because every agent
   starts on an empty context. The checkout the sessions load their project rules and skills from

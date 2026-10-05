@@ -733,6 +733,21 @@ type State struct {
 	// StaleWriters are the processes of an older beekeeper seen saving the
 	// state after a newer one, one per process while it runs.
 	StaleWriters []StaleWriter `json:"staleWriters,omitempty"`
+	// Problems are the findings workers reported with agents idle that the
+	// supervisor's watch has not printed yet.
+	Problems []Problem `json:"problems,omitempty"`
+
+	rest rest
+}
+
+// Problem is one finding a worker reported with its task: a broken
+// function, a workaround, a follow-up. The watch prints it once and drops
+// it; the event log keeps it (agents.problem).
+type Problem struct {
+	By   Party     `json:"by"`
+	At   time.Time `json:"at"`
+	Task string    `json:"task,omitempty"`
+	Text string    `json:"text"`
 
 	rest rest
 }

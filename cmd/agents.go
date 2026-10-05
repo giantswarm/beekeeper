@@ -189,6 +189,7 @@ or "wake turn running".`,
 		},
 	}
 	var finished bool
+	var problems []string
 	idle := &cobra.Command{
 		Use:   "idle",
 		Short: "Report the calling agent's task done: idle again",
@@ -196,9 +197,18 @@ or "wake turn running".`,
 With --done its work is finished: the watch's doctor takes it off the
 roster and archives the desktop session beekeeper started for it once its
 CLI runs no turn, a desktop CLI kept warm included (beekeeper doctor; the
-desktop's Archived list brings it back).`,
+desktop's Archived list brings it back).
+
+--problem is the report's "Problems found": one line per broken function,
+workaround, follow-up or problem the task met, with its evidence and owning
+repository, or --problem none. --done refuses without it. The supervisor's
+watch prints each finding once (PROBLEM FOUND), for the supervisor to file.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
+			found, err := problemsFound(problems, finished)
+			if err != nil {
+				return err
+			}
 			me, err := a.caller()
 			if err != nil {
 				return err
@@ -215,10 +225,20 @@ desktop's Archived list brings it back).`,
 				if finished {
 					verb = "agents.done"
 				}
-				return []state.Event{event(me, verb, "%s done: %s", ag.Name, ag.LastTask)}, nil
+				evs := []state.Event{event(me, verb, "%s done: %s", ag.Name, ag.LastTask)}
+				for _, p := range found {
+					st.Problems = append(st.Problems, state.Problem{By: ag.Party, At: a.now.UTC(), Task: ag.LastTask, Text: p})
+					evs = append(evs, event(me, "agents.problem", "%s: %s", ag.Name, p))
+				}
+				return evs, nil
 			})
 			if err != nil {
 				return err
+			}
+			if len(found) > 0 {
+				if _, err := fmt.Fprintf(a.out, "register: %d problem(s) found go to the supervisor's watch\n", len(found)); err != nil {
+					return err
+				}
 			}
 			if finished {
 				_, err = fmt.Fprintf(a.out, "register: %s finished: off the roster and archived once its turn ends\n", me.Name)
@@ -229,6 +249,7 @@ desktop's Archived list brings it back).`,
 		},
 	}
 	idle.Flags().BoolVar(&finished, "done", false, "the work is finished: the doctor removes and archives the agent once idle")
+	idle.Flags().StringArrayVar(&problems, "problem", nil, `a problem found: one line per broken function, workaround or follow-up, with evidence and owning repository; "none" when there was none (required with --done)`)
 	var keepDesktop bool
 	remove := &cobra.Command{
 		Use:   "remove <agent>",
@@ -351,6 +372,34 @@ func reportIdle(ag *state.Agent, now time.Time) {
 	if ag.Task != "" {
 		ag.LastTask, ag.Task, ag.IdleSince = ag.Task, "", now.UTC()
 	}
+}
+
+// noProblems is the answer of a task that found no problem.
+const noProblems = "none"
+
+// problemsFound checks a report's "Problems found": required with --done,
+// "none" alone or one line per finding. It returns the findings.
+func problemsFound(lines []string, finished bool) ([]string, error) {
+	var found []string
+	none := false
+	for _, l := range lines {
+		l = strings.Join(strings.Fields(l), " ")
+		switch {
+		case l == "":
+			return nil, refused("an empty --problem: one line per finding, or --problem none")
+		case strings.EqualFold(l, noProblems):
+			none = true
+		default:
+			found = append(found, l)
+		}
+	}
+	switch {
+	case finished && len(lines) == 0:
+		return nil, refused(`the report's "Problems found" is missing: --problem "<finding, evidence, owning repo>" per broken function, workaround or follow-up the task met, or --problem none`)
+	case none && len(found) > 0:
+		return nil, refused("--problem none next to %d finding(s): drop none", len(found))
+	}
+	return found, nil
 }
 
 func findAgent(st *state.State, q string) (int, error) {
