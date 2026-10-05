@@ -593,6 +593,11 @@ func (a *app) showBriefly(ctx context.Context, d desk, url, host, follow string,
 			return "", err
 		}
 	}
+	if running {
+		if err := a.makeRoom(ctx, host); err != nil {
+			return "", err
+		}
+	}
 	if err := plat.Opener.Open(ctx, url, running); err != nil {
 		return "", err
 	}
