@@ -23,7 +23,7 @@ var mentionTools = []string{
 
 // ghPosts are the gh subcommands that post text: issue and pr comment,
 // create, edit and review, and api (a comments or reviews endpoint).
-var ghPosts = map[string]bool{"comment": true, "create": true, "edit": true, "review": true, "close": true}
+var ghPosts = map[string]bool{"comment": true, "create": true, verbEdit: true, "review": true, "close": true}
 
 // mentionHead is what may stand before an @-mention: the start, a space,
 // an opening bracket or punctuation; not a word, path, address or option
@@ -54,7 +54,7 @@ func mentionRefusal(tool string, input map[string]any, cwd string) string {
 	var text string
 	switch {
 	case tool == bashTool:
-		cmd, _ := input["command"].(string)
+		cmd, _ := input[commandKey].(string)
 		text = ghPostText(cmd, cwd)
 	case strings.HasPrefix(tool, mcpPrefix) && postsToGitHub(tool):
 		text = strings.Join(stringValues(input), "\n")

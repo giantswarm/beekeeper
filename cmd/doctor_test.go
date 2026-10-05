@@ -159,7 +159,7 @@ func TestIdleDone(t *testing.T) {
 		t.Fatal(err)
 	}
 	run("assign", agentOne, "a task")
-	run("idle", "--done", "--report", "merged #1", "--problem", "none")
+	run(verbIdle, flagDone, flagReport, "merged #1", flagProblem, noProblems)
 	st, err := a.store.Read()
 	if err != nil {
 		t.Fatal(err)
@@ -173,9 +173,18 @@ func TestIdleDone(t *testing.T) {
 	}
 }
 
+// The flags of agents idle the tests pass.
+const (
+	verbIdle    = "idle"
+	flagDone    = "--done"
+	flagReport  = "--report"
+	flagProblem = "--problem"
+)
+
 // agents idle --done requires the report's "Problems found", and each
 // finding reaches the supervisor's watch once.
 func TestIdleDoneProblemsFound(t *testing.T) {
+	const task, merged = "the task", "merged #1"
 	a, out := noteApp(t)
 	run := func(args ...string) error {
 		t.Helper()
@@ -186,38 +195,38 @@ func TestIdleDoneProblemsFound(t *testing.T) {
 		return c.Execute()
 	}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents = []state.Agent{{Party: state.Party{Name: agentOne}, Task: "a task"}}
+		st.Agents = []state.Agent{{Party: state.Party{Name: agentOne}, Task: task}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{
-		{"idle", "--done"},
-		{"idle", "--done", "--report", "merged #1"},
-		{"idle", "--done", "--problem", "none"},
-		{"idle", "--done", "--report", "merged #1", "--problem", " "},
-		{"idle", "--done", "--report", "merged #1", "--problem", "none", "--problem", "the reconciler creates no repository"},
+		{verbIdle, flagDone},
+		{verbIdle, flagDone, flagReport, merged},
+		{verbIdle, flagDone, flagProblem, noProblems},
+		{verbIdle, flagDone, flagReport, merged, flagProblem, " "},
+		{verbIdle, flagDone, flagReport, merged, flagProblem, noProblems, flagProblem, "the reconciler creates no repository"},
 	} {
 		if err := run(args...); err == nil {
 			t.Errorf("%v passed", args)
 		}
 	}
-	if st, _ := a.store.Read(); st.Agents[0].Task != "a task" || st.Agents[0].Done {
+	if st, _ := a.store.Read(); st.Agents[0].Task != task || st.Agents[0].Done {
 		t.Fatalf("a refused report changed the agent: %+v", st.Agents[0])
 	}
 	found := []string{"giantswarm/github: the reconciler creates no repository; worked around with gh", "follow-up: docs"}
-	if err := run("idle", "--done", "--report", "merged #1, released v1.2.3", "--problem", found[0], "--problem", found[1]); err != nil {
+	if err := run(verbIdle, flagDone, flagReport, "merged #1, released v1.2.3", flagProblem, found[0], flagProblem, found[1]); err != nil {
 		t.Fatal(err)
 	}
 	st, err := a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rs := st.WorkerReports; len(rs) != 1 || rs[0].Text != "merged #1, released v1.2.3" || len(rs[0].Problems) != 2 || rs[0].Problems[0] != found[0] || rs[0].Task != "a task" || rs[0].By.Name != agentOne {
+	if rs := st.WorkerReports; len(rs) != 1 || rs[0].Text != "merged #1, released v1.2.3" || len(rs[0].Problems) != 2 || rs[0].Problems[0] != found[0] || rs[0].Task != task || rs[0].By.Name != agentOne {
 		t.Fatalf("reports = %+v", st.WorkerReports)
 	}
 	lines, _ := firePending(st, nil, time.Now())
-	if len(lines) != 3 || !strings.HasPrefix(lines[0], `WORKER REPORT by "`+agentOne+`" (task: a task): merged #1`) ||
+	if len(lines) != 3 || !strings.HasPrefix(lines[0], `WORKER REPORT by "`+agentOne+`" (task: the task): merged #1`) ||
 		!strings.HasPrefix(lines[1], `PROBLEM FOUND by "`+agentOne+`": `+found[0]) {
 		t.Errorf("lines = %q", lines)
 	}

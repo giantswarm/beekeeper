@@ -27,6 +27,7 @@ func TestMentions(t *testing.T) {
 }
 
 func TestMentionRefusal(t *testing.T) {
+	const ping, bodyKey = "cc @piontec", "body"
 	dir := t.TempDir()
 	body := filepath.Join(dir, "body.md")
 	if err := os.WriteFile(body, []byte("Done.\n\n@QuentinBisson can you check?\n"), 0o600); err != nil {
@@ -36,7 +37,7 @@ func TestMentionRefusal(t *testing.T) {
 	if err := os.WriteFile(clean, []byte("Done, QuentinBisson's PR is merged.\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	bash := func(cmd string) map[string]any { return map[string]any{"command": cmd} }
+	bash := func(cmd string) map[string]any { return map[string]any{commandKey: cmd} }
 	for _, c := range []struct {
 		tool   string
 		input  map[string]any
@@ -48,9 +49,9 @@ func TestMentionRefusal(t *testing.T) {
 		{bashTool, bash(`gh issue create --repo giantswarm/x --title t --body-file ` + clean), false},
 		{bashTool, bash(`echo "@marians" && gh pr view 12`), false},
 		{bashTool, bash(`git commit -m "fix: thanks @marians"`), false},
-		{"mcp__claude_ai_GitHub_MCP__add_issue_comment", map[string]any{"body": "cc @piontec"}, true},
-		{"mcp__claude_ai_GitHub_MCP__issue_read", map[string]any{"body": "cc @piontec"}, false},
-		{"mcp__claude_ai_Slack__slack_send_message", map[string]any{"text": "cc @piontec"}, false},
+		{"mcp__claude_ai_GitHub_MCP__add_issue_comment", map[string]any{bodyKey: ping}, true},
+		{"mcp__claude_ai_GitHub_MCP__issue_read", map[string]any{bodyKey: ping}, false},
+		{"mcp__claude_ai_Slack__slack_send_message", map[string]any{bodyKey: ping}, false},
 	} {
 		if got := mentionRefusal(c.tool, c.input, dir) != ""; got != c.refuse {
 			t.Errorf("%s %v: refused %v, want %v", c.tool, c.input, got, c.refuse)
