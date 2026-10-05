@@ -161,7 +161,7 @@ func New(cfg config.Sandbox, e Paths) Policy {
 func (p Policy) Settings() map[string]any {
 	envVars := make([]map[string]any, 0, len(p.Mask))
 	for _, m := range p.Mask {
-		envVars = append(envVars, map[string]any{"name": m.Name, "mode": modeMask, injectHosts: m.Hosts})
+		envVars = append(envVars, mask(map[string]any{"name": m.Name}, m.Hosts))
 	}
 	return map[string]any{
 		"env": p.Vars,
@@ -194,12 +194,12 @@ func (p Policy) Settings() map[string]any {
 	}
 }
 
-// injectHosts is a mask's key for the hosts its real value goes to,
-// modeMask the mode of a masked variable or file.
-const (
-	injectHosts = "injectHosts"
-	modeMask    = "mask"
-)
+// mask is a credentials entry masked towards hosts: commands see a
+// placeholder, the proxy puts the real value into requests to hosts.
+func mask(entry map[string]any, hosts []string) map[string]any {
+	entry["mode"], entry["injectHosts"] = "mask", hosts
+	return entry
+}
 
 // credentials are the masked variables and, with a runtime directory, the
 // masked GitHub token files.
@@ -207,8 +207,8 @@ func (p Policy) credentials(envVars []map[string]any) map[string]any {
 	c := map[string]any{"envVars": envVars}
 	if p.GitHub != "" {
 		c["files"] = []map[string]any{
-			{"path": filepath.Join(p.GitHub, GitHubHosts), "mode": modeMask, "extract": githubHostsExtract, injectHosts: config.GitHubHosts},
-			{"path": filepath.Join(p.GitHub, GitHubGit), "mode": modeMask, "extract": githubGitExtract, injectHosts: []string{"github.com"}},
+			mask(map[string]any{"path": filepath.Join(p.GitHub, GitHubHosts), "extract": githubHostsExtract}, config.GitHubHosts),
+			mask(map[string]any{"path": filepath.Join(p.GitHub, GitHubGit), "extract": githubGitExtract}, []string{"github.com"}),
 		}
 	}
 	return c
