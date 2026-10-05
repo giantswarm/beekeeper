@@ -316,7 +316,9 @@ harness's own grep and find shadows) are removed, so each name runs the tool
 on PATH, and with agents.shell.globs literal (the default) an unmatched glob
 stays as written instead of failing the command (zsh's "no matches found").
 The person's interactive setup stays theirs; an agent's commands are written
-for the plain tools. It replaces only its own block, so other hooks' lines
+for the plain tools. agents.shell.path goes first on PATH, except in the
+agent sandbox, where gh acts with the broker's masked GitHub login instead
+of a gh link to devctl. It replaces only its own block, so other hooks' lines
 stay, and prints nothing. beekeeper install registers it in
 ~/.claude/settings.json:
 
@@ -330,7 +332,11 @@ stay, and prints nothing. beekeeper install registers it in
 				return nil // a broken configuration must not block a session's start
 			}
 			sh := a.cfg.Agents.Shell
-			return guard.WritePrelude(env, guard.Prelude(sh.Unalias, sh.Globs == config.GlobsLiteral, sh.Path))
+			path := sh.Path
+			if os.Getenv(sandbox.Env) != "" {
+				path = nil // gh takes the masked login; a gh link to devctl would read the keychain the sandbox closes
+			}
+			return guard.WritePrelude(env, guard.Prelude(sh.Unalias, sh.Globs == config.GlobsLiteral, path))
 		},
 	})
 	c.AddCommand(&cobra.Command{

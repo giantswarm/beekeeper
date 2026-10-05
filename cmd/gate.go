@@ -23,6 +23,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
@@ -159,6 +160,9 @@ type gateRun struct {
 }
 
 func (a *app) gate(ctx context.Context, argv []string, wait time.Duration, queued bool) error {
+	if os.Getenv(sandbox.Env) != "" && os.Getenv(sandbox.Brokered) == "" {
+		return a.gateBrokered(argv, wait, queued)
+	}
 	repo, pr, ok := parseGated(argv)
 	if !ok {
 		if a.store != nil && merge.ParseOwned(argv) {
