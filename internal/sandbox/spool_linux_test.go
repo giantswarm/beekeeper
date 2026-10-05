@@ -233,7 +233,7 @@ func TestAStreamedCallEndsWithItsRequester(t *testing.T) {
 		t.Fatal(err)
 	}
 	// the requester holds its request open, then ends without a word
-	requester := exec.Command("/bin/sh", "-c", "exec 3<"+path+"; echo ready; /bin/sleep 30") //nolint:gosec // the test's own spool
+	requester := exec.Command("/bin/sh", "-c", "exec 3<"+path+"; echo ready; exec /bin/sleep 30") //nolint:gosec // the test's own spool
 	ready, err := requester.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -272,7 +272,7 @@ func TestAStreamedCallsAnswerWithoutItsRequesterIsDropped(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"op":"agents","stream":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	requester := exec.Command("/bin/sh", "-c", "exec 3<"+path+"; echo ready; /bin/sleep 30") //nolint:gosec // the test's own spool
+	requester := exec.Command("/bin/sh", "-c", "exec 3<"+path+"; echo ready; exec /bin/sleep 30") //nolint:gosec // the test's own spool
 	ready, err := requester.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
