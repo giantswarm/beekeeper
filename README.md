@@ -627,14 +627,17 @@ same file passed to `claude --settings` holds one session to it, to try a change
   Kubeconfigs, the Teleport profile, the GitHub CLI's token file and every other credential nobody
   listed stay unreadable. Only the managed settings' read paths count.
 - **Writes:** the session's working directory (when it is readable itself), the temporary directory,
-  beekeeper's state, the build slots and `sandbox.allowWrite`.
+  beekeeper's state, the build slots and `sandbox.allowWrite`. The sandbox mounts a readable path
+  read-only over a writable one inside it, so `beekeeper sandbox install` refuses that layout and
+  names both paths.
 - **The harness's config directory** (`~/.claude`, or `CLAUDE_CONFIG_DIR`) is denied for writing:
   Claude Code mounts it writable in the sandbox and masks only the entries it knows, so a command could
   otherwise leave a new file there that the harness reads outside the sandbox. The file tools still write
   the sessions' memory and plans.
 - **The scanner's key and index** (`scan/` in beekeeper's state) are denied for reading and writing
   inside the writable state directory: the narrower deny holds, so no session reads the fingerprint key
-  or rewrites the index the redaction matches against.
+  or rewrites the index the redaction matches against. `beekeeper sandbox install` and the broker
+  at its start create `scan/`, the mount point the sandbox cannot create itself.
 - **Egress:** through beekeeper's egress proxy alone, to GitHub and `sandbox.domains`, nothing else,
   with no prompt to widen it. The policy points Claude Code's `httpProxyPort` and `socksProxyPort` at
   the broker's proxy (`127.0.0.1:<sandbox.proxyPort>`, 3190), so Claude Code bridges the sandbox's HTTP
