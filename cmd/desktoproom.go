@@ -35,10 +35,10 @@ func desktopCLIs(t *proc.Table) int {
 // it start one (an import, a show, a send that starts a turn). At its cap
 // the desktop's governor pauses the CLI idle longest to start another,
 // whoever's it is, the person's own sessions included; so at the cap
-// beekeeper ends one of its own CLIs first (roomFor: a finished worker's,
-// then a parked one's, then one idle on its task, never a role's), never
-// one of keep (local_ ids). With none to end it starts nothing: the error
-// names the cap.
+// beekeeper ends one of its own CLIs first (roomFor: a finished worker's or
+// a relieved role run's, then a parked one's, and for a role's run one idle
+// on its task, never a role's), never one of keep (local_ ids). With none to
+// end it starts nothing: the error names the cap.
 func (a *app) makeRoom(ctx context.Context, keep ...string) error {
 	return a.makeRoomFor(ctx, 1, keep...)
 }
@@ -72,7 +72,7 @@ func (a *app) endOneForRoom(ctx context.Context, slots int, keep []string) (bool
 	if desktopCLIs(t)+slots <= limit {
 		return false, nil
 	}
-	s := roomFor(st, sessions, t, a.now, keep)
+	s := roomFor(st, sessions, t, a.now, keep, forRole(st, keep, a.now))
 	if s == nil {
 		return false, fmt.Errorf("the desktop runs its cap of %d CLIs and beekeeper runs no idle CLI of its own to end: it starts none, "+
 			"since at the cap the desktop pauses the CLI idle longest, the person's own sessions included", limit)
@@ -98,14 +98,29 @@ func (a *app) endOneForRoom(ctx context.Context, slots int, keep []string) (bool
 	return true, awaitExit(ctx, s.PID, roomWait)
 }
 
+// forRole reports whether one of keep (local_ ids) is a role's run: its
+// holder or the successor an open relay names. A role's run gets its CLI
+// before a worker idle on its task keeps one.
+func forRole(st *state.State, keep []string, now time.Time) bool {
+	return slices.ContainsFunc(roles, func(rl role) bool {
+		r := rl.get(st)
+		return r.Holder != nil && slices.Contains(keep, r.Holder.HostSession) ||
+			r.Relay.Open(now) && slices.Contains(keep, r.Relay.To.HostSession)
+	})
+}
+
 // roomFor is the desktop CLI makeRoom ends: one of beekeeper's own (roomRank),
 // never one of keep, the lowest rank first, then the one idle longest; nil
-// when none is.
-func roomFor(st *state.State, sessions []*claude.Session, t *proc.Table, now time.Time, keep []string) *claude.Session {
+// when none is. role admits a worker idle on its task (rank 2): the room is
+// for a role's run.
+func roomFor(st *state.State, sessions []*claude.Session, t *proc.Table, now time.Time, keep []string, role bool) *claude.Session {
 	var best *claude.Session
 	bestRank := 0
 	for _, s := range sessions {
 		r, ok := roomRank(st, t, s, now)
+		if !ok && role {
+			r, ok = taskRank(st, t, s, now)
+		}
 		if !ok || slices.Contains(keep, s.HostID) {
 			continue
 		}
@@ -117,24 +132,18 @@ func roomFor(st *state.State, sessions []*claude.Session, t *proc.Table, now tim
 }
 
 // roomRank ranks the desktop CLI of s for makeRoom: 0 a finished worker (off
-// the roster, or on it without a task), 1 a parked one. Its session stays,
-// and the desktop's send starts a CLI of it again. False: never ended, since
-// it is no desktop CLI, its session is not one beekeeper started (the
-// person's own), it holds a role, it is busy on its task, a merge of it waits
-// or runs in the gate (whose outcome wakes it), or it runs a turn or a
-// command or was active within stewardQuiet.
+// the roster, or on it without a task) or a role's past run (pastRun: its
+// work ended with the relay), 1 a parked one. Its session stays, and the
+// desktop's send starts a CLI of it again. False: never ended, since it is
+// not idle (endable), it holds or is to take a role, or it is busy on its
+// task.
 func roomRank(st *state.State, t *proc.Table, s *claude.Session, now time.Time) (int, bool) {
-	p := t.ByPID[s.PID]
 	switch {
-	case s.HostID == "" || s.Archived || p == nil || !slices.Contains(p.Args, permissionPromptTool):
+	case !endable(st, t, s, now):
 		return 0, false
-	case !slices.ContainsFunc(st.Starts, func(x state.Start) bool { return x.Session == s.ID }):
-		return 0, false
+	case pastRun(st, s.Party(), now):
+		return 0, true
 	case keepsRole(st, s.Party()):
-		return 0, false
-	case slices.ContainsFunc(st.Merges, func(m state.Merge) bool { return m.Finished.IsZero() && m.By.Is(s.Party()) }):
-		return 0, false
-	case len(s.Commands) > 0 || headlessTurn(t, s.ID) != "" || now.Sub(s.LastActive) < stewardQuiet:
 		return 0, false
 	}
 	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(s.Party()) })
@@ -145,6 +154,34 @@ func roomRank(st *state.State, t *proc.Table, s *claude.Session, now time.Time) 
 		return 1, true
 	}
 	return 0, false
+}
+
+// taskRank ranks the desktop CLI of a worker idle on its task for a role's
+// run: 2, after every finished and parked one. A message by name starts its
+// CLI again; false for any other CLI.
+func taskRank(st *state.State, t *proc.Table, s *claude.Session, now time.Time) (int, bool) {
+	if !endable(st, t, s, now) || keepsRole(st, s.Party()) {
+		return 0, false
+	}
+	ok := slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(s.Party()) && ag.Task != "" && ag.Park == nil })
+	return 2, ok
+}
+
+// endable reports whether makeRoom may end the desktop CLI of s at all: a
+// desktop CLI of a session beekeeper started, no merge of it waiting or
+// running in the gate (whose outcome wakes it), no turn or command running,
+// and not active within stewardQuiet. The person's own sessions never are.
+func endable(st *state.State, t *proc.Table, s *claude.Session, now time.Time) bool {
+	p := t.ByPID[s.PID]
+	switch {
+	case s.HostID == "" || s.Archived || p == nil || !slices.Contains(p.Args, permissionPromptTool):
+		return false
+	case !slices.ContainsFunc(st.Starts, func(x state.Start) bool { return x.Session == s.ID }):
+		return false
+	case slices.ContainsFunc(st.Merges, func(m state.Merge) bool { return m.Finished.IsZero() && m.By.Is(s.Party()) }):
+		return false
+	}
+	return len(s.Commands) == 0 && headlessTurn(t, s.ID) == "" && now.Sub(s.LastActive) >= stewardQuiet
 }
 
 // awaitExit waits up to wait for process pid to exit.
