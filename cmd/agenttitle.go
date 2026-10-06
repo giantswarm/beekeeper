@@ -458,7 +458,13 @@ const permissionPromptTool = "--permission-prompt-tool"
 // returns its peer socket, the address a message reaches it by whatever its
 // title; empty when none came.
 func desktopSocket(ctx context.Context, id string) string {
-	ctx, cancel := context.WithTimeout(ctx, twinWait)
+	return desktopSocketWithin(ctx, id, twinWait)
+}
+
+// desktopSocketWithin is desktopSocket waiting up to wait; zero: it looks
+// once.
+func desktopSocketWithin(ctx context.Context, id string, wait time.Duration) string {
+	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()

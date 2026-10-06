@@ -357,8 +357,17 @@ func (a *app) reviveFromWatch(ctx context.Context, _ role, holder state.Party, m
 		_, ok := claude.Live(sessions, holder)
 		return ok
 	}
-	// The send starts a CLI: the desktop stays under its cap, and the
-	// steward asked keeps its own CLI.
+	_, err := a.sendThroughDesktop(ctx, host, msg, running)
+	return err
+}
+
+// sendThroughDesktop has a steward send msg to the desktop session host,
+// which runs no CLI, through the desktop's session messaging: the desktop
+// starts host's CLI at once with msg as its turn, whatever the window's
+// focus, the person's typing or its cap. running reports host's CLI up. The
+// send starts a CLI, so the desktop stays under its cap first, and the
+// steward asked keeps its own CLI.
+func (a *app) sendThroughDesktop(ctx context.Context, host, msg string, running func() bool) (steward, error) {
 	find := func(ctx context.Context, tried []string) (steward, error) {
 		s, err := a.findSteward(host, append(tried, host))
 		if err != nil {
@@ -366,11 +375,10 @@ func (a *app) reviveFromWatch(ctx context.Context, _ role, holder state.Party, m
 		}
 		return s, a.makeRoom(ctx, host, s.host)
 	}
-	_, err := delegate(ctx, find, func(steward) string { return sendRequest(host, msg) }, running, a.peerSend, sendWait)
-	return err
+	return delegate(ctx, find, func(steward) string { return sendRequest(host, msg) }, running, a.peerSend, sendWait)
 }
 
-// sendWait bounds how long a steward's send takes to start the holder's
+// sendWait bounds how long a steward's send takes to start a session's
 // desktop CLI.
 const sendWait = 2 * time.Minute
 
@@ -378,9 +386,9 @@ const sendWait = 2 * time.Minute
 const sendTool = "mcp__ccd_session_mgmt__send_message"
 
 // sendRequest is the message that has a steward send msg to the desktop
-// session host, which holds a role and runs no CLI.
+// session host, a session beekeeper started that runs no CLI.
 func sendRequest(host, msg string) string {
-	return fmt.Sprintf(stewardPreamble+"the role holder %s runs no CLI, and only the desktop's session messaging starts one. "+
+	return fmt.Sprintf(stewardPreamble+"the session %s, which beekeeper started, runs no CLI, and only the desktop's session messaging starts one. "+
 		"Call %s once with session_id %q and the message below, word for word, then end the turn without another tool call and without a reply.\n\n%s",
 		host, sendTool, host, msg)
 }
