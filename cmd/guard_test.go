@@ -40,8 +40,11 @@ func TestMain(m *testing.M) {
 	}
 	// A test inside the agent sandbox would inherit its markers and ask a
 	// broker it never started; a test that wants them sets them itself.
-	os.Unsetenv(sandbox.Env)
-	os.Unsetenv(sandbox.Brokered)
+	for _, k := range []string{sandbox.Env, sandbox.Brokered} {
+		if err := os.Unsetenv(k); err != nil {
+			panic(err)
+		}
+	}
 	os.Exit(m.Run())
 }
 
