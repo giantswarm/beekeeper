@@ -505,8 +505,9 @@ naming the recipients, each source with what it held, and `secret.ageIdentities`
 another key group (KMS, PGP, Vault, key groups), an SSH or plugin recipient, or with
 `SOPS_AGE_KEY_CMD` or `SOPS_AGE_SSH_PRIVATE_KEY_FILE` set goes to sops unchecked.
 
-`secret.ageIdentities` supplies an identity no local source holds, from the shared vault or from
-an identity file on the host that is to stay out of every vault:
+`secret.ageIdentities` supplies an identity no local source holds, from the shared vault, from an
+identity file on the host that is to stay out of every vault, or from the person's own credential
+store:
 
 ```yaml
 secret:
@@ -517,6 +518,13 @@ secret:
       ref: op://<vault>/<item>/<field>
     - recipient: age1…
       ref: file:///home/<person>/<identity file>  # an age identity file (absolute path)
+    - recipient: age1…
+      ref: store://<entry>                    # an entry of the person's own credential store
+    - recipient: age1…
+      ref: store://                           # the entry the store's search finds for the recipient
+  store:                                      # the person's own commands, run by the broker
+    read: [<command>, <args>…]                # prints the entry appended as last argument
+    search: [<command>, <args>…]              # prints the names of the entries matching the term
 ```
 
 The first entry whose recipient is one of the file's, or whose `pathRegex` matches the file's
@@ -527,6 +535,16 @@ given as `SOPS_AGE_KEY` to the one sops call's environment, never written anywhe
 `secret.session` such a call runs in the broker, like a call on an `op://` reference: an identity
 file is read in the broker's process alone, without the vault session, and never copied, printed or
 fingerprinted.
+
+A `store://` reference reads an entry of the person's own credential store (a password manager, or
+a keyring behind the freedesktop Secret Service API, `secret-tool lookup` for one) through the
+person's own commands in `secret.store`, which the broker runs like a vault field without the vault
+session: `read` prints the entry's secret on stdout, the entry appended as its last argument.
+`store://` with no entry asks the store's own search (`search`, the term appended) for each of the
+file's recipients, and reads the entries it names, one per line: an identity is found by its public
+recipient, never by listing values. beekeeper never handles the store's password; the store shows
+whatever unlock prompt it shows the person, and a command answers within five minutes or fails. Its
+output stays in the broker; an error names the entry or the recipient, never a value.
 
 ### The vault session
 
@@ -1716,7 +1734,8 @@ The organisation and desk keys, and their defaults:
 | `secret.signinCommand` | none | The command the broker runs to sign in to the vault without the person; it prints the session as `op signin` does ([The vault session](#the-vault-session)) |
 | `secret.sessionLifetime` | `12h` | How long the broker holds the vault session after a sign-in ([The vault session](#the-vault-session)) |
 | `secret.unlockWait` | `8m` | How long a call on the vault waits for the broker's sign-in ([The vault session](#the-vault-session)) |
-| `secret.ageIdentities` | none | Age identities in the shared vault or in an identity file (`file://`), by recipient or `pathRegex`, for the SOPS files no local sops identity decrypts ([Age identities](#age-identities)) |
+| `secret.ageIdentities` | none | Age identities in the shared vault, in an identity file (`file://`) or in the person's own credential store (`store://`), by recipient or `pathRegex`, for the SOPS files no local sops identity decrypts ([Age identities](#age-identities)) |
+| `secret.store.read`, `secret.store.search` | none | The person's own commands that read an entry of their credential store and search it by an age recipient, for `store://` age identities ([Age identities](#age-identities)) |
 | `secret.unlockCommands` | none | The person's own vault unlock helpers, refused in agent sessions like `op signin` and unaliased in the agent shell ([Secret reads](#secret-reads)) |
 | `sandbox.allowRead`, `sandbox.allowWrite`, `sandbox.domains` | none | The paths under the home directory the agent sandbox re-allows for reading and writing, and the hosts commands reach besides GitHub ([The agent sandbox](#the-agent-sandbox)) |
 | `sandbox.proxyPort` | `3190` | The port of the broker's egress proxy on `127.0.0.1`, the sandbox's only way out ([The agent sandbox](#the-agent-sandbox)) |

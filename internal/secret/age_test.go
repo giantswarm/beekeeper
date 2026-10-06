@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -167,6 +168,116 @@ func TestAgeIdentityFromAFile(t *testing.T) {
 	_, err = o.values(context.Background(), Ref{File: file})
 	if err == nil || !strings.Contains(err.Error(), "holds no age identity") || strings.Contains(err.Error(), "NOTAKEY") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// storeTools is a fake sops and person's credential store: store-read
+// answers an entry's secret, store-search the entries whose name holds the
+// term, and every call is recorded.
+type storeTools struct {
+	entries map[string]string
+	fail    bool
+	calls   []string
+	env     []string
+}
+
+func (f *storeTools) run(_ context.Context, _ string, env []string, _ io.Reader, name string, args ...string) ([]byte, error) {
+	f.calls = append(f.calls, name+" "+strings.Join(args, " "))
+	arg := args[len(args)-1]
+	switch name {
+	case "store-read":
+		if f.fail {
+			return nil, errors.New("store-read: exit 1 (locked)")
+		}
+		v, ok := f.entries[arg]
+		if !ok {
+			return nil, errors.New("store-read: exit 1 (no such entry)")
+		}
+		return []byte(v), nil
+	case "store-search":
+		var out []string
+		for e := range f.entries {
+			if strings.Contains(e, arg) {
+				out = append(out, e)
+			}
+		}
+		return []byte(strings.Join(out, "\n") + "\n"), nil
+	}
+	f.env = env
+	return []byte(ageDoc), nil
+}
+
+func TestAgeIdentityFromTheStore(t *testing.T) {
+	id := isolateAge(t)
+	other, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := id.Recipient().String()
+	const otherEntry = "keys/other"
+	store := Store{Read: []string{"store-read", "--field", "password"}, Search: []string{"store-search"}}
+	file := sopsFile(t, "", r)
+	args := []string{file + "#stringData.password"}
+
+	for _, tc := range []struct {
+		name, ref string
+		entries   map[string]string
+		wantCalls []string
+	}{
+		{"entry", StoreRef + "keys/age", map[string]string{"keys/age": id.String()},
+			[]string{"store-read --field password keys/age"}},
+		{"search", StoreRef, map[string]string{"keys/age " + r: "# public key: " + r + "\n" + id.String(), otherEntry: other.String()},
+			[]string{"store-search " + r, "store-read --field password keys/age " + r}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &storeTools{entries: tc.entries}
+			o := &Ops{Run: f.run, Store: store, Ages: []AgeIdentity{{Recipient: r, Ref: tc.ref}}}
+			if o.AgeNeedsVault("", args) || !o.AgeNeedsIdentity("", args) {
+				t.Errorf("AgeNeedsVault = %v, AgeNeedsIdentity = %v: want the identity without the vault", o.AgeNeedsVault("", args), o.AgeNeedsIdentity("", args))
+			}
+			if _, err := o.values(context.Background(), Ref{File: file}); err != nil {
+				t.Fatal(err)
+			}
+			if got := f.calls[:len(f.calls)-1]; !slices.Equal(got, tc.wantCalls) || !strings.HasPrefix(f.calls[len(f.calls)-1], "sops ") {
+				t.Errorf("calls = %q: want %q, then sops", f.calls, tc.wantCalls)
+			}
+			if len(f.env) != 1 || f.env[0] != envAgeKey+"="+id.String() {
+				t.Errorf("sops did not get the matching identity alone (%d entries)", len(f.env))
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name, ref string
+		entries   map[string]string
+		fail      bool
+		store     Store
+		want      string
+	}{
+		{"no entry found", StoreRef, map[string]string{otherEntry: other.String()}, false, store, "has no entry for " + r},
+		{"another identity", StoreRef + otherEntry, map[string]string{otherEntry: other.String()}, false, store, "not of the file's recipients"},
+		{"no identity", StoreRef + "keys/note", map[string]string{"keys/note": "AGE-SECRET-KEY-1NOTAKEY"}, false, store, "store://keys/note holds no age identity"},
+		{"store fails", StoreRef + "keys/age", map[string]string{"keys/age": id.String()}, true, store, "locked"},
+		{"no store", StoreRef + "keys/age", nil, false, Store{}, "secret.store is not configured"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &storeTools{entries: tc.entries, fail: tc.fail}
+			o := &Ops{Run: f.run, Store: tc.store, Ages: []AgeIdentity{{Recipient: r, Ref: tc.ref}}}
+			_, err := o.values(context.Background(), Ref{File: file})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+			for _, v := range tc.entries {
+				if strings.Contains(err.Error(), v) {
+					t.Errorf("the error names a value: %v", err)
+				}
+			}
+			for _, c := range f.calls {
+				if strings.HasPrefix(c, "sops ") {
+					t.Errorf("sops ran: %v", f.calls)
+				}
+			}
+		})
 	}
 }
 
