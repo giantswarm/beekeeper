@@ -1436,7 +1436,13 @@ other MCP server, every other call refused rather than asked). That connection t
 extension's site permissions and never asks. It prints the turn's report,
 its transcript and each screenshot it took as an image file under `<stateDir>/browse/<id>/`. Every
 headless turn of a start (the task's when the desktop runs none, an `agents wake`) gets `--chrome`
-too. A person's own sessions are untouched. `agents start` says which Chrome mode the desktop
+too, on the same CLI connection and the same extension site permissions. That turn keeps its own
+Claude in Chrome tools rather than going through `browse`, by design: it runs in bypassPermissions,
+so its shell could run `beekeeper browse` or `claude -p --chrome` itself, and taking the Chrome tools
+out of it would narrow nothing. A bypass turn's scope is the bypass; `browse`'s narrowing serves the
+desktop turns, whose acceptEdits it keeps. So each kind of turn has one browser path: a desktop turn
+browses through `browse`, a headless turn with its own Chrome tools. A person's own sessions are
+untouched. `agents start` says which Chrome mode the desktop
 recorded, and `beekeeper agents` shows it per agent in its BROWSER column: `asks` or `skips`.
 
 The same hook serves the person's take-over on `beekeeper ui`: while a running screen has taken a

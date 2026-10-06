@@ -349,7 +349,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if err != nil {
 		return startedAgent{}, err
 	}
-	if err := launch(unit, dir, a.explicitConfig(), []string{self, agentsName, reopenName, id}, agentArgv(bin, id, sp.name, sp.model, sp.brief, chromeFlag)); err != nil {
+	if err := launch(unit, dir, a.explicitConfig(), []string{self, agentsName, reopenName, id}, headlessStartArgv(bin, id, sp.name, sp.model, sp.brief)); err != nil {
 		return startedAgent{}, fmt.Errorf("starting %s: %w (the start stays recorded; beekeeper agents remove %q takes it off the roster)", sp.name, err, sp.name)
 	}
 	if err := awaitReply(ctx, a.cfg.Claude.ProjectsDir, id, func() bool { return unitEnded(ctx, unit) }, replyQuiet, replyWait); err != nil {
@@ -1127,6 +1127,13 @@ func workerPrompt(prompt string) string {
 func briefTask(brief string) string {
 	line, _, _ := strings.Cut(brief, "\n")
 	return truncate(strings.TrimSpace(strings.TrimLeft(line, "# ")), 80)
+}
+
+// headlessStartArgv is the first turn of a headless start: in bypass with the
+// CLI's own Chrome connection, as every bypass wake turn (wakeArgv). The bypass
+// is the turn's scope, so its Chrome tools are not narrowed to browse's.
+func headlessStartArgv(bin, id, name, model, brief string) []string {
+	return agentArgv(bin, id, name, model, brief, chromeFlag)
 }
 
 // agentArgv is the started session's command line: one headless turn in
