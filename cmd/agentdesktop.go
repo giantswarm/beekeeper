@@ -29,7 +29,7 @@ The import or reopen that shows the agent in the desktop then does not wait
 for the desktop's window to lose the focus: it waits for the person's typing
 to pause for desktop.typingQuiet, 1 minute at most, shows the session for a
 moment (which warms its desktop CLI) and switches the window back to the
-session it showed. A reopen already waiting goes ahead within a second; an
+session it showed. A reopen already waiting goes ahead within seconds; an
 agent whose turn ended with neither a CLI nor a waiting reopen (its import
 missed) is shown in the desktop now. The ask holds until the desktop shows
 the agent.`,
