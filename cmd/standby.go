@@ -340,14 +340,18 @@ func (w *watcher) reviveGone(ctx context.Context, rl role, holder state.Party) s
 // the window's focus, the person's typing or the desktop's cap of CLIs. A
 // holder runs no headless turn: its row in the desktop is where the person
 // sees the role, and a headless turn that keeps a watch never hands it to a
-// desktop CLI.
+// desktop CLI. A holder with no row yet (its import waits on the person's
+// typing or missed at the cap) is imported first, as importRow does: the
+// role does not wait for a reopen.
 func (a *app) reviveFromWatch(ctx context.Context, _ role, holder state.Party, msg string) error {
 	if holder.Session == "" {
 		return fmt.Errorf("%s has no session id to reach", holder.Name)
 	}
 	host := "local_" + holder.Session
 	if !a.hasRow(holder.Session) {
-		return fmt.Errorf("%s has no row in the desktop yet (its import is pending): the next gap tries again", holder.Name)
+		if _, err := a.importRowFromWatch(ctx, holder.Session, holder.Name); err != nil {
+			return fmt.Errorf("%s has no row in the desktop and its import missed: %w", holder.Name, err)
+		}
 	}
 	running := func() bool {
 		sessions, _, err := a.sessions()

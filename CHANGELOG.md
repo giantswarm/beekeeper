@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A relayed supervisor or guide successor gets its desktop CLI while the desktop runs its cap of CLIs: `makeRoom` ends the idle CLI of the role run the relay relieved (its work ended with the relay) and, for a role's holder or relay successor, a worker's idle on its task, which a message by name starts again. The standby watch's revive of a holder with no row in the desktop imports the row first, then sends, instead of "the next gap tries again". Before, the successor's reopen missed at the cap, the role lapsed until a peer woke it, and the relieved run kept its CLI ([#484](https://github.com/giantswarm/beekeeper/issues/484)).
 - `budget --json` reports `used` as what the limit lost (`limit - remaining`) for a GraphQL reading reused from the state and for a core answer without `X-RateLimit-Used`, where it printed 0, and reads the GraphQL limit again once the stored reading's reset has passed instead of printing a reset in the past.
 
 - `secret set` and `secret copy <ref> <file#path>` never write a value outside the SOPS file's encrypted fields: on a Kubernetes Secret a path that names neither `data` nor `stringData` goes under `stringData` (`set <skeleton> default --generate` used to write a top-level `default`, which a `^(data|stringData)$` `encrypted_regex` left in plaintext), and a path the file's `.sops.yaml` creation rule would leave in plaintext is refused before any value is drawn or written, the error naming the rule.

@@ -1215,7 +1215,11 @@ CLI when no other steward runs. The desktop's CLI of the session, which the impo
 the message that starts the task as its turn; when the desktop runs none, a steward's `send_message`
 through the desktop's session messaging starts one with it, the route a relay revives a role holder
 by. Before either spawn, `makeRoom` keeps the desktop under its cap of CLIs by ending one of
-beekeeper's own finished or parked workers' CLIs, never a person's session. Only where the desktop
+beekeeper's own idle CLIs: a finished worker's or a role run a relay relieved, then a parked
+worker's, and, when the CLI is for a role's holder or relay successor, a worker's idle on its task
+(a message by name starts it again); never a role holder's or a person's session. A revived role
+holder with no row in the desktop yet is imported first, so a relay successor gets its CLI at the
+cap and while the person types. Only where the desktop
 cannot run the turn (it does not run, it did not import the session, at its cap with no CLI of
 beekeeper's to end or the person still typing, so the session has no row, or no steward took the
 send) is the session resumed headless as `agents wake` does, and `start` says why; that turn's
