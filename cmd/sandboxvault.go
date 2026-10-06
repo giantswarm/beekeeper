@@ -72,13 +72,23 @@ func (a *app) keepVault(ctx context.Context) (*vaultBroker, error) {
 		v.signin = func(ctx context.Context) (string, string, error) { return runSignin(ctx, cmd) }
 	}
 	v.ask(ctx)
-	go keepVaultAlive(ctx, k, func(ctx context.Context, env string) error {
-		if err := opVault(ctx, env, "whoami"); err != nil && secret.Expired(err.Error()) {
+	go keepVaultAlive(ctx, v, func(ctx context.Context, env string) error {
+		// op whoami answers from the local session without counting as
+		// activity: a listing reaches 1Password and resets the idle timeout
+		if err := opVault(ctx, env, "vault", "list", "--format", "json"); err != nil && secret.Expired(err.Error()) {
 			return err
 		}
 		return nil
 	})
 	return v, nil
+}
+
+// drop forgets a session op no longer takes, says so in the journal and on
+// the watch (VAULT SESSION DROPPED), and signs in again at once.
+func (v *vaultBroker) drop(ctx context.Context, reason string) {
+	fmt.Fprintf(os.Stderr, "vault keeper: op no longer takes the session (%s): signing in again\n", reason)
+	v.k.Drop(reason, time.Now())
+	v.ask(ctx)
 }
 
 // vaultBroker signs the broker in to the vault, one sign-in at a time:
@@ -154,7 +164,7 @@ const (
 
 // keepVaultAlive touches the session within its lifetime, so that op does
 // not let it idle out; the keeper ends it at the end of its lifetime.
-func keepVaultAlive(ctx context.Context, k *secret.Keeper, touch func(context.Context, string) error) {
+func keepVaultAlive(ctx context.Context, v *vaultBroker, touch func(context.Context, string) error) {
 	t := time.NewTicker(vaultTendEvery)
 	defer t.Stop()
 	var touched time.Time
@@ -163,25 +173,24 @@ func keepVaultAlive(ctx context.Context, k *secret.Keeper, touch func(context.Co
 		case <-ctx.Done():
 			return
 		case now := <-t.C:
-			touched = tendVault(ctx, k, now, touched, touch)
+			touched = tendVault(ctx, v, now, touched, touch)
 		}
 	}
 }
 
 // tendVault is one look of keepVaultAlive at now: it touches a session
-// untouched for vaultTouchEvery and forgets it when op no longer takes it.
-// It answers when the session was last touched.
-func tendVault(ctx context.Context, k *secret.Keeper, now, touched time.Time, touch func(context.Context, string) error) time.Time {
-	st := k.State()
+// untouched for vaultTouchEvery and drops it, signing in again, when op no
+// longer takes it. It answers when the session was last touched.
+func tendVault(ctx context.Context, v *vaultBroker, now, touched time.Time, touch func(context.Context, string) error) time.Time {
+	st := v.k.State()
 	if st.Since.After(touched) {
 		touched = st.Since
 	}
 	if !st.Unlocked || now.Sub(touched) < vaultTouchEvery {
 		return touched
 	}
-	if err := touch(ctx, k.Env()); err != nil {
-		fmt.Fprintf(os.Stderr, "vault keeper: op no longer takes the session (%v)\n", err)
-		k.Lock()
+	if err := touch(ctx, v.k.Env()); err != nil {
+		v.drop(ctx, err.Error())
 	}
 	return now
 }
@@ -206,7 +215,7 @@ func opVault(ctx context.Context, env string, args ...string) error {
 // sign-in shared by every waiting call) and waits until secret.unlockWait
 // passes (exit ExitVault), listed in the broker's waits for the watch's
 // VAULT LOCKED line and beekeeper status. A session op no longer takes is
-// forgotten and signed in again once.
+// dropped, signed in again and the call retried once.
 func (a *app) brokeredVault(v *vaultBroker, call func(env []string) sandbox.Handler) sandbox.Handler {
 	waits := &vaultWaits{}
 	return func(ctx context.Context, pid int, req sandbox.Request) (sandbox.Reply, error) {
@@ -230,7 +239,7 @@ func (a *app) brokeredVault(v *vaultBroker, call func(env []string) sandbox.Hand
 			if err != nil || r.Code != ExitVault || !secret.Expired(r.Err) || try > 0 {
 				return r, err
 			}
-			v.k.Lock()
+			v.drop(ctx, lastOf(r.Err))
 		}
 	}
 }

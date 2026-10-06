@@ -541,8 +541,12 @@ stdout, which the broker reads into its memory; its stderr goes to the broker's 
 the broker's environment, the vault credentials removed; a command that needs more memory than the
 broker's unit allows runs in a unit of its own (`systemd-run --user --pipe --wait --quiet -p
 MemoryMax=1G -- <helper>`). The broker holds the session for `secret.sessionLifetime` (12 h), touches
-it every 10 minutes so that op does not let it idle out, and forgets it at the end of the lifetime or
-when op no longer takes it; the next call signs in again.
+it every 10 minutes with a vault listing (a call that reaches 1Password: `op whoami` does not reset
+op's 30-minute idle timeout) so that op does not let it idle out, and forgets it at the end of the
+lifetime. A session op no longer takes, found by the touch or by a call that op answers "not signed
+in", is dropped and signed in again at once through `secret.signinCommand`, the call retried once
+with the new session; the journal and the watch (`VAULT SESSION DROPPED at <t>: op no longer took it
+(<reason>); the broker signs in again`, ended by the new sign-in) say so.
 
 While the broker holds no session, a call on the vault prints `vault locked: waiting for the broker's
 sign-in` and waits up to `secret.unlockWait` (8 m; the hook gives such a call the Bash tool's 10
