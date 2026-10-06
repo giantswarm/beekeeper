@@ -60,7 +60,7 @@ the unit beekeeper-sandbox.service) for its capped scope; the command
 stays in the sandbox. What a role needs from the host runs there through
 the same broker, as the asking session: the gated devctl commands, agents
 start, wake and resume, the watch, and a held lab's lease up and lease
-down.`,
+down. A sandboxed git signs through the broker as well.`,
 		Args: cobra.NoArgs,
 		PersistentPreRunE: func(*cobra.Command, []string) error {
 			return a.loadConfig()
@@ -110,7 +110,7 @@ the installed policy is the current one.`,
 			return err
 		},
 	})
-	c.AddCommand(a.sandboxBrokerCmd(), sandboxScopeCmd())
+	c.AddCommand(a.sandboxBrokerCmd(), sandboxScopeCmd(), a.sandboxGPGCmd())
 	return c
 }
 
@@ -200,7 +200,12 @@ watch runs here in a scope of its own, where it reads the installations
 through the person's kubeconfig and Teleport login, neither of which the
 sandbox opens; and so do a held lab's lease up and lease down, where kind
 reaches the container runtime. Their output streams back while they run,
-and a call whose sandboxed command ended is ended with it.`,
+and a call whose sandboxed command ended is ended with it.
+
+A sandboxed git signs its commits and tags here: its gpg.program sends the
+payload, and the broker signs it with the person's gpg, where gpg reaches
+its agent, and answers the signature and gpg's status lines. It signs
+git's signing call only; the key and the agent stay out of the sandbox.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if os.Getenv(sandbox.Env) != "" {
@@ -248,6 +253,7 @@ and a call whose sandboxed command ended is ended with it.`,
 					sandbox.OpAgents:     brokeredCall(exe, "/proc", agentsBrokeredTimeout, nil, brokeredAgentsArgv),
 					sandbox.OpWatch:      brokeredCall(exe, "/proc", 0, nil, brokeredWatchArgv),
 					sandbox.OpLab:        brokeredCall(exe, "/proc", labBrokeredTimeout, nil, brokeredLabArgv),
+					sandbox.OpSign:       brokeredSign(hostGPG(ctx)),
 				}))
 			}()
 			// either one ending ends the broker, which its unit restarts

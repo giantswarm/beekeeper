@@ -41,7 +41,11 @@ func (a *app) listenEgress(ctx context.Context) (serve func() error, err error) 
 	if err != nil {
 		return nil, err
 	}
-	if err := sandbox.WriteEgress(dir, ca.PEM()); err != nil {
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	if err := sandbox.WriteEgress(dir, ca.PEM(), exe); err != nil {
 		return nil, fmt.Errorf("egress: %w", err)
 	}
 	if err := sandbox.RemoveMaskedGitHub(runtimeDir); err != nil {

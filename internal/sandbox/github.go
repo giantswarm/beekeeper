@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -27,6 +28,10 @@ const (
 	// EgressGH is gh's configuration directory: a login whose token is a
 	// fixed word, since the proxy sets the header (GHLogin).
 	EgressGH = "gh"
+	// EgressGPG is git's gpg.program in the sandbox: it runs beekeeper
+	// sandbox gpg, which has the broker sign with the person's key, out of
+	// the sandbox's reach.
+	EgressGPG = "gpg"
 )
 
 // GHLogin is gh's login in the sandbox: gh needs one to call GitHub, and
@@ -53,8 +58,9 @@ func EgressDir(runtimeDir string) string {
 }
 
 // WriteEgress puts the proxy's CA, the bundle of the system's roots and the
-// CA, and gh's login into dir, each replaced in one rename.
-func WriteEgress(dir string, ca []byte) error {
+// CA, gh's login and git's gpg.program, which runs exe, into dir, each
+// replaced in one rename.
+func WriteEgress(dir string, ca []byte, exe string) error {
 	var roots []byte
 	for _, p := range systemRoots {
 		if b, err := os.ReadFile(p); err == nil { //nolint:gosec // the system's root bundle
@@ -69,6 +75,7 @@ func WriteEgress(dir string, ca []byte) error {
 		EgressCA:                             ca,
 		EgressBundle:                         append(append(bytes.TrimRight(roots, "\n"), '\n'), ca...),
 		filepath.Join(EgressGH, "hosts.yml"): []byte("github.com:\n    oauth_token: " + GHLogin + "\n    git_protocol: https\n"),
+		EgressGPG:                            GPGProgram(exe),
 	}
 	if err := os.MkdirAll(filepath.Join(dir, EgressGH), 0o700); err != nil {
 		return err
@@ -76,7 +83,11 @@ func WriteEgress(dir string, ca []byte) error {
 	for name, b := range files {
 		path := filepath.Join(dir, name)
 		tmp := path + ".new"
-		if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		mode := os.FileMode(0o600)
+		if name == EgressGPG {
+			mode = 0o700
+		}
+		if err := os.WriteFile(tmp, b, mode); err != nil {
 			return err
 		}
 		if err := os.Rename(tmp, path); err != nil {
@@ -84,6 +95,12 @@ func WriteEgress(dir string, ca []byte) error {
 		}
 	}
 	return nil
+}
+
+// GPGProgram is git's gpg.program in the sandbox: git runs it by its path
+// alone, so it is a script that runs exe's sandbox gpg.
+func GPGProgram(exe string) []byte {
+	return []byte("#!/bin/sh\nexec '" + strings.ReplaceAll(exe, "'", `'\''`) + "' sandbox gpg \"$@\"\n")
 }
 
 // RemoveMaskedGitHub removes the masked token files earlier brokers kept

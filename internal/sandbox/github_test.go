@@ -26,21 +26,25 @@ func TestWriteEgress(t *testing.T) {
 	systemRoots = []string{filepath.Join(t.TempDir(), "missing"), roots}
 	t.Cleanup(func() { systemRoots = saved })
 	dir := EgressDir(t.TempDir())
-	if err := WriteEgress(dir, []byte("CA\n")); err != nil {
+	if err := WriteEgress(dir, []byte("CA\n"), "/opt/bee keeper"); err != nil {
 		t.Fatal(err)
 	}
 	for name, want := range map[string]string{
 		EgressCA:                             "CA\n",
 		EgressBundle:                         "ROOTS\nCA\n",
 		filepath.Join(EgressGH, "hosts.yml"): "github.com:\n    oauth_token: " + GHLogin + "\n    git_protocol: https\n",
+		EgressGPG:                            "#!/bin/sh\nexec '/opt/bee keeper' sandbox gpg \"$@\"\n",
 	} {
 		b, err := os.ReadFile(filepath.Join(dir, name)) //nolint:gosec // the test's own files
 		if err != nil || string(b) != want {
 			t.Errorf("%s = %q, %v; want %q", name, b, err, want)
 		}
 	}
+	if fi, err := os.Stat(filepath.Join(dir, EgressGPG)); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("gpg.program: %v, %v; want an executable script", fi, err)
+	}
 	systemRoots = []string{filepath.Join(t.TempDir(), "missing")}
-	if err := WriteEgress(dir, []byte("CA\n")); err == nil {
+	if err := WriteEgress(dir, []byte("CA\n"), "/opt/bee keeper"); err == nil {
 		t.Error("no system roots: written")
 	}
 }
@@ -125,7 +129,8 @@ func TestSettingsUseTheEgressProxy(t *testing.T) {
 	for k, want := range map[string]string{
 		"GH_CONFIG_DIR": "/run/user/1000/beekeeper/egress/gh", "SSL_CERT_FILE": bundle, "GIT_SSL_CAINFO": bundle,
 		"CURL_CA_BUNDLE": bundle, "REQUESTS_CA_BUNDLE": bundle, "NODE_EXTRA_CA_CERTS": "/run/user/1000/beekeeper/egress/ca.pem",
-		"GIT_CONFIG_COUNT": "3", "GIT_CONFIG_VALUE_0": "git@github.com:", "GIT_CONFIG_KEY_2": "credential.https://github.com.helper", "GIT_CONFIG_VALUE_2": "",
+		"GIT_CONFIG_COUNT": "4", "GIT_CONFIG_VALUE_0": "git@github.com:", "GIT_CONFIG_KEY_2": "credential.https://github.com.helper", "GIT_CONFIG_VALUE_2": "",
+		"GIT_CONFIG_KEY_3": "gpg.program", "GIT_CONFIG_VALUE_3": "/run/user/1000/beekeeper/egress/gpg",
 	} {
 		if got, ok := s.Env[k]; !ok || got != want {
 			t.Errorf("env %s = %q, want %q", k, got, want)

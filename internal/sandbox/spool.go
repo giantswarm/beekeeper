@@ -30,13 +30,13 @@ const (
 	outSuffix   = ".out"
 	tmpSuffix   = ".tmp"
 	// maxRequest bounds what the broker reads of a request: a wake's
-	// message rides in it.
-	maxRequest = 64 << 10
+	// message and a commit to sign ride in it.
+	maxRequest = 1 << 20
 )
 
 // Request is one ask of the broker.
 type Request struct {
-	// Op is OpPing, OpCapSlot, OpScope, OpSecret, OpKubeconfig, OpVault or OpGate.
+	// Op is one of the broker's operations below.
 	Op string `json:"op"`
 	// Unit is the scope to put the requester into (OpScope).
 	Unit string `json:"unit,omitempty"`
@@ -52,6 +52,8 @@ type Request struct {
 	// Resource is the lab lease whose kubeconfig to write (OpKubeconfig)
 	// or whose lab to create or tear down (OpLab).
 	Resource string `json:"resource,omitempty"`
+	// Input is the call's standard input: the payload to sign (OpSign).
+	Input []byte `json:"input,omitempty"`
 	// Stream asks for the call's output while it runs, and ties the call to
 	// its requester: once no process holds the request any more, the
 	// broker ends the call.
@@ -96,6 +98,9 @@ const (
 	// OpLab creates or tears down a held lab's kind cluster on the host,
 	// where kind reaches the container runtime.
 	OpLab = "lab"
+	// OpSign signs a payload with the person's key on the host, where gpg
+	// reaches its agent: git's gpg.program in the sandbox.
+	OpSign = "sign"
 )
 
 // Reply is the broker's answer: an empty Error is done, Out, Err and Code
