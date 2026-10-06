@@ -24,6 +24,7 @@ const (
 	modelManager = "giantswarm/model-manager"
 	graveler     = "graveler"
 	gazelle      = "gazelle"
+	kubectlBin   = "kubectl"
 	serving      = "serving"
 )
 

@@ -255,14 +255,14 @@ func TestCopyToConsumerRedactsItsOutput(t *testing.T) {
 		[]byte("#!/bin/sh\nread v\necho \"stored $v\"\nexit 3\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	code, out, err := ops(tools).CopyToConsumer(context.Background(), secret.Ref{Op: vaultRef}, []string{gh, secretWord, "set", "X"})
+	code, out, err := ops(tools).CopyToConsumer(context.Background(), secret.Ref{Op: vaultRef}, []string{gh, secretWord, setWord, "X"}, secret.Stdin{})
 	if err != nil || code != 3 {
 		t.Fatalf("consumer = %d, %q, %v", code, out, err)
 	}
 	if strings.Contains(out, token) || !strings.Contains(out, "[redacted: "+vaultRef+"]") {
 		t.Errorf("output = %q", out)
 	}
-	if _, _, err := ops(tools).CopyToConsumer(context.Background(), secret.Ref{Op: vaultRef}, []string{catCmd}); err == nil {
+	if _, _, err := ops(tools).CopyToConsumer(context.Background(), secret.Ref{Op: vaultRef}, []string{catCmd}, secret.Stdin{}); err == nil {
 		t.Error("cat took a value")
 	}
 }
@@ -347,7 +347,7 @@ func TestSetFeedsAConsumerAfterTheSOPSPath(t *testing.T) {
 		[]byte("#!/bin/sh\nread v\necho \"stored $v\"\nexit 2\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	res, err := ops(tools).Set(context.Background(), dst, secret.SetOptions{Length: 24, Charset: alnumSet, Consumer: []string{gh, secretWord, "set", "X"}})
+	res, err := ops(tools).Set(context.Background(), dst, secret.SetOptions{Length: 24, Charset: alnumSet, Consumer: []string{gh, secretWord, setWord, "X"}})
 	if err != nil || res.Code != 2 {
 		t.Fatalf("set = %+v, %v", res, err)
 	}
@@ -381,6 +381,181 @@ func TestParseRef(t *testing.T) {
 	for _, bad := range []string{"op://Shared/item", "#x", "op:///a/b"} {
 		if _, err := secret.ParseRef(bad); err == nil {
 			t.Errorf("ParseRef(%q) passes", bad)
+		}
+	}
+}
+
+const (
+	s3Key = "stringData.secretKey"
+	appNS = "app"
+)
+
+//nolint:gosec // a Secret skeleton, no value in it
+const skeletonSecret = `apiVersion: v1
+kind: Secret
+metadata:
+  name: app-s3
+  namespace: app
+type: Opaque
+stringData:
+`
+
+func TestSetFillsAPlaintextSecretSkeleton(t *testing.T) {
+	tools := secrettest.New(nil)
+	dir, _ := scratch(t)
+	file := filepath.Join(dir, "secret-s3.sops.yaml")
+	if err := os.WriteFile(file, []byte(skeletonSecret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dst := secret.Ref{File: file, Path: s3Key}
+	if _, err := ops(tools).Set(context.Background(), dst, secret.SetOptions{Length: 32, Charset: alnumSet}); err != nil {
+		t.Fatal(err)
+	}
+	plain := decrypted(t, tools, file)
+	for _, w := range []string{"kind: Secret", "name: app-s3", "namespace: app", "type: Opaque", "stringData:\n  secretKey: "} {
+		if !strings.Contains(plain, w) {
+			t.Errorf("the filled skeleton lacks %q:\n%s", w, plain)
+		}
+	}
+	raw, err := os.ReadFile(file) //nolint:gosec // the test's scratch file
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "kind: Secret") {
+		t.Error("the file stayed plaintext")
+	}
+	// A second set decrypts the SOPS file it became.
+	if _, err := ops(tools).Set(context.Background(), secret.Ref{File: file, Path: "stringData.second"}, secret.SetOptions{Length: 16, Charset: hexSet}); err != nil {
+		t.Fatal(err)
+	}
+	if plain := decrypted(t, tools, file); !strings.Contains(plain, "secretKey: ") || !strings.Contains(plain, "second: ") {
+		t.Errorf("after a second set:\n%s", plain)
+	}
+}
+
+func TestSetRefusesAPlaintextSecretHoldingAValue(t *testing.T) {
+	tools := secrettest.New(nil)
+	dir, _ := scratch(t)
+	file := filepath.Join(dir, "plain.sops.yaml")
+	body := skeletonSecret + "  password: " + password + "\n"
+	if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ops(tools).Set(context.Background(), secret.Ref{File: file, Path: s3Key}, secret.SetOptions{Length: 32, Charset: alnumSet})
+	if err == nil || !strings.Contains(err.Error(), "stringData.password") || strings.Contains(err.Error(), password) {
+		t.Fatalf("set into a plaintext Secret with a value = %v", err)
+	}
+	if raw, _ := os.ReadFile(file); string(raw) != body { //nolint:gosec // the test's scratch file
+		t.Error("the refused file changed")
+	}
+}
+
+func TestSetStartsANewSecret(t *testing.T) {
+	tools := secrettest.New(nil)
+	dir, src := scratch(t)
+	file := filepath.Join(dir, "new.sops.yaml")
+	nw := &secret.NewSecret{Name: "app-s3", Namespace: appNS}
+	if _, err := ops(tools).Set(context.Background(), secret.Ref{File: file, Path: s3Key}, secret.SetOptions{Length: 32, Charset: alnumSet, New: nw}); err != nil {
+		t.Fatal(err)
+	}
+	plain := decrypted(t, tools, file)
+	if !strings.HasPrefix(plain, "apiVersion: v1\nkind: Secret\nmetadata:\n  name: app-s3\n  namespace: app\ntype: Opaque\nstringData:\n  secretKey: ") {
+		t.Errorf("the new Secret:\n%s", plain)
+	}
+	for _, bad := range []struct {
+		file string
+		nw   secret.NewSecret
+	}{
+		{src, *nw},
+		{filepath.Join(dir, "x.sops.yaml"), secret.NewSecret{Name: "Bad_Name", Namespace: appNS}},
+		{filepath.Join(dir, "x.sops.yaml"), secret.NewSecret{Name: "ok", Namespace: "no.dots"}},
+	} {
+		calls := len(tools.Calls)
+		if _, err := ops(tools).Set(context.Background(), secret.Ref{File: bad.file, Path: "stringData.k"}, secret.SetOptions{Length: 32, Charset: alnumSet, New: &bad.nw}); err == nil || len(tools.Calls) != calls {
+			t.Errorf("set %s as %+v = %v", bad.file, bad.nw, err)
+		}
+	}
+}
+
+func TestConsumerKubectlExec(t *testing.T) {
+	const pod = "kubectl exec -i --context kind-lab -n garage garage-0 -- "
+	for argv, ok := range map[string]bool{
+		pod + "/garage json-api ImportKey -":                             true,
+		pod + "garage json-api ImportKey -":                              true,
+		"kubectl exec --stdin --context=kind-lab pod -- gh secret set X": true,
+		pod + "tool --password-stdin":                                    true,
+		"garage json-api ImportKey -":                                    true,
+		pod + "/garage key import GK1 secret":                            false,
+		pod + "garage json-api ImportKey {}":                             false,
+		pod + "cat":                                                      false,
+		pod:                                                              false,
+		"kubectl exec --context kind-lab pod -- garage json-api ImportKey -":         false,
+		"kubectl exec -i pod -- garage json-api ImportKey -":                         false,
+		"kubectl exec -it --context kind-lab pod -- garage json-api ImportKey -":     false,
+		"kubectl exec -i -t --context kind-lab pod -- garage json-api ImportKey -":   false,
+		"kubectl exec -i -v=9 --context kind-lab pod -- garage json-api ImportKey -": false,
+		"kubectl apply -i --context kind-lab -f - -- garage json-api ImportKey -":    false,
+		"kubectl exec -i --context kind-lab pod garage json-api ImportKey -":         false,
+	} {
+		if err := secret.Consumer(strings.Fields(argv)); (err == nil) != ok {
+			t.Errorf("Consumer(%q) = %v, want allowed %v", argv, err, ok)
+		}
+	}
+	if c := secret.ConsumerContext(strings.Fields(pod + "x")); c != "kind-lab" {
+		t.Errorf("ConsumerContext = %q", c)
+	}
+	if c := secret.ConsumerContext([]string{"gh", "secret", "set", "--context", "x"}); c != "" {
+		t.Errorf("ConsumerContext of gh = %q", c)
+	}
+}
+
+func TestSetHandsAPodAJSONRequestOnStdin(t *testing.T) {
+	tools := secrettest.New(nil)
+	dir, _ := scratch(t)
+	file := filepath.Join(dir, "secret-s3.sops.yaml")
+	if err := os.WriteFile(file, []byte(skeletonSecret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A fake kubectl that keeps its stdin and argv aside and echoes stdin:
+	// the echo comes back redacted.
+	bin := t.TempDir()
+	kubectl := filepath.Join(bin, "kubectl")
+	if err := os.WriteFile(kubectl, //nolint:gosec // an executable test consumer
+		[]byte("#!/bin/sh\ncat > \""+bin+"/stdin\"\necho \"$@\" > \""+bin+"/argv\"\ncat \""+bin+"/stdin\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	argv := []string{kubectl, "exec", "-i", "--context", "kind-lab", "-n", "garage", "garage-0", "--", "/garage", "json-api", "ImportKey", "-"}
+	in := secret.Stdin{Template: `{"accessKeyId":"GK0123","name":"app"}`, Field: "secretAccessKey"}
+	res, err := ops(tools).Set(context.Background(), secret.Ref{File: file, Path: s3Key}, secret.SetOptions{Length: 32, Charset: alnumSet, Consumer: argv, Stdin: in})
+	if err != nil || res.Code != 0 {
+		t.Fatalf("set = %+v, %v", res, err)
+	}
+	raw, err := os.ReadFile(filepath.Join(bin, "stdin")) //nolint:gosec // the test's scratch file
+	if err != nil {
+		t.Fatal(err)
+	}
+	var req map[string]string
+	if err := json.Unmarshal(raw, &req); err != nil {
+		t.Fatalf("stdin is no JSON object: %v", err)
+	}
+	v := req["secretAccessKey"]
+	if req["accessKeyId"] != "GK0123" || req["name"] != "app" || len(v) != 32 {
+		t.Fatalf("request keys %d, accessKeyId %q, value of %d bytes", len(req), req["accessKeyId"], len(v))
+	}
+	if !strings.Contains(decrypted(t, tools, file), "secretKey: "+v) {
+		t.Error("the pod got another value than the SOPS file holds")
+	}
+	if args, _ := os.ReadFile(filepath.Join(bin, "argv")); strings.Contains(string(args), v) { //nolint:gosec // the test's scratch file
+		t.Error("the value is on the consumer's argv")
+	}
+	if strings.Contains(res.Output, v) || !strings.Contains(res.Output, "[redacted: ") {
+		t.Errorf("output not redacted (%d bytes)", len(res.Output))
+	}
+	// A bad template draws no value.
+	for _, bad := range []secret.Stdin{{Template: "[]", Field: "k"}, {Template: `{"k":1}`, Field: "k"}, {Template: "{}"}} {
+		calls := len(tools.Calls)
+		if _, err := ops(tools).Set(context.Background(), secret.Ref{File: file, Path: "stringData.k"}, secret.SetOptions{Length: 32, Charset: alnumSet, Consumer: argv, Stdin: bad}); err == nil || len(tools.Calls) != calls {
+			t.Errorf("stdin %+v = %v", bad, err)
 		}
 	}
 }
