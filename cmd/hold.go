@@ -342,6 +342,9 @@ func (a *app) holdList() error {
 	return cerr
 }
 
+// holdActive is the STATE of a hold that applies.
+const holdActive = "active"
+
 func (a *app) printHolds(holds []state.Hold) {
 	if len(holds) == 0 {
 		_, _ = fmt.Fprintln(a.out, "nothing is held")
@@ -350,7 +353,7 @@ func (a *app) printHolds(holds []state.Hold) {
 	w := a.table()
 	_, _ = fmt.Fprintln(w, "TARGET\tSTATE\tUNTIL\tBY\tSINCE\tREASON")
 	for _, h := range holds {
-		status, end := "active", holdEnd(a, h)
+		status, end := holdActive, holdEnd(a, h)
 		if h.LiftedBy != nil {
 			status = liftedText(a, h)
 		}
