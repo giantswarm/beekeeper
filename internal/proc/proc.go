@@ -346,3 +346,29 @@ func writeBytesAt(root string, pid int) (int64, error) {
 	}
 	return 0, errors.New("no write_bytes in io")
 }
+
+// Named returns the PIDs of the live processes whose command name (comm)
+// is name and which run as uid.
+func Named(name string, uid int) []int { return namedAt(procRoot, name, uid) }
+
+func namedAt(root, name string, uid int) []int {
+	dirs, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	var out []int
+	for _, d := range dirs {
+		pid, err := strconv.Atoi(d.Name())
+		if err != nil {
+			continue
+		}
+		comm, err := os.ReadFile(filepath.Join(root, d.Name(), "comm")) //nolint:gosec // a /proc entry
+		if err != nil || strings.TrimSpace(string(comm)) != name {
+			continue
+		}
+		if info, err := os.Stat(filepath.Join(root, d.Name())); err == nil && ownerUID(info) == uid {
+			out = append(out, pid)
+		}
+	}
+	return out
+}

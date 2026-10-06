@@ -199,6 +199,8 @@ doctor:                     # known faults the doctor (beekeeper doctor, every w
       probe: systemctl --user is-active --quiet registry-login.service   # exits 0 while the fault is absent
       remedy: systemctl --user restart registry-login.service
       unattended: true      # the watch runs the remedy by itself; false: one note for guide.person
+  goCacheMaxGiB: 20         # the default; trims the shared Go build cache over this, LRU first, to 3/4; negative: off
+  goCacheEvery: 1h          # the default; how often a watch reads the cache's size
 reporter:                   # the scheduled status reporter the standby watch starts; off without every and brief
   every: 1h                 # one report per interval, on its multiples (on the hour)
   brief: ~/.local/state/desk/report-brief.md   # what to report and where to post it

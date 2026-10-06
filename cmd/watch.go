@@ -355,6 +355,11 @@ type watcher struct {
 	chores    bool
 	doctoring atomic.Bool
 	retitled  map[string]time.Time
+	// goCacheOn trims the Go build cache (not for --once); goCaching is
+	// set while a look at it goes, goCacheNext is when the next is due.
+	goCacheOn   bool
+	goCaching   atomic.Bool
+	goCacheNext time.Time
 	// doctored are the chore lines the doctor said, each said once.
 	doctored map[string]bool
 	// timerActs are the fired timers' wakes and commands under way, and
@@ -443,6 +448,7 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 		w.timerActs.Wait()      // nor a timer's wake or command
 		return nil
 	}
+	w.goCacheOn = true
 	// The machine is sampled in a loop of its own, so no network read or
 	// subprocess of the rest of the poll ever delays a memory or load line.
 	// The first sample comes before the reads start: they begin knowing
@@ -908,6 +914,7 @@ func (w *watcher) sample(ctx context.Context) {
 		}
 		w.sampleDisk(now, d, w.cpuTable, owners)
 	}
+	w.goCache(now)
 	s, err := plat.Machine.DesktopScope()
 	w.unavailable(secScope, err)
 	if s != nil {

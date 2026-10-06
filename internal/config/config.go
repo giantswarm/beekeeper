@@ -587,6 +587,22 @@ var commandName = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.+-]*$`)
 // Doctor configures the known faults the doctor probes and remedies.
 type Doctor struct {
 	Faults []Fault `yaml:"faults"`
+	// GoCacheMaxGiB caps the Go build cache every session's builds share:
+	// over it the watch trims the least recently used entries down to
+	// three quarters of it, while no go build runs. Default 20; negative:
+	// off.
+	GoCacheMaxGiB int `yaml:"goCacheMaxGiB"`
+	// GoCacheEvery is how often the cache's size is read (default 1h);
+	// a trim a build held back is tried again at the next sample.
+	GoCacheEvery Duration `yaml:"goCacheEvery"`
+}
+
+// GoCacheMax is the Go build cache's cap in bytes; 0 is off.
+func (d Doctor) GoCacheMax() int64 {
+	if d.GoCacheMaxGiB < 0 {
+		return 0
+	}
+	return int64(d.GoCacheMaxGiB) << 30
 }
 
 // Fault is a known fault with a known remedy.
@@ -1385,6 +1401,8 @@ func (c *Config) defaults() error {
 	setDur(&w.BudgetEvery, 5*time.Minute)
 	setDur(&w.OOMDWithin, 30*time.Minute)
 	setDur(&w.DiskFillWithin, 2*time.Hour)
+	setInt(&c.Doctor.GoCacheMaxGiB, 20)
+	setDur(&c.Doctor.GoCacheEvery, time.Hour)
 	setStr(&c.Ollama.Unit, "ollama")
 	setInt(&c.Ollama.BudgetGiB, 12)
 	setInt(&c.Ollama.MaxBudgetGiB, 24)
