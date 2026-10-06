@@ -404,7 +404,7 @@ const taskTurn = "beekeeper: this desktop turn starts your task. Work the task o
 // as agents wake resumes a session, and sa.turn says why.
 func (a *app) startVisible(ctx context.Context, d desk, sp agentStart, bin, unit, dir string, sa startedAgent, by state.Party) (startedAgent, error) {
 	id := sa.id
-	argv := agentArgv(bin, id, sp.name, sp.model, sp.brief+"\n\n"+seedNote, "--tools", "", "--strict-mcp-config")
+	argv := agentArgv(bin, id, sp.name, sp.model, sp.brief+"\n\n"+seedNote, toolsFlag, "", strictMCPConfigFlag)
 	if err := launch(unit, dir, a.explicitConfig(), nil, argv); err != nil {
 		return startedAgent{}, fmt.Errorf("starting %s: %w (the start stays recorded; beekeeper agents remove %q takes it off the roster)", sp.name, err, sp.name)
 	}

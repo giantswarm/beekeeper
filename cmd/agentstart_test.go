@@ -85,7 +85,7 @@ func TestHeadlessTurnFlags(t *testing.T) {
 		if !slices.Contains(flags, chromeFlag) {
 			t.Errorf("%s argv = %q, want %s", turn, argv, chromeFlag)
 		}
-		for _, narrowing := range []string{"--tools", "--allowedTools", "--strict-mcp-config"} {
+		for _, narrowing := range []string{toolsFlag, allowedToolsFlag, strictMCPConfigFlag} {
 			if slices.Contains(flags, narrowing) {
 				t.Errorf("%s argv = %q, want no %s", turn, argv, narrowing)
 			}
