@@ -1242,6 +1242,12 @@ func alertsView(d *Data, w, h, sel int) string {
 			line = cols(line, style.Warn.Render("held: "+fit(b.HoldReason, 30)))
 		}
 		t.head(line)
+		switch {
+		case b.GraphQLRefused:
+			t.head(style.Gone.Render(fit(b.GraphQL, w-2)))
+		case b.GraphQL != "":
+			t.dim(fit(b.GraphQL, w-2))
+		}
 	}
 	if b.Err != "" {
 		t.head(style.Warn.Render("probe: " + b.Err))
