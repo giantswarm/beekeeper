@@ -230,6 +230,7 @@ func vaultExit(err error) error {
 
 func (a *app) secretCopyCmd() *cobra.Command {
 	var name, namespace, toSecret string
+	var in secret.Stdin
 	c := &cobra.Command{
 		Use:   "copy <from> <to> | copy <from> -- <consumer…> | copy <from> --to-secret <context>/<namespace>/<name>/<key>",
 		Short: "Copy a SOPS file, or one value into a SOPS path, a consumer's stdin or a lab's Secret",
@@ -243,8 +244,13 @@ copy <ref> <file#path> puts one value into a SOPS path, creating the file
 or the key when absent, the file's other values kept.
 
 copy <ref> -- <command…> runs a consumer with the value on stdin: gh secret
-set, a command with --password-stdin, or one with --secret <name>=-. It
-answers the consumer's output with the value redacted, and its exit code.
+set, garage json-api <endpoint> -, a command with --password-stdin or one
+with --secret <name>=-, or kubectl exec -i --context <context> <pod> --
+<one of them> for a command in a pod (no TTY, no -v, never a production
+context). --stdin-json '<object>' --stdin-field <key> hands the consumer
+that JSON object with the value at <key> instead of the bare value (garage
+json-api ImportKey's request, for one). It answers the consumer's output
+with the value redacted, and its exit code.
 
 copy <ref> --to-secret <context>/<namespace>/<name>/<key> writes one value
 into a key of a Secret in a kind lab, kind-<cluster>, whose lab lease the
@@ -271,6 +277,9 @@ failing or answering nothing within a minute) exits 78.`,
 			return cobra.ExactArgs(2)(cmd, args)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if in != (secret.Stdin{}) && cmd.ArgsLenAtDash() != 1 {
+				return usageErr("--stdin-json and --stdin-field shape a consumer's stdin: copy <from> -- <consumer…>")
+			}
 			src, err := parseRefs(args[0])
 			if err != nil {
 				return err
@@ -294,7 +303,10 @@ failing or answering nothing within a minute) exits 78.`,
 					return usageErr("--name and --namespace rewrite a copied file, not a consumer's value")
 				}
 				argv := args[1:]
-				code, out, err := ops.CopyToConsumer(ctx, src[0], argv)
+				if err := a.checkConsumerContext(argv); err != nil {
+					return err
+				}
+				code, out, err := ops.CopyToConsumer(ctx, src[0], argv, in)
 				a.secretLog("copy", "%s to %s: %s", src[0], argv[0], outcome(err, fmt.Sprintf("exit %d", code)))
 				if err != nil {
 					return refused("%v", err)
@@ -341,7 +353,23 @@ failing or answering nothing within a minute) exits 78.`,
 	c.Flags().StringVar(&name, "name", "", "the copy's metadata.name")
 	c.Flags().StringVar(&namespace, "namespace", "", "the copy's metadata.namespace")
 	c.Flags().StringVar(&toSecret, "to-secret", "", "a key of a Secret in a lab you hold: <context>/<namespace>/<name>/<key>")
+	stdinFlags(c, &in)
 	return c
+}
+
+// stdinFlags are the flags that shape a consumer's stdin.
+func stdinFlags(c *cobra.Command, in *secret.Stdin) {
+	c.Flags().StringVar(&in.Template, "stdin-json", "", "the consumer reads this JSON object with the value at --stdin-field, not the bare value")
+	c.Flags().StringVar(&in.Field, "stdin-field", "", "the key of --stdin-json the value goes to")
+}
+
+// checkConsumerContext refuses a kubectl exec consumer into production:
+// agents never write to its clusters.
+func (a *app) checkConsumerContext(argv []string) error {
+	if ctx := secret.ConsumerContext(argv); guard.IsProduction(ctx, a.cfg.Kube.Production) {
+		return refused("%s: agents never write to the production installation's clusters", ctx)
+	}
+	return nil
 }
 
 // secretCopyToSecret is copy --to-secret: one value into a key of a
@@ -380,17 +408,20 @@ func (a *app) checkLabHeld(t secret.KubeTarget) error {
 }
 
 func (a *app) secretSetCmd() *cobra.Command {
-	var vault, charset, toSecret string
+	var vault, charset, toSecret, name, namespace string
 	var length int
 	var generate bool
+	var in secret.Stdin
 	c := &cobra.Command{
-		Use:   "set <sops-file> <path> --generate [--vault op://<vault>/<item>/<field>] [--to-secret <context>/<namespace>/<name>/<key> | -- <consumer…>]",
+		Use:   "set <sops-file> <path> --generate [--name n --namespace ns] [--vault op://<vault>/<item>/<field>] [--to-secret <context>/<namespace>/<name>/<key> | -- <consumer…>]",
 		Short: "Generate a value into a SOPS path, and the shared vault, a lab's Secret or a consumer",
 		Long: `set --generate draws a new value in beekeeper's process and writes it into
 the SOPS file's dotted path (creating the file or the key when absent,
 encrypted to the recipients of its .sops.yaml), and answers its
 fingerprint. Without --vault the SOPS file is the value's only home: no
-vault holds a copy.
+vault holds a copy. A plaintext Kubernetes Secret without values (apiVersion,
+kind, metadata, an empty stringData), a skeleton, becomes the SOPS file with
+the value in it; --name and --namespace start an absent file as that Secret.
 
 --vault op://<vault>/<item>/<field> writes the shared vault's field first
 (creating the item or the field when absent), then the SOPS path.
@@ -398,8 +429,9 @@ vault holds a copy.
 --to-secret <context>/<namespace>/<name>/<key> also writes the value into
 a key of a Secret in a kind lab whose lease the caller holds, as copy
 --to-secret does; -- <consumer…> also runs a consumer with the value on
-stdin, as copy <ref> -- <consumer…> does, and answers its output with the
-value redacted and its exit code. Both come after the SOPS path is
+stdin, as copy <ref> -- <consumer…> does (kubectl exec -i into a pod and
+--stdin-json included), and answers its output with the value redacted and
+its exit code. Both come after the SOPS path is
 written: when one fails, the SOPS path holds the value and copy finishes
 the delivery.`,
 		Args: func(cmd *cobra.Command, args []string) error {
@@ -447,12 +479,24 @@ the delivery.`,
 				opt.Secret = &t
 			}
 			if cmd.ArgsLenAtDash() == 2 {
-				opt.Consumer = args[2:]
+				opt.Consumer, opt.Stdin = args[2:], in
 				to = append(to, opt.Consumer[0])
-				if err := secret.Consumer(opt.Consumer); err != nil {
+				err := secret.Consumer(opt.Consumer)
+				if err == nil {
+					err = a.checkConsumerContext(opt.Consumer)
+				}
+				if err != nil {
 					a.secretLog("set", "%s: %s", strings.Join(to, " and "), outcome(err, ""))
 					return refused("%v", err)
 				}
+			} else if in != (secret.Stdin{}) {
+				return usageErr("--stdin-json and --stdin-field shape a consumer's stdin: set … -- <consumer…>")
+			}
+			if name != "" || namespace != "" {
+				if name == "" || namespace == "" {
+					return usageErr("--name and --namespace start a new Secret together")
+				}
+				opt.New = &secret.NewSecret{Name: name, Namespace: namespace}
 			}
 			ops, err := a.secretOpsKeyed()
 			if err != nil {
@@ -483,6 +527,9 @@ the delivery.`,
 	f.StringVar(&toSecret, "to-secret", "", "also a key of a Secret in a lab you hold: <context>/<namespace>/<name>/<key>")
 	f.IntVar(&length, "length", 32, "the value's length")
 	f.StringVar(&charset, "charset", "alnum", "the characters: "+strings.Join(secret.Charsets(), ", "))
+	f.StringVar(&name, "name", "", "an absent file starts as a Secret of this metadata.name")
+	f.StringVar(&namespace, "namespace", "", "an absent file starts as a Secret in this metadata.namespace")
+	stdinFlags(c, &in)
 	return c
 }
 

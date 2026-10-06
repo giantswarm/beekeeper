@@ -288,3 +288,35 @@ func TestBrokeredSecretHoldsItsFilesToTheSandbox(t *testing.T) {
 		t.Errorf("a copy inside the sandbox's lists: %v", err)
 	}
 }
+
+func TestSecretSetNewSecretAndPodConsumers(t *testing.T) {
+	a, tools, repo := secretApp(t)
+	a.cfg.Kube.Production = "gazelle"
+	file := filepath.Join(repo, "s3.sops.yaml")
+	if _, err := runSecret(a, setOp, file, "stringData.secretKey", generateFlag, "--name", "app-s3", "--namespace", "app"); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(file) //nolint:gosec // the test's scratch file
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(raw), "FAKESOPS") || len(tools.Calls) == 0 {
+		t.Fatalf("set with --name wrote no SOPS file")
+	}
+	pod := []string{"kubectl", "exec", "-i", "--context", "teleport.example.io-gazelle", "garage-0", "--", "/garage", "json-api", "ImportKey", "-"}
+	for _, c := range []struct {
+		args []string
+		code int
+	}{
+		{append([]string{setOp, file, "stringData.x", generateFlag, "--"}, pod...), ExitRefused},
+		{append([]string{copyOp, file + "#stringData.secretKey", "--"}, pod...), ExitRefused},
+		{[]string{setOp, file, "stringData.x", generateFlag, "--stdin-json", "{}", "--stdin-field", "k"}, ExitUsage},
+		{[]string{setOp, filepath.Join(repo, "y.sops.yaml"), "stringData.x", generateFlag, "--name", "y"}, ExitUsage},
+	} {
+		a.out = &bytes.Buffer{}
+		calls := len(tools.Calls)
+		if _, err := runSecret(a, c.args...); Code(err) != c.code || len(tools.Calls) != calls {
+			t.Errorf("secret %s = %v, want exit %d and no tool run", strings.Join(c.args, " "), err, c.code)
+		}
+	}
+}

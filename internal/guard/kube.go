@@ -117,7 +117,7 @@ func (h Hook) scanKube(cmd string, env kubeEnv, depth int) string {
 		}
 	}
 	for _, m := range contextFlag.FindAllStringSubmatch(sc.plain, -1) {
-		if isProduction(m[1], h.Production) {
+		if IsProduction(m[1], h.Production) {
 			env.wrapped = m[1]
 		}
 	}
@@ -393,7 +393,7 @@ func (h Hook) writeReason(at, context, cluster, kubeconfig string) string {
 	}
 	target := ""
 	for _, n := range []string{context, cluster, kc.clusters[context]} {
-		if isProduction(n, h.Production) {
+		if IsProduction(n, h.Production) {
 			target = n
 			break
 		}
@@ -407,9 +407,9 @@ func (h Hook) writeReason(at, context, cluster, kubeconfig string) string {
 		"and so do writes to a lab with --context kind-<lab>."
 }
 
-// isProduction reports whether a context or cluster name has production as
+// IsProduction reports whether a context or cluster name has production as
 // one of its components.
-func isProduction(name, production string) bool {
+func IsProduction(name, production string) bool {
 	if production == "" {
 		return false
 	}

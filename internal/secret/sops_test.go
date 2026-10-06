@@ -120,3 +120,56 @@ func TestRealSOPSAgeIdentity(t *testing.T) {
 		t.Fatalf("with the mapping: %+v, %v", ps, err)
 	}
 }
+
+// TestRealSOPSSkeleton fills a plaintext Secret skeleton with the real
+// sops: metadata stays readable, the generated value is encrypted.
+func TestRealSOPSSkeleton(t *testing.T) {
+	for _, bin := range []string{"sops", "age-keygen"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("%s is not installed", bin)
+		}
+	}
+	dir := t.TempDir()
+	key := filepath.Join(dir, "age.key")
+	if out, err := exec.Command("age-keygen", "-o", key).CombinedOutput(); err != nil { //nolint:gosec // the test's scratch key
+		t.Fatalf("age-keygen: %v: %s", err, out)
+	}
+	recipient, err := exec.Command("age-keygen", "-y", key).Output() //nolint:gosec // the test's scratch key
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SOPS_AGE_KEY_FILE", key)
+	rules := fmt.Sprintf("creation_rules:\n  - path_regex: '\\.sops\\.yaml$'\n    encrypted_regex: '^(data|stringData)$'\n    age: %s\n", strings.TrimSpace(string(recipient)))
+	if err := os.WriteFile(filepath.Join(dir, ".sops.yaml"), []byte(rules), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "apps", "secret-s3.sops.yaml")
+	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	skel := "apiVersion: v1\nkind: Secret\nmetadata:\n  name: app-s3\n  namespace: app\nstringData:\n"
+	if err := os.WriteFile(file, []byte(skel), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	o := &Ops{Run: Exec, Fingerprint: func(v string) string { return fmt.Sprint(len(v)) }}
+	ctx := context.Background()
+	if _, err := o.Set(ctx, Ref{File: file, Path: "stringData.secretKey"}, SetOptions{Length: 32, Charset: "alnum"}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(file) //nolint:gosec // the test's scratch file
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []string{"kind: Secret", "name: app-s3", "namespace: app", "secretKey: ENC[", "sops:"} {
+		if !strings.Contains(string(raw), w) {
+			t.Errorf("the SOPS file lacks %q", w)
+		}
+	}
+	v, err := o.values(ctx, Ref{File: file})
+	if err != nil || len(v["stringData.secretKey"]) != 32 {
+		t.Fatalf("decrypted: %v (%d bytes)", err, len(v["stringData.secretKey"]))
+	}
+	if strings.Contains(string(raw), v["stringData.secretKey"]) {
+		t.Fatal("the file holds the value in plaintext")
+	}
+}
