@@ -28,7 +28,7 @@ const graphqlRefusedText = "API rate limit already exceeded for user ID 1."
 func refusingGitHub(t *testing.T, refuse *bool) (queries *int) {
 	t.Helper()
 	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\necho tok\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\necho tok\n"), 0o700); err != nil { //nolint:gosec // a fake gh
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -61,7 +61,7 @@ func budgetApp(t *testing.T) (*app, *bytes.Buffer) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	cfg := &config.Config{GitHub: config.GitHub{Floor: 2500, ProbeRepo: "o/r"},
+	cfg := &config.Config{GitHub: config.GitHub{Floor: 2500, ProbeRepo: scratchRepo},
 		Merge: config.Merge{BudgetFresh: config.Duration{Duration: time.Minute}}}
 	return &app{cfg: cfg, store: store, now: time.Now(), out: &out}, &out
 }
