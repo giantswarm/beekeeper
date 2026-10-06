@@ -451,6 +451,42 @@ func TestSetRefusesAPlaintextSecretHoldingAValue(t *testing.T) {
 	}
 }
 
+func TestSetRefusesAPlaintextFileThatIsNoSecretSkeleton(t *testing.T) {
+	for _, c := range []struct{ name, body, want string }{
+		{"a ConfigMap", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: app\ndata:\n  password: " + password + "\n", "a plaintext ConfigMap, no sops metadata"},
+		{"no YAML mapping", "- " + password + "\n", "no sops metadata and no YAML mapping"},
+		{"no kind", "password: " + password + "\n", "without a kind"},
+		{"a Secret without metadata", "kind: Secret\nstringData:\n  password: " + password + "\n", "a plaintext Secret without metadata"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tools := secrettest.New(nil)
+			dir, _ := scratch(t)
+			file := filepath.Join(dir, "plain.sops.yaml")
+			if err := os.WriteFile(file, []byte(c.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := ops(tools).Set(context.Background(), secret.Ref{File: file, Path: s3Key}, secret.SetOptions{Length: 32, Charset: alnumSet})
+			if err == nil {
+				t.Fatal("set into a plaintext file that is no Secret skeleton passes")
+			}
+			for _, w := range []string{file, c.want, "--name and --namespace"} {
+				if !strings.Contains(err.Error(), w) {
+					t.Errorf("the refusal lacks %q: %v", w, err)
+				}
+			}
+			if strings.Contains(err.Error(), password) || strings.Contains(err.Error(), "sops metadata not found") {
+				t.Errorf("the refusal quotes the file or sops: %v", err)
+			}
+			if len(tools.Calls) != 0 {
+				t.Errorf("a refused set ran %q", tools.Calls)
+			}
+			if raw, _ := os.ReadFile(file); string(raw) != c.body { //nolint:gosec // the test's scratch file
+				t.Error("the refused file changed")
+			}
+		})
+	}
+}
+
 // secretRules is a .sops.yaml that encrypts a Kubernetes Secret's values only.
 const secretRules = "creation_rules:\n  - path_regex: '\\.sops\\.yaml$'\n    encrypted_regex: '^(data|stringData)$'\n"
 
