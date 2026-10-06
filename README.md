@@ -164,7 +164,7 @@ a relayed successor opens with the plugin's role.
 | `beekeeper hook posttooluse` | The PostToolUse hook (matcher `*`): replaces a tool result that carries an indexed secret value or a token pattern with its redacted copy before the model sees it, logs `scan.redact` and files one rotation note per indexed reference (see [What reaches the model](#what-reaches-the-model)). |
 | `beekeeper secret compare\|fingerprint\|copy\|set\|rotate` | The credential operations no agent runs itself: equality, keyed fingerprints, a SOPS file copied under a new name and namespace, a value into a SOPS path or a consumer's stdin, a generated value into the shared vault and a SOPS path, a rotation into every SOPS path that carried the old value. They answer key names, lengths, equality and fingerprints, never a value (see [Secret operations](#secret-operations)). |
 | `beekeeper sandbox render\|install` | The agent sandbox: the policy Claude Code enforces on every session's commands, rendered as a managed-settings drop-in, and the root command that installs it (see [The agent sandbox](#the-agent-sandbox)). |
-| `beekeeper scan [index\|add <ref>\|sweep]` | The transcript value scanner: without a subcommand what the fingerprint index holds; `index` rebuilds it from `scan.sops` and `scan.vaults`, `add` indexes one value from stdin, `sweep` counts each reference and token rule in every transcript, never a value (see [What reaches the model](#what-reaches-the-model)). |
+| `beekeeper scan [index\|add <ref>\|sweep]` | The transcript value scanner: without a subcommand what the fingerprint index holds; `index` rebuilds it from `scan.sops` and `scan.vaults`, `add` indexes one value from stdin, `sweep` counts each reference and token rule in every transcript and names the files, never a value (see [What reaches the model](#what-reaches-the-model)). |
 | `beekeeper hook sessionstart` | The SessionStart hook: writes the agent shell's prelude into the session's environment file (`$CLAUDE_ENV_FILE`), which Claude Code sources before parsing each Bash command. It drops the vault credentials (`OP_SESSION_*`, `OP_SERVICE_ACCOUNT_TOKEN`, `OP_CONNECT_TOKEN`) from the environment and removes the aliases and shell functions of `agents.shell.unalias` (default `grep`, `find`, `ls`, `cp`, `mv`, `rm`, the harness's own `grep` and `find` shadows among them), so each name runs the tool on `PATH`, and with `agents.shell.globs: literal` (the default) an unmatched glob stays as written instead of failing the command with zsh's `no matches found`. The directories of `agents.shell.path` go first on `PATH`, in their order and once each: the agent's own programs, such as a `gh` link to devctl that acts with the devctl App's short-lived token in place of the person's long-lived `gh` login. The person's interactive setup stays theirs; an agent writes its commands for the plain tools. |
 | `beekeeper lint briefs <file or folder>...` | Refuses dated lines, "until X ships" clauses, notes on the release that fixed something, workarounds and role run numbers in skills and briefs (every Markdown file below a folder), one `path:line: rule: why` per finding, exit 3 on any. |
 | `beekeeper hook permissionrequest` | The PermissionRequest hook: answers `allow` only for a session `agents start` started in bypass that now runs in `acceptEdits`; every other request gets no answer, so the person sees the normal card. Below. |
@@ -789,7 +789,10 @@ tool), runs on each tool result before the model sees it. It splits every string
 candidate strings (the tokens between whitespace, quotes and brackets, and their parts between `=`,
 `:`, `@` and `/`), fingerprints the candidates of an indexed length, and runs the outbound guard's
 token patterns beside them for values the index does not hold (a line marked `gitleaks:allow` keeps
-its pattern matches). With a hit, the hook replaces the result with the same result, each hit
+its pattern matches). It decodes every base64 run of 32 characters or more (a Kubernetes Secret's
+`data`, an attachment, `base64` output wrapped over lines, and a run within the decoded text once
+more) and looks into the decoded text the same way: a run that carries an indexed value or a token
+pattern (an age identity, a private key, a token) is replaced whole. With a hit, the hook replaces the result with the same result, each hit
 replaced by `[redacted: <reference or rule>]`, and the session goes on: the value never reached the
 model, so ending the session would protect nothing more. Claude Code writes the replaced result to
 the transcript on disk as well (checked with Claude Code 2.1.286), so the value is in neither. Each
@@ -800,8 +803,9 @@ otherwise passes.
 
 `beekeeper scan sweep` reads every transcript under `claude.projectsDir` (the sessions' and
 subagents' `.jsonl` files, each line's strings decoded, and the spilled tool results in
-`tool-results/`) and prints each reference and token rule it finds, with how often and in how many
-files, never a value or where it was: the list of what leaked before the hook ran.
+``tool-results/`) and prints each reference and token rule it finds, base64-wrapped ones included,
+with how often and in which files, never a value or where in a file it was: the list of what leaked
+before the hook ran.
 
 ## Questions go to the guide
 
