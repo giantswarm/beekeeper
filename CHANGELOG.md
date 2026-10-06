@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `beekeeper budget`, the snapshot, the `ui` screen and the watch read the GitHub GraphQL limit beside the REST one, from a real `rateLimit` query: a GraphQL refusal shows while REST has headroom, named as the hourly limit spent or a secondary limit, with its reset or Retry-After. The watch says it once with the `gh` and `devctl` callers and their sessions, and its end; `budget --gate` exits 3 while it holds ([README](README.md#what-it-does)).
+- The watch no longer sends the "GitHub budget under the floor" notification while the budget is above the floor.
+
 ### Changed
 
 - The agent sandbox's GitHub token never enters the sandbox. `beekeeper sandbox broker` is the sandbox's only egress proxy (`sandbox.proxyPort`, 3190, on `127.0.0.1` for its own user only): the policy points Claude Code's `httpProxyPort` and `socksProxyPort` at it, it holds every connection to GitHub and `sandbox.domains`, refuses the rest and never dials a loopback or link-local address by name, and terminates TLS for `github.com`, `api.github.com` and `uploads.github.com` with a name-constrained CA made in its memory to set the `Authorization` header itself, request bodies untouched. A GitHub endpoint that echoes its input no longer returns the token. The masked token files, their masks, `tlsTerminate`, `sandbox.mask` and `beekeeper sandbox git-credential` are gone; the broker removes the old files under `$XDG_RUNTIME_DIR/beekeeper/github` at start ([README](README.md#the-agent-sandbox)).

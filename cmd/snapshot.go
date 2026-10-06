@@ -306,7 +306,9 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 	return s, nil
 }
 
-// probeBudget reads the GitHub budget with the stored ETag and keeps the new one.
+// probeBudget reads the GitHub budget with the stored ETag and keeps the new
+// one, and the GraphQL limit beside it: a real query, read again once the
+// last reading is older than merge.budgetFresh.
 func (a *app) probeBudget(ctx context.Context) (github.Budget, error) {
 	token, err := github.Token(ctx)
 	if err != nil {
@@ -321,9 +323,22 @@ func (a *app) probeBudget(ctx context.Context) (github.Budget, error) {
 	if err != nil {
 		return b, err
 	}
+	now := time.Now().UTC()
+	var g *state.GraphQL
+	if last := st.Budget; last != nil && last.GraphQL != nil && now.Sub(last.GraphQL.At) <= a.cfg.Merge.BudgetFresh.Duration &&
+		(last.GraphQL.Refused == "" || last.GraphQL.Blocks(now)) {
+		g = last.GraphQL
+	} else if r := github.ProbeGraphQL(ctx, client, token, now); r.Err == "" {
+		g = &state.GraphQL{Remaining: r.Remaining, Limit: r.Limit, Reset: r.Reset, Refused: r.Refused, Secondary: r.Secondary, At: now}
+	} else {
+		b.GraphQL = &r
+	}
+	if g != nil {
+		b.GraphQL = graphqlOf(g)
+	}
 	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.BudgetETag = etag
-		st.Budget = &state.Budget{Remaining: b.Remaining, Limit: b.Limit, Reset: b.Reset, At: time.Now().UTC()}
+		st.Budget = &state.Budget{Remaining: b.Remaining, Limit: b.Limit, Reset: b.Reset, At: now, GraphQL: g}
 		return nil, nil
 	})
 	return b, nil
@@ -633,8 +648,39 @@ func budgetLine(a *app, b github.Budget) string {
 	if b.Remaining < a.cfg.GitHub.Floor {
 		status = "UNDER THE FLOOR: stop GitHub work"
 	}
-	return fmt.Sprintf("%d of %d left, resets %s (in %s); floor %d: %s",
+	line := fmt.Sprintf("%d of %d left, resets %s (in %s); floor %d: %s",
 		b.Remaining, b.Limit, clock(a.now, b.Reset), dur(b.Reset.Sub(a.now)), a.cfg.GitHub.Floor, status)
+	if g := b.GraphQL; g != nil {
+		line += "; " + graphqlText(a, g)
+	}
+	return line
+}
+
+// graphqlOf is a stored GraphQL reading as the probe reports it.
+func graphqlOf(g *state.GraphQL) *github.GraphQL {
+	if g == nil {
+		return nil
+	}
+	return &github.GraphQL{Limit: g.Limit, Remaining: g.Remaining, Reset: g.Reset, Refused: g.Refused, Secondary: g.Secondary}
+}
+
+// graphqlText says the GraphQL limit: its figures, or its refusal with the
+// kind of limit and when it ends.
+func graphqlText(a *app, g *github.GraphQL) string {
+	switch {
+	case g.Err != "":
+		return "GraphQL unknown (" + truncate(g.Err, 60) + ")"
+	case g.Refused == "":
+		return fmt.Sprintf("GraphQL %d of %d", g.Remaining, g.Limit)
+	}
+	kind, until := "spent", "until an answer says otherwise"
+	if g.Secondary {
+		kind = fmt.Sprintf("secondary limit, %d of %d left", g.Remaining, g.Limit)
+	}
+	if !g.Reset.IsZero() {
+		until = fmt.Sprintf("until %s (in %s)", clock(a.now, g.Reset), dur(g.Reset.Sub(a.now)))
+	}
+	return fmt.Sprintf("GRAPHQL REFUSED (%s) %s: %s", kind, until, truncate(g.Refused, 80))
 }
 
 // diffSnapshots says what changed between two ticks, in the words a report uses.

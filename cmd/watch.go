@@ -1192,7 +1192,8 @@ func (w *watcher) exposures() {
 	w.clearMissing(exposedKey, found)
 }
 
-// budget probes the GitHub budget and says when it is under the floor.
+// budget probes the GitHub budget and says when it is under the floor and
+// when GitHub refuses GraphQL calls, with the callers drawing on it.
 func (w *watcher) budget(ctx context.Context, now time.Time) {
 	b, err := w.probeBudget(ctx)
 	switch {
@@ -1201,10 +1202,40 @@ func (w *watcher) budget(ctx context.Context, now time.Time) {
 		w.emit("budget-error", "GitHub budget unknown: %v", err)
 	default:
 		w.clear("budget-error")
-		l := w.check("budget", b.Remaining < w.cfg.GitHub.Floor, "GITHUB BUDGET %d of %d: hold GitHub work until %s",
-			b.Remaining, b.Limit, b.Reset.Local().Format("15:04"))
-		w.notifyAt(ctx, now, notify.Budget, "", "beekeeper: GitHub budget under the floor", l+"\nbeekeeper budget")
+		if l := w.check("budget", b.Remaining < w.cfg.GitHub.Floor, "GITHUB BUDGET %d of %d: hold GitHub work until %s",
+			b.Remaining, b.Limit, b.Reset.Local().Format("15:04")); l != "" {
+			w.notifyAt(ctx, now, notify.Budget, "", "beekeeper: GitHub budget under the floor", l+"\nbeekeeper budget")
+		}
+		refused := b.GraphQL.Blocks(now)
+		var callers string
+		if refused {
+			callers = w.callersText()
+		}
+		if l := w.check("graphql", refused, "%s; callers: %s", graphqlText(w.app, b.GraphQL), callers); l != "" {
+			w.notifyAt(ctx, now, notify.Budget, "", "beekeeper: GitHub refuses GraphQL", l+"\nbeekeeper budget")
+		}
 	}
+}
+
+// callersText names the gh and devctl processes drawing on GitHub and the
+// sessions they run under, the longest-running first.
+func (w *watcher) callersText() string {
+	sessions, t, err := w.app.sessions()
+	if err != nil {
+		return "unknown (" + err.Error() + ")"
+	}
+	ps := githubCallers(w.app, t, sessions)
+	if len(ps) == 0 {
+		return "no gh or devctl process now"
+	}
+	var out []string
+	for _, p := range ps[:min(len(ps), 5)] {
+		out = append(out, fmt.Sprintf("%s (%s, %s)", truncate(p.Args, 50), cmp.Or(p.Session, noSession), dur(p.Elapsed)))
+	}
+	if len(ps) > 5 {
+		out = append(out, fmt.Sprintf("%d more", len(ps)-5))
+	}
+	return strings.Join(out, ", ")
 }
 
 // stalls says each stalled lane, one LANE STALLED line per lane and waiting
