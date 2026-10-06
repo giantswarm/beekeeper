@@ -156,6 +156,9 @@ hooks.scope.dirs unset every session is in scope; a configuration or state
 that does not load keeps the guards on.`,
 		Args: cobra.NoArgs,
 		PersistentPreRunE: func(*cobra.Command, []string) error {
+			// a hook runs on the host for a sandboxed session too, where the
+			// policy's environment stays its session's
+			a.hook = true
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
@@ -335,14 +338,17 @@ stay, and prints nothing. beekeeper install registers it in
 				return nil // a broken configuration must not block a session's start
 			}
 			sh := a.cfg.Agents.Shell
-			path, drop := sh.Path, []string(nil)
+			var drop []string
+			unheld := ""
 			if os.Getenv(sandbox.Env) != "" {
-				// gh goes through the egress proxy; a gh link to devctl would
-				// read the keychain the sandbox closes, also from an inherited PATH
-				path, drop = nil, sh.Path
+				// held, gh goes through the egress proxy and a gh link to
+				// devctl would read the keychain the sandbox closes, also from
+				// an inherited PATH; the policy's environment without its
+				// sandbox is the host's again
+				drop, unheld = sh.Path, sandbox.UnsetShell(sandbox.EgressDir(os.Getenv("XDG_RUNTIME_DIR")))
 			}
 			unalias := append(slices.Clone(sh.Unalias), a.cfg.Secret.UnlockCommands...)
-			return guard.WritePrelude(env, guard.Prelude(unalias, sh.Globs == config.GlobsLiteral, path, drop))
+			return guard.WritePrelude(env, guard.Prelude(unalias, sh.Globs == config.GlobsLiteral, sh.Path, drop, unheld))
 		},
 	})
 	c.AddCommand(&cobra.Command{
@@ -545,6 +551,11 @@ func (a *app) loadConfig() error {
 		return err
 	}
 	plat = platform.Current(platform.Options{DesktopApp: a.cfg.Claude.DesktopApp})
+	if !a.hook && sandbox.Unheld(os.Getenv) {
+		// the sandbox policy's environment without its sandbox: beekeeper and
+		// what it runs reach GitHub as on the host
+		sandbox.Unconfine(sandbox.EgressDir(os.Getenv("XDG_RUNTIME_DIR")))
+	}
 	return nil
 }
 
