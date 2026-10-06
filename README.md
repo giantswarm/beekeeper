@@ -1261,6 +1261,21 @@ to wait in the foreground; the event log says `agent.resumed-wait`, and the resu
 shows it in the desktop. A worker done, kept, or parked on a person is left alone, and so is a
 `devctl` wait or merge the gate runs, whose outcome wakes its owner by itself (`devctl.unheard`).
 
+A session the desktop never imported has no row in its sidebar: nobody sees it there, reads its
+transcript or types into it, and the roster and the event log are its only signs. The usual cause
+is the desktop's cap of CLIs: at the cap the import, the show and the reopen start nothing
+(`makeRoom`), the task runs headless, and the reopen after it misses. `beekeeper agents` marks such
+an agent `no desktop row` in REACHABLE (`--json`: `noDesktopRow`) and counts them under its table;
+the watch says `NO DESKTOP ROW` once per worker, with what shows it: the standby watch imports one
+whose headless turn runs beside the turn (above), and the doctor reopens a worker whose CLI does not
+run once the desktop runs fewer CLIs than its cap, `beekeeper agents reopen <id>` in a transient
+unit `beekeeper-reopen-<id>-<n>` of its own, which gives the session its row and warms its CLI, one
+`DOCTOR reopens …` line and an `agent.reopen` event each, with no person acting. It starts no
+reopen within seven minutes of the start (a start imports by itself), beside a start's or wake's
+unit still running its turn or its reopen, or beside a reopen of its own, and counts the reopens
+under way against the cap; `doctor --dry-run` names the workers it would reopen and those the cap,
+or a desktop that does not run, leaves without a row.
+
 The desktop handles each `claude://resume` link twice. When the second delivery arrives while the
 first import still runs, both import, the second drops the transcript's title and model as stale
 (the first touched the file), and the desktop keeps its untitled record: the session shows
@@ -1319,7 +1334,8 @@ open timer that wakes the agent by name (`timer add --wake`) keeps it the same w
 is done. `agents` shows what keeps an entry in its KEPT column, `doctor --dry-run` names each kept
 entry it leaves, the watch says no `AGENTS STOPPED` line for one, and `board next` counts its
 `sessions serve` record as covering its item. `agents keep <agent> --no-keep` lifts the marker and
-returns the entry to `agents.staleAfter`.
+returns the entry to `agents.staleAfter`. The doctor also reopens a worker whose session the desktop
+never imported, once the desktop runs fewer CLIs than its cap ([above](#agents-started-without-a-click)).
 
 A worker that waits on a person, a merge lane or a release parks instead of sleeping in a turn
 that holds its slot and its CLI's memory: `beekeeper agents park [--on <#note|owner/repo#n>]

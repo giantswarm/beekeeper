@@ -276,6 +276,9 @@ type watcher struct {
 	// stopped are the agents with a task this watch said have no running
 	// CLI, by session key, until their CLI runs again.
 	stopped map[string]bool
+	// rowlessSaid are the workers this watch said have no row in the
+	// desktop, by session, until they get one.
+	rowlessSaid map[string]bool
 	// waits are the reopen waits this watch said, by agent session and the
 	// wait's start, until they end.
 	waits map[string]time.Time
@@ -1559,6 +1562,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	w.stoppedAgents(st, sessions)
 	w.capacity(ctx, st, sessions)
 	w.importWaits(st)
+	w.rowlessAgents(st)
 	q := w.quietness(ctx, st, sessions)
 	w.handoversDue(st, sessions)
 	w.doctor(ctx)

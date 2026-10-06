@@ -20,6 +20,15 @@ const desktopCLICap = 28
 // roomWait bounds how long an ended CLI takes to exit.
 const roomWait = 10 * time.Second
 
+// desktopCap is the desktop's cap of CLIs: the last its governor's log
+// named, else desktopCLICap.
+func (a *app) desktopCap() int {
+	if n, ok := claude.DesktopCap(a.cfg.Claude.DesktopLog); ok {
+		return n
+	}
+	return desktopCLICap
+}
+
 // desktopCLIs counts the CLIs the desktop runs: its governor's count.
 func desktopCLIs(t *proc.Table) int {
 	n := 0
@@ -57,10 +66,7 @@ func (a *app) makeRoomFor(ctx context.Context, slots int, keep ...string) error 
 // desktop has fewer than slots free under its cap, and reports whether it
 // ended one.
 func (a *app) endOneForRoom(ctx context.Context, slots int, keep []string) (bool, error) {
-	limit := desktopCLICap
-	if n, ok := claude.DesktopCap(a.cfg.Claude.DesktopLog); ok {
-		limit = n
-	}
+	limit := a.desktopCap()
 	st, err := a.store.Read()
 	if err != nil {
 		return false, err
