@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -42,7 +43,15 @@ A reference is a SOPS file (every value in it), one value in a SOPS file
 (file#a.b.c, the dotted key path; sops:// in front optional) or a field of
 the shared 1Password vault (op://<vault>/<item>/<field>, the vault being
 secret.vault). A SOPS file is encrypted under the creation rules of the
-.sops.yaml nearest above it.`,
+.sops.yaml nearest above it.
+
+A SOPS file encrypted to age recipients decrypts with an identity from
+sops' own sources (SOPS_AGE_KEY, SOPS_AGE_KEY_FILE, sops/age/keys.txt in
+the user's config directory) or from secret.ageIdentities: entries that map
+a recipient or a pathRegex to the op:// field of the shared vault holding
+its identity, read in beekeeper's process for the one sops call. A file
+none of them has an identity for fails before sops runs, naming its
+recipients and the sources checked.`,
 		Args: cobra.NoArgs,
 	}
 	c.AddCommand(&cobra.Command{
@@ -121,89 +130,93 @@ can make one.`,
 	for _, sub := range c.Commands() {
 		run := sub.RunE
 		sub.RunE = func(cmd *cobra.Command, args []string) error {
-			if os.Getenv(sandbox.Env) != "" && os.Getenv(sandbox.Brokered) == "" {
-				return a.secretBrokered(cmd, args)
+			if os.Getenv(sandbox.Brokered) != "" {
+				// the broker's call: the vault session in its environment
+				// stays out of every other process's reach
+				_ = secret.Protect()
+				return vaultExit(run(cmd, args))
+			}
+			inSandbox := os.Getenv(sandbox.Env) != ""
+			if inSandbox || a.cfg.Secret.Session && a.secretNeedsBroker(callArgs(cmd, args)) {
+				return a.secretBrokered(cmd, args, inSandbox)
 			}
 			return vaultExit(run(cmd, args))
 		}
 	}
+	c.AddCommand(a.secretUnlockCmd(), a.secretLockCmd(), a.secretStatusCmd())
 	return c
 }
 
-// secretBrokered is a secret call in the agent sandbox, which holds no
-// sops key and no op session: the host's broker runs it as this session
-// and answers its output and exit code through the spool.
-func (a *app) secretBrokered(cmd *cobra.Command, args []string) error {
-	if cmd.ArgsLenAtDash() >= 0 {
-		return refused("the agent sandbox runs no consumer on the host: copy <from> -- <consumer> runs outside the sandbox only")
+// callArgs are a call's arguments and its flags' values.
+func callArgs(cmd *cobra.Command, args []string) []string {
+	all := slices.Clone(args)
+	cmd.Flags().Visit(func(f *pflag.Flag) { all = append(all, f.Value.String()) })
+	return all
+}
+
+// secretBrokered is a secret call the host's broker runs as this session,
+// answering its output and exit code through the spool: every call in the
+// agent sandbox, which holds no sops key and no op session, and with
+// secret.session every call on the vault, whose session lives in the broker
+// alone. While the broker holds no session the call says so and waits for
+// the person's unlock.
+func (a *app) secretBrokered(cmd *cobra.Command, args []string, inSandbox bool) error {
+	dash := cmd.ArgsLenAtDash()
+	if inSandbox && dash >= 0 {
+		return refused("the agent sandbox runs no consumer on the host: copy or set with -- <consumer> runs outside the sandbox only")
 	}
-	argv := []string{cmd.Name()}
-	var err error
-	cmd.Flags().Visit(func(f *pflag.Flag) {
-		if f.Name == "as" || f.Name == "config" {
-			err = refused("--%s: a brokered secret call runs as this session, under the host's config", f.Name)
-		}
-		argv = append(argv, "--"+f.Name+"="+f.Value.String())
-	})
+	if dash < 0 {
+		dash = len(args)
+	}
+	argv, err := brokerFlags(cmd)
 	if err != nil {
 		return err
 	}
-	for _, arg := range args {
+	for _, arg := range args[:dash] {
 		if strings.HasPrefix(arg, "-") {
 			return usageErr("%s: an argument the broker would take for a flag", arg)
 		}
 	}
-	argv = append(argv, args...)
-	if err := brokeredSecretArgs(argv); err != nil {
+	argv = append(argv, args[:dash]...)
+	if dash < len(args) {
+		argv = append(append(argv, "--"), args[dash:]...)
+	}
+	if err := brokeredSecretArgs(argv, inSandbox); err != nil {
 		return refused("%v; %s and %s run on the host, by the person", err, "setup", "import")
 	}
-	return a.brokeredReply(sandbox.Request{Op: sandbox.OpSecret, Args: argv})
+	if !a.cfg.Secret.Session || !a.secretNeedsVault("", argv) {
+		return a.brokeredReply(sandbox.Request{Op: sandbox.OpSecret, Args: argv})
+	}
+	r, err := sandbox.Call(sandbox.SpoolDir(a.cfg.StateDir), sandbox.Request{Op: sandbox.OpVault}, 10*time.Second)
+	if err == nil && r.Out != vaultUnlocked {
+		_, _ = fmt.Fprintln(os.Stderr, "beekeeper: "+secret.Locked)
+	}
+	return a.brokeredReplyWithin(sandbox.Request{Op: sandbox.OpSecret, Args: argv}, a.cfg.Secret.UnlockWait.Duration+brokeredCallTimeout+time.Minute)
 }
 
 // brokeredReply asks the host's broker for req and passes on its output
 // and exit code.
 func (a *app) brokeredReply(req sandbox.Request) error {
-	dir := sandbox.SpoolDir(a.cfg.StateDir)
-	if !(sandbox.Capper{Dir: dir}).Available() {
-		return refused("no sandbox broker answers in %s: beekeeper-sandbox.service on the host runs this for the sandbox (beekeeper install)", dir)
-	}
-	r, err := sandbox.Call(dir, req, brokeredCallTimeout+time.Minute)
-	if err != nil {
-		return refused("%v", err)
-	}
-	if _, err := io.WriteString(a.out, r.Out); err != nil {
-		return err
-	}
-	_, _ = io.WriteString(os.Stderr, r.Err)
-	if r.Code != 0 {
-		return &exitError{code: r.Code}
-	}
-	return nil
+	return a.brokeredReplyWithin(req, brokeredCallTimeout+time.Minute)
 }
 
-// sandboxFiles holds the SOPS files of a brokered call to the agent
-// sandbox's lists: through the broker a sandboxed session reads and writes
-// no file its sandbox closes to it.
+// brokeredReplyWithin is brokeredReply waiting up to timeout.
+func (a *app) brokeredReplyWithin(req sandbox.Request, timeout time.Duration) error {
+	return a.brokeredAnswer(req, timeout, false)
+}
+
+// sandboxFiles holds the SOPS files of a sandboxed session's brokered call
+// to the agent sandbox's lists: through the broker it reads and writes no
+// file its sandbox closes to it.
 func (a *app) sandboxFiles(read, write []secret.Ref) error {
-	if os.Getenv(sandbox.Brokered) == "" {
-		return nil
-	}
-	p := a.sandboxPolicy()
-	cwd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	for _, r := range read {
-		if r.File != "" && !p.Readable(r.File, cwd) {
-			return refused("the agent sandbox does not let this session read %s", r.File)
+	files := func(refs []secret.Ref) []string {
+		var out []string
+		for _, r := range refs {
+			out = append(out, r.File)
 		}
+		return out
 	}
-	for _, r := range write {
-		if r.File != "" && !p.Writable(r.File, cwd) {
-			return refused("the agent sandbox does not let this session write %s", r.File)
-		}
-	}
-	return nil
+	return a.sandboxPaths(files(read), files(write))
 }
 
 // vaultExit gives an error reading the shared vault its own exit code,
@@ -217,6 +230,7 @@ func vaultExit(err error) error {
 
 func (a *app) secretCopyCmd() *cobra.Command {
 	var name, namespace, toSecret string
+	var in secret.Stdin
 	c := &cobra.Command{
 		Use:   "copy <from> <to> | copy <from> -- <consumer…> | copy <from> --to-secret <context>/<namespace>/<name>/<key>",
 		Short: "Copy a SOPS file, or one value into a SOPS path, a consumer's stdin or a lab's Secret",
@@ -230,8 +244,13 @@ copy <ref> <file#path> puts one value into a SOPS path, creating the file
 or the key when absent, the file's other values kept.
 
 copy <ref> -- <command…> runs a consumer with the value on stdin: gh secret
-set, a command with --password-stdin, or one with --secret <name>=-. It
-answers the consumer's output with the value redacted, and its exit code.
+set, garage json-api <endpoint> -, a command with --password-stdin or one
+with --secret <name>=-, or kubectl exec -i --context <context> <pod> --
+<one of them> for a command in a pod (no TTY, no -v, never a production
+context). --stdin-json '<object>' --stdin-field <key> hands the consumer
+that JSON object with the value at <key> instead of the bare value (garage
+json-api ImportKey's request, for one). It answers the consumer's output
+with the value redacted, and its exit code.
 
 copy <ref> --to-secret <context>/<namespace>/<name>/<key> writes one value
 into a key of a Secret in a kind lab, kind-<cluster>, whose lab lease the
@@ -258,6 +277,9 @@ failing or answering nothing within a minute) exits 78.`,
 			return cobra.ExactArgs(2)(cmd, args)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if in != (secret.Stdin{}) && cmd.ArgsLenAtDash() != 1 {
+				return usageErr("--stdin-json and --stdin-field shape a consumer's stdin: copy <from> -- <consumer…>")
+			}
 			src, err := parseRefs(args[0])
 			if err != nil {
 				return err
@@ -281,8 +303,15 @@ failing or answering nothing within a minute) exits 78.`,
 					return usageErr("--name and --namespace rewrite a copied file, not a consumer's value")
 				}
 				argv := args[1:]
-				code, out, err := ops.CopyToConsumer(ctx, src[0], argv)
+				if err := a.checkConsumerContext(argv); err != nil {
+					return err
+				}
+				code, out, err := ops.CopyToConsumer(ctx, src[0], argv, in)
 				a.secretLog("copy", "%s to %s: %s", src[0], argv[0], outcome(err, fmt.Sprintf("exit %d", code)))
+				if errors.Is(err, secret.ErrVault) {
+					// exit ExitVault: the broker signs in again and retries
+					return err
+				}
 				if err != nil {
 					return refused("%v", err)
 				}
@@ -328,7 +357,23 @@ failing or answering nothing within a minute) exits 78.`,
 	c.Flags().StringVar(&name, "name", "", "the copy's metadata.name")
 	c.Flags().StringVar(&namespace, "namespace", "", "the copy's metadata.namespace")
 	c.Flags().StringVar(&toSecret, "to-secret", "", "a key of a Secret in a lab you hold: <context>/<namespace>/<name>/<key>")
+	stdinFlags(c, &in)
 	return c
+}
+
+// stdinFlags are the flags that shape a consumer's stdin.
+func stdinFlags(c *cobra.Command, in *secret.Stdin) {
+	c.Flags().StringVar(&in.Template, "stdin-json", "", "the consumer reads this JSON object with the value at --stdin-field, not the bare value")
+	c.Flags().StringVar(&in.Field, "stdin-field", "", "the key of --stdin-json the value goes to")
+}
+
+// checkConsumerContext refuses a kubectl exec consumer into production:
+// agents never write to its clusters.
+func (a *app) checkConsumerContext(argv []string) error {
+	if ctx := secret.ConsumerContext(argv); guard.IsProduction(ctx, a.cfg.Kube.Production) {
+		return refused("%s: agents never write to the production installation's clusters", ctx)
+	}
+	return nil
 }
 
 // secretCopyToSecret is copy --to-secret: one value into a key of a
@@ -367,47 +412,128 @@ func (a *app) checkLabHeld(t secret.KubeTarget) error {
 }
 
 func (a *app) secretSetCmd() *cobra.Command {
-	var vault, charset string
+	var vault, charset, toSecret, name, namespace string
 	var length int
 	var generate bool
+	var in secret.Stdin
 	c := &cobra.Command{
-		Use:   "set <sops-file> <path> --generate --vault op://<vault>/<item>/<field>",
-		Short: "Generate a value into the shared vault, then into a SOPS path",
-		Long: `set --generate draws a new value, writes it to the shared vault's field
-first (creating the item or the field when absent) and then into the SOPS
-file's dotted path (creating the file or the key when absent, encrypted to
-the recipients of its .sops.yaml), and answers its fingerprint.`,
-		Args: cobra.ExactArgs(2),
+		Use:   "set <sops-file> <path> --generate [--name n --namespace ns] [--vault op://<vault>/<item>/<field>] [--to-secret <context>/<namespace>/<name>/<key> | -- <consumer…>]",
+		Short: "Generate a value into a SOPS path, and the shared vault, a lab's Secret or a consumer",
+		Long: `set --generate draws a new value in beekeeper's process and writes it into
+the SOPS file's dotted path (creating the file or the key when absent,
+encrypted to the recipients of its .sops.yaml), and answers its
+fingerprint. Without --vault the SOPS file is the value's only home: no
+vault holds a copy. A plaintext Kubernetes Secret without values (apiVersion,
+kind, metadata, an empty stringData), a skeleton, becomes the SOPS file with
+the value in it; --name and --namespace start an absent file as that Secret.
+
+--vault op://<vault>/<item>/<field> writes the shared vault's field first
+(creating the item or the field when absent), then the SOPS path.
+
+--to-secret <context>/<namespace>/<name>/<key> also writes the value into
+a key of a Secret in a kind lab whose lease the caller holds, as copy
+--to-secret does; -- <consumer…> also runs a consumer with the value on
+stdin, as copy <ref> -- <consumer…> does (kubectl exec -i into a pod and
+--stdin-json included), and answers its output with the value redacted and
+its exit code. Both come after the SOPS path is
+written: when one fails, the SOPS path holds the value and copy finishes
+the delivery.`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if dash := cmd.ArgsLenAtDash(); dash >= 0 {
+				if dash != 2 || len(args) < 3 {
+					return fmt.Errorf("set <sops-file> <path> --generate -- <consumer…>")
+				}
+				if cmd.Flags().Changed("to-secret") {
+					return fmt.Errorf("set takes --to-secret or a consumer, not both")
+				}
+				return nil
+			}
+			return cobra.ExactArgs(2)(cmd, args)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !generate {
 				return usageErr("set takes no value: --generate makes one")
 			}
-			v, err := parseRefs(vault)
-			if err != nil {
-				return usageErr("--vault: %v", err)
+			opt := secret.SetOptions{Length: length, Charset: charset}
+			if vault != "" {
+				v, err := parseRefs(vault)
+				if err != nil {
+					return usageErr("--vault: %v", err)
+				}
+				opt.Vault = v[0]
 			}
 			dst := secret.Ref{File: args[0], Path: args[1]}
 			if err := a.sandboxFiles(nil, []secret.Ref{dst}); err != nil {
 				return err
 			}
+			to := []string{dst.String()}
+			if opt.Vault != (secret.Ref{}) {
+				to = append([]string{opt.Vault.String()}, to...)
+			}
+			if cmd.Flags().Changed("to-secret") {
+				t, err := secret.ParseKubeTarget(toSecret)
+				if err != nil {
+					return usageErr("--to-secret: %v", err)
+				}
+				to = append(to, t.String())
+				if err := a.checkLabHeld(t); err != nil {
+					a.secretLog("set", "%s: %s", strings.Join(to, " and "), outcome(err, ""))
+					return err
+				}
+				opt.Secret = &t
+			}
+			if cmd.ArgsLenAtDash() == 2 {
+				opt.Consumer, opt.Stdin = args[2:], in
+				to = append(to, opt.Consumer[0])
+				err := secret.Consumer(opt.Consumer)
+				if err == nil {
+					err = a.checkConsumerContext(opt.Consumer)
+				}
+				if err != nil {
+					a.secretLog("set", "%s: %s", strings.Join(to, " and "), outcome(err, ""))
+					return refused("%v", err)
+				}
+			} else if in != (secret.Stdin{}) {
+				return usageErr("--stdin-json and --stdin-field shape a consumer's stdin: set … -- <consumer…>")
+			}
+			if name != "" || namespace != "" {
+				if name == "" || namespace == "" {
+					return usageErr("--name and --namespace start a new Secret together")
+				}
+				opt.New = &secret.NewSecret{Name: name, Namespace: namespace}
+			}
 			ops, err := a.secretOpsKeyed()
 			if err != nil {
 				return err
 			}
-			fp, err := ops.Set(cmd.Context(), dst, v[0], length, charset)
-			a.secretLog("set", "%s and %s: %s", v[0], dst, outcome(err, "generated "+fp))
+			res, err := ops.Set(cmd.Context(), dst, opt)
+			done := "generated " + res.Fingerprint
+			if opt.Consumer != nil {
+				done += fmt.Sprintf(", consumer exit %d", res.Code)
+			}
+			a.secretLog("set", "%s: %s", strings.Join(to, " and "), outcome(err, done))
 			if err != nil {
 				return err
 			}
-			return a.secretPrint(secret.Print{Key: dst.String(), Fingerprint: fp},
-				fmt.Sprintf("wrote %s and %s: %d characters, %s\n", v[0], dst, length, fp))
+			text := fmt.Sprintf("wrote %s: %d characters, %s\n", strings.Join(to, " and "), length, res.Fingerprint)
+			if err := a.secretPrint(res, text+res.Output); err != nil {
+				return err
+			}
+			if res.Code != 0 {
+				return &exitError{code: res.Code}
+			}
+			return nil
 		},
 	}
 	f := c.Flags()
 	f.BoolVar(&generate, "generate", false, "generate the value")
-	f.StringVar(&vault, "vault", "", "the shared vault's field that holds the value first (op://<vault>/<item>/<field>)")
+	f.StringVar(&vault, "vault", "", "the shared vault's field that holds the value first (op://<vault>/<item>/<field>); none keeps it in the SOPS file alone")
+	f.StringVar(&toSecret, "to-secret", "", "also a key of a Secret in a lab you hold: <context>/<namespace>/<name>/<key>")
 	f.IntVar(&length, "length", 32, "the value's length")
 	f.StringVar(&charset, "charset", "alnum", "the characters: "+strings.Join(secret.Charsets(), ", "))
+	f.StringVar(&name, "name", "", "an absent file starts as a Secret of this metadata.name")
+	f.StringVar(&namespace, "namespace", "", "an absent file starts as a Secret in this metadata.namespace")
+	stdinFlags(c, &in)
 	return c
 }
 
@@ -633,7 +759,7 @@ func parseRefs(args ...string) ([]secret.Ref, error) {
 // secretOps are the operations with the service account's token, read
 // from secret.tokenFile when the shared vault is configured.
 func (a *app) secretOps() (*secret.Ops, error) {
-	ops := &secret.Ops{Run: secretRun, Apply: secretApply, Vault: a.cfg.Secret.Vault, Session: a.cfg.Secret.Session}
+	ops := &secret.Ops{Run: secretRun, Apply: secretApply, Vault: a.cfg.Secret.Vault, Session: a.cfg.Secret.Session, Ages: a.ageIdentities()}
 	if ops.Vault == "" || ops.Session || a.cfg.Secret.TokenFile == "" {
 		return ops, nil
 	}
@@ -643,6 +769,35 @@ func (a *app) secretOps() (*secret.Ops, error) {
 	}
 	ops.Token = strings.TrimSpace(string(raw))
 	return ops, nil
+}
+
+// ageIdentities are secret.ageIdentities, their path patterns compiled
+// (the config's validation compiled each once).
+func (a *app) ageIdentities() []secret.AgeIdentity {
+	out := make([]secret.AgeIdentity, 0, len(a.cfg.Secret.AgeIdentities))
+	for _, id := range a.cfg.Secret.AgeIdentities {
+		ai := secret.AgeIdentity{Recipient: id.Recipient, Ref: id.Ref}
+		if id.PathRegex != "" {
+			ai.Path = regexp.MustCompile(id.PathRegex)
+		}
+		out = append(out, ai)
+	}
+	return out
+}
+
+// secretNeedsVault reports whether a call's arguments take the shared
+// vault: an op:// reference, or a SOPS file, relative to dir (the working
+// directory when empty), whose age identity lives there. The client and the
+// broker decide on it alike.
+func (a *app) secretNeedsVault(dir string, args []string) bool {
+	return secret.NeedsVault(args) || (&secret.Ops{Ages: a.ageIdentities()}).AgeNeedsVault(dir, args)
+}
+
+// secretNeedsBroker reports whether a call goes to the broker with
+// secret.session: one on the vault, or on a SOPS file whose age identity
+// secret.ageIdentities names, a file's included, which the broker alone reads.
+func (a *app) secretNeedsBroker(args []string) bool {
+	return secret.NeedsVault(args) || (&secret.Ops{Ages: a.ageIdentities()}).AgeNeedsIdentity("", args)
 }
 
 // secretOpsKeyed are the operations with the fingerprint key, created on

@@ -190,7 +190,11 @@ type Budget struct {
 	// Held says a "github" hold is set, HoldReason why.
 	Held       bool
 	HoldReason string
-	Pollers    []Poller
+	// GraphQL says the GraphQL limit, GraphQLRefused that GitHub refuses
+	// GraphQL calls.
+	GraphQL        string
+	GraphQLRefused bool
+	Pollers        []Poller
 	// Err is set when the probe failed; the figures above are then the
 	// last reading from the state, if any.
 	Err string

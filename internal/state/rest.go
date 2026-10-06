@@ -110,13 +110,16 @@ type (
 	plainAlertOwner   AlertOwner
 	plainStart        Start
 	plainArchive      Archive
+	plainDecline      Decline
 	plainReport       Report
 	plainReportPause  ReportPause
 	plainReportThread ReportThread
 	plainBudget       Budget
+	plainGraphQL      GraphQL
 	plainMerge        Merge
 	plainWriter       Writer
 	plainStaleWriter  StaleWriter
+	plainWorkerReport WorkerReport
 )
 
 func (v *State) UnmarshalJSON(b []byte) error { return decodeKeeping(b, (*plainState)(v), &v.rest) }
@@ -165,6 +168,8 @@ func (v *Start) UnmarshalJSON(b []byte) error     { return decodeKeeping(b, (*pl
 func (v Start) MarshalJSON() ([]byte, error)      { return encodeKeeping(plainStart(v), v.rest) }
 func (v *Archive) UnmarshalJSON(b []byte) error   { return decodeKeeping(b, (*plainArchive)(v), &v.rest) }
 func (v Archive) MarshalJSON() ([]byte, error)    { return encodeKeeping(plainArchive(v), v.rest) }
+func (v *Decline) UnmarshalJSON(b []byte) error   { return decodeKeeping(b, (*plainDecline)(v), &v.rest) }
+func (v Decline) MarshalJSON() ([]byte, error)    { return encodeKeeping(plainDecline(v), v.rest) }
 func (v *Report) UnmarshalJSON(b []byte) error    { return decodeKeeping(b, (*plainReport)(v), &v.rest) }
 func (v Report) MarshalJSON() ([]byte, error)     { return encodeKeeping(plainReport(v), v.rest) }
 func (v *ReportThread) UnmarshalJSON(b []byte) error {
@@ -179,6 +184,8 @@ func (v *ReportPause) UnmarshalJSON(b []byte) error {
 func (v ReportPause) MarshalJSON() ([]byte, error) { return encodeKeeping(plainReportPause(v), v.rest) }
 func (v *Budget) UnmarshalJSON(b []byte) error     { return decodeKeeping(b, (*plainBudget)(v), &v.rest) }
 func (v Budget) MarshalJSON() ([]byte, error)      { return encodeKeeping(plainBudget(v), v.rest) }
+func (v *GraphQL) UnmarshalJSON(b []byte) error    { return decodeKeeping(b, (*plainGraphQL)(v), &v.rest) }
+func (v GraphQL) MarshalJSON() ([]byte, error)     { return encodeKeeping(plainGraphQL(v), v.rest) }
 func (v *Merge) UnmarshalJSON(b []byte) error      { return decodeKeeping(b, (*plainMerge)(v), &v.rest) }
 func (v Merge) MarshalJSON() ([]byte, error)       { return encodeKeeping(plainMerge(v), v.rest) }
 func (v *Writer) UnmarshalJSON(b []byte) error     { return decodeKeeping(b, (*plainWriter)(v), &v.rest) }
@@ -187,3 +194,9 @@ func (v *StaleWriter) UnmarshalJSON(b []byte) error {
 	return decodeKeeping(b, (*plainStaleWriter)(v), &v.rest)
 }
 func (v StaleWriter) MarshalJSON() ([]byte, error) { return encodeKeeping(plainStaleWriter(v), v.rest) }
+func (v *WorkerReport) UnmarshalJSON(b []byte) error {
+	return decodeKeeping(b, (*plainWorkerReport)(v), &v.rest)
+}
+func (v WorkerReport) MarshalJSON() ([]byte, error) {
+	return encodeKeeping(plainWorkerReport(v), v.rest)
+}

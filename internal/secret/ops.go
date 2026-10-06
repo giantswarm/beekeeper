@@ -135,10 +135,33 @@ func (o *Ops) CopyValue(ctx context.Context, src, dst Ref) (int, error) {
 
 // put writes v at dst's path, the rest of its file kept.
 func (o *Ops) put(ctx context.Context, dst Ref, v string) error {
+	return o.putNew(ctx, dst, v, nil)
+}
+
+// putNew is put starting a file absent so far as the Secret nw names, an
+// empty document when nil. A plaintext Kubernetes Secret without values,
+// a skeleton, is filled and encrypted like a file absent so far.
+func (o *Ops) putNew(ctx context.Context, dst Ref, v string, nw *NewSecret) error {
 	doc := newDocument()
-	if _, err := os.Stat(dst.File); err == nil {
-		if doc, err = o.decrypt(ctx, dst.File); err != nil {
-			return err
+	if nw != nil {
+		doc = nw.document()
+	}
+	raw, err := os.ReadFile(dst.File)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+	case err != nil:
+		return err
+	default:
+		skel, err := skeleton(raw)
+		switch {
+		case err != nil:
+			return fmt.Errorf("%s: %w", dst.File, err)
+		case skel != nil:
+			doc = skel
+		default:
+			if doc, err = o.decrypt(ctx, dst.File); err != nil {
+				return err
+			}
 		}
 	}
 	if err := doc.set(dst.Path, v); err != nil {
@@ -148,38 +171,168 @@ func (o *Ops) put(ctx context.Context, dst Ref, v string) error {
 }
 
 // Consumer allows a command to take a value on stdin: one that reads a
-// secret from stdin and stores it without printing it.
+// secret from stdin and stores it without printing it, or kubectl exec -i
+// handing stdin to such a command in a pod.
 func Consumer(argv []string) error {
 	if len(argv) == 0 {
 		return errors.New("no consumer: copy <ref> -- <command>")
 	}
-	if filepath.Base(argv[0]) == "gh" && len(argv) >= 3 && argv[1] == "secret" && argv[2] == "set" {
+	if filepath.Base(argv[0]) == "kubectl" {
+		return kubectlExec(argv)
+	}
+	if stdinReader(argv) {
 		return nil
+	}
+	return fmt.Errorf("%q takes no value from beekeeper: the consumers are `gh secret set`, `garage json-api <endpoint> -`, "+
+		"a command with --password-stdin or --secret <name>=-, and `kubectl exec -i --context <context> <pod> -- <one of them>`", strings.Join(argv, " "))
+}
+
+// stdinReader reports whether a command reads a secret from stdin and
+// stores it without printing it.
+func stdinReader(argv []string) bool {
+	switch filepath.Base(argv[0]) {
+	case "gh":
+		return len(argv) >= 3 && argv[1] == "secret" && argv[2] == "set"
+	case "garage":
+		// the JSON request on stdin, "-" its only argument after the endpoint
+		return len(argv) == 4 && argv[1] == "json-api" && argv[3] == "-"
 	}
 	for i, a := range argv[1:] {
 		switch {
 		case a == "--password-stdin":
-			return nil
+			return true
 		case a == "--secret" && i+2 < len(argv) && strings.HasSuffix(argv[i+2], "=-"),
 			strings.HasPrefix(a, "--secret=") && strings.HasSuffix(a, "=-"):
-			return nil
+			return true
 		}
 	}
-	return fmt.Errorf("%q takes no value from beekeeper: the consumers are `gh secret set`, a command with --password-stdin and one with --secret <name>=-", strings.Join(argv, " "))
+	return false
 }
 
-// CopyToConsumer runs an allowed consumer with the value on stdin. It
-// answers the consumer's exit code and its output with the value redacted.
-func (o *Ops) CopyToConsumer(ctx context.Context, src Ref, argv []string) (int, string, error) {
+// kubectlExec allows kubectl exec -i with an explicit --context, no TTY
+// (which would echo stdin) and no verbosity, whose command in the pod is a
+// stdin reader: the value travels on the exec stream alone, never on an
+// argv.
+func kubectlExec(argv []string) error {
+	cmd := strings.Join(argv, " ")
+	dash := slices.Index(argv, "--")
+	if len(argv) < 2 || argv[1] != "exec" || dash < 0 {
+		return fmt.Errorf("%q: kubectl takes a value only as kubectl exec -i --context <context> <pod> -- <command>", cmd)
+	}
+	stdin := false
+	for _, a := range argv[2:dash] {
+		switch {
+		case a == "-i", a == "--stdin", a == "--stdin=true":
+			stdin = true
+		case a == "-t", a == "--tty", strings.HasPrefix(a, "--tty="), strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") && len(a) > 2 && strings.ContainsAny(a[1:], "it"):
+			return fmt.Errorf("%q: no TTY and no combined short flags, a TTY echoes stdin: kubectl exec -i", cmd)
+		case a == "-v", a == "--v", strings.HasPrefix(a, "-v="), strings.HasPrefix(a, "--v="):
+			return fmt.Errorf("%q: no verbosity, kubectl's request log stays off", cmd)
+		}
+	}
+	switch {
+	case !stdin:
+		return fmt.Errorf("%q: the value goes on the exec stream, kubectl exec -i", cmd)
+	case ConsumerContext(argv) == "":
+		return fmt.Errorf("%q: name the cluster, --context <context>", cmd)
+	case dash+1 == len(argv) || !stdinReader(argv[dash+1:]):
+		return fmt.Errorf("%q: the command in the pod reads the value on stdin: `garage json-api <endpoint> -`, `gh secret set`, "+
+			"or one with --password-stdin or --secret <name>=-", cmd)
+	}
+	return nil
+}
+
+// ConsumerContext is the kube context a kubectl exec consumer names, ""
+// for any other consumer.
+func ConsumerContext(argv []string) string {
+	if len(argv) < 2 || filepath.Base(argv[0]) != "kubectl" {
+		return ""
+	}
+	end := slices.Index(argv, "--")
+	if end < 0 {
+		end = len(argv)
+	}
+	for i, a := range argv[:end] {
+		if a == "--context" && i+1 < end {
+			return argv[i+1]
+		}
+		if c, ok := strings.CutPrefix(a, "--context="); ok {
+			return c
+		}
+	}
+	return ""
+}
+
+// Stdin shapes what a consumer reads: the value alone, or with Field set,
+// the JSON object Template with the value at Field (garage json-api's
+// request, for one).
+type Stdin struct {
+	Template string
+	Field    string
+}
+
+// Check refuses a template that is no JSON object or already holds Field.
+func (s Stdin) Check() error {
+	if s.Template == "" && s.Field == "" {
+		return nil
+	}
+	if s.Field == "" {
+		return errors.New("--stdin-json takes --stdin-field, the key the value goes to")
+	}
+	obj := map[string]any{}
+	if s.Template != "" {
+		if err := json.Unmarshal([]byte(s.Template), &obj); err != nil {
+			return errors.New("--stdin-json: no JSON object")
+		}
+	}
+	if _, ok := obj[s.Field]; ok {
+		return fmt.Errorf("--stdin-json holds %q already: the value goes there", s.Field)
+	}
+	return nil
+}
+
+// input is what the consumer reads for v.
+func (s Stdin) input(v string) (string, error) {
+	if s.Field == "" {
+		return v, nil
+	}
+	obj := map[string]any{}
+	if s.Template != "" {
+		if err := json.Unmarshal([]byte(s.Template), &obj); err != nil {
+			return "", errors.New("--stdin-json: no JSON object")
+		}
+	}
+	obj[s.Field] = v
+	b, err := json.Marshal(obj)
+	return string(b), err
+}
+
+// CopyToConsumer runs an allowed consumer with the value on stdin, shaped
+// by in. It answers the consumer's exit code and its output with the value
+// redacted.
+func (o *Ops) CopyToConsumer(ctx context.Context, src Ref, argv []string, in Stdin) (int, string, error) {
 	if err := Consumer(argv); err != nil {
+		return 0, "", err
+	}
+	if err := in.Check(); err != nil {
 		return 0, "", err
 	}
 	v, err := o.value(ctx, src)
 	if err != nil {
 		return 0, "", err
 	}
+	return consume(ctx, v, src.String(), argv, in)
+}
+
+// consume runs a consumer with v on stdin, shaped by in, answering its
+// exit code and its output with v redacted as ref.
+func consume(ctx context.Context, v, ref string, argv []string, in Stdin) (int, string, error) {
+	input, err := in.input(v)
+	if err != nil {
+		return 0, "", err
+	}
 	c := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // an allow-listed consumer
-	c.Stdin = strings.NewReader(v)
+	c.Stdin = strings.NewReader(input)
 	var out bytes.Buffer
 	c.Stdout, c.Stderr = &out, &out
 	code := 0
@@ -190,7 +343,7 @@ func (o *Ops) CopyToConsumer(ctx context.Context, src Ref, argv []string) (int, 
 		}
 		code = ee.ExitCode()
 	}
-	return code, redact(out.String(), v, src.String()), nil
+	return code, redact(out.String(), v, ref), nil
 }
 
 // redact replaces a value and its base64 forms in s, then what the token
@@ -198,7 +351,8 @@ func (o *Ops) CopyToConsumer(ctx context.Context, src Ref, argv []string) (int, 
 func redact(s, value, ref string) string {
 	if value != "" {
 		mark := "[redacted: " + ref + "]"
-		for _, f := range []string{value,
+		quoted, _ := json.Marshal(value)
+		for _, f := range []string{value, strings.Trim(string(quoted), `"`),
 			base64.StdEncoding.EncodeToString([]byte(value)),
 			base64.RawStdEncoding.EncodeToString([]byte(value))} {
 			s = strings.ReplaceAll(s, f, mark)
@@ -238,34 +392,95 @@ func Generate(n int, charset string) (string, error) {
 	return string(b), nil
 }
 
-// Set generates a value, writes it to the shared vault's field first and
-// then into the SOPS path, and answers its fingerprint.
-func (o *Ops) Set(ctx context.Context, dst, vault Ref, length int, charset string) (string, error) {
+// SetOptions are what set draws and where the value goes besides the SOPS
+// path: the shared vault's field first, a lab's Secret and a consumer's
+// stdin after it. Each is optional; the value never leaves the process
+// otherwise.
+type SetOptions struct {
+	Length   int
+	Charset  string
+	Vault    Ref
+	Secret   *KubeTarget
+	Consumer []string
+	Stdin    Stdin
+	// New is the Secret a file absent so far starts as, its name and
+	// namespace; nil starts an empty document.
+	New *NewSecret
+}
+
+// SetResult is what set answers: the value's fingerprint and, with a
+// consumer, its exit code and its output with the value redacted.
+type SetResult struct {
+	Key         string `json:"key"`
+	Fingerprint string `json:"fingerprint"`
+	Code        int    `json:"code,omitempty"`
+	Output      string `json:"output,omitempty"`
+}
+
+// Set generates a value and writes it to the shared vault's field first
+// when one is given, then into the SOPS path, then into a lab's Secret and
+// a consumer's stdin when given. A value without a vault field lives in the
+// SOPS file alone.
+func (o *Ops) Set(ctx context.Context, dst Ref, opt SetOptions) (SetResult, error) {
 	if dst.Op != "" || dst.Path == "" {
-		return "", fmt.Errorf("%s: set writes a SOPS path, file#path", dst)
+		return SetResult{}, fmt.Errorf("%s: set writes a SOPS path, file#path", dst)
 	}
-	if vault.Op == "" {
-		return "", fmt.Errorf("%s: the vault copy is an op://<vault>/<item>/<field>", vault)
+	if opt.Vault != (Ref{}) {
+		if opt.Vault.Op == "" {
+			return SetResult{}, fmt.Errorf("%s: the vault copy is an op://<vault>/<item>/<field>", opt.Vault)
+		}
+		if err := o.checkVault(opt.Vault); err != nil {
+			return SetResult{}, err
+		}
 	}
-	if err := o.checkVault(vault); err != nil {
-		return "", err
+	if opt.Secret != nil && opt.Secret.KindCluster() == "" {
+		return SetResult{}, fmt.Errorf("%s: a Secret is written only into a kind lab's context, kind-<cluster>", opt.Secret.Context)
 	}
-	v, err := Generate(length, charset)
+	if opt.Consumer != nil {
+		if err := Consumer(opt.Consumer); err != nil {
+			return SetResult{}, err
+		}
+		if err := opt.Stdin.Check(); err != nil {
+			return SetResult{}, err
+		}
+	}
+	if opt.New != nil {
+		if err := opt.New.check(dst.File); err != nil {
+			return SetResult{}, err
+		}
+	}
+	v, err := Generate(opt.Length, opt.Charset)
 	if err != nil {
-		return "", err
+		return SetResult{}, err
 	}
-	if err := o.storeVault(ctx, vault, v); err != nil {
-		return "", err
+	if opt.Vault != (Ref{}) {
+		if err := o.storeVault(ctx, opt.Vault, v); err != nil {
+			return SetResult{}, err
+		}
 	}
-	if err := o.put(ctx, dst, v); err != nil {
-		return "", fmt.Errorf("the vault holds the value, the SOPS file not: %w", err)
+	if err := o.putNew(ctx, dst, v, opt.New); err != nil {
+		if opt.Vault != (Ref{}) {
+			return SetResult{}, fmt.Errorf("the vault holds the value, the SOPS file not: %w", err)
+		}
+		return SetResult{}, err
 	}
-	return o.Fingerprint(v), nil
+	res := SetResult{Key: dst.String(), Fingerprint: o.Fingerprint(v)}
+	if opt.Secret != nil {
+		if err := o.toSecret(ctx, v, dst.String(), *opt.Secret); err != nil {
+			return res, fmt.Errorf("%s holds the value, the Secret not (copy %s --to-secret %s): %w", dst, dst, opt.Secret, err)
+		}
+	}
+	if opt.Consumer != nil {
+		if res.Code, res.Output, err = consume(ctx, v, dst.String(), opt.Consumer, opt.Stdin); err != nil {
+			return res, fmt.Errorf("%s holds the value, the consumer not (copy %s -- …): %w", dst, dst, err)
+		}
+	}
+	return res, nil
 }
 
 // storeVault writes v into the concealed field of a vault item, creating
-// the item or the field when absent. The item travels as a JSON template
-// on stdin, never on a command line.
+// the item or the field when absent. The item travels as JSON on stdin,
+// never on a command line; op refuses piped input next to --template.
 func (o *Ops) storeVault(ctx context.Context, r Ref, v string) error {
 	parts := strings.SplitN(strings.TrimPrefix(r.Op, guard.OpRef), "/", 3)
 	vault, title, field := parts[0], parts[1], parts[2]
@@ -305,9 +520,9 @@ func (o *Ops) storeVault(ctx context.Context, r Ref, v string) error {
 	if err != nil {
 		return err
 	}
-	args := []string{"item", "create", "--vault", vault, "--template", "/dev/stdin", "--format", "json"}
+	args := []string{"item", "create", "-", "--vault", vault, "--format", "json"}
 	if id != "" {
-		args = []string{"item", "edit", id, "--vault", vault, "--template", "/dev/stdin", "--format", "json"}
+		args = []string{"item", "edit", id, "--vault", vault, "--format", "json"}
 	}
 	if _, err := o.op(ctx, bytes.NewReader(tmpl), args...); err != nil {
 		return fmt.Errorf("%s: %w", r.Op, err)

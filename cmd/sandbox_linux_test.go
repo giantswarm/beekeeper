@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,7 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/giantswarm/beekeeper/internal/sandbox"
+	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
 // The broker serves on Linux only.
@@ -38,7 +43,7 @@ func TestBrokeredSecretRunsAsTheRequester(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = requester.Process.Kill(); _ = requester.Wait() }()
-	h := brokered(brokeredCap(&recordingCapper{}), map[string]sandbox.Handler{sandbox.OpSecret: brokeredCall(exe, "/proc", brokeredSecretArgv)})
+	h := brokered(brokeredCap(&recordingCapper{}), map[string]sandbox.Handler{sandbox.OpSecret: brokeredCall(exe, "/proc", brokeredCallTimeout, nil, brokeredSecretArgv)})
 	r, err := h(context.Background(), requester.Process.Pid, sandbox.Request{Op: sandbox.OpSecret, Args: []string{compareOp, sopsA, sopsB}})
 	if err != nil {
 		t.Fatal(err)
@@ -86,5 +91,103 @@ func TestSecretInTheSandboxGoesThroughTheBroker(t *testing.T) {
 	}
 	if len(got) != 1 {
 		t.Errorf("a refused call reached the broker: %q", got)
+	}
+}
+
+func TestGateInTheSandboxGoesThroughTheBroker(t *testing.T) {
+	a, _, _ := secretApp(t)
+	t.Setenv(sandbox.Env, "1")
+	var got []sandbox.Request
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = sandbox.Serve(ctx, sandbox.SpoolDir(a.cfg.StateDir), "/proc", 5*time.Millisecond, func(_ context.Context, _ int, req sandbox.Request) (sandbox.Reply, error) {
+			if req.Op != sandbox.OpGate {
+				return sandbox.Reply{}, nil
+			}
+			got = append(got, req)
+			return sandbox.Reply{Out: "{\"merged\":true}\n", Code: 9}, nil
+		})
+	}()
+	t.Cleanup(func() { cancel(); <-done })
+	argv := strings.Fields("devctl pr merge giantswarm/beekeeper 7")
+	if err := a.gate(context.Background(), argv, time.Minute, false); Code(err) != 9 {
+		t.Errorf("exit %d (%v), want the brokered gate's 9", Code(err), err)
+	}
+	if len(got) != 1 || got[0].Op != sandbox.OpGate || strings.Join(got[0].Args, " ") != strings.Join(argv, " ") || got[0].Wait != "1m0s" {
+		t.Errorf("broker got %+v", got)
+	}
+	if err := a.gate(context.Background(), argv, time.Minute, true); err == nil {
+		t.Error("a queued run from the sandbox: want a refusal")
+	}
+}
+
+// hostBroker serves the app's spool with h until the test ends.
+func hostBroker(t *testing.T, a *app, h sandbox.Handler) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = sandbox.Serve(ctx, sandbox.SpoolDir(a.cfg.StateDir), "/proc", 5*time.Millisecond, h)
+	}()
+	t.Cleanup(func() { cancel(); <-done })
+}
+
+func TestRoleCommandsInTheSandboxGoThroughTheBroker(t *testing.T) {
+	a, _, _ := secretApp(t)
+	t.Setenv(sandbox.Env, "1")
+	var got []sandbox.Request
+	hostBroker(t, a, func(_ context.Context, _ int, req sandbox.Request) (sandbox.Reply, error) {
+		if req.Op == sandbox.OpPing {
+			return sandbox.Reply{}, nil
+		}
+		got = append(got, req)
+		if w := req.Output(); w != nil {
+			_, _ = io.WriteString(w, "streamed\n")
+		}
+		return sandbox.Reply{Code: 4}, nil
+	})
+	run := func(c *cobra.Command, args ...string) (string, error) {
+		a.out = &bytes.Buffer{}
+		usageArgs(c)
+		c.SetArgs(args)
+		c.SetOut(a.out)
+		c.SetErr(a.out)
+		c.SilenceUsage, c.SilenceErrors = true, true
+		err := c.ExecuteContext(context.Background())
+		return a.out.(*bytes.Buffer).String(), err
+	}
+	for _, tc := range []struct {
+		c    *cobra.Command
+		args []string
+		op   string
+		want string
+	}{
+		{a.agentsCmd(), []string{agentWakeName, agentBK1, "go on -- now"}, sandbox.OpAgents, "wake -- BK 1 go on -- now"},
+		{a.agentsCmd(), []string{agentResumeName, agentBK1}, sandbox.OpAgents, "resume -- BK 1"},
+		{a.agentsCmd(), []string{agentStartName, "--task", "t", "BK 2", "brief.md"}, sandbox.OpAgents, "start --task=t -- BK 2 brief.md"},
+		{a.watchCmd(), []string{"--notify"}, "", "watch --notify=true --"},
+	} {
+		if tc.op == "" {
+			tc.c = a.onHost(tc.c, sandbox.OpWatch, 0)
+			tc.op = sandbox.OpWatch
+		}
+		got = nil
+		out, err := run(tc.c, tc.args...)
+		if out != "streamed\n" || Code(err) != 4 {
+			t.Errorf("%q: out %q, exit %d (%v)", tc.args, out, Code(err), err)
+		}
+		if len(got) != 1 || got[0].Op != tc.op || !got[0].Stream || strings.Join(got[0].Args, " ") != tc.want {
+			t.Errorf("%q: broker got %+v, want %s %q", tc.args, got, tc.op, tc.want)
+		}
+	}
+	got = nil
+	root := &cobra.Command{Use: project.Name}
+	root.PersistentFlags().StringVar(&a.as, "as", "", "")
+	root.AddCommand(a.agentsCmd())
+	if _, err := run(root, "agents", agentWakeName, "--as", "supervisor", agentBK1, "hi"); Code(err) != ExitRefused || len(got) != 0 {
+		t.Errorf("--as: exit %d, broker got %+v; want refused here", Code(err), got)
 	}
 }

@@ -1,7 +1,10 @@
 package guard
 
 import (
+	"bytes"
+	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -13,13 +16,16 @@ import (
 // tools it is an allow list: a read passes only when its output keeps key
 // names, metadata or lengths, or goes to a consumer that prints nothing of
 // it. sops, op and decryption run only in beekeeper (beekeeper secret), never
-// in an agent session. Every other shape that touches a secret is refused:
-// false positives beat leaks.
+// in an agent session, and no agent session signs in to or unlocks a vault:
+// the vault session lives in beekeeper's broker alone. Every other shape that
+// touches a secret is refused: false positives beat leaks.
 
 const (
 	kubectlCmd = "kubectl"
 	sopsCmd    = "sops"
 	helmCmd    = "helm"
+	evalCmd    = "eval"
+	selfCmd    = "beekeeper"
 	verbGet    = "get"
 	verbSet    = "set"
 	verbCreate = "create"
@@ -38,12 +44,15 @@ type leak struct {
 	// render: a render fed with secret values, which a filter that blanks
 	// its Secret data makes safe.
 	render bool
+	// unlock: a sign-in to or an unlock of a vault, which no agent runs.
+	unlock bool
 }
 
 // secretOps names the beekeeper secret operations every refusal points to.
 const secretOps = "Equality: `beekeeper secret compare <a> <b>` or `beekeeper secret fingerprint <ref>`. " +
 	"Changes: `beekeeper secret copy <src.sops.yaml> <dst.sops.yaml> [--name n --namespace ns]`, " +
-	"`copy <ref> <file#path>`, `copy <ref> -- <consumer>`, `set <file> <path> --generate --vault op://…`. " +
+	"`copy <ref> <file#path>`, `copy <ref> -- <consumer>`, `set <file> <path> --generate [--name n --namespace ns] [--vault op://…] [--to-secret … | -- <consumer>]`; " +
+	"a consumer reads the value on stdin, in a pod through `kubectl exec -i --context <context> <pod> -- <consumer>` (`--stdin-json`/`--stdin-field` wrap it in a JSON request). " +
 	"Rotations: `beekeeper secret rotate op://… --generate` (a value beekeeper made), `rotate op://…` (a value its issuer " +
 	"rotated into the vault), `rotate platform://<installation>/<capability>/<name> --reason …` (a platform manager credential)."
 
@@ -51,6 +60,12 @@ func (l leak) reason() string {
 	at := strings.Join(strings.Fields(l.at), " ")
 	if len(at) > 200 {
 		at = at[:200] + "…"
+	}
+	if l.unlock {
+		return "Refused: `" + at + "` (" + l.what + ") signs in to or unlocks a vault from an agent session. No agent session holds " +
+			"a vault session or opens one: it lives in beekeeper's broker alone, which signs in by itself. A `beekeeper secret` call " +
+			"that needs the vault waits for that sign-in (`vault locked: waiting for the broker's sign-in`), so run the operation " +
+			"itself:\n" + secretOps
 	}
 	return "Refused: `" + at + "` (" + l.what + ") would put secret values where an agent can read them: the transcript " +
 		"and from there the model API, a file, a variable, a hash or a diff. Only key names, metadata and lengths reach an agent, " +
@@ -64,12 +79,12 @@ var (
 		"  kubectl get secret <name> -o jsonpath='{.data.<key>}' | base64 -d | wc -c   (the length)"
 	sopsSafe = "  sops runs only in beekeeper, never in an agent session, encryption included.\n" +
 		"  yq '.stringData|keys' <file>   (a SOPS file keeps its key names in plaintext)"
-	opSafe = "  op run -- <command>   (masks the values in the output; the command it runs is checked on its own)\n" +
-		"  Every other op command runs only in beekeeper, never in an agent session: beekeeper secret reads the shared vault."
-	cryptSafe  = "  Decryption runs only in beekeeper, never in an agent session."
-	vaultSafe  = "  vault kv get -format=json <path> | jq '.data.data|keys'\n  vault kv metadata get <path>\n  vault kv list <path>"
-	base64Safe = "  … | base64 -d | wc -c   (the length)"
-	renderSafe = "  … | yq 'del(.data, .stringData)'   (the render with its Secret data blanked)\n" +
+	opSafe      = "  op runs only in beekeeper, never in an agent session (op run included): beekeeper secret reads the shared vault."
+	keyringSafe = "  The keyring's entries are the person's: no agent session reads them."
+	cryptSafe   = "  Decryption runs only in beekeeper, never in an agent session."
+	vaultSafe   = "  vault kv get -format=json <path> | jq '.data.data|keys'\n  vault kv metadata get <path>\n  vault kv list <path>"
+	base64Safe  = "  … | base64 -d | wc -c   (the length)"
+	renderSafe  = "  … | yq 'del(.data, .stringData)'   (the render with its Secret data blanked)\n" +
 		"  diff <(… | yq 'del(.data, .stringData)') <(… | yq 'del(.data, .stringData)')"
 	fileSafe = "  yq '.data|keys' <file>   (the key names)"
 )
@@ -108,7 +123,7 @@ var (
 	// codeFile: a file name that holds code or prose, not a secret's values.
 	codeFile = regexp.MustCompile(`(?i)\.(?:go|md|ts|tsx|js|mjs|py|sh|rs|java|kt|rb|tf|html|css|tpl|snap|golden|mod|sum)$`)
 	dataWord = regexp.MustCompile(`(?i)\b(?:string)?data\b`)
-	shells   = map[string]bool{"sh": true, "bash": true, "zsh": true, "ksh": true, "dash": true, "ssh": true, "eval": true, "watch": true}
+	shells   = map[string]bool{"sh": true, "bash": true, "zsh": true, "ksh": true, "dash": true, "ssh": true, evalCmd: true, "watch": true}
 	hashCmds = map[string]bool{"sha256sum": true, "sha1sum": true, "sha224sum": true, "sha384sum": true, "sha512sum": true, "md5sum": true, "b2sum": true, "cksum": true, "shasum": true}
 	diffCmds = map[string]bool{"diff": true, "cmp": true, "colordiff": true, "sdiff": true, "diff3": true, "vimdiff": true, "delta": true, "difft": true}
 	// wrapperValues: the options of wrappers that take a value.
@@ -125,12 +140,26 @@ var kubectlValue = map[string]bool{
 	"--raw": true,
 }
 
-// secretLeak returns the leak cmd would expose, nil when it exposes none.
-func secretLeak(cmd string) *leak {
-	return scanLeaks(cmd, 0)
+// secretGuard is the Secret guard of one call: the commands that unlock the
+// person's vault besides op's own, and the directory a script it runs is
+// read from.
+type secretGuard struct {
+	// unlock are the names of commands that sign in to or unlock a vault:
+	// the person's own helpers around op signin (secret.unlockCommands).
+	unlock []string
+	// cwd is the session's working directory; empty, no script is read.
+	cwd string
 }
 
-func scanLeaks(cmd string, depth int) *leak {
+// maxScript bounds what the guard reads of a script a command runs.
+const maxScript = 64 << 10
+
+// leak returns the leak cmd would expose, nil when it exposes none.
+func (g secretGuard) leak(cmd string) *leak {
+	return g.scan(cmd, 0)
+}
+
+func (g secretGuard) scan(cmd string, depth int) *leak {
 	if depth > 4 {
 		return nil
 	}
@@ -144,28 +173,10 @@ func scanLeaks(cmd string, depth int) *leak {
 	}
 	for i, sg := range segs {
 		words := shellWords(sc.plain[sg.start:sg.end])
-		// A command string a shell runs is a command of its own.
-		for k, w := range words {
-			if !shells[path.Base(w)] {
-				continue
-			}
-			for _, arg := range words[k+1:] {
-				if strings.ContainsAny(arg, " \t\n|;") {
-					if l := scanLeaks(arg, depth+1); l != nil {
-						return l
-					}
-				}
-			}
-			for _, h := range sc.heredocs {
-				if h.op >= sg.start && h.op < sg.end {
-					if l := scanLeaks(cmd[h.start:h.end], depth+1); l != nil {
-						return l
-					}
-				}
-			}
-			break
+		if l := g.nested(cmd, sc, sg, words, depth); l != nil {
+			return l
 		}
-		l := sourceLeak(words, pipelineBefore(sc.plain, segs, i), aliases)
+		l := g.sourceLeak(words, pipelineBefore(sc.plain, segs, i), aliases)
 		if l == nil || flowsSafely(sc, segs, i, l) {
 			continue
 		}
@@ -182,6 +193,92 @@ func scanLeaks(cmd string, depth int) *leak {
 	return nil
 }
 
+// nested returns the leak of what the simple command runs besides itself:
+// the command strings and scripts a shell runs, its here-documents, eval's
+// words, a sourced script and a script run by its path.
+func (g secretGuard) nested(cmd string, sc shellScan, sg segment, words []string, depth int) *leak {
+	if c := commandAt(words); c < len(words) {
+		name, args := path.Base(words[c]), words[c+1:]
+		switch {
+		case name == evalCmd:
+			return g.scan(strings.Join(args, " "), depth+1)
+		case (name == "source" || name == ".") && len(args) > 0:
+			return g.script(args[0], depth)
+		case strings.Contains(words[c], "/") && !shells[name]:
+			if l := g.script(words[c], depth); l != nil {
+				return l
+			}
+		}
+	}
+	for k, w := range words {
+		name := path.Base(w)
+		if w == "$SHELL" || w == "${SHELL}" {
+			name = "sh"
+		}
+		if !shells[name] {
+			continue
+		}
+		// Every argument is scanned as a command line of its own: a -c
+		// string, ssh's remote command, watch's; one word (zsh -ic f) too.
+		script := name != "ssh" && name != "watch" && name != evalCmd
+		for _, arg := range words[k+1:] {
+			if strings.HasPrefix(arg, "-") {
+				continue
+			}
+			if l := g.scan(arg, depth+1); l != nil {
+				return l
+			}
+			if script {
+				if l := g.script(arg, depth); l != nil {
+					return l
+				}
+				script = false
+			}
+		}
+		for _, h := range sc.heredocs {
+			if h.op >= sg.start && h.op < sg.end {
+				if l := g.scan(cmd[h.start:h.end], depth+1); l != nil {
+					return l
+				}
+			}
+		}
+		break
+	}
+	return nil
+}
+
+// script returns the leak of the script at p, a shell script a command line
+// runs: a regular text file of at most maxScript bytes, relative to the
+// session's working directory. Anything else is no script and passes.
+func (g secretGuard) script(p string, depth int) *leak {
+	if g.cwd == "" || p == "" {
+		return nil
+	}
+	if rest, ok := strings.CutPrefix(p, "~/"); ok {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil
+		}
+		p = filepath.Join(home, rest)
+	}
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(g.cwd, p)
+	}
+	fi, err := os.Stat(p)
+	if err != nil || !fi.Mode().IsRegular() || fi.Size() > maxScript {
+		return nil
+	}
+	raw, err := os.ReadFile(p) //nolint:gosec // a script the command line runs, read to scan it
+	if err != nil || bytes.IndexByte(raw, 0) >= 0 {
+		return nil
+	}
+	if l := g.scan(string(raw), depth+1); l != nil {
+		l.what += ", run from " + filepath.Base(p)
+		return l
+	}
+	return nil
+}
+
 // pipelineBefore is the text of the pipeline stages before segs[i].
 func pipelineBefore(cmd string, segs []segment, i int) string {
 	first := i
@@ -192,11 +289,11 @@ func pipelineBefore(cmd string, segs []segment, i int) string {
 }
 
 // sourceLeak returns the leak when the simple command exposes secret values.
-func sourceLeak(words []string, before string, aliases map[string]bool) *leak {
+func (g secretGuard) sourceLeak(words []string, before string, aliases map[string]bool) *leak {
 	if l := procFileLeak(words); l != nil {
 		return l
 	}
-	if l := toolLeak(words); l != nil {
+	if l := g.toolLeak(words); l != nil {
 		return l
 	}
 	for k, w := range words {
@@ -229,17 +326,20 @@ func sourceLeak(words []string, before string, aliases map[string]bool) *leak {
 }
 
 // commandAt returns the index of the word the simple command runs, past its
-// assignments and wrappers (sudo, env, timeout, xargs, beekeeper run, …).
+// assignments, wrappers (sudo, env, timeout, xargs, beekeeper run, …), the
+// shell's keywords and a function definition's head.
 func commandAt(words []string) int {
 	for k := 0; k < len(words); k++ {
 		w, name := words[k], path.Base(words[k])
 		switch {
-		case envWord.MatchString(w), w == "--", duration.MatchString(w), wrappers[name]:
+		case envWord.MatchString(w), w == "--", duration.MatchString(w), wrappers[name], keywords[w]:
+		case w == "function":
+			k++
 		case strings.HasPrefix(w, "-"):
 			if wrapperValues[w] {
 				k++
 			}
-		case name == "beekeeper" && k+1 < len(words) && words[k+1] == "run":
+		case name == selfCmd && k+1 < len(words) && words[k+1] == "run":
 			k++
 		default:
 			return k
@@ -249,9 +349,9 @@ func commandAt(words []string) int {
 }
 
 // toolLeak returns the leak of a credential tool that runs only in beekeeper
-// (sops, op, decryption), of a hash or a diff of a secret file, or of a
-// render fed with secret values.
-func toolLeak(words []string) *leak {
+// (sops, op, decryption), of a vault sign-in or unlock or a keyring read, of
+// a hash or a diff of a secret file, or of a render fed with secret values.
+func (g secretGuard) toolLeak(words []string) *leak {
 	k := commandAt(words)
 	if k == len(words) {
 		return nil
@@ -259,18 +359,19 @@ func toolLeak(words []string) *leak {
 	name, args := path.Base(words[k]), words[k+1:]
 	sub := nonFlags(args)
 	switch {
+	case slices.Contains(g.unlock, name):
+		return &leak{what: name + ", a vault unlock", never: true, unlock: true}
+	case name == "op" && len(sub) > 0 && (sub[0] == "signin" || sub[0] == "unlock" || len(sub) > 1 && sub[0] == "account" && sub[1] == "add"):
+		return &leak{what: "op " + strings.Join(sub[:min(len(sub), 2)], " ") + ", a vault sign-in", never: true, unlock: true}
+	case name == selfCmd && slices.Contains(sub, "secret") && slices.Contains(sub, "unlock"):
+		return &leak{what: "beekeeper secret unlock, the person's own unlock", never: true, unlock: true}
 	case name == sopsCmd:
 		return &leak{what: "sops, which runs only in beekeeper", safe: sopsSafe, never: true}
 	case name == "op":
-		// op run masks the values in its command's output; the command it
-		// runs is a command of its own, with the same guard.
-		if len(sub) > 0 && sub[0] == "run" && !hasAny(args, "--no-masking") {
-			if i := slices.Index(args, "--"); i >= 0 {
-				return toolLeak(args[i+1:])
-			}
-			return nil
-		}
 		return &leak{what: "op, which runs only in beekeeper", safe: opSafe, never: true}
+	case name == "secret-tool" && len(sub) > 0 && (sub[0] == "lookup" || sub[0] == "search"),
+		name == "security" && len(sub) > 0 && strings.HasPrefix(sub[0], "find-") && strings.HasSuffix(sub[0], "-password"):
+		return &leak{what: "a keyring read", safe: keyringSafe, never: true}
 	case name == "vault":
 		return vaultLeak(args)
 	case name == helmCmd && len(sub) > 0 && sub[0] == "secrets":

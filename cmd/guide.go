@@ -537,8 +537,9 @@ files as waiting on its person (read from its session record, never from a
 transcript), each note of the queue answered or closed, and the guide's
 relay: GUIDE RELAY DUE at guide.relayAt, taken or
 expired, and a restart of its CLI. Silent otherwise. What it said is kept
-in the state, so a restarted feed says nothing again. Runs until killed;
---once polls once.`,
+in the state, so a restarted feed says nothing again; only a standing
+GUIDE RELAY DUE is said once more, by each feed and after a change of
+guide.relayAt. Runs until killed; --once polls once.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
@@ -547,6 +548,9 @@ in the state, so a restarted feed says nothing again. Runs until killed;
 			defer tick.Stop()
 			if a.cfg.Guide.Person == "" {
 				_, _ = fmt.Fprintln(a.out, time.Now().Format("15:04:05")+" GUIDE: "+personUnset)
+			}
+			if !once {
+				a.guideDues = relayDues{}
 			}
 			for {
 				a.now = time.Now()
@@ -584,8 +588,8 @@ func (a *app) guideFeed(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	// Outside the lock: the transcript's context and the log's answers.
-	c := roleContext(guideRole.get(st), sessions, a.now, a.cfg.Guide.RelayAt)
-	q := quietness{checked: c > 0, context: c}
+	c := roleContext(guideRole.get(st), sessions, a.now, a.cfg.Guide.RelayAt, a.guideDues)
+	q := quietness{checked: c > 0, context: c, relayAt: a.cfg.Guide.RelayAt}
 	closed, err := a.closedNotes(st)
 	if err != nil {
 		return nil, err
@@ -601,7 +605,7 @@ func (a *app) guideFeed(ctx context.Context) ([]string, error) {
 			lines = append(lines, fmt.Sprintf("GUIDE RESTARTED: %q, %s; it keeps the role", e.By.Name, e.Detail))
 		}
 		rl, re := guideRole.fireRelay(st, a.now)
-		dl, de := guideRole.fireRelayDue(st, q, a.now)
+		dl, de := guideRole.fireRelayDue(st, q, a.guideDues, a.now)
 		fl, fed := a.feedLines(st, sessions, closed, findOrphaned(st, archived))
 		lines = append(append(append(lines, rl...), dl...), fl...)
 		evs := append(append(ce, re...), de...)

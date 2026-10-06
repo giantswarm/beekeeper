@@ -14,8 +14,9 @@ roster for one task. `$ARGUMENTS`, when given, is the session's name (`Agent fou
 The supervisor knows that this session exists, what it can reach and that it is idle, without the
 person telling it. The session takes the task the supervisor sends and works it to the finish under
 the `worker-rules` skill: merged, released, rolled and proven live. Done, it reports the outcome to
-the supervisor (PR links, release versions, the proof, what remains open, all re-queried live), runs
-`beekeeper agents idle --done` and ends its turn. It is not reused: the next task goes to a fresh
+the supervisor through `beekeeper agents idle --done --report "<report>"` (PR links, release
+versions, the proof, what remains open, all re-queried live) with a `--problem` line per finding
+(or `--problem none`), which beekeeper delivers to the supervisor's watch, and ends its turn. It is not reused: the next task goes to a fresh
 session, and beekeeper takes this one off the roster and archives it once its turn ended.
 
 ## Context

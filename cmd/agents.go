@@ -3,6 +3,7 @@ package cmd
 import (
 	"cmp"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -188,6 +190,8 @@ or "wake turn running".`,
 		},
 	}
 	var finished bool
+	var problems []string
+	var report string
 	idle := &cobra.Command{
 		Use:   "idle",
 		Short: "Report the calling agent's task done: idle again",
@@ -195,9 +199,33 @@ or "wake turn running".`,
 With --done its work is finished: the watch's doctor takes it off the
 roster and archives the desktop session beekeeper started for it once its
 CLI runs no turn, a desktop CLI kept warm included (beekeeper doctor; the
-desktop's Archived list brings it back).`,
+desktop's Archived list brings it back).
+
+--done refuses without the final report: --report is what the supervisor
+learns (PR links, release versions, the live proof, what is still open;
+"-" reads it from stdin), and --problem its "Problems found": one line per
+broken function, workaround, follow-up or problem the task met, with its
+evidence and owning repository, or --problem none. beekeeper delivers both
+itself: the supervisor's watch prints the report once (WORKER REPORT) and
+each finding as a line of its own (PROBLEM FOUND), for the supervisor to
+file; the log keeps them (agents.report, agents.problem).`,
 		Args: cobra.NoArgs,
-		RunE: func(*cobra.Command, []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			found, err := problemsFound(problems, finished)
+			if err != nil {
+				return err
+			}
+			if report == "-" {
+				b, err := io.ReadAll(cmd.InOrStdin())
+				if err != nil {
+					return err
+				}
+				report = string(b)
+			}
+			report = strings.TrimSpace(report)
+			if finished && report == "" {
+				return refused("the final report is missing: --report \"<PR links, releases, the live proof, what is still open>\" (or --report - from stdin); beekeeper delivers it to the supervisor")
+			}
 			me, err := a.caller()
 			if err != nil {
 				return err
@@ -214,10 +242,25 @@ desktop's Archived list brings it back).`,
 				if finished {
 					verb = "agents.done"
 				}
-				return []state.Event{event(me, verb, "%s done: %s", ag.Name, ag.LastTask)}, nil
+				evs := []state.Event{event(me, verb, "%s done: %s", ag.Name, ag.LastTask)}
+				if report != "" || len(found) > 0 {
+					st.WorkerReports = append(st.WorkerReports, state.WorkerReport{By: ag.Party, At: a.now.UTC(), Task: ag.LastTask, Text: report, Problems: found})
+				}
+				if report != "" {
+					evs = append(evs, event(me, "agents.report", "%s: %s", ag.Name, report))
+				}
+				for _, p := range found {
+					evs = append(evs, event(me, "agents.problem", "%s: %s", ag.Name, p))
+				}
+				return evs, nil
 			})
 			if err != nil {
 				return err
+			}
+			if report != "" || len(found) > 0 {
+				if _, err := fmt.Fprintf(a.out, "register: the report and %d problem(s) found go to the supervisor's watch\n", len(found)); err != nil {
+					return err
+				}
 			}
 			if finished {
 				_, err = fmt.Fprintf(a.out, "register: %s finished: off the roster and archived once its turn ends\n", me.Name)
@@ -228,6 +271,8 @@ desktop's Archived list brings it back).`,
 		},
 	}
 	idle.Flags().BoolVar(&finished, "done", false, "the work is finished: the doctor removes and archives the agent once idle")
+	idle.Flags().StringVar(&report, "report", "", `the final report for the supervisor, "-" from stdin (required with --done)`)
+	idle.Flags().StringArrayVar(&problems, "problem", nil, `a problem found: one line per broken function, workaround or follow-up, with evidence and owning repository; "none" when there was none (required with --done)`)
 	var keepDesktop bool
 	remove := &cobra.Command{
 		Use:   "remove <agent>",
@@ -275,7 +320,7 @@ archive it. A session its person started is never archived.`,
 	remove.Flags().BoolVar(&keepDesktop, "keep-desktop", false, "leave the agent's desktop session in the sidebar")
 	list := listCmd("List the agents, idle ones first", func() error { return a.agentList(full) })
 	fullFlag(list, &full)
-	c.AddCommand(register, a.agentStartCmd(), a.agentWakeCmd(), a.agentReopenCmd(), a.agentDesktopCmd(), a.agentHandoverCmd(), a.agentNoteCmd(), a.agentBroadcastCmd(), a.agentKeepCmd(), a.agentParkCmd(), a.agentResumeCmd(), assign, idle, remove, list)
+	c.AddCommand(register, a.onHost(a.agentStartCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.onHost(a.agentWakeCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.agentReopenCmd(), a.agentDesktopCmd(), a.agentHandoverCmd(), a.agentNoteCmd(), a.agentBroadcastCmd(), a.agentKeepCmd(), a.agentParkCmd(), a.onHost(a.agentResumeCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.agentArchivableCmd(), assign, idle, remove, list)
 	return c
 }
 
@@ -350,6 +395,34 @@ func reportIdle(ag *state.Agent, now time.Time) {
 	if ag.Task != "" {
 		ag.LastTask, ag.Task, ag.IdleSince = ag.Task, "", now.UTC()
 	}
+}
+
+// noProblems is the answer of a task that found no problem.
+const noProblems = "none"
+
+// problemsFound checks a report's "Problems found": required with --done,
+// "none" alone or one line per finding. It returns the findings.
+func problemsFound(lines []string, finished bool) ([]string, error) {
+	var found []string
+	none := false
+	for _, l := range lines {
+		l = strings.Join(strings.Fields(l), " ")
+		switch {
+		case l == "":
+			return nil, refused("an empty --problem: one line per finding, or --problem none")
+		case strings.EqualFold(l, noProblems):
+			none = true
+		default:
+			found = append(found, l)
+		}
+	}
+	switch {
+	case finished && len(lines) == 0:
+		return nil, refused(`the report's "Problems found" is missing: --problem "<finding, evidence, owning repo>" per broken function, workaround or follow-up the task met, or --problem none`)
+	case none && len(found) > 0:
+		return nil, refused("--problem none next to %d finding(s): drop none", len(found))
+	}
+	return found, nil
 }
 
 func findAgent(st *state.State, q string) (int, error) {

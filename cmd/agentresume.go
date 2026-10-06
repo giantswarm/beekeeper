@@ -133,7 +133,7 @@ func (a *app) resumeOnWait(ctx context.Context, id string) (bool, error) {
 		return false, nil
 	}
 	ag := st.Agents[i]
-	if ag.Task == "" || ag.Done || keptBy(st, ag, a.now) != "" || resumedForTask(ag) ||
+	if ag.Task == "" || ag.Done || pastRun(st, ag.Party, a.now) || keptBy(st, ag, a.now) != "" || resumedForTask(ag) ||
 		parkedOn(waitsOf(st.Records, ag), a.cfg.Guide.Person) != "" {
 		return false, nil
 	}

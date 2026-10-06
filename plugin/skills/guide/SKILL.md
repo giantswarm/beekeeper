@@ -88,10 +88,12 @@ roadmap board shows what is really in progress, blocked, in validation and done.
 - **The guide's context holds only new information.** beekeeper prints a second read as what
   changed, or "no change since"; `--full` only when the whole text is needed. Messages to the
   supervisor are one line.
-- **Hand over at `guide.relayAt`.** At `GUIDE RELAY DUE` the guide runs `beekeeper guide relay`:
+- **Hand over at `guide.relayAt`.** At `GUIDE RELAY DUE` the guide runs `beekeeper guide relay`
+  (still over it `guide.relayGrace` later, the standby watch relays it, `GUIDE RELAYED`):
   beekeeper starts "Guide run N+1" as a fresh session and opens the relay to it. Its headless first
-  turn only takes the role with `beekeeper guide start`; the standby unit then resumes it in its
-  desktop CLI, where it reads `beekeeper guide handover --prompt`, arms `beekeeper guide watch` and
+  turn only takes the role with `beekeeper guide start`. Once that turn ended, the relay prints
+  one SendMessage to the successor's `local_` id: the guide makes exactly that call, which has the
+  desktop start the successor's CLI, where it reads `beekeeper guide handover --prompt`, arms `beekeeper guide watch` and
   acknowledges by name. What is not in beekeeper goes to it by `SendMessage` after that. Once
   `beekeeper guide status` exits 4 here, the guide stops its Monitor, leaves nothing running and
   ends. A relay not taken expires and the guide carries on. After a crash the standby unit starts

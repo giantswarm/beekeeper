@@ -162,6 +162,7 @@ supervisor:                 # what handover --prompt tells the successor supervi
   scope: The desk's sessions, kind labs and merge lanes.   # default: the resources, lanes and installations configured
   relayAt: 400k             # watch says RELAY DUE once the supervisor's context reaches this, at a quiet moment
   relayTTL: 15m             # a relay not taken by the successor's start expires
+  relayGrace: 30m           # still over relayAt this long after RELAY DUE, the standby watch relays the supervisor itself
   restartGrace: 30s         # a CLI back within this of first seen gone is a restart; past it, SUPERVISOR GONE and a fresh successor
   dir: ~/src/desk            # the folder a successor starts in (default: where its predecessor's desktop session started, never its worktree)
 guide:                      # the guide's role: what guide handover --prompt tells its successor, and its relay
@@ -170,12 +171,16 @@ guide:                      # the guide's role: what guide handover --prompt tel
   skill: beekeeper:guide    # the skill its successor runs; or instructions: ~/guide.md; unset, it opens without them
   relayAt: 150k             # guide watch says GUIDE RELAY DUE once the guide's context reaches this
   relayTTL: 15m
+  relayGrace: 30m
   restartGrace: 1m
   dir: ~/src/desk
 agents:                     # the hand-over of registered agents
   relayAt: 400k             # watch says HANDOVER DUE once an agent's context reaches this; default: supervisor.relayAt
   noteWait: 3m              # agents handover waits this long for the agent's note
   staleAfter: 24h           # the doctor takes an idle agent with no CLI running off the roster after this, unless kept (agents keep, a timer that wakes it); 0: never
+  archiveAgreement: ""      # where the person agreed that finished workers' desktop sessions are archived without asking, never their own (quoted to the steward, which confirms each with agents archivable); empty: no steward is asked to archive
+  dir: ~/src/desk           # every agent beekeeper starts runs here (start, handover, a role's successor); empty: the caller's folder
+  roots: [~/src/worktrees]  # with dir set, a --dir is refused unless it is dir or under one of these
   autoResume: false         # the watch resumes a parked agent (agents park --on) with what settled its note or pull request; false: it says AGENT RESUMABLE, agents resume does it by hand
   shell:                    # the agent shell's prelude, written by beekeeper hook sessionstart before each Bash command
     unalias: [grep, find, ls, cp, mv, rm]   # aliases and shell functions removed, so each runs the tool on PATH; []: none
@@ -226,7 +231,7 @@ scan:                       # the value scanner's index (README: What reaches th
 sandbox:                    # the agent sandbox (README: The agent sandbox); beekeeper sandbox render prints the policy
   allowRead: [~/projects, ~/.go, ~/.local/bin]   # re-allowed under the denied home directory: checkouts, toolchains
   allowWrite: [~/projects, ~/.cache, ~/go/pkg/mod]   # writable too: checkouts and worktrees, build and module caches
-  domains: [proxy.golang.org, sum.golang.org, registry.npmjs.org]   # hosts commands reach besides GitHub
+  domains: [proxy.golang.org, sum.golang.org, registry.npmjs.org, 127.0.0.1:6443]   # hosts commands reach besides GitHub; loopback by port only (a kind lab's API server)
   mask:                     # the default: GH_TOKEN and GITHUB_TOKEN, to GitHub's hosts only
     - {name: GH_TOKEN, hosts: [github.com, api.github.com, uploads.github.com]}
 

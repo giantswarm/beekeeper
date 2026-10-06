@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/peer"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -47,7 +48,10 @@ type standbyWatch struct {
 	// turning reports whether a unit of beekeeper's start or wake of
 	// session id runs its headless turn (unitsTurning); nil: none does.
 	turning func(ctx context.Context, id string) bool
-	busy    atomic.Bool
+	// reopening reports whether a unit of beekeeper's start or wake of
+	// session id runs its turn or its reopen (turningUnits); nil: none does.
+	reopening func(ctx context.Context, id string) bool
+	busy      atomic.Bool
 	// guideGap is the term of the gone guide this watch said.
 	guideGap string
 	// starting is the role whose successor is being started, one at a time;
@@ -61,6 +65,14 @@ type standbyWatch struct {
 	// liveTerm run.
 	liveTerm string
 	liveAt   time.Time
+	// overdueNext is when the next relay of a holder over its relayAt may
+	// start, by role name.
+	overdueNext map[string]time.Time
+	// importRow gives a session that runs headless with no desktop row its
+	// row (app.importRowFromWatch); nil: rows are not imported.
+	importRow func(ctx context.Context, id, name string) (string, error)
+	// importing holds the sessions whose import runs, by session id.
+	importing sync.Map
 }
 
 func (a *app) supervisorReopenCmd() *cobra.Command {
@@ -94,7 +106,13 @@ session.`,
 			if err != nil {
 				return err
 			}
-			if err := plat.Opener.Open(cmd.Context(), url, !plat.Opener.Running(t).IsZero()); err != nil {
+			running := !plat.Opener.Running(t).IsZero()
+			if running {
+				if err := a.makeRoom(cmd.Context(), st.Supervisor.HostSession); err != nil {
+					return err
+				}
+			}
+			if err := plat.Opener.Open(cmd.Context(), url, running); err != nil {
 				return err
 			}
 			_, err = fmt.Fprintf(a.out, "opened %q: %s\n", st.Supervisor.Name, url)
@@ -135,10 +153,23 @@ func (a *app) succeedFromWatch(ctx context.Context, rl role, from state.Party) (
 // beekeeper's start or wake, before its CLI shows among the sessions. The
 // reopen after the turn is none: it waits while the desktop's window has
 // the focus, up to reopenAwayWait, so the holder's restart grace covers it
-// and past the grace the standby resumes the holder headless.
-func (w *watcher) firstTurn(ctx context.Context, p state.Party) bool {
-	return p.Session != "" && w.stand.turning != nil && w.stand.turning(ctx, p.Session)
+// and past the grace the standby resumes the holder headless; but a reopen
+// of a holder that asked for a desktop turn (agents desktop) goes ahead at
+// once, and counts.
+func (w *watcher) firstTurn(ctx context.Context, st *state.State, p state.Party) bool {
+	if p.Session == "" {
+		return false
+	}
+	if w.stand.turning != nil && w.stand.turning(ctx, p.Session) {
+		return true
+	}
+	i := agentOfSession(st, p.Session)
+	return i >= 0 && !st.Agents[i].DesktopTurn.IsZero() && w.stand.reopening != nil && w.stand.reopening(ctx, p.Session)
 }
+
+// unitsReopening reports whether a start or wake unit of session id runs
+// its turn or its reopen.
+func unitsReopening(ctx context.Context, id string) bool { return len(turningUnits(ctx, id)) > 0 }
 
 // unitsTurning reports whether a start or wake unit of session id is
 // active or starting: its headless turn runs.
@@ -162,7 +193,7 @@ func sessionUnits(ctx context.Context, id string, stopping bool) []string {
 func (w *watcher) guideGone(ctx context.Context, st *state.State, sessions []*claude.Session) {
 	r := guideRole.get(st)
 	sv := readHolder(r, sessions, w.now, w.cfg.Guide.RestartGrace.Duration)
-	if !sv.down() || relayPending(st, r, w.now) || w.firstTurn(ctx, r.Holder.Party) {
+	if !sv.down() || relayPending(st, r, w.now) || w.firstTurn(ctx, st, r.Holder.Party) {
 		if sv.live {
 			w.stand.guideGap = ""
 			w.upAgain(guideRole, r.Holder.Party)
@@ -291,24 +322,75 @@ func (w *watcher) reviveGone(ctx context.Context, rl role, holder state.Party) s
 	go func() {
 		defer w.stand.inflight.Done()
 		defer w.stand.starting.Store(false)
-		msg := rl.resumeMessage("your headless turn ended and the desktop runs no CLI of yours: this headless turn keeps " + rl.duty)
+		msg := rl.resumeMessage("the desktop runs your CLI now, started by this message: this desktop turn keeps " + rl.duty)
 		if err := w.stand.revive(ctx, rl, holder, msg); err != nil {
-			w.emitNow(rl.name+"-successor", "%sRESUME FAILED: %q has no desktop CLI and did not resume headless: %v", rl.tag, holder.Name, err)
+			w.emitNow(rl.name+"-successor", "%sRESUME FAILED: %q has no desktop CLI and the desktop's send did not start one: %v", rl.tag, holder.Name, err)
 			return
 		}
-		w.emitNow(rl.name+"-successor", "%sRESUME: %q has no desktop CLI: resumed it headless, its turn keeps %s", rl.tag, holder.Name, rl.duty)
+		w.emitNow(rl.name+"-successor", "%sRESUME: %q had no desktop CLI: the desktop's send started one, its turn keeps %s", rl.tag, holder.Name, rl.duty)
 	}()
-	return "; resuming it headless (the desktop runs no CLI of it)"
+	return "; having the desktop start its CLI (it runs none)"
 }
 
 // reviveFromWatch resumes rl's holder headless with msg for the standby
 // watch.
+//
+// The desktop runs the turn: a steward sends msg through the desktop's own
+// session messaging, which starts the holder's desktop CLI at once, whatever
+// the window's focus, the person's typing or the desktop's cap of CLIs. A
+// holder runs no headless turn: its row in the desktop is where the person
+// sees the role, and a headless turn that keeps a watch never hands it to a
+// desktop CLI.
 func (a *app) reviveFromWatch(ctx context.Context, _ role, holder state.Party, msg string) error {
-	q := holder.Session
-	if q == "" {
-		q = holder.Name
+	if holder.Session == "" {
+		return fmt.Errorf("%s has no session id to reach", holder.Name)
 	}
-	return a.wakeAgent(ctx, watchParty, q, msg, "")
+	host := "local_" + holder.Session
+	if !a.hasRow(holder.Session) {
+		return fmt.Errorf("%s has no row in the desktop yet (its import is pending): the next gap tries again", holder.Name)
+	}
+	running := func() bool {
+		sessions, _, err := a.sessions()
+		if err != nil {
+			return false
+		}
+		_, ok := claude.Live(sessions, holder)
+		return ok
+	}
+	_, err := a.sendThroughDesktop(ctx, host, msg, running)
+	return err
+}
+
+// sendThroughDesktop has a steward send msg to the desktop session host,
+// which runs no CLI, through the desktop's session messaging: the desktop
+// starts host's CLI at once with msg as its turn, whatever the window's
+// focus, the person's typing or its cap. running reports host's CLI up. The
+// send starts a CLI, so the desktop stays under its cap first, and the
+// steward asked keeps its own CLI.
+func (a *app) sendThroughDesktop(ctx context.Context, host, msg string, running func() bool) (steward, error) {
+	find := func(ctx context.Context, tried []string) (steward, error) {
+		s, err := a.findSteward(host, append(tried, host))
+		if err != nil {
+			return s, err
+		}
+		return s, a.makeRoom(ctx, host, s.host)
+	}
+	return delegate(ctx, find, func(steward) string { return sendRequest(host, msg) }, running, a.peerSend, sendWait)
+}
+
+// sendWait bounds how long a steward's send takes to start a session's
+// desktop CLI.
+const sendWait = 2 * time.Minute
+
+// sendTool is the desktop's session messaging tool.
+const sendTool = "mcp__ccd_session_mgmt__send_message"
+
+// sendRequest is the message that has a steward send msg to the desktop
+// session host, a session beekeeper started that runs no CLI.
+func sendRequest(host, msg string) string {
+	return fmt.Sprintf(stewardPreamble+"the session %s, which beekeeper started, runs no CLI, and only the desktop's session messaging starts one. "+
+		"Call %s once with session_id %q and the message below, word for word, then end the turn without another tool call and without a reply.\n\n%s",
+		host, sendTool, host, msg)
 }
 
 // noteFailedSuccessor files the one note for the person on rl's first
@@ -342,24 +424,74 @@ func (w *watcher) noteFailedSuccessor(rl role, holder state.Party) int {
 // the relay beekeeper opens to it, so a repeated poll and a restarted watch
 // see the relay and start none. It returns what the GONE line adds.
 func (w *watcher) succeedGone(ctx context.Context, rl role, holder state.Party) string {
-	if w.stand.succeed == nil {
-		return ""
-	}
-	if !w.stand.starting.CompareAndSwap(false, true) {
-		return successorStarting
-	}
-	w.stand.inflight.Add(1)
-	go func() {
-		defer w.stand.inflight.Done()
-		defer w.stand.starting.Store(false)
-		to, err := w.stand.succeed(ctx, rl, holder)
+	started := w.succeedAsync(ctx, rl, holder, func(to state.Party, err error) {
 		if err != nil {
 			w.emitNow(rl.name+"-successor", "%sSUCCESSOR FAILED: %q is gone and its successor did not start: %v", rl.tag, holder.Name, err)
 			return
 		}
 		w.emitNow(rl.name+"-successor", "%sSUCCESSOR: started %q, whose `beekeeper %s start` takes the role from the gone %q", rl.tag, to.Name, rl.name, holder.Name)
-	}()
+	})
+	switch {
+	case w.stand.succeed == nil:
+		return ""
+	case !started:
+		return successorStarting
+	}
 	return "; starting its successor"
+}
+
+// succeedAsync starts rl's next run after holder outside the poll, one at a
+// time, and hands done the outcome. It reports whether the start began:
+// none does without stand.succeed or while another runs.
+func (w *watcher) succeedAsync(ctx context.Context, rl role, holder state.Party, done func(state.Party, error)) bool {
+	if w.stand.succeed == nil || !w.stand.starting.CompareAndSwap(false, true) {
+		return false
+	}
+	w.stand.inflight.Add(1)
+	go func() {
+		defer w.stand.inflight.Done()
+		defer w.stand.starting.Store(false)
+		done(w.stand.succeed(ctx, rl, holder))
+	}()
+	return true
+}
+
+// relayOverdue relays rl's live holder that stayed over its relayAt for
+// relayGrace after its relay due (standby watch): it starts the successor
+// as the holder's own relay does, and the successor's start takes the role.
+// The hand-over is no one's decision. A role that takes the grants waits
+// for a quiet moment; a start that did not begin or failed is tried again
+// after successorBackoff.
+func (w *watcher) relayOverdue(ctx context.Context, rl role, st *state.State, sessions []*claude.Session) {
+	cfg, r := rl.cfg(w.cfg), rl.get(st)
+	if !pastRelayGrace(r, cfg, w.now) || w.now.Before(w.stand.overdueNext[rl.name]) {
+		return
+	}
+	c := sessionContext(sessions, r.Holder.Party, w.now)
+	if c < int64(cfg.RelayAt) || (rl.grants && w.busyNow(ctx, st) != "") {
+		return
+	}
+	if w.stand.overdueNext == nil {
+		w.stand.overdueNext = map[string]time.Time{}
+	}
+	w.stand.overdueNext[rl.name] = w.now.Add(successorBackoff)
+	holder, since := r.Holder.Party, clock(w.now, r.RelayDue.Reported)
+	w.succeedAsync(ctx, rl, holder, func(to state.Party, err error) {
+		if err != nil {
+			w.emitNow(rl.name+"-relayed", "%sRELAY FAILED: %q is at %s tokens of context, over %s since its relay due at %s, and its successor did not start: %v",
+				rl.tag, holder.Name, tokensText(c), tokensText(int64(cfg.RelayAt)), since, err)
+			return
+		}
+		w.emitNow(rl.name+"-relayed", "%sRELAYED: %q is at %s tokens of context, over %s since its relay due at %s: started %q, whose `beekeeper %s start` takes the role",
+			rl.tag, holder.Name, tokensText(c), tokensText(int64(cfg.RelayAt)), since, to.Name, rl.name)
+	})
+}
+
+// pastRelayGrace reports whether r's holder was told its relay due at the
+// configured relayAt at least relayGrace ago, with no relay open.
+func pastRelayGrace(r state.Role, cfg config.Role, now time.Time) bool {
+	return r.Holder != nil && !r.Relay.Open(now) && r.RelayDue.At(r.Holder, int64(cfg.RelayAt)) &&
+		!now.Before(r.RelayDue.Reported.Add(cfg.RelayGrace.Duration))
 }
 
 // reopenAfterAppStart opens the gone supervisor's row once when the desktop

@@ -141,14 +141,17 @@ func (c *CLI) Of(sup *Supervisor) bool {
 }
 
 // RelayDue is the watch's memory that it reported the relay due to the
-// supervisor's term Supervisor and Since, once: a relay cancelled or
-// expired removes it, so the next quiet moment reports it again.
+// supervisor's term Supervisor and Since at RelayAt: a relay cancelled or
+// expired removes it, so the next quiet moment reports it again, and a
+// changed relayAt reports it anew.
 type RelayDue struct {
 	Supervisor Party     `json:"supervisor"`
 	Since      time.Time `json:"since"`
 	Reported   time.Time `json:"reported"`
 	// Context is the supervisor's context in tokens when it was reported.
 	Context int64 `json:"contextTokens"`
+	// RelayAt is the relayAt in tokens it was reported at.
+	RelayAt int64 `json:"relayAt,omitempty"`
 
 	rest rest
 }
@@ -156,6 +159,11 @@ type RelayDue struct {
 // Of reports whether the record is about sup's current term.
 func (r *RelayDue) Of(sup *Supervisor) bool {
 	return r != nil && sup != nil && r.Supervisor.Is(sup.Party) && r.Since.Equal(sup.Since)
+}
+
+// At reports whether the record is about sup's current term at relayAt.
+func (r *RelayDue) At(sup *Supervisor, relayAt int64) bool {
+	return r.Of(sup) && r.RelayAt == relayAt
 }
 
 // Role is a relayed role's record: its holder and term, its last relay,
@@ -301,6 +309,9 @@ type Park struct {
 	// a person's answer word for word or the pull request's state.
 	Resumable time.Time `json:"resumable,omitzero"`
 	Answer    string    `json:"answer,omitempty"`
+	// Told is when the supervisor's watch said the park waits on a person;
+	// zero: not yet, or it waits on no person.
+	Told time.Time `json:"told,omitzero"`
 
 	rest rest
 }
@@ -432,8 +443,42 @@ type Timer struct {
 	// runs, its exit code logged. Without either the watch's line says it.
 	Wake string `json:"wake,omitempty"`
 	Run  string `json:"run,omitempty"`
+	// Repeat re-arms a timer that wakes or runs at the same local time:
+	// daily, weekdays (Monday to Friday) or weekly. Such a timer stays open
+	// until marked done.
+	Repeat string `json:"repeat,omitempty"`
 
 	rest rest
+}
+
+// The values of Timer.Repeat.
+const (
+	RepeatDaily    = "daily"
+	RepeatWeekdays = "weekdays"
+	RepeatWeekly   = "weekly"
+)
+
+// Repeats are the values of Timer.Repeat.
+var Repeats = []string{RepeatDaily, RepeatWeekdays, RepeatWeekly}
+
+// Next is the first time after now the repeating timer is due again, at its
+// local time of day: a day or a week on, a weekday timer skipping the weekend.
+func (t Timer) Next(now time.Time) time.Time {
+	next := t.Due.Local()
+	for !next.After(now) || t.Repeat == RepeatWeekdays && Weekend(next) {
+		if t.Repeat == RepeatWeekly {
+			next = next.AddDate(0, 0, 7)
+		} else {
+			next = next.AddDate(0, 0, 1)
+		}
+	}
+	return next.UTC()
+}
+
+// Weekend reports whether t falls on a Saturday or a Sunday.
+func Weekend(t time.Time) bool {
+	d := t.Weekday()
+	return d == time.Saturday || d == time.Sunday
 }
 
 // Auto reports whether the watch acts on the timer itself and closes it
@@ -520,6 +565,16 @@ type Archive struct {
 	// Tries counts the stewards' turns asked for it, Tried the last.
 	Tries int       `json:"tries,omitempty"`
 	Tried time.Time `json:"tried,omitzero"`
+
+	rest rest
+}
+
+// Decline is a steward's answer to an archive request that archived
+// nothing: its desktop session, when, and the first line of its reply.
+type Decline struct {
+	Host string    `json:"host"`
+	At   time.Time `json:"at"`
+	Why  string    `json:"why"`
 
 	rest rest
 }
@@ -653,6 +708,12 @@ type State struct {
 	// ArchivesSeeded says the doctor owed the archives of the finished
 	// workers whose desktop CLI ran on before it kept Archives.
 	ArchivesSeeded bool `json:"archivesSeeded,omitempty"`
+	// FinishedSeeded says the doctor owed the archives of all finished
+	// workers whose desktop record stayed unarchived, a CLI running or not.
+	FinishedSeeded bool `json:"finishedSeeded,omitempty"`
+	// Declines are the stewards that declined an archive request, which
+	// the doctor asks for none for a while.
+	Declines []Decline `json:"declines,omitempty"`
 	// BudgetETag makes the budget probe a conditional request (a 304
 	// costs no budget).
 	BudgetETag string `json:"budgetETag,omitempty"`
@@ -675,6 +736,23 @@ type State struct {
 	// StaleWriters are the processes of an older beekeeper seen saving the
 	// state after a newer one, one per process while it runs.
 	StaleWriters []StaleWriter `json:"staleWriters,omitempty"`
+	// WorkerReports are the reports workers finished with (agents idle
+	// --done) that the supervisor's watch has not printed yet.
+	WorkerReports []WorkerReport `json:"workerReports,omitempty"`
+
+	rest rest
+}
+
+// WorkerReport is the report a worker finished its task with: what it
+// delivered and the problems it found (broken functions, ways around them,
+// follow-ups). The supervisor's watch prints it once and drops it; the event
+// log keeps it (agents.report, agents.problem).
+type WorkerReport struct {
+	By       Party     `json:"by"`
+	At       time.Time `json:"at"`
+	Task     string    `json:"task,omitempty"`
+	Text     string    `json:"text"`
+	Problems []string  `json:"problems,omitempty"`
 
 	rest rest
 }
@@ -711,8 +789,31 @@ type Budget struct {
 	Limit     int       `json:"limit"`
 	Reset     time.Time `json:"reset"`
 	At        time.Time `json:"at"`
+	// GraphQL is the last reading of the GraphQL limit; nil before the
+	// first.
+	GraphQL *GraphQL `json:"graphql,omitempty"`
 
 	rest rest
+}
+
+// GraphQL is one reading of the GitHub GraphQL limit.
+type GraphQL struct {
+	Remaining int `json:"remaining"`
+	Limit     int `json:"limit"`
+	// Reset is when a refusal ends; zero when GitHub named no time.
+	Reset time.Time `json:"reset,omitzero"`
+	// Refused is GitHub's words while it refused GraphQL calls.
+	Refused   string    `json:"refused,omitempty"`
+	Secondary bool      `json:"secondary,omitempty"`
+	At        time.Time `json:"at"`
+
+	rest rest
+}
+
+// Blocks says the reading's refusal still holds at now: one without a
+// reset holds until a reading says otherwise.
+func (g *GraphQL) Blocks(now time.Time) bool {
+	return g != nil && g.Refused != "" && (g.Reset.IsZero() || now.Before(g.Reset))
 }
 
 // The phases of a Merge.
@@ -892,15 +993,20 @@ const VerbStaleWriter = "state.stale-writer"
 // stamp records the binary as the state's writer, unless a newer one wrote
 // it: then the save goes on with the fields this binary does not know kept,
 // and its process is recorded and logged once as a stale writer. A build
-// without a release version (dev) neither stamps nor judges.
+// without a release version (dev, a release candidate, a +dirty branch
+// build) neither stamps nor judges, and a stamp of one is overwritten by
+// the next release that saves.
 func (s *FileStore) stamp(st *State, now time.Time) []Event {
-	own, err := semver.NewVersion(s.version)
-	if err != nil {
+	own, ok := release(s.version)
+	if !ok {
 		return nil
 	}
-	st.StaleWriters = slices.DeleteFunc(st.StaleWriters, func(w StaleWriter) bool { return !proc.Alive(w.PID) })
+	st.StaleWriters = slices.DeleteFunc(st.StaleWriters, func(w StaleWriter) bool {
+		_, newer := release(w.Newer)
+		return !newer || !proc.Alive(w.PID)
+	})
 	if st.Writer != nil {
-		if newer, err := semver.NewVersion(st.Writer.Version); err == nil && own.LessThan(newer) {
+		if newer, ok := release(st.Writer.Version); ok && own.LessThan(newer) {
 			pid := os.Getpid()
 			if slices.ContainsFunc(st.StaleWriters, func(w StaleWriter) bool { return w.PID == pid && w.Version == s.version }) {
 				return nil
@@ -912,6 +1018,15 @@ func (s *FileStore) stamp(st *State, now time.Time) []Event {
 	}
 	st.Writer = &Writer{Version: s.version, rest: writerRest(st.Writer)}
 	return nil
+}
+
+// release is v as a release version: no prerelease, no build metadata.
+func release(v string) (*semver.Version, bool) {
+	r, err := semver.NewVersion(v)
+	if err != nil || r.Prerelease() != "" || r.Metadata() != "" {
+		return nil, false
+	}
+	return r, true
 }
 
 func writerRest(w *Writer) rest {

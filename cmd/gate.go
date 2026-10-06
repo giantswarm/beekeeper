@@ -159,6 +159,9 @@ type gateRun struct {
 }
 
 func (a *app) gate(ctx context.Context, argv []string, wait time.Duration, queued bool) error {
+	if inSandbox() {
+		return a.gateBrokered(argv, wait, queued)
+	}
 	repo, pr, ok := parseGated(argv)
 	if !ok {
 		if a.store != nil && merge.ParseOwned(argv) {

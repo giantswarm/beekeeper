@@ -27,7 +27,7 @@ func policy(t *testing.T) (Policy, string) {
 		}
 	}
 	cfg := config.Sandbox{AllowRead: []string{filepath.Join(home, "projects")}, AllowWrite: []string{filepath.Join(home, "go/pkg/mod")},
-		Domains: []string{"muster.example.com"}, Mask: []config.SandboxMask{{Name: "GH_TOKEN", Hosts: config.GitHubHosts}}}
+		Domains: []string{"muster.example.com"}, ProxyPort: 3190}
 	return New(cfg, Paths{Home: home, ConfigFile: filepath.Join(home, ".config/beekeeper/config.yaml"),
 		StateDir: filepath.Join(home, ".local/state/beekeeper"), LeaseDir: filepath.Join(home, ".local/state/beekeeper/leases"),
 		SlotDir: filepath.Join(home, ".local/state/memcap/slots"), Exe: filepath.Join(home, ".go/bin/beekeeper"),
@@ -49,10 +49,8 @@ func TestSettings(t *testing.T) {
 				AllowedDomains          []string
 				AllowManagedDomainsOnly bool
 				AllowAllUnixSockets     bool
-				TLSTerminate            map[string]any
-			}
-			Credentials struct {
-				EnvVars []struct{ Name, Mode string }
+				HTTPProxyPort           int
+				SOCKSProxyPort          int
 			}
 		}
 		Hooks struct {
@@ -69,8 +67,8 @@ func TestSettings(t *testing.T) {
 	if !slices.Equal(sb.Filesystem.DenyRead, []string{"~/", "~/.local/state/beekeeper/scan"}) {
 		t.Errorf("denyRead = %v, want the home directory and the scanner's", sb.Filesystem.DenyRead)
 	}
-	if !slices.Equal(sb.Filesystem.DenyWrite, []string{"~/.local/state/beekeeper/scan"}) {
-		t.Errorf("denyWrite = %v, want the scanner's directory", sb.Filesystem.DenyWrite)
+	if !slices.Equal(sb.Filesystem.DenyWrite, []string{"~/.local/state/beekeeper/scan", "~/.claude"}) {
+		t.Errorf("denyWrite = %v, want the scanner's directory and the harness's", sb.Filesystem.DenyWrite)
 	}
 	for _, want := range []string{"~/projects", "~/.go/bin", "~/.config/beekeeper", "~/.claude/projects"} {
 		if !slices.Contains(sb.Filesystem.AllowRead, want) {
@@ -86,12 +84,9 @@ func TestSettings(t *testing.T) {
 		!slices.Contains(sb.Filesystem.AllowWrite, "~/.local/state/memcap/slots") {
 		t.Errorf("allowWrite = %v", sb.Filesystem.AllowWrite)
 	}
-	if !sb.Network.AllowManagedDomainsOnly || sb.Network.AllowAllUnixSockets || sb.Network.TLSTerminate == nil || !slices.Contains(sb.Network.AllowedDomains, "muster.example.com") ||
+	if !sb.Network.AllowManagedDomainsOnly || sb.Network.AllowAllUnixSockets || sb.Network.HTTPProxyPort != 3190 || sb.Network.SOCKSProxyPort != 3190 || !slices.Contains(sb.Network.AllowedDomains, "muster.example.com") ||
 		!slices.Contains(sb.Network.AllowedDomains, "api.github.com") && !slices.Contains(sb.Network.AllowedDomains, "*.github.com") {
 		t.Errorf("network = %+v", sb.Network)
-	}
-	if len(sb.Credentials.EnvVars) != 1 || sb.Credentials.EnvVars[0].Name != "GH_TOKEN" || sb.Credentials.EnvVars[0].Mode != "mask" {
-		t.Errorf("credentials = %+v", sb.Credentials)
 	}
 	if len(s.Hooks.PreToolUse) != 1 || s.Hooks.PreToolUse[0].Matcher != "Read|Grep|Glob|Edit|MultiEdit|Write|NotebookEdit" {
 		t.Errorf("hooks = %+v", s.Hooks)

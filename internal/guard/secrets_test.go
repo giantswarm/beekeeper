@@ -1,20 +1,23 @@
 package guard
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 // The safe forms a refusal names.
 const (
-	keysForm   = "jq '.data|keys'"
-	lengthForm = "base64 -d | wc -c"
-	sopsForm   = "sops runs only in beekeeper"
-	opForm     = "op run -- <command>"
-	cryptForm  = "Decryption runs only in beekeeper"
-	vaultForm  = "vault kv metadata get"
-	renderForm = "yq 'del(.data, .stringData)'"
-	fileForm   = "yq '.data|keys' <file>"
+	keysForm    = "jq '.data|keys'"
+	lengthForm  = "base64 -d | wc -c"
+	sopsForm    = "sops runs only in beekeeper"
+	opForm      = "op runs only in beekeeper"
+	cryptForm   = "Decryption runs only in beekeeper"
+	vaultForm   = "vault kv metadata get"
+	renderForm  = "yq 'del(.data, .stringData)'"
+	fileForm    = "yq '.data|keys' <file>"
+	keyringForm = "The keyring's entries are the person's"
 )
 
 // The forms a refusal never offers: plaintext files and unkeyed hashes.
@@ -117,11 +120,25 @@ var secretCorpus = []struct{ cmd, safe string }{
 	{"op document get kubeconfig", opForm},
 	{"op inject -i tpl.yaml", opForm},
 	{"op run --no-masking -- env", opForm},
-	{"op run -- sops -d x.yaml", sopsForm},
+	{"op run -- sops -d x.yaml", opForm},
 	{"op run -- op read op://v/i/f", opForm},
-	{"op run -- kubectl get secret app -o yaml", keysForm},
-	{"op run -- bash -c 'kubectl get secret app -o yaml'", keysForm},
-	{"op run -- helm template app ./chart -f secrets.yaml", renderForm},
+	{"op run -- kubectl get secret app -o yaml", opForm},
+	{"op run -- make test", opForm},
+	{"op run --env-file .env -- make test", opForm},
+	{"op run -- kubectl get secret app -o json | jq '.data|keys'", opForm},
+	{"K=op://Employee/x/credential op run -- sh -c 'printenv K | kubectl --context kind-agentlab apply -f -'", opForm},
+	{"secret-tool lookup service x account y", keyringForm},
+	{"secret-tool search --all service x", keyringForm},
+	{"security find-generic-password -s x -w", keyringForm},
+	{"bash -c op\\ whoami", opForm},
+	{"zsh -ic 'op whoami'", opForm},
+	{"eval op whoami", opForm},
+	{`eval "$(op signin)"`, "signs in by itself"},
+	{"f(){ op item get x; }; f", opForm},
+	{"function f { op item get x; }; f", opForm},
+	{"if true; then op item get x; fi", opForm},
+	{"{ op item get x; }", opForm},
+	{"(op item get x)", opForm},
 	{"op item list --vault x", opForm},
 	{"op item get app", opForm},
 	{"op item get app --fields label=password --reveal", opForm},
@@ -199,7 +216,6 @@ var secretCorpus = []struct{ cmd, safe string }{
 	{"kubectl get secret app -n a -o yaml | kubectl apply -n b -f -", ""},
 	{"kubectl get secret app -n a -o yaml | kubectl --context b -n c apply -f -", ""},
 	{"kubectl get secret app -n a -o yaml | kubectl --kubeconfig=k replace --force -f -", ""},
-	{"K=op://Employee/x/credential op run -- sh -c 'printenv K | kubectl --context kind-agentlab -n kagent create secret generic s --from-file=K=/dev/stdin --dry-run=client -o yaml | kubectl --context kind-agentlab apply -f -'", ""},
 	{"kubectl create secret generic x --from-literal=a=b --dry-run=client -o yaml | kubectl apply -f -", ""},
 	{`kc(){ kubectl --context a "$@"; }; kc get secret app -o json | jq '.data|keys'`, ""},
 	{"kubectl get configmap x -o yaml", ""},
@@ -213,10 +229,6 @@ var secretCorpus = []struct{ cmd, safe string }{
 	{"vault kv get -format=json secret/app | jq '.data.data|keys'", ""},
 	{"vault kv metadata get secret/app", ""},
 	{"echo aGk= | base64 -d", ""},
-	{"op run -- make test", ""},
-	{"op run --env-file .env -- make test", ""},
-	{"op-unlock && op run -- ./scripts/release.sh", ""},
-	{"op run -- kubectl get secret app -o json | jq '.data|keys'", ""},
 	{"helm template app ./chart -f values.yaml", ""},
 	{"helm template app ./chart -f secrets.yaml | yq 'del(.data, .stringData)'", ""},
 	{"helm template app ./chart -f secrets.yaml | yq '.data |= keys | .stringData |= keys' > out.yaml", ""},
@@ -268,6 +280,112 @@ func TestSecretGuardCorpus(t *testing.T) {
 					t.Errorf("%q: the refusal offers %q:\n%s", c.cmd, f, d.Reason)
 				}
 			}
+		}
+	}
+}
+
+// Every vault sign-in or unlock is refused in an agent session, however the
+// command line reaches it: the person's helpers by name or path, op's own
+// sign-ins, through a shell string, eval, a function, a script.
+func TestSecretGuardRefusesVaultUnlocks(t *testing.T) {
+	const helper = "vault-unlock"
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"signin.sh": "#!/bin/sh\nset -e\neval \"$(op signin --account team)\"\n",
+		"helper.sh": "#!/bin/sh\n" + helper + "\n",
+		"nested.sh": "#!/bin/sh\nbash ./signin.sh\n",
+		"build.sh":  "#!/bin/sh\ngo build ./...\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := hook()
+	h.UnlockCommands = []string{helper}
+	for cmd, refused := range map[string]bool{
+		"vault-unlock":                       true,
+		"vault-unlock lock":                  true,
+		"~/bin/vault-unlock":                 true,
+		"command vault-unlock":               true,
+		"zsh -ic vault-unlock":               true,
+		"bash -c vault-unlock":               true,
+		"zsh -c 'vault-unlock && make test'": true,
+		"eval vault-unlock":                  true,
+		"timeout 30 vault-unlock":            true,
+		"op signin":                          true,
+		"op signin --account team --raw":     true,
+		"op --account team signin":           true,
+		"op account add --address x":         true,
+		`eval "$(op signin --account team)"`: true,
+		"f(){ op signin; }; f":               true,
+		"beekeeper secret unlock":            true,
+		"bash signin.sh":                     true,
+		"sh ./helper.sh":                     true,
+		"./signin.sh":                        true,
+		dir + "/signin.sh":                   true,
+		"bash nested.sh":                     true,
+		"source signin.sh":                   true,
+		". ./helper.sh":                      true,
+		"bash build.sh":                      false,
+		"./build.sh":                         false,
+		"echo vault-unlock":                  false,
+		"grep -rn vault-unlock .":            false,
+		"beekeeper secret fingerprint op://Shared/item/password":   false,
+		"git commit -m 'guard: refuse op signin and vault-unlock'": false,
+	} {
+		d := decide(t, h, dir, cmd, nil)
+		got := d != nil && d.PermissionDecision == decisionDeny
+		switch {
+		case got != refused:
+			t.Errorf("%q: refused %v, want %v: %+v", cmd, got, refused, d)
+		case refused && !strings.Contains(d.Reason, "beekeeper secret") || refused && strings.Contains(d.Reason, "op run --"):
+			t.Errorf("%q: the refusal names no beekeeper secret, or offers op run:\n%s", cmd, d.Reason)
+		}
+	}
+	for _, cmd := range []string{helper, "op signin", "zsh -ic vault-unlock", "./signin.sh"} {
+		if d := decide(t, h, dir, cmd, nil); !strings.Contains(d.Reason, "signs in by itself") || strings.Contains(d.Reason, "beekeeper secret unlock") {
+			t.Errorf("%q: the refusal does not name the broker's sign-in, or sends the person to a terminal:\n%s", cmd, d.Reason)
+		}
+	}
+}
+
+// Every op call is refused in an agent session, however the command line
+// reaches it: op runs in beekeeper's broker alone.
+func TestSecretGuardRefusesOp(t *testing.T) {
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"whoami.sh": "#!/bin/sh\nop whoami\n",
+		"nested.sh": "#!/bin/sh\nsh ./whoami.sh\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, cmd := range []string{
+		"op whoami",
+		"op vault list",
+		"/usr/bin/op whoami",
+		"OP_ACCOUNT=team op whoami",
+		"env OP_ACCOUNT=team op vault list",
+		"command op whoami",
+		"exec op whoami",
+		"sudo -u teemow op whoami",
+		"timeout 30 op whoami",
+		"nohup op whoami",
+		"setsid op whoami",
+		"echo x | xargs op whoami",
+		"bash -c 'op whoami'",
+		"zsh -ic 'op vault list'",
+		"eval 'op whoami'",
+		"echo $(op whoami)",
+		"f(){ op whoami; }; f",
+		"sh whoami.sh",
+		"./nested.sh",
+		"source whoami.sh",
+	} {
+		d := decide(t, hook(), dir, cmd, nil)
+		if d == nil || d.PermissionDecision != decisionDeny {
+			t.Errorf("%q is not refused: %+v", cmd, d)
 		}
 	}
 }

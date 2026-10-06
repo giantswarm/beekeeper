@@ -27,8 +27,8 @@ import (
 func (a *app) agentWakeCmd() *cobra.Command {
 	var mode string
 	c := &cobra.Command{
-		Use:   "wake <agent> <message>",
-		Short: "Message an agent, starting its CLI headless when none runs: no desktop cap",
+		Use:   agentWakeName + " <agent> <message>",
+		Short: "Message an agent, starting its desktop CLI when none runs (headless where the desktop cannot)",
 		Long: `wake delivers a message to a registered agent without Claude Desktop's
 route, whose cap pauses a session's messages to local_ ids after ten sends
 since its person last typed in it.
@@ -40,7 +40,12 @@ refused: nothing resumes it.
 A session whose CLI runs gets the message by name, as SendMessage by name
 does: it queues and runs at the session's next tool call or as its next turn.
 A session with no running CLI (after a reboot, a crash, the desktop's idle
-drop) is resumed from the command line: "claude -p --resume <id>" with the
+drop) and a row in the running desktop gets the message as a desktop turn:
+a steward's send through the desktop's session messaging starts its desktop
+CLI with it, under the desktop's cap (beekeeper ends one of its own finished
+or parked workers' CLIs first). Only where the desktop cannot run the turn
+(it does not run, the session has no row, no steward took the send) wake
+says why, and the session is resumed from the command line: "claude -p --resume <id>" with the
 message as its turn, in the session's directory, permission mode (a
 start's bypassPermissions, else the mode the desktop recorded for it;
 --permission-mode overrides) and the model the desktop recorded for it, in a transient user unit beekeeper-wake-<id>-<wake>
@@ -116,6 +121,19 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 	if u := wakeRunning(ctx, w.id); u != "" {
 		return refused("%s: its wake turn %s is starting and not yet reachable by name: send again in a minute", ag.Name, u)
 	}
+	if line, err := a.turnInDesktop(ctx, w, msg, 0); err == nil {
+		_ = a.store.Log(event(by, "agents.wake", "%s: %s", ag.Name, line))
+		_, err = fmt.Fprintf(a.out, "wake: %s: %s\n", ag.Name, line)
+		return err
+	} else if _, err := fmt.Fprintf(a.out, "wake: %s gets no desktop turn (%v): its turn runs headless\n", ag.Name, err); err != nil {
+		return err
+	}
+	return a.resumeTurn(ctx, by, w, msg)
+}
+
+// resumeTurn resumes the session w headless with msg as its turn, in a
+// transient user unit whose end shows it in the desktop for a moment.
+func (a *app) resumeTurn(ctx context.Context, by state.Party, w wakeTarget, msg string) error {
 	unit := wakeUnit(w.id)
 	bin, err := exec.LookPath("claude")
 	if err != nil {
@@ -130,15 +148,53 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 		stopPost = []string{self, agentsName, reopenName, w.host}
 	}
 	if err := launch(unit, w.dir, a.explicitConfig(), stopPost, wakeArgv(bin, w, msg)); err != nil {
-		return fmt.Errorf("waking %s: %w", ag.Name, err)
+		return fmt.Errorf("waking %s: %w", w.name, err)
 	}
-	_ = a.store.Log(event(by, "agents.wake", "%s: resumed session %s headless in %s, %s (%s)", ag.Name, w.id, w.dir, w.mode, unit))
+	_ = a.store.Log(event(by, "agents.wake", "%s: resumed session %s headless in %s, %s (%s)", w.name, w.id, w.dir, w.mode, unit))
 	_, err = fmt.Fprintf(a.out, "wake: %s had no running CLI: resumed session %s headless in %s, %s, with the message as its turn (journalctl --user -u %s)\n",
-		ag.Name, w.id, w.dir, w.mode, unit)
+		w.name, w.id, w.dir, w.mode, unit)
 	if err == nil && w.host != "" {
 		_, err = fmt.Fprintf(a.out, "once the turn ends, %s is shown in the desktop for a moment, which warms its desktop CLI; the moment waits while the desktop's window has the focus\n", w.host)
 	}
 	return err
+}
+
+// turnInDesktop has the desktop run msg as a turn of the session w, whose
+// row the person sees it run in: its desktop CLI, when one runs or the
+// desktop warms one within warm, takes msg by its socket; else a steward's
+// send through the desktop's session messaging starts one with msg (the
+// route a relay revives a role holder by). It returns how, one line; an
+// error when the desktop cannot run the turn (it does not run, the session
+// has no row, no steward took the send), whose turn then runs headless.
+func (a *app) turnInDesktop(ctx context.Context, w wakeTarget, msg string, warm time.Duration) (string, error) {
+	if w.host == "" || !strings.HasPrefix(w.host, "local_") {
+		return "", errors.New("it has no desktop session")
+	}
+	if _, ok := claude.ReadRecord(a.cfg, w.host); !ok {
+		return "", fmt.Errorf("%s has no row in the desktop", w.host)
+	}
+	t, err := plat.Machine.Processes()
+	if err != nil {
+		return "", err
+	}
+	if plat.Opener.Running(t).IsZero() {
+		return "", errors.New("the desktop does not run")
+	}
+	if sock := desktopSocketWithin(ctx, w.id, warm); sock != "" {
+		if err := a.peerSend(ctx, "uds:"+sock, msg); err != nil {
+			return "", fmt.Errorf("sending to its desktop CLI: %w", err)
+		}
+		return fmt.Sprintf("its desktop CLI took the message as its turn, in the desktop's row %s", w.host), nil
+	}
+	running := func() bool {
+		t, err := plat.Machine.Processes()
+		return err == nil && desktopTwin(t, w.id) != nil
+	}
+	s, err := a.sendThroughDesktop(ctx, w.host, msg, running)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s had the desktop start its CLI with the message as its turn, in the desktop's row %s", s.who(w.host), w.host), nil
 }
 
 // wakeOmp writes msg to the inbox of the omp agent ag, started under id.

@@ -2,7 +2,9 @@ package guard
 
 import (
 	"encoding/json"
+	"maps"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -75,4 +77,48 @@ func globRoot(pat string) string {
 		}
 	}
 	return pat
+}
+
+// labProxy puts the refresh of the session's lab kubeconfigs in front of a
+// sandboxed session's command, after the hook's own rewrites: the sandbox
+// reaches a lab's API server only through its SOCKS proxy, whose
+// credentials change with every Claude Code process, so the kubeconfig in
+// the lease is pointed at this process's proxy before the command runs.
+// out is the hook's answer so far; a refused call stays refused.
+func (h Hook) labProxy(ev event, out []byte) []byte {
+	if ev.ToolName != bashTool || h.Sandbox == nil || h.Labs == nil {
+		return out
+	}
+	var labs []string
+	for _, l := range h.Labs() {
+		if heldBy(l, ev.Session) {
+			labs = append(labs, ShellQuote(l.Env))
+		}
+	}
+	if len(labs) == 0 {
+		return out
+	}
+	slices.Sort(labs)
+	input := ev.ToolInput
+	var d hookOutput
+	if out != nil {
+		var o map[string]hookOutput
+		if json.Unmarshal(out, &o) != nil {
+			return out
+		}
+		if d = o["hookSpecificOutput"]; d.PermissionDecision == decisionDeny {
+			return out
+		}
+		if d.UpdatedInput != nil {
+			input = d.UpdatedInput
+		}
+	}
+	cmd, _ := input["command"].(string)
+	if strings.TrimSpace(cmd) == "" {
+		return out
+	}
+	d.UpdatedInput = maps.Clone(input)
+	d.UpdatedInput["command"] = ShellQuote(h.Self) + " lease kubeconfig --refresh " + strings.Join(labs, " ") + " >/dev/null 2>&1; " + cmd
+	d.PermissionDecision = decisionAllow
+	return answer(d)
 }

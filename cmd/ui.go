@@ -18,7 +18,6 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/machine"
-	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -422,10 +421,16 @@ func (c *collector) uiBudgetView(st *state.State, t *proc.Table, sessions []*cla
 		c.budgetBusy, c.budgetTry = true, time.Now()
 		go c.probeBudget()
 	}
+	var g *github.GraphQL
 	if !c.budgetAt.IsZero() {
 		b.At, b.Limit, b.Remaining, b.Reset = c.budgetAt, c.lastBudget.Limit, c.lastBudget.Remaining, c.lastBudget.Reset
+		g = c.lastBudget.GraphQL
 	} else if st.Budget != nil {
 		b.At, b.Limit, b.Remaining, b.Reset = st.Budget.At, st.Budget.Limit, st.Budget.Remaining, st.Budget.Reset
+		g = graphqlOf(st.Budget.GraphQL)
+	}
+	if g != nil {
+		b.GraphQL, b.GraphQLRefused = graphqlText(a, g), g.Blocks(a.now)
 	}
 	b.Err = c.budgetErr
 	c.mu.Unlock()
@@ -492,17 +497,9 @@ func (c *collector) readUpgrades(st *state.State) {
 // budget lists them: longest-running first.
 func (a *app) uiPollers(t *proc.Table, sessions []*claude.Session) []tui.Poller {
 	var out []tui.Poller
-	for _, p := range t.ByPID {
-		if p.Comm != "gh" && p.Comm != merge.Tool {
-			continue
-		}
-		pl := tui.Poller{PID: p.PID, Args: p.Cmdline(), Elapsed: p.Elapsed(a.now).Round(time.Second)}
-		if s, ok := claude.OwnerOf(sessions, p.PID); ok {
-			pl.Session = s.Name
-		}
-		out = append(out, pl)
+	for _, p := range githubCallers(a, t, sessions) {
+		out = append(out, tui.Poller(p))
 	}
-	slices.SortFunc(out, func(x, y tui.Poller) int { return int(y.Elapsed - x.Elapsed) })
 	return out
 }
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/platform"
+	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -80,6 +81,9 @@ type statusView struct {
 	Busy    int `json:"busy"`
 	Floor   int `json:"floor"`
 	Ceiling int `json:"ceiling"`
+	// VaultWaits are the sessions whose calls wait on the person's unlock
+	// of the vault.
+	VaultWaits []string `json:"vaultWaits,omitempty"`
 }
 
 func (a *app) status() (*statusView, error) {
@@ -118,6 +122,12 @@ func (a *app) status() (*statusView, error) {
 	}
 	for _, h := range liftedHolds(st, a.now) {
 		v.Lifted = append(v.Lifted, h.Target+" by "+h.LiftedBy.Name)
+	}
+	if path, err := secret.WaitsPath(); err == nil && a.cfg.Secret.Session {
+		ws, _ := secret.ReadWaits(path)
+		for _, w := range ws {
+			v.VaultWaits = append(v.VaultWaits, w.Who)
+		}
 	}
 	return v, nil
 }
@@ -185,5 +195,9 @@ func (v *statusView) line() string {
 	if len(v.Lifted) > 0 {
 		holds += "; " + list(len(v.Lifted), "lifted", "lifted", v.Lifted)
 	}
-	return fmt.Sprintf("%s; %s; %s; %d due; busy %d/%d-%d", sup, list(len(v.Leases), "lease held", "leases held", v.Leases), holds, v.Due, v.Busy, v.Floor, v.Ceiling)
+	line := fmt.Sprintf("%s; %s; %s; %d due; busy %d/%d-%d", sup, list(len(v.Leases), "lease held", "leases held", v.Leases), holds, v.Due, v.Busy, v.Floor, v.Ceiling)
+	if len(v.VaultWaits) > 0 {
+		line += "; vault locked: " + list(len(v.VaultWaits), "call waits", "calls wait", v.VaultWaits)
+	}
+	return line
 }

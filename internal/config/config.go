@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -298,8 +299,49 @@ type Secret struct {
 	// Session reads the vault through the person's own signed-in op
 	// session instead of a service account (tokenFile then unused): for a
 	// vault no service account can be granted, such as an Employee vault.
-	// op fails while the person is signed out, which exits 78.
+	// The broker signs in by itself (SigninCommand) and holds the session in
+	// its memory alone; every call on an op:// reference runs there.
 	Session bool `yaml:"session"`
+	// UnlockCommands are the names of the person's own commands that sign
+	// in to or unlock the vault (helpers around op signin): the hook
+	// refuses them in agent sessions under any path, like op signin, and
+	// the agent shell prelude removes their aliases and shell functions.
+	UnlockCommands []string `yaml:"unlockCommands"`
+	// SigninCommand is the command the broker runs to sign in to the vault
+	// without the person, when it starts and whenever a call waits while it
+	// holds no session: it prints the session as op signin does
+	// (export OP_SESSION_<id>="<token>") on stdout, its log on stderr. Empty
+	// leaves the sign-in to the person's beekeeper secret unlock.
+	SigninCommand []string `yaml:"signinCommand"`
+	// UnlockWait is how long a call that needs the vault waits for the
+	// broker's sign-in while it holds no session (8m, within the Bash tool's
+	// 10 minutes).
+	UnlockWait Duration `yaml:"unlockWait"`
+	// SessionLifetime is how long the broker holds the session after the
+	// person's unlock (12h): it keeps op's session from idling out until
+	// then, and forgets it at the end.
+	SessionLifetime Duration `yaml:"sessionLifetime"`
+	// AgeIdentities are the age identities beekeeper reads from the shared
+	// vault or an identity file for the SOPS files that sops' own sources
+	// (SOPS_AGE_KEY, SOPS_AGE_KEY_FILE, sops/age/keys.txt) hold none for:
+	// each read in beekeeper's process (the broker's, with secret.session)
+	// and given to the one sops call alone.
+	AgeIdentities []AgeIdentity `yaml:"ageIdentities"`
+}
+
+// AgeIdentity maps the SOPS files of an age recipient, or under a path, to
+// the vault field or the identity file that holds the recipient's identity.
+type AgeIdentity struct {
+	// Recipient is the age recipient (age1…) as the files' sops metadata
+	// and .sops.yaml name it.
+	Recipient string `yaml:"recipient"`
+	// PathRegex matches a file's absolute path (unanchored), for the files
+	// of a repository or an installation whatever their recipient.
+	PathRegex string `yaml:"pathRegex"`
+	// Ref is the op:// field of the shared vault (secret.vault) or the
+	// file:/// identity file (an absolute path, comments allowed) holding
+	// the identity, AGE-SECRET-KEY-1….
+	Ref string `yaml:"ref"`
 }
 
 // Sandbox is the agent sandbox: the paths and hosts an agent session's
@@ -316,17 +358,15 @@ type Sandbox struct {
 	// Domains are the hosts commands reach besides GitHub's: muster, the
 	// registries and module proxies builds need, the labs' API servers.
 	Domains []string `yaml:"domains"`
-	// Mask are the environment variables commands see only as a
-	// placeholder, the sandbox proxy putting the real value into requests
-	// to their hosts; unset, GH_TOKEN and GITHUB_TOKEN go to GitHub.
-	Mask []SandboxMask `yaml:"mask"`
-}
-
-// SandboxMask is one masked environment variable and the hosts its real
-// value goes to.
-type SandboxMask struct {
-	Name  string   `yaml:"name"`
-	Hosts []string `yaml:"hosts"`
+	// ProxyPort is the port of the broker's egress proxy on the host's
+	// loopback (default 3190): the sandbox's only way out, which holds it
+	// to the domains and sets the GitHub token's header itself.
+	ProxyPort int `yaml:"proxyPort"`
+	// Devctl is the devctl binary the broker runs on the host (~/ allowed;
+	// default: devctl on the broker's PATH): it renews the egress proxy's
+	// GitHub token from devctl's App login and runs a sandboxed session's
+	// gated devctl commands, which read the keychain the sandbox closes.
+	Devctl string `yaml:"devctl"`
 }
 
 // Scan configures the transcript value scanner: beekeeper scan index
@@ -455,6 +495,12 @@ type Agents struct {
 	// StaleAfter is how long an idle agent whose CLI no longer runs stays on
 	// the roster before the doctor takes it off (24h).
 	StaleAfter Duration `yaml:"staleAfter"`
+	// ArchiveAgreement says where the person agreed that the desktop
+	// sessions of finished workers beekeeper started are archived without
+	// asking, never a session the person started (their standing
+	// instruction, quoted to a steward). Empty: beekeeper asks no steward to
+	// archive, since a peer's message is not the person's agreement.
+	ArchiveAgreement string `yaml:"archiveAgreement"`
 	// AutoResume has the watch resume a parked agent (agents park) with
 	// what settled its wait, once the note it parked on is closed or the
 	// pull request merged or closed; off, the watch only says AGENT
@@ -463,6 +509,14 @@ type Agents struct {
 	// Shell is the prelude of every agent shell (beekeeper hook
 	// sessionstart).
 	Shell AgentShell `yaml:"shell"`
+	// Dir is the folder every agent beekeeper starts runs in (agents start,
+	// agents handover, a role's successor): the desk's checkout, whose
+	// project instructions every session loads. Empty: the caller's.
+	Dir string `yaml:"dir"`
+	// Roots are the folders under which an agent may run instead, with
+	// --dir: the worktrees of the desk's repositories. Any other folder is
+	// refused while Dir is set.
+	Roots []string `yaml:"roots"`
 }
 
 // Capacity is the supervisor's target of busy agents and the memory guards
@@ -633,6 +687,9 @@ type Role struct {
 	RelayAt Tokens `yaml:"relayAt"`
 	// RelayTTL is how long a relay stays open for the successor's start.
 	RelayTTL Duration `yaml:"relayTTL"`
+	// RelayGrace is how long a holder that stays over RelayAt has after
+	// the relay due to relay itself; past it, the standby watch relays it.
+	RelayGrace Duration `yaml:"relayGrace"`
 	// RestartGrace is how long beekeeper waits after it first saw the
 	// role's CLI gone: a CLI back under the same session within it is a
 	// restart and keeps the role; past it, the watch says the supervisor
@@ -1356,6 +1413,8 @@ func (c *Config) defaults() error {
 	setDur(&c.Merge.BudgetFresh, time.Minute)
 	setDur(&c.Merge.StallAfter, 5*time.Minute)
 	setDur(&c.Merge.HungAfter, 45*time.Minute)
+	setDur(&c.Secret.UnlockWait, 8*time.Minute)
+	setDur(&c.Secret.SessionLifetime, 12*time.Hour)
 
 	setStr(&c.Memcap.SlotDir, filepath.Join(state, "memcap", "slots"))
 	setInt(&c.Memcap.Slots, 2)
@@ -1391,6 +1450,7 @@ func (c *Config) defaults() error {
 
 func (r *Role) defaults(home string) {
 	setDur(&r.RelayTTL, 15*time.Minute)
+	setDur(&r.RelayGrace, 30*time.Minute)
 	setDur(&r.RestartGrace, time.Minute)
 	if r.RelayAt == 0 {
 		r.RelayAt = 400_000
@@ -1402,8 +1462,6 @@ func (r *Role) defaults(home string) {
 // GitHubHosts are the hosts the GitHub token goes to.
 var GitHubHosts = []string{"github.com", "api.github.com", "uploads.github.com"}
 
-var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-
 func (s *Sandbox) validate() error {
 	for key, ps := range map[string][]string{"sandbox.allowRead": s.AllowRead, "sandbox.allowWrite": s.AllowWrite} {
 		for _, p := range ps {
@@ -1412,12 +1470,41 @@ func (s *Sandbox) validate() error {
 			}
 		}
 	}
-	for i, m := range s.Mask {
-		if !envName.MatchString(m.Name) || len(m.Hosts) == 0 {
-			return fmt.Errorf("sandbox.mask[%d]: want an environment variable's name and at least one host", i)
+	if s.ProxyPort < 0 || s.ProxyPort > 65535 {
+		return fmt.Errorf("sandbox.proxyPort: %d is no TCP port", s.ProxyPort)
+	}
+	for _, d := range s.Domains {
+		if openLoopback(d) {
+			return fmt.Errorf("sandbox.domains: %q opens every loopback listener on the host (other sessions' port-forwards, local servers) to the sandbox: name a lab's API server by its port, 127.0.0.1:<port>", d)
+		}
+		if host, port, err := net.SplitHostPort(d); err == nil && Loopback(host) && port == strconv.Itoa(s.ProxyPort) {
+			return fmt.Errorf("sandbox.domains: %q is the egress proxy itself (sandbox.proxyPort)", d)
 		}
 	}
 	return nil
+}
+
+// openLoopback reports whether the egress entry d opens loopback beyond one
+// port: a bare loopback host or a wildcard port would open every listener on
+// the host through the sandbox proxy.
+func openLoopback(d string) bool {
+	if d == "*" {
+		return true
+	}
+	host, port, err := net.SplitHostPort(d)
+	if err != nil {
+		host, port = strings.Trim(d, "[]"), ""
+	}
+	return Loopback(strings.TrimPrefix(host, "*.")) && (port == "" || port == "*")
+}
+
+// Loopback reports whether host is a loopback name or address.
+func Loopback(host string) bool {
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	return host == "localhost" || strings.HasSuffix(host, ".localhost")
 }
 
 func (s *Sandbox) defaults(home string) {
@@ -1426,9 +1513,13 @@ func (s *Sandbox) defaults(home string) {
 			ps[i] = filepath.Clean(homePath(home, ps[i]))
 		}
 	}
-	if s.Mask == nil {
-		s.Mask = []SandboxMask{{Name: "GH_TOKEN", Hosts: GitHubHosts}, {Name: "GITHUB_TOKEN", Hosts: GitHubHosts}}
+	if s.ProxyPort == 0 {
+		s.ProxyPort = 3190
 	}
+	if s.Devctl == "" {
+		s.Devctl = "devctl"
+	}
+	s.Devctl = homePath(home, s.Devctl)
 }
 
 // homePath is p with a leading ~/ resolved against home.
@@ -1465,6 +1556,24 @@ func (c *Config) validate() error {
 	for _, n := range c.Agents.Shell.Unalias {
 		if !commandName.MatchString(n) {
 			return fmt.Errorf("agents.shell.unalias: %q is no command name", n)
+		}
+	}
+	for _, n := range c.Secret.UnlockCommands {
+		if !commandName.MatchString(n) {
+			return fmt.Errorf("secret.unlockCommands: %q is no command name", n)
+		}
+	}
+	for i, id := range c.Secret.AgeIdentities {
+		switch {
+		case id.Recipient == "" && id.PathRegex == "":
+			return fmt.Errorf("secret.ageIdentities[%d]: name a recipient or a pathRegex", i)
+		case id.Recipient != "" && !strings.HasPrefix(id.Recipient, "age1"):
+			return fmt.Errorf("secret.ageIdentities[%d]: recipient %q is no age recipient (age1…)", i, id.Recipient)
+		case !strings.HasPrefix(id.Ref, "op://") && !strings.HasPrefix(id.Ref, "file:///"):
+			return fmt.Errorf("secret.ageIdentities[%d]: ref %q: want op://<vault>/<item>/<field> or file:///<absolute path>", i, id.Ref)
+		}
+		if _, err := regexp.Compile(id.PathRegex); err != nil {
+			return fmt.Errorf("secret.ageIdentities[%d]: pathRegex: %w", i, err)
 		}
 	}
 	for i, r := range c.Outbound.StoreDeny {

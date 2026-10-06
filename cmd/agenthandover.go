@@ -109,6 +109,12 @@ last events and its note. It carries no standing rules and no live values.`,
 			}
 			if dir != "" {
 				h.dir = dir
+			} else if home := a.cfg.Agents.Dir; home != "" {
+				// The follow-up keeps the old session's folder when agents
+				// may run there, else it runs in agents.dir.
+				if _, err := a.agentDir(h.dir); h.dir == "" || err != nil {
+					h.dir = homePath(home)
+				}
 			}
 			if model != "" {
 				h.model = model
@@ -340,12 +346,12 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 		return err
 	}
 	a.say("started %q: session %s, desktop local_%s, in %s, busy with %q", ag.Name, sa.id, sa.id, sa.dir, sa.task)
+	a.say("%s", sa.turn)
 	if sa.restored != "" {
 		a.say("%s", sa.restored)
 	}
 	a.say("%s", titleLine(ag.Name, sa.title))
 	a.say("%s", modelLine(sa.model))
-	a.say("%s", twinLine(sa.twin))
 	if sa.kept != "" {
 		a.say("the desktop still shows %s", sa.kept)
 	}

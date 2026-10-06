@@ -148,6 +148,11 @@ func TestLoadRejects(t *testing.T) {
 		"negative relayAt":     "supervisor: {relayAt: -1}",
 		"bad store glob":       "outbound: {storeDeny: [{vault: \"[\"}]}",
 		"bad outbound path":    "outbound: {paths: [\"[\"]}",
+		"age without match":    "secret: {ageIdentities: [{ref: op://V/i/f}]}",
+		"age bad recipient":    "secret: {ageIdentities: [{recipient: ssh-ed25519, ref: op://V/i/f}]}",
+		"age without op ref":   "secret: {ageIdentities: [{recipient: age1x, ref: ~/key.txt}]}",
+		"age relative file":    "secret: {ageIdentities: [{recipient: age1x, ref: \"file://key.txt\"}]}",
+		"age bad pathRegex":    "secret: {ageIdentities: [{pathRegex: \"[\", ref: op://V/i/f}]}",
 		"nameless board step":  "board: {order: [{status: [backlog]}]}",
 		"search with fields":   "board: {order: [{name: q, search: \"repo:o/r\", status: [backlog]}]}",
 	} {
@@ -158,6 +163,21 @@ func TestLoadRejects(t *testing.T) {
 		if _, err := Load(p); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+func TestAgeIdentityRefs(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "c.yaml")
+	raw := "secret: {ageIdentities: [{recipient: age1x, ref: op://V/i/f}, {pathRegex: /repo/, ref: \"file:///home/me/keys.txt\"}]}"
+	if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Secret.AgeIdentities[1].Ref; got != "file:///home/me/keys.txt" {
+		t.Errorf("file ref = %q", got)
 	}
 }
 
@@ -434,12 +454,23 @@ func TestSandbox(t *testing.T) {
 	if err != nil || c.Sandbox.AllowRead[0] != filepath.Join(home, "projects") || c.Sandbox.AllowWrite[0] != "/var/tmp/x" {
 		t.Fatalf("%+v, %v", c.Sandbox, err)
 	}
-	if len(c.Sandbox.Mask) != 2 || c.Sandbox.Mask[0].Name != "GH_TOKEN" {
-		t.Errorf("default mask = %+v", c.Sandbox.Mask)
+	if c.Sandbox.ProxyPort != 3190 {
+		t.Errorf("default proxyPort = %d", c.Sandbox.ProxyPort)
 	}
-	for _, bad := range []string{"sandbox: {allowRead: [projects]}\n", "sandbox: {mask: [{name: GH-TOKEN, hosts: [github.com]}]}\n", "sandbox: {mask: [{name: X}]}\n"} {
+	for _, bad := range []string{"sandbox: {allowRead: [projects]}\n", "sandbox: {proxyPort: 70000}\n", "sandbox: {proxyPort: -1}\n",
+		"sandbox: {proxyPort: 3191, domains: [\"127.0.0.1:3191\"]}\n"} {
 		if _, err := Load(write(bad)); err == nil {
 			t.Errorf("%q loads", bad)
 		}
+	}
+	// loopback only by a lab's port: a bare loopback host opens every
+	// listener on the host through the sandbox proxy
+	for _, d := range []string{"127.0.0.1", "localhost", "127.0.0.1:*", "[::1]", "::1", "*.localhost", "127.0.0.2", "*"} {
+		if _, err := Load(write("sandbox: {domains: ['" + d + "']}\n")); err == nil || !strings.Contains(err.Error(), "127.0.0.1:<port>") {
+			t.Errorf("domain %q: %v", d, err)
+		}
+	}
+	if _, err := Load(write("sandbox: {domains: ['127.0.0.1:6443', '[::1]:6443', 'github.com', '*.circleci.com']}\n")); err != nil {
+		t.Errorf("a lab's port: %v", err)
 	}
 }

@@ -3,7 +3,9 @@ package claude
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestFirst(t *testing.T) {
@@ -101,5 +103,31 @@ func TestOpenBackground(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Command != "until gh run view 1; do :; done" {
 		t.Errorf("OpenBackground = %+v, want only the wait no notice followed", got)
+	}
+}
+
+// An answer holds only what the session did from the message on: its tool
+// calls with their results, and its last text.
+func TestReadAnswer(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	lines := []string{
+		`{"type":"assistant","timestamp":"2026-10-05T10:00:00Z","message":{"content":[{"type":"text","text":"before"}]}}`,
+		`{"type":"user","timestamp":"2026-10-05T10:01:00Z","message":{"content":"please archive"}}`,
+		`{"type":"assistant","timestamp":"2026-10-05T10:01:01Z","message":{"content":[{"type":"tool_use","id":"t1","name":"mcp__ccd_session_mgmt__archive_session","input":{"session_id":"local_x"}}]}}`,
+		`{"type":"user","timestamp":"2026-10-05T10:01:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"Archived session local_x"}]}]}}`,
+		`{"type":"assistant","timestamp":"2026-10-05T10:01:03Z","message":{"content":[{"type":"text","text":"Done."}]}}`,
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a, err := ReadAnswer(path, time.Date(2026, 10, 5, 10, 1, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Text != "Done." || len(a.Calls) != 1 {
+		t.Fatalf("answer %+v", a)
+	}
+	if c := a.Calls[0]; !c.Done || c.Error || c.Result != "Archived session local_x" || !strings.HasSuffix(c.Name, "archive_session") {
+		t.Errorf("call %+v", c)
 	}
 }

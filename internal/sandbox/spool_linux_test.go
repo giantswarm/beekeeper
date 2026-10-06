@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -95,7 +96,7 @@ func TestServeRefusesAnOversizedRequest(t *testing.T) {
 	}
 	answer(context.Background(), path, "/proc", func(context.Context, int, Request) (Reply, error) { return Reply{}, nil })
 	raw, _ := os.ReadFile(filepath.Join(dir, "big"+replySuffix)) //nolint:gosec // the test's own spool
-	if !strings.Contains(string(raw), "over 4096 bytes") {
+	if !strings.Contains(string(raw), fmt.Sprintf("over %d bytes", maxRequest)) {
 		t.Errorf("reply %s", raw)
 	}
 }
@@ -106,7 +107,7 @@ func TestCallAnswersOutputSideBySide(t *testing.T) {
 	broker(t, dir, func(_ context.Context, _ int, req Request) (Reply, error) {
 		if req.Op == OpSecret {
 			<-slow
-			return Reply{Out: "equal\n", Err: "warned\n", Code: 1}, nil
+			return Reply{Out: "equal\n", Err: warned, Code: 1}, nil
 		}
 		return Reply{}, nil
 	})
@@ -123,7 +124,7 @@ func TestCallAnswersOutputSideBySide(t *testing.T) {
 		t.Fatalf("ping behind a running call: %v", err)
 	}
 	close(slow)
-	if r := <-done; r.Out != "equal\n" || r.Err != "warned\n" || r.Code != 1 {
+	if r := <-done; r.Out != "equal\n" || r.Err != warned || r.Code != 1 {
 		t.Errorf("reply %+v", r)
 	}
 }
@@ -154,5 +155,141 @@ func TestOriginKeepsOnlyTheNamedVariables(t *testing.T) {
 	}
 	if !reflect.DeepEqual(env, []string{"BEEKEEPER_TEST_ORIGIN=kept"}) {
 		t.Errorf("env %q", env)
+	}
+}
+
+// warned is a call's standard error in the tests.
+const warned = "warned\n"
+
+// signalWriter collects what is written and says each write on wrote.
+type signalWriter struct {
+	mu    sync.Mutex
+	b     strings.Builder
+	wrote chan struct{}
+}
+
+func (w *signalWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.b.Write(p)
+	select {
+	case w.wrote <- struct{}{}:
+	default:
+	}
+	return len(p), nil
+}
+
+func (w *signalWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.b.String()
+}
+
+func TestStreamCopiesOutputWhileTheCallRuns(t *testing.T) {
+	dir := t.TempDir()
+	more := make(chan struct{})
+	broker(t, dir, func(_ context.Context, _ int, req Request) (Reply, error) {
+		if req.Output() == nil {
+			return Reply{}, errors.New("a streamed request without its output")
+		}
+		_, _ = fmt.Fprintln(req.Output(), "one")
+		<-more
+		_, _ = fmt.Fprintln(req.Output(), "two")
+		return Reply{Err: warned, Code: 2}, nil
+	})
+	w := &signalWriter{wrote: make(chan struct{}, 1)}
+	done := make(chan Reply)
+	go func() {
+		r, err := Stream(dir, Request{Op: OpWatch, Args: []string{"watch"}}, 0, w)
+		if err != nil {
+			t.Error(err)
+		}
+		done <- r
+	}()
+	select {
+	case <-w.wrote:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no output while the call runs")
+	}
+	if got := w.String(); got != "one\n" {
+		t.Errorf("while running: %q", got)
+	}
+	close(more)
+	if r := <-done; r.Err != warned || r.Code != 2 || r.Out != "" {
+		t.Errorf("reply %+v", r)
+	}
+	if got := w.String(); got != "one\ntwo\n" {
+		t.Errorf("streamed %q", got)
+	}
+	if left, _ := os.ReadDir(dir); len(left) != 0 {
+		t.Errorf("the spool keeps %v", left)
+	}
+}
+
+func TestAStreamedCallEndsWithItsRequester(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "w"+reqSuffix)
+	if err := os.WriteFile(path, []byte(`{"op":"watch","stream":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// the requester holds its request open, then ends without a word
+	requester := exec.Command("/bin/sh", "-c", "exec 3<"+path+"; echo ready; exec /bin/sleep 30") //nolint:gosec // the test's own spool
+	ready, err := requester.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := requester.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bufio.NewReader(ready).ReadString('\n'); err != nil {
+		t.Fatal(err)
+	}
+	ended := make(chan struct{})
+	go func() {
+		answer(context.Background(), path, "/proc", func(ctx context.Context, _ int, req Request) (Reply, error) {
+			_, _ = fmt.Fprintln(req.Output(), "line")
+			<-ctx.Done()
+			return Reply{}, ctx.Err()
+		})
+		close(ended)
+	}()
+	time.Sleep(100 * time.Millisecond)
+	_ = requester.Process.Kill()
+	_ = requester.Wait()
+	select {
+	case <-ended:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the call outlived its requester")
+	}
+	if left, _ := os.ReadDir(dir); len(left) != 0 {
+		t.Errorf("the spool keeps %v", left)
+	}
+}
+
+func TestAStreamedCallsAnswerWithoutItsRequesterIsDropped(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "s"+reqSuffix)
+	if err := os.WriteFile(path, []byte(`{"op":"agents","stream":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	requester := exec.Command("/bin/sh", "-c", "exec 3<"+path+"; echo ready; exec /bin/sleep 30") //nolint:gosec // the test's own spool
+	ready, err := requester.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := requester.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bufio.NewReader(ready).ReadString('\n'); err != nil {
+		t.Fatal(err)
+	}
+	// the call ends within the holder poll, right after its requester
+	answer(context.Background(), path, "/proc", func(context.Context, int, Request) (Reply, error) {
+		_ = requester.Process.Kill()
+		_ = requester.Wait()
+		return Reply{}, nil
+	})
+	if left, _ := os.ReadDir(dir); len(left) != 0 {
+		t.Errorf("the spool keeps %v", left)
 	}
 }

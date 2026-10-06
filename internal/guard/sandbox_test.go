@@ -2,12 +2,14 @@ package guard
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 )
 
@@ -102,4 +104,61 @@ func testHome(t *testing.T) string {
 	}
 	t.Setenv("TMPDIR", filepath.Join(base, "tmp"))
 	return filepath.Join(base, "home")
+}
+
+func TestLabProxyRefreshesHeldLabs(t *testing.T) {
+	h, home := sandboxHook(t)
+	h.Labs = func() []lease.Holder {
+		return []lease.Holder{{Env: "lab-b", Session: "s7"}, {Env: "lab-a", HostSession: "local_s7"}, {Env: "lab-c", Session: "other"}}
+	}
+	refresh := self + " lease kubeconfig --refresh lab-a lab-b >/dev/null 2>&1; "
+	run := func(h Hook, session, cmd string) *decision {
+		ev := toolEvent(bashTool, map[string]any{commandKey: cmd})
+		ev["cwd"], ev["session_id"] = home, session
+		return decideEvent(t, h, ev)
+	}
+	if d := run(h, "s7", "kubectl get nodes"); d == nil || d.UpdatedInput[commandKey] != refresh+"kubectl get nodes" {
+		t.Errorf("a lab lease's holder: %+v", d)
+	}
+	if d := run(h, "s7", "go test ./..."); d == nil || !strings.HasPrefix(d.UpdatedInput[commandKey].(string), refresh+ShellQuote(self)+" run -- ") {
+		t.Errorf("the refresh goes in front of the build wrap: %+v", d)
+	}
+	if d := run(h, "s2", "kubectl get nodes"); d != nil {
+		t.Errorf("a session that holds no lab: %+v", d)
+	}
+	unsandboxed := h
+	unsandboxed.Sandbox = nil
+	if d := run(unsandboxed, "s7", "kubectl get nodes"); d != nil {
+		t.Errorf("outside the sandbox: %+v", d)
+	}
+	broken := h
+	broken.ConfigErr = errors.New("bad")
+	if d := run(broken, "s7", "kubectl get nodes"); d == nil || d.PermissionDecision != decisionDeny {
+		t.Errorf("a refused call stays refused: %+v", d)
+	}
+}
+
+func TestSandboxSendsLabRuntimeToTheHost(t *testing.T) {
+	h, home := sandboxHook(t)
+	h.Clusters = func() []string { return nil }
+	run := func(h Hook, cmd string) *decision {
+		ev := toolEvent(bashTool, map[string]any{commandKey: cmd})
+		ev["cwd"] = home
+		return decideEvent(t, h, ev)
+	}
+	for _, cmd := range []string{"agentlab up", "cd lab && agentlab down", "agentlab --lab agentlab-2 up --open=false", "kind create cluster --name x", "kind delete cluster --name x", "kind delete clusters --all"} {
+		if d := run(h, cmd); d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "beekeeper lease up <lab>") {
+			t.Errorf("%s: %+v", cmd, d)
+		}
+	}
+	for _, cmd := range []string{"agentlab status", "kind get clusters", "echo agentlab up"} {
+		if d := run(h, cmd); d != nil && d.PermissionDecision == decisionDeny {
+			t.Errorf("%s: refused: %s", cmd, d.Reason)
+		}
+	}
+	unsandboxed := h
+	unsandboxed.Sandbox = nil
+	if d := run(unsandboxed, "agentlab down"); d != nil && d.PermissionDecision == decisionDeny {
+		t.Errorf("outside the sandbox: refused: %s", d.Reason)
+	}
 }

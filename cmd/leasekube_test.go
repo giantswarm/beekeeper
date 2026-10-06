@@ -83,11 +83,11 @@ func TestLeaseKubeconfigInTheSandboxAsksTheBroker(t *testing.T) {
 }
 
 func TestBrokeredKubeconfigArgv(t *testing.T) {
-	if argv, err := brokeredKubeconfigArgv(sandbox.Request{Op: sandbox.OpKubeconfig, Resource: labOne}); err != nil || len(argv) != 3 || argv[2] != labOne {
+	if argv, err := brokeredKubeconfigArgv(sandbox.Request{Op: sandbox.OpKubeconfig, Resource: labOne}, true); err != nil || len(argv) != 3 || argv[2] != labOne {
 		t.Errorf("%q, %v", argv, err)
 	}
 	for _, bad := range []string{"", "../state", "-h", "a b", "--as=x"} {
-		if _, err := brokeredKubeconfigArgv(sandbox.Request{Op: sandbox.OpKubeconfig, Resource: bad}); err == nil {
+		if _, err := brokeredKubeconfigArgv(sandbox.Request{Op: sandbox.OpKubeconfig, Resource: bad}, true); err == nil {
 			t.Errorf("%q: want a refusal", bad)
 		}
 	}

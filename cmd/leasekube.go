@@ -3,7 +3,9 @@ package cmd
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,7 +17,8 @@ import (
 )
 
 func (a *app) leaseKubeconfigCmd() *cobra.Command {
-	return &cobra.Command{
+	var refresh bool
+	c := &cobra.Command{
 		Use:   "kubeconfig <lab>",
 		Short: "Write the kubeconfig of a kind lab whose lease you hold into its lease, and print its path",
 		Long: `kubeconfig writes kind's kubeconfig of the lab's cluster into the lease
@@ -25,24 +28,93 @@ lease gets one. A lab claim writes it already when the cluster runs; this
 writes it once a lab started after its claim does.
 
 In the agent sandbox, which closes the container runtime's socket kind
-needs, the host's broker writes it for the session.`,
-		Args: cobra.ExactArgs(1),
+needs, the host's broker writes it for the session, and the session points
+it at its sandbox's SOCKS proxy: the API server is on loopback, which the
+sandbox reaches only through the proxy and only on the ports
+sandbox.domains lists (127.0.0.1:<port>). beekeeper's hook refreshes the
+proxy's URL before every command of a sandboxed session that holds a lab
+lease (--refresh).`,
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			sandboxed := inSandbox()
+			if refresh {
+				if !sandboxed {
+					return nil
+				}
+				var errs []error
+				for _, res := range args {
+					if err := a.checkResource(res); err != nil {
+						errs = append(errs, err)
+						continue
+					}
+					if err := proxyLabKubeconfig(labKubeconfig(a.cfg.LeaseDir, res)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+						errs = append(errs, err)
+					}
+				}
+				return errors.Join(errs...)
+			}
+			if len(args) != 1 {
+				return usageErr("kubeconfig takes one lab")
+			}
 			res := args[0]
 			if err := a.checkResource(res); err != nil {
 				return err
 			}
-			if os.Getenv(sandbox.Env) != "" && os.Getenv(sandbox.Brokered) == "" {
-				return a.brokeredReply(sandbox.Request{Op: sandbox.OpKubeconfig, Resource: res})
-			}
-			path, err := a.writeLabKubeconfig(cmd.Context(), res)
+			line, err := a.labKubeconfigLine(cmd.Context(), res)
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(a.out, "export KUBECONFIG=%s\n", path)
+			_, err = fmt.Fprintln(a.out, line)
 			return err
 		},
 	}
+	c.Flags().BoolVar(&refresh, "refresh", false, "in the sandbox, point the labs' existing kubeconfigs at this process's sandbox proxy; quiet, a missing one skipped")
+	_ = c.Flags().MarkHidden("refresh")
+	return c
+}
+
+// brokeredKubeconfig has the host's broker write the kubeconfig of the lab
+// res for a sandboxed session, points it at the session's sandbox proxy,
+// and returns the broker's export line.
+func (a *app) brokeredKubeconfig(res string) (string, error) {
+	dir := sandbox.SpoolDir(a.cfg.StateDir)
+	if !(sandbox.Capper{Dir: dir}).Available() {
+		return "", refused("no sandbox broker answers in %s: beekeeper-sandbox.service on the host runs this for the sandbox (beekeeper install)", dir)
+	}
+	r, err := sandbox.Call(dir, sandbox.Request{Op: sandbox.OpKubeconfig, Resource: res}, brokeredCallTimeout)
+	if err != nil {
+		return "", refused("%v", err)
+	}
+	if r.Code != 0 {
+		return "", &exitError{code: r.Code, msg: strings.TrimPrefix(strings.TrimSpace(r.Err), "beekeeper: ")}
+	}
+	if err := proxyLabKubeconfig(labKubeconfig(a.cfg.LeaseDir, res)); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(r.Out), nil
+}
+
+// proxyLabKubeconfig points the lab kubeconfig at path at the SOCKS proxy
+// of the sandbox the process runs in, rewriting it only when that changes.
+// path is a lease's kubeconfig, its resource checked by the caller.
+func proxyLabKubeconfig(path string) error {
+	raw, err := os.ReadFile(path) //nolint:gosec // a lease's kubeconfig (labKubeconfig of a checked resource)
+	if err != nil {
+		return err
+	}
+	proxy, err := sandbox.SOCKSProxy(os.Getenv)
+	if err != nil {
+		return err
+	}
+	out, changed, err := sandbox.ProxyKubeconfig(raw, proxy)
+	if err != nil || !changed {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, out, 0o600); err != nil { //nolint:gosec // beside the checked lease's kubeconfig
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // labKubeconfig is where a lab lease's kubeconfig lies: in the lease, so
@@ -75,29 +147,22 @@ func (a *app) writeLabKubeconfig(ctx context.Context, res string) (string, error
 // claimKubeconfig is the line a lab claim adds: the kubeconfig's path, or
 // why there is none yet.
 func (a *app) claimKubeconfig(ctx context.Context, res string) string {
-	var path string
-	var err error
-	if os.Getenv(sandbox.Env) != "" && os.Getenv(sandbox.Brokered) == "" {
-		dir := sandbox.SpoolDir(a.cfg.StateDir)
-		var r sandbox.Reply
-		if !(sandbox.Capper{Dir: dir}).Available() {
-			err = fmt.Errorf("no sandbox broker answers in %s", dir)
-		} else {
-			r, err = sandbox.Call(dir, sandbox.Request{Op: sandbox.OpKubeconfig, Resource: res}, brokeredCallTimeout)
-		}
-		if err == nil && r.Code != 0 {
-			err = fmt.Errorf("%s", strings.TrimSpace(r.Err))
-		}
-		if err == nil {
-			return "\n" + strings.TrimSpace(r.Out)
-		}
-	} else {
-		path, err = a.writeLabKubeconfig(ctx, res)
-	}
+	line, err := a.labKubeconfigLine(ctx, res)
 	if err != nil {
 		return fmt.Sprintf("\nno kubeconfig yet (%v): beekeeper lease kubeconfig %s once the lab runs", err, res)
 	}
-	return "\nexport KUBECONFIG=" + path
+	return "\n" + line
+}
+
+// labKubeconfigLine writes the kubeconfig of the lab res, whose lease the
+// caller holds, through the broker in the sandbox, and returns its export
+// line.
+func (a *app) labKubeconfigLine(ctx context.Context, res string) (string, error) {
+	if inSandbox() {
+		return a.brokeredKubeconfig(res)
+	}
+	path, err := a.writeLabKubeconfig(ctx, res)
+	return "export KUBECONFIG=" + path, err
 }
 
 // holdsLease refuses, for what, unless the caller holds the lease of res.

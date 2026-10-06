@@ -1,7 +1,11 @@
 package cmd
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/platform"
@@ -72,9 +76,18 @@ func TestBrokeredSecretArgs(t *testing.T) {
 		{copyOp, "--name=--config", sopsA, sopsB},
 		{"rotate", "op://Shared/db/password", "--generate=true", "--json=true"},
 	} {
-		if err := brokeredSecretArgs(ok); err != nil {
+		if err := brokeredSecretArgs(ok, true); err != nil {
 			t.Errorf("%q: %v", ok, err)
 		}
+	}
+	// a requester outside the sandbox runs its consumer on the host anyway;
+	// copy's own consumer list holds it
+	consumer := strings.Fields(copyOp + " op://Shared/x/y -- gh secret set T")
+	if err := brokeredSecretArgs(consumer, false); err != nil {
+		t.Errorf("%q outside the sandbox: %v", consumer, err)
+	}
+	if err := brokeredSecretArgs(consumer, true); err == nil {
+		t.Errorf("%q in the sandbox: want a refusal", consumer)
 	}
 	for _, bad := range [][]string{
 		nil,
@@ -84,8 +97,85 @@ func TestBrokeredSecretArgs(t *testing.T) {
 		{compareOp, "--as", agentTwo, "a", "b"},
 		{compareOp, "--config=/tmp/other.yaml", "a", "b"},
 	} {
-		if err := brokeredSecretArgs(bad); err == nil {
+		if err := brokeredSecretArgs(bad, true); err == nil {
 			t.Errorf("%q: want a refusal", bad)
 		}
+	}
+}
+
+func TestSandboxInstallSteps(t *testing.T) {
+	dir, state := filepath.Join(t.TempDir(), "claude-code"), t.TempDir()
+	policy := []byte("{\"sandbox\":{}}\n")
+	steps, err := sandboxInstallSteps(dir, state, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, dropIns := filepath.Join(dir, "managed-settings.json"), filepath.Join(dir, "managed-settings.d")
+	want := []string{
+		"sudo install -d -m 0755 " + dir,
+		"sudo install -m 0644 -o root " + filepath.Join(state, "managed-settings.json") + " " + settings,
+		"sudo install -d -m 0755 " + dropIns,
+		"sudo install -m 0644 -o root " + filepath.Join(state, sandbox.DropIn) + " " + filepath.Join(dropIns, sandbox.DropIn),
+	}
+	if !slices.Equal(steps, want) {
+		t.Fatalf("a fresh machine's steps = %q, want %q", steps, want)
+	}
+	if b, _ := os.ReadFile(filepath.Join(state, "managed-settings.json")); string(b) != emptyManagedSettings { //nolint:gosec // the test's own temporary directory
+		t.Errorf("staged managed settings = %q, want {}", b)
+	}
+	// the root steps run
+	for _, f := range []struct {
+		path string
+		b    []byte
+	}{{settings, []byte(emptyManagedSettings)}, {filepath.Join(dropIns, sandbox.DropIn), policy}} {
+		if err := os.MkdirAll(filepath.Dir(f.path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(f.path, f.b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if steps, err := sandboxInstallSteps(dir, state, policy); err != nil || len(steps) != 0 {
+		t.Errorf("an installed policy's steps = %q, %v, want none", steps, err)
+	}
+	steps, err = sandboxInstallSteps(dir, state, []byte("{\"sandbox\":{\"enabled\":true}}\n"))
+	if err != nil || len(steps) != 1 || !strings.HasSuffix(steps[0], sandbox.DropIn) {
+		t.Errorf("a changed policy's steps = %q, %v, want the drop-in only", steps, err)
+	}
+}
+
+func TestBrokeredGateArgv(t *testing.T) {
+	for in, want := range map[string]string{
+		"devctl pr merge giantswarm/beekeeper 7":                  "gate --wait 2m0s -- devctl pr merge giantswarm/beekeeper 7",
+		"/home/u/.go/bin/devctl pr wait giantswarm/beekeeper 7":   "gate --wait 2m0s -- devctl pr wait giantswarm/beekeeper 7",
+		"devctl release promote giantswarm/beekeeper":             "gate --wait 2m0s -- devctl release promote giantswarm/beekeeper",
+		"devctl rollout wait gazelle giantswarm/backstage --pr 3": "gate --wait 2m0s -- devctl rollout wait gazelle giantswarm/backstage --pr 3",
+	} {
+		got, err := brokeredGateArgv(sandbox.Request{Op: sandbox.OpGate, Args: strings.Fields(in), Wait: "2m"}, true)
+		if err != nil || strings.Join(got, " ") != want {
+			t.Errorf("%s: %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, bad := range []sandbox.Request{
+		{Args: strings.Fields("sh -c id"), Wait: "2m"},
+		{Args: strings.Fields("/tmp/x/devctl-evil pr merge giantswarm/beekeeper 7"), Wait: "2m"},
+		{Args: strings.Fields("devctl repo create giantswarm/x"), Wait: "2m"},
+		{Args: strings.Fields("devctl pr merge giantswarm/beekeeper 7"), Wait: "forever"},
+		{Args: strings.Fields("devctl pr merge giantswarm/beekeeper 7"), Wait: "24h"},
+		{},
+	} {
+		if got, err := brokeredGateArgv(bad, true); err == nil {
+			t.Errorf("%+v: %q, want a refusal", bad, got)
+		}
+	}
+}
+
+func TestDevctlPath(t *testing.T) {
+	t.Setenv("PATH", "/usr/bin")
+	if got := devctlPath("/home/u/.go/bin/devctl"); len(got) != 1 || got[0] != "PATH=/home/u/.go/bin:/usr/bin" {
+		t.Errorf("devctlPath = %q", got)
+	}
+	if got := devctlPath("devctl"); got != nil {
+		t.Errorf("devctl on PATH: %q, want the broker's PATH", got)
 	}
 }

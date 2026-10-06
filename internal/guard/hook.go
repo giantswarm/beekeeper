@@ -66,9 +66,12 @@ var (
 	anyOwned = regexp.MustCompile(devctlOwned)
 	gated    = regexp.MustCompile(`\bgate\s+(?:--wait\s+\S+\s+)?--\s+$`)
 	// shellC: a shell's -c option up to the quote opening its command string.
-	shellC  = regexp.MustCompile(`(?:^|[\s;&|(/])(?:ba|z|da|k)?sh\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*c[a-zA-Z]*\s+(['"])`)
-	lab     = regexp.MustCompile(`(?m)` + pos + `(agentlab\s+up\b|kind\s+create\s+cluster\b)`)
-	trivial = regexp.MustCompile(`^\s*\S+(?:\s+\S+)?\s+(?:--version|-V|--help|-h|help)\s*$`)
+	shellC = regexp.MustCompile(`(?:^|[\s;&|(/])(?:ba|z|da|k)?sh\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*c[a-zA-Z]*\s+(['"])`)
+	lab    = regexp.MustCompile(`(?m)` + pos + `(agentlab\s+up\b|kind\s+create\s+cluster\b)`)
+	// labRuntime: a lab's creation or teardown, which takes the container
+	// runtime's socket the agent sandbox closes.
+	labRuntime = regexp.MustCompile(`(?m)` + pos + `(agentlab\s+(?:--lab[= ]\s*\S+\s+)?(?:up|down)\b|kind\s+(?:create|delete)\s+clusters?\b)`)
+	trivial    = regexp.MustCompile(`^\s*\S+(?:\s+\S+)?\s+(?:--version|-V|--help|-h|help)\s*$`)
 	// wrapped: the command invokes the wrapper itself, by name or path, at a
 	// command position. A wrapper path merely mentioned (ls …/memcap,
 	// m=$(ls …/memcap), M=…/memcap) is no wrapper, so pos's assignments may
@@ -79,6 +82,9 @@ var (
 	cdArg     = regexp.MustCompile(`(?:^|[;&|]\s*)cd\s+(\S+)`)
 	clusterRe = regexp.MustCompile(`^\s*clusterName:\s*"?([\w.-]+)"?`)
 	shellSafe = regexp.MustCompile(`^[\w@%+=:,./-]+$`)
+	// vaultCall: a beekeeper secret call on the vault, which may wait for
+	// the person's unlock (secret.unlockWait) and gets the 10 minutes.
+	vaultCall = regexp.MustCompile(`(?:^|[\s;&|(/])beekeeper["']?\s+secret\s+(?:compare|fingerprint|copy|set|rotate)\b[^;&|\n]*op://`)
 )
 
 // The hook's permission decisions and the Bash tool's background flag.
@@ -92,6 +98,9 @@ const (
 type Hook struct {
 	// Self is the absolute path of the beekeeper binary a rewrite names.
 	Self string
+	// UnlockCommands are the person's own vault unlock helpers
+	// (secret.unlockCommands), refused like op signin.
+	UnlockCommands []string
 	// ConfigErr is why the configuration did not load: every Bash call is
 	// refused with it, since the guards it configures cannot run.
 	ConfigErr error
@@ -151,6 +160,9 @@ type Hook struct {
 	// Sandbox is the agent sandbox's policy, which the file tools are held
 	// to; nil in a session no sandbox holds.
 	Sandbox *sandbox.Policy
+	// Labs lists the held leases of kind labs, unnamed (a lease file read,
+	// no process scan); nil, none.
+	Labs func() []lease.Holder
 }
 
 // event is the part of a PreToolUse event the hook reads.
@@ -181,7 +193,7 @@ func (h Hook) Decide(input []byte) []byte {
 	if dec.Decode(&ev) != nil {
 		return nil
 	}
-	out := h.decide(ev)
+	out := h.labProxy(ev, h.decide(ev))
 	var o map[string]hookOutput
 	if out != nil && (json.Unmarshal(out, &o) != nil || o["hookSpecificOutput"].PermissionDecision == decisionDeny) {
 		return out
@@ -208,6 +220,9 @@ func (h Hook) decide(ev event) []byte {
 	if ev.ToolName == SendMessageTool {
 		return h.sendMessage(ev.ToolInput)
 	}
+	if r := mentionRefusal(ev.ToolName, ev.ToolInput, ev.CWD); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
 	if ev.ToolName != bashTool {
 		if r := h.Outbound.toolRefusal(ev.ToolName, ev.ToolInput); r != "" {
 			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
@@ -231,15 +246,15 @@ func (h Hook) decide(ev event) []byte {
 	if r := h.modelServerRefusal(cmd, ev.Session); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
-	if l := secretLeak(cmd); l != nil {
+	cwd := ev.CWD
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
+	if l := (secretGuard{unlock: h.UnlockCommands, cwd: cwd}).leak(cmd); l != nil {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: l.reason()})
 	}
 	if r := deleteRefusal(cmd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
-	}
-	cwd := ev.CWD
-	if cwd == "" {
-		cwd, _ = os.Getwd()
 	}
 	if r := h.Outbound.bashRefusal(cmd, cwd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
@@ -254,6 +269,19 @@ func (h Hook) decide(ev event) []byte {
 		return h.rewrite(ev.ToolInput, cmd, gated, bg)
 	}
 
+	if h.Sandbox != nil {
+		if m := labRuntime.FindStringSubmatchIndex(cmd); m != nil {
+			var held []lease.Holder
+			if h.Leases != nil {
+				held = h.Leases()
+			}
+			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: fmt.Sprintf(
+				"Refused: `%s` needs the container runtime, which the agent sandbox closes. The host creates and tears down a lab "+
+					"whose lease you hold: `beekeeper lease up <lab>` or `beekeeper lease down <lab>`, run in the lab's directory "+
+					"(its agentlab.yaml names the lease's cluster) or anywhere for a lab agentlab knows.\nleases:\n%s",
+				strings.TrimSpace(cmd[m[2]:m[3]]), leaseLines(held))})
+		}
+	}
 	if m := lab.FindStringSubmatchIndex(cmd); m != nil {
 		running := h.Clusters()
 		target := labTarget(cmd, m, cwd)
@@ -266,7 +294,7 @@ func (h Hook) decide(ev event) []byte {
 	}
 
 	if !isHeavy(cmd) {
-		return h.rewrite(ev.ToolInput, cmd, gated, bg)
+		return h.rewrite(ev.ToolInput, cmd, gated || vaultCall.MatchString(cmd), bg)
 	}
 	prefix := ""
 	if bg {
@@ -399,16 +427,26 @@ func labTarget(cmd string, m []int, cwd string) string {
 		d = filepath.Join(cwd, d)
 	}
 	// A directory without agentlab.yaml is a new lab, whatever name it ends up with.
-	raw, err := os.ReadFile(filepath.Join(d, "agentlab.yaml")) //nolint:gosec // the lab's own configuration
+	if cl, ok := LabCluster(d); ok {
+		return cl
+	}
+	return "a new lab in " + d
+}
+
+// LabCluster is the kind cluster of the agentlab lab in dir, its
+// agentlab.yaml's clusterName (agentlab's default without one), and
+// whether dir holds an agentlab.yaml at all.
+func LabCluster(dir string) (string, bool) {
+	raw, err := os.ReadFile(filepath.Join(dir, "agentlab.yaml")) //nolint:gosec // the lab's own configuration
 	if err != nil {
-		return "a new lab in " + d
+		return "", false
 	}
 	for line := range strings.SplitSeq(string(raw), "\n") {
 		if c := clusterRe.FindStringSubmatch(line); c != nil {
-			return c[1]
+			return c[1], true
 		}
 	}
-	return "agentlab"
+	return "agentlab", true
 }
 
 func expandHome(p string) string {

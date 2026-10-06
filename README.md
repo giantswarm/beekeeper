@@ -126,9 +126,10 @@ a relayed successor opens with the plugin's role.
 | `beekeeper ui` | The person's screen, for a terminal rather than a session's context: six tabs over the live state — the machine (load, RAM, swap, pressure, the desktop scope, disks, build slots, kind labs, the waits and the OOM kills), every session, Claude Code and omp (its state — busy, idle, waiting on its person, omp's own —, idle age, memory, context fill, last hour, what it runs, what it waits on its person for — a waiting session stands out; `enter` opens its pane, which follows the session live: the history, then the current turn with its tool calls as they land, re-read every refresh; `k`/`j` scroll back and forward, `G` follows again; `m` writes the session a message, stamped as the person's through the screen: by name to a Claude Code CLI, into the inbox of an omp agent beekeeper started; `t` takes a Claude Code session over: its permission requests come to the pane with its turns beside them, `a` allows and `d` denies, and one left unanswered for 290 s, or when `t` hands it back or the screen quits, goes to the session's own window, which the pane says), the shares (held leases and their staleness, free resources, grant queues, holds, the merge lanes), the supervision (the supervisor and guide roles with their relay state, the agents, the open notes with their defaults, the timers, the session records), the installations' alerts by severity with the running upgrades and the GitHub budget and its pollers, and the event log. Refreshes every two seconds (the budget and the upgrades every minute, in the background); besides those messages and take-overs it reads only: it takes no lease and lifts no hold — those stay with the commands, whose exit codes the sessions gate on. |
 | `beekeeper watch` | Silent until something needs a look, then one line: the source of a `Monitor`. A threshold breach, an unreadable source and a stalled lane are one line when they start and one `ENDED` line when they end, never repeated while they last; OOM kills, sessions that start, end or restart, stale leases and every NEW or RESOLVED alert of the installations are always reported. A note or timer that falls due, the end of a session with a record and a relay taken or expired are one line each, once: the state keeps that they were reported, so a second or restarted watch stays silent about them. Once the supervisor session's context (its transcript's last request, the `CTX` column) reaches `supervisor.relayAt` (400k tokens), `RELAY DUE` is said at the first quiet moment (no gated merge running or settling, no grant waiting, no claim queued, no relay open), once per supervisor and again only after a relay is cancelled or expires; `supervisor status` and `handover` show the supervisor's context. A recorded supervisor whose CLI has stayed gone past `supervisor.restartGrace` with no relay open is `SUPERVISOR GONE`, once: claims stay gated until a successor's `supervisor start`; a supervisor back after it is `SUPERVISOR BACK`, once; its CLI back under the same session with a new PID is `SUPERVISOR RESTARTED`. A session over a threshold in `metrics.runaway` is one `RUNAWAY` line per figure, once per watch. A fork rate `watch.forkRateMax` over the machine's usual one for two samples is one `PROCESS STORM` line, and more than `watch.stackMax` long-running copies of one command line one `STACKED` line each, with the commands, the parent and the owning session, and more than `watch.toolProcsMax` (1000) processes of the CLIs in `watch.tools` (kubectl, helm, tsh, gh, flux, devctl) machine-wide one `LOAD` line with their commands and the sessions that run them, and an `ENDED` line each. A stalled lane (see `lanes`) is one `LANE STALLED` line, repeated at most every 10 minutes while it lasts. A settling merge leaves its lane once its release rolled and the lane's HelmReleases are Ready, however late; one not settled past `merge.settleTimeout` is one `LANE STUCK` line with what the lane waits for (the HelmRelease off the release, the one not Ready, an installation that cannot be read), repeated at most every 10 minutes, and one `ENDED` line when it settles or the lane is cleared; `lanes` marks it `stuck since`. A cluster upgrade on an installation (see [Cluster upgrades](#cluster-upgrades)) is `UPGRADE <installation>/<cluster> <from> → <to>` when it begins and `UPGRADE ENDED … (since HH:MM)` when it ends, once each. The quiet rules keep what is noise for the supervisor out of its lines: other teams' alerts matching `alerts.quiet` (by default their e2e test clusters, `t-*`, and, once `alerts.team` is set, every other team's and team-less `notify` alert), an alert back after a reading that missed it with its old start (an Alertmanager restart, a reconnect), and the start, end and restart of the short-lived sessions in `watch.quietSessions` (by default beekeeper's tests, `test: *`). A rule never holds back an alert of `alerts.team`, one on an installation in play (leased, claimed or merged into within the last 30 minutes, or with a merge settling), or a page unless the rule names a cluster; everything else is said as before. What they hold back is logged (`beekeeper log --verb watch.quiet`) and counted in `snapshot`. `--notify` also sends the events that need a person to the desktop, `--standby` leaves a running supervisor's events to its watch (see [Desktop notifications](#desktop-notifications)). |
 | `beekeeper alerts watch\|snapshot\|import\|capture\|replay\|own` | The installations' alerts, read from each Alertmanager through a bounded `kubectl port-forward` (Mimir's with the `giantswarm` tenant, else the plain one), in parallel: `watch` prints one line per NEW or RESOLVED alert since the baseline (pages and your team in capitals, a burst of one alertname as one line, one line when an installation stops or starts answering, the lease holder and the sessions working against it in brackets, and on a NEW line the merges into the installation's lanes and the lease claims on it of the last 30 minutes with their sessions, worded as timing (`during merging …`, `during merged … at …`), not as cause); `snapshot` the current set, grouped; `import` takes over another watcher's per-installation baseline. An alert below its installation's severity floor never appears in either, and an alert that keeps firing and resolving is one FLAPPING line, then quiet until it has been stable for the damper's window; neither a floor nor a damper change prints a burst of lines. `capture <dir>` records each installation's answer, `replay <dir>...` prints what the watch would for recorded answers, from the current baseline without writing it: a floor or damper setting tried before the watch gets it. `own <installation/alertname>` records the caller (`--by` another running session, `--as` a person) as the owner of the firing alerts it names (`alert.owned`); ownership ends with the owning session or the alert's resolution. `beekeeper watch` says `PAGE UNOWNED <installation> <alertname> <where> for <duration>` (one line per alertname, `(+n)` for its other unowned alerts) for a firing alert at `alerts.pageSeverity` (default `page`), of `alerts.team` when it is set, that has had no owner for `alerts.ownerGrace` (15m), and again every `alerts.ownerGrace` while it stays unowned; the owner's session ending starts the count again, and a non-paging alert never gets the line. One process owns the baseline at a time, so two watches never split the lines. Every port-forward ends with the reading, on SIGINT or SIGTERM, and when beekeeper is killed. |
-| `beekeeper budget` | The GitHub core budget from the headers of a real, conditional request (a 304 costs nothing), and every `gh` and `devctl` process with its session. `--gate` exits 3 under the floor. |
+| `beekeeper budget` | The GitHub core budget from the headers of a real, conditional request (a 304 costs nothing), the GraphQL limit from a real `rateLimit` query (one point, read again after `merge.budgetFresh`), and every `gh` and `devctl` process with its session: the callers. A GraphQL refusal shows even while its counter looks healthy, named as the hourly limit spent or a secondary limit, with the time it ends when GitHub names one; the watch says it once with the callers, and its end. `--gate` exits 3 under the floor or while GraphQL is refused. |
 | `beekeeper lease claim\|release\|status\|grant\|revoke` | One holder per resource: the environments in the configuration, the shared installations of the central instance when one is configured ([The central instance](#the-central-instance)), the host's model server (`model-server`, whose claim carries `--gib <n>`: the GiB its models may hold, see [The model server](#the-model-server)) and the browser. While a supervisor runs, a session claims only what the supervisor granted it, in grant order. While a cluster upgrade runs on the installation of the resource's name, nobody claims it except by the supervisor's `lease grant <installation> <session> --upgrade-unblock "<why>"`, for the work that unblocks the upgrade (see [Cluster upgrades](#cluster-upgrades)). |
-| `beekeeper lease kubeconfig <lab>` | The kubeconfig of a kind lab whose lease you hold, written into the lease (`<leaseDir>/<lab>/kubeconfig`, mode 0600) and freed with it; prints `export KUBECONFIG=<path>`, never the content. A lab claim writes it already when the cluster runs. In the agent sandbox the broker writes it (see [The agent sandbox](#the-agent-sandbox)). |
+| `beekeeper lease kubeconfig <lab>` | The kubeconfig of a kind lab whose lease you hold, written into the lease (`<leaseDir>/<lab>/kubeconfig`, mode 0600) and freed with it; prints `export KUBECONFIG=<path>`, never the content. A lab claim writes it already when the cluster runs. In the agent sandbox the broker writes it and the session points it at its sandbox proxy (see [The agent sandbox](#the-agent-sandbox)). |
+| `beekeeper lease up\|down <lab>` | Create (`agentlab up`, asking nothing) or tear down (`agentlab down`) the kind cluster of a lab whose lease you hold, the cluster `labs` maps the lease to: in the lab's directory its `agentlab.yaml` must name that cluster, elsewhere agentlab runs the lab it knows by that name. Capped as `beekeeper run` caps it; `up` prints the lease's kubeconfig line, `down` drops it. In the agent sandbox the broker runs it on the host (see [The agent sandbox](#the-agent-sandbox)). |
 | `beekeeper hold set\|lift\|check` | Stop merges into a repository (a broken main), one lane (`--lane serving`: a proving window such as a model load stops the lane whose components it exercises, not the others), every merge (`merges`) or every GitHub call (`github`) until lifted, a time passes or its probe passes (`--lift-when "<shell command>"`: the watch lifts the hold once the command exits 0 and logs it as `hold.lift`). A merge hold lets one repository or pull request through with `--except owner/repo[#n]`: `hold set --lane serving --except giantswarm/model-manager#172` stops the lane but for the merge it waits for. A lane hold that excepts one pull request (`owner/repo#n`) is also its fix window: that merge runs without the lane's HelmReleases Ready or the previous release rolled, for the fix of a rollout only the fix can repair, logged as `merge.window`. The merge gate enforces them. |
 | `beekeeper lanes [queue\|settle\|drop\|clear]` | Each merge lane: the running merge, the one settling until its release rolled, and the waiting ones in turn order, so who is next is never prose. `queue <owner/repo> <n> --for <session>` gives a session's merge its place now so an agreed order carries over (kept until that merge runs, through refusals, for `merge.seedTTL`, 12h; seeds keep their order, an arrived unseeded merge passes one whose merge has not arrived); a run with nothing merged stays in its place as `retrying` for its session's retry; `settle <owner/repo> <n> [--for <session>]` registers a merge run outside the gate (in flight when the gate went live, run without the hook): it heads its lane until it merges, then settles the lane like a gated merge; `drop` takes a waiting merge out (a place whose pull request merged or closed leaves by itself at the next `watch` poll), and ends the devctl of a running merge whose pull request merged or closed (`watch` does so by itself `merge.hungAfter`, 45m, after the merge); `clear` is the repair for a lane whose settling release will not roll, after a look at the installation. A lane where no merge runs and whose first arrived merge has waited longer than `merge.stallAfter` (5m) behind places whose merges are not in the gate (seeds that have not arrived, merges that left it) is `stalled`, with the waiting merge and those places named. |
 | `beekeeper board next [--claim]\|move` | The project board's next item of work: `next` walks `board.order` (steps by Status, Kind and labels; an epic's open sub-issues; blocked items whose blockers all closed; items created within a window; a GitHub search; a sub-issue that is a board item held to the order by its own Status, whatever its Team) over one read of the board and prints the first free item with why it is picked and why each item above it was skipped: served by a running session (a `sessions serve` record, a busy agent's task) or by an agent on the roster whose CLI is gone while it is busy with its task or kept, waiting on an open note, assigned outside `board.people`, blocked by an open recorded blocker, without activity for `board.staleAfter`, or needing a lease another session holds (a `lease/<resource>` label on the issue, `lease/agentlab-1`: the item is passed over until the lease is free and the items behind it are offered meanwhile; a picked item's free lease is printed with it); a sub-issue offered through an epic passes the same checks, and a serve record, task or note naming the epic covers it (`…, on epic owner/repo#n`). `--claim` records the pick as the calling session's serve under the state lock, so two concurrent claims never get the same item; it changes nothing on the board, the caller moves the item with `board move` once it judged it, and ends with the session, `agents idle` or `sessions unserve`. A second `--claim` while the session serves an open issue or PR is refused (exit 3) with its record, unchanged; `--claim --replace` takes the next item and replaces the record. `move <issue> <status>` sets an item's Status by the board's canonical name or an unambiguous part ("up next"), and refuses anything else with the board's values. |
@@ -139,12 +140,13 @@ a relayed successor opens with the plugin's role.
 | `beekeeper guide next` | The one decision the guide asks now: the open note for its person due first, marked as being asked (`guide.asking`), served again until `note answer` or `note done` closes it; only then the next. Only the guide's session calls it; `--json` the item. |
 | `beekeeper guide queue` | The guide's queue: every open decision filed for its person, `guide.person` (`note add --for`, or an older note's `[for <person>]` text prefix; any case; a memo or a pinned note is none), with its owning session (the one that filed it, and whether it still runs), deadline and default, then every session whose record says it waits on the person (`sessions serve … --waits "<person>: <ask>"`, the person in any case; with `guide.person` unset, every `--waits`), while its CLI runs or stopped (`(stopped)`) less than `guide.waitingTTL` ago (default 2h; 0: never folds), except the guide's own session, an archived one, a test (titled `test: …`) and an agent that reported its task after the wait (`agents idle`, `--done`, or taken off the roster). The sessions stopped longer ago fold into one line, `<n> stopped session(s) waited on <person>`; `--full` lists them. `guide watch` says nothing for a session that only aged out. With `guide.person` unset, every note filed `--for` anyone, and a line that says so. Delta output like `sessions`. |
 | `beekeeper guide watch [--once]` | The guide's feed, silent otherwise: `GUIDE DECISION` for each new open decision of the queue (only `guide.person`'s; with it unset, every `--for` note and one `GUIDE:` line that says so), `GUIDE WAITING` for each session of the queue newly waiting on its person (only an explicit `--waits`: the desktop's turn summary does not count), `GUIDE ANSWERED`, `GUIDE DEFAULTED` or `GUIDE CLOSED` for a note of the queue closed (`GUIDE CLOSED #<id> overtaken: <reason>` for an overtaken one, `GUIDE REPLACED: #<id> replaced by #<new>: <text>` for one a successor replaced), `GUIDE ORPHANED #<id> for <person>, its filing session "<name>" is archived; ask it, or close it with note done <id> --overtaken: <text>` for an open decision without `--ref` whose filing worker session is archived (`note add --ref`), and the guide's relay: `GUIDE RELAY DUE` once its context reaches `guide.relayAt` (150k), `GUIDE RELAY TAKEN`, `GUIDE RELAY EXPIRED`, `GUIDE RESTARTED`. Each is one line, once: what it said is kept in the state (`guide.fed`). |
-| `beekeeper agents register\|assign\|idle` | The roster of empty sessions registered as spare capacity. `register` names the session by its title (a `claude --bg` worker by its `-n` name) unless `--name` overrides it. A name is one agent's: registering under the name of a session that no longer runs (what `agents` shows as `not running`: stopped, closed or asleep) replaces its entry, saying so; a task the replaced entry left unfinished becomes the new entry's, with its assignment time, named in the `agents.register` event (`replaces <id>, takes over "<task>"`) and in the output, so the fresh session works it and a later `assign` to the name is refused as busy until `idle`. Re-registering keeps the session's own open task, so a session `agents start` registered busy stays busy when it registers itself (`register: <name> busy with "<task>"`); two dropped entries with open tasks are refused (exit 3). A name a running session's entry holds is refused (exit 3). `assign` and `remove` take a session id, a name or a unique part of one, and refuse a name several entries share. |
-| `beekeeper agents start <name> <brief file> [--task t] [--model m] [--dir d] [--harness omp]` | Starts an agent session without a click: `claude -p` in `bypassPermissions` under a session id beekeeper chooses, the brief as its first prompt, in a transient user unit `beekeeper-agent-<id>` (`KillMode=process`, the user manager's environment). Before the session exists it records the id and mode as one of beekeeper's starts (the state's `starts`, kept 30 days) and registers it on the roster under the name, busy from its start with `--task` (by default the brief's first line) or with the open task of a stopped entry under that name. Once the transcript holds the first reply it imports the session into Claude Desktop (`claude://resume?session=<id>`, sidebar row `local_<id>` titled with the name: beekeeper appends the name's `custom-title` line to the transcript first, since the import reads only its last 256 KiB) and switches the desktop back to the session it showed before (`claude://code/continue`), the one the desktop log (`claude.desktopLog`) last names as focused. See [Agents started without a click](#agents-started-without-a-click). `--harness omp` starts an omp agent instead, see [omp agents](#omp-agents). |
+| `beekeeper agents register\|assign\|idle` | The roster of empty sessions registered as spare capacity. `register` names the session by its title (a `claude --bg` worker by its `-n` name) unless `--name` overrides it. A name is one agent's: registering under the name of a session that no longer runs (what `agents` shows as `not running`: stopped, closed or asleep) replaces its entry, saying so; a task the replaced entry left unfinished becomes the new entry's, with its assignment time, named in the `agents.register` event (`replaces <id>, takes over "<task>"`) and in the output, so the fresh session works it and a later `assign` to the name is refused as busy until `idle`. Re-registering keeps the session's own open task, so a session `agents start` registered busy stays busy when it registers itself (`register: <name> busy with "<task>"`); two dropped entries with open tasks are refused (exit 3). A name a running session's entry holds is refused (exit 3). `assign` and `remove` take a session id, a name or a unique part of one, and refuse a name several entries share. `idle --done` requires the final report, `--report "<text>"` (`-` reads stdin), and its "Problems found": `--problem "<finding>"` once per broken function, workaround, follow-up or problem the task met (evidence and owning repository in the line), or `--problem none`; without them, or with `none` beside a finding, it is refused (exit 3). beekeeper delivers them itself: both are logged (`agents.report`, `agents.problem`) and the supervisor's watch prints them once, `WORKER REPORT by "<agent>" (task: …): <report>` and `PROBLEM FOUND by "<agent>": <line>` per finding, for the supervisor to file and hand to a worker. |
+| `beekeeper agents start <name> <brief file> [--task t] [--model m] [--dir d] [--harness omp]` | Starts an agent session without a click that runs in Claude Desktop from its first turn. Before the session exists it records the id beekeeper chose as one of beekeeper's starts (the state's `starts`, kept 30 days) and registers it on the roster under the name, busy from its start with `--task` (by default the brief's first line) or with the open task of a stopped entry under that name. A seed turn without tools (`claude -p` in a transient user unit `beekeeper-agent-<id>`) creates the transcript with the worker prompt; the session is then imported into the desktop (`claude://resume?session=<id>`, sidebar row `local_<id>` titled with the name), the desktop switched back to the session it showed (`claude://code/continue`), and the task runs as a desktop turn of the session's desktop CLI, or of one a steward's `send_message` starts; headless only where the desktop cannot run it, said with the reason. See [Agents started without a click](#agents-started-without-a-click). `--harness omp` starts an omp agent instead, see [omp agents](#omp-agents). |
 | `beekeeper agents desktop [agent]` | Asks for an agent's desktop turn (the browser): its import or reopen shows it in the desktop without waiting for the window's focus, the person's typing holding it 1 minute at most; an agent with neither a CLI nor a waiting reopen is shown at once. By default the calling agent. See [Agents started without a click](#agents-started-without-a-click). |
-| `beekeeper agents wake <agent> <message> [--permission-mode m]` | Messages a registered agent without Claude Desktop's `local_` route and its cap (a session's desktop sends pause after ten since its person last typed in it). A running CLI gets the message by name; a session with none is resumed headless, `claude -p --resume <id>` with the message as its turn, in its directory, permission mode (a start's bypass, else the desktop record's) and recorded model, in a transient unit `beekeeper-wake-<id>-<wake>`, one per wake; its `ExecStopPost` runs `agents reopen <local_ id>`, which warms the desktop's CLI again. `agents` shows `live, first turn running` or `live, wake turn running` while a headless turn is the session's CLI. See [Waking a session](#waking-a-session). |
+| `beekeeper agents wake <agent> <message> [--permission-mode m]` | Messages a registered agent without Claude Desktop's `local_` route and its cap (a session's desktop sends pause after ten since its person last typed in it). A running CLI gets the message by name; a session with a desktop row and no CLI gets it as a desktop turn, a steward's `send_message` starting its desktop CLI; only where the desktop cannot run it (said with the reason) is it resumed headless, `claude -p --resume <id>` with the message as its turn, in its directory, permission mode (a start's bypass, else the desktop record's) and recorded model, in a transient unit `beekeeper-wake-<id>-<wake>`, one per wake; its `ExecStopPost` runs `agents reopen <local_ id>`, which warms the desktop's CLI again. `agents` shows `live, first turn running` or `live, wake turn running` while a headless turn is the session's CLI. See [Waking a session](#waking-a-session). |
 | `beekeeper agents handover <agent> [--prompt] [--model m] [--dir d]` | Hands a registered agent over to a fresh session near its context limit, one line per step: asks it by peer message, or in a headless turn resumed from its transcript when its CLI does not run or take the message, for `beekeeper agents note "<what is in flight, what is next>"` (waiting `agents.noteWait` at most), builds the follow-up's prompt, starts the follow-up as `agents start` does under the agent's name (it takes over the roster entry, the task and the session record), stops the old session's CLI and the processes under it by PID (a `claude --bg` session through `claude stop` first, so its daemon does not resume it), archives the old session's desktop row once its CLI has exited, and logs `agents.handover`. `--prompt` prints the prompt only. `watch` says `HANDOVER DUE` once per agent session at `agents.relayAt`. See [Agents handed over near their context limit](#agents-handed-over-near-their-context-limit). |
-| `beekeeper agents park [--on <#note\|owner/repo#n>] "<what>"`, `agents resume <agent>` | `park` parks the calling agent, its task kept, on what settles its wait: counted parked, not busy, in `agents` and `capacity`, it ends its turn. Once the note is closed or the issue or pull request merged or closed, the watch says `AGENT RESUMABLE` once; with `agents.autoResume` it resumes the agent with what settled it, a person's answer word for word. `resume` does it by hand. An agent without a task is refused. See [Agents started without a click](#agents-started-without-a-click). |
+| `beekeeper agents park [--on <#note\|owner/repo#n>] "<what>"`, `agents resume <agent>` | `park` parks the calling agent, its task kept, on what settles its wait: counted parked, not busy, in `agents` and `capacity`, it ends its turn. Once the note is closed or the issue or pull request merged or closed, the watch says `AGENT RESUMABLE` once; a park on a person (a note, or a wait naming `guide.person`, an answer, a review or a decision) the supervisor's watch says once as `PARKED ON A PERSON`, for the guide to tell the person; with `agents.autoResume` it resumes the agent with what settled it, a person's answer word for word. `resume` does it by hand. An agent without a task is refused. See [Agents started without a click](#agents-started-without-a-click). |
+| `beekeeper agents archivable <local_id>...` | Confirms, per desktop session, that it is a finished worker beekeeper started (one of its starts, off the roster, no role a relay did not relieve, unarchived, its CLI in no turn but the caller's own) and exits 3 for any other, a session the person started included. A steward asked to archive runs it first and archives only what it confirms (see [Agents started without a click](#agents-started-without-a-click)). |
 | `beekeeper agents broadcast <message>` | Sends one message by name to every registered agent whose CLI runs, one after the other, the supervisor and the caller left out; a stopped agent is not resumed for it. One `agents.broadcast` event logs whom it reached. |
 | `beekeeper agents note <text>` | The calling agent's hand-over note, logged as an `agents.note` event; the next `agents handover` puts the latest one into the follow-up's prompt. |
 | `beekeeper note add\|answer\|done\|pin\|unpin` | Open items that outlive a session, of two kinds (`--kind`). A decision waits on a person with its deadline and what happens if nobody answers (`note add --for Ada --due 22:55 --status-quo "<what is true now>" --why "<why it needs Ada>" --default "the alert stays as is" <text>`); only open decisions reach the guide (`guide queue`, `guide watch`). A memo is a session's own record (a state summary, a board skip, a list of deferred work) that asks nobody; `note list` and the hand-over list it apart from the decisions. `--kind` defaults to `decision` for `guide.person` (any `--for` with it unset) and to `memo` otherwise; a note filed before kinds is classified the same way, a pinned one as a memo. A decision names who decides (`--for`) and is refused with exit 2 without `--due` and a `--default` that is an action. `--replaces <id>` closes the named open note in the same step (`note.replaced`) and carries its pin over, so a state memo is one open note at a time. A decision for `guide.person` (any `--for` with it unset) is refused, naming what it lacks, without `--status-quo`, `--why`, a `--default` that is an action (not `wait` or `none`), every `--option` as `<choice>: <consequence>`, the full URL of every `#N` or `owner/repo#N`, and `--checked "<source>"` for a claim that something is merged, green, released, rolled or closed, and while a pull request it links in a plans repository (`plans.repositories`) is open with its stage check (`plans.check`, `plan-stages`) red, pending or missing, naming what the check found; one on an issue or PR an open note for the same person names, with the same verb (the text's first word), folds into it (`note.folded`). `--kind login --until "<probe>"`: the watch runs the probe each tick and closes the note once it exits 0. A memo is not checked. A note for a person asking again what was answered for them within 72 hours (the same verb on one of the same issues or PRs) is filed with a warning that quotes the answer. `--pin` (or `note pin <id>`) makes a note a standing instruction: every hand-over, the supervisor's and the guide's, carries it until `note unpin` or `note done`. `watch` reports a note once when it is due; a decision due unanswered closes with its default (`NOTE DEFAULTED #<id>: <default>`, `note.defaulted`), and the session that filed it is told. A decision renders as one Slack message (`beekeeper serve --help`): it is refused with exit 2 without `--status-quo`, with a question over one line or 150 characters, a status quo over 3000, more than 10 `--option` or a label over 75 characters, or a `--recommend <n>` (1-based) that names none of them; `--for team:<name>` puts it to a team. `--ref owner/repo#n` (repeatable) links a note to the issues or PRs it asks about: once every one is closed or merged, `watch` closes it as overtaken (`NOTE OVERTAKEN`, `note.overtaken` with the reason; `watch --once` names it and writes nothing); a note without `--ref` is never closed by the watch: once the session that filed it is archived (a stopped session is not), `guide watch` names it to the guide as orphaned, to ask or close by hand (a role's run, current or relieved, never orphans its notes). Pinned and login notes, and the note the guide asks now, are never overtaken. `note done <id> --overtaken "<why>"` closes one so by hand. `note answer <id> [--choice <n>] [<answer>]` records the person's answer word for word (the option's label, their own words, or both) and how it came (`--via cli`, the default, or `slack`), closes the note and tells the session that filed it (`NOTE ANSWERED #<id> by <person>: <answer>`, which `watch` prints too); the `note.answered` event carries it for the owning session, the supervisor and the guide's feed. |
@@ -152,7 +154,7 @@ a relayed successor opens with the plugin's role.
 | `beekeeper report [--since 1h\|15:04] [--until 15:04] [--tz zone]` | Renders the status report from beekeeper's own state, as Markdown that passes `reporter check`: the pull requests and promotions the gate merged in the window with title, release and rollout; the running work (roles, busy agents, sessions serving an issue) with the issue, what it waits on and its leases; what waits on `reporter.person` (open notes per owning session, sessions waiting on an answer, the open drafts of `reporter.reviews`); the merge lanes, timers and holds; the machine. Every time in `reporter.tz` (`--tz`; default the machine's zone); one GitHub request for the titles and drafts. See [The scheduled status reporter](#the-scheduled-status-reporter). |
 | `beekeeper reporter check` | Checks a report on stdin as the reporter's post hook does (see [The scheduled status reporter](#the-scheduled-status-reporter)): one line per problem and exit 3, or `ok`. |
 | `beekeeper reporter` | The scheduled status reporter (see [The scheduled status reporter](#the-scheduled-status-reporter)): its schedule, when the next one starts, and the current or last run with its outcome. |
-| `beekeeper timer add\|done\|list` | Times to look at something: `timer add 22:55 "check the rollout"` (or a duration, `45m`). `watch` prints one line when a timer is due; it stays open until `timer done`. A timer can wait on a condition from its time instead: `--when "pr-merged owner/repo#n"` (also `issue-closed owner/repo#n`, `helmrelease-ready context/namespace/name`, `controlplane-ready context/namespace/name`) or `--probe "<command>"` (exit 0: it holds), checked by the watch every `--every` (5m), each distinct check once per tick however many timers share it and a GitHub one only above the budget floor; it fires within one tick of the condition holding. `--until` ends the wait: the timer then fires as timed out, or with `--expire` closes unfired (`TIMER EXPIRED`). `--wake <agent>` wakes the agent with the timer's text (as `agents wake`; `TIMER WAKE FAILED` when it cannot), `--run "<command>"` runs a command, its output in `timers/<id>.log` of the state directory and its exit code logged (`timer.ran`, `TIMER RAN`); without either the `TIMER` line is for the supervisor. Such a timer closes when it fires. |
+| `beekeeper timer add\|done\|list` | Times to look at something: `timer add 22:55 "check the rollout"` (or a duration, `45m`). `watch` prints one line when a timer is due; it stays open until `timer done`. A timer can wait on a condition from its time instead: `--when "pr-merged owner/repo#n"` (also `issue-closed owner/repo#n`, `helmrelease-ready context/namespace/name`, `controlplane-ready context/namespace/name`) or `--probe "<command>"` (exit 0: it holds), checked by the watch every `--every` (5m), each distinct check once per tick however many timers share it and a GitHub one only above the budget floor; it fires within one tick of the condition holding. `--until` ends the wait: the timer then fires as timed out, or with `--expire` closes unfired (`TIMER EXPIRED`). `--wake <agent>` wakes the agent with the timer's text (as `agents wake`; `TIMER WAKE FAILED` when it cannot), `--run "<command>"` runs a command, its output in `timers/<id>.log` of the state directory and its exit code logged (`timer.ran`, `TIMER RAN`); without either the `TIMER` line is for the supervisor. Such a timer closes when it fires; with `--repeat daily`, `weekdays` or `weekly` a `--wake` or `--run` timer is re-armed at the same local time instead and stays open until `timer done` (a morning refresh, a Friday summary). |
 | `beekeeper ps [name\|pid...]` | The process table with every command line masked: PID, parent, age, CPU time, resident memory, and the command line as the watch's `STACKED` line prints it (the program, its subcommands and flag names; flag values, `key=value` words, URLs and what follows a short option's letter left out). A masked line ends in `(masked)`, so a left-out value is never read as an empty one. A number narrows the list to a PID, a word to the processes whose masked line or name holds it. `--json` has the rows. The hook's refusal of a whole command-line read names it ([Secret reads](#secret-reads)). |
 | `beekeeper sessions serve\|unserve` | A record for any session, registered agent or not: `sessions serve <session> <owner/repo#n> [--waits "<what>"]`, the issue or epic it serves and what it waits on; `sessions unserve <session|owner/repo#n>` removes it, by the issue for the one record serving it. `sessions` and `handover` show it; `watch` prints one line when the session ends, naming the issue to re-query. |
 | `beekeeper handover [--prompt] [--section <name>]` | Everything the next supervisor needs, as Markdown, from the live state: leases and grants, holds and their exceptions, agents, session records, pinned notes, notes with their defaults, the decisions answered since the last relay, timers, the merge lanes with their queues and settling merges, and what the alert watch reads (the installations and why, the ignored alert names, the baseline). `--prompt` prints the successor's session prompt: the configured instructions (`supervisor.skill` or `supervisor.instructions`), the scope, the pending state and the commands that read the live values; no live value (version, memory figure, pull request state). Both show what a successor acts on in its first minutes: the notes the guide serves (for `guide.person` and for the guide) are one count line, records of sessions ended over an hour ago one line, and the answered decisions those since the predecessor's start with a count of the rest of 72 hours. `--section <name>` prints one section with everything it holds (`notes`, `records`, `answers`, …). |
@@ -163,7 +165,7 @@ a relayed successor opens with the plugin's role.
 | `beekeeper secret compare\|fingerprint\|copy\|set\|rotate` | The credential operations no agent runs itself: equality, keyed fingerprints, a SOPS file copied under a new name and namespace, a value into a SOPS path or a consumer's stdin, a generated value into the shared vault and a SOPS path, a rotation into every SOPS path that carried the old value. They answer key names, lengths, equality and fingerprints, never a value (see [Secret operations](#secret-operations)). |
 | `beekeeper sandbox render\|install` | The agent sandbox: the policy Claude Code enforces on every session's commands, rendered as a managed-settings drop-in, and the root command that installs it (see [The agent sandbox](#the-agent-sandbox)). |
 | `beekeeper scan [index\|add <ref>\|sweep]` | The transcript value scanner: without a subcommand what the fingerprint index holds; `index` rebuilds it from `scan.sops` and `scan.vaults`, `add` indexes one value from stdin, `sweep` counts each reference and token rule in every transcript, never a value (see [What reaches the model](#what-reaches-the-model)). |
-| `beekeeper hook sessionstart` | The SessionStart hook: writes the agent shell's prelude into the session's environment file (`$CLAUDE_ENV_FILE`), which Claude Code sources before parsing each Bash command. It removes the aliases and shell functions of `agents.shell.unalias` (default `grep`, `find`, `ls`, `cp`, `mv`, `rm`, the harness's own `grep` and `find` shadows among them), so each name runs the tool on `PATH`, and with `agents.shell.globs: literal` (the default) an unmatched glob stays as written instead of failing the command with zsh's `no matches found`. The directories of `agents.shell.path` go first on `PATH`, in their order and once each: the agent's own programs, such as a `gh` link to devctl that acts with the devctl App's short-lived token in place of the person's long-lived `gh` login. The person's interactive setup stays theirs; an agent writes its commands for the plain tools. |
+| `beekeeper hook sessionstart` | The SessionStart hook: writes the agent shell's prelude into the session's environment file (`$CLAUDE_ENV_FILE`), which Claude Code sources before parsing each Bash command. It drops the vault credentials (`OP_SESSION_*`, `OP_SERVICE_ACCOUNT_TOKEN`, `OP_CONNECT_TOKEN`) from the environment and removes the aliases and shell functions of `agents.shell.unalias` (default `grep`, `find`, `ls`, `cp`, `mv`, `rm`, the harness's own `grep` and `find` shadows among them), so each name runs the tool on `PATH`, and with `agents.shell.globs: literal` (the default) an unmatched glob stays as written instead of failing the command with zsh's `no matches found`. The directories of `agents.shell.path` go first on `PATH`, in their order and once each: the agent's own programs, such as a `gh` link to devctl that acts with the devctl App's short-lived token in place of the person's long-lived `gh` login. The person's interactive setup stays theirs; an agent writes its commands for the plain tools. |
 | `beekeeper lint briefs <file or folder>...` | Refuses dated lines, "until X ships" clauses, notes on the release that fixed something, workarounds and role run numbers in skills and briefs (every Markdown file below a folder), one `path:line: rule: why` per finding, exit 3 on any. |
 | `beekeeper hook permissionrequest` | The PermissionRequest hook: answers `allow` only for a session `agents start` started in bypass that now runs in `acceptEdits`; every other request gets no answer, so the person sees the normal card. Below. |
 | `beekeeper free [--apply] [--only SECTIONS] [--summary]` | Show where the memory is and, with `--apply`, free what no running work needs: dead sessions' dirs in the tmpfs `/tmp` (the CLI is gone; an idle session's stay), throwaway temp dirs and orphaned jest or Claude workers. Kind clusters, idle CLIs, heavy or runaway processes and Chrome renderers are only reported. Each Claude CLI is listed with its session's title and id, its roster state (busy, parked, idle), its role (supervisor, guide, relay spare) and the hours since its transcript changed; one whose session is untouched for `--cli-stale-hours` (12) with no role and not busy or parked is marked stale with the memory its exit returns, and stays running. Never runs as root: the swap reset and root-owned leftovers are printed as the commands to run. `--summary` prints the TSV rows a desktop front end parses. |
@@ -328,6 +330,62 @@ variable (`rm -rf "${D:?}"/*`), run the cleanup from a `set -euo pipefail` scrip
 or move the files aside instead of deleting them. `rm -rf "$D"` alone, `$HOME` and `$PWD` paths, `git
 clean`, `git rm`, `klausctl stop|delete` and beekeeper's own commands pass.
 
+## Threat model
+
+Agents act for the person but are not the person: a prompt injection, a confused plan or a wrong
+command must not reach a credential. The parties:
+
+| Party | Runs as | Reaches |
+|---|---|---|
+| The person | their Unix user, at their terminal | everything: the vault through their own sign-in, the keyring, the kubeconfigs |
+| beekeeper's broker (`beekeeper sandbox broker`) | the person's user, a systemd user unit no agent starts, undumpable | the vault session (in memory), the SOPS keys, the container runtime, devctl's keychain login |
+| A sandboxed agent session | the person's user inside the sandbox (bubblewrap, own mount namespace, no Unix sockets) | its working directory, the temporary directory, beekeeper's state outside `scan/`, GitHub and `sandbox.domains` through beekeeper's egress proxy; no credential |
+| An unsandboxed agent session | the person's user | what the person reaches, held back by the PreToolUse hook only |
+| Remote services (GitHub, the model API, chat) | elsewhere | what a session sends: the outbound guard refuses secret values ([What leaves the machine](#what-leaves-the-machine)); the mention guard refuses a gh post (issue or pr comment, create, edit, review; a comments, reviews, issues or pulls endpoint of gh api, its body files included) or a GitHub connector post that @-mentions someone: an agent's text goes out under a person's account |
+
+The secrets and where they live:
+
+| Secret | Where | Who reads it |
+|---|---|---|
+| The vault session (`secret.session`) | the broker's memory; for one call, the environment of the broker's `op` child | the broker, which signs in by itself (`secret.signinCommand`) |
+| The vault's service account token (`secret.tokenFile`) | a 0600 file outside the sandbox's lists | beekeeper's own `op` calls |
+| The SOPS keys | the person's key files, outside the sandbox's lists | sops in beekeeper's process |
+| The GitHub App token of sandboxed sessions | the broker's memory | the egress proxy, into the `Authorization` header of requests to GitHub |
+| The person's commit signing key | gpg and its agent on the host, whose socket the sandbox closes | gpg, run by the broker for a sandboxed git's signing call |
+| The value scanner's key and index | `scan/` in beekeeper's state, denied to sandboxed sessions | beekeeper |
+| Kubeconfigs, the Teleport profile, the GitHub CLI's token, the keyring | the person's home and session bus | the person; a lab kubeconfig for its lease holder |
+
+Why an agent reads no value and opens no vault: a value leaves beekeeper only as a key name, a
+length, an equality or a keyed fingerprint ([Secret operations](#secret-operations)); every op, sops
+and decryption command, every vault sign-in or unlock and every keyring read is refused in agent
+sessions ([Secret reads](#secret-reads)); the agent shell drops vault credentials from its environment;
+the vault session exists in the broker alone and only the person's sign-in at their own terminal puts
+it there ([The vault session](#the-vault-session)); a sandboxed session can neither read the
+credential files nor reach a Unix socket, the keeper's and the session bus included
+([The agent sandbox](#the-agent-sandbox)); and a tool result that carries a value is redacted before
+the model sees it ([What reaches the model](#what-reaches-the-model)).
+
+Residual risks:
+
+- **An unsandboxed session is not a boundary.** It runs as the person's user, and the hook reads
+  command lines: a compiled program, an interpreter's own code (`python -c`), a binary renamed or
+  written on the fly reaches what the user reaches, the keyring, the token file, the keeper's socket
+  (to lock it, or to hand it a session) and the environment of the broker's `op` child during a call.
+  The sandbox is the boundary; the hook is a guard rail that catches mistakes and the plain forms.
+- **Credentials in shell startup files.** A credential that shell startup files export comes back in
+  every shell an agent's command starts (`zsh -c …` reads them again after the prelude). A vault
+  session belongs to the broker only, never in startup files or a store every process of the user reads.
+- **The keeper's socket.** `unlock` hands the session only to a listener running this beekeeper
+  binary as this user; a process of the user that replaces the binary on disk defeats that check.
+- **The egress proxy acts on GitHub with the App token** for every sandboxed session: a session cannot
+  read the token, but it can make any call the App's permissions allow, as the person's merges and
+  pushes do ([The agent sandbox](#the-agent-sandbox)).
+- **The broker signs for every sandboxed session**: a session cannot read the signing key, but its git
+  can have any commit or tag signed with it, as the person's own commits are.
+- **A held lab's kubeconfig** is readable by every sandboxed session, not by its holder alone.
+- **Desktop control.** An agent that drives the desktop could type into the person's terminal; the
+  unlock still needs the account password, which no agent holds.
+
 ## Secret reads
 
 A value a command prints lands in the session's transcript and goes to the model API with the next
@@ -341,11 +399,13 @@ everywhere it is carried ([Secret operations](#secret-operations)).
 Refused in every form, since beekeeper is the only process that reads, creates, rotates, encrypts and
 decrypts secrets:
 
-- `sops` (decrypting and encrypting alike, `helm secrets` included) and `op` (`op read`, `op item`,
-  `op whoami`, `op run --no-masking`, …), also behind `sudo`, `env`, `timeout`, `xargs` and
-  `beekeeper run`; `age -d` and `gpg --decrypt`. The one exception until `beekeeper secret rotate` ships:
-  `op run -- <command>`, whose output op masks; the command it runs is checked as a command of its
-  own (`op run -- sops -d x` and `op run -- kubectl get secret x -o yaml` are refused).
+- `sops` (decrypting and encrypting alike, `helm secrets` included) and `op` in every form (`op read`,
+  `op item`, `op whoami`, `op run`, …), also behind `sudo`, `env`, `timeout`, `xargs` and
+  `beekeeper run`; `age -d` and `gpg --decrypt`.
+- Every sign-in to or unlock of a vault: `op signin`, `op account add`, `op unlock`, the person's own
+  unlock helpers (`secret.unlockCommands`, by name under any path; the broker alone runs one, as
+  `secret.signinCommand`), `beekeeper secret unlock`, which is the person's; and keyring reads (`secret-tool lookup|search`, macOS `security find-*-password`). No
+  agent session holds or opens a vault session: it lives in beekeeper alone, and the refusal says so.
 - `kubectl edit` of a Secret and `kubectl view-secret`.
 - A hash (`sha*sum`, `md5sum`, `b2sum`, `cksum`, `openssl dgst`) or a diff (`diff`, `cmp`, `git diff
   --no-index`, …) of a file whose name says it holds secrets in plaintext (`secrets.yaml`,
@@ -383,9 +443,17 @@ a variable or a flag's value (`T=$(…)`, `--from-literal=k=$(…)`), a hash, `g
 clipboard are no allowed end. `-o name`, `-o wide`, the table and `kubectl describe secret` (sizes
 only) pass.
 
-The same holds inside `sh|bash|zsh -c`, `ssh`, `eval` and `watch` strings and here-documents fed to a
-shell. Quoted text, comments and other here-documents (a commit message, an issue body) are not
-commands and pass.
+The same holds inside what a command line runs besides itself: every argument of `sh|bash|zsh` (a
+`-c` or `-ic` string, a single word such as `zsh -ic <helper>` included, and `"$SHELL"`), `ssh` and
+`watch`; `eval`'s words; the body of a shell function or group on the line (`f(){ …; }; f`); here-documents
+fed to a shell; and a script it runs (`bash x.sh`, `./x.sh`, `source x.sh`, read from the session's
+working directory, a text file up to 64 KiB, nested scripts four deep). Quoted text, comments and other
+here-documents (a commit message, an issue body) are not commands and pass.
+
+The agent shell prelude (`beekeeper hook sessionstart`) also drops `OP_SESSION_*`,
+`OP_SERVICE_ACCOUNT_TOKEN` and `OP_CONNECT_TOKEN` from the environment before every command, and the
+aliases and shell functions of `secret.unlockCommands`, so a vault credential in the environment never
+reaches an agent's command.
 
 ## Secret operations
 
@@ -400,10 +468,12 @@ path; `sops://` in front optional) or a field of the shared 1Password vault
 (`op://<vault>/<item>/<field>`). beekeeper reads only the vault `secret.vault` names, and only as its
 service account, whose token it reads from `secret.tokenFile` and gives to its own `op` calls alone;
 with either unset, an `op://` reference is refused. `secret.session: true` reads and writes the vault
-through the person's own signed-in `op` session in the caller's environment instead (`tokenFile` unused,
-`setup` refused): the way to a vault no service account can be granted, such as a person's Employee vault;
-signed out, `op` fails and the command exits 78. Every command exits 78 when the vault cannot give a
-value: none configured, no token, or `op` failing or answering nothing within a minute. A SOPS file is encrypted under the creation rules
+through the person's own `op` session instead (`tokenFile` unused, `setup` refused): the way to a vault
+no service account can be granted, such as a person's Employee vault. That session lives in the broker's
+memory alone ([The vault session](#the-vault-session)), so every call on an `op://` reference runs
+there, from an agent session, a sandboxed one or the person's terminal alike. Every command exits 78
+when the vault cannot give a value: none configured, no token, the vault locked past
+`secret.unlockWait`, or `op` failing or answering nothing within a minute. A SOPS file is encrypted under the creation rules
 of the `.sops.yaml` nearest above it, run from that directory, so a `path_regex` relative to the
 repository matches.
 
@@ -413,14 +483,98 @@ repository matches.
 | `fingerprint <ref>` | HMAC-SHA256 of each value under the value scanner's key (`scan/key`), cut to 16 hex digits: equal values, equal fingerprints; only beekeeper can make one. |
 | `copy <src.sops.yaml> <dst.sops.yaml> [--name n] [--namespace ns]` | A new SOPS file with src's values, encrypted under dst's rules; `--name` and `--namespace` rewrite a Kubernetes object's metadata. It answers each key and its length (a Secret's `data` decoded); dst must not exist. |
 | `copy <ref> <file#path>` | One value into a SOPS path, creating the file or the key when absent, the file's other values kept. |
-| `copy <ref> -- <consumer…>` | One value on the stdin of `gh secret set`, a command with `--password-stdin` or one with `--secret <name>=-`; any other consumer is refused. It answers the consumer's exit code and its output with the value redacted. |
+| `copy <ref> -- <consumer…>` | One value on the stdin of `gh secret set`, `garage json-api <endpoint> -`, a command with `--password-stdin` or one with `--secret <name>=-`, or of one of them in a pod through `kubectl exec -i --context <context> <pod> -- <consumer…>` (no TTY, which would echo stdin, no `-v`, never a context of `kube.production`): the value travels on the exec stream, never on an argv. Any other consumer is refused. `--stdin-json '<object>' --stdin-field <key>` hands the consumer that JSON object with the value at `<key>` instead of the bare value, for a command that reads a JSON request, such as Garage's `garage json-api ImportKey -` with `--stdin-json '{"accessKeyId":"GK…","name":"app"}' --stdin-field secretAccessKey`; `kubectl exec` starts `/garage` itself, so an image without a shell takes it, and the CLI reaches the admin API over RPC with the pod's own configuration, no admin token. It answers the consumer's exit code and its output with the value redacted (its JSON-escaped and base64 forms included). |
 | `copy <ref> --to-secret <context>/<namespace>/<name>/<key>` | One value into a key of a Secret in a kind lab (`kind-<cluster>`) whose lab lease (`labs`) the caller holds: a server-side apply under the field manager `beekeeper-secret` that creates the Secret when absent and keeps its other keys, through the admin kubeconfig `kind get kubeconfig` answers, which stays in beekeeper's memory like the value. Any other context, and a lab the caller does not hold, is refused (exit 3). It answers the value's length. |
-| `set <file> <path> --generate --vault op://…` | A new value (`--length`, 32; `--charset`, `alnum`, `hex` or `ascii`) written to the vault field first (the item or field created when absent, the item passed as a JSON template on stdin, never on a command line), then into the SOPS path; it answers the fingerprint. |
+| `set <file> <path> --generate [--vault op://…] [--to-secret <context>/<namespace>/<name>/<key> \| -- <consumer…>]` | A new value (`--length`, 32; `--charset`, `alnum`, `hex` or `ascii`), drawn in beekeeper's process, into the SOPS path (the file or key created when absent); it answers the fingerprint. A plaintext Kubernetes Secret without values (apiVersion, kind, metadata, an empty `stringData`), a skeleton, becomes the SOPS file, encrypted to its `.sops.yaml` recipients; a plaintext Secret holding a value is refused. `--name` and `--namespace` start an absent file as that Secret (`type: Opaque`), ready for Flux. Without `--vault` the SOPS file is the value's only home, for a credential no vault may hold. `--vault` writes the vault field first (the item or field created when absent, the item passed as JSON on stdin, never on a command line). `--to-secret` (a held lab, as for `copy`) or a consumer (the `copy` consumers, its output redacted and its exit code answered) receives the same value in the same call, after the SOPS path; a delivery that fails leaves the value in the SOPS path, for `copy` to finish. A refused lab or consumer is refused before any value is drawn. |
 | `setup [--service-account <name>]` | Gives beekeeper the shared vault, once: `secret.vault` created when the person's 1Password session finds none, a service account (default `beekeeper-<host>`) that reads and writes that vault only, and its token written from `op`'s output straight to `secret.tokenFile` (mode 0600). It runs `op` as the person, in the caller's signed-in session, and answers the vault, the account and the token's length; a token file that holds a token is refused (exit 3). |
 | `import op://<vault>/<item>/<field> op://<shared>/<item>/<field>` | One field of a vault outside the shared one, read with the person's session, into a field of the shared vault, written as the service account (the item or field created when absent); it answers the length. From then on the shared reference is the one to use. |
 | `rotate op://… --generate` | A value beekeeper made gets a new one (`--length`, `--charset` as for `set`): the vault field first, then every path of the SOPS files `scan.sops` names that carried the old value, the value itself or its base64 form (a Secret's `data`), matched by fingerprint. |
 | `rotate op://…` | A value a third party issues: the person rotates it at its issuer into the vault field, and `rotate` writes the vault's new value into every path that carried the old one, known by the fingerprint `beekeeper scan index` recorded before the change. It refuses while the vault still holds the recorded value. |
+| `unlock [--account <a>]` | The person's, in their own terminal: `op signin` on that terminal, the session handed to the broker ([The vault session](#the-vault-session)). Refused in an agent session and without a terminal; the hook refuses it in agent sessions too. |
+| `lock` | The broker forgets the vault session. |
+| `status` | Whether the broker holds the vault session, never the session. |
 | `rotate platform://<installation>/<capability>/<name> --reason <text>` | A credential the platform manager generates: `platformctl installation reconcile <installation> <capability> --commit --rotate <name>` on the host, the manager writing the new value into the installation's SOPS files in a pull request; nothing is decrypted and no copy reaches the vault. `--dry-run` shows the files that hold it. |
+
+### Age identities
+
+sops decrypts a file encrypted to age recipients with an identity from its own sources:
+`SOPS_AGE_KEY`, the file `SOPS_AGE_KEY_FILE` names, and `sops/age/keys.txt` in the user's config
+directory. Before sops runs, beekeeper reads the file's recipients from its plaintext metadata and
+checks those sources for an identity of one of them; without one, the call fails before sops,
+naming the recipients, each source with what it held, and `secret.ageIdentities`. A file with
+another key group (KMS, PGP, Vault, key groups), an SSH or plugin recipient, or with
+`SOPS_AGE_KEY_CMD` or `SOPS_AGE_SSH_PRIVATE_KEY_FILE` set goes to sops unchecked.
+
+`secret.ageIdentities` supplies an identity no local source holds, from the shared vault or from
+an identity file on the host that is to stay out of every vault:
+
+```yaml
+secret:
+  ageIdentities:
+    - recipient: age1…                       # the files encrypted to this recipient
+      ref: op://<vault>/<item>/<field>        # the AGE-SECRET-KEY-1… identity
+    - pathRegex: /installations/[^/]+/secrets/  # or every file under a path (absolute, unanchored)
+      ref: op://<vault>/<item>/<field>
+    - recipient: age1…
+      ref: file:///home/<person>/<identity file>  # an age identity file (absolute path)
+```
+
+The first entry whose recipient is one of the file's, or whose `pathRegex` matches the file's
+absolute path, is read like any `op://` reference (the vault must be `secret.vault`) or, for a
+`file://` reference, from the file as `age-keygen` writes it (comment lines and several identities
+allowed), checked to hold the identity of one of the file's recipients, and only that identity is
+given as `SOPS_AGE_KEY` to the one sops call's environment, never written anywhere. With
+`secret.session` such a call runs in the broker, like a call on an `op://` reference: an identity
+file is read in the broker's process alone, without the vault session, and never copied, printed or
+fingerprinted.
+
+### The vault session
+
+With `secret.session`, no agent ever holds the vault session or opens one. It lives in the memory of
+`beekeeper sandbox broker` (`beekeeper-sandbox.service`), a process of the host that no agent session
+starts; never in a file, a keyring entry or an agent's environment. The broker makes itself undumpable
+(no other process of the user reads its memory or environment), drops every vault credential from what
+its calls inherit, and gives the session to its own `op` calls alone, in their environment.
+
+The broker signs in by itself: it runs `secret.signinCommand` when it starts and whenever a call needs
+the vault while it holds no session, one sign-in at a time that every waiting call shares. The command
+signs in without the person (a helper that reads the account password from a local password store,
+for example) and prints the session as `op signin` does (`export OP_SESSION_<id>="<token>"`) on
+stdout, which the broker reads into its memory; its stderr goes to the broker's journal. It runs with
+the broker's environment, the vault credentials removed; a command that needs more memory than the
+broker's unit allows runs in a unit of its own (`systemd-run --user --pipe --wait --quiet -p
+MemoryMax=1G -- <helper>`). The broker holds the session for `secret.sessionLifetime` (12 h), touches
+it every 10 minutes with a vault listing (a call that reaches 1Password: `op whoami` does not reset
+op's 30-minute idle timeout) so that op does not let it idle out, and forgets it at the end of the
+lifetime. A session op no longer takes, found by the touch or by a call that op answers "not signed
+in", is dropped and signed in again at once through `secret.signinCommand`, the call retried once
+with the new session; the journal and the watch (`VAULT SESSION DROPPED at <t>: op no longer took it
+(<reason>); the broker signs in again`, ended by the new sign-in) say so.
+
+While the broker holds no session, a call on the vault prints `vault locked: waiting for the broker's
+sign-in` and waits up to `secret.unlockWait` (8 m; the hook gives such a call the Bash tool's 10
+minutes), then exits 78. Nothing asks the person. The watch says `VAULT UNLOCKED: the broker holds the
+vault session since <t> until <t>` for the session's lifetime and an ENDED line when the broker
+forgets it; `VAULT SIGN-IN FAILED: <reason>` with the command's last line; `VAULT LOCKED: <who> waits
+on <ref>` for each waiting call, with an ENDED line once it goes on, or `VAULT LOCKED: <who>'s call on
+<ref> timed out …, still locked` when it gives up. `beekeeper status` names the waiting sessions.
+`beekeeper secret lock` forgets the session at once. The broker runs on Linux only, so
+`secret.session` needs it there.
+
+Without `secret.signinCommand`, the person hands the broker a session with `beekeeper secret unlock`
+in their own terminal: `op signin` runs on that terminal and the person types the account password
+into op's own prompt; the session goes from beekeeper's memory to the broker over a Unix socket in the
+runtime directory (`$XDG_RUNTIME_DIR/beekeeper/vault.sock`, mode 0600 in a 0700 directory, which the
+sandbox can neither reach nor write), after `unlock` checked that the listener is the main process of
+`beekeeper-sandbox.service` running this beekeeper binary as this user (from systemd: the broker's own
+`/proc/<pid>/exe` is root's, since it is undumpable). The socket answers only whether a session is
+held. `unlock` refuses in an agent session (Claude Code's, omp's or the sandbox's variables set) and
+without a terminal, and logs a refusal; the hook refuses it in agent sessions before it runs.
+
+The 1Password desktop app's CLI integration (op asks the app, the app asks the person through the
+system authentication prompt) is not used: it lets any process of the user that calls op raise the
+prompt, so an unsandboxed agent calling op directly would raise the same prompt as beekeeper, and the
+person could not tell them apart.
 
 `rotate` reads every SOPS file before it writes anything, so one it cannot read stops the rotation with
 nothing changed; it answers the new value's fingerprint and the paths it went to, indexes the new value
@@ -438,9 +592,12 @@ wrote team-b/app.sops.yaml: 2 keys
 An agent's commands run as the person's Unix user. A deny list of credential paths leaves every path
 nobody listed readable, so the agent sandbox turns it around: the home directory is denied and only what
 a session needs is re-allowed. `beekeeper sandbox render` prints the policy as Claude Code settings;
-`beekeeper sandbox install` stages it and prints the one root command that puts it into Claude Code's
+`beekeeper sandbox install` stages it and prints the root commands that put it into Claude Code's
 managed settings (`/etc/claude-code/managed-settings.d/beekeeper-sandbox.json` on Linux,
-`/Library/Application Support/ClaudeCode/managed-settings.d/` on macOS). From there it holds every
+`/Library/Application Support/ClaudeCode/managed-settings.d/` on macOS). On a fresh machine they create
+the managed settings file (`managed-settings.json`, an empty `{}`) and its `managed-settings.d`
+directory first: the sandbox mounts both read-only and cannot create them, so a session held by
+`claude --settings` needs them as well. From there it holds every
 Claude Code session on the machine, the headless turns beekeeper starts and the CLI the desktop app
 spawns alike, enforced by Anthropic's sandbox runtime (bubblewrap on Linux, Seatbelt on macOS). The
 same file passed to `claude --settings` holds one session to it, to try a change first.
@@ -453,12 +610,65 @@ same file passed to `claude --settings` holds one session to it, to try a change
   listed stay unreadable. Only the managed settings' read paths count.
 - **Writes:** the session's working directory (when it is readable itself), the temporary directory,
   beekeeper's state, the build slots and `sandbox.allowWrite`.
+- **The harness's config directory** (`~/.claude`, or `CLAUDE_CONFIG_DIR`) is denied for writing:
+  Claude Code mounts it writable in the sandbox and masks only the entries it knows, so a command could
+  otherwise leave a new file there that the harness reads outside the sandbox. The file tools still write
+  the sessions' memory and plans.
 - **The scanner's key and index** (`scan/` in beekeeper's state) are denied for reading and writing
   inside the writable state directory: the narrower deny holds, so no session reads the fingerprint key
   or rewrites the index the redaction matches against.
-- **Egress:** GitHub and `sandbox.domains`, nothing else, with no prompt to widen it.
-- **The GitHub token:** `GH_TOKEN` and `GITHUB_TOKEN` (`sandbox.mask`) are masked: commands see a
-  placeholder, and the sandbox proxy puts the real value into requests to GitHub's hosts only.
+- **Egress:** through beekeeper's egress proxy alone, to GitHub and `sandbox.domains`, nothing else,
+  with no prompt to widen it. The policy points Claude Code's `httpProxyPort` and `socksProxyPort` at
+  the broker's proxy (`127.0.0.1:<sandbox.proxyPort>`, 3190), so Claude Code bridges the sandbox's HTTP
+  and SOCKS5 proxies there and runs no proxy of its own; the broker's proxy answers its own user only.
+  An entry is a host, `*.<domain>` for its subdomains, or `host:port` for one port. Loopback is listed
+  by port only (`127.0.0.1:<port>`, a lab's API server): a bare loopback host or a wildcard port would
+  open every listener on the host (other sessions' port-forwards, local servers), so the configuration
+  refuses it, and a name that resolves to a loopback, link-local, unspecified or multicast address is
+  refused when the proxy dials it. A refused target gets a 403 (SOCKS: not allowed) and a line in the
+  broker's log.
+- **The runtime directory** (`$XDG_RUNTIME_DIR`) is denied for reading like the home directory (the
+  container runtime's registry login, the agents' sockets), apart from the egress proxy's directory.
+- **The GitHub token:** `gh`, `git push` and `devctl` act with devctl's App user token (eight hours,
+  capped by the App's permissions), and the sandbox never holds it, not even as a placeholder. The
+  broker reads it every five minutes with `devctl auth exec` (`sandbox.devctl`) into its memory. Its
+  egress proxy terminates TLS for `github.com`, `api.github.com` and `uploads.github.com` with a CA it
+  makes at start, its key in memory alone and name-constrained to those hosts, and sets each request's
+  `Authorization` header itself (Basic for git on `github.com`, a token for the API), replacing what
+  the client sent; bodies pass untouched, so no endpoint can echo the token back. Every other host is
+  an opaque tunnel. The broker writes the CA, a bundle of the system's roots and the CA, and gh's login
+  (a fixed word, `beekeeper-egress-proxy`, which the proxy replaces) to
+  `$XDG_RUNTIME_DIR/beekeeper/egress`; the policy points `SSL_CERT_FILE`, `GIT_SSL_CAINFO`,
+  `CURL_CA_BUNDLE` and `REQUESTS_CA_BUNDLE` at the bundle, `NODE_EXTRA_CA_CERTS` at the CA and
+  `GH_CONFIG_DIR` at gh's login, and git's `gpg.program` at the signing script. These variables reach the harness process too; the bundle keeps the
+  system's roots, and the CA is good for GitHub's three hosts alone. git reaches GitHub over HTTPS
+  (`git@github.com:` is rewritten), needs no credential helper, since the proxy authenticates its first
+  request, and runs none of the person's for GitHub. `agents.shell.path` stays off `PATH` in the
+  sandbox, an inherited `PATH` included, since a `gh` link to devctl reads the keychain.
+- **Commit signing.** The sandbox reaches no gpg-agent, so the policy sets git's `gpg.program` to a
+  script the broker writes into the egress directory, which runs `beekeeper sandbox gpg`: it hands
+  the payload of git's signing call (`--status-fd=2 -bsau <key>`, nothing else) to the broker, which
+  runs the person's gpg (`gpg.program` of their git config, else `gpg`) on the host and answers the
+  signature and gpg's status lines. `commit.gpgsign` and `tag.gpgSign` work unchanged; the key and
+  the agent never enter the sandbox.
+- **devctl.** devctl's gated commands (`pr merge`, `pr wait`, `release promote`, `release wait`,
+  `rollout wait`) read the keychain over the user bus and start user units, both closed in the sandbox,
+  so a sandboxed `beekeeper gate` hands its command to the broker: it runs the same gate on the host, as
+  the session and in its working directory, with `sandbox.devctl`'s directory first on `PATH`, and its
+  output and exit code come back through the spool once it ends (up to three hours). Only those
+  commands are brokered, and a queued merge's own run is refused from the sandbox.
+- **The roles' host commands.** `beekeeper agents start`, `wake` and `resume` start transient user
+  units over the user bus, the watch reads the installations through the person's kubeconfig and
+  Teleport login, and a lab's creation needs the container runtime: all closed in the sandbox. A
+  sandboxed call of each hands its command line to the broker, which runs it on the host as the
+  session, in its working directory, with the command's own checks: a start's brief and `--dir` held
+  to the session's lists, a lab only for the holder of its lease. Their output streams back while they
+  run, and a call whose sandboxed command ended (a stopped `Monitor`) is ended with it. The watch moves
+  into a scope of its own (512M), out of the broker's unit; a lab's `agentlab up` or `down` runs capped
+  as `beekeeper run` caps it. In the sandbox the hook refuses `agentlab up|down` and `kind
+  create|delete cluster` and names `beekeeper lease up|down <lab>` instead. Nothing of the person's
+  kubeconfig or Teleport profile enters the sandbox: only the watch's lines and the lease's own lab
+  kubeconfig do.
 - **No way out:** unsandboxed retries are off, and a session whose sandbox cannot start does not start.
 - **The file tools.** Read, Grep, Glob, Edit, Write and NotebookEdit run in the harness, outside the
   sandbox. The policy runs `beekeeper hook pretooluse` for them and sets `BEEKEEPER_SANDBOX`, and the
@@ -479,13 +689,20 @@ same file passed to `claude --settings` holds one session to it, to try a change
   its working directory, and the SOPS files it reads and writes are held to the sandbox's lists. Its
   output and exit code come back through the spool, and that output is never a value. A consumer
   (`copy <ref> -- <command>`) would run on the host, outside the sandbox, so the sandbox refuses it,
-  as it refuses `--as`, `--config` and the vault's `setup` and `import`, which the person runs.
+  as it refuses `--as`, `--config` and the vault's `setup` and `import`, which the person runs. The
+  broker tells a sandboxed requester by its mount namespace, which no process in the sandbox leaves:
+  an unsandboxed session's vault call ([The vault session](#the-vault-session)) runs outside the
+  sandbox's lists, its consumer included.
 - **Lab kubeconfigs.** The machine kubeconfig stays denied, and kind needs the container runtime's
   socket, so a lab's kubeconfig exists only while its lease is held: the claim (or `beekeeper lease
   kubeconfig <lab>` once the lab runs) has the broker write it into the lease for the session that holds
-  it, and release takes it away. The lab's API server address goes into `sandbox.domains`. The policy is
-  one for the machine, so a held lab's kubeconfig is readable by every sandboxed session, not by its
-  holder alone.
+  it, and release takes it away. The lab's API server goes into `sandbox.domains` as `127.0.0.1:<port>`,
+  so its port is fixed (agentlab's `apiServerPort`). Every HTTP client exempts loopback from the proxy
+  environment, so the kubeconfig points the lab's cluster at the sandbox's SOCKS proxy (`proxy-url`),
+  which ends at the egress proxy as an opaque tunnel held to the same allow list. In a session that
+  holds a lab lease the hook puts `beekeeper lease kubeconfig --refresh <lab>` in front of every
+  command, which points the lease's kubeconfig at this process's proxy. The policy is one for the
+  machine, so a held lab's kubeconfig is readable by every sandboxed session, not by its holder alone.
 
 ## What leaves the machine
 
@@ -878,7 +1095,13 @@ is kept in reserve or repurposed: a relay and a crash both start a fresh session
   wake`, `RESUME`), and that turn keeps the role's watch and its CLI, with no click or decision
   by a person. The pending reopen then yields to that turn, so the desktop warms no second CLI
   beside it; the wake's own reopen follows the turn, and each later gap without a CLI is resumed
-  headless again until the desktop runs the holder's CLI. One whose resume never ran did not
+  headless again until the desktop runs the holder's CLI. A successor is imported into the
+  desktop's sidebar under its run title without a click, whatever its turns do: its import goes
+  ahead past the desktop window's focus as an `agents start --desktop` agent's does (it waits
+  for the person's typing to pause, 1 minute at most), and a reopen that meets the resume of a
+  session the desktop never imported imports it beside that turn, the turn frozen while the
+  desktop reads the transcript and the desktop's CLI it warms stopped. A desktop at its cap of
+  CLIs still writes the row; it warms no CLI for it. One whose resume never ran did not
   come up (`SUCCESSOR DOWN`): the first is one
   note for `guide.person`, the next successor starts 5 minutes later, the one after 10 minutes,
   and after three none starts until a holder runs again.
@@ -946,30 +1169,33 @@ tab-separated fields, always present, in this order.
 session and hand it a brief, without the click. The first prompt is the worker rules beekeeper
 ships (the `worker-rules` skill, under the binary's version), then the brief as the task, so a
 brief carries only its task and reports to `the supervisor`, whoever holds the role by then; a
-hand-over puts the rules ahead of the follow-up's prompt again. The first turn runs from the command
-line in bypass, and the roster shows it busy with its `--task` from the moment it is started. The session is then a desktop session as well: the person reads and answers it in the sidebar.
+hand-over puts the rules ahead of the follow-up's prompt again. The roster shows it busy with its
+`--task` from the moment it is started, and the desktop shows it working from its first turn.
 
-**The roster is the view of which agents work, not the sidebar.** Claude Desktop marks a row
-working only while its own CLI of the session runs a turn; its session record holds no state another
-process could set. A first turn (and a wake turn of `agents wake`) is a `claude -p` outside the
-desktop, so the row shows the session idle while it works. The desktop has no route that runs the
-brief as a desktop turn of the imported session instead: `claude://resume` imports a session without
-a prompt, `claude://code/new?q=` fills the composer of a new session under an id of the desktop's,
-and a message to `local_<id>` (`SendMessage`, the session tools' `send_message`) is a turn another
-desktop session's model sends, labelled as that session's message, under the desktop's cap of CLIs
-and of sends since the person last typed. `beekeeper agents` shows such an agent `live, first turn
-running` or `live, wake turn running` and says under its table how many agents are in a headless
-turn; `--json` marks each with `headlessTurn`.
+**The task runs as a desktop turn.** Claude Desktop marks a row working only while its own CLI of
+the session runs a turn, so a `claude -p` turn outside the desktop leaves the row idle while it
+works. A start therefore runs no task headless: a seed turn (`claude -p` under the id beekeeper
+chose, with `--tools ""` and `--strict-mcp-config`, the worker prompt as its first prompt and the
+note that it only answers "ready") creates the transcript with its model and title, in a transient
+user unit `beekeeper-agent-<id>`. Once it ended, beekeeper imports the session into the desktop
+under its name, past the window's focus (the person's typing holds the link 1 minute at most); a
+title or model the import dropped is restored by a steward, the title by the session's own desktop
+CLI when no other steward runs. The desktop's CLI of the session, which the import warms, then takes
+the message that starts the task as its turn; when the desktop runs none, a steward's `send_message`
+through the desktop's session messaging starts one with it, the route a relay revives a role holder
+by. Before either spawn, `makeRoom` keeps the desktop under its cap of CLIs by ending one of
+beekeeper's own finished or parked workers' CLIs, never a person's session. Only where the desktop
+cannot run the turn (it does not run, the session has no row, no steward took the send) is the
+session resumed headless as `agents wake` does, and `start` says why. A role's relay successor keeps
+its headless first turn, which only takes the role; its relay hands it the desktop turn.
 
-The import makes the desktop warm a CLI of its own for the session (`--resume=<id>`) while the
-first turn still runs. Two CLIs on one session id are two peers under one name, and a message by
-name could reach the desktop's copy, which would run a turn beside the first turn. So once the
-import has shown the session, beekeeper stops the desktop's CLI (it waits up to 15s for it) while
-the first turn runs: the first turn is then the session's only CLI, and a message by name, such as
-a grant or a clearance, reaches it at its next tool call. Once the first turn has ended, the unit's
-`ExecStopPost` runs `beekeeper agents reopen <id>`: it shows the session in the desktop for a
-moment and switches back, which warms the desktop's CLI of it, so the session is a peer again and
-takes a follow-up task by message as a desktop turn. It reopens only a start the roster still
+`beekeeper agents` shows an agent in a headless turn (a fallback, a successor's first turn, a wake
+turn) `live, first turn running` or `live, wake turn running` and says under its table how many
+agents are in one; `--json` marks each with `headlessTurn`. While such a turn runs beside an import,
+beekeeper stops the desktop's CLI of the session (it waits up to 15s for it): two CLIs on one
+session id are two peers under one name. Once the headless turn has ended, its unit's
+`ExecStopPost` runs `beekeeper agents reopen <id>`, which shows the session in the desktop for a
+moment and switches back, so its desktop CLI is warm again. It reopens only a start the roster still
 holds, never one a hand-over or `agents remove` took off. A reopen the desktop did not take (the
 session not shown, its title not restored) is an `agent.reopen` event and ends the unit
 successfully: the turn ended as it should.
@@ -1013,6 +1239,20 @@ a relay relieved it;
 `--keep-desktop` leaves it in the sidebar. When no steward is idle it says so and the removal
 still stands; the doctor then owes the archive (below).
 
+The desktop's `archive_session` may be used only on the person's explicit agreement, and a
+peer's message is not that, so beekeeper archives only under `agents.archiveAgreement`: where the
+person agreed that the desktop sessions of finished workers beekeeper started are archived
+without asking, never a session they started themselves (a standing instruction in their user
+`CLAUDE.md`, say). The request quotes it and has the steward run `beekeeper agents archivable
+<local_id>…` first, which confirms each session is such a finished worker (one of beekeeper's
+starts, off the roster, no role a relay did not relieve, unarchived, its CLI in no turn) and exits
+3 for any other, a session the person started included; the steward archives only what it
+confirms. Without `agents.archiveAgreement` no steward is asked and the line says so. An archive
+counts once the desktop records it, and the line names the steward whose `archive_session` call
+did it. A steward that archived nothing is read from its turn: one that declined is reported with
+the first line of its reply (`agents.archive`, "steward local_… declined to archive: …") and asked
+for no archive for 24 hours; one that did not answer is reported as such.
+
 `beekeeper doctor` does these chores by rule, and every watch poll (not `--once`) runs it in the
 background, one `DOCTOR` line per thing it did. It takes an agent off the roster once it reported
 its work finished with `agents idle --done` and its CLI runs no turn, once it was relieved of the
@@ -1038,8 +1278,10 @@ defaulted, done or overtaken) or the issue or pull request merged or closed, the
 to a running CLI, else headless); without it, or for a park without `--on`, `beekeeper agents
 resume <agent>` does it by hand. A resume that cannot wake the agent leaves it parked (`AGENT
 RESUME FAILED`); `agents idle` ends the park with the task. An archive
-that stayed (the CLI ran a turn, no steward recorded it, also after `agents remove`) is owed: the
-doctor asks for it again on its later runs while the CLI runs no turn, in the same steward's turn,
+that stayed (the CLI ran a turn, no steward recorded it, also after `agents remove`) is owed, and
+so is, once, every finished worker beekeeper started whose desktop record stayed unarchived, its
+CLI running or not: the doctor asks for at most 20 of them per run, while the CLI runs no turn, in
+the same steward's turn,
 until the desktop records it, up to 5 stewards' turns 10 minutes apart within 24 hours, each try a
 `DOCTOR` line and an `agents.archive` event with its reason; an agent back on the roster or the
 session archived by hand is owed nothing. The old session of an `agents handover` and the run of
@@ -1470,8 +1712,15 @@ The organisation and desk keys, and their defaults:
 | `ollama.url`, `lemonade.url` | unset: no model server | The host's model servers, watched and guarded under the `model-server` lease |
 | `outbound.phrases`, `outbound.paths`, `outbound.storeDeny` | none | What never leaves the machine, the plan files whose writes are outbound, the refused secret-store writes ([What leaves the machine](#what-leaves-the-machine)) |
 | `secret.vault`, `secret.tokenFile` | none | The shared 1Password vault `beekeeper secret` reads and writes, and the file with its service account's token ([Secret operations](#secret-operations)) |
-| `secret.session` | `false` | Read and write `secret.vault` through the person's signed-in `op` session instead of a service account ([Secret operations](#secret-operations)) |
-| `sandbox.allowRead`, `sandbox.allowWrite`, `sandbox.domains`, `sandbox.mask` | none; `GH_TOKEN` and `GITHUB_TOKEN` to GitHub | The paths under the home directory the agent sandbox re-allows for reading and writing, the hosts commands reach besides GitHub, the masked environment variables and their hosts ([The agent sandbox](#the-agent-sandbox)) |
+| `secret.session` | `false` | Read and write `secret.vault` through the person's `op` session, held by the broker alone, instead of a service account ([The vault session](#the-vault-session)) |
+| `secret.signinCommand` | none | The command the broker runs to sign in to the vault without the person; it prints the session as `op signin` does ([The vault session](#the-vault-session)) |
+| `secret.sessionLifetime` | `12h` | How long the broker holds the vault session after a sign-in ([The vault session](#the-vault-session)) |
+| `secret.unlockWait` | `8m` | How long a call on the vault waits for the broker's sign-in ([The vault session](#the-vault-session)) |
+| `secret.ageIdentities` | none | Age identities in the shared vault or in an identity file (`file://`), by recipient or `pathRegex`, for the SOPS files no local sops identity decrypts ([Age identities](#age-identities)) |
+| `secret.unlockCommands` | none | The person's own vault unlock helpers, refused in agent sessions like `op signin` and unaliased in the agent shell ([Secret reads](#secret-reads)) |
+| `sandbox.allowRead`, `sandbox.allowWrite`, `sandbox.domains` | none | The paths under the home directory the agent sandbox re-allows for reading and writing, and the hosts commands reach besides GitHub ([The agent sandbox](#the-agent-sandbox)) |
+| `sandbox.proxyPort` | `3190` | The port of the broker's egress proxy on `127.0.0.1`, the sandbox's only way out ([The agent sandbox](#the-agent-sandbox)) |
+| `sandbox.devctl` | `devctl` on the broker's `PATH` | The devctl the broker runs on the host: it renews the egress proxy's GitHub token and runs their gated devctl commands ([The agent sandbox](#the-agent-sandbox)) |
 | `scan.sops`, `scan.vaults`, `scan.minLength` | none, none, 12 | The SOPS file globs and 1Password vaults `beekeeper scan index` fingerprints, and the shortest value it takes ([What reaches the model](#what-reaches-the-model)) |
 | `plans.repositories`, `plans.check` | none, `plan-stages` | The plans repositories whose open pull requests a note for `guide.person` links only once their stage check is green |
 | `outbound.sweepRoots`, `outbound.sweepDepth` | the home directory, 5 | Where the watch looks for exposed keys and credentials in remote URLs |

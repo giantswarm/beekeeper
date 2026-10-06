@@ -5,10 +5,20 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
+	"k8s.io/apimachinery/pkg/util/validation"
+)
+
+// mapTag and secretKind are the YAML tag of a mapping and the kind of a
+// Kubernetes Secret.
+const (
+	mapTag     = "!!map"
+	secretKind = "Secret"
 )
 
 // document is a decrypted SOPS file as a YAML tree, kept as nodes so that
@@ -35,7 +45,7 @@ func parseDocument(raw []byte) (*document, error) {
 
 // newDocument is an empty mapping.
 func newDocument() *document {
-	return &document{root: &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}}
+	return &document{root: &yaml.Node{Kind: yaml.MappingNode, Tag: mapTag}}
 }
 
 func (d *document) encode() ([]byte, error) {
@@ -123,11 +133,15 @@ func (d *document) set(path, value string) error {
 		}
 		c := child(n, k)
 		last := i == len(keys)-1
+		if c != nil && !last && c.Kind == yaml.ScalarNode && c.Tag == "!!null" {
+			// an empty key on the way, a skeleton's `stringData:`
+			*c = yaml.Node{Kind: yaml.MappingNode, Tag: mapTag}
+		}
 		switch {
 		case c == nil && n.Kind != yaml.MappingNode:
 			return fmt.Errorf("%q: %s is no mapping", path, strings.Join(keys[:i], "."))
 		case c == nil:
-			c = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+			c = &yaml.Node{Kind: yaml.MappingNode, Tag: mapTag}
 			if last {
 				c = &yaml.Node{}
 			}
@@ -170,6 +184,69 @@ func (d *document) rename(name, namespace string) error {
 	return nil
 }
 
+// NewSecret is the Kubernetes Secret a new SOPS file starts as.
+type NewSecret struct {
+	Name      string
+	Namespace string
+}
+
+// check refuses an invalid name or namespace, and a file that exists:
+// a new Secret starts a new file.
+func (n NewSecret) check(file string) error {
+	if errs := validation.IsDNS1123Subdomain(n.Name); len(errs) > 0 {
+		return fmt.Errorf("--name %q: %s", n.Name, errs[0])
+	}
+	if errs := validation.IsDNS1123Label(n.Namespace); len(errs) > 0 {
+		return fmt.Errorf("--namespace %q: %s", n.Namespace, errs[0])
+	}
+	if _, err := os.Stat(file); err == nil {
+		return fmt.Errorf("%s exists: --name and --namespace start a new file", file)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// document is the Secret without values.
+func (n NewSecret) document() *document {
+	d := newDocument()
+	for _, kv := range [][2]string{{"apiVersion", "v1"}, {"kind", secretKind}, {"metadata.name", n.Name}, {"metadata.namespace", n.Namespace}, {"type", "Opaque"}} {
+		_ = d.set(kv[0], kv[1]) // fixed paths into an empty mapping
+	}
+	return d
+}
+
+// sopsMetadata reports whether raw carries sops metadata.
+func sopsMetadata(raw []byte) bool {
+	var doc struct {
+		SOPS map[string]any `yaml:"sops"`
+	}
+	return yaml.Unmarshal(raw, &doc) == nil && doc.SOPS != nil
+}
+
+// skeleton is a plaintext Kubernetes Secret that holds no value yet, the
+// start of a new SOPS file; nil for a file with sops metadata or no
+// plaintext Secret, which sops reads. A plaintext Secret holding a value
+// is refused, its content never quoted.
+func skeleton(raw []byte) (*document, error) {
+	if sopsMetadata(raw) {
+		return nil, nil
+	}
+	doc, err := parseDocument(raw)
+	if err != nil {
+		return nil, nil //nolint:nilerr // no plaintext document: sops judges it
+	}
+	if k, _ := doc.get("kind"); k != secretKind || child(doc.root, "metadata") == nil {
+		return nil, nil
+	}
+	for p, v := range doc.leaves() {
+		if v != "" && (strings.HasPrefix(p, "data.") || strings.HasPrefix(p, "stringData.")) {
+			return nil, fmt.Errorf("a plaintext Secret holding a value at %s: a skeleton holds none, encrypt it or move it aside", p)
+		}
+	}
+	return doc, nil
+}
+
 // Key is a key name and the length of its value, all an answer tells.
 type Key struct {
 	Name  string `json:"name"`
@@ -181,7 +258,7 @@ type Key struct {
 func (d *document) keys() []Key {
 	leaves := d.leaves()
 	secret := false
-	if k, ok := d.get("kind"); ok && k == "Secret" {
+	if k, ok := d.get("kind"); ok && k == secretKind {
 		secret = true
 	}
 	var out []Key

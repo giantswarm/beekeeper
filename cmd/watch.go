@@ -28,6 +28,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/notify"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/upgrade"
 )
@@ -113,8 +114,9 @@ line and keeps its holds.
 Once the supervisor session's context (its transcript's last request, the
 CTX column) reaches supervisor.relayAt, RELAY DUE is said at the first
 quiet moment: no gated merge running or settling, no grant waiting to be
-claimed, no claim queued and no relay open. It is said once per supervisor,
-and again only after a relay is cancelled or expires.
+claimed, no claim queued and no relay open. It is said once per supervisor
+and supervisor.relayAt, again after a relay is cancelled or expires, and
+once more by every watch that did not say it yet (a restarted watch).
 
 Every poll but --once's runs beekeeper doctor in the background (its last
 run still going, the poll skips it): one DOCTOR line per agent it took off
@@ -153,7 +155,11 @@ the notes, timers, session records and relays to the supervisor's watch,
 and it never reads the alerts, so it takes nothing from the supervisor's
 view. It reads the upgrades and sets and lifts their holds only while no
 supervisor's watch has begun an upgrade cycle within five watch.interval
-(upgrades-watch.json), and says so once.
+(upgrades-watch.json), and says so once. It relays a supervisor or guide
+that is still over its relayAt <role>.relayGrace (30m) after its relay
+due, with no relay open and, for the supervisor, at a quiet moment: it
+starts the successor as the holder's own relay does (RELAYED), and the
+successor's start takes the role.
 
 The quiet rules keep what is noise for the supervisor out of the output:
 other teams' alerts matching alerts.quiet (by default, once alerts.team is
@@ -198,9 +204,16 @@ keeps no value: the program, its subcommands and the flag names.
 What a watch has said is kept per caller (seen.watch.<caller>.json): a
 restarted watch of the same session says no open condition, runaway or
 stale lease again, only its end or what is new. Runs until killed. --once
-polls once, keeps no mark and says every condition it finds.`,
+polls once, keeps no mark and says every condition it finds.
+
+In the agent sandbox, which closes the person's kubeconfig and Teleport
+login, the user bus and the notification service, the host's broker runs
+the watch as the session, in a scope of its own, and streams its lines
+back for as long as the sandboxed command runs: a Monitor reads them as
+it reads a watch on the host, and stopping it stops the watch.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			ownScope("watch", brokeredWatchCap)
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			w := a.newWatcher(standby, !once)
@@ -261,6 +274,9 @@ type watcher struct {
 	// waits are the reopen waits this watch said, by agent session and the
 	// wait's start, until they end.
 	waits map[string]time.Time
+	// dues are the supervisor's relay dues this watch said; nil in a watch
+	// --once.
+	dues relayDues
 	// stand is the standby watch's memory of its messages, successors and
 	// reopens; table the last poll's process table.
 	stand standbyWatch
@@ -331,6 +347,8 @@ type watcher struct {
 	chores    bool
 	doctoring atomic.Bool
 	retitled  map[string]time.Time
+	// doctored are the chore lines the doctor said, each said once.
+	doctored map[string]bool
 	// timerActs are the fired timers' wakes and commands under way, and
 	// the defaulted decisions' filers being told.
 	timerActs sync.WaitGroup
@@ -620,6 +638,22 @@ func (w *watcher) clearMissing(prefix string, found map[string]bool) {
 	}
 }
 
+// drop forgets each condition said under prefix that found no longer holds,
+// without an ENDED line, and answers them.
+func (w *watcher) drop(prefix string, found map[string]bool) map[string]condition {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	gone := map[string]condition{}
+	for k, c := range w.active {
+		if strings.HasPrefix(k, prefix) && !found[k] {
+			gone[k] = c
+			delete(w.active, k)
+			w.dirty = true
+		}
+	}
+	return gone
+}
+
 // condition is a lasting condition a watch has said: since when, and the
 // line's head that names it.
 type condition struct {
@@ -640,9 +674,12 @@ type watchMark struct {
 // again. --once and a watch outside a Claude session keep none.
 func (a *app) newWatcher(standby, keep bool) *watcher {
 	w := &watcher{app: a, standby: standby, last: map[string]time.Time{}, seenKills: map[string]bool{},
-		reported: map[string]bool{}, active: map[string]condition{}, chores: keep, retitled: map[string]time.Time{},
+		reported: map[string]bool{}, active: map[string]condition{}, chores: keep, retitled: map[string]time.Time{}, doctored: map[string]bool{},
 		upgrades: upgrade.Readings{}}
-	w.stand = standbyWatch{send: a.peerSend, open: plat.Opener.Open, succeed: a.succeedFromWatch, revive: a.reviveFromWatch, turning: unitsTurning}
+	if keep {
+		w.dues = relayDues{}
+	}
+	w.stand = standbyWatch{send: a.peerSend, open: plat.Opener.Open, succeed: a.succeedFromWatch, revive: a.reviveFromWatch, turning: unitsTurning, reopening: unitsReopening, importRow: a.importRowFromWatch}
 	if me, err := a.caller(); keep && err == nil {
 		w.markFile = "seen.watch." + fileKey(me) + ".json"
 		var m watchMark
@@ -1021,6 +1058,7 @@ func (w *watcher) poll(ctx context.Context) {
 	w.lostMerges(ctx)
 	w.closeToolWindow(ctx, watchParty)
 	w.stalls()
+	w.vaultWaits()
 	now := w.now
 	if now.Sub(w.lastSettle) >= w.readEvery(th.Interval.Duration) {
 		w.lastSettle = now
@@ -1071,6 +1109,72 @@ func (w *watcher) teleport(ctx context.Context) {
 	}
 }
 
+// vaultKey starts the condition key of a call waiting on the vault, and
+// vaultUnlockedKey is the broker's approval.
+const (
+	vaultKey         = "vault "
+	vaultUnlockedKey = "vault-unlocked"
+	vaultReadKey     = "vault-read"
+	vaultSigninKey   = "vault-signin"
+	vaultDroppedKey  = "vault-dropped"
+)
+
+// vaultWaits says the vault's state (secret.session): one VAULT UNLOCKED
+// line while the broker holds the session, until when, and its ENDED line
+// when the broker forgets it; a VAULT SIGN-IN FAILED line with the broker's
+// reason; a VAULT SESSION DROPPED line while a session op stopped taking
+// waits for its new sign-in; one VAULT LOCKED line for each call that waits on the sign-in,
+// and once it goes on its ENDED line, or a line that it timed out with the
+// vault still locked. Nothing asks the person.
+func (w *watcher) vaultWaits() {
+	if !w.cfg.Secret.Session {
+		return
+	}
+	statePath, err := secret.StatePath()
+	if err != nil {
+		return
+	}
+	st, err := secret.ReadState(statePath)
+	if err != nil {
+		w.emit(vaultReadKey, "cannot read the vault's state: %v", err)
+		return
+	}
+	w.check(vaultUnlockedKey, st.Unlocked, "VAULT UNLOCKED: the broker holds the vault session since %s until %s",
+		st.Since.Local().Format("15:04"), st.Until.Local().Format("15:04"))
+	w.check(vaultSigninKey, st.Error != "", "VAULT SIGN-IN FAILED: %s", st.Error)
+	w.check(vaultDroppedKey, st.Dropped != "", "VAULT SESSION DROPPED at %s: op no longer took it (%s); the broker signs in again",
+		st.DroppedAt.Local().Format("15:04"), st.Dropped)
+	waitsPath, err := secret.WaitsPath()
+	if err != nil {
+		return
+	}
+	ws, err := secret.ReadWaits(waitsPath)
+	if err != nil {
+		w.emit(vaultReadKey, "cannot read the vault's waiting calls: %v", err)
+		return
+	}
+	w.clear(vaultReadKey)
+	found := map[string]bool{}
+	for _, v := range ws {
+		key := vaultKey + v.Who + " " + v.Ref
+		found[key] = true
+		w.emit(key, "VAULT LOCKED: %s waits on %s since %s; the broker signs in",
+			v.Who, v.Ref, v.Since.Local().Format("15:04"))
+	}
+	if !st.Unlocked {
+		// a call gone while the vault is locked gave up: no ENDED line
+		for key, c := range w.drop(vaultKey, found) {
+			who, ref := key[len(vaultKey):], ""
+			if i := strings.LastIndexByte(who, ' '); i >= 0 {
+				who, ref = who[:i], who[i+1:]
+			}
+			w.emitNow("vault", "VAULT LOCKED: %s's call on %s timed out (seen waiting since %s), still locked",
+				who, ref, c.Since.Local().Format("15:04"))
+		}
+	}
+	w.clearMissing(vaultKey, found)
+}
+
 // exposedKey starts the condition key of a credential exposed on disk.
 const exposedKey = "exposed "
 
@@ -1088,7 +1192,8 @@ func (w *watcher) exposures() {
 	w.clearMissing(exposedKey, found)
 }
 
-// budget probes the GitHub budget and says when it is under the floor.
+// budget probes the GitHub budget and says when it is under the floor and
+// when GitHub refuses GraphQL calls, with the callers drawing on it.
 func (w *watcher) budget(ctx context.Context, now time.Time) {
 	b, err := w.probeBudget(ctx)
 	switch {
@@ -1097,10 +1202,40 @@ func (w *watcher) budget(ctx context.Context, now time.Time) {
 		w.emit("budget-error", "GitHub budget unknown: %v", err)
 	default:
 		w.clear("budget-error")
-		l := w.check("budget", b.Remaining < w.cfg.GitHub.Floor, "GITHUB BUDGET %d of %d: hold GitHub work until %s",
-			b.Remaining, b.Limit, b.Reset.Local().Format("15:04"))
-		w.notifyAt(ctx, now, notify.Budget, "", "beekeeper: GitHub budget under the floor", l+"\nbeekeeper budget")
+		if l := w.check("budget", b.Remaining < w.cfg.GitHub.Floor, "GITHUB BUDGET %d of %d: hold GitHub work until %s",
+			b.Remaining, b.Limit, b.Reset.Local().Format("15:04")); l != "" {
+			w.notifyAt(ctx, now, notify.Budget, "", "beekeeper: GitHub budget under the floor", l+"\nbeekeeper budget")
+		}
+		refused := b.GraphQL.Blocks(now)
+		var callers string
+		if refused {
+			callers = w.callersText()
+		}
+		if l := w.check("graphql", refused, "%s; callers: %s", graphqlText(w.app, b.GraphQL), callers); l != "" {
+			w.notifyAt(ctx, now, notify.Budget, "", "beekeeper: GitHub refuses GraphQL", l+"\nbeekeeper budget")
+		}
 	}
+}
+
+// callersText names the gh and devctl processes drawing on GitHub and the
+// sessions they run under, the longest-running first.
+func (w *watcher) callersText() string {
+	sessions, t, err := w.app.sessions()
+	if err != nil {
+		return "unknown (" + err.Error() + ")"
+	}
+	ps := githubCallers(w.app, t, sessions)
+	if len(ps) == 0 {
+		return "no gh or devctl process now"
+	}
+	var out []string
+	for _, p := range ps[:min(len(ps), 5)] {
+		out = append(out, fmt.Sprintf("%s (%s, %s)", truncate(p.Args, 50), cmp.Or(p.Session, noSession), dur(p.Elapsed)))
+	}
+	if len(ps) > 5 {
+		out = append(out, fmt.Sprintf("%d more", len(ps)-5))
+	}
+	return strings.Join(out, ", ")
 }
 
 // stalls says each stalled lane, one LANE STALLED line per lane and waiting
@@ -1354,6 +1489,10 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	if w.standby {
 		w.guideGone(ctx, st, sessions)
 		w.resumeRestarted(ctx, guideRole, st, sessions)
+		for _, rl := range roles {
+			w.relayOverdue(ctx, rl, st, sessions)
+		}
+		w.importRows(ctx, st)
 	}
 	if w.standby && supervised {
 		w.resumeRestarted(ctx, supervisorRole, st, sessions)
@@ -1396,12 +1535,14 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		seen = seen || touched
 		pl, pe := firePending(st, sessions, w.now)
 		lines, evs = append(lines, pl...), append(evs, pe...)
+		ppl, ppe := parkedOnPerson(st, w.cfg.Guide.Person, w.now)
+		lines, evs = append(lines, ppl...), append(evs, ppe...)
 		for _, e := range ce {
 			lines = append(lines, fmt.Sprintf("SUPERVISOR RESTARTED: %q, %s; it keeps the role", e.By.Name, e.Detail))
 		}
 		evs = append(evs, ce...)
 		rl, re := fireRelay(st, w.now)
-		dl, de := fireRelayDue(st, q, w.now)
+		dl, de := fireRelayDue(st, q, w.dues, w.now)
 		lines, evs = append(append(lines, rl...), dl...), append(append(evs, re...), de...)
 		return lines, evs, seen || len(lines) > 0 || len(evs) > 0
 	}
@@ -1585,7 +1726,7 @@ func (w *watcher) supervisorGone(ctx context.Context, st *state.State, sessions 
 		w.stand.liveTerm, w.stand.liveAt = key, w.now
 		w.upAgain(supervisorRole, s.Party)
 	}
-	if !sv.down() || relayPending(st, st.SupervisorRole(), w.now) || w.firstTurn(ctx, s.Party) {
+	if !sv.down() || relayPending(st, st.SupervisorRole(), w.now) || w.firstTurn(ctx, st, s.Party) {
 		switch {
 		case s == nil:
 			w.gap = ""
@@ -1610,16 +1751,24 @@ func (w *watcher) supervisorGone(ctx context.Context, st *state.State, sessions 
 }
 
 // quietness reads whether the machine is at a quiet moment, once the
-// supervisor's context reached relayAt: outside the state lock, since a
-// settling merge's installation is read with kubectl.
+// supervisor's context reached relayAt and this watch did not say its relay
+// due yet.
 func (w *watcher) quietness(ctx context.Context, st *state.State, sessions []*claude.Session) quietness {
-	c := relayContext(st, sessions, w.now, w.cfg.Supervisor.RelayAt)
+	relayAt := w.cfg.Supervisor.RelayAt
+	c := relayContext(st, sessions, w.now, relayAt, w.dues)
 	if c == 0 {
 		return quietness{}
 	}
+	return quietness{checked: true, context: c, relayAt: relayAt, busy: w.busyNow(ctx, st)}
+}
+
+// busyNow says what keeps the machine from a quiet moment for a relay
+// (busyWith), "" when quiet: outside the state lock, since a settling
+// merge's installation is read with kubectl.
+func (w *watcher) busyNow(ctx context.Context, st *state.State) string {
 	holders, err := lease.Dir(w.cfg.LeaseDir).List()
 	if err != nil {
-		return quietness{checked: true, context: c, busy: fmt.Sprintf("the leases cannot be read: %v", err)}
+		return fmt.Sprintf("the leases cannot be read: %v", err)
 	}
 	hrs := map[string][]merge.HelmRelease{}
 	rolled := func(m state.Merge, lane config.Lane) bool {
@@ -1631,7 +1780,7 @@ func (w *watcher) quietness(ctx context.Context, st *state.State, sessions []*cl
 		ready, _ := merge.Ready(lane, h, &m, w.now, w.cfg.Merge.Settle.Duration)
 		return h != nil && ready
 	}
-	return quietness{checked: true, context: c, busy: busyWith(st, w.cfg, heldMap(holders), w.now, proc.Alive, rolled)}
+	return busyWith(st, w.cfg, heldMap(holders), w.now, proc.Alive, rolled)
 }
 
 // firePending marks what is due or ended in st as reported and returns its
@@ -1679,6 +1828,49 @@ func firePending(st *state.State, sessions []*claude.Session, now time.Time) ([]
 		r.Ended = now.UTC()
 		lines = append(lines, fmt.Sprintf("SESSION ENDED: %q, which %s: re-query %s", r.Session.Name, truncate(recordText(*r), 200), r.Issue))
 		evs = append(evs, event(watchParty, "session.ended", "%s: %s", r.Session.Name, recordText(*r)))
+	}
+	for _, r := range st.WorkerReports {
+		lines = append(lines, reportLines(r)...)
+	}
+	st.WorkerReports = nil
+	return lines, evs
+}
+
+// reportLines are a worker's final report and each problem it found, a line
+// of its own for the supervisor to file as an issue and hand to a worker.
+func reportLines(r state.WorkerReport) []string {
+	var lines []string
+	if r.Text != "" {
+		l := fmt.Sprintf("WORKER REPORT by %q", r.By.Name)
+		if r.Task != "" {
+			l += " (task: " + truncate(r.Task, 80) + ")"
+		}
+		lines = append(lines, l+": "+truncate(r.Text, 2000))
+	}
+	for _, p := range r.Problems {
+		lines = append(lines, fmt.Sprintf("PROBLEM FOUND by %q: %s; file it and hand it to a worker", r.By.Name, truncate(p, 400)))
+	}
+	return lines
+}
+
+// parkedOnPerson says once per park which agents parked on a person (a note,
+// the person's or a colleague's answer, a review): the supervisor carries it
+// to the guide, who tells the person.
+func parkedOnPerson(st *state.State, person string, now time.Time) ([]string, []state.Event) {
+	var lines []string
+	var evs []state.Event
+	for i := range st.Agents {
+		ag := &st.Agents[i]
+		p := ag.Park
+		if p == nil || !p.Told.IsZero() {
+			continue
+		}
+		if _, note := parkNote(p.On); !note && parkedOn(p.Waits, person) == "" {
+			continue
+		}
+		p.Told = now.UTC()
+		lines = append(lines, fmt.Sprintf("PARKED ON A PERSON: %q %s; tell the guide, who tells %s", ag.Name, parkedText(p, now), cmp.Or(person, "the person")))
+		evs = append(evs, event(watchParty, "agents.parked-on-person", "%s: %s", ag.Name, p.Waits))
 	}
 	return lines, evs
 }
