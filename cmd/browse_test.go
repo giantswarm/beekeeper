@@ -14,9 +14,26 @@ import (
 // reach it.
 func TestBrowseTurn(t *testing.T) {
 	argv := browseArgv("id-1", "", "steps")
-	want := []string{"-p", chromeFlag, permissionModeFlag, "bypassPermissions", "--session-id", "id-1", "--", "steps"}
+	want := []string{"-p", chromeFlag, "--tools", "", "--strict-mcp-config", permissionModeFlag, "dontAsk",
+		"--allowedTools", "mcp__claude-in-chrome__*", "--session-id", "id-1", "--", "steps"}
 	if !slices.Equal(argv, want) {
 		t.Errorf("browseArgv = %q, want %q", argv, want)
+	}
+	// The child has the Chrome tools and nothing else: no built-in tool, no
+	// other MCP server, no allow rule beyond Chrome's, never bypass.
+	for i, arg := range argv {
+		switch arg {
+		case "--tools":
+			if argv[i+1] != "" {
+				t.Errorf("--tools %q, want none", argv[i+1])
+			}
+		case "--allowedTools", "--allowed-tools":
+			if argv[i+1] != browseTools {
+				t.Errorf("allowed tools %q, want only %q", argv[i+1], browseTools)
+			}
+		case "bypassPermissions", "--dangerously-skip-permissions", "--mcp-config":
+			t.Errorf("browseArgv carries %q", arg)
+		}
 	}
 	if argv := browseArgv("id-1", "sonnet", "-steps"); !slices.Contains(argv, "sonnet") || argv[len(argv)-2] != "--" {
 		t.Errorf("browseArgv with a model = %q", argv)

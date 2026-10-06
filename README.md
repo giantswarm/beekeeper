@@ -1429,9 +1429,11 @@ aborts it, sometimes hours later, and the model reads "Claude in Chrome is not c
 
 So the sessions beekeeper starts never use the desktop's browser. In their desktop turns
 (acceptEdits) `beekeeper hook pretooluse` refuses every `mcp__claude-in-chrome__*` call and names
-`beekeeper browse "<steps>"`, which runs the steps in a headless `claude -p --chrome
---permission-mode bypassPermissions` turn: the CLI's own Claude in Chrome connection takes the
-Chrome extension's site permissions, runs in bypass and never asks. It prints the turn's report,
+`beekeeper browse "<steps>"`, which runs the steps in a headless `claude -p --chrome` turn that has
+the CLI's own Claude in Chrome tools and nothing else (`--tools '' --strict-mcp-config
+--permission-mode dontAsk --allowedTools 'mcp__claude-in-chrome__*'`: no shell, no file tools, no
+other MCP server, every other call refused rather than asked). That connection takes the Chrome
+extension's site permissions and never asks. It prints the turn's report,
 its transcript and each screenshot it took as an image file under `<stateDir>/browse/<id>/`. Every
 headless turn of a start (the task's when the desktop runs none, an `agents wake`) gets `--chrome`
 too. A person's own sessions are untouched. `agents start` says which Chrome mode the desktop

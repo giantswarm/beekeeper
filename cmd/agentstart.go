@@ -146,8 +146,8 @@ to a site the session was not allowed on yet for a person's site request in
 its row, which no hook answers, unless the session runs in auto or bypass
 (the import never keeps bypass). So beekeeper hook pretooluse refuses the
 Claude in Chrome tools in the desktop turns of beekeeper's starts and names
-beekeeper browse, which runs the browser steps in a headless turn on the
-CLI's own Chrome connection; every headless turn of a start (--chrome, in
+beekeeper browse, which runs the browser steps in a headless turn that has
+the CLI's own Chrome tools and nothing else; every headless turn of a start (--chrome, in
 bypass) has that connection too. Neither ever waits on a site request.
 start says which Chrome mode the desktop recorded, and agents shows it per
 agent (BROWSER asks or skips). --desktop

@@ -15,9 +15,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
-
-	"github.com/giantswarm/beekeeper/internal/state"
 )
+
+// modeDontAsk refuses every call no allow rule covers, without a prompt.
+const modeDontAsk = "dontAsk"
 
 // browseWait bounds a browse turn by default: a navigate that waits longer
 // waits on something only a person answers (a sign-in page, a dialog).
@@ -35,11 +36,14 @@ func (a *app) browseCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "browse <steps>",
 		Short: "Run browser steps in a headless turn that never waits on a site approval",
-		Long: `browse runs <steps> in a headless Claude Code turn: "claude -p --chrome
---permission-mode bypassPermissions" in --dir, on the CLI's own Claude in
-Chrome connection. That connection takes the site permissions of the Chrome
-extension and runs in bypass, so a navigate to a site no session was
-allowed on never waits on a person's site approval.
+		Long: `browse runs <steps> in a headless Claude Code turn in --dir that has the
+CLI's own Claude in Chrome tools and nothing else: "claude -p --chrome
+--tools '' --strict-mcp-config --permission-mode dontAsk --allowedTools
+'mcp__claude-in-chrome__*'", no shell, no file tools, no other MCP server,
+and every call outside the Chrome tools refused rather than asked. The
+CLI's Chrome connection takes the site permissions of the Chrome extension,
+so a navigate to a site no session was allowed on never waits on a person's
+site approval.
 
 It exists for the desktop turns of the sessions beekeeper starts: Claude
 Desktop holds such a session's navigate to a new site for a person's site
@@ -103,10 +107,18 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	return errors.Join(err, serr)
 }
 
+// browseTools are the only tools a browse turn has: the CLI's own Claude in
+// Chrome tools.
+const browseTools = "mcp__claude-in-chrome__*"
+
 // browseArgv is a browse turn's command line after the binary: one headless
-// turn in bypass with the CLI's own Chrome connection, under id.
+// turn under id with the CLI's own Chrome connection and nothing else: no
+// built-in tool (no shell, no file tools), no MCP server but Chrome's, and in
+// dontAsk mode every call the Chrome tools' allow rule does not cover is
+// refused rather than asked.
 func browseArgv(id, model, prompt string) []string {
-	argv := []string{"-p", chromeFlag, permissionModeFlag, state.ModeBypass, sessionIDFlag, id}
+	argv := []string{"-p", chromeFlag, "--tools", "", "--strict-mcp-config", permissionModeFlag, modeDontAsk,
+		"--allowedTools", browseTools, sessionIDFlag, id}
 	if model != "" {
 		argv = append(argv, modelFlag, model)
 	}
