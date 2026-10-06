@@ -137,7 +137,7 @@ can make one.`,
 				return vaultExit(run(cmd, args))
 			}
 			inSandbox := os.Getenv(sandbox.Env) != ""
-			if inSandbox || a.cfg.Secret.Session && a.secretNeedsVault(callArgs(cmd, args)) {
+			if inSandbox || a.cfg.Secret.Session && a.secretNeedsBroker(callArgs(cmd, args)) {
 				return a.secretBrokered(cmd, args, inSandbox)
 			}
 			return vaultExit(run(cmd, args))
@@ -676,6 +676,13 @@ func (a *app) ageIdentities() []secret.AgeIdentity {
 // vault: an op:// reference, or a SOPS file whose age identity lives there.
 func (a *app) secretNeedsVault(args []string) bool {
 	return secret.NeedsVault(args) || (&secret.Ops{Ages: a.ageIdentities()}).AgeNeedsVault(args)
+}
+
+// secretNeedsBroker reports whether a call goes to the broker with
+// secret.session: one on the vault, or on a SOPS file whose age identity
+// secret.ageIdentities names, a file's included, which the broker alone reads.
+func (a *app) secretNeedsBroker(args []string) bool {
+	return secret.NeedsVault(args) || (&secret.Ops{Ages: a.ageIdentities()}).AgeNeedsIdentity(args)
 }
 
 // secretOpsKeyed are the operations with the fingerprint key, created on

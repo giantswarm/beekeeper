@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `secret.ageIdentities` takes an age identity file, `ref: file:///<absolute path>`, besides a vault field: for an identity that stays out of every vault. The broker reads it in its own process, without the vault session, and gives only the identity of the SOPS file's recipient to the one sops call; an identity file's comment lines and several identities are understood, for vault fields too ([README](README.md#age-identities)).
 - A sandboxed session runs the roles' host commands through the broker, as itself and in its working directory: `beekeeper agents start`, `wake` and `resume` (the user bus starts the agent's unit; a start's brief and `--dir` are held to the session's lists), `beekeeper watch` (the person's kubeconfig and Teleport login stay outside the sandbox; the watch runs in a scope of its own and its lines stream back to the `Monitor`, which stops it by stopping), and the new `beekeeper lease up|down <lab>`, which creates or tears down the kind cluster of a lab whose lease the caller holds (`agentlab up` asking nothing, or `agentlab down`, capped as `beekeeper run` caps it). The broker streams a call's output while it runs and ends it once its sandboxed command ended. In the sandbox the hook refuses `agentlab up|down` and `kind create|delete cluster` and names `lease up|down` instead ([README](README.md#the-agent-sandbox)).
 
 ### Fixed
