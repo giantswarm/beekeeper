@@ -135,13 +135,20 @@ func (o *Ops) CopyValue(ctx context.Context, src, dst Ref) (int, error) {
 
 // put writes v at dst's path, the rest of its file kept.
 func (o *Ops) put(ctx context.Context, dst Ref, v string) error {
-	return o.putNew(ctx, dst, v, nil)
+	doc, dst, err := o.target(ctx, dst, nil)
+	if err != nil {
+		return err
+	}
+	return o.write(ctx, doc, dst, v)
 }
 
-// putNew is put starting a file absent so far as the Secret nw names, an
-// empty document when nil. A plaintext Kubernetes Secret without values,
-// a skeleton, is filled and encrypted like a file absent so far.
-func (o *Ops) putNew(ctx context.Context, dst Ref, v string, nw *NewSecret) error {
+// target is the document a value for dst goes into and the path it takes
+// there. An absent file starts as the Secret nw names, an empty document
+// when nil; a plaintext Kubernetes Secret without values, a skeleton, is
+// filled like a file absent so far. A Secret's value goes under stringData
+// unless the path names data or stringData. A path the file's creation rule
+// would leave in plaintext is refused before any value is written.
+func (o *Ops) target(ctx context.Context, dst Ref, nw *NewSecret) (*document, Ref, error) {
 	doc := newDocument()
 	if nw != nil {
 		doc = nw.document()
@@ -150,20 +157,39 @@ func (o *Ops) putNew(ctx context.Context, dst Ref, v string, nw *NewSecret) erro
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 	case err != nil:
-		return err
+		return nil, dst, err
 	default:
 		skel, err := skeleton(raw)
 		switch {
 		case err != nil:
-			return fmt.Errorf("%s: %w", dst.File, err)
+			return nil, dst, fmt.Errorf("%s: %w", dst.File, err)
 		case skel != nil:
 			doc = skel
 		default:
 			if doc, err = o.decrypt(ctx, dst.File); err != nil {
-				return err
+				return nil, dst, err
 			}
 		}
 	}
+	dst.Path = doc.valuePath(dst.Path)
+	cfg, rel, err := sopsTarget(dst.File)
+	if err != nil {
+		return nil, dst, err
+	}
+	rule, err := ruleFor(cfg, rel)
+	if err != nil {
+		return nil, dst, err
+	}
+	if rule != nil {
+		if err := rule.check(dst.Path); err != nil {
+			return nil, dst, fmt.Errorf("%s: %w (%s)", dst.File, err, cfg)
+		}
+	}
+	return doc, dst, nil
+}
+
+// write sets v at dst's path of doc and encrypts doc into dst's file.
+func (o *Ops) write(ctx context.Context, doc *document, dst Ref, v string) error {
 	if err := doc.set(dst.Path, v); err != nil {
 		return fmt.Errorf("%s: %w", dst.File, err)
 	}
@@ -449,6 +475,10 @@ func (o *Ops) Set(ctx context.Context, dst Ref, opt SetOptions) (SetResult, erro
 			return SetResult{}, err
 		}
 	}
+	doc, dst, err := o.target(ctx, dst, opt.New)
+	if err != nil {
+		return SetResult{}, err
+	}
 	v, err := Generate(opt.Length, opt.Charset)
 	if err != nil {
 		return SetResult{}, err
@@ -458,7 +488,7 @@ func (o *Ops) Set(ctx context.Context, dst Ref, opt SetOptions) (SetResult, erro
 			return SetResult{}, err
 		}
 	}
-	if err := o.putNew(ctx, dst, v, opt.New); err != nil {
+	if err := o.write(ctx, doc, dst, v); err != nil {
 		if opt.Vault != (Ref{}) {
 			return SetResult{}, fmt.Errorf("the vault holds the value, the SOPS file not: %w", err)
 		}

@@ -24,6 +24,7 @@ const (
 	aFile    = "a.sops.yaml"
 	shared   = "Shared"
 	saToken  = "sa-token"
+	appVault = "op://Shared/app/password"
 )
 
 //nolint:gosec // a template of planted test values
@@ -271,11 +272,11 @@ func TestSetWritesTheVaultFirst(t *testing.T) {
 	tools := secrettest.New(nil)
 	dir, _ := scratch(t)
 	dst := secret.Ref{File: filepath.Join(dir, "gen.sops.yaml"), Path: pwPath}
-	res, err := ops(tools).Set(context.Background(), dst, secret.SetOptions{Vault: secret.Ref{Op: "op://Shared/app/password"}, Length: 24, Charset: alnumSet})
+	res, err := ops(tools).Set(context.Background(), dst, secret.SetOptions{Vault: secret.Ref{Op: appVault}, Length: 24, Charset: alnumSet})
 	if err != nil {
 		t.Fatal(err)
 	}
-	v := tools.Vault["op://Shared/app/password"]
+	v := tools.Vault[appVault]
 	if len(v) != 24 || res.Fingerprint != fmt.Sprintf("fp-%d", 24*7) {
 		t.Fatalf("vault value of %d bytes, fingerprint %q", len(v), res.Fingerprint)
 	}
@@ -296,7 +297,7 @@ func TestSetWritesTheVaultFirst(t *testing.T) {
 		}
 	}
 	// A second set edits the item it made.
-	if _, err := ops(tools).Set(context.Background(), dst, secret.SetOptions{Vault: secret.Ref{Op: "op://Shared/app/password"}, Length: 24, Charset: hexSet}); err != nil {
+	if _, err := ops(tools).Set(context.Background(), dst, secret.SetOptions{Vault: secret.Ref{Op: appVault}, Length: 24, Charset: hexSet}); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.ContainsFunc(tools.Calls, func(c string) bool { return strings.HasPrefix(c, "op item edit id-app") }) {
@@ -447,6 +448,76 @@ func TestSetRefusesAPlaintextSecretHoldingAValue(t *testing.T) {
 	}
 	if raw, _ := os.ReadFile(file); string(raw) != body { //nolint:gosec // the test's scratch file
 		t.Error("the refused file changed")
+	}
+}
+
+// secretRules is a .sops.yaml that encrypts a Kubernetes Secret's values only.
+const secretRules = "creation_rules:\n  - path_regex: '\\.sops\\.yaml$'\n    encrypted_regex: '^(data|stringData)$'\n"
+
+func TestSetPutsASecretsValueUnderStringData(t *testing.T) {
+	tools := secrettest.New(nil)
+	dir, _ := scratch(t)
+	if err := os.WriteFile(filepath.Join(dir, ".sops.yaml"), []byte(secretRules), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "secret-s3.sops.yaml")
+	if err := os.WriteFile(file, []byte(skeletonSecret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, err := ops(tools).Set(context.Background(), secret.Ref{File: file, Path: "default"}, secret.SetOptions{Length: 32, Charset: alnumSet})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Key != file+"#stringData.default" {
+		t.Errorf("key = %q, want the stringData path", res.Key)
+	}
+	if plain := decrypted(t, tools, file); !strings.Contains(plain, "stringData:\n  default: ") || strings.Contains(plain, "\ndefault:") {
+		t.Errorf("the value is not under stringData:\n%s", plain)
+	}
+	// data and stringData paths stay as given.
+	if res, err := ops(tools).Set(context.Background(), secret.Ref{File: file, Path: "data.other"}, secret.SetOptions{Length: 16, Charset: hexSet}); err != nil || res.Key != file+"#data.other" {
+		t.Errorf("set data.other = %+v, %v", res, err)
+	}
+}
+
+func TestSetRefusesAPathTheCreationRuleLeavesPlaintext(t *testing.T) {
+	for _, c := range []struct {
+		name, rules, path, want string
+		skeleton                bool
+	}{
+		{"outside encrypted_regex", secretRules, "default", `encrypted_regex "^(data|stringData)$"`, false},
+		{"unencrypted_suffix", "creation_rules:\n  - unencrypted_suffix: _unencrypted\n", "stringData.key_unencrypted", `unencrypted_suffix "_unencrypted"`, true},
+		{"outside encrypted_suffix", "creation_rules:\n  - encrypted_suffix: _secret\n", "stringData.key", `encrypted_suffix "_secret"`, true},
+		{"unencrypted_regex", "creation_rules:\n  - unencrypted_regex: '^stringData$'\n", "key", `unencrypted_regex "^stringData$"`, true},
+		{"by comments", "creation_rules:\n  - encrypted_comment_regex: 'sops:enc'\n", "key", `encrypted_comment_regex "sops:enc"`, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tools := secrettest.New(nil)
+			dir, _ := scratch(t)
+			if err := os.WriteFile(filepath.Join(dir, ".sops.yaml"), []byte(c.rules), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			file := filepath.Join(dir, "gen.sops.yaml")
+			if c.skeleton {
+				if err := os.WriteFile(file, []byte(skeletonSecret), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err := ops(tools).Set(context.Background(), secret.Ref{File: file, Path: c.path}, secret.SetOptions{Length: 32, Charset: alnumSet, Vault: secret.Ref{Op: appVault}})
+			if err == nil || !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), ".sops.yaml") {
+				t.Fatalf("set %s = %v, want a refusal naming %s", c.path, err, c.want)
+			}
+			if len(tools.Calls) != 0 || len(tools.Vault) != 0 {
+				t.Errorf("a refused set ran %q", tools.Calls)
+			}
+			raw, err := os.ReadFile(file) //nolint:gosec // the test's scratch file
+			switch {
+			case c.skeleton && string(raw) != skeletonSecret:
+				t.Error("the refused skeleton changed")
+			case !c.skeleton && err == nil:
+				t.Error("a refused set wrote a file")
+			}
+		})
 	}
 }
 
