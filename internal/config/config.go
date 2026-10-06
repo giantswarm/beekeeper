@@ -998,6 +998,12 @@ type Watch struct {
 	Tools        []string `yaml:"tools"`
 	TmpMaxMiB    int      `yaml:"tmpMaxMiB"`
 	DiskMinMiB   int      `yaml:"diskMinMiB"`
+	// DiskCriticalMiB is the free space on / under which the watch says
+	// DISK NEARLY FULL; DiskFillWithin how soon / would run full at the
+	// rate its free space fell over the last minutes for the watch to say
+	// DISK FILLING with the commands and sessions that wrote.
+	DiskCriticalMiB int      `yaml:"diskCriticalMiB"`
+	DiskFillWithin  Duration `yaml:"diskFillWithin"`
 	// QuietSessions are globs (* matches any run) of the names of
 	// short-lived sessions whose start, end and restart are no wake-up:
 	// the watch logs them (watch.quiet) instead of printing them. Setting
@@ -1016,6 +1022,7 @@ const (
 	DefaultGTTMax          = 0.28
 	DefaultTmpMax          = 0.45
 	DefaultDiskMin         = 0.05
+	DefaultDiskCritical    = 0.01
 )
 
 // AvailMin is the LOW RAM threshold on a machine of ramMiB.
@@ -1042,6 +1049,11 @@ func (w Watch) TmpMax(tmpMiB int) int { return atMost(w.TmpMaxMiB, DefaultTmpMax
 
 // DiskMin is the LOW DISK threshold on a / of diskMiB.
 func (w Watch) DiskMin(diskMiB int) int { return atLeast(w.DiskMinMiB, DefaultDiskMin, diskMiB) }
+
+// DiskCritical is the DISK NEARLY FULL threshold on a / of diskMiB.
+func (w Watch) DiskCritical(diskMiB int) int {
+	return atLeast(w.DiskCriticalMiB, DefaultDiskCritical, diskMiB)
+}
 
 // atLeast is a lower threshold: the configured one, else the fraction of
 // total (0 when total is unknown, which never fires).
@@ -1372,6 +1384,7 @@ func (c *Config) defaults() error {
 	setDur(&w.Repeat, 10*time.Minute)
 	setDur(&w.BudgetEvery, 5*time.Minute)
 	setDur(&w.OOMDWithin, 30*time.Minute)
+	setDur(&w.DiskFillWithin, 2*time.Hour)
 	setStr(&c.Ollama.Unit, "ollama")
 	setInt(&c.Ollama.BudgetGiB, 12)
 	setInt(&c.Ollama.MaxBudgetGiB, 24)
