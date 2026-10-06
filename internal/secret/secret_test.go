@@ -255,7 +255,7 @@ func TestCopyToConsumerRedactsItsOutput(t *testing.T) {
 		[]byte("#!/bin/sh\nread v\necho \"stored $v\"\nexit 3\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	code, out, err := ops(tools).CopyToConsumer(context.Background(), secret.Ref{Op: vaultRef}, []string{gh, secretWord, "set", "X"}, secret.Stdin{})
+	code, out, err := ops(tools).CopyToConsumer(context.Background(), secret.Ref{Op: vaultRef}, []string{gh, secretWord, setWord, "X"}, secret.Stdin{})
 	if err != nil || code != 3 {
 		t.Fatalf("consumer = %d, %q, %v", code, out, err)
 	}
@@ -347,7 +347,7 @@ func TestSetFeedsAConsumerAfterTheSOPSPath(t *testing.T) {
 		[]byte("#!/bin/sh\nread v\necho \"stored $v\"\nexit 2\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	res, err := ops(tools).Set(context.Background(), dst, secret.SetOptions{Length: 24, Charset: alnumSet, Consumer: []string{gh, secretWord, "set", "X"}})
+	res, err := ops(tools).Set(context.Background(), dst, secret.SetOptions{Length: 24, Charset: alnumSet, Consumer: []string{gh, secretWord, setWord, "X"}})
 	if err != nil || res.Code != 2 {
 		t.Fatalf("set = %+v, %v", res, err)
 	}
@@ -385,6 +385,12 @@ func TestParseRef(t *testing.T) {
 	}
 }
 
+const (
+	s3Key = "stringData.secretKey"
+	appNS = "app"
+)
+
+//nolint:gosec // a Secret skeleton, no value in it
 const skeletonSecret = `apiVersion: v1
 kind: Secret
 metadata:
@@ -401,7 +407,7 @@ func TestSetFillsAPlaintextSecretSkeleton(t *testing.T) {
 	if err := os.WriteFile(file, []byte(skeletonSecret), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	dst := secret.Ref{File: file, Path: "stringData.secretKey"}
+	dst := secret.Ref{File: file, Path: s3Key}
 	if _, err := ops(tools).Set(context.Background(), dst, secret.SetOptions{Length: 32, Charset: alnumSet}); err != nil {
 		t.Fatal(err)
 	}
@@ -435,7 +441,7 @@ func TestSetRefusesAPlaintextSecretHoldingAValue(t *testing.T) {
 	if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err := ops(tools).Set(context.Background(), secret.Ref{File: file, Path: "stringData.secretKey"}, secret.SetOptions{Length: 32, Charset: alnumSet})
+	_, err := ops(tools).Set(context.Background(), secret.Ref{File: file, Path: s3Key}, secret.SetOptions{Length: 32, Charset: alnumSet})
 	if err == nil || !strings.Contains(err.Error(), "stringData.password") || strings.Contains(err.Error(), password) {
 		t.Fatalf("set into a plaintext Secret with a value = %v", err)
 	}
@@ -448,8 +454,8 @@ func TestSetStartsANewSecret(t *testing.T) {
 	tools := secrettest.New(nil)
 	dir, src := scratch(t)
 	file := filepath.Join(dir, "new.sops.yaml")
-	nw := &secret.NewSecret{Name: "app-s3", Namespace: "app"}
-	if _, err := ops(tools).Set(context.Background(), secret.Ref{File: file, Path: "stringData.secretKey"}, secret.SetOptions{Length: 32, Charset: alnumSet, New: nw}); err != nil {
+	nw := &secret.NewSecret{Name: "app-s3", Namespace: appNS}
+	if _, err := ops(tools).Set(context.Background(), secret.Ref{File: file, Path: s3Key}, secret.SetOptions{Length: 32, Charset: alnumSet, New: nw}); err != nil {
 		t.Fatal(err)
 	}
 	plain := decrypted(t, tools, file)
@@ -461,7 +467,7 @@ func TestSetStartsANewSecret(t *testing.T) {
 		nw   secret.NewSecret
 	}{
 		{src, *nw},
-		{filepath.Join(dir, "x.sops.yaml"), secret.NewSecret{Name: "Bad_Name", Namespace: "app"}},
+		{filepath.Join(dir, "x.sops.yaml"), secret.NewSecret{Name: "Bad_Name", Namespace: appNS}},
 		{filepath.Join(dir, "x.sops.yaml"), secret.NewSecret{Name: "ok", Namespace: "no.dots"}},
 	} {
 		calls := len(tools.Calls)
@@ -520,7 +526,7 @@ func TestSetHandsAPodAJSONRequestOnStdin(t *testing.T) {
 	}
 	argv := []string{kubectl, "exec", "-i", "--context", "kind-lab", "-n", "garage", "garage-0", "--", "/garage", "json-api", "ImportKey", "-"}
 	in := secret.Stdin{Template: `{"accessKeyId":"GK0123","name":"app"}`, Field: "secretAccessKey"}
-	res, err := ops(tools).Set(context.Background(), secret.Ref{File: file, Path: "stringData.secretKey"}, secret.SetOptions{Length: 32, Charset: alnumSet, Consumer: argv, Stdin: in})
+	res, err := ops(tools).Set(context.Background(), secret.Ref{File: file, Path: s3Key}, secret.SetOptions{Length: 32, Charset: alnumSet, Consumer: argv, Stdin: in})
 	if err != nil || res.Code != 0 {
 		t.Fatalf("set = %+v, %v", res, err)
 	}

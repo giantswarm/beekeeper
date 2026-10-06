@@ -14,6 +14,13 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
+// mapTag and secretKind are the YAML tag of a mapping and the kind of a
+// Kubernetes Secret.
+const (
+	mapTag     = "!!map"
+	secretKind = "Secret"
+)
+
 // document is a decrypted SOPS file as a YAML tree, kept as nodes so that
 // a copy keeps its keys' order and comments.
 type document struct {
@@ -38,7 +45,7 @@ func parseDocument(raw []byte) (*document, error) {
 
 // newDocument is an empty mapping.
 func newDocument() *document {
-	return &document{root: &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}}
+	return &document{root: &yaml.Node{Kind: yaml.MappingNode, Tag: mapTag}}
 }
 
 func (d *document) encode() ([]byte, error) {
@@ -128,13 +135,13 @@ func (d *document) set(path, value string) error {
 		last := i == len(keys)-1
 		if c != nil && !last && c.Kind == yaml.ScalarNode && c.Tag == "!!null" {
 			// an empty key on the way, a skeleton's `stringData:`
-			*c = yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+			*c = yaml.Node{Kind: yaml.MappingNode, Tag: mapTag}
 		}
 		switch {
 		case c == nil && n.Kind != yaml.MappingNode:
 			return fmt.Errorf("%q: %s is no mapping", path, strings.Join(keys[:i], "."))
 		case c == nil:
-			c = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+			c = &yaml.Node{Kind: yaml.MappingNode, Tag: mapTag}
 			if last {
 				c = &yaml.Node{}
 			}
@@ -203,7 +210,7 @@ func (n NewSecret) check(file string) error {
 // document is the Secret without values.
 func (n NewSecret) document() *document {
 	d := newDocument()
-	for _, kv := range [][2]string{{"apiVersion", "v1"}, {"kind", "Secret"}, {"metadata.name", n.Name}, {"metadata.namespace", n.Namespace}, {"type", "Opaque"}} {
+	for _, kv := range [][2]string{{"apiVersion", "v1"}, {"kind", secretKind}, {"metadata.name", n.Name}, {"metadata.namespace", n.Namespace}, {"type", "Opaque"}} {
 		_ = d.set(kv[0], kv[1]) // fixed paths into an empty mapping
 	}
 	return d
@@ -229,7 +236,7 @@ func skeleton(raw []byte) (*document, error) {
 	if err != nil {
 		return nil, nil //nolint:nilerr // no plaintext document: sops judges it
 	}
-	if k, _ := doc.get("kind"); k != "Secret" || child(doc.root, "metadata") == nil {
+	if k, _ := doc.get("kind"); k != secretKind || child(doc.root, "metadata") == nil {
 		return nil, nil
 	}
 	for p, v := range doc.leaves() {
@@ -251,7 +258,7 @@ type Key struct {
 func (d *document) keys() []Key {
 	leaves := d.leaves()
 	secret := false
-	if k, ok := d.get("kind"); ok && k == "Secret" {
+	if k, ok := d.get("kind"); ok && k == secretKind {
 		secret = true
 	}
 	var out []Key

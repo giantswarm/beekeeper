@@ -187,9 +187,9 @@ func TestIsWait(t *testing.T) {
 		{devctl, "release", "wait", "giantswarm/x", "--pr", "1"},
 		{"gh", "pr", "checks", "1", "--watch"},
 		{"docker", "image", "save", "x"},
-		{"kubectl", "port-forward", "svc/x", "8080"},
+		{kubectlBin, "port-forward", "svc/x", "8080"},
 	}
-	no := [][]string{{devctl, "version"}, {"gh", "pr", "view", "1"}, {"kubectl", "get", "pods"}}
+	no := [][]string{{devctl, "version"}, {"gh", "pr", "view", "1"}, {kubectlBin, "get", "pods"}}
 	for _, args := range yes {
 		if !isWait(&proc.Process{Comm: args[0], Args: args}) {
 			t.Errorf("%v is a wait", args)

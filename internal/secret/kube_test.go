@@ -19,6 +19,7 @@ const (
 	hexSet         = "hex"
 	catCmd         = "cat"
 	secretWord     = "secret"
+	setWord        = "set"
 )
 
 func TestParseKubeTarget(t *testing.T) {
