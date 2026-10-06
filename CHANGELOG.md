@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The agent sandbox's GitHub token never enters the sandbox. `beekeeper sandbox broker` is the sandbox's only egress proxy (`sandbox.proxyPort`, 3190, on `127.0.0.1` for its own user only): the policy points Claude Code's `httpProxyPort` and `socksProxyPort` at it, it holds every connection to GitHub and `sandbox.domains`, refuses the rest and never dials a loopback or link-local address by name, and terminates TLS for `github.com`, `api.github.com` and `uploads.github.com` with a name-constrained CA made in its memory to set the `Authorization` header itself, request bodies untouched. A GitHub endpoint that echoes its input no longer returns the token. The masked token files, their masks, `tlsTerminate`, `sandbox.mask` and `beekeeper sandbox git-credential` are gone; the broker removes the old files under `$XDG_RUNTIME_DIR/beekeeper/github` at start ([README](README.md#the-agent-sandbox)).
+- The agent sandbox denies the runtime directory (`$XDG_RUNTIME_DIR`) for reading, apart from the egress proxy's CA and gh's login.
+
 ### Added
 
 - `beekeeper secret set` fills a plaintext Kubernetes Secret skeleton (apiVersion, kind, metadata, an empty `stringData`) and writes it back as a SOPS file encrypted to the `.sops.yaml` recipients, and `--name`/`--namespace` start an absent file as such a Secret, so a generated value lands in a file Flux applies ([README](README.md#secret-operations)).
