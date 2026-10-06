@@ -131,6 +131,12 @@ type Hook struct {
 	// id; an error (no holder, an ambiguous name) refuses the send. Nil
 	// leaves a role's name as written.
 	Role func(role string) (string, error)
+	// Holds names the role a message by name addresses: a name the role's
+	// holder carries or carried on the roster ("Supervisor run 82" for a
+	// holder its desktop has since titled "klaus-lab-14"), or its session
+	// id; "" when it holds none. Such a message goes where Role sends it.
+	// Nil reads every name as written.
+	Holds func(name string) string
 	// Peer names the running CLI of a desktop session id, "" when none
 	// runs; an error refuses the send. Nil passes every SendMessage.
 	Peer func(host string) (string, error)

@@ -106,7 +106,7 @@ var unitChars = regexp.MustCompile(`[^a-z0-9]+`)
 // now; the start does not wait for the sends. The line says where it runs,
 // or what to run where no unit can start.
 func (a *app) announce(name string) string {
-	msg := fmt.Sprintf("%q answers now as the supervisor: report to it and ask it by that name (`beekeeper supervisor status` names the holder).", name)
+	msg := fmt.Sprintf("%q answers now as the supervisor: report to it and ask it as \"the supervisor\", which reaches whoever holds the role whatever its desktop titles it, or by that name (`beekeeper supervisor status` names the holder).", name)
 	by := fmt.Sprintf("run `beekeeper --as %q agents %s %q` to tell the agents", name, broadcastName, msg)
 	if !plat.Launcher.Available() {
 		return "no unit can start here: " + by

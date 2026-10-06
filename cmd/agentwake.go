@@ -504,6 +504,49 @@ func (a *app) roleTarget(name string) (string, error) {
 	return roleAddress(rl.get(st).Holder, rl, sessions)
 }
 
+// heldRole is the PreToolUse hook's lookup for a SendMessage by name: the
+// role whose holder the name addresses (holderRole), "" when none.
+func (a *app) heldRole(name string) string {
+	if a.loadConfig() != nil {
+		return ""
+	}
+	store, err := state.Open(a.cfg.StateDir)
+	if err != nil {
+		return ""
+	}
+	st, err := store.Read()
+	if err != nil {
+		return ""
+	}
+	return holderRole(st, name)
+}
+
+// holderRole names the role whose holder name addresses: the holder's
+// recorded name or session id, or the name of its roster entry, which keeps
+// the run name ("Supervisor run 82") after the holder takes its desktop
+// title; "" when name addresses no holder.
+func holderRole(st *state.State, name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	for _, rl := range roles {
+		h := rl.get(st).Holder
+		if h == nil {
+			continue
+		}
+		if strings.EqualFold(h.Name, name) || h.Session == name || h.HostSession == name {
+			return rl.name
+		}
+		for _, ag := range st.Agents {
+			if (strings.EqualFold(ag.Name, name) || ag.Session == name) && ag.Is(h.Party) {
+				return rl.name
+			}
+		}
+	}
+	return ""
+}
+
 // roleAddress is where a message to rl's holder goes: the name its running
 // CLI takes messages under, else its desktop session id, which the desktop
 // starts, else its name.
