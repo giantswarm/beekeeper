@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 )
@@ -63,11 +66,22 @@ func (a *app) onHost(c *cobra.Command, op string, timeout time.Duration) *cobra.
 		if !inSandbox() {
 			return run(cmd, args)
 		}
-		argv, err := brokerArgv(cmd, args)
+		if op != sandbox.OpAgents {
+			argv, err := brokerArgv(cmd, args)
+			if err != nil {
+				return err
+			}
+			return a.brokeredAnswer(sandbox.Request{Op: op, Args: argv}, timeout, true)
+		}
+		argv, err := a.scratchArgv(cmd, args)
 		if err != nil {
 			return err
 		}
-		return a.brokeredAnswer(sandbox.Request{Op: op, Args: argv}, timeout, true)
+		dir, err := a.hostSpool()
+		if err != nil {
+			return err
+		}
+		return a.brokeredAnswerIn(dir, sandbox.Request{Op: op, Args: argv}, timeout, true)
 	}
 	return c
 }
@@ -81,6 +95,59 @@ func brokerArgv(cmd *cobra.Command, args []string) ([]string, error) {
 		return nil, err
 	}
 	return append(append(argv, "--"), args...), nil
+}
+
+// scratchArgv is brokerArgv for an agents start, wake or resume, which may
+// keep its state in a scratch configuration's: the --config the caller
+// named (or $BEEKEEPER_STATE_FROM it runs under) goes to the broker as
+// --config=<absolute path>, which brokeredAgents takes for the scratch
+// state. A broker without it refuses the flag, so no start of a scratch
+// configuration lands in the host's state.
+func (a *app) scratchArgv(cmd *cobra.Command, args []string) ([]string, error) {
+	scratch := a.cfgPath
+	if scratch == "" {
+		scratch = os.Getenv(stateFromEnv)
+	}
+	argv := []string{cmd.Name()}
+	var err error
+	cmd.Flags().Visit(func(f *pflag.Flag) {
+		switch f.Name {
+		case "as":
+			err = refused("--as: a brokered call runs as this session")
+		case "config":
+		default:
+			argv = append(argv, "--"+f.Name+"="+f.Value.String())
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	if scratch != "" {
+		abs, err := filepath.Abs(scratch)
+		if err != nil {
+			return nil, err
+		}
+		argv = append(argv, "--config="+abs)
+	}
+	return append(append(argv, "--"), args...), nil
+}
+
+// hostSpool is the host broker's spool: the state directory of the host's
+// configuration ($BEEKEEPER_CONFIG or the default one), never the scratch
+// one a call names.
+func (a *app) hostSpool() (string, error) {
+	if a.cfgPath == "" && os.Getenv(stateFromEnv) == "" {
+		return sandbox.SpoolDir(a.cfg.StateDir), nil
+	}
+	path, err := config.Path("")
+	if err != nil {
+		return "", err
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		return "", err
+	}
+	return sandbox.SpoolDir(cfg.StateDir), nil
 }
 
 // brokerFlags is cmd's name and the flags set on it, for a brokered call.
@@ -102,9 +169,13 @@ func brokerFlags(cmd *cobra.Command) ([]string, error) {
 // as long as the call runs), and passes on its output, streamed while it
 // runs with stream, and its exit code.
 func (a *app) brokeredAnswer(req sandbox.Request, timeout time.Duration, stream bool) error {
-	dir := sandbox.SpoolDir(a.cfg.StateDir)
+	return a.brokeredAnswerIn(sandbox.SpoolDir(a.cfg.StateDir), req, timeout, stream)
+}
+
+// brokeredAnswerIn is brokeredAnswer from the broker serving dir.
+func (a *app) brokeredAnswerIn(dir string, req sandbox.Request, timeout time.Duration, stream bool) error {
 	if !(sandbox.Capper{Dir: dir}).Available() {
-		return refused("no sandbox broker answers in %s: beekeeper-sandbox.service on the host runs this for the sandbox (beekeeper install)", dir)
+		return refused("no sandbox broker answers in %s: beekeeper-sandbox.service on the host runs this for the sandbox (beekeeper install); agents start, wake and resume name a scratch state with --config", dir)
 	}
 	call, out := sandbox.Call, a.out
 	if stream {
@@ -140,6 +211,48 @@ func brokeredSub(args []string, what string, subs ...string) error {
 		return fmt.Errorf("the sandbox broker runs beekeeper %s %s only", what, strings.Join(subs, ", "))
 	}
 	return brokeredFlags(args[1:])
+}
+
+// brokeredAgents runs a brokered agents start, wake or resume with call: a
+// scratch configuration its flags name (--config=<absolute path>, from
+// scratchArgv) leaves them and gives the call its state through
+// $BEEKEEPER_STATE_FROM, held to the session's lists (stateFrom). The rest
+// of the scratch configuration never reaches the host: its commands would
+// run outside the sandbox.
+func brokeredAgents(call func(env []string) sandbox.Handler) sandbox.Handler {
+	return func(ctx context.Context, pid int, req sandbox.Request) (sandbox.Reply, error) {
+		args, scratch, err := scratchConfig(req.Args)
+		if err != nil {
+			return sandbox.Reply{}, err
+		}
+		var env []string
+		if scratch != "" {
+			env = []string{stateFromEnv + "=" + scratch}
+		}
+		req.Args = args
+		return call(env)(ctx, pid, req)
+	}
+}
+
+// scratchConfig takes the scratch configuration a brokered agents call
+// names out of its flags: the arguments without it, and its path.
+func scratchConfig(args []string) ([]string, string, error) {
+	var scratch string
+	out := make([]string, 0, len(args))
+	for i, arg := range args {
+		if arg == "--" {
+			return append(out, args[i:]...), scratch, nil
+		}
+		if v, ok := strings.CutPrefix(arg, "--config="); ok {
+			if !filepath.IsAbs(v) {
+				return nil, "", fmt.Errorf("--config=%s: a scratch configuration is named by its absolute path", v)
+			}
+			scratch = v
+			continue
+		}
+		out = append(out, arg)
+	}
+	return out, scratch, nil
 }
 
 // brokeredAgentsArgv is the command line of a brokered agents start, wake
@@ -184,6 +297,31 @@ func ownScope(name string, c platform.Cap) {
 	if err := plat.Capper.Adopt(os.Getpid(), fmt.Sprintf("beekeeper-%s-%d", name, os.Getpid()), c); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "beekeeper: %s stays in the broker's unit: %v\n", name, err)
 	}
+}
+
+// stateFromEnv names a configuration file whose state a beekeeper keeps:
+// its stateDir and leaseDir, everything else from the configuration it
+// reads. A sandboxed session's agents start --config passes it through the
+// broker, so the host's configuration stays the broker's and the start's
+// state the scratch one; the started agent runs under it too.
+const stateFromEnv = "BEEKEEPER_STATE_FROM"
+
+// stateFrom keeps the state of the configuration file path; in a sandboxed
+// session's brokered call, only of one the session reads and whose state
+// folders it writes.
+func (a *app) stateFrom(path string) error {
+	if err := a.sandboxPaths([]string{path}, nil); err != nil {
+		return err
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		return fmt.Errorf("$%s: %w", stateFromEnv, err)
+	}
+	if err := a.sandboxPaths(nil, []string{c.StateDir, c.LeaseDir}); err != nil {
+		return err
+	}
+	a.cfg.StateDir, a.cfg.LeaseDir = c.StateDir, c.LeaseDir
+	return nil
 }
 
 // sandboxPaths holds a sandboxed session's brokered call to the agent

@@ -694,6 +694,12 @@ same file passed to `claude --settings` holds one session to it, to try a change
   create|delete cluster` and names `beekeeper lease up|down <lab>` instead. Nothing of the person's
   kubeconfig or Teleport profile enters the sandbox: only the watch's lines and the lease's own lab
   kubeconfig do.
+  A start, wake or resume with `--config <scratch>` (or under `$BEEKEEPER_STATE_FROM`) keeps the
+  scratch configuration's state: the call still asks the host's broker, which takes only the scratch
+  file's `stateDir` and `leaseDir`, held to the session's lists, and runs the installed beekeeper under
+  the host's configuration with them (`$BEEKEEPER_STATE_FROM`, which the started agent keeps too). The
+  roster entry and events land in the scratch state, the live ones untouched; nothing else of the
+  scratch file reaches the host, whose commands would run outside the sandbox.
 - **No way out:** unsandboxed retries are off, and a session whose sandbox cannot start does not start.
 - **The file tools.** Read, Grep, Glob, Edit, Write and NotebookEdit run in the harness, outside the
   sandbox. The policy runs `beekeeper hook pretooluse` for them and sets `BEEKEEPER_SANDBOX`, and the

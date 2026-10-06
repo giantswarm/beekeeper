@@ -558,6 +558,11 @@ func (a *app) loadConfig() error {
 	if a.cfg, err = config.Load(path); err != nil {
 		return err
 	}
+	if f := os.Getenv(stateFromEnv); f != "" {
+		if err := a.stateFrom(f); err != nil {
+			return err
+		}
+	}
 	plat = platform.Current(platform.Options{DesktopApp: a.cfg.Claude.DesktopApp})
 	if !a.hook && sandbox.Unheld(os.Getenv) {
 		// the sandbox policy's environment without its sandbox: beekeeper and

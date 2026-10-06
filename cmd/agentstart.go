@@ -1151,7 +1151,7 @@ func agentArgv(bin, id, name, model, brief string, flags ...string) []string {
 // launch runs argv in a transient user service: it gets the user manager's
 // environment, not the caller's session variables, and outlives the caller;
 // a configuration file the caller named is passed on as $BEEKEEPER_CONFIG,
-// env (KEY=value) is added, and stopPost runs once argv has ended.
+// a scratch state it keeps as $BEEKEEPER_STATE_FROM, env (KEY=value) is added, and stopPost runs once argv has ended.
 // KillMode=process leaves what the turn started running when it ends, as a
 // terminal would.
 func launch(unit, dir, config string, stopPost, argv []string, env ...string) error {
@@ -1162,6 +1162,9 @@ func launch(unit, dir, config string, stopPost, argv []string, env ...string) er
 	u.Env = append(u.Env, env...)
 	if config != "" {
 		u.Env = append(u.Env, "BEEKEEPER_CONFIG="+config)
+	}
+	if f := os.Getenv(stateFromEnv); f != "" {
+		u.Env = append(u.Env, stateFromEnv+"="+f)
 	}
 	if dir, ok := devBuild(); ok {
 		// Its beekeeper commands run the build that started it.
