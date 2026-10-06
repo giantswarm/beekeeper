@@ -491,3 +491,47 @@ func TestANoReleaseToolMergeLiftsItsWindow(t *testing.T) {
 		t.Errorf("hold.lift event: %q", d)
 	}
 }
+
+// A devctl merge queued behind a devctl release starts on that release: the
+// gate runs devctl's update before it starts, and the merge waits while the
+// window of the previous release is open, as devctl would otherwise run on
+// the version that release replaced and refuse (exit 7).
+func TestADevctlMergeWaitsForThePreviousRelease(t *testing.T) {
+	stubGitHub(t, github.Merged, devctlFrom)
+	updates := 0
+	devctlUpdate = func(context.Context) error { updates++; return nil }
+	g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
+	g.cfg.Merge.Cap = 10
+	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Merges[0].Phase, st.Merges[0].Started = state.Waiting, time.Time{}
+		st.Holds[0].ToolMerged, st.Holds[0].ToolRelease, st.Holds[0].ToolPR = true, devctlTo, 6
+		return nil, nil
+	})
+	why, err := g.start("", nil)
+	if err != nil || !strings.Contains(why, "waiting for devctl to report "+devctlTo) || !strings.Contains(why, merge.ToolRepo+"#6") {
+		t.Fatalf("start: %q, %v", why, err)
+	}
+	if updates != 1 {
+		t.Errorf("%d updates before the start, want 1", updates)
+	}
+	st := gateState(t, g)
+	if st.Merges[0].Phase != state.Waiting || len(st.Holds) != 1 || st.Holds[0].ToolPR != 6 {
+		t.Errorf("the merge started or the window changed: %+v, %+v", st.Merges, st.Holds)
+	}
+}
+
+// A merged window stays until devctl reports its release: another version
+// than the window's opening one is not enough.
+func TestAMergedToolWindowWaitsForItsRelease(t *testing.T) {
+	stubGitHub(t, github.Merged, "v8.0.5")
+	g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
+	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Merges = nil
+		st.Holds[0].ToolMerged, st.Holds[0].ToolRelease = true, devctlTo
+		return nil, nil
+	})
+	g.closeToolWindow(context.Background(), watchParty)
+	if st := gateState(t, g); len(st.Holds) != 1 {
+		t.Fatalf("lifted on v8.0.5 before %s: %+v", devctlTo, st.Holds)
+	}
+}

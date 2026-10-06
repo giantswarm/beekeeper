@@ -439,3 +439,28 @@ func TestHung(t *testing.T) {
 		}
 	}
 }
+
+// A window whose merge released ends once the tool reports that release or a
+// later one; any other window once the tool reports another version than at
+// its opening.
+func TestInstalled(t *testing.T) {
+	released := state.Hold{Tool: Tool, ToolFrom: "v8.0.0", ToolMerged: true, ToolRelease: "v8.1.0"}
+	opened := state.Hold{Tool: Tool, ToolFrom: "v8.0.0"}
+	for _, c := range []struct {
+		h    state.Hold
+		v    string
+		want bool
+	}{
+		{released, "8.0.0", false},
+		{released, "8.0.5", false},
+		{released, "8.1.0", true},
+		{released, "v8.1.0", true},
+		{released, "8.2.0", true},
+		{opened, "8.0.0", false},
+		{opened, "8.0.1", true},
+	} {
+		if got := Installed(c.h, c.v); got != c.want {
+			t.Errorf("Installed(%+v, %q) = %v, want %v", c.h, c.v, got, c.want)
+		}
+	}
+}

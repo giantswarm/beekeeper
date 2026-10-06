@@ -590,8 +590,6 @@ func follows(rng, release string) bool {
 	return c.Check(v)
 }
 
-// bare is a version without a leading v and without build metadata: a tag
-// v1.2.3 and a chart version 1.2.3+1c161d9d name the same release.
 // reached says whether a HelmRelease on version have runs release or a
 // later one in semver order. A merge cuts a release candidate: an
 // installation on a stable range runs its promotion, X.Y.Z after X.Y.Z-rc.N,
@@ -606,6 +604,19 @@ func reached(have, release string) bool {
 	return !h.LessThan(r)
 }
 
+// Installed says whether the merge tool reporting version v ends the
+// tool-release window h: a window whose merge released waits for the tool to
+// report that release or a later one, any other for a version other than the
+// one it opened on.
+func Installed(h state.Hold, v string) bool {
+	if h.ToolMerged && h.ToolRelease != "" {
+		return reached(v, h.ToolRelease)
+	}
+	return bare(v) != bare(h.ToolFrom)
+}
+
+// bare is a version without a leading v and without build metadata: a tag
+// v1.2.3 and a chart version 1.2.3+1c161d9d name the same release.
 func bare(v string) string {
 	v = strings.TrimPrefix(v, "v")
 	if i := strings.IndexByte(v, '+'); i >= 0 {
