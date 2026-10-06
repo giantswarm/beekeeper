@@ -64,8 +64,9 @@ than scan.minLength (12) is refused.`,
 		Short: "Count the indexed references and token patterns in every transcript",
 		Long: `sweep reads every transcript under claude.projectsDir: the sessions' and
 subagents' .jsonl files and the spilled tool results (tool-results/*.txt).
-It prints each reference and token rule found, with how often and in how
-many files: never a value, never where. A reference listed was in a
+It prints each reference and token rule found, base64-wrapped ones
+included, with how often and in which files: never a value, never where in
+a file. A reference listed was in a
 transcript on disk and goes to its rotation.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error { return a.scanSweep() },
@@ -189,6 +190,9 @@ func (a *app) scanAdd(in io.Reader, ref string) error {
 	return err
 }
 
+// sweepPathsShown bounds the files the sweep prints under one finding.
+const sweepPathsShown = 10
+
 func (a *app) scanSweep() error {
 	ix, err := guard.LoadIndex(a.scanDir())
 	if err != nil {
@@ -208,6 +212,13 @@ func (a *app) scanSweep() error {
 	}
 	for _, l := range rep.Leaks {
 		fmt.Fprintf(&b, "  %-60s %6d× in %d files\n", l.Name(), l.Count, l.Files)
+		for i, p := range l.Paths {
+			if i == sweepPathsShown {
+				fmt.Fprintf(&b, "      … %d more (--json lists them all)\n", len(l.Paths)-i)
+				break
+			}
+			fmt.Fprintf(&b, "      %s\n", p)
+		}
 	}
 	_, err = io.WriteString(a.out, b.String())
 	return err
