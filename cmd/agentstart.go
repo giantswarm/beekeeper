@@ -141,13 +141,16 @@ supervisor", which the PreToolUse hook delivers to the role's holder.
 The desktop runs the session's turns in acceptEdits (its import always
 drops bypass), so requests no allow rule covers would stop at a card:
 beekeeper hook permissionrequest answers them, for beekeeper's starts only.
-The browser is the desktop's own: the import gives the session the Chrome
-permission mode skip_all_permission_checks only when the desktop allows all
-browser actions (a person's "Allow all sites" on a Claude in Chrome site
-request turns that on for every session), and otherwise each navigate to a
-site the session was not allowed on yet waits on a site request in its
-desktop row, which no hook answers. start says which mode the desktop
-recorded, and agents shows it per agent (BROWSER asks or skips). --desktop
+The desktop's browser asks: Claude Desktop holds a desktop turn's navigate
+to a site the session was not allowed on yet for a person's site request in
+its row, which no hook answers, unless the session runs in auto or bypass
+(the import never keeps bypass). So beekeeper hook pretooluse refuses the
+Claude in Chrome tools in the desktop turns of beekeeper's starts and names
+beekeeper browse, which runs the browser steps in a headless turn that has
+the CLI's own Chrome tools and nothing else; every headless turn of a start (--chrome, in
+bypass) has that connection too. Neither ever waits on a site request.
+start says which Chrome mode the desktop recorded, and agents shows it per
+agent (BROWSER asks or skips). --desktop
 is kept for scripts: every start imports past the window's focus now.
 
 --harness omp starts an omp (oh-my-pi) agent instead: "omp --mode rpc"
@@ -215,7 +218,7 @@ is involved and no import happens.`,
 	c.Flags().StringVar(&dir, "dir", "", "the session's working directory (default: agents.dir, else the current one)")
 	c.Flags().StringVar(&task, "task", "", "the task the roster shows it busy with (default: the brief's first line)")
 	c.Flags().StringVar(&harness, "harness", "claude", "the agent harness: claude or omp")
-	c.Flags().BoolVar(&desktop, "desktop", false, "the task needs desktop turns (the browser): import it past the desktop window's focus, as agents desktop does")
+	c.Flags().BoolVar(&desktop, "desktop", false, "the task needs desktop turns: import it past the desktop window's focus, as agents desktop does")
 	return c
 }
 
@@ -346,7 +349,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if err != nil {
 		return startedAgent{}, err
 	}
-	if err := launch(unit, dir, a.explicitConfig(), []string{self, agentsName, reopenName, id}, agentArgv(bin, id, sp.name, sp.model, sp.brief)); err != nil {
+	if err := launch(unit, dir, a.explicitConfig(), []string{self, agentsName, reopenName, id}, agentArgv(bin, id, sp.name, sp.model, sp.brief, chromeFlag)); err != nil {
 		return startedAgent{}, fmt.Errorf("starting %s: %w (the start stays recorded; beekeeper agents remove %q takes it off the roster)", sp.name, err, sp.name)
 	}
 	if err := awaitReply(ctx, a.cfg.Claude.ProjectsDir, id, func() bool { return unitEnded(ctx, unit) }, replyQuiet, replyWait); err != nil {
@@ -641,9 +644,9 @@ func browserLine(chrome string) string {
 	case claude.ChromeSkipAll:
 		return "its browser actions run without the desktop's site requests (Chrome permission mode " + chrome + ")"
 	case "":
-		return "the desktop recorded no Chrome permission mode: each navigate to a site it was not allowed on yet waits on a person's site request in its desktop row"
+		return "the desktop recorded no Chrome permission mode: each navigate to a site it was not allowed on yet waits on a person's site request in its desktop row, so its desktop turns run browser steps through beekeeper browse"
 	}
-	return fmt.Sprintf("the desktop recorded the Chrome permission mode %s: each navigate to a site it was not allowed on yet waits on a person's site request in its desktop row", chrome)
+	return fmt.Sprintf("the desktop recorded the Chrome permission mode %s: each navigate to a site it was not allowed on yet waits on a person's site request in its desktop row, so its desktop turns run browser steps through beekeeper browse", chrome)
 }
 
 // twinLine says whether the headless turn is the session's only CLI.
@@ -1130,7 +1133,7 @@ func briefTask(brief string) string {
 // bypassPermissions under the id beekeeper recorded; flags go before the
 // brief.
 func agentArgv(bin, id, name, model, brief string, flags ...string) []string {
-	argv := []string{bin, "-p", sessionIDFlag, id, "--permission-mode", state.ModeBypass, "-n", name}
+	argv := []string{bin, "-p", sessionIDFlag, id, permissionModeFlag, state.ModeBypass, "-n", name}
 	if model != "" {
 		argv = append(argv, modelFlag, model)
 	}

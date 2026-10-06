@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `beekeeper browse "<steps>"` runs browser steps in a headless `claude -p --chrome` turn that has the CLI's own Claude in Chrome tools and nothing else (no shell, no file tools, no other MCP server, dontAsk with a Chrome-only allow rule), on a connection that never waits on a site approval, and prints the turn's report, its transcript and every screenshot it took as an image file under `<stateDir>/browse/<id>/`. `beekeeper hook pretooluse` refuses the Claude in Chrome tools in the desktop turns of the sessions `agents start` starts and names `browse`: Claude Desktop holds such a session's navigate to a new site for a person's site approval, which no hook answers. Headless turns of a start (`agents wake`, a task turn the desktop does not run) get `--chrome`. A person's own sessions are untouched.
+
 - `secret.ageIdentities` takes an entry of the person's own credential store, `ref: store://<entry>`, read by the broker through the person's own commands in `secret.store` (`read`, and `search` for `store://` with no entry, which finds the entry by the SOPS file's recipients through the store's own search). The store shows whatever unlock prompt it shows; only the identity of the file's recipient reaches the one sops call, and nothing is printed, copied or fingerprinted ([README](README.md#age-identities)).
 
 ### Fixed

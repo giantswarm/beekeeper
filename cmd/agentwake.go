@@ -356,15 +356,27 @@ func wakeRunning(ctx context.Context, id string) string {
 // in its mode and on its model, the message as the turn; flags go before the
 // message.
 func wakeArgv(bin string, w wakeTarget, msg string) []string {
-	argv := []string{bin, "-p", resumeFlag, w.id, "--permission-mode", w.mode}
+	argv := []string{bin, "-p", resumeFlag, w.id, permissionModeFlag, w.mode}
 	if w.name != "" {
 		argv = append(argv, "-n", w.name)
 	}
 	if w.model != "" {
 		argv = append(argv, modelFlag, w.model)
 	}
+	if w.mode == state.ModeBypass {
+		// the CLI's own Chrome connection, which in bypass never waits on
+		// a person's site approval as the desktop's does
+		argv = append(argv, chromeFlag)
+	}
 	return append(argv, "--", msg)
 }
+
+// permissionModeFlag sets a turn's permission mode.
+const permissionModeFlag = "--permission-mode"
+
+// chromeFlag connects a headless turn to the person's Chrome through the
+// CLI's own Claude in Chrome integration.
+const chromeFlag = "--chrome"
 
 // headlessTurn says which headless beekeeper turn of session id runs: "first
 // turn" (agents start), "wake turn" (agents wake), "" for none.
