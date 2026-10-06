@@ -61,8 +61,9 @@ const (
 	// session a link is about to show, a switch back still landing.
 	settleWait = 5 * time.Second
 	// awayPoll is how often a wait for the desktop's window asks the
-	// compositor which window has focus.
-	awayPoll = 500 * time.Millisecond
+	// compositor which window has focus: each ask runs hyprctl, and a
+	// reopen may wait reopenAwayWait.
+	awayPoll = 2 * time.Second
 )
 
 // errDesktopInUse is a claude:// link not opened: the desktop's window kept
@@ -776,6 +777,15 @@ func (a *app) reopenSession(ctx context.Context, arg string) error {
 		}
 		return nil
 	}
+	release, waits, err := a.holdReopen(id)
+	if err != nil {
+		return a.reopenMissed(name, err)
+	}
+	if waits {
+		_, err := fmt.Fprintf(a.out, "reopen: a reopen of %s already waits to show it, left to that one\n", id)
+		return err
+	}
+	defer release()
 	t, err := plat.Machine.Processes()
 	if err != nil {
 		return err
@@ -794,9 +804,14 @@ func (a *app) reopenSession(ctx context.Context, arg string) error {
 	if err != nil {
 		return a.reopenMissed(name, err)
 	}
-	d.urgent = a.asksDesktop(id)
-	err = d.await(ctx, reopenAwayWait, a.importWaits(id, name, reopenAwayWait))
+	wctx, urgent, stop := a.watchReopen(ctx, arg, id)
+	defer stop()
+	d.urgent = urgent
+	err = d.await(wctx, reopenAwayWait, a.importWaits(id, name, reopenAwayWait))
 	a.importEnded(id)
+	if end, ok := errors.AsType[reopenEnd](context.Cause(wctx)); ok {
+		return a.reopenEnded(ctx, id, name, end)
+	}
 	if err != nil {
 		return a.reopenMissed(name, fmt.Errorf("reopening %s in the desktop: %w", id, err))
 	}
@@ -812,15 +827,39 @@ func (a *app) reopenSession(ctx context.Context, arg string) error {
 		return nil
 	}
 	shownAt := time.Now()
-	if _, err := a.showBriefly(ctx, d, url, "local_"+id, "", true, reopenAwayWait, ready); err != nil {
+	if _, err := a.showBriefly(wctx, d, url, "local_"+id, "", true, reopenAwayWait, ready); err != nil {
+		if end, ok := errors.AsType[reopenEnd](context.Cause(wctx)); ok {
+			return a.reopenEnded(ctx, id, name, end)
+		}
 		if u, ok := errors.AsType[wakeStarted](err); ok {
 			return a.yieldToWake(ctx, d, id, name, string(u))
 		}
 		return a.reopenMissed(name, fmt.Errorf("reopening %s in the desktop: %w", id, err))
 	}
+	stop()
 	if _, err := fmt.Fprintf(a.out, "reopen: showed local_%s in the desktop, which warms its CLI\n", id); err != nil {
 		return err
 	}
+	return a.reopenWarmed(ctx, id, name, shownAt)
+}
+
+// reopenEnded ends the reopen of session id once it has nothing left to
+// show: a desktop CLI of the session that runs already is kept as the
+// warmed one, and its title and model are seen to as after a show.
+func (a *app) reopenEnded(ctx context.Context, id, name string, end reopenEnd) error {
+	if !end.twin {
+		_, err := fmt.Fprintf(a.out, "reopen: %s (%s) left closed: %s\n", name, id, end.why)
+		return err
+	}
+	if _, err := fmt.Fprintf(a.out, "reopen: no show of local_%s: %s\n", id, end.why); err != nil {
+		return err
+	}
+	return a.reopenWarmed(ctx, id, name, time.Now())
+}
+
+// reopenWarmed waits for the desktop CLI of session id that the show at
+// shownAt warms, and keeps the session's title and model.
+func (a *app) reopenWarmed(ctx context.Context, id, name string, shownAt time.Time) error {
 	if err := a.awaitWarmed(ctx, id, name, shownAt); err != nil {
 		return err
 	}
@@ -986,7 +1025,7 @@ func (d desk) turnWait() time.Duration {
 // watchDesk watches the person's input until ctx ends, unless
 // desktop.typingQuiet is negative.
 func (a *app) watchDesk(ctx context.Context) (desk, error) {
-	d := desk{quiet: a.cfg.Desktop.TypingQuiet.Duration, locked: screenLocked}
+	d := desk{quiet: a.cfg.Desktop.TypingQuiet.Duration, locked: every(lockPoll, screenLocked)}
 	if d.quiet < 0 {
 		return d, nil
 	}
