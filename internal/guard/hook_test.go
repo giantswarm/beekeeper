@@ -18,6 +18,7 @@ type decision struct {
 	PermissionDecision string         `json:"permissionDecision"`
 	Reason             string         `json:"permissionDecisionReason"`
 	UpdatedInput       map[string]any `json:"updatedInput"`
+	AdditionalContext  string         `json:"additionalContext"`
 }
 
 // decide feeds a Bash tool call to the hook the way Claude Code sends it.

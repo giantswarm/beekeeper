@@ -11,11 +11,13 @@ import (
 	"strings"
 )
 
-// A Leak is one reference or rule found in the transcripts: how often and in
-// how many files. It never carries the value or where in a file it was.
+// A Leak is one reference or rule found in the transcripts: how often, in
+// how many files and which. It never carries the value or where in a file
+// it was.
 type Leak struct {
 	Finding
-	Files int `json:"files"`
+	Files int      `json:"files"`
+	Paths []string `json:"paths"`
 }
 
 // SweepReport is what SweepTranscripts read and found.
@@ -60,6 +62,7 @@ func SweepTranscripts(dir string, ix *Index) (SweepReport, error) {
 			}
 			l.Count += f.Count
 			l.Files++
+			l.Paths = append(l.Paths, p)
 		}
 		return nil
 	})

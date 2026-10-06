@@ -44,8 +44,9 @@ machine has a supervisor at all times: the role moves to a successor by relay an
   `ScheduleWakeup` is not a reliable tick; nothing depends on it.
 - **The watch's own state is on disk, not in the transcript.** `beekeeper supervisor start` makes
   every lease claim need the supervisor's grant until a deliberate `beekeeper supervisor stop` or a
-  successor's start; a crash of this session's CLI leaves the rule in force. A `yours <env>` is
-  recorded with `beekeeper lease grant <resource> <session>` (grants queue in order), a hold with
+  successor's start; a crash of this session's CLI leaves the rule in force. A `yours <env>` said to
+  the worker (SendMessage, `agents wake`) records its grant, `beekeeper lease grant <resource>
+  <session>` records one without the word (grants queue in order), a hold with
   `beekeeper hold set <repo|github>`, a decision for the person with `beekeeper note add --for
   <person> --due <time> --status-quo "<what is true now>" --why "<why it needs them>" --default
   "<the action if unanswered>"` (every issue or PR as its full URL; `note add --help` names the checks), its own
@@ -159,8 +160,8 @@ machine has a supervisor at all times: the role moves to a successor by relay an
   busy lane waits on in its own run and wakes its session with the outcome, so the lane needs no
   `clear` message and a promotion no separate `go`; only a hold stops a merge, and `lanes clear` is
   the repair for a lane whose release will not roll. A hold reaches a merge only before its devctl
-  started; after that the merge is a fact to sequence around. Resources are handed over as `yours <env>` / `browser yours` (recorded
-  as a grant) and returned as `<env> free` / `browser free`; the session's claim follows. The
+  started; after that the merge is a fact to sequence around. Resources are handed over as `yours <env>` / `browser yours` (the message
+  records the grant) and returned as `<env> free` / `browser free`; the session's claim follows. The
   worker's side of the vocabulary is the `worker-rules` skill.
 - **Reading is a worker's task.** Board sweeps, epic re-queries and research run as workers; the
   supervisor reads their one-line results, never the boards, epics or transcripts in full itself.

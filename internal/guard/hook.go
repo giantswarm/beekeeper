@@ -138,6 +138,12 @@ type Hook struct {
 	// roster agent's whose CLI does not run (its headless turn ended, its
 	// import waits); "" passes the send. Nil passes every one.
 	Absent func(name string) string
+	// Yours records a `yours <resource>` in a message from the session
+	// holding the supervisor role as the resource's grant to the message's
+	// target (to, after the hook's own redirects) and returns what the
+	// sender is told: the grant recorded, or why none was; "" says nothing.
+	// Nil records nothing.
+	Yours func(session, to, message string) string
 	// Project is the session's own project ($CLAUDE_PROJECT_DIR), whose
 	// instructions Claude Code loads itself; "" takes the call's cwd.
 	Project string
@@ -208,7 +214,7 @@ func (h Hook) Decide(input []byte) []byte {
 		return out
 	}
 	d := o["hookSpecificOutput"]
-	d.AdditionalContext = reads
+	d.AdditionalContext = strings.TrimSpace(d.AdditionalContext + "\n\n" + reads)
 	return answer(d)
 }
 
@@ -226,7 +232,7 @@ func (h Hook) decide(ev event) []byte {
 		return h.ask(ev.Session, ev.ToolInput)
 	}
 	if ev.ToolName == SendMessageTool {
-		return h.sendMessage(ev.ToolInput)
+		return h.sendMessage(ev.Session, ev.ToolInput)
 	}
 	if r := mentionRefusal(ev.ToolName, ev.ToolInput, ev.CWD); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})

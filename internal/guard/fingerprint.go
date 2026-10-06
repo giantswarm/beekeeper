@@ -277,7 +277,8 @@ type span struct {
 // Redact replaces every indexed value and every token pattern match in s
 // with a marker naming its reference or rule, and returns what it found. A
 // line marked gitleaks:allow keeps its pattern matches, not its indexed
-// values. An Index without a key matches patterns only.
+// values. A base64 run whose decoding carries either is replaced whole. An
+// Index without a key matches patterns only.
 func (ix *Index) Redact(s string) (string, []Finding) {
 	// An indexed value wins over a pattern match it overlaps, since it names
 	// what to rotate; among either, the widest span starting first wins.
@@ -297,6 +298,7 @@ func (ix *Index) Redact(s string) (string, []Finding) {
 		}
 	}
 	spans = disjoint(patterns, spans)
+	spans = disjoint(ix.encodedSpans(s, 1), spans)
 	if len(spans) == 0 {
 		return s, nil
 	}

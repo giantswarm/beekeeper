@@ -23,9 +23,12 @@ const desktopPrefix = "local_"
 // none runs; an error is a send the hook refuses. A running session's
 // message is redirected to its name, which queues it in that CLI. A message
 // by name to a roster agent whose CLI does not run is refused with what
-// Absent says: no CLI runs, and whether an import is pending. Every other
+// Absent says: no CLI runs, and whether an import is pending. A message
+// that hands a resource over with the supervisor's word (`yours
+// <resource>`) goes through Yours, whose answer the sender reads as
+// additional context: the grant recorded, or why none was. Every other
 // call passes unchanged.
-func (h Hook) sendMessage(input map[string]any) []byte {
+func (h Hook) sendMessage(session string, input map[string]any) []byte {
 	to, _ := input["to"].(string)
 	to = strings.TrimSpace(to)
 	var why []string
@@ -52,8 +55,16 @@ func (h Hook) sendMessage(input map[string]any) []byte {
 			to = name
 		}
 	}
+	var context string
+	if h.Yours != nil {
+		message, _ := input["message"].(string)
+		context = h.Yours(session, to, message)
+	}
 	if len(why) == 0 {
-		return nil
+		if context == "" {
+			return nil
+		}
+		return answer(hookOutput{AdditionalContext: context})
 	}
 	updated := make(map[string]any, len(input))
 	for k, v := range input {
@@ -64,6 +75,7 @@ func (h Hook) sendMessage(input map[string]any) []byte {
 		PermissionDecision: decisionAllow,
 		Reason:             "beekeeper: " + strings.Join(why, "; "),
 		UpdatedInput:       updated,
+		AdditionalContext:  context,
 	})
 }
 

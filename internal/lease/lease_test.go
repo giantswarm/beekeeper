@@ -56,6 +56,16 @@ func TestCheckNeedsGrantUnderSupervisor(t *testing.T) {
 	if !errors.As(err, &r) {
 		t.Fatalf("want a refusal, got %v", err)
 	}
+	// The refusal names the missing grant and the command that records it.
+	for _, want := range []string{`recorded no grant of kind-1 to "Agent one"`, "`yours kind-1`", "`beekeeper lease grant kind-1 \"Agent one\"`", "`kind-1 needed: <purpose>`"} {
+		if !strings.Contains(r.Reason, want) {
+			t.Errorf("refusal %q lacks %s", r.Reason, want)
+		}
+	}
+	_, err = Check(&state.State{}, Gate{Resource: lab, Caller: state.Party{Session: "s9"}, Supervisor: sup, Now: now, TTL: ttl})
+	if !errors.As(err, &r) || !strings.Contains(r.Reason, "`beekeeper lease grant kind-1 s9`") {
+		t.Errorf("an unnamed caller is granted by its session id: %v", err)
+	}
 	// The supervisor itself and a person are not gated.
 	for _, p := range []state.Party{sup.Party, alex} {
 		if _, err := Check(&state.State{}, Gate{Resource: lab, Caller: p, Supervisor: sup, Now: now, TTL: ttl}); err != nil {

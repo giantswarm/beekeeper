@@ -92,6 +92,19 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 		return err
 	}
 	ag := st.Agents[i]
+	if st.Supervisor != nil && st.Supervisor.Is(by) {
+		// The supervisor's `yours <resource>` is the grant, as in a
+		// SendMessage; the record follows the word.
+		if named := guard.Yours(msg, a.cfg.Leasable()); len(named) > 0 {
+			sessions, _, err := a.sessions()
+			if err != nil {
+				return err
+			}
+			if _, err := fmt.Fprintln(a.out, "wake: "+a.yoursGrants(sessions, st.Supervisor.Party, ag.Name, named)); err != nil {
+				return err
+			}
+		}
+	}
 	if ag.Undelivered != "" {
 		// A delivered turn is the task's start agents start did not make.
 		defer func() {
