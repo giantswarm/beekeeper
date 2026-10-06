@@ -1634,6 +1634,8 @@ func (w *watcher) stoppedAgents(st *state.State, sessions []*claude.Session) {
 		if !w.stopped[k] {
 			hint := resumeHint(ag)
 			switch on := parkedOn(waitsOf(st.Records, ag), w.cfg.Guide.Person); {
+			case ag.Undelivered != "":
+				hint = fmt.Sprintf("task not delivered: %s; beekeeper agents wake %q <message> delivers it", ag.Undelivered, ag.Name)
 			case ag.Import.Pending(w.now):
 				hint = importStatus(ag, w.now)
 			case on != "":
