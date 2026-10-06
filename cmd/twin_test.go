@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -98,19 +99,37 @@ func TestADesktopSendWaitsForTheHeadlessTurn(t *testing.T) {
 }
 
 // The watch says a session that runs two CLIs once, naming both, and its end
-// once one is left.
+// once one is left. Discover lists the session once; the process table holds
+// both CLIs. A CLI younger than twinGrace (a restart's overlap) counts not
+// yet.
 func TestTheWatchSaysATwinCLI(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	head := &claude.Session{PID: 10, ID: "s1", Name: twinName, Cwd: "/w/a"}
-	desk := &claude.Session{PID: 11, ID: "s1", HostID: twinHost, Name: twinName, Cwd: "/w/b"}
-	other := &claude.Session{PID: 12, ID: "o", Name: "someone else"}
-	w.twins([]*claude.Session{desk, other, head})
-	w.twins([]*claude.Session{desk, other, head})
+	w.now = time.Now()
+	old := w.now.Add(-time.Hour)
+	sessions := []*claude.Session{{PID: 11, ID: "s1", HostID: twinHost, Name: twinName}, {PID: 12, ID: "o", Name: "someone else"}}
+	head := &proc.Process{PID: 10, Comm: claudeComm, Start: old, Args: []string{claudeComm, "-p", resumeFlag, "s1", "--", "msg"}}
+	desk := &proc.Process{PID: 11, Comm: claudeComm, Start: old, Args: []string{claudeComm, "--resume=s1"}}
+	other := &proc.Process{PID: 12, Comm: claudeComm, Start: old, Args: []string{claudeComm, resumeFlag, "o"}}
+	table := func(ps ...*proc.Process) *proc.Table {
+		tb := &proc.Table{ByPID: map[int]*proc.Process{}}
+		for _, p := range ps {
+			tb.ByPID[p.PID] = p
+		}
+		return tb
+	}
+	young := *head
+	young.Start = w.now.Add(-time.Second)
+	w.twins(sessions, table(&young, desk, other))
+	if strings.Contains(out.String(), "TWIN CLI") {
+		t.Errorf("a restart's overlap counts as a twin:\n%s", out)
+	}
+	w.twins(sessions, table(head, desk, other))
+	w.twins(sessions, table(head, desk, other))
 	if s := out.String(); strings.Count(s, "TWIN CLI") != 1 ||
-		!strings.Contains(s, `"Twin worker" runs 2 CLIs on session s1 (PID 10 in /w/a, PID 11 in /w/b)`) {
+		!strings.Contains(s, `"Twin worker" runs 2 CLIs on session s1 (PID 10 in `) || !strings.Contains(s, "PID 11 in ") {
 		t.Errorf("output:\n%s", s)
 	}
-	w.twins([]*claude.Session{desk, other})
+	w.twins(sessions, table(desk, other))
 	if !strings.Contains(out.String(), "ENDED TWIN CLI") {
 		t.Errorf("no end once one CLI is left:\n%s", out)
 	}
