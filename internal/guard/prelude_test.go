@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/giantswarm/beekeeper/internal/sandbox"
 )
 
 // bash and agentShells are the shells the prelude is tested in.
@@ -17,7 +19,7 @@ var agentShells = []string{"zsh", bash}
 // with a session's environment file: the shell's aliases and functions of
 // the names are gone and an unmatched glob is a literal, in zsh and bash.
 func TestPreludeInAgentShells(t *testing.T) {
-	prelude := Prelude([]string{"grep", "ls"}, true, nil, nil)
+	prelude := Prelude([]string{"grep", "ls"}, true, nil, nil, "")
 	setup := "alias ls='echo ALIASED'\ngrep() { echo SHADOWED; }\n"
 	for _, sh := range agentShells {
 		bin, err := exec.LookPath(sh)
@@ -54,7 +56,7 @@ func TestPreludeInAgentShells(t *testing.T) {
 // bash, and leaves the other variables.
 func TestPreludeDropsVaultCredentials(t *testing.T) {
 	env := filepath.Join(t.TempDir(), "env.sh")
-	if err := WritePrelude(env, Prelude(nil, false, nil, nil)); err != nil {
+	if err := WritePrelude(env, Prelude(nil, false, nil, nil, "")); err != nil {
 		t.Fatal(err)
 	}
 	for _, sh := range agentShells {
@@ -82,7 +84,7 @@ func TestPreludeDropsVaultCredentials(t *testing.T) {
 // bash.
 func TestPreludeDropsPath(t *testing.T) {
 	env := filepath.Join(t.TempDir(), "env.sh")
-	if err := WritePrelude(env, Prelude(nil, false, nil, []string{"/opt/agent bin", "/opt/x"})); err != nil {
+	if err := WritePrelude(env, Prelude(nil, false, nil, []string{"/opt/agent bin", "/opt/x"}, "")); err != nil {
 		t.Fatal(err)
 	}
 	for _, sh := range agentShells {
@@ -110,10 +112,10 @@ func TestPreludeDropsPath(t *testing.T) {
 }
 
 func TestPreludeOff(t *testing.T) {
-	if p := Prelude(nil, false, nil, nil); strings.Contains(p, "unalias") || strings.Contains(p, "nomatch") || strings.Contains(p, "PATH") {
-		t.Errorf("Prelude(nil, false, nil, nil) = %q", p)
+	if p := Prelude(nil, false, nil, nil, ""); strings.Contains(p, "unalias") || strings.Contains(p, "nomatch") || strings.Contains(p, "PATH") {
+		t.Errorf("Prelude(nil, false, nil, nil, \"\") = %q", p)
 	}
-	if p := Prelude(nil, true, nil, nil); strings.Contains(p, "unalias") || !strings.Contains(p, "no_nomatch") {
+	if p := Prelude(nil, true, nil, nil, ""); strings.Contains(p, "unalias") || !strings.Contains(p, "no_nomatch") {
 		t.Errorf("globs only: %q", p)
 	}
 }
@@ -123,13 +125,13 @@ func TestWritePreludeReplacesItsOwnBlockOnly(t *testing.T) {
 	if err := os.WriteFile(env, []byte("export A=1"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []string{Prelude([]string{"grep"}, true, nil, nil), Prelude([]string{"ls"}, false, nil, nil), Prelude([]string{"ls"}, false, nil, nil)} {
+	for _, p := range []string{Prelude([]string{"grep"}, true, nil, nil, ""), Prelude([]string{"ls"}, false, nil, nil, ""), Prelude([]string{"ls"}, false, nil, nil, "")} {
 		if err := WritePrelude(env, p); err != nil {
 			t.Fatal(err)
 		}
 	}
 	raw, _ := os.ReadFile(env) //nolint:gosec // the test's own file
-	if got, want := string(raw), "export A=1\n"+Prelude([]string{"ls"}, false, nil, nil); got != want {
+	if got, want := string(raw), "export A=1\n"+Prelude([]string{"ls"}, false, nil, nil, ""); got != want {
 		t.Errorf("env file:\n%s\nwant:\n%s", got, want)
 	}
 	if err := WritePrelude(env, ""); err != nil {
@@ -148,7 +150,7 @@ func TestPreludePath(t *testing.T) {
 	if err != nil {
 		t.Skip("no home directory")
 	}
-	prelude := Prelude(nil, false, []string{"~/agent-bin", "/opt/it's"}, nil)
+	prelude := Prelude(nil, false, []string{"~/agent-bin", "/opt/it's"}, nil, "")
 	for _, sh := range agentShells {
 		bin, err := exec.LookPath(sh)
 		if err != nil {
@@ -169,5 +171,43 @@ func TestPreludePath(t *testing.T) {
 				t.Errorf("PATH in %s = %q, want %q", sh, got, want)
 			}
 		})
+	}
+}
+
+// With the sandbox policy's environment, a command the sandbox runtime
+// holds keeps the egress login and leaves the gh link off PATH; any other
+// drops the policy's variables, so gh and git use the host's own
+// configuration, with the gh link first on PATH, in zsh and bash.
+func TestPreludeUnheld(t *testing.T) {
+	const egress, bin = "/run/user/1/beekeeper/egress", "/opt/agent bin"
+	env := filepath.Join(t.TempDir(), "env.sh")
+	if err := WritePrelude(env, Prelude(nil, false, []string{bin}, []string{bin}, sandbox.UnsetShell(egress))); err != nil {
+		t.Fatal(err)
+	}
+	show := `printf '%s|%s|%s|%s\n' "$PATH" "${GH_CONFIG_DIR-}" "${BEEKEEPER_SANDBOX-}" "${GIT_CONFIG_COUNT-}"`
+	base := os.Getenv("PATH")
+	for _, sh := range agentShells {
+		shell, err := exec.LookPath(sh)
+		if err != nil {
+			t.Logf("%s not installed", sh)
+			continue
+		}
+		for runtime, want := range map[string]string{
+			"":  bin + ":" + base + "|||",
+			"1": base + "|" + egress + "/gh|1|4",
+		} {
+			c := exec.Command(shell, "-c", "PATH='"+bin+":"+base+"'\nsource "+env+"\n"+show) //nolint:gosec // the test's own shells
+			c.Env = []string{"GH_CONFIG_DIR=" + egress + "/gh", "BEEKEEPER_SANDBOX=1", "GIT_CONFIG_COUNT=4"}
+			if runtime != "" {
+				c.Env = append(c.Env, sandbox.Runtime+"="+runtime)
+			}
+			out, err := c.CombinedOutput()
+			if err != nil {
+				t.Fatalf("%s: %v: %s", sh, err, out)
+			}
+			if got := strings.TrimSpace(string(out)); got != want {
+				t.Errorf("prelude in %s, %s=%q: got %q, want %q", sh, sandbox.Runtime, runtime, got, want)
+			}
+		}
 	}
 }

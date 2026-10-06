@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A session that carries the sandbox policy's environment while no sandbox holds its commands (Claude Code applied the policy's `env`, not its `sandbox` block) acts on GitHub as on the host again: the agent shell's prelude and beekeeper at start drop the egress variables and `BEEKEEPER_SANDBOX` unless `SANDBOX_RUNTIME` is set. Before, gh sent the egress login's fixed word straight to GitHub (401), `budget --gate` and the merge gate failed on it, git had no credential helper for GitHub, and the prelude took devctl's `gh` link off `PATH` ([README](README.md#the-agent-sandbox)).
 - `beekeeper budget`, the snapshot, the `ui` screen and the watch read the GitHub GraphQL limit beside the REST one, from a real `rateLimit` query: a GraphQL refusal shows while REST has headroom, named as the hourly limit spent or a secondary limit, with its reset or Retry-After. The watch says it once with the `gh` and `devctl` callers and their sessions, and its end; `budget --gate` exits 3 while it holds ([README](README.md#what-it-does)).
 - The watch no longer sends the "GitHub budget under the floor" notification while the budget is above the floor.
 - The broker runs a brokered `beekeeper secret` call on a SOPS file whose age identity is an `op://` field of `secret.ageIdentities` with the vault session, as the client decides: both use one predicate, the file named relative to the requester's directory. Such a call ran without the session and failed.

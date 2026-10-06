@@ -206,13 +206,13 @@ func egressVars(dir string) map[string]string {
 	kv := [][2]string{
 		{"url.https://github.com/.insteadOf", "git@github.com:"},
 		{"url.https://github.com/.insteadOf", "ssh://git@github.com/"},
-		{"credential.https://github.com.helper", ""},
+		{gitHubHelper, ""},
 		{"gpg.program", filepath.Join(dir, EgressGPG)},
 	}
 	bundle := filepath.Join(dir, EgressBundle)
 	v := map[string]string{
-		"GH_CONFIG_DIR": filepath.Join(dir, EgressGH), "GIT_CONFIG_COUNT": strconv.Itoa(len(kv)),
-		"SSL_CERT_FILE": bundle, "GIT_SSL_CAINFO": bundle, "CURL_CA_BUNDLE": bundle, "REQUESTS_CA_BUNDLE": bundle,
+		ghConfigDir: filepath.Join(dir, EgressGH), gitConfigCount: strconv.Itoa(len(kv)),
+		sslCertFile: bundle, "GIT_SSL_CAINFO": bundle, "CURL_CA_BUNDLE": bundle, "REQUESTS_CA_BUNDLE": bundle,
 		"NODE_EXTRA_CA_CERTS": filepath.Join(dir, EgressCA),
 	}
 	for i, e := range kv {

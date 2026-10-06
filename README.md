@@ -663,6 +663,13 @@ same file passed to `claude --settings` holds one session to it, to try a change
   (`git@github.com:` is rewritten), needs no credential helper, since the proxy authenticates its first
   request, and runs none of the person's for GitHub. `agents.shell.path` stays off `PATH` in the
   sandbox, an inherited `PATH` included, since a `gh` link to devctl reads the keychain.
+- **The policy's environment without its sandbox.** Claude Code can apply the policy's `env` and
+  still run a session's commands unconfined (its `sandbox` block not in force). No proxy then
+  completes gh's login, so the variables are only in force where the sandbox runtime holds the
+  command (`SANDBOX_RUNTIME`, which the host never has). Elsewhere the agent shell's prelude, and
+  beekeeper itself at start (outside its hooks), drop the egress variables and `BEEKEEPER_SANDBOX`:
+  gh, git and devctl act as on the host, with `agents.shell.path` first on `PATH` as outside the
+  sandbox.
 - **Commit signing.** The sandbox reaches no gpg-agent, so the policy sets git's `gpg.program` to a
   script the broker writes into the egress directory, which runs `beekeeper sandbox gpg`: it hands
   the payload of git's signing call (`--status-fd=2 -bsau <key>`, nothing else) to the broker, which
