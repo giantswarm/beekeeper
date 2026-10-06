@@ -329,3 +329,20 @@ func Cgroup(pid int) string {
 	}
 	return ""
 }
+
+// WriteBytes is what the live process pid caused to be written to storage
+// (write_bytes of /proc/<pid>/io); another user's process is unreadable.
+func WriteBytes(pid int) (int64, error) { return writeBytesAt(procRoot, pid) }
+
+func writeBytesAt(root string, pid int) (int64, error) {
+	b, err := os.ReadFile(filepath.Clean(filepath.Join(root, strconv.Itoa(pid), "io")))
+	if err != nil {
+		return 0, err
+	}
+	for line := range strings.Lines(string(b)) {
+		if v, ok := strings.CutPrefix(line, "write_bytes:"); ok {
+			return strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		}
+	}
+	return 0, errors.New("no write_bytes in io")
+}

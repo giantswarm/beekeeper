@@ -45,6 +45,11 @@ wakes only when something needs a look.
 Threshold breaches (RAM, swap, desktop scope, load, CPU and memory
 pressure, tmpfs, disk, the GitHub budget) and unreadable sources are one line when they
 start and one ENDED line when they end, never repeated while they last.
+Under watch.diskMinMiB free on / the watch says LOW DISK, under
+watch.diskCriticalMiB DISK NEARLY FULL, and while / would run full within
+watch.diskFillWithin (2h) at the rate its free space fell over the last ten
+minutes DISK FILLING, naming the commands and sessions that wrote most and
+how much of the loss no process it can read accounts for.
 OOM kills are never folded away: every poll reports every kill since the
 last one, grouped by whose limit they hit; a cap kill whose scope no
 run.start names says its cap is unknown. A kill in a test run's scope
@@ -311,6 +316,9 @@ type watcher struct {
 	forks     uint64
 	forkUsual float64
 	forkOver  int
+	// disk is the free space on / over the last minutes and the processes'
+	// writes, for DISK FILLING.
+	disk diskWatch
 	// readForks reads the fork counter; nil is plat.Machine.Forks.
 	readForks func() (uint64, error)
 	// owners names the session of each CLI PID the last poll found: the
@@ -894,7 +902,11 @@ func (w *watcher) sample(ctx context.Context) {
 		w.check("tmp", d.UsedMiB > th.TmpMax(d.TotalMiB), "TMPFS /tmp: %d MiB", d.UsedMiB)
 	}
 	if d, err := machine.ReadDisk("/"); err == nil {
-		w.check("disk", d.FreeMiB < th.DiskMin(d.TotalMiB), "LOW DISK: / %d GiB free", d.FreeMiB/1024)
+		var owners map[int]string
+		if o := w.owners.Load(); o != nil {
+			owners = *o
+		}
+		w.sampleDisk(now, d, w.cpuTable, owners)
 	}
 	s, err := plat.Machine.DesktopScope()
 	w.unavailable(secScope, err)

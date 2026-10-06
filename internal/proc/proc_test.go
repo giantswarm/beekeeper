@@ -2,6 +2,7 @@ package proc
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -32,5 +33,22 @@ func TestReadFindsItself(t *testing.T) {
 	anc := tab.Ancestors(me.PID)
 	if len(anc) == 0 || anc[0].PID != os.Getppid() {
 		t.Errorf("ancestors = %v", anc)
+	}
+}
+
+func TestWriteBytesAt(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "42"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	io := "rchar: 1\nwchar: 2\nsyscr: 3\nsyscw: 4\nread_bytes: 5\nwrite_bytes: 4096\ncancelled_write_bytes: 0\n"
+	if err := os.WriteFile(filepath.Join(root, "42", "io"), []byte(io), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := writeBytesAt(root, 42); err != nil || got != 4096 {
+		t.Errorf("writeBytesAt = %d, %v; want 4096", got, err)
+	}
+	if _, err := writeBytesAt(root, 43); err == nil {
+		t.Error("a missing process read without an error")
 	}
 }
