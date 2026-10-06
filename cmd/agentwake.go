@@ -152,6 +152,14 @@ func (a *app) markDelivered(p state.Party) {
 // resumeTurn resumes the session w headless with msg as its turn, in a
 // transient user unit whose end shows it in the desktop for a moment.
 func (a *app) resumeTurn(ctx context.Context, by state.Party, w wakeTarget, msg string) error {
+	if pid, err := a.toDesktopCLI(ctx, w.id, msg); pid != 0 || err != nil {
+		if err != nil {
+			return fmt.Errorf("waking %s: %w", w.name, err)
+		}
+		_ = a.store.Log(event(by, "agents.wake", "%s: sent to its desktop CLI %d, which started meanwhile, instead of resuming it headless", w.name, pid))
+		_, err = fmt.Fprintf(a.out, "wake: %s: its desktop CLI %d runs: sent the message to it instead of resuming the session headless beside it\n", w.name, pid)
+		return err
+	}
 	unit := wakeUnit(w.id)
 	bin, err := exec.LookPath("claude")
 	if err != nil {
@@ -175,6 +183,60 @@ func (a *app) resumeTurn(ctx context.Context, by state.Party, w wakeTarget, msg 
 		_, err = fmt.Fprintf(a.out, "once the turn ends, %s is shown in the desktop for a moment, which warms its desktop CLI; the moment waits while the desktop's window has the focus\n", w.host)
 	}
 	return err
+}
+
+// toDesktopCLI sends msg to the desktop's CLI of session id when one runs,
+// so a headless resume never starts a second CLI beside it: two CLIs on one
+// session are two peers under its name, each running turns of its own. It
+// returns the CLI's PID, 0 when none runs or the process table cannot be
+// read (a platform without one); a CLI that takes no message within twinWait
+// is an error.
+func (a *app) toDesktopCLI(ctx context.Context, id, msg string) (int, error) {
+	t, err := plat.Machine.Processes()
+	if err != nil {
+		return 0, nil
+	}
+	p := desktopTwin(t, id)
+	if p == nil {
+		return 0, nil
+	}
+	sock := desktopSocketWithin(ctx, id, twinWait)
+	if sock == "" {
+		return p.PID, refused("its desktop CLI %d runs and takes no message yet: a headless resume would run beside it, send again in a minute", p.PID)
+	}
+	if err := cliSend(ctx, a, "uds:"+sock, msg); err != nil {
+		return p.PID, fmt.Errorf("sending to its desktop CLI %d: %w", p.PID, err)
+	}
+	return p.PID, nil
+}
+
+// cliSend sends msg to the running CLI to; tests replace it.
+var cliSend = func(ctx context.Context, a *app, to, msg string) error { return a.peerSend(ctx, to, msg) }
+
+// awaitNoHeadless waits up to wait for the headless turn of session id to
+// end: a desktop send or reopen starts the desktop's CLI, which must not run
+// beside a headless turn of the same session. An error names the turn still
+// running; a process table that cannot be read shows none.
+func awaitNoHeadless(ctx context.Context, id string, wait time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	tick := time.NewTicker(250 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		t, err := plat.Machine.Processes()
+		if err != nil {
+			return nil
+		}
+		turn := headlessTurn(t, id)
+		if turn == "" {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return refused("its headless %s still runs after %s: the desktop's CLI would start beside it", turn, dur(wait))
+		case <-tick.C:
+		}
+	}
 }
 
 // turnInDesktop has the desktop run msg as a turn of the session w, whose
@@ -454,11 +516,7 @@ func (a *app) desktopPeer(host string) (string, error) {
 		return "", nil
 	}
 	sessions := claude.Discover(a.cfg, t, time.Now())
-	id := strings.TrimPrefix(host, "local_")
-	if r, ok := claude.ReadRecord(a.cfg, host); ok && r.CLISessionID != "" {
-		id = r.CLISessionID
-	}
-	s, ok := wakeLive(sessions, state.Party{HostSession: host}, id)
+	s, ok := wakeLive(sessions, state.Party{HostSession: host}, a.cliSession(host))
 	if !ok {
 		if s, ok = wakeLive(sessions, state.Party{}, strings.TrimPrefix(host, "local_")); !ok {
 			return "", nil

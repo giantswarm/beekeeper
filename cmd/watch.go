@@ -1050,7 +1050,42 @@ func (w *watcher) pollSessions(ctx context.Context, since time.Time, t *proc.Tab
 	w.staleLeases(ctx, sessions)
 	w.unownedPages(ctx, sessions)
 	w.runaways(sessions, t)
+	w.twins(sessions)
 	w.staleWatches(ctx, t)
+}
+
+// twinKey starts the condition key of a session that runs two CLIs.
+const twinKey = "twin "
+
+// twins says each session that runs more than one Claude Code CLI on its
+// session id (a headless turn beside its desktop CLI): both act on its task,
+// each unaware of the other, and a message by name reaches only one. One
+// TWIN CLI line naming every CLI's PID and directory, and its ENDED line once
+// one CLI is left.
+func (w *watcher) twins(sessions []*claude.Session) {
+	byID := map[string][]*claude.Session{}
+	for _, s := range sessions {
+		if s.ID != "" && s.Harness == "" {
+			byID[s.ID] = append(byID[s.ID], s)
+		}
+	}
+	found := map[string]bool{}
+	for _, id := range slices.Sorted(maps.Keys(byID)) {
+		cli := byID[id]
+		if len(cli) < 2 {
+			continue
+		}
+		slices.SortFunc(cli, func(a, b *claude.Session) int { return cmp.Compare(a.PID, b.PID) })
+		var each []string
+		for _, s := range cli {
+			each = append(each, fmt.Sprintf("PID %d in %s", s.PID, s.Cwd))
+		}
+		key := twinKey + id
+		found[key] = true
+		w.emit(key, "TWIN CLI: %q runs %d CLIs on session %s (%s): both act on its task and a message by name reaches only one; stop the one that should not run",
+			cli[0].Name, len(cli), id, strings.Join(each, ", "))
+	}
+	w.clearMissing(twinKey, found)
 }
 
 // poll does everything but the machine sample: the process table, the

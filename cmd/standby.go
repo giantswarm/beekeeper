@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -369,9 +370,13 @@ func (a *app) reviveFromWatch(ctx context.Context, _ role, holder state.Party, m
 // which runs no CLI, through the desktop's session messaging: the desktop
 // starts host's CLI at once with msg as its turn, whatever the window's
 // focus, the person's typing or its cap. running reports host's CLI up. The
-// send starts a CLI, so the desktop stays under its cap first, and the
-// steward asked keeps its own CLI.
+// send starts a CLI, so it waits for a headless turn of the session to end
+// first, the desktop stays under its cap, and the steward asked keeps its
+// own CLI.
 func (a *app) sendThroughDesktop(ctx context.Context, host, msg string, running func() bool) (steward, error) {
+	if err := awaitNoHeadless(ctx, a.cliSession(host), sendWait); err != nil {
+		return steward{}, err
+	}
 	find := func(ctx context.Context, tried []string) (steward, error) {
 		s, err := a.findSteward(host, append(tried, host))
 		if err != nil {
@@ -380,6 +385,15 @@ func (a *app) sendThroughDesktop(ctx context.Context, host, msg string, running 
 		return s, a.makeRoom(ctx, host, s.host)
 	}
 	return delegate(ctx, find, func(steward) string { return sendRequest(host, msg) }, running, a.peerSend, sendWait)
+}
+
+// cliSession is the CLI session id the desktop session host runs under: its
+// record's, else host's own id.
+func (a *app) cliSession(host string) string {
+	if r, ok := claude.ReadRecord(a.cfg, host); ok && r.CLISessionID != "" {
+		return r.CLISessionID
+	}
+	return strings.TrimPrefix(host, "local_")
 }
 
 // sendWait bounds how long a steward's send takes to start a session's

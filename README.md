@@ -1241,7 +1241,12 @@ its headless first turn, which only takes the role; its relay hands it the deskt
 turn) `live, first turn running` or `live, wake turn running` and says under its table how many
 agents are in one; `--json` marks each with `headlessTurn`. While such a turn runs beside an import,
 beekeeper stops the desktop's CLI of the session (it waits up to 15s for it): two CLIs on one
-session id are two peers under one name. Once the headless turn has ended, its unit's
+session id are two peers under one name. The same holds later: a headless resume (`agents wake`,
+a task turn the desktop does not run, a hand-over's note turn) whose session's desktop CLI runs
+sends the message to that CLI instead, and a desktop send that starts the desktop's CLI (a wake, the
+standby's revive) waits up to two minutes for the session's headless turn to end and is refused
+while it still runs. The watch says `TWIN CLI` for any session that runs two CLIs anyway (the
+person opened its row), naming each CLI's PID and directory. Once the headless turn has ended, its unit's
 `ExecStopPost` runs `beekeeper agents reopen <id>`, which shows the session in the desktop for a
 moment and switches back, so its desktop CLI is warm again. It reopens only a start the roster still
 holds, never one a hand-over or `agents remove` took off. A reopen the desktop did not take (the
