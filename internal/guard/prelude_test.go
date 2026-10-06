@@ -185,6 +185,7 @@ func TestPreludeUnheld(t *testing.T) {
 		t.Fatal(err)
 	}
 	show := `printf '%s|%s|%s|%s\n' "$PATH" "${GH_CONFIG_DIR-}" "${BEEKEEPER_SANDBOX-}" "${GIT_CONFIG_COUNT-}"`
+	base := os.Getenv("PATH")
 	for _, sh := range agentShells {
 		shell, err := exec.LookPath(sh)
 		if err != nil {
@@ -192,10 +193,10 @@ func TestPreludeUnheld(t *testing.T) {
 			continue
 		}
 		for runtime, want := range map[string]string{
-			"":  bin + ":/usr/bin|||",
-			"1": "/usr/bin|" + egress + "/gh|1|4",
+			"":  bin + ":" + base + "|||",
+			"1": base + "|" + egress + "/gh|1|4",
 		} {
-			c := exec.Command(shell, "-c", "PATH='"+bin+":/usr/bin'\nsource "+env+"\n"+show) //nolint:gosec // the test's own shells
+			c := exec.Command(shell, "-c", "PATH='"+bin+":"+base+"'\nsource "+env+"\n"+show) //nolint:gosec // the test's own shells
 			c.Env = []string{"GH_CONFIG_DIR=" + egress + "/gh", "BEEKEEPER_SANDBOX=1", "GIT_CONFIG_COUNT=4"}
 			if runtime != "" {
 				c.Env = append(c.Env, sandbox.Runtime+"="+runtime)
