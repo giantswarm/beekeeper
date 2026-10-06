@@ -116,7 +116,7 @@ func (a *app) startSuccessor(ctx context.Context, rl role, from, by state.Party,
 	// end before the next relay, and the person sees the role's holder only
 	// in the desktop's sidebar.
 	_, err = a.startAgent(ctx, agentStart{id: id, by: &by, name: to.Name, brief: rl.successorBrief(to.Name, fromLabel),
-		task: fmt.Sprintf("%s as %s", rl.duty, to.Name), dir: dir, model: model, desktop: true})
+		task: fmt.Sprintf("%s as %s", rl.duty, to.Name), dir: dir, model: model, desktop: true, headless: true})
 	if err != nil {
 		a.withdrawRelay(rl, to, by)
 		return state.Party{}, "", fmt.Errorf("starting %q: %w (its relay is withdrawn)", to.Name, err)
