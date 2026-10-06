@@ -979,13 +979,18 @@ is open.
 
 A merge of giantswarm/devctl opens a tool-release window by itself: a `merges` hold with
 giantswarm/devctl excepted, since the release makes every in-flight devctl run refuse until
-updated. It lifts once no devctl merge runs and the local `devctl version` reports another
-version than when the window opened, or once its pull request did not merge: the gate lifts it
+updated. It lifts once no devctl merge runs and the local `devctl version` reports the window's
+release (another version than when the window opened, while the release is unknown), or once its
+pull request did not merge: the gate lifts it
 after a run with nothing merged or no release warranted, and `watch` (or the next gate call) asks
 GitHub about a window whose merge ended unrecorded (its gate killed) and lifts it when the pull
 request is open or closed. Once its merge merged, beekeeper installs the release itself: the gate
-runs `devctl version update` right after the merge, and `watch` retries every 2 minutes while
-devctl still reports the old version, logging a failed update as `hold.update`. Nobody has to
+runs `devctl version update` right after the merge (also when the window was lifted by hand), and
+`watch` retries every 2 minutes while devctl does not report the release, logging a failed update
+as `hold.update`. Every merge or promotion that runs devctl starts with `devctl version update`,
+which installs the latest release when the local devctl is behind it (a failure logged as
+`merge.update`), and the next merge of giantswarm/devctl waits while the previous one's window
+waits for its release: devctl refuses to run behind its latest release (exit 7). Nobody has to
 update devctl or lift the window by hand.
 
 The budget floor uses the last reading in the state when it is younger than `merge.budgetFresh`

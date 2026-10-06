@@ -459,6 +459,11 @@ func (g *gateRun) laneReady(q merge.Lane) ([]merge.HelmRelease, string, error) {
 // lane's settling merges are the ones it checked and the machine runs fewer
 // than merge.cap devctl processes, and runs devctl.
 func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error) {
+	if g.runsDevctl() {
+		// devctl refuses to run behind its latest release (exit 7): a merge
+		// queued behind a devctl release starts on that release.
+		g.installTool(g.ctx, g.me, "merge.update", "before "+g.key())
+	}
 	toolFrom := ""
 	if g.toolMerge() {
 		toolFrom = devctlVersion(g.ctx)
@@ -469,12 +474,18 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 		q := merge.Queue(st, g.lane.Name)
 		i := g.mine(st, state.Waiting)
 		_, behind := q.Ahead(g.repo, g.pr, g.present)
+		w := slices.IndexFunc(st.Holds, func(h state.Hold) bool { return h.Tool != "" && h.ToolMerged })
 		switch {
 		case i < 0 || behind || q.Running != nil:
 			why = "the lane moved on"
 			return nil, nil
 		case q.SettlingKeys() != settling:
 			why = "another merge of the lane just settled"
+			return nil, nil
+		case g.toolMerge() && w >= 0:
+			h := st.Holds[w]
+			why = fmt.Sprintf("next in lane %s, waiting for %s to report %s, the release of %s#%d (its window lifts then)",
+				g.lane.Name, merge.Tool, h.ToolRelease, merge.ToolRepo, h.ToolPR)
 			return nil, nil
 		}
 		if n := devctlRuns(st); n >= g.cfg.Merge.Cap {
@@ -501,7 +512,7 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 		if g.toolMerge() {
 			st.Holds = slices.DeleteFunc(st.Holds, func(h state.Hold) bool { return h.Target == merge.AllMerges })
 			h := state.Hold{Target: merge.AllMerges, Except: merge.ToolRepo, By: g.me, At: g.now.UTC(), Tool: merge.Tool, ToolFrom: toolFrom,
-				ToolPR: g.pr, Reason: fmt.Sprintf("the devctl release window: %s#%d merges and every devctl run refuses until updated; it lifts once `devctl version` reports the release", g.repo, g.pr)}
+				ToolPR: g.pr, Reason: fmt.Sprintf("the devctl release window: %s#%d merges and every devctl run refuses until updated; the gate runs `devctl version update` once it released and lifts this once `devctl version` reports the release", g.repo, g.pr)}
 			st.Holds = append(st.Holds, h)
 			ev = append(ev, event(g.me, "hold.set", "%s except %s until devctl is updated: %s", h.Target, h.Except, h.Reason))
 		}
@@ -544,7 +555,7 @@ func (g *gateRun) runMerge() error {
 	defer outliveCaller()()
 	run := childRun{rc: guard.ExitNotFound}
 	argv, note := g.argv, ""
-	if g.pr != 0 && !g.cfg.Merge.DevctlServes(g.repo) {
+	if !g.runsDevctl() {
 		self, err := selfExe()
 		if err != nil {
 			gateLine("%v", err)
@@ -588,8 +599,11 @@ func (g *gateRun) runMerge() error {
 	}
 	out, unanswered := r.out, r.unanswered
 	if g.toolMerge() && out.Merged {
-		// The release is out: install it now rather than on the watch's tick.
-		g.closeToolWindow(context.WithoutCancel(g.ctx), g.me)
+		// The release is out: install it now rather than on the watch's tick,
+		// also when its window was lifted by hand, then lift the window.
+		ctx := context.WithoutCancel(g.ctx)
+		g.installTool(ctx, g.me, "hold.update", "after "+g.key())
+		g.closeToolWindow(ctx, g.me)
 	}
 	switch {
 	case unanswered != nil:
@@ -641,6 +655,11 @@ func parseOutcome(pr int, doc []byte) (merge.Outcome, bool) {
 // toolMerge says whether the gate merges the merge tool's own repository,
 // which opens the tool-release window.
 func (g *gateRun) toolMerge() bool { return g.pr != 0 && strings.EqualFold(g.repo, merge.ToolRepo) }
+
+// runsDevctl says whether the gated command runs devctl: a promotion, or a
+// merge of a repository devctl serves; any other merge takes the plain
+// squash merge.
+func (g *gateRun) runsDevctl() bool { return g.pr == 0 || g.cfg.Merge.DevctlServes(g.repo) }
 
 // judgeTries is how often the gate asks GitHub about a run without its
 // document, judgeWait the pause between the tries.
@@ -770,7 +789,7 @@ func (a *app) closeToolWindow(ctx context.Context, by state.Party) {
 	}
 	pulls := map[int]github.Pull{}
 	for _, h := range st.Holds {
-		if h.Tool != "" && h.ToolPR != 0 && !h.ToolMerged && (v == "" || v == h.ToolFrom) {
+		if h.Tool != "" && h.ToolPR != 0 && !h.ToolMerged && (v == "" || !merge.Installed(h, v)) {
 			if p, err := pullState(ctx, merge.ToolRepo, h.ToolPR); err == nil {
 				pulls[h.ToolPR] = p
 			}
@@ -785,7 +804,7 @@ func (a *app) closeToolWindow(ctx context.Context, by state.Party) {
 			if h.Tool == "" {
 				return false
 			}
-			if v != "" && h.ToolFrom != v {
+			if v != "" && merge.Installed(h, v) {
 				ev = append(ev, event(by, "hold.lift", "%s: devctl now reports %s (the window opened on %s)", h.Target, v, h.ToolFrom))
 				return true
 			}
@@ -848,28 +867,34 @@ func devctlRuns(st *state.State) int {
 const toolUpdateEvery = 2 * time.Minute
 
 // updateTool runs the tool's update for a window whose merge merged while
-// the tool still reports v, the version the window opened on, at most once
-// per toolUpdateEvery and window, so the window does not wait for somebody
-// to install the release. A failed update is logged. It reports whether it
-// ran the update.
+// the tool, reporting v, does not report its release yet, at most once per
+// toolUpdateEvery and window, so the window does not wait for somebody to
+// install the release. A failed update is logged. It reports whether it ran
+// the update.
 func (a *app) updateTool(ctx context.Context, v string, by state.Party) bool {
 	now := time.Now().UTC()
 	due := false
 	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		for i, h := range st.Holds {
-			if h.Tool != "" && h.ToolMerged && h.ToolFrom == v && now.Sub(h.ToolUpdated) >= toolUpdateEvery {
+			if h.Tool != "" && h.ToolMerged && !merge.Installed(h, v) && now.Sub(h.ToolUpdated) >= toolUpdateEvery {
 				st.Holds[i].ToolUpdated, due = now, true
 			}
 		}
 		return nil, nil
 	})
-	if !due {
-		return false
+	if due {
+		a.installTool(ctx, by, "hold.update", fmt.Sprintf("from %s (retried in %s)", v, toolUpdateEvery))
 	}
+	return due
+}
+
+// installTool runs the tool's update, which installs its latest release when
+// the installed tool is behind it and does nothing otherwise; a failure is
+// logged under verb.
+func (a *app) installTool(ctx context.Context, by state.Party, verb, what string) {
 	if err := devctlUpdate(ctx); err != nil {
-		_ = a.store.Log(event(by, "hold.update", "%s update from %s failed, retried in %s: %v", merge.Tool, v, toolUpdateEvery, err))
+		_ = a.store.Log(event(by, verb, "%s update %s failed: %v", merge.Tool, what, err))
 	}
-	return true
 }
 
 // toolUpdate runs `devctl version update`, which installs the newest
