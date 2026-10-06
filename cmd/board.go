@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -51,7 +52,7 @@ own Status, whatever its Team: one no step offers on its own (a Backlog item old
 Backlog step's createdWithin, a blocked one, one in Inbox) is skipped with
 the reason, even when its epic is in progress. The first item that is free
 is picked: not served by a running session (a sessions serve record, a busy
-agent's task) nor by an agent on the roster, its CLI running or not, while it is
+agent's task; one naming a pull request serves the issues it closes too) nor by an agent on the roster, its CLI running or not, while it is
 busy with its task or parked and kept (agents keep, or an open timer that
 wakes it by name), and named by no open note (it waits on the note's person),
 not assigned to anybody outside board.people, without an open recorded
@@ -109,6 +110,14 @@ replaces the record. Exit 3 when no item is free or the claim is refused.`,
 				return err
 			}
 			skipHeldLeases(cands, holders, me)
+			st, err := a.store.Read()
+			if err != nil {
+				return err
+			}
+			closes, err := cl.Closes(cmd.Context(), slices.Sorted(maps.Keys(boardOwners(st, me, alive, listed))))
+			if err != nil {
+				return err
+			}
 			var res nextResult
 			if claim {
 				open := func(string) bool { return false }
@@ -117,12 +126,9 @@ replaces the record. Exit 3 when no item is free or the claim is refused.`,
 						return err
 					}
 				}
-				res, err = claimNext(a.store, cands, me, alive, listed, waits, open)
+				res, err = claimNext(a.store, cands, me, alive, listed, waits, open, closes)
 			} else {
-				var st *state.State
-				if st, err = a.store.Read(); err == nil {
-					res = nextFree(st, cands, me, alive, listed)
-				}
+				res = nextFree(st, cands, me, alive, listed, closes)
 			}
 			if err != nil {
 				return err
@@ -196,10 +202,12 @@ type nextResult struct {
 // unless the session is a registered agent reporting idle, by the record
 // of an agent kept on the roster (keptBy) or busy with its task on it,
 // whether its CLI runs or not, by a
-// busy agent whose task names it and by an open note naming it. A sub-issue
-// offered through an epic is owned by whatever owns the epic too.
-func nextFree(st *state.State, cands []board.Candidate, me state.Party, alive func(state.Party) bool, listed time.Time) nextResult {
-	owners := boardOwners(st, me, alive, listed)
+// busy agent whose task names it and by an open note naming it. An issue a
+// pull request closes (closes, from Client.Closes) is owned by whatever owns
+// the pull request, and a sub-issue offered through an epic by whatever owns
+// the epic.
+func nextFree(st *state.State, cands []board.Candidate, me state.Party, alive func(state.Party) bool, listed time.Time, closes map[string][]string) nextResult {
+	owners := coverClosed(boardOwners(st, me, alive, listed), closes)
 	var res nextResult
 	owned := func(ref string) string {
 		o, ok := owners[strings.ToLower(ref)]
@@ -233,7 +241,7 @@ func nextFree(st *state.State, cands []board.Candidate, me state.Party, alive fu
 // in one update of the state, so a concurrent claim sees it. While me
 // serves an item open reports open, and me is no agent reporting idle,
 // it changes nothing and returns that record as Held.
-func claimNext(store state.Store, cands []board.Candidate, me state.Party, alive func(state.Party) bool, listed time.Time, waits string, open func(string) bool) (nextResult, error) {
+func claimNext(store state.Store, cands []board.Candidate, me state.Party, alive func(state.Party) bool, listed time.Time, waits string, open func(string) bool, closes map[string][]string) (nextResult, error) {
 	var res nextResult
 	err := store.Update(func(st *state.State) ([]state.Event, error) {
 		if i := slices.IndexFunc(st.Records, func(r state.Record) bool {
@@ -242,7 +250,7 @@ func claimNext(store state.Store, cands []board.Candidate, me state.Party, alive
 			res.Held = &st.Records[i]
 			return nil, nil
 		}
-		res = nextFree(st, cands, me, alive, listed)
+		res = nextFree(st, cands, me, alive, listed, closes)
 		if res.Pick == nil {
 			return nil, nil
 		}
@@ -321,6 +329,22 @@ func boardOwners(st *state.State, me state.Party, alive func(state.Party) bool, 
 		named(n.Text, fmt.Sprintf("note #%d (waits on %s)", n.ID, cmp.Or(n.For, "the supervisor")))
 	}
 	return out
+}
+
+// coverClosed adds to owners every issue a pull request it names closes,
+// owned by whatever owns the pull request "through" it; an issue owned on
+// its own keeps its owner.
+func coverClosed(owners map[string]string, closes map[string][]string) map[string]string {
+	covered := map[string]string{}
+	for _, pr := range slices.Sorted(maps.Keys(owners)) {
+		for _, issue := range closes[pr] {
+			if _, ok := owners[issue]; !ok && covered[issue] == "" {
+				covered[issue] = owners[pr] + " through " + pr
+			}
+		}
+	}
+	maps.Copy(owners, covered)
+	return owners
 }
 
 func (a *app) printNext(res nextResult, offered int) error {
