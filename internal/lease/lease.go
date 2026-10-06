@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -234,8 +235,18 @@ func Check(st *state.State, g Gate) (int, error) {
 		return -1, &Refusal{fmt.Sprintf("supervisor %q is restarting its CLI (grace until %s): a free lease is not a grant; send it `%s needed: <purpose>` once it is back",
 			g.Supervisor.Name, g.RestartUntil.Local().Format(time.TimeOnly), g.Resource)}
 	}
-	return -1, &Refusal{fmt.Sprintf("supervisor %q runs: a free lease is not a grant; send it `%s needed: <purpose>` and claim after its `yours %s`",
-		g.Supervisor.Name, g.Resource, g.Resource)}
+	who := granteeName(g.Caller)
+	return -1, &Refusal{fmt.Sprintf("supervisor %q runs and recorded no grant of %s to %s: a free lease is not a grant. Send it `%s needed: <purpose>`; its `yours %s` to you records the grant (as `beekeeper lease grant %s %s` does), then claim",
+		g.Supervisor.Name, g.Resource, who, g.Resource, g.Resource, g.Resource, who)}
+}
+
+// granteeName is how a refusal names the caller a grant would go to: its
+// name quoted, as the grant command takes it, else its session id.
+func granteeName(p state.Party) string {
+	if p.Name != "" {
+		return strconv.Quote(p.Name)
+	}
+	return p.Session
 }
 
 // checkUnblock admits a claim during the upgrade h only by the caller's
