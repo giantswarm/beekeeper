@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The README's browser section says why a headless turn of a start keeps its own Claude in Chrome tools (`--chrome` in bypass) rather than going through `beekeeper browse`: the bypass is that turn's scope, so narrowing its Chrome tools would narrow nothing; a desktop turn browses through `browse`, a headless turn with its own tools ([README](README.md#agents-started-without-a-click)).
+
 - The agent sandbox's GitHub token never enters the sandbox. `beekeeper sandbox broker` is the sandbox's only egress proxy (`sandbox.proxyPort`, 3190, on `127.0.0.1` for its own user only): the policy points Claude Code's `httpProxyPort` and `socksProxyPort` at it, it holds every connection to GitHub and `sandbox.domains`, refuses the rest and never dials a loopback or link-local address by name, and terminates TLS for `github.com`, `api.github.com` and `uploads.github.com` with a name-constrained CA made in its memory to set the `Authorization` header itself, request bodies untouched. A GitHub endpoint that echoes its input no longer returns the token. The masked token files, their masks, `tlsTerminate`, `sandbox.mask` and `beekeeper sandbox git-credential` are gone; the broker removes the old files under `$XDG_RUNTIME_DIR/beekeeper/github` at start ([README](README.md#the-agent-sandbox)).
 - The agent sandbox denies the runtime directory (`$XDG_RUNTIME_DIR`) for reading, apart from the egress proxy's CA and gh's login.
 

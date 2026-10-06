@@ -69,6 +69,30 @@ func TestBypassStartNeedsTheRecordedMode(t *testing.T) {
 	}
 }
 
+// Every headless turn of a start, the first (headlessStartArgv) and a wake
+// (wakeArgv), runs in bypass with the CLI's own Chrome connection and no
+// narrowed tool set: browse's narrowing is for the desktop turns.
+func TestHeadlessTurnFlags(t *testing.T) {
+	turns := map[string][]string{
+		"first turn": headlessStartArgv("claude", "id", "n", "", "b"),
+		"wake turn":  wakeArgv("claude", wakeTarget{id: "id", mode: state.ModeBypass}, "m"),
+	}
+	for turn, argv := range turns {
+		flags := argv[:slices.Index(argv, "--")]
+		if i := slices.Index(flags, permissionModeFlag); i < 0 || flags[i+1] != state.ModeBypass {
+			t.Errorf("%s argv = %q, want %s %s", turn, argv, permissionModeFlag, state.ModeBypass)
+		}
+		if !slices.Contains(flags, chromeFlag) {
+			t.Errorf("%s argv = %q, want %s", turn, argv, chromeFlag)
+		}
+		for _, narrowing := range []string{toolsFlag, allowedToolsFlag, strictMCPConfigFlag} {
+			if slices.Contains(flags, narrowing) {
+				t.Errorf("%s argv = %q, want no %s", turn, argv, narrowing)
+			}
+		}
+	}
+}
+
 func TestAgentArgvAndBriefTask(t *testing.T) {
 	got := agentArgv("/usr/bin/claude", "id-1", "test: w", "haiku", "-starts with a dash")
 	want := []string{"/usr/bin/claude", "-p", "--session-id", "id-1", permissionModeFlag, "bypassPermissions", "-n", "test: w", "--model", "haiku", "--", "-starts with a dash"}

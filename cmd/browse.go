@@ -111,14 +111,23 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 // Chrome tools.
 const browseTools = "mcp__claude-in-chrome__*"
 
+// The CLI flags that narrow a turn's tools: toolsFlag the built-in tools,
+// strictMCPConfigFlag the MCP servers to those named, allowedToolsFlag the
+// calls allowed without asking.
+const (
+	toolsFlag           = "--tools"
+	strictMCPConfigFlag = "--strict-mcp-config"
+	allowedToolsFlag    = "--allowedTools"
+)
+
 // browseArgv is a browse turn's command line after the binary: one headless
 // turn under id with the CLI's own Chrome connection and nothing else: no
 // built-in tool (no shell, no file tools), no MCP server but Chrome's, and in
 // dontAsk mode every call the Chrome tools' allow rule does not cover is
 // refused rather than asked.
 func browseArgv(id, model, prompt string) []string {
-	argv := []string{"-p", chromeFlag, "--tools", "", "--strict-mcp-config", permissionModeFlag, modeDontAsk,
-		"--allowedTools", browseTools, sessionIDFlag, id}
+	argv := []string{"-p", chromeFlag, toolsFlag, "", strictMCPConfigFlag, permissionModeFlag, modeDontAsk,
+		allowedToolsFlag, browseTools, sessionIDFlag, id}
 	if model != "" {
 		argv = append(argv, modelFlag, model)
 	}

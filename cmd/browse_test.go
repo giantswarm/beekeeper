@@ -14,8 +14,8 @@ import (
 // reach it.
 func TestBrowseTurn(t *testing.T) {
 	argv := browseArgv("id-1", "", "steps")
-	want := []string{"-p", chromeFlag, "--tools", "", "--strict-mcp-config", permissionModeFlag, "dontAsk",
-		"--allowedTools", "mcp__claude-in-chrome__*", "--session-id", "id-1", "--", "steps"}
+	want := []string{"-p", chromeFlag, toolsFlag, "", strictMCPConfigFlag, permissionModeFlag, "dontAsk",
+		allowedToolsFlag, "mcp__claude-in-chrome__*", "--session-id", "id-1", "--", "steps"}
 	if !slices.Equal(argv, want) {
 		t.Errorf("browseArgv = %q, want %q", argv, want)
 	}
