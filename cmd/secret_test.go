@@ -96,6 +96,8 @@ func TestSecretOperationsReturnNoValueAndAreLogged(t *testing.T) {
 		{copyOp, dbRef, dst + "#stringData.extra"},
 		{copyOp, dbRef, "--", consumer, "secret", "set", "X"},
 		{"set", dst, "stringData.generated", "--generate", "--vault", "op://Shared/gen/password"},
+		{"set", dst, "stringData.local", "--generate"},
+		{"set", dst, "stringData.fed", "--generate", "--", consumer, "secret", "set", "X"},
 		{jsonFlag, copyOp, src, filepath.Join(repo, "json.sops.yaml")},
 	} {
 		a.out = &bytes.Buffer{}
@@ -126,8 +128,8 @@ func TestSecretOperationsReturnNoValueAndAreLogged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(evs) != 12 {
-		t.Errorf("%d secret events, want 12", len(evs))
+	if len(evs) != 14 {
+		t.Errorf("%d secret events, want 14", len(evs))
 	}
 	for _, e := range evs {
 		noSecret(t, "the log", e.Detail)
@@ -184,7 +186,7 @@ func TestSecretRotateClosesTheRotationNotes(t *testing.T) {
 }
 
 func TestSecretCopyToSecretOnlyIntoAHeldLab(t *testing.T) {
-	a, _, _ := secretApp(t)
+	a, _, repo := secretApp(t)
 	a.cfg.LeaseDir = t.TempDir()
 	a.cfg.Resources = []string{labOne, labTwo}
 	a.cfg.Labs = map[string]string{labOne: labCluster, labTwo: labTwo}
@@ -214,7 +216,20 @@ func TestSecretCopyToSecretOnlyIntoAHeldLab(t *testing.T) {
 		}
 		noSecret(t, "the refusal", fmt.Sprint(out, err))
 	}
-	if len(applied) != 1 || applied[0] != fmt.Sprintf("kind-agentlab/%s %d", key, len(secretValue)) {
+	gen := filepath.Join(repo, "gen.sops.yaml")
+	a.out = &bytes.Buffer{}
+	if out, err := runSecret(a, "set", gen, "data.key", "--generate", "--length", "20", "--to-secret", "kind-agentlab-2/"+key); Code(err) != ExitRefused {
+		t.Errorf("set into a lab held by another = %q, %v, want refused", out, err)
+	}
+	if _, err := os.Stat(gen); err == nil {
+		t.Error("a refused set wrote the SOPS file")
+	}
+	a.out = &bytes.Buffer{}
+	out, err = runSecret(a, "set", gen, "data.key", "--generate", "--length", "20", "--to-secret", "kind-agentlab/"+key)
+	if err != nil || !strings.HasPrefix(out, "wrote "+gen+"#data.key and kind-agentlab/"+key+": 20 characters, hmac:") {
+		t.Errorf("set into the held lab answers %q, %v", out, err)
+	}
+	if len(applied) != 2 || applied[0] != fmt.Sprintf("kind-agentlab/%s %d", key, len(secretValue)) || applied[1] != "kind-agentlab/"+key+" 20" {
 		t.Errorf("applied %q", applied)
 	}
 	a.out = &bytes.Buffer{}

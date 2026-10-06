@@ -51,7 +51,7 @@ type leak struct {
 // secretOps names the beekeeper secret operations every refusal points to.
 const secretOps = "Equality: `beekeeper secret compare <a> <b>` or `beekeeper secret fingerprint <ref>`. " +
 	"Changes: `beekeeper secret copy <src.sops.yaml> <dst.sops.yaml> [--name n --namespace ns]`, " +
-	"`copy <ref> <file#path>`, `copy <ref> -- <consumer>`, `set <file> <path> --generate --vault op://…`. " +
+	"`copy <ref> <file#path>`, `copy <ref> -- <consumer>`, `set <file> <path> --generate [--vault op://…] [--to-secret … | -- <consumer>]`. " +
 	"Rotations: `beekeeper secret rotate op://… --generate` (a value beekeeper made), `rotate op://…` (a value its issuer " +
 	"rotated into the vault), `rotate platform://<installation>/<capability>/<name> --reason …` (a platform manager credential)."
 

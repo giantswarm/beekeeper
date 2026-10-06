@@ -310,7 +310,7 @@ func brokeredSecretArgs(args []string, inSandbox bool) error {
 	}
 	for _, a := range args[1:] {
 		if a == "--" && inSandbox {
-			return errors.New("a consumer runs on the host only: copy -- is not brokered")
+			return errors.New("a consumer runs on the host only: copy or set with -- is not brokered")
 		}
 	}
 	return brokeredFlags(args[1:])

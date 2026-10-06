@@ -271,13 +271,13 @@ func TestSetWritesTheVaultFirst(t *testing.T) {
 	tools := secrettest.New(nil)
 	dir, _ := scratch(t)
 	dst := secret.Ref{File: filepath.Join(dir, "gen.sops.yaml"), Path: pwPath}
-	fp, err := ops(tools).Set(context.Background(), dst, secret.Ref{Op: "op://Shared/app/password"}, 24, "alnum")
+	res, err := ops(tools).Set(context.Background(), dst, secret.SetOptions{Vault: secret.Ref{Op: "op://Shared/app/password"}, Length: 24, Charset: "alnum"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	v := tools.Vault["op://Shared/app/password"]
-	if len(v) != 24 || fp != fmt.Sprintf("fp-%d", 24*7) {
-		t.Fatalf("vault value of %d bytes, fingerprint %q", len(v), fp)
+	if len(v) != 24 || res.Fingerprint != fmt.Sprintf("fp-%d", 24*7) {
+		t.Fatalf("vault value of %d bytes, fingerprint %q", len(v), res.Fingerprint)
 	}
 	if slices.ContainsFunc(tools.Tokens, func(s string) bool { return s != "sa-token" }) {
 		t.Errorf("op ran as %q, not the service account", tools.Tokens)
@@ -296,14 +296,73 @@ func TestSetWritesTheVaultFirst(t *testing.T) {
 		}
 	}
 	// A second set edits the item it made.
-	if _, err := ops(tools).Set(context.Background(), dst, secret.Ref{Op: "op://Shared/app/password"}, 24, "hex"); err != nil {
+	if _, err := ops(tools).Set(context.Background(), dst, secret.SetOptions{Vault: secret.Ref{Op: "op://Shared/app/password"}, Length: 24, Charset: "hex"}); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.ContainsFunc(tools.Calls, func(c string) bool { return strings.HasPrefix(c, "op item edit id-app") }) {
 		t.Errorf("calls = %q", tools.Calls)
 	}
-	if _, err := ops(tools).Set(context.Background(), dst, secret.Ref{Op: "op://Other/app/password"}, 24, "hex"); err == nil {
+	if _, err := ops(tools).Set(context.Background(), dst, secret.SetOptions{Vault: secret.Ref{Op: "op://Other/app/password"}, Length: 24, Charset: "hex"}); err == nil {
 		t.Error("set into another vault passes")
+	}
+}
+
+func TestSetWithoutAVaultWritesTheSOPSPathAlone(t *testing.T) {
+	tools := secrettest.New(nil)
+	dir, _ := scratch(t)
+	dst := secret.Ref{File: filepath.Join(dir, "gen.sops.yaml"), Path: pwPath}
+	o := ops(tools)
+	var applied string
+	o.Apply = func(_ context.Context, _ []byte, _ secret.KubeTarget, v []byte) error {
+		applied = string(v)
+		return nil
+	}
+	tg := secret.KubeTarget{Context: labContext, Namespace: "garage", Name: "s3", Key: "secret"}
+	res, err := o.Set(context.Background(), dst, secret.SetOptions{Length: 40, Charset: "hex", Secret: &tg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools.Vault) != 0 || slices.ContainsFunc(tools.Calls, func(c string) bool { return strings.HasPrefix(c, "op ") }) {
+		t.Errorf("op ran without a vault: %q", tools.Calls)
+	}
+	if len(applied) != 40 || !strings.Contains(decrypted(t, tools, dst.File), "password: "+applied) {
+		t.Errorf("the Secret and the SOPS path differ, or the value is not 40 characters")
+	}
+	if res.Key != dst.String() || res.Fingerprint != fmt.Sprintf("fp-%d", 40*7) {
+		t.Errorf("result %+v", res)
+	}
+	for _, c := range tools.Calls {
+		if strings.Contains(c, applied) {
+			t.Errorf("a command line carries the value: %q", c)
+		}
+	}
+}
+
+func TestSetFeedsAConsumerAfterTheSOPSPath(t *testing.T) {
+	tools := secrettest.New(nil)
+	dir, _ := scratch(t)
+	dst := secret.Ref{File: filepath.Join(dir, "gen.sops.yaml"), Path: pwPath}
+	gh := filepath.Join(t.TempDir(), "gh")
+	if err := os.WriteFile(gh, //nolint:gosec // an executable test consumer
+		[]byte("#!/bin/sh\nread v\necho \"stored $v\"\nexit 2\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	res, err := ops(tools).Set(context.Background(), dst, secret.SetOptions{Length: 24, Charset: "alnum", Consumer: []string{gh, "secret", "set", "X"}})
+	if err != nil || res.Code != 2 {
+		t.Fatalf("set = %+v, %v", res, err)
+	}
+	if res.Output != "stored [redacted: "+dst.String()+"]\n" {
+		t.Errorf("output = %q", res.Output)
+	}
+	// A refused consumer and a lab-less context draw no value at all.
+	for _, opt := range []secret.SetOptions{
+		{Length: 24, Charset: "alnum", Consumer: []string{"cat"}},
+		{Length: 24, Charset: "alnum", Secret: &secret.KubeTarget{Context: "teleport.giantswarm.io-gazelle", Namespace: "x", Name: "y", Key: "z"}},
+	} {
+		calls := len(tools.Calls)
+		if _, err := ops(tools).Set(context.Background(), dst, opt); err == nil || len(tools.Calls) != calls {
+			t.Errorf("set %+v = %v, ran %q", opt, err, tools.Calls[calls:])
+		}
 	}
 }
 
