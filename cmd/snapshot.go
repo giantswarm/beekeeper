@@ -308,7 +308,8 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 
 // probeBudget reads the GitHub budget with the stored ETag and keeps the new
 // one, and the GraphQL limit beside it: a real query, read again once the
-// last reading is older than merge.budgetFresh.
+// last reading is older than merge.budgetFresh or its reset has passed (the
+// window it counted is over).
 func (a *app) probeBudget(ctx context.Context) (github.Budget, error) {
 	token, err := github.Token(ctx)
 	if err != nil {
@@ -326,7 +327,7 @@ func (a *app) probeBudget(ctx context.Context) (github.Budget, error) {
 	now := time.Now().UTC()
 	var g *state.GraphQL
 	if last := st.Budget; last != nil && last.GraphQL != nil && now.Sub(last.GraphQL.At) <= a.cfg.Merge.BudgetFresh.Duration &&
-		(last.GraphQL.Refused == "" || last.GraphQL.Blocks(now)) {
+		(last.GraphQL.Reset.IsZero() || now.Before(last.GraphQL.Reset)) {
 		g = last.GraphQL
 	} else if r := github.ProbeGraphQL(ctx, client, token, now); r.Err == "" {
 		g = &state.GraphQL{Remaining: r.Remaining, Limit: r.Limit, Reset: r.Reset, Refused: r.Refused, Secondary: r.Secondary, At: now}
@@ -656,12 +657,13 @@ func budgetLine(a *app, b github.Budget) string {
 	return line
 }
 
-// graphqlOf is a stored GraphQL reading as the probe reports it.
+// graphqlOf is a stored GraphQL reading as the probe reports it, its used
+// points what the limit lost.
 func graphqlOf(g *state.GraphQL) *github.GraphQL {
 	if g == nil {
 		return nil
 	}
-	return &github.GraphQL{Limit: g.Limit, Remaining: g.Remaining, Reset: g.Reset, Refused: g.Refused, Secondary: g.Secondary}
+	return &github.GraphQL{Limit: g.Limit, Remaining: g.Remaining, Used: g.Limit - g.Remaining, Reset: g.Reset, Refused: g.Refused, Secondary: g.Secondary}
 }
 
 // graphqlText says the GraphQL limit: its figures, or its refusal with the
