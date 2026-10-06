@@ -86,6 +86,8 @@ type app struct {
 	cfgPath string
 	as      string
 	json    bool
+	// hook says a hook runs, for a session whose environment it keeps.
+	hook bool
 
 	cfg   *config.Config
 	store state.Store

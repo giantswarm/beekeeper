@@ -127,9 +127,9 @@ func TestSettingsUseTheEgressProxy(t *testing.T) {
 	}
 	bundle := "/run/user/1000/beekeeper/egress/bundle.pem"
 	for k, want := range map[string]string{
-		"GH_CONFIG_DIR": "/run/user/1000/beekeeper/egress/gh", "SSL_CERT_FILE": bundle, "GIT_SSL_CAINFO": bundle,
+		ghConfigDir: "/run/user/1000/beekeeper/egress/gh", sslCertFile: bundle, "GIT_SSL_CAINFO": bundle,
 		"CURL_CA_BUNDLE": bundle, "REQUESTS_CA_BUNDLE": bundle, "NODE_EXTRA_CA_CERTS": "/run/user/1000/beekeeper/egress/ca.pem",
-		"GIT_CONFIG_COUNT": "4", "GIT_CONFIG_VALUE_0": "git@github.com:", "GIT_CONFIG_KEY_2": "credential.https://github.com.helper", "GIT_CONFIG_VALUE_2": "",
+		gitConfigCount: "4", "GIT_CONFIG_VALUE_0": "git@github.com:", "GIT_CONFIG_KEY_2": gitHubHelper, "GIT_CONFIG_VALUE_2": "",
 		"GIT_CONFIG_KEY_3": "gpg.program", "GIT_CONFIG_VALUE_3": "/run/user/1000/beekeeper/egress/gpg",
 	} {
 		if got, ok := s.Env[k]; !ok || got != want {
@@ -143,7 +143,7 @@ func TestSettingsUseTheEgressProxy(t *testing.T) {
 
 func TestNoRuntimeDirNoEgressVars(t *testing.T) {
 	p, _ := policy(t)
-	if p.Egress != "" || p.Vars["SSL_CERT_FILE"] != "" {
+	if p.Egress != "" || p.Vars[sslCertFile] != "" {
 		t.Fatalf("Egress = %q, vars %v without a runtime directory", p.Egress, p.Vars)
 	}
 }
