@@ -91,10 +91,11 @@ func TestPreludeDropsPath(t *testing.T) {
 			t.Logf("%s not installed", sh)
 			continue
 		}
+		base := os.Getenv("PATH")
 		for in, want := range map[string]string{
-			"/opt/agent bin:/usr/bin:/opt/x:/bin:/opt/agent bin": "/usr/bin:/bin",
-			"/usr/bin:/bin":    "/usr/bin:/bin",
-			"/opt/xy:/usr/bin": "/opt/xy:/usr/bin",
+			"/opt/agent bin:" + base + ":/opt/x:/opt/agent bin": base,
+			base:              base,
+			"/opt/xy:" + base: "/opt/xy:" + base,
 		} {
 			c := exec.Command(bin, "-c", "PATH='"+in+"'\nsource "+env+"\necho \"$?\"; printf '%s\\n' \"$PATH\"") //nolint:gosec // the test's own shells
 			out, err := c.CombinedOutput()

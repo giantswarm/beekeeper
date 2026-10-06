@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -13,18 +14,20 @@ import (
 // Only git's signing call passes: the flags in git's order and a key that
 // is no flag and carries no control character.
 func TestGPGSignKey(t *testing.T) {
+	const key = "ABCDEF0123456789"
+	sign := func(args ...string) []string { return append(slices.Clone(gpgSignFlags), args...) }
 	for _, tc := range []struct {
 		args []string
 		key  string
 	}{
-		{[]string{"--status-fd=2", "-bsau", "ABCDEF0123456789"}, "ABCDEF0123456789"},
-		{[]string{"--status-fd=2", "-bsau", "Timo <timo@example.com>"}, "Timo <timo@example.com>"},
-		{[]string{"--status-fd=2", "-bsau", "--export-secret-keys"}, ""},
-		{[]string{"--status-fd=2", "-bsau", "a\nb"}, ""},
-		{[]string{"--status-fd=2", "-bsau", ""}, ""},
+		{sign(key), key},
+		{sign("Timo <timo@example.com>"), "Timo <timo@example.com>"},
+		{sign("--export-secret-keys"), ""},
+		{sign("a\nb"), ""},
+		{sign(""), ""},
 		{[]string{"--keyid-format=long", "--status-fd=1", "--verify", "/tmp/sig", "-"}, ""},
-		{[]string{"--status-fd=2", "-bsau", "KEY", "--armor"}, ""},
-		{[]string{"-bsau", "--status-fd=2", "KEY"}, ""},
+		{sign(key, "--armor"), ""},
+		{[]string{gpgSignFlags[1], gpgSignFlags[0], key}, ""},
 	} {
 		key, ok := gpgSignKey(tc.args)
 		if key != tc.key || ok != (tc.key != "") {
@@ -44,7 +47,7 @@ func TestBrokeredSign(t *testing.T) {
 		t.Fatal(err)
 	}
 	sign := brokeredSign(gpg)
-	r, err := sign(context.Background(), 0, sandbox.Request{Op: sandbox.OpSign, Args: []string{"--status-fd=2", "-bsau", "KEY"}, Input: []byte("tree x\n\xff")})
+	r, err := sign(context.Background(), 0, sandbox.Request{Op: sandbox.OpSign, Args: append(slices.Clone(gpgSignFlags), "KEY"), Input: []byte("tree x\n\xff")})
 	if err != nil {
 		t.Fatal(err)
 	}
