@@ -85,26 +85,31 @@ func ApplySecret(ctx context.Context, kubeconfig []byte, t KubeTarget, value []b
 // like the value. It answers the value's length. Which contexts a caller
 // may write to is the caller's to check.
 func (o *Ops) CopyToSecret(ctx context.Context, src Ref, t KubeTarget) (int, error) {
-	cl := t.KindCluster()
-	if cl == "" {
+	if t.KindCluster() == "" {
 		return 0, fmt.Errorf("%s: a Secret is written only into a kind lab's context, kind-<cluster>", t.Context)
 	}
 	v, err := o.value(ctx, src)
 	if err != nil {
 		return 0, err
 	}
-	kc, err := o.Run(ctx, "", nil, nil, "kind", "get", "kubeconfig", "--name", cl)
+	return len(v), o.toSecret(ctx, v, src.String(), t)
+}
+
+// toSecret writes v into a key of a Secret in t's kind cluster, an error
+// carrying v redacted as ref.
+func (o *Ops) toSecret(ctx context.Context, v, ref string, t KubeTarget) error {
+	kc, err := o.Run(ctx, "", nil, nil, "kind", "get", "kubeconfig", "--name", t.KindCluster())
 	if err != nil {
-		return 0, fmt.Errorf("%s: %w", t.Context, err)
+		return fmt.Errorf("%s: %w", t.Context, err)
 	}
 	apply := o.Apply
 	if apply == nil {
 		apply = ApplySecret
 	}
 	if err := apply(ctx, kc, t, []byte(v)); err != nil {
-		return 0, fmt.Errorf("%s: %s", t, redact(err.Error(), v, src.String()))
+		return fmt.Errorf("%s: %s", t, redact(err.Error(), v, ref))
 	}
-	return len(v), nil
+	return nil
 }
 
 // ErrVault marks a failure to read the shared vault: none configured, no

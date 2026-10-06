@@ -178,6 +178,12 @@ func (o *Ops) CopyToConsumer(ctx context.Context, src Ref, argv []string) (int, 
 	if err != nil {
 		return 0, "", err
 	}
+	return consume(ctx, v, src.String(), argv)
+}
+
+// consume runs a consumer with v on stdin, answering its exit code and its
+// output with v redacted as ref.
+func consume(ctx context.Context, v, ref string, argv []string) (int, string, error) {
 	c := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // an allow-listed consumer
 	c.Stdin = strings.NewReader(v)
 	var out bytes.Buffer
@@ -190,7 +196,7 @@ func (o *Ops) CopyToConsumer(ctx context.Context, src Ref, argv []string) (int, 
 		}
 		code = ee.ExitCode()
 	}
-	return code, redact(out.String(), v, src.String()), nil
+	return code, redact(out.String(), v, ref), nil
 }
 
 // redact replaces a value and its base64 forms in s, then what the token
@@ -238,29 +244,78 @@ func Generate(n int, charset string) (string, error) {
 	return string(b), nil
 }
 
-// Set generates a value, writes it to the shared vault's field first and
-// then into the SOPS path, and answers its fingerprint.
-func (o *Ops) Set(ctx context.Context, dst, vault Ref, length int, charset string) (string, error) {
+// SetOptions are what set draws and where the value goes besides the SOPS
+// path: the shared vault's field first, a lab's Secret and a consumer's
+// stdin after it. Each is optional; the value never leaves the process
+// otherwise.
+type SetOptions struct {
+	Length   int
+	Charset  string
+	Vault    Ref
+	Secret   *KubeTarget
+	Consumer []string
+}
+
+// SetResult is what set answers: the value's fingerprint and, with a
+// consumer, its exit code and its output with the value redacted.
+type SetResult struct {
+	Key         string `json:"key"`
+	Fingerprint string `json:"fingerprint"`
+	Code        int    `json:"code,omitempty"`
+	Output      string `json:"output,omitempty"`
+}
+
+// Set generates a value and writes it to the shared vault's field first
+// when one is given, then into the SOPS path, then into a lab's Secret and
+// a consumer's stdin when given. A value without a vault field lives in the
+// SOPS file alone.
+func (o *Ops) Set(ctx context.Context, dst Ref, opt SetOptions) (SetResult, error) {
 	if dst.Op != "" || dst.Path == "" {
-		return "", fmt.Errorf("%s: set writes a SOPS path, file#path", dst)
+		return SetResult{}, fmt.Errorf("%s: set writes a SOPS path, file#path", dst)
 	}
-	if vault.Op == "" {
-		return "", fmt.Errorf("%s: the vault copy is an op://<vault>/<item>/<field>", vault)
+	if opt.Vault != (Ref{}) {
+		if opt.Vault.Op == "" {
+			return SetResult{}, fmt.Errorf("%s: the vault copy is an op://<vault>/<item>/<field>", opt.Vault)
+		}
+		if err := o.checkVault(opt.Vault); err != nil {
+			return SetResult{}, err
+		}
 	}
-	if err := o.checkVault(vault); err != nil {
-		return "", err
+	if opt.Secret != nil && opt.Secret.KindCluster() == "" {
+		return SetResult{}, fmt.Errorf("%s: a Secret is written only into a kind lab's context, kind-<cluster>", opt.Secret.Context)
 	}
-	v, err := Generate(length, charset)
+	if opt.Consumer != nil {
+		if err := Consumer(opt.Consumer); err != nil {
+			return SetResult{}, err
+		}
+	}
+	v, err := Generate(opt.Length, opt.Charset)
 	if err != nil {
-		return "", err
+		return SetResult{}, err
 	}
-	if err := o.storeVault(ctx, vault, v); err != nil {
-		return "", err
+	if opt.Vault != (Ref{}) {
+		if err := o.storeVault(ctx, opt.Vault, v); err != nil {
+			return SetResult{}, err
+		}
 	}
 	if err := o.put(ctx, dst, v); err != nil {
-		return "", fmt.Errorf("the vault holds the value, the SOPS file not: %w", err)
+		if opt.Vault != (Ref{}) {
+			return SetResult{}, fmt.Errorf("the vault holds the value, the SOPS file not: %w", err)
+		}
+		return SetResult{}, err
 	}
-	return o.Fingerprint(v), nil
+	res := SetResult{Key: dst.String(), Fingerprint: o.Fingerprint(v)}
+	if opt.Secret != nil {
+		if err := o.toSecret(ctx, v, dst.String(), *opt.Secret); err != nil {
+			return res, fmt.Errorf("%s holds the value, the Secret not (copy %s --to-secret %s): %w", dst, dst, opt.Secret, err)
+		}
+	}
+	if opt.Consumer != nil {
+		if res.Code, res.Output, err = consume(ctx, v, dst.String(), opt.Consumer); err != nil {
+			return res, fmt.Errorf("%s holds the value, the consumer not (copy %s -- …): %w", dst, dst, err)
+		}
+	}
+	return res, nil
 }
 
 // storeVault writes v into the concealed field of a vault item, creating

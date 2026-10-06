@@ -163,7 +163,7 @@ func callArgs(cmd *cobra.Command, args []string) []string {
 func (a *app) secretBrokered(cmd *cobra.Command, args []string, inSandbox bool) error {
 	dash := cmd.ArgsLenAtDash()
 	if inSandbox && dash >= 0 {
-		return refused("the agent sandbox runs no consumer on the host: copy <from> -- <consumer> runs outside the sandbox only")
+		return refused("the agent sandbox runs no consumer on the host: copy or set with -- <consumer> runs outside the sandbox only")
 	}
 	if dash < 0 {
 		dash = len(args)
@@ -380,45 +380,107 @@ func (a *app) checkLabHeld(t secret.KubeTarget) error {
 }
 
 func (a *app) secretSetCmd() *cobra.Command {
-	var vault, charset string
+	var vault, charset, toSecret string
 	var length int
 	var generate bool
 	c := &cobra.Command{
-		Use:   "set <sops-file> <path> --generate --vault op://<vault>/<item>/<field>",
-		Short: "Generate a value into the shared vault, then into a SOPS path",
-		Long: `set --generate draws a new value, writes it to the shared vault's field
-first (creating the item or the field when absent) and then into the SOPS
-file's dotted path (creating the file or the key when absent, encrypted to
-the recipients of its .sops.yaml), and answers its fingerprint.`,
-		Args: cobra.ExactArgs(2),
+		Use:   "set <sops-file> <path> --generate [--vault op://<vault>/<item>/<field>] [--to-secret <context>/<namespace>/<name>/<key> | -- <consumer…>]",
+		Short: "Generate a value into a SOPS path, and the shared vault, a lab's Secret or a consumer",
+		Long: `set --generate draws a new value in beekeeper's process and writes it into
+the SOPS file's dotted path (creating the file or the key when absent,
+encrypted to the recipients of its .sops.yaml), and answers its
+fingerprint. Without --vault the SOPS file is the value's only home: no
+vault holds a copy.
+
+--vault op://<vault>/<item>/<field> writes the shared vault's field first
+(creating the item or the field when absent), then the SOPS path.
+
+--to-secret <context>/<namespace>/<name>/<key> also writes the value into
+a key of a Secret in a kind lab whose lease the caller holds, as copy
+--to-secret does; -- <consumer…> also runs a consumer with the value on
+stdin, as copy <ref> -- <consumer…> does, and answers its output with the
+value redacted and its exit code. Both come after the SOPS path is
+written: when one fails, the SOPS path holds the value and copy finishes
+the delivery.`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if dash := cmd.ArgsLenAtDash(); dash >= 0 {
+				if dash != 2 || len(args) < 3 {
+					return fmt.Errorf("set <sops-file> <path> --generate -- <consumer…>")
+				}
+				if cmd.Flags().Changed("to-secret") {
+					return fmt.Errorf("set takes --to-secret or a consumer, not both")
+				}
+				return nil
+			}
+			return cobra.ExactArgs(2)(cmd, args)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !generate {
 				return usageErr("set takes no value: --generate makes one")
 			}
-			v, err := parseRefs(vault)
-			if err != nil {
-				return usageErr("--vault: %v", err)
+			opt := secret.SetOptions{Length: length, Charset: charset}
+			if vault != "" {
+				v, err := parseRefs(vault)
+				if err != nil {
+					return usageErr("--vault: %v", err)
+				}
+				opt.Vault = v[0]
 			}
 			dst := secret.Ref{File: args[0], Path: args[1]}
 			if err := a.sandboxFiles(nil, []secret.Ref{dst}); err != nil {
 				return err
 			}
+			to := []string{dst.String()}
+			if opt.Vault != (secret.Ref{}) {
+				to = append([]string{opt.Vault.String()}, to...)
+			}
+			if cmd.Flags().Changed("to-secret") {
+				t, err := secret.ParseKubeTarget(toSecret)
+				if err != nil {
+					return usageErr("--to-secret: %v", err)
+				}
+				to = append(to, t.String())
+				if err := a.checkLabHeld(t); err != nil {
+					a.secretLog("set", "%s: %s", strings.Join(to, " and "), outcome(err, ""))
+					return err
+				}
+				opt.Secret = &t
+			}
+			if cmd.ArgsLenAtDash() == 2 {
+				opt.Consumer = args[2:]
+				to = append(to, opt.Consumer[0])
+				if err := secret.Consumer(opt.Consumer); err != nil {
+					a.secretLog("set", "%s: %s", strings.Join(to, " and "), outcome(err, ""))
+					return refused("%v", err)
+				}
+			}
 			ops, err := a.secretOpsKeyed()
 			if err != nil {
 				return err
 			}
-			fp, err := ops.Set(cmd.Context(), dst, v[0], length, charset)
-			a.secretLog("set", "%s and %s: %s", v[0], dst, outcome(err, "generated "+fp))
+			res, err := ops.Set(cmd.Context(), dst, opt)
+			done := "generated " + res.Fingerprint
+			if opt.Consumer != nil {
+				done += fmt.Sprintf(", consumer exit %d", res.Code)
+			}
+			a.secretLog("set", "%s: %s", strings.Join(to, " and "), outcome(err, done))
 			if err != nil {
 				return err
 			}
-			return a.secretPrint(secret.Print{Key: dst.String(), Fingerprint: fp},
-				fmt.Sprintf("wrote %s and %s: %d characters, %s\n", v[0], dst, length, fp))
+			text := fmt.Sprintf("wrote %s: %d characters, %s\n", strings.Join(to, " and "), length, res.Fingerprint)
+			if err := a.secretPrint(res, text+res.Output); err != nil {
+				return err
+			}
+			if res.Code != 0 {
+				return &exitError{code: res.Code}
+			}
+			return nil
 		},
 	}
 	f := c.Flags()
 	f.BoolVar(&generate, "generate", false, "generate the value")
-	f.StringVar(&vault, "vault", "", "the shared vault's field that holds the value first (op://<vault>/<item>/<field>)")
+	f.StringVar(&vault, "vault", "", "the shared vault's field that holds the value first (op://<vault>/<item>/<field>); none keeps it in the SOPS file alone")
+	f.StringVar(&toSecret, "to-secret", "", "also a key of a Secret in a lab you hold: <context>/<namespace>/<name>/<key>")
 	f.IntVar(&length, "length", 32, "the value's length")
 	f.StringVar(&charset, "charset", "alnum", "the characters: "+strings.Join(secret.Charsets(), ", "))
 	return c

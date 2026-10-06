@@ -42,7 +42,7 @@ func TestBrokeredHostArgv(t *testing.T) {
 		{brokeredAgentsArgv, sandbox.Request{Args: []string{agentWakeName, "--as=supervisor", "--", agentBK1, "hi"}}},
 		{brokeredAgentsArgv, sandbox.Request{Args: []string{agentStartName, "--config", "/tmp/c.yaml", "--", agentBK1, "b"}}},
 		{brokeredAgentsArgv, sandbox.Request{}},
-		{brokeredWatchArgv, sandbox.Request{Args: []string{"secret", "compare"}}},
+		{brokeredWatchArgv, sandbox.Request{Args: []string{ghSecret, compareOp}}},
 		{brokeredWatchArgv, sandbox.Request{Args: []string{"watch", "--config=/tmp/c.yaml"}}},
 		{brokeredLabArgv, sandbox.Request{Resource: labOne, Args: []string{"claim"}}},
 		{brokeredLabArgv, sandbox.Request{Resource: "../x", Args: []string{labUp}}},
