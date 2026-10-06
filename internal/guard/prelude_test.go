@@ -17,7 +17,7 @@ var agentShells = []string{"zsh", bash}
 // with a session's environment file: the shell's aliases and functions of
 // the names are gone and an unmatched glob is a literal, in zsh and bash.
 func TestPreludeInAgentShells(t *testing.T) {
-	prelude := Prelude([]string{"grep", "ls"}, true, nil)
+	prelude := Prelude([]string{"grep", "ls"}, true, nil, nil)
 	setup := "alias ls='echo ALIASED'\ngrep() { echo SHADOWED; }\n"
 	for _, sh := range agentShells {
 		bin, err := exec.LookPath(sh)
@@ -54,7 +54,7 @@ func TestPreludeInAgentShells(t *testing.T) {
 // bash, and leaves the other variables.
 func TestPreludeDropsVaultCredentials(t *testing.T) {
 	env := filepath.Join(t.TempDir(), "env.sh")
-	if err := WritePrelude(env, Prelude(nil, false, nil)); err != nil {
+	if err := WritePrelude(env, Prelude(nil, false, nil, nil)); err != nil {
 		t.Fatal(err)
 	}
 	for _, sh := range agentShells {
@@ -77,11 +77,42 @@ func TestPreludeDropsVaultCredentials(t *testing.T) {
 	}
 }
 
-func TestPreludeOff(t *testing.T) {
-	if p := Prelude(nil, false, nil); strings.Contains(p, "unalias") || strings.Contains(p, "nomatch") || strings.Contains(p, "PATH") {
-		t.Errorf("Prelude(nil, false, nil) = %q", p)
+// The prelude takes the directories of drop off PATH wherever an inherited
+// PATH carries them, once or more, and keeps the rest in order, in zsh and
+// bash.
+func TestPreludeDropsPath(t *testing.T) {
+	env := filepath.Join(t.TempDir(), "env.sh")
+	if err := WritePrelude(env, Prelude(nil, false, nil, []string{"/opt/agent bin", "/opt/x"})); err != nil {
+		t.Fatal(err)
 	}
-	if p := Prelude(nil, true, nil); strings.Contains(p, "unalias") || !strings.Contains(p, "no_nomatch") {
+	for _, sh := range agentShells {
+		bin, err := exec.LookPath(sh)
+		if err != nil {
+			t.Logf("%s not installed", sh)
+			continue
+		}
+		for in, want := range map[string]string{
+			"/opt/agent bin:/usr/bin:/opt/x:/bin:/opt/agent bin": "/usr/bin:/bin",
+			"/usr/bin:/bin":    "/usr/bin:/bin",
+			"/opt/xy:/usr/bin": "/opt/xy:/usr/bin",
+		} {
+			c := exec.Command(bin, "-c", "PATH='"+in+"'\nsource "+env+"\necho \"$?\"; printf '%s\\n' \"$PATH\"") //nolint:gosec // the test's own shells
+			out, err := c.CombinedOutput()
+			if err != nil {
+				t.Fatalf("%s: %v: %s", sh, err, out)
+			}
+			if got := string(out); got != "0\n"+want+"\n" {
+				t.Errorf("prelude in %s, PATH %q: got %q, want %q", sh, in, got, want)
+			}
+		}
+	}
+}
+
+func TestPreludeOff(t *testing.T) {
+	if p := Prelude(nil, false, nil, nil); strings.Contains(p, "unalias") || strings.Contains(p, "nomatch") || strings.Contains(p, "PATH") {
+		t.Errorf("Prelude(nil, false, nil, nil) = %q", p)
+	}
+	if p := Prelude(nil, true, nil, nil); strings.Contains(p, "unalias") || !strings.Contains(p, "no_nomatch") {
 		t.Errorf("globs only: %q", p)
 	}
 }
@@ -91,13 +122,13 @@ func TestWritePreludeReplacesItsOwnBlockOnly(t *testing.T) {
 	if err := os.WriteFile(env, []byte("export A=1"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []string{Prelude([]string{"grep"}, true, nil), Prelude([]string{"ls"}, false, nil), Prelude([]string{"ls"}, false, nil)} {
+	for _, p := range []string{Prelude([]string{"grep"}, true, nil, nil), Prelude([]string{"ls"}, false, nil, nil), Prelude([]string{"ls"}, false, nil, nil)} {
 		if err := WritePrelude(env, p); err != nil {
 			t.Fatal(err)
 		}
 	}
 	raw, _ := os.ReadFile(env) //nolint:gosec // the test's own file
-	if got, want := string(raw), "export A=1\n"+Prelude([]string{"ls"}, false, nil); got != want {
+	if got, want := string(raw), "export A=1\n"+Prelude([]string{"ls"}, false, nil, nil); got != want {
 		t.Errorf("env file:\n%s\nwant:\n%s", got, want)
 	}
 	if err := WritePrelude(env, ""); err != nil {
@@ -116,7 +147,7 @@ func TestPreludePath(t *testing.T) {
 	if err != nil {
 		t.Skip("no home directory")
 	}
-	prelude := Prelude(nil, false, []string{"~/agent-bin", "/opt/it's"})
+	prelude := Prelude(nil, false, []string{"~/agent-bin", "/opt/it's"}, nil)
 	for _, sh := range agentShells {
 		bin, err := exec.LookPath(sh)
 		if err != nil {

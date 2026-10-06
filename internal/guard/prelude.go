@@ -31,11 +31,14 @@ const (
 // before parsing the command, so a removed alias is not expanded in it.
 // The directories of path go first on PATH, in their order, each once (a
 // leading ~/ is the home directory): an agent's own programs, such as a gh
-// that acts with a short-lived token, shadow the person's.
+// that acts with a short-lived token, shadow the person's. The directories
+// of drop leave PATH wherever they are, one an inherited PATH carries
+// included: in the agent sandbox an agent's gh link to devctl would read a
+// keychain the sandbox closes.
 // It always drops the vault credentials of vaultEnv from the environment:
 // no agent command runs with a vault session or token.
 // Every line ends with exit status 0.
-func Prelude(unalias []string, literalGlobs bool, path []string) string {
+func Prelude(unalias []string, literalGlobs bool, path, drop []string) string {
 	var b strings.Builder
 	b.WriteString(preludeBegin + "\n")
 	fmt.Fprintf(&b, "for _bk_v in $(env | sed -nE 's/^(%s)=.*/\\1/p'); do unset \"$_bk_v\"; done; unset _bk_v\n", vaultEnv)
@@ -45,6 +48,10 @@ func Prelude(unalias []string, literalGlobs bool, path []string) string {
 	}
 	if literalGlobs {
 		b.WriteString(`if [ -n "${ZSH_VERSION-}" ]; then setopt no_nomatch; elif [ -n "${BASH_VERSION-}" ]; then shopt -u failglob nullglob; fi` + "\n")
+	}
+	for _, d := range drop {
+		dir := strings.ReplaceAll(expandHome(d), "'", `'\''`)
+		fmt.Fprintf(&b, "case \":$PATH:\" in *':%[1]s:'*) _bk_p=$(printf %%s \"$PATH\" | awk -v RS=: -v ORS=: -v d='%[1]s' '$0 != d'); PATH=${_bk_p%%:}; export PATH; unset _bk_p ;; esac\n", dir)
 	}
 	for i := len(path) - 1; i >= 0; i-- {
 		dir := strings.ReplaceAll(expandHome(path[i]), "'", `'\''`)

@@ -200,12 +200,14 @@ func (p Policy) Settings() map[string]any {
 // egressVars point the clients that reach GitHub at the egress proxy's CA,
 // gh at a login the proxy completes, and git at GitHub over HTTPS: the
 // sandbox has no SSH agent, and the proxy authenticates git's first
-// request, so no credential helper of the person's runs for GitHub.
+// request, so no credential helper of the person's runs for GitHub. git
+// signs through the broker: the sandbox reaches no gpg-agent.
 func egressVars(dir string) map[string]string {
 	kv := [][2]string{
 		{"url.https://github.com/.insteadOf", "git@github.com:"},
 		{"url.https://github.com/.insteadOf", "ssh://git@github.com/"},
 		{"credential.https://github.com.helper", ""},
+		{"gpg.program", filepath.Join(dir, EgressGPG)},
 	}
 	bundle := filepath.Join(dir, EgressBundle)
 	v := map[string]string{

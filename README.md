@@ -351,6 +351,7 @@ The secrets and where they live:
 | The vault's service account token (`secret.tokenFile`) | a 0600 file outside the sandbox's lists | beekeeper's own `op` calls |
 | The SOPS keys | the person's key files, outside the sandbox's lists | sops in beekeeper's process |
 | The GitHub App token of sandboxed sessions | the broker's memory | the egress proxy, into the `Authorization` header of requests to GitHub |
+| The person's commit signing key | gpg and its agent on the host, whose socket the sandbox closes | gpg, run by the broker for a sandboxed git's signing call |
 | The value scanner's key and index | `scan/` in beekeeper's state, denied to sandboxed sessions | beekeeper |
 | Kubeconfigs, the Teleport profile, the GitHub CLI's token, the keyring | the person's home and session bus | the person; a lab kubeconfig for its lease holder |
 
@@ -379,6 +380,8 @@ Residual risks:
 - **The egress proxy acts on GitHub with the App token** for every sandboxed session: a session cannot
   read the token, but it can make any call the App's permissions allow, as the person's merges and
   pushes do ([The agent sandbox](#the-agent-sandbox)).
+- **The broker signs for every sandboxed session**: a session cannot read the signing key, but its git
+  can have any commit or tag signed with it, as the person's own commits are.
 - **A held lab's kubeconfig** is readable by every sandboxed session, not by its holder alone.
 - **Desktop control.** An agent that drives the desktop could type into the person's terminal; the
   unlock still needs the account password, which no agent holds.
@@ -637,11 +640,17 @@ same file passed to `claude --settings` holds one session to it, to try a change
   (a fixed word, `beekeeper-egress-proxy`, which the proxy replaces) to
   `$XDG_RUNTIME_DIR/beekeeper/egress`; the policy points `SSL_CERT_FILE`, `GIT_SSL_CAINFO`,
   `CURL_CA_BUNDLE` and `REQUESTS_CA_BUNDLE` at the bundle, `NODE_EXTRA_CA_CERTS` at the CA and
-  `GH_CONFIG_DIR` at gh's login. These variables reach the harness process too; the bundle keeps the
+  `GH_CONFIG_DIR` at gh's login, and git's `gpg.program` at the signing script. These variables reach the harness process too; the bundle keeps the
   system's roots, and the CA is good for GitHub's three hosts alone. git reaches GitHub over HTTPS
   (`git@github.com:` is rewritten), needs no credential helper, since the proxy authenticates its first
   request, and runs none of the person's for GitHub. `agents.shell.path` stays off `PATH` in the
-  sandbox, since a `gh` link to devctl reads the keychain.
+  sandbox, an inherited `PATH` included, since a `gh` link to devctl reads the keychain.
+- **Commit signing.** The sandbox reaches no gpg-agent, so the policy sets git's `gpg.program` to a
+  script the broker writes into the egress directory, which runs `beekeeper sandbox gpg`: it hands
+  the payload of git's signing call (`--status-fd=2 -bsau <key>`, nothing else) to the broker, which
+  runs the person's gpg (`gpg.program` of their git config, else `gpg`) on the host and answers the
+  signature and gpg's status lines. `commit.gpgsign` and `tag.gpgSign` work unchanged; the key and
+  the agent never enter the sandbox.
 - **devctl.** devctl's gated commands (`pr merge`, `pr wait`, `release promote`, `release wait`,
   `rollout wait`) read the keychain over the user bus and start user units, both closed in the sandbox,
   so a sandboxed `beekeeper gate` hands its command to the broker: it runs the same gate on the host, as
