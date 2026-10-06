@@ -60,10 +60,12 @@ cluster runs, a claim names it, and a running kind cluster no lab lease maps
 is listed as unmapped.
 
 While a supervisor runs, a free lease is not permission: a session claims
-only what the supervisor granted it (` + "`beekeeper lease grant`" + `), in the order
-the grants were given. Without a supervisor a free lease is claimed directly.
-A claim that is refused exits 3: gate the action on it (claim && act), never
-run the action after a failed claim.
+only what the supervisor granted it, in the order the grants were given. The
+supervisor's ` + "`yours <resource>`" + ` in a message to the session (SendMessage, agents
+wake) records the grant itself; ` + "`beekeeper lease grant`" + ` records one without the
+word. Without a supervisor a free lease is claimed directly. A claim that is
+refused exits 3, naming the grant it lacks: gate the action on it (claim &&
+act), never run the action after a failed claim.
 
 Without a subcommand, lists the leases.`,
 		Args: cobra.NoArgs,
@@ -532,56 +534,7 @@ and the log. Such grants are claimed during the upgrade in their order.`,
 			if cmd.Flags().Changed("upgrade-unblock") && unblock == "" {
 				return usageErr("--upgrade-unblock needs the reason: what unblocks the upgrade")
 			}
-			dir := lease.Dir(a.cfg.LeaseDir)
-			var msg string
-			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-				holders, err := dir.List()
-				if err != nil {
-					return nil, err
-				}
-				held := heldMap(holders)
-				lease.Prune(st, held, a.now, a.cfg.GrantTTL.Duration)
-				var hold state.Hold
-				if unblock != "" {
-					if r := st.SupervisorRole(); r.Holder == nil || !r.Holder.Is(me) {
-						return nil, refused("only the supervisor grants an upgrade unblock")
-					}
-					var ok bool
-					if hold, ok = upgrade.Held(st, res, a.now); !ok {
-						return nil, refused("no upgrade holds %s: grant it without --upgrade-unblock", res)
-					}
-				}
-				q := lease.Pending(st, res, held[res], a.now, a.cfg.GrantTTL.Duration)
-				if i := slices.IndexFunc(q, func(g state.Grant) bool { return g.To.Is(to.Party()) }); i >= 0 {
-					if unblock == "" || q[i].UpgradeUnblock != "" {
-						msg = fmt.Sprintf("%s is already granted to %q (number %d in its queue%s)", res, to.Name, i+1, unblockText(q[i]))
-						return nil, nil
-					}
-					j := slices.IndexFunc(st.Grants, func(g state.Grant) bool { return g.Resource == res && g.To.Is(q[i].To) && g.At.Equal(q[i].At) })
-					st.Grants[j].UpgradeUnblock = unblock
-					msg = fmt.Sprintf("the grant of %s to %q now unblocks %s: it claims with `beekeeper lease claim %s --purpose ...`", res, to.Name, hold.Reason, res)
-					return []state.Event{event(me, "lease.grant", "%s to %s, upgrade unblock: %s", res, to.Name, unblock)}, nil
-				}
-				st.Grants = append(st.Grants, state.Grant{Resource: res, To: to.Party(), By: me, At: a.now.UTC(), UpgradeUnblock: unblock})
-				if unblock != "" {
-					msg = fmt.Sprintf("granted %s to %q to unblock %s: it claims with `beekeeper lease claim %s --purpose ...`; every other claim stays refused", res, to.Name, hold.Reason, res)
-					if held[res] {
-						cur, _ := dir.Get(res)
-						msg += fmt.Sprintf(" (%q holds it: %s)", cur.Name, cur.Purpose)
-					}
-					return []state.Event{event(me, "lease.grant", "%s to %s, upgrade unblock: %s", res, to.Name, unblock)}, nil
-				}
-				switch {
-				case held[res]:
-					cur, _ := dir.Get(res)
-					msg = fmt.Sprintf("granted %s to %q, number %d in its queue: %q holds it (%s)", res, to.Name, len(q)+1, cur.Name, cur.Purpose)
-				case len(q) > 0:
-					msg = fmt.Sprintf("granted %s to %q, number %d in its queue after %q", res, to.Name, len(q)+1, q[len(q)-1].To.Name)
-				default:
-					msg = fmt.Sprintf("granted %s to %q: it claims with `beekeeper lease claim %s --purpose ...` within %s", res, to.Name, res, dur(a.cfg.GrantTTL.Duration))
-				}
-				return []state.Event{event(me, "lease.grant", "%s to %s", res, to.Name)}, nil
-			})
+			msg, err := a.grant(me, res, to, unblock)
 			if err != nil {
 				return err
 			}
@@ -594,6 +547,64 @@ and the log. Such grants are claimed during the upgrade in their order.`,
 	}
 	c.Flags().StringVar(&unblock, "upgrade-unblock", "", "grant the claim that unblocks the upgrade holding the resource, and say why (supervisor only)")
 	return c
+}
+
+// grant records me's grant of res to the session to, queued behind the
+// earlier grants of res, and returns what to say of it: the grant, or that
+// it was granted already. unblock is the reason of an upgrade unblock, ""
+// for a plain grant.
+func (a *app) grant(me state.Party, res string, to *claude.Session, unblock string) (string, error) {
+	dir := lease.Dir(a.cfg.LeaseDir)
+	var msg string
+	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		holders, err := dir.List()
+		if err != nil {
+			return nil, err
+		}
+		held := heldMap(holders)
+		lease.Prune(st, held, a.now, a.cfg.GrantTTL.Duration)
+		var hold state.Hold
+		if unblock != "" {
+			if r := st.SupervisorRole(); r.Holder == nil || !r.Holder.Is(me) {
+				return nil, refused("only the supervisor grants an upgrade unblock")
+			}
+			var ok bool
+			if hold, ok = upgrade.Held(st, res, a.now); !ok {
+				return nil, refused("no upgrade holds %s: grant it without --upgrade-unblock", res)
+			}
+		}
+		q := lease.Pending(st, res, held[res], a.now, a.cfg.GrantTTL.Duration)
+		if i := slices.IndexFunc(q, func(g state.Grant) bool { return g.To.Is(to.Party()) }); i >= 0 {
+			if unblock == "" || q[i].UpgradeUnblock != "" {
+				msg = fmt.Sprintf("%s is already granted to %q (number %d in its queue%s)", res, to.Name, i+1, unblockText(q[i]))
+				return nil, nil
+			}
+			j := slices.IndexFunc(st.Grants, func(g state.Grant) bool { return g.Resource == res && g.To.Is(q[i].To) && g.At.Equal(q[i].At) })
+			st.Grants[j].UpgradeUnblock = unblock
+			msg = fmt.Sprintf("the grant of %s to %q now unblocks %s: it claims with `beekeeper lease claim %s --purpose ...`", res, to.Name, hold.Reason, res)
+			return []state.Event{event(me, "lease.grant", "%s to %s, upgrade unblock: %s", res, to.Name, unblock)}, nil
+		}
+		st.Grants = append(st.Grants, state.Grant{Resource: res, To: to.Party(), By: me, At: a.now.UTC(), UpgradeUnblock: unblock})
+		if unblock != "" {
+			msg = fmt.Sprintf("granted %s to %q to unblock %s: it claims with `beekeeper lease claim %s --purpose ...`; every other claim stays refused", res, to.Name, hold.Reason, res)
+			if held[res] {
+				cur, _ := dir.Get(res)
+				msg += fmt.Sprintf(" (%q holds it: %s)", cur.Name, cur.Purpose)
+			}
+			return []state.Event{event(me, "lease.grant", "%s to %s, upgrade unblock: %s", res, to.Name, unblock)}, nil
+		}
+		switch {
+		case held[res]:
+			cur, _ := dir.Get(res)
+			msg = fmt.Sprintf("granted %s to %q, number %d in its queue: %q holds it (%s)", res, to.Name, len(q)+1, cur.Name, cur.Purpose)
+		case len(q) > 0:
+			msg = fmt.Sprintf("granted %s to %q, number %d in its queue after %q", res, to.Name, len(q)+1, q[len(q)-1].To.Name)
+		default:
+			msg = fmt.Sprintf("granted %s to %q: it claims with `beekeeper lease claim %s --purpose ...` within %s", res, to.Name, res, dur(a.cfg.GrantTTL.Duration))
+		}
+		return []state.Event{event(me, "lease.grant", "%s to %s", res, to.Name)}, nil
+	})
+	return msg, err
 }
 
 func (a *app) leaseRevokeCmd() *cobra.Command {
