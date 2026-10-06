@@ -351,3 +351,25 @@ func TestItemLeases(t *testing.T) {
 		t.Errorf("leases %q", got)
 	}
 }
+
+func TestClosesReadsTheClosingReferencesInOneRequest(t *testing.T) {
+	var queries []string
+	gh := func(_ context.Context, args ...string) ([]byte, error) {
+		queries = append(queries, args[3])
+		return []byte(`{"data":{
+			"r0":{"issueOrPullRequest":{"closingIssuesReferences":{"nodes":[{"number":1,"repository":{"nameWithOwner":"O/R"}},{"number":2,"repository":{"nameWithOwner":"other/x"}}]}}},
+			"r1":{"issueOrPullRequest":{}},
+			"r2":null}}`), nil
+	}
+	got, err := (&Client{GH: gh}).Closes(t.Context(), []string{"O/R#100", "o/r#5", "not a ref", "gone/r#1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][]string{"o/r#100": {"o/r#1", "other/x#2"}}
+	if len(queries) != 1 || !strings.Contains(queries[0], `r2:repository(owner:"gone",name:"r")`) || len(got) != 1 || !slices.Equal(got["o/r#100"], want["o/r#100"]) {
+		t.Errorf("closes %v, queries %q", got, queries)
+	}
+	if got, err := (&Client{GH: gh}).Closes(t.Context(), nil); err != nil || got != nil || len(queries) != 1 {
+		t.Errorf("no refs asked GitHub: %v, %v, %d queries", got, err, len(queries))
+	}
+}
