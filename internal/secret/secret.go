@@ -44,9 +44,13 @@ type Ops struct {
 	Fingerprint func(value string) string
 	// Apply writes a key of a Secret; nil is [ApplySecret].
 	Apply SecretApplier
-	// Ages are the age identities of the shared vault for the SOPS files
-	// sops' own sources hold none for.
+	// Ages are the age identities of the shared vault, an identity file or
+	// the person's own credential store for the SOPS files sops' own
+	// sources hold none for.
 	Ages []AgeIdentity
+	// Store is the person's own credential store a store:// age identity
+	// is read from.
+	Store Store
 }
 
 // opTimeout bounds one read of the shared vault: op that answers nothing

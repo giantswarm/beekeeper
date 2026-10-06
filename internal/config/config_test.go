@@ -153,6 +153,8 @@ func TestLoadRejects(t *testing.T) {
 		"age without op ref":   "secret: {ageIdentities: [{recipient: age1x, ref: ~/key.txt}]}",
 		"age relative file":    "secret: {ageIdentities: [{recipient: age1x, ref: \"file://key.txt\"}]}",
 		"age bad pathRegex":    "secret: {ageIdentities: [{pathRegex: \"[\", ref: op://V/i/f}]}",
+		"age store no read":    "secret: {ageIdentities: [{recipient: age1x, ref: store://keys/age}]}",
+		"age store no search":  "secret: {store: {read: [r]}, ageIdentities: [{recipient: age1x, ref: \"store://\"}]}",
 		"nameless board step":  "board: {order: [{status: [backlog]}]}",
 		"search with fields":   "board: {order: [{name: q, search: \"repo:o/r\", status: [backlog]}]}",
 	} {
@@ -168,7 +170,7 @@ func TestLoadRejects(t *testing.T) {
 
 func TestAgeIdentityRefs(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "c.yaml")
-	raw := "secret: {ageIdentities: [{recipient: age1x, ref: op://V/i/f}, {pathRegex: /repo/, ref: \"file:///home/me/keys.txt\"}]}"
+	raw := "secret: {store: {read: [r, -a], search: [s]}, ageIdentities: [{recipient: age1x, ref: op://V/i/f}, {pathRegex: /repo/, ref: \"file:///home/me/keys.txt\"}, {recipient: age1y, ref: \"store://\"}, {recipient: age1z, ref: store://keys/age}]}"
 	if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -178,6 +180,9 @@ func TestAgeIdentityRefs(t *testing.T) {
 	}
 	if got := c.Secret.AgeIdentities[1].Ref; got != "file:///home/me/keys.txt" {
 		t.Errorf("file ref = %q", got)
+	}
+	if got := c.Secret.Store.Read; len(got) != 2 || len(c.Secret.Store.Search) != 1 || c.Secret.AgeIdentities[3].Ref != "store://keys/age" {
+		t.Errorf("store = %+v, refs = %+v", c.Secret.Store, c.Secret.AgeIdentities)
 	}
 }
 

@@ -322,11 +322,27 @@ type Secret struct {
 	// then, and forgets it at the end.
 	SessionLifetime Duration `yaml:"sessionLifetime"`
 	// AgeIdentities are the age identities beekeeper reads from the shared
-	// vault or an identity file for the SOPS files that sops' own sources
-	// (SOPS_AGE_KEY, SOPS_AGE_KEY_FILE, sops/age/keys.txt) hold none for:
-	// each read in beekeeper's process (the broker's, with secret.session)
-	// and given to the one sops call alone.
+	// vault, an identity file or the person's own credential store for the
+	// SOPS files that sops' own sources (SOPS_AGE_KEY, SOPS_AGE_KEY_FILE,
+	// sops/age/keys.txt) hold none for: each read in beekeeper's process
+	// (the broker's, with secret.session) and given to the one sops call
+	// alone.
 	AgeIdentities []AgeIdentity `yaml:"ageIdentities"`
+	// Store is the person's own credential store a store:// age identity
+	// is read from.
+	Store SecretStore `yaml:"store"`
+}
+
+// SecretStore reaches the person's own credential store through the
+// person's own commands, run by the broker: beekeeper never handles the
+// store's password, and the store shows whatever unlock prompt it shows.
+type SecretStore struct {
+	// Read prints the secret of the entry appended as its last argument on
+	// stdout.
+	Read []string `yaml:"read"`
+	// Search prints the names of the entries matching the term appended as
+	// its last argument (an age recipient), one per line, never a value.
+	Search []string `yaml:"search"`
 }
 
 // AgeIdentity maps the SOPS files of an age recipient, or under a path, to
@@ -338,9 +354,11 @@ type AgeIdentity struct {
 	// PathRegex matches a file's absolute path (unanchored), for the files
 	// of a repository or an installation whatever their recipient.
 	PathRegex string `yaml:"pathRegex"`
-	// Ref is the op:// field of the shared vault (secret.vault) or the
-	// file:/// identity file (an absolute path, comments allowed) holding
-	// the identity, AGE-SECRET-KEY-1….
+	// Ref is the op:// field of the shared vault (secret.vault), the
+	// file:/// identity file (an absolute path, comments allowed) or the
+	// store:// entry of the person's own credential store (secret.store;
+	// store:// alone searches it for the file's recipients) holding the
+	// identity, AGE-SECRET-KEY-1….
 	Ref string `yaml:"ref"`
 }
 
@@ -1569,8 +1587,12 @@ func (c *Config) validate() error {
 			return fmt.Errorf("secret.ageIdentities[%d]: name a recipient or a pathRegex", i)
 		case id.Recipient != "" && !strings.HasPrefix(id.Recipient, "age1"):
 			return fmt.Errorf("secret.ageIdentities[%d]: recipient %q is no age recipient (age1…)", i, id.Recipient)
-		case !strings.HasPrefix(id.Ref, "op://") && !strings.HasPrefix(id.Ref, "file:///"):
-			return fmt.Errorf("secret.ageIdentities[%d]: ref %q: want op://<vault>/<item>/<field> or file:///<absolute path>", i, id.Ref)
+		case !strings.HasPrefix(id.Ref, "op://") && !strings.HasPrefix(id.Ref, "file:///") && !strings.HasPrefix(id.Ref, "store://"):
+			return fmt.Errorf("secret.ageIdentities[%d]: ref %q: want op://<vault>/<item>/<field>, file:///<absolute path> or store://[<entry>]", i, id.Ref)
+		case strings.HasPrefix(id.Ref, "store://") && len(c.Secret.Store.Read) == 0:
+			return fmt.Errorf("secret.ageIdentities[%d]: ref %q: a store:// reference takes secret.store.read", i, id.Ref)
+		case id.Ref == "store://" && len(c.Secret.Store.Search) == 0:
+			return fmt.Errorf("secret.ageIdentities[%d]: ref %q: store:// without an entry takes secret.store.search", i, id.Ref)
 		}
 		if _, err := regexp.Compile(id.PathRegex); err != nil {
 			return fmt.Errorf("secret.ageIdentities[%d]: pathRegex: %w", i, err)

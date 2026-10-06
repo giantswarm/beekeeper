@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"time"
 
 	"filippo.io/age"
 	"gopkg.in/yaml.v3"
@@ -19,21 +20,44 @@ import (
 )
 
 // AgeIdentity is where beekeeper finds the age identity of a SOPS file
-// none of sops' own sources holds: a field of the shared vault or an
-// identity file on the host, read in beekeeper's process and given to the
-// one sops call's environment alone.
+// none of sops' own sources holds: a field of the shared vault, an identity
+// file on the host or an entry of the person's own credential store, read
+// in beekeeper's process and given to the one sops call's environment alone.
 type AgeIdentity struct {
 	// Recipient is the age recipient (age1…) the identity decrypts for.
 	Recipient string
 	// Path matches the file's absolute path; nil matches by recipient only.
 	Path *regexp.Regexp
-	// Ref is the op:// field or the file:// identity file that holds the
-	// identity (AGE-SECRET-KEY-1…, an identity file's comments allowed).
+	// Ref is the op:// field, the file:// identity file or the store://
+	// entry that holds the identity (AGE-SECRET-KEY-1…, an identity file's
+	// comments allowed).
 	Ref string
 }
 
-// FileRef starts the reference of an identity file on the host.
-const FileRef = "file://"
+// The references of an age identity besides a vault field.
+const (
+	// FileRef starts the reference of an identity file on the host.
+	FileRef = "file://"
+	// StoreRef starts the reference of an entry of the person's own
+	// credential store; with no entry, the store's search finds it by the
+	// file's recipients.
+	StoreRef = "store://"
+)
+
+// Store is the person's own credential store, reached through the person's
+// own commands: beekeeper never handles the store's password, and the
+// store shows whatever unlock prompt it shows.
+type Store struct {
+	// Read prints the secret of the entry appended as its last argument.
+	Read []string
+	// Search prints the names of the entries matching the term appended as
+	// its last argument, one per line, never a value.
+	Search []string
+}
+
+// storeTimeout bounds one store command: long enough for the person to
+// answer the store's own unlock prompt, never a hang.
+const storeTimeout = 5 * time.Minute
 
 // ErrNoAgeIdentity marks a SOPS file whose age recipients no identity
 // beekeeper can reach decrypts for.
@@ -63,45 +87,106 @@ func (o *Ops) ageEnv(ctx context.Context, file string) ([]string, error) {
 	if id == nil || err != nil {
 		return nil, err
 	}
-	key, err := o.ageKey(ctx, id.Ref)
+	keys, err := o.ageKeys(ctx, id.Ref, recipients)
 	if err != nil {
 		return nil, fmt.Errorf("%s: the age identity of secret.ageIdentities: %w", file, err)
 	}
-	// the parse error is dropped: it may quote the line it failed on
-	parsed, err := age.ParseIdentities(strings.NewReader(key))
-	if err != nil {
-		return nil, fmt.Errorf("%s: %s holds no age identity (AGE-SECRET-KEY-1…)", file, id.Ref)
-	}
-	var held []string
-	for _, p := range parsed {
-		ident, ok := p.(*age.X25519Identity)
-		if !ok {
+	var held, from []string
+	for _, k := range keys {
+		from = append(from, k.source)
+		// the parse error is dropped: it may quote the line it failed on
+		parsed, err := age.ParseIdentities(strings.NewReader(k.value))
+		if err != nil {
 			continue
 		}
-		r := ident.Recipient().String()
-		if slices.Contains(recipients, r) {
-			return []string{envAgeKey + "=" + ident.String()}, nil
+		for _, p := range parsed {
+			ident, ok := p.(*age.X25519Identity)
+			if !ok {
+				continue
+			}
+			r := ident.Recipient().String()
+			if slices.Contains(recipients, r) {
+				return []string{envAgeKey + "=" + ident.String()}, nil
+			}
+			held = append(held, r)
 		}
-		held = append(held, r)
 	}
 	if len(held) == 0 {
-		return nil, fmt.Errorf("%s: %s holds no age identity (AGE-SECRET-KEY-1…)", file, id.Ref)
+		return nil, fmt.Errorf("%s: %s holds no age identity (AGE-SECRET-KEY-1…)", file, strings.Join(from, ", "))
 	}
-	return nil, fmt.Errorf("%s: %s holds the identity of %s, not of the file's recipients %s", file, id.Ref, strings.Join(held, ", "), strings.Join(recipients, ", "))
+	return nil, fmt.Errorf("%s: %s holds the identity of %s, not of the file's recipients %s", file, strings.Join(from, ", "), strings.Join(held, ", "), strings.Join(recipients, ", "))
 }
 
-// ageKey reads the identity ref holds: an op:// field of the shared vault
-// or a file:// identity file, read here and nowhere else.
-func (o *Ops) ageKey(ctx context.Context, ref string) (string, error) {
-	path, ok := strings.CutPrefix(ref, FileRef)
+// ageKey is a value that may hold an age identity, with where it came from.
+type ageKey struct {
+	source, value string
+}
+
+// ageKeys read the identities ref holds: an op:// field of the shared
+// vault, a file:// identity file or a store:// entry of the person's own
+// credential store (with no entry, every entry the store's search finds for
+// one of recipients), read here and nowhere else.
+func (o *Ops) ageKeys(ctx context.Context, ref string, recipients []string) ([]ageKey, error) {
+	if path, ok := strings.CutPrefix(ref, FileRef); ok {
+		raw, err := os.ReadFile(path) //nolint:gosec // the identity file secret.ageIdentities names
+		if err != nil {
+			return nil, err
+		}
+		return []ageKey{{ref, string(raw)}}, nil
+	}
+	entry, ok := strings.CutPrefix(ref, StoreRef)
 	if !ok {
-		return o.value(ctx, Ref{Op: ref})
+		v, err := o.value(ctx, Ref{Op: ref})
+		return []ageKey{{ref, v}}, err
 	}
-	raw, err := os.ReadFile(path) //nolint:gosec // the identity file secret.ageIdentities names
-	if err != nil {
-		return "", err
+	entries := []string{entry}
+	if entry == "" {
+		var err error
+		if entries, err = o.storeSearch(ctx, recipients); err != nil {
+			return nil, err
+		}
 	}
-	return string(raw), nil
+	out := make([]ageKey, 0, len(entries))
+	for _, e := range entries {
+		v, err := o.storeRun(ctx, o.Store.Read, e)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ageKey{StoreRef + e, string(v)})
+	}
+	return out, nil
+}
+
+// storeSearch are the entries of the person's own credential store its
+// search finds for recipients, each once.
+func (o *Ops) storeSearch(ctx context.Context, recipients []string) ([]string, error) {
+	var out []string
+	for _, r := range recipients {
+		found, err := o.storeRun(ctx, o.Store.Search, r)
+		if err != nil {
+			return nil, err
+		}
+		for e := range strings.Lines(string(found)) {
+			if e = strings.TrimSpace(e); e != "" && !slices.Contains(out, e) {
+				out = append(out, e)
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("the person's credential store has no entry for %s", strings.Join(recipients, ", "))
+	}
+	return out, nil
+}
+
+// storeRun runs one of the store's commands on arg and returns its stdout,
+// which only the caller sees.
+func (o *Ops) storeRun(ctx context.Context, argv []string, arg string) ([]byte, error) {
+	if len(argv) == 0 {
+		return nil, errors.New("secret.store is not configured: a store:// reference takes secret.store.read, and an empty entry secret.store.search")
+	}
+	ctx, cancel := context.WithTimeout(ctx, storeTimeout)
+	defer cancel()
+	return o.Run(ctx, "", nil, nil, argv[0], append(argv[1:len(argv):len(argv)], arg)...)
 }
 
 // AgeNeedsVault reports whether decrypting one of the SOPS files args name,
@@ -113,7 +198,7 @@ func (o *Ops) AgeNeedsVault(dir string, args []string) bool {
 
 // AgeNeedsIdentity reports whether decrypting one of the SOPS files args
 // name, relative to dir (the working directory when empty), takes an
-// identity of secret.ageIdentities, from the vault or a file.
+// identity of secret.ageIdentities, from the vault, a file or the store.
 func (o *Ops) AgeNeedsIdentity(dir string, args []string) bool {
 	return o.ageNeeds(dir, args, func(*AgeIdentity) bool { return true })
 }
@@ -166,7 +251,7 @@ func (o *Ops) ageIdentity(file string) (*AgeIdentity, []string, error) {
 		}
 	}
 	return nil, nil, fmt.Errorf("%s: %w for its recipients %s: checked %s and secret.ageIdentities; "+
-		"an entry there (recipient or pathRegex, and ref: op://<vault>/<item>/<field> or file://<identity file> holding the AGE-SECRET-KEY-1… identity) gives beekeeper one",
+		"an entry there (recipient or pathRegex, and ref: op://<vault>/<item>/<field>, file://<identity file> or store://[<entry>] holding the AGE-SECRET-KEY-1… identity) gives beekeeper one",
 		file, ErrNoAgeIdentity, strings.Join(recipients, ", "), strings.Join(checked, ", "))
 }
 

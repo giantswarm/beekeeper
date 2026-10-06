@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `secret.ageIdentities` takes an entry of the person's own credential store, `ref: store://<entry>`, read by the broker through the person's own commands in `secret.store` (`read`, and `search` for `store://` with no entry, which finds the entry by the SOPS file's recipients through the store's own search). The store shows whatever unlock prompt it shows; only the identity of the file's recipient reaches the one sops call, and nothing is printed, copied or fingerprinted ([README](README.md#age-identities)).
+
 ### Fixed
 
 - `beekeeper budget`, the snapshot, the `ui` screen and the watch read the GitHub GraphQL limit beside the REST one, from a real `rateLimit` query: a GraphQL refusal shows while REST has headroom, named as the hourly limit spent or a secondary limit, with its reset or Retry-After. The watch says it once with the `gh` and `devctl` callers and their sessions, and its end; `budget --gate` exits 3 while it holds ([README](README.md#what-it-does)).
