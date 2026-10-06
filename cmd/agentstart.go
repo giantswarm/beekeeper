@@ -95,59 +95,53 @@ func (a *app) agentStartCmd() *cobra.Command {
 	var model, dir, task, harness string
 	var desktop bool
 	c := &cobra.Command{
-		Use:   "start <name> <brief file>",
+		Use:   agentStartName + " <name> <brief file>",
 		Short: "Start an agent session in bypass from the command line and import it into the desktop",
-		Long: `start starts a Claude Code session without a click: "claude -p" in
-bypassPermissions under a session id beekeeper chooses, with the brief file
-as its first prompt, in a transient user unit (beekeeper-agent-<id>, its
-output in journalctl --user -u <unit>) that the caller's session, scope or
-terminal do not take down. Before the session exists, beekeeper records its
-id and mode as one of its starts and registers it on the roster under
+		Long: `start starts a Claude Code session without a click and runs it in
+Claude Desktop from its first turn. Before the session exists, beekeeper
+records its id as one of its starts and registers it on the roster under
 <name>, busy with --task, by default the brief's first line (or with the
 open task of a stopped session's entry under that name, which it takes
-over), so the roster shows it at work from its start. Once the
-transcript holds the first reply it imports the session into Claude Desktop
-(claude://resume?session=<id>): it shows in the sidebar as local_<id>,
-titled with <name> (beekeeper appends the name's custom-title line to the
-transcript first, within the last 256 KiB the import reads, and freezes the
-first turn's unit until the desktop recorded the session, so the transcript
-does not change under the import), and takes messages there. The desktop
-handles the link twice and sometimes keeps an untitled record: once the
-first turn has ended, beekeeper has the session set its own title with the
-desktop's set_session_title. The import switches the desktop's main window to the
-new session; beekeeper switches it back to the session it showed before
-(claude://code/continue), so the person working there stays on it. Both
-links wait while the desktop's window has the focus (Hyprland's active
-window), so the switch never happens under someone reading or typing
-there: up to 2 minutes, after which the start leaves the import to the
-reopen once the first turn has ended, which waits up to 25 minutes more
-(agents and the watch's IMPORT WAITS show it waiting). A locked screen
-(a running hyprlock, swaylock, gtklock or waylock) holds no link: nobody
-works in the window and keystrokes go to the locker. An agent
-that needs a desktop turn, its browser's (the Claude in Chrome tools exist
-only in a desktop CLI), is started with --desktop or asks with agents
-desktop: its import and reopen do not wait for the window's focus, and wait
-for the person's typing to pause for 1 minute at most.
+over), so the roster shows it at work from its start.
+
+A seed turn creates the session: "claude -p" under a session id beekeeper
+chooses, without tools, with the brief as its first prompt, in a transient
+user unit (beekeeper-agent-<id>, its output in journalctl --user -u <unit>);
+it only answers "ready" and gives the transcript its model. Once it ended,
+beekeeper imports the session into the desktop (claude://resume?session=<id>):
+it shows in the sidebar as local_<id>, titled with <name> (beekeeper appends
+the name's custom-title line to the transcript first, and a steward restores
+a title or model the import dropped). The import switches the desktop's main
+window to the new session for a moment and back to the session it showed
+(claude://code/continue); the window's focus does not hold it, the person's
+typing for 1 minute at most, and a locked screen not at all.
+
+The task then runs as a desktop turn, which the person sees in the
+session's row: the desktop's CLI of the session, which the import warms,
+takes the message that starts it; when the desktop runs none, a steward's
+send through the desktop's session messaging starts one with it. Before
+either spawn beekeeper keeps the desktop under its cap of CLIs by ending one
+of its own finished or parked workers' CLIs, never a person's session. Only
+where the desktop cannot run the turn (it does not run, the session has no
+row, no steward took the send) is the session resumed headless, as agents
+wake does, and start says why.
 
 The first prompt is the worker rules beekeeper ships with its role skills
 (the worker-rules skill, under the binary's version), then the brief as the
 task: a brief carries only its task, and a worker reports to "the
 supervisor", which the PreToolUse hook delivers to the role's holder.
 
-Its first turn runs that prompt from the command line in bypass. The desktop
-runs every later turn in acceptEdits (its import always drops bypass), so
-requests no allow rule covers would stop at a card: beekeeper hook
-permissionrequest answers them, for beekeeper's starts only. The browser is
-the desktop's own: the import gives the session the Chrome permission mode
-skip_all_permission_checks only when the desktop allows all browser actions
-(a person's "Allow all sites" on a Claude in Chrome site request turns that
-on for every session), and otherwise each navigate to a site the session
-was not allowed on yet waits on a site request in its desktop row, which no
-hook answers. start says which mode the desktop recorded, and agents shows
-it per agent (BROWSER asks or skips). While the first
-turn runs, beekeeper stops the CLI the desktop warms for the import, so the
-first turn is the session's only CLI and a message by name reaches it; the
-desktop starts a new CLI when the person opens the session.
+The desktop runs the session's turns in acceptEdits (its import always
+drops bypass), so requests no allow rule covers would stop at a card:
+beekeeper hook permissionrequest answers them, for beekeeper's starts only.
+The browser is the desktop's own: the import gives the session the Chrome
+permission mode skip_all_permission_checks only when the desktop allows all
+browser actions (a person's "Allow all sites" on a Claude in Chrome site
+request turns that on for every session), and otherwise each navigate to a
+site the session was not allowed on yet waits on a site request in its
+desktop row, which no hook answers. start says which mode the desktop
+recorded, and agents shows it per agent (BROWSER asks or skips). --desktop
+is kept for scripts: every start imports past the window's focus now.
 
 --harness omp starts an omp (oh-my-pi) agent instead: "omp --mode rpc"
 in yolo approval mode on --model (default: omp.model; with neither, or a
@@ -163,6 +157,11 @@ is involved and no import happens.`,
 			name := strings.TrimSpace(args[0])
 			if name == "" {
 				return usageErr("an agent needs a name")
+			}
+			// a sandboxed session's start reads its brief and gives the
+			// agent its directory through the broker, within its own lists
+			if err := a.sandboxPaths([]string{args[1]}, []string{dir}); err != nil {
+				return err
 			}
 			brief, err := readBrief(args[1])
 			if err != nil {
@@ -185,13 +184,8 @@ is involved and no import happens.`,
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(a.out, "started %s: session %s, desktop local_%s, bypassPermissions, in %s, busy with %q\n"+
-				"its first turn runs from the command line (journalctl --user -u %s); later turns are desktop turns in acceptEdits\n",
-				name, sa.id, sa.id, sa.dir, sa.task, sa.unit)
-			if err == nil && sa.deferred != nil {
-				_, err = fmt.Fprintf(a.out, "%v: not imported yet, the reopen after its first turn imports it\n", sa.deferred)
-				return err
-			}
+			_, err = fmt.Fprintf(a.out, "started %s: session %s, desktop local_%s, in %s, busy with %q\n%s\n",
+				name, sa.id, sa.id, sa.dir, sa.task, sa.turn)
 			if err == nil && sa.kept != "" {
 				_, err = fmt.Fprintf(a.out, "the desktop still shows %s\n", sa.kept)
 			}
@@ -207,14 +201,11 @@ is involved and no import happens.`,
 			if err == nil {
 				_, err = fmt.Fprintln(a.out, browserLine(sa.chrome))
 			}
-			if err == nil {
-				_, err = fmt.Fprintln(a.out, twinLine(sa.twin))
-			}
 			return err
 		},
 	}
 	c.Flags().StringVar(&model, "model", "", "the session's model (default: Claude Code's; omp: omp.model)")
-	c.Flags().StringVar(&dir, "dir", ".", "the session's working directory")
+	c.Flags().StringVar(&dir, "dir", "", "the session's working directory (default: agents.dir, else the current one)")
 	c.Flags().StringVar(&task, "task", "", "the task the roster shows it busy with (default: the brief's first line)")
 	c.Flags().StringVar(&harness, "harness", "claude", "the agent harness: claude or omp")
 	c.Flags().BoolVar(&desktop, "desktop", false, "the task needs desktop turns (the browser): import it past the desktop window's focus, as agents desktop does")
@@ -237,6 +228,11 @@ type agentStart struct {
 	by *state.Party
 	// desktop asks for its desktop turn from the start (--desktop).
 	desktop bool
+	// headless runs the brief as the session's first turn from the command
+	// line beside the import: a role's successor, whose first turn only takes
+	// the role and whose relay hands it its desktop turn. Otherwise the first
+	// turn only seeds the session and the brief runs as a desktop turn.
+	headless bool
 }
 
 // startedAgent is what startAgent started.
@@ -263,13 +259,16 @@ type startedAgent struct {
 	// focus, the person kept typing): the reopen after the first turn
 	// imports the session.
 	deferred error
+	// turn says how the task's first turn runs: a desktop turn, or why it
+	// runs headless.
+	turn string
 }
 
 // startAgent records and registers the session, starts its first turn in a
 // transient user unit and imports it into the desktop once the transcript
 // holds its first reply, which carries its model.
 func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, error) {
-	dir, err := filepath.Abs(sp.dir)
+	dir, err := a.agentDir(sp.dir)
 	if err != nil {
 		return startedAgent{}, err
 	}
@@ -329,6 +328,9 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 		return startedAgent{}, err
 	}
 	unit := "beekeeper-agent-" + id[:8]
+	if !sp.headless {
+		return a.startVisible(ctx, d, sp, bin, unit, dir, startedAgent{id: id, unit: unit, dir: dir, task: reg.task}, by)
+	}
 	self, err := os.Executable()
 	if err != nil {
 		return startedAgent{}, err
@@ -352,6 +354,80 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 		return sa, err
 	}
 	sa.restored = a.keepImport(ctx, id, sp.name, &sa)
+	return sa, nil
+}
+
+// seedNote ends a seed turn's prompt: the turn only creates the session.
+const seedNote = "beekeeper: this first turn only creates your session and has no tools. Reply with the single word ready and nothing else. " +
+	"Your task starts with the next message, a turn in the desktop, where you work it."
+
+// taskTurn is the message that starts a seeded worker's task as a desktop
+// turn.
+const taskTurn = "beekeeper: this desktop turn starts your task. Work the task of your first prompt above to the finish, under the worker rules it gives."
+
+// startVisible runs a started session in the desktop from its first turn:
+// a seed turn without tools creates the session from the command line with
+// the brief as its first prompt (the transcript, its title and model, which
+// the desktop's import reads), the desktop imports it under its name once
+// the seed ended, past the window's focus and the person's typing within
+// desktopTurnWait, and the task's first turn then runs as a desktop turn
+// (turnInDesktop). Only a desktop that cannot run it gets the turn headless,
+// as agents wake resumes a session, and sa.turn says why.
+func (a *app) startVisible(ctx context.Context, d desk, sp agentStart, bin, unit, dir string, sa startedAgent, by state.Party) (startedAgent, error) {
+	id := sa.id
+	argv := agentArgv(bin, id, sp.name, sp.model, sp.brief+"\n\n"+seedNote, "--tools", "", "--strict-mcp-config")
+	if err := launch(unit, dir, a.explicitConfig(), nil, argv); err != nil {
+		return startedAgent{}, fmt.Errorf("starting %s: %w (the start stays recorded; beekeeper agents remove %q takes it off the roster)", sp.name, err, sp.name)
+	}
+	if err := awaitReply(ctx, a.cfg.Claude.ProjectsDir, id, func() bool { return unitEnded(ctx, unit) }, replyQuiet, replyWait); err != nil {
+		return startedAgent{}, fmt.Errorf("%w, not imported into the desktop: journalctl --user -u %s", err, unit)
+	}
+	if err := awaitTurnEnd(ctx, id, replyWait); err != nil {
+		return startedAgent{}, fmt.Errorf("its seed turn: %w (journalctl --user -u %s)", err, unit)
+	}
+	var follow string
+	if sp.replaces != nil {
+		follow = sp.replaces.HostSession
+	}
+	d.urgent = func() bool { return true }
+	t, err := plat.Machine.Processes()
+	if err != nil {
+		return sa, err
+	}
+	if !plat.Opener.Running(t).IsZero() {
+		if err := d.await(ctx, d.turnWait()+awayPoll, nil); err != nil {
+			return sa, err
+		}
+		if err := a.importBeside(ctx, d, id, sp.name, follow, &sa); err != nil {
+			return sa, err
+		}
+		sa.restored = a.keepImport(ctx, id, sp.name, &sa)
+		// No other steward ran to restore a dropped title: the session's
+		// own desktop CLI, which the import warmed, sets it before its task,
+		// so the row and the roster carry its name from its first turn.
+		if sa.title != sp.name {
+			line, err := a.keepTitle(ctx, id, sp.name)
+			if err != nil {
+				line = err.Error()
+			}
+			sa.restored = strings.TrimPrefix(sa.restored+"; "+line, "; ")
+			if r, ok := claude.ReadRecord(a.cfg, "local_"+id); ok {
+				sa.title, sa.model = r.Title, r.Model
+			}
+		}
+	}
+	w := wakeTarget{name: sp.name, id: id, host: "local_" + id, dir: dir, mode: state.ModeBypass, model: sp.model}
+	line, err := a.turnInDesktop(ctx, w, taskTurn, twinWait)
+	if err == nil {
+		sa.turn = "its task runs as a desktop turn: " + line
+		_ = a.store.Log(event(by, "agents.start", "%s: %s", sp.name, sa.turn))
+		return sa, nil
+	}
+	sa.turn = fmt.Sprintf("the desktop runs no turn of it (%v): its task runs headless", err)
+	_ = a.store.Log(event(by, "agents.start", "%s: %s", sp.name, sa.turn))
+	if err := a.resumeTurn(ctx, by, w, taskTurn); err != nil {
+		return sa, err
+	}
 	return sa, nil
 }
 
@@ -558,11 +634,11 @@ func (a *app) importSession(ctx context.Context, d desk, id, follow string) (str
 	}
 	running := !plat.Opener.Running(t).IsZero()
 	// The caller waited for the window already; the link checks once more.
-	// A desktop turn's import gives the person's typing its bound again, as
-	// its first wait did, instead of failing on a keystroke in between.
+	// A desktop turn's link does not: the caller's wait gave the person's
+	// typing its bound, and a keystroke since then must not miss the import.
 	away := awayPoll
 	if d.urgent != nil && d.urgent() {
-		away = d.turnWait() + awayPoll
+		away = 0
 	}
 	prev, err := a.showBriefly(ctx, d, resumeURL(id), "local_"+id, follow, running, away, nil)
 	if err != nil {
@@ -575,18 +651,26 @@ func (a *app) importSession(ctx context.Context, d desk, id, follow string) (str
 // once it does, shows the session the window showed before again and
 // returns it; empty when there was none to go back to, or it was host or
 // follow. A running desktop gets the link only once d takes it, waiting up
-// to away: errDesktopInUse or errTyping when it did not. ready, unless nil,
+// to away (zero: the caller's wait stands): errDesktopInUse or errTyping
+// when it did not. ready, unless nil,
 // is asked right before the link opens, and its error ends the show.
 func (a *app) showBriefly(ctx context.Context, d desk, url, host, follow string, running bool, away time.Duration, ready func() error) (string, error) {
 	var prev string
 	if running {
-		if err := d.await(ctx, away, nil); err != nil {
-			return "", err
+		if away > 0 {
+			if err := d.await(ctx, away, nil); err != nil {
+				return "", err
+			}
 		}
 		prev = awaitFocusOff(ctx, a.cfg.Claude.DesktopLog, host, settleWait)
 	}
 	if ready != nil {
 		if err := ready(); err != nil {
+			return "", err
+		}
+	}
+	if running {
+		if err := a.makeRoom(ctx, host); err != nil {
 			return "", err
 		}
 	}
@@ -633,6 +717,10 @@ func (a *app) reopenSession(ctx context.Context, arg string) error {
 		return err
 	}
 	name, ok := reopens(st, arg)
+	if ok && pastRun(st, state.Party{Session: id, HostSession: "local_" + id, Name: name}, a.now) {
+		_, err := fmt.Fprintf(a.out, "reopen: %s (%s) is a relieved role run: its work ended with the relay, left closed\n", name, id)
+		return err
+	}
 	if !ok {
 		_, err := fmt.Fprintf(a.out, "reopen: %s is no start on the roster, left closed\n", id)
 		return err

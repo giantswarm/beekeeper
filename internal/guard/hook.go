@@ -66,9 +66,12 @@ var (
 	anyOwned = regexp.MustCompile(devctlOwned)
 	gated    = regexp.MustCompile(`\bgate\s+(?:--wait\s+\S+\s+)?--\s+$`)
 	// shellC: a shell's -c option up to the quote opening its command string.
-	shellC  = regexp.MustCompile(`(?:^|[\s;&|(/])(?:ba|z|da|k)?sh\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*c[a-zA-Z]*\s+(['"])`)
-	lab     = regexp.MustCompile(`(?m)` + pos + `(agentlab\s+up\b|kind\s+create\s+cluster\b)`)
-	trivial = regexp.MustCompile(`^\s*\S+(?:\s+\S+)?\s+(?:--version|-V|--help|-h|help)\s*$`)
+	shellC = regexp.MustCompile(`(?:^|[\s;&|(/])(?:ba|z|da|k)?sh\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*c[a-zA-Z]*\s+(['"])`)
+	lab    = regexp.MustCompile(`(?m)` + pos + `(agentlab\s+up\b|kind\s+create\s+cluster\b)`)
+	// labRuntime: a lab's creation or teardown, which takes the container
+	// runtime's socket the agent sandbox closes.
+	labRuntime = regexp.MustCompile(`(?m)` + pos + `(agentlab\s+(?:--lab[= ]\s*\S+\s+)?(?:up|down)\b|kind\s+(?:create|delete)\s+clusters?\b)`)
+	trivial    = regexp.MustCompile(`^\s*\S+(?:\s+\S+)?\s+(?:--version|-V|--help|-h|help)\s*$`)
 	// wrapped: the command invokes the wrapper itself, by name or path, at a
 	// command position. A wrapper path merely mentioned (ls …/memcap,
 	// m=$(ls …/memcap), M=…/memcap) is no wrapper, so pos's assignments may
@@ -217,6 +220,9 @@ func (h Hook) decide(ev event) []byte {
 	if ev.ToolName == SendMessageTool {
 		return h.sendMessage(ev.ToolInput)
 	}
+	if r := mentionRefusal(ev.ToolName, ev.ToolInput, ev.CWD); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
 	if ev.ToolName != bashTool {
 		if r := h.Outbound.toolRefusal(ev.ToolName, ev.ToolInput); r != "" {
 			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
@@ -263,6 +269,19 @@ func (h Hook) decide(ev event) []byte {
 		return h.rewrite(ev.ToolInput, cmd, gated, bg)
 	}
 
+	if h.Sandbox != nil {
+		if m := labRuntime.FindStringSubmatchIndex(cmd); m != nil {
+			var held []lease.Holder
+			if h.Leases != nil {
+				held = h.Leases()
+			}
+			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: fmt.Sprintf(
+				"Refused: `%s` needs the container runtime, which the agent sandbox closes. The host creates and tears down a lab "+
+					"whose lease you hold: `beekeeper lease up <lab>` or `beekeeper lease down <lab>`, run in the lab's directory "+
+					"(its agentlab.yaml names the lease's cluster) or anywhere for a lab agentlab knows.\nleases:\n%s",
+				strings.TrimSpace(cmd[m[2]:m[3]]), leaseLines(held))})
+		}
+	}
 	if m := lab.FindStringSubmatchIndex(cmd); m != nil {
 		running := h.Clusters()
 		target := labTarget(cmd, m, cwd)
@@ -408,16 +427,26 @@ func labTarget(cmd string, m []int, cwd string) string {
 		d = filepath.Join(cwd, d)
 	}
 	// A directory without agentlab.yaml is a new lab, whatever name it ends up with.
-	raw, err := os.ReadFile(filepath.Join(d, "agentlab.yaml")) //nolint:gosec // the lab's own configuration
+	if cl, ok := LabCluster(d); ok {
+		return cl
+	}
+	return "a new lab in " + d
+}
+
+// LabCluster is the kind cluster of the agentlab lab in dir, its
+// agentlab.yaml's clusterName (agentlab's default without one), and
+// whether dir holds an agentlab.yaml at all.
+func LabCluster(dir string) (string, bool) {
+	raw, err := os.ReadFile(filepath.Join(dir, "agentlab.yaml")) //nolint:gosec // the lab's own configuration
 	if err != nil {
-		return "a new lab in " + d
+		return "", false
 	}
 	for line := range strings.SplitSeq(string(raw), "\n") {
 		if c := clusterRe.FindStringSubmatch(line); c != nil {
-			return c[1]
+			return c[1], true
 		}
 	}
-	return "agentlab"
+	return "agentlab", true
 }
 
 func expandHome(p string) string {

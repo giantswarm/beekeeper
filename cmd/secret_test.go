@@ -27,6 +27,9 @@ const (
 	fingerprintOp = "fingerprint"
 	sopsA         = "a.sops.yaml"
 	sopsB         = "b.sops.yaml"
+	generateFlag  = "--generate"
+	ghSecret      = "secret"
+	setOp         = "set"
 )
 
 // secretApp is an app over a scratch repository with one encrypted Secret
@@ -94,8 +97,10 @@ func TestSecretOperationsReturnNoValueAndAreLogged(t *testing.T) {
 		{fingerprintOp, src},
 		{fingerprintOp, dbRef},
 		{copyOp, dbRef, dst + "#stringData.extra"},
-		{copyOp, dbRef, "--", consumer, "secret", "set", "X"},
-		{"set", dst, "stringData.generated", "--generate", "--vault", "op://Shared/gen/password"},
+		{copyOp, dbRef, "--", consumer, ghSecret, setOp, "X"},
+		{setOp, dst, "stringData.generated", generateFlag, "--vault", "op://Shared/gen/password"},
+		{setOp, dst, "stringData.local", generateFlag},
+		{setOp, dst, "stringData.fed", generateFlag, "--", consumer, ghSecret, setOp, "X"},
 		{jsonFlag, copyOp, src, filepath.Join(repo, "json.sops.yaml")},
 	} {
 		a.out = &bytes.Buffer{}
@@ -126,8 +131,8 @@ func TestSecretOperationsReturnNoValueAndAreLogged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(evs) != 12 {
-		t.Errorf("%d secret events, want 12", len(evs))
+	if len(evs) != 14 {
+		t.Errorf("%d secret events, want 14", len(evs))
 	}
 	for _, e := range evs {
 		noSecret(t, "the log", e.Detail)
@@ -149,7 +154,7 @@ func TestSecretRotateClosesTheRotationNotes(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	out, err := runSecret(a, "rotate", dbRef, "--generate")
+	out, err := runSecret(a, "rotate", dbRef, generateFlag)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,13 +183,13 @@ func TestSecretRotateClosesTheRotationNotes(t *testing.T) {
 		noSecret(t, "the log", e.Detail)
 	}
 	a.out = &bytes.Buffer{}
-	if _, err := runSecret(a, "rotate", "platform://hazel/muster/x", "--generate"); Code(err) != ExitUsage {
+	if _, err := runSecret(a, "rotate", "platform://hazel/muster/x", generateFlag); Code(err) != ExitUsage {
 		t.Errorf("--generate on a platform credential = %v, want usage", err)
 	}
 }
 
 func TestSecretCopyToSecretOnlyIntoAHeldLab(t *testing.T) {
-	a, _, _ := secretApp(t)
+	a, _, repo := secretApp(t)
 	a.cfg.LeaseDir = t.TempDir()
 	a.cfg.Resources = []string{labOne, labTwo}
 	a.cfg.Labs = map[string]string{labOne: labCluster, labTwo: labTwo}
@@ -214,7 +219,20 @@ func TestSecretCopyToSecretOnlyIntoAHeldLab(t *testing.T) {
 		}
 		noSecret(t, "the refusal", fmt.Sprint(out, err))
 	}
-	if len(applied) != 1 || applied[0] != fmt.Sprintf("kind-agentlab/%s %d", key, len(secretValue)) {
+	gen := filepath.Join(repo, "gen.sops.yaml")
+	a.out = &bytes.Buffer{}
+	if out, err := runSecret(a, setOp, gen, "data.key", generateFlag, "--length", "20", "--to-secret", "kind-agentlab-2/"+key); Code(err) != ExitRefused {
+		t.Errorf("set into a lab held by another = %q, %v, want refused", out, err)
+	}
+	if _, err := os.Stat(gen); err == nil {
+		t.Error("a refused set wrote the SOPS file")
+	}
+	a.out = &bytes.Buffer{}
+	out, err = runSecret(a, setOp, gen, "data.key", generateFlag, "--length", "20", "--to-secret", "kind-agentlab/"+key)
+	if err != nil || !strings.HasPrefix(out, "wrote "+gen+"#data.key and kind-agentlab/"+key+": 20 characters, hmac:") {
+		t.Errorf("set into the held lab answers %q, %v", out, err)
+	}
+	if len(applied) != 2 || applied[0] != fmt.Sprintf("kind-agentlab/%s %d", key, len(secretValue)) || applied[1] != "kind-agentlab/"+key+" 20" {
 		t.Errorf("applied %q", applied)
 	}
 	a.out = &bytes.Buffer{}
@@ -268,5 +286,38 @@ func TestBrokeredSecretHoldsItsFilesToTheSandbox(t *testing.T) {
 	a.out = &bytes.Buffer{}
 	if _, err := runSecret(a, copyOp, src, filepath.Join(repo, "copy.sops.yaml")); err != nil {
 		t.Errorf("a copy inside the sandbox's lists: %v", err)
+	}
+}
+
+func TestSecretSetNewSecretAndPodConsumers(t *testing.T) {
+	const newKey = "stringData.x"
+	a, tools, repo := secretApp(t)
+	a.cfg.Kube.Production = gazelle
+	file := filepath.Join(repo, "s3.sops.yaml")
+	if _, err := runSecret(a, setOp, file, "stringData.secretKey", generateFlag, "--name", "app-s3", "--namespace", "app"); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(file) //nolint:gosec // the test's scratch file
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(raw), "FAKESOPS") || len(tools.Calls) == 0 {
+		t.Fatalf("set with --name wrote no SOPS file")
+	}
+	pod := []string{kubectlBin, "exec", "-i", "--context", "teleport.example.io-gazelle", "garage-0", "--", "/garage", "json-api", "ImportKey", "-"}
+	for _, c := range []struct {
+		args []string
+		code int
+	}{
+		{append([]string{setOp, file, newKey, generateFlag, "--"}, pod...), ExitRefused},
+		{append([]string{copyOp, file + "#stringData.secretKey", "--"}, pod...), ExitRefused},
+		{[]string{setOp, file, newKey, generateFlag, "--stdin-json", "{}", "--stdin-field", "k"}, ExitUsage},
+		{[]string{setOp, filepath.Join(repo, "y.sops.yaml"), newKey, generateFlag, "--name", "y"}, ExitUsage},
+	} {
+		a.out = &bytes.Buffer{}
+		calls := len(tools.Calls)
+		if _, err := runSecret(a, c.args...); Code(err) != c.code || len(tools.Calls) != calls {
+			t.Errorf("secret %s = %v, want exit %d and no tool run", strings.Join(c.args, " "), err, c.code)
+		}
 	}
 }

@@ -64,7 +64,7 @@ func (rl role) successorBrief(name, from string) string {
 
 This first turn runs headless from the command line. In it, only take the role: run `+"`beekeeper %s start`"+`, then end the turn. Arm no Monitor, watch or background task in it: the desktop gets this session's CLI only once this turn has ended.
 
-Once the desktop runs your CLI, beekeeper's standby watch tells you so there: then run `+"`%s`"+` and follow it. Peers message you as %q.`,
+Once the desktop runs your CLI, a message tells you so there: then run `+"`%s`"+` and follow it. Peers message you as %q.`,
 		name, rl.name, rl.duty, from, rl.name, rl.handover, name)
 }
 
@@ -105,6 +105,9 @@ func (a *app) startSuccessor(ctx context.Context, rl role, from, by state.Party,
 	if rec != nil {
 		model = rec.Model
 	}
+	if dir == "" && rl.cfg(a.cfg).Dir == "" {
+		dir = a.cfg.Agents.Dir
+	}
 	if dir == "" {
 		dir = successorDir(rl.cfg(a.cfg), rec, startDir)
 	}
@@ -113,7 +116,7 @@ func (a *app) startSuccessor(ctx context.Context, rl role, from, by state.Party,
 	// end before the next relay, and the person sees the role's holder only
 	// in the desktop's sidebar.
 	_, err = a.startAgent(ctx, agentStart{id: id, by: &by, name: to.Name, brief: rl.successorBrief(to.Name, fromLabel),
-		task: fmt.Sprintf("%s as %s", rl.duty, to.Name), dir: dir, model: model, desktop: true})
+		task: fmt.Sprintf("%s as %s", rl.duty, to.Name), dir: dir, model: model, desktop: true, headless: true})
 	if err != nil {
 		a.withdrawRelay(rl, to, by)
 		return state.Party{}, "", fmt.Errorf("starting %q: %w (its relay is withdrawn)", to.Name, err)

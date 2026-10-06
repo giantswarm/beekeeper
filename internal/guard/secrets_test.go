@@ -133,7 +133,7 @@ var secretCorpus = []struct{ cmd, safe string }{
 	{"bash -c op\\ whoami", opForm},
 	{"zsh -ic 'op whoami'", opForm},
 	{"eval op whoami", opForm},
-	{`eval "$(op signin)"`, "beekeeper secret unlock"},
+	{`eval "$(op signin)"`, "signs in by itself"},
 	{"f(){ op item get x; }; f", opForm},
 	{"function f { op item get x; }; f", opForm},
 	{"if true; then op item get x; fi", opForm},
@@ -343,8 +343,49 @@ func TestSecretGuardRefusesVaultUnlocks(t *testing.T) {
 		}
 	}
 	for _, cmd := range []string{helper, "op signin", "zsh -ic vault-unlock", "./signin.sh"} {
-		if d := decide(t, h, dir, cmd, nil); !strings.Contains(d.Reason, "beekeeper secret unlock") {
-			t.Errorf("%q: the refusal does not name the person's unlock:\n%s", cmd, d.Reason)
+		if d := decide(t, h, dir, cmd, nil); !strings.Contains(d.Reason, "signs in by itself") || strings.Contains(d.Reason, "beekeeper secret unlock") {
+			t.Errorf("%q: the refusal does not name the broker's sign-in, or sends the person to a terminal:\n%s", cmd, d.Reason)
+		}
+	}
+}
+
+// Every op call is refused in an agent session, however the command line
+// reaches it: op runs in beekeeper's broker alone.
+func TestSecretGuardRefusesOp(t *testing.T) {
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"whoami.sh": "#!/bin/sh\nop whoami\n",
+		"nested.sh": "#!/bin/sh\nsh ./whoami.sh\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, cmd := range []string{
+		"op whoami",
+		"op vault list",
+		"/usr/bin/op whoami",
+		"OP_ACCOUNT=team op whoami",
+		"env OP_ACCOUNT=team op vault list",
+		"command op whoami",
+		"exec op whoami",
+		"sudo -u teemow op whoami",
+		"timeout 30 op whoami",
+		"nohup op whoami",
+		"setsid op whoami",
+		"echo x | xargs op whoami",
+		"bash -c 'op whoami'",
+		"zsh -ic 'op vault list'",
+		"eval 'op whoami'",
+		"echo $(op whoami)",
+		"f(){ op whoami; }; f",
+		"sh whoami.sh",
+		"./nested.sh",
+		"source whoami.sh",
+	} {
+		d := decide(t, hook(), dir, cmd, nil)
+		if d == nil || d.PermissionDecision != decisionDeny {
+			t.Errorf("%q is not refused: %+v", cmd, d)
 		}
 	}
 }

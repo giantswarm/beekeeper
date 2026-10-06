@@ -13,60 +13,110 @@ import (
 
 // The vault session of secret.session lives in one process only: the
 // broker on the host (beekeeper sandbox broker), outside every agent
-// session. It holds the session in memory, never in a file, a keyring entry
-// or an environment an agent reads, and gives it to its own op calls alone.
-// The person hands it over with beekeeper secret unlock in their own
-// terminal; no agent command opens or completes the unlock.
+// session. It signs in by itself through secret.signinCommand, when it
+// starts and whenever a call waits on the vault, holds the session in
+// memory for secret.sessionLifetime, never in a file, a keyring entry or an
+// environment an agent reads, and gives it to its own op calls alone. No
+// agent command opens or completes the sign-in.
 
 // Locked is the message of a call that waits on the person's unlock.
-const Locked = "vault locked: waiting for the person's approval (they unlock it with `beekeeper secret unlock` in their own terminal)"
+const Locked = "vault locked: waiting for the broker's sign-in"
 
 // ErrLocked is a vault the person did not unlock in time.
 var ErrLocked = errors.New("vault locked")
 
-// Keeper holds the vault session in memory.
+// Keeper holds the vault session in memory, for its lifetime at most.
 type Keeper struct {
-	mu    sync.Mutex
-	env   string // OP_SESSION_<id>=<token>
-	since time.Time
-	// unlocked is closed when a session arrives and replaced by the next
+	mu       sync.Mutex
+	unlocked bool
+	env      string // OP_SESSION_<id>=<token>
+	since    time.Time
+	until    time.Time
+	lifetime time.Duration
+	// end locks the session when its lifetime passes.
+	end *time.Timer
+	// changed hears the state after every unlock and lock.
+	changed func(VaultState)
+	// ready is closed when the vault unlocks and replaced by the next
 	// lock, so that every waiting call wakes at once.
-	unlocked chan struct{}
+	ready chan struct{}
 }
 
-// NewKeeper is a locked keeper.
-func NewKeeper() *Keeper { return &Keeper{unlocked: make(chan struct{})} }
+// NewKeeper is a locked keeper that holds a session for lifetime and tells
+// changed (nil: no one) each new state.
+func NewKeeper(lifetime time.Duration, changed func(VaultState)) *Keeper {
+	if changed == nil {
+		changed = func(VaultState) {}
+	}
+	return &Keeper{lifetime: lifetime, changed: changed, ready: make(chan struct{})}
+}
 
-// Unlock takes the session the person's sign-in answered.
+// Unlock takes the session a sign-in printed, until its lifetime passes.
 func (k *Keeper) Unlock(name, token string, now time.Time) error {
 	if !sessionName.MatchString(name) || token == "" || strings.ContainsAny(token, "\x00\n") {
 		return errors.New("no op session: want OP_SESSION_<id> and its token")
 	}
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	wasLocked := k.env == ""
-	k.env, k.since = name+"="+token, now
-	if wasLocked {
-		close(k.unlocked)
-	}
+	k.unlock(name+"="+token, now)
 	return nil
+}
+
+func (k *Keeper) unlock(env string, now time.Time) {
+	k.mu.Lock()
+	if !k.unlocked {
+		close(k.ready)
+	}
+	k.unlocked, k.env, k.since, k.until = true, env, now, now.Add(k.lifetime)
+	if k.end != nil {
+		k.end.Stop()
+	}
+	k.end = time.AfterFunc(k.lifetime, func() { k.lockSession(now) })
+	st := k.stateLocked()
+	k.mu.Unlock()
+	k.changed(st)
 }
 
 // Lock forgets the session: the person's lock, or one op no longer takes.
 func (k *Keeper) Lock() {
 	k.mu.Lock()
-	defer k.mu.Unlock()
-	if k.env != "" {
-		k.env, k.since = "", time.Time{}
-		k.unlocked = make(chan struct{})
-	}
+	k.lockLocked()
 }
 
-// Status is whether the keeper holds a session, and since when.
-func (k *Keeper) Status() (bool, time.Time) {
+// lockSession forgets the session that unlocked at since, at the end of its
+// lifetime; a later session stays.
+func (k *Keeper) lockSession(since time.Time) {
+	k.mu.Lock()
+	if !k.since.Equal(since) {
+		k.mu.Unlock()
+		return
+	}
+	k.lockLocked()
+}
+
+// lockLocked forgets the session with k.mu held, and releases it.
+func (k *Keeper) lockLocked() {
+	if !k.unlocked {
+		k.mu.Unlock()
+		return
+	}
+	k.unlocked, k.env, k.since, k.until = false, "", time.Time{}, time.Time{}
+	if k.end != nil {
+		k.end.Stop()
+	}
+	k.ready = make(chan struct{})
+	st := k.stateLocked()
+	k.mu.Unlock()
+	k.changed(st)
+}
+
+// State is whether the keeper holds a session, since when and until when.
+func (k *Keeper) State() VaultState {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	return k.env != "", k.since
+	return k.stateLocked()
+}
+
+func (k *Keeper) stateLocked() VaultState {
+	return VaultState{Unlocked: k.unlocked, Since: k.since, Until: k.until}
 }
 
 // Env is the session's environment entry for op, "" while locked.
@@ -79,7 +129,7 @@ func (k *Keeper) Env() string {
 // Wait blocks until the keeper holds a session or ctx ends (ErrLocked).
 func (k *Keeper) Wait(ctx context.Context) error {
 	k.mu.Lock()
-	ch := k.unlocked
+	ch := k.ready
 	k.mu.Unlock()
 	select {
 	case <-ch:

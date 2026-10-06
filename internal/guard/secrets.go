@@ -51,7 +51,8 @@ type leak struct {
 // secretOps names the beekeeper secret operations every refusal points to.
 const secretOps = "Equality: `beekeeper secret compare <a> <b>` or `beekeeper secret fingerprint <ref>`. " +
 	"Changes: `beekeeper secret copy <src.sops.yaml> <dst.sops.yaml> [--name n --namespace ns]`, " +
-	"`copy <ref> <file#path>`, `copy <ref> -- <consumer>`, `set <file> <path> --generate --vault op://…`. " +
+	"`copy <ref> <file#path>`, `copy <ref> -- <consumer>`, `set <file> <path> --generate [--name n --namespace ns] [--vault op://…] [--to-secret … | -- <consumer>]`; " +
+	"a consumer reads the value on stdin, in a pod through `kubectl exec -i --context <context> <pod> -- <consumer>` (`--stdin-json`/`--stdin-field` wrap it in a JSON request). " +
 	"Rotations: `beekeeper secret rotate op://… --generate` (a value beekeeper made), `rotate op://…` (a value its issuer " +
 	"rotated into the vault), `rotate platform://<installation>/<capability>/<name> --reason …` (a platform manager credential)."
 
@@ -62,9 +63,9 @@ func (l leak) reason() string {
 	}
 	if l.unlock {
 		return "Refused: `" + at + "` (" + l.what + ") signs in to or unlocks a vault from an agent session. No agent session holds " +
-			"a vault session or opens one: it lives in beekeeper's broker alone, and the person unlocks it with `beekeeper secret unlock` " +
-			"in their own terminal. A `beekeeper secret` call that needs the vault waits for that (`vault locked: waiting for the person's " +
-			"approval`), so run the operation itself:\n" + secretOps
+			"a vault session or opens one: it lives in beekeeper's broker alone, which signs in by itself. A `beekeeper secret` call " +
+			"that needs the vault waits for that sign-in (`vault locked: waiting for the broker's sign-in`), so run the operation " +
+			"itself:\n" + secretOps
 	}
 	return "Refused: `" + at + "` (" + l.what + ") would put secret values where an agent can read them: the transcript " +
 		"and from there the model API, a file, a variable, a hash or a diff. Only key names, metadata and lengths reach an agent, " +

@@ -179,7 +179,10 @@ machine has a supervisor at all times: the role moves to a successor by relay an
   `/register-agent` takes one task by `beekeeper agents assign`. A message to an agent whose CLI
   may have stopped is `beekeeper agents wake <agent> "<message>"`, never a `SendMessage` to its
   `local_` id, which the desktop caps when nobody types in the sender's session. Done, an agent
-  reports and runs `agents idle --done`: the watch's doctor takes it off the roster and archives
+  reports with `agents idle --done`, whose required `--report` the watch prints as `WORKER REPORT`
+  and whose `--problem` lines as `PROBLEM FOUND`: each finding, and each one a worker messages on
+  the way, becomes an issue in its owning repository and a worker. `PARKED ON A PERSON` goes to the
+  guide, who tells the person. The doctor takes the agent off the roster and archives
   its session, as it does with relieved role holders and idle entries whose CLI is gone a day
   (`beekeeper doctor --dry-run` lists them); none of it is a note for the person. Briefs are standalone, because every agent
   starts on an empty context. The checkout the sessions load their project rules and skills from
@@ -206,8 +209,9 @@ a numbered run, "Supervisor run N": its desktop title, roster name and the name 
   holds, grants, lane seeds); a standing rule this watch agreed on is a pinned note (`beekeeper note
   add --pin`), which every hand-over carries. Then `beekeeper supervisor relay` starts "Supervisor
   run N+1" and opens the relay to it. Its headless first turn only takes the role with `beekeeper
-  supervisor start`, which tells every running agent the new name; the standby unit then resumes
-  it in its desktop CLI, where it reads `beekeeper handover --prompt` (one part in full: `--section
+  supervisor start`, which tells every running agent the new name. Once that turn ended, the
+  relay prints one SendMessage to the successor's `local_` id: this session makes exactly that
+  call, which has the desktop start the successor's CLI, where it reads `beekeeper handover --prompt` (one part in full: `--section
   <name>`), arms its watch and acknowledges by name. A decision listed there as answered is not
   asked again. Once `beekeeper supervisor
   status` exits 4 in this session, it is relieved. A relay not taken expires after

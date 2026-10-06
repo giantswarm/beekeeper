@@ -57,7 +57,7 @@ func TestStandbyResumesASuccessorWhoseReopenWaitsOnTheFocus(t *testing.T) {
 	w.stand = standbyWatch{
 		turning: unitsTurning,
 		revive: func(_ context.Context, _ role, holder state.Party, msg string) error {
-			if !holder.Is(run) || !strings.Contains(msg, "this headless turn keeps") {
+			if !holder.Is(run) || !strings.Contains(msg, "this desktop turn keeps") {
 				t.Errorf("revive %q: %q", holder.Name, msg)
 			}
 			revived.Add(1)
@@ -74,9 +74,9 @@ func TestStandbyResumesASuccessorWhoseReopenWaitsOnTheFocus(t *testing.T) {
 	w.pending(context.Background(), nil)
 	eventually(2*time.Second, func() bool { return revived.Load() == 1 && !w.stand.starting.Load() })
 	if n := revived.Load(); n != 1 {
-		t.Fatalf("%d headless resumes, want 1:\n%s", n, out)
+		t.Fatalf("%d resumes, want 1:\n%s", n, out)
 	}
-	if l := out.String(); !strings.Contains(l, `SUPERVISOR GONE: "Supervisor run 67"`) || !strings.Contains(l, "resuming it headless") {
+	if l := out.String(); !strings.Contains(l, `SUPERVISOR GONE: "Supervisor run 67"`) || !strings.Contains(l, "having the desktop start its CLI") {
 		t.Errorf("watch lines:\n%s", l)
 	}
 }
@@ -362,4 +362,17 @@ func (o *importingOpener) Open(ctx context.Context, url string, running bool) er
 	}
 	o.machine.imported = true
 	return o.recordingOpener.Open(ctx, url, running)
+}
+
+// A steward's send request names the desktop's session messaging, the
+// holder's desktop id and the message word for word.
+func TestSendRequestDeliversTheMessageThroughTheDesktop(t *testing.T) {
+	host := "local_" + runSixtySeven
+	msg := supervisorRole.resumeMessage("the desktop runs your CLI now")
+	got := sendRequest(host, msg)
+	for _, want := range []string{sendTool, `session_id "` + host + `"`, msg} {
+		if !strings.Contains(got, want) {
+			t.Errorf("request lacks %q:\n%s", want, got)
+		}
+	}
 }

@@ -204,9 +204,16 @@ keeps no value: the program, its subcommands and the flag names.
 What a watch has said is kept per caller (seen.watch.<caller>.json): a
 restarted watch of the same session says no open condition, runaway or
 stale lease again, only its end or what is new. Runs until killed. --once
-polls once, keeps no mark and says every condition it finds.`,
+polls once, keeps no mark and says every condition it finds.
+
+In the agent sandbox, which closes the person's kubeconfig and Teleport
+login, the user bus and the notification service, the host's broker runs
+the watch as the session, in a scope of its own, and streams its lines
+back for as long as the sandboxed command runs: a Monitor reads them as
+it reads a watch on the host, and stopping it stops the watch.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			ownScope("watch", brokeredWatchCap)
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			w := a.newWatcher(standby, !once)
@@ -631,6 +638,22 @@ func (w *watcher) clearMissing(prefix string, found map[string]bool) {
 	}
 }
 
+// drop forgets each condition said under prefix that found no longer holds,
+// without an ENDED line, and answers them.
+func (w *watcher) drop(prefix string, found map[string]bool) map[string]condition {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	gone := map[string]condition{}
+	for k, c := range w.active {
+		if strings.HasPrefix(k, prefix) && !found[k] {
+			gone[k] = c
+			delete(w.active, k)
+			w.dirty = true
+		}
+	}
+	return gone
+}
+
 // condition is a lasting condition a watch has said: since when, and the
 // line's head that names it.
 type condition struct {
@@ -656,7 +679,7 @@ func (a *app) newWatcher(standby, keep bool) *watcher {
 	if keep {
 		w.dues = relayDues{}
 	}
-	w.stand = standbyWatch{send: a.peerSend, open: plat.Opener.Open, succeed: a.succeedFromWatch, revive: a.reviveFromWatch, turning: unitsTurning, reopening: unitsReopening}
+	w.stand = standbyWatch{send: a.peerSend, open: plat.Opener.Open, succeed: a.succeedFromWatch, revive: a.reviveFromWatch, turning: unitsTurning, reopening: unitsReopening, importRow: a.importRowFromWatch}
 	if me, err := a.caller(); keep && err == nil {
 		w.markFile = "seen.watch." + fileKey(me) + ".json"
 		var m watchMark
@@ -1086,31 +1109,64 @@ func (w *watcher) teleport(ctx context.Context) {
 	}
 }
 
-// vaultKey starts the condition key of a call waiting on the vault.
-const vaultKey = "vault "
+// vaultKey starts the condition key of a call waiting on the vault, and
+// vaultUnlockedKey is the broker's approval.
+const (
+	vaultKey         = "vault "
+	vaultUnlockedKey = "vault-unlocked"
+	vaultReadKey     = "vault-read"
+	vaultSigninKey   = "vault-signin"
+)
 
-// vaultWaits says each call that waits on the person's unlock of the vault
-// (secret.session), one VAULT LOCKED line naming who waits on what, and one
-// ENDED line once it goes on or gives up. Nothing asks the person.
+// vaultWaits says the vault's state (secret.session): one VAULT UNLOCKED
+// line while the broker holds the session, until when, and its ENDED line
+// when the broker forgets it; a VAULT SIGN-IN FAILED line with the broker's
+// reason; one VAULT LOCKED line for each call that waits on the sign-in,
+// and once it goes on its ENDED line, or a line that it timed out with the
+// vault still locked. Nothing asks the person.
 func (w *watcher) vaultWaits() {
 	if !w.cfg.Secret.Session {
 		return
 	}
-	path, err := secret.WaitsPath()
+	statePath, err := secret.StatePath()
 	if err != nil {
 		return
 	}
-	ws, err := secret.ReadWaits(path)
+	st, err := secret.ReadState(statePath)
 	if err != nil {
-		w.emit(vaultKey+"read", "cannot read the vault's waiting calls: %v", err)
+		w.emit(vaultReadKey, "cannot read the vault's state: %v", err)
 		return
 	}
+	w.check(vaultUnlockedKey, st.Unlocked, "VAULT UNLOCKED: the broker holds the vault session since %s until %s",
+		st.Since.Local().Format("15:04"), st.Until.Local().Format("15:04"))
+	w.check(vaultSigninKey, st.Error != "", "VAULT SIGN-IN FAILED: %s", st.Error)
+	waitsPath, err := secret.WaitsPath()
+	if err != nil {
+		return
+	}
+	ws, err := secret.ReadWaits(waitsPath)
+	if err != nil {
+		w.emit(vaultReadKey, "cannot read the vault's waiting calls: %v", err)
+		return
+	}
+	w.clear(vaultReadKey)
 	found := map[string]bool{}
 	for _, v := range ws {
 		key := vaultKey + v.Who + " " + v.Ref
 		found[key] = true
-		w.emit(key, "VAULT LOCKED: %s waits on %s since %s; the person unlocks it with beekeeper secret unlock in their own terminal",
+		w.emit(key, "VAULT LOCKED: %s waits on %s since %s; the broker signs in",
 			v.Who, v.Ref, v.Since.Local().Format("15:04"))
+	}
+	if !st.Unlocked {
+		// a call gone while the vault is locked gave up: no ENDED line
+		for key, c := range w.drop(vaultKey, found) {
+			who, ref := key[len(vaultKey):], ""
+			if i := strings.LastIndexByte(who, ' '); i >= 0 {
+				who, ref = who[:i], who[i+1:]
+			}
+			w.emitNow("vault", "VAULT LOCKED: %s's call on %s timed out (seen waiting since %s), still locked",
+				who, ref, c.Since.Local().Format("15:04"))
+		}
 	}
 	w.clearMissing(vaultKey, found)
 }
@@ -1401,6 +1457,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		for _, rl := range roles {
 			w.relayOverdue(ctx, rl, st, sessions)
 		}
+		w.importRows(ctx, st)
 	}
 	if w.standby && supervised {
 		w.resumeRestarted(ctx, supervisorRole, st, sessions)
@@ -1443,6 +1500,8 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		seen = seen || touched
 		pl, pe := firePending(st, sessions, w.now)
 		lines, evs = append(lines, pl...), append(evs, pe...)
+		ppl, ppe := parkedOnPerson(st, w.cfg.Guide.Person, w.now)
+		lines, evs = append(lines, ppl...), append(evs, ppe...)
 		for _, e := range ce {
 			lines = append(lines, fmt.Sprintf("SUPERVISOR RESTARTED: %q, %s; it keeps the role", e.By.Name, e.Detail))
 		}
@@ -1734,6 +1793,49 @@ func firePending(st *state.State, sessions []*claude.Session, now time.Time) ([]
 		r.Ended = now.UTC()
 		lines = append(lines, fmt.Sprintf("SESSION ENDED: %q, which %s: re-query %s", r.Session.Name, truncate(recordText(*r), 200), r.Issue))
 		evs = append(evs, event(watchParty, "session.ended", "%s: %s", r.Session.Name, recordText(*r)))
+	}
+	for _, r := range st.WorkerReports {
+		lines = append(lines, reportLines(r)...)
+	}
+	st.WorkerReports = nil
+	return lines, evs
+}
+
+// reportLines are a worker's final report and each problem it found, a line
+// of its own for the supervisor to file as an issue and hand to a worker.
+func reportLines(r state.WorkerReport) []string {
+	var lines []string
+	if r.Text != "" {
+		l := fmt.Sprintf("WORKER REPORT by %q", r.By.Name)
+		if r.Task != "" {
+			l += " (task: " + truncate(r.Task, 80) + ")"
+		}
+		lines = append(lines, l+": "+truncate(r.Text, 2000))
+	}
+	for _, p := range r.Problems {
+		lines = append(lines, fmt.Sprintf("PROBLEM FOUND by %q: %s; file it and hand it to a worker", r.By.Name, truncate(p, 400)))
+	}
+	return lines
+}
+
+// parkedOnPerson says once per park which agents parked on a person (a note,
+// the person's or a colleague's answer, a review): the supervisor carries it
+// to the guide, who tells the person.
+func parkedOnPerson(st *state.State, person string, now time.Time) ([]string, []state.Event) {
+	var lines []string
+	var evs []state.Event
+	for i := range st.Agents {
+		ag := &st.Agents[i]
+		p := ag.Park
+		if p == nil || !p.Told.IsZero() {
+			continue
+		}
+		if _, note := parkNote(p.On); !note && parkedOn(p.Waits, person) == "" {
+			continue
+		}
+		p.Told = now.UTC()
+		lines = append(lines, fmt.Sprintf("PARKED ON A PERSON: %q %s; tell the guide, who tells %s", ag.Name, parkedText(p, now), cmp.Or(person, "the person")))
+		evs = append(evs, event(watchParty, "agents.parked-on-person", "%s: %s", ag.Name, p.Waits))
 	}
 	return lines, evs
 }

@@ -75,7 +75,7 @@ kill in it as a test kill, not a build's.`,
 			o := guard.Options{Max: env("MEMCAP_MAX", a.cfg.MemcapMax(ramMiB())), Swap: env("MEMCAP_SWAP", "0"),
 				SlotDir: a.cfg.Memcap.SlotDir, Slots: a.cfg.Memcap.Slots, Stderr: os.Stderr, Record: a.runRecorder(),
 				Test: os.Getenv("MEMCAP_TEST") == "1"}
-			if os.Getenv(sandbox.Env) != "" {
+			if inSandbox() {
 				exe, _ := os.Executable()
 				o.Sandbox = sandbox.Capper{Dir: sandbox.SpoolDir(a.cfg.StateDir), Exe: exe}
 			}
@@ -320,7 +320,7 @@ on PATH, and with agents.shell.globs literal (the default) an unmatched glob
 stays as written instead of failing the command (zsh's "no matches found").
 The person's interactive setup stays theirs; an agent's commands are written
 for the plain tools. agents.shell.path goes first on PATH, except in the
-agent sandbox, where gh acts with the broker's masked GitHub login instead
+agent sandbox, where gh reaches GitHub through the broker's egress proxy instead
 of a gh link to devctl. It replaces only its own block, so other hooks' lines
 stay, and prints nothing. beekeeper install registers it in
 ~/.claude/settings.json:
@@ -337,7 +337,7 @@ stay, and prints nothing. beekeeper install registers it in
 			sh := a.cfg.Agents.Shell
 			path := sh.Path
 			if os.Getenv(sandbox.Env) != "" {
-				path = nil // gh takes the masked login; a gh link to devctl would read the keychain the sandbox closes
+				path = nil // gh goes through the egress proxy; a gh link to devctl would read the keychain the sandbox closes
 			}
 			unalias := append(slices.Clone(sh.Unalias), a.cfg.Secret.UnlockCommands...)
 			return guard.WritePrelude(env, guard.Prelude(unalias, sh.Globs == config.GlobsLiteral, path))

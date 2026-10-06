@@ -151,6 +151,7 @@ func TestLoadRejects(t *testing.T) {
 		"age without match":    "secret: {ageIdentities: [{ref: op://V/i/f}]}",
 		"age bad recipient":    "secret: {ageIdentities: [{recipient: ssh-ed25519, ref: op://V/i/f}]}",
 		"age without op ref":   "secret: {ageIdentities: [{recipient: age1x, ref: ~/key.txt}]}",
+		"age relative file":    "secret: {ageIdentities: [{recipient: age1x, ref: \"file://key.txt\"}]}",
 		"age bad pathRegex":    "secret: {ageIdentities: [{pathRegex: \"[\", ref: op://V/i/f}]}",
 		"nameless board step":  "board: {order: [{status: [backlog]}]}",
 		"search with fields":   "board: {order: [{name: q, search: \"repo:o/r\", status: [backlog]}]}",
@@ -162,6 +163,21 @@ func TestLoadRejects(t *testing.T) {
 		if _, err := Load(p); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+func TestAgeIdentityRefs(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "c.yaml")
+	raw := "secret: {ageIdentities: [{recipient: age1x, ref: op://V/i/f}, {pathRegex: /repo/, ref: \"file:///home/me/keys.txt\"}]}"
+	if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Secret.AgeIdentities[1].Ref; got != "file:///home/me/keys.txt" {
+		t.Errorf("file ref = %q", got)
 	}
 }
 

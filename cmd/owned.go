@@ -365,6 +365,11 @@ func lastLine(path string) string {
 	if err != nil {
 		return ""
 	}
-	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	return lastOf(string(raw))
+}
+
+// lastOf is the last non-empty line of s, shortened.
+func lastOf(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
 	return truncate(lines[len(lines)-1], 200)
 }

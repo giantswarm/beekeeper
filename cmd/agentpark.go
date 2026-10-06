@@ -142,7 +142,7 @@ park. An agent without a task is refused: it has nothing to wait for.`,
 
 func (a *app) agentResumeCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "resume <agent>",
+		Use:   agentResumeName + " <agent>",
 		Short: "Resume a parked agent with what settled its wait, or by hand",
 		Long: `resume ends an agent's park (agents park) and wakes it, as agents wake
 does: by name to a running CLI, else headless. Its turn carries what

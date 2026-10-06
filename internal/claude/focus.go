@@ -88,3 +88,19 @@ func lastFocus(log []byte) string {
 	}
 	return string(id)
 }
+
+// DesktopCap is the cap of CLIs the desktop's governor last named in its
+// log ("at cap=<n>"); false when the log names none.
+func DesktopCap(logPath string) (int, bool) {
+	buf, err := logTail(logPath)
+	if err != nil {
+		return 0, false
+	}
+	var n int
+	for _, m := range governorLine.FindAllSubmatch(buf, -1) {
+		if len(m[2]) > 0 {
+			n, _ = strconv.Atoi(string(m[2]))
+		}
+	}
+	return n, n > 0
+}

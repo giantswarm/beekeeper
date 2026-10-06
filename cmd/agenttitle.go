@@ -433,6 +433,18 @@ func relieved(st *state.State, p state.Party) bool {
 	})
 }
 
+// pastRun reports whether p is a role's past run: a taken relay relieved it
+// and it holds no role again, and no open relay names it. Its session's work
+// ended with the relay: nothing resumes or reopens it.
+func pastRun(st *state.State, p state.Party, now time.Time) bool {
+	for _, rl := range roles {
+		if rel := rl.get(st).Relay; rel.Open(now) && rel.To.Is(p) {
+			return false
+		}
+	}
+	return relieved(st, p)
+}
+
 // roleKeeps reports whether p's desktop session stays for its role: p holds
 // or held one and no taken relay relieved it. A relieved run's session is
 // archived like a finished worker's, which frees its desktop CLI slot.
@@ -446,7 +458,13 @@ const permissionPromptTool = "--permission-prompt-tool"
 // returns its peer socket, the address a message reaches it by whatever its
 // title; empty when none came.
 func desktopSocket(ctx context.Context, id string) string {
-	ctx, cancel := context.WithTimeout(ctx, twinWait)
+	return desktopSocketWithin(ctx, id, twinWait)
+}
+
+// desktopSocketWithin is desktopSocket waiting up to wait; zero: it looks
+// once.
+func desktopSocketWithin(ctx context.Context, id string, wait time.Duration) string {
+	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()

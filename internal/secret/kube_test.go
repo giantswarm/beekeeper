@@ -11,9 +11,15 @@ import (
 )
 
 const (
-	otherVaultRef = "op://Private/x/y"
-	kagentNS      = "kagent"
-	labContext    = "kind-agentlab"
+	otherVaultRef  = "op://Private/x/y"
+	kagentNS       = "kagent"
+	labContext     = "kind-agentlab"
+	gazelleContext = "teleport.giantswarm.io-gazelle"
+	alnumSet       = "alnum"
+	hexSet         = "hex"
+	catCmd         = "cat"
+	secretWord     = "secret"
+	setWord        = "set"
 )
 
 func TestParseKubeTarget(t *testing.T) {
@@ -30,7 +36,7 @@ func TestParseKubeTarget(t *testing.T) {
 			t.Errorf("%q parsed", bad)
 		}
 	}
-	if c := (secret.KubeTarget{Context: "teleport.giantswarm.io-gazelle"}).KindCluster(); c != "" {
+	if c := (secret.KubeTarget{Context: gazelleContext}).KindCluster(); c != "" {
 		t.Errorf("a non-kind context names cluster %q", c)
 	}
 }
@@ -73,7 +79,7 @@ func TestCopyToSecretOnlyIntoAKindContext(t *testing.T) {
 	o := ops(tools)
 	o.Apply = func(context.Context, []byte, secret.KubeTarget, []byte) error { t.Error("applied"); return nil }
 	_, err := o.CopyToSecret(context.Background(), secret.Ref{Op: vaultRef},
-		secret.KubeTarget{Context: "teleport.giantswarm.io-gazelle", Namespace: kagentNS, Name: "x", Key: "k"})
+		secret.KubeTarget{Context: gazelleContext, Namespace: kagentNS, Name: "x", Key: "k"})
 	if err == nil || !strings.Contains(err.Error(), "kind-<cluster>") {
 		t.Errorf("a non-kind context = %v", err)
 	}
