@@ -211,6 +211,13 @@ A line marked gitleaks:allow is skipped. An op item or document create or
 edit, or a vault kv put or patch, that an outbound.storeDeny rule matches is
 refused. The connector tools need "|mcp__.*" in the matcher.
 
+A Claude in Chrome call (mcp__claude-in-chrome__*) in a desktop turn of a
+session beekeeper agents start started in bypass (it runs in acceptEdits
+now) is refused, naming beekeeper browse: Claude Desktop holds such a
+session's navigate to a site it was not allowed on yet for a person's site
+approval, which no hook answers. Its headless turns and every other
+session's browser calls pass.
+
 An AskUserQuestion call is refused in every session but the guide's (the
 one beekeeper guide names): the agent files beekeeper note add --for
 <guide.person> and carries on.
@@ -263,7 +270,8 @@ Register it in ~/.claude/settings.json:
 			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, CheckQuestion: checkQuestion, Role: a.roleTarget, Peer: a.desktopPeer, Absent: a.absentPeer,
 				Project: os.Getenv("CLAUDE_PROJECT_DIR"), Reads: a.firstReads,
 				Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(),
-				ModelServer: a.modelServer, ConfigErr: cfgErr, Sandbox: sandboxed}
+				ModelServer: a.modelServer, ConfigErr: cfgErr, Sandbox: sandboxed,
+				Started: func(session string) bool { _, ok := a.bypassStart(session); return ok }}
 			if h.ConfigErr == nil {
 				h.Shell, h.Production, h.ContextHint = a.cfg.Shell, a.cfg.Kube.Production, a.cfg.Kube.Context("<installation>")
 				h.MaxLabs = func() int { return a.cfg.KindClusters(ramMiB()) }

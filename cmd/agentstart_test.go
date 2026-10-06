@@ -71,7 +71,7 @@ func TestBypassStartNeedsTheRecordedMode(t *testing.T) {
 
 func TestAgentArgvAndBriefTask(t *testing.T) {
 	got := agentArgv("/usr/bin/claude", "id-1", "test: w", "haiku", "-starts with a dash")
-	want := []string{"/usr/bin/claude", "-p", "--session-id", "id-1", "--permission-mode", "bypassPermissions", "-n", "test: w", "--model", "haiku", "--", "-starts with a dash"}
+	want := []string{"/usr/bin/claude", "-p", "--session-id", "id-1", permissionModeFlag, "bypassPermissions", "-n", "test: w", "--model", "haiku", "--", "-starts with a dash"}
 	if !slices.Equal(got, want) {
 		t.Errorf("argv = %q", got)
 	}

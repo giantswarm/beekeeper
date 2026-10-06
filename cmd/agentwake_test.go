@@ -68,9 +68,14 @@ func TestResolveWake(t *testing.T) {
 func TestWakeArgv(t *testing.T) {
 	const name, model, id = "test: waker", "sonnet", "w-1"
 	got := wakeArgv("/usr/bin/claude", wakeTarget{name: name, id: id, mode: state.ModeBypass, model: model}, "-a message with a dash")
-	want := []string{"/usr/bin/claude", "-p", resumeFlag, id, "--permission-mode", state.ModeBypass, "-n", name, "--model", model, "--", "-a message with a dash"}
+	want := []string{"/usr/bin/claude", "-p", resumeFlag, id, permissionModeFlag, state.ModeBypass, "-n", name, "--model", model, chromeFlag, "--", "-a message with a dash"}
 	if !slices.Equal(got, want) {
 		t.Errorf("wakeArgv = %q, want %q", got, want)
+	}
+	// Only a bypass turn gets the CLI's own Chrome connection: a role
+	// holder resumed in its recorded mode does not.
+	if got := wakeArgv("claude", wakeTarget{id: id, mode: "acceptEdits"}, "m"); slices.Contains(got, "--chrome") {
+		t.Errorf("wakeArgv in acceptEdits = %q, want no --chrome", got)
 	}
 	a, b := wakeUnit("0123456789ab"), wakeUnit("0123456789ab")
 	if a == b || !strings.HasPrefix(a, "beekeeper-wake-01234567-") || !strings.HasPrefix(b, "beekeeper-wake-01234567-") {

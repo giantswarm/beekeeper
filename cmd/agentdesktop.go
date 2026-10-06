@@ -18,10 +18,12 @@ func (a *app) agentDesktopCmd() *cobra.Command {
 		Use:   "desktop [agent]",
 		Short: "Ask for an agent's desktop turn: its import goes ahead past the desktop window's focus",
 		Long: `Asks for the desktop turn of an agent beekeeper started, by default the
-calling one: a turn that needs the desktop's tools (the Claude in Chrome
-tools exist only in a desktop CLI, never in a headless turn of agents start
-or agents wake). A worker whose headless turn ends with its next step in the
-browser runs it before that turn ends.
+calling one: a turn that needs the desktop's own tools. The browser does
+not: a headless turn of agents start or agents wake has the Claude in
+Chrome tools through the CLI's own connection, which never waits on a site
+approval, and a desktop turn runs its browser steps through beekeeper
+browse. A worker whose headless turn ends with its next step in the
+desktop runs it before that turn ends.
 
 The import or reopen that shows the agent in the desktop then does not wait
 for the desktop's window to lose the focus: it waits for the person's typing
@@ -213,7 +215,7 @@ func importStatus(ag state.Agent, now time.Time) string {
 func noCLI(ag state.Agent, now time.Time) string {
 	s := fmt.Sprintf("no CLI of %q runs; %s", ag.Name, importStatus(ag, now))
 	if !ag.Import.Pending(now) {
-		s += fmt.Sprintf(": `beekeeper agents desktop %q` shows it in the desktop (its browser tools), `beekeeper agents wake %q \"<message>\"` resumes it headless", ag.Name, ag.Name)
+		s += fmt.Sprintf(": `beekeeper agents desktop %q` shows it in the desktop, `beekeeper agents wake %q \"<message>\"` resumes it headless", ag.Name, ag.Name)
 	}
 	return s
 }

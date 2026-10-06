@@ -1415,15 +1415,22 @@ written under the state lock before the session existed.
 **The browser is the desktop's, not a permission request.** Claude in Chrome's site requests
 (`browser:navigate`, one per session and site) are held by Claude Desktop itself, in the session's
 desktop row; Claude Code's permission layer never sees them, so neither `bypassPermissions` nor the
-hook answers them. The import gives a start the Chrome permission mode
-`skip_all_permission_checks` only when the desktop allows all browser actions, a desktop-wide
-choice a person makes with "Allow all sites" on one site request; otherwise it records no Chrome
-mode, and each navigate to a site the session was not allowed on yet waits for a person (with
-nobody there, until the desktop aborts it hours later and the model reads "Claude in Chrome is not
-connected"). Read-only calls such as `tabs_context_mcp` never ask. beekeeper does not raise the mode
-itself: switching another session's permissions takes the person's approval in the desktop.
-`agents start` says which Chrome mode the desktop recorded, and `beekeeper agents` shows it per
-agent in its BROWSER column: `asks` or `skips`.
+hook answers them. The desktop skips them only for a session in auto or bypass mode; the import
+turns bypass into acceptEdits, and raising a session's mode again takes the person's approval in
+the desktop. (A desktop-wide "Allow all sites", `preferences.allowAllBrowserActions` in the
+desktop's `claude_desktop_config.json`, does not reach an acceptEdits session on a Team or
+Enterprise account either.) With nobody at the desktop such a navigate waits until the desktop
+aborts it, sometimes hours later, and the model reads "Claude in Chrome is not connected".
+
+So the sessions beekeeper starts never use the desktop's browser. In their desktop turns
+(acceptEdits) `beekeeper hook pretooluse` refuses every `mcp__claude-in-chrome__*` call and names
+`beekeeper browse "<steps>"`, which runs the steps in a headless `claude -p --chrome
+--permission-mode bypassPermissions` turn: the CLI's own Claude in Chrome connection takes the
+Chrome extension's site permissions, runs in bypass and never asks. It prints the turn's report,
+its transcript and each screenshot it took as an image file under `<stateDir>/browse/<id>/`. Every
+headless turn of a start (the task's when the desktop runs none, an `agents wake`) gets `--chrome`
+too. A person's own sessions are untouched. `agents start` says which Chrome mode the desktop
+recorded, and `beekeeper agents` shows it per agent in its BROWSER column: `asks` or `skips`.
 
 The same hook serves the person's take-over on `beekeeper ui`: while a running screen has taken a
 session over (a flag file per session in the state folder's `takeover/`, naming the screen's

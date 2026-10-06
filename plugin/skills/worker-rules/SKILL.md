@@ -80,9 +80,10 @@ task needs lives only in this session: the next task goes to a fresh one.
   merge` block by themselves. A headless turn (a first turn, a `wake` turn) never ends on a
   background task or wait, whose completion never wakes it: it waits in the foreground (`devctl pr
   wait`, `devctl pr merge`, a foreground Bash with a bounded timeout) and ends only when the task is
-  done or parked on a person. A headless turn has no browser tools: a worker whose
-  next step needs the desktop (a browser proof, a sign-in) runs `beekeeper agents desktop` before
-  its headless turn ends, which imports it into the desktop at once. A rollout is checked once, when a `beekeeper timer
+  done or parked on a person. The browser never waits on a site approval: a headless turn has
+  the Claude in Chrome tools through the CLI's own connection, and a desktop turn runs its browser
+  steps through `beekeeper browse "<steps>"`, which prints the report and the screenshots as image
+  files; the desktop's own browser tools are refused there. A rollout is checked once, when a `beekeeper timer
   add` set for it falls due, never polled.
 - **Public repositories carry nothing internal.** Visibility is checked before writing; no
   installation, cluster, customer, employee, chat or secret-store details reach a public issue,
