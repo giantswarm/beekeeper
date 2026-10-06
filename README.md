@@ -1210,8 +1210,13 @@ the message that starts the task as its turn; when the desktop runs none, a stew
 through the desktop's session messaging starts one with it, the route a relay revives a role holder
 by. Before either spawn, `makeRoom` keeps the desktop under its cap of CLIs by ending one of
 beekeeper's own finished or parked workers' CLIs, never a person's session. Only where the desktop
-cannot run the turn (it does not run, the session has no row, no steward took the send) is the
-session resumed headless as `agents wake` does, and `start` says why. A role's relay successor keeps
+cannot run the turn (it does not run, it did not import the session, at its cap with no CLI of
+beekeeper's to end or the person still typing, so the session has no row, or no steward took the
+send) is the session resumed headless as `agents wake` does, and `start` says why; that turn's
+reopen imports a session the desktop did not. A start that delivers no turn of the task fails: it
+exits non-zero, logs `agents.start` "task not delivered" with the reason, and `agents` (REACHABLE)
+and the watch's AGENTS STOPPED line say "task not delivered" until `agents wake` delivers a turn,
+so a worker that never got its task is never silent. A role's relay successor keeps
 its headless first turn, which only takes the role; its relay hands it the desktop turn.
 
 `beekeeper agents` shows an agent in a headless turn (a fallback, a successor's first turn, a wake

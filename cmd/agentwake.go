@@ -82,7 +82,7 @@ type wakeTarget struct {
 }
 
 // wakeAgent delivers msg from by to the registered agent q (wake).
-func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string) error {
+func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string) (err error) {
 	st, err := a.store.Read()
 	if err != nil {
 		return err
@@ -92,6 +92,14 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 		return err
 	}
 	ag := st.Agents[i]
+	if ag.Undelivered != "" {
+		// A delivered turn is the task's start agents start did not make.
+		defer func() {
+			if err == nil {
+				a.markDelivered(ag.Party)
+			}
+		}()
+	}
 	if id, ok := strings.CutPrefix(ag.HostSession, omp.HostPrefix); ok {
 		return a.wakeOmp(by, ag, id, msg)
 	}
@@ -129,6 +137,16 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 		return err
 	}
 	return a.resumeTurn(ctx, by, w, msg)
+}
+
+// markDelivered clears the roster's "task not delivered" of p.
+func (a *app) markDelivered(p state.Party) {
+	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) }); i >= 0 {
+			st.Agents[i].Undelivered = ""
+		}
+		return nil, nil
+	})
 }
 
 // resumeTurn resumes the session w headless with msg as its turn, in a

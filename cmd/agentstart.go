@@ -122,9 +122,16 @@ takes the message that starts it; when the desktop runs none, a steward's
 send through the desktop's session messaging starts one with it. Before
 either spawn beekeeper keeps the desktop under its cap of CLIs by ending one
 of its own finished or parked workers' CLIs, never a person's session. Only
-where the desktop cannot run the turn (it does not run, the session has no
-row, no steward took the send) is the session resumed headless, as agents
-wake does, and start says why.
+where the desktop cannot run the turn (it does not run, it did not import
+the session, at its cap with no CLI of beekeeper's to end or the person
+still typing, so the session has no row, or no steward took the send) is
+the session resumed headless, as agents wake does, and start says why; the
+reopen after that turn imports a session the desktop did not.
+
+A start that delivers no turn of the task fails: it exits non-zero, logs
+"task not delivered" with the reason, and the roster's REACHABLE (and the
+watch's AGENTS STOPPED line) says "task not delivered" until agents wake
+delivers a turn.
 
 The first prompt is the worker rules beekeeper ships with its role skills
 (the worker-rules skill, under the binary's version), then the brief as the
@@ -329,7 +336,11 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	}
 	unit := "beekeeper-agent-" + id[:8]
 	if !sp.headless {
-		return a.startVisible(ctx, d, sp, bin, unit, dir, startedAgent{id: id, unit: unit, dir: dir, task: reg.task}, by)
+		sa, err := a.startVisible(ctx, d, sp, bin, unit, dir, startedAgent{id: id, unit: unit, dir: dir, task: reg.task}, by)
+		if err != nil {
+			return sa, a.undelivered(by, s.Party, err)
+		}
+		return sa, nil
 	}
 	self, err := os.Executable()
 	if err != nil {
@@ -355,6 +366,21 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	}
 	sa.restored = a.keepImport(ctx, id, sp.name, &sa)
 	return sa, nil
+}
+
+// undelivered records that the start of p delivered no turn of its task:
+// the roster entry says so until agents wake delivers one, the event log
+// has the reason, and the returned error makes the start fail, so its
+// caller retries instead of counting on a worker that never got its task.
+func (a *app) undelivered(by, p state.Party, why error) error {
+	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) }); i >= 0 {
+			st.Agents[i].Undelivered = why.Error()
+		}
+		return []state.Event{event(by, "agents.start", "%s: task not delivered: %v", p.Name, why)}, nil
+	})
+	return fmt.Errorf("%s: task not delivered: %w (beekeeper agents wake %q <message> delivers it, beekeeper agents remove %q takes it off the roster)",
+		p.Name, why, p.Name, p.Name)
 }
 
 // seedNote ends a seed turn's prompt: the turn only creates the session.
@@ -395,25 +421,12 @@ func (a *app) startVisible(ctx context.Context, d desk, sp agentStart, bin, unit
 		return sa, err
 	}
 	if !plat.Opener.Running(t).IsZero() {
-		if err := d.await(ctx, d.turnWait()+awayPoll, nil); err != nil {
-			return sa, err
-		}
-		if err := a.importBeside(ctx, d, id, sp.name, follow, &sa); err != nil {
-			return sa, err
-		}
-		sa.restored = a.keepImport(ctx, id, sp.name, &sa)
-		// No other steward ran to restore a dropped title: the session's
-		// own desktop CLI, which the import warmed, sets it before its task,
-		// so the row and the roster carry its name from its first turn.
-		if sa.title != sp.name {
-			line, err := a.keepTitle(ctx, id, sp.name)
-			if err != nil {
-				line = err.Error()
-			}
-			sa.restored = strings.TrimPrefix(sa.restored+"; "+line, "; ")
-			if r, ok := claude.ReadRecord(a.cfg, "local_"+id); ok {
-				sa.title, sa.model = r.Title, r.Model
-			}
+		// An import the desktop does not take (at its cap of CLIs, the
+		// person still typing) leaves the session without a row: its task
+		// runs headless, whose reopen imports it later.
+		if err := a.importVisible(ctx, d, id, sp.name, follow, &sa); err != nil {
+			sa.deferred = err
+			_ = a.store.Log(event(by, "agents.start", "%s: the desktop did not import it (%v)", sp.name, err))
 		}
 	}
 	w := wakeTarget{name: sp.name, id: id, host: "local_" + id, dir: dir, mode: state.ModeBypass, model: sp.model}
@@ -429,6 +442,33 @@ func (a *app) startVisible(ctx context.Context, d desk, sp agentStart, bin, unit
 		return sa, err
 	}
 	return sa, nil
+}
+
+// importVisible imports a seeded session into the running desktop once the
+// person's typing paused, within desktopTurnWait, and gives its row the
+// session's name.
+func (a *app) importVisible(ctx context.Context, d desk, id, name, follow string, sa *startedAgent) error {
+	if err := d.await(ctx, d.turnWait()+awayPoll, nil); err != nil {
+		return err
+	}
+	if err := a.importBeside(ctx, d, id, name, follow, sa); err != nil {
+		return err
+	}
+	sa.restored = a.keepImport(ctx, id, name, sa)
+	// No other steward ran to restore a dropped title: the session's own
+	// desktop CLI, which the import warmed, sets it before its task, so the
+	// row and the roster carry its name from its first turn.
+	if sa.title != name {
+		line, err := a.keepTitle(ctx, id, name)
+		if err != nil {
+			line = err.Error()
+		}
+		sa.restored = strings.TrimPrefix(sa.restored+"; "+line, "; ")
+		if r, ok := claude.ReadRecord(a.cfg, "local_"+id); ok {
+			sa.title, sa.model = r.Title, r.Model
+		}
+	}
+	return nil
 }
 
 // importBeside titles session id name and imports it into the desktop

@@ -348,6 +348,9 @@ type Agent struct {
 	// task), and ResumedOn the wait it named; zero: never.
 	ResumedWait time.Time `json:"resumedWait,omitzero"`
 	ResumedOn   string    `json:"resumedOn,omitempty"`
+	// Undelivered is why agents start delivered no turn of the agent's
+	// task, which waits until agents wake delivers one; empty: delivered.
+	Undelivered string `json:"undelivered,omitempty"`
 	// Conversation is klaus-gateway's conversation the agent holds with its
 	// person, a Slack thread; empty: none is open.
 	Conversation string `json:"conversation,omitempty"`
