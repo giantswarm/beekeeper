@@ -10,16 +10,14 @@ import (
 )
 
 // SOCKSProxy is the SOCKS5 proxy URL of the sandbox the calling process
-// runs in, its credentials included. A kind lab's API server is on loopback,
-// which every HTTP client exempts from the proxy environment, and the
-// sandbox's HTTP proxy terminates TLS, which breaks kind's client
-// certificates; its SOCKS proxy is an opaque tunnel, held to the same
-// allow list (127.0.0.1:<port>). The credentials are the sandbox's own and
-// change with every Claude Code process.
+// runs in. A kind lab's API server is on loopback, which every HTTP client
+// exempts from the proxy environment, so the lab's kubeconfig names the
+// sandbox's SOCKS proxy, which ends at beekeeper's egress proxy: an opaque
+// tunnel, held to the allow list (127.0.0.1:<port>).
 func SOCKSProxy(getenv func(string) string) (string, error) {
 	for _, name := range []string{"ALL_PROXY", "all_proxy", "FTP_PROXY", "ftp_proxy"} {
 		u, err := url.Parse(getenv(name))
-		if err != nil || u.User == nil || (u.Scheme != "socks5" && u.Scheme != "socks5h") {
+		if err != nil || u.Host == "" || (u.Scheme != "socks5" && u.Scheme != "socks5h") {
 			continue
 		}
 		// client-go dials socks5 only; the lab's server is an IP literal,

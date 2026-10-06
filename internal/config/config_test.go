@@ -454,10 +454,11 @@ func TestSandbox(t *testing.T) {
 	if err != nil || c.Sandbox.AllowRead[0] != filepath.Join(home, "projects") || c.Sandbox.AllowWrite[0] != "/var/tmp/x" {
 		t.Fatalf("%+v, %v", c.Sandbox, err)
 	}
-	if len(c.Sandbox.Mask) != 2 || c.Sandbox.Mask[0].Name != "GH_TOKEN" {
-		t.Errorf("default mask = %+v", c.Sandbox.Mask)
+	if c.Sandbox.ProxyPort != 3190 {
+		t.Errorf("default proxyPort = %d", c.Sandbox.ProxyPort)
 	}
-	for _, bad := range []string{"sandbox: {allowRead: [projects]}\n", "sandbox: {mask: [{name: GH-TOKEN, hosts: [github.com]}]}\n", "sandbox: {mask: [{name: X}]}\n"} {
+	for _, bad := range []string{"sandbox: {allowRead: [projects]}\n", "sandbox: {proxyPort: 70000}\n", "sandbox: {proxyPort: -1}\n",
+		"sandbox: {proxyPort: 3191, domains: [\"127.0.0.1:3191\"]}\n"} {
 		if _, err := Load(write(bad)); err == nil {
 			t.Errorf("%q loads", bad)
 		}

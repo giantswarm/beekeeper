@@ -339,7 +339,7 @@ command must not reach a credential. The parties:
 |---|---|---|
 | The person | their Unix user, at their terminal | everything: the vault through their own sign-in, the keyring, the kubeconfigs |
 | beekeeper's broker (`beekeeper sandbox broker`) | the person's user, a systemd user unit no agent starts, undumpable | the vault session (in memory), the SOPS keys, the container runtime, devctl's keychain login |
-| A sandboxed agent session | the person's user inside the sandbox (bubblewrap, own mount namespace, no Unix sockets) | its working directory, the temporary directory, beekeeper's state outside `scan/`, GitHub and `sandbox.domains`; credentials only as masked placeholders |
+| A sandboxed agent session | the person's user inside the sandbox (bubblewrap, own mount namespace, no Unix sockets) | its working directory, the temporary directory, beekeeper's state outside `scan/`, GitHub and `sandbox.domains` through beekeeper's egress proxy; no credential |
 | An unsandboxed agent session | the person's user | what the person reaches, held back by the PreToolUse hook only |
 | Remote services (GitHub, the model API, chat) | elsewhere | what a session sends: the outbound guard refuses secret values ([What leaves the machine](#what-leaves-the-machine)); the mention guard refuses a gh post (issue or pr comment, create, edit, review; a comments, reviews, issues or pulls endpoint of gh api, its body files included) or a GitHub connector post that @-mentions someone: an agent's text goes out under a person's account |
 
@@ -350,7 +350,7 @@ The secrets and where they live:
 | The vault session (`secret.session`) | the broker's memory; for one call, the environment of the broker's `op` child | the broker, which signs in by itself (`secret.signinCommand`) |
 | The vault's service account token (`secret.tokenFile`) | a 0600 file outside the sandbox's lists | beekeeper's own `op` calls |
 | The SOPS keys | the person's key files, outside the sandbox's lists | sops in beekeeper's process |
-| The GitHub App token of sandboxed sessions | `$XDG_RUNTIME_DIR/beekeeper/github`, masked | the sandbox proxy, into requests to GitHub |
+| The GitHub App token of sandboxed sessions | the broker's memory | the egress proxy, into the `Authorization` header of requests to GitHub |
 | The value scanner's key and index | `scan/` in beekeeper's state, denied to sandboxed sessions | beekeeper |
 | Kubeconfigs, the Teleport profile, the GitHub CLI's token, the keyring | the person's home and session bus | the person; a lab kubeconfig for its lease holder |
 
@@ -376,9 +376,9 @@ Residual risks:
   session belongs to the broker only, never in startup files or a store every process of the user reads.
 - **The keeper's socket.** `unlock` hands the session only to a listener running this beekeeper
   binary as this user; a process of the user that replaces the binary on disk defeats that check.
-- **The masked GitHub token** can be read back through a GitHub endpoint that echoes its request
-  body, since the sandbox proxy substitutes the placeholder in bodies too ([The agent
-  sandbox](#the-agent-sandbox)); the token dies within eight hours.
+- **The egress proxy acts on GitHub with the App token** for every sandboxed session: a session cannot
+  read the token, but it can make any call the App's permissions allow, as the person's merges and
+  pushes do ([The agent sandbox](#the-agent-sandbox)).
 - **A held lab's kubeconfig** is readable by every sandboxed session, not by its holder alone.
 - **Desktop control.** An agent that drives the desktop could type into the person's terminal; the
   unlock still needs the account password, which no agent holds.
@@ -614,29 +614,34 @@ same file passed to `claude --settings` holds one session to it, to try a change
 - **The scanner's key and index** (`scan/` in beekeeper's state) are denied for reading and writing
   inside the writable state directory: the narrower deny holds, so no session reads the fingerprint key
   or rewrites the index the redaction matches against.
-- **Egress:** GitHub and `sandbox.domains`, nothing else, with no prompt to widen it. Loopback is
-  listed by port only (`127.0.0.1:<port>`, a lab's API server): a bare loopback host or a wildcard port
-  would open every listener on the host (other sessions' port-forwards, local servers), so the
-  configuration refuses it.
+- **Egress:** through beekeeper's egress proxy alone, to GitHub and `sandbox.domains`, nothing else,
+  with no prompt to widen it. The policy points Claude Code's `httpProxyPort` and `socksProxyPort` at
+  the broker's proxy (`127.0.0.1:<sandbox.proxyPort>`, 3190), so Claude Code bridges the sandbox's HTTP
+  and SOCKS5 proxies there and runs no proxy of its own; the broker's proxy answers its own user only.
+  An entry is a host, `*.<domain>` for its subdomains, or `host:port` for one port. Loopback is listed
+  by port only (`127.0.0.1:<port>`, a lab's API server): a bare loopback host or a wildcard port would
+  open every listener on the host (other sessions' port-forwards, local servers), so the configuration
+  refuses it, and a name that resolves to a loopback, link-local, unspecified or multicast address is
+  refused when the proxy dials it. A refused target gets a 403 (SOCKS: not allowed) and a line in the
+  broker's log.
+- **The runtime directory** (`$XDG_RUNTIME_DIR`) is denied for reading like the home directory (the
+  container runtime's registry login, the agents' sockets), apart from the egress proxy's directory.
 - **The GitHub token:** `gh`, `git push` and `devctl` act with devctl's App user token (eight hours,
-  capped by the App's permissions), and commands see only a placeholder for it. The broker reads the
-  token every five minutes with `devctl auth exec` (`sandbox.devctl`) into two files under
-  `$XDG_RUNTIME_DIR/beekeeper/github`: gh's login (`hosts.yml`, which the policy's `GH_CONFIG_DIR`
-  names) and git's Basic credential. The policy masks both: a command reads them with a placeholder in
-  place of the token, and the sandbox proxy puts the real token into requests to GitHub's hosts only
-  (the credential to `github.com` alone). The proxy re-reads the files for every command, so a renewed
-  token reaches a running session without a restart; the broker rewrites them in place, never by a
-  rename. The files lie outside the home directory on purpose: Claude Code mounts no mask under a denied
-  path and injects none under a re-allowed one. The file tools never read them. git reaches GitHub over
-  HTTPS (`git@github.com:` is rewritten), and its credential helper is `beekeeper sandbox
-  git-credential`, which hands git the masked credential as an `authtype=Basic` credential (git 2.46 or
-  newer): GitHub's git endpoint takes Basic only, and the proxy finds the placeholder only as written,
-  never base64-encoded. `agents.shell.path` stays off `PATH` in the sandbox, since a `gh` link to devctl
-  reads the keychain. `GH_TOKEN` and `GITHUB_TOKEN` (`sandbox.mask`) are masked as well, should the CLI
-  carry them. **Open:** Claude Code's proxy substitutes the placeholder in request bodies too, not in
-  headers alone, so a command that sends the placeholder to a GitHub endpoint that echoes its input
-  (`POST /markdown`) reads the real token back. A deliberate exfiltration gets a token that dies within
-  eight hours; a proxy that only adds the header is the fix.
+  capped by the App's permissions), and the sandbox never holds it, not even as a placeholder. The
+  broker reads it every five minutes with `devctl auth exec` (`sandbox.devctl`) into its memory. Its
+  egress proxy terminates TLS for `github.com`, `api.github.com` and `uploads.github.com` with a CA it
+  makes at start, its key in memory alone and name-constrained to those hosts, and sets each request's
+  `Authorization` header itself (Basic for git on `github.com`, a token for the API), replacing what
+  the client sent; bodies pass untouched, so no endpoint can echo the token back. Every other host is
+  an opaque tunnel. The broker writes the CA, a bundle of the system's roots and the CA, and gh's login
+  (a fixed word, `beekeeper-egress-proxy`, which the proxy replaces) to
+  `$XDG_RUNTIME_DIR/beekeeper/egress`; the policy points `SSL_CERT_FILE`, `GIT_SSL_CAINFO`,
+  `CURL_CA_BUNDLE` and `REQUESTS_CA_BUNDLE` at the bundle, `NODE_EXTRA_CA_CERTS` at the CA and
+  `GH_CONFIG_DIR` at gh's login. These variables reach the harness process too; the bundle keeps the
+  system's roots, and the CA is good for GitHub's three hosts alone. git reaches GitHub over HTTPS
+  (`git@github.com:` is rewritten), needs no credential helper, since the proxy authenticates its first
+  request, and runs none of the person's for GitHub. `agents.shell.path` stays off `PATH` in the
+  sandbox, since a `gh` link to devctl reads the keychain.
 - **devctl.** devctl's gated commands (`pr merge`, `pr wait`, `release promote`, `release wait`,
   `rollout wait`) read the keychain over the user bus and start user units, both closed in the sandbox,
   so a sandboxed `beekeeper gate` hands its command to the broker: it runs the same gate on the host, as
@@ -684,10 +689,9 @@ same file passed to `claude --settings` holds one session to it, to try a change
   kubeconfig <lab>` once the lab runs) has the broker write it into the lease for the session that holds
   it, and release takes it away. The lab's API server goes into `sandbox.domains` as `127.0.0.1:<port>`,
   so its port is fixed (agentlab's `apiServerPort`). Every HTTP client exempts loopback from the proxy
-  environment, and the sandbox's HTTP proxy terminates TLS, which breaks kind's client certificates, so
-  the kubeconfig points the lab's cluster at the sandbox's SOCKS proxy (`proxy-url`), an opaque tunnel
-  held to the same allow list. Its credentials change with every Claude Code process, so in a session
-  that holds a lab lease the hook puts `beekeeper lease kubeconfig --refresh <lab>` in front of every
+  environment, so the kubeconfig points the lab's cluster at the sandbox's SOCKS proxy (`proxy-url`),
+  which ends at the egress proxy as an opaque tunnel held to the same allow list. In a session that
+  holds a lab lease the hook puts `beekeeper lease kubeconfig --refresh <lab>` in front of every
   command, which points the lease's kubeconfig at this process's proxy. The policy is one for the
   machine, so a held lab's kubeconfig is readable by every sandboxed session, not by its holder alone.
 
@@ -1705,8 +1709,9 @@ The organisation and desk keys, and their defaults:
 | `secret.unlockWait` | `8m` | How long a call on the vault waits for the broker's sign-in ([The vault session](#the-vault-session)) |
 | `secret.ageIdentities` | none | Age identities in the shared vault or in an identity file (`file://`), by recipient or `pathRegex`, for the SOPS files no local sops identity decrypts ([Age identities](#age-identities)) |
 | `secret.unlockCommands` | none | The person's own vault unlock helpers, refused in agent sessions like `op signin` and unaliased in the agent shell ([Secret reads](#secret-reads)) |
-| `sandbox.allowRead`, `sandbox.allowWrite`, `sandbox.domains`, `sandbox.mask` | none; `GH_TOKEN` and `GITHUB_TOKEN` to GitHub | The paths under the home directory the agent sandbox re-allows for reading and writing, the hosts commands reach besides GitHub, the masked environment variables and their hosts ([The agent sandbox](#the-agent-sandbox)) |
-| `sandbox.devctl` | `devctl` on the broker's `PATH` | The devctl the broker runs on the host: it renews the sandboxed sessions' masked GitHub token and runs their gated devctl commands ([The agent sandbox](#the-agent-sandbox)) |
+| `sandbox.allowRead`, `sandbox.allowWrite`, `sandbox.domains` | none | The paths under the home directory the agent sandbox re-allows for reading and writing, and the hosts commands reach besides GitHub ([The agent sandbox](#the-agent-sandbox)) |
+| `sandbox.proxyPort` | `3190` | The port of the broker's egress proxy on `127.0.0.1`, the sandbox's only way out ([The agent sandbox](#the-agent-sandbox)) |
+| `sandbox.devctl` | `devctl` on the broker's `PATH` | The devctl the broker runs on the host: it renews the egress proxy's GitHub token and runs their gated devctl commands ([The agent sandbox](#the-agent-sandbox)) |
 | `scan.sops`, `scan.vaults`, `scan.minLength` | none, none, 12 | The SOPS file globs and 1Password vaults `beekeeper scan index` fingerprints, and the shortest value it takes ([What reaches the model](#what-reaches-the-model)) |
 | `plans.repositories`, `plans.check` | none, `plan-stages` | The plans repositories whose open pull requests a note for `guide.person` links only once their stage check is green |
 | `outbound.sweepRoots`, `outbound.sweepDepth` | the home directory, 5 | Where the watch looks for exposed keys and credentials in remote URLs |

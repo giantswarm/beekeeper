@@ -31,9 +31,9 @@ In the agent sandbox, which closes the container runtime's socket kind
 needs, the host's broker writes it for the session, and the session points
 it at its sandbox's SOCKS proxy: the API server is on loopback, which the
 sandbox reaches only through the proxy and only on the ports
-sandbox.domains lists (127.0.0.1:<port>). The proxy's credentials change
-with every Claude Code process, so beekeeper's hook refreshes them before
-every command of a sandboxed session that holds a lab lease (--refresh).`,
+sandbox.domains lists (127.0.0.1:<port>). beekeeper's hook refreshes the
+proxy's URL before every command of a sandboxed session that holds a lab
+lease (--refresh).`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			sandboxed := inSandbox()

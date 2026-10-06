@@ -23,10 +23,11 @@ func TestSOCKSProxy(t *testing.T) {
 	if _, err := SOCKSProxy(func(string) string { return "" }); err == nil {
 		t.Error("no SOCKS proxy in the environment: no error")
 	}
+	// beekeeper's egress proxy: no credentials
 	delete(env, "FTP_PROXY")
 	env["ftp_proxy"] = "socks5h://localhost:1080"
-	if _, err := SOCKSProxy(func(k string) string { return env[k] }); err == nil {
-		t.Error("a proxy without credentials is no sandbox proxy")
+	if got, err := SOCKSProxy(func(k string) string { return env[k] }); err != nil || got != "socks5://localhost:1080" {
+		t.Errorf("SOCKSProxy without credentials = %q, %v", got, err)
 	}
 }
 

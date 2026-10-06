@@ -40,13 +40,13 @@ Anthropic's sandbox runtime (bubblewrap on Linux, Seatbelt on macOS):
     beekeeper's state, the build slots and sandbox.allowWrite;
   - denied inside them, for reading and writing: the value scanner's key
     and index (scan/ in the state directory);
-  - egress: GitHub and sandbox.domains, nothing else; loopback by port
-    only (127.0.0.1:<port>, a kind lab's API server, which a held lab's
+  - egress: through the broker's egress proxy alone (sandbox.proxyPort),
+    to GitHub and sandbox.domains, nothing else; loopback by port only
+    (127.0.0.1:<port>, a kind lab's API server, which a held lab's
     kubeconfig reaches through the sandbox's SOCKS proxy);
-  - the GitHub token: the broker keeps devctl's App token in two masked
-    files under $XDG_RUNTIME_DIR (gh's login and git's credential), and
-    sandbox.mask masks variables; commands see a placeholder, the sandbox
-    proxy puts the real token into requests to GitHub only;
+  - the GitHub token: never in the sandbox. The egress proxy terminates
+    TLS for GitHub's hosts with a CA of its own, which the policy has the
+    sandbox's clients trust, and sets the Authorization header itself;
   - no command leaves the sandbox, and a session where it cannot start
     does not start.
 
@@ -110,7 +110,7 @@ the installed policy is the current one.`,
 			return err
 		},
 	})
-	c.AddCommand(a.sandboxBrokerCmd(), sandboxScopeCmd(), sandboxGitCredentialCmd())
+	c.AddCommand(a.sandboxBrokerCmd(), sandboxScopeCmd())
 	return c
 }
 
@@ -176,11 +176,16 @@ vault's setup and import run on the host only, by the person.
 A sandboxed beekeeper lease kubeconfig runs here as well, where kind reaches
 the container runtime: for the session that holds the lab's lease only.
 
-The broker keeps the sandboxed sessions' GitHub token: every five minutes it
-reads devctl's App user token (devctl auth exec, sandbox.devctl) into gh's
-login and git's Basic credential under $XDG_RUNTIME_DIR/beekeeper/github,
-rewritten in place, which the policy masks. A renewed token reaches a
-running session at its next command.
+The broker is the sandbox's egress proxy, on 127.0.0.1:<sandbox.proxyPort>
+for its own user only: Claude Code bridges the sandbox's HTTP and SOCKS5
+proxies to it. It reaches GitHub and sandbox.domains and refuses the rest,
+and never a loopback or link-local address by name. Every five minutes it
+reads devctl's App user token (devctl auth exec, sandbox.devctl) into its
+memory, and it terminates TLS for github.com, api.github.com and
+uploads.github.com with a CA it makes at start, its key in memory alone, to
+set the Authorization header of each request; bodies pass untouched. The
+CA, a bundle of the system's roots and the CA, and gh's login (a fixed
+word, no token) go to $XDG_RUNTIME_DIR/beekeeper/egress.
 
 A sandboxed session's gated devctl command (pr merge, pr wait, release
 promote, release wait, rollout wait) runs here as beekeeper gate, as the
@@ -220,7 +225,12 @@ and a call whose sandboxed command ended is ended with it.`,
 					return err
 				}
 			}
-			go a.keepGitHub(ctx)
+			serveEgress, err := a.listenEgress(ctx)
+			if err != nil {
+				return err
+			}
+			egress := make(chan error, 1)
+			go func() { egress <- serveEgress() }()
 			keeper, err := a.keepVault(ctx)
 			if err != nil {
 				return err
@@ -228,15 +238,28 @@ and a call whose sandboxed command ended is ended with it.`,
 			secretCall := func(env []string) sandbox.Handler {
 				return brokeredCall(exe, "/proc", brokeredCallTimeout, env, brokeredSecretArgv)
 			}
-			return sandbox.Serve(ctx, dir, "/proc", brokerTick, brokered(brokeredCap(plat.Capper), map[string]sandbox.Handler{
-				sandbox.OpSecret:     a.brokeredVault(keeper, secretCall),
-				sandbox.OpVault:      brokeredVaultState(keeper),
-				sandbox.OpKubeconfig: brokeredCall(exe, "/proc", brokeredCallTimeout, nil, brokeredKubeconfigArgv),
-				sandbox.OpGate:       brokeredCall(exe, "/proc", gateBrokeredTimeout, devctlPath(a.cfg.Sandbox.Devctl), brokeredGateArgv),
-				sandbox.OpAgents:     brokeredCall(exe, "/proc", agentsBrokeredTimeout, nil, brokeredAgentsArgv),
-				sandbox.OpWatch:      brokeredCall(exe, "/proc", 0, nil, brokeredWatchArgv),
-				sandbox.OpLab:        brokeredCall(exe, "/proc", labBrokeredTimeout, nil, brokeredLabArgv),
-			}))
+			spool := make(chan error, 1)
+			go func() {
+				spool <- sandbox.Serve(ctx, dir, "/proc", brokerTick, brokered(brokeredCap(plat.Capper), map[string]sandbox.Handler{
+					sandbox.OpSecret:     a.brokeredVault(keeper, secretCall),
+					sandbox.OpVault:      brokeredVaultState(keeper),
+					sandbox.OpKubeconfig: brokeredCall(exe, "/proc", brokeredCallTimeout, nil, brokeredKubeconfigArgv),
+					sandbox.OpGate:       brokeredCall(exe, "/proc", gateBrokeredTimeout, devctlPath(a.cfg.Sandbox.Devctl), brokeredGateArgv),
+					sandbox.OpAgents:     brokeredCall(exe, "/proc", agentsBrokeredTimeout, nil, brokeredAgentsArgv),
+					sandbox.OpWatch:      brokeredCall(exe, "/proc", 0, nil, brokeredWatchArgv),
+					sandbox.OpLab:        brokeredCall(exe, "/proc", labBrokeredTimeout, nil, brokeredLabArgv),
+				}))
+			}()
+			// either one ending ends the broker, which its unit restarts
+			select {
+			case err := <-spool:
+				return err
+			case err := <-egress:
+				if err == nil && ctx.Err() == nil {
+					err = errors.New("the egress proxy stopped")
+				}
+				return err
+			}
 		},
 	}
 }
