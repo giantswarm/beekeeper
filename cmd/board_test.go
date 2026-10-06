@@ -52,7 +52,7 @@ func TestNextFreeSkipsOwnedItems(t *testing.T) {
 	}
 	cands := boardCandidates(11)
 	cands[10].Skip = "assigned to pat"
-	res := nextFree(st, cands, me, alive, listed)
+	res := nextFree(st, cands, me, alive, listed, nil)
 	if res.Pick == nil || res.Pick.Ref != idleRef || len(res.Skipped) != 1 || res.Skipped[0].Skip != `served by "Worker one"` {
 		t.Errorf("an idle agent's record is no claim: pick %v, skipped %+v", res.Pick, res.Skipped)
 	}
@@ -60,7 +60,7 @@ func TestNextFreeSkipsOwnedItems(t *testing.T) {
 	// are free; once a running session serves them nothing is.
 	st.Records = append(st.Records, state.Record{Session: running, Issue: idleRef}, state.Record{Session: running, Issue: "o/r#3"},
 		state.Record{Session: running, Issue: "o/r#5"}, state.Record{Session: running, Issue: "o/r#9"})
-	if res = nextFree(st, cands, me, alive, listed); res.Pick != nil {
+	if res = nextFree(st, cands, me, alive, listed, nil); res.Pick != nil {
 		t.Errorf("all owned, picked %v", res.Pick)
 	}
 	var got []string
@@ -102,7 +102,7 @@ func TestNextFreeHoldsAnEpicsSubIssuesToItsOwners(t *testing.T) {
 	}
 	// A sub-issue's own record names it ahead of its epic's.
 	cands := []board.Candidate{sub(11, "o/r#10"), sub(12, "O/R#10"), sub(21, "o/r#20"), sub(22, "o/r#20"), sub(31, "o/r#30")}
-	res := nextFree(st, cands, me, alive, listed)
+	res := nextFree(st, cands, me, alive, listed, nil)
 	var got []string
 	for _, c := range res.Skipped {
 		got = append(got, c.Ref+": "+c.Skip)
@@ -132,7 +132,7 @@ func TestConcurrentClaimsNeverGetTheSameItem(t *testing.T) {
 	for i := range workers {
 		wg.Go(func() {
 			me := state.Party{Session: fmt.Sprintf("s%d", i), Name: fmt.Sprintf("Board pull %d", i)}
-			res, err := claimNext(store, cands, me, alive, listed, "", func(string) bool { return false })
+			res, err := claimNext(store, cands, me, alive, listed, "", func(string) bool { return false }, nil)
 			if err != nil {
 				t.Error(err)
 			}
@@ -166,13 +166,13 @@ func TestSecondClaimKeepsAnOpenServe(t *testing.T) {
 	alive := func(state.Party) bool { return true }
 	me := state.Party{Session: "s1", Name: boardPull}
 	open := func(string) bool { return true }
-	if res, err := claimNext(store, cands, me, alive, listed, "picking up", open); err != nil || !res.Claimed || res.Pick.Ref != refOne {
+	if res, err := claimNext(store, cands, me, alive, listed, "picking up", open, nil); err != nil || !res.Claimed || res.Pick.Ref != refOne {
 		t.Fatalf("first claim: %+v, %v", res, err)
 	}
 	before, _ := store.Read()
 
 	// While o/r#1 is open, a second claim changes nothing and names it.
-	res, err := claimNext(store, cands, me, alive, listed, "the review", open)
+	res, err := claimNext(store, cands, me, alive, listed, "the review", open, nil)
 	st, _ := store.Read()
 	if err != nil || res.Claimed || res.Pick != nil || res.Held == nil || res.Held.Issue != refOne || !slices.EqualFunc(st.Records, before.Records, recordsEqual) {
 		t.Fatalf("second claim over an open serve: %+v, %v; records %+v", res, err, st.Records)
@@ -183,7 +183,7 @@ func TestSecondClaimKeepsAnOpenServe(t *testing.T) {
 
 	// --replace (or a served item since closed) takes the next item and
 	// replaces the record: the session serves one item.
-	res, err = claimNext(store, cands, me, alive, listed, "the review", func(string) bool { return false })
+	res, err = claimNext(store, cands, me, alive, listed, "the review", func(string) bool { return false }, nil)
 	st, _ = store.Read()
 	if err != nil || !res.Claimed || res.Held != nil || res.Pick.Ref != cands[1].Ref || len(st.Records) != 1 || st.Records[0].Issue != cands[1].Ref || st.Records[0].Waits != "the review" {
 		t.Errorf("replacing claim: %+v, %v; records %+v", res, err, st.Records)
@@ -194,7 +194,7 @@ func TestSecondClaimKeepsAnOpenServe(t *testing.T) {
 		st.Agents = append(st.Agents, state.Agent{Party: me, Task: "board pull", Done: true})
 		return nil, nil
 	})
-	if res, err := claimNext(store, cands, me, alive, listed, "", open); err != nil || !res.Claimed || res.Held != nil {
+	if res, err := claimNext(store, cands, me, alive, listed, "", open, nil); err != nil || !res.Claimed || res.Held != nil {
 		t.Errorf("claim of a done agent: %+v, %v", res, err)
 	}
 }
@@ -242,7 +242,7 @@ func TestClaimTakesNoSkippedItem(t *testing.T) {
 	cands := boardCandidates(1)
 	cands[0].Skip = "created 2026-06-24: Backlog takes items created within 90 days"
 	me := state.Party{Session: "s1", Name: boardPull}
-	res, err := claimNext(store, cands, me, func(state.Party) bool { return true }, time.Now(), "", func(string) bool { return false })
+	res, err := claimNext(store, cands, me, func(state.Party) bool { return true }, time.Now(), "", func(string) bool { return false }, nil)
 	st, _ := store.Read()
 	if err != nil || res.Pick != nil || res.Claimed || len(st.Records) != 0 || len(res.Skipped) != 1 {
 		t.Errorf("claim over a skipped item: %+v, %v; records %+v", res, err, st.Records)
@@ -296,7 +296,7 @@ func TestSkipHeldLeases(t *testing.T) {
 		t.Errorf("lease skips:\n got %q\nwant %q", got, want)
 	}
 	// The held item is passed over; the one behind it is picked.
-	res := nextFree(&state.State{}, cands, me, func(state.Party) bool { return false }, time.Now())
+	res := nextFree(&state.State{}, cands, me, func(state.Party) bool { return false }, time.Now(), nil)
 	if res.Pick == nil || res.Pick.Ref != "o/r#2" || len(res.Skipped) != 1 {
 		t.Errorf("pick %v, skipped %+v", res.Pick, res.Skipped)
 	}
@@ -308,5 +308,46 @@ func TestSkipHeldLeases(t *testing.T) {
 	}
 	if want := []string{"o/r#3: ", "o/r#4: assigned to pat"}; !slices.Equal(got, want) {
 		t.Errorf("after pick:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestNextFreeSkipsTheIssuesAServedPRCloses(t *testing.T) {
+	listed := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	me := state.Party{Session: "me", Name: "Me"}
+	worker := state.Party{Session: "s1", Name: "Worker one"}
+	alive := func(p state.Party) bool { return p.Is(worker) || p.Is(me) }
+	st := &state.State{
+		Records: []state.Record{
+			{Session: worker, Issue: "o/r#100", At: listed.Add(-time.Hour)},
+			{Session: worker, Issue: "o/r#101", At: listed.Add(-time.Hour)},
+		},
+		Agents: []state.Agent{{Party: state.Party{Session: "s2", Name: "Busy"}, Task: "review o/r#102"}},
+	}
+	// o/r#100 closes o/r#1 and an issue in another repository, the busy
+	// agent's o/r#102 closes o/r#3; o/r#101 closes nothing.
+	closes := map[string][]string{"o/r#100": {"o/r#1", "other/x#2"}, "o/r#102": {"o/r#3"}}
+	cands := append(boardCandidates(4), board.Candidate{Item: board.Item{Ref: "Other/X#2"}, Step: "Up Next"})
+	res := nextFree(st, cands, me, alive, listed, closes)
+	var got []string
+	for _, c := range append(res.Skipped, res.AfterPick...) {
+		got = append(got, c.Ref+": "+c.Skip)
+	}
+	want := []string{
+		`o/r#1: served by "Worker one" through o/r#100`,
+		`o/r#2: `,
+		`o/r#3: served by "Busy" (task) through o/r#102`,
+		`o/r#4: `,
+		`Other/X#2: served by "Worker one" through o/r#100`,
+	}
+	if res.Pick == nil || res.Pick.Ref != "o/r#2" {
+		t.Fatalf("pick %v, want o/r#2", res.Pick)
+	}
+	got = slices.Insert(got, 1, "o/r#2: ")
+	if !slices.Equal(got, want) {
+		t.Errorf("closing-reference skips:\n got %q\nwant %q", got, want)
+	}
+	// Without the closing references nothing beyond the records is covered.
+	if res = nextFree(st, cands, me, alive, listed, nil); res.Pick == nil || res.Pick.Ref != "o/r#1" {
+		t.Errorf("no closes: pick %v, want o/r#1", res.Pick)
 	}
 }
