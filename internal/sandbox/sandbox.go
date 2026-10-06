@@ -13,6 +13,7 @@ package sandbox
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"maps"
 	"os"
@@ -160,6 +161,33 @@ func New(cfg config.Sandbox, e Paths) Policy {
 		*ps = slices.Compact(*ps)
 	}
 	return p
+}
+
+// MountPoints creates every path of Deny that does not exist yet: the
+// sandbox mounts each over a writable parent, which it remounts read-only
+// first and cannot create one in, so a missing one fails every session's
+// start.
+func (p Policy) MountPoints() error {
+	for _, d := range p.Deny {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Nested refuses a path of Read that holds a path of Write: the sandbox
+// mounts the readable parent after the writable child, which it leaves
+// read-only.
+func (p Policy) Nested() error {
+	for _, r := range p.Read {
+		for _, w := range p.Write {
+			if w != r && under(w, r) {
+				return fmt.Errorf("the writable %s lies inside the readable %s, which the sandbox mounts read-only over it: list neither inside the other", w, r)
+			}
+		}
+	}
+	return nil
 }
 
 // Settings is the policy as Claude Code managed settings.

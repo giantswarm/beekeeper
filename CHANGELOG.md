@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A sandboxed session starts on a fresh state directory: `beekeeper sandbox install` and the broker at its start create every denied path's mount point (`scan/` in the state directory). The sandbox cannot create one in the read-only remount of its writable parent, so every session failed at start with `Can't create file …/scan: Read-only file system` ([#461](https://github.com/giantswarm/beekeeper/issues/461)).
+
+- `beekeeper sandbox install` refuses a writable path inside a readable one (a `sandbox.allowWrite` under a `sandbox.allowRead`, or beekeeper's state under its config directory) and names both: the sandbox mounts the readable parent read-only over the writable child, so the spool went unwritable and sessions found no broker ([#462](https://github.com/giantswarm/beekeeper/issues/462)).
+
 - A relayed supervisor or guide successor gets its desktop CLI while the desktop runs its cap of CLIs: `makeRoom` ends the idle CLI of the role run the relay relieved (its work ended with the relay) and, for a role's holder or relay successor, a worker's idle on its task, which a message by name starts again. The standby watch's revive of a holder with no row in the desktop imports the row first, then sends, instead of "the next gap tries again". Before, the successor's reopen missed at the cap, the role lapsed until a peer woke it, and the relieved run kept its CLI ([#484](https://github.com/giantswarm/beekeeper/issues/484)).
 - `budget --json` reports `used` as what the limit lost (`limit - remaining`) for a GraphQL reading reused from the state and for a core answer without `X-RateLimit-Used`, where it printed 0, and reads the GraphQL limit again once the stored reading's reset has passed instead of printing a reset in the past.
 
