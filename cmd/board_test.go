@@ -312,20 +312,21 @@ func TestSkipHeldLeases(t *testing.T) {
 }
 
 func TestNextFreeSkipsTheIssuesAServedPRCloses(t *testing.T) {
+	const servedPR, taskPR, taskIssue = "o/r#100", "o/r#102", "o/r#3"
 	listed := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	me := state.Party{Session: "me", Name: "Me"}
-	worker := state.Party{Session: "s1", Name: "Worker one"}
+	worker := state.Party{Session: "s1", Name: "PR author"}
 	alive := func(p state.Party) bool { return p.Is(worker) || p.Is(me) }
 	st := &state.State{
 		Records: []state.Record{
-			{Session: worker, Issue: "o/r#100", At: listed.Add(-time.Hour)},
+			{Session: worker, Issue: servedPR, At: listed.Add(-time.Hour)},
 			{Session: worker, Issue: "o/r#101", At: listed.Add(-time.Hour)},
 		},
-		Agents: []state.Agent{{Party: state.Party{Session: "s2", Name: "Busy"}, Task: "review o/r#102"}},
+		Agents: []state.Agent{{Party: state.Party{Session: "s2", Name: "Busy"}, Task: "review " + taskPR}},
 	}
 	// o/r#100 closes o/r#1 and an issue in another repository, the busy
 	// agent's o/r#102 closes o/r#3; o/r#101 closes nothing.
-	closes := map[string][]string{"o/r#100": {"o/r#1", "other/x#2"}, "o/r#102": {"o/r#3"}}
+	closes := map[string][]string{servedPR: {refOne, "other/x#2"}, taskPR: {taskIssue}}
 	cands := append(boardCandidates(4), board.Candidate{Item: board.Item{Ref: "Other/X#2"}, Step: "Up Next"})
 	res := nextFree(st, cands, me, alive, listed, closes)
 	var got []string
@@ -333,21 +334,21 @@ func TestNextFreeSkipsTheIssuesAServedPRCloses(t *testing.T) {
 		got = append(got, c.Ref+": "+c.Skip)
 	}
 	want := []string{
-		`o/r#1: served by "Worker one" through o/r#100`,
-		`o/r#2: `,
-		`o/r#3: served by "Busy" (task) through o/r#102`,
+		refOne + `: served by "PR author" through ` + servedPR,
+		idleRef + ": ",
+		taskIssue + `: served by "Busy" (task) through ` + taskPR,
 		`o/r#4: `,
-		`Other/X#2: served by "Worker one" through o/r#100`,
+		`Other/X#2: served by "PR author" through ` + servedPR,
 	}
-	if res.Pick == nil || res.Pick.Ref != "o/r#2" {
-		t.Fatalf("pick %v, want o/r#2", res.Pick)
+	if res.Pick == nil || res.Pick.Ref != idleRef {
+		t.Fatalf("pick %v, want %s", res.Pick, idleRef)
 	}
-	got = slices.Insert(got, 1, "o/r#2: ")
+	got = slices.Insert(got, 1, idleRef+": ")
 	if !slices.Equal(got, want) {
 		t.Errorf("closing-reference skips:\n got %q\nwant %q", got, want)
 	}
 	// Without the closing references nothing beyond the records is covered.
-	if res = nextFree(st, cands, me, alive, listed, nil); res.Pick == nil || res.Pick.Ref != "o/r#1" {
-		t.Errorf("no closes: pick %v, want o/r#1", res.Pick)
+	if res = nextFree(st, cands, me, alive, listed, nil); res.Pick == nil || res.Pick.Ref != refOne {
+		t.Errorf("no closes: pick %v, want %s", res.Pick, refOne)
 	}
 }
