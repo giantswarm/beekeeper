@@ -250,10 +250,12 @@ git's signing call only; the key and the agent stay out of the sandbox.`,
 					sandbox.OpVault:      brokeredVaultState(keeper),
 					sandbox.OpKubeconfig: brokeredCall(exe, "/proc", brokeredCallTimeout, nil, brokeredKubeconfigArgv),
 					sandbox.OpGate:       brokeredCall(exe, "/proc", gateBrokeredTimeout, devctlPath(a.cfg.Sandbox.Devctl), brokeredGateArgv),
-					sandbox.OpAgents:     brokeredCall(exe, "/proc", agentsBrokeredTimeout, nil, brokeredAgentsArgv),
-					sandbox.OpWatch:      brokeredCall(exe, "/proc", 0, nil, brokeredWatchArgv),
-					sandbox.OpLab:        brokeredCall(exe, "/proc", labBrokeredTimeout, nil, brokeredLabArgv),
-					sandbox.OpSign:       brokeredSign(hostGPG(ctx)),
+					sandbox.OpAgents: brokeredAgents(func(env []string) sandbox.Handler {
+						return brokeredCall(exe, "/proc", agentsBrokeredTimeout, env, brokeredAgentsArgv)
+					}),
+					sandbox.OpWatch: brokeredCall(exe, "/proc", 0, nil, brokeredWatchArgv),
+					sandbox.OpLab:   brokeredCall(exe, "/proc", labBrokeredTimeout, nil, brokeredLabArgv),
+					sandbox.OpSign:  brokeredSign(hostGPG(ctx)),
 				}))
 			}()
 			// either one ending ends the broker, which its unit restarts
@@ -419,7 +421,7 @@ func brokeredCall(exe, procDir string, timeout time.Duration, env []string, argv
 		c.Dir = cwd
 		c.Env = slices.DeleteFunc(os.Environ(), func(kv string) bool {
 			k, _, _ := strings.Cut(kv, "=")
-			return k == sandbox.Env || k == sandbox.Brokered || slices.Contains(callerEnv, k) || guard.VaultVar.MatchString(k)
+			return k == sandbox.Env || k == sandbox.Brokered || k == stateFromEnv || slices.Contains(callerEnv, k) || guard.VaultVar.MatchString(k)
 		})
 		c.Env = append(append(append(c.Env, env...), caller...), sandbox.Brokered+"=1")
 		if inSandbox {
