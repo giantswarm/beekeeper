@@ -104,8 +104,12 @@ func TestAgeIdentityFromTheVault(t *testing.T) {
 			f := &ageTools{identity: id.String() + "\n"}
 			o := &Ops{Run: f.run, Vault: ageVault, Token: "t", Ages: []AgeIdentity{entry}}
 			file := sopsFile(t, "", id.Recipient().String())
-			if !o.AgeNeedsVault([]string{"--name=x", file + "#stringData.password"}) {
+			if !o.AgeNeedsVault("", []string{"--name=x", file + "#stringData.password"}) {
 				t.Error("AgeNeedsVault = false")
+			}
+			// a file named relative to another directory, as the broker gets it
+			if !o.AgeNeedsVault(filepath.Dir(file), []string{"app.sops.yaml#stringData.password"}) {
+				t.Error("AgeNeedsVault relative to its directory = false")
 			}
 			vs, err := o.values(context.Background(), Ref{File: file})
 			if err != nil {
@@ -136,8 +140,8 @@ func TestAgeIdentityFromAFile(t *testing.T) {
 	o := &Ops{Run: f.run, Ages: []AgeIdentity{{Recipient: id.Recipient().String(), Ref: FileRef + keys}}}
 	file := sopsFile(t, "", id.Recipient().String())
 	args := []string{file + "#stringData.password"}
-	if o.AgeNeedsVault(args) || !o.AgeNeedsIdentity(args) {
-		t.Errorf("AgeNeedsVault = %v, AgeNeedsIdentity = %v: want the identity without the vault", o.AgeNeedsVault(args), o.AgeNeedsIdentity(args))
+	if o.AgeNeedsVault("", args) || !o.AgeNeedsIdentity("", args) {
+		t.Errorf("AgeNeedsVault = %v, AgeNeedsIdentity = %v: want the identity without the vault", o.AgeNeedsVault("", args), o.AgeNeedsIdentity("", args))
 	}
 	if _, err := o.values(context.Background(), Ref{File: file}); err != nil {
 		t.Fatal(err)

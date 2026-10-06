@@ -211,7 +211,8 @@ func opVault(ctx context.Context, env string, args ...string) error {
 }
 
 // brokeredVault runs a brokered secret call with the vault session when it
-// names an op:// reference. While the keeper holds none, it signs in (one
+// takes the vault (secretNeedsVault, its files relative to the requester's
+// directory, as the client decides). While the keeper holds none, it signs in (one
 // sign-in shared by every waiting call) and waits until secret.unlockWait
 // passes (exit ExitVault), listed in the broker's waits for the watch's
 // VAULT LOCKED line and beekeeper status. A session op no longer takes is
@@ -219,7 +220,18 @@ func opVault(ctx context.Context, env string, args ...string) error {
 func (a *app) brokeredVault(v *vaultBroker, call func(env []string) sandbox.Handler) sandbox.Handler {
 	waits := &vaultWaits{}
 	return func(ctx context.Context, pid int, req sandbox.Request) (sandbox.Reply, error) {
-		if !a.cfg.Secret.Session || !secret.NeedsVault(req.Args) {
+		if !a.cfg.Secret.Session {
+			return call(nil)(ctx, pid, req)
+		}
+		// the files of a call are the requester's, read only for an age identity
+		var cwd string
+		if len(a.cfg.Secret.AgeIdentities) > 0 {
+			var err error
+			if cwd, _, err = sandbox.Origin("/proc", pid, nil); err != nil {
+				return sandbox.Reply{}, fmt.Errorf("the requester: %w", err)
+			}
+		}
+		if !a.secretNeedsVault(cwd, req.Args) {
 			return call(nil)(ctx, pid, req)
 		}
 		for try := 0; ; try++ {

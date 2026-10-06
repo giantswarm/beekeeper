@@ -5,12 +5,16 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"filippo.io/age"
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
@@ -157,6 +161,72 @@ func TestBrokeredVaultSignsInAgainForAnExpiredSession(t *testing.T) {
 	envs = nil
 	if r, _ := h(context.Background(), os.Getpid(), sandbox.Request{Op: sandbox.OpSecret, Args: []string{fingerprintOp, testVaultRef}}); r.Code != ExitVault || len(envs) != 2 {
 		t.Errorf("expired twice: %+v, %d calls", r, len(envs))
+	}
+}
+
+// A SOPS file whose age identity is a field of the vault takes the vault on
+// the broker as on the client: the call runs with the session, its file
+// named relative to the requester's directory. One with a file:// identity
+// runs without it.
+func TestBrokeredVaultForAnAgeIdentityInTheVault(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the sandbox broker runs on Linux only")
+	}
+	for _, e := range []string{"SOPS_AGE_KEY", "SOPS_AGE_KEY_FILE", "SOPS_AGE_KEY_CMD", "SOPS_AGE_SSH_PRIVATE_KEY_FILE"} {
+		t.Setenv(e, "")
+		if err := os.Unsetenv(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	inVault, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inFile, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	for name, r := range map[string]string{"vault.sops.yaml": inVault.Recipient().String(), "file.sops.yaml": inFile.Recipient().String()} {
+		body := "stringData:\n  password: ENC[AES256_GCM,data:x,type:str]\nsops:\n  age:\n    - recipient: " + r + "\n"
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(dir)
+
+	a := vaultApp(t, time.Second)
+	a.cfg.Secret.AgeIdentities = []config.AgeIdentity{
+		{Recipient: inVault.Recipient().String(), Ref: testVaultRef},
+		{Recipient: inFile.Recipient().String(), Ref: "file:///nowhere/identity.txt"},
+	}
+	k := secret.NewKeeper(time.Hour, nil)
+	_ = k.Unlock(testVaultSession, "tok", time.Now())
+	v := &vaultBroker{k: k, wait: time.Second, signin: func(context.Context) (string, string, error) {
+		t.Error("signed in with an unlocked keeper")
+		return "", "", errors.New("no sign-in")
+	}}
+	var env []string
+	h := a.brokeredVault(v, func(e []string) sandbox.Handler {
+		return func(context.Context, int, sandbox.Request) (sandbox.Reply, error) {
+			env = e
+			return sandbox.Reply{Out: "ok"}, nil
+		}
+	})
+	for file, want := range map[string]bool{"vault.sops.yaml": true, "file.sops.yaml": false} {
+		args := []string{"get", file + "#stringData.password"}
+		if got := a.secretNeedsVault(dir, args); got != want {
+			t.Errorf("%s: secretNeedsVault = %v, want %v", file, got, want)
+		}
+		env = []string{"unset"}
+		if r, err := h(context.Background(), os.Getpid(), sandbox.Request{Op: sandbox.OpSecret, Args: args}); err != nil || r.Out != "ok" {
+			t.Fatalf("%s: %+v, %v", file, r, err)
+		}
+		if got := len(env) == 1 && env[0] == testVaultSession+"=tok"; got != want {
+			t.Errorf("%s: broker env %q, want the session %v", file, env, want)
+		}
 	}
 }
 
