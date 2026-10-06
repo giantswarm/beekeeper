@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -112,46 +113,84 @@ func TestBrokeredVaultSignsInOnce(t *testing.T) {
 	}
 }
 
-// A session op no longer takes is forgotten, and the call waits for the
-// next approval once.
-func TestBrokeredVaultForgetsAnExpiredSession(t *testing.T) {
-	a := vaultApp(t, 20*time.Millisecond)
-	k := secret.NewKeeper(time.Hour, nil)
-	_ = k.Unlock(testVaultSession, "old", time.Now())
-	calls := 0
-	h := a.brokeredVault(&vaultBroker{k: k}, func([]string) sandbox.Handler {
+// A session op no longer takes is dropped, signed in again through the
+// sign-in, and the call retried once with the new session; the drop shows
+// in the state until the new sign-in.
+func TestBrokeredVaultSignsInAgainForAnExpiredSession(t *testing.T) {
+	const oldToken = "old"
+	a := vaultApp(t, time.Second)
+	var states []secret.VaultState
+	var mu sync.Mutex
+	k := secret.NewKeeper(time.Hour, func(st secret.VaultState) { mu.Lock(); states = append(states, st); mu.Unlock() })
+	_ = k.Unlock(testVaultSession, oldToken, time.Now())
+	var signins atomic.Int32
+	v := &vaultBroker{k: k, wait: time.Second, signin: func(context.Context) (string, string, error) {
+		signins.Add(1)
+		return testVaultSession, "new", nil
+	}}
+	var envs []string
+	h := a.brokeredVault(v, func(env []string) sandbox.Handler {
 		return func(context.Context, int, sandbox.Request) (sandbox.Reply, error) {
-			calls++
-			return sandbox.Reply{Code: ExitVault, Err: "op: exit 1 ([ERROR] You are not currently signed in)"}, nil
+			envs = append(envs, env[0])
+			if env[0] == testVaultSession+"="+oldToken {
+				return sandbox.Reply{Code: ExitVault, Err: "op: exit 1 ([ERROR] You are not currently signed in)"}, nil
+			}
+			return sandbox.Reply{Out: "ok"}, nil
 		}
 	})
-	r, _ := h(context.Background(), os.Getpid(), sandbox.Request{Op: sandbox.OpSecret, Args: []string{"fingerprint", testVaultRef}})
-	if calls != 1 || k.State().Unlocked || r.Code != ExitVault || !strings.Contains(r.Err, "vault locked") {
-		t.Errorf("expired session: %d calls, %+v, %+v", calls, k.State(), r)
+	r, _ := h(context.Background(), os.Getpid(), sandbox.Request{Op: sandbox.OpSecret, Args: []string{fingerprintOp, testVaultRef}})
+	if r.Out != "ok" || signins.Load() != 1 || len(envs) != 2 || envs[1] != testVaultSession+"=new" {
+		t.Fatalf("after the expiry: %+v, %d sign-ins, envs %q", r, signins.Load(), envs)
+	}
+	mu.Lock()
+	dropped := slices.IndexFunc(states, func(st secret.VaultState) bool {
+		return !st.Unlocked && strings.Contains(st.Dropped, "not currently signed in")
+	})
+	if dropped < 0 || !states[len(states)-1].Unlocked || states[len(states)-1].Dropped != "" {
+		t.Errorf("states %+v: a drop, then an unlock that clears it", states)
+	}
+	mu.Unlock()
+
+	// a session that the second try also finds expired is answered as is
+	_ = k.Unlock(testVaultSession, oldToken, time.Now())
+	v.signin = func(context.Context) (string, string, error) { return testVaultSession, oldToken, nil }
+	envs = nil
+	if r, _ := h(context.Background(), os.Getpid(), sandbox.Request{Op: sandbox.OpSecret, Args: []string{fingerprintOp, testVaultRef}}); r.Code != ExitVault || len(envs) != 2 {
+		t.Errorf("expired twice: %+v, %d calls", r, len(envs))
 	}
 }
 
-// The keeper touches the session every vaultTouchEvery and forgets one op
-// no longer takes.
+// The keeper touches the session every vaultTouchEvery; one op no longer
+// takes is dropped and signed in again at once.
 func TestTendVault(t *testing.T) {
 	now := time.Date(2026, 10, 5, 22, 10, 0, 0, time.UTC)
 	k := secret.NewKeeper(time.Hour, nil)
 	_ = k.Unlock(testVaultSession, "tok", now)
+	signedIn := make(chan struct{}, 1)
+	v := &vaultBroker{k: k, wait: time.Second, signin: func(context.Context) (string, string, error) {
+		signedIn <- struct{}{}
+		return testVaultSession, "new", nil
+	}}
 	var touches int
 	var gone error
 	touch := func(context.Context, string) error { touches++; return gone }
-	touched := tendVault(context.Background(), k, now.Add(time.Minute), time.Time{}, touch)
+	touched := tendVault(context.Background(), v, now.Add(time.Minute), time.Time{}, touch)
 	if touches != 0 || !touched.Equal(now) {
 		t.Fatalf("a fresh session was touched: %d, %v", touches, touched)
 	}
-	touched = tendVault(context.Background(), k, now.Add(vaultTouchEvery), touched, touch)
+	touched = tendVault(context.Background(), v, now.Add(vaultTouchEvery), touched, touch)
 	if touches != 1 || !touched.Equal(now.Add(vaultTouchEvery)) || !k.State().Unlocked {
 		t.Fatalf("the touch: %d, %v, %+v", touches, touched, k.State())
 	}
 	gone = errors.New("You are not currently signed in")
-	tendVault(context.Background(), k, now.Add(2*vaultTouchEvery), touched, touch)
-	if k.State().Unlocked {
-		t.Error("kept a session op no longer takes")
+	tendVault(context.Background(), v, now.Add(2*vaultTouchEvery), touched, touch)
+	select {
+	case <-signedIn:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no sign-in after the drop")
+	}
+	if err := k.Wait(context.Background()); err != nil || k.Env() != testVaultSession+"=new" {
+		t.Errorf("after the drop: %v, a new session %v", err, k.Env() == testVaultSession+"=new")
 	}
 }
 
@@ -248,5 +287,22 @@ func TestWatchSaysAFailedSignin(t *testing.T) {
 	w.vaultWaits()
 	if l := out.String(); !strings.Contains(l, "VAULT SIGN-IN FAILED: op-unlock: exit status 2: no terminal to ask") || !strings.Contains(l, "ENDED VAULT SIGN-IN FAILED") {
 		t.Errorf("a failed sign-in: %s", l)
+	}
+}
+
+// The watch says a session op stopped taking while the broker signs in
+// again, and its end once the new sign-in unlocked.
+func TestWatchSaysADroppedSession(t *testing.T) {
+	a := vaultApp(t, time.Minute)
+	var out bytes.Buffer
+	a.out = &out
+	w := &watcher{app: a, last: map[string]time.Time{}}
+	statePath, _ := secret.StatePath()
+	_ = secret.WriteState(statePath, secret.VaultState{Dropped: "op: exit 1 (You are not currently signed in)", DroppedAt: time.Now()})
+	w.vaultWaits()
+	_ = secret.WriteState(statePath, secret.VaultState{Unlocked: true, Since: time.Now(), Until: time.Now().Add(time.Hour)})
+	w.vaultWaits()
+	if l := out.String(); !strings.Contains(l, "VAULT SESSION DROPPED at ") || !strings.Contains(l, "not currently signed in") || !strings.Contains(l, "ENDED VAULT SESSION DROPPED") {
+		t.Errorf("a dropped session: %s", l)
 	}
 }

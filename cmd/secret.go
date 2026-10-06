@@ -308,6 +308,10 @@ failing or answering nothing within a minute) exits 78.`,
 				}
 				code, out, err := ops.CopyToConsumer(ctx, src[0], argv, in)
 				a.secretLog("copy", "%s to %s: %s", src[0], argv[0], outcome(err, fmt.Sprintf("exit %d", code)))
+				if errors.Is(err, secret.ErrVault) {
+					// exit ExitVault: the broker signs in again and retries
+					return err
+				}
 				if err != nil {
 					return refused("%v", err)
 				}

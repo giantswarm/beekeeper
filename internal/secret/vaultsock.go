@@ -38,6 +38,10 @@ type VaultState struct {
 	Since    time.Time `json:"since,omitzero"`
 	Until    time.Time `json:"until,omitzero"`
 	Error    string    `json:"error,omitempty"`
+	// Dropped is why op stopped taking the last session, at DroppedAt;
+	// empty once a sign-in unlocked again.
+	Dropped   string    `json:"dropped,omitempty"`
+	DroppedAt time.Time `json:"droppedAt,omitzero"`
 }
 
 // maxVaultRequest bounds what the keeper reads of one request.

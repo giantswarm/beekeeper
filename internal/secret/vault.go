@@ -32,7 +32,11 @@ type Keeper struct {
 	env      string // OP_SESSION_<id>=<token>
 	since    time.Time
 	until    time.Time
-	lifetime time.Duration
+	// dropped is why op stopped taking the last session and when, until
+	// the next unlock.
+	dropped   string
+	droppedAt time.Time
+	lifetime  time.Duration
 	// end locks the session when its lifetime passes.
 	end *time.Timer
 	// changed hears the state after every unlock and lock.
@@ -66,6 +70,7 @@ func (k *Keeper) unlock(env string, now time.Time) {
 		close(k.ready)
 	}
 	k.unlocked, k.env, k.since, k.until = true, env, now, now.Add(k.lifetime)
+	k.dropped, k.droppedAt = "", time.Time{}
 	if k.end != nil {
 		k.end.Stop()
 	}
@@ -78,6 +83,16 @@ func (k *Keeper) unlock(env string, now time.Time) {
 // Lock forgets the session: the person's lock, or one op no longer takes.
 func (k *Keeper) Lock() {
 	k.mu.Lock()
+	k.lockLocked()
+}
+
+// Drop forgets a session op no longer takes, and says why until the next
+// unlock.
+func (k *Keeper) Drop(reason string, now time.Time) {
+	k.mu.Lock()
+	if k.unlocked {
+		k.dropped, k.droppedAt = reason, now
+	}
 	k.lockLocked()
 }
 
@@ -116,7 +131,7 @@ func (k *Keeper) State() VaultState {
 }
 
 func (k *Keeper) stateLocked() VaultState {
-	return VaultState{Unlocked: k.unlocked, Since: k.since, Until: k.until}
+	return VaultState{Unlocked: k.unlocked, Since: k.since, Until: k.until, Dropped: k.dropped, DroppedAt: k.droppedAt}
 }
 
 // Env is the session's environment entry for op, "" while locked.
