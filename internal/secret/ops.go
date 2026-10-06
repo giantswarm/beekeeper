@@ -264,8 +264,8 @@ func (o *Ops) Set(ctx context.Context, dst, vault Ref, length int, charset strin
 }
 
 // storeVault writes v into the concealed field of a vault item, creating
-// the item or the field when absent. The item travels as a JSON template
-// on stdin, never on a command line.
+// the item or the field when absent. The item travels as JSON on stdin,
+// never on a command line; op refuses piped input next to --template.
 func (o *Ops) storeVault(ctx context.Context, r Ref, v string) error {
 	parts := strings.SplitN(strings.TrimPrefix(r.Op, guard.OpRef), "/", 3)
 	vault, title, field := parts[0], parts[1], parts[2]
@@ -305,9 +305,9 @@ func (o *Ops) storeVault(ctx context.Context, r Ref, v string) error {
 	if err != nil {
 		return err
 	}
-	args := []string{"item", "create", "--vault", vault, "--template", "/dev/stdin", "--format", "json"}
+	args := []string{"item", "create", "-", "--vault", vault, "--format", "json"}
 	if id != "" {
-		args = []string{"item", "edit", id, "--vault", vault, "--template", "/dev/stdin", "--format", "json"}
+		args = []string{"item", "edit", id, "--vault", vault, "--format", "json"}
 	}
 	if _, err := o.op(ctx, bytes.NewReader(tmpl), args...); err != nil {
 		return fmt.Errorf("%s: %w", r.Op, err)

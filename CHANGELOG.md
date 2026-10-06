@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `beekeeper secret set --generate` creates and edits the vault item again: op refuses piped input next to `--template` ("cannot create an item from template and stdin at the same time"), so the item's JSON now goes to `op item create -` and `op item edit` on stdin alone; `secret rotate --generate`, which edits the item, is fixed with it.
 - The broker's vault session ends at the exact end of `secret.sessionLifetime`, not up to a minute later on the keeper's next look, so the watch's `VAULT UNLOCKED … until <t>` holds to the minute.
 - `beekeeper secret unlock` reached no broker: the broker is undumpable, so its `/proc/<pid>/exe` is root's and the peer check failed before anything was sent or logged. The check now identifies the broker as the main process of `beekeeper-sandbox.service` running this binary, from systemd, and a refused unlock is logged.
 - The watch no longer ends a waiting vault call with a bare ENDED line when it gave up: `VAULT LOCKED: <who>'s call on <ref> timed out …, still locked`.
