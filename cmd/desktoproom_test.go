@@ -9,6 +9,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// desktopArgs are the arguments of a CLI the desktop runs.
+var desktopArgs = []string{claudeComm, permissionPromptTool, "stdio"}
+
 // At the desktop's cap beekeeper ends only one of its own idle CLIs: a
 // finished worker's first, then a parked one's, idle longest first; never
 // the person's own session, a role's holder, a worker busy on its task, one
@@ -16,7 +19,6 @@ import (
 func TestRoomFor(t *testing.T) {
 	now := time.Date(2026, 10, 5, 22, 0, 0, 0, time.UTC)
 	const onhold = "onhold"
-	desktop := []string{claudeComm, permissionPromptTool, "stdio"}
 	session := func(pid int, id string, idle time.Duration) *claude.Session {
 		return &claude.Session{PID: pid, ID: id, HostID: "local_" + id, LastActive: now.Add(-idle)}
 	}
@@ -33,7 +35,7 @@ func TestRoomFor(t *testing.T) {
 	}
 	tbl := &proc.Table{ByPID: map[int]*proc.Process{}}
 	for _, s := range sessions {
-		tbl.ByPID[s.PID] = &proc.Process{PID: s.PID, Comm: claudeComm, Args: desktop}
+		tbl.ByPID[s.PID] = &proc.Process{PID: s.PID, Comm: claudeComm, Args: desktopArgs}
 	}
 	st := &state.State{}
 	for _, id := range []string{"fresh", "stale", "tasked", "watcher", onhold} {
@@ -80,16 +82,15 @@ func TestRoomFor(t *testing.T) {
 // Neither the holder nor a run still active within stewardQuiet is ended.
 func TestRoomForRelievedRun(t *testing.T) {
 	now := time.Date(2026, 10, 6, 13, 4, 0, 0, time.UTC)
-	desktop := []string{claudeComm, permissionPromptTool, "stdio"}
-	old := state.Party{Session: "old", HostSession: "local_old", Name: "Guide run 12"}
-	succ := state.Party{Session: "new", HostSession: "local_new", Name: "Guide run 13"}
+	old := state.Party{Session: "pastrun", HostSession: "local_pastrun", Name: "Guide run 12"}
+	succ := state.Party{Session: "successor", HostSession: "local_successor", Name: "Guide run 13"}
 	sessions := []*claude.Session{
-		{PID: 1, ID: "old", HostID: "local_old", Name: old.Name, LastActive: now.Add(-3 * time.Minute)},
-		{PID: 2, ID: "new", HostID: "local_new", Name: succ.Name, LastActive: now.Add(-2 * time.Minute)},
+		{PID: 1, ID: old.Session, HostID: old.HostSession, Name: old.Name, LastActive: now.Add(-3 * time.Minute)},
+		{PID: 2, ID: succ.Session, HostID: succ.HostSession, Name: succ.Name, LastActive: now.Add(-2 * time.Minute)},
 	}
 	tbl := &proc.Table{ByPID: map[int]*proc.Process{}}
 	for _, s := range sessions {
-		tbl.ByPID[s.PID] = &proc.Process{PID: s.PID, Comm: claudeComm, Args: desktop}
+		tbl.ByPID[s.PID] = &proc.Process{PID: s.PID, Comm: claudeComm, Args: desktopArgs}
 	}
 	st := &state.State{Starts: []state.Start{{Party: old}, {Party: succ}}}
 	guideRole.update(st, func(r *state.Role) {
