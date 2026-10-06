@@ -502,7 +502,8 @@ naming the recipients, each source with what it held, and `secret.ageIdentities`
 another key group (KMS, PGP, Vault, key groups), an SSH or plugin recipient, or with
 `SOPS_AGE_KEY_CMD` or `SOPS_AGE_SSH_PRIVATE_KEY_FILE` set goes to sops unchecked.
 
-`secret.ageIdentities` supplies an identity no local source holds, from the shared vault:
+`secret.ageIdentities` supplies an identity no local source holds, from the shared vault or from
+an identity file on the host that is to stay out of every vault:
 
 ```yaml
 secret:
@@ -511,13 +512,18 @@ secret:
       ref: op://<vault>/<item>/<field>        # the AGE-SECRET-KEY-1… identity
     - pathRegex: /installations/[^/]+/secrets/  # or every file under a path (absolute, unanchored)
       ref: op://<vault>/<item>/<field>
+    - recipient: age1…
+      ref: file:///home/<person>/<identity file>  # an age identity file (absolute path)
 ```
 
 The first entry whose recipient is one of the file's, or whose `pathRegex` matches the file's
-absolute path, is read like any `op://` reference (the vault must be `secret.vault`), checked to be
-the identity of one of the file's recipients, and given as `SOPS_AGE_KEY` to the one sops call's
-environment, never written anywhere. With `secret.session` such a call runs in the broker, like a
-call on an `op://` reference.
+absolute path, is read like any `op://` reference (the vault must be `secret.vault`) or, for a
+`file://` reference, from the file as `age-keygen` writes it (comment lines and several identities
+allowed), checked to hold the identity of one of the file's recipients, and only that identity is
+given as `SOPS_AGE_KEY` to the one sops call's environment, never written anywhere. With
+`secret.session` such a call runs in the broker, like a call on an `op://` reference: an identity
+file is read in the broker's process alone, without the vault session, and never copied, printed or
+fingerprinted.
 
 ### The vault session
 
@@ -1693,7 +1699,7 @@ The organisation and desk keys, and their defaults:
 | `secret.signinCommand` | none | The command the broker runs to sign in to the vault without the person; it prints the session as `op signin` does ([The vault session](#the-vault-session)) |
 | `secret.sessionLifetime` | `12h` | How long the broker holds the vault session after a sign-in ([The vault session](#the-vault-session)) |
 | `secret.unlockWait` | `8m` | How long a call on the vault waits for the broker's sign-in ([The vault session](#the-vault-session)) |
-| `secret.ageIdentities` | none | Age identities in the shared vault, by recipient or `pathRegex`, for the SOPS files no local sops identity decrypts ([Age identities](#age-identities)) |
+| `secret.ageIdentities` | none | Age identities in the shared vault or in an identity file (`file://`), by recipient or `pathRegex`, for the SOPS files no local sops identity decrypts ([Age identities](#age-identities)) |
 | `secret.unlockCommands` | none | The person's own vault unlock helpers, refused in agent sessions like `op signin` and unaliased in the agent shell ([Secret reads](#secret-reads)) |
 | `sandbox.allowRead`, `sandbox.allowWrite`, `sandbox.domains`, `sandbox.mask` | none; `GH_TOKEN` and `GITHUB_TOKEN` to GitHub | The paths under the home directory the agent sandbox re-allows for reading and writing, the hosts commands reach besides GitHub, the masked environment variables and their hosts ([The agent sandbox](#the-agent-sandbox)) |
 | `sandbox.devctl` | `devctl` on the broker's `PATH` | The devctl the broker runs on the host: it renews the sandboxed sessions' masked GitHub token and runs their gated devctl commands ([The agent sandbox](#the-agent-sandbox)) |

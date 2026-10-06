@@ -19,16 +19,21 @@ import (
 )
 
 // AgeIdentity is where beekeeper finds the age identity of a SOPS file
-// none of sops' own sources holds: a field of the shared vault, read in
-// beekeeper's process and given to the one sops call's environment alone.
+// none of sops' own sources holds: a field of the shared vault or an
+// identity file on the host, read in beekeeper's process and given to the
+// one sops call's environment alone.
 type AgeIdentity struct {
 	// Recipient is the age recipient (age1…) the identity decrypts for.
 	Recipient string
 	// Path matches the file's absolute path; nil matches by recipient only.
 	Path *regexp.Regexp
-	// Ref is the op:// field that holds the identity (AGE-SECRET-KEY-1…).
+	// Ref is the op:// field or the file:// identity file that holds the
+	// identity (AGE-SECRET-KEY-1…, an identity file's comments allowed).
 	Ref string
 }
+
+// FileRef starts the reference of an identity file on the host.
+const FileRef = "file://"
 
 // ErrNoAgeIdentity marks a SOPS file whose age recipients no identity
 // beekeeper can reach decrypts for.
@@ -58,23 +63,62 @@ func (o *Ops) ageEnv(ctx context.Context, file string) ([]string, error) {
 	if id == nil || err != nil {
 		return nil, err
 	}
-	key, err := o.value(ctx, Ref{Op: id.Ref})
+	key, err := o.ageKey(ctx, id.Ref)
 	if err != nil {
 		return nil, fmt.Errorf("%s: the age identity of secret.ageIdentities: %w", file, err)
 	}
-	ident, err := age.ParseX25519Identity(strings.TrimSpace(key))
+	// the parse error is dropped: it may quote the line it failed on
+	parsed, err := age.ParseIdentities(strings.NewReader(key))
 	if err != nil {
 		return nil, fmt.Errorf("%s: %s holds no age identity (AGE-SECRET-KEY-1…)", file, id.Ref)
 	}
-	if r := ident.Recipient().String(); !slices.Contains(recipients, r) {
-		return nil, fmt.Errorf("%s: %s holds the identity of %s, not of the file's recipients %s", file, id.Ref, r, strings.Join(recipients, ", "))
+	var held []string
+	for _, p := range parsed {
+		ident, ok := p.(*age.X25519Identity)
+		if !ok {
+			continue
+		}
+		r := ident.Recipient().String()
+		if slices.Contains(recipients, r) {
+			return []string{envAgeKey + "=" + ident.String()}, nil
+		}
+		held = append(held, r)
 	}
-	return []string{envAgeKey + "=" + ident.String()}, nil
+	if len(held) == 0 {
+		return nil, fmt.Errorf("%s: %s holds no age identity (AGE-SECRET-KEY-1…)", file, id.Ref)
+	}
+	return nil, fmt.Errorf("%s: %s holds the identity of %s, not of the file's recipients %s", file, id.Ref, strings.Join(held, ", "), strings.Join(recipients, ", "))
+}
+
+// ageKey reads the identity ref holds: an op:// field of the shared vault
+// or a file:// identity file, read here and nowhere else.
+func (o *Ops) ageKey(ctx context.Context, ref string) (string, error) {
+	path, ok := strings.CutPrefix(ref, FileRef)
+	if !ok {
+		return o.value(ctx, Ref{Op: ref})
+	}
+	raw, err := os.ReadFile(path) //nolint:gosec // the identity file secret.ageIdentities names
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
 }
 
 // AgeNeedsVault reports whether decrypting one of the SOPS files args name
 // takes an age identity from the shared vault.
 func (o *Ops) AgeNeedsVault(args []string) bool {
+	return o.ageNeeds(args, func(id *AgeIdentity) bool { return strings.HasPrefix(id.Ref, guard.OpRef) })
+}
+
+// AgeNeedsIdentity reports whether decrypting one of the SOPS files args
+// name takes an identity of secret.ageIdentities, from the vault or a file.
+func (o *Ops) AgeNeedsIdentity(args []string) bool {
+	return o.ageNeeds(args, func(*AgeIdentity) bool { return true })
+}
+
+// ageNeeds reports whether one of the SOPS files args name takes an
+// identity of secret.ageIdentities that match accepts.
+func (o *Ops) ageNeeds(args []string, match func(*AgeIdentity) bool) bool {
 	if len(o.Ages) == 0 {
 		return false
 	}
@@ -86,7 +130,7 @@ func (o *Ops) AgeNeedsVault(args []string) bool {
 		if err != nil {
 			continue
 		}
-		if id, _, _ := o.ageIdentity(r.File); id != nil {
+		if id, _, _ := o.ageIdentity(r.File); id != nil && match(id) {
 			return true
 		}
 	}
@@ -117,7 +161,7 @@ func (o *Ops) ageIdentity(file string) (*AgeIdentity, []string, error) {
 		}
 	}
 	return nil, nil, fmt.Errorf("%s: %w for its recipients %s: checked %s and secret.ageIdentities; "+
-		"an entry there (recipient or pathRegex, and ref: op://<vault>/<item>/<field> holding the AGE-SECRET-KEY-1… identity) gives beekeeper one",
+		"an entry there (recipient or pathRegex, and ref: op://<vault>/<item>/<field> or file://<identity file> holding the AGE-SECRET-KEY-1… identity) gives beekeeper one",
 		file, ErrNoAgeIdentity, strings.Join(recipients, ", "), strings.Join(checked, ", "))
 }
 
