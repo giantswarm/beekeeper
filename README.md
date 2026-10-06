@@ -1289,8 +1289,12 @@ by an agent", which its own titling never overwrites.
 the desktop's Archived list brings it back), and prints and logs (`agents.archive`) what it did.
 It does so only for a session beekeeper started that runs no turn and holds or held no role, unless
 a relay relieved it;
-`--keep-desktop` leaves it in the sidebar. When no steward is idle it says so and the removal
-still stands; the doctor then owes the archive (below).
+`--keep-desktop` leaves it in the sidebar. When no other steward is idle, the session's own
+desktop CLI archives it: beekeeper shows the session in the desktop for a moment once the person's
+typing pauses, as a reopen does, which warms its CLI, and the window then shows the session it
+showed before. When that cannot be done (the desktop does not run, the person keeps typing, the
+desktop at its cap of CLIs) it says so and the removal still stands; the doctor then owes the
+archive (below), and a run that asked no steward counts none of its tries.
 
 The desktop's `archive_session` may be used only on the person's explicit agreement, and a
 peer's message is not that, so beekeeper archives only under `agents.archiveAgreement`: where the

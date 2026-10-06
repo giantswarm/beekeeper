@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -15,6 +16,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
+
+// The desktop sessions of the stewards in the tests.
+const stewardA, stewardB = "local_a", "local_b"
 
 // A session whose desktop record lost its name has a steward set its title,
 // "self" when the steward is its own desktop CLI, and retitle waits for the
@@ -103,7 +107,6 @@ func TestDelegate(t *testing.T) {
 // target's own first, else the one idle longest; never the operator's own
 // session, a role holder, a busy agent, a headless CLI or one in a turn.
 func TestPickSteward(t *testing.T) {
-	const stewardA = "local_a"
 	now := time.Date(2026, 9, 30, 18, 0, 0, 0, time.UTC)
 	quiet, recent := now.Add(-10*time.Minute), now.Add(-5*time.Second)
 	desktop := []string{claudeComm, "--output-format", "stream-json", permissionPromptTool, "stdio"}
@@ -144,13 +147,13 @@ func TestPickSteward(t *testing.T) {
 		want     string // the steward's host, "" for none
 	}{
 		{desc: "the target's own", st: started("a", "t"), sessions: []*claude.Session{session(1, "a", quiet.Add(-time.Hour)), session(2, "t", quiet)}, want: "local_t"},
-		{desc: "the one idle longest", st: started("a", "b"), sessions: []*claude.Session{session(1, "a", quiet), session(2, "b", quiet.Add(-time.Hour))}, want: "local_b"},
+		{desc: "the one idle longest", st: started("a", "b"), sessions: []*claude.Session{session(1, "a", quiet), session(2, "b", quiet.Add(-time.Hour))}, want: stewardB},
 		{desc: "a finished worker before a roster agent", st: func() *state.State {
 			st := started("a", "b")
 			st.Agents = []state.Agent{{Party: state.Party{Session: "b"}}}
 			return st
 		}(), sessions: []*claude.Session{session(1, "a", quiet), session(2, "b", quiet.Add(-time.Hour))}, want: stewardA},
-		{desc: "not one tried", st: started("a", "b"), sessions: []*claude.Session{session(1, "a", quiet), session(2, "b", quiet.Add(-time.Hour))}, tried: []string{"local_b"}, want: stewardA},
+		{desc: "not one tried", st: started("a", "b"), sessions: []*claude.Session{session(1, "a", quiet), session(2, "b", quiet.Add(-time.Hour))}, tried: []string{stewardB}, want: stewardA},
 		{desc: "the operator's own session", st: started(), sessions: []*claude.Session{session(1, "a", quiet)}},
 		{desc: "in a turn", st: started("a"), sessions: []*claude.Session{session(1, "a", recent)}},
 		{desc: "a busy agent", st: func() *state.State {
@@ -322,5 +325,48 @@ func TestRestoreImport(t *testing.T) {
 				t.Errorf("sent %q, want model %q", msg, model)
 			}
 		})
+	}
+}
+
+// An archive asks an idle steward when one runs, else warms the CLI of the
+// first session to archive that was not asked yet, which archives itself;
+// a lookup that failed otherwise warms nothing.
+func TestArchiveSteward(t *testing.T) {
+	idle := steward{host: "local_idle", sock: "/s/1.sock"}
+	var warmed []string
+	warm := func(_ context.Context, host string) (steward, error) {
+		warmed = append(warmed, host)
+		return steward{host: host, sock: "/s/2.sock"}, nil
+	}
+	none := func([]string) (steward, error) { return steward{}, errNoSteward }
+	broken := errors.New("state unreadable")
+	for _, c := range []struct {
+		desc    string
+		find    func([]string) (steward, error)
+		exclude []string
+		want    string
+		warmed  []string
+		wantErr error
+	}{
+		{desc: "an idle steward", find: func([]string) (steward, error) { return idle, nil }, want: "local_idle"},
+		{desc: "none idle", find: none, want: stewardA, warmed: []string{stewardA}},
+		{desc: "the first asked", find: none, exclude: []string{stewardA}, want: stewardB, warmed: []string{stewardB}},
+		{desc: "all asked", find: none, exclude: []string{stewardA, stewardB}, wantErr: errNoSteward},
+		{desc: "a failed lookup", find: func([]string) (steward, error) { return steward{}, broken }, wantErr: broken},
+	} {
+		warmed = nil
+		s, err := archiveSteward(t.Context(), []string{stewardA, stewardB}, c.exclude, c.find, warm)
+		if !errors.Is(err, c.wantErr) || s.host != c.want || !slices.Equal(warmed, c.warmed) {
+			t.Errorf("%s: steward %q, err %v, warmed %v", c.desc, s.host, err, warmed)
+		}
+	}
+}
+
+// A warmed steward archives its own session as "self", after the others.
+func TestArchiveRequestOfAWarmedSteward(t *testing.T) {
+	s := steward{host: stewardA, sock: "/s/2.sock"}
+	msg := archiveRequest(s, []string{stewardA, stewardB}, "beekeeper doctor", "agreed")
+	if !strings.Contains(msg, strconv.Quote(stewardB)+`, "self"`) {
+		t.Errorf("request %q", msg)
 	}
 }

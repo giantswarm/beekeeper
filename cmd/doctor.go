@@ -455,6 +455,9 @@ line:
   desktop records it, up to 5 stewards' turns 10 minutes apart within 24h;
   so are archived the session an agents handover ended and the run of the
   supervisor or the guide a relay relieved, which frees its desktop CLI;
+  with no idle steward running, the session's own desktop CLI archives it,
+  warmed by showing the session in the desktop for a moment once the
+  person's typing pauses (a run that asks no steward counts no turn);
 - gives a session beekeeper started the roster name back when the desktop
   recorded another title, through a steward;
 - probes each fault of doctor.faults (a probe exits 0 while the fault is

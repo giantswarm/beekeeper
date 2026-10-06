@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Finished workers' and relieved role runs' desktop sessions are archived without an idle steward: when no other desktop CLI of beekeeper's is idle to ask, the doctor (and `agents remove`, `agents handover`) shows the session in the desktop for a moment once the person's typing pauses, which warms its own CLI, and asks that CLI to archive itself. A run that could ask no steward (the desktop does not run, the person keeps typing) counts none of the five tries, and the doctor owes once more the archives it gave up, relieved role runs included. Before, every run without an idle steward counted a try, and after five "no idle desktop CLI … runs to ask" the session stayed in the sidebar for good ([#440](https://github.com/giantswarm/beekeeper/issues/440)).
+
 ### Added
 
 - A session no longer runs a headless turn beside its desktop CLI: a headless resume (`agents wake`, a task turn the desktop does not run, a hand-over's note turn) sends its message to the session's desktop CLI when one started meanwhile, and a desktop send that starts the desktop's CLI (a wake, the standby's revive) waits up to two minutes for the session's headless turn to end and is refused while it still runs. The watch says `TWIN CLI: "<name>" runs <n> CLIs on session <id> (PID <pid> in <dir>, …)` for a session that runs two CLIs anyway, and its ENDED line once one is left. Two CLIs on one transcript both worked the task, each unaware of the other, and a message by name reached only one ([#499](https://github.com/giantswarm/beekeeper/issues/499)).

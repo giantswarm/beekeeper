@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -129,6 +130,33 @@ func TestSeedArchives(t *testing.T) {
 	st.Archives = nil
 	if seedArchives(st, record, archiveNow); len(st.Archives) != 0 {
 		t.Errorf("seeded twice: %+v", st.Archives)
+	}
+}
+
+// A state seeded before the doctor warmed a session's own CLI is seeded
+// once more, the archives it gave up included, and a relieved role run's
+// with them.
+func TestSeedArchivesAgainForTheWarmedSteward(t *testing.T) {
+	st := handOverState()
+	st.Starts = []state.Start{{Party: supA}, {Party: supB}, {Party: state.Party{Session: "given-up", HostSession: "local_given-up", Name: "given up"}}}
+	if _, _, err := relayRole(st, supA, supB, relayNow, 15*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := startRole(st, supB, true, false, relayNow.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	st.Archives, st.ArchivesSeeded, st.FinishedSeeded = nil, true, true
+	seedArchives(st, unarchived, archiveNow)
+	var hosts []string
+	for _, ar := range st.Archives {
+		hosts = append(hosts, ar.Host)
+	}
+	if !slices.Equal(hosts, []string{supA.HostSession, "local_given-up"}) || !st.WarmSeeded {
+		t.Fatalf("seeded %v", hosts)
+	}
+	st.Archives = nil
+	if seedArchives(st, unarchived, archiveNow); len(st.Archives) != 0 {
+		t.Errorf("seeded again: %+v", st.Archives)
 	}
 }
 
