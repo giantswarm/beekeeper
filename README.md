@@ -1332,7 +1332,16 @@ back through a steward, at most every 30 minutes per session. Each fault of `doc
 probed (the probe exits 0 while the fault is absent); a failing one whose remedy may run
 unattended is remedied and probed again, any other only with `doctor --fault <name>`, and a fault
 still failing is one note for `guide.person`, closed once its probe passes, and one `DOCTOR FAULT`
-line while it lasts. `--dry-run` says what it would do. A note for the person that asks nothing
+line while it lasts. The Go build cache every session's builds share (`$GOCACHE`, else
+`~/.cache/go-build`) is kept under `doctor.goCacheMaxGiB` (20 GiB): Go itself drops only entries
+unused for five days, so a busy machine's cache grows without bound. Every watch, the standby
+watch included, reads its size every `doctor.goCacheEvery` (1h) and, over the cap, removes the
+least recently used entries down to three quarters of it; it never starts while one of the user's
+`go` commands runs and stops when one begins, trying again five minutes later. One process trims
+at a time, and each trim is one `gocache.trim` event with the size before and after; a trim that
+waited `doctor.goCacheEvery` for the builds, or a cache it cannot read, is one `GO CACHE` line.
+`beekeeper doctor` trims it the same way (`--dry-run` says the size). `--dry-run` says what it
+would do. A note for the person that asks nothing
 (no question mark, no `--option`, no request verb opening it) is refused: a status line goes to
 `beekeeper log add "<text>"`.
 
@@ -1766,6 +1775,7 @@ The organisation and desk keys, and their defaults:
 | `watch.tmpMaxMiB`, `watch.diskMinMiB` | 45% of `/tmp`, 5% of `/` | TMPFS, LOW DISK |
 | `watch.diskCriticalMiB` | 1% of `/` | DISK NEARLY FULL |
 | `watch.diskFillWithin` | 2h | DISK FILLING: `/` would run full within it at the rate its free space fell over the last ten minutes; the line names the commands and sessions whose processes wrote most (`write_bytes` of `/proc/<pid>/io`) and the part of the loss no process the watch can read accounts for (another user's, such as dockerd, or ended ones) |
+| `doctor.goCacheMaxGiB`, `doctor.goCacheEvery` | `20`; `1h` | The cap of the shared Go build cache and how often a watch reads its size; over the cap it is trimmed, least recently used first, to three quarters of it while no go build runs ([Agents started without a click](#agents-started-without-a-click)); negative: off |
 | `ollama.url`, `lemonade.url` | unset: no model server | The host's model servers, watched and guarded under the `model-server` lease |
 | `outbound.phrases`, `outbound.paths`, `outbound.storeDeny` | none | What never leaves the machine, the plan files whose writes are outbound, the refused secret-store writes ([What leaves the machine](#what-leaves-the-machine)) |
 | `secret.vault`, `secret.tokenFile` | none | The shared 1Password vault `beekeeper secret` reads and writes, and the file with its service account's token ([Secret operations](#secret-operations)) |

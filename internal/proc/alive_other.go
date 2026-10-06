@@ -2,7 +2,10 @@
 
 package proc
 
-import "os"
+import (
+	"io/fs"
+	"os"
+)
 
 // Alive reports whether a process with that PID exists.
 func Alive(pid int) bool {
@@ -16,3 +19,6 @@ func Alive(pid int) bool {
 	_ = p.Release()
 	return true
 }
+
+// ownerUID is unknown off unix.
+func ownerUID(fs.FileInfo) int { return -1 }
