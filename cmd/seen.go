@@ -160,7 +160,7 @@ func (a *app) agentFacts(views []agentView) []fact {
 		key := fmt.Sprintf("agent %q", v.Name)
 		facts = append(facts, fact{
 			Key:  key,
-			Sig:  strings.Join([]string{task, clock(a.now, since), reach, v.Browser, v.Kept}, "|"),
+			Sig:  strings.Join([]string{task, clock(a.now, since), reach, v.Browser, v.Kept, fmt.Sprint(v.NoRow)}, "|"),
 			Line: fmt.Sprintf("%s %s since %s, %s%s%s", key, task, clock(a.now, since), v.Reachable, browserNote(v.Browser), keptNote(v.Kept)),
 		})
 	}
