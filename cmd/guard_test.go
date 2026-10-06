@@ -14,6 +14,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -37,6 +38,10 @@ func TestMain(m *testing.M) {
 	if os.Getenv("BEEKEEPER_TEST_MAIN") == "1" {
 		os.Exit(Main())
 	}
+	// A test inside the agent sandbox would inherit its markers and ask a
+	// broker it never started; a test that wants them sets them itself.
+	os.Unsetenv(sandbox.Env)
+	os.Unsetenv(sandbox.Brokered)
 	os.Exit(m.Run())
 }
 
