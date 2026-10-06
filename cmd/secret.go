@@ -184,7 +184,7 @@ func (a *app) secretBrokered(cmd *cobra.Command, args []string, inSandbox bool) 
 	if err := brokeredSecretArgs(argv, inSandbox); err != nil {
 		return refused("%v; %s and %s run on the host, by the person", err, "setup", "import")
 	}
-	if !a.cfg.Secret.Session || !a.secretNeedsVault(argv) {
+	if !a.cfg.Secret.Session || !a.secretNeedsVault("", argv) {
 		return a.brokeredReply(sandbox.Request{Op: sandbox.OpSecret, Args: argv})
 	}
 	r, err := sandbox.Call(sandbox.SpoolDir(a.cfg.StateDir), sandbox.Request{Op: sandbox.OpVault}, 10*time.Second)
@@ -786,16 +786,18 @@ func (a *app) ageIdentities() []secret.AgeIdentity {
 }
 
 // secretNeedsVault reports whether a call's arguments take the shared
-// vault: an op:// reference, or a SOPS file whose age identity lives there.
-func (a *app) secretNeedsVault(args []string) bool {
-	return secret.NeedsVault(args) || (&secret.Ops{Ages: a.ageIdentities()}).AgeNeedsVault(args)
+// vault: an op:// reference, or a SOPS file, relative to dir (the working
+// directory when empty), whose age identity lives there. The client and the
+// broker decide on it alike.
+func (a *app) secretNeedsVault(dir string, args []string) bool {
+	return secret.NeedsVault(args) || (&secret.Ops{Ages: a.ageIdentities()}).AgeNeedsVault(dir, args)
 }
 
 // secretNeedsBroker reports whether a call goes to the broker with
 // secret.session: one on the vault, or on a SOPS file whose age identity
 // secret.ageIdentities names, a file's included, which the broker alone reads.
 func (a *app) secretNeedsBroker(args []string) bool {
-	return secret.NeedsVault(args) || (&secret.Ops{Ages: a.ageIdentities()}).AgeNeedsIdentity(args)
+	return secret.NeedsVault(args) || (&secret.Ops{Ages: a.ageIdentities()}).AgeNeedsIdentity("", args)
 }
 
 // secretOpsKeyed are the operations with the fingerprint key, created on

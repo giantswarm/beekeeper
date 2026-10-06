@@ -104,21 +104,23 @@ func (o *Ops) ageKey(ctx context.Context, ref string) (string, error) {
 	return string(raw), nil
 }
 
-// AgeNeedsVault reports whether decrypting one of the SOPS files args name
-// takes an age identity from the shared vault.
-func (o *Ops) AgeNeedsVault(args []string) bool {
-	return o.ageNeeds(args, func(id *AgeIdentity) bool { return strings.HasPrefix(id.Ref, guard.OpRef) })
+// AgeNeedsVault reports whether decrypting one of the SOPS files args name,
+// relative to dir (the working directory when empty), takes an age
+// identity from the shared vault.
+func (o *Ops) AgeNeedsVault(dir string, args []string) bool {
+	return o.ageNeeds(dir, args, func(id *AgeIdentity) bool { return strings.HasPrefix(id.Ref, guard.OpRef) })
 }
 
 // AgeNeedsIdentity reports whether decrypting one of the SOPS files args
-// name takes an identity of secret.ageIdentities, from the vault or a file.
-func (o *Ops) AgeNeedsIdentity(args []string) bool {
-	return o.ageNeeds(args, func(*AgeIdentity) bool { return true })
+// name, relative to dir (the working directory when empty), takes an
+// identity of secret.ageIdentities, from the vault or a file.
+func (o *Ops) AgeNeedsIdentity(dir string, args []string) bool {
+	return o.ageNeeds(dir, args, func(*AgeIdentity) bool { return true })
 }
 
-// ageNeeds reports whether one of the SOPS files args name takes an
-// identity of secret.ageIdentities that match accepts.
-func (o *Ops) ageNeeds(args []string, match func(*AgeIdentity) bool) bool {
+// ageNeeds reports whether one of the SOPS files args name, relative to
+// dir, takes an identity of secret.ageIdentities that match accepts.
+func (o *Ops) ageNeeds(dir string, args []string, match func(*AgeIdentity) bool) bool {
 	if len(o.Ages) == 0 {
 		return false
 	}
@@ -129,6 +131,9 @@ func (o *Ops) ageNeeds(args []string, match func(*AgeIdentity) bool) bool {
 		r, err := ParseRef(a)
 		if err != nil {
 			continue
+		}
+		if dir != "" && !filepath.IsAbs(r.File) {
+			r.File = filepath.Join(dir, r.File)
 		}
 		if id, _, _ := o.ageIdentity(r.File); id != nil && match(id) {
 			return true
