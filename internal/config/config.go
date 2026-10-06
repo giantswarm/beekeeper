@@ -322,11 +322,27 @@ type Secret struct {
 	// then, and forgets it at the end.
 	SessionLifetime Duration `yaml:"sessionLifetime"`
 	// AgeIdentities are the age identities beekeeper reads from the shared
-	// vault or an identity file for the SOPS files that sops' own sources
-	// (SOPS_AGE_KEY, SOPS_AGE_KEY_FILE, sops/age/keys.txt) hold none for:
-	// each read in beekeeper's process (the broker's, with secret.session)
-	// and given to the one sops call alone.
+	// vault, an identity file or the person's own credential store for the
+	// SOPS files that sops' own sources (SOPS_AGE_KEY, SOPS_AGE_KEY_FILE,
+	// sops/age/keys.txt) hold none for: each read in beekeeper's process
+	// (the broker's, with secret.session) and given to the one sops call
+	// alone.
 	AgeIdentities []AgeIdentity `yaml:"ageIdentities"`
+	// Store is the person's own credential store a store:// age identity
+	// is read from.
+	Store SecretStore `yaml:"store"`
+}
+
+// SecretStore reaches the person's own credential store through the
+// person's own commands, run by the broker: beekeeper never handles the
+// store's password, and the store shows whatever unlock prompt it shows.
+type SecretStore struct {
+	// Read prints the secret of the entry appended as its last argument on
+	// stdout.
+	Read []string `yaml:"read"`
+	// Search prints the names of the entries matching the term appended as
+	// its last argument (an age recipient), one per line, never a value.
+	Search []string `yaml:"search"`
 }
 
 // AgeIdentity maps the SOPS files of an age recipient, or under a path, to
@@ -338,9 +354,11 @@ type AgeIdentity struct {
 	// PathRegex matches a file's absolute path (unanchored), for the files
 	// of a repository or an installation whatever their recipient.
 	PathRegex string `yaml:"pathRegex"`
-	// Ref is the op:// field of the shared vault (secret.vault) or the
-	// file:/// identity file (an absolute path, comments allowed) holding
-	// the identity, AGE-SECRET-KEY-1….
+	// Ref is the op:// field of the shared vault (secret.vault), the
+	// file:/// identity file (an absolute path, comments allowed) or the
+	// store:// entry of the person's own credential store (secret.store;
+	// store:// alone searches it for the file's recipients) holding the
+	// identity, AGE-SECRET-KEY-1….
 	Ref string `yaml:"ref"`
 }
 
@@ -569,6 +587,22 @@ var commandName = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.+-]*$`)
 // Doctor configures the known faults the doctor probes and remedies.
 type Doctor struct {
 	Faults []Fault `yaml:"faults"`
+	// GoCacheMaxGiB caps the Go build cache every session's builds share:
+	// over it the watch trims the least recently used entries down to
+	// three quarters of it, while no go build runs. Default 20; negative:
+	// off.
+	GoCacheMaxGiB int `yaml:"goCacheMaxGiB"`
+	// GoCacheEvery is how often the cache's size is read (default 1h);
+	// a trim a build held back is tried again at the next sample.
+	GoCacheEvery Duration `yaml:"goCacheEvery"`
+}
+
+// GoCacheMax is the Go build cache's cap in bytes; 0 is off.
+func (d Doctor) GoCacheMax() int64 {
+	if d.GoCacheMaxGiB < 0 {
+		return 0
+	}
+	return int64(d.GoCacheMaxGiB) << 30
 }
 
 // Fault is a known fault with a known remedy.
@@ -980,6 +1014,12 @@ type Watch struct {
 	Tools        []string `yaml:"tools"`
 	TmpMaxMiB    int      `yaml:"tmpMaxMiB"`
 	DiskMinMiB   int      `yaml:"diskMinMiB"`
+	// DiskCriticalMiB is the free space on / under which the watch says
+	// DISK NEARLY FULL; DiskFillWithin how soon / would run full at the
+	// rate its free space fell over the last minutes for the watch to say
+	// DISK FILLING with the commands and sessions that wrote.
+	DiskCriticalMiB int      `yaml:"diskCriticalMiB"`
+	DiskFillWithin  Duration `yaml:"diskFillWithin"`
 	// QuietSessions are globs (* matches any run) of the names of
 	// short-lived sessions whose start, end and restart are no wake-up:
 	// the watch logs them (watch.quiet) instead of printing them. Setting
@@ -998,6 +1038,7 @@ const (
 	DefaultGTTMax          = 0.28
 	DefaultTmpMax          = 0.45
 	DefaultDiskMin         = 0.05
+	DefaultDiskCritical    = 0.01
 )
 
 // AvailMin is the LOW RAM threshold on a machine of ramMiB.
@@ -1024,6 +1065,11 @@ func (w Watch) TmpMax(tmpMiB int) int { return atMost(w.TmpMaxMiB, DefaultTmpMax
 
 // DiskMin is the LOW DISK threshold on a / of diskMiB.
 func (w Watch) DiskMin(diskMiB int) int { return atLeast(w.DiskMinMiB, DefaultDiskMin, diskMiB) }
+
+// DiskCritical is the DISK NEARLY FULL threshold on a / of diskMiB.
+func (w Watch) DiskCritical(diskMiB int) int {
+	return atLeast(w.DiskCriticalMiB, DefaultDiskCritical, diskMiB)
+}
 
 // atLeast is a lower threshold: the configured one, else the fraction of
 // total (0 when total is unknown, which never fires).
@@ -1354,6 +1400,9 @@ func (c *Config) defaults() error {
 	setDur(&w.Repeat, 10*time.Minute)
 	setDur(&w.BudgetEvery, 5*time.Minute)
 	setDur(&w.OOMDWithin, 30*time.Minute)
+	setDur(&w.DiskFillWithin, 2*time.Hour)
+	setInt(&c.Doctor.GoCacheMaxGiB, 20)
+	setDur(&c.Doctor.GoCacheEvery, time.Hour)
 	setStr(&c.Ollama.Unit, "ollama")
 	setInt(&c.Ollama.BudgetGiB, 12)
 	setInt(&c.Ollama.MaxBudgetGiB, 24)
@@ -1569,8 +1618,12 @@ func (c *Config) validate() error {
 			return fmt.Errorf("secret.ageIdentities[%d]: name a recipient or a pathRegex", i)
 		case id.Recipient != "" && !strings.HasPrefix(id.Recipient, "age1"):
 			return fmt.Errorf("secret.ageIdentities[%d]: recipient %q is no age recipient (age1…)", i, id.Recipient)
-		case !strings.HasPrefix(id.Ref, "op://") && !strings.HasPrefix(id.Ref, "file:///"):
-			return fmt.Errorf("secret.ageIdentities[%d]: ref %q: want op://<vault>/<item>/<field> or file:///<absolute path>", i, id.Ref)
+		case !strings.HasPrefix(id.Ref, "op://") && !strings.HasPrefix(id.Ref, "file:///") && !strings.HasPrefix(id.Ref, "store://"):
+			return fmt.Errorf("secret.ageIdentities[%d]: ref %q: want op://<vault>/<item>/<field>, file:///<absolute path> or store://[<entry>]", i, id.Ref)
+		case strings.HasPrefix(id.Ref, "store://") && len(c.Secret.Store.Read) == 0:
+			return fmt.Errorf("secret.ageIdentities[%d]: ref %q: a store:// reference takes secret.store.read", i, id.Ref)
+		case id.Ref == "store://" && len(c.Secret.Store.Search) == 0:
+			return fmt.Errorf("secret.ageIdentities[%d]: ref %q: store:// without an entry takes secret.store.search", i, id.Ref)
 		}
 		if _, err := regexp.Compile(id.PathRegex); err != nil {
 			return fmt.Errorf("secret.ageIdentities[%d]: pathRegex: %w", i, err)

@@ -44,9 +44,13 @@ type Ops struct {
 	Fingerprint func(value string) string
 	// Apply writes a key of a Secret; nil is [ApplySecret].
 	Apply SecretApplier
-	// Ages are the age identities of the shared vault for the SOPS files
-	// sops' own sources hold none for.
+	// Ages are the age identities of the shared vault, an identity file or
+	// the person's own credential store for the SOPS files sops' own
+	// sources hold none for.
 	Ages []AgeIdentity
+	// Store is the person's own credential store a store:// age identity
+	// is read from.
+	Store Store
 }
 
 // opTimeout bounds one read of the shared vault: op that answers nothing
@@ -218,15 +222,7 @@ func (o *Ops) decrypt(ctx context.Context, file string) (*document, error) {
 // .sops.yaml nearest above file. The plaintext goes to sops on stdin; the
 // file is written from sops' output only, through a rename.
 func (o *Ops) encrypt(ctx context.Context, doc *document, file string) error {
-	abs, err := filepath.Abs(file)
-	if err != nil {
-		return err
-	}
-	cfg, err := sopsConfig(filepath.Dir(abs))
-	if err != nil {
-		return err
-	}
-	rel, err := filepath.Rel(filepath.Dir(cfg), abs)
+	cfg, rel, err := sopsTarget(file)
 	if err != nil {
 		return err
 	}
@@ -239,7 +235,7 @@ func (o *Ops) encrypt(ctx context.Context, doc *document, file string) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", file, err)
 	}
-	return writeFile(abs, out)
+	return writeFile(file, out)
 }
 
 // sopsConfig is the .sops.yaml in dir or the nearest directory above it.

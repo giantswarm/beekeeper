@@ -2,6 +2,8 @@ package proc
 
 import (
 	"os"
+	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -32,5 +34,43 @@ func TestReadFindsItself(t *testing.T) {
 	anc := tab.Ancestors(me.PID)
 	if len(anc) == 0 || anc[0].PID != os.Getppid() {
 		t.Errorf("ancestors = %v", anc)
+	}
+}
+
+func TestWriteBytesAt(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "42"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	io := "rchar: 1\nwchar: 2\nsyscr: 3\nsyscw: 4\nread_bytes: 5\nwrite_bytes: 4096\ncancelled_write_bytes: 0\n"
+	if err := os.WriteFile(filepath.Join(root, "42", "io"), []byte(io), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := writeBytesAt(root, 42); err != nil || got != 4096 {
+		t.Errorf("writeBytesAt = %d, %v; want 4096", got, err)
+	}
+	if _, err := writeBytesAt(root, 43); err == nil {
+		t.Error("a missing process read without an error")
+	}
+}
+
+func TestNamedFindsTheCallersProcessesByComm(t *testing.T) {
+	root := t.TempDir()
+	const goComm = "go\n"
+	for pid, comm := range map[string]string{"10": goComm, "11": "gopls\n", "12": goComm, "self": goComm} {
+		if err := os.MkdirAll(filepath.Join(root, pid), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, pid, "comm"), []byte(comm), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := namedAt(root, "go", os.Getuid())
+	slices.Sort(got)
+	if !slices.Equal(got, []int{10, 12}) {
+		t.Errorf("namedAt = %v, want [10 12]", got)
+	}
+	if got := namedAt(root, "go", os.Getuid()+1); len(got) != 0 {
+		t.Errorf("namedAt another uid = %v, want none", got)
 	}
 }

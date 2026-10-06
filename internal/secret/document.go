@@ -155,6 +155,16 @@ func (d *document) set(path, value string) error {
 	return nil
 }
 
+// valuePath is where a value for path goes: a Kubernetes Secret holds its
+// values under stringData or data, so any other path lands under
+// stringData.
+func (d *document) valuePath(path string) string {
+	if k, _ := d.get("kind"); k != secretKind || strings.HasPrefix(path, "data.") || strings.HasPrefix(path, "stringData.") {
+		return path
+	}
+	return "stringData." + path
+}
+
 func kindName(k yaml.Kind) string {
 	switch k {
 	case yaml.MappingNode:

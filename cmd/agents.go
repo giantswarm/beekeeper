@@ -474,6 +474,9 @@ func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentVie
 		if w := ag.Import; w.Pending(a.now) {
 			v.Reachable = "not running, import waits until " + clock(a.now, w.Until)
 		}
+		if ag.Undelivered != "" {
+			v.Reachable = "task not delivered: " + ag.Undelivered
+		}
 		if s, ok := claude.Live(sessions, ag.Party); ok {
 			v.Reachable, v.Model = "live", s.Model
 			for _, c := range s.Commands {

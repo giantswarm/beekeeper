@@ -69,9 +69,33 @@ func TestBypassStartNeedsTheRecordedMode(t *testing.T) {
 	}
 }
 
+// Every headless turn of a start, the first (headlessStartArgv) and a wake
+// (wakeArgv), runs in bypass with the CLI's own Chrome connection and no
+// narrowed tool set: browse's narrowing is for the desktop turns.
+func TestHeadlessTurnFlags(t *testing.T) {
+	turns := map[string][]string{
+		"first turn": headlessStartArgv("claude", "id", "n", "", "b"),
+		"wake turn":  wakeArgv("claude", wakeTarget{id: "id", mode: state.ModeBypass}, "m"),
+	}
+	for turn, argv := range turns {
+		flags := argv[:slices.Index(argv, "--")]
+		if i := slices.Index(flags, permissionModeFlag); i < 0 || flags[i+1] != state.ModeBypass {
+			t.Errorf("%s argv = %q, want %s %s", turn, argv, permissionModeFlag, state.ModeBypass)
+		}
+		if !slices.Contains(flags, chromeFlag) {
+			t.Errorf("%s argv = %q, want %s", turn, argv, chromeFlag)
+		}
+		for _, narrowing := range []string{toolsFlag, allowedToolsFlag, strictMCPConfigFlag} {
+			if slices.Contains(flags, narrowing) {
+				t.Errorf("%s argv = %q, want no %s", turn, argv, narrowing)
+			}
+		}
+	}
+}
+
 func TestAgentArgvAndBriefTask(t *testing.T) {
 	got := agentArgv("/usr/bin/claude", "id-1", "test: w", "haiku", "-starts with a dash")
-	want := []string{"/usr/bin/claude", "-p", "--session-id", "id-1", "--permission-mode", "bypassPermissions", "-n", "test: w", "--model", "haiku", "--", "-starts with a dash"}
+	want := []string{"/usr/bin/claude", "-p", "--session-id", "id-1", permissionModeFlag, "bypassPermissions", "-n", "test: w", "--model", "haiku", "--", "-starts with a dash"}
 	if !slices.Equal(got, want) {
 		t.Errorf("argv = %q", got)
 	}
@@ -377,5 +401,36 @@ func TestBrowserLine(t *testing.T) {
 		if got := strings.Contains(line, "waits on a person's site request"); got != asks {
 			t.Errorf("browserLine(%q) = %q, asks = %v, want %v", chrome, line, got, asks)
 		}
+	}
+}
+
+// A start that delivers no turn of its task fails loudly: a non-zero exit
+// naming the reason, an agents.start line, and the roster saying so until a
+// delivered wake clears it.
+func TestUndeliveredTaskIsLoud(t *testing.T) {
+	a, _ := stubApp(t)
+	p := rotationParty
+	rosterAgent(t, a, state.Agent{Party: p, Task: rotationTask})
+	why := errors.New("importing it into the desktop: the desktop runs its cap of 28 CLIs")
+	err := a.undelivered(state.Party{Name: "the starter"}, p, why)
+	if err == nil || !errors.Is(err, why) || !strings.Contains(err.Error(), "task not delivered") {
+		t.Fatalf("error %v, want a task-not-delivered error wrapping the reason", err)
+	}
+	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "agents.start" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 1 || !strings.Contains(evs[0].Detail, rotationName+": task not delivered: "+why.Error()) {
+		t.Errorf("log %+v", evs)
+	}
+	st, _ := a.store.Read()
+	views := a.agentViews(st, nil)
+	if len(views) != 1 || views[0].Reachable != "task not delivered: "+why.Error() {
+		t.Errorf("roster %+v", views)
+	}
+	a.markDelivered(p)
+	st, _ = a.store.Read()
+	if views := a.agentViews(st, nil); views[0].Reachable != "not running" {
+		t.Errorf("after a delivered wake: %q", views[0].Reachable)
 	}
 }

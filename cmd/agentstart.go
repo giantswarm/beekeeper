@@ -122,9 +122,16 @@ takes the message that starts it; when the desktop runs none, a steward's
 send through the desktop's session messaging starts one with it. Before
 either spawn beekeeper keeps the desktop under its cap of CLIs by ending one
 of its own finished or parked workers' CLIs, never a person's session. Only
-where the desktop cannot run the turn (it does not run, the session has no
-row, no steward took the send) is the session resumed headless, as agents
-wake does, and start says why.
+where the desktop cannot run the turn (it does not run, it did not import
+the session, at its cap with no CLI of beekeeper's to end or the person
+still typing, so the session has no row, or no steward took the send) is
+the session resumed headless, as agents wake does, and start says why; the
+reopen after that turn imports a session the desktop did not.
+
+A start that delivers no turn of the task fails: it exits non-zero, logs
+"task not delivered" with the reason, and the roster's REACHABLE (and the
+watch's AGENTS STOPPED line) says "task not delivered" until agents wake
+delivers a turn.
 
 The first prompt is the worker rules beekeeper ships with its role skills
 (the worker-rules skill, under the binary's version), then the brief as the
@@ -134,13 +141,16 @@ supervisor", which the PreToolUse hook delivers to the role's holder.
 The desktop runs the session's turns in acceptEdits (its import always
 drops bypass), so requests no allow rule covers would stop at a card:
 beekeeper hook permissionrequest answers them, for beekeeper's starts only.
-The browser is the desktop's own: the import gives the session the Chrome
-permission mode skip_all_permission_checks only when the desktop allows all
-browser actions (a person's "Allow all sites" on a Claude in Chrome site
-request turns that on for every session), and otherwise each navigate to a
-site the session was not allowed on yet waits on a site request in its
-desktop row, which no hook answers. start says which mode the desktop
-recorded, and agents shows it per agent (BROWSER asks or skips). --desktop
+The desktop's browser asks: Claude Desktop holds a desktop turn's navigate
+to a site the session was not allowed on yet for a person's site request in
+its row, which no hook answers, unless the session runs in auto or bypass
+(the import never keeps bypass). So beekeeper hook pretooluse refuses the
+Claude in Chrome tools in the desktop turns of beekeeper's starts and names
+beekeeper browse, which runs the browser steps in a headless turn that has
+the CLI's own Chrome tools and nothing else; every headless turn of a start (--chrome, in
+bypass) has that connection too. Neither ever waits on a site request.
+start says which Chrome mode the desktop recorded, and agents shows it per
+agent (BROWSER asks or skips). --desktop
 is kept for scripts: every start imports past the window's focus now.
 
 --harness omp starts an omp (oh-my-pi) agent instead: "omp --mode rpc"
@@ -208,7 +218,7 @@ is involved and no import happens.`,
 	c.Flags().StringVar(&dir, "dir", "", "the session's working directory (default: agents.dir, else the current one)")
 	c.Flags().StringVar(&task, "task", "", "the task the roster shows it busy with (default: the brief's first line)")
 	c.Flags().StringVar(&harness, "harness", "claude", "the agent harness: claude or omp")
-	c.Flags().BoolVar(&desktop, "desktop", false, "the task needs desktop turns (the browser): import it past the desktop window's focus, as agents desktop does")
+	c.Flags().BoolVar(&desktop, "desktop", false, "the task needs desktop turns: import it past the desktop window's focus, as agents desktop does")
 	return c
 }
 
@@ -329,13 +339,17 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	}
 	unit := "beekeeper-agent-" + id[:8]
 	if !sp.headless {
-		return a.startVisible(ctx, d, sp, bin, unit, dir, startedAgent{id: id, unit: unit, dir: dir, task: reg.task}, by)
+		sa, err := a.startVisible(ctx, d, sp, bin, unit, dir, startedAgent{id: id, unit: unit, dir: dir, task: reg.task}, by)
+		if err != nil {
+			return sa, a.undelivered(by, s.Party, err)
+		}
+		return sa, nil
 	}
 	self, err := os.Executable()
 	if err != nil {
 		return startedAgent{}, err
 	}
-	if err := launch(unit, dir, a.explicitConfig(), []string{self, agentsName, reopenName, id}, agentArgv(bin, id, sp.name, sp.model, sp.brief)); err != nil {
+	if err := launch(unit, dir, a.explicitConfig(), []string{self, agentsName, reopenName, id}, headlessStartArgv(bin, id, sp.name, sp.model, sp.brief)); err != nil {
 		return startedAgent{}, fmt.Errorf("starting %s: %w (the start stays recorded; beekeeper agents remove %q takes it off the roster)", sp.name, err, sp.name)
 	}
 	if err := awaitReply(ctx, a.cfg.Claude.ProjectsDir, id, func() bool { return unitEnded(ctx, unit) }, replyQuiet, replyWait); err != nil {
@@ -357,6 +371,21 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	return sa, nil
 }
 
+// undelivered records that the start of p delivered no turn of its task:
+// the roster entry says so until agents wake delivers one, the event log
+// has the reason, and the returned error makes the start fail, so its
+// caller retries instead of counting on a worker that never got its task.
+func (a *app) undelivered(by, p state.Party, why error) error {
+	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) }); i >= 0 {
+			st.Agents[i].Undelivered = why.Error()
+		}
+		return []state.Event{event(by, "agents.start", "%s: task not delivered: %v", p.Name, why)}, nil
+	})
+	return fmt.Errorf("%s: task not delivered: %w (beekeeper agents wake %q <message> delivers it, beekeeper agents remove %q takes it off the roster)",
+		p.Name, why, p.Name, p.Name)
+}
+
 // seedNote ends a seed turn's prompt: the turn only creates the session.
 const seedNote = "beekeeper: this first turn only creates your session and has no tools. Reply with the single word ready and nothing else. " +
 	"Your task starts with the next message, a turn in the desktop, where you work it."
@@ -375,7 +404,7 @@ const taskTurn = "beekeeper: this desktop turn starts your task. Work the task o
 // as agents wake resumes a session, and sa.turn says why.
 func (a *app) startVisible(ctx context.Context, d desk, sp agentStart, bin, unit, dir string, sa startedAgent, by state.Party) (startedAgent, error) {
 	id := sa.id
-	argv := agentArgv(bin, id, sp.name, sp.model, sp.brief+"\n\n"+seedNote, "--tools", "", "--strict-mcp-config")
+	argv := agentArgv(bin, id, sp.name, sp.model, sp.brief+"\n\n"+seedNote, toolsFlag, "", strictMCPConfigFlag)
 	if err := launch(unit, dir, a.explicitConfig(), nil, argv); err != nil {
 		return startedAgent{}, fmt.Errorf("starting %s: %w (the start stays recorded; beekeeper agents remove %q takes it off the roster)", sp.name, err, sp.name)
 	}
@@ -395,25 +424,12 @@ func (a *app) startVisible(ctx context.Context, d desk, sp agentStart, bin, unit
 		return sa, err
 	}
 	if !plat.Opener.Running(t).IsZero() {
-		if err := d.await(ctx, d.turnWait()+awayPoll, nil); err != nil {
-			return sa, err
-		}
-		if err := a.importBeside(ctx, d, id, sp.name, follow, &sa); err != nil {
-			return sa, err
-		}
-		sa.restored = a.keepImport(ctx, id, sp.name, &sa)
-		// No other steward ran to restore a dropped title: the session's
-		// own desktop CLI, which the import warmed, sets it before its task,
-		// so the row and the roster carry its name from its first turn.
-		if sa.title != sp.name {
-			line, err := a.keepTitle(ctx, id, sp.name)
-			if err != nil {
-				line = err.Error()
-			}
-			sa.restored = strings.TrimPrefix(sa.restored+"; "+line, "; ")
-			if r, ok := claude.ReadRecord(a.cfg, "local_"+id); ok {
-				sa.title, sa.model = r.Title, r.Model
-			}
+		// An import the desktop does not take (at its cap of CLIs, the
+		// person still typing) leaves the session without a row: its task
+		// runs headless, whose reopen imports it later.
+		if err := a.importVisible(ctx, d, id, sp.name, follow, &sa); err != nil {
+			sa.deferred = err
+			_ = a.store.Log(event(by, "agents.start", "%s: the desktop did not import it (%v)", sp.name, err))
 		}
 	}
 	w := wakeTarget{name: sp.name, id: id, host: "local_" + id, dir: dir, mode: state.ModeBypass, model: sp.model}
@@ -429,6 +445,33 @@ func (a *app) startVisible(ctx context.Context, d desk, sp agentStart, bin, unit
 		return sa, err
 	}
 	return sa, nil
+}
+
+// importVisible imports a seeded session into the running desktop once the
+// person's typing paused, within desktopTurnWait, and gives its row the
+// session's name.
+func (a *app) importVisible(ctx context.Context, d desk, id, name, follow string, sa *startedAgent) error {
+	if err := d.await(ctx, d.turnWait()+awayPoll, nil); err != nil {
+		return err
+	}
+	if err := a.importBeside(ctx, d, id, name, follow, sa); err != nil {
+		return err
+	}
+	sa.restored = a.keepImport(ctx, id, name, sa)
+	// No other steward ran to restore a dropped title: the session's own
+	// desktop CLI, which the import warmed, sets it before its task, so the
+	// row and the roster carry its name from its first turn.
+	if sa.title != name {
+		line, err := a.keepTitle(ctx, id, name)
+		if err != nil {
+			line = err.Error()
+		}
+		sa.restored = strings.TrimPrefix(sa.restored+"; "+line, "; ")
+		if r, ok := claude.ReadRecord(a.cfg, "local_"+id); ok {
+			sa.title, sa.model = r.Title, r.Model
+		}
+	}
+	return nil
 }
 
 // importBeside titles session id name and imports it into the desktop
@@ -601,9 +644,9 @@ func browserLine(chrome string) string {
 	case claude.ChromeSkipAll:
 		return "its browser actions run without the desktop's site requests (Chrome permission mode " + chrome + ")"
 	case "":
-		return "the desktop recorded no Chrome permission mode: each navigate to a site it was not allowed on yet waits on a person's site request in its desktop row"
+		return "the desktop recorded no Chrome permission mode: each navigate to a site it was not allowed on yet waits on a person's site request in its desktop row, so its desktop turns run browser steps through beekeeper browse"
 	}
-	return fmt.Sprintf("the desktop recorded the Chrome permission mode %s: each navigate to a site it was not allowed on yet waits on a person's site request in its desktop row", chrome)
+	return fmt.Sprintf("the desktop recorded the Chrome permission mode %s: each navigate to a site it was not allowed on yet waits on a person's site request in its desktop row, so its desktop turns run browser steps through beekeeper browse", chrome)
 }
 
 // twinLine says whether the headless turn is the session's only CLI.
@@ -1086,11 +1129,18 @@ func briefTask(brief string) string {
 	return truncate(strings.TrimSpace(strings.TrimLeft(line, "# ")), 80)
 }
 
+// headlessStartArgv is the first turn of a headless start: in bypass with the
+// CLI's own Chrome connection, as every bypass wake turn (wakeArgv). The bypass
+// is the turn's scope, so its Chrome tools are not narrowed to browse's.
+func headlessStartArgv(bin, id, name, model, brief string) []string {
+	return agentArgv(bin, id, name, model, brief, chromeFlag)
+}
+
 // agentArgv is the started session's command line: one headless turn in
 // bypassPermissions under the id beekeeper recorded; flags go before the
 // brief.
 func agentArgv(bin, id, name, model, brief string, flags ...string) []string {
-	argv := []string{bin, "-p", sessionIDFlag, id, "--permission-mode", state.ModeBypass, "-n", name}
+	argv := []string{bin, "-p", sessionIDFlag, id, permissionModeFlag, state.ModeBypass, "-n", name}
 	if model != "" {
 		argv = append(argv, modelFlag, model)
 	}
@@ -1101,7 +1151,7 @@ func agentArgv(bin, id, name, model, brief string, flags ...string) []string {
 // launch runs argv in a transient user service: it gets the user manager's
 // environment, not the caller's session variables, and outlives the caller;
 // a configuration file the caller named is passed on as $BEEKEEPER_CONFIG,
-// env (KEY=value) is added, and stopPost runs once argv has ended.
+// a scratch state it keeps as $BEEKEEPER_STATE_FROM, env (KEY=value) is added, and stopPost runs once argv has ended.
 // KillMode=process leaves what the turn started running when it ends, as a
 // terminal would.
 func launch(unit, dir, config string, stopPost, argv []string, env ...string) error {
@@ -1112,6 +1162,9 @@ func launch(unit, dir, config string, stopPost, argv []string, env ...string) er
 	u.Env = append(u.Env, env...)
 	if config != "" {
 		u.Env = append(u.Env, "BEEKEEPER_CONFIG="+config)
+	}
+	if f := os.Getenv(stateFromEnv); f != "" {
+		u.Env = append(u.Env, stateFromEnv+"="+f)
 	}
 	if dir, ok := devBuild(); ok {
 		// Its beekeeper commands run the build that started it.

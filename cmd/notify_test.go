@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -182,8 +183,11 @@ func TestLiftedUpgradeHoldShowsWhoLiftedIt(t *testing.T) {
 	if active := a.activeHolds(st); len(active) != 1 || active[0].Target != portalLane {
 		t.Errorf("active holds %+v", active)
 	}
-	a.printHolds(liftedHolds(st, relayNow))
-	if !strings.Contains(out.String(), `lifted by Supervisor run 17`) {
+	a.printHolds(append(a.activeHolds(st), liftedHolds(st, relayNow)...))
+	lines := strings.Split(out.String(), "\n")
+	if len(lines) < 3 || !strings.Contains(lines[0], "STATE") ||
+		!regexp.MustCompile(portalLane+` +active +until lifted `).MatchString(lines[1]) ||
+		!regexp.MustCompile(`upgrade:gazelle/cicddev +lifted by Supervisor run 17 \S+ +the upgrade ends `).MatchString(lines[2]) {
 		t.Errorf("hold list:\n%s", out.String())
 	}
 	v := statusView{Holds: []string{portalLane}, Lifted: []string{"upgrade:gazelle/cicddev by Supervisor run 17"}}

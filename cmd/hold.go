@@ -258,10 +258,24 @@ func holdTarget(h state.Hold) string {
 	return h.Target + " except " + h.Except
 }
 
+// untilText ends a "held … until" sentence: the hold's end, or "lifted"
+// for a hold that lasts until someone lifts it.
 func untilText(a *app, h state.Hold) string {
 	if h.LiftedBy != nil {
-		return "lifted by " + h.LiftedBy.Name + " " + clock(a.now, h.LiftedAt)
+		return liftedText(a, h)
 	}
+	if end := holdEnd(a, h); end != "" {
+		return end
+	}
+	return "lifted"
+}
+
+func liftedText(a *app, h state.Hold) string {
+	return "lifted by " + h.LiftedBy.Name + " " + clock(a.now, h.LiftedAt)
+}
+
+// holdEnd is what ends the hold by itself, "" for none.
+func holdEnd(a *app, h state.Hold) string {
 	if upgrade.Is(h) {
 		return "the upgrade ends"
 	}
@@ -273,7 +287,7 @@ func untilText(a *app, h state.Hold) string {
 		return probe + " or " + clock(a.now, h.Until)
 	}
 	if h.Until.IsZero() {
-		return "lifted"
+		return ""
 	}
 	return clock(a.now, h.Until)
 }
@@ -328,15 +342,25 @@ func (a *app) holdList() error {
 	return cerr
 }
 
+// holdActive is the STATE of a hold that applies.
+const holdActive = "active"
+
 func (a *app) printHolds(holds []state.Hold) {
 	if len(holds) == 0 {
 		_, _ = fmt.Fprintln(a.out, "nothing is held")
 		return
 	}
 	w := a.table()
-	_, _ = fmt.Fprintln(w, "TARGET\tUNTIL\tBY\tSINCE\tREASON")
+	_, _ = fmt.Fprintln(w, "TARGET\tSTATE\tUNTIL\tBY\tSINCE\tREASON")
 	for _, h := range holds {
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", holdTarget(h), untilText(a, h), truncate(h.By.Name, 30), clock(a.now, h.At), truncate(h.Reason, 60))
+		status, end := holdActive, holdEnd(a, h)
+		if h.LiftedBy != nil {
+			status = liftedText(a, h)
+		}
+		if end == "" {
+			end = "until lifted"
+		}
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", holdTarget(h), status, end, truncate(h.By.Name, 30), clock(a.now, h.At), truncate(h.Reason, 60))
 	}
 	_ = w.Flush()
 }

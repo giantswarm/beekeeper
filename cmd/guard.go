@@ -156,6 +156,9 @@ hooks.scope.dirs unset every session is in scope; a configuration or state
 that does not load keeps the guards on.`,
 		Args: cobra.NoArgs,
 		PersistentPreRunE: func(*cobra.Command, []string) error {
+			// a hook runs on the host for a sandboxed session too, where the
+			// policy's environment stays its session's
+			a.hook = true
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
@@ -207,6 +210,13 @@ refuses the call, naming the rule or the phrase's number, never the match.
 A line marked gitleaks:allow is skipped. An op item or document create or
 edit, or a vault kv put or patch, that an outbound.storeDeny rule matches is
 refused. The connector tools need "|mcp__.*" in the matcher.
+
+A Claude in Chrome call (mcp__claude-in-chrome__*) in a desktop turn of a
+session beekeeper agents start started in bypass (it runs in acceptEdits
+now) is refused, naming beekeeper browse: Claude Desktop holds such a
+session's navigate to a site it was not allowed on yet for a person's site
+approval, which no hook answers. Its headless turns and every other
+session's browser calls pass.
 
 An AskUserQuestion call is refused in every session but the guide's (the
 one beekeeper guide names): the agent files beekeeper note add --for
@@ -260,7 +270,8 @@ Register it in ~/.claude/settings.json:
 			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, CheckQuestion: checkQuestion, Role: a.roleTarget, Peer: a.desktopPeer, Absent: a.absentPeer,
 				Project: os.Getenv("CLAUDE_PROJECT_DIR"), Reads: a.firstReads,
 				Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(),
-				ModelServer: a.modelServer, ConfigErr: cfgErr, Sandbox: sandboxed}
+				ModelServer: a.modelServer, ConfigErr: cfgErr, Sandbox: sandboxed,
+				Started: func(session string) bool { _, ok := a.bypassStart(session); return ok }}
 			if h.ConfigErr == nil {
 				h.Shell, h.Production, h.ContextHint = a.cfg.Shell, a.cfg.Kube.Production, a.cfg.Kube.Context("<installation>")
 				h.MaxLabs = func() int { return a.cfg.KindClusters(ramMiB()) }
@@ -335,14 +346,17 @@ stay, and prints nothing. beekeeper install registers it in
 				return nil // a broken configuration must not block a session's start
 			}
 			sh := a.cfg.Agents.Shell
-			path, drop := sh.Path, []string(nil)
+			var drop []string
+			unheld := ""
 			if os.Getenv(sandbox.Env) != "" {
-				// gh goes through the egress proxy; a gh link to devctl would
-				// read the keychain the sandbox closes, also from an inherited PATH
-				path, drop = nil, sh.Path
+				// held, gh goes through the egress proxy and a gh link to
+				// devctl would read the keychain the sandbox closes, also from
+				// an inherited PATH; the policy's environment without its
+				// sandbox is the host's again
+				drop, unheld = sh.Path, sandbox.UnsetShell(sandbox.EgressDir(os.Getenv("XDG_RUNTIME_DIR")))
 			}
 			unalias := append(slices.Clone(sh.Unalias), a.cfg.Secret.UnlockCommands...)
-			return guard.WritePrelude(env, guard.Prelude(unalias, sh.Globs == config.GlobsLiteral, path, drop))
+			return guard.WritePrelude(env, guard.Prelude(unalias, sh.Globs == config.GlobsLiteral, sh.Path, drop, unheld))
 		},
 	})
 	c.AddCommand(&cobra.Command{
@@ -544,7 +558,17 @@ func (a *app) loadConfig() error {
 	if a.cfg, err = config.Load(path); err != nil {
 		return err
 	}
+	if f := os.Getenv(stateFromEnv); f != "" {
+		if err := a.stateFrom(f); err != nil {
+			return err
+		}
+	}
 	plat = platform.Current(platform.Options{DesktopApp: a.cfg.Claude.DesktopApp})
+	if !a.hook && sandbox.Unheld(os.Getenv) {
+		// the sandbox policy's environment without its sandbox: beekeeper and
+		// what it runs reach GitHub as on the host
+		sandbox.Unconfine(sandbox.EgressDir(os.Getenv("XDG_RUNTIME_DIR")))
+	}
 	return nil
 }
 

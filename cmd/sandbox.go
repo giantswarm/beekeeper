@@ -92,10 +92,23 @@ settings file (an empty ` + "`{}`" + `) and its drop-in directory first: the san
 mounts both read-only and cannot create them, so a session held by
 claude --settings needs them too. Once installed, every new Claude Code
 session on the machine runs in the sandbox. Exit 0 with nothing to do when
-the installed policy is the current one.`,
+the installed policy is the current one.
+
+install creates the denied paths' mount points (scan/ in the state
+directory), which the sandbox cannot create; the broker does too at its
+start. It refuses a writable path inside a readable one (a
+sandbox.allowWrite under a sandbox.allowRead) and names both: the sandbox
+mounts the readable parent read-only over the writable child.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
-			b, err := a.sandboxPolicy().JSON()
+			p := a.sandboxPolicy()
+			if err := p.Nested(); err != nil {
+				return refused("%s", err)
+			}
+			if err := p.MountPoints(); err != nil {
+				return err
+			}
+			b, err := p.JSON()
 			if err != nil {
 				return err
 			}
@@ -213,6 +226,10 @@ git's signing call only; the key and the agent stay out of the sandbox.`,
 			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
+			// a state directory made after the install lacks them as well
+			if err := a.sandboxPolicy().MountPoints(); err != nil {
+				return err
+			}
 			dir := sandbox.SpoolDir(a.cfg.StateDir)
 			_, _ = fmt.Fprintf(a.out, "serving %s\n", dir)
 			exe, err := os.Executable()
@@ -250,10 +267,12 @@ git's signing call only; the key and the agent stay out of the sandbox.`,
 					sandbox.OpVault:      brokeredVaultState(keeper),
 					sandbox.OpKubeconfig: brokeredCall(exe, "/proc", brokeredCallTimeout, nil, brokeredKubeconfigArgv),
 					sandbox.OpGate:       brokeredCall(exe, "/proc", gateBrokeredTimeout, devctlPath(a.cfg.Sandbox.Devctl), brokeredGateArgv),
-					sandbox.OpAgents:     brokeredCall(exe, "/proc", agentsBrokeredTimeout, nil, brokeredAgentsArgv),
-					sandbox.OpWatch:      brokeredCall(exe, "/proc", 0, nil, brokeredWatchArgv),
-					sandbox.OpLab:        brokeredCall(exe, "/proc", labBrokeredTimeout, nil, brokeredLabArgv),
-					sandbox.OpSign:       brokeredSign(hostGPG(ctx)),
+					sandbox.OpAgents: brokeredAgents(func(env []string) sandbox.Handler {
+						return brokeredCall(exe, "/proc", agentsBrokeredTimeout, env, brokeredAgentsArgv)
+					}),
+					sandbox.OpWatch: brokeredCall(exe, "/proc", 0, nil, brokeredWatchArgv),
+					sandbox.OpLab:   brokeredCall(exe, "/proc", labBrokeredTimeout, nil, brokeredLabArgv),
+					sandbox.OpSign:  brokeredSign(hostGPG(ctx)),
 				}))
 			}()
 			// either one ending ends the broker, which its unit restarts
@@ -419,7 +438,7 @@ func brokeredCall(exe, procDir string, timeout time.Duration, env []string, argv
 		c.Dir = cwd
 		c.Env = slices.DeleteFunc(os.Environ(), func(kv string) bool {
 			k, _, _ := strings.Cut(kv, "=")
-			return k == sandbox.Env || k == sandbox.Brokered || slices.Contains(callerEnv, k) || guard.VaultVar.MatchString(k)
+			return k == sandbox.Env || k == sandbox.Brokered || k == stateFromEnv || slices.Contains(callerEnv, k) || guard.VaultVar.MatchString(k)
 		})
 		c.Env = append(append(append(c.Env, env...), caller...), sandbox.Brokered+"=1")
 		if inSandbox {

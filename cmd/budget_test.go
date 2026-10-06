@@ -47,7 +47,8 @@ func refusingGitHub(t *testing.T, refuse *bool) (queries *int) {
 			_, _ = w.Write([]byte(`{"data":null,"errors":[{"type":"RATE_LIMITED","message":"` + graphqlRefusedText + `"}]}`))
 			return
 		}
-		_, _ = w.Write([]byte(`{"data":{"rateLimit":{"limit":5000,"remaining":4960,"used":40,"resetAt":"2026-10-06T03:55:12Z"}}}`))
+		resetAt := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
+		_, _ = w.Write([]byte(`{"data":{"rateLimit":{"limit":5000,"remaining":4960,"used":40,"resetAt":"` + resetAt + `"}}}`))
 	}))
 	t.Cleanup(srv.Close)
 	t.Setenv("BEEKEEPER_GITHUB_API", srv.URL)
@@ -112,6 +113,52 @@ func TestBudgetReusesAFreshGraphQLReading(t *testing.T) {
 	}
 	if *queries != 1 {
 		t.Errorf("%d GraphQL queries for three probes in a minute, want 1", *queries)
+	}
+}
+
+// A reused reading reports what it read: the points used are what the
+// limit lost, for GraphQL and core alike.
+func TestBudgetCachedReadingReportsUsed(t *testing.T) {
+	refuse := false
+	refusingGitHub(t, &refuse)
+	a, _ := budgetApp(t)
+	for i := range 2 {
+		b, err := a.probeBudget(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if b.Used != b.Limit-b.Remaining {
+			t.Errorf("probe %d: core used %d, want %d", i, b.Used, b.Limit-b.Remaining)
+		}
+		if g := b.GraphQL; g == nil || g.Used != g.Limit-g.Remaining || g.Used != 40 {
+			t.Errorf("probe %d: GraphQL = %+v, want 40 used", i, g)
+		}
+	}
+}
+
+// A fresh reading whose reset has passed counted a window that is over: the
+// next probe reads the limit again and never reports the past reset.
+func TestBudgetRereadsAReadingPastItsReset(t *testing.T) {
+	refuse := false
+	queries := refusingGitHub(t, &refuse)
+	a, _ := budgetApp(t)
+	now := time.Now().UTC()
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Budget = &state.Budget{Limit: 5000, Remaining: 4800, At: now,
+			GraphQL: &state.GraphQL{Limit: 5000, Remaining: 4062, Reset: now.Add(-time.Minute), At: now}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := a.probeBudget(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *queries != 1 {
+		t.Errorf("%d GraphQL queries, want 1: the reading past its reset was reused", *queries)
+	}
+	if g := b.GraphQL; g == nil || !g.Reset.After(now) || g.Remaining != 4960 {
+		t.Errorf("GraphQL = %+v, want the new reading with a reset after %s", g, now)
 	}
 }
 

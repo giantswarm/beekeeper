@@ -9,10 +9,12 @@ import (
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 )
 
-// agentBK1 is the tests' agent, labX their lab's kind cluster.
+// agentBK1 is the tests' agent, labX their lab's kind cluster, briefMD a
+// start's brief.
 const (
 	agentBK1 = "BK 1"
 	labX     = "lab-x"
+	briefMD  = "brief.md"
 )
 
 func TestBrokeredHostArgv(t *testing.T) {
@@ -21,7 +23,7 @@ func TestBrokeredHostArgv(t *testing.T) {
 		req  sandbox.Request
 		want string
 	}{
-		{brokeredAgentsArgv, sandbox.Request{Args: []string{agentStartName, "--dir=/w", "--", agentBK1, "brief.md"}}, "agents start --dir=/w -- BK 1 brief.md"},
+		{brokeredAgentsArgv, sandbox.Request{Args: []string{agentStartName, "--dir=/w", "--", agentBK1, briefMD}}, "agents start --dir=/w -- BK 1 " + briefMD},
 		{brokeredAgentsArgv, sandbox.Request{Args: []string{agentWakeName, "--", agentBK1, "--as x"}}, "agents wake -- BK 1 --as x"},
 		{brokeredAgentsArgv, sandbox.Request{Args: []string{agentResumeName, "--", agentBK1}}, "agents resume -- BK 1"},
 		{brokeredWatchArgv, sandbox.Request{Args: []string{"watch", "--notify=true", "--"}}, "watch --notify=true --"},
@@ -74,5 +76,18 @@ func TestLabArgv(t *testing.T) {
 	}
 	if got, err := labArgv(labUp, labX, other); Code(err) != ExitRefused {
 		t.Errorf("another lab's directory: %q, exit %d, want refused", got, Code(err))
+	}
+}
+
+func TestScratchConfig(t *testing.T) {
+	args, scratch, err := scratchConfig([]string{agentStartName, "--task=t", "--config=/s/bk.yaml", "--", agentBK1, "--config=/x"})
+	if err != nil || scratch != "/s/bk.yaml" || strings.Join(args, " ") != "start --task=t -- BK 1 --config=/x" {
+		t.Errorf("got %q, %q, %v", args, scratch, err)
+	}
+	if args, scratch, err := scratchConfig([]string{agentWakeName, "--", agentBK1}); err != nil || scratch != "" || len(args) != 3 {
+		t.Errorf("no scratch: %q, %q, %v", args, scratch, err)
+	}
+	if _, _, err := scratchConfig([]string{agentStartName, "--config=bk.yaml", "--", agentBK1, "b"}); err == nil {
+		t.Error("a relative scratch configuration: want a refusal")
 	}
 }

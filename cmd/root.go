@@ -86,6 +86,8 @@ type app struct {
 	cfgPath string
 	as      string
 	json    bool
+	// hook says a hook runs, for a session whose environment it keeps.
+	hook bool
 
 	cfg   *config.Config
 	store state.Store
@@ -149,7 +151,7 @@ with central configured), 125 a newer release (self-update --check).`,
 		c.GroupID = "watching"
 		root.AddCommand(c)
 	}
-	for _, c := range []*cobra.Command{a.leaseCmd(), a.holdCmd(), a.lanesCmd(), a.boardCmd()} {
+	for _, c := range []*cobra.Command{a.leaseCmd(), a.holdCmd(), a.lanesCmd(), a.boardCmd(), a.browseCmd()} {
 		c.GroupID = "sharing"
 		root.AddCommand(c)
 	}

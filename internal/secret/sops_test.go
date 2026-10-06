@@ -172,4 +172,17 @@ func TestRealSOPSSkeleton(t *testing.T) {
 	if strings.Contains(string(raw), v["stringData.secretKey"]) {
 		t.Fatal("the file holds the value in plaintext")
 	}
+	// A bare key on a Secret goes under stringData, where the rule encrypts it.
+	if _, err := o.Set(ctx, Ref{File: file, Path: "default"}, SetOptions{Length: 32, Charset: "alnum"}); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err = os.ReadFile(file); err != nil { //nolint:gosec // the test's scratch file
+		t.Fatal(err)
+	}
+	if v, err = o.values(ctx, Ref{File: file}); err != nil || len(v["stringData.default"]) != 32 {
+		t.Fatalf("decrypted: %v (%d bytes)", err, len(v["stringData.default"]))
+	}
+	if !strings.Contains(string(raw), "default: ENC[") || strings.Contains(string(raw), v["stringData.default"]) {
+		t.Fatal("stringData.default is not encrypted")
+	}
 }

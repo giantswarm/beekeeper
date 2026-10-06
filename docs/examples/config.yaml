@@ -100,6 +100,8 @@ watch:
   tools: [kubectl, helm, tsh, gh, flux, devctl]   # the default
   tmpMaxMiB: 20000          # TMPFS /tmp over this; default: 45% of /tmp's size
   diskMinMiB: 102400        # LOW DISK under this free on /; default: 5% of its size
+  diskCriticalMiB: 20480    # DISK NEARLY FULL under this free on /; default: 1% of its size
+  diskFillWithin: 2h        # DISK FILLING while / would run full within this at its last ten minutes' rate
   quietSessions: ["test: *"]   # the default; short-lived sessions whose start and end are logged, not said
 
 memcap:                     # beekeeper run's build slots and cap
@@ -197,6 +199,8 @@ doctor:                     # known faults the doctor (beekeeper doctor, every w
       probe: systemctl --user is-active --quiet registry-login.service   # exits 0 while the fault is absent
       remedy: systemctl --user restart registry-login.service
       unattended: true      # the watch runs the remedy by itself; false: one note for guide.person
+  goCacheMaxGiB: 20         # the default; trims the shared Go build cache over this, LRU first, to 3/4; negative: off
+  goCacheEvery: 1h          # the default; how often a watch reads the cache's size
 reporter:                   # the scheduled status reporter the standby watch starts; off without every and brief
   every: 1h                 # one report per interval, on its multiples (on the hour)
   brief: ~/.local/state/desk/report-brief.md   # what to report and where to post it

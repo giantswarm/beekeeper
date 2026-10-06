@@ -163,6 +163,10 @@ type Hook struct {
 	// Labs lists the held leases of kind labs, unnamed (a lease file read,
 	// no process scan); nil, none.
 	Labs func() []lease.Holder
+	// Started reports whether beekeeper agents start started the session
+	// in bypassPermissions; read only for a browser call in acceptEdits,
+	// nil refuses no browser call.
+	Started func(session string) bool
 }
 
 // event is the part of a PreToolUse event the hook reads.
@@ -172,6 +176,7 @@ type event struct {
 	CWD       string         `json:"cwd"`
 	Session   string         `json:"session_id"`
 	Agent     string         `json:"agent_id"`
+	Mode      string         `json:"permission_mode"`
 }
 
 type hookOutput struct {
@@ -212,6 +217,9 @@ func (h Hook) decide(ev event) []byte {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	if r := h.sandboxRefusal(ev); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
+	if r := h.desktopBrowserRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	if ev.ToolName == AskTool {

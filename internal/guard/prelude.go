@@ -7,6 +7,8 @@ import (
 	"os"
 	"regexp"
 	"strings"
+
+	"github.com/giantswarm/beekeeper/internal/sandbox"
 )
 
 // vaultEnv matches the names of the variables that carry a 1Password
@@ -35,10 +37,15 @@ const (
 // of drop leave PATH wherever they are, one an inherited PATH carries
 // included: in the agent sandbox an agent's gh link to devctl would read a
 // keychain the sandbox closes.
+// With unheld, the shell picks per command: a command the sandbox runtime
+// holds ($SANDBOX_RUNTIME) leaves drop, any other runs unheld, the shell
+// lines that put an unheld environment back on the host, and puts path
+// first: Claude Code can apply the sandbox policy's environment without
+// its sandbox.
 // It always drops the vault credentials of vaultEnv from the environment:
 // no agent command runs with a vault session or token.
 // Every line ends with exit status 0.
-func Prelude(unalias []string, literalGlobs bool, path, drop []string) string {
+func Prelude(unalias []string, literalGlobs bool, path, drop []string, unheld string) string {
 	var b strings.Builder
 	b.WriteString(preludeBegin + "\n")
 	fmt.Fprintf(&b, "for _bk_v in $(env | sed -nE 's/^(%s)=.*/\\1/p'); do unset \"$_bk_v\"; done; unset _bk_v\n", vaultEnv)
@@ -49,16 +56,34 @@ func Prelude(unalias []string, literalGlobs bool, path, drop []string) string {
 	if literalGlobs {
 		b.WriteString(`if [ -n "${ZSH_VERSION-}" ]; then setopt no_nomatch; elif [ -n "${BASH_VERSION-}" ]; then shopt -u failglob nullglob; fi` + "\n")
 	}
-	for _, d := range drop {
-		dir := strings.ReplaceAll(expandHome(d), "'", `'\''`)
-		fmt.Fprintf(&b, "case \":$PATH:\" in *':%[1]s:'*) _bk_p=$(printf %%s \"$PATH\" | awk -v RS=: -v ORS=: -v d='%[1]s' '$0 != d'); PATH=${_bk_p%%:}; export PATH; unset _bk_p ;; esac\n", dir)
-	}
-	for i := len(path) - 1; i >= 0; i-- {
-		dir := strings.ReplaceAll(expandHome(path[i]), "'", `'\''`)
-		fmt.Fprintf(&b, "case \":$PATH:\" in *':%[1]s:'*) ;; *) PATH='%[1]s':\"$PATH\"; export PATH ;; esac\n", dir)
+	if unheld != "" {
+		b.WriteString(`if [ -z "${` + sandbox.Runtime + `-}" ]; then` + "\n" + unheld)
+		writePath(&b, path)
+		b.WriteString("else\n")
+		writeDrop(&b, drop)
+		b.WriteString("fi\n")
+	} else {
+		writeDrop(&b, drop)
+		writePath(&b, path)
 	}
 	b.WriteString(preludeEnd + "\n")
 	return b.String()
+}
+
+// writeDrop removes the directories of drop from PATH.
+func writeDrop(b *strings.Builder, drop []string) {
+	for _, d := range drop {
+		dir := strings.ReplaceAll(expandHome(d), "'", `'\''`)
+		fmt.Fprintf(b, "case \":$PATH:\" in *':%[1]s:'*) _bk_p=$(printf %%s \"$PATH\" | awk -v RS=: -v ORS=: -v d='%[1]s' '$0 != d'); PATH=${_bk_p%%:}; export PATH; unset _bk_p ;; esac\n", dir)
+	}
+}
+
+// writePath puts the directories of path first on PATH, in their order.
+func writePath(b *strings.Builder, path []string) {
+	for i := len(path) - 1; i >= 0; i-- {
+		dir := strings.ReplaceAll(expandHome(path[i]), "'", `'\''`)
+		fmt.Fprintf(b, "case \":$PATH:\" in *':%[1]s:'*) ;; *) PATH='%[1]s':\"$PATH\"; export PATH ;; esac\n", dir)
+	}
 }
 
 // WithPrelude is env, a session's environment file, with prelude in place

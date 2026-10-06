@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/config"
@@ -195,6 +196,41 @@ func TestTheScannersDirectoryIsDeniedInsideTheState(t *testing.T) {
 	}
 	if !p.Readable(filepath.Join(state, "state.json"), state) || !p.Writable(filepath.Join(state, "scanned.json"), state) {
 		t.Error("the rest of the state directory is closed")
+	}
+}
+
+func TestMountPointsCreatesTheDeniedPathsOnAFreshState(t *testing.T) {
+	p, home := policy(t)
+	scan := filepath.Join(home, ".local/state/beekeeper/scan")
+	if _, err := os.Stat(scan); !os.IsNotExist(err) {
+		t.Fatalf("the fixture has %s already: %v", scan, err)
+	}
+	for range 2 {
+		if err := p.MountPoints(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if fi, err := os.Stat(scan); err != nil || !fi.IsDir() || fi.Mode().Perm() != 0o700 {
+		t.Fatalf("%s is not a private directory: %v %v", scan, fi, err)
+	}
+}
+
+func TestNestedRefusesAWritableChildOfAReadableParent(t *testing.T) {
+	p, home := policy(t)
+	if err := p.Nested(); err != nil {
+		t.Fatalf("the fixture's layout: %v", err)
+	}
+	cfg := filepath.Join(home, ".config")
+	q := New(config.Sandbox{AllowRead: []string{cfg}}, Paths{Home: home, ConfigFile: filepath.Join(cfg, "beekeeper/config.yaml"),
+		StateDir: filepath.Join(cfg, "beekeeper/state"), Exe: filepath.Join(home, ".go/bin/beekeeper")})
+	err := q.Nested()
+	if err == nil {
+		t.Fatal("a writable state inside a readable config directory is accepted")
+	}
+	for _, path := range []string{cfg, filepath.Join(cfg, "beekeeper/state")} {
+		if !strings.Contains(err.Error(), path) {
+			t.Errorf("%q does not name %s", err, path)
+		}
 	}
 }
 

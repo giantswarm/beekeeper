@@ -3,6 +3,7 @@ package guard
 import (
 	"regexp"
 	"slices"
+	"strings"
 
 	"github.com/giantswarm/beekeeper/internal/lease"
 )
@@ -38,4 +39,34 @@ func (h Hook) browserRefusal(cmd, session string) string {
 // heldBy reports whether the session holds the lease l.
 func heldBy(l lease.Holder, session string) bool {
 	return session != "" && (l.Session == session || l.HostSession == "local_"+session)
+}
+
+// desktopBrowserTools is the prefix of the Claude in Chrome tools as Claude
+// Desktop serves them to its CLIs, the same name the CLI's own integration
+// uses, compared without case.
+const desktopBrowserTools = "mcp__claude_in_chrome__"
+
+// isBrowserTool reports whether tool is a Claude in Chrome tool.
+func isBrowserTool(tool string) bool {
+	t := strings.ReplaceAll(strings.ToLower(tool), "-", "_")
+	return strings.HasPrefix(t, desktopBrowserTools)
+}
+
+// desktopBrowserRefusal returns why the hook refuses a browser call of a
+// session beekeeper started in bypass that now runs a desktop turn
+// (acceptEdits, the mode the desktop's import gives it), "" when it passes.
+// The desktop holds such a session's navigate to a site it was not allowed
+// on yet for its person's site approval, which neither bypassPermissions
+// nor a hook answers, and with nobody at the desktop the turn waits until
+// the desktop aborts it. A headless turn runs the CLI's own Chrome
+// connection in bypass, which never asks.
+func (h Hook) desktopBrowserRefusal(ev event) string {
+	if !isBrowserTool(ev.ToolName) || ev.Mode != ModeAcceptEdits || ev.Session == "" || h.Started == nil || !h.Started(ev.Session) {
+		return ""
+	}
+	return "Refused: in a desktop turn of a session beekeeper started, Claude Desktop holds every navigate to a site the session " +
+		"was not allowed on yet for a person's site approval, which nobody answers. Run the browser steps headless instead: " +
+		"`beekeeper browse \"<the steps, and what to report back>\"` (Bash, timeout up to 10 minutes) runs them in a headless " +
+		"turn on the CLI's own Chrome connection, which never asks, and prints its report and the screenshots it took as image " +
+		"files to Read. Hold the browser lease while it runs, as for any browser work."
 }

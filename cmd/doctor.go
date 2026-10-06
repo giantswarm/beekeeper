@@ -461,6 +461,11 @@ line:
   absent) and runs the remedy of a failing one that may run unattended,
   or the faults named with --fault; a fault still failing is one note for
   guide.person, closed once its probe passes;
+- trims the Go build cache that every session's builds share once it is over
+  doctor.goCacheMaxGiB (20), least recently used entries first, down to
+  three quarters of the cap, never while a go build runs (the watch does
+  it every doctor.goCacheEvery, 1h, and says GO CACHE when a trim waited
+  that long or failed); each trim is logged (gocache.trim);
 - reports a stale writer: a running process of an older beekeeper that
   saved the state after a newer one (state.stale-writer in the log). Its
   saves keep the fields it does not know, yet it acts by its older rules
@@ -496,6 +501,9 @@ faults but remedying none.`,
 			}
 			for _, w := range rep.stale {
 				lines = append(lines, staleLine(w))
+			}
+			if r := a.trimGoCache(dryRun, goBuilds); r.notable() {
+				lines = append(lines, r.String())
 			}
 			if len(lines) == 0 {
 				lines = []string{"doctor: nothing to fix"}

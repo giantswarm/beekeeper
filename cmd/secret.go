@@ -48,8 +48,10 @@ secret.vault). A SOPS file is encrypted under the creation rules of the
 A SOPS file encrypted to age recipients decrypts with an identity from
 sops' own sources (SOPS_AGE_KEY, SOPS_AGE_KEY_FILE, sops/age/keys.txt in
 the user's config directory) or from secret.ageIdentities: entries that map
-a recipient or a pathRegex to the op:// field of the shared vault holding
-its identity, read in beekeeper's process for the one sops call. A file
+a recipient or a pathRegex to the op:// field of the shared vault, the
+file:// identity file or the store:// entry of the person's own credential
+store holding its identity (store:// alone searches the store for the
+file's recipients), read in beekeeper's process for the one sops call. A file
 none of them has an identity for fails before sops runs, naming its
 recipients and the sources checked.`,
 		Args: cobra.NoArgs,
@@ -426,6 +428,9 @@ fingerprint. Without --vault the SOPS file is the value's only home: no
 vault holds a copy. A plaintext Kubernetes Secret without values (apiVersion,
 kind, metadata, an empty stringData), a skeleton, becomes the SOPS file with
 the value in it; --name and --namespace start an absent file as that Secret.
+A Secret's value goes under stringData unless the path names data or
+stringData. A path the file's .sops.yaml creation rule would leave in
+plaintext is refused before any value is drawn, naming the rule.
 
 --vault op://<vault>/<item>/<field> writes the shared vault's field first
 (creating the item or the field when absent), then the SOPS path.
@@ -507,6 +512,9 @@ the delivery.`,
 				return err
 			}
 			res, err := ops.Set(cmd.Context(), dst, opt)
+			if res.Key != "" {
+				to[slices.Index(to, dst.String())] = res.Key
+			}
 			done := "generated " + res.Fingerprint
 			if opt.Consumer != nil {
 				done += fmt.Sprintf(", consumer exit %d", res.Code)
@@ -759,7 +767,8 @@ func parseRefs(args ...string) ([]secret.Ref, error) {
 // secretOps are the operations with the service account's token, read
 // from secret.tokenFile when the shared vault is configured.
 func (a *app) secretOps() (*secret.Ops, error) {
-	ops := &secret.Ops{Run: secretRun, Apply: secretApply, Vault: a.cfg.Secret.Vault, Session: a.cfg.Secret.Session, Ages: a.ageIdentities()}
+	ops := &secret.Ops{Run: secretRun, Apply: secretApply, Vault: a.cfg.Secret.Vault, Session: a.cfg.Secret.Session, Ages: a.ageIdentities(),
+		Store: secret.Store{Read: a.cfg.Secret.Store.Read, Search: a.cfg.Secret.Store.Search}}
 	if ops.Vault == "" || ops.Session || a.cfg.Secret.TokenFile == "" {
 		return ops, nil
 	}
