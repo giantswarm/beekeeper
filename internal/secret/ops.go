@@ -305,7 +305,7 @@ func (o *Ops) storeVault(ctx context.Context, r Ref, v string) error {
 	if err != nil {
 		return err
 	}
-	args := []string{"item", "create", "--vault", vault, "--format", "json"}
+	args := []string{"item", "create", "-", "--vault", vault, "--format", "json"}
 	if id != "" {
 		args = []string{"item", "edit", id, "--vault", vault, "--format", "json"}
 	}

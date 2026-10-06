@@ -185,6 +185,9 @@ func (t *Tools) item(args []string, stdin io.Reader) ([]byte, error) {
 		if slices.Contains(args, "--template") {
 			return nil, fmt.Errorf("exit 1 (cannot %s an item from template and stdin at the same time)", args[0])
 		}
+		if args[0] == create && !slices.Contains(args, "-") {
+			return nil, errors.New("exit 1 (no piped item: create takes it after \"-\")")
+		}
 		raw, err := io.ReadAll(stdin)
 		if err != nil {
 			return nil, err
