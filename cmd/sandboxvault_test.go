@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -168,6 +169,9 @@ func TestBrokeredVaultSignsInAgainForAnExpiredSession(t *testing.T) {
 // named relative to the requester's directory. One with a file:// identity
 // runs without it.
 func TestBrokeredVaultForAnAgeIdentityInTheVault(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the sandbox broker runs on Linux only")
+	}
 	for _, e := range []string{"SOPS_AGE_KEY", "SOPS_AGE_KEY_FILE", "SOPS_AGE_KEY_CMD", "SOPS_AGE_SSH_PRIVATE_KEY_FILE"} {
 		t.Setenv(e, "")
 		if err := os.Unsetenv(e); err != nil {

@@ -223,9 +223,13 @@ func (a *app) brokeredVault(v *vaultBroker, call func(env []string) sandbox.Hand
 		if !a.cfg.Secret.Session {
 			return call(nil)(ctx, pid, req)
 		}
-		cwd, _, err := sandbox.Origin("/proc", pid, nil)
-		if err != nil {
-			return sandbox.Reply{}, fmt.Errorf("the requester: %w", err)
+		// the files of a call are the requester's, read only for an age identity
+		var cwd string
+		if len(a.cfg.Secret.AgeIdentities) > 0 {
+			var err error
+			if cwd, _, err = sandbox.Origin("/proc", pid, nil); err != nil {
+				return sandbox.Reply{}, fmt.Errorf("the requester: %w", err)
+			}
 		}
 		if !a.secretNeedsVault(cwd, req.Args) {
 			return call(nil)(ctx, pid, req)
