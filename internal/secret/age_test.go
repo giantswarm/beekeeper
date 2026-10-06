@@ -121,6 +121,51 @@ func TestAgeIdentityFromTheVault(t *testing.T) {
 	}
 }
 
+func TestAgeIdentityFromAFile(t *testing.T) {
+	id := isolateAge(t)
+	other, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := filepath.Join(t.TempDir(), "identity.txt")
+	body := "# created: now\n# public key: " + other.Recipient().String() + "\n" + other.String() + "\n\n" + id.String() + "\n"
+	if err := os.WriteFile(keys, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := &ageTools{}
+	o := &Ops{Run: f.run, Ages: []AgeIdentity{{Recipient: id.Recipient().String(), Ref: FileRef + keys}}}
+	file := sopsFile(t, "", id.Recipient().String())
+	args := []string{file + "#stringData.password"}
+	if o.AgeNeedsVault(args) || !o.AgeNeedsIdentity(args) {
+		t.Errorf("AgeNeedsVault = %v, AgeNeedsIdentity = %v: want the identity without the vault", o.AgeNeedsVault(args), o.AgeNeedsIdentity(args))
+	}
+	if _, err := o.values(context.Background(), Ref{File: file}); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.calls) != 1 || !strings.HasPrefix(f.calls[0], "sops ") {
+		t.Errorf("calls = %v: want sops alone, no op", f.calls)
+	}
+	if len(f.env) != 1 || f.env[0] != envAgeKey+"="+id.String() {
+		t.Errorf("sops did not get the matching identity alone (%d entries)", len(f.env))
+	}
+
+	// a file without the recipient's identity is refused, naming no identity
+	if err := os.WriteFile(keys, []byte("# created: now\n"+other.String()+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = o.values(context.Background(), Ref{File: file})
+	if err == nil || !strings.Contains(err.Error(), "not of the file's recipients") || strings.Contains(err.Error(), other.String()) {
+		t.Fatalf("err = %v", err)
+	}
+	if err := os.WriteFile(keys, []byte("AGE-SECRET-KEY-1NOTAKEY\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = o.values(context.Background(), Ref{File: file})
+	if err == nil || !strings.Contains(err.Error(), "holds no age identity") || strings.Contains(err.Error(), "NOTAKEY") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestAgeIdentityOfAnotherRecipientIsRefused(t *testing.T) {
 	id := isolateAge(t)
 	other, err := age.GenerateX25519Identity()
