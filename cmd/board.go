@@ -61,7 +61,9 @@ whose lease another session holds is passed over until it is released,
 the items behind it offered meanwhile. A sub-issue offered through
 an epic passes the same checks, and a serve record, task or note naming
 the epic covers it too ("…, on epic owner/repo#n"). It prints the item,
-why it is picked, and why every item above it was skipped.
+why it is picked, why every item above it was skipped, and how many items
+are behind it; --json lists those as after_pick, each with its skip reason
+or free (an empty skip).
 
 --claim records the pick as the calling session's sessions serve record
 under the state lock, after checking again that nobody claimed it since:
@@ -174,18 +176,21 @@ func skipHeldLeases(cands []board.Candidate, holders []lease.Holder, me state.Pa
 	}
 }
 
-// nextResult is the pick, nil when no item is free, and the candidates
-// skipped above it with the reason.
+// nextResult is the pick, nil when no item is free, the candidates
+// skipped above it with the reason, and every candidate behind it: with
+// its skip reason, or free (an empty skip) and next in line.
 type nextResult struct {
 	Pick    *board.Candidate `json:"pick"`
 	Claimed bool             `json:"claimed,omitempty"`
 	// Held is the record a claim was refused for: the open item the
 	// session serves.
-	Held    *state.Record     `json:"held,omitempty"`
-	Skipped []board.Candidate `json:"skipped,omitempty"`
+	Held      *state.Record     `json:"held,omitempty"`
+	Skipped   []board.Candidate `json:"skipped,omitempty"`
+	AfterPick []board.Candidate `json:"after_pick,omitempty"`
 }
 
-// nextFree walks the candidates in order and returns the first free one.
+// nextFree walks all the candidates in order and picks the first free one;
+// the rest go to AfterPick, each with its skip reason or free.
 // An item is owned by a record of a running session (or of one that
 // started after listed, the moment the running sessions were listed),
 // unless the session is a registered agent reporting idle, by the record
@@ -212,11 +217,14 @@ func nextFree(st *state.State, cands []board.Candidate, me state.Party, alive fu
 				c.Skip = o + ", on epic " + c.Epic
 			}
 		}
-		if c.Skip == "" {
+		switch {
+		case res.Pick != nil:
+			res.AfterPick = append(res.AfterPick, c)
+		case c.Skip == "":
 			res.Pick = &c
-			return res
+		default:
+			res.Skipped = append(res.Skipped, c)
 		}
-		res.Skipped = append(res.Skipped, c)
 	}
 	return res
 }
@@ -345,6 +353,15 @@ func (a *app) printNext(res nextResult, offered int) error {
 				_, _ = fmt.Fprintf(w, "  %s\t%s\t%s\t%s\n", c.Ref, truncate(c.Title, 50), c.Step, c.Skip)
 			}
 			_ = w.Flush()
+		}
+		if n := len(res.AfterPick); n > 0 {
+			free := 0
+			for _, c := range res.AfterPick {
+				if c.Skip == "" {
+					free++
+				}
+			}
+			_, _ = fmt.Fprintf(a.out, "behind it: %d more, %d of them free (--json lists them as after_pick)\n", n, free)
 		}
 	}
 	if h := res.Held; h != nil {

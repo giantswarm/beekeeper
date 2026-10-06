@@ -300,4 +300,13 @@ func TestSkipHeldLeases(t *testing.T) {
 	if res.Pick == nil || res.Pick.Ref != "o/r#2" || len(res.Skipped) != 1 {
 		t.Errorf("pick %v, skipped %+v", res.Pick, res.Skipped)
 	}
+	// Every item behind the pick is listed: the free one next in line and
+	// the skipped one with its reason.
+	got = nil
+	for _, c := range res.AfterPick {
+		got = append(got, c.Ref+": "+c.Skip)
+	}
+	if want := []string{"o/r#3: ", "o/r#4: assigned to pat"}; !slices.Equal(got, want) {
+		t.Errorf("after pick:\n got %q\nwant %q", got, want)
+	}
 }
