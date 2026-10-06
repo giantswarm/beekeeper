@@ -21,6 +21,12 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 )
 
+// GitHub's hosts the tests reach.
+const (
+	hostGitHub = "github.com"
+	hostAPI    = "api.github.com"
+)
+
 // egressFixture is a proxy whose injected hosts all reach the echo server
 // upstream, and whose log lines are collected.
 type egressFixture struct {
@@ -40,7 +46,7 @@ func newEgress(t *testing.T) *egressFixture {
 	f.echo = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.seen <- r.Header.Clone()
 		b, _ := io.ReadAll(r.Body)
-		_, _ = fmt.Fprintf(w, "%s %s %s", r.Host, r.URL.Path, b)
+		_, _ = fmt.Fprintf(w, "%s %s %s", r.Host, r.URL.Path, b) //nolint:gosec // the test's echo server
 	}))
 	t.Cleanup(f.echo.Close)
 	echoAddr := f.echo.Listener.Addr().String()
@@ -70,7 +76,7 @@ func newEgress(t *testing.T) *egressFixture {
 	}
 	f.addr = ln.Addr().String()
 	e := &Egress{
-		Allow:  []string{"github.com", "*.github.com", f.tunnel},
+		Allow:  []string{hostGitHub, "*.github.com", f.tunnel},
 		Inject: config.GitHubHosts,
 		Token:  func() string { return testToken },
 		CA:     ca,
@@ -123,8 +129,8 @@ func TestEgressInjectsTheTokenInHeadersOnly(t *testing.T) {
 	f := newEgress(t)
 	c := f.client()
 	for host, want := range map[string]string{
-		"api.github.com": "token " + testToken,
-		"github.com":     Authorization("github.com", testToken),
+		hostAPI:    "token " + testToken,
+		hostGitHub: Authorization(hostGitHub, testToken),
 	} {
 		req, _ := http.NewRequest(http.MethodPost, "https://"+host+"/markdown", strings.NewReader("echo "+testToken[:4]+" placeholder"))
 		req.Header.Set("Authorization", "token sandbox-placeholder")
@@ -189,8 +195,8 @@ func socks(t *testing.T, proxy, host string, port int) (net.Conn, byte) {
 	if _, err := io.ReadFull(r, b[:]); err != nil || b[1] != 0 {
 		t.Fatalf("auth %v %v", b, err)
 	}
-	req := append([]byte{5, socksConnect, 0, socksDomain, byte(len(host))}, host...)
-	req = binary.BigEndian.AppendUint16(req, uint16(port)) //nolint:gosec // a test port
+	req := append([]byte{5, socksConnect, 0, socksDomain, byte(len(host))}, host...) //nolint:gosec // a test host name, short
+	req = binary.BigEndian.AppendUint16(req, uint16(port))                           //nolint:gosec // a test port
 	_, _ = c.Write(req)
 	var rep [10]byte
 	if _, err := io.ReadFull(r, rep[:]); err != nil {

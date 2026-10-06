@@ -34,7 +34,7 @@ func TestWriteEgress(t *testing.T) {
 		EgressBundle:                         "ROOTS\nCA\n",
 		filepath.Join(EgressGH, "hosts.yml"): "github.com:\n    oauth_token: " + GHLogin + "\n    git_protocol: https\n",
 	} {
-		b, err := os.ReadFile(filepath.Join(dir, name))
+		b, err := os.ReadFile(filepath.Join(dir, name)) //nolint:gosec // the test's own files
 		if err != nil || string(b) != want {
 			t.Errorf("%s = %q, %v; want %q", name, b, err, want)
 		}
