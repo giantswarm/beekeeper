@@ -116,7 +116,10 @@ func parse(h http.Header) (Budget, error) {
 		return Budget{}, errors.New("GitHub sent no rate-limit headers")
 	}
 	remaining, _ := get("Remaining")
-	used, _ := get("Used")
+	used, err := get("Used")
+	if err != nil {
+		used = limit - remaining
+	}
 	reset, _ := get("Reset")
 	return Budget{
 		Resource:  h.Get("X-RateLimit-Resource"),

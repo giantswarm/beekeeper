@@ -65,7 +65,7 @@ func TestProbeGraphQL(t *testing.T) {
 		"the limit spent, refused with 403": {
 			status: 403, headers: map[string]string{"X-RateLimit-Limit": "5000", "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1791258912"},
 			body: `{"message":"API rate limit exceeded for user ID 1."}`,
-			want: GraphQL{Limit: 5000, Reset: reset, Refused: "API rate limit exceeded for user ID 1."}, wantBlock: true,
+			want: GraphQL{Limit: 5000, Used: 5000, Reset: reset, Refused: "API rate limit exceeded for user ID 1."}, wantBlock: true,
 		},
 		"a server error is no refusal": {status: 502, body: `bad gateway`, wantErr: "502"},
 	} {

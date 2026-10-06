@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `budget --json` reports `used` as what the limit lost (`limit - remaining`) for a GraphQL reading reused from the state and for a core answer without `X-RateLimit-Used`, where it printed 0, and reads the GraphQL limit again once the stored reading's reset has passed instead of printing a reset in the past.
+
 - `secret set` and `secret copy <ref> <file#path>` never write a value outside the SOPS file's encrypted fields: on a Kubernetes Secret a path that names neither `data` nor `stringData` goes under `stringData` (`set <skeleton> default --generate` used to write a top-level `default`, which a `^(data|stringData)$` `encrypted_regex` left in plaintext), and a path the file's `.sops.yaml` creation rule would leave in plaintext is refused before any value is drawn or written, the error naming the rule.
 
 - `agents start` no longer loses a worker's task when the desktop does not import the seeded session (at its cap of CLIs with none of beekeeper's to end, or the person still typing): the start logs why and runs the task headless, whose reopen imports the session later. A start that still delivers no turn of the task exits non-zero, logs "task not delivered" with the reason, and `agents` (REACHABLE) and the watch's AGENTS STOPPED line say "task not delivered" until `agents wake` delivers a turn. Such a start used to leave the worker idle after its seed turn, busy on the roster, with nothing in the log.
