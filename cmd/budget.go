@@ -52,11 +52,11 @@ floor (github.floor, default 2500) or a "github" hold is set:
 			if err != nil {
 				return err
 			}
-			sessions, t, err := a.sessions()
-			if err != nil {
-				return err
+			var pollers []poller
+			sessions, t, callersErr := a.sessions()
+			if callersErr == nil {
+				pollers = githubCallers(a, t, sessions)
 			}
-			pollers := githubCallers(a, t, sessions)
 			hold, held := activeHold(st, a, "github")
 			if a.json {
 				_ = a.printJSON(struct {
@@ -69,6 +69,9 @@ floor (github.floor, default 2500) or a "github" hold is set:
 				_, _ = fmt.Fprintln(a.out, budgetLine(a, b))
 				if held {
 					_, _ = fmt.Fprintf(a.out, "GitHub is held by %q until %s: %s\n", hold.By.Name, untilText(a, hold), hold.Reason)
+				}
+				if callersErr != nil {
+					_, _ = fmt.Fprintf(a.out, "callers unknown: %v\n", callersErr)
 				}
 				if len(pollers) > 0 {
 					_, _ = fmt.Fprintf(a.out, "%d gh/devctl processes:\n", len(pollers))
