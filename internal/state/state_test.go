@@ -266,7 +266,7 @@ const newerSchema = `{
   "records": [{"session": {"name": "a"}, "issue": "o/r#1", "by": {"name": "a"}, "at": "2026-10-02T14:00:00Z", "phase": "ci"}],
   "starts": [{"session": "s1", "name": "Agent one", "mode": "bypassPermissions", "dir": "/w", "by": {"name": "s"}, "at": "2026-10-02T14:00:00Z", "model": "m"}],
   "merges": [{"repo": "o/r", "pr": 1, "lane": "l", "by": {"name": "a"}, "pid": 1, "phase": "waiting", "joined": "2026-10-02T14:00:00Z", "seen": "2026-10-02T14:00:00Z", "priority": 2}],
-  "budget": {"remaining": 1, "limit": 2, "reset": "2026-10-02T15:00:00Z", "at": "2026-10-02T14:00:00Z", "graphql": 3},
+  "budget": {"remaining": 1, "limit": 2, "reset": "2026-10-02T15:00:00Z", "at": "2026-10-02T14:00:00Z", "search": 3},
   "rota": {"next": "Supervisor run 13"}
 }`
 
@@ -338,7 +338,7 @@ func TestOlderSaveKeepsANewerSchema(t *testing.T) {
 		{[]any{"records", 0, "phase"}, "ci"},
 		{[]any{"starts", 0, "model"}, "m"},
 		{[]any{"merges", 0, "priority"}, 2.0},
-		{[]any{"budget", "graphql"}, 3.0},
+		{[]any{"budget", "search"}, 3.0},
 		{[]any{"rota", "next"}, "Supervisor run 13"},
 	}
 	for _, w := range want {

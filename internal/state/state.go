@@ -789,8 +789,31 @@ type Budget struct {
 	Limit     int       `json:"limit"`
 	Reset     time.Time `json:"reset"`
 	At        time.Time `json:"at"`
+	// GraphQL is the last reading of the GraphQL limit; nil before the
+	// first.
+	GraphQL *GraphQL `json:"graphql,omitempty"`
 
 	rest rest
+}
+
+// GraphQL is one reading of the GitHub GraphQL limit.
+type GraphQL struct {
+	Remaining int `json:"remaining"`
+	Limit     int `json:"limit"`
+	// Reset is when a refusal ends; zero when GitHub named no time.
+	Reset time.Time `json:"reset,omitzero"`
+	// Refused is GitHub's words while it refused GraphQL calls.
+	Refused   string    `json:"refused,omitempty"`
+	Secondary bool      `json:"secondary,omitempty"`
+	At        time.Time `json:"at"`
+
+	rest rest
+}
+
+// Blocks says the reading's refusal still holds at now: one without a
+// reset holds until a reading says otherwise.
+func (g *GraphQL) Blocks(now time.Time) bool {
+	return g != nil && g.Refused != "" && (g.Reset.IsZero() || now.Before(g.Reset))
 }
 
 // The phases of a Merge.

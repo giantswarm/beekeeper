@@ -115,6 +115,7 @@ type (
 	plainReportPause  ReportPause
 	plainReportThread ReportThread
 	plainBudget       Budget
+	plainGraphQL      GraphQL
 	plainMerge        Merge
 	plainWriter       Writer
 	plainStaleWriter  StaleWriter
@@ -183,6 +184,8 @@ func (v *ReportPause) UnmarshalJSON(b []byte) error {
 func (v ReportPause) MarshalJSON() ([]byte, error) { return encodeKeeping(plainReportPause(v), v.rest) }
 func (v *Budget) UnmarshalJSON(b []byte) error     { return decodeKeeping(b, (*plainBudget)(v), &v.rest) }
 func (v Budget) MarshalJSON() ([]byte, error)      { return encodeKeeping(plainBudget(v), v.rest) }
+func (v *GraphQL) UnmarshalJSON(b []byte) error    { return decodeKeeping(b, (*plainGraphQL)(v), &v.rest) }
+func (v GraphQL) MarshalJSON() ([]byte, error)     { return encodeKeeping(plainGraphQL(v), v.rest) }
 func (v *Merge) UnmarshalJSON(b []byte) error      { return decodeKeeping(b, (*plainMerge)(v), &v.rest) }
 func (v Merge) MarshalJSON() ([]byte, error)       { return encodeKeeping(plainMerge(v), v.rest) }
 func (v *Writer) UnmarshalJSON(b []byte) error     { return decodeKeeping(b, (*plainWriter)(v), &v.rest) }

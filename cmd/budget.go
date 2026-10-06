@@ -10,6 +10,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 type poller struct {
@@ -24,15 +25,20 @@ func (a *app) budgetCmd() *cobra.Command {
 	var floor int
 	c := &cobra.Command{
 		Use:   "budget",
-		Short: "The GitHub REST budget every session draws from, and who is drawing",
+		Short: "The GitHub REST and GraphQL budget every session draws from, and who is drawing",
 		Long: `Read the person's GitHub core budget from the rate-limit headers of a real,
 conditional request (a 304 costs nothing; /rate_limit is exempt and lies),
-and list the gh and devctl processes on the machine with the session each
-runs under. The budget is shared with the person's own logins, the developer
-portal among them: at zero it signs them out.
+and the GraphQL limit from a real rateLimit query (one point, read again
+after merge.budgetFresh), and list the gh and devctl processes on the
+machine with the session each runs under: the callers drawing on it. A
+GraphQL refusal shows even while its counter looks healthy (a secondary
+limit), with the time it ends when GitHub names one. The budget is shared
+with the person's own logins, the developer portal among them: at zero it
+signs them out.
 
---gate exits 3 when the budget is under the floor (github.floor, default
-2500) or a "github" hold is set: ` + "`beekeeper budget --gate && gh …`" + `.`,
+--gate exits 3 when GitHub refuses GraphQL calls, the budget is under the
+floor (github.floor, default 2500) or a "github" hold is set:
+` + "`beekeeper budget --gate && gh …`" + `.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if floor > 0 {
@@ -50,18 +56,7 @@ portal among them: at zero it signs them out.
 			if err != nil {
 				return err
 			}
-			var pollers []poller
-			for _, p := range t.ByPID {
-				if p.Comm != "gh" && p.Comm != merge.Tool {
-					continue
-				}
-				pl := poller{PID: p.PID, Args: p.Cmdline(), Elapsed: p.Elapsed(a.now).Round(time.Second)}
-				if s, ok := claude.OwnerOf(sessions, p.PID); ok {
-					pl.Session = s.Name
-				}
-				pollers = append(pollers, pl)
-			}
-			slices.SortFunc(pollers, func(x, y poller) int { return int(y.Elapsed - x.Elapsed) })
+			pollers := githubCallers(a, t, sessions)
 			hold, held := activeHold(st, a, "github")
 			if a.json {
 				_ = a.printJSON(struct {
@@ -91,13 +86,34 @@ portal among them: at zero it signs them out.
 			if gate && held {
 				return refused("GitHub is held: %s", hold.Reason)
 			}
+			if gate && b.GraphQL.Blocks(a.now) {
+				return refused("GitHub refuses GraphQL calls: %s", graphqlText(a, b.GraphQL))
+			}
 			if gate && b.Remaining < a.cfg.GitHub.Floor {
 				return refused("GitHub budget %d is under the floor %d: wait for the reset at %s", b.Remaining, a.cfg.GitHub.Floor, clock(a.now, b.Reset))
 			}
 			return nil
 		},
 	}
-	c.Flags().BoolVar(&gate, "gate", false, "exit 3 when under the floor or held")
+	c.Flags().BoolVar(&gate, "gate", false, "exit 3 when GraphQL is refused, under the floor or held")
 	c.Flags().IntVar(&floor, "floor", 0, "the floor for this call (default github.floor)")
 	return c
+}
+
+// githubCallers are the gh and devctl processes drawing on the budget, with
+// the session each runs under: longest-running first.
+func githubCallers(a *app, t *proc.Table, sessions []*claude.Session) []poller {
+	var out []poller
+	for _, p := range t.ByPID {
+		if p.Comm != "gh" && p.Comm != merge.Tool {
+			continue
+		}
+		pl := poller{PID: p.PID, Args: p.Cmdline(), Elapsed: p.Elapsed(a.now).Round(time.Second)}
+		if s, ok := claude.OwnerOf(sessions, p.PID); ok {
+			pl.Session = s.Name
+		}
+		out = append(out, pl)
+	}
+	slices.SortFunc(out, func(x, y poller) int { return int(y.Elapsed - x.Elapsed) })
+	return out
 }
