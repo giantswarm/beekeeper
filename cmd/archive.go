@@ -14,7 +14,8 @@ import (
 // unarchived: its CLI ran a turn, or no steward recorded the archive. The
 // doctor asks a steward for it again on its later runs while the CLI runs
 // no turn, until the desktop records it, within archiveTries stewards'
-// turns and archiveOwedFor.
+// turns and archiveOwedFor. A run that asked no steward (the desktop did
+// not run, the person typed) counts no turn.
 const (
 	archiveTries   = 5
 	archiveOwedFor = 24 * time.Hour
@@ -78,15 +79,17 @@ func givenUp(ar state.Archive, now time.Time) string {
 // seedArchives owes, once, the archives of the finished workers whose
 // desktop records stayed unarchived: a session beekeeper started, off the
 // roster, holding no role, its record unarchived, its CLI running or not.
-// The doctor asks for at most archiveBatch of them per run.
+// The doctor asks for at most archiveBatch of them per run. It seeds once
+// more for the archives given up while no idle steward ran, which a
+// session's own warmed CLI now does.
 func seedArchives(st *state.State, record func(host string) (*claude.Record, bool), now time.Time) {
-	if st.FinishedSeeded {
+	if st.FinishedSeeded && st.WarmSeeded {
 		return
 	}
-	st.ArchivesSeeded, st.FinishedSeeded = true, true
+	st.ArchivesSeeded, st.FinishedSeeded, st.WarmSeeded = true, true, true
 	for _, s := range st.Starts {
 		switch {
-		case s.HostSession == "" || s.Harness != "" || keepsRole(st, s.Party),
+		case s.HostSession == "" || s.Harness != "" || roleKeeps(st, s.Party),
 			slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(s.Party) }),
 			slices.ContainsFunc(st.Archives, func(x state.Archive) bool { return x.Host == s.HostSession }):
 			continue
