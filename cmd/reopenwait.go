@@ -82,8 +82,9 @@ func (a *app) watchReopen(ctx context.Context, arg, id string) (wctx context.Con
 		return why != ""
 	}
 	if !ended(true) {
+		poll := reopenPoll
 		go func() {
-			tick := time.NewTicker(reopenPoll)
+			tick := time.NewTicker(poll)
 			defer tick.Stop()
 			for n := 1; ; n++ {
 				select {
@@ -91,7 +92,7 @@ func (a *app) watchReopen(ctx context.Context, arg, id string) (wctx context.Con
 					return
 				case <-tick.C:
 				}
-				if ended(n%int(reopenTwinPoll/reopenPoll) == 0) {
+				if ended(n%int(reopenTwinPoll/poll) == 0) {
 					return
 				}
 			}
