@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/giantswarm/beekeeper/internal/sandbox"
@@ -84,6 +86,43 @@ func writePath(b *strings.Builder, path []string) {
 		dir := strings.ReplaceAll(expandHome(path[i]), "'", `'\''`)
 		fmt.Fprintf(b, "case \":$PATH:\" in *':%[1]s:'*) ;; *) PATH='%[1]s':\"$PATH\"; export PATH ;; esac\n", dir)
 	}
+}
+
+// PathFirst is path, a PATH, as writePath leaves it: each directory of
+// first not on it yet put ahead, in their order.
+func PathFirst(first []string, path string) string {
+	for i := len(first) - 1; i >= 0; i-- {
+		dir := expandHome(first[i])
+		if !slices.Contains(filepath.SplitList(path), dir) {
+			path = dir + string(os.PathListSeparator) + path
+		}
+	}
+	return path
+}
+
+// Resolve is the program a shell runs for name on path, a PATH: the first
+// executable file of that name, "" when there is none.
+func Resolve(name, path string) string {
+	for _, dir := range filepath.SplitList(path) {
+		if dir == "" {
+			continue
+		}
+		p := filepath.Join(dir, name)
+		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o111 != 0 {
+			return p
+		}
+	}
+	return ""
+}
+
+// Brokered reports whether gh, the gh a session resolves, is one of the
+// agent's own programs: it lies in a directory of path (agents.shell.path).
+// With no such directories every gh is the agent's.
+func Brokered(gh string, path []string) bool {
+	if len(path) == 0 {
+		return true
+	}
+	return slices.ContainsFunc(path, func(d string) bool { return filepath.Dir(gh) == filepath.Clean(expandHome(d)) })
 }
 
 // WithPrelude is env, a session's environment file, with prelude in place

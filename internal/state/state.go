@@ -354,6 +354,10 @@ type Agent struct {
 	// Conversation is klaus-gateway's conversation the agent holds with its
 	// person, a Slack thread; empty: none is open.
 	Conversation string `json:"conversation,omitempty"`
+	// GH is the gh the agent's shell resolves outside the sandbox, read at
+	// its registration and each session start; GHAt when. Empty: not read.
+	GH   string    `json:"gh,omitempty"`
+	GHAt time.Time `json:"ghAt,omitzero"`
 
 	rest rest
 }
