@@ -25,7 +25,7 @@ import (
 
 const (
 	testVaultSession = "OP_SESSION_TESTACCOUNT"
-	testVaultToken   = testVaultToken
+	testVaultToken   = "tok"
 	testVaultRef     = "op://Shared/i/f"
 )
 
