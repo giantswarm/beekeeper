@@ -306,10 +306,14 @@ func TestADeadMergesToolWindowCloses(t *testing.T) {
 	}
 }
 
-// A merge-child unit fails only where a person must act; devctl's verdicts
-// on the pull request are its caller's and end the unit successfully.
+// A merge-child unit fails only where a person must act; devctl's verdicts,
+// the gate's and a stop as asked are its caller's and end the unit
+// successfully.
 func TestMergeChildUnitFailsOnlyForAPerson(t *testing.T) {
-	for rc, want := range map[int]int{0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 9: 0, 7: 7, 8: 8, 127: 127, 130: 130, 137: 137} {
+	for rc, want := range map[int]int{
+		0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 9: 0, ExitGateQueued: 0, ExitGateRefused: 0, 143: 0,
+		8: 8, 75: 75, 127: 127, 130: 130, 137: 137,
+	} {
 		if got := unitExit(rc); got != want {
 			t.Errorf("devctl exit %d: unit exit %d, want %d", rc, got, want)
 		}

@@ -5,6 +5,7 @@ package platform
 import (
 	"math"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -81,6 +82,18 @@ func TestSizeBytes(t *testing.T) {
 	for _, in := range []string{"", "G", "-1G", "1.5G", "12GB", "99999999999T"} {
 		if _, err := sizeBytes(in); err == nil {
 			t.Errorf("sizeBytes(%q): want an error", in)
+		}
+	}
+}
+
+// A unit's informative ends never fail it: a stop as asked with
+// TermIsSuccess, and the stop-post's own end, a kill included.
+func TestRunArgsExpectedEndsSucceed(t *testing.T) {
+	got := strings.Join(runArgs(Unit{Name: "beekeeper-wake-x", Argv: []string{"claude"}, TermIsSuccess: true,
+		StopPost: []string{"/bin/beekeeper", "agents", "reopen", "local_x"}, StopTimeout: time.Minute}), " ")
+	for _, want := range []string{"SuccessExitStatus=143 SIGTERM", "ExecStopPost=-/bin/beekeeper agents reopen local_x", "-- claude"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("systemd-run %s: no %q", got, want)
 		}
 	}
 }

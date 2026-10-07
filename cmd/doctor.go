@@ -303,6 +303,9 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 			rep.chores = append(rep.chores, "would "+o.String())
 		}
 		rep.chores = append(rep.chores, a.reopenRowless(ctx, st, t, record, r)...)
+		if line := resetOwnUnits(ctx, true); line != "" {
+			rep.chores = append(rep.chores, line)
+		}
 		return rep, nil
 	}
 	failing := slices.ContainsFunc(rep.faults, func(f faultFinding) bool { return !f.healthy })
@@ -367,7 +370,30 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 		})
 	}
 	rep.chores = append(rep.chores, a.reopenRowless(ctx, st, t, record, r)...)
+	if line := resetOwnUnits(ctx, r.dryRun); line != "" {
+		rep.chores = append(rep.chores, line)
+	}
 	return rep, nil
+}
+
+// ownUnits matches every unit beekeeper starts or installs.
+const ownUnits = "beekeeper-*"
+
+// resetOwnUnits clears the failed state of beekeeper's own units, whose
+// outcomes are in the event log and the watch, so the desktop shows no failed
+// unit for them, and says which it cleared; with dryRun it only says them.
+func resetOwnUnits(ctx context.Context, dryRun bool) string {
+	units := plat.Launcher.Failed(ctx, ownUnits)
+	if len(units) == 0 {
+		return ""
+	}
+	if dryRun {
+		return "would reset the failed units " + strings.Join(units, ", ")
+	}
+	if err := plat.Launcher.ResetFailed(ctx, units...); err != nil {
+		return fmt.Sprintf("the failed units %s stay failed: %v", strings.Join(units, ", "), err)
+	}
+	return "reset the failed units " + strings.Join(units, ", ") + ": their outcomes are in the event log"
 }
 
 // owedRun is what the doctor's run found of the archives owed: the agents
