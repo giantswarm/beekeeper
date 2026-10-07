@@ -151,6 +151,22 @@ func ParsePromoteDocument(raw []byte) (Outcome, bool) {
 	return o, true
 }
 
+// ParsePromoteCandidate reads the candidate of devctl release promote
+// --dry-run's JSON document for one repository: the release candidate a
+// promotion would dispatch now, "" when there is none. ok is false when the
+// document names no single repository.
+func ParsePromoteCandidate(raw []byte) (candidate string, ok bool) {
+	var doc struct {
+		Repositories []struct {
+			Candidate string `json:"candidate"`
+		} `json:"repositories"`
+	}
+	if json.Unmarshal(raw, &doc) != nil || len(doc.Repositories) != 1 {
+		return "", false
+	}
+	return doc.Repositories[0].Candidate, true
+}
+
 // owned are the subcommands of devctl that block until an outcome, which
 // the gate runs outside their caller so that the outcome reaches its owner.
 var owned = [][2]string{{"pr", "merge"}, {"pr", waitVerb}, {"release", waitVerb}, {"rollout", waitVerb}}

@@ -73,10 +73,13 @@ func stubSelf(t *testing.T) (self string, launched func() childSpec) {
 	}
 }
 
+// aheadName is the session of the merge ahead in a busy lane.
+const aheadName = "ahead"
+
 // busyLaneApp is queueApp with o/r#6 of a live gate waiting ahead.
 func busyLaneApp(t *testing.T) *app {
 	t.Helper()
-	return queueApp(t, state.Merge{Repo: scratchRepo, PR: 6, Lane: scratchRepo, By: state.Party{Name: "ahead"}, PID: sleeper(t),
+	return queueApp(t, state.Merge{Repo: scratchRepo, PR: 6, Lane: scratchRepo, By: state.Party{Name: aheadName}, PID: sleeper(t),
 		Phase: state.Waiting, Joined: time.Now().Add(-time.Minute), Seen: time.Now()})
 }
 
@@ -150,7 +153,7 @@ func TestASecondMergeOfAQueuedOneIsRefused(t *testing.T) {
 	busy, queued := sleeper(t), sleeper(t)
 	seed := func() *app {
 		return queueApp(t,
-			state.Merge{Repo: scratchRepo, PR: 6, Lane: scratchRepo, By: state.Party{Name: "ahead"}, PID: busy, Phase: state.Waiting, Joined: time.Now().Add(-time.Hour), Seen: time.Now()},
+			state.Merge{Repo: scratchRepo, PR: 6, Lane: scratchRepo, By: state.Party{Name: aheadName}, PID: busy, Phase: state.Waiting, Joined: time.Now().Add(-time.Hour), Seen: time.Now()},
 			state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, By: state.Party{Session: "s1", Name: ownerName}, PID: queued, Phase: state.Waiting, Joined: time.Now(), Seen: time.Now()})
 	}
 	a := seed()

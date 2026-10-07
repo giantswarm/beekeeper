@@ -125,9 +125,12 @@ an arrived unseeded merge, not an earlier pull request of its own session.`,
 	}
 	queue.Flags().StringVar(&forName, "for", "", "the session whose merge this is")
 	drop := &cobra.Command{
-		Use:   "drop <owner/repo> <n>",
-		Short: "Take a waiting merge out of its lane, or end a running one whose pull request merged",
-		Long: `drop takes a waiting merge out of its lane's queue. A running merge whose
+		Use:   "drop <owner/repo> <n>|promote",
+		Short: "Take a waiting merge or promotion out of its lane, or end a running merge whose pull request merged",
+		Long: `drop takes a waiting merge out of its lane's queue, or with promote in place
+of the number the repository's waiting devctl release promote. A gate that
+waits for the place, a queued run of its own included, refuses (exit 77)
+and wakes its owner: nothing runs. A running merge whose
 pull request GitHub reports merged or closed while its devctl runs on (hung
 after the merge) has its devctl ended; its outcome is recorded as when its
 gate ends it: a merge settles its lane by the settle rule, its release
@@ -136,10 +139,11 @@ merges it on. The watch ends such a hung run by itself merge.hungAfter (45m)
 after the merge.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			pr, err := strconv.Atoi(args[1])
+			pr, err := dropArg(args[1])
 			if err != nil {
-				return usageErr("%s is not a pull request number", args[1])
+				return err
 			}
+			key := state.Merge{Repo: args[0], PR: pr}.Key()
 			me, err := a.caller()
 			if err != nil {
 				return err
@@ -157,18 +161,20 @@ after the merge.`,
 				if !found {
 					return nil, nil
 				}
-				return []state.Event{event(me, "merge.dropped", "%s#%d", args[0], pr)}, nil
+				return []state.Event{event(me, "merge.dropped", "%s", key)}, nil
 			})
 			switch {
 			case err != nil:
 				return err
 			case found:
-				_, err = fmt.Fprintf(a.out, "dropped %s#%d from its lane\n", args[0], pr)
+				_, err = fmt.Fprintf(a.out, "dropped %s from its lane\n", key)
 				return err
+			case running && pr == 0:
+				return refused("%s is running: devctl dispatched it or is about to, a promotion has no pull request to end it by", key)
 			case running:
 				return a.dropRunning(cmd.Context(), me, args[0], pr)
 			}
-			_, err = fmt.Fprintf(a.out, "%s#%d is not waiting in any lane\n", args[0], pr)
+			_, err = fmt.Fprintf(a.out, "%s is not waiting in any lane\n", key)
 			return err
 		},
 	}
@@ -213,6 +219,22 @@ counts as settling: watch settles it too, with a MERGE LOST line.`,
 		},
 	})
 	return c
+}
+
+// promoteArg names a promotion's place in lanes drop.
+const promoteArg = "promote"
+
+// dropArg reads lanes drop's place: a pull request number, or promote for
+// the repository's promotion (0).
+func dropArg(arg string) (int, error) {
+	if arg == promoteArg {
+		return 0, nil
+	}
+	pr, err := strconv.Atoi(arg)
+	if err != nil || pr < 1 {
+		return 0, usageErr("%s is neither a pull request number nor promote", arg)
+	}
+	return pr, nil
 }
 
 // prArgs reads <owner/repo> <n>.
@@ -360,7 +382,7 @@ func (a *app) stallText(s merge.Stall) string {
 		}
 		behind = append(behind, fmt.Sprintf("%s (%q, %s)", m.Key(), m.By.Name, how))
 	}
-	return fmt.Sprintf("stalled for %s: %s (%q) waits in the gate behind %s; drop the places that will not arrive (beekeeper lanes drop <owner/repo> <n>)",
+	return fmt.Sprintf("stalled for %s: %s (%q) waits in the gate behind %s; drop the places that will not arrive (beekeeper lanes drop <owner/repo> <n>|promote)",
 		a.now.Sub(s.Since).Round(time.Second), s.Merge.Key(), s.Merge.By.Name, strings.Join(behind, ", "))
 }
 

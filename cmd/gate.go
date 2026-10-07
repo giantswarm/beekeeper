@@ -155,6 +155,13 @@ type gateRun struct {
 	seeded  bool // the merge's place was queued on the session's behalf
 	queued  bool // the merge's own run, which waits on after exit 76
 	from    int  // the gate a queued run took the merge's place from
+	// placed says the merge had its place in the lane: a step that finds
+	// none, its place was taken out (lanes drop).
+	placed bool
+	// candidate is the release candidate a promotion is for; read says this
+	// call read it (a fresh promote), else it is its place's.
+	candidate     string
+	candidateRead bool
 	// central says the merge's lane queues in the central instance: joined
 	// once the merge has its place there, centralWhy what it waits for
 	// there as of centralAsked.
@@ -189,6 +196,14 @@ func (a *app) gate(ctx context.Context, argv []string, wait time.Duration, queue
 	}
 	g := &gateRun{app: a, ctx: ctx, argv: argv, repo: repo, pr: pr, lane: a.cfg.LaneOf(repo), me: me, pid: os.Getpid(), cli: callerCLI(), queued: queued}
 	g.central = pr != 0 && a.cfg.CentralLane(g.lane)
+	// A queued run takes over the place its gate holds: none means dropped.
+	g.placed = queued
+	if pr == 0 && !queued {
+		if g.candidate, err = promoteCandidate(ctx, repo); err != nil {
+			return gateRefused("the release candidate of %s is unknown (%v): nothing promoted; run the same command again", repo, err)
+		}
+		g.candidateRead = true
+	}
 	if v, ok := os.LookupEnv(gateFromEnv); ok {
 		_ = os.Unsetenv(gateFromEnv)
 		g.from, _ = strconv.Atoi(v)
@@ -279,6 +294,7 @@ func (g *gateRun) step() (string, error) {
 	var hold state.Hold
 	var held bool
 	var dup *state.Merge
+	dropped := false
 	err := g.store.Update(func(st *state.State) ([]state.Event, error) {
 		merge.Prune(st, g.now, g.cfg.Merge.QueueTTL.Duration, g.cfg.Merge.SeedTTL.Duration, proc.Alive)
 		if hold, held = merge.Blocking(st, g.now, g.repo, g.pr, g.lane); held {
@@ -294,19 +310,35 @@ func (g *gateRun) step() (string, error) {
 		}
 		var ev []state.Event
 		if i := g.mine(st, state.Waiting); i >= 0 {
-			st.Merges[i].PID, st.Merges[i].By, st.Merges[i].Seen = g.pid, g.me, g.now.UTC()
-			g.seeded = st.Merges[i].Seeded || st.Merges[i].Retrying()
+			m := &st.Merges[i]
+			m.PID, m.By, m.Seen = g.pid, g.me, g.now.UTC()
+			g.seeded = m.Seeded || m.Retrying()
+			if g.candidateRead {
+				m.Candidate = g.candidate
+			} else {
+				g.candidate = m.Candidate
+			}
+		} else if g.placed {
+			dropped = true
+			return nil, nil
 		} else {
 			st.Merges = append(st.Merges, state.Merge{Repo: g.repo, PR: g.pr, Lane: g.lane.Name, By: g.me, PID: g.pid,
-				Phase: state.Waiting, Joined: g.now.UTC(), Seen: g.now.UTC()})
-			ev = append(ev, event(g.me, "merge.queued", "%s in lane %s", g.key(), g.lane.Name))
+				Phase: state.Waiting, Joined: g.now.UTC(), Seen: g.now.UTC(), Candidate: g.candidate})
+			detail := fmt.Sprintf("%s in lane %s", g.key(), g.lane.Name)
+			if g.pr == 0 {
+				detail += ", for " + candidateText(g.candidate)
+			}
+			ev = append(ev, event(g.me, "merge.queued", "%s", detail))
 		}
+		g.placed = true
 		q = merge.Queue(st, g.lane.Name)
 		return ev, nil
 	})
 	switch {
 	case err != nil:
 		return "", gateRefused("the state does not load (%v): fix it, then run the same command again", err)
+	case dropped:
+		return "", g.refuse("%s was taken out of lane %s (beekeeper lanes drop): nothing ran; run it again only if it is still wanted", g.key(), g.lane.Name)
 	case held:
 		return "", g.refuse("%s is held (%s) by %q until %s: %s; merge after the hold lifts (beekeeper hold), do not poll",
 			g.repo, holdTarget(hold), hold.By.Name, untilText(g.app, hold), hold.Reason)
@@ -369,6 +401,54 @@ func (g *gateRun) step() (string, error) {
 		return "", err
 	}
 	return g.start(q.SettlingKeys(), hrs)
+}
+
+// checkCandidate refuses a promotion whose turn came, its place running,
+// when the newest release candidate is not the one it was queued for: it
+// would promote another worker's candidate. Its place leaves the lane and
+// its owner decides again.
+func (g *gateRun) checkCandidate() error {
+	now, err := promoteCandidate(g.ctx, g.repo)
+	if err == nil && now == g.candidate {
+		return nil
+	}
+	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+		if i := g.mine(st, state.Running); i >= 0 {
+			st.Merges = slices.Delete(st.Merges, i, i+1)
+		}
+		return nil, nil
+	})
+	if err != nil {
+		return g.refuse("its turn came, and the release candidate of %s is unknown (%v): nothing promoted; run the same command again", g.repo, err)
+	}
+	return g.refuse("%s was queued for %s, the newest is %s now: nothing promoted, its place is dropped; decide again whether to promote it",
+		g.key(), candidateText(g.candidate), candidateText(now))
+}
+
+// candidateText names a release candidate, "" as none.
+func candidateText(c string) string {
+	if c == "" {
+		return "no candidate"
+	}
+	return "candidate " + c
+}
+
+// promoteCandidate is the release candidate devctl release promote would
+// dispatch for repo now (its --dry-run), "" when there is none.
+var promoteCandidate = func(ctx context.Context, repo string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	var stderr bytes.Buffer
+	c := exec.CommandContext(ctx, merge.Tool, "release", "promote", repo, "--dry-run") //nolint:gosec // the merge tool, a checked repository
+	c.Stderr = &stderr
+	out, err := c.Output()
+	if candidate, ok := merge.ParsePromoteCandidate(out); ok {
+		return candidate, nil
+	}
+	if err == nil {
+		err = errors.New("no document")
+	}
+	return "", fmt.Errorf("%s release promote %s --dry-run: %w: %s", merge.Tool, repo, err, lastOf(stderr.String()))
 }
 
 // outsideCheck is how often a merge waiting in a lane asks GitHub about the
@@ -569,6 +649,11 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 		return why, nil
 	}
 	g.leaveCentral(g.ctx, settled, "rolled, HelmReleases of "+g.lane.Installation+" Ready")
+	if g.pr == 0 {
+		if err := g.checkCandidate(); err != nil {
+			return "", err
+		}
+	}
 	if g.central {
 		if why, err := g.centralStart(); err != nil || why != "" {
 			return why, err
