@@ -45,7 +45,9 @@ func TestTheWatchSaysAnUnbrokeredGH(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	line := func(name, gh string) string { return fmt.Sprintf("GH UNBROKERED %q: its shell resolves gh to %s", name, gh) }
+	line := func(name, gh string) string {
+		return fmt.Sprintf("GH UNBROKERED %q: its shell resolves gh to %s", name, gh)
+	}
 	set(map[string]string{own: filepath.Join(link, "gh"), plain: "/usr/bin/gh", missing: ghNone})
 	var out bytes.Buffer
 	w := &watcher{app: &app{cfg: cfg, store: store, now: now, out: &out}, last: map[string]time.Time{}}
