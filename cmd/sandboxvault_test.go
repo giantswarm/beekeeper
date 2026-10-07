@@ -344,7 +344,7 @@ func TestWatchSaysTheVault(t *testing.T) {
 // The sign-in command's stdout is read into memory as op signin prints it;
 // a failure names the command's last stderr line.
 func TestRunSignin(t *testing.T) {
-	name, token, err := runSignin(context.Background(), []string{"sh", "-c", `echo signing in >&2; echo 'export ` + testVaultSession + `=testVaultToken'`})
+	name, token, err := runSignin(context.Background(), []string{"sh", "-c", `echo signing in >&2; echo 'export ` + testVaultSession + `="` + testVaultToken + `"'`})
 	if err != nil || name != testVaultSession || token != testVaultToken {
 		t.Fatalf("runSignin: %q, %q, %v", name, token, err)
 	}
