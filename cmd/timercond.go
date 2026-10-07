@@ -5,13 +5,9 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
-	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -24,66 +20,13 @@ const timerEvery = 5 * time.Minute
 // timerRunTimeout bounds a timer's --run command.
 const timerRunTimeout = 30 * time.Minute
 
-// timerCondition is a typed condition of timer add --when: the reference it
-// names (form, matched by ref) and the probe that exits 0 once it holds.
-type timerCondition struct {
-	form   string
-	ref    *regexp.Regexp
-	github bool
-	probe  func(m []string) string
-}
-
-var (
-	ghRef   = regexp.MustCompile(`^([\w.-]+/[\w.-]+)#(\d+)$`)
-	kubeRef = regexp.MustCompile(`^([\w.@:-]+)/([a-z0-9][a-z0-9.-]*)/([a-z0-9][a-z0-9.-]*)$`)
-)
-
-// timerConditions are the typed conditions by kind. Each probe is one read
-// of one reference, so the timers on the same reference share it.
-var timerConditions = map[string]timerCondition{
-	"pr-merged": {"owner/repo#n", ghRef, true, func(m []string) string {
-		return fmt.Sprintf("gh api repos/%s/pulls/%s --jq .merged | grep -qx true", m[1], m[2])
-	}},
-	"issue-closed": {"owner/repo#n", ghRef, true, func(m []string) string {
-		return fmt.Sprintf("gh api repos/%s/issues/%s --jq .state | grep -qx closed", m[1], m[2])
-	}},
-	"helmrelease-ready": {"context/namespace/name", kubeRef, false, func(m []string) string {
-		return fmt.Sprintf(`kubectl --context %s -n %s get helmrelease %s -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' | grep -qx True`, m[1], m[2], m[3])
-	}},
-	"controlplane-ready": {"context/namespace/name", kubeRef, false, func(m []string) string {
-		return fmt.Sprintf(`kubectl --context %s -n %s get kubeadmcontrolplane %s -o jsonpath='{.spec.replicas}/{.status.readyReplicas}/{.status.updatedReplicas}' | grep -Eqx '([0-9]+)/\1/\1'`, m[1], m[2], m[3])
-	}},
-}
-
-// conditionProbe is the probe of a typed condition "<kind> <ref>" and
-// whether it reads GitHub.
-func conditionProbe(when string) (string, bool, error) {
-	kind, ref, _ := strings.Cut(strings.TrimSpace(when), " ")
-	c, ok := timerConditions[kind]
-	if !ok {
-		return "", false, usageErr("--when %q: a condition is one of %s, then its reference; --probe takes a command", when, strings.Join(slices.Sorted(maps.Keys(timerConditions)), ", "))
+// lastFound is what t's last check found, for a line: " (<reason>)", or
+// empty.
+func lastFound(t state.Timer) string {
+	if t.Reason == "" {
+		return ""
 	}
-	m := c.ref.FindStringSubmatch(strings.TrimSpace(ref))
-	if m == nil {
-		return "", false, usageErr("--when %q: %s names %s", when, kind, c.form)
-	}
-	return c.probe(m), c.github, nil
-}
-
-// timerProbe is the command that checks t's condition and whether it reads
-// GitHub; empty for a timer without one.
-func timerProbe(t state.Timer) (string, bool) {
-	if t.Probe != "" {
-		return t.Probe, false
-	}
-	if t.When == "" {
-		return "", false
-	}
-	cmd, github, err := conditionProbe(t.When)
-	if err != nil {
-		return "", false
-	}
-	return cmd, github
+	return " (" + truncate(t.Reason, 200) + ")"
 }
 
 // timerCond names t's condition in a line.
@@ -97,35 +40,37 @@ func timerCond(t state.Timer) string {
 // runProbe reports whether a probe command exits 0; a seam for the tests.
 var runProbe = probePasses
 
-// checkTimers runs the probes of the conditional timers whose check is due
+// checkTimers runs the checks of the conditional timers whose check is due
 // at now, each distinct command once however many timers share it, and
-// returns by timer id whether its condition holds. A GitHub condition waits
-// while the budget is under the floor (lowBudget).
-func checkTimers(ctx context.Context, timers []state.Timer, now time.Time, lowBudget bool) map[int]bool {
+// returns by timer id what it found. A GitHub condition waits while the
+// budget is under the floor (lowBudget).
+func checkTimers(ctx context.Context, timers []state.Timer, now time.Time, lowBudget bool) map[int]checkResult {
+	checks := map[string]timerCheck{}
 	byCmd := map[string][]int{}
 	for _, t := range timers {
 		if !t.Conditional() || t.Due.After(now) || !t.Checked.IsZero() && now.Sub(t.Checked) < cmp.Or(t.Every, timerEvery) {
 			continue
 		}
-		if cmd, github := timerProbe(t); cmd != "" && (!github || !lowBudget) {
-			byCmd[cmd] = append(byCmd[cmd], t.ID)
+		if c := checkOf(t); c.cmd != "" && (!c.github || !lowBudget) {
+			checks[c.cmd] = c
+			byCmd[c.cmd] = append(byCmd[c.cmd], t.ID)
 		}
 	}
-	held := map[int]bool{}
+	found := map[int]checkResult{}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	for cmd, ids := range byCmd {
 		wg.Go(func() {
-			ok := runProbe(ctx, cmd)
+			r := checks[cmd].result(readProbe(ctx, cmd))
 			mu.Lock()
 			defer mu.Unlock()
 			for _, id := range ids {
-				held[id] = ok
+				found[id] = r
 			}
 		})
 	}
 	wg.Wait()
-	return held
+	return found
 }
 
 // lowBudget reports whether the last GitHub budget reading is under the
@@ -149,11 +94,13 @@ func (f timerFire) message() string {
 }
 
 // settleTimers fires the auto timers of st due at now: a plain one at its
-// time, a conditional one once held says it holds and, past its Until, as
+// time, a conditional one once found says it holds and, past its Until, as
 // timed out, or closed unfired when it expires; a fired or expired timer is
-// closed, a repeating one re-armed at its next time. A check that found the condition not holding is recorded. It
-// returns the lines, events and fires, and whether it changed st.
-func settleTimers(st *state.State, held map[int]bool, now time.Time) ([]string, []state.Event, []timerFire, bool) {
+// closed, a repeating one re-armed at its next time. A check that found the
+// condition not holding is recorded with its reason; a reference that could
+// not be read is a line once, until the reason changes. It returns the
+// lines, events and fires, and whether it changed st.
+func settleTimers(st *state.State, found map[int]checkResult, now time.Time) ([]string, []state.Event, []timerFire, bool) {
 	var lines []string
 	var evs []state.Event
 	var fires []timerFire
@@ -164,24 +111,28 @@ func settleTimers(st *state.State, held map[int]bool, now time.Time) ([]string, 
 			kept = append(kept, t)
 			continue
 		}
-		h, checked := held[t.ID]
+		r, checked := found[t.ID]
 		over := !t.Until.IsZero() && !now.Before(t.Until)
 		f := timerFire{t: t}
 		switch {
 		case !t.Conditional():
 			f.reason = "due " + clock(now, t.Due)
-		case h:
+		case r.holds:
 			f.reason = timerCond(t) + " holds"
 		case over && t.Expire:
 			changed = true
-			lines = append(lines, fmt.Sprintf("TIMER EXPIRED: #%d, %s did not hold by %s: %s", t.ID, timerCond(t), clock(now, t.Until), truncate(t.What, 200)))
+			lines = append(lines, fmt.Sprintf("TIMER EXPIRED: #%d, %s did not hold by %s%s: %s", t.ID, timerCond(t), clock(now, t.Until), lastFound(t), truncate(t.What, 200)))
 			evs = append(evs, event(watchParty, "timer.expired", "#%d %s: %s", t.ID, timerCond(t), t.What))
 			continue
 		case over:
-			f.timedOut, f.reason = true, fmt.Sprintf("timed out at %s, %s did not hold", clock(now, t.Until), timerCond(t))
+			f.timedOut, f.reason = true, fmt.Sprintf("timed out at %s, %s did not hold%s", clock(now, t.Until), timerCond(t), lastFound(t))
 		default:
 			if checked {
-				t.Checked, changed = now.UTC(), true
+				if r.unreadable && (!t.Unreadable || t.Reason != r.reason) {
+					lines = append(lines, fmt.Sprintf("TIMER UNREADABLE: #%d, %s cannot be read (%s); it keeps waiting: %s", t.ID, timerCond(t), r.reason, truncate(t.What, 200)))
+					evs = append(evs, event(watchParty, "timer.unreadable", "#%d %s: %s", t.ID, timerCond(t), r.reason))
+				}
+				t.Checked, t.Reason, t.Unreadable, changed = now.UTC(), r.reason, r.unreadable, true
 			}
 			kept = append(kept, t)
 			continue

@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,20 +25,20 @@ func TestTimerConditionsProbeTheirReference(t *testing.T) {
 	for when, want := range map[string]string{
 		prMerged7:            "gh api repos/o/r/pulls/7 --jq .merged",
 		"issue-closed o/r#8": "gh api repos/o/r/issues/8 --jq .state",
-		"helmrelease-ready teleport.example.io-mc/flux-giantswarm/backstage": "kubectl --context teleport.example.io-mc -n flux-giantswarm get helmrelease backstage",
-		"controlplane-ready admin@mc/org-x/wc1":                              "get kubeadmcontrolplane wc1",
+		"helmrelease-ready teleport.example.io-mc/flux-giantswarm/backstage": "kubectl --context teleport.example.io-mc -n flux-giantswarm get helmreleases.helm.toolkit.fluxcd.io backstage -o json",
+		"controlplane-ready admin@mc/org-x/wc1":                              "kubectl --context admin@mc -n org-x get kubeadmcontrolplanes.controlplane.cluster.x-k8s.io wc1 -o json",
 	} {
-		cmd, _, err := conditionProbe(when)
-		if err != nil || !strings.Contains(cmd, want) {
-			t.Errorf("%s: %q, %v", when, cmd, err)
+		c, err := conditionCheck(when)
+		if err != nil || c.cmd != want || c.judge == nil {
+			t.Errorf("%s: %q, %v", when, c.cmd, err)
 		}
 	}
 	for _, when := range []string{"merged o/r#7", "pr-merged o/r", "pr-merged o/r#7;rm", "helmrelease-ready ctx/ns", "helmrelease-ready c/n/$(id)"} {
-		if _, _, err := conditionProbe(when); err == nil {
+		if _, err := conditionCheck(when); err == nil {
 			t.Errorf("%q passed", when)
 		}
 	}
-	if _, github, _ := conditionProbe(prMerged7); !github {
+	if c, _ := conditionCheck(prMerged7); !c.github {
 		t.Error("pr-merged does not read GitHub")
 	}
 }
@@ -53,7 +55,7 @@ func TestTimersOnOneReferenceShareOneCheck(t *testing.T) {
 	timers = append(timers, state.Timer{ID: 11, Due: relayNow.Add(time.Minute), Probe: probeHolds})
 	held := checkTimers(context.Background(), timers, relayNow, false)
 	b, _ := os.ReadFile(count) //nolint:gosec // the test's temp file
-	if string(b) != "x\n" || len(held) != 10 || held[1] {
+	if string(b) != "x\n" || len(held) != 10 || held[1].holds || held[1].unreadable {
 		t.Fatalf("ran %q, held %v", b, held)
 	}
 	for i := range timers {
@@ -73,9 +75,12 @@ func TestTimersOnOneReferenceShareOneCheck(t *testing.T) {
 func TestConditionalTimerWakesItsAgentOnceItHolds(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	merged := false
-	wasProbe := runProbe
-	runProbe = func(_ context.Context, cmd string) bool { return merged && strings.Contains(cmd, "repos/o/r/pulls/7") }
-	t.Cleanup(func() { runProbe = wasProbe })
+	fakeRead(t, func(cmd string) ([]byte, error) {
+		if !strings.Contains(cmd, "repos/o/r/pulls/7") {
+			return nil, errors.New("unexpected " + cmd)
+		}
+		return []byte(fmt.Sprintln(merged)), nil
+	})
 	var woke []string
 	wasWake := wakeOwner
 	wakeOwner = func(_ *app, _ context.Context, _ state.Party, q, msg, _ string) error {
@@ -125,7 +130,7 @@ func TestTimersTimeOutExpireAndFireAtTheirTime(t *testing.T) {
 		{ID: 5, Due: past, Probe: probeFails, Until: relayNow.Add(time.Hour), What: "waits"},
 		{ID: 6, Due: relayNow.Add(time.Hour), Wake: "a", What: "later"},
 	}}
-	lines, evs, fires, changed := settleTimers(st, map[int]bool{5: false}, relayNow)
+	lines, evs, fires, changed := settleTimers(st, map[int]checkResult{5: {}}, relayNow)
 	if !changed || len(fires) != 2 || !fires[0].timedOut || fires[0].t.ID != 1 || fires[1].t.ID != 4 || fires[1].timedOut {
 		t.Fatalf("fires %+v", fires)
 	}

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -12,6 +13,7 @@ import (
 )
 
 func (a *app) timerCmd() *cobra.Command {
+	var verbose bool
 	c := &cobra.Command{
 		Use:   "timer",
 		Short: "Times to look at something: check the rollout after 22:55",
@@ -21,10 +23,12 @@ when a timer is due; it stays in every hand-over until marked done. A timer
 can wait on a condition and wake an agent or run a command itself (timer
 add --help); such a timer closes when it fires.
 
-Without a subcommand, lists the open timers.`,
+Without a subcommand, lists the open timers; -v adds what the last check
+of each condition found.`,
 		Args: cobra.NoArgs,
-		RunE: func(*cobra.Command, []string) error { return a.timerList() },
+		RunE: func(*cobra.Command, []string) error { return a.timerList(verbose) },
 	}
+	c.Flags().BoolVarP(&verbose, "verbose", "v", false, "add what the last check of each condition found")
 	var spec timerSpec
 	add := &cobra.Command{
 		Use:   "add <time> <what>",
@@ -130,11 +134,22 @@ floor:
 			return nil
 		},
 	}
-	c.AddCommand(add, done, listCmd("List the open timers", a.timerList))
+	check := &cobra.Command{
+		Use:   "check <id>",
+		Short: "Check a timer's condition now and say what it found",
+		Long: `Runs the check of a timer's condition once, now, and prints what it found:
+it holds, why not yet, or why its reference cannot be read. The timer is
+left as it is; the watch fires it on its own check.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error { return a.timerCheck(c.Context(), args[0]) },
+	}
+	list := listCmd("List the open timers", func() error { return a.timerList(verbose) })
+	list.Flags().BoolVarP(&verbose, "verbose", "v", false, "add what the last check of each condition found")
+	c.AddCommand(add, done, check, list)
 	return c
 }
 
-func (a *app) timerList() error {
+func (a *app) timerList(verbose bool) error {
 	st, err := a.store.Read()
 	if err != nil {
 		return err
@@ -142,11 +157,11 @@ func (a *app) timerList() error {
 	if a.json {
 		return a.printJSON(st.Timers)
 	}
-	a.printTimers(st.Timers)
+	a.printTimers(st.Timers, verbose)
 	return nil
 }
 
-func (a *app) printTimers(timers []state.Timer) {
+func (a *app) printTimers(timers []state.Timer, verbose bool) {
 	if len(timers) == 0 {
 		_, _ = fmt.Fprintln(a.out, "no open timers")
 		return
@@ -157,7 +172,67 @@ func (a *app) printTimers(timers []state.Timer) {
 			when += " (due)"
 		}
 		_, _ = fmt.Fprintf(a.out, "#%d [%s, set by %s] %s\n", t.ID, when, t.By.Name, t.What)
+		if verbose && t.Conditional() {
+			_, _ = fmt.Fprintf(a.out, "    %s\n", lastCheck(a.now, t))
+		}
 	}
+}
+
+// lastCheck says what t's last check found.
+func lastCheck(now time.Time, t state.Timer) string {
+	switch {
+	case t.Checked.IsZero():
+		return "not checked yet"
+	case t.Unreadable:
+		return fmt.Sprintf("checked %s: cannot be read: %s", clock(now, t.Checked), t.Reason)
+	case t.Reason != "":
+		return fmt.Sprintf("checked %s: not yet: %s", clock(now, t.Checked), t.Reason)
+	}
+	return fmt.Sprintf("checked %s: not yet", clock(now, t.Checked))
+}
+
+// timerCheck runs the check of the open timer id now and prints what it
+// found.
+func (a *app) timerCheck(ctx context.Context, arg string) error {
+	ids, err := parseIDs([]string{arg}, "timer")
+	if err != nil {
+		return err
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		return err
+	}
+	i := slices.IndexFunc(st.Timers, func(t state.Timer) bool { return t.ID == ids[0] })
+	if i < 0 {
+		return refused("timer #%d is not open", ids[0])
+	}
+	t := st.Timers[i]
+	c := checkOf(t)
+	if c.cmd == "" {
+		return refused("timer #%d waits on no condition: it fires %s", t.ID, timerWhen(a.now, t))
+	}
+	r := c.result(readProbe(ctx, c.cmd))
+	found := "not yet"
+	switch {
+	case r.holds:
+		found = "it holds"
+	case r.unreadable:
+		found = "cannot be read"
+	}
+	if r.reason != "" {
+		found += ": " + r.reason
+	}
+	if a.json {
+		return a.printJSON(struct {
+			ID         int    `json:"id"`
+			Condition  string `json:"condition"`
+			Holds      bool   `json:"holds"`
+			Unreadable bool   `json:"unreadable,omitempty"`
+			Reason     string `json:"reason,omitempty"`
+		}{t.ID, timerCond(t), r.holds, r.unreadable, r.reason})
+	}
+	_, err = fmt.Fprintf(a.out, "#%d %s: %s\n", t.ID, timerCond(t), found)
+	return err
 }
 
 // timerSpec is what timer add was given beyond the time and the text.
@@ -171,7 +246,7 @@ type timerSpec struct {
 func (a *app) timerFrom(spec timerSpec, due time.Time) (state.Timer, error) {
 	t := state.Timer{Due: due.UTC(), When: strings.TrimSpace(spec.when), Probe: strings.TrimSpace(spec.probe), Every: spec.every, Expire: spec.expire, Run: strings.TrimSpace(spec.run), Repeat: strings.TrimSpace(spec.repeat)}
 	if t.When != "" {
-		if _, _, err := conditionProbe(t.When); err != nil {
+		if _, err := conditionCheck(t.When); err != nil {
 			return t, err
 		}
 	}
