@@ -19,6 +19,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/secret"
+	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 const (
@@ -35,7 +36,11 @@ func vaultApp(t *testing.T, wait time.Duration) *app {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	t.Setenv("XDG_RUNTIME_DIR", dir)
-	return &app{cfg: &config.Config{Secret: config.Secret{Vault: "Shared", Session: true, UnlockWait: config.Duration{Duration: wait}}}}
+	store, err := state.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &app{store: store, cfg: &config.Config{Secret: config.Secret{Vault: "Shared", Session: true, UnlockWait: config.Duration{Duration: wait}}}}
 }
 
 // A call on the vault waits while the broker holds no session, listed for
@@ -108,6 +113,12 @@ func TestBrokeredVaultSignsInOnce(t *testing.T) {
 	r, err := h(context.Background(), os.Getpid(), req)
 	if err != nil || r.Code != ExitVault || !strings.Contains(r.Err, "vault locked") || !strings.Contains(r.Err, "sign-in") {
 		t.Errorf("no sign-in: %+v, %v", r, err)
+	}
+	// the call that ran no process is logged by the broker, as the requester's
+	evs, err := a.store.Events(0, func(e state.Event) bool { return strings.HasPrefix(e.Verb, "secret.") })
+	if err != nil || len(evs) != 1 || evs[0].Verb != "secret.fingerprint" || evs[0].By.Name == "" ||
+		!strings.HasPrefix(evs[0].Detail, testVaultRef+": failed: the vault stayed locked for 20ms (") {
+		t.Errorf("the locked call's log = %+v, %v", evs, err)
 	}
 
 	// a SOPS-only call never waits on the vault

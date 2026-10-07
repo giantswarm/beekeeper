@@ -66,8 +66,7 @@ forgotten by itself.`,
 				return err
 			}
 			if _, err := secret.AskVault(path, secret.VaultRequest{Op: secret.VaultStatus}); err != nil {
-				a.secretLog("unlock", "refused: %v", err)
-				return refused("%v", err)
+				return a.secretLog(refused("%v", err), "unlock", "refused: %v", err)
 			}
 			args := []string{"signin"}
 			if account != "" {
@@ -78,8 +77,7 @@ forgotten by itself.`,
 			op.Stdin, op.Stdout, op.Stderr = os.Stdin, &out, os.Stderr
 			op.Env = withoutVaultEnv(os.Environ())
 			if err := op.Run(); err != nil {
-				a.secretLog("unlock", "failed: op signin: %v", err)
-				return &exitError{code: ExitVault, msg: "op signin: " + err.Error()}
+				return a.secretLog(&exitError{code: ExitVault, msg: "op signin: " + err.Error()}, "unlock", "failed: op signin: %v", err)
 			}
 			name, token, err := secret.ParseSignin(out.Bytes())
 			out.Reset()
@@ -87,9 +85,11 @@ forgotten by itself.`,
 				return &exitError{code: ExitVault, msg: err.Error()}
 			}
 			st, err := secret.AskVault(path, secret.VaultRequest{Op: secret.VaultUnlock, Name: name, Token: token})
-			a.secretLog("unlock", "%s", outcome(err, "the broker holds the vault session"))
 			if err != nil {
-				return &exitError{code: ExitVault, msg: err.Error()}
+				err = &exitError{code: ExitVault, msg: err.Error()}
+			}
+			if err := a.secretLog(err, "unlock", "%s", outcome(err, "the broker holds the vault session")); err != nil {
+				return err
 			}
 			_, err = fmt.Fprintf(a.out, "unlocked: the broker holds the vault session since %s; beekeeper secret lock forgets it\n", st.Since.Format(time.TimeOnly))
 			return err
@@ -110,9 +110,11 @@ func (a *app) secretLockCmd() *cobra.Command {
 				return err
 			}
 			_, err = secret.AskVault(path, secret.VaultRequest{Op: secret.VaultLock})
-			a.secretLog("lock", "%s", outcome(err, "the broker forgot the vault session"))
 			if err != nil {
-				return refused("%v", err)
+				err = refused("%v", err)
+			}
+			if err := a.secretLog(err, "lock", "%s", outcome(err, "the broker forgot the vault session")); err != nil {
+				return err
 			}
 			_, err = fmt.Fprintln(a.out, "locked: the broker holds no vault session")
 			return err
