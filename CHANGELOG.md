@@ -477,3 +477,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `hook pretooluse` leaves a command alone only when it invokes `memcap` or `beekeeper run` at a command position; a wrapper path it merely mentions (`ls …/memcap`, `M=…/memcap`, `grep -v memcap`) no longer lets its build run without a slot.
 
 [Unreleased]: https://github.com/giantswarm/beekeeper/tree/main
+### Fixed
+
+- The merge gate knows which base branches auto-release: before devctl's turn it reads the pull request's base branch and the Auto-release workflow on it (`.github/workflows/zz_generated.auto_release.yaml`, its `on.push` branch filter), once per merge. A merge into a branch no Auto-release run tags (a maintenance branch whose tags are cut by hand, a fork line's backport branch) runs `devctl pr merge --no-release-wait`, frees its lane the moment devctl reports it merged, awaits no release and says so in the gate line, the `merged` event and the wake text; a branch with auto-release still holds its lane until the release rolled. GitHub not answering for the base branch refuses the merge (77). Such a merge waited for a tag that never came, holding its lane until a person stopped devctl ([#573](https://github.com/giantswarm/beekeeper/issues/573)).
+- A SIGTERM aimed at a gated merge or wait stops its devctl too: when the gate's caller is still there two seconds after the SIGTERM, the gate passes it on to devctl and records the run as one ended by a signal. A caller going away (SIGHUP, the gate's parent gone with the SIGTERM) still leaves devctl running on ([#573](https://github.com/giantswarm/beekeeper/issues/573)).
+

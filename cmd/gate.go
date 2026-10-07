@@ -83,7 +83,13 @@ merge waiting behind it). A waiting call whose binary is replaced
 arguments and stdio, the same place and deadline; never while devctl runs.
 devctl then runs once, in a session of its own, so it merges on when the
 caller's session ends (only SIGINT reaches it); its document and exit code
-pass through unchanged. A run with nothing merged keeps its place for the
+pass through unchanged. A merge into a base branch no Auto-release
+run tags (the Auto-release workflow on the branch, read once per merge,
+names no push to it; its tags are cut by hand) runs devctl with
+--no-release-wait: its lane frees the moment devctl reports it merged and
+no release is awaited; GitHub not answering for the base refuses (77). A
+SIGTERM aimed at the gate, its caller still there two seconds later,
+stops devctl too. A run with nothing merged keeps its place for the
 retry (merge.seedTTL), except devctl's refusal (exit 5). A run without its
 document or ended by a signal is judged by GitHub: merged, its release is
 unconfirmed. A second merge of a pull request whose merge runs is refused
@@ -156,6 +162,9 @@ type gateRun struct {
 	joined       bool
 	centralWhy   string
 	centralAsked time.Time
+	// release is how the pull request's base branch releases, read once
+	// before devctl's turn.
+	release *github.BaseRelease
 }
 
 func (a *app) gate(ctx context.Context, argv []string, wait time.Duration, queued bool) error {
@@ -356,6 +365,9 @@ func (g *gateRun) step() (string, error) {
 		}
 		return "", g.enqueue(ExitGateRefused, why)
 	}
+	if err := g.readRelease(); err != nil {
+		return "", err
+	}
 	return g.start(q.SettlingKeys(), hrs)
 }
 
@@ -378,6 +390,32 @@ func (g *gateRun) checkOutside() string {
 		return fmt.Sprintf("lane %s waits for a place settled outside the gate, and GitHub does not answer for it (%v)", g.lane.Name, err)
 	}
 	return ""
+}
+
+// readRelease reads, once per merge, whether a merge into the pull
+// request's base branch is tagged by its Auto-release workflow. Only a
+// devctl merge waits for a release; GitHub not answering refuses.
+func (g *gateRun) readRelease() error {
+	if g.release != nil || g.pr == 0 || !g.runsDevctl() {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(g.ctx, time.Minute)
+	defer cancel()
+	r, err := baseRelease(ctx, g.repo, g.pr)
+	if err != nil {
+		return g.refuse("whether %s's base branch has auto-release cannot be read (%v): run the same command again", g.key(), err)
+	}
+	g.release = &r
+	return nil
+}
+
+// handCut is the base branch when no Auto-release run tags a merge into it,
+// "" otherwise.
+func (g *gateRun) handCut() string {
+	if g.release == nil || g.release.Auto {
+		return ""
+	}
+	return g.release.Base
 }
 
 // key names the merge, owner/repo#n or owner/repo promote.
@@ -509,6 +547,7 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 		passed := q.Passed(g.repo, g.pr)
 		m := &st.Merges[i]
 		m.Phase, m.Started, m.Roll, m.Seeded, m.Outside = state.Running, g.now.UTC(), merge.RollSet(hrs, g.repo), false, false
+		m.HandCut = g.handCut()
 		m.Finished, m.Exit = time.Time{}, 0
 		ev := []state.Event{event(g.me, "merging", "%s in lane %s", g.key(), g.lane.Name)}
 		if passed != "" {
@@ -570,11 +609,16 @@ func (g *gateRun) runMerge() error {
 		gateLine("devctl serves the repositories of %s only (merge.devctlOwners): %s#%d takes the %s as the gh login, green first, no release wait",
 			strings.Join(g.cfg.Merge.DevctlOwners, ", "), g.repo, g.pr, github.SquashRoute)
 	}
+	if b := g.handCut(); b != "" {
+		argv = merge.NoReleaseWait(argv)
+		gateLine("%s merges into %s, which no Auto-release run tags: devctl ends at the merge (--no-release-wait), awaits no release and frees lane %s then",
+			g.key(), b, g.lane.Name)
+	}
 	base, err := g.mergeFiles()
 	if err != nil {
 		gateLine("%v", err)
 	} else {
-		run = runDetached(childSpec{Argv: argv, Owner: g.me, Config: g.explicitConfig()}, base, g.started)
+		run = runDetached(childSpec{Argv: argv, Owner: g.me, Config: g.explicitConfig(), HandCut: g.handCut()}, base, g.started)
 		defer handOver(base, run, g.cli)
 	}
 	doc, rc, output := run.doc, run.rc, run.kept
@@ -614,6 +658,9 @@ func (g *gateRun) runMerge() error {
 	case unanswered != nil:
 		gateLine("devctl ended with exit %d without its document and GitHub does not answer (%v): whether %s merged is unknown, lane %s settles by the settle rule; check the pull request, do not rerun blindly",
 			rc, unanswered, g.key(), g.lane.Name)
+	case out.Merged && g.handCut() != "":
+		gateLine("%s merged into %s, which no Auto-release run tags: no release awaited, lane %s is free; a tag of %s is cut by hand",
+			g.key(), g.handCut(), g.lane.Name, g.handCut())
 	case out.Unconfirmed:
 		gateLine("devctl ended with exit %d before its document, and GitHub reports %s#%d merged: its release is unconfirmed, confirm it with `devctl release wait %s --pr %d`, do not merge again",
 			rc, g.repo, g.pr, g.repo, g.pr)
@@ -710,13 +757,13 @@ type runOutcome struct {
 // is kept.
 func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOutcome, now time.Time, note string) ([]state.Event, bool) {
 	m := &st.Merges[i]
-	key, repo, pr, out, rc := m.Key(), m.Repo, m.PR, r.out, r.rc
+	key, repo, pr, out, rc, handCut := m.Key(), m.Repo, m.PR, r.out, r.rc, m.HandCut
 	var ev []state.Event
 	kept := false
 	switch {
 	case r.unanswered != nil:
 		m.Phase, m.Finished, m.Exit, m.Release, m.Roll = state.Settling, now, rc, "", nil
-	case out.Merged && !out.NoRelease && lane.Installation != "":
+	case out.Merged && !out.NoRelease && handCut == "" && lane.Installation != "":
 		m.Phase, m.Finished, m.Exit, m.Release = state.Settling, now, rc, out.Release
 	case !out.Merged && merge.Failed(m, rc, now):
 		kept = true
@@ -735,6 +782,8 @@ func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOu
 			why = "merged nothing"
 		case out.NoRelease:
 			why = "warranted no release"
+		case handCut != "":
+			why = "awaits no release, " + handCut + " has no auto-release"
 		}
 		if why != "" {
 			st.Holds = slices.DeleteFunc(st.Holds, func(h state.Hold) bool {
@@ -748,6 +797,8 @@ func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOu
 	}
 	release := out.Release
 	switch {
+	case handCut != "":
+		release = "none awaited (" + handCut + " has no auto-release)"
 	case out.NoRelease:
 		release = "none warranted"
 	case out.Unconfirmed:

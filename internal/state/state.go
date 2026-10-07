@@ -864,6 +864,10 @@ type Merge struct {
 	Checked time.Time `json:"checked,omitzero"`
 	// Release is the tag the merge released, empty when unknown.
 	Release string `json:"release,omitempty"`
+	// HandCut is the merge's base branch when no Auto-release run tags a
+	// merge into it (its tags are cut by hand): devctl awaits no release and
+	// the merge leaves its lane once merged.
+	HandCut string `json:"handCut,omitempty"`
 	// Roll names the HelmReleases (namespace/name) that must reach Release
 	// before the lane frees.
 	Roll []string `json:"roll,omitempty"`

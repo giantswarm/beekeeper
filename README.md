@@ -956,8 +956,9 @@ service manager, merge-child runs in a session of its own. The gate follows devc
 its own output and records the outcome. When the caller ends mid-merge (SIGTERM, SIGHUP, its pipes
 closed), devctl merges on and waits for the release, and the gate waits on to record it; when the
 gate is killed too, `watch` records the outcome from the files once devctl ended (`MERGE
-RECORDED`, a `merged` or `merge.failed` event naming the gone gate). Only SIGINT, a person's
-Ctrl-C, reaches devctl. A run that ends without its document or
+RECORDED`, a `merged` or `merge.failed` event naming the gone gate). SIGINT, a person's Ctrl-C,
+reaches devctl at once; a SIGTERM reaches it when it is aimed at the gate: its caller (the gate's
+parent) is still there two seconds later and no SIGHUP came, so `kill <gate pid>` stops the merge. A run that ends without its document or
 by a signal (exit 128+n) is judged by GitHub (`gh pr view`), never by its exit code: merged, it
 settles its lane with its release unconfirmed and the gate line names `devctl release wait
 <owner/repo> --pr <n>`, with no retry place; not merged, it keeps its place for the retry; with
@@ -976,6 +977,16 @@ and wakes the owner, a registered agent, with one line, `<command> exit N: <reas
 the document's verdict and reason (a merge's release), else devctl's last stderr line; the output
 is kept under `merge-output/` for seven days. A second `devctl pr merge` of a pull request whose
 merge runs is refused with exit 3, naming that run's start, owner and last line.
+
+A merge into a base branch without auto-release releases nothing by itself: a maintenance branch
+whose tags are cut by hand, a fork line's backport branch. Before devctl's turn the gate reads the
+pull request's base branch and the Auto-release workflow on it
+(`.github/workflows/zz_generated.auto_release.yaml`), once per merge; when the workflow is absent
+or its `on.push` branch filter does not name the branch, devctl runs with `--no-release-wait`, the
+merge leaves its lane the moment devctl reports it merged (`merged … release none awaited
+(<branch> has no auto-release)`), and the gate line and the wake text say no release is awaited.
+A base branch with auto-release holds its lane until the release rolled, as above. GitHub not
+answering for the base branch refuses the merge (exit 77).
 
 A running merge whose gate process and devctl are both gone (killed, or lost with the machine in
 a reboot) is lost: whether it merged is unknown. `watch` turns it into the lane's settling merge with an

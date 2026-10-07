@@ -195,7 +195,7 @@ func noSystemd(t *testing.T) {
 }
 
 func TestASignalExitWithoutADocumentIsJudgedByGitHub(t *testing.T) {
-	gazelleLane := config.Lane{Name: "serving", Installation: "gazelle", Repositories: []string{scratchRepo}}
+	gazelleLane := config.Lane{Name: serving, Installation: gazelle, Repositories: []string{scratchRepo}}
 	toolLane := config.Lane{Name: merge.ToolRepo, Repositories: []string{merge.ToolRepo}}
 	for _, c := range []struct {
 		name, repo, pull string

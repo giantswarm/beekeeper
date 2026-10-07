@@ -96,6 +96,19 @@ func StripDetach(argv []string) (out, stripped []string) {
 	return out, stripped
 }
 
+// noReleaseWaitFlag ends devctl pr merge at the merge.
+const noReleaseWaitFlag = "--no-release-wait"
+
+// NoReleaseWait is a devctl pr merge argument vector that ends at the merge:
+// argv with --no-release-wait after its subcommand, unless it has it.
+func NoReleaseWait(argv []string) []string {
+	i := slices.Index(argv, "merge")
+	if i < 0 || slices.Contains(argv, noReleaseWaitFlag) {
+		return argv
+	}
+	return slices.Insert(slices.Clone(argv), i+1, noReleaseWaitFlag)
+}
+
 // ParsePromote finds the one repository of a devctl release promote
 // argument vector; ok is false for anything else (several repositories,
 // --team, --dry-run, --help), which runs ungated.
