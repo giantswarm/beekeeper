@@ -583,11 +583,28 @@ in", is dropped and signed in again at once through `secret.signinCommand`, the 
 with the new session; the journal and the watch (`VAULT SESSION DROPPED at <t>: op no longer took it
 (<reason>); the broker signs in again`, ended by the new sign-in) say so.
 
+A sign-in that fails is tried again, after 30 s, 1 m, 2 m and then every 5 m, within `secret.unlockWait`
+of the ask, each try bounded by two minutes. Before each try the broker asks the session bus for the
+person's credential store (the freedesktop Secret Service: KeePassXC, GNOME Keyring, KWallet) and waits,
+looking every 15 s, while it is locked and, within ten minutes of the boot, while nothing serves it yet;
+later an absent store may be no Secret Service at all, and the command runs. The journal names each
+failure's cause (`the credential store is locked`, `no credential store answers on the session bus`,
+`the network did not reach 1Password`, `the sign-in did not finish in time`, `1Password rejected the
+password`) with the command's last line, and the watch says `VAULT SIGN-IN RETRYING: <cause> (<line>);
+try <n> at <t>`, or `… waiting for the credential store: <state>`, until the sign-in unlocks or gives
+up. A sign-in that gives up is `VAULT SIGN-IN FAILED: <cause> after <n> tries: <reason>` and a
+`vault.signin` line in `beekeeper log`; the broker signs in again at the next call on the vault. Only a
+password 1Password rejected while the store answered unlocked (or could not be asked) is for the person:
+one sign-in note for `guide.person`, which closes by itself once `beekeeper secret status` finds the
+broker holding a session (exit 78 while it holds none). A store that was locked or absent is the cause
+whatever the command said: a helper that read no password reports what 1Password said to the empty one,
+and a note asking the person to fix an entry that is fine would be wrong.
+
 While the broker holds no session, a call on the vault prints `vault locked: waiting for the broker's
 sign-in` and waits up to `secret.unlockWait` (8 m; the hook gives such a call the Bash tool's 10
 minutes), then exits 78. Nothing asks the person. The watch says `VAULT UNLOCKED: the broker holds the
 vault session since <t> until <t>` for the session's lifetime and an ENDED line when the broker
-forgets it; `VAULT SIGN-IN FAILED: <reason>` with the command's last line; `VAULT LOCKED: <who> waits
+forgets it; `VAULT SIGN-IN FAILED: <reason>` once a sign-in gave up; `VAULT LOCKED: <who> waits
 on <ref>` for each waiting call, with an ENDED line once it goes on, or `VAULT LOCKED: <who>'s call on
 <ref> timed out …, still locked` when it gives up. `beekeeper status` names the waiting sessions.
 `beekeeper secret lock` forgets the session at once. The broker runs on Linux only, so
@@ -1875,7 +1892,7 @@ The organisation and desk keys, and their defaults:
 | `secret.session` | `false` | Read and write `secret.vault` through the person's `op` session, held by the broker alone, instead of a service account ([The vault session](#the-vault-session)) |
 | `secret.signinCommand` | none | The command the broker runs to sign in to the vault without the person; it prints the session as `op signin` does ([The vault session](#the-vault-session)) |
 | `secret.sessionLifetime` | `12h` | How long the broker holds the vault session after a sign-in ([The vault session](#the-vault-session)) |
-| `secret.unlockWait` | `8m` | How long a call on the vault waits for the broker's sign-in ([The vault session](#the-vault-session)) |
+| `secret.unlockWait` | `8m` | How long a call on the vault waits for the broker's sign-in, and how long one sign-in waits for the credential store and tries again after a failure ([The vault session](#the-vault-session)) |
 | `secret.ageIdentities` | none | Age identities in the shared vault, in an identity file (`file://`) or in the person's own credential store (`store://`), by recipient or `pathRegex`, for the SOPS files no local sops identity decrypts ([Age identities](#age-identities)) |
 | `secret.store.read`, `secret.store.search` | none | The person's own commands that read an entry of their credential store and search it by an age recipient, for `store://` age identities ([Age identities](#age-identities)) |
 | `secret.unlockCommands` | none | The person's own vault unlock helpers, refused in agent sessions like `op signin` and unaliased in the agent shell ([Secret reads](#secret-reads)) |
