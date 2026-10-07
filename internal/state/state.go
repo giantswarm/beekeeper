@@ -13,10 +13,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -916,6 +918,11 @@ type Store interface {
 	Record(events ...Event) error
 	// Events returns the last n events keep accepts, oldest first.
 	Events(n int, keep func(Event) bool) ([]Event, error)
+	// Follow returns every event keep accepts, oldest first, as Events(0,
+	// keep); a reader that calls it again under the same name, with the
+	// same keep, may be handed what it read before and only what was logged
+	// since read.
+	Follow(name string, keep func(Event) bool) ([]Event, error)
 	// ReadFile decodes a JSON side file; found is false when it is missing.
 	ReadFile(name string, v any) (found bool, err error)
 	// WriteFile replaces a JSON side file.
@@ -928,6 +935,16 @@ type FileStore struct {
 	dir string
 	// version is the binary's, which every save stamps or judges.
 	version string
+	// follows are the Follow readers' places in the log, by name.
+	mu      sync.Mutex
+	follows map[string]*followed
+}
+
+// followed is how far a Follow reader has read the log, and what it kept.
+type followed struct {
+	file   os.FileInfo
+	offset int64
+	kept   []Event
 }
 
 var _ Store = (*FileStore)(nil)
@@ -1164,6 +1181,60 @@ func (s *FileStore) Events(n int, keep func(Event) bool) ([]Event, error) {
 		out = out[len(out)-n:]
 	}
 	return out, sc.Err()
+}
+
+// Follow returns every event keep accepts, oldest first. It remembers under
+// name how far it read and what it kept, and reads only the lines appended
+// since: a watch that follows the log every poll parses each line once. A
+// log that was replaced or shrank is read again from its start.
+func (s *FileStore) Follow(name string, keep func(Event) bool) ([]Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := os.Open(s.path("events.jsonl"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if s.follows == nil {
+		s.follows = map[string]*followed{}
+	}
+	at := s.follows[name]
+	if at == nil || !os.SameFile(at.file, fi) || fi.Size() < at.offset {
+		at = &followed{}
+		s.follows[name] = at
+	}
+	at.file = fi
+	if _, err := f.Seek(at.offset, io.SeekStart); err != nil {
+		return nil, err
+	}
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 64*1024), 1024*1024)
+	sc.Split(wholeLines)
+	for sc.Scan() {
+		at.offset += int64(len(sc.Bytes())) + 1
+		var e Event
+		line := bytes.TrimLeft(sc.Bytes(), "\x00")
+		if json.Unmarshal(line, &e) == nil && (keep == nil || keep(e)) {
+			at.kept = append(at.kept, e)
+		}
+	}
+	return slices.Clone(at.kept), sc.Err()
+}
+
+// wholeLines splits the log into its complete lines: a line still being
+// appended, without its newline yet, is left for the next read.
+func wholeLines(data []byte, _ bool) (advance int, token []byte, err error) {
+	if i := bytes.IndexByte(data, '\n'); i >= 0 {
+		return i + 1, data[:i], nil
+	}
+	return 0, nil, nil
 }
 
 // ReadFile decodes a JSON side file of the store (the last snapshot);

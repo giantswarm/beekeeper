@@ -777,7 +777,7 @@ credentials do not belong in a shared store. In an agent session the Secret guar
 first ([Secret reads](#secret-reads)).
 
 The watch sweeps `outbound.sweepRoots` (the home directory) `outbound.sweepDepth` (5) levels deep every
-interval for world-readable private keys (`id_*`, `*.pem`, `*.key`, `*.ppk` with a private key header)
+`outbound.sweepEvery` (15m) for world-readable private keys (`id_*`, `*.pem`, `*.key`, `*.ppk` with a private key header)
 and git repositories whose remote URL carries a credential, skipping caches and dependency trees: one
 `EXPOSED <path>: <what>` line each, never the content, and an ENDED line once it is fixed.
 
@@ -815,7 +815,8 @@ otherwise passes.
 subagents' `.jsonl` files, each line's strings decoded, and the spilled tool results in
 ``tool-results/`) and prints each reference and token rule it finds, base64-wrapped ones included,
 with how often and in which files, never a value or where in a file it was: the list of what leaked
-before the hook ran.
+before the hook ran. A maintenance pass, it runs on one core at nice 10, and the PreToolUse hook runs
+a session's sweep through `beekeeper run`, in a build slot like a build.
 
 ## Questions go to the guide
 
@@ -1113,7 +1114,10 @@ cycle within five `watch.interval` (it says so in `upgrades-watch.json`), the st
 the upgrades on the same shared schedule, sets and lifts their holds and says
 `UPGRADES read by the standby watch` once; beside a running supervisor's watch it reads none.
 A supervisor runs its own watch with `--notify` too. `beekeeper install` writes and starts the
-unit with the binary's path; `journalctl --user -u beekeeper-notify -f` shows its lines.
+unit with the binary's path; `journalctl --user -u beekeeper-notify -f` shows its lines. The unit
+caps the watch at half a core (`CPUQuota=50%`): at rest a tick costs a stat per file it read
+before, since the watches keep the parsed desktop records, the transcripts' places and context
+sizes, and their place in the event log across ticks, and read again only what changed.
 
 ### A supervisor gone
 
@@ -1863,7 +1867,7 @@ The organisation and desk keys, and their defaults:
 | `sandbox.devctl` | `devctl` on the broker's `PATH` | The devctl the broker runs on the host: it renews the egress proxy's GitHub token and runs their gated devctl commands ([The agent sandbox](#the-agent-sandbox)) |
 | `scan.sops`, `scan.vaults`, `scan.minLength` | none, none, 12 | The SOPS file globs and 1Password vaults `beekeeper scan index` fingerprints, and the shortest value it takes ([What reaches the model](#what-reaches-the-model)) |
 | `plans.repositories`, `plans.check` | none, `plan-stages` | The plans repositories whose open pull requests a note for `guide.person` links only once their stage check is green |
-| `outbound.sweepRoots`, `outbound.sweepDepth` | the home directory, 5 | Where the watch looks for exposed keys and credentials in remote URLs |
+| `outbound.sweepRoots`, `outbound.sweepDepth`, `outbound.sweepEvery` | the home directory, 5, 15m | Where and how often the watch looks for exposed keys and credentials in remote URLs |
 
 State lives in `$XDG_STATE_HOME/beekeeper/` (`state.json`, which an older beekeeper still running
 writes back with the fields it does not know at every level, `events.jsonl`, whose `at` is RFC 3339 in UTC while

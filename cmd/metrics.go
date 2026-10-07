@@ -86,6 +86,15 @@ const topSessions = 3
 // sessionMetrics reads every session's transcript window once (in
 // parallel) for its work and its activity, and attributes the processes,
 // scopes, merge events and leases to it.
+// readTranscript reads a session's transcript at a.now: through the app's
+// cache in a watch, directly in a command that reads it once.
+func (a *app) readTranscript(path string) (claude.Work, claude.Activity) {
+	if a.transcripts != nil {
+		return a.transcripts.Read(path, a.now)
+	}
+	return claude.ReadTranscript(path, a.now)
+}
+
 func (a *app) sessionMetrics(sessions []*claude.Session, t *proc.Table, holders []lease.Holder) ([]claude.Work, []*metrics) {
 	work := make([]claude.Work, len(sessions))
 	out := make([]*metrics, len(sessions))
@@ -100,7 +109,7 @@ func (a *app) sessionMetrics(sessions []*claude.Session, t *proc.Table, holders 
 				// omp prices its replies itself.
 				work[i], m.Activity = omp.ReadTranscript(s.Transcript, a.now)
 			} else {
-				work[i], m.Activity = claude.ReadTranscript(s.Transcript, a.now)
+				work[i], m.Activity = a.readTranscript(s.Transcript)
 				m.Price(a.cfg.Metrics)
 			}
 			if !s.LastActive.IsZero() {
@@ -133,7 +142,7 @@ func (a *app) sessionMetrics(sessions []*claude.Session, t *proc.Table, holders 
 			out[i].LeaseTimes = append(out[i].LeaseTimes, lt)
 		}
 	}
-	events, _ := a.store.Events(0, func(e state.Event) bool {
+	events, _ := a.store.Follow("metrics", func(e state.Event) bool {
 		return strings.HasPrefix(e.Verb, "merge") || e.Verb == guard.VerbStart || e.Verb == guard.VerbEnd
 	})
 	open := map[string]state.Event{}

@@ -56,6 +56,7 @@ var (
 		`kind\s+(?:load|build)\b`,
 		`agentlab\s+(?:up|platform|test|platform-test|backstage-test|down)\b`,
 		`graphify\s+(?:update|build|extract|label|cluster-only|scan)\b`,
+		`beekeeper\s+scan\s+sweep\b`,
 	}, "|") + `)`)
 	// lightMake: make targets that build nothing (RE2 has no lookahead).
 	lightMake = regexp.MustCompile(`^\s+(?:-n\b|--dry-run\b|help\b|version\b|clean\b|fmt\b|print-|list\b)`)

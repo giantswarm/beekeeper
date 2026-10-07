@@ -89,12 +89,12 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	if _, werr := fmt.Fprintln(a.out, strings.TrimSpace(string(report))); werr != nil {
 		return werr
 	}
-	m, _ := filepath.Glob(filepath.Join(a.cfg.Claude.ProjectsDir, "*", id+".jsonl"))
-	if len(m) == 0 {
+	path := transcriptOf(a.cfg, id)
+	if path == "" {
 		return errors.Join(err, fmt.Errorf("browse turn %s left no transcript", id))
 	}
-	shots, serr := saveScreenshots(m[0], filepath.Join(a.cfg.StateDir, "browse", id))
-	lines := []string{"transcript: " + m[0]}
+	shots, serr := saveScreenshots(path, filepath.Join(a.cfg.StateDir, "browse", id))
+	lines := []string{"transcript: " + path}
 	for _, s := range shots {
 		lines = append(lines, "screenshot: "+s)
 	}

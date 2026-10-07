@@ -477,6 +477,11 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 	return nil
 }
 
+// transcriptFresh is how long a watch takes an unchanged transcript's last
+// read for its figures: an idle session's last hour ages that much before
+// it is read again.
+const transcriptFresh = 5 * time.Minute
+
 // slowReads is how many times less often the installation reads run while
 // the machine is strained.
 const slowReads = 4
@@ -695,6 +700,9 @@ func (a *app) newWatcher(standby, keep bool) *watcher {
 		upgrades: upgrade.Readings{}}
 	if keep {
 		w.dues = relayDues{}
+		// A poll reads every session's transcript (RUNAWAY): an idle
+		// session's read stays good for a few polls.
+		a.transcripts = claude.NewTranscriptCache(transcriptFresh)
 	}
 	w.stand = standbyWatch{send: a.peerSend, open: plat.Opener.Open, succeed: a.succeedFromWatch, revive: a.reviveFromWatch, turning: unitsTurning, reopening: unitsReopening, importRow: a.importRowFromWatch}
 	if me, err := a.caller(); keep && err == nil {
@@ -875,6 +883,12 @@ func (w *watcher) sample(ctx context.Context) {
 	if merr == nil {
 		w.modelServer(ctx, models)
 	}
+	// One process table a sample: the swapoff and the CPU lines read it;
+	// nil when it is unreadable.
+	table, terr := plat.Machine.Processes()
+	if terr != nil {
+		table = nil
+	}
 	m, merr := plat.Machine.Mem()
 	w.unavailable(secMemory, merr)
 	var cause string
@@ -893,7 +907,7 @@ func (w *watcher) sample(ctx context.Context) {
 		w.check("swap", swapOver(m, t, th.SwapMax(m.SwapTotalMiB)), "%s", line)
 		// A running swapoff shrinks SwapTotal ahead of the pages it drains:
 		// swap reads full while it empties, and oomd is no nearer.
-		swapoff := plat.Machine.SwapoffRuns()
+		swapoff := swapoffRuns(table)
 		w.check("swapoff", swapoff, "SWAPOFF IN PROGRESS: %s", line)
 		if m.SwapTotalMiB > 0 {
 			w.check("oomd", !swapoff && w.oomdImminent(m, oomd, t), "OOMD IMMINENT: %s", line)
@@ -901,7 +915,7 @@ func (w *watcher) sample(ctx context.Context) {
 		w.keepSwap(&swapReading{At: now, UsedMiB: m.SwapUsedMiB, DiskMiB: m.DiskSwapMiB(), ZswapMiB: m.ZswappedMiB,
 			PerHourMiB: t.DiskPerHourMiB, AvailFalling: t.AvailFalling, Rated: t.Rated})
 	}
-	w.sampleCPU(now)
+	w.sampleCPU(now, table)
 	psi, err := plat.Machine.MemoryPressure()
 	w.unavailable(secPressure, err)
 	if err == nil {
@@ -935,7 +949,7 @@ func (w *watcher) sample(ctx context.Context) {
 // once two samples in a row read some avg10 over watch.cpuPSIMax, each
 // with the top CPU consumers since the last sample; and READS SLOWED while
 // the machine is strained.
-func (w *watcher) sampleCPU(now time.Time) {
+func (w *watcher) sampleCPU(now time.Time, t *proc.Table) {
 	th := w.cfg.Watch
 	cores := runtime.NumCPU()
 	limit := th.LoadLimit(cores)
@@ -949,7 +963,7 @@ func (w *watcher) sampleCPU(now time.Time) {
 		w.cpuOver = 0
 	}
 	var top string
-	if t, err := plat.Machine.Processes(); err == nil {
+	if t != nil {
 		span := now.Sub(w.cpuAt)
 		top = topCPULine(topCPU(w.cpuTable, t, span, topCPUCommands), span)
 		w.sampleProcs(now, span, w.cpuTable, t)
@@ -964,6 +978,19 @@ func (w *watcher) sampleCPU(now time.Time) {
 	w.strained.Store(strained)
 	w.check("slowed", strained, "READS SLOWED: machine under CPU pressure (load %.0f, CPU some avg10 %.0f%%): installation reads every %d× their interval, at nice %s",
 		load[0], cpu, slowReads, proc.Niceness)
+}
+
+// swapoffRuns reports whether a swapoff runs.
+func swapoffRuns(t *proc.Table) bool {
+	if t == nil {
+		return false
+	}
+	for _, p := range t.ByPID {
+		if p.Comm == "swapoff" {
+			return true
+		}
+	}
+	return false
 }
 
 // sampleProcs says PROCESS STORM once two samples in a row read a fork rate
@@ -1155,7 +1182,7 @@ func (w *watcher) poll(ctx context.Context) {
 		w.lastCentral = now
 		inFlight(ctx, th.Interval.Duration, &w.centraling, w.syncRoster)
 	}
-	if now.Sub(w.lastSweep) >= w.readEvery(th.Interval.Duration) {
+	if now.Sub(w.lastSweep) >= w.readEvery(w.cfg.Outbound.SweepEvery.Duration) {
 		w.lastSweep = now
 		// The sweep takes a while on a big home directory: the poll does not wait.
 		inFlight(ctx, 0, &w.sweeping, func(context.Context) { w.exposures() })

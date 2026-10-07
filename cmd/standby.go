@@ -485,7 +485,7 @@ func (w *watcher) relayOverdue(ctx context.Context, rl role, st *state.State, se
 	if !pastRelayGrace(r, cfg, w.now) || w.now.Before(w.stand.overdueNext[rl.name]) {
 		return
 	}
-	c := sessionContext(sessions, r.Holder.Party, w.now)
+	c := sessionContext(sessions, r.Holder.Party)
 	if c < int64(cfg.RelayAt) || (rl.grants && w.busyNow(ctx, st) != "") {
 		return
 	}

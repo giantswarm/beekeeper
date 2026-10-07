@@ -18,6 +18,7 @@ ExecStart=%h/.local/bin/beekeeper watch --notify --standby
 Restart=on-failure
 RestartSec=30s
 MemoryMax=256M
+CPUQuota=50%
 
 [Install]
 WantedBy=graphical-session.target

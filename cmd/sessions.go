@@ -72,7 +72,7 @@ func (a *app) viewRole(rl role, r state.Role, sessions []*claude.Session, sv sup
 	}
 	return &supervisorView{
 		Supervisor: *r.Holder, Live: sv.live, CLIGone: sv.gone, RestartUntil: sv.until, Relay: r.Relay,
-		Context: sessionContext(sessions, r.Holder.Party, a.now), RelayAt: int64(rl.cfg(a.cfg).RelayAt), Run: r.Run,
+		Context: sessionContext(sessions, r.Holder.Party), RelayAt: int64(rl.cfg(a.cfg).RelayAt), Run: r.Run,
 	}
 }
 

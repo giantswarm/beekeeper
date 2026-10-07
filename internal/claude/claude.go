@@ -397,12 +397,9 @@ func newSession(cfg *config.Config, t *proc.Table, p *proc.Process, rec *cliReco
 	if s.Branch == "" {
 		s.Branch = branch
 	}
-	if s.ID != "" {
-		if m, _ := filepath.Glob(filepath.Join(cfg.Claude.ProjectsDir, "*", s.ID+".jsonl")); len(m) > 0 {
-			s.Transcript = m[0]
-			if fi, err := os.Stat(m[0]); err == nil {
-				s.LastActive = fi.ModTime()
-			}
+	if s.Transcript = Transcript(cfg, s.ID, s.Cwd); s.Transcript != "" {
+		if fi, err := os.Stat(s.Transcript); err == nil {
+			s.LastActive = fi.ModTime()
 		}
 	}
 	s.MemMiB, s.Commands = processTree(t, p.PID, clis, now)
@@ -451,19 +448,13 @@ func ReadRecord(cfg *config.Config, hostID string) (*Record, bool) {
 	if strings.ContainsAny(hostID, `/\*?[`) {
 		return nil, false
 	}
-	m, _ := filepath.Glob(filepath.Join(cfg.Claude.DesktopDir, "*", "*", hostID+".json"))
-	if len(m) == 0 {
-		return nil, false
+	name := hostID + ".json"
+	for _, p := range recordPaths(cfg) {
+		if filepath.Base(p) == name {
+			return readRecord(p)
+		}
 	}
-	return readRecord(m[0])
-}
-
-func readRecord(path string) (*Record, bool) {
-	raw, err := os.ReadFile(filepath.Clean(path))
-	if err != nil {
-		return nil, false
-	}
-	return parseRecord(raw)
+	return nil, false
 }
 
 func parseRecord(raw []byte) (*Record, bool) {
@@ -475,8 +466,7 @@ func parseRecord(raw []byte) (*Record, bool) {
 }
 
 func recordFiles(cfg *config.Config) []string {
-	m, _ := filepath.Glob(filepath.Join(cfg.Claude.DesktopDir, "*", "*", "local_*.json"))
-	return m
+	return slices.DeleteFunc(recordPaths(cfg), func(p string) bool { return !strings.HasPrefix(filepath.Base(p), "local_") })
 }
 
 // Titles maps CLI session ids, current and prior, to their desktop titles,
