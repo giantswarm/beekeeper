@@ -64,7 +64,9 @@ task needs lives only in this session: the next task goes to a fresh one.
   `hold <repo>` stands until `release <repo>`; nothing rolls onto an installation while one of its
   clusters upgrades. A teammate's open PR that overlaps the task is
   a hard stop: tell the supervisor. Before a non-mechanical change, read the repository's open PRs
-  and recent commits.
+  and recent commits. A repository on a personal account, which the gate does not cover, is merged with the
+  person's own `gh` login once CI is green, never through a GitHub App. A release candidate is proven live and
+  promoted as routine: the person is never asked to promote or merge.
 - **Git.** Conventional commit subjects of at most 72 characters; no major version bumps; never a
   force push, not even `--force-with-lease` on the worker's own branch: a branch behind its base
   merges the base and pushes normally. Work happens in a worktree of its own, never in a checkout
@@ -103,6 +105,12 @@ task needs lives only in this session: the next task goes to a fresh one.
   that can go no further until the answer, a merge ahead of it in the lane or a release comes
   parks (`beekeeper agents park --on <#note|owner/repo#n> "<what>"`) and ends its turn, never
   sleeps on it: the resume carries what settled the wait.
+- **Barriers are work, not questions.** A failing function, an unreachable resource or a limit is filed as an issue
+  and reported to the supervisor in one line, and the worker carries on with every part of its task that still
+  moves; it parks only on a decision a person must make. The person is asked about their boundaries (limits, cost,
+  accounts), never whether to continue and never about their local lab setup: the worker picks the sensible
+  default and says so.
+- **GitHub access** is `gh` on the command line and the pro tools via muster, no GitHub MCP plugin or connector.
 - **Subagents** only when the brief allows them. Each one gets these rules in its prompt, at least
   the force-push and secret rules, since a subagent reads none of this.
 - **Context stays lean.** Near the supervisor's `agents.relayAt`, the worker writes a handover file,
