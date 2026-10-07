@@ -54,7 +54,6 @@ func (systemdMachine) MemoryPressure() (float64, error)   { return machine.ReadP
 func (systemdMachine) CPUPressure() (float64, error)      { return machine.ReadCPUPSISome10() }
 func (systemdMachine) Processes() (*proc.Table, error)    { return proc.Read() }
 func (systemdMachine) Started(pid int) (time.Time, error) { return proc.Started(pid) }
-func (systemdMachine) SwapoffRuns() bool                  { return machine.SwapoffRuns() }
 
 func (systemdMachine) OOMDSwap(ctx context.Context) (machine.OOMDSwap, error) {
 	return machine.ReadOOMDSwap(ctx)

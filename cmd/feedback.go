@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path/filepath"
 	"slices"
 
 	"github.com/giantswarm/beekeeper/internal/central"
@@ -28,11 +27,11 @@ func (w *watcher) recordReportThread(r state.Report) {
 	if !w.cfg.Feedback.Enabled() {
 		return
 	}
-	m, _ := filepath.Glob(filepath.Join(w.cfg.Claude.ProjectsDir, "*", r.Session+".jsonl"))
-	if len(m) == 0 {
+	path := transcriptOf(w.cfg, r.Session)
+	if path == "" {
 		return
 	}
-	text, ok, err := claude.CallResult(m[0], guard.PostTool)
+	text, ok, err := claude.CallResult(path, guard.PostTool)
 	if err != nil || !ok {
 		return
 	}

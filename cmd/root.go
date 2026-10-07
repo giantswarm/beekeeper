@@ -75,6 +75,7 @@ func usageErr(format string, a ...any) error {
 // Main runs the command line and returns the process exit code. An error
 // without a message (a wrapped command's exit code) prints nothing.
 func Main() int {
+	defer cpuProfile(os.Getenv("BEEKEEPER_CPUPROFILE"))()
 	err := New().Execute()
 	if err == nil {
 		return 0
@@ -109,6 +110,9 @@ type app struct {
 	// guideDues are the guide's relay dues its guide watch said; nil in a
 	// guide watch --once.
 	guideDues relayDues
+	// transcripts keeps a watch's transcript reads across its polls; nil
+	// reads every time.
+	transcripts *claude.TranscriptCache
 }
 
 // New returns the root command.

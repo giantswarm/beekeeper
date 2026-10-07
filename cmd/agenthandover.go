@@ -169,7 +169,7 @@ func (a *app) readHandover(q string) (handover, error) {
 	transcript := ""
 	if s, ok := claude.Live(sessions, p); ok {
 		h.session, h.dir, h.model, transcript = s, s.Cwd, s.Model, s.Transcript
-		h.context = transcriptContext(s, a.now)
+		h.context = transcriptContext(s)
 	}
 	if transcript == "" {
 		// A session whose CLI does not run: its context is its transcript's.
@@ -756,7 +756,7 @@ func (w *watcher) handoversDue(st *state.State, sessions []*claude.Session) {
 		if s == nil {
 			s = &claude.Session{Transcript: transcriptOf(w.cfg, ag.Session)}
 		}
-		return transcriptContext(s, w.now)
+		return transcriptContext(s)
 	}
 	for _, d := range handoversDue(st, sessions, w.cfg.Agents.RelayAt, said, contextOf, proc.Alive) {
 		w.reported[key(d.agent.Party)], w.dirty = true, true

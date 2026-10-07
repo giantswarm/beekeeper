@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -234,11 +233,8 @@ func (a *app) reseed(sessions []*claude.Session) func(*state.State, state.Start)
 	var done map[string]bool
 	live := func(p state.Party) bool { _, ok := claude.Live(sessions, p); return ok }
 	transcript := func(id string) (string, bool) {
-		m, _ := filepath.Glob(filepath.Join(a.cfg.Claude.ProjectsDir, "*", id+".jsonl"))
-		if len(m) == 0 {
-			return "", false
-		}
-		return m[0], true
+		path := transcriptOf(a.cfg, id)
+		return path, path != ""
 	}
 	return func(st *state.State, s state.Start) (time.Time, bool) {
 		if done == nil {

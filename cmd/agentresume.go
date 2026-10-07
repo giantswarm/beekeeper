@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -95,8 +94,8 @@ func turnUnit(unit, id string) bool {
 // merge the gate runs is none: its outcome wakes its owner (devctl.unheard).
 func (a *app) endedOnWait(id string) string {
 	var waits []string
-	if m, _ := filepath.Glob(filepath.Join(a.cfg.Claude.ProjectsDir, "*", id+".jsonl")); len(m) > 0 {
-		open, _ := claude.OpenBackground(m[0])
+	if path := transcriptOf(a.cfg, id); path != "" {
+		open, _ := claude.OpenBackground(path)
 		for _, b := range slices.Backward(open) {
 			if !guard.Owned(b.Command) {
 				waits = append(waits, cmp.Or(strings.TrimSpace(b.Description), b.Command))

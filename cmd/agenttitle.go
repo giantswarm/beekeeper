@@ -238,8 +238,8 @@ func (a *app) keepImport(ctx context.Context, id, name string, sa *startedAgent)
 		return claude.Record{}
 	}
 	var model string
-	if m, _ := filepath.Glob(filepath.Join(a.cfg.Claude.ProjectsDir, "*", id+".jsonl")); len(m) > 0 {
-		model, _ = claude.Model(m[0])
+	if path := transcriptOf(a.cfg, id); path != "" {
+		model, _ = claude.Model(path)
 	}
 	find := func(_ context.Context, tried []string) (steward, error) {
 		return a.findSteward(host, append(tried, host))
@@ -733,11 +733,11 @@ func (a *app) stewardAnswer(host string, since time.Time) claude.Answer {
 	if !ok || r.CLISessionID == "" {
 		return claude.Answer{}
 	}
-	m, _ := filepath.Glob(filepath.Join(a.cfg.Claude.ProjectsDir, "*", r.CLISessionID+".jsonl"))
-	if len(m) == 0 {
+	path := transcriptOf(a.cfg, r.CLISessionID)
+	if path == "" {
 		return claude.Answer{}
 	}
-	ans, _ := claude.ReadAnswer(m[0], since)
+	ans, _ := claude.ReadAnswer(path, since)
 	return ans
 }
 

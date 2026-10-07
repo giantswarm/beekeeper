@@ -367,6 +367,12 @@ func environmentErr(name string, err error) error {
 	return err
 }
 
+// Follow lists the events as Events(0, keep) does: the API server keeps no
+// place of a reader's.
+func (s *Store) Follow(_ string, keep func(state.Event) bool) ([]state.Event, error) {
+	return s.Events(0, keep)
+}
+
 // Events returns the last n Kubernetes Events beekeeper recorded that keep
 // accepts, oldest first.
 func (s *Store) Events(n int, keep func(state.Event) bool) ([]state.Event, error) {

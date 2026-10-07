@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/free"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -194,6 +196,10 @@ func (a *app) scanAdd(in io.Reader, ref string) error {
 const sweepPathsShown = 10
 
 func (a *app) scanSweep() error {
+	// A maintenance pass over every transcript: on one core at low
+	// priority, it never competes with the sessions it serves.
+	runtime.GOMAXPROCS(1)
+	free.Nice(10)
 	ix, err := guard.LoadIndex(a.scanDir())
 	if err != nil {
 		return err

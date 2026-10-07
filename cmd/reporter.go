@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -115,11 +114,11 @@ func (w *watcher) tendReporter(ctx context.Context, sessions []*claude.Session) 
 
 // reportPosted reports whether the session's transcript holds the post.
 func (w *watcher) reportPosted(id string) bool {
-	m, _ := filepath.Glob(filepath.Join(w.cfg.Claude.ProjectsDir, "*", id+".jsonl"))
-	if len(m) == 0 {
+	path := transcriptOf(w.cfg, id)
+	if path == "" {
 		return false
 	}
-	ok, _ := claude.Called(m[0], guard.PostTool) // unreadable: not yet
+	ok, _ := claude.Called(path, guard.PostTool) // unreadable: not yet
 	return ok
 }
 
