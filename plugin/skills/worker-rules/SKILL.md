@@ -76,7 +76,8 @@ task needs lives only in this session: the next task goes to a fresh one.
   monitor or background wait; a process is killed by the PID captured at its start, never by a
   pattern. Agents never hard-delete: what goes away is moved aside.
 - **GitHub.** GitHub work stops while `beekeeper budget --gate` refuses and resumes after the
-  reset. No `--watch` and no sleep loop over `gh` or `devctl`: `devctl pr wait` and `devctl pr
+  reset. Whether a login belongs to the org is `beekeeper person <login>`, never a members
+  endpoint of `gh api`: the App's token reads a private member as an outsider. No `--watch` and no sleep loop over `gh` or `devctl`: `devctl pr wait` and `devctl pr
   merge` block by themselves. A headless turn (a first turn, a `wake` turn) never ends on a
   background task or wait, whose completion never wakes it: it waits in the foreground (`devctl pr
   wait`, `devctl pr merge`, a foreground Bash with a bounded timeout) and ends only when the task is
