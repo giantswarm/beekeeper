@@ -125,7 +125,7 @@ func (a *app) secretLockCmd() *cobra.Command {
 func (a *app) secretStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   secret.VaultStatus,
-		Short: "Whether the broker holds the vault session (never the session)",
+		Short: "Whether the broker holds the vault session (never the session): exit 78 while it holds none",
 		Args:  cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			r, err := sandbox.Call(sandbox.SpoolDir(a.cfg.StateDir), sandbox.Request{Op: sandbox.OpVault}, 10*time.Second)
@@ -133,8 +133,7 @@ func (a *app) secretStatusCmd() *cobra.Command {
 				return refused("%v", err)
 			}
 			if r.Out != vaultUnlocked {
-				_, err = fmt.Fprintln(a.out, secret.Locked)
-				return err
+				return &exitError{code: ExitVault, msg: secret.Locked}
 			}
 			_, err = fmt.Fprintln(a.out, "unlocked: the broker holds the vault session")
 			return err
