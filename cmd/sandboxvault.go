@@ -79,7 +79,7 @@ func (a *app) keepVault(ctx context.Context) (*vaultBroker, error) {
 			if cause.Rejected() {
 				next = "a sign-in note asks " + a.cfg.Guide.Person
 			}
-			writeState(secret.VaultState{Error: fmt.Sprintf("%s after %s: %v; %s", cause, plural(tries, "try"), err, next)})
+			writeState(secret.VaultState{Error: fmt.Sprintf("%s after %s: %v; %s", cause, triesOf(tries), err, next)})
 			a.vaultSigninFailed(exe, cause, tries, err)
 		}}
 	if cmd := a.cfg.Secret.SigninCommand; len(cmd) > 0 {
@@ -270,10 +270,18 @@ func (v *vaultBroker) status(s string) {
 // giveUp reports a sign-in that failed for good: the journal, and v.failed
 // for the state and the person.
 func (v *vaultBroker) giveUp(cause secret.SigninCause, tries int, err error) {
-	fmt.Fprintf(os.Stderr, "vault keeper: the sign-in failed (%s) after %s: %v\n", cause, plural(tries, "try"), err)
+	fmt.Fprintf(os.Stderr, "vault keeper: the sign-in failed (%s) after %s: %v\n", cause, triesOf(tries), err)
 	if v.failed != nil {
 		v.failed(cause, tries, err)
 	}
+}
+
+// triesOf is n tries, in words.
+func triesOf(n int) string {
+	if n == 1 {
+		return "1 try"
+	}
+	return fmt.Sprintf("%d tries", n)
 }
 
 // vaultParty is the keeper in the event log.
@@ -293,7 +301,7 @@ func (a *app) vaultSigninLog(format string, args ...any) {
 // by itself leaves no note: the broker signs in again at the next call.
 func (a *app) vaultSigninFailed(exe string, cause secret.SigninCause, tries int, err error) {
 	if uerr := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		evs := []state.Event{event(vaultParty, "vault.signin", "failed (%s) after %s: %s", cause, plural(tries, "try"), lastOf(err.Error()))}
+		evs := []state.Event{event(vaultParty, "vault.signin", "failed (%s) after %s: %s", cause, triesOf(tries), lastOf(err.Error()))}
 		probe := guard.ShellQuote(exe) + " secret status"
 		if !cause.Rejected() || slices.ContainsFunc(st.Notes, func(n state.Note) bool { return n.Kind == noteLogin && n.Until == probe }) {
 			return evs, nil
@@ -302,7 +310,7 @@ func (a *app) vaultSigninFailed(exe string, cause secret.SigninCause, tries int,
 		st.NextNote++
 		n := state.Note{ID: st.NextNote, For: a.cfg.Guide.Person, By: vaultParty, At: now, Due: now, Kind: noteLogin, Until: probe,
 			Text: fmt.Sprintf("Sign in to the vault: 1Password rejected the password the broker's sign-in command reads, in %s (%s). The entry the command reads is wrong or rotated: fix it, then `systemctl --user restart beekeeper-sandbox`, or wait for the next call on the vault, when the broker signs in again.",
-				plural(tries, "try"), lastOf(err.Error())),
+				triesOf(tries), lastOf(err.Error())),
 			Default: "every call on the vault waits secret.unlockWait and exits 78: the agents' secret steps stay blocked"}
 		st.Notes = append(st.Notes, n)
 		return append(evs, event(vaultParty, "note.add", "#%d %s", n.ID, n.Text)), nil
