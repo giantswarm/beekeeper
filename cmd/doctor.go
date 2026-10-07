@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"slices"
 	"strings"
@@ -241,25 +242,15 @@ type doctorReport struct {
 	// unagreed counts the finished workers whose archive waits on
 	// agents.archiveAgreement, said once for all, not per agent.
 	unagreed int
-	// stale are the running processes of an older beekeeper that saved the
-	// state after a newer one.
-	stale []state.StaleWriter
+	// stale are the running beekeeper processes of a binary an install
+	// replaced, the watches apart (WATCH STALE names them): their saves of
+	// the state are refused.
+	stale []*proc.Process
 }
 
-// staleLine says a stale writer and what ends it.
-func staleLine(w state.StaleWriter) string {
-	return "stale writer: " + w.String() + "; it keeps the fields it does not know but saves by its older rules until it ends or is restarted"
-}
-
-// liveStaleWriters are the stale writers whose process still runs.
-func liveStaleWriters(st *state.State, alive func(int) bool) []state.StaleWriter {
-	var out []state.StaleWriter
-	for _, w := range st.StaleWriters {
-		if alive(w.PID) {
-			out = append(out, w)
-		}
-	}
-	return out
+// staleLine says a process of a replaced binary and what ends it.
+func staleLine(p *proc.Process) string {
+	return fmt.Sprintf("stale binary: pid %d (%s) runs a beekeeper an install replaced; its saves of the state are refused until it ends or is restarted", p.PID, display(p.Args))
 }
 
 // doctor finds the chores and the faults, and fixes what it may.
@@ -269,11 +260,11 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 	if err != nil {
 		return rep, err
 	}
-	rep.stale = liveStaleWriters(st, proc.Alive)
 	sessions, t, err := a.sessions()
 	if err != nil {
 		return rep, err
 	}
+	rep.stale = slices.DeleteFunc(staleBinaries(t, os.Getpid(), replacedBinary), isWatch)
 	record := func(host string) (*claude.Record, bool) { return claude.ReadRecord(a.cfg, host) }
 	busy := func(p state.Party) bool {
 		_, turn := turnRunning(sessions, t, p, a.now)
@@ -504,10 +495,10 @@ line:
   three quarters of the cap, never while a go build runs (the watch does
   it every doctor.goCacheEvery, 1h, and says GO CACHE when a trim waited
   that long or failed); each trim is logged (gocache.trim);
-- reports a stale writer: a running process of an older beekeeper that
-  saved the state after a newer one (state.stale-writer in the log). Its
-  saves keep the fields it does not know, yet it acts by its older rules
-  until it ends or is restarted.
+- reports a stale binary: a running beekeeper process of a binary an
+  install replaced (a start's reopen, a gate call), whose saves of the
+  state the newer release refuses (state.stale-writer in the log) until
+  it ends or is restarted; a watch is named by WATCH STALE instead.
 
 A session a person started is never archived or retitled, nor one that
 holds or held the supervisor's or the guide's role unless a relay

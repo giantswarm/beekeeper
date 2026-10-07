@@ -67,15 +67,20 @@ installed, and that a re-arm (a restart) picks the new one up; no watch re-execu
 
 An install leaves the older binaries already running on their old code until they end or are
 re-armed: the `agents start` of a worker started before it (its desktop reopen saves the state
-after the first turn), a watch, the standby unit, a waiting gate call. Their saves keep what the
-new release recorded: every object of `state.json` that carries per-entry data (the state itself,
-roster entries and their keep markers, notes, timers, grants, holds, lanes, session records,
-starts, archives, the roles) writes the members its binary does not know back unchanged, with its
-entry. The state carries the version of the newest beekeeper that saved it (`writer`); an older
-process's first save after it is logged once as `state.stale-writer`, naming the process, its
-command and its version, and `beekeeper doctor` (a `DOCTOR stale writer` line in the watch) lists
-each such process while it runs, since it still acts by its older rules. A process older than this
-mechanism (v0.71.1 and before) keeps only the state's top-level members and drops the nested ones.
+after the first turn), a watch, the standby unit, a waiting gate call; `beekeeper self-update`
+names them (pid and command). The state carries the version of the newest release that saved it
+(`writer`), and a release older than it does not save: the save is refused with the state
+unchanged, logged once per process as `state.stale-writer` naming the process, its command and
+both versions, and the command ends with that message (exit 3; a gate call waiting in a lane
+re-executes the binary installed at its path first and refuses, 77, only when it cannot, the lane
+untouched either way). `beekeeper doctor` (a `DOCTOR stale binary` line in the watch) lists each
+such process while it runs; a watch is named by `WATCH STALE`. A build without a release version
+(a development or release-candidate build) neither stamps the state nor is refused, and its saves
+keep what a newer release recorded: every object of `state.json` that carries per-entry data (the
+state itself, roster entries and their keep markers, notes, timers, grants, holds, lanes, session
+records, starts, archives, the roles) writes the members its binary does not know back unchanged,
+with its entry. A process older than this mechanism (v0.71.1 and before) keeps only the state's
+top-level members and drops the nested ones.
 
 The session and machine views need Linux (`/proc`, cgroup v2, the journal). Leases, holds and
 the budget work on any system.

@@ -296,7 +296,8 @@ const (
 // TestOlderSaveKeepsANewerSchema loads and saves a newer beekeeper's state
 // with this binary's types, which lack a member in every object, while it
 // changes the roster: every member it does not know is written back where
-// it was, with its entry.
+// it was, with its entry. A build without a release version saves it (a
+// release older than the writer is refused).
 func TestOlderSaveKeepsANewerSchema(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(newerSchema), 0o600); err != nil {
@@ -306,7 +307,7 @@ func TestOlderSaveKeepsANewerSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.version = "v8.0.0"
+	s.version = "v8.0.0+dirty"
 	err = s.Update(func(st *State) ([]Event, error) {
 		st.Agents = []Agent{st.Agents[1], st.Agents[0], {Party: Party{Session: "s3", Name: "Agent three"}}}
 		st.Agents[1].Keep.Reason = "parked"
@@ -368,10 +369,14 @@ func TestOlderSaveKeepsANewerSchema(t *testing.T) {
 	}
 }
 
-func TestAStaleWriterIsLoggedOnce(t *testing.T) {
+// An older release's save after a newer one wrote the state is refused: the
+// state and the log stay as they were, apart from one stale-writer event per
+// process, and the error names the process and both versions.
+func TestAnOlderReleasesSaveIsRefused(t *testing.T) {
 	const newest = "v0.73.0"
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(`{"writer":{"version":"v0.72.0"},"nextNote":1}`), 0o600); err != nil {
+	before := `{"writer":{"version":"v0.72.0"},"nextNote":1,"merges":[{"repo":"o/r","pr":7,"lane":"l","phase":"waiting","priority":2}]}`
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(before), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	s, err := Open(dir)
@@ -380,23 +385,26 @@ func TestAStaleWriterIsLoggedOnce(t *testing.T) {
 	}
 	s.version = "v0.71.1"
 	for range 2 {
-		if err := s.Update(func(st *State) ([]Event, error) { st.NextNote++; return nil, nil }); err != nil {
-			t.Fatal(err)
+		err := s.Update(func(st *State) ([]Event, error) {
+			st.NextNote++
+			st.Merges = nil
+			return []Event{{Verb: "merge.dropped"}}, nil
+		})
+		var stale *StaleWriterError
+		if !errors.As(err, &stale) || stale.PID != os.Getpid() || stale.Version != "v0.71.1" || stale.Newer != "v0.72.0" ||
+			!strings.Contains(err.Error(), "pid "+strconv.Itoa(os.Getpid())+" (") || !strings.Contains(err.Error(), "v0.71.1, older than the v0.72.0 that wrote the state: its save is refused") {
+			t.Fatalf("err = %v", err)
 		}
 	}
-	evs, err := s.Events(0, func(e Event) bool { return e.Verb == VerbStaleWriter })
+	if raw, _ := os.ReadFile(filepath.Join(dir, "state.json")); string(raw) != before { //nolint:gosec // a test file
+		t.Errorf("the state changed: %s", raw)
+	}
+	evs, err := s.Events(0, func(Event) bool { return true })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(evs) != 1 || !strings.Contains(evs[0].Detail, "pid "+strconv.Itoa(os.Getpid())) || !strings.Contains(evs[0].Detail, "v0.71.1, older than the v0.72.0") {
-		t.Fatalf("stale-writer events = %+v", evs)
-	}
-	st, err := s.Read()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if st.NextNote != 3 || st.Writer.Version != "v0.72.0" || len(st.StaleWriters) != 1 || st.StaleWriters[0].PID != os.Getpid() {
-		t.Errorf("state = %+v, writer %+v, stale %+v", st, st.Writer, st.StaleWriters)
+	if len(evs) != 1 || evs[0].Verb != VerbStaleWriter || !strings.Contains(evs[0].Detail, "its save is refused") {
+		t.Fatalf("events = %+v, want one stale-writer", evs)
 	}
 
 	s.version = newest
@@ -409,7 +417,7 @@ func TestAStaleWriterIsLoggedOnce(t *testing.T) {
 	for _, v := range []string{"dev", "v0.74.0-rc.1", "v0.74.0-rc.1+dirty", "v0.74.0+dirty"} {
 		s.version = v
 		if err := s.Update(func(*State) ([]Event, error) { return nil, nil }); err != nil {
-			t.Fatal(err)
+			t.Errorf("a %s build was refused: %v", v, err)
 		}
 		if st, _ := s.Read(); st.Writer.Version != newest {
 			t.Errorf("a %s build stamped: %+v", v, st.Writer)
@@ -417,7 +425,8 @@ func TestAStaleWriterIsLoggedOnce(t *testing.T) {
 	}
 }
 
-// A branch build's stamp judges no release: the next release overwrites it.
+// A branch build's stamp judges no release: the next release overwrites it,
+// and drops the record of stale saves that releases before the refusal kept.
 func TestABranchBuildsStampJudgesNoRelease(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(`{"writer":{"version":"v0.89.1-rc.1+dirty"},"staleWriters":[{"pid":`+strconv.Itoa(os.Getpid())+`,"command":"beekeeper watch","version":"v0.89.0","newer":"v0.89.1-rc.1+dirty","at":"2026-10-05T15:08:00Z"}]}`), 0o600); err != nil {
@@ -431,27 +440,8 @@ func TestABranchBuildsStampJudgesNoRelease(t *testing.T) {
 	if err := s.Update(func(*State) ([]Event, error) { return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
-	if st, _ := s.Read(); st.Writer.Version != "v0.89.0" || len(st.StaleWriters) != 0 {
-		t.Errorf("writer %+v, stale %+v", st.Writer, st.StaleWriters)
-	}
-}
-
-func TestStaleWritersOfEndedProcessesGo(t *testing.T) {
-	dir := t.TempDir()
-	gone := `{"writer":{"version":"v0.72.0"},"staleWriters":[{"pid":2147483646,"command":"beekeeper watch","version":"v0.71.0","newer":"v0.72.0","at":"2026-10-02T14:00:00Z"}]}`
-	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(gone), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	s, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.version = "v0.72.0"
-	if err := s.Update(func(*State) ([]Event, error) { return nil, nil }); err != nil {
-		t.Fatal(err)
-	}
-	if st, _ := s.Read(); len(st.StaleWriters) != 0 {
-		t.Errorf("stale writers = %+v", st.StaleWriters)
+	if st, _ := s.Read(); st.Writer.Version != "v0.89.0" || st.rest != nil {
+		t.Errorf("writer %+v, rest %s", st.Writer, st.rest)
 	}
 }
 

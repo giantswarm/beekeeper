@@ -26,7 +26,8 @@ import (
 
 // Exit codes: 0 done, 1 error, 2 usage, 3 refused (a lease held or not
 // granted, a hold set, the budget under its floor, a platform part this
-// build does not have), 4 relieved (supervisor status in the session a
+// build does not have, a save by a release older than the one that wrote
+// the state), 4 relieved (supervisor status in the session a
 // relay relieved), 69 central unreachable (ExitCentral: a central verb
 // whose instance did not answer), 78 vault (ExitVault: beekeeper secret
 // could not read the shared vault: none configured, no token, op failing
@@ -55,7 +56,8 @@ func Code(err error) int {
 	if errors.As(err, &e) {
 		return e.code
 	}
-	if platform.Missing(err) {
+	var stale *state.StaleWriterError
+	if platform.Missing(err) || errors.As(err, &stale) {
 		return ExitRefused
 	}
 	return ExitError
