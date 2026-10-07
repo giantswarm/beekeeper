@@ -37,4 +37,3 @@ func steerLine(msg string) ([]byte, error) {
 	}
 	return append(b, '\n'), nil
 }
-
