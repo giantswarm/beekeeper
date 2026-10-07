@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -52,7 +53,7 @@ func TestNextFreeSkipsOwnedItems(t *testing.T) {
 	}
 	cands := boardCandidates(11)
 	cands[10].Skip = "assigned to pat"
-	res := nextFree(st, cands, me, alive, listed, nil)
+	res := nextFree(st, cands, pickScope{me: me, alive: alive, listed: listed})
 	if res.Pick == nil || res.Pick.Ref != idleRef || len(res.Skipped) != 1 || res.Skipped[0].Skip != `served by "Worker one"` {
 		t.Errorf("an idle agent's record is no claim: pick %v, skipped %+v", res.Pick, res.Skipped)
 	}
@@ -60,7 +61,7 @@ func TestNextFreeSkipsOwnedItems(t *testing.T) {
 	// are free; once a running session serves them nothing is.
 	st.Records = append(st.Records, state.Record{Session: running, Issue: idleRef}, state.Record{Session: running, Issue: "o/r#3"},
 		state.Record{Session: running, Issue: "o/r#5"}, state.Record{Session: running, Issue: "o/r#9"})
-	if res = nextFree(st, cands, me, alive, listed, nil); res.Pick != nil {
+	if res = nextFree(st, cands, pickScope{me: me, alive: alive, listed: listed}); res.Pick != nil {
 		t.Errorf("all owned, picked %v", res.Pick)
 	}
 	var got []string
@@ -102,7 +103,7 @@ func TestNextFreeHoldsAnEpicsSubIssuesToItsOwners(t *testing.T) {
 	}
 	// A sub-issue's own record names it ahead of its epic's.
 	cands := []board.Candidate{sub(11, "o/r#10"), sub(12, "O/R#10"), sub(21, "o/r#20"), sub(22, "o/r#20"), sub(31, "o/r#30")}
-	res := nextFree(st, cands, me, alive, listed, nil)
+	res := nextFree(st, cands, pickScope{me: me, alive: alive, listed: listed})
 	var got []string
 	for _, c := range res.Skipped {
 		got = append(got, c.Ref+": "+c.Skip)
@@ -132,7 +133,7 @@ func TestConcurrentClaimsNeverGetTheSameItem(t *testing.T) {
 	for i := range workers {
 		wg.Go(func() {
 			me := state.Party{Session: fmt.Sprintf("s%d", i), Name: fmt.Sprintf("Board pull %d", i)}
-			res, err := claimNext(store, cands, me, alive, listed, "", func(string) bool { return false }, nil)
+			res, err := claimNext(store, cands, pickScope{me: me, alive: alive, listed: listed}, "", func(string) bool { return false })
 			if err != nil {
 				t.Error(err)
 			}
@@ -166,13 +167,13 @@ func TestSecondClaimKeepsAnOpenServe(t *testing.T) {
 	alive := func(state.Party) bool { return true }
 	me := state.Party{Session: "s1", Name: boardPull}
 	open := func(string) bool { return true }
-	if res, err := claimNext(store, cands, me, alive, listed, "picking up", open, nil); err != nil || !res.Claimed || res.Pick.Ref != refOne {
+	if res, err := claimNext(store, cands, pickScope{me: me, alive: alive, listed: listed}, "picking up", open); err != nil || !res.Claimed || res.Pick.Ref != refOne {
 		t.Fatalf("first claim: %+v, %v", res, err)
 	}
 	before, _ := store.Read()
 
 	// While o/r#1 is open, a second claim changes nothing and names it.
-	res, err := claimNext(store, cands, me, alive, listed, "the review", open, nil)
+	res, err := claimNext(store, cands, pickScope{me: me, alive: alive, listed: listed}, "the review", open)
 	st, _ := store.Read()
 	if err != nil || res.Claimed || res.Pick != nil || res.Held == nil || res.Held.Issue != refOne || !slices.EqualFunc(st.Records, before.Records, recordsEqual) {
 		t.Fatalf("second claim over an open serve: %+v, %v; records %+v", res, err, st.Records)
@@ -183,7 +184,7 @@ func TestSecondClaimKeepsAnOpenServe(t *testing.T) {
 
 	// --replace (or a served item since closed) takes the next item and
 	// replaces the record: the session serves one item.
-	res, err = claimNext(store, cands, me, alive, listed, "the review", func(string) bool { return false }, nil)
+	res, err = claimNext(store, cands, pickScope{me: me, alive: alive, listed: listed}, "the review", func(string) bool { return false })
 	st, _ = store.Read()
 	if err != nil || !res.Claimed || res.Held != nil || res.Pick.Ref != cands[1].Ref || len(st.Records) != 1 || st.Records[0].Issue != cands[1].Ref || st.Records[0].Waits != "the review" {
 		t.Errorf("replacing claim: %+v, %v; records %+v", res, err, st.Records)
@@ -194,7 +195,7 @@ func TestSecondClaimKeepsAnOpenServe(t *testing.T) {
 		st.Agents = append(st.Agents, state.Agent{Party: me, Task: "board pull", Done: true})
 		return nil, nil
 	})
-	if res, err := claimNext(store, cands, me, alive, listed, "", open, nil); err != nil || !res.Claimed || res.Held != nil {
+	if res, err := claimNext(store, cands, pickScope{me: me, alive: alive, listed: listed}, "", open); err != nil || !res.Claimed || res.Held != nil {
 		t.Errorf("claim of a done agent: %+v, %v", res, err)
 	}
 }
@@ -242,7 +243,7 @@ func TestClaimTakesNoSkippedItem(t *testing.T) {
 	cands := boardCandidates(1)
 	cands[0].Skip = "created 2026-06-24: Backlog takes items created within 90 days"
 	me := state.Party{Session: "s1", Name: boardPull}
-	res, err := claimNext(store, cands, me, func(state.Party) bool { return true }, time.Now(), "", func(string) bool { return false }, nil)
+	res, err := claimNext(store, cands, pickScope{me: me, alive: func(state.Party) bool { return true }, listed: time.Now()}, "", func(string) bool { return false })
 	st, _ := store.Read()
 	if err != nil || res.Pick != nil || res.Claimed || len(st.Records) != 0 || len(res.Skipped) != 1 {
 		t.Errorf("claim over a skipped item: %+v, %v; records %+v", res, err, st.Records)
@@ -296,7 +297,7 @@ func TestSkipHeldLeases(t *testing.T) {
 		t.Errorf("lease skips:\n got %q\nwant %q", got, want)
 	}
 	// The held item is passed over; the one behind it is picked.
-	res := nextFree(&state.State{}, cands, me, func(state.Party) bool { return false }, time.Now(), nil)
+	res := nextFree(&state.State{}, cands, pickScope{me: me, alive: func(state.Party) bool { return false }, listed: time.Now()})
 	if res.Pick == nil || res.Pick.Ref != "o/r#2" || len(res.Skipped) != 1 {
 		t.Errorf("pick %v, skipped %+v", res.Pick, res.Skipped)
 	}
@@ -328,7 +329,7 @@ func TestNextFreeSkipsTheIssuesAServedPRCloses(t *testing.T) {
 	// agent's o/r#102 closes o/r#3; o/r#101 closes nothing.
 	closes := map[string][]string{servedPR: {refOne, "other/x#2"}, taskPR: {taskIssue}}
 	cands := append(boardCandidates(4), board.Candidate{Item: board.Item{Ref: "Other/X#2"}, Step: "Up Next"})
-	res := nextFree(st, cands, me, alive, listed, closes)
+	res := nextFree(st, cands, pickScope{me: me, alive: alive, listed: listed, closes: closes})
 	var got []string
 	for _, c := range append(res.Skipped, res.AfterPick...) {
 		got = append(got, c.Ref+": "+c.Skip)
@@ -348,7 +349,136 @@ func TestNextFreeSkipsTheIssuesAServedPRCloses(t *testing.T) {
 		t.Errorf("closing-reference skips:\n got %q\nwant %q", got, want)
 	}
 	// Without the closing references nothing beyond the records is covered.
-	if res = nextFree(st, cands, me, alive, listed, nil); res.Pick == nil || res.Pick.Ref != refOne {
+	if res = nextFree(st, cands, pickScope{me: me, alive: alive, listed: listed}); res.Pick == nil || res.Pick.Ref != refOne {
 		t.Errorf("no closes: pick %v, want %s", res.Pick, refOne)
+	}
+}
+
+func TestNamedRefsReadsTheFormsPeopleWrite(t *testing.T) {
+	const owner = "gs"
+	for _, tc := range []struct {
+		text, owner string
+		want        []string
+	}{
+		{"decide https://github.com/o/r/issues/10 and https://github.com/O/R/pull/11/files", owner, []string{"o/r#10", "o/r#11"}},
+		{"https://github.com/o/r/issues/7 and o/r#8", owner, []string{"o/r#7", "o/r#8"}},
+		{"model-manager#258 and llm-d#29", owner, []string{"gs/model-manager#258", "gs/llm-d#29"}},
+		{"beekeeper#525, #555 and #563 wait", owner, []string{"gs/beekeeper#525", "gs/beekeeper#555", "gs/beekeeper#563"}},
+		{"beekeeper: #524 (a), #525 (b), #555 (c)", owner, []string{"gs/beekeeper#524", "gs/beekeeper#525", "gs/beekeeper#555"}},
+		{"o/r: #1, #2; then x/y#3, #4", owner, []string{"o/r#1", "o/r#2", "x/y#3", "x/y#4"}},
+		{"https://github.com/o/r/issues/10, #11 too", owner, []string{"o/r#10", "o/r#11"}},
+		// A bare #n before any repository names nothing.
+		{"#5 then o/r#6 and #7", owner, []string{"o/r#6", "o/r#7"}},
+		{"#5 alone", owner, nil},
+		// beekeeper's own items are no issues, and set no context.
+		{"o/r#1 waits on note #708, timer #707, memo #1047, decision #894; notes #3 and #4 too", owner, []string{"o/r#1", "o/r#4"}},
+		{"note #708 then #2", owner, nil},
+		{"o/r#1 and O/R#1 once", owner, []string{"o/r#1"}},
+		// Without a board owner a repo#n names nothing.
+		{"beekeeper#5 and o/r#6", "", []string{"o/r#6"}},
+		{"nothing here, 13:38 either", owner, nil},
+	} {
+		if got := namedRefs(tc.text, tc.owner); !slices.Equal(got, tc.want) {
+			t.Errorf("namedRefs(%q, %q) = %q, want %q", tc.text, tc.owner, got, tc.want)
+		}
+	}
+}
+
+func TestNextFreeSkipsWhatANoteNamesAsPeopleWrite(t *testing.T) {
+	listed := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	me := state.Party{Session: "me", Name: "Me"}
+	st := &state.State{
+		Agents: []state.Agent{{Party: state.Party{Session: "s5", Name: "Busy"}, Task: "llm-d#29 to merged"}},
+		Notes: []state.Note{
+			{ID: 1, For: "Pat", Text: "model-manager#258 waits on the GPU", Refs: []string{"o/r#9"}},
+			{ID: 2, Text: "dispatched beekeeper: #525 (a), #555 (b), #563 (c)"},
+			{ID: 3, For: "Pat", Text: "#4 is nobody's: no repository before it"},
+		},
+	}
+	item := func(ref string) board.Candidate {
+		return board.Candidate{Item: board.Item{Ref: ref}, Step: "Up Next"}
+	}
+	cands := []board.Candidate{item("gs/model-manager#258"), item("gs/beekeeper#525"), item("gs/beekeeper#555"),
+		item("gs/beekeeper#563"), item("gs/llm-d#29"), item("o/r#9"), item("gs/x#4"), item("o/r#4")}
+	res := nextFree(st, cands, pickScope{me: me, alive: func(state.Party) bool { return true }, listed: listed, owner: "gs"})
+	var got []string
+	for _, c := range res.Skipped {
+		got = append(got, c.Ref+": "+c.Skip)
+	}
+	want := []string{
+		`gs/model-manager#258: note #1 (waits on Pat)`,
+		`gs/beekeeper#525: note #2 (waits on the supervisor)`,
+		`gs/beekeeper#555: note #2 (waits on the supervisor)`,
+		`gs/beekeeper#563: note #2 (waits on the supervisor)`,
+		`gs/llm-d#29: served by "Busy" (task)`,
+		`o/r#9: note #1 (waits on Pat)`,
+	}
+	if !slices.Equal(got, want) || res.Pick == nil || res.Pick.Ref != "gs/x#4" {
+		t.Errorf("pick %v, skipped:\n%s\nwant gs/x#4 after:\n%s", res.Pick, strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if n := len(res.AfterPick); n != 1 || res.AfterPick[0].Skip != "" {
+		t.Errorf("after the pick %+v, want o/r#4 free", res.AfterPick)
+	}
+}
+
+func TestSkipKind(t *testing.T) {
+	for reason, want := range map[string]string{
+		`served by "Worker one" through o/r#100`:              "served",
+		`note #704 (waits on the supervisor), on epic o/r#10`: "note",
+		"assigned to pat":                                                 "assigned",
+		"3 of 4 blockers open":                                            "blocked",
+		"no activity since 2026-01-01":                                    "stale",
+		`needs lease agentlab-1, held by "Lab holder"`:                    "lease",
+		"created 2026-06-24: Backlog takes items created within 90 days":  "order",
+		"no step of board.order offers Inbox":                             "order",
+		"blocker cleared takes items with recorded blockers, it has none": "order",
+	} {
+		if got := skipKind(reason); got != want {
+			t.Errorf("skipKind(%q) = %q, want %q", reason, got, want)
+		}
+	}
+}
+
+func TestPrintNextPreviewListsTheFreeItemsAndCountsTheSkips(t *testing.T) {
+	listed := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	me := state.Party{Session: "me", Name: "Me"}
+	running := state.Party{Session: "s1", Name: "Worker one"}
+	st := &state.State{
+		Records: []state.Record{{Session: running, Issue: "o/r#3", At: listed.Add(-time.Hour)}},
+		Notes:   []state.Note{{ID: 12, For: "Pat", Text: "o/r#4 and o/r#7"}},
+	}
+	cands := boardCandidates(7)
+	cands[0].Skip = "created 2026-06-24: Backlog takes items created within 90 days"
+	for i := range cands {
+		cands[i].Title = fmt.Sprintf("Item %d", i+1)
+	}
+	res := nextFree(st, cands, pickScope{me: me, alive: func(state.Party) bool { return true }, listed: listed})
+	if want := map[string]int{"note": 2, "order": 1, "served": 1}; !maps.Equal(res.SkippedBy, want) {
+		t.Errorf("skipped by %v, want %v", res.SkippedBy, want)
+	}
+	var out strings.Builder
+	if err := (&app{out: &out}).printNext(res, len(cands)); err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range []string{
+		"o/r#2 Item 2\n",
+		"skipped above it:\n",
+		"free behind it, next in line: 2 of 5\n",
+		"  o/r#5  Item 5  Up Next\n",
+		"  o/r#6  Item 6  Up Next\n",
+		"skipped: 4 in all: note 2, order 1, served 1 (--json lists each with its reason)\n",
+	} {
+		if !strings.Contains(out.String(), line) {
+			t.Errorf("preview lacks %q:\n%s", line, out.String())
+		}
+	}
+	// A claim prints its pick and how many items are behind it, not the list.
+	res.Claimed = true
+	out.Reset()
+	if err := (&app{out: &out}).printNext(res, len(cands)); err != nil {
+		t.Fatal(err)
+	}
+	if s := out.String(); !strings.Contains(s, "behind it: 5 more, 2 of them free") || strings.Contains(s, "Item 5") {
+		t.Errorf("claim output:\n%s", s)
 	}
 }
