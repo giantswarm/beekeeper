@@ -276,6 +276,9 @@ func (h Hook) decide(ev event) []byte {
 	if cwd == "" {
 		cwd, _ = os.Getwd()
 	}
+	if r := h.membersRefusal(cmd, ev.Session, cwd); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
 	if l := (secretGuard{unlock: h.UnlockCommands, cwd: cwd}).leak(cmd); l != nil {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: l.reason()})
 	}

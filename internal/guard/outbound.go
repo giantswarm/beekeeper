@@ -318,7 +318,7 @@ func readFile(name, cwd string) string {
 }
 
 // fileFlags take the name of a file whose content a command sends.
-var fileFlags = map[string]bool{"--body-file": true, "--notes-file": true, "--input": true, "--file": true, "-F": true, "-T": true, "--upload-file": true}
+var fileFlags = map[string]bool{"--body-file": true, "--notes-file": true, flagInput: true, "--file": true, "-F": true, "-T": true, "--upload-file": true}
 
 // curlData are curl's flags that send a body.
 var curlData = map[string]bool{"-d": true, "--data": true, "--data-raw": true, "--data-binary": true, "--data-urlencode": true,
