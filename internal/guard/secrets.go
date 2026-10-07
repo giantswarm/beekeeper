@@ -584,7 +584,7 @@ func vaultLeak(args []string) *leak {
 		return nil
 	}
 	switch {
-	case sub[0] == "status", sub[0] == "version", sub[0] == verbList,
+	case sub[0] == "status", sub[0] == verbVersion, sub[0] == verbList,
 		sub[0] == "kv" && len(sub) > 1 && (sub[1] == verbList || sub[1] == "metadata" && len(sub) > 2 && sub[2] == verbGet),
 		len(sub) > 1 && sub[1] == verbList && (sub[0] == "secrets" || sub[0] == "auth" || sub[0] == "policy" || sub[0] == "audit"):
 		return nil

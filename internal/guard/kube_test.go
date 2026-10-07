@@ -40,10 +40,11 @@ func wantPassed(t *testing.T, h Hook, cmd string) {
 }
 
 const (
-	switchMsg = "switches a kubeconfig's current context"
-	prodMsg   = "a production cluster"
-	gitopsMsg = "GitOps pull request and platformctl"
-	setMsg    = "sets the current context of the machine kubeconfig"
+	switchMsg  = "switches a kubeconfig's current context"
+	prodMsg    = "a production cluster"
+	gitopsMsg  = "GitOps pull request and platformctl"
+	setMsg     = "sets the current context of the machine kubeconfig"
+	contextMsg = "fall back to the kubeconfig's current context"
 )
 
 func TestKubeRefusesContextSwitches(t *testing.T) {
@@ -143,7 +144,7 @@ func TestKubeRefusesProductionWrites(t *testing.T) {
 		"env FOO=1 kubectl --context teleport.giantswarm.io-gazelle delete pod x",
 		"bash -c 'kubectl --context teleport.giantswarm.io-gazelle delete pod x'",
 		"/home/u/.go/bin/beekeeper run -- zsh -c 'helm --kube-context teleport.giantswarm.io-gazelle upgrade x c'",
-		"kubectl get pods -o name | xargs kubectl --context teleport.giantswarm.io-gazelle delete",
+		"kubectl --context kind-lab get pods -o name | xargs kubectl --context teleport.giantswarm.io-gazelle delete",
 		`K="kubectl --context teleport.giantswarm.io-gazelle"; $K delete pod x`,
 		`kg(){ kubectl --context teleport.giantswarm.io-gazelle "$@"; }; kg delete pod x`,
 		"KUBECONFIG=testdata/kubeconfig-default-gazelle kubectl delete pod x",
@@ -187,7 +188,6 @@ func TestKubeRefusesProductionWrites(t *testing.T) {
 		"KUBECONFIG=testdata/kubeconfig-lab kubectl apply -f x.yaml",
 		"kubectl --kubeconfig testdata/kubeconfig-lab --context kind-agentlab delete pod x",
 		"helm --kubeconfig testdata/kubeconfig-lab upgrade --install x chart",
-		"kubectl apply -f x.yaml",
 		"kubectl --context gazelleish apply -f x",
 		"git commit -m 'no kubectl --context teleport.giantswarm.io-gazelle apply'",
 		"grep -rn 'kubectl delete' docs/",
@@ -269,6 +269,89 @@ func TestKubeRefusesProductionPluginWrites(t *testing.T) {
 		wantPassed(t, h, cmd)
 	}
 	wantPassed(t, kubeHook(gazelleKC), "kubectl-ate --context kind-agentlab delete actor x")
+}
+
+func TestKubeRefusesMissingContext(t *testing.T) {
+	h := kubeHook(machineKC)
+	for _, cmd := range []string{
+		// Absent.
+		"kubectl get pods",
+		"kubectl apply -f x.yaml",
+		"kubectl -n x logs deploy/x",
+		"kubectl version",
+		"helm list -A",
+		"helm upgrade --install x chart",
+		"flux get hr -A",
+		"flux reconcile hr x",
+		"ls && kubectl get pods",
+		"kubectl get pods | grep x",
+		"echo $(kubectl get ns)",
+		"bash -c 'kubectl get pods'",
+		"timeout 30 /usr/bin/kubectl get pods",
+		"kubectl --kubeconfig testdata/kubeconfig-machine get pods",
+		// Empty, or an expansion that may be empty.
+		`kubectl --context "" get pods`,
+		"kubectl --context '' get pods",
+		"kubectl --context= get pods",
+		`kubectl --context "$CTX" get pods`,
+		"kubectl --context $CTX get pods",
+		`kubectl --context="${CTX}" get pods`,
+		`CTX=$(beekeeper lease kubeconfig x); kubectl --context "$CTX" get pods`,
+		`CTX=""; kubectl --context "$CTX" get pods`,
+		`kubectl --context "$(cat ctx)" get pods`,
+		"kubectl --context `cat ctx` delete pod x",
+		`helm --kube-context "$(cat ctx)" list`,
+		`flux --context "$(cat ctx)" get ks`,
+		"helm --kube-context \"$CTX\" status x",
+		`HELM_KUBECONTEXT="" helm list`,
+		`flux --context "" get ks`,
+		`KUBECONFIG="$KC" kubectl get pods`,
+	} {
+		wantRefused(t, h, cmd, contextMsg)
+	}
+	for _, cmd := range []string{
+		"kubectl --context kind-agentlab get pods",
+		"kubectl --context teleport.example.com-foo get pods",
+		"kubectl --context=kind-agentlab get pods",
+		`kubectl --context "kind-agentlab" get pods`,
+		"kubectl get pods --context 'kind-agentlab'",
+		"kubectl get pods --context kind-lab | grep x",
+		`bash -c "kubectl --context kind-lab get pods"`,
+		`CTX=kind-lab; kubectl --context "$CTX" get pods`,
+		`export CTX="kind-lab" && kubectl --context "$CTX" get pods`,
+		`for c in kind-a kind-b; do kubectl --context "$c" get pods; done`,
+		`CTX=$(beekeeper lease kubeconfig x); kubectl --context "${CTX:?no context}" get pods`,
+		`kubectl --context "kind-$LAB" get pods`,
+		`kg(){ kubectl --context kind-lab "$@"; }; kg get pods`,
+		"kubectl --server https://127.0.0.1:6443 get pods",
+		"helm --kube-context kind-lab list -A",
+		"HELM_KUBECONTEXT=kind-lab helm status x",
+		"flux --context kind-lab get hr -A",
+		// A kubeconfig of the command's own.
+		"KUBECONFIG=testdata/kubeconfig-lab kubectl get pods",
+		"kubectl --kubeconfig testdata/kubeconfig-lab get pods",
+		"helm --kubeconfig=testdata/kubeconfig-lab list",
+		"flux --kubeconfig testdata/kubeconfig-lab get ks",
+		// No cluster reached.
+		"kubectl config get-contexts -o name",
+		"kubectl version --client",
+		"kubectl completion zsh",
+		"kubectl kustomize ./overlay",
+		"kubectl create configmap x --from-literal=a=b --dry-run=client -o yaml",
+		"kubectl get pods --help",
+		"kubectl",
+		"helm template x chart",
+		"helm repo add x https://x",
+		"helm dependency update ./chart",
+		"helm lint ./chart",
+		"flux build kustomization x --path ./k",
+		"flux version --client",
+		"flux push artifact oci://x --path=. --source=x --revision=y",
+		"flux create source oci x --url oci://x --export",
+		"git commit -m 'kubectl get pods needs --context'",
+	} {
+		wantPassed(t, h, cmd)
+	}
 }
 
 func TestCurrentContext(t *testing.T) {

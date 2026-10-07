@@ -25,6 +25,9 @@ const (
 	flagDryRun     = "--dry-run"
 	flagKubeconfig = "--kubeconfig"
 	verbLogin      = "login"
+	verbVersion    = "version"
+	// flagOn is the value kubeArgs gives a flag without one.
+	flagOn = "true"
 )
 
 var (
@@ -45,11 +48,11 @@ var (
 	// kubectlBuiltins: kubectl's own commands; any other first word runs a
 	// plugin, kubectl-<word>.
 	kubectlBuiltins = setOf("get", "describe", "logs", "top", "explain", "api-resources", "api-versions", "cluster-info",
-		"version", "config", "auth", "diff", "wait", "port-forward", "proxy", "completion", "kustomize", "plugin", "events",
+		verbVersion, "config", "auth", "diff", "wait", "port-forward", "proxy", "completion", "kustomize", "plugin", "events",
 		"alpha", "certificate", "rollout", "options", "help", "convert")
 	// pluginReads: plugin subcommands that only read; readOnlyPlugins:
 	// plugins that never write. Any other plugin command counts as a write.
-	pluginReads     = setOf("get", "list", "ls", "describe", "logs", "log", "top", "tree", "show", "view", "status", "version", "help", "completion", "template", "validate", "info", "whoami", "explain", "diff")
+	pluginReads     = setOf("get", "list", "ls", "describe", "logs", "log", "top", "tree", "show", "view", "status", verbVersion, "help", "completion", "template", "validate", "info", "whoami", "explain", "diff")
 	readOnlyPlugins = setOf("tree", "access-matrix", "resource-capacity", "who-can", "neat", "krew", "oidc-login", "ns")
 	// pluginValue: flags of kubectl plugins that take a value, kubectl-ate's.
 	pluginValue = map[string]map[string]bool{
@@ -69,6 +72,18 @@ var (
 		"--set-file", "--version", "--repo", "--timeout", "-o", "--output", "--post-renderer", "--description")
 	fluxValue = setOf("-n", "--namespace", "--context", "--kubeconfig", "--timeout", "--source", "--url", "--path",
 		"--interval", "--branch", "--tag", "--chart", "--values", "--target-namespace", "-o", "--output")
+	// kubectlLocal, helmCluster, fluxLocal: which commands reach a cluster
+	// and so need an explicit context.
+	kubectlLocal = setOf("config", "completion", "help", "options", "plugin", "kustomize", "convert")
+	helmCluster  = setOf("install", "upgrade", "uninstall", "un", "delete", "del", "rollback", "test", "list", "ls",
+		"status", "get", "history", "hist")
+	fluxLocal = setOf("build", "completion", "envsubst", "push", "pull", "tag", "help")
+	// varAssign, loopVar: a variable the command sets to a non-empty word.
+	varAssign = regexp.MustCompile(`(?:^|[\s;&|(])(\w+)=["']?[^\s"'$` + "`" + `;&|()]`)
+	loopVar   = regexp.MustCompile(`(?:^|[\s;&|(])for\s+(\w+)\s+in\s`)
+	// varRef: an expansion in a word: ${NAME…} (with :? when it fails on
+	// empty), $NAME, $( … ) or backticks.
+	varRef = regexp.MustCompile(`\$\{(\w+)(:\?)?[^}]*\}|\$(\w+)|\$\([^)]*\)|` + "`[^`]*`")
 )
 
 func setOf(ws ...string) map[string]bool {
@@ -79,10 +94,12 @@ func setOf(ws ...string) map[string]bool {
 	return m
 }
 
-// kubeEnv is what a command's kube tools read from the environment, and
-// the production context a kubectl wrapper in the command may carry.
+// kubeEnv is what a command's kube tools read from the environment, the
+// context a kubectl wrapper in the command may carry (a production one
+// first), and the variables the command sets to a non-empty word.
 type kubeEnv struct {
 	kubeconfig, helmContext, wrapped string
+	set                              map[string]bool
 }
 
 // KubeGuardOff says why the kube guard is off, "" while it is on.
@@ -117,10 +134,20 @@ func (h Hook) scanKube(cmd string, env kubeEnv, depth int) string {
 		}
 	}
 	for _, m := range contextFlag.FindAllStringSubmatch(sc.plain, -1) {
-		if IsProduction(m[1], h.Production) {
+		if env.wrapped == "" || IsProduction(m[1], h.Production) {
 			env.wrapped = m[1]
 		}
 	}
+	set := map[string]bool{}
+	for k := range env.set {
+		set[k] = true
+	}
+	for _, re := range []*regexp.Regexp{varAssign, loopVar} {
+		for _, m := range re.FindAllStringSubmatch(sc.plain, -1) {
+			set[m[1]] = true
+		}
+	}
+	env.set = set
 	for _, sg := range sc.segments() {
 		words := shellWords(sc.plain[sg.start:sg.end])
 		at := strings.Join(words, " ")
@@ -251,7 +278,7 @@ func kubeArgs(args []string, values map[string]bool) ([]string, map[string]strin
 			val = args[i]
 		}
 		if !eq && !values[name] {
-			val = "true"
+			val = flagOn
 		}
 		flags[name] = val
 	}
@@ -266,7 +293,7 @@ func dryRun(flags map[string]string) bool {
 func (h Hook) kubectlRefusal(args []string, env kubeEnv, at string) string {
 	pos, flags := kubeArgs(args, kubectlValue)
 	if len(pos) == 0 {
-		return ""
+		return h.cutContext(at, "--context", flags, env)
 	}
 	if !kubectlBuiltins[pos[0]] {
 		pos, flags = kubeArgs(args, pluginValues(pos[0]))
@@ -274,6 +301,13 @@ func (h Hook) kubectlRefusal(args []string, env kubeEnv, at string) string {
 	verb, sub := pos[0], ""
 	if len(pos) > 1 {
 		sub = pos[1]
+	}
+	local := kubectlLocal[verb] || verb == verbVersion && flags["--client"] == flagOn || flags["--local"] == flagOn ||
+		strings.HasPrefix(flags[flagDryRun], "client") || flags[flagDryRun] == flagOn
+	if (kubectlBuiltins[verb] || kubectlWrites[verb]) && !local && flags["--server"] == "" && flags["-s"] == "" {
+		if r := h.contextReason(at, "--context", flags, env, flags[flagKubeconfig]); r != "" {
+			return r
+		}
 	}
 	switch {
 	case verb == "config" && (sub == "use-context" || sub == "use" || sub == "set" && len(pos) > 2 && pos[2] == "current-context"):
@@ -306,7 +340,18 @@ func pluginValues(plugin string) map[string]bool {
 
 func (h Hook) helmRefusal(args []string, env kubeEnv, at string) string {
 	pos, flags := kubeArgs(args, helmValue)
-	if len(pos) == 0 || !helmWrites[pos[0]] || dryRun(flags) {
+	if len(pos) == 0 {
+		return h.cutContext(at, "--kube-context", flags, env)
+	}
+	if helmCluster[pos[0]] {
+		if _, given := flags["--kube-context"]; !given && env.helmContext != "" {
+			flags["--kube-context"] = env.helmContext
+		}
+		if r := h.contextReason(at, "--kube-context", flags, env, flags[flagKubeconfig]); r != "" {
+			return r
+		}
+	}
+	if !helmWrites[pos[0]] || dryRun(flags) {
 		return ""
 	}
 	if f := flags[flagKubeconfig]; f != "" {
@@ -321,7 +366,17 @@ func (h Hook) helmRefusal(args []string, env kubeEnv, at string) string {
 
 func (h Hook) fluxRefusal(args []string, env kubeEnv, at string) string {
 	pos, flags := kubeArgs(args, fluxValue)
-	if len(pos) == 0 || !fluxWrites[pos[0]] || flags["--export"] == "true" {
+	if len(pos) == 0 {
+		return h.cutContext(at, "--context", flags, env)
+	}
+	artifact := len(pos) > 1 && (pos[1] == "artifact" || pos[1] == "artifacts")
+	if !fluxLocal[pos[0]] && !artifact && flags["--export"] != flagOn &&
+		(pos[0] != verbVersion || flags["--client"] != flagOn) {
+		if r := h.contextReason(at, "--context", flags, env, flags[flagKubeconfig]); r != "" {
+			return r
+		}
+	}
+	if !fluxWrites[pos[0]] || flags["--export"] == flagOn {
 		return ""
 	}
 	if f := flags[flagKubeconfig]; f != "" {
@@ -381,6 +436,59 @@ func switchReason(at string) string {
 	return "Refused: `" + short(at) + "` switches a kubeconfig's current context. " + noDefault +
 		" Pass the target on each command instead: kubectl --context <name>, helm --kube-context <name>, flux --context <name> " +
 		"(`kubectl config get-contexts -o name` lists them); a lab's own kubeconfig with --kubeconfig <file>."
+}
+
+// contextReason refuses a command that reaches a cluster through the
+// machine kubeconfig without naming its context in flag, or with one that
+// may expand to nothing: kubectl, helm and flux treat an empty context as
+// none and use the kubeconfig's current one. A kubeconfig of the command's
+// own (--kubeconfig, KUBECONFIG) is the target itself and passes.
+func (h Hook) contextReason(at, flag string, flags map[string]string, env kubeEnv, kubeconfig string) string {
+	if h.MachineKubeconfig == "" || flags["-h"] == flagOn || flags["--help"] == flagOn {
+		return ""
+	}
+	kc := cmp.Or(kubeconfig, env.kubeconfig)
+	if kc != "" && !h.machineKubeconfig(kc) && env.nonEmpty(kc) {
+		return ""
+	}
+	ctx, given := flags[flag]
+	if given && env.nonEmpty(ctx) {
+		return ""
+	}
+	what := "names no context"
+	if given {
+		what = "passes a context that may be empty (" + cmp.Or(ctx, `""`) + ")"
+	}
+	return "Refused: `" + short(at) + "` " + what + ": kubectl, helm and flux then fall back to the kubeconfig's " +
+		"current context, which may be production. Pass the target explicitly: kubectl --context <name>, " +
+		"helm --kube-context <name>, flux --context <name> (`kubectl config get-contexts -o name` lists them), " +
+		"or a lab's own kubeconfig with --kubeconfig <file>. A context from a lookup fails on an empty result: " +
+		`CTX=$(…); kubectl --context "${CTX:?no context}" …`
+}
+
+// cutContext refuses a command whose words end at an empty context: a
+// command substitution there ($( … ), backticks) ends the segment the hook
+// sees, the subcommand after it unseen.
+func (h Hook) cutContext(at, flag string, flags map[string]string, env kubeEnv) string {
+	if v, given := flags[flag]; !given || v != "" {
+		return ""
+	}
+	return h.contextReason(at, flag, flags, env, flags[flagKubeconfig])
+}
+
+// nonEmpty reports whether a word the shell expands is never empty: it has
+// literal text beside its expansions, or one of them is a variable the
+// command sets to a non-empty word or a ${NAME:?} that fails on empty.
+func (e kubeEnv) nonEmpty(word string) bool {
+	if strings.TrimSpace(varRef.ReplaceAllString(word, "")) != "" {
+		return true
+	}
+	for _, m := range varRef.FindAllStringSubmatch(word, -1) {
+		if m[2] != "" || e.set[m[1]+m[3]] && m[1]+m[3] != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // writeReason refuses a write whose target is a production cluster: the
