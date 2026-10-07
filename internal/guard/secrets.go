@@ -26,6 +26,7 @@ const (
 	helmCmd      = "helm"
 	evalCmd      = "eval"
 	selfCmd      = "beekeeper"
+	findCmd      = "find"
 	verbGet      = "get"
 	verbSet      = "set"
 	verbCreate   = "create"
@@ -48,6 +49,9 @@ type leak struct {
 	render bool
 	// unlock: a sign-in to or an unlock of a vault, which no agent runs.
 	unlock bool
+	// file: a read of a file that holds secret values, which a jq or yq
+	// filter that strips its credential keys makes safe.
+	file string
 }
 
 // secretOps names the beekeeper secret operations every refusal points to.
@@ -151,6 +155,8 @@ type secretGuard struct {
 	unlock []string
 	// cwd is the session's working directory; empty, no script is read.
 	cwd string
+	// files are the files known to hold secret values (secretfiles.go).
+	files secretFiles
 }
 
 // maxScript bounds what the guard reads of a script a command runs.
@@ -173,12 +179,18 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 			aliases[strings.Join(m[1:], "")] = true
 		}
 	}
+	// dirs: where a relative path may point, the working directory and
+	// every directory the command line changes to.
+	dirs := []string{g.cwd}
+	for _, m := range cdArg.FindAllStringSubmatch(sc.plain, -1) {
+		dirs = append(dirs, within(g.cwd, m[1]))
+	}
 	for i, sg := range segs {
 		words := shellWords(sc.plain[sg.start:sg.end])
 		if l := g.nested(cmd, sc, sg, words, depth); l != nil {
 			return l
 		}
-		l := g.sourceLeak(words, pipelineBefore(sc.plain, segs, i), aliases)
+		l := g.sourceLeak(words, pipelineBefore(sc.plain, segs, i), aliases, dirs)
 		if l == nil || flowsSafely(sc, segs, i, l) {
 			continue
 		}
@@ -291,8 +303,11 @@ func pipelineBefore(cmd string, segs []segment, i int) string {
 }
 
 // sourceLeak returns the leak when the simple command exposes secret values.
-func (g secretGuard) sourceLeak(words []string, before string, aliases map[string]bool) *leak {
+func (g secretGuard) sourceLeak(words []string, before string, aliases map[string]bool, dirs []string) *leak {
 	if l := procFileLeak(words); l != nil {
+		return l
+	}
+	if l := g.fileLeak(words, dirs); l != nil {
 		return l
 	}
 	if l := g.toolLeak(words); l != nil {
@@ -569,7 +584,7 @@ func vaultLeak(args []string) *leak {
 		return nil
 	}
 	switch {
-	case sub[0] == "status", sub[0] == "version", sub[0] == verbList,
+	case sub[0] == "status", sub[0] == verbVersion, sub[0] == verbList,
 		sub[0] == "kv" && len(sub) > 1 && (sub[1] == verbList || sub[1] == "metadata" && len(sub) > 2 && sub[2] == verbGet),
 		len(sub) > 1 && sub[1] == verbList && (sub[0] == "secrets" || sub[0] == "auth" || sub[0] == "policy" || sub[0] == "audit"):
 		return nil
@@ -634,7 +649,7 @@ func safeSink(words []string, l *leak) bool {
 		return hasAny(args, "-y")
 	case name == "jq" || name == "gojq" || name == "yq":
 		filter, ok := jqFilter(args)
-		return ok && (filterSafe(filter) || l.render && blanksSecrets(filter))
+		return ok && (filterSafe(filter) || l.render && blanksSecrets(filter) || l.file != "" && strips(filter, l.file))
 	case name == kubectlCmd:
 		verb := kubectlVerb(args)
 		return (verb == "apply" || verb == verbCreate || verb == "replace") && readsStdin(args) && !printsObject(args)

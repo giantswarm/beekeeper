@@ -309,6 +309,10 @@ type Secret struct {
 	// refuses them in agent sessions under any path, like op signin, and
 	// the agent shell prelude removes their aliases and shell functions.
 	UnlockCommands []string `yaml:"unlockCommands"`
+	// Files are files known to hold secret values (~/ and globs allowed)
+	// that the hook refuses to let an agent read whole, beside its built-in
+	// list (omp's provider configuration and the like) and TokenFile.
+	Files []string `yaml:"files"`
 	// SigninCommand is the command the broker runs to sign in to the vault
 	// without the person, when it starts and whenever a call waits while it
 	// holds no session: it prints the session as op signin does
@@ -1458,6 +1462,9 @@ func (c *Config) defaults() error {
 	}
 	setInt(&c.Scan.MinLength, 12)
 	c.Secret.TokenFile = homePath(home, c.Secret.TokenFile)
+	for i, f := range c.Secret.Files {
+		c.Secret.Files[i] = homePath(home, f)
+	}
 	c.Sandbox.defaults(home)
 	for i := range c.Scan.SOPS {
 		c.Scan.SOPS[i] = homePath(home, c.Scan.SOPS[i])
@@ -1691,6 +1698,11 @@ func (c *Config) validate() error {
 	for _, n := range c.Secret.UnlockCommands {
 		if !commandName.MatchString(n) {
 			return fmt.Errorf("secret.unlockCommands: %q is no command name", n)
+		}
+	}
+	for _, f := range c.Secret.Files {
+		if _, err := filepath.Match(f, ""); err != nil || !filepath.IsAbs(f) {
+			return fmt.Errorf("secret.files: %q is no absolute path or glob (~/ allowed)", f)
 		}
 	}
 	for i, id := range c.Secret.AgeIdentities {

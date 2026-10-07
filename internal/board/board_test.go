@@ -373,3 +373,24 @@ func TestClosesReadsTheClosingReferencesInOneRequest(t *testing.T) {
 		t.Errorf("no refs asked GitHub: %v, %v, %d queries", got, err, len(queries))
 	}
 }
+
+func TestClosesAsksInBatches(t *testing.T) {
+	var queries []string
+	gh := func(_ context.Context, args ...string) ([]byte, error) {
+		queries = append(queries, args[3])
+		return []byte(`{"data":{"r0":{"issueOrPullRequest":{"closingIssuesReferences":{"nodes":[{"number":1,"repository":{"nameWithOwner":"o/r"}}]}}}}}`), nil
+	}
+	refs := make([]string, 2*closesBatch+1)
+	for i := range refs {
+		refs[i] = fmt.Sprintf("o/r#%d", i+100)
+	}
+	got, err := (&Client{GH: gh}).Closes(t.Context(), refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each request's first ref closes o/r#1; a request holds closesBatch refs.
+	if len(queries) != 3 || strings.Count(queries[0], "repository(") != closesBatch || strings.Count(queries[2], "repository(") != 1 ||
+		len(got) != 3 || !slices.Equal(got["o/r#200"], []string{"o/r#1"}) {
+		t.Errorf("%d queries, closes %v", len(queries), got)
+	}
+}

@@ -20,13 +20,16 @@ import (
 )
 
 // queueApp is an app with one lane, o/r, whose merges are seeded with
-// merges; the caller is the session "worker".
+// merges; the caller is the session "worker". Its store saves as a dev
+// build's, whichever version the test binary is linked with: a stable
+// tag's `make test` links the release's version, which would stamp the
+// state as its writer and refuse the older releases a test opens.
 func queueApp(t *testing.T, merges ...state.Merge) *app {
 	t.Helper()
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "s1")
 	t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", "")
 	t.Setenv("CLAUDE_CODE_SESSION_NAME", ownerName)
-	store, err := state.Open(t.TempDir())
+	store, err := state.OpenVersion(t.TempDir(), "dev")
 	if err != nil {
 		t.Fatal(err)
 	}

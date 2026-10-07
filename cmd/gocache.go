@@ -136,9 +136,15 @@ func (a *app) trimGoCache(dryRun bool, builds func() []int) goCacheRun {
 // and trims it over its cap, in the background so the sample goes on. A
 // trim the builds hold back is tried again every goCacheRetry; once it has
 // waited doctor.goCacheEvery the watch says GO CACHE until it ran. A failed
-// read or trim is GO CACHE too.
+// read or trim is GO CACHE too. The goCaching flag orders the looks: the
+// next look's time is read only with the flag held, after the look that
+// wrote it gave the flag back.
 func (w *watcher) goCache(now time.Time) {
-	if !w.goCacheOn || w.cfg.Doctor.GoCacheMax() == 0 || now.Before(w.goCacheNext) || !w.goCaching.CompareAndSwap(false, true) {
+	if !w.goCacheOn || w.cfg.Doctor.GoCacheMax() == 0 || !w.goCaching.CompareAndSwap(false, true) {
+		return
+	}
+	if now.Before(w.goCacheNext) {
+		w.goCaching.Store(false)
 		return
 	}
 	go func() {

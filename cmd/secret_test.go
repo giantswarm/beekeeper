@@ -30,6 +30,8 @@ const (
 	generateFlag  = "--generate"
 	ghSecret      = "secret"
 	setOp         = "set"
+	nameFlag      = "--name"
+	namespaceFlag = "--namespace"
 )
 
 // secretApp is an app over a scratch repository with one encrypted Secret
@@ -336,5 +338,33 @@ func TestSecretSetNewSecretAndPodConsumers(t *testing.T) {
 		if _, err := runSecret(a, c.args...); Code(err) != c.code || len(tools.Calls) != calls {
 			t.Errorf("secret %s = %v, want exit %d and no tool run", strings.Join(c.args, " "), err, c.code)
 		}
+	}
+}
+
+func TestSecretCopyValuesIntoANewSecret(t *testing.T) {
+	a, tools, repo := secretApp(t)
+	tools.Vault["op://Shared/db/user"] = "planted-user-21"
+	file := filepath.Join(repo, "oauth.sops.yaml")
+	out, err := runSecret(a, copyOp, "op://Shared/db/user=client-id", dbRef+"=client-secret", file, nameFlag, "oauth", namespaceFlag, "team-b")
+	want := "wrote " + file + ": 2 keys\n" +
+		"  stringData.client-id" + strings.Repeat(" ", 38) + " 15 bytes\n" +
+		"  stringData.client-secret" + strings.Repeat(" ", 34) + fmt.Sprintf(" %d bytes\n", len(secretValue))
+	if err != nil || out != want {
+		t.Errorf("copy answers %q, %v, want %q", out, err, want)
+	}
+	noSecret(t, "copy", out)
+	for _, args := range [][]string{
+		{copyOp, dbRef + "=a", dbRef + "=b", file + "#x"},
+		{copyOp, dbRef, dbRef + "=b", filepath.Join(repo, "n.sops.yaml")},
+		{copyOp, dbRef + "=a", filepath.Join(repo, "n.sops.yaml"), nameFlag, "only"},
+	} {
+		a.out = &bytes.Buffer{}
+		if _, err := runSecret(a, args...); Code(err) != ExitUsage {
+			t.Errorf("secret %s = %v, want a usage error", strings.Join(args, " "), err)
+		}
+	}
+	a.out = &bytes.Buffer{}
+	if _, err := runSecret(a, copyOp, dbRef+"=again", file); err == nil || !strings.Contains(err.Error(), "is encrypted") {
+		t.Errorf("copy into the encrypted file = %v", err)
 	}
 }

@@ -2,12 +2,16 @@ package secret
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
-	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -15,8 +19,7 @@ import (
 // kindContext is the prefix of the context kind names a cluster's.
 const kindContext = "kind-"
 
-// FieldManager is the server-side apply manager a copied key is written
-// under.
+// FieldManager is the field manager a copied key is written under.
 const FieldManager = "beekeeper-secret"
 
 // KubeTarget is one key of a Secret: <context>/<namespace>/<name>/<key>.
@@ -65,8 +68,8 @@ func (t KubeTarget) KindCluster() string {
 // kubeconfig reaches, the Secret's other keys kept.
 type SecretApplier func(ctx context.Context, kubeconfig []byte, t KubeTarget, value []byte) error
 
-// ApplySecret is the SecretApplier of a real cluster: a server-side apply
-// that owns the one key, creating the Secret when absent.
+// ApplySecret is the SecretApplier of a real cluster: WriteSecretKey
+// through the kubeconfig's cluster.
 func ApplySecret(ctx context.Context, kubeconfig []byte, t KubeTarget, value []byte) error {
 	cfg, err := clientcmd.RESTConfigFromKubeConfig(kubeconfig)
 	if err != nil {
@@ -76,8 +79,32 @@ func ApplySecret(ctx context.Context, kubeconfig []byte, t KubeTarget, value []b
 	if err != nil {
 		return err
 	}
-	ac := corev1ac.Secret(t.Name, t.Namespace).WithData(map[string][]byte{t.Key: value})
-	return c.Apply(ctx, ac, client.FieldOwner(FieldManager), client.ForceOwnership)
+	return WriteSecretKey(ctx, c, t, value)
+}
+
+// WriteSecretKey writes value into the one key of the Secret t names: a
+// merge patch of that key alone, so the Secret's other keys, labels and
+// annotations stay whoever wrote them; a Secret absent is created with the
+// key. A server-side apply would own the whole data of the Secret under
+// FieldManager and drop the keys an earlier copy wrote.
+func WriteSecretKey(ctx context.Context, c client.Client, t KubeTarget, value []byte) error {
+	s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: t.Namespace, Name: t.Name}}
+	body, err := json.Marshal(map[string]any{"data": map[string][]byte{t.Key: value}})
+	if err != nil {
+		return err
+	}
+	patch := client.RawPatch(types.MergePatchType, body)
+	err = c.Patch(ctx, s, patch, client.FieldOwner(FieldManager))
+	if !apierrors.IsNotFound(err) {
+		return err
+	}
+	s.Data = map[string][]byte{t.Key: value}
+	err = c.Create(ctx, s, client.FieldOwner(FieldManager))
+	if apierrors.IsAlreadyExists(err) {
+		// Created by another writer between the two calls: the patch now lands.
+		return c.Patch(ctx, s, patch, client.FieldOwner(FieldManager))
+	}
+	return err
 }
 
 // CopyToSecret copies one value into a key of a Secret in a kind cluster,
