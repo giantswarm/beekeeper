@@ -270,9 +270,10 @@ git's signing call only; the key and the agent stay out of the sandbox.`,
 					sandbox.OpAgents: brokeredAgents(func(env []string) sandbox.Handler {
 						return brokeredCall(exe, "/proc", agentsBrokeredTimeout, env, brokeredAgentsArgv)
 					}),
-					sandbox.OpWatch: brokeredCall(exe, "/proc", 0, nil, brokeredWatchArgv),
-					sandbox.OpLab:   brokeredCall(exe, "/proc", labBrokeredTimeout, nil, brokeredLabArgv),
-					sandbox.OpSign:  brokeredSign(hostGPG(ctx)),
+					sandbox.OpWatch:  brokeredCall(exe, "/proc", 0, nil, brokeredWatchArgv),
+					sandbox.OpLab:    brokeredCall(exe, "/proc", labBrokeredTimeout, nil, brokeredLabArgv),
+					sandbox.OpSign:   brokeredSign(hostGPG(ctx)),
+					sandbox.OpPerson: brokeredCall(exe, "/proc", brokeredCallTimeout, nil, brokeredPersonArgv),
 				}))
 			}()
 			// either one ending ends the broker, which its unit restarts

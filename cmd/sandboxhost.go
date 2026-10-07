@@ -272,6 +272,14 @@ func brokeredWatchArgv(req sandbox.Request, _ bool) ([]string, error) {
 	return req.Args, nil
 }
 
+// brokeredPersonArgv is the command line of a brokered person.
+func brokeredPersonArgv(req sandbox.Request, _ bool) ([]string, error) {
+	if err := brokeredSub(req.Args, personName, personName); err != nil {
+		return nil, err
+	}
+	return req.Args, nil
+}
+
 // brokeredLabArgv is the command line of a brokered lab creation or
 // teardown: lease up or lease down of the lab.
 func brokeredLabArgv(req sandbox.Request, _ bool) ([]string, error) {
