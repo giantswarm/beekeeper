@@ -14,7 +14,7 @@ import (
 // tool writes an executable name into dir and answers its path.
 func tool(t *testing.T, dir, name string) string {
 	t.Helper()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	p := filepath.Join(dir, name)
@@ -77,7 +77,7 @@ func TestLookPathSkipsWhatIsNotExecutable(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(gobin, "kindish"), []byte("#!/bin/sh\n"), 0o644); err != nil { //nolint:gosec // a file the test must not run
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(filepath.Join(gobin, "dirish"), 0o755); err != nil {
+	if err := os.Mkdir(filepath.Join(gobin, "dirish"), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"kindish", "dirish"} {
