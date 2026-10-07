@@ -21,17 +21,19 @@ import (
 // touches a secret is refused: false positives beat leaks.
 
 const (
-	kubectlCmd = "kubectl"
-	sopsCmd    = "sops"
-	helmCmd    = "helm"
-	evalCmd    = "eval"
-	selfCmd    = "beekeeper"
-	verbGet    = "get"
-	verbSet    = "set"
-	verbCreate = "create"
-	verbEdit   = "edit"
-	verbList   = "list"
-	flagOutput = "--output"
+	kubectlCmd   = "kubectl"
+	sopsCmd      = "sops"
+	helmCmd      = "helm"
+	evalCmd      = "eval"
+	selfCmd      = "beekeeper"
+	verbGet      = "get"
+	verbSet      = "set"
+	verbCreate   = "create"
+	verbEdit     = "edit"
+	verbList     = "list"
+	flagOutput   = "--output"
+	flagInput    = "--input"
+	flagTemplate = "--template"
 )
 
 // A leak names the command that would expose secret values and the safe forms.
@@ -135,7 +137,7 @@ var (
 var kubectlValue = map[string]bool{
 	"-n": true, "--namespace": true, "--context": true, "--kubeconfig": true, "--cluster": true, "--user": true,
 	"-s": true, "--server": true, "--as": true, "--as-group": true, "--token": true, "--request-timeout": true,
-	"-l": true, "--selector": true, "-o": true, flagOutput: true, "--field-selector": true, "--template": true,
+	"-l": true, "--selector": true, "-o": true, flagOutput: true, "--field-selector": true, flagTemplate: true,
 	"-f": true, "--filename": true, "-c": true, "--container": true, "--sort-by": true, "--chunk-size": true, "--label-columns": true, "-L": true,
 	"--raw": true,
 }
@@ -465,7 +467,7 @@ func kubectlLeak(args []string, before string) *leak {
 			switch name {
 			case "-o", flagOutput:
 				output = val
-			case "--template":
+			case flagTemplate:
 				template = val
 			case "--raw":
 				raw = val
