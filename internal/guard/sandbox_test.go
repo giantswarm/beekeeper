@@ -48,10 +48,10 @@ func TestSandboxHoldsFileTools(t *testing.T) {
 		{writeTool, map[string]any{filePathKey: filepath.Join(cwd, "x.go")}, ""},
 		{editTool, map[string]any{filePathKey: filepath.Join(home, ".bashrc")}, refuseWrite},
 		{"NotebookEdit", map[string]any{"notebook_path": filepath.Join(home, "n.ipynb")}, refuseWrite},
-		{grepTool, map[string]any{"path": filepath.Join(home, ".config")}, refuseRead},
+		{grepTool, map[string]any{pathKey: filepath.Join(home, ".config")}, refuseRead},
 		{grepTool, map[string]any{}, ""}, // the working directory
-		{globTool, map[string]any{"pattern": filepath.Join(home, ".ssh") + "/*"}, refuseRead},
-		{globTool, map[string]any{"pattern": "**/*.go"}, ""},
+		{globTool, map[string]any{patternKey: filepath.Join(home, ".ssh") + "/*"}, refuseRead},
+		{globTool, map[string]any{patternKey: "**/*.go"}, ""},
 	} {
 		ev := toolEvent(c.tool, c.input)
 		ev["cwd"] = cwd

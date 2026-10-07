@@ -38,6 +38,10 @@ const (
 	commandKey      = "command"
 	filePathKey     = "file_path"
 	notebookPathKey = "notebook_path"
+	pathKey         = "path"
+	patternKey      = "pattern"
+	contentKey      = "content"
+	outputModeKey   = "output_mode"
 	claudeMD        = "CLAUDE.md"
 )
 
