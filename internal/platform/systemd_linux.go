@@ -259,10 +259,6 @@ func (c Cap) slice() string {
 	return c.Slice
 }
 
-// RunNice is the nice level a capped run's command starts at: among the
-// processes that share a core, the desktop and the CLIs come first.
-const RunNice = 10
-
 // CapSlot sets the slot slice's limits for this boot, and memcap.slice's
 // CPU budget, which every slot shares.
 func (systemdCapper) CapSlot(c Cap) error {

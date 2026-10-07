@@ -127,6 +127,10 @@ type Launcher interface {
 	ResetFailed(ctx context.Context, units ...string) error
 }
 
+// RunNice is the nice level a capped run's command starts at: among the
+// processes that share a core, the desktop and the CLIs come first.
+const RunNice = 10
+
 // Cap bounds a capped run.
 type Cap struct {
 	// Max is the memory limit, Swap the swap limit ("12G", "0").
