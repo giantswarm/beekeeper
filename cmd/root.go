@@ -223,15 +223,9 @@ func (a *app) callerSession() (state.Party, error) {
 	if a.as != "" {
 		return state.Party{Name: a.as}, nil
 	}
-	// An omp agent beekeeper started is its roster entry, whatever session
-	// variables its tool shell carries.
-	if id := os.Getenv(omp.EnvAgent); id != "" {
-		return state.Party{HostSession: omp.HostPrefix + id, Name: os.Getenv(omp.EnvName)}, nil
-	}
-	p := state.Party{
-		Session:     os.Getenv("CLAUDE_CODE_SESSION_ID"),
-		HostSession: os.Getenv("CLAUDE_CODE_HOST_SESSION_ID"),
-		Name:        os.Getenv("CLAUDE_CODE_SESSION_NAME"),
+	p := envParty(os.Getenv)
+	if os.Getenv(omp.EnvAgent) != "" {
+		return p, nil
 	}
 	if p.Session == "" {
 		return p, &exitError{code: ExitUsage, msg: "not inside a Claude Code session: pass --as <name>"}
@@ -250,6 +244,20 @@ func (a *app) callerSession() (state.Party, error) {
 		p.Name = p.Session
 	}
 	return p, nil
+}
+
+// envParty is the session an environment names, read with get: an omp agent
+// beekeeper started is its roster entry, whatever session variables its tool
+// shell carries; else the Claude Code session's ids and name.
+func envParty(get func(string) string) state.Party {
+	if id := get(omp.EnvAgent); id != "" {
+		return state.Party{HostSession: omp.HostPrefix + id, Name: get(omp.EnvName)}
+	}
+	return state.Party{
+		Session:     get("CLAUDE_CODE_SESSION_ID"),
+		HostSession: get("CLAUDE_CODE_HOST_SESSION_ID"),
+		Name:        get("CLAUDE_CODE_SESSION_NAME"),
+	}
 }
 
 // sessions reads the process table and the running sessions.

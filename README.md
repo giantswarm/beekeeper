@@ -461,7 +461,10 @@ reaches an agent's command.
 run in beekeeper's process, a value stays in its memory for the one operation and is written nowhere
 in plaintext (sops gets the plaintext on stdin, the file is written from its ciphertext), and an
 answer is key names, lengths, equality or keyed fingerprints. Every call is a `secret.<operation>`
-event in `beekeeper log` with the session, the references and the outcome, never a value.
+event in `beekeeper log` with the session, the references, the outcome and the operation's duration,
+never a value: the entry waits for a busy state lock, a call whose entry cannot be written fails with
+the reason and the entry, and a call the broker refused, left waiting on the locked vault or ended on
+its deadline is logged by the broker as the requester's.
 
 A reference is a SOPS file (every value in it), one value of a SOPS file (`file#a.b.c`, the dotted key
 path; `sops://` in front optional) or a field of the shared 1Password vault

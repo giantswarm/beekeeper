@@ -8,12 +8,10 @@ import (
 	"os"
 	"os/exec"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/secret"
 )
@@ -214,7 +212,8 @@ func opVault(ctx context.Context, env string, args ...string) error {
 // takes the vault (secretNeedsVault, its files relative to the requester's
 // directory, as the client decides). While the keeper holds none, it signs in (one
 // sign-in shared by every waiting call) and waits until secret.unlockWait
-// passes (exit ExitVault), listed in the broker's waits for the watch's
+// passes (exit ExitVault, the call logged as the requester's, since no
+// process of its own ran), listed in the broker's waits for the watch's
 // VAULT LOCKED line and beekeeper status. A session op no longer takes is
 // dropped, signed in again and the call retried once.
 func (a *app) brokeredVault(v *vaultBroker, call func(env []string) sandbox.Handler) sandbox.Handler {
@@ -223,6 +222,7 @@ func (a *app) brokeredVault(v *vaultBroker, call func(env []string) sandbox.Hand
 		if !a.cfg.Secret.Session {
 			return call(nil)(ctx, pid, req)
 		}
+		start := time.Now()
 		// the files of a call are the requester's, read only for an age identity
 		var cwd string
 		if len(a.cfg.Secret.AgeIdentities) > 0 {
@@ -243,8 +243,9 @@ func (a *app) brokeredVault(v *vaultBroker, call func(env []string) sandbox.Hand
 				cancel()
 				done()
 				if err != nil {
-					return sandbox.Reply{Code: ExitVault, Err: fmt.Sprintf("beekeeper: %v: the broker's sign-in did not unlock it within %s (journalctl --user -u beekeeper-sandbox says why)\n",
-						err, a.cfg.Secret.UnlockWait.Duration)}, nil
+					wait := a.cfg.Secret.UnlockWait.Duration
+					r := sandbox.Reply{Code: ExitVault, Err: fmt.Sprintf("beekeeper: %v: the broker's sign-in did not unlock it within %s (journalctl --user -u beekeeper-sandbox says why)\n", err, wait)}
+					return withBrokerLog(r, a.brokerSecretLog(pid, req, start, fmt.Sprintf("the vault stayed locked for %s", wait))), nil
 				}
 			}
 			r, err := call([]string{v.k.Env()})(ctx, pid, req)
@@ -292,19 +293,6 @@ func (v *vaultWaits) writeLocked() {
 	if err := secret.WriteWaits(path, ws); err != nil {
 		fmt.Fprintf(os.Stderr, "vault waits: %v\n", err)
 	}
-}
-
-// requester names the session behind a request: its name, else its pid.
-func requester(pid int) string {
-	_, env, err := sandbox.Origin("/proc", pid, []string{"CLAUDE_CODE_SESSION_NAME", omp.EnvName})
-	if err == nil {
-		for _, kv := range env {
-			if _, v, _ := strings.Cut(kv, "="); v != "" {
-				return v
-			}
-		}
-	}
-	return "pid " + strconv.Itoa(pid)
 }
 
 // vaultRef is the first op:// reference of a call's arguments.

@@ -905,8 +905,11 @@ type Store interface {
 	// Update runs fn on the state and saves the result together with the
 	// events fn returns; when fn fails nothing is saved.
 	Update(fn func(*State) ([]Event, error)) error
-	// Log appends events that change no state.
+	// Log appends events that change no state, giving up on a busy lock.
 	Log(events ...Event) error
+	// Record appends events that change no state and must not be lost,
+	// waiting for the lock as an update does.
+	Record(events ...Event) error
 	// Events returns the last n events keep accepts, oldest first.
 	Events(n int, keep func(Event) bool) ([]Event, error)
 	// ReadFile decodes a JSON side file; found is false when it is missing.
@@ -996,6 +999,18 @@ func (s *FileStore) Log(events ...Event) error {
 }
 
 const logWait = time.Second
+
+// Record appends events that change no state and must not be lost, a secret
+// call's audit entry for one, under the state lock, waiting for it as an
+// update does: a busy lock delays the entry, never drops it.
+func (s *FileStore) Record(events ...Event) error {
+	l := flock.New(s.path("state.lock"))
+	if err := l.Lock(); err != nil {
+		return err
+	}
+	defer func() { _ = l.Unlock() }()
+	return s.append(events)
+}
 
 // VerbStaleWriter is the event of an older beekeeper's first save after a
 // newer one's.

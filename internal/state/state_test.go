@@ -97,15 +97,32 @@ func TestLogAppendsWithoutTouchingTheState(t *testing.T) {
 	if err != nil || len(runs) != 2 || runs[0].Detail != "a" || runs[1].Detail != "b" {
 		t.Errorf("Events = %+v, %v", runs, err)
 	}
-	// A held lock drops the event after the bounded wait instead of blocking.
+	// A held lock drops the event after the bounded wait instead of blocking;
+	// Record waits for the lock, however slow the holder, and loses nothing.
 	l := flock.New(s.path("state.lock"))
 	if err := l.Lock(); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = l.Unlock() }()
 	t0 := time.Now()
 	if err := s.Log(Event{Verb: verbRunStart}); err == nil || time.Since(t0) > 3*logWait {
 		t.Errorf("Log under a held lock = %v after %s", err, time.Since(t0))
+	}
+	recorded := make(chan error, 1)
+	go func() { recorded <- s.Record(Event{Verb: "secret.copy", Detail: "c"}) }()
+	time.Sleep(2 * logWait)
+	select {
+	case err := <-recorded:
+		t.Fatalf("Record under a held lock returned %v before the lock was released", err)
+	default:
+	}
+	if err := l.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-recorded; err != nil {
+		t.Fatalf("Record after the lock was released: %v", err)
+	}
+	if evs, err := s.Events(0, func(e Event) bool { return e.Verb == "secret.copy" }); err != nil || len(evs) != 1 || evs[0].Detail != "c" {
+		t.Errorf("the recorded event = %+v, %v", evs, err)
 	}
 }
 
