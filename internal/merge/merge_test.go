@@ -463,6 +463,22 @@ func TestParsePromoteDocument(t *testing.T) {
 	}
 }
 
+func TestParsePromoteCandidate(t *testing.T) {
+	for raw, want := range map[string]string{
+		`{"repositories":[{"repository":"o/r","candidate":"v0.49.1-rc.2","state":"would_dispatch"}]}`: "v0.49.1-rc.2",
+		`{"repositories":[{"repository":"o/r","state":"nothing_to_promote"}]}`:                        "",
+	} {
+		if c, ok := ParsePromoteCandidate([]byte(raw)); !ok || c != want {
+			t.Errorf("%s: %q %v, want %q", raw, c, ok, want)
+		}
+	}
+	for _, raw := range []string{"not json", `{"repositories":[]}`, `{"repositories":[{},{}]}`} {
+		if _, ok := ParsePromoteCandidate([]byte(raw)); ok {
+			t.Errorf("%s parsed", raw)
+		}
+	}
+}
+
 func TestHung(t *testing.T) {
 	now := time.Now()
 	for _, c := range []struct {

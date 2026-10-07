@@ -864,6 +864,10 @@ type Merge struct {
 	Outside bool `json:"outside,omitempty"`
 	// Checked is when GitHub last reported an outside merge not merged yet.
 	Checked time.Time `json:"checked,omitzero"`
+	// Candidate is the release candidate a promotion (PR 0) was queued for,
+	// the newest one at queue time, empty when there was none: its turn
+	// refuses when the newest candidate is another by then.
+	Candidate string `json:"candidate,omitempty"`
 	// Release is the tag the merge released, empty when unknown.
 	Release string `json:"release,omitempty"`
 	// HandCut is the merge's base branch when no Auto-release run tags a
