@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -79,14 +81,17 @@ func givenUp(ar state.Archive, now time.Time) string {
 // seedArchives owes, once, the archives of the finished workers whose
 // desktop records stayed unarchived: a session beekeeper started, off the
 // roster, holding no role, its record unarchived, its CLI running or not.
-// The doctor asks for at most archiveBatch of them per run. It seeds once
-// more for the archives given up while no idle steward ran, which a
-// session's own warmed CLI now does.
-func seedArchives(st *state.State, record func(host string) (*claude.Record, bool), now time.Time) {
-	if st.FinishedSeeded && st.WarmSeeded {
+// The doctor asks for at most archiveBatch of them per run. A state seeded
+// before a session's own warmed CLI archived it is seeded once more, for
+// the archives given up while no idle steward ran: only the starts reseed
+// takes, never a session someone brought back from the Archived list, each
+// owed from when its session has stayed quiet reseedQuiet (reseedWhy).
+func seedArchives(st *state.State, record func(host string) (*claude.Record, bool), reseed func(*state.State, state.Start) (time.Time, bool), now time.Time) {
+	if st.FinishedSeeded && st.DoneSeeded {
 		return
 	}
-	st.ArchivesSeeded, st.FinishedSeeded, st.WarmSeeded = true, true, true
+	again := st.FinishedSeeded
+	st.ArchivesSeeded, st.FinishedSeeded, st.DoneSeeded = true, true, true
 	for _, s := range st.Starts {
 		switch {
 		case s.HostSession == "" || s.Harness != "" || roleKeeps(st, s.Party),
@@ -94,10 +99,63 @@ func seedArchives(st *state.State, record func(host string) (*claude.Record, boo
 			slices.ContainsFunc(st.Archives, func(x state.Archive) bool { return x.Host == s.HostSession }):
 			continue
 		}
-		if r, ok := record(s.HostSession); ok && !r.IsArchived {
+		r, ok := record(s.HostSession)
+		if !ok || r.IsArchived {
+			continue
+		}
+		if !again {
 			st.Archives = append(st.Archives, state.Archive{Party: s.Party, Host: s.HostSession, Since: now, Why: "a finished worker left unarchived"})
+			continue
+		}
+		if r.AutoArchiveExempt {
+			continue
+		}
+		if active, ok := reseed(st, s); ok {
+			since := now
+			if quiet := latest(active, r.LastSeen()).Add(reseedQuiet); quiet.After(since) {
+				since = quiet
+			}
+			st.Archives = append(st.Archives, state.Archive{Party: s.Party, Host: s.HostSession, Since: since.UTC(), Why: reseedWhy})
 		}
 	}
+}
+
+// reseedWhy is why the reseed owes an archive: the doctor asks for none
+// while its session ran a turn or was shown within reseedQuiet.
+const reseedWhy = "a finished worker left unarchived, owed once its session stays quiet a day"
+
+// reseedQuiet is how long a reseeded session stays without a turn and
+// unshown before the doctor asks for its archive.
+const reseedQuiet = 24 * time.Hour
+
+func latest(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
+}
+
+// reseedable says whether the reseed owes the archive of start s, and when
+// its transcript was last written: an agent that reported its work done
+// (agents.done) or a role's run a relay relieved, whose CLI does not run and
+// whose session no person typed in. done holds the sessions that reported
+// done; transcript finds a session's transcript.
+func reseedable(st *state.State, s state.Start, done map[string]bool, live func(state.Party) bool,
+	transcript func(id string) (string, bool),
+) (time.Time, bool) {
+	if !done[s.Session] && !relieved(st, s.Party) || live(s.Party) {
+		return time.Time{}, false
+	}
+	path, ok := transcript(s.Session)
+	if !ok {
+		return time.Time{}, false
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}, false
+	}
+	typed, err := claude.PersonTyped(path)
+	return fi.ModTime(), err == nil && !typed
 }
 
 // owedArchive is what the doctor does with one archive owed: ask for it
@@ -144,6 +202,8 @@ func planArchives(st *state.State, record func(host string) (*claude.Record, boo
 			o.drop = "the doctor gives it up: " + givenUp(ar, now)
 		case busy(ar.Party):
 			o.wait = "its CLI runs a turn or a gated merge"
+		case ar.Why == reseedWhy && now.Before(latest(ar.Since, r.LastSeen().Add(reseedQuiet))):
+			o.wait = fmt.Sprintf("its session stays quiet a day first, until %s", clock(now, latest(ar.Since, r.LastSeen().Add(reseedQuiet))))
 		case !ar.Tried.IsZero() && now.Sub(ar.Tried) < archiveAgain:
 			o.wait = fmt.Sprintf("a steward was asked %s ago", dur(now.Sub(ar.Tried)))
 		}
@@ -166,4 +226,28 @@ func oweArchive(st *state.State, p state.Party, why string, now time.Time) strin
 		st.Archives = append(st.Archives, state.Archive{Party: s.Party, Host: s.HostSession, Since: now.UTC(), Why: why})
 	}
 	return s.HostSession
+}
+
+// reseed is the doctor's reseedable on the running sessions: it reads the
+// sessions that reported done from the event log once, when first asked.
+func (a *app) reseed(sessions []*claude.Session) func(*state.State, state.Start) (time.Time, bool) {
+	var done map[string]bool
+	live := func(p state.Party) bool { _, ok := claude.Live(sessions, p); return ok }
+	transcript := func(id string) (string, bool) {
+		m, _ := filepath.Glob(filepath.Join(a.cfg.Claude.ProjectsDir, "*", id+".jsonl"))
+		if len(m) == 0 {
+			return "", false
+		}
+		return m[0], true
+	}
+	return func(st *state.State, s state.Start) (time.Time, bool) {
+		if done == nil {
+			done = map[string]bool{}
+			evs, _ := a.store.Events(0, func(e state.Event) bool { return e.Verb == "agents.done" })
+			for _, e := range evs {
+				done[e.By.Session] = true
+			}
+		}
+		return reseedable(st, s, done, live, transcript)
+	}
 }
