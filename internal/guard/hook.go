@@ -102,6 +102,10 @@ type Hook struct {
 	// UnlockCommands are the person's own vault unlock helpers
 	// (secret.unlockCommands), refused like op signin.
 	UnlockCommands []string
+	// SecretFiles are the files known to hold secret values the config adds
+	// to the built-in SecretFiles (secret.files), globs allowed; no session
+	// reads them whole.
+	SecretFiles []string
 	// ConfigErr is why the configuration did not load: every Bash call is
 	// refused with it, since the guards it configures cannot run.
 	ConfigErr error
@@ -247,6 +251,9 @@ func (h Hook) decide(ev event) []byte {
 	if r := mentionRefusal(ev.ToolName, ev.ToolInput, ev.CWD); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	if r := h.secretFileRefusal(ev); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
 	if ev.ToolName != bashTool {
 		if r := h.Outbound.toolRefusal(ev.ToolName, ev.ToolInput); r != "" {
 			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
@@ -280,7 +287,7 @@ func (h Hook) decide(ev event) []byte {
 	if r := h.membersRefusal(cmd, ev.Session, cwd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
-	if l := (secretGuard{unlock: h.UnlockCommands, cwd: cwd}).leak(cmd); l != nil {
+	if l := (secretGuard{unlock: h.UnlockCommands, cwd: cwd, files: newSecretFiles(h.SecretFiles)}).leak(cmd); l != nil {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: l.reason()})
 	}
 	if r := deleteRefusal(cmd); r != "" {
