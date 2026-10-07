@@ -36,7 +36,7 @@ func TestRedactReplacesAnIndexedValueInEveryShape(t *testing.T) {
 		"key: value":    "password: " + planted,
 		"JSON":          `{"password":"` + planted + `"}`,
 		"URL":           "https://user:" + planted + "@example.com/x",
-		"path":          "/run/secrets/" + planted + "/file",
+		pathKey:         "/run/secrets/" + planted + "/file",
 		"sentence end":  "the value is " + planted + ".",
 		"base64":        "data:\n  token: " + b64,
 		"base64 inline": "TOKEN=" + strings.TrimRight(b64, "="),
