@@ -213,7 +213,7 @@ func TestHelmReleaseReadyReadsItsReadyCondition(t *testing.T) {
 		`{"kind":"HelmRelease","metadata":{"generation":2},"status":{"observedGeneration":2,"conditions":[{"type":"Ready","status":"True"}]}}`:                             "",
 		`{"kind":"HelmRelease","metadata":{"generation":2},"status":{"observedGeneration":2,"conditions":[{"type":"Ready","status":"False","message":"upgrade failed"}]}}`: "Ready False: upgrade failed",
 		`{"kind":"HelmRelease","metadata":{"generation":3},"status":{"observedGeneration":2,"conditions":[{"type":"Ready","status":"True"}]}}`:                             "generation 3 not observed yet (status at 2)",
-		`{"kind":"HelmRelease","metadata":{"generation":1},"status":{"observedGeneration":1}}`:                                                                                                   "no Ready condition yet",
+		`{"kind":"HelmRelease","metadata":{"generation":1},"status":{"observedGeneration":1}}`:                                                                             "no Ready condition yet",
 	} {
 		holds, why, err := helmReleaseReady([]byte(obj))
 		if err != nil || holds != (want == "") || why != want {
