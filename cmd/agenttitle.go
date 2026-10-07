@@ -21,7 +21,8 @@ import (
 
 // retitleWait bounds the wait for the desktop to record the title a steward
 // set on beekeeper's request: one short desktop turn. stewardTries of them
-// stay within the reopen unit's TimeoutStopSec.
+// stay within stopPostWait, the reopen unit's runtime (RuntimeMaxSec) past
+// its wait for the person.
 const retitleWait = 80 * time.Second
 
 // The desktop handles every claude://resume link twice, and when the second

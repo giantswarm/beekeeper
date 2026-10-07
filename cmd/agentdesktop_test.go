@@ -158,7 +158,7 @@ func TestReopenShowsADesktopTurnAtOnce(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
 	start := time.Now()
-	if err := a.reopenSession(ctx, rotationLogin); err != nil {
+	if err := a.reopenSession(ctx, rotationLogin, ""); err != nil {
 		t.Fatal(err)
 	}
 	if len(o.opened) == 0 || o.opened[0] != resumeURL(rotationLogin) {
@@ -202,7 +202,7 @@ func TestReopenSaysTheDesktopIsAtItsCap(t *testing.T) {
 	plat.Opener = capOpener{log: a.cfg.Claude.DesktopLog}
 	ctx, cancel := context.WithTimeout(t.Context(), twinWait+5*time.Second)
 	defer cancel()
-	if err := a.reopenSession(ctx, rotationLogin); err != nil {
+	if err := a.reopenSession(ctx, rotationLogin, ""); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "it runs its cap of 28 CLIs and starts none for a show") {
@@ -242,7 +242,7 @@ func TestReopenRecordsItsWait(t *testing.T) {
 	plat.Launcher = &unitLauncher{}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- a.reopenSession(ctx, rotationLogin) }()
+	go func() { done <- a.reopenSession(ctx, rotationLogin, "") }()
 	var seen *state.ImportWait
 	eventually(5*time.Second, func() bool {
 		st, _ := a.store.Read()

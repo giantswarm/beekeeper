@@ -50,7 +50,8 @@ type standbyWatch struct {
 	// session id runs its headless turn (unitsTurning); nil: none does.
 	turning func(ctx context.Context, id string) bool
 	// reopening reports whether a unit of beekeeper's start or wake of
-	// session id runs its turn or its reopen (turningUnits); nil: none does.
+	// session id runs its turn, or a reopen of it runs (unitsReopening);
+	// nil: none does.
 	reopening func(ctx context.Context, id string) bool
 	busy      atomic.Bool
 	// guideGap is the term of the gone guide this watch said.
@@ -168,20 +169,24 @@ func (w *watcher) firstTurn(ctx context.Context, st *state.State, p state.Party)
 	return i >= 0 && !st.Agents[i].DesktopTurn.IsZero() && w.stand.reopening != nil && w.stand.reopening(ctx, p.Session)
 }
 
-// unitsReopening reports whether a start or wake unit of session id runs
-// its turn or its reopen.
-func unitsReopening(ctx context.Context, id string) bool { return len(turningUnits(ctx, id)) > 0 }
+// unitsReopening reports whether a unit of session id runs its headless
+// turn or its reopen: a start's or wake's unit active, starting or stopping
+// (its stop-post starts the reopen's unit), or a reopen unit.
+func unitsReopening(ctx context.Context, id string) bool {
+	return len(turningUnits(ctx, id)) > 0 || len(reopenUnits(ctx, id)) > 0
+}
 
 // unitsTurning reports whether a start or wake unit of session id is
 // active or starting: its headless turn runs.
 func unitsTurning(ctx context.Context, id string) bool { return len(sessionUnits(ctx, id, false)) > 0 }
 
 // turningUnits are the start and wake units of session id that are active,
-// starting or running their reopen (deactivating).
+// starting or stopping (deactivating: the turn's end on the stop signal,
+// then the stop-post that starts the reopen's unit).
 func turningUnits(ctx context.Context, id string) []string { return sessionUnits(ctx, id, true) }
 
 // sessionUnits are the start and wake units of session id that are active
-// or starting, and with stopping those running their reopen too.
+// or starting, and with stopping those in their stop too.
 func sessionUnits(ctx context.Context, id string, stopping bool) []string {
 	if len(id) < 8 {
 		return nil

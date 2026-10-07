@@ -248,7 +248,7 @@ func TestAMissedReopenFailsNoUnit(t *testing.T) {
 	if err := a.reopenMissed("#1 task", errors.New("the desktop recorded no title")); err != nil {
 		t.Fatalf("a missed reopen fails its unit: %v", err)
 	}
-	evs, err := store.Events(0, func(e state.Event) bool { return e.Verb == "agent.reopen" })
+	evs, err := store.Events(0, func(e state.Event) bool { return e.Verb == reopenVerb })
 	if err != nil || len(evs) != 1 || !strings.Contains(evs[0].Detail, "no title") || evs[0].By.Name != "#1 task" {
 		t.Errorf("events %+v, %v", evs, err)
 	}
