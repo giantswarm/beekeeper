@@ -1,3 +1,5 @@
+//go:build linux && !nosystemd
+
 package secret
 
 import (
