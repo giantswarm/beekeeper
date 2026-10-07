@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/omp"
+	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -92,6 +94,100 @@ func TestOmpModel(t *testing.T) {
 	}
 	if argv := ompArgv("omp", local); !slices.Equal(argv[len(argv)-2:], []string{modelFlag, local}) {
 		t.Errorf("ompArgv = %v", argv)
+	}
+}
+
+// An omp agent on a provider of omp.providers gets the provider's key from
+// the reference, under the variable the models file names; a start on a
+// key the file carries while a reference names it, on a variable no
+// reference fills, or with no variable named is refused; a provider the
+// config does not know starts on omp's own key as before.
+func TestOmpCredentials(t *testing.T) {
+	const planted = "planted-key-7b2e" //nolint:gosec // a planted test value
+	const ref = sparkRef
+	write := func(t *testing.T, raw string) string {
+		t.Helper()
+		p := filepath.Join(t.TempDir(), "models.yml")
+		if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	for name, tc := range map[string]struct {
+		models, model, ref, wantName, err string
+	}{
+		"from the vault":    {models: "providers: {spark: {apiKey: SPARK_API_KEY}}", model: sparkModel, ref: ref, wantName: "SPARK_API_KEY"},
+		"keyless provider":  {models: "providers: {local: {auth: none}}", model: "local/m"},
+		"omp's own key":     {models: "providers: {spark: {apiKey: " + planted + "}}", model: sparkModel},
+		"built-in provider": {models: "providers: {}", model: "amazon-bedrock/m"},
+		"value and ref":     {models: "providers: {spark: {apiKey: " + planted + "}}", model: sparkModel, ref: ref, err: "replace the value"},
+		"ref without name":  {models: "providers: {spark: {baseUrl: x}}", model: sparkModel, ref: ref, err: "names no variable"},
+		"name without ref":  {models: "providers: {spark: {apiKey: SPARK_API_KEY}}", model: sparkModel, err: "fills from no reference"},
+	} {
+		cfg := &config.Config{Omp: config.Omp{ModelsFile: write(t, tc.models)}}
+		if tc.ref != "" {
+			cfg.Omp.Providers = map[string]config.OmpProvider{"spark": {APIKey: tc.ref}}
+		}
+		a := &app{cfg: cfg}
+		creds, err := a.ompCredentials(tc.model)
+		if tc.err != "" {
+			if err == nil || !strings.Contains(err.Error(), tc.err) {
+				t.Errorf("%s: %v, want the error %q", name, err, tc.err)
+			}
+			if err != nil && strings.Contains(err.Error(), planted) {
+				t.Errorf("%s: the error carries the value: %v", name, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		switch {
+		case tc.wantName == "" && len(creds) != 0:
+			t.Errorf("%s: credentials %+v, want none", name, creds)
+		case tc.wantName != "" && (len(creds) != 1 || creds[0].Name != tc.wantName || creds[0].Ref.Op != tc.ref):
+			t.Errorf("%s: credentials %+v", name, creds)
+		}
+	}
+}
+
+// The tests' vault provider: a model of it and its key's reference.
+const (
+	sparkModel = "spark/m"
+	sparkRef   = "op://Shared/spark/credential" //nolint:gosec // a reference, no value
+)
+
+// A brokered omp start on a provider of omp.providers reads the vault,
+// by its model or omp.model; any other start does not.
+func TestOmpStartNeedsVault(t *testing.T) {
+	const ompHarness = "--harness=omp"
+	a := &app{cfg: &config.Config{Omp: config.Omp{Model: sparkModel, Providers: map[string]config.OmpProvider{"spark": {APIKey: sparkRef}}}}}
+	for _, tc := range []struct {
+		args []string
+		want bool
+	}{
+		{[]string{agentStartName, ompHarness, "--", "w", briefMD}, true},
+		{[]string{agentStartName, ompHarness, "--model=spark/other", "--", "w", briefMD}, true},
+		{[]string{agentStartName, ompHarness, "--model=ollama/m", "--", "w", briefMD}, false},
+		{[]string{agentStartName, "--", "w", briefMD}, false},
+		{[]string{"wake", "--", "w", "hi"}, false},
+		{[]string{agentStartName, "--", ompHarness, briefMD}, false},
+	} {
+		if got := a.ompStartNeedsVault(tc.args); got != tc.want {
+			t.Errorf("ompStartNeedsVault(%q) = %v", tc.args, got)
+		}
+	}
+	if a.ompStartBrokered(sparkModel) {
+		t.Error("brokered without secret.session")
+	}
+	a.cfg.Secret.Session = true
+	if !a.ompStartBrokered("") || a.ompStartBrokered("ollama/m") {
+		t.Error("the brokering does not follow the provider")
+	}
+	t.Setenv(sandbox.Brokered, "1")
+	if a.ompStartBrokered(sparkModel) {
+		t.Error("the broker's own call brokered again")
 	}
 }
 

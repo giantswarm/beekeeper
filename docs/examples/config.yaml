@@ -266,7 +266,11 @@ claude:
 
 omp:
   sessionsDir: ~/.omp/agent/sessions   # the default; omp's session files, one folder per working directory
-  model: ""                 # agents start --harness omp without --model: omp's model pattern; empty: omp's own default
+  modelsFile: ~/.omp/agent/models.yml  # the default; omp's providers, a vault provider's apiKey there the variable's name (SPARK_API_KEY)
+  model: ""                 # agents start --harness omp without --model: an exact selector omp lists (provider/id); empty: the start is refused
+  providers:                # providers whose key agents start hands over from the vault, by their name in modelsFile
+    spark:
+      apiKey: op://Shared/spark/credential   # the key's reference, never the key: it goes into the agent's environment alone
 
 desktop:
   typingQuiet: 30s          # the default; a claude:// link waits for this much idle keyboard and pointer input; negative: no wait

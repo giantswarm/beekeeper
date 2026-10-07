@@ -73,17 +73,24 @@ func (a *app) onHost(c *cobra.Command, op string, timeout time.Duration) *cobra.
 			}
 			return a.brokeredAnswer(sandbox.Request{Op: op, Args: argv}, timeout, true)
 		}
-		argv, err := a.scratchArgv(cmd, args)
-		if err != nil {
-			return err
-		}
-		dir, err := a.hostSpool()
-		if err != nil {
-			return err
-		}
-		return a.brokeredAnswerIn(dir, sandbox.Request{Op: op, Args: argv}, timeout, true)
+		return a.agentsOnHost(cmd, args, timeout)
 	}
 	return c
+}
+
+// agentsOnHost runs an agents start, wake or resume through the host's
+// broker, streamed for up to timeout, its state the scratch configuration's
+// when the call names one.
+func (a *app) agentsOnHost(cmd *cobra.Command, args []string, timeout time.Duration) error {
+	argv, err := a.scratchArgv(cmd, args)
+	if err != nil {
+		return err
+	}
+	dir, err := a.hostSpool()
+	if err != nil {
+		return err
+	}
+	return a.brokeredAnswerIn(dir, sandbox.Request{Op: sandbox.OpAgents, Args: argv}, timeout, true)
 }
 
 // brokerArgv is the command line of cmd's call for the broker: its name,

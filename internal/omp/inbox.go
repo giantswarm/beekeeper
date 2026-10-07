@@ -38,11 +38,3 @@ func steerLine(msg string) ([]byte, error) {
 	return append(b, '\n'), nil
 }
 
-// ShellArgv runs argv, omp's command line, with its stdin on the inbox
-// at path: opened for reading and writing, so the inbox never reaches its
-// end while the agent runs, whoever writes to it. omp's protocol output
-// goes nowhere; its log is omp's own (~/.omp/logs) and the unit's journal
-// keeps its errors.
-func ShellArgv(path string, argv ...string) []string {
-	return append([]string{"/bin/sh", "-c", `inbox=$1; shift; exec "$@" <>"$inbox" >/dev/null`, "omp-inbox", path}, argv...)
-}
