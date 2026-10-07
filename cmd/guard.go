@@ -442,11 +442,22 @@ Claude Code, ends the wait.`,
 }
 
 // graphqlLeft is the GraphQL limit as beekeeper last read it, with the
-// reading's age; "" when none was read. It reads the state, never GitHub.
+// reading's age; "" when none was read. It reads the state without its
+// lock, never GitHub: the hook opens no store of its own.
 func (a *app) graphqlLeft() string {
-	st, err := a.store.Read()
+	if a.loadConfig() != nil {
+		return ""
+	}
+	store, err := state.Open(a.cfg.StateDir)
+	if err != nil {
+		return ""
+	}
+	st, err := store.Peek()
 	if err != nil || st.Budget == nil || st.Budget.GraphQL == nil {
 		return ""
+	}
+	if a.now.IsZero() {
+		a.now = time.Now()
 	}
 	return graphqlText(a, graphqlOf(st.Budget.GraphQL)) + ", read " + dur(a.now.Sub(st.Budget.GraphQL.At)) + " ago"
 }
