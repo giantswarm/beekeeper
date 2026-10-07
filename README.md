@@ -549,6 +549,11 @@ recipient, never by listing values. beekeeper never handles the store's password
 whatever unlock prompt it shows the person, and a command answers within five minutes or fails. Its
 output stays in the broker; an error names the entry or the recipient, never a value.
 
+A `store://` reference and `secret.store` are set together, in one `beekeeper config set` call (see
+[Configuration](#configuration)). A reference whose `secret.store` is still missing leaves the
+configuration loadable: every command works, and `beekeeper secret …` warns once per such reference
+until the store is set.
+
 ### The vault session
 
 With `secret.session`, no agent ever holds the vault session or opens one. It lives in the memory of
@@ -1792,6 +1797,14 @@ coordination commands run with neutral defaults. Memory and disk thresholds defa
 what the machine has, and every organisation or desk choice is unset until configured.
 [`docs/examples/config.yaml`](docs/examples/config.yaml) is a complete desk's configuration, every
 key annotated with what it guards and its default.
+
+Every session's hook loads this file on every tool call, so an edit is one write:
+`beekeeper config set <key> <value> [<key> <value>]…` sets dotted keys (`secret.store.read`) to YAML
+values in a single rename, validated before it replaces the file. A result that would not load is
+refused with exit 3 and the file unchanged; comments, the other keys, the file's mode and a link to
+it stay. Keys that reference each other (a `store://` age identity and `secret.store`) are set in
+the same call; an editor saving them one after the other is the edit that can leave a window
+between them. `config set` runs on a file that no longer loads, to repair it.
 
 The organisation and desk keys, and their defaults:
 

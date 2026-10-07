@@ -55,6 +55,15 @@ file's recipients), read in beekeeper's process for the one sops call. A file
 none of them has an identity for fails before sops runs, naming its
 recipients and the sources checked.`,
 		Args: cobra.NoArgs,
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			if a.cfg == nil {
+				if err := a.load(); err != nil {
+					return err
+				}
+			}
+			warnIncomplete(cmd.ErrOrStderr(), a.cfg)
+			return nil
+		},
 	}
 	c.AddCommand(&cobra.Command{
 		Use:   "compare <a> <b>",

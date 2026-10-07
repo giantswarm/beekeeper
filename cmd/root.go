@@ -65,6 +65,9 @@ func refused(format string, a ...any) error {
 	return &exitError{code: ExitRefused, msg: fmt.Sprintf(format, a...)}
 }
 
+// configFlag names the configuration file.
+const configFlag = "config"
+
 func usageErr(format string, a ...any) error {
 	return &exitError{code: ExitUsage, msg: fmt.Sprintf(format, a...)}
 }
@@ -137,7 +140,7 @@ with central configured), 125 a newer release (self-update --check).`,
 	}
 	root.SetVersionTemplate("{{.Name}} {{.Version}}\n")
 	pf := root.PersistentFlags()
-	pf.StringVar(&a.cfgPath, "config", "", "configuration file (default $XDG_CONFIG_HOME/beekeeper/config.yaml, or $BEEKEEPER_CONFIG)")
+	pf.StringVar(&a.cfgPath, configFlag, "", "configuration file (default $XDG_CONFIG_HOME/beekeeper/config.yaml, or $BEEKEEPER_CONFIG)")
 	pf.StringVar(&a.as, "as", "", "act as this person or script instead of the calling Claude Code session")
 	pf.BoolVar(&a.json, "json", false, "print JSON")
 
@@ -163,7 +166,7 @@ with central configured), 125 a newer release (self-update --check).`,
 		c.GroupID = "guarding"
 		root.AddCommand(c)
 	}
-	root.AddCommand(a.installCmd(), a.uninstallCmd(), a.selfUpdateCmd(), a.versionCmd(), a.mergeChildCmd(), a.followRunCmd(), a.squashMergeCmd(), a.centralCmd())
+	root.AddCommand(a.installCmd(), a.uninstallCmd(), a.selfUpdateCmd(), a.versionCmd(), a.configCmd(), a.mergeChildCmd(), a.followRunCmd(), a.squashMergeCmd(), a.centralCmd())
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
 		return &exitError{code: ExitUsage, msg: err.Error()}
 	})
