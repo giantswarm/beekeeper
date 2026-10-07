@@ -25,8 +25,8 @@ import (
 
 // Seams for the tests.
 var (
-	pullState     = github.PullState
-	baseRelease   = func(ctx context.Context, repo string, n int) (github.BaseRelease, error) {
+	pullState   = github.PullState
+	baseRelease = func(ctx context.Context, repo string, n int) (github.BaseRelease, error) {
 		return github.ReadBaseRelease(ctx, github.RunGH, repo, n)
 	}
 	devctlVersion = toolVersion
