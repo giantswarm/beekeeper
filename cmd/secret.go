@@ -276,8 +276,8 @@ with the value redacted, and its exit code.
 
 copy <ref> --to-secret <context>/<namespace>/<name>/<key> writes one value
 into a key of a Secret in a kind lab, kind-<cluster>, whose lab lease the
-caller holds: a server-side apply that creates the Secret when absent and
-keeps its other keys. kind's admin kubeconfig stays in beekeeper's memory
+caller holds: a patch of that one key that creates the Secret when absent
+and keeps its other keys. kind's admin kubeconfig stays in beekeeper's memory
 like the value; it answers the value's length. A context of a lab the
 caller holds no lease for is refused.
 
