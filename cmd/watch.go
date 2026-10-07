@@ -276,6 +276,9 @@ type watcher struct {
 	// stopped are the agents with a task this watch said have no running
 	// CLI, by session key, until their CLI runs again.
 	stopped map[string]bool
+	// rowlessSaid are the workers this watch said have no row in the
+	// desktop, by session, until they get one.
+	rowlessSaid map[string]bool
 	// waits are the reopen waits this watch said, by agent session and the
 	// wait's start, until they end.
 	waits map[string]time.Time
@@ -1050,40 +1053,57 @@ func (w *watcher) pollSessions(ctx context.Context, since time.Time, t *proc.Tab
 	w.staleLeases(ctx, sessions)
 	w.unownedPages(ctx, sessions)
 	w.runaways(sessions, t)
-	w.twins(sessions)
+	w.twins(sessions, t)
 	w.staleWatches(ctx, t)
 }
 
-// twinKey starts the condition key of a session that runs two CLIs.
-const twinKey = "twin "
+// twinKey starts the condition key of a session that runs two CLIs, and
+// twinGrace is how long the youngest of them runs before they count.
+const (
+	twinKey   = "twin "
+	twinGrace = 30 * time.Second
+)
 
 // twins says each session that runs more than one Claude Code CLI on its
 // session id (a headless turn beside its desktop CLI): both act on its task,
 // each unaware of the other, and a message by name reaches only one. One
 // TWIN CLI line naming every CLI's PID and directory, and its ENDED line once
-// one CLI is left.
-func (w *watcher) twins(sessions []*claude.Session) {
-	byID := map[string][]*claude.Session{}
+// one CLI is left. Discover keeps one session per id, so the CLIs are counted
+// in the process table; a restarted CLI overlaps its predecessor for a
+// moment, so CLIs count once the youngest has run for twinGrace.
+func (w *watcher) twins(sessions []*claude.Session, t *proc.Table) {
+	names := map[string]string{}
 	for _, s := range sessions {
 		if s.ID != "" && s.Harness == "" {
-			byID[s.ID] = append(byID[s.ID], s)
+			names[s.ID] = s.Name
+		}
+	}
+	byID := map[string][]*proc.Process{}
+	for _, p := range t.ByPID {
+		if p.Comm != claudeComm {
+			continue
+		}
+		for id := range names {
+			if resumes(p.Args, id) || startsSession(p, id) {
+				byID[id] = append(byID[id], p)
+			}
 		}
 	}
 	found := map[string]bool{}
 	for _, id := range slices.Sorted(maps.Keys(byID)) {
 		cli := byID[id]
-		if len(cli) < 2 {
+		if len(cli) < 2 || slices.ContainsFunc(cli, func(p *proc.Process) bool { return w.now.Sub(p.Start) < twinGrace }) {
 			continue
 		}
-		slices.SortFunc(cli, func(a, b *claude.Session) int { return cmp.Compare(a.PID, b.PID) })
+		slices.SortFunc(cli, func(a, b *proc.Process) int { return cmp.Compare(a.PID, b.PID) })
 		var each []string
-		for _, s := range cli {
-			each = append(each, fmt.Sprintf("PID %d in %s", s.PID, s.Cwd))
+		for _, p := range cli {
+			each = append(each, fmt.Sprintf("PID %d in %s", p.PID, t.Cwd(p.PID)))
 		}
 		key := twinKey + id
 		found[key] = true
 		w.emit(key, "TWIN CLI: %q runs %d CLIs on session %s (%s): both act on its task and a message by name reaches only one; stop the one that should not run",
-			cli[0].Name, len(cli), id, strings.Join(each, ", "))
+			names[id], len(cli), id, strings.Join(each, ", "))
 	}
 	w.clearMissing(twinKey, found)
 }
@@ -1559,6 +1579,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	w.stoppedAgents(st, sessions)
 	w.capacity(ctx, st, sessions)
 	w.importWaits(st)
+	w.rowlessAgents(st)
 	q := w.quietness(ctx, st, sessions)
 	w.handoversDue(st, sessions)
 	w.doctor(ctx)

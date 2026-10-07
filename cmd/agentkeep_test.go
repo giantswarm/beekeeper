@@ -199,7 +199,7 @@ func TestNextFreeCoversParkedAgentsItems(t *testing.T) {
 	for i := range st.Records {
 		st.Records[i].Issue = cands[i].Ref
 	}
-	res := nextFree(st, cands, me, alive, listed)
+	res := nextFree(st, cands, me, alive, listed, nil)
 	var got []string
 	for _, c := range res.Skipped {
 		got = append(got, c.Ref+": "+c.Skip)
@@ -209,7 +209,7 @@ func TestNextFreeCoversParkedAgentsItems(t *testing.T) {
 		t.Errorf("pick %v, skipped:\n%s\nwant:\n%s", res.Pick, strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 	st.Agents[0].Keep, st.Timers = nil, nil
-	if res = nextFree(st, cands, me, alive, listed); res.Pick == nil || res.Pick.Ref != cands[0].Ref {
+	if res = nextFree(st, cands, me, alive, listed, nil); res.Pick == nil || res.Pick.Ref != cands[0].Ref {
 		t.Errorf("nothing keeps them any more: pick %v, skipped %+v", res.Pick, res.Skipped)
 	}
 }
@@ -229,7 +229,7 @@ func TestNextFreeCoversABusyAgentWithoutACLI(t *testing.T) {
 		Records: []state.Record{{Session: busy.Party, Issue: cands[0].Ref, At: listed.Add(-time.Hour), Ended: listed.Add(-time.Minute)}},
 	}
 	gone := func(state.Party) bool { return false }
-	res := nextFree(st, cands, me, gone, listed)
+	res := nextFree(st, cands, me, gone, listed, nil)
 	want := `served by "Board pull 153" (busy, no CLI)`
 	if res.Pick == nil || res.Pick.Ref != cands[1].Ref || len(res.Skipped) != 1 || res.Skipped[0].Skip != want {
 		t.Errorf("pick %v, skipped %+v; want %s skipped with %q", res.Pick, res.Skipped, cands[0].Ref, want)
@@ -243,12 +243,12 @@ func TestNextFreeCoversABusyAgentWithoutACLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	only := cands[:1]
-	if res, err := claimNext(store, only, me, gone, listed, "picking up", func(string) bool { return true }); err != nil || res.Claimed || res.Pick != nil {
+	if res, err := claimNext(store, only, me, gone, listed, "picking up", func(string) bool { return true }, nil); err != nil || res.Claimed || res.Pick != nil {
 		t.Errorf("claim over a busy agent's item: %+v, %v", res, err)
 	}
 
 	st.Agents[0].Task, st.Agents[0].IdleSince = "", listed
-	if res = nextFree(st, cands, me, gone, listed); res.Pick == nil || res.Pick.Ref != cands[0].Ref {
+	if res = nextFree(st, cands, me, gone, listed, nil); res.Pick == nil || res.Pick.Ref != cands[0].Ref {
 		t.Errorf("the agent reported idle: pick %v, skipped %+v", res.Pick, res.Skipped)
 	}
 }

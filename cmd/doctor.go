@@ -302,6 +302,7 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 		for _, o := range planArchives(st, record, busy, a.now) {
 			rep.chores = append(rep.chores, "would "+o.String())
 		}
+		rep.chores = append(rep.chores, a.reopenRowless(ctx, st, t, record, r)...)
 		return rep, nil
 	}
 	failing := slices.ContainsFunc(rep.faults, func(f faultFinding) bool { return !f.healthy })
@@ -365,6 +366,7 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 			return []state.Event{event(r.by, "agents.retitle", "%s: %s", c.agent.Name, line)}, nil
 		})
 	}
+	rep.chores = append(rep.chores, a.reopenRowless(ctx, st, t, record, r)...)
 	return rep, nil
 }
 
@@ -455,8 +457,17 @@ line:
   desktop records it, up to 5 stewards' turns 10 minutes apart within 24h;
   so are archived the session an agents handover ended and the run of the
   supervisor or the guide a relay relieved, which frees its desktop CLI;
+  with no idle steward running, the session's own desktop CLI archives it,
+  warmed by showing the session in the desktop for a moment once the
+  person's typing pauses (a run that asks no steward counts no turn);
 - gives a session beekeeper started the roster name back when the desktop
   recorded another title, through a steward;
+- reopens a worker whose session the desktop never imported (no row in the
+  sidebar: its start ran at the desktop's cap of CLIs, say) and whose CLI
+  does not run, once the desktop runs fewer CLIs than its cap, in a
+  transient unit beekeeper-reopen-<id> that gives it its row and warms its
+  CLI (agent.reopen in the log); the watch says NO DESKTOP ROW once per
+  such worker meanwhile;
 - probes each fault of doctor.faults (a probe exits 0 while the fault is
   absent) and runs the remedy of a failing one that may run unattended,
   or the faults named with --fault; a fault still failing is one note for

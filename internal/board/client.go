@@ -391,6 +391,52 @@ func (c *Client) Open(ctx context.Context, ref string) (bool, error) {
 	return r.Repository.Item.State == "OPEN", nil
 }
 
+// Closes reads in one request the issues each pull request among refs
+// closes (its closing references, the Closes and Fixes keywords resolved
+// across repositories), keyed by the lower-cased ref as given. An issue
+// among refs, or a ref that is no issue, closes nothing.
+func (c *Client) Closes(ctx context.Context, refs []string) (map[string][]string, error) {
+	var q strings.Builder
+	var asked []string
+	for _, ref := range refs {
+		owner, repo, n, err := Ref(ref)
+		if err != nil {
+			continue
+		}
+		fmt.Fprintf(&q, "r%d:repository(owner:%s,name:%s){issueOrPullRequest(number:%d){...on PullRequest{closingIssuesReferences(first:20){nodes{number repository{nameWithOwner}}}}}}", len(asked), quote(owner), quote(repo), n)
+		asked = append(asked, strings.ToLower(ref))
+	}
+	if len(asked) == 0 {
+		return nil, nil
+	}
+	var r map[string]*struct {
+		Item *struct {
+			Closing struct {
+				Nodes []struct {
+					Number     int `json:"number"`
+					Repository struct {
+						NameWithOwner string `json:"nameWithOwner"`
+					} `json:"repository"`
+				} `json:"nodes"`
+			} `json:"closingIssuesReferences"`
+		} `json:"issueOrPullRequest"`
+	}
+	if err := c.graphql(ctx, &r, "query{"+q.String()+"}", nil); err != nil {
+		return nil, fmt.Errorf("the issues the served pull requests close: %w", err)
+	}
+	out := map[string][]string{}
+	for i, ref := range asked {
+		x := r[fmt.Sprintf("r%d", i)]
+		if x == nil || x.Item == nil {
+			continue
+		}
+		for _, n := range x.Item.Closing.Nodes {
+			out[ref] = append(out[ref], strings.ToLower(fmt.Sprintf("%s#%d", n.Repository.NameWithOwner, n.Number)))
+		}
+	}
+	return out, nil
+}
+
 // Moved is a move of an item to a status.
 type Moved struct {
 	Ref  string `json:"ref"`

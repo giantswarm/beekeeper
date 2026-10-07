@@ -36,6 +36,11 @@ const (
 // context.
 const inputPoll = 500 * time.Millisecond
 
+// inputSettle is how long the watch sleeps after the events it drained:
+// a pointer reports up to a thousand times a second, and only the arrival
+// counts, at a resolution far finer than desktop.typingQuiet.
+const inputSettle = 250 * time.Millisecond
+
 // evdevInput reads the input event devices: only when an event arrives,
 // never what it was. It grabs no device, so every other reader still gets
 // every event.
@@ -103,6 +108,7 @@ func (evdevInput) Watch(ctx context.Context) (func() time.Time, error) {
 					}
 				}
 			}
+			time.Sleep(inputSettle)
 		}
 	}()
 	return func() time.Time { return time.Unix(0, last.Load()) }, nil

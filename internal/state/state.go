@@ -714,6 +714,9 @@ type State struct {
 	// FinishedSeeded says the doctor owed the archives of all finished
 	// workers whose desktop record stayed unarchived, a CLI running or not.
 	FinishedSeeded bool `json:"finishedSeeded,omitempty"`
+	// WarmSeeded says the doctor owed those archives again once it warmed
+	// a finished session's own CLI to archive it, for those it gave up.
+	WarmSeeded bool `json:"warmSeeded,omitempty"`
 	// Declines are the stewards that declined an archive request, which
 	// the doctor asks for none for a while.
 	Declines []Decline `json:"declines,omitempty"`
