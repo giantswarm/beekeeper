@@ -482,3 +482,11 @@ func TestPrintNextPreviewListsTheFreeItemsAndCountsTheSkips(t *testing.T) {
 		t.Errorf("claim output:\n%s", s)
 	}
 }
+
+func TestOffBoardAsksAboutWhatIsNoBoardItem(t *testing.T) {
+	owners := map[string]string{"o/r#1": "you", "o/r#100": `"Worker one"`, "x/y#2": "note #1 (waits on Pat)"}
+	cands := []board.Candidate{{Item: board.Item{Ref: "O/R#1"}}, {Item: board.Item{Ref: "o/r#2"}}}
+	if got := offBoard(owners, cands); !slices.Equal(got, []string{"o/r#100", "x/y#2"}) {
+		t.Errorf("off the board %q, want the pull request and the other repository's issue", got)
+	}
+}

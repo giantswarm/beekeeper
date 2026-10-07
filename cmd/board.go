@@ -126,7 +126,7 @@ replaces the record. Exit 3 when no item is free or the claim is refused.`,
 				return err
 			}
 			sc := pickScope{me: me, alive: alive, listed: listed, owner: a.cfg.Board.Owner}
-			if sc.closes, err = cl.Closes(cmd.Context(), slices.Sorted(maps.Keys(boardOwners(st, sc)))); err != nil {
+			if sc.closes, err = cl.Closes(cmd.Context(), offBoard(boardOwners(st, sc), cands)); err != nil {
 				return err
 			}
 			var res nextResult
@@ -428,6 +428,16 @@ func boardOwners(st *state.State, sc pickScope) map[string]string {
 		named(strings.Join(append([]string{n.Text}, n.Refs...), " "), fmt.Sprintf("note #%d (waits on %s)", n.ID, cmp.Or(n.For, "the supervisor")))
 	}
 	return out
+}
+
+// offBoard are the refs of owners that are no candidate, sorted: a board
+// item is an issue, so the pull requests among what the sessions serve
+// and the tasks and notes name are among these, and Closes is asked about
+// these only.
+func offBoard(owners map[string]string, cands []board.Candidate) []string {
+	return slices.DeleteFunc(slices.Sorted(maps.Keys(owners)), func(ref string) bool {
+		return slices.ContainsFunc(cands, func(c board.Candidate) bool { return strings.EqualFold(c.Ref, ref) })
+	})
 }
 
 // coverClosed adds to owners every issue a pull request it names closes,
