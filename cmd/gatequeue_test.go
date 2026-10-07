@@ -73,6 +73,13 @@ func stubSelf(t *testing.T) (self string, launched func() childSpec) {
 	}
 }
 
+// busyLaneApp is queueApp with o/r#6 of a live gate waiting ahead.
+func busyLaneApp(t *testing.T) *app {
+	t.Helper()
+	return queueApp(t, state.Merge{Repo: scratchRepo, PR: 6, Lane: scratchRepo, By: state.Party{Name: "ahead"}, PID: sleeper(t),
+		Phase: state.Waiting, Joined: time.Now().Add(-time.Minute), Seen: time.Now()})
+}
+
 // sleeper is a live process that is not the test, ended with the test.
 func sleeper(t *testing.T) int {
 	t.Helper()
@@ -90,9 +97,7 @@ func sleeper(t *testing.T) int {
 func TestAMergeBehindABusyLaneWaitsOnInARunOfItsOwn(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	self, launched := stubSelf(t)
-	busy := sleeper(t)
-	a := queueApp(t, state.Merge{Repo: scratchRepo, PR: 6, Lane: scratchRepo, By: state.Party{Name: "ahead"}, PID: busy,
-		Phase: state.Waiting, Joined: time.Now().Add(-time.Minute), Seen: time.Now()})
+	a := busyLaneApp(t)
 
 	err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, false)
 	if Code(err) != ExitGateQueued {
@@ -116,6 +121,24 @@ func TestAMergeBehindABusyLaneWaitsOnInARunOfItsOwn(t *testing.T) {
 	st, _ := a.store.Read()
 	if i := slices.IndexFunc(st.Merges, func(m state.Merge) bool { return m.PR == 7 && m.Phase == state.Waiting }); i < 0 {
 		t.Errorf("the merge lost its place: %+v", st.Merges)
+	}
+}
+
+// A detached merge is the blocking one under the gate: --detach and its
+// --on-done never reach the run that merges, which the lane accounts for.
+func TestAGatedDetachedMergeRunsBlocking(t *testing.T) {
+	stubGitHub(t, github.Open, "")
+	self, launched := stubSelf(t)
+	a := busyLaneApp(t)
+
+	argv := mergeArgv(scratchRepo, "--detach", "--on-done", "beekeeper agents wake x")
+	if err := a.gate(context.Background(), argv, 0, false); Code(err) != ExitGateQueued {
+		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateQueued)
+	}
+	spec := launched()
+	want := append([]string{self, "gate", "--queued", "--wait", "1h0m0s", "--"}, mergeArgv(scratchRepo)...)
+	if !slices.Equal(spec.Argv, want) || !slices.Equal(spec.Command, mergeArgv(scratchRepo)) {
+		t.Errorf("argv %q, command %q, want %q", spec.Argv, spec.Command, want)
 	}
 }
 
