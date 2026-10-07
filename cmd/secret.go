@@ -428,6 +428,8 @@ fingerprint. Without --vault the SOPS file is the value's only home: no
 vault holds a copy. A plaintext Kubernetes Secret without values (apiVersion,
 kind, metadata, an empty stringData), a skeleton, becomes the SOPS file with
 the value in it; --name and --namespace start an absent file as that Secret.
+Any other plaintext file (a ConfigMap, a Secret holding a value, no YAML
+mapping) is refused by what it is, before sops sees it.
 A Secret's value goes under stringData unless the path names data or
 stringData. A path the file's .sops.yaml creation rule would leave in
 plaintext is refused before any value is drawn, naming the rule.

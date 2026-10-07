@@ -1,6 +1,7 @@
 // Package secrettest is a fake sops and op for the tests of beekeeper
-// secret: its "encryption" is base64 behind a header, so a test sees a
-// plaintext value on disk as one, and its vault is a map.
+// secret: its "encryption" is base64 under a sops metadata block, so a
+// test sees a plaintext value on disk as one and secret takes the file for
+// a sops file, and its vault is a map.
 package secrettest
 
 import (
@@ -18,7 +19,9 @@ import (
 	"sync"
 )
 
-const header = "FAKESOPS\n"
+// header is the fake ciphertext's sops metadata block: the base64 of the
+// plaintext follows it as the block's one value.
+const header = "sops:\n  fake: "
 
 const (
 	create = "create"
