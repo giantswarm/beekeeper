@@ -777,7 +777,10 @@ same file passed to `claude --settings` holds one session to it, to try a change
 - **Lab kubeconfigs.** The machine kubeconfig stays denied, and kind needs the container runtime's
   socket, so a lab's kubeconfig exists only while its lease is held: the claim (or `beekeeper lease
   kubeconfig <lab>` once the lab runs) has the broker write it into the lease for the session that holds
-  it, and release takes it away. The lab's API server goes into `sandbox.domains` as `127.0.0.1:<port>`,
+  it, and release takes it away. The broker's calls run with its unit's PATH, the service manager's,
+  so `kind` and the credential tools of a brokered `secret` call are found there or in the Go tool
+  directories: beside the beekeeper binary, `$GOBIN`, `$GOPATH/bin`, `~/go/bin` and `~/.go/bin`.
+  The lab's API server goes into `sandbox.domains` as `127.0.0.1:<port>`,
   so its port is fixed (agentlab's `apiServerPort`). Every HTTP client exempts loopback from the proxy
   environment, so the kubeconfig points the lab's cluster at the sandbox's SOCKS proxy (`proxy-url`),
   which ends at the egress proxy as an opaque tunnel held to the same allow list. In a session that
