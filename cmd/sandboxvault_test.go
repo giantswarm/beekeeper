@@ -17,6 +17,7 @@ import (
 	"filippo.io/age"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -24,6 +25,7 @@ import (
 
 const (
 	testVaultSession = "OP_SESSION_TESTACCOUNT"
+	testVaultToken   = "tok"
 	testVaultRef     = "op://Shared/i/f"
 )
 
@@ -57,7 +59,7 @@ func TestBrokeredVaultSignsInOnce(t *testing.T) {
 		if err := <-approved; err != nil {
 			return "", "", err
 		}
-		return testVaultSession, "tok", nil
+		return testVaultSession, testVaultToken, nil
 	}}
 	var mu sync.Mutex
 	var envs [][]string
@@ -214,7 +216,7 @@ func TestBrokeredVaultForAnAgeIdentityInTheVault(t *testing.T) {
 		{Recipient: inFile.Recipient().String(), Ref: "file:///nowhere/identity.txt"},
 	}
 	k := secret.NewKeeper(time.Hour, nil)
-	_ = k.Unlock(testVaultSession, "tok", time.Now())
+	_ = k.Unlock(testVaultSession, testVaultToken, time.Now())
 	v := &vaultBroker{k: k, wait: time.Second, signin: func(context.Context) (string, string, error) {
 		t.Error("signed in with an unlocked keeper")
 		return "", "", errors.New("no sign-in")
@@ -246,7 +248,7 @@ func TestBrokeredVaultForAnAgeIdentityInTheVault(t *testing.T) {
 func TestTendVault(t *testing.T) {
 	now := time.Date(2026, 10, 5, 22, 10, 0, 0, time.UTC)
 	k := secret.NewKeeper(time.Hour, nil)
-	_ = k.Unlock(testVaultSession, "tok", now)
+	_ = k.Unlock(testVaultSession, testVaultToken, now)
 	signedIn := make(chan struct{}, 1)
 	v := &vaultBroker{k: k, wait: time.Second, signin: func(context.Context) (string, string, error) {
 		signedIn <- struct{}{}
@@ -342,8 +344,8 @@ func TestWatchSaysTheVault(t *testing.T) {
 // The sign-in command's stdout is read into memory as op signin prints it;
 // a failure names the command's last stderr line.
 func TestRunSignin(t *testing.T) {
-	name, token, err := runSignin(context.Background(), []string{"sh", "-c", `echo signing in >&2; echo 'export ` + testVaultSession + `="tok"'`})
-	if err != nil || name != testVaultSession || token != "tok" {
+	name, token, err := runSignin(context.Background(), []string{"sh", "-c", `echo signing in >&2; echo 'export ` + testVaultSession + `="` + testVaultToken + `"'`})
+	if err != nil || name != testVaultSession || token != testVaultToken {
 		t.Fatalf("runSignin: %q, %q, %v", name, token, err)
 	}
 	_, _, err = runSignin(context.Background(), []string{"sh", "-c", "echo 'op-unlock: no terminal to ask' >&2; exit 2"})
@@ -368,6 +370,220 @@ func TestWatchSaysAFailedSignin(t *testing.T) {
 	w.vaultWaits()
 	if l := out.String(); !strings.Contains(l, "VAULT SIGN-IN FAILED: op-unlock: exit status 2: no terminal to ask") || !strings.Contains(l, "ENDED VAULT SIGN-IN FAILED") {
 		t.Errorf("a failed sign-in: %s", l)
+	}
+}
+
+// A sign-in that fails for a reason that passes by itself (the network) is
+// tried again after the backoff, each failure one status for the watch,
+// and nothing reaches the person: no note, no final failure.
+func TestVaultSigninRetriesATransientFailure(t *testing.T) {
+	a := vaultApp(t, time.Second)
+	k := secret.NewKeeper(time.Hour, nil)
+	var tries atomic.Int32
+	var mu sync.Mutex
+	var statuses []string
+	var gaveUp []secret.SigninCause
+	v := &vaultBroker{k: k, wait: 5 * time.Second, backoff: []time.Duration{time.Millisecond},
+		signin: func(context.Context) (string, string, error) {
+			if tries.Add(1) < 3 {
+				return "", "", errors.New("op-unlock: exit status 1: dial tcp: lookup my.1password.com: no such host")
+			}
+			return testVaultSession, testVaultToken, nil
+		},
+		retrying: func(s string) { mu.Lock(); statuses = append(statuses, s); mu.Unlock() },
+		failed:   func(c secret.SigninCause, _ int, _ error) { mu.Lock(); gaveUp = append(gaveUp, c); mu.Unlock() },
+	}
+	v.ask(context.Background())
+	wctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := k.Wait(wctx); err != nil {
+		t.Fatalf("not unlocked after the retries: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if tries.Load() != 3 || len(gaveUp) != 0 {
+		t.Errorf("%d tries, gave up %v", tries.Load(), gaveUp)
+	}
+	if len(statuses) != 2 || !strings.Contains(statuses[0], "the network did not reach 1Password (op-unlock: exit status 1: dial tcp: lookup my.1password.com: no such host); try 2 at ") ||
+		!strings.Contains(statuses[1], "try 3 at ") {
+		t.Errorf("statuses %q", statuses)
+	}
+	st, err := a.store.Read()
+	if err != nil || len(st.Notes) != 0 {
+		t.Errorf("notes after a transient failure: %+v, %v", st.Notes, err)
+	}
+}
+
+// A password 1Password rejects while the credential store answered survives
+// the retries and reaches the person: one sign-in note, whose probe is
+// beekeeper secret status, filed once; the failure is in the event log.
+func TestVaultSigninRejectedReachesThePerson(t *testing.T) {
+	a := vaultApp(t, time.Second)
+	a.cfg.Guide.Person = personTimo
+	k := secret.NewKeeper(time.Hour, nil)
+	var tries atomic.Int32
+	gaveUp := make(chan secret.SigninCause, 2)
+	const exe = "/opt/bee keeper/beekeeper"
+	v := &vaultBroker{k: k, wait: 200 * time.Millisecond, backoff: []time.Duration{10 * time.Millisecond},
+		store: func(context.Context) (secret.StoreState, error) { return secret.StoreReady, nil },
+		signin: func(context.Context) (string, string, error) {
+			tries.Add(1)
+			return "", "", errors.New("op-unlock: exit status 1: op-unlock: 1Password rejected the password from entry 'x' (rotated? update the entry)")
+		},
+		failed: func(c secret.SigninCause, n int, err error) {
+			a.vaultSigninFailed(exe, c, n, err)
+			gaveUp <- c
+		},
+	}
+	gaveUpWith := func() secret.SigninCause {
+		t.Helper()
+		select {
+		case c := <-gaveUp:
+			return c
+		case <-time.After(5 * time.Second):
+			t.Fatal("the sign-in never gave up")
+			return secret.SigninUnknown
+		}
+	}
+	v.ask(context.Background())
+	if c := gaveUpWith(); c != secret.SigninRejected {
+		t.Fatalf("gave up with %s", c)
+	}
+	if n := tries.Load(); n < 2 {
+		t.Errorf("%d tries, want retries before the person hears", n)
+	}
+	st, err := a.store.Read()
+	if err != nil || len(st.Notes) != 1 {
+		t.Fatalf("notes %+v, %v", st.Notes, err)
+	}
+	n := st.Notes[0]
+	if n.Kind != noteLogin || n.For != personTimo || n.Until != guard.ShellQuote(exe)+" secret status" || n.By != vaultParty || n.Default == "" ||
+		!strings.Contains(n.Text, "1Password rejected the password") || !strings.Contains(n.Text, "rotated? update the entry") {
+		t.Errorf("the note: %+v", n)
+	}
+	// a second sign-in that fails the same way files no second note
+	v.ask(context.Background())
+	gaveUpWith()
+	if st, _ = a.store.Read(); len(st.Notes) != 1 {
+		t.Errorf("notes after the second failure: %+v", st.Notes)
+	}
+	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "vault.signin" })
+	if err != nil || len(evs) != 2 || !strings.HasPrefix(evs[0].Detail, "failed (1Password rejected the password) after ") || !strings.HasSuffix(evs[0].Detail, "(rotated? update the entry)") {
+		t.Errorf("the log: %+v, %v", evs, err)
+	}
+}
+
+// Within the boot grace the keeper waits for the credential store to come up
+// before it runs the command, and a locked store is waited for at any time:
+// once the store answers unlocked the sign-in runs, once.
+func TestVaultSigninWaitsForTheCredentialStore(t *testing.T) {
+	for name, tc := range map[string]struct {
+		uptime time.Duration
+		states []secret.StoreState
+	}{
+		"not up yet after the boot": {14 * time.Second, []secret.StoreState{secret.StoreAbsent, secret.StoreAbsent, secret.StoreReady}},
+		"locked":                    {3 * time.Hour, []secret.StoreState{secret.StoreLocked, secret.StoreReady}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			k := secret.NewKeeper(time.Hour, nil)
+			var looks, signins atomic.Int32
+			var mu sync.Mutex
+			var statuses []string
+			v := &vaultBroker{k: k, wait: 5 * time.Second, backoff: []time.Duration{time.Millisecond}, storeEvery: time.Millisecond,
+				uptime: func() (time.Duration, error) { return tc.uptime, nil },
+				store: func(context.Context) (secret.StoreState, error) {
+					return tc.states[min(int(looks.Add(1)), len(tc.states))-1], nil
+				},
+				signin: func(context.Context) (string, string, error) {
+					if int(looks.Load()) != len(tc.states) {
+						t.Errorf("signed in after %d looks at the store, want %d", looks.Load(), len(tc.states))
+					}
+					signins.Add(1)
+					return testVaultSession, testVaultToken, nil
+				},
+				retrying: func(s string) { mu.Lock(); statuses = append(statuses, s); mu.Unlock() },
+			}
+			v.ask(context.Background())
+			wctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := k.Wait(wctx); err != nil {
+				t.Fatalf("not unlocked: %v", err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if signins.Load() != 1 || len(statuses) != 1 || !strings.HasPrefix(statuses[0], "waiting for the credential store: "+tc.states[0].String()+"; looking every ") {
+				t.Errorf("%d sign-ins, statuses %q", signins.Load(), statuses)
+			}
+		})
+	}
+}
+
+// An absent store after the boot grace holds nothing: it may be no Secret
+// Service at all, and the command runs at once.
+func TestVaultSigninRunsWithoutASecretServiceAfterTheBoot(t *testing.T) {
+	k := secret.NewKeeper(time.Hour, nil)
+	var looks atomic.Int32
+	v := &vaultBroker{k: k, wait: time.Second, storeEvery: time.Millisecond,
+		uptime: func() (time.Duration, error) { return 3 * time.Hour, nil },
+		store:  func(context.Context) (secret.StoreState, error) { looks.Add(1); return secret.StoreAbsent, nil },
+		signin: func(context.Context) (string, string, error) { return testVaultSession, testVaultToken, nil },
+	}
+	v.ask(context.Background())
+	wctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := k.Wait(wctx); err != nil || looks.Load() != 1 {
+		t.Errorf("unlocked %v after %d looks at the store", err, looks.Load())
+	}
+}
+
+// A store that never comes up within the window is the failure's cause,
+// the command never ran, and no note asks the person.
+func TestVaultSigninGivesUpOnAStoreThatNeverComes(t *testing.T) {
+	a := vaultApp(t, time.Second)
+	k := secret.NewKeeper(time.Hour, nil)
+	gaveUp := make(chan error, 1)
+	var cause secret.SigninCause
+	v := &vaultBroker{k: k, wait: 100 * time.Millisecond, storeEvery: time.Millisecond,
+		uptime: func() (time.Duration, error) { return 10 * time.Second, nil },
+		store:  func(context.Context) (secret.StoreState, error) { return secret.StoreAbsent, nil },
+		signin: func(context.Context) (string, string, error) {
+			t.Error("signed in without the store")
+			return "", "", errors.New("no store")
+		},
+		failed: func(c secret.SigninCause, n int, err error) {
+			cause = c
+			a.vaultSigninFailed("/x/beekeeper", c, n, err)
+			gaveUp <- err
+		},
+	}
+	v.ask(context.Background())
+	select {
+	case err := <-gaveUp:
+		if cause != secret.SigninStoreAbsent || !strings.HasPrefix(err.Error(), "no credential store answers on the session bus: waited ") {
+			t.Errorf("gave up with %s: %v", cause, err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the sign-in never gave up")
+	}
+	if st, _ := a.store.Read(); len(st.Notes) != 0 {
+		t.Errorf("a note for a store that is not up: %+v", st.Notes)
+	}
+}
+
+// The watch says a sign-in the broker retries, and its end once it unlocked.
+func TestWatchSaysARetriedSignin(t *testing.T) {
+	a := vaultApp(t, time.Minute)
+	var out bytes.Buffer
+	a.out = &out
+	w := &watcher{app: a, last: map[string]time.Time{}}
+	statePath, _ := secret.StatePath()
+	_ = secret.WriteState(statePath, secret.VaultState{Retrying: "the network did not reach 1Password (no such host); try 2 at 14:25:51"})
+	w.vaultWaits()
+	_ = secret.WriteState(statePath, secret.VaultState{Unlocked: true, Since: time.Now(), Until: time.Now().Add(time.Hour)})
+	w.vaultWaits()
+	if l := out.String(); !strings.Contains(l, "VAULT SIGN-IN RETRYING: the network did not reach 1Password (no such host); try 2 at 14:25:51") ||
+		!strings.Contains(l, "ENDED VAULT SIGN-IN RETRYING") || strings.Contains(l, "SIGN-IN FAILED") {
+		t.Errorf("a retried sign-in: %s", l)
 	}
 }
 

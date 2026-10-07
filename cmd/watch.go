@@ -1218,13 +1218,16 @@ const (
 	vaultUnlockedKey = "vault-unlocked"
 	vaultReadKey     = "vault-read"
 	vaultSigninKey   = "vault-signin"
+	vaultRetryKey    = "vault-retry"
 	vaultDroppedKey  = "vault-dropped"
 )
 
 // vaultWaits says the vault's state (secret.session): one VAULT UNLOCKED
 // line while the broker holds the session, until when, and its ENDED line
-// when the broker forgets it; a VAULT SIGN-IN FAILED line with the broker's
-// reason; a VAULT SESSION DROPPED line while a session op stopped taking
+// when the broker forgets it; a VAULT SIGN-IN RETRYING line while the
+// broker waits for the credential store or tries a failed sign-in again,
+// and a VAULT SIGN-IN FAILED line with the broker's reason once it gave
+// up; a VAULT SESSION DROPPED line while a session op stopped taking
 // waits for its new sign-in; one VAULT LOCKED line for each call that waits on the sign-in,
 // and once it goes on its ENDED line, or a line that it timed out with the
 // vault still locked. Nothing asks the person.
@@ -1243,6 +1246,7 @@ func (w *watcher) vaultWaits() {
 	}
 	w.check(vaultUnlockedKey, st.Unlocked, "VAULT UNLOCKED: the broker holds the vault session since %s until %s",
 		st.Since.Local().Format("15:04"), st.Until.Local().Format("15:04"))
+	w.check(vaultRetryKey, st.Retrying != "", "VAULT SIGN-IN RETRYING: %s", st.Retrying)
 	w.check(vaultSigninKey, st.Error != "", "VAULT SIGN-IN FAILED: %s", st.Error)
 	w.check(vaultDroppedKey, st.Dropped != "", "VAULT SESSION DROPPED at %s: op no longer took it (%s); the broker signs in again",
 		st.DroppedAt.Local().Format("15:04"), st.Dropped)

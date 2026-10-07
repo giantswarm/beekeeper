@@ -506,6 +506,7 @@ repository matches.
 | `fingerprint <ref>` | HMAC-SHA256 of each value under the value scanner's key (`scan/key`), cut to 16 hex digits: equal values, equal fingerprints; only beekeeper can make one. |
 | `copy <src.sops.yaml> <dst.sops.yaml> [--name n] [--namespace ns]` | A new SOPS file with src's values, encrypted under dst's rules; `--name` and `--namespace` rewrite a Kubernetes object's metadata. It answers each key and its length (a Secret's `data` decoded); dst must not exist. |
 | `copy <ref> <file#path>` | One value into a SOPS path, creating the file or the key when absent, the file's other values kept. |
+| `copy <ref>=<path>… <new-file> [--name n --namespace ns]` | Several values (vault fields, SOPS paths) into a new SOPS file in one encryption: only the recipients of the nearest `.sops.yaml` are needed, nothing is decrypted, so no age identity of the new file. `--name` and `--namespace` start it as that Secret, a bare path under `stringData`. Answers key names and lengths. |
 | `copy <ref> -- <consumer…>` | One value on the stdin of `gh secret set`, `garage json-api <endpoint> -`, a command with `--password-stdin` or one with `--secret <name>=-`, or of one of them in a pod through `kubectl exec -i --context <context> <pod> -- <consumer…>` (no TTY, which would echo stdin, no `-v`, never a context of `kube.production`): the value travels on the exec stream, never on an argv. Any other consumer is refused. `--stdin-json '<object>' --stdin-field <key>` hands the consumer that JSON object with the value at `<key>` instead of the bare value, for a command that reads a JSON request, such as Garage's `garage json-api ImportKey -` with `--stdin-json '{"accessKeyId":"GK…","name":"app"}' --stdin-field secretAccessKey`; `kubectl exec` starts `/garage` itself, so an image without a shell takes it, and the CLI reaches the admin API over RPC with the pod's own configuration, no admin token. It answers the consumer's exit code and its output with the value redacted (its JSON-escaped and base64 forms included). |
 | `copy <ref> --to-secret <context>/<namespace>/<name>/<key>` | One value into a key of a Secret in a kind lab (`kind-<cluster>`) whose lab lease (`labs`) the caller holds: a server-side apply under the field manager `beekeeper-secret` that creates the Secret when absent and keeps its other keys, through the admin kubeconfig `kind get kubeconfig` answers, which stays in beekeeper's memory like the value. Any other context, and a lab the caller does not hold, is refused (exit 3). It answers the value's length. |
 | `set <file> <path> --generate [--vault op://…] [--to-secret <context>/<namespace>/<name>/<key> \| -- <consumer…>]` | A new value (`--length`, 32; `--charset`, `alnum`, `hex` or `ascii`), drawn in beekeeper's process, into the SOPS path (the file or key created when absent); it answers the fingerprint. A plaintext Kubernetes Secret without values (apiVersion, kind, metadata, an empty `stringData`), a skeleton, becomes the SOPS file, encrypted to its `.sops.yaml` recipients; any other plaintext file (a ConfigMap, a Secret holding a value, no YAML mapping) is refused by what it is, naming the way on, before sops sees it. A Secret's value goes under `stringData` unless the path names `data` or `stringData` (`set <skeleton> default` writes `stringData.default`). A path the file's `.sops.yaml` creation rule would leave in plaintext (outside its `encrypted_regex` or `encrypted_suffix`, matching its `unencrypted_regex` or `unencrypted_suffix`, or under a rule that decides by comments) is refused before any value is drawn, naming the rule. `--name` and `--namespace` start an absent file as that Secret (`type: Opaque`), ready for Flux. Without `--vault` the SOPS file is the value's only home, for a credential no vault may hold. `--vault` writes the vault field first (the item or field created when absent, the item passed as JSON on stdin, never on a command line). `--to-secret` (a held lab, as for `copy`) or a consumer (the `copy` consumers, its output redacted and its exit code answered) receives the same value in the same call, after the SOPS path; a delivery that fails leaves the value in the SOPS path, for `copy` to finish. A refused lab or consumer is refused before any value is drawn. |
@@ -597,11 +598,28 @@ in", is dropped and signed in again at once through `secret.signinCommand`, the 
 with the new session; the journal and the watch (`VAULT SESSION DROPPED at <t>: op no longer took it
 (<reason>); the broker signs in again`, ended by the new sign-in) say so.
 
+A sign-in that fails is tried again, after 30 s, 1 m, 2 m and then every 5 m, within `secret.unlockWait`
+of the ask, each try bounded by two minutes. Before each try the broker asks the session bus for the
+person's credential store (the freedesktop Secret Service: KeePassXC, GNOME Keyring, KWallet) and waits,
+looking every 15 s, while it is locked and, within ten minutes of the boot, while nothing serves it yet;
+later an absent store may be no Secret Service at all, and the command runs. The journal names each
+failure's cause (`the credential store is locked`, `no credential store answers on the session bus`,
+`the network did not reach 1Password`, `the sign-in did not finish in time`, `1Password rejected the
+password`) with the command's last line, and the watch says `VAULT SIGN-IN RETRYING: <cause> (<line>);
+try <n> at <t>`, or `… waiting for the credential store: <state>`, until the sign-in unlocks or gives
+up. A sign-in that gives up is `VAULT SIGN-IN FAILED: <cause> after <n> tries: <reason>` and a
+`vault.signin` line in `beekeeper log`; the broker signs in again at the next call on the vault. Only a
+password 1Password rejected while the store answered unlocked (or could not be asked) is for the person:
+one sign-in note for `guide.person`, which closes by itself once `beekeeper secret status` finds the
+broker holding a session (exit 78 while it holds none). A store that was locked or absent is the cause
+whatever the command said: a helper that read no password reports what 1Password said to the empty one,
+and a note asking the person to fix an entry that is fine would be wrong.
+
 While the broker holds no session, a call on the vault prints `vault locked: waiting for the broker's
 sign-in` and waits up to `secret.unlockWait` (8 m; the hook gives such a call the Bash tool's 10
 minutes), then exits 78. Nothing asks the person. The watch says `VAULT UNLOCKED: the broker holds the
 vault session since <t> until <t>` for the session's lifetime and an ENDED line when the broker
-forgets it; `VAULT SIGN-IN FAILED: <reason>` with the command's last line; `VAULT LOCKED: <who> waits
+forgets it; `VAULT SIGN-IN FAILED: <reason>` once a sign-in gave up; `VAULT LOCKED: <who> waits
 on <ref>` for each waiting call, with an ENDED line once it goes on, or `VAULT LOCKED: <who>'s call on
 <ref> timed out …, still locked` when it gives up. `beekeeper status` names the waiting sessions.
 `beekeeper secret lock` forgets the session at once. The broker runs on Linux only, so
@@ -1889,7 +1907,7 @@ The organisation and desk keys, and their defaults:
 | `secret.session` | `false` | Read and write `secret.vault` through the person's `op` session, held by the broker alone, instead of a service account ([The vault session](#the-vault-session)) |
 | `secret.signinCommand` | none | The command the broker runs to sign in to the vault without the person; it prints the session as `op signin` does ([The vault session](#the-vault-session)) |
 | `secret.sessionLifetime` | `12h` | How long the broker holds the vault session after a sign-in ([The vault session](#the-vault-session)) |
-| `secret.unlockWait` | `8m` | How long a call on the vault waits for the broker's sign-in ([The vault session](#the-vault-session)) |
+| `secret.unlockWait` | `8m` | How long a call on the vault waits for the broker's sign-in, and how long one sign-in waits for the credential store and tries again after a failure ([The vault session](#the-vault-session)) |
 | `secret.ageIdentities` | none | Age identities in the shared vault, in an identity file (`file://`) or in the person's own credential store (`store://`), by recipient or `pathRegex`, for the SOPS files no local sops identity decrypts ([Age identities](#age-identities)) |
 | `secret.store.read`, `secret.store.search` | none | The person's own commands that read an entry of their credential store and search it by an age recipient, for `store://` age identities ([Age identities](#age-identities)) |
 | `secret.files` | none | Files known to hold secret values (`~/` and globs allowed) that no agent reads whole, beside the built-in list ([Secret reads](#secret-reads)) |
