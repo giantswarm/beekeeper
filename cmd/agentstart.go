@@ -43,9 +43,17 @@ const (
 	focusWait = 15 * time.Second
 	// twinWait bounds the wait for the CLI the desktop warms for an import.
 	twinWait = 15 * time.Second
-	// stopPostWait bounds the reopen after the first turn: the desktop's
-	// CLI, the retitle and model requests and the desktop recording them.
+	// stopPostWait bounds the reopen's work past its wait for the person:
+	// the desktop's CLI, the retitle and model requests and the desktop
+	// recording them. With reopenAwayWait it is the reopen unit's runtime
+	// cap (RuntimeMaxSec).
 	stopPostWait = 10 * time.Minute
+	// turnStopWait bounds the stop of a start's or wake's unit: claude -p
+	// ends on SIGTERM within seconds, KillMode=process signals only it, and
+	// the stop-post starts the reopen's unit and returns. Under the user
+	// manager's default stop timeout (90 s upstream), so a shutdown never
+	// waits on a turn; what runs past it is killed.
+	turnStopWait = time.Minute
 	// importAwayWait bounds how long a start's import waits for the person
 	// to leave the desktop's window; past it the reopen after the first
 	// turn imports the session.
@@ -350,7 +358,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if err != nil {
 		return startedAgent{}, err
 	}
-	if err := launch(unit, dir, a.explicitConfig(), []string{self, agentsName, reopenName, id}, headlessStartArgv(bin, id, sp.name, sp.model, sp.brief)); err != nil {
+	if err := launch(unit, dir, a.explicitConfig(), reopenStopPost(self, id), headlessStartArgv(bin, id, sp.name, sp.model, sp.brief)); err != nil {
 		return startedAgent{}, fmt.Errorf("starting %s: %w (the start stays recorded; beekeeper agents remove %q takes it off the roster)", sp.name, err, sp.name)
 	}
 	if err := awaitReply(ctx, a.cfg.Claude.ProjectsDir, id, func() bool { return unitEnded(ctx, unit) }, replyQuiet, replyWait); err != nil {
@@ -730,29 +738,77 @@ func (a *app) showBriefly(ctx context.Context, d desk, url, host, follow string,
 	return prev, nil
 }
 
-// agentReopenCmd is the unit's ExecStopPost: once a start's first turn has
-// ended, it shows the session in the desktop for a moment, which warms the
-// desktop's CLI of it (endDesktopTwin stopped the one the import warmed), so
-// the session is a peer again and takes follow-ups by message. Only a
-// session still on the roster is reopened: a hand-over or agents remove
-// took the others off, and a handed-over session must not come back. A
-// wake names the desktop id of any roster agent it resumed.
+// agentReopenCmd runs once a start's or wake's headless turn has ended: it
+// shows the session in the desktop for a moment, which warms the desktop's
+// CLI of it (endDesktopTwin stopped the one the import warmed), so the
+// session is a peer again and takes follow-ups by message. The turn's unit
+// runs it as its ExecStopPost with --detach, which starts the reopen in a
+// unit of its own (beekeeper-reopen-<id>-…, bounded by RuntimeMaxSec) and
+// returns at once: the wait for the person is no part of a unit's stop,
+// which a shutdown waits for (the doctor starts such a unit for a rowless
+// worker too); --turn names the turn's unit, whose leftover processes the
+// reopen reads. Only a session still on the roster is reopened: a hand-over
+// or agents remove took the others off, and a handed-over session must not
+// come back. A wake names the desktop id of any roster agent it resumed.
 func (a *app) agentReopenCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:    "reopen <session id | local_ desktop id>",
+	var detach bool
+	var turn string
+	c := &cobra.Command{
+		Use:    "reopen [--detach | --turn <unit>] <session id | local_ desktop id>",
 		Short:  "Warm the desktop's CLI of a started session once its first turn ended",
 		Hidden: true,
 		Args:   cobra.ExactArgs(1),
-		RunE:   func(cmd *cobra.Command, args []string) error { return a.reopenSession(cmd.Context(), args[0]) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if detach {
+				return a.detachReopen(args[0])
+			}
+			return a.reopenSession(cmd.Context(), args[0], turn)
+		},
 	}
+	c.Flags().BoolVar(&detach, detachFlag, false, "start the reopen in a transient unit of its own and return")
+	c.Flags().StringVar(&turn, turnFlag, "", "the start's or wake's unit whose turn ended")
+	return c
+}
+
+// reopenStopPost is a start's or wake's ExecStopPost: agents reopen --detach
+// of arg (the session id, or a wake's local_ desktop id), which starts the
+// reopen in a unit of its own and returns.
+func reopenStopPost(self, arg string) []string {
+	return []string{self, agentsName, reopenName, "--" + detachFlag, arg}
+}
+
+// detachReopen is the stop-post of a start's or wake's unit: it starts the
+// reopen of arg in a unit of its own, in the turn's working directory, and
+// names the turn's unit (this process's own) for its leftover processes. A
+// reopen unit that does not start (at a shutdown, whose transaction refuses
+// a start) is a missed reopen in the event log, never a failed unit.
+func (a *app) detachReopen(arg string) error {
+	dir, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	id := strings.TrimPrefix(arg, "local_")
+	unit := reopenUnit(id)
+	if err := a.launchReopen(unit, dir, arg, ownUnit()); err != nil {
+		name := id
+		if st, err := a.store.Read(); err == nil {
+			if n, ok := reopens(st, arg); ok {
+				name = n
+			}
+		}
+		return a.reopenMissed(name, fmt.Errorf("starting its reopen %s: %w", unit, err))
+	}
+	_, err = fmt.Fprintf(a.out, "reopen: %s shows %s in the desktop once its turn's unit stopped\n", unit, id)
+	return err
 }
 
 // reopenSession shows the session of a start or wake (its session id, or a
-// desktop id local_…) in the desktop once its headless turn ended. Its wait
-// for the person to leave the desktop's window is recorded on the agent
-// (agents, the watch's IMPORT WAITS) while it runs, and skipped for an agent
-// that asked for a desktop turn.
-func (a *app) reopenSession(ctx context.Context, arg string) error {
+// desktop id local_…) in the desktop once its headless turn ended; turn is
+// the start's or wake's unit that ran the turn, empty for a doctor's
+// reopen. Its wait for the person to leave the desktop's window is recorded
+// on the agent (agents, the watch's IMPORT WAITS) while it runs, and skipped
+// for an agent that asked for a desktop turn.
+func (a *app) reopenSession(ctx context.Context, arg, turn string) error {
 	// A wake names the desktop id (local_…), a start its session id, which
 	// is the desktop id's too.
 	id := strings.TrimPrefix(arg, "local_")
@@ -771,7 +827,7 @@ func (a *app) reopenSession(ctx context.Context, arg string) error {
 	}
 	// A headless turn that ended on a background wait, its task open, is
 	// resumed headless instead: the wait's completion notice never wakes it.
-	if resumed, err := a.resumeOnWait(ctx, id); resumed || err != nil {
+	if resumed, err := a.resumeOnWait(ctx, id, turn); resumed || err != nil {
 		if err != nil {
 			return a.reopenMissed(name, err)
 		}
@@ -1187,17 +1243,22 @@ func agentArgv(bin, id, name, model, brief string, flags ...string) []string {
 	return append(argv, "--", brief)
 }
 
-// launch runs argv in a transient user service: it gets the user manager's
-// environment, not the caller's session variables, and outlives the caller;
-// a configuration file the caller named is passed on as $BEEKEEPER_CONFIG,
-// a scratch state it keeps as $BEEKEEPER_STATE_FROM, env (KEY=value) is added, and stopPost runs once argv has ended.
-// KillMode=process leaves what the turn started running when it ends, as a
-// terminal would.
+// launch runs argv, a headless turn, in a transient user service (startUnit)
+// with env (KEY=value) added; stopPost runs once argv has ended, within the
+// unit's stop budget of turnStopWait, which a stop-post that returns at once
+// (reopenStopPost) keeps. KillMode=process leaves what the turn started
+// running when it ends, as a terminal would.
 func launch(unit, dir, config string, stopPost, argv []string, env ...string) error {
 	// A session beekeeper stops (SIGTERM) ended as asked, not failed.
-	u := platform.Unit{Name: unit, Dir: dir, Argv: argv, KeepChildren: true, TermIsSuccess: true, StopPost: stopPost,
-		// The reopen may wait for the session to retitle itself.
-		StopTimeout: reopenAwayWait + stopPostWait}
+	return startUnit(platform.Unit{Name: unit, Dir: dir, Argv: argv, KeepChildren: true, TermIsSuccess: true, StopPost: stopPost, StopTimeout: turnStopWait}, config, env...)
+}
+
+// startUnit starts u as a transient user service: it gets the user
+// manager's environment, not the caller's session variables, and outlives
+// the caller; a configuration file the caller named is passed on as
+// $BEEKEEPER_CONFIG, a scratch state it keeps as $BEEKEEPER_STATE_FROM, and
+// env (KEY=value) is added.
+func startUnit(u platform.Unit, config string, env ...string) error {
 	u.Env = append(u.Env, env...)
 	if config != "" {
 		u.Env = append(u.Env, "BEEKEEPER_CONFIG="+config)

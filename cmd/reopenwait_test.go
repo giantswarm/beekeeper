@@ -25,7 +25,7 @@ func waitingReopen(t *testing.T, a *app, ctx context.Context) (done chan error) 
 	plat.Opener = &recordingOpener{}
 	plat.Launcher = &unitLauncher{}
 	done = make(chan error, 1)
-	go func() { done <- a.reopenSession(ctx, rotationLogin) }()
+	go func() { done <- a.reopenSession(ctx, rotationLogin, "") }()
 	if !eventually(5*time.Second, func() bool {
 		st, _ := a.store.Read()
 		i := agentOfSession(st, rotationLogin)
@@ -50,7 +50,7 @@ func TestOneReopenWaitsPerSession(t *testing.T) {
 		var said bytes.Buffer
 		second.out = &said
 		start := time.Now()
-		if err := second.reopenSession(t.Context(), "local_"+rotationLogin); err != nil {
+		if err := second.reopenSession(t.Context(), "local_"+rotationLogin, ""); err != nil {
 			t.Fatal(err)
 		}
 		if took := time.Since(start); took > time.Second {
@@ -127,7 +127,7 @@ func TestReopenKeepsARunningDesktopCLI(t *testing.T) {
 	// The retitle after the show waits for a steward none runs here.
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
-	if err := a.reopenSession(ctx, rotationLogin); err != nil {
+	if err := a.reopenSession(ctx, rotationLogin, ""); err != nil {
 		t.Fatal(err)
 	}
 	if len(o.opened) != 0 {
