@@ -362,7 +362,13 @@ stay, and prints nothing. beekeeper install registers it in
 				drop, unheld = sh.Path, sandbox.UnsetShell(sandbox.EgressDir(os.Getenv("XDG_RUNTIME_DIR")))
 			}
 			unalias := append(slices.Clone(sh.Unalias), a.cfg.Secret.UnlockCommands...)
-			return guard.WritePrelude(env, guard.Prelude(unalias, sh.Globs == config.GlobsLiteral, sh.Path, drop, unheld))
+			if err := guard.WritePrelude(env, guard.Prelude(unalias, sh.Globs == config.GlobsLiteral, sh.Path, drop, unheld)); err != nil {
+				return err
+			}
+			if os.Getenv(sandbox.Env) == "" {
+				a.recordSessionGH(raw, guard.Resolve("gh", guard.PathFirst(sh.Path, os.Getenv("PATH"))))
+			}
+			return nil
 		},
 	})
 	c.AddCommand(&cobra.Command{
