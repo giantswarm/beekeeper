@@ -69,6 +69,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `agents reopen` waiters no longer pile up and burn CPU. One reopen waits per session: a later turn's reopen leaves the showing to the waiting one and ends. A waiting reopen ends, showing nothing, once its agent reported its work done (`agents idle --done`), left the roster (`agents remove`) or is a relieved role run, and keeps a desktop CLI of the session that started meanwhile instead of showing it again. Its wait polls cheaply: the window's focus every 2 seconds instead of 500 ms, the roster every 5 seconds without the state lock, the screen lock every 15 seconds, and the input watch sleeps 250 ms after the events it drained. Each waiter read the 1.3 MB state and the whole process table twice a second, about 10 CPU-seconds per minute, and one machine ran six of them, two for a session already off the roster ([#498](https://github.com/giantswarm/beekeeper/issues/498)).
 
+- A waiting `agents reopen` stays under one CPU-second per minute on a busy machine: it reads the roster every 15 seconds instead of 5, each read parsing the whole state. A waiter used about 1.2 CPU-seconds per minute live; an `agents desktop` ask now reaches a waiting reopen within 15 seconds ([#498](https://github.com/giantswarm/beekeeper/issues/498)).
+
 ### Changed
 
 - The README's browser section says why a headless turn of a start keeps its own Claude in Chrome tools (`--chrome` in bypass) rather than going through `beekeeper browse`: the bypass is that turn's scope, so narrowing its Chrome tools would narrow nothing; a desktop turn browses through `browse`, a headless turn with its own tools ([README](README.md#agents-started-without-a-click)).
