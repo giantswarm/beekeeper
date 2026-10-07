@@ -99,7 +99,8 @@ type Unit struct {
 	KeepChildren bool
 	// TermIsSuccess counts an end by SIGTERM as success: a stop as asked.
 	TermIsSuccess bool
-	// StopPost runs once Argv has ended, for up to StopTimeout.
+	// StopPost runs once Argv has ended, for up to StopTimeout. It reports
+	// its own outcome: its exit or kill never fails the unit.
 	StopPost    []string
 	StopTimeout time.Duration
 }
@@ -120,6 +121,10 @@ type Launcher interface {
 	// Running lists the units matching the patterns that are active or
 	// starting, and with stopping those running their stop too.
 	Running(ctx context.Context, stopping bool, patterns ...string) []string
+	// Failed lists the failed units matching the patterns.
+	Failed(ctx context.Context, patterns ...string) []string
+	// ResetFailed clears the failed state of the units.
+	ResetFailed(ctx context.Context, units ...string) error
 }
 
 // Cap bounds a capped run.
