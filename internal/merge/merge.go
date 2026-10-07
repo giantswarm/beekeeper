@@ -33,6 +33,12 @@ const (
 	Tool = "devctl"
 )
 
+// devctl pr merge's flags of a detached merge, which the gate drops.
+const (
+	detachFlag = "--detach"
+	onDoneFlag = "--on-done"
+)
+
 var (
 	repoArg = regexp.MustCompile(`^[\w.-]+/[\w.-]+$`)
 	numArg  = regexp.MustCompile(`^\d+$`)
@@ -57,6 +63,37 @@ func ParseArgs(argv []string) (repo string, pr int, ok bool) {
 		}
 	}
 	return "", 0, false
+}
+
+// StripDetach drops devctl pr merge's --detach and --on-done (with its
+// command, either form) from argv: the gate runs every merge outside its
+// caller already, and a detached devctl would leave the gate's unit and its
+// lane accounting. stripped lists what went; argv of any other command comes
+// back as it is.
+func StripDetach(argv []string) (out, stripped []string) {
+	i := slices.Index(argv, "merge")
+	if i < 1 || argv[i-1] != "pr" {
+		return argv, nil
+	}
+	out = slices.Clip(argv[:i+1])
+	for j := i + 1; j < len(argv); j++ {
+		switch a := argv[j]; {
+		case a == "--":
+			return append(out, argv[j:]...), stripped
+		case a == detachFlag || strings.HasPrefix(a, detachFlag+"="),
+			strings.HasPrefix(a, onDoneFlag+"="):
+			stripped = append(stripped, a)
+		case a == onDoneFlag:
+			stripped = append(stripped, a)
+			if j+1 < len(argv) {
+				j++
+				stripped = append(stripped, argv[j])
+			}
+		default:
+			out = append(out, a)
+		}
+	}
+	return out, stripped
 }
 
 // ParsePromote finds the one repository of a devctl release promote

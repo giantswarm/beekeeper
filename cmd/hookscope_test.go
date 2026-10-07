@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -127,5 +128,37 @@ func TestHookScopeInertHooks(t *testing.T) {
 	runHook(t, a, &out, "sessionstart", `{"hook_event_name":"SessionStart","session_id":"s1","cwd":"`+filepath.Join(dir, "desk")+`"}`)
 	if _, err := os.Stat(envFile); err != nil {
 		t.Errorf("sessionstart in scope: no prelude: %v", err)
+	}
+}
+
+// The PreToolUse hook refuses a board-wide project read in the desk's scope,
+// naming the GraphQL budget last read, and passes it elsewhere; item-add
+// passes everywhere.
+func TestHookBoardRead(t *testing.T) {
+	var out bytes.Buffer
+	a, dir := scopeApp(t, &out)
+	st, err := state.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Update(func(s *state.State) ([]state.Event, error) {
+		s.Budget = &state.Budget{GraphQL: &state.GraphQL{Remaining: 4321, Limit: 5000, At: time.Now()}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ev := func(cwd, command string) string {
+		return `{"hook_event_name":"PreToolUse","session_id":"s1","cwd":"` + cwd + `","tool_name":"Bash","tool_input":{"command":"` + command + `"}}`
+	}
+	desk, home := filepath.Join(dir, "desk"), filepath.Join(dir, "home-project")
+	list := "gh project item-list 273 --owner giantswarm --limit 3000"
+	if got := runHook(t, a, &out, "pretooluse", ev(desk, list)); !strings.Contains(got, `"deny"`) || !strings.Contains(got, "GraphQL 4321 of 5000") {
+		t.Errorf("item-list in the desk: want the refusal with the budget, got %q", got)
+	}
+	if got := runHook(t, a, &out, "pretooluse", ev(home, list)); strings.Contains(got, `"deny"`) {
+		t.Errorf("item-list outside the desk refused: %q", got)
+	}
+	if got := runHook(t, a, &out, "pretooluse", ev(desk, "gh project item-add 273 --owner giantswarm --url https://github.com/giantswarm/beekeeper/issues/487")); strings.Contains(got, `"deny"`) {
+		t.Errorf("item-add refused: %q", got)
 	}
 }

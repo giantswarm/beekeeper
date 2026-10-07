@@ -114,7 +114,7 @@ func (a *app) scratchArgv(cmd *cobra.Command, args []string) ([]string, error) {
 		switch f.Name {
 		case "as":
 			err = refused("--as: a brokered call runs as this session")
-		case "config":
+		case configFlag:
 		default:
 			argv = append(argv, "--"+f.Name+"="+f.Value.String())
 		}
@@ -157,7 +157,7 @@ func brokerFlags(cmd *cobra.Command) ([]string, error) {
 	argv := []string{cmd.Name()}
 	var err error
 	cmd.Flags().Visit(func(f *pflag.Flag) {
-		if f.Name == "as" || f.Name == "config" {
+		if f.Name == "as" || f.Name == configFlag {
 			err = refused("--%s: a brokered call runs as this session, under the host's config", f.Name)
 		}
 		argv = append(argv, "--"+f.Name+"="+f.Value.String())

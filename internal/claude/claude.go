@@ -118,7 +118,12 @@ type Record struct {
 	Title          string `json:"title"`
 	IsArchived     bool   `json:"isArchived"`
 	LastActivityAt int64  `json:"lastActivityAt"`
-	PermissionMode string `json:"permissionMode"`
+	// LastFocusedAt is when the desktop's window last showed the session.
+	LastFocusedAt int64 `json:"lastFocusedAt"`
+	// AutoArchiveExempt says someone brought the session back from the
+	// Archived list: it stays in the sidebar.
+	AutoArchiveExempt bool   `json:"autoArchiveExempt"`
+	PermissionMode    string `json:"permissionMode"`
 	// ChromePermissionMode is how the desktop answers the session's Claude
 	// in Chrome actions: ChromeSkipAll without asking, anything else (empty
 	// included) with a site request for its person.
@@ -132,6 +137,16 @@ type Record struct {
 	PostTurnSummary    *TurnSummary `json:"postTurnSummary"`
 	PostTurnSummaryFor string       `json:"postTurnSummaryFor"`
 	LastAssistantUUID  string       `json:"lastAssistantUuid"`
+}
+
+// LastSeen is when the session last ran a desktop turn or the desktop's
+// window last showed it; zero when the record says neither.
+func (r *Record) LastSeen() time.Time {
+	ms := max(r.LastActivityAt, r.LastFocusedAt)
+	if ms == 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(ms)
 }
 
 // ChromeSkipAll is the Chrome permission mode under which the desktop runs

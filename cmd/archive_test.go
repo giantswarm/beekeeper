@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -122,13 +125,98 @@ func TestSeedArchives(t *testing.T) {
 	record := func(host string) (*claude.Record, bool) {
 		return &claude.Record{IsArchived: host == "local_shelved"}, true
 	}
-	seedArchives(st, record, archiveNow)
+	seedArchives(st, record, nil, archiveNow)
 	if len(st.Archives) != 3 || st.Archives[1].Host != "local_warm" || st.Archives[2].Host != "local_stopped" || st.Archives[0].Tries != 2 || !st.FinishedSeeded {
 		t.Fatalf("seeded %+v", st.Archives)
 	}
 	st.Archives = nil
-	if seedArchives(st, record, archiveNow); len(st.Archives) != 0 {
+	if seedArchives(st, record, nil, archiveNow); len(st.Archives) != 0 {
 		t.Errorf("seeded twice: %+v", st.Archives)
+	}
+}
+
+// A state seeded before the doctor warmed a session's own CLI is seeded
+// once more, with only the starts reseed takes (a relieved role run's, a
+// worker's that reported done) and never a session someone brought back
+// from the Archived list; each is asked for once its session stayed quiet
+// a day.
+func TestSeedArchivesAgainOnlyWhatReseedTakes(t *testing.T) {
+	st := handOverState()
+	done := state.Party{Session: "w-done", HostSession: "local_w-done", Name: "reported done"}
+	back := state.Party{Session: "w-back", HostSession: "local_w-back", Name: "brought back"}
+	stale := state.Party{Session: "stale", HostSession: "local_stale", Name: "left stale"}
+	st.Starts = []state.Start{{Party: supA}, {Party: supB}, {Party: done}, {Party: back}, {Party: stale}}
+	if _, _, err := relayRole(st, supA, supB, relayNow, 15*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := startRole(st, supB, true, false, relayNow.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	st.Archives, st.ArchivesSeeded, st.FinishedSeeded = nil, true, true
+	active := archiveNow.Add(-time.Hour)
+	record := func(host string) (*claude.Record, bool) {
+		return &claude.Record{AutoArchiveExempt: host == back.HostSession}, true
+	}
+	reseed := func(st *state.State, s state.Start) (time.Time, bool) {
+		return active, s.Session != stale.Session && (s.Session != supA.Session || relieved(st, s.Party))
+	}
+	seedArchives(st, record, reseed, archiveNow)
+	var hosts []string
+	for _, ar := range st.Archives {
+		hosts = append(hosts, ar.Host)
+	}
+	if !slices.Equal(hosts, []string{supA.HostSession, done.HostSession}) || !st.DoneSeeded {
+		t.Fatalf("seeded %v", hosts)
+	}
+	idle := func(state.Party) bool { return false }
+	if p := planArchives(st, record, idle, archiveNow.Add(time.Hour)); !strings.Contains(p[1].wait, "quiet a day") {
+		t.Errorf("an hour on: %s", p[1])
+	}
+	if p := planArchives(st, record, idle, active.Add(reseedQuiet)); p[1].wait != "" || p[1].drop != "" {
+		t.Errorf("a quiet day on: %s", p[1])
+	}
+	shown := func(string) (*claude.Record, bool) {
+		return &claude.Record{LastFocusedAt: active.Add(reseedQuiet).UnixMilli()}, true
+	}
+	if p := planArchives(st, shown, idle, active.Add(reseedQuiet+time.Hour)); !strings.Contains(p[1].wait, "quiet a day") {
+		t.Errorf("shown meanwhile: %s", p[1])
+	}
+	st.Archives = nil
+	if seedArchives(st, record, reseed, archiveNow); len(st.Archives) != 0 {
+		t.Errorf("seeded again: %+v", st.Archives)
+	}
+}
+
+// The reseed takes a session that reported done or a relieved role run,
+// whose CLI does not run and that no person typed in.
+func TestReseedable(t *testing.T) {
+	const running = "r-live"
+	dir := t.TempDir()
+	write := func(id string, lines ...string) {
+		p := filepath.Join(dir, id+".jsonl")
+		if err := os.WriteFile(p, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	brief := `{"type":"user","entrypoint":"sdk-cli","message":{"role":"user","content":"the brief"}}`
+	peer := `{"type":"user","entrypoint":"claude-desktop","message":{"role":"user","content":"Another Claude session sent a message: go"}}`
+	typed := `{"type":"user","entrypoint":"claude-desktop","message":{"role":"user","content":[{"type":"text","text":"merge it"}]}}`
+	write("r-done", brief, peer)
+	write("r-typed", brief, typed)
+	write(running, brief)
+	write("r-undone", brief)
+	transcript := func(id string) (string, bool) {
+		p := filepath.Join(dir, id+".jsonl")
+		_, err := os.Stat(p)
+		return p, err == nil
+	}
+	done := map[string]bool{"r-done": true, "r-typed": true, running: true, "r-missing": true}
+	live := func(p state.Party) bool { return p.Session == running }
+	for id, want := range map[string]bool{"r-done": true, "r-typed": false, running: false, "r-undone": false, "r-missing": false} {
+		s := state.Start{Party: state.Party{Session: id, Name: id}}
+		if _, got := reseedable(&state.State{}, s, done, live, transcript); got != want {
+			t.Errorf("%s: reseedable %v, want %v", id, got, want)
+		}
 	}
 }
 

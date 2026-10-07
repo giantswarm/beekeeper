@@ -298,7 +298,7 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 			}
 			rep.chores = append(rep.chores, "would "+c.String())
 		}
-		seedArchives(st, record, a.now)
+		seedArchives(st, record, a.reseed(sessions), a.now)
 		for _, o := range planArchives(st, record, busy, a.now) {
 			rep.chores = append(rep.chores, "would "+o.String())
 		}
@@ -382,9 +382,10 @@ type owedRun struct {
 // when it changes.
 func (a *app) owedArchives(sessions []*claude.Session, record func(host string) (*claude.Record, bool), busy func(state.Party) bool, by state.Party) (owedRun, error) {
 	var run owedRun
+	reseed := a.reseed(sessions)
 	sort := func(st *state.State) []state.Event {
 		run = owedRun{}
-		seedArchives(st, record, a.now)
+		seedArchives(st, record, reseed, a.now)
 		var evs []state.Event
 		for _, o := range planArchives(st, record, busy, a.now) {
 			switch {
@@ -457,6 +458,9 @@ line:
   desktop records it, up to 5 stewards' turns 10 minutes apart within 24h;
   so are archived the session an agents handover ended and the run of the
   supervisor or the guide a relay relieved, which frees its desktop CLI;
+  with no idle steward running, the session's own desktop CLI archives it,
+  warmed by showing the session in the desktop for a moment once the
+  person's typing pauses (a run that asks no steward counts no turn);
 - gives a session beekeeper started the roster name back when the desktop
   recorded another title, through a steward;
 - reopens a worker whose session the desktop never imported (no row in the

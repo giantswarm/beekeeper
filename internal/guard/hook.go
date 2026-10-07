@@ -179,6 +179,9 @@ type Hook struct {
 	// in bypassPermissions; read only for a browser call in acceptEdits,
 	// nil refuses no browser call.
 	Started func(session string) bool
+	// GraphQL is the GraphQL budget as beekeeper last read it, for a
+	// board-read refusal; nil or "", unknown.
+	GraphQL func() string
 }
 
 // event is the part of a PreToolUse event the hook reads.
@@ -264,6 +267,9 @@ func (h Hook) decide(ev event) []byte {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	if r := h.modelServerRefusal(cmd, ev.Session); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
+	if r := h.boardReadRefusal(cmd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	cwd := ev.CWD

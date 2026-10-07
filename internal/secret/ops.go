@@ -145,7 +145,8 @@ func (o *Ops) put(ctx context.Context, dst Ref, v string) error {
 // target is the document a value for dst goes into and the path it takes
 // there. An absent file starts as the Secret nw names, an empty document
 // when nil; a plaintext Kubernetes Secret without values, a skeleton, is
-// filled like a file absent so far. A Secret's value goes under stringData
+// filled like a file absent so far, and any other plaintext file is refused
+// by what it is. A Secret's value goes under stringData
 // unless the path names data or stringData. A path the file's creation rule
 // would leave in plaintext is refused before any value is written.
 func (o *Ops) target(ctx context.Context, dst Ref, nw *NewSecret) (*document, Ref, error) {

@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"io"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -129,6 +131,10 @@ or "wake turn running".`,
 				reg, err = registerAgent(st, me, live, a.now.UTC())
 				if err != nil {
 					return nil, err
+				}
+				if os.Getenv(sandbox.Runtime) == "" {
+					// outside the sandbox, this shell's PATH is the agent's own
+					_ = recordGH(st, me, guard.Resolve("gh", os.Getenv("PATH")), a.now.UTC())
 				}
 				detail := me.Name
 				for _, r := range reg.replaced {

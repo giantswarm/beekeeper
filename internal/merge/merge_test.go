@@ -2,6 +2,7 @@ package merge
 
 import (
 	"embed"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +30,46 @@ func TestParseArgs(t *testing.T) {
 		if repo != c.repo || pr != c.pr || ok != (c.pr > 0) {
 			t.Errorf("%s: got %s %d %v", c.argv, repo, pr, ok)
 		}
+	}
+}
+
+func TestStripDetach(t *testing.T) {
+	onDone := "beekeeper agents wake x"
+	prMerge := func(args ...string) []string { return append([]string{Tool, "pr", "merge"}, args...) }
+	for _, c := range []struct {
+		name     string
+		argv     []string
+		want     []string
+		stripped []string
+	}{
+		{"detach", prMerge(backstage, "12", detachFlag),
+			prMerge(backstage, "12"), []string{detachFlag}},
+		{"detach with a value", prMerge(detachFlag+"=true", backstage, "12"),
+			prMerge(backstage, "12"), []string{detachFlag + "=true"}},
+		{"on-done separate", prMerge(backstage, "12", detachFlag, onDoneFlag, onDone, "--timeout", "9m"),
+			prMerge(backstage, "12", "--timeout", "9m"), []string{detachFlag, onDoneFlag, onDone}},
+		{"on-done joined", prMerge(onDoneFlag+"="+onDone, detachFlag, backstage, "12"),
+			prMerge(backstage, "12"), []string{onDoneFlag + "=" + onDone, detachFlag}},
+		{"blocking", prMerge(backstage, "12"),
+			prMerge(backstage, "12"), nil},
+		{"after --", prMerge(backstage, "12", "--", detachFlag),
+			prMerge(backstage, "12", "--", detachFlag), nil},
+		{"other command", []string{Tool, "pr", "wait", backstage, "12", detachFlag},
+			[]string{Tool, "pr", "wait", backstage, "12", detachFlag}, nil},
+	} {
+		in := slices.Clone(c.argv)
+		got, stripped := StripDetach(c.argv)
+		if !slices.Equal(got, c.want) || !slices.Equal(stripped, c.stripped) {
+			t.Errorf("%s: got %q, stripped %q", c.name, got, stripped)
+		}
+		if !slices.Equal(c.argv, in) {
+			t.Errorf("%s: the caller's argv changed to %q", c.name, c.argv)
+		}
+	}
+	// An --on-done command shaped like a repository is no longer the merge's.
+	argv, _ := StripDetach(prMerge(onDoneFlag, "notify/me", backstage, "12"))
+	if repo, pr, ok := ParseArgs(argv); !ok || repo != backstage || pr != 12 {
+		t.Errorf("parsed %s %d %v after stripping", repo, pr, ok)
 	}
 }
 

@@ -1309,23 +1309,47 @@ func Path(flag string) (string, error) {
 	return filepath.Join(dir, "beekeeper", "config.yaml"), nil
 }
 
-// Load reads the file at path and applies the defaults.
+// Load reads the file at path and applies the defaults. A configuration
+// that is only incomplete loads: Incomplete names what is missing.
 func Load(path string) (*Config, error) {
-	c := &Config{}
 	raw, err := os.ReadFile(filepath.Clean(path))
 	switch {
 	case errors.Is(err, os.ErrNotExist):
+		raw = nil
 	case err != nil:
 		return nil, err
-	default:
-		if err := yaml.Unmarshal(raw, c); err != nil {
-			return nil, fmt.Errorf("%s: %w", path, err)
-		}
+	}
+	return parse(path, raw)
+}
+
+// parse is the configuration raw holds, read from path, with the defaults
+// applied and validated.
+func parse(path string, raw []byte) (*Config, error) {
+	c := &Config{}
+	if err := yaml.Unmarshal(raw, c); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	if err := c.defaults(); err != nil {
 		return nil, err
 	}
 	return c, c.validate()
+}
+
+// Incomplete names the references whose source section is missing: each
+// fails the commands that follow it, and leaves every other command
+// working, so an edit that adds a reference and its section one after the
+// other never makes the configuration unloadable in between.
+func (c *Config) Incomplete() []string {
+	var out []string
+	for i, id := range c.Secret.AgeIdentities {
+		switch {
+		case strings.HasPrefix(id.Ref, "store://") && len(c.Secret.Store.Read) == 0:
+			out = append(out, fmt.Sprintf("secret.ageIdentities[%d]: ref %q: a store:// reference takes secret.store.read", i, id.Ref))
+		case id.Ref == "store://" && len(c.Secret.Store.Search) == 0:
+			out = append(out, fmt.Sprintf("secret.ageIdentities[%d]: ref %q: store:// without an entry takes secret.store.search", i, id.Ref))
+		}
+	}
+	return out
 }
 
 func (c *Config) defaults() error {
@@ -1620,10 +1644,6 @@ func (c *Config) validate() error {
 			return fmt.Errorf("secret.ageIdentities[%d]: recipient %q is no age recipient (age1…)", i, id.Recipient)
 		case !strings.HasPrefix(id.Ref, "op://") && !strings.HasPrefix(id.Ref, "file:///") && !strings.HasPrefix(id.Ref, "store://"):
 			return fmt.Errorf("secret.ageIdentities[%d]: ref %q: want op://<vault>/<item>/<field>, file:///<absolute path> or store://[<entry>]", i, id.Ref)
-		case strings.HasPrefix(id.Ref, "store://") && len(c.Secret.Store.Read) == 0:
-			return fmt.Errorf("secret.ageIdentities[%d]: ref %q: a store:// reference takes secret.store.read", i, id.Ref)
-		case id.Ref == "store://" && len(c.Secret.Store.Search) == 0:
-			return fmt.Errorf("secret.ageIdentities[%d]: ref %q: store:// without an entry takes secret.store.search", i, id.Ref)
 		}
 		if _, err := regexp.Compile(id.PathRegex); err != nil {
 			return fmt.Errorf("secret.ageIdentities[%d]: pathRegex: %w", i, err)

@@ -289,6 +289,23 @@ func TestBrokeredSecretHoldsItsFilesToTheSandbox(t *testing.T) {
 	}
 }
 
+func TestSecretSetRefusesAPlaintextConfigMap(t *testing.T) {
+	a, tools, repo := secretApp(t)
+	file := filepath.Join(repo, "cm.sops.yaml")
+	body := "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: app\ndata:\n  password: " + secretValue + "\n"
+	if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runSecret(a, setOp, file, "stringData.secretKey", generateFlag)
+	if err == nil || !strings.Contains(err.Error(), file+": a plaintext ConfigMap, no sops metadata") || !strings.Contains(err.Error(), "--name and --namespace") || len(tools.Calls) != 0 {
+		t.Fatalf("set into a ConfigMap = %v, want its refusal and no tool run", err)
+	}
+	noSecret(t, "a refused set", out+err.Error())
+	if raw, _ := os.ReadFile(file); string(raw) != body { //nolint:gosec // the test's scratch file
+		t.Error("the refused ConfigMap changed")
+	}
+}
+
 func TestSecretSetNewSecretAndPodConsumers(t *testing.T) {
 	const newKey = "stringData.x"
 	a, tools, repo := secretApp(t)
@@ -301,7 +318,7 @@ func TestSecretSetNewSecretAndPodConsumers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(string(raw), "FAKESOPS") || len(tools.Calls) == 0 {
+	if !strings.HasPrefix(string(raw), "sops:\n") || len(tools.Calls) == 0 {
 		t.Fatalf("set with --name wrote no SOPS file")
 	}
 	pod := []string{kubectlBin, "exec", "-i", "--context", "teleport.example.io-gazelle", "garage-0", "--", "/garage", "json-api", "ImportKey", "-"}

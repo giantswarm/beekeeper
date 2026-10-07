@@ -55,6 +55,15 @@ file's recipients), read in beekeeper's process for the one sops call. A file
 none of them has an identity for fails before sops runs, naming its
 recipients and the sources checked.`,
 		Args: cobra.NoArgs,
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			if a.cfg == nil {
+				if err := a.load(); err != nil {
+					return err
+				}
+			}
+			warnIncomplete(cmd.ErrOrStderr(), a.cfg)
+			return nil
+		},
 	}
 	c.AddCommand(&cobra.Command{
 		Use:   "compare <a> <b>",
@@ -77,8 +86,7 @@ anything is not equal.`,
 				return err
 			}
 			vs, err := ops.Compare(cmd.Context(), ra, rb)
-			a.secretLog("compare", "%s %s: %s", ra, rb, outcome(err, fmt.Sprintf("%d keys", len(vs))))
-			if err != nil {
+			if err := a.secretLog(err, "compare", "%s %s: %s", ra, rb, outcome(err, fmt.Sprintf("%d keys", len(vs)))); err != nil {
 				return err
 			}
 			differ := false
@@ -117,8 +125,7 @@ can make one.`,
 				return err
 			}
 			ps, err := ops.Fingerprints(cmd.Context(), r[0])
-			a.secretLog("fingerprint", "%s: %s", r[0], outcome(err, fmt.Sprintf("%d keys", len(ps))))
-			if err != nil {
+			if err := a.secretLog(err, "fingerprint", "%s: %s", r[0], outcome(err, fmt.Sprintf("%d keys", len(ps)))); err != nil {
 				return err
 			}
 			var b strings.Builder
@@ -309,13 +316,12 @@ failing or answering nothing within a minute) exits 78.`,
 					return err
 				}
 				code, out, err := ops.CopyToConsumer(ctx, src[0], argv, in)
-				a.secretLog("copy", "%s to %s: %s", src[0], argv[0], outcome(err, fmt.Sprintf("exit %d", code)))
-				if errors.Is(err, secret.ErrVault) {
-					// exit ExitVault: the broker signs in again and retries
-					return err
+				if err != nil && !errors.Is(err, secret.ErrVault) {
+					// exit ExitVault stays: the broker signs in again and retries
+					err = refused("%v", err)
 				}
-				if err != nil {
-					return refused("%v", err)
+				if err := a.secretLog(err, "copy", "%s to %s: %s", src[0], argv[0], outcome(err, fmt.Sprintf("exit %d", code))); err != nil {
+					return err
 				}
 				if _, err := io.WriteString(a.out, out); err != nil {
 					return err
@@ -337,15 +343,13 @@ failing or answering nothing within a minute) exits 78.`,
 					return usageErr("--name and --namespace rewrite a copied file, not one value")
 				}
 				n, err := ops.CopyValue(ctx, src[0], dst[0])
-				a.secretLog("copy", "%s to %s: %s", src[0], dst[0], outcome(err, fmt.Sprintf("%d bytes", n)))
-				if err != nil {
+				if err := a.secretLog(err, "copy", "%s to %s: %s", src[0], dst[0], outcome(err, fmt.Sprintf("%d bytes", n))); err != nil {
 					return err
 				}
 				return a.secretPrint(secret.Key{Name: dst[0].String(), Bytes: n}, fmt.Sprintf("wrote %s: %d bytes\n", dst[0], n))
 			}
 			keys, err := ops.CopyFile(ctx, src[0], dst[0].File, name, namespace)
-			a.secretLog("copy", "%s to %s: %s", src[0], dst[0], outcome(err, fmt.Sprintf("%d keys", len(keys))))
-			if err != nil {
+			if err := a.secretLog(err, "copy", "%s to %s: %s", src[0], dst[0], outcome(err, fmt.Sprintf("%d keys", len(keys)))); err != nil {
 				return err
 			}
 			var b strings.Builder
@@ -386,12 +390,10 @@ func (a *app) secretCopyToSecret(ctx context.Context, ops *secret.Ops, src secre
 		return usageErr("--to-secret: %v", err)
 	}
 	if err := a.checkLabHeld(t); err != nil {
-		a.secretLog("copy", "%s to %s: %s", src, t, outcome(err, ""))
-		return err
+		return a.secretLog(err, "copy", "%s to %s: %s", src, t, outcome(err, ""))
 	}
 	n, err := ops.CopyToSecret(ctx, src, t)
-	a.secretLog("copy", "%s to %s: %s", src, t, outcome(err, fmt.Sprintf("%d bytes", n)))
-	if err != nil {
+	if err := a.secretLog(err, "copy", "%s to %s: %s", src, t, outcome(err, fmt.Sprintf("%d bytes", n))); err != nil {
 		return err
 	}
 	return a.secretPrint(secret.Key{Name: t.String(), Bytes: n}, fmt.Sprintf("wrote %s: %d bytes\n", t, n))
@@ -428,6 +430,8 @@ fingerprint. Without --vault the SOPS file is the value's only home: no
 vault holds a copy. A plaintext Kubernetes Secret without values (apiVersion,
 kind, metadata, an empty stringData), a skeleton, becomes the SOPS file with
 the value in it; --name and --namespace start an absent file as that Secret.
+Any other plaintext file (a ConfigMap, a Secret holding a value, no YAML
+mapping) is refused by what it is, before sops sees it.
 A Secret's value goes under stringData unless the path names data or
 stringData. A path the file's .sops.yaml creation rule would leave in
 plaintext is refused before any value is drawn, naming the rule.
@@ -482,8 +486,7 @@ the delivery.`,
 				}
 				to = append(to, t.String())
 				if err := a.checkLabHeld(t); err != nil {
-					a.secretLog("set", "%s: %s", strings.Join(to, " and "), outcome(err, ""))
-					return err
+					return a.secretLog(err, "set", "%s: %s", strings.Join(to, " and "), outcome(err, ""))
 				}
 				opt.Secret = &t
 			}
@@ -495,8 +498,7 @@ the delivery.`,
 					err = a.checkConsumerContext(opt.Consumer)
 				}
 				if err != nil {
-					a.secretLog("set", "%s: %s", strings.Join(to, " and "), outcome(err, ""))
-					return refused("%v", err)
+					return a.secretLog(refused("%v", err), "set", "%s: %s", strings.Join(to, " and "), outcome(err, ""))
 				}
 			} else if in != (secret.Stdin{}) {
 				return usageErr("--stdin-json and --stdin-field shape a consumer's stdin: set … -- <consumer…>")
@@ -519,8 +521,7 @@ the delivery.`,
 			if opt.Consumer != nil {
 				done += fmt.Sprintf(", consumer exit %d", res.Code)
 			}
-			a.secretLog("set", "%s: %s", strings.Join(to, " and "), outcome(err, done))
-			if err != nil {
+			if err := a.secretLog(err, "set", "%s: %s", strings.Join(to, " and "), outcome(err, done)); err != nil {
 				return err
 			}
 			text := fmt.Sprintf("wrote %s: %d characters, %s\n", strings.Join(to, " and "), length, res.Fingerprint)
@@ -562,11 +563,10 @@ before a new one.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ops := &secret.Ops{Run: secretRun, Apply: secretApply, Vault: a.cfg.Secret.Vault, Session: a.cfg.Secret.Session}
 			s, err := ops.Setup(cmd.Context(), account, a.cfg.Secret.TokenFile)
-			a.secretLog("setup", "vault %s, service account %s: %s", s.Vault, account, outcome(err, fmt.Sprintf("token of %d bytes", s.TokenBytes)))
 			if errors.Is(err, secret.ErrSetUp) {
-				return refused("%v", err)
+				err = refused("%v", err)
 			}
-			if err != nil {
+			if err := a.secretLog(err, "setup", "vault %s, service account %s: %s", s.Vault, account, outcome(err, fmt.Sprintf("token of %d bytes", s.TokenBytes))); err != nil {
 				return err
 			}
 			created := "existing"
@@ -602,8 +602,7 @@ shared vault's reference is the one to use.`,
 				return err
 			}
 			n, err := ops.Import(cmd.Context(), r[0], r[1])
-			a.secretLog("import", "%s to %s: %s", r[0], r[1], outcome(err, fmt.Sprintf("%d bytes", n)))
-			if err != nil {
+			if err := a.secretLog(err, "import", "%s to %s: %s", r[0], r[1], outcome(err, fmt.Sprintf("%d bytes", n))); err != nil {
 				return err
 			}
 			return a.secretPrint(secret.Key{Name: r[1].String(), Bytes: n}, fmt.Sprintf("wrote %s: %d bytes\n", r[1], n))
@@ -672,7 +671,7 @@ written: one that cannot be read stops the rotation with nothing changed.`,
 					err = errors.Join(err, serr)
 				}
 			}
-			a.secretLog("rotate", "%s: %s", r[0], outcome(err, fmt.Sprintf("%s into %d carriers", rot.Fingerprint, len(rot.Carriers))))
+			err = a.secretLog(err, "rotate", "%s: %s", r[0], outcome(err, fmt.Sprintf("%s into %d carriers", rot.Fingerprint, len(rot.Carriers))))
 			if rot.Ref != "" {
 				refs := []string{rot.Ref}
 				for _, c := range rot.Carriers {
@@ -719,8 +718,7 @@ func (a *app) secretRotatePlatform(cmd *cobra.Command, arg, reason string, dryRu
 	if dryRun {
 		mode = "dry run"
 	}
-	a.secretLog("rotate", "%s: %s", r, outcome(err, mode))
-	if err != nil {
+	if err := a.secretLog(err, "rotate", "%s: %s", r, outcome(err, mode)); err != nil {
 		return err
 	}
 	if !dryRun {
@@ -839,24 +837,4 @@ func (a *app) secretPrint(v any, text string) error {
 	}
 	_, err := io.WriteString(a.out, text)
 	return err
-}
-
-// secretLog records one operation with the calling session; the log never
-// holds a value, only references and the outcome.
-func (a *app) secretLog(op, format string, args ...any) {
-	who, err := a.caller()
-	if err != nil {
-		who = state.Party{Name: noSession}
-	}
-	if err := a.store.Log(event(who, "secret."+op, format, args...)); err != nil {
-		fmt.Fprintln(os.Stderr, guard.LogPrefix+"secret: the call is not logged: "+err.Error())
-	}
-}
-
-// outcome is ok, or the error that ended an operation.
-func outcome(err error, ok string) string {
-	if err != nil {
-		return "failed: " + err.Error()
-	}
-	return ok
 }

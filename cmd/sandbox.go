@@ -258,7 +258,7 @@ git's signing call only; the key and the agent stay out of the sandbox.`,
 				return err
 			}
 			secretCall := func(env []string) sandbox.Handler {
-				return brokeredCall(exe, "/proc", brokeredCallTimeout, env, brokeredSecretArgv)
+				return a.secretCallLogged(brokeredCallTimeout, brokeredCall(exe, "/proc", 0, env, brokeredSecretArgv))
 			}
 			spool := make(chan error, 1)
 			go func() {
