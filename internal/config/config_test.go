@@ -153,8 +153,6 @@ func TestLoadRejects(t *testing.T) {
 		"age without op ref":   "secret: {ageIdentities: [{recipient: age1x, ref: ~/key.txt}]}",
 		"age relative file":    "secret: {ageIdentities: [{recipient: age1x, ref: \"file://key.txt\"}]}",
 		"age bad pathRegex":    "secret: {ageIdentities: [{pathRegex: \"[\", ref: op://V/i/f}]}",
-		"age store no read":    "secret: {ageIdentities: [{recipient: age1x, ref: store://keys/age}]}",
-		"age store no search":  "secret: {store: {read: [r]}, ageIdentities: [{recipient: age1x, ref: \"store://\"}]}",
 		"nameless board step":  "board: {order: [{status: [backlog]}]}",
 		"search with fields":   "board: {order: [{name: q, search: \"repo:o/r\", status: [backlog]}]}",
 	} {
@@ -477,5 +475,32 @@ func TestSandbox(t *testing.T) {
 	}
 	if _, err := Load(write("sandbox: {domains: ['127.0.0.1:6443', '[::1]:6443', 'github.com', '*.circleci.com']}\n")); err != nil {
 		t.Errorf("a lab's port: %v", err)
+	}
+}
+
+// A store:// reference without its secret.store section loads: only the
+// commands that follow it fail, each said once by Incomplete.
+func TestIncompleteStoreRef(t *testing.T) {
+	for raw, want := range map[string]string{
+		"secret: {ageIdentities: [{recipient: age1x, ref: store://keys/age}]}":                              "takes secret.store.read",
+		"secret: {store: {read: [r]}, ageIdentities: [{recipient: age1x, ref: \"store://\"}]}":              "takes secret.store.search",
+		"secret: {store: {read: [r], search: [s]}, ageIdentities: [{recipient: age1x, ref: \"store://\"}]}": "",
+	} {
+		p := filepath.Join(t.TempDir(), "c.yaml")
+		if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		c, err := Load(p)
+		if err != nil {
+			t.Errorf("%s: %v", raw, err)
+			continue
+		}
+		got := c.Incomplete()
+		switch {
+		case want == "" && len(got) != 0:
+			t.Errorf("%s: incomplete %v", raw, got)
+		case want != "" && (len(got) != 1 || !strings.Contains(got[0], want)):
+			t.Errorf("%s: incomplete %v, want one %q", raw, got, want)
+		}
 	}
 }
