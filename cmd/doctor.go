@@ -298,7 +298,7 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 			}
 			rep.chores = append(rep.chores, "would "+c.String())
 		}
-		seedArchives(st, record, a.now)
+		seedArchives(st, record, a.reseed(sessions), a.now)
 		for _, o := range planArchives(st, record, busy, a.now) {
 			rep.chores = append(rep.chores, "would "+o.String())
 		}
@@ -382,9 +382,10 @@ type owedRun struct {
 // when it changes.
 func (a *app) owedArchives(sessions []*claude.Session, record func(host string) (*claude.Record, bool), busy func(state.Party) bool, by state.Party) (owedRun, error) {
 	var run owedRun
+	reseed := a.reseed(sessions)
 	sort := func(st *state.State) []state.Event {
 		run = owedRun{}
-		seedArchives(st, record, a.now)
+		seedArchives(st, record, reseed, a.now)
 		var evs []state.Event
 		for _, o := range planArchives(st, record, busy, a.now) {
 			switch {
