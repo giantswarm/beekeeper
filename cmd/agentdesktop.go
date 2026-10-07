@@ -95,7 +95,7 @@ func (a *app) desktopTurn(ctx context.Context, ag state.Agent) error {
 	if _, err := fmt.Fprintf(a.out, "desktop: %s runs no CLI and no reopen waits: showing it in the desktop\n", ag.Name); err != nil {
 		return err
 	}
-	return a.reopenSession(ctx, ag.Session)
+	return a.reopenSession(ctx, ag.Session, "")
 }
 
 // agentOfSession is the index of the roster entry of session id (or its

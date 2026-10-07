@@ -97,10 +97,17 @@ type Unit struct {
 	KeepChildren bool
 	// TermIsSuccess counts an end by SIGTERM as success: a stop as asked.
 	TermIsSuccess bool
-	// StopPost runs once Argv has ended, for up to StopTimeout. It reports
-	// its own outcome: its exit or kill never fails the unit.
-	StopPost    []string
+	// StopPost runs once Argv has ended, within StopTimeout. It reports its
+	// own outcome: its exit or kill never fails the unit. It returns at
+	// once: a stop waits for it, a shutdown's included.
+	StopPost []string
+	// StopTimeout bounds a stop: Argv's end on the stop signal, then
+	// StopPost; past it the service manager kills what still runs. Zero
+	// leaves the manager's default.
 	StopTimeout time.Duration
+	// MaxRuntime ends the unit once it has run that long, as a failure;
+	// zero lets it run on.
+	MaxRuntime time.Duration
 }
 
 // Launcher starts and inspects units.

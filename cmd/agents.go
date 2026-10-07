@@ -69,10 +69,14 @@ func agentBrowser(cfg *config.Config, ag state.Agent) string {
 }
 
 // The agents command's name and its reopen subcommand's, which a start's and
-// a wake's unit run once their turn ended.
+// a wake's unit run once their turn ended, with the reopen's flags: --detach
+// starts the reopen in a unit of its own (the unit's stop-post), --turn
+// names the unit whose turn ended (the detached reopen).
 const (
 	agentsName = "agents"
 	reopenName = "reopen"
+	detachFlag = "detach"
+	turnFlag   = "turn"
 )
 
 func (a *app) agentsCmd() *cobra.Command {

@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -16,12 +18,17 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// reopenVerb is the event of a reopen: started, shown or missed.
+const reopenVerb = "agent.reopen"
+
 // reopenLauncher runs no unit: it lists the running ones it was given by
-// pattern and records the units it was asked to start.
+// pattern and records the units it was asked to start, or refuses them
+// with fail.
 type reopenLauncher struct {
 	platform.Launcher
 	running []string
 	started []platform.Unit
+	fail    error
 }
 
 func (l *reopenLauncher) Running(_ context.Context, _ bool, patterns ...string) []string {
@@ -37,8 +44,67 @@ func (l *reopenLauncher) Running(_ context.Context, _ bool, patterns ...string) 
 }
 
 func (l *reopenLauncher) Start(u platform.Unit) error {
+	if l.fail != nil {
+		return l.fail
+	}
 	l.started = append(l.started, u)
 	return nil
+}
+
+// A start's or wake's stop-post, agents reopen --detach, starts the reopen
+// in a unit of its own, in the turn's directory, naming the turn's unit,
+// bounded in its runtime and never in its stop, and returns; a reopen unit
+// that does not start is a missed reopen in the event log, not an error of
+// the stop-post's.
+func TestReopenDetachStartsAUnitOfItsOwn(t *testing.T) {
+	a, out := stubApp(t)
+	l := &reopenLauncher{}
+	useLauncher(t, l)
+	p := state.Party{Session: waitWorker, HostSession: "local_" + waitWorker, Name: waitName}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts = append(st.Starts, state.Start{Party: p, Dir: "/work"})
+		st.Agents = append(st.Agents, state.Agent{Party: p, Task: rowlessTask})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c := a.agentReopenCmd()
+	c.SetArgs([]string{"--detach", "local_" + waitWorker})
+	if err := c.ExecuteContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(l.started) != 1 {
+		t.Fatalf("started %+v, want one reopen unit", l.started)
+	}
+	u := l.started[0]
+	self, _ := os.Executable()
+	cwd, _ := os.Getwd()
+	want := []string{self, "agents", "reopen"}
+	if turn := ownUnit(); turn != "" {
+		want = append(want, "--turn", turn)
+	}
+	want = append(want, "local_"+waitWorker)
+	if !strings.HasPrefix(u.Name, reopenPrefix(waitWorker)+"-") || u.Dir != cwd || !slices.Equal(u.Argv, want) ||
+		u.MaxRuntime != reopenAwayWait+stopPostWait || u.StopTimeout != 0 || u.StopPost != nil || !u.TermIsSuccess || u.KeepChildren {
+		t.Errorf("unit %+v, want argv %q in %s", u, want, cwd)
+	}
+	if !strings.Contains(out.String(), "reopen: "+u.Name+" shows "+waitWorker+" in the desktop") {
+		t.Errorf("output:\n%s", out)
+	}
+
+	l.fail = errors.New("Transaction is destructive")
+	out.Reset()
+	if err := c.ExecuteContext(t.Context()); err != nil {
+		t.Fatalf("a reopen unit that does not start: %v", err)
+	}
+	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == reopenVerb })
+	if err != nil || len(evs) != 1 || evs[0].By.Name != waitName || !strings.Contains(evs[0].Detail, "missed: starting its reopen beekeeper-reopen-29900000-") ||
+		!strings.Contains(evs[0].Detail, "Transaction is destructive") {
+		t.Errorf("agent.reopen events %+v, %v", evs, err)
+	}
+	if !strings.Contains(out.String(), "reopen: missed, starting its reopen") {
+		t.Errorf("output:\n%s", out)
+	}
 }
 
 // The rowless workers of beekeeper's starts: busy on a task, no row in the
@@ -163,13 +229,13 @@ func TestDoctorReopensRowlessWorkersUnderTheCap(t *testing.T) {
 	}
 	self, _ := os.Executable()
 	if len(l.started) != 1 || !strings.HasPrefix(l.started[0].Name, "beekeeper-reopen-rowless1-") || l.started[0].Dir != "/work/rowless1" ||
-		strings.Join(l.started[0].Argv, " ") != self+" agents reopen rowless1" {
+		strings.Join(l.started[0].Argv, " ") != self+" agents reopen rowless1" || l.started[0].MaxRuntime != reopenAwayWait+stopPostWait || l.started[0].StopPost != nil {
 		t.Fatalf("started %+v, want one reopen unit of rowless1", l.started)
 	}
 	if !strings.Contains(lines[0], "; unit "+l.started[0].Name+")") {
 		t.Errorf("the line does not name the unit: %s", lines[0])
 	}
-	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "agent.reopen" })
+	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == reopenVerb })
 	if err != nil || len(evs) != 1 || !strings.HasPrefix(evs[0].Detail, "worker rowless1: reopens") || evs[0].By.Name != by.Name {
 		t.Errorf("agent.reopen events %+v, %v", evs, err)
 	}

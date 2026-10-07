@@ -56,14 +56,14 @@ func resumedForTask(ag state.Agent) bool {
 	return !ag.ResumedWait.IsZero() && !ag.ResumedWait.Before(ag.AssignedAt)
 }
 
-// unitLeftovers are the argument lists of the processes a headless turn's
-// unit still runs once its CLI ended (KillMode=process keeps them), apart
-// from the reopen calling it; nil outside a start's or wake's unit of
-// session id. Tests replace it.
-var unitLeftovers = func(id string) [][]string {
-	self := os.Getpid()
-	cg := proc.Cgroup(self)
-	if !turnUnit(path.Base(cg), id) {
+// unitLeftovers are the argument lists of the processes turn, the start's or
+// wake's unit of session id whose headless turn ended, still runs once its
+// CLI ended (KillMode=process keeps them, and the unit's cgroup stays while
+// they run), its stop-post apart, which started this reopen in a unit of its
+// own beside it under the same slice; nil with no turn unit, or one of
+// another session. Tests replace it.
+var unitLeftovers = func(id, turn string) [][]string {
+	if turn == "" || !turnUnit(turn, id) {
 		return nil
 	}
 	t, err := plat.Machine.Processes()
@@ -71,12 +71,27 @@ var unitLeftovers = func(id string) [][]string {
 		return nil
 	}
 	var out [][]string
-	for _, pid := range plat.Machine.CgroupPIDs(cg) {
-		if p := t.ByPID[pid]; pid != self && p != nil && len(p.Args) > 0 {
+	for _, pid := range plat.Machine.CgroupPIDs(path.Join(path.Dir(proc.Cgroup(os.Getpid())), turn)) {
+		if p := t.ByPID[pid]; p != nil && len(p.Args) > 0 && !reopenArgs(p.Args) {
 			out = append(out, p.Args)
 		}
 	}
 	return out
+}
+
+// ownUnit is the unit this process runs in, as its cgroup names it; empty
+// outside one.
+func ownUnit() string {
+	if cg := proc.Cgroup(os.Getpid()); cg != "" {
+		return path.Base(cg)
+	}
+	return ""
+}
+
+// reopenArgs reports whether args is beekeeper's agents reopen (reopenStopPost):
+// the turn unit's stop-post, which starts the reopen's unit and ends.
+func reopenArgs(args []string) bool {
+	return len(args) > 2 && args[1] == agentsName && args[2] == reopenName
 }
 
 // turnUnit reports whether unit is the start's or a wake's unit of session
@@ -88,11 +103,11 @@ func turnUnit(unit, id string) bool {
 
 // endedOnWait names the background wait session id's headless turn ended on:
 // a background Bash its transcript launched with no completion notice after
-// it, else a process its unit still runs, named by its masked command line
-// (a process's arguments may carry a secret, its own commands do not); ""
-// for none. A devctl wait or
-// merge the gate runs is none: its outcome wakes its owner (devctl.unheard).
-func (a *app) endedOnWait(id string) string {
+// it, else a process its unit turn still runs, named by its masked command
+// line (a process's arguments may carry a secret, its own commands do not);
+// "" for none. A devctl wait or merge the gate runs is none: its outcome
+// wakes its owner (devctl.unheard).
+func (a *app) endedOnWait(id, turn string) string {
 	var waits []string
 	if path := transcriptOf(a.cfg, id); path != "" {
 		open, _ := claude.OpenBackground(path)
@@ -102,7 +117,7 @@ func (a *app) endedOnWait(id string) string {
 			}
 		}
 	}
-	for _, args := range unitLeftovers(id) {
+	for _, args := range unitLeftovers(id, turn) {
 		if c := strings.Join(args, " "); !guard.Owned(c) && !strings.Contains(c, "beekeeper gate") {
 			waits = append(waits, display(args))
 		}
@@ -116,11 +131,12 @@ func (a *app) endedOnWait(id string) string {
 // resumeOnWait resumes the agent of session id headless once its headless
 // turn ended on a background wait with its task open: the end of a headless
 // turn is the end of its process, and the wait's completion notice never
-// wakes it. Once per task, logged as agent.resumed-wait; an agent done,
+// wakes it. turn is the unit that ran the turn, whose leftover processes
+// are waits too. Once per task, logged as agent.resumed-wait; an agent done,
 // kept, or parked on a person (its serve record waits on one) is left alone.
 // It reports whether it resumed the agent, whose wake turn's reopen then
 // shows it in the desktop.
-func (a *app) resumeOnWait(ctx context.Context, id string) (bool, error) {
+func (a *app) resumeOnWait(ctx context.Context, id, turn string) (bool, error) {
 	st, err := a.store.Read()
 	if err != nil {
 		return false, err
@@ -140,7 +156,7 @@ func (a *app) resumeOnWait(ctx context.Context, id string) (bool, error) {
 	if err != nil {
 		return false, nil
 	}
-	on := a.endedOnWait(w.id)
+	on := a.endedOnWait(w.id, turn)
 	if on == "" {
 		return false, nil
 	}
