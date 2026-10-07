@@ -211,3 +211,37 @@ func TestPreludeUnheld(t *testing.T) {
 		}
 	}
 }
+
+// PathFirst leaves PATH as the prelude's lines do, Resolve finds the gh a
+// shell runs on it, and Brokered tells the agent's own gh from the person's.
+func TestTheGHAShellResolves(t *testing.T) {
+	dir := t.TempDir()
+	own, plain := filepath.Join(dir, "agent-bin"), filepath.Join(dir, "usr-bin")
+	for _, d := range []string{own, plain} {
+		if err := os.MkdirAll(d, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, "gh"), []byte("#!/bin/sh\n"), 0o700); err != nil { //nolint:gosec // a fake gh
+			t.Fatal(err)
+		}
+	}
+	path := PathFirst([]string{own}, plain)
+	if want := own + ":" + plain; path != want {
+		t.Errorf("PathFirst = %q, want %q", path, want)
+	}
+	if again := PathFirst([]string{own}, path); again != path {
+		t.Errorf("PathFirst on a PATH that has the directory = %q, want it unchanged", again)
+	}
+	if gh := Resolve("gh", path); gh != filepath.Join(own, "gh") || !Brokered(gh, []string{own}) {
+		t.Errorf("with the agent's directory first: %q", gh)
+	}
+	if gh := Resolve("gh", plain); gh != filepath.Join(plain, "gh") || Brokered(gh, []string{own}) {
+		t.Errorf("without it: %q counts as the agent's", gh)
+	}
+	if gh := Resolve("gh", t.TempDir()); gh != "" || Brokered(gh, []string{own}) {
+		t.Errorf("no gh: %q", gh)
+	}
+	if !Brokered("/usr/bin/gh", nil) {
+		t.Error("with no agents.shell.path every gh is the agent's")
+	}
+}

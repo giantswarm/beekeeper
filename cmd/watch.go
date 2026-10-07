@@ -1132,6 +1132,7 @@ func (w *watcher) poll(ctx context.Context) {
 	w.lostMerges(ctx)
 	w.closeToolWindow(ctx, watchParty)
 	w.stalls()
+	w.unbrokered()
 	w.vaultWaits()
 	now := w.now
 	if now.Sub(w.lastSettle) >= w.readEvery(th.Interval.Duration) {
