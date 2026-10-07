@@ -1,6 +1,7 @@
 package free
 
 import (
+	"cmp"
 	"fmt"
 	"path"
 	"path/filepath"
@@ -46,7 +47,7 @@ func (r *Run) state() {
 	}
 	r.say("  Claude Desktop scope: %d MiB RAM, %d MiB swap, %d processes, %d Claude CLIs",
 		s.CurrentMiB, s.SwapMiB, len(r.scopePIDs(s.Path)), r.claudeCount())
-	if s.Max == "max" {
+	if s.Max == unlimited {
 		r.say("  memory guard: none on the scope (no MemoryMax): the first kernel OOM kill can take every session with it")
 		return
 	}
@@ -68,9 +69,12 @@ func (r *Run) claudeCount() int {
 	return n
 }
 
+// unlimited is a cgroup limit file's word for no limit.
+const unlimited = "max"
+
 // capMiB renders a machine.Scope limit ("max" or MiB).
 func capMiB(v string) string {
-	if v == "max" {
+	if v == unlimited {
 		return "none"
 	}
 	return v + " MiB"
@@ -89,6 +93,29 @@ func (r *Run) slots() {
 			r.say("  slot %d: %s", s.N, s.Holder)
 		}
 	}
+	r.say("  %s", BuildCPULine(machine.ReadBuildCPU(BuildCPUSample), r.BuildCPU))
+}
+
+// BuildCPUSample is how long a reading samples memcap.slice's CPU use: a
+// few of the quota's 100 ms periods, so that the figure is not one period's.
+const BuildCPUSample = 500 * time.Millisecond
+
+// BuildCPULine says memcap.slice's CPU budget and use: what the slice's
+// cgroup reads, or the configured budget while the slice does not run; a
+// slice with no quota says so and that the next run sets the configured one.
+func BuildCPULine(b *machine.BuildCPU, configured platform.Cap) string {
+	budget := fmt.Sprintf("%s (memcap.cpuQuota), weight %d", cmp.Or(configured.CPUQuota, "none"), configured.CPUWeight)
+	if b == nil {
+		return "build CPU: memcap.slice not running; its budget " + budget
+	}
+	line := fmt.Sprintf("build CPU: %.0f%% of %s in use (memcap.slice CPUQuota, weight %d; 100%% is one core)", b.UsePct, b.Quota, b.Weight)
+	if b.Throttled > 0 {
+		line += fmt.Sprintf(", throttled in %d periods of the last %s", b.Throttled, BuildCPUSample)
+	}
+	if b.Quota == unlimited {
+		line += "; NO QUOTA: the next beekeeper run sets " + budget
+	}
+	return line
 }
 
 // kind reports the kind clusters; tearing one down is its owner's call.

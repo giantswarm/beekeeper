@@ -107,6 +107,8 @@ watch:
 memcap:                     # beekeeper run's build slots and cap
   slots: 2                  # the default
   max: 12G                  # a command's MemoryMax (systemd size); default: 14% of RAM; $MEMCAP_MAX and --max override
+  cpuQuota: 1200%           # memcap.slice's CPUQuota, every run together (100% is one core); default: half the cores
+  cpuWeight: 50             # memcap.slice's CPUWeight against the desktop's slices (100 each); the default
 
 ollama:                     # the host's ollama, whose loaded models sit in the iGPU's GTT; unset url, none
   url: http://localhost:11434   # GET /api/ps

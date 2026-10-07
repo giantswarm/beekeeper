@@ -39,7 +39,8 @@ func (r *recordingCapper) Adopt(pid int, _ string, _ platform.Cap) error {
 
 func TestBrokeredCap(t *testing.T) {
 	r := &recordingCapper{}
-	h := brokeredCap(r)
+	// The host's CPU budget reaches the slot's cap; the request carries none.
+	h := brokeredCap(r, platform.Cap{CPUQuota: "1200%", CPUWeight: 50})
 	for _, ok := range []sandbox.Request{
 		{Op: sandbox.OpPing},
 		{Op: sandbox.OpCapSlot, Slice: "memcap-slot1_0a1b2c3d.slice", Max: testMax, Swap: "0"},
@@ -50,7 +51,8 @@ func TestBrokeredCap(t *testing.T) {
 			t.Errorf("%+v: %v", ok, err)
 		}
 	}
-	if len(r.slots) != 1 || len(r.adopts) != 2 || r.adopts[0] != 7 {
+	want := platform.Cap{Max: testMax, Swap: "0", Slice: "memcap-slot1_0a1b2c3d.slice", CPUQuota: "1200%", CPUWeight: 50}
+	if len(r.slots) != 1 || r.slots[0] != want || len(r.adopts) != 2 || r.adopts[0] != 7 {
 		t.Errorf("slots %v, adopts %v", r.slots, r.adopts)
 	}
 	for _, bad := range []sandbox.Request{

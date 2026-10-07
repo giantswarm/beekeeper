@@ -258,14 +258,27 @@ func (c Cap) slice() string {
 	return c.Slice
 }
 
-// CapSlot sets the slot slice's limits for this boot.
+// CapSlot sets the slot slice's limits for this boot, and memcap.slice's
+// CPU budget, which every slot shares.
 func (systemdCapper) CapSlot(c Cap) error {
-	out, err := exec.Command("systemctl", userManager, "set-property", "--runtime", c.slice(), //nolint:gosec // our own sizes
-		"MemoryMax="+c.Max, "MemorySwapMax="+c.Swap).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("capping %s: %v: %s", c.slice(), err, strings.TrimSpace(string(out)))
+	for _, p := range sliceProperties(c) {
+		out, err := exec.Command("systemctl", append([]string{userManager, "set-property", "--runtime"}, p...)...).CombinedOutput() //nolint:gosec // our own sizes
+		if err != nil {
+			return fmt.Errorf("capping %s: %v: %s", p[0], err, strings.TrimSpace(string(out)))
+		}
 	}
 	return nil
+}
+
+// sliceProperties are a slot cap's set-property calls, each a unit and its
+// assignments: memcap.slice's CPU budget (with a CPUWeight; an empty
+// CPUQuota lifts the quota), then the slot slice's memory.
+func sliceProperties(c Cap) [][]string {
+	var out [][]string
+	if c.CPUWeight > 0 {
+		out = append(out, []string{memcapSlice, "CPUQuota=" + c.CPUQuota, "CPUWeight=" + strconv.Itoa(c.CPUWeight)})
+	}
+	return append(out, []string{c.slice(), "MemoryMax=" + c.Max, "MemorySwapMax=" + c.Swap})
 }
 
 // Command is argv in a transient scope in the slot's slice. systemd-run's
@@ -273,10 +286,16 @@ func (systemdCapper) CapSlot(c Cap) error {
 // the argument list reaches the command verbatim, so a wrapped `zsh -c`
 // keeps ${=files}, ${(f)x}, ${pipestatus[1]} and $$.
 func (systemdCapper) Command(name string, c Cap, argv []string) (*exec.Cmd, error) {
-	args := append([]string{userManager, "--scope", "--quiet", "--expand-environment=no", "--unit=" + name,
-		"--slice=" + c.slice(), "-p", "MemoryMax=" + c.Max, "-p", "MemorySwapMax=" + c.Swap,
+	return exec.Command("systemd-run", scopeArgs(name, c, argv)...), nil //nolint:gosec // running the caller's command is the purpose
+}
+
+// scopeArgs is systemd-run's argument list for the scope name around argv:
+// the slot's slice, the memory cap, and the command at RunNice, which
+// systemd-run applies itself in --scope mode.
+func scopeArgs(name string, c Cap, argv []string) []string {
+	return append([]string{userManager, "--scope", "--quiet", "--expand-environment=no", "--unit=" + name,
+		"--slice=" + c.slice(), "--nice=" + strconv.Itoa(RunNice), "-p", "MemoryMax=" + c.Max, "-p", "MemorySwapMax=" + c.Swap,
 		"-p", "OOMPolicy=continue", "--"}, argv...)
-	return exec.Command("systemd-run", args...), nil //nolint:gosec // running the caller's command is the purpose
 }
 
 // Adopt starts the transient scope name around the running process pid

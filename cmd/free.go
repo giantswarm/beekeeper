@@ -195,6 +195,7 @@ func (a *app) freeMachine() (free.Machine, error) {
 		MaxLabs:      a.cfg.KindClusters(ramMiB()),
 		SlotDir:      a.cfg.Memcap.SlotDir,
 		Slots:        a.cfg.Memcap.Slots,
+		BuildCPU:     a.memcapCPU(),
 		Now:          a.now,
 	}, nil
 }

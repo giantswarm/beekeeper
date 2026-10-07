@@ -17,6 +17,29 @@ import (
 
 var now = time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
 
+// The build CPU line: the slice's reading, its throttling, a slice without
+// a quota, and the configured budget while the slice does not run.
+func TestBuildCPULine(t *testing.T) {
+	const quota = "1200%"
+	configured := platform.Cap{CPUQuota: quota, CPUWeight: 50}
+	for name, tc := range map[string]struct {
+		b    *machine.BuildCPU
+		want string
+	}{
+		"in use":      {&machine.BuildCPU{Quota: quota, Weight: 50, UsePct: 1180.4}, "build CPU: 1180% of 1200% in use (memcap.slice CPUQuota, weight 50; 100% is one core)"},
+		"throttled":   {&machine.BuildCPU{Quota: quota, Weight: 50, UsePct: 1199, Throttled: 2}, "build CPU: 1199% of 1200% in use (memcap.slice CPUQuota, weight 50; 100% is one core), throttled in 2 periods of the last 500ms"},
+		"no quota":    {&machine.BuildCPU{Quota: "max", Weight: 100, UsePct: 340}, "build CPU: 340% of max in use (memcap.slice CPUQuota, weight 100; 100% is one core); NO QUOTA: the next beekeeper run sets 1200% (memcap.cpuQuota), weight 50"},
+		"not running": {nil, "build CPU: memcap.slice not running; its budget 1200% (memcap.cpuQuota), weight 50"},
+	} {
+		if got := BuildCPULine(tc.b, configured); got != tc.want {
+			t.Errorf("%s:\n got %q\nwant %q", name, got, tc.want)
+		}
+	}
+	if got := BuildCPULine(nil, platform.Cap{CPUWeight: 50}); got != "build CPU: memcap.slice not running; its budget none (memcap.cpuQuota), weight 50" {
+		t.Errorf("without a quota configured: %q", got)
+	}
+}
+
 const (
 	deadSID = "11111111-dead-4000-8000-000000000000"
 	liveSID = "22222222-live-4000-8000-000000000000"

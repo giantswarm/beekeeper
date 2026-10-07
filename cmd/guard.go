@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"time"
@@ -25,6 +26,13 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/takeover"
 )
+
+// memcapCPU is memcap.slice's CPU budget from the configuration, the part
+// of a run's cap the host decides: for its own runs, the broker's and
+// install's slice unit.
+func (a *app) memcapCPU() platform.Cap {
+	return platform.Cap{CPUQuota: a.cfg.MemcapCPUQuota(runtime.NumCPU()), CPUWeight: a.cfg.Memcap.CPUWeight}
+}
 
 func (a *app) runCmd() *cobra.Command {
 	var maxFlag, swapFlag, waitFlag string
@@ -62,6 +70,13 @@ later (snapshot, watch) names them after the run has ended. Logging never
 fails or delays the run: an event the log cannot take within a second is
 dropped.
 
+The runs share memcap.slice's CPU budget: its CPUQuota (memcap.cpuQuota,
+default half the cores) bounds the cores they use together, its CPUWeight
+(memcap.cpuWeight, default 50 against the desktop's slices' 100) their
+share while the desktop wants the cores too; run sets both at every slot it
+takes, the slots share them by equal weight, and the command starts at nice
+10. snapshot and free show the slice's budget and use.
+
 Environment: MEMCAP_MAX (memcap.max, default 14% of RAM), MEMCAP_SWAP (0), MEMCAP_WAIT (8m),
 MEMCAP_SLOTS and MEMCAP_STATE (the directory holding slots/) override the
 configuration; the flags override the environment. MEMCAP_TEST=1 marks a
@@ -72,7 +87,9 @@ kill in it as a test kill, not a build's.`,
 			return a.loadConfig()
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cpu := a.memcapCPU()
 			o := guard.Options{Max: env("MEMCAP_MAX", a.cfg.MemcapMax(ramMiB())), Swap: env("MEMCAP_SWAP", "0"),
+				CPUQuota: cpu.CPUQuota, CPUWeight: cpu.CPUWeight,
 				SlotDir: a.cfg.Memcap.SlotDir, Slots: a.cfg.Memcap.Slots, Stderr: os.Stderr, Record: a.runRecorder(),
 				Test: os.Getenv("MEMCAP_TEST") == "1"}
 			if inSandbox() {
