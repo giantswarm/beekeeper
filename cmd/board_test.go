@@ -19,7 +19,7 @@ import (
 func boardCandidates(n int) []board.Candidate {
 	out := make([]board.Candidate, n)
 	for i := range out {
-		out[i] = board.Candidate{Item: board.Item{Ref: fmt.Sprintf("o/r#%d", i+1)}, Step: "Up Next"}
+		out[i] = board.Candidate{Item: board.Item{Ref: fmt.Sprintf("o/r#%d", i+1)}, Step: stepUpNext}
 	}
 	return out
 }
@@ -27,10 +27,18 @@ func boardCandidates(n int) []board.Candidate {
 // idleRef is the item an agent reporting idle still has a record of.
 const idleRef = "o/r#2"
 
+// The names, steps and reasons the tests share.
+const (
+	stepUpNext = "Up Next"
+	workerOne  = "Worker one"
+	busyAgent  = "Busy"
+	oldBacklog = "created 2026-06-24: Backlog takes items created within 90 days"
+)
+
 func TestNextFreeSkipsOwnedItems(t *testing.T) {
 	listed := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	me := state.Party{Session: "me", Name: "Me"}
-	running := state.Party{Session: "s1", Name: "Worker one"}
+	running := state.Party{Session: "s1", Name: workerOne}
 	idleAgent := state.Party{Session: "s2", Name: "Idle agent"}
 	gone := state.Party{Session: "s3", Name: "Gone"}
 	late := state.Party{Session: "s4", Name: "Started late"}
@@ -46,10 +54,10 @@ func TestNextFreeSkipsOwnedItems(t *testing.T) {
 		},
 		Agents: []state.Agent{
 			{Party: idleAgent, LastTask: idleRef},
-			{Party: state.Party{Session: "s5", Name: "Busy"}, Task: "https://github.com/o/r/issues/7 and o/r#8"},
+			{Party: state.Party{Session: "s5", Name: busyAgent}, Task: "https://github.com/o/r/issues/7 and o/r#8"},
 			{Party: state.Party{Session: "s6", Name: "Finished"}, Task: "o/r#9", Done: true},
 		},
-		Notes: []state.Note{{ID: 12, For: "Pat", Text: "decide https://github.com/o/r/issues/10"}},
+		Notes: []state.Note{{ID: 12, For: pat, Text: "decide https://github.com/o/r/issues/10"}},
 	}
 	cands := boardCandidates(11)
 	cands[10].Skip = "assigned to pat"
@@ -89,14 +97,14 @@ func TestNextFreeSkipsOwnedItems(t *testing.T) {
 func TestNextFreeHoldsAnEpicsSubIssuesToItsOwners(t *testing.T) {
 	listed := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	me := state.Party{Session: "me", Name: "Me"}
-	running := state.Party{Session: "s1", Name: "Worker one"}
+	running := state.Party{Session: "s1", Name: workerOne}
 	alive := func(p state.Party) bool { return p.Is(running) || p.Is(me) }
 	st := &state.State{
 		Records: []state.Record{
 			{Session: running, Issue: "o/r#20", At: listed.Add(-time.Hour)},
 			{Session: running, Issue: "o/r#21", At: listed.Add(-time.Hour)},
 		},
-		Notes: []state.Note{{ID: 704, For: "Pat", Pinned: true, Text: "skip the slices of https://github.com/o/r/issues/10"}},
+		Notes: []state.Note{{ID: 704, For: pat, Pinned: true, Text: "skip the slices of https://github.com/o/r/issues/10"}},
 	}
 	sub := func(n int, epic string) board.Candidate {
 		return board.Candidate{Item: board.Item{Ref: fmt.Sprintf("o/r#%d", n)}, Step: "In Progress", Epic: epic}
@@ -212,7 +220,7 @@ func TestServedOpenAsksGitHubPerRecord(t *testing.T) {
 	me := state.Party{Session: "s1", Name: boardPull}
 	other := state.Party{Session: "s2", Name: "Other"}
 	_ = store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Records = []state.Record{{Session: me, Issue: refOne}, {Session: other, Issue: "o/r#2"}}
+		st.Records = []state.Record{{Session: me, Issue: refOne}, {Session: other, Issue: idleRef}}
 		return nil, nil
 	})
 	var asked []string
@@ -231,7 +239,7 @@ func TestServedOpenAsksGitHubPerRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	if open("O/R#1") || !open("o/r#9") || len(asked) != 1 || asked[0] != "n=1 o=o r=r" {
-		t.Errorf("open o/r#1 %v, o/r#9 %v; asked %q", open("o/r#1"), open("o/r#9"), asked)
+		t.Errorf("open o/r#1 %v, o/r#9 %v; asked %q", open(refOne), open("o/r#9"), asked)
 	}
 }
 
@@ -241,7 +249,7 @@ func TestClaimTakesNoSkippedItem(t *testing.T) {
 		t.Fatal(err)
 	}
 	cands := boardCandidates(1)
-	cands[0].Skip = "created 2026-06-24: Backlog takes items created within 90 days"
+	cands[0].Skip = oldBacklog
 	me := state.Party{Session: "s1", Name: boardPull}
 	res, err := claimNext(store, cands, pickScope{me: me, alive: func(state.Party) bool { return true }, listed: time.Now()}, "", func(string) bool { return false })
 	st, _ := store.Read()
@@ -323,12 +331,12 @@ func TestNextFreeSkipsTheIssuesAServedPRCloses(t *testing.T) {
 			{Session: worker, Issue: servedPR, At: listed.Add(-time.Hour)},
 			{Session: worker, Issue: "o/r#101", At: listed.Add(-time.Hour)},
 		},
-		Agents: []state.Agent{{Party: state.Party{Session: "s2", Name: "Busy"}, Task: "review " + taskPR}},
+		Agents: []state.Agent{{Party: state.Party{Session: "s2", Name: busyAgent}, Task: "review " + taskPR}},
 	}
 	// o/r#100 closes o/r#1 and an issue in another repository, the busy
 	// agent's o/r#102 closes o/r#3; o/r#101 closes nothing.
 	closes := map[string][]string{servedPR: {refOne, "other/x#2"}, taskPR: {taskIssue}}
-	cands := append(boardCandidates(4), board.Candidate{Item: board.Item{Ref: "Other/X#2"}, Step: "Up Next"})
+	cands := append(boardCandidates(4), board.Candidate{Item: board.Item{Ref: "Other/X#2"}, Step: stepUpNext})
 	res := nextFree(st, cands, pickScope{me: me, alive: alive, listed: listed, closes: closes})
 	var got []string
 	for _, c := range append(res.Skipped, res.AfterPick...) {
@@ -364,18 +372,18 @@ func TestNamedRefsReadsTheFormsPeopleWrite(t *testing.T) {
 		{"https://github.com/o/r/issues/7 and o/r#8", owner, []string{"o/r#7", "o/r#8"}},
 		{"model-manager#258 and llm-d#29", owner, []string{"gs/model-manager#258", "gs/llm-d#29"}},
 		{"beekeeper#525, #555 and #563 wait", owner, []string{"gs/beekeeper#525", "gs/beekeeper#555", "gs/beekeeper#563"}},
-		{"beekeeper: #524 (a), #525 (b), #555 (c)", owner, []string{"gs/beekeeper#524", "gs/beekeeper#525", "gs/beekeeper#555"}},
-		{"o/r: #1, #2; then x/y#3, #4", owner, []string{"o/r#1", "o/r#2", "x/y#3", "x/y#4"}},
+		{"beekeeper: #534 (a), #535 (b), #565 (c)", owner, []string{"gs/beekeeper#534", "gs/beekeeper#535", "gs/beekeeper#565"}},
+		{"o/r: #1, #2; then x/y#3, #4", owner, []string{refOne, idleRef, "x/y#3", "x/y#4"}},
 		{"https://github.com/o/r/issues/10, #11 too", owner, []string{"o/r#10", "o/r#11"}},
 		// A bare #n before any repository names nothing.
-		{"#5 then o/r#6 and #7", owner, []string{"o/r#6", "o/r#7"}},
+		{"#5 then o/r#16 and #17", owner, []string{"o/r#16", "o/r#17"}},
 		{"#5 alone", owner, nil},
 		// beekeeper's own items are no issues, and set no context.
-		{"o/r#1 waits on note #708, timer #707, memo #1047, decision #894; notes #3 and #4 too", owner, []string{"o/r#1", "o/r#4"}},
+		{"o/r#1 waits on note #708, timer #707, memo #1047, decision #894; notes #3 and #4 too", owner, []string{refOne, "o/r#4"}},
 		{"note #708 then #2", owner, nil},
-		{"o/r#1 and O/R#1 once", owner, []string{"o/r#1"}},
+		{"o/r#1 and O/R#1 once", owner, []string{refOne}},
 		// Without a board owner a repo#n names nothing.
-		{"beekeeper#5 and o/r#6", "", []string{"o/r#6"}},
+		{"beekeeper#5 and a/b#6", "", []string{"a/b#6"}},
 		{"nothing here, 13:38 either", owner, nil},
 	} {
 		if got := namedRefs(tc.text, tc.owner); !slices.Equal(got, tc.want) {
@@ -388,18 +396,18 @@ func TestNextFreeSkipsWhatANoteNamesAsPeopleWrite(t *testing.T) {
 	listed := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	me := state.Party{Session: "me", Name: "Me"}
 	st := &state.State{
-		Agents: []state.Agent{{Party: state.Party{Session: "s5", Name: "Busy"}, Task: "llm-d#29 to merged"}},
+		Agents: []state.Agent{{Party: state.Party{Session: "s5", Name: busyAgent}, Task: "llm-d#29 to merged"}},
 		Notes: []state.Note{
-			{ID: 1, For: "Pat", Text: "model-manager#258 waits on the GPU", Refs: []string{"o/r#9"}},
+			{ID: 1, For: pat, Text: "model-manager#258 waits on the GPU", Refs: []string{"x/y#9"}},
 			{ID: 2, Text: "dispatched beekeeper: #525 (a), #555 (b), #563 (c)"},
-			{ID: 3, For: "Pat", Text: "#4 is nobody's: no repository before it"},
+			{ID: 3, For: pat, Text: "#4 is nobody's: no repository before it"},
 		},
 	}
 	item := func(ref string) board.Candidate {
-		return board.Candidate{Item: board.Item{Ref: ref}, Step: "Up Next"}
+		return board.Candidate{Item: board.Item{Ref: ref}, Step: stepUpNext}
 	}
 	cands := []board.Candidate{item("gs/model-manager#258"), item("gs/beekeeper#525"), item("gs/beekeeper#555"),
-		item("gs/beekeeper#563"), item("gs/llm-d#29"), item("o/r#9"), item("gs/x#4"), item("o/r#4")}
+		item("gs/beekeeper#563"), item("gs/llm-d#29"), item("x/y#9"), item("gs/x#4"), item("o/r#4")}
 	res := nextFree(st, cands, pickScope{me: me, alive: func(state.Party) bool { return true }, listed: listed, owner: "gs"})
 	var got []string
 	for _, c := range res.Skipped {
@@ -411,7 +419,7 @@ func TestNextFreeSkipsWhatANoteNamesAsPeopleWrite(t *testing.T) {
 		`gs/beekeeper#555: note #2 (waits on the supervisor)`,
 		`gs/beekeeper#563: note #2 (waits on the supervisor)`,
 		`gs/llm-d#29: served by "Busy" (task)`,
-		`o/r#9: note #1 (waits on Pat)`,
+		`x/y#9: note #1 (waits on Pat)`,
 	}
 	if !slices.Equal(got, want) || res.Pick == nil || res.Pick.Ref != "gs/x#4" {
 		t.Errorf("pick %v, skipped:\n%s\nwant gs/x#4 after:\n%s", res.Pick, strings.Join(got, "\n"), strings.Join(want, "\n"))
@@ -423,15 +431,15 @@ func TestNextFreeSkipsWhatANoteNamesAsPeopleWrite(t *testing.T) {
 
 func TestSkipKind(t *testing.T) {
 	for reason, want := range map[string]string{
-		`served by "Worker one" through o/r#100`:              "served",
-		`note #704 (waits on the supervisor), on epic o/r#10`: "note",
-		"assigned to pat":                                                 "assigned",
-		"3 of 4 blockers open":                                            "blocked",
-		"no activity since 2026-01-01":                                    "stale",
-		`needs lease agentlab-1, held by "Lab holder"`:                    "lease",
-		"created 2026-06-24: Backlog takes items created within 90 days":  "order",
-		"no step of board.order offers Inbox":                             "order",
-		"blocker cleared takes items with recorded blockers, it has none": "order",
+		`served by "Worker one" through o/r#100`:              kindServed,
+		`note #704 (waits on the supervisor), on epic o/r#10`: kindNote,
+		"assigned to sam":                              kindAssigned,
+		"3 of 4 blockers open":                         kindBlocked,
+		"no activity since 2026-01-01":                 kindStale,
+		`needs lease agentlab-1, held by "Lab holder"`: kindLease,
+		oldBacklog:                            kindOrder,
+		"no step of board.order offers Inbox": kindOrder,
+		"blocker cleared takes items with recorded blockers, it has none": kindOrder,
 	} {
 		if got := skipKind(reason); got != want {
 			t.Errorf("skipKind(%q) = %q, want %q", reason, got, want)
@@ -442,18 +450,18 @@ func TestSkipKind(t *testing.T) {
 func TestPrintNextPreviewListsTheFreeItemsAndCountsTheSkips(t *testing.T) {
 	listed := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	me := state.Party{Session: "me", Name: "Me"}
-	running := state.Party{Session: "s1", Name: "Worker one"}
-	st := &state.State{
-		Records: []state.Record{{Session: running, Issue: "o/r#3", At: listed.Add(-time.Hour)}},
-		Notes:   []state.Note{{ID: 12, For: "Pat", Text: "o/r#4 and o/r#7"}},
-	}
+	running := state.Party{Session: "s1", Name: workerOne}
 	cands := boardCandidates(7)
-	cands[0].Skip = "created 2026-06-24: Backlog takes items created within 90 days"
+	st := &state.State{
+		Records: []state.Record{{Session: running, Issue: cands[2].Ref, At: listed.Add(-time.Hour)}},
+		Notes:   []state.Note{{ID: 12, For: pat, Text: cands[3].Ref + " and " + cands[6].Ref}},
+	}
+	cands[0].Skip = oldBacklog
 	for i := range cands {
 		cands[i].Title = fmt.Sprintf("Item %d", i+1)
 	}
 	res := nextFree(st, cands, pickScope{me: me, alive: func(state.Party) bool { return true }, listed: listed})
-	if want := map[string]int{"note": 2, "order": 1, "served": 1}; !maps.Equal(res.SkippedBy, want) {
+	if want := map[string]int{kindNote: 2, kindOrder: 1, kindServed: 1}; !maps.Equal(res.SkippedBy, want) {
 		t.Errorf("skipped by %v, want %v", res.SkippedBy, want)
 	}
 	var out strings.Builder
@@ -484,8 +492,8 @@ func TestPrintNextPreviewListsTheFreeItemsAndCountsTheSkips(t *testing.T) {
 }
 
 func TestOffBoardAsksAboutWhatIsNoBoardItem(t *testing.T) {
-	owners := map[string]string{"o/r#1": "you", "o/r#100": `"Worker one"`, "x/y#2": "note #1 (waits on Pat)"}
-	cands := []board.Candidate{{Item: board.Item{Ref: "O/R#1"}}, {Item: board.Item{Ref: "o/r#2"}}}
+	owners := map[string]string{refOne: "you", "o/r#100": `"Worker one"`, "x/y#2": "note #1 (waits on Pat)"}
+	cands := []board.Candidate{{Item: board.Item{Ref: "O/R#1"}}, {Item: board.Item{Ref: idleRef}}}
 	if got := offBoard(owners, cands); !slices.Equal(got, []string{"o/r#100", "x/y#2"}) {
 		t.Errorf("off the board %q, want the pull request and the other repository's issue", got)
 	}

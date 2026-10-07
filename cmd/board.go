@@ -220,24 +220,35 @@ type nextResult struct {
 	SkippedBy map[string]int    `json:"skipped_by,omitempty"`
 }
 
+// The kinds of a skip reason, skipKind's words and skipped_by's keys.
+const (
+	kindServed   = "served"
+	kindNote     = "note"
+	kindAssigned = "assigned"
+	kindBlocked  = "blocked"
+	kindStale    = "stale"
+	kindLease    = "lease"
+	kindOrder    = "order"
+)
+
 // skipKind names the kind of a skip reason: who holds the item, or what
 // turns it away.
 func skipKind(reason string) string {
 	switch {
 	case strings.HasPrefix(reason, "served by "):
-		return "served"
+		return kindServed
 	case strings.HasPrefix(reason, "note #"):
-		return "note"
+		return kindNote
 	case strings.HasPrefix(reason, "assigned to "):
-		return "assigned"
+		return kindAssigned
 	case strings.HasSuffix(reason, "blockers open"):
-		return "blocked"
+		return kindBlocked
 	case strings.HasPrefix(reason, "no activity since "):
-		return "stale"
+		return kindStale
 	case strings.HasPrefix(reason, "needs lease "):
-		return "lease"
+		return kindLease
 	}
-	return "order"
+	return kindOrder
 }
 
 // skipCounts says how many candidates were skipped, by kind, most first.
