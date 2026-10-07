@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -391,11 +392,35 @@ func (c *Client) Open(ctx context.Context, ref string) (bool, error) {
 	return r.Repository.Item.State == "OPEN", nil
 }
 
-// Closes reads in one request the issues each pull request among refs
-// closes (its closing references, the Closes and Fixes keywords resolved
-// across repositories), keyed by the lower-cased ref as given. An issue
-// among refs, or a ref that is no issue, closes nothing.
+// closesBatch is how many refs one request of Closes asks about: the query
+// stays far under an argument's size limit, and a request's cost bounded.
+const closesBatch = 50
+
+// Closes reads the issues each pull request among refs closes (its closing
+// references, the Closes and Fixes keywords resolved across repositories),
+// keyed by the lower-cased ref as given, closesBatch refs per request. An
+// issue among refs, or a ref that is no issue, closes nothing; nil when
+// nothing was asked.
 func (c *Client) Closes(ctx context.Context, refs []string) (map[string][]string, error) {
+	var out map[string][]string
+	for batch := range slices.Chunk(refs, closesBatch) {
+		part, err := c.closes(ctx, batch)
+		if err != nil {
+			return nil, err
+		}
+		if part == nil {
+			continue
+		}
+		if out == nil {
+			out = map[string][]string{}
+		}
+		maps.Copy(out, part)
+	}
+	return out, nil
+}
+
+// closes is one request of Closes.
+func (c *Client) closes(ctx context.Context, refs []string) (map[string][]string, error) {
 	var q strings.Builder
 	var asked []string
 	for _, ref := range refs {
