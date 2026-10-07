@@ -224,6 +224,14 @@ session's navigate to a site it was not allowed on yet for a person's site
 approval, which no hook answers. Its headless turns and every other
 session's browser calls pass.
 
+A board-wide project read is refused: gh project item-list without
+--query, and a gh api graphql query over a projectV2's items without a
+narrowing query: argument. Such a read pages the whole board with its field
+values and spends the GraphQL limit every session shares; the refusal names
+the estimated cost, the GraphQL budget as beekeeper last read it, and
+gh project item-add, gh project item-edit by item id, beekeeper board move
+and a filtered read instead. An issue's projectItems passes.
+
 An AskUserQuestion call is refused in every session but the guide's (the
 one beekeeper guide names): the agent files beekeeper note add --for
 <guide.person> and carries on.
@@ -284,6 +292,7 @@ Register it in ~/.claude/settings.json:
 				h.Outbound = outboundGuard(a.cfg.Outbound)
 				h.Labs = a.heldLabs
 				h.UnlockCommands = a.cfg.Secret.UnlockCommands
+				h.GraphQL = a.graphqlLeft
 			}
 			if out := h.Decide(raw); out != nil {
 				_, _ = a.out.Write(out)
@@ -430,6 +439,27 @@ Claude Code, ends the wait.`,
 		},
 	})
 	return c
+}
+
+// graphqlLeft is the GraphQL limit as beekeeper last read it, with the
+// reading's age; "" when none was read. It reads the state without its
+// lock, never GitHub: the hook opens no store of its own.
+func (a *app) graphqlLeft() string {
+	if a.loadConfig() != nil {
+		return ""
+	}
+	store, err := state.Open(a.cfg.StateDir)
+	if err != nil {
+		return ""
+	}
+	st, err := store.Peek()
+	if err != nil || st.Budget == nil || st.Budget.GraphQL == nil {
+		return ""
+	}
+	if a.now.IsZero() {
+		a.now = time.Now()
+	}
+	return graphqlText(a, graphqlOf(st.Budget.GraphQL)) + ", read " + dur(a.now.Sub(st.Budget.GraphQL.At)) + " ago"
 }
 
 // inScope reports whether the hook event in raw is in the hooks' scope:
