@@ -239,8 +239,8 @@ func TestReadTranscript(t *testing.T) {
 }
 
 func TestShellArgv(t *testing.T) {
-	argv := ShellArgv("/state/omp/x.in", "omp", "--mode", "rpc")
-	if argv[0] != "/bin/sh" || argv[4] != "/state/omp/x.in" || strings.Join(argv[5:], " ") != "omp --mode rpc" {
+	argv := ShellArgv("/state/omp/x.in", []string{keyVar, otherKeyVar}, "omp", "--mode", "rpc")
+	if argv[0] != "/bin/sh" || argv[4] != "/state/omp/x.in" || argv[5] != "A_KEY B_KEY" || strings.Join(argv[6:], " ") != "omp --mode rpc" {
 		t.Fatalf("argv = %q", argv)
 	}
 }

@@ -5,6 +5,7 @@ package omp
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -26,13 +27,22 @@ func MakeInbox(path string) error {
 
 // Send writes msg to the inbox at path as one steer command. It never
 // blocks on an inbox no process reads: that refuses it (ErrNotRunning).
-// Writes are serialized by a lock file beside the inbox (macOS locks no
-// FIFO), so two senders' lines never interleave, whatever their length.
 func Send(path, msg string) error {
 	line, err := steerLine(msg)
 	if err != nil {
 		return err
 	}
+	return Write(path, func(w io.Writer) error {
+		_, err := w.Write(line)
+		return err
+	})
+}
+
+// Write runs write with the inbox at path open for writing, or refuses
+// when no process reads the inbox (ErrNotRunning). Writes are serialized
+// by a lock file beside the inbox (macOS locks no FIFO), so two writers'
+// lines never interleave, whatever their length.
+func Write(path string, write func(w io.Writer) error) error {
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		return ErrNotRunning
 	}
@@ -56,8 +66,7 @@ func Send(path, msg string) error {
 	if err := setBlocking(f); err != nil {
 		return err
 	}
-	_, err = f.Write(line)
-	return err
+	return write(f)
 }
 
 func setBlocking(f *os.File) error {

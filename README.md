@@ -1806,6 +1806,27 @@ so a process left running would only hold its model. The agent's own beekeeper c
 `agents idle --done` like any worker. `agents handover` refuses omp
 agents, and no desktop import happens.
 
+A provider's key never lies in a file. omp resolves a provider's `apiKey` in its models file
+(`omp.modelsFile`, `~/.omp/agent/models.yml`) as the name of an environment variable first and as the
+key itself otherwise, so the file names the variable (`apiKey: SPARK_API_KEY`) and beekeeper's
+configuration names where the value lives, an `op://` reference of the shared vault
+(`omp.providers.<provider>.apiKey: op://<vault>/<item>/<field>`; a value there is refused when the
+configuration loads). `agents start --harness omp` on a model of such a provider reads the reference
+through `beekeeper secret`'s own handling, in the process that holds the vault session (the host's
+broker with `secret.session`, so the start runs there as a sandboxed start does; with a service
+account, the caller's own), and writes `NAME=value` into the agent's inbox before omp runs: the unit's
+shell reads the line, exports the variable and execs omp. No file, no command line and no unit
+property carries the value; it lives in omp's environment alone. omp hands its whole environment to
+the shells that run the agent's tool commands, so the unit names beekeeper's own bash as `SHELL`
+(`<stateDir>/omp/bin/bash`), which drops the variables `BEEKEEPER_OMP_CREDENTIALS` lists before it
+runs the command. A start is refused, before anything is recorded, when the file carries a value for a
+provider whose reference the configuration names (the file would hold the key), when it names a
+variable for a provider the configuration has no reference for (omp would send the name as the key),
+when the configuration names a reference and the file no variable, and when the reference does not
+answer or the vault stays locked: nothing starts on a key it does not have. The start's record and
+output say which variable the agent got and from which reference (`$SPARK_API_KEY from
+op://…`), never the value. A provider the configuration does not name keeps omp's own key handling.
+
 An omp session the person started in a terminal shows in `sessions` and can be followed, but takes
 no messages: omp offers no way into a running interactive session except its collab link, which goes
 through omp's relay service.

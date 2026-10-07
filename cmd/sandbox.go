@@ -268,8 +268,11 @@ git's signing call only; the key and the agent stay out of the sandbox.`,
 					sandbox.OpVault:      brokeredVaultState(keeper),
 					sandbox.OpKubeconfig: brokeredCall(exe, "/proc", brokeredCallTimeout, nil, brokeredKubeconfigArgv),
 					sandbox.OpGate:       brokeredCall(exe, "/proc", gateBrokeredTimeout, devctlPath(a.cfg.Sandbox.Devctl), brokeredGateArgv),
-					sandbox.OpAgents: brokeredAgents(func(env []string) sandbox.Handler {
-						return brokeredCall(exe, "/proc", agentsBrokeredTimeout, env, brokeredAgentsArgv)
+					// an omp start on a vault provider gets the vault session, as a secret call does
+					sandbox.OpAgents: a.brokeredVault(keeper, func(vault []string) sandbox.Handler {
+						return brokeredAgents(func(env []string) sandbox.Handler {
+							return brokeredCall(exe, "/proc", agentsBrokeredTimeout, append(slices.Clone(vault), env...), brokeredAgentsArgv)
+						})
 					}),
 					sandbox.OpWatch:  brokeredCall(exe, "/proc", 0, nil, brokeredWatchArgv),
 					sandbox.OpLab:    brokeredCall(exe, "/proc", labBrokeredTimeout, nil, brokeredLabArgv),

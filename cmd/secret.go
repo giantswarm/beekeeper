@@ -872,11 +872,12 @@ func (a *app) ageIdentities() []secret.AgeIdentity {
 }
 
 // secretNeedsVault reports whether a call's arguments take the shared
-// vault: an op:// reference, or a SOPS file, relative to dir (the working
-// directory when empty), whose age identity lives there. The client and the
-// broker decide on it alike.
+// vault: an op:// reference, a SOPS file, relative to dir (the working
+// directory when empty), whose age identity lives there, or an omp agent's
+// start on a provider whose key is there. The client and the broker decide
+// on it alike.
 func (a *app) secretNeedsVault(dir string, args []string) bool {
-	return secret.NeedsVault(args) || (&secret.Ops{Ages: a.ageIdentities()}).AgeNeedsVault(dir, args)
+	return secret.NeedsVault(args) || (&secret.Ops{Ages: a.ageIdentities()}).AgeNeedsVault(dir, args) || a.ompStartNeedsVault(args)
 }
 
 // secretNeedsBroker reports whether a call goes to the broker with

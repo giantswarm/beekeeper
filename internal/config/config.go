@@ -590,6 +590,13 @@ var DefaultUnalias = []string{"grep", "find", "ls", "cp", "mv", "rm"}
 // would read as more.
 var commandName = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.+-]*$`)
 
+// opRef reports whether s is an op:// reference of a field,
+// op://<vault>/<item>/<field>, as beekeeper secret reads them.
+func opRef(s string) bool {
+	parts := strings.Split(strings.TrimPrefix(s, "op://"), "/")
+	return strings.HasPrefix(s, "op://") && len(parts) >= 3 && !slices.Contains(parts, "")
+}
+
 // Doctor configures the known faults the doctor probes and remedies.
 type Doctor struct {
 	Faults []Fault `yaml:"faults"`
@@ -1242,10 +1249,28 @@ type Omp struct {
 	// SessionsDir holds omp's session files, one folder per working
 	// directory.
 	SessionsDir string `yaml:"sessionsDir"`
+	// ModelsFile is omp's provider configuration (~/.omp/agent/models.yml):
+	// the providers' endpoints and models, and for a provider of Providers
+	// the name of the variable omp reads its key from.
+	ModelsFile string `yaml:"modelsFile"`
 	// Model is the model `agents start --harness omp` starts an agent on
 	// without --model, an exact selector omp lists ("ollama/qwen3.5:9b");
 	// empty: such a start is refused.
 	Model string `yaml:"model"`
+	// Providers are the providers of ModelsFile whose key lives in the
+	// vault, by the provider's name there.
+	Providers map[string]OmpProvider `yaml:"providers"`
+}
+
+// OmpProvider is a provider of omp's models file whose key beekeeper hands
+// to the agents it starts on it.
+type OmpProvider struct {
+	// APIKey is the op:// reference of the provider's key, never the key:
+	// `agents start --harness omp` reads it through beekeeper's secret
+	// handling and puts it into the agent's environment under the variable
+	// the provider's apiKey in ModelsFile names, so no file carries the
+	// value.
+	APIKey string `yaml:"apiKey"`
 }
 
 // Desktop is how beekeeper shares the person's desktop.
@@ -1491,6 +1516,7 @@ func (c *Config) defaults() error {
 	setStr(&c.Claude.DesktopApp, DefaultDesktopApp)
 	setStr(&c.Claude.SessionsDir, filepath.Join(home, ".claude", "sessions"))
 	setStr(&c.Omp.SessionsDir, filepath.Join(home, ".omp", "agent", "sessions"))
+	setStr(&c.Omp.ModelsFile, filepath.Join(home, ".omp", "agent", "models.yml"))
 	cfg, err := os.UserConfigDir()
 	if err != nil {
 		return err
@@ -1690,6 +1716,12 @@ func (c *Config) validate() error {
 		}
 		if _, err := regexp.Compile(id.PathRegex); err != nil {
 			return fmt.Errorf("secret.ageIdentities[%d]: pathRegex: %w", i, err)
+		}
+	}
+	for name, p := range c.Omp.Providers {
+		// the message never carries the value someone put there
+		if !opRef(p.APIKey) {
+			return fmt.Errorf("omp.providers.%s.apiKey: want op://<vault>/<item>/<field>, the reference of the provider's key: beekeeper hands an agent the key from the vault, never from a file", name)
 		}
 	}
 	for i, r := range c.Outbound.StoreDeny {

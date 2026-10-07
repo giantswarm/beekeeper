@@ -155,6 +155,9 @@ func TestLoadRejects(t *testing.T) {
 		"age bad pathRegex":    "secret: {ageIdentities: [{pathRegex: \"[\", ref: op://V/i/f}]}",
 		"nameless board step":  "board: {order: [{status: [backlog]}]}",
 		"search with fields":   "board: {order: [{name: q, search: \"repo:o/r\", status: [backlog]}]}",
+		"omp key as value":     "omp: {providers: {spark: {apiKey: sk-planted}}}",
+		"omp key half ref":     "omp: {providers: {spark: {apiKey: op://Vault/item}}}",
+		"omp key no ref":       "omp: {providers: {spark: {}}}",
 	} {
 		p := filepath.Join(t.TempDir(), "c.yaml")
 		if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
@@ -163,6 +166,25 @@ func TestLoadRejects(t *testing.T) {
 		if _, err := Load(p); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+// An omp provider's key is an op:// reference; the models file has its
+// default beside the sessions.
+func TestOmpProviders(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "c.yaml")
+	if err := os.WriteFile(p, []byte("omp: {providers: {spark: {apiKey: op://Shared/spark/credential}}}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Omp.Providers["spark"].APIKey; got != "op://Shared/spark/credential" {
+		t.Errorf("apiKey = %q", got)
+	}
+	if !strings.HasSuffix(c.Omp.ModelsFile, filepath.Join(".omp", "agent", "models.yml")) {
+		t.Errorf("modelsFile = %q", c.Omp.ModelsFile)
 	}
 }
 

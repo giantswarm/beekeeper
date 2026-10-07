@@ -177,6 +177,11 @@ is involved and no import happens.`,
 			if name == "" {
 				return usageErr("an agent needs a name")
 			}
+			// an omp agent whose provider's key is in the vault starts where
+			// the vault session is: the host's broker
+			if harness == omp.Harness && a.ompStartBrokered(model) {
+				return a.agentsOnHost(cmd, args, agentsBrokeredTimeout+time.Minute)
+			}
 			// a sandboxed session's start reads its brief and gives the
 			// agent its directory through the broker, within its own lists
 			if err := a.sandboxPaths([]string{args[1]}, []string{dir}); err != nil {
