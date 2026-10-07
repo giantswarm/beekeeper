@@ -10,7 +10,10 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/merge"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
 // The doctor takes a finished worker off the roster once its CLI is idle,
@@ -253,14 +256,27 @@ func TestParkedOnPersonIsSaidOnce(t *testing.T) {
 	}
 }
 
-func TestLiveStaleWriters(t *testing.T) {
-	st := &state.State{StaleWriters: []state.StaleWriter{
-		{PID: 1, Command: "beekeeper agents start", Version: "v0.71.0", Newer: "v0.72.0"},
-		{PID: 2, Command: "beekeeper watch", Version: "v0.71.0", Newer: "v0.72.0"},
+// The stale binaries are the other beekeeper processes whose file was
+// replaced, by pid; the doctor leaves the watches to WATCH STALE.
+func TestStaleBinaries(t *testing.T) {
+	p := func(pid int, comm, cmdline string) *proc.Process {
+		return &proc.Process{PID: pid, Comm: comm, Args: strings.Fields(cmdline)}
+	}
+	tab := &proc.Table{ByPID: map[int]*proc.Process{
+		5: p(5, project.Name, "beekeeper agents reopen"),
+		3: p(3, project.Name, "beekeeper gate -- devctl pr merge o/r 1"),
+		4: p(4, project.Name, "beekeeper watch"),
+		6: p(6, project.Name, "beekeeper snapshot"),
+		7: p(7, merge.Tool, "devctl pr merge o/r 1"),
+		8: p(8, project.Name, "beekeeper doctor"),
 	}}
-	got := liveStaleWriters(st, func(pid int) bool { return pid == 1 })
-	if len(got) != 1 || staleLine(got[0]) != "stale writer: pid 1 (beekeeper agents start) runs beekeeper v0.71.0, older than the v0.72.0 that wrote the state; "+
-		"it keeps the fields it does not know but saves by its older rules until it ends or is restarted" {
-		t.Errorf("stale writers = %v", got)
+	replaced := func(pid int) bool { return pid != 6 }
+	got := staleBinaries(tab, 8, replaced)
+	if len(got) != 3 || got[0].PID != 3 || got[1].PID != 4 || got[2].PID != 5 {
+		t.Fatalf("stale binaries = %v", got)
+	}
+	if rest := slices.DeleteFunc(got, isWatch); len(rest) != 2 || staleLine(rest[0]) != "stale binary: pid 3 (beekeeper gate --) runs a beekeeper an install replaced; "+
+		"its saves of the state are refused until it ends or is restarted" {
+		t.Errorf("without the watches = %v: %q", rest, staleLine(rest[0]))
 	}
 }

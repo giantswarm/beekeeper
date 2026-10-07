@@ -118,7 +118,6 @@ type (
 	plainGraphQL      GraphQL
 	plainMerge        Merge
 	plainWriter       Writer
-	plainStaleWriter  StaleWriter
 	plainWorkerReport WorkerReport
 )
 
@@ -190,10 +189,6 @@ func (v *Merge) UnmarshalJSON(b []byte) error      { return decodeKeeping(b, (*p
 func (v Merge) MarshalJSON() ([]byte, error)       { return encodeKeeping(plainMerge(v), v.rest) }
 func (v *Writer) UnmarshalJSON(b []byte) error     { return decodeKeeping(b, (*plainWriter)(v), &v.rest) }
 func (v Writer) MarshalJSON() ([]byte, error)      { return encodeKeeping(plainWriter(v), v.rest) }
-func (v *StaleWriter) UnmarshalJSON(b []byte) error {
-	return decodeKeeping(b, (*plainStaleWriter)(v), &v.rest)
-}
-func (v StaleWriter) MarshalJSON() ([]byte, error) { return encodeKeeping(plainStaleWriter(v), v.rest) }
 func (v *WorkerReport) UnmarshalJSON(b []byte) error {
 	return decodeKeeping(b, (*plainWorkerReport)(v), &v.rest)
 }

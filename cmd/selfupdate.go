@@ -2,10 +2,14 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
 	"io"
+	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/update"
 )
 
@@ -30,7 +34,10 @@ stays as it is.
 
 The new binary is renamed over the old one in one step: a running
 beekeeper watch keeps running (the old binary, until it is restarted), and
-every beekeeper started afterwards is the new one. GitHub is asked
+every beekeeper started afterwards is the new one. The update names the
+beekeeper processes it leaves on the old binary (pid and command): once the
+new release writes the state, their saves are refused until they end or are
+restarted (beekeeper doctor lists them meanwhile). GitHub is asked
 anonymously, apart from the budget gh and devctl share, unless GITHUB_TOKEN
 is set. A development build (version dev) is refused.`,
 		Args: cobra.NoArgs,
@@ -53,9 +60,28 @@ is set. A development build (version dev) is refused.`,
 			if errors.Is(err, update.ErrOutdated) {
 				return &exitError{code: ExitOutdated, msg: res.Latest + " is newer than " + res.Current + ": beekeeper self-update installs it"}
 			}
+			if err == nil && res.Updated {
+				if t, terr := proc.Read(); terr == nil {
+					_, _ = fmt.Fprint(w, leftBehind(staleBinaries(t, os.Getpid(), replacedBinary), res.Current, res.Latest))
+				}
+			}
 			return err
 		},
 	}
 	c.Flags().BoolVar(&check, "check", false, "only report the running and the latest release; exit 125 when a newer one exists")
 	return c
+}
+
+// leftBehind names the beekeeper processes an update leaves on the old
+// binary, one line each, and what becomes of their saves; "" for none.
+func leftBehind(stale []*proc.Process, old, installed string) string {
+	if len(stale) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Left on %s until restarted, their saves of the state refused once %s writes it:\n", old, installed)
+	for _, p := range stale {
+		fmt.Fprintf(&b, "  pid %d: %s\n", p.PID, display(p.Args))
+	}
+	return b.String()
 }

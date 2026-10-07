@@ -83,7 +83,9 @@ merge waiting behind it). A waiting call whose binary is replaced
 arguments and stdio, the same place and deadline; never while devctl runs.
 devctl then runs once, in a session of its own, so it merges on when the
 caller's session ends (only SIGINT reaches it); its document and exit code
-pass through unchanged. A merge into a base branch no Auto-release
+pass through unchanged. A call whose release is older than the one that
+wrote the state and that cannot re-execute is refused (77) before it
+touches the lane: the installed beekeeper gates the same command again. A merge into a base branch no Auto-release
 run tags (the Auto-release workflow on the branch, read once per merge,
 names no push to it; its tags are cut by hand) runs devctl with
 --no-release-wait: its lane frees the moment devctl reports it merged and
@@ -219,6 +221,13 @@ func (a *app) gate(ctx context.Context, argv []string, wait time.Duration, queue
 	bin := platform.RunningBinary()
 	for {
 		a.now = time.Now()
+		// Before the step saves: the new release may have written the
+		// state, which refuses this binary's save.
+		if bin.Replaced() {
+			gateLine("%s was replaced while the merge waited: re-executing it", bin.Path)
+			err := bin.Exec(gateDeadlineEnv + "=" + deadline.Format(time.RFC3339Nano))
+			gateLine("the new binary does not start (%v): waiting on under %s", err, project.Version())
+		}
 		why, err := g.step()
 		if err != nil || why == "" {
 			return err
@@ -228,11 +237,6 @@ func (a *app) gate(ctx context.Context, argv []string, wait time.Duration, queue
 				return g.refuse("waited %s for its turn, %s; its place is dropped: run the same command again once the lane moves", wait, why)
 			}
 			return g.enqueue(ExitGateQueued, why)
-		}
-		if bin.Replaced() {
-			gateLine("%s was replaced while the merge waited: re-executing it", bin.Path)
-			err := bin.Exec(gateDeadlineEnv + "=" + deadline.Format(time.RFC3339Nano))
-			gateLine("the new binary does not start (%v): waiting on under %s", err, project.Version())
 		}
 		if why != g.lastWhy {
 			gateLine("waiting (up to %s): %s", deadline.Sub(a.now).Round(time.Second), why)
@@ -334,7 +338,13 @@ func (g *gateRun) step() (string, error) {
 		q = merge.Queue(st, g.lane.Name)
 		return ev, nil
 	})
+	var stale *state.StaleWriterError
 	switch {
+	case errors.As(err, &stale):
+		why := fmt.Sprintf("%s: this call runs beekeeper %s, older than the %s that wrote the state; nothing ran, the lane is untouched: run the same command again, the installed %s gates it",
+			g.key(), stale.Version, stale.Newer, project.Name)
+		_ = g.store.Log(event(g.me, "merge.refused", "%s", why))
+		return "", gateRefused("%s", why)
 	case err != nil:
 		return "", gateRefused("the state does not load (%v): fix it, then run the same command again", err)
 	case dropped:

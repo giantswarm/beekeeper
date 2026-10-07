@@ -24,7 +24,6 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/gofrs/flock"
 
-	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
@@ -746,9 +745,6 @@ type State struct {
 	ReportPause *ReportPause `json:"reportPause,omitempty"`
 	// Writer is the newest beekeeper that saved the state.
 	Writer *Writer `json:"writer,omitempty"`
-	// StaleWriters are the processes of an older beekeeper seen saving the
-	// state after a newer one, one per process while it runs.
-	StaleWriters []StaleWriter `json:"staleWriters,omitempty"`
 	// WorkerReports are the reports workers finished with (agents idle
 	// --done) that the supervisor's watch has not printed yet.
 	WorkerReports []WorkerReport `json:"workerReports,omitempty"`
@@ -777,23 +773,20 @@ type Writer struct {
 	rest rest
 }
 
-// StaleWriter is a process of an older beekeeper that saved the state after
-// a newer one had: it keeps the fields it does not know, yet it acts on the
-// state by its older rules until it is restarted.
-type StaleWriter struct {
-	PID     int    `json:"pid"`
-	Command string `json:"command"`
-	Version string `json:"version"`
-	// Newer is the version of the writer it followed.
-	Newer string    `json:"newer"`
-	At    time.Time `json:"at"`
-
-	rest rest
+// StaleWriterError is a save refused because a newer release wrote the
+// state: this binary would save it by rules that release changed (a watch,
+// a start's reopen or a gate call left running by an install). The state
+// stays as it is; the process ends or is restarted, and the installed
+// beekeeper runs its command.
+type StaleWriterError struct {
+	PID     int
+	Command string
+	// Version is this binary's, Newer the one that wrote the state.
+	Version, Newer string
 }
 
-// String names the process and its versions.
-func (w StaleWriter) String() string {
-	return fmt.Sprintf("pid %d (%s) runs beekeeper %s, older than the %s that wrote the state", w.PID, w.Command, w.Version, w.Newer)
+func (e *StaleWriterError) Error() string {
+	return fmt.Sprintf("pid %d (%s) runs beekeeper %s, older than the %s that wrote the state: its save is refused; restart it on the installed beekeeper", e.PID, e.Command, e.Version, e.Newer)
 }
 
 // Budget is one reading of the GitHub core budget.
@@ -939,9 +932,11 @@ type FileStore struct {
 	dir string
 	// version is the binary's, which every save stamps or judges.
 	version string
-	// follows are the Follow readers' places in the log, by name.
+	// follows are the Follow readers' places in the log, by name; refused
+	// says a save was refused and logged, once per process.
 	mu      sync.Mutex
 	follows map[string]*followed
+	refused bool
 }
 
 // followed is how far a Follow reader has read the log, and what it kept.
@@ -953,12 +948,17 @@ type followed struct {
 
 var _ Store = (*FileStore)(nil)
 
-// Open returns the file store in dir, creating the directory.
-func Open(dir string) (*FileStore, error) {
+// Open returns the file store in dir, creating the directory, saving as
+// this binary's version.
+func Open(dir string) (*FileStore, error) { return OpenVersion(dir, project.Version()) }
+
+// OpenVersion is Open saving as version: a release stamps the state and is
+// refused by a newer one's, a build without a release version does neither.
+func OpenVersion(dir, version string) (*FileStore, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	return &FileStore{dir: dir, version: project.Version()}, nil
+	return &FileStore{dir: dir, version: version}, nil
 }
 
 // Dir is the store's directory.
@@ -983,7 +983,7 @@ func (s *FileStore) Peek() (*State, error) { return s.load() }
 
 // Update runs fn on the state under the exclusive lock and writes the result
 // back atomically together with the events fn returns. When fn fails nothing
-// is written.
+// is written, nor when a newer release wrote the state (StaleWriterError).
 func (s *FileStore) Update(fn func(*State) ([]Event, error)) error {
 	l := flock.New(s.path("state.lock"))
 	if err := l.Lock(); err != nil {
@@ -998,7 +998,9 @@ func (s *FileStore) Update(fn func(*State) ([]Event, error)) error {
 	if err != nil {
 		return err
 	}
-	events = append(events, s.stamp(st, time.Now())...)
+	if err := s.stamp(st, time.Now()); err != nil {
+		return err
+	}
 	if err := writeJSON(s.path("state.json"), st); err != nil {
 		return err
 	}
@@ -1037,38 +1039,43 @@ func (s *FileStore) Record(events ...Event) error {
 	return s.append(events)
 }
 
-// VerbStaleWriter is the event of an older beekeeper's first save after a
-// newer one's.
+// VerbStaleWriter is the event of an older release's first refused save
+// after a newer one wrote the state.
 const VerbStaleWriter = "state.stale-writer"
 
-// stamp records the binary as the state's writer, unless a newer one wrote
-// it: then the save goes on with the fields this binary does not know kept,
-// and its process is recorded and logged once as a stale writer. A build
-// without a release version (dev, a release candidate, a +dirty branch
-// build) neither stamps nor judges, and a stamp of one is overwritten by
-// the next release that saves.
-func (s *FileStore) stamp(st *State, now time.Time) []Event {
+// stamp records the binary as the state's writer. A newer release wrote it:
+// the save is refused (StaleWriterError), logged once per process, since
+// this binary would save by rules that release changed. A build without a
+// release version (dev, a release candidate, a +dirty branch build) neither
+// stamps nor is judged, and a stamp of one is overwritten by the next
+// release that saves.
+func (s *FileStore) stamp(st *State, now time.Time) error {
 	own, ok := release(s.version)
 	if !ok {
 		return nil
 	}
-	st.StaleWriters = slices.DeleteFunc(st.StaleWriters, func(w StaleWriter) bool {
-		_, newer := release(w.Newer)
-		return !newer || !proc.Alive(w.PID)
-	})
 	if st.Writer != nil {
 		if newer, ok := release(st.Writer.Version); ok && own.LessThan(newer) {
-			pid := os.Getpid()
-			if slices.ContainsFunc(st.StaleWriters, func(w StaleWriter) bool { return w.PID == pid && w.Version == s.version }) {
-				return nil
-			}
-			w := StaleWriter{PID: pid, Command: command(os.Args), Version: s.version, Newer: st.Writer.Version, At: now}
-			st.StaleWriters = append(st.StaleWriters, w)
-			return []Event{{At: now, By: Party{Name: w.Command}, Verb: VerbStaleWriter, Detail: w.String() + ": it keeps the fields it does not know; restart it"}}
+			return s.refuse(st.Writer.Version, now)
 		}
 	}
 	st.Writer = &Writer{Version: s.version, rest: writerRest(st.Writer)}
+	// Releases before the refusal recorded their stale saves here instead.
+	delete(st.rest, "staleWriters")
 	return nil
+}
+
+// refuse is the refused save's error, logged the first time in this process.
+func (s *FileStore) refuse(newer string, now time.Time) error {
+	err := &StaleWriterError{PID: os.Getpid(), Command: command(os.Args), Version: s.version, Newer: newer}
+	s.mu.Lock()
+	logged := s.refused
+	s.refused = true
+	s.mu.Unlock()
+	if !logged {
+		_ = s.append([]Event{{At: now, By: Party{Name: err.Command}, Verb: VerbStaleWriter, Detail: err.Error()}})
+	}
+	return err
 }
 
 // release is v as a release version: no prerelease, no build metadata.
