@@ -34,8 +34,9 @@ binary it runs from (or --binary):
     beekeeper-teleport.timer, enabled and started, and the service it
     starts every teleport.every (beekeeper teleport renew --keeper);
   - with systemd, the memory guard sized to the machine's RAM: memcap.slice,
-    which beekeeper run's capped commands sit in, and a drop-in for the
-    Claude Desktop scope that runs;
+    which beekeeper run's capped commands sit in, with their CPU budget
+    (memcap.cpuQuota, memcap.cpuWeight), and a drop-in for the Claude
+    Desktop scope that runs;
   - a starter config, the example configuration with every key commented
     out, when no config exists.
 
@@ -118,6 +119,8 @@ func (a *app) installEnv(e *install.Env, binary string) error {
 	if m, err := plat.Machine.Mem(); err == nil {
 		e.Spec.RAMMiB, e.Spec.SwapMiB = m.TotalMiB, m.SwapTotalMiB
 	}
+	cpu := a.memcapCPU()
+	e.Spec.CPUQuota, e.Spec.CPUWeight = cpu.CPUQuota, cpu.CPUWeight
 	if s, err := plat.Machine.DesktopScope(); err == nil && s != nil {
 		e.Spec.DesktopScope = filepath.Base(s.Path)
 	}

@@ -1,8 +1,11 @@
 package machine
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseOOM(t *testing.T) {
@@ -21,6 +24,44 @@ func TestParseOOM(t *testing.T) {
 	}
 	if kills[1].PID != 42 || kills[1].Task != "jest worker" || kills[1].AnonMiB != 2 {
 		t.Errorf("second kill = %+v", kills[1])
+	}
+}
+
+// memcap.slice's CPU: cpu.max as a systemd quota, cpu.weight, and the use
+// and the throttled periods over the sample from cpu.stat before and after.
+func TestReadBuildCPU(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("cpu.max", "1200000 100000\n")
+	write("cpu.weight", "50\n")
+	write("cpu.stat", "usage_usec 1000000\nuser_usec 900000\nsystem_usec 100000\nnr_periods 10\nnr_throttled 2\nthrottled_usec 5000\n")
+	var slept time.Duration
+	later := func(d time.Duration) {
+		slept = d
+		write("cpu.stat", "usage_usec 3400000\nuser_usec 3000000\nsystem_usec 400000\nnr_periods 12\nnr_throttled 5\nthrottled_usec 9000\n")
+	}
+	b := readBuildCPU(dir, 200*time.Millisecond, later)
+	if slept != 200*time.Millisecond || b.Quota != "1200%" || b.Weight != 50 || b.UsePct != 1200 || b.Throttled != 3 {
+		t.Errorf("readBuildCPU = %+v after %s", b, slept)
+	}
+
+	write("cpu.max", "max 100000\n")
+	if b := readBuildCPU(dir, 0, func(time.Duration) {}); b.Quota != "max" || b.UsePct != 0 || b.Throttled != 0 {
+		t.Errorf("without a quota or a sample: %+v", b)
+	}
+	for file, want := range map[string]string{"150000 100000\n": "150%", "50000 100000": "50%", "garbage": "?", "1 0": "?"} {
+		write("cpu.max", file)
+		if got := cpuQuota(filepath.Join(dir, "cpu.max")); got != want {
+			t.Errorf("cpuQuota(%q) = %q, want %q", file, got, want)
+		}
+	}
+	if got := cpuQuota(filepath.Join(dir, "missing")); got != "?" {
+		t.Errorf("cpuQuota of a missing file = %q", got)
 	}
 }
 

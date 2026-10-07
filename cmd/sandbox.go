@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/free"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
@@ -262,7 +263,7 @@ git's signing call only; the key and the agent stay out of the sandbox.`,
 			}
 			spool := make(chan error, 1)
 			go func() {
-				spool <- sandbox.Serve(ctx, dir, "/proc", brokerTick, brokered(brokeredCap(plat.Capper), map[string]sandbox.Handler{
+				spool <- sandbox.Serve(ctx, dir, "/proc", brokerTick, brokered(brokeredCap(plat.Capper, a.memcapCPU()), map[string]sandbox.Handler{
 					sandbox.OpSecret:     a.brokeredVault(keeper, secretCall),
 					sandbox.OpVault:      brokeredVaultState(keeper),
 					sandbox.OpKubeconfig: brokeredCall(exe, "/proc", brokeredCallTimeout, nil, brokeredKubeconfigArgv),
@@ -309,8 +310,9 @@ func brokered(capRun func(int, sandbox.Request) error, calls map[string]sandbox.
 }
 
 // brokeredCap acts on a sandboxed run's request with the host's capper:
-// memcap's slices and scopes only, sizes as beekeeper run takes them.
-func brokeredCap(c platform.Capper) func(int, sandbox.Request) error {
+// memcap's slices and scopes only, sizes as beekeeper run takes them, and
+// memcap.slice's CPU budget the host's own (cpu), never the request's.
+func brokeredCap(c platform.Capper, cpu platform.Cap) func(int, sandbox.Request) error {
 	return func(pid int, req sandbox.Request) error {
 		if req.Op == sandbox.OpPing {
 			return nil
@@ -323,7 +325,7 @@ func brokeredCap(c platform.Capper) func(int, sandbox.Request) error {
 				return err
 			}
 		}
-		cp := platform.Cap{Max: req.Max, Swap: req.Swap, Slice: req.Slice}
+		cp := platform.Cap{Max: req.Max, Swap: req.Swap, Slice: req.Slice, CPUQuota: cpu.CPUQuota, CPUWeight: cpu.CPUWeight}
 		switch req.Op {
 		case sandbox.OpCapSlot:
 			return c.CapSlot(cp)
@@ -477,6 +479,9 @@ func sandboxScopeCmd() *cobra.Command {
 			if err != nil {
 				return &exitError{code: guard.ExitNotFound, msg: err.Error()}
 			}
+			// The command starts at RunNice here, as systemd-run starts it
+			// on the host.
+			free.Nice(platform.RunNice)
 			return syscall.Exec(path, argv, os.Environ()) //nolint:gosec // running the caller's command is the purpose
 		},
 	}

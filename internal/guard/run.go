@@ -117,6 +117,10 @@ type Options struct {
 	Max string
 	// Swap is the scope's MemorySwapMax; "0": a build does not swap.
 	Swap string
+	// CPUQuota and CPUWeight are memcap.slice's CPU budget, which every
+	// slot shares (platform.Cap).
+	CPUQuota  string
+	CPUWeight int
 	// Wait bounds the wait for a slot and for the memory the cap needs.
 	Wait    time.Duration
 	SlotDir string
@@ -132,6 +136,11 @@ type Options struct {
 	// Sandbox caps the run when the agent sandbox keeps the service
 	// manager out of reach (the host's broker); nil outside the sandbox.
 	Sandbox platform.Capper
+}
+
+// cap is the run's cap in the slice of slot n.
+func (o Options) cap(n int) platform.Cap {
+	return platform.Cap{Max: o.Max, Swap: o.Swap, Slice: o.SlotSlice(n), CPUQuota: o.CPUQuota, CPUWeight: o.CPUWeight}
 }
 
 func (o Options) record(verb, detail string) {
@@ -224,7 +233,7 @@ func Run(o Options, argv []string) int {
 		defer func() { _ = lock.Unlock() }()
 		holder := filepath.Join(o.SlotDir, strconv.Itoa(slot)+".holder")
 		defer func() { _ = os.Remove(holder) }()
-		if err := capper.CapSlot(platform.Cap{Max: o.Max, Swap: o.Swap, Slice: o.SlotSlice(slot)}); err != nil {
+		if err := capper.CapSlot(o.cap(slot)); err != nil {
 			logf("%v", err)
 			return 1
 		}
@@ -378,7 +387,7 @@ func writeHolder(o Options, slot int, argv []string) {
 
 // scope runs argv in the capped scope unit, in the slot's slice.
 func scope(capper platform.Capper, unit string, o Options, slot int, argv []string, logf func(string, ...any)) int {
-	c, err := capper.Command(unit, platform.Cap{Max: o.Max, Swap: o.Swap, Slice: o.SlotSlice(slot)}, argv)
+	c, err := capper.Command(unit, o.cap(slot), argv)
 	if err != nil {
 		logf("%v", err)
 		return ExitNotFound

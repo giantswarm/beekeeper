@@ -129,6 +129,12 @@ type Cap struct {
 	// Slice is the slice of the build slot the run holds or shares, under
 	// memcap.slice: every run of the slot shares its cap. "": memcap.slice.
 	Slice string
+	// CPUQuota and CPUWeight are memcap.slice's CPU budget, which every
+	// slot shares: its CPUQuota ("1200%", 100% a core; "": none) and its
+	// CPUWeight against the desktop's slices (100 each). A zero CPUWeight
+	// leaves the slice's CPU as it is.
+	CPUQuota  string
+	CPUWeight int
 }
 
 // Capper runs commands under a memory cap.
@@ -189,6 +195,10 @@ type SetupSpec struct {
 	Exe string
 	// RAMMiB and SwapMiB size the memory guard; zero RAM writes none.
 	RAMMiB, SwapMiB int
+	// CPUQuota and CPUWeight are memcap.slice's CPU budget
+	// (memcap.cpuQuota, memcap.cpuWeight), as in a Cap.
+	CPUQuota  string
+	CPUWeight int
 	// DesktopScope is the unit name of the running Claude Desktop scope,
 	// empty when none runs.
 	DesktopScope string
