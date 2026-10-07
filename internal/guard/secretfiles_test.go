@@ -168,3 +168,28 @@ func TestCredentialKey(t *testing.T) {
 		}
 	}
 }
+
+// A home reached through a symlinked directory (macOS's /var): a symlink
+// resolves to the real path, which the guarded glob names too.
+func TestSecretFilesSymlinkedHome(t *testing.T) {
+	real := t.TempDir()
+	via := filepath.Join(t.TempDir(), "via")
+	if err := os.Symlink(real, via); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", via)
+	agent := filepath.Join(real, ".omp", "agent")
+	if err := os.MkdirAll(agent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agent, "models.yml"), []byte("a: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(via, "m.yml")
+	if err := os.Symlink(filepath.Join(via, ".omp", "agent", "models.yml"), link); err != nil {
+		t.Fatal(err)
+	}
+	if newSecretFiles(nil).match(link) == "" {
+		t.Error("a symlink through a symlinked home is no read of the guarded file")
+	}
+}

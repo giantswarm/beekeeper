@@ -72,8 +72,15 @@ func newSecretFiles(extra []string) secretFiles {
 	home, _ := os.UserHomeDir()
 	f := secretFiles{home: home}
 	for _, g := range slices.Concat(SecretFiles, extra) {
-		if g = expandHome(g); filepath.IsAbs(g) {
-			f.globs = append(f.globs, filepath.Clean(g))
+		if g = expandHome(g); !filepath.IsAbs(g) {
+			continue
+		}
+		g = filepath.Clean(g)
+		f.globs = append(f.globs, g)
+		// the glob under its directory's real path, which a resolved
+		// symlink names (macOS's /var is /private/var)
+		if dir, err := filepath.EvalSymlinks(filepath.Dir(g)); err == nil && dir != filepath.Dir(g) {
+			f.globs = append(f.globs, filepath.Join(dir, filepath.Base(g)))
 		}
 	}
 	return f
