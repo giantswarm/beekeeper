@@ -11,8 +11,12 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// waitWorker is the session of a worker whose headless turn ends on a wait.
-const waitWorker = "29900000-0000-4000-8000-000000000299"
+// waitWorker is the session of a worker whose headless turn ends on a wait,
+// waitName its name on the roster.
+const (
+	waitWorker = "29900000-0000-4000-8000-000000000299"
+	waitName   = "BK 299"
+)
 
 // backgroundTurn is a transcript whose turn launched cmd in the background
 // and ended before its completion notice.
@@ -39,7 +43,7 @@ func waitApp(t *testing.T, transcript, waits string) (*app, *[]string) {
 	if err := os.WriteFile(filepath.Join(dir, waitWorker+".jsonl"), []byte(transcript), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	p := state.Party{Session: waitWorker, HostSession: "local_" + waitWorker, Name: "BK 299"}
+	p := state.Party{Session: waitWorker, HostSession: "local_" + waitWorker, Name: waitName}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Starts = append(st.Starts, state.Start{Party: p, Mode: state.ModeBypass, Dir: dir, At: time.Now()})
 		st.Agents = append(st.Agents, state.Agent{Party: p, Task: "giantswarm/beekeeper#299", AssignedAt: time.Now().Add(-time.Minute)})
@@ -54,13 +58,13 @@ func waitApp(t *testing.T, transcript, waits string) (*app, *[]string) {
 	savedResume, savedLeft := resumeHeadless, unitLeftovers
 	t.Cleanup(func() { resumeHeadless, unitLeftovers = savedResume, savedLeft })
 	resumeHeadless = func(_ context.Context, _ *app, ag state.Agent, msg string) error {
-		if ag.Name != "BK 299" {
+		if ag.Name != waitName {
 			t.Errorf("resumed %q", ag.Name)
 		}
 		resumes = append(resumes, msg)
 		return nil
 	}
-	unitLeftovers = func(string) [][]string { return nil }
+	unitLeftovers = func(string, string) [][]string { return nil }
 	plat.Machine = tableMachine{plat.Machine}
 	return a, &resumes
 }
@@ -93,7 +97,7 @@ func TestReopenResumesATurnThatEndedOnAWait(t *testing.T) {
 		t.Errorf("agent after the resume: %+v", ag)
 	}
 	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == resumedWaitEvent })
-	if err != nil || len(evs) != 1 || !strings.Contains(evs[0].Detail, "BK 299") {
+	if err != nil || len(evs) != 1 || !strings.Contains(evs[0].Detail, waitName) {
 		t.Errorf("%s events = %+v, %v", resumedWaitEvent, evs, err)
 	}
 	reopen(t, a)
@@ -106,7 +110,7 @@ func TestReopenResumesATurnThatEndedOnAWait(t *testing.T) {
 // arguments' values.
 func TestReopenResumesOnALeftoverProcess(t *testing.T) {
 	a, resumes := waitApp(t, "{}\n", "")
-	unitLeftovers = func(string) [][]string {
+	unitLeftovers = func(string, string) [][]string {
 		return [][]string{{"/usr/bin/curl", "-H", "Authorization: Bearer s3cr3t", "-o", "model.bin", "https://example.com/model"}}
 	}
 	reopen(t, a)
@@ -195,6 +199,23 @@ func TestTurnUnit(t *testing.T) {
 	} {
 		if got := turnUnit(unit, waitWorker); got != want {
 			t.Errorf("turnUnit(%q) = %v, want %v", unit, got, want)
+		}
+	}
+}
+
+// The turn unit's stop-post, which starts the reopen, is no leftover of
+// the turn's; a worker's own beekeeper commands and claude are.
+func TestReopenArgs(t *testing.T) {
+	for cmd, want := range map[string]bool{
+		"/bin/beekeeper agents reopen --detach local_x":  true,
+		"/bin/beekeeper agents reopen x":                 true,
+		"/bin/beekeeper agents":                          false,
+		"/bin/beekeeper agents note reopen":              false,
+		"/bin/beekeeper --as x agents reopen x":          false,
+		"/usr/bin/claude -p --resume x -- agents reopen": false,
+	} {
+		if got := reopenArgs(strings.Fields(cmd)); got != want {
+			t.Errorf("reopenArgs(%q) = %v, want %v", cmd, got, want)
 		}
 	}
 }

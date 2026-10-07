@@ -89,11 +89,41 @@ func TestSizeBytes(t *testing.T) {
 // A unit's informative ends never fail it: a stop as asked with
 // TermIsSuccess, and the stop-post's own end, a kill included.
 func TestRunArgsExpectedEndsSucceed(t *testing.T) {
-	got := strings.Join(runArgs(Unit{Name: "beekeeper-wake-x", Argv: []string{"claude"}, TermIsSuccess: true,
-		StopPost: []string{"/bin/beekeeper", "agents", "reopen", "local_x"}, StopTimeout: time.Minute}), " ")
-	for _, want := range []string{"SuccessExitStatus=143 SIGTERM", "ExecStopPost=-/bin/beekeeper agents reopen local_x", "-- claude"} {
+	got := strings.Join(runArgs(Unit{Name: "beekeeper-wake-x", Argv: []string{"claude"}, TermIsSuccess: true, StopPost: detachStopPost, StopTimeout: time.Minute}), " ")
+	for _, want := range []string{"SuccessExitStatus=143 SIGTERM", "ExecStopPost=-/bin/beekeeper agents reopen --detach local_x", "-- claude"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("systemd-run %s: no %q", got, want)
+		}
+	}
+}
+
+// detachStopPost is a turn unit's stop-post, which starts the reopen's unit.
+var detachStopPost = []string{"/bin/beekeeper", "agents", "reopen", "--detach", "local_x"}
+
+// A turn's unit is bounded in its stop (TimeoutStopSec, the stop-post
+// within it), a reopen's in its runtime (RuntimeMaxSec); a unit without
+// either gets the manager's defaults.
+func TestRunArgsStopAndRuntimeBounds(t *testing.T) {
+	for name, c := range map[string]struct {
+		unit      Unit
+		want, not []string
+	}{
+		"a turn": {Unit{Name: "beekeeper-wake-x", Argv: []string{"claude"}, StopPost: detachStopPost, StopTimeout: time.Minute},
+			[]string{"-p TimeoutStopSec=60 "}, []string{"RuntimeMaxSec"}},
+		"a reopen": {Unit{Name: "beekeeper-reopen-x", Argv: []string{"beekeeper"}, MaxRuntime: 35 * time.Minute},
+			[]string{"-p RuntimeMaxSec=2100 "}, []string{"ExecStopPost", "TimeoutStopSec"}},
+		"neither": {Unit{Name: "beekeeper-merge-x", Argv: []string{"devctl"}}, nil, []string{"ExecStopPost", "TimeoutStopSec", "RuntimeMaxSec"}},
+	} {
+		got := strings.Join(runArgs(c.unit), " ")
+		for _, want := range c.want {
+			if !strings.Contains(got, want) {
+				t.Errorf("%s: systemd-run %s: no %q", name, got, want)
+			}
+		}
+		for _, not := range c.not {
+			if strings.Contains(got, not) {
+				t.Errorf("%s: systemd-run %s: has %q", name, got, not)
+			}
 		}
 	}
 }

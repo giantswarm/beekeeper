@@ -309,7 +309,7 @@ func TestHandoverAsksAParkedAgentInAHeadlessTurn(t *testing.T) {
 		}
 		u := l.units[0]
 		argv := strings.Join(u.Argv, " ")
-		if !strings.HasPrefix(u.Name, wakePrefix(oldID)) || u.Dir != dir || u.StopPost != nil ||
+		if !strings.HasPrefix(u.Name, wakePrefix(oldID)) || u.Dir != dir || u.StopPost != nil || u.StopTimeout != turnStopWait || u.MaxRuntime != 0 ||
 			!strings.Contains(argv, "-p --resume "+oldID+" --permission-mode "+state.ModeBypass) || !strings.Contains(argv, "agents note") {
 			t.Errorf("live %v: unit %+v", live, u)
 		}

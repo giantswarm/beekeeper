@@ -155,13 +155,22 @@ func runArgs(u Unit) []string {
 	}
 	if len(u.StopPost) > 0 {
 		// "-": the stop-post's own end, a kill included, never fails the unit.
-		args = append(args, "-p", "ExecStopPost=-"+strings.Join(u.StopPost, " "), "-p", "TimeoutStopSec="+strconv.Itoa(int(u.StopTimeout.Seconds())))
+		args = append(args, "-p", "ExecStopPost=-"+strings.Join(u.StopPost, " "))
+	}
+	if u.StopTimeout > 0 {
+		args = append(args, "-p", "TimeoutStopSec="+seconds(u.StopTimeout))
+	}
+	if u.MaxRuntime > 0 {
+		args = append(args, "-p", "RuntimeMaxSec="+seconds(u.MaxRuntime))
 	}
 	for _, e := range u.Env {
 		args = append(args, "--setenv="+e)
 	}
 	return append(append(args, "--"), u.Argv...)
 }
+
+// seconds is d as a service manager's time value in whole seconds.
+func seconds(d time.Duration) string { return strconv.Itoa(int(d.Seconds())) }
 
 func (systemdLauncher) Freeze(ctx context.Context, name string) error {
 	return systemctlUser(ctx, "freeze", name)

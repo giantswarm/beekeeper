@@ -162,7 +162,8 @@ func (a *app) markDelivered(p state.Party) {
 }
 
 // resumeTurn resumes the session w headless with msg as its turn, in a
-// transient user unit whose end shows it in the desktop for a moment.
+// transient user unit whose stop-post starts the reopen that shows it in the
+// desktop for a moment.
 func (a *app) resumeTurn(ctx context.Context, by state.Party, w wakeTarget, msg string) error {
 	if pid, err := a.toDesktopCLI(ctx, w.id, msg); pid != 0 || err != nil {
 		if err != nil {
@@ -183,7 +184,7 @@ func (a *app) resumeTurn(ctx context.Context, by state.Party, w wakeTarget, msg 
 	}
 	var stopPost []string
 	if w.host != "" {
-		stopPost = []string{self, agentsName, reopenName, w.host}
+		stopPost = reopenStopPost(self, w.host)
 	}
 	if err := launch(unit, w.dir, a.explicitConfig(), stopPost, wakeArgv(bin, w, msg)); err != nil {
 		return fmt.Errorf("waking %s: %w", w.name, err)

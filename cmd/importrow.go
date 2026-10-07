@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -115,21 +116,21 @@ func (w *watcher) importRows(ctx context.Context, st *state.State) {
 // after a headless task turn imports the session itself.
 const rowGrace = replyWait + importRowWait
 
-// reopenUnitPrefix is the unit prefix of every doctor's reopen.
+// reopenUnitPrefix is the unit prefix of every reopen: the one a start's or
+// wake's stop-post starts once the turn ended (agents reopen --detach), and
+// the doctor's for a rowless worker.
 const reopenUnitPrefix = "beekeeper-reopen-"
 
-// reopenPrefix is the unit prefix of the doctor's reopens of session id;
-// reopenUnit a new unit name for each, as wakeUnit (an ended unit stays
-// loaded while a process it started runs on).
+// reopenPrefix is the unit prefix of the reopens of session id; reopenUnit
+// a new unit name for each, as wakeUnit (an ended unit stays loaded while a
+// process it started runs on).
 func reopenPrefix(id string) string { return reopenUnitPrefix + id[:min(8, len(id))] }
 
 func reopenUnit(id string) string { return reopenPrefix(id) + "-" + uuid.NewString()[:8] }
 
-// reopening reports whether a reopen of session id runs: a start's or
-// wake's unit in its turn or its stop-post reopen, or a doctor's reopen
-// unit.
-func reopening(ctx context.Context, id string) bool {
-	return unitsReopening(ctx, id) || len(plat.Launcher.Running(ctx, true, reopenPrefix(id)+"*")) > 0
+// reopenUnits are the reopen units of session id that run or stop.
+func reopenUnits(ctx context.Context, id string) []string {
+	return plat.Launcher.Running(ctx, true, reopenPrefix(id)+"*")
 }
 
 // rowlessWorker is a worker of beekeeper's starts whose session the desktop
@@ -173,7 +174,7 @@ func (a *app) rowlessWorkers(ctx context.Context, st *state.State, t *proc.Table
 		if _, ok := record("local_" + ag.Session); ok {
 			continue
 		}
-		if headlessTurn(t, ag.Session) != "" || desktopTwin(t, ag.Session) != nil || reopening(ctx, ag.Session) {
+		if headlessTurn(t, ag.Session) != "" || desktopTwin(t, ag.Session) != nil || unitsReopening(ctx, ag.Session) {
 			continue
 		}
 		out = append(out, rowlessWorker{agent: ag, start: start})
@@ -205,8 +206,9 @@ func (a *app) reopenRowless(ctx context.Context, st *state.State, t *proc.Table,
 		}
 		return lines
 	}
-	// A reopen under way (an earlier pass's) warms a CLI the process table
-	// does not show yet: it counts against the cap as well.
+	// A reopen under way (a turn's stop-post's, an earlier pass's) warms a
+	// CLI the process table does not show yet: it counts against the cap as
+	// well.
 	running, pending, limit := desktopCLIs(t), len(plat.Launcher.Running(ctx, true, reopenUnitPrefix+"*")), a.desktopCap()
 	n := running + pending
 	for _, w := range workers {
@@ -224,7 +226,7 @@ func (a *app) reopenRowless(ctx context.Context, st *state.State, t *proc.Table,
 			continue
 		}
 		unit := reopenUnit(w.agent.Session)
-		if err := a.launchReopen(unit, w); err != nil {
+		if err := a.launchReopen(unit, w.start.Dir, w.agent.Session, ""); err != nil {
 			lines = append(lines, fmt.Sprintf("%q: its reopen did not start: %v", w.agent.Name, err))
 			n--
 			continue
@@ -238,14 +240,23 @@ func (a *app) reopenRowless(ctx context.Context, st *state.State, t *proc.Table,
 	return lines
 }
 
-// launchReopen starts `agents reopen` of w's session in unit, in the
-// start's directory.
-func (a *app) launchReopen(unit string, w rowlessWorker) error {
+// launchReopen starts `agents reopen` of arg (a session id, or a wake's
+// local_ desktop id) in unit, in dir: a start's or wake's stop-post
+// (detachReopen; turn is its unit) or the doctor (reopenRowless; none). The
+// unit runs reopenAwayWait + stopPostWait at most (RuntimeMaxSec): the wait
+// for the person to leave the desktop's window, then the show, the CLI it
+// warms and the retitle; a stop (a hand-over's) ends it at once, as asked,
+// its short-lived children (the desktop's opener, hyprctl) with it.
+func (a *app) launchReopen(unit, dir, arg, turn string) error {
 	self, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	return launch(unit, w.start.Dir, a.explicitConfig(), nil, []string{self, agentsName, reopenName, w.agent.Session})
+	argv := []string{self, agentsName, reopenName}
+	if turn != "" {
+		argv = append(argv, "--"+turnFlag, turn)
+	}
+	return startUnit(platform.Unit{Name: unit, Dir: dir, Argv: append(argv, arg), TermIsSuccess: true, MaxRuntime: reopenAwayWait + stopPostWait}, a.explicitConfig())
 }
 
 // rowlessAgents says once per worker that its session has no row in the
