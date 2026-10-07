@@ -75,7 +75,7 @@ func TestWatchSaysCPUPressureOnTheSecondSample(t *testing.T) {
 		t.Fatalf("no CPU PRESSURE with its consumers on the second sample:\n%s", out)
 	}
 	w.cfg.Watch.CPUPSIMax = 1000
-	w.sampleCPU(now.Add(2 * time.Second), nil)
+	w.sampleCPU(now.Add(2*time.Second), nil)
 	if !strings.Contains(out.String(), "ENDED CPU PRESSURE") {
 		t.Errorf("no ENDED CPU PRESSURE:\n%s", out)
 	}
