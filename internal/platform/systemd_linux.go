@@ -132,6 +132,15 @@ type systemdLauncher struct{}
 func (systemdLauncher) Available() bool { return userSystemd() }
 
 func (systemdLauncher) Start(u Unit) error {
+	out, err := exec.Command("systemd-run", runArgs(u)...).CombinedOutput() //nolint:gosec // starting the unit is the purpose
+	if err != nil {
+		return fmt.Errorf("systemd-run: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// runArgs is systemd-run's command line for u.
+func runArgs(u Unit) []string {
 	args := []string{userManager, "--collect", "--quiet", "--unit=" + u.Name}
 	if u.KeepChildren {
 		args = append(args, "-p", "KillMode=process")
@@ -145,17 +154,13 @@ func (systemdLauncher) Start(u Unit) error {
 		args = append(args, "--working-directory="+u.Dir)
 	}
 	if len(u.StopPost) > 0 {
-		args = append(args, "-p", "ExecStopPost="+strings.Join(u.StopPost, " "), "-p", "TimeoutStopSec="+strconv.Itoa(int(u.StopTimeout.Seconds())))
+		// "-": the stop-post's own end, a kill included, never fails the unit.
+		args = append(args, "-p", "ExecStopPost=-"+strings.Join(u.StopPost, " "), "-p", "TimeoutStopSec="+strconv.Itoa(int(u.StopTimeout.Seconds())))
 	}
 	for _, e := range u.Env {
 		args = append(args, "--setenv="+e)
 	}
-	args = append(append(args, "--"), u.Argv...)
-	out, err := exec.Command("systemd-run", args...).CombinedOutput() //nolint:gosec // starting the unit is the purpose
-	if err != nil {
-		return fmt.Errorf("systemd-run: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
+	return append(append(args, "--"), u.Argv...)
 }
 
 func (systemdLauncher) Freeze(ctx context.Context, name string) error {
@@ -170,9 +175,9 @@ func (systemdLauncher) Stop(ctx context.Context, name string) error {
 	return systemctlUser(ctx, "stop", name)
 }
 
-// systemctlUser runs one systemctl --user verb on unit.
-func systemctlUser(ctx context.Context, verb, unit string) error {
-	out, err := exec.CommandContext(ctx, "systemctl", userManager, verb, unit).CombinedOutput() //nolint:gosec // the unit beekeeper named
+// systemctlUser runs one systemctl --user verb on the units.
+func systemctlUser(ctx context.Context, verb string, units ...string) error {
+	out, err := exec.CommandContext(ctx, "systemctl", append([]string{userManager, verb}, units...)...).CombinedOutput() //nolint:gosec // the units beekeeper named
 	if err != nil {
 		return fmt.Errorf("systemctl --user %s: %w: %s", verb, err, strings.TrimSpace(string(out)))
 	}
@@ -189,7 +194,23 @@ func (systemdLauncher) Running(ctx context.Context, stopping bool, patterns ...s
 	if stopping {
 		states += ",deactivating"
 	}
-	args := append([]string{userManager, "list-units", "--plain", "--no-legend", states}, patterns...)
+	return listUnits(ctx, states, patterns)
+}
+
+func (systemdLauncher) Failed(ctx context.Context, patterns ...string) []string {
+	return listUnits(ctx, "--state=failed", patterns)
+}
+
+func (systemdLauncher) ResetFailed(ctx context.Context, units ...string) error {
+	if len(units) == 0 {
+		return nil
+	}
+	return systemctlUser(ctx, "reset-failed", units...)
+}
+
+// listUnits lists the units in states matching the patterns.
+func listUnits(ctx context.Context, states string, patterns []string) []string {
+	args := append([]string{userManager, "list-units", "--all", "--plain", "--no-legend", states}, patterns...)
 	out, _ := exec.CommandContext(ctx, "systemctl", args...).Output() //nolint:gosec // the units beekeeper named
 	var units []string
 	for line := range strings.Lines(string(out)) {

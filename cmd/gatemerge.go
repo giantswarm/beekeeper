@@ -242,7 +242,7 @@ func startChild(base string) error {
 	}
 	if userSystemd() {
 		unit := fmt.Sprintf("beekeeper-merge-%s-%d", filepath.Base(base), time.Now().UnixNano())
-		return plat.Launcher.Start(platform.Unit{Name: unit, Argv: []string{self, mergeChildCmd, base}})
+		return plat.Launcher.Start(platform.Unit{Name: unit, Argv: []string{self, mergeChildCmd, base}, TermIsSuccess: true})
 	}
 	c := exec.Command(self, mergeChildCmd, base) //nolint:gosec // as above
 	platform.Detach(c)
@@ -291,19 +291,19 @@ func (a *app) mergeChildCmd() *cobra.Command {
 	}
 }
 
-// unitExit is the exit of merge-child's unit for devctl's exit code rc. The
-// outcome travels in base.rc to the gate, which hands it to the calling
+// unitExit is the exit of merge-child's unit for its command's exit code rc.
+// The outcome travels in base.rc to the gate, which hands it to the calling
 // session and the event log; the unit fails only where a person must act:
-// devctl's usage or tooling failure (7), its authentication (8), a signal
-// or merge-child itself failing. A merge, a red or unfinished pull request
-// and a refusal (0-6, 9) are the calling session's to act on and end the
-// unit successfully.
+// devctl's authentication (8), a kill or merge-child itself failing. devctl's
+// verdicts (0-7, 9: a merge, a red or unfinished pull request, a refusal, a
+// mistyped flag), the gate's own (76 queued, 77 refused, of a queued merge's
+// gate) and a stop as asked (SIGTERM) are the calling session's to act on and
+// end the unit successfully.
 func unitExit(rc int) int {
-	switch rc {
-	case devctlUsage, devctlAuth:
+	switch {
+	case rc == devctlAuth:
 		return rc
-	}
-	if rc >= 0 && rc <= devctlUnconfirmed {
+	case rc >= 0 && rc <= devctlUnconfirmed, rc == ExitGateQueued, rc == ExitGateRefused, rc == 128+int(syscall.SIGTERM):
 		return 0
 	}
 	return rc

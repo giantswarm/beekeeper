@@ -76,6 +76,10 @@ func (stubLauncher) Thaw(context.Context, string) error                { return 
 func (stubLauncher) Stop(context.Context, string) error                { return missing("Launcher.Stop") }
 func (stubLauncher) State(context.Context, string) string              { return "" }
 func (stubLauncher) Running(context.Context, bool, ...string) []string { return nil }
+func (stubLauncher) Failed(context.Context, ...string) []string        { return nil }
+func (stubLauncher) ResetFailed(context.Context, ...string) error {
+	return missing("Launcher.ResetFailed")
+}
 
 type stubCapper struct{}
 
