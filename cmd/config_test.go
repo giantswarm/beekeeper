@@ -31,8 +31,8 @@ func TestIncompleteConfigLoads(t *testing.T) {
 	t.Setenv("BEEKEEPER_CONFIG", cfg)
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
-	if stderr, err := execute(t, "lease", "list"); err != nil || stderr != "" {
-		t.Errorf("lease list = %v, stderr %q", err, stderr)
+	if stderr, err := execute(t, "log", "-n", "1"); err != nil || stderr != "" {
+		t.Errorf("log = %v, stderr %q", err, stderr)
 	}
 	stderr, _ := execute(t, "secret", "compare", "op://V/i/a", "op://V/i/b")
 	if n := strings.Count(stderr, "warning: secret.ageIdentities[0]"); n != 1 || !strings.Contains(stderr, "takes secret.store.read") {
@@ -58,8 +58,8 @@ func TestConfigSet(t *testing.T) {
 		"secret.store", "{read: [r]}"); err != nil {
 		t.Fatalf("set = %v", err)
 	}
-	if stderr, err := execute(t, "lease", "list"); err != nil || stderr != "" {
-		t.Errorf("after set: lease list = %v, %q", err, stderr)
+	if stderr, err := execute(t, "log", "-n", "1"); err != nil || stderr != "" {
+		t.Errorf("after set: log = %v, %q", err, stderr)
 	}
 	if _, err := execute(t, "config", "set", "secret.store"); Code(err) != ExitUsage {
 		t.Errorf("odd arguments = exit %d, want %d", Code(err), ExitUsage)
