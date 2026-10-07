@@ -15,8 +15,9 @@ import (
 
 // reopenPoll is how often a waiting reopen reads the roster: whether its
 // agent asked for a desktop turn, and whether it still has a reason to show
-// the session. Tests shorten it.
-var reopenPoll = 5 * time.Second
+// the session. Each read parses the whole state, the bulk of a waiting
+// reopen's CPU. Tests shorten it.
+var reopenPoll = 15 * time.Second
 
 const (
 	// reopenTwinPoll is how often a waiting reopen looks for a desktop CLI

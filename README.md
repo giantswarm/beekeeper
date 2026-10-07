@@ -1265,7 +1265,7 @@ person opened its row), naming each CLI's PID and directory. Once the headless t
 moment and switches back, so its desktop CLI is warm again. It reopens only a start the roster still
 holds, never one a hand-over or `agents remove` took off. One reopen waits per session (a lock
 under `<stateDir>/reopen/`): a later turn's reopen leaves the showing to the one that waits. A
-waiting reopen reads the roster every 5 seconds and ends, showing nothing, once its agent reported
+waiting reopen reads the roster every 15 seconds and ends, showing nothing, once its agent reported
 its work done, left the roster or is a relieved role run; a desktop CLI of the session that started
 meanwhile (looked for every 30 seconds) ends the wait too, kept as the warmed one. A reopen the desktop did not take (the
 session not shown, its title not restored) is an `agent.reopen` event and ends the unit
