@@ -71,7 +71,7 @@ func (d *desktop) notify(ctx context.Context, m notify.Message) (uint32, bool, e
 // context: godbus closes a connection when the context it was opened with
 // ends, and each send's context ends with the send.
 func connect() (*dbus.Conn, error) {
-	addr, err := sessionBus()
+	addr, err := SessionBus()
 	if err != nil {
 		return nil, err
 	}
@@ -88,10 +88,10 @@ func (d *desktop) Close() error {
 	return err
 }
 
-// sessionBus is the session bus address: DBUS_SESSION_BUS_ADDRESS, else the
+// SessionBus is the session bus address: DBUS_SESSION_BUS_ADDRESS, else the
 // user bus socket in XDG_RUNTIME_DIR. Unlike the library's default it never
 // autolaunches a bus through dbus-launch.
-func sessionBus() (string, error) {
+func SessionBus() (string, error) {
 	if a := os.Getenv("DBUS_SESSION_BUS_ADDRESS"); a != "" {
 		return a, nil
 	}

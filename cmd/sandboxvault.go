@@ -12,8 +12,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/secret"
+	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 // The broker's answers to sandbox.OpVault.
@@ -63,9 +65,23 @@ func (a *app) keepVault(ctx context.Context) (*vaultBroker, error) {
 			fmt.Fprintf(os.Stderr, "vault keeper: %v\n", err)
 		}
 	}()
-	v := &vaultBroker{k: k, wait: a.cfg.Secret.UnlockWait.Duration, failed: func(err error) {
-		writeState(secret.VaultState{Error: err.Error()})
-	}}
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	v := &vaultBroker{k: k, wait: a.cfg.Secret.UnlockWait.Duration, store: secret.CredentialStore, uptime: secret.Uptime, backoff: vaultSigninBackoff,
+		retrying: func(status string) {
+			writeState(secret.VaultState{Retrying: status})
+			a.vaultSigninLog("retrying: %s", status)
+		},
+		failed: func(cause secret.SigninCause, tries int, err error) {
+			next := "the broker signs in again at the next call on the vault"
+			if cause.Rejected() {
+				next = "a sign-in note asks " + a.cfg.Guide.Person
+			}
+			writeState(secret.VaultState{Error: fmt.Sprintf("%s after %s: %v; %s", cause, plural(tries, "try"), err, next)})
+			a.vaultSigninFailed(exe, cause, tries, err)
+		}}
 	if cmd := a.cfg.Secret.SigninCommand; len(cmd) > 0 {
 		v.signin = func(ctx context.Context) (string, string, error) { return runSignin(ctx, cmd) }
 	}
@@ -96,12 +112,37 @@ type vaultBroker struct {
 	// signin answers a session op signin would print, without the person
 	// (secret.signinCommand); nil leaves it to beekeeper secret unlock.
 	signin func(context.Context) (name, token string, err error)
-	// failed hears why a sign-in failed.
-	failed func(error)
+	// store answers the state of the person's credential store
+	// (secret.CredentialStore); nil never waits on it.
+	store func(context.Context) (secret.StoreState, error)
+	// uptime is how long the machine is up (secret.Uptime); nil: long enough.
+	uptime func() (time.Duration, error)
+	// backoff is the wait before each retry, the last one repeated.
+	backoff []time.Duration
+	// storeEvery is how often a store the sign-in waits for is looked at
+	// (vaultStoreEvery).
+	storeEvery time.Duration
+	// retrying hears what the running sign-in waits on or retries after.
+	retrying func(status string)
+	// failed hears why a sign-in failed for good, after its tries.
+	failed func(cause secret.SigninCause, tries int, err error)
 	wait   time.Duration
 	mu     sync.Mutex
 	asking bool
 }
+
+// A failed sign-in is tried again after vaultSigninBackoff's waits, the
+// last repeated, within the ask's window (secret.unlockWait); one try has
+// vaultTryTimeout. Within vaultBootGrace of the boot the keeper waits for
+// the credential store to come up, looking every vaultStoreEvery; a
+// locked store is waited for at any time.
+var vaultSigninBackoff = []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 5 * time.Minute}
+
+const (
+	vaultTryTimeout = 2 * time.Minute
+	vaultBootGrace  = 10 * time.Minute
+	vaultStoreEvery = 15 * time.Second
+)
 
 // ask starts a sign-in unless the vault is unlocked or a sign-in runs; it
 // ends after secret.unlockWait.
@@ -124,17 +165,150 @@ func (v *vaultBroker) ask(ctx context.Context) {
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), v.wait)
 		defer cancel()
 		fmt.Fprintln(os.Stderr, "vault keeper: signing in")
-		name, token, err := v.signin(sctx)
+		v.signinUntil(sctx)
+	}()
+}
+
+// signinUntil signs in, trying again after v.backoff's waits while ctx
+// lasts, and gives up once the next try would not fit: every failure is
+// one journal line with its cause, and the retry one status for the
+// watch. A store the sign-in cannot succeed without is waited for first.
+func (v *vaultBroker) signinUntil(ctx context.Context) {
+	var tries int
+	for {
+		store, err := v.waitStore(ctx)
 		if err == nil {
-			err = v.k.Unlock(name, token, time.Now())
-		}
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "vault keeper: the sign-in failed: %v\n", err)
-			if v.failed != nil {
-				v.failed(err)
+			tries++
+			tctx, cancel := context.WithTimeout(ctx, vaultTryTimeout)
+			var name, token string
+			name, token, err = v.signin(tctx)
+			cancel()
+			if err == nil {
+				err = v.k.Unlock(name, token, time.Now())
+			}
+			if err == nil {
+				return
 			}
 		}
-	}()
+		cause := secret.ClassifySignin(err, store)
+		next := time.Now().Add(v.backoffFor(tries))
+		if deadline, ok := ctx.Deadline(); ctx.Err() != nil || (ok && next.After(deadline)) {
+			v.giveUp(cause, tries, err)
+			return
+		}
+		at := next.Local().Format(time.TimeOnly)
+		fmt.Fprintf(os.Stderr, "vault keeper: the sign-in failed (%s): %v; try %d at %s\n", cause, err, tries+1, at)
+		v.status(fmt.Sprintf("%s (%s); try %d at %s", cause, lastOf(err.Error()), tries+1, at))
+		select {
+		case <-ctx.Done():
+			v.giveUp(cause, tries, err)
+			return
+		case <-time.After(time.Until(next)):
+		}
+	}
+}
+
+// backoffFor is the wait before the try after tries failed ones.
+func (v *vaultBroker) backoffFor(tries int) time.Duration {
+	b := v.backoff
+	if len(b) == 0 {
+		b = vaultSigninBackoff
+	}
+	return b[min(max(tries, 1), len(b))-1]
+}
+
+// waitStore waits for the person's credential store where the sign-in
+// cannot succeed without it: one that is locked, and one not up yet
+// within vaultBootGrace of the boot (later an absent one may be no Secret
+// Service at all, and the command runs). It answers the store's state as
+// last read and, when ctx ended first, the wait as the error.
+func (v *vaultBroker) waitStore(ctx context.Context) (secret.StoreState, error) {
+	if v.store == nil {
+		return secret.StoreUnknown, nil
+	}
+	every := v.storeEvery
+	if every == 0 {
+		every = vaultStoreEvery
+	}
+	start := time.Now()
+	var last secret.StoreState
+	for {
+		st, _ := v.store(ctx)
+		if st == secret.StoreReady || st == secret.StoreUnknown || (st == secret.StoreAbsent && !v.booting()) {
+			return st, nil
+		}
+		if st != last {
+			last = st
+			fmt.Fprintf(os.Stderr, "vault keeper: waiting for the credential store: %s; looking every %s\n", st, every)
+			v.status(fmt.Sprintf("waiting for the credential store: %s; looking every %s", st, every))
+		}
+		select {
+		case <-ctx.Done():
+			return st, fmt.Errorf("%s: waited %s for it", st, time.Since(start).Round(time.Second))
+		case <-time.After(every):
+		}
+	}
+}
+
+// booting reports whether the machine is within vaultBootGrace of its boot,
+// when the person's credential store may not be up yet.
+func (v *vaultBroker) booting() bool {
+	if v.uptime == nil {
+		return false
+	}
+	up, err := v.uptime()
+	return err == nil && up < vaultBootGrace
+}
+
+// status tells the watch what the running sign-in waits on or retries after.
+func (v *vaultBroker) status(s string) {
+	if v.retrying != nil {
+		v.retrying(s)
+	}
+}
+
+// giveUp reports a sign-in that failed for good: the journal, and v.failed
+// for the state and the person.
+func (v *vaultBroker) giveUp(cause secret.SigninCause, tries int, err error) {
+	fmt.Fprintf(os.Stderr, "vault keeper: the sign-in failed (%s) after %s: %v\n", cause, plural(tries, "try"), err)
+	if v.failed != nil {
+		v.failed(cause, tries, err)
+	}
+}
+
+// vaultParty is the keeper in the event log.
+var vaultParty = state.Party{Name: "the vault keeper"}
+
+// vaultSigninLog is one line of the event log about the keeper's sign-in.
+func (a *app) vaultSigninLog(format string, args ...any) {
+	if err := a.store.Record(event(vaultParty, "vault.signin", format, args...)); err != nil {
+		fmt.Fprintf(os.Stderr, "vault keeper: %v\n", err)
+	}
+}
+
+// vaultSigninFailed logs a sign-in that failed for good and, for a password
+// 1Password rejected while the credential store answered, leaves one
+// sign-in note for the guide's person, which closes by itself once the
+// broker holds a session (beekeeper secret status). A failure that passes
+// by itself leaves no note: the broker signs in again at the next call.
+func (a *app) vaultSigninFailed(exe string, cause secret.SigninCause, tries int, err error) {
+	if uerr := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		evs := []state.Event{event(vaultParty, "vault.signin", "failed (%s) after %s: %s", cause, plural(tries, "try"), lastOf(err.Error()))}
+		probe := guard.ShellQuote(exe) + " secret status"
+		if !cause.Rejected() || slices.ContainsFunc(st.Notes, func(n state.Note) bool { return n.Kind == noteLogin && n.Until == probe }) {
+			return evs, nil
+		}
+		now := time.Now().UTC()
+		st.NextNote++
+		n := state.Note{ID: st.NextNote, For: a.cfg.Guide.Person, By: vaultParty, At: now, Due: now, Kind: noteLogin, Until: probe,
+			Text: fmt.Sprintf("Sign in to the vault: 1Password rejected the password the broker's sign-in command reads, in %s (%s). The entry the command reads is wrong or rotated: fix it, then `systemctl --user restart beekeeper-sandbox`, or wait for the next call on the vault, when the broker signs in again.",
+				plural(tries, "try"), lastOf(err.Error())),
+			Default: "every call on the vault waits secret.unlockWait and exits 78: the agents' secret steps stay blocked"}
+		st.Notes = append(st.Notes, n)
+		return append(evs, event(vaultParty, "note.add", "#%d %s", n.ID, n.Text)), nil
+	}); uerr != nil {
+		fmt.Fprintf(os.Stderr, "vault keeper: %v\n", uerr)
+	}
 }
 
 // runSignin runs secret.signinCommand and reads the session it prints, as op
