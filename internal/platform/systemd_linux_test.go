@@ -4,6 +4,7 @@ package platform
 
 import (
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +33,43 @@ func TestOpenerRunning(t *testing.T) {
 		if got := (systemdOpener{app: "claude-desktop"}.Running(tc.t)); !got.Equal(tc.want) {
 			t.Errorf("%s: Running = %v, want %v", name, got, tc.want)
 		}
+	}
+}
+
+// The properties a slot's cap sets: memcap.slice's CPU budget first, with
+// a CPUWeight, then the slot slice's memory; a scope's systemd-run
+// arguments carry the slot's slice, the memory cap and RunNice.
+func TestCapProperties(t *testing.T) {
+	const slot, noSwap = "memcap-slot1_0a1b2c3d.slice", "MemorySwapMax=0"
+	c := Cap{Max: "12G", Swap: "0", Slice: slot, CPUQuota: "1200%", CPUWeight: 50}
+	want := [][]string{
+		{memcapSlice, "CPUQuota=1200%", "CPUWeight=50"},
+		{slot, "MemoryMax=12G", noSwap},
+	}
+	if got := sliceProperties(c); !reflect.DeepEqual(got, want) {
+		t.Errorf("sliceProperties = %q, want %q", got, want)
+	}
+	// An unknown core count leaves the quota empty, which lifts it.
+	c.CPUQuota = ""
+	if got := sliceProperties(c); !reflect.DeepEqual(got[0], []string{memcapSlice, "CPUQuota=", "CPUWeight=50"}) {
+		t.Errorf("without a quota: %q", got[0])
+	}
+	// Without a weight the slice's CPU stays as it is: the memory only.
+	c.CPUWeight = 0
+	if got := sliceProperties(c); !reflect.DeepEqual(got, want[1:]) {
+		t.Errorf("without a weight: %q", got)
+	}
+	// No slot: memcap.slice itself takes the memory cap.
+	if got := sliceProperties(Cap{Max: "512M", Swap: "0"}); !reflect.DeepEqual(got, [][]string{{memcapSlice, "MemoryMax=512M", noSwap}}) {
+		t.Errorf("without a slot: %q", got)
+	}
+
+	args := scopeArgs("memcap-42-000001", c, []string{"zsh", "-c", "go build ./..."})
+	wantArgs := []string{"--user", "--scope", "--quiet", "--expand-environment=no", "--unit=memcap-42-000001",
+		"--slice=" + slot, "--nice=10", "-p", "MemoryMax=12G", "-p", noSwap, "-p", "OOMPolicy=continue",
+		"--", "zsh", "-c", "go build ./..."}
+	if !reflect.DeepEqual(args, wantArgs) {
+		t.Errorf("scopeArgs = %q, want %q", args, wantArgs)
 	}
 }
 

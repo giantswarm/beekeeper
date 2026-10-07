@@ -107,7 +107,10 @@ type Machine struct {
 	MaxLabs int
 	SlotDir string
 	Slots   int
-	Now     time.Time
+	// BuildCPU is memcap.slice's configured CPU budget (its CPUQuota and
+	// CPUWeight), said while the slice does not run.
+	BuildCPU platform.Cap
+	Now      time.Time
 }
 
 // Run is one invocation.

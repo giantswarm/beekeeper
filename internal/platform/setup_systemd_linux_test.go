@@ -13,14 +13,14 @@ const testExe = "/b/beekeeper"
 
 func TestSystemdSetupFiles(t *testing.T) {
 	files, skipped := systemdSetup{}.Files(SetupSpec{ConfigDir: "/c", Exe: testExe, RAMMiB: 100 << 10, SwapMiB: 16 << 10,
-		DesktopScope: "app-Hyprland-com.anthropic.Claude-5776.scope"})
+		CPUQuota: "1200%", CPUWeight: 50, DesktopScope: "app-Hyprland-com.anthropic.Claude-5776.scope"})
 	if len(skipped) > 0 || len(files) != 4 {
 		t.Fatalf("files %v, skipped %v", files, skipped)
 	}
 	for i, want := range []struct{ path, content string }{
 		{"/c/systemd/user/beekeeper-notify.service", "ExecStart=/b/beekeeper watch --notify --standby\n"},
 		{"/c/systemd/user/beekeeper-sandbox.service", "ExecStart=/b/beekeeper sandbox broker\n"},
-		{"/c/systemd/user/memcap.slice", "MemoryHigh=23552M\nMemoryMax=28672M\nMemorySwapMax=0\n"},
+		{"/c/systemd/user/memcap.slice", "MemoryHigh=23552M\nMemoryMax=28672M\nMemorySwapMax=0\nCPUQuota=1200%\nCPUWeight=50\n"},
 		{"/c/systemd/user/app-Hyprland-com.anthropic.Claude-.scope.d/50-memory-guard.conf", "MemoryHigh=47104M\nMemoryMax=57344M\nMemorySwapMax=4096M\nOOMPolicy=continue\n"},
 	} {
 		if files[i].Path != want.path || !strings.Contains(string(files[i].Content), want.content) || files[i].Service != (i < 2) {

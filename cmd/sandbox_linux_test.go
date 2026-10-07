@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
@@ -43,7 +44,7 @@ func TestBrokeredSecretRunsAsTheRequester(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = requester.Process.Kill(); _ = requester.Wait() }()
-	h := brokered(brokeredCap(&recordingCapper{}), map[string]sandbox.Handler{sandbox.OpSecret: brokeredCall(exe, "/proc", brokeredCallTimeout, nil, brokeredSecretArgv)})
+	h := brokered(brokeredCap(&recordingCapper{}, platform.Cap{}), map[string]sandbox.Handler{sandbox.OpSecret: brokeredCall(exe, "/proc", brokeredCallTimeout, nil, brokeredSecretArgv)})
 	r, err := h(context.Background(), requester.Process.Pid, sandbox.Request{Op: sandbox.OpSecret, Args: []string{compareOp, sopsA, sopsB}})
 	if err != nil {
 		t.Fatal(err)
