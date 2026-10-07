@@ -441,8 +441,12 @@ type Timer struct {
 	When  string        `json:"when,omitempty"`
 	Probe string        `json:"probe,omitempty"`
 	Every time.Duration `json:"every,omitempty"`
-	// Checked is when a watch last found the condition not holding.
-	Checked time.Time `json:"checked,omitzero"`
+	// Checked is when a watch last found the condition not holding, Reason
+	// why: what the reference says, or why it could not be read
+	// (Unreadable).
+	Checked    time.Time `json:"checked,omitzero"`
+	Reason     string    `json:"reason,omitempty"`
+	Unreadable bool      `json:"unreadable,omitempty"`
 	// Until is the end of the wait: past it the timer fires as timed out,
 	// or closes unfired when Expire is set.
 	Until  time.Time `json:"until,omitzero"`

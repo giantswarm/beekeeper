@@ -1623,7 +1623,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		w.wouldOvertake(st, over)
 		over = nil
 	}
-	held := checkTimers(ctx, st.Timers, w.now, lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now))
+	found := checkTimers(ctx, st.Timers, w.now, lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now))
 	var fires []timerFire
 	var defaulted []state.Note
 	fire := func(st *state.State) ([]string, []state.Event, bool) {
@@ -1637,7 +1637,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		lines, evs = append(lines, ol...), append(evs, oe...)
 		kl, ke := markResumable(st, parks, w.cfg.Agents.AutoResume, w.now)
 		lines, evs = append(lines, kl...), append(evs, ke...)
-		tl, te, tf, touched := settleTimers(st, held, w.now)
+		tl, te, tf, touched := settleTimers(st, found, w.now)
 		lines, evs, fires = append(lines, tl...), append(evs, te...), tf
 		seen = seen || touched
 		pl, pe := firePending(st, sessions, w.now)
