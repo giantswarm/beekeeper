@@ -666,3 +666,83 @@ func TestSetHandsAPodAJSONRequestOnStdin(t *testing.T) {
 		}
 	}
 }
+
+func TestCopyValuesWritesANewSecretInOneEncryption(t *testing.T) {
+	const idRef, secretRef = "op://Shared/oauth/username", "op://Shared/oauth/credential" //nolint:gosec // vault references, no value
+	tools := secrettest.New(map[string]string{idRef: token, secretRef: password})
+	dir, _ := scratch(t)
+	file := filepath.Join(dir, "oauth.sops.yaml")
+	pairs := []secret.Pair{{Src: secret.Ref{Op: idRef}, Path: "client-id"}, {Src: secret.Ref{Op: secretRef}, Path: "client-secret"}}
+	keys, err := ops(tools).CopyValues(context.Background(), pairs, file, &secret.NewSecret{Name: "oauth", Namespace: appNS})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []secret.Key{{Name: "stringData.client-id", Bytes: len(token)}, {Name: "stringData.client-secret", Bytes: len(password)}}
+	if !slices.Equal(keys, want) {
+		t.Errorf("keys = %+v, want %+v", keys, want)
+	}
+	noValue(t, "copy", keys)
+	var sops []string
+	for _, c := range tools.Calls {
+		if strings.HasPrefix(c, "sops") {
+			sops = append(sops, c)
+		}
+	}
+	if len(sops) != 1 || !strings.Contains(sops[0], "encrypt") {
+		t.Errorf("sops calls = %q, want one encrypt and no decrypt", sops)
+	}
+	plain := decrypted(t, tools, file)
+	if plain != "apiVersion: v1\nkind: Secret\nmetadata:\n  name: oauth\n  namespace: app\ntype: Opaque\nstringData:\n  client-id: "+token+"\n  client-secret: "+password+"\n" {
+		t.Errorf("the new Secret:\n%s", plain)
+	}
+}
+
+func TestCopyValuesRefusesBeforeReadingAValue(t *testing.T) {
+	tools := secrettest.New(map[string]string{appVault: password})
+	dir, src := scratch(t)
+	one := []secret.Pair{{Src: secret.Ref{Op: appVault}, Path: "a"}}
+	nw := &secret.NewSecret{Name: "x", Namespace: appNS}
+	for _, c := range []struct {
+		name, file, rules, want string
+		pairs                   []secret.Pair
+		nw                      *secret.NewSecret
+	}{
+		{"an encrypted file", src, "", "is encrypted", one, nil},
+		{"a path named twice", filepath.Join(dir, "n.sops.yaml"), "", "named twice", append(one, secret.Pair{Src: secret.Ref{Op: appVault}, Path: "stringData.a"}), nw},
+		{"a path left plaintext", filepath.Join(dir, "p.sops.yaml"), secretRules, "encrypted_regex", one, nil},
+		{"no value", filepath.Join(dir, "e.sops.yaml"), "", "no value", nil, nw},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tools.Calls = nil
+			if c.rules != "" {
+				if err := os.WriteFile(filepath.Join(dir, ".sops.yaml"), []byte(c.rules), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err := ops(tools).CopyValues(context.Background(), c.pairs, c.file, c.nw)
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("copy = %v, want a refusal naming %q", err, c.want)
+			}
+			if len(tools.Calls) != 0 {
+				t.Errorf("a refused copy ran %q", tools.Calls)
+			}
+			noValue(t, "the refusal", err)
+		})
+	}
+}
+
+func TestParsePair(t *testing.T) {
+	for in, want := range map[string]secret.Pair{
+		"op://Shared/app/client id=client-id": {Src: secret.Ref{Op: "op://Shared/app/client id"}, Path: "client-id"},
+		"a.sops.yaml#stringData.x=y":          {Src: secret.Ref{File: aFile, Path: "stringData.x"}, Path: "y"},
+	} {
+		if p, err := secret.ParsePair(in); err != nil || p != want {
+			t.Errorf("ParsePair(%q) = %+v, %v", in, p, err)
+		}
+	}
+	for _, bad := range []string{"op://Shared/app/f", aFile + "=k", "op://Shared/app/f=", "op://Shared/app/f=a#b", "op://Shared/app=k"} {
+		if _, err := secret.ParsePair(bad); err == nil {
+			t.Errorf("ParsePair(%q) took it", bad)
+		}
+	}
+}
