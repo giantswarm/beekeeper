@@ -247,6 +247,18 @@ With `kube.production` set, the machine kubeconfig (`~/.kube/config`) keeps no c
 The PreToolUse hook keeps it that way and refuses, with the reason and the explicit form (unset, the
 kube guard is off and `beekeeper snapshot` says so):
 
+- A command that reaches a cluster through the machine kubeconfig without an explicit context: `kubectl`
+  (every command but `config`, `completion`, `kustomize`, `help`, `options`, `plugin`, `version --client`,
+  `--dry-run=client`, `--local`; a `--server` names its target), `helm`
+  install/upgrade/uninstall/rollback/test/list/status/get/history and `flux` (all but `build`, `envsubst`,
+  `completion`, the artifact commands, `--export`, `version --client`) with no `--context` (helm:
+  `--kube-context` or `HELM_KUBECONTEXT`) or with one that may expand to nothing: `--context ""`,
+  `--context "$CTX"` when the command does not set `CTX` to a non-empty word, a command substitution.
+  The tools treat an empty context as none and use the kubeconfig's current one, which may be
+  production. `--context "${CTX:?no context}"` fails on an empty lookup and passes; so do a literal
+  `--context kind-<lab>` or any other name, and a kubeconfig of the command's own (`--kubeconfig <file>`,
+  `KUBECONFIG=<file>`, the session's own `KUBECONFIG`), which is the target itself. kubectl plugins are not
+  covered. A person's own shells stay outside the rule through `hooks.scope`, as for every guard.
 - A context switch: `kubectl config use-context`, `kubectl config set current-context`, `kubectl ctx`,
   `kubectx <name>`, `kubectl gs login` without `--self-contained`; and `tsh kube login`, `tsh login
   --kube-cluster`, `kind create cluster` and `kind export kubeconfig` when they write the machine
