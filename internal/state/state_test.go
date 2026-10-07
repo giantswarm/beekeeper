@@ -515,3 +515,55 @@ func TestStateWithoutIdentityLoads(t *testing.T) {
 		t.Errorf("By = %+v, want %+v", got, want)
 	}
 }
+
+// Follow hands back what it kept and parses only the lines logged since its
+// last read; a line still being written waits, and a replaced log is read
+// from its start.
+func TestFollowReadsOnlyTheNewLines(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	keep := func(e Event) bool { return e.Verb != "skip" }
+	if evs, err := s.Follow("t", keep); err != nil || len(evs) != 0 {
+		t.Fatalf("no log yet: %+v, %v", evs, err)
+	}
+	if err := s.Record(Event{Verb: "a"}, Event{Verb: "skip"}, Event{Verb: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	evs, err := s.Follow("t", keep)
+	if err != nil || len(evs) != 2 || evs[0].Verb != "a" || evs[1].Verb != "b" {
+		t.Fatalf("Follow = %+v, %v", evs, err)
+	}
+	evs[0].Verb = "changed by its caller"
+
+	// A line without its newline yet is left for the next read.
+	f, err := os.OpenFile(s.path("events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`{"verb":"c"`); err != nil {
+		t.Fatal(err)
+	}
+	if evs, _ := s.Follow("t", keep); len(evs) != 2 || evs[0].Verb != "a" {
+		t.Errorf("Follow with a line being written = %+v", evs)
+	}
+	if _, err := f.WriteString("}\n"); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+	if evs, _ := s.Follow("t", keep); len(evs) != 3 || evs[2].Verb != "c" {
+		t.Errorf("Follow after the line ended = %+v", evs)
+	}
+	if all, _ := s.Events(0, keep); len(all) != 3 {
+		t.Errorf("Events = %+v", all)
+	}
+
+	// A log replaced by a shorter one is read from its start.
+	if err := os.WriteFile(s.path("events.jsonl"), []byte(`{"verb":"d"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if evs, _ := s.Follow("t", keep); len(evs) != 1 || evs[0].Verb != "d" {
+		t.Errorf("Follow after the log was replaced = %+v", evs)
+	}
+}

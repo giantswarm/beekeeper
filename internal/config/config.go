@@ -280,10 +280,12 @@ type Outbound struct {
 	// StoreDeny are the secret-store writes the hook refuses.
 	StoreDeny []StoreRule `yaml:"storeDeny"`
 	// SweepRoots are the directories (~/ allowed; default: home) the watch
-	// sweeps, SweepDepth levels deep (default 5), for world-readable key
-	// files and git remote URLs that carry a credential.
+	// sweeps, SweepDepth levels deep (default 5), every SweepEvery (default
+	// 15m), for world-readable key files and git remote URLs that carry a
+	// credential.
 	SweepRoots []string `yaml:"sweepRoots"`
 	SweepDepth int      `yaml:"sweepDepth"`
+	SweepEvery Duration `yaml:"sweepEvery"`
 }
 
 // Secret configures beekeeper secret, the credential operations beekeeper
@@ -1636,6 +1638,7 @@ func (o *Outbound) defaults(home string) {
 		o.SweepRoots = []string{home}
 	}
 	setInt(&o.SweepDepth, 5)
+	setDur(&o.SweepEvery, 15*time.Minute)
 	for _, ps := range [][]string{o.Paths, o.SweepRoots} {
 		for i := range ps {
 			ps[i] = homePath(home, ps[i])

@@ -66,17 +66,30 @@ func TestLoadRising(t *testing.T) {
 func TestWatchSaysCPUPressureOnTheSecondSample(t *testing.T) {
 	w, out := loopWatcher(t, "250ms", ", loadMax: 1000000, cpuPSIMax: -1", nil)
 	now := time.Now()
-	w.sampleCPU(now)
+	w.sampleCPU(now, nil)
 	if strings.Contains(out.String(), "CPU PRESSURE") {
 		t.Fatalf("CPU PRESSURE on the first sample:\n%s", out)
 	}
-	w.sampleCPU(now.Add(time.Second))
+	w.sampleCPU(now.Add(time.Second), nil)
 	if !strings.Contains(out.String(), "CPU PRESSURE: some avg10") {
 		t.Fatalf("no CPU PRESSURE with its consumers on the second sample:\n%s", out)
 	}
 	w.cfg.Watch.CPUPSIMax = 1000
-	w.sampleCPU(now.Add(2 * time.Second))
+	w.sampleCPU(now.Add(2*time.Second), nil)
 	if !strings.Contains(out.String(), "ENDED CPU PRESSURE") {
 		t.Errorf("no ENDED CPU PRESSURE:\n%s", out)
+	}
+}
+
+// A swapoff is read from the sample's process table.
+func TestSwapoffRuns(t *testing.T) {
+	if swapoffRuns(nil) {
+		t.Error("swapoff without a process table")
+	}
+	if swapoffRuns(table(&proc.Process{PID: 1, Comm: "init"})) {
+		t.Error("swapoff with none running")
+	}
+	if !swapoffRuns(table(&proc.Process{PID: 1, Comm: "init"}, &proc.Process{PID: 2, Comm: "swapoff"})) {
+		t.Error("a running swapoff missed")
 	}
 }

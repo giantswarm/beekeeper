@@ -75,8 +75,6 @@ type Machine interface {
 	// OOMDSwap is the userspace OOM killer's swap rule: the share of swap
 	// past which it kills and the cgroups it watches for it.
 	OOMDSwap(ctx context.Context) (machine.OOMDSwap, error)
-	// SwapoffRuns reports whether a swapoff is running.
-	SwapoffRuns() bool
 	// OOMKills are the kernel's OOM kills since the given time, oldest first.
 	OOMKills(ctx context.Context, since time.Time) ([]machine.OOMKill, error)
 	// OomdKills are the userspace OOM killer's kill lines since the given time.

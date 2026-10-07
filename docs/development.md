@@ -252,6 +252,12 @@ over the file (usage summed once per message id, the last line of an id being it
 The repeats, GitHub calls and turn rules are tested on synthetic lines without usage. Timing is
 measured with `beekeeper sessions --json` against the installed release on the same sessions.
 
+A long-running command's CPU is profiled where it runs: `BEEKEEPER_CPUPROFILE=<file>` writes the
+process's CPU profile to the file until it exits (a watch, on SIGINT or SIGTERM), for
+`go tool pprof -top -cum <binary> <file>`. Profile a watch against a copy of the state directory
+(`stateDir` in a copy of the configuration, `BEEKEEPER_CONFIG`), so that it takes no line, note or
+timer from the running watches.
+
 ## Layout
 
 | Package | What it knows |

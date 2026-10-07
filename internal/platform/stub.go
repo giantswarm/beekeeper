@@ -57,7 +57,6 @@ func (stubMachine) OOMPolicy(string) string { return "?" }
 func (stubMachine) OOMDSwap(context.Context) (machine.OOMDSwap, error) {
 	return machine.OOMDSwap{}, missing("Machine.OOMDSwap")
 }
-func (stubMachine) SwapoffRuns() bool { return false }
 func (stubMachine) OOMKills(context.Context, time.Time) ([]machine.OOMKill, error) {
 	return nil, missing("Machine.OOMKills")
 }

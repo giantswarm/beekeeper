@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -366,13 +365,7 @@ func resolveWake(cfg *config.Config, st *state.State, ag state.Agent) (wakeTarge
 // transcriptOf is the transcript of session id under the projects
 // directory, "" for none.
 func transcriptOf(cfg *config.Config, id string) string {
-	if id == "" {
-		return ""
-	}
-	if m, _ := filepath.Glob(filepath.Join(cfg.Claude.ProjectsDir, "*", id+".jsonl")); len(m) > 0 {
-		return m[0]
-	}
-	return ""
+	return claude.Transcript(cfg, id, "")
 }
 
 // wakeLive is the running CLI of the agent: its party's, or one that runs
