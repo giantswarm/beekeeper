@@ -241,8 +241,8 @@ func (a *app) secretCopyCmd() *cobra.Command {
 	var name, namespace, toSecret string
 	var in secret.Stdin
 	c := &cobra.Command{
-		Use:   "copy <from> <to> | copy <from> -- <consumer…> | copy <from> --to-secret <context>/<namespace>/<name>/<key>",
-		Short: "Copy a SOPS file, or one value into a SOPS path, a consumer's stdin or a lab's Secret",
+		Use:   "copy <from> <to> | copy <ref>=<path>… <new-file> [--name n --namespace ns] | copy <from> -- <consumer…> | copy <from> --to-secret <context>/<namespace>/<name>/<key>",
+		Short: "Copy a SOPS file, values into a new SOPS file, or one value into a SOPS path, a consumer's stdin or a lab's Secret",
 		Long: `copy <src.sops.yaml> <dst.sops.yaml> writes a new SOPS file with the
 values of src, encrypted under dst's creation rules; --name and --namespace
 rewrite a Kubernetes object's metadata.name and metadata.namespace on the
@@ -251,6 +251,19 @@ dst must not exist.
 
 copy <ref> <file#path> puts one value into a SOPS path, creating the file
 or the key when absent, the file's other values kept.
+
+copy <ref>=<path> [<ref>=<path>…] <new-file> writes several values, each
+<ref> one value (op://<vault>/<item>/<field>, file#path), into a new SOPS
+file in one encryption: sops needs only the recipients of the nearest
+.sops.yaml and decrypts nothing, so no age identity of the new file is
+needed. --name and --namespace start the file as that Secret, a bare path
+going under stringData; a plaintext Secret skeleton is filled; an encrypted
+file is refused. Every path is checked against the creation rule before a
+value is read. It answers the key names and value lengths, for example:
+
+  beekeeper secret copy op://<vault>/<item>/username=client-id \
+    op://<vault>/<item>/credential=client-secret app.sops.yaml \
+    --name app --namespace team
 
 copy <ref> -- <command…> runs a consumer with the value on stdin: gh secret
 set, garage json-api <endpoint> -, a command with --password-stdin or one
@@ -283,11 +296,22 @@ failing or answering nothing within a minute) exits 78.`,
 				}
 				return nil
 			}
+			if len(args) > 2 {
+				if _, err := copyPairs(args); err != nil {
+					return err
+				}
+				return nil
+			}
 			return cobra.ExactArgs(2)(cmd, args)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if in != (secret.Stdin{}) && cmd.ArgsLenAtDash() != 1 {
 				return usageErr("--stdin-json and --stdin-field shape a consumer's stdin: copy <from> -- <consumer…>")
+			}
+			if cmd.ArgsLenAtDash() < 0 && !cmd.Flags().Changed("to-secret") {
+				if pairs, err := copyPairs(args); err == nil {
+					return a.secretCopyValues(cmd.Context(), pairs, args[len(args)-1], name, namespace)
+				}
 			}
 			src, err := parseRefs(args[0])
 			if err != nil {
@@ -360,11 +384,66 @@ failing or answering nothing within a minute) exits 78.`,
 			return a.secretPrint(keys, b.String())
 		},
 	}
-	c.Flags().StringVar(&name, "name", "", "the copy's metadata.name")
-	c.Flags().StringVar(&namespace, "namespace", "", "the copy's metadata.namespace")
+	c.Flags().StringVar(&name, "name", "", "the copy's metadata.name; with <ref>=<path>… the new Secret's")
+	c.Flags().StringVar(&namespace, "namespace", "", "the copy's metadata.namespace; with <ref>=<path>… the new Secret's")
 	c.Flags().StringVar(&toSecret, "to-secret", "", "a key of a Secret in a lab you hold: <context>/<namespace>/<name>/<key>")
 	stdinFlags(c, &in)
 	return c
+}
+
+// copyPairs are the <ref>=<path> pairs of copy into a new file: every
+// argument but the last one, which names a whole file.
+func copyPairs(args []string) ([]secret.Pair, error) {
+	dst, err := secret.ParseRef(args[len(args)-1])
+	if err != nil {
+		return nil, usageErr("%v", err)
+	}
+	if dst.Op != "" || dst.Path != "" {
+		return nil, usageErr("%s: copy <ref>=<path>… <file> writes a whole new file, no path or op:// in it", dst)
+	}
+	pairs := make([]secret.Pair, 0, len(args)-1)
+	for _, s := range args[:len(args)-1] {
+		p, err := secret.ParsePair(s)
+		if err != nil {
+			return nil, usageErr("copy <ref>=<path>… <file>: %v", err)
+		}
+		pairs = append(pairs, p)
+	}
+	return pairs, nil
+}
+
+// secretCopyValues is copy <ref>=<path>… <file>: several values into a new
+// SOPS file in one encryption.
+func (a *app) secretCopyValues(ctx context.Context, pairs []secret.Pair, file, name, namespace string) error {
+	var nw *secret.NewSecret
+	if name != "" || namespace != "" {
+		if name == "" || namespace == "" {
+			return usageErr("--name and --namespace start a new Secret together")
+		}
+		nw = &secret.NewSecret{Name: name, Namespace: namespace}
+	}
+	src := make([]secret.Ref, len(pairs))
+	from := make([]string, len(pairs))
+	for i, p := range pairs {
+		src[i], from[i] = p.Src, p.Src.String()
+	}
+	if err := a.sandboxFiles(src, []secret.Ref{{File: file}}); err != nil {
+		return err
+	}
+	ops, err := a.secretOps()
+	if err != nil {
+		return err
+	}
+	keys, err := ops.CopyValues(ctx, pairs, file, nw)
+	if err := a.secretLog(err, "copy", "%s to %s: %s", strings.Join(from, " and "), file, outcome(err, fmt.Sprintf("%d keys", len(keys)))); err != nil {
+		return err
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "wrote %s: %d keys\n", file, len(keys))
+	for _, k := range keys {
+		fmt.Fprintf(&b, "  %-58s %d bytes\n", k.Name, k.Bytes)
+	}
+	return a.secretPrint(keys, b.String())
 }
 
 // stdinFlags are the flags that shape a consumer's stdin.

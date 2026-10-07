@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -184,5 +185,63 @@ func TestRealSOPSSkeleton(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), "default: ENC[") || strings.Contains(string(raw), v["stringData.default"]) {
 		t.Fatal("stringData.default is not encrypted")
+	}
+}
+
+// sopsBin is the real sops.
+const sopsBin = "sops"
+
+// TestRealSOPSCopyValues writes two vault fields into a new Secret with the
+// real sops while no age identity is reachable, then decrypts the file with
+// the throwaway recipient's identity to the two keys.
+func TestRealSOPSCopyValues(t *testing.T) {
+	if _, err := exec.LookPath(sopsBin); err != nil {
+		t.Skip("sops is not installed")
+	}
+	const idRef, secretRef = "op://Shared/oauth/username", "op://Shared/oauth/credential" //nolint:gosec // vault references, no value
+	const clientID, clientSecret = "planted-Client-Id-4b2e", "planted-Client-Secret-a91f07"
+	id := isolateAge(t)
+	dir := t.TempDir()
+	rules := fmt.Sprintf("creation_rules:\n  - path_regex: '\\.sops\\.yaml$'\n    encrypted_regex: '^(data|stringData)$'\n    age: %s\n", id.Recipient())
+	if err := os.WriteFile(filepath.Join(dir, ".sops.yaml"), []byte(rules), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	vault := func(ctx context.Context, dir string, env []string, stdin io.Reader, name string, args ...string) ([]byte, error) {
+		if name == "op" {
+			return []byte(map[string]string{idRef: clientID, secretRef: clientSecret}[args[len(args)-1]]), nil
+		}
+		if name == sopsBin && slices.Contains(args, "decrypt") {
+			t.Errorf("copy decrypted: sops %s", strings.Join(args, " "))
+		}
+		return Exec(ctx, dir, env, stdin, name, args...)
+	}
+	o := &Ops{Run: vault, Vault: "Shared", Token: "t"}
+	file := filepath.Join(dir, "oauth.sops.yaml")
+	pairs := []Pair{{Src: Ref{Op: idRef}, Path: "client-id"}, {Src: Ref{Op: secretRef}, Path: "client-secret"}}
+	keys, err := o.CopyValues(context.Background(), pairs, file, &NewSecret{Name: "oauth", Namespace: "app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 2 || keys[0] != (Key{Name: "stringData.client-id", Bytes: len(clientID)}) || keys[1] != (Key{Name: "stringData.client-secret", Bytes: len(clientSecret)}) {
+		t.Errorf("keys = %+v", keys)
+	}
+	raw, err := os.ReadFile(file) //nolint:gosec // the test's scratch file
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), clientID) || strings.Contains(string(raw), clientSecret) {
+		t.Fatal("the file holds a value in plaintext")
+	}
+	t.Setenv(envAgeKey, id.String())
+	out, err := Exec(context.Background(), "", nil, nil, sopsBin, "decrypt", "--output-type", "yaml", file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := parseDocument(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := doc.leaves(); v["stringData.client-id"] != clientID || v["stringData.client-secret"] != clientSecret || v["metadata.name"] != "oauth" {
+		t.Errorf("decrypted %d keys, not the two values", len(v))
 	}
 }
