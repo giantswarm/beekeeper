@@ -162,6 +162,11 @@ func (a *app) gate(ctx context.Context, argv []string, wait time.Duration, queue
 	if inSandbox() {
 		return a.gateBrokered(argv, wait, queued)
 	}
+	argv, detached := merge.StripDetach(argv)
+	if len(detached) > 0 {
+		gateLine("dropped %s: the gate runs the merge outside your session already, its outcome reaches you as for the blocking form",
+			strings.Join(detached, " "))
+	}
 	repo, pr, ok := parseGated(argv)
 	if !ok {
 		if a.store != nil && merge.ParseOwned(argv) {
