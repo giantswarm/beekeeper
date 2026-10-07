@@ -1113,6 +1113,24 @@ func (c *Config) MemcapMax(ramMiB int) string {
 	return strconv.Itoa(int(DefaultMemcapMax*float64(ramMiB))) + "M"
 }
 
+// DefaultMemcapCPUQuota is the fraction of the cores every capped run
+// together may use.
+const DefaultMemcapCPUQuota = 0.5
+
+// DefaultMemcapCPUWeight is memcap.slice's CPUWeight: half a desktop
+// slice's 100, a third of the cores while the desktop wants them too.
+const DefaultMemcapCPUWeight = 50
+
+// MemcapCPUQuota is memcap.slice's CPUQuota on a machine of cores, a
+// systemd quota (100% a core): memcap.cpuQuota, else DefaultMemcapCPUQuota
+// of the cores; "" with the cores unknown: no quota.
+func (c *Config) MemcapCPUQuota(cores int) string {
+	if c.Memcap.CPUQuota != "" || cores <= 0 {
+		return c.Memcap.CPUQuota
+	}
+	return strconv.Itoa(int(DefaultMemcapCPUQuota*float64(cores)*100)) + "%"
+}
+
 // LoadLimit is the HIGH LOAD threshold on a machine of cores: LoadMax when
 // set, LoadPerCoreMax × cores otherwise.
 func (w Watch) LoadLimit(cores int) float64 {
@@ -1242,6 +1260,15 @@ type Memcap struct {
 	// Max is a command's MemoryMax, a systemd size ("12G"; default: a
 	// fraction of RAM, DefaultMemcapMax).
 	Max string `yaml:"max"`
+	// CPUQuota is memcap.slice's CPUQuota, the cores every capped run
+	// together may use, a systemd quota ("1200%" is twelve cores; default:
+	// a fraction of the cores, DefaultMemcapCPUQuota). The slots share it
+	// by equal weight.
+	CPUQuota string `yaml:"cpuQuota"`
+	// CPUWeight is memcap.slice's CPUWeight against the desktop's slices
+	// (100 each): the runs' share of the cores while the desktop wants
+	// them too (default DefaultMemcapCPUWeight).
+	CPUWeight int `yaml:"cpuWeight"`
 }
 
 // Duration is a time.Duration written as "30s", "10m" in YAML.
@@ -1491,6 +1518,7 @@ func (c *Config) defaults() error {
 
 	setStr(&c.Memcap.SlotDir, filepath.Join(state, "memcap", "slots"))
 	setInt(&c.Memcap.Slots, 2)
+	setInt(&c.Memcap.CPUWeight, DefaultMemcapCPUWeight)
 	setInt(&c.Capacity.Floor, 5)
 	setInt(&c.Capacity.Ceiling, 10)
 	setInt(&c.Capacity.AvailMinMiB, 20<<10)

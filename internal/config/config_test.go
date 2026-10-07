@@ -391,6 +391,14 @@ func TestThresholdsDefaultToFractions(t *testing.T) {
 	if c.KindClusters(88_000) != 2 || c.KindClusters(16_000) != 1 || c.MemcapMax(100_000) != "14000M" || c.MemcapMax(0) != "infinity" {
 		t.Errorf("kind %d/%d, memcap %s", c.KindClusters(88_000), c.KindClusters(16_000), c.MemcapMax(100_000))
 	}
+	if c.MemcapCPUQuota(24) != "1200%" || c.MemcapCPUQuota(3) != "150%" || c.MemcapCPUQuota(0) != "" || c.Memcap.CPUWeight != DefaultMemcapCPUWeight {
+		t.Errorf("memcap CPU: quota %q on 24, %q on 3, %q unknown, weight %d", c.MemcapCPUQuota(24), c.MemcapCPUQuota(3), c.MemcapCPUQuota(0), c.Memcap.CPUWeight)
+	}
+	const quota = "800%"
+	c.Memcap.CPUQuota = quota
+	if c.MemcapCPUQuota(24) != quota || c.MemcapCPUQuota(0) != quota {
+		t.Errorf("memcap.cpuQuota set: %q, %q", c.MemcapCPUQuota(24), c.MemcapCPUQuota(0))
+	}
 	if _, err := Load(writeTemp(t, "kube: {contextTemplate: login.example.com}\n")); err == nil {
 		t.Error("a context template without {installation} loads")
 	}

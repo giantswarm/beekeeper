@@ -65,15 +65,21 @@ func (systemdSetup) Files(s SetupSpec) ([]File, []string) {
 	files = append(files, File{Path: filepath.Join(dir, memcapSlice), Content: fmt.Appendf(nil, `# The slice beekeeper run puts its capped commands into, sized by beekeeper
 # install for %s: above MemoryHigh the runs are throttled together, at
 # MemoryMax the kernel kills the biggest one. No swap: a build that does not
-# fit stops instead of pushing the desktop's pages out.
+# fit stops instead of pushing the desktop's pages out. CPUQuota bounds the
+# cores the runs use together (memcap.cpuQuota), CPUWeight their share
+# against the desktop's slices while both want the cores (memcap.cpuWeight);
+# beekeeper run sets both again at every slot it takes, so the configuration
+# rules without a reinstall.
 [Unit]
-Description=beekeeper run: memory-capped build and test commands
+Description=beekeeper run: memory- and CPU-capped build and test commands
 
 [Slice]
 MemoryHigh=%s
 MemoryMax=%s
 MemorySwapMax=0
-`, ram, share(s.RAMMiB, sliceHigh), share(s.RAMMiB, sliceMax))})
+CPUQuota=%s
+CPUWeight=%d
+`, ram, share(s.RAMMiB, sliceHigh), share(s.RAMMiB, sliceMax), s.CPUQuota, s.CPUWeight)})
 	prefix, ok := scopePrefix(s.DesktopScope)
 	if !ok {
 		return files, []string{"desktop scope memory guard: no Claude Desktop scope runs; run install again while the app runs"}

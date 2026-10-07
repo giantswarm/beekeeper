@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/free"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
@@ -40,6 +41,7 @@ type snapshot struct {
 	Tmp         machine.Disk        `json:"tmp"`
 	Root        machine.Disk        `json:"root"`
 	Slots       []machine.Slot      `json:"slots"`
+	BuildCPU    *machine.BuildCPU   `json:"buildCPU,omitempty"`
 	Clusters    []machine.Cluster   `json:"clusters"`
 	ClustersErr string              `json:"clustersError,omitempty"`
 	Sessions    []string            `json:"sessions"`
@@ -239,6 +241,7 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 	s.Tmp, _ = machine.ReadDisk("/tmp")
 	s.Root, _ = machine.ReadDisk("/")
 	s.Slots = machine.ReadSlots(a.cfg.Memcap.SlotDir, a.cfg.Memcap.Slots)
+	s.BuildCPU = machine.ReadBuildCPU(free.BuildCPUSample)
 	s.KubeContext = guard.CurrentContext(machineKubeconfig())
 	s.Teleport = a.readTeleport(ctx)
 	if s.Clusters, err = machine.KindClusters(ctx); err != nil {
@@ -509,6 +512,7 @@ func (a *app) printSnapshot(s *snapshot) {
 		}
 	}
 	p("build slots: %s", strings.Join(slots, "; "))
+	p("%s", free.BuildCPULine(s.BuildCPU, a.memcapCPU()))
 	if s.Teleport != nil {
 		p("%s", s.Teleport.line(a.now))
 	}

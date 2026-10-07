@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -188,6 +189,70 @@ func FindMemcapScope(unit string) string {
 		}
 	}
 	return ""
+}
+
+// BuildCPU is memcap.slice's CPU: the budget every capped run shares and
+// its use over a sample.
+type BuildCPU struct {
+	// Quota is the slice's cpu.max as a systemd CPUQuota ("1200%" is
+	// twelve cores), "max" for none.
+	Quota string `json:"quota"`
+	// Weight is the slice's cpu.weight, against the desktop's slices (100
+	// each).
+	Weight int64 `json:"weight"`
+	// UsePct is the CPU the slice used over the sample in percent of one
+	// core, comparable to Quota.
+	UsePct float64 `json:"usePct"`
+	// Throttled is how many quota periods of the sample the slice ran
+	// into its quota in.
+	Throttled int64 `json:"throttled"`
+}
+
+// ReadBuildCPU reads memcap.slice's CPU over a sample of the given length,
+// or nil while the slice has no cgroup (no run since the user manager
+// started).
+func ReadBuildCPU(sample time.Duration) *BuildCPU {
+	m, _ := filepath.Glob(strings.TrimSuffix(memcapSlice, "/"))
+	if len(m) == 0 {
+		return nil
+	}
+	return readBuildCPU(m[0], sample, time.Sleep)
+}
+
+// readBuildCPU reads the cgroup dir's cpu files, its cpu.stat before and
+// after sleep(sample).
+func readBuildCPU(dir string, sample time.Duration, sleep func(time.Duration)) *BuildCPU {
+	before := keyed(filepath.Join(dir, "cpu.stat"))
+	sleep(sample)
+	after := keyed(filepath.Join(dir, "cpu.stat"))
+	b := &BuildCPU{
+		Quota:     cpuQuota(filepath.Join(dir, "cpu.max")),
+		Weight:    readInt(filepath.Join(dir, "cpu.weight")),
+		Throttled: after["nr_throttled"] - before["nr_throttled"],
+	}
+	if sample > 0 {
+		b.UsePct = float64(after["usage_usec"]-before["usage_usec"]) / float64(sample.Microseconds()) * 100
+	}
+	return b
+}
+
+// cpuQuota renders a cgroup cpu.max ("1200000 100000", "max 100000") as a
+// systemd CPUQuota ("1200%", "max"), "?" when unreadable.
+func cpuQuota(path string) string {
+	raw, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return "?"
+	}
+	quota, period, _ := strings.Cut(strings.TrimSpace(string(raw)), " ")
+	if quota == "max" {
+		return quota
+	}
+	q, err := strconv.ParseFloat(quota, 64)
+	p, perr := strconv.ParseFloat(period, 64)
+	if err != nil || perr != nil || p == 0 {
+		return "?"
+	}
+	return strconv.Itoa(int(math.Round(q/p*100))) + "%"
 }
 
 // ReadScope reads the cgroup at path.
