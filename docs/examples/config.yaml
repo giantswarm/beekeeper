@@ -180,6 +180,8 @@ guide:                      # the guide's role: what guide handover --prompt tel
   dir: ~/src/desk
 agents:                     # the hand-over of registered agents
   relayAt: 400k             # watch says HANDOVER DUE once an agent's context reaches this; default: supervisor.relayAt
+  lastStepGrace: 30m        # an agent over relayAt in its task's last step (its serve record waits on the report or says the merge landed, or the gate saw its merge land) is HANDOVER HELD this long from that evidence, its report expected
+  lastStepCeiling: 500k     # the context at which the hand-over is due whatever the last step; default: a quarter above relayAt
   noteWait: 3m              # agents handover waits this long for the agent's note
   staleAfter: 24h           # the doctor takes an idle agent with no CLI running off the roster after this, unless kept (agents keep, a timer that wakes it); 0: never
   archiveAgreement: ""      # where the person agreed that finished workers' desktop sessions are archived without asking, never their own (quoted to the steward, which confirms each with agents archivable); empty: no steward is asked to archive

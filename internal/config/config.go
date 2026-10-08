@@ -513,6 +513,15 @@ type Agents struct {
 	// RelayAt is an agent's session context, in tokens, at which the watch
 	// says its hand-over due (default: supervisor.relayAt).
 	RelayAt Tokens `yaml:"relayAt"`
+	// LastStepGrace is how long the watch holds the hand-over of an agent
+	// over RelayAt whose task is in its last step (its sessions serve record
+	// waits on the report or says the merge landed, or the gate saw its
+	// merge land), counted from that evidence, since its report is expected
+	// before a hand-over would pay (30m).
+	LastStepGrace Duration `yaml:"lastStepGrace"`
+	// LastStepCeiling is the context, in tokens, at which the hand-over is
+	// due whatever the agent's last step (default: a quarter above RelayAt).
+	LastStepCeiling Tokens `yaml:"lastStepCeiling"`
 	// NoteWait bounds how long `agents handover` waits for the agent's
 	// note on what is in flight (3m).
 	NoteWait Duration `yaml:"noteWait"`
@@ -1449,6 +1458,10 @@ func (c *Config) defaults() error {
 	if c.Agents.RelayAt == 0 {
 		c.Agents.RelayAt = c.Supervisor.RelayAt
 	}
+	setDur(&c.Agents.LastStepGrace, 30*time.Minute)
+	if c.Agents.LastStepCeiling == 0 {
+		c.Agents.LastStepCeiling = c.Agents.RelayAt + c.Agents.RelayAt/4
+	}
 	setDur(&c.Agents.NoteWait, 3*time.Minute)
 	setDur(&c.Agents.StaleAfter, 24*time.Hour)
 	if c.Agents.Shell.Unalias == nil {
@@ -1805,6 +1818,9 @@ func (c *Config) validate() error {
 	}
 	if k := c.Capacity; k.Floor < 0 || k.Ceiling < k.Floor {
 		return fmt.Errorf("capacity: floor %d and ceiling %d; the ceiling is at least the floor", k.Floor, k.Ceiling)
+	}
+	if a := c.Agents; a.LastStepCeiling != 0 && a.LastStepCeiling <= a.RelayAt {
+		return fmt.Errorf("agents.lastStepCeiling: %d is not above relayAt %d", a.LastStepCeiling, a.RelayAt)
 	}
 	if err := c.validateLabs(); err != nil {
 		return err
