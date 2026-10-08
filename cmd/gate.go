@@ -30,11 +30,12 @@ import (
 
 // The gate's own exit codes, apart from devctl's 1-9 and the busy machine's 75.
 const (
-	// ExitGateQueued: the merge waits on for its turn in a run of its own,
-	// which wakes its owner with the outcome.
+	// ExitGateQueued: the merge waits on for its turn, or for the GitHub
+	// budget's reset, in a run of its own, which wakes its owner with the
+	// outcome.
 	ExitGateQueued = 76
-	// ExitGateRefused: a hold or an unreadable installation; under the
-	// budget floor the merge is queued for the reset (enqueue).
+	// ExitGateRefused: a hold, a GitHub budget unknown or an unreadable
+	// installation; nothing is queued.
 	ExitGateRefused = 77
 	// ExitGateDuplicate: the pull request's merge already runs, devctl's
 	// "not applicable".
@@ -66,8 +67,8 @@ release settling the lane. Only a hold refuses (exit 77): the repository,
 its lane, "merges" or "github" held (a cluster upgrade on the lane's
 installation holds it too); so do a GitHub budget unknown and a lane
 installation that cannot be read. Under the budget floor the merge is
-queued for the reset (exit 77, a "queued" line): a run of its own waits
-for the budget and merges as below; a merge marked urgent (lanes urgent)
+queued for the reset (exit 76, as below): a run of its own waits for the
+budget and merges as below; a merge marked urgent (lanes urgent)
 runs under the floor instead, once per reset window. Otherwise the merge
 joins its lane's queue (a merge registered with lanes settle heads it) and
 runs when no merge before it holds its place (one in the gate or within
@@ -238,7 +239,7 @@ func (a *app) gate(ctx context.Context, argv []string, wait time.Duration, queue
 			if g.queued {
 				return g.refuse("waited %s for its turn, %s; its place is dropped: run the same command again once the lane moves", wait, why)
 			}
-			return g.enqueue(ExitGateQueued, why)
+			return g.enqueue(why)
 		}
 		if why != g.lastWhy {
 			gateLine("waiting (up to %s): %s", deadline.Sub(a.now).Round(time.Second), why)
@@ -255,10 +256,10 @@ func (a *app) gate(ctx context.Context, argv []string, wait time.Duration, queue
 // enqueue hands the merge's wait to a run of its own outside the caller
 // (launchChild), the same gate under --queued: it keeps the merge's place, merges
 // when its turn comes and wakes the owner with the outcome (tellOwner), as
-// this gate leaves without its heard marker. It returns exit code: 76 for
-// a merge that waited its turn, 77 for one under the budget floor.
-func (g *gateRun) enqueue(code int, why string) error {
-	queued := &exitError{code: code}
+// this gate leaves without its heard marker. It returns exit 76, for a
+// merge that waited its turn and for one under the budget floor alike.
+func (g *gateRun) enqueue(why string) error {
+	queued := &exitError{code: ExitGateQueued}
 	self, err := selfExe()
 	if err == nil {
 		argv := []string{self}
@@ -412,7 +413,7 @@ func (g *gateRun) step() (string, error) {
 			if g.queued {
 				return why, nil
 			}
-			return "", g.enqueue(ExitGateRefused, why)
+			return "", g.enqueue(why)
 		}
 	}
 	if err := g.readRelease(); err != nil {
