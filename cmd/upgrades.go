@@ -114,7 +114,7 @@ func (w *watcher) upgradeCycle(ctx context.Context) {
 	}
 	st, err := w.store.Read()
 	if err != nil {
-		w.emit("upgrades", "UPGRADES unknown: the state does not load (%v)", err)
+		w.fail("upgrades", "UPGRADES unknown: the state does not load (%v)", err)
 		return
 	}
 	statuses := w.upgradeStatuses(ctx, st, now, w.upgrades, w.upgradeFresh(st, now))
@@ -141,12 +141,16 @@ func (w *watcher) upgradeCycle(ctx context.Context) {
 		return ev, nil
 	})
 	if err != nil {
-		w.emit("upgrades", "UPGRADES unknown: the state does not load (%v)", err)
+		w.fail("upgrades", "UPGRADES unknown: the state does not load (%v)", err)
 		return
 	}
 	w.clear("upgrades")
 	for _, s := range statuses {
-		w.check("upgrades:"+s.Installation, s.Err != "", "UPGRADES %s unreadable: %s", s.Installation, s.Err)
+		if s.Err != "" {
+			w.fail("upgrades:"+s.Installation, "UPGRADES %s unreadable: %s", s.Installation, s.Err)
+		} else {
+			w.clear("upgrades:" + s.Installation)
+		}
 	}
 	for _, h := range begun {
 		w.emitNow("upgrade", "%s", upgrade.Line(h))

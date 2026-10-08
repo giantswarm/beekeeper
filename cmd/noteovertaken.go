@@ -195,13 +195,34 @@ func findOrphaned(st *state.State, archived map[string]bool) []overtake {
 
 // overtakenNow reads what findOvertaken needs, GitHub only for notes with
 // refs and while the budget is over its floor, and returns the overtaken
-// notes and the kept ones.
+// notes and the kept ones. A failed read is a NOTE line (fail); --once also
+// says the read it skips for the budget and the refs GitHub left
+// unanswered, which keep their notes open: its silence means no change.
 func (w *watcher) overtakenNow(ctx context.Context, st *state.State) (over, kept []overtake) {
 	var states map[github.PR]github.RefState
-	if refs := overtakeRefs(st); len(refs) > 0 && !lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now) {
+	refs := overtakeRefs(st)
+	switch {
+	case len(refs) == 0:
+	case lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now):
+		if !w.chores {
+			w.emitNow("pending", "NOTE REFS NOT READ (--once): the GitHub budget is under its floor until %s; no note is overtaken or kept",
+				st.Budget.Reset.Local().Format("15:04"))
+		}
+	default:
 		s, err := refStates(ctx, refs)
-		w.check("note-refs", s == nil, "cannot read the notes' issues and pull requests: %v", err)
+		if s == nil {
+			w.fail("note-refs", "NOTE REFS UNREADABLE: cannot read the notes' issues and pull requests: %v", err)
+			break
+		}
+		w.clear("note-refs")
 		states = s
+		if unanswered := slices.DeleteFunc(slices.Clone(refs), func(r github.PR) bool { _, ok := s[r]; return ok }); len(unanswered) > 0 && !w.chores {
+			names := make([]string, len(unanswered))
+			for i, r := range unanswered {
+				names[i] = refName(r)
+			}
+			w.emitNow("pending", "NOTE REFS UNANSWERED (--once): %s; their notes stay open", strings.Join(names, ", "))
+		}
 	}
 	return findOvertaken(st, states)
 }
