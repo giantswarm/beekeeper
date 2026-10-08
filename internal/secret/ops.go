@@ -604,16 +604,9 @@ func (o *Ops) Set(ctx context.Context, dst Ref, opt SetOptions) (SetResult, erro
 func (o *Ops) storeVault(ctx context.Context, r Ref, v string) error {
 	parts := strings.SplitN(strings.TrimPrefix(r.Op, guard.OpRef), "/", 3)
 	vault, title, field := parts[0], parts[1], parts[2]
-	raw, err := o.op(ctx, nil, "item", "list", "--vault", vault, "--format", "json")
+	items, err := o.vaultItems(ctx, vault)
 	if err != nil {
 		return fmt.Errorf("%s: %w", r.Op, err)
-	}
-	var items []struct {
-		ID    string `json:"id"`
-		Title string `json:"title"`
-	}
-	if err := json.Unmarshal(raw, &items); err != nil {
-		return fmt.Errorf("%s: op item list answered no list", r.Op)
 	}
 	id := ""
 	for _, it := range items {
@@ -648,6 +641,26 @@ func (o *Ops) storeVault(ctx context.Context, r Ref, v string) error {
 		return fmt.Errorf("%s: %w", r.Op, err)
 	}
 	return nil
+}
+
+// vaultItem is what a vault's item listing says of one item: metadata, no
+// field and no value.
+type vaultItem struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+}
+
+// vaultItems lists the items of vault, metadata only.
+func (o *Ops) vaultItems(ctx context.Context, vault string) ([]vaultItem, error) {
+	raw, err := o.op(ctx, nil, "item", "list", "--vault", vault, "--format", "json")
+	if err != nil {
+		return nil, err
+	}
+	var items []vaultItem
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, errors.New("op item list answered no list")
+	}
+	return items, nil
 }
 
 // setField sets the concealed field labelled label in an item's JSON.

@@ -2,6 +2,7 @@ package secret
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -19,6 +20,11 @@ const (
 	ageRef   = "op://Shared/age/identity"
 	// ageDoc is a decrypted document the fake sops answers.
 	ageDoc = "stringData:\n  password: x\n"
+	// itemOp is op's item command, whose listing is the fakes' metadata.
+	itemOp = "item"
+	// opItemList is the vault's item listing, the one call that checks an
+	// item exists.
+	opItemList = "op item list --vault Shared --format json"
 )
 
 // ageTools is a fake sops and op: op answers the identity, sops the
@@ -60,6 +66,13 @@ func isolateAge(t *testing.T) *age.X25519Identity {
 // sopsFile writes a SOPS file encrypted to recipients, plus extra metadata.
 func sopsFile(t *testing.T, extra string, recipients ...string) string {
 	t.Helper()
+	return sopsFileAt(t, filepath.Join(t.TempDir(), "app.sops.yaml"), extra, recipients...)
+}
+
+// sopsFileAt writes a SOPS file encrypted to recipients, plus extra
+// metadata, at path.
+func sopsFileAt(t *testing.T, path, extra string, recipients ...string) string {
+	t.Helper()
 	var b strings.Builder
 	b.WriteString("stringData:\n  password: ENC[AES256_GCM,data:x,type:str]\nsops:\n")
 	if len(recipients) > 0 {
@@ -69,29 +82,147 @@ func sopsFile(t *testing.T, extra string, recipients ...string) string {
 		}
 	}
 	b.WriteString(extra)
-	p := filepath.Join(t.TempDir(), "app.sops.yaml")
-	if err := os.WriteFile(p, []byte(b.String()), 0o600); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	return p
+	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func TestNoAgeIdentityFailsBeforeSOPS(t *testing.T) {
 	id := isolateAge(t)
 	f := &ageTools{}
-	o := &Ops{Run: f.run, Vault: ageVault, Token: "t"}
+	o := &Ops{Run: f.run}
 	file := sopsFile(t, "", id.Recipient().String())
 	_, err := o.values(context.Background(), Ref{File: file})
 	if !errors.Is(err, ErrNoAgeIdentity) {
 		t.Fatalf("err = %v, want ErrNoAgeIdentity", err)
 	}
-	for _, w := range []string{id.Recipient().String(), "SOPS_AGE_KEY (unset)", "SOPS_AGE_KEY_FILE (unset)", "keys.txt (absent)", "secret.ageIdentities"} {
+	for _, w := range []string{id.Recipient().String(), "SOPS_AGE_KEY (unset)", "SOPS_AGE_KEY_FILE (unset)", "keys.txt (absent)", "secret.ageIdentities", "secret.vault"} {
 		if !strings.Contains(err.Error(), w) {
 			t.Errorf("the error lacks %q: %v", w, err)
 		}
 	}
 	if len(f.calls) != 0 {
 		t.Errorf("ran %v before failing", f.calls)
+	}
+}
+
+// itemTools is a fake sops and vault: op item list answers the vault's
+// item titles (metadata, no value), op read a recipient's item, sops the
+// document, and every call is recorded with its environment.
+type itemTools struct {
+	// items map an item's title to its password field.
+	items map[string]string
+	calls []string
+	env   []string
+}
+
+func (f *itemTools) run(_ context.Context, _ string, env []string, _ io.Reader, name string, args ...string) ([]byte, error) {
+	f.calls = append(f.calls, name+" "+strings.Join(args, " "))
+	if name == "op" {
+		switch args[0] {
+		case itemOp:
+			out := []map[string]string{}
+			for title := range f.items {
+				out = append(out, map[string]string{"id": "id-" + title, "title": title})
+			}
+			return json.Marshal(out)
+		case "read":
+			parts := strings.SplitN(strings.TrimPrefix(args[len(args)-1], "op://"), "/", 3)
+			v, ok := f.items[parts[1]]
+			if !ok {
+				return nil, errors.New("op: exit 1 (isn't an item)")
+			}
+			return []byte(v), nil
+		}
+		return nil, errors.New("op: exit 2 (unknown)")
+	}
+	f.env = env
+	return []byte(ageDoc), nil
+}
+
+func TestAgeIdentityFromTheVaultItem(t *testing.T) {
+	id := isolateAge(t)
+	other, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := id.Recipient().String()
+	// the file's first recipient has no item, its second one has
+	file := sopsFile(t, "", other.Recipient().String(), r)
+	args := []string{file + "#stringData.password"}
+	f := &itemTools{items: map[string]string{AgeItemTitle(r): id.String() + "\n", "unrelated": "x"}}
+	o := &Ops{Run: f.run, Vault: ageVault, Token: "t"}
+	if !o.AgeNeedsVault("", args) || !o.AgeNeedsIdentity("", args) {
+		t.Errorf("AgeNeedsVault = %v, AgeNeedsIdentity = %v: want the vault", o.AgeNeedsVault("", args), o.AgeNeedsIdentity("", args))
+	}
+	vs, err := o.values(context.Background(), Ref{File: file})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vs["stringData.password"] != "x" {
+		t.Errorf("values = %v", vs)
+	}
+	want := []string{opItemList, "op read --no-newline " + AgeItemRef(ageVault, r)}
+	if got := f.calls[:len(f.calls)-1]; !slices.Equal(got, want) || !strings.HasPrefix(f.calls[len(f.calls)-1], "sops ") {
+		t.Errorf("calls = %q: want %q, then sops", f.calls, want)
+	}
+	if len(f.env) != 1 || f.env[0] != envAgeKey+"="+id.String() {
+		t.Errorf("sops did not get the identity alone (%d entries)", len(f.env))
+	}
+
+	// an entry of secret.ageIdentities comes first: the vault is not asked
+	keys := filepath.Join(t.TempDir(), "identity.txt")
+	if err := os.WriteFile(keys, []byte(id.String()+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.calls = nil
+	o.Ages = []AgeIdentity{{Recipient: r, Ref: FileRef + keys}}
+	if o.AgeNeedsVault("", args) {
+		t.Error("AgeNeedsVault = true with the identity in a file")
+	}
+	if _, err := o.values(context.Background(), Ref{File: file}); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.calls) != 1 || !strings.HasPrefix(f.calls[0], "sops ") {
+		t.Errorf("calls = %q: want sops alone", f.calls)
+	}
+}
+
+func TestNoVaultItemFailsInOneLineNamingTheInstallation(t *testing.T) {
+	id := isolateAge(t)
+	r := id.Recipient().String()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".sops.yaml"), []byte("creation_rules: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file := sopsFileAt(t, filepath.Join(dir, "management-clusters", "graveler", "secrets", "app.sops.yaml"), "", r)
+	f := &itemTools{items: map[string]string{"unrelated": "x"}}
+	o := &Ops{Run: f.run, Vault: ageVault, Token: "t", Installations: []string{"gazelle", "graveler"}}
+	_, err := o.values(context.Background(), Ref{File: file})
+	if !errors.Is(err, ErrNoAgeIdentity) || errors.Is(err, ErrVault) {
+		t.Fatalf("err = %v, want ErrNoAgeIdentity and no vault error", err)
+	}
+	for _, w := range []string{"graveler's recipient " + r, `"` + AgeItemTitle(r) + `"`, "the vault Shared holds no item", "AGE-SECRET-KEY-1"} {
+		if !strings.Contains(err.Error(), w) {
+			t.Errorf("the error lacks %q: %v", w, err)
+		}
+	}
+	if strings.Contains(err.Error(), "\n") {
+		t.Errorf("the error is more than one line: %v", err)
+	}
+	if len(f.calls) != 1 || f.calls[0] != opItemList {
+		t.Errorf("calls = %q: want the vault's item listing alone, no read and no sops", f.calls)
+	}
+
+	// a file outside any installation names no installation
+	f.calls = nil
+	_, err = o.values(context.Background(), Ref{File: sopsFile(t, "", r)})
+	if err == nil || !strings.Contains(err.Error(), "for its recipient "+r) {
+		t.Errorf("err = %v", err)
 	}
 }
 

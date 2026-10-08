@@ -530,16 +530,18 @@ repository matches.
 | `lock` | The broker forgets the vault session. |
 | `status` | Whether the broker holds the vault session, never the session. |
 | `rotate platform://<installation>/<capability>/<name> --reason <text>` | A credential the platform manager generates: `platformctl installation reconcile <installation> <capability> --commit --rotate <name>` on the host, the manager writing the new value into the installation's SOPS files in a pull request; nothing is decrypted and no copy reaches the vault. `--dry-run` shows the files that hold it. |
+| `recipients [<directory> \| <sops-file>]` | For a directory (the working directory by default), every age recipient of the creation rules of the `.sops.yaml` nearest above it, a gitops repository's installations' for one (`management-clusters/graveler/.*` → its recipient); for a SOPS file, the file's recipients (its metadata when encrypted, else its creation rule's). Each comes with where its identity is: sops' own sources, the entry of `secret.ageIdentities`, the shared vault's item per recipient (found in the vault's item listing, metadata only) or `none`, naming the item the vault lacks. No value is read; exit 1 when a recipient has no identity. With `secret.session` it runs in the broker, like a call on the vault. |
 
 ### Age identities
 
 sops decrypts a file encrypted to age recipients with an identity from its own sources:
 `SOPS_AGE_KEY`, the file `SOPS_AGE_KEY_FILE` names, and `sops/age/keys.txt` in the user's config
 directory. Before sops runs, beekeeper reads the file's recipients from its plaintext metadata and
-checks those sources for an identity of one of them; without one, the call fails before sops,
-naming the recipients, each source with what it held, and `secret.ageIdentities`. A file with
-another key group (KMS, PGP, Vault, key groups), an SSH or plugin recipient, or with
-`SOPS_AGE_KEY_CMD` or `SOPS_AGE_SSH_PRIVATE_KEY_FILE` set goes to sops unchecked.
+checks those sources for an identity of one of them; without one, it takes the entry of
+`secret.ageIdentities` that names one of the recipients or the file's path, and for a recipient no
+entry names, the shared vault's item per recipient (below). A file with none fails before sops, in
+one line. A file with another key group (KMS, PGP, Vault, key groups), an SSH or plugin recipient,
+or with `SOPS_AGE_KEY_CMD` or `SOPS_AGE_SSH_PRIVATE_KEY_FILE` set goes to sops unchecked.
 
 `secret.ageIdentities` supplies an identity no local source holds, from the shared vault, from an
 identity file on the host that is to stay out of every vault, or from the person's own credential
@@ -586,6 +588,23 @@ A `store://` reference and `secret.store` are set together, in one `beekeeper co
 [Configuration](#configuration)). A reference whose `secret.store` is still missing leaves the
 configuration loadable: every command works, and `beekeeper secret …` warns once per such reference
 until the store is set.
+
+#### The vault's item per recipient
+
+A recipient no entry of `secret.ageIdentities` names, a test installation's for one, has its
+identity in the shared vault (`secret.vault`) under one naming convention: an item titled
+`sops age key <recipient>` (the recipient as the gitops repository's `.sops.yaml` names it,
+`sops age key age1…`), whose `password` field holds the `AGE-SECRET-KEY-1…` identity. A person
+creates the item once, as a Password item in the vault; the item is the grant. Nothing else is
+configured: the broker resolves a file's recipients from its metadata and, for a file still to be
+written, from the creation rule of the `.sops.yaml` for its path (`management-clusters/<installation>/…`
+by `path_regex`), finds the item in the vault's item listing (titles only, metadata, no value) and
+reads it like any `op://` field for the one sops call. `beekeeper secret recipients <directory>`
+shows, for a gitops repository's path, each creation rule's recipient and where its identity is,
+reading no value. A file whose recipient has neither an entry nor an item fails before sops in one
+line, naming the installation (`alerts.installations`, by the directory of the file's path), the
+recipient and the item the vault lacks: a Secret for it is one no agent can change, and no person
+is asked to decrypt it. With `secret.session` the call runs in the broker, like a call on the vault.
 
 ### The vault session
 
@@ -950,7 +969,10 @@ refusal naming the command with the gate written in.
   Nobody runs it again; a second `devctl pr merge` of the pull request while it waits is refused
   with exit 3.
 - **Otherwise devctl runs once**, its JSON document and exit code (devctl's own 0–9) unchanged,
-  and the event log records `merging` and `merged` with the release. devctl serves the
+  and the event log records `merging` and `merged` with the release. Its wait for the CI outcome
+  is `merge.ciTimeout` (1h, passed as `--timeout`) unless the command names its own `--timeout`:
+  devctl's default of 30m is shorter than a CI that `--update-branch` restarts from zero, and a
+  timeout (exit 2) merges nothing. devctl serves the
   repositories of `merge.devctlOwners` only (its GitHub App login reaches the giantswarm
   organisation); any other owner's repository takes the **plain squash merge** instead, in the
   same place and unit: as the gh login, it waits up to `--timeout` (45m) for the head's checks,
@@ -1056,8 +1078,8 @@ unknown release, one `MERGE LOST` line and a `merge.lost` event, so the lane set
 `merge.settle` and frees once its HelmReleases are Ready; `lanes clear <lane>` drops it at once.
 
 A running merge whose devctl runs on after its pull request merged (a hung release wait) holds
-its lane for nothing. `watch` asks GitHub about each run older than `merge.hungAfter` (45m,
-devctl's own `--timeout`) and ends the devctl of one whose pull request merged longer than that
+its lane for nothing. `watch` asks GitHub about each run older than `merge.hungAfter` (45m)
+and ends the devctl of one whose pull request merged longer than that
 ago, or closed: SIGTERM to its merge-child, one `MERGE HUNG` line and a `merge.hung` event. The
 run is then recorded like any devctl ended by a signal, by its gate or by the next poll: merged,
 it settles its lane with its release unconfirmed. `lanes drop <owner/repo> <n>` does the same at
@@ -1955,7 +1977,7 @@ The organisation and desk keys, and their defaults:
 | `secret.signinCommand` | none | The command the broker runs to sign in to the vault without the person; it prints the session as `op signin` does ([The vault session](#the-vault-session)) |
 | `secret.sessionLifetime` | `12h` | How long the broker holds the vault session after a sign-in ([The vault session](#the-vault-session)) |
 | `secret.unlockWait` | `8m` | How long a call on the vault waits for the broker's sign-in, and how long one sign-in waits for the credential store and tries again after a failure ([The vault session](#the-vault-session)) |
-| `secret.ageIdentities` | none | Age identities in the shared vault, in an identity file (`file://`) or in the person's own credential store (`store://`), by recipient or `pathRegex`, for the SOPS files no local sops identity decrypts ([Age identities](#age-identities)) |
+| `secret.ageIdentities` | none | Age identities in the shared vault, in an identity file (`file://`) or in the person's own credential store (`store://`), by recipient or `pathRegex`, for the SOPS files no local sops identity decrypts; a recipient no entry names has its identity in the vault's item `sops age key <recipient>` ([Age identities](#age-identities)) |
 | `secret.store.read`, `secret.store.search` | none | The person's own commands that read an entry of their credential store and search it by an age recipient, for `store://` age identities ([Age identities](#age-identities)) |
 | `secret.files` | none | Files known to hold secret values (`~/` and globs allowed) that no agent reads whole, beside the built-in list ([Secret reads](#secret-reads)) |
 | `secret.unlockCommands` | none | The person's own vault unlock helpers, refused in agent sessions like `op signin` and unaliased in the agent shell ([Secret reads](#secret-reads)) |
