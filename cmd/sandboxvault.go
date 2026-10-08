@@ -407,7 +407,7 @@ func (a *app) brokeredVault(v *vaultBroker, call func(env []string) sandbox.Hand
 		start := time.Now()
 		// the files of a call are the requester's, read only for an age identity
 		var cwd string
-		if len(a.cfg.Secret.AgeIdentities) > 0 {
+		if len(a.cfg.Secret.AgeIdentities) > 0 || a.cfg.Secret.Vault != "" {
 			var err error
 			if cwd, _, err = sandbox.Origin("/proc", pid, nil); err != nil {
 				return sandbox.Reply{}, fmt.Errorf("the requester: %w", err)

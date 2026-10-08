@@ -345,7 +345,7 @@ func brokeredCap(c platform.Capper, cpu platform.Cap) func(int, sandbox.Request)
 // brokeredSecretOps are the beekeeper secret subcommands a sandboxed
 // session runs through the broker. copy's consumer form is refused with
 // them: its consumer would run on the host, outside the sandbox.
-var brokeredSecretOps = []string{"compare", "fingerprint", "copy", "set", "rotate"}
+var brokeredSecretOps = []string{"compare", "fingerprint", "copy", "set", "rotate", "recipients"}
 
 // callerEnv are the variables that name the calling session, the only part
 // of its environment a brokered call takes over.

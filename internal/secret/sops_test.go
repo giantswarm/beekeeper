@@ -2,6 +2,7 @@ package secret
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -84,8 +85,8 @@ func TestRealSOPSCopy(t *testing.T) {
 }
 
 // TestRealSOPSAgeIdentity decrypts with the real sops a file whose identity
-// only the vault holds: refused before sops without the mapping, decrypted
-// with it.
+// only the vault holds: refused before sops without the mapping (the vault
+// holding no item per recipient either), decrypted with it.
 func TestRealSOPSAgeIdentity(t *testing.T) {
 	if _, err := exec.LookPath("sops"); err != nil {
 		t.Skip("sops is not installed")
@@ -106,7 +107,10 @@ func TestRealSOPSAgeIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	vault := func(ctx context.Context, dir string, env []string, stdin io.Reader, name string, args ...string) ([]byte, error) {
-		if name == "op" {
+		switch {
+		case name == "op" && args[0] == itemOp:
+			return []byte("[]"), nil
+		case name == "op":
 			return []byte(id.String()), nil
 		}
 		return Exec(ctx, dir, env, stdin, name, args...)
@@ -154,7 +158,7 @@ func TestRealSOPSSkeleton(t *testing.T) {
 	}
 	o := &Ops{Run: Exec, Fingerprint: func(v string) string { return fmt.Sprint(len(v)) }}
 	ctx := context.Background()
-	if _, err := o.Set(ctx, Ref{File: file, Path: "stringData.secretKey"}, SetOptions{Length: 32, Charset: "alnum"}); err != nil {
+	if _, err := o.Set(ctx, Ref{File: file, Path: "stringData.secretKey"}, SetOptions{Length: 32, Charset: alnum}); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(file) //nolint:gosec // the test's scratch file
@@ -174,7 +178,7 @@ func TestRealSOPSSkeleton(t *testing.T) {
 		t.Fatal("the file holds the value in plaintext")
 	}
 	// A bare key on a Secret goes under stringData, where the rule encrypts it.
-	if _, err := o.Set(ctx, Ref{File: file, Path: "default"}, SetOptions{Length: 32, Charset: "alnum"}); err != nil {
+	if _, err := o.Set(ctx, Ref{File: file, Path: "default"}, SetOptions{Length: 32, Charset: alnum}); err != nil {
 		t.Fatal(err)
 	}
 	if raw, err = os.ReadFile(file); err != nil { //nolint:gosec // the test's scratch file
@@ -190,6 +194,9 @@ func TestRealSOPSSkeleton(t *testing.T) {
 
 // sopsBin is the real sops.
 const sopsBin = "sops"
+
+// alnum is set's default character set.
+const alnum = "alnum"
 
 // TestRealSOPSCopyValues writes two vault fields into a new Secret with the
 // real sops while no age identity is reachable, then decrypts the file with
@@ -243,5 +250,71 @@ func TestRealSOPSCopyValues(t *testing.T) {
 	}
 	if v := doc.leaves(); v["stringData.client-id"] != clientID || v["stringData.client-secret"] != clientSecret || v["metadata.name"] != "oauth" {
 		t.Errorf("decrypted %d keys, not the two values", len(v))
+	}
+}
+
+// TestRealSOPSVaultItem changes, with the real sops, a file whose
+// recipient's identity only the vault's item per recipient holds: set
+// decrypts with it and encrypts again, and without the item the call fails
+// before sops, naming the recipient and the item.
+func TestRealSOPSVaultItem(t *testing.T) {
+	if _, err := exec.LookPath(sopsBin); err != nil {
+		t.Skip("sops is not installed")
+	}
+	const password = "planted-Pass-item-9b1e"
+	id := isolateAge(t)
+	r := id.Recipient().String()
+	dir := t.TempDir()
+	rules := fmt.Sprintf("creation_rules:\n  - path_regex: '\\.sops\\.yaml$'\n    encrypted_regex: '^(data|stringData)$'\n    age: %s\n", r)
+	if err := os.WriteFile(filepath.Join(dir, ".sops.yaml"), []byte(rules), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := parseDocument([]byte("stringData:\n  password: " + password + "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	file := filepath.Join(dir, "app.sops.yaml")
+	if err := (&Ops{Run: Exec}).encrypt(ctx, doc, file); err != nil {
+		t.Fatal(err)
+	}
+	vault := func(items map[string]string) Runner {
+		return func(ctx context.Context, dir string, env []string, stdin io.Reader, name string, args ...string) ([]byte, error) {
+			if name != "op" {
+				return Exec(ctx, dir, env, stdin, name, args...)
+			}
+			if args[0] == itemOp {
+				var out []map[string]string
+				for title := range items {
+					out = append(out, map[string]string{"id": "id", "title": title})
+				}
+				return json.Marshal(out)
+			}
+			parts := strings.SplitN(strings.TrimPrefix(args[len(args)-1], "op://"), "/", 3)
+			if v, ok := items[parts[1]]; ok {
+				return []byte(v), nil
+			}
+			return nil, errors.New("op: exit 1 (isn't an item)")
+		}
+	}
+	o := &Ops{Run: vault(map[string]string{AgeItemTitle(r): id.String()}), Vault: ageVault, Token: "t", Fingerprint: func(v string) string { return fmt.Sprint(len(v)) }}
+	if _, err := o.Set(ctx, Ref{File: file, Path: "stringData.token"}, SetOptions{Length: 32, Charset: alnum}); err != nil {
+		t.Fatal(err)
+	}
+	vs, err := o.values(ctx, Ref{File: file})
+	if err != nil || vs["stringData.password"] != password || len(vs["stringData.token"]) != 32 {
+		t.Fatalf("after set: %v (%d keys)", err, len(vs))
+	}
+	raw, err := os.ReadFile(file) //nolint:gosec // the test's scratch file
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), password) || strings.Contains(string(raw), vs["stringData.token"]) {
+		t.Fatal("the file holds a value in plaintext")
+	}
+	empty := &Ops{Run: vault(map[string]string{}), Vault: ageVault, Token: "t"}
+	_, err = empty.Fingerprints(ctx, Ref{File: file})
+	if !errors.Is(err, ErrNoAgeIdentity) || !strings.Contains(err.Error(), AgeItemTitle(r)) {
+		t.Fatalf("without the item: %v", err)
 	}
 }
