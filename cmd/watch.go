@@ -137,7 +137,13 @@ re-executes itself. --once says the stale watches it finds as well.
 A registered agent whose session's context reaches agents.relayAt gets one
 HANDOVER DUE "<agent>" at <n>k: beekeeper agents handover "<agent>" at its
 first quiet moment: no tool command of its own running and no gated merge
-of its own in flight.
+of its own in flight. An agent in its task's last step (its sessions serve
+record waits on the report or says the merge landed, or the gate saw its
+merge land) is HANDOVER HELD instead, once, for agents.lastStepGrace (30m)
+from that evidence or until its context reaches agents.lastStepCeiling:
+its report is expected before a hand-over would pay, and an agent that
+reported done is never handed over. Past the grace or the ceiling the
+HANDOVER DUE line says how long it was held.
 
 --notify also sends the events that need a person to the desktop's
 notification service (org.freedesktop.Notifications on the session bus):
