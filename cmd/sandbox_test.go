@@ -78,18 +78,26 @@ func TestBrokeredSecretArgs(t *testing.T) {
 		{copyOp, "--name=--config", sopsA, sopsB},
 		{"rotate", "op://Shared/db/password", "--generate=true", "--json=true"},
 	} {
-		if err := brokeredSecretArgs(ok, true); err != nil {
+		if err := brokeredSecretArgs(ok, true, false); err != nil {
 			t.Errorf("%q: %v", ok, err)
 		}
 	}
 	// a requester outside the sandbox runs its consumer on the host anyway;
 	// copy's own consumer list holds it
 	consumer := strings.Fields(copyOp + " op://Shared/x/y -- gh secret set T")
-	if err := brokeredSecretArgs(consumer, false); err != nil {
+	if err := brokeredSecretArgs(consumer, false, false); err != nil {
 		t.Errorf("%q outside the sandbox: %v", consumer, err)
 	}
-	if err := brokeredSecretArgs(consumer, true); err == nil {
+	if err := brokeredSecretArgs(consumer, true, false); err == nil {
 		t.Errorf("%q in the sandbox: want a refusal", consumer)
+	}
+	// import reads the person's own vault: brokered in session mode only
+	imp := []string{"import", "--recipient=age1x", "op://Private/x/y"}
+	if err := brokeredSecretArgs(imp, true, true); err != nil {
+		t.Errorf("%q in session mode: %v", imp, err)
+	}
+	if err := brokeredSecretArgs(imp, true, false); err == nil || !strings.Contains(err.Error(), "secret.session") {
+		t.Errorf("%q without secret.session = %v, want the reason", imp, err)
 	}
 	for _, bad := range [][]string{
 		nil,
@@ -99,7 +107,7 @@ func TestBrokeredSecretArgs(t *testing.T) {
 		{compareOp, "--as", agentTwo, "a", "b"},
 		{compareOp, "--config=/tmp/other.yaml", "a", "b"},
 	} {
-		if err := brokeredSecretArgs(bad, true); err == nil {
+		if err := brokeredSecretArgs(bad, true, false); err == nil {
 			t.Errorf("%q: want a refusal", bad)
 		}
 	}
