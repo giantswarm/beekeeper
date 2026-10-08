@@ -123,8 +123,10 @@ the lane `stalled` and `watch --once` prints one `LANE STALLED` line. The re-exe
 builds stamped with different versions (`-ldflags "-X …/pkg/project.version=…"`): start a
 waiting gate call from build A's path, rename build B over that path (`mv -f`, as `self-update`
 does), and within 5s the call prints `continuing under beekeeper <B>` and keeps its position in
-`lanes`. The test binary is not re-executed: `internal/platform/binary_linux_test.go` covers noticing the
-replacement.
+`lanes`; a call whose devctl runs prints it within a poll and follows the same devctl on. The
+test binary is not re-executed: `internal/platform/binary_linux_test.go` covers noticing the
+replacement, and `cmd/gatereexec_test.go` the hand-over on both sides with a binary whose re-exec
+fails.
 
 `watch` finds a session by its process: a `claude` binary that is no subcommand (`daemon`,
 `bg-pty-host`, `stop`, …) and not the `--bg` launcher, running under no other session's CLI

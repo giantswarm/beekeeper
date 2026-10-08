@@ -275,8 +275,13 @@ func TestStaleBinaries(t *testing.T) {
 	if len(got) != 3 || got[0].PID != 3 || got[1].PID != 4 || got[2].PID != 5 {
 		t.Fatalf("stale binaries = %v", got)
 	}
-	if rest := slices.DeleteFunc(got, isWatch); len(rest) != 2 || staleLine(rest[0]) != "stale binary: pid 3 (beekeeper gate --) runs a beekeeper an install replaced; "+
-		"its saves of the state are refused until it ends or is restarted" {
+	rest := slices.DeleteFunc(got, isWatch)
+	if len(rest) != 2 || staleLine(rest[0]) != "stale binary: pid 3 (beekeeper gate --) runs a beekeeper an install replaced; "+
+		"it re-executes the installed one at its next step" {
 		t.Errorf("without the watches = %v: %q", rest, staleLine(rest[0]))
+	}
+	if len(rest) == 2 && staleLine(rest[1]) != "stale binary: pid 5 (beekeeper agents reopen) runs a beekeeper an install replaced; "+
+		"its saves of the state are refused until it ends or is restarted" {
+		t.Errorf("a reopen: %q", staleLine(rest[1]))
 	}
 }

@@ -54,11 +54,17 @@ func runningMerge(t *testing.T, repo string, lane config.Lane) *gateRun {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return runningMergeIn(t, store, repo, lane)
+}
+
+// runningMergeIn is runningMerge in store.
+func runningMergeIn(t *testing.T, store *state.FileStore, repo string, lane config.Lane) *gateRun {
+	t.Helper()
 	cfg := &config.Config{Lanes: []config.Lane{lane}, Merge: config.Merge{SeedTTL: config.Duration{Duration: time.Hour}, DevctlOwners: []string{"o", "giantswarm"}}}
 	me := state.Party{Name: "worker"}
 	g := &gateRun{app: &app{cfg: cfg, store: store, now: relayNow}, ctx: context.Background(), repo: repo, pr: 7, lane: lane, me: me, pid: os.Getpid(),
 		argv: mergeArgv(repo)}
-	err = store.Update(func(st *state.State) ([]state.Event, error) {
+	err := store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges = []state.Merge{{Repo: repo, PR: 7, Lane: lane.Name, By: me, PID: g.pid, Phase: state.Running, Joined: relayNow, Started: relayNow}}
 		if repo == merge.ToolRepo {
 			st.Holds = []state.Hold{{Target: merge.AllMerges, Except: repo, By: me, Tool: merge.Tool, ToolFrom: devctlFrom, ToolPR: 7}}

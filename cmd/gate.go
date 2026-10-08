@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,7 +23,6 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/merge"
-	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/pkg/project"
@@ -50,6 +50,10 @@ const (
 	// gateDeadlineEnv carries a waiting call's deadline across the re-exec
 	// of a replaced binary.
 	gateDeadlineEnv = "BEEKEEPER_GATE_DEADLINE"
+	// gateRunningEnv carries a running merge's devctl across the re-exec of
+	// a replaced binary: its merge-child's pid and how far its stderr was
+	// copied, "<pid>:<offset>".
+	gateRunningEnv = "BEEKEEPER_GATE_RUNNING"
 	// gateFromEnv names the gate a queued run took the merge's place from.
 	gateFromEnv = "BEEKEEPER_GATE_FROM"
 )
@@ -81,14 +85,18 @@ merge's place, waits up to merge.seedTTL, runs devctl when its turn comes
 and wakes the owner with the outcome; a second merge of the pull request
 is refused (exit 3) while it waits. A place whose pull request merged or
 closed outside the gate leaves the queue at the next check (watch, and a
-merge waiting behind it). A waiting call whose binary is replaced
-(beekeeper self-update) re-executes the new one: the same process,
-arguments and stdio, the same place and deadline; never while devctl runs.
-devctl then runs once, in a session of its own, so it merges on when the
-caller's session ends (only SIGINT reaches it); its document and exit code
-pass through unchanged. A call whose release is older than the one that
-wrote the state and that cannot re-execute is refused (77) before it
-touches the lane: the installed beekeeper gates the same command again. A merge into a base branch no Auto-release
+merge waiting behind it). A call whose binary is replaced (beekeeper
+self-update, install) re-executes the new one at its next step: the same
+process, arguments and stdio; waiting, the same place and deadline;
+running, the same devctl, followed on from where its stderr was copied, so
+the installed release records the outcome. devctl runs once, in a session
+of its own, so it merges on when the caller's session ends (only SIGINT
+reaches it); its document and exit code pass through unchanged. A call
+whose release is older than the one that wrote the state and that cannot
+re-execute is refused (77) before it touches the lane: the installed
+beekeeper gates the same command again; one whose devctl already ran leaves
+the run's document and exit code for the watch, which records the outcome
+at its next poll. A merge into a base branch no Auto-release
 run tags (the Auto-release workflow on the branch, read once per merge,
 names no push to it; its tags are cut by hand) runs devctl with
 --no-release-wait: its lane frees the moment devctl reports it merged and
@@ -177,6 +185,8 @@ type gateRun struct {
 	// release is how the pull request's base branch releases, read once
 	// before devctl's turn.
 	release *github.BaseRelease
+	// bin is the executable this call runs, re-executed once replaced.
+	bin binary
 }
 
 func (a *app) gate(ctx context.Context, argv []string, wait time.Duration, queued bool) error {
@@ -199,8 +209,13 @@ func (a *app) gate(ctx context.Context, argv []string, wait time.Duration, queue
 	if err != nil {
 		me = state.Party{Name: fmt.Sprintf("pid %d", os.Getppid())}
 	}
-	g := &gateRun{app: a, ctx: ctx, argv: argv, repo: repo, pr: pr, lane: a.cfg.LaneOf(repo), me: me, pid: os.Getpid(), cli: callerCLI(), queued: queued}
+	g := &gateRun{app: a, ctx: ctx, argv: argv, repo: repo, pr: pr, lane: a.cfg.LaneOf(repo), me: me, pid: os.Getpid(), cli: callerCLI(), queued: queued,
+		bin: runningBinary()}
 	g.central = pr != 0 && a.cfg.CentralLane(g.lane)
+	if v, ok := os.LookupEnv(gateRunningEnv); ok {
+		_ = os.Unsetenv(gateRunningEnv)
+		return g.resumeMerge(v)
+	}
 	// A queued run takes over the place its gate holds: none means dropped.
 	g.placed = queued
 	if pr == 0 && !queued {
@@ -221,17 +236,23 @@ func (a *app) gate(ctx context.Context, argv []string, wait time.Duration, queue
 			gateLine("continuing under %s %s: %s keeps its place in lane %s", project.Name, project.Version(), g.key(), g.lane.Name)
 		}
 	}
-	bin := platform.RunningBinary()
 	for {
 		a.now = time.Now()
 		// Before the step saves: the new release may have written the
 		// state, which refuses this binary's save.
-		if bin.Replaced() {
-			gateLine("%s was replaced while the merge waited: re-executing it", bin.Path)
-			err := bin.Exec(gateDeadlineEnv + "=" + deadline.Format(time.RFC3339Nano))
-			gateLine("the new binary does not start (%v): waiting on under %s", err, project.Version())
+		if g.bin.Replaced() {
+			g.reexec("while the merge waited", gateDeadlineEnv+"="+deadline.Format(time.RFC3339Nano))
 		}
 		why, err := g.step()
+		var stale *state.StaleWriterError
+		if errors.As(err, &stale) {
+			// The step saved nothing: a replaced binary carries on as the
+			// installed one, with the same place.
+			if g.bin.Replaced() {
+				g.reexec("while the merge waited", gateDeadlineEnv+"="+deadline.Format(time.RFC3339Nano))
+			}
+			return g.staleRefused(stale)
+		}
 		if err != nil || why == "" {
 			return err
 		}
@@ -251,6 +272,52 @@ func (a *app) gate(ctx context.Context, argv []string, wait time.Duration, queue
 		case <-time.After(min(deadline.Sub(a.now), 5*time.Second)):
 		}
 	}
+}
+
+// reexec replaces this process with the binary installed at its path, with
+// env for the new one, and says so; it returns only when the new binary
+// does not start, and the call carries on under this one.
+func (g *gateRun) reexec(when string, env ...string) {
+	gateLine("%s was replaced %s: re-executing it", g.bin.Path(), when)
+	err := g.bin.Exec(env...)
+	gateLine("the new binary does not start (%v): carrying on under %s", err, project.Version())
+}
+
+// staleRefused refuses the call whose save the newer release that wrote the
+// state refused and that could not re-execute: nothing ran, the lane is
+// untouched, and the installed beekeeper gates the same command again.
+func (g *gateRun) staleRefused(stale *state.StaleWriterError) error {
+	why := fmt.Sprintf("%s: this call runs beekeeper %s, older than the %s that wrote the state; nothing ran, the lane is untouched: run the same command again, the installed %s gates it",
+		g.key(), stale.Version, stale.Newer, project.Name)
+	_ = g.store.Log(event(g.me, "merge.refused", "%s", why))
+	return gateRefused("%s", why)
+}
+
+// resumeMerge carries a running merge on after the re-exec of a replaced
+// binary: running names its merge-child and how far its stderr was copied
+// (gateRunningEnv). The merge keeps its place, its devctl runs on, and this
+// release follows and records it; a merge the state no longer runs is
+// followed to its end all the same, its outcome the caller's.
+func (g *gateRun) resumeMerge(running string) error {
+	defer outliveCaller()()
+	pidText, offsetText, _ := strings.Cut(running, ":")
+	pid, err := strconv.Atoi(pidText)
+	offset, oerr := strconv.ParseInt(offsetText, 10, 64)
+	if err != nil || oerr != nil || pid <= 0 {
+		return gateRefused("%s: the re-executed call names no running devctl (%s=%q): check the lane (beekeeper lanes); the merge, if it ran, is recorded by the watch", g.key(), gateRunningEnv, running)
+	}
+	if st, err := g.store.Read(); err == nil {
+		if i := g.mine(st, state.Running); i >= 0 && st.Merges[i].HandCut != "" {
+			g.release = &github.BaseRelease{Base: st.Merges[i].HandCut}
+		}
+	}
+	gateLine("continuing under %s %s: following %s's devctl (pid %d) on", project.Name, project.Version(), g.key(), pid)
+	base, err := g.mergeFiles()
+	if err != nil {
+		gateLine("%v", err)
+		return g.record(base, childRun{rc: guard.ExitNotFound})
+	}
+	return g.follow(base, pid, offset)
 }
 
 // enqueue hands the merge's wait to a run of its own outside the caller
@@ -344,10 +411,7 @@ func (g *gateRun) step() (string, error) {
 	var stale *state.StaleWriterError
 	switch {
 	case errors.As(err, &stale):
-		why := fmt.Sprintf("%s: this call runs beekeeper %s, older than the %s that wrote the state; nothing ran, the lane is untouched: run the same command again, the installed %s gates it",
-			g.key(), stale.Version, stale.Newer, project.Name)
-		_ = g.store.Log(event(g.me, "merge.refused", "%s", why))
-		return "", gateRefused("%s", why)
+		return "", stale // nothing ran: the gate re-executes a replaced binary, else refuses
 	case err != nil:
 		return "", gateRefused("the state does not load (%v): fix it, then run the same command again", err)
 	case dropped:
@@ -696,24 +760,19 @@ func (g *gateRun) unstart() {
 	})
 }
 
-// runMerge runs devctl once, detached from its caller (runDetached), its
-// document and exit code unchanged, and records the outcome: a merge settles
-// its lane, one that warranted no release or whose lane has no installation
-// to roll leaves it, and one with nothing merged keeps its place for the
-// retry. A run without its document or ended by a signal is GitHub's to
-// judge: merged, its release is unconfirmed; unanswered, the lane settles by
-// the settle rule as for a lost merge.
+// runMerge runs devctl once, detached from its caller (launchChild), its
+// document and exit code unchanged, and follows it to its end (follow). A
+// run that does not start is recorded as one without a document.
 func (g *gateRun) runMerge() error {
 	defer outliveCaller()()
-	run := childRun{rc: guard.ExitNotFound}
-	argv, note := g.argv, ""
+	argv := g.argv
 	if !g.runsDevctl() {
 		self, err := selfExe()
 		if err != nil {
 			gateLine("%v", err)
-			return exitCode(run.rc)
+			return exitCode(guard.ExitNotFound)
 		}
-		argv, note = squashArgv(self, g.repo, g.pr, g.argv), ", "+github.SquashRoute
+		argv = squashArgv(self, g.repo, g.pr, g.argv)
 		gateLine("devctl serves the repositories of %s only (merge.devctlOwners): %s#%d takes the %s as the gh login, green first, no release wait",
 			strings.Join(g.cfg.Merge.DevctlOwners, ", "), g.repo, g.pr, github.SquashRoute)
 	}
@@ -728,11 +787,47 @@ func (g *gateRun) runMerge() error {
 	base, err := g.mergeFiles()
 	if err != nil {
 		gateLine("%v", err)
-	} else {
-		run = runDetached(childSpec{Argv: argv, Owner: g.me, Config: g.explicitConfig(), HandCut: g.handCut()}, base, g.started)
-		defer handOver(base, run, g.cli)
+		return g.record(base, childRun{rc: guard.ExitNotFound})
 	}
+	pid, err := launchChild(childSpec{Argv: argv, Owner: g.me, Config: g.explicitConfig(), HandCut: g.handCut()}, base)
+	if err != nil {
+		gateLine("devctl does not start: %v", err)
+		removeMergeFiles(base)
+		return g.record(base, childRun{rc: guard.ExitNotFound})
+	}
+	g.started(pid)
+	return g.follow(base, pid, 0)
+}
+
+// follow copies the merge's devctl (its merge-child pid) stderr on from
+// offset to its end and records the run (record). A binary replaced
+// meanwhile re-executes the installed one first (reexec), which follows the
+// same devctl on from there (resumeMerge), so the installed release records
+// the outcome; one that does not start is followed on under this one.
+func (g *gateRun) follow(base string, pid int, offset int64) error {
+	run := followChild(base, pid, offset, g.bin)
+	if run.replaced {
+		g.reexec("while "+g.key()+"'s devctl ran", fmt.Sprintf("%s=%d:%d", gateRunningEnv, pid, run.offset))
+		run = followChild(base, pid, run.offset, nil)
+	}
+	defer handOver(base, run, g.cli)
+	return g.record(base, run)
+}
+
+// record records the run's outcome: a merge settles its lane, one that
+// warranted no release or whose lane has no installation to roll leaves it,
+// and one with nothing merged keeps its place for the retry. A run without
+// its document or ended by a signal is GitHub's to judge: merged, its
+// release is unconfirmed; unanswered, the lane settles by the settle rule as
+// for a lost merge. The run's files go with the record; a save the newer
+// release that wrote the state refuses leaves them, document and exit code,
+// for the watch, which records the run from them at its next poll.
+func (g *gateRun) record(base string, run childRun) error {
 	doc, rc, output := run.doc, run.rc, run.kept
+	note := ""
+	if !g.runsDevctl() {
+		note = ", " + github.SquashRoute
+	}
 	if output != "" {
 		note += ", output in " + output
 	}
@@ -742,7 +837,7 @@ func (g *gateRun) runMerge() error {
 		r.out, r.unanswered = judgeRun(g.ctx, g.repo, g.pr, judgeTries)
 	}
 	kept, settles := false, false
-	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+	err := g.store.Update(func(st *state.State) ([]state.Event, error) {
 		i := g.mine(st, state.Running)
 		if i < 0 {
 			return nil, nil
@@ -754,6 +849,13 @@ func (g *gateRun) runMerge() error {
 		})
 		return ev, nil
 	})
+	var stale *state.StaleWriterError
+	if errors.As(err, &stale) {
+		gateLine("%s's outcome is not recorded by this call, which runs beekeeper %s, older than the %s that wrote the state: its document and exit code stay in %s for the watch of the installed %s, which records the run at its next poll",
+			g.key(), stale.Version, stale.Newer, filepath.Dir(base), project.Name)
+	} else {
+		removeMergeFiles(base)
+	}
 	if g.central {
 		g.centralRecord(settles, fmt.Sprintf("devctl exit %d, nothing to roll", rc))
 	}
