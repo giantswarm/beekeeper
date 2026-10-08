@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -100,10 +101,22 @@ func (a *app) supervision(st *state.State, sessions []*claude.Session) supervisi
 func (a *app) leaseClaimCmd() *cobra.Command {
 	var purpose string
 	var gib int
+	var wait time.Duration
 	c := &cobra.Command{
 		Use:   "claim <resource>",
-		Short: "Claim a resource (exit 3 when it is held or not granted to you)",
-		Long: `Claim a resource (exit 3 when it is held or not granted to you).
+		Short: "Claim a resource: held (exit 0), or queued or refused (exit 3)",
+		Long: `Claim a resource. The first line says the outcome:
+
+  held by you since <time>: ...           exit 0, the lease is yours
+  queued: number <n> behind <holder> ...  exit 3, not yours yet
+  refused: <reason>                       exit 3
+
+Only a held claim of a kind lab prints the export line of its kubeconfig,
+after the held line. Gate the work on the exit code (claim && work).
+
+A claim does not wait by itself: queued or refused, it exits at once.
+--wait <duration> claims again every 10s until the claim is held or the
+duration has passed, then says the last outcome.
 
 A model-server claim carries the GiB its models may hold on the host's model
 server (--gib, default ollama.budgetGiB, at most ollama.maxBudgetGiB): a loaded
@@ -121,6 +134,9 @@ model is RAM no cgroup counts, and the watch unloads what exceeds it.`,
 				if cmd.Flags().Changed("gib") {
 					return usageErr("--gib is the model server's budget: %s carries none", res)
 				}
+				if wait > 0 {
+					return usageErr("--wait claims the machine's own resources: %s is the central instance's", res)
+				}
 				return a.claimCentral(res, purpose)
 			}
 			budget, err := a.claimBudget(res, gib, cmd.Flags().Changed("gib"))
@@ -131,96 +147,26 @@ model is RAM no cgroup counts, and the watch unloads what exceeds it.`,
 			if err != nil {
 				return err
 			}
-			sessions, _, err := a.sessions()
-			if err != nil {
-				return err
+			msg, err := a.claimLocal(res, purpose, me, budget)
+			var r *claimRefusal
+			for waited := time.Duration(0); wait > 0 && errors.As(err, &r); {
+				if waited >= wait {
+					r.waited = waited
+					break
+				}
+				step := min(claimPoll, wait-waited)
+				if err := claimPause(cmd.Context(), step); err != nil {
+					return err
+				}
+				waited += step
+				a.now = a.now.Add(step)
+				msg, err = a.claimLocal(res, purpose, me, budget)
 			}
-			lab := a.claimedLab(res)
-			dir := lease.Dir(a.cfg.LeaseDir)
-			var msg string
-			var refusal error
-			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-				holders, err := dir.List()
-				if err != nil {
-					return nil, err
+			if errors.As(err, &r) {
+				if _, err := fmt.Fprintln(a.out, r.line()); err != nil {
+					return err
 				}
-				held := heldMap(holders)
-				lease.Prune(st, held, a.now, a.cfg.GrantTTL.Duration)
-				// What this claim saw of the supervisor's CLI is kept even
-				// when it is refused: the restart grace runs from it.
-				seen, evs := observeCLI(st, sessions, a.now)
-				refuse := func(err error) ([]state.Event, error) {
-					if !seen {
-						return nil, err
-					}
-					refusal = err
-					return evs, nil
-				}
-				if cur, _ := dir.Get(res); cur != nil {
-					if cur.Party().Is(me) {
-						msg = fmt.Sprintf("%s is already yours (since %s)", res, clock(a.now, cur.SinceTime()))
-						return evs, nil
-					}
-					return refuse(a.heldBy(a.leaseView(sessions, *cur)))
-				}
-				sv := a.supervision(st, sessions)
-				idx, err := lease.Check(st, lease.Gate{
-					Resource:     res,
-					Caller:       me,
-					Supervisor:   sv.sup,
-					RestartUntil: sv.until,
-					Gone:         sv.down(),
-					Held:         false,
-					Now:          a.now,
-					TTL:          a.cfg.GrantTTL.Duration,
-				})
-				if r := (*lease.Refusal)(nil); errors.As(err, &r) {
-					return refuse(refused("%s: %s", res, r.Reason))
-				} else if err != nil {
-					return nil, err
-				}
-				var unblock string
-				if idx >= 0 {
-					unblock = st.Grants[idx].UpgradeUnblock
-				}
-				host, _ := os.Hostname()
-				cur, err := dir.Claim(res, lease.Holder{
-					Env:         res,
-					Holder:      os.Getenv("USER") + "@" + strings.SplitN(host, ".", 2)[0],
-					Session:     me.Session,
-					HostSession: me.HostSession,
-					Name:        me.Name,
-					Person:      me.Person,
-					Team:        me.Team,
-					Host:        me.Host,
-					Purpose:     purpose,
-					Since:       a.now.UTC().Format("2006-01-02T15:04:05Z"),
-
-					UpgradeUnblock: unblock,
-					BudgetGiB:      budget,
-				})
-				if err != nil {
-					return nil, err
-				}
-				if cur != nil {
-					return refuse(a.heldBy(a.leaseView(sessions, *cur)))
-				}
-				if idx >= 0 {
-					st.Grants = slices.Delete(st.Grants, idx, idx+1)
-				}
-				msg = "claimed " + res + lab
-				if budget > 0 {
-					msg += fmt.Sprintf(" with a budget of %d GiB: use models within it, with keep_alive 0, and release it when done", budget)
-					return append(evs, event(me, verbLeaseClaim, "%s: %s (%d GiB)", res, purpose, budget)), nil
-				}
-				if unblock != "" {
-					msg += " to unblock its upgrade: " + unblock
-					return append(evs, event(me, verbLeaseClaim, "%s: %s (upgrade unblock: %s)", res, purpose, unblock)), nil
-				}
-				return append(evs, event(me, verbLeaseClaim, "%s: %s", res, purpose)), nil
-			})
-			if err == nil {
-				err = refusal
+				return &exitError{code: ExitRefused}
 			}
 			if err != nil {
 				return err
@@ -234,7 +180,108 @@ model is RAM no cgroup counts, and the watch unloads what exceeds it.`,
 	}
 	c.Flags().StringVarP(&purpose, "purpose", "p", "", "what the resource is for (required)")
 	c.Flags().IntVar(&gib, "gib", 0, "model-server only: the GiB your models may hold (default ollama.budgetGiB)")
+	c.Flags().DurationVar(&wait, "wait", 0, "claim again every 10s until held or this long has passed (0: claim once)")
 	return c
+}
+
+// claimLocal claims the machine's resource res for me once and returns the
+// held line, or the claimRefusal that says why not.
+func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (string, error) {
+	sessions, _, err := a.sessions()
+	if err != nil {
+		return "", err
+	}
+	lab := a.claimedLab(res)
+	dir := lease.Dir(a.cfg.LeaseDir)
+	var msg string
+	var refusal error
+	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		holders, err := dir.List()
+		if err != nil {
+			return nil, err
+		}
+		held := heldMap(holders)
+		lease.Prune(st, held, a.now, a.cfg.GrantTTL.Duration)
+		// What this claim saw of the supervisor's CLI is kept even
+		// when it is refused: the restart grace runs from it.
+		seen, evs := observeCLI(st, sessions, a.now)
+		refuse := func(err error) ([]state.Event, error) {
+			if !seen {
+				return nil, err
+			}
+			refusal = err
+			return evs, nil
+		}
+		if cur, _ := dir.Get(res); cur != nil {
+			if cur.Party().Is(me) {
+				msg = fmt.Sprintf("held by you since %s: %s was yours already", clock(a.now, cur.SinceTime()), res+lab)
+				return evs, nil
+			}
+			return refuse(a.claimHeld(st, me, sessions, *cur))
+		}
+		sv := a.supervision(st, sessions)
+		idx, err := lease.Check(st, lease.Gate{
+			Resource:     res,
+			Caller:       me,
+			Supervisor:   sv.sup,
+			RestartUntil: sv.until,
+			Gone:         sv.down(),
+			Held:         false,
+			Now:          a.now,
+			TTL:          a.cfg.GrantTTL.Duration,
+		})
+		if r := (*lease.Refusal)(nil); errors.As(err, &r) {
+			if r.Position > 0 {
+				return refuse(&claimRefusal{res: res, queued: true, why: fmt.Sprintf("number %d behind %q, granted %s first", r.Position, r.Ahead, res)})
+			}
+			return refuse(&claimRefusal{res: res, why: res + ": " + r.Reason})
+		} else if err != nil {
+			return nil, err
+		}
+		var unblock string
+		if idx >= 0 {
+			unblock = st.Grants[idx].UpgradeUnblock
+		}
+		host, _ := os.Hostname()
+		cur, err := dir.Claim(res, lease.Holder{
+			Env:         res,
+			Holder:      os.Getenv("USER") + "@" + strings.SplitN(host, ".", 2)[0],
+			Session:     me.Session,
+			HostSession: me.HostSession,
+			Name:        me.Name,
+			Person:      me.Person,
+			Team:        me.Team,
+			Host:        me.Host,
+			Purpose:     purpose,
+			Since:       a.now.UTC().Format("2006-01-02T15:04:05Z"),
+
+			UpgradeUnblock: unblock,
+			BudgetGiB:      budget,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if cur != nil {
+			return refuse(a.claimHeld(st, me, sessions, *cur))
+		}
+		if idx >= 0 {
+			st.Grants = slices.Delete(st.Grants, idx, idx+1)
+		}
+		msg = fmt.Sprintf("held by you since %s: claimed %s", clock(a.now, a.now), res+lab)
+		if budget > 0 {
+			msg += fmt.Sprintf(" with a budget of %d GiB: use models within it, with keep_alive 0, and release it when done", budget)
+			return append(evs, event(me, verbLeaseClaim, "%s: %s (%d GiB)", res, purpose, budget)), nil
+		}
+		if unblock != "" {
+			msg += " to unblock its upgrade: " + unblock
+			return append(evs, event(me, verbLeaseClaim, "%s: %s (upgrade unblock: %s)", res, purpose, unblock)), nil
+		}
+		return append(evs, event(me, verbLeaseClaim, "%s: %s", res, purpose)), nil
+	})
+	if err == nil {
+		err = refusal
+	}
+	return msg, err
 }
 
 // claimBudget is the GiB a claim of res carries: set only on the model
@@ -252,6 +299,57 @@ func (a *app) claimBudget(res string, gib int, set bool) (int, error) {
 		return 0, usageErr("--gib %d: a model-server claim holds 1 to %d GiB (ollama.maxBudgetGiB)", gib, o.MaxBudgetGiB)
 	}
 	return gib, nil
+}
+
+// claimPoll is how often a claim with --wait tries again.
+const claimPoll = 10 * time.Second
+
+// claimPause waits d between the tries of a claim with --wait.
+var claimPause = func(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+// claimRefusal is a claim of res that did not get the lease: queued behind
+// the holder or an earlier grant, or refused; waited is how long a claim
+// with --wait tried.
+type claimRefusal struct {
+	res    string
+	queued bool
+	why    string
+	waited time.Duration
+}
+
+func (r *claimRefusal) Error() string { return r.line() }
+
+// line is the claim's first line, with what to do while it is not held.
+func (r *claimRefusal) line() string {
+	out := "refused: " + r.why
+	if r.queued {
+		out = "queued: " + r.why
+	}
+	if r.waited > 0 {
+		return out + fmt.Sprintf(" (waited %s)", dur(r.waited))
+	}
+	return out + fmt.Sprintf("; not yours: park on `beekeeper lease status %s` in a probe timer, or claim with --wait <duration>", r.res)
+}
+
+// claimHeld is the outcome of me's claim of the lease cur holds: queued
+// when a grant of it to me waits, else refused.
+func (a *app) claimHeld(st *state.State, me state.Party, sessions []*claude.Session, cur lease.Holder) error {
+	v := a.leaseView(sessions, cur)
+	q := lease.Pending(st, cur.Env, true, a.now, a.cfg.GrantTTL.Duration)
+	if i := slices.IndexFunc(q, func(g state.Grant) bool { return g.To.Is(me) }); i >= 0 {
+		return &claimRefusal{res: cur.Env, queued: true, why: fmt.Sprintf("number %d behind %q, who holds %s since %s: %s",
+			i+1, v.Name, cur.Env, clock(a.now, v.SinceTime()), v.Purpose)}
+	}
+	return &claimRefusal{res: cur.Env, why: a.heldBy(v).Error()}
 }
 
 func (a *app) heldBy(v leaseView) error {
