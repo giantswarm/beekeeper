@@ -19,10 +19,13 @@ const (
 	refTwo  = "o/r#2"
 	askedQ  = "merge it?"
 	hostArc = "local_archived"
+	// flagFor names a note's person, on note add and note list.
+	flagFor = "--for"
 )
 
 // overtakingWatch is a running watch (it writes) on the state in dir, with
-// the desktop's records in dir/desktop and GitHub answering refs.
+// the desktop's records in dir/desktop and GitHub answering refs: a state,
+// or "CLOSED by <ref>" for an issue a closing keyword closed.
 func overtakingWatch(t *testing.T, refs map[string]string) (*watcher, *bytes.Buffer) {
 	t.Helper()
 	dir := t.TempDir()
@@ -33,16 +36,138 @@ func overtakingWatch(t *testing.T, refs map[string]string) (*watcher, *bytes.Buf
 	w.cfg.Claude.DesktopDir = filepath.Join(dir, "desktop")
 	prev := refStates
 	t.Cleanup(func() { refStates = prev })
-	refStates = func(_ context.Context, rs []github.PR) (map[github.PR]string, error) {
-		m := map[github.PR]string{}
+	refStates = func(_ context.Context, rs []github.PR) (map[github.PR]github.RefState, error) {
+		m := map[github.PR]github.RefState{}
 		for _, r := range rs {
 			if s, ok := refs[refName(r)]; ok {
-				m[r] = s
+				at, closer, _ := strings.Cut(s, " by ")
+				m[r] = github.RefState{State: at, Closer: closer}
 			}
 		}
 		return m, nil
 	}
 	return w, out
+}
+
+// keywordClosed is refOne closed by refTwo's closing keyword.
+const keywordClosed = github.Closed + " by " + refTwo
+
+// keptEvents are the note.kept events of w's log.
+func keptEvents(t *testing.T, w *watcher) []state.Event {
+	t.Helper()
+	evs, err := w.store.Events(0, func(e state.Event) bool { return e.Verb == noteKept })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return evs
+}
+
+// listedFor is what note list --for person prints.
+func listedFor(t *testing.T, w *watcher, person string) string {
+	t.Helper()
+	var out bytes.Buffer
+	prev := w.out
+	w.out = &out
+	defer func() { w.out = prev }()
+	c := w.noteCmd()
+	c.SetArgs([]string{"list", flagFor, person})
+	c.SilenceUsage = true
+	if err := c.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	return out.String()
+}
+
+func TestKeywordCloseKeepsTheNoteOpenAndSaysSoOnce(t *testing.T) {
+	refs := map[string]string{refOne: keywordClosed}
+	w, out := overtakingWatch(t, refs)
+	// The supervisor filed it: no worker's task end can settle it.
+	setNotes(t, w, state.Note{ID: 1, For: personTimo, Text: askedQ, By: state.Party{Name: supRun3}, Refs: []string{refOne}})
+	for range 2 {
+		w.pending(context.Background(), nil)
+	}
+	if ids := openIDs(t, w); !slices.Equal(ids, []int{1}) || len(overtakenEvents(t, w)) != 0 {
+		t.Fatalf("a keyword close overtook the note: open %v", ids)
+	}
+	if listed := listedFor(t, w, personTimo); !strings.Contains(listed, askedQ) {
+		t.Fatalf("note list --for %s: %q", personTimo, listed)
+	}
+	const line = "NOTE KEPT: #1, o/r#1 closed by o/r#2's closing keyword, not by its worker: " + askedQ
+	if said := out.String(); strings.Count(said, line) != 1 {
+		t.Fatalf("watch said %q", said)
+	}
+	if evs := keptEvents(t, w); len(evs) != 1 || !strings.HasPrefix(evs[0].Detail, "#1 kept: o/r#1 closed by o/r#2's closing keyword, not by its worker"+overtakenSep) {
+		t.Fatalf("events %+v", evs)
+	}
+	// Reopened and closed by hand: a deliberate close overtakes it.
+	refs[refOne] = github.Closed
+	w.pending(context.Background(), nil)
+	if evs := overtakenEvents(t, w); len(evs) != 1 || overtakenReason(evs[0]) != "o/r#1 closed" || len(openIDs(t, w)) != 0 {
+		t.Fatalf("closed by hand: %+v, open %v", evs, openIDs(t, w))
+	}
+}
+
+func TestWorkerNoteIsKeptWhileItsTaskRunsAndOvertakenOnceDone(t *testing.T) {
+	refs := map[string]string{refOne: keywordClosed, refTwo: github.Closed}
+	w, out := overtakingWatch(t, refs)
+	worker := state.Party{Name: agentOne}
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{{Party: worker, Task: "the task"}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	setNotes(t, w,
+		state.Note{ID: 1, For: personTimo, Text: askedQ, By: worker, Refs: []string{refOne}},
+		// Closed by hand while the worker runs: still not its worker's close.
+		state.Note{ID: 2, For: personTimo, Text: "keep it?", By: worker, Refs: []string{refTwo}},
+	)
+	for range 2 {
+		w.pending(context.Background(), nil)
+	}
+	if ids := openIDs(t, w); !slices.Equal(ids, []int{1, 2}) || len(overtakenEvents(t, w)) != 0 {
+		t.Fatalf("overtaken while its worker runs: open %v", ids)
+	}
+	said := out.String()
+	for _, line := range []string{
+		`NOTE KEPT: #1, o/r#1 closed by o/r#2's closing keyword, its worker "Agent one" still runs: ` + askedQ,
+		`NOTE KEPT: #2, o/r#2 closed, its worker "Agent one" still runs: keep it?`,
+	} {
+		if strings.Count(said, line) != 1 {
+			t.Fatalf("watch said %q, want %q once", said, line)
+		}
+	}
+	// The worker ends its task with the issues closed: they settle its
+	// notes, its next task notwithstanding.
+	for _, args := range [][]string{
+		{verbIdle, flagDone, flagReport, "merged o/r#2", flagProblem, noProblems},
+		{"assign", agentOne, "another task"},
+	} {
+		c := w.agentsCmd()
+		c.SetArgs(args)
+		c.SetOut(w.out)
+		if err := c.Execute(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w.pending(context.Background(), nil)
+	if ids := openIDs(t, w); len(ids) != 0 {
+		t.Fatalf("its worker done: open %v", ids)
+	}
+	evs := overtakenEvents(t, w)
+	if len(evs) != 2 || overtakenReason(evs[0]) != `o/r#1 closed by o/r#2's closing keyword, its worker "Agent one" done` || overtakenReason(evs[1]) != `o/r#2 closed, its worker "Agent one" done` {
+		t.Fatalf("events %+v", evs)
+	}
+}
+
+func TestWorkerNoteClosedAfterItsTaskEndedIsOvertaken(t *testing.T) {
+	w, _ := overtakingWatch(t, map[string]string{refOne: keywordClosed})
+	// The worker is off the roster already; its note carries the task's end.
+	setNotes(t, w, state.Note{ID: 1, For: personTimo, Text: askedQ, By: state.Party{Name: agentOne}, Refs: []string{refOne}, TaskEnded: relayNow})
+	w.pending(context.Background(), nil)
+	if evs := overtakenEvents(t, w); len(evs) != 1 || overtakenReason(evs[0]) != `o/r#1 closed by o/r#2's closing keyword, its worker "Agent one" done` {
+		t.Fatalf("events %+v", evs)
+	}
 }
 
 func setNotes(t *testing.T, w *watcher, notes ...state.Note) {
@@ -216,14 +341,17 @@ func TestGuideFeedSaysOrphanedNotesOnce(t *testing.T) {
 }
 
 func TestWatchOnceNamesOvertakenNotesAndWritesNothing(t *testing.T) {
-	w, out := overtakingWatch(t, map[string]string{refOne: github.Closed})
+	w, out := overtakingWatch(t, map[string]string{refOne: github.Closed, refTwo: github.Closed + " by o/r#3"})
 	w.chores = false
-	setNotes(t, w, state.Note{ID: 7, For: personTimo, Text: askedQ, Refs: []string{refOne}})
+	setNotes(t, w, state.Note{ID: 7, For: personTimo, Text: askedQ, Refs: []string{refOne}},
+		state.Note{ID: 8, For: personTimo, Text: askedQ, Refs: []string{refTwo}})
 	w.pending(context.Background(), nil)
-	if ids := openIDs(t, w); !slices.Equal(ids, []int{7}) || len(overtakenEvents(t, w)) != 0 {
-		t.Fatalf("--once wrote: open %v", ids)
+	st, _ := w.store.Read()
+	if ids := openIDs(t, w); !slices.Equal(ids, []int{7, 8}) || len(overtakenEvents(t, w)) != 0 || len(keptEvents(t, w)) != 0 || st.Notes[1].Kept != "" {
+		t.Fatalf("--once wrote: open %v, kept %q", ids, st.Notes[1].Kept)
 	}
-	if out := out.String(); !strings.Contains(out, "NOTE OVERTAKEN (--once writes nothing): #7, o/r#1 closed") {
+	if out := out.String(); !strings.Contains(out, "NOTE OVERTAKEN (--once writes nothing): #7, o/r#1 closed") ||
+		!strings.Contains(out, "NOTE KEPT (--once writes nothing): #8, o/r#2 closed by o/r#3's closing keyword, not by its worker") {
 		t.Fatalf("watch said %q", out)
 	}
 }

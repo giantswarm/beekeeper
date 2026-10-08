@@ -1617,11 +1617,11 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	w.doctor(ctx)
 	signedIn := probeLogins(ctx, st.Notes)
 	probed := probeHoldLifts(ctx, st.Holds, w.now)
-	over := w.overtakenNow(ctx, st)
+	over, kept := w.overtakenNow(ctx, st)
 	parks := w.settledParks(ctx, st)
 	if !w.chores {
-		w.wouldOvertake(st, over)
-		over = nil
+		w.wouldOvertake(st, over, kept)
+		over, kept = nil, nil
 	}
 	found := checkTimers(ctx, st.Timers, w.now, lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now))
 	var fires []timerFire
@@ -1634,6 +1634,8 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		nl, ne, nd := closeDefaulted(st, w.cfg.Guide.Person, watchParty, w.now)
 		lines, evs, defaulted = append(lines, nl...), append(evs, ne...), nd
 		ol, oe := closeOvertaken(st, over, watchParty)
+		lines, evs = append(lines, ol...), append(evs, oe...)
+		ol, oe = keepOpen(st, kept, watchParty)
 		lines, evs = append(lines, ol...), append(evs, oe...)
 		kl, ke := markResumable(st, parks, w.cfg.Agents.AutoResume, w.now)
 		lines, evs = append(lines, kl...), append(evs, ke...)
