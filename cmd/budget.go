@@ -11,6 +11,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 type poller struct {
@@ -34,7 +35,9 @@ machine with the session each runs under: the callers drawing on it. A
 GraphQL refusal shows even while its counter looks healthy (a secondary
 limit), with the time it ends when GitHub names one. The budget is shared
 with the person's own logins, the developer portal among them: at zero it
-signs them out.
+signs them out. The urgent merge of the reset window (lanes urgent), the
+one that ran under the floor or the one marked and waiting, is a line with
+who asked for it and what its run drew against its own bound.
 
 --gate exits 3 when GitHub refuses GraphQL calls, the budget is under the
 floor (github.floor, default 2500) or a "github" hold is set:
@@ -58,15 +61,20 @@ floor (github.floor, default 2500) or a "github" hold is set:
 				pollers = githubCallers(a, t, sessions)
 			}
 			hold, held := activeHold(st, a, "github")
+			urgent := urgentLines(a, st)
 			if a.json {
 				_ = a.printJSON(struct {
 					github.Budget
-					Floor   int      `json:"floor"`
-					Held    bool     `json:"held"`
-					Pollers []poller `json:"pollers"`
-				}{b, a.cfg.GitHub.Floor, held, pollers})
+					Floor   int            `json:"floor"`
+					Held    bool           `json:"held"`
+					Urgent  []state.Urgent `json:"urgent,omitempty"`
+					Pollers []poller       `json:"pollers"`
+				}{b, a.cfg.GitHub.Floor, held, st.Urgent, pollers})
 			} else {
 				_, _ = fmt.Fprintln(a.out, budgetLine(a, b))
+				for _, l := range urgent {
+					_, _ = fmt.Fprintln(a.out, l)
+				}
 				if held {
 					_, _ = fmt.Fprintf(a.out, "GitHub is held by %q until %s: %s\n", hold.By.Name, untilText(a, hold), hold.Reason)
 				}

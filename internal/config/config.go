@@ -944,6 +944,9 @@ var DefaultIgnore = []string{"Watchdog"}
 type GitHub struct {
 	// Floor is the remaining core budget under which GitHub work stops.
 	Floor int `yaml:"floor"`
+	// UrgentBound is the budget an urgent merge keeps for itself under the
+	// floor (lanes urgent): it runs while at least this much remains.
+	UrgentBound int `yaml:"urgentBound"`
 	// ProbeRepo is the repository whose conditional GET reads the budget
 	// headers; any repository the token can read (default: beekeeper's own).
 	ProbeRepo string `yaml:"probeRepo"`
@@ -1495,6 +1498,7 @@ func (c *Config) defaults() error {
 	setDur(&c.Board.StaleAfter, 365*24*time.Hour)
 
 	setInt(&c.GitHub.Floor, 2500)
+	setInt(&c.GitHub.UrgentBound, 200)
 	setStr(&c.GitHub.ProbeRepo, "giantswarm/beekeeper")
 
 	w := &c.Watch

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -67,7 +68,8 @@ its lane, "merges" or "github" held (a cluster upgrade on the lane's
 installation holds it too); so do a GitHub budget unknown and a lane
 installation that cannot be read. Under the budget floor the merge is
 queued for the reset (exit 76, as below): a run of its own waits for the
-budget and merges as below. Otherwise the merge
+budget and merges as below; a merge marked urgent (lanes urgent)
+runs under the floor instead, once per reset window. Otherwise the merge
 joins its lane's queue (a merge registered with lanes settle heads it) and
 runs when no merge before it holds its place (one in the gate or within
 merge.queueTTL of its last run; for a seeded place also the seeds before
@@ -401,17 +403,27 @@ func (g *gateRun) step() (string, error) {
 	if err != nil {
 		return "", g.refuse("the GitHub budget is unknown (%v): fix that (gh auth status), then run the same command again", err)
 	}
+	urgent := false
 	if b.Remaining < g.cfg.GitHub.Floor {
-		why := fmt.Sprintf("the GitHub budget %d is under the floor %d until the reset at %s", b.Remaining, g.cfg.GitHub.Floor, clock(g.now, b.Reset))
-		if g.queued {
-			return why, nil
+		if urgent, why, err = g.urgentTurn(b); err != nil {
+			return "", g.refuse("the state does not load (%v): fix it, then run the same command again", err)
 		}
-		return "", g.enqueue(why)
+		if !urgent {
+			why = cmp.Or(why, fmt.Sprintf("the GitHub budget %d is under the floor %d until the reset at %s", b.Remaining, g.cfg.GitHub.Floor, clock(g.now, b.Reset)))
+			if g.queued {
+				return why, nil
+			}
+			return "", g.enqueue(why)
+		}
 	}
 	if err := g.readRelease(); err != nil {
 		return "", err
 	}
-	return g.start(q.SettlingKeys(), hrs)
+	why, err = g.start(q.SettlingKeys(), hrs)
+	if why == "" {
+		g.settleUrgent(urgent, b)
+	}
+	return why, err
 }
 
 // checkCandidate refuses a promotion whose turn came, its place running,

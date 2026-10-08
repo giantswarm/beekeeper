@@ -63,7 +63,8 @@ session, and beekeeper takes this one off the roster and archives it once its tu
   for 20 minutes, the session carries on with the work that needs none. A merge needs no word: the
   gate queues it in its lane and wakes the session with the outcome. An
   explicit `hold <repo>` still stands until `release <repo>`, and a lab or the browser is still
-  never claimed without `yours <env>` or `browser yours`.
+  never claimed without `yours <env>` or `browser yours`, and nothing that needs it runs before
+  the claim exited 0.
 - **Subagents** only when the supervisor's brief allows them.
 - **Waiting is quiet.** While a desktop agent waits for a task or a grant, one bounded background
   wait keeps it reachable (a `sleep` of at most 25 minutes, `run_in_background`, re-armed when it

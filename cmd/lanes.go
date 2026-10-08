@@ -178,7 +178,7 @@ after the merge.`,
 			return err
 		},
 	}
-	c.AddCommand(queue, a.settleCmd(), drop, a.centralLanesCmd(), a.laneLeaveCmd(), &cobra.Command{
+	c.AddCommand(queue, a.settleCmd(), a.urgentCmd(), drop, a.centralLanesCmd(), a.laneLeaveCmd(), &cobra.Command{
 		Use:   "clear <lane>",
 		Short: "Free a lane whose settling merge will not roll",
 		Long: `clear drops the lane's settling merge, after its installation was checked

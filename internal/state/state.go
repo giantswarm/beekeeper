@@ -761,9 +761,41 @@ type State struct {
 	// WorkerReports are the reports workers finished with (agents idle
 	// --done) that the supervisor's watch has not printed yet.
 	WorkerReports []WorkerReport `json:"workerReports,omitempty"`
+	// Urgent are the merges marked urgent (lanes urgent): waiting for their
+	// gate, or run under the GitHub budget floor in a reset window that has
+	// not ended.
+	Urgent []Urgent `json:"urgent,omitempty"`
 
 	rest rest
 }
+
+// Urgent is a merge marked urgent, a privacy or security fix's: under the
+// GitHub budget floor it runs, once per reset window, while the budget keeps
+// github.urgentBound for it.
+type Urgent struct {
+	Repo string `json:"repo"`
+	PR   int    `json:"pr"`
+	// By is who asked for it, Reason why.
+	By     Party     `json:"by"`
+	Reason string    `json:"reason"`
+	At     time.Time `json:"at"`
+	// Window is the reset of the budget window the merge ran under the
+	// floor in; zero while it waits for its gate.
+	Window time.Time `json:"window,omitzero"`
+	// Remaining is the budget when it ran, Spent what its run drew from
+	// it: nil while it runs, -1 unread.
+	Remaining int  `json:"remaining,omitempty"`
+	Spent     *int `json:"spent,omitempty"`
+
+	rest rest
+}
+
+// Key is the urgent merge's owner/repo#n.
+func (u Urgent) Key() string { return Merge{Repo: u.Repo, PR: u.PR}.Key() }
+
+// Ran says whether the merge ran under the floor in the window that resets
+// at Window.
+func (u Urgent) Ran() bool { return !u.Window.IsZero() }
 
 // WorkerReport is the report a worker finished its task with: what it
 // delivered and the problems it found (broken functions, ways around them,

@@ -74,6 +74,7 @@ teleport:
 
 github:
   floor: 2500               # the default; budget under which GitHub work stops
+  urgentBound: 200          # the default; what an urgent merge (lanes urgent) keeps for itself under the floor
   probeRepo: example-org/tools   # default: giantswarm/beekeeper; any repository the token can read
 
 overlaps:
