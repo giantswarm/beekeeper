@@ -119,6 +119,7 @@ type (
 	plainMerge        Merge
 	plainWriter       Writer
 	plainWorkerReport WorkerReport
+	plainUrgent       Urgent
 )
 
 func (v *State) UnmarshalJSON(b []byte) error { return decodeKeeping(b, (*plainState)(v), &v.rest) }
@@ -195,3 +196,5 @@ func (v *WorkerReport) UnmarshalJSON(b []byte) error {
 func (v WorkerReport) MarshalJSON() ([]byte, error) {
 	return encodeKeeping(plainWorkerReport(v), v.rest)
 }
+func (v *Urgent) UnmarshalJSON(b []byte) error { return decodeKeeping(b, (*plainUrgent)(v), &v.rest) }
+func (v Urgent) MarshalJSON() ([]byte, error)  { return encodeKeeping(plainUrgent(v), v.rest) }
