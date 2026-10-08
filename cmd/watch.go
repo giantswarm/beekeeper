@@ -209,7 +209,13 @@ keeps no value: the program, its subcommands and the flag names.
 What a watch has said is kept per caller (seen.watch.<caller>.json): a
 restarted watch of the same session says no open condition, runaway or
 stale lease again, only its end or what is new. Runs until killed. --once
-polls once, keeps no mark and says every condition it finds.
+polls once, keeps no mark and says every condition it finds; a read that
+fails (the state, a source, GitHub) is a line and makes it exit 1, so a
+silent --once with exit 0 means nothing changed. The notes' read is said
+on the NOTE path: NOTE REFS UNREADABLE when GitHub fails it, NOTE REFS
+NOT READ while the budget is under its floor and NOTE REFS UNANSWERED
+for an issue or pull request GitHub did not answer, which keeps its notes
+open.
 
 In the agent sandbox, which closes the person's kubeconfig and Teleport
 login, the user bus and the notification service, the host's broker runs
@@ -349,6 +355,9 @@ type watcher struct {
 	centralChecked time.Time
 	// polls counts the polls begun.
 	polls atomic.Int64
+	// failed counts the reads that failed (fail): --once exits non-zero on
+	// any, so a silent run means no change.
+	failed atomic.Int64
 	// missing are the sections whose platform part this build does not
 	// have, said once each.
 	missing map[string]bool
@@ -449,7 +458,7 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 		w.poll(ctx)
 		w.stand.inflight.Wait() // a successor's start outlives no watch
 		w.timerActs.Wait()      // nor a timer's wake or command
-		return nil
+		return w.onceErr()
 	}
 	w.goCacheOn = true
 	// The machine is sampled in a loop of its own, so no network read or
@@ -611,6 +620,22 @@ func (w *watcher) emit(key, format string, args ...any) string {
 		w.emitNow(key, "%s", line)
 	}
 	return line
+}
+
+// onceErr is --once's outcome: an error once a read failed, its lines said
+// already.
+func (w *watcher) onceErr() error {
+	if n := w.failed.Load(); n > 0 {
+		return fmt.Errorf("watch --once: %d reads failed, said above", n)
+	}
+	return nil
+}
+
+// fail says a read that failed as a condition (emit) and counts it: --once
+// exits non-zero on any.
+func (w *watcher) fail(key, format string, args ...any) string {
+	w.failed.Add(1)
+	return w.emit(key, format, args...)
 }
 
 // check says a condition's start (emit) while on holds and its end, one
@@ -1150,7 +1175,7 @@ func (w *watcher) poll(ctx context.Context) {
 	case w.unavailable(secSessions, err):
 		// No session is known: what reads them is left out, not guessed.
 	case err != nil:
-		w.emit("proc", "cannot read the process table: %v", err)
+		w.fail("proc", "cannot read the process table: %v", err)
 		return
 	default:
 		w.clear("proc")
@@ -1241,7 +1266,7 @@ func (w *watcher) vaultWaits() {
 	}
 	st, err := secret.ReadState(statePath)
 	if err != nil {
-		w.emit(vaultReadKey, "cannot read the vault's state: %v", err)
+		w.fail(vaultReadKey, "cannot read the vault's state: %v", err)
 		return
 	}
 	w.check(vaultUnlockedKey, st.Unlocked, "VAULT UNLOCKED: the broker holds the vault session since %s until %s",
@@ -1256,7 +1281,7 @@ func (w *watcher) vaultWaits() {
 	}
 	ws, err := secret.ReadWaits(waitsPath)
 	if err != nil {
-		w.emit(vaultReadKey, "cannot read the vault's waiting calls: %v", err)
+		w.fail(vaultReadKey, "cannot read the vault's waiting calls: %v", err)
 		return
 	}
 	w.clear(vaultReadKey)
@@ -1305,7 +1330,7 @@ func (w *watcher) budget(ctx context.Context, now time.Time) {
 	switch {
 	case err != nil && ctx.Err() != nil:
 	case err != nil:
-		w.emit("budget-error", "GitHub budget unknown: %v", err)
+		w.fail("budget-error", "GitHub budget unknown: %v", err)
 	default:
 		w.clear("budget-error")
 		if l := w.check("budget", b.Remaining < w.cfg.GitHub.Floor, "GITHUB BUDGET %d of %d: hold GitHub work until %s",
@@ -1476,7 +1501,7 @@ func (w *watcher) kills(ctx context.Context, since time.Time, sessions []*claude
 		if ctx.Err() != nil || w.unavailable(secOOM, err) {
 			return
 		}
-		w.emit("journal", "cannot read the kernel journal: %v", err)
+		w.fail("journal", "cannot read the kernel journal: %v", err)
 		return
 	}
 	w.clear("journal")
@@ -1586,7 +1611,7 @@ var watchParty = state.Party{Name: "beekeeper watch"}
 func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	st, err := w.store.Read()
 	if err != nil {
-		w.emit("state-read", "cannot read the state: %v", err)
+		w.fail("state-read", "cannot read the state: %v", err)
 		return
 	}
 	w.clear("state-read")
@@ -1668,7 +1693,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		return evs, nil
 	})
 	if err != nil {
-		w.emit("state-write", "cannot write the state: %v", err)
+		w.fail("state-write", "cannot write the state: %v", err)
 		return
 	}
 	w.clear("state-write")

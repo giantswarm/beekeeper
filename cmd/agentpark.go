@@ -237,7 +237,11 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 	var states map[github.PR]github.RefState
 	if len(refs) > 0 && !lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now) {
 		s, err := refStates(ctx, refs)
-		w.check("park-refs", s == nil, "cannot read the parked agents' issues and pull requests: %v", err)
+		if s == nil {
+			w.fail("park-refs", "cannot read the parked agents' issues and pull requests: %v", err)
+		} else {
+			w.clear("park-refs")
+		}
 		states = s
 	}
 	closes := map[int]string{}
