@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"filippo.io/age"
 )
 
 // Setup is what [Ops.Setup] did: the shared vault, whether it created it,
@@ -97,8 +99,55 @@ func (o *Ops) ensureVault(ctx context.Context) (string, bool, error) {
 // Import copies one field of a vault the person reads, outside the shared
 // vault, into a field of the shared vault (creating the item or the field
 // when absent), and answers the value's length. The source is read with
-// the person's session, the destination written as the service account.
+// the person's session, the destination written as the service account, or
+// as the person in session mode.
 func (o *Ops) Import(ctx context.Context, src, dst Ref) (int, error) {
+	return o.importValue(ctx, src, dst, func(v string) (string, error) { return v, nil })
+}
+
+// ImportAge imports the age identity of recipient from src into the shared
+// vault's item of that recipient ([AgeItemRef]) and answers the
+// destination and the stored identity's length. The source is an identity
+// or an identity file's text (comment lines above the AGE-SECRET-KEY-1…
+// line, keys.txt as age-keygen writes it); only the identity whose public
+// key is recipient is stored, and a source holding none is refused before
+// anything is written, so another key never becomes a recipient's identity.
+func (o *Ops) ImportAge(ctx context.Context, src Ref, recipient string) (Ref, int, error) {
+	if _, err := age.ParseX25519Recipient(recipient); err != nil {
+		return Ref{}, 0, fmt.Errorf("%q is no age recipient (age1…)", recipient)
+	}
+	if o.Vault == "" {
+		return Ref{}, 0, fmt.Errorf("%w: no shared vault is configured (secret.vault)", ErrVault)
+	}
+	dst := Ref{Op: AgeItemRef(o.Vault, recipient)}
+	n, err := o.importValue(ctx, src, dst, func(v string) (string, error) {
+		if id, ok := ageIdentityOf(v, recipient); ok {
+			return id, nil
+		}
+		return "", fmt.Errorf("%s holds no age identity of recipient %s: %q is not written", src.Op, recipient, AgeItemTitle(recipient))
+	})
+	return dst, n, err
+}
+
+// ageIdentityOf is the line of keys, identities one per line with comments
+// as an identity file holds them, whose X25519 identity is recipient's.
+func ageIdentityOf(keys, recipient string) (string, bool) {
+	for line := range strings.Lines(keys) {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if id, err := age.ParseX25519Identity(line); err == nil && id.Recipient().String() == recipient {
+			return line, true
+		}
+	}
+	return "", false
+}
+
+// importValue reads src with the person's session, keep turns it into
+// the value dst gets, and writes that into the shared vault's dst,
+// answering its length.
+func (o *Ops) importValue(ctx context.Context, src, dst Ref, keep func(string) (string, error)) (int, error) {
 	if src.Op == "" || dst.Op == "" {
 		return 0, errors.New("import copies an op://<vault>/<item>/<field> into one of the shared vault")
 	}
@@ -110,17 +159,21 @@ func (o *Ops) Import(ctx context.Context, src, dst Ref) (int, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, opTimeout)
 	defer cancel()
-	v, err := o.asPerson(ctx, nil, "read", "--no-newline", src.Op)
+	raw, err := o.asPerson(ctx, nil, "read", "--no-newline", src.Op)
 	if ctx.Err() != nil {
 		return 0, fmt.Errorf("%w: %s: op answered nothing in %s", ErrVault, src.Op, opTimeout)
 	}
 	if err != nil {
 		return 0, fmt.Errorf("%w: %s: %w", ErrVault, src.Op, err)
 	}
-	if len(v) == 0 {
+	if len(raw) == 0 {
 		return 0, fmt.Errorf("%s: the field is empty", src.Op)
 	}
-	if err := o.storeVault(ctx, dst, string(v)); err != nil {
+	v, err := keep(string(raw))
+	if err != nil {
+		return 0, err
+	}
+	if err := o.storeVault(ctx, dst, v); err != nil {
 		return 0, err
 	}
 	return len(v), nil

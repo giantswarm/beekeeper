@@ -272,8 +272,8 @@ func (a *app) secretBrokered(cmd *cobra.Command, args []string, inSandbox bool) 
 	if dash < len(args) {
 		argv = append(append(argv, "--"), args[dash:]...)
 	}
-	if err := brokeredSecretArgs(argv, inSandbox); err != nil {
-		return refused("%v; %s and %s run on the host, by the person", err, "setup", "import")
+	if err := brokeredSecretArgs(argv, inSandbox, a.cfg.Secret.Session); err != nil {
+		return refused("%v; setup runs on the host, by the person", err)
 	}
 	if !a.cfg.Secret.Session || !a.secretNeedsVault("", argv) {
 		return a.brokeredReply(sandbox.Request{Op: sandbox.OpSecret, Args: argv})
@@ -778,15 +778,36 @@ before a new one.`,
 }
 
 func (a *app) secretImportCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "import op://<vault>/<item>/<field> op://<shared-vault>/<item>/<field>",
+	var recipient string
+	c := &cobra.Command{
+		Use:   "import op://<vault>/<item>/<field> op://<shared-vault>/<item>/<field> | import op://<vault>/<item>/<field> --recipient <age1…>",
 		Short: "Copy a field of the person's vault into the shared vault",
 		Long: `import reads one field of a vault outside the shared vault with the
-person's own 1Password session (op signin first) and writes it into a field
-of the shared vault as beekeeper's service account, creating the item or
-the field when absent. It answers the value's length; from then on the
-shared vault's reference is the one to use.`,
-		Args: cobra.ExactArgs(2),
+person's own 1Password session and writes it into a field of the shared
+vault, creating the item or the field when absent. It answers the value's
+length; from then on the shared vault's reference is the one to use.
+
+With secret.session the broker runs it, in the person's vault session it
+holds, for a session in the agent sandbox as well: the value stays in the
+broker's call. Without secret.session the source is read in the caller's
+own session (op signin first) and the destination written as beekeeper's
+service account, on the host only: the service account reads no other
+vault.
+
+--recipient <age1…> imports an age identity for a SOPS recipient: the
+destination is the shared vault's item of that recipient ("sops age key
+<recipient>", its password field), and the source, an identity or an
+identity file's text (comments above the AGE-SECRET-KEY-1… line, as
+keys.txt holds it), is refused unless it holds that recipient's identity;
+only the identity's line is stored:
+
+  beekeeper secret import "op://<vault>/<installation>.agekey/notesPlain" --recipient age1…`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if recipient != "" {
+				return cobra.ExactArgs(1)(cmd, args)
+			}
+			return cobra.ExactArgs(2)(cmd, args)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			r, err := parseRefs(args...)
 			if err != nil {
@@ -796,13 +817,25 @@ shared vault's reference is the one to use.`,
 			if err != nil {
 				return err
 			}
-			n, err := ops.Import(cmd.Context(), r[0], r[1])
-			if err := a.secretLog(err, "import", "%s to %s: %s", r[0], r[1], outcome(err, fmt.Sprintf("%d bytes", n))); err != nil {
+			var dst secret.Ref
+			var n int
+			if recipient != "" {
+				dst, n, err = ops.ImportAge(cmd.Context(), r[0], recipient)
+				if dst.Op == "" {
+					dst = secret.Ref{Op: "recipient " + recipient}
+				}
+			} else {
+				dst = r[1]
+				n, err = ops.Import(cmd.Context(), r[0], dst)
+			}
+			if err := a.secretLog(err, "import", "%s to %s: %s", r[0], dst, outcome(err, fmt.Sprintf("%d bytes", n))); err != nil {
 				return err
 			}
-			return a.secretPrint(secret.Key{Name: r[1].String(), Bytes: n}, fmt.Sprintf("wrote %s: %d bytes\n", r[1], n))
+			return a.secretPrint(secret.Key{Name: dst.String(), Bytes: n}, fmt.Sprintf("wrote %s: %d bytes\n", dst, n))
 		},
 	}
+	c.Flags().StringVar(&recipient, "recipient", "", "an age recipient (age1…): import its identity into the shared vault's item \"sops age key <recipient>\"")
+	return c
 }
 
 func (a *app) secretRotateCmd() *cobra.Command {

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"filippo.io/age"
+
 	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/secret/secrettest"
 )
@@ -119,5 +121,51 @@ func TestSessionModeReadsAndWritesAsThePerson(t *testing.T) {
 	}
 	if _, err := o.Setup(context.Background(), "sa", filepath.Join(t.TempDir(), "tok")); !errors.Is(err, secret.ErrSetUp) {
 		t.Errorf("setup in session mode = %v", err)
+	}
+}
+
+func TestImportAgeStoresOnlyTheRecipientsIdentity(t *testing.T) {
+	want, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipient := want.Recipient().String()
+	keysTxt := "# created: 2026-10-09T01:00:00Z\n# public key: " + recipient + "\n" + want.String() + "\n"
+	const src, wrong = "op://Employee/lab.agekey/notesPlain", "op://Employee/other.agekey/notesPlain"
+	tools := secrettest.New(map[string]string{src: keysTxt, wrong: "# public key: " + recipient + "\n" + other.String()})
+	tools.Signed = true
+	o := &secret.Ops{Run: tools.Run, Vault: shared, Session: true}
+	dst, n, err := o.ImportAge(context.Background(), secret.Ref{Op: src}, recipient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := secret.AgeItemRef(shared, recipient)
+	if dst.Op != item || n != len(want.String()) || tools.Vault[item] != want.String() {
+		t.Errorf("import = %s, %d bytes; the item holds %d bytes", dst, n, len(tools.Vault[item]))
+	}
+	if len(tools.Tokens) != 0 {
+		t.Errorf("op got a service account token: %q", tools.Tokens)
+	}
+	// another key, even under a comment naming the recipient, is refused
+	// before anything is written, and the refusal carries no value
+	delete(tools.Vault, item)
+	_, _, err = o.ImportAge(context.Background(), secret.Ref{Op: wrong}, recipient)
+	if err == nil || !strings.Contains(err.Error(), recipient) || !strings.Contains(err.Error(), wrong) || strings.Contains(err.Error(), "AGE-SECRET-KEY") {
+		t.Errorf("a wrong identity = %v", err)
+	}
+	if _, ok := tools.Vault[item]; ok {
+		t.Error("a wrong identity was written")
+	}
+	for _, c := range tools.Calls {
+		if strings.Contains(c, "AGE-SECRET-KEY") {
+			t.Errorf("a command line carries an identity: %q", c)
+		}
+	}
+	if _, _, err := o.ImportAge(context.Background(), secret.Ref{Op: src}, "age1nope"); err == nil {
+		t.Error("an invalid recipient passes")
 	}
 }
