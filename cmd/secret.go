@@ -894,7 +894,14 @@ func (a *app) installationNames() []string {
 // provider whose key is there. The client and the broker decide on it
 // alike.
 func (a *app) secretNeedsVault(dir string, args []string) bool {
-	return secret.NeedsVault(args) || a.ageOps().AgeNeedsVault(dir, args) || a.recipientsNeedVault(args) || a.ompStartNeedsVault(args)
+	return a.secretArgsNeedVault(args) || a.ageOps().AgeNeedsVault(dir, args)
+}
+
+// secretArgsNeedVault is [app.secretNeedsVault] decided from the arguments
+// alone, no file read: an op:// reference, a recipients listing or an omp
+// start on a vault provider.
+func (a *app) secretArgsNeedVault(args []string) bool {
+	return secret.NeedsVault(args) || a.recipientsNeedVault(args) || a.ompStartNeedsVault(args)
 }
 
 // secretNeedsBroker reports whether a call, the operation first, goes to
