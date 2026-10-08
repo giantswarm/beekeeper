@@ -37,7 +37,7 @@ type Verdict struct {
 // Compare answers per key whether a and b hold the same values. Two single
 // references compare as one value; two whole files key by key.
 func (o *Ops) Compare(ctx context.Context, a, b Ref) ([]Verdict, error) {
-	if a.single() != b.single() {
+	if a.Single() != b.Single() {
 		return nil, errors.New("compare one value with one value (file#path, op://…), or a whole file with a whole file")
 	}
 	va, err := o.values(ctx, a)
@@ -48,7 +48,7 @@ func (o *Ops) Compare(ctx context.Context, a, b Ref) ([]Verdict, error) {
 	if err != nil {
 		return nil, err
 	}
-	if a.single() {
+	if a.Single() {
 		st := Different
 		if va[a.String()] == vb[b.String()] {
 			st = Equal
@@ -79,8 +79,16 @@ type Print struct {
 	Fingerprint string `json:"fingerprint"`
 }
 
-// Fingerprints are the keyed fingerprints of what r names.
+// Fingerprints are the keyed fingerprints of what r names, of the one value
+// in o.Encode when an encoding is set.
 func (o *Ops) Fingerprints(ctx context.Context, r Ref) ([]Print, error) {
+	if !o.Encode.IsZero() {
+		v, err := o.encoded(ctx, r)
+		if err != nil {
+			return nil, err
+		}
+		return []Print{{Key: r.String() + " (" + o.Encode.String() + ")", Fingerprint: o.Fingerprint(v)}}, nil
+	}
 	vs, err := o.values(ctx, r)
 	if err != nil {
 		return nil, err
@@ -97,7 +105,7 @@ func (o *Ops) Fingerprints(ctx context.Context, r Ref) ([]Print, error) {
 // and metadata.namespace rewritten when given. It answers the keys and
 // their lengths.
 func (o *Ops) CopyFile(ctx context.Context, src Ref, dst, name, namespace string) ([]Key, error) {
-	if src.single() {
+	if src.Single() {
 		return nil, fmt.Errorf("%s: copy into a file takes a whole SOPS file; one value goes to file#path", src)
 	}
 	if _, err := os.Stat(dst); err == nil {
@@ -126,7 +134,7 @@ func (o *Ops) CopyValue(ctx context.Context, src, dst Ref) (int, error) {
 	if dst.Op != "" || dst.Path == "" {
 		return 0, fmt.Errorf("%s: one value goes to a SOPS path, file#path", dst)
 	}
-	v, err := o.value(ctx, src)
+	v, err := o.encoded(ctx, src)
 	if err != nil {
 		return 0, err
 	}
@@ -153,7 +161,7 @@ func ParsePair(s string) (Pair, error) {
 	}
 	p := Pair{Src: src, Path: s[i+1:]}
 	switch {
-	case !src.single():
+	case !src.Single():
 		return Pair{}, fmt.Errorf("%q: name one value (file#path or op://…), not a whole file", s)
 	case p.Path == "" || strings.ContainsAny(p.Path, "#/"):
 		return Pair{}, fmt.Errorf("%q: the path after = is a dotted key of the new file", s)
@@ -433,7 +441,7 @@ func (o *Ops) CopyToConsumer(ctx context.Context, src Ref, argv []string, in Std
 	if err := in.Check(); err != nil {
 		return 0, "", err
 	}
-	v, err := o.value(ctx, src)
+	v, err := o.encoded(ctx, src)
 	if err != nil {
 		return 0, "", err
 	}
@@ -535,8 +543,8 @@ type SetResult struct {
 
 // Set generates a value and writes it to the shared vault's field first
 // when one is given, then into the SOPS path, then into a lab's Secret and
-// a consumer's stdin when given. A value without a vault field lives in the
-// SOPS file alone.
+// a consumer's stdin when given, these three in o.Encode. A value without a
+// vault field lives in the SOPS file alone.
 func (o *Ops) Set(ctx context.Context, dst Ref, opt SetOptions) (SetResult, error) {
 	if dst.Op != "" || dst.Path == "" {
 		return SetResult{}, fmt.Errorf("%s: set writes a SOPS path, file#path", dst)
@@ -578,6 +586,8 @@ func (o *Ops) Set(ctx context.Context, dst Ref, opt SetOptions) (SetResult, erro
 			return SetResult{}, err
 		}
 	}
+	// the vault keeps the generated value, every other home its encoded form
+	v = o.Encode.Apply(v)
 	if err := o.write(ctx, doc, dst, v); err != nil {
 		if opt.Vault != (Ref{}) {
 			return SetResult{}, fmt.Errorf("the vault holds the value, the SOPS file not: %w", err)
