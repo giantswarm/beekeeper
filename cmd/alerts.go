@@ -54,6 +54,15 @@ the watch's rules over recorded ones, to try a floor or damper setting.`,
   HH:MM:SS ALERT NEW|FLAPPING <installation> <severity> <team> <alertname> <namespace/object[@cluster]> since <start>
   HH:MM:SS ALERT RESOLVED <installation> <severity> <team> <alertname> <namespace/object[@cluster]>
 
+With alerts.pagerduty.context set, the open incidents of the team's
+PagerDuty services follow, read through muster as the person:
+
+  HH:MM:SS PAGERDUTY NEW|ACKNOWLEDGED <installation> <TEAM> #<number> <title> since <start>
+  HH:MM:SS PAGERDUTY RESOLVED <installation> <TEAM> #<number> <title>
+
+The installation is the label of the incident's first alert; its cluster
+starts the title.
+
 A page says PAGE and alerts.team's alerts carry the team in capitals. More
 than alerts.collapse changes of one alertname are one line with a count. An
 alert below its installation's floor (alerts.installations[].floor) is never
@@ -81,10 +90,19 @@ command refuses.`,
 				return err
 			}
 			if !owned {
-				return fmt.Errorf("the alerts are read by pid %d (a beekeeper watch) since %s", owner.PID, clock(a.now, owner.Since))
+				return errors.New(ownedBy("the alerts", owner, a.now))
 			}
 			defer func() { _ = store.Release() }()
-			for _, l := range a.alertCycle(ctx, store) {
+			lines := a.alertCycle(ctx, store)
+			if a.cfg.Alerts.PagerDuty.Enabled() && ctx.Err() == nil {
+				pd, err := a.ownPagerDuty()
+				if err != nil {
+					return err
+				}
+				defer func() { _ = pd.Release() }()
+				lines = append(lines, a.pagerDutyCycle(ctx, pd, nil)...)
+			}
+			for _, l := range lines {
 				_, _ = fmt.Fprintln(a.out, time.Now().Format("15:04:05"), l)
 			}
 			if ctx.Err() != nil {
@@ -513,8 +531,11 @@ func runsAgainst(s *claude.Session, t alerts.Target) bool {
 	return false
 }
 
-// alertSnapshot is every installation's current set, grouped.
+// alertSnapshot is every installation's current set, grouped, and the
+// team's open PagerDuty incidents.
 func (a *app) alertSnapshot(ctx context.Context) []string {
+	incidents := make(chan []string, 1)
+	go func() { incidents <- a.pagerDutySnapshot(ctx) }()
 	targets := a.alertTargets(ctx)
 	answers := a.alertReader().Read(ctx, targets)
 	rules, now := a.alertRules(), time.Now()
@@ -522,7 +543,7 @@ func (a *app) alertSnapshot(ctx context.Context) []string {
 	for i, t := range targets {
 		lines = append(lines, rules.SnapshotLines(t.Name, answers[i], now)...)
 	}
-	return lines
+	return append(lines, <-incidents...)
 }
 
 // alertsView is what the alert watch reads, for the hand-over.
@@ -537,7 +558,16 @@ type alertsView struct {
 	Collapse  int                             `json:"collapse"`
 	Floors    map[string]string               `json:"floors,omitempty"`
 	Flap      flapView                        `json:"flap"`
+	PagerDuty *pagerDutyView                  `json:"pagerduty,omitempty"`
 	Baselines map[string]*alerts.Installation `json:"-"`
+}
+
+// pagerDutyView is the PagerDuty reading's setting and baseline.
+type pagerDutyView struct {
+	Context  string            `json:"context"`
+	Services []string          `json:"services"`
+	Every    string            `json:"every"`
+	Baseline *alerts.PagerDuty `json:"-"`
 }
 
 // flapView is the damper's setting.
@@ -552,11 +582,19 @@ func (a *app) alertsHandover(ctx context.Context) (*alertsView, error) {
 		return nil, err
 	}
 	al := a.cfg.Alerts
-	return &alertsView{
+	v := &alertsView{
 		Every: dur(al.Every.Duration), Owner: st.Owner, Live: st.Owner != nil && proc.Alive(st.Owner.PID), Targets: a.alertTargets(ctx),
 		Ignore: al.Ignore, Quiet: al.Quiet, Team: al.Team, Collapse: al.Collapse, Floors: a.alertRules().Floors,
 		Flap: flapView{Changes: al.Flap.Changes, Window: dur(al.Flap.Window.Duration)}, Baselines: st.Installations,
-	}, nil
+	}
+	if pd := al.PagerDuty; pd.Enabled() {
+		pst, err := alerts.NewPagerDutyStore(a.cfg.StateDir).Load()
+		if err != nil {
+			return nil, err
+		}
+		v.PagerDuty = &pagerDutyView{Context: pd.Context, Services: pd.Services, Every: dur(pd.Every.Duration), Baseline: pst.PagerDuty}
+	}
+	return v, nil
 }
 
 func (a *app) printAlerts(v *alertsView) {
@@ -597,4 +635,16 @@ func (a *app) printAlerts(v *alertsView) {
 		p("Marked team: %s; more than %d changes of one alertname are one line.", v.Team, v.Collapse)
 	}
 	p("Flapping: an alert's %d changes within %s are one FLAPPING line, then nothing until it has been stable for %s.", v.Flap.Changes, v.Flap.Window, v.Flap.Window)
+	if pd := v.PagerDuty; pd != nil {
+		base := "no baseline yet"
+		switch b := pd.Baseline; {
+		case b != nil && b.Incidents != nil && b.Reachable:
+			base = fmt.Sprintf("%d open", len(b.Incidents))
+		case b != nil && b.Incidents != nil:
+			base = fmt.Sprintf("unreachable, %d open when last read", len(b.Incidents))
+		case b != nil:
+			base = "unreachable, never read"
+		}
+		p("PagerDuty: the open incidents of %s, read every %s through muster context %s: %s.", strings.Join(pd.Services, ", "), pd.Every, pd.Context, base)
+	}
 }

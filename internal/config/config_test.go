@@ -126,38 +126,39 @@ func TestLabs(t *testing.T) {
 
 func TestLoadRejects(t *testing.T) {
 	for name, raw := range map[string]string{
-		"browser as resource":  "resources: [browser]",
-		"path as resource":     "resources: [../x]",
-		"lab not a resource":   "resources: [kind-1]\nlabs: {kind-2: kind-2}",
-		"lab without cluster":  "resources: [kind-1]\nlabs: {kind-1: \"\"}",
-		"lab cluster twice":    "resources: [kind-1, kind-2]\nlabs: {kind-1: kind, kind-2: kind}",
-		"nameless install":     "alerts: {installations: [{context: x}]}",
-		"unknown floor":        "alerts: {installations: [{name: x, floor: low}]}",
-		"unknown pageSeverity": "alerts: {pageSeverity: urgent}",
-		"short ownerGrace":     "alerts: {ownerGrace: 10s}",
-		"flapping at once":     "alerts: {flap: {changes: 1}}",
-		"bad duration":         "grantTTL: soon",
-		"skill and file":       "supervisor: {skill: supervise, instructions: /x.md}",
-		"unknown notify kind":  "notify: {kinds: [due, alerts]}",
-		"machine notify kind":  "notify: {kinds: [due, oom-line]}",
-		"machine urgency":      "notify: {urgency: {oom-kill: critical}}",
-		"unknown urgency":      "notify: {urgency: {due: urgent}}",
-		"urgency of no kind":   "notify: {urgency: {sessions: low}}",
-		"bad quiet hours":      "notify: {quietHours: 22-7}",
-		"bad relayAt":          "supervisor: {relayAt: 400kb}",
-		"negative relayAt":     "supervisor: {relayAt: -1}",
-		"bad store glob":       "outbound: {storeDeny: [{vault: \"[\"}]}",
-		"bad outbound path":    "outbound: {paths: [\"[\"]}",
-		"age without match":    "secret: {ageIdentities: [{ref: op://V/i/f}]}",
-		"age bad recipient":    "secret: {ageIdentities: [{recipient: ssh-ed25519, ref: op://V/i/f}]}",
-		"age without op ref":   "secret: {ageIdentities: [{recipient: age1x, ref: ~/key.txt}]}",
-		"age relative file":    "secret: {ageIdentities: [{recipient: age1x, ref: \"file://key.txt\"}]}",
-		"age bad pathRegex":    "secret: {ageIdentities: [{pathRegex: \"[\", ref: op://V/i/f}]}",
-		"nameless board step":  "board: {order: [{status: [backlog]}]}",
-		"search with fields":   "board: {order: [{name: q, search: \"repo:o/r\", status: [backlog]}]}",
-		"omp key as value":     "omp: {providers: {spark: {apiKey: sk-planted}}}",
-		"omp key half ref":     "omp: {providers: {spark: {apiKey: op://Vault/item}}}",
-		"omp key no ref":       "omp: {providers: {spark: {}}}",
+		"browser as resource":        "resources: [browser]",
+		"path as resource":           "resources: [../x]",
+		"lab not a resource":         "resources: [kind-1]\nlabs: {kind-2: kind-2}",
+		"lab without cluster":        "resources: [kind-1]\nlabs: {kind-1: \"\"}",
+		"lab cluster twice":          "resources: [kind-1, kind-2]\nlabs: {kind-1: kind, kind-2: kind}",
+		"nameless install":           "alerts: {installations: [{context: x}]}",
+		"unknown floor":              "alerts: {installations: [{name: x, floor: low}]}",
+		"unknown pageSeverity":       "alerts: {pageSeverity: urgent}",
+		"short ownerGrace":           "alerts: {ownerGrace: 10s}",
+		"pagerduty without services": "alerts: {pagerduty: {context: example}}",
+		"flapping at once":           "alerts: {flap: {changes: 1}}",
+		"bad duration":               "grantTTL: soon",
+		"skill and file":             "supervisor: {skill: supervise, instructions: /x.md}",
+		"unknown notify kind":        "notify: {kinds: [due, alerts]}",
+		"machine notify kind":        "notify: {kinds: [due, oom-line]}",
+		"machine urgency":            "notify: {urgency: {oom-kill: critical}}",
+		"unknown urgency":            "notify: {urgency: {due: urgent}}",
+		"urgency of no kind":         "notify: {urgency: {sessions: low}}",
+		"bad quiet hours":            "notify: {quietHours: 22-7}",
+		"bad relayAt":                "supervisor: {relayAt: 400kb}",
+		"negative relayAt":           "supervisor: {relayAt: -1}",
+		"bad store glob":             "outbound: {storeDeny: [{vault: \"[\"}]}",
+		"bad outbound path":          "outbound: {paths: [\"[\"]}",
+		"age without match":          "secret: {ageIdentities: [{ref: op://V/i/f}]}",
+		"age bad recipient":          "secret: {ageIdentities: [{recipient: ssh-ed25519, ref: op://V/i/f}]}",
+		"age without op ref":         "secret: {ageIdentities: [{recipient: age1x, ref: ~/key.txt}]}",
+		"age relative file":          "secret: {ageIdentities: [{recipient: age1x, ref: \"file://key.txt\"}]}",
+		"age bad pathRegex":          "secret: {ageIdentities: [{pathRegex: \"[\", ref: op://V/i/f}]}",
+		"nameless board step":        "board: {order: [{status: [backlog]}]}",
+		"search with fields":         "board: {order: [{name: q, search: \"repo:o/r\", status: [backlog]}]}",
+		"omp key as value":           "omp: {providers: {spark: {apiKey: sk-planted}}}",
+		"omp key half ref":           "omp: {providers: {spark: {apiKey: op://Vault/item}}}",
+		"omp key no ref":             "omp: {providers: {spark: {}}}",
 	} {
 		p := filepath.Join(t.TempDir(), "c.yaml")
 		if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
@@ -395,6 +396,9 @@ func TestExampleConfig(t *testing.T) {
 	if want := []alerts.Quiet{{Cluster: "t-*"}, OtherTeamsNotify}; !slices.Equal(c.Alerts.Quiet, want) ||
 		!slices.Contains(c.Alerts.Ignore, "InhibitionOutsideWorkingHours") {
 		t.Errorf("alerts quiet %+v, ignore %q", c.Alerts.Quiet, c.Alerts.Ignore)
+	}
+	if pd := c.Alerts.PagerDuty; !pd.Enabled() || pd.Server != "pd" || !slices.Equal(pd.Services, []string{"PABC123"}) || pd.Every.Duration != time.Minute {
+		t.Errorf("alerts.pagerduty %+v", pd)
 	}
 }
 
