@@ -418,6 +418,61 @@ func TestVaultSigninRetriesATransientFailure(t *testing.T) {
 	}
 }
 
+// The keeper's schedule: 30 s before the second try, then 1 m, 2 m and 5 m,
+// the 5 m repeated for every try after; a broker with a schedule of its own
+// follows that one the same way.
+func TestVaultSigninBackoffSchedule(t *testing.T) {
+	if want := []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 5 * time.Minute}; !slices.Equal(vaultSigninBackoff, want) {
+		t.Errorf("the schedule %v, want %v", vaultSigninBackoff, want)
+	}
+	v := &vaultBroker{}
+	for _, tc := range []struct {
+		tries int
+		want  time.Duration
+	}{{0, 30 * time.Second}, {1, 30 * time.Second}, {2, time.Minute}, {3, 2 * time.Minute}, {4, 5 * time.Minute}, {5, 5 * time.Minute}, {12, 5 * time.Minute}} {
+		if got := v.backoffFor(tc.tries); got != tc.want {
+			t.Errorf("after %d failed tries: %s, want %s", tc.tries, got, tc.want)
+		}
+	}
+	own := &vaultBroker{backoff: []time.Duration{time.Second, time.Hour}}
+	if own.backoffFor(1) != time.Second || own.backoffFor(2) != time.Hour || own.backoffFor(9) != time.Hour {
+		t.Error("a schedule of the broker's own is not followed")
+	}
+}
+
+// The retries end at the ask's window (secret.unlockWait): a try whose wait
+// would end past it is not made, and the sign-in gives up at once with the
+// last failure's cause and the tries it made, never sleeping past the window.
+func TestVaultSigninGivesUpAtTheUnlockWindow(t *testing.T) {
+	k := secret.NewKeeper(time.Hour, nil)
+	var tries atomic.Int32
+	gaveUp := make(chan int, 1)
+	var cause secret.SigninCause
+	v := &vaultBroker{k: k, wait: time.Second, backoff: []time.Duration{time.Millisecond, time.Hour},
+		signin: func(context.Context) (string, string, error) {
+			tries.Add(1)
+			return "", "", errors.New("op-unlock: exit status 1: dial tcp: lookup my.1password.com: no such host")
+		},
+		failed: func(c secret.SigninCause, n int, _ error) { cause = c; gaveUp <- n },
+	}
+	start := time.Now()
+	v.ask(context.Background())
+	select {
+	case n := <-gaveUp:
+		if n != 2 || tries.Load() != 2 || cause != secret.SigninNetwork {
+			t.Errorf("gave up after %d tries (%d made) with %s, want 2 with %s", n, tries.Load(), cause, secret.SigninNetwork)
+		}
+		if since := time.Since(start); since > v.wait {
+			t.Errorf("gave up after %s, past the window of %s", since, v.wait)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the sign-in never gave up")
+	}
+	if k.State().Unlocked {
+		t.Error("unlocked without a sign-in")
+	}
+}
+
 // A password 1Password rejects while the credential store answered survives
 // the retries and reaches the person: one sign-in note, whose probe is
 // beekeeper secret status, filed once; the failure is in the event log.
