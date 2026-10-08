@@ -539,3 +539,38 @@ func TestAMergedToolWindowWaitsForItsRelease(t *testing.T) {
 		t.Fatalf("lifted on v8.0.5 before %s: %+v", devctlTo, st.Holds)
 	}
 }
+
+// The gate gives devctl pr merge merge.ciTimeout as its --timeout, which a
+// CI restarted by --update-branch fits into; a --timeout the command names
+// is the caller's and stays the only one.
+func TestTheGateBoundsDevctlsCIWaitByItsOwnTimeout(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		extra []string
+		want  string
+	}{
+		{"none named", []string{"--update-branch"}, "--timeout 1h0m0s"},
+		{"named", []string{"--timeout", "9m"}, "--timeout 9m"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			noSystemd(t)
+			args := filepath.Join(t.TempDir(), "args")
+			fakeDevctl(t, `echo "$*" >`+args+`; case "$*" in *"`+c.want+`"*) echo '`+mergedDoc+`' ;;
+*) echo '{"verdict":"timeout","reason":"timeout after 30m0s"}'; exit 2 ;; esac`)
+			stubGitHub(t, "", "")
+			g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
+			g.cfg.Merge.CITimeout = config.Duration{Duration: time.Hour}
+			g.argv = mergeArgv(scratchRepo, c.extra...)
+			if err := g.runMerge(); err != nil {
+				t.Fatalf("exit %d, want 0", Code(err))
+			}
+			raw, err := os.ReadFile(args) //nolint:gosec // the test's file
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n := strings.Count(string(raw), "--timeout"); n != 1 {
+				t.Errorf("devctl ran with %d --timeout: %s", n, raw)
+			}
+		})
+	}
+}

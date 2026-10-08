@@ -789,6 +789,10 @@ type Merge struct {
 	// request's merge before the watch ends it: devctl confirms the release
 	// within its own --timeout, so one running on past it hangs in its lane.
 	HungAfter Duration `yaml:"hungAfter"`
+	// CITimeout is devctl pr merge's --timeout, its wait for the CI outcome,
+	// when the gated command names none: devctl's own 30m is shorter than a
+	// repository's CI restarted from zero by --update-branch.
+	CITimeout Duration `yaml:"ciTimeout"`
 	// DevctlOwners are the owners whose repositories devctl pr merge serves
 	// (its GitHub App login reaches its own organisation only); a
 	// repository of any other owner, and every repository while it is
@@ -1548,6 +1552,7 @@ func (c *Config) defaults() error {
 	setDur(&c.Merge.BudgetFresh, time.Minute)
 	setDur(&c.Merge.StallAfter, 5*time.Minute)
 	setDur(&c.Merge.HungAfter, 45*time.Minute)
+	setDur(&c.Merge.CITimeout, time.Hour)
 	setDur(&c.Secret.UnlockWait, 8*time.Minute)
 	setDur(&c.Secret.SessionLifetime, 12*time.Hour)
 

@@ -950,7 +950,10 @@ refusal naming the command with the gate written in.
   Nobody runs it again; a second `devctl pr merge` of the pull request while it waits is refused
   with exit 3.
 - **Otherwise devctl runs once**, its JSON document and exit code (devctl's own 0–9) unchanged,
-  and the event log records `merging` and `merged` with the release. devctl serves the
+  and the event log records `merging` and `merged` with the release. Its wait for the CI outcome
+  is `merge.ciTimeout` (1h, passed as `--timeout`) unless the command names its own `--timeout`:
+  devctl's default of 30m is shorter than a CI that `--update-branch` restarts from zero, and a
+  timeout (exit 2) merges nothing. devctl serves the
   repositories of `merge.devctlOwners` only (its GitHub App login reaches the giantswarm
   organisation); any other owner's repository takes the **plain squash merge** instead, in the
   same place and unit: as the gh login, it waits up to `--timeout` (45m) for the head's checks,
@@ -1056,8 +1059,8 @@ unknown release, one `MERGE LOST` line and a `merge.lost` event, so the lane set
 `merge.settle` and frees once its HelmReleases are Ready; `lanes clear <lane>` drops it at once.
 
 A running merge whose devctl runs on after its pull request merged (a hung release wait) holds
-its lane for nothing. `watch` asks GitHub about each run older than `merge.hungAfter` (45m,
-devctl's own `--timeout`) and ends the devctl of one whose pull request merged longer than that
+its lane for nothing. `watch` asks GitHub about each run older than `merge.hungAfter` (45m)
+and ends the devctl of one whose pull request merged longer than that
 ago, or closed: SIGTERM to its merge-child, one `MERGE HUNG` line and a `merge.hung` event. The
 run is then recorded like any devctl ended by a signal, by its gate or by the next poll: merged,
 it settles its lane with its release unconfirmed. `lanes drop <owner/repo> <n>` does the same at
