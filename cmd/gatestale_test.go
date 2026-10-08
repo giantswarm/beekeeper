@@ -13,6 +13,13 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// The releases of the tests' stale gates: the one that wrote the state and
+// the older one a gate call runs.
+const (
+	newerRelease = "v0.2.0"
+	olderRelease = "v0.1.0"
+)
+
 // A gate call of a release older than the one that wrote the state (an
 // install while it waited, its binary not replaced at its path) is refused
 // before it touches the lane: the lane and the writer stay as the newer
@@ -22,14 +29,14 @@ func TestAnOlderReleasesGateIsRefusedBeforeTheLane(t *testing.T) {
 	waiting := state.Merge{Repo: scratchRepo, PR: 3, Lane: scratchRepo, Phase: state.Waiting, By: state.Party{Session: "s2", Name: agentTwo},
 		PID: os.Getpid(), Joined: time.Now().UTC(), Seen: time.Now().UTC()}
 	a := queueApp(t, waiting)
-	newer, err := state.OpenVersion(a.store.Dir(), "v0.2.0")
+	newer, err := state.OpenVersion(a.store.Dir(), newerRelease)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := newer.Update(func(*state.State) ([]state.Event, error) { return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
-	if a.store, err = state.OpenVersion(a.store.Dir(), "v0.1.0"); err != nil {
+	if a.store, err = state.OpenVersion(a.store.Dir(), olderRelease); err != nil {
 		t.Fatal(err)
 	}
 	err = a.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, false)
@@ -43,7 +50,7 @@ func TestAnOlderReleasesGateIsRefusedBeforeTheLane(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Writer == nil || st.Writer.Version != "v0.2.0" || len(st.Merges) != 1 || st.Merges[0].PR != 3 || st.Merges[0].Phase != state.Waiting {
+	if st.Writer == nil || st.Writer.Version != newerRelease || len(st.Merges) != 1 || st.Merges[0].PR != 3 || st.Merges[0].Phase != state.Waiting {
 		t.Errorf("writer %+v, merges %+v: the older release's gate touched the state", st.Writer, st.Merges)
 	}
 	if d := lastEventOf(t, a, state.VerbStaleWriter); !strings.Contains(d, "its save is refused") {

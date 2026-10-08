@@ -59,21 +59,25 @@ hooks:
 
 From then on `beekeeper self-update` keeps it current: it verifies the release binary's Sigstore
 signature and renames it over the old one in one step, so a running `beekeeper watch` keeps
-running, and a `devctl pr merge` gate call waiting for its turn re-executes the new binary at its
-place. A running watch keeps the code it started with: every watch, `--once` included, says
+running, and a `devctl pr merge` gate call re-executes the new binary at its next step, waiting
+for its turn or following its devctl, as does a `merge-child` before it hands its outcome to the
+owner. A running watch keeps the code it started with: every watch, `--once` included, says
 `WATCH STALE` once per watch whose binary was replaced, naming the version it runs and the one
 installed, and that a re-arm (a restart) picks the new one up; no watch re-executes itself.
 `beekeeper self-update --check` exits 125 while a newer release is out.
 
 An install leaves the older binaries already running on their old code until they end or are
 re-armed: the `agents start` of a worker started before it (its desktop reopen saves the state
-after the first turn), a watch, the standby unit, a waiting gate call; `beekeeper self-update`
-names them (pid and command). The state carries the version of the newest release that saved it
-(`writer`), and a release older than it does not save: the save is refused with the state
-unchanged, logged once per process as `state.stale-writer` naming the process, its command and
-both versions, and the command ends with that message (exit 3; a gate call waiting in a lane
-re-executes the binary installed at its path first and refuses, 77, only when it cannot, the lane
-untouched either way). `beekeeper doctor` (a `DOCTOR stale binary` line in the watch) lists each
+after the first turn), a watch, the standby unit; `beekeeper self-update` names them (pid and
+command), a gate call or `merge-child` among them marked as re-executing the installed binary at
+its next step. The state carries the version of the newest release that saved it (`writer`), and
+a release older than it does not save: the save is refused with the state unchanged, logged once
+per process as `state.stale-writer` naming the process, its command and both versions, and the
+command ends with that message (exit 3; a gate call re-executes the binary installed at its path
+first and refuses, 77, only when it cannot, the lane untouched either way; a gate whose devctl
+already ran leaves the run's document and exit code under `merges/` for the watch, which records
+the outcome from them at its next poll, so no lane keeps a running entry for a finished merge).
+`beekeeper doctor` (a `DOCTOR stale binary` line in the watch) lists each
 such process while it runs; a watch is named by `WATCH STALE`. A build without a release version
 (a development or release-candidate build) neither stamps the state nor is refused, and its saves
 keep what a newer release recorded: every object of `state.json` that carries per-entry data (the
@@ -1030,7 +1034,10 @@ A gate call keeps deciding by the code it started with only until the binary is 
 waiting for its turn when `beekeeper self-update` renames a new binary over its path re-executes
 it, the same process, arguments, stdio and deadline, and the new code finds the merge's place by
 its session, repository and number. It says `continuing under beekeeper <version>`. A call whose
-devctl already runs is never re-executed. A lane that stays stuck anyway (a seed whose session is
+devctl already runs re-executes the same way and follows the same devctl on from where its
+stderr was copied (`following <merge>'s devctl (pid <n>) on`), so the installed release records
+the outcome; the `merge-child` that hands the outcome to the owner re-executes before it does,
+carrying the outcome. A lane that stays stuck anyway (a seed whose session is
 gone) is flagged: `lanes` shows it `stalled` and `watch` says `LANE STALLED` once the first
 arrived merge has waited `merge.stallAfter` behind places whose merges are not in the gate.
 

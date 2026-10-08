@@ -315,15 +315,7 @@ func (a *app) tellOwner(ctx context.Context, r childResult) {
 // (output in <file>)", the reason the document's verdict and reason (a
 // merge's release), else devctl's last stderr line.
 func (r childResult) outcome() string {
-	argv := r.spec.Argv
-	if len(r.spec.Command) > 0 {
-		argv = r.spec.Command
-	}
-	if len(argv) == 0 {
-		argv = []string{"devctl"}
-	}
-	cmd := strings.Join(append([]string{filepath.Base(argv[0])}, argv[1:]...), " ")
-	line := fmt.Sprintf("%s exit %d: %s", cmd, r.rc, runReason(r.doc, r.last, r.spec.HandCut))
+	line := fmt.Sprintf("%s exit %d: %s", r.command(), r.rc, runReason(r.doc, r.last, r.spec.HandCut))
 	if r.kept != "" {
 		line += " (output in " + r.kept + ")"
 	}

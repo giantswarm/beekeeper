@@ -248,9 +248,14 @@ type doctorReport struct {
 	stale []*proc.Process
 }
 
-// staleLine says a process of a replaced binary and what ends it.
+// staleLine says a process of a replaced binary and what ends it: a gate
+// call or a merge-child re-executes the installed binary by itself.
 func staleLine(p *proc.Process) string {
-	return fmt.Sprintf("stale binary: pid %d (%s) runs a beekeeper an install replaced; its saves of the state are refused until it ends or is restarted", p.PID, display(p.Args))
+	what := "its saves of the state are refused until it ends or is restarted"
+	if reexecs(p) {
+		what = "it re-executes the installed one at its next step"
+	}
+	return fmt.Sprintf("stale binary: pid %d (%s) runs a beekeeper an install replaced; %s", p.PID, display(p.Args), what)
 }
 
 // doctor finds the chores and the faults, and fixes what it may.
@@ -496,9 +501,10 @@ line:
   it every doctor.goCacheEvery, 1h, and says GO CACHE when a trim waited
   that long or failed); each trim is logged (gocache.trim);
 - reports a stale binary: a running beekeeper process of a binary an
-  install replaced (a start's reopen, a gate call), whose saves of the
-  state the newer release refuses (state.stale-writer in the log) until
-  it ends or is restarted; a watch is named by WATCH STALE instead.
+  install replaced (a start's reopen), whose saves of the state the newer
+  release refuses (state.stale-writer in the log) until it ends or is
+  restarted; a gate call or a merge-child re-executes the installed binary
+  at its next step by itself; a watch is named by WATCH STALE instead.
 
 A session a person started is never archived or retitled, nor one that
 holds or held the supervisor's or the guide's role unless a relay
