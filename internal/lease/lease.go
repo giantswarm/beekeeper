@@ -149,8 +149,14 @@ func (d Dir) List() ([]Holder, error) {
 	return out, nil
 }
 
-// Refusal is why a claim is not allowed.
-type Refusal struct{ Reason string }
+// Refusal is why a claim is not allowed. A claim queued behind earlier
+// grants carries its place: Position (from 1) and Ahead, the grantee who
+// claims first.
+type Refusal struct {
+	Reason   string
+	Position int
+	Ahead    string
+}
 
 func (r *Refusal) Error() string { return r.Reason }
 
@@ -221,7 +227,7 @@ func Check(st *state.State, g Gate) (int, error) {
 			continue
 		}
 		if pos > 0 {
-			return -1, &Refusal{fmt.Sprintf("%s is granted to %q first; you are number %d in its queue", g.Resource, pending[0].To.Name, pos+1)}
+			return -1, &Refusal{Reason: fmt.Sprintf("%s is granted to %q first; you are number %d in its queue", g.Resource, pending[0].To.Name, pos+1), Position: pos + 1, Ahead: pending[0].To.Name}
 		}
 		return slices.IndexFunc(st.Grants, func(x state.Grant) bool {
 			return x.Resource == p.Resource && x.To.Is(p.To) && x.At.Equal(p.At)
@@ -229,14 +235,14 @@ func Check(st *state.State, g Gate) (int, error) {
 	}
 	switch {
 	case g.Gone:
-		return -1, &Refusal{fmt.Sprintf("supervisor %q is gone: a free lease is not a grant until its successor's `beekeeper supervisor start`; send the successor `%s needed: <purpose>`",
+		return -1, &Refusal{Reason: fmt.Sprintf("supervisor %q is gone: a free lease is not a grant until its successor's `beekeeper supervisor start`; send the successor `%s needed: <purpose>`",
 			g.Supervisor.Name, g.Resource)}
 	case !g.RestartUntil.IsZero():
-		return -1, &Refusal{fmt.Sprintf("supervisor %q is restarting its CLI (grace until %s): a free lease is not a grant; send it `%s needed: <purpose>` once it is back",
+		return -1, &Refusal{Reason: fmt.Sprintf("supervisor %q is restarting its CLI (grace until %s): a free lease is not a grant; send it `%s needed: <purpose>` once it is back",
 			g.Supervisor.Name, g.RestartUntil.Local().Format(time.TimeOnly), g.Resource)}
 	}
 	who := granteeName(g.Caller)
-	return -1, &Refusal{fmt.Sprintf("supervisor %q runs and recorded no grant of %s to %s: a free lease is not a grant. Send it `%s needed: <purpose>`; its `yours %s` to you records the grant (as `beekeeper lease grant %s %s` does), then claim",
+	return -1, &Refusal{Reason: fmt.Sprintf("supervisor %q runs and recorded no grant of %s to %s: a free lease is not a grant. Send it `%s needed: <purpose>`; its `yours %s` to you records the grant (as `beekeeper lease grant %s %s` does), then claim",
 		g.Supervisor.Name, g.Resource, who, g.Resource, g.Resource, g.Resource, who)}
 }
 
@@ -258,12 +264,12 @@ func checkUnblock(st *state.State, g Gate, h state.Hold) (int, error) {
 			continue
 		}
 		if pos > 0 {
-			return -1, &Refusal{fmt.Sprintf("%s runs: its upgrade unblock is granted to %q first; you are number %d", h.Reason, pending[0].To.Name, pos+1)}
+			return -1, &Refusal{Reason: fmt.Sprintf("%s runs: its upgrade unblock is granted to %q first; you are number %d", h.Reason, pending[0].To.Name, pos+1), Position: pos + 1, Ahead: pending[0].To.Name}
 		}
 		return slices.IndexFunc(st.Grants, func(x state.Grant) bool {
 			return x.Resource == p.Resource && x.To.Is(p.To) && x.At.Equal(p.At)
 		}), nil
 	}
-	return -1, &Refusal{fmt.Sprintf("%s runs since %s: claim after it ends (beekeeper hold lists it); only work that unblocks the upgrade is claimed during it, with the supervisor's `lease grant %s <session> --upgrade-unblock <why>`",
+	return -1, &Refusal{Reason: fmt.Sprintf("%s runs since %s: claim after it ends (beekeeper hold lists it); only work that unblocks the upgrade is claimed during it, with the supervisor's `lease grant %s <session> --upgrade-unblock <why>`",
 		h.Reason, h.At.Local().Format(time.TimeOnly), g.Resource)}
 }

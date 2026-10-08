@@ -184,7 +184,10 @@ Marks are per host session (`CLAUDE_CODE_HOST_SESSION_ID`, else the session): a 
 Exit codes: 0 done, 1 error, 2 usage, 3 refused (held, not granted, under the floor), 4
 relieved (`supervisor status` in the session a relay relieved), 69 the central instance is
 unreachable (a central verb, see [The central instance](#the-central-instance)), 125 a newer
-release is out (`self-update --check`). A claim gates the action it guards:
+release is out (`self-update --check`). A claim's first line is its outcome: `held by you since
+<time>` (exit 0), `queued: number <n> behind <holder>` or `refused: <reason>` (exit 3); a kind
+lab's held claim adds its kubeconfig's export line after it. A claim exits at once; `--wait
+<duration>` claims again every 10 seconds until it is held or the duration has passed. A claim gates the action it guards:
 `beekeeper lease claim staging -p "database migration" && kubectl …`, never a `;` between them.
 
 `--json` prints any command's result as JSON. A session is identified by the environment
