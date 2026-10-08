@@ -27,6 +27,12 @@ import (
 // port-forward has ended and the baseline is unchanged.
 var errInterrupted = errors.New("interrupted: nothing read, the baseline is unchanged")
 
+// The states of a baseline that holds no reading.
+const (
+	noBaseline = "no baseline yet"
+	neverRead  = "unreachable, never read"
+)
+
 func (a *app) alertsCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "alerts",
@@ -604,14 +610,14 @@ func (a *app) printAlerts(v *alertsView) {
 	}
 	for _, t := range v.Targets {
 		b := v.Baselines[t.Name]
-		base := "no baseline yet"
+		base := noBaseline
 		switch {
 		case b != nil && b.Alerts != nil && b.Reachable:
 			base = fmt.Sprintf("%d active", len(b.Alerts))
 		case b != nil && b.Alerts != nil:
 			base = fmt.Sprintf("unreachable, %d active when last read%s", len(b.Alerts), lastRead(a.now, b))
 		case b != nil:
-			base = "unreachable, never read"
+			base = neverRead
 		}
 		floor := ""
 		if f := v.Floors[t.Name]; f != "" {
@@ -636,14 +642,14 @@ func (a *app) printAlerts(v *alertsView) {
 	}
 	p("Flapping: an alert's %d changes within %s are one FLAPPING line, then nothing until it has been stable for %s.", v.Flap.Changes, v.Flap.Window, v.Flap.Window)
 	if pd := v.PagerDuty; pd != nil {
-		base := "no baseline yet"
+		base := noBaseline
 		switch b := pd.Baseline; {
 		case b != nil && b.Incidents != nil && b.Reachable:
 			base = fmt.Sprintf("%d open", len(b.Incidents))
 		case b != nil && b.Incidents != nil:
 			base = fmt.Sprintf("unreachable, %d open when last read", len(b.Incidents))
 		case b != nil:
-			base = "unreachable, never read"
+			base = neverRead
 		}
 		p("PagerDuty: the open incidents of %s, read every %s through muster context %s: %s.", strings.Join(pd.Services, ", "), pd.Every, pd.Context, base)
 	}

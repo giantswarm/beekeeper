@@ -45,6 +45,9 @@ var (
 	fluxPage   = incident("Q2", 9369, "triggered", "eta-wc1 - FluxGiantswarmHelmReleaseFailed: HelmRelease agent-manager is stuck in Failed state. (2 firing)", "2026-09-24T17:10:00Z")
 )
 
+// instZ is the installation of the tests' incidents.
+const instZ = "zeta"
+
 func readPD(t *testing.T, f *fakePagerDuty, prev *PagerDuty, at time.Time) ([]string, *PagerDuty) {
 	t.Helper()
 	var known map[string]Incident
@@ -56,7 +59,7 @@ func readPD(t *testing.T, f *fakePagerDuty, prev *PagerDuty, at time.Time) ([]st
 }
 
 func TestPagerDutyNewAndResolved(t *testing.T) {
-	f := &fakePagerDuty{open: []string{fluxPage}, installations: map[string]string{"Q1": "zeta", "Q2": "eta"}}
+	f := &fakePagerDuty{open: []string{fluxPage}, installations: map[string]string{"Q1": instZ, "Q2": "eta"}}
 	lines, base := readPD(t, f, nil, now)
 	want := []string{
 		"PAGERDUTY first look: 1 open",
@@ -106,7 +109,7 @@ func TestPagerDutyEmpty(t *testing.T) {
 }
 
 func TestPagerDutyUnreachable(t *testing.T) {
-	f := &fakePagerDuty{open: []string{kagentPage}, installations: map[string]string{"Q1": "zeta"}}
+	f := &fakePagerDuty{open: []string{kagentPage}, installations: map[string]string{"Q1": instZ}}
 	_, base := readPD(t, f, nil, now)
 
 	f.down = errors.New("muster context gazelle, x_pd_list_incidents: not signed in")
@@ -159,9 +162,9 @@ func TestPagerDutyInstallationUnread(t *testing.T) {
 	if got := base.Incidents["Q1"].Installation; got != "" {
 		t.Fatalf("installation %q without an alert label", got)
 	}
-	f.installations = map[string]string{"Q1": "zeta"}
+	f.installations = map[string]string{"Q1": instZ}
 	_, base = readPD(t, f, base, now.Add(time.Minute))
-	if got := base.Incidents["Q1"].Installation; got != "zeta" {
+	if got := base.Incidents["Q1"].Installation; got != instZ {
 		t.Errorf("installation %q: an unread one is read again at the next reading", got)
 	}
 }
