@@ -56,6 +56,7 @@ var (
 		`kind\s+(?:load|build)\b`,
 		`agentlab\s+(?:up|platform|test|platform-test|backstage-test|down)\b`,
 		`graphify\s+(?:update|build|extract|label|cluster-only|scan)\b`,
+		`beekeeper\s+scan\s+sweep\b`,
 	}, "|") + `)`)
 	// lightMake: make targets that build nothing (RE2 has no lookahead).
 	lightMake = regexp.MustCompile(`^\s+(?:-n\b|--dry-run\b|help\b|version\b|clean\b|fmt\b|print-|list\b)`)
@@ -101,6 +102,10 @@ type Hook struct {
 	// UnlockCommands are the person's own vault unlock helpers
 	// (secret.unlockCommands), refused like op signin.
 	UnlockCommands []string
+	// SecretFiles are the files known to hold secret values the config adds
+	// to the built-in SecretFiles (secret.files), globs allowed; no session
+	// reads them whole.
+	SecretFiles []string
 	// ConfigErr is why the configuration did not load: every Bash call is
 	// refused with it, since the guards it configures cannot run.
 	ConfigErr error
@@ -131,6 +136,12 @@ type Hook struct {
 	// id; an error (no holder, an ambiguous name) refuses the send. Nil
 	// leaves a role's name as written.
 	Role func(role string) (string, error)
+	// Holds names the role a message by name addresses: a name the role's
+	// holder carries or carried on the roster ("Supervisor run 82" for a
+	// holder its desktop has since titled "klaus-lab-14"), or its session
+	// id; "" when it holds none. Such a message goes where Role sends it.
+	// Nil reads every name as written.
+	Holds func(name string) string
 	// Peer names the running CLI of a desktop session id, "" when none
 	// runs; an error refuses the send. Nil passes every SendMessage.
 	Peer func(host string) (string, error)
@@ -138,6 +149,12 @@ type Hook struct {
 	// roster agent's whose CLI does not run (its headless turn ended, its
 	// import waits); "" passes the send. Nil passes every one.
 	Absent func(name string) string
+	// Yours records a `yours <resource>` in a message from the session
+	// holding the supervisor role as the resource's grant to the message's
+	// target (to, after the hook's own redirects) and returns what the
+	// sender is told: the grant recorded, or why none was; "" says nothing.
+	// Nil records nothing.
+	Yours func(session, to, message string) string
 	// Project is the session's own project ($CLAUDE_PROJECT_DIR), whose
 	// instructions Claude Code loads itself; "" takes the call's cwd.
 	Project string
@@ -167,6 +184,9 @@ type Hook struct {
 	// in bypassPermissions; read only for a browser call in acceptEdits,
 	// nil refuses no browser call.
 	Started func(session string) bool
+	// GraphQL is the GraphQL budget as beekeeper last read it, for a
+	// board-read refusal; nil or "", unknown.
+	GraphQL func() string
 }
 
 // event is the part of a PreToolUse event the hook reads.
@@ -208,7 +228,7 @@ func (h Hook) Decide(input []byte) []byte {
 		return out
 	}
 	d := o["hookSpecificOutput"]
-	d.AdditionalContext = reads
+	d.AdditionalContext = strings.TrimSpace(d.AdditionalContext + "\n\n" + reads)
 	return answer(d)
 }
 
@@ -226,9 +246,12 @@ func (h Hook) decide(ev event) []byte {
 		return h.ask(ev.Session, ev.ToolInput)
 	}
 	if ev.ToolName == SendMessageTool {
-		return h.sendMessage(ev.ToolInput)
+		return h.sendMessage(ev.Session, ev.ToolInput)
 	}
 	if r := mentionRefusal(ev.ToolName, ev.ToolInput, ev.CWD); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
+	if r := h.secretFileRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	if ev.ToolName != bashTool {
@@ -254,11 +277,17 @@ func (h Hook) decide(ev event) []byte {
 	if r := h.modelServerRefusal(cmd, ev.Session); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	if r := h.boardReadRefusal(cmd); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
 	cwd := ev.CWD
 	if cwd == "" {
 		cwd, _ = os.Getwd()
 	}
-	if l := (secretGuard{unlock: h.UnlockCommands, cwd: cwd}).leak(cmd); l != nil {
+	if r := h.membersRefusal(cmd, ev.Session, cwd); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
+	if l := (secretGuard{unlock: h.UnlockCommands, cwd: cwd, files: newSecretFiles(h.SecretFiles)}).leak(cmd); l != nil {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: l.reason()})
 	}
 	if r := deleteRefusal(cmd); r != "" {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -51,7 +52,7 @@ own Status, whatever its Team: one no step offers on its own (a Backlog item old
 Backlog step's createdWithin, a blocked one, one in Inbox) is skipped with
 the reason, even when its epic is in progress. The first item that is free
 is picked: not served by a running session (a sessions serve record, a busy
-agent's task) nor by an agent on the roster, its CLI running or not, while it is
+agent's task; one naming a pull request serves the issues it closes too) nor by an agent on the roster, its CLI running or not, while it is
 busy with its task or parked and kept (agents keep, or an open timer that
 wakes it by name), and named by no open note (it waits on the note's person),
 not assigned to anybody outside board.people, without an open recorded
@@ -60,10 +61,21 @@ name (lease/<resource>, lease/agentlab-1) free or the caller's: an item
 whose lease another session holds is passed over until it is released,
 the items behind it offered meanwhile. A sub-issue offered through
 an epic passes the same checks, and a serve record, task or note naming
-the epic covers it too ("…, on epic owner/repo#n"). It prints the item,
-why it is picked, why every item above it was skipped, and how many items
-are behind it; --json lists those as after_pick, each with its skip reason
-or free (an empty skip).
+the epic covers it too ("…, on epic owner/repo#n"). A task or note names
+an issue or pull request by its URL, as owner/repo#n, as repo#n of
+board.owner, as a repository before a list ("beekeeper: #524, #525") or as
+a bare #n after the last repository it named ("beekeeper#173, #176"); a
+bare #n before any repository names nothing, and "note #n", "timer #n",
+"memo #n" and "decision #n" are beekeeper's own items. It prints the item,
+why it is picked, why every item above it was skipped, without --claim the
+free items behind it in their order (the preview of the board's work), and
+the skipped items' count by kind: served (a session's record, a busy
+agent's task), note (an open note names it), assigned (outside
+board.people), blocked, stale, lease (another session holds it) and order
+(a rule of board.order turns it away: an old Backlog item, one in Inbox,
+one without recorded blockers); --json lists every item behind the pick
+as after_pick, each with its skip reason or free (an empty skip), and the
+counts as skipped_by.
 
 --claim records the pick as the calling session's sessions serve record
 under the state lock, after checking again that nobody claimed it since:
@@ -109,6 +121,14 @@ replaces the record. Exit 3 when no item is free or the claim is refused.`,
 				return err
 			}
 			skipHeldLeases(cands, holders, me)
+			st, err := a.store.Read()
+			if err != nil {
+				return err
+			}
+			sc := pickScope{me: me, alive: alive, listed: listed, owner: a.cfg.Board.Owner}
+			if sc.closes, err = cl.Closes(cmd.Context(), offBoard(boardOwners(st, sc), cands)); err != nil {
+				return err
+			}
 			var res nextResult
 			if claim {
 				open := func(string) bool { return false }
@@ -117,12 +137,9 @@ replaces the record. Exit 3 when no item is free or the claim is refused.`,
 						return err
 					}
 				}
-				res, err = claimNext(a.store, cands, me, alive, listed, waits, open)
+				res, err = claimNext(a.store, cands, sc, waits, open)
 			} else {
-				var st *state.State
-				if st, err = a.store.Read(); err == nil {
-					res = nextFree(st, cands, me, alive, listed)
-				}
+				res = nextFree(st, cands, sc)
 			}
 			if err != nil {
 				return err
@@ -176,9 +193,22 @@ func skipHeldLeases(cands []board.Candidate, holders []lease.Holder, me state.Pa
 	}
 }
 
+// pickScope is what a pick reads beside the state: who asks, which sessions
+// run and when they were listed, which issues the pull requests close
+// (closes, from Client.Closes) and the board's owner, which a repo#n a
+// task or note names belongs to.
+type pickScope struct {
+	me     state.Party
+	alive  func(state.Party) bool
+	listed time.Time
+	closes map[string][]string
+	owner  string
+}
+
 // nextResult is the pick, nil when no item is free, the candidates
-// skipped above it with the reason, and every candidate behind it: with
-// its skip reason, or free (an empty skip) and next in line.
+// skipped above it with the reason, every candidate behind it: with
+// its skip reason, or free (an empty skip) and next in line, and the
+// skipped candidates counted by the kind of their reason (skipKind).
 type nextResult struct {
 	Pick    *board.Candidate `json:"pick"`
 	Claimed bool             `json:"claimed,omitempty"`
@@ -187,20 +217,68 @@ type nextResult struct {
 	Held      *state.Record     `json:"held,omitempty"`
 	Skipped   []board.Candidate `json:"skipped,omitempty"`
 	AfterPick []board.Candidate `json:"after_pick,omitempty"`
+	SkippedBy map[string]int    `json:"skipped_by,omitempty"`
+}
+
+// The kinds of a skip reason, skipKind's words and skipped_by's keys.
+const (
+	kindServed   = "served"
+	kindNote     = "note"
+	kindAssigned = "assigned"
+	kindBlocked  = "blocked"
+	kindStale    = "stale"
+	kindLease    = "lease"
+	kindOrder    = "order"
+)
+
+// skipKind names the kind of a skip reason: who holds the item, or what
+// turns it away.
+func skipKind(reason string) string {
+	switch {
+	case strings.HasPrefix(reason, "served by "):
+		return kindServed
+	case strings.HasPrefix(reason, "note #"):
+		return kindNote
+	case strings.HasPrefix(reason, "assigned to "):
+		return kindAssigned
+	case strings.HasSuffix(reason, "blockers open"):
+		return kindBlocked
+	case strings.HasPrefix(reason, "no activity since "):
+		return kindStale
+	case strings.HasPrefix(reason, "needs lease "):
+		return kindLease
+	}
+	return kindOrder
+}
+
+// skipCounts says how many candidates were skipped, by kind, most first.
+func skipCounts(by map[string]int) string {
+	kinds := slices.SortedFunc(maps.Keys(by), func(a, b string) int {
+		return cmp.Or(cmp.Compare(by[b], by[a]), cmp.Compare(a, b))
+	})
+	total := 0
+	parts := make([]string, 0, len(kinds))
+	for _, k := range kinds {
+		total += by[k]
+		parts = append(parts, fmt.Sprintf("%s %d", k, by[k]))
+	}
+	return fmt.Sprintf("%d in all: %s", total, strings.Join(parts, ", "))
 }
 
 // nextFree walks all the candidates in order and picks the first free one;
 // the rest go to AfterPick, each with its skip reason or free.
 // An item is owned by a record of a running session (or of one that
-// started after listed, the moment the running sessions were listed),
+// started after sc.listed, the moment the running sessions were listed),
 // unless the session is a registered agent reporting idle, by the record
 // of an agent kept on the roster (keptBy) or busy with its task on it,
 // whether its CLI runs or not, by a
-// busy agent whose task names it and by an open note naming it. A sub-issue
-// offered through an epic is owned by whatever owns the epic too.
-func nextFree(st *state.State, cands []board.Candidate, me state.Party, alive func(state.Party) bool, listed time.Time) nextResult {
-	owners := boardOwners(st, me, alive, listed)
-	var res nextResult
+// busy agent whose task names it and by an open note naming it. An issue a
+// pull request closes (sc.closes) is owned by whatever owns
+// the pull request, and a sub-issue offered through an epic by whatever owns
+// the epic.
+func nextFree(st *state.State, cands []board.Candidate, sc pickScope) nextResult {
+	owners := coverClosed(boardOwners(st, sc), sc.closes)
+	res := nextResult{SkippedBy: map[string]int{}}
 	owned := func(ref string) string {
 		o, ok := owners[strings.ToLower(ref)]
 		if ok && !strings.HasPrefix(o, "note ") {
@@ -217,6 +295,9 @@ func nextFree(st *state.State, cands []board.Candidate, me state.Party, alive fu
 				c.Skip = o + ", on epic " + c.Epic
 			}
 		}
+		if c.Skip != "" {
+			res.SkippedBy[skipKind(c.Skip)]++
+		}
 		switch {
 		case res.Pick != nil:
 			res.AfterPick = append(res.AfterPick, c)
@@ -226,6 +307,9 @@ func nextFree(st *state.State, cands []board.Candidate, me state.Party, alive fu
 			res.Skipped = append(res.Skipped, c)
 		}
 	}
+	if len(res.SkippedBy) == 0 {
+		res.SkippedBy = nil
+	}
 	return res
 }
 
@@ -233,7 +317,8 @@ func nextFree(st *state.State, cands []board.Candidate, me state.Party, alive fu
 // in one update of the state, so a concurrent claim sees it. While me
 // serves an item open reports open, and me is no agent reporting idle,
 // it changes nothing and returns that record as Held.
-func claimNext(store state.Store, cands []board.Candidate, me state.Party, alive func(state.Party) bool, listed time.Time, waits string, open func(string) bool) (nextResult, error) {
+func claimNext(store state.Store, cands []board.Candidate, sc pickScope, waits string, open func(string) bool) (nextResult, error) {
+	me := sc.me
 	var res nextResult
 	err := store.Update(func(st *state.State) ([]state.Event, error) {
 		if i := slices.IndexFunc(st.Records, func(r state.Record) bool {
@@ -242,7 +327,7 @@ func claimNext(store state.Store, cands []board.Candidate, me state.Party, alive
 			res.Held = &st.Records[i]
 			return nil, nil
 		}
-		res = nextFree(st, cands, me, alive, listed)
+		res = nextFree(st, cands, sc)
 		if res.Pick == nil {
 			return nil, nil
 		}
@@ -262,12 +347,48 @@ func agentIdle(st *state.State, p state.Party) bool {
 	return i >= 0 && (st.Agents[i].Task == "" || st.Agents[i].Done)
 }
 
-// taskRef finds the issues an agent's task names: owner/repo#n or a URL.
-var taskRef = regexp.MustCompile(`([\w.-]+/[\w.-]+)#(\d+)|github\.com/([\w.-]+/[\w.-]+)/(?:issues|pull)/(\d+)`)
+// namedRef finds what names an issue or pull request in a task or a note,
+// as people write them: its URL; owner/repo#n or repo#n; a repository
+// before a list, "beekeeper: #524, #525"; a bare #n; and "note #n",
+// "timer #n", "memo #n" or "decision #n", beekeeper's own items.
+var namedRef = regexp.MustCompile(`(?i)github\.com/([\w.-]+/[\w.-]+)/(?:issues|pull)/(\d+)|\b([a-z][\w.-]*(?:/[\w.-]+)?)(?:#|:\s*#)(\d+)\b|\b(?:notes?|timers?|memos?|decisions?)\s+#\d+\b|#(\d+)\b`)
+
+// namedRefs are the issues and pull requests text names, lower-cased
+// owner/repo#n, each once in the order named: by URL, as owner/repo#n, as
+// repo#n of owner (the board's), as a repository before a list, or as a
+// bare #n in the context of the last repository named before it, so
+// "beekeeper#173, #176" names two; a bare #n before any repository names
+// nothing, and beekeeper's own items (note #n) nothing.
+func namedRefs(text, owner string) []string {
+	var out []string
+	repo := ""
+	for _, m := range namedRef.FindAllStringSubmatch(text, -1) {
+		var n string
+		switch {
+		case m[1] != "":
+			repo, n = m[1], m[2]
+		case m[3] != "" && (owner != "" || strings.Contains(m[3], "/")):
+			repo, n = m[3], m[4]
+			if !strings.Contains(repo, "/") {
+				repo = owner + "/" + repo
+			}
+		case m[5] != "":
+			n = m[5]
+		}
+		if n == "" || repo == "" {
+			continue
+		}
+		if ref := strings.ToLower(repo + "#" + n); !slices.Contains(out, ref) {
+			out = append(out, ref)
+		}
+	}
+	return out
+}
 
 // boardOwners maps each issue (lower-cased owner/repo#n) a live session
 // serves, or an open note waits on, to who serves it or whom it waits on.
-func boardOwners(st *state.State, me state.Party, alive func(state.Party) bool, listed time.Time) map[string]string {
+func boardOwners(st *state.State, sc pickScope) map[string]string {
+	me, alive, listed := sc.me, sc.alive, sc.listed
 	name := func(p state.Party) string {
 		if p.Is(me) {
 			return "you"
@@ -302,11 +423,7 @@ func boardOwners(st *state.State, me state.Party, alive func(state.Party) bool, 
 		}
 	}
 	named := func(text, who string) {
-		for _, m := range taskRef.FindAllStringSubmatch(text, -1) {
-			ref := strings.ToLower(m[1] + "#" + m[2])
-			if m[3] != "" {
-				ref = strings.ToLower(m[3] + "#" + m[4])
-			}
+		for _, ref := range namedRefs(text, sc.owner) {
 			if _, ok := out[ref]; !ok {
 				out[ref] = who
 			}
@@ -317,10 +434,37 @@ func boardOwners(st *state.State, me state.Party, alive func(state.Party) bool, 
 			named(ag.Task, name(ag.Party)+" (task)")
 		}
 	}
+	// A note names what its text says and what it is linked to (--ref).
 	for _, n := range st.Notes {
-		named(n.Text, fmt.Sprintf("note #%d (waits on %s)", n.ID, cmp.Or(n.For, "the supervisor")))
+		named(strings.Join(append([]string{n.Text}, n.Refs...), " "), fmt.Sprintf("note #%d (waits on %s)", n.ID, cmp.Or(n.For, "the supervisor")))
 	}
 	return out
+}
+
+// offBoard are the refs of owners that are no candidate, sorted: a board
+// item is an issue, so the pull requests among what the sessions serve
+// and the tasks and notes name are among these, and Closes is asked about
+// these only.
+func offBoard(owners map[string]string, cands []board.Candidate) []string {
+	return slices.DeleteFunc(slices.Sorted(maps.Keys(owners)), func(ref string) bool {
+		return slices.ContainsFunc(cands, func(c board.Candidate) bool { return strings.EqualFold(c.Ref, ref) })
+	})
+}
+
+// coverClosed adds to owners every issue a pull request it names closes,
+// owned by whatever owns the pull request "through" it; an issue owned on
+// its own keeps its owner.
+func coverClosed(owners map[string]string, closes map[string][]string) map[string]string {
+	covered := map[string]string{}
+	for _, pr := range slices.Sorted(maps.Keys(owners)) {
+		for _, issue := range closes[pr] {
+			if _, ok := owners[issue]; !ok && covered[issue] == "" {
+				covered[issue] = owners[pr] + " through " + pr
+			}
+		}
+	}
+	maps.Copy(owners, covered)
+	return owners
 }
 
 func (a *app) printNext(res nextResult, offered int) error {
@@ -355,13 +499,21 @@ func (a *app) printNext(res nextResult, offered int) error {
 			_ = w.Flush()
 		}
 		if n := len(res.AfterPick); n > 0 {
-			free := 0
-			for _, c := range res.AfterPick {
-				if c.Skip == "" {
-					free++
+			free := slices.DeleteFunc(slices.Clone(res.AfterPick), func(c board.Candidate) bool { return c.Skip != "" })
+			if res.Claimed {
+				_, _ = fmt.Fprintf(a.out, "behind it: %d more, %d of them free (--json lists them as after_pick)\n", n, len(free))
+			} else {
+				// The preview lists the free items in their order.
+				_, _ = fmt.Fprintf(a.out, "free behind it, next in line: %d of %d\n", len(free), n)
+				w := a.table()
+				for _, c := range free {
+					_, _ = fmt.Fprintf(w, "  %s\t%s\t%s\n", c.Ref, truncate(c.Title, 50), c.Step)
 				}
+				_ = w.Flush()
 			}
-			_, _ = fmt.Fprintf(a.out, "behind it: %d more, %d of them free (--json lists them as after_pick)\n", n, free)
+		}
+		if len(res.SkippedBy) > 0 {
+			_, _ = fmt.Fprintf(a.out, "skipped: %s (--json lists each with its reason)\n", skipCounts(res.SkippedBy))
 		}
 	}
 	if h := res.Held; h != nil {

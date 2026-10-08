@@ -20,13 +20,16 @@ import (
 )
 
 // queueApp is an app with one lane, o/r, whose merges are seeded with
-// merges; the caller is the session "worker".
+// merges; the caller is the session "worker". Its store saves as a dev
+// build's, whichever version the test binary is linked with: a stable
+// tag's `make test` links the release's version, which would stamp the
+// state as its writer and refuse the older releases a test opens.
 func queueApp(t *testing.T, merges ...state.Merge) *app {
 	t.Helper()
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "s1")
 	t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", "")
 	t.Setenv("CLAUDE_CODE_SESSION_NAME", ownerName)
-	store, err := state.Open(t.TempDir())
+	store, err := state.OpenVersion(t.TempDir(), "dev")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,6 +76,16 @@ func stubSelf(t *testing.T) (self string, launched func() childSpec) {
 	}
 }
 
+// aheadName is the session of the merge ahead in a busy lane.
+const aheadName = "ahead"
+
+// busyLaneApp is queueApp with o/r#6 of a live gate waiting ahead.
+func busyLaneApp(t *testing.T) *app {
+	t.Helper()
+	return queueApp(t, state.Merge{Repo: scratchRepo, PR: 6, Lane: scratchRepo, By: state.Party{Name: aheadName}, PID: sleeper(t),
+		Phase: state.Waiting, Joined: time.Now().Add(-time.Minute), Seen: time.Now()})
+}
+
 // sleeper is a live process that is not the test, ended with the test.
 func sleeper(t *testing.T) int {
 	t.Helper()
@@ -90,9 +103,7 @@ func sleeper(t *testing.T) int {
 func TestAMergeBehindABusyLaneWaitsOnInARunOfItsOwn(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	self, launched := stubSelf(t)
-	busy := sleeper(t)
-	a := queueApp(t, state.Merge{Repo: scratchRepo, PR: 6, Lane: scratchRepo, By: state.Party{Name: "ahead"}, PID: busy,
-		Phase: state.Waiting, Joined: time.Now().Add(-time.Minute), Seen: time.Now()})
+	a := busyLaneApp(t)
 
 	err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, false)
 	if Code(err) != ExitGateQueued {
@@ -119,6 +130,24 @@ func TestAMergeBehindABusyLaneWaitsOnInARunOfItsOwn(t *testing.T) {
 	}
 }
 
+// A detached merge is the blocking one under the gate: --detach and its
+// --on-done never reach the run that merges, which the lane accounts for.
+func TestAGatedDetachedMergeRunsBlocking(t *testing.T) {
+	stubGitHub(t, github.Open, "")
+	self, launched := stubSelf(t)
+	a := busyLaneApp(t)
+
+	argv := mergeArgv(scratchRepo, "--detach", "--on-done", "beekeeper agents wake x")
+	if err := a.gate(context.Background(), argv, 0, false); Code(err) != ExitGateQueued {
+		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateQueued)
+	}
+	spec := launched()
+	want := append([]string{self, "gate", "--queued", "--wait", "1h0m0s", "--"}, mergeArgv(scratchRepo)...)
+	if !slices.Equal(spec.Argv, want) || !slices.Equal(spec.Command, mergeArgv(scratchRepo)) {
+		t.Errorf("argv %q, command %q, want %q", spec.Argv, spec.Command, want)
+	}
+}
+
 // The queued run takes over the place of the gate it came from; any other
 // live gate of the same pull request is refused as a second merge (exit 3)
 // and leaves the place alone.
@@ -127,7 +156,7 @@ func TestASecondMergeOfAQueuedOneIsRefused(t *testing.T) {
 	busy, queued := sleeper(t), sleeper(t)
 	seed := func() *app {
 		return queueApp(t,
-			state.Merge{Repo: scratchRepo, PR: 6, Lane: scratchRepo, By: state.Party{Name: "ahead"}, PID: busy, Phase: state.Waiting, Joined: time.Now().Add(-time.Hour), Seen: time.Now()},
+			state.Merge{Repo: scratchRepo, PR: 6, Lane: scratchRepo, By: state.Party{Name: aheadName}, PID: busy, Phase: state.Waiting, Joined: time.Now().Add(-time.Hour), Seen: time.Now()},
 			state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, By: state.Party{Session: "s1", Name: ownerName}, PID: queued, Phase: state.Waiting, Joined: time.Now(), Seen: time.Now()})
 	}
 	a := seed()

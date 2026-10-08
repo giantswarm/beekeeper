@@ -235,19 +235,27 @@ func sopsMetadata(raw []byte) bool {
 }
 
 // skeleton is a plaintext Kubernetes Secret that holds no value yet, the
-// start of a new SOPS file; nil for a file with sops metadata or no
-// plaintext Secret, which sops reads. A plaintext Secret holding a value
-// is refused, its content never quoted.
+// start of a new SOPS file; nil for a file with sops metadata, which sops
+// reads. Every other plaintext file is refused before sops sees it, by what
+// it is (a ConfigMap, no YAML mapping, a Secret without metadata or holding
+// a value), its content never quoted: sops' own "sops metadata not found"
+// names neither the cause nor the way on.
 func skeleton(raw []byte) (*document, error) {
 	if sopsMetadata(raw) {
 		return nil, nil
 	}
 	doc, err := parseDocument(raw)
 	if err != nil {
-		return nil, nil //nolint:nilerr // no plaintext document: sops judges it
+		return nil, noSkeleton("no sops metadata and no YAML mapping")
 	}
-	if k, _ := doc.get("kind"); k != secretKind || child(doc.root, "metadata") == nil {
-		return nil, nil
+	k, _ := doc.get("kind")
+	switch {
+	case k == "":
+		return nil, noSkeleton("a plaintext YAML document without a kind, no sops metadata")
+	case k != secretKind:
+		return nil, noSkeleton("a plaintext " + k + ", no sops metadata")
+	case child(doc.root, "metadata") == nil:
+		return nil, noSkeleton("a plaintext Secret without metadata, no sops metadata")
 	}
 	for p, v := range doc.leaves() {
 		if v != "" && (strings.HasPrefix(p, "data.") || strings.HasPrefix(p, "stringData.")) {
@@ -255,6 +263,12 @@ func skeleton(raw []byte) (*document, error) {
 		}
 	}
 	return doc, nil
+}
+
+// noSkeleton is the refusal of a plaintext file that is no Secret skeleton:
+// what the file is, and the way on.
+func noSkeleton(what string) error {
+	return fmt.Errorf("%s: a value goes into a sops-encrypted file or a plaintext Secret skeleton; pick the encrypted Secret, or start one in an absent file with --name and --namespace", what)
 }
 
 // Key is a key name and the length of its value, all an answer tells.

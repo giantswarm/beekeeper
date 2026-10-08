@@ -13,16 +13,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/gofrs/flock"
 
-	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
@@ -354,6 +355,10 @@ type Agent struct {
 	// Conversation is klaus-gateway's conversation the agent holds with its
 	// person, a Slack thread; empty: none is open.
 	Conversation string `json:"conversation,omitempty"`
+	// GH is the gh the agent's shell resolves outside the sandbox, read at
+	// its registration and each session start; GHAt when. Empty: not read.
+	GH   string    `json:"gh,omitempty"`
+	GHAt time.Time `json:"ghAt,omitzero"`
 
 	rest rest
 }
@@ -436,8 +441,12 @@ type Timer struct {
 	When  string        `json:"when,omitempty"`
 	Probe string        `json:"probe,omitempty"`
 	Every time.Duration `json:"every,omitempty"`
-	// Checked is when a watch last found the condition not holding.
-	Checked time.Time `json:"checked,omitzero"`
+	// Checked is when a watch last found the condition not holding, Reason
+	// why: what the reference says, or why it could not be read
+	// (Unreadable).
+	Checked    time.Time `json:"checked,omitzero"`
+	Reason     string    `json:"reason,omitempty"`
+	Unreadable bool      `json:"unreadable,omitempty"`
 	// Until is the end of the wait: past it the timer fires as timed out,
 	// or closes unfired when Expire is set.
 	Until  time.Time `json:"until,omitzero"`
@@ -714,6 +723,10 @@ type State struct {
 	// FinishedSeeded says the doctor owed the archives of all finished
 	// workers whose desktop record stayed unarchived, a CLI running or not.
 	FinishedSeeded bool `json:"finishedSeeded,omitempty"`
+	// DoneSeeded says the doctor owed those archives again, of the agents
+	// that reported done and the relieved role runs no person typed in, once
+	// a finished session's own warmed CLI archived it.
+	DoneSeeded bool `json:"doneSeeded,omitempty"`
 	// Declines are the stewards that declined an archive request, which
 	// the doctor asks for none for a while.
 	Declines []Decline `json:"declines,omitempty"`
@@ -736,9 +749,6 @@ type State struct {
 	ReportPause *ReportPause `json:"reportPause,omitempty"`
 	// Writer is the newest beekeeper that saved the state.
 	Writer *Writer `json:"writer,omitempty"`
-	// StaleWriters are the processes of an older beekeeper seen saving the
-	// state after a newer one, one per process while it runs.
-	StaleWriters []StaleWriter `json:"staleWriters,omitempty"`
 	// WorkerReports are the reports workers finished with (agents idle
 	// --done) that the supervisor's watch has not printed yet.
 	WorkerReports []WorkerReport `json:"workerReports,omitempty"`
@@ -767,23 +777,20 @@ type Writer struct {
 	rest rest
 }
 
-// StaleWriter is a process of an older beekeeper that saved the state after
-// a newer one had: it keeps the fields it does not know, yet it acts on the
-// state by its older rules until it is restarted.
-type StaleWriter struct {
-	PID     int    `json:"pid"`
-	Command string `json:"command"`
-	Version string `json:"version"`
-	// Newer is the version of the writer it followed.
-	Newer string    `json:"newer"`
-	At    time.Time `json:"at"`
-
-	rest rest
+// StaleWriterError is a save refused because a newer release wrote the
+// state: this binary would save it by rules that release changed (a watch,
+// a start's reopen or a gate call left running by an install). The state
+// stays as it is; the process ends or is restarted, and the installed
+// beekeeper runs its command.
+type StaleWriterError struct {
+	PID     int
+	Command string
+	// Version is this binary's, Newer the one that wrote the state.
+	Version, Newer string
 }
 
-// String names the process and its versions.
-func (w StaleWriter) String() string {
-	return fmt.Sprintf("pid %d (%s) runs beekeeper %s, older than the %s that wrote the state", w.PID, w.Command, w.Version, w.Newer)
+func (e *StaleWriterError) Error() string {
+	return fmt.Sprintf("pid %d (%s) runs beekeeper %s, older than the %s that wrote the state: its save is refused; restart it on the installed beekeeper", e.PID, e.Command, e.Version, e.Newer)
 }
 
 // Budget is one reading of the GitHub core budget.
@@ -854,8 +861,16 @@ type Merge struct {
 	Outside bool `json:"outside,omitempty"`
 	// Checked is when GitHub last reported an outside merge not merged yet.
 	Checked time.Time `json:"checked,omitzero"`
+	// Candidate is the release candidate a promotion (PR 0) was queued for,
+	// the newest one at queue time, empty when there was none: its turn
+	// refuses when the newest candidate is another by then.
+	Candidate string `json:"candidate,omitempty"`
 	// Release is the tag the merge released, empty when unknown.
 	Release string `json:"release,omitempty"`
+	// HandCut is the merge's base branch when no Auto-release run tags a
+	// merge into it (its tags are cut by hand): devctl awaits no release and
+	// the merge leaves its lane once merged.
+	HandCut string `json:"handCut,omitempty"`
 	// Roll names the HelmReleases (namespace/name) that must reach Release
 	// before the lane frees.
 	Roll []string `json:"roll,omitempty"`
@@ -897,10 +912,18 @@ type Store interface {
 	// Update runs fn on the state and saves the result together with the
 	// events fn returns; when fn fails nothing is saved.
 	Update(fn func(*State) ([]Event, error)) error
-	// Log appends events that change no state.
+	// Log appends events that change no state, giving up on a busy lock.
 	Log(events ...Event) error
+	// Record appends events that change no state and must not be lost,
+	// waiting for the lock as an update does.
+	Record(events ...Event) error
 	// Events returns the last n events keep accepts, oldest first.
 	Events(n int, keep func(Event) bool) ([]Event, error)
+	// Follow returns every event keep accepts, oldest first, as Events(0,
+	// keep); a reader that calls it again under the same name, with the
+	// same keep, may be handed what it read before and only what was logged
+	// since read.
+	Follow(name string, keep func(Event) bool) ([]Event, error)
 	// ReadFile decodes a JSON side file; found is false when it is missing.
 	ReadFile(name string, v any) (found bool, err error)
 	// WriteFile replaces a JSON side file.
@@ -913,16 +936,33 @@ type FileStore struct {
 	dir string
 	// version is the binary's, which every save stamps or judges.
 	version string
+	// follows are the Follow readers' places in the log, by name; refused
+	// says a save was refused and logged, once per process.
+	mu      sync.Mutex
+	follows map[string]*followed
+	refused bool
+}
+
+// followed is how far a Follow reader has read the log, and what it kept.
+type followed struct {
+	file   os.FileInfo
+	offset int64
+	kept   []Event
 }
 
 var _ Store = (*FileStore)(nil)
 
-// Open returns the file store in dir, creating the directory.
-func Open(dir string) (*FileStore, error) {
+// Open returns the file store in dir, creating the directory, saving as
+// this binary's version.
+func Open(dir string) (*FileStore, error) { return OpenVersion(dir, project.Version()) }
+
+// OpenVersion is Open saving as version: a release stamps the state and is
+// refused by a newer one's, a build without a release version does neither.
+func OpenVersion(dir, version string) (*FileStore, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	return &FileStore{dir: dir, version: project.Version()}, nil
+	return &FileStore{dir: dir, version: version}, nil
 }
 
 // Dir is the store's directory.
@@ -947,7 +987,7 @@ func (s *FileStore) Peek() (*State, error) { return s.load() }
 
 // Update runs fn on the state under the exclusive lock and writes the result
 // back atomically together with the events fn returns. When fn fails nothing
-// is written.
+// is written, nor when a newer release wrote the state (StaleWriterError).
 func (s *FileStore) Update(fn func(*State) ([]Event, error)) error {
 	l := flock.New(s.path("state.lock"))
 	if err := l.Lock(); err != nil {
@@ -962,7 +1002,9 @@ func (s *FileStore) Update(fn func(*State) ([]Event, error)) error {
 	if err != nil {
 		return err
 	}
-	events = append(events, s.stamp(st, time.Now())...)
+	if err := s.stamp(st, time.Now()); err != nil {
+		return err
+	}
 	if err := writeJSON(s.path("state.json"), st); err != nil {
 		return err
 	}
@@ -989,38 +1031,55 @@ func (s *FileStore) Log(events ...Event) error {
 
 const logWait = time.Second
 
-// VerbStaleWriter is the event of an older beekeeper's first save after a
-// newer one's.
+// Record appends events that change no state and must not be lost, a secret
+// call's audit entry for one, under the state lock, waiting for it as an
+// update does: a busy lock delays the entry, never drops it.
+func (s *FileStore) Record(events ...Event) error {
+	l := flock.New(s.path("state.lock"))
+	if err := l.Lock(); err != nil {
+		return err
+	}
+	defer func() { _ = l.Unlock() }()
+	return s.append(events)
+}
+
+// VerbStaleWriter is the event of an older release's first refused save
+// after a newer one wrote the state.
 const VerbStaleWriter = "state.stale-writer"
 
-// stamp records the binary as the state's writer, unless a newer one wrote
-// it: then the save goes on with the fields this binary does not know kept,
-// and its process is recorded and logged once as a stale writer. A build
-// without a release version (dev, a release candidate, a +dirty branch
-// build) neither stamps nor judges, and a stamp of one is overwritten by
-// the next release that saves.
-func (s *FileStore) stamp(st *State, now time.Time) []Event {
+// stamp records the binary as the state's writer. A newer release wrote it:
+// the save is refused (StaleWriterError), logged once per process, since
+// this binary would save by rules that release changed. A build without a
+// release version (dev, a release candidate, a +dirty branch build) neither
+// stamps nor is judged, and a stamp of one is overwritten by the next
+// release that saves.
+func (s *FileStore) stamp(st *State, now time.Time) error {
 	own, ok := release(s.version)
 	if !ok {
 		return nil
 	}
-	st.StaleWriters = slices.DeleteFunc(st.StaleWriters, func(w StaleWriter) bool {
-		_, newer := release(w.Newer)
-		return !newer || !proc.Alive(w.PID)
-	})
 	if st.Writer != nil {
 		if newer, ok := release(st.Writer.Version); ok && own.LessThan(newer) {
-			pid := os.Getpid()
-			if slices.ContainsFunc(st.StaleWriters, func(w StaleWriter) bool { return w.PID == pid && w.Version == s.version }) {
-				return nil
-			}
-			w := StaleWriter{PID: pid, Command: command(os.Args), Version: s.version, Newer: st.Writer.Version, At: now}
-			st.StaleWriters = append(st.StaleWriters, w)
-			return []Event{{At: now, By: Party{Name: w.Command}, Verb: VerbStaleWriter, Detail: w.String() + ": it keeps the fields it does not know; restart it"}}
+			return s.refuse(st.Writer.Version, now)
 		}
 	}
 	st.Writer = &Writer{Version: s.version, rest: writerRest(st.Writer)}
+	// Releases before the refusal recorded their stale saves here instead.
+	delete(st.rest, "staleWriters")
 	return nil
+}
+
+// refuse is the refused save's error, logged the first time in this process.
+func (s *FileStore) refuse(newer string, now time.Time) error {
+	err := &StaleWriterError{PID: os.Getpid(), Command: command(os.Args), Version: s.version, Newer: newer}
+	s.mu.Lock()
+	logged := s.refused
+	s.refused = true
+	s.mu.Unlock()
+	if !logged {
+		_ = s.append([]Event{{At: now, By: Party{Name: err.Command}, Verb: VerbStaleWriter, Detail: err.Error()}})
+	}
+	return err
 }
 
 // release is v as a release version: no prerelease, no build metadata.
@@ -1137,6 +1196,60 @@ func (s *FileStore) Events(n int, keep func(Event) bool) ([]Event, error) {
 		out = out[len(out)-n:]
 	}
 	return out, sc.Err()
+}
+
+// Follow returns every event keep accepts, oldest first. It remembers under
+// name how far it read and what it kept, and reads only the lines appended
+// since: a watch that follows the log every poll parses each line once. A
+// log that was replaced or shrank is read again from its start.
+func (s *FileStore) Follow(name string, keep func(Event) bool) ([]Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := os.Open(s.path("events.jsonl"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if s.follows == nil {
+		s.follows = map[string]*followed{}
+	}
+	at := s.follows[name]
+	if at == nil || !os.SameFile(at.file, fi) || fi.Size() < at.offset {
+		at = &followed{}
+		s.follows[name] = at
+	}
+	at.file = fi
+	if _, err := f.Seek(at.offset, io.SeekStart); err != nil {
+		return nil, err
+	}
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 64*1024), 1024*1024)
+	sc.Split(wholeLines)
+	for sc.Scan() {
+		at.offset += int64(len(sc.Bytes())) + 1
+		var e Event
+		line := bytes.TrimLeft(sc.Bytes(), "\x00")
+		if json.Unmarshal(line, &e) == nil && (keep == nil || keep(e)) {
+			at.kept = append(at.kept, e)
+		}
+	}
+	return slices.Clone(at.kept), sc.Err()
+}
+
+// wholeLines splits the log into its complete lines: a line still being
+// appended, without its newline yet, is left for the next read.
+func wholeLines(data []byte, _ bool) (advance int, token []byte, err error) {
+	if i := bytes.IndexByte(data, '\n'); i >= 0 {
+		return i + 1, data[:i], nil
+	}
+	return 0, nil, nil
 }
 
 // ReadFile decodes a JSON side file of the store (the last snapshot);

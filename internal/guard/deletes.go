@@ -182,7 +182,7 @@ func deleteTargets(name string, args []string) []string {
 			}
 		}
 		return out
-	case "find":
+	case findCmd:
 		deletes := false
 		for i, a := range args {
 			a = strings.Join(shellWords(a), "")

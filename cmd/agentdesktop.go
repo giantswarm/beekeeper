@@ -29,7 +29,7 @@ The import or reopen that shows the agent in the desktop then does not wait
 for the desktop's window to lose the focus: it waits for the person's typing
 to pause for desktop.typingQuiet, 1 minute at most, shows the session for a
 moment (which warms its desktop CLI) and switches the window back to the
-session it showed. A reopen already waiting goes ahead within a second; an
+session it showed. A reopen already waiting goes ahead within 15 seconds; an
 agent whose turn ended with neither a CLI nor a waiting reopen (its import
 missed) is shown in the desktop now. The ask holds until the desktop shows
 the agent.`,
@@ -95,7 +95,7 @@ func (a *app) desktopTurn(ctx context.Context, ag state.Agent) error {
 	if _, err := fmt.Fprintf(a.out, "desktop: %s runs no CLI and no reopen waits: showing it in the desktop\n", ag.Name); err != nil {
 		return err
 	}
-	return a.reopenSession(ctx, ag.Session)
+	return a.reopenSession(ctx, ag.Session, "")
 }
 
 // agentOfSession is the index of the roster entry of session id (or its

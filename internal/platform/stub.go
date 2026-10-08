@@ -57,7 +57,6 @@ func (stubMachine) OOMPolicy(string) string { return "?" }
 func (stubMachine) OOMDSwap(context.Context) (machine.OOMDSwap, error) {
 	return machine.OOMDSwap{}, missing("Machine.OOMDSwap")
 }
-func (stubMachine) SwapoffRuns() bool { return false }
 func (stubMachine) OOMKills(context.Context, time.Time) ([]machine.OOMKill, error) {
 	return nil, missing("Machine.OOMKills")
 }
@@ -77,6 +76,10 @@ func (stubLauncher) Thaw(context.Context, string) error                { return 
 func (stubLauncher) Stop(context.Context, string) error                { return missing("Launcher.Stop") }
 func (stubLauncher) State(context.Context, string) string              { return "" }
 func (stubLauncher) Running(context.Context, bool, ...string) []string { return nil }
+func (stubLauncher) Failed(context.Context, ...string) []string        { return nil }
+func (stubLauncher) ResetFailed(context.Context, ...string) error {
+	return missing("Launcher.ResetFailed")
+}
 
 type stubCapper struct{}
 

@@ -280,10 +280,12 @@ type Outbound struct {
 	// StoreDeny are the secret-store writes the hook refuses.
 	StoreDeny []StoreRule `yaml:"storeDeny"`
 	// SweepRoots are the directories (~/ allowed; default: home) the watch
-	// sweeps, SweepDepth levels deep (default 5), for world-readable key
-	// files and git remote URLs that carry a credential.
+	// sweeps, SweepDepth levels deep (default 5), every SweepEvery (default
+	// 15m), for world-readable key files and git remote URLs that carry a
+	// credential.
 	SweepRoots []string `yaml:"sweepRoots"`
 	SweepDepth int      `yaml:"sweepDepth"`
+	SweepEvery Duration `yaml:"sweepEvery"`
 }
 
 // Secret configures beekeeper secret, the credential operations beekeeper
@@ -307,6 +309,10 @@ type Secret struct {
 	// refuses them in agent sessions under any path, like op signin, and
 	// the agent shell prelude removes their aliases and shell functions.
 	UnlockCommands []string `yaml:"unlockCommands"`
+	// Files are files known to hold secret values (~/ and globs allowed)
+	// that the hook refuses to let an agent read whole, beside its built-in
+	// list (omp's provider configuration and the like) and TokenFile.
+	Files []string `yaml:"files"`
 	// SigninCommand is the command the broker runs to sign in to the vault
 	// without the person, when it starts and whenever a call waits while it
 	// holds no session: it prints the session as op signin does
@@ -583,6 +589,13 @@ var DefaultUnalias = []string{"grep", "find", "ls", "cp", "mv", "rm"}
 // commandName is what agents.shell.unalias takes: a name, nothing a shell
 // would read as more.
 var commandName = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.+-]*$`)
+
+// opRef reports whether s is an op:// reference of a field,
+// op://<vault>/<item>/<field>, as beekeeper secret reads them.
+func opRef(s string) bool {
+	parts := strings.Split(strings.TrimPrefix(s, "op://"), "/")
+	return strings.HasPrefix(s, "op://") && len(parts) >= 3 && !slices.Contains(parts, "")
+}
 
 // Doctor configures the known faults the doctor probes and remedies.
 type Doctor struct {
@@ -1113,6 +1126,24 @@ func (c *Config) MemcapMax(ramMiB int) string {
 	return strconv.Itoa(int(DefaultMemcapMax*float64(ramMiB))) + "M"
 }
 
+// DefaultMemcapCPUQuota is the fraction of the cores every capped run
+// together may use.
+const DefaultMemcapCPUQuota = 0.5
+
+// DefaultMemcapCPUWeight is memcap.slice's CPUWeight: half a desktop
+// slice's 100, a third of the cores while the desktop wants them too.
+const DefaultMemcapCPUWeight = 50
+
+// MemcapCPUQuota is memcap.slice's CPUQuota on a machine of cores, a
+// systemd quota (100% a core): memcap.cpuQuota, else DefaultMemcapCPUQuota
+// of the cores; "" with the cores unknown: no quota.
+func (c *Config) MemcapCPUQuota(cores int) string {
+	if c.Memcap.CPUQuota != "" || cores <= 0 {
+		return c.Memcap.CPUQuota
+	}
+	return strconv.Itoa(int(DefaultMemcapCPUQuota*float64(cores)*100)) + "%"
+}
+
 // LoadLimit is the HIGH LOAD threshold on a machine of cores: LoadMax when
 // set, LoadPerCoreMax × cores otherwise.
 func (w Watch) LoadLimit(cores int) float64 {
@@ -1218,10 +1249,28 @@ type Omp struct {
 	// SessionsDir holds omp's session files, one folder per working
 	// directory.
 	SessionsDir string `yaml:"sessionsDir"`
+	// ModelsFile is omp's provider configuration (~/.omp/agent/models.yml):
+	// the providers' endpoints and models, and for a provider of Providers
+	// the name of the variable omp reads its key from.
+	ModelsFile string `yaml:"modelsFile"`
 	// Model is the model `agents start --harness omp` starts an agent on
 	// without --model, an exact selector omp lists ("ollama/qwen3.5:9b");
 	// empty: such a start is refused.
 	Model string `yaml:"model"`
+	// Providers are the providers of ModelsFile whose key lives in the
+	// vault, by the provider's name there.
+	Providers map[string]OmpProvider `yaml:"providers"`
+}
+
+// OmpProvider is a provider of omp's models file whose key beekeeper hands
+// to the agents it starts on it.
+type OmpProvider struct {
+	// APIKey is the op:// reference of the provider's key, never the key:
+	// `agents start --harness omp` reads it through beekeeper's secret
+	// handling and puts it into the agent's environment under the variable
+	// the provider's apiKey in ModelsFile names, so no file carries the
+	// value.
+	APIKey string `yaml:"apiKey"`
 }
 
 // Desktop is how beekeeper shares the person's desktop.
@@ -1242,6 +1291,15 @@ type Memcap struct {
 	// Max is a command's MemoryMax, a systemd size ("12G"; default: a
 	// fraction of RAM, DefaultMemcapMax).
 	Max string `yaml:"max"`
+	// CPUQuota is memcap.slice's CPUQuota, the cores every capped run
+	// together may use, a systemd quota ("1200%" is twelve cores; default:
+	// a fraction of the cores, DefaultMemcapCPUQuota). The slots share it
+	// by equal weight.
+	CPUQuota string `yaml:"cpuQuota"`
+	// CPUWeight is memcap.slice's CPUWeight against the desktop's slices
+	// (100 each): the runs' share of the cores while the desktop wants
+	// them too (default DefaultMemcapCPUWeight).
+	CPUWeight int `yaml:"cpuWeight"`
 }
 
 // Duration is a time.Duration written as "30s", "10m" in YAML.
@@ -1309,23 +1367,47 @@ func Path(flag string) (string, error) {
 	return filepath.Join(dir, "beekeeper", "config.yaml"), nil
 }
 
-// Load reads the file at path and applies the defaults.
+// Load reads the file at path and applies the defaults. A configuration
+// that is only incomplete loads: Incomplete names what is missing.
 func Load(path string) (*Config, error) {
-	c := &Config{}
 	raw, err := os.ReadFile(filepath.Clean(path))
 	switch {
 	case errors.Is(err, os.ErrNotExist):
+		raw = nil
 	case err != nil:
 		return nil, err
-	default:
-		if err := yaml.Unmarshal(raw, c); err != nil {
-			return nil, fmt.Errorf("%s: %w", path, err)
-		}
+	}
+	return parse(path, raw)
+}
+
+// parse is the configuration raw holds, read from path, with the defaults
+// applied and validated.
+func parse(path string, raw []byte) (*Config, error) {
+	c := &Config{}
+	if err := yaml.Unmarshal(raw, c); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	if err := c.defaults(); err != nil {
 		return nil, err
 	}
 	return c, c.validate()
+}
+
+// Incomplete names the references whose source section is missing: each
+// fails the commands that follow it, and leaves every other command
+// working, so an edit that adds a reference and its section one after the
+// other never makes the configuration unloadable in between.
+func (c *Config) Incomplete() []string {
+	var out []string
+	for i, id := range c.Secret.AgeIdentities {
+		switch {
+		case strings.HasPrefix(id.Ref, "store://") && len(c.Secret.Store.Read) == 0:
+			out = append(out, fmt.Sprintf("secret.ageIdentities[%d]: ref %q: a store:// reference takes secret.store.read", i, id.Ref))
+		case id.Ref == "store://" && len(c.Secret.Store.Search) == 0:
+			out = append(out, fmt.Sprintf("secret.ageIdentities[%d]: ref %q: store:// without an entry takes secret.store.search", i, id.Ref))
+		}
+	}
+	return out
 }
 
 func (c *Config) defaults() error {
@@ -1380,6 +1462,9 @@ func (c *Config) defaults() error {
 	}
 	setInt(&c.Scan.MinLength, 12)
 	c.Secret.TokenFile = homePath(home, c.Secret.TokenFile)
+	for i, f := range c.Secret.Files {
+		c.Secret.Files[i] = homePath(home, f)
+	}
 	c.Sandbox.defaults(home)
 	for i := range c.Scan.SOPS {
 		c.Scan.SOPS[i] = homePath(home, c.Scan.SOPS[i])
@@ -1431,6 +1516,7 @@ func (c *Config) defaults() error {
 	setStr(&c.Claude.DesktopApp, DefaultDesktopApp)
 	setStr(&c.Claude.SessionsDir, filepath.Join(home, ".claude", "sessions"))
 	setStr(&c.Omp.SessionsDir, filepath.Join(home, ".omp", "agent", "sessions"))
+	setStr(&c.Omp.ModelsFile, filepath.Join(home, ".omp", "agent", "models.yml"))
 	cfg, err := os.UserConfigDir()
 	if err != nil {
 		return err
@@ -1467,6 +1553,7 @@ func (c *Config) defaults() error {
 
 	setStr(&c.Memcap.SlotDir, filepath.Join(state, "memcap", "slots"))
 	setInt(&c.Memcap.Slots, 2)
+	setInt(&c.Memcap.CPUWeight, DefaultMemcapCPUWeight)
 	setInt(&c.Capacity.Floor, 5)
 	setInt(&c.Capacity.Ceiling, 10)
 	setInt(&c.Capacity.AvailMinMiB, 20<<10)
@@ -1584,6 +1671,7 @@ func (o *Outbound) defaults(home string) {
 		o.SweepRoots = []string{home}
 	}
 	setInt(&o.SweepDepth, 5)
+	setDur(&o.SweepEvery, 15*time.Minute)
 	for _, ps := range [][]string{o.Paths, o.SweepRoots} {
 		for i := range ps {
 			ps[i] = homePath(home, ps[i])
@@ -1612,6 +1700,11 @@ func (c *Config) validate() error {
 			return fmt.Errorf("secret.unlockCommands: %q is no command name", n)
 		}
 	}
+	for _, f := range c.Secret.Files {
+		if _, err := filepath.Match(f, ""); err != nil || !filepath.IsAbs(f) {
+			return fmt.Errorf("secret.files: %q is no absolute path or glob (~/ allowed)", f)
+		}
+	}
 	for i, id := range c.Secret.AgeIdentities {
 		switch {
 		case id.Recipient == "" && id.PathRegex == "":
@@ -1620,13 +1713,15 @@ func (c *Config) validate() error {
 			return fmt.Errorf("secret.ageIdentities[%d]: recipient %q is no age recipient (age1…)", i, id.Recipient)
 		case !strings.HasPrefix(id.Ref, "op://") && !strings.HasPrefix(id.Ref, "file:///") && !strings.HasPrefix(id.Ref, "store://"):
 			return fmt.Errorf("secret.ageIdentities[%d]: ref %q: want op://<vault>/<item>/<field>, file:///<absolute path> or store://[<entry>]", i, id.Ref)
-		case strings.HasPrefix(id.Ref, "store://") && len(c.Secret.Store.Read) == 0:
-			return fmt.Errorf("secret.ageIdentities[%d]: ref %q: a store:// reference takes secret.store.read", i, id.Ref)
-		case id.Ref == "store://" && len(c.Secret.Store.Search) == 0:
-			return fmt.Errorf("secret.ageIdentities[%d]: ref %q: store:// without an entry takes secret.store.search", i, id.Ref)
 		}
 		if _, err := regexp.Compile(id.PathRegex); err != nil {
 			return fmt.Errorf("secret.ageIdentities[%d]: pathRegex: %w", i, err)
+		}
+	}
+	for name, p := range c.Omp.Providers {
+		// the message never carries the value someone put there
+		if !opRef(p.APIKey) {
+			return fmt.Errorf("omp.providers.%s.apiKey: want op://<vault>/<item>/<field>, the reference of the provider's key: beekeeper hands an agent the key from the vault, never from a file", name)
 		}
 	}
 	for i, r := range c.Outbound.StoreDeny {

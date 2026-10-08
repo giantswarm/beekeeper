@@ -21,7 +21,8 @@ import (
 
 // retitleWait bounds the wait for the desktop to record the title a steward
 // set on beekeeper's request: one short desktop turn. stewardTries of them
-// stay within the reopen unit's TimeoutStopSec.
+// stay within stopPostWait, the reopen unit's runtime (RuntimeMaxSec) past
+// its wait for the person.
 const retitleWait = 80 * time.Second
 
 // The desktop handles every claude://resume link twice, and when the second
@@ -238,8 +239,8 @@ func (a *app) keepImport(ctx context.Context, id, name string, sa *startedAgent)
 		return claude.Record{}
 	}
 	var model string
-	if m, _ := filepath.Glob(filepath.Join(a.cfg.Claude.ProjectsDir, "*", id+".jsonl")); len(m) > 0 {
-		model, _ = claude.Model(m[0])
+	if path := transcriptOf(a.cfg, id); path != "" {
+		model, _ = claude.Model(path)
 	}
 	find := func(_ context.Context, tried []string) (steward, error) {
 		return a.findSteward(host, append(tried, host))
@@ -337,6 +338,9 @@ func (a *app) findSteward(target string, tried []string) (steward, error) {
 	})
 }
 
+// errNoSteward is pickSteward finding no CLI to ask.
+var errNoSteward = errors.New("no idle desktop CLI of a session beekeeper started (and not asked yet) runs to ask")
+
 // pickSteward picks the steward for target: an idle desktop CLI (its
 // transcript quiet for stewardQuiet, no tool command, no headless turn) of a
 // session beekeeper started, never the operator's own, the supervisor's or
@@ -352,7 +356,7 @@ func pickSteward(st *state.State, sessions []*claude.Session, t *proc.Table, tar
 		}
 	}
 	if len(picks) == 0 {
-		return steward{}, errors.New("no idle desktop CLI of a session beekeeper started (and not asked yet) runs to ask")
+		return steward{}, errNoSteward
 	}
 	rank := func(s *claude.Session) int {
 		switch {
@@ -527,7 +531,8 @@ type archiveOutcome struct {
 const stewardDeclineFor = 24 * time.Hour
 
 // archiveDesktops archives the desktop sessions of agents taken off the
-// roster by the command by, through one steward's turn: only sessions
+// roster by the command by, through one steward's turn (archiveSteward: an
+// idle CLI, else one of the sessions' own, warmed for it): only sessions
 // beekeeper started, keeping no role (roleKeeps) and running no turn, and
 // only under the person's agreement (agents.archiveAgreement). An archive
 // counts once the desktop records it; the line names the steward whose
@@ -568,8 +573,9 @@ func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []sta
 	wait := archiveWait + time.Duration(len(hosts)-1)*archiveEach
 	var asked []stewardAnswer
 	var errs []error
+	find := func(exclude []string) (steward, error) { return a.findSteward(hosts[0], exclude) }
 	for range stewardTries {
-		s, err := a.findSteward(hosts[0], append(slices.Clone(declined), stewardHosts(asked)...))
+		s, err := archiveSteward(ctx, left(), append(slices.Clone(declined), stewardHosts(asked)...), find, a.warmSteward)
 		if err != nil {
 			errs = append(errs, err)
 			break
@@ -593,10 +599,70 @@ func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []sta
 		case who != "":
 			o.line = fmt.Sprintf("archived its desktop session %s (%s's %s call succeeded; the desktop has not recorded it yet)", h, who, archiveTool)
 		default:
-			o.line, o.host, o.asked = fmt.Sprintf("its desktop session %s stays: %v", h, errors.Join(errs...)), h, true
+			o.line, o.host, o.asked = fmt.Sprintf("its desktop session %s stays: %v", h, errors.Join(errs...)), h, len(asked) > 0
 		}
 	}
 	return out
+}
+
+// archiveSteward picks the steward for an archive request about the
+// sessions hosts, none of exclude: an idle CLI find picks, else the CLI warm
+// has the desktop run of the first of hosts not excluded, which archives
+// itself and the others. An archive thus waits on no other session being
+// idle.
+func archiveSteward(ctx context.Context, hosts, exclude []string, find func(exclude []string) (steward, error),
+	warm func(ctx context.Context, host string) (steward, error),
+) (steward, error) {
+	s, err := find(exclude)
+	if !errors.Is(err, errNoSteward) {
+		return s, err
+	}
+	for _, h := range hosts {
+		if !slices.Contains(exclude, h) {
+			return warm(ctx, h)
+		}
+	}
+	return steward{}, err
+}
+
+// warmSteward returns the desktop's CLI of the finished session host as a
+// steward, warming it first when none runs: the reopen's show of the session
+// in the main window for a moment, after which the window shows the session
+// it showed before. The show disregards the window's focus, like an import's,
+// and waits for the person's typing to pause, never into it.
+func (a *app) warmSteward(ctx context.Context, host string) (steward, error) {
+	id := strings.TrimPrefix(host, "local_")
+	if sock := desktopSocketWithin(ctx, id, 0); sock != "" {
+		return steward{host: host, sock: sock}, nil
+	}
+	t, err := plat.Machine.Processes()
+	if err != nil {
+		return steward{}, err
+	}
+	if plat.Opener.Running(t).IsZero() {
+		return steward{}, fmt.Errorf("%w, and the desktop does not run to warm the CLI of %s", errNoSteward, host)
+	}
+	d, err := a.watchDesk(ctx)
+	if err != nil {
+		return steward{}, err
+	}
+	d.urgent, d.turn = func() bool { return true }, 2*desktopTurnWait
+	if err := d.await(ctx, desktopTurnWait, nil); err != nil {
+		return steward{}, fmt.Errorf("warming the CLI of %s waits for %s", host, reopenHeldBy(err))
+	}
+	linkMu.Lock()
+	defer linkMu.Unlock()
+	shownAt := time.Now()
+	if _, err := a.showBriefly(ctx, d, continueURL(host), host, "", true, 0, nil); err != nil {
+		return steward{}, fmt.Errorf("warming the CLI of %s: %w", host, err)
+	}
+	if sock := desktopSocket(ctx, id); sock != "" {
+		return steward{host: host, sock: sock}, nil
+	}
+	if n, ok, _ := claude.DesktopAtCap(a.cfg.Claude.DesktopLog, shownAt); ok {
+		return steward{}, fmt.Errorf("the desktop warmed no CLI of %s: it runs its cap of %s and starts none for a show", host, capText(n))
+	}
+	return steward{}, fmt.Errorf("the desktop warmed no CLI of %s within %s of showing it", host, twinWait)
 }
 
 // stewardAnswer is what a steward asked for archives did in its turn.
@@ -668,11 +734,11 @@ func (a *app) stewardAnswer(host string, since time.Time) claude.Answer {
 	if !ok || r.CLISessionID == "" {
 		return claude.Answer{}
 	}
-	m, _ := filepath.Glob(filepath.Join(a.cfg.Claude.ProjectsDir, "*", r.CLISessionID+".jsonl"))
-	if len(m) == 0 {
+	path := transcriptOf(a.cfg, r.CLISessionID)
+	if path == "" {
 		return claude.Answer{}
 	}
-	ans, _ := claude.ReadAnswer(m[0], since)
+	ans, _ := claude.ReadAnswer(path, since)
 	return ans
 }
 

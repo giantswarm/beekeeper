@@ -133,6 +133,86 @@ func (o *Ops) CopyValue(ctx context.Context, src, dst Ref) (int, error) {
 	return len(v), o.put(ctx, dst, v)
 }
 
+// Pair is one value of a copy into a new file: the reference it is read
+// from and the path it takes there.
+type Pair struct {
+	Src  Ref
+	Path string
+}
+
+// ParsePair reads <ref>=<path>, the path after the last "=": the reference
+// names one value (op://…, file#path), the path is a key of the new file.
+func ParsePair(s string) (Pair, error) {
+	i := strings.LastIndex(s, "=")
+	if i < 0 {
+		return Pair{}, fmt.Errorf("%q: a value goes in as <ref>=<path>", s)
+	}
+	src, err := ParseRef(s[:i])
+	if err != nil {
+		return Pair{}, err
+	}
+	p := Pair{Src: src, Path: s[i+1:]}
+	switch {
+	case !src.single():
+		return Pair{}, fmt.Errorf("%q: name one value (file#path or op://…), not a whole file", s)
+	case p.Path == "" || strings.ContainsAny(p.Path, "#/"):
+		return Pair{}, fmt.Errorf("%q: the path after = is a dotted key of the new file", s)
+	}
+	return p, nil
+}
+
+// CopyValues writes several values into a new SOPS file in one
+// encryption: sops needs only the recipients of the file's creation rule,
+// nothing is decrypted, so no age identity of the destination is needed. An
+// absent file starts as the Secret nw names (an empty document when nil), a
+// plaintext Secret skeleton is filled; an encrypted file is refused. Every
+// path is checked against the creation rule before a value is read. It
+// answers the keys and their lengths.
+func (o *Ops) CopyValues(ctx context.Context, pairs []Pair, file string, nw *NewSecret) ([]Key, error) {
+	if len(pairs) == 0 {
+		return nil, errors.New("copy <ref>=<path>… <file>: no value named")
+	}
+	if raw, err := os.ReadFile(file); err == nil && sopsMetadata(raw) { //nolint:gosec // the caller's SOPS file
+		return nil, fmt.Errorf("%s is encrypted: copy <ref>=<path>… writes a new file in one encryption; "+
+			"one value goes into an existing file with copy <ref> <file#path>", file)
+	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	if nw != nil {
+		if err := nw.check(file); err != nil {
+			return nil, err
+		}
+	}
+	doc, _, err := o.target(ctx, Ref{File: file, Path: pairs[0].Path}, nw)
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, len(pairs))
+	for i, p := range pairs {
+		if paths[i], err = place(doc, file, p.Path); err != nil {
+			return nil, err
+		}
+		if slices.Contains(paths[:i], paths[i]) {
+			return nil, fmt.Errorf("%s: %s is named twice", file, paths[i])
+		}
+	}
+	vs := make([]string, len(pairs))
+	for i, p := range pairs {
+		if vs[i], err = o.value(ctx, p.Src); err != nil {
+			return nil, err
+		}
+	}
+	for i := range pairs {
+		if err := doc.set(paths[i], vs[i]); err != nil {
+			return nil, fmt.Errorf("%s: %w", file, err)
+		}
+	}
+	if err := o.encrypt(ctx, doc, file); err != nil {
+		return nil, err
+	}
+	return doc.keys(), nil
+}
+
 // put writes v at dst's path, the rest of its file kept.
 func (o *Ops) put(ctx context.Context, dst Ref, v string) error {
 	doc, dst, err := o.target(ctx, dst, nil)
@@ -145,7 +225,8 @@ func (o *Ops) put(ctx context.Context, dst Ref, v string) error {
 // target is the document a value for dst goes into and the path it takes
 // there. An absent file starts as the Secret nw names, an empty document
 // when nil; a plaintext Kubernetes Secret without values, a skeleton, is
-// filled like a file absent so far. A Secret's value goes under stringData
+// filled like a file absent so far, and any other plaintext file is refused
+// by what it is. A Secret's value goes under stringData
 // unless the path names data or stringData. A path the file's creation rule
 // would leave in plaintext is refused before any value is written.
 func (o *Ops) target(ctx context.Context, dst Ref, nw *NewSecret) (*document, Ref, error) {
@@ -171,21 +252,30 @@ func (o *Ops) target(ctx context.Context, dst Ref, nw *NewSecret) (*document, Re
 			}
 		}
 	}
-	dst.Path = doc.valuePath(dst.Path)
-	cfg, rel, err := sopsTarget(dst.File)
-	if err != nil {
+	if dst.Path, err = place(doc, dst.File, dst.Path); err != nil {
 		return nil, dst, err
+	}
+	return doc, dst, nil
+}
+
+// place is the path a value for path takes in doc, the document of file,
+// refused when file's creation rule would leave it in plaintext.
+func place(doc *document, file, path string) (string, error) {
+	path = doc.valuePath(path)
+	cfg, rel, err := sopsTarget(file)
+	if err != nil {
+		return "", err
 	}
 	rule, err := ruleFor(cfg, rel)
 	if err != nil {
-		return nil, dst, err
+		return "", err
 	}
 	if rule != nil {
-		if err := rule.check(dst.Path); err != nil {
-			return nil, dst, fmt.Errorf("%s: %w (%s)", dst.File, err, cfg)
+		if err := rule.check(path); err != nil {
+			return "", fmt.Errorf("%s: %w (%s)", file, err, cfg)
 		}
 	}
-	return doc, dst, nil
+	return path, nil
 }
 
 // write sets v at dst's path of doc and encrypts doc into dst's file.

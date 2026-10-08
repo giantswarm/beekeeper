@@ -169,7 +169,7 @@ func (a *app) readHandover(q string) (handover, error) {
 	transcript := ""
 	if s, ok := claude.Live(sessions, p); ok {
 		h.session, h.dir, h.model, transcript = s, s.Cwd, s.Model, s.Transcript
-		h.context = transcriptContext(s, a.now)
+		h.context = transcriptContext(s)
 	}
 	if transcript == "" {
 		// A session whose CLI does not run: its context is its transcript's.
@@ -366,14 +366,21 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 		}
 		a.say("ended session %s: %sits CLI %d and %d processes it left stopped", ag.Session, how, h.session.PID, n-1)
 	}
-	// A start or wake unit of the old session that still runs its reopen
-	// would show it in the desktop and warm a CLI of it again.
-	for _, u := range turningUnits(ctx, ag.Session) {
+	// A start or wake unit of the old session still in its turn, or a
+	// reopen unit of it, would show it in the desktop and warm a CLI of it
+	// again. The turns' units go first: their stop-posts start reopen units.
+	stop := func(u string) {
 		if err := plat.Launcher.Stop(ctx, u); err != nil {
 			a.say("stopping %s of session %s: %v", u, ag.Session, err)
-			continue
+			return
 		}
 		a.say("stopped %s of session %s, so the desktop does not reopen it", u, ag.Session)
+	}
+	for _, u := range turningUnits(ctx, ag.Session) {
+		stop(u)
+	}
+	for _, u := range reopenUnits(ctx, ag.Session) {
+		stop(u)
 	}
 	a.say("%s", a.archiveHandedOver(ctx, me, ag.Party, sa.id))
 	took := time.Since(began)
@@ -529,9 +536,13 @@ func (a *app) askNote(ctx context.Context, h handover) (string, bool, error) {
 		return "", false, nil
 	}
 	note, ok, err := a.awaitNote(ctx, h.agent.Party, since, wait)
-	a.endNoteTurn(ctx, unit)
+	where := "its desktop CLI, which started meanwhile"
+	if unit != "" {
+		a.endNoteTurn(ctx, unit)
+		where = "headless turn " + unit
+	}
 	if err == nil {
-		a.say("note: %s (headless turn %s)", noteOutcome(ok, since, wait), unit)
+		a.say("note: %s (%s)", noteOutcome(ok, since, wait), where)
 	}
 	return note, ok, err
 }
@@ -546,7 +557,8 @@ func noteOutcome(ok bool, since time.Time, wait time.Duration) string {
 
 // resumeForNote starts one headless turn of the agent's session with the
 // note request, in a wake unit without the desktop's reopen: the session
-// ends with the hand-over. It returns the unit.
+// ends with the hand-over. It returns the unit; "" when the session's desktop
+// CLI started meanwhile and took the request instead.
 func (a *app) resumeForNote(ctx context.Context, h handover) (string, error) {
 	st, err := a.store.Read()
 	if err != nil {
@@ -558,6 +570,9 @@ func (a *app) resumeForNote(ctx context.Context, h handover) (string, error) {
 	}
 	if u := wakeRunning(ctx, w.id); u != "" {
 		return "", refused("its wake turn %s runs", u)
+	}
+	if pid, err := a.toDesktopCLI(ctx, w.id, a.noteRequest(h)); pid != 0 || err != nil {
+		return "", err
 	}
 	bin, err := exec.LookPath("claude")
 	if err != nil {
@@ -748,7 +763,7 @@ func (w *watcher) handoversDue(st *state.State, sessions []*claude.Session) {
 		if s == nil {
 			s = &claude.Session{Transcript: transcriptOf(w.cfg, ag.Session)}
 		}
-		return transcriptContext(s, w.now)
+		return transcriptContext(s)
 	}
 	for _, d := range handoversDue(st, sessions, w.cfg.Agents.RelayAt, said, contextOf, proc.Alive) {
 		w.reported[key(d.agent.Party)], w.dirty = true, true

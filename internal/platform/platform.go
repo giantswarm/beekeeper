@@ -75,8 +75,6 @@ type Machine interface {
 	// OOMDSwap is the userspace OOM killer's swap rule: the share of swap
 	// past which it kills and the cgroups it watches for it.
 	OOMDSwap(ctx context.Context) (machine.OOMDSwap, error)
-	// SwapoffRuns reports whether a swapoff is running.
-	SwapoffRuns() bool
 	// OOMKills are the kernel's OOM kills since the given time, oldest first.
 	OOMKills(ctx context.Context, since time.Time) ([]machine.OOMKill, error)
 	// OomdKills are the userspace OOM killer's kill lines since the given time.
@@ -99,9 +97,17 @@ type Unit struct {
 	KeepChildren bool
 	// TermIsSuccess counts an end by SIGTERM as success: a stop as asked.
 	TermIsSuccess bool
-	// StopPost runs once Argv has ended, for up to StopTimeout.
-	StopPost    []string
+	// StopPost runs once Argv has ended, within StopTimeout. It reports its
+	// own outcome: its exit or kill never fails the unit. It returns at
+	// once: a stop waits for it, a shutdown's included.
+	StopPost []string
+	// StopTimeout bounds a stop: Argv's end on the stop signal, then
+	// StopPost; past it the service manager kills what still runs. Zero
+	// leaves the manager's default.
 	StopTimeout time.Duration
+	// MaxRuntime ends the unit once it has run that long, as a failure;
+	// zero lets it run on.
+	MaxRuntime time.Duration
 }
 
 // Launcher starts and inspects units.
@@ -120,7 +126,15 @@ type Launcher interface {
 	// Running lists the units matching the patterns that are active or
 	// starting, and with stopping those running their stop too.
 	Running(ctx context.Context, stopping bool, patterns ...string) []string
+	// Failed lists the failed units matching the patterns.
+	Failed(ctx context.Context, patterns ...string) []string
+	// ResetFailed clears the failed state of the units.
+	ResetFailed(ctx context.Context, units ...string) error
 }
+
+// RunNice is the nice level a capped run's command starts at: among the
+// processes that share a core, the desktop and the CLIs come first.
+const RunNice = 10
 
 // Cap bounds a capped run.
 type Cap struct {
@@ -129,6 +143,12 @@ type Cap struct {
 	// Slice is the slice of the build slot the run holds or shares, under
 	// memcap.slice: every run of the slot shares its cap. "": memcap.slice.
 	Slice string
+	// CPUQuota and CPUWeight are memcap.slice's CPU budget, which every
+	// slot shares: its CPUQuota ("1200%", 100% a core; "": none) and its
+	// CPUWeight against the desktop's slices (100 each). A zero CPUWeight
+	// leaves the slice's CPU as it is.
+	CPUQuota  string
+	CPUWeight int
 }
 
 // Capper runs commands under a memory cap.
@@ -189,6 +209,10 @@ type SetupSpec struct {
 	Exe string
 	// RAMMiB and SwapMiB size the memory guard; zero RAM writes none.
 	RAMMiB, SwapMiB int
+	// CPUQuota and CPUWeight are memcap.slice's CPU budget
+	// (memcap.cpuQuota, memcap.cpuWeight), as in a Cap.
+	CPUQuota  string
+	CPUWeight int
 	// DesktopScope is the unit name of the running Claude Desktop scope,
 	// empty when none runs.
 	DesktopScope string

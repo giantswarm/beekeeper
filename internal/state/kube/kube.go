@@ -190,6 +190,9 @@ func (s *Store) Log(events ...state.Event) error {
 	return fmt.Errorf("%d events: %w", len(events), ErrLocal)
 }
 
+// Record refuses as Log does.
+func (s *Store) Record(events ...state.Event) error { return s.Log(events...) }
+
 // ReadFile refuses: side files stay on the machine.
 func (s *Store) ReadFile(name string, _ any) (bool, error) {
 	return false, fmt.Errorf("side file %s: %w", name, ErrLocal)
@@ -362,6 +365,12 @@ func environmentErr(name string, err error) error {
 		return fmt.Errorf("%s is not an Environment on this installation", name)
 	}
 	return err
+}
+
+// Follow lists the events as Events(0, keep) does: the API server keeps no
+// place of a reader's.
+func (s *Store) Follow(_ string, keep func(state.Event) bool) ([]state.Event, error) {
+	return s.Events(0, keep)
 }
 
 // Events returns the last n Kubernetes Events beekeeper recorded that keep

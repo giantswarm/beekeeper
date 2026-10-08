@@ -66,6 +66,25 @@ func isWatch(p *proc.Process) bool {
 	return p.Comm == project.Name && slices.Contains(p.Args, "watch") && !slices.Contains(p.Args, "--once")
 }
 
+// staleBinaries are the beekeeper processes of t, self apart, whose binary
+// another file was renamed over since they started (replaced says so for a
+// pid): an install's leftovers, which run the old code and whose saves of
+// the state the new release refuses. By pid.
+func staleBinaries(t *proc.Table, self int, replaced func(pid int) bool) []*proc.Process {
+	var out []*proc.Process
+	for _, p := range t.ByPID {
+		if p.PID != self && p.Comm == project.Name && replaced(p.PID) {
+			out = append(out, p)
+		}
+	}
+	slices.SortFunc(out, func(a, b *proc.Process) int { return a.PID - b.PID })
+	return out
+}
+
+// replacedBinary says whether another file was renamed over the executable
+// of the live process pid since it started.
+func replacedBinary(pid int) bool { return platform.ProcessBinary(pid).Replaced() }
+
 // replacedBinary is the path of process pid's executable and whether
 // another file was renamed over it since the process started.
 func (w *watcher) replacedBinary(pid int) (string, bool) {

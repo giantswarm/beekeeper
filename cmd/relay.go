@@ -398,7 +398,7 @@ func roleContext(r state.Role, sessions []*claude.Session, now time.Time, relayA
 	if sup == nil || r.Relay.Open(now) || said.said(r, relayAt, now) {
 		return 0
 	}
-	if c := sessionContext(sessions, sup.Party, now); c >= int64(relayAt) {
+	if c := sessionContext(sessions, sup.Party); c >= int64(relayAt) {
 		return c
 	}
 	return 0
@@ -448,23 +448,17 @@ func (d relayDues) say(sup *state.Supervisor, relayAt config.Tokens, now time.Ti
 
 // sessionContext is the context in tokens of p's running session, read from
 // its transcript's last request (the CTX column); 0 when it does not run.
-func sessionContext(sessions []*claude.Session, p state.Party, now time.Time) int64 {
+func sessionContext(sessions []*claude.Session, p state.Party) int64 {
 	s, live := claude.Live(sessions, p)
 	if !live {
 		return 0
 	}
-	return transcriptContext(s, now)
+	return transcriptContext(s)
 }
 
 // transcriptContext is the context in tokens of s, read from its
 // transcript's last request; 0 without a transcript.
-func transcriptContext(s *claude.Session, now time.Time) int64 {
-	if s.Transcript == "" {
-		return 0
-	}
-	_, a := claude.ReadTranscript(s.Transcript, now)
-	return a.Context
-}
+func transcriptContext(s *claude.Session) int64 { return claude.Context(s.Transcript) }
 
 // quietness is the watch's reading of the machine for a relay: checked once
 // the holder's context reached relayAt (context), busy saying what keeps it

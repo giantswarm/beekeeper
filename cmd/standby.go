@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -49,7 +50,8 @@ type standbyWatch struct {
 	// session id runs its headless turn (unitsTurning); nil: none does.
 	turning func(ctx context.Context, id string) bool
 	// reopening reports whether a unit of beekeeper's start or wake of
-	// session id runs its turn or its reopen (turningUnits); nil: none does.
+	// session id runs its turn, or a reopen of it runs (unitsReopening);
+	// nil: none does.
 	reopening func(ctx context.Context, id string) bool
 	busy      atomic.Bool
 	// guideGap is the term of the gone guide this watch said.
@@ -167,20 +169,24 @@ func (w *watcher) firstTurn(ctx context.Context, st *state.State, p state.Party)
 	return i >= 0 && !st.Agents[i].DesktopTurn.IsZero() && w.stand.reopening != nil && w.stand.reopening(ctx, p.Session)
 }
 
-// unitsReopening reports whether a start or wake unit of session id runs
-// its turn or its reopen.
-func unitsReopening(ctx context.Context, id string) bool { return len(turningUnits(ctx, id)) > 0 }
+// unitsReopening reports whether a unit of session id runs its headless
+// turn or its reopen: a start's or wake's unit active, starting or stopping
+// (its stop-post starts the reopen's unit), or a reopen unit.
+func unitsReopening(ctx context.Context, id string) bool {
+	return len(turningUnits(ctx, id)) > 0 || len(reopenUnits(ctx, id)) > 0
+}
 
 // unitsTurning reports whether a start or wake unit of session id is
 // active or starting: its headless turn runs.
 func unitsTurning(ctx context.Context, id string) bool { return len(sessionUnits(ctx, id, false)) > 0 }
 
 // turningUnits are the start and wake units of session id that are active,
-// starting or running their reopen (deactivating).
+// starting or stopping (deactivating: the turn's end on the stop signal,
+// then the stop-post that starts the reopen's unit).
 func turningUnits(ctx context.Context, id string) []string { return sessionUnits(ctx, id, true) }
 
 // sessionUnits are the start and wake units of session id that are active
-// or starting, and with stopping those running their reopen too.
+// or starting, and with stopping those in their stop too.
 func sessionUnits(ctx context.Context, id string, stopping bool) []string {
 	if len(id) < 8 {
 		return nil
@@ -369,9 +375,13 @@ func (a *app) reviveFromWatch(ctx context.Context, _ role, holder state.Party, m
 // which runs no CLI, through the desktop's session messaging: the desktop
 // starts host's CLI at once with msg as its turn, whatever the window's
 // focus, the person's typing or its cap. running reports host's CLI up. The
-// send starts a CLI, so the desktop stays under its cap first, and the
-// steward asked keeps its own CLI.
+// send starts a CLI, so it waits for a headless turn of the session to end
+// first, the desktop stays under its cap, and the steward asked keeps its
+// own CLI.
 func (a *app) sendThroughDesktop(ctx context.Context, host, msg string, running func() bool) (steward, error) {
+	if err := awaitNoHeadless(ctx, a.cliSession(host), sendWait); err != nil {
+		return steward{}, err
+	}
 	find := func(ctx context.Context, tried []string) (steward, error) {
 		s, err := a.findSteward(host, append(tried, host))
 		if err != nil {
@@ -380,6 +390,15 @@ func (a *app) sendThroughDesktop(ctx context.Context, host, msg string, running 
 		return s, a.makeRoom(ctx, host, s.host)
 	}
 	return delegate(ctx, find, func(steward) string { return sendRequest(host, msg) }, running, a.peerSend, sendWait)
+}
+
+// cliSession is the CLI session id the desktop session host runs under: its
+// record's, else host's own id.
+func (a *app) cliSession(host string) string {
+	if r, ok := claude.ReadRecord(a.cfg, host); ok && r.CLISessionID != "" {
+		return r.CLISessionID
+	}
+	return strings.TrimPrefix(host, "local_")
 }
 
 // sendWait bounds how long a steward's send takes to start a session's
@@ -471,7 +490,7 @@ func (w *watcher) relayOverdue(ctx context.Context, rl role, st *state.State, se
 	if !pastRelayGrace(r, cfg, w.now) || w.now.Before(w.stand.overdueNext[rl.name]) {
 		return
 	}
-	c := sessionContext(sessions, r.Holder.Party, w.now)
+	c := sessionContext(sessions, r.Holder.Party)
 	if c < int64(cfg.RelayAt) || (rl.grants && w.busyNow(ctx, st) != "") {
 		return
 	}

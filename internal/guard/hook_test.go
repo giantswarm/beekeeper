@@ -18,6 +18,7 @@ type decision struct {
 	PermissionDecision string         `json:"permissionDecision"`
 	Reason             string         `json:"permissionDecisionReason"`
 	UpdatedInput       map[string]any `json:"updatedInput"`
+	AdditionalContext  string         `json:"additionalContext"`
 }
 
 // decide feeds a Bash tool call to the hook the way Claude Code sends it.
@@ -103,6 +104,7 @@ func TestHeavyCommandIsWrappedVerbatim(t *testing.T) {
 		t.Errorf("other tool input fields lost: %v", d.UpdatedInput)
 	}
 	for _, c := range []string{"make build", "timeout 600 go vet ./...", "x=$(yarn tsc)", "if true; then golangci-lint run; fi", "FOO=1 npx jest",
+		"beekeeper scan sweep --json",
 		// the wrapper mentioned, not invoked: the build still needs a slot
 		"cd ~/d && m=$(ls ~/klaus-lab/scripts/memcap 2>/dev/null); echo $m; go test ./e2e/",
 		"which memcap beekeeper && go vet ./...",

@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"io"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -38,6 +40,11 @@ type agentView struct {
 	// CLI, which Claude Desktop does not run, so its sidebar row shows the
 	// session idle while it works.
 	HeadlessTurn bool `json:"headlessTurn,omitempty"`
+	// NoRow: the running desktop never imported the session beekeeper
+	// started (at its cap of CLIs, say), so it has no row in the sidebar:
+	// nobody sees it there, reads its transcript or types into it, until
+	// the standby watch imports it beside its turn or the doctor reopens it.
+	NoRow bool `json:"noDesktopRow,omitempty"`
 }
 
 // An agent's Browser.
@@ -62,10 +69,14 @@ func agentBrowser(cfg *config.Config, ag state.Agent) string {
 }
 
 // The agents command's name and its reopen subcommand's, which a start's and
-// a wake's unit run once their turn ended.
+// a wake's unit run once their turn ended, with the reopen's flags: --detach
+// starts the reopen in a unit of its own (the unit's stop-post), --turn
+// names the unit whose turn ended (the detached reopen).
 const (
 	agentsName = "agents"
 	reopenName = "reopen"
+	detachFlag = "detach"
+	turnFlag   = "turn"
 )
 
 func (a *app) agentsCmd() *cobra.Command {
@@ -124,6 +135,10 @@ or "wake turn running".`,
 				reg, err = registerAgent(st, me, live, a.now.UTC())
 				if err != nil {
 					return nil, err
+				}
+				if os.Getenv(sandbox.Runtime) == "" {
+					// outside the sandbox, this shell's PATH is the agent's own
+					_ = recordGH(st, me, guard.Resolve("gh", os.Getenv("PATH")), a.now.UTC())
 				}
 				detail := me.Name
 				for _, r := range reg.replaced {
@@ -469,6 +484,7 @@ func findParty(parties []state.Party, q, one, many string) (int, error) {
 func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentView {
 	out := make([]agentView, 0, len(st.Agents))
 	t, _ := plat.Machine.Processes() // unreadable: no headless turn is named
+	desktop := t != nil && !plat.Opener.Running(t).IsZero()
 	for _, ag := range st.Agents {
 		v := agentView{Agent: ag, Reachable: "not running", Browser: agentBrowser(a.cfg, ag), Kept: keptBy(st, ag, a.now)}
 		if w := ag.Import; w.Pending(a.now) {
@@ -487,6 +503,10 @@ func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentVie
 			if turn := headlessTurn(t, s.ID); turn != "" {
 				v.Reachable, v.HeadlessTurn = "live, "+turn+" running", true
 			}
+		}
+		if desktop && started(st, ag.Party) && !a.hasRow(ag.Session) {
+			v.NoRow = true
+			v.Reachable += ", no desktop row"
 		}
 		out = append(out, v)
 	}
@@ -547,7 +567,7 @@ func (a *app) printAgents(views []agentView) {
 		_, _ = fmt.Fprintln(a.out, "no agent is registered")
 		return
 	}
-	w, headless := a.table(), 0
+	w, headless, rowless := a.table(), 0, 0
 	_, _ = fmt.Fprintln(w, "AGENT\tTASK\tSINCE\tMODEL\tBROWSER\tREACHABLE\tKEPT")
 	for _, v := range views {
 		task, since := "(idle)", v.IdleSince
@@ -555,10 +575,14 @@ func (a *app) printAgents(views []agentView) {
 			task, since = v.Task, v.AssignedAt
 		}
 		headless += boolInt(v.HeadlessTurn)
+		rowless += boolInt(v.NoRow)
 		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", truncate(v.Name, 30), truncate(task, 60), clock(a.now, since), cmp.Or(truncate(v.Model, 32), "-"), cmp.Or(v.Browser, "-"), v.Reachable, cmp.Or(truncate(v.Kept, 50), "-"))
 	}
 	_ = w.Flush()
 	if headless > 0 {
 		_, _ = fmt.Fprintf(a.out, "%s in a headless turn: Claude Desktop's sidebar shows the row idle, this roster is the busy view\n", plural(headless, "agent"))
+	}
+	if rowless > 0 {
+		_, _ = fmt.Fprintf(a.out, "%s without a desktop row: the desktop never imported the session (at its cap of CLIs, say); the standby watch imports one whose headless turn runs, the doctor reopens one whose CLI does not run, once the desktop has room\n", plural(rowless, "agent"))
 	}
 }

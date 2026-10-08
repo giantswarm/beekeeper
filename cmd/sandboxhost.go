@@ -73,17 +73,24 @@ func (a *app) onHost(c *cobra.Command, op string, timeout time.Duration) *cobra.
 			}
 			return a.brokeredAnswer(sandbox.Request{Op: op, Args: argv}, timeout, true)
 		}
-		argv, err := a.scratchArgv(cmd, args)
-		if err != nil {
-			return err
-		}
-		dir, err := a.hostSpool()
-		if err != nil {
-			return err
-		}
-		return a.brokeredAnswerIn(dir, sandbox.Request{Op: op, Args: argv}, timeout, true)
+		return a.agentsOnHost(cmd, args, timeout)
 	}
 	return c
+}
+
+// agentsOnHost runs an agents start, wake or resume through the host's
+// broker, streamed for up to timeout, its state the scratch configuration's
+// when the call names one.
+func (a *app) agentsOnHost(cmd *cobra.Command, args []string, timeout time.Duration) error {
+	argv, err := a.scratchArgv(cmd, args)
+	if err != nil {
+		return err
+	}
+	dir, err := a.hostSpool()
+	if err != nil {
+		return err
+	}
+	return a.brokeredAnswerIn(dir, sandbox.Request{Op: sandbox.OpAgents, Args: argv}, timeout, true)
 }
 
 // brokerArgv is the command line of cmd's call for the broker: its name,
@@ -114,7 +121,7 @@ func (a *app) scratchArgv(cmd *cobra.Command, args []string) ([]string, error) {
 		switch f.Name {
 		case "as":
 			err = refused("--as: a brokered call runs as this session")
-		case "config":
+		case configFlag:
 		default:
 			argv = append(argv, "--"+f.Name+"="+f.Value.String())
 		}
@@ -157,7 +164,7 @@ func brokerFlags(cmd *cobra.Command) ([]string, error) {
 	argv := []string{cmd.Name()}
 	var err error
 	cmd.Flags().Visit(func(f *pflag.Flag) {
-		if f.Name == "as" || f.Name == "config" {
+		if f.Name == "as" || f.Name == configFlag {
 			err = refused("--%s: a brokered call runs as this session, under the host's config", f.Name)
 		}
 		argv = append(argv, "--"+f.Name+"="+f.Value.String())
@@ -267,6 +274,14 @@ func brokeredAgentsArgv(req sandbox.Request, _ bool) ([]string, error) {
 // brokeredWatchArgv is the command line of a brokered watch.
 func brokeredWatchArgv(req sandbox.Request, _ bool) ([]string, error) {
 	if err := brokeredSub(req.Args, "watch", "watch"); err != nil {
+		return nil, err
+	}
+	return req.Args, nil
+}
+
+// brokeredPersonArgv is the command line of a brokered person.
+func brokeredPersonArgv(req sandbox.Request, _ bool) ([]string, error) {
+	if err := brokeredSub(req.Args, personName, personName); err != nil {
 		return nil, err
 	}
 	return req.Args, nil

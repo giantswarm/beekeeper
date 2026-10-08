@@ -101,6 +101,9 @@ const (
 	// OpSign signs a payload with the person's key on the host, where gpg
 	// reaches its agent: git's gpg.program in the sandbox.
 	OpSign = "sign"
+	// OpPerson runs beekeeper person on the host, where the person's own gh
+	// login reads the org's roster.
+	OpPerson = "person"
 )
 
 // Reply is the broker's answer: an empty Error is done, Out, Err and Code

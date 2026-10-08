@@ -2,6 +2,7 @@ package merge
 
 import (
 	"embed"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +30,46 @@ func TestParseArgs(t *testing.T) {
 		if repo != c.repo || pr != c.pr || ok != (c.pr > 0) {
 			t.Errorf("%s: got %s %d %v", c.argv, repo, pr, ok)
 		}
+	}
+}
+
+func TestStripDetach(t *testing.T) {
+	onDone := "beekeeper agents wake x"
+	prMerge := func(args ...string) []string { return append([]string{Tool, "pr", "merge"}, args...) }
+	for _, c := range []struct {
+		name     string
+		argv     []string
+		want     []string
+		stripped []string
+	}{
+		{"detach", prMerge(backstage, "12", detachFlag),
+			prMerge(backstage, "12"), []string{detachFlag}},
+		{"detach with a value", prMerge(detachFlag+"=true", backstage, "12"),
+			prMerge(backstage, "12"), []string{detachFlag + "=true"}},
+		{"on-done separate", prMerge(backstage, "12", detachFlag, onDoneFlag, onDone, "--timeout", "9m"),
+			prMerge(backstage, "12", "--timeout", "9m"), []string{detachFlag, onDoneFlag, onDone}},
+		{"on-done joined", prMerge(onDoneFlag+"="+onDone, detachFlag, backstage, "12"),
+			prMerge(backstage, "12"), []string{onDoneFlag + "=" + onDone, detachFlag}},
+		{"blocking", prMerge(backstage, "12"),
+			prMerge(backstage, "12"), nil},
+		{"after --", prMerge(backstage, "12", "--", detachFlag),
+			prMerge(backstage, "12", "--", detachFlag), nil},
+		{"other command", []string{Tool, "pr", "wait", backstage, "12", detachFlag},
+			[]string{Tool, "pr", "wait", backstage, "12", detachFlag}, nil},
+	} {
+		in := slices.Clone(c.argv)
+		got, stripped := StripDetach(c.argv)
+		if !slices.Equal(got, c.want) || !slices.Equal(stripped, c.stripped) {
+			t.Errorf("%s: got %q, stripped %q", c.name, got, stripped)
+		}
+		if !slices.Equal(c.argv, in) {
+			t.Errorf("%s: the caller's argv changed to %q", c.name, c.argv)
+		}
+	}
+	// An --on-done command shaped like a repository is no longer the merge's.
+	argv, _ := StripDetach(prMerge(onDoneFlag, "notify/me", backstage, "12"))
+	if repo, pr, ok := ParseArgs(argv); !ok || repo != backstage || pr != 12 {
+		t.Errorf("parsed %s %d %v after stripping", repo, pr, ok)
 	}
 }
 
@@ -422,6 +463,22 @@ func TestParsePromoteDocument(t *testing.T) {
 	}
 }
 
+func TestParsePromoteCandidate(t *testing.T) {
+	for raw, want := range map[string]string{
+		`{"repositories":[{"repository":"o/r","candidate":"v0.49.1-rc.2","state":"would_dispatch"}]}`: "v0.49.1-rc.2",
+		`{"repositories":[{"repository":"o/r","state":"nothing_to_promote"}]}`:                        "",
+	} {
+		if c, ok := ParsePromoteCandidate([]byte(raw)); !ok || c != want {
+			t.Errorf("%s: %q %v, want %q", raw, c, ok, want)
+		}
+	}
+	for _, raw := range []string{"not json", `{"repositories":[]}`, `{"repositories":[{},{}]}`} {
+		if _, ok := ParsePromoteCandidate([]byte(raw)); ok {
+			t.Errorf("%s parsed", raw)
+		}
+	}
+}
+
 func TestHung(t *testing.T) {
 	now := time.Now()
 	for _, c := range []struct {
@@ -436,6 +493,31 @@ func TestHung(t *testing.T) {
 	} {
 		if got := Hung(c.p, now, 45*time.Minute); got != c.want {
 			t.Errorf("%s: Hung = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// A window whose merge released ends once the tool reports that release or a
+// later one; any other window once the tool reports another version than at
+// its opening.
+func TestInstalled(t *testing.T) {
+	released := state.Hold{Tool: Tool, ToolFrom: "v8.0.0", ToolMerged: true, ToolRelease: "v8.1.0"}
+	opened := state.Hold{Tool: Tool, ToolFrom: "v8.0.0"}
+	for _, c := range []struct {
+		h    state.Hold
+		v    string
+		want bool
+	}{
+		{released, "8.0.0", false},
+		{released, "8.0.5", false},
+		{released, "8.1.0", true},
+		{released, "v8.1.0", true},
+		{released, "8.2.0", true},
+		{opened, "8.0.0", false},
+		{opened, "8.0.1", true},
+	} {
+		if got := Installed(c.h, c.v); got != c.want {
+			t.Errorf("Installed(%+v, %q) = %v, want %v", c.h, c.v, got, c.want)
 		}
 	}
 }

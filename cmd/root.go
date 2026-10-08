@@ -26,7 +26,8 @@ import (
 
 // Exit codes: 0 done, 1 error, 2 usage, 3 refused (a lease held or not
 // granted, a hold set, the budget under its floor, a platform part this
-// build does not have), 4 relieved (supervisor status in the session a
+// build does not have, a save by a release older than the one that wrote
+// the state), 4 relieved (supervisor status in the session a
 // relay relieved), 69 central unreachable (ExitCentral: a central verb
 // whose instance did not answer), 78 vault (ExitVault: beekeeper secret
 // could not read the shared vault: none configured, no token, op failing
@@ -55,7 +56,8 @@ func Code(err error) int {
 	if errors.As(err, &e) {
 		return e.code
 	}
-	if platform.Missing(err) {
+	var stale *state.StaleWriterError
+	if platform.Missing(err) || errors.As(err, &stale) {
 		return ExitRefused
 	}
 	return ExitError
@@ -65,6 +67,9 @@ func refused(format string, a ...any) error {
 	return &exitError{code: ExitRefused, msg: fmt.Sprintf(format, a...)}
 }
 
+// configFlag names the configuration file.
+const configFlag = "config"
+
 func usageErr(format string, a ...any) error {
 	return &exitError{code: ExitUsage, msg: fmt.Sprintf(format, a...)}
 }
@@ -72,6 +77,7 @@ func usageErr(format string, a ...any) error {
 // Main runs the command line and returns the process exit code. An error
 // without a message (a wrapped command's exit code) prints nothing.
 func Main() int {
+	defer cpuProfile(os.Getenv("BEEKEEPER_CPUPROFILE"))()
 	err := New().Execute()
 	if err == nil {
 		return 0
@@ -106,6 +112,9 @@ type app struct {
 	// guideDues are the guide's relay dues its guide watch said; nil in a
 	// guide watch --once.
 	guideDues relayDues
+	// transcripts keeps a watch's transcript reads across its polls; nil
+	// reads every time.
+	transcripts *claude.TranscriptCache
 }
 
 // New returns the root command.
@@ -137,7 +146,7 @@ with central configured), 125 a newer release (self-update --check).`,
 	}
 	root.SetVersionTemplate("{{.Name}} {{.Version}}\n")
 	pf := root.PersistentFlags()
-	pf.StringVar(&a.cfgPath, "config", "", "configuration file (default $XDG_CONFIG_HOME/beekeeper/config.yaml, or $BEEKEEPER_CONFIG)")
+	pf.StringVar(&a.cfgPath, configFlag, "", "configuration file (default $XDG_CONFIG_HOME/beekeeper/config.yaml, or $BEEKEEPER_CONFIG)")
 	pf.StringVar(&a.as, "as", "", "act as this person or script instead of the calling Claude Code session")
 	pf.BoolVar(&a.json, "json", false, "print JSON")
 
@@ -151,7 +160,7 @@ with central configured), 125 a newer release (self-update --check).`,
 		c.GroupID = "watching"
 		root.AddCommand(c)
 	}
-	for _, c := range []*cobra.Command{a.leaseCmd(), a.holdCmd(), a.lanesCmd(), a.boardCmd(), a.browseCmd()} {
+	for _, c := range []*cobra.Command{a.leaseCmd(), a.holdCmd(), a.lanesCmd(), a.boardCmd(), a.browseCmd(), a.onHost(a.personCmd(), sandbox.OpPerson, brokeredCallTimeout+time.Minute)} {
 		c.GroupID = "sharing"
 		root.AddCommand(c)
 	}
@@ -163,7 +172,7 @@ with central configured), 125 a newer release (self-update --check).`,
 		c.GroupID = "guarding"
 		root.AddCommand(c)
 	}
-	root.AddCommand(a.installCmd(), a.uninstallCmd(), a.selfUpdateCmd(), a.versionCmd(), a.mergeChildCmd(), a.followRunCmd(), a.squashMergeCmd(), a.centralCmd())
+	root.AddCommand(a.installCmd(), a.uninstallCmd(), a.selfUpdateCmd(), a.versionCmd(), a.configCmd(), a.mergeChildCmd(), a.followRunCmd(), a.squashMergeCmd(), a.centralCmd())
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
 		return &exitError{code: ExitUsage, msg: err.Error()}
 	})
@@ -220,15 +229,9 @@ func (a *app) callerSession() (state.Party, error) {
 	if a.as != "" {
 		return state.Party{Name: a.as}, nil
 	}
-	// An omp agent beekeeper started is its roster entry, whatever session
-	// variables its tool shell carries.
-	if id := os.Getenv(omp.EnvAgent); id != "" {
-		return state.Party{HostSession: omp.HostPrefix + id, Name: os.Getenv(omp.EnvName)}, nil
-	}
-	p := state.Party{
-		Session:     os.Getenv("CLAUDE_CODE_SESSION_ID"),
-		HostSession: os.Getenv("CLAUDE_CODE_HOST_SESSION_ID"),
-		Name:        os.Getenv("CLAUDE_CODE_SESSION_NAME"),
+	p := envParty(os.Getenv)
+	if os.Getenv(omp.EnvAgent) != "" {
+		return p, nil
 	}
 	if p.Session == "" {
 		return p, &exitError{code: ExitUsage, msg: "not inside a Claude Code session: pass --as <name>"}
@@ -247,6 +250,20 @@ func (a *app) callerSession() (state.Party, error) {
 		p.Name = p.Session
 	}
 	return p, nil
+}
+
+// envParty is the session an environment names, read with get: an omp agent
+// beekeeper started is its roster entry, whatever session variables its tool
+// shell carries; else the Claude Code session's ids and name.
+func envParty(get func(string) string) state.Party {
+	if id := get(omp.EnvAgent); id != "" {
+		return state.Party{HostSession: omp.HostPrefix + id, Name: get(omp.EnvName)}
+	}
+	return state.Party{
+		Session:     get("CLAUDE_CODE_SESSION_ID"),
+		HostSession: get("CLAUDE_CODE_HOST_SESSION_ID"),
+		Name:        get("CLAUDE_CODE_SESSION_NAME"),
+	}
 }
 
 // sessions reads the process table and the running sessions.

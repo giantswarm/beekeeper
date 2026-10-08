@@ -54,7 +54,6 @@ func (systemdMachine) MemoryPressure() (float64, error)   { return machine.ReadP
 func (systemdMachine) CPUPressure() (float64, error)      { return machine.ReadCPUPSISome10() }
 func (systemdMachine) Processes() (*proc.Table, error)    { return proc.Read() }
 func (systemdMachine) Started(pid int) (time.Time, error) { return proc.Started(pid) }
-func (systemdMachine) SwapoffRuns() bool                  { return machine.SwapoffRuns() }
 
 func (systemdMachine) OOMDSwap(ctx context.Context) (machine.OOMDSwap, error) {
 	return machine.ReadOOMDSwap(ctx)
@@ -133,6 +132,15 @@ type systemdLauncher struct{}
 func (systemdLauncher) Available() bool { return userSystemd() }
 
 func (systemdLauncher) Start(u Unit) error {
+	out, err := exec.Command("systemd-run", runArgs(u)...).CombinedOutput() //nolint:gosec // starting the unit is the purpose
+	if err != nil {
+		return fmt.Errorf("systemd-run: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// runArgs is systemd-run's command line for u.
+func runArgs(u Unit) []string {
 	args := []string{userManager, "--collect", "--quiet", "--unit=" + u.Name}
 	if u.KeepChildren {
 		args = append(args, "-p", "KillMode=process")
@@ -146,18 +154,23 @@ func (systemdLauncher) Start(u Unit) error {
 		args = append(args, "--working-directory="+u.Dir)
 	}
 	if len(u.StopPost) > 0 {
-		args = append(args, "-p", "ExecStopPost="+strings.Join(u.StopPost, " "), "-p", "TimeoutStopSec="+strconv.Itoa(int(u.StopTimeout.Seconds())))
+		// "-": the stop-post's own end, a kill included, never fails the unit.
+		args = append(args, "-p", "ExecStopPost=-"+strings.Join(u.StopPost, " "))
+	}
+	if u.StopTimeout > 0 {
+		args = append(args, "-p", "TimeoutStopSec="+seconds(u.StopTimeout))
+	}
+	if u.MaxRuntime > 0 {
+		args = append(args, "-p", "RuntimeMaxSec="+seconds(u.MaxRuntime))
 	}
 	for _, e := range u.Env {
 		args = append(args, "--setenv="+e)
 	}
-	args = append(append(args, "--"), u.Argv...)
-	out, err := exec.Command("systemd-run", args...).CombinedOutput() //nolint:gosec // starting the unit is the purpose
-	if err != nil {
-		return fmt.Errorf("systemd-run: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
+	return append(append(args, "--"), u.Argv...)
 }
+
+// seconds is d as a service manager's time value in whole seconds.
+func seconds(d time.Duration) string { return strconv.Itoa(int(d.Seconds())) }
 
 func (systemdLauncher) Freeze(ctx context.Context, name string) error {
 	return systemctlUser(ctx, "freeze", name)
@@ -171,9 +184,9 @@ func (systemdLauncher) Stop(ctx context.Context, name string) error {
 	return systemctlUser(ctx, "stop", name)
 }
 
-// systemctlUser runs one systemctl --user verb on unit.
-func systemctlUser(ctx context.Context, verb, unit string) error {
-	out, err := exec.CommandContext(ctx, "systemctl", userManager, verb, unit).CombinedOutput() //nolint:gosec // the unit beekeeper named
+// systemctlUser runs one systemctl --user verb on the units.
+func systemctlUser(ctx context.Context, verb string, units ...string) error {
+	out, err := exec.CommandContext(ctx, "systemctl", append([]string{userManager, verb}, units...)...).CombinedOutput() //nolint:gosec // the units beekeeper named
 	if err != nil {
 		return fmt.Errorf("systemctl --user %s: %w: %s", verb, err, strings.TrimSpace(string(out)))
 	}
@@ -190,7 +203,23 @@ func (systemdLauncher) Running(ctx context.Context, stopping bool, patterns ...s
 	if stopping {
 		states += ",deactivating"
 	}
-	args := append([]string{userManager, "list-units", "--plain", "--no-legend", states}, patterns...)
+	return listUnits(ctx, states, patterns)
+}
+
+func (systemdLauncher) Failed(ctx context.Context, patterns ...string) []string {
+	return listUnits(ctx, "--state=failed", patterns)
+}
+
+func (systemdLauncher) ResetFailed(ctx context.Context, units ...string) error {
+	if len(units) == 0 {
+		return nil
+	}
+	return systemctlUser(ctx, "reset-failed", units...)
+}
+
+// listUnits lists the units in states matching the patterns.
+func listUnits(ctx context.Context, states string, patterns []string) []string {
+	args := append([]string{userManager, "list-units", "--all", "--plain", "--no-legend", states}, patterns...)
 	out, _ := exec.CommandContext(ctx, "systemctl", args...).Output() //nolint:gosec // the units beekeeper named
 	var units []string
 	for line := range strings.Lines(string(out)) {
@@ -238,14 +267,27 @@ func (c Cap) slice() string {
 	return c.Slice
 }
 
-// CapSlot sets the slot slice's limits for this boot.
+// CapSlot sets the slot slice's limits for this boot, and memcap.slice's
+// CPU budget, which every slot shares.
 func (systemdCapper) CapSlot(c Cap) error {
-	out, err := exec.Command("systemctl", userManager, "set-property", "--runtime", c.slice(), //nolint:gosec // our own sizes
-		"MemoryMax="+c.Max, "MemorySwapMax="+c.Swap).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("capping %s: %v: %s", c.slice(), err, strings.TrimSpace(string(out)))
+	for _, p := range sliceProperties(c) {
+		out, err := exec.Command("systemctl", append([]string{userManager, "set-property", "--runtime"}, p...)...).CombinedOutput() //nolint:gosec // our own sizes
+		if err != nil {
+			return fmt.Errorf("capping %s: %v: %s", p[0], err, strings.TrimSpace(string(out)))
+		}
 	}
 	return nil
+}
+
+// sliceProperties are a slot cap's set-property calls, each a unit and its
+// assignments: memcap.slice's CPU budget (with a CPUWeight; an empty
+// CPUQuota lifts the quota), then the slot slice's memory.
+func sliceProperties(c Cap) [][]string {
+	var out [][]string
+	if c.CPUWeight > 0 {
+		out = append(out, []string{memcapSlice, "CPUQuota=" + c.CPUQuota, "CPUWeight=" + strconv.Itoa(c.CPUWeight)})
+	}
+	return append(out, []string{c.slice(), "MemoryMax=" + c.Max, "MemorySwapMax=" + c.Swap})
 }
 
 // Command is argv in a transient scope in the slot's slice. systemd-run's
@@ -253,10 +295,16 @@ func (systemdCapper) CapSlot(c Cap) error {
 // the argument list reaches the command verbatim, so a wrapped `zsh -c`
 // keeps ${=files}, ${(f)x}, ${pipestatus[1]} and $$.
 func (systemdCapper) Command(name string, c Cap, argv []string) (*exec.Cmd, error) {
-	args := append([]string{userManager, "--scope", "--quiet", "--expand-environment=no", "--unit=" + name,
-		"--slice=" + c.slice(), "-p", "MemoryMax=" + c.Max, "-p", "MemorySwapMax=" + c.Swap,
+	return exec.Command("systemd-run", scopeArgs(name, c, argv)...), nil //nolint:gosec // running the caller's command is the purpose
+}
+
+// scopeArgs is systemd-run's argument list for the scope name around argv:
+// the slot's slice, the memory cap, and the command at RunNice, which
+// systemd-run applies itself in --scope mode.
+func scopeArgs(name string, c Cap, argv []string) []string {
+	return append([]string{userManager, "--scope", "--quiet", "--expand-environment=no", "--unit=" + name,
+		"--slice=" + c.slice(), "--nice=" + strconv.Itoa(RunNice), "-p", "MemoryMax=" + c.Max, "-p", "MemorySwapMax=" + c.Swap,
 		"-p", "OOMPolicy=continue", "--"}, argv...)
-	return exec.Command("systemd-run", args...), nil //nolint:gosec // running the caller's command is the purpose
 }
 
 // Adopt starts the transient scope name around the running process pid

@@ -33,6 +33,12 @@ const (
 	Tool = "devctl"
 )
 
+// devctl pr merge's flags of a detached merge, which the gate drops.
+const (
+	detachFlag = "--detach"
+	onDoneFlag = "--on-done"
+)
+
 var (
 	repoArg = regexp.MustCompile(`^[\w.-]+/[\w.-]+$`)
 	numArg  = regexp.MustCompile(`^\d+$`)
@@ -57,6 +63,50 @@ func ParseArgs(argv []string) (repo string, pr int, ok bool) {
 		}
 	}
 	return "", 0, false
+}
+
+// StripDetach drops devctl pr merge's --detach and --on-done (with its
+// command, either form) from argv: the gate runs every merge outside its
+// caller already, and a detached devctl would leave the gate's unit and its
+// lane accounting. stripped lists what went; argv of any other command comes
+// back as it is.
+func StripDetach(argv []string) (out, stripped []string) {
+	i := slices.Index(argv, "merge")
+	if i < 1 || argv[i-1] != "pr" {
+		return argv, nil
+	}
+	out = slices.Clip(argv[:i+1])
+	for j := i + 1; j < len(argv); j++ {
+		switch a := argv[j]; {
+		case a == "--":
+			return append(out, argv[j:]...), stripped
+		case a == detachFlag || strings.HasPrefix(a, detachFlag+"="),
+			strings.HasPrefix(a, onDoneFlag+"="):
+			stripped = append(stripped, a)
+		case a == onDoneFlag:
+			stripped = append(stripped, a)
+			if j+1 < len(argv) {
+				j++
+				stripped = append(stripped, argv[j])
+			}
+		default:
+			out = append(out, a)
+		}
+	}
+	return out, stripped
+}
+
+// noReleaseWaitFlag ends devctl pr merge at the merge.
+const noReleaseWaitFlag = "--no-release-wait"
+
+// NoReleaseWait is a devctl pr merge argument vector that ends at the merge:
+// argv with --no-release-wait after its subcommand, unless it has it.
+func NoReleaseWait(argv []string) []string {
+	i := slices.Index(argv, "merge")
+	if i < 0 || slices.Contains(argv, noReleaseWaitFlag) {
+		return argv
+	}
+	return slices.Insert(slices.Clone(argv), i+1, noReleaseWaitFlag)
 }
 
 // ParsePromote finds the one repository of a devctl release promote
@@ -99,6 +149,22 @@ func ParsePromoteDocument(raw []byte) (Outcome, bool) {
 		o.Release, _, _ = strings.Cut(r.Candidate, "-")
 	}
 	return o, true
+}
+
+// ParsePromoteCandidate reads the candidate of devctl release promote
+// --dry-run's JSON document for one repository: the release candidate a
+// promotion would dispatch now, "" when there is none. ok is false when the
+// document names no single repository.
+func ParsePromoteCandidate(raw []byte) (candidate string, ok bool) {
+	var doc struct {
+		Repositories []struct {
+			Candidate string `json:"candidate"`
+		} `json:"repositories"`
+	}
+	if json.Unmarshal(raw, &doc) != nil || len(doc.Repositories) != 1 {
+		return "", false
+	}
+	return doc.Repositories[0].Candidate, true
 }
 
 // owned are the subcommands of devctl that block until an outcome, which
@@ -590,8 +656,6 @@ func follows(rng, release string) bool {
 	return c.Check(v)
 }
 
-// bare is a version without a leading v and without build metadata: a tag
-// v1.2.3 and a chart version 1.2.3+1c161d9d name the same release.
 // reached says whether a HelmRelease on version have runs release or a
 // later one in semver order. A merge cuts a release candidate: an
 // installation on a stable range runs its promotion, X.Y.Z after X.Y.Z-rc.N,
@@ -606,6 +670,19 @@ func reached(have, release string) bool {
 	return !h.LessThan(r)
 }
 
+// Installed says whether the merge tool reporting version v ends the
+// tool-release window h: a window whose merge released waits for the tool to
+// report that release or a later one, any other for a version other than the
+// one it opened on.
+func Installed(h state.Hold, v string) bool {
+	if h.ToolMerged && h.ToolRelease != "" {
+		return reached(v, h.ToolRelease)
+	}
+	return bare(v) != bare(h.ToolFrom)
+}
+
+// bare is a version without a leading v and without build metadata: a tag
+// v1.2.3 and a chart version 1.2.3+1c161d9d name the same release.
 func bare(v string) string {
 	v = strings.TrimPrefix(v, "v")
 	if i := strings.IndexByte(v, '+'); i >= 0 {

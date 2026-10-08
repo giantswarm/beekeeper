@@ -321,6 +321,9 @@ func TestEnvtestRefusals(t *testing.T) {
 	if err := a.Log(state.Event{Verb: "build.run"}); !errors.Is(err, ErrLocal) {
 		t.Errorf("Log: %v", err)
 	}
+	if err := a.Record(state.Event{Verb: "secret.copy"}); !errors.Is(err, ErrLocal) {
+		t.Errorf("Record: %v", err)
+	}
 	if _, err := a.ReadFile("snapshot.json", nil); !errors.Is(err, ErrLocal) {
 		t.Errorf("ReadFile: %v", err)
 	}

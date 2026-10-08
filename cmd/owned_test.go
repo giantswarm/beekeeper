@@ -130,14 +130,16 @@ func TestAnUnheardRunWakesItsOwner(t *testing.T) {
 }
 
 func TestRunReason(t *testing.T) {
-	for _, c := range []struct{ doc, last, want string }{
-		{greenDoc, "x", "green: every check passed"},
-		{mergedDoc, "x", "merged, release v1.2.4"},
-		{`{"mergeCommitSha":"abc","verdict":"merged","reason":"released"}`, "", "merged, release unknown; merged: released"},
-		{"", "devctl: not found", "devctl: not found"},
-		{"", "", "no output"},
+	for _, c := range []struct{ doc, last, handCut, want string }{
+		{greenDoc, "x", "", "green: every check passed"},
+		{mergedDoc, "x", "", "merged, release v1.2.4"},
+		{`{"mergeCommitSha":"abc","verdict":"merged","reason":"released"}`, "", "", "merged, release unknown; merged: released"},
+		{`{"mergeCommitSha":"abc","verdict":"merged","release":null}`, "", "release-1.3",
+			"merged, release none awaited, release-1.3 has no auto-release and its tags are cut by hand; merged"},
+		{"", "devctl: not found", "", "devctl: not found"},
+		{"", "", "", "no output"},
 	} {
-		if got := runReason([]byte(c.doc), c.last); got != c.want {
+		if got := runReason([]byte(c.doc), c.last, c.handCut); got != c.want {
 			t.Errorf("runReason(%q, %q) = %q, want %q", c.doc, c.last, got, c.want)
 		}
 	}

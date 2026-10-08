@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 // Runner runs a credential tool in dir with stdin, its environment plus
@@ -57,9 +58,15 @@ type Ops struct {
 // in time fails like a locked vault, never hangs the caller.
 const opTimeout = time.Minute
 
-// Exec is the Runner of the real tools.
+// Exec is the Runner of the real tools, found on PATH or in the Go tool
+// directories (proc.LookPath): the sandbox broker's calls run with the
+// service manager's PATH, without the directory kind lives in.
 func Exec(ctx context.Context, dir string, env []string, stdin io.Reader, name string, args ...string) ([]byte, error) {
-	c := exec.CommandContext(ctx, name, args...) //nolint:gosec // sops and op, beekeeper's own calls
+	path, err := proc.LookPath(name)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	c := exec.CommandContext(ctx, path, args...) //nolint:gosec // sops, op and kind, beekeeper's own calls
 	c.Dir = dir
 	if env != nil {
 		c.Env = append(os.Environ(), env...)

@@ -37,7 +37,11 @@ type VaultState struct {
 	Unlocked bool      `json:"unlocked"`
 	Since    time.Time `json:"since,omitzero"`
 	Until    time.Time `json:"until,omitzero"`
-	Error    string    `json:"error,omitempty"`
+	// Error is why the last sign-in failed for good, after its retries.
+	Error string `json:"error,omitempty"`
+	// Retrying is what the running sign-in waits on or retries after, and
+	// when it looks again; empty once it unlocked or failed for good.
+	Retrying string `json:"retrying,omitempty"`
 	// Dropped is why op stopped taking the last session, at DroppedAt;
 	// empty once a sign-in unlocked again.
 	Dropped   string    `json:"dropped,omitempty"`

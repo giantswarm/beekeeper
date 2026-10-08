@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,7 +25,10 @@ import (
 
 // Seams for the tests.
 var (
-	pullState     = github.PullState
+	pullState   = github.PullState
+	baseRelease = func(ctx context.Context, repo string, n int) (github.BaseRelease, error) {
+		return github.ReadBaseRelease(ctx, github.RunGH, repo, n)
+	}
 	devctlVersion = toolVersion
 	devctlUpdate  = toolUpdate
 	userSystemd   = plat.Launcher.Available
@@ -118,7 +122,8 @@ const (
 // Owner is the session the outcome goes to, Gate the pid of the gate that
 // hands it over while its caller listens, Config the configuration a wake of
 // the owner loads, Command the devctl command Argv stands for when Argv is
-// beekeeper's own (a queued merge, a wait that follows another's poller).
+// beekeeper's own (a queued merge, a wait that follows another's poller),
+// HandCut a merge's base branch that no Auto-release run tags.
 type childSpec struct {
 	Argv    []string    `json:"argv"`
 	Command []string    `json:"command,omitempty"`
@@ -127,6 +132,7 @@ type childSpec struct {
 	Owner   state.Party `json:"owner,omitzero"`
 	Gate    int         `json:"gate,omitempty"`
 	Config  string      `json:"config,omitempty"`
+	HandCut string      `json:"handCut,omitempty"`
 }
 
 // childRun is how a detached run ended for its gate: devctl's document and
@@ -147,9 +153,12 @@ type childRun struct {
 // to base.json, its stderr to base.log, which the gate follows onto its own
 // stderr, and its exit code to base.rc. The gate writes the document to its
 // stdout once devctl ended; a child gone without an exit code counts as
-// killed (137). Only SIGINT, a person's Ctrl-C, reaches devctl; SIGTERM and
-// SIGHUP, a caller going away, do not (outliveCaller keeps them from ending
-// the gate). started gets merge-child's pid.
+// killed (137). SIGINT, a person's Ctrl-C, reaches devctl at once. SIGTERM
+// reaches it when it is a stop aimed at the gate: its caller still there
+// stopGrace later. A caller going away (SIGHUP, or the gate's parent gone
+// with the SIGTERM, a harness killing its command's process tree) does not
+// stop devctl (outliveCaller keeps it from ending the gate). started gets
+// merge-child's pid.
 func runDetached(spec childSpec, base string, started func(pid int)) (r childRun) {
 	defer removeMergeFiles(base)
 	r.rc = guard.ExitNotFound
@@ -166,7 +175,13 @@ func runDetached(spec childSpec, base string, started func(pid int)) (r childRun
 	if err == nil {
 		defer func() { _ = log.Close() }()
 	}
-	said := false
+	said, ppid, term := false, os.Getppid(), time.Time{}
+	away := func(s os.Signal) {
+		if !said {
+			gateLine("%v: the caller is going away; devctl runs on outside it (pid %d) and its outcome reaches its owner", s, pid)
+			said = true
+		}
+	}
 	for {
 		if log != nil {
 			if _, err := io.Copy(os.Stderr, log); err != nil {
@@ -195,19 +210,41 @@ func runDetached(spec childSpec, base string, started func(pid int)) (r childRun
 		}
 		select {
 		case s := <-sig:
-			switch {
-			case s == syscall.SIGINT:
-				if p, err := os.FindProcess(pid); err == nil {
-					_ = p.Signal(os.Interrupt)
+			switch s {
+			case syscall.SIGINT:
+				signalPID(pid, os.Interrupt)
+			case syscall.SIGHUP:
+				away(s)
+			case syscall.SIGTERM:
+				if term.IsZero() && !said {
+					term = time.Now()
 				}
-			case !said:
-				gateLine("%v: the caller is going away; devctl runs on outside it (pid %d) and its outcome reaches its owner", s, pid)
-				said = true
 			}
 		case <-time.After(followPoll):
 		}
+		switch {
+		case term.IsZero():
+		case said || os.Getppid() != ppid:
+			away(syscall.SIGTERM)
+			term = time.Time{}
+		case time.Since(term) >= stopGrace:
+			gateLine("SIGTERM with the caller still there: stopping devctl (pid %d); the run is recorded as one ended by a signal", pid)
+			signalPID(pid, syscall.SIGTERM)
+			term, said = time.Time{}, true
+		}
 	}
 }
+
+// signalPID sends s to pid.
+func signalPID(pid int, s os.Signal) {
+	if p, err := os.FindProcess(pid); err == nil {
+		_ = p.Signal(s)
+	}
+}
+
+// stopGrace is how long a SIGTERM waits for its caller to go away before
+// it counts as a stop aimed at the gate.
+const stopGrace = 2 * time.Second
 
 // launchChild writes spec, with this process's environment, directory and pid as
 // its gate, to base.spec, starts merge-child on it and returns its pid.
@@ -242,7 +279,7 @@ func startChild(base string) error {
 	}
 	if userSystemd() {
 		unit := fmt.Sprintf("beekeeper-merge-%s-%d", filepath.Base(base), time.Now().UnixNano())
-		return plat.Launcher.Start(platform.Unit{Name: unit, Argv: []string{self, mergeChildCmd, base}})
+		return plat.Launcher.Start(platform.Unit{Name: unit, Argv: []string{self, mergeChildCmd, base}, TermIsSuccess: true})
 	}
 	c := exec.Command(self, mergeChildCmd, base) //nolint:gosec // as above
 	platform.Detach(c)
@@ -291,19 +328,19 @@ func (a *app) mergeChildCmd() *cobra.Command {
 	}
 }
 
-// unitExit is the exit of merge-child's unit for devctl's exit code rc. The
-// outcome travels in base.rc to the gate, which hands it to the calling
+// unitExit is the exit of merge-child's unit for its command's exit code rc.
+// The outcome travels in base.rc to the gate, which hands it to the calling
 // session and the event log; the unit fails only where a person must act:
-// devctl's usage or tooling failure (7), its authentication (8), a signal
-// or merge-child itself failing. A merge, a red or unfinished pull request
-// and a refusal (0-6, 9) are the calling session's to act on and end the
-// unit successfully.
+// devctl's authentication (8), a kill or merge-child itself failing. devctl's
+// verdicts (0-7, 9: a merge, a red or unfinished pull request, a refusal, a
+// mistyped flag), the gate's own (76 queued, 77 refused, of a queued merge's
+// gate) and a stop as asked (SIGTERM) are the calling session's to act on and
+// end the unit successfully.
 func unitExit(rc int) int {
-	switch rc {
-	case devctlUsage, devctlAuth:
+	switch {
+	case rc == devctlAuth:
 		return rc
-	}
-	if rc >= 0 && rc <= devctlUnconfirmed {
+	case rc >= 0 && rc <= devctlUnconfirmed, rc == ExitGateQueued, rc == ExitGateRefused, rc == 128+int(syscall.SIGTERM):
 		return 0
 	}
 	return rc

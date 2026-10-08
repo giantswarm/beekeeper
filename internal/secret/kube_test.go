@@ -1,25 +1,35 @@
 package secret_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"maps"
 	"strings"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/secret/secrettest"
 )
 
 const (
-	otherVaultRef  = "op://Private/x/y"
-	kagentNS       = "kagent"
-	labContext     = "kind-agentlab"
-	gazelleContext = "teleport.giantswarm.io-gazelle"
-	alnumSet       = "alnum"
-	hexSet         = "hex"
-	catCmd         = "cat"
-	secretWord     = "secret"
-	setWord        = "set"
+	otherVaultRef   = "op://Private/x/y"
+	kagentNS        = "kagent"
+	labContext      = "kind-agentlab"
+	gazelleContext  = "teleport.giantswarm.io-gazelle"
+	alnumSet        = "alnum"
+	hexSet          = "hex"
+	catCmd          = "cat"
+	secretWord      = "secret"
+	setWord         = "set"
+	oauthName       = "github-oauth-client"
+	clientIDKey     = "client-id"
+	clientSecretKey = "client-secret"
 )
 
 func TestParseKubeTarget(t *testing.T) {
@@ -58,6 +68,73 @@ func TestCopyToSecretAppliesWithKindsKubeconfig(t *testing.T) {
 	if n != len(password) || gotValue != password || gotTarget != tg || gotKC != secrettest.Kubeconfig("agentlab") {
 		t.Errorf("n %d, applied %+v with %q", n, gotTarget, gotKC)
 	}
+}
+
+// TestWriteSecretKeyKeepsTheSecretsOtherKeys copies two keys in sequence
+// into one Secret that already holds both as placeholders and a third key:
+// each write touches its key alone, the rest of the Secret stays.
+func TestWriteSecretKeyKeepsTheSecretsOtherKeys(t *testing.T) {
+	labels := map[string]string{"app.kubernetes.io/managed-by": "placeholders"}
+	annotations := map[string]string{"example.com/placeholder": "true"}
+	existing := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: kagentNS, Name: oauthName, Labels: maps.Clone(labels), Annotations: maps.Clone(annotations)},
+		Type:       corev1.SecretTypeOpaque,
+		Data:       map[string][]byte{clientIDKey: []byte("placeholder"), clientSecretKey: []byte("placeholder"), "extra": []byte("stays")},
+	}
+	c := fake.NewClientBuilder().WithObjects(existing).Build()
+	id, secretValue := []byte("Iv1.0123456789abcdef"), []byte(strings.Repeat("s", 40))
+	writeKey(t, c, clientIDKey, id)
+	writeKey(t, c, clientSecretKey, secretValue)
+	got := readSecret(t, c, oauthName)
+	wantData := map[string][]byte{clientIDKey: id, clientSecretKey: secretValue, "extra": []byte("stays")}
+	if !maps.EqualFunc(got.Data, wantData, bytes.Equal) {
+		t.Errorf("data %v, want %v", keySizes(got.Data), keySizes(wantData))
+	}
+	if !maps.Equal(got.Labels, labels) || !maps.Equal(got.Annotations, annotations) || got.Type != corev1.SecretTypeOpaque {
+		t.Errorf("labels %v, annotations %v, type %q changed", got.Labels, got.Annotations, got.Type)
+	}
+}
+
+// TestWriteSecretKeyCreatesAnAbsentSecret writes two keys into a Secret
+// that does not exist yet: the first write creates it, the second adds
+// its key next to the first.
+func TestWriteSecretKeyCreatesAnAbsentSecret(t *testing.T) {
+	c := fake.NewClientBuilder().Build()
+	id, secretValue := []byte("Iv1.0123456789abcdef"), []byte(strings.Repeat("s", 40))
+	writeKey(t, c, clientIDKey, id)
+	writeKey(t, c, clientSecretKey, secretValue)
+	got := readSecret(t, c, oauthName)
+	wantData := map[string][]byte{clientIDKey: id, clientSecretKey: secretValue}
+	if !maps.EqualFunc(got.Data, wantData, bytes.Equal) {
+		t.Errorf("data %v, want %v", keySizes(got.Data), keySizes(wantData))
+	}
+}
+
+func writeKey(t *testing.T, c client.Client, key string, value []byte) {
+	t.Helper()
+	tg := secret.KubeTarget{Context: labContext, Namespace: kagentNS, Name: oauthName, Key: key}
+	if err := secret.WriteSecretKey(context.Background(), c, tg, value); err != nil {
+		t.Fatalf("%s: %v", tg, err)
+	}
+}
+
+func readSecret(t *testing.T, c client.Client, name string) *corev1.Secret {
+	t.Helper()
+	s := &corev1.Secret{}
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: kagentNS, Name: name}, s); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// keySizes names a Secret's keys with their values' sizes: what a failure
+// may print.
+func keySizes(data map[string][]byte) map[string]int {
+	sizes := make(map[string]int, len(data))
+	for k, v := range data {
+		sizes[k] = len(v)
+	}
+	return sizes
 }
 
 func TestCopyToSecretRedactsTheApplyError(t *testing.T) {

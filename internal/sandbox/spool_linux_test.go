@@ -241,19 +241,27 @@ func TestAStreamedCallEndsWithItsRequester(t *testing.T) {
 	if err := requester.Start(); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = requester.Process.Kill() })
 	if _, err := bufio.NewReader(ready).ReadString('\n'); err != nil {
 		t.Fatal(err)
 	}
+	running := make(chan struct{})
 	ended := make(chan struct{})
 	go func() {
 		answer(context.Background(), path, "/proc", func(ctx context.Context, _ int, req Request) (Reply, error) {
 			_, _ = fmt.Fprintln(req.Output(), "line")
+			close(running)
 			<-ctx.Done()
 			return Reply{}, ctx.Err()
 		})
 		close(ended)
 	}()
-	time.Sleep(100 * time.Millisecond)
+	// the requester ends while its call runs, not before the call found it
+	select {
+	case <-running:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the call never ran")
+	}
 	_ = requester.Process.Kill()
 	_ = requester.Wait()
 	select {

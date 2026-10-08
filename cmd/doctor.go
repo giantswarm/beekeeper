@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"slices"
 	"strings"
@@ -241,25 +242,15 @@ type doctorReport struct {
 	// unagreed counts the finished workers whose archive waits on
 	// agents.archiveAgreement, said once for all, not per agent.
 	unagreed int
-	// stale are the running processes of an older beekeeper that saved the
-	// state after a newer one.
-	stale []state.StaleWriter
+	// stale are the running beekeeper processes of a binary an install
+	// replaced, the watches apart (WATCH STALE names them): their saves of
+	// the state are refused.
+	stale []*proc.Process
 }
 
-// staleLine says a stale writer and what ends it.
-func staleLine(w state.StaleWriter) string {
-	return "stale writer: " + w.String() + "; it keeps the fields it does not know but saves by its older rules until it ends or is restarted"
-}
-
-// liveStaleWriters are the stale writers whose process still runs.
-func liveStaleWriters(st *state.State, alive func(int) bool) []state.StaleWriter {
-	var out []state.StaleWriter
-	for _, w := range st.StaleWriters {
-		if alive(w.PID) {
-			out = append(out, w)
-		}
-	}
-	return out
+// staleLine says a process of a replaced binary and what ends it.
+func staleLine(p *proc.Process) string {
+	return fmt.Sprintf("stale binary: pid %d (%s) runs a beekeeper an install replaced; its saves of the state are refused until it ends or is restarted", p.PID, display(p.Args))
 }
 
 // doctor finds the chores and the faults, and fixes what it may.
@@ -269,11 +260,11 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 	if err != nil {
 		return rep, err
 	}
-	rep.stale = liveStaleWriters(st, proc.Alive)
 	sessions, t, err := a.sessions()
 	if err != nil {
 		return rep, err
 	}
+	rep.stale = slices.DeleteFunc(staleBinaries(t, os.Getpid(), replacedBinary), isWatch)
 	record := func(host string) (*claude.Record, bool) { return claude.ReadRecord(a.cfg, host) }
 	busy := func(p state.Party) bool {
 		_, turn := turnRunning(sessions, t, p, a.now)
@@ -298,9 +289,13 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 			}
 			rep.chores = append(rep.chores, "would "+c.String())
 		}
-		seedArchives(st, record, a.now)
+		seedArchives(st, record, a.reseed(sessions), a.now)
 		for _, o := range planArchives(st, record, busy, a.now) {
 			rep.chores = append(rep.chores, "would "+o.String())
+		}
+		rep.chores = append(rep.chores, a.reopenRowless(ctx, st, t, record, r)...)
+		if line := resetOwnUnits(ctx, true); line != "" {
+			rep.chores = append(rep.chores, line)
 		}
 		return rep, nil
 	}
@@ -365,7 +360,31 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 			return []state.Event{event(r.by, "agents.retitle", "%s: %s", c.agent.Name, line)}, nil
 		})
 	}
+	rep.chores = append(rep.chores, a.reopenRowless(ctx, st, t, record, r)...)
+	if line := resetOwnUnits(ctx, r.dryRun); line != "" {
+		rep.chores = append(rep.chores, line)
+	}
 	return rep, nil
+}
+
+// ownUnits matches every unit beekeeper starts or installs.
+const ownUnits = "beekeeper-*"
+
+// resetOwnUnits clears the failed state of beekeeper's own units, whose
+// outcomes are in the event log and the watch, so the desktop shows no failed
+// unit for them, and says which it cleared; with dryRun it only says them.
+func resetOwnUnits(ctx context.Context, dryRun bool) string {
+	units := plat.Launcher.Failed(ctx, ownUnits)
+	if len(units) == 0 {
+		return ""
+	}
+	if dryRun {
+		return "would reset the failed units " + strings.Join(units, ", ")
+	}
+	if err := plat.Launcher.ResetFailed(ctx, units...); err != nil {
+		return fmt.Sprintf("the failed units %s stay failed: %v", strings.Join(units, ", "), err)
+	}
+	return "reset the failed units " + strings.Join(units, ", ") + ": their outcomes are in the event log"
 }
 
 // owedRun is what the doctor's run found of the archives owed: the agents
@@ -380,9 +399,10 @@ type owedRun struct {
 // when it changes.
 func (a *app) owedArchives(sessions []*claude.Session, record func(host string) (*claude.Record, bool), busy func(state.Party) bool, by state.Party) (owedRun, error) {
 	var run owedRun
+	reseed := a.reseed(sessions)
 	sort := func(st *state.State) []state.Event {
 		run = owedRun{}
-		seedArchives(st, record, a.now)
+		seedArchives(st, record, reseed, a.now)
 		var evs []state.Event
 		for _, o := range planArchives(st, record, busy, a.now) {
 			switch {
@@ -455,8 +475,17 @@ line:
   desktop records it, up to 5 stewards' turns 10 minutes apart within 24h;
   so are archived the session an agents handover ended and the run of the
   supervisor or the guide a relay relieved, which frees its desktop CLI;
+  with no idle steward running, the session's own desktop CLI archives it,
+  warmed by showing the session in the desktop for a moment once the
+  person's typing pauses (a run that asks no steward counts no turn);
 - gives a session beekeeper started the roster name back when the desktop
   recorded another title, through a steward;
+- reopens a worker whose session the desktop never imported (no row in the
+  sidebar: its start ran at the desktop's cap of CLIs, say) and whose CLI
+  does not run, once the desktop runs fewer CLIs than its cap, in a
+  transient unit beekeeper-reopen-<id> that gives it its row and warms its
+  CLI (agent.reopen in the log); the watch says NO DESKTOP ROW once per
+  such worker meanwhile;
 - probes each fault of doctor.faults (a probe exits 0 while the fault is
   absent) and runs the remedy of a failing one that may run unattended,
   or the faults named with --fault; a fault still failing is one note for
@@ -466,10 +495,10 @@ line:
   three quarters of the cap, never while a go build runs (the watch does
   it every doctor.goCacheEvery, 1h, and says GO CACHE when a trim waited
   that long or failed); each trim is logged (gocache.trim);
-- reports a stale writer: a running process of an older beekeeper that
-  saved the state after a newer one (state.stale-writer in the log). Its
-  saves keep the fields it does not know, yet it acts by its older rules
-  until it ends or is restarted.
+- reports a stale binary: a running beekeeper process of a binary an
+  install replaced (a start's reopen, a gate call), whose saves of the
+  state the newer release refuses (state.stale-writer in the log) until
+  it ends or is restarted; a watch is named by WATCH STALE instead.
 
 A session a person started is never archived or retitled, nor one that
 holds or held the supervisor's or the guide's role unless a relay

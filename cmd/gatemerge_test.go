@@ -195,7 +195,7 @@ func noSystemd(t *testing.T) {
 }
 
 func TestASignalExitWithoutADocumentIsJudgedByGitHub(t *testing.T) {
-	gazelleLane := config.Lane{Name: "serving", Installation: "gazelle", Repositories: []string{scratchRepo}}
+	gazelleLane := config.Lane{Name: serving, Installation: gazelle, Repositories: []string{scratchRepo}}
 	toolLane := config.Lane{Name: merge.ToolRepo, Repositories: []string{merge.ToolRepo}}
 	for _, c := range []struct {
 		name, repo, pull string
@@ -306,10 +306,14 @@ func TestADeadMergesToolWindowCloses(t *testing.T) {
 	}
 }
 
-// A merge-child unit fails only where a person must act; devctl's verdicts
-// on the pull request are its caller's and end the unit successfully.
+// A merge-child unit fails only where a person must act; devctl's verdicts,
+// the gate's and a stop as asked are its caller's and end the unit
+// successfully.
 func TestMergeChildUnitFailsOnlyForAPerson(t *testing.T) {
-	for rc, want := range map[int]int{0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 9: 0, 7: 7, 8: 8, 127: 127, 130: 130, 137: 137} {
+	for rc, want := range map[int]int{
+		0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 9: 0, ExitGateQueued: 0, ExitGateRefused: 0, 143: 0,
+		8: 8, 75: 75, 127: 127, 130: 130, 137: 137,
+	} {
 		if got := unitExit(rc); got != want {
 			t.Errorf("devctl exit %d: unit exit %d, want %d", rc, got, want)
 		}
@@ -489,5 +493,49 @@ func TestANoReleaseToolMergeLiftsItsWindow(t *testing.T) {
 	}
 	if d := lastEvent(t, g, "hold.lift"); !strings.Contains(d, "warranted no release") {
 		t.Errorf("hold.lift event: %q", d)
+	}
+}
+
+// A devctl merge queued behind a devctl release starts on that release: the
+// gate runs devctl's update before it starts, and the merge waits while the
+// window of the previous release is open, as devctl would otherwise run on
+// the version that release replaced and refuse (exit 7).
+func TestADevctlMergeWaitsForThePreviousRelease(t *testing.T) {
+	stubGitHub(t, github.Merged, devctlFrom)
+	updates := 0
+	devctlUpdate = func(context.Context) error { updates++; return nil }
+	g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
+	g.cfg.Merge.Cap = 10
+	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Merges[0].Phase, st.Merges[0].Started = state.Waiting, time.Time{}
+		st.Holds[0].ToolMerged, st.Holds[0].ToolRelease, st.Holds[0].ToolPR = true, devctlTo, 6
+		return nil, nil
+	})
+	why, err := g.start("", nil)
+	if err != nil || !strings.Contains(why, "waiting for devctl to report "+devctlTo) || !strings.Contains(why, merge.ToolRepo+"#6") {
+		t.Fatalf("start: %q, %v", why, err)
+	}
+	if updates != 1 {
+		t.Errorf("%d updates before the start, want 1", updates)
+	}
+	st := gateState(t, g)
+	if st.Merges[0].Phase != state.Waiting || len(st.Holds) != 1 || st.Holds[0].ToolPR != 6 {
+		t.Errorf("the merge started or the window changed: %+v, %+v", st.Merges, st.Holds)
+	}
+}
+
+// A merged window stays until devctl reports its release: another version
+// than the window's opening one is not enough.
+func TestAMergedToolWindowWaitsForItsRelease(t *testing.T) {
+	stubGitHub(t, github.Merged, "v8.0.5")
+	g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
+	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Merges = nil
+		st.Holds[0].ToolMerged, st.Holds[0].ToolRelease = true, devctlTo
+		return nil, nil
+	})
+	g.closeToolWindow(context.Background(), watchParty)
+	if st := gateState(t, g); len(st.Holds) != 1 {
+		t.Fatalf("lifted on v8.0.5 before %s: %+v", devctlTo, st.Holds)
 	}
 }

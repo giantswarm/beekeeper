@@ -323,7 +323,7 @@ func (r childResult) outcome() string {
 		argv = []string{"devctl"}
 	}
 	cmd := strings.Join(append([]string{filepath.Base(argv[0])}, argv[1:]...), " ")
-	line := fmt.Sprintf("%s exit %d: %s", cmd, r.rc, runReason(r.doc, r.last))
+	line := fmt.Sprintf("%s exit %d: %s", cmd, r.rc, runReason(r.doc, r.last, r.spec.HandCut))
 	if r.kept != "" {
 		line += " (output in " + r.kept + ")"
 	}
@@ -331,8 +331,9 @@ func (r childResult) outcome() string {
 }
 
 // runReason is what a run's document says about its end, else its last
-// stderr line.
-func runReason(doc []byte, last string) string {
+// stderr line; handCut is a merge's base branch that no Auto-release run
+// tags, whose release nobody awaits.
+func runReason(doc []byte, last, handCut string) string {
 	var d struct {
 		Verdict string `json:"verdict"`
 		Reason  string `json:"reason"`
@@ -342,6 +343,8 @@ func runReason(doc []byte, last string) string {
 	if o, ok := merge.ParseDocument(doc); ok && o.Merged {
 		rel := o.Release
 		switch {
+		case handCut != "":
+			rel = "none awaited, " + handCut + " has no auto-release and its tags are cut by hand"
 		case o.NoRelease:
 			rel = "none warranted"
 		case rel == "":

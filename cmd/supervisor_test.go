@@ -139,7 +139,7 @@ func TestRelayDueAtTheContextOnceAtAQuietMoment(t *testing.T) {
 	now := relayNow
 	sessions := []*claude.Session{{ID: supA.Session, HostID: supA.HostSession, Name: supA.Name, Transcript: supervisorTranscript}}
 	st := &state.State{Supervisor: &state.Supervisor{Party: supA, Since: now.Add(-3 * time.Hour)}}
-	if c := sessionContext(sessions, supA, now); c != 163018 {
+	if c := sessionContext(sessions, supA); c != 163018 {
 		t.Fatalf("the supervisor's context from its transcript: %d", c)
 	}
 	if c := relayContext(st, sessions, now, 200_000, nil); c != 0 {

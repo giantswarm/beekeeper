@@ -153,10 +153,11 @@ func TestLoadRejects(t *testing.T) {
 		"age without op ref":   "secret: {ageIdentities: [{recipient: age1x, ref: ~/key.txt}]}",
 		"age relative file":    "secret: {ageIdentities: [{recipient: age1x, ref: \"file://key.txt\"}]}",
 		"age bad pathRegex":    "secret: {ageIdentities: [{pathRegex: \"[\", ref: op://V/i/f}]}",
-		"age store no read":    "secret: {ageIdentities: [{recipient: age1x, ref: store://keys/age}]}",
-		"age store no search":  "secret: {store: {read: [r]}, ageIdentities: [{recipient: age1x, ref: \"store://\"}]}",
 		"nameless board step":  "board: {order: [{status: [backlog]}]}",
 		"search with fields":   "board: {order: [{name: q, search: \"repo:o/r\", status: [backlog]}]}",
+		"omp key as value":     "omp: {providers: {spark: {apiKey: sk-planted}}}",
+		"omp key half ref":     "omp: {providers: {spark: {apiKey: op://Vault/item}}}",
+		"omp key no ref":       "omp: {providers: {spark: {}}}",
 	} {
 		p := filepath.Join(t.TempDir(), "c.yaml")
 		if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
@@ -165,6 +166,25 @@ func TestLoadRejects(t *testing.T) {
 		if _, err := Load(p); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+// An omp provider's key is an op:// reference; the models file has its
+// default beside the sessions.
+func TestOmpProviders(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "c.yaml")
+	if err := os.WriteFile(p, []byte("omp: {providers: {spark: {apiKey: op://Shared/spark/credential}}}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Omp.Providers["spark"].APIKey; got != "op://Shared/spark/credential" {
+		t.Errorf("apiKey = %q", got)
+	}
+	if !strings.HasSuffix(c.Omp.ModelsFile, filepath.Join(".omp", "agent", "models.yml")) {
+		t.Errorf("modelsFile = %q", c.Omp.ModelsFile)
 	}
 }
 
@@ -393,6 +413,14 @@ func TestThresholdsDefaultToFractions(t *testing.T) {
 	if c.KindClusters(88_000) != 2 || c.KindClusters(16_000) != 1 || c.MemcapMax(100_000) != "14000M" || c.MemcapMax(0) != "infinity" {
 		t.Errorf("kind %d/%d, memcap %s", c.KindClusters(88_000), c.KindClusters(16_000), c.MemcapMax(100_000))
 	}
+	if c.MemcapCPUQuota(24) != "1200%" || c.MemcapCPUQuota(3) != "150%" || c.MemcapCPUQuota(0) != "" || c.Memcap.CPUWeight != DefaultMemcapCPUWeight {
+		t.Errorf("memcap CPU: quota %q on 24, %q on 3, %q unknown, weight %d", c.MemcapCPUQuota(24), c.MemcapCPUQuota(3), c.MemcapCPUQuota(0), c.Memcap.CPUWeight)
+	}
+	const quota = "800%"
+	c.Memcap.CPUQuota = quota
+	if c.MemcapCPUQuota(24) != quota || c.MemcapCPUQuota(0) != quota {
+		t.Errorf("memcap.cpuQuota set: %q, %q", c.MemcapCPUQuota(24), c.MemcapCPUQuota(0))
+	}
 	if _, err := Load(writeTemp(t, "kube: {contextTemplate: login.example.com}\n")); err == nil {
 		t.Error("a context template without {installation} loads")
 	}
@@ -477,5 +505,32 @@ func TestSandbox(t *testing.T) {
 	}
 	if _, err := Load(write("sandbox: {domains: ['127.0.0.1:6443', '[::1]:6443', 'github.com', '*.circleci.com']}\n")); err != nil {
 		t.Errorf("a lab's port: %v", err)
+	}
+}
+
+// A store:// reference without its secret.store section loads: only the
+// commands that follow it fail, each said once by Incomplete.
+func TestIncompleteStoreRef(t *testing.T) {
+	for raw, want := range map[string]string{
+		"secret: {ageIdentities: [{recipient: age1x, ref: store://keys/age}]}":                              "takes secret.store.read",
+		"secret: {store: {read: [r]}, ageIdentities: [{recipient: age1x, ref: \"store://\"}]}":              "takes secret.store.search",
+		"secret: {store: {read: [r], search: [s]}, ageIdentities: [{recipient: age1x, ref: \"store://\"}]}": "",
+	} {
+		p := filepath.Join(t.TempDir(), "c.yaml")
+		if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		c, err := Load(p)
+		if err != nil {
+			t.Errorf("%s: %v", raw, err)
+			continue
+		}
+		got := c.Incomplete()
+		switch {
+		case want == "" && len(got) != 0:
+			t.Errorf("%s: incomplete %v", raw, got)
+		case want != "" && (len(got) != 1 || !strings.Contains(got[0], want)):
+			t.Errorf("%s: incomplete %v, want one %q", raw, got, want)
+		}
 	}
 }

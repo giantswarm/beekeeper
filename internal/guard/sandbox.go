@@ -40,8 +40,8 @@ func (h Hook) sandboxRefusal(ev event) string {
 		path, _ = ev.ToolInput[notebookPathKey].(string)
 		write = true
 	case grepTool, globTool:
-		path, _ = ev.ToolInput["path"].(string)
-		if pat, _ := ev.ToolInput["pattern"].(string); ev.ToolName == globTool && filepath.IsAbs(pat) {
+		path, _ = ev.ToolInput[pathKey].(string)
+		if pat, _ := ev.ToolInput[patternKey].(string); ev.ToolName == globTool && filepath.IsAbs(pat) {
 			// an absolute pattern searches from its literal prefix
 			path = globRoot(pat)
 		}

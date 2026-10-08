@@ -29,8 +29,8 @@ repository or pull request through (--except owner/repo or owner/repo#n): a
 window that stops a lane but for the one merge it waits for. The gate on
 beekeeper gate -- devctl pr merge refuses a held merge with the hold's reason. A merge of giantswarm/devctl
 opens a tool-release window by itself: a "merges" hold that lets only
-giantswarm/devctl through and lifts once the local devctl reports another
-version.
+giantswarm/devctl through; the gate installs the release with devctl
+version update and lifts the window once the local devctl reports it.
 
 --lift-when takes a shell command on this machine: the watch lifts the hold
 once it exits 0, and logs the lift.

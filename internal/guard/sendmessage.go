@@ -14,6 +14,8 @@ const desktopPrefix = "local_"
 // sendMessage decides a SendMessage call. A message to a role ("the
 // supervisor", "the guide") goes to the session holding the role now: Role
 // names it, so no brief has to name a run that a relay makes stale. A
+// message by a name the holder carries or carried on the roster (Holds) goes
+// the same way, whatever its desktop titles the session now. A
 // message to a desktop session id (local_…) goes through Claude Desktop,
 // which starts a CLI of its own for the session when it has none: while a
 // headless turn of the session runs (a first turn of agents start, a wake),
@@ -23,13 +25,21 @@ const desktopPrefix = "local_"
 // none runs; an error is a send the hook refuses. A running session's
 // message is redirected to its name, which queues it in that CLI. A message
 // by name to a roster agent whose CLI does not run is refused with what
-// Absent says: no CLI runs, and whether an import is pending. Every other
+// Absent says: no CLI runs, and whether an import is pending. A message
+// that hands a resource over with the supervisor's word (`yours
+// <resource>`) goes through Yours, whose answer the sender reads as
+// additional context: the grant recorded, or why none was. Every other
 // call passes unchanged.
-func (h Hook) sendMessage(input map[string]any) []byte {
+func (h Hook) sendMessage(session string, input map[string]any) []byte {
 	to, _ := input["to"].(string)
 	to = strings.TrimSpace(to)
 	var why []string
-	if role, ok := RoleOf(to); ok && h.Role != nil {
+	role, ok := RoleOf(to)
+	if !ok && h.Holds != nil {
+		role = h.Holds(to)
+		ok = role != ""
+	}
+	if ok && h.Role != nil {
 		holder, err := h.Role(role)
 		if err != nil {
 			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused by beekeeper: " + err.Error()})
@@ -37,7 +47,7 @@ func (h Hook) sendMessage(input map[string]any) []byte {
 		why = append(why, "the "+role+" is "+holder+" now")
 		to = holder
 	}
-	if len(why) == 0 && h.Absent != nil && !strings.HasPrefix(to, desktopPrefix) {
+	if !ok && h.Absent != nil && !strings.HasPrefix(to, desktopPrefix) {
 		if r := h.Absent(to); r != "" {
 			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused by beekeeper: " + r})
 		}
@@ -52,8 +62,16 @@ func (h Hook) sendMessage(input map[string]any) []byte {
 			to = name
 		}
 	}
+	var context string
+	if h.Yours != nil {
+		message, _ := input["message"].(string)
+		context = h.Yours(session, to, message)
+	}
 	if len(why) == 0 {
-		return nil
+		if context == "" {
+			return nil
+		}
+		return answer(hookOutput{AdditionalContext: context})
 	}
 	updated := make(map[string]any, len(input))
 	for k, v := range input {
@@ -64,6 +82,7 @@ func (h Hook) sendMessage(input map[string]any) []byte {
 		PermissionDecision: decisionAllow,
 		Reason:             "beekeeper: " + strings.Join(why, "; "),
 		UpdatedInput:       updated,
+		AdditionalContext:  context,
 	})
 }
 

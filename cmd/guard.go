@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"time"
@@ -25,6 +26,13 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/takeover"
 )
+
+// memcapCPU is memcap.slice's CPU budget from the configuration, the part
+// of a run's cap the host decides: for its own runs, the broker's and
+// install's slice unit.
+func (a *app) memcapCPU() platform.Cap {
+	return platform.Cap{CPUQuota: a.cfg.MemcapCPUQuota(runtime.NumCPU()), CPUWeight: a.cfg.Memcap.CPUWeight}
+}
 
 func (a *app) runCmd() *cobra.Command {
 	var maxFlag, swapFlag, waitFlag string
@@ -62,6 +70,13 @@ later (snapshot, watch) names them after the run has ended. Logging never
 fails or delays the run: an event the log cannot take within a second is
 dropped.
 
+The runs share memcap.slice's CPU budget: its CPUQuota (memcap.cpuQuota,
+default half the cores) bounds the cores they use together, its CPUWeight
+(memcap.cpuWeight, default 50 against the desktop's slices' 100) their
+share while the desktop wants the cores too; run sets both at every slot it
+takes, the slots share them by equal weight, and the command starts at nice
+10. snapshot and free show the slice's budget and use.
+
 Environment: MEMCAP_MAX (memcap.max, default 14% of RAM), MEMCAP_SWAP (0), MEMCAP_WAIT (8m),
 MEMCAP_SLOTS and MEMCAP_STATE (the directory holding slots/) override the
 configuration; the flags override the environment. MEMCAP_TEST=1 marks a
@@ -72,7 +87,9 @@ kill in it as a test kill, not a build's.`,
 			return a.loadConfig()
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cpu := a.memcapCPU()
 			o := guard.Options{Max: env("MEMCAP_MAX", a.cfg.MemcapMax(ramMiB())), Swap: env("MEMCAP_SWAP", "0"),
+				CPUQuota: cpu.CPUQuota, CPUWeight: cpu.CPUWeight,
 				SlotDir: a.cfg.Memcap.SlotDir, Slots: a.cfg.Memcap.Slots, Stderr: os.Stderr, Record: a.runRecorder(),
 				Test: os.Getenv("MEMCAP_TEST") == "1"}
 			if inSandbox() {
@@ -196,6 +213,12 @@ A SendMessage to "the supervisor" or "the guide" (any case, "the" optional)
 goes to the session holding that role now: its running CLI by name, else
 its desktop session. A brief names the role, so a relay never makes it
 stale; with nobody holding the role the send is refused.
+A SendMessage from the session holding the supervisor role whose message
+says "yours <resource>", "<resource> yours" or "<resource> is yours" for a
+leasable resource records the grant of the resource to the message's
+target, as beekeeper lease grant does, and the sender reads what was
+recorded, or why nothing was with the command that records it, as
+additional context. A worker's "yours" records nothing.
 Anything else, malformed input included, passes unchanged.
 
 What leaves the machine is scanned for secret values: the command line
@@ -217,6 +240,14 @@ now) is refused, naming beekeeper browse: Claude Desktop holds such a
 session's navigate to a site it was not allowed on yet for a person's site
 approval, which no hook answers. Its headless turns and every other
 session's browser calls pass.
+
+A board-wide project read is refused: gh project item-list without
+--query, and a gh api graphql query over a projectV2's items without a
+narrowing query: argument. Such a read pages the whole board with its field
+values and spends the GraphQL limit every session shares; the refusal names
+the estimated cost, the GraphQL budget as beekeeper last read it, and
+gh project item-add, gh project item-edit by item id, beekeeper board move
+and a filtered read instead. An issue's projectItems passes.
 
 An AskUserQuestion call is refused in every session but the guide's (the
 one beekeeper guide names): the agent files beekeeper note add --for
@@ -248,7 +279,7 @@ under <stateDir>/reads.
 
 Register it in ~/.claude/settings.json:
 
-  "PreToolUse": [{"matcher": "Bash|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage|mcp__.*", "hooks": [{"type": "command",
+  "PreToolUse": [{"matcher": "Bash|Read|Grep|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage|mcp__.*", "hooks": [{"type": "command",
     "command": "~/.go/bin/beekeeper hook pretooluse"}]}]`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
@@ -267,7 +298,7 @@ Register it in ~/.claude/settings.json:
 				return nil
 			}
 			self, _ := os.Executable()
-			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, CheckQuestion: checkQuestion, Role: a.roleTarget, Peer: a.desktopPeer, Absent: a.absentPeer,
+			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, CheckQuestion: checkQuestion, Role: a.roleTarget, Holds: a.heldRole, Peer: a.desktopPeer, Absent: a.absentPeer, Yours: a.yoursGrant,
 				Project: os.Getenv("CLAUDE_PROJECT_DIR"), Reads: a.firstReads,
 				Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(),
 				ModelServer: a.modelServer, ConfigErr: cfgErr, Sandbox: sandboxed,
@@ -278,6 +309,8 @@ Register it in ~/.claude/settings.json:
 				h.Outbound = outboundGuard(a.cfg.Outbound)
 				h.Labs = a.heldLabs
 				h.UnlockCommands = a.cfg.Secret.UnlockCommands
+				h.SecretFiles = slices.DeleteFunc(append(slices.Clone(a.cfg.Secret.Files), a.cfg.Secret.TokenFile), func(f string) bool { return f == "" })
+				h.GraphQL = a.graphqlLeft
 			}
 			if out := h.Decide(raw); out != nil {
 				_, _ = a.out.Write(out)
@@ -356,7 +389,13 @@ stay, and prints nothing. beekeeper install registers it in
 				drop, unheld = sh.Path, sandbox.UnsetShell(sandbox.EgressDir(os.Getenv("XDG_RUNTIME_DIR")))
 			}
 			unalias := append(slices.Clone(sh.Unalias), a.cfg.Secret.UnlockCommands...)
-			return guard.WritePrelude(env, guard.Prelude(unalias, sh.Globs == config.GlobsLiteral, sh.Path, drop, unheld))
+			if err := guard.WritePrelude(env, guard.Prelude(unalias, sh.Globs == config.GlobsLiteral, sh.Path, drop, unheld)); err != nil {
+				return err
+			}
+			if os.Getenv(sandbox.Env) == "" {
+				a.recordSessionGH(raw, guard.Resolve("gh", guard.PathFirst(sh.Path, os.Getenv("PATH"))))
+			}
+			return nil
 		},
 	})
 	c.AddCommand(&cobra.Command{
@@ -424,6 +463,27 @@ Claude Code, ends the wait.`,
 		},
 	})
 	return c
+}
+
+// graphqlLeft is the GraphQL limit as beekeeper last read it, with the
+// reading's age; "" when none was read. It reads the state without its
+// lock, never GitHub: the hook opens no store of its own.
+func (a *app) graphqlLeft() string {
+	if a.loadConfig() != nil {
+		return ""
+	}
+	store, err := state.Open(a.cfg.StateDir)
+	if err != nil {
+		return ""
+	}
+	st, err := store.Peek()
+	if err != nil || st.Budget == nil || st.Budget.GraphQL == nil {
+		return ""
+	}
+	if a.now.IsZero() {
+		a.now = time.Now()
+	}
+	return graphqlText(a, graphqlOf(st.Budget.GraphQL)) + ", read " + dur(a.now.Sub(st.Budget.GraphQL.At)) + " ago"
 }
 
 // inScope reports whether the hook event in raw is in the hooks' scope:

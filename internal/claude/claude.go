@@ -118,7 +118,12 @@ type Record struct {
 	Title          string `json:"title"`
 	IsArchived     bool   `json:"isArchived"`
 	LastActivityAt int64  `json:"lastActivityAt"`
-	PermissionMode string `json:"permissionMode"`
+	// LastFocusedAt is when the desktop's window last showed the session.
+	LastFocusedAt int64 `json:"lastFocusedAt"`
+	// AutoArchiveExempt says someone brought the session back from the
+	// Archived list: it stays in the sidebar.
+	AutoArchiveExempt bool   `json:"autoArchiveExempt"`
+	PermissionMode    string `json:"permissionMode"`
 	// ChromePermissionMode is how the desktop answers the session's Claude
 	// in Chrome actions: ChromeSkipAll without asking, anything else (empty
 	// included) with a site request for its person.
@@ -132,6 +137,16 @@ type Record struct {
 	PostTurnSummary    *TurnSummary `json:"postTurnSummary"`
 	PostTurnSummaryFor string       `json:"postTurnSummaryFor"`
 	LastAssistantUUID  string       `json:"lastAssistantUuid"`
+}
+
+// LastSeen is when the session last ran a desktop turn or the desktop's
+// window last showed it; zero when the record says neither.
+func (r *Record) LastSeen() time.Time {
+	ms := max(r.LastActivityAt, r.LastFocusedAt)
+	if ms == 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(ms)
 }
 
 // ChromeSkipAll is the Chrome permission mode under which the desktop runs
@@ -382,12 +397,9 @@ func newSession(cfg *config.Config, t *proc.Table, p *proc.Process, rec *cliReco
 	if s.Branch == "" {
 		s.Branch = branch
 	}
-	if s.ID != "" {
-		if m, _ := filepath.Glob(filepath.Join(cfg.Claude.ProjectsDir, "*", s.ID+".jsonl")); len(m) > 0 {
-			s.Transcript = m[0]
-			if fi, err := os.Stat(m[0]); err == nil {
-				s.LastActive = fi.ModTime()
-			}
+	if s.Transcript = Transcript(cfg, s.ID, s.Cwd); s.Transcript != "" {
+		if fi, err := os.Stat(s.Transcript); err == nil {
+			s.LastActive = fi.ModTime()
 		}
 	}
 	s.MemMiB, s.Commands = processTree(t, p.PID, clis, now)
@@ -436,19 +448,13 @@ func ReadRecord(cfg *config.Config, hostID string) (*Record, bool) {
 	if strings.ContainsAny(hostID, `/\*?[`) {
 		return nil, false
 	}
-	m, _ := filepath.Glob(filepath.Join(cfg.Claude.DesktopDir, "*", "*", hostID+".json"))
-	if len(m) == 0 {
-		return nil, false
+	name := hostID + ".json"
+	for _, p := range recordPaths(cfg) {
+		if filepath.Base(p) == name {
+			return readRecord(p)
+		}
 	}
-	return readRecord(m[0])
-}
-
-func readRecord(path string) (*Record, bool) {
-	raw, err := os.ReadFile(filepath.Clean(path))
-	if err != nil {
-		return nil, false
-	}
-	return parseRecord(raw)
+	return nil, false
 }
 
 func parseRecord(raw []byte) (*Record, bool) {
@@ -460,8 +466,7 @@ func parseRecord(raw []byte) (*Record, bool) {
 }
 
 func recordFiles(cfg *config.Config) []string {
-	m, _ := filepath.Glob(filepath.Join(cfg.Claude.DesktopDir, "*", "*", "local_*.json"))
-	return m
+	return slices.DeleteFunc(recordPaths(cfg), func(p string) bool { return !strings.HasPrefix(filepath.Base(p), "local_") })
 }
 
 // Titles maps CLI session ids, current and prior, to their desktop titles,

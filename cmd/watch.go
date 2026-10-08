@@ -276,6 +276,9 @@ type watcher struct {
 	// stopped are the agents with a task this watch said have no running
 	// CLI, by session key, until their CLI runs again.
 	stopped map[string]bool
+	// rowlessSaid are the workers this watch said have no row in the
+	// desktop, by session, until they get one.
+	rowlessSaid map[string]bool
 	// waits are the reopen waits this watch said, by agent session and the
 	// wait's start, until they end.
 	waits map[string]time.Time
@@ -473,6 +476,11 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 	w.loop(ctx, interval, false, w.poll)
 	return nil
 }
+
+// transcriptFresh is how long a watch takes an unchanged transcript's last
+// read for its figures: an idle session's last hour ages that much before
+// it is read again.
+const transcriptFresh = 5 * time.Minute
 
 // slowReads is how many times less often the installation reads run while
 // the machine is strained.
@@ -692,6 +700,9 @@ func (a *app) newWatcher(standby, keep bool) *watcher {
 		upgrades: upgrade.Readings{}}
 	if keep {
 		w.dues = relayDues{}
+		// A poll reads every session's transcript (RUNAWAY): an idle
+		// session's read stays good for a few polls.
+		a.transcripts = claude.NewTranscriptCache(transcriptFresh)
 	}
 	w.stand = standbyWatch{send: a.peerSend, open: plat.Opener.Open, succeed: a.succeedFromWatch, revive: a.reviveFromWatch, turning: unitsTurning, reopening: unitsReopening, importRow: a.importRowFromWatch}
 	if me, err := a.caller(); keep && err == nil {
@@ -872,6 +883,12 @@ func (w *watcher) sample(ctx context.Context) {
 	if merr == nil {
 		w.modelServer(ctx, models)
 	}
+	// One process table a sample: the swapoff and the CPU lines read it;
+	// nil when it is unreadable.
+	table, terr := plat.Machine.Processes()
+	if terr != nil {
+		table = nil
+	}
 	m, merr := plat.Machine.Mem()
 	w.unavailable(secMemory, merr)
 	var cause string
@@ -890,7 +907,7 @@ func (w *watcher) sample(ctx context.Context) {
 		w.check("swap", swapOver(m, t, th.SwapMax(m.SwapTotalMiB)), "%s", line)
 		// A running swapoff shrinks SwapTotal ahead of the pages it drains:
 		// swap reads full while it empties, and oomd is no nearer.
-		swapoff := plat.Machine.SwapoffRuns()
+		swapoff := swapoffRuns(table)
 		w.check("swapoff", swapoff, "SWAPOFF IN PROGRESS: %s", line)
 		if m.SwapTotalMiB > 0 {
 			w.check("oomd", !swapoff && w.oomdImminent(m, oomd, t), "OOMD IMMINENT: %s", line)
@@ -898,7 +915,7 @@ func (w *watcher) sample(ctx context.Context) {
 		w.keepSwap(&swapReading{At: now, UsedMiB: m.SwapUsedMiB, DiskMiB: m.DiskSwapMiB(), ZswapMiB: m.ZswappedMiB,
 			PerHourMiB: t.DiskPerHourMiB, AvailFalling: t.AvailFalling, Rated: t.Rated})
 	}
-	w.sampleCPU(now)
+	w.sampleCPU(now, table)
 	psi, err := plat.Machine.MemoryPressure()
 	w.unavailable(secPressure, err)
 	if err == nil {
@@ -932,7 +949,7 @@ func (w *watcher) sample(ctx context.Context) {
 // once two samples in a row read some avg10 over watch.cpuPSIMax, each
 // with the top CPU consumers since the last sample; and READS SLOWED while
 // the machine is strained.
-func (w *watcher) sampleCPU(now time.Time) {
+func (w *watcher) sampleCPU(now time.Time, t *proc.Table) {
 	th := w.cfg.Watch
 	cores := runtime.NumCPU()
 	limit := th.LoadLimit(cores)
@@ -946,7 +963,7 @@ func (w *watcher) sampleCPU(now time.Time) {
 		w.cpuOver = 0
 	}
 	var top string
-	if t, err := plat.Machine.Processes(); err == nil {
+	if t != nil {
 		span := now.Sub(w.cpuAt)
 		top = topCPULine(topCPU(w.cpuTable, t, span, topCPUCommands), span)
 		w.sampleProcs(now, span, w.cpuTable, t)
@@ -961,6 +978,19 @@ func (w *watcher) sampleCPU(now time.Time) {
 	w.strained.Store(strained)
 	w.check("slowed", strained, "READS SLOWED: machine under CPU pressure (load %.0f, CPU some avg10 %.0f%%): installation reads every %d× their interval, at nice %s",
 		load[0], cpu, slowReads, proc.Niceness)
+}
+
+// swapoffRuns reports whether a swapoff runs.
+func swapoffRuns(t *proc.Table) bool {
+	if t == nil {
+		return false
+	}
+	for _, p := range t.ByPID {
+		if p.Comm == "swapoff" {
+			return true
+		}
+	}
+	return false
 }
 
 // sampleProcs says PROCESS STORM once two samples in a row read a fork rate
@@ -1050,7 +1080,59 @@ func (w *watcher) pollSessions(ctx context.Context, since time.Time, t *proc.Tab
 	w.staleLeases(ctx, sessions)
 	w.unownedPages(ctx, sessions)
 	w.runaways(sessions, t)
+	w.twins(sessions, t)
 	w.staleWatches(ctx, t)
+}
+
+// twinKey starts the condition key of a session that runs two CLIs, and
+// twinGrace is how long the youngest of them runs before they count.
+const (
+	twinKey   = "twin "
+	twinGrace = 30 * time.Second
+)
+
+// twins says each session that runs more than one Claude Code CLI on its
+// session id (a headless turn beside its desktop CLI): both act on its task,
+// each unaware of the other, and a message by name reaches only one. One
+// TWIN CLI line naming every CLI's PID and directory, and its ENDED line once
+// one CLI is left. Discover keeps one session per id, so the CLIs are counted
+// in the process table; a restarted CLI overlaps its predecessor for a
+// moment, so CLIs count once the youngest has run for twinGrace.
+func (w *watcher) twins(sessions []*claude.Session, t *proc.Table) {
+	names := map[string]string{}
+	for _, s := range sessions {
+		if s.ID != "" && s.Harness == "" {
+			names[s.ID] = s.Name
+		}
+	}
+	byID := map[string][]*proc.Process{}
+	for _, p := range t.ByPID {
+		if p.Comm != claudeComm {
+			continue
+		}
+		for id := range names {
+			if resumes(p.Args, id) || startsSession(p, id) {
+				byID[id] = append(byID[id], p)
+			}
+		}
+	}
+	found := map[string]bool{}
+	for _, id := range slices.Sorted(maps.Keys(byID)) {
+		cli := byID[id]
+		if len(cli) < 2 || slices.ContainsFunc(cli, func(p *proc.Process) bool { return w.now.Sub(p.Start) < twinGrace }) {
+			continue
+		}
+		slices.SortFunc(cli, func(a, b *proc.Process) int { return cmp.Compare(a.PID, b.PID) })
+		var each []string
+		for _, p := range cli {
+			each = append(each, fmt.Sprintf("PID %d in %s", p.PID, t.Cwd(p.PID)))
+		}
+		key := twinKey + id
+		found[key] = true
+		w.emit(key, "TWIN CLI: %q runs %d CLIs on session %s (%s): both act on its task and a message by name reaches only one; stop the one that should not run",
+			names[id], len(cli), id, strings.Join(each, ", "))
+	}
+	w.clearMissing(twinKey, found)
 }
 
 // poll does everything but the machine sample: the process table, the
@@ -1077,6 +1159,7 @@ func (w *watcher) poll(ctx context.Context) {
 	w.lostMerges(ctx)
 	w.closeToolWindow(ctx, watchParty)
 	w.stalls()
+	w.unbrokered()
 	w.vaultWaits()
 	now := w.now
 	if now.Sub(w.lastSettle) >= w.readEvery(th.Interval.Duration) {
@@ -1099,7 +1182,7 @@ func (w *watcher) poll(ctx context.Context) {
 		w.lastCentral = now
 		inFlight(ctx, th.Interval.Duration, &w.centraling, w.syncRoster)
 	}
-	if now.Sub(w.lastSweep) >= w.readEvery(th.Interval.Duration) {
+	if now.Sub(w.lastSweep) >= w.readEvery(w.cfg.Outbound.SweepEvery.Duration) {
 		w.lastSweep = now
 		// The sweep takes a while on a big home directory: the poll does not wait.
 		inFlight(ctx, 0, &w.sweeping, func(context.Context) { w.exposures() })
@@ -1135,13 +1218,16 @@ const (
 	vaultUnlockedKey = "vault-unlocked"
 	vaultReadKey     = "vault-read"
 	vaultSigninKey   = "vault-signin"
+	vaultRetryKey    = "vault-retry"
 	vaultDroppedKey  = "vault-dropped"
 )
 
 // vaultWaits says the vault's state (secret.session): one VAULT UNLOCKED
 // line while the broker holds the session, until when, and its ENDED line
-// when the broker forgets it; a VAULT SIGN-IN FAILED line with the broker's
-// reason; a VAULT SESSION DROPPED line while a session op stopped taking
+// when the broker forgets it; a VAULT SIGN-IN RETRYING line while the
+// broker waits for the credential store or tries a failed sign-in again,
+// and a VAULT SIGN-IN FAILED line with the broker's reason once it gave
+// up; a VAULT SESSION DROPPED line while a session op stopped taking
 // waits for its new sign-in; one VAULT LOCKED line for each call that waits on the sign-in,
 // and once it goes on its ENDED line, or a line that it timed out with the
 // vault still locked. Nothing asks the person.
@@ -1160,6 +1246,7 @@ func (w *watcher) vaultWaits() {
 	}
 	w.check(vaultUnlockedKey, st.Unlocked, "VAULT UNLOCKED: the broker holds the vault session since %s until %s",
 		st.Since.Local().Format("15:04"), st.Until.Local().Format("15:04"))
+	w.check(vaultRetryKey, st.Retrying != "", "VAULT SIGN-IN RETRYING: %s", st.Retrying)
 	w.check(vaultSigninKey, st.Error != "", "VAULT SIGN-IN FAILED: %s", st.Error)
 	w.check(vaultDroppedKey, st.Dropped != "", "VAULT SESSION DROPPED at %s: op no longer took it (%s); the broker signs in again",
 		st.DroppedAt.Local().Format("15:04"), st.Dropped)
@@ -1524,6 +1611,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	w.stoppedAgents(st, sessions)
 	w.capacity(ctx, st, sessions)
 	w.importWaits(st)
+	w.rowlessAgents(st)
 	q := w.quietness(ctx, st, sessions)
 	w.handoversDue(st, sessions)
 	w.doctor(ctx)
@@ -1535,7 +1623,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		w.wouldOvertake(st, over)
 		over = nil
 	}
-	held := checkTimers(ctx, st.Timers, w.now, lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now))
+	found := checkTimers(ctx, st.Timers, w.now, lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now))
 	var fires []timerFire
 	var defaulted []state.Note
 	fire := func(st *state.State) ([]string, []state.Event, bool) {
@@ -1549,7 +1637,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		lines, evs = append(lines, ol...), append(evs, oe...)
 		kl, ke := markResumable(st, parks, w.cfg.Agents.AutoResume, w.now)
 		lines, evs = append(lines, kl...), append(evs, ke...)
-		tl, te, tf, touched := settleTimers(st, held, w.now)
+		tl, te, tf, touched := settleTimers(st, found, w.now)
 		lines, evs, fires = append(lines, tl...), append(evs, te...), tf
 		seen = seen || touched
 		pl, pe := firePending(st, sessions, w.now)
