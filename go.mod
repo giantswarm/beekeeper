@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	filippo.io/age v1.3.2
 	github.com/Masterminds/semver/v3 v3.5.0
-	github.com/charmbracelet/bubbletea v1.3.10
+	github.com/charmbracelet/bubbletea/v2 v2.1.0
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/ansi v0.10.1
 	github.com/coreos/go-oidc/v3 v3.21.0
