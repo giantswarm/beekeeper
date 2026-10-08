@@ -17,7 +17,7 @@ const (
 )
 
 // decisionArgs are the parts a complete decision for the person carries.
-var decisionArgs = []string{"--for", notePerson, flagStatusQuo, sqNow, flagWhy, whyNow, "--default", dfltOK, "--due", "3h"}
+var decisionArgs = []string{flagFor, notePerson, flagStatusQuo, sqNow, flagWhy, whyNow, "--default", dfltOK, "--due", "3h"}
 
 func TestNoteKindDefaultsByWhomItIsFor(t *testing.T) {
 	a, _ := noteApp(t)

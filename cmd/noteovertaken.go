@@ -19,12 +19,18 @@ const noteOvertaken = "note.overtaken"
 // noteDone is the verb of a note marked done.
 const noteDone = "note.done"
 
+// noteKept is the event of a note the watch keeps open although every
+// issue and pull request it asks about is closed or merged: a closing
+// keyword closed one, or the worker that filed it still runs its task.
+// Its detail is "#<id> kept: <reason>; the note: <text>".
+const noteKept = "note.kept"
+
 // overtakenSep separates an overtaken event's reason from the note's text.
 const overtakenSep = "; the note: "
 
 // refStates reads the states of issues and pull requests; a seam for the
 // tests.
-var refStates = func(ctx context.Context, refs []github.PR) (map[github.PR]string, error) {
+var refStates = func(ctx context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 	return github.RefStates(ctx, notesGH, refs)
@@ -99,33 +105,76 @@ func roleRun(st *state.State, p state.Party) bool {
 	return false
 }
 
-// findOvertaken returns the open notes of st that are overtaken: a note
-// with refs once every one of them is closed or merged (states, as GitHub
-// answered; an unanswered ref keeps the note open). A note without refs is
-// never overtaken: its filing session archived says the asker is gone, not
-// that the question is settled (findOrphaned).
-func findOvertaken(st *state.State, states map[github.PR]string) []overtake {
-	var out []overtake
+// settledRefs says how refs are settled once every one is closed or merged
+// ("o/r#1 closed by o/r#2's closing keyword, o/r#3 merged"; states as
+// GitHub answered) and whether a closing keyword closed one of them; ""
+// while any is open or unanswered.
+func settledRefs(refs []string, states map[github.PR]github.RefState) (string, bool) {
+	var parts []string
+	var keyword bool
+	for _, s := range refs {
+		r, ok := parseRef(s)
+		at := states[r]
+		if !ok || at.State == "" || at.State == github.Open {
+			return "", false
+		}
+		part := refName(r) + " " + strings.ToLower(at.State)
+		if at.Closer != "" {
+			part += " by " + at.Closer + "'s closing keyword"
+			keyword = true
+		}
+		parts = append(parts, part)
+	}
+	return strings.Join(parts, ", "), keyword
+}
+
+// runningWorker returns the agent of st that filed n while its task still
+// runs (busy or parked, not reported idle or done); nil for a note a role,
+// a person's own session or a finished worker filed.
+func runningWorker(st *state.State, n state.Note) *state.Agent {
+	for i := range st.Agents {
+		if ag := &st.Agents[i]; ag.Is(n.By) && ag.Task != "" && !ag.Done {
+			return ag
+		}
+	}
+	return nil
+}
+
+// findOvertaken returns the open notes of st that are overtaken, and the
+// ones kept open although every ref is settled. A note with refs is
+// overtaken once every one of them is closed or merged (an unanswered ref
+// keeps the note open) when its worker closed them at the end of its task:
+// the worker that filed it has reported its task over (TaskEnded), or no
+// closing keyword closed one and no worker runs for it. While the filing
+// worker still runs, or a pull request's closing keyword closed a ref
+// before any worker's task ended, the note is kept: the decision is still
+// nobody's. A note without refs is never overtaken: its filing session
+// archived says the asker is gone, not that the question is settled
+// (findOrphaned).
+func findOvertaken(st *state.State, states map[github.PR]github.RefState) (over, kept []overtake) {
 	asking := st.GuideRole().Asking
 	for _, n := range st.Notes {
 		if !overtakable(n, asking) || len(n.Refs) == 0 {
 			continue
 		}
-		var settled []string
-		for _, s := range n.Refs {
-			r, ok := parseRef(s)
-			at := states[r]
-			if !ok || at == "" || at == github.Open {
-				settled = nil
-				break
-			}
-			settled = append(settled, refName(r)+" "+strings.ToLower(at))
+		settled, keyword := settledRefs(n.Refs, states)
+		if settled == "" {
+			continue
 		}
-		if len(settled) > 0 {
-			out = append(out, overtake{n.ID, strings.Join(settled, ", ")})
+		// The task's end is recorded first: a worker on its next task still
+		// runs, its earlier notes are settled.
+		switch w := runningWorker(st, n); {
+		case !n.TaskEnded.IsZero():
+			over = append(over, overtake{n.ID, fmt.Sprintf("%s, its worker %q done", settled, n.By.Name)})
+		case w != nil:
+			kept = append(kept, overtake{n.ID, fmt.Sprintf("%s, its worker %q still runs", settled, w.Name)})
+		case keyword:
+			kept = append(kept, overtake{n.ID, settled + ", not by its worker"})
+		default:
+			over = append(over, overtake{n.ID, settled})
 		}
 	}
-	return out
+	return over, kept
 }
 
 // findOrphaned returns the open notes of st without refs whose filing
@@ -146,15 +195,34 @@ func findOrphaned(st *state.State, archived map[string]bool) []overtake {
 
 // overtakenNow reads what findOvertaken needs, GitHub only for notes with
 // refs and while the budget is over its floor, and returns the overtaken
-// notes.
-func (w *watcher) overtakenNow(ctx context.Context, st *state.State) []overtake {
-	var states map[github.PR]string
+// notes and the kept ones.
+func (w *watcher) overtakenNow(ctx context.Context, st *state.State) (over, kept []overtake) {
+	var states map[github.PR]github.RefState
 	if refs := overtakeRefs(st); len(refs) > 0 && !lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now) {
 		s, err := refStates(ctx, refs)
 		w.check("note-refs", s == nil, "cannot read the notes' issues and pull requests: %v", err)
 		states = s
 	}
 	return findOvertaken(st, states)
+}
+
+// keepOpen records on the open notes of st among kept why the watch keeps
+// them open and returns the lines and events of the reasons it has not
+// said yet: a note says each reason once.
+func keepOpen(st *state.State, kept []overtake, by state.Party) ([]string, []state.Event) {
+	var lines []string
+	var evs []state.Event
+	for i := range st.Notes {
+		n := &st.Notes[i]
+		j := slices.IndexFunc(kept, func(o overtake) bool { return o.id == n.ID })
+		if j < 0 || n.Kept == kept[j].reason {
+			continue
+		}
+		n.Kept = kept[j].reason
+		lines = append(lines, fmt.Sprintf("NOTE KEPT: #%d, %s: %s", n.ID, n.Kept, truncate(n.Text, 200)))
+		evs = append(evs, event(by, noteKept, "#%d kept: %s%s%s", n.ID, oneLine(n.Kept), overtakenSep, n.Text))
+	}
+	return lines, evs
 }
 
 // closeOvertaken closes the open notes of st among over as overtaken and
@@ -188,12 +256,19 @@ func overtakenReason(e state.Event) string {
 }
 
 // wouldOvertake says, for a watch that writes nothing (--once), each note
-// a running watch would close as overtaken.
-func (w *watcher) wouldOvertake(st *state.State, over []overtake) {
+// a running watch would close as overtaken, and each it would keep open
+// for a reason it has not recorded yet.
+func (w *watcher) wouldOvertake(st *state.State, over, kept []overtake) {
 	for _, o := range over {
 		i := slices.IndexFunc(st.Notes, func(n state.Note) bool { return n.ID == o.id })
 		if i >= 0 {
 			w.emitNow("pending", "NOTE OVERTAKEN (--once writes nothing): #%d, %s: %s", o.id, o.reason, truncate(st.Notes[i].Text, 200))
+		}
+	}
+	for _, o := range kept {
+		i := slices.IndexFunc(st.Notes, func(n state.Note) bool { return n.ID == o.id })
+		if i >= 0 && st.Notes[i].Kept != o.reason {
+			w.emitNow("pending", "NOTE KEPT (--once writes nothing): #%d, %s: %s", o.id, o.reason, truncate(st.Notes[i].Text, 200))
 		}
 	}
 }
