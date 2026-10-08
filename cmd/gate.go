@@ -704,6 +704,9 @@ func (g *gateRun) runMerge() error {
 		gateLine("devctl serves the repositories of %s only (merge.devctlOwners): %s#%d takes the %s as the gh login, green first, no release wait",
 			strings.Join(g.cfg.Merge.DevctlOwners, ", "), g.repo, g.pr, github.SquashRoute)
 	}
+	if g.pr != 0 && g.runsDevctl() {
+		argv = merge.CITimeout(argv, g.cfg.Merge.CITimeout.Duration)
+	}
 	if b := g.handCut(); b != "" {
 		argv = merge.NoReleaseWait(argv)
 		gateLine("%s merges into %s, which no Auto-release run tags: devctl ends at the merge (--no-release-wait), awaits no release and frees lane %s then",

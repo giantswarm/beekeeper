@@ -109,6 +109,22 @@ func NoReleaseWait(argv []string) []string {
 	return slices.Insert(slices.Clone(argv), i+1, noReleaseWaitFlag)
 }
 
+// timeoutFlag bounds devctl pr merge's wait for the CI outcome.
+const timeoutFlag = "--timeout"
+
+// CITimeout is a devctl pr merge argument vector whose CI wait is bounded
+// by d: argv with --timeout d after its subcommand, unless it names its own
+// --timeout or d is zero.
+func CITimeout(argv []string, d time.Duration) []string {
+	i := slices.Index(argv, "merge")
+	if i < 0 || d <= 0 || slices.ContainsFunc(argv, func(a string) bool {
+		return a == timeoutFlag || strings.HasPrefix(a, timeoutFlag+"=")
+	}) {
+		return argv
+	}
+	return slices.Insert(slices.Clone(argv), i+1, timeoutFlag, d.String())
+}
+
 // ParsePromote finds the one repository of a devctl release promote
 // argument vector; ok is false for anything else (several repositories,
 // --team, --dry-run, --help), which runs ungated.

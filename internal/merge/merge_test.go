@@ -33,6 +33,29 @@ func TestParseArgs(t *testing.T) {
 	}
 }
 
+// The gate bounds devctl's CI wait by its own timeout unless the command
+// names one: devctl's 30m default ended merges whose CI, restarted by
+// --update-branch, still ran.
+func TestCITimeout(t *testing.T) {
+	for _, c := range []struct {
+		argv, want string
+		d          time.Duration
+	}{
+		{"devctl pr merge o/r 7 --update-branch", "devctl pr merge --timeout 1h0m0s o/r 7 --update-branch", time.Hour},
+		{"devctl pr merge o/r 7 --timeout 9m", "devctl pr merge o/r 7 --timeout 9m", time.Hour},
+		{"devctl pr merge --timeout=2h o/r 7", "devctl pr merge --timeout=2h o/r 7", time.Hour},
+		{"devctl pr merge o/r 7", "devctl pr merge o/r 7", 0},
+	} {
+		argv := strings.Fields(c.argv)
+		if got := strings.Join(CITimeout(argv, c.d), " "); got != c.want {
+			t.Errorf("%s: got %s, want %s", c.argv, got, c.want)
+		}
+		if strings.Join(argv, " ") != c.argv {
+			t.Errorf("%s: the caller's argv changed", c.argv)
+		}
+	}
+}
+
 func TestStripDetach(t *testing.T) {
 	onDone := "beekeeper agents wake x"
 	prMerge := func(args ...string) []string { return append([]string{Tool, "pr", "merge"}, args...) }
