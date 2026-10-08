@@ -956,14 +956,14 @@ refusal naming the command with the gate written in.
 - **Refused, exit 77**, one line starting `beekeeper gate: refused,` that says why and what to do:
   the repository, its lane, `merges` or `github` is held, or a cluster upgrade runs on the lane's
   installation (the hold's reason); the GitHub budget is unknown, checked before devctl makes a
-  single request (under `github.floor` the line says `queued` instead: the merge waits for the
-  reset in a run of its own, as for exit 76 below, and wakes its owner); the lane's
-  installation cannot be read (a lapsed `tsh` login). Nothing else stops a merge: a lane whose
+  single request; the lane's installation cannot be read (a lapsed `tsh` login). Nothing was
+  queued: a 77 never says `queued`. Nothing else stops a merge: a lane whose
   release has not rolled past `merge.settleTimeout` keeps it waiting, and `watch` says `LANE STUCK`.
 - **Queued, exit 76**, one line starting `beekeeper gate: queued,` with the merge's position and
   whom it waits behind (when the machine-wide devctl cap is the reason, `<n> devctl processes run
   machine-wide (cap <n>), not a lane problem`), once the merge has waited `--wait` (2 minutes, 30
-  in the background). The merge is not dropped: the gate hands it to a run of its own outside the
+  in the background), or at once with the budget and its reset when the GitHub budget is under
+  `github.floor`. The merge is not dropped: the gate hands it to a run of its own outside the
   caller, the same gate under `--queued`, which keeps its place for up to `merge.seedTTL`, runs
   devctl when its turn comes and wakes the owner with the outcome (`devctl.unheard`, as below).
   Nobody runs it again; a second `devctl pr merge` of the pull request while it waits is refused
