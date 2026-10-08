@@ -54,9 +54,11 @@ task needs lives only in this session: the next task goes to a fresh one.
 
 ## Constraints
 
-- **Leases.** A resource is claimed with `beekeeper lease claim <env> -p "<purpose>"` only after the
-  supervisor's `yours <env>`, released with `beekeeper lease release <env>` and returned with
-  `<env> free` when done. A held lease is another session's.
+- **Leases.** A resource is asked of the supervisor first (`need <env>`), then claimed with
+  `beekeeper lease claim <env> -p "<purpose>"` once its `yours <env>` arrived, released with
+  `beekeeper lease release <env>` and returned with `<env> free` when done. A command that needs
+  the lease runs only after the claim exited 0 (`lease claim … && <command>`, never `;`): a
+  refused claim is no lease. A held lease is another session's.
 - **Merges.** One merge command per PR, through the gate (`devctl pr merge <owner/repo> <n>` for the
   owners under `merge.devctlOwners`, `devctl release promote <owner/repo>` likewise), acting on its
   exit code and never around it: 76 queued, the merge waits on in its lane by itself and its
