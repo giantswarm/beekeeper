@@ -107,6 +107,54 @@ func WriteSecretKey(ctx context.Context, c client.Client, t KubeTarget, value []
 	return err
 }
 
+// SecretReader reads one key of a Secret in the cluster a kubeconfig
+// reaches.
+type SecretReader func(ctx context.Context, kubeconfig []byte, t KubeTarget) ([]byte, error)
+
+// ReadSecret is the SecretReader of a real cluster.
+func ReadSecret(ctx context.Context, kubeconfig []byte, t KubeTarget) ([]byte, error) {
+	cfg, err := clientcmd.RESTConfigFromKubeConfig(kubeconfig)
+	if err != nil {
+		return nil, fmt.Errorf("the kubeconfig: %w", err)
+	}
+	c, err := client.New(cfg, client.Options{})
+	if err != nil {
+		return nil, err
+	}
+	var s corev1.Secret
+	if err := c.Get(ctx, types.NamespacedName{Namespace: t.Namespace, Name: t.Name}, &s); err != nil {
+		return nil, err
+	}
+	v, ok := s.Data[t.Key]
+	if !ok {
+		return nil, fmt.Errorf("%s: no key %s", t.Namespace+"/"+t.Name, t.Key)
+	}
+	return v, nil
+}
+
+// SecretFingerprint is the keyed fingerprint of one key of a Secret in a
+// kind cluster, read with the admin kubeconfig kind answers: a delivery is
+// checked against [Ops.Fingerprints] of its source without a value read.
+// Which contexts a caller may read is the caller's to check.
+func (o *Ops) SecretFingerprint(ctx context.Context, t KubeTarget) (Print, error) {
+	if t.KindCluster() == "" {
+		return Print{}, fmt.Errorf("%s: a Secret is read only in a kind lab's context, kind-<cluster>", t.Context)
+	}
+	kc, err := o.Run(ctx, "", nil, nil, "kind", "get", "kubeconfig", "--name", t.KindCluster())
+	if err != nil {
+		return Print{}, fmt.Errorf("%s: %w", t.Context, err)
+	}
+	read := o.Read
+	if read == nil {
+		read = ReadSecret
+	}
+	v, err := read(ctx, kc, t)
+	if err != nil {
+		return Print{}, fmt.Errorf("%s: %w", t, err)
+	}
+	return Print{Key: t.String(), Fingerprint: o.Fingerprint(string(v))}, nil
+}
+
 // CopyToSecret copies one value into a key of a Secret in a kind cluster,
 // reached with the admin kubeconfig kind answers, which stays in memory
 // like the value. It answers the value's length. Which contexts a caller
@@ -115,7 +163,7 @@ func (o *Ops) CopyToSecret(ctx context.Context, src Ref, t KubeTarget) (int, err
 	if t.KindCluster() == "" {
 		return 0, fmt.Errorf("%s: a Secret is written only into a kind lab's context, kind-<cluster>", t.Context)
 	}
-	v, err := o.value(ctx, src)
+	v, err := o.encoded(ctx, src)
 	if err != nil {
 		return 0, err
 	}

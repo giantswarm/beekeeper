@@ -523,6 +523,7 @@ repository matches.
 |---|---|
 | `compare <a> <b>` | `equal` or `different` for two values, and for two files each key's state (`equal`, `different`, `only in a`, `only in b`); exit 1 when anything is not equal. |
 | `fingerprint <ref>` | HMAC-SHA256 of each value under the value scanner's key (`scan/key`), cut to 16 hex digits: equal values, equal fingerprints; only beekeeper can make one. |
+| `fingerprint <ref> --encode <encoding>` \| `fingerprint --secret <context>/<namespace>/<name>/<key>` | The fingerprint of one value in an encoding (the form `copy --encode` writes), or of a key of a Secret in a kind lab whose lab lease the caller holds: a delivery checked without a value read. |
 | `copy <src.sops.yaml> <dst.sops.yaml> [--name n] [--namespace ns]` | A new SOPS file with src's values, encrypted under dst's rules; `--name` and `--namespace` rewrite a Kubernetes object's metadata. It answers each key and its length (a Secret's `data` decoded); dst must not exist. |
 | `copy <ref> <file#path>` | One value into a SOPS path, creating the file or the key when absent, the file's other values kept. |
 | `copy <ref>=<path>… <new-file> [--name n --namespace ns]` | Several values (vault fields, SOPS paths) into a new SOPS file in one encryption: only the recipients of the nearest `.sops.yaml` are needed, nothing is decrypted, so no age identity of the new file. `--name` and `--namespace` start it as that Secret, a bare path under `stringData`. Answers key names and lengths. |
@@ -538,6 +539,34 @@ repository matches.
 | `status` | Whether the broker holds the vault session, never the session. |
 | `rotate platform://<installation>/<capability>/<name> --reason <text>` | A credential the platform manager generates: `platformctl installation reconcile <installation> <capability> --commit --rotate <name>` on the host, the manager writing the new value into the installation's SOPS files in a pull request; nothing is decrypted and no copy reaches the vault. `--dry-run` shows the files that hold it. |
 | `recipients [<directory> \| <sops-file>]` | For a directory (the working directory by default), every age recipient of the creation rules of the `.sops.yaml` nearest above it, a gitops repository's installations' for one (`management-clusters/graveler/.*` → its recipient); for a SOPS file, the file's recipients (its metadata when encrypted, else its creation rule's). Each comes with where its identity is: sops' own sources, the entry of `secret.ageIdentities`, the shared vault's item per recipient (found in the vault's item listing, metadata only) or `none`, naming the item the vault lacks. No value is read; exit 1 when a recipient has no identity. With `secret.session` it runs in the broker, like a call on the vault. |
+
+### Encoded values
+
+Some consumers inject a value verbatim: a gateway's egress credential that sends
+`Authorization: Basic <value>` needs the Secret to hold `base64("<user>:<token>")`, not the token.
+`--encode` on `copy` (one value: into a SOPS path, a consumer's stdin or a lab's Secret) and on `set`
+makes that form in beekeeper's process, after the value is read or drawn and before it is written;
+the encoded value is never printed, logged or returned, and the answer is its length.
+
+| Encoding | Written |
+|---|---|
+| `base64` | the value in standard base64 |
+| `basic:<user>` | `base64("<user>:<value>")`, an HTTP Basic credential (a user without a colon) |
+
+An unknown encoding, a whole SOPS file and `copy <ref>=<path>…` are refused before any value is
+read. `set --encode` writes the encoded form to the SOPS path, the Secret and the consumer, and keeps
+the generated value in the vault field; the fingerprint it answers is the encoded form's. A delivery
+is checked with two fingerprints:
+
+```sh
+beekeeper secret copy op://<vault>/<item>/<field> --encode basic:x-access-token \
+  --to-secret kind-<lab>/<namespace>/<name>/<key>
+beekeeper secret fingerprint --secret kind-<lab>/<namespace>/<name>/<key>
+beekeeper secret fingerprint op://<vault>/<item>/<field> --encode basic:x-access-token
+```
+
+A beekeeper without `--encode` reaches the same form through a consumer that encodes on the host,
+`copy <ref> -- <consumer…>`, as long as the consumer reads the value on stdin and prints nothing of it.
 
 ### Age identities
 

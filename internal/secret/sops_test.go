@@ -2,6 +2,7 @@ package secret
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -189,6 +190,18 @@ func TestRealSOPSSkeleton(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), "default: ENC[") || strings.Contains(string(raw), v["stringData.default"]) {
 		t.Fatal("stringData.default is not encrypted")
+	}
+	// --encode basic:<user> writes base64(<user>:<generated>).
+	o.Encode = Encoding{Base64: true, User: "x-access-token"}
+	if _, err := o.Set(ctx, Ref{File: file, Path: "basic"}, SetOptions{Length: 32, Charset: alnum}); err != nil {
+		t.Fatal(err)
+	}
+	if v, err = o.values(ctx, Ref{File: file}); err != nil {
+		t.Fatal(err)
+	}
+	dec, err := base64.StdEncoding.DecodeString(v["stringData.basic"])
+	if user, gen, ok := strings.Cut(string(dec), ":"); err != nil || !ok || user != "x-access-token" || len(gen) != 32 {
+		t.Fatalf("stringData.basic is no basic credential of a 32-character value: %v", err)
 	}
 }
 

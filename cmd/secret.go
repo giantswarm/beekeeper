@@ -27,6 +27,10 @@ var secretRun secret.Runner = secret.Exec
 // replace it.
 var secretApply secret.SecretApplier
 
+// secretRead reads a lab Secret's key; nil is the real cluster's, tests
+// replace it.
+var secretRead secret.SecretReader
+
 func (a *app) secretCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "secret",
@@ -109,38 +113,7 @@ anything is not equal.`,
 			return nil
 		},
 	})
-	c.AddCommand(&cobra.Command{
-		Use:   "fingerprint <ref>",
-		Short: "The keyed fingerprint of a value, or of each value of a SOPS file",
-		Long: `fingerprint answers an HMAC-SHA256 of each value under beekeeper's own key
-(the value scanner's, scan/key in the state directory), cut to 16 hex
-digits: two fingerprints are equal when the values are, and only beekeeper
-can make one.`,
-		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			r, err := parseRefs(args[0])
-			if err != nil {
-				return err
-			}
-			if err := a.sandboxFiles(r, nil); err != nil {
-				return err
-			}
-			ops, err := a.secretOpsKeyed()
-			if err != nil {
-				return err
-			}
-			ps, err := ops.Fingerprints(cmd.Context(), r[0])
-			if err := a.secretLog(err, "fingerprint", "%s: %s", r[0], outcome(err, fmt.Sprintf("%d keys", len(ps)))); err != nil {
-				return err
-			}
-			var b strings.Builder
-			for _, p := range ps {
-				fmt.Fprintf(&b, "%-60s %s\n", p.Key, p.Fingerprint)
-			}
-			return a.secretPrint(ps, b.String())
-		},
-	})
-	c.AddCommand(a.secretCopyCmd(), a.secretSetCmd(), a.secretRotateCmd(), a.secretSetupCmd(), a.secretImportCmd(), a.secretRecipientsCmd())
+	c.AddCommand(a.secretFingerprintCmd(), a.secretCopyCmd(), a.secretSetCmd(), a.secretRotateCmd(), a.secretSetupCmd(), a.secretImportCmd(), a.secretRecipientsCmd())
 	for _, sub := range c.Commands() {
 		run := sub.RunE
 		sub.RunE = func(cmd *cobra.Command, args []string) error {
@@ -159,6 +132,110 @@ can make one.`,
 	}
 	c.AddCommand(a.secretUnlockCmd(), a.secretLockCmd(), a.secretStatusCmd())
 	return c
+}
+
+func (a *app) secretFingerprintCmd() *cobra.Command {
+	var encode, fromSecret string
+	c := &cobra.Command{
+		Use:   "fingerprint <ref> [--encode <encoding>] | fingerprint --secret <context>/<namespace>/<name>/<key>",
+		Short: "The keyed fingerprint of a value, of each value of a SOPS file, or of a key of a lab's Secret",
+		Long: `fingerprint answers an HMAC-SHA256 of each value under beekeeper's own key
+(the value scanner's, scan/key in the state directory), cut to 16 hex
+digits: two fingerprints are equal when the values are, and only beekeeper
+can make one.
+
+--encode <encoding> answers the fingerprint of one value in that encoding,
+the form copy --encode writes; --secret <context>/<namespace>/<name>/<key>
+the fingerprint of a key of a Secret in a kind lab whose lease the caller
+holds. The two together check a delivery without reading a value:
+
+  beekeeper secret fingerprint op://<vault>/<item>/<field> --encode basic:<user>
+  beekeeper secret fingerprint --secret kind-<lab>/<namespace>/<name>/<key>`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if cmd.Flags().Changed("secret") {
+				return cobra.NoArgs(cmd, args)
+			}
+			return cobra.ExactArgs(1)(cmd, args)
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			enc, err := secret.ParseEncoding(encode)
+			if err != nil {
+				return usageErr("%v", err)
+			}
+			if cmd.Flags().Changed("secret") {
+				if !enc.IsZero() {
+					return usageErr("--encode encodes a source's value; a Secret's key is fingerprinted as it is")
+				}
+				return a.secretFingerprintSecret(cmd.Context(), fromSecret)
+			}
+			r, err := parseRefs(args[0])
+			if err != nil {
+				return err
+			}
+			if !enc.IsZero() && !r[0].Single() {
+				return usageErr("--encode encodes one value: file#path or op://…, not a whole file")
+			}
+			if err := a.sandboxFiles(r, nil); err != nil {
+				return err
+			}
+			ops, err := a.secretOpsKeyed()
+			if err != nil {
+				return err
+			}
+			ops.Encode = enc
+			ps, err := ops.Fingerprints(cmd.Context(), r[0])
+			if err := a.secretLog(err, "fingerprint", "%s%s: %s", r[0], encodedAs(enc), outcome(err, fmt.Sprintf("%d keys", len(ps)))); err != nil {
+				return err
+			}
+			return a.secretPrintPrints(ps)
+		},
+	}
+	encodeFlag(c, &encode)
+	c.Flags().StringVar(&fromSecret, "secret", "", "a key of a Secret in a lab you hold: <context>/<namespace>/<name>/<key>")
+	return c
+}
+
+// secretFingerprintSecret is fingerprint --secret: a key of a Secret in a
+// lab whose lease the caller holds.
+func (a *app) secretFingerprintSecret(ctx context.Context, spec string) error {
+	t, err := secret.ParseKubeTarget(spec)
+	if err != nil {
+		return usageErr("--secret: %v", err)
+	}
+	if err := a.checkLabHeld(t); err != nil {
+		return a.secretLog(err, "fingerprint", "%s: %s", t, outcome(err, ""))
+	}
+	ops, err := a.secretOpsKeyed()
+	if err != nil {
+		return err
+	}
+	p, err := ops.SecretFingerprint(ctx, t)
+	if err := a.secretLog(err, "fingerprint", "%s: %s", t, outcome(err, "1 key")); err != nil {
+		return err
+	}
+	return a.secretPrintPrints([]secret.Print{p})
+}
+
+// secretPrintPrints prints fingerprints, one key per line.
+func (a *app) secretPrintPrints(ps []secret.Print) error {
+	var b strings.Builder
+	for _, p := range ps {
+		fmt.Fprintf(&b, "%-60s %s\n", p.Key, p.Fingerprint)
+	}
+	return a.secretPrint(ps, b.String())
+}
+
+// encodeFlag is the flag that encodes a value before it is written.
+func encodeFlag(c *cobra.Command, encode *string) {
+	c.Flags().StringVar(encode, "encode", "", "encode the value inside beekeeper before it is written: base64, or basic:<user> for base64(<user>:<value>)")
+}
+
+// encodedAs is the log's note of an encoding, "" for none.
+func encodedAs(e secret.Encoding) string {
+	if e.IsZero() {
+		return ""
+	}
+	return " encoded " + e.String()
 }
 
 // callArgs are a call's arguments and its flags' values.
@@ -243,7 +320,7 @@ func vaultExit(err error) error {
 }
 
 func (a *app) secretCopyCmd() *cobra.Command {
-	var name, namespace, toSecret string
+	var name, namespace, toSecret, encode string
 	var in secret.Stdin
 	c := &cobra.Command{
 		Use:   "copy <from> <to> | copy <ref>=<path>… <new-file> [--name n --namespace ns] | copy <from> -- <consumer…> | copy <from> --to-secret <context>/<namespace>/<name>/<key>",
@@ -286,6 +363,16 @@ and keeps its other keys. kind's admin kubeconfig stays in beekeeper's memory
 like the value; it answers the value's length. A context of a lab the
 caller holds no lease for is refused.
 
+--encode base64 or --encode basic:<user> writes one value's encoded form
+instead of the value, made in beekeeper's process: base64(<user>:<value>)
+for basic, the credential a gateway injects verbatim after "Basic ". It
+takes one value (copy <ref> <file#path>, -- <consumer…>, --to-secret), the
+answer is the encoded form's length, and fingerprint <ref> --encode answers
+the fingerprint a delivery is checked against:
+
+  beekeeper secret copy op://<vault>/<item>/<field> --encode basic:x-access-token \
+    --to-secret kind-<lab>/<namespace>/<name>/<key>
+
 An op:// value the shared vault cannot give (none configured, no token, op
 failing or answering nothing within a minute) exits 78.`,
 		Args: func(cmd *cobra.Command, args []string) error {
@@ -313,14 +400,24 @@ failing or answering nothing within a minute) exits 78.`,
 			if in != (secret.Stdin{}) && cmd.ArgsLenAtDash() != 1 {
 				return usageErr("--stdin-json and --stdin-field shape a consumer's stdin: copy <from> -- <consumer…>")
 			}
+			enc, err := secret.ParseEncoding(encode)
+			if err != nil {
+				return usageErr("%v", err)
+			}
 			if cmd.ArgsLenAtDash() < 0 && !cmd.Flags().Changed("to-secret") {
 				if pairs, err := copyPairs(args); err == nil {
+					if !enc.IsZero() {
+						return usageErr("--encode encodes one value: copy <ref> <file#path>, copy <ref> -- <consumer…> or copy <ref> --to-secret …")
+					}
 					return a.secretCopyValues(cmd.Context(), pairs, args[len(args)-1], name, namespace)
 				}
 			}
 			src, err := parseRefs(args[0])
 			if err != nil {
 				return err
+			}
+			if !enc.IsZero() && !src[0].Single() {
+				return usageErr("--encode encodes one value: file#path or op://…, not a whole file")
 			}
 			if err := a.sandboxFiles(src, nil); err != nil {
 				return err
@@ -329,6 +426,7 @@ failing or answering nothing within a minute) exits 78.`,
 			if err != nil {
 				return err
 			}
+			ops.Encode = enc
 			ctx := cmd.Context()
 			if cmd.Flags().Changed("to-secret") {
 				if name != "" || namespace != "" {
@@ -349,7 +447,7 @@ failing or answering nothing within a minute) exits 78.`,
 					// exit ExitVault stays: the broker signs in again and retries
 					err = refused("%v", err)
 				}
-				if err := a.secretLog(err, "copy", "%s to %s: %s", src[0], argv[0], outcome(err, fmt.Sprintf("exit %d", code))); err != nil {
+				if err := a.secretLog(err, "copy", "%s%s to %s: %s", src[0], encodedAs(enc), argv[0], outcome(err, fmt.Sprintf("exit %d", code))); err != nil {
 					return err
 				}
 				if _, err := io.WriteString(a.out, out); err != nil {
@@ -372,7 +470,7 @@ failing or answering nothing within a minute) exits 78.`,
 					return usageErr("--name and --namespace rewrite a copied file, not one value")
 				}
 				n, err := ops.CopyValue(ctx, src[0], dst[0])
-				if err := a.secretLog(err, "copy", "%s to %s: %s", src[0], dst[0], outcome(err, fmt.Sprintf("%d bytes", n))); err != nil {
+				if err := a.secretLog(err, "copy", "%s%s to %s: %s", src[0], encodedAs(enc), dst[0], outcome(err, fmt.Sprintf("%d bytes", n))); err != nil {
 					return err
 				}
 				return a.secretPrint(secret.Key{Name: dst[0].String(), Bytes: n}, fmt.Sprintf("wrote %s: %d bytes\n", dst[0], n))
@@ -393,6 +491,7 @@ failing or answering nothing within a minute) exits 78.`,
 	c.Flags().StringVar(&namespace, "namespace", "", "the copy's metadata.namespace; with <ref>=<path>… the new Secret's")
 	c.Flags().StringVar(&toSecret, "to-secret", "", "a key of a Secret in a lab you hold: <context>/<namespace>/<name>/<key>")
 	stdinFlags(c, &in)
+	encodeFlag(c, &encode)
 	return c
 }
 
@@ -477,7 +576,7 @@ func (a *app) secretCopyToSecret(ctx context.Context, ops *secret.Ops, src secre
 		return a.secretLog(err, "copy", "%s to %s: %s", src, t, outcome(err, ""))
 	}
 	n, err := ops.CopyToSecret(ctx, src, t)
-	if err := a.secretLog(err, "copy", "%s to %s: %s", src, t, outcome(err, fmt.Sprintf("%d bytes", n))); err != nil {
+	if err := a.secretLog(err, "copy", "%s%s to %s: %s", src, encodedAs(ops.Encode), t, outcome(err, fmt.Sprintf("%d bytes", n))); err != nil {
 		return err
 	}
 	return a.secretPrint(secret.Key{Name: t.String(), Bytes: n}, fmt.Sprintf("wrote %s: %d bytes\n", t, n))
@@ -500,7 +599,7 @@ func (a *app) checkLabHeld(t secret.KubeTarget) error {
 }
 
 func (a *app) secretSetCmd() *cobra.Command {
-	var vault, charset, toSecret, name, namespace string
+	var vault, charset, toSecret, name, namespace, encode string
 	var length int
 	var generate bool
 	var in secret.Stdin
@@ -530,7 +629,13 @@ stdin, as copy <ref> -- <consumer…> does (kubectl exec -i into a pod and
 --stdin-json included), and answers its output with the value redacted and
 its exit code. Both come after the SOPS path is
 written: when one fails, the SOPS path holds the value and copy finishes
-the delivery.`,
+the delivery.
+
+--encode base64 or --encode basic:<user> writes the SOPS path, the Secret
+and the consumer the value's encoded form (base64(<user>:<value>) for
+basic, an HTTP Basic credential), made in beekeeper's process; the vault's
+field keeps the generated value, and the fingerprint answered is the
+encoded form's.`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if dash := cmd.ArgsLenAtDash(); dash >= 0 {
 				if dash != 2 || len(args) < 3 {
@@ -546,6 +651,10 @@ the delivery.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !generate {
 				return usageErr("set takes no value: --generate makes one")
+			}
+			enc, err := secret.ParseEncoding(encode)
+			if err != nil {
+				return usageErr("%v", err)
 			}
 			opt := secret.SetOptions{Length: length, Charset: charset}
 			if vault != "" {
@@ -597,18 +706,19 @@ the delivery.`,
 			if err != nil {
 				return err
 			}
+			ops.Encode = enc
 			res, err := ops.Set(cmd.Context(), dst, opt)
 			if res.Key != "" {
 				to[slices.Index(to, dst.String())] = res.Key
 			}
-			done := "generated " + res.Fingerprint
+			done := "generated" + encodedAs(enc) + " " + res.Fingerprint
 			if opt.Consumer != nil {
 				done += fmt.Sprintf(", consumer exit %d", res.Code)
 			}
 			if err := a.secretLog(err, "set", "%s: %s", strings.Join(to, " and "), outcome(err, done)); err != nil {
 				return err
 			}
-			text := fmt.Sprintf("wrote %s: %d characters, %s\n", strings.Join(to, " and "), length, res.Fingerprint)
+			text := fmt.Sprintf("wrote %s: %d characters%s, %s\n", strings.Join(to, " and "), length, encodedAs(enc), res.Fingerprint)
 			if err := a.secretPrint(res, text+res.Output); err != nil {
 				return err
 			}
@@ -627,6 +737,7 @@ the delivery.`,
 	f.StringVar(&name, "name", "", "an absent file starts as a Secret of this metadata.name")
 	f.StringVar(&namespace, "namespace", "", "an absent file starts as a Secret in this metadata.namespace")
 	stdinFlags(c, &in)
+	encodeFlag(c, &encode)
 	return c
 }
 
@@ -849,7 +960,7 @@ func parseRefs(args ...string) ([]secret.Ref, error) {
 // secretOps are the operations with the service account's token, read
 // from secret.tokenFile when the shared vault is configured.
 func (a *app) secretOps() (*secret.Ops, error) {
-	ops := &secret.Ops{Run: secretRun, Apply: secretApply, Vault: a.cfg.Secret.Vault, Session: a.cfg.Secret.Session, Ages: a.ageIdentities(),
+	ops := &secret.Ops{Run: secretRun, Apply: secretApply, Read: secretRead, Vault: a.cfg.Secret.Vault, Session: a.cfg.Secret.Session, Ages: a.ageIdentities(),
 		Store: secret.Store{Read: a.cfg.Secret.Store.Read, Search: a.cfg.Secret.Store.Search}, Installations: a.installationNames()}
 	if ops.Vault == "" || ops.Session || a.cfg.Secret.TokenFile == "" {
 		return ops, nil
