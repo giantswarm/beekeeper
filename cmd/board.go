@@ -66,8 +66,11 @@ an issue or pull request by its URL, as owner/repo#n, as repo#n of
 board.owner, as a repository before a list ("beekeeper: #524, #525") or as
 a bare #n after the last repository it named ("beekeeper#173, #176"); a
 bare #n before any repository names nothing, and "note #n", "timer #n",
-"memo #n" and "decision #n" are beekeeper's own items. It prints the item,
-why it is picked, why every item above it was skipped, without --claim the
+"memo #n" and "decision #n" are beekeeper's own items. It prints each item
+above the pick that was skipped on a line of its own, "skipped
+<owner/repo#n>: <reason>", the same list as --json's skipped (a note's
+reason names the note and its first line: note #<id> "<first line>" (waits
+on <person>)), then the item and why it is picked, without --claim the
 free items behind it in their order (the preview of the board's work), and
 the skipped items' count by kind: served (a session's record, a busy
 agent's task), note (an open note names it), assigned (outside
@@ -436,7 +439,7 @@ func boardOwners(st *state.State, sc pickScope) map[string]string {
 	}
 	// A note names what its text says and what it is linked to (--ref).
 	for _, n := range st.Notes {
-		named(strings.Join(append([]string{n.Text}, n.Refs...), " "), fmt.Sprintf("note #%d (waits on %s)", n.ID, cmp.Or(n.For, "the supervisor")))
+		named(strings.Join(append([]string{n.Text}, n.Refs...), " "), fmt.Sprintf("note #%d %q (waits on %s)", n.ID, truncate(firstLine(n.Text), 60), cmp.Or(n.For, "the supervisor")))
 	}
 	return out
 }
@@ -476,6 +479,11 @@ func (a *app) printNext(res nextResult, offered int) error {
 		if h := res.Held; h != nil {
 			_, _ = fmt.Fprintf(a.out, "this session %s: finish it, release it with sessions unserve %s, or claim with --replace\n", recordText(*h), h.Issue)
 		}
+		// Every skip above the pick comes first, the same list as --json's
+		// skipped, so a held item reads apart from an absent one.
+		for _, c := range res.Skipped {
+			_, _ = fmt.Fprintf(a.out, "skipped %s: %s\n", c.Ref, c.Skip)
+		}
 		if res.Pick != nil {
 			p := res.Pick
 			_, _ = fmt.Fprintf(a.out, "%s %s\n  %s\n  picked: %s\n", p.Ref, p.Title, p.URL, p.Why())
@@ -485,18 +493,6 @@ func (a *app) printNext(res nextResult, offered int) error {
 			if res.Claimed {
 				_, _ = fmt.Fprintf(a.out, "  claimed: you serve %s now, its Status unchanged (board move %s %q once you take it on; sessions unserve %s releases it)\n", p.Ref, p.Ref, "in progress", p.Ref)
 			}
-		}
-		if len(res.Skipped) > 0 {
-			head := "skipped above it:"
-			if res.Pick == nil {
-				head = "skipped:"
-			}
-			_, _ = fmt.Fprintln(a.out, head)
-			w := a.table()
-			for _, c := range res.Skipped {
-				_, _ = fmt.Fprintf(w, "  %s\t%s\t%s\t%s\n", c.Ref, truncate(c.Title, 50), c.Step, c.Skip)
-			}
-			_ = w.Flush()
 		}
 		if n := len(res.AfterPick); n > 0 {
 			free := slices.DeleteFunc(slices.Clone(res.AfterPick), func(c board.Candidate) bool { return c.Skip != "" })

@@ -86,7 +86,7 @@ func TestNextFreeSkipsOwnedItems(t *testing.T) {
 		`o/r#7: served by "Busy" (task)`,
 		`o/r#8: served by "Busy" (task)`,
 		`o/r#9: served by "Worker one"`,
-		`o/r#10: note #12 (waits on Pat)`,
+		`o/r#10: note #12 "decide https://github.com/o/r/issues/10" (waits on Pat)`,
 		`o/r#11: assigned to pat`,
 	}
 	if !slices.Equal(got, want) {
@@ -117,8 +117,8 @@ func TestNextFreeHoldsAnEpicsSubIssuesToItsOwners(t *testing.T) {
 		got = append(got, c.Ref+": "+c.Skip)
 	}
 	want := []string{
-		`o/r#11: note #704 (waits on Pat), on epic o/r#10`,
-		`o/r#12: note #704 (waits on Pat), on epic O/R#10`,
+		`o/r#11: note #704 "skip the slices of https://github.com/o/r/issues/10" (waits on Pat), on epic o/r#10`,
+		`o/r#12: note #704 "skip the slices of https://github.com/o/r/issues/10" (waits on Pat), on epic O/R#10`,
 		`o/r#21: served by "Worker one"`,
 		`o/r#22: served by "Worker one", on epic o/r#20`,
 	}
@@ -414,12 +414,12 @@ func TestNextFreeSkipsWhatANoteNamesAsPeopleWrite(t *testing.T) {
 		got = append(got, c.Ref+": "+c.Skip)
 	}
 	want := []string{
-		`gs/model-manager#258: note #1 (waits on Pat)`,
-		`gs/beekeeper#525: note #2 (waits on the supervisor)`,
-		`gs/beekeeper#555: note #2 (waits on the supervisor)`,
-		`gs/beekeeper#563: note #2 (waits on the supervisor)`,
+		`gs/model-manager#258: note #1 "model-manager#258 waits on the GPU" (waits on Pat)`,
+		`gs/beekeeper#525: note #2 "dispatched beekeeper: #525 (a), #555 (b), #563 (c)" (waits on the supervisor)`,
+		`gs/beekeeper#555: note #2 "dispatched beekeeper: #525 (a), #555 (b), #563 (c)" (waits on the supervisor)`,
+		`gs/beekeeper#563: note #2 "dispatched beekeeper: #525 (a), #555 (b), #563 (c)" (waits on the supervisor)`,
 		`gs/llm-d#29: served by "Busy" (task)`,
-		`x/y#9: note #1 (waits on Pat)`,
+		`x/y#9: note #1 "model-manager#258 waits on the GPU" (waits on Pat)`,
 	}
 	if !slices.Equal(got, want) || res.Pick == nil || res.Pick.Ref != "gs/x#4" {
 		t.Errorf("pick %v, skipped:\n%s\nwant gs/x#4 after:\n%s", res.Pick, strings.Join(got, "\n"), strings.Join(want, "\n"))
@@ -470,7 +470,6 @@ func TestPrintNextPreviewListsTheFreeItemsAndCountsTheSkips(t *testing.T) {
 	}
 	for _, line := range []string{
 		"o/r#2 Item 2\n",
-		"skipped above it:\n",
 		"free behind it, next in line: 2 of 5\n",
 		"  o/r#5  Item 5  Up Next\n",
 		"  o/r#6  Item 6  Up Next\n",
@@ -488,6 +487,47 @@ func TestPrintNextPreviewListsTheFreeItemsAndCountsTheSkips(t *testing.T) {
 	}
 	if s := out.String(); !strings.Contains(s, "behind it: 5 more, 2 of them free") || strings.Contains(s, "Item 5") {
 		t.Errorf("claim output:\n%s", s)
+	}
+}
+
+func TestPrintNextListsEachSkipBeforeThePick(t *testing.T) {
+	listed := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	running := state.Party{Session: "s1", Name: workerOne}
+	cands := boardCandidates(4)
+	st := &state.State{
+		Records: []state.Record{{Session: running, Issue: cands[1].Ref, At: listed.Add(-time.Hour)}},
+		Notes:   []state.Note{{ID: 12, For: pat, Text: "Which model for " + cands[2].Ref + "?\nThe GPU is busy."}},
+	}
+	cands[0].Skip = oldBacklog
+	res := nextFree(st, cands, pickScope{me: state.Party{Session: "me"}, alive: func(state.Party) bool { return true }, listed: listed})
+	var out strings.Builder
+	if err := (&app{out: &out}).printNext(res, len(cands)); err != nil {
+		t.Fatal(err)
+	}
+	skips := "skipped " + cands[0].Ref + ": " + oldBacklog + "\n" +
+		"skipped " + cands[1].Ref + ": served by \"Worker one\"\n" +
+		"skipped " + cands[2].Ref + ": note #12 \"Which model for " + cands[2].Ref + "?\" (waits on Pat)\n"
+	want := skips + cands[3].Ref + " "
+	if !strings.HasPrefix(out.String(), want) {
+		t.Errorf("output:\n%s\nwant it to start with:\n%s", out.String(), want)
+	}
+	// The text names the skipped items --json does, in its order.
+	var refs []string
+	for _, c := range res.Skipped {
+		refs = append(refs, c.Ref)
+	}
+	if !slices.Equal(refs, []string{cands[0].Ref, cands[1].Ref, cands[2].Ref}) {
+		t.Errorf("--json's skipped %v", refs)
+	}
+	// With nothing free, the skips are all it prints before the refusal.
+	cands = cands[:3]
+	res = nextFree(st, cands, pickScope{me: state.Party{Session: "me"}, alive: func(state.Party) bool { return true }, listed: listed})
+	out.Reset()
+	if err := (&app{out: &out}).printNext(res, len(cands)); Code(err) != ExitRefused {
+		t.Fatalf("no free item: err %v, want exit refused", err)
+	}
+	if !strings.HasPrefix(out.String(), skips) {
+		t.Errorf("output without a pick:\n%s", out.String())
 	}
 }
 
