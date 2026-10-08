@@ -32,6 +32,29 @@ type AgeIdentity struct {
 	// entry that holds the identity (AGE-SECRET-KEY-1…, an identity file's
 	// comments allowed).
 	Ref string
+	// item is the shared vault's item per recipient ([AgeItemTitle]), the
+	// source of a recipient no entry names.
+	item bool
+}
+
+// The shared vault holds the identity of a recipient no secret.ageIdentities
+// entry names in one item per recipient: titled [AgeItemTitle], its password
+// field the AGE-SECRET-KEY-1… identity. A person grants an installation's
+// recipient once by creating the item; beekeeper reads it like any op://
+// field and checks that it exists by the vault's item listing, metadata
+// only.
+const (
+	ageItemPrefix = "sops age key "
+	ageItemField  = "password"
+)
+
+// AgeItemTitle is the title of the vault item that holds recipient's
+// identity.
+func AgeItemTitle(recipient string) string { return ageItemPrefix + recipient }
+
+// AgeItemRef is the op:// reference of recipient's identity in vault.
+func AgeItemRef(vault, recipient string) string {
+	return guard.OpRef + vault + "/" + AgeItemTitle(recipient) + "/" + ageItemField
 }
 
 // The references of an age identity besides a vault field.
@@ -87,9 +110,14 @@ func (o *Ops) ageEnv(ctx context.Context, file string) ([]string, error) {
 	if id == nil || err != nil {
 		return nil, err
 	}
-	keys, err := o.ageKeys(ctx, id.Ref, recipients)
+	var keys []ageKey
+	if id.item {
+		keys, err = o.itemKeys(ctx, file, recipients)
+	} else if keys, err = o.ageKeys(ctx, id.Ref, recipients); err != nil {
+		err = fmt.Errorf("%s: the age identity of secret.ageIdentities: %w", file, err)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("%s: the age identity of secret.ageIdentities: %w", file, err)
+		return nil, err
 	}
 	var held, from []string
 	for _, k := range keys {
@@ -193,7 +221,7 @@ func (o *Ops) storeRun(ctx context.Context, argv []string, arg string) ([]byte, 
 // relative to dir (the working directory when empty), takes an age
 // identity from the shared vault.
 func (o *Ops) AgeNeedsVault(dir string, args []string) bool {
-	return o.ageNeeds(dir, args, func(id *AgeIdentity) bool { return strings.HasPrefix(id.Ref, guard.OpRef) })
+	return o.ageNeeds(dir, args, func(id *AgeIdentity) bool { return id.item || strings.HasPrefix(id.Ref, guard.OpRef) })
 }
 
 // AgeNeedsIdentity reports whether decrypting one of the SOPS files args
@@ -206,7 +234,7 @@ func (o *Ops) AgeNeedsIdentity(dir string, args []string) bool {
 // ageNeeds reports whether one of the SOPS files args name, relative to
 // dir, takes an identity of secret.ageIdentities that match accepts.
 func (o *Ops) ageNeeds(dir string, args []string, match func(*AgeIdentity) bool) bool {
-	if len(o.Ages) == 0 {
+	if len(o.Ages) == 0 && o.Vault == "" {
 		return false
 	}
 	for _, a := range args {
@@ -227,11 +255,13 @@ func (o *Ops) ageNeeds(dir string, args []string, match func(*AgeIdentity) bool)
 	return false
 }
 
-// ageIdentity is the configured identity decrypting file takes, with the
-// file's recipients: nil when the file has no age recipients beekeeper can
-// check (none, an SSH or plugin recipient, another key group), when one of
-// sops' own sources holds an identity for one of them, or when one of
-// those sources is opaque to beekeeper.
+// ageIdentity is the identity decrypting file takes, with the file's
+// recipients: the first configured entry that names one of them or the
+// file's path, else the shared vault's item per recipient. nil when the
+// file has no age recipients beekeeper can check (none, an SSH or plugin
+// recipient, another key group), when one of sops' own sources holds an
+// identity for one of them, or when one of those sources is opaque to
+// beekeeper.
 func (o *Ops) ageIdentity(file string) (*AgeIdentity, []string, error) {
 	recipients := ageRecipients(file)
 	if len(recipients) == 0 {
@@ -245,14 +275,91 @@ func (o *Ops) ageIdentity(file string) (*AgeIdentity, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	for i, id := range o.Ages {
-		if slices.Contains(recipients, id.Recipient) || id.Path != nil && id.Path.MatchString(abs) {
-			return &o.Ages[i], recipients, nil
-		}
+	if id := o.configured(recipients, abs); id != nil {
+		return id, recipients, nil
 	}
-	return nil, nil, fmt.Errorf("%s: %w for its recipients %s: checked %s and secret.ageIdentities; "+
+	if o.Vault != "" {
+		return &AgeIdentity{item: true}, recipients, nil
+	}
+	return nil, nil, fmt.Errorf("%s: %w for its recipients %s: checked %s and secret.ageIdentities, and no shared vault (secret.vault) holds an item per recipient; "+
 		"an entry there (recipient or pathRegex, and ref: op://<vault>/<item>/<field>, file://<identity file> or store://[<entry>] holding the AGE-SECRET-KEY-1… identity) gives beekeeper one",
 		file, ErrNoAgeIdentity, strings.Join(recipients, ", "), strings.Join(checked, ", "))
+}
+
+// configured is the first entry of secret.ageIdentities that names one of
+// recipients or matches the absolute path abs, nil when none does.
+func (o *Ops) configured(recipients []string, abs string) *AgeIdentity {
+	for i, id := range o.Ages {
+		if slices.Contains(recipients, id.Recipient) || abs != "" && id.Path != nil && id.Path.MatchString(abs) {
+			return &o.Ages[i]
+		}
+	}
+	return nil
+}
+
+// itemKeys read the shared vault's items of recipients, [AgeItemTitle]
+// each, those the vault's item listing names (metadata, no value): the
+// identity of a recipient no secret.ageIdentities entry names. With none,
+// the call fails in one line naming the installation, the recipient and the
+// item the vault lacks: never a person's own sops run.
+func (o *Ops) itemKeys(ctx context.Context, file string, recipients []string) ([]ageKey, error) {
+	titles, err := o.itemTitles(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%s: the age identity in the vault: %w", file, err)
+	}
+	var out []ageKey
+	var missing []string
+	for _, r := range recipients {
+		if !slices.Contains(titles, AgeItemTitle(r)) {
+			missing = append(missing, fmt.Sprintf("%q", AgeItemTitle(r)))
+			continue
+		}
+		ref := AgeItemRef(o.Vault, r)
+		v, err := o.value(ctx, Ref{Op: ref})
+		if err != nil {
+			return nil, fmt.Errorf("%s: the age identity in the vault: %w", file, err)
+		}
+		out = append(out, ageKey{ref, v})
+	}
+	if len(out) == 0 {
+		whose := "its"
+		if inst := o.installation(file); inst != "" {
+			whose = inst + "'s"
+		}
+		return nil, fmt.Errorf("%s: %w for %s recipient %s: the vault %s holds no item %s, whose password field is the AGE-SECRET-KEY-1… identity",
+			file, ErrNoAgeIdentity, whose, strings.Join(recipients, ", "), o.Vault, strings.Join(missing, " or "))
+	}
+	return out, nil
+}
+
+// itemTitles are the titles of the shared vault's items: the listing names
+// no value.
+func (o *Ops) itemTitles(ctx context.Context) ([]string, error) {
+	items, err := o.vaultItems(ctx, o.Vault)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrVault, err)
+	}
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		out = append(out, it.Title)
+	}
+	return out, nil
+}
+
+// installation is the one of Installations that file's path names, as a
+// directory under the .sops.yaml above it (management-clusters/<name>/…),
+// "" when none.
+func (o *Ops) installation(file string) string {
+	_, rel, err := sopsTarget(file)
+	if err != nil {
+		return ""
+	}
+	for _, seg := range strings.Split(filepath.ToSlash(rel), "/") {
+		if slices.Contains(o.Installations, seg) {
+			return seg
+		}
+	}
+	return ""
 }
 
 // ageRecipients are the age recipients in file's sops metadata, nil when

@@ -8,13 +8,15 @@ import (
 	"slices"
 	"strings"
 
+	"filippo.io/age"
 	"gopkg.in/yaml.v3"
 )
 
 // creationRule is what a .sops.yaml creation rule says about the file it
-// applies to and the keys sops encrypts in it.
+// applies to, the recipients it encrypts for and the keys sops encrypts in it.
 type creationRule struct {
 	PathRegex               string `yaml:"path_regex"`
+	Age                     string `yaml:"age"`
 	UnencryptedSuffix       string `yaml:"unencrypted_suffix"`
 	EncryptedSuffix         string `yaml:"encrypted_suffix"`
 	UnencryptedRegex        string `yaml:"unencrypted_regex"`
@@ -37,10 +39,8 @@ func sopsTarget(file string) (cfg, rel string, err error) {
 	return cfg, rel, err
 }
 
-// ruleFor is the creation rule of cfg that sops applies to rel: the first
-// without a path_regex or whose path_regex matches. nil when none does,
-// which sops refuses itself.
-func ruleFor(cfg, rel string) (*creationRule, error) {
+// rulesOf are the creation rules of the .sops.yaml cfg, in their order.
+func rulesOf(cfg string) ([]creationRule, error) {
 	raw, err := os.ReadFile(cfg) //nolint:gosec // the .sops.yaml above the file
 	if err != nil {
 		return nil, err
@@ -51,8 +51,19 @@ func ruleFor(cfg, rel string) (*creationRule, error) {
 	if err := yaml.Unmarshal(raw, &c); err != nil {
 		return nil, fmt.Errorf("%s: %w", cfg, err)
 	}
-	for i := range c.CreationRules {
-		r := &c.CreationRules[i]
+	return c.CreationRules, nil
+}
+
+// ruleFor is the creation rule of cfg that sops applies to rel: the first
+// without a path_regex or whose path_regex matches. nil when none does,
+// which sops refuses itself.
+func ruleFor(cfg, rel string) (*creationRule, error) {
+	rules, err := rulesOf(cfg)
+	if err != nil {
+		return nil, err
+	}
+	for i := range rules {
+		r := &rules[i]
 		if r.PathRegex == "" {
 			return r, nil
 		}
@@ -65,6 +76,24 @@ func ruleFor(cfg, rel string) (*creationRule, error) {
 		}
 	}
 	return nil, nil
+}
+
+// recipients are the age recipients r encrypts for, as the rule's age
+// setting lists them (comma-separated); nil when it names none or one that
+// is not X25519, which beekeeper does not check.
+func (r creationRule) recipients() []string {
+	var out []string
+	for _, s := range strings.Split(r.Age, ",") {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if _, err := age.ParseX25519Recipient(s); err != nil {
+			return nil
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 // check refuses a dotted path whose value sops would leave in plaintext

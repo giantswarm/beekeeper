@@ -123,10 +123,14 @@ func TestBrokeredVaultSignsInOnce(t *testing.T) {
 		t.Errorf("the locked call's log = %+v, %v", evs, err)
 	}
 
-	// a SOPS-only call never waits on the vault
-	envs = append(envs, []string{"x"})
-	if r, _ := h(context.Background(), os.Getpid(), sandbox.Request{Op: sandbox.OpSecret, Args: []string{"compare", "a.sops.yaml", "b.sops.yaml"}}); r.Out != "ok" || envs[len(envs)-1] != nil {
-		t.Errorf("SOPS-only: %+v, env %q", r, envs[len(envs)-1])
+	// a SOPS-only call whose files name no recipient of the vault never
+	// waits on it; the files are read relative to the requester's working
+	// directory, which /proc gives on Linux alone
+	if runtime.GOOS == "linux" {
+		envs = append(envs, []string{"x"})
+		if r, _ := h(context.Background(), os.Getpid(), sandbox.Request{Op: sandbox.OpSecret, Args: []string{"compare", "a.sops.yaml", "b.sops.yaml"}}); r.Out != "ok" || envs[len(envs)-1] != nil {
+			t.Errorf("SOPS-only: %+v, env %q", r, envs[len(envs)-1])
+		}
 	}
 }
 

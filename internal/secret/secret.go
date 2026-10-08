@@ -52,6 +52,10 @@ type Ops struct {
 	// Store is the person's own credential store a store:// age identity
 	// is read from.
 	Store Store
+	// Installations are the installations' names, which a SOPS file's path
+	// under its .sops.yaml carries as a directory: a refusal names the one
+	// whose recipient has no identity.
+	Installations []string
 }
 
 // opTimeout bounds one read of the shared vault: op that answers nothing
