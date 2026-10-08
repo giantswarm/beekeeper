@@ -251,6 +251,13 @@ func TestSecretCopyToSecretOnlyIntoAHeldLab(t *testing.T) {
 	}
 }
 
+// The flag and encodings the encoded copy's test names.
+const (
+	encodeOpt  = "--encode"
+	base64Enc  = "base64"
+	basicToken = "basic:x-access-token"
+)
+
 // TestSecretCopyEncodedIsCheckedByFingerprint copies a value encoded into a
 // held lab's Secret and checks the delivery with fingerprint alone: the
 // Secret's key and the source's encoded form answer the same fingerprint,
@@ -273,7 +280,7 @@ func TestSecretCopyEncodedIsCheckedByFingerprint(t *testing.T) {
 	}
 	const target = "kind-agentlab/kagent/private-skills/token"
 	encoded := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + secretValue))
-	out, err := runSecret(a, copyOp, dbRef, "--encode", "basic:x-access-token", "--to-secret", target)
+	out, err := runSecret(a, copyOp, dbRef, encodeOpt, basicToken, "--to-secret", target)
 	if err != nil || out != fmt.Sprintf("wrote %s: %d bytes\n", target, len(encoded)) {
 		t.Fatalf("copy --encode answers %q, %v", out, err)
 	}
@@ -283,7 +290,7 @@ func TestSecretCopyEncodedIsCheckedByFingerprint(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.out = &bytes.Buffer{}
-	expected, err := runSecret(a, fingerprintOp, dbRef, "--encode", "basic:x-access-token")
+	expected, err := runSecret(a, fingerprintOp, dbRef, encodeOpt, basicToken)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,13 +310,13 @@ func TestSecretCopyEncodedIsCheckedByFingerprint(t *testing.T) {
 		}
 	}
 	for _, args := range [][]string{
-		{copyOp, dbRef, "--encode", "hex", "--to-secret", target},
-		{copyOp, dbRef, "--encode", "basic:", "--to-secret", target},
-		{copyOp, filepath.Join(repo, "app.sops.yaml"), filepath.Join(repo, "copy.sops.yaml"), "--encode", "base64"},
-		{copyOp, dbRef + "=a", filepath.Join(repo, "new.sops.yaml"), "--encode", "base64"},
-		{fingerprintOp, dbRef, "--encode", "rot13"},
-		{fingerprintOp, "--secret", target, "--encode", "base64"},
-		{setOp, filepath.Join(repo, "x.sops.yaml"), "a", generateFlag, "--encode", "basic"},
+		{copyOp, dbRef, encodeOpt, "hex", "--to-secret", target},
+		{copyOp, dbRef, encodeOpt, "basic:", "--to-secret", target},
+		{copyOp, filepath.Join(repo, "app.sops.yaml"), filepath.Join(repo, "copy.sops.yaml"), encodeOpt, base64Enc},
+		{copyOp, dbRef + "=a", filepath.Join(repo, "new.sops.yaml"), encodeOpt, base64Enc},
+		{fingerprintOp, dbRef, encodeOpt, "rot13"},
+		{fingerprintOp, "--secret", target, encodeOpt, base64Enc},
+		{setOp, filepath.Join(repo, "x.sops.yaml"), "a", generateFlag, encodeOpt, "basic"},
 	} {
 		a.out = &bytes.Buffer{}
 		if _, err := runSecret(a, args...); Code(err) != ExitUsage {
