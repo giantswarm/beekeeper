@@ -156,6 +156,11 @@ alerts:
   flap: {changes: 4, window: 1h}   # an alert's 4th change within 1h is one FLAPPING line, then quiet until stable for 1h
   pageSeverity: page        # a firing alert at it (team's, when set) with no owner (alerts own) for ownerGrace is PAGE UNOWNED, again every ownerGrace
   ownerGrace: 15m
+  pagerduty:                # the second source: the team's PagerDuty services' open incidents; off without context
+    context: example        # the muster context whose PagerDuty MCP server is read, as the person; beekeeper holds no PagerDuty token
+    server: pd              # its muster name: x_<server>_<tool>, the read-only list_incidents and list_alerts_from_incident
+    services: [PABC123]     # the team's service ids
+    every: 1m               # a page is a PAGERDUTY NEW line within it
   quiet:                    # alerts whose changes are logged, not said; default: [{severity: notify}] once team is set, else none
     - {cluster: "t-*"}      # fields installation, cluster, alertname, severity, globs; a page only by a rule naming a cluster
     - {severity: notify}    # other teams' and team-less notify alerts

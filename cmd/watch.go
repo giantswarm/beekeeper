@@ -486,6 +486,9 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 	})
 	if !w.standby {
 		wg.Go(func() { w.watchAlerts(ctx) })
+		if w.cfg.Alerts.PagerDuty.Enabled() {
+			wg.Go(func() { w.watchPagerDuty(ctx) })
+		}
 	}
 	wg.Go(func() { w.loop(ctx, interval, true, w.upgradeCycle) })
 	w.loop(ctx, interval, false, w.poll)

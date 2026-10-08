@@ -19,6 +19,9 @@ import (
 type State struct {
 	Owner         *Owner                   `json:"owner,omitempty"`
 	Installations map[string]*Installation `json:"installations"`
+	// PagerDuty is the open incidents' baseline, in the PagerDuty store
+	// only.
+	PagerDuty *PagerDuty `json:"pagerduty,omitempty"`
 }
 
 // Owner is the process that reads the alerts and keeps the baseline.
@@ -27,20 +30,26 @@ type Owner struct {
 	Since time.Time `json:"since"`
 }
 
-// Store keeps the baseline in alerts.json in beekeeper's state directory.
-// Only the process holding alerts.lock reads alerts into it.
+// Store keeps the baseline in <name>.json in beekeeper's state directory.
+// Only the process holding <name>.lock reads alerts into it.
 type Store struct {
-	dir  string
-	lock *flock.Flock
+	dir, name string
+	lock      *flock.Flock
 }
 
-// NewStore returns the baseline kept in dir.
-func NewStore(dir string) *Store {
-	return &Store{dir: dir, lock: flock.New(filepath.Join(dir, "alerts.lock"))}
+// NewStore returns the installations' baseline kept in dir.
+func NewStore(dir string) *Store { return newStore(dir, "alerts") }
+
+// NewPagerDutyStore returns the incidents' baseline kept in dir: read on its
+// own cadence, so it never waits for, or overwrites, the installations'.
+func NewPagerDutyStore(dir string) *Store { return newStore(dir, "pagerduty") }
+
+func newStore(dir, name string) *Store {
+	return &Store{dir: dir, name: name, lock: flock.New(filepath.Join(dir, name+".lock"))}
 }
 
 // Path is the baseline file.
-func (s *Store) Path() string { return filepath.Join(s.dir, "alerts.json") }
+func (s *Store) Path() string { return filepath.Join(s.dir, s.name+".json") }
 
 // Own makes this process the baseline's owner unless another one is; then it
 // returns false and that owner. Owning lasts until Release or the process ends.
