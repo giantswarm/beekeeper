@@ -135,7 +135,7 @@ func TestImportAgeStoresOnlyTheRecipientsIdentity(t *testing.T) {
 	}
 	recipient := want.Recipient().String()
 	keysTxt := "# created: 2026-10-09T01:00:00Z\n# public key: " + recipient + "\n" + want.String() + "\n"
-	const src, wrong = "op://Dev Common/lab.agekey/notesPlain", "op://Dev Common/other.agekey/notesPlain"
+	const src, wrong = "op://Employee/lab.agekey/notesPlain", "op://Employee/other.agekey/notesPlain"
 	tools := secrettest.New(map[string]string{src: keysTxt, wrong: "# public key: " + recipient + "\n" + other.String()})
 	tools.Signed = true
 	o := &secret.Ops{Run: tools.Run, Vault: shared, Session: true}
