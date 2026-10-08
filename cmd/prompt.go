@@ -351,9 +351,9 @@ func (a *app) promptAlerts(p printer, al *alertsView) {
 func baselineText(now time.Time, b *alerts.Installation) string {
 	switch {
 	case b == nil:
-		return "no baseline yet"
+		return noBaseline
 	case b.Alerts == nil:
-		return "unreachable, never read"
+		return neverRead
 	}
 	count := map[string]int{}
 	for _, al := range b.Alerts {

@@ -879,7 +879,32 @@ type Alerts struct {
 	PageSeverity string `yaml:"pageSeverity"`
 	// OwnerGrace is how long a page may go unowned (default 15m).
 	OwnerGrace Duration `yaml:"ownerGrace"`
+	// PagerDuty is the second alert source: the team's PagerDuty services'
+	// open incidents.
+	PagerDuty PagerDuty `yaml:"pagerduty"`
 }
+
+// PagerDuty configures the reading of the open incidents of the team's
+// PagerDuty services, through muster's read-only PagerDuty tools as the
+// person, signed in to the muster context: beekeeper holds no PagerDuty
+// token. The watch reads them every Every and prints PAGERDUTY NEW,
+// ACKNOWLEDGED and RESOLVED lines; alerts.team marks them.
+type PagerDuty struct {
+	// Context is the muster context whose PagerDuty server is read; unset,
+	// PagerDuty is not read. The binary and the call timeout are central's.
+	Context string `yaml:"context"`
+	// Server is the name muster registered the PagerDuty MCP server under:
+	// its tools are x_<server>_<tool> (default pd).
+	Server string `yaml:"server"`
+	// Services are the ids of the team's PagerDuty services.
+	Services []string `yaml:"services"`
+	// Every is the reading interval (default 1m): a page is a watch line
+	// within it.
+	Every Duration `yaml:"every"`
+}
+
+// Enabled says whether PagerDuty is read.
+func (p PagerDuty) Enabled() bool { return p.Context != "" }
 
 // Upgrades paces the reading of alerts.installations' Cluster API clusters
 // for running upgrades: each installation is read every Every, and every
@@ -1598,6 +1623,8 @@ func (c *Config) defaults() error {
 	setDur(&al.Flap.Window, time.Hour)
 	setStr(&al.PageSeverity, alerts.Page)
 	setDur(&al.OwnerGrace, 15*time.Minute)
+	setStr(&al.PagerDuty.Server, "pd")
+	setDur(&al.PagerDuty.Every, time.Minute)
 	setDur(&c.Upgrades.Every, 5*time.Minute)
 	if c.Notify.Kinds == nil {
 		c.Notify.Kinds = slices.Clone(notify.Kinds)
@@ -1796,6 +1823,9 @@ func (c *Config) validate() error {
 		if r.Skill != "" && r.Instructions != "" {
 			return fmt.Errorf("%s: set skill or instructions, not both", name)
 		}
+	}
+	if pd := c.Alerts.PagerDuty; pd.Enabled() && len(pd.Services) == 0 {
+		return fmt.Errorf("alerts.pagerduty.services: reading PagerDuty through muster context %s needs the team's service ids", pd.Context)
 	}
 	for i, in := range c.Alerts.Installations {
 		if in.Name == "" {
