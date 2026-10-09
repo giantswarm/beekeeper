@@ -627,7 +627,9 @@ func (o *Ops) storeVault(ctx context.Context, r Ref, v string) error {
 			id = it.ID
 		}
 	}
-	item := map[string]any{"title": title, "category": "PASSWORD"}
+	// a new item is op's Password template: its password field is the
+	// built-in one, which op's validator requires of the category
+	item := map[string]any{"title": title, "category": passwordPurpose, "fields": []any{builtinField(passwordField, "")}}
 	if id != "" {
 		raw, err := o.op(ctx, nil, "item", "get", id, "--vault", vault, "--format", "json")
 		if err != nil {
@@ -648,9 +650,40 @@ func (o *Ops) storeVault(ctx context.Context, r Ref, v string) error {
 		args = []string{"item", "edit", id, "--vault", vault, "--format", "json"}
 	}
 	if _, err := o.op(ctx, bytes.NewReader(tmpl), args...); err != nil {
-		return fmt.Errorf("%s: %w", r.Op, err)
+		// op's whole message goes to the caller, never the value it was given
+		msg := err.Error()
+		if v != "" {
+			msg = strings.ReplaceAll(msg, v, "[value]")
+		}
+		return fmt.Errorf("%s: %s", r.Op, msg)
 	}
 	return nil
+}
+
+const (
+	// passwordField is the built-in field of a Password item.
+	passwordField = "password"
+	// passwordPurpose is the category and the password field's purpose.
+	passwordPurpose = "PASSWORD"
+	concealed       = "CONCEALED"
+)
+
+// builtins are op's built-in fields by id: op's validator refuses one
+// without its purpose and type.
+var builtins = map[string]struct{ purpose, typ string }{
+	passwordField: {passwordPurpose, concealed},
+	"username":    {"USERNAME", "STRING"},
+	"notesPlain":  {"NOTES", "STRING"},
+}
+
+// builtinField is a field of id with value v: a built-in one with its
+// purpose and type, any other a concealed one.
+func builtinField(id, v string) map[string]any {
+	f := map[string]any{"id": id, "label": id, "type": concealed, "value": v}
+	if b, ok := builtins[id]; ok {
+		f["purpose"], f["type"] = b.purpose, b.typ
+	}
+	return f
 }
 
 // vaultItem is what a vault's item listing says of one item: metadata, no
@@ -673,17 +706,20 @@ func (o *Ops) vaultItems(ctx context.Context, vault string) ([]vaultItem, error)
 	return items, nil
 }
 
-// setField sets the concealed field labelled label in an item's JSON.
+// setField sets the field labelled label in an item's JSON: a built-in
+// field keeps its purpose and type, any other is concealed.
 func setField(item map[string]any, label, v string) {
 	fields, _ := item["fields"].([]any)
 	for _, f := range fields {
 		if m, ok := f.(map[string]any); ok && (m["label"] == label || m["id"] == label) {
 			m["value"] = v
-			m["type"] = "CONCEALED"
+			if _, builtin := m["purpose"]; !builtin {
+				m["type"] = concealed
+			}
 			return
 		}
 	}
-	item["fields"] = append(fields, map[string]any{"id": label, "label": label, "type": "CONCEALED", "value": v})
+	item["fields"] = append(fields, builtinField(label, v))
 }
 
 // sortedKeys are the keys of the maps, merged and sorted.

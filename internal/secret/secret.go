@@ -87,7 +87,7 @@ func Exec(ctx context.Context, dir string, env []string, stdin io.Reader, name s
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
-			return nil, fmt.Errorf("%s: exit %d (%s)", name, ee.ExitCode(), guard.FirstLine(stderr.String()))
+			return nil, fmt.Errorf("%s: exit %d (%s)", name, ee.ExitCode(), guard.Message(stderr.String()))
 		}
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
