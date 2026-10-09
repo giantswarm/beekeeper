@@ -74,7 +74,10 @@ task needs lives only in this session: the next task goes to a fresh one.
   promoted as routine: the person is never asked to promote or merge.
 - **Git.** Conventional commit subjects of at most 72 characters; no major version bumps; never a
   force push, not even `--force-with-lease` on the worker's own branch: a branch behind its base
-  merges the base and pushes normally. Work happens in a worktree of its own, never in a checkout
+  merges the base and pushes normally. On a rebase-merge line (merged with `--rebase`) the base is
+  never merged into a branch, which only hides a conflict until the merge; a PR there that conflicts
+  with its base, which the gate refuses before it queues, is replaced at once by a new PR from a
+  fresh branch of the base. Work happens in a worktree of its own, never in a checkout
   another session uses.
 - **The machine.** Build, test and lint commands run through `beekeeper run` (the PreToolUse hook
   does it): exit 75 means no slot, rerun in the background, never in a loop; exit 137 means the cap
