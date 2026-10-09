@@ -21,6 +21,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
 // Seams for the tests.
@@ -33,7 +34,45 @@ var (
 	devctlUpdate  = toolUpdate
 	userSystemd   = plat.Launcher.Available
 	selfExe       = os.Executable
+	runningBinary = func() binary { return liveBinary{platform.RunningBinary()} }
+	gateOutput    = stdoutFile
 )
+
+// stdoutFile is the regular file this process's stdout writes to, "" for a
+// pipe, a terminal or where the platform cannot say: a Claude Code
+// background task writes to <tasks>/<task id>.output.
+func stdoutFile() string {
+	p, err := os.Readlink("/proc/self/fd/1")
+	if err != nil || !filepath.IsAbs(p) {
+		return ""
+	}
+	return p
+}
+
+// binary is the executable a gate call or a merge-child runs: whether
+// another file was renamed over its path since it started (beekeeper
+// self-update, install) and its re-exec, which carries the call on under the
+// installed release with the same pid, arguments and stdio.
+type binary interface {
+	Path() string
+	Replaced() bool
+	Exec(env ...string) error
+}
+
+// liveBinary is this process's executable; nil where /proc cannot say,
+// which is never replaced.
+type liveBinary struct{ b *platform.Binary }
+
+func (l liveBinary) Path() string {
+	if l.b == nil {
+		return ""
+	}
+	return l.b.Path
+}
+
+func (l liveBinary) Replaced() bool { return l.b.Replaced() }
+
+func (l liveBinary) Exec(env ...string) error { return l.b.Exec(env...) }
 
 // mergeFiles is the base of the merge's files (mergeBase), its directory
 // created.
@@ -137,43 +176,76 @@ type childSpec struct {
 
 // childRun is how a detached run ended for its gate: devctl's document and
 // exit code (128+n for a signal), the file its output is kept in, and
-// whether a write to the caller's pipes failed.
+// whether a write to the caller's pipes failed. replaced says the gate's
+// binary was replaced while the run went on, which runs on: offset is how
+// far its stderr was copied, for the re-executed gate to follow it from.
 type childRun struct {
-	doc     []byte
-	rc      int
-	kept    string
-	unheard bool
+	doc      []byte
+	rc       int
+	kept     string
+	unheard  bool
+	replaced bool
+	offset   int64
+	// held says the document was kept off the gate's stdout (followChild's
+	// hold): a run the gate may send again, whose caller reads one document.
+	held bool
 }
 
-// runDetached runs spec's devctl outside its caller: a harness that
-// ends the caller kills its process tree, and a session run as a unit takes
-// its cgroup down with it. merge-child (this binary) runs devctl in a
-// transient user service of its own (systemd-run), or where there is no
-// user service manager as a child in a session of its own: its stdout goes
-// to base.json, its stderr to base.log, which the gate follows onto its own
-// stderr, and its exit code to base.rc. The gate writes the document to its
-// stdout once devctl ended; a child gone without an exit code counts as
-// killed (137). SIGINT, a person's Ctrl-C, reaches devctl at once. SIGTERM
-// reaches it when it is a stop aimed at the gate: its caller still there
-// stopGrace later. A caller going away (SIGHUP, or the gate's parent gone
-// with the SIGTERM, a harness killing its command's process tree) does not
-// stop devctl (outliveCaller keeps it from ending the gate). started gets
-// merge-child's pid.
-func runDetached(spec childSpec, base string, started func(pid int)) (r childRun) {
+// emit writes a held document to the gate's stdout.
+func (r childRun) emit() childRun {
+	if r.held {
+		r.held = false
+		if _, err := os.Stdout.Write(r.doc); err != nil {
+			r.unheard = true
+		}
+	}
+	return r
+}
+
+// runDetached runs spec's devctl outside its caller (launchChild) and
+// follows it to its end (followChild), its files removed; started gets
+// merge-child's pid. A merge's gate launches and follows apart, as it
+// re-executes a replaced binary in between.
+func runDetached(spec childSpec, base string, started func(pid int)) childRun {
 	defer removeMergeFiles(base)
+	pid, err := launchChild(spec, base)
+	if err != nil {
+		gateLine("devctl does not start: %v", err)
+		return childRun{rc: guard.ExitNotFound}
+	}
+	started(pid)
+	return followChild(base, pid, 0, nil, nil)
+}
+
+// followChild follows the devctl that merge-child pid runs outside its
+// caller: a harness that ends the caller kills its process tree, and a
+// session run as a unit takes its cgroup down with it. merge-child (this
+// binary) runs devctl in a transient user service of its own (systemd-run),
+// or where there is no user service manager as a child in a session of its
+// own: its stdout goes to base.json, its stderr to base.log, which the gate
+// copies onto its own stderr from offset on, and its exit code to base.rc.
+// The gate writes the document to its stdout once devctl ended; a child
+// gone without an exit code counts as killed (137). SIGINT, a person's
+// Ctrl-C, reaches devctl at once. SIGTERM reaches it when it is a stop aimed
+// at the gate: its caller still there stopGrace later. A caller going away
+// (SIGHUP, or the gate's parent gone with the SIGTERM, a harness killing its
+// command's process tree) does not stop devctl (outliveCaller keeps it from
+// ending the gate). bin, when given, is the gate's binary: replaced while
+// the run goes on, the follow returns at once with replaced set and the
+// offset reached, the run's files in place, for the gate to re-execute the
+// installed binary and follow on from there. hold, when given, keeps a
+// document it takes off the stdout (held), for the gate to decide.
+func followChild(base string, pid int, offset int64, bin binary, hold func(doc []byte) bool) (r childRun) {
 	r.rc = guard.ExitNotFound
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(sig)
-	pid, err := launchChild(spec, base)
-	if err != nil {
-		gateLine("devctl does not start: %v", err)
-		return r
-	}
-	started(pid)
 	log, err := os.Open(base + ".log") //nolint:gosec // the gate's own file under the state directory
 	if err == nil {
 		defer func() { _ = log.Close() }()
+		if _, err := log.Seek(offset, io.SeekStart); err != nil {
+			gateLine("devctl's output so far cannot be skipped (%v): it is copied once more", err)
+		}
 	}
 	said, ppid, term := false, os.Getppid(), time.Time{}
 	away := func(s os.Signal) {
@@ -187,6 +259,13 @@ func runDetached(spec childSpec, base string, started func(pid int)) (r childRun
 			if _, err := io.Copy(os.Stderr, log); err != nil {
 				r.unheard = true
 			}
+		}
+		if bin != nil && bin.Replaced() {
+			r.replaced = true
+			if log != nil {
+				r.offset, _ = log.Seek(0, io.SeekCurrent)
+			}
+			return r
 		}
 		_, err := os.Stat(base + ".rc")
 		gone := err != nil && !proc.Alive(pid)
@@ -202,6 +281,9 @@ func runDetached(spec childSpec, base string, started func(pid int)) (r childRun
 				r.kept = string(raw)
 			} else {
 				r.kept = keepOutput(base, r.doc, time.Now())
+			}
+			if r.held = hold != nil && hold(r.doc); r.held {
+				return r
 			}
 			if _, err := os.Stdout.Write(r.doc); err != nil { // the caller's pipe may be gone
 				r.unheard = true
@@ -318,14 +400,91 @@ func (a *app) mergeChildCmd() *cobra.Command {
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			r := mergeChild(args[0])
-			a.tellOwner(cmd.Context(), r)
-			if filepath.Base(filepath.Dir(r.base)) == ownedRuns && !proc.Alive(r.spec.Gate) {
-				removeMergeFiles(r.base) // a gate gone leaves a wait's or queued merge's files to its run
-			}
-			return exitCode(unitExit(r.rc))
+			return a.mergeChildRun(cmd.Context(), args[0], runningBinary())
 		},
 	}
+}
+
+// mergeChildRun runs merge-child for base: the command, then the outcome to
+// its owner (tellOwner). A binary replaced while the command ran (beekeeper
+// self-update, install) re-executes the installed one with the outcome
+// (mergeDoneEnv), so the installed release hands it over; one that does not
+// start hands it over under this one.
+func (a *app) mergeChildRun(ctx context.Context, base string, bin binary) error {
+	r := mergeChild(base)
+	if bin.Replaced() {
+		if raw, err := json.Marshal(r.done()); err == nil {
+			_, _ = fmt.Fprintf(os.Stderr, "%s%s was replaced while %s ran: re-executing it to hand the outcome over\n", GatePrefix, bin.Path(), r.command())
+			err := bin.Exec(mergeDoneEnv + "=" + string(raw))
+			_, _ = fmt.Fprintf(os.Stderr, "%sthe new binary does not start (%v): handing the outcome over under %s\n", GatePrefix, err, project.Version())
+		}
+	}
+	a.tellOwner(ctx, r)
+	if filepath.Base(filepath.Dir(r.base)) == ownedRuns && !proc.Alive(r.spec.Gate) {
+		removeMergeFiles(r.base) // a gate gone leaves a wait's or queued merge's files to its run
+	}
+	return exitCode(unitExit(r.rc))
+}
+
+// mergeDoneEnv carries a finished command's outcome across merge-child's
+// re-exec of a replaced binary: a childDone as JSON.
+const mergeDoneEnv = "BEEKEEPER_MERGE_DONE"
+
+// childDone is a merge-child's outcome for the re-executed one: what
+// tellOwner needs of the spec (not the command's environment), the base of
+// the run's files and how the command ended.
+type childDone struct {
+	Argv    []string    `json:"argv"`
+	Command []string    `json:"command,omitempty"`
+	Owner   state.Party `json:"owner,omitzero"`
+	Gate    int         `json:"gate,omitempty"`
+	Config  string      `json:"config,omitempty"`
+	HandCut string      `json:"handCut,omitempty"`
+	Base    string      `json:"base"`
+	RC      int         `json:"rc"`
+	Doc     []byte      `json:"doc,omitempty"`
+	Last    string      `json:"last,omitempty"`
+	Kept    string      `json:"kept,omitempty"`
+}
+
+// done is r for the re-executed merge-child.
+func (r childResult) done() childDone {
+	return childDone{Argv: r.spec.Argv, Command: r.spec.Command, Owner: r.spec.Owner, Gate: r.spec.Gate, Config: r.spec.Config,
+		HandCut: r.spec.HandCut, Base: r.base, RC: r.rc, Doc: r.doc, Last: r.last, Kept: r.kept}
+}
+
+// result is the outcome d carries, as mergeChild returns it.
+func (d childDone) result() childResult {
+	return childResult{spec: childSpec{Argv: d.Argv, Command: d.Command, Owner: d.Owner, Gate: d.Gate, Config: d.Config, HandCut: d.HandCut},
+		base: d.Base, rc: d.RC, doc: d.Doc, last: d.Last, kept: d.Kept}
+}
+
+// command names the command merge-child ran, the devctl command Argv stands
+// for when there is one.
+func (r childResult) command() string {
+	argv := r.spec.Argv
+	if len(r.spec.Command) > 0 {
+		argv = r.spec.Command
+	}
+	if len(argv) == 0 {
+		return "devctl"
+	}
+	return strings.Join(append([]string{filepath.Base(argv[0])}, argv[1:]...), " ")
+}
+
+// doneResult is the outcome a replaced merge-child handed this one
+// (mergeDoneEnv), false when there is none.
+func doneResult(base string) (childResult, bool) {
+	raw, ok := os.LookupEnv(mergeDoneEnv)
+	if !ok {
+		return childResult{}, false
+	}
+	_ = os.Unsetenv(mergeDoneEnv)
+	var d childDone
+	if err := json.Unmarshal([]byte(raw), &d); err != nil || d.Base != base {
+		return childResult{}, false
+	}
+	return d.result(), true
 }
 
 // unitExit is the exit of merge-child's unit for its command's exit code rc.
@@ -369,8 +528,12 @@ type childResult struct {
 // the file keepOutput kept its output in in base.kept and the command's exit
 // code (128+n for a signal) in base.rc last. SIGINT is passed on; SIGTERM
 // and SIGHUP too, as they come from the service manager or a person, never
-// from the gate's caller.
+// from the gate's caller. Re-executed by a replaced merge-child whose
+// command ended, it returns that outcome (doneResult) and runs nothing.
 func mergeChild(base string) childResult {
+	if r, ok := doneResult(base); ok {
+		return r
+	}
 	r := childResult{base: base, rc: guard.ExitNotFound}
 	raw, err := os.ReadFile(base + ".spec") //nolint:gosec // the gate's own file
 	if err != nil {

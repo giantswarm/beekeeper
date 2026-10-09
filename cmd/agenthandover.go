@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"syscall"
@@ -84,7 +85,8 @@ through claude stop first, so its daemon does not resume it); once that CLI
 has exited, archives the old session's desktop row through a steward, as
 the doctor does, so only the follow-up's row carries the name (an archive
 not done now the doctor owes and asks for again); and logs agents.handover. watch says HANDOVER DUE once an agent's
-context reached agents.relayAt, at its first quiet moment.
+context reached agents.relayAt, at its first quiet moment, and HANDOVER HELD
+instead while the agent's task is in its last step (agents.lastStepGrace).
 
 The follow-up runs in the old session's folder and model (--dir, --model
 override them). An agent whose CLI does not run (its headless turn ended)
@@ -703,11 +705,16 @@ func endSession(ctx context.Context, s *claude.Session) (int, error) {
 }
 
 // dueAgent is a registered agent whose hand-over is due; parked when its
-// CLI does not run.
+// CLI does not run. held is why it is held instead of due (its task's last
+// step, "" when due), until when; was says how long a hand-over due after
+// a hold was held.
 type dueAgent struct {
 	agent   state.Agent
 	context int64
 	parked  bool
+	held    string
+	until   time.Time
+	was     string
 }
 
 // handoversDue are the registered agents whose context reached relayAt, at a
@@ -715,14 +722,18 @@ type dueAgent struct {
 // their own in flight. An agent with a task whose CLI no longer runs (its
 // headless turn ended, waiting on a grant or a person) is due too, with its
 // transcript's context: nothing else relieves it. It skips the agents said
-// already and those holding or relieved of a relayed role, which relay
-// instead. contextOf gets a nil session for an agent whose CLI does not run.
-func handoversDue(st *state.State, sessions []*claude.Session, relayAt config.Tokens, said func(state.Party) bool,
+// already, those that reported their work done (the doctor archives them)
+// and those holding or relieved of a relayed role, which relay instead.
+// An agent in its task's last step (lastStepOf) is held rather than due
+// for cfg.LastStepGrace from the step's evidence, unless its context reached
+// cfg.LastStepCeiling: its report is expected before a hand-over would
+// pay. contextOf gets a nil session for an agent whose CLI does not run.
+func handoversDue(st *state.State, sessions []*claude.Session, cfg config.Agents, now time.Time, said func(state.Party) bool,
 	contextOf func(state.Agent, *claude.Session) int64, alive func(int) bool,
 ) []dueAgent {
 	var out []dueAgent
 	for _, ag := range st.Agents {
-		if said(ag.Party) || keepsRole(st, ag.Party) || mergeInFlight(st, ag.Party, alive) {
+		if said(ag.Party) || ag.Done || keepsRole(st, ag.Party) || mergeInFlight(st, ag.Party, alive) {
 			continue
 		}
 		s, live := claude.Live(sessions, ag.Party)
@@ -732,11 +743,49 @@ func handoversDue(st *state.State, sessions []*claude.Session, relayAt config.To
 		case !live:
 			s = nil
 		}
-		if c := contextOf(ag, s); c >= int64(relayAt) {
-			out = append(out, dueAgent{agent: ag, context: c, parked: !live})
+		c := contextOf(ag, s)
+		if c < int64(cfg.RelayAt) {
+			continue
 		}
+		d := dueAgent{agent: ag, context: c, parked: !live}
+		if why, since, ok := lastStepOf(st, ag.Party); ok {
+			until := since.Add(cfg.LastStepGrace.Duration)
+			switch {
+			case now.Before(until) && c < int64(cfg.LastStepCeiling):
+				d.held, d.until = why, until
+			case now.Before(until):
+				d.was = fmt.Sprintf("its last step (%s) holds no hand-over past %s", why, tokensText(int64(cfg.LastStepCeiling)))
+			default:
+				d.was = fmt.Sprintf("held %s for its last step (%s)", dur(cfg.LastStepGrace.Duration), why)
+			}
+		}
+		out = append(out, d)
 	}
 	return out
+}
+
+// lastStepWords are the words of a sessions serve --waits that say the
+// task is in its last step: the report is being written, or the merge
+// landed and the proof, the release or the rollout is what remains.
+var lastStepWords = regexp.MustCompile(`(?i)\b(report\w*|merged|releas\w*|roll(ed|ing|s)?[ -]?out|proof|proven)\b`)
+
+// lastStepOf finds the evidence that p's task is in its last step and when
+// it was given: its sessions serve record waits on the report or says the
+// merge landed, or the gate saw a merge of its own land (settling, its
+// release and rollout pending). The latest evidence counts; false when
+// there is none.
+func lastStepOf(st *state.State, p state.Party) (why string, since time.Time, ok bool) {
+	for _, r := range st.Records {
+		if r.Session.Is(p) && r.Ended.IsZero() && lastStepWords.MatchString(r.Waits) && !r.At.Before(since) {
+			why, since, ok = fmt.Sprintf("it waits on %q", r.Waits), r.At, true
+		}
+	}
+	for _, m := range st.Merges {
+		if m.By.Is(p) && m.Phase == state.Settling && m.Exit == 0 && !m.Finished.Before(since) {
+			why, since, ok = m.Key()+" merged", m.Finished, true
+		}
+	}
+	return why, since, ok
 }
 
 func holdsRole(st *state.State, p state.Party) bool {
@@ -754,8 +803,9 @@ func mergeInFlight(st *state.State, p state.Party, alive func(int) bool) bool {
 	})
 }
 
-// handoversDue says HANDOVER DUE once for each agent handoversDue finds;
-// the watch's mark keeps it said across the watch's restarts.
+// handoversDue says HANDOVER DUE once for each agent handoversDue finds,
+// and HANDOVER HELD once for an agent it holds in its last step; the
+// watch's mark keeps both said across the watch's restarts.
 func (w *watcher) handoversDue(st *state.State, sessions []*claude.Session) {
 	key := func(p state.Party) string { return "handover " + p.Session }
 	said := func(p state.Party) bool { return w.reported[key(p)] }
@@ -765,12 +815,23 @@ func (w *watcher) handoversDue(st *state.State, sessions []*claude.Session) {
 		}
 		return transcriptContext(s)
 	}
-	for _, d := range handoversDue(st, sessions, w.cfg.Agents.RelayAt, said, contextOf, proc.Alive) {
+	for _, d := range handoversDue(st, sessions, w.cfg.Agents, w.now, said, contextOf, proc.Alive) {
+		if d.held != "" {
+			if k := "handover-held " + d.agent.Session; !w.reported[k] {
+				w.reported[k], w.dirty = true, true
+				w.emitNow("handover", "HANDOVER HELD %q at %s: last step, report expected (%s); due at %s or at %s",
+					d.agent.Name, tokensText(d.context), d.held, d.until.Local().Format("15:04"), tokensText(int64(w.cfg.Agents.LastStepCeiling)))
+			}
+			continue
+		}
 		w.reported[key(d.agent.Party)], w.dirty = true, true
-		parked := ""
+		parked, was := "", ""
 		if d.parked {
 			parked = " (its CLI does not run: the hand-over resumes it headless for its note)"
 		}
-		w.emitNow("handover", "HANDOVER DUE %q at %s%s: beekeeper agents handover %q", d.agent.Name, tokensText(d.context), parked, d.agent.Name)
+		if d.was != "" {
+			was = ", " + d.was
+		}
+		w.emitNow("handover", "HANDOVER DUE %q at %s%s%s: beekeeper agents handover %q", d.agent.Name, tokensText(d.context), parked, was, d.agent.Name)
 	}
 }

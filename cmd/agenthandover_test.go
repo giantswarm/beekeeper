@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -60,9 +61,11 @@ func TestHandoversDue(t *testing.T) {
 	}
 	said := func(p state.Party) bool { return p.Session == ids[4] }
 	alive := func(pid int) bool { return pid == 42 }
+	cfg := config.Agents{RelayAt: 20_000, LastStepGrace: config.Duration{Duration: 30 * time.Minute}, LastStepCeiling: 30_000}
+	now := time.Date(2026, 10, 8, 9, 0, 0, 0, time.UTC)
 
-	due := handoversDue(st, sessions, 20_000, said, contextOf, alive)
-	if len(due) != 2 || due[0].agent.Session != dueID || due[0].context != 25_000 || due[0].parked {
+	due := handoversDue(st, sessions, cfg, now, said, contextOf, alive)
+	if len(due) != 2 || due[0].agent.Session != dueID || due[0].context != 25_000 || due[0].parked || due[0].held != "" || due[0].was != "" {
 		t.Fatalf("due = %+v, want the quiet agent past relayAt first", due)
 	}
 	// The agent whose turn ended with its task open is due too; the one
@@ -71,8 +74,123 @@ func TestHandoversDue(t *testing.T) {
 		t.Errorf("due = %+v, want the parked agent past relayAt second", due)
 	}
 	// The merge ended: the merging agent is quiet now.
-	if due := handoversDue(st, sessions, 20_000, said, contextOf, func(int) bool { return false }); len(due) != 3 {
+	if due := handoversDue(st, sessions, cfg, now, said, contextOf, func(int) bool { return false }); len(due) != 3 {
 		t.Errorf("after the merge: due = %+v", due)
+	}
+}
+
+// An agent over relayAt whose task is in its last step is held, not due: its
+// serve record waits on the report or says the merge landed, or the gate saw
+// its merge land. The hold lasts lastStepGrace from that evidence and ends at
+// lastStepCeiling; an agent that reported done is never handed over.
+func TestHandoversHeldInTheLastStep(t *testing.T) {
+	now := time.Date(2026, 10, 8, 9, 0, 0, 0, time.UTC)
+	party := func(id string) state.Party { return state.Party{Session: id, Name: "test: " + id} }
+	const finished, late, closed = "reported-done", "stale-record", "ended-record"
+	ids := []string{"report", "merged", "landed", "ci", finished, late, closed}
+	st := &state.State{}
+	var sessions []*claude.Session
+	for _, id := range ids {
+		st.Agents = append(st.Agents, state.Agent{Party: party(id), Task: countTask})
+		sessions = append(sessions, &claude.Session{ID: id, Name: "test: " + id})
+	}
+	st.Agents[4].Done, st.Agents[4].Task = true, ""
+	rec := func(id, waits string, ago time.Duration) state.Record {
+		return state.Record{Session: party(id), Issue: issue61, Waits: waits, At: now.Add(-ago)}
+	}
+	st.Records = []state.Record{
+		rec("report", "writing the report", 10*time.Minute),
+		rec("merged", "PR 61 merged, the proof runs", 5*time.Minute),
+		rec("ci", "CI of PR 61", time.Minute),
+		rec(late, "the report", time.Hour),
+		rec(closed, "the report", time.Minute),
+	}
+	st.Records[4].Ended = now
+	st.Merges = []state.Merge{
+		{Repo: scratchRepo, PR: 61, By: party("landed"), Phase: state.Settling, Finished: now.Add(-2 * time.Minute)},
+		{Repo: scratchRepo, PR: 62, By: party("ci"), Phase: state.Settling, Finished: now.Add(-time.Minute), Exit: -1}, // lost: whether it merged is unknown
+	}
+	cfg := config.Agents{RelayAt: 20_000, LastStepGrace: config.Duration{Duration: 30 * time.Minute}, LastStepCeiling: 30_000}
+	contextOf := func(state.Agent, *claude.Session) int64 { return 25_000 }
+	none := func(state.Party) bool { return false }
+	find := func(due []dueAgent) map[string]dueAgent {
+		got := map[string]dueAgent{}
+		for _, d := range due {
+			got[d.agent.Session] = d
+		}
+		return got
+	}
+
+	got := find(handoversDue(st, sessions, cfg, now, none, contextOf, func(int) bool { return false }))
+	if _, done := got[finished]; len(got) != 6 || done {
+		t.Fatalf("due = %+v, want every agent but the done one", got)
+	}
+	held := map[string]string{
+		"report": `it waits on "writing the report"`,
+		"merged": `it waits on "PR 61 merged, the proof runs"`,
+		"landed": scratchRepo + "#61 merged",
+	}
+	for id, why := range held {
+		if d := got[id]; d.held != why || d.was != "" {
+			t.Errorf("%s: held %q, was %q; want held %q", id, d.held, d.was, why)
+		}
+	}
+	if d := got["report"]; !d.until.Equal(now.Add(20 * time.Minute)) {
+		t.Errorf("report: held until %s, want 20m from now (30m from its record)", d.until)
+	}
+	for _, id := range []string{"ci", closed} {
+		if d := got[id]; d.held != "" || d.was != "" {
+			t.Errorf("%s: held %q, was %q; want due as before", id, d.held, d.was)
+		}
+	}
+	if d, want := got[late], `held 30m for its last step (it waits on "the report")`; d.held != "" || d.was != want {
+		t.Errorf("%s: held %q, was %q; want due, %s", late, d.held, d.was, want)
+	}
+
+	// At the ceiling the last step holds nothing.
+	cfg.LastStepCeiling = 25_000
+	got = find(handoversDue(st, sessions, cfg, now, none, contextOf, func(int) bool { return false }))
+	for id := range held {
+		if d := got[id]; d.held != "" || !strings.HasPrefix(d.was, "its last step (") || !strings.HasSuffix(d.was, ") holds no hand-over past 25k") {
+			t.Errorf("%s at the ceiling: held %q, was %q", id, d.held, d.was)
+		}
+	}
+}
+
+// The watch says HANDOVER HELD once for an agent in its last step and, once
+// the grace is over, HANDOVER DUE once, saying how long it was held.
+func TestWatchSaysHandoverHeldOnce(t *testing.T) {
+	dir := t.TempDir()
+	w, _, out := notifyingWatch(t, dir, false)
+	w.notifier = nil
+	ts := w.now.Add(-time.Minute).UTC().Format(time.RFC3339)
+	tr := filepath.Join(dir, "s1.jsonl")
+	line := `{"type":"assistant","timestamp":"` + ts + `","message":{"id":"m1","model":"claude-opus-5-5","usage":{"input_tokens":10,"cache_read_input_tokens":410000},"content":[]}}` + "\n"
+	if err := os.WriteFile(tr, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	one := state.Party{Session: "s1", Name: sessionOne}
+	st := &state.State{
+		Agents:  []state.Agent{{Party: one, Task: countTask}},
+		Records: []state.Record{{Session: one, Issue: issue61, Waits: "the report", At: w.now.Add(-time.Minute)}},
+	}
+	live := []*claude.Session{{ID: "s1", Name: sessionOne, Transcript: tr, LastActive: w.now}}
+
+	w.handoversDue(st, live)
+	w.handoversDue(st, live)
+	held := fmt.Sprintf(`HANDOVER HELD %q at 410k: last step, report expected (it waits on "the report"); due at %s or at 500k`,
+		sessionOne, w.now.Add(29*time.Minute).Local().Format("15:04"))
+	if got := out.String(); strings.Count(got, held) != 1 || strings.Contains(got, "HANDOVER DUE") {
+		t.Errorf("want one held line %q, got:\n%s", held, got)
+	}
+
+	out.Reset()
+	w.now = w.now.Add(time.Hour)
+	w.handoversDue(st, live)
+	w.handoversDue(st, live)
+	due := fmt.Sprintf(`HANDOVER DUE %q at 410k, held 30m for its last step (it waits on "the report"): beekeeper agents handover %q`, sessionOne, sessionOne)
+	if got := out.String(); strings.Count(got, due) != 1 || strings.Contains(got, "HANDOVER HELD") {
+		t.Errorf("want one due line %q, got:\n%s", due, got)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
 // A process started since the last read counts toward the storm; a Go
@@ -248,4 +249,34 @@ func named(t *proc.Table) *proc.Table {
 		}
 	}
 	return t
+}
+
+// The watch's own processes, its alert reads among them, are the watch's in
+// a PROCESS STORM line, not the session's that started the watch.
+func TestSampleProcsNamesTheWatchsOwnReads(t *testing.T) {
+	var out bytes.Buffer
+	cfg := &config.Config{}
+	cfg.Watch.Repeat.Duration = 10 * time.Minute
+	cfg.Watch.ForkRateMax = 50
+	var forks uint64 = 1000
+	w := &watcher{app: &app{out: &out, cfg: cfg}, last: map[string]time.Time{}, self: 11}
+	w.readForks = func() (uint64, error) { return forks, nil }
+	w.owners.Store(&map[int]string{10: "Run 7"})
+	prev := named(table(
+		&proc.Process{PID: 10, Args: []string{claudeComm}, StartTicks: 1},
+		&proc.Process{PID: 11, PPID: 10, Args: strings.Fields(project.Name + " watch"), StartTicks: 1},
+	))
+	cur := named(table(
+		prev.ByPID[10], prev.ByPID[11],
+		&proc.Process{PID: 20, PPID: 11, Args: strings.Fields("kubectl port-forward"), StartTicks: 5, CPU: time.Millisecond},
+		&proc.Process{PID: 21, PPID: 20, Args: strings.Fields("tsh kube credentials"), StartTicks: 5, CPU: time.Millisecond},
+	))
+	now := time.Now()
+	for _, rate := range []uint64{0, 10, 100, 100} {
+		forks += rate * 30
+		w.sampleProcs(now, 30*time.Second, prev, cur)
+	}
+	if !strings.Contains(out.String(), `sessions: "beekeeper watch" 100 %`) {
+		t.Errorf("the watch said:\n%s", out.String())
+	}
 }

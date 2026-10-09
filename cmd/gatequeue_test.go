@@ -5,6 +5,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +17,9 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/merge"
+	"github.com/giantswarm/beekeeper/internal/platform"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -42,7 +46,32 @@ func queueApp(t *testing.T, merges ...state.Merge) *app {
 	cfg := &config.Config{Lanes: []config.Lane{{Name: scratchRepo, Repositories: []string{scratchRepo}}}, GitHub: config.GitHub{Floor: 100},
 		Merge: config.Merge{Cap: 4, QueueTTL: config.Duration{Duration: 15 * time.Minute}, SeedTTL: config.Duration{Duration: time.Hour},
 			DevctlOwners: []string{"o"}}}
+	hostDevctls(t, 0)
 	return &app{cfg: cfg, store: store, now: time.Now()}
+}
+
+// devctlMachine is a machine whose process table holds n devctl processes
+// and nothing else.
+type devctlMachine struct {
+	platform.Machine
+	n int
+}
+
+func (m devctlMachine) Processes() (*proc.Table, error) {
+	t := &proc.Table{ByPID: map[int]*proc.Process{}}
+	for pid := 1; pid <= m.n; pid++ {
+		t.ByPID[pid] = &proc.Process{PID: pid, PPID: 1, Comm: merge.Tool}
+	}
+	return t, nil
+}
+
+// hostDevctls makes the gate count n devctl processes machine-wide instead
+// of the host's own.
+func hostDevctls(t *testing.T, n int) {
+	t.Helper()
+	was := plat.Machine
+	plat.Machine = devctlMachine{Machine: was, n: n}
+	t.Cleanup(func() { plat.Machine = was })
 }
 
 // stubSelf stands in for this binary as merge-child: it records its pid and
@@ -230,9 +259,9 @@ func TestClosedAndMergedPlacesLeaveTheirLane(t *testing.T) {
 	}
 }
 
-// A merge under the budget floor is not refused for good: it is queued for
-// the reset in a run of its own (exit 77), which waits while the budget is
-// under the floor.
+// A merge under the budget floor is not refused: it is queued for the reset
+// in a run of its own (exit 76, a "queued" line), which waits while the
+// budget is under the floor.
 func TestAMergeUnderTheBudgetFloorIsQueuedForTheReset(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	_, launched := stubSelf(t)
@@ -244,8 +273,14 @@ func TestAMergeUnderTheBudgetFloorIsQueuedForTheReset(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, false); Code(err) != ExitGateRefused {
-		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateRefused)
+	var err error
+	stderr := gateStderr(t, func() { err = a.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, false) })
+	if Code(err) != ExitGateQueued {
+		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateQueued)
+	}
+	if !strings.Contains(stderr, GatePrefix+"queued, the GitHub budget 40 is under the floor 100") ||
+		!strings.Contains(stderr, "its outcome wakes") || strings.Contains(stderr, "refused") {
+		t.Errorf("stderr %q, want the queued line", stderr)
 	}
 	if spec := launched(); !slices.Contains(spec.Argv, "--queued") {
 		t.Errorf("not queued: %q", spec.Argv)
@@ -259,4 +294,44 @@ func TestAMergeUnderTheBudgetFloorIsQueuedForTheReset(t *testing.T) {
 	if why, err := g.step(); err != nil || !strings.Contains(why, "under the floor") {
 		t.Errorf("queued run: %q, %v; want a wait for the reset", why, err)
 	}
+}
+
+// A held repository is refused (exit 77) with its reason, and nothing is
+// queued: 77 never comes with a "queued" line.
+func TestAHeldMergeIsRefusedNotQueued(t *testing.T) {
+	stubGitHub(t, github.Open, "")
+	a := queueApp(t)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Holds = []state.Hold{{Target: scratchRepo, By: state.Party{Name: aheadName}, At: time.Now(), Reason: "a test hold"}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	stderr := gateStderr(t, func() { err = a.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, false) })
+	if Code(err) != ExitGateRefused {
+		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateRefused)
+	}
+	if !strings.Contains(stderr, GatePrefix+"refused, o/r is held") || !strings.Contains(stderr, "a test hold") || strings.Contains(stderr, "queued") {
+		t.Errorf("stderr %q, want the refusal with its reason", stderr)
+	}
+	if d := lastEventOf(t, a, "merge.queued"); strings.Contains(d, "run of its own") {
+		t.Errorf("a refused merge was queued: %q", d)
+	}
+}
+
+// gateStderr runs f and returns what it wrote to stderr.
+func gateStderr(t *testing.T, f func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	was := os.Stderr
+	os.Stderr = w
+	f()
+	os.Stderr = was
+	_ = w.Close()
+	out, _ := io.ReadAll(r)
+	return string(out)
 }

@@ -111,7 +111,7 @@ func TestNoteAddRefusesAndAcceptsForThePerson(t *testing.T) {
 
 func TestNoteOnTheSameRefAndVerbFolds(t *testing.T) {
 	a, out := noteApp(t)
-	args := []string{"--for", notePerson, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "--due", "3h"}
+	args := []string{flagFor, notePerson, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "--due", "3h"}
 	if err := addNote(a, append(args, "approve "+prURL)...); err != nil {
 		t.Fatal(err)
 	}

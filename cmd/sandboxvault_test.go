@@ -123,10 +123,14 @@ func TestBrokeredVaultSignsInOnce(t *testing.T) {
 		t.Errorf("the locked call's log = %+v, %v", evs, err)
 	}
 
-	// a SOPS-only call never waits on the vault
-	envs = append(envs, []string{"x"})
-	if r, _ := h(context.Background(), os.Getpid(), sandbox.Request{Op: sandbox.OpSecret, Args: []string{"compare", "a.sops.yaml", "b.sops.yaml"}}); r.Out != "ok" || envs[len(envs)-1] != nil {
-		t.Errorf("SOPS-only: %+v, env %q", r, envs[len(envs)-1])
+	// a SOPS-only call whose files name no recipient of the vault never
+	// waits on it; the files are read relative to the requester's working
+	// directory, which /proc gives on Linux alone
+	if runtime.GOOS == "linux" {
+		envs = append(envs, []string{"x"})
+		if r, _ := h(context.Background(), os.Getpid(), sandbox.Request{Op: sandbox.OpSecret, Args: []string{"compare", "a.sops.yaml", "b.sops.yaml"}}); r.Out != "ok" || envs[len(envs)-1] != nil {
+			t.Errorf("SOPS-only: %+v, env %q", r, envs[len(envs)-1])
+		}
 	}
 }
 
@@ -174,6 +178,34 @@ func TestBrokeredVaultSignsInAgainForAnExpiredSession(t *testing.T) {
 	envs = nil
 	if r, _ := h(context.Background(), os.Getpid(), sandbox.Request{Op: sandbox.OpSecret, Args: []string{fingerprintOp, testVaultRef}}); r.Code != ExitVault || len(envs) != 2 {
 		t.Errorf("expired twice: %+v, %d calls", r, len(envs))
+	}
+}
+
+// A session dropped the moment a sign-in unlocked the keeper gets a sign-in
+// of its own: the one that unlocked is over by then, never still running.
+// The keeper wakes its waiters before it reports the unlock, which holds the
+// drop inside the sign-in's last step here.
+func TestADropRightAfterTheUnlockSignsInAgain(t *testing.T) {
+	k := secret.NewKeeper(time.Hour, func(st secret.VaultState) {
+		if st.Unlocked {
+			time.Sleep(time.Millisecond)
+		}
+	})
+	var signins atomic.Int32
+	v := &vaultBroker{k: k, wait: time.Minute, signin: func(context.Context) (string, string, error) {
+		signins.Add(1)
+		return testVaultSession, "token", nil
+	}}
+	ctx := context.Background()
+	for i := range 200 {
+		v.ask(ctx)
+		wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		err := k.Wait(wctx)
+		cancel()
+		if err != nil {
+			t.Fatalf("drop %d: no sign-in unlocked the keeper: %v", i, err)
+		}
+		v.drop(ctx, "expired")
 	}
 }
 
@@ -411,6 +443,61 @@ func TestVaultSigninRetriesATransientFailure(t *testing.T) {
 	st, err := a.store.Read()
 	if err != nil || len(st.Notes) != 0 {
 		t.Errorf("notes after a transient failure: %+v, %v", st.Notes, err)
+	}
+}
+
+// The keeper's schedule: 30 s before the second try, then 1 m, 2 m and 5 m,
+// the 5 m repeated for every try after; a broker with a schedule of its own
+// follows that one the same way.
+func TestVaultSigninBackoffSchedule(t *testing.T) {
+	if want := []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 5 * time.Minute}; !slices.Equal(vaultSigninBackoff, want) {
+		t.Errorf("the schedule %v, want %v", vaultSigninBackoff, want)
+	}
+	v := &vaultBroker{}
+	for _, tc := range []struct {
+		tries int
+		want  time.Duration
+	}{{0, 30 * time.Second}, {1, 30 * time.Second}, {2, time.Minute}, {3, 2 * time.Minute}, {4, 5 * time.Minute}, {5, 5 * time.Minute}, {12, 5 * time.Minute}} {
+		if got := v.backoffFor(tc.tries); got != tc.want {
+			t.Errorf("after %d failed tries: %s, want %s", tc.tries, got, tc.want)
+		}
+	}
+	own := &vaultBroker{backoff: []time.Duration{time.Second, time.Hour}}
+	if own.backoffFor(1) != time.Second || own.backoffFor(2) != time.Hour || own.backoffFor(9) != time.Hour {
+		t.Error("a schedule of the broker's own is not followed")
+	}
+}
+
+// The retries end at the ask's window (secret.unlockWait): a try whose wait
+// would end past it is not made, and the sign-in gives up at once with the
+// last failure's cause and the tries it made, never sleeping past the window.
+func TestVaultSigninGivesUpAtTheUnlockWindow(t *testing.T) {
+	k := secret.NewKeeper(time.Hour, nil)
+	var tries atomic.Int32
+	gaveUp := make(chan int, 1)
+	var cause secret.SigninCause
+	v := &vaultBroker{k: k, wait: time.Second, backoff: []time.Duration{time.Millisecond, time.Hour},
+		signin: func(context.Context) (string, string, error) {
+			tries.Add(1)
+			return "", "", errors.New("op-unlock: exit status 1: dial tcp: lookup my.1password.com: no such host")
+		},
+		failed: func(c secret.SigninCause, n int, _ error) { cause = c; gaveUp <- n },
+	}
+	start := time.Now()
+	v.ask(context.Background())
+	select {
+	case n := <-gaveUp:
+		if n != 2 || tries.Load() != 2 || cause != secret.SigninNetwork {
+			t.Errorf("gave up after %d tries (%d made) with %s, want 2 with %s", n, tries.Load(), cause, secret.SigninNetwork)
+		}
+		if since := time.Since(start); since > v.wait {
+			t.Errorf("gave up after %s, past the window of %s", since, v.wait)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the sign-in never gave up")
+	}
+	if k.State().Unlocked {
+		t.Error("unlocked without a sign-in")
 	}
 }
 

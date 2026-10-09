@@ -21,10 +21,12 @@ import (
 // port in $FAKE_<SERVICE> (mimir-alertmanager is FAKE_MIMIR, the plain one
 // FAKE_PLAIN), says "not found" for a service without one, and fails with
 // $FAKE_FAIL, or once with $FAKE_FAIL_ONCE (the file $FAKE_FAILED records
-// that it did). It starts a child like a real port-forward's helpers and
+// that it did). Every run appends its arguments to $FAKE_CALLS. It starts a child like a real port-forward's helpers and
 // records both PIDs, so the test can tell whether the process group ended.
 const fakeKubectl = `#!/bin/sh
+echo "$*" >> "$FAKE_CALLS"
 case "$*" in *"config get-contexts"*) echo teleport.giantswarm.io-alpha; exit 0;; esac
+case "$*" in *"--context missing"*) echo 'error: context "missing" does not exist' >&2; exit 1;; esac
 if [ -n "$FAKE_FAIL" ]; then echo "$FAKE_FAIL" >&2; exit 1; fi
 if [ -n "$FAKE_FAIL_ONCE" ] && [ ! -e "$FAKE_FAILED" ]; then : > "$FAKE_FAILED"; echo "$FAKE_FAIL_ONCE" >&2; exit 1; fi
 case "$*" in
@@ -43,10 +45,13 @@ type fake struct {
 	t      *testing.T
 	reader Reader
 	pids   string
+	calls  string // the fake's runs, one line each
 	failed string // the file the fake's failure once leaves
 	mu     sync.Mutex
 	seen   []string // path and tenant of each request
 	hang   bool
+	// fail is how many requests answer 503 before the next one answers.
+	fail int
 }
 
 func newFake(t *testing.T) *fake {
@@ -57,15 +62,15 @@ func newFake(t *testing.T) *fake {
 	}
 	f := &fake{t: t, reader: Reader{Kubectl: kubectl, Timeout: 20 * time.Second, Tenant: "tenant-a"}, pids: filepath.Join(dir, "pids")}
 	t.Setenv("FAKE_PIDS", f.pids)
+	f.calls = filepath.Join(dir, "calls")
+	t.Setenv("FAKE_CALLS", f.calls)
 	t.Setenv("FAKE_MIMIR", "")
 	t.Setenv("FAKE_PLAIN", "")
 	t.Setenv("FAKE_FAIL", "")
 	t.Setenv("FAKE_FAIL_ONCE", "")
 	f.failed = filepath.Join(dir, "failed")
 	t.Setenv("FAKE_FAILED", f.failed)
-	pause := retryPause
-	retryPause = 100 * time.Millisecond
-	t.Cleanup(func() { retryPause = pause })
+	quickRetry(t)
 	return f
 }
 
@@ -74,7 +79,15 @@ func (f *fake) serve(env string) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.seen = append(f.seen, r.URL.RequestURI()+" "+r.Header.Get("X-Scope-OrgID"))
+		fail := f.fail > 0
+		if fail {
+			f.fail--
+		}
 		f.mu.Unlock()
+		if fail {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
 		if f.hang {
 			<-r.Context().Done()
 			return
@@ -105,6 +118,27 @@ func (f *fake) noForwardLeft() {
 			time.Sleep(20 * time.Millisecond)
 		}
 	}
+}
+
+// forwards are the port-forwards the fake started: the PID of each
+// kubectl.
+func (f *fake) forwards() []int {
+	f.t.Helper()
+	raw, _ := os.ReadFile(f.pids)
+	var out []int
+	for _, l := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if fields := strings.Fields(l); len(fields) > 0 {
+			pid, _ := strconv.Atoi(fields[0])
+			out = append(out, pid)
+		}
+	}
+	return out
+}
+
+// runs counts the fake's runs whose arguments contain word.
+func (f *fake) runs(word string) int {
+	raw, _ := os.ReadFile(f.calls)
+	return strings.Count(string(raw), word)
 }
 
 func zombie(pid int) bool {
@@ -211,4 +245,122 @@ func TestReadTimeoutPerInstallation(t *testing.T) {
 		t.Errorf("answer = %+v", got[0])
 	}
 	f.noForwardLeft()
+}
+
+// A Reader that keeps its forwards reads every tick after the first through
+// the first tick's forward: no kubectl runs, so no credential plugin either.
+func TestReadKeepsTheForwardAcrossTicks(t *testing.T) {
+	f := newFake(t)
+	f.reader.Keep = true
+	f.serve("FAKE_MIMIR")
+	for tick := range 3 {
+		got := f.reader.Read(context.Background(), []Target{alpha})
+		if !got[0].OK {
+			t.Fatalf("tick %d: answer = %+v", tick, got[0])
+		}
+	}
+	if n := len(f.forwards()); n != 1 || f.runs("port-forward") != 1 {
+		t.Errorf("three ticks started %d forwards in %d kubectl runs, want 1", n, f.runs("port-forward"))
+	}
+	if len(f.seen) != 3 {
+		t.Errorf("requests = %q, want three", f.seen)
+	}
+	f.reader.Close()
+	f.noForwardLeft()
+}
+
+// A kept forward whose process ended is replaced by one new forward at the
+// next tick.
+func TestReadReplacesAForwardThatEnded(t *testing.T) {
+	f := newFake(t)
+	f.reader.Keep = true
+	f.serve("FAKE_MIMIR")
+	if got := f.reader.Read(context.Background(), []Target{alpha}); !got[0].OK {
+		t.Fatalf("first tick: %+v", got[0])
+	}
+	first := f.forwards()[0]
+	if err := syscall.Kill(-first, syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	f.reader.mu.Lock()
+	held := f.reader.held[ctxA]
+	f.reader.mu.Unlock()
+	<-held.exited
+	if got := f.reader.Read(context.Background(), []Target{alpha}); !got[0].OK {
+		t.Fatalf("second tick: %+v", got[0])
+	}
+	if n := len(f.forwards()); n != 2 {
+		t.Errorf("forwards = %d, want the first and its one replacement", n)
+	}
+	f.reader.Close()
+	f.noForwardLeft()
+}
+
+// A kept forward whose request fails while its process runs (the connection
+// behind it dropped) is ended, and the next attempt of the same tick
+// answers through one new forward.
+func TestReadReplacesAForwardThatFails(t *testing.T) {
+	f := newFake(t)
+	f.reader.Keep = true
+	f.serve("FAKE_MIMIR")
+	if got := f.reader.Read(context.Background(), []Target{alpha}); !got[0].OK {
+		t.Fatalf("first tick: %+v", got[0])
+	}
+	f.mu.Lock()
+	f.fail = 1
+	f.mu.Unlock()
+	if got := f.reader.Read(context.Background(), []Target{alpha}); !got[0].OK {
+		t.Fatalf("second tick: %+v", got[0])
+	}
+	if n := len(f.forwards()); n != 2 {
+		t.Errorf("forwards = %d, want the first and its one replacement", n)
+	}
+	f.reader.Close()
+	f.noForwardLeft()
+}
+
+// A Reader that keeps its forwards asks kubectl for the contexts again only
+// once the kubeconfig changed.
+func TestContextsKeptUntilTheKubeconfigChanges(t *testing.T) {
+	f := newFake(t)
+	f.reader.Keep = true
+	kubeconfig := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(kubeconfig, []byte("a"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KUBECONFIG", kubeconfig)
+	for range 2 {
+		if got := f.reader.Contexts(context.Background()); len(got) != 1 || got[0] != "teleport.giantswarm.io-alpha" {
+			t.Fatalf("contexts = %q", got)
+		}
+	}
+	if n := f.runs("get-contexts"); n != 1 {
+		t.Errorf("kubectl asked %d times, want once", n)
+	}
+	if err := os.WriteFile(kubeconfig, []byte("ab"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.reader.Contexts(context.Background())
+	if n := f.runs("get-contexts"); n != 2 {
+		t.Errorf("kubectl asked %d times after the change, want twice", n)
+	}
+}
+
+// A context the kubeconfig lacks is said at once: no attempt after the first
+// finds it, and a Reader that knows the kubeconfig's contexts runs no
+// kubectl for it.
+func TestReadMissingContextIsNotRetried(t *testing.T) {
+	f := newFake(t)
+	missing := Target{Name: "missing", Context: "missing"}
+	got := f.reader.Read(context.Background(), []Target{missing})
+	if got[0].OK || got[0].Why != `error: context "missing" does not exist` || f.runs("port-forward") != 1 {
+		t.Errorf("answer = %+v after %d forwards", got[0], f.runs("port-forward"))
+	}
+	f.reader.Keep = true
+	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "config"))
+	f.reader.Contexts(context.Background())
+	got = f.reader.Read(context.Background(), []Target{missing})
+	if got[0].OK || got[0].Why != `context "missing" is not in the kubeconfig` || f.runs("port-forward") != 1 {
+		t.Errorf("known contexts: answer = %+v after %d forwards", got[0], f.runs("port-forward"))
+	}
 }

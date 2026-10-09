@@ -234,10 +234,14 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 	if len(parked) == 0 {
 		return nil
 	}
-	var states map[github.PR]string
+	var states map[github.PR]github.RefState
 	if len(refs) > 0 && !lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now) {
 		s, err := refStates(ctx, refs)
-		w.check("park-refs", s == nil, "cannot read the parked agents' issues and pull requests: %v", err)
+		if s == nil {
+			w.fail("park-refs", "cannot read the parked agents' issues and pull requests: %v", err)
+		} else {
+			w.clear("park-refs")
+		}
 		states = s
 	}
 	closes := map[int]string{}
@@ -272,7 +276,7 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 			continue
 		}
 		r, _ := parseRef(on)
-		if s := states[r]; s != "" && s != github.Open {
+		if s := states[r].State; s != "" && s != github.Open {
 			out = append(out, settledPark{ag.Party, on, refName(r) + " " + strings.ToLower(s)})
 		}
 	}

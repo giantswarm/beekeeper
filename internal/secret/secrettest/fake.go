@@ -24,8 +24,11 @@ import (
 const header = "sops:\n  fake: "
 
 const (
-	create = "create"
-	get    = "get"
+	// passwordPurpose is a Password item's category and its password
+	// field's purpose.
+	passwordPurpose = "PASSWORD"
+	create          = "create"
+	get             = "get"
 )
 
 // Tools are the fake tools and what they were asked.
@@ -144,18 +147,28 @@ func (t *Tools) vault(args []string) ([]byte, error) {
 	return json.Marshal(map[string]string{"id": id, "name": args[1]})
 }
 
+// builtins are op's built-in item fields by id: their purpose and type,
+// which op's validator requires.
+var builtins = map[string][2]string{
+	"password":   {passwordPurpose, "CONCEALED"},
+	"username":   {"USERNAME", "STRING"},
+	"notesPlain": {"NOTES", "STRING"},
+}
+
 func (t *Tools) item(args []string, stdin io.Reader) ([]byte, error) {
 	vault := args[slices.Index(args, "--vault")+1]
 	type field struct {
-		ID    string `json:"id"`
-		Label string `json:"label"`
-		Type  string `json:"type"`
-		Value string `json:"value"`
+		ID      string `json:"id"`
+		Label   string `json:"label"`
+		Type    string `json:"type"`
+		Purpose string `json:"purpose,omitempty"`
+		Value   string `json:"value"`
 	}
 	type item struct {
-		ID     string  `json:"id"`
-		Title  string  `json:"title"`
-		Fields []field `json:"fields"`
+		ID       string  `json:"id"`
+		Title    string  `json:"title"`
+		Category string  `json:"category,omitempty"`
+		Fields   []field `json:"fields"`
 	}
 	items := map[string]*item{}
 	for ref, v := range t.Vault {
@@ -168,7 +181,11 @@ func (t *Tools) item(args []string, stdin io.Reader) ([]byte, error) {
 			it = &item{ID: "id-" + parts[1], Title: parts[1]}
 			items[parts[1]] = it
 		}
-		it.Fields = append(it.Fields, field{ID: parts[2], Label: parts[2], Type: "CONCEALED", Value: v})
+		f := field{ID: parts[2], Label: parts[2], Type: "CONCEALED", Value: v}
+		if b, ok := builtins[f.ID]; ok {
+			f.Purpose, f.Type = b[0], b[1]
+		}
+		it.Fields = append(it.Fields, f)
 	}
 	switch args[0] {
 	case "list":
@@ -198,6 +215,21 @@ func (t *Tools) item(args []string, stdin io.Reader) ([]byte, error) {
 		var it item
 		if err := json.Unmarshal(raw, &it); err != nil || it.Title == "" {
 			return nil, errors.New("exit 1 (no template on stdin)")
+		}
+		var refused []string
+		password := false
+		for _, f := range it.Fields {
+			password = password || f.Purpose == passwordPurpose
+			if b, ok := builtins[f.ID]; ok && (f.Purpose != b[0] || f.Type != b[1]) {
+				refused = append(refused, fmt.Sprintf("field %q must have purpose %s and type %s", f.ID, b[0], b[1]))
+			}
+		}
+		if it.Category == passwordPurpose && !password {
+			refused = append(refused, "a Password item must have a field with purpose PASSWORD")
+		}
+		if len(refused) > 0 {
+			return nil, fmt.Errorf("exit 1 ([ERROR] unable to process line 1: Validation: (validateVaultItem failed to Validate), "+
+				"Couldn't validate the item: \"[ItemValidator] has found %d errors, 0 warnings: \nDetails:\nErrors:\n%s\")", len(refused), strings.Join(refused, "\n"))
 		}
 		for _, f := range it.Fields {
 			t.Vault["op://"+vault+"/"+it.Title+"/"+f.Label] = f.Value

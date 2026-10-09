@@ -259,7 +259,7 @@ git's signing call only; the key and the agent stay out of the sandbox.`,
 				return err
 			}
 			secretCall := func(env []string) sandbox.Handler {
-				return a.secretCallLogged(brokeredCallTimeout, brokeredCall(exe, "/proc", 0, env, brokeredSecretArgv))
+				return a.secretCallLogged(brokeredCallTimeout, brokeredCall(exe, "/proc", 0, env, brokeredSecretArgv(a.cfg.Secret.Session)))
 			}
 			spool := make(chan error, 1)
 			go func() {
@@ -344,8 +344,13 @@ func brokeredCap(c platform.Capper, cpu platform.Cap) func(int, sandbox.Request)
 
 // brokeredSecretOps are the beekeeper secret subcommands a sandboxed
 // session runs through the broker. copy's consumer form is refused with
-// them: its consumer would run on the host, outside the sandbox.
-var brokeredSecretOps = []string{"compare", "fingerprint", "copy", "set", "rotate"}
+// them: its consumer would run on the host, outside the sandbox. import
+// reads a vault of the person's that the service account does not: the
+// broker runs it with secret.session only, in the person's session it holds.
+var brokeredSecretOps = []string{"compare", "fingerprint", "copy", "set", "rotate", "recipients", importOp}
+
+// importOp is the secret subcommand that reads the person's own vault.
+const importOp = "import"
 
 // callerEnv are the variables that name the calling session, the only part
 // of its environment a brokered call takes over.
@@ -356,11 +361,15 @@ var callerEnv = []string{"CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_HOST_SESSION_ID"
 const brokeredCallTimeout = 10 * time.Minute
 
 // brokeredSecretArgs refuses a secret call the broker does not run: one
-// outside brokeredSecretOps, another caller or config, or for a sandboxed
-// requester a consumer, which would run outside its sandbox.
-func brokeredSecretArgs(args []string, inSandbox bool) error {
+// outside brokeredSecretOps, an import without secret.session (session), another
+// caller or config, or for a sandboxed requester a consumer, which would run
+// outside its sandbox.
+func brokeredSecretArgs(args []string, inSandbox, session bool) error {
 	if len(args) == 0 || !slices.Contains(brokeredSecretOps, args[0]) {
 		return fmt.Errorf("the sandbox broker runs beekeeper secret %s only", strings.Join(brokeredSecretOps, ", "))
+	}
+	if args[0] == importOp && !session {
+		return errors.New("the broker runs import with secret.session only, in the person's vault session it holds: without it import reads the person's own vault on the host, by the person")
 	}
 	for _, a := range args[1:] {
 		if a == "--" && inSandbox {
@@ -386,12 +395,15 @@ func brokeredFlags(args []string) error {
 	return nil
 }
 
-// brokeredSecretArgv is the command line of a brokered secret call.
-func brokeredSecretArgv(req sandbox.Request, inSandbox bool) ([]string, error) {
-	if err := brokeredSecretArgs(req.Args, inSandbox); err != nil {
-		return nil, err
+// brokeredSecretArgv is the command line of a brokered secret call, under
+// the broker's secret.session (session).
+func brokeredSecretArgv(session bool) func(sandbox.Request, bool) ([]string, error) {
+	return func(req sandbox.Request, inSandbox bool) ([]string, error) {
+		if err := brokeredSecretArgs(req.Args, inSandbox, session); err != nil {
+			return nil, err
+		}
+		return append([]string{"secret"}, req.Args...), nil
 	}
-	return append([]string{"secret"}, req.Args...), nil
 }
 
 // resourceName is a lease's resource name.

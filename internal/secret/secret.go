@@ -45,6 +45,11 @@ type Ops struct {
 	Fingerprint func(value string) string
 	// Apply writes a key of a Secret; nil is [ApplySecret].
 	Apply SecretApplier
+	// Read reads a key of a Secret; nil is [ReadSecret].
+	Read SecretReader
+	// Encode transforms the value a copy writes, set writes besides the
+	// vault, and fingerprint answers for; the zero Encoding keeps it as it is.
+	Encode Encoding
 	// Ages are the age identities of the shared vault, an identity file or
 	// the person's own credential store for the SOPS files sops' own
 	// sources hold none for.
@@ -52,6 +57,10 @@ type Ops struct {
 	// Store is the person's own credential store a store:// age identity
 	// is read from.
 	Store Store
+	// Installations are the installations' names, which a SOPS file's path
+	// under its .sops.yaml carries as a directory: a refusal names the one
+	// whose recipient has no identity.
+	Installations []string
 }
 
 // opTimeout bounds one read of the shared vault: op that answers nothing
@@ -78,7 +87,7 @@ func Exec(ctx context.Context, dir string, env []string, stdin io.Reader, name s
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
-			return nil, fmt.Errorf("%s: exit %d (%s)", name, ee.ExitCode(), guard.FirstLine(stderr.String()))
+			return nil, fmt.Errorf("%s: exit %d (%s)", name, ee.ExitCode(), guard.Message(stderr.String()))
 		}
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
@@ -131,8 +140,8 @@ func (r Ref) String() string {
 	return r.File
 }
 
-// single is whether the reference names one value.
-func (r Ref) single() bool { return r.Op != "" || r.Path != "" }
+// Single is whether the reference names one value.
+func (r Ref) Single() bool { return r.Op != "" || r.Path != "" }
 
 // vault is the vault an op:// reference names.
 func (r Ref) vault() string {
@@ -190,7 +199,7 @@ func (o *Ops) values(ctx context.Context, r Ref) (map[string]string, error) {
 
 // value reads the one value a single reference names.
 func (o *Ops) value(ctx context.Context, r Ref) (string, error) {
-	if !r.single() {
+	if !r.Single() {
 		return "", fmt.Errorf("%s: name one value (file#path or op://…), not a whole file", r)
 	}
 	vs, err := o.values(ctx, r)

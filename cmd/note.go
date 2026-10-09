@@ -32,7 +32,7 @@ in full until it is unpinned or done.
 
 Without a subcommand, lists the open notes.`,
 		Args: cobra.NoArgs,
-		RunE: func(*cobra.Command, []string) error { return a.noteList() },
+		RunE: func(*cobra.Command, []string) error { return a.noteList("") },
 	}
 	var forWho, due, overtaken, replaces string
 	var pin bool
@@ -65,7 +65,12 @@ warning that quotes the answer.
 
 --ref links the note to an issue or pull request it asks about
 (owner/repo#n or its URL, repeatable): once every linked one is closed or
-merged, beekeeper watch closes the note as overtaken (note.overtaken).
+merged, beekeeper watch closes the note as overtaken (note.overtaken),
+when its worker closed them at the end of its task: an issue a pull
+request's closing keyword closed at its merge, or any close while the
+worker that filed the note still runs its task, keeps the note open
+(NOTE KEPT, note.kept, once per reason); once the worker reports its task
+over (agents idle), its settled issues overtake its notes.
 A note without --ref stays open: once the session that filed it is
 archived, guide watch names it to the guide as orphaned (GUIDE ORPHANED),
 to ask or close by hand; a role's run never orphans its notes.
@@ -296,24 +301,30 @@ that filed it is told at once.`,
 	}
 	answer.Flags().IntVar(&choice, "choice", 0, "the option chosen, 1-based")
 	answer.Flags().StringVar(&via, "via", viaCLI, "how the answer came: cli or slack")
-	list := listCmd("List the open notes", a.noteList)
+	var listFor string
+	list := listCmd("List the open notes", func() error { return a.noteList(listFor) })
+	list.Flags().StringVar(&listFor, "for", "", "only the notes for this person or team")
 	c.AddCommand(add, answer, done, a.notePinCmd("pin", true), a.notePinCmd("unpin", false), list)
 	return c
 }
 
-func (a *app) noteList() error {
+// noteList prints the open notes, those for forWho alone with it set.
+func (a *app) noteList(forWho string) error {
 	st, err := a.store.Read()
 	if err != nil {
 		return err
 	}
+	notes := slices.Clone(st.Notes)
+	if forWho != "" {
+		notes = slices.DeleteFunc(notes, func(n state.Note) bool { return !strings.EqualFold(n.For, forWho) })
+	}
 	if a.json {
-		notes := slices.Clone(st.Notes)
 		for i := range notes {
 			notes[i].Kind = noteKind(a.cfg.Guide.Person, &notes[i])
 		}
 		return a.printJSON(notes)
 	}
-	a.printNotes(st.Notes)
+	a.printNotes(notes)
 	return nil
 }
 

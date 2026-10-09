@@ -23,6 +23,9 @@ const handCutDevctl = `case "$*" in
 *) echo "waiting for the release" >&2; exec sleep 30 ;;
 esac`
 
+// mainBranch is a base branch Auto-release tags.
+const mainBranch = "main"
+
 // stubBaseRelease answers the base branch's release model and counts the
 // reads.
 func stubBaseRelease(t *testing.T, r github.BaseRelease, err error) *int {
@@ -88,7 +91,7 @@ func TestAMergeIntoAHandCutBranchFreesItsLaneAtTheMerge(t *testing.T) {
 		noSystemd(t)
 		fakeDevctl(t, `case "$*" in *--no-release-wait*) exit 7 ;; esac; echo '`+mergedDoc+`'`)
 		stubGitHub(t, github.Merged, "")
-		stubBaseRelease(t, github.BaseRelease{Base: "main", Auto: true}, nil)
+		stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
 		g := runningMerge(t, scratchRepo, lane)
 		if err := startMerge(t, g); err != nil {
 			t.Fatalf("exit %d, want 0", Code(err))

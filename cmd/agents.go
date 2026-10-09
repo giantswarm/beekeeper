@@ -252,6 +252,7 @@ file; the log keeps them (agents.report, agents.problem).`,
 				}
 				ag := &st.Agents[i]
 				reportIdle(ag, a.now)
+				endNotes(st, ag.Party, a.now)
 				ag.Done = finished
 				verb := "agents.idle"
 				if finished {
@@ -409,6 +410,17 @@ func reportIdle(ag *state.Agent, now time.Time) {
 	ag.Park = nil
 	if ag.Task != "" {
 		ag.LastTask, ag.Task, ag.IdleSince = ag.Task, "", now.UTC()
+	}
+}
+
+// endNotes stamps the open notes worker filed with the end of its task
+// (Note.TaskEnded): from now on their settled issues overtake them, a
+// closing keyword's close included.
+func endNotes(st *state.State, worker state.Party, now time.Time) {
+	for i := range st.Notes {
+		if n := &st.Notes[i]; n.By.Is(worker) && n.TaskEnded.IsZero() {
+			n.TaskEnded = now.UTC()
+		}
 	}
 }
 

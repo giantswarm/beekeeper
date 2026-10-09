@@ -513,6 +513,15 @@ type Agents struct {
 	// RelayAt is an agent's session context, in tokens, at which the watch
 	// says its hand-over due (default: supervisor.relayAt).
 	RelayAt Tokens `yaml:"relayAt"`
+	// LastStepGrace is how long the watch holds the hand-over of an agent
+	// over RelayAt whose task is in its last step (its sessions serve record
+	// waits on the report or says the merge landed, or the gate saw its
+	// merge land), counted from that evidence, since its report is expected
+	// before a hand-over would pay (30m).
+	LastStepGrace Duration `yaml:"lastStepGrace"`
+	// LastStepCeiling is the context, in tokens, at which the hand-over is
+	// due whatever the agent's last step (default: a quarter above RelayAt).
+	LastStepCeiling Tokens `yaml:"lastStepCeiling"`
 	// NoteWait bounds how long `agents handover` waits for the agent's
 	// note on what is in flight (3m).
 	NoteWait Duration `yaml:"noteWait"`
@@ -789,6 +798,10 @@ type Merge struct {
 	// request's merge before the watch ends it: devctl confirms the release
 	// within its own --timeout, so one running on past it hangs in its lane.
 	HungAfter Duration `yaml:"hungAfter"`
+	// CITimeout is devctl pr merge's --timeout, its wait for the CI outcome,
+	// when the gated command names none: devctl's own 30m is shorter than a
+	// repository's CI restarted from zero by --update-branch.
+	CITimeout Duration `yaml:"ciTimeout"`
 	// DevctlOwners are the owners whose repositories devctl pr merge serves
 	// (its GitHub App login reaches its own organisation only); a
 	// repository of any other owner, and every repository while it is
@@ -866,7 +879,32 @@ type Alerts struct {
 	PageSeverity string `yaml:"pageSeverity"`
 	// OwnerGrace is how long a page may go unowned (default 15m).
 	OwnerGrace Duration `yaml:"ownerGrace"`
+	// PagerDuty is the second alert source: the team's PagerDuty services'
+	// open incidents.
+	PagerDuty PagerDuty `yaml:"pagerduty"`
 }
+
+// PagerDuty configures the reading of the open incidents of the team's
+// PagerDuty services, through muster's read-only PagerDuty tools as the
+// person, signed in to the muster context: beekeeper holds no PagerDuty
+// token. The watch reads them every Every and prints PAGERDUTY NEW,
+// ACKNOWLEDGED and RESOLVED lines; alerts.team marks them.
+type PagerDuty struct {
+	// Context is the muster context whose PagerDuty server is read; unset,
+	// PagerDuty is not read. The binary and the call timeout are central's.
+	Context string `yaml:"context"`
+	// Server is the name muster registered the PagerDuty MCP server under:
+	// its tools are x_<server>_<tool> (default pd).
+	Server string `yaml:"server"`
+	// Services are the ids of the team's PagerDuty services.
+	Services []string `yaml:"services"`
+	// Every is the reading interval (default 1m): a page is a watch line
+	// within it.
+	Every Duration `yaml:"every"`
+}
+
+// Enabled says whether PagerDuty is read.
+func (p PagerDuty) Enabled() bool { return p.Context != "" }
 
 // Upgrades paces the reading of alerts.installations' Cluster API clusters
 // for running upgrades: each installation is read every Every, and every
@@ -931,6 +969,9 @@ var DefaultIgnore = []string{"Watchdog"}
 type GitHub struct {
 	// Floor is the remaining core budget under which GitHub work stops.
 	Floor int `yaml:"floor"`
+	// UrgentBound is the budget an urgent merge keeps for itself under the
+	// floor (lanes urgent): it runs while at least this much remains.
+	UrgentBound int `yaml:"urgentBound"`
 	// ProbeRepo is the repository whose conditional GET reads the budget
 	// headers; any repository the token can read (default: beekeeper's own).
 	ProbeRepo string `yaml:"probeRepo"`
@@ -1038,6 +1079,10 @@ type Watch struct {
 	// the watch logs them (watch.quiet) instead of printing them. Setting
 	// it replaces the default, beekeeper's own tests ("test: *").
 	QuietSessions []string `yaml:"quietSessions"`
+	// Notify says whether the standby watch beekeeper install writes sends
+	// the events that need a person to the desktop (watch --notify
+	// --standby); off, the default, it runs as watch --standby.
+	Notify bool `yaml:"notify"`
 }
 
 // The fractions a memory or disk threshold defaults to: of RAM (available
@@ -1449,6 +1494,10 @@ func (c *Config) defaults() error {
 	if c.Agents.RelayAt == 0 {
 		c.Agents.RelayAt = c.Supervisor.RelayAt
 	}
+	setDur(&c.Agents.LastStepGrace, 30*time.Minute)
+	if c.Agents.LastStepCeiling == 0 {
+		c.Agents.LastStepCeiling = c.Agents.RelayAt + c.Agents.RelayAt/4
+	}
 	setDur(&c.Agents.NoteWait, 3*time.Minute)
 	setDur(&c.Agents.StaleAfter, 24*time.Hour)
 	if c.Agents.Shell.Unalias == nil {
@@ -1478,6 +1527,7 @@ func (c *Config) defaults() error {
 	setDur(&c.Board.StaleAfter, 365*24*time.Hour)
 
 	setInt(&c.GitHub.Floor, 2500)
+	setInt(&c.GitHub.UrgentBound, 200)
 	setStr(&c.GitHub.ProbeRepo, "giantswarm/beekeeper")
 
 	w := &c.Watch
@@ -1548,6 +1598,7 @@ func (c *Config) defaults() error {
 	setDur(&c.Merge.BudgetFresh, time.Minute)
 	setDur(&c.Merge.StallAfter, 5*time.Minute)
 	setDur(&c.Merge.HungAfter, 45*time.Minute)
+	setDur(&c.Merge.CITimeout, time.Hour)
 	setDur(&c.Secret.UnlockWait, 8*time.Minute)
 	setDur(&c.Secret.SessionLifetime, 12*time.Hour)
 
@@ -1576,6 +1627,8 @@ func (c *Config) defaults() error {
 	setDur(&al.Flap.Window, time.Hour)
 	setStr(&al.PageSeverity, alerts.Page)
 	setDur(&al.OwnerGrace, 15*time.Minute)
+	setStr(&al.PagerDuty.Server, "pd")
+	setDur(&al.PagerDuty.Every, time.Minute)
 	setDur(&c.Upgrades.Every, 5*time.Minute)
 	if c.Notify.Kinds == nil {
 		c.Notify.Kinds = slices.Clone(notify.Kinds)
@@ -1775,6 +1828,9 @@ func (c *Config) validate() error {
 			return fmt.Errorf("%s: set skill or instructions, not both", name)
 		}
 	}
+	if pd := c.Alerts.PagerDuty; pd.Enabled() && len(pd.Services) == 0 {
+		return fmt.Errorf("alerts.pagerduty.services: reading PagerDuty through muster context %s needs the team's service ids", pd.Context)
+	}
 	for i, in := range c.Alerts.Installations {
 		if in.Name == "" {
 			return fmt.Errorf("alerts.installations[%d]: an installation needs a name", i)
@@ -1805,6 +1861,9 @@ func (c *Config) validate() error {
 	}
 	if k := c.Capacity; k.Floor < 0 || k.Ceiling < k.Floor {
 		return fmt.Errorf("capacity: floor %d and ceiling %d; the ceiling is at least the floor", k.Floor, k.Ceiling)
+	}
+	if a := c.Agents; a.LastStepCeiling != 0 && a.LastStepCeiling <= a.RelayAt {
+		return fmt.Errorf("agents.lastStepCeiling: %d is not above relayAt %d", a.LastStepCeiling, a.RelayAt)
 	}
 	if err := c.validateLabs(); err != nil {
 		return err

@@ -168,7 +168,9 @@ const (
 	fileKept                     // different and not install's: kept
 )
 
-// planFile writes f where it is missing or install's own.
+// planFile writes f where it is missing or install's own: written by an
+// earlier install, or a unit that runs this binary (a copy of the shipped
+// one, an install that predates the manifest).
 func (e Env) planFile(p *plan, m *Manifest, f platform.File) fileState {
 	cur, err := os.ReadFile(filepath.Clean(f.Path))
 	state := fileNew
@@ -179,6 +181,9 @@ func (e Env) planFile(p *plan, m *Manifest, f platform.File) fileState {
 	case err == nil && m.owns(f.Path, cur):
 		state = fileUpdated
 		p.add("update", f.Path, "", nil)
+	case err == nil && bytes.Contains(cur, []byte(e.Exe)):
+		state = fileUpdated
+		p.add("update", f.Path, "an earlier unit of this binary", nil)
 	case err == nil:
 		p.add("keep", f.Path, "differs from what install writes, and install did not write it", nil)
 		return fileKept

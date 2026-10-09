@@ -123,8 +123,10 @@ the lane `stalled` and `watch --once` prints one `LANE STALLED` line. The re-exe
 builds stamped with different versions (`-ldflags "-X …/pkg/project.version=…"`): start a
 waiting gate call from build A's path, rename build B over that path (`mv -f`, as `self-update`
 does), and within 5s the call prints `continuing under beekeeper <B>` and keeps its position in
-`lanes`. The test binary is not re-executed: `internal/platform/binary_linux_test.go` covers noticing the
-replacement.
+`lanes`; a call whose devctl runs prints it within a poll and follows the same devctl on. The
+test binary is not re-executed: `internal/platform/binary_linux_test.go` covers noticing the
+replacement, and `cmd/gatereexec_test.go` the hand-over on both sides with a binary whose re-exec
+fails.
 
 `watch` finds a session by its process: a `claude` binary that is no subcommand (`daemon`,
 `bg-pty-host`, `stop`, …) and not the `--bg` launcher, running under no other session's CLI
@@ -276,7 +278,7 @@ timer from the running watches.
 | `internal/feed` | The versioned shape of `beekeeper://feed` ([docs/feed.md](feed.md)): event ids, kinds, subject, actor, time and the line the watch prints. |
 | `internal/mailbox` | The mailboxes of `beekeeper serve` in Postgres: one `messages` table and a dedupe table, migrated at start; at least once and in order, `Cap` per mailbox, expiry with a notice to the sender, `LISTEN`/`NOTIFY` on every change; `mailboxtest` gives a test a database of its own. |
 | `internal/notify` | Desktop notifications: the kinds, urgencies and quiet hours and the ledger `notify.json` under `notify.lock` that makes each event one notification across watches and holds the quiet hours' ones; the sender is `platform.Notifier`. |
-| `internal/alerts` | The installations' alerts: bounded `kubectl port-forward`s in their own process group, the Alertmanager reading, the NEW/RESOLVED/FLAPPING lines with the severity floors and the flap damper, and the grouped snapshot (pure, tested against Alertmanager-shaped fixtures, recorded answers in `testdata/` and a fake `kubectl`), the baseline with the damper's records and its single owner, and recorded answers for `alerts replay`. |
+| `internal/alerts` | The installations' alerts: bounded `kubectl port-forward`s in their own process group, kept from tick to tick by the watch, the Alertmanager reading, the NEW/RESOLVED/FLAPPING lines with the severity floors and the flap damper, and the grouped snapshot (pure, tested against Alertmanager-shaped fixtures, recorded answers in `testdata/` and a fake `kubectl`), the baseline with the damper's records and its single owner, and recorded answers for `alerts replay`. |
 | `internal/upgrade` | Cluster upgrades: the detection over an installation's Clusters, control planes and node pools (pure, tested against a real upgrade replayed from `testdata/prod/<phase>/`, stripped to the fields read), the bounded parallel `kubectl` reading with the events that name the release upgraded from, and the automatic `upgrade:<installation>/<cluster>` holds the merge gate and `lease claim` read. |
 | `internal/guard` | The build guard: a capped run in a build slot with its `run.start`/`run.end` events, the PreToolUse hook's rewrite and third-lab refusal, and the PermissionRequest hook's decision. |
 | `internal/free` | What can be freed (dead sessions' dirs, throwaway temp dirs, orphaned workers) and what is only reported, as a report or the front end's TSV. |

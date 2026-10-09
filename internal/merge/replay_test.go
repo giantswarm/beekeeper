@@ -16,9 +16,8 @@ import (
 )
 
 var (
-	keyDetail  = regexp.MustCompile(`^([\w.-]+/[\w.-]+)#(\d+)`)
-	forDetail  = regexp.MustCompile(` for "(.*)"$`)
-	exitDetail = regexp.MustCompile(` exit (\d+),`)
+	keyDetail = regexp.MustCompile(`^([\w.-]+/[\w.-]+)#(\d+)`)
+	forDetail = regexp.MustCompile(` for "(.*)"$`)
 )
 
 // decision is what the queue rule says when a session's merge arrives.
@@ -99,7 +98,8 @@ func replay(t *testing.T, raw []byte) []decision {
 				m.Phase, m.Seeded, m.Finished, m.Exit = state.Running, false, time.Time{}, 0
 			}
 		case e.Verb == "merge.failed":
-			if i := find(state.Running); i >= 0 && !Failed(&st.Merges[i], atoi(t, exitDetail.FindStringSubmatch(e.Detail)[1]), e.At) {
+			// A run with nothing merged leaves its lane with its gate.
+			if i := find(state.Running); i >= 0 {
 				st.Merges = slices.Delete(st.Merges, i, i+1)
 			}
 		case e.Verb == "merged":
@@ -122,7 +122,8 @@ func atoi(t *testing.T, s string) int {
 // merge trail of the night of 2026-09-24 as beekeeper log --verb merge
 // shows it, the sessions' ids left out: the supervisor seeds 672, 676, 678,
 // 679 and 671; 678 fails with exit 3 at 00:35:33 and its session retries at
-// 00:36:19. The old queue sent the retry behind the seeds 679 and 671 until
+// 00:36:19, rejoining its lane behind the absent seeds, which an arrived merge
+// passes. The old queue sent the retry behind the seeds 679 and 671 until
 // the supervisor rebuilt the queue by hand at 01:00:50.
 func TestReplayAgentPlatformNight(t *testing.T) {
 	ds := replay(t, testdata(t, "events-agent-platform-678.jsonl"))
@@ -143,7 +144,7 @@ func TestReplayAgentPlatformNight(t *testing.T) {
 		return strings.Join(keys, " ")
 	}
 	retry := at("00:36:19", ap(678))
-	if retry.behind != "" || strings.Join(retry.waiting, " ") != ap(678, 679, 671) {
+	if retry.behind != "" || strings.Join(retry.waiting, " ") != ap(679, 671, 678) {
 		t.Errorf("the retry of the failed 678 waits behind %q; waiting %v", retry.behind, retry.waiting)
 	}
 	late := at("23:03:57", ap(684))
@@ -191,22 +192,36 @@ func TestAheadSeedOrder(t *testing.T) {
 	}
 }
 
-func TestFailedKeepsItsPlace(t *testing.T) {
+// A waiting place whose run ended (an older release kept one for the retry)
+// goes with its gate; a place whose gate left without a run keeps its TTL.
+func TestAnEndedRunLeavesNoPlace(t *testing.T) {
 	now := time.Now()
-	m := state.Merge{Repo: "o/r", PR: 678, Lane: "l", PID: 3, Phase: state.Running, Joined: now.Add(-2 * time.Hour), Roll: []string{"x"}}
-	if !Failed(&m, 3, now) || !m.Retrying() || m.Exit != 3 || !m.Seen.Equal(now.UTC()) || m.Roll != nil {
-		t.Fatalf("a failed attempt does not keep its place: %+v", m)
+	dead := func(int) bool { return false }
+	ended := state.Merge{Repo: "o/r", PR: 678, Lane: "l", PID: 3, Phase: state.Waiting, Joined: now, Seen: now, Finished: now, Exit: 7}
+	left := state.Merge{Repo: "o/r", PR: 679, Lane: "l", PID: 4, Phase: state.Waiting, Joined: now, Seen: now}
+	st := &state.State{Merges: []state.Merge{ended, left}}
+	Prune(st, now.Add(time.Second), 15*time.Minute, 12*time.Hour, dead)
+	if len(st.Merges) != 1 || st.Merges[0].PR != 679 {
+		t.Errorf("want only the place whose gate left without a run: %+v", st.Merges)
 	}
-	st := &state.State{Merges: []state.Merge{m}}
-	Prune(st, now.Add(11*time.Hour), 15*time.Minute, 12*time.Hour, func(int) bool { return false })
+	st = &state.State{Merges: []state.Merge{ended}}
+	Prune(st, now.Add(time.Second), 15*time.Minute, 12*time.Hour, func(int) bool { return true })
 	if len(st.Merges) != 1 {
-		t.Error("a failed attempt's place goes before the seed TTL")
+		t.Error("a place whose gate still runs is dropped")
 	}
-	if Present(st.Merges[0], now.Add(16*time.Minute), 15*time.Minute, func(int) bool { return false }) {
-		t.Error("a failed attempt not retried holds up a free lane past the queue TTL")
-	}
-	r := state.Merge{Phase: state.Running}
-	if Failed(&r, ExitRefused, now) || r.Retrying() {
-		t.Error("devctl's refusal keeps a place")
+}
+
+func TestServerError(t *testing.T) {
+	for doc, want := range map[string]bool{
+		`{"exitCode":7,"reason":"PUT https://api.github.com/repos/o/r/pulls/7/merge: 502 Bad Gateway []"}`:              true,
+		`{"exitCode":7,"reason":"PUT https://api.github.com/repos/o/r/pulls/7/update-branch: 503 Service Unavailable"}`: true,
+		`{"exitCode":7,"reason":"PUT https://api.github.com/repos/o/r/pulls/7/merge: 422 Unprocessable Entity"}`:        false,
+		`{"exitCode":7,"reason":"a newer devctl is released: devctl version update"}`:                                   false,
+		`{"exitCode":1,"reason":"PUT https://api.github.com/repos/o/r/pulls/7/merge: 502 Bad Gateway"}`:                 false,
+		``: false,
+	} {
+		if got := ServerError([]byte(doc)); got != want {
+			t.Errorf("ServerError(%s) = %v, want %v", doc, got, want)
+		}
 	}
 }

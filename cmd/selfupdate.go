@@ -73,7 +73,9 @@ is set. A development build (version dev) is refused.`,
 }
 
 // leftBehind names the beekeeper processes an update leaves on the old
-// binary, one line each, and what becomes of their saves; "" for none.
+// binary, one line each, and what becomes of their saves; a gate call or a
+// merge-child re-executes the installed binary at its next step, and says
+// so. "" for none.
 func leftBehind(stale []*proc.Process, old, installed string) string {
 	if len(stale) == 0 {
 		return ""
@@ -81,7 +83,18 @@ func leftBehind(stale []*proc.Process, old, installed string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Left on %s until restarted, their saves of the state refused once %s writes it:\n", old, installed)
 	for _, p := range stale {
-		fmt.Fprintf(&b, "  pid %d: %s\n", p.PID, display(p.Args))
+		fmt.Fprintf(&b, "  pid %d: %s", p.PID, display(p.Args))
+		if reexecs(p) {
+			fmt.Fprintf(&b, " (re-executes %s at its next step)", installed)
+		}
+		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// reexecs says whether the beekeeper process p re-executes the binary
+// installed at its path by itself once replaced: a gate call, waiting for
+// its turn or following its devctl, and a merge-child.
+func reexecs(p *proc.Process) bool {
+	return len(p.Args) > 1 && (p.Args[1] == "gate" || p.Args[1] == mergeChildCmd)
 }

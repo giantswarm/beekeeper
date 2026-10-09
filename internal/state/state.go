@@ -399,9 +399,18 @@ type Note struct {
 	Pinned bool `json:"pinned,omitempty"`
 	// Refs are the issues and pull requests (owner/repo#n) the note asks
 	// about: once every one is closed or merged, the watch closes the note
-	// as overtaken. Without refs the note is linked to its filing session,
-	// and closes once that session is archived.
+	// as overtaken, unless a closing keyword closed one and the note's
+	// worker has not ended its task (Kept). Without refs the note is linked
+	// to its filing session, and closes once that session is archived.
 	Refs []string `json:"refs,omitempty"`
+	// TaskEnded is when the worker that filed the note reported its task
+	// over (agents idle): from then on its settled refs overtake the note,
+	// a closing keyword's close included. Zero for a note no worker filed
+	// or whose worker still runs.
+	TaskEnded time.Time `json:"taskEnded,omitzero"`
+	// Kept is why the watch keeps the note open although every ref is
+	// closed or merged, said once per reason (NOTE KEPT).
+	Kept string `json:"kept,omitempty"`
 	// Question, StatusQuo, Options ("<label>: <consequence>" each) and
 	// Recommend (the recommended option, 1-based) are a decision's parts as
 	// its message renders them; Text joins them for the terminal.
@@ -752,9 +761,41 @@ type State struct {
 	// WorkerReports are the reports workers finished with (agents idle
 	// --done) that the supervisor's watch has not printed yet.
 	WorkerReports []WorkerReport `json:"workerReports,omitempty"`
+	// Urgent are the merges marked urgent (lanes urgent): waiting for their
+	// gate, or run under the GitHub budget floor in a reset window that has
+	// not ended.
+	Urgent []Urgent `json:"urgent,omitempty"`
 
 	rest rest
 }
+
+// Urgent is a merge marked urgent, a privacy or security fix's: under the
+// GitHub budget floor it runs, once per reset window, while the budget keeps
+// github.urgentBound for it.
+type Urgent struct {
+	Repo string `json:"repo"`
+	PR   int    `json:"pr"`
+	// By is who asked for it, Reason why.
+	By     Party     `json:"by"`
+	Reason string    `json:"reason"`
+	At     time.Time `json:"at"`
+	// Window is the reset of the budget window the merge ran under the
+	// floor in; zero while it waits for its gate.
+	Window time.Time `json:"window,omitzero"`
+	// Remaining is the budget when it ran, Spent what its run drew from
+	// it: nil while it runs, -1 unread.
+	Remaining int  `json:"remaining,omitempty"`
+	Spent     *int `json:"spent,omitempty"`
+
+	rest rest
+}
+
+// Key is the urgent merge's owner/repo#n.
+func (u Urgent) Key() string { return Merge{Repo: u.Repo, PR: u.PR}.Key() }
+
+// Ran says whether the merge ran under the floor in the window that resets
+// at Window.
+func (u Urgent) Ran() bool { return !u.Window.IsZero() }
 
 // WorkerReport is the report a worker finished its task with: what it
 // delivered and the problems it found (broken functions, ways around them,
@@ -842,14 +883,16 @@ type Merge struct {
 	PID  int    `json:"pid"`
 	// Child is a running merge's devctl, in a session of its own: it merges
 	// on when the gate's caller, or the gate, is gone.
-	Child int    `json:"child,omitempty"`
-	Phase string `json:"phase"`
+	Child int `json:"child,omitempty"`
+	// Output is the file the gate's stdout writes to, a background task's
+	// output file: a TaskStop naming that task stops the merge.
+	Output string `json:"output,omitempty"`
+	Phase  string `json:"phase"`
 	// Joined orders the queue; a rerun within the queue TTL keeps it.
 	Joined  time.Time `json:"joined"`
 	Seen    time.Time `json:"seen"`
 	Started time.Time `json:"started,omitzero"`
-	// Finished and Exit are when and how the merge's run ended; on a
-	// waiting merge, the failed attempt whose place it keeps (Retrying).
+	// Finished and Exit are when and how the merge's run ended.
 	Finished time.Time `json:"finished,omitzero"`
 	Exit     int       `json:"exit,omitempty"`
 	// Seeded marks a place queued on a session's behalf (lanes queue): it
@@ -886,10 +929,6 @@ func (m Merge) Key() string {
 	}
 	return fmt.Sprintf("%s#%d", m.Repo, m.PR)
 }
-
-// Retrying says whether a waiting merge is a failed attempt that keeps its
-// place for its session's retry of the same pull request.
-func (m Merge) Retrying() bool { return m.Phase == Waiting && !m.Finished.IsZero() }
 
 // Event is one line of events.jsonl. At is written in UTC (RFC 3339 with a
 // trailing Z), so a reader can compare it as a string.

@@ -641,7 +641,7 @@ func (a *app) uiLanes(st *state.State) []tui.Lane {
 func uiMerge(m state.Merge) tui.Merge {
 	return tui.Merge{Key: m.Key(), By: m.By.Name, Phase: m.Phase, Joined: m.Joined, Started: m.Started,
 		Finished: m.Finished, Exit: m.Exit, Seeded: m.Seeded, Outside: m.Outside,
-		Retrying: m.Retrying(), Release: m.Release, Roll: slices.Clone(m.Roll)}
+		Release: m.Release, Roll: slices.Clone(m.Roll)}
 }
 
 // uiRoles is the supervisor's and the guide's record as the screen reads

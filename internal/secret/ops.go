@@ -37,7 +37,7 @@ type Verdict struct {
 // Compare answers per key whether a and b hold the same values. Two single
 // references compare as one value; two whole files key by key.
 func (o *Ops) Compare(ctx context.Context, a, b Ref) ([]Verdict, error) {
-	if a.single() != b.single() {
+	if a.Single() != b.Single() {
 		return nil, errors.New("compare one value with one value (file#path, op://…), or a whole file with a whole file")
 	}
 	va, err := o.values(ctx, a)
@@ -48,7 +48,7 @@ func (o *Ops) Compare(ctx context.Context, a, b Ref) ([]Verdict, error) {
 	if err != nil {
 		return nil, err
 	}
-	if a.single() {
+	if a.Single() {
 		st := Different
 		if va[a.String()] == vb[b.String()] {
 			st = Equal
@@ -79,8 +79,16 @@ type Print struct {
 	Fingerprint string `json:"fingerprint"`
 }
 
-// Fingerprints are the keyed fingerprints of what r names.
+// Fingerprints are the keyed fingerprints of what r names, of the one value
+// in o.Encode when an encoding is set.
 func (o *Ops) Fingerprints(ctx context.Context, r Ref) ([]Print, error) {
+	if !o.Encode.IsZero() {
+		v, err := o.encoded(ctx, r)
+		if err != nil {
+			return nil, err
+		}
+		return []Print{{Key: r.String() + " (" + o.Encode.String() + ")", Fingerprint: o.Fingerprint(v)}}, nil
+	}
 	vs, err := o.values(ctx, r)
 	if err != nil {
 		return nil, err
@@ -97,7 +105,7 @@ func (o *Ops) Fingerprints(ctx context.Context, r Ref) ([]Print, error) {
 // and metadata.namespace rewritten when given. It answers the keys and
 // their lengths.
 func (o *Ops) CopyFile(ctx context.Context, src Ref, dst, name, namespace string) ([]Key, error) {
-	if src.single() {
+	if src.Single() {
 		return nil, fmt.Errorf("%s: copy into a file takes a whole SOPS file; one value goes to file#path", src)
 	}
 	if _, err := os.Stat(dst); err == nil {
@@ -126,7 +134,7 @@ func (o *Ops) CopyValue(ctx context.Context, src, dst Ref) (int, error) {
 	if dst.Op != "" || dst.Path == "" {
 		return 0, fmt.Errorf("%s: one value goes to a SOPS path, file#path", dst)
 	}
-	v, err := o.value(ctx, src)
+	v, err := o.encoded(ctx, src)
 	if err != nil {
 		return 0, err
 	}
@@ -153,7 +161,7 @@ func ParsePair(s string) (Pair, error) {
 	}
 	p := Pair{Src: src, Path: s[i+1:]}
 	switch {
-	case !src.single():
+	case !src.Single():
 		return Pair{}, fmt.Errorf("%q: name one value (file#path or op://…), not a whole file", s)
 	case p.Path == "" || strings.ContainsAny(p.Path, "#/"):
 		return Pair{}, fmt.Errorf("%q: the path after = is a dotted key of the new file", s)
@@ -433,7 +441,7 @@ func (o *Ops) CopyToConsumer(ctx context.Context, src Ref, argv []string, in Std
 	if err := in.Check(); err != nil {
 		return 0, "", err
 	}
-	v, err := o.value(ctx, src)
+	v, err := o.encoded(ctx, src)
 	if err != nil {
 		return 0, "", err
 	}
@@ -535,8 +543,8 @@ type SetResult struct {
 
 // Set generates a value and writes it to the shared vault's field first
 // when one is given, then into the SOPS path, then into a lab's Secret and
-// a consumer's stdin when given. A value without a vault field lives in the
-// SOPS file alone.
+// a consumer's stdin when given, these three in o.Encode. A value without a
+// vault field lives in the SOPS file alone.
 func (o *Ops) Set(ctx context.Context, dst Ref, opt SetOptions) (SetResult, error) {
 	if dst.Op != "" || dst.Path == "" {
 		return SetResult{}, fmt.Errorf("%s: set writes a SOPS path, file#path", dst)
@@ -578,6 +586,8 @@ func (o *Ops) Set(ctx context.Context, dst Ref, opt SetOptions) (SetResult, erro
 			return SetResult{}, err
 		}
 	}
+	// the vault keeps the generated value, every other home its encoded form
+	v = o.Encode.Apply(v)
 	if err := o.write(ctx, doc, dst, v); err != nil {
 		if opt.Vault != (Ref{}) {
 			return SetResult{}, fmt.Errorf("the vault holds the value, the SOPS file not: %w", err)
@@ -604,16 +614,9 @@ func (o *Ops) Set(ctx context.Context, dst Ref, opt SetOptions) (SetResult, erro
 func (o *Ops) storeVault(ctx context.Context, r Ref, v string) error {
 	parts := strings.SplitN(strings.TrimPrefix(r.Op, guard.OpRef), "/", 3)
 	vault, title, field := parts[0], parts[1], parts[2]
-	raw, err := o.op(ctx, nil, "item", "list", "--vault", vault, "--format", "json")
+	items, err := o.vaultItems(ctx, vault)
 	if err != nil {
 		return fmt.Errorf("%s: %w", r.Op, err)
-	}
-	var items []struct {
-		ID    string `json:"id"`
-		Title string `json:"title"`
-	}
-	if err := json.Unmarshal(raw, &items); err != nil {
-		return fmt.Errorf("%s: op item list answered no list", r.Op)
 	}
 	id := ""
 	for _, it := range items {
@@ -624,7 +627,9 @@ func (o *Ops) storeVault(ctx context.Context, r Ref, v string) error {
 			id = it.ID
 		}
 	}
-	item := map[string]any{"title": title, "category": "PASSWORD"}
+	// a new item is op's Password template: its password field is the
+	// built-in one, which op's validator requires of the category
+	item := map[string]any{"title": title, "category": passwordPurpose, "fields": []any{builtinField(passwordField, "")}}
 	if id != "" {
 		raw, err := o.op(ctx, nil, "item", "get", id, "--vault", vault, "--format", "json")
 		if err != nil {
@@ -645,22 +650,76 @@ func (o *Ops) storeVault(ctx context.Context, r Ref, v string) error {
 		args = []string{"item", "edit", id, "--vault", vault, "--format", "json"}
 	}
 	if _, err := o.op(ctx, bytes.NewReader(tmpl), args...); err != nil {
-		return fmt.Errorf("%s: %w", r.Op, err)
+		// op's whole message goes to the caller, never the value it was given
+		msg := err.Error()
+		if v != "" {
+			msg = strings.ReplaceAll(msg, v, "[value]")
+		}
+		return fmt.Errorf("%s: %s", r.Op, msg)
 	}
 	return nil
 }
 
-// setField sets the concealed field labelled label in an item's JSON.
+const (
+	// passwordField is the built-in field of a Password item.
+	passwordField = "password"
+	// passwordPurpose is the category and the password field's purpose.
+	passwordPurpose = "PASSWORD"
+	concealed       = "CONCEALED"
+)
+
+// builtins are op's built-in fields by id: op's validator refuses one
+// without its purpose and type.
+var builtins = map[string]struct{ purpose, typ string }{
+	passwordField: {passwordPurpose, concealed},
+	"username":    {"USERNAME", "STRING"},
+	"notesPlain":  {"NOTES", "STRING"},
+}
+
+// builtinField is a field of id with value v: a built-in one with its
+// purpose and type, any other a concealed one.
+func builtinField(id, v string) map[string]any {
+	f := map[string]any{"id": id, "label": id, "type": concealed, "value": v}
+	if b, ok := builtins[id]; ok {
+		f["purpose"], f["type"] = b.purpose, b.typ
+	}
+	return f
+}
+
+// vaultItem is what a vault's item listing says of one item: metadata, no
+// field and no value.
+type vaultItem struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+}
+
+// vaultItems lists the items of vault, metadata only.
+func (o *Ops) vaultItems(ctx context.Context, vault string) ([]vaultItem, error) {
+	raw, err := o.op(ctx, nil, "item", "list", "--vault", vault, "--format", "json")
+	if err != nil {
+		return nil, err
+	}
+	var items []vaultItem
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, errors.New("op item list answered no list")
+	}
+	return items, nil
+}
+
+// setField sets the field labelled label in an item's JSON: a built-in
+// field keeps its purpose and type, any other is concealed.
 func setField(item map[string]any, label, v string) {
 	fields, _ := item["fields"].([]any)
 	for _, f := range fields {
 		if m, ok := f.(map[string]any); ok && (m["label"] == label || m["id"] == label) {
 			m["value"] = v
-			m["type"] = "CONCEALED"
+			if _, builtin := m["purpose"]; !builtin {
+				m["type"] = concealed
+			}
 			return
 		}
 	}
-	item["fields"] = append(fields, map[string]any{"id": label, "label": label, "type": "CONCEALED", "value": v})
+	item["fields"] = append(fields, builtinField(label, v))
 }
 
 // sortedKeys are the keys of the maps, merged and sorted.

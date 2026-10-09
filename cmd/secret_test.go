@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"filippo.io/age"
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/lease"
@@ -248,6 +251,84 @@ func TestSecretCopyToSecretOnlyIntoAHeldLab(t *testing.T) {
 	}
 }
 
+// The flag and encodings the encoded copy's test names.
+const (
+	encodeOpt  = "--encode"
+	base64Enc  = "base64"
+	basicToken = "basic:x-access-token"
+)
+
+// TestSecretCopyEncodedIsCheckedByFingerprint copies a value encoded into a
+// held lab's Secret and checks the delivery with fingerprint alone: the
+// Secret's key and the source's encoded form answer the same fingerprint,
+// and no answer carries the value or its encoded form.
+func TestSecretCopyEncodedIsCheckedByFingerprint(t *testing.T) {
+	a, _, repo := secretApp(t)
+	a.cfg.LeaseDir = t.TempDir()
+	a.cfg.Resources = []string{labOne}
+	a.cfg.Labs = map[string]string{labOne: labCluster}
+	stored := map[secret.KubeTarget][]byte{}
+	prevApply, prevRead := secretApply, secretRead
+	secretApply = func(_ context.Context, _ []byte, tg secret.KubeTarget, v []byte) error {
+		stored[tg] = v
+		return nil
+	}
+	secretRead = func(_ context.Context, _ []byte, tg secret.KubeTarget) ([]byte, error) { return stored[tg], nil }
+	t.Cleanup(func() { secretApply, secretRead = prevApply, prevRead })
+	if _, err := lease.Dir(a.cfg.LeaseDir).Claim(labOne, lease.Holder{Env: labOne, Name: a.as}); err != nil {
+		t.Fatal(err)
+	}
+	const target = "kind-agentlab/kagent/private-skills/token"
+	encoded := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + secretValue))
+	out, err := runSecret(a, copyOp, dbRef, encodeOpt, basicToken, "--to-secret", target)
+	if err != nil || out != fmt.Sprintf("wrote %s: %d bytes\n", target, len(encoded)) {
+		t.Fatalf("copy --encode answers %q, %v", out, err)
+	}
+	a.out = &bytes.Buffer{}
+	delivered, err := runSecret(a, fingerprintOp, "--secret", target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.out = &bytes.Buffer{}
+	expected, err := runSecret(a, fingerprintOp, dbRef, encodeOpt, basicToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := func(s string) string { f := strings.Fields(s); return f[len(f)-1] }
+	if fp(delivered) != fp(expected) || !strings.HasPrefix(fp(delivered), "hmac:") {
+		t.Errorf("the Secret's fingerprint %q, the expected form's %q", delivered, expected)
+	}
+	a.out = &bytes.Buffer{}
+	plain, _ := runSecret(a, fingerprintOp, dbRef)
+	if fp(plain) == fp(expected) {
+		t.Error("the encoded form fingerprints like the value")
+	}
+	for _, s := range []string{out, delivered, expected} {
+		noSecret(t, "an answer", s)
+		if strings.Contains(s, encoded) {
+			t.Errorf("an answer carries the encoded value: %q", s)
+		}
+	}
+	for _, args := range [][]string{
+		{copyOp, dbRef, encodeOpt, "hex", "--to-secret", target},
+		{copyOp, dbRef, encodeOpt, "basic:", "--to-secret", target},
+		{copyOp, filepath.Join(repo, "app.sops.yaml"), filepath.Join(repo, "copy.sops.yaml"), encodeOpt, base64Enc},
+		{copyOp, dbRef + "=a", filepath.Join(repo, "new.sops.yaml"), encodeOpt, base64Enc},
+		{fingerprintOp, dbRef, encodeOpt, "rot13"},
+		{fingerprintOp, "--secret", target, encodeOpt, base64Enc},
+		{setOp, filepath.Join(repo, "x.sops.yaml"), "a", generateFlag, encodeOpt, "basic"},
+	} {
+		a.out = &bytes.Buffer{}
+		if _, err := runSecret(a, args...); Code(err) != ExitUsage {
+			t.Errorf("secret %s = %v, want a usage error", strings.Join(args, " "), err)
+		}
+	}
+	a.out = &bytes.Buffer{}
+	if _, err := runSecret(a, fingerprintOp, "--secret", "kind-agentlab-2/kagent/private-skills/token"); Code(err) != ExitRefused {
+		t.Errorf("fingerprint of a lab not held = %v, want refused", err)
+	}
+}
+
 func TestBrokeredSecretHoldsItsFilesToTheSandbox(t *testing.T) {
 	a, _, repo := secretApp(t)
 	// a home outside the temporary directory, which the sandbox opens, and
@@ -366,5 +447,60 @@ func TestSecretCopyValuesIntoANewSecret(t *testing.T) {
 	a.out = &bytes.Buffer{}
 	if _, err := runSecret(a, copyOp, dbRef+"=again", file); err == nil || !strings.Contains(err.Error(), "is encrypted") {
 		t.Errorf("copy into the encrypted file = %v", err)
+	}
+}
+
+func TestSecretRecipientsNamesEachIdentityAndNoValue(t *testing.T) {
+	a, tools, repo := secretApp(t)
+	for _, e := range []string{"SOPS_AGE_KEY", "SOPS_AGE_KEY_FILE", "SOPS_AGE_KEY_CMD", "SOPS_AGE_SSH_PRIVATE_KEY_FILE"} {
+		t.Setenv(e, "")
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, o := id.Recipient().String(), other.Recipient().String()
+	rules := fmt.Sprintf("creation_rules:\n  - path_regex: management-clusters/graveler/.*\n    age: %s\n  - path_regex: management-clusters/glean/.*\n    age: %s\n", r, o)
+	if err := os.WriteFile(filepath.Join(repo, ".sops.yaml"), []byte(rules), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tools.Vault[secret.AgeItemRef("Shared", r)] = id.String()
+	out, err := runSecret(a, "recipients", repo)
+	if Code(err) != ExitError {
+		t.Fatalf("recipients with one missing = %v, want exit 1:\n%s", err, out)
+	}
+	for _, w := range []string{"management-clusters/graveler/.*", r, fmt.Sprintf("the vault item %q", secret.AgeItemTitle(r)),
+		"management-clusters/glean/.*", o, fmt.Sprintf("none: the vault Shared holds no item %q", secret.AgeItemTitle(o))} {
+		if !strings.Contains(out, w) {
+			t.Errorf("the listing lacks %q:\n%s", w, out)
+		}
+	}
+	if strings.Contains(out, id.String()) {
+		t.Fatal("the listing carries the identity")
+	}
+	for _, c := range tools.Calls {
+		if strings.HasPrefix(c, "op read") || strings.HasPrefix(c, "sops") {
+			t.Errorf("recipients ran %q: the listing reads no value", c)
+		}
+	}
+
+	// every recipient with an item: exit 0, and --json answers the structure
+	tools.Vault[secret.AgeItemRef("Shared", o)] = other.String()
+	a.out, a.json = &bytes.Buffer{}, true
+	out, err = runSecret(a, "recipients", repo)
+	if err != nil {
+		t.Fatalf("recipients = %v:\n%s", err, out)
+	}
+	var rs []secret.Recipient
+	if err := json.Unmarshal([]byte(out), &rs); err != nil || len(rs) != 2 || rs[0].Missing() || rs[1].Missing() {
+		t.Errorf("recipients --json = %s, %v", out, err)
+	}
+	if strings.Contains(out, other.String()) {
+		t.Fatal("the listing carries the identity")
 	}
 }

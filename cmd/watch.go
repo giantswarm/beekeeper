@@ -137,7 +137,13 @@ re-executes itself. --once says the stale watches it finds as well.
 A registered agent whose session's context reaches agents.relayAt gets one
 HANDOVER DUE "<agent>" at <n>k: beekeeper agents handover "<agent>" at its
 first quiet moment: no tool command of its own running and no gated merge
-of its own in flight.
+of its own in flight. An agent in its task's last step (its sessions serve
+record waits on the report or says the merge landed, or the gate saw its
+merge land) is HANDOVER HELD instead, once, for agents.lastStepGrace (30m)
+from that evidence or until its context reaches agents.lastStepCeiling:
+its report is expected before a hand-over would pay, and an agent that
+reported done is never handed over. Past the grace or the ceiling the
+HANDOVER DUE line says how long it was held.
 
 --notify also sends the events that need a person to the desktop's
 notification service (org.freedesktop.Notifications on the session bus):
@@ -196,7 +202,8 @@ SLOWED line when that starts and one ENDED line when it ends.
 A fork storm is PROCESS STORM once two samples in a row read more forks a
 second (/proc/stat) than watch.forkRateMax (50) over the machine's usual
 rate (the last 10 minutes' average outside a storm), with the commands and
-sessions of the processes started since the last sample; more than
+sessions of the processes started since the last sample (the watch's own,
+its alert reads among them, as "beekeeper watch"); more than
 watch.stackMax (3) copies of one command line from the same place in the
 process tree, each running over a minute, are one STACKED line with the
 count, the oldest's age, its parent and its session. More than
@@ -209,7 +216,13 @@ keeps no value: the program, its subcommands and the flag names.
 What a watch has said is kept per caller (seen.watch.<caller>.json): a
 restarted watch of the same session says no open condition, runaway or
 stale lease again, only its end or what is new. Runs until killed. --once
-polls once, keeps no mark and says every condition it finds.
+polls once, keeps no mark and says every condition it finds; a read that
+fails (the state, a source, GitHub) is a line and makes it exit 1, so a
+silent --once with exit 0 means nothing changed. The notes' read is said
+on the NOTE path: NOTE REFS UNREADABLE when GitHub fails it, NOTE REFS
+NOT READ while the budget is under its floor and NOTE REFS UNANSWERED
+for an issue or pull request GitHub did not answer, which keeps its notes
+open.
 
 In the agent sandbox, which closes the person's kubeconfig and Teleport
 login, the user bus and the notification service, the host's broker runs
@@ -324,6 +337,8 @@ type watcher struct {
 	disk diskWatch
 	// readForks reads the fork counter; nil is plat.Machine.Forks.
 	readForks func() (uint64, error)
+	// self is the watch's PID in the process table; 0 is its own.
+	self int
 	// owners names the session of each CLI PID the last poll found: the
 	// machine sample attributes a storm or a stack with it.
 	owners atomic.Pointer[map[int]string]
@@ -349,6 +364,9 @@ type watcher struct {
 	centralChecked time.Time
 	// polls counts the polls begun.
 	polls atomic.Int64
+	// failed counts the reads that failed (fail): --once exits non-zero on
+	// any, so a silent run means no change.
+	failed atomic.Int64
 	// missing are the sections whose platform part this build does not
 	// have, said once each.
 	missing map[string]bool
@@ -449,7 +467,7 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 		w.poll(ctx)
 		w.stand.inflight.Wait() // a successor's start outlives no watch
 		w.timerActs.Wait()      // nor a timer's wake or command
-		return nil
+		return w.onceErr()
 	}
 	w.goCacheOn = true
 	// The machine is sampled in a loop of its own, so no network read or
@@ -471,6 +489,9 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 	})
 	if !w.standby {
 		wg.Go(func() { w.watchAlerts(ctx) })
+		if w.cfg.Alerts.PagerDuty.Enabled() {
+			wg.Go(func() { w.watchPagerDuty(ctx) })
+		}
 	}
 	wg.Go(func() { w.loop(ctx, interval, true, w.upgradeCycle) })
 	w.loop(ctx, interval, false, w.poll)
@@ -560,6 +581,11 @@ func inFlight(ctx context.Context, wait time.Duration, running *atomic.Bool, fn 
 func (w *watcher) watchAlerts(ctx context.Context) {
 	store := alerts.NewStore(w.cfg.StateDir)
 	defer func() { _ = store.Release() }()
+	// One port-forward per installation, kept from tick to tick: a tick
+	// is then HTTP requests, not kubectl and tsh processes.
+	reader := w.alertReader()
+	reader.Keep = true
+	defer reader.Close()
 	other := 0
 	w.loop(ctx, w.cfg.Alerts.Every.Duration, true, func(ctx context.Context) {
 		owned, owner, err := store.Own()
@@ -567,6 +593,7 @@ func (w *watcher) watchAlerts(ctx context.Context) {
 		case err != nil:
 			w.emit("alerts", "ALERTS baseline unusable: %v", err)
 		case !owned:
+			reader.Close()
 			w.clear("alerts")
 			if owner.PID != other {
 				other = owner.PID
@@ -578,7 +605,7 @@ func (w *watcher) watchAlerts(ctx context.Context) {
 				other = 0
 				w.emitNow("alerts", "ALERTS taken over by this watch")
 			}
-			for _, l := range w.alertCycle(ctx, store) {
+			for _, l := range w.alertCycle(ctx, store, reader) {
 				w.emitNow("alerts", "%s", l)
 			}
 		}
@@ -611,6 +638,22 @@ func (w *watcher) emit(key, format string, args ...any) string {
 		w.emitNow(key, "%s", line)
 	}
 	return line
+}
+
+// onceErr is --once's outcome: an error once a read failed, its lines said
+// already.
+func (w *watcher) onceErr() error {
+	if n := w.failed.Load(); n > 0 {
+		return fmt.Errorf("watch --once: %d reads failed, said above", n)
+	}
+	return nil
+}
+
+// fail says a read that failed as a condition (emit) and counts it: --once
+// exits non-zero on any.
+func (w *watcher) fail(key, format string, args ...any) string {
+	w.failed.Add(1)
+	return w.emit(key, format, args...)
 }
 
 // check says a condition's start (emit) while on holds and its end, one
@@ -993,6 +1036,10 @@ func swapoffRuns(t *proc.Table) bool {
 	return false
 }
 
+// watchOwner names the watch's own processes in the PROCESS STORM, LOAD and
+// STACKED lines.
+const watchOwner = "beekeeper watch"
+
 // sampleProcs says PROCESS STORM once two samples in a row read a fork rate
 // more than watch.forkRateMax over the machine's usual one, LOAD while more
 // than watch.toolProcsMax processes of watch.tools run, and a STACKED line
@@ -1001,10 +1048,13 @@ func swapoffRuns(t *proc.Table) bool {
 // prev is the process table the last sample read, span ago.
 func (w *watcher) sampleProcs(now time.Time, span time.Duration, prev, t *proc.Table) {
 	th := w.cfg.Watch
-	var owners map[int]string
+	owners := map[int]string{}
 	if o := w.owners.Load(); o != nil {
-		owners = *o
+		maps.Copy(owners, *o)
 	}
+	// The watch's own processes (its alert reads among them) are the
+	// watch's, not the session's that started it.
+	owners[cmp.Or(w.self, os.Getpid())] = watchOwner
 	read := w.readForks
 	if read == nil {
 		read = plat.Machine.Forks
@@ -1150,7 +1200,7 @@ func (w *watcher) poll(ctx context.Context) {
 	case w.unavailable(secSessions, err):
 		// No session is known: what reads them is left out, not guessed.
 	case err != nil:
-		w.emit("proc", "cannot read the process table: %v", err)
+		w.fail("proc", "cannot read the process table: %v", err)
 		return
 	default:
 		w.clear("proc")
@@ -1241,7 +1291,7 @@ func (w *watcher) vaultWaits() {
 	}
 	st, err := secret.ReadState(statePath)
 	if err != nil {
-		w.emit(vaultReadKey, "cannot read the vault's state: %v", err)
+		w.fail(vaultReadKey, "cannot read the vault's state: %v", err)
 		return
 	}
 	w.check(vaultUnlockedKey, st.Unlocked, "VAULT UNLOCKED: the broker holds the vault session since %s until %s",
@@ -1256,7 +1306,7 @@ func (w *watcher) vaultWaits() {
 	}
 	ws, err := secret.ReadWaits(waitsPath)
 	if err != nil {
-		w.emit(vaultReadKey, "cannot read the vault's waiting calls: %v", err)
+		w.fail(vaultReadKey, "cannot read the vault's waiting calls: %v", err)
 		return
 	}
 	w.clear(vaultReadKey)
@@ -1305,7 +1355,7 @@ func (w *watcher) budget(ctx context.Context, now time.Time) {
 	switch {
 	case err != nil && ctx.Err() != nil:
 	case err != nil:
-		w.emit("budget-error", "GitHub budget unknown: %v", err)
+		w.fail("budget-error", "GitHub budget unknown: %v", err)
 	default:
 		w.clear("budget-error")
 		if l := w.check("budget", b.Remaining < w.cfg.GitHub.Floor, "GITHUB BUDGET %d of %d: hold GitHub work until %s",
@@ -1476,7 +1526,7 @@ func (w *watcher) kills(ctx context.Context, since time.Time, sessions []*claude
 		if ctx.Err() != nil || w.unavailable(secOOM, err) {
 			return
 		}
-		w.emit("journal", "cannot read the kernel journal: %v", err)
+		w.fail("journal", "cannot read the kernel journal: %v", err)
 		return
 	}
 	w.clear("journal")
@@ -1586,7 +1636,7 @@ var watchParty = state.Party{Name: "beekeeper watch"}
 func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	st, err := w.store.Read()
 	if err != nil {
-		w.emit("state-read", "cannot read the state: %v", err)
+		w.fail("state-read", "cannot read the state: %v", err)
 		return
 	}
 	w.clear("state-read")
@@ -1617,11 +1667,11 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	w.doctor(ctx)
 	signedIn := probeLogins(ctx, st.Notes)
 	probed := probeHoldLifts(ctx, st.Holds, w.now)
-	over := w.overtakenNow(ctx, st)
+	over, kept := w.overtakenNow(ctx, st)
 	parks := w.settledParks(ctx, st)
 	if !w.chores {
-		w.wouldOvertake(st, over)
-		over = nil
+		w.wouldOvertake(st, over, kept)
+		over, kept = nil, nil
 	}
 	found := checkTimers(ctx, st.Timers, w.now, lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now))
 	var fires []timerFire
@@ -1634,6 +1684,8 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		nl, ne, nd := closeDefaulted(st, w.cfg.Guide.Person, watchParty, w.now)
 		lines, evs, defaulted = append(lines, nl...), append(evs, ne...), nd
 		ol, oe := closeOvertaken(st, over, watchParty)
+		lines, evs = append(lines, ol...), append(evs, oe...)
+		ol, oe = keepOpen(st, kept, watchParty)
 		lines, evs = append(lines, ol...), append(evs, oe...)
 		kl, ke := markResumable(st, parks, w.cfg.Agents.AutoResume, w.now)
 		lines, evs = append(lines, kl...), append(evs, ke...)
@@ -1666,7 +1718,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		return evs, nil
 	})
 	if err != nil {
-		w.emit("state-write", "cannot write the state: %v", err)
+		w.fail("state-write", "cannot write the state: %v", err)
 		return
 	}
 	w.clear("state-write")

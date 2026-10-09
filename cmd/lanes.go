@@ -44,9 +44,8 @@ that holds, and a lane with no installation has nothing to settle. The lane
 never idles for a merge
 that is not there: an arrived merge runs ahead of a seeded place whose merge
 has not arrived (seeds keep their order among themselves), and a merge that
-ended with nothing merged keeps its place, "retrying", so its session's
-retry runs before the merges behind it; it holds the lane for
-merge.queueTTL after the failure and keeps its place for merge.seedTTL.
+ended with nothing merged leaves the lane with its run: its session's retry
+joins the lane anew.
 
 A merge run outside the gate (one in flight when the gate went live, one run
 without the hook) is registered with lanes settle: it heads its lane until it
@@ -178,7 +177,7 @@ after the merge.`,
 			return err
 		},
 	}
-	c.AddCommand(queue, a.settleCmd(), drop, a.centralLanesCmd(), a.laneLeaveCmd(), &cobra.Command{
+	c.AddCommand(queue, a.settleCmd(), a.urgentCmd(), drop, a.centralLanesCmd(), a.laneLeaveCmd(), &cobra.Command{
 		Use:   "clear <lane>",
 		Short: "Free a lane whose settling merge will not roll",
 		Long: `clear drops the lane's settling merge, after its installation was checked
@@ -456,11 +455,6 @@ func (a *app) printLanes(views []laneView) {
 			case proc.Alive(m.PID):
 			case m.Outside:
 				how = fmt.Sprintf("settled outside the gate, not merged at %s, heads the lane", clock(a.now, m.Checked))
-			case m.Retrying() && present(m):
-				how = fmt.Sprintf("retrying after exit %d at %s (holds the lane until %s), queued", m.Exit, clock(a.now, m.Finished),
-					clock(a.now, m.Seen.Add(a.cfg.Merge.QueueTTL.Duration)))
-			case m.Retrying():
-				how = fmt.Sprintf("retrying after exit %d at %s (not back, arrived merges pass it), queued", m.Exit, clock(a.now, m.Finished))
 			case m.PID != 0 && present(m):
 				how = fmt.Sprintf("left the gate at %s (its place is kept until %s), queued", clock(a.now, m.Seen), clock(a.now, m.Seen.Add(a.cfg.Merge.QueueTTL.Duration)))
 			case m.PID != 0:
@@ -531,17 +525,21 @@ func (a *app) checkPlaces(ctx context.Context, by state.Party, now time.Time, la
 }
 
 // recordGone records the outcome of each running merge whose gate process
-// and devctl are gone: from the document and exit code its runner left in
-// the state directory, or from GitHub when there is no document (a gate
-// killed with its caller while devctl merged on, a hung devctl ended). A
-// merge nothing can judge (GitHub unanswered) is lost: it settles, once. It
-// returns what it recorded and the lost merges.
+// is gone and whose devctl ended (its merge-child gone, or its exit code
+// written while merge-child still hands the outcome over): from the
+// document and exit code its runner left in the state directory, or from
+// GitHub when there is no document (a gate killed with its caller while
+// devctl merged on, a hung devctl ended, a gate stopped). A merge nothing
+// can judge (GitHub unanswered) is lost: it settles, once. It returns what
+// it recorded and the lost merges.
 func (a *app) recordGone(ctx context.Context) (recorded []string, lost []state.Merge) {
 	st, err := a.store.Read()
 	if err != nil {
 		return nil, nil
 	}
-	gone := func(m state.Merge) bool { return m.Phase == state.Running && !merge.Runs(m, proc.Alive) }
+	gone := func(m state.Merge) bool {
+		return m.Phase == state.Running && !proc.Alive(m.PID) && (!proc.Alive(m.Child) || exited(mergeBase(a.store.Dir(), m.Repo, m.PR)))
+	}
 	runs := map[string]runOutcome{}
 	for _, m := range st.Merges {
 		if !gone(m) {
@@ -570,7 +568,7 @@ func (a *app) recordGone(ctx context.Context) (recorded []string, lost []state.M
 			m := st.Merges[i]
 			lane, _ := a.cfg.LaneNamed(m.Lane)
 			lane.Name = m.Lane
-			ev, _ := recordRun(st, i, lane, watchParty, r, a.now.UTC(), fmt.Sprintf(" (for %q, whose gate, pid %d, is gone)", m.By.Name, m.PID))
+			ev := recordRun(st, i, lane, watchParty, r, a.now.UTC(), fmt.Sprintf(" (for %q, whose gate, pid %d, is gone)", m.By.Name, m.PID))
 			evs = append(evs, ev...)
 			recorded = append(recorded, ev[len(ev)-1].Detail)
 			removeMergeFiles(mergeBase(a.store.Dir(), m.Repo, m.PR))
@@ -585,6 +583,13 @@ func (a *app) recordGone(ctx context.Context) (recorded []string, lost []state.M
 		return nil, nil
 	}
 	return recorded, lost
+}
+
+// exited says whether the devctl of the merge whose files are at base wrote
+// its exit code.
+func exited(base string) bool {
+	_, err := os.Stat(base + ".rc")
+	return err == nil
 }
 
 // dropWait bounds how long lanes drop waits for an ended devctl, and its

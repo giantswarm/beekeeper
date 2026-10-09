@@ -27,6 +27,10 @@ var secretRun secret.Runner = secret.Exec
 // replace it.
 var secretApply secret.SecretApplier
 
+// secretRead reads a lab Secret's key; nil is the real cluster's, tests
+// replace it.
+var secretRead secret.SecretReader
+
 func (a *app) secretCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "secret",
@@ -47,13 +51,18 @@ secret.vault). A SOPS file is encrypted under the creation rules of the
 
 A SOPS file encrypted to age recipients decrypts with an identity from
 sops' own sources (SOPS_AGE_KEY, SOPS_AGE_KEY_FILE, sops/age/keys.txt in
-the user's config directory) or from secret.ageIdentities: entries that map
+the user's config directory), from secret.ageIdentities (entries that map
 a recipient or a pathRegex to the op:// field of the shared vault, the
 file:// identity file or the store:// entry of the person's own credential
-store holding its identity (store:// alone searches the store for the
-file's recipients), read in beekeeper's process for the one sops call. A file
-none of them has an identity for fails before sops runs, naming its
-recipients and the sources checked.`,
+store holding its identity; store:// alone searches the store for the
+file's recipients) or, for a recipient no entry names, from the shared
+vault's item per recipient: titled "sops age key <recipient>", its
+password field the AGE-SECRET-KEY-1… identity, which a person creates once
+for an installation's recipient. Each is read in beekeeper's process for
+the one sops call. A file none of them has an identity for fails before
+sops runs, in one line naming the installation, the recipient and the item
+the vault lacks; recipients shows, for a gitops repository's path, each
+creation rule's recipient and where its identity is, no value read.`,
 		Args: cobra.NoArgs,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 			if a.cfg == nil {
@@ -104,38 +113,7 @@ anything is not equal.`,
 			return nil
 		},
 	})
-	c.AddCommand(&cobra.Command{
-		Use:   "fingerprint <ref>",
-		Short: "The keyed fingerprint of a value, or of each value of a SOPS file",
-		Long: `fingerprint answers an HMAC-SHA256 of each value under beekeeper's own key
-(the value scanner's, scan/key in the state directory), cut to 16 hex
-digits: two fingerprints are equal when the values are, and only beekeeper
-can make one.`,
-		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			r, err := parseRefs(args[0])
-			if err != nil {
-				return err
-			}
-			if err := a.sandboxFiles(r, nil); err != nil {
-				return err
-			}
-			ops, err := a.secretOpsKeyed()
-			if err != nil {
-				return err
-			}
-			ps, err := ops.Fingerprints(cmd.Context(), r[0])
-			if err := a.secretLog(err, "fingerprint", "%s: %s", r[0], outcome(err, fmt.Sprintf("%d keys", len(ps)))); err != nil {
-				return err
-			}
-			var b strings.Builder
-			for _, p := range ps {
-				fmt.Fprintf(&b, "%-60s %s\n", p.Key, p.Fingerprint)
-			}
-			return a.secretPrint(ps, b.String())
-		},
-	})
-	c.AddCommand(a.secretCopyCmd(), a.secretSetCmd(), a.secretRotateCmd(), a.secretSetupCmd(), a.secretImportCmd())
+	c.AddCommand(a.secretFingerprintCmd(), a.secretCopyCmd(), a.secretSetCmd(), a.secretRotateCmd(), a.secretSetupCmd(), a.secretImportCmd(), a.secretRecipientsCmd())
 	for _, sub := range c.Commands() {
 		run := sub.RunE
 		sub.RunE = func(cmd *cobra.Command, args []string) error {
@@ -146,7 +124,7 @@ can make one.`,
 				return vaultExit(run(cmd, args))
 			}
 			inSandbox := os.Getenv(sandbox.Env) != ""
-			if inSandbox || a.cfg.Secret.Session && a.secretNeedsBroker(callArgs(cmd, args)) {
+			if inSandbox || a.cfg.Secret.Session && a.secretNeedsBroker(append([]string{cmd.Name()}, callArgs(cmd, args)...)) {
 				return a.secretBrokered(cmd, args, inSandbox)
 			}
 			return vaultExit(run(cmd, args))
@@ -154,6 +132,110 @@ can make one.`,
 	}
 	c.AddCommand(a.secretUnlockCmd(), a.secretLockCmd(), a.secretStatusCmd())
 	return c
+}
+
+func (a *app) secretFingerprintCmd() *cobra.Command {
+	var encode, fromSecret string
+	c := &cobra.Command{
+		Use:   "fingerprint <ref> [--encode <encoding>] | fingerprint --secret <context>/<namespace>/<name>/<key>",
+		Short: "The keyed fingerprint of a value, of each value of a SOPS file, or of a key of a lab's Secret",
+		Long: `fingerprint answers an HMAC-SHA256 of each value under beekeeper's own key
+(the value scanner's, scan/key in the state directory), cut to 16 hex
+digits: two fingerprints are equal when the values are, and only beekeeper
+can make one.
+
+--encode <encoding> answers the fingerprint of one value in that encoding,
+the form copy --encode writes; --secret <context>/<namespace>/<name>/<key>
+the fingerprint of a key of a Secret in a kind lab whose lease the caller
+holds. The two together check a delivery without reading a value:
+
+  beekeeper secret fingerprint op://<vault>/<item>/<field> --encode basic:<user>
+  beekeeper secret fingerprint --secret kind-<lab>/<namespace>/<name>/<key>`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if cmd.Flags().Changed("secret") {
+				return cobra.NoArgs(cmd, args)
+			}
+			return cobra.ExactArgs(1)(cmd, args)
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			enc, err := secret.ParseEncoding(encode)
+			if err != nil {
+				return usageErr("%v", err)
+			}
+			if cmd.Flags().Changed("secret") {
+				if !enc.IsZero() {
+					return usageErr("--encode encodes a source's value; a Secret's key is fingerprinted as it is")
+				}
+				return a.secretFingerprintSecret(cmd.Context(), fromSecret)
+			}
+			r, err := parseRefs(args[0])
+			if err != nil {
+				return err
+			}
+			if !enc.IsZero() && !r[0].Single() {
+				return usageErr("--encode encodes one value: file#path or op://…, not a whole file")
+			}
+			if err := a.sandboxFiles(r, nil); err != nil {
+				return err
+			}
+			ops, err := a.secretOpsKeyed()
+			if err != nil {
+				return err
+			}
+			ops.Encode = enc
+			ps, err := ops.Fingerprints(cmd.Context(), r[0])
+			if err := a.secretLog(err, "fingerprint", "%s%s: %s", r[0], encodedAs(enc), outcome(err, fmt.Sprintf("%d keys", len(ps)))); err != nil {
+				return err
+			}
+			return a.secretPrintPrints(ps)
+		},
+	}
+	encodeFlag(c, &encode)
+	c.Flags().StringVar(&fromSecret, "secret", "", "a key of a Secret in a lab you hold: <context>/<namespace>/<name>/<key>")
+	return c
+}
+
+// secretFingerprintSecret is fingerprint --secret: a key of a Secret in a
+// lab whose lease the caller holds.
+func (a *app) secretFingerprintSecret(ctx context.Context, spec string) error {
+	t, err := secret.ParseKubeTarget(spec)
+	if err != nil {
+		return usageErr("--secret: %v", err)
+	}
+	if err := a.checkLabHeld(t); err != nil {
+		return a.secretLog(err, "fingerprint", "%s: %s", t, outcome(err, ""))
+	}
+	ops, err := a.secretOpsKeyed()
+	if err != nil {
+		return err
+	}
+	p, err := ops.SecretFingerprint(ctx, t)
+	if err := a.secretLog(err, "fingerprint", "%s: %s", t, outcome(err, "1 key")); err != nil {
+		return err
+	}
+	return a.secretPrintPrints([]secret.Print{p})
+}
+
+// secretPrintPrints prints fingerprints, one key per line.
+func (a *app) secretPrintPrints(ps []secret.Print) error {
+	var b strings.Builder
+	for _, p := range ps {
+		fmt.Fprintf(&b, "%-60s %s\n", p.Key, p.Fingerprint)
+	}
+	return a.secretPrint(ps, b.String())
+}
+
+// encodeFlag is the flag that encodes a value before it is written.
+func encodeFlag(c *cobra.Command, encode *string) {
+	c.Flags().StringVar(encode, "encode", "", "encode the value inside beekeeper before it is written: base64, or basic:<user> for base64(<user>:<value>)")
+}
+
+// encodedAs is the log's note of an encoding, "" for none.
+func encodedAs(e secret.Encoding) string {
+	if e.IsZero() {
+		return ""
+	}
+	return " encoded " + e.String()
 }
 
 // callArgs are a call's arguments and its flags' values.
@@ -190,8 +272,8 @@ func (a *app) secretBrokered(cmd *cobra.Command, args []string, inSandbox bool) 
 	if dash < len(args) {
 		argv = append(append(argv, "--"), args[dash:]...)
 	}
-	if err := brokeredSecretArgs(argv, inSandbox); err != nil {
-		return refused("%v; %s and %s run on the host, by the person", err, "setup", "import")
+	if err := brokeredSecretArgs(argv, inSandbox, a.cfg.Secret.Session); err != nil {
+		return refused("%v; setup runs on the host, by the person", err)
 	}
 	if !a.cfg.Secret.Session || !a.secretNeedsVault("", argv) {
 		return a.brokeredReply(sandbox.Request{Op: sandbox.OpSecret, Args: argv})
@@ -238,7 +320,7 @@ func vaultExit(err error) error {
 }
 
 func (a *app) secretCopyCmd() *cobra.Command {
-	var name, namespace, toSecret string
+	var name, namespace, toSecret, encode string
 	var in secret.Stdin
 	c := &cobra.Command{
 		Use:   "copy <from> <to> | copy <ref>=<path>… <new-file> [--name n --namespace ns] | copy <from> -- <consumer…> | copy <from> --to-secret <context>/<namespace>/<name>/<key>",
@@ -281,6 +363,16 @@ and keeps its other keys. kind's admin kubeconfig stays in beekeeper's memory
 like the value; it answers the value's length. A context of a lab the
 caller holds no lease for is refused.
 
+--encode base64 or --encode basic:<user> writes one value's encoded form
+instead of the value, made in beekeeper's process: base64(<user>:<value>)
+for basic, the credential a gateway injects verbatim after "Basic ". It
+takes one value (copy <ref> <file#path>, -- <consumer…>, --to-secret), the
+answer is the encoded form's length, and fingerprint <ref> --encode answers
+the fingerprint a delivery is checked against:
+
+  beekeeper secret copy op://<vault>/<item>/<field> --encode basic:x-access-token \
+    --to-secret kind-<lab>/<namespace>/<name>/<key>
+
 An op:// value the shared vault cannot give (none configured, no token, op
 failing or answering nothing within a minute) exits 78.`,
 		Args: func(cmd *cobra.Command, args []string) error {
@@ -308,14 +400,24 @@ failing or answering nothing within a minute) exits 78.`,
 			if in != (secret.Stdin{}) && cmd.ArgsLenAtDash() != 1 {
 				return usageErr("--stdin-json and --stdin-field shape a consumer's stdin: copy <from> -- <consumer…>")
 			}
+			enc, err := secret.ParseEncoding(encode)
+			if err != nil {
+				return usageErr("%v", err)
+			}
 			if cmd.ArgsLenAtDash() < 0 && !cmd.Flags().Changed("to-secret") {
 				if pairs, err := copyPairs(args); err == nil {
+					if !enc.IsZero() {
+						return usageErr("--encode encodes one value: copy <ref> <file#path>, copy <ref> -- <consumer…> or copy <ref> --to-secret …")
+					}
 					return a.secretCopyValues(cmd.Context(), pairs, args[len(args)-1], name, namespace)
 				}
 			}
 			src, err := parseRefs(args[0])
 			if err != nil {
 				return err
+			}
+			if !enc.IsZero() && !src[0].Single() {
+				return usageErr("--encode encodes one value: file#path or op://…, not a whole file")
 			}
 			if err := a.sandboxFiles(src, nil); err != nil {
 				return err
@@ -324,6 +426,7 @@ failing or answering nothing within a minute) exits 78.`,
 			if err != nil {
 				return err
 			}
+			ops.Encode = enc
 			ctx := cmd.Context()
 			if cmd.Flags().Changed("to-secret") {
 				if name != "" || namespace != "" {
@@ -344,7 +447,7 @@ failing or answering nothing within a minute) exits 78.`,
 					// exit ExitVault stays: the broker signs in again and retries
 					err = refused("%v", err)
 				}
-				if err := a.secretLog(err, "copy", "%s to %s: %s", src[0], argv[0], outcome(err, fmt.Sprintf("exit %d", code))); err != nil {
+				if err := a.secretLog(err, "copy", "%s%s to %s: %s", src[0], encodedAs(enc), argv[0], outcome(err, fmt.Sprintf("exit %d", code))); err != nil {
 					return err
 				}
 				if _, err := io.WriteString(a.out, out); err != nil {
@@ -367,7 +470,7 @@ failing or answering nothing within a minute) exits 78.`,
 					return usageErr("--name and --namespace rewrite a copied file, not one value")
 				}
 				n, err := ops.CopyValue(ctx, src[0], dst[0])
-				if err := a.secretLog(err, "copy", "%s to %s: %s", src[0], dst[0], outcome(err, fmt.Sprintf("%d bytes", n))); err != nil {
+				if err := a.secretLog(err, "copy", "%s%s to %s: %s", src[0], encodedAs(enc), dst[0], outcome(err, fmt.Sprintf("%d bytes", n))); err != nil {
 					return err
 				}
 				return a.secretPrint(secret.Key{Name: dst[0].String(), Bytes: n}, fmt.Sprintf("wrote %s: %d bytes\n", dst[0], n))
@@ -388,6 +491,7 @@ failing or answering nothing within a minute) exits 78.`,
 	c.Flags().StringVar(&namespace, "namespace", "", "the copy's metadata.namespace; with <ref>=<path>… the new Secret's")
 	c.Flags().StringVar(&toSecret, "to-secret", "", "a key of a Secret in a lab you hold: <context>/<namespace>/<name>/<key>")
 	stdinFlags(c, &in)
+	encodeFlag(c, &encode)
 	return c
 }
 
@@ -472,7 +576,7 @@ func (a *app) secretCopyToSecret(ctx context.Context, ops *secret.Ops, src secre
 		return a.secretLog(err, "copy", "%s to %s: %s", src, t, outcome(err, ""))
 	}
 	n, err := ops.CopyToSecret(ctx, src, t)
-	if err := a.secretLog(err, "copy", "%s to %s: %s", src, t, outcome(err, fmt.Sprintf("%d bytes", n))); err != nil {
+	if err := a.secretLog(err, "copy", "%s%s to %s: %s", src, encodedAs(ops.Encode), t, outcome(err, fmt.Sprintf("%d bytes", n))); err != nil {
 		return err
 	}
 	return a.secretPrint(secret.Key{Name: t.String(), Bytes: n}, fmt.Sprintf("wrote %s: %d bytes\n", t, n))
@@ -495,7 +599,7 @@ func (a *app) checkLabHeld(t secret.KubeTarget) error {
 }
 
 func (a *app) secretSetCmd() *cobra.Command {
-	var vault, charset, toSecret, name, namespace string
+	var vault, charset, toSecret, name, namespace, encode string
 	var length int
 	var generate bool
 	var in secret.Stdin
@@ -525,7 +629,13 @@ stdin, as copy <ref> -- <consumer…> does (kubectl exec -i into a pod and
 --stdin-json included), and answers its output with the value redacted and
 its exit code. Both come after the SOPS path is
 written: when one fails, the SOPS path holds the value and copy finishes
-the delivery.`,
+the delivery.
+
+--encode base64 or --encode basic:<user> writes the SOPS path, the Secret
+and the consumer the value's encoded form (base64(<user>:<value>) for
+basic, an HTTP Basic credential), made in beekeeper's process; the vault's
+field keeps the generated value, and the fingerprint answered is the
+encoded form's.`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if dash := cmd.ArgsLenAtDash(); dash >= 0 {
 				if dash != 2 || len(args) < 3 {
@@ -541,6 +651,10 @@ the delivery.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !generate {
 				return usageErr("set takes no value: --generate makes one")
+			}
+			enc, err := secret.ParseEncoding(encode)
+			if err != nil {
+				return usageErr("%v", err)
 			}
 			opt := secret.SetOptions{Length: length, Charset: charset}
 			if vault != "" {
@@ -592,18 +706,19 @@ the delivery.`,
 			if err != nil {
 				return err
 			}
+			ops.Encode = enc
 			res, err := ops.Set(cmd.Context(), dst, opt)
 			if res.Key != "" {
 				to[slices.Index(to, dst.String())] = res.Key
 			}
-			done := "generated " + res.Fingerprint
+			done := "generated" + encodedAs(enc) + " " + res.Fingerprint
 			if opt.Consumer != nil {
 				done += fmt.Sprintf(", consumer exit %d", res.Code)
 			}
 			if err := a.secretLog(err, "set", "%s: %s", strings.Join(to, " and "), outcome(err, done)); err != nil {
 				return err
 			}
-			text := fmt.Sprintf("wrote %s: %d characters, %s\n", strings.Join(to, " and "), length, res.Fingerprint)
+			text := fmt.Sprintf("wrote %s: %d characters%s, %s\n", strings.Join(to, " and "), length, encodedAs(enc), res.Fingerprint)
 			if err := a.secretPrint(res, text+res.Output); err != nil {
 				return err
 			}
@@ -622,6 +737,7 @@ the delivery.`,
 	f.StringVar(&name, "name", "", "an absent file starts as a Secret of this metadata.name")
 	f.StringVar(&namespace, "namespace", "", "an absent file starts as a Secret in this metadata.namespace")
 	stdinFlags(c, &in)
+	encodeFlag(c, &encode)
 	return c
 }
 
@@ -662,15 +778,36 @@ before a new one.`,
 }
 
 func (a *app) secretImportCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "import op://<vault>/<item>/<field> op://<shared-vault>/<item>/<field>",
+	var recipient string
+	c := &cobra.Command{
+		Use:   "import op://<vault>/<item>/<field> op://<shared-vault>/<item>/<field> | import op://<vault>/<item>/<field> --recipient <age1…>",
 		Short: "Copy a field of the person's vault into the shared vault",
 		Long: `import reads one field of a vault outside the shared vault with the
-person's own 1Password session (op signin first) and writes it into a field
-of the shared vault as beekeeper's service account, creating the item or
-the field when absent. It answers the value's length; from then on the
-shared vault's reference is the one to use.`,
-		Args: cobra.ExactArgs(2),
+person's own 1Password session and writes it into a field of the shared
+vault, creating the item or the field when absent. It answers the value's
+length; from then on the shared vault's reference is the one to use.
+
+With secret.session the broker runs it, in the person's vault session it
+holds, for a session in the agent sandbox as well: the value stays in the
+broker's call. Without secret.session the source is read in the caller's
+own session (op signin first) and the destination written as beekeeper's
+service account, on the host only: the service account reads no other
+vault.
+
+--recipient <age1…> imports an age identity for a SOPS recipient: the
+destination is the shared vault's item of that recipient ("sops age key
+<recipient>", its password field), and the source, an identity or an
+identity file's text (comments above the AGE-SECRET-KEY-1… line, as
+keys.txt holds it), is refused unless it holds that recipient's identity;
+only the identity's line is stored:
+
+  beekeeper secret import "op://<vault>/<installation>.agekey/notesPlain" --recipient age1…`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if recipient != "" {
+				return cobra.ExactArgs(1)(cmd, args)
+			}
+			return cobra.ExactArgs(2)(cmd, args)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			r, err := parseRefs(args...)
 			if err != nil {
@@ -680,13 +817,25 @@ shared vault's reference is the one to use.`,
 			if err != nil {
 				return err
 			}
-			n, err := ops.Import(cmd.Context(), r[0], r[1])
-			if err := a.secretLog(err, "import", "%s to %s: %s", r[0], r[1], outcome(err, fmt.Sprintf("%d bytes", n))); err != nil {
+			var dst secret.Ref
+			var n int
+			if recipient != "" {
+				dst, n, err = ops.ImportAge(cmd.Context(), r[0], recipient)
+				if dst.Op == "" {
+					dst = secret.Ref{Op: "recipient " + recipient}
+				}
+			} else {
+				dst = r[1]
+				n, err = ops.Import(cmd.Context(), r[0], dst)
+			}
+			if err := a.secretLog(err, "import", "%s to %s: %s", r[0], dst, outcome(err, fmt.Sprintf("%d bytes", n))); err != nil {
 				return err
 			}
-			return a.secretPrint(secret.Key{Name: r[1].String(), Bytes: n}, fmt.Sprintf("wrote %s: %d bytes\n", r[1], n))
+			return a.secretPrint(secret.Key{Name: dst.String(), Bytes: n}, fmt.Sprintf("wrote %s: %d bytes\n", dst, n))
 		},
 	}
+	c.Flags().StringVar(&recipient, "recipient", "", "an age recipient (age1…): import its identity into the shared vault's item \"sops age key <recipient>\"")
+	return c
 }
 
 func (a *app) secretRotateCmd() *cobra.Command {
@@ -844,8 +993,8 @@ func parseRefs(args ...string) ([]secret.Ref, error) {
 // secretOps are the operations with the service account's token, read
 // from secret.tokenFile when the shared vault is configured.
 func (a *app) secretOps() (*secret.Ops, error) {
-	ops := &secret.Ops{Run: secretRun, Apply: secretApply, Vault: a.cfg.Secret.Vault, Session: a.cfg.Secret.Session, Ages: a.ageIdentities(),
-		Store: secret.Store{Read: a.cfg.Secret.Store.Read, Search: a.cfg.Secret.Store.Search}}
+	ops := &secret.Ops{Run: secretRun, Apply: secretApply, Read: secretRead, Vault: a.cfg.Secret.Vault, Session: a.cfg.Secret.Session, Ages: a.ageIdentities(),
+		Store: secret.Store{Read: a.cfg.Secret.Store.Read, Search: a.cfg.Secret.Store.Search}, Installations: a.installationNames()}
 	if ops.Vault == "" || ops.Session || a.cfg.Secret.TokenFile == "" {
 		return ops, nil
 	}
@@ -871,20 +1020,102 @@ func (a *app) ageIdentities() []secret.AgeIdentity {
 	return out
 }
 
-// secretNeedsVault reports whether a call's arguments take the shared
-// vault: an op:// reference, a SOPS file, relative to dir (the working
-// directory when empty), whose age identity lives there, or an omp agent's
-// start on a provider whose key is there. The client and the broker decide
-// on it alike.
-func (a *app) secretNeedsVault(dir string, args []string) bool {
-	return secret.NeedsVault(args) || (&secret.Ops{Ages: a.ageIdentities()}).AgeNeedsVault(dir, args) || a.ompStartNeedsVault(args)
+// installationNames are the installations the configuration names
+// (alerts.installations).
+func (a *app) installationNames() []string {
+	out := make([]string, 0, len(a.cfg.Alerts.Installations))
+	for _, in := range a.cfg.Alerts.Installations {
+		out = append(out, in.Name)
+	}
+	return out
 }
 
-// secretNeedsBroker reports whether a call goes to the broker with
-// secret.session: one on the vault, or on a SOPS file whose age identity
-// secret.ageIdentities names, a file's included, which the broker alone reads.
+// secretNeedsVault reports whether a call's arguments, the operation first,
+// take the shared vault: an op:// reference, a SOPS file, relative to dir
+// (the working directory when empty), whose age identity lives there (an
+// entry of secret.ageIdentities, or the vault's item per recipient), the
+// recipients listing's check of those items, or an omp agent's start on a
+// provider whose key is there. The client and the broker decide on it
+// alike.
+func (a *app) secretNeedsVault(dir string, args []string) bool {
+	return a.secretArgsNeedVault(args) || a.ageOps().AgeNeedsVault(dir, args)
+}
+
+// secretArgsNeedVault is [app.secretNeedsVault] decided from the arguments
+// alone, no file read: an op:// reference, a recipients listing or an omp
+// start on a vault provider.
+func (a *app) secretArgsNeedVault(args []string) bool {
+	return secret.NeedsVault(args) || a.recipientsNeedVault(args) || a.ompStartNeedsVault(args)
+}
+
+// secretNeedsBroker reports whether a call, the operation first, goes to
+// the broker with secret.session: one on the vault, or on a SOPS file whose
+// age identity secret.ageIdentities names, a file's included, which the
+// broker alone reads.
 func (a *app) secretNeedsBroker(args []string) bool {
-	return secret.NeedsVault(args) || (&secret.Ops{Ages: a.ageIdentities()}).AgeNeedsIdentity("", args)
+	return secret.NeedsVault(args) || a.ageOps().AgeNeedsIdentity("", args) || a.recipientsNeedVault(args)
+}
+
+// ageOps decide where a SOPS file's age identity lives.
+func (a *app) ageOps() *secret.Ops {
+	return &secret.Ops{Ages: a.ageIdentities(), Vault: a.cfg.Secret.Vault}
+}
+
+// recipientsNeedVault reports whether args are a recipients listing that
+// checks the shared vault's items.
+func (a *app) recipientsNeedVault(args []string) bool {
+	return len(args) > 0 && args[0] == "recipients" && a.cfg.Secret.Vault != ""
+}
+
+func (a *app) secretRecipientsCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "recipients [<directory> | <sops-file>]",
+		Short: "The age recipients of a path's creation rules, or of a SOPS file, and where each identity is",
+		Long: `recipients answers, for a directory (the working directory by default),
+every age recipient of the creation rules of the .sops.yaml nearest above
+it, a gitops repository's installations' for one, and for a SOPS file the
+file's recipients (its metadata when encrypted, else its creation rule's),
+each with where its identity is: sops' own sources, the entry of
+secret.ageIdentities, the shared vault's item per recipient ("sops age key
+<recipient>", found in the vault's item listing, metadata only), or none,
+naming the item the vault lacks. No value is read. It exits 1 when a
+recipient has no identity: a Secret for it is one no agent can change.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path := "."
+			if len(args) == 1 {
+				path = args[0]
+			}
+			if err := a.sandboxPaths([]string{path}, nil); err != nil {
+				return err
+			}
+			ops, err := a.secretOps()
+			if err != nil {
+				return err
+			}
+			rs, err := ops.Recipients(cmd.Context(), path)
+			missing := 0
+			for _, r := range rs {
+				if r.Missing() {
+					missing++
+				}
+			}
+			if err := a.secretLog(err, "recipients", "%s: %s", path, outcome(err, fmt.Sprintf("%d recipients, %d without an identity", len(rs), missing))); err != nil {
+				return err
+			}
+			var b strings.Builder
+			for _, r := range rs {
+				fmt.Fprintf(&b, "%-48s %s  %s\n", r.Rule, r.Recipient, r.Identity)
+			}
+			if err := a.secretPrint(rs, b.String()); err != nil {
+				return err
+			}
+			if missing > 0 {
+				return &exitError{code: ExitError}
+			}
+			return nil
+		},
+	}
 }
 
 // secretOpsKeyed are the operations with the fingerprint key, created on

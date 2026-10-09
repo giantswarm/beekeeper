@@ -74,6 +74,7 @@ teleport:
 
 github:
   floor: 2500               # the default; budget under which GitHub work stops
+  urgentBound: 200          # the default; what an urgent merge (lanes urgent) keeps for itself under the floor
   probeRepo: example-org/tools   # default: giantswarm/beekeeper; any repository the token can read
 
 overlaps:
@@ -103,6 +104,7 @@ watch:
   diskCriticalMiB: 20480    # DISK NEARLY FULL under this free on /; default: 1% of its size
   diskFillWithin: 2h        # DISK FILLING while / would run full within this at its last ten minutes' rate
   quietSessions: ["test: *"]   # the default; short-lived sessions whose start and end are logged, not said
+  notify: false             # the default; true: the standby watch beekeeper install writes runs with --notify
 
 memcap:                     # beekeeper run's build slots and cap
   slots: 2                  # the default
@@ -138,6 +140,7 @@ merge:
   budgetFresh: 1m           # the last budget reading is used this long, then read afresh
   stallAfter: 5m            # a lane's first arrived merge waits this long behind absent places, then the lane is stalled
   hungAfter: 45m            # the watch ends a running merge's devctl this long after its pull request merged (a closed one's this long after its start)
+  ciTimeout: 1h             # devctl pr merge's --timeout (its CI wait) when the command names none; devctl's own 30m is shorter than a CI --update-branch restarts
   devctlOwners: [giantswarm]   # the owners devctl pr merge serves; default: none, every merge is the plain squash merge
 
 alerts:
@@ -154,6 +157,11 @@ alerts:
   flap: {changes: 4, window: 1h}   # an alert's 4th change within 1h is one FLAPPING line, then quiet until stable for 1h
   pageSeverity: page        # a firing alert at it (team's, when set) with no owner (alerts own) for ownerGrace is PAGE UNOWNED, again every ownerGrace
   ownerGrace: 15m
+  pagerduty:                # the second source: the team's PagerDuty services' open incidents; off without context
+    context: example        # the muster context whose PagerDuty MCP server is read, as the person; beekeeper holds no PagerDuty token
+    server: pd              # its muster name: x_<server>_<tool>, the read-only list_incidents and list_alerts_from_incident
+    services: [PABC123]     # the team's service ids
+    every: 1m               # a page is a PAGERDUTY NEW line within it
   quiet:                    # alerts whose changes are logged, not said; default: [{severity: notify}] once team is set, else none
     - {cluster: "t-*"}      # fields installation, cluster, alertname, severity, globs; a page only by a rule naming a cluster
     - {severity: notify}    # other teams' and team-less notify alerts
@@ -180,6 +188,8 @@ guide:                      # the guide's role: what guide handover --prompt tel
   dir: ~/src/desk
 agents:                     # the hand-over of registered agents
   relayAt: 400k             # watch says HANDOVER DUE once an agent's context reaches this; default: supervisor.relayAt
+  lastStepGrace: 30m        # an agent over relayAt in its task's last step (its serve record waits on the report or says the merge landed, or the gate saw its merge land) is HANDOVER HELD this long from that evidence, its report expected
+  lastStepCeiling: 500k     # the context at which the hand-over is due whatever the last step; default: a quarter above relayAt
   noteWait: 3m              # agents handover waits this long for the agent's note
   staleAfter: 24h           # the doctor takes an idle agent with no CLI running off the roster after this, unless kept (agents keep, a timer that wakes it); 0: never
   archiveAgreement: ""      # where the person agreed that finished workers' desktop sessions are archived without asking, never their own (quoted to the steward, which confirms each with agents archivable); empty: no steward is asked to archive

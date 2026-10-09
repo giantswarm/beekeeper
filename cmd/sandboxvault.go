@@ -157,15 +157,15 @@ func (v *vaultBroker) ask(ctx context.Context) {
 	}
 	v.asking = true
 	go func() {
-		defer func() {
-			v.mu.Lock()
-			v.asking = false
-			v.mu.Unlock()
-		}()
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), v.wait)
 		defer cancel()
 		fmt.Fprintln(os.Stderr, "vault keeper: signing in")
-		v.signinUntil(sctx)
+		if !v.signinUntil(sctx) {
+			// a sign-in that succeeded ended itself in its unlock
+			v.mu.Lock()
+			v.asking = false
+			v.mu.Unlock()
+		}
 	}()
 }
 
@@ -173,7 +173,8 @@ func (v *vaultBroker) ask(ctx context.Context) {
 // lasts, and gives up once the next try would not fit: every failure is
 // one journal line with its cause, and the retry one status for the
 // watch. A store the sign-in cannot succeed without is waited for first.
-func (v *vaultBroker) signinUntil(ctx context.Context) {
+// It answers whether the sign-in unlocked the keeper.
+func (v *vaultBroker) signinUntil(ctx context.Context) bool {
 	var tries int
 	for {
 		store, err := v.waitStore(ctx)
@@ -184,17 +185,17 @@ func (v *vaultBroker) signinUntil(ctx context.Context) {
 			name, token, err = v.signin(tctx)
 			cancel()
 			if err == nil {
-				err = v.k.Unlock(name, token, time.Now())
+				err = v.unlock(name, token)
 			}
 			if err == nil {
-				return
+				return true
 			}
 		}
 		cause := secret.ClassifySignin(err, store)
 		next := time.Now().Add(v.backoffFor(tries))
 		if deadline, ok := ctx.Deadline(); ctx.Err() != nil || (ok && next.After(deadline)) {
 			v.giveUp(cause, tries, err)
-			return
+			return false
 		}
 		at := next.Local().Format(time.TimeOnly)
 		fmt.Fprintf(os.Stderr, "vault keeper: the sign-in failed (%s): %v; try %d at %s\n", cause, err, tries+1, at)
@@ -202,10 +203,24 @@ func (v *vaultBroker) signinUntil(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			v.giveUp(cause, tries, err)
-			return
+			return false
 		case <-time.After(time.Until(next)):
 		}
 	}
+}
+
+// unlock gives the keeper the signed-in session and ends the sign-in in
+// one step: a drop right after it finds no sign-in running and asks anew,
+// where one in between would find the old sign-in still running and lose its
+// own.
+func (v *vaultBroker) unlock(name, token string) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if err := v.k.Unlock(name, token, time.Now()); err != nil {
+		return err
+	}
+	v.asking = false
+	return nil
 }
 
 // backoffFor is the wait before the try after tries failed ones.
@@ -405,15 +420,16 @@ func (a *app) brokeredVault(v *vaultBroker, call func(env []string) sandbox.Hand
 			return call(nil)(ctx, pid, req)
 		}
 		start := time.Now()
-		// the files of a call are the requester's, read only for an age identity
-		var cwd string
-		if len(a.cfg.Secret.AgeIdentities) > 0 {
-			var err error
-			if cwd, _, err = sandbox.Origin("/proc", pid, nil); err != nil {
+		needs := a.secretArgsNeedVault(req.Args)
+		if !needs && (len(a.cfg.Secret.AgeIdentities) > 0 || a.cfg.Secret.Vault != "") {
+			// the files of a call are the requester's, read only for an age identity
+			cwd, _, err := sandbox.Origin("/proc", pid, nil)
+			if err != nil {
 				return sandbox.Reply{}, fmt.Errorf("the requester: %w", err)
 			}
+			needs = a.ageOps().AgeNeedsVault(cwd, req.Args)
 		}
-		if !a.secretNeedsVault(cwd, req.Args) {
+		if !needs {
 			return call(nil)(ctx, pid, req)
 		}
 		for try := 0; ; try++ {

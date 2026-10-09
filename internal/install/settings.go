@@ -45,7 +45,7 @@ func Hooks(exe string) []Hook {
 		return Hook{Event: event, Entry: bytes.TrimSpace(b.Bytes())}
 	}
 	return []Hook{
-		hook("PreToolUse", "Bash|Read|Grep|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage|mcp__.*", "pretooluse", 30),
+		hook("PreToolUse", "Bash|Read|Grep|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage|TaskStop|mcp__.*", "pretooluse", 30),
 		hook("PermissionRequest", "*", "permissionrequest", 300),
 		hook("PostToolUse", "*", "posttooluse", 10),
 		hook("SessionStart", "", "sessionstart", 10),
@@ -77,7 +77,16 @@ func command(entry json.RawMessage) []string {
 	return subs
 }
 
-// planHooks adds the hooks a settings file lacks.
+// sameCommand reports whether a and b are entries of one hook each that run
+// the same command.
+func sameCommand(a, b json.RawMessage) bool {
+	var x, y hookEntry
+	return json.Unmarshal(a, &x) == nil && json.Unmarshal(b, &y) == nil &&
+		len(x.Hooks) == 1 && len(y.Hooks) == 1 && x.Hooks[0].Command == y.Hooks[0].Command
+}
+
+// planHooks adds the hooks a settings file lacks and updates the entries of
+// this binary's hooks in place.
 func (e Env) planHooks(p *plan, m *Manifest) error {
 	s, err := readSettings(e.Settings)
 	if err != nil {
@@ -96,7 +105,11 @@ func (e Env) planHooks(p *plan, m *Manifest) error {
 			p.add("ok", what, "", nil)
 		case fileUpdated:
 			list[i] = want.Entry
-			m.Hooks[mine] = want
+			if mine >= 0 {
+				m.Hooks[mine] = want
+			} else {
+				m.Hooks = append(m.Hooks, want)
+			}
 			changed = true
 			p.add("update", what, "", nil)
 		case fileKept:
@@ -130,8 +143,10 @@ func (e Env) planHooks(p *plan, m *Manifest) error {
 }
 
 // find is where want stands in list: as it is, as the entry install added
-// earlier (mine, an index into added, -1 for none), as another beekeeper
-// hook of the same subcommand, or absent (fileNew).
+// earlier (mine, an index into added, -1 for none) or one running the same
+// command with another matcher or timeout (fileUpdated), as a beekeeper hook
+// of the same subcommand with another command (fileKept), or absent
+// (fileNew).
 func find(list []json.RawMessage, want Hook, added []Hook, mine int) (int, fileState) {
 	if slices.ContainsFunc(list, func(r json.RawMessage) bool { return sameJSON(r, want.Entry) }) {
 		return 0, fileSame
@@ -140,6 +155,9 @@ func find(list []json.RawMessage, want Hook, added []Hook, mine int) (int, fileS
 		if i := slices.IndexFunc(list, func(r json.RawMessage) bool { return sameJSON(r, added[mine].Entry) }); i >= 0 {
 			return i, fileUpdated
 		}
+	}
+	if i := slices.IndexFunc(list, func(r json.RawMessage) bool { return sameCommand(r, want.Entry) }); i >= 0 {
+		return i, fileUpdated
 	}
 	sub := command(want.Entry)
 	if slices.ContainsFunc(list, func(r json.RawMessage) bool { return slices.Equal(command(r), sub) }) {
