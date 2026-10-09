@@ -115,8 +115,10 @@ func (o *Ops) kubeconfig(ctx context.Context, t KubeTarget) ([]byte, error) {
 }
 
 // readKube reads the one value a k8s:// reference names: the Secret's key,
-// or with a path one value of the YAML document the key holds. A Secret,
-// key or path absent fails naming it, no content quoted.
+// or with a path one value inside what the key holds (a YAML or JSON
+// mapping, dotenv lines, or a document one level down under a block
+// scalar). A Secret or key absent fails naming it; a path that reaches
+// nothing names the shape of what the key holds, no content quoted.
 func (o *Ops) readKube(ctx context.Context, r Ref) (string, error) {
 	kc, err := o.kubeconfig(ctx, r.Kube)
 	if err != nil {
@@ -133,13 +135,9 @@ func (o *Ops) readKube(ctx context.Context, r Ref) (string, error) {
 	if r.Path == "" {
 		return string(raw), nil
 	}
-	doc, err := parseDocument(raw)
+	v, err := valueAt(raw, r.Path)
 	if err != nil {
-		return "", fmt.Errorf("%s: the key holds %w", r.Kube, err)
-	}
-	v, ok := doc.get(r.Path)
-	if !ok {
-		return "", fmt.Errorf("%s: no value at %s", r.Kube, r.Path)
+		return "", fmt.Errorf("%s: %w", r.Kube, err)
 	}
 	return v, nil
 }

@@ -28,22 +28,44 @@ type document struct {
 	root *yaml.Node
 }
 
-// parseDocument reads one YAML (or JSON) mapping; its errors name what
-// raw is, never what it says.
-func parseDocument(raw []byte) (*document, error) {
+// errSeveralDocuments refuses a YAML stream of several documents.
+var errSeveralDocuments = errors.New("more than one YAML document: beekeeper secret handles one")
+
+// parseNode reads one YAML (or JSON) document, its root node of any kind;
+// its errors name what raw is, never what it says.
+func parseNode(raw []byte) (*yaml.Node, error) {
 	var n yaml.Node
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
-	if err := dec.Decode(&n); err != nil {
+	if err := dec.Decode(&n); err != nil || len(n.Content) != 1 {
 		return nil, errors.New("no YAML document")
 	}
 	var extra yaml.Node
 	if dec.Decode(&extra) == nil {
-		return nil, errors.New("more than one YAML document: beekeeper secret handles one")
+		return nil, errSeveralDocuments
 	}
-	if len(n.Content) != 1 || n.Content[0].Kind != yaml.MappingNode {
+	return n.Content[0], nil
+}
+
+// parseDocument reads one YAML (or JSON) mapping; its errors name what
+// raw is, never what it says.
+func parseDocument(raw []byte) (*document, error) {
+	n, err := parseNode(raw)
+	if err != nil {
+		return nil, err
+	}
+	if n.Kind != yaml.MappingNode {
 		return nil, errors.New("no YAML mapping")
 	}
-	return &document{root: n.Content[0]}, nil
+	return &document{root: n}, nil
+}
+
+// topKeys are the mapping's keys in their order.
+func (d *document) topKeys() []string {
+	keys := make([]string, 0, len(d.root.Content)/2)
+	for i := 0; i+1 < len(d.root.Content); i += 2 {
+		keys = append(keys, d.root.Content[i].Value)
+	}
+	return keys
 }
 
 // newDocument is an empty mapping.

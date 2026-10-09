@@ -187,7 +187,6 @@ func TestAVaultFailureIsErrVault(t *testing.T) {
 const (
 	configKey        = "config.yaml"
 	clientSecretPath = "clientSecret"
-	noMapping        = "no YAML mapping"
 	oauthKubeRef     = secret.K8sRef + labContext + "/" + kagentNS + "/" + oauthName + "/" + configKey
 )
 
@@ -320,8 +319,8 @@ func TestKubeSourceResolvesTheContextInTheKubeconfigFiles(t *testing.T) {
 }
 
 // TestKubeSourceErrorsNameTheMissingPartAndNoValue: a Secret, key or path
-// absent, and a key holding no YAML mapping where a path is asked, fail in
-// one line naming it, the key's content never quoted.
+// absent, and a key holding no document where a path is asked, fail in
+// one line naming it and the key's shape, the key's content never quoted.
 func TestKubeSourceErrorsNameTheMissingPartAndNoValue(t *testing.T) {
 	o := ops(secrettest.New(nil))
 	ctx := context.Background()
@@ -333,8 +332,8 @@ func TestKubeSourceErrorsNameTheMissingPartAndNoValue(t *testing.T) {
 	}{
 		{"absent Secret", "not found", "", func() ([]byte, error) { return nil, errors.New(`secrets "github-oauth-client" not found`) }},
 		{"absent path", "no value at oidc.clientToken", "oidc.clientToken", func() ([]byte, error) { return []byte(connectorDoc), nil }},
-		{"no mapping", noMapping, clientSecretPath, func() ([]byte, error) { return []byte(password), nil }},
-		{"a list", noMapping, clientSecretPath, func() ([]byte, error) { return []byte("- " + password + "\n"), nil }},
+		{"no mapping", "the key holds a scalar", clientSecretPath, func() ([]byte, error) { return []byte(password), nil }},
+		{"a list", "the key holds a YAML list of 1 item", clientSecretPath, func() ([]byte, error) { return []byte("- " + password + "\n"), nil }},
 	} {
 		o.Read = func(context.Context, []byte, secret.KubeTarget) ([]byte, error) { return tc.read() }
 		_, err := o.Fingerprints(ctx, secret.Ref{Kube: tg, Path: tc.path})
