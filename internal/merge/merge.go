@@ -290,16 +290,20 @@ func FixWindow(st *state.State, now time.Time, repo string, pr int, lane config.
 	return state.Hold{}, false
 }
 
-// Prune drops the waiting merges whose run ended more than ttl ago (seedTTL
-// for a seeded place and a failed attempt's) and settles the lost ones
-// (Lost).
+// Prune drops the waiting merges whose gate is gone: a place a run that ended
+// left behind (Finished set, as an older release kept one for the retry) at
+// once, any other once its gate left more than ttl ago (seedTTL for a seeded
+// place), and settles the lost ones (Lost).
 func Prune(st *state.State, now time.Time, ttl, seedTTL time.Duration, alive func(pid int) bool) {
 	st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool {
+		if m.Phase != state.Waiting || alive(m.PID) {
+			return false
+		}
 		keep := ttl
-		if m.Seeded || m.Retrying() {
+		if m.Seeded {
 			keep = seedTTL
 		}
-		return m.Phase == state.Waiting && !alive(m.PID) && now.Sub(m.Seen) > keep
+		return !m.Finished.IsZero() || now.Sub(m.Seen) > keep
 	})
 	Lost(st, now, alive)
 }
@@ -385,20 +389,20 @@ func Queue(st *state.State, lane string) Lane {
 	return q
 }
 
-// ExitRefused is devctl's refusal (another human's pull request, a
-// repository with agentMerge: false): final, no retry follows it.
-const ExitRefused = 5
+// serverError is a 5xx GitHub answered one of devctl's writes with: the
+// merge or the branch update, which devctl sends once (go-github's
+// "PUT <url>/pulls/<n>/merge: 502 Bad Gateway").
+var serverError = regexp.MustCompile(`/pulls/\d+/(?:merge|update-branch): 5\d\d\b`)
 
-// Failed records a run that ended with exit code rc and nothing merged. The
-// merge goes back to waiting at its place, so its session's retry of the same
-// pull request runs before the merges that joined behind it; a refusal leaves
-// the lane. It reports whether the place is kept.
-func Failed(m *state.Merge, rc int, at time.Time) bool {
-	if rc == ExitRefused {
-		return false
+// ServerError says whether devctl's document is a tooling failure (exit 7)
+// for a 5xx on its merge or branch-update call: GitHub failed in transit,
+// and the same merge sent again may well land.
+func ServerError(doc []byte) bool {
+	var d struct {
+		ExitCode int    `json:"exitCode"`
+		Reason   string `json:"reason"`
 	}
-	m.Phase, m.Finished, m.Seen, m.Exit, m.Release, m.Roll = state.Waiting, at.UTC(), at.UTC(), rc, "", nil
-	return true
+	return json.Unmarshal(doc, &d) == nil && d.ExitCode == 7 && serverError.MatchString(d.Reason)
 }
 
 // Present says whether a waiting merge holds its place against the arrived

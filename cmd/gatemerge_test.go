@@ -209,8 +209,8 @@ func TestASignalExitWithoutADocumentIsJudgedByGitHub(t *testing.T) {
 		check            func(t *testing.T, g *gateRun, st *state.State)
 	}{
 		{"merged, a lane to roll", scratchRepo, github.Merged, gazelleLane, func(t *testing.T, g *gateRun, st *state.State) {
-			if len(st.Merges) != 1 || st.Merges[0].Phase != state.Settling || st.Merges[0].Retrying() {
-				t.Errorf("want one settling merge, no retry place: %+v", st.Merges)
+			if len(st.Merges) != 1 || st.Merges[0].Phase != state.Settling {
+				t.Errorf("want one settling merge: %+v", st.Merges)
 			}
 			if d := lastEvent(t, g, "merged"); !strings.Contains(d, "exit 143, release unconfirmed (merged per GitHub)") {
 				t.Errorf("merged event: %q", d)
@@ -219,11 +219,11 @@ func TestASignalExitWithoutADocumentIsJudgedByGitHub(t *testing.T) {
 				t.Error("logged merge.failed")
 			}
 		}},
-		{"unmerged keeps the retry place", scratchRepo, github.Open, gazelleLane, func(t *testing.T, g *gateRun, st *state.State) {
-			if len(st.Merges) != 1 || !st.Merges[0].Retrying() {
-				t.Errorf("want the retry place: %+v", st.Merges)
+		{"unmerged leaves the lane", scratchRepo, github.Open, gazelleLane, func(t *testing.T, g *gateRun, st *state.State) {
+			if len(st.Merges) != 0 {
+				t.Errorf("a run with nothing merged keeps a place: %+v", st.Merges)
 			}
-			if d := lastEvent(t, g, "merge.failed"); !strings.Contains(d, "exit 143, nothing merged") {
+			if d := lastEvent(t, g, "merge.failed"); !strings.Contains(d, "exit 143, nothing merged, it left lane "+serving) {
 				t.Errorf("merge.failed event: %q", d)
 			}
 		}},
@@ -491,8 +491,7 @@ func TestANoReleaseToolMergeLiftsItsWindow(t *testing.T) {
 	stubGitHub(t, github.Merged, devctlFrom)
 	g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
 	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
-		ev, _ := recordRun(st, 0, g.lane, g.me, runOutcome{out: merge.Outcome{Merged: true, NoRelease: true}}, time.Now(), "")
-		return ev, nil
+		return recordRun(st, 0, g.lane, g.me, runOutcome{out: merge.Outcome{Merged: true, NoRelease: true}}, time.Now(), ""), nil
 	})
 	if st := gateState(t, g); len(st.Holds) != 0 {
 		t.Fatalf("window left: %+v", st.Holds)

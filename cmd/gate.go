@@ -102,8 +102,11 @@ names no push to it; its tags are cut by hand) runs devctl with
 --no-release-wait: its lane frees the moment devctl reports it merged and
 no release is awaited; GitHub not answering for the base refuses (77). A
 SIGTERM aimed at the gate, its caller still there two seconds later,
-stops devctl too. A run with nothing merged keeps its place for the
-retry (merge.seedTTL), except devctl's refusal (exit 5). A run without its
+stops devctl too, and so does a TaskStop of the background task the gate
+runs (the PreToolUse hook ends its devctl first). A merge call GitHub
+answers with a 5xx is sent again while the pull request is open, up to
+three times (10s, 30s, 1m apart); the caller reads the last document. A run
+with nothing merged leaves the lane with its run. A run without its
 document or ended by a signal is judged by GitHub: merged, its release is
 unconfirmed. A second merge of a pull request whose merge runs is refused
 (exit 3) with that run's start, owner and last line.
@@ -187,6 +190,9 @@ type gateRun struct {
 	release *github.BaseRelease
 	// bin is the executable this call runs, re-executed once replaced.
 	bin binary
+	// output is the file this call's stdout writes to (gateOutput), the
+	// background task a TaskStop names.
+	output string
 }
 
 func (a *app) gate(ctx context.Context, argv []string, wait time.Duration, queued bool) error {
@@ -210,7 +216,7 @@ func (a *app) gate(ctx context.Context, argv []string, wait time.Duration, queue
 		me = state.Party{Name: fmt.Sprintf("pid %d", os.Getppid())}
 	}
 	g := &gateRun{app: a, ctx: ctx, argv: argv, repo: repo, pr: pr, lane: a.cfg.LaneOf(repo), me: me, pid: os.Getpid(), cli: callerCLI(), queued: queued,
-		bin: runningBinary()}
+		bin: runningBinary(), output: gateOutput()}
 	g.central = pr != 0 && a.cfg.CentralLane(g.lane)
 	if v, ok := os.LookupEnv(gateRunningEnv); ok {
 		_ = os.Unsetenv(gateRunningEnv)
@@ -385,8 +391,8 @@ func (g *gateRun) step() (string, error) {
 		var ev []state.Event
 		if i := g.mine(st, state.Waiting); i >= 0 {
 			m := &st.Merges[i]
-			m.PID, m.By, m.Seen = g.pid, g.me, g.now.UTC()
-			g.seeded = m.Seeded || m.Retrying()
+			m.PID, m.By, m.Seen, m.Output = g.pid, g.me, g.now.UTC(), g.output
+			g.seeded = m.Seeded
 			if g.candidateRead {
 				m.Candidate = g.candidate
 			} else {
@@ -396,7 +402,7 @@ func (g *gateRun) step() (string, error) {
 			dropped = true
 			return nil, nil
 		} else {
-			st.Merges = append(st.Merges, state.Merge{Repo: g.repo, PR: g.pr, Lane: g.lane.Name, By: g.me, PID: g.pid,
+			st.Merges = append(st.Merges, state.Merge{Repo: g.repo, PR: g.pr, Lane: g.lane.Name, By: g.me, PID: g.pid, Output: g.output,
 				Phase: state.Waiting, Joined: g.now.UTC(), Seen: g.now.UTC(), Candidate: g.candidate})
 			detail := fmt.Sprintf("%s in lane %s", g.key(), g.lane.Name)
 			if g.pr == 0 {
@@ -446,8 +452,6 @@ func (g *gateRun) step() (string, error) {
 		case phase != state.Waiting || proc.Alive(ahead.PID):
 		case ahead.Outside:
 			phase = fmt.Sprintf("settled outside the gate, GitHub reported it not merged at %s", clock(g.now, ahead.Checked))
-		case ahead.Retrying():
-			phase = fmt.Sprintf("retrying after exit %d at %s, its place is kept", ahead.Exit, clock(g.now, ahead.Finished))
 		case ahead.PID != 0:
 			phase = fmt.Sprintf("queued, its merge left the gate at %s, its place is kept", clock(g.now, ahead.Seen))
 		default:
@@ -765,22 +769,11 @@ func (g *gateRun) unstart() {
 // run that does not start is recorded as one without a document.
 func (g *gateRun) runMerge() error {
 	defer outliveCaller()()
-	argv := g.argv
 	if !g.runsDevctl() {
-		self, err := selfExe()
-		if err != nil {
-			gateLine("%v", err)
-			return exitCode(guard.ExitNotFound)
-		}
-		argv = squashArgv(self, g.repo, g.pr, g.argv)
 		gateLine("devctl serves the repositories of %s only (merge.devctlOwners): %s#%d takes the %s as the gh login, green first, no release wait",
 			strings.Join(g.cfg.Merge.DevctlOwners, ", "), g.repo, g.pr, github.SquashRoute)
 	}
-	if g.pr != 0 && g.runsDevctl() {
-		argv = merge.CITimeout(argv, g.cfg.Merge.CITimeout.Duration)
-	}
 	if b := g.handCut(); b != "" {
-		argv = merge.NoReleaseWait(argv)
 		gateLine("%s merges into %s, which no Auto-release run tags: devctl ends at the merge (--no-release-wait), awaits no release and frees lane %s then",
 			g.key(), b, g.lane.Name)
 	}
@@ -789,14 +782,92 @@ func (g *gateRun) runMerge() error {
 		gateLine("%v", err)
 		return g.record(base, childRun{rc: guard.ExitNotFound})
 	}
-	pid, err := launchChild(childSpec{Argv: argv, Owner: g.me, Config: g.explicitConfig(), HandCut: g.handCut()}, base)
+	pid, rc := g.launch(base)
+	if rc != 0 {
+		return g.record(base, childRun{rc: rc})
+	}
+	return g.follow(base, pid, 0)
+}
+
+// mergeArgv is the command the merge's merge-child runs: the gated devctl
+// command bounded by the gate's CI timeout, with --no-release-wait into a
+// hand-cut base, or the plain squash merge for a repository devctl does not
+// serve.
+func (g *gateRun) mergeArgv() ([]string, error) {
+	argv := g.argv
+	if !g.runsDevctl() {
+		self, err := selfExe()
+		if err != nil {
+			return nil, err
+		}
+		argv = squashArgv(self, g.repo, g.pr, g.argv)
+	}
+	if g.pr != 0 && g.runsDevctl() {
+		argv = merge.CITimeout(argv, g.cfg.Merge.CITimeout.Duration)
+	}
+	if g.handCut() != "" {
+		argv = merge.NoReleaseWait(argv)
+	}
+	return argv, nil
+}
+
+// launch starts the merge's merge-child (launchChild) and records it as the
+// merge's child; rc is the exit to record when it does not start.
+func (g *gateRun) launch(base string) (pid, rc int) {
+	argv, err := g.mergeArgv()
+	if err == nil {
+		pid, err = launchChild(childSpec{Argv: argv, Owner: g.me, Config: g.explicitConfig(), HandCut: g.handCut()}, base)
+	}
 	if err != nil {
 		gateLine("devctl does not start: %v", err)
 		removeMergeFiles(base)
-		return g.record(base, childRun{rc: guard.ExitNotFound})
+		return 0, guard.ExitNotFound
 	}
 	g.started(pid)
-	return g.follow(base, pid, 0)
+	return pid, 0
+}
+
+// serverRetries are the pauses before the gate sends a merge again whose
+// merge call GitHub answered with a 5xx (merge.ServerError), one per retry.
+var serverRetries = []time.Duration{10 * time.Second, 30 * time.Second, time.Minute}
+
+// retryServerError runs the merge again while its last run ended on a 5xx
+// of its merge call and GitHub reports the pull request still open: devctl
+// sends the merge once, a gateway's 502 is GitHub's, and the expected head
+// keeps a second call from merging anything but the judged head. A pull
+// request GitHub reports otherwise, or does not answer for, is the record's
+// to judge, its document set aside. It returns the last run.
+func (g *gateRun) retryServerError(base string, pid int, run childRun) (childRun, int) {
+	for try, pause := range serverRetries {
+		if run.replaced || !merge.ServerError(run.doc) {
+			return run.emit(), pid
+		}
+		p, err := pullState(context.WithoutCancel(g.ctx), g.repo, g.pr)
+		if err != nil || p.State != github.Open {
+			run = run.emit()
+			run.doc = nil
+			return run, pid
+		}
+		gateLine("GitHub answered %s's merge call with a server error (exit %d): sending it again in %s, retry %d of %d",
+			g.key(), run.rc, pause, try+1, len(serverRetries))
+		_ = g.store.Log(event(g.me, "merge.retry", "%s: a 5xx on the merge call, retry %d of %d", g.key(), try+1, len(serverRetries)))
+		time.Sleep(pause) // the held document goes: a retry's replaces it
+		var rc int
+		if pid, rc = g.launch(base); rc != 0 {
+			return childRun{rc: rc}, pid
+		}
+		run = followChild(base, pid, 0, g.bin, g.retried(try+1))
+	}
+	return run.emit(), pid
+}
+
+// retried is followChild's hold for a run after try retries: a document of
+// a 5xx on the merge call while a retry is left.
+func (g *gateRun) retried(try int) func([]byte) bool {
+	if try >= len(serverRetries) {
+		return nil
+	}
+	return merge.ServerError
 }
 
 // follow copies the merge's devctl (its merge-child pid) stderr on from
@@ -805,10 +876,10 @@ func (g *gateRun) runMerge() error {
 // same devctl on from there (resumeMerge), so the installed release records
 // the outcome; one that does not start is followed on under this one.
 func (g *gateRun) follow(base string, pid int, offset int64) error {
-	run := followChild(base, pid, offset, g.bin)
+	run, pid := g.retryServerError(base, pid, followChild(base, pid, offset, g.bin, g.retried(0)))
 	if run.replaced {
 		g.reexec("while "+g.key()+"'s devctl ran", fmt.Sprintf("%s=%d:%d", gateRunningEnv, pid, run.offset))
-		run = followChild(base, pid, run.offset, nil)
+		run, _ = g.retryServerError(base, pid, followChild(base, pid, run.offset, nil, g.retried(0)))
 	}
 	defer handOver(base, run, g.cli)
 	return g.record(base, run)
@@ -816,7 +887,7 @@ func (g *gateRun) follow(base string, pid int, offset int64) error {
 
 // record records the run's outcome: a merge settles its lane, one that
 // warranted no release or whose lane has no installation to roll leaves it,
-// and one with nothing merged keeps its place for the retry. A run without
+// and so does one with nothing merged. A run without
 // its document or ended by a signal is GitHub's to judge: merged, its
 // release is unconfirmed; unanswered, the lane settles by the settle rule as
 // for a lost merge. The run's files go with the record; a save the newer
@@ -836,14 +907,13 @@ func (g *gateRun) record(base string, run childRun) error {
 	if r.out, ok = parseOutcome(g.pr, doc); merge.NeedsJudging(ok, rc) {
 		r.out, r.unanswered = judgeRun(g.ctx, g.repo, g.pr, judgeTries)
 	}
-	kept, settles := false, false
+	settles := false
 	err := g.store.Update(func(st *state.State) ([]state.Event, error) {
 		i := g.mine(st, state.Running)
 		if i < 0 {
 			return nil, nil
 		}
-		var ev []state.Event
-		ev, kept = recordRun(st, i, g.lane, g.me, r, time.Now().UTC(), note)
+		ev := recordRun(st, i, g.lane, g.me, r, time.Now().UTC(), note)
 		settles = slices.ContainsFunc(st.Merges, func(m state.Merge) bool {
 			return m.Repo == g.repo && m.PR == g.pr && m.Phase == state.Settling
 		})
@@ -877,12 +947,12 @@ func (g *gateRun) record(base string, run childRun) error {
 	case out.Unconfirmed:
 		gateLine("devctl ended with exit %d before its document, and GitHub reports %s#%d merged: its release is unconfirmed, confirm it with `devctl release wait %s --pr %d`, do not merge again",
 			rc, g.repo, g.pr, g.repo, g.pr)
-	case kept && (rc == devctlUsage || rc == devctlAuth):
-		gateLine("nothing merged (exit %d, a tooling fault): the same command fails the same way until what the reason names is fixed (output in %s); your place in lane %s is kept for %s",
-			rc, output, g.lane.Name, g.cfg.Merge.SeedTTL.Duration)
-	case kept:
-		gateLine("nothing merged (exit %d); your place in lane %s is kept for %s: act on the reason, then run the same command again",
-			rc, g.lane.Name, g.cfg.Merge.SeedTTL.Duration)
+	case !out.Merged && (rc == devctlUsage || rc == devctlAuth):
+		gateLine("nothing merged (exit %d, a tooling fault): the same command fails the same way until what the reason names is fixed (output in %s); %s left lane %s",
+			rc, output, g.key(), g.lane.Name)
+	case !out.Merged:
+		gateLine("nothing merged (exit %d); %s left lane %s: act on the reason, then run the same command again, it joins the lane anew",
+			rc, g.key(), g.lane.Name)
 	}
 	return exitCode(rc)
 }
@@ -963,23 +1033,19 @@ type runOutcome struct {
 
 // recordRun records the outcome of the running merge st.Merges[i] in lane:
 // a merge settles its lane, one that warranted no release or whose lane has
-// no installation to roll leaves it, one with nothing merged keeps its place
-// for the retry, and one nothing could judge settles by the settle rule. A
-// devctl merge's release window records the merge, or lifts when nothing
-// merged. It returns the events, with note appended, and whether the place
-// is kept.
-func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOutcome, now time.Time, note string) ([]state.Event, bool) {
+// no installation to roll leaves it, so does one with nothing merged (its
+// place dies with its run), and one nothing could judge settles by the
+// settle rule. A devctl merge's release window records the merge, or lifts
+// when nothing merged. It returns the events, with note appended.
+func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOutcome, now time.Time, note string) []state.Event {
 	m := &st.Merges[i]
 	key, repo, pr, out, rc, handCut := m.Key(), m.Repo, m.PR, r.out, r.rc, m.HandCut
 	var ev []state.Event
-	kept := false
 	switch {
 	case r.unanswered != nil:
 		m.Phase, m.Finished, m.Exit, m.Release, m.Roll = state.Settling, now, rc, "", nil
 	case out.Merged && !out.NoRelease && handCut == "" && lane.Installation != "":
 		m.Phase, m.Finished, m.Exit, m.Release = state.Settling, now, rc, out.Release
-	case !out.Merged && merge.Failed(m, rc, now):
-		kept = true
 	default:
 		st.Merges = slices.Delete(st.Merges, i, i+1)
 	}
@@ -1025,15 +1091,12 @@ func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOu
 		e = event(by, "merge.unknown", "%s exit %d without its document, GitHub does not answer (%v): lane %s settles by the settle rule",
 			key, rc, r.unanswered, lane.Name)
 	case !out.Merged:
-		e = event(by, "merge.failed", "%s exit %d, nothing merged", key, rc)
-		if kept {
-			e.Detail += fmt.Sprintf(", its place in lane %s is kept for the retry", lane.Name)
-		}
+		e = event(by, "merge.failed", "%s exit %d, nothing merged, it left lane %s", key, rc, lane.Name)
 	default:
 		e = event(by, verbMerged, "%s exit %d, release %s", key, rc, release)
 	}
 	e.Detail += note
-	return append(ev, e), kept
+	return append(ev, e)
 }
 
 // closeToolWindow lifts a tool-release window once no merge of the tool's

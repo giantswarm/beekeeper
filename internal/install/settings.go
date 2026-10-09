@@ -45,7 +45,7 @@ func Hooks(exe string) []Hook {
 		return Hook{Event: event, Entry: bytes.TrimSpace(b.Bytes())}
 	}
 	return []Hook{
-		hook("PreToolUse", "Bash|Read|Grep|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage|mcp__.*", "pretooluse", 30),
+		hook("PreToolUse", "Bash|Read|Grep|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage|TaskStop|mcp__.*", "pretooluse", 30),
 		hook("PermissionRequest", "*", "permissionrequest", 300),
 		hook("PostToolUse", "*", "posttooluse", 10),
 		hook("SessionStart", "", "sessionstart", 10),

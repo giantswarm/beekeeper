@@ -279,7 +279,7 @@ under <stateDir>/reads.
 
 Register it in ~/.claude/settings.json:
 
-  "PreToolUse": [{"matcher": "Bash|Read|Grep|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage|mcp__.*", "hooks": [{"type": "command",
+  "PreToolUse": [{"matcher": "Bash|Read|Grep|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage|TaskStop|mcp__.*", "hooks": [{"type": "command",
     "command": "~/.go/bin/beekeeper hook pretooluse"}]}]`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
@@ -311,6 +311,7 @@ Register it in ~/.claude/settings.json:
 				h.UnlockCommands = a.cfg.Secret.UnlockCommands
 				h.SecretFiles = slices.DeleteFunc(append(slices.Clone(a.cfg.Secret.Files), a.cfg.Secret.TokenFile), func(f string) bool { return f == "" })
 				h.GraphQL = a.graphqlLeft
+				h.StopTask = a.stopTask
 			}
 			if out := h.Decide(raw); out != nil {
 				_, _ = a.out.Write(out)

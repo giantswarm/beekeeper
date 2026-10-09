@@ -395,8 +395,6 @@ type Merge struct {
 	Exit     int
 	Seeded   bool
 	Outside  bool
-	// Retrying is a failed attempt that keeps its place.
-	Retrying bool
 	Release  string
 	Roll     []string
 }

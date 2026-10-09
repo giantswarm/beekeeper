@@ -35,7 +35,19 @@ var (
 	userSystemd   = plat.Launcher.Available
 	selfExe       = os.Executable
 	runningBinary = func() binary { return liveBinary{platform.RunningBinary()} }
+	gateOutput    = stdoutFile
 )
+
+// stdoutFile is the regular file this process's stdout writes to, "" for a
+// pipe, a terminal or where the platform cannot say: a Claude Code
+// background task writes to <tasks>/<task id>.output.
+func stdoutFile() string {
+	p, err := os.Readlink("/proc/self/fd/1")
+	if err != nil || !filepath.IsAbs(p) {
+		return ""
+	}
+	return p
+}
 
 // binary is the executable a gate call or a merge-child runs: whether
 // another file was renamed over its path since it started (beekeeper
@@ -174,6 +186,20 @@ type childRun struct {
 	unheard  bool
 	replaced bool
 	offset   int64
+	// held says the document was kept off the gate's stdout (followChild's
+	// hold): a run the gate may send again, whose caller reads one document.
+	held bool
+}
+
+// emit writes a held document to the gate's stdout.
+func (r childRun) emit() childRun {
+	if r.held {
+		r.held = false
+		if _, err := os.Stdout.Write(r.doc); err != nil {
+			r.unheard = true
+		}
+	}
+	return r
 }
 
 // runDetached runs spec's devctl outside its caller (launchChild) and
@@ -188,7 +214,7 @@ func runDetached(spec childSpec, base string, started func(pid int)) childRun {
 		return childRun{rc: guard.ExitNotFound}
 	}
 	started(pid)
-	return followChild(base, pid, 0, nil)
+	return followChild(base, pid, 0, nil, nil)
 }
 
 // followChild follows the devctl that merge-child pid runs outside its
@@ -207,8 +233,9 @@ func runDetached(spec childSpec, base string, started func(pid int)) childRun {
 // ending the gate). bin, when given, is the gate's binary: replaced while
 // the run goes on, the follow returns at once with replaced set and the
 // offset reached, the run's files in place, for the gate to re-execute the
-// installed binary and follow on from there.
-func followChild(base string, pid int, offset int64, bin binary) (r childRun) {
+// installed binary and follow on from there. hold, when given, keeps a
+// document it takes off the stdout (held), for the gate to decide.
+func followChild(base string, pid int, offset int64, bin binary, hold func(doc []byte) bool) (r childRun) {
 	r.rc = guard.ExitNotFound
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
@@ -254,6 +281,9 @@ func followChild(base string, pid int, offset int64, bin binary) (r childRun) {
 				r.kept = string(raw)
 			} else {
 				r.kept = keepOutput(base, r.doc, time.Now())
+			}
+			if r.held = hold != nil && hold(r.doc); r.held {
+				return r
 			}
 			if _, err := os.Stdout.Write(r.doc); err != nil { // the caller's pipe may be gone
 				r.unheard = true
