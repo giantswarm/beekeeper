@@ -174,3 +174,67 @@ func TestDropArg(t *testing.T) {
 		}
 	}
 }
+
+// The gate names the command whose turn came: a promotion is "promoting
+// o/r" and a refused one says "nothing promoted" with devctl's state, never
+// "merging"; a merge stays "merging o/r#7".
+func TestTheGateNamesTheCommandWhoseTurnCame(t *testing.T) {
+	noSystemd(t)
+	stubGitHub(t, github.Open, "")
+	newest := candidateA
+	stubCandidate(t, &newest)
+
+	fakeDevctl(t, `echo '{"repositories":[{"candidate":"`+candidateA+`","state":"not_built"}]}'; exit 1`)
+	a, g := promotePlace(t)
+	var err error
+	stderr := gateStderr(t, func() { _, err = g.step() })
+	if Code(err) != 1 {
+		t.Fatalf("refused promotion: exit %d (%v), want 1", Code(err), err)
+	}
+	if d := lastEventOf(t, a, verbPromoting); d != "o/r in lane o/r" {
+		t.Errorf("promoting event %q", d)
+	}
+	if d := lastEventOf(t, a, verbMerging); d != "" {
+		t.Errorf("a promotion logged merging: %q", d)
+	}
+	if d := lastEventOf(t, a, "merge.failed"); !strings.Contains(d, "nothing promoted (not_built)") {
+		t.Errorf("failed event %q", d)
+	}
+	if !strings.Contains(stderr, GatePrefix+"nothing promoted (not_built) (exit 1); o/r promote left lane o/r") || strings.Contains(stderr, "merg") {
+		t.Errorf("stderr %q, want the promotion's outcome and no merge", stderr)
+	}
+
+	fakeDevctl(t, `echo '{"repositories":[{"candidate":"`+candidateA+`","state":"dispatched"}]}'`)
+	a, g = promotePlace(t)
+	stderr = gateStderr(t, func() { _, err = g.step() })
+	if err != nil {
+		t.Fatalf("dispatched promotion: %v", err)
+	}
+	if !strings.Contains(stderr, GatePrefix+"promoted o/r: release v1.2.4 dispatched") || strings.Contains(stderr, "merg") {
+		t.Errorf("stderr %q, want the dispatched promotion", stderr)
+	}
+	if d := lastEventOf(t, a, verbMerging); d != "" {
+		t.Errorf("a promotion logged merging: %q", d)
+	}
+
+	fakeDevctl(t, `echo '`+mergedDoc+`'`)
+	stubBaseRelease(t, github.BaseRelease{Base: "main", Auto: true}, nil)
+	a, g = promotePlace(t)
+	g.pr, g.argv, g.candidate = 7, mergeArgv(scratchRepo), ""
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Merges[0].PR, st.Merges[0].Candidate = 7, ""
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stderr = gateStderr(t, func() { _, err = g.step() })
+	if err != nil {
+		t.Fatalf("merge: exit %d (%v), stderr %q", Code(err), err, stderr)
+	}
+	if d := lastEventOf(t, a, verbMerging); d != "o/r#7 in lane o/r" {
+		t.Errorf("merging event %q", d)
+	}
+	if d := lastEventOf(t, a, verbPromoting); d != "" || strings.Contains(stderr, "promot") {
+		t.Errorf("a merge said promoting: event %q, stderr %q", d, stderr)
+	}
+}

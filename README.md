@@ -1012,7 +1012,9 @@ refusal naming the command with the gate written in.
   Nobody runs it again; a second `devctl pr merge` of the pull request while it waits is refused
   with exit 3.
 - **Otherwise devctl runs once**, its JSON document and exit code (devctl's own 0–9) unchanged,
-  and the event log records `merging` and `merged` with the release. Its wait for the CI outcome
+  and the event log records `merging <owner/repo>#<n>` (`promoting <owner/repo>` for a promotion)
+  and `merged` with the release; a run that merged or promoted nothing says so in one gate line
+  after devctl returns (`nothing promoted (not_built)`, devctl's state of the promotion). Its wait for the CI outcome
   is `merge.ciTimeout` (1h, passed as `--timeout`) unless the command names its own `--timeout`:
   devctl's default of 30m is shorter than a CI that `--update-branch` restarts from zero, and a
   timeout (exit 2) merges nothing. devctl serves the

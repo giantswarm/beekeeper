@@ -559,8 +559,11 @@ var promoteCandidate = func(ctx context.Context, repo string) (string, error) {
 // places before it that wait without their merge.
 const outsideCheck = time.Minute
 
-// The verbs of a merge that merged and of a lane that settled after it.
+// The verbs of a merge and a promotion whose turn came, of a merge that
+// merged and of a lane that settled after it.
 const (
+	verbMerging     = "merging"
+	verbPromoting   = "promoting"
 	verbMerged      = "merged"
 	verbLaneSettled = "lane.settled"
 )
@@ -648,6 +651,27 @@ func (g *gateRun) handCut() string {
 
 // key names the merge, owner/repo#n or owner/repo promote.
 func (g *gateRun) key() string { return state.Merge{Repo: g.repo, PR: g.pr}.Key() }
+
+// startEvent names the command whose turn came: "merging owner/repo#n" for
+// devctl pr merge, "promoting owner/repo" for devctl release promote.
+func (g *gateRun) startEvent() state.Event {
+	if g.pr == 0 {
+		return event(g.me, verbPromoting, "%s in lane %s", g.repo, g.lane.Name)
+	}
+	return event(g.me, verbMerging, "%s in lane %s", g.key(), g.lane.Name)
+}
+
+// nothingDone is the outcome line's "nothing merged", "nothing promoted"
+// for a promotion, with devctl's state of it when its document named one.
+func nothingDone(pr int, out merge.Outcome) string {
+	switch {
+	case pr != 0:
+		return "nothing merged"
+	case out.State != "":
+		return "nothing promoted (" + out.State + ")"
+	}
+	return "nothing promoted"
+}
 
 // mine is the index of this merge's entry in that phase, -1 when none.
 func (g *gateRun) mine(st *state.State, phase string) int {
@@ -777,7 +801,7 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 		m.Phase, m.Started, m.Roll, m.Seeded, m.Outside = state.Running, g.now.UTC(), merge.RollSet(hrs, g.repo), false, false
 		m.HandCut = g.handCut()
 		m.Finished, m.Exit = time.Time{}, 0
-		ev := []state.Event{event(g.me, "merging", "%s in lane %s", g.key(), g.lane.Name)}
+		ev := []state.Event{g.startEvent()}
 		if passed != "" {
 			ev[0].Detail += ", ahead of " + passed + " (not arrived)"
 		}
@@ -1005,11 +1029,13 @@ func (g *gateRun) record(base string, run childRun) error {
 		gateLine("devctl ended with exit %d before its document, and GitHub reports %s#%d merged: its release is unconfirmed, confirm it with `devctl release wait %s --pr %d`, do not merge again",
 			rc, g.repo, g.pr, g.repo, g.pr)
 	case !out.Merged && (rc == devctlUsage || rc == devctlAuth):
-		gateLine("nothing merged (exit %d, a tooling fault): the same command fails the same way until what the reason names is fixed (output in %s); %s left lane %s",
-			rc, output, g.key(), g.lane.Name)
+		gateLine("%s (exit %d, a tooling fault): the same command fails the same way until what the reason names is fixed (output in %s); %s left lane %s",
+			nothingDone(g.pr, out), rc, output, g.key(), g.lane.Name)
 	case !out.Merged:
-		gateLine("nothing merged (exit %d); %s left lane %s: act on the reason, then run the same command again, it joins the lane anew",
-			rc, g.key(), g.lane.Name)
+		gateLine("%s (exit %d); %s left lane %s: act on the reason, then run the same command again, it joins the lane anew",
+			nothingDone(g.pr, out), rc, g.key(), g.lane.Name)
+	case g.pr == 0:
+		gateLine("promoted %s: release %s dispatched", g.repo, out.Release)
 	}
 	return exitCode(rc)
 }
@@ -1148,7 +1174,7 @@ func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOu
 		e = event(by, "merge.unknown", "%s exit %d without its document, GitHub does not answer (%v): lane %s settles by the settle rule",
 			key, rc, r.unanswered, lane.Name)
 	case !out.Merged:
-		e = event(by, "merge.failed", "%s exit %d, nothing merged, it left lane %s", key, rc, lane.Name)
+		e = event(by, "merge.failed", "%s exit %d, %s, it left lane %s", key, rc, nothingDone(pr, out), lane.Name)
 	default:
 		e = event(by, verbMerged, "%s exit %d, release %s", key, rc, release)
 	}
