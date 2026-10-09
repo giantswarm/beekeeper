@@ -243,6 +243,9 @@ type Setup interface {
 	// Stop stops and disables it.
 	Start(path string) []string
 	Stop(path string) []string
+	// Restart are the commands that make the started unit defined by the
+	// file at path run its changed definition, keeping it enabled.
+	Restart(path string) [][]string
 }
 
 // Platform is one build's implementation of every part.

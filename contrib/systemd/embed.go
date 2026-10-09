@@ -16,16 +16,18 @@ var NotifyService string
 // NotifyServiceExe is the binary the shipped units run.
 const NotifyServiceExe = "%h/.local/bin/beekeeper"
 
-// notifyExecStart is NotifyService's command line as shipped.
-const notifyExecStart = "ExecStart=" + NotifyServiceExe + " watch --notify --standby\n"
+// notifyWatch is NotifyService's watch as shipped, in its header comment
+// and its ExecStart.
+const notifyWatch = " watch --notify --standby"
 
 // StandbyService is NotifyService, its watch sending desktop notifications
-// only when notify (watch.notify).
+// only when notify (watch.notify); the header comment names the same watch
+// as ExecStart.
 func StandbyService(notify bool) string {
 	if notify {
 		return NotifyService
 	}
-	return strings.Replace(NotifyService, notifyExecStart, "ExecStart="+NotifyServiceExe+" watch --standby\n", 1)
+	return strings.ReplaceAll(NotifyService, notifyWatch, " watch --standby")
 }
 
 // SandboxService is beekeeper-sandbox.service, the agent sandbox's

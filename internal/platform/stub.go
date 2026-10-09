@@ -33,6 +33,7 @@ func (stubSetup) Started(context.Context, string) bool { return false }
 func (stubSetup) Reload() []string                     { return nil }
 func (stubSetup) Start(string) []string                { return nil }
 func (stubSetup) Stop(string) []string                 { return nil }
+func (stubSetup) Restart(string) [][]string            { return nil }
 
 func missing(part string) error { return &NotAvailableError{Part: part} }
 

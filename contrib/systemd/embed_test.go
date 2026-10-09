@@ -6,14 +6,15 @@ import (
 )
 
 func TestStandbyService(t *testing.T) {
-	if got := StandbyService(true); got != NotifyService || !strings.Contains(got, notifyExecStart) {
+	if got := StandbyService(true); got != NotifyService || !strings.Contains(got, "\nExecStart="+NotifyServiceExe+notifyWatch+"\n") {
 		t.Errorf("with notify: not the shipped unit:\n%s", got)
 	}
 	off := StandbyService(false)
-	if !strings.Contains(off, "\nExecStart="+NotifyServiceExe+" watch --standby\n") || strings.Contains(off, notifyExecStart) {
-		t.Errorf("without notify: the watch still notifies:\n%s", off)
+	if !strings.HasPrefix(off, "# beekeeper watch --standby as a systemd user unit") ||
+		!strings.Contains(off, "\nExecStart="+NotifyServiceExe+" watch --standby\n") || strings.Contains(off, notifyWatch) {
+		t.Errorf("without notify: the header or the watch still notifies:\n%s", off)
 	}
-	if len(NotifyService)-len(off) != len(" --notify") {
-		t.Errorf("without notify: more than the ExecStart flag changed:\n%s", off)
+	if len(NotifyService)-len(off) != 2*len(" --notify") {
+		t.Errorf("without notify: more than the header's and ExecStart's flag changed:\n%s", off)
 	}
 }

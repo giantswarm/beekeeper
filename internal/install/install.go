@@ -191,11 +191,15 @@ func (e Env) planFile(p *plan, m *Manifest, f platform.File) fileState {
 		p.add("keep", f.Path, err.Error(), nil)
 		return fileKept
 	default:
-		m.addDirs(filepath.Dir(f.Path))
+		m.addDirs(filepath.Dir(resolve(f.Path)))
 		p.add("write", f.Path, "", nil)
 	}
 	m.Files[f.Path] = sum(f.Content)
-	p.steps[len(p.steps)-1].do = func() error { return writeFile(f.Path, f.Content) }
+	last := &p.steps[len(p.steps)-1]
+	if target := resolve(f.Path); target != f.Path {
+		last.why = strings.TrimPrefix(last.why+"; through the link to "+target, "; ")
+	}
+	last.do = func() error { return writeFile(f.Path, f.Content) }
 	return state
 }
 
@@ -237,8 +241,9 @@ func (e Env) planStart(ctx context.Context, p *plan, m *Manifest, path string, s
 		p.add("keep", name, "its definition is not beekeeper install's", nil)
 	case state != fileNew && e.Setup.Started(ctx, path):
 		if state == fileUpdated {
-			p.command(ctx, e, e.Setup.Stop(path))
-			p.command(ctx, e, e.Setup.Start(path))
+			for _, argv := range e.Setup.Restart(path) {
+				p.command(ctx, e, argv)
+			}
 		} else {
 			p.add("ok", name, "running", nil)
 		}
@@ -281,11 +286,11 @@ func (p *plan) run(out io.Writer, dry bool) error {
 		_, _ = fmt.Fprintln(out, "dry run: nothing changes")
 	}
 	for _, s := range p.steps {
-		line := fmt.Sprintf("%-7s %s", s.verb, p.tilde(s.what))
+		line := fmt.Sprintf("%-7s %s", s.verb, s.what)
 		if s.why != "" {
 			line += ": " + s.why
 		}
-		_, _ = fmt.Fprintln(out, line)
+		_, _ = fmt.Fprintln(out, p.tilde(line))
 		if !dry && s.do != nil {
 			if err := s.do(); err != nil {
 				return fmt.Errorf("%s %s: %w", s.verb, s.what, err)
@@ -403,12 +408,30 @@ func exists(path string) bool {
 	return err == nil
 }
 
-// writeFile replaces the file at path, through a symlink to its target,
-// keeping its mode; a new file is 0644.
-func writeFile(path string, content []byte) error {
-	if target, err := filepath.EvalSymlinks(path); err == nil {
+// resolve is the file a write to path lands in: path, or the end of the
+// symlinks at path, whether that file exists or not.
+func resolve(path string) string {
+	for range 40 {
+		fi, err := os.Lstat(path)
+		if err != nil || fi.Mode()&fs.ModeSymlink == 0 {
+			return path
+		}
+		target, err := os.Readlink(path)
+		if err != nil {
+			return path
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(path), target)
+		}
 		path = target
 	}
+	return path
+}
+
+// writeFile replaces the file at path, through a symlink to its target
+// (a dangling one included), keeping its mode; a new file is 0644.
+func writeFile(path string, content []byte) error {
+	path = resolve(path)
 	mode := fs.FileMode(0o644)
 	if fi, err := os.Stat(path); err == nil {
 		mode = fi.Mode().Perm()
