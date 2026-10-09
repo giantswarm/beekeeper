@@ -79,11 +79,9 @@ func (a *app) startSuccessor(ctx context.Context, rl role, from, by state.Party,
 	var to state.Party
 	var msg, startDir string
 	fromLabel := from.Name
-	sessions, _, err := a.sessions()
-	if err != nil {
-		return state.Party{}, "", err
-	}
-	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+	// A machine without a process table shows no session carrying the title.
+	sessions, _, _ := a.sessions()
+	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		if s, ok := st.BypassStart(from.Session); ok {
 			startDir = s.Dir
 		}
