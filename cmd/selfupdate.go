@@ -96,5 +96,5 @@ func leftBehind(stale []*proc.Process, old, installed string) string {
 // installed at its path by itself once replaced: a gate call, waiting for
 // its turn or following its devctl, and a merge-child.
 func reexecs(p *proc.Process) bool {
-	return len(p.Args) > 1 && (p.Args[1] == "gate" || p.Args[1] == mergeChildCmd)
+	return len(p.Args) > 1 && (p.Args[1] == gateCmdName || p.Args[1] == mergeChildCmd)
 }

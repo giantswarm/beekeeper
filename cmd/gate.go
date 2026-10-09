@@ -47,6 +47,9 @@ const (
 	// BackgroundGateWait.
 	DefaultGateWait    = 2 * time.Minute
 	BackgroundGateWait = 30 * time.Minute
+	// gateCmdName is the gate's command, which a queued run and a brokered
+	// gate run, and which re-executes a replaced binary by itself.
+	gateCmdName = "gate"
 	// gateDeadlineEnv carries a waiting call's deadline across the re-exec
 	// of a replaced binary.
 	gateDeadlineEnv = "BEEKEEPER_GATE_DEADLINE"
@@ -62,7 +65,7 @@ func (a *app) gateCmd() *cobra.Command {
 	var wait time.Duration
 	var queued bool
 	c := &cobra.Command{
-		Use:   "gate [--wait DURATION] -- devctl pr merge|release promote|pr wait|release wait|rollout wait <args>",
+		Use:   gateCmdName + " [--wait DURATION] -- devctl pr merge|release promote|pr wait|release wait|rollout wait <args>",
 		Short: "The PreToolUse hook's gate on devctl's blocking commands",
 		Long: `gate is what the PreToolUse hook puts in front of every devctl pr merge and
 every devctl release promote of one repository; a session never calls it. A
@@ -349,7 +352,7 @@ func (g *gateRun) enqueue(why string) error {
 		if c := g.explicitConfig(); c != "" {
 			argv = append(argv, "--config", c)
 		}
-		argv = append(append(argv, "gate", "--queued", "--wait", g.cfg.Merge.SeedTTL.String(), "--"), g.argv...)
+		argv = append(append(argv, gateCmdName, "--queued", "--wait", g.cfg.Merge.SeedTTL.String(), "--"), g.argv...)
 		_ = os.Setenv(gateFromEnv, strconv.Itoa(g.pid))
 		var pid int
 		if pid, err = launchChild(childSpec{Argv: argv, Command: g.argv, Owner: g.me, Config: g.explicitConfig()}, ownedBase(g.store.Dir(), g.argv, g.pid)); err == nil {

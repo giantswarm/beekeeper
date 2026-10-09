@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -178,6 +179,153 @@ func TestAReplacedGateFollowsItsDevctlOnUnderTheInstalledOne(t *testing.T) {
 			t.Errorf("merges left: %+v", st.Merges)
 		}
 	})
+}
+
+// A gate whose binary file is replaced while its devctl runs (an install
+// renaming a new beekeeper over its path) re-executes the new file and exits
+// with devctl's own code: 0 for a merge, and a refusal's code unchanged, never
+// the re-executed process's own. The gate is this test binary run as
+// beekeeper from a copy that the test renames another copy over.
+func TestAGateReplacedMidMergeExitsWithDevctlsCode(t *testing.T) {
+	if runningBinary().Path() == "" {
+		t.Skip("the running binary cannot be read here")
+	}
+	for _, c := range []struct {
+		name string
+		doc  string
+		rc   int
+	}{
+		{verbMerged, mergedDoc, 0},
+		{"refused", `{"verdict":"red","reason":"check lint concluded failure"}`, 3},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			noSystemd(t)
+			dir := t.TempDir()
+			proceed := filepath.Join(dir, "proceed")
+			fakeDevctl(t, fmt.Sprintf(`echo merging >&2; while [ ! -e %s ]; do sleep 0.05; done; echo "waiting for the release" >&2; echo '%s'; exit %d`,
+				proceed, c.doc, c.rc))
+			stateHome := filepath.Join(dir, "state")
+			store, err := state.Open(filepath.Join(stateHome, "beekeeper"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			base := mergeBase(store.Dir(), scratchRepo, 7)
+			if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			pid, err := launchChild(childSpec{Argv: mergeArgv(scratchRepo)}, base)
+			if err != nil {
+				t.Fatal(err)
+			}
+			self := filepath.Join(dir, "bin", "beekeeper")
+			copyTestBinary(t, self)
+			gate := exec.Command(self, append([]string{gateCmdName, "--"}, mergeArgv(scratchRepo)...)...) //nolint:gosec // this test binary's copy
+			gate.Env = append(os.Environ(), "BEEKEEPER_TEST_MAIN=1", "BEEKEEPER_CONFIG="+filepath.Join(dir, "none.yaml"), "XDG_STATE_HOME="+stateHome,
+				"CLAUDE_CODE_SESSION_ID=", "CLAUDE_CODE_HOST_SESSION_ID=", fmt.Sprintf("%s=%d:0", gateRunningEnv, pid))
+			var stdout strings.Builder
+			gate.Stdout = &stdout
+			stderr := &lines{}
+			gate.Stderr = stderr
+			if err := gate.Start(); err != nil {
+				t.Fatal(err)
+			}
+			exited := make(chan error, 1)
+			go func() { exited <- gate.Wait() }()
+			t.Cleanup(func() {
+				_ = os.WriteFile(proceed, nil, 0o600)
+				_ = gate.Process.Kill()
+			})
+			err = store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Merges = []state.Merge{{Repo: scratchRepo, PR: 7, Lane: scratchRepo, PID: gate.Process.Pid, Phase: state.Running, Joined: relayNow, Started: relayNow}}
+				return nil, nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			stderr.await(t, "following o/r#7's devctl", 1)
+			replacement := self + ".new"
+			copyTestBinary(t, replacement)
+			if err := os.Rename(replacement, self); err != nil {
+				t.Fatal(err)
+			}
+			stderr.await(t, "was replaced while o/r#7's devctl ran: re-executing it", 1)
+			stderr.await(t, "following o/r#7's devctl", 2)
+			if err := os.WriteFile(proceed, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-exited:
+			case <-time.After(30 * time.Second):
+				t.Fatalf("the gate did not end\n%s", stderr)
+			}
+			said := stderr.String()
+			if rc := gate.ProcessState.ExitCode(); rc != c.rc {
+				t.Fatalf("the gate exited %d, want devctl's %d\n%s", rc, c.rc, said)
+			}
+			if strings.TrimSpace(stdout.String()) != c.doc {
+				t.Errorf("stdout %q, want devctl's document", stdout.String())
+			}
+			if strings.Count(said, "merging") != 1 || !strings.Contains(said, "waiting for the release") {
+				t.Errorf("stderr:\n%s", said)
+			}
+			verb := verbMerged
+			if c.rc != 0 {
+				verb = "merge.failed"
+			}
+			evs, err := store.Events(0, func(e state.Event) bool { return e.Verb == verb })
+			if err != nil || len(evs) != 1 || !strings.Contains(evs[0].Detail, fmt.Sprintf("o/r#7 exit %d", c.rc)) {
+				t.Errorf("%s events %+v (%v)", verb, evs, err)
+			}
+		})
+	}
+}
+
+// copyTestBinary copies this test binary, which doubles as beekeeper, to path.
+func copyTestBinary(t *testing.T, path string) {
+	t.Helper()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(self) //nolint:gosec // this test binary
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o700); err != nil { //nolint:gosec // an executable copy
+		t.Fatal(err)
+	}
+}
+
+// lines is a process's output, safe to read while it writes.
+type lines struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (l *lines) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *lines) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
+// await waits up to 30 s for the output to say s n times.
+func (l *lines) await(t *testing.T, s string, n int) {
+	t.Helper()
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if strings.Count(l.String(), s) >= n {
+			return
+		}
+	}
+	t.Fatalf("the gate did not say %q %d times:\n%s", s, n, l)
 }
 
 // A gate whose devctl ran on a release older than the one that wrote the

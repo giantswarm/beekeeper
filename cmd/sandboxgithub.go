@@ -108,7 +108,7 @@ func brokeredGateArgv(req sandbox.Request, _ bool) ([]string, error) {
 	if err != nil || wait <= 0 || wait > gateBrokeredTimeout {
 		return nil, fmt.Errorf("wait %q: want a duration up to %s", req.Wait, gateBrokeredTimeout)
 	}
-	return append([]string{"gate", "--wait", wait.String(), "--"}, argv...), nil
+	return append([]string{gateCmdName, "--wait", wait.String(), "--"}, argv...), nil
 }
 
 // devctlPath is PATH with the configured devctl's directory first, for a
