@@ -1,8 +1,12 @@
 package secret_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -167,5 +171,97 @@ func TestImportAgeStoresOnlyTheRecipientsIdentity(t *testing.T) {
 	}
 	if _, _, err := o.ImportAge(context.Background(), secret.Ref{Op: src}, "age1nope"); err == nil {
 		t.Error("an invalid recipient passes")
+	}
+}
+
+// The item an import creates is op's Password template, which op's
+// ItemValidator accepts: the built-in password field with its purpose, a
+// built-in destination field (notesPlain) with its own purpose and type.
+func TestImportCreatesAnItemOpsValidatorAccepts(t *testing.T) {
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipient := id.Recipient().String()
+	const src = "op://Employee/lab.agekey/notesPlain"
+	tools := secrettest.New(map[string]string{src: id.String()})
+	tools.Signed = true
+	var created []map[string]any
+	run := func(ctx context.Context, dir string, env []string, stdin io.Reader, name string, args ...string) ([]byte, error) {
+		if name == "op" && len(args) > 1 && args[0] == "item" && args[1] == "create" {
+			raw, err := io.ReadAll(stdin)
+			if err != nil {
+				return nil, err
+			}
+			var item map[string]any
+			if err := json.Unmarshal(raw, &item); err != nil {
+				t.Fatalf("item create got no JSON: %v", err)
+			}
+			created = append(created, item)
+			stdin = bytes.NewReader(raw)
+		}
+		return tools.Run(ctx, dir, env, stdin, name, args...)
+	}
+	o := &secret.Ops{Run: run, Vault: shared, Session: true}
+	if _, _, err := o.ImportAge(context.Background(), secret.Ref{Op: src}, recipient); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := o.Import(context.Background(), secret.Ref{Op: src}, secret.Ref{Op: "op://Shared/lab notes/notesPlain"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(created) != 2 {
+		t.Fatalf("items created: %d", len(created))
+	}
+	type want struct{ purpose, typ string }
+	builtin := want{"PASSWORD", "CONCEALED"}
+	for i, w := range []map[string]want{
+		{"password": builtin},
+		{"password": builtin, "notesPlain": {"NOTES", "STRING"}},
+	} {
+		item := created[i]
+		if item["category"] != builtin.purpose {
+			t.Errorf("item %d: category %v", i, item["category"])
+		}
+		fields, _ := item["fields"].([]any)
+		got := map[string]want{}
+		for _, f := range fields {
+			m, _ := f.(map[string]any)
+			p, _ := m["purpose"].(string)
+			typ, _ := m["type"].(string)
+			got[m["id"].(string)] = want{p, typ}
+		}
+		if !maps.Equal(got, w) {
+			t.Errorf("item %d fields = %v, want %v", i, got, w)
+		}
+	}
+	if created[0]["title"] != secret.AgeItemTitle(recipient) {
+		t.Errorf("title = %v", created[0]["title"])
+	}
+	if tools.Vault[secret.AgeItemRef(shared, recipient)] != id.String() {
+		t.Error("the recipient's item does not hold its identity")
+	}
+}
+
+// An op refusal reaches the caller whole, past its first line, without the
+// value op was given.
+func TestStoreVaultRelaysOpsRefusalWhole(t *testing.T) {
+	const src = "op://Employee/lab.key/password"
+	tools := secrettest.New(map[string]string{src: password})
+	tools.Signed = true
+	const tail = "{1. a field the validator names at the very end of a long message}"
+	run := func(ctx context.Context, dir string, env []string, stdin io.Reader, name string, args ...string) ([]byte, error) {
+		if name == "op" && len(args) > 1 && args[0] == "item" && args[1] == "create" {
+			return nil, errors.New("op: exit 1 ([ERROR] unable to process line 1: Validation: (validateVaultItem failed to Validate), " +
+				"Couldn't validate the item: \"[ItemValidator] has found 1 errors, 0 warnings: Details: Errors: value " + password + " " + tail + "\")")
+		}
+		return tools.Run(ctx, dir, env, stdin, name, args...)
+	}
+	o := &secret.Ops{Run: run, Vault: shared, Session: true}
+	_, err := o.Import(context.Background(), secret.Ref{Op: src}, secret.Ref{Op: "op://Shared/lab key/password"})
+	if err == nil || !strings.Contains(err.Error(), tail) || !strings.HasPrefix(err.Error(), "op://Shared/lab key/password: op: exit 1") {
+		t.Errorf("a refusal = %v", err)
+	}
+	if err != nil && strings.Contains(err.Error(), password) {
+		t.Error("the refusal carries the value")
 	}
 }
