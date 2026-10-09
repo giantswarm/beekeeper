@@ -436,6 +436,12 @@ type Kube struct {
 	// empty, an installation's context is its name or the one ending in
 	// @<name>.
 	ContextTemplate string `yaml:"contextTemplate"`
+	// Kubeconfig lists the kubeconfig files beekeeper's own reads resolve
+	// a context in, merged as kubectl merges a KUBECONFIG list (~/
+	// allowed): the k8s:// source of beekeeper secret, whose Secret read a
+	// kind lab's context makes through kind instead. Empty, the files
+	// KUBECONFIG lists, else the machine kubeconfig ~/.kube/config.
+	Kubeconfig []string `yaml:"kubeconfig"`
 }
 
 // Teleport configures the Teleport login's keeper: a periodic user unit
@@ -1520,6 +1526,9 @@ func (c *Config) defaults() error {
 	c.Secret.TokenFile = homePath(home, c.Secret.TokenFile)
 	for i, f := range c.Secret.Files {
 		c.Secret.Files[i] = homePath(home, f)
+	}
+	for i, f := range c.Kube.Kubeconfig {
+		c.Kube.Kubeconfig[i] = homePath(home, f)
 	}
 	c.Sandbox.defaults(home)
 	for i := range c.Scan.SOPS {

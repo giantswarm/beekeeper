@@ -28,18 +28,20 @@ type document struct {
 	root *yaml.Node
 }
 
+// parseDocument reads one YAML (or JSON) mapping; its errors name what
+// raw is, never what it says.
 func parseDocument(raw []byte) (*document, error) {
 	var n yaml.Node
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	if err := dec.Decode(&n); err != nil {
-		return nil, errors.New("sops answered no YAML document")
+		return nil, errors.New("no YAML document")
 	}
 	var extra yaml.Node
 	if dec.Decode(&extra) == nil {
-		return nil, errors.New("more than one YAML document: beekeeper secret handles one per file")
+		return nil, errors.New("more than one YAML document: beekeeper secret handles one")
 	}
 	if len(n.Content) != 1 || n.Content[0].Kind != yaml.MappingNode {
-		return nil, errors.New("the document is no mapping")
+		return nil, errors.New("no YAML mapping")
 	}
 	return &document{root: n.Content[0]}, nil
 }

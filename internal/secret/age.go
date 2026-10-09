@@ -286,7 +286,7 @@ func (o *Ops) ageNeeds(dir string, args []string, match func(*AgeIdentity) bool)
 		return false
 	}
 	for _, a := range args {
-		if strings.HasPrefix(a, "-") || strings.HasPrefix(a, guard.OpRef) {
+		if strings.HasPrefix(a, "-") || strings.HasPrefix(a, guard.OpRef) || strings.HasPrefix(a, K8sRef) {
 			continue
 		}
 		r, err := ParseRef(a)

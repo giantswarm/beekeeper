@@ -55,6 +55,11 @@ kube:
   # refusals name it. Unset: the context named after the installation, else
   # the one ending in @<name>.
   contextTemplate: login.example.com-{installation}
+  # The kubeconfig files a k8s:// source of beekeeper secret resolves its
+  # context in, merged as kubectl merges a KUBECONFIG list (~/ allowed); a
+  # kind lab's context reads through kind instead. Unset: KUBECONFIG's files,
+  # else ~/.kube/config.
+  kubeconfig: [~/.kube/config, ~/.local/state/beekeeper/kube/teleport.yaml]
 
 # The Teleport login the kube contexts run `tsh kube credentials` with. Set,
 # beekeeper install adds the keeper (beekeeper-teleport.timer), which renews

@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A key of a Kubernetes Secret as a source of `beekeeper secret`: `k8s://<context>/<namespace>/<name>/<key>[#<path>]` reads one key, or one value of the YAML or JSON document the key holds, in beekeeper's process and serves it to every `copy` destination (a SOPS path, `<ref>=<path>…`, a consumer, `--to-secret`), to `compare` and to `fingerprint`, so a credential its owner placed in a cluster Secret reaches a SOPS path without a person and without its value reaching a session. A lab's context (`kind-<cluster>`) reads through kind under the caller's lab lease, any other through the new `kube.kubeconfig` list (default `KUBECONFIG`'s files, else `~/.kube/config`), one Secret GET and nothing written; a Secret, key or path absent fails in one line naming it, no content quoted, and the answer is the value's length. The hook's refusal of a `kubectl get` of a Secret names the form ([#773](https://github.com/giantswarm/beekeeper/issues/773)).
+
 - `secret.ageVaults`: the vaults besides `secret.vault` that age identities are read from. A SOPS file under `installations/<name>/` that no `secret.ageIdentities` entry names finds its identity in the item `<name>.agekey` of `secret.vault` or one of them, a field or the document holding the identity file, and `secret recipients` names that item; an `op://` entry of `secret.ageIdentities` may name a field of an age vault, and one naming any other vault fails the configuration's load instead of being listed as found ([#766](https://github.com/giantswarm/beekeeper/issues/766)).
 
 ### Changed

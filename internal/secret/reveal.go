@@ -82,7 +82,7 @@ func (o *Ops) revealed(doc *document, file, path string) ([]Field, error) {
 // unchanged and writes nothing.
 func (o *Ops) RevealTo(ctx context.Context, file, path string, dst Ref, write bool) (RevealResult, error) {
 	res := RevealResult{To: dst.String()}
-	if dst.Op != "" || dst.Path == "" {
+	if dst.Op != "" || dst.IsKube() || dst.Path == "" {
 		return res, fmt.Errorf("%s: --to names a path of a plaintext YAML file, file#path", dst)
 	}
 	if same, err := sameFile(file, dst.File); err != nil || same {

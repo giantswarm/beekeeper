@@ -19,6 +19,11 @@ import (
 // kindContext is the prefix of the context kind names a cluster's.
 const kindContext = "kind-"
 
+// K8sRef starts a reference to a key of a Kubernetes Secret as a source:
+// k8s://<context>/<namespace>/<name>/<key>, and after # the dotted path of
+// one value inside the YAML (or JSON) document the key holds.
+const K8sRef = "k8s://"
+
 // FieldManager is the field manager a copied key is written under.
 const FieldManager = "beekeeper-secret"
 
@@ -62,6 +67,81 @@ func (t KubeTarget) KindCluster() string {
 		return ""
 	}
 	return cl
+}
+
+// parseKubeRef reads k8s://<context>/<namespace>/<name>/<key>[#<path>], a
+// Secret's key as a source, the path one value inside the document the key
+// holds.
+func parseKubeRef(s string) (Ref, error) {
+	target, path, hasPath := strings.Cut(strings.TrimPrefix(s, K8sRef), "#")
+	t, err := ParseKubeTarget(target)
+	if err != nil {
+		return Ref{}, fmt.Errorf("%q: a Secret's key as a source is k8s://<context>/<namespace>/<name>/<key>[#<path>]: %w", s, err)
+	}
+	if hasPath && path == "" {
+		return Ref{}, fmt.Errorf("%q: the path after # is a dotted key of the document the Secret's key holds", s)
+	}
+	return Ref{Kube: t, Path: path}, nil
+}
+
+// kubeconfig is the kubeconfig that reaches the cluster of t's context: a
+// kind lab's admin kubeconfig from kind, any other context resolved in
+// o.Kubeconfig, the files merged as kubectl merges a KUBECONFIG list. It
+// stays in memory like the value.
+func (o *Ops) kubeconfig(ctx context.Context, t KubeTarget) ([]byte, error) {
+	if cl := t.KindCluster(); cl != "" {
+		kc, err := o.Run(ctx, "", nil, nil, "kind", "get", "kubeconfig", "--name", cl)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", t.Context, err)
+		}
+		return kc, nil
+	}
+	if len(o.Kubeconfig) == 0 {
+		return nil, fmt.Errorf("%s: no kubeconfig to resolve the context in (kube.kubeconfig, KUBECONFIG or ~/.kube/config)", t.Context)
+	}
+	cfg, err := (&clientcmd.ClientConfigLoadingRules{Precedence: o.Kubeconfig}).Load()
+	if err != nil {
+		return nil, fmt.Errorf("%s: the kubeconfig %s: %w", t.Context, strings.Join(o.Kubeconfig, ":"), err)
+	}
+	if _, ok := cfg.Contexts[t.Context]; !ok {
+		return nil, fmt.Errorf("%s: no such context in %s", t.Context, strings.Join(o.Kubeconfig, ":"))
+	}
+	cfg.CurrentContext = t.Context
+	kc, err := clientcmd.Write(*cfg)
+	if err != nil {
+		return nil, fmt.Errorf("%s: the kubeconfig: %w", t.Context, err)
+	}
+	return kc, nil
+}
+
+// readKube reads the one value a k8s:// reference names: the Secret's key,
+// or with a path one value of the YAML document the key holds. A Secret,
+// key or path absent fails naming it, no content quoted.
+func (o *Ops) readKube(ctx context.Context, r Ref) (string, error) {
+	kc, err := o.kubeconfig(ctx, r.Kube)
+	if err != nil {
+		return "", err
+	}
+	read := o.Read
+	if read == nil {
+		read = ReadSecret
+	}
+	raw, err := read(ctx, kc, r.Kube)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", r.Kube, err)
+	}
+	if r.Path == "" {
+		return string(raw), nil
+	}
+	doc, err := parseDocument(raw)
+	if err != nil {
+		return "", fmt.Errorf("%s: the key holds %w", r.Kube, err)
+	}
+	v, ok := doc.get(r.Path)
+	if !ok {
+		return "", fmt.Errorf("%s: no value at %s", r.Kube, r.Path)
+	}
+	return v, nil
 }
 
 // SecretApplier writes value into one key of a Secret in the cluster a

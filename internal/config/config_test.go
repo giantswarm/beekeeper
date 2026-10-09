@@ -34,7 +34,7 @@ func TestLoadDefaults(t *testing.T) {
 	if len(c.Alerts.Quiet) != 0 || !slices.Equal(c.Alerts.Ignore, DefaultIgnore) || c.Alerts.Tenant != "" {
 		t.Errorf("alerts without a team = %+v, want no quiet rule, Watchdog ignored, no tenant", c.Alerts)
 	}
-	if c.Kube != (Kube{}) || c.Kube.Context("alpha") != "" || len(c.Lanes) != 0 || len(c.Merge.DevctlOwners) != 0 ||
+	if c.Kube.Production != "" || c.Kube.ContextTemplate != "" || len(c.Kube.Kubeconfig) != 0 || c.Kube.Context("alpha") != "" || len(c.Lanes) != 0 || len(c.Merge.DevctlOwners) != 0 ||
 		c.Guide.Skill != "" || c.Guide.Person != "" || c.Supervisor.Skill != "" || c.Ollama.URL != "" || c.Lemonade.URL != "" {
 		t.Errorf("organisation and desk defaults are set: %+v", c)
 	}
@@ -451,6 +451,14 @@ func TestThresholdsDefaultToFractions(t *testing.T) {
 	}
 	if _, err := Load(writeTemp(t, "kube: {contextTemplate: login.example.com}\n")); err == nil {
 		t.Error("a context template without {installation} loads")
+	}
+	kc, err := Load(writeTemp(t, "kube: {kubeconfig: [~/.kube/config, /srv/kube/teleport.yaml]}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, _ := os.UserHomeDir()
+	if want := []string{filepath.Join(home, ".kube", "config"), "/srv/kube/teleport.yaml"}; !slices.Equal(kc.Kube.Kubeconfig, want) {
+		t.Errorf("kube.kubeconfig = %q, want %q", kc.Kube.Kubeconfig, want)
 	}
 }
 
