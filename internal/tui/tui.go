@@ -15,7 +15,7 @@ import (
 	"context"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // Source supplies the screen's data. Implementations must be safe to call

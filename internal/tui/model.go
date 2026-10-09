@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // tabAlerts is the alerts tab's name.
@@ -129,7 +129,7 @@ func newModel(src Source, opts Options) tea.Model {
 
 // Init starts the first refresh and the ticker.
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.refreshCmd(), m.tick())
+	return tea.Batch(m.refreshCmd(), m.tick(), tea.RequestBackgroundColor)
 }
 
 // waitTick waits one interval before asking for the next refresh.
@@ -173,6 +173,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		return m, nil
+	case tea.BackgroundColorMsg:
+		style = newStyles(msg.IsDark())
 		return m, nil
 	case tickMsg:
 		cmds := []tea.Cmd{m.refreshCmd(), m.tick()}
@@ -223,8 +226,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.taken[msg.took] = true
 		}
 		return m, m.refreshCmd()
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m.key(msg)
+	case tea.PasteMsg:
+		if m.composing {
+			m.draft = append(m.draft, []rune(msg.Content)...)
+		}
+		return m, nil
 	}
 	return m, nil
 }
@@ -270,7 +278,7 @@ func (m *model) sendCmd(session, text string) tea.Cmd {
 // transcript and enter/esc close it, and while the person writes a
 // message every key but ctrl+c is the message's; otherwise they move the
 // tab's selection, which also drives the body's scroll.
-func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.composing && msg.String() != "ctrl+c" {
 		return m.compose(msg)
 	}
@@ -310,28 +318,27 @@ func (m *model) enter() (tea.Model, tea.Cmd) {
 }
 
 // compose edits the message line: enter sends a non-empty draft, esc
-// drops it, backspace and ctrl+u take back a character or everything.
-func (m *model) compose(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyEnter:
+// drops it, backspace and ctrl+u take back a character or everything;
+// a pasted text lands in the draft through Update.
+func (m *model) compose(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case msg.Code == tea.KeyEnter:
 		text := strings.TrimSpace(string(m.draft))
 		if text == "" {
 			return m, nil
 		}
 		m.composing, m.draft, m.outcome = false, nil, ""
 		return m, m.sendCmd(m.detail, text)
-	case tea.KeyEsc:
+	case msg.Code == tea.KeyEscape:
 		m.composing, m.draft = false, nil
-	case tea.KeyBackspace:
+	case msg.Code == tea.KeyBackspace:
 		if len(m.draft) > 0 {
 			m.draft = m.draft[:len(m.draft)-1]
 		}
-	case tea.KeyCtrlU:
+	case msg.String() == "ctrl+u":
 		m.draft = nil
-	case tea.KeySpace:
-		m.draft = append(m.draft, ' ')
-	case tea.KeyRunes:
-		m.draft = append(m.draft, msg.Runes...)
+	case msg.Text != "":
+		m.draft = append(m.draft, []rune(msg.Text)...)
 	}
 	return m, nil
 }
@@ -339,7 +346,7 @@ func (m *model) compose(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // scrollDetail moves the transcript window of an open pane: k and up go
 // back to older turns, j and down forward; G and end follow live again,
 // g and home go to the oldest turn read.
-func (m *model) scrollDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *model) scrollDetail(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	oldest := maxRow(len(m.tail))
 	switch msg.String() {
 	case "k", "up":
@@ -455,7 +462,7 @@ func (m *model) noticeHandedBack() {
 }
 
 // navigate moves between tabs and within the current tab's list.
-func (m *model) navigate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *model) navigate(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	rows := m.rows()
 	sel := &m.sel[m.tab]
 	switch msg.String() {
@@ -640,9 +647,14 @@ func maxRow(n int) int {
 	return n - 1
 }
 
-// View renders the whole window. Before the first resize it assumes a
+// View renders the whole window.
+func (m *model) View() tea.View {
+	return tea.NewView(m.screen())
+}
+
+// screen is the window's text. Before the first resize it assumes a
 // standard terminal so a program can ask for it at any time.
-func (m *model) View() string {
+func (m *model) screen() string {
 	if m.quitting {
 		return ""
 	}
