@@ -34,7 +34,7 @@ var secretRead secret.SecretReader
 func (a *app) secretCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "secret",
-		Short: "Credential operations that never return a value: compare, fingerprint, copy, set, rotate",
+		Short: "Credential operations that never return a value: compare, fingerprint, copy, set, rotate, unset; reveal answers configuration",
 		Long: `beekeeper is the only process that reads, creates, encrypts and decrypts
 secrets; an agent asks it with beekeeper secret. sops and op run in
 beekeeper's process, a value stays in its memory for the one operation and
@@ -113,7 +113,8 @@ anything is not equal.`,
 			return nil
 		},
 	})
-	c.AddCommand(a.secretFingerprintCmd(), a.secretCopyCmd(), a.secretSetCmd(), a.secretRotateCmd(), a.secretSetupCmd(), a.secretImportCmd(), a.secretRecipientsCmd())
+	c.AddCommand(a.secretFingerprintCmd(), a.secretCopyCmd(), a.secretSetCmd(), a.secretRotateCmd(), a.secretSetupCmd(), a.secretImportCmd(), a.secretRecipientsCmd(),
+		a.secretRevealCmd(), a.secretUnsetCmd())
 	for _, sub := range c.Commands() {
 		run := sub.RunE
 		sub.RunE = func(cmd *cobra.Command, args []string) error {
@@ -944,7 +945,7 @@ func (a *app) secretRotatePlatform(cmd *cobra.Command, arg, reason string, dryRu
 	out, err := ops.RotatePlatform(cmd.Context(), r, reason, dryRun)
 	mode := "committed"
 	if dryRun {
-		mode = "dry run"
+		mode = dryRunState
 	}
 	if err := a.secretLog(err, "rotate", "%s: %s", r, outcome(err, mode)); err != nil {
 		return err

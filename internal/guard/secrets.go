@@ -57,7 +57,8 @@ type leak struct {
 // secretOps names the beekeeper secret operations every refusal points to.
 const secretOps = "Equality: `beekeeper secret compare <a> <b>` or `beekeeper secret fingerprint <ref>`. " +
 	"Changes: `beekeeper secret copy <src.sops.yaml> <dst.sops.yaml> [--name n --namespace ns]`, " +
-	"`copy <ref> <file#path>`, `copy <ref> -- <consumer>`, `set <file> <path> --generate [--name n --namespace ns] [--vault op://…] [--to-secret … | -- <consumer>]`; " +
+	"`copy <ref> <file#path>`, `copy <ref> -- <consumer>`, `set <file> <path> --generate [--name n --namespace ns] [--vault op://…] [--to-secret … | -- <consumer>]`, " +
+	"`unset <file> <path>… --write` (keys out of a SOPS file); configuration a SOPS file encrypts (ids, URLs, peers): `reveal <file> <path>…`; " +
 	"a consumer reads the value on stdin, in a pod through `kubectl exec -i --context <context> <pod> -- <consumer>` (`--stdin-json`/`--stdin-field` wrap it in a JSON request). " +
 	"Rotations: `beekeeper secret rotate op://… --generate` (a value beekeeper made), `rotate op://…` (a value its issuer " +
 	"rotated into the vault), `rotate platform://<installation>/<capability>/<name> --reason …` (a platform manager credential)."

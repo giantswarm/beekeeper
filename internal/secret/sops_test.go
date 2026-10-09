@@ -18,7 +18,7 @@ import (
 // TestRealSOPSCopy runs copy and compare with the real sops and a throwaway
 // age key, where both are installed.
 func TestRealSOPSCopy(t *testing.T) {
-	for _, bin := range []string{"sops", "age-keygen"} {
+	for _, bin := range []string{sopsBin, ageKeygen} {
 		if _, err := exec.LookPath(bin); err != nil {
 			t.Skipf("%s is not installed", bin)
 		}
@@ -26,10 +26,10 @@ func TestRealSOPSCopy(t *testing.T) {
 	const password, pwPath = "planted-Pass-real-3e8a51", "stringData.password"
 	dir := t.TempDir()
 	key := filepath.Join(dir, "age.key")
-	if out, err := exec.Command("age-keygen", "-o", key).CombinedOutput(); err != nil { //nolint:gosec // the test's scratch key
+	if out, err := exec.Command(ageKeygen, "-o", key).CombinedOutput(); err != nil { //nolint:gosec // the test's scratch key
 		t.Fatalf("age-keygen: %v: %s", err, out)
 	}
-	recipient, err := exec.Command("age-keygen", "-y", key).Output() //nolint:gosec // the test's scratch key
+	recipient, err := exec.Command(ageKeygen, "-y", key).Output() //nolint:gosec // the test's scratch key
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,17 +130,17 @@ func TestRealSOPSAgeIdentity(t *testing.T) {
 // TestRealSOPSSkeleton fills a plaintext Secret skeleton with the real
 // sops: metadata stays readable, the generated value is encrypted.
 func TestRealSOPSSkeleton(t *testing.T) {
-	for _, bin := range []string{"sops", "age-keygen"} {
+	for _, bin := range []string{sopsBin, ageKeygen} {
 		if _, err := exec.LookPath(bin); err != nil {
 			t.Skipf("%s is not installed", bin)
 		}
 	}
 	dir := t.TempDir()
 	key := filepath.Join(dir, "age.key")
-	if out, err := exec.Command("age-keygen", "-o", key).CombinedOutput(); err != nil { //nolint:gosec // the test's scratch key
+	if out, err := exec.Command(ageKeygen, "-o", key).CombinedOutput(); err != nil { //nolint:gosec // the test's scratch key
 		t.Fatalf("age-keygen: %v: %s", err, out)
 	}
-	recipient, err := exec.Command("age-keygen", "-y", key).Output() //nolint:gosec // the test's scratch key
+	recipient, err := exec.Command(ageKeygen, "-y", key).Output() //nolint:gosec // the test's scratch key
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,11 @@ func TestRealSOPSSkeleton(t *testing.T) {
 }
 
 // sopsBin is the real sops.
-const sopsBin = "sops"
+// sopsBin and ageKeygen are the real tools the tests run where installed.
+const (
+	sopsBin   = "sops"
+	ageKeygen = "age-keygen"
+)
 
 // alnum is set's default character set.
 const alnum = "alnum"
