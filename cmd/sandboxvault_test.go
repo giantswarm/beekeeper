@@ -181,6 +181,34 @@ func TestBrokeredVaultSignsInAgainForAnExpiredSession(t *testing.T) {
 	}
 }
 
+// A session dropped the moment a sign-in unlocked the keeper gets a sign-in
+// of its own: the one that unlocked is over by then, never still running.
+// The keeper wakes its waiters before it reports the unlock, which holds the
+// drop inside the sign-in's last step here.
+func TestADropRightAfterTheUnlockSignsInAgain(t *testing.T) {
+	k := secret.NewKeeper(time.Hour, func(st secret.VaultState) {
+		if st.Unlocked {
+			time.Sleep(time.Millisecond)
+		}
+	})
+	var signins atomic.Int32
+	v := &vaultBroker{k: k, wait: time.Minute, signin: func(context.Context) (string, string, error) {
+		signins.Add(1)
+		return testVaultSession, "token", nil
+	}}
+	ctx := context.Background()
+	for i := range 200 {
+		v.ask(ctx)
+		wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		err := k.Wait(wctx)
+		cancel()
+		if err != nil {
+			t.Fatalf("drop %d: no sign-in unlocked the keeper: %v", i, err)
+		}
+		v.drop(ctx, "expired")
+	}
+}
+
 // A SOPS file whose age identity is a field of the vault takes the vault on
 // the broker as on the client: the call runs with the session, its file
 // named relative to the requester's directory. One with a file:// identity
