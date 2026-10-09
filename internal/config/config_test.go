@@ -266,6 +266,9 @@ func TestMetricsModels(t *testing.T) {
 	if got, ok := m.Model("claude-haiku-4-5-20251001"); !ok || got.Input != 1 {
 		t.Errorf("a dated snapshot is priced like its model: %+v %v", got, ok)
 	}
+	if got, ok := m.Model("claude-sonnet-5-5"); !ok || got.Input != 2 || got.Output != 10 || got.CacheRead != 0.2 || got.CacheWrite1h != 4 {
+		t.Errorf("claude-sonnet-5-5 has its list price: %+v %v", got, ok)
+	}
 	for _, unknown := range []string{"claude-opus-5-6", "claude-opus-5-5-fast", "claude"} {
 		if _, ok := m.Model(unknown); ok {
 			t.Errorf("%s has no price", unknown)
