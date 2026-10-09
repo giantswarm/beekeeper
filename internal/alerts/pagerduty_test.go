@@ -57,6 +57,14 @@ var (
 // instZ is the installation of the tests' incidents.
 const instZ = "zeta"
 
+// quickRetry shortens the pause before another attempt for the test.
+func quickRetry(t *testing.T) {
+	t.Helper()
+	pause := retryPause
+	retryPause = 100 * time.Millisecond
+	t.Cleanup(func() { retryPause = pause })
+}
+
 func readPD(t *testing.T, f *fakePagerDuty, prev *PagerDuty, at time.Time) ([]string, *PagerDuty) {
 	t.Helper()
 	quickRetry(t)

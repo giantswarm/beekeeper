@@ -74,14 +74,6 @@ func newFake(t *testing.T) *fake {
 	return f
 }
 
-// quickRetry shortens the pause before another attempt for the test.
-func quickRetry(t *testing.T) {
-	t.Helper()
-	pause := retryPause
-	retryPause = 100 * time.Millisecond
-	t.Cleanup(func() { retryPause = pause })
-}
-
 // serve starts an Alertmanager and points the service's forward at it.
 func (f *fake) serve(env string) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
