@@ -216,6 +216,11 @@ func (a *app) runStart(ctx context.Context, rl role, takeOver bool) error {
 		if err != nil {
 			return nil, err
 		}
+		// The start titles me with the run's name: never one another live
+		// session carries.
+		if err := titleTaken(sessions, rl.runName(rl.get(st).Run), me); err != nil {
+			return nil, err
+		}
 		took, after = was == nil || !was.Is(me), st
 		run = rl.get(st).Run
 		_, cli := rl.observeCLI(st, sessions, a.now)

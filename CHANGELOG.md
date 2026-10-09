@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `secret.ageVaults`: the vaults besides `secret.vault` that age identities are read from. A SOPS file under `installations/<name>/` that no `secret.ageIdentities` entry names finds its identity in the item `<name>.agekey` of `secret.vault` or one of them, a field or the document holding the identity file, and `secret recipients` names that item; an `op://` entry of `secret.ageIdentities` may name a field of an age vault, and one naming any other vault fails the configuration's load instead of being listed as found ([#766](https://github.com/giantswarm/beekeeper/issues/766)).
 
+### Fixed
+
+- A message to `the supervisor` or `the guide` reaches the holder beekeeper records although another live session carries the holder's title: the holder's CLI is found by its session id and addressed by its own socket while its title is shared. `beekeeper doctor` and the watch (`SAME TITLE`) name every title two live sessions carry, and a relay or a role's `start` refuses a run name another live session carries, naming that session ([#758](https://github.com/giantswarm/beekeeper/issues/758)).
+
 ### Changed
 
 - `#<path>` on a `k8s://` source reaches into every shape a Secret's key commonly holds: a dotted key of its YAML or JSON mapping as before, a line of its dotenv lines (`KEY=value`, an `export` in front and matching quotes stripped, `#` comments and blank lines ignored), and, one level down, a value of the YAML mapping or dotenv lines a block scalar holds (`#config.yaml.oidc.clientID`; a key holding dots takes as many path segments as it needs). A path that reaches nothing fails in one line with the shape of what the key, or the node on the way, holds and nothing of its value: the format (a YAML or JSON mapping with its top-level keys, dotenv lines with their keys, a list of n items, a scalar, text, binary, nothing), its line count and byte length; a key named like a generated value is counted, not named. The caller picks the right path from the refusal instead of reading the value ([#799](https://github.com/giantswarm/beekeeper/issues/799)).

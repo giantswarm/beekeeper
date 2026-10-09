@@ -41,7 +41,7 @@ func TestMessageByRunNameReachesTheRenamedSupervisor(t *testing.T) {
 			t.Errorf("%q addresses no holder, got %q", name, got)
 		}
 	}
-	to, err := roleAddress(supervisorRole.get(st).Holder, supervisorRole, sessions)
+	to, err := roleAddress(supervisorRole.get(st).Holder, supervisorRole, sessions, noSocket)
 	if err != nil || to != runTitle {
 		t.Fatalf("address %q, %v; want the running CLI's title", to, err)
 	}

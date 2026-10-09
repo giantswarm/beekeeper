@@ -495,7 +495,15 @@ func (a *app) roleTarget(name string) (string, error) {
 	if t, err := plat.Machine.Processes(); err == nil {
 		sessions = claude.Discover(a.cfg, t, time.Now())
 	}
-	return roleAddress(rl.get(st).Holder, rl, sessions)
+	return roleAddress(rl.get(st).Holder, rl, sessions, liveSocket)
+}
+
+// liveSocket is the peer socket of the CLI pid, "" when it has none.
+func liveSocket(pid int) string {
+	if sock := peerSocket(runtimeDir(), pid); fileExists(sock) {
+		return sock
+	}
+	return ""
 }
 
 // heldRole is the PreToolUse hook's lookup for a SendMessage by name: the
@@ -542,14 +550,22 @@ func holderRole(st *state.State, name string) string {
 }
 
 // roleAddress is where a message to rl's holder goes: the name its running
-// CLI takes messages under, else its desktop session id, which the desktop
-// starts, else its name.
-func roleAddress(holder *state.Supervisor, rl role, sessions []*claude.Session) (string, error) {
+// CLI takes messages under, or that CLI's own socket (sock) while another
+// live session carries the same name, else its desktop session id, which the
+// desktop starts, else its name. The holder is beekeeper's record, matched to
+// its CLI by session id, so a shared title never makes the role ambiguous.
+func roleAddress(holder *state.Supervisor, rl role, sessions []*claude.Session, sock func(pid int) string) (string, error) {
 	if holder == nil {
 		return "", fmt.Errorf("no session holds the %s's role (beekeeper %s status): the message has nobody to go to", rl.name, rl.name)
 	}
 	if s, ok := claude.Live(sessions, holder.Party); ok {
-		return uniqueName(sessions, s)
+		name, err := uniqueName(sessions, s)
+		if err != nil {
+			if path := sock(s.PID); path != "" {
+				return "uds:" + path, nil
+			}
+		}
+		return name, err
 	}
 	return cmp.Or(holder.HostSession, holder.Name), nil
 }
