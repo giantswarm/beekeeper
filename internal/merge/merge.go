@@ -109,6 +109,27 @@ func NoReleaseWait(argv []string) []string {
 	return slices.Insert(slices.Clone(argv), i+1, noReleaseWaitFlag)
 }
 
+// rebaseFlag makes devctl pr merge a rebase merge, the upstream-line forks'.
+const rebaseFlag = "--rebase"
+
+// Rebase says whether a devctl pr merge argument vector is a rebase merge:
+// --rebase (or --rebase=true) among its flags, before any --.
+func Rebase(argv []string) bool {
+	i := slices.Index(argv, "merge")
+	if i < 1 || argv[i-1] != "pr" {
+		return false
+	}
+	for _, a := range argv[i+1:] {
+		switch a {
+		case "--":
+			return false
+		case rebaseFlag, rebaseFlag + "=true":
+			return true
+		}
+	}
+	return false
+}
+
 // timeoutFlag bounds devctl pr merge's wait for the CI outcome.
 const timeoutFlag = "--timeout"
 

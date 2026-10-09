@@ -70,7 +70,10 @@ promotion queues and runs in its repository's lane like a merge, its stable
 release settling the lane. Only a hold refuses (exit 77): the repository,
 its lane, "merges" or "github" held (a cluster upgrade on the lane's
 installation holds it too); so do a GitHub budget unknown and a lane
-installation that cannot be read. Under the budget floor the merge is
+installation that cannot be read. A rebase merge (--rebase) GitHub reports
+not rebaseable or conflicting with its base is refused (77) before it takes
+a lane place, the way out a replacement PR; GitHub not answering whether it
+rebases refuses too. Under the budget floor the merge is
 queued for the reset (exit 76, as below): a run of its own waits for the
 budget and merges as below; a merge marked urgent (lanes urgent)
 runs under the floor instead, once per reset window. Otherwise the merge
@@ -233,6 +236,13 @@ func (a *app) gate(ctx context.Context, argv []string, wait time.Duration, queue
 	if v, ok := os.LookupEnv(gateFromEnv); ok {
 		_ = os.Unsetenv(gateFromEnv)
 		g.from, _ = strconv.Atoi(v)
+	}
+	// A fresh rebase merge, not one that has its place already (its queued
+	// run, a re-executed wait), is judged before it takes a lane place.
+	if _, waiting := os.LookupEnv(gateDeadlineEnv); !waiting && !queued && merge.Rebase(argv) {
+		if err := g.checkRebase(); err != nil {
+			return err
+		}
 	}
 	deadline := time.Now().Add(wait)
 	if v, ok := os.LookupEnv(gateDeadlineEnv); ok {
@@ -577,6 +587,50 @@ func (g *gateRun) readRelease() error {
 		return g.refuse("whether %s's base branch has auto-release cannot be read (%v): run the same command again", g.key(), err)
 	}
 	g.release = &r
+	return nil
+}
+
+// rebaseReads is how often the gate reads a pull request whose rebase GitHub
+// has not computed yet.
+const rebaseReads = 3
+
+// checkRebase refuses a rebase merge GitHub reports conflicting with its
+// base before it takes a lane place: devctl would refuse it only at its turn
+// (exit 3, "This branch can't be rebased"), and a base merged into the
+// branch hides the conflict from the pull request. GitHub not answering
+// refuses; a rebase GitHub has not computed after rebaseReads reads queues,
+// devctl judging it at its turn.
+func (g *gateRun) checkRebase() error {
+	var r github.Rebase
+	for try := 1; ; try++ {
+		ctx, cancel := context.WithTimeout(g.ctx, time.Minute)
+		var err error
+		r, err = pullRebase(ctx, g.repo, g.pr)
+		cancel()
+		if err != nil {
+			return g.refuse("whether %s rebases onto its base cannot be read (%v): run the same command again", g.key(), err)
+		}
+		if r.Known || try == rebaseReads {
+			break
+		}
+		select {
+		case <-g.ctx.Done():
+			return g.ctx.Err()
+		case <-time.After(rebaseRetry):
+		}
+	}
+	switch {
+	case r.Conflicts():
+		why := "GitHub reports it not rebaseable"
+		if r.State == github.DirtyState {
+			why = "it conflicts with its base (mergeable_state dirty)"
+		}
+		return g.refuse("%s cannot be rebased onto its base: %s; a rebase merge fails at its turn, so it takes no lane place. "+
+			"Open a replacement PR (a fresh branch from the base with the change applied again; never merge the base into a branch), then merge that one",
+			g.key(), why)
+	case !r.Known:
+		gateLine("GitHub has not computed whether %s rebases (mergeable_state %s): it queues, devctl judges the rebase at its turn", g.key(), cmp.Or(r.State, "unknown"))
+	}
 	return nil
 }
 

@@ -56,6 +56,22 @@ func TestCITimeout(t *testing.T) {
 	}
 }
 
+func TestRebase(t *testing.T) {
+	for argv, want := range map[string]bool{
+		"devctl pr merge o/r 7 --rebase":        true,
+		"devctl pr merge --rebase=true o/r 7":   true,
+		"devctl pr merge o/r 8":                 false,
+		"devctl pr merge o/r 7 --rebase=false":  false,
+		"devctl pr merge o/r 7 -- --rebase":     false,
+		"devctl release promote o/r --rebase":   false,
+		"devctl pr merge o/r 7 --update-branch": false,
+	} {
+		if got := Rebase(strings.Fields(argv)); got != want {
+			t.Errorf("%s: got %v, want %v", argv, got, want)
+		}
+	}
+}
+
 func TestStripDetach(t *testing.T) {
 	onDone := "beekeeper agents wake x"
 	prMerge := func(args ...string) []string { return append([]string{Tool, "pr", "merge"}, args...) }

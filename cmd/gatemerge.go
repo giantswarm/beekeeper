@@ -30,6 +30,12 @@ var (
 	baseRelease = func(ctx context.Context, repo string, n int) (github.BaseRelease, error) {
 		return github.ReadBaseRelease(ctx, github.RunGH, repo, n)
 	}
+	pullRebase = func(ctx context.Context, repo string, n int) (github.Rebase, error) {
+		return github.ReadRebase(ctx, github.RunGH, repo, n)
+	}
+	// rebaseRetry is how long the gate waits for GitHub to compute whether a
+	// pull request rebases before it reads again.
+	rebaseRetry   = 2 * time.Second
 	devctlVersion = toolVersion
 	devctlUpdate  = toolUpdate
 	userSystemd   = plat.Launcher.Available
