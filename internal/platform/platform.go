@@ -219,11 +219,13 @@ type SetupSpec struct {
 	// TeleportEvery is how often the Teleport login's keeper reads the
 	// expiry (teleport.every); zero writes no keeper.
 	TeleportEvery time.Duration
+	// Notify runs the standby watch with --notify (watch.notify).
+	Notify bool
 }
 
 // Setup is what beekeeper install puts in place for this platform beside
-// the hooks and the config: the standby service (beekeeper watch --notify
-// --standby), the memory guard and the Teleport login's keeper, as files
+// the hooks and the config: the standby service (beekeeper watch --standby,
+// with --notify when watch.notify), the memory guard and the Teleport login's keeper, as files
 // and the service manager's commands. A command is an argument vector.
 type Setup interface {
 	// Available reports whether this platform runs the standby service.

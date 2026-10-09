@@ -26,8 +26,9 @@ binary it runs from (or --binary):
   - the PreToolUse and PermissionRequest hooks in Claude Code's user
     settings ($CLAUDE_CONFIG_DIR, else ~/.claude/settings.json), merged
     into what is there;
-  - the standby service (beekeeper watch --notify --standby): a systemd
-    user unit on Linux, a launch agent on macOS, enabled and started;
+  - the standby service (beekeeper watch --standby, with --notify when
+    watch.notify is true; off by default): a systemd user unit on Linux, a
+    launch agent on macOS, enabled and started;
   - with systemd, the agent sandbox's broker (beekeeper sandbox broker):
     beekeeper-sandbox.service, enabled and started;
   - with systemd and teleport.proxy set, the Teleport login's keeper:
@@ -40,10 +41,13 @@ binary it runs from (or --binary):
   - a starter config, the example configuration with every key commented
     out, when no config exists.
 
-A file that is already what install writes stays as it is, and one it finds
-differing that an earlier install did not write it keeps: install changes
-nothing it did not put there, and a second run changes nothing. What it
-wrote is recorded in install.json in the state directory, for uninstall.
+A file that is already what install writes stays as it is. One an earlier
+install wrote, a unit that runs this binary and a hook entry that runs this
+binary's hook command (with an older matcher, say) are updated in place,
+never added twice; one it finds differing that is none of these it keeps:
+install changes nothing it did not put there, and a second run changes
+nothing, so running it after every update is safe. What it wrote is
+recorded in install.json in the state directory, for uninstall.
 Without a service manager (Linux without systemd) it writes the hooks and
 the config and says the service is not available.`,
 		Args: cobra.NoArgs,
@@ -127,6 +131,7 @@ func (a *app) installEnv(e *install.Env, binary string) error {
 	if a.cfg.Teleport.Enabled() {
 		e.Spec.TeleportEvery = a.cfg.Teleport.Every.Duration
 	}
+	e.Spec.Notify = a.cfg.Watch.Notify
 	e.Setup = plat.Setup
 	e.Run = runCommand
 	e.Out = a.out

@@ -38,9 +38,13 @@ starts the [standby service](#desktop-notifications) (a systemd user unit, a lau
 macOS), with `teleport.proxy` set the [Teleport login's keeper](#the-teleport-login), and on systemd the [agent sandbox](#the-agent-sandbox)'s broker (`beekeeper-sandbox.service`) and the memory guard sized to the machine's RAM: `memcap.slice` for `beekeeper
 run`'s capped commands, with their CPU budget (`memcap.cpuQuota`, `memcap.cpuWeight`), and a drop-in for the Claude Desktop scope that runs (run install again
 with the app running when it does not). Without a config it writes a starter one, the [example
-configuration](docs/examples/config.yaml) with every key commented out. A file already as install
-writes it stays, and one that differs and that install did not write it keeps and names; a second
-run changes nothing. A new Claude Code session picks the hooks up. `beekeeper uninstall` (also
+configuration](docs/examples/config.yaml) with every key commented out. The standby service runs
+`watch --standby`, and `watch --notify --standby` only with `watch.notify: true` (off by default).
+A file already as install writes it stays; one an earlier install wrote, a unit that runs this
+binary and a hook entry that runs this binary's hook command (an older matcher, a self-update's
+settings) are updated in place, never added twice; one that differs and is none of these it keeps
+and names, and it never touches another setting. A second run changes nothing, so install is safe
+to run after every update: that is how a changed hook matcher reaches the settings. A new Claude Code session picks the hooks up. `beekeeper uninstall` (also
 with `--dry-run`) stops the units and removes exactly what install wrote, as `install.json` in
 the state directory records it, and leaves the config and the state unless `--purge`. On Linux
 without systemd install writes the hooks and the config and says the service is not available.
@@ -1247,7 +1251,8 @@ last 20 deliveries with the id the service returned.
 
 When no supervisor runs, the same watch runs as a systemd user unit,
 [`contrib/systemd/beekeeper-notify.service`](contrib/systemd/beekeeper-notify.service), with
-`--standby`: while a supervisor's session runs it leaves the notes, timers, session records and
+`--standby`; `beekeeper install` adds `--notify` to it only with `watch.notify: true`, so a desk
+without desktop notifications leaves the key unset: while a supervisor's session runs it leaves the notes, timers, session records and
 relays to the supervisor's watch and never reads the alerts, so it takes nothing from the
 supervisor's view; what both see (the budget, stale leases) is sent once.
 The upgrade holds never wait on a supervisor: while no supervisor's watch has begun an upgrade

@@ -316,6 +316,66 @@ func TestUpdatesWhatItWrote(t *testing.T) {
 	}
 }
 
+// A machine set up without a manifest (by hand, by self-update): the hook
+// entries and the unit of this binary are updated in place, never added a
+// second time, and what is not beekeeper's stays as it is.
+func TestTakesOverThisBinarysEntries(t *testing.T) {
+	home := t.TempDir()
+	f := &fakeSetup{started: true}
+	e, out := env(t, home, f, f.run)
+	service := filepath.Join(home, ".config", "units", "notify.service")
+	write(t, service, "# an older unit\nExecStart=/opt/bin/beekeeper watch --notify\n")
+	write(t, e.Settings, `{"model":"opus","hooks":{"PreToolUse":[`+
+		`{"matcher":"Bash","hooks":[{"type":"command","command":"echo theirs"}]},`+
+		`{"matcher":"Bash|Edit","hooks":[{"type":"command","command":"/opt/bin/beekeeper hook pretooluse","timeout":30}]}]}}`)
+
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"update  ~/.claude/settings.json: PreToolUse hook",
+		"update  ~/.config/units/notify.service: an earlier unit of this binary",
+		"run     stop notify.service",
+		"run     start notify.service",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("install lacks %q:\n%s", want, out)
+		}
+	}
+	s, err := readSettings(e.Settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, _ := s.hooks("PreToolUse")
+	if len(list) != 2 || !sameJSON(list[1], Hooks(e.Exe)[0].Entry) || !strings.Contains(string(list[0]), "echo theirs") {
+		t.Errorf("PreToolUse not updated in place:\n%s", list)
+	}
+	if raw, _ := s.top.get("model"); string(raw) != `"opus"` {
+		t.Errorf("install touched an unrelated setting: %s", raw)
+	}
+	if raw, _ := os.ReadFile(filepath.Clean(service)); string(raw) != "ExecStart=/opt/bin/beekeeper watch\n" {
+		t.Errorf("unit not updated: %s", raw)
+	}
+
+	installed := tree(t, home)
+	f.ran = nil
+	out.Reset()
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if again := tree(t, home); !maps.Equal(installed, again) || len(f.ran) > 0 {
+		t.Errorf("a second install changed files or ran %v:\n%s", f.ran, out)
+	}
+
+	if err := Uninstall(context.Background(), e, false); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(e.Settings)
+	if strings.Contains(string(raw), "beekeeper") || !strings.Contains(string(raw), "echo theirs") {
+		t.Errorf("uninstall left the taken-over hooks or removed theirs:\n%s", raw)
+	}
+}
+
 func TestWithoutServiceManager(t *testing.T) {
 	home := t.TempDir()
 	e, out := env(t, home, platform.Stub().Setup, nil)

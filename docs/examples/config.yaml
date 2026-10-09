@@ -104,6 +104,7 @@ watch:
   diskCriticalMiB: 20480    # DISK NEARLY FULL under this free on /; default: 1% of its size
   diskFillWithin: 2h        # DISK FILLING while / would run full within this at its last ten minutes' rate
   quietSessions: ["test: *"]   # the default; short-lived sessions whose start and end are logged, not said
+  notify: false             # the default; true: the standby watch beekeeper install writes runs with --notify
 
 memcap:                     # beekeeper run's build slots and cap
   slots: 2                  # the default
