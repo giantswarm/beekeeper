@@ -49,7 +49,8 @@ A reference is a SOPS file (every value in it), one value in a SOPS file
 the shared 1Password vault (op://<vault>/<item>/<field>, the vault being
 secret.vault) or, as a source, a key of a Kubernetes Secret
 (k8s://<context>/<namespace>/<name>/<key>, and after # the dotted path of
-one value inside the YAML or JSON document the key holds): a credential
+one value inside what the key holds: a YAML or JSON mapping, dotenv lines,
+or a document one level down under a block scalar): a credential
 its owner placed in a cluster reaches a SOPS path, a consumer or a lab's
 Secret without a person and without its value reaching a session. The
 read is one Secret GET, in beekeeper's process, through kind for a lab's
@@ -354,13 +355,21 @@ dst must not exist.
 copy <ref> <file#path> puts one value into a SOPS path, creating the file
 or the key when absent, the file's other values kept. The source may be a
 key of a Kubernetes Secret, k8s://<context>/<namespace>/<name>/<key>, and
-with #<path> one value of the YAML or JSON document that key holds: a
-credential its owner placed in a cluster Secret (an identity provider's
-client secret for a connector, for one) reaches the SOPS path without a
-person and without its value reaching a session, in one Secret GET. A
-Secret, key or path absent fails in one line naming it:
+with #<path> one value inside what that key holds: a dotted key of its
+YAML or JSON mapping, a line of its dotenv lines (KEY=value, an export
+in front and matching quotes stripped, # comments ignored), or, one level
+down, a value of the mapping or dotenv lines a block scalar holds
+(#config.yaml.oidc.clientID; a key holding dots takes as many segments as
+it needs): a credential its owner placed in a cluster Secret (an identity
+provider's client secret for a connector, for one) reaches the SOPS path
+without a person and without its value reaching a session, in one Secret
+GET. A Secret or key absent fails in one line naming it; a path that
+reaches nothing names the shape of what the key holds (the format, its
+top-level or dotenv keys, lines and bytes), never its value:
 
   beekeeper secret copy k8s://<context>/<namespace>/<name>/<key>#clientSecret \
+    values.sops.yaml#connectors.0.config.clientSecret
+  beekeeper secret copy k8s://<context>/<namespace>/<name>/<key>#CLIENT_SECRET \
     values.sops.yaml#connectors.0.config.clientSecret
 
 copy <ref>=<path> [<ref>=<path>…] <new-file> writes several values, each
