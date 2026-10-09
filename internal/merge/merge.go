@@ -181,7 +181,7 @@ func ParsePromoteDocument(raw []byte) (Outcome, bool) {
 		return Outcome{}, false
 	}
 	r := doc.Repositories[0]
-	o := Outcome{Merged: r.State == "dispatched", NoRelease: r.State == "nothing_to_promote"}
+	o := Outcome{Merged: r.State == "dispatched", NoRelease: r.State == "nothing_to_promote", State: r.State}
 	if o.Merged {
 		o.Release, _, _ = strings.Cut(r.Candidate, "-")
 	}
@@ -237,6 +237,9 @@ type Outcome struct {
 	// Unconfirmed is true when GitHub, not the document, reports the merge:
 	// devctl ended before it confirmed the release.
 	Unconfirmed bool
+	// State is a promotion's state in devctl release promote's document
+	// (dispatched, nothing_to_promote, not_built, …), empty for a merge.
+	State string
 }
 
 // Judged is the outcome of a run that ended without its document or by a

@@ -494,7 +494,7 @@ func TestParsePromoteDocument(t *testing.T) {
 	if o, ok := ParsePromoteDocument(doc("nothing_to_promote")); !ok || o.Merged || !o.NoRelease {
 		t.Errorf("nothing to promote: %+v %v", o, ok)
 	}
-	if o, ok := ParsePromoteDocument(doc("not_built")); !ok || o.Merged || o.NoRelease || o.Release != "" {
+	if o, ok := ParsePromoteDocument(doc("not_built")); !ok || o.Merged || o.NoRelease || o.Release != "" || o.State != "not_built" {
 		t.Errorf("not built: %+v %v", o, ok)
 	}
 	if _, ok := ParsePromoteDocument([]byte("not json")); ok {
