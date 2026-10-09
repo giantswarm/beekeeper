@@ -12,21 +12,30 @@ import (
 
 // fakePagerDuty answers muster's x_pd_* tools as PagerDuty does: open is
 // the list_incidents answer, installations the installation label of each
-// incident's first alert; down fails every call.
+// incident's first alert; down fails every call, flaps the next flaps
+// list_incidents calls with muster's auth_required.
 type fakePagerDuty struct {
 	open          []string
 	installations map[string]string
 	down          error
+	flaps         int
 	calls         []string
 }
+
+// errAuthRequired is muster's answer while it reconnects the PagerDuty server.
+var errAuthRequired = errors.New("muster context central, x_pd_list_incidents: x_pd_list_incidents: auth_required: authentication required")
 
 func (f *fakePagerDuty) call(_ context.Context, tool string, args map[string]any) (string, error) {
 	f.calls = append(f.calls, tool)
 	if f.down != nil {
 		return "", f.down
 	}
+	if tool == listIncidentsTool && f.flaps > 0 {
+		f.flaps--
+		return "", errAuthRequired
+	}
 	switch tool {
-	case "list_incidents":
+	case listIncidentsTool:
 		return `{"response": [` + strings.Join(f.open, ",") + `], "response_summary": "ListResponseModel<Incident>"}`, nil
 	case "list_alerts_from_incident":
 		id, _ := args["incident_id"].(string)
@@ -48,8 +57,17 @@ var (
 // instZ is the installation of the tests' incidents.
 const instZ = "zeta"
 
+// quickRetry shortens the pause before another attempt for the test.
+func quickRetry(t *testing.T) {
+	t.Helper()
+	pause := retryPause
+	retryPause = 100 * time.Millisecond
+	t.Cleanup(func() { retryPause = pause })
+}
+
 func readPD(t *testing.T, f *fakePagerDuty, prev *PagerDuty, at time.Time) ([]string, *PagerDuty) {
 	t.Helper()
+	quickRetry(t)
 	var known map[string]Incident
 	if prev != nil {
 		known = prev.Incidents
@@ -114,7 +132,7 @@ func TestPagerDutyUnreachable(t *testing.T) {
 
 	f.down = errors.New("muster context gazelle, x_pd_list_incidents: not signed in")
 	lines, base := readPD(t, f, base, now.Add(5*time.Minute))
-	want := []string{"PAGERDUTY unreachable, incidents unseen for 5m (since 18:50Z): muster context gazelle, x_pd_list_incidents: not signed in"}
+	want := []string{"PAGERDUTY unreachable, incidents unseen for 5m (since 18:50Z): muster context gazelle, x_pd_list_incidents: not signed in (2 attempts)"}
 	if !slices.Equal(lines, want) {
 		t.Fatalf("unreachable: %q", lines)
 	}
@@ -137,12 +155,60 @@ func TestPagerDutyUnreachable(t *testing.T) {
 
 	f.down = errors.New("no muster")
 	lines, _ = readPD(t, f, nil, now)
-	if !slices.Equal(lines, []string{"PAGERDUTY unreachable, incidents never read: no muster"}) {
+	if !slices.Equal(lines, []string{"PAGERDUTY unreachable, incidents never read: no muster (2 attempts)"}) {
 		t.Errorf("never read: %q", lines)
 	}
 	snap := rules.PagerDutySnapshot(PagerDutyReader{Call: f.call}.Read(context.Background(), nil), now)
-	if !slices.Equal(snap, []string{"pagerduty unreachable: no muster"}) {
+	if !slices.Equal(snap, []string{"pagerduty unreachable: no muster (2 attempts)"}) {
 		t.Errorf("snapshot: %q", snap)
+	}
+}
+
+// A single auth_required is read through by the retry: no line, the
+// incidents as they are.
+func TestPagerDutyAuthRequiredOnce(t *testing.T) {
+	f := &fakePagerDuty{open: []string{kagentPage}, installations: map[string]string{"Q1": instZ}}
+	_, base := readPD(t, f, nil, now)
+
+	f.flaps, f.calls = 1, nil
+	lines, base := readPD(t, f, base, now.Add(time.Minute))
+	if len(lines) != 0 || !base.Reachable || !base.Seen.Equal(now.Add(time.Minute)) {
+		t.Errorf("one auth_required: lines %q, baseline %+v", lines, base)
+	}
+	if !slices.Equal(f.calls, []string{listIncidentsTool, listIncidentsTool}) {
+		t.Errorf("calls %v: the listing is tried once more", f.calls)
+	}
+}
+
+// auth_required for a reading or two, then a good one, is never said
+// unseen; one that persists past PagerDutyGrace is.
+func TestPagerDutyAuthRequiredWithinGrace(t *testing.T) {
+	f := &fakePagerDuty{open: []string{kagentPage}, installations: map[string]string{"Q1": instZ}}
+	_, base := readPD(t, f, nil, now)
+
+	for _, at := range []time.Duration{time.Minute, 2 * time.Minute} {
+		f.flaps = 2
+		var lines []string
+		lines, base = readPD(t, f, base, now.Add(at))
+		if len(lines) != 0 {
+			t.Fatalf("auth_required %s after the last reading said: %q", at, lines)
+		}
+	}
+	lines, base := readPD(t, f, base, now.Add(3*time.Minute-time.Second))
+	if len(lines) != 0 || !base.Seen.Equal(now.Add(3*time.Minute-time.Second)) {
+		t.Errorf("read again within the grace: lines %q, baseline %+v", lines, base)
+	}
+
+	f.flaps = 1 << 30
+	for _, at := range []time.Duration{4 * time.Minute, 5 * time.Minute} {
+		if lines, base = readPD(t, f, base, now.Add(at)); len(lines) != 0 {
+			t.Fatalf("auth_required within %s of the last reading said: %q", PagerDutyGrace, lines)
+		}
+	}
+	lines, _ = readPD(t, f, base, now.Add(6*time.Minute))
+	want := []string{"PAGERDUTY unreachable, incidents unseen for 3m (since 18:52Z): " + errAuthRequired.Error() + " (2 attempts)"}
+	if !slices.Equal(lines, want) {
+		t.Errorf("persistent auth_required:\n%q\nwant\n%q", lines, want)
 	}
 }
 

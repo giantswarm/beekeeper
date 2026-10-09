@@ -70,9 +70,7 @@ func newFake(t *testing.T) *fake {
 	t.Setenv("FAKE_FAIL_ONCE", "")
 	f.failed = filepath.Join(dir, "failed")
 	t.Setenv("FAKE_FAILED", f.failed)
-	pause := retryPause
-	retryPause = 100 * time.Millisecond
-	t.Cleanup(func() { retryPause = pause })
+	quickRetry(t)
 	return f
 }
 
