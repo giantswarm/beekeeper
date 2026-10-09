@@ -348,11 +348,12 @@ func (a *app) probeBudget(ctx context.Context) (github.Budget, error) {
 	return b, nil
 }
 
-// findWaits lists the long-running commands sessions block on.
+// findWaits lists the long-running commands sessions block on; a watch's
+// own (its kept port-forwards) are none.
 func findWaits(t *proc.Table, sessions []*claude.Session, now time.Time) []wait {
 	var out []wait
 	for _, p := range t.ByPID {
-		if !isWait(p) {
+		if !isWait(p) || slices.ContainsFunc(t.Ancestors(p.PID), isWatch) {
 			continue
 		}
 		w := wait{PID: p.PID, Args: p.Cmdline(), Elapsed: p.Elapsed(now).Round(time.Second)}

@@ -23,6 +23,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/update"
+	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
 // A scratch repository and the devctl a release window opened on.
@@ -199,6 +200,20 @@ func TestIsWait(t *testing.T) {
 		if isWait(&proc.Process{Comm: args[0], Args: args}) {
 			t.Errorf("%v is no wait", args)
 		}
+	}
+}
+
+// A watch's kept port-forwards are the watch's, no session's wait.
+func TestFindWaitsLeavesTheWatchsForwardsOut(t *testing.T) {
+	tab := named(table(
+		&proc.Process{PID: 10, Args: []string{claudeComm}},
+		&proc.Process{PID: 11, PPID: 10, Args: strings.Fields(project.Name + " watch")},
+		&proc.Process{PID: 12, PPID: 11, Args: strings.Fields("kubectl port-forward svc/x :9093")},
+		&proc.Process{PID: 13, PPID: 10, Args: strings.Fields("kubectl port-forward svc/y :9093")},
+	))
+	got := findWaits(tab, nil, time.Now())
+	if len(got) != 1 || got[0].PID != 13 {
+		t.Errorf("waits = %+v, want the session's forward only", got)
 	}
 }
 

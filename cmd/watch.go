@@ -202,7 +202,8 @@ SLOWED line when that starts and one ENDED line when it ends.
 A fork storm is PROCESS STORM once two samples in a row read more forks a
 second (/proc/stat) than watch.forkRateMax (50) over the machine's usual
 rate (the last 10 minutes' average outside a storm), with the commands and
-sessions of the processes started since the last sample; more than
+sessions of the processes started since the last sample (the watch's own,
+its alert reads among them, as "beekeeper watch"); more than
 watch.stackMax (3) copies of one command line from the same place in the
 process tree, each running over a minute, are one STACKED line with the
 count, the oldest's age, its parent and its session. More than
@@ -336,6 +337,8 @@ type watcher struct {
 	disk diskWatch
 	// readForks reads the fork counter; nil is plat.Machine.Forks.
 	readForks func() (uint64, error)
+	// self is the watch's PID in the process table; 0 is its own.
+	self int
 	// owners names the session of each CLI PID the last poll found: the
 	// machine sample attributes a storm or a stack with it.
 	owners atomic.Pointer[map[int]string]
@@ -578,6 +581,11 @@ func inFlight(ctx context.Context, wait time.Duration, running *atomic.Bool, fn 
 func (w *watcher) watchAlerts(ctx context.Context) {
 	store := alerts.NewStore(w.cfg.StateDir)
 	defer func() { _ = store.Release() }()
+	// One port-forward per installation, kept from tick to tick: a tick
+	// is then HTTP requests, not kubectl and tsh processes.
+	reader := w.alertReader()
+	reader.Keep = true
+	defer reader.Close()
 	other := 0
 	w.loop(ctx, w.cfg.Alerts.Every.Duration, true, func(ctx context.Context) {
 		owned, owner, err := store.Own()
@@ -585,6 +593,7 @@ func (w *watcher) watchAlerts(ctx context.Context) {
 		case err != nil:
 			w.emit("alerts", "ALERTS baseline unusable: %v", err)
 		case !owned:
+			reader.Close()
 			w.clear("alerts")
 			if owner.PID != other {
 				other = owner.PID
@@ -596,7 +605,7 @@ func (w *watcher) watchAlerts(ctx context.Context) {
 				other = 0
 				w.emitNow("alerts", "ALERTS taken over by this watch")
 			}
-			for _, l := range w.alertCycle(ctx, store) {
+			for _, l := range w.alertCycle(ctx, store, reader) {
 				w.emitNow("alerts", "%s", l)
 			}
 		}
@@ -1027,6 +1036,10 @@ func swapoffRuns(t *proc.Table) bool {
 	return false
 }
 
+// watchOwner names the watch's own processes in the PROCESS STORM, LOAD and
+// STACKED lines.
+const watchOwner = "beekeeper watch"
+
 // sampleProcs says PROCESS STORM once two samples in a row read a fork rate
 // more than watch.forkRateMax over the machine's usual one, LOAD while more
 // than watch.toolProcsMax processes of watch.tools run, and a STACKED line
@@ -1035,10 +1048,13 @@ func swapoffRuns(t *proc.Table) bool {
 // prev is the process table the last sample read, span ago.
 func (w *watcher) sampleProcs(now time.Time, span time.Duration, prev, t *proc.Table) {
 	th := w.cfg.Watch
-	var owners map[int]string
+	owners := map[int]string{}
 	if o := w.owners.Load(); o != nil {
-		owners = *o
+		maps.Copy(owners, *o)
 	}
+	// The watch's own processes (its alert reads among them) are the
+	// watch's, not the session's that started it.
+	owners[cmp.Or(w.self, os.Getpid())] = watchOwner
 	read := w.readForks
 	if read == nil {
 		read = plat.Machine.Forks
