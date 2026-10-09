@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -54,6 +55,11 @@ type Ops struct {
 	// the person's own credential store for the SOPS files sops' own
 	// sources hold none for.
 	Ages []AgeIdentity
+	// AgeVaults are the vaults besides Vault that age identities are read
+	// from: an op:// entry of Ages may name one, and the item of a SOPS
+	// file's installation ([AgeInstallationItem]) is looked up in Vault and
+	// each of them.
+	AgeVaults []string
 	// Store is the person's own credential store a store:// age identity
 	// is read from.
 	Store Store
@@ -152,6 +158,16 @@ func (r Ref) vault() string {
 // checkVault refuses an op:// reference outside the shared vault, with
 // [ErrVault] when the vault is not configured.
 func (o *Ops) checkVault(r Ref) error {
+	err := o.checkVaultIn(r, o.Vault)
+	if err != nil && !errors.Is(err, ErrVault) {
+		return fmt.Errorf("%s: beekeeper reads only the shared vault %q", r.Op, o.Vault)
+	}
+	return err
+}
+
+// checkVaultIn refuses an op:// reference outside vaults, with [ErrVault]
+// when the shared vault is not configured.
+func (o *Ops) checkVaultIn(r Ref, vaults ...string) error {
 	switch {
 	case r.Op == "":
 		return nil
@@ -159,8 +175,8 @@ func (o *Ops) checkVault(r Ref) error {
 		return fmt.Errorf("%w: %s: no shared vault is configured (secret.vault): beekeeper reads no op:// reference", ErrVault, r.Op)
 	case o.Token == "" && !o.Session:
 		return fmt.Errorf("%w: %s: no service account token (secret.tokenFile): beekeeper reads the shared vault only through its own service account", ErrVault, r.Op)
-	case r.vault() != o.Vault:
-		return fmt.Errorf("%s: beekeeper reads only the shared vault %q", r.Op, o.Vault)
+	case !slices.Contains(vaults, r.vault()):
+		return fmt.Errorf("%s: beekeeper reads only the vaults %q", r.Op, vaults)
 	}
 	return nil
 }
@@ -172,16 +188,11 @@ func (o *Ops) values(ctx context.Context, r Ref) (map[string]string, error) {
 		return nil, err
 	}
 	if r.Op != "" {
-		ctx, cancel := context.WithTimeout(ctx, opTimeout)
-		defer cancel()
-		out, err := o.op(ctx, nil, "read", "--no-newline", r.Op)
-		if ctx.Err() != nil {
-			return nil, fmt.Errorf("%w: %s: op answered nothing in %s", ErrVault, r.Op, opTimeout)
-		}
+		v, err := o.readOp(ctx, r.Op)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %s: %w", ErrVault, r.Op, err)
+			return nil, err
 		}
-		return map[string]string{r.Op: string(out)}, nil
+		return map[string]string{r.Op: v}, nil
 	}
 	doc, err := o.decrypt(ctx, r.File)
 	if err != nil {
@@ -195,6 +206,20 @@ func (o *Ops) values(ctx context.Context, r Ref) (map[string]string, error) {
 		return nil, fmt.Errorf("%s: no value at %s", r.File, r.Path)
 	}
 	return map[string]string{r.String(): v}, nil
+}
+
+// readOp reads the op:// field ref, whose vault the caller checked.
+func (o *Ops) readOp(ctx context.Context, ref string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, opTimeout)
+	defer cancel()
+	out, err := o.op(ctx, nil, "read", "--no-newline", ref)
+	if ctx.Err() != nil {
+		return "", fmt.Errorf("%w: %s: op answered nothing in %s", ErrVault, ref, opTimeout)
+	}
+	if err != nil {
+		return "", fmt.Errorf("%w: %s: %w", ErrVault, ref, err)
+	}
+	return string(out), nil
 }
 
 // value reads the one value a single reference names.

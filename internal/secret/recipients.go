@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 )
 
@@ -93,10 +92,25 @@ func (o *Ops) Recipients(ctx context.Context, path string) ([]Recipient, error) 
 		}
 		rules = append(rules, named{rule: path, recipients: recipients, file: abs})
 	}
-	var titles []string
-	listed := false
+	// each vault's item listing, read once when a recipient needs it
+	listings := map[string][]vaultItem{}
+	listing := func(vault string) ([]vaultItem, error) {
+		if items, ok := listings[vault]; ok {
+			return items, nil
+		}
+		items, err := o.vaultItems(ctx, vault)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrVault, err)
+		}
+		listings[vault] = items
+		return items, nil
+	}
 	var out []Recipient
 	for _, n := range rules {
+		inst := installationIn(n.rule)
+		if inst == "" {
+			inst = o.installation(abs)
+		}
 		for _, r := range n.recipients {
 			rec := Recipient{Rule: n.rule, Recipient: r}
 			switch id := o.configured([]string{r}, n.file); {
@@ -107,22 +121,39 @@ func (o *Ops) Recipients(ctx context.Context, path string) ([]Recipient, error) 
 			case o.Vault == "":
 				rec.Identity = None + ": no entry of secret.ageIdentities names it, and no shared vault (secret.vault) holds an item per recipient"
 			default:
-				if !listed {
-					if titles, err = o.itemTitles(ctx); err != nil {
-						return nil, err
-					}
-					listed = true
-				}
-				if slices.Contains(titles, AgeItemTitle(r)) {
-					rec.Identity = fmt.Sprintf("the vault item %q", AgeItemTitle(r))
-				} else {
-					rec.Identity = fmt.Sprintf("%s: the vault %s holds no item %q, whose password field is the AGE-SECRET-KEY-1… identity", None, o.Vault, AgeItemTitle(r))
+				if rec.Identity, err = o.itemIdentity(r, inst, listing); err != nil {
+					return nil, err
 				}
 			}
 			out = append(out, rec)
 		}
 	}
 	return out, nil
+}
+
+// itemIdentity says which vault item holds recipient's identity: the shared
+// vault's item per recipient, else the item of the installation inst ("" for
+// none) in the first vault that holds it, else none, naming the items the
+// vaults lack.
+func (o *Ops) itemIdentity(recipient, inst string, listing func(vault string) ([]vaultItem, error)) (string, error) {
+	items, err := listing(o.Vault)
+	if err != nil {
+		return "", err
+	}
+	if itemID(items, AgeItemTitle(recipient)) != "" {
+		return fmt.Sprintf("the vault item %q", AgeItemTitle(recipient)), nil
+	}
+	if inst != "" {
+		for _, vault := range o.ageVaults() {
+			if items, err = listing(vault); err != nil {
+				return "", err
+			}
+			if itemID(items, AgeInstallationItem(inst)) != "" {
+				return fmt.Sprintf("the vault item %q of %s", AgeInstallationItem(inst), vault), nil
+			}
+		}
+	}
+	return None + ": " + o.lacking(fmt.Sprintf("%q", AgeItemTitle(recipient)), inst), nil
 }
 
 // localAgeIdentityFor reports whether one of sops' own sources holds an

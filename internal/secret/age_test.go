@@ -491,3 +491,184 @@ func TestNoAgeCheckBeyondX25519(t *testing.T) {
 		})
 	}
 }
+
+const (
+	// ageVaultB is an age vault beside the shared one.
+	ageVaultB = "Common"
+	// noteField is a Secure Note's notes field.
+	noteField     = "notesPlain"
+	unrelatedItem = "unrelated"
+	titleKey      = "title"
+	opRead        = "read"
+	cedarItem     = "cedar.agekey"
+	commonRef     = "op://" + ageVaultB + "/" + cedarItem + "/" + noteField
+)
+
+// vaultsTools is a fake sops and several vaults: op item list answers a
+// vault's titles, op item get an item's fields, op document get a document
+// item's file, op read a field; every call is recorded.
+type vaultsTools struct {
+	// vaults map a vault to its items' titles, each to its fields (label to
+	// value); the field "" is a document's file.
+	vaults map[string]map[string]map[string]string
+	calls  []string
+	env    []string
+}
+
+func (f *vaultsTools) run(_ context.Context, _ string, env []string, _ io.Reader, name string, args ...string) ([]byte, error) {
+	f.calls = append(f.calls, name+" "+strings.Join(args, " "))
+	if name != "op" {
+		f.env = env
+		return []byte(ageDoc), nil
+	}
+	item := func(id string) (map[string]string, bool) {
+		vault, title, _ := strings.Cut(strings.TrimPrefix(id, "id-"), "/")
+		it, ok := f.vaults[vault][title]
+		return it, ok
+	}
+	switch strings.Join(args[:2], " ") {
+	case "item list":
+		out := []map[string]string{}
+		for title := range f.vaults[args[3]] {
+			out = append(out, map[string]string{"id": "id-" + args[3] + "/" + title, titleKey: title})
+		}
+		return json.Marshal(out)
+	case "item get":
+		it, ok := item(args[2])
+		if !ok {
+			return nil, errors.New("op: exit 1 (isn't an item)")
+		}
+		doc := map[string]any{"category": "SECURE_NOTE"}
+		var fields []map[string]string
+		for label, v := range it {
+			if label == "" {
+				doc["category"] = "DOCUMENT"
+				continue
+			}
+			fields = append(fields, map[string]string{"label": label, "value": v})
+		}
+		doc["fields"] = fields
+		return json.Marshal(doc)
+	case "document get":
+		it, _ := item(args[2])
+		return []byte(it[""]), nil
+	}
+	if args[0] == opRead {
+		parts := strings.SplitN(strings.TrimPrefix(args[len(args)-1], "op://"), "/", 3)
+		if v, ok := f.vaults[parts[0]][parts[1]][parts[2]]; ok {
+			return []byte(v), nil
+		}
+		return nil, errors.New("op: exit 1 (isn't an item)")
+	}
+	return nil, errors.New("op: exit 2 (unknown)")
+}
+
+func TestAgeIdentityFromTheInstallationItem(t *testing.T) {
+	id := isolateAge(t)
+	other, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := id.Recipient().String()
+	keysFile := "# created: 2026-01-01\n# public key: " + r + "\n" + id.String() + "\n"
+	dir := t.TempDir()
+	file := sopsFileAt(t, filepath.Join(dir, "installations", "cedar", "apps", "dex-app", "secret-values.yaml.patch"), "", r)
+	for name, fields := range map[string]map[string]string{
+		"a note's field":         {noteField: keysFile, "username": "x"},
+		"a document":             {"": keysFile},
+		"two identities, one is": {noteField: other.String() + "\n", ageItemField: id.String()},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := &vaultsTools{vaults: map[string]map[string]map[string]string{
+				ageVault:  {unrelatedItem: {ageItemField: "x"}},
+				ageVaultB: {cedarItem: fields, "elver.agekey": {noteField: other.String()}},
+			}}
+			o := &Ops{Run: f.run, Vault: ageVault, Token: "t", AgeVaults: []string{ageVaultB}}
+			if !o.AgeNeedsVault("", []string{file}) {
+				t.Error("AgeNeedsVault = false")
+			}
+			vs, err := o.values(context.Background(), Ref{File: file})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if vs["stringData.password"] != "x" {
+				t.Errorf("values = %v", vs)
+			}
+			if len(f.env) != 1 || f.env[0] != envAgeKey+"="+id.String() {
+				t.Errorf("sops did not get the identity alone (%d entries)", len(f.env))
+			}
+			for _, c := range f.calls {
+				if strings.Contains(c, "elver") {
+					t.Errorf("read another installation's item: %q", c)
+				}
+			}
+
+			rs, err := o.Recipients(context.Background(), file)
+			if err != nil || len(rs) != 1 || rs[0].Identity != `the vault item "cedar.agekey" of Common` {
+				t.Errorf("recipients = %+v, %v", rs, err)
+			}
+			raw, _ := json.Marshal(rs)
+			if strings.Contains(string(raw), id.String()) {
+				t.Fatal("the listing carries an identity")
+			}
+		})
+	}
+}
+
+func TestNoInstallationItemFailsNamingIt(t *testing.T) {
+	id := isolateAge(t)
+	r := id.Recipient().String()
+	file := sopsFileAt(t, filepath.Join(t.TempDir(), "installations", "cedar", "secret.yaml"), "", r)
+	other, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &vaultsTools{vaults: map[string]map[string]map[string]string{ageVault: {}, ageVaultB: {"elver.agekey": {noteField: other.String()}}}}
+	o := &Ops{Run: f.run, Vault: ageVault, Token: "t", AgeVaults: []string{ageVaultB}}
+	_, err = o.values(context.Background(), Ref{File: file})
+	if !errors.Is(err, ErrNoAgeIdentity) || strings.Contains(err.Error(), "\n") {
+		t.Fatalf("err = %v, want one line with ErrNoAgeIdentity", err)
+	}
+	for _, w := range []string{"cedar's recipient " + r, `"` + AgeItemTitle(r) + `"`, `no vault of Shared, Common an item "cedar.agekey"`} {
+		if !strings.Contains(err.Error(), w) {
+			t.Errorf("the error lacks %q: %v", w, err)
+		}
+	}
+	for _, c := range f.calls {
+		if !strings.HasPrefix(c, "op item list") {
+			t.Errorf("calls = %q: want the vaults' item listings alone", f.calls)
+		}
+	}
+	rs, err := o.Recipients(context.Background(), file)
+	if err != nil || len(rs) != 1 || !rs[0].Missing() || !strings.Contains(rs[0].Identity, `"cedar.agekey"`) {
+		t.Errorf("recipients = %+v, %v", rs, err)
+	}
+
+	// the installation's item holding another recipient's identity is refused
+	f.vaults[ageVaultB][cedarItem] = map[string]string{noteField: other.String()}
+	if _, err := o.values(context.Background(), Ref{File: file}); err == nil || !strings.Contains(err.Error(), "holds the identity of "+other.Recipient().String()) {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestAgeIdentityEntryInAnAgeVault(t *testing.T) {
+	id := isolateAge(t)
+	r := id.Recipient().String()
+	file := sopsFile(t, "", r)
+	f := &vaultsTools{vaults: map[string]map[string]map[string]string{ageVaultB: {cedarItem: {noteField: id.String()}}}}
+	o := &Ops{Run: f.run, Vault: ageVault, Token: "t", Ages: []AgeIdentity{{Recipient: r, Ref: commonRef}}}
+	if _, err := o.values(context.Background(), Ref{File: file}); err == nil || !strings.Contains(err.Error(), "secret.ageVaults") {
+		t.Errorf("an entry outside the age vaults: err = %v", err)
+	}
+	o.AgeVaults = []string{ageVaultB}
+	if _, err := o.values(context.Background(), Ref{File: file}); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.env) != 1 || f.env[0] != envAgeKey+"="+id.String() {
+		t.Errorf("sops did not get the identity alone (%d entries)", len(f.env))
+	}
+	// an age vault is no shared vault for any other reference
+	if _, err := o.values(context.Background(), Ref{Op: commonRef}); err == nil {
+		t.Error("an op:// reference into an age vault reads")
+	}
+}
