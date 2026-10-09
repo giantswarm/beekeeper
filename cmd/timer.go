@@ -38,7 +38,8 @@ of each condition found.`,
 A plain timer is one watch line when its time comes and stays open until
 timer done. With --when or --probe it waits on a condition from its time:
 the watch checks it every --every (5m) and fires the timer once it holds,
-within one tick. --until ends the wait: past it the timer fires as timed
+within one tick; a condition that has not held for a day is one watch
+line (TIMER STUCK) and the timer keeps waiting. --until ends the wait: past it the timer fires as timed
 out, or with --expire closes unfired with one line. --wake names the agent
 the firing wakes with the timer's text (as agents wake does); --run runs a
 shell command instead, its output in timers/<id>.log of the state
@@ -52,10 +53,15 @@ by every timer on it; a GitHub one waits while the budget is under the
 floor:
   pr-merged owner/repo#n
   issue-closed owner/repo#n
-  helmrelease-ready context/namespace/name
+  helmrelease-ready context/namespace/name [version]   (Ready and, given a
+                                         version, running it: the newest
+                                         release of status.history)
   controlplane-ready context/namespace/name   (every replica ready and updated)
---probe takes any shell command that exits 0 once the condition holds.`,
+--probe takes any shell command that exits 0 once the condition holds. A
+rollout is helmrelease-ready with its version: current Flux leaves a
+HelmRelease's applied revision empty, so a probe of it never holds.`,
 		Example: `  beekeeper timer add 5m "PR 243 merged: rebase and merge yours" --when "pr-merged giantswarm/beekeeper#243" --wake "BK 229" --until 2h
+  beekeeper timer add 10m "backstage 2.67.0 rolled: prove it" --when "helmrelease-ready admin@mc/flux-giantswarm/backstage 2.67.0" --wake "BK 737" --until 3h
   beekeeper timer add 23:00 "swap flat again" --probe "test $(awk '/SwapFree/{print $2}' /proc/meminfo) -gt 8000000" --until 06:00 --expire
   beekeeper timer add 11:01 "budget reset" --run "beekeeper agents wake 'BK 228' 'the budget is back'"
   beekeeper timer add 08:15 "morning overview" --run "beekeeper agents start Overview ~/brief.md" --repeat weekdays`,
@@ -91,7 +97,7 @@ floor:
 		},
 	}
 	f := add.Flags()
-	f.StringVar(&spec.when, "when", "", "a condition to wait on from the time: pr-merged, issue-closed, helmrelease-ready, controlplane-ready and its reference")
+	f.StringVar(&spec.when, "when", "", "a condition to wait on from the time: pr-merged, issue-closed, helmrelease-ready (with a version: rolled), controlplane-ready and its reference")
 	f.StringVar(&spec.probe, "probe", "", "a shell command to wait on from the time: it exits 0 once the condition holds")
 	f.DurationVar(&spec.every, "every", 0, "how often the condition is checked (default 5m)")
 	f.StringVar(&spec.until, "until", "", "the end of the wait, a time or a duration from now: the timer fires as timed out")
@@ -180,6 +186,14 @@ func (a *app) printTimers(timers []state.Timer, verbose bool) {
 
 // lastCheck says what t's last check found.
 func lastCheck(now time.Time, t state.Timer) string {
+	if t.Stuck {
+		return fmt.Sprintf("not held since %s; %s", clock(now, t.Since), lastCheckOnly(now, t))
+	}
+	return lastCheckOnly(now, t)
+}
+
+// lastCheckOnly says what t's last check found, without its history.
+func lastCheckOnly(now time.Time, t state.Timer) string {
 	switch {
 	case t.Checked.IsZero():
 		return "not checked yet"

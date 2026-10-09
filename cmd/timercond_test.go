@@ -27,13 +27,14 @@ func TestTimerConditionsProbeTheirReference(t *testing.T) {
 		"issue-closed o/r#8": "gh api repos/o/r/issues/8 --jq .state",
 		"helmrelease-ready teleport.example.io-mc/flux-giantswarm/backstage": "kubectl --context teleport.example.io-mc -n flux-giantswarm get helmreleases.helm.toolkit.fluxcd.io backstage -o json",
 		"controlplane-ready admin@mc/org-x/wc1":                              "kubectl --context admin@mc -n org-x get kubeadmcontrolplanes.controlplane.cluster.x-k8s.io wc1 -o json",
+		"helmrelease-ready admin@mc/flux-giantswarm/backstage v2.67.0":       "kubectl --context admin@mc -n flux-giantswarm get helmreleases.helm.toolkit.fluxcd.io backstage -o json",
 	} {
 		c, err := conditionCheck(when)
 		if err != nil || c.cmd != want || c.judge == nil {
 			t.Errorf("%s: %q, %v", when, c.cmd, err)
 		}
 	}
-	for _, when := range []string{"merged o/r#7", "pr-merged o/r", "pr-merged o/r#7;rm", "helmrelease-ready ctx/ns", "helmrelease-ready c/n/$(id)"} {
+	for _, when := range []string{"merged o/r#7", "pr-merged o/r", "pr-merged o/r#7;rm", "helmrelease-ready ctx/ns", "helmrelease-ready c/n/$(id)", "helmrelease-ready c/n/x 1.0;rm", "controlplane-ready c/n/x 1.0"} {
 		if _, err := conditionCheck(when); err == nil {
 			t.Errorf("%q passed", when)
 		}
@@ -239,5 +240,36 @@ func TestTimerAddRefusesARepeatThatCannotFire(t *testing.T) {
 	}
 	if s := timerWhen(relayNow, tm); s != "at Sep 28 02:00, runs `true`, repeats weekdays" {
 		t.Errorf("when %q", s)
+	}
+}
+
+// A condition that has not held for a day is one TIMER STUCK line, the
+// timer still waiting: a probe of a field Flux leaves empty never exits 0.
+func TestTimerNotHoldingForADayIsOneWatchLine(t *testing.T) {
+	st := &state.State{Timers: []state.Timer{{ID: 7, Due: relayNow.Add(-time.Hour), Probe: probeFails, What: "check the rollout"}}}
+	settle := func(at time.Time) []string {
+		lines, _, fires, _ := settleTimers(st, map[int]checkResult{7: {reason: "exit status 1"}}, at)
+		if len(fires) != 0 || len(st.Timers) != 1 {
+			t.Fatalf("fires %+v, open %+v", fires, st.Timers)
+		}
+		return lines
+	}
+	if lines := settle(relayNow); len(lines) != 0 || !st.Timers[0].Since.Equal(relayNow.UTC()) {
+		t.Fatalf("first check: %q, %+v", lines, st.Timers[0])
+	}
+	if lines := settle(relayNow.Add(timerStuckAfter - time.Minute)); len(lines) != 0 {
+		t.Fatalf("under a day: %q", lines)
+	}
+	day := relayNow.Add(timerStuckAfter)
+	lines, evs, _, _ := settleTimers(st, map[int]checkResult{7: {reason: "exit status 1"}}, day)
+	want := "TIMER STUCK: #7, probe `false` has not held since Sep 25 02:00 (exit status 1); it keeps waiting: check the rollout"
+	if len(lines) != 1 || lines[0] != want || len(evs) != 1 || evs[0].Verb != "timer.stuck" || !st.Timers[0].Stuck {
+		t.Fatalf("after a day: %q, %+v", lines, evs)
+	}
+	if lines := settle(day.Add(timerEvery)); len(lines) != 0 {
+		t.Fatalf("said twice: %q", lines)
+	}
+	if s := lastCheck(day, st.Timers[0]); !strings.HasPrefix(s, "not held since Sep 25 02:00; checked") {
+		t.Errorf("list -v %q", s)
 	}
 }

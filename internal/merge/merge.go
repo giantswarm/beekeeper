@@ -585,7 +585,8 @@ func ParseHelmReleases(raw []byte) ([]HelmRelease, error) {
 					ChartName    string `json:"chartName"`
 					ChartVersion string `json:"chartVersion"`
 				} `json:"history"`
-				Conditions []struct {
+				LastAttemptedRevision string `json:"lastAttemptedRevision"`
+				Conditions            []struct {
 					Type    string `json:"type"`
 					Status  string `json:"status"`
 					Message string `json:"message"`
@@ -607,13 +608,18 @@ func ParseHelmReleases(raw []byte) ([]HelmRelease, error) {
 			}
 			hr.Source = ns + "/" + ref.Name
 		}
-		if len(it.Status.History) > 0 {
-			hr.Chart, hr.Version = it.Status.History[0].ChartName, bare(it.Status.History[0].ChartVersion)
-		}
 		for _, c := range it.Status.Conditions {
 			if c.Type == "Ready" {
 				hr.Ready, hr.Message = c.Status == "True", c.Message
 			}
+		}
+		// The rolled version is the newest release of the history; without
+		// one, the attempted revision once it is Ready.
+		switch {
+		case len(it.Status.History) > 0:
+			hr.Chart, hr.Version = it.Status.History[0].ChartName, Bare(it.Status.History[0].ChartVersion)
+		case hr.Ready:
+			hr.Version = Bare(it.Status.LastAttemptedRevision)
 		}
 		out = append(out, hr)
 	}
@@ -651,7 +657,7 @@ func AttachRanges(hrs []HelmRelease, raw []byte) error {
 		}
 		r := ref.SemVer
 		if r == "" && ref.Tag != "" {
-			r = "=" + bare(ref.Tag)
+			r = "=" + Bare(ref.Tag)
 		}
 		ranges[it.Metadata.Namespace+"/"+it.Metadata.Name] = r
 	}
@@ -669,7 +675,7 @@ func AttachRanges(hrs []HelmRelease, raw []byte) error {
 // unknown range, counts as followed: the lane waits as before.
 func follows(rng, release string) bool {
 	c, errC := semver.NewConstraint(rng)
-	v, errV := semver.NewVersion(bare(release))
+	v, errV := semver.NewVersion(Bare(release))
 	if rng == "" || errC != nil || errV != nil {
 		return true
 	}
@@ -682,10 +688,10 @@ func follows(rng, release string) bool {
 // never the candidate itself. Versions that are not semver compare equal or
 // not at all.
 func reached(have, release string) bool {
-	h, errH := semver.NewVersion(bare(have))
-	r, errR := semver.NewVersion(bare(release))
+	h, errH := semver.NewVersion(Bare(have))
+	r, errR := semver.NewVersion(Bare(release))
 	if errH != nil || errR != nil {
-		return bare(have) == bare(release)
+		return Bare(have) == Bare(release)
 	}
 	return !h.LessThan(r)
 }
@@ -698,12 +704,12 @@ func Installed(h state.Hold, v string) bool {
 	if h.ToolMerged && h.ToolRelease != "" {
 		return reached(v, h.ToolRelease)
 	}
-	return bare(v) != bare(h.ToolFrom)
+	return Bare(v) != Bare(h.ToolFrom)
 }
 
-// bare is a version without a leading v and without build metadata: a tag
+// Bare is a version without a leading v and without build metadata: a tag
 // v1.2.3 and a chart version 1.2.3+1c161d9d name the same release.
-func bare(v string) string {
+func Bare(v string) string {
 	v = strings.TrimPrefix(v, "v")
 	if i := strings.IndexByte(v, '+'); i >= 0 {
 		v = v[:i]
@@ -778,7 +784,7 @@ func Ready(lane config.Lane, hrs []HelmRelease, settling *state.Merge, now time.
 			case !follows(mine[i].Range, settling.Release):
 				unfollowed = append(unfollowed, fmt.Sprintf("%s follows semver %s", key, mine[i].Range))
 			case !reached(mine[i].Version, settling.Release):
-				why := fmt.Sprintf("%s is on %s, rolling to %s", key, mine[i].Version, bare(settling.Release))
+				why := fmt.Sprintf("%s is on %s, rolling to %s", key, mine[i].Version, Bare(settling.Release))
 				if mine[i].Range != "" {
 					why += fmt.Sprintf(" (semver %s)", mine[i].Range)
 				}
@@ -792,7 +798,7 @@ func Ready(lane config.Lane, hrs []HelmRelease, settling *state.Merge, now time.
 		}
 	}
 	if len(unfollowed) > 0 {
-		return true, fmt.Sprintf("%s does not follow %s: %s", lane.Installation, bare(settling.Release), strings.Join(unfollowed, "; "))
+		return true, fmt.Sprintf("%s does not follow %s: %s", lane.Installation, Bare(settling.Release), strings.Join(unfollowed, "; "))
 	}
 	return true, ""
 }

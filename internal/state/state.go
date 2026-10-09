@@ -456,6 +456,10 @@ type Timer struct {
 	Checked    time.Time `json:"checked,omitzero"`
 	Reason     string    `json:"reason,omitempty"`
 	Unreadable bool      `json:"unreadable,omitempty"`
+	// Since is the first check that found the condition not holding; Stuck
+	// is set once the watch said it has not held for a day.
+	Since time.Time `json:"since,omitzero"`
+	Stuck bool      `json:"stuck,omitempty"`
 	// Until is the end of the wait: past it the timer fires as timed out,
 	// or closes unfired when Expire is set.
 	Until  time.Time `json:"until,omitzero"`

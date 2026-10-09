@@ -13,18 +13,19 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 // timerCondition is a typed condition of timer add --when: the reference it
 // names (form, matched by ref), the command that reads it and what its
-// output says.
+// output says of the reference.
 type timerCondition struct {
 	form   string
 	ref    *regexp.Regexp
 	github bool
 	read   func(m []string) string
-	judge  judge
+	judge  func(m []string) judge
 }
 
 // judge says whether a reference's output holds the condition and, if not,
@@ -34,7 +35,12 @@ type judge func(out []byte) (bool, string, error)
 var (
 	ghRef   = regexp.MustCompile(`^([\w.-]+/[\w.-]+)#(\d+)$`)
 	kubeRef = regexp.MustCompile(`^([\w.@:-]+)/([a-z0-9][a-z0-9.-]*)/([a-z0-9][a-z0-9.-]*)$`)
+	// hrRef is a kubeRef with the chart version it waits for, optional.
+	hrRef = regexp.MustCompile(`^([\w.@:-]+)/([a-z0-9][a-z0-9.-]*)/([a-z0-9][a-z0-9.-]*)(?:\s+(v?[0-9][\w.+-]*))?$`)
 )
+
+// always is the judge of a condition whose reference adds nothing to it.
+func always(j judge) func([]string) judge { return func([]string) judge { return j } }
 
 // prNotMerged is why a pr-merged condition does not hold yet.
 const prNotMerged = "not merged"
@@ -44,16 +50,16 @@ const prNotMerged = "not merged"
 var timerConditions = map[string]timerCondition{
 	"pr-merged": {"owner/repo#n", ghRef, true, func(m []string) string {
 		return fmt.Sprintf("gh api repos/%s/pulls/%s --jq .merged", m[1], m[2])
-	}, outputIs("true", prNotMerged)},
+	}, always(outputIs("true", prNotMerged))},
 	"issue-closed": {"owner/repo#n", ghRef, true, func(m []string) string {
 		return fmt.Sprintf("gh api repos/%s/issues/%s --jq .state", m[1], m[2])
-	}, outputIs("closed", "open")},
-	"helmrelease-ready": {"context/namespace/name", kubeRef, false, func(m []string) string {
+	}, always(outputIs("closed", "open"))},
+	"helmrelease-ready": {"context/namespace/name [version]", hrRef, false, func(m []string) string {
 		return fmt.Sprintf("kubectl --context %s -n %s get helmreleases.helm.toolkit.fluxcd.io %s -o json", m[1], m[2], m[3])
-	}, helmReleaseReady},
+	}, func(m []string) judge { return helmReleaseReady(m[4]) }},
 	"controlplane-ready": {"context/namespace/name", kubeRef, false, func(m []string) string {
 		return fmt.Sprintf("kubectl --context %s -n %s get kubeadmcontrolplanes.controlplane.cluster.x-k8s.io %s -o json", m[1], m[2], m[3])
-	}, controlPlaneReady},
+	}, always(controlPlaneReady)},
 }
 
 // timerCheck is how a timer's condition is checked: the command that reads
@@ -101,7 +107,7 @@ func conditionCheck(when string) (timerCheck, error) {
 	if m == nil {
 		return timerCheck{}, usageErr("--when %q: %s names %s", when, kind, c.form)
 	}
-	return timerCheck{c.read(m), c.github, c.judge}, nil
+	return timerCheck{c.read(m), c.github, c.judge(m)}, nil
 }
 
 // checkOf is the check of t's condition; without a command for a timer
@@ -197,32 +203,53 @@ func (g generations) stale() string {
 }
 
 // helmReleaseReady holds once a Flux HelmRelease's status reports on its
-// spec and its Ready condition is true.
-func helmReleaseReady(out []byte) (bool, string, error) {
-	var o struct {
-		Kind     string `json:"kind"`
-		Metadata struct {
-			Generation int64 `json:"generation"`
-		} `json:"metadata"`
-		Status struct {
-			ObservedGeneration int64           `json:"observedGeneration"`
-			Conditions         []kubeCondition `json:"conditions"`
-		} `json:"status"`
+// spec, its Ready condition is true and, given a version, it runs that
+// chart version. The version it runs is the newest release of its history,
+// or without one the attempted revision while Ready: current Flux leaves
+// the applied revision empty.
+func helmReleaseReady(version string) judge {
+	return func(out []byte) (bool, string, error) {
+		var o struct {
+			Kind     string `json:"kind"`
+			Metadata struct {
+				Generation int64 `json:"generation"`
+			} `json:"metadata"`
+			Status struct {
+				ObservedGeneration int64 `json:"observedGeneration"`
+				History            []struct {
+					ChartVersion string `json:"chartVersion"`
+				} `json:"history"`
+				LastAttemptedRevision string          `json:"lastAttemptedRevision"`
+				Conditions            []kubeCondition `json:"conditions"`
+			} `json:"status"`
+		}
+		if err := json.Unmarshal(out, &o); err != nil || o.Kind != "HelmRelease" {
+			return false, "", fmt.Errorf("not a HelmRelease: %v", cmp.Or[any](err, "kind "+o.Kind))
+		}
+		if s := (generations{o.Metadata.Generation, o.Status.ObservedGeneration}).stale(); s != "" {
+			return false, s, nil
+		}
+		c := conditionOf(o.Status.Conditions, "Ready")
+		ready := c != nil && c.Status == "True"
+		var rolled string
+		switch {
+		case len(o.Status.History) > 0:
+			rolled = merge.Bare(o.Status.History[0].ChartVersion)
+		case ready:
+			rolled = merge.Bare(o.Status.LastAttemptedRevision)
+		}
+		switch {
+		case version != "" && rolled == "":
+			return false, "no release yet, waiting for " + merge.Bare(version), nil
+		case version != "" && rolled != merge.Bare(version):
+			return false, "runs " + rolled + ", not " + merge.Bare(version), nil
+		case c == nil:
+			return false, "no Ready condition yet", nil
+		case ready:
+			return true, "", nil
+		}
+		return false, "Ready " + c.Status + ": " + cmp.Or(c.Message, c.Reason), nil
 	}
-	if err := json.Unmarshal(out, &o); err != nil || o.Kind != "HelmRelease" {
-		return false, "", fmt.Errorf("not a HelmRelease: %v", cmp.Or[any](err, "kind "+o.Kind))
-	}
-	if s := (generations{o.Metadata.Generation, o.Status.ObservedGeneration}).stale(); s != "" {
-		return false, s, nil
-	}
-	c := conditionOf(o.Status.Conditions, "Ready")
-	switch {
-	case c == nil:
-		return false, "no Ready condition yet", nil
-	case c.Status == "True":
-		return true, "", nil
-	}
-	return false, "Ready " + c.Status + ": " + cmp.Or(c.Message, c.Reason), nil
 }
 
 // controlPlaneReady holds once a KubeadmControlPlane's status reports on its
