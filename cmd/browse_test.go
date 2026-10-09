@@ -126,6 +126,11 @@ func TestReadFindings(t *testing.T) {
 	if l := (browseFindings{}).lines(steps); l != nil {
 		t.Errorf("lines of no findings = %q", l)
 	}
+	// A long step is quoted bounded.
+	long := "Then click Authorize on the page " + strings.Repeat("x", 200)
+	if p := consentPhrase(long); len([]rune(p)) != phraseRunes+1 || !strings.HasSuffix(p, "…") || !strings.HasPrefix(p, "Then click Authorize") {
+		t.Errorf("consentPhrase(long) = %q", p)
+	}
 	if n := (browseFindings{NotRendered: 3}).lines(""); len(n) != 1 || !strings.HasPrefix(n[0], "not rendered: 3 screenshots timed out") {
 		t.Errorf("lines of 3 not rendered = %q", n)
 	}

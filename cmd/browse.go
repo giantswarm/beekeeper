@@ -239,11 +239,17 @@ func (f browseFindings) lines(steps string) []string {
 	return out
 }
 
-// consentPhrase is the first step of steps that reads as a grant, "" when
-// none does.
+// phraseRunes bounds a quoted step.
+const phraseRunes = 160
+
+// consentPhrase is the first step of steps that reads as a grant, bounded
+// to phraseRunes, "" when none does.
 func consentPhrase(steps string) string {
 	for _, s := range strings.FieldsFunc(steps, func(r rune) bool { return r == '.' || r == ';' || r == '\n' }) {
 		if s = strings.TrimSpace(s); consentWords.MatchString(s) {
+			if r := []rune(s); len(r) > phraseRunes {
+				return string(r[:phraseRunes]) + "…"
+			}
 			return s
 		}
 	}
