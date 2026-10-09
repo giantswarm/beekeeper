@@ -397,22 +397,12 @@ func cost(msgs []message, m config.Metrics, since time.Time) (*float64, []string
 		if msg.at.Before(since) {
 			continue
 		}
-		p, ok := m.Model(msg.model)
-		if !ok || (msg.fast && p.Fast == 0) {
-			name := msg.model
-			if msg.fast {
-				name += " (fast)"
-			}
-			if !slices.Contains(unknown, name) {
+		c, ok := msg.price(m)
+		if !ok {
+			if name := msg.priceName(); !slices.Contains(unknown, name) {
 				unknown = append(unknown, name)
 			}
 			continue
-		}
-		t := msg.tokens
-		c := (float64(t.Input)*p.Input + float64(t.CacheWrite5m)*p.CacheWrite5m + float64(t.CacheWrite1h)*p.CacheWrite1h +
-			float64(t.CacheRead)*p.CacheRead + float64(t.Output)*p.Output) / 1e6
-		if msg.fast {
-			c *= p.Fast
 		}
 		usd += c
 	}
@@ -420,6 +410,31 @@ func cost(msgs []message, m config.Metrics, since time.Time) (*float64, []string
 		return nil, unknown
 	}
 	return &usd, nil
+}
+
+// price is what the request cost in US dollars; false when its model has
+// no price, or it was a fast request and the model no fast multiplier.
+func (msg message) price(m config.Metrics) (float64, bool) {
+	p, ok := m.Model(msg.model)
+	if !ok || (msg.fast && p.Fast == 0) {
+		return 0, false
+	}
+	t := msg.tokens
+	c := (float64(t.Input)*p.Input + float64(t.CacheWrite5m)*p.CacheWrite5m + float64(t.CacheWrite1h)*p.CacheWrite1h +
+		float64(t.CacheRead)*p.CacheRead + float64(t.Output)*p.Output) / 1e6
+	if msg.fast {
+		c *= p.Fast
+	}
+	return c, true
+}
+
+// priceName is the model the request is priced by: a fast request's is
+// marked (fast).
+func (msg message) priceName() string {
+	if msg.fast {
+		return msg.model + " (fast)"
+	}
+	return msg.model
 }
 
 // InvokesGitHub says a shell command runs gh or devctl as one of its
