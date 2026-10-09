@@ -147,3 +147,11 @@ func FirstLine(s string) string {
 	s, _ = empty.Redact(s)
 	return s
 }
+
+// Message is a tool's whole stderr on one line, stripped of what a pattern
+// would redact: a refusal's reason is often past its first line.
+func Message(s string) string {
+	empty := &Index{}
+	s, _ = empty.Redact(strings.Join(strings.Fields(s), " "))
+	return s
+}
