@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `secret.ageVaults`: the vaults besides `secret.vault` that age identities are read from. A SOPS file under `installations/<name>/` that no `secret.ageIdentities` entry names finds its identity in the item `<name>.agekey` of `secret.vault` or one of them, a field or the document holding the identity file, and `secret recipients` names that item; an `op://` entry of `secret.ageIdentities` may name a field of an age vault, and one naming any other vault fails the configuration's load instead of being listed as found ([#766](https://github.com/giantswarm/beekeeper/issues/766)).
 
+### Fixed
+
+- A message to `the supervisor` or `the guide` reaches the holder beekeeper records although another live session carries the holder's title: the holder's CLI is found by its session id and addressed by its own socket while its title is shared. `beekeeper doctor` and the watch (`SAME TITLE`) name every title two live sessions carry, and a relay or a role's `start` refuses a run name another live session carries, naming that session ([#758](https://github.com/giantswarm/beekeeper/issues/758)).
+
 ### Changed
 
 - `secret reveal` answers a client id however random it looks: a leaf named `id`, `clientID` or `client_id` and an item of a `trustedPeers` or `peers` list are exempt from the entropy rule, since every authorize URL carries them; a key named like a secret on the path, the value scanner and a URL password still refuse, and a client id equal to a value under a secret-named key of the same file is refused ([#774](https://github.com/giantswarm/beekeeper/issues/774)).
