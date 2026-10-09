@@ -1,6 +1,8 @@
 package platform
 
 import (
+	"bufio"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -73,10 +75,14 @@ func TestProcessBinary(t *testing.T) {
 	}
 }
 
+// helperRunning is the line TestHelperSleep writes once the copy runs.
+const helperRunning = "running"
+
 // TestHelperSleep is the process TestProcessBinaryReplaced runs: a copy of
-// this test binary that waits to be killed.
+// this test binary that says it runs and waits to be killed.
 func TestHelperSleep(*testing.T) {
 	if os.Getenv("BEEKEEPER_TEST_SLEEP") == "1" {
+		fmt.Println(helperRunning)
 		time.Sleep(time.Minute)
 	}
 }
@@ -99,10 +105,20 @@ func TestProcessBinaryReplaced(t *testing.T) {
 	write(path)
 	cmd := exec.Command(path, "-test.run=^TestHelperSleep$") //nolint:gosec // the copy written above
 	cmd.Env = append(os.Environ(), "BEEKEEPER_TEST_SLEEP=1")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	// Start can return before the child's exec has swapped its image in:
+	// under load /proc/<pid>/exe still names this test binary. The copy's
+	// own line says it runs.
+	if line, err := bufio.NewReader(stdout).ReadString('\n'); err != nil || line != helperRunning+"\n" {
+		t.Fatalf("the copy does not say it runs: %q, %v", line, err)
+	}
 	if b := ProcessBinary(cmd.Process.Pid); b == nil || b.Path != path || b.Replaced() {
 		t.Fatalf("the running copy reads as %+v, want its path %s, not replaced", b, path)
 	}
