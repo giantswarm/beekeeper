@@ -560,3 +560,15 @@ func TestInstalled(t *testing.T) {
 		}
 	}
 }
+
+// A HelmRelease without a history, its lastAppliedRevision empty as current
+// Flux leaves it, runs the attempted revision once Ready, and none before.
+func TestParseHelmReleasesReadsTheAttemptWithoutAHistory(t *testing.T) {
+	hrs, err := ParseHelmReleases([]byte(`{"items":[
+ {"metadata":{"namespace":"flux","name":"a"},"spec":{"chart":{"spec":{"chart":"a"}}},"status":{"lastAppliedRevision":"","lastAttemptedRevision":"1.2.3+abc","conditions":[{"type":"Ready","status":"True"}]}},
+ {"metadata":{"namespace":"flux","name":"b"},"spec":{"chart":{"spec":{"chart":"b"}}},"status":{"lastAttemptedRevision":"1.2.4","conditions":[{"type":"Ready","status":"False"}]}}
+]}`))
+	if err != nil || len(hrs) != 2 || hrs[0].Version != "1.2.3" || hrs[1].Version != "" {
+		t.Fatalf("%+v, %v", hrs, err)
+	}
+}

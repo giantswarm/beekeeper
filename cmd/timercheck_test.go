@@ -3,6 +3,9 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -215,10 +218,64 @@ func TestHelmReleaseReadyReadsItsReadyCondition(t *testing.T) {
 		`{"kind":"HelmRelease","metadata":{"generation":3},"status":{"observedGeneration":2,"conditions":[{"type":"Ready","status":"True"}]}}`:                             "generation 3 not observed yet (status at 2)",
 		`{"kind":"HelmRelease","metadata":{"generation":1},"status":{"observedGeneration":1}}`:                                                                             "no Ready condition yet",
 	} {
-		holds, why, err := helmReleaseReady([]byte(obj))
+		holds, why, err := helmReleaseReady("")([]byte(obj))
 		if err != nil || holds != (want == "") || why != want {
 			t.Errorf("%s: holds %v, %q, %v", obj, holds, why, err)
 		}
+	}
+}
+
+// A HelmRelease with an empty lastAppliedRevision, as current Flux leaves
+// it, reports the version its history says it rolled.
+func TestHelmReleaseReadyReadsTheRolledVersionFromItsHistory(t *testing.T) {
+	obj, err := os.ReadFile(filepath.Join("testdata", "helmrelease-history.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const rolled = "2.67.0"
+	attempted := `{"kind":"HelmRelease","metadata":{"generation":1},"status":{"observedGeneration":1,"lastAttemptedRevision":"2.67.0+d293",
+		"conditions":[{"type":"Ready","status":"%s"}]}}`
+	for name, tc := range map[string]struct {
+		obj, version string
+		holds        bool
+		why          string
+	}{
+		"the rolled version":                  {string(obj), rolled, true, ""},
+		"a tag names the same version":        {string(obj), "v2.67.0", true, ""},
+		"an older version is not rolled":      {string(obj), "2.68.0", false, "runs 2.67.0, not 2.68.0"},
+		"no version, Ready alone":             {string(obj), "", true, ""},
+		"no history, the attempt while Ready": {fmt.Sprintf(attempted, "True"), rolled, true, ""},
+		"no history, the attempt not Ready":   {fmt.Sprintf(attempted, "False"), rolled, false, "no release yet, waiting for 2.67.0"},
+		"rolled but not Ready": {strings.Replace(string(obj), `"status": "True",
+        "reason": "UpgradeSucceeded",
+        "message"`, `"status": "False",
+        "reason": "UpgradeFailed",
+        "message"`, 1), rolled, false, "Ready False: Helm upgrade succeeded for release flux-giantswarm/backstage.v58 with chart backstage@2.67.0+d293a1c0e5f4"},
+	} {
+		holds, why, err := helmReleaseReady(tc.version)([]byte(tc.obj))
+		if err != nil || holds != tc.holds || why != tc.why {
+			t.Errorf("%s: holds %v, %q, %v", name, holds, why, err)
+		}
+	}
+}
+
+// A helmrelease-ready timer with a version fires once the release runs it,
+// read through the condition's own kubectl command.
+func TestHelmReleaseTimerFiresOnceTheVersionRolled(t *testing.T) {
+	obj, err := os.ReadFile(filepath.Join("testdata", "helmrelease-history.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := conditionCheck("helmrelease-ready admin@mc/flux-giantswarm/backstage 2.67.0")
+	if err != nil || c.cmd != "kubectl --context admin@mc -n flux-giantswarm get helmreleases.helm.toolkit.fluxcd.io backstage -o json" {
+		t.Fatalf("%q, %v", c.cmd, err)
+	}
+	if r := c.result(obj, nil); !r.holds {
+		t.Fatalf("2.67.0: %+v", r)
+	}
+	c, _ = conditionCheck("helmrelease-ready admin@mc/flux-giantswarm/backstage 2.68.0")
+	if r := c.result(obj, nil); r.holds || r.unreadable || r.reason != "runs 2.67.0, not 2.68.0" {
+		t.Fatalf("2.68.0: %+v", r)
 	}
 }
 

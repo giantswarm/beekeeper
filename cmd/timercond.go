@@ -17,6 +17,10 @@ import (
 // timerEvery is how often the watch checks a timer's condition by default.
 const timerEvery = 5 * time.Minute
 
+// timerStuckAfter is how long a condition may fail to hold before the watch
+// says so: a probe that never exits 0 may read the wrong field.
+const timerStuckAfter = 24 * time.Hour
+
 // timerRunTimeout bounds a timer's --run command.
 const timerRunTimeout = 30 * time.Minute
 
@@ -98,7 +102,8 @@ func (f timerFire) message() string {
 // timed out, or closed unfired when it expires; a fired or expired timer is
 // closed, a repeating one re-armed at its next time. A check that found the
 // condition not holding is recorded with its reason; a reference that could
-// not be read is a line once, until the reason changes. It returns the
+// not be read is a line once, until the reason changes, and a condition that
+// has not held for timerStuckAfter is a line once. It returns the
 // lines, events and fires, and whether it changed st.
 func settleTimers(st *state.State, found map[int]checkResult, now time.Time) ([]string, []state.Event, []timerFire, bool) {
 	var lines []string
@@ -133,6 +138,14 @@ func settleTimers(st *state.State, found map[int]checkResult, now time.Time) ([]
 					evs = append(evs, event(watchParty, "timer.unreadable", "#%d %s: %s", t.ID, timerCond(t), r.reason))
 				}
 				t.Checked, t.Reason, t.Unreadable, changed = now.UTC(), r.reason, r.unreadable, true
+				if t.Since.IsZero() {
+					t.Since = now.UTC()
+				}
+				if !t.Stuck && now.Sub(t.Since) >= timerStuckAfter {
+					t.Stuck = true
+					lines = append(lines, fmt.Sprintf("TIMER STUCK: #%d, %s has not held since %s%s; it keeps waiting: %s", t.ID, timerCond(t), clock(now, t.Since), lastFound(t), truncate(t.What, 200)))
+					evs = append(evs, event(watchParty, "timer.stuck", "#%d %s since %s: %s", t.ID, timerCond(t), t.Since.Format(time.RFC3339), t.Reason))
+				}
 			}
 			kept = append(kept, t)
 			continue
