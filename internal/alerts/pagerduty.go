@@ -58,6 +58,9 @@ type PagerDutyReader struct {
 	Services []string
 }
 
+// listIncidentsTool is the PagerDuty server's listing of incidents.
+const listIncidentsTool = "list_incidents"
+
 // incidentsLimit bounds one listing; the open incidents of a team's
 // services are far fewer.
 const incidentsLimit = 100
@@ -65,10 +68,7 @@ const incidentsLimit = 100
 // Read lists the triggered and acknowledged incidents of the services, of
 // every age, and reads the installation of each one known lacks.
 func (p PagerDutyReader) Read(ctx context.Context, known map[string]Incident) PagerDutyAnswer {
-	text, err := p.Call(ctx, "list_incidents", map[string]any{"query_model": map[string]any{
-		"service_ids": p.Services, "status": []string{"triggered", Acknowledged},
-		"date_range": "all", "limit": incidentsLimit, "sort_by": []string{"created_at:asc"},
-	}})
+	text, err := p.listIncidents(ctx)
 	if err != nil {
 		return PagerDutyAnswer{Why: err.Error()}
 	}
@@ -93,6 +93,31 @@ func (p PagerDutyReader) Read(ctx context.Context, known map[string]Incident) Pa
 		out[r.ID] = in
 	}
 	return PagerDutyAnswer{OK: true, Incidents: out}
+}
+
+// listIncidents calls list_incidents, once more after retryPause when the
+// call fails: muster answers auth_required for a moment while it reconnects
+// the PagerDuty server, and the second call reads.
+func (p PagerDutyReader) listIncidents(ctx context.Context) (string, error) {
+	args := map[string]any{"query_model": map[string]any{
+		"service_ids": p.Services, "status": []string{"triggered", Acknowledged},
+		"date_range": "all", "limit": incidentsLimit, "sort_by": []string{"created_at:asc"},
+	}}
+	text, err := p.Call(ctx, listIncidentsTool, args)
+	if err == nil {
+		return text, nil
+	}
+	pause := time.NewTimer(retryPause)
+	defer pause.Stop()
+	select {
+	case <-pause.C:
+	case <-ctx.Done():
+		return text, err
+	}
+	if text, again := p.Call(ctx, listIncidentsTool, args); again == nil {
+		return text, nil
+	}
+	return text, fmt.Errorf("%w (2 attempts)", err)
 }
 
 // installation is the installation label of the incident's first alert, ""
@@ -124,11 +149,19 @@ func firstLine(s string) string {
 	return cmp.Or(line, "an empty answer")
 }
 
+// PagerDutyGrace is how long a PagerDuty that read does not answer before
+// it is said unseen: muster's auth_required while it reconnects the server
+// lasts a reading or two.
+const PagerDutyGrace = 3 * time.Minute
+
 // PagerDutyStep returns the lines one reading prints and the baseline it
 // leaves; prev is nil on the first reading. It mirrors Triage: a first look
 // lists the open incidents, a PagerDuty that does not answer keeps the set
-// and is said again every UnseenRepeat.
+// and is said, once it is PagerDutyGrace unseen, again every UnseenRepeat.
 func (r Rules) PagerDutyStep(prev *PagerDuty, ans PagerDutyAnswer, now time.Time) ([]string, *PagerDuty) {
+	if !ans.OK && prev != nil && prev.Reachable && prev.Incidents != nil && now.Sub(prev.Seen) < PagerDutyGrace {
+		return nil, prev
+	}
 	if !ans.OK {
 		next := &PagerDuty{Said: now}
 		if prev != nil {

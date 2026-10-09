@@ -70,10 +70,16 @@ func newFake(t *testing.T) *fake {
 	t.Setenv("FAKE_FAIL_ONCE", "")
 	f.failed = filepath.Join(dir, "failed")
 	t.Setenv("FAKE_FAILED", f.failed)
+	quickRetry(t)
+	return f
+}
+
+// quickRetry shortens the pause before another attempt for the test.
+func quickRetry(t *testing.T) {
+	t.Helper()
 	pause := retryPause
 	retryPause = 100 * time.Millisecond
 	t.Cleanup(func() { retryPause = pause })
-	return f
 }
 
 // serve starts an Alertmanager and points the service's forward at it.
