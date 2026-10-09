@@ -18,7 +18,7 @@ func TestSystemdSetupFiles(t *testing.T) {
 		t.Fatalf("files %v, skipped %v", files, skipped)
 	}
 	for i, want := range []struct{ path, content string }{
-		{"/c/systemd/user/beekeeper-notify.service", "ExecStart=/b/beekeeper watch --notify --standby\n"},
+		{"/c/systemd/user/beekeeper-notify.service", "ExecStart=/b/beekeeper watch --standby\n"},
 		{"/c/systemd/user/beekeeper-sandbox.service", "ExecStart=/b/beekeeper sandbox broker\n"},
 		{"/c/systemd/user/memcap.slice", "MemoryHigh=23552M\nMemoryMax=28672M\nMemorySwapMax=0\nCPUQuota=1200%\nCPUWeight=50\n"},
 		{"/c/systemd/user/app-Hyprland-com.anthropic.Claude-.scope.d/50-memory-guard.conf", "MemoryHigh=47104M\nMemoryMax=57344M\nMemorySwapMax=4096M\nOOMPolicy=continue\n"},
@@ -26,6 +26,11 @@ func TestSystemdSetupFiles(t *testing.T) {
 		if files[i].Path != want.path || !strings.Contains(string(files[i].Content), want.content) || files[i].Service != (i < 2) {
 			t.Errorf("file %d: %s\n%s", i, files[i].Path, files[i].Content)
 		}
+	}
+
+	files, _ = systemdSetup{}.Files(SetupSpec{ConfigDir: "/c", Exe: testExe, Notify: true})
+	if !strings.Contains(string(files[0].Content), "ExecStart=/b/beekeeper watch --notify --standby\n") {
+		t.Errorf("watch.notify: the standby watch does not notify:\n%s", files[0].Content)
 	}
 
 	files, skipped = systemdSetup{}.Files(SetupSpec{ConfigDir: "/c", Exe: testExe, RAMMiB: 100 << 10})

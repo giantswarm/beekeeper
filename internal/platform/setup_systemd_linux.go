@@ -49,7 +49,7 @@ func (systemdSetup) Files(s SetupSpec) ([]File, []string) {
 	dir := filepath.Join(s.ConfigDir, "systemd", "user")
 	exe := func(unit string) []byte { return []byte(strings.ReplaceAll(unit, systemd.NotifyServiceExe, s.Exe)) }
 	files := []File{
-		{Path: filepath.Join(dir, notifyUnit), Content: exe(systemd.NotifyService), Service: true},
+		{Path: filepath.Join(dir, notifyUnit), Content: exe(systemd.StandbyService(s.Notify)), Service: true},
 		{Path: filepath.Join(dir, sandboxUnit), Content: exe(systemd.SandboxService), Service: true},
 	}
 	if s.TeleportEvery > 0 {

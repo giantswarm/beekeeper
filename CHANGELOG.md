@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `beekeeper install` writes the standby unit as `beekeeper watch --standby`, and with `--notify` only when the new config key `watch.notify` is true (default false): a desk without desktop notifications runs install as it is. Re-running install is idempotent and safe after every update: besides what an earlier install recorded, it updates in place the hook entries that run this binary's hook command (an older matcher, settings a self-update left) and a unit that runs this binary, never adds an entry twice and touches no other setting, so a changed hook matcher (`Read|Grep`, `TaskStop`) reaches `~/.claude/settings.json`; a second run changes nothing. `install --dry-run` prints every step ([#622](https://github.com/giantswarm/beekeeper/issues/622)).
+
 - The watch keeps one Alertmanager port-forward per installation from tick to tick and asks kubectl for the kubeconfig's contexts only once it changed: a tick is HTTP requests, no `kubectl` or `tsh kube credentials` run (kubectl keeps the Teleport credential until it expires). A forward that dropped is replaced by one new one at the next attempt, counted as today. An installation whose context is not in the kubeconfig is said at once (`context "<ctx>" is not in the kubeconfig`), never retried: 23 such installations ran 670 kubectl a tick. A PROCESS STORM line names the watch's own processes as `"beekeeper watch"`, and the snapshot lists the kept forwards as no session's wait. One tick over 28 installations was the machine's fork storm ([#710](https://github.com/giantswarm/beekeeper/issues/710)).
 
 ### Added

@@ -1079,6 +1079,10 @@ type Watch struct {
 	// the watch logs them (watch.quiet) instead of printing them. Setting
 	// it replaces the default, beekeeper's own tests ("test: *").
 	QuietSessions []string `yaml:"quietSessions"`
+	// Notify says whether the standby watch beekeeper install writes sends
+	// the events that need a person to the desktop (watch --notify
+	// --standby); off, the default, it runs as watch --standby.
+	Notify bool `yaml:"notify"`
 }
 
 // The fractions a memory or disk threshold defaults to: of RAM (available

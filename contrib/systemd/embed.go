@@ -2,7 +2,10 @@
 // beekeeper install to write.
 package systemd
 
-import _ "embed"
+import (
+	_ "embed"
+	"strings"
+)
 
 // NotifyService is beekeeper-notify.service, the standby watch; its
 // ExecStart names NotifyServiceExe, which install replaces with the binary.
@@ -12,6 +15,18 @@ var NotifyService string
 
 // NotifyServiceExe is the binary the shipped units run.
 const NotifyServiceExe = "%h/.local/bin/beekeeper"
+
+// notifyExecStart is NotifyService's command line as shipped.
+const notifyExecStart = "ExecStart=" + NotifyServiceExe + " watch --notify --standby\n"
+
+// StandbyService is NotifyService, its watch sending desktop notifications
+// only when notify (watch.notify).
+func StandbyService(notify bool) string {
+	if notify {
+		return NotifyService
+	}
+	return strings.Replace(NotifyService, notifyExecStart, "ExecStart="+NotifyServiceExe+" watch --standby\n", 1)
+}
 
 // SandboxService is beekeeper-sandbox.service, the agent sandbox's
 // broker; its ExecStart names NotifyServiceExe.

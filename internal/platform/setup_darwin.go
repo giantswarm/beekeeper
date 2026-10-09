@@ -27,19 +27,22 @@ func (launchdSetup) Available() bool { return true }
 
 func (launchdSetup) Files(s SetupSpec) ([]File, []string) {
 	path := filepath.Join(s.Home, "Library", "LaunchAgents", notifyLabel+".plist")
+	args, flag := "watch --standby", ""
+	if s.Notify {
+		args, flag = "watch --notify --standby", "\n\t\t<string>--notify</string>"
+	}
 	plist := fmt.Appendf(nil, `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- beekeeper watch --notify --standby, written by beekeeper install: the
-     events that need a person reach the desktop when no supervisor runs. -->
+<!-- beekeeper %[4]s, the standby watch, written by beekeeper install
+     (watch.notify adds --notify). -->
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>%s</string>
+	<string>%[1]s</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>%s</string>
-		<string>watch</string>
-		<string>--notify</string>
+		<string>%[2]s</string>
+		<string>watch</string>%[5]s
 		<string>--standby</string>
 	</array>
 	<key>RunAtLoad</key>
@@ -57,7 +60,7 @@ func (launchdSetup) Files(s SetupSpec) ([]File, []string) {
 	<string>%[3]s</string>
 </dict>
 </plist>
-`, notifyLabel, escapeXML(s.Exe), escapeXML(filepath.Join(s.Home, "Library", "Logs", "beekeeper-notify.log")))
+`, notifyLabel, escapeXML(s.Exe), escapeXML(filepath.Join(s.Home, "Library", "Logs", "beekeeper-notify.log")), args, flag)
 	skipped := []string{"memory guard: not available on " + Name()}
 	if s.TeleportEvery > 0 {
 		skipped = append(skipped, "teleport keeper: not available on "+Name())
