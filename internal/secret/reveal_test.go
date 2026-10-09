@@ -36,6 +36,7 @@ const (
         - https://kagent.example.org/callback
     - id: ` + keyLike + `
       secret: ` + clientSecret + `
+    - id: ` + peerSecret + `
   authenticator:
     trustedPeers:
       - kagent
@@ -75,7 +76,7 @@ func noDexSecret(t *testing.T, what string, v any) {
 	t.Helper()
 	raw, _ := json.Marshal(v)
 	s := fmt.Sprintf("%s %+v", raw, v)
-	for _, p := range []string{clientSecret, peerSecret, keyLike} {
+	for _, p := range []string{clientSecret, peerSecret} {
 		if strings.Contains(s, p) {
 			t.Errorf("%s answers a secret: %s", what, s)
 		}
@@ -87,7 +88,7 @@ func TestRevealConfiguration(t *testing.T) {
 	_, patch := dexScratch(t)
 	fs, err := ops(tools).Reveal(context.Background(), patch, []string{
 		kagentID, "oidc.extraStaticClients.0.redirectURIs", "oidc.extraStaticClients.0.public",
-		"oidc.authenticator.trustedPeers", musterID,
+		"oidc.authenticator.trustedPeers", musterID, "oidc.extraStaticClients.1.id",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -99,6 +100,7 @@ func TestRevealConfiguration(t *testing.T) {
 		{Path: peer0, Value: "kagent"},
 		{Path: peer1, Value: "muster"},
 		{Path: musterID, Value: "muster"},
+		{Path: "oidc.extraStaticClients.1.id", Value: keyLike},
 	}
 	if !slices.Equal(fs, want) {
 		t.Errorf("reveal = %+v", fs)
@@ -113,7 +115,8 @@ func TestRevealRefusesSecrets(t *testing.T) {
 	for _, tc := range []struct{ path, why string }{
 		{"oidc.extraStaticClients.0", underSecret},
 		{extraSecret, underSecret},
-		{"oidc.extraStaticClients.1.id", "a key's entropy"},
+		{"oidc.extraStaticClients.1.secret", underSecret},
+		{"oidc.extraStaticClients.2.id", "an id equal to the secret at " + musterSecret},
 		{"oidc", underSecret},
 	} {
 		fs, err := ops(secrettest.New(nil)).Reveal(context.Background(), patch, []string{"issuer", tc.path})
@@ -124,6 +127,47 @@ func TestRevealRefusesSecrets(t *testing.T) {
 	}
 	if _, err := ops(secrettest.New(nil)).Reveal(context.Background(), patch, []string{"oidc.nothing"}); err == nil || !strings.Contains(err.Error(), "no value at oidc.nothing") {
 		t.Errorf("an absent path: %v", err)
+	}
+}
+
+func TestRevealClientIDs(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "ids.sops.yaml")
+	doc := `clients:
+  - id: ` + keyLike + `
+    clientID: 0123456789abcdef0123456789abcdef
+    name: ` + keyLike + `
+    secret: ` + clientSecret + `
+  - client_id: ` + clientSecret + `
+authenticator:
+  trustedPeers: [` + keyLike + `, web-ui]
+  peers: [ghp_` + strings.Repeat("aB3dE5fG7h", 3) + `123456]
+privateKey:
+  id: some-key
+`
+	if err := os.WriteFile(f, secrettest.Encrypt(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fs, err := ops(secrettest.New(nil)).Reveal(context.Background(), f, []string{"clients.0.id", "clients.0.clientID", "authenticator.trustedPeers"})
+	want := []secret.Field{
+		{Path: "clients.0.id", Value: keyLike},
+		{Path: "clients.0.clientID", Value: "0123456789abcdef0123456789abcdef"},
+		{Path: "authenticator.trustedPeers.0", Value: keyLike},
+		{Path: "authenticator.trustedPeers.1", Value: "web-ui"},
+	}
+	if err != nil || !slices.Equal(fs, want) {
+		t.Errorf("client ids = %+v, %v", fs, err)
+	}
+	for path, why := range map[string]string{
+		"clients.0.name":      "a key's entropy",
+		"clients.1.client_id": "an id equal to the secret at clients.0.secret",
+		"authenticator.peers": "the value scanner matches it",
+		"privateKey.id":       `under the key "privateKey"`,
+	} {
+		fs, err := ops(secrettest.New(nil)).Reveal(context.Background(), f, []string{path})
+		if !errors.Is(err, secret.ErrSecretLike) || !strings.Contains(err.Error(), why) || fs != nil {
+			t.Errorf("%s: %v, %+v", path, err, fs)
+		}
+		noDexSecret(t, "reveal "+path, err)
 	}
 }
 

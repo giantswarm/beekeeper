@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `secret reveal` answers a client id however random it looks: a leaf named `id`, `clientID` or `client_id` and an item of a `trustedPeers` or `peers` list are exempt from the entropy rule, since every authorize URL carries them; a key named like a secret on the path, the value scanner and a URL password still refuse, and a client id equal to a value under a secret-named key of the same file is refused ([#774](https://github.com/giantswarm/beekeeper/issues/774)).
+
 - The merge gate names the command whose turn came: `promoting <owner/repo>` for `devctl release promote`, `merging <owner/repo>#<n>` for `devctl pr merge` (unchanged). A promotion devctl refuses (`not_built`, `nothing_to_promote`) logs no `merging` and its outcome line, printed after devctl returns, says `nothing promoted (<state>)`; a dispatched one says `promoted <owner/repo>: release <version> dispatched` ([#593](https://github.com/giantswarm/beekeeper/issues/593)).
 
 - A rollout is read from a HelmRelease's `status.history`: `timer add --when "helmrelease-ready <context>/<namespace>/<name> <version>"` holds once the release is Ready and runs that chart version (the newest release of the history, or without one the attempted revision while Ready), and the merge gate's roll check takes the attempted revision of a Ready HelmRelease without a history. Current Flux leaves the applied revision empty, so a timer probing it never fired although the release had rolled. A conditional timer whose condition has not held for 24 h is one `TIMER STUCK` watch line (event `timer.stuck`), and `timer list -v` says since when ([#737](https://github.com/giantswarm/beekeeper/issues/737)).
