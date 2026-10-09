@@ -82,7 +82,7 @@ func TestKubePathRefusalNamesTheShape(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {
 		name, raw, path string
-		want           []string
+		want            []string
 	}{
 		{"dotenv", dotenvDoc, clientSecretPath, []string{"no value at clientSecret: the key holds dotenv lines with the keys CLIENT_ID, CLIENT_SECRET, EMPTY, URL, ESCAPED (7 lines, " + bytesOf(dotenvDoc) + ")"}},
 		{"yaml mapping", connectorDoc, "oidc.clientSecret", []string{"no value at oidc.clientSecret: the key holds a YAML mapping with the top-level keys clientID, clientSecret (2 lines, " + bytesOf(connectorDoc) + ")"}},
