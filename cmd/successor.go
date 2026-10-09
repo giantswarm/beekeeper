@@ -79,13 +79,20 @@ func (a *app) startSuccessor(ctx context.Context, rl role, from, by state.Party,
 	var to state.Party
 	var msg, startDir string
 	fromLabel := from.Name
-	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+	sessions, _, err := a.sessions()
+	if err != nil {
+		return state.Party{}, "", err
+	}
+	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		if s, ok := st.BypassStart(from.Session); ok {
 			startDir = s.Dir
 		}
 		r := rl.get(st)
 		n := max(rl.lastRun(r), a.titledRun(rl, r.Holder)) + 1
 		to = state.Party{Session: id, HostSession: "local_" + id, Name: rl.runName(n)}
+		if err := titleTaken(sessions, to.Name, to); err != nil {
+			return nil, err
+		}
 		if r.Run > 0 && r.Holder != nil && rl.runName(r.Run) != from.Name {
 			fromLabel = fmt.Sprintf("%s (%s)", from.Name, rl.runName(r.Run))
 		}

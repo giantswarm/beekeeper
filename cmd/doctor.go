@@ -246,6 +246,8 @@ type doctorReport struct {
 	// replaced, the watches apart (WATCH STALE names them): their saves of
 	// the state are refused.
 	stale []*proc.Process
+	// sameTitles are the titles more than one live session carries.
+	sameTitles []sameTitle
 }
 
 // staleLine says a process of a replaced binary and what ends it: a gate
@@ -270,6 +272,7 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 		return rep, err
 	}
 	rep.stale = slices.DeleteFunc(staleBinaries(t, os.Getpid(), replacedBinary), isWatch)
+	rep.sameTitles = sameTitles(sessions)
 	record := func(host string) (*claude.Record, bool) { return claude.ReadRecord(a.cfg, host) }
 	busy := func(p state.Party) bool {
 		_, turn := turnRunning(sessions, t, p, a.now)
@@ -504,7 +507,11 @@ line:
   install replaced (a start's reopen), whose saves of the state the newer
   release refuses (state.stale-writer in the log) until it ends or is
   restarted; a gate call or a merge-child re-executes the installed binary
-  at its next step by itself; a watch is named by WATCH STALE instead.
+  at its next step by itself; a watch is named by WATCH STALE instead;
+- reports a title more than one live session carries, each session by PID
+  and id: a message by that name reaches neither for sure (a message to a
+  role still reaches its holder by its own socket); the watch says SAME
+  TITLE while it lasts.
 
 A session a person started is never archived or retitled, nor one that
 holds or held the supervisor's or the guide's role unless a relay
@@ -536,6 +543,9 @@ faults but remedying none.`,
 			}
 			for _, w := range rep.stale {
 				lines = append(lines, staleLine(w))
+			}
+			for _, d := range rep.sameTitles {
+				lines = append(lines, "same title: "+d.String())
 			}
 			if r := a.trimGoCache(dryRun, goBuilds); r.notable() {
 				lines = append(lines, r.String())
