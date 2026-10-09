@@ -63,7 +63,7 @@ func findGitDir(dir string) string {
 
 // originRepo reads the url of [remote "origin"] from a git config file.
 func originRepo(path string) string {
-	f, err := os.Open(filepath.Clean(path))
+	f, err := os.Open(filepath.Clean(path)) //nolint:gosec // the git config of a checkout the session works in
 	if err != nil {
 		return ""
 	}
