@@ -74,6 +74,14 @@ func roomy() *headroom {
 		Swap: &swapReading{Rated: true, AvailFalling: true, PerHourMiB: 10}, SlotsFree: 1, Slots: 2, Labs: 1, MaxLabs: 2}
 }
 
+// tight is a roomy headroom whose memory leaves no room for a start: the
+// watch tests' machine, which says no CAPACITY line under the floor.
+func tight() *headroom {
+	h := roomy()
+	h.AvailableMiB = 5 << 10
+	return h
+}
+
 // The verdict is room up to the ceiling within the guards, else every guard
 // that blocks.
 func TestCapacityVerdict(t *testing.T) {

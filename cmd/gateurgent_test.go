@@ -59,13 +59,15 @@ func markUrgent(t *testing.T, a *app, pr string) (string, error) {
 
 // A merge marked urgent runs while the budget is under the floor: once, as
 // the reset window's urgent merge, against a bound of its own; the log and
-// beekeeper budget name it and who asked.
+// beekeeper budget name it and who asked. The machine runs one devctl
+// process fewer than the cap.
 func TestAnUrgentMergeRunsUnderTheBudgetFloor(t *testing.T) {
 	noSystemd(t)
 	fakeDevctl(t, `echo '`+mergedDoc+`'`)
 	stubGitHub(t, github.Merged, "")
 	stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
 	a := urgentApp(t)
+	hostDevctls(t, a.cfg.Merge.Cap-1)
 	if out, err := markUrgent(t, a, "7"); err != nil || !strings.Contains(out, "marked o/r#7 urgent") {
 		t.Fatalf("lanes urgent: %v\n%s", err, out)
 	}
@@ -140,6 +142,22 @@ func TestASecondUrgentMergeInTheWindowIsRefused(t *testing.T) {
 	a.now = window.Add(time.Second)
 	if out, err := markUrgent(t, a, "8"); err != nil || !strings.Contains(out, "marked o/r#8 urgent") {
 		t.Errorf("a mark after the reset: %v\n%s", err, out)
+	}
+}
+
+// At the cap, counted from the machine's process table, the merge first in
+// its lane waits for a devctl process to end.
+func TestAMergeWaitsForTheMachinesDevctlCap(t *testing.T) {
+	stubGitHub(t, github.Open, "")
+	stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
+	a := queueApp(t)
+	a.cfg.Merge.BudgetFresh = config.Duration{Duration: time.Hour}
+	setBudget(t, a, 4000)
+	hostDevctls(t, a.cfg.Merge.Cap)
+	g := &gateRun{app: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo),
+		me: state.Party{Session: "s1", Name: ownerName}, pid: os.Getpid(), queued: true}
+	if why, err := g.step(); err != nil || !strings.Contains(why, "4 devctl processes run machine-wide (cap 4)") {
+		t.Errorf("step: %q, %v; want a wait for the cap", why, err)
 	}
 }
 

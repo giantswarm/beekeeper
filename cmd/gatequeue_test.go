@@ -17,6 +17,9 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/merge"
+	"github.com/giantswarm/beekeeper/internal/platform"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -43,7 +46,32 @@ func queueApp(t *testing.T, merges ...state.Merge) *app {
 	cfg := &config.Config{Lanes: []config.Lane{{Name: scratchRepo, Repositories: []string{scratchRepo}}}, GitHub: config.GitHub{Floor: 100},
 		Merge: config.Merge{Cap: 4, QueueTTL: config.Duration{Duration: 15 * time.Minute}, SeedTTL: config.Duration{Duration: time.Hour},
 			DevctlOwners: []string{"o"}}}
+	hostDevctls(t, 0)
 	return &app{cfg: cfg, store: store, now: time.Now()}
+}
+
+// devctlMachine is a machine whose process table holds n devctl processes
+// and nothing else.
+type devctlMachine struct {
+	platform.Machine
+	n int
+}
+
+func (m devctlMachine) Processes() (*proc.Table, error) {
+	t := &proc.Table{ByPID: map[int]*proc.Process{}}
+	for pid := 1; pid <= m.n; pid++ {
+		t.ByPID[pid] = &proc.Process{PID: pid, PPID: 1, Comm: merge.Tool}
+	}
+	return t, nil
+}
+
+// hostDevctls makes the gate count n devctl processes machine-wide instead
+// of the host's own.
+func hostDevctls(t *testing.T, n int) {
+	t.Helper()
+	was := plat.Machine
+	plat.Machine = devctlMachine{Machine: was, n: n}
+	t.Cleanup(func() { plat.Machine = was })
 }
 
 // stubSelf stands in for this binary as merge-child: it records its pid and
