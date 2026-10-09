@@ -45,7 +45,7 @@ func (f *fakeSetup) Started(context.Context, string) bool { return f.started }
 func (*fakeSetup) Reload() []string                       { return []string{reload} }
 func (*fakeSetup) Start(p string) []string                { return []string{"start", filepath.Base(p)} }
 func (*fakeSetup) Stop(p string) []string                 { return []string{"stop", filepath.Base(p)} }
-func (*fakeSetup) Restart(p string) [][]string { return [][]string{{"restart", filepath.Base(p)}} }
+func (*fakeSetup) Restart(p string) [][]string            { return [][]string{{"restart", filepath.Base(p)}} }
 
 func (f *fakeSetup) run(_ context.Context, argv []string) error {
 	f.ran = append(f.ran, strings.Join(argv, " "))
