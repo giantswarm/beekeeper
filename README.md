@@ -546,7 +546,7 @@ repository matches.
 | `lock` | The broker forgets the vault session. |
 | `status` | Whether the broker holds the vault session, never the session. |
 | `rotate platform://<installation>/<capability>/<name> --reason <text>` | A credential the platform manager generates: `platformctl installation reconcile <installation> <capability> --commit --rotate <name>` on the host, the manager writing the new value into the installation's SOPS files in a pull request; nothing is decrypted and no copy reaches the vault. `--dry-run` shows the files that hold it. |
-| `recipients [<directory> \| <sops-file>]` | For a directory (the working directory by default), every age recipient of the creation rules of the `.sops.yaml` nearest above it, a gitops repository's installations' for one (`management-clusters/graveler/.*` → its recipient); for a SOPS file, the file's recipients (its metadata when encrypted, else its creation rule's). Each comes with where its identity is: sops' own sources, the entry of `secret.ageIdentities`, the shared vault's item per recipient (found in the vault's item listing, metadata only) or `none`, naming the item the vault lacks. No value is read; exit 1 when a recipient has no identity. With `secret.session` it runs in the broker, like a call on the vault. |
+| `recipients [<directory> \| <sops-file>]` | For a directory (the working directory by default), every age recipient of the creation rules of the `.sops.yaml` nearest above it, a gitops repository's installations' for one (`management-clusters/graveler/.*` → its recipient); for a SOPS file, the file's recipients (its metadata when encrypted, else its creation rule's). Each comes with where its identity is: sops' own sources, the entry of `secret.ageIdentities`, the shared vault's item per recipient or the installation's item `<installation>.agekey` in `secret.vault` or `secret.ageVaults` (found in the vaults' item listings, metadata only) or `none`, naming the items the vaults lack. No value is read; exit 1 when a recipient has no identity. With `secret.session` it runs in the broker, like a call on the vault. |
 
 ### Encoded values
 
@@ -610,7 +610,8 @@ secret:
 ```
 
 The first entry whose recipient is one of the file's, or whose `pathRegex` matches the file's
-absolute path, is read like any `op://` reference (the vault must be `secret.vault`) or, for a
+absolute path, is read like any `op://` reference (the vault must be `secret.vault` or one of
+`secret.ageVaults`) or, for a
 `file://` reference, from the file as `age-keygen` writes it (comment lines and several identities
 allowed), checked to hold the identity of one of the file's recipients, and only that identity is
 given as `SOPS_AGE_KEY` to the one sops call's environment, never written anywhere. With
@@ -649,6 +650,28 @@ reading no value. A file whose recipient has neither an entry nor an item fails 
 line, naming the installation (`alerts.installations`, by the directory of the file's path), the
 recipient and the item the vault lacks: a Secret for it is one no agent can change, and no person
 is asked to decrypt it. With `secret.session` the call runs in the broker, like a call on the vault.
+
+#### The installation's item
+
+A customer's gitops repository keeps an installation's files under `installations/<installation>/`,
+and the identity of the installation's recipient lives in an item titled `<installation>.agekey`,
+the identity file's text in one of its fields (a Secure Note's `notesPlain`, for one) or as the
+document it is. beekeeper looks the item up by the installation the file's path names, in
+`secret.vault` and in every vault of `secret.ageVaults`, the vaults the same session or service
+account reads age identities from:
+
+```yaml
+secret:
+  vault: <shared vault>
+  ageVaults: [<vault holding the installations' .agekey items>]
+```
+
+The item is found in the vaults' item listings (titles only, metadata, no value); the broker reads
+its fields in its own process for the one sops call and gives sops only the identity of the file's
+recipient, so an item holding another recipient's identity is refused. No entry per installation is
+configured. An `op://` entry of `secret.ageIdentities` may name a field of one of `secret.ageVaults`;
+no other `op://` reference reads them. `beekeeper secret recipients` names the item and its vault, or,
+when no vault holds it, the items the vaults lack.
 
 ### The vault session
 
@@ -2071,6 +2094,7 @@ The organisation and desk keys, and their defaults:
 | `secret.sessionLifetime` | `12h` | How long the broker holds the vault session after a sign-in ([The vault session](#the-vault-session)) |
 | `secret.unlockWait` | `8m` | How long a call on the vault waits for the broker's sign-in, and how long one sign-in waits for the credential store and tries again after a failure ([The vault session](#the-vault-session)) |
 | `secret.ageIdentities` | none | Age identities in the shared vault, in an identity file (`file://`) or in the person's own credential store (`store://`), by recipient or `pathRegex`, for the SOPS files no local sops identity decrypts; a recipient no entry names has its identity in the vault's item `sops age key <recipient>` ([Age identities](#age-identities)) |
+| `secret.ageVaults` | none | The vaults besides `secret.vault` that age identities are read from: an `op://` entry of `secret.ageIdentities` may name one, and a file under `installations/<name>/` finds its identity in the item `<name>.agekey` of `secret.vault` or one of them ([The installation's item](#the-installations-item)) |
 | `secret.store.read`, `secret.store.search` | none | The person's own commands that read an entry of their credential store and search it by an age recipient, for `store://` age identities ([Age identities](#age-identities)) |
 | `secret.files` | none | Files known to hold secret values (`~/` and globs allowed) that no agent reads whole, beside the built-in list ([Secret reads](#secret-reads)) |
 | `secret.unlockCommands` | none | The person's own vault unlock helpers, refused in agent sessions like `op signin` and unaliased in the agent shell ([Secret reads](#secret-reads)) |

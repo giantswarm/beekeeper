@@ -191,7 +191,7 @@ func TestOmpProviders(t *testing.T) {
 
 func TestAgeIdentityRefs(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "c.yaml")
-	raw := "secret: {store: {read: [r, -a], search: [s]}, ageIdentities: [{recipient: age1x, ref: op://V/i/f}, {pathRegex: /repo/, ref: \"file:///home/me/keys.txt\"}, {recipient: age1y, ref: \"store://\"}, {recipient: age1z, ref: store://keys/age}]}"
+	raw := "secret: {vault: S, ageVaults: [V], store: {read: [r, -a], search: [s]}, ageIdentities: [{recipient: age1x, ref: op://V/i/f}, {pathRegex: /repo/, ref: \"file:///home/me/keys.txt\"}, {recipient: age1y, ref: \"store://\"}, {recipient: age1z, ref: store://keys/age}]}"
 	if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -204,6 +204,27 @@ func TestAgeIdentityRefs(t *testing.T) {
 	}
 	if got := c.Secret.Store.Read; len(got) != 2 || len(c.Secret.Store.Search) != 1 || c.Secret.AgeIdentities[3].Ref != "store://keys/age" {
 		t.Errorf("store = %+v, refs = %+v", c.Secret.Store, c.Secret.AgeIdentities)
+	}
+	if got := c.Secret.AgeVaults; len(got) != 1 || got[0] != "V" {
+		t.Errorf("ageVaults = %q", got)
+	}
+
+	// an op:// entry outside secret.vault and secret.ageVaults is refused at
+	// load, as is an age vault without a shared vault
+	for name, raw := range map[string]string{
+		"another vault":       "secret: {vault: S, ageIdentities: [{recipient: age1x, ref: op://V/i/f}]}",
+		"no shared vault":     "secret: {ageVaults: [V]}",
+		"a path, not a vault": "secret: {vault: S, ageVaults: [V/i]}",
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), "c.yaml")
+			if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(p); err == nil {
+				t.Error("loads")
+			}
+		})
 	}
 }
 
