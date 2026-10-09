@@ -111,7 +111,7 @@ func TestAReplacedGateFollowsItsDevctlOnUnderTheInstalledOne(t *testing.T) {
 	t.Run("the installed binary follows on", func(t *testing.T) {
 		g, base, pid, stderr := launchedMerge(t, script)
 		stubGitHub(t, "", "")
-		run := followChild(base, pid, 0, &fakeBinary{replaced: true})
+		run := followChild(base, pid, 0, &fakeBinary{replaced: true}, nil)
 		if !run.replaced || run.offset != int64(len(devctlFirstLine)) {
 			t.Fatalf("replaced %v at offset %d, want %d", run.replaced, run.offset, len(devctlFirstLine))
 		}

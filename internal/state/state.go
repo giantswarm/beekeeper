@@ -883,14 +883,16 @@ type Merge struct {
 	PID  int    `json:"pid"`
 	// Child is a running merge's devctl, in a session of its own: it merges
 	// on when the gate's caller, or the gate, is gone.
-	Child int    `json:"child,omitempty"`
-	Phase string `json:"phase"`
+	Child int `json:"child,omitempty"`
+	// Output is the file the gate's stdout writes to, a background task's
+	// output file: a TaskStop naming that task stops the merge.
+	Output string `json:"output,omitempty"`
+	Phase  string `json:"phase"`
 	// Joined orders the queue; a rerun within the queue TTL keeps it.
 	Joined  time.Time `json:"joined"`
 	Seen    time.Time `json:"seen"`
 	Started time.Time `json:"started,omitzero"`
-	// Finished and Exit are when and how the merge's run ended; on a
-	// waiting merge, the failed attempt whose place it keeps (Retrying).
+	// Finished and Exit are when and how the merge's run ended.
 	Finished time.Time `json:"finished,omitzero"`
 	Exit     int       `json:"exit,omitempty"`
 	// Seeded marks a place queued on a session's behalf (lanes queue): it
@@ -927,10 +929,6 @@ func (m Merge) Key() string {
 	}
 	return fmt.Sprintf("%s#%d", m.Repo, m.PR)
 }
-
-// Retrying says whether a waiting merge is a failed attempt that keeps its
-// place for its session's retry of the same pull request.
-func (m Merge) Retrying() bool { return m.Phase == Waiting && !m.Finished.IsZero() }
 
 // Event is one line of events.jsonl. At is written in UTC (RFC 3339 with a
 // trailing Z), so a reader can compare it as a string.

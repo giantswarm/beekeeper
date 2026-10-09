@@ -19,7 +19,7 @@ import (
 // The repositories and lane of the hung-merge tests.
 const (
 	hungRepo, openRepo, freshRepo, nextRepo = "o/hung", "o/open", "o/fresh", "o/next"
-	hungLane                                = "scratch"
+	hungLane, openLane                      = "scratch", "open"
 )
 
 // hungChild starts a process standing in for a merge's merge-child, records
@@ -77,7 +77,7 @@ func TestWatchEndsAHungMerge(t *testing.T) {
 			// Its gate was killed with its caller; devctl runs on.
 			{Repo: hungRepo, PR: 1, Lane: hungLane, By: four, Child: hung, Phase: state.Running, Started: long},
 			{Repo: nextRepo, PR: 4, Lane: hungLane, By: four, Phase: state.Waiting, Joined: relayNow, Seen: relayNow},
-			{Repo: openRepo, PR: 2, Lane: "open", By: four, Child: open, Phase: state.Running, Started: long},
+			{Repo: openRepo, PR: 2, Lane: openLane, By: four, Child: open, Phase: state.Running, Started: long},
 			{Repo: freshRepo, PR: 3, Lane: "fresh", By: four, Child: fresh, Phase: state.Running, Started: long},
 		}
 		return nil, nil
@@ -129,7 +129,7 @@ func TestLanesDropEndsAHungRun(t *testing.T) {
 	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges = []state.Merge{
 			{Repo: hungRepo, PR: 1, Lane: hungLane, By: four, Child: hung, Phase: state.Running, Started: a.now},
-			{Repo: openRepo, PR: 2, Lane: "open", By: four, Child: open, Phase: state.Running, Started: a.now},
+			{Repo: openRepo, PR: 2, Lane: openLane, By: four, Child: open, Phase: state.Running, Started: a.now},
 		}
 		return nil, nil
 	})

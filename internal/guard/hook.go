@@ -187,6 +187,9 @@ type Hook struct {
 	// GraphQL is the GraphQL budget as beekeeper last read it, for a
 	// board-read refusal; nil or "", unknown.
 	GraphQL func() string
+	// StopTask ends the gate a TaskStop of the session's task runs and says
+	// what it ended, "" for nothing; nil ends nothing.
+	StopTask func(session, task string) string
 }
 
 // event is the part of a PreToolUse event the hook reads.
@@ -247,6 +250,9 @@ func (h Hook) decide(ev event) []byte {
 	}
 	if ev.ToolName == SendMessageTool {
 		return h.sendMessage(ev.Session, ev.ToolInput)
+	}
+	if ev.ToolName == TaskStopTool {
+		return h.taskStop(ev.Session, ev.ToolInput)
 	}
 	if r := mentionRefusal(ev.ToolName, ev.ToolInput, ev.CWD); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
