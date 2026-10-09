@@ -334,6 +334,12 @@ type Secret struct {
 	// (the broker's, with secret.session) and given to the one sops call
 	// alone.
 	AgeIdentities []AgeIdentity `yaml:"ageIdentities"`
+	// AgeVaults are the 1Password vaults besides secret.vault that age
+	// identities are read from, through the same session or service
+	// account: an op:// entry of ageIdentities may name one, and a SOPS file
+	// of installations/<name>/ no entry names finds its identity in the item
+	// "<name>.agekey" of secret.vault or one of them.
+	AgeVaults []string `yaml:"ageVaults"`
 	// Store is the person's own credential store a store:// age identity
 	// is read from.
 	Store SecretStore `yaml:"store"`
@@ -360,8 +366,8 @@ type AgeIdentity struct {
 	// PathRegex matches a file's absolute path (unanchored), for the files
 	// of a repository or an installation whatever their recipient.
 	PathRegex string `yaml:"pathRegex"`
-	// Ref is the op:// field of the shared vault (secret.vault), the
-	// file:/// identity file (an absolute path, comments allowed) or the
+	// Ref is the op:// field of the shared vault (secret.vault) or of one
+	// of secret.ageVaults, the file:/// identity file (an absolute path, comments allowed) or the
 	// store:// entry of the person's own credential store (secret.store;
 	// store:// alone searches it for the file's recipients) holding the
 	// identity, AGE-SECRET-KEY-1….
@@ -1770,6 +1776,16 @@ func (c *Config) validate() error {
 		}
 		if _, err := regexp.Compile(id.PathRegex); err != nil {
 			return fmt.Errorf("secret.ageIdentities[%d]: pathRegex: %w", i, err)
+		}
+		if rest, ok := strings.CutPrefix(id.Ref, "op://"); ok {
+			if vault, _, _ := strings.Cut(rest, "/"); vault != c.Secret.Vault && !slices.Contains(c.Secret.AgeVaults, vault) {
+				return fmt.Errorf("secret.ageIdentities[%d]: ref %q: the vault %q is neither secret.vault nor one of secret.ageVaults", i, id.Ref, vault)
+			}
+		}
+	}
+	for i, v := range c.Secret.AgeVaults {
+		if v == "" || strings.Contains(v, "/") || c.Secret.Vault == "" {
+			return fmt.Errorf("secret.ageVaults[%d]: %q: a vault's name, beside secret.vault", i, v)
 		}
 	}
 	for name, p := range c.Omp.Providers {

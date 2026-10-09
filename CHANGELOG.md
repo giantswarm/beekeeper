@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `secret.ageVaults`: the vaults besides `secret.vault` that age identities are read from. A SOPS file under `installations/<name>/` that no `secret.ageIdentities` entry names finds its identity in the item `<name>.agekey` of `secret.vault` or one of them, a field or the document holding the identity file, and `secret recipients` names that item; an `op://` entry of `secret.ageIdentities` may name a field of an age vault, and one naming any other vault fails the configuration's load instead of being listed as found ([#766](https://github.com/giantswarm/beekeeper/issues/766)).
+
 ### Changed
 
 - The merge gate names the command whose turn came: `promoting <owner/repo>` for `devctl release promote`, `merging <owner/repo>#<n>` for `devctl pr merge` (unchanged). A promotion devctl refuses (`not_built`, `nothing_to_promote`) logs no `merging` and its outcome line, printed after devctl returns, says `nothing promoted (<state>)`; a dispatched one says `promoted <owner/repo>: release <version> dispatched` ([#593](https://github.com/giantswarm/beekeeper/issues/593)).

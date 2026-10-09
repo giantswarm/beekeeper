@@ -3,6 +3,7 @@ package secret
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -55,6 +56,50 @@ func AgeItemTitle(recipient string) string { return ageItemPrefix + recipient }
 // AgeItemRef is the op:// reference of recipient's identity in vault.
 func AgeItemRef(vault, recipient string) string {
 	return guard.OpRef + vault + "/" + AgeItemTitle(recipient) + "/" + ageItemField
+}
+
+// The shared vault and secret.ageVaults hold an installation's identity in
+// one item per installation: titled [AgeInstallationItem], one of its fields
+// or the document it is the identity file's text. beekeeper finds it by the
+// installation the SOPS file's path names, checks that it exists by the
+// vaults' item listings, metadata only, and reads every field of it in its
+// own process, keeping the one identity of the file's recipient.
+const ageInstallationSuffix = ".agekey"
+
+// AgeInstallationItem is the title of the vault item that holds the
+// identity of installation's recipient.
+func AgeInstallationItem(installation string) string {
+	return installation + ageInstallationSuffix
+}
+
+// installationDir is the directory of a gitops repository the installations
+// live under, one directory each (installations/<name>/…).
+const installationDir = "installations/"
+
+// installationName matches an installation's name.
+var installationName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+// installationIn is the installation a path or a creation rule's path_regex
+// names as installations/<name>/, "" when none.
+func installationIn(s string) string {
+	_, rest, ok := strings.Cut(filepath.ToSlash(s), installationDir)
+	if !ok {
+		return ""
+	}
+	name, _, _ := strings.Cut(rest, "/")
+	if !installationName.MatchString(name) {
+		return ""
+	}
+	return name
+}
+
+// ageVaults are the vaults age identities are read from: the shared vault
+// first, then secret.ageVaults; none without a shared vault.
+func (o *Ops) ageVaults() []string {
+	if o.Vault == "" {
+		return nil
+	}
+	return append([]string{o.Vault}, o.AgeVaults...)
 }
 
 // The references of an age identity besides a vault field.
@@ -150,10 +195,10 @@ type ageKey struct {
 	source, value string
 }
 
-// ageKeys read the identities ref holds: an op:// field of the shared
-// vault, a file:// identity file or a store:// entry of the person's own
-// credential store (with no entry, every entry the store's search finds for
-// one of recipients), read here and nowhere else.
+// ageKeys read the identities ref holds: an op:// field of the shared vault
+// or of secret.ageVaults, a file:// identity file or a store:// entry of the
+// person's own credential store (with no entry, every entry the store's
+// search finds for one of recipients), read here and nowhere else.
 func (o *Ops) ageKeys(ctx context.Context, ref string, recipients []string) ([]ageKey, error) {
 	if path, ok := strings.CutPrefix(ref, FileRef); ok {
 		raw, err := os.ReadFile(path) //nolint:gosec // the identity file secret.ageIdentities names
@@ -164,7 +209,10 @@ func (o *Ops) ageKeys(ctx context.Context, ref string, recipients []string) ([]a
 	}
 	entry, ok := strings.CutPrefix(ref, StoreRef)
 	if !ok {
-		v, err := o.value(ctx, Ref{Op: ref})
+		if err := o.checkVaultIn(Ref{Op: ref}, o.ageVaults()...); err != nil {
+			return nil, fmt.Errorf("%w (secret.vault and secret.ageVaults)", err)
+		}
+		v, err := o.readOp(ctx, ref)
 		return []ageKey{{ref, v}}, err
 	}
 	entries := []string{entry}
@@ -297,59 +345,128 @@ func (o *Ops) configured(recipients []string, abs string) *AgeIdentity {
 	return nil
 }
 
-// itemKeys read the shared vault's items of recipients, [AgeItemTitle]
-// each, those the vault's item listing names (metadata, no value): the
-// identity of a recipient no secret.ageIdentities entry names. With none,
-// the call fails in one line naming the installation, the recipient and the
-// item the vault lacks: never a person's own sops run.
+// itemKeys read the vault items of a file no secret.ageIdentities entry
+// names, those the vaults' item listings name (metadata, no value): the
+// shared vault's item per recipient ([AgeItemTitle]) and the item of the
+// file's installation ([AgeInstallationItem]) in the shared vault and
+// secret.ageVaults. With none, the call fails in one line naming the
+// installation, the recipient and the items the vaults lack: never a
+// person's own sops run.
 func (o *Ops) itemKeys(ctx context.Context, file string, recipients []string) ([]ageKey, error) {
-	titles, err := o.itemTitles(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("%s: the age identity in the vault: %w", file, err)
-	}
+	inst := o.installation(file)
 	var out []ageKey
 	var missing []string
-	for _, r := range recipients {
-		if !slices.Contains(titles, AgeItemTitle(r)) {
-			missing = append(missing, fmt.Sprintf("%q", AgeItemTitle(r)))
+	for _, vault := range o.ageVaults() {
+		items, err := o.vaultItems(ctx, vault)
+		if err != nil {
+			return nil, fmt.Errorf("%s: the age identity in the vault %s: %w: %w", file, vault, ErrVault, err)
+		}
+		if vault == o.Vault {
+			for _, r := range recipients {
+				if itemID(items, AgeItemTitle(r)) == "" {
+					missing = append(missing, fmt.Sprintf("%q", AgeItemTitle(r)))
+					continue
+				}
+				ref := AgeItemRef(o.Vault, r)
+				v, err := o.readOp(ctx, ref)
+				if err != nil {
+					return nil, fmt.Errorf("%s: the age identity in the vault: %w", file, err)
+				}
+				out = append(out, ageKey{ref, v})
+			}
+		}
+		if inst == "" {
 			continue
 		}
-		ref := AgeItemRef(o.Vault, r)
-		v, err := o.value(ctx, Ref{Op: ref})
-		if err != nil {
-			return nil, fmt.Errorf("%s: the age identity in the vault: %w", file, err)
+		id := itemID(items, AgeInstallationItem(inst))
+		if id == "" {
+			continue
 		}
-		out = append(out, ageKey{ref, v})
+		keys, err := o.installationKeys(ctx, vault, id, AgeInstallationItem(inst))
+		if err != nil {
+			return nil, fmt.Errorf("%s: the age identity in the vault %s: %w", file, vault, err)
+		}
+		out = append(out, keys...)
 	}
 	if len(out) == 0 {
 		whose := "its"
-		if inst := o.installation(file); inst != "" {
+		if inst != "" {
 			whose = inst + "'s"
 		}
-		return nil, fmt.Errorf("%s: %w for %s recipient %s: the vault %s holds no item %s, whose password field is the AGE-SECRET-KEY-1… identity",
-			file, ErrNoAgeIdentity, whose, strings.Join(recipients, ", "), o.Vault, strings.Join(missing, " or "))
+		return nil, fmt.Errorf("%s: %w for %s recipient %s: %s",
+			file, ErrNoAgeIdentity, whose, strings.Join(recipients, ", "), o.lacking(strings.Join(missing, " or "), inst))
 	}
 	return out, nil
 }
 
-// itemTitles are the titles of the shared vault's items: the listing names
-// no value.
-func (o *Ops) itemTitles(ctx context.Context) ([]string, error) {
-	items, err := o.vaultItems(ctx, o.Vault)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrVault, err)
+// lacking says which items the vaults lack: the shared vault's items per
+// recipient (quoted titles) and, for a file of an installation, the
+// installation's item in every vault.
+func (o *Ops) lacking(perRecipient, inst string) string {
+	s := fmt.Sprintf("the vault %s holds no item %s, whose password field is the AGE-SECRET-KEY-1… identity", o.Vault, perRecipient)
+	if inst != "" {
+		s += fmt.Sprintf(", and no vault of %s an item %q holding the installation's identity file", strings.Join(o.ageVaults(), ", "), AgeInstallationItem(inst))
 	}
-	out := make([]string, 0, len(items))
+	return s
+}
+
+// itemID is the ID of the item titled title, "" when items hold none.
+func itemID(items []vaultItem, title string) string {
 	for _, it := range items {
-		out = append(out, it.Title)
+		if it.Title == title {
+			return it.ID
+		}
+	}
+	return ""
+}
+
+// installationKeys read the item id of vault, an installation's: every
+// field's value and, for a document, its file, each a candidate for the
+// identity file's text.
+func (o *Ops) installationKeys(ctx context.Context, vault, id, title string) ([]ageKey, error) {
+	ctx, cancel := context.WithTimeout(ctx, opTimeout)
+	defer cancel()
+	raw, err := o.op(ctx, nil, "item", "get", id, "--vault", vault, "--reveal", "--format", "json")
+	if err != nil {
+		return nil, fmt.Errorf("%w: %q: %w", ErrVault, title, err)
+	}
+	var item struct {
+		Category string `json:"category"`
+		Fields   []struct {
+			Label string `json:"label"`
+			Value string `json:"value"`
+		} `json:"fields"`
+	}
+	if json.Unmarshal(raw, &item) != nil {
+		return nil, fmt.Errorf("%w: %q: op item get answered no item", ErrVault, title)
+	}
+	src := guard.OpRef + vault + "/" + title
+	var out []ageKey
+	for _, f := range item.Fields {
+		if f.Value != "" {
+			out = append(out, ageKey{src + "/" + f.Label, f.Value})
+		}
+	}
+	if item.Category == "DOCUMENT" {
+		doc, err := o.op(ctx, nil, "document", "get", id, "--vault", vault)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %q: %w", ErrVault, title, err)
+		}
+		out = append(out, ageKey{src, string(doc)})
 	}
 	return out, nil
 }
 
-// installation is the one of Installations that file's path names, as a
-// directory under the .sops.yaml above it (management-clusters/<name>/…),
+// installation is the installation file's path names: installations/<name>/
+// of a customer's gitops repository, else the one of Installations it names
+// as a directory under the .sops.yaml above it (management-clusters/<name>/…);
 // "" when none.
 func (o *Ops) installation(file string) string {
+	if abs, err := filepath.Abs(file); err == nil {
+		if inst := installationIn(abs); inst != "" {
+			return inst
+		}
+	}
 	_, rel, err := sopsTarget(file)
 	if err != nil {
 		return ""
