@@ -17,8 +17,14 @@ interfaces have one implementation per build, `linux_systemd` on Linux (`systemd
 a `platform.NotAvailableError`. `GOOS=darwin go build ./...` and `go build -tags nosystemd ./...`
 check both. The remaining syscalls are split by build tag: `statfs` (`internal/machine/disk_*.go`),
 the gate's re-exec of a replaced binary (`internal/platform/binary_*.go`, Linux only, a no-op
-elsewhere) and the detached merge child (`internal/platform/detach_*.go`). Pre-commit runs
-golangci-lint with gosec and goconst.
+elsewhere) and the detached merge child (`internal/platform/detach_*.go`).
+
+Pre-commit runs golangci-lint (the version CI's `pre-commit` workflow pins) over every package, test
+files included, with the linters of `.golangci.yaml`: a bare `golangci-lint run ./...` lints what CI
+does, and main lints clean. `goconst` counts a string across a whole package, production and test
+files together, so a change that adds or removes a string in `cmd/snapshot.go` can raise a finding
+in an untouched `cmd/*_test.go`: that finding is the change's, and CI reports it too. A lint of a
+worktree of `origin/main` tells main's findings from a change's.
 
 The Kubernetes store's tests (`internal/state/kube`) and `beekeeper serve`'s (`cmd/serve_envtest_test.go`,
 every tool over streamable HTTP behind a test Dex from `internal/identity/identitytest`) run against
