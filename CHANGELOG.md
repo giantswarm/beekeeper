@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The watch keeps one Alertmanager port-forward per installation from tick to tick and asks kubectl for the kubeconfig's contexts only once it changed: a tick is HTTP requests, no `kubectl` or `tsh kube credentials` run (kubectl keeps the Teleport credential until it expires). A forward that dropped is replaced by one new one at the next attempt, counted as today. An installation whose context is not in the kubeconfig is said at once (`context "<ctx>" is not in the kubeconfig`), never retried: 23 such installations ran 670 kubectl a tick. A PROCESS STORM line names the watch's own processes as `"beekeeper watch"`, and the snapshot lists the kept forwards as no session's wait. One tick over 28 installations was the machine's fork storm ([#710](https://github.com/giantswarm/beekeeper/issues/710)).
+
 ### Added
 
 - `beekeeper secret copy` and `secret set` take `--encode base64` or `--encode basic:<user>`: the value is written in that form, made in beekeeper's process before the write (`base64("<user>:<value>")` for basic, the credential a gateway injects verbatim after `Basic `), never printed, logged or returned. `secret fingerprint <ref> --encode …` answers the encoded form's fingerprint and `secret fingerprint --secret <context>/<namespace>/<name>/<key>` a held lab Secret's key, so a delivery is checked without a value read ([#720](https://github.com/giantswarm/beekeeper/issues/720)).

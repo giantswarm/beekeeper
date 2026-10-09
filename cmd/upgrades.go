@@ -38,7 +38,7 @@ func (a *app) upgradeStatuses(ctx context.Context, st *state.State, now time.Tim
 	if len(due) > 0 {
 		var contexts []string
 		if slices.ContainsFunc(due, func(in config.Installation) bool { return in.Context == "" }) {
-			contexts = alerts.Reader{Kubectl: al.Kubectl}.Contexts(ctx)
+			contexts = (&alerts.Reader{Kubectl: al.Kubectl}).Contexts(ctx)
 		}
 		targets := make([]upgrade.Target, 0, len(due))
 		for _, in := range due {

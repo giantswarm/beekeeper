@@ -99,7 +99,9 @@ command refuses.`,
 				return errors.New(ownedBy("the alerts", owner, a.now))
 			}
 			defer func() { _ = store.Release() }()
-			lines := a.alertCycle(ctx, store)
+			r := a.alertReader()
+			defer r.Close()
+			lines := a.alertCycle(ctx, store, r)
 			if a.cfg.Alerts.PagerDuty.Enabled() && ctx.Err() == nil {
 				pd, err := a.ownPagerDuty()
 				if err != nil {
@@ -258,12 +260,20 @@ func (a *app) alertRules() alerts.Rules {
 		Flap: alerts.Damper{Changes: al.Flap.Changes, Window: al.Flap.Window.Duration}, Quiet: al.Quiet}
 }
 
-func (a *app) alertReader() alerts.Reader {
-	return alerts.Reader{Kubectl: a.cfg.Alerts.Kubectl, Timeout: a.cfg.Alerts.Timeout.Duration, Tenant: a.cfg.Alerts.Tenant}
+// alertReader is a Reader whose forwards end with each read; the watches
+// keep theirs (alertCycle).
+func (a *app) alertReader() *alerts.Reader {
+	return &alerts.Reader{Kubectl: a.cfg.Alerts.Kubectl, Timeout: a.cfg.Alerts.Timeout.Duration, Tenant: a.cfg.Alerts.Tenant}
 }
 
 // alertTargets are the configured installations and the leased ones.
 func (a *app) alertTargets(ctx context.Context) []alerts.Target {
+	return a.alertTargetsIn(a.alertReader().Contexts(ctx))
+}
+
+// alertTargetsIn are the configured installations and the leased ones,
+// their contexts resolved among contexts.
+func (a *app) alertTargetsIn(contexts []string) []alerts.Target {
 	var configured []alerts.Target
 	for _, in := range a.cfg.Alerts.Installations {
 		configured = append(configured, alerts.Target{Name: in.Name, Context: in.Context})
@@ -274,14 +284,15 @@ func (a *app) alertTargets(ctx context.Context) []alerts.Target {
 			leased[h.Env] = fmt.Sprintf("%q", cmp.Or(h.Name, h.Holder))
 		}
 	}
-	return alerts.Targets(configured, leased, a.cfg.Kube.Context, a.alertReader().Contexts(ctx))
+	return alerts.Targets(configured, leased, a.cfg.Kube.Context, contexts)
 }
 
-// alertCycle reads every installation once, returns the lines of what
-// changed and keeps the new baseline. An interrupted reading keeps nothing.
-func (a *app) alertCycle(ctx context.Context, store *alerts.Store) []string {
-	targets := a.alertTargets(ctx)
-	answers := a.alertReader().Read(ctx, targets)
+// alertCycle reads every installation once through r, returns the lines of
+// what changed and keeps the new baseline. An interrupted reading keeps
+// nothing.
+func (a *app) alertCycle(ctx context.Context, store *alerts.Store, r *alerts.Reader) []string {
+	targets := a.alertTargetsIn(r.Contexts(ctx))
+	answers := r.Read(ctx, targets)
 	if ctx.Err() != nil {
 		return nil
 	}
