@@ -72,7 +72,8 @@ func answer(ctx context.Context, path, procDir string, h Handler) {
 	}
 	r, gone, err := handle(ctx, path, procDir, h)
 	if gone {
-		// a streamed call whose requester ended: nobody reads its answer
+		// a streamed call whose requester ended, or a request collected
+		// since the listing: nobody reads its answer
 		_ = os.Remove(path)
 		_ = os.Remove(base + outSuffix)
 		return
@@ -94,10 +95,14 @@ func answer(ctx context.Context, path, procDir string, h Handler) {
 // holderPoll is how often a streamed call's requester is looked for.
 const holderPoll = time.Second
 
-// handle acts on the request at path; gone says that a streamed call's
-// requester ended before its call's answer.
+// handle acts on the request at path; gone says that nobody reads its
+// answer: a streamed call's requester ended before it, or the request was
+// answered and collected since the spool was listed.
 func handle(ctx context.Context, path, procDir string, h Handler) (Reply, bool, error) {
 	raw, st, err := read(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return Reply{}, true, nil
+	}
 	if err != nil {
 		return Reply{}, false, err
 	}

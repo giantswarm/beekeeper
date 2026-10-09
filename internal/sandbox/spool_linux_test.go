@@ -73,6 +73,38 @@ func TestServeRefusesARequestNobodyHolds(t *testing.T) {
 	}
 }
 
+// A request the broker listed and its requester collected and removed
+// before the broker came to it gets no answer: not even for a moment does a
+// reply or its temp file appear in the spool, where the requester's own
+// listing would find it.
+func TestServeAnswersNoCollectedRequest(t *testing.T) {
+	dir := t.TempDir()
+	stop := make(chan struct{})
+	seen := make(chan []os.DirEntry, 1)
+	go func() {
+		defer close(seen)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if left, _ := os.ReadDir(dir); len(left) != 0 {
+				seen <- left
+				return
+			}
+		}
+	}()
+	called := false
+	for range 1000 {
+		answer(context.Background(), filepath.Join(dir, "x"+reqSuffix), "/proc", func(context.Context, int, Request) (Reply, error) { called = true; return Reply{}, nil })
+	}
+	close(stop)
+	if left, ok := <-seen; ok || called {
+		t.Errorf("the spool showed %v; handler called %v", left, called)
+	}
+}
+
 func TestAskWithoutABroker(t *testing.T) {
 	dir := t.TempDir()
 	if err := Ask(dir, Request{Op: OpPing}, 50*time.Millisecond); !errors.Is(err, ErrNoBroker) {
