@@ -28,9 +28,22 @@ func TestSystemdSetupFiles(t *testing.T) {
 		}
 	}
 
-	files, _ = systemdSetup{}.Files(SetupSpec{ConfigDir: "/c", Exe: testExe, Notify: true})
-	if !strings.Contains(string(files[0].Content), "ExecStart=/b/beekeeper watch --notify --standby\n") {
-		t.Errorf("watch.notify: the standby watch does not notify:\n%s", files[0].Content)
+	for _, notify := range []bool{false, true} {
+		watch := "watch --standby"
+		if notify {
+			watch = "watch --notify --standby"
+		}
+		files, _ = systemdSetup{}.Files(SetupSpec{ConfigDir: "/c", Exe: testExe, Notify: notify})
+		unit := string(files[0].Content)
+		if !strings.HasPrefix(unit, "# beekeeper "+watch+" as a systemd user unit") ||
+			!strings.Contains(unit, "\nExecStart=/b/beekeeper "+watch+"\n") {
+			t.Errorf("watch.notify %v: the header and ExecStart do not both run %q:\n%s", notify, watch, unit)
+		}
+	}
+
+	restart := systemdSetup{}.Restart("/c/systemd/user/beekeeper-notify.service")
+	if len(restart) != 1 || strings.Join(restart[0], " ") != "systemctl --user restart beekeeper-notify.service" {
+		t.Errorf("restart %v: a linked unit survives only a restart, never a disable", restart)
 	}
 
 	files, skipped = systemdSetup{}.Files(SetupSpec{ConfigDir: "/c", Exe: testExe, RAMMiB: 100 << 10})

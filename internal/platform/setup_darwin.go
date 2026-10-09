@@ -93,3 +93,9 @@ func (l launchdSetup) Start(path string) []string {
 func (l launchdSetup) Stop(path string) []string {
 	return []string{"launchctl", "bootout", l.target(path)}
 }
+
+// Restart unloads and loads the agent: launchd reads a changed plist only
+// at bootstrap.
+func (l launchdSetup) Restart(path string) [][]string {
+	return [][]string{l.Stop(path), l.Start(path)}
+}

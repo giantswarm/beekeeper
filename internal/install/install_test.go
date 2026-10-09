@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -44,6 +45,7 @@ func (f *fakeSetup) Started(context.Context, string) bool { return f.started }
 func (*fakeSetup) Reload() []string                       { return []string{reload} }
 func (*fakeSetup) Start(p string) []string                { return []string{"start", filepath.Base(p)} }
 func (*fakeSetup) Stop(p string) []string                 { return []string{"stop", filepath.Base(p)} }
+func (*fakeSetup) Restart(p string) [][]string { return [][]string{{"restart", filepath.Base(p)}} }
 
 func (f *fakeSetup) run(_ context.Context, argv []string) error {
 	f.ran = append(f.ran, strings.Join(argv, " "))
@@ -298,7 +300,7 @@ func TestUpdatesWhatItWrote(t *testing.T) {
 	if err := Install(context.Background(), e); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"update  ~/.claude/settings.json: PreToolUse hook", "update  ~/.config/units/notify.service", "run     stop notify.service", "run     start notify.service"} {
+	for _, want := range []string{"update  ~/.claude/settings.json: PreToolUse hook", "update  ~/.config/units/notify.service", "run     restart notify.service"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("second install lacks %q:\n%s", want, out)
 		}
@@ -335,8 +337,7 @@ func TestTakesOverThisBinarysEntries(t *testing.T) {
 	for _, want := range []string{
 		"update  ~/.claude/settings.json: PreToolUse hook",
 		"update  ~/.config/units/notify.service: an earlier unit of this binary",
-		"run     stop notify.service",
-		"run     start notify.service",
+		"run     restart notify.service",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("install lacks %q:\n%s", want, out)
@@ -373,6 +374,49 @@ func TestTakesOverThisBinarysEntries(t *testing.T) {
 	raw, _ := os.ReadFile(e.Settings)
 	if strings.Contains(string(raw), "beekeeper") || !strings.Contains(string(raw), "echo theirs") {
 		t.Errorf("uninstall left the taken-over hooks or removed theirs:\n%s", raw)
+	}
+}
+
+// A unit path that is a symlink into the person's dotfiles stays the link:
+// install writes the target, a dangling one too, says where, and restarts
+// the started unit instead of disabling it (systemd removes a linked unit
+// on disable).
+func TestWritesThroughASymlinkedUnit(t *testing.T) {
+	for _, dangling := range []bool{false, true} {
+		home := t.TempDir()
+		f := &fakeSetup{started: true}
+		e, out := env(t, home, f, f.run)
+		service := filepath.Join(home, ".config", "units", "notify.service")
+		target := filepath.Join(home, "dotfiles", "notify.service")
+		if !dangling {
+			write(t, target, "# the person's copy\nExecStart=/opt/bin/beekeeper watch --notify\n")
+		}
+		if err := os.MkdirAll(filepath.Dir(service), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join("..", "..", "dotfiles", "notify.service"), service); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := Install(context.Background(), e); err != nil {
+			t.Fatal(err)
+		}
+		want := "update  ~/.config/units/notify.service: an earlier unit of this binary; through the link to ~/dotfiles/notify.service"
+		if dangling {
+			want = "write   ~/.config/units/notify.service: through the link to ~/dotfiles/notify.service"
+		}
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("dangling %v: install lacks %q:\n%s", dangling, want, out)
+		}
+		if fi, err := os.Lstat(service); err != nil || fi.Mode()&fs.ModeSymlink == 0 {
+			t.Errorf("dangling %v: the unit path is no longer a symlink: %v", dangling, err)
+		}
+		if raw, _ := os.ReadFile(filepath.Clean(target)); string(raw) != "ExecStart=/opt/bin/beekeeper watch\n" {
+			t.Errorf("dangling %v: the link's target not written: %q", dangling, raw)
+		}
+		if !dangling && (!slices.Contains(f.ran, "restart notify.service") || slices.Contains(f.ran, "stop notify.service")) {
+			t.Errorf("an updated started unit: ran %v, want a restart and no stop", f.ran)
+		}
 	}
 }
 
