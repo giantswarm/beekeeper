@@ -14,14 +14,21 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+
+	"gopkg.in/yaml.v3"
 )
 
 // header is the fake ciphertext's sops metadata block: the base64 of the
 // plaintext follows it as the block's one value.
 const header = "sops:\n  fake: "
+
+// sops is the fake's name for the tool.
+const sops = "sops"
 
 const (
 	// passwordPurpose is a Password item's category and its password
@@ -94,7 +101,7 @@ func (t *Tools) Run(_ context.Context, dir string, env []string, stdin io.Reader
 		}
 	}
 	switch {
-	case name == "sops" && slices.Contains(args, "decrypt"):
+	case name == sops && slices.Contains(args, "decrypt"):
 		raw, err := os.ReadFile(args[len(args)-1])
 		if err != nil {
 			return nil, errors.New("exit 128 (no such file)")
@@ -104,7 +111,9 @@ func (t *Tools) Run(_ context.Context, dir string, env []string, stdin io.Reader
 			return nil, errors.New("exit 1 (not a sops file)")
 		}
 		return base64.StdEncoding.DecodeString(strings.TrimSpace(enc))
-	case name == "sops" && slices.Contains(args, "encrypt"):
+	case name == sops && len(args) > 2 && args[0] == "unset":
+		return nil, unset(args[len(args)-2], args[len(args)-1])
+	case name == sops && slices.Contains(args, "encrypt"):
 		if !slices.Contains(args, "--filename-override") {
 			return nil, errors.New("exit 1 (no creation rule)")
 		}
@@ -237,4 +246,69 @@ func (t *Tools) item(args []string, stdin io.Reader) ([]byte, error) {
 		return bytes.TrimSpace(raw), nil
 	}
 	return nil, errors.New("exit 2 (unknown op item command)")
+}
+
+// index is one key of sops' index syntax, ["a"][0]["b"].
+var index = regexp.MustCompile(`\[("(?:[^"\\]|\\.)*"|\d+)\]`)
+
+// unset removes the key at a sops index from a fake SOPS file, failing like
+// sops on an absent one.
+func unset(file, path string) error {
+	raw, err := os.ReadFile(file) //nolint:gosec // the test's file
+	if err != nil {
+		return errors.New("exit 128 (no such file)")
+	}
+	enc, ok := strings.CutPrefix(string(raw), header)
+	if !ok {
+		return errors.New("exit 1 (not a sops file)")
+	}
+	plain, err := base64.StdEncoding.DecodeString(strings.TrimSpace(enc))
+	if err != nil {
+		return err
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(plain, &doc); err != nil {
+		return err
+	}
+	n := doc.Content[0]
+	keys := index.FindAllStringSubmatch(path, -1)
+	for i, m := range keys {
+		k := m[1]
+		if strings.HasPrefix(k, `"`) {
+			k, _ = strconv.Unquote(k)
+		}
+		at := -1
+		switch n.Kind {
+		case yaml.MappingNode:
+			for j := 0; j+1 < len(n.Content); j += 2 {
+				if n.Content[j].Value == k {
+					at = j
+				}
+			}
+		case yaml.SequenceNode:
+			if j, err := strconv.Atoi(k); err == nil && j < len(n.Content) {
+				at = j
+			}
+		}
+		if at < 0 {
+			return errors.New("exit 1 (key not found)")
+		}
+		if i < len(keys)-1 {
+			if n.Kind == yaml.MappingNode {
+				at++
+			}
+			n = n.Content[at]
+			continue
+		}
+		if n.Kind == yaml.MappingNode {
+			n.Content = slices.Delete(n.Content, at, at+2)
+		} else {
+			n.Content = slices.Delete(n.Content, at, at+1)
+		}
+	}
+	out, err := yaml.Marshal(&doc)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(file, Encrypt(string(out)), 0o600)
 }

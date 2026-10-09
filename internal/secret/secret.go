@@ -63,6 +63,9 @@ type Ops struct {
 	// Store is the person's own credential store a store:// age identity
 	// is read from.
 	Store Store
+	// Index is the value scanner's index reveal checks a value against, its
+	// indexed secrets and token patterns; nil checks the patterns alone.
+	Index *guard.Index
 	// Installations are the installations' names, which a SOPS file's path
 	// under its .sops.yaml carries as a directory: a refusal names the one
 	// whose recipient has no identity.
@@ -248,7 +251,8 @@ func (o *Ops) decrypt(ctx context.Context, file string) (*document, error) {
 	if err != nil {
 		return nil, err
 	}
-	out, err := o.Run(ctx, "", env, nil, "sops", "decrypt", "--output-type", "yaml", file)
+	args := append(append([]string{"decrypt"}, sopsTypes(file, false)...), outputType, yamlType, file)
+	out, err := o.Run(ctx, "", env, nil, "sops", args...)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", file, err)
 	}
@@ -271,13 +275,38 @@ func (o *Ops) encrypt(ctx context.Context, doc *document, file string) error {
 	if err != nil {
 		return err
 	}
-	out, err := o.Run(ctx, filepath.Dir(cfg), nil, bytes.NewReader(plain), "sops", "--config", cfg,
-		"encrypt", "--filename-override", rel, "--input-type", "yaml", "/dev/stdin")
+	args := []string{"--config", cfg, "encrypt", "--filename-override", rel, inputType, yamlType}
+	if sopsTypes(file, false) != nil {
+		args = append(args, outputType, yamlType)
+	}
+	out, err := o.Run(ctx, filepath.Dir(cfg), nil, bytes.NewReader(plain), "sops", append(args, "/dev/stdin")...)
 	if err != nil {
 		return fmt.Errorf("%s: %w", file, err)
 	}
 	return writeFile(file, out)
 }
+
+// sopsTypes are the flags that tell sops a file is YAML when its name
+// does not: sops types a file by its extension, a Helm values patch
+// (*.yaml.patch) is none it knows, and beekeeper reads YAML documents
+// only. out adds the output type, for a command that writes the file.
+func sopsTypes(file string, out bool) []string {
+	switch filepath.Ext(file) {
+	case ".yaml", ".yml", ".json", ".env", ".ini":
+		return nil
+	}
+	if out {
+		return []string{inputType, yamlType, outputType, yamlType}
+	}
+	return []string{inputType, yamlType}
+}
+
+// inputType and outputType are the flags that type sops' input and output.
+const (
+	inputType  = "--input-type"
+	outputType = "--output-type"
+	yamlType   = "yaml"
+)
 
 // sopsConfig is the .sops.yaml in dir or the nearest directory above it.
 func sopsConfig(dir string) (string, error) {

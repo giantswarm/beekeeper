@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -93,17 +94,45 @@ func (d *document) leaves() map[string]string {
 
 // get is the scalar at a dotted path.
 func (d *document) get(path string) (string, bool) {
-	n := d.root
-	for _, k := range strings.Split(path, ".") {
-		n = child(n, k)
-		if n == nil {
-			return "", false
-		}
-	}
-	if n.Kind != yaml.ScalarNode {
+	n := d.node(path)
+	if n == nil || n.Kind != yaml.ScalarNode {
 		return "", false
 	}
 	return n.Value, true
+}
+
+// node is the node at a dotted path, nil when absent.
+func (d *document) node(path string) *yaml.Node {
+	n := d.root
+	for _, k := range strings.Split(path, ".") {
+		if n = child(n, k); n == nil {
+			return nil
+		}
+	}
+	return n
+}
+
+// remove deletes the key or list item at a dotted path; an absent one
+// stays absent.
+func (d *document) remove(path string) {
+	parent, k := d.root, path
+	if i := strings.LastIndex(path, "."); i >= 0 {
+		parent, k = d.node(path[:i]), path[i+1:]
+	}
+	switch {
+	case parent == nil:
+	case parent.Kind == yaml.MappingNode:
+		for i := 0; i+1 < len(parent.Content); i += 2 {
+			if parent.Content[i].Value == k {
+				parent.Content = slices.Delete(parent.Content, i, i+2)
+				return
+			}
+		}
+	case parent.Kind == yaml.SequenceNode:
+		if i, err := strconv.Atoi(k); err == nil && i >= 0 && i < len(parent.Content) {
+			parent.Content = slices.Delete(parent.Content, i, i+1)
+		}
+	}
 }
 
 // child is the node under key k of a mapping, or index k of a sequence.
@@ -125,6 +154,15 @@ func child(n *yaml.Node, k string) *yaml.Node {
 
 // set puts a string at a dotted path, creating the mappings on the way.
 func (d *document) set(path, value string) error {
+	if n := d.node(path); n != nil && n.Kind != yaml.ScalarNode {
+		return fmt.Errorf("%q holds a %s, not a value", path, kindName(n.Kind))
+	}
+	return d.put(path, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value})
+}
+
+// put puts a node at a dotted path, replacing what is there and creating
+// the mappings on the way.
+func (d *document) put(path string, value *yaml.Node) error {
 	keys := strings.Split(path, ".")
 	n := d.root
 	for i, k := range keys {
@@ -146,12 +184,10 @@ func (d *document) set(path, value string) error {
 				c = &yaml.Node{}
 			}
 			n.Content = append(n.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: k}, c)
-		case last && c.Kind != yaml.ScalarNode:
-			return fmt.Errorf("%q holds a %s, not a value", path, kindName(c.Kind))
 		}
 		n = c
 	}
-	*n = yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value}
+	*n = *value
 	return nil
 }
 

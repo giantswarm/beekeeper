@@ -318,7 +318,7 @@ func TestSetWithoutAVaultWritesTheSOPSPathAlone(t *testing.T) {
 		applied = string(v)
 		return nil
 	}
-	tg := secret.KubeTarget{Context: labContext, Namespace: "garage", Name: "s3", Key: "secret"}
+	tg := secret.KubeTarget{Context: labContext, Namespace: "garage", Name: "s3", Key: secretWord}
 	res, err := o.Set(context.Background(), dst, secret.SetOptions{Length: 40, Charset: hexSet, Secret: &tg})
 	if err != nil {
 		t.Fatal(err)

@@ -347,7 +347,7 @@ func brokeredCap(c platform.Capper, cpu platform.Cap) func(int, sandbox.Request)
 // them: its consumer would run on the host, outside the sandbox. import
 // reads a vault of the person's that the service account does not: the
 // broker runs it with secret.session only, in the person's session it holds.
-var brokeredSecretOps = []string{"compare", "fingerprint", "copy", "set", "rotate", "recipients", importOp}
+var brokeredSecretOps = []string{"compare", "fingerprint", "copy", "set", "rotate", "recipients", "reveal", "unset", importOp}
 
 // importOp is the secret subcommand that reads the person's own vault.
 const importOp = "import"
