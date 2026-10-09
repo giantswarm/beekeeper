@@ -83,7 +83,8 @@ var (
 	kubectlSafe = "  kubectl get secret <name> -o json | jq '.data|keys'\n" +
 		"  kubectl get secrets -o name\n" +
 		"  kubectl describe secret <name>   (sizes only)\n" +
-		"  kubectl get secret <name> -o jsonpath='{.data.<key>}' | base64 -d | wc -c   (the length)"
+		"  kubectl get secret <name> -o jsonpath='{.data.<key>}' | base64 -d | wc -c   (the length)\n" +
+		"  beekeeper secret copy k8s://<context>/<namespace>/<name>/<key>[#<path>] <file.sops.yaml#path>   (the value into a SOPS path, in beekeeper)"
 	sopsSafe = "  sops runs only in beekeeper, never in an agent session, encryption included.\n" +
 		"  yq '.stringData|keys' <file>   (a SOPS file keeps its key names in plaintext)"
 	opSafe      = "  op runs only in beekeeper, never in an agent session (op run included): beekeeper secret reads the shared vault."

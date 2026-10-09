@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -44,10 +45,19 @@ is logged (beekeeper log) with the session, the references and the
 operation.
 
 A reference is a SOPS file (every value in it), one value in a SOPS file
-(file#a.b.c, the dotted key path; sops:// in front optional) or a field of
+(file#a.b.c, the dotted key path; sops:// in front optional), a field of
 the shared 1Password vault (op://<vault>/<item>/<field>, the vault being
-secret.vault). A SOPS file is encrypted under the creation rules of the
-.sops.yaml nearest above it.
+secret.vault) or, as a source, a key of a Kubernetes Secret
+(k8s://<context>/<namespace>/<name>/<key>, and after # the dotted path of
+one value inside the YAML or JSON document the key holds): a credential
+its owner placed in a cluster reaches a SOPS path, a consumer or a lab's
+Secret without a person and without its value reaching a session. The
+read is one Secret GET, in beekeeper's process, through kind for a lab's
+context (kind-<cluster>, its lab lease held by the caller) and through
+the kubeconfig files kube.kubeconfig names (KUBECONFIG's, else
+~/.kube/config) for any other; nothing is written to that cluster. A SOPS
+file is encrypted under the creation rules of the .sops.yaml nearest above
+it.
 
 A SOPS file encrypted to age recipients decrypts with an identity from
 sops' own sources (SOPS_AGE_KEY, SOPS_AGE_KEY_FILE, sops/age/keys.txt in
@@ -87,6 +97,9 @@ anything is not equal.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			r, err := parseRefs(args...)
 			if err != nil {
+				return err
+			}
+			if err := a.checkKubeSources(r); err != nil {
 				return err
 			}
 			if err := a.sandboxFiles(r, nil); err != nil {
@@ -177,7 +190,10 @@ holds. The two together check a delivery without reading a value:
 				return err
 			}
 			if !enc.IsZero() && !r[0].Single() {
-				return usageErr("--encode encodes one value: file#path or op://…, not a whole file")
+				return usageErr("--encode encodes one value: file#path, op://… or k8s://…, not a whole file")
+			}
+			if err := a.checkKubeSources(r); err != nil {
+				return err
 			}
 			if err := a.sandboxFiles(r, nil); err != nil {
 				return err
@@ -336,10 +352,19 @@ way. It answers the key names and value lengths (a Secret's data decoded).
 dst must not exist.
 
 copy <ref> <file#path> puts one value into a SOPS path, creating the file
-or the key when absent, the file's other values kept.
+or the key when absent, the file's other values kept. The source may be a
+key of a Kubernetes Secret, k8s://<context>/<namespace>/<name>/<key>, and
+with #<path> one value of the YAML or JSON document that key holds: a
+credential its owner placed in a cluster Secret (an identity provider's
+client secret for a connector, for one) reaches the SOPS path without a
+person and without its value reaching a session, in one Secret GET. A
+Secret, key or path absent fails in one line naming it:
+
+  beekeeper secret copy k8s://<context>/<namespace>/<name>/<key>#clientSecret \
+    values.sops.yaml#connectors.0.config.clientSecret
 
 copy <ref>=<path> [<ref>=<path>…] <new-file> writes several values, each
-<ref> one value (op://<vault>/<item>/<field>, file#path), into a new SOPS
+<ref> one value (op://<vault>/<item>/<field>, k8s://…, file#path), into a new SOPS
 file in one encryption: sops needs only the recipients of the nearest
 .sops.yaml and decrypts nothing, so no age identity of the new file is
 needed. --name and --namespace start the file as that Secret, a bare path
@@ -421,7 +446,10 @@ failing or answering nothing within a minute) exits 78.`,
 				return err
 			}
 			if !enc.IsZero() && !src[0].Single() {
-				return usageErr("--encode encodes one value: file#path or op://…, not a whole file")
+				return usageErr("--encode encodes one value: file#path, op://… or k8s://…, not a whole file")
+			}
+			if err := a.checkKubeSources(src); err != nil {
+				return err
 			}
 			if err := a.sandboxFiles(src, nil); err != nil {
 				return err
@@ -469,6 +497,9 @@ failing or answering nothing within a minute) exits 78.`,
 			if err := a.sandboxFiles(nil, dst); err != nil {
 				return err
 			}
+			if dst[0].IsKube() {
+				return usageErr("%s: k8s:// names a source; a lab's Secret is written with --to-secret %s", dst[0], dst[0].Kube)
+			}
 			if dst[0].Path != "" || dst[0].Op != "" {
 				if name != "" || namespace != "" {
 					return usageErr("--name and --namespace rewrite a copied file, not one value")
@@ -506,8 +537,8 @@ func copyPairs(args []string) ([]secret.Pair, error) {
 	if err != nil {
 		return nil, usageErr("%v", err)
 	}
-	if dst.Op != "" || dst.Path != "" {
-		return nil, usageErr("%s: copy <ref>=<path>… <file> writes a whole new file, no path or op:// in it", dst)
+	if dst.Op != "" || dst.IsKube() || dst.Path != "" {
+		return nil, usageErr("%s: copy <ref>=<path>… <file> writes a whole new file, no path, op:// or k8s:// in it", dst)
 	}
 	pairs := make([]secret.Pair, 0, len(args)-1)
 	for _, s := range args[:len(args)-1] {
@@ -534,6 +565,9 @@ func (a *app) secretCopyValues(ctx context.Context, pairs []secret.Pair, file, n
 	from := make([]string, len(pairs))
 	for i, p := range pairs {
 		src[i], from[i] = p.Src, p.Src.String()
+	}
+	if err := a.checkKubeSources(src); err != nil {
+		return err
 	}
 	if err := a.sandboxFiles(src, []secret.Ref{{File: file}}); err != nil {
 		return err
@@ -597,9 +631,33 @@ func (a *app) checkLabHeld(t secret.KubeTarget) error {
 				labs = append(labs, "kind-"+cl)
 			}
 		}
-		return refused("%s: a Secret is written only into a lab's context (%s), held under its lease", t.Context, strings.Join(labs, ", "))
+		return refused("%s: a lab's Secret is read or written only in a lab's context (%s), held under its lease", t.Context, strings.Join(labs, ", "))
 	}
 	return a.holdsLease(res, t.Context)
+}
+
+// checkKubeSources refuses a k8s:// source in a kind cluster's context
+// unless the caller holds that lab's lease, as a lab's Secret is written;
+// any other context is the machine's to read.
+func (a *app) checkKubeSources(refs []secret.Ref) error {
+	for _, r := range refs {
+		if r.IsKube() && r.Kube.KindCluster() != "" {
+			if err := a.checkLabHeld(r.Kube); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// kubeconfigFiles are the kubeconfig files a k8s:// source's context is
+// resolved in: kube.kubeconfig, else the list KUBECONFIG names, else the
+// machine kubeconfig.
+func (a *app) kubeconfigFiles() []string {
+	if len(a.cfg.Kube.Kubeconfig) > 0 {
+		return a.cfg.Kube.Kubeconfig
+	}
+	return filepath.SplitList(kubeconfigList())
 }
 
 func (a *app) secretSetCmd() *cobra.Command {
@@ -997,7 +1055,7 @@ func parseRefs(args ...string) ([]secret.Ref, error) {
 // secretOps are the operations with the service account's token, read
 // from secret.tokenFile when the shared vault is configured.
 func (a *app) secretOps() (*secret.Ops, error) {
-	ops := &secret.Ops{Run: secretRun, Apply: secretApply, Read: secretRead, Vault: a.cfg.Secret.Vault, Session: a.cfg.Secret.Session, Ages: a.ageIdentities(),
+	ops := &secret.Ops{Run: secretRun, Apply: secretApply, Read: secretRead, Kubeconfig: a.kubeconfigFiles(), Vault: a.cfg.Secret.Vault, Session: a.cfg.Secret.Session, Ages: a.ageIdentities(),
 		AgeVaults: a.cfg.Secret.AgeVaults, Store: secret.Store{Read: a.cfg.Secret.Store.Read, Search: a.cfg.Secret.Store.Search}, Installations: a.installationNames()}
 	if ops.Vault == "" || ops.Session || a.cfg.Secret.TokenFile == "" {
 		return ops, nil

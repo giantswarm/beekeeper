@@ -504,3 +504,54 @@ func TestSecretRecipientsNamesEachIdentityAndNoValue(t *testing.T) {
 		t.Fatal("the listing carries the identity")
 	}
 }
+
+// TestSecretCopyFromALabSecretKeyNeedsItsLease copies one value of the
+// document a lab Secret's key holds into a SOPS path: refused until the
+// caller holds the lab's lease, then the answer is the length, compare
+// takes the same source, a path absent is named in one line, and nothing
+// carries the value.
+func TestSecretCopyFromALabSecretKeyNeedsItsLease(t *testing.T) {
+	a, _, repo := secretApp(t)
+	a.cfg.LeaseDir = t.TempDir()
+	a.cfg.Resources = []string{labOne}
+	a.cfg.Labs = map[string]string{labOne: labCluster}
+	prev := secretRead
+	secretRead = func(_ context.Context, _ []byte, tg secret.KubeTarget) ([]byte, error) {
+		if tg.Key != "config.yaml" {
+			return nil, fmt.Errorf("no key %s", tg.Key)
+		}
+		return []byte("clientID: app-123\nclientSecret: " + secretValue + "\n"), nil
+	}
+	t.Cleanup(func() { secretRead = prev })
+	const src = "k8s://kind-agentlab/kagent/github-oauth-client/config.yaml"
+	dst := filepath.Join(repo, "app.sops.yaml") + "#stringData.clientSecret"
+	if _, err := runSecret(a, copyOp, src+"#clientSecret", dst); Code(err) != ExitRefused {
+		t.Errorf("copy from a lab not held = %v, want refused", err)
+	}
+	if _, err := lease.Dir(a.cfg.LeaseDir).Claim(labOne, lease.Holder{Env: labOne, Name: a.as}); err != nil {
+		t.Fatal(err)
+	}
+	a.out = &bytes.Buffer{}
+	out, err := runSecret(a, copyOp, src+"#clientSecret", dst)
+	if err != nil || out != fmt.Sprintf("wrote %s: %d bytes\n", dst, len(secretValue)) {
+		t.Fatalf("copy answers %q, %v", out, err)
+	}
+	a.out = &bytes.Buffer{}
+	same, err := runSecret(a, compareOp, src+"#clientSecret", dst)
+	if err != nil || !strings.Contains(same, "equal") {
+		t.Errorf("compare answers %q, %v", same, err)
+	}
+	a.out = &bytes.Buffer{}
+	_, err = runSecret(a, fingerprintOp, src+"#clientToken")
+	if err == nil || !strings.Contains(err.Error(), "no value at clientToken") {
+		t.Errorf("an absent path = %v", err)
+	}
+	a.out = &bytes.Buffer{}
+	_, err = runSecret(a, copyOp, src+"#clientSecret", "k8s://kind-agentlab/kagent/other/key")
+	if Code(err) != ExitUsage {
+		t.Errorf("a k8s:// destination = %v, want a usage error", err)
+	}
+	for what, s := range map[string]string{"the copy": out, "the comparison": same, "the error": err.Error()} {
+		noSecret(t, what, s)
+	}
+}

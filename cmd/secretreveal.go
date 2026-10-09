@@ -173,7 +173,7 @@ func checkSOPSFile(file string) error {
 	if err != nil {
 		return usageErr("%v", err)
 	}
-	if r.Op != "" || r.Path != "" {
+	if r.Op != "" || r.IsKube() || r.Path != "" {
 		return usageErr("%s: name the SOPS file, then its dotted paths as arguments", file)
 	}
 	return nil

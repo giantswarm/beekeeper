@@ -38,7 +38,7 @@ type Verdict struct {
 // references compare as one value; two whole files key by key.
 func (o *Ops) Compare(ctx context.Context, a, b Ref) ([]Verdict, error) {
 	if a.Single() != b.Single() {
-		return nil, errors.New("compare one value with one value (file#path, op://…), or a whole file with a whole file")
+		return nil, errors.New("compare one value with one value (file#path, op://…, k8s://…), or a whole file with a whole file")
 	}
 	va, err := o.values(ctx, a)
 	if err != nil {
@@ -131,7 +131,7 @@ func (o *Ops) CopyFile(ctx context.Context, src Ref, dst, name, namespace string
 // CopyValue copies one value into a path of a SOPS file, creating the file
 // or the key when absent. It answers the value's length.
 func (o *Ops) CopyValue(ctx context.Context, src, dst Ref) (int, error) {
-	if dst.Op != "" || dst.Path == "" {
+	if dst.Op != "" || dst.IsKube() || dst.Path == "" {
 		return 0, fmt.Errorf("%s: one value goes to a SOPS path, file#path", dst)
 	}
 	v, err := o.encoded(ctx, src)
@@ -149,7 +149,8 @@ type Pair struct {
 }
 
 // ParsePair reads <ref>=<path>, the path after the last "=": the reference
-// names one value (op://…, file#path), the path is a key of the new file.
+// names one value (op://…, k8s://…, file#path), the path is a key of the
+// new file.
 func ParsePair(s string) (Pair, error) {
 	i := strings.LastIndex(s, "=")
 	if i < 0 {
@@ -162,7 +163,7 @@ func ParsePair(s string) (Pair, error) {
 	p := Pair{Src: src, Path: s[i+1:]}
 	switch {
 	case !src.Single():
-		return Pair{}, fmt.Errorf("%q: name one value (file#path or op://…), not a whole file", s)
+		return Pair{}, fmt.Errorf("%q: name one value (file#path, op://… or k8s://…), not a whole file", s)
 	case p.Path == "" || strings.ContainsAny(p.Path, "#/"):
 		return Pair{}, fmt.Errorf("%q: the path after = is a dotted key of the new file", s)
 	}
@@ -546,7 +547,7 @@ type SetResult struct {
 // a consumer's stdin when given, these three in o.Encode. A value without a
 // vault field lives in the SOPS file alone.
 func (o *Ops) Set(ctx context.Context, dst Ref, opt SetOptions) (SetResult, error) {
-	if dst.Op != "" || dst.Path == "" {
+	if dst.Op != "" || dst.IsKube() || dst.Path == "" {
 		return SetResult{}, fmt.Errorf("%s: set writes a SOPS path, file#path", dst)
 	}
 	if opt.Vault != (Ref{}) {

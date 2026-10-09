@@ -5,11 +5,15 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/clientcmd"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -177,5 +181,173 @@ func TestAVaultFailureIsErrVault(t *testing.T) {
 	o.Token = ""
 	if _, err := o.Fingerprints(context.Background(), secret.Ref{Op: vaultRef}); !errors.Is(err, secret.ErrVault) {
 		t.Errorf("no token = %v", err)
+	}
+}
+
+const (
+	configKey        = "config.yaml"
+	clientSecretPath = "clientSecret"
+	noMapping        = "no YAML mapping"
+	oauthKubeRef     = secret.K8sRef + labContext + "/" + kagentNS + "/" + oauthName + "/" + configKey
+)
+
+// connectorDoc is the document the Secret's key holds in the tests: a
+// connector's client credentials, as an identity provider's owner places
+// them.
+const connectorDoc = "clientID: app-123\nclientSecret: " + password + "\n"
+
+func TestParseRefKube(t *testing.T) {
+	r, err := secret.ParseRef(oauthKubeRef + "#oidc." + clientSecretPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := secret.Ref{Kube: secret.KubeTarget{Context: labContext, Namespace: kagentNS, Name: oauthName, Key: configKey}, Path: "oidc." + clientSecretPath}
+	if r != want || !r.Single() || !r.IsKube() || r.String() != oauthKubeRef+"#oidc."+clientSecretPath {
+		t.Errorf("parsed %+v, %q", r, r)
+	}
+	whole, err := secret.ParseRef(oauthKubeRef)
+	if err != nil || whole.Path != "" || !whole.Single() || whole.String() != oauthKubeRef {
+		t.Errorf("the whole key parsed %+v, %q, %v", whole, whole, err)
+	}
+	for _, bad := range []string{oauthKubeRef + "#", secret.K8sRef + labContext + "/" + kagentNS + "/" + oauthName, secret.K8sRef + "/" + kagentNS + "/x/k",
+		secret.K8sRef + labContext + "/Kagent/x/k", secret.K8sRef + labContext + "/" + kagentNS + "/x/k y"} {
+		if _, err := secret.ParseRef(bad); err == nil {
+			t.Errorf("%q parsed", bad)
+		}
+	}
+	p, err := secret.ParsePair(oauthKubeRef + "#" + clientSecretPath + "=client-secret")
+	if err != nil || p.Src != (secret.Ref{Kube: want.Kube, Path: clientSecretPath}) || p.Path != "client-secret" {
+		t.Errorf("the pair parsed %+v, %v", p, err)
+	}
+}
+
+// TestCopyFromALabSecretKeyReadsThroughKind copies one value of the
+// document a lab Secret's key holds, then the whole key, into a SOPS file:
+// the read goes through kind's kubeconfig like a write into the lab does,
+// compare and fingerprint take the same source, and no answer carries a
+// value.
+func TestCopyFromALabSecretKeyReadsThroughKind(t *testing.T) {
+	_, dst := scratch(t)
+	tools := secrettest.New(nil)
+	o := ops(tools)
+	var gotKC string
+	var gotTarget secret.KubeTarget
+	o.Read = func(_ context.Context, kc []byte, tg secret.KubeTarget) ([]byte, error) {
+		gotKC, gotTarget = string(kc), tg
+		return []byte(connectorDoc), nil
+	}
+	ctx := context.Background()
+	tg := secret.KubeTarget{Context: labContext, Namespace: kagentNS, Name: oauthName, Key: configKey}
+	field := secret.Ref{Kube: tg, Path: clientSecretPath}
+	to := secret.Ref{File: dst, Path: "stringData." + clientSecretPath}
+	n, err := o.CopyValue(ctx, field, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != len(password) || gotTarget != tg || gotKC != secrettest.Kubeconfig("agentlab") {
+		t.Errorf("n %d, read %+v with %q", n, gotTarget, gotKC)
+	}
+	if n, err := o.CopyValue(ctx, secret.Ref{Kube: tg}, secret.Ref{File: dst, Path: "stringData.config"}); err != nil || n != len(connectorDoc) {
+		t.Errorf("the whole key: %d bytes, %v", n, err)
+	}
+	plain := decrypted(t, tools, dst)
+	for _, w := range []string{clientSecretPath + ": " + password, "config: |"} {
+		if !strings.Contains(plain, w) {
+			t.Errorf("the file lacks %q:\n%s", w, plain)
+		}
+	}
+	vs, err := o.Compare(ctx, field, to)
+	if err != nil || len(vs) != 1 || vs[0].State != secret.Equal {
+		t.Errorf("compare = %+v, %v", vs, err)
+	}
+	ps, err := o.Fingerprints(ctx, secret.Ref{Kube: tg, Path: "clientID"})
+	if err != nil || len(ps) != 1 || ps[0].Key != oauthKubeRef+"#clientID" {
+		t.Errorf("fingerprint = %+v, %v", ps, err)
+	}
+	noValue(t, "the fingerprints", ps)
+	if _, err := o.CopyValue(ctx, secret.Ref{Op: vaultRef}, field); err == nil || !strings.Contains(err.Error(), "file#path") {
+		t.Errorf("a k8s:// destination = %v", err)
+	}
+}
+
+// TestKubeSourceResolvesTheContextInTheKubeconfigFiles reads a Secret of
+// a context outside a lab: the context is found in the configured
+// kubeconfig files, merged as kubectl merges them, and the read's
+// kubeconfig names it as the current context; a context in none of them,
+// or no files at all, is refused before any read.
+func TestKubeSourceResolvesTheContextInTheKubeconfigFiles(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, context string) string {
+		p := filepath.Join(dir, name)
+		cfg := "apiVersion: v1\nkind: Config\ncurrent-context: " + context + "\nclusters:\n- name: " + context + "\n  cluster:\n    server: https://127.0.0.1:6443\n" +
+			"contexts:\n- name: " + context + "\n  context:\n    cluster: " + context + "\n    user: " + context + "\nusers:\n- name: " + context + "\n  user:\n    token: planted-kubeconfig-" + context + "\n"
+		if err := os.WriteFile(p, []byte(cfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	o := ops(secrettest.New(nil))
+	o.Kubeconfig = []string{write("machine.yaml", "other"), write("teleport.yaml", gazelleContext)}
+	reads := 0
+	var got *clientcmdapi.Config
+	o.Read = func(_ context.Context, kc []byte, _ secret.KubeTarget) ([]byte, error) {
+		reads++
+		var err error
+		got, err = clientcmd.Load(kc)
+		return []byte(token), err
+	}
+	ctx := context.Background()
+	tg := secret.KubeTarget{Context: gazelleContext, Namespace: kagentNS, Name: oauthName, Key: configKey}
+	ps, err := o.Fingerprints(ctx, secret.Ref{Kube: tg})
+	if err != nil || len(ps) != 1 {
+		t.Fatalf("fingerprint = %+v, %v", ps, err)
+	}
+	if got == nil || got.CurrentContext != gazelleContext || len(got.Contexts) != 2 {
+		t.Errorf("the read's kubeconfig: %+v", got)
+	}
+	noValue(t, "the fingerprint", ps)
+	absent := secret.KubeTarget{Context: "teleport.giantswarm.io-absent", Namespace: kagentNS, Name: oauthName, Key: configKey}
+	if _, err := o.Fingerprints(ctx, secret.Ref{Kube: absent}); err == nil || !strings.Contains(err.Error(), "no such context") || !strings.Contains(err.Error(), "teleport.yaml") {
+		t.Errorf("an absent context = %v", err)
+	}
+	o.Kubeconfig = nil
+	if _, err := o.Fingerprints(ctx, secret.Ref{Kube: tg}); err == nil || !strings.Contains(err.Error(), "kube.kubeconfig") {
+		t.Errorf("no kubeconfig = %v", err)
+	}
+	if reads != 1 {
+		t.Errorf("%d reads, want the one of the resolved context", reads)
+	}
+}
+
+// TestKubeSourceErrorsNameTheMissingPartAndNoValue: a Secret, key or path
+// absent, and a key holding no YAML mapping where a path is asked, fail in
+// one line naming it, the key's content never quoted.
+func TestKubeSourceErrorsNameTheMissingPartAndNoValue(t *testing.T) {
+	o := ops(secrettest.New(nil))
+	ctx := context.Background()
+	tg := secret.KubeTarget{Context: labContext, Namespace: kagentNS, Name: oauthName, Key: configKey}
+	for _, tc := range []struct {
+		name, want string
+		path       string
+		read       func() ([]byte, error)
+	}{
+		{"absent Secret", "not found", "", func() ([]byte, error) { return nil, errors.New(`secrets "github-oauth-client" not found`) }},
+		{"absent path", "no value at oidc.clientToken", "oidc.clientToken", func() ([]byte, error) { return []byte(connectorDoc), nil }},
+		{"no mapping", noMapping, clientSecretPath, func() ([]byte, error) { return []byte(password), nil }},
+		{"a list", noMapping, clientSecretPath, func() ([]byte, error) { return []byte("- " + password + "\n"), nil }},
+	} {
+		o.Read = func(context.Context, []byte, secret.KubeTarget) ([]byte, error) { return tc.read() }
+		_, err := o.Fingerprints(ctx, secret.Ref{Kube: tg, Path: tc.path})
+		if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), tg.String()) {
+			t.Errorf("%s = %v, want %q naming %s", tc.name, err, tc.want, tg)
+			continue
+		}
+		noValue(t, tc.name, err.Error())
+	}
+	// a key holding no YAML is still a value when no path is asked
+	o.Read = func(context.Context, []byte, secret.KubeTarget) ([]byte, error) { return []byte(password), nil }
+	ps, err := o.Fingerprints(ctx, secret.Ref{Kube: tg})
+	if err != nil || len(ps) != 1 || ps[0].Fingerprint != o.Fingerprint(password) {
+		t.Errorf("the whole key = %+v, %v", ps, err)
 	}
 }
