@@ -8,50 +8,53 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
 // noneLabel is what a section without entries shows.
 const noneLabel = "none"
 
-// The screen's whole palette lives here. lipgloss v1 carries adaptive
-// light/dark colours instead of a LightDark helper, so every colour is an
-// AdaptiveColor and lipgloss picks the pair the terminal's background
-// needs and downgrades it to what the terminal can show. Colour marks
+// The screen's whole palette lives here: every colour is a light/dark
+// pair, and newStyles picks the half the terminal's background needs (the
+// program asks the terminal at start and restyles on its answer); the
+// program downgrades it to what the terminal can show. Colour marks
 // state — gone, stale, held, breach — never decoration, and its order is
 // red > amber > green > dim. Bold is only for the selected row, the
 // waiting flag and paging alerts.
-var (
-	colDim   = lipgloss.AdaptiveColor{Light: "#626262", Dark: "#949494"}
-	colWarn  = lipgloss.AdaptiveColor{Light: "#9c6400", Dark: "#d7a54a"}
-	colFaint = lipgloss.AdaptiveColor{Light: "#857a55", Dark: "#9a8a5a"}
-	colGone  = lipgloss.AdaptiveColor{Light: "#a10000", Dark: "#cd5c5c"}
-	colOK    = lipgloss.AdaptiveColor{Light: "#00701f", Dark: "#5faf5f"}
-	colRun   = lipgloss.AdaptiveColor{Light: "#005f87", Dark: "#5fafd7"}
+type styles struct {
+	Title, Tab, TabSel, Head, Dim, Sel, Warn, Faint, Gone, OK, Run, Waiting, Hint lipgloss.Style
+}
 
-	style = struct {
-		Title, Tab, TabSel, Head, Dim, Sel, Warn, Faint, Gone, OK, Run, Waiting, Hint lipgloss.Style
-	}{
+// style is the screen's current palette. It starts dark, as the terminal
+// is assumed to be until it answers, and is replaced on that answer.
+var style = newStyles(true)
+
+// newStyles builds the palette for a dark or a light background.
+func newStyles(dark bool) styles {
+	c := lipgloss.LightDark(dark)
+	dim := c(lipgloss.Color("#626262"), lipgloss.Color("#949494"))
+	warn := c(lipgloss.Color("#9c6400"), lipgloss.Color("#d7a54a"))
+	return styles{
 		Title:  lipgloss.NewStyle().Bold(true),
-		Tab:    lipgloss.NewStyle().Foreground(colDim),
+		Tab:    lipgloss.NewStyle().Foreground(dim),
 		TabSel: lipgloss.NewStyle().Bold(true).Reverse(true),
 		Head:   lipgloss.NewStyle().Bold(true),
-		Dim:    lipgloss.NewStyle().Foreground(colDim),
+		Dim:    lipgloss.NewStyle().Foreground(dim),
 		Sel:    lipgloss.NewStyle().Reverse(true),
-		Warn:   lipgloss.NewStyle().Foreground(colWarn),
+		Warn:   lipgloss.NewStyle().Foreground(warn),
 		// Faint is a paler amber: severities that warn but do not
 		// need the eye yet.
-		Faint: lipgloss.NewStyle().Foreground(colFaint),
-		Gone:  lipgloss.NewStyle().Foreground(colGone),
-		OK:    lipgloss.NewStyle().Foreground(colOK),
-		Run:   lipgloss.NewStyle().Foreground(colRun),
+		Faint: lipgloss.NewStyle().Foreground(c(lipgloss.Color("#857a55"), lipgloss.Color("#9a8a5a"))),
+		Gone:  lipgloss.NewStyle().Foreground(c(lipgloss.Color("#a10000"), lipgloss.Color("#cd5c5c"))),
+		OK:    lipgloss.NewStyle().Foreground(c(lipgloss.Color("#00701f"), lipgloss.Color("#5faf5f"))),
+		Run:   lipgloss.NewStyle().Foreground(c(lipgloss.Color("#005f87"), lipgloss.Color("#5fafd7"))),
 		// Waiting is the one thing on the screen that always shouts:
 		// a session parked on its person.
-		Waiting: lipgloss.NewStyle().Bold(true).Foreground(colWarn),
-		Hint:    lipgloss.NewStyle().Foreground(colDim),
+		Waiting: lipgloss.NewStyle().Bold(true).Foreground(warn),
+		Hint:    lipgloss.NewStyle().Foreground(dim),
 	}
-)
+}
 
 // tabShort names the tabs when the window is too narrow for the full
 // names; the digits stay while they fit, because they are the keys.
