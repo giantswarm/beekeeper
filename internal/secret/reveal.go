@@ -61,13 +61,18 @@ func (o *Ops) revealed(doc *document, file, path string) ([]Field, error) {
 		return nil, fmt.Errorf("%s: no value at %s", file, path)
 	}
 	leaves := (&document{root: n}).leaves()
+	secrets := doc.secretValues()
 	out := make([]Field, 0, len(leaves))
 	for _, k := range sortedKeys(leaves) {
 		p := path
 		if k != "" {
 			p += "." + k
 		}
-		if why := o.secretLike(p, leaves[k]); why != "" {
+		why := o.secretLike(p, leaves[k], publicID(p))
+		if s, ok := secrets[leaves[k]]; why == "" && ok && publicID(p) {
+			why = fmt.Sprintf("an id equal to the secret at %s", s)
+		}
+		if why != "" {
 			return nil, fmt.Errorf("%w: %s#%s: %s; reveal answers configuration only, copy and compare move and check a secret", ErrSecretLike, file, p, why)
 		}
 		out = append(out, Field{Path: p, Value: leaves[k]})
@@ -239,11 +244,48 @@ func sopsIndex(path string) string {
 // secretKey is a key whose value is a secret whatever it looks like.
 var secretKey = regexp.MustCompile(`(?i)secret|passw(or)?d|pwd|token|key|credential|private|cookie|salt|hmac|cert`)
 
+// publicIDKey is a leaf naming an OAuth client, public in every authorize
+// URL however random it looks.
+var publicIDKey = regexp.MustCompile(`(?i)^(id|client_?id)$`)
+
+// peersKey is a list of client ids, each item public like publicIDKey.
+var peersKey = regexp.MustCompile(`(?i)^(trusted_?)?peers$`)
+
+// publicID reports whether the leaf at path is a client id: a key named id
+// or clientID, or an item of a trustedPeers or peers list.
+func publicID(path string) bool {
+	ks := strings.Split(path, ".")
+	last := ks[len(ks)-1]
+	if publicIDKey.MatchString(last) {
+		return true
+	}
+	_, err := strconv.Atoi(last)
+	return err == nil && len(ks) > 1 && peersKey.MatchString(ks[len(ks)-2])
+}
+
+// secretValues maps every non-empty value under a key named like a secret
+// to its path, the first in path order: a client id equal to one is a
+// secret filed under an id's name.
+func (d *document) secretValues() map[string]string {
+	leaves := d.leaves()
+	out := map[string]string{}
+	for _, p := range sortedKeys(leaves) {
+		if _, seen := out[leaves[p]]; seen || leaves[p] == "" {
+			continue
+		}
+		if slices.ContainsFunc(strings.Split(p, "."), secretKey.MatchString) {
+			out[leaves[p]] = p
+		}
+	}
+	return out
+}
+
 // secretLike is why a leaf at path looks like a secret, "" when it looks
 // like configuration: a key on its path named like a secret, a value the
 // value scanner matches (a token pattern or an indexed secret), a URL
-// carrying a password, or a run of key-like entropy.
-func (o *Ops) secretLike(path, v string) string {
+// carrying a password, or a run of key-like entropy, which a client id
+// (id) may have.
+func (o *Ops) secretLike(path, v string, id bool) string {
 	for _, k := range strings.Split(path, ".") {
 		if secretKey.MatchString(k) {
 			return fmt.Sprintf("under the key %q, named like a secret", k)
@@ -260,6 +302,9 @@ func (o *Ops) secretLike(path, v string) string {
 		if _, ok := u.User.Password(); ok {
 			return "a URL carrying a password"
 		}
+	}
+	if id {
+		return ""
 	}
 	for _, run := range strings.FieldsFunc(v, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '+' && r != '=' }) {
 		if keyLike(run) {
