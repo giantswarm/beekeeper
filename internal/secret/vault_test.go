@@ -17,6 +17,8 @@ const (
 	testToken   = "tok"
 	// testValue is what a store hands the keeper.
 	testValue = "s3cret"
+	// hmacOne is the fingerprint the fake stores answer with.
+	hmacOne = "hmac:1"
 )
 
 func TestKeeperWaitsForTheUnlock(t *testing.T) {
@@ -98,7 +100,7 @@ func TestVaultSocket(t *testing.T) {
 	asBroker(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go func() { _ = ServeVault(ctx, path, k, nil) }()
+	go func() { _ = ServeVault(ctx, path, k, nil, nil) }()
 	var st VaultState
 	for range 100 {
 		if st, err = AskVault(path, VaultRequest{Op: VaultStatus}); err == nil {
@@ -151,11 +153,11 @@ func TestVaultSocketStores(t *testing.T) {
 		if strings.Contains(ref, "bad") {
 			return Stored{}, errors.New("op refused " + value)
 		}
-		return Stored{Ref: ref, Bytes: len(value), Fingerprint: "hmac:1"}, nil
+		return Stored{Ref: ref, Bytes: len(value), Fingerprint: hmacOne}, nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go func() { _ = ServeVault(ctx, path, k, store) }()
+	go func() { _ = ServeVault(ctx, path, k, store, nil) }()
 	for range 100 {
 		if _, err = AskVault(path, VaultRequest{Op: VaultStatus}); err == nil {
 			break
@@ -173,7 +175,7 @@ func TestVaultSocketStores(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, err := AskVault(path, req)
-	if err != nil || st.Stored == nil || *st.Stored != (Stored{Ref: req.Ref, Bytes: 6, Fingerprint: "hmac:1"}) {
+	if err != nil || st.Stored == nil || *st.Stored != (Stored{Ref: req.Ref, Bytes: 6, Fingerprint: hmacOne}) {
 		t.Fatalf("store: %+v, %v", st, err)
 	}
 	if want := []string{testSession + "=" + testToken, req.Ref, testValue}; !slices.Equal(got, want) {
@@ -185,6 +187,71 @@ func TestVaultSocketStores(t *testing.T) {
 	big := VaultRequest{Op: VaultStore, Ref: "op://Shared/app/private-key", Value: strings.Repeat("\n", MaxStoreBytes)}
 	if st, err := AskVault(path, big); err != nil || st.Stored == nil || st.Stored.Bytes != MaxStoreBytes {
 		t.Errorf("a value of MaxStoreBytes: %+v, %v", st, err)
+	}
+}
+
+// A store into an item over the socket reaches the item storer with the
+// keeper's session and every field, and answers what it wrote per field,
+// never a value, which a failure's message loses too; a locked keeper and
+// a keeper without an item storer refuse it.
+func TestVaultSocketStoresItems(t *testing.T) {
+	dir, err := os.MkdirTemp("", "bkv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Setenv("XDG_RUNTIME_DIR", dir)
+	path, err := SocketPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := NewKeeper(time.Hour, nil)
+	asBroker(t)
+	var gotEnv, gotItem string
+	var gotFields []ItemField
+	storeItem := func(_ context.Context, env, item string, fields []ItemField) ([]Stored, error) {
+		gotEnv, gotItem, gotFields = env, item, fields
+		if strings.Contains(item, "bad") {
+			return nil, errors.New("op refused " + fields[0].Value)
+		}
+		var out []Stored
+		for _, f := range fields {
+			out = append(out, Stored{Ref: item + "/" + f.Label, Bytes: len(f.Value), Fingerprint: hmacOne})
+		}
+		return out, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = ServeVault(ctx, path, k, nil, storeItem) }()
+	for range 100 {
+		if _, err = AskVault(path, VaultRequest{Op: VaultStatus}); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := []ItemField{{Label: "app-id", Value: "4242", Plain: true}, {Label: "client-secret", Value: testValue}, {Label: "private-key", Value: strings.Repeat("\n", MaxStoreBytes)}}
+	req := VaultRequest{Op: VaultStoreItem, Item: "op://Shared/app", Fields: fields}
+	if _, err := AskVault(path, req); err == nil || !strings.Contains(err.Error(), "holds no session") || gotItem != "" {
+		t.Errorf("a store while locked: %v, storer got %q", err, gotItem)
+	}
+	if _, err := AskVault(path, VaultRequest{Op: VaultUnlock, Name: testSession, Token: testToken}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := AskVault(path, req)
+	if err != nil || len(st.Fields) != 3 || st.Fields[0] != (Stored{Ref: "op://Shared/app/app-id", Bytes: 4, Fingerprint: hmacOne}) || st.Fields[2].Bytes != MaxStoreBytes {
+		t.Fatalf("store-item: %+v, %v", st, err)
+	}
+	if gotEnv != testSession+"="+testToken || gotItem != req.Item || !slices.Equal(gotFields, fields) {
+		t.Errorf("the storer got %q %q %+v", gotEnv, gotItem, gotFields)
+	}
+	if _, err := AskVault(path, VaultRequest{Op: VaultStoreItem, Item: "op://Shared/bad", Fields: fields[1:]}); err == nil || err.Error() != "op refused [value]" {
+		t.Errorf("a failed store-item: %v", err)
+	}
+	if _, err := AskVault(path, VaultRequest{Op: VaultStore, Ref: "op://Shared/app/x", Value: "v"}); err == nil || !strings.Contains(err.Error(), "stores nothing") {
+		t.Errorf("a store without a storer: %v", err)
 	}
 }
 

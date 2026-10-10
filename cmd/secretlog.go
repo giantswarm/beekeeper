@@ -25,11 +25,17 @@ import (
 // written the call fails with the reason and the entry it lost, so that no
 // call ends unlogged.
 func (a *app) secretLog(result error, op, format string, args ...any) error {
+	return a.opLog(result, "secret."+op, format, args...)
+}
+
+// opLog is secretLog for any verb: an operation on credentials outside
+// beekeeper secret (app create) is logged the same way.
+func (a *app) opLog(result error, verb, format string, args ...any) error {
 	who, err := a.caller()
 	if err != nil {
 		who = state.Party{Name: noSession}
 	}
-	e := event(who, "secret."+op, format, args...)
+	e := event(who, verb, format, args...)
 	e.Detail += fmt.Sprintf(" (%s)", time.Since(a.now).Round(time.Millisecond))
 	if err := a.store.Record(e); err != nil {
 		return errors.Join(result, &exitError{code: ExitError, msg: notLogged(e, err)})

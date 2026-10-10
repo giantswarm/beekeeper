@@ -61,7 +61,7 @@ func (a *app) keepVault(ctx context.Context) (*vaultBroker, error) {
 		return nil, fmt.Errorf("the vault keeper: %w", err)
 	}
 	go func() {
-		if err := secret.ServeVault(ctx, path, k, a.vaultStore); err != nil {
+		if err := secret.ServeVault(ctx, path, k, a.vaultStore, a.vaultStoreItem); err != nil {
 			fmt.Fprintf(os.Stderr, "vault keeper: %v\n", err)
 		}
 	}()
@@ -113,6 +113,22 @@ func (a *app) vaultStore(ctx context.Context, env, ref, value string) (secret.St
 	}
 	ops.Env = []string{env}
 	return ops.StoreValue(ctx, r, value)
+}
+
+// vaultStoreItem is the keeper's ItemStorer: the fields a session handed
+// the keeper over its socket (beekeeper app create) go into one item of
+// the shared vault in one op call, with the session in env, the same way.
+func (a *app) vaultStoreItem(ctx context.Context, env, item string, fields []secret.ItemField) ([]secret.Stored, error) {
+	vault, title, err := secret.ParseItem(item)
+	if err != nil {
+		return nil, err
+	}
+	ops, err := a.secretOpsKeyed()
+	if err != nil {
+		return nil, err
+	}
+	ops.Env = []string{env}
+	return ops.StoreFields(ctx, vault, title, fields)
 }
 
 // drop forgets a session op no longer takes, says so in the journal and on
