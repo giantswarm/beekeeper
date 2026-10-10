@@ -594,8 +594,8 @@ func TestProfileFor(t *testing.T) {
 	if _, ok := c.Agents.ProfileFor(c.Guide.Profile); ok {
 		t.Error("a role without a profile resolved one")
 	}
-	c.Agents.Profiles[MinimalProfile] = Profile{Tools: []string{"Grep"}}
-	if p, _ := c.Agents.ProfileFor(MinimalProfile); !slices.Equal(p.Tools, []string{"Grep"}) {
+	c.Agents.Profiles[MinimalProfile] = Profile{Tools: []string{"Glob"}}
+	if p, _ := c.Agents.ProfileFor(MinimalProfile); !slices.Equal(p.Tools, []string{"Glob"}) {
 		t.Errorf("the desk's minimal did not replace the built-in one: %+v", p)
 	}
 }
