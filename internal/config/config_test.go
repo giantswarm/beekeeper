@@ -162,7 +162,7 @@ func TestLoadRejects(t *testing.T) {
 		"omp key as value":           "omp: {providers: {spark: {apiKey: sk-planted}}}",
 		"omp key half ref":           "omp: {providers: {spark: {apiKey: op://Vault/item}}}",
 		"omp key no ref":             "omp: {providers: {spark: {}}}",
-		"short swapWindow":           "watch: {swapWindow: 2m}",
+		"swap window under 5m":       "watch: {swapWindow: 2m}",
 		"negative swapPSIMax":        "capacity: {swapPSIMax: -1}",
 	} {
 		p := filepath.Join(t.TempDir(), "c.yaml")
