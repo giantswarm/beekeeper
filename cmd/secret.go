@@ -342,10 +342,11 @@ func vaultExit(err error) error {
 }
 
 func (a *app) secretCopyCmd() *cobra.Command {
-	var name, namespace, toSecret, encode string
+	var name, namespace, toSecret, encode, gitUser string
+	var gitAskpass bool
 	var in secret.Stdin
 	c := &cobra.Command{
-		Use:   "copy <from> <to> | copy <ref>=<path>… <new-file> [--name n --namespace ns] | copy <from> -- <consumer…> | copy <from> --to-secret <context>/<namespace>/<name>/<key>",
+		Use:   "copy <from> <to> | copy <ref>=<path>… <new-file> [--name n --namespace ns] | copy <from> -- <consumer…> | copy <from> --git-askpass -- git … | copy <from> --to-secret <context>/<namespace>/<name>/<key>",
 		Short: "Copy a SOPS file, values into a new SOPS file, or one value into a SOPS path, a consumer's stdin or a lab's Secret",
 		Long: `copy <src.sops.yaml> <dst.sops.yaml> writes a new SOPS file with the
 values of src, encrypted under dst's creation rules; --name and --namespace
@@ -389,13 +390,33 @@ value is read. It answers the key names and value lengths, for example:
     --name app --namespace team
 
 copy <ref> -- <command…> runs a consumer with the value on stdin: gh secret
-set, garage json-api <endpoint> -, a command with --password-stdin or one
-with --secret <name>=-, or kubectl exec -i --context <context> <pod> --
-<one of them> for a command in a pod (no TTY, no -v, never a production
-context). --stdin-json '<object>' --stdin-field <key> hands the consumer
-that JSON object with the value at <key> instead of the bare value (garage
-json-api ImportKey's request, for one). It answers the consumer's output
-with the value redacted, and its exit code.
+set, garage json-api <endpoint> -, gitlab-rails runner [-e <env>] '<code>'
+whose Ruby code reads STDIN, a command with --password-stdin or one with
+--secret <name>=-, or kubectl exec -i --context <context> <pod> -- <one of
+them> for a command in a pod (no TTY, no -v, never a production context).
+--stdin-json '<object>' --stdin-field <key> hands the consumer that JSON
+object with the value at <key> instead of the bare value (garage json-api
+ImportKey's request, for one). It answers the consumer's output with the
+value redacted, and its exit code:
+
+  beekeeper secret copy <file>#<path> -- kubectl exec -i --context <context> \
+    -n <namespace> <pod> -- gitlab-rails runner 'token = STDIN.read.strip; …'
+
+copy <ref> --git-askpass -- git [-C <dir>] clone|fetch|push|ls-remote …
+runs git over HTTPS with the value as the password: GIT_ASKPASS names a
+helper beekeeper writes for the one call, which asks beekeeper for the
+answer on a socket only git's own processes reach, the user name for the
+Username prompt (--git-user, default oauth2) and the value for the
+Password prompt. The value is never on an argv, in a file, in git's
+environment or in the answer; git runs without the global and system
+configuration (whose credential helper would answer or store first) and
+without hooks, a repository naming a credential helper is refused, and so
+are the options that set configuration or name a program (-c, --config,
+--upload-pack, --receive-pack, --exec). A brokered call runs in the
+broker's directory: -C names the repository by its absolute path.
+
+  beekeeper secret copy <file>#<path> --git-askpass -- \
+    git -C /path/to/repo push https://<host>/<group>/<project>.git main
 
 copy <ref> --to-secret <context>/<namespace>/<name>/<key> writes one value
 into a key of a Secret in a kind lab, kind-<cluster>, whose lab lease the
@@ -440,6 +461,12 @@ failing or answering nothing within a minute) exits 78.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if in != (secret.Stdin{}) && cmd.ArgsLenAtDash() != 1 {
 				return usageErr("--stdin-json and --stdin-field shape a consumer's stdin: copy <from> -- <consumer…>")
+			}
+			if gitAskpass && (cmd.ArgsLenAtDash() != 1 || in != (secret.Stdin{})) {
+				return usageErr("--git-askpass answers git's prompts, no stdin: copy <from> --git-askpass -- git …")
+			}
+			if cmd.Flags().Changed("git-user") && !gitAskpass {
+				return usageErr("--git-user is the user name --git-askpass answers")
 			}
 			enc, err := secret.ParseEncoding(encode)
 			if err != nil {
@@ -486,7 +513,11 @@ failing or answering nothing within a minute) exits 78.`,
 				if err := a.checkConsumerContext(argv); err != nil {
 					return err
 				}
-				code, out, err := ops.CopyToConsumer(ctx, src[0], argv, in)
+				run := func() (int, string, error) { return ops.CopyToConsumer(ctx, src[0], argv, in) }
+				if gitAskpass {
+					run = func() (int, string, error) { return ops.CopyToGit(ctx, src[0], argv, gitUser) }
+				}
+				code, out, err := run()
 				if err != nil && !errors.Is(err, secret.ErrVault) {
 					// exit ExitVault stays: the broker signs in again and retries
 					err = refused("%v", err)
@@ -537,6 +568,8 @@ failing or answering nothing within a minute) exits 78.`,
 	c.Flags().StringVar(&name, "name", "", "the copy's metadata.name; with <ref>=<path>… the new Secret's")
 	c.Flags().StringVar(&namespace, "namespace", "", "the copy's metadata.namespace; with <ref>=<path>… the new Secret's")
 	c.Flags().StringVar(&toSecret, "to-secret", "", "a key of a Secret in a lab you hold: <context>/<namespace>/<name>/<key>")
+	c.Flags().BoolVar(&gitAskpass, "git-askpass", false, "run git with the value as the password its askpass helper answers: copy <ref> --git-askpass -- git …")
+	c.Flags().StringVar(&gitUser, "git-user", secret.GitUser, "the user name the askpass helper answers")
 	stdinFlags(c, &in)
 	encodeFlag(c, &encode)
 	return c

@@ -296,8 +296,10 @@ func (o *Ops) write(ctx context.Context, doc *document, dst Ref, v string) error
 }
 
 // Consumer allows a command to take a value on stdin: one that reads a
-// secret from stdin and stores it without printing it, or kubectl exec -i
-// handing stdin to such a command in a pod.
+// secret from stdin and stores it without printing it (gitlab-rails
+// runner's code reading STDIN among them), or kubectl exec -i handing stdin
+// to such a command in a pod. git takes a value through GitConsumer's
+// askpass path instead.
 func Consumer(argv []string) error {
 	if len(argv) == 0 {
 		return errors.New("no consumer: copy <ref> -- <command>")
@@ -308,9 +310,16 @@ func Consumer(argv []string) error {
 	if stdinReader(argv) {
 		return nil
 	}
-	return fmt.Errorf("%q takes no value from beekeeper: the consumers are `gh secret set`, `garage json-api <endpoint> -`, "+
-		"a command with --password-stdin or --secret <name>=-, and `kubectl exec -i --context <context> <pod> -- <one of them>`", strings.Join(argv, " "))
+	if filepath.Base(argv[0]) == "git" {
+		return fmt.Errorf("%q: git takes a value through beekeeper's askpass helper: copy <ref> --git-askpass -- git …", strings.Join(argv, " "))
+	}
+	return fmt.Errorf("%q takes no value from beekeeper: the consumers are %s, and `kubectl exec -i --context <context> <pod> -- <one of them>`",
+		strings.Join(argv, " "), stdinReaders)
 }
+
+// stdinReaders names the commands stdinReader allows.
+const stdinReaders = "`gh secret set`, `garage json-api <endpoint> -`, `gitlab-rails runner [-e <env>] '<code reading STDIN>'`, " +
+	"a command with --password-stdin or --secret <name>=-"
 
 // stdinReader reports whether a command reads a secret from stdin and
 // stores it without printing it.
@@ -321,6 +330,8 @@ func stdinReader(argv []string) bool {
 	case "garage":
 		// the JSON request on stdin, "-" its only argument after the endpoint
 		return len(argv) == 4 && argv[1] == "json-api" && argv[3] == "-"
+	case "gitlab-rails":
+		return railsRunner(argv)
 	}
 	for i, a := range argv[1:] {
 		switch {
@@ -332,6 +343,23 @@ func stdinReader(argv []string) bool {
 		}
 	}
 	return false
+}
+
+// railsRunner reports whether argv is gitlab-rails runner [-e <env>]
+// <code>, the Ruby code reading STDIN; a script file, whose reading its
+// path does not show, is refused.
+func railsRunner(argv []string) bool {
+	args := argv[1:]
+	if len(args) == 0 || args[0] != "runner" {
+		return false
+	}
+	args = args[1:]
+	if len(args) > 2 && (args[0] == "-e" || args[0] == "--environment") {
+		args = args[2:]
+	} else if len(args) > 1 && strings.HasPrefix(args[0], "--environment=") {
+		args = args[1:]
+	}
+	return len(args) == 1 && (strings.Contains(args[0], "STDIN") || strings.Contains(args[0], "$stdin"))
 }
 
 // kubectlExec allows kubectl exec -i with an explicit --context, no TTY
@@ -361,8 +389,7 @@ func kubectlExec(argv []string) error {
 	case ConsumerContext(argv) == "":
 		return fmt.Errorf("%q: name the cluster, --context <context>", cmd)
 	case dash+1 == len(argv) || !stdinReader(argv[dash+1:]):
-		return fmt.Errorf("%q: the command in the pod reads the value on stdin: `garage json-api <endpoint> -`, `gh secret set`, "+
-			"or one with --password-stdin or --secret <name>=-", cmd)
+		return fmt.Errorf("%q: the command in the pod reads the value on stdin: %s", cmd, stdinReaders)
 	}
 	return nil
 }
