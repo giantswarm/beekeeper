@@ -17,6 +17,11 @@ const (
 	jsonDoc   = `{"clientID": "app-123", "clientSecret": "` + password + `"}`
 	listDoc   = "- " + password + "\n- " + token + "\n"
 	textDoc   = "clientID: app-123\n  clientSecret: " + password + "\n"
+	tabDoc    = "oidc:\r\n\tclientID: app-123\r\n\tclientSecret: " + password + "\r\n"
+	spacedDoc = "clientID = app-123\r\nclientSecret = \"" + password + "\"\r\nissuer = https://idp.example.com\r\nscopes = openid email\r\n"
+	mixedDoc  = "# hand-written\r\nclientID = 'app-123'\n\tclientSecret:\t\"" + password + "\"\r\nexport issuer : https://idp.example.com\n"
+	proseDoc  = "client id: app-123\nthe secret below\n" + password + "\nc2VjcmV0cGFzcw=\nhttps://idp.example.com/a=b\n"
+	headless  = "[" + password + "\n" + token + "\n"
 	paddedDoc = "c2VjcmV0cGFzcw="
 	tokenKey  = "Iv1.0123456789abcdefABCDEF0123456789"
 )
@@ -49,6 +54,14 @@ func TestKubePathResolvesEveryShape(t *testing.T) {
 		{"block scalar itself", nestedDoc, "values.env", "TOKEN=" + token + "\nMODE=dev\n"},
 		{"json", jsonDoc, clientSecretPath, password},
 		{"yaml", connectorDoc, clientSecretPath, password},
+		{"tab-indented yaml", tabDoc, "oidc.clientSecret", password},
+		{"spaced separator", spacedDoc, clientSecretPath, password},
+		{"spaced separator, crlf", spacedDoc, "issuer", "https://idp.example.com"},
+		{"spaced separator, spaced value", spacedDoc, "scopes", "openid email"},
+		{"mixed quoted", mixedDoc, "clientID", "app-123"},
+		{"mixed tab and colon", mixedDoc, clientSecretPath, password},
+		{"mixed export", mixedDoc, "issuer", "https://idp.example.com"},
+		{"indented colon lines", textDoc, clientSecretPath, password},
 	} {
 		o := readingKube([]byte(tc.raw))
 		ps, err := o.Fingerprints(ctx, secret.Ref{Kube: shapeTarget, Path: tc.path})
@@ -89,7 +102,11 @@ func TestKubePathRefusalNamesTheShape(t *testing.T) {
 		{"json mapping", jsonDoc, "secret", []string{"the key holds a JSON mapping with the top-level keys clientID, clientSecret (1 line, "}},
 		{"yaml list", listDoc, clientSecretPath, []string{"the key holds a YAML list of 2 items (2 lines, " + bytesOf(listDoc) + ")"}},
 		{"scalar", password, clientSecretPath, []string{"the key holds a scalar (1 line, " + bytesOf(password) + ")"}},
-		{"text", textDoc, clientSecretPath, []string{"the key holds text, no YAML document (2 lines, "}},
+		{"text", proseDoc, clientSecretPath, []string{"no value at clientSecret: the key holds text, no YAML document with the line heads client id, <16 characters>, <" + strconv.Itoa(len(password)) + " characters>, <15 characters>, https (5 lines, " + bytesOf(proseDoc) + ")"}},
+		{"text without heads", headless, clientSecretPath, []string{"no value at clientSecret: the key holds text, no YAML document (2 lines, " + bytesOf(headless) + ")"}},
+		{"spaced dotenv", spacedDoc, "clientToken", []string{"no value at clientToken: the key holds dotenv lines with the keys clientID, clientSecret, issuer, scopes (4 lines, " + bytesOf(spacedDoc) + ")"}},
+		{"key-value lines", mixedDoc, "clientToken", []string{"no value at clientToken: the key holds key-value lines with the keys clientID, clientSecret, issuer (4 lines, " + bytesOf(mixedDoc) + ")"}},
+		{"tab-indented yaml", tabDoc, "clientSecret", []string{"no value at clientSecret: the key holds a YAML mapping with the top-level keys oidc (3 lines, "}},
 		{"padded encoding", paddedDoc, "c2VjcmV0cGFzcw", []string{"the key holds a scalar (1 line, 15 bytes)"}},
 		{"binary", "\x00\x01\xff" + password, clientSecretPath, []string{"the key holds binary (" + bytesOf("\x00\x01\xff"+password) + ")"}},
 		{"nothing", "", clientSecretPath, []string{"the key holds nothing (0 bytes)"}},

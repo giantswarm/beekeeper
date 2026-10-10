@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `secret copy|compare|fingerprint k8s://…#<path>` reads a key an operator wrote by hand that is neither a YAML document nor dotenv: tab-indented YAML, `key = value` and `key: value` lines with any spacing around the separator, CRLF line ends, quoted values, or a mix. A refusal for text no reader takes names each line's head, the text before its first `:` or `=` (trimmed, `export` stripped), never anything after it; a line without either, or with a head no key carries, is counted by its length ([#827](https://github.com/giantswarm/beekeeper/issues/827)).
+
 - A message to `the supervisor` or `the guide` reaches the holder beekeeper records although another live session carries the holder's title: the holder's CLI is found by its session id and addressed by its own socket while its title is shared. `beekeeper doctor` and the watch (`SAME TITLE`) name every title two live sessions carry, and a relay or a role's `start` refuses a run name another live session carries, naming that session ([#758](https://github.com/giantswarm/beekeeper/issues/758)).
 
 ### Changed
