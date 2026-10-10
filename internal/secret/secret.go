@@ -42,6 +42,10 @@ type Ops struct {
 	// service account: the way to a vault no service account can be
 	// granted, such as a person's Employee vault.
 	Session bool
+	// Env is what op's environment gets besides this process's own in
+	// session mode: the broker's own calls give the vault session here; a
+	// brokered child carries it in its environment already.
+	Env []string
 	// Fingerprint is the keyed hash fingerprint answers with.
 	Fingerprint func(value string) string
 	// Apply writes a key of a Secret; nil is [ApplySecret].

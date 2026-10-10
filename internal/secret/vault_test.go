@@ -2,15 +2,22 @@ package secret
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 )
 
-// testSession is a made-up session variable; no op ever issued it.
-const testSession = "OP_SESSION_TESTACCOUNT"
+// testSession and testToken are a made-up session; no op ever issued it.
+const (
+	testSession = "OP_SESSION_TESTACCOUNT"
+	testToken   = "tok"
+	// testValue is what a store hands the keeper.
+	testValue = "s3cret"
+)
 
 func TestKeeperWaitsForTheUnlock(t *testing.T) {
 	k := NewKeeper(time.Hour, nil)
@@ -24,7 +31,7 @@ func TestKeeperWaitsForTheUnlock(t *testing.T) {
 	}
 	done := make(chan error)
 	go func() { done <- k.Wait(context.Background()) }()
-	if err := k.Unlock(testSession, "tok", time.Now()); err != nil {
+	if err := k.Unlock(testSession, testToken, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-done; err != nil {
@@ -50,7 +57,7 @@ func TestParseSignin(t *testing.T) {
 		testSession + "=tok\n",
 	} {
 		name, token, err := ParseSignin([]byte(out))
-		if err != nil || name != testSession || token != "tok" {
+		if err != nil || name != testSession || token != testToken {
 			t.Errorf("ParseSignin(%q) = %q, %q, %v", out, name, token, err)
 		}
 	}
@@ -91,7 +98,7 @@ func TestVaultSocket(t *testing.T) {
 	asBroker(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go func() { _ = ServeVault(ctx, path, k) }()
+	go func() { _ = ServeVault(ctx, path, k, nil) }()
 	var st VaultState
 	for range 100 {
 		if st, err = AskVault(path, VaultRequest{Op: VaultStatus}); err == nil {
@@ -105,7 +112,7 @@ func TestVaultSocket(t *testing.T) {
 	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Errorf("socket mode: %v, %v", fi.Mode(), err)
 	}
-	if st, err = AskVault(path, VaultRequest{Op: VaultUnlock, Name: testSession, Token: "tok"}); err != nil || !st.Unlocked {
+	if st, err = AskVault(path, VaultRequest{Op: VaultUnlock, Name: testSession, Token: testToken}); err != nil || !st.Unlocked {
 		t.Fatalf("unlock: %+v, %v", st, err)
 	}
 	if k.Env() != testSession+"=tok" {
@@ -114,8 +121,70 @@ func TestVaultSocket(t *testing.T) {
 	if _, err = AskVault(path, VaultRequest{Op: "read"}); err == nil {
 		t.Error("an unknown request was answered")
 	}
+	if _, err = AskVault(path, VaultRequest{Op: VaultStore, Ref: "op://Shared/app/x", Value: "v"}); err == nil || !strings.Contains(err.Error(), "stores nothing") {
+		t.Errorf("a store without a storer: %v", err)
+	}
 	if st, err = AskVault(path, VaultRequest{Op: VaultLock}); err != nil || st.Unlocked || k.Env() != "" {
 		t.Errorf("lock: %+v, %v", st, err)
+	}
+}
+
+// A store over the socket reaches the storer with the keeper's session and
+// answers what it wrote, never the value, which a failure's message loses
+// too; a locked keeper refuses it.
+func TestVaultSocketStores(t *testing.T) {
+	dir, err := os.MkdirTemp("", "bkv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Setenv("XDG_RUNTIME_DIR", dir)
+	path, err := SocketPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := NewKeeper(time.Hour, nil)
+	asBroker(t)
+	var got []string
+	store := func(_ context.Context, env, ref, value string) (Stored, error) {
+		got = append(got, env, ref, value)
+		if strings.Contains(ref, "bad") {
+			return Stored{}, errors.New("op refused " + value)
+		}
+		return Stored{Ref: ref, Bytes: len(value), Fingerprint: "hmac:1"}, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = ServeVault(ctx, path, k, store) }()
+	for range 100 {
+		if _, err = AskVault(path, VaultRequest{Op: VaultStatus}); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := VaultRequest{Op: VaultStore, Ref: "op://Shared/app/client-secret", Value: testValue}
+	if _, err := AskVault(path, req); err == nil || !strings.Contains(err.Error(), "holds no session") || len(got) > 0 {
+		t.Errorf("a store while locked: %v, storer got %q", err, got)
+	}
+	if _, err := AskVault(path, VaultRequest{Op: VaultUnlock, Name: testSession, Token: testToken}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := AskVault(path, req)
+	if err != nil || st.Stored == nil || *st.Stored != (Stored{Ref: req.Ref, Bytes: 6, Fingerprint: "hmac:1"}) {
+		t.Fatalf("store: %+v, %v", st, err)
+	}
+	if want := []string{testSession + "=" + testToken, req.Ref, testValue}; !slices.Equal(got, want) {
+		t.Errorf("the storer got %q, want %q", got, want)
+	}
+	if _, err := AskVault(path, VaultRequest{Op: VaultStore, Ref: "op://Shared/bad/x", Value: testValue}); err == nil || err.Error() != "op refused [value]" {
+		t.Errorf("a failed store: %v", err)
+	}
+	big := VaultRequest{Op: VaultStore, Ref: "op://Shared/app/private-key", Value: strings.Repeat("\n", MaxStoreBytes)}
+	if st, err := AskVault(path, big); err != nil || st.Stored == nil || st.Stored.Bytes != MaxStoreBytes {
+		t.Errorf("a value of MaxStoreBytes: %+v, %v", st, err)
 	}
 }
 
@@ -124,7 +193,7 @@ func TestKeeperLifetime(t *testing.T) {
 	changes := make(chan VaultState, 4)
 	k := NewKeeper(lifetime, func(st VaultState) { changes <- st })
 	now := time.Now()
-	if err := k.Unlock(testSession, "tok", now); err != nil {
+	if err := k.Unlock(testSession, testToken, now); err != nil {
 		t.Fatal(err)
 	}
 	if st := k.State(); !st.Unlocked || !st.Since.Equal(now) || !st.Until.Equal(now.Add(lifetime)) {
@@ -165,7 +234,7 @@ func TestKeeperLifetime(t *testing.T) {
 		t.Errorf("state round trip: %+v, %v", st, err)
 	}
 	raw, _ := os.ReadFile(path) //nolint:gosec // the test's own file
-	if strings.Contains(string(raw), "tok") {
+	if strings.Contains(string(raw), testToken) {
 		t.Error("the state file carries the session")
 	}
 }
