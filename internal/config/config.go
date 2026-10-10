@@ -343,6 +343,11 @@ type Secret struct {
 	// Store is the person's own credential store a store:// age identity
 	// is read from.
 	Store SecretStore `yaml:"store"`
+	// Env are the names (globs, such as *_TOKEN) of the environment
+	// variables that carry a secret: the producer of beekeeper secret
+	// capture runs without them, as without the vault's credentials and
+	// SOPS_AGE_KEY, which it never gets.
+	Env []string `yaml:"env"`
 }
 
 // SecretStore reaches the person's own credential store through the
