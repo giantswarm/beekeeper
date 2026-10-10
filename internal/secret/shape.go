@@ -23,6 +23,7 @@ const (
 	shapeStream      = "a YAML stream of several documents"
 	shapeText        = "text, no YAML document"
 	shapeDotenv      = "dotenv lines"
+	shapeLines       = "key-value lines"
 	shapeScalar      = "a scalar"
 	shapeBinary      = "binary"
 	shapeNothing     = "nothing"
@@ -31,8 +32,15 @@ const (
 // shownKeys is how many keys a shape names; the rest are counted.
 const shownKeys = 20
 
-// dotenvKey is the key of a dotenv line.
+// dotenvKey is the key of a dotenv or key-value line.
 var dotenvKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]*$`)
+
+// counted is a key or line head a shape counts instead of naming.
+var counted = regexp.MustCompile(`^<[0-9]+ characters>$`)
+
+// lineHead is a text line's head a refusal names: a key's characters and
+// spaces, nothing a value's encoding carries (/, +, quotes).
+var lineHead = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_. -]*$`)
 
 // shape is what a Secret's key, or a node inside it, holds, as far as a
 // refusal may say: the format, the top-level or dotenv keys, a list's
@@ -51,7 +59,9 @@ func (s shape) String() string {
 	var b strings.Builder
 	b.WriteString(s.format)
 	switch {
-	case len(s.keys) > 0 && s.whole && s.format != shapeDotenv:
+	case len(s.keys) > 0 && s.format == shapeText:
+		b.WriteString(" with the line heads " + namedKeys(s.keys))
+	case len(s.keys) > 0 && s.whole && s.format != shapeDotenv && s.format != shapeLines:
 		b.WriteString(" with the top-level keys " + namedKeys(s.keys))
 	case len(s.keys) > 0:
 		b.WriteString(" with the keys " + namedKeys(s.keys))
@@ -71,11 +81,12 @@ func (s shape) String() string {
 }
 
 // namedKeys lists keys, at most shownKeys of them; a key named like a
-// generated value, or longer than any key, is counted instead.
+// generated value, or longer than any key, is counted instead, and a
+// count (<n characters>) stays one.
 func namedKeys(keys []string) string {
 	named := make([]string, 0, len(keys))
 	for _, k := range keys {
-		if len(k) > 64 || keyLike(k) {
+		if !counted.MatchString(k) && (len(k) > 64 || keyLike(k)) {
 			k = fmt.Sprintf("<%d characters>", len(k))
 		}
 		named = append(named, k)
@@ -103,7 +114,9 @@ type content struct {
 
 // parseContent reads what a key holds: dotenv lines first, which a YAML
 // reader takes for a scalar or a mapping keyed by whole lines, then one
-// YAML or JSON document.
+// YAML or JSON document, as written or with its indenting tabs as spaces,
+// then key-value lines; text none of them reads is named by its line
+// heads.
 func parseContent(raw []byte) content {
 	s := shape{bytes: len(raw), lines: countLines(raw), whole: true}
 	switch {
@@ -120,11 +133,22 @@ func parseContent(raw []byte) content {
 	}
 	json := bytes.HasPrefix(bytes.TrimLeft(raw, " \t\r\n"), []byte("{")) || bytes.HasPrefix(bytes.TrimLeft(raw, " \t\r\n"), []byte("["))
 	n, err := parseNode(raw)
+	if err != nil && !errors.Is(err, errSeveralDocuments) {
+		if tn, terr := parseNode(untab(raw)); terr == nil && tn.Kind == yaml.MappingNode {
+			n, err = tn, nil
+		}
+	}
+	if err != nil && !errors.Is(err, errSeveralDocuments) {
+		if env, keys := parseLines(raw); env != nil {
+			s.format, s.keys = shapeLines, keys
+			return content{shape: s, env: env}
+		}
+	}
 	switch {
 	case errors.Is(err, errSeveralDocuments):
 		s.format = shapeStream
 	case err != nil:
-		s.format = shapeText
+		s.format, s.keys = shapeText, lineHeads(raw)
 	case n.Kind == yaml.MappingNode:
 		doc := &document{root: n}
 		s.format, s.keys = shapeYAMLMapping, doc.topKeys()
@@ -209,6 +233,98 @@ func parseDotenv(raw []byte) (map[string]string, []string) {
 		return nil, nil
 	}
 	return env, keys
+}
+
+// untab is raw with CRLF line ends as LF and every tab of a line's
+// indent as two spaces, the YAML a hand-written key often means.
+func untab(raw []byte) []byte {
+	lines := strings.Split(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n")
+	for i, l := range lines {
+		rest := strings.TrimLeft(l, " \t")
+		indent := l[:len(l)-len(rest)]
+		lines[i] = strings.ReplaceAll(indent, "\t", "  ") + rest
+	}
+	return []byte(strings.Join(lines, "\n"))
+}
+
+// parseLines reads key-value lines: a key, then : or = with any spacing
+// around it, then the value as dotenv reads one (quotes stripped, a
+// trailing comment dropped), whichever separator comes first; an export in
+// front, # comments, blank lines and CR line ends are ignored, a key in
+// matching quotes unquoted. Any other line means raw is no key-value
+// lines: nil.
+func parseLines(raw []byte) (map[string]string, []string) {
+	env := map[string]string{}
+	var keys []string
+	for line := range strings.SplitSeq(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line[0] == '#' {
+			continue
+		}
+		k, v, ok := splitLine(line)
+		k = unquote(k)
+		if !ok || !dotenvKey.MatchString(k) {
+			return nil, nil
+		}
+		if _, seen := env[k]; !seen {
+			keys = append(keys, k)
+		}
+		env[k] = dotenvValue(v)
+	}
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	return env, keys
+}
+
+// splitLine cuts a trimmed line at its first : or =, an export in front
+// stripped from the head, which comes trimmed.
+func splitLine(line string) (head, rest string, ok bool) {
+	i := strings.IndexAny(line, ":=")
+	if i < 0 {
+		return "", "", false
+	}
+	head = strings.TrimSpace(line[:i])
+	if h, found := strings.CutPrefix(head, "export"); found && h != "" && unicode.IsSpace(rune(h[0])) {
+		head = strings.TrimSpace(h)
+	}
+	return head, line[i+1:], true
+}
+
+// unquote is s without matching quotes around it.
+func unquote(s string) string {
+	if len(s) >= 2 && (s[0] == '"' || s[0] == '\'') && s[len(s)-1] == s[0] {
+		return s[1 : len(s)-1]
+	}
+	return s
+}
+
+// lineHeads are the heads of text's lines, as a refusal names them: the
+// text before a line's first : or = (trimmed, an export stripped), never
+// anything after it. A line without either, with a head no key would
+// carry, or with nothing but = after its head (a padded encoding) is
+// counted by its length; text without a single head names none.
+func lineHeads(raw []byte) []string {
+	var heads []string
+	named := false
+	for line := range strings.SplitSeq(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line[0] == '#' {
+			continue
+		}
+		h, rest, ok := splitLine(line)
+		h = unquote(h)
+		padded := ok && line[len(line)-len(rest)-1] == '=' && strings.Trim(rest, "= \t") == ""
+		if !ok || padded || !lineHead.MatchString(h) {
+			heads = append(heads, fmt.Sprintf("<%d characters>", len(line)))
+			continue
+		}
+		heads, named = append(heads, h), true
+	}
+	if !named {
+		return nil
+	}
+	return heads
 }
 
 // dotenvValue is a dotenv line's value: the inside of matching quotes (a
