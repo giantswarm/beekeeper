@@ -251,30 +251,66 @@ func untab(raw []byte) []byte {
 // around it, then the value as dotenv reads one (quotes stripped, a
 // trailing comment dropped), whichever separator comes first; an export in
 // front, # comments, blank lines and CR line ends are ignored, a key in
-// matching quotes unquoted. Any other line means raw is no key-value
-// lines: nil.
+// matching quotes unquoted. A bare key-like line right before a key-value
+// line is a section: the lines that follow it, up to the next section or,
+// when they are indented under it, the first line that is not, are keyed
+// <section>.<key>, and each also by its own key unless an earlier line
+// holds it. Any other line means raw is no key-value lines: nil.
 func parseLines(raw []byte) (map[string]string, []string) {
-	env := map[string]string{}
-	var keys []string
-	for line := range strings.SplitSeq(string(raw), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || line[0] == '#' {
+	type line struct {
+		text   string
+		indent int
+	}
+	var ls []line
+	for l := range strings.SplitSeq(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n") {
+		text := strings.TrimSpace(l)
+		if text == "" || text[0] == '#' {
 			continue
 		}
-		k, v, ok := splitLine(line)
+		ls = append(ls, line{text: text, indent: len(l) - len(strings.TrimLeft(l, " \t"))})
+	}
+	env := map[string]string{}
+	var keys []string
+	section, sectionIndent, indented := "", 0, false
+	for i, l := range ls {
+		k, v, ok := splitLine(l.text)
 		k = unquote(k)
-		if !ok || !dotenvKey.MatchString(k) {
+		if !ok {
+			if !sectionName(l.text) || i+1 == len(ls) {
+				return nil, nil
+			}
+			if nk, _, nok := splitLine(ls[i+1].text); !nok || !dotenvKey.MatchString(unquote(nk)) {
+				return nil, nil
+			}
+			section, sectionIndent, indented = l.text, l.indent, ls[i+1].indent > l.indent
+			continue
+		}
+		if !dotenvKey.MatchString(k) {
 			return nil, nil
 		}
-		if _, seen := env[k]; !seen {
-			keys = append(keys, k)
+		if indented && l.indent <= sectionIndent {
+			section = ""
 		}
-		env[k] = dotenvValue(v)
+		v = dotenvValue(v)
+		full := joinPath(section, k)
+		if _, seen := env[full]; !seen {
+			keys = append(keys, full)
+		}
+		env[full] = v
+		if _, seen := env[k]; section != "" && !seen {
+			env[k] = v
+		}
 	}
 	if len(keys) == 0 {
 		return nil, nil
 	}
 	return env, keys
+}
+
+// sectionName reports whether a bare line may name a section: a key's
+// characters, nothing a generated value looks like.
+func sectionName(s string) bool {
+	return dotenvKey.MatchString(s) && !strings.Contains(s, ".") && len(s) <= 64 && !keyLike(s)
 }
 
 // splitLine cuts a trimmed line at its first : or =, an export in front

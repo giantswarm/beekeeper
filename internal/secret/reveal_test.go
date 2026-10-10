@@ -182,7 +182,7 @@ func TestSecretLikeValues(t *testing.T) {
 		"ghp_" + strings.Repeat("aB3dE5fG7h", 3) + "123456": true,
 		"q8Zt4WmN2xVb7KpR5sLd":                              true,
 	} {
-		_, err := ops(secrettest.New(nil)).Reveal(context.Background(), writeOne(t, v), []string{"value"})
+		_, err := ops(secrettest.New(nil)).Reveal(context.Background(), writeOne(t, v), []string{valueKey})
 		if got := errors.Is(err, secret.ErrSecretLike); got != secretish {
 			t.Errorf("%q: secret-like %v, want %v (%v)", v, got, secretish, err)
 		}
