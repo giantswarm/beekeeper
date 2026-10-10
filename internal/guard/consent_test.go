@@ -167,7 +167,7 @@ func TestLastPageReadsTheTail(t *testing.T) {
 		t.Fatal(err)
 	}
 	pad := `{"type":"user","message":{"content":"` + strings.Repeat("x", transcriptTail) + `"}}` + "\n"
-	if err := os.WriteFile(path, append([]byte(pad), b...), 0o600); err != nil {
+	if err := os.WriteFile(path, append([]byte(pad), b...), 0o600); err != nil { //nolint:gosec // the test's own file
 		t.Fatal(err)
 	}
 	p, ok := lastPage(path, "7")
