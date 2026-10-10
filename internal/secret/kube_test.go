@@ -259,7 +259,7 @@ func TestCopyFromALabSecretKeyReadsThroughKind(t *testing.T) {
 	if err != nil || len(vs) != 1 || vs[0].State != secret.Equal {
 		t.Errorf("compare = %+v, %v", vs, err)
 	}
-	ps, err := o.Fingerprints(ctx, secret.Ref{Kube: tg, Path: "clientID"})
+	ps, err := o.Fingerprints(ctx, secret.Ref{Kube: tg, Path: clientIDHead})
 	if err != nil || len(ps) != 1 || ps[0].Key != oauthKubeRef+"#clientID" {
 		t.Errorf("fingerprint = %+v, %v", ps, err)
 	}
