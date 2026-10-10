@@ -232,31 +232,38 @@ func TestSwapLineSaysDiskZswapAndOomdRule(t *testing.T) {
 		t.Errorf("a trigger without a swap-monitored cgroup: %q", got)
 	}
 	watched := &machine.OOMDSwap{LimitPercent: 90, Monitored: []string{swapCgroup}}
-	if got, want := swapLine(m, watched, swapTrend{DiskPerHourMiB: 250, UsedPerHourMiB: 250, AvailFalling: true, Rated: true}), "SWAP: 10627 of 16383 MiB used, disk 2627 MiB + zswap 8000 MiB in a 2500 MiB pool, 4117 MiB before systemd-oomd's 90 % swap trigger (1 swap-monitored cgroups), disk +250 MiB/h over the last hour while MemAvailable falls, trigger in 16h28m0s"; got != want {
+	if got, want := swapLine(m, watched, swapTrend{DiskPerHourMiB: 250, UsedPerHourMiB: 250, AvailFalling: true, Rated: true, Window: 10 * time.Minute}), "SWAP: 10627 of 16383 MiB used, disk 2627 MiB + zswap 8000 MiB in a 2500 MiB pool, 4117 MiB before systemd-oomd's 90 % swap trigger (1 swap-monitored cgroups), disk +250 MiB/h over the last 10m while MemAvailable falls, trigger in 16h28m0s"; got != want {
 		t.Errorf("watched, growing:\n got %q\nwant %q", got, want)
 	}
-	if got := swapLine(m, nil, swapTrend{DiskPerHourMiB: -80, Rated: true}); !strings.HasSuffix(got, "systemd-oomd swap rule unknown, disk -80 MiB/h over the last hour") {
+	if got := swapLine(m, nil, swapTrend{DiskPerHourMiB: -80, Rated: true, Window: time.Hour}); !strings.HasSuffix(got, "systemd-oomd swap rule unknown, disk -80 MiB/h over the last 1h00m") {
 		t.Errorf("shrinking: %q", got)
 	}
 }
 
-func TestSwapTrendOverTheLastHour(t *testing.T) {
-	w := &watcher{}
+// The swap trend is the rate over watch.swapWindow (10m), rated once the
+// readings span five minutes; a burst older than the window has left it.
+func TestSwapTrendOverTheWindow(t *testing.T) {
+	cfg, err := config.Load(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := &watcher{app: &app{cfg: cfg}}
 	at := func(used, zswapped, avail int) machine.Mem {
 		return machine.Mem{SwapUsedMiB: used, ZswappedMiB: zswapped, AvailableMiB: avail}
 	}
-	if w.swapTrend(relayNow, at(1000, 0, 40000)).Rated {
-		t.Fatal("one reading has no rate")
+	window := 10 * time.Minute
+	if tr := w.swapTrend(relayNow, at(1000, 0, 40000)); tr.Rated || tr.Window != window {
+		t.Fatalf("one reading has no rate: %+v", tr)
 	}
 	if w.swapTrend(relayNow.Add(time.Minute), at(1010, 0, 40000)).Rated {
 		t.Fatal("a minute is too short a span")
 	}
-	// 500 MiB more in use in 30 minutes, 400 of it into zswap.
-	if tr := w.swapTrend(relayNow.Add(30*time.Minute), at(1500, 400, 39000)); tr != (swapTrend{DiskPerHourMiB: 200, UsedPerHourMiB: 1000, AvailFalling: true, Rated: true}) {
-		t.Fatalf("30 minutes: %+v", tr)
+	// 500 MiB more in use in 6 minutes, 400 of it into zswap.
+	if tr := w.swapTrend(relayNow.Add(6*time.Minute), at(1500, 400, 39000)); tr != (swapTrend{DiskPerHourMiB: 1000, UsedPerHourMiB: 5000, AvailFalling: true, Rated: true, Window: window}) {
+		t.Fatalf("6 minutes: %+v", tr)
 	}
-	if tr := w.swapTrend(relayNow.Add(150*time.Minute), at(1500, 400, 41000)); tr.DiskPerHourMiB != 0 || len(w.swapSamples) != 1 {
-		t.Fatalf("readings older than an hour are dropped: %+v %d", tr, len(w.swapSamples))
+	if tr := w.swapTrend(relayNow.Add(25*time.Minute), at(1500, 400, 41000)); tr.DiskPerHourMiB != 0 || tr.Rated || len(w.swapSamples) != 1 {
+		t.Fatalf("readings older than the window are dropped: %+v %d", tr, len(w.swapSamples))
 	}
 }
 

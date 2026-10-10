@@ -68,11 +68,20 @@ func TestCountAgents(t *testing.T) {
 	}
 }
 
-// roomy is a headroom with memory, swap, load, slots and labs to spare.
+// roomy is a headroom with memory, swap, pressure, load, slots and labs to
+// spare.
 func roomy() *headroom {
 	return &headroom{AvailableMiB: 45 << 10, AvailMinMiB: 20 << 10, SwapGrowthMaxMiB: 256,
-		Swap: &swapReading{Rated: true, AvailFalling: true, PerHourMiB: 10}, Load1: 3, LoadMax: 48, SlotsFree: 1, Slots: 2, Labs: 1, MaxLabs: 2}
+		Swap: &swapReading{Rated: true, PerHourMiB: 10}, Load1: 3, LoadMax: 48, SlotsFree: 1, Slots: 2, Labs: 1, MaxLabs: 2}
 }
+
+// The swap guard's figures at a disk swap growth over the max.
+const (
+	swapFigures   = "memory PSI 0% (max 0%), MemAvailable 45.0 GiB (floor 20 GiB)"
+	swapWarning   = roomSeven + " (disk swap growing +900 MiB/h over 256, without pressure: " + swapFigures + ")"
+	swapUnderPSI  = "no start: disk swap growing +900 MiB/h over 256, under pressure: memory PSI 0.4% over 0%, MemAvailable 45.0 GiB (floor 20 GiB)"
+	swapUnderRoom = "no start: MemAvailable 15.0 GiB under 20 GiB; disk swap growing +900 MiB/h over 256, under pressure: memory PSI 0% (max 0%), MemAvailable 15.0 GiB under the floor of 20 GiB"
+)
 
 // slotNote is the verdict's note for a start that does not build while no
 // build slot is free.
@@ -110,8 +119,18 @@ func TestCapacityVerdict(t *testing.T) {
 		{"one", 9, false, func(*headroom) {}, "room for 1 start"},
 		{"ceiling", 10, false, func(*headroom) {}, "no start: 10 busy at the ceiling of 10"},
 		{"memory", 3, false, func(h *headroom) { h.AvailableMiB = 15 << 10 }, "no start: MemAvailable 15.0 GiB under 20 GiB"},
-		{"swap", 3, false, func(h *headroom) { h.Swap.PerHourMiB = 900 }, "no start: disk swap growing +900 MiB/h while MemAvailable falls, over 256"},
-		{"swap growing, RAM recovers", 3, false, func(h *headroom) { h.Swap.PerHourMiB, h.Swap.AvailFalling = 900, false }, roomSeven},
+		// Disk swap growing over the max is a warning with PSI within the
+		// max and MemAvailable over the floor, a block under either.
+		{"swap, PSI 0 and room", 3, false, func(h *headroom) { h.Swap.PerHourMiB = 900 }, swapWarning},
+		{"swap under PSI", 3, false, func(h *headroom) { h.Swap.PerHourMiB, h.PSI = 900, 0.4 }, swapUnderPSI},
+		{"swap under the floor", 3, false, func(h *headroom) { h.Swap.PerHourMiB, h.AvailableMiB = 900, 15<<10 }, swapUnderRoom},
+		{"swap, PSI within the max", 3, false, func(h *headroom) { h.Swap.PerHourMiB, h.PSI, h.PSIMax = 900, 3, 5 },
+			roomSeven + " (disk swap growing +900 MiB/h over 256, without pressure: memory PSI 3% (max 5%), MemAvailable 45.0 GiB (floor 20 GiB))"},
+		{"swap, PSI unknown", 3, false, func(h *headroom) { h.Swap.PerHourMiB, h.PSIErr = 900, "no pressure file" },
+			"no start: disk swap growing +900 MiB/h over 256, pressure unknown: memory PSI unknown (no pressure file), MemAvailable 45.0 GiB (floor 20 GiB)"},
+		{"swap warning and slot note", 3, false, func(h *headroom) { h.Swap.PerHourMiB, h.SlotsFree = 900, 0 },
+			roomSeven + " (disk swap growing +900 MiB/h over 256, without pressure: " + swapFigures + "; no free build slot: a start that builds (--builds) waits for it)"},
+		{"PSI alone", 3, false, func(h *headroom) { h.PSI = 12 }, roomSeven},
 		{"swap unrated", 3, false, func(h *headroom) { h.Swap = &swapReading{PerHourMiB: 900} }, roomSeven},
 		{"swap full, flat", 3, false, func(h *headroom) { h.Swap.UsedMiB, h.Swap.PerHourMiB = 16<<10, 0 }, roomSeven},
 		{"load", 3, false, func(h *headroom) { h.Load1 = 60 }, "no start: 1m load 60 over 48"},
@@ -136,7 +155,7 @@ func TestCapacityVerdict(t *testing.T) {
 		}
 	}
 	h := roomy()
-	if got, want := h.line(), "headroom: MemAvailable 45.0 GiB (floor 20 GiB), disk swap 0 MiB +10 MiB/h (max 256), zswap 0 MiB, 1m load 3 (max 48), build slots 1 of 2 free, kind labs 1 of 2"; got != want {
+	if got, want := h.line(), "headroom: MemAvailable 45.0 GiB (floor 20 GiB), memory PSI 0% (max 0%), disk swap 0 MiB +10 MiB/h (max 256), zswap 0 MiB, 1m load 3 (max 48), build slots 1 of 2 free, kind labs 1 of 2"; got != want {
 		t.Errorf("line %q, want %q", got, want)
 	}
 	h.Swap = nil
