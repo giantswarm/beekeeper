@@ -84,8 +84,10 @@ joins its lane's queue (a merge registered with lanes settle heads it) and
 runs when no merge before it holds its place (one in the gate or within
 merge.queueTTL of its last run; for a seeded place also the seeds before
 it), nothing else of the lane runs, the lane's HelmReleases are Ready and
-the previous merge's release has rolled, and fewer than merge.cap devctl
-processes run. A wait longer than --wait hands the merge to a run of its
+the previous merge's release has rolled, fewer than merge.cap devctl
+processes run and the calling session runs fewer than merge.sessionCap
+merges (default 2: each running devctl polls GitHub, a waiting place does
+not; the session's merges start in the order they queued). A wait longer than --wait hands the merge to a run of its
 own outside the caller (exit 76): the same gate under --queued keeps the
 merge's place, waits up to merge.seedTTL, runs devctl when its turn comes
 and wakes the owner with the outcome; a second merge of the pull request
@@ -388,6 +390,7 @@ func (g *gateRun) step() (string, error) {
 	var held bool
 	var dup *state.Merge
 	dropped := false
+	session := ""
 	err := g.store.Update(func(st *state.State) ([]state.Event, error) {
 		merge.Prune(st, g.now, g.cfg.Merge.QueueTTL.Duration, g.cfg.Merge.SeedTTL.Duration, proc.Alive)
 		if hold, held = merge.Blocking(st, g.now, g.repo, g.pr, g.lane); held {
@@ -425,6 +428,7 @@ func (g *gateRun) step() (string, error) {
 		}
 		g.placed = true
 		q = merge.Queue(st, g.lane.Name)
+		session = g.sessionWait(st)
 		return ev, nil
 	})
 	var stale *state.StaleWriterError
@@ -475,6 +479,9 @@ func (g *gateRun) step() (string, error) {
 	if q.Running != nil {
 		return fmt.Sprintf("next in lane %s behind the running %s (%q, since %s)", g.lane.Name, q.Running.Key(), q.Running.By.Name,
 			clock(g.now, q.Running.Started)), nil
+	}
+	if session != "" {
+		return session, nil
 	}
 	hrs, why, err := g.laneReady(q)
 	if err != nil || why != "" {
@@ -751,8 +758,9 @@ func (g *gateRun) laneReady(q merge.Lane) ([]merge.HelmRelease, string, error) {
 }
 
 // start makes the merge the lane's running one, when it still is first, its
-// lane's settling merges are the ones it checked and the machine runs fewer
-// than merge.cap devctl processes, and runs devctl.
+// lane's settling merges are the ones it checked, the machine runs fewer
+// than merge.cap devctl processes and its party may start one more
+// (sessionWait), and runs devctl.
 func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error) {
 	if g.runsDevctl() {
 		// devctl refuses to run behind its latest release (exit 7): a merge
@@ -786,6 +794,9 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 		if n := devctlRuns(st); n >= g.cfg.Merge.Cap {
 			why = fmt.Sprintf("%d devctl processes run machine-wide (cap %d), not a lane problem: %s is next in lane %s and starts when one ends",
 				n, g.cfg.Merge.Cap, g.key(), g.lane.Name)
+			return nil, nil
+		}
+		if why = g.sessionWait(st); why != "" {
 			return nil, nil
 		}
 		st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool {
@@ -832,6 +843,33 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 		}
 	}
 	return "", g.runMerge()
+}
+
+// sessionWait is what the merge, its lane's next, waits for under
+// merge.sessionCap, "" when its party may start one more: each running
+// devctl polls GitHub, so one party's queued merges run a few at a time and
+// the rest wait in their lanes without reading GitHub, starting in the order
+// they queued.
+func (g *gateRun) sessionWait(st *state.State) string {
+	i := g.mine(st, state.Waiting)
+	if i < 0 {
+		return ""
+	}
+	most := g.cfg.Merge.SessionCap
+	running, first, ok := merge.SessionTurn(st, st.Merges[i], most, g.present, proc.Alive)
+	switch {
+	case ok:
+		return ""
+	case first != nil:
+		return fmt.Sprintf("next in lane %s, %s of %q queued before it takes the free one of its %d merge slots (merge.sessionCap): it waits without reading GitHub",
+			g.lane.Name, first.Key(), g.me.Name, most)
+	}
+	keys := make([]string, len(running))
+	for j, m := range running {
+		keys[j] = m.Key()
+	}
+	return fmt.Sprintf("next in lane %s, %q runs %d merges (%s), merge.sessionCap %d: it waits without reading GitHub until one ends",
+		g.lane.Name, g.me.Name, len(running), strings.Join(keys, ", "), most)
 }
 
 // unstart puts the merge back to waiting in its local lane when its central

@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -37,7 +38,9 @@ limit), with the time it ends when GitHub names one. The budget is shared
 with the person's own logins, the developer portal among them: at zero it
 signs them out. The urgent merge of the reset window (lanes urgent), the
 one that ran under the floor or the one marked and waiting, is a line with
-who asked for it and what its run drew against its own bound.
+who asked for it and what its run drew against its own bound. Each session's
+gated merges are a line: those whose devctl polls GitHub (at most
+merge.sessionCap) and those queued in their lanes, which read nothing.
 
 --gate exits 3 when GitHub refuses GraphQL calls, the budget is under the
 floor (github.floor, default 2500) or a "github" hold is set:
@@ -62,18 +65,23 @@ floor (github.floor, default 2500) or a "github" hold is set:
 			}
 			hold, held := activeHold(st, a, "github")
 			urgent := urgentLines(a, st)
+			gated := gatedMerges(st, proc.Alive)
 			if a.json {
 				_ = a.printJSON(struct {
 					github.Budget
 					Floor   int            `json:"floor"`
 					Held    bool           `json:"held"`
 					Urgent  []state.Urgent `json:"urgent,omitempty"`
+					Gated   []gatedParty   `json:"gated,omitempty"`
 					Pollers []poller       `json:"pollers"`
-				}{b, a.cfg.GitHub.Floor, held, st.Urgent, pollers})
+				}{b, a.cfg.GitHub.Floor, held, st.Urgent, gated, pollers})
 			} else {
 				_, _ = fmt.Fprintln(a.out, budgetLine(a, b))
 				for _, l := range urgent {
 					_, _ = fmt.Fprintln(a.out, l)
+				}
+				for _, g := range gated {
+					_, _ = fmt.Fprintln(a.out, g.line(a.cfg.Merge.SessionCap))
 				}
 				if held {
 					_, _ = fmt.Fprintf(a.out, "GitHub is held by %q until %s: %s\n", hold.By.Name, untilText(a, hold), hold.Reason)
@@ -109,6 +117,52 @@ floor (github.floor, default 2500) or a "github" hold is set:
 	c.Flags().BoolVar(&gate, "gate", false, "exit 3 when GraphQL is refused, under the floor or held")
 	c.Flags().IntVar(&floor, "floor", 0, "the floor for this call (default github.floor)")
 	return c
+}
+
+// gatedParty is one party's gated merges: those whose devctl runs and polls
+// GitHub, and those waiting in their lanes, which read nothing.
+type gatedParty struct {
+	Party   string   `json:"party"`
+	Polling []string `json:"polling,omitempty"`
+	Waiting []string `json:"waiting,omitempty"`
+}
+
+// line says what the party's gated merges draw on the budget.
+func (g gatedParty) line(most int) string {
+	l := fmt.Sprintf("gated merges of %q: %d polling GitHub", g.Party, len(g.Polling))
+	if len(g.Polling) > 0 {
+		l += " (" + strings.Join(g.Polling, ", ") + ")"
+	}
+	if len(g.Waiting) > 0 {
+		l += fmt.Sprintf(", %d queued without reading it (%s)", len(g.Waiting), strings.Join(g.Waiting, ", "))
+	}
+	if most > 0 {
+		l += fmt.Sprintf(", merge.sessionCap %d", most)
+	}
+	return l
+}
+
+// gatedMerges groups the gate's merges by party: the running ones whose
+// gate or devctl is alive poll, the waiting ones whose gate is alive do not.
+func gatedMerges(st *state.State, alive func(pid int) bool) []gatedParty {
+	var out []gatedParty
+	for _, m := range st.Merges {
+		polling := m.Phase == state.Running && merge.Runs(m, alive)
+		if !polling && (m.Phase != state.Waiting || !alive(m.PID)) {
+			continue
+		}
+		i := slices.IndexFunc(out, func(g gatedParty) bool { return g.Party == m.By.Name })
+		if i < 0 {
+			out = append(out, gatedParty{Party: m.By.Name})
+			i = len(out) - 1
+		}
+		if polling {
+			out[i].Polling = append(out[i].Polling, m.Key())
+		} else {
+			out[i].Waiting = append(out[i].Waiting, m.Key())
+		}
+	}
+	return out
 }
 
 // githubCallers are the gh and devctl processes drawing on the budget, with

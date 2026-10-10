@@ -138,6 +138,7 @@ lanes:                      # merges that roll the same components of an install
 
 merge:
   cap: 5                    # devctl processes on the machine when a merge starts
+  sessionCap: 2             # merges one session runs at once; its others wait without polling GitHub (-1: no cap)
   queueTTL: 15m             # a queued merge keeps its place this long after its run ended
   seedTTL: 12h              # a place queued with lanes queue --for, from its seeding or last arrival; a failed run's, from the failure
   settle: 5m                # a lane waits this long after a merge whose release is unknown
