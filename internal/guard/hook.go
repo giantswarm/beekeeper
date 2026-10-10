@@ -65,7 +65,7 @@ var (
 	owned = regexp.MustCompile(`(?m)` + mergePos + `(` + devctlOwned + `)`)
 	// anyOwned: one anywhere; gated: the gate ends the text before it.
 	anyOwned = regexp.MustCompile(devctlOwned)
-	gated    = regexp.MustCompile(`\bgate\s+(?:--wait\s+\S+\s+)?--\s+$`)
+	gated    = regexp.MustCompile(`\bgate\s+(?:--(?:wait|limit)\s+\S+\s+)*--\s+$`)
 	// shellC: a shell's -c option up to the quote opening its command string.
 	shellC = regexp.MustCompile(`(?:^|[\s;&|(/])(?:ba|z|da|k)?sh\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*c[a-zA-Z]*\s+(['"])`)
 	lab    = regexp.MustCompile(`(?m)` + pos + `(agentlab\s+up\b|kind\s+create\s+cluster\b)`)
@@ -389,11 +389,12 @@ func (h Hook) hiddenMerges(cmd string, bg bool) (string, bool) {
 }
 
 // insertGate puts the gate before each offset in at, in ascending order; a
-// background merge waits up to 30 minutes for its turn (a wait has none).
+// background merge waits up to 30 minutes for its turn (a wait has none) and
+// runs without the tool limit, as no Bash call limit stops a background task.
 func (h Hook) insertGate(cmd string, at []int, bg bool) string {
 	gate := ShellQuote(h.Self) + " gate -- "
 	if bg {
-		gate = ShellQuote(h.Self) + " gate --wait 30m -- "
+		gate = ShellQuote(h.Self) + " gate --wait 30m --limit 0 -- "
 	}
 	for i := len(at) - 1; i >= 0; i-- {
 		cmd = cmd[:at[i]] + gate + cmd[at[i]:]

@@ -134,7 +134,7 @@ func TestAMergeBehindABusyLaneWaitsOnInARunOfItsOwn(t *testing.T) {
 	self, launched := stubSelf(t)
 	a := busyLaneApp(t)
 
-	err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, false)
+	err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, 0, false)
 	if Code(err) != ExitGateQueued {
 		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateQueued)
 	}
@@ -167,7 +167,7 @@ func TestAGatedDetachedMergeRunsBlocking(t *testing.T) {
 	a := busyLaneApp(t)
 
 	argv := mergeArgv(scratchRepo, "--detach", "--on-done", "beekeeper agents wake x")
-	if err := a.gate(context.Background(), argv, 0, false); Code(err) != ExitGateQueued {
+	if err := a.gate(context.Background(), argv, 0, 0, false); Code(err) != ExitGateQueued {
 		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateQueued)
 	}
 	spec := launched()
@@ -189,7 +189,7 @@ func TestASecondMergeOfAQueuedOneIsRefused(t *testing.T) {
 			state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, By: state.Party{Session: "s1", Name: ownerName}, PID: queued, Phase: state.Waiting, Joined: time.Now(), Seen: time.Now()})
 	}
 	a := seed()
-	if err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, false); Code(err) != ExitGateDuplicate {
+	if err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, 0, false); Code(err) != ExitGateDuplicate {
 		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateDuplicate)
 	}
 	st, _ := a.store.Read()
@@ -199,7 +199,7 @@ func TestASecondMergeOfAQueuedOneIsRefused(t *testing.T) {
 
 	a = seed()
 	t.Setenv(gateFromEnv, strconv.Itoa(queued))
-	err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, true)
+	err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, 0, true)
 	if Code(err) != ExitGateRefused {
 		t.Fatalf("the queued run past its wait: exit %d (%v), want %d", Code(err), err, ExitGateRefused)
 	}
@@ -274,7 +274,7 @@ func TestAMergeUnderTheBudgetFloorIsQueuedForTheReset(t *testing.T) {
 		t.Fatal(err)
 	}
 	var err error
-	stderr := gateStderr(t, func() { err = a.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, false) })
+	stderr := gateStderr(t, func() { err = a.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, 0, false) })
 	if Code(err) != ExitGateQueued {
 		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateQueued)
 	}
@@ -308,7 +308,7 @@ func TestAHeldMergeIsRefusedNotQueued(t *testing.T) {
 		t.Fatal(err)
 	}
 	var err error
-	stderr := gateStderr(t, func() { err = a.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, false) })
+	stderr := gateStderr(t, func() { err = a.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, 0, false) })
 	if Code(err) != ExitGateRefused {
 		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateRefused)
 	}

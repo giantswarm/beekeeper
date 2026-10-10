@@ -26,7 +26,7 @@ func TestASessionsThirdMergeWaitsWithoutReadingGitHub(t *testing.T) {
 	a.cfg.Merge.SessionCap = 2
 
 	var err error
-	stderr := gateStderr(t, func() { err = a.gate(context.Background(), mergeArgv(scratchRepo), 0, false) })
+	stderr := gateStderr(t, func() { err = a.gate(context.Background(), mergeArgv(scratchRepo), 0, 0, false) })
 	if Code(err) != ExitGateQueued {
 		t.Fatalf("exit %d (%v), want %d; stderr %s", Code(err), err, ExitGateQueued, stderr)
 	}

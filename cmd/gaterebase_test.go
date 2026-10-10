@@ -49,7 +49,7 @@ func TestANonRebaseableMergeIsRefusedBeforeItQueues(t *testing.T) {
 			stubGitHub(t, github.Open, "")
 			asked := stubPullRebase(t, r, nil)
 			a := busyLaneApp(t)
-			err := a.gate(context.Background(), mergeArgv(scratchRepo, "--rebase"), 0, false)
+			err := a.gate(context.Background(), mergeArgv(scratchRepo, "--rebase"), 0, 0, false)
 			if Code(err) != ExitGateRefused {
 				t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateRefused)
 			}
@@ -84,7 +84,7 @@ func TestARebaseableMergeQueuesAsBefore(t *testing.T) {
 			stubSelf(t)
 			asked := stubPullRebase(t, c.r, nil)
 			a := busyLaneApp(t)
-			if err := a.gate(context.Background(), mergeArgv(scratchRepo, "--rebase"), 0, false); Code(err) != ExitGateQueued {
+			if err := a.gate(context.Background(), mergeArgv(scratchRepo, "--rebase"), 0, 0, false); Code(err) != ExitGateQueued {
 				t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateQueued)
 			}
 			if *asked != c.reads {
@@ -105,7 +105,7 @@ func TestTheRebaseReadOnlyGuardsAFreshRebaseMerge(t *testing.T) {
 	stubSelf(t)
 	asked := stubPullRebase(t, github.Rebase{}, errors.New("connection reset"))
 	a := busyLaneApp(t)
-	if err := a.gate(context.Background(), mergeArgv(scratchRepo, "--rebase"), 0, false); Code(err) != ExitGateRefused {
+	if err := a.gate(context.Background(), mergeArgv(scratchRepo, "--rebase"), 0, 0, false); Code(err) != ExitGateRefused {
 		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateRefused)
 	}
 	if d := lastEventOf(t, a, "merge.refused"); !strings.Contains(d, "connection reset") || placeOf(t, a) >= 0 {
@@ -113,11 +113,11 @@ func TestTheRebaseReadOnlyGuardsAFreshRebaseMerge(t *testing.T) {
 	}
 
 	a = busyLaneApp(t)
-	if err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, false); Code(err) != ExitGateQueued {
+	if err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, 0, false); Code(err) != ExitGateQueued {
 		t.Fatalf("the squash merge: exit %d (%v), want %d", Code(err), err, ExitGateQueued)
 	}
 	a = busyLaneApp(t)
-	if err := a.gate(context.Background(), mergeArgv(scratchRepo, "--rebase"), 0, true); Code(err) != ExitGateRefused ||
+	if err := a.gate(context.Background(), mergeArgv(scratchRepo, "--rebase"), 0, 0, true); Code(err) != ExitGateRefused ||
 		strings.Contains(lastEventOf(t, a, "merge.refused"), "rebase") {
 		t.Fatalf("the queued run: exit %d (%v), want the wait's own refusal", Code(err), err)
 	}

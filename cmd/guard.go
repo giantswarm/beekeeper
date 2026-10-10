@@ -193,7 +193,7 @@ guard refuses writes to that installation and context switches of the
 machine kubeconfig. A configuration that does not load refuses every Bash
 call, naming the error.
 Every devctl pr merge gets "<this binary> gate --" in front of it (a
-background one "gate --wait 30m --"), the timeout raised the same way; see
+background one "gate --wait 30m --limit 0 --"), the timeout raised the same way; see
 beekeeper lanes. That is behind prefix commands (flock <lock>, nohup, setsid,
 stdbuf, ionice, chrt, nice, timeout, env, VAR=value) and in any segment of a
 pipeline or list, devctl by name or path, wrapping only the devctl

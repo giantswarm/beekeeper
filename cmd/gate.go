@@ -59,13 +59,16 @@ const (
 	gateRunningEnv = "BEEKEEPER_GATE_RUNNING"
 	// gateFromEnv names the gate a queued run took the merge's place from.
 	gateFromEnv = "BEEKEEPER_GATE_FROM"
+	// gateLimitEnv carries a call's tool limit (merge.toolLimit) across the
+	// re-exec of a replaced binary: the time the call leaves, RFC 3339.
+	gateLimitEnv = "BEEKEEPER_GATE_LIMIT"
 )
 
 func (a *app) gateCmd() *cobra.Command {
-	var wait time.Duration
+	var wait, limit time.Duration
 	var queued bool
 	c := &cobra.Command{
-		Use:   gateCmdName + " [--wait DURATION] -- devctl pr merge|release promote|pr wait|release wait|rollout wait <args>",
+		Use:   gateCmdName + " [--wait DURATION] [--limit DURATION] -- devctl pr merge|release promote|pr wait|release wait|rollout wait <args>",
 		Short: "The PreToolUse hook's gate on devctl's blocking commands",
 		Long: `gate is what the PreToolUse hook puts in front of every devctl pr merge and
 every devctl release promote of one repository; a session never calls it. A
@@ -127,7 +130,16 @@ the session that started it: the caller sees the output and exit code as
 ever while it listens, and when it no longer does (a headless turn that
 ended, a caller killed, its CLI gone, a queued merge) the run wakes its
 owner, a registered agent, with one line: "<command> exit N: <reason>
-(output in <file>)", logged as devctl.unheard.`,
+(output in <file>)", logged as devctl.unheard.
+
+A desktop Bash call stops its command at 10 minutes without an exit code.
+A foreground merge or promotion therefore leaves merge.toolLimit (default
+9m) after the call started, whether it still waits for its turn or its
+devctl runs: exit 76 as for a queued merge, devctl (or the wait, in a run of
+its own) goes on outside the call, and its outcome wakes the owner as
+above; do not run it again, do not poll. A merge expected to outlive the
+limit runs with run_in_background, which the hook gives --limit 0 (no
+limit) and a 30m wait.`,
 		Hidden: true,
 		Args:   cobra.MinimumNArgs(1),
 		PersistentPreRunE: func(_ *cobra.Command, args []string) error {
@@ -141,11 +153,15 @@ owner, a registered agent, with one line: "<command> exit N: <reason>
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return a.gate(cmd.Context(), args, wait, queued)
+			if !cmd.Flags().Changed("limit") {
+				limit = a.cfg.Merge.ToolLimit.Duration
+			}
+			return a.gate(cmd.Context(), args, wait, limit, queued)
 		},
 	}
 	c.Flags().SetInterspersed(false)
 	c.Flags().DurationVar(&wait, "wait", DefaultGateWait, "how long to wait for the merge's turn")
+	c.Flags().DurationVar(&limit, "limit", 0, "how long the call runs before it exits 76 and the merge runs on outside it (default merge.toolLimit; 0: no limit)")
 	c.Flags().BoolVar(&queued, "queued", false, "wait as a queued merge's own run, which refuses at the end of --wait")
 	_ = c.Flags().MarkHidden("queued")
 	return c
@@ -201,9 +217,12 @@ type gateRun struct {
 	// output is the file this call's stdout writes to (gateOutput), the
 	// background task a TaskStop names.
 	output string
+	// leaveAt is when the call leaves its merge to run on outside it, exit
+	// 76 (merge.toolLimit); zero: never.
+	leaveAt time.Time
 }
 
-func (a *app) gate(ctx context.Context, argv []string, wait time.Duration, queued bool) error {
+func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration, queued bool) error {
 	if inSandbox() {
 		return a.gateBrokered(argv, wait, queued)
 	}
@@ -226,6 +245,7 @@ func (a *app) gate(ctx context.Context, argv []string, wait time.Duration, queue
 	g := &gateRun{app: a, ctx: ctx, argv: argv, repo: repo, pr: pr, lane: a.cfg.LaneOf(repo), me: me, pid: os.Getpid(), cli: callerCLI(), queued: queued,
 		bin: runningBinary(), output: gateOutput()}
 	g.central = pr != 0 && a.cfg.CentralLane(g.lane)
+	g.leaveAt = leaveAt(time.Now(), limit, queued)
 	if v, ok := os.LookupEnv(gateRunningEnv); ok {
 		_ = os.Unsetenv(gateRunningEnv)
 		return g.resumeMerge(v)
@@ -256,6 +276,9 @@ func (a *app) gate(ctx context.Context, argv []string, wait time.Duration, queue
 			deadline = t
 			gateLine("continuing under %s %s: %s keeps its place in lane %s", project.Name, project.Version(), g.key(), g.lane.Name)
 		}
+	}
+	if !g.leaveAt.IsZero() && g.leaveAt.Before(deadline) {
+		deadline = g.leaveAt
 	}
 	for {
 		a.now = time.Now()
@@ -299,6 +322,9 @@ func (a *app) gate(ctx context.Context, argv []string, wait time.Duration, queue
 // env for the new one, and says so; it returns only when the new binary
 // does not start, and the call carries on under this one.
 func (g *gateRun) reexec(when string, env ...string) {
+	if !g.leaveAt.IsZero() {
+		env = append(env, gateLimitEnv+"="+g.leaveAt.Format(time.RFC3339Nano))
+	}
 	gateLine("%s was replaced %s: re-executing it", g.bin.Path(), when)
 	err := g.bin.Exec(env...)
 	gateLine("the new binary does not start (%v): carrying on under %s", err, project.Version())
@@ -358,12 +384,8 @@ func (g *gateRun) enqueue(why string) error {
 		_ = os.Setenv(gateFromEnv, strconv.Itoa(g.pid))
 		var pid int
 		if pid, err = launchChild(childSpec{Argv: argv, Command: g.argv, Owner: g.me, Config: g.explicitConfig()}, ownedBase(g.store.Dir(), g.argv, g.pid)); err == nil {
-			to := "its outcome is logged (beekeeper log --verb merged)"
-			if g.me.Session != "" {
-				to = fmt.Sprintf("its outcome wakes %q", g.me.Name)
-			}
 			gateLine("queued, %s; the merge waits on in a run of its own (pid %d) for up to %s and runs when its turn comes; %s: do not run it again, do not poll",
-				why, pid, g.cfg.Merge.SeedTTL.Duration, to)
+				why, pid, g.cfg.Merge.SeedTTL.Duration, g.outcomeTo())
 			_ = g.store.Log(event(g.me, "merge.queued", "%s waits on in lane %s in a run of its own (pid %d): %s", g.key(), g.lane.Name, pid, why))
 			return queued
 		}
@@ -375,6 +397,46 @@ func (g *gateRun) enqueue(why string) error {
 	gateLine("queued, %s; it cannot wait on in a run of its own (%v): your place is kept for %s, run the same command again with run_in_background, do not poll",
 		why, err, kept)
 	return queued
+}
+
+// outcomeTo says where the outcome of a merge that runs on outside the call
+// goes: a wake of its owner, else the log.
+func (g *gateRun) outcomeTo() string {
+	if g.me.Session != "" {
+		return fmt.Sprintf("its outcome wakes %q", g.me.Name)
+	}
+	return "its outcome is logged (beekeeper log --verb merged)"
+}
+
+// leaveAt is when a call started at now leaves its merge to run on outside
+// it: a re-executed call's own time (gateLimitEnv), else now+limit; never for
+// a queued merge's own run, which no tool call bounds, nor without a limit.
+func leaveAt(now time.Time, limit time.Duration, queued bool) time.Time {
+	v, carried := os.LookupEnv(gateLimitEnv)
+	_ = os.Unsetenv(gateLimitEnv) // devctl must not inherit it
+	switch {
+	case queued:
+		return time.Time{}
+	case carried:
+		if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
+			return t
+		}
+	}
+	if limit <= 0 {
+		return time.Time{}
+	}
+	return now.Add(limit)
+}
+
+// leave ends the call at its tool limit while the merge's devctl (its
+// merge-child pid) runs on: exit 76, as for a queued merge, without the heard
+// marker, so merge-child wakes the owner with the outcome (tellOwner) and the
+// watch records the run once devctl ended (recordGone).
+func (g *gateRun) leave(pid int) error {
+	gateLine("%s's devctl runs past this call's limit (merge.toolLimit; a desktop Bash call stops at 10 minutes): it runs on outside the call (pid %d), %s: do not run it again, do not poll",
+		g.key(), pid, g.outcomeTo())
+	_ = g.store.Log(event(g.me, "merge.left", "%s: devctl runs on outside the call past its limit (pid %d)", g.key(), pid))
+	return &exitError{code: ExitGateQueued}
 }
 
 // step joins or refreshes the merge's queue entry and starts devctl when it
@@ -958,7 +1020,7 @@ var serverRetries = []time.Duration{10 * time.Second, 30 * time.Second, time.Min
 // to judge, its document set aside. It returns the last run.
 func (g *gateRun) retryServerError(base string, pid int, run childRun) (childRun, int) {
 	for try, pause := range serverRetries {
-		if run.replaced || !merge.ServerError(run.doc) {
+		if run.replaced || run.left || !merge.ServerError(run.doc) {
 			return run.emit(), pid
 		}
 		p, err := pullState(context.WithoutCancel(g.ctx), g.repo, g.pr)
@@ -975,7 +1037,7 @@ func (g *gateRun) retryServerError(base string, pid int, run childRun) (childRun
 		if pid, rc = g.launch(base); rc != 0 {
 			return childRun{rc: rc}, pid
 		}
-		run = followChild(base, pid, 0, g.bin, g.retried(try+1))
+		run = followChild(base, pid, 0, g.bin, g.retried(try+1), g.leaveAt)
 	}
 	return run.emit(), pid
 }
@@ -995,10 +1057,13 @@ func (g *gateRun) retried(try int) func([]byte) bool {
 // same devctl on from there (resumeMerge), so the installed release records
 // the outcome; one that does not start is followed on under this one.
 func (g *gateRun) follow(base string, pid int, offset int64) error {
-	run, pid := g.retryServerError(base, pid, followChild(base, pid, offset, g.bin, g.retried(0)))
+	run, pid := g.retryServerError(base, pid, followChild(base, pid, offset, g.bin, g.retried(0), g.leaveAt))
 	if run.replaced {
 		g.reexec("while "+g.key()+"'s devctl ran", fmt.Sprintf("%s=%d:%d", gateRunningEnv, pid, run.offset))
-		run, _ = g.retryServerError(base, pid, followChild(base, pid, run.offset, nil, g.retried(0)))
+		run, _ = g.retryServerError(base, pid, followChild(base, pid, run.offset, nil, g.retried(0), g.leaveAt))
+	}
+	if run.left {
+		return g.leave(pid)
 	}
 	defer handOver(base, run, g.cli)
 	return g.record(base, run)

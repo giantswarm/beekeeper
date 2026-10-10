@@ -1045,6 +1045,13 @@ refusal naming the command with the gate written in.
   devctl when its turn comes and wakes the owner with the outcome (`devctl.unheard`, as below).
   Nobody runs it again; a second `devctl pr merge` of the pull request while it waits is refused
   with exit 3.
+- **Left at the tool limit, exit 76**: a desktop Bash call stops its command at 10 minutes without
+  an exit code, so a foreground call leaves `merge.toolLimit` (9m) after it started, whether the
+  merge still waits for its turn (queued as above) or its devctl runs. A running devctl goes on
+  outside the call (`beekeeper gate: o/r#7's devctl runs past this call's limit …`, logged as
+  `merge.left`), its outcome wakes the owner (`devctl.unheard`, as below) and `watch` records the
+  run once devctl ended. A merge expected to outlive the limit runs with `run_in_background`: the
+  hook gives it `--limit 0` and a 30-minute wait.
 - **Otherwise devctl runs once**, its JSON document and exit code (devctl's own 0–9) unchanged,
   and the event log records `merging <owner/repo>#<n>` (`promoting <owner/repo>` for a promotion)
   and `merged` with the release; a run that merged or promoted nothing says so in one gate line
