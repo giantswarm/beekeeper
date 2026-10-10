@@ -194,7 +194,7 @@ func TestHookGatesMerges(t *testing.T) {
 		{"devctl pr merge giantswarm/marge 3 --timeout 9m | $L record x", g + "devctl pr merge giantswarm/marge 3 --timeout 9m | $L record x", false},
 		{"timeout 600 devctl pr merge o/r 1", "timeout 600 " + g + "devctl pr merge o/r 1", false},
 		{"cd x && devctl pr merge o/r 1", "cd x && " + g + "devctl pr merge o/r 1", false},
-		{"devctl pr merge o/r 1", self + " gate --wait 30m -- devctl pr merge o/r 1", true},
+		{"devctl pr merge o/r 1", self + " gate --wait 30m --limit 0 -- devctl pr merge o/r 1", true},
 		{"make && devctl pr merge o/r 1", self + " run -- zsh -c 'make && " + g + "devctl pr merge o/r 1'", false},
 		// The live case: only the devctl invocation is wrapped, the pipeline runs as written.
 		{`flock ~/.local/state/lab/locks/merge-marge.lock devctl pr merge --update-branch o/r 7 | tee "$(scripts/scratch orch merge-7.json)" | ./orchestration/ledger.sh record o/r#7 --agent orchestrator`,
@@ -219,7 +219,7 @@ func TestHookGatesMerges(t *testing.T) {
 		{"devctl pr wait o/r 1", g + "devctl pr wait o/r 1", false},
 		{"devctl release wait o/r --pr 1 | tail -3", g + "devctl release wait o/r --pr 1 | tail -3", false},
 		{"devctl rollout wait inst o/r --pr 1 >| r.json", g + "devctl rollout wait inst o/r --pr 1 >| r.json", false},
-		{"devctl pr wait o/r 1", self + " gate --wait 30m -- devctl pr wait o/r 1", true},
+		{"devctl pr wait o/r 1", self + " gate --wait 30m --limit 0 -- devctl pr wait o/r 1", true},
 		// A merge on a line of its own in a multi-line -c string is gated in place.
 		{"bash -c '\ntrap restore EXIT\ndevctl pr merge o/r 7\n'", "bash -c '\ntrap restore EXIT\n" + g + "devctl pr merge o/r 7\n'", false},
 	} {
@@ -298,7 +298,7 @@ func TestHookRefusesHiddenMerges(t *testing.T) {
 	}{
 		{`bash -c 'devctl pr merge o/r 7' | tee m.json`, `bash -c '` + g + `devctl pr merge o/r 7' | tee m.json`, false},
 		{`zsh -lc "flock x.lock ~/bin/devctl pr merge o/r 7 >| \"$S/m.json\""`, `zsh -lc "flock x.lock ` + g + `~/bin/devctl pr merge o/r 7 >| \"$S/m.json\""`, false},
-		{`timeout 600 sh -c "devctl pr merge o/r 7"`, `timeout 600 sh -c "` + self + ` gate --wait 30m -- devctl pr merge o/r 7"`, true},
+		{`timeout 600 sh -c "devctl pr merge o/r 7"`, `timeout 600 sh -c "` + self + ` gate --wait 30m --limit 0 -- devctl pr merge o/r 7"`, true},
 		{self + ` run -- zsh -c 'devctl pr merge o/r 7'`, self + ` run -- zsh -c '` + g + `devctl pr merge o/r 7'`, false},
 		{`bash -c 'devctl pr wait o/r 7'`, `bash -c '` + g + `devctl pr wait o/r 7'`, false},
 	} {

@@ -147,6 +147,7 @@ merge:
   stallAfter: 5m            # a lane's first arrived merge waits this long behind absent places, then the lane is stalled
   hungAfter: 45m            # the watch ends a running merge's devctl this long after its pull request merged (a closed one's this long after its start)
   ciTimeout: 1h             # devctl pr merge's --timeout (its CI wait) when the command names none; devctl's own 30m is shorter than a CI --update-branch restarts
+  toolLimit: 9m             # a foreground gate call exits 76 this long after its start, below a desktop Bash call's 10m limit; the merge runs on and its outcome wakes the caller
   devctlOwners: [giantswarm]   # the owners devctl pr merge serves; default: none, every merge is the plain squash merge
 
 alerts:

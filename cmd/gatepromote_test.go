@@ -65,7 +65,7 @@ func TestAQueuedPromotionRecordsItsCandidate(t *testing.T) {
 	stubCandidate(t, &newest)
 	a := busyLaneApp(t)
 
-	if err := a.gate(context.Background(), promoteArgv(), 0, false); Code(err) != ExitGateQueued {
+	if err := a.gate(context.Background(), promoteArgv(), 0, 0, false); Code(err) != ExitGateQueued {
 		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateQueued)
 	}
 	launched()

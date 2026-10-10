@@ -112,7 +112,7 @@ func TestAReplacedGateFollowsItsDevctlOnUnderTheInstalledOne(t *testing.T) {
 	t.Run("the installed binary follows on", func(t *testing.T) {
 		g, base, pid, stderr := launchedMerge(t, script)
 		stubGitHub(t, "", "")
-		run := followChild(base, pid, 0, &fakeBinary{replaced: true}, nil)
+		run := followChild(base, pid, 0, &fakeBinary{replaced: true}, nil, time.Time{})
 		if !run.replaced || run.offset != int64(len(devctlFirstLine)) {
 			t.Fatalf("replaced %v at offset %d, want %d", run.replaced, run.offset, len(devctlFirstLine))
 		}
@@ -124,7 +124,7 @@ func TestAReplacedGateFollowsItsDevctlOnUnderTheInstalledOne(t *testing.T) {
 		// The re-executed gate: the same process, arguments and stdio.
 		t.Setenv(gateRunningEnv, fmt.Sprintf("%d:%d", pid, run.offset))
 		stdout := capture(t, &os.Stdout)
-		err := g.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, true)
+		err := g.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, 0, true)
 		doc, said := stdout(), stderr()
 		if err != nil {
 			t.Fatalf("exit %d (%v), want devctl's 0\n%s", Code(err), err, said)
@@ -492,7 +492,7 @@ func TestAStaleStepReExecutesAReplacedGate(t *testing.T) {
 	was := runningBinary
 	runningBinary = func() binary { return bin }
 	t.Cleanup(func() { runningBinary = was })
-	err = a.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, false)
+	err = a.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, 0, false)
 	if Code(err) != ExitGateRefused {
 		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateRefused)
 	}

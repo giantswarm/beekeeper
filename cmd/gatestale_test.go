@@ -39,7 +39,7 @@ func TestAnOlderReleasesGateIsRefusedBeforeTheLane(t *testing.T) {
 	if a.store, err = state.OpenVersion(a.store.Dir(), olderRelease); err != nil {
 		t.Fatal(err)
 	}
-	err = a.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, false)
+	err = a.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, 0, false)
 	if Code(err) != ExitGateRefused {
 		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateRefused)
 	}

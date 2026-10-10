@@ -72,7 +72,7 @@ func TestAnUrgentMergeRunsUnderTheBudgetFloor(t *testing.T) {
 		t.Fatalf("lanes urgent: %v\n%s", err, out)
 	}
 
-	if err := a.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, false); err != nil {
+	if err := a.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, 0, false); err != nil {
 		t.Fatalf("exit %d (%v), want the merge run under the floor", Code(err), err)
 	}
 	if d := lastEventOf(t, a, verbMerged); !strings.Contains(d, "o/r#7 exit 0") {
@@ -122,7 +122,7 @@ func TestASecondUrgentMergeInTheWindowIsRefused(t *testing.T) {
 		t.Errorf("refused mark event %q", d)
 	}
 
-	if err := a.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, false); Code(err) == 0 {
+	if err := a.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, 0, false); Code(err) == 0 {
 		t.Fatal("the raced urgent merge ran under the floor a second time in the window")
 	}
 	if spec := launched(); !slices.Contains(spec.Argv, "--queued") {

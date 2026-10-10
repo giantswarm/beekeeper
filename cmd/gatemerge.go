@@ -195,6 +195,8 @@ type childRun struct {
 	// held says the document was kept off the gate's stdout (followChild's
 	// hold): a run the gate may send again, whose caller reads one document.
 	held bool
+	// left says the follow reached its leave time while the run went on.
+	left bool
 }
 
 // emit writes a held document to the gate's stdout.
@@ -220,7 +222,7 @@ func runDetached(spec childSpec, base string, started func(pid int)) childRun {
 		return childRun{rc: guard.ExitNotFound}
 	}
 	started(pid)
-	return followChild(base, pid, 0, nil, nil)
+	return followChild(base, pid, 0, nil, nil, time.Time{})
 }
 
 // followChild follows the devctl that merge-child pid runs outside its
@@ -240,8 +242,11 @@ func runDetached(spec childSpec, base string, started func(pid int)) childRun {
 // the run goes on, the follow returns at once with replaced set and the
 // offset reached, the run's files in place, for the gate to re-execute the
 // installed binary and follow on from there. hold, when given, keeps a
-// document it takes off the stdout (held), for the gate to decide.
-func followChild(base string, pid int, offset int64, bin binary, hold func(doc []byte) bool) (r childRun) {
+// document it takes off the stdout (held), for the gate to decide. leave,
+// when set, is when the follow returns with left set while the run goes on
+// (the gate's tool limit), its files in place for its merge-child and the
+// watch.
+func followChild(base string, pid int, offset int64, bin binary, hold func(doc []byte) bool, leave time.Time) (r childRun) {
 	r.rc = guard.ExitNotFound
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
@@ -294,6 +299,10 @@ func followChild(base string, pid int, offset int64, bin binary, hold func(doc [
 			if _, err := os.Stdout.Write(r.doc); err != nil { // the caller's pipe may be gone
 				r.unheard = true
 			}
+			return r
+		}
+		if !leave.IsZero() && !time.Now().Before(leave) {
+			r.left = true
 			return r
 		}
 		select {
