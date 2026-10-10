@@ -322,8 +322,9 @@ func (r childResult) outcome() string {
 	return line
 }
 
-// runReason is what a run's document says about its end, else its last
-// stderr line; handCut is a merge's base branch that no Auto-release run
+// runReason is what a run's document says about its end (its verdict and
+// reason, the failed checks the reason does not name), else its last stderr
+// line; handCut is a merge's base branch that no Auto-release run
 // tags, whose release nobody awaits.
 func runReason(doc []byte, last, handCut string) string {
 	var d struct {
@@ -332,6 +333,15 @@ func runReason(doc []byte, last, handCut string) string {
 	}
 	_ = json.Unmarshal(doc, &d)
 	why := strings.Trim(d.Verdict+": "+d.Reason, ": ")
+	var unnamed []string
+	for _, c := range merge.FailedChecks(doc) {
+		if !strings.Contains(why, c) {
+			unnamed = append(unnamed, c)
+		}
+	}
+	if len(unnamed) > 0 {
+		why = strings.Trim(why+"; failed: "+strings.Join(unnamed, ", "), "; ")
+	}
 	if o, ok := merge.ParseDocument(doc); ok && o.Merged {
 		rel := o.Release
 		switch {
@@ -350,7 +360,18 @@ func runReason(doc []byte, last, handCut string) string {
 	case last != "":
 		return last
 	}
-	return "no output"
+	return noOutput
+}
+
+// noOutput is runReason for a run that said nothing.
+const noOutput = "no output"
+
+// runFailure is a gated run's reason for its record, "" when it said nothing.
+func runFailure(doc []byte, last, handCut string) string {
+	if why := runReason(doc, last, handCut); why != noOutput {
+		return why
+	}
+	return ""
 }
 
 // lastLine is the last non-empty line of the file at path, shortened, ""

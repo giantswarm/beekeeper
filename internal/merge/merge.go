@@ -377,6 +377,9 @@ type Lane struct {
 	Settling    *state.Merge   `json:"settling,omitempty"`
 	AllSettling []*state.Merge `json:"allSettling,omitempty"`
 	Waiting     []state.Merge  `json:"waiting"`
+	// Failed are the lane's merges whose last run merged nothing, oldest
+	// first, until their next attempt.
+	Failed []state.Failed `json:"failed,omitempty"`
 }
 
 // Queue returns the lane's running and settling merges and the waiting
@@ -410,7 +413,69 @@ func Queue(st *state.State, lane string) Lane {
 		}
 		return a.Joined.Compare(b.Joined)
 	})
+	for _, f := range st.Failed {
+		if f.Lane == lane {
+			q.Failed = append(q.Failed, f)
+		}
+	}
 	return q
+}
+
+// failedFor is how long a failed attempt stays on its lane without a next
+// one: its pull request is fixed, closed or forgotten by then.
+const failedFor = 7 * 24 * time.Hour
+
+// Fail records f, a merge's run that merged nothing, in place of the pull
+// request's earlier failed attempt, and drops the attempts older than
+// failedFor.
+func Fail(st *state.State, f state.Failed) {
+	Retry(st, f.Repo, f.PR)
+	st.Failed = slices.DeleteFunc(st.Failed, func(o state.Failed) bool { return f.At.Sub(o.At) > failedFor })
+	st.Failed = append(st.Failed, f)
+}
+
+// Retry drops repo#pr's failed attempt: its next attempt joins the lane.
+func Retry(st *state.State, repo string, pr int) {
+	st.Failed = slices.DeleteFunc(st.Failed, func(f state.Failed) bool { return f.Repo == repo && f.PR == pr })
+}
+
+// failedConclusions are the check conclusions and CircleCI workflow states
+// that fail a pull request's CI.
+var failedConclusions = []string{"failure", "failed", "failing", "error", "cancelled", "canceled", "timed_out", "action_required", "startup_failure"}
+
+// FailedChecks are the names of the checks and CircleCI workflows devctl's
+// document reports failed, in its order, each once (an Actions run's failed
+// jobs are checks of their own).
+func FailedChecks(doc []byte) []string {
+	type run struct {
+		Name       string `json:"name"`
+		Conclusion string `json:"conclusion"`
+	}
+	var d struct {
+		Checks   []run `json:"checks"`
+		CircleCI *struct {
+			Workflows []struct {
+				Name   string `json:"name"`
+				Status string `json:"status"`
+			} `json:"workflows"`
+		} `json:"circleci"`
+	}
+	if json.Unmarshal(doc, &d) != nil {
+		return nil
+	}
+	all := d.Checks
+	if d.CircleCI != nil {
+		for _, w := range d.CircleCI.Workflows {
+			all = append(all, run{Name: "circleci workflow " + w.Name, Conclusion: w.Status})
+		}
+	}
+	var names []string
+	for _, r := range all {
+		if slices.Contains(failedConclusions, strings.ToLower(r.Conclusion)) && !slices.Contains(names, r.Name) {
+			names = append(names, r.Name)
+		}
+	}
+	return names
 }
 
 // serverError is a 5xx GitHub answered one of devctl's writes with: the

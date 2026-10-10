@@ -117,7 +117,10 @@ stops devctl too, and so does a TaskStop of the background task the gate
 runs (the PreToolUse hook ends its devctl first). A merge call GitHub
 answers with a 5xx is sent again while the pull request is open, up to
 three times (10s, 30s, 1m apart); the caller reads the last document. A run
-with nothing merged leaves the lane with its run. A run without its
+with nothing merged leaves the lane with its run, stays on it as a failed
+attempt with its reason (lanes) until the pull request's next attempt, and
+wakes its owner with devctl's verdict and the failed checks, also while the
+caller listens. A run without its
 document or ended by a signal is judged by GitHub: merged, its release is
 unconfirmed. A second merge of a pull request whose merge runs is refused
 (exit 3) with that run's start, owner and last line.
@@ -467,6 +470,7 @@ func (g *gateRun) step() (string, error) {
 			}
 		}
 		var ev []state.Event
+		merge.Retry(st, g.repo, g.pr)
 		if i := g.mine(st, state.Waiting); i >= 0 {
 			m := &st.Merges[i]
 			m.PID, m.By, m.Seen, m.Output = g.pid, g.me, g.now.UTC(), g.output
@@ -1065,8 +1069,33 @@ func (g *gateRun) follow(base string, pid int, offset int64) error {
 	if run.left {
 		return g.leave(pid)
 	}
-	defer handOver(base, run, g.cli)
+	if !g.wakesOnFailure(run) {
+		defer handOver(base, run, g.cli)
+	}
 	return g.record(base, run)
+}
+
+// wakesOnFailure says whether a run's outcome goes to its owner as a wake
+// even while the caller listens: a merge whose document says nothing merged,
+// which the owner acts on, also when its call ran in the background of a turn
+// that ended. merge-child wakes it (tellOwner) as no heard marker is left; a
+// queued merge's own run leaves that to the run that waits for it, which wakes
+// the owner once.
+func (g *gateRun) wakesOnFailure(run childRun) bool {
+	if g.pr == 0 || g.queued {
+		return false
+	}
+	out, ok := merge.ParseDocument(run.doc)
+	return ok && !out.Merged
+}
+
+// failureWake is the gate line's word on the wake a merge that merged
+// nothing sends its owner, "" when it sends none.
+func (g *gateRun) failureWake(run childRun) string {
+	if !g.wakesOnFailure(run) || g.me.Session == "" && g.me.HostSession == "" {
+		return ""
+	}
+	return fmt.Sprintf(" (the outcome wakes %q too)", g.me.Name)
 }
 
 // record records the run's outcome: a merge settles its lane, one that
@@ -1086,7 +1115,7 @@ func (g *gateRun) record(base string, run childRun) error {
 	if output != "" {
 		note += ", output in " + output
 	}
-	r := runOutcome{rc: rc}
+	r := runOutcome{rc: rc, reason: runFailure(doc, lastLine(base+".log"), g.handCut())}
 	var ok bool
 	if r.out, ok = parseOutcome(g.pr, doc); merge.NeedsJudging(ok, rc) {
 		r.out, r.unanswered = judgeRun(g.ctx, g.repo, g.pr, judgeTries)
@@ -1135,8 +1164,8 @@ func (g *gateRun) record(base string, run childRun) error {
 		gateLine("%s (exit %d, a tooling fault): the same command fails the same way until what the reason names is fixed (output in %s); %s left lane %s",
 			nothingDone(g.pr, out), rc, output, g.key(), g.lane.Name)
 	case !out.Merged:
-		gateLine("%s (exit %d); %s left lane %s: act on the reason, then run the same command again, it joins the lane anew",
-			nothingDone(g.pr, out), rc, g.key(), g.lane.Name)
+		gateLine("%s (%s); %s left lane %s%s: act on the reason, then run the same command again, it joins the lane anew",
+			nothingDone(g.pr, out), exitText(rc, r.reason), g.key(), g.lane.Name, g.failureWake(run))
 	case g.pr == 0:
 		gateLine("promoted %s: release %s dispatched", g.repo, out.Release)
 	}
@@ -1209,11 +1238,21 @@ func judgeRun(ctx context.Context, repo string, pr, tries int) (merge.Outcome, e
 	return merge.Outcome{}, err
 }
 
+// exitText is "exit <rc>", with the run's reason when it gave one.
+func exitText(rc int, reason string) string {
+	if reason == "" {
+		return fmt.Sprintf("exit %d", rc)
+	}
+	return fmt.Sprintf("exit %d: %s", rc, reason)
+}
+
 // runOutcome is how one merge's devctl run ended: its outcome, its exit
-// code, and GitHub's error when nothing could judge it.
+// code, its reason (runReason), and GitHub's error when nothing could judge
+// it.
 type runOutcome struct {
 	out        merge.Outcome
 	rc         int
+	reason     string
 	unanswered error
 }
 
@@ -1227,6 +1266,12 @@ func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOu
 	m := &st.Merges[i]
 	key, repo, pr, out, rc, handCut := m.Key(), m.Repo, m.PR, r.out, r.rc, m.HandCut
 	var ev []state.Event
+	switch {
+	case out.Merged:
+		merge.Retry(st, repo, pr)
+	case r.unanswered == nil:
+		merge.Fail(st, state.Failed{Repo: repo, PR: pr, Lane: lane.Name, By: m.By, At: now, Exit: rc, Reason: r.reason})
+	}
 	switch {
 	case r.unanswered != nil:
 		m.Phase, m.Finished, m.Exit, m.Release, m.Roll = state.Settling, now, rc, "", nil
@@ -1278,6 +1323,9 @@ func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOu
 			key, rc, r.unanswered, lane.Name)
 	case !out.Merged:
 		e = event(by, "merge.failed", "%s exit %d, %s, it left lane %s", key, rc, nothingDone(pr, out), lane.Name)
+		if r.reason != "" {
+			e.Detail += ": " + r.reason
+		}
 	default:
 		e = event(by, verbMerged, "%s exit %d, release %s", key, rc, release)
 	}

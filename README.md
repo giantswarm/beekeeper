@@ -1162,6 +1162,18 @@ the document's verdict and reason (a merge's release), else devctl's last stderr
 is kept under `merge-output/` for seven days. A second `devctl pr merge` of a pull request whose
 merge runs is refused with exit 3, naming that run's start, owner and last line.
 
+A merge that ends with nothing merged (red CI, a timeout, a refusal in devctl's document) always
+reaches its worker, the same way: the gate leaves merge-child no marker, so the owner gets the wake
+above also when the call listened (a foreground call reads the gate line as well), and a queued
+merge's own run leaves it to the run that waits for it, so the owner is woken once. The line is
+`devctl pr merge <owner/repo> <n> exit N: <verdict>: <reason>; failed: <checks> (output in
+<file>)`, `failed:` naming the checks and CircleCI workflows the document reports failed that the
+reason does not already name; the gate line and the `merge.failed` event carry the same reason.
+`lanes` shows the failed attempt on its lane, `failed <owner/repo>#<n> by "<owner>" at <time>,
+nothing merged, exit N: <reason>; shown until its next attempt`, until the pull request's next
+`devctl pr merge` joins the lane or a merge of it is recorded; an attempt nobody retries leaves
+after seven days.
+
 A merge into a base branch without auto-release releases nothing by itself: a maintenance branch
 whose tags are cut by hand, a fork line's backport branch. Before devctl's turn the gate reads the
 pull request's base branch and the Auto-release workflow on it
