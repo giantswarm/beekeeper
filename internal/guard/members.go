@@ -9,6 +9,9 @@ import (
 	"strings"
 )
 
+// ghAPISub is gh's api subcommand.
+const ghAPISub = "api"
+
 var (
 	// membersPath: a REST path whose answer under the App's token an agent's
 	// gh carries misclassifies a colleague: the org's members and a login's
@@ -68,7 +71,7 @@ func (h Hook) membersRefusal(cmd, session, cwd string) string {
 // call's flags and their values, "" when they are no gh api call.
 func ghAPIEndpoint(words []string) string {
 	k := commandAt(words)
-	if k+1 >= len(words) || path.Base(words[k]) != "gh" || words[k+1] != "api" {
+	if k+1 >= len(words) || path.Base(words[k]) != "gh" || words[k+1] != ghAPISub {
 		return ""
 	}
 	for i := k + 2; i < len(words); i++ {

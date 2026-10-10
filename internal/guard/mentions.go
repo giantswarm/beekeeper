@@ -128,7 +128,7 @@ func ghPost(words []string) bool {
 	switch words[1] {
 	case "issue", "pr":
 		return ghPosts[words[2]]
-	case "api":
+	case ghAPISub:
 		for _, w := range words[2:] {
 			if strings.Contains(w, "/comments") || strings.Contains(w, "/reviews") ||
 				strings.HasSuffix(w, "/issues") || strings.HasSuffix(w, "/pulls") {

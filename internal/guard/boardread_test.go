@@ -54,7 +54,7 @@ func TestBoardReadRefusal(t *testing.T) {
 
 func TestDecideRefusesBoardRead(t *testing.T) {
 	read := false
-	h := Hook{Self: "/bin/beekeeper", Shell: "/bin/sh", GraphQL: func() string { read = true; return "GraphQL 1 of 5000" }}
+	h := Hook{Self: hookSelf, Shell: hookShell, GraphQL: func() string { read = true; return "GraphQL 1 of 5000" }}
 	decide := func(cmd string) hookOutput {
 		raw, _ := json.Marshal(event{ToolName: bashTool, ToolInput: map[string]any{commandKey: cmd}, CWD: t.TempDir()})
 		var o map[string]hookOutput
