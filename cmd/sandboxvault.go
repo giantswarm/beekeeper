@@ -61,7 +61,7 @@ func (a *app) keepVault(ctx context.Context) (*vaultBroker, error) {
 		return nil, fmt.Errorf("the vault keeper: %w", err)
 	}
 	go func() {
-		if err := secret.ServeVault(ctx, path, k); err != nil {
+		if err := secret.ServeVault(ctx, path, k, a.vaultStore); err != nil {
 			fmt.Fprintf(os.Stderr, "vault keeper: %v\n", err)
 		}
 	}()
@@ -95,6 +95,24 @@ func (a *app) keepVault(ctx context.Context) (*vaultBroker, error) {
 		return nil
 	})
 	return v, nil
+}
+
+// vaultStore is the keeper's Storer: a value the person handed the keeper
+// over its socket (beekeeper secret store) goes into a field of the shared
+// vault with the session in env, in the broker's own process and through
+// op's stdin, never on a command line or in a file. It answers the length
+// and the fingerprint.
+func (a *app) vaultStore(ctx context.Context, env, ref, value string) (secret.Stored, error) {
+	r, err := secret.ParseRef(ref)
+	if err != nil {
+		return secret.Stored{}, err
+	}
+	ops, err := a.secretOpsKeyed()
+	if err != nil {
+		return secret.Stored{}, err
+	}
+	ops.Env = []string{env}
+	return ops.StoreValue(ctx, r, value)
 }
 
 // drop forgets a session op no longer takes, says so in the journal and on

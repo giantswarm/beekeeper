@@ -83,7 +83,9 @@ func (t *Tools) Run(_ context.Context, dir string, env []string, stdin io.Reader
 	if name == "op" {
 		token := ""
 		for _, e := range env {
-			token, _ = strings.CutPrefix(e, "OP_SERVICE_ACCOUNT_TOKEN=")
+			if v, ok := strings.CutPrefix(e, "OP_SERVICE_ACCOUNT_TOKEN="); ok {
+				token = v
+			}
 		}
 		switch {
 		case token != "":
