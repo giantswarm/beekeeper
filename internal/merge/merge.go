@@ -457,6 +457,48 @@ func (q Lane) Ahead(repo string, pr int, present func(state.Merge) bool) (state.
 	return state.Merge{}, false
 }
 
+// SessionTurn says whether the waiting merge me, its lane's next, may start
+// under the cap (most) on one party's running merges: each running devctl polls
+// GitHub, a waiting place does not. It returns the party's running merges
+// (gate or devctl alive) and, where me waits, the party's merge that takes the
+// free slot first: one that joined before me, is present and is free to start
+// (its lane's next, nothing running or settling in its lane), so the party's
+// merges start in the order they queued. most 0 or less is no cap.
+func SessionTurn(st *state.State, me state.Merge, most int, present func(state.Merge) bool, alive func(pid int) bool) (running []state.Merge, first *state.Merge, ok bool) {
+	if most <= 0 {
+		return nil, nil, true
+	}
+	var earlier []state.Merge
+	for _, m := range st.Merges {
+		if !m.By.Is(me.By) || m.Repo == me.Repo && m.PR == me.PR {
+			continue
+		}
+		switch {
+		case m.Phase == state.Running && Runs(m, alive):
+			running = append(running, m)
+		case m.Phase == state.Waiting && m.Joined.Before(me.Joined) && present(m) && free(st, m, present):
+			earlier = append(earlier, m)
+		}
+	}
+	slices.SortStableFunc(earlier, func(a, b state.Merge) int { return a.Joined.Compare(b.Joined) })
+	slots := most - len(running)
+	if slots <= 0 {
+		return running, nil, false
+	}
+	if len(earlier) >= slots {
+		return running, &earlier[0], false
+	}
+	return running, nil, true
+}
+
+// free says whether the waiting merge m is its lane's next with nothing
+// running or settling in the lane.
+func free(st *state.State, m state.Merge, present func(state.Merge) bool) bool {
+	q := Queue(st, m.Lane)
+	_, behind := q.Ahead(m.Repo, m.PR, present)
+	return !behind && q.Running == nil && q.Settling == nil
+}
+
 // holds says whether the waiting merge m, before me in the queue, holds me
 // up: m is present, or both are seeded places and m is not a later pull
 // request of me's session and repository.

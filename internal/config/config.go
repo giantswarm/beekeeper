@@ -789,6 +789,11 @@ type Lane struct {
 type Merge struct {
 	// Cap is the most devctl processes the machine runs when a merge starts.
 	Cap int `yaml:"cap"`
+	// SessionCap is the most merges and promotions one session runs at once:
+	// each running devctl polls GitHub, so the rest of its queued merges wait
+	// in their lanes without reading it, starting in the order they queued.
+	// Negative: no cap.
+	SessionCap int `yaml:"sessionCap"`
 	// QueueTTL is how long a queued merge keeps its place after its run ended,
 	// and how long after it the place holds up the merges behind it.
 	QueueTTL Duration `yaml:"queueTTL"`
@@ -1607,6 +1612,7 @@ func (c *Config) defaults() error {
 	}
 
 	setInt(&c.Merge.Cap, 5)
+	setInt(&c.Merge.SessionCap, 2)
 	setDur(&c.Merge.QueueTTL, 15*time.Minute)
 	setDur(&c.Merge.SeedTTL, 12*time.Hour)
 	setDur(&c.Merge.Settle, 5*time.Minute)

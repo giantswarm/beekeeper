@@ -1064,7 +1064,10 @@ refusal naming the command with the gate written in.
   its run: a place dies with its process, and the session's retry joins the lane anew.
 
 A merge runs when no merge before it in its lane's queue holds its place, nothing else of the lane runs, fewer than
-`merge.cap` devctl processes run on the machine, and the lane's installation is ready: every
+`merge.cap` devctl processes run on the machine, the calling session runs fewer than `merge.sessionCap` merges
+(default 2; each running devctl polls GitHub, so ten merges one session queued poll as two would, the others wait in
+their lanes without reading GitHub and start in the order they queued; `beekeeper budget` lists each session's
+polling and waiting merges), and the lane's installation is ready: every
 HelmRelease of the lane's charts Ready, and the previous merge rolled. Rolled means each
 HelmRelease of the merged repository's chart that ran the newest version when the merge started
 now reports the released version, or follows a range that never admits it: the HelmRelease's
