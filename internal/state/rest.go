@@ -118,6 +118,7 @@ type (
 	plainBudget       Budget
 	plainGraphQL      GraphQL
 	plainMerge        Merge
+	plainFailed       Failed
 	plainWriter       Writer
 	plainWorkerReport WorkerReport
 	plainUrgent       Urgent
@@ -199,5 +200,7 @@ func (v *WorkerReport) UnmarshalJSON(b []byte) error {
 func (v WorkerReport) MarshalJSON() ([]byte, error) {
 	return encodeKeeping(plainWorkerReport(v), v.rest)
 }
+func (v *Failed) UnmarshalJSON(b []byte) error { return decodeKeeping(b, (*plainFailed)(v), &v.rest) }
+func (v Failed) MarshalJSON() ([]byte, error)  { return encodeKeeping(plainFailed(v), v.rest) }
 func (v *Urgent) UnmarshalJSON(b []byte) error { return decodeKeeping(b, (*plainUrgent)(v), &v.rest) }
 func (v Urgent) MarshalJSON() ([]byte, error)  { return encodeKeeping(plainUrgent(v), v.rest) }

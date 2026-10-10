@@ -44,7 +44,8 @@ that holds, and a lane with no installation has nothing to settle. The lane
 never idles for a merge
 that is not there: an arrived merge runs ahead of a seeded place whose merge
 has not arrived (seeds keep their order among themselves), and a merge that
-ended with nothing merged leaves the lane with its run: its session's retry
+ended with nothing merged leaves the lane with its run: the lane shows it as a
+failed attempt with devctl's exit code and reason until its session's retry
 joins the lane anew.
 
 A merge run outside the gate (one in flight when the gate went live, one run
@@ -326,7 +327,8 @@ The entry is kept for merge.seedTTL; lanes drop takes it out.`,
 	return c
 }
 
-// laneViews are the configured lanes, then every other lane with a merge.
+// laneViews are the configured lanes, then every other lane with a merge or
+// a failed attempt.
 func (a *app) laneViews(st *state.State) []laneView {
 	var out []laneView
 	seen := map[string]bool{}
@@ -354,6 +356,9 @@ func (a *app) laneViews(st *state.State) []laneView {
 	}
 	for _, m := range st.Merges {
 		add(m.Lane, a.cfg.LaneOf(m.Repo).Installation)
+	}
+	for _, f := range st.Failed {
+		add(f.Lane, a.cfg.LaneOf(f.Repo).Installation)
 	}
 	return out
 }
@@ -464,6 +469,10 @@ func (a *app) printLanes(views []laneView) {
 			}
 			p("%s %d. %s by %s, %s since %s", label, i+1, m.Key(), quotedOwner(m.By), how, clock(a.now, m.Joined))
 		}
+		for _, f := range v.Failed {
+			p("  failed %s by %s at %s, %s, %s; shown until its next attempt", f.Key(), quotedOwner(f.By), clock(a.now, f.At),
+				nothingDone(f.PR, merge.Outcome{}), exitText(f.Exit, f.Reason))
+		}
 	}
 }
 
@@ -545,8 +554,9 @@ func (a *app) recordGone(ctx context.Context) (recorded []string, lost []state.M
 		if !gone(m) {
 			continue
 		}
-		doc, rc := finishedRun(mergeBase(a.store.Dir(), m.Repo, m.PR))
-		r := runOutcome{rc: rc}
+		base := mergeBase(a.store.Dir(), m.Repo, m.PR)
+		doc, rc := finishedRun(base)
+		r := runOutcome{rc: rc, reason: runFailure(doc, lastLine(base+".log"), m.HandCut)}
 		var ok bool
 		if r.out, ok = parseOutcome(m.PR, doc); merge.NeedsJudging(ok, rc) {
 			if r.out, r.unanswered = judgeRun(ctx, m.Repo, m.PR, 1); r.unanswered != nil {

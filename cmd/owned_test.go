@@ -136,6 +136,7 @@ func TestRunReason(t *testing.T) {
 		{`{"mergeCommitSha":"abc","verdict":"merged","reason":"released"}`, "", "", "merged, release unknown; merged: released"},
 		{`{"mergeCommitSha":"abc","verdict":"merged","release":null}`, "", "release-1.3",
 			"merged, release none awaited, release-1.3 has no auto-release and its tags are cut by hand; merged"},
+		{redDoc, "x", "", redReason},
 		{"", "devctl: not found", "", "devctl: not found"},
 		{"", "", "", "no output"},
 	} {

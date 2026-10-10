@@ -772,6 +772,9 @@ type State struct {
 	// Merges are the wrapped devctl pr merge runs, per lane: waiting in join
 	// order, running, and settling until the lane's installation rolled them.
 	Merges []Merge `json:"merges,omitempty"`
+	// Failed are the gated merges whose last run merged nothing, one per
+	// pull request, shown on their lane until its next attempt joins it.
+	Failed []Failed `json:"failed,omitempty"`
 	// Report is the scheduled status reporter's current or last run.
 	Report *Report `json:"report,omitempty"`
 	// ReportThreads are the posted reports' Slack threads the feedback
@@ -945,6 +948,24 @@ type Merge struct {
 
 	rest rest
 }
+
+// Failed is a gated merge's run that merged nothing: when, devctl's exit
+// code and its reason (the verdict and the failed checks), for whoever it ran
+// for.
+type Failed struct {
+	Repo   string    `json:"repo"`
+	PR     int       `json:"pr"`
+	Lane   string    `json:"lane"`
+	By     Party     `json:"by"`
+	At     time.Time `json:"at"`
+	Exit   int       `json:"exit"`
+	Reason string    `json:"reason,omitempty"`
+
+	rest rest
+}
+
+// Key is the failed merge's owner/repo#n, or owner/repo promote.
+func (f Failed) Key() string { return Merge{Repo: f.Repo, PR: f.PR}.Key() }
 
 // Key is the merge's repository and number, owner/repo#n, or owner/repo
 // promote for a promotion (PR 0).
