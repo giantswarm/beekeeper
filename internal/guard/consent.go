@@ -62,11 +62,27 @@ const (
 
 // signInSegments are the path segments of an identity provider's sign-in
 // and consent pages (Dex's auth and approval, a portal's sign-in).
-var signInSegments = []string{"dex", "auth", "approval", "login", "signin", "connect", "oauth"}
+var signInSegments = strings.Fields("dex auth approval login signin connect oauth")
 
 // chromeRedacted is what the Claude in Chrome tools put in place of an
-// auth-like value of a URL they report (a client id, a state).
-const chromeRedacted = "REDACTED"
+// auth-like value of a URL they report (a client id, a state); authorizeTitle
+// opens GitHub's consent page's title.
+const (
+	chromeRedacted = "REDACTED"
+	authorizeTitle = "Authorize "
+)
+
+// The Chrome tools that act on a page (their names after the server's
+// prefix), and the keys of their inputs: the tab a call acts on, a batch
+// action's name and input.
+const (
+	chromeComputer = "computer"
+	chromeBatch    = "browser_batch"
+	chromeForm     = "form_input"
+	tabKey         = "tabId"
+	nameKey        = "name"
+	inputKey       = "input"
+)
 
 // AllowForm is how an App the person owns and asked for is recorded.
 const AllowForm = "`beekeeper app allow <name> --client-id <id> --callback <host> --word \"<the person's words>\"`"
@@ -103,7 +119,7 @@ func githubConsent(apps []App, u *url.URL, title string) Decision {
 		if !strings.EqualFold(a.Callback, callback) {
 			continue
 		}
-		if clientID == a.ClientID || (clientID == chromeRedacted && strings.EqualFold(title, "Authorize "+a.Name)) {
+		if clientID == a.ClientID || (clientID == chromeRedacted && strings.EqualFold(title, authorizeTitle+a.Name)) {
 			return Decision{Allow, fmt.Sprintf("beekeeper allows the click: the consent page of the person's own App %s (callback %s), "+
 				"on record since %s by %s: %s", a.Name, a.Callback, a.At.UTC().Format("2006-01-02"), a.By, a.Word)}
 		}
@@ -170,17 +186,17 @@ func actsOn(tool string, input map[string]any) (string, bool) {
 		t = t[i+len("__"):]
 	}
 	switch t {
-	case "form_input":
-		return tabOf(input["tabId"]), true
-	case "computer":
-		action, _ := input["action"].(string)
-		return tabOf(input["tabId"]), slices.Contains(acting, action)
-	case "browser_batch":
+	case chromeForm:
+		return tabOf(input[tabKey]), true
+	case chromeComputer:
+		action, _ := input[actionKey].(string)
+		return tabOf(input[tabKey]), slices.Contains(acting, action)
+	case chromeBatch:
 		actions, _ := input["actions"].([]any)
 		for _, a := range actions {
 			m, _ := a.(map[string]any)
-			name, _ := m["name"].(string)
-			in, _ := m["input"].(map[string]any)
+			name, _ := m[nameKey].(string)
+			in, _ := m[inputKey].(map[string]any)
 			if tab, acts := actsOn(name, in); acts {
 				return tab, true
 			}

@@ -204,6 +204,13 @@ func TestReadFindings(t *testing.T) {
 	}
 }
 
+// What the fake claude of the turn tests prints, and the line of a turn that
+// took no screenshot.
+const (
+	turnReport = "the turn's report"
+	noShots    = "screenshot: none taken"
+)
+
 // The turn runs the claude on PATH with the browse argv: dontAsk, the Chrome
 // tools alone, and with a declared deploy the settings whose auto mode
 // allows it and a prompt that names it; the report and the lines below it
@@ -243,9 +250,9 @@ func TestBrowseRunsTheTurn(t *testing.T) {
 		t.Fatalf("browse: %v\n%s", err, out.String())
 	}
 	got := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
-	if len(got) < 5 || got[0] != "the turn's report" ||
+	if len(got) < 5 || got[0] != turnReport ||
 		got[1] != `refused: computer left_click "Deploys the demo agent to the demo cluster": the auto mode classifier denied it as [Production Deploy]` ||
-		got[2] != deployHint || !strings.HasPrefix(got[3], "transcript: ") || got[4] != "screenshot: none taken" {
+		got[2] != deployHint || !strings.HasPrefix(got[3], "transcript: ") || got[4] != noShots {
 		t.Errorf("browse without the flag printed %q", got)
 	}
 	argv := argvOf()
@@ -263,8 +270,8 @@ func TestBrowseRunsTheTurn(t *testing.T) {
 		t.Fatalf("browse --allow-deploy: %v\n%s", err, out.String())
 	}
 	got = strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
-	if len(got) != 4 || got[0] != "the turn's report" || !strings.HasPrefix(got[1], "allowed deploy: "+deploy+": ") ||
-		!strings.HasPrefix(got[2], "transcript: ") || got[3] != "screenshot: none taken" {
+	if len(got) != 4 || got[0] != turnReport || !strings.HasPrefix(got[1], "allowed deploy: "+deploy+": ") ||
+		!strings.HasPrefix(got[2], "transcript: ") || got[3] != noShots {
 		t.Errorf("browse --allow-deploy printed %q", got)
 	}
 	argv = argvOf()
@@ -283,12 +290,12 @@ func TestBrowseRunsTheTurn(t *testing.T) {
 // declared deploy's; the report says what was allowed, and a grant refusal
 // under a record says the record did not cover it.
 func TestBrowseConsent(t *testing.T) {
-	rec := []state.App{{Name: recordedApp, ClientID: recordedClientID, Callback: recordedCallback, Word: "your agent has to do this", By: state.Party{Name: "the guide"},
+	rec := []state.App{{Name: recordedApp, ClientID: recordedClientID, Callback: recordedCallback, Word: personsWord, By: state.Party{Name: "the guide"},
 		At: time.Date(2026, 10, 10, 8, 16, 0, 0, time.UTC)}}
 	for steps, want := range map[string]int{
-		"Open https://example.org/signin. On GitHub's page 'Authorize " + recordedApp + "' click Authorize once.": 1,
-		"Open https://" + recordedCallback + "/connect/github and click Authorize.":                               1,
-		"Open https://example.org/ and report the title.":                                                         0,
+		"Open https://example.org/signin. On GitHub's page '" + recordedTitle + "' click Authorize once.": 1,
+		"Open https://" + recordedCallback + "/connect/github and click Authorize.":                       1,
+		"Open https://example.org/ and report the title.":                                                 0,
 	} {
 		if got := appsNamed(rec, steps); len(got) != want || (want == 1 && got[0].Name != recordedApp) {
 			t.Errorf("appsNamed(%q) = %+v, want %d", steps, got, want)
@@ -328,7 +335,7 @@ func TestBrowseConsent(t *testing.T) {
 		t.Errorf("browsePrompt with a record and the lab = %q", p)
 	}
 	l := (browseFindings{}).lines("steps", "", consents, true)
-	if len(l) != 2 || !strings.HasPrefix(l[0], "allowed consent: "+recordedApp+" (callback "+recordedCallback+"): ") || !strings.Contains(l[0], "on record since 2026-10-10 by the guide: your agent has to do this") ||
+	if len(l) != 2 || !strings.HasPrefix(l[0], "allowed consent: "+recordedApp+" (callback "+recordedCallback+"): ") || !strings.Contains(l[0], "on record since 2026-10-10 by the guide: "+personsWord) ||
 		!strings.HasPrefix(l[1], "allowed lab sign-in: ") {
 		t.Errorf("lines with a record and the lab = %q", l)
 	}
@@ -367,16 +374,16 @@ func TestBrowseTurnWithARecord(t *testing.T) {
 	t.Setenv("BROWSE_PROJECT", filepath.Join(a.cfg.Claude.ProjectsDir, "p"))
 	writeFile(t, transcript, `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"mcp__claude-in-chrome__computer","input":{"action":"left_click","action_summary":"Clicks Authorize"}}]}}`+"\n"+
 		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":false,"content":"Clicked"}]}}`+"\n")
-	if _, err := runApp(t, a, "allow", recordedApp, "--client-id", recordedClientID, "--callback", recordedCallback, "--word", "your agent has to do this"); err != nil {
+	if _, err := runApp(t, a, allowArgs(recordedCallback, personsWord)...); err != nil {
 		t.Fatal(err)
 	}
-	steps := "Open https://" + recordedCallback + "/connect/github. On GitHub's page 'Authorize " + recordedApp + "' click Authorize once; report the final URL."
+	steps := "Open https://" + recordedCallback + "/connect/github. On GitHub's page '" + recordedTitle + "' click Authorize once; report the final URL."
 	if err := a.browse(t.Context(), steps, bin, "", time.Minute, ""); err != nil {
 		t.Fatalf("browse: %v\n%s", err, out.String())
 	}
 	got := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
-	if len(got) != 5 || got[0] != "the turn's report" || !strings.HasPrefix(got[1], "allowed consent: "+recordedApp+" (callback "+recordedCallback+"): ") ||
-		!strings.HasPrefix(got[2], "allowed lab sign-in: ") || !strings.HasPrefix(got[3], "transcript: ") || got[4] != "screenshot: none taken" {
+	if len(got) != 5 || got[0] != turnReport || !strings.HasPrefix(got[1], "allowed consent: "+recordedApp+" (callback "+recordedCallback+"): ") ||
+		!strings.HasPrefix(got[2], "allowed lab sign-in: ") || !strings.HasPrefix(got[3], "transcript: ") || got[4] != noShots {
 		t.Errorf("browse with a record printed %q", got)
 	}
 	b, err := os.ReadFile(argvFile) //nolint:gosec // the test's own file
