@@ -40,7 +40,10 @@ of its own). The gate the PreToolUse hook puts in front of devctl pr merge
 runs one merge per lane at a time, in the order the merges joined, and the
 next once the installation's HelmReleases of the lane's charts are Ready and
 the previous merge's release has rolled; watch drops a settling merge once
-that holds, and a lane with no installation has nothing to settle. The lane
+that holds, and a lane with no installation has nothing to roll: only a
+merge whose release is unknown (its run lost, merged without a confirmed
+release) settles it, by the settle rule. A running merge whose devctl ended
+after its gate left is judged before the next merge or promotion starts. The lane
 never idles for a merge
 that is not there: an arrived merge runs ahead of a seeded place whose merge
 has not arrived (seeds keep their order among themselves), and a merge that
@@ -399,6 +402,10 @@ func (a *app) settlingText(m state.Merge) string {
 		text = fmt.Sprintf("settling %s, merged outside the gate at %s, until %s and its HelmReleases are Ready", m.Key(),
 			clock(a.now, m.Finished), clock(a.now, m.Finished.Add(a.cfg.Merge.Settle.Duration)))
 	case m.Release == "":
+		if lane, _ := a.cfg.LaneNamed(m.Lane); lane.Installation == "" {
+			text = fmt.Sprintf("settling %s, its release unknown, until %s", m.Key(), clock(a.now, m.Finished.Add(a.cfg.Merge.Settle.Duration)))
+			break
+		}
 		text = fmt.Sprintf("settling %s until an unknown release rolls", m.Key())
 	default:
 		text = fmt.Sprintf("settling %s until %s rolls", m.Key(), m.Release)

@@ -447,6 +447,11 @@ func (g *gateRun) leave(pid int) error {
 // run's outcome once devctl ran or the merge was refused.
 func (g *gateRun) step() (string, error) {
 	g.closeToolWindow(g.ctx, g.me)
+	// A running merge whose devctl ended outside the gate (its gate left at
+	// the tool limit) is judged before the lane moves on, as the watch does:
+	// pruned as lost it would settle unjudged, and a lane without an
+	// installation would start the next at once.
+	g.recordGone(g.ctx)
 	if why := g.checkOutside(); why != "" {
 		return why, nil
 	}
@@ -777,10 +782,19 @@ func (g *gateRun) refuseWith(code int, format string, args ...any) error {
 }
 
 // laneReady reads the lane's installation: why is what the lane waits for,
-// "" when it is free, which needs each of its settling merges settled. An
-// installation that cannot be read refuses.
+// "" when it is free, which needs each of its settling merges settled. A
+// lane without an installation has nothing to roll, but a merge whose
+// release is unknown (its run lost, merged without a confirmed release)
+// settles it by the settle rule all the same: its release may be cutting
+// now, and a promotion behind it would race that. An installation that
+// cannot be read refuses.
 func (g *gateRun) laneReady(q merge.Lane) ([]merge.HelmRelease, string, error) {
 	if g.lane.Installation == "" {
+		for _, s := range q.AllSettling {
+			if ready, why := merge.Ready(g.lane, nil, s, g.now, g.cfg.Merge.Settle.Duration); !ready {
+				return nil, fmt.Sprintf("next in lane %s, %s", g.lane.Name, why), nil
+			}
+		}
 		return nil, "", nil
 	}
 	if st, err := g.store.Read(); err == nil {
@@ -1099,8 +1113,8 @@ func (g *gateRun) failureWake(run childRun) string {
 }
 
 // record records the run's outcome: a merge settles its lane, one that
-// warranted no release or whose lane has no installation to roll leaves it,
-// and so does one with nothing merged. A run without
+// warranted no release or whose lane has no installation to roll leaves it
+// once its release is known, and so does one with nothing merged. A run without
 // its document or ended by a signal is GitHub's to judge: merged, its
 // release is unconfirmed; unanswered, the lane settles by the settle rule as
 // for a lost merge. The run's files go with the record; a save the newer
@@ -1258,7 +1272,8 @@ type runOutcome struct {
 
 // recordRun records the outcome of the running merge st.Merges[i] in lane:
 // a merge settles its lane, one that warranted no release or whose lane has
-// no installation to roll leaves it, so does one with nothing merged (its
+// no installation to roll leaves it (in that lane once its release is known),
+// so does one with nothing merged (its
 // place dies with its run), and one nothing could judge settles by the
 // settle rule. A devctl merge's release window records the merge, or lifts
 // when nothing merged. It returns the events, with note appended.
@@ -1275,7 +1290,7 @@ func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOu
 	switch {
 	case r.unanswered != nil:
 		m.Phase, m.Finished, m.Exit, m.Release, m.Roll = state.Settling, now, rc, "", nil
-	case out.Merged && !out.NoRelease && handCut == "" && lane.Installation != "":
+	case out.Merged && !out.NoRelease && handCut == "" && (lane.Installation != "" || out.Release == ""):
 		m.Phase, m.Finished, m.Exit, m.Release = state.Settling, now, rc, out.Release
 	default:
 		st.Merges = slices.Delete(st.Merges, i, i+1)
@@ -1515,7 +1530,7 @@ func kubeContext(ctx context.Context, lane config.Lane) (string, error) {
 
 // readHelmReleases reads the lane installation's HelmReleases with kubectl,
 // each with the range its OCIRepository follows.
-func readHelmReleases(ctx context.Context, lane config.Lane) ([]merge.HelmRelease, error) {
+var readHelmReleases = func(ctx context.Context, lane config.Lane) ([]merge.HelmRelease, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	kctx, err := kubeContext(ctx, lane)

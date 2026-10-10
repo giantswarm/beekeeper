@@ -1442,7 +1442,8 @@ func (w *watcher) hungMerges(ctx context.Context, now time.Time) {
 
 // settled drops the settling merges whose lane has settled, so lanes shows
 // the lane free before its next merge starts: a lane with no installation
-// has nothing to roll, and one whose release rolled and whose HelmReleases
+// has nothing to roll (a merge whose release is unknown settles it by the
+// settle rule), and one whose release rolled and whose HelmReleases
 // are Ready is done, however late. A merge not settled past
 // merge.settleTimeout is one LANE STUCK line with what the lane waits for,
 // and one ENDED line once it settles or the lane is cleared.
@@ -1464,7 +1465,10 @@ func (w *watcher) settled(ctx context.Context, now time.Time) {
 		}
 		lane, ok := w.cfg.LaneNamed(m.Lane)
 		if !ok || lane.Installation == "" {
-			done[m.Key()] = "no installation to roll"
+			// A release unknown settles by the settle rule: it may be cutting.
+			if ready, _ := merge.Ready(lane, nil, &m, now, w.cfg.Merge.Settle.Duration); ready {
+				done[m.Key()] = "no installation to roll"
+			}
 			continue
 		}
 		r, ok := read[lane.Name]

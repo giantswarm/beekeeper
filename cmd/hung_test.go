@@ -58,8 +58,9 @@ func stubPulls(t *testing.T, pulls map[int]github.Pull) {
 }
 
 // A merge whose devctl runs on merge.hungAfter after its pull request
-// merged is ended by the watch, and the next poll records it: the lane is
-// free. A run whose pull request is open, or that merged recently, runs on.
+// merged is ended by the watch, and the next poll records it: its release
+// unconfirmed, it settles its lane by the settle rule. A run whose pull
+// request is open, or that merged recently, runs on.
 func TestWatchEndsAHungMerge(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	w.now = relayNow
@@ -104,7 +105,7 @@ func TestWatchEndsAHungMerge(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, m := range st.Merges {
-		want := map[string]string{nextRepo: state.Waiting, openRepo: state.Running, freshRepo: state.Running}[m.Repo]
+		want := map[string]string{hungRepo: state.Settling, nextRepo: state.Waiting, openRepo: state.Running, freshRepo: state.Running}[m.Repo]
 		if m.Phase != want {
 			t.Errorf("%s is %s, want %s", m.Key(), m.Phase, want)
 		}
@@ -145,7 +146,7 @@ func TestLanesDropEndsAHungRun(t *testing.T) {
 	if err := drop("1"); err != nil {
 		t.Fatal(err)
 	}
-	if l := out.String(); !strings.Contains(l, "ended the devctl of o/hung#1 (merged at") || !strings.Contains(l, "lane scratch no longer holds it") {
+	if l := out.String(); !strings.Contains(l, "ended the devctl of o/hung#1 (merged at") || !strings.Contains(l, "settling o/hung#1, its release unknown, until ") {
 		t.Fatalf("drop said:\n%s", l)
 	}
 	if err := drop("2"); err == nil || !strings.Contains(err.Error(), "its pull request is open") {
@@ -158,7 +159,11 @@ func TestLanesDropEndsAHungRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(st.Merges) != 1 || st.Merges[0].Repo != openRepo || st.Merges[0].Phase != state.Running {
+	phases := map[string]string{}
+	for _, m := range st.Merges {
+		phases[m.Repo] = m.Phase
+	}
+	if len(st.Merges) != 2 || phases[hungRepo] != state.Settling || phases[openRepo] != state.Running {
 		t.Errorf("merges: %+v", st.Merges)
 	}
 }
