@@ -12,19 +12,24 @@ import (
 
 // The shapes a Secret's key may hold in the tests.
 const (
-	dotenvDoc = "# the app's credentials\nexport CLIENT_ID=\"app-123\"\nCLIENT_SECRET='" + password + "' # the secret\n\nEMPTY=\nURL=https://idp.example.com/auth?scope=openid\nESCAPED=\"a \\\"quoted\\\" word\"\n"
-	nestedDoc = "config.yaml: |\n  oidc:\n    clientID: app-123\n    clientSecret: " + password + "\n  issuer: https://idp.example.com\nvalues.env: |\n  TOKEN=" + token + "\n  MODE=dev\nname: app\n"
-	jsonDoc   = `{"clientID": "app-123", "clientSecret": "` + password + `"}`
-	listDoc   = "- " + password + "\n- " + token + "\n"
-	textDoc   = "clientID: app-123\n  clientSecret: " + password + "\n"
-	tabDoc    = "oidc:\r\n\tclientID: app-123\r\n\tclientSecret: " + password + "\r\n"
-	spacedDoc = "clientID = app-123\r\nclientSecret = \"" + password + "\"\r\nissuer = https://idp.example.com\r\nscopes = openid email\r\n"
-	mixedDoc  = "# hand-written\r\nclientID = 'app-123'\n\tclientSecret:\t\"" + password + "\"\r\nexport issuer : https://idp.example.com\n"
-	proseDoc  = "client id: app-123\nthe secret below\n" + password + "\nc2VjcmV0cGFzcw=\nhttps://idp.example.com/a=b\n"
-	headless  = "[" + password + "\n" + token + "\n"
-	paddedDoc = "c2VjcmV0cGFzcw="
-	tokenKey  = "Iv1.0123456789abcdefABCDEF0123456789"
-	issuerKey = "issuer"
+	dotenvDoc   = "# the app's credentials\nexport CLIENT_ID=\"app-123\"\nCLIENT_SECRET='" + password + "' # the secret\n\nEMPTY=\nURL=https://idp.example.com/auth?scope=openid\nESCAPED=\"a \\\"quoted\\\" word\"\n"
+	nestedDoc   = "config.yaml: |\n  oidc:\n    clientID: app-123\n    clientSecret: " + password + "\n  issuer: https://idp.example.com\nvalues.env: |\n  TOKEN=" + token + "\n  MODE=dev\nname: app\n"
+	jsonDoc     = `{"clientID": "app-123", "clientSecret": "` + password + `"}`
+	listDoc     = "- " + password + "\n- " + token + "\n"
+	textDoc     = "clientID: app-123\n  clientSecret: " + password + "\n"
+	tabDoc      = "oidc:\r\n\tclientID: app-123\r\n\tclientSecret: " + password + "\r\n"
+	spacedDoc   = "clientID = app-123\r\nclientSecret = \"" + password + "\"\r\nissuer = https://idp.example.com\r\nscopes = openid email\r\n"
+	mixedDoc    = "# hand-written\r\nclientID = 'app-123'\n\tclientSecret:\t\"" + password + "\"\r\nexport issuer : https://idp.example.com\n"
+	proseDoc    = "client id: app-123\nthe secret below\n" + password + "\nc2VjcmV0cGFzcw=\nhttps://idp.example.com/a=b\n"
+	headless    = "[" + password + "\n" + token + "\n"
+	paddedDoc   = "c2VjcmV0cGFzcw="
+	sectionDoc  = "clientID: app-123\r\nclientSecret\r\n  ID : " + token + "\r\n  value = " + password + "\r\n"
+	flatSection = "clientID=app-123\nclientSecret\nID: " + token + "\nvalue:" + password + "\n"
+	outdented   = "clientSecret\n  value: " + password + "\nissuer: https://idp.example.com\n"
+	loneBare    = "clientID: app-123\nclientSecret\n"
+	valueBare   = "clientID: app-123\n" + password + "\nvalue: x\n"
+	tokenKey    = "Iv1.0123456789abcdefABCDEF0123456789"
+	issuerKey   = "issuer"
 )
 
 // readingKube is an Ops whose Secret read answers raw.
@@ -63,6 +68,13 @@ func TestKubePathResolvesEveryShape(t *testing.T) {
 		{"mixed tab and colon", mixedDoc, clientSecretPath, password},
 		{"mixed export", mixedDoc, issuerKey, "https://idp.example.com"},
 		{"indented colon lines", textDoc, clientSecretPath, password},
+		{"section, head line before it", sectionDoc, "clientID", "app-123"},
+		{"section, its value", sectionDoc, "clientSecret.value", password},
+		{"section, its id", sectionDoc, "clientSecret.ID", token},
+		{"section, a line by its own head", sectionDoc, "value", password},
+		{"unindented section", flatSection, "clientSecret.value", password},
+		{"unindented section, head line before it", flatSection, "clientID", "app-123"},
+		{"outdented line after a section", outdented, issuerKey, "https://idp.example.com"},
 	} {
 		o := readingKube([]byte(tc.raw))
 		ps, err := o.Fingerprints(ctx, secret.Ref{Kube: shapeTarget, Path: tc.path})
@@ -107,6 +119,10 @@ func TestKubePathRefusalNamesTheShape(t *testing.T) {
 		{"text without heads", headless, clientSecretPath, []string{"no value at clientSecret: the key holds text, no YAML document (2 lines, " + bytesOf(headless) + ")"}},
 		{"spaced dotenv", spacedDoc, "clientToken", []string{"no value at clientToken: the key holds dotenv lines with the keys clientID, clientSecret, issuer, scopes (4 lines, " + bytesOf(spacedDoc) + ")"}},
 		{"key-value lines", mixedDoc, "clientToken", []string{"no value at clientToken: the key holds key-value lines with the keys clientID, clientSecret, issuer (4 lines, " + bytesOf(mixedDoc) + ")"}},
+		{"section lines", sectionDoc, "clientToken", []string{"no value at clientToken: the key holds key-value lines with the keys clientID, clientSecret.ID, clientSecret.value (4 lines, " + bytesOf(sectionDoc) + ")"}},
+		{"outdented line ends a section", outdented, "clientSecret.issuer", []string{"with the keys clientSecret.value, issuer (3 lines, "}},
+		{"a bare last line is no section", loneBare, "clientSecret", []string{"the key holds text, no YAML document with the line heads clientID, <12 characters> (2 lines, "}},
+		{"a bare value is no section", valueBare, "value", []string{"the key holds text, no YAML document with the line heads clientID, <" + strconv.Itoa(len(password)) + " characters>, value (3 lines, "}},
 		{"tab-indented yaml", tabDoc, "clientSecret", []string{"no value at clientSecret: the key holds a YAML mapping with the top-level keys oidc (3 lines, "}},
 		{"padded encoding", paddedDoc, "c2VjcmV0cGFzcw", []string{"the key holds a scalar (1 line, 15 bytes)"}},
 		{"binary", "\x00\x01\xff" + password, clientSecretPath, []string{"the key holds binary (" + bytesOf("\x00\x01\xff"+password) + ")"}},

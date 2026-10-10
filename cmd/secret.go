@@ -360,7 +360,7 @@ with #<path> one value inside what that key holds: a dotted key of its
 YAML or JSON mapping (tab-indented too), a line of its dotenv lines
 (KEY=value, an export in front and matching quotes stripped, # comments
 ignored) or key-value lines (key = value or key: value, any spacing, CRLF
-line ends), or, one level down, a value of the mapping or dotenv lines a block scalar holds
+line ends; a bare line right before them a section, #<section>.<key>), or, one level down, a value of the mapping or dotenv lines a block scalar holds
 (#config.yaml.oidc.clientID; a key holding dots takes as many segments as
 it needs): a credential its owner placed in a cluster Secret (an identity
 provider's client secret for a connector, for one) reaches the SOPS path
