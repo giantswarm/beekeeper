@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 // A browse turn is one headless turn in dontAsk on the CLI's own Chrome
@@ -18,7 +20,7 @@ import (
 // rule for that one action after the shipped rules, and its prompt's word
 // between the preamble and the steps; without one the turn gets no settings.
 func TestBrowseTurn(t *testing.T) {
-	argv := browseArgv("id-1", "", "steps", "")
+	argv := browseArgv("id-1", "", "steps", nil)
 	want := []string{"-p", chromeFlag, toolsFlag, "", strictMCPConfigFlag, permissionModeFlag, "dontAsk",
 		allowedToolsFlag, "mcp__claude-in-chrome__*", "--session-id", "id-1", "--", "steps"}
 	if !slices.Equal(argv, want) {
@@ -40,11 +42,11 @@ func TestBrowseTurn(t *testing.T) {
 			t.Errorf("browseArgv carries %q", arg)
 		}
 	}
-	if argv := browseArgv("id-1", "sonnet", "-steps", ""); !slices.Contains(argv, "sonnet") || argv[len(argv)-2] != "--" {
+	if argv := browseArgv("id-1", "sonnet", "-steps", nil); !slices.Contains(argv, "sonnet") || argv[len(argv)-2] != "--" {
 		t.Errorf("browseArgv with a model = %q", argv)
 	}
 	const deploy = "the demo agent to the demo cluster"
-	argv = browseArgv("id-1", "", "steps", deploy)
+	argv = browseArgv("id-1", "", "steps", browseRules(deploy, nil, false))
 	i := slices.Index(argv, "--settings")
 	if i < 0 || i+1 >= len(argv) || argv[len(argv)-2] != "--" || slices.Index(argv, "--") < i {
 		t.Fatalf("browseArgv with a deploy = %q, want --settings before --", argv)
@@ -69,10 +71,10 @@ func TestBrowseTurn(t *testing.T) {
 	if n := strings.Count(argv[i+1], "$defaults"); n != 1 || strings.Contains(argv[i+1], "soft_deny") || strings.Contains(argv[i+1], "environment") {
 		t.Errorf("--settings touches more than the allow list: %s", argv[i+1])
 	}
-	if p := browsePrompt("steps", ""); p != browsePreamble+browseSteps+"steps" {
+	if p := browsePrompt("steps", "", nil, false); p != browsePreamble+browseSteps+"steps" {
 		t.Errorf("browsePrompt without a deploy = %q", p)
 	}
-	if p := browsePrompt("steps", deploy); !strings.HasPrefix(p, browsePreamble+"The person's task covers one deploy: "+deploy+".") ||
+	if p := browsePrompt("steps", deploy, nil, false); !strings.HasPrefix(p, browsePreamble+"The person's task covers one deploy: "+deploy+".") ||
 		!strings.HasSuffix(p, browseSteps+"steps") {
 		t.Errorf("browsePrompt with a deploy = %q", p)
 	}
@@ -138,7 +140,7 @@ func TestReadFindings(t *testing.T) {
 		t.Fatalf("readFindings = %+v, %v; want %+v", f, err, want)
 	}
 	steps := "Open https://example.test/sign-in. On GitHub's page, click Authorize once; report the final URL."
-	got := f.lines(steps, "")
+	got := f.lines(steps, "", nil, false)
 	wantLines := []string{
 		"refused: tabs_context_mcp: the auto mode classifier denied it as [Permission Grant]",
 		`refused: computer left_click "Clicks Authorize for the App": the auto mode classifier denied it as [Permission Grant]`,
@@ -152,14 +154,14 @@ func TestReadFindings(t *testing.T) {
 	// Another reason gets no hint; a grant refused with steps that name no
 	// grant gets the bare hint; nothing found prints nothing.
 	other := browseFindings{Refused: []refusal{{Call: "navigate https://example.test/", Reason: "Destructive"}}}
-	if l := other.lines(steps, ""); len(l) != 1 || !strings.HasSuffix(l[0], "[Destructive]") {
+	if l := other.lines(steps, "", nil, false); len(l) != 1 || !strings.HasSuffix(l[0], "[Destructive]") {
 		t.Errorf("lines of another reason = %q", l)
 	}
 	grant := browseFindings{Refused: []refusal{{Call: "tabs_context_mcp", Reason: reasonGrant}}}
-	if l := grant.lines("Open the page and take a screenshot", ""); len(l) != 2 || l[1] != consentHint {
+	if l := grant.lines("Open the page and take a screenshot", "", nil, false); len(l) != 2 || l[1] != consentHint {
 		t.Errorf("lines without a consent step = %q", l)
 	}
-	if l := (browseFindings{}).lines(steps, ""); l != nil {
+	if l := (browseFindings{}).lines(steps, "", nil, false); l != nil {
 		t.Errorf("lines of no findings = %q", l)
 	}
 	// A long step is quoted bounded.
@@ -167,7 +169,7 @@ func TestReadFindings(t *testing.T) {
 	if p := consentPhrase(long); len([]rune(p)) != phraseRunes+1 || !strings.HasSuffix(p, "…") || !strings.HasPrefix(p, "Then click Authorize") {
 		t.Errorf("consentPhrase(long) = %q", p)
 	}
-	if n := (browseFindings{NotRendered: 3}).lines("", ""); len(n) != 1 || !strings.HasPrefix(n[0], "not rendered: 3 screenshots timed out") {
+	if n := (browseFindings{NotRendered: 3}).lines("", "", nil, false); len(n) != 1 || !strings.HasPrefix(n[0], "not rendered: 3 screenshots timed out") {
 		t.Errorf("lines of 3 not rendered = %q", n)
 	}
 	// A deploy refusal names the refused click and, without a declared
@@ -175,19 +177,19 @@ func TestReadFindings(t *testing.T) {
 	// declared deploy is the first line, refusal or not.
 	click := `browser_batch computer left_click "Deploys the demo agent to the demo cluster", computer wait`
 	refusedDeploy := browseFindings{Refused: []refusal{{Call: click, Reason: "Production Deploy"}}}
-	if l := refusedDeploy.lines(steps, ""); len(l) != 2 || l[0] != "refused: "+click+": the auto mode classifier denied it as [Production Deploy]" || l[1] != deployHint {
+	if l := refusedDeploy.lines(steps, "", nil, false); len(l) != 2 || l[0] != "refused: "+click+": the auto mode classifier denied it as [Production Deploy]" || l[1] != deployHint {
 		t.Errorf("lines of a deploy refusal = %q", l)
 	}
 	const deploy = "the demo agent to the demo cluster"
-	if l := refusedDeploy.lines(steps, deploy); len(l) != 3 || l[0] != "allowed deploy: "+deploy+": the turn's auto mode allowed that one deploy or create click (--allow-deploy)" ||
+	if l := refusedDeploy.lines(steps, deploy, nil, false); len(l) != 3 || l[0] != "allowed deploy: "+deploy+": the turn's auto mode allowed that one deploy or create click (--allow-deploy)" ||
 		!strings.HasPrefix(l[1], "refused: ") || l[2] != `the declared deploy "`+deploy+`" did not cover it: declare the refused call's own action and target` {
 		t.Errorf("lines of a deploy refusal under a declared deploy = %q", l)
 	}
-	if l := (browseFindings{}).lines(steps, deploy); len(l) != 1 || !strings.HasPrefix(l[0], "allowed deploy: "+deploy) {
+	if l := (browseFindings{}).lines(steps, deploy, nil, false); len(l) != 1 || !strings.HasPrefix(l[0], "allowed deploy: "+deploy) {
 		t.Errorf("lines of a declared deploy without findings = %q", l)
 	}
 	for _, reason := range deployReasons {
-		if l := (browseFindings{Refused: []refusal{{Call: click, Reason: reason}}}).lines(steps, ""); len(l) != 2 || l[1] != deployHint {
+		if l := (browseFindings{Refused: []refusal{{Call: click, Reason: reason}}}).lines(steps, "", nil, false); len(l) != 2 || l[1] != deployHint {
 			t.Errorf("lines of a [%s] refusal = %q, want the deploy hint", reason, l)
 		}
 	}
@@ -201,6 +203,13 @@ func TestReadFindings(t *testing.T) {
 		t.Errorf("callWords(find) = %q", w)
 	}
 }
+
+// What the fake claude of the turn tests prints, and the line of a turn that
+// took no screenshot.
+const (
+	turnReport = "the turn's report"
+	noShots    = "screenshot: none taken"
+)
 
 // The turn runs the claude on PATH with the browse argv: dontAsk, the Chrome
 // tools alone, and with a declared deploy the settings whose auto mode
@@ -241,14 +250,14 @@ func TestBrowseRunsTheTurn(t *testing.T) {
 		t.Fatalf("browse: %v\n%s", err, out.String())
 	}
 	got := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
-	if len(got) < 5 || got[0] != "the turn's report" ||
+	if len(got) < 5 || got[0] != turnReport ||
 		got[1] != `refused: computer left_click "Deploys the demo agent to the demo cluster": the auto mode classifier denied it as [Production Deploy]` ||
-		got[2] != deployHint || !strings.HasPrefix(got[3], "transcript: ") || got[4] != "screenshot: none taken" {
+		got[2] != deployHint || !strings.HasPrefix(got[3], "transcript: ") || got[4] != noShots {
 		t.Errorf("browse without the flag printed %q", got)
 	}
 	argv := argvOf()
 	if i := slices.Index(argv, permissionModeFlag); i < 0 || argv[i+1] != modeDontAsk || slices.Contains(argv, settingsFlag) ||
-		argv[len(argv)-1] != browsePrompt(steps, "") || !slices.Contains(argv, chromeFlag) {
+		argv[len(argv)-1] != browsePrompt(steps, "", nil, false) || !slices.Contains(argv, chromeFlag) {
 		t.Errorf("the turn without the flag ran with %q", argv)
 	}
 
@@ -261,16 +270,144 @@ func TestBrowseRunsTheTurn(t *testing.T) {
 		t.Fatalf("browse --allow-deploy: %v\n%s", err, out.String())
 	}
 	got = strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
-	if len(got) != 4 || got[0] != "the turn's report" || !strings.HasPrefix(got[1], "allowed deploy: "+deploy+": ") ||
-		!strings.HasPrefix(got[2], "transcript: ") || got[3] != "screenshot: none taken" {
+	if len(got) != 4 || got[0] != turnReport || !strings.HasPrefix(got[1], "allowed deploy: "+deploy+": ") ||
+		!strings.HasPrefix(got[2], "transcript: ") || got[3] != noShots {
 		t.Errorf("browse --allow-deploy printed %q", got)
 	}
 	argv = argvOf()
 	i := slices.Index(argv, settingsFlag)
-	if i < 0 || argv[i+1] != allowDeploySettings(deploy) || argv[len(argv)-1] != browsePrompt(steps, deploy) {
+	if i < 0 || argv[i+1] != allowDeploySettings(deploy) || argv[len(argv)-1] != browsePrompt(steps, deploy, nil, false) {
 		t.Errorf("the turn with the flag ran with %q", argv)
 	}
 	if i := slices.Index(argv, permissionModeFlag); i < 0 || argv[i+1] != modeDontAsk {
 		t.Errorf("the flag changed the turn's mode: %q", argv)
+	}
+}
+
+// Steps that name an App on record, by name or callback host, give the turn
+// that App's auto mode rule and prompt words; steps that name a loopback
+// host give it the lab's; the rules stand after the shipped ones beside a
+// declared deploy's; the report says what was allowed, and a grant refusal
+// under a record says the record did not cover it.
+func TestBrowseConsent(t *testing.T) {
+	rec := []state.App{{Name: recordedApp, ClientID: recordedClientID, Callback: recordedCallback, Word: personsWord, By: state.Party{Name: "the guide"},
+		At: time.Date(2026, 10, 10, 8, 16, 0, 0, time.UTC)}}
+	for steps, want := range map[string]int{
+		"Open https://example.org/signin. On GitHub's page '" + recordedTitle + "' click Authorize once.": 1,
+		"Open https://" + recordedCallback + "/connect/github and click Authorize.":                       1,
+		"Open https://example.org/ and report the title.":                                                 0,
+	} {
+		if got := appsNamed(rec, steps); len(got) != want || (want == 1 && got[0].Name != recordedApp) {
+			t.Errorf("appsNamed(%q) = %+v, want %d", steps, got, want)
+		}
+	}
+	for steps, want := range map[string]bool{
+		"Open https://dex.127.0.0.1.nip.io/dex/auth and sign in as admin@lab.local": true,
+		"Open https://localhost:32000/dex/auth":                                     true,
+		"Open http://127.0.0.1:8080/":                                               true,
+		"Open https://example.org/ and https://portal.example.org/":                 false,
+		"Open https://my-localhost.example.org/":                                    false,
+	} {
+		if got := namesLoopback(steps); got != want {
+			t.Errorf("namesLoopback(%q) = %v, want %v", steps, got, want)
+		}
+	}
+	consents := guardApps(rec)
+	rules := browseRules("", consents, true)
+	if len(rules) != 2 || rules[0] != consentRule(consents[0]) || rules[1] != labRule {
+		t.Errorf("browseRules = %q", rules)
+	}
+	if r := rules[0]; !strings.Contains(r, "the App "+recordedApp+" (OAuth client id "+recordedClientID+")") || !strings.Contains(r, "callback host "+recordedCallback) || !strings.Contains(r, "Not covered:") {
+		t.Errorf("the consent rule = %q", r)
+	}
+	if rules := browseRules("", nil, false); rules != nil {
+		t.Errorf("browseRules of nothing = %q", rules)
+	}
+	const deploy = "the demo agent to the demo cluster"
+	argv := browseArgv("id-1", "", "steps", browseRules(deploy, consents, false))
+	i := slices.Index(argv, settingsFlag)
+	if i < 0 || argv[i+1] != allowSettings([]string{allowDeployRule(deploy), consentRule(consents[0])}) || strings.Count(argv[i+1], "$defaults") != 1 {
+		t.Errorf("--settings with a deploy and a record = %q", argv)
+	}
+	p := browsePrompt("steps", "", consents, true)
+	if !strings.HasPrefix(p, browsePreamble+"The person's own App "+recordedApp+" is on record (callback "+recordedCallback+"):") ||
+		!strings.Contains(p, labWords) || !strings.HasSuffix(p, browseSteps+"steps") {
+		t.Errorf("browsePrompt with a record and the lab = %q", p)
+	}
+	l := (browseFindings{}).lines("steps", "", consents, true)
+	if len(l) != 2 || !strings.HasPrefix(l[0], "allowed consent: "+recordedApp+" (callback "+recordedCallback+"): ") || !strings.Contains(l[0], "on record since 2026-10-10 by the guide: "+personsWord) ||
+		!strings.HasPrefix(l[1], "allowed lab sign-in: ") {
+		t.Errorf("lines with a record and the lab = %q", l)
+	}
+	refused := browseFindings{Refused: []refusal{{Call: `computer left_click "Clicks Authorize"`, Reason: reasonGrant}}}
+	if l := refused.lines("On the page click Authorize once.", "", consents, false); len(l) != 3 || l[2] != `the steps' "On the page click Authorize once" reads as a grant: the App on record (`+recordedApp+`) did not cover it: `+
+		"the page named another App or callback host, or the hook saw no page for the call's tab; the refused call says which" {
+		t.Errorf("lines of a grant refusal under a record = %q", l)
+	}
+	if l := refused.lines("On the page click Authorize once.", "", nil, false); len(l) != 2 || !strings.HasSuffix(l[1], consentHint) || !strings.Contains(consentHint, "beekeeper app allow") {
+		t.Errorf("lines of a grant refusal without a record = %q", l)
+	}
+}
+
+// A browse turn reads the Apps on record: steps naming one run with its rule
+// and prompt words and the report says so; the turn's start record, which
+// has the hook act in the turn wherever it runs, exists while the turn runs
+// and is gone after it, the turn logged.
+func TestBrowseTurnWithARecord(t *testing.T) {
+	a, out := stubApp(t)
+	bin := t.TempDir()
+	argvFile, transcript, startsFile := filepath.Join(bin, "argv"), filepath.Join(bin, "transcript.jsonl"), filepath.Join(bin, "starts")
+	// The fake claude records its arguments, copies the state's starts as it
+	// sees them while it runs, writes the transcript under its session id
+	// and prints its report.
+	script := "#!/bin/sh\n: > \"$BROWSE_ARGV\"\nid=; prev=\nfor a in \"$@\"; do\n  printf '%s\\0' \"$a\" >> \"$BROWSE_ARGV\"\n" +
+		"  [ \"$prev\" = --session-id ] && id=$a\n  prev=$a\ndone\ncp \"$BROWSE_STATE\" \"$BROWSE_STARTS\"\n" +
+		"mkdir -p \"$BROWSE_PROJECT\" && cp \"$BROWSE_TRANSCRIPT\" \"$BROWSE_PROJECT/$id.jsonl\"\necho \"the turn's report\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o700); err != nil { //nolint:gosec // a fake claude
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("BROWSE_ARGV", argvFile)
+	t.Setenv("BROWSE_TRANSCRIPT", transcript)
+	t.Setenv("BROWSE_STARTS", startsFile)
+	t.Setenv("BROWSE_STATE", filepath.Join(a.cfg.StateDir, "state.json"))
+	t.Setenv("BROWSE_PROJECT", filepath.Join(a.cfg.Claude.ProjectsDir, "p"))
+	writeFile(t, transcript, `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"mcp__claude-in-chrome__computer","input":{"action":"left_click","action_summary":"Clicks Authorize"}}]}}`+"\n"+
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":false,"content":"Clicked"}]}}`+"\n")
+	if _, err := runApp(t, a, allowArgs(recordedCallback, personsWord)...); err != nil {
+		t.Fatal(err)
+	}
+	steps := "Open https://" + recordedCallback + "/connect/github. On GitHub's page '" + recordedTitle + "' click Authorize once; report the final URL."
+	if err := a.browse(t.Context(), steps, bin, "", time.Minute, ""); err != nil {
+		t.Fatalf("browse: %v\n%s", err, out.String())
+	}
+	got := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if len(got) != 5 || got[0] != turnReport || !strings.HasPrefix(got[1], "allowed consent: "+recordedApp+" (callback "+recordedCallback+"): ") ||
+		!strings.HasPrefix(got[2], "allowed lab sign-in: ") || !strings.HasPrefix(got[3], "transcript: ") || got[4] != noShots {
+		t.Errorf("browse with a record printed %q", got)
+	}
+	b, err := os.ReadFile(argvFile) //nolint:gosec // the test's own file
+	if err != nil {
+		t.Fatal(err)
+	}
+	argv := strings.Split(strings.TrimSuffix(string(b), "\x00"), "\x00")
+	i := slices.Index(argv, settingsFlag)
+	if i < 0 || !strings.Contains(argv[i+1], "Own App Consent: The person owns the App "+recordedApp) || !strings.Contains(argv[i+1], "Lab Identity Provider:") ||
+		!strings.Contains(argv[len(argv)-1], "The person's own App "+recordedApp+" is on record") {
+		t.Errorf("the turn with a record ran with %q", argv)
+	}
+	id := argv[slices.Index(argv, sessionIDFlag)+1]
+	var seen state.State
+	if raw, err := os.ReadFile(startsFile); err != nil || json.Unmarshal(raw, &seen) != nil || !slices.ContainsFunc(seen.Starts, func(s state.Start) bool { //nolint:gosec // the test's own file
+		return s.Session == id && s.Name == browseStart && s.Mode == modeDontAsk && s.Dir == bin && s.By.Name == agentOne
+	}) {
+		t.Errorf("the state while the turn ran held no start record of it: %+v, %v", seen.Starts, err)
+	}
+	st, err := a.store.Read()
+	if err != nil || slices.ContainsFunc(st.Starts, func(s state.Start) bool { return s.Session == id }) {
+		t.Errorf("the start record outlived the turn: %+v, %v", st.Starts, err)
+	}
+	if evs, _ := a.store.Events(0, func(e state.Event) bool { return e.Verb == "browse.turn" }); len(evs) != 1 || !strings.HasPrefix(evs[0].Detail, id+" in "+bin+": Open https://") {
+		t.Errorf("browse.turn events = %+v", evs)
 	}
 }

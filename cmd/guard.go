@@ -302,7 +302,8 @@ Register it in ~/.claude/settings.json:
 				Project: os.Getenv("CLAUDE_PROJECT_DIR"), Reads: a.firstReads,
 				Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(),
 				ModelServer: a.modelServer, ConfigErr: cfgErr, Sandbox: sandboxed,
-				Started: func(session string) bool { _, ok := a.bypassStart(session); return ok }}
+				Started: func(session string) bool { _, ok := a.bypassStart(session); return ok },
+				Apps:    a.allowedApps}
 			if h.ConfigErr == nil {
 				h.Shell, h.Production, h.ContextHint = a.cfg.Shell, a.cfg.Kube.Production, a.cfg.Kube.Context("<installation>")
 				h.MaxLabs = func() int { return a.cfg.KindClusters(ramMiB()) }

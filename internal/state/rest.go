@@ -109,6 +109,7 @@ type (
 	plainRecord       Record
 	plainAlertOwner   AlertOwner
 	plainStart        Start
+	plainApp          App
 	plainArchive      Archive
 	plainDecline      Decline
 	plainReport       Report
@@ -166,6 +167,8 @@ func (v *AlertOwner) UnmarshalJSON(b []byte) error {
 func (v AlertOwner) MarshalJSON() ([]byte, error) { return encodeKeeping(plainAlertOwner(v), v.rest) }
 func (v *Start) UnmarshalJSON(b []byte) error     { return decodeKeeping(b, (*plainStart)(v), &v.rest) }
 func (v Start) MarshalJSON() ([]byte, error)      { return encodeKeeping(plainStart(v), v.rest) }
+func (v *App) UnmarshalJSON(b []byte) error       { return decodeKeeping(b, (*plainApp)(v), &v.rest) }
+func (v App) MarshalJSON() ([]byte, error)        { return encodeKeeping(plainApp(v), v.rest) }
 func (v *Archive) UnmarshalJSON(b []byte) error   { return decodeKeeping(b, (*plainArchive)(v), &v.rest) }
 func (v Archive) MarshalJSON() ([]byte, error)    { return encodeKeeping(plainArchive(v), v.rest) }
 func (v *Decline) UnmarshalJSON(b []byte) error   { return decodeKeeping(b, (*plainDecline)(v), &v.rest) }
