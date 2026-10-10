@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
+	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
@@ -77,6 +79,10 @@ func usageErr(format string, a ...any) error {
 // Main runs the command line and returns the process exit code. An error
 // without a message (a wrapped command's exit code) prints nothing.
 func Main() int {
+	if len(os.Args) > len(secret.AskpassArgs) && slices.Equal(os.Args[1:1+len(secret.AskpassArgs)], secret.AskpassArgs) {
+		// git's askpass helper: no configuration, nothing but the socket
+		return secret.AskpassMain(os.Args[1+len(secret.AskpassArgs):], os.Stdout, os.Stderr)
+	}
 	defer cpuProfile(os.Getenv("BEEKEEPER_CPUPROFILE"))()
 	err := New().Execute()
 	if err == nil {
