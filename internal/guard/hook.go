@@ -14,9 +14,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 )
 
-// start is where a command starts: start of line, after ; & | ( $( or
-// then/do/else.
-const start = `(?:^|[;&|(]\s*|\$\(\s*|\b(?:then|do|else)\s+)`
+// start is where a command starts: start of line (indented or not), after
+// ; & | ( $( or then/do/else.
+const start = `(?:^[ \t]*|[;&|(]\s*|\$\(\s*|\b(?:then|do|else)\s+)`
 
 // pos is a command position: a start with optional wrappers (timeout 600,
 // time, nice, env, VAR=val, command).
@@ -34,7 +34,7 @@ const mergePos = start + `(?:(?:` +
 	`|stdbuf(?:\s+(?:-[ioe]\s*\S+|--\S+))+` +
 	`|env(?:\s+(?:-[uC]\s*\S+|-\S+|\w+=\S*))*` +
 	`|setsid(?:\s+-\S+)*` +
-	`|nohup|time(?:\s+-p)?|command|exec|\w+=\S*` +
+	`|nohup|time(?:\s+-p)?|command|exec|eval|\w+=\S*` +
 	`)\s+)*`
 
 // devctlOwned is one of devctl's commands the gate runs (pr merge, release
@@ -66,8 +66,9 @@ var (
 	// anyOwned: one anywhere; gated: the gate ends the text before it.
 	anyOwned = regexp.MustCompile(devctlOwned)
 	gated    = regexp.MustCompile(`\bgate\s+(?:--(?:wait|limit)\s+\S+\s+)*--\s+$`)
-	// shellC: a shell's -c option up to the quote opening its command string.
-	shellC = regexp.MustCompile(`(?:^|[\s;&|(/])(?:ba|z|da|k)?sh\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*c[a-zA-Z]*\s+(['"])`)
+	// shellC: a shell's -c option, or eval, up to the quote opening its
+	// command string.
+	shellC = regexp.MustCompile(`(?:^|[\s;&|(/])(?:(?:ba|z|da|k)?sh\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*c[a-zA-Z]*|eval)\s+(['"])`)
 	lab    = regexp.MustCompile(`(?m)` + pos + `(agentlab\s+up\b|kind\s+create\s+cluster\b)`)
 	// labRuntime: a lab's creation or teardown, which takes the container
 	// runtime's socket the agent sandbox closes.
@@ -319,7 +320,10 @@ func (h Hook) decide(ev event) []byte {
 	cmd, gated := h.gate(cmd, bg)
 	if fixed, ok := h.hiddenMerges(cmd, bg); ok {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused: a devctl pr merge, release promote, pr wait, release wait or rollout wait " +
-			"inside a shell's -c string runs outside the gate. Run it as its own command, or with the gate written in:\n" + fixed})
+			"inside a shell's -c or eval string runs outside the gate. Run it as its own command, or with the gate written in:\n" + fixed})
+	}
+	if r := h.ungatedRefusal(cmd, cwd); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	if wrapped.MatchString(cmd) {
 		return h.rewrite(ev.ToolInput, cmd, gated, bg)
@@ -361,18 +365,59 @@ func (h Hook) decide(ev event) []byte {
 
 // gate puts "beekeeper gate --" before every blocking devctl command at a
 // command position, behind its prefix commands, so that only the devctl
-// invocation is wrapped and pipelines and lists run as written.
+// invocation is wrapped and pipelines and lists run as written. A
+// here-document a shell reads as its program is a command line too, gated in
+// place; one that is content (a file written, an issue body sent) stays as
+// written.
 func (h Hook) gate(cmd string, bg bool) (string, bool) {
+	content := contentHeredocs(cmd)
 	var at []int
 	for _, m := range owned.FindAllStringSubmatchIndex(cmd, -1) {
-		at = append(at, m[2])
+		if !slices.ContainsFunc(content, func(r [2]int) bool { return m[2] >= r[0] && m[2] < r[1] }) {
+			at = append(at, m[2])
+		}
 	}
 	return h.insertGate(cmd, at, bg), len(at) > 0
 }
 
+// contentHeredocs returns the bodies of the command line's here-documents no
+// local shell reads as its program: the command the operator is on is no
+// shell, and neither is a stage after it in its pipeline.
+func contentHeredocs(cmd string) [][2]int {
+	sc := scanShell(cmd)
+	segs := sc.segments()
+	var out [][2]int
+	for _, hd := range sc.heredocs {
+		if !shellReads(sc, segs, hd.op) {
+			out = append(out, [2]int{hd.start, hd.end})
+		}
+	}
+	return out
+}
+
+// shellReads reports whether a local shell reads the here-document whose
+// operator is at op as its program.
+func shellReads(sc shellScan, segs []segment, op int) bool {
+	for i, sg := range segs {
+		if op < sg.start || op >= sg.end {
+			continue
+		}
+		for j := i; j < len(segs); j++ {
+			if words := shellWords(sc.plain[segs[j].start:segs[j].end]); runsLocalShell(words) {
+				return true
+			}
+			if segs[j].after != "|" {
+				break
+			}
+		}
+		return false
+	}
+	return false
+}
+
 // hiddenMerges returns cmd with the gate before each blocking devctl command
-// the gate rewrite left inside a sh, bash or zsh -c string, and whether there
-// was one.
+// the gate rewrite left inside a sh, bash or zsh -c string or an eval string,
+// and whether there was one.
 // The hook refuses such a command rather than rewriting a quoted string.
 func (h Hook) hiddenMerges(cmd string, bg bool) (string, bool) {
 	var at []int

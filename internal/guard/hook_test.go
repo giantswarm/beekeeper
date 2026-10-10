@@ -222,6 +222,12 @@ func TestHookGatesMerges(t *testing.T) {
 		{"devctl pr wait o/r 1", self + " gate --wait 30m --limit 0 -- devctl pr wait o/r 1", true},
 		// A merge on a line of its own in a multi-line -c string is gated in place.
 		{"bash -c '\ntrap restore EXIT\ndevctl pr merge o/r 7\n'", "bash -c '\ntrap restore EXIT\n" + g + "devctl pr merge o/r 7\n'", false},
+		// An indented line is a command position too.
+		{"for pr in 1 2\ndo\n  echo $pr\n  devctl pr merge o/r $pr\ndone", "for pr in 1 2\ndo\n  echo $pr\n  " + g + "devctl pr merge o/r $pr\ndone", false},
+		// A here-document a shell reads is a command line: gated in place, like the -c string.
+		{"bash <<'EOF'\nset -e\n  devctl pr merge o/r 7\nEOF", "bash <<'EOF'\nset -e\n  " + g + "devctl pr merge o/r 7\nEOF", false},
+		{"cat <<'EOF' | sh\ndevctl release promote o/r\nEOF", "cat <<'EOF' | sh\n" + g + "devctl release promote o/r\nEOF", false},
+		{"eval devctl pr merge o/r 7", "eval " + g + "devctl pr merge o/r 7", false},
 	} {
 		d := decide(t, h, t.TempDir(), c.cmd, map[string]any{backgroundKey: c.bg})
 		if d == nil || d.UpdatedInput["command"] != c.want {
@@ -233,9 +239,87 @@ func TestHookGatesMerges(t *testing.T) {
 		}
 	}
 	for _, cmd := range []string{"devctl pr view o/r 1", "devctl release list o/r", "devctl version", "echo devctl pr merge o/r 1", g + "devctl pr merge o/r 1",
-		"flock x.lock " + g + "~/bin/devctl pr merge o/r 1", "sed -i 's/gs-pr-merge/devctl pr merge/g' f", "pgrep -f 'devctl pr merge'"} {
+		"flock x.lock " + g + "~/bin/devctl pr merge o/r 1", "sed -i 's/gs-pr-merge/devctl pr merge/g' f", "pgrep -f 'devctl pr merge'",
+		// A here-document that is content stays as written: an issue body, a file.
+		"gh issue create --repo o/r --title t --body-file - <<'EOF'\nThe merge failed:\n\n    devctl pr merge o/r 7\nEOF",
+		"cat <<'EOF' >| notes.md\ndevctl pr merge o/r 7\nEOF"} {
 		if d := decide(t, h, t.TempDir(), cmd, nil); d != nil {
 			t.Errorf("%q is rewritten: %v", cmd, d.UpdatedInput["command"])
+		}
+	}
+}
+
+// TestHookRefusesScriptMerges: a merge the call runs from a script file, from
+// a here-document or input an interpreter reads, or from an interpreter's
+// code is refused, the refusal naming the place and the line; one a shell
+// reads from a here-document is gated in place (TestHookGatesMerges).
+func TestHookRefusesScriptMerges(t *testing.T) {
+	h := Hook{Self: self, Shell: testShell, Clusters: func() []string { return nil }, Leases: func() []lease.Holder { return nil }}
+	g := self + " gate -- "
+	dir := t.TempDir()
+	write := func(name, content string, mode os.FileMode) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("merge.sh", "#!/usr/bin/env bash\nset -euo pipefail\n# devctl pr merge o/r 1 is run below\nfor pr in 7 8; do\n  devctl pr merge o/r $pr | tee \"m-$pr.json\"\ndone\n", 0o755)
+	write("outer.sh", "echo start\nbash merge.sh\n", 0o644)
+	write("gated.sh", "set -e\n"+g+"devctl pr merge o/r 7\n", 0o644)
+	write("mention.sh", "echo 'run devctl pr merge o/r 7 yourself'\ngh pr view 7 --repo o/r\n", 0o644)
+	write("merge.py", "#!/usr/bin/env python3\nimport subprocess\nsubprocess.run([\"devctl\", \"pr\", \"merge\", \"o/r\", \"7\"], check=True)\n", 0o755)
+	write("promote.sh", "devctl release promote o/r\n", 0o644)
+	write("heredoc.sh", "python3 - <<'EOF'\nimport os\nos.system('devctl pr merge o/r 7')\nEOF\n", 0o644)
+	script := filepath.Join(dir, "merge.sh")
+	const line5 = "line 5: devctl pr merge o/r $pr | tee \"m-$pr.json\""
+	for _, c := range []struct {
+		cmd  string
+		want []string
+	}{
+		// A script file, run by a shell, by its path, sourced, through a variable or another script.
+		{"bash merge.sh", []string{"a devctl pr merge in the script " + script, line5, "or with the gate written in: " + g + "devctl pr merge o/r $pr | tee \"m-$pr.json\""}},
+		{"zsh -x ./merge.sh 2>&1 | tail -3", []string{"the script " + script, line5}},
+		{"./merge.sh", []string{"the script " + script, line5}},
+		{"cd " + dir + " && source merge.sh", []string{"the script " + script, line5}},
+		{"S=" + dir + "; bash \"$S/merge.sh\"", []string{"the script " + script, line5}},
+		{"nohup bash outer.sh >| out.log 2>&1 &", []string{"the script " + script, line5}},
+		{"bash promote.sh", []string{"a devctl release promote in the script " + filepath.Join(dir, "promote.sh"), "line 1: devctl release promote o/r"}},
+		{"bash heredoc.sh", []string{"a devctl pr merge in the here-document python3 reads", "line 2: os.system('devctl pr merge o/r 7')", "os.system('" + g + "devctl pr merge o/r 7')"}},
+		// One written and run in the same call.
+		{"cat <<'EOF' >| run.sh\ndevctl pr merge o/r 7\nEOF\nbash run.sh", []string{"this call, which runs run.sh (not readable before the call)", "line 2: devctl pr merge o/r 7"}},
+		// An interpreter's script, by name or by its shebang.
+		{"python3 merge.py", []string{"a devctl pr merge in the script " + filepath.Join(dir, "merge.py"), "line 3: subprocess.run([\"devctl\", \"pr\", \"merge\", \"o/r\", \"7\"], check=True)"}},
+		{"./merge.py", []string{"the script " + filepath.Join(dir, "merge.py"), "line 3:"}},
+		// A here-document or input an interpreter reads.
+		{"python3 - <<'EOF'\nimport subprocess\nsubprocess.run([\"devctl\", \"pr\", \"merge\", \"o/r\", \"7\"])\nEOF", []string{"the here-document python3 reads", "line 2: subprocess.run(["}},
+		{"echo 'devctl pr merge o/r 7' | bash", []string{"a devctl pr merge in the input bash reads", "line 1: echo 'devctl pr merge o/r 7'"}},
+		{"cat merge.sh | sh", []string{"the script " + script, line5}},
+		{"bash <<< 'devctl pr merge o/r 7'", []string{"the here-string bash reads", "line 1: devctl pr merge o/r 7", "or with the gate written in: " + g + "devctl pr merge o/r 7"}},
+		{"sh < merge.sh", []string{"the script " + script, line5}},
+		// An interpreter line.
+		{"python3 -c 'import subprocess; subprocess.run([\"devctl\", \"pr\", \"merge\", \"o/r\", \"7\"])'", []string{"a devctl pr merge in python3's code (-c)", "line 1: import subprocess; subprocess.run([\"devctl\", \"pr\", \"merge\", \"o/r\", \"7\"])", "Run it as its own Bash command line."}},
+		{"node -e 'require(\"child_process\").execSync(\"devctl pr merge o/r 7\")'", []string{"in node's code (-e)", "or with the gate written in: require(\"child_process\").execSync(\"" + g + "devctl pr merge o/r 7\")"}},
+		{"perl -e 'system(\"devctl release promote o/r\")'", []string{"a devctl release promote in perl's code (-e)"}},
+		{"ruby -e 'system(\"devctl pr wait o/r 7\")'", []string{"a devctl pr wait in ruby's code (-e)"}},
+	} {
+		d := decide(t, h, dir, c.cmd, nil)
+		if d == nil || d.PermissionDecision != decisionDeny {
+			t.Errorf("%q: want a refusal, got %+v", c.cmd, d)
+			continue
+		}
+		for _, w := range c.want {
+			if !strings.Contains(d.Reason, w) {
+				t.Errorf("%q: reason lacks %q:\n%s", c.cmd, w, d.Reason)
+			}
+		}
+	}
+	for _, cmd := range []string{
+		"bash gated.sh", "bash mention.sh", "./mention.sh", "cat merge.sh", "grep -n merge merge.sh", "bash /nowhere/merge.sh",
+		"python3 -c 'print(\"devctl pr view o/r 7\")'", "python3 -m pytest tests/", "bash -n merge.sh && echo ok | bash",
+		g + "devctl pr merge o/r 7 | tee m.json | ./mention.sh record o/r#7",
+	} {
+		if d := decide(t, h, dir, cmd, nil); d != nil && d.PermissionDecision == decisionDeny {
+			t.Errorf("%q is refused: %s", cmd, d.Reason)
 		}
 	}
 }
@@ -301,6 +385,7 @@ func TestHookRefusesHiddenMerges(t *testing.T) {
 		{`timeout 600 sh -c "devctl pr merge o/r 7"`, `timeout 600 sh -c "` + self + ` gate --wait 30m --limit 0 -- devctl pr merge o/r 7"`, true},
 		{self + ` run -- zsh -c 'devctl pr merge o/r 7'`, self + ` run -- zsh -c '` + g + `devctl pr merge o/r 7'`, false},
 		{`bash -c 'devctl pr wait o/r 7'`, `bash -c '` + g + `devctl pr wait o/r 7'`, false},
+		{`eval "devctl pr merge o/r 7"`, `eval "` + g + `devctl pr merge o/r 7"`, false},
 	} {
 		d := decide(t, h, t.TempDir(), c.cmd, map[string]any{backgroundKey: c.bg})
 		if d == nil || d.PermissionDecision != decisionDeny || !strings.HasSuffix(d.Reason, "\n"+c.fixed) {

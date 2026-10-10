@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A `devctl pr merge` (or `release promote`, `pr wait`, `release wait`, `rollout wait`) the call runs from a script file no longer bypasses the merge gate: the PreToolUse hook reads the script a shell runs (`bash merge.sh`), one run by its path (`./merge.sh`), a sourced one and one an interpreter runs (`python3 merge.py`), relative to the call's working directory and into the scripts it runs in turn, and refuses the call naming the script and the line, with the line's gated form where the gate has a place; a script the call writes before it runs it is judged by the call's own text. The same refusal meets a merge in an interpreter's code (`python3 -c`, `node -e`, `perl -e`, …), in the program a shell or an interpreter reads from its input (`echo '…' | bash`, `bash <<< '…'`, `sh < merge.sh`, `python3 - <<'EOF'`) and in an `eval` string, as it did one in a `-c` string. A merge in a here-document a shell reads (`bash <<'EOF'`, `cat <<'EOF' | sh`) and one on an indented line are gated in place, and a here-document that is content (a file written, an issue body sent) is left as written, the gate no longer put into it ([#874](https://github.com/giantswarm/beekeeper/issues/874)).
+
 ### Changed
 
 - `beekeeper app allow` records only an App the organisation declares: it reads the App's manifest from the repository the config's `apps.repo` names, at `apps.manifest` (`{name}` for the App's name), on its default branch, refuses an App no manifest declares under its name, and takes the record's callback hosts from the manifest's `callback_urls` (`--callback` is gone); the record, `app list`, the hook's allow and the browse report name the manifest and the commit it was read at ([#655](https://github.com/giantswarm/beekeeper/issues/655)).

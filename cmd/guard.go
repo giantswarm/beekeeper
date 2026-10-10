@@ -197,9 +197,14 @@ background one "gate --wait 30m --limit 0 --"), the timeout raised the same way;
 beekeeper lanes. That is behind prefix commands (flock <lock>, nohup, setsid,
 stdbuf, ionice, chrt, nice, timeout, env, VAR=value) and in any segment of a
 pipeline or list, devctl by name or path, wrapping only the devctl
-invocation. A merge inside a sh, bash or zsh -c string the rewrite cannot
-reach is refused, naming the command with the gate written in. Other devctl
-commands pass untouched.
+invocation; a here-document a shell reads is gated in place too. A merge the
+rewrite cannot reach is refused, naming the place and the line and, where it
+has a place, the command with the gate written in: one inside a sh, bash or
+zsh -c string or an eval string, in a script file the call runs (by a shell,
+by its path, sourced, or by an interpreter such as python3), in an
+interpreter's code (python3 -c, node -e, perl -e, …), or in the program a
+shell or an interpreter reads from its input (a pipe, a here-string, a
+here-document, a redirected file). Other devctl commands pass untouched.
 A SendMessage to a desktop session id (local_…) whose session has a
 running CLI goes to that CLI by its name instead: the desktop would start a
 second CLI of the session beside a headless turn (an agents start's first
