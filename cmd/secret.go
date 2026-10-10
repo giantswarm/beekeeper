@@ -35,7 +35,7 @@ var secretRead secret.SecretReader
 func (a *app) secretCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "secret",
-		Short: "Credential operations that never return a value: compare, fingerprint, copy, set, rotate, unset; reveal answers configuration",
+		Short: "Credential operations that never return a value: compare, fingerprint, copy, set, rotate, unset; reveal answers configuration; store is the person's",
 		Long: `beekeeper is the only process that reads, creates, encrypts and decrypts
 secrets; an agent asks it with beekeeper secret. sops and op run in
 beekeeper's process, a value stays in its memory for the one operation and
@@ -149,7 +149,7 @@ anything is not equal.`,
 			return vaultExit(run(cmd, args))
 		}
 	}
-	c.AddCommand(a.secretUnlockCmd(), a.secretLockCmd(), a.secretStatusCmd())
+	c.AddCommand(a.secretUnlockCmd(), a.secretLockCmd(), a.secretStatusCmd(), a.secretStoreCmd())
 	return c
 }
 

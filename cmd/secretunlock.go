@@ -20,16 +20,19 @@ import (
 // Code's, omp's, the sandbox's.
 var agentMarkers = []string{"CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_ENTRYPOINT", omp.EnvAgent, sandbox.Env, sandbox.Brokered}
 
+// isTerminal reports whether fd is a terminal; tests replace it.
+var isTerminal = func(fd int) bool { return term.IsTerminal(fd) }
+
 // personOnly refuses a command an agent session runs, or one without a
-// terminal: the person's own vault unlock.
+// terminal: the person's own vault unlock and store.
 func personOnly(what string) error {
 	for _, k := range agentMarkers {
 		if os.Getenv(k) != "" {
-			return refused("%s is the person's, in their own terminal: no agent session unlocks the vault (%s is set)", what, k)
+			return refused("%s is the person's, in their own terminal: no agent session runs it (%s is set)", what, k)
 		}
 	}
-	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stderr.Fd())) {
-		return refused("%s needs the person's terminal: op asks for the account password there", what)
+	if !isTerminal(int(os.Stdin.Fd())) || !isTerminal(int(os.Stderr.Fd())) {
+		return refused("%s needs the person's terminal: nothing scripts it", what)
 	}
 	return nil
 }

@@ -49,6 +49,9 @@ type leak struct {
 	render bool
 	// unlock: a sign-in to or an unlock of a vault, which no agent runs.
 	unlock bool
+	// person: the person's own store into the vault, whose value (the
+	// clipboard, a download) no agent handles.
+	person bool
 	// file: a read of a file that holds secret values, which a jq or yq
 	// filter that strips its credential keys makes safe.
 	file string
@@ -67,6 +70,12 @@ func (l leak) reason() string {
 	at := strings.Join(strings.Fields(l.at), " ")
 	if len(at) > 200 {
 		at = at[:200] + "…"
+	}
+	if l.person {
+		return "Refused: `" + at + "` (" + l.what + ") is the person's, run in their own terminal: the value it takes in (the " +
+			"clipboard, a downloaded file) never passes through an agent session. Ask the person for it (a one-line question to the " +
+			"supervisor: `beekeeper secret store op://<vault>/<item>/<field>` or `--github-app <item>`), then run the operations " +
+			"on the stored field yourself:\n" + secretOps
 	}
 	if l.unlock {
 		return "Refused: `" + at + "` (" + l.what + ") signs in to or unlocks a vault from an agent session. No agent session holds " +
@@ -384,6 +393,8 @@ func (g secretGuard) toolLeak(words []string) *leak {
 		return &leak{what: "op " + strings.Join(sub[:min(len(sub), 2)], " ") + ", a vault sign-in", never: true, unlock: true}
 	case name == selfCmd && slices.Contains(sub, "secret") && slices.Contains(sub, "unlock"):
 		return &leak{what: "beekeeper secret unlock, the person's own unlock", never: true, unlock: true}
+	case name == selfCmd && secretOp(sub) == "store":
+		return &leak{what: "beekeeper secret store, the person's own store into the vault", never: true, person: true}
 	case name == sopsCmd:
 		return &leak{what: "sops, which runs only in beekeeper", safe: sopsSafe, never: true}
 	case name == "op":
@@ -413,6 +424,15 @@ func (g secretGuard) toolLeak(words []string) *leak {
 		return &leak{what: "kustomize build with plugins that decrypt", safe: renderSafe, render: true}
 	}
 	return nil
+}
+
+// secretOp is the beekeeper secret operation among the words sub, "" for
+// none.
+func secretOp(sub []string) string {
+	if i := slices.Index(sub, "secret"); i >= 0 && i+1 < len(sub) {
+		return sub[i+1]
+	}
+	return ""
 }
 
 // secretFile reports whether a file name may hold secret values in
