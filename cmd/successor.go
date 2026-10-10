@@ -120,7 +120,7 @@ func (a *app) startSuccessor(ctx context.Context, rl role, from, by state.Party,
 	// a desktop turn's does: its role turn soon runs headless and may not
 	// end before the next relay, and the person sees the role's holder only
 	// in the desktop's sidebar.
-	_, err = a.startAgent(ctx, agentStart{id: id, by: &by, name: to.Name, brief: rl.successorBrief(to.Name, fromLabel),
+	_, err = a.startAgent(ctx, agentStart{id: id, by: &by, name: to.Name, role: rl.name, brief: rl.successorBrief(to.Name, fromLabel),
 		task: fmt.Sprintf("%s as %s", rl.duty, to.Name), dir: dir, model: model, desktop: true, headless: true})
 	if err != nil {
 		a.withdrawRelay(rl, to, by)

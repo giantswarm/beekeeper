@@ -343,7 +343,7 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 	}
 	p := h.prompt()
 	a.say("prompt: %d bytes: %s", len(p), h.summary())
-	sa, err := a.startAgent(ctx, agentStart{name: ag.Name, brief: workerPrompt(p), task: h.task(), dir: h.dir, model: h.model, replaces: &ag.Party})
+	sa, err := a.startAgent(ctx, agentStart{name: ag.Name, role: workerRole, brief: workerPrompt(p), task: h.task(), dir: h.dir, model: h.model, replaces: &ag.Party})
 	if err != nil {
 		return err
 	}
@@ -580,8 +580,12 @@ func (a *app) resumeForNote(ctx context.Context, h handover) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	argv, err := a.profiledWakeArgv(ctx, bin, w, a.noteRequest(h))
+	if err != nil {
+		return "", err
+	}
 	unit := wakeUnit(w.id)
-	if err := launch(unit, w.dir, a.explicitConfig(), nil, wakeArgv(bin, w, a.noteRequest(h))); err != nil {
+	if err := launch(unit, w.dir, a.explicitConfig(), nil, argv); err != nil {
 		return "", err
 	}
 	return unit, nil

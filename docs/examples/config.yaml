@@ -185,6 +185,7 @@ supervisor:                 # what handover --prompt tells the successor supervi
   relayGrace: 30m           # still over relayAt this long after RELAY DUE, the standby watch relays the supervisor itself
   restartGrace: 30s         # a CLI back within this of first seen gone is a restart; past it, SUPERVISOR GONE and a fresh successor
   dir: ~/src/desk            # the folder a successor starts in (default: where its predecessor's desktop session started, never its worktree)
+  profile: ""                # the tool profile (agents.profiles or minimal) of its successors and its holder's headless wakes; empty: none
 guide:                      # the guide's role: what guide handover --prompt tells its successor, and its relay
   person: Ada               # guide queue and guide watch show only the notes for this person (any case); unset, every --for note
   waitingTTL: 2h            # a session that waits on the person and stopped longer ago folds into one line (guide queue --full lists it); 0: never
@@ -203,6 +204,13 @@ agents:                     # the hand-over of registered agents
   archiveAgreement: ""      # where the person agreed that finished workers' desktop sessions are archived without asking, never their own (quoted to the steward, which confirms each with agents archivable); empty: no steward is asked to archive
   dir: ~/src/desk           # every agent beekeeper starts runs here (start, handover, a role's successor); empty: the caller's folder
   roots: [~/src/worktrees]  # with dir set, a --dir is refused unless it is dir or under one of these
+  profile: desk-worker      # the tool profile of the workers agents start creates: their task runs as a headless turn under it; empty: none, the task runs as a desktop turn with the person's whole tool surface
+  profiles:                 # the desk's tool profiles; beekeeper ships minimal (its tools below, plugins [beekeeper], mcpServers [claude-in-chrome]), which one named minimal here replaces
+    desk-worker:
+      tools: [Bash, Read, Edit, Write, Skill, ToolSearch, SendMessage, ListAgents, TaskStop, WebFetch, WebSearch]   # built-in tools kept (--tools); empty: Claude Code's default set
+      plugins: [beekeeper, desk-plugin]   # plugins kept by name or id; every other installed plugin, of any marketplace, is disabled; empty: all stay
+      mcpServers: [claude-in-chrome, board]   # MCP servers kept (allowedMcpServers), claude.ai connectors included; empty: all stay
+      deny: []              # further permission rules refused (permissions.deny); a bare tool or mcp__<server> name takes it off the tool list
   autoResume: false         # the watch resumes a parked agent (agents park --on) with what settled its note or pull request; false: it says AGENT RESUMABLE, agents resume does it by hand
   shell:                    # the agent shell's prelude, written by beekeeper hook sessionstart before each Bash command
     unalias: [grep, find, ls, cp, mv, rm]   # aliases and shell functions removed, so each runs the tool on PATH; []: none

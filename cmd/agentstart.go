@@ -102,7 +102,7 @@ var desktopInput = func(ctx context.Context) (func() time.Time, error) { return 
 
 func (a *app) agentStartCmd() *cobra.Command {
 	var model, dir, task, harness string
-	var desktop, builds, force bool
+	var desktop, builds, force, dryRun bool
 	c := &cobra.Command{
 		Use:   agentStartName + " <name> <brief file>",
 		Short: "Start an agent session in bypass from the command line and import it into the desktop",
@@ -148,6 +148,15 @@ the session, at its cap with no CLI of beekeeper's to end or the person
 still typing, so the session has no row, or no steward took the send) is
 the session resumed headless, as agents wake does, and start says why; the
 reopen after that turn imports a session the desktop did not.
+
+Under a worker profile (agents.profile: one of agents.profiles, or the
+built-in minimal) no seed turn runs: the task runs as a headless turn under
+the profile (--tools and a --settings file of its plugins, MCP servers and
+deny rules, ranked over the person's settings for that process only), the
+desktop imports the session beside it, and start says "its task runs as a
+headless turn under profile <name>". The desktop spawns its own CLI for a
+desktop turn, which no profile reaches. --dry-run prints the profile
+applied and the first turn's command line and starts nothing.
 
 A start that delivers no turn of the task fails: it exits non-zero, logs
 "task not delivered" with the reason, and the roster's REACHABLE (and the
@@ -206,6 +215,9 @@ is involved and no import happens.`,
 			if task = strings.TrimSpace(task); task == "" {
 				task = briefTask(brief)
 			}
+			if dryRun && harness != omp.Harness {
+				return a.dryRunStart(cmd.Context(), agentStart{name: name, role: workerRole, dir: dir, model: model})
+			}
 			// The start gate: a verdict without room refuses the start
 			// before anything is recorded; --force goes through on record.
 			over, err := a.startGate(cmd.Context(), builds, force)
@@ -226,7 +238,7 @@ is involved and no import happens.`,
 			}
 			// Every worker gets the shipped rules ahead of its task, whatever
 			// its harness.
-			sp := agentStart{name: name, brief: workerPrompt(taskPrompt(brief)), task: task, dir: dir, model: model, desktop: desktop}
+			sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief)), task: task, dir: dir, model: model, desktop: desktop}
 			switch harness {
 			case omp.Harness:
 				return a.startOmpAgent(cmd.Context(), sp)
@@ -265,12 +277,16 @@ is involved and no import happens.`,
 	c.Flags().BoolVar(&desktop, "desktop", false, "the task needs desktop turns: import it past the desktop window's focus, as agents desktop does")
 	c.Flags().BoolVar(&builds, buildsFlag, false, "the task builds, tests or lints: the start waits for a free build slot")
 	c.Flags().BoolVar(&force, "force", false, "start although capacity says no start; the event log records the verdict overridden")
+	c.Flags().BoolVar(&dryRun, "dry-run", false, "print how the session would start (the profile applied and its first turn's command line) and start nothing")
 	return c
 }
 
 // agentStart is a session `agents start` or `agents handover` starts.
 type agentStart struct {
 	name, brief, dir, model string
+	// role is the role whose profile the session gets (workerRole, or a
+	// relayed role's name); empty: none.
+	role string
 	// task is the roster's task unless the entry taken over holds one.
 	task string
 	// replaces is the running session a hand-over ends: its roster entry,
@@ -343,6 +359,17 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if err != nil {
 		return startedAgent{}, err
 	}
+	// A profiled session's task runs as a headless turn under its profile:
+	// the desktop spawns its own CLI for a desktop turn, with the person's
+	// whole tool surface, and no seed turn is needed before it.
+	profile := profileName(a.cfg, sp.role)
+	var profiled []string
+	if profile != "" {
+		if profiled, err = a.profileFlags(ctx, profile); err != nil {
+			return startedAgent{}, err
+		}
+		sp.headless = true
+	}
 	var by state.Party
 	if sp.by != nil {
 		by = *sp.by
@@ -395,7 +422,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if err != nil {
 		return startedAgent{}, err
 	}
-	if err := launch(unit, dir, a.explicitConfig(), reopenStopPost(self, id), headlessStartArgv(bin, id, sp.name, sp.model, sp.brief)); err != nil {
+	if err := launch(unit, dir, a.explicitConfig(), reopenStopPost(self, id), headlessStartArgv(bin, id, sp.name, sp.model, sp.brief, profiled...)); err != nil {
 		return startedAgent{}, fmt.Errorf("starting %s: %w (the start stays recorded; beekeeper agents remove %q takes it off the roster)", sp.name, err, sp.name)
 	}
 	if err := awaitReply(ctx, a.cfg.Claude.ProjectsDir, id, func() bool { return unitEnded(ctx, unit) }, replyQuiet, replyWait); err != nil {
@@ -407,6 +434,12 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	}
 	sa := startedAgent{id: id, unit: unit, dir: dir, task: reg.task}
 	d.urgent = a.asksDesktop(id)
+	if profile != "" {
+		sa.turn = profiledTurn(profile)
+		_ = a.store.Log(event(by, "agents.start", "%s: %s", sp.name, sa.turn))
+		// its row shows from its first turn, as a desktop turn's does
+		d.urgent = func() bool { return true }
+	}
 	if sa.deferred = d.await(ctx, importAwayWait, nil); sa.deferred != nil {
 		return sa, nil
 	}
@@ -1262,10 +1295,42 @@ func briefTask(brief string) string {
 }
 
 // headlessStartArgv is the first turn of a headless start: in bypass with the
-// CLI's own Chrome connection, as every bypass wake turn (wakeArgv). The bypass
-// is the turn's scope, so its Chrome tools are not narrowed to browse's.
-func headlessStartArgv(bin, id, name, model, brief string) []string {
-	return agentArgv(bin, id, name, model, brief, chromeFlag)
+// CLI's own Chrome connection, as every bypass wake turn (wakeArgv), and the
+// session's profile flags. The bypass is the turn's scope, so its Chrome tools
+// are not narrowed to browse's.
+func headlessStartArgv(bin, id, name, model, brief string, profile ...string) []string {
+	return agentArgv(bin, id, name, model, brief, append([]string{chromeFlag}, profile...)...)
+}
+
+// profiledTurn says how a profiled start runs its task.
+func profiledTurn(profile string) string {
+	return "its task runs as a headless turn under profile " + profile
+}
+
+// dryRunStart prints how agents start would start sp, and starts nothing:
+// the profile applied and the first turn's command line, the prompt left
+// out.
+func (a *app) dryRunStart(ctx context.Context, sp agentStart) error {
+	dir, err := a.agentDir(sp.dir)
+	if err != nil {
+		return err
+	}
+	const id = "<session id>"
+	profile := profileName(a.cfg, sp.role)
+	if profile == "" {
+		argv := agentArgv("claude", id, sp.name, sp.model, "<rules and brief>\n\n"+seedNote, toolsFlag, "", strictMCPConfigFlag)
+		_, err = fmt.Fprintf(a.out, "dry run: %s would start in %s under no profile: a seed turn without tools, then its task as a desktop turn with the person's whole tool surface\nseed turn: %s\n",
+			sp.name, dir, strings.Join(argv, " "))
+		return err
+	}
+	flags, err := a.profileFlags(ctx, profile)
+	if err != nil {
+		return err
+	}
+	argv := headlessStartArgv("claude", id, sp.name, sp.model, "<rules and brief>", flags...)
+	_, err = fmt.Fprintf(a.out, "dry run: %s would start in %s under profile %s: %s, no seed turn\nfirst turn: %s\n",
+		sp.name, dir, profile, profiledTurn(profile), strings.Join(argv, " "))
+	return err
 }
 
 // agentArgv is the started session's command line: one headless turn in

@@ -567,6 +567,71 @@ type Agents struct {
 	// --dir: the worktrees of the desk's repositories. Any other folder is
 	// refused while Dir is set.
 	Roots []string `yaml:"roots"`
+	// Profile names the tool profile of the workers agents start creates
+	// (Profiles, or the built-in minimal); empty: none, a worker gets the
+	// person's whole tool surface and its task runs as a desktop turn.
+	Profile string `yaml:"profile"`
+	// Profiles are the desk's tool profiles by name; one named minimal
+	// replaces the built-in one.
+	Profiles map[string]Profile `yaml:"profiles"`
+}
+
+// Profile is the tool surface of a session beekeeper starts: the headless
+// turns it launches get it on their command line (--tools, and --settings,
+// whose flag settings Claude Code ranks over the person's user and project
+// settings for that process only), never through the person's settings
+// files.
+type Profile struct {
+	// Tools are the built-in tools kept (--tools); every other one is off.
+	// Empty: Claude Code's default set.
+	Tools []string `yaml:"tools"`
+	// Deny are further permission rules the session is refused
+	// (permissions.deny); a bare tool or mcp__<server> name takes it off the
+	// tool list.
+	Deny []string `yaml:"deny"`
+	// Plugins are the plugins kept, by name (beekeeper) or id
+	// (beekeeper@beekeeper); every other installed plugin, of any
+	// marketplace, is disabled (enabledPlugins), and its skills, agents,
+	// MCP servers and hooks with it. Empty: every plugin stays.
+	Plugins []string `yaml:"plugins"`
+	// MCPServers are the MCP servers kept, by name (allowedMcpServers);
+	// every other one, claude.ai connectors included, is off. Empty: every
+	// server stays.
+	MCPServers []string `yaml:"mcpServers"`
+}
+
+// profileNamePattern is a profile's name, which names its settings file too.
+var profileNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// MinimalProfile is the name of the profile beekeeper ships.
+const MinimalProfile = "minimal"
+
+// minimalProfile keeps what a worker uses: the shell, files, skills, tool
+// search, messages to other sessions and the browser connector; beekeeper's
+// own plugin. Artifacts, the browser pane, questions to the person,
+// workflows, subagents, the desktop-app and claude.ai connectors and every
+// other plugin are off.
+var minimalProfile = Profile{
+	Tools: []string{"Bash", "Read", "Edit", "Write", "Skill", "ToolSearch", "SendMessage", "ListAgents",
+		"TaskStop", "WebFetch", "WebSearch"},
+	Plugins:    []string{"beekeeper"},
+	MCPServers: []string{"claude-in-chrome"},
+}
+
+// ProfileFor resolves a profile name: the desk's profile of that name, else
+// the built-in minimal. ok is false for an empty name (no profile) or one
+// neither defines.
+func (a Agents) ProfileFor(name string) (Profile, bool) {
+	if name == "" {
+		return Profile{}, false
+	}
+	if p, ok := a.Profiles[name]; ok {
+		return p, true
+	}
+	if name == MinimalProfile {
+		return minimalProfile, true
+	}
+	return Profile{}, false
 }
 
 // Capacity is the supervisor's target of busy agents and the memory guards
@@ -780,6 +845,10 @@ type Role struct {
 	// worktree the desktop made for it, whose branch the desktop cannot
 	// check out a second time).
 	Dir string `yaml:"dir"`
+	// Profile names the tool profile (agents.profiles, or the built-in
+	// minimal) of the role's successors and its holder's headless wakes;
+	// empty: none, they get the person's whole tool surface.
+	Profile string `yaml:"profile"`
 }
 
 // Lane is a set of repositories whose merges roll the same components of an
@@ -1789,6 +1858,16 @@ func (r *Reporter) defaults(home, person string) {
 }
 
 func (c *Config) validate() error {
+	for name := range c.Agents.Profiles {
+		if !profileNamePattern.MatchString(name) {
+			return fmt.Errorf("agents.profiles: %q is no profile name (letters, digits, - and _)", name)
+		}
+	}
+	for key, name := range map[string]string{"agents.profile": c.Agents.Profile, "supervisor.profile": c.Supervisor.Profile, "guide.profile": c.Guide.Profile} {
+		if _, ok := c.Agents.ProfileFor(name); name != "" && !ok {
+			return fmt.Errorf("%s: %q is no profile: name one of agents.profiles or %s", key, name, MinimalProfile)
+		}
+	}
 	if g := c.Agents.Shell.Globs; g != "" && g != GlobsLiteral && g != GlobsShell {
 		return fmt.Errorf("agents.shell.globs: %q: want %s or %s", g, GlobsLiteral, GlobsShell)
 	}

@@ -142,6 +142,9 @@ func TestLoadRejects(t *testing.T) {
 		"flapping at once":           "alerts: {flap: {changes: 1}}",
 		"bad duration":               "grantTTL: soon",
 		"skill and file":             "supervisor: {skill: supervise, instructions: /x.md}",
+		"unknown worker profile":     "agents: {profile: lean}",
+		"profile name as a path":     "agents: {profiles: {../x: {tools: [Read]}}}",
+		"unknown role profile":       "guide: {profile: lean}\nagents: {profiles: {slim: {tools: [Bash]}}}",
 		"unknown notify kind":        "notify: {kinds: [due, alerts]}",
 		"machine notify kind":        "notify: {kinds: [due, oom-line]}",
 		"machine urgency":            "notify: {urgency: {oom-kill: critical}}",
@@ -573,5 +576,31 @@ func TestIncompleteStoreRef(t *testing.T) {
 		case want != "" && (len(got) != 1 || !strings.Contains(got[0], want)):
 			t.Errorf("%s: incomplete %v, want one %q", raw, got, want)
 		}
+	}
+}
+
+func TestProfileFor(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.yaml")
+	raw := "agents:\n  profile: minimal\n  profiles:\n    lean: {tools: [Read, Grep], plugins: [beekeeper, base], mcpServers: [pro]}\nsupervisor: {profile: lean}\n"
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, ok := c.Agents.ProfileFor(c.Agents.Profile); !ok || !slices.Contains(p.Tools, "SendMessage") || !slices.Equal(p.Plugins, []string{"beekeeper"}) ||
+		slices.Contains(p.Tools, "AskUserQuestion") || slices.Contains(p.Tools, "Agent") {
+		t.Errorf("built-in minimal = %+v %v", p, ok)
+	}
+	if p, ok := c.Agents.ProfileFor(c.Supervisor.Profile); !ok || !slices.Equal(p.Tools, []string{"Read", "Grep"}) || !slices.Equal(p.MCPServers, []string{"pro"}) {
+		t.Errorf("desk profile lean = %+v %v", p, ok)
+	}
+	if _, ok := c.Agents.ProfileFor(c.Guide.Profile); ok {
+		t.Error("a role without a profile resolved one")
+	}
+	c.Agents.Profiles[MinimalProfile] = Profile{Tools: []string{"Glob"}}
+	if p, _ := c.Agents.ProfileFor(MinimalProfile); !slices.Equal(p.Tools, []string{"Glob"}) {
+		t.Errorf("the desk's minimal did not replace the built-in one: %+v", p)
 	}
 }
