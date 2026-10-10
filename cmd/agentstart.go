@@ -102,7 +102,7 @@ var desktopInput = func(ctx context.Context) (func() time.Time, error) { return 
 
 func (a *app) agentStartCmd() *cobra.Command {
 	var model, dir, task, harness string
-	var desktop, dryRun bool
+	var desktop, builds, force, dryRun bool
 	c := &cobra.Command{
 		Use:   agentStartName + " <name> <brief file>",
 		Short: "Start an agent session in bypass from the command line and import it into the desktop",
@@ -112,6 +112,18 @@ records its id as one of its starts and registers it on the roster under
 <name>, busy with --task, by default the brief's first line (or with the
 open task of a stopped session's entry under that name, which it takes
 over), so the roster shows it at work from its start.
+
+The start is judged first, as beekeeper capacity judges one: the busy
+agents against capacity.ceiling, MemAvailable, disk swap's growth, the
+1-minute load and the kind labs. --builds marks a task that builds, tests
+or lints (its commands take the build slot under beekeeper run): such a
+start waits for a free build slot and is refused while none is. Without
+--builds the start is one that does not build (a filer, a dispatcher, a
+reviewer, a promoter proving a release read-only): the slot is no guard
+of it, and a busy slot is a note in the verdict, never a refusal. A
+verdict without room refuses the start with exit 3, the guards named,
+and no session is created; --force starts it anyway and records the
+verdict overridden in the event log (agents.start).
 
 A seed turn creates the session: "claude -p" under a session id beekeeper
 chooses, without tools, with the brief as its first prompt, in a transient
@@ -203,6 +215,27 @@ is involved and no import happens.`,
 			if task = strings.TrimSpace(task); task == "" {
 				task = briefTask(brief)
 			}
+			if dryRun && harness != omp.Harness {
+				return a.dryRunStart(cmd.Context(), agentStart{name: name, role: workerRole, dir: dir, model: model})
+			}
+			// The start gate: a verdict without room refuses the start
+			// before anything is recorded; --force goes through on record.
+			over, err := a.startGate(cmd.Context(), builds, force)
+			if err != nil {
+				return err
+			}
+			if over != "" {
+				by, err := a.caller()
+				if err != nil {
+					return err
+				}
+				if err := a.store.Log(event(by, "agents.start", "%s: started over %s (--force)", name, over)); err != nil {
+					return err
+				}
+				if _, err := fmt.Fprintf(a.out, "started over %s (--force)\n", over); err != nil {
+					return err
+				}
+			}
 			// Every worker gets the shipped rules ahead of its task, whatever
 			// its harness.
 			sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief)), task: task, dir: dir, model: model, desktop: desktop}
@@ -212,9 +245,6 @@ is involved and no import happens.`,
 			case "", "claude":
 			default:
 				return usageErr("--harness %q: claude or omp", harness)
-			}
-			if dryRun {
-				return a.dryRunStart(cmd.Context(), sp)
 			}
 			sa, err := a.startAgent(cmd.Context(), sp)
 			if err != nil {
@@ -245,6 +275,8 @@ is involved and no import happens.`,
 	c.Flags().StringVar(&task, "task", "", "the task the roster shows it busy with (default: the brief's first line)")
 	c.Flags().StringVar(&harness, "harness", "claude", "the agent harness: claude or omp")
 	c.Flags().BoolVar(&desktop, "desktop", false, "the task needs desktop turns: import it past the desktop window's focus, as agents desktop does")
+	c.Flags().BoolVar(&builds, buildsFlag, false, "the task builds, tests or lints: the start waits for a free build slot")
+	c.Flags().BoolVar(&force, "force", false, "start although capacity says no start; the event log records the verdict overridden")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "print how the session would start (the profile applied and its first turn's command line) and start nothing")
 	return c
 }
