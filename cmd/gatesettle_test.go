@@ -103,7 +103,9 @@ func TestAPromotionWaitsForTheRunningMergeAheadToSettle(t *testing.T) {
 	gateOf := func(repo string) *gateRun {
 		st, _ := a.store.Read()
 		i := slices.IndexFunc(st.Merges, func(m state.Merge) bool { return m.Repo == repo })
-		return &gateRun{app: a, ctx: context.Background(), argv: []string{merge.Tool, "release", promoteArg, repo}, repo: repo,
+		argv := promoteArgv()
+		argv[len(argv)-1] = repo
+		return &gateRun{app: a, ctx: context.Background(), argv: argv, repo: repo,
 			lane: a.cfg.LaneOf(repo), me: st.Merges[i].By, pid: os.Getpid(), queued: true, placed: true, from: st.Merges[i].PID}
 	}
 
