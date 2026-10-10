@@ -78,6 +78,9 @@ type wakeTarget struct {
 	// model is the model the desktop recorded for the session's turns;
 	// empty: Claude Code's default.
 	model string
+	// profile is the profile a headless turn of one of beekeeper's starts
+	// runs under (its role's); empty: none.
+	profile string
 }
 
 // wakeAgent delivers msg from by to the registered agent q (wake).
@@ -186,10 +189,14 @@ func (a *app) resumeTurn(ctx context.Context, by state.Party, w wakeTarget, msg 
 	if w.host != "" {
 		stopPost = reopenStopPost(self, w.host)
 	}
-	if err := launch(unit, w.dir, a.explicitConfig(), stopPost, wakeArgv(bin, w, msg)); err != nil {
+	argv, err := a.profiledWakeArgv(ctx, bin, w, msg)
+	if err != nil {
 		return fmt.Errorf("waking %s: %w", w.name, err)
 	}
-	_ = a.store.Log(event(by, "agents.wake", "%s: resumed session %s headless in %s, %s (%s)", w.name, w.id, w.dir, w.mode, unit))
+	if err := launch(unit, w.dir, a.explicitConfig(), stopPost, argv); err != nil {
+		return fmt.Errorf("waking %s: %w", w.name, err)
+	}
+	_ = a.store.Log(event(by, "agents.wake", "%s: resumed session %s headless in %s, %s%s (%s)", w.name, w.id, w.dir, w.mode, underProfile(w.profile), unit))
 	_, err = fmt.Fprintf(a.out, "wake: %s had no running CLI: resumed session %s headless in %s, %s, with the message as its turn (journalctl --user -u %s)\n",
 		w.name, w.id, w.dir, w.mode, unit)
 	if err == nil && w.host != "" {
@@ -341,6 +348,7 @@ func resolveWake(cfg *config.Config, st *state.State, ag state.Agent) (wakeTarge
 			if w.dir == "" {
 				w.dir = s.Dir
 			}
+			w.profile = profileName(cfg, agentRole(st, ag.Party))
 			break
 		}
 	}
@@ -421,10 +429,32 @@ func wakeRunning(ctx context.Context, id string) string {
 	return ""
 }
 
+// profiledWakeArgv is wakeArgv under w's profile, whose flag settings it
+// writes first.
+func (a *app) profiledWakeArgv(ctx context.Context, bin string, w wakeTarget, msg string) ([]string, error) {
+	if w.profile == "" {
+		return wakeArgv(bin, w, msg), nil
+	}
+	flags, err := a.profileFlags(ctx, w.profile)
+	if err != nil {
+		return nil, err
+	}
+	return wakeArgv(bin, w, msg, flags...), nil
+}
+
+// underProfile names a headless turn's profile for a log line; empty for
+// none.
+func underProfile(profile string) string {
+	if profile == "" {
+		return ""
+	}
+	return ", under profile " + profile
+}
+
 // wakeArgv is a wake's command line: one headless turn resuming session id
-// in its mode and on its model, the message as the turn; flags go before the
-// message.
-func wakeArgv(bin string, w wakeTarget, msg string) []string {
+// in its mode and on its model, under its profile's flags, the message as
+// the turn; flags go before the message.
+func wakeArgv(bin string, w wakeTarget, msg string, profile ...string) []string {
 	argv := []string{bin, "-p", resumeFlag, w.id, permissionModeFlag, w.mode}
 	if w.name != "" {
 		argv = append(argv, "-n", w.name)
@@ -437,6 +467,7 @@ func wakeArgv(bin string, w wakeTarget, msg string) []string {
 		// a person's site approval as the desktop's does
 		argv = append(argv, chromeFlag)
 	}
+	argv = append(argv, profile...)
 	return append(argv, "--", msg)
 }
 
