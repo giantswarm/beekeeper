@@ -179,10 +179,10 @@ func (o *Ops) importValue(ctx context.Context, src, dst Ref, keep func(string) (
 	return len(v), nil
 }
 
-// asPerson runs op in the caller's own environment, its signed-in session,
-// without the service account's token.
+// asPerson runs op in the caller's own environment (and o.Env), its
+// signed-in session, without the service account's token.
 func (o *Ops) asPerson(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error) {
-	return o.Run(ctx, "", nil, stdin, "op", args...)
+	return o.Run(ctx, "", o.Env, stdin, "op", args...)
 }
 
 // writeSecretFile creates path with mode 0600 from data, through a rename.
