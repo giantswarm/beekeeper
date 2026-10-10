@@ -18,6 +18,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
+
+	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 // modeDontAsk refuses every call no allow rule covers, without a prompt.
@@ -40,6 +43,20 @@ const (
 // between the preamble and the steps.
 const deployWords = "The person's task covers one deploy: %s. Once the steps reach the portal's control that performs " +
 	"exactly that deploy or create, click it once; click nothing else that deploys, creates, deletes or changes a shared system. "
+
+// consentWords tell a browse turn the App on record its steps name, and
+// labWords the lab's own identity provider the steps name, the one place a
+// credential is typed: a fixture user's.
+const (
+	consentWords = "The person's own App %s is on record (callback %s): once the steps reach GitHub's page 'Authorize %s' " +
+		"with that callback, click Authorize once; click nothing else that grants access. "
+	labWords = "The lab's own identity provider on a loopback host (*.127.0.0.1.nip.io, localhost) is the person's: " +
+		"there, and only there, a fixture user the steps name signs in with the fixture credential the steps give. "
+)
+
+// browseStart names the browse turn's start record, which has the hook act
+// in the turn wherever it runs.
+const browseStart = "beekeeper browse"
 
 func (a *app) browseCmd() *cobra.Command {
 	var model, dir, deploy string
@@ -69,22 +86,38 @@ a page that waits on a person (a sign-in form, a dialog) is the usual cause.
 
 A consent page (an OAuth grant: GitHub's green Authorize button, an identity
 provider's Allow) is a permission grant to the turn's classifier, which
-refuses the click, or the whole task at its first call, unless the steps say
-whose grant it is. Phrase a consent click the person asked for with all
-three: whose App it is (the person's own, by name), that the person asked
-for this one click, and which App and callback host the consent page must
-name, so a page for any other App or callback is not clicked. For example:
+refuses the click, or the whole task at its first call. A consent for an App
+the person owns and asked for is beekeeper's own decision, from its record:
+"beekeeper app allow <name> --client-id <id> --callback <host> --word
+'<the person's words>'" records the App (beekeeper app --help). On GitHub's
+consent page of an App on record, with the recorded callback host, the hook
+(beekeeper hook pretooluse, in this turn too) answers the Authorize click
+itself: allowed, the record in its reason; on GitHub's consent page of any
+other App or callback host it refuses the click, naming the page and the
+record's form. A turn whose steps name an App on record (its name or its
+callback host) runs with an auto mode allow rule for that App's consent
+after the shipped rules (its --settings, this run only), so the classifier
+refuses neither the task at its first call nor the click, its prompt says
+to click that page's Authorize once and nothing else that grants access,
+and a line below the report says "allowed consent: <name> (callback
+<host>)". For example:
 
-  beekeeper browse "The GitHub App <app> is the person's own; they asked
-  for this one click. Open <sign-in URL>. On GitHub's page 'Authorize
-  <app>', whose callback is https://<callback host>/..., click Authorize
-  once; click nothing else that grants access. Report the App name and the
-  callback the page showed, and the final URL."
+  beekeeper browse "Open <sign-in URL>. On GitHub's page 'Authorize <app>'
+  click Authorize once. Report the App name and the callback the page
+  showed, and the final URL."
+
+A sign-in or consent page of the lab's own identity provider on a loopback
+host (*.127.0.0.1.nip.io, localhost) is allowed the same way without a
+record: a fixture user's sign-in there is the person's own lab's. Steps
+that name such a host run with the lab's rule, the prompt's exception for
+the fixture user's credential the steps give, and "allowed lab sign-in:"
+below the report.
 
 Every other grant stays refused. A call the classifier refused is named
 below the report, one "refused:" line per call, with the call's own words
 and the classifier's reason; a [Permission Grant] line quotes the step that
-reads as a grant and points here.
+reads as a grant and names the record. The hook's refusal of a consent
+click reaches the report the same way, in its own words.
 
 A portal's deploy or create click (a review step's Deploy button, which
 applies a release to a cluster) is a production deploy to the turn's
@@ -124,10 +157,31 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	if err != nil {
 		return err
 	}
+	st, err := a.store.Read()
+	if err != nil {
+		return err
+	}
+	consents, lab := appsNamed(st.Apps, steps), namesLoopback(steps)
 	id := uuid.NewString()
+	// The turn's start record has the hook act in it wherever it runs; the
+	// turn over, the record goes.
+	me, _ := a.caller()
+	start := state.Start{Party: state.Party{Session: id, Name: browseStart}, Mode: modeDontAsk, Dir: dir, By: me, At: a.now.UTC()}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts = append(st.Starts, start)
+		return nil, nil
+	}); err != nil {
+		return err
+	}
+	defer func() {
+		_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+			st.Starts = slices.DeleteFunc(st.Starts, func(x state.Start) bool { return x.Session == id })
+			return []state.Event{event(me, "browse.turn", "%s in %s: %s", id, dir, bounded(steps, phraseRunes))}, nil
+		})
+	}()
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
-	c := exec.CommandContext(ctx, bin, browseArgv(id, model, browsePrompt(steps, deploy), deploy)...) //nolint:gosec // the claude CLI on PATH
+	c := exec.CommandContext(ctx, bin, browseArgv(id, model, browsePrompt(steps, deploy, consents, lab), browseRules(deploy, consents, lab))...) //nolint:gosec // the claude CLI on PATH
 	c.Dir = dir
 	c.Env = browseEnv(os.Environ())
 	c.Stderr = os.Stderr
@@ -144,7 +198,7 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	}
 	found, ferr := readFindings(path)
 	shots, serr := saveScreenshots(path, filepath.Join(a.cfg.StateDir, "browse", id))
-	lines := append(found.lines(steps, deploy), "transcript: "+path)
+	lines := append(found.lines(steps, deploy, consents, lab), "transcript: "+path)
 	for _, s := range shots {
 		lines = append(lines, "screenshot: "+s)
 	}
@@ -175,14 +229,15 @@ const frozenRenderer = "renderer may be frozen"
 // a call's words.
 const chromeToolPrefix = "mcp__claude-in-chrome__"
 
-// consentWords are the words of a step that reads as a grant to the
+// grantWords are the words of a step that reads as a grant to the
 // classifier.
-var consentWords = regexp.MustCompile(`(?i)\b(authori[sz]e|consent|grant|approve|allow)\b`)
+var grantWords = regexp.MustCompile(`(?i)\b(authori[sz]e|consent|grant|approve|allow)\b`)
 
-// consentHint is how a consent click the person asked for is phrased, the
-// help text's long form.
-const consentHint = "a consent click the person asked for is phrased as `beekeeper browse --help` says: whose App it is, " +
-	"that the person asked for this one click, which App and callback host the page must name; every other grant stays refused"
+// consentHint names the record below a grant refusal of a run whose steps
+// name no App on record.
+const consentHint = "a consent for an App the person owns and asked for is recorded with " + guard.AllowForm +
+	", after which the hook answers the click on its consent page and a turn whose steps name the App runs with its rule " +
+	"(`beekeeper browse --help`); every other grant stays refused"
 
 // deployReasons are the classifier's reasons a portal's deploy or create
 // click trips: the rules a declared deploy is an exception to, and the
@@ -243,14 +298,23 @@ func readFindings(transcript string) (browseFindings, error) {
 }
 
 // lines are the findings as the lines printed below the report: the deploy
-// the run declared, one "refused:" line per refused call, the consent hint
-// once when a refusal is a [Permission Grant], quoting the step that reads
-// as a grant, the deploy hint once when a refusal is a deploy reason, and
-// one "not rendered:" line for the screenshots of an undrawn window.
-func (f browseFindings) lines(steps, deploy string) []string {
+// the run declared, the Apps on record and the lab sign-in the steps named,
+// one "refused:" line per refused call, the consent hint once when a
+// refusal is a [Permission Grant], quoting the step that reads as a grant,
+// the deploy hint once when a refusal is a deploy reason, and one "not
+// rendered:" line for the screenshots of an undrawn window.
+func (f browseFindings) lines(steps, deploy string, consents []guard.App, lab bool) []string {
 	var out []string
 	if deploy != "" {
 		out = append(out, "allowed deploy: "+deploy+": the turn's auto mode allowed that one deploy or create click (--allow-deploy)")
+	}
+	for _, c := range consents {
+		out = append(out, fmt.Sprintf("allowed consent: %s (callback %s): the hook answers the click on its consent page and the turn's "+
+			"auto mode allows it, on record since %s by %s: %s", c.Name, c.Callback, c.At.UTC().Format("2006-01-02"), c.By, c.Word))
+	}
+	if lab {
+		out = append(out, "allowed lab sign-in: a fixture user's sign-in and consent on the lab's own identity provider, "+
+			"a loopback host the steps name, which the hook allows and the turn's auto mode allows")
 	}
 	grant, deployed := false, false
 	for _, r := range f.Refused {
@@ -260,6 +324,10 @@ func (f browseFindings) lines(steps, deploy string) []string {
 	}
 	if grant {
 		hint := consentHint
+		if len(consents) > 0 {
+			hint = fmt.Sprintf("the App on record (%s) did not cover it: the page named another App or callback host, or the hook saw no page for the "+
+				"call's tab; the refused call says which", appNames(consents))
+		}
 		if p := consentPhrase(steps); p != "" {
 			hint = fmt.Sprintf("the steps' %q reads as a grant: %s", p, hint)
 		}
@@ -291,14 +359,19 @@ const phraseRunes = 160
 // to phraseRunes, "" when none does.
 func consentPhrase(steps string) string {
 	for _, s := range strings.FieldsFunc(steps, func(r rune) bool { return r == '.' || r == ';' || r == '\n' }) {
-		if s = strings.TrimSpace(s); consentWords.MatchString(s) {
-			if r := []rune(s); len(r) > phraseRunes {
-				return string(r[:phraseRunes]) + "…"
-			}
-			return s
+		if s = strings.TrimSpace(s); grantWords.MatchString(s) {
+			return bounded(s, phraseRunes)
 		}
 	}
 	return ""
+}
+
+// bounded is s cut to n runes, an ellipsis after a cut.
+func bounded(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return s
 }
 
 // callWords are a Chrome call's own words: the tool, its action, its URL
@@ -423,37 +496,115 @@ const autoModeDefaults = "$defaults"
 // turn under id with the CLI's own Chrome connection and nothing else: no
 // built-in tool (no shell, no file tools), no MCP server but Chrome's, and in
 // dontAsk mode every call the Chrome tools' allow rule does not cover is
-// refused rather than asked. A declared deploy is the turn's settings: its
-// auto mode allows that one action.
-func browseArgv(id, model, prompt, deploy string) []string {
+// refused rather than asked. The rules of a declared deploy, the Apps on
+// record and the lab sign-in the steps name are the turn's settings: its
+// auto mode allows those actions.
+func browseArgv(id, model, prompt string, rules []string) []string {
 	argv := []string{"-p", chromeFlag, toolsFlag, "", strictMCPConfigFlag, permissionModeFlag, modeDontAsk,
 		allowedToolsFlag, browseTools, sessionIDFlag, id}
 	if model != "" {
 		argv = append(argv, modelFlag, model)
 	}
-	if deploy != "" {
-		argv = append(argv, settingsFlag, allowDeploySettings(deploy))
+	if len(rules) > 0 {
+		argv = append(argv, settingsFlag, allowSettings(rules))
 	}
 	return append(argv, "--", prompt)
 }
 
 // browsePrompt is a browse turn's prompt: the preamble, the deploy the
-// person's task covers when one is declared, then the steps.
-func browsePrompt(steps, deploy string) string {
+// person's task covers when one is declared, the Apps on record and the lab
+// sign-in the steps name, then the steps.
+func browsePrompt(steps, deploy string, consents []guard.App, lab bool) string {
 	p := browsePreamble
 	if deploy != "" {
 		p += fmt.Sprintf(deployWords, deploy)
 	}
+	for _, c := range consents {
+		p += fmt.Sprintf(consentWords, c.Name, c.Callback, c.Name)
+	}
+	if lab {
+		p += labWords
+	}
 	return p + browseSteps + steps
 }
 
-// allowDeploySettings are the settings of a turn whose auto mode allows the
-// declared deploy: the shipped allow rules with the deploy's own rule after
-// them, every other rule list as shipped.
-func allowDeploySettings(deploy string) string {
-	b, _ := json.Marshal(map[string]any{"autoMode": map[string]any{"allow": []string{autoModeDefaults, allowDeployRule(deploy)}}})
+// browseRules are the auto mode allow rules of a browse turn: the declared
+// deploy's, one per App on record the steps name, the lab's when the steps
+// name a loopback host; none without any.
+func browseRules(deploy string, consents []guard.App, lab bool) []string {
+	var rules []string
+	if deploy != "" {
+		rules = append(rules, allowDeployRule(deploy))
+	}
+	for _, c := range consents {
+		rules = append(rules, consentRule(c))
+	}
+	if lab {
+		rules = append(rules, labRule)
+	}
+	return rules
+}
+
+// allowSettings are the settings of a turn whose auto mode allows rules:
+// the shipped allow rules with those after them, every other rule list as
+// shipped.
+func allowSettings(rules []string) string {
+	b, _ := json.Marshal(map[string]any{"autoMode": map[string]any{"allow": append([]string{autoModeDefaults}, rules...)}})
 	return string(b)
 }
+
+// allowDeploySettings are the settings of a turn whose auto mode allows the
+// declared deploy alone.
+func allowDeploySettings(deploy string) string {
+	return allowSettings([]string{allowDeployRule(deploy)})
+}
+
+// consentRule is the auto mode allow rule of an App on record: the person's
+// pre-authorization of the consent click on that App's page, which the hook
+// verifies; a page for any other App or callback host is not covered.
+func consentRule(a guard.App) string {
+	return fmt.Sprintf("Own App Consent: The person owns the App %s (OAuth client id %s) and asked, on record with beekeeper, "+
+		"for its consent: on GitHub's consent page 'Authorize %s' whose redirect goes to the callback host %s, the Authorize click "+
+		"is pre-authorized and no Permission Grant to refuse, and a step that names it is no grant request; beekeeper's own hook "+
+		"verifies the page and answers the click. Not covered: a consent page of any other App or callback host, any other grant "+
+		"of access, a credential typed anywhere. Every other rule applies in full.", a.Name, a.ClientID, a.Name, a.Callback)
+}
+
+// labRule is the auto mode allow rule of the lab's own identity provider:
+// a fixture user's sign-in and consent on a loopback host, which the hook
+// verifies.
+const labRule = "Lab Identity Provider: a sign-in or consent page on a loopback host (localhost, *.127.0.0.1.nip.io) is the " +
+	"person's own lab identity provider with its fixture users: a fixture user's sign-in there, as the steps name it, and its " +
+	"consent are pre-authorized, no credential disclosure and no Permission Grant to refuse; beekeeper's own hook verifies the " +
+	"host. Not covered: a page on any other host, a credential of the person's own. Every other rule applies in full."
+
+// appsNamed are the Apps on record the steps name, by name or callback
+// host, as the guard reads them.
+func appsNamed(apps []state.App, steps string) []guard.App {
+	s := strings.ToLower(steps)
+	var named []state.App
+	for _, x := range apps {
+		if strings.Contains(s, strings.ToLower(x.Name)) || strings.Contains(s, strings.ToLower(x.Callback)) {
+			named = append(named, x)
+		}
+	}
+	return guardApps(named)
+}
+
+// appNames are the Apps' names, comma-separated.
+func appNames(apps []guard.App) string {
+	names := make([]string, 0, len(apps))
+	for _, a := range apps {
+		names = append(names, a.Name)
+	}
+	return strings.Join(names, ", ")
+}
+
+// loopbackHost is a loopback host in steps: the lab's own.
+var loopbackHost = regexp.MustCompile(`(?i)(?:^|[^\w.-])(?:localhost|127\.0\.0\.1|[\w.-]+\.127\.0\.0\.1\.nip\.io)(?:[^\w.-]|$)`)
+
+// namesLoopback reports whether steps name a loopback host.
+func namesLoopback(steps string) bool { return loopbackHost.MatchString(steps) }
 
 // allowDeployRule is the auto mode allow rule of a declared deploy: the
 // person's pre-authorization of that one action, meeting the named+specifics

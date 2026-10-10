@@ -184,6 +184,10 @@ type Hook struct {
 	// in bypassPermissions; read only for a browser call in acceptEdits,
 	// nil refuses no browser call.
 	Started func(session string) bool
+	// Apps lists the Apps the person owns and asked a consent for, what a
+	// Chrome call on a consent page is decided from (consent.go); read only
+	// for a browser call that acts on a page, nil decides no consent page.
+	Apps func() []App
 	// GraphQL is the GraphQL budget as beekeeper last read it, for a
 	// board-read refusal; nil or "", unknown.
 	GraphQL func() string
@@ -200,6 +204,9 @@ type event struct {
 	Session   string         `json:"session_id"`
 	Agent     string         `json:"agent_id"`
 	Mode      string         `json:"permission_mode"`
+	// TranscriptPath is the session's transcript, where a Chrome call's
+	// page is read from.
+	TranscriptPath string `json:"transcript_path"`
 }
 
 type hookOutput struct {
@@ -244,6 +251,9 @@ func (h Hook) decide(ev event) []byte {
 	}
 	if r := h.desktopBrowserRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
+	if out := h.consent(ev); out != nil {
+		return out
 	}
 	if ev.ToolName == AskTool {
 		return h.ask(ev.Session, ev.ToolInput)

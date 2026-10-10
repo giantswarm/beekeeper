@@ -560,6 +560,24 @@ func (o AlertOwner) Person() bool { return o.By.Session == "" && o.By.HostSessio
 // ModeBypass is Claude Code's bypassPermissions mode.
 const ModeBypass = "bypassPermissions"
 
+// App is an App the person owns and asked a consent for, on their word:
+// the hook answers the consent click on its page itself (guard.Consent).
+type App struct {
+	// Name is the App's name as its consent page titles it ("Authorize
+	// <name>" on GitHub).
+	Name string `json:"name"`
+	// ClientID is the OAuth client id the consent URL carries.
+	ClientID string `json:"clientID"`
+	// Callback is the host the consent page's redirect must go to.
+	Callback string `json:"callback"`
+	// Word is the person's words that asked for the consent.
+	Word string    `json:"word"`
+	By   Party     `json:"by"`
+	At   time.Time `json:"at"`
+
+	rest rest
+}
+
 // Start is a session `beekeeper agents start` started: the id beekeeper
 // chose and the permission mode it passed, recorded before the session
 // existed. A session cannot add itself: its id is only ever written here by
@@ -727,6 +745,9 @@ type State struct {
 	// Starts are the sessions beekeeper started, what the permission hook
 	// answers for.
 	Starts []Start `json:"starts,omitempty"`
+	// Apps are the Apps the person owns and asked a consent for, what the
+	// hook answers a consent click for.
+	Apps []App `json:"apps,omitempty"`
 	// Archives are the desktop sessions of agents off the roster the
 	// doctor still owes an archive.
 	Archives []Archive `json:"archives,omitempty"`
