@@ -26,16 +26,23 @@ var appsGH github.GH = github.RunGH
 func (a *app) appCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "app",
-		Short: "The Apps the person owns and asked a consent for: what the hook answers a consent click for",
-		Long: `An App on record is one the organisation declares and the person owns and
+		Short: "The organisation's GitHub Apps: create one from its declared manifest; record the ones the person asked a consent for",
+		Long: `The organisation declares its GitHub Apps in the config's apps.repo, one
+manifest each at apps.manifest ({name} for the App's name, e.g.
+apps/{name}/manifest.json), read from the default branch.
+
+create <name> creates the declared App from its manifest through GitHub's
+manifest flow, with the person's two clicks (Create, Install), and writes
+every credential the flow answers into the shared vault item <name>, where
+no person copies a value from a page (app create --help).
+
+An App on record is one the organisation declares and the person owns and
 asked a consent for, on their word: its name as GitHub's consent page titles
 it ("Authorize <name>"), the OAuth client id its consent URL carries, the
 callback hosts its declaration names, and the person's words (a note's
-answer). allow reads the declaration, the App's manifest in the config's
-apps.repo at apps.manifest ({name} for the App's name, e.g. apps/{name}/
-manifest.json): its name must be the App's, and the hosts of its
-callback_urls are the record's; an App no manifest declares is not
-recorded. With it, beekeeper hook pretooluse answers a Chrome click on
+answer). allow reads the declaration: its name must be the App's, and the
+hosts of its callback_urls are the record's; an App no manifest declares is
+not recorded. With it, beekeeper hook pretooluse answers a Chrome click on
 GitHub's consent page itself: allowed on the recorded App's page with one of
 its declared callback hosts (the client id, or the name in GitHub's title
 where the tool redacts the id), refused on GitHub's consent page of any
@@ -145,7 +152,7 @@ tool results show it.`,
 		},
 	}
 	check.Flags().StringVar(&title, "title", "", "the page's title (GitHub's consent page: \"Authorize <name>\")")
-	c.AddCommand(allow, listCmd("List the Apps on record", a.appList), revoke, check)
+	c.AddCommand(a.appCreateCmd(), allow, listCmd("List the Apps on record", a.appList), revoke, check)
 	return c
 }
 

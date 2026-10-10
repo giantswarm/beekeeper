@@ -180,7 +180,11 @@ func (a *app) holdsLease(res, what string) error {
 		if h != nil {
 			holder = fmt.Sprintf("%q", cmp.Or(h.Name, h.Holder))
 		}
-		return refused("%s: the lab lease %s is held by %s, not by you: claim it first (beekeeper lease claim %s)", what, res, holder, res)
+		kind := "lease"
+		if a.cfg.LabCluster(res) != "" {
+			kind = "lab lease"
+		}
+		return refused("%s: the %s %s is held by %s, not by you: claim it first (beekeeper lease claim %s)", what, kind, res, holder, res)
 	}
 	return nil
 }

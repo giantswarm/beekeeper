@@ -43,6 +43,9 @@ type Tools struct {
 	mu sync.Mutex
 	// Vault maps op://vault/item/field to its value.
 	Vault map[string]string
+	// Types maps op://vault/item/field to the type a store gave it
+	// (CONCEALED, STRING).
+	Types map[string]string
 	// Calls are the command lines run, stdin left out.
 	Calls []string
 	// Tokens are the service account tokens op calls were given.
@@ -193,6 +196,9 @@ func (t *Tools) item(args []string, stdin io.Reader) ([]byte, error) {
 			items[parts[1]] = it
 		}
 		f := field{ID: parts[2], Label: parts[2], Type: "CONCEALED", Value: v}
+		if typ, ok := t.Types[ref]; ok {
+			f.Type = typ
+		}
 		if b, ok := builtins[f.ID]; ok {
 			f.Purpose, f.Type = b[0], b[1]
 		}
@@ -242,8 +248,12 @@ func (t *Tools) item(args []string, stdin io.Reader) ([]byte, error) {
 			return nil, fmt.Errorf("exit 1 ([ERROR] unable to process line 1: Validation: (validateVaultItem failed to Validate), "+
 				"Couldn't validate the item: \"[ItemValidator] has found %d errors, 0 warnings: \nDetails:\nErrors:\n%s\")", len(refused), strings.Join(refused, "\n"))
 		}
+		if t.Types == nil {
+			t.Types = map[string]string{}
+		}
 		for _, f := range it.Fields {
-			t.Vault["op://"+vault+"/"+it.Title+"/"+f.Label] = f.Value
+			ref := "op://" + vault + "/" + it.Title + "/" + f.Label
+			t.Vault[ref], t.Types[ref] = f.Value, f.Type
 		}
 		return bytes.TrimSpace(raw), nil
 	}

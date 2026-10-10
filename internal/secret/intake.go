@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/guard"
 )
 
 // The person's store: a value a web page showed once, or a file it
@@ -56,6 +58,71 @@ func (o *Ops) Writable(dst Ref) error {
 		return fmt.Errorf("%s: store writes a field of the shared vault, op://<vault>/<item>/<field>", dst)
 	}
 	return o.checkVault(dst)
+}
+
+// ItemField is one field of a store into a vault item: its label, its value
+// and whether it is configuration, a plain string, rather than a secret,
+// which is concealed.
+type ItemField struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
+	Plain bool   `json:"plain,omitempty"`
+}
+
+// MaxItemBytes bounds the values of one store into an item together: a
+// GitHub App's credentials, its private key included, fit many times over.
+const MaxItemBytes = 4 * MaxStoreBytes
+
+// ParseItem reads op://<vault>/<item>, an item of the shared vault.
+func ParseItem(s string) (vault, item string, err error) {
+	parts := strings.Split(strings.TrimPrefix(s, guard.OpRef), "/")
+	if !strings.HasPrefix(s, guard.OpRef) || len(parts) != 2 || slicesHasEmpty(parts) {
+		return "", "", fmt.Errorf("%q: an item is op://<vault>/<item>", s)
+	}
+	return parts[0], parts[1], nil
+}
+
+// StoreFields writes fields into the item titled item of vault in one op
+// call, the item or a field created when absent, and answers each field's
+// reference, length and fingerprint. Every field is checked before any is
+// written: a label or value that is empty, a value or the item over its
+// bound, a vault not the shared one.
+func (o *Ops) StoreFields(ctx context.Context, vault, item string, fields []ItemField) ([]Stored, error) {
+	ref := guard.OpRef + vault + "/" + item
+	if len(fields) == 0 {
+		return nil, fmt.Errorf("%s: nothing to store, no field", ref)
+	}
+	total := 0
+	for _, f := range fields {
+		switch {
+		case f.Label == "" || strings.ContainsAny(f.Label, "/\n"):
+			return nil, fmt.Errorf("%s: a field's label names it, not %q", ref, f.Label)
+		case f.Value == "":
+			return nil, fmt.Errorf("%s/%s: nothing to store, the value is empty", ref, f.Label)
+		case len(f.Value) > MaxStoreBytes:
+			return nil, fmt.Errorf("%s/%s: %d bytes is more than a field takes (%d)", ref, f.Label, len(f.Value), MaxStoreBytes)
+		}
+		total += len(f.Value)
+	}
+	if total > MaxItemBytes {
+		return nil, fmt.Errorf("%s: %d bytes is more than one store into an item takes (%d)", ref, total, MaxItemBytes)
+	}
+	if err := o.checkVault(Ref{Op: ref + "/" + fields[0].Label}); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*opTimeout)
+	defer cancel()
+	if err := o.storeVaultFields(ctx, vault, item, ref, fields); err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("%w: %s: op answered nothing in %s", ErrVault, ref, 3*opTimeout)
+		}
+		return nil, err
+	}
+	out := make([]Stored, 0, len(fields))
+	for _, f := range fields {
+		out = append(out, Stored{Ref: ref + "/" + f.Label, Bytes: len(f.Value), Fingerprint: o.fingerprint(f.Value)})
+	}
+	return out, nil
 }
 
 // fingerprint is o.Fingerprint of v, "" without a key.

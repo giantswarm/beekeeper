@@ -23,10 +23,11 @@ import (
 
 // The socket's operations.
 const (
-	VaultUnlock = "unlock"
-	VaultLock   = "lock"
-	VaultStatus = "status"
-	VaultStore  = "store"
+	VaultUnlock    = "unlock"
+	VaultLock      = "lock"
+	VaultStatus    = "status"
+	VaultStore     = "store"
+	VaultStoreItem = "store-item"
 )
 
 // VaultRequest is one ask of the keeper's socket.
@@ -37,6 +38,10 @@ type VaultRequest struct {
 	// Ref and Value are a store's field and what it gets.
 	Ref   string `json:"ref,omitempty"`
 	Value string `json:"value,omitempty"`
+	// Item and Fields are a store-item's item (op://<vault>/<item>) and
+	// the fields it gets, in one op call.
+	Item   string      `json:"item,omitempty"`
+	Fields []ItemField `json:"fields,omitempty"`
 }
 
 // Stored is what a store wrote: the field, the value's length and its
@@ -50,6 +55,10 @@ type Stored struct {
 // Storer writes value into the vault field ref with the session env
 // (OP_SESSION_<id>=<token>) and answers what it wrote.
 type Storer func(ctx context.Context, env, ref, value string) (Stored, error)
+
+// ItemStorer writes fields into the vault item (op://<vault>/<item>) with
+// the session env, in one op call, and answers what it wrote per field.
+type ItemStorer func(ctx context.Context, env, item string, fields []ItemField) ([]Stored, error)
 
 // VaultState is the keeper's answer.
 type VaultState struct {
@@ -65,18 +74,19 @@ type VaultState struct {
 	// empty once a sign-in unlocked again.
 	Dropped   string    `json:"dropped,omitempty"`
 	DroppedAt time.Time `json:"droppedAt,omitzero"`
-	// Stored is what a store wrote.
-	Stored *Stored `json:"stored,omitempty"`
+	// Stored is what a store wrote, Fields what a store-item wrote.
+	Stored *Stored  `json:"stored,omitempty"`
+	Fields []Stored `json:"fields,omitempty"`
 }
 
-// maxVaultRequest bounds what the keeper reads of one request: a store's
-// value, JSON-escaped at the worst, and the rest of the line.
-const maxVaultRequest = 8*MaxStoreBytes + 1024
+// maxVaultRequest bounds what the keeper reads of one request: a
+// store-item's values, JSON-escaped at the worst, and the rest of the line.
+const maxVaultRequest = 8*MaxItemBytes + 4096
 
 // deadline bounds one request on the socket: an answer from the keeper's
 // memory, or a store's op calls.
 func deadline(op string) time.Duration {
-	if op == VaultStore {
+	if op == VaultStore || op == VaultStoreItem {
 		return 3 * time.Minute
 	}
 	return 10 * time.Second
@@ -92,8 +102,9 @@ func SocketPath() (string, error) {
 }
 
 // ServeVault answers the keeper's socket at path until ctx ends; store
-// writes what a store request hands over (nil refuses one).
-func ServeVault(ctx context.Context, path string, k *Keeper, store Storer) error {
+// writes what a store request hands over and storeItem what a store-item
+// does (nil refuses one).
+func ServeVault(ctx context.Context, path string, k *Keeper, store Storer, storeItem ItemStorer) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
@@ -121,11 +132,11 @@ func ServeVault(ctx context.Context, path string, k *Keeper, store Storer) error
 			}
 			return err
 		}
-		go answerVault(ctx, c, k, store)
+		go answerVault(ctx, c, k, store, storeItem)
 	}
 }
 
-func answerVault(ctx context.Context, c net.Conn, k *Keeper, store Storer) {
+func answerVault(ctx context.Context, c net.Conn, k *Keeper, store Storer, storeItem ItemStorer) {
 	defer func() { _ = c.Close() }()
 	_ = c.SetDeadline(time.Now().Add(deadline("")))
 	var st VaultState
@@ -145,30 +156,63 @@ func answerVault(ctx context.Context, c net.Conn, k *Keeper, store Storer) {
 	case req.Op == VaultStore:
 		_ = c.SetDeadline(time.Now().Add(deadline(req.Op)))
 		st.Stored, st.Error = storeFor(ctx, k, store, req)
+	case req.Op == VaultStoreItem:
+		_ = c.SetDeadline(time.Now().Add(deadline(req.Op)))
+		st.Fields, st.Error = storeItemFor(ctx, k, storeItem, req)
 	case req.Op != VaultStatus:
 		st.Error = fmt.Sprintf("unknown request %q", req.Op)
 	}
-	msg, stored := st.Error, st.Stored
+	msg, stored, fields := st.Error, st.Stored, st.Fields
 	st = k.State()
-	st.Error, st.Stored = msg, stored
+	st.Error, st.Stored, st.Fields = msg, stored, fields
 	_ = json.NewEncoder(c).Encode(st)
 }
 
 // storeFor writes a store request's value through store with the session
 // the keeper holds; its error names no value.
 func storeFor(ctx context.Context, k *Keeper, store Storer, req VaultRequest) (*Stored, string) {
-	env := k.Env()
-	switch {
-	case store == nil:
-		return nil, "the keeper stores nothing"
-	case env == "":
-		return nil, "vault locked: the broker holds no session; nothing stored"
+	env, msg := sessionFor(k, store == nil)
+	if msg != "" {
+		return nil, msg
 	}
 	s, err := store(ctx, env, req.Ref, req.Value)
 	if err != nil {
 		return nil, strings.ReplaceAll(err.Error(), req.Value, "[value]")
 	}
 	return &s, ""
+}
+
+// storeItemFor writes a store-item request's fields through storeItem with
+// the session the keeper holds; its error names no value.
+func storeItemFor(ctx context.Context, k *Keeper, storeItem ItemStorer, req VaultRequest) ([]Stored, string) {
+	env, msg := sessionFor(k, storeItem == nil)
+	if msg != "" {
+		return nil, msg
+	}
+	out, err := storeItem(ctx, env, req.Item, req.Fields)
+	if err != nil {
+		msg := err.Error()
+		for _, f := range req.Fields {
+			if f.Value != "" {
+				msg = strings.ReplaceAll(msg, f.Value, "[value]")
+			}
+		}
+		return nil, msg
+	}
+	return out, ""
+}
+
+// sessionFor is the session a store runs with, or why there is none: no
+// storer, or a locked keeper.
+func sessionFor(k *Keeper, noStorer bool) (string, string) {
+	env := k.Env()
+	switch {
+	case noStorer:
+		return "", "the keeper stores nothing"
+	case env == "":
+		return "", "vault locked: the broker holds no session; nothing stored"
+	}
+	return env, ""
 }
 
 // AskVault sends req to the keeper at path and returns its state. The
