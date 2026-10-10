@@ -228,8 +228,9 @@ func TestASignalExitWithoutADocumentIsJudgedByGitHub(t *testing.T) {
 			}
 		}},
 		{"merged devctl keeps its window for the update", merge.ToolRepo, github.Merged, toolLane, func(t *testing.T, _ *gateRun, st *state.State) {
-			if len(st.Merges) != 0 {
-				t.Errorf("merges left: %+v", st.Merges)
+			// Its release unconfirmed, it settles its lane by the settle rule.
+			if len(st.Merges) != 1 || st.Merges[0].Phase != state.Settling || st.Merges[0].Release != "" {
+				t.Errorf("want one settling merge, its release unknown: %+v", st.Merges)
 			}
 			if len(st.Holds) != 1 || !st.Holds[0].ToolMerged {
 				t.Errorf("want the window, merged: %+v", st.Holds)

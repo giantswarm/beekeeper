@@ -192,7 +192,8 @@ func TestWatchRecordsAMergeWhoseGateIsGone(t *testing.T) {
 		!strings.Contains(l, "MERGE RECORDED: o/gh#2 exit 137, release unconfirmed (merged per GitHub)") || strings.Contains(l, "MERGE LOST") {
 		t.Fatalf("watch lines:\n%s", l)
 	}
-	if st, _ := w.store.Read(); len(st.Merges) != 0 {
+	// The merge GitHub judged, its release unconfirmed, settles its lane.
+	if st, _ := w.store.Read(); len(st.Merges) != 1 || st.Merges[0].Repo != "o/gh" || st.Merges[0].Phase != state.Settling {
 		t.Errorf("merges left: %+v", st.Merges)
 	}
 	if _, err := os.Stat(base + ".json"); err == nil {

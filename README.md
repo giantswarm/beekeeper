@@ -1089,7 +1089,11 @@ follows semver >=4.0.0 <5.0.0`; a wait names the range. A release devctl could n
 matches a chart version `4.74.0+971d12027db0`. The installation is read with `kubectl
 --context <lanes[].context>` (default: the kubeconfig context named after the installation or
 ending in `-<installation>`). A merge whose lane has no installation has nothing to roll and
-leaves its lane when devctl returns. A settling merge leaves its lane once the lane has settled:
+leaves its lane when devctl returns with its release; one whose release is unknown (merged per
+GitHub, its run lost) settles that lane for `merge.settle` all the same, so a promotion queued
+behind it does not race the release candidate it may be cutting. A running merge whose devctl
+ended after its gate left is judged (its document, else GitHub) before the next merge or
+promotion of its lane starts. A settling merge leaves its lane once the lane has settled:
 `watch` checks every poll, logs `lane.settled`, and `lanes` then shows the lane free before its
 next merge arrives.
 
