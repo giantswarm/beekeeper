@@ -24,6 +24,7 @@ const (
 	headless  = "[" + password + "\n" + token + "\n"
 	paddedDoc = "c2VjcmV0cGFzcw="
 	tokenKey  = "Iv1.0123456789abcdefABCDEF0123456789"
+	issuerKey = "issuer"
 )
 
 // readingKube is an Ops whose Secret read answers raw.
@@ -56,11 +57,11 @@ func TestKubePathResolvesEveryShape(t *testing.T) {
 		{"yaml", connectorDoc, clientSecretPath, password},
 		{"tab-indented yaml", tabDoc, "oidc.clientSecret", password},
 		{"spaced separator", spacedDoc, clientSecretPath, password},
-		{"spaced separator, crlf", spacedDoc, "issuer", "https://idp.example.com"},
+		{"spaced separator, crlf", spacedDoc, issuerKey, "https://idp.example.com"},
 		{"spaced separator, spaced value", spacedDoc, "scopes", "openid email"},
 		{"mixed quoted", mixedDoc, "clientID", "app-123"},
 		{"mixed tab and colon", mixedDoc, clientSecretPath, password},
-		{"mixed export", mixedDoc, "issuer", "https://idp.example.com"},
+		{"mixed export", mixedDoc, issuerKey, "https://idp.example.com"},
 		{"indented colon lines", textDoc, clientSecretPath, password},
 	} {
 		o := readingKube([]byte(tc.raw))
