@@ -131,7 +131,7 @@ a relayed successor opens with the plugin's role.
 
 | Command | For |
 |---|---|
-| `beekeeper capacity [--builds]` | The busy, parked and idle agents against `capacity.floor` and `capacity.ceiling`, the headroom that bounds a new start (MemAvailable, the swap's growth over the watch's readings, the 1-minute load against the watch's limit, the kind labs against their cap, and for a start that builds the free build slots) and one verdict: `room for N starts` or what blocks one, each guard that refuses named. `--builds` judges a start whose task builds, tests or lints, which waits for a free build slot; without it the verdict is for a start that does not build, and a busy slot is a note after the verdict, never a `no start`. Read-only, no GitHub call. |
+| `beekeeper capacity [--builds]` | The busy, parked and idle agents against `capacity.floor` and `capacity.ceiling`, the headroom that bounds a new start (MemAvailable, disk swap's growth over the watch's readings weighed with memory pressure and MemAvailable, the 1-minute load against the watch's limit, the kind labs against their cap, and for a start that builds the free build slots) and one verdict: `room for N starts` or what blocks one, each guard that refuses named; a swap growth without pressure is a warning in parentheses after it. `--builds` judges a start whose task builds, tests or lints, which waits for a free build slot; without it the verdict is for a start that does not build, and a busy slot is a note after the verdict, never a `no start`. Read-only, no GitHub call. |
 | `beekeeper status [--bar]` | One line: who supervises, the leases held, the holds in force, the notes and timers that are due and the busy agents against the target (`busy 4/5-10`). `--bar` prints it as the fixed tab-separated row a desktop bar reads (see [Desktop notifications](#desktop-notifications)). |
 | `beekeeper sessions` | Every running session, Claude Code's and omp's (marked `omp busy` or `omp idle`, see [omp agents](#omp-agents)): the issues and pull requests its latest turns acted on (its `sessions serve` record, its `gh` and `devctl` commands and GitHub tool calls, what it created; a ref it only quoted or read is a mention, kept in `--json` as `mentioned`), when it was last active, the commands it runs right now (a `devctl` wait, a bounded `sleep` with the time left), its memory, how full its context is, its last hour (turns, tool calls and their errors, GitHub calls, cost), role and leases, after `archived` or `test` for a session the guide's feed leaves out. Overlaps name what more than one session acts on. `--all` adds the paused ones and the omp sessions of the last 24 hours no process runs: a message to them does not arrive. `--json` has every figure per session and their totals (see [Session metrics](#session-metrics)). |
 | `beekeeper tail <session>` | A session's last turns without tool calls: what it said and what it was told. |
@@ -1393,11 +1393,18 @@ is kept in reserve or repurposed: a relay and a crash both start a fresh session
   waits on its person are parked; the
   supervisor, the guide and a role's successor are not counted. `beekeeper capacity` (and
   `--json`) prints the count, the headroom that bounds a new start (MemAvailable against
-  `capacity.availMinMiB`, the machine swap's growth over the watch's readings against
+  `capacity.availMinMiB`, disk swap's growth over the watch's readings of `watch.swapWindow` against
   `capacity.swapGrowthMaxMiB`, never the swap in use, the 1-minute load against the watch's HIGH
   LOAD limit (`watch.loadMax`, or `watch.loadPerCoreMax` × cores), the kind labs against their cap,
   and for a start that builds the free build slots) and one verdict, `room for N starts` or what
   blocks one, each guard that refuses named; it reads, changes nothing and makes no GitHub call.
+  Disk swap's growth is weighed with memory pressure and MemAvailable, the three figures in its
+  line: over the max it blocks a start under pressure (memory PSI, full avg60, over
+  `capacity.swapPSIMax`, or MemAvailable under the floor; either unknown counts as pressure) and is
+  a warning in parentheses after the verdict without (`room for 7 starts (disk swap growing +391
+  MiB/h over 256, without pressure: memory PSI 0% (max 0%), MemAvailable 43.0 GiB (floor 20
+  GiB))`): swap may sit full for days without a byte moving, zswap's writeback moves pages to disk
+  without new swapping, and the window lets a single burst leave the rate.
   The build slot guards only a start that builds: `capacity --builds` and `agents start --builds`
   mark a task that builds, tests or lints (its commands take the slot under `beekeeper run`), and
   such a start is refused while no slot is free. A start without the mark does not build (a filer,
@@ -2178,6 +2185,7 @@ The organisation and desk keys, and their defaults:
 | `memcap.cpuWeight` | `50` | `memcap.slice`'s CPUWeight against the desktop's slices (100 each): the runs' share of the cores while the desktop wants them too, a third by default |
 | `watch.availMinMiB`, `watch.scopeAnonMaxMiB`, `watch.gttMaxMiB` | 12%, 32%, 28% of RAM | LOW RAM, DESKTOP SCOPE, IGPU GTT |
 | `watch.swapMaxMiB`, `watch.oomdHeadroomMinMiB` | 60%, 6% of swap | SWAP (disk swap, zswap's share not counted, while it grows and MemAvailable falls), and the headroom under which OOMD IMMINENT is said (only while systemd-oomd watches a cgroup for swap) |
+| `watch.swapWindow` | 10m | how far back swap's growth rate looks (SWAP, OOMD IMMINENT, `capacity`'s swap guard), at least 5m: a writeback burst older than it has left the rate |
 | `watch.toolProcsMax`, `watch.tools` | `1000`; kubectl, helm, tsh, gh, flux, devctl | LOAD over this many processes of these CLIs machine-wide; negative: off |
 | `desktop.typingQuiet` | `30s` | How long the person's input stays idle before a `claude://` link switches the desktop's window; negative: links do not wait for it |
 | `watch.tmpMaxMiB`, `watch.diskMinMiB` | 45% of `/tmp`, 5% of `/` | TMPFS, LOW DISK |
