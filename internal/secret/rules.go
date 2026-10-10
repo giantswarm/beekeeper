@@ -96,15 +96,15 @@ func (r creationRule) recipients() []string {
 	return out
 }
 
-// check refuses a dotted path whose value sops would leave in plaintext
-// under r, decided as sops decides it from the keys on the path. A rule
-// that decides by comments is refused as a whole: a written value carries
-// none.
-func (r creationRule) check(path string) error {
+// checkKeys refuses the keys of a value's path, one key each, whose value
+// sops would leave in plaintext under r, decided as sops decides it from
+// the keys on the path. A rule that decides by comments is refused as a
+// whole: a written value carries none.
+func (r creationRule) checkKeys(keys []string) error {
+	path := strings.Join(keys, ".")
 	if r.UnencryptedCommentRegex != "" || r.EncryptedCommentRegex != "" {
 		return fmt.Errorf("%s: the creation rule %s decides by comments, and a written value carries none", path, r)
 	}
-	keys := strings.Split(path, ".")
 	anyKey := func(f func(string) bool) bool { return slices.ContainsFunc(keys, f) }
 	matching := func(field, expr string) (func(string) bool, error) {
 		re, err := regexp.Compile(expr)
