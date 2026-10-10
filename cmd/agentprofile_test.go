@@ -54,7 +54,10 @@ func TestProfileSettings(t *testing.T) {
 func TestProfileFlags(t *testing.T) {
 	listed := 0
 	old := installedPlugins
-	installedPlugins = func(context.Context) ([]string, error) { listed++; return []string{"beekeeper@beekeeper", "craft@shop"}, nil }
+	installedPlugins = func(context.Context) ([]string, error) {
+		listed++
+		return []string{"beekeeper@beekeeper", "craft@shop"}, nil
+	}
 	t.Cleanup(func() { installedPlugins = old })
 	a := &app{cfg: &config.Config{StateDir: t.TempDir()}}
 	flags, err := a.profileFlags(context.Background(), config.MinimalProfile)
