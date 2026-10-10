@@ -9,13 +9,16 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
-// A browse turn is one headless turn in bypass on the CLI's own Chrome
+// A browse turn is one headless turn in dontAsk on the CLI's own Chrome
 // connection, a session of its own: none of its caller's session variables
-// reach it.
+// reach it. A declared deploy is the turn's settings, an auto mode allow
+// rule for that one action after the shipped rules, and its prompt's word
+// between the preamble and the steps; without one the turn gets no settings.
 func TestBrowseTurn(t *testing.T) {
-	argv := browseArgv("id-1", "", "steps")
+	argv := browseArgv("id-1", "", "steps", "")
 	want := []string{"-p", chromeFlag, toolsFlag, "", strictMCPConfigFlag, permissionModeFlag, "dontAsk",
 		allowedToolsFlag, "mcp__claude-in-chrome__*", "--session-id", "id-1", "--", "steps"}
 	if !slices.Equal(argv, want) {
@@ -33,12 +36,45 @@ func TestBrowseTurn(t *testing.T) {
 			if argv[i+1] != browseTools {
 				t.Errorf("allowed tools %q, want only %q", argv[i+1], browseTools)
 			}
-		case "bypassPermissions", "--dangerously-skip-permissions", "--mcp-config":
+		case "bypassPermissions", "--dangerously-skip-permissions", "--mcp-config", "--settings":
 			t.Errorf("browseArgv carries %q", arg)
 		}
 	}
-	if argv := browseArgv("id-1", "sonnet", "-steps"); !slices.Contains(argv, "sonnet") || argv[len(argv)-2] != "--" {
+	if argv := browseArgv("id-1", "sonnet", "-steps", ""); !slices.Contains(argv, "sonnet") || argv[len(argv)-2] != "--" {
 		t.Errorf("browseArgv with a model = %q", argv)
+	}
+	const deploy = "the demo agent to the demo cluster"
+	argv = browseArgv("id-1", "", "steps", deploy)
+	i := slices.Index(argv, "--settings")
+	if i < 0 || i+1 >= len(argv) || argv[len(argv)-2] != "--" || slices.Index(argv, "--") < i {
+		t.Fatalf("browseArgv with a deploy = %q, want --settings before --", argv)
+	}
+	var settings struct {
+		AutoMode struct {
+			Allow                           []string
+			Environment, SoftDeny, HardDeny []string `json:",omitempty"`
+		}
+	}
+	if err := json.Unmarshal([]byte(argv[i+1]), &settings); err != nil {
+		t.Fatalf("--settings %q: %v", argv[i+1], err)
+	}
+	allow := settings.AutoMode.Allow
+	if len(allow) != 2 || allow[0] != "$defaults" || allow[1] != allowDeployRule(deploy) {
+		t.Errorf("autoMode.allow = %q, want the shipped rules then the deploy's", allow)
+	}
+	if rule := allow[1]; !strings.Contains(rule, "exactly one deploy or create action in a portal: "+deploy+".") ||
+		!strings.Contains(rule, "Production Deploy") || !strings.Contains(rule, "Not covered:") {
+		t.Errorf("the deploy's rule = %q", rule)
+	}
+	if n := strings.Count(argv[i+1], "$defaults"); n != 1 || strings.Contains(argv[i+1], "soft_deny") || strings.Contains(argv[i+1], "environment") {
+		t.Errorf("--settings touches more than the allow list: %s", argv[i+1])
+	}
+	if p := browsePrompt("steps", ""); p != browsePreamble+browseSteps+"steps" {
+		t.Errorf("browsePrompt without a deploy = %q", p)
+	}
+	if p := browsePrompt("steps", deploy); !strings.HasPrefix(p, browsePreamble+"The person's task covers one deploy: "+deploy+".") ||
+		!strings.HasSuffix(p, browseSteps+"steps") {
+		t.Errorf("browsePrompt with a deploy = %q", p)
 	}
 	env := browseEnv([]string{"PATH=/bin", "CLAUDECODE=1", "CLAUDE_CODE_ENTRYPOINT=claude-desktop", "CLAUDE_CODE_SESSION_ID=x", "CLAUDE_PID=1", "CLAUDE_CONFIG_DIR=/c", "HOME=/h"})
 	if !slices.Equal(env, []string{"PATH=/bin", "CLAUDE_CONFIG_DIR=/c", "HOME=/h"}) {
@@ -102,7 +138,7 @@ func TestReadFindings(t *testing.T) {
 		t.Fatalf("readFindings = %+v, %v; want %+v", f, err, want)
 	}
 	steps := "Open https://example.test/sign-in. On GitHub's page, click Authorize once; report the final URL."
-	got := f.lines(steps)
+	got := f.lines(steps, "")
 	wantLines := []string{
 		"refused: tabs_context_mcp: the auto mode classifier denied it as [Permission Grant]",
 		`refused: computer left_click "Clicks Authorize for the App": the auto mode classifier denied it as [Permission Grant]`,
@@ -116,14 +152,14 @@ func TestReadFindings(t *testing.T) {
 	// Another reason gets no hint; a grant refused with steps that name no
 	// grant gets the bare hint; nothing found prints nothing.
 	other := browseFindings{Refused: []refusal{{Call: "navigate https://example.test/", Reason: "Destructive"}}}
-	if l := other.lines(steps); len(l) != 1 || !strings.HasSuffix(l[0], "[Destructive]") {
+	if l := other.lines(steps, ""); len(l) != 1 || !strings.HasSuffix(l[0], "[Destructive]") {
 		t.Errorf("lines of another reason = %q", l)
 	}
 	grant := browseFindings{Refused: []refusal{{Call: "tabs_context_mcp", Reason: reasonGrant}}}
-	if l := grant.lines("Open the page and take a screenshot"); len(l) != 2 || l[1] != consentHint {
+	if l := grant.lines("Open the page and take a screenshot", ""); len(l) != 2 || l[1] != consentHint {
 		t.Errorf("lines without a consent step = %q", l)
 	}
-	if l := (browseFindings{}).lines(steps); l != nil {
+	if l := (browseFindings{}).lines(steps, ""); l != nil {
 		t.Errorf("lines of no findings = %q", l)
 	}
 	// A long step is quoted bounded.
@@ -131,8 +167,29 @@ func TestReadFindings(t *testing.T) {
 	if p := consentPhrase(long); len([]rune(p)) != phraseRunes+1 || !strings.HasSuffix(p, "…") || !strings.HasPrefix(p, "Then click Authorize") {
 		t.Errorf("consentPhrase(long) = %q", p)
 	}
-	if n := (browseFindings{NotRendered: 3}).lines(""); len(n) != 1 || !strings.HasPrefix(n[0], "not rendered: 3 screenshots timed out") {
+	if n := (browseFindings{NotRendered: 3}).lines("", ""); len(n) != 1 || !strings.HasPrefix(n[0], "not rendered: 3 screenshots timed out") {
 		t.Errorf("lines of 3 not rendered = %q", n)
+	}
+	// A deploy refusal names the refused click and, without a declared
+	// deploy, the flag; with one, the declaration that did not cover it. A
+	// declared deploy is the first line, refusal or not.
+	click := `browser_batch computer left_click "Deploys the demo agent to the demo cluster", computer wait`
+	refusedDeploy := browseFindings{Refused: []refusal{{Call: click, Reason: "Production Deploy"}}}
+	if l := refusedDeploy.lines(steps, ""); len(l) != 2 || l[0] != "refused: "+click+": the auto mode classifier denied it as [Production Deploy]" || l[1] != deployHint {
+		t.Errorf("lines of a deploy refusal = %q", l)
+	}
+	const deploy = "the demo agent to the demo cluster"
+	if l := refusedDeploy.lines(steps, deploy); len(l) != 3 || l[0] != "allowed deploy: "+deploy+": the turn's auto mode allowed that one deploy or create click (--allow-deploy)" ||
+		!strings.HasPrefix(l[1], "refused: ") || l[2] != `the declared deploy "`+deploy+`" did not cover it: declare the refused call's own action and target` {
+		t.Errorf("lines of a deploy refusal under a declared deploy = %q", l)
+	}
+	if l := (browseFindings{}).lines(steps, deploy); len(l) != 1 || !strings.HasPrefix(l[0], "allowed deploy: "+deploy) {
+		t.Errorf("lines of a declared deploy without findings = %q", l)
+	}
+	for _, reason := range deployReasons {
+		if l := (browseFindings{Refused: []refusal{{Call: click, Reason: reason}}}).lines(steps, ""); len(l) != 2 || l[1] != deployHint {
+			t.Errorf("lines of a [%s] refusal = %q, want the deploy hint", reason, l)
+		}
 	}
 	// A batch's words carry its actions' in order; a call without an input
 	// is its tool's name.
@@ -142,5 +199,78 @@ func TestReadFindings(t *testing.T) {
 	}
 	if w := callWords("mcp__claude-in-chrome__find", nil); w != "find" {
 		t.Errorf("callWords(find) = %q", w)
+	}
+}
+
+// The turn runs the claude on PATH with the browse argv: dontAsk, the Chrome
+// tools alone, and with a declared deploy the settings whose auto mode
+// allows it and a prompt that names it; the report and the lines below it
+// come from the turn's output and its transcript.
+func TestBrowseRunsTheTurn(t *testing.T) {
+	a, out := stubApp(t)
+	bin := t.TempDir()
+	argvFile, transcript := filepath.Join(bin, "argv"), filepath.Join(bin, "transcript.jsonl")
+	// The fake claude records its arguments NUL-separated (a prompt holds
+	// newlines), writes the transcript under the session id it was given and
+	// prints its report.
+	script := "#!/bin/sh\n: > \"$BROWSE_ARGV\"\nid=; prev=\nfor a in \"$@\"; do\n  printf '%s\\0' \"$a\" >> \"$BROWSE_ARGV\"\n" +
+		"  [ \"$prev\" = --session-id ] && id=$a\n  prev=$a\ndone\nmkdir -p \"$BROWSE_PROJECT\" && cp \"$BROWSE_TRANSCRIPT\" \"$BROWSE_PROJECT/$id.jsonl\"\n" +
+		"echo \"the turn's report\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o700); err != nil { //nolint:gosec // a fake claude
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("BROWSE_ARGV", argvFile)
+	t.Setenv("BROWSE_TRANSCRIPT", transcript)
+	t.Setenv("BROWSE_PROJECT", filepath.Join(a.cfg.Claude.ProjectsDir, "p"))
+	click := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"mcp__claude-in-chrome__computer","input":{"action":"left_click","ref":"ref_9","action_summary":"Deploys the demo agent to the demo cluster"}}]}}` + "\n"
+	denial := "Permission for this action was denied by the Claude Code auto mode classifier. Reason: [Production Deploy]. If you have other tasks, continue."
+	argvOf := func() []string {
+		b, err := os.ReadFile(argvFile) //nolint:gosec // the test's own file
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Split(strings.TrimSuffix(string(b), "\x00"), "\x00")
+	}
+	const steps = "Open the demo page. Click Deploy agent once. Report what the page says."
+
+	// Without the flag the turn gets no settings, and its refused click is
+	// named below the report with the flag to declare it.
+	writeFile(t, transcript, click+`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"`+denial+`"}]}}`+"\n")
+	if err := a.browse(t.Context(), steps, bin, "", time.Minute, ""); err != nil {
+		t.Fatalf("browse: %v\n%s", err, out.String())
+	}
+	got := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if len(got) < 5 || got[0] != "the turn's report" ||
+		got[1] != `refused: computer left_click "Deploys the demo agent to the demo cluster": the auto mode classifier denied it as [Production Deploy]` ||
+		got[2] != deployHint || !strings.HasPrefix(got[3], "transcript: ") || got[4] != "screenshot: none taken" {
+		t.Errorf("browse without the flag printed %q", got)
+	}
+	argv := argvOf()
+	if i := slices.Index(argv, permissionModeFlag); i < 0 || argv[i+1] != modeDontAsk || slices.Contains(argv, settingsFlag) ||
+		argv[len(argv)-1] != browsePrompt(steps, "") || !slices.Contains(argv, chromeFlag) {
+		t.Errorf("the turn without the flag ran with %q", argv)
+	}
+
+	// With the flag the turn gets the settings whose auto mode allows the
+	// declared deploy and a prompt that names it, and the report says so.
+	const deploy = "the demo agent to the demo cluster"
+	writeFile(t, transcript, click+`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":false,"content":"Clicked"}]}}`+"\n")
+	out.Reset()
+	if err := a.browse(t.Context(), steps, bin, "", time.Minute, deploy); err != nil {
+		t.Fatalf("browse --allow-deploy: %v\n%s", err, out.String())
+	}
+	got = strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if len(got) != 4 || got[0] != "the turn's report" || !strings.HasPrefix(got[1], "allowed deploy: "+deploy+": ") ||
+		!strings.HasPrefix(got[2], "transcript: ") || got[3] != "screenshot: none taken" {
+		t.Errorf("browse --allow-deploy printed %q", got)
+	}
+	argv = argvOf()
+	i := slices.Index(argv, settingsFlag)
+	if i < 0 || argv[i+1] != allowDeploySettings(deploy) || argv[len(argv)-1] != browsePrompt(steps, deploy) {
+		t.Errorf("the turn with the flag ran with %q", argv)
+	}
+	if i := slices.Index(argv, permissionModeFlag); i < 0 || argv[i+1] != modeDontAsk {
+		t.Errorf("the flag changed the turn's mode: %q", argv)
 	}
 }
