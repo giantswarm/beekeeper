@@ -19,6 +19,7 @@ import (
 // Kubernetes Secret.
 const (
 	mapTag     = "!!map"
+	strTag     = "!!str"
 	secretKind = "Secret"
 )
 
@@ -181,13 +182,24 @@ func (d *document) set(path, value string) error {
 	if n := d.node(path); n != nil && n.Kind != yaml.ScalarNode {
 		return fmt.Errorf("%q holds a %s, not a value", path, kindName(n.Kind))
 	}
-	return d.put(path, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value})
+	return d.put(path, &yaml.Node{Kind: yaml.ScalarNode, Tag: strTag, Value: value})
+}
+
+// setKeys puts a string under keys, one key each, a key holding a dot
+// included (a Secret's .dockerconfigjson), creating the mappings on the way.
+func (d *document) setKeys(keys []string, value string) error {
+	return d.putKeys(keys, &yaml.Node{Kind: yaml.ScalarNode, Tag: strTag, Value: value})
 }
 
 // put puts a node at a dotted path, replacing what is there and creating
 // the mappings on the way.
 func (d *document) put(path string, value *yaml.Node) error {
-	keys := strings.Split(path, ".")
+	return d.putKeys(strings.Split(path, "."), value)
+}
+
+// putKeys is [document.put] under keys, one key each.
+func (d *document) putKeys(keys []string, value *yaml.Node) error {
+	path := strings.Join(keys, ".")
 	n := d.root
 	for i, k := range keys {
 		if k == "" {
@@ -207,7 +219,7 @@ func (d *document) put(path string, value *yaml.Node) error {
 			if last {
 				c = &yaml.Node{}
 			}
-			n.Content = append(n.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: k}, c)
+			n.Content = append(n.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: strTag, Value: k}, c)
 		}
 		n = c
 	}

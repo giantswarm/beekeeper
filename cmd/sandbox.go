@@ -343,11 +343,12 @@ func brokeredCap(c platform.Capper, cpu platform.Cap) func(int, sandbox.Request)
 }
 
 // brokeredSecretOps are the beekeeper secret subcommands a sandboxed
-// session runs through the broker. copy's consumer form is refused with
-// them: its consumer would run on the host, outside the sandbox. import
+// session runs through the broker. copy's and set's consumer form and
+// capture are refused with them: the command after -- would run on the
+// host, outside the sandbox. import
 // reads a vault of the person's that the service account does not: the
 // broker runs it with secret.session only, in the person's session it holds.
-var brokeredSecretOps = []string{"compare", "fingerprint", "copy", "set", "rotate", "recipients", "reveal", "unset", importOp}
+var brokeredSecretOps = []string{"compare", "fingerprint", "copy", "set", "capture", "rotate", "recipients", "reveal", "unset", importOp}
 
 // importOp is the secret subcommand that reads the person's own vault.
 const importOp = "import"
@@ -373,7 +374,7 @@ func brokeredSecretArgs(args []string, inSandbox, session bool) error {
 	}
 	for _, a := range args[1:] {
 		if a == "--" && inSandbox {
-			return errors.New("a consumer runs on the host only: copy or set with -- is not brokered")
+			return errors.New("a consumer or producer runs on the host only: copy, set or capture with -- is not brokered")
 		}
 	}
 	return brokeredFlags(args[1:])

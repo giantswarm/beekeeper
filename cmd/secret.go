@@ -35,7 +35,7 @@ var secretRead secret.SecretReader
 func (a *app) secretCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "secret",
-		Short: "Credential operations that never return a value: compare, fingerprint, copy, set, rotate, unset; reveal answers configuration; store is the person's",
+		Short: "Credential operations that never return a value: compare, fingerprint, copy, set, capture, rotate, unset; reveal answers configuration; store is the person's",
 		Long: `beekeeper is the only process that reads, creates, encrypts and decrypts
 secrets; an agent asks it with beekeeper secret. sops and op run in
 beekeeper's process, a value stays in its memory for the one operation and
@@ -131,7 +131,7 @@ anything is not equal.`,
 			return nil
 		},
 	})
-	c.AddCommand(a.secretFingerprintCmd(), a.secretCopyCmd(), a.secretSetCmd(), a.secretRotateCmd(), a.secretSetupCmd(), a.secretImportCmd(), a.secretRecipientsCmd(),
+	c.AddCommand(a.secretFingerprintCmd(), a.secretCopyCmd(), a.secretSetCmd(), a.secretCaptureCmd(), a.secretRotateCmd(), a.secretSetupCmd(), a.secretImportCmd(), a.secretRecipientsCmd(),
 		a.secretRevealCmd(), a.secretUnsetCmd())
 	for _, sub := range c.Commands() {
 		run := sub.RunE
@@ -276,7 +276,7 @@ func callArgs(cmd *cobra.Command, args []string) []string {
 func (a *app) secretBrokered(cmd *cobra.Command, args []string, inSandbox bool) error {
 	dash := cmd.ArgsLenAtDash()
 	if inSandbox && dash >= 0 {
-		return refused("the agent sandbox runs no consumer on the host: copy or set with -- <consumer> runs outside the sandbox only")
+		return refused("the agent sandbox runs no consumer or producer on the host: copy, set or capture with -- <command> runs outside the sandbox only")
 	}
 	if dash < 0 {
 		dash = len(args)
