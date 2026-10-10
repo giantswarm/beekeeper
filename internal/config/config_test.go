@@ -31,6 +31,9 @@ func TestLoadDefaults(t *testing.T) {
 	if w := c.Watch; w.ToolProcsMax != 1000 || len(w.Tools) != 6 || c.Desktop.TypingQuiet.Duration != 30*time.Second {
 		t.Errorf("LOAD and typing defaults = %d %v %s", w.ToolProcsMax, w.Tools, c.Desktop.TypingQuiet)
 	}
+	if w, k := c.Watch, c.Capacity; w.SwapWindow.Duration != 10*time.Minute || k.SwapGrowthMaxMiB != 256 || k.SwapPSIMax != 0 || k.AvailMinMiB != 20<<10 {
+		t.Errorf("swap guard defaults = %s %d %g %d", w.SwapWindow, k.SwapGrowthMaxMiB, k.SwapPSIMax, k.AvailMinMiB)
+	}
 	if len(c.Alerts.Quiet) != 0 || !slices.Equal(c.Alerts.Ignore, DefaultIgnore) || c.Alerts.Tenant != "" {
 		t.Errorf("alerts without a team = %+v, want no quiet rule, Watchdog ignored, no tenant", c.Alerts)
 	}
@@ -159,6 +162,8 @@ func TestLoadRejects(t *testing.T) {
 		"omp key as value":           "omp: {providers: {spark: {apiKey: sk-planted}}}",
 		"omp key half ref":           "omp: {providers: {spark: {apiKey: op://Vault/item}}}",
 		"omp key no ref":             "omp: {providers: {spark: {}}}",
+		"short swapWindow":           "watch: {swapWindow: 2m}",
+		"negative swapPSIMax":        "capacity: {swapPSIMax: -1}",
 	} {
 		p := filepath.Join(t.TempDir(), "c.yaml")
 		if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {

@@ -1924,7 +1924,7 @@ func (c *Config) validate() error {
 	if c.Capacity.SwapPSIMax < 0 {
 		return fmt.Errorf("capacity.swapPSIMax: %g is not a pressure in percent", c.Capacity.SwapPSIMax)
 	}
-	if w := c.Watch.SwapWindow.Duration; w < MinSwapSpan {
+	if w := c.Watch.SwapWindow.Duration; w != 0 && w < MinSwapSpan {
 		return fmt.Errorf("watch.swapWindow: %s is under the %s a swap growth rate is measured over", w, MinSwapSpan)
 	}
 	if a := c.Agents; a.LastStepCeiling != 0 && a.LastStepCeiling <= a.RelayAt {

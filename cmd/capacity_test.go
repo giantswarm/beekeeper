@@ -68,10 +68,11 @@ func TestCountAgents(t *testing.T) {
 	}
 }
 
-// roomy is a headroom with memory, swap, pressure, slots and labs to spare.
+// roomy is a headroom with memory, swap, pressure, load, slots and labs to
+// spare.
 func roomy() *headroom {
 	return &headroom{AvailableMiB: 45 << 10, AvailMinMiB: 20 << 10, SwapGrowthMaxMiB: 256,
-		Swap: &swapReading{Rated: true, PerHourMiB: 10}, SlotsFree: 1, Slots: 2, Labs: 1, MaxLabs: 2}
+		Swap: &swapReading{Rated: true, PerHourMiB: 10}, Load1: 3, LoadMax: 48, SlotsFree: 1, Slots: 2, Labs: 1, MaxLabs: 2}
 }
 
 // The swap guard's figures at a disk swap growth over the max.
@@ -82,6 +83,10 @@ const (
 	swapUnderRoom = "no start: MemAvailable 15.0 GiB under 20 GiB; disk swap growing +900 MiB/h over 256, under pressure: memory PSI 0% (max 0%), MemAvailable 15.0 GiB under the floor of 20 GiB"
 )
 
+// slotNote is the verdict's note for a start that does not build while no
+// build slot is free.
+const slotNote = " (no free build slot: a start that builds (--builds) waits for it)"
+
 // tight is a roomy headroom whose memory leaves no room for a start: the
 // watch tests' machine, which says no CAPACITY line under the floor.
 func tight() *headroom {
@@ -91,7 +96,8 @@ func tight() *headroom {
 }
 
 // The verdict is room up to the ceiling within the guards, else every guard
-// that blocks.
+// that blocks. The build slot guards only a start that builds: without the
+// mark a busy slot is a note after the verdict, with it a block.
 func TestCapacityVerdict(t *testing.T) {
 	k := config.Capacity{Floor: 5, Ceiling: 10}
 	busy := func(n int) agentCount {
@@ -102,46 +108,121 @@ func TestCapacityVerdict(t *testing.T) {
 		return c
 	}
 	for _, c := range []struct {
-		name string
-		busy int
-		edit func(*headroom)
-		want string
+		name   string
+		busy   int
+		builds bool
+		edit   func(*headroom)
+		want   string
 	}{
-		{"room", 3, func(*headroom) {}, roomSeven},
-		{"one", 9, func(*headroom) {}, "room for 1 start"},
-		{"ceiling", 10, func(*headroom) {}, "no start: 10 busy at the ceiling of 10"},
-		{"memory", 3, func(h *headroom) { h.AvailableMiB = 15 << 10 }, "no start: MemAvailable 15.0 GiB under 20 GiB"},
+		{"room", 3, false, func(*headroom) {}, roomSeven},
+		{"room, builds", 3, true, func(*headroom) {}, roomSeven},
+		{"one", 9, false, func(*headroom) {}, "room for 1 start"},
+		{"ceiling", 10, false, func(*headroom) {}, "no start: 10 busy at the ceiling of 10"},
+		{"memory", 3, false, func(h *headroom) { h.AvailableMiB = 15 << 10 }, "no start: MemAvailable 15.0 GiB under 20 GiB"},
 		// Disk swap growing over the max is a warning with PSI within the
 		// max and MemAvailable over the floor, a block under either.
-		{"swap, PSI 0 and room", 3, func(h *headroom) { h.Swap.PerHourMiB = 900 }, swapWarning},
-		{"swap under PSI", 3, func(h *headroom) { h.Swap.PerHourMiB, h.PSI = 900, 0.4 }, swapUnderPSI},
-		{"swap under the floor", 3, func(h *headroom) { h.Swap.PerHourMiB, h.AvailableMiB = 900, 15 << 10 }, swapUnderRoom},
-		{"swap, PSI within the max", 3, func(h *headroom) { h.Swap.PerHourMiB, h.PSI, h.PSIMax = 900, 3, 5 },
+		{"swap, PSI 0 and room", 3, false, func(h *headroom) { h.Swap.PerHourMiB = 900 }, swapWarning},
+		{"swap under PSI", 3, false, func(h *headroom) { h.Swap.PerHourMiB, h.PSI = 900, 0.4 }, swapUnderPSI},
+		{"swap under the floor", 3, false, func(h *headroom) { h.Swap.PerHourMiB, h.AvailableMiB = 900, 15<<10 }, swapUnderRoom},
+		{"swap, PSI within the max", 3, false, func(h *headroom) { h.Swap.PerHourMiB, h.PSI, h.PSIMax = 900, 3, 5 },
 			roomSeven + " (disk swap growing +900 MiB/h over 256, without pressure: memory PSI 3% (max 5%), MemAvailable 45.0 GiB (floor 20 GiB))"},
-		{"swap, PSI unknown", 3, func(h *headroom) { h.Swap.PerHourMiB, h.PSIErr = 900, "no pressure file" },
+		{"swap, PSI unknown", 3, false, func(h *headroom) { h.Swap.PerHourMiB, h.PSIErr = 900, "no pressure file" },
 			"no start: disk swap growing +900 MiB/h over 256, pressure unknown: memory PSI unknown (no pressure file), MemAvailable 45.0 GiB (floor 20 GiB)"},
-		{"PSI alone", 3, func(h *headroom) { h.PSI = 12 }, roomSeven},
-		{"swap unrated", 3, func(h *headroom) { h.Swap = &swapReading{PerHourMiB: 900} }, roomSeven},
-		{"swap full, flat", 3, func(h *headroom) { h.Swap.UsedMiB, h.Swap.PerHourMiB = 16<<10, 0 }, roomSeven},
-		{"slots", 3, func(h *headroom) { h.SlotsFree = 0 }, "no start: no free build slot"},
-		{"labs", 3, func(h *headroom) { h.Labs = 3 }, "no start: 3 kind labs over the cap of 2"},
-		{"labs at the cap", 3, func(h *headroom) { h.Labs = 2 }, roomSeven},
-		{"two", 3, func(h *headroom) { h.AvailableMiB, h.SlotsFree = 10<<10, 0 }, "no start: MemAvailable 10.0 GiB under 20 GiB; no free build slot"},
+		{"swap warning and slot note", 3, false, func(h *headroom) { h.Swap.PerHourMiB, h.SlotsFree = 900, 0 },
+			roomSeven + " (disk swap growing +900 MiB/h over 256, without pressure: " + swapFigures + "; no free build slot: a start that builds (--builds) waits for it)"},
+		{"PSI alone", 3, false, func(h *headroom) { h.PSI = 12 }, roomSeven},
+		{"swap unrated", 3, false, func(h *headroom) { h.Swap = &swapReading{PerHourMiB: 900} }, roomSeven},
+		{"swap full, flat", 3, false, func(h *headroom) { h.Swap.UsedMiB, h.Swap.PerHourMiB = 16<<10, 0 }, roomSeven},
+		{"load", 3, false, func(h *headroom) { h.Load1 = 60 }, "no start: 1m load 60 over 48"},
+		{"load unknown", 3, false, func(h *headroom) { h.Load1, h.LoadErr = 60, "no /proc/loadavg" }, roomSeven},
+		{"load unbounded", 3, false, func(h *headroom) { h.Load1, h.LoadMax = 60, 0 }, roomSeven},
+		{"slot busy, no build", 3, false, func(h *headroom) { h.SlotsFree = 0 }, roomSeven + slotNote},
+		{"slot busy, builds", 3, true, func(h *headroom) { h.SlotsFree = 0 }, "no start: no free build slot"},
+		{"no slots configured", 3, true, func(h *headroom) { h.SlotsFree, h.Slots = 0, 0 }, roomSeven},
+		{"labs", 3, false, func(h *headroom) { h.Labs = 3 }, "no start: 3 kind labs over the cap of 2"},
+		{"labs at the cap", 3, false, func(h *headroom) { h.Labs = 2 }, roomSeven},
+		{"memory and slot, no build", 3, false, func(h *headroom) { h.AvailableMiB, h.SlotsFree = 10<<10, 0 }, "no start: MemAvailable 10.0 GiB under 20 GiB" + slotNote},
+		{"memory and slot, builds", 3, true, func(h *headroom) { h.AvailableMiB, h.SlotsFree = 10<<10, 0 }, "no start: MemAvailable 10.0 GiB under 20 GiB; no free build slot"},
 	} {
 		h := roomy()
 		c.edit(h)
-		if got := newCapacity(busy(c.busy), k, h).verdict(); got != c.want {
+		v := newCapacity(busy(c.busy), k, h, c.builds)
+		if got := v.verdict(); got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+		if v.Builds != c.builds {
+			t.Errorf("%s: builds %v, want %v", c.name, v.Builds, c.builds)
 		}
 	}
 	h := roomy()
-	if got, want := h.line(), "headroom: MemAvailable 45.0 GiB (floor 20 GiB), memory PSI 0% (max 0%), disk swap 0 MiB +10 MiB/h (max 256), zswap 0 MiB, build slots 1 of 2 free, kind labs 1 of 2"; got != want {
+	if got, want := h.line(), "headroom: MemAvailable 45.0 GiB (floor 20 GiB), memory PSI 0% (max 0%), disk swap 0 MiB +10 MiB/h (max 256), zswap 0 MiB, 1m load 3 (max 48), build slots 1 of 2 free, kind labs 1 of 2"; got != want {
 		t.Errorf("line %q, want %q", got, want)
 	}
 	h.Swap = nil
-	if got := h.line(); !strings.Contains(got, "swap growth not measured (no watch reading)") {
-		t.Errorf("line without a reading: %q", got)
+	h.LoadErr = "no /proc/loadavg"
+	if got := h.line(); !strings.Contains(got, "swap growth not measured (no watch reading)") || !strings.Contains(got, ", load unknown,") {
+		t.Errorf("line without readings: %q", got)
 	}
+}
+
+// The start gate lets a start with room through, refuses one without
+// (exit 3, the guards named) and lets --force through with the verdict it
+// overrides: a busy build slot refuses only a start that builds.
+func TestGateStart(t *testing.T) {
+	k := config.Capacity{Floor: 5, Ceiling: 10}
+	three := countAgents(supervised(3), nil, keepNow)
+	slotBusy := roomy()
+	slotBusy.SlotsFree = 0
+	for _, c := range []struct {
+		name     string
+		h        *headroom
+		builds   bool
+		force    bool
+		wantOver string
+		wantErr  string
+	}{
+		{"room", roomy(), false, false, "", ""},
+		{"slot busy, no build", slotBusy, false, false, "", ""},
+		{"slot busy, builds", slotBusy, true, false, "", "no start: no free build slot (beekeeper capacity; --force starts anyway)"},
+		{"slot busy, builds, forced", slotBusy, true, true, "no start: no free build slot", ""},
+		{"tight", tight(), false, false, "", "no start: MemAvailable 5.0 GiB under 20 GiB (beekeeper capacity; --force starts anyway)"},
+		{"tight, forced", tight(), false, true, "no start: MemAvailable 5.0 GiB under 20 GiB", ""},
+	} {
+		over, err := gateStart(newCapacity(three, k, c.h, c.builds), c.force)
+		if over != c.wantOver {
+			t.Errorf("%s: overridden %q, want %q", c.name, over, c.wantOver)
+		}
+		switch {
+		case c.wantErr == "" && err != nil:
+			t.Errorf("%s: %v, want the start through", c.name, err)
+		case c.wantErr != "" && (err == nil || err.Error() != c.wantErr):
+			t.Errorf("%s: %v, want %q", c.name, err, c.wantErr)
+		case c.wantErr != "" && Code(err) != ExitRefused:
+			t.Errorf("%s: exit %d, want %d", c.name, Code(err), ExitRefused)
+		}
+	}
+}
+
+// The watch's CAPACITY LOW weighs a start that does not build: a busy build
+// slot leaves the room and is a note in the line.
+func TestWatchCapacitySlotBusy(t *testing.T) {
+	w, _, out := notifyingWatch(t, t.TempDir(), false)
+	room := roomy()
+	room.SlotsFree = 0
+	w.readHeadroom = func(context.Context, *swapReading) *headroom { return room }
+	w.capacity(context.Background(), supervised(3), nil)
+	if !strings.Contains(out.String(), "CAPACITY LOW 3 of 5: "+roomSeven+slotNote+"; headroom:") {
+		t.Fatalf("under the floor with the slot busy:\n%s", out)
+	}
+}
+
+// supervised is a roster of n busy workers under a supervisor.
+func supervised(n int) *state.State {
+	st := &state.State{Supervisor: &state.Supervisor{Party: state.Party{Session: "s-sup", Name: "Supervisor run 68"}}}
+	for i := range n {
+		st.Agents = append(st.Agents, tasked(fmt.Sprint("BK ", i)))
+	}
+	return st
 }
 
 // The watch says CAPACITY LOW once while busy stays under the floor with
@@ -152,35 +233,28 @@ func TestWatchCapacity(t *testing.T) {
 	room := roomy()
 	reads := 0
 	w.readHeadroom = func(context.Context, *swapReading) *headroom { reads++; return room }
-	roster := func(n int) *state.State {
-		st := &state.State{Supervisor: &state.Supervisor{Party: state.Party{Session: "s-sup", Name: "Supervisor run 68"}}}
-		for i := range n {
-			st.Agents = append(st.Agents, tasked(fmt.Sprint("BK ", i)))
-		}
-		return st
-	}
 	count := func(s string) int { return strings.Count(out.String(), s) }
 
-	w.capacity(context.Background(), roster(3), nil)
-	w.capacity(context.Background(), roster(3), nil)
+	w.capacity(context.Background(), supervised(3), nil)
+	w.capacity(context.Background(), supervised(3), nil)
 	if count("CAPACITY LOW 3 of 5: room for 7 starts; headroom: MemAvailable 45.0 GiB") != 1 {
 		t.Fatalf("under the floor twice:\n%s", out)
 	}
-	w.capacity(context.Background(), roster(5), nil)
+	w.capacity(context.Background(), supervised(5), nil)
 	if count("ENDED CAPACITY LOW 3 of 5") != 1 || reads != 2 {
 		t.Fatalf("recovered (reads %d):\n%s", reads, out)
 	}
-	w.capacity(context.Background(), roster(4), nil)
+	w.capacity(context.Background(), supervised(4), nil)
 	if count("CAPACITY LOW 4 of 5") != 1 {
 		t.Fatalf("dropped again:\n%s", out)
 	}
-	w.capacity(context.Background(), roster(10), nil)
+	w.capacity(context.Background(), supervised(10), nil)
 	if count("CAPACITY FULL 10 of 10: headroom:") != 1 {
 		t.Fatalf("at the ceiling:\n%s", out)
 	}
 	out.Reset()
 	room.AvailableMiB = 5 << 10
-	w.capacity(context.Background(), roster(2), nil)
+	w.capacity(context.Background(), supervised(2), nil)
 	if strings.Contains(out.String(), "CAPACITY LOW") {
 		t.Fatalf("under the floor without room:\n%s", out)
 	}
