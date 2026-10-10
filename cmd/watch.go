@@ -268,7 +268,7 @@ type watcher struct {
 	reported map[string]bool
 	// notifier sends the events that need a person (--notify); nil prints only.
 	notifier *notify.Notifier
-	// swapSamples are the last hour's swap readings, oldest first: the
+	// swapSamples are watch.swapWindow's swap readings, oldest first: the
 	// growth rate toward systemd-oomd's trigger.
 	swapSamples []swapSample
 	// swap is the machine sample's latest swap reading, under mu: the
@@ -789,21 +789,17 @@ type swapSample struct {
 	usedMiB, diskMiB, availMiB int
 }
 
-// swapWindow is how far back the swap growth rate looks, and minSwapSpan
-// the shortest span it is measured over.
-const (
-	swapWindow  = time.Hour
-	minSwapSpan = 5 * time.Minute
-)
-
-// swapTrend is the swap's movement over the last hour: disk swap's growth,
-// the growth of all swap in use (what systemd-oomd measures), and whether
-// MemAvailable fell. Rated once the readings span minSwapSpan.
+// swapTrend is the swap's movement over watch.swapWindow: disk swap's
+// growth, the growth of all swap in use (what systemd-oomd measures), and
+// whether MemAvailable fell. Rated once the readings span
+// config.MinSwapSpan.
 type swapTrend struct {
 	DiskPerHourMiB int
 	UsedPerHourMiB int
 	AvailFalling   bool
 	Rated          bool
+	// Window is how far back the rate looks.
+	Window time.Duration
 }
 
 // pressing reports disk swap growing while MemAvailable falls: the only
@@ -811,18 +807,20 @@ type swapTrend struct {
 // after the burst that pushed them out, and zswap's share sits in RAM.
 func (t swapTrend) pressing() bool { return t.Rated && t.DiskPerHourMiB > 0 && t.AvailFalling }
 
-// swapTrend records a reading and returns the movement over the last hour.
+// swapTrend records a reading and returns the movement over
+// watch.swapWindow.
 func (w *watcher) swapTrend(now time.Time, m machine.Mem) swapTrend {
+	window := w.cfg.Watch.SwapWindow.Duration
 	w.swapSamples = append(w.swapSamples, swapSample{now, m.SwapUsedMiB, m.DiskSwapMiB(), m.AvailableMiB})
 	i := 0
-	for i < len(w.swapSamples)-1 && now.Sub(w.swapSamples[i].at) > swapWindow {
+	for i < len(w.swapSamples)-1 && now.Sub(w.swapSamples[i].at) > window {
 		i++
 	}
 	w.swapSamples = w.swapSamples[i:]
 	first := w.swapSamples[0]
 	span := now.Sub(first.at)
-	if span < minSwapSpan {
-		return swapTrend{}
+	if span < config.MinSwapSpan {
+		return swapTrend{Window: window}
 	}
 	perHour := func(from, to int) int { return int(float64(to-from) / span.Hours()) }
 	return swapTrend{
@@ -830,6 +828,7 @@ func (w *watcher) swapTrend(now time.Time, m machine.Mem) swapTrend {
 		UsedPerHourMiB: perHour(first.usedMiB, m.SwapUsedMiB),
 		AvailFalling:   m.AvailableMiB < first.availMiB,
 		Rated:          true,
+		Window:         window,
 	}
 }
 
@@ -846,7 +845,7 @@ func swapLine(m machine.Mem, oomd *machine.OOMDSwap, t swapTrend) string {
 	if !t.Rated {
 		return line + ", growth not yet measured"
 	}
-	line += fmt.Sprintf(", disk %+d MiB/h over the last hour", t.DiskPerHourMiB)
+	line += fmt.Sprintf(", disk %+d MiB/h over the last %s", t.DiskPerHourMiB, dur(t.Window))
 	if t.pressing() {
 		line += " while MemAvailable falls"
 	}
@@ -956,7 +955,7 @@ func (w *watcher) sample(ctx context.Context) {
 			w.check("oomd", !swapoff && w.oomdImminent(m, oomd, t), "OOMD IMMINENT: %s", line)
 		}
 		w.keepSwap(&swapReading{At: now, UsedMiB: m.SwapUsedMiB, DiskMiB: m.DiskSwapMiB(), ZswapMiB: m.ZswappedMiB,
-			PerHourMiB: t.DiskPerHourMiB, AvailFalling: t.AvailFalling, Rated: t.Rated})
+			PerHourMiB: t.DiskPerHourMiB, Rated: t.Rated})
 	}
 	w.sampleCPU(now, table)
 	psi, err := plat.Machine.MemoryPressure()

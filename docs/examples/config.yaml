@@ -92,6 +92,7 @@ watch:
   budgetEvery: 5m
   availMinMiB: 10240        # LOW RAM under this MemAvailable; default: 12% of RAM
   swapMaxMiB: 10000         # SWAP over this much disk swap (zswap's share not counted) while it grows and MemAvailable falls; default: 60% of swap
+  swapWindow: 10m           # the default; how far back swap's growth rate looks (SWAP, OOMD IMMINENT, capacity's swap guard), at least 5m: a writeback burst older than this has left the rate
   oomdHeadroomMinMiB: 1024  # OOMD IMMINENT, only when oomd watches a cgroup for swap and disk swap grows while MemAvailable falls: under this much swap growth left before oomd's SwapUsedLimit; default: 6% of swap
   oomdWithin: 30m           # ... or when the last hour's growth rate reaches the trigger within this
   scopeAnonMaxMiB: 28000    # DESKTOP SCOPE anon over this (cache is reclaimable, anon is not); default: 32% of RAM
@@ -210,8 +211,9 @@ agents:                     # the hand-over of registered agents
 capacity:                   # the busy agents the supervisor keeps (beekeeper capacity, watch's CAPACITY LOW / FULL)
   floor: 5                  # CAPACITY LOW under this many busy agents, when the headroom allows a start
   ceiling: 10               # CAPACITY FULL at this many; no start past it
-  availMinMiB: 20480        # a start needs this MemAvailable
-  swapGrowthMaxMiB: 256     # no start while disk swap grows faster than this per hour over the watch's readings and MemAvailable falls
+  availMinMiB: 20480        # a start needs this MemAvailable; also the floor under which disk swap's growth refuses one
+  swapGrowthMaxMiB: 256     # disk swap growing faster than this per hour (over watch.swapWindow) refuses a start under memory pressure, and is a warning after the verdict without
+  swapPSIMax: 0             # the default; memory pressure (full avg60 of /proc/pressure/memory, %) up to which that growth is only a warning while MemAvailable is over availMinMiB
 doctor:                     # known faults the doctor (beekeeper doctor, every watch poll) probes and remedies
   faults:
     - name: registry-login  # an example: a login unit answering 401, fixed by a restart

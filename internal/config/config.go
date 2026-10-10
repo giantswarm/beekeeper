@@ -576,11 +576,18 @@ type Capacity struct {
 	// the most it starts (10).
 	Floor   int `yaml:"floor"`
 	Ceiling int `yaml:"ceiling"`
-	// AvailMinMiB is the MemAvailable a start needs (20 GiB).
+	// AvailMinMiB is the MemAvailable a start needs (20 GiB), and the floor
+	// under which disk swap's growth refuses a start.
 	AvailMinMiB int `yaml:"availMinMiB"`
-	// SwapGrowthMaxMiB is the machine swap's growth per hour, over the
-	// watch's readings, above which no start fits (256).
+	// SwapGrowthMaxMiB is disk swap's growth per hour, over the watch's
+	// readings of Watch.SwapWindow, that counts (256): a growth over it
+	// refuses a start under memory pressure (PSI over SwapPSIMax, or
+	// MemAvailable under AvailMinMiB) and is a warning without.
 	SwapGrowthMaxMiB int `yaml:"swapGrowthMaxMiB"`
+	// SwapPSIMax is the memory pressure ("full avg60" of
+	// /proc/pressure/memory, in percent) up to which disk swap's growth is
+	// a warning rather than a refusal (0: any pressure refuses).
+	SwapPSIMax float64 `yaml:"swapPSIMax"`
 }
 
 // AgentShell configures the prelude Claude Code runs before each Bash
@@ -1055,11 +1062,15 @@ type Watch struct {
 	BudgetEvery Duration `yaml:"budgetEvery"`
 	AvailMinMiB int      `yaml:"availMinMiB"`
 	SwapMaxMiB  int      `yaml:"swapMaxMiB"`
+	// SwapWindow is how far back swap's growth rate looks (10m, at least
+	// 5m): a burst older than the window has left the rate, which the SWAP
+	// and OOMD IMMINENT checks and capacity's swap guard read.
+	SwapWindow Duration `yaml:"swapWindow"`
 	// OOMDHeadroomMinMiB and OOMDWithin decide when systemd-oomd's swap
 	// kill is imminent (OOMD IMMINENT), only while oomd watches a cgroup
 	// for swap and disk swap grows as MemAvailable falls: less swap growth
 	// left before its SwapUsedLimit than OOMDHeadroomMinMiB, or the trigger
-	// reached within OOMDWithin at the last hour's growth rate.
+	// reached within OOMDWithin at the window's growth rate.
 	OOMDHeadroomMinMiB int      `yaml:"oomdHeadroomMinMiB"`
 	OOMDWithin         Duration `yaml:"oomdWithin"`
 	ScopeAnonMaxMiB    int      `yaml:"scopeAnonMaxMiB"`
@@ -1125,6 +1136,10 @@ const (
 	DefaultDiskMin         = 0.05
 	DefaultDiskCritical    = 0.01
 )
+
+// MinSwapSpan is the shortest span a swap growth rate is measured over, and
+// the least Watch.SwapWindow may be: a shorter window would never rate one.
+const MinSwapSpan = 5 * time.Minute
 
 // AvailMin is the LOW RAM threshold on a machine of ramMiB.
 func (w Watch) AvailMin(ramMiB int) int { return atLeast(w.AvailMinMiB, DefaultAvailMin, ramMiB) }
@@ -1565,6 +1580,7 @@ func (c *Config) defaults() error {
 	setDur(&w.Interval, 30*time.Second)
 	setDur(&w.Repeat, 10*time.Minute)
 	setDur(&w.BudgetEvery, 5*time.Minute)
+	setDur(&w.SwapWindow, 10*time.Minute)
 	setDur(&w.OOMDWithin, 30*time.Minute)
 	setDur(&w.DiskFillWithin, 2*time.Hour)
 	setInt(&c.Doctor.GoCacheMaxGiB, 20)
@@ -1904,6 +1920,12 @@ func (c *Config) validate() error {
 	}
 	if k := c.Capacity; k.Floor < 0 || k.Ceiling < k.Floor {
 		return fmt.Errorf("capacity: floor %d and ceiling %d; the ceiling is at least the floor", k.Floor, k.Ceiling)
+	}
+	if c.Capacity.SwapPSIMax < 0 {
+		return fmt.Errorf("capacity.swapPSIMax: %g is not a pressure in percent", c.Capacity.SwapPSIMax)
+	}
+	if w := c.Watch.SwapWindow.Duration; w < MinSwapSpan {
+		return fmt.Errorf("watch.swapWindow: %s is under the %s a swap growth rate is measured over", w, MinSwapSpan)
 	}
 	if a := c.Agents; a.LastStepCeiling != 0 && a.LastStepCeiling <= a.RelayAt {
 		return fmt.Errorf("agents.lastStepCeiling: %d is not above relayAt %d", a.LastStepCeiling, a.RelayAt)

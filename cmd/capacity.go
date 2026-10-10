@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +26,9 @@ type capacityView struct {
 	// Room is how many starts fit; Blocks says what stops one when none does.
 	Room   int      `json:"room"`
 	Blocks []string `json:"blocks,omitempty"`
+	// Notes is what a start that fits should know: disk swap growing
+	// without memory pressure.
+	Notes []string `json:"notes,omitempty"`
 }
 
 // agentCount sorts the roster: busy with a task, parked (kept on purpose, a
@@ -72,13 +76,19 @@ func (c agentCount) line(k config.Capacity) string {
 	return s + fmt.Sprintf("; %d parked, %d idle", len(c.Parked), len(c.Idle))
 }
 
-// headroom is what bounds a new start: MemAvailable, the swap's growth over
-// the watch's readings, the free build slots and the kind labs against their
-// cap.
+// headroom is what bounds a new start: MemAvailable, disk swap's growth
+// over the watch's readings weighed with memory pressure and MemAvailable,
+// the free build slots and the kind labs against their cap.
 type headroom struct {
 	AvailableMiB int    `json:"availableMiB"`
 	AvailMinMiB  int    `json:"availMinMiB"`
 	MemErr       string `json:"memError,omitempty"`
+	// PSI is memory pressure now ("full avg60" of /proc/pressure/memory,
+	// in percent), PSIMax the most under which disk swap's growth is a
+	// warning rather than a block (capacity.swapPSIMax).
+	PSI    float64 `json:"psi"`
+	PSIMax float64 `json:"psiMax"`
+	PSIErr string  `json:"psiError,omitempty"`
 	// Swap is the watch's latest swap reading; nil when no fresh one exists.
 	Swap             *swapReading `json:"swap,omitempty"`
 	SwapGrowthMaxMiB int          `json:"swapGrowthMaxMiB"`
@@ -91,10 +101,10 @@ type headroom struct {
 
 // swapReading is a watch's latest machine swap sample: in use, split into
 // disk and zswap, and disk swap's growth per hour over the watch's readings
-// with whether MemAvailable fell (Rated once they span minSwapSpan). Disk
-// swap growing while MemAvailable falls bounds a start, never the figure in
-// use: swap may sit full for days without a byte moving, and zswap's share
-// is held in RAM.
+// of watch.swapWindow (Rated once they span config.MinSwapSpan). Disk swap
+// growing weighs against a start, with memory pressure and MemAvailable,
+// never the figure in use: swap may sit full for days without a byte
+// moving, and zswap's share is held in RAM.
 type swapReading struct {
 	At      time.Time `json:"at"`
 	UsedMiB int       `json:"usedMiB"`
@@ -102,9 +112,8 @@ type swapReading struct {
 	// ZswapMiB is the swap zswap holds compressed in RAM.
 	ZswapMiB int `json:"zswapMiB"`
 	// PerHourMiB is disk swap's growth.
-	PerHourMiB   int  `json:"perHourMiB"`
-	AvailFalling bool `json:"availFalling"`
-	Rated        bool `json:"rated"`
+	PerHourMiB int  `json:"perHourMiB"`
+	Rated      bool `json:"rated"`
 }
 
 // swapFile is the state's side file the watch keeps its latest swap reading
@@ -123,8 +132,8 @@ func (h *headroom) blocks() []string {
 	case h.AvailableMiB < h.AvailMinMiB:
 		out = append(out, fmt.Sprintf("MemAvailable %.1f GiB under %d GiB", float64(h.AvailableMiB)/1024, gib(h.AvailMinMiB)))
 	}
-	if s := h.Swap; s != nil && s.Rated && s.AvailFalling && s.PerHourMiB > h.SwapGrowthMaxMiB {
-		out = append(out, fmt.Sprintf("disk swap growing %+d MiB/h while MemAvailable falls, over %d", s.PerHourMiB, h.SwapGrowthMaxMiB))
+	if line, blocks := h.swapGuard(); blocks {
+		out = append(out, line)
 	}
 	if h.Slots > 0 && h.SlotsFree == 0 {
 		out = append(out, "no free build slot")
@@ -135,12 +144,61 @@ func (h *headroom) blocks() []string {
 	return out
 }
 
+// swapGuard weighs disk swap's growth with memory pressure and
+// MemAvailable, the three figures in its line: a growth over
+// SwapGrowthMaxMiB blocks a start under pressure (PSI over PSIMax or
+// MemAvailable under the floor; either unknown counts as pressure) and is
+// a warning without, a single writeback burst having left the rate after
+// watch.swapWindow. The line is "" while the growth is unrated or within
+// the max.
+func (h *headroom) swapGuard() (line string, blocks bool) {
+	s := h.Swap
+	if s == nil || !s.Rated || s.PerHourMiB <= h.SwapGrowthMaxMiB {
+		return "", false
+	}
+	psi, avail := h.psiFigure(), h.availFigure()
+	pressure := "without pressure"
+	switch {
+	case h.PSIErr != "" || h.MemErr != "":
+		pressure, blocks = "pressure unknown", true
+	case h.PSI > h.PSIMax || h.AvailableMiB < h.AvailMinMiB:
+		pressure, blocks = "under pressure", true
+	}
+	return fmt.Sprintf("disk swap growing %+d MiB/h over %d, %s: %s, %s", s.PerHourMiB, h.SwapGrowthMaxMiB, pressure, psi, avail), blocks
+}
+
+// psiFigure says memory pressure against the swap guard's max.
+func (h *headroom) psiFigure() string {
+	switch {
+	case h.PSIErr != "":
+		return "memory PSI unknown (" + h.PSIErr + ")"
+	case h.PSI > h.PSIMax:
+		return fmt.Sprintf("memory PSI %s over %s", pct(h.PSI), pct(h.PSIMax))
+	}
+	return fmt.Sprintf("memory PSI %s (max %s)", pct(h.PSI), pct(h.PSIMax))
+}
+
+// availFigure says MemAvailable against the floor.
+func (h *headroom) availFigure() string {
+	switch {
+	case h.MemErr != "":
+		return "MemAvailable unknown (" + h.MemErr + ")"
+	case h.AvailableMiB < h.AvailMinMiB:
+		return fmt.Sprintf("MemAvailable %.1f GiB under the floor of %d GiB", float64(h.AvailableMiB)/1024, gib(h.AvailMinMiB))
+	}
+	return fmt.Sprintf("MemAvailable %.1f GiB (floor %d GiB)", float64(h.AvailableMiB)/1024, gib(h.AvailMinMiB))
+}
+
+// pct renders a pressure share as read ("0%", "0.4%", "12%").
+func pct(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) + "%" }
+
 // line says the headroom in one line.
 func (h *headroom) line() string {
 	mem := "MemAvailable unknown"
 	if h.MemErr == "" {
 		mem = fmt.Sprintf("MemAvailable %.1f GiB (floor %d GiB)", float64(h.AvailableMiB)/1024, gib(h.AvailMinMiB))
 	}
+	mem += ", " + h.psiFigure()
 	swap := "swap growth not measured (no watch reading)"
 	if s := h.Swap; s != nil {
 		swap = fmt.Sprintf("disk swap %d MiB, zswap %d MiB, growth not yet measured", s.DiskMiB, s.ZswapMiB)
@@ -155,41 +213,57 @@ func (h *headroom) line() string {
 	return fmt.Sprintf("headroom: %s, %s, build slots %d of %d free, %s", mem, swap, h.SlotsFree, h.Slots, labs)
 }
 
-// newCapacity weighs the count against the target and the headroom.
+// newCapacity weighs the count against the target and the headroom; disk
+// swap growing without pressure is a note, not a block.
 func newCapacity(c agentCount, k config.Capacity, h *headroom) *capacityView {
 	v := &capacityView{agentCount: c, Floor: k.Floor, Ceiling: k.Ceiling, Headroom: h}
 	if busy := len(c.Busy); busy >= k.Ceiling {
 		v.Blocks = append(v.Blocks, fmt.Sprintf("%d busy at the ceiling of %d", busy, k.Ceiling))
 	}
 	v.Blocks = append(v.Blocks, h.blocks()...)
+	if line, blocks := h.swapGuard(); line != "" && !blocks {
+		v.Notes = append(v.Notes, line)
+	}
 	if len(v.Blocks) == 0 {
 		v.Room = k.Ceiling - len(c.Busy)
 	}
 	return v
 }
 
-// verdict is the one-line answer: room for N starts, or what blocks one.
+// verdict is the one-line answer: room for N starts, or what blocks one,
+// with the notes in parentheses.
 func (v *capacityView) verdict() string {
+	var s string
 	switch {
 	case v.Room == 1:
-		return "room for 1 start"
+		s = "room for 1 start"
 	case v.Room > 1:
-		return fmt.Sprintf("room for %d starts", v.Room)
+		s = fmt.Sprintf("room for %d starts", v.Room)
+	default:
+		s = "no start: " + strings.Join(v.Blocks, "; ")
 	}
-	return "no start: " + strings.Join(v.Blocks, "; ")
+	if len(v.Notes) > 0 {
+		s += " (" + strings.Join(v.Notes, "; ") + ")"
+	}
+	return s
 }
 
 // readHeadroom reads the machine's headroom now; swap is the watch's latest
 // reading, nil without a fresh one.
 func (a *app) readHeadroom(ctx context.Context, swap *swapReading) *headroom {
 	k := a.cfg.Capacity
-	h := &headroom{AvailMinMiB: k.AvailMinMiB, SwapGrowthMaxMiB: k.SwapGrowthMaxMiB, Swap: swap, Slots: a.cfg.Memcap.Slots}
+	h := &headroom{AvailMinMiB: k.AvailMinMiB, SwapGrowthMaxMiB: k.SwapGrowthMaxMiB, PSIMax: k.SwapPSIMax, Swap: swap, Slots: a.cfg.Memcap.Slots}
 	m, err := plat.Machine.Mem()
 	if err != nil {
 		h.MemErr = err.Error()
 	}
 	h.AvailableMiB = m.AvailableMiB
 	h.MaxLabs = a.cfg.KindClusters(m.TotalMiB)
+	psi, err := plat.Machine.MemoryPressure()
+	if err != nil {
+		h.PSIErr = err.Error()
+	}
+	h.PSI = psi
 	for _, s := range machine.ReadSlots(a.cfg.Memcap.SlotDir, a.cfg.Memcap.Slots) {
 		if s.Free {
 			h.SlotsFree++
@@ -226,12 +300,16 @@ are parked; one without a task, or done, is idle. The supervisor, the guide
 and a role's successor are not counted.
 
 The headroom bounds a start: MemAvailable against capacity.availMinMiB,
-disk swap's growth over the watch's readings against
-capacity.swapGrowthMaxMiB while MemAvailable falls (never the swap in
-use, and never zswap's share, which sits in RAM), the free build
-slots and the kind labs against their cap. The verdict is "room for N
-starts" up to the ceiling, or what blocks one. capacity reads the roster,
-the sessions and the machine and changes nothing; it makes no GitHub call.`,
+disk swap's growth over the watch's readings of watch.swapWindow against
+capacity.swapGrowthMaxMiB (never the swap in use, and never zswap's share,
+which sits in RAM), the free build slots and the kind labs against their
+cap. Disk swap's growth is weighed with memory pressure and MemAvailable:
+over the max it blocks a start under pressure (memory PSI, full avg60,
+over capacity.swapPSIMax, or MemAvailable under the floor) and is a
+warning in parentheses after the verdict without, the line naming the
+three figures. The verdict is "room for N starts" up to the ceiling, or
+what blocks one. capacity reads the roster, the sessions and the machine
+and changes nothing; it makes no GitHub call.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			st, err := a.store.Read()
