@@ -10,7 +10,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.9
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/creativeprojects/go-selfupdate v1.6.0
-	github.com/giantswarm/selfupdate-cosign v0.3.2
+	github.com/giantswarm/selfupdate-cosign v0.3.4
 	github.com/go-jose/go-jose/v4 v4.1.5
 	github.com/go-logr/logr v1.4.4
 	github.com/godbus/dbus/v5 v5.2.2
@@ -35,6 +35,7 @@ require (
 	code.gitea.io/sdk/gitea v0.23.2 // indirect
 	filippo.io/hpke v0.4.0 // indirect
 	github.com/42wim/httpsig v1.2.4 // indirect
+	github.com/ProtonMail/go-crypto v1.4.1 // indirect
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/blang/semver v3.5.1+incompatible // indirect
@@ -47,6 +48,7 @@ require (
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
+	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/davidmz/go-pageant v1.0.2 // indirect
@@ -55,6 +57,7 @@ require (
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
 	github.com/evanphx/json-patch/v5 v5.9.11 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.1 // indirect
+	github.com/giantswarm/go-selfupdate v1.6.1 // indirect
 	github.com/go-fed/httpsig v1.1.0 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-openapi/analysis v0.25.5 // indirect
