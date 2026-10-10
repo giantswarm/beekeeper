@@ -132,7 +132,7 @@ func TestGHAPIEndpoint(t *testing.T) {
 func TestDecideRefusesMembersRead(t *testing.T) {
 	const worker = "sess-worker"
 	read := false
-	h := Hook{Self: "/bin/beekeeper", Shell: "/bin/sh", Started: func(s string) bool { read = true; return s == worker }}
+	h := Hook{Self: hookSelf, Shell: hookShell, Started: func(s string) bool { read = true; return s == worker }}
 	decide := func(session, cmd string) *decision {
 		ev := toolEvent(bashTool, map[string]any{commandKey: cmd})
 		ev["cwd"] = t.TempDir()

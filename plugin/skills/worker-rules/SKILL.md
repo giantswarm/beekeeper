@@ -87,7 +87,11 @@ task needs lives only in this session: the next task goes to a fresh one.
   pattern. Agents never hard-delete: what goes away is moved aside.
 - **GitHub.** GitHub work stops while `beekeeper budget --gate` refuses and resumes after the
   reset. Whether a login belongs to the org is `beekeeper person <login>`, never a members
-  endpoint of `gh api`: the App's token reads a private member as an outsider. No `--watch` and no sleep loop over `gh` or `devctl`: `devctl pr wait` and `devctl pr
+  endpoint of `gh api`: the App's token reads a private member as an outsider. A scan of issues
+  or pull requests across repositories lists each one (`gh issue list --repo <owner/repo> --search
+  "<query>"`, `gh pr list` likewise), never one `gh search` over an owner or several repositories,
+  which drops a private repository the token cannot read without a word; a repository the listing
+  cannot read is a problem found, never "no match". No `--watch` and no sleep loop over `gh` or `devctl`: `devctl pr wait` and `devctl pr
   merge` block by themselves. A headless turn (a first turn, a `wake` turn) never ends on a
   background task or wait, whose completion never wakes it: it waits in the foreground (`devctl pr
   wait`, `devctl pr merge`, a foreground Bash with a bounded timeout) and ends only when the task is
