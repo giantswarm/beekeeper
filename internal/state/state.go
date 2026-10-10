@@ -568,8 +568,12 @@ type App struct {
 	Name string `json:"name"`
 	// ClientID is the OAuth client id the consent URL carries.
 	ClientID string `json:"clientID"`
-	// Callback is the host the consent page's redirect must go to.
-	Callback string `json:"callback"`
+	// Callbacks are the hosts the consent page's redirect may go to: the
+	// callback URLs' hosts of the App's declaration.
+	Callbacks []string `json:"callbacks"`
+	// Declared is where the organisation declares the App:
+	// <repo>@<commit>:<manifest path>.
+	Declared string `json:"declared"`
 	// Word is the person's words that asked for the consent.
 	Word string    `json:"word"`
 	By   Party     `json:"by"`

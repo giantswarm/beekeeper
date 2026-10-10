@@ -123,6 +123,9 @@ type Config struct {
 	Sandbox Sandbox `yaml:"sandbox"`
 	// Board is the project board `beekeeper board` picks work from.
 	Board Board `yaml:"board"`
+	// Apps is where the organisation declares the GitHub Apps whose
+	// consent `beekeeper app allow` records.
+	Apps Apps `yaml:"apps"`
 	// Plans are the repositories whose pull requests a note for a person
 	// names only once their stage check is green.
 	Plans Plans `yaml:"plans"`
@@ -206,6 +209,30 @@ const DefaultPlansCheck = "plan-stages"
 // Covers reports whether repo (owner/repo, any case) is a plans repository.
 func (p Plans) Covers(repo string) bool {
 	return slices.ContainsFunc(p.Repositories, func(r string) bool { return strings.EqualFold(r, repo) })
+}
+
+// AppName is the placeholder of the App's name in Apps.Manifest.
+const AppName = "{name}"
+
+// Apps is the repository that declares the organisation's GitHub Apps, one
+// manifest each (GitHub's App manifest: name, callback_urls). Unset, `app
+// allow` refuses: an App is recorded only once it is declared.
+type Apps struct {
+	// Repo is the declaring repository (owner/repo), read on its default
+	// branch.
+	Repo string `yaml:"repo"`
+	// Manifest is an App's manifest's path in Repo, AppName standing for
+	// the App's name.
+	Manifest string `yaml:"manifest"`
+}
+
+// ManifestOf is the path of the manifest of the App name in Repo, "" while
+// the declaring repository is unset.
+func (a Apps) ManifestOf(name string) string {
+	if a.Repo == "" || !strings.Contains(a.Manifest, AppName) {
+		return ""
+	}
+	return strings.ReplaceAll(a.Manifest, AppName, name)
 }
 
 // Board is a GitHub project board and the order its work is picked in.

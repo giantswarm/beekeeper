@@ -48,7 +48,7 @@ const deployWords = "The person's task covers one deploy: %s. Once the steps rea
 // labWords the lab's own identity provider the steps name, the one place a
 // credential is typed: a fixture user's.
 const (
-	consentWords = "The person's own App %s is on record (callback %s): once the steps reach GitHub's page 'Authorize %s' " +
+	consentWords = "The person's own App %s is declared and on record (callback %s): once the steps reach GitHub's page 'Authorize %s' " +
 		"with that callback, click Authorize once; click nothing else that grants access. "
 	labWords = "The lab's own identity provider on a loopback host (*.127.0.0.1.nip.io, localhost) is the person's: " +
 		"there, and only there, a fixture user the steps name signs in with the fixture credential the steps give. "
@@ -87,10 +87,12 @@ a page that waits on a person (a sign-in form, a dialog) is the usual cause.
 A consent page (an OAuth grant: GitHub's green Authorize button, an identity
 provider's Allow) is a permission grant to the turn's classifier, which
 refuses the click, or the whole task at its first call. A consent for an App
-the person owns and asked for is beekeeper's own decision, from its record:
-"beekeeper app allow <name> --client-id <id> --callback <host> --word
-'<the person's words>'" records the App (beekeeper app --help). On GitHub's
-consent page of an App on record, with the recorded callback host, the hook
+the organisation declares and the person asked for is beekeeper's own
+decision, from its record: "beekeeper app allow <name> --client-id <id>
+--word '<the person's words>'" records the App once its manifest in the
+config's apps.repo declares it, its callback hosts the manifest's
+(beekeeper app --help). On GitHub's consent page of an App on record, with
+one of its declared callback hosts, the hook
 (beekeeper hook pretooluse, in this turn too) answers the Authorize click
 itself: allowed, the record in its reason; on GitHub's consent page of any
 other App or callback host it refuses the click, naming the page and the
@@ -100,7 +102,7 @@ after the shipped rules (its --settings, this run only), so the classifier
 refuses neither the task at its first call nor the click, its prompt says
 to click that page's Authorize once and nothing else that grants access,
 and a line below the report says "allowed consent: <name> (callback
-<host>)". For example:
+<host>, declared in <manifest>)". For example:
 
   beekeeper browse "Open <sign-in URL>. On GitHub's page 'Authorize <app>'
   click Authorize once. Report the App name and the callback the page
@@ -309,8 +311,8 @@ func (f browseFindings) lines(steps, deploy string, consents []guard.App, lab bo
 		out = append(out, "allowed deploy: "+deploy+": the turn's auto mode allowed that one deploy or create click (--allow-deploy)")
 	}
 	for _, c := range consents {
-		out = append(out, fmt.Sprintf("allowed consent: %s (callback %s): the hook answers the click on its consent page and the turn's "+
-			"auto mode allows it, on record since %s by %s: %s", c.Name, c.Callback, c.At.UTC().Format("2006-01-02"), c.By, c.Word))
+		out = append(out, fmt.Sprintf("allowed consent: %s (callback %s, declared in %s): the hook answers the click on its consent page "+
+			"and the turn's auto mode allows it, on record since %s by %s: %s", c.Name, callbacks(c), c.Declared, c.At.UTC().Format("2006-01-02"), c.By, c.Word))
 	}
 	if lab {
 		out = append(out, "allowed lab sign-in: a fixture user's sign-in and consent on the lab's own identity provider, "+
@@ -520,7 +522,7 @@ func browsePrompt(steps, deploy string, consents []guard.App, lab bool) string {
 		p += fmt.Sprintf(deployWords, deploy)
 	}
 	for _, c := range consents {
-		p += fmt.Sprintf(consentWords, c.Name, c.Callback, c.Name)
+		p += fmt.Sprintf(consentWords, c.Name, callbacks(c), c.Name)
 	}
 	if lab {
 		p += labWords
@@ -563,12 +565,15 @@ func allowDeploySettings(deploy string) string {
 // pre-authorization of the consent click on that App's page, which the hook
 // verifies; a page for any other App or callback host is not covered.
 func consentRule(a guard.App) string {
-	return fmt.Sprintf("Own App Consent: The person owns the App %s (OAuth client id %s) and asked, on record with beekeeper, "+
-		"for its consent: on GitHub's consent page 'Authorize %s' whose redirect goes to the callback host %s, the Authorize click "+
+	return fmt.Sprintf("Own App Consent: The person's organisation declares the App %s (OAuth client id %s) in %s and the person "+
+		"asked, on record with beekeeper, for its consent: on GitHub's consent page 'Authorize %s' whose redirect goes to the callback host %s, the Authorize click "+
 		"is pre-authorized and no Permission Grant to refuse, and a step that names it is no grant request; beekeeper's own hook "+
 		"verifies the page and answers the click. Not covered: a consent page of any other App or callback host, any other grant "+
-		"of access, a credential typed anywhere. Every other rule applies in full.", a.Name, a.ClientID, a.Name, a.Callback)
+		"of access, a credential typed anywhere. Every other rule applies in full.", a.Name, a.ClientID, a.Declared, a.Name, callbacks(a))
 }
+
+// callbacks are an App's callback hosts, as a turn and its report name them.
+func callbacks(a guard.App) string { return strings.Join(a.Callbacks, " or ") }
 
 // labRule is the auto mode allow rule of the lab's own identity provider:
 // a fixture user's sign-in and consent on a loopback host, which the hook
@@ -578,13 +583,13 @@ const labRule = "Lab Identity Provider: a sign-in or consent page on a loopback 
 	"consent are pre-authorized, no credential disclosure and no Permission Grant to refuse; beekeeper's own hook verifies the " +
 	"host. Not covered: a page on any other host, a credential of the person's own. Every other rule applies in full."
 
-// appsNamed are the Apps on record the steps name, by name or callback
-// host, as the guard reads them.
+// appsNamed are the Apps on record the steps name, by name or one of their
+// callback hosts, as the guard reads them.
 func appsNamed(apps []state.App, steps string) []guard.App {
 	s := strings.ToLower(steps)
 	var named []state.App
 	for _, x := range apps {
-		if strings.Contains(s, strings.ToLower(x.Name)) || strings.Contains(s, strings.ToLower(x.Callback)) {
+		if strings.Contains(s, strings.ToLower(x.Name)) || slices.ContainsFunc(x.Callbacks, func(h string) bool { return strings.Contains(s, h) }) {
 			named = append(named, x)
 		}
 	}

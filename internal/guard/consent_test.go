@@ -31,10 +31,14 @@ const (
 	applicationsPage  = "https://github.com/settings/applications"
 )
 
-var recorded = []App{{Name: ownApp, ClientID: ownClientID, Callback: ownCallback, Word: "your agent has to do this", By: "the guide",
-	At: time.Date(2026, 10, 10, 8, 16, 0, 0, time.UTC)}}
+// ownDeclared is where the organisation declares the App.
+const ownDeclared = "example/github@0123456789ab:apps/" + ownApp + "/manifest.json"
 
-// The App on record is allowed on its consent page with its callback host,
+var recorded = []App{{Name: ownApp, ClientID: ownClientID, Callbacks: []string{ownCallback, ownCallback + ":8443"}, Declared: ownDeclared,
+	Word: "your agent has to do this", By: "the guide", At: time.Date(2026, 10, 10, 8, 16, 0, 0, time.UTC)}}
+
+// The App on record is allowed on its consent page with one of its declared
+// callback hosts,
 // by client id or, where the tool redacted it, by GitHub's title; another
 // App, another callback host and a title that names another App are
 // refused naming the record's form; a page that is no consent page gets no
@@ -47,21 +51,22 @@ func TestConsent(t *testing.T) {
 		decision string
 		reason   string
 	}{
-		"own App and host":              {Page{ownPage, ownTitle}, recorded, Allow, "the person's own App " + ownApp + " (callback " + ownCallback + "), on record since 2026-10-10 by the guide: your agent has to do this"},
-		"own App, the id redacted":      {Page{redactedPage, ownTitle}, recorded, Allow, "the person's own App " + ownApp},
-		"own App by id, title unknown":  {Page{ownPage, ""}, recorded, Allow, ownApp},
-		"other App":                     {Page{otherAppPage, otherTitle}, recorded, Deny, `GitHub's consent page of client id Iv1.ffffffffffffffff (callback ` + ownCallback + `) names an App beekeeper has no record of`},
-		"other App, the id redacted":    {Page{redactedPage, otherTitle}, recorded, Deny, `GitHub's consent page "` + otherTitle + `" (callback ` + ownCallback + `)`},
-		"other callback host":           {Page{otherCallbackPage, ownTitle}, recorded, Deny, "(callback example.org)"},
-		"no record at all":              {Page{ownPage, ownTitle}, []App{}, Deny, AllowForm},
-		"other page":                    {Page{applicationsPage, "Applications"}, recorded, "", ""},
-		"the portal":                    {Page{"https://portal.example.org/agents", "Agents"}, recorded, "", ""},
-		"lab Dex sign-in":               {Page{labDexPage, "Log in to agentlab"}, recorded, Allow, "dex.127.0.0.1.nip.io is the lab's own identity provider on a loopback host"},
-		"lab Dex approval on localhost": {Page{"https://localhost:32000/dex/approval?req=abc", "Grant Access"}, nil, Allow, "localhost:32000 is the lab's own identity provider"},
-		"lab portal sign-in":            {Page{"https://" + ownCallback + "/connect/github", "Connect"}, nil, Allow, "loopback host"},
-		"Dex on another host":           {Page{"https://dex.example.org/dex/approval?req=abc", "Grant Access"}, recorded, "", ""},
-		"a lab page that is no sign-in": {Page{"https://backstage.127.0.0.1.nip.io/catalog", "Catalog"}, recorded, "", ""},
-		"no URL":                        {Page{"", ""}, recorded, "", ""},
+		"own App and host":                 {Page{ownPage, ownTitle}, recorded, Allow, "the person's own App " + ownApp + " (callback " + ownCallback + "), declared in " + ownDeclared + ", on record since 2026-10-10 by the guide: your agent has to do this"},
+		"own App, its other declared host": {Page{strings.Replace(ownPage, ownCallback, ownCallback+"%3A8443", 1), ownTitle}, recorded, Allow, "(callback " + ownCallback + ":8443), declared in"},
+		"own App, the id redacted":         {Page{redactedPage, ownTitle}, recorded, Allow, "the person's own App " + ownApp},
+		"own App by id, title unknown":     {Page{ownPage, ""}, recorded, Allow, ownApp},
+		"other App":                        {Page{otherAppPage, otherTitle}, recorded, Deny, `GitHub's consent page of client id Iv1.ffffffffffffffff (callback ` + ownCallback + `) names an App beekeeper has no record of`},
+		"other App, the id redacted":       {Page{redactedPage, otherTitle}, recorded, Deny, `GitHub's consent page "` + otherTitle + `" (callback ` + ownCallback + `)`},
+		"other callback host":              {Page{otherCallbackPage, ownTitle}, recorded, Deny, "(callback example.org)"},
+		"no record at all":                 {Page{ownPage, ownTitle}, []App{}, Deny, AllowForm},
+		"other page":                       {Page{applicationsPage, "Applications"}, recorded, "", ""},
+		"the portal":                       {Page{"https://portal.example.org/agents", "Agents"}, recorded, "", ""},
+		"lab Dex sign-in":                  {Page{labDexPage, "Log in to agentlab"}, recorded, Allow, "dex.127.0.0.1.nip.io is the lab's own identity provider on a loopback host"},
+		"lab Dex approval on localhost":    {Page{"https://localhost:32000/dex/approval?req=abc", "Grant Access"}, nil, Allow, "localhost:32000 is the lab's own identity provider"},
+		"lab portal sign-in":               {Page{"https://" + ownCallback + "/connect/github", "Connect"}, nil, Allow, "loopback host"},
+		"Dex on another host":              {Page{"https://dex.example.org/dex/approval?req=abc", "Grant Access"}, recorded, "", ""},
+		"a lab page that is no sign-in":    {Page{"https://backstage.127.0.0.1.nip.io/catalog", "Catalog"}, recorded, "", ""},
+		"no URL":                           {Page{"", ""}, recorded, "", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := Consent(tc.apps, tc.page)

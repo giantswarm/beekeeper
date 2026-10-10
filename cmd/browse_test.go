@@ -284,17 +284,18 @@ func TestBrowseRunsTheTurn(t *testing.T) {
 	}
 }
 
-// Steps that name an App on record, by name or callback host, give the turn
+// Steps that name an App on record, by name or one of its callback hosts, give the turn
 // that App's auto mode rule and prompt words; steps that name a loopback
 // host give it the lab's; the rules stand after the shipped ones beside a
 // declared deploy's; the report says what was allowed, and a grant refusal
 // under a record says the record did not cover it.
 func TestBrowseConsent(t *testing.T) {
-	rec := []state.App{{Name: recordedApp, ClientID: recordedClientID, Callback: recordedCallback, Word: personsWord, By: state.Party{Name: "the guide"},
-		At: time.Date(2026, 10, 10, 8, 16, 0, 0, time.UTC)}}
+	rec := []state.App{{Name: recordedApp, ClientID: recordedClientID, Callbacks: []string{recordedCallback, recordedCallback + ":8443"}, Declared: recordedDeclared,
+		Word: personsWord, By: state.Party{Name: "the guide"}, At: time.Date(2026, 10, 10, 8, 16, 0, 0, time.UTC)}}
 	for steps, want := range map[string]int{
 		"Open https://example.org/signin. On GitHub's page '" + recordedTitle + "' click Authorize once.": 1,
 		"Open https://" + recordedCallback + "/connect/github and click Authorize.":                       1,
+		"Open https://" + recordedCallback + ":8443/connect/github and click Authorize.":                  1,
 		"Open https://example.org/ and report the title.":                                                 0,
 	} {
 		if got := appsNamed(rec, steps); len(got) != want || (want == 1 && got[0].Name != recordedApp) {
@@ -317,7 +318,8 @@ func TestBrowseConsent(t *testing.T) {
 	if len(rules) != 2 || rules[0] != consentRule(consents[0]) || rules[1] != labRule {
 		t.Errorf("browseRules = %q", rules)
 	}
-	if r := rules[0]; !strings.Contains(r, "the App "+recordedApp+" (OAuth client id "+recordedClientID+")") || !strings.Contains(r, "callback host "+recordedCallback) || !strings.Contains(r, "Not covered:") {
+	if r := rules[0]; !strings.Contains(r, "the App "+recordedApp+" (OAuth client id "+recordedClientID+") in "+recordedDeclared) ||
+		!strings.Contains(r, "callback host "+recordedCallback+" or "+recordedCallback+":8443") || !strings.Contains(r, "Not covered:") {
 		t.Errorf("the consent rule = %q", r)
 	}
 	if rules := browseRules("", nil, false); rules != nil {
@@ -330,12 +332,12 @@ func TestBrowseConsent(t *testing.T) {
 		t.Errorf("--settings with a deploy and a record = %q", argv)
 	}
 	p := browsePrompt("steps", "", consents, true)
-	if !strings.HasPrefix(p, browsePreamble+"The person's own App "+recordedApp+" is on record (callback "+recordedCallback+"):") ||
+	if !strings.HasPrefix(p, browsePreamble+"The person's own App "+recordedApp+" is declared and on record (callback "+recordedCallback+" or "+recordedCallback+":8443):") ||
 		!strings.Contains(p, labWords) || !strings.HasSuffix(p, browseSteps+"steps") {
 		t.Errorf("browsePrompt with a record and the lab = %q", p)
 	}
 	l := (browseFindings{}).lines("steps", "", consents, true)
-	if len(l) != 2 || !strings.HasPrefix(l[0], "allowed consent: "+recordedApp+" (callback "+recordedCallback+"): ") || !strings.Contains(l[0], "on record since 2026-10-10 by the guide: "+personsWord) ||
+	if len(l) != 2 || !strings.HasPrefix(l[0], "allowed consent: "+recordedApp+" (callback "+recordedCallback+" or "+recordedCallback+":8443, declared in "+recordedDeclared+"): ") || !strings.Contains(l[0], "on record since 2026-10-10 by the guide: "+personsWord) ||
 		!strings.HasPrefix(l[1], "allowed lab sign-in: ") {
 		t.Errorf("lines with a record and the lab = %q", l)
 	}
@@ -374,7 +376,8 @@ func TestBrowseTurnWithARecord(t *testing.T) {
 	t.Setenv("BROWSE_PROJECT", filepath.Join(a.cfg.Claude.ProjectsDir, "p"))
 	writeFile(t, transcript, `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"mcp__claude-in-chrome__computer","input":{"action":"left_click","action_summary":"Clicks Authorize"}}]}}`+"\n"+
 		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":false,"content":"Clicked"}]}}`+"\n")
-	if _, err := runApp(t, a, allowArgs(recordedCallback, personsWord)...); err != nil {
+	declareApps(t, a, map[string]string{"apps/" + recordedApp + "/manifest.json": recordedManifest})
+	if _, err := runApp(t, a, allowArgs(personsWord)...); err != nil {
 		t.Fatal(err)
 	}
 	steps := "Open https://" + recordedCallback + "/connect/github. On GitHub's page '" + recordedTitle + "' click Authorize once; report the final URL."
@@ -382,7 +385,7 @@ func TestBrowseTurnWithARecord(t *testing.T) {
 		t.Fatalf("browse: %v\n%s", err, out.String())
 	}
 	got := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
-	if len(got) != 5 || got[0] != turnReport || !strings.HasPrefix(got[1], "allowed consent: "+recordedApp+" (callback "+recordedCallback+"): ") ||
+	if len(got) != 5 || got[0] != turnReport || !strings.HasPrefix(got[1], "allowed consent: "+recordedApp+" (callback "+recordedCallback+" or "+recordedCallback+":8443, declared in "+recordedDeclared+"): ") ||
 		!strings.HasPrefix(got[2], "allowed lab sign-in: ") || !strings.HasPrefix(got[3], "transcript: ") || got[4] != noShots {
 		t.Errorf("browse with a record printed %q", got)
 	}
@@ -392,8 +395,8 @@ func TestBrowseTurnWithARecord(t *testing.T) {
 	}
 	argv := strings.Split(strings.TrimSuffix(string(b), "\x00"), "\x00")
 	i := slices.Index(argv, settingsFlag)
-	if i < 0 || !strings.Contains(argv[i+1], "Own App Consent: The person owns the App "+recordedApp) || !strings.Contains(argv[i+1], "Lab Identity Provider:") ||
-		!strings.Contains(argv[len(argv)-1], "The person's own App "+recordedApp+" is on record") {
+	if i < 0 || !strings.Contains(argv[i+1], "Own App Consent: The person's organisation declares the App "+recordedApp) || !strings.Contains(argv[i+1], "Lab Identity Provider:") ||
+		!strings.Contains(argv[len(argv)-1], "The person's own App "+recordedApp+" is declared and on record") {
 		t.Errorf("the turn with a record ran with %q", argv)
 	}
 	id := argv[slices.Index(argv, sessionIDFlag)+1]

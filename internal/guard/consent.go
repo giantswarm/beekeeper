@@ -16,8 +16,9 @@ import (
 
 // A consent page is an OAuth grant: GitHub's green Authorize button, an
 // identity provider's Allow. The hook answers a Chrome call that acts on one
-// from the Apps on record (Hook.Apps), the person's word: on GitHub's consent
-// page of a recorded App, with its callback host, the click is allowed; on
+// from the Apps on record (Hook.Apps): Apps the organisation declares, on the
+// person's word. On GitHub's consent page of a recorded App, with one of its
+// declared callback hosts, the click is allowed; on
 // GitHub's consent page of any other App or callback host it is refused; on
 // the lab's own identity provider, a loopback host, a fixture user's sign-in
 // and consent are allowed. Any other page gets no decision, as does a call
@@ -29,8 +30,10 @@ type App struct {
 	Name string
 	// ClientID is the OAuth client id the consent URL carries.
 	ClientID string
-	// Callback is the host the consent page's redirect must go to.
-	Callback string
+	// Callbacks are the hosts the consent page's redirect may go to.
+	Callbacks []string
+	// Declared is where the organisation declares the App.
+	Declared string
 	// Word is the person's words that asked for the consent, By whom and
 	// At when they were recorded.
 	Word, By string
@@ -85,7 +88,7 @@ const (
 )
 
 // AllowForm is how an App the person owns and asked for is recorded.
-const AllowForm = "`beekeeper app allow <name> --client-id <id> --callback <host> --word \"<the person's words>\"`"
+const AllowForm = "`beekeeper app allow <name> --client-id <id> --word \"<the person's words>\"`"
 
 // Consent decides a call acting on page from the Apps on record.
 func Consent(apps []App, page Page) Decision {
@@ -116,12 +119,12 @@ func githubConsent(apps []App, u *url.URL, title string) Decision {
 		callback = strings.ToLower(r.Host)
 	}
 	for _, a := range apps {
-		if !strings.EqualFold(a.Callback, callback) {
+		if !slices.Contains(a.Callbacks, callback) {
 			continue
 		}
 		if clientID == a.ClientID || (clientID == chromeRedacted && strings.EqualFold(title, authorizeTitle+a.Name)) {
 			return Decision{Allow, fmt.Sprintf("beekeeper allows the click: the consent page of the person's own App %s (callback %s), "+
-				"on record since %s by %s: %s", a.Name, a.Callback, a.At.UTC().Format("2006-01-02"), a.By, a.Word)}
+				"declared in %s, on record since %s by %s: %s", a.Name, callback, a.Declared, a.At.UTC().Format("2006-01-02"), a.By, a.Word)}
 		}
 	}
 	which := "of client id " + clientID

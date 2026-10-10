@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `beekeeper app allow` records only an App the organisation declares: it reads the App's manifest from the repository the config's `apps.repo` names, at `apps.manifest` (`{name}` for the App's name), on its default branch, refuses an App no manifest declares under its name, and takes the record's callback hosts from the manifest's `callback_urls` (`--callback` is gone); the record, `app list`, the hook's allow and the browse report name the manifest and the commit it was read at ([#655](https://github.com/giantswarm/beekeeper/issues/655)).
+
 ### Added
 
 - Worker profiles: `agents.profile` (and `supervisor.profile`, `guide.profile`) names a tool profile of `agents.profiles`, or the built-in `minimal`, that the sessions beekeeper starts get: the built-in tools kept (`--tools`), the plugins kept (every other installed plugin, of any marketplace, disabled), the MCP servers kept (`allowedMcpServers`, claude.ai connectors included) and further deny rules, in a flag settings file beekeeper passes with `--settings`, never editing the person's settings files. A profiled worker's task runs as a headless turn under the profile with no seed turn, its desktop import beside it; every headless wake of one of beekeeper's starts runs under its role's profile. `start` and the log say `its task runs as a headless turn under profile <name>`, and `agents start --dry-run` prints the profile applied and the first turn's command line. Measured on a start: the first task turn's input drops from 86,471 to 30,560 tokens, the cached shared prefix from 40,839 to 7,708, and the seed turn's ~16,000-token cache write is gone ([#882](https://github.com/giantswarm/beekeeper/issues/882)).
