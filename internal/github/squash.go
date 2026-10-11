@@ -44,6 +44,10 @@ type SquashDoc struct {
 	HeadSha        string  `json:"headSha,omitempty"`
 	MergeCommitSha string  `json:"mergeCommitSha,omitempty"`
 	Release        *string `json:"release"`
+	// UnansweredReviews is the feedback the last review read found
+	// unanswered, empty when nothing held the merge; null only when gh
+	// failed before the first read.
+	UnansweredReviews []UnansweredReview `json:"unansweredReviews"`
 }
 
 // SquashRoute names the route in the document and the gate's lines.
@@ -94,6 +98,9 @@ type squashPull struct {
 	} `json:"author"`
 }
 
+// bot says whether a bot or a GitHub App opened the pull request.
+func (p squashPull) bot() bool { return p.Author.IsBot || strings.HasSuffix(p.Author.Login, "[bot]") }
+
 type squashCheck struct {
 	Name   string `json:"name"`
 	Bucket string `json:"bucket"`
@@ -103,8 +110,11 @@ type squashCheck struct {
 // it through the merge API with that head as the expected one, the subject
 // "<title> (#<n>)", then deletes the head branch. It refuses what devctl
 // refuses before its wait: a draft, a closed, merged or conflicting pull
-// request (3) and another human's (5). Its document says what happened;
-// nothing waits for a release.
+// request (3), another human's (5) and one with a reviewer's unanswered
+// feedback (5), devctl's review guard: read before any refusal, so the
+// document carries the review state whatever ends the merge, and again
+// right before the merge call. Its document says what happened; nothing
+// waits for a release.
 func (s Squash) Run(ctx context.Context) SquashDoc {
 	doc := SquashDoc{Command: "pr merge", Route: SquashRoute, SchemaVersion: 1, Repo: s.Repo, Number: s.Number}
 	end := func(rc int, format string, args ...any) SquashDoc {
@@ -116,13 +126,32 @@ func (s Squash) Run(ctx context.Context) SquashDoc {
 		return end(SquashTooling, "the gh login does not answer: %v", err)
 	}
 	login := strings.TrimSpace(string(me))
+	// review reads the feedback on p's head into the document and returns
+	// the refusal's reason while any of it is unanswered.
+	review := func(p squashPull) (string, error) {
+		open, err := s.unansweredReviews(ctx, p.HeadRefOid, p.Author.Login, login)
+		if err != nil {
+			return "", fmt.Errorf("the review read fails: %w", err)
+		}
+		if doc.UnansweredReviews = open; len(open) == 0 {
+			s.say("reviews: nothing unanswered on %s", short(p.HeadRefOid))
+			return "", nil
+		}
+		return reviewRefusal(open, answerers(p.Author.Login, p.bot(), login)), nil
+	}
 	deadline := s.Now().Add(s.Timeout)
 	var p squashPull
-	for {
+	for first := true; ; first = false {
 		if p, err = s.pull(ctx); err != nil {
 			return end(SquashTooling, "%v", err)
 		}
 		doc.HeadSha = p.HeadRefOid
+		refusal := ""
+		if first {
+			if refusal, err = review(p); err != nil {
+				return end(SquashTooling, "%v", err)
+			}
+		}
 		switch {
 		case p.State != Open:
 			return end(SquashNotApplicable, "%s#%d is %s", s.Repo, s.Number, strings.ToLower(p.State))
@@ -130,8 +159,10 @@ func (s Squash) Run(ctx context.Context) SquashDoc {
 			return end(SquashNotApplicable, "%s#%d is a draft", s.Repo, s.Number)
 		case p.Mergeable == "CONFLICTING":
 			return end(SquashNotApplicable, "%s#%d conflicts with its base", s.Repo, s.Number)
-		case !p.Author.IsBot && !strings.HasSuffix(p.Author.Login, "[bot]") && !strings.EqualFold(p.Author.Login, login):
+		case !p.bot() && !strings.EqualFold(p.Author.Login, login):
 			return end(SquashRefused, "%s#%d was opened by %s, not by %s: another person's pull request is theirs to merge", s.Repo, s.Number, p.Author.Login, login)
+		case refusal != "":
+			return end(SquashRefused, "%s", refusal)
 		}
 		checks, err := s.checks(ctx)
 		if err != nil {
@@ -149,6 +180,12 @@ func (s Squash) Run(ctx context.Context) SquashDoc {
 		}
 		s.say("waiting for %s at %s: %s", fmt.Sprintf("%s#%d", s.Repo, s.Number), short(p.HeadRefOid), strings.Join(pending, ", "))
 		s.Sleep(s.Poll)
+	}
+	// Feedback that landed while the checks ran holds the merge too.
+	if refusal, err := review(p); err != nil {
+		return end(SquashTooling, "%v", err)
+	} else if refusal != "" {
+		return end(SquashRefused, "%s", refusal)
 	}
 	s.say("green at %s: squash-merging %s#%d", short(p.HeadRefOid), s.Repo, s.Number)
 	out, err := s.GH(ctx, "api", "-X", "PUT", fmt.Sprintf("repos/%s/pulls/%d/merge", s.Repo, s.Number),

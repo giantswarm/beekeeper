@@ -410,6 +410,51 @@ func TestAnUnservedRepositoryTakesThePlainSquashMerge(t *testing.T) {
 	}
 }
 
+// unansweredDoc is a merge refused for a reviewer's unanswered COMMENTED
+// review, as either route's document says it.
+const unansweredDoc = `{"exitCode":5,"verdict":"refused","reason":"unanswered review: 1 item(s) newer than the head wait for an answer: review COMMENTED by pat https://github.com/o/r/pull/7#r; a reply from teemow on the pull request, a new commit or the reviewer's approval clears them","unansweredReviews":[{"kind":"review","login":"pat","state":"COMMENTED","at":"2026-10-11T11:00:00Z","url":"https://github.com/o/r/pull/7#r"}]}`
+
+// On either route, devctl pr merge's and the plain squash merge's, a merge a
+// reviewer's unanswered review refuses merges nothing, ends with exit 5 and
+// says why in a gate line.
+func TestAnUnansweredReviewRefusesEveryRoute(t *testing.T) {
+	userSystemd = func() bool { return false }
+	t.Cleanup(func() { userSystemd = plat.Launcher.Available })
+	for _, repo := range []string{scratchRepo, labRepo} {
+		t.Run(repo, func(t *testing.T) {
+			dir := t.TempDir()
+			doc := filepath.Join(dir, "doc.json")
+			if err := os.WriteFile(doc, []byte(unansweredDoc+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			fakeDevctl(t, `cat `+doc+`; exit 5`)
+			self := filepath.Join(dir, "beekeeper")
+			script := "#!/bin/sh\nif [ \"$1\" = merge-child ]; then exec " + os.Args[0] + " -test.run=TestHelperMergeChild -- \"$2\"; fi\n" +
+				"cat " + doc + "; exit 5\n"
+			if err := os.WriteFile(self, []byte(script), 0o700); err != nil { //nolint:gosec // a test script
+				t.Fatal(err)
+			}
+			was := selfExe
+			selfExe = func() (string, error) { return self, nil }
+			t.Cleanup(func() { selfExe = was })
+			stubGitHub(t, "", "")
+			g := runningMerge(t, repo, config.Lane{Name: repo})
+			var err error
+			out := gateStderr(t, func() { err = g.runMerge() })
+			var code *exitError
+			if !errors.As(err, &code) || code.code != 5 {
+				t.Errorf("exit %v, want 5", err)
+			}
+			if !strings.Contains(out, GatePrefix+"nothing merged (exit 5: refused: unanswered review: 1 item(s)") || !strings.Contains(out, "COMMENTED by pat") {
+				t.Errorf("no gate line names the unanswered review:\n%s", out)
+			}
+			if d := lastEvent(t, g, "merged"); d != "" {
+				t.Errorf("merged: %q", d)
+			}
+		})
+	}
+}
+
 // TestHelperMergeChild is merge-child for the fake binary above.
 func TestHelperMergeChild(t *testing.T) {
 	i := slices.Index(os.Args, "--")
