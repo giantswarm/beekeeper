@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,17 +15,28 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// The session id of the argv tests and the Chrome call that reads the tabs.
+const (
+	turnID      = "id-1"
+	tabsContext = "tabs_context_mcp"
+)
+
 // A browse turn is one headless turn in dontAsk on the CLI's own Chrome
 // connection, a session of its own: none of its caller's session variables
 // reach it. A declared deploy is the turn's settings, an auto mode allow
 // rule for that one action after the shipped rules, and its prompt's word
 // between the preamble and the steps; without one the turn gets no settings.
 func TestBrowseTurn(t *testing.T) {
-	argv := browseArgv("id-1", "", "steps", nil)
+	argv := browseArgv(turnID, "", "steps", nil, false)
 	want := []string{"-p", chromeFlag, toolsFlag, "", strictMCPConfigFlag, permissionModeFlag, "dontAsk",
-		allowedToolsFlag, "mcp__claude-in-chrome__*", "--session-id", "id-1", "--", "steps"}
+		allowedToolsFlag, "mcp__claude-in-chrome__*", "--session-id", turnID, "--", "steps"}
 	if !slices.Equal(argv, want) {
 		t.Errorf("browseArgv = %q, want %q", argv, want)
+	}
+	// The reconnect turn resumes the session with the same tools and mode.
+	want[9], want[10] = resumeFlag, turnID
+	if argv := browseArgv(turnID, "", "steps", nil, true); !slices.Equal(argv, want) {
+		t.Errorf("browseArgv of the reconnect = %q, want %q", argv, want)
 	}
 	// The child has the Chrome tools and nothing else: no built-in tool, no
 	// other MCP server, no allow rule beyond Chrome's, never bypass.
@@ -42,11 +54,11 @@ func TestBrowseTurn(t *testing.T) {
 			t.Errorf("browseArgv carries %q", arg)
 		}
 	}
-	if argv := browseArgv("id-1", "sonnet", "-steps", nil); !slices.Contains(argv, "sonnet") || argv[len(argv)-2] != "--" {
+	if argv := browseArgv(turnID, "sonnet", "-steps", nil, false); !slices.Contains(argv, "sonnet") || argv[len(argv)-2] != "--" {
 		t.Errorf("browseArgv with a model = %q", argv)
 	}
 	const deploy = "the demo agent to the demo cluster"
-	argv = browseArgv("id-1", "", "steps", browseRules(deploy, nil, false))
+	argv = browseArgv(turnID, "", "steps", browseRules(deploy, nil, false), false)
 	i := slices.Index(argv, "--settings")
 	if i < 0 || i+1 >= len(argv) || argv[len(argv)-2] != "--" || slices.Index(argv, "--") < i {
 		t.Fatalf("browseArgv with a deploy = %q, want --settings before --", argv)
@@ -71,10 +83,14 @@ func TestBrowseTurn(t *testing.T) {
 	if n := strings.Count(argv[i+1], "$defaults"); n != 1 || strings.Contains(argv[i+1], "soft_deny") || strings.Contains(argv[i+1], "environment") {
 		t.Errorf("--settings touches more than the allow list: %s", argv[i+1])
 	}
-	if p := browsePrompt("steps", "", nil, false); p != browsePreamble+browseSteps+"steps" {
+	// Every prompt has the connection words: the check before each step,
+	// the one reconnect in the turn, the lost line and the steps not done.
+	if p := browsePrompt("steps", "", nil, false); p != browsePreamble+connectionWords+browseSteps+"steps" ||
+		!strings.Contains(connectionWords, "list_connected_browsers before each step") || !strings.Contains(connectionWords, "select_browser") ||
+		!strings.Contains(connectionWords, "'"+lostLine+"' followed by the steps not done") {
 		t.Errorf("browsePrompt without a deploy = %q", p)
 	}
-	if p := browsePrompt("steps", deploy, nil, false); !strings.HasPrefix(p, browsePreamble+"The person's task covers one deploy: "+deploy+".") ||
+	if p := browsePrompt("steps", deploy, nil, false); !strings.HasPrefix(p, browsePreamble+connectionWords+"The person's task covers one deploy: "+deploy+".") ||
 		!strings.HasSuffix(p, browseSteps+"steps") {
 		t.Errorf("browsePrompt with a deploy = %q", p)
 	}
@@ -133,7 +149,7 @@ func TestReadFindings(t *testing.T) {
 	}
 	f, err := readFindings(transcript)
 	want := browseFindings{Refused: []refusal{
-		{Call: "tabs_context_mcp", Reason: "Permission Grant"},
+		{Call: tabsContext, Reason: "Permission Grant"},
 		{Call: `computer left_click "Clicks Authorize for the App"`, Reason: "Permission Grant"},
 	}, NotRendered: 1}
 	if err != nil || !reflect.DeepEqual(f, want) {
@@ -157,7 +173,7 @@ func TestReadFindings(t *testing.T) {
 	if l := other.lines(steps, "", nil, false); len(l) != 1 || !strings.HasSuffix(l[0], "[Destructive]") {
 		t.Errorf("lines of another reason = %q", l)
 	}
-	grant := browseFindings{Refused: []refusal{{Call: "tabs_context_mcp", Reason: reasonGrant}}}
+	grant := browseFindings{Refused: []refusal{{Call: tabsContext, Reason: reasonGrant}}}
 	if l := grant.lines("Open the page and take a screenshot", "", nil, false); len(l) != 2 || l[1] != consentHint {
 		t.Errorf("lines without a consent step = %q", l)
 	}
@@ -204,6 +220,122 @@ func TestReadFindings(t *testing.T) {
 	}
 }
 
+// chromeUse and chromeAnswer are one transcript line each: a Chrome call by
+// its tool after the prefix, and the plain text its result carries, no tool
+// error.
+func chromeUse(id, tool, input string) string {
+	return `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"` + id + `","name":"` + chromeToolPrefix + tool + `","input":` + input + `}]}}` + "\n"
+}
+
+func chromeAnswer(id, text string) string {
+	b, _ := json.Marshal(text)
+	return `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"` + id + `","is_error":false,"content":` + string(b) + `}]}}` + "\n"
+}
+
+// What the CLI answers a Chrome call with while the extension's connection
+// is gone, the list of connected browsers then, and the click of the
+// connection tests with its words.
+const (
+	goneAnswer   = "⚠️ **Claude in Chrome is not connected**\n\nThe Chrome extension isn't reachable right now. If browser tools were working earlier in this session, this is usually transient — retry in a moment."
+	noBrowsers   = "[]"
+	oneBrowser   = `[{"deviceId":"3998c3cb","name":"Browser 1","osPlatform":"Linux","isLocal":true,"inUse":true}]`
+	deployClick  = `{"action":"left_click","ref":"ref_9","action_summary":"Clicks Deploy agent"}`
+	deployCall   = `computer left_click "Clicks Deploy agent"`
+	notDoneLines = "- Click Deploy agent once\n- Report what the page says"
+)
+
+// A Chrome call answered "not connected", in the CLI's or the desktop's
+// words, or a list of no browser, is a lost call, no tool error needed; a
+// Chrome call answered after the last such one has the connection back, a
+// classifier denial does not; the lines count the lost calls, name the
+// first and say what came of the reconnect; the report's lines after its
+// lost line are the steps not done, which the error names.
+func TestReadFindingsConnection(t *testing.T) {
+	read := func(t *testing.T, lines string) browseFindings {
+		t.Helper()
+		transcript := filepath.Join(t.TempDir(), "t.jsonl")
+		writeFile(t, transcript, lines)
+		f, err := readFindings(transcript)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	// Lost twice, then the list names a browser and a call is answered: the
+	// connection is back, the turn went on by itself.
+	back := read(t, chromeUse("t1", "navigate", `{"url":"https://example.test/"}`)+chromeAnswer("t1", "Navigated to https://example.test/")+
+		chromeUse("t2", "computer", `{"action":"screenshot"}`)+chromeAnswer("t2", goneAnswer)+
+		chromeUse("t3", "list_connected_browsers", `{}`)+chromeAnswer("t3", noBrowsers)+
+		chromeUse("t4", "list_connected_browsers", `{}`)+chromeAnswer("t4", oneBrowser)+
+		chromeUse("t5", "computer", `{"action":"screenshot"}`)+chromeAnswer("t5", "Successfully captured screenshot"))
+	if !slices.Equal(back.Lost, []string{"computer screenshot", "list_connected_browsers"}) || !back.Recovered || back.lost() || back.lostErr("report") != nil {
+		t.Errorf("findings of a connection that came back = %+v, %v", back, back.lostErr("report"))
+	}
+	if l := back.lines("steps", "", nil, false); len(l) != 1 ||
+		l[0] != "connection lost: 2 calls found Claude in Chrome not connected, the first computer screenshot; the connection answered again and the turn went on" {
+		t.Errorf("lines of a connection that came back = %q", l)
+	}
+	// Lost at the end, the list empty and a denial after it: gone; the
+	// desktop's words and the account-wide list are lost calls too.
+	denial := `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t4","is_error":true,"content":"Permission for this action was denied by the Claude Code auto mode classifier. Reason: [Destructive]."}]}}` + "\n"
+	gone := read(t, chromeUse("t1", "navigate", `{"url":"https://example.test/"}`)+chromeAnswer("t1", "Navigated to https://example.test/")+
+		chromeUse("t2", "computer", deployClick)+chromeAnswer("t2", goneAnswer)+
+		chromeUse("t3", "list_connected_browsers", `{}`)+chromeAnswer("t3", noBrowsers)+
+		chromeUse("t4", "computer", deployClick)+denial)
+	if !slices.Equal(gone.Lost, []string{deployCall, "list_connected_browsers"}) || gone.Recovered || !gone.lost() || len(gone.Refused) != 1 {
+		t.Errorf("findings of a connection that stayed gone = %+v", gone)
+	}
+	for _, text := range []string{"Browser extension is not connected. Please ensure the Claude browser extension is installed", "No browsers connected to the account."} {
+		if f := read(t, chromeUse("t1", tabsContext, `{}`)+chromeAnswer("t1", text)); !slices.Equal(f.Lost, []string{tabsContext}) || !f.lost() {
+			t.Errorf("findings of %q = %+v", text, f)
+		}
+	}
+	if f := read(t, chromeUse("t1", "list_connected_browsers", `{}`)+chromeAnswer("t1", oneBrowser)); f.Lost != nil || f.lost() || f.Recovered {
+		t.Errorf("findings of a listed browser = %+v", f)
+	}
+	// Before a reconnect the line says the turn ended without the
+	// connection; after one that found no browser, that; after one that
+	// found it, that it went on.
+	if l := gone.lines("steps", "", nil, false); len(l) != 2 ||
+		l[1] != "connection lost: 2 calls found Claude in Chrome not connected, the first "+deployCall+"; the turn ended without it, before a reconnect" {
+		t.Errorf("lines of a connection gone before a reconnect = %q", l)
+	}
+	gone.Reconnected = true
+	if l := gone.lines("steps", "", nil, false); len(l) != 2 || l[1] != "connection lost: 2 calls found Claude in Chrome not connected, the first "+deployCall+
+		"; the reconnect turn, a fresh connection, found no browser: the steps not done are the report's, to run again once the extension is connected (list_connected_browsers)" {
+		t.Errorf("lines of a reconnect that found no browser = %q", l)
+	}
+	back.Reconnected = true
+	if l := back.lines("steps", "", nil, false); len(l) != 1 || !strings.HasSuffix(l[0], "; the reconnect turn, a fresh connection, found the browser and went on with the steps not done") {
+		t.Errorf("lines of a reconnect that found the browser = %q", l)
+	}
+	if l := (browseFindings{Lost: []string{tabsContext}}).lines("steps", "", nil, false); len(l) != 1 || !strings.HasPrefix(l[0], "connection lost: 1 call found ") {
+		t.Errorf("lines of one lost call = %q", l)
+	}
+	// The error names the lost call, the reconnect's outcome and the steps
+	// the report lists after its lost line, list marks dropped; a report
+	// without the line says so.
+	report := "Opened the page, the connection went at the click.\n\n**" + lostLine + "**\n" + notDoneLines + "\n"
+	if err := gone.lostErr(report); err == nil || err.Error() != lostLine+" at "+deployCall+": the reconnect turn found no browser; steps not done, to run again once the extension is connected (list_connected_browsers): "+
+		"Click Deploy agent once; Report what the page says" {
+		t.Errorf("lostErr after the reconnect = %v", err)
+	}
+	gone.Reconnected = false
+	if err := gone.lostErr("Opened the page."); err == nil || err.Error() != lostLine+" at "+deployCall+": the turn did not get it back; the report lists no steps not done: run the steps again once the extension is connected (list_connected_browsers)" {
+		t.Errorf("lostErr without the steps = %v", err)
+	}
+	for report, want := range map[string][]string{
+		"Browser connection lost:\n1. Open the page\n2) Click Deploy\n\n• Report":                            {"Open the page", "Click Deploy", "Report"},
+		"Done: the page opened.\n\n" + lostLine + "\n- Click Deploy agent once\n- Report what the page says": {"Click Deploy agent once", "Report what the page says"},
+		"The browser connection lost its tab; all steps done.":                                               nil,
+		"": nil,
+	} {
+		if got := stepsNotDone(report); !slices.Equal(got, want) {
+			t.Errorf("stepsNotDone(%q) = %q, want %q", report, got, want)
+		}
+	}
+}
+
 // What the fake claude of the turn tests prints, and the line of a turn that
 // took no screenshot.
 const (
@@ -211,6 +343,120 @@ const (
 	noShots    = "screenshot: none taken"
 	theGuide   = "the guide"
 )
+
+// A connection the turn lost and did not get back is reconnected once: a
+// second claude resumes the session (the same tools, mode and rules, the
+// reconnect prompt naming the lost call), its report is printed after the
+// first and its findings are read with the first turn's. A reconnect that
+// finds the browser ends the run well; one that finds none ends it with the
+// lost error naming the steps the report lists; a connection the turn got
+// back by itself runs no reconnect.
+func TestBrowseReconnects(t *testing.T) {
+	a, out := stubApp(t)
+	bin := t.TempDir()
+	argvFile, transcript, reportFile, count := filepath.Join(bin, "argv"), filepath.Join(bin, "transcript"), filepath.Join(bin, "report"), filepath.Join(bin, "count")
+	// The fake claude counts its runs, records each run's arguments, appends
+	// that run's transcript under the session it starts or resumes and
+	// prints that run's report.
+	script := "#!/bin/sh\nn=$(cat \"$BROWSE_COUNT\" 2>/dev/null || echo 0); n=$((n+1)); echo \"$n\" > \"$BROWSE_COUNT\"\n" +
+		": > \"$BROWSE_ARGV.$n\"\nid=; prev=\nfor a in \"$@\"; do\n  printf '%s\\0' \"$a\" >> \"$BROWSE_ARGV.$n\"\n" +
+		"  case \"$prev\" in --session-id|--resume) id=$a;; esac\n  prev=$a\ndone\n" +
+		"mkdir -p \"$BROWSE_PROJECT\" && cat \"$BROWSE_TRANSCRIPT.$n\" >> \"$BROWSE_PROJECT/$id.jsonl\"\ncat \"$BROWSE_REPORT.$n\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o700); err != nil { //nolint:gosec // a fake claude
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("BROWSE_ARGV", argvFile)
+	t.Setenv("BROWSE_TRANSCRIPT", transcript)
+	t.Setenv("BROWSE_REPORT", reportFile)
+	t.Setenv("BROWSE_COUNT", count)
+	t.Setenv("BROWSE_PROJECT", filepath.Join(a.cfg.Claude.ProjectsDir, "p"))
+	argvOf := func(n string) []string {
+		b, err := os.ReadFile(argvFile + "." + n) //nolint:gosec // the test's own file
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Split(strings.TrimSuffix(string(b), "\x00"), "\x00")
+	}
+	runs := func() string {
+		b, _ := os.ReadFile(count) //nolint:gosec // the test's own file
+		return strings.TrimSpace(string(b))
+	}
+	const steps = "Open the demo page. Click Deploy agent once. Report what the page says."
+	lostTurn := chromeUse("t1", "navigate", `{"url":"https://example.test/"}`) + chromeAnswer("t1", "Navigated to https://example.test/") +
+		chromeUse("t2", "computer", deployClick) + chromeAnswer("t2", goneAnswer) +
+		chromeUse("t3", "list_connected_browsers", `{}`) + chromeAnswer("t3", noBrowsers)
+	const lostReport = "Opened the page; the connection went at the click.\n" + lostLine + "\n" + notDoneLines + "\n"
+
+	// The reconnect finds the browser and goes on.
+	writeFile(t, transcript+".1", lostTurn)
+	writeFile(t, reportFile+".1", lostReport)
+	writeFile(t, transcript+".2", chromeUse("t4", "list_connected_browsers", `{}`)+chromeAnswer("t4", oneBrowser)+
+		chromeUse("t5", "computer", deployClick)+chromeAnswer("t5", "Clicked on element ref_9"))
+	writeFile(t, reportFile+".2", "Clicked Deploy agent; the page says deployed.\n")
+	if err := a.browse(t.Context(), steps, bin, "", time.Minute, ""); err != nil {
+		t.Fatalf("browse with a reconnect that found the browser: %v\n%s", err, out.String())
+	}
+	got := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if len(got) != 8 || got[0] != "Opened the page; the connection went at the click." || got[1] != lostLine || got[3] != "- Report what the page says" ||
+		got[4] != "Clicked Deploy agent; the page says deployed." ||
+		got[5] != "connection lost: 2 calls found Claude in Chrome not connected, the first "+deployCall+"; the reconnect turn, a fresh connection, found the browser and went on with the steps not done" ||
+		!strings.HasPrefix(got[6], "transcript: ") || got[7] != noShots {
+		t.Errorf("browse with a reconnect printed %q", got)
+	}
+	if runs() != "2" {
+		t.Errorf("the fake claude ran %s times, want 2", runs())
+	}
+	first, second := argvOf("1"), argvOf("2")
+	id := first[slices.Index(first, sessionIDFlag)+1]
+	if i := slices.Index(second, resumeFlag); i < 0 || second[i+1] != id || slices.Contains(second, sessionIDFlag) ||
+		second[len(second)-1] != fmt.Sprintf(reconnectWords, deployCall) || !slices.Contains(second, chromeFlag) ||
+		!slices.Equal(second[:i], first[:slices.Index(first, sessionIDFlag)]) {
+		t.Errorf("the reconnect ran with %q, the first turn with %q", second, first)
+	}
+
+	// The reconnect finds no browser: the lost error names the steps the
+	// reconnect's report lists, and the line says so.
+	out.Reset()
+	if err := os.Remove(count); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, transcript+".2", chromeUse("t4", "list_connected_browsers", `{}`)+chromeAnswer("t4", noBrowsers))
+	writeFile(t, reportFile+".2", lostLine+"\n"+notDoneLines+"\n")
+	err := a.browse(t.Context(), steps, bin, "", time.Minute, "")
+	if err == nil || err.Error() != lostLine+" at "+deployCall+": the reconnect turn found no browser; steps not done, to run again once the extension is connected (list_connected_browsers): "+
+		"Click Deploy agent once; Report what the page says" {
+		t.Errorf("browse with a reconnect that found no browser: %v", err)
+	}
+	got = strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if len(got) != 10 || got[4] != lostLine || got[6] != "- Report what the page says" ||
+		!strings.HasPrefix(got[7], "connection lost: 3 calls found Claude in Chrome not connected, the first "+deployCall+"; the reconnect turn, a fresh connection, found no browser: ") ||
+		!strings.HasPrefix(got[8], "transcript: ") || got[9] != noShots {
+		t.Errorf("browse with a reconnect that found no browser printed %q", got)
+	}
+	if runs() != "2" {
+		t.Errorf("the fake claude ran %s times, want 2", runs())
+	}
+
+	// A connection the turn got back by itself runs no reconnect.
+	out.Reset()
+	if err := os.Remove(count); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, transcript+".1", lostTurn+chromeUse("t4", "list_connected_browsers", `{}`)+chromeAnswer("t4", oneBrowser)+
+		chromeUse("t5", "computer", deployClick)+chromeAnswer("t5", "Clicked on element ref_9"))
+	writeFile(t, reportFile+".1", "Clicked Deploy agent after a reconnect; the page says deployed.\n")
+	if err := a.browse(t.Context(), steps, bin, "", time.Minute, ""); err != nil {
+		t.Fatalf("browse with a connection that came back: %v\n%s", err, out.String())
+	}
+	got = strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if len(got) != 4 || got[1] != "connection lost: 2 calls found Claude in Chrome not connected, the first "+deployCall+"; the connection answered again and the turn went on" {
+		t.Errorf("browse with a connection that came back printed %q", got)
+	}
+	if runs() != "1" {
+		t.Errorf("the fake claude ran %s times, want 1", runs())
+	}
+}
 
 // The turn runs the claude on PATH with the browse argv: dontAsk, the Chrome
 // tools alone, and with a declared deploy the settings whose auto mode
@@ -347,13 +593,13 @@ func TestBrowseConsent(t *testing.T) {
 		t.Errorf("browseRules of nothing = %q", rules)
 	}
 	const deploy = "the demo agent to the demo cluster"
-	argv := browseArgv("id-1", "", "steps", browseRules(deploy, consents, false))
+	argv := browseArgv(turnID, "", "steps", browseRules(deploy, consents, false), false)
 	i := slices.Index(argv, settingsFlag)
 	if i < 0 || argv[i+1] != allowSettings([]string{allowDeployRule(deploy), consentRule(consents[0])}) || strings.Count(argv[i+1], "$defaults") != 1 {
 		t.Errorf("--settings with a deploy and a record = %q", argv)
 	}
 	p := browsePrompt("steps", "", consents, true)
-	if !strings.HasPrefix(p, browsePreamble+"The person's own App "+recordedApp+" is declared and on record (callback "+recordedCallback+" or "+recordedCallback+":8443):") ||
+	if !strings.HasPrefix(p, browsePreamble+connectionWords+"The person's own App "+recordedApp+" is declared and on record (callback "+recordedCallback+" or "+recordedCallback+":8443):") ||
 		!strings.Contains(p, labWords) || !strings.HasSuffix(p, browseSteps+"steps") {
 		t.Errorf("browsePrompt with a record and the lab = %q", p)
 	}
