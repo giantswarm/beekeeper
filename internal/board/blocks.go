@@ -127,13 +127,17 @@ func (c *Client) hold(ctx context.Context, ref, by string, block bool) (*Held, e
 	var r map[string]*struct {
 		Issue *depNode `json:"issue"`
 	}
-	partial, err := c.query(ctx, &r, `mutation($i:ID!,$b:ID!){`+mutation+`(input:{issueId:$i,blockingIssueId:$b}){issue{`+depFields+` `+blockersField+`}}}`,
+	err = c.graphql(ctx, &r, `mutation($i:ID!,$b:ID!){`+mutation+`(input:{issueId:$i,blockingIssueId:$b}){issue{`+depFields+` `+blockersField+`}}}`,
 		vars{"i": it.node.ID, "b": blocker.node.ID})
-	if err != nil {
+	p, ok := partialOf(err)
+	if !ok {
 		return nil, err
 	}
 	if r[mutation] == nil || r[mutation].Issue == nil {
-		return nil, fmt.Errorf("%s %s on %s%s", mutation, h.By, h.Ref, reason(partial))
+		return nil, fmt.Errorf("%s %s on %s%s", mutation, h.By, h.Ref, p.reason())
+	}
+	if p != nil {
+		return nil, fmt.Errorf("%s %s on %s, its blockers unread: %w", mutation, h.By, h.Ref, err)
 	}
 	h.Changed = true
 	h.Blockers, h.OpenBlockers = r[mutation].Issue.counts()
@@ -144,7 +148,7 @@ func (c *Client) hold(ctx context.Context, ref, by string, block bool) (*Held, e
 // GitHub answered beside it.
 type resolved struct {
 	node    *depNode
-	partial []string
+	partial *Partial
 }
 
 // depNode reads the issue or pull request owner/repo#n, with extra of an
@@ -155,14 +159,19 @@ func (c *Client) depNode(ctx context.Context, owner, repo string, n int, extra s
 			Item *depNode `json:"issueOrPullRequest"`
 		} `json:"repository"`
 	}
-	partial, err := c.query(ctx, &r, `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issueOrPullRequest(number:$n){__typename ...on Issue{`+depFields+` `+extra+`}}}}`,
+	err := c.graphql(ctx, &r, `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issueOrPullRequest(number:$n){__typename ...on Issue{`+depFields+` `+extra+`}}}}`,
 		vars{"o": owner, "r": repo, "n": n})
-	if err != nil {
+	p, ok := partialOf(err)
+	if !ok {
 		return resolved{}, err
 	}
-	out := resolved{partial: partial}
+	out := resolved{partial: p}
 	if r.Repository != nil {
 		out.node = r.Repository.Item
+	}
+	if out.node != nil && p != nil {
+		// A node GitHub resolved with fields missing is never read whole.
+		return resolved{}, fmt.Errorf("%s/%s#%d: %w", owner, repo, n, err)
 	}
 	return out, nil
 }
@@ -173,7 +182,7 @@ func (c *Client) depNode(ctx context.Context, owner, repo string, n int, extra s
 func notIssue(x resolved, ref, rule string) string {
 	switch {
 	case x.node == nil:
-		return ref + " is no issue" + reason(x.partial)
+		return ref + " is no issue" + x.partial.reason()
 	case x.node.Type == "PullRequest":
 		return ref + " is a pull request: " + rule
 	case x.node.Type != "Issue" || x.node.ID == "":

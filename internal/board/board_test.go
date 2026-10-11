@@ -261,7 +261,9 @@ type fakeGH struct {
 	t      *testing.T
 	pages  []string
 	extras string
-	item   string
+	// extrasBy answers an extras request by its query, over extras.
+	extrasBy func(q string) string
+	item     string
 	// added answers addProjectV2ItemById.
 	added string
 	// byIssue answers an issue's projectItems by its number, over item;
@@ -308,6 +310,8 @@ func (f *fakeGH) run(ctx context.Context, args ...string) ([]byte, error) {
 			page = 1
 		}
 		return []byte(f.pages[page]), nil
+	case f.extrasBy != nil && (strings.Contains(q, "subIssues(first:50)") || strings.Contains(q, "search(")):
+		return []byte(f.extrasBy(q)), nil
 	case strings.Contains(q, "subIssues(first:50)") || strings.Contains(q, "search("):
 		if !strings.Contains(q, `e1:repository(owner:"o",name:"r"){issue(number:2){subIssues(first:50){nodes{...I projectItems(`) ||
 			!strings.Contains(q, `s2:search(query:"repo:o/q is:issue is:open sort:created-asc"`) {
@@ -332,6 +336,17 @@ func node(status, kind, content string) string {
 	return fmt.Sprintf(`{"status":{"name":%q},"kind":%s,"content":%s}`, status, kind, content)
 }
 
+// readBoard is the board the reads take: the epics' sub-issues, In
+// Progress, a search step and Up Next.
+func readBoard() config.Board {
+	return config.Board{Owner: "o", Project: 7, Team: "X", People: []string{"me"}, Order: []config.BoardStep{
+		{Name: "epics", Status: []string{"in progress"}, Kind: []string{defaultEpicKind}, SubIssues: true},
+		{Name: "In Progress", Status: []string{"progress"}},
+		{Name: "queue", Search: "repo:o/q"},
+		{Name: "Up Next", Status: []string{"next"}},
+	}}
+}
+
 func TestReadPagesTheBoardAndReadsSubIssuesAndSearches(t *testing.T) {
 	f := &fakeGH{t: t, pages: []string{
 		`{"data":{"repositoryOwner":{"projectV2":{"items":{"pageInfo":{"hasNextPage":true,"endCursor":"C"},"nodes":[` +
@@ -346,12 +361,7 @@ func TestReadPagesTheBoardAndReadsSubIssuesAndSearches(t *testing.T) {
 		strings.Replace(issue(21, ""), "OPEN", "CLOSED", 1) + "," +
 		issue(22, `,"projectItems":{"nodes":[{"project":{"id":"Q"}},{"project":{"id":"P"},"status":{"name":"Inbox 📥"},"kind":null}]}`) +
 		`]}}},"s2":{"nodes":[` + issue(30, "") + `]}}}`}
-	b := config.Board{Owner: "o", Project: 7, Team: "X", People: []string{"me"}, Order: []config.BoardStep{
-		{Name: "epics", Status: []string{"in progress"}, Kind: []string{defaultEpicKind}, SubIssues: true},
-		{Name: "In Progress", Status: []string{"progress"}},
-		{Name: "queue", Search: "repo:o/q"},
-		{Name: "Up Next", Status: []string{"next"}},
-	}}
+	b := readBoard()
 	snap, err := (&Client{GH: f.run, Board: b}).Read(context.Background(), now)
 	if err != nil {
 		t.Fatal(err)

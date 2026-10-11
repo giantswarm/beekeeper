@@ -92,12 +92,17 @@ free items behind it in their order (the preview of the board's work), and
 the skipped items' count by kind: served (a session's record, a busy
 agent's task), note (an open note names it), assigned (outside
 board.people), blocked, stale, lease (another session holds it), planning
-(the epic gate holds it) and order (a rule of board.order turns it away: an
-old Backlog item, one in Inbox, one without recorded blockers), and each
-epic in planning or past its go with its plan's URL, state and head; --json
-lists every item behind the pick as after_pick, each with its skip reason
-or free (an empty skip), the counts as skipped_by and the epics with their
-plans as epics.
+(the epic gate holds it), unknown (GitHub answered its board fields or an
+epic's sub-issues with an error) and order (a rule of board.order turns it
+away: an old Backlog item, one in Inbox, one without recorded blockers), and
+each epic in planning or past its go with its plan's URL, state and head;
+--json lists every item behind the pick as after_pick, each with its skip
+reason or free (an empty skip), the counts as skipped_by and the epics with
+their plans as epics. The sub-issues are read 150 at a time, under GitHub's
+resource limits; whatever GitHub still answers with an error is named, never
+read as absent: an item's missing fields as its missing ("<field>:
+<message>"), anything else on a line "unknown, GitHub answered with an
+error: …" and in --json's missing.
 
 --claim records the pick as the calling session's sessions serve record
 under the state lock, after checking again that nobody claimed it since:
@@ -166,7 +171,7 @@ replaces the record. Exit 3 when no item is free or the claim is refused.`,
 			if err != nil {
 				return err
 			}
-			res.Epics = snap.Epics()
+			res.Epics, res.Missing = snap.Epics(), snap.Missing
 			return a.printNext(res, len(cands))
 		},
 	}
@@ -244,6 +249,9 @@ type nextResult struct {
 	// Epics are the epics the epic gate watches, in planning or past their
 	// go, each with its plan.
 	Epics []board.Epic `json:"epics,omitempty"`
+	// Missing names what GitHub answered with an error and no candidate's
+	// missing holds, a search step's issues for one.
+	Missing []string `json:"missing,omitempty"`
 }
 
 // The kinds of a skip reason, skipKind's words and skipped_by's keys.
@@ -255,6 +263,7 @@ const (
 	kindStale    = "stale"
 	kindLease    = "lease"
 	kindPlanning = "planning"
+	kindUnknown  = "unknown"
 	kindOrder    = "order"
 )
 
@@ -276,6 +285,8 @@ func skipKind(reason string) string {
 		return kindLease
 	case strings.Contains(reason, "in planning ("):
 		return kindPlanning
+	case strings.HasPrefix(reason, "board fields unknown: "), strings.HasPrefix(reason, "sub-issues unknown: "):
+		return kindUnknown
 	}
 	return kindOrder
 }
@@ -540,6 +551,9 @@ func (a *app) printNext(res nextResult, offered int) error {
 		if len(res.Epics) > 0 && !res.Claimed {
 			_, _ = fmt.Fprintf(a.out, "epics in planning and past their go: %d\n", len(res.Epics))
 			a.printEpics(res.Epics, "  ")
+		}
+		for _, m := range res.Missing {
+			_, _ = fmt.Fprintf(a.out, "unknown, GitHub answered with an error: %s\n", m)
 		}
 	}
 	if h := res.Held; h != nil {

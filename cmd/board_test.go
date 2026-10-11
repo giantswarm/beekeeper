@@ -439,6 +439,8 @@ func TestSkipKind(t *testing.T) {
 		`needs lease agentlab-1, held by "Lab holder"`:   kindLease,
 		"sub-issue of epic o/r#8, in planning (Up Next)": kindPlanning,
 		"epic in planning (Up Next), no plan pull request names it: its planning session's": kindPlanning,
+		"board fields unknown: projectItems: Resource limits for this query exceeded.":      kindUnknown,
+		"sub-issues unknown: issue.subIssues: Resource limits for this query exceeded.":     kindUnknown,
 		oldBacklog:                            kindOrder,
 		"no step of board.order offers Inbox": kindOrder,
 		"blocker cleared takes items with recorded blockers, it has none": kindOrder,
@@ -490,8 +492,26 @@ func TestPrintNextPreviewListsTheFreeItemsAndCountsTheSkips(t *testing.T) {
 	if s := out.String(); !strings.Contains(s, "behind it: 5 more, 2 of them free") || strings.Contains(s, "Item 5") {
 		t.Errorf("claim output:\n%s", s)
 	}
-	// The preview names each epic in planning or past its go with its plan.
+	// What GitHub answered with an error is named, in the text and --json.
 	res.Claimed = false
+	res.Missing = []string{`board.order "queue": Resource limits for this query exceeded.`}
+	res.AfterPick[0].Missing = []string{"projectItems: Resource limits for this query exceeded."}
+	out.Reset()
+	if err := (&app{out: &out}).printNext(res, len(cands)); err != nil {
+		t.Fatal(err)
+	}
+	if s := out.String(); !strings.Contains(s, "unknown, GitHub answered with an error: board.order \"queue\": Resource limits for this query exceeded.\n") {
+		t.Errorf("preview lacks the missing search:\n%s", s)
+	}
+	out.Reset()
+	if err := (&app{out: &out, json: true}).printNext(res, len(cands)); err != nil {
+		t.Fatal(err)
+	}
+	if s := out.String(); !strings.Contains(s, `"missing": [`) || !strings.Contains(s, `"projectItems: Resource limits for this query exceeded."`) {
+		t.Errorf("--json lacks missing:\n%s", s)
+	}
+	res.Missing, res.AfterPick[0].Missing = nil, nil
+	// The preview names each epic in planning or past its go with its plan.
 	res.Epics = []board.Epic{
 		{Ref: "o/r#8", Title: "Epic", Status: "Up Next", Plan: &board.Plan{URL: "https://github.com/o/plans/pull/1", State: "draft", Head: "6a672cdede08"}},
 		{Ref: "o/r#12", Title: "Other", Status: "In Progress"},
