@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The shipped `worker-rules` skill says never to `git stash` in a worktree: the stash list is the clone's, shared by every worktree of it, so a pop applies another session's entry or drops it; work that has to wait is committed to the worker's own branch or a throwaway branch, or left in place ([#761](https://github.com/giantswarm/beekeeper/issues/761)).
+
 - `beekeeper app allow` records only an App the organisation declares: it reads the App's manifest from the repository the config's `apps.repo` names, at `apps.manifest` (`{name}` for the App's name), on its default branch, refuses an App no manifest declares under its name, and takes the record's callback hosts from the manifest's `callback_urls` (`--callback` is gone); the record, `app list`, the hook's allow and the browse report name the manifest and the commit it was read at ([#655](https://github.com/giantswarm/beekeeper/issues/655)).
 
 ### Added
