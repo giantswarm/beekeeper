@@ -31,9 +31,11 @@ func (a *app) boardCmd() *cobra.Command {
 		Long: `The project board of board.owner and board.project, the items of board.team.
 next applies the configured order (board.order) to the board's open items
 and the roster and prints the first free item with why it is picked; move
-sets an item's Status by the board's canonical names.`,
+sets an item's Status by the board's canonical names; rank sets an item's
+priority, its position on the board, which is the order next reads the
+items of each step in.`,
 	}
-	c.AddCommand(a.boardNextCmd(), a.boardMoveCmd())
+	c.AddCommand(a.boardNextCmd(), a.boardMoveCmd(), a.boardRankCmd())
 	return c
 }
 
@@ -575,5 +577,79 @@ Exit 3 when refused.`,
 			}
 			return err
 		},
+	}
+}
+
+func (a *app) boardRankCmd() *cobra.Command {
+	var at board.Place
+	c := &cobra.Command{
+		Use:   "rank <owner/repo#n|URL> --top | --before <issue> | --after <issue>",
+		Short: "Set a board item's priority: move it to the top, or before or after another item",
+		Long: `An item's priority is its position on the board: board next walks the items
+of each board.order step in the board's position order, the order a view
+without a sort shows and a drag in it changes (the roadmap board's Epics and
+Backlogs views). rank moves the issue's item to the top of the board, right
+before or right after the item of another issue (updateProjectV2ItemPosition),
+and prints the neighbours the move names. An issue without an item on the
+board is added first, as move adds it, with board.team as its Team and no
+Status. The other issue must be on the board already. Only the items named
+are read, never the board's items. Every GitHub call acts on the repository
+of the issue it asks about (GH_REPO). Exit 3 when refused: an issue that
+does not exist, another issue that has no item on the board, an item placed
+against itself.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			for _, r := range []string{args[0], at.Before, at.After} {
+				if r == "" {
+					continue
+				}
+				if _, _, _, err := board.Ref(r); err != nil {
+					return usageErr("%v", err)
+				}
+			}
+			me, _ := a.caller()
+			cl := &board.Client{GH: boardGH, Board: a.cfg.Board}
+			rk, err := cl.Rank(cmd.Context(), args[0], at)
+			if r := (*board.Refusal)(nil); errors.As(err, &r) {
+				return refused("%s", r.Reason)
+			}
+			if err != nil {
+				return err
+			}
+			place := rankPlace(rk)
+			added := ""
+			if rk.Added {
+				added = ", added to the board"
+				if rk.Team != "" {
+					added += " with Team " + rk.Team
+				}
+			}
+			_ = a.store.Log(event(me, "board.rank", "%s: %s%s", rk.Ref, place, added))
+			if a.json {
+				return a.printJSON(rk)
+			}
+			_, err = fmt.Fprintf(a.out, "ranked %s on the board %s/%d: %s%s\n", rk.Ref, a.cfg.Board.Owner, a.cfg.Board.Project, place, added)
+			return err
+		},
+	}
+	c.Flags().BoolVar(&at.Top, "top", false, "move the item to the top of the board")
+	c.Flags().StringVar(&at.Before, "before", "", "move the item right before this issue's item")
+	c.Flags().StringVar(&at.After, "after", "", "move the item right after this issue's item")
+	c.MarkFlagsMutuallyExclusive("top", "before", "after")
+	c.MarkFlagsOneRequired("top", "before", "after")
+	return c
+}
+
+// rankPlace is where rk put the item, with the neighbours it names.
+func rankPlace(rk *board.Ranked) string {
+	switch {
+	case rk.Top && rk.Below != "":
+		return "at the top, above " + rk.Below
+	case rk.Top:
+		return "at the top"
+	case rk.Above != "":
+		return "after " + rk.Above
+	default:
+		return "before " + rk.Below
 	}
 }

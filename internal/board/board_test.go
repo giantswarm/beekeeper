@@ -1,6 +1,7 @@
 package board
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -147,6 +148,33 @@ func TestRankAppliesTheOrderToAFixtureBoard(t *testing.T) {
 	}
 }
 
+func TestPositionIsThePriorityWithinAStep(t *testing.T) {
+	// The board's items in position order: a rank that moves #12 above #10
+	// makes it the first Up Next item, still after every In Progress one.
+	const three, ten, twelve = "o/r#3", "o/r#10", "o/r#12"
+	before, after := []string{three, ten, twelve}, []string{three, twelve, ten}
+	snap := snapshot(t)
+	it := func(n int, status string) Item {
+		return Item{Ref: fmt.Sprintf("o/r#%d", n), OnBoard: true, Status: status, Created: days(5), Updated: days(1)}
+	}
+	for _, tc := range []struct {
+		items []Item
+		want  []string
+	}{
+		{[]Item{it(3, inProgress), it(10, upNext), it(12, upNext)}, before},
+		{[]Item{it(12, upNext), it(3, inProgress), it(10, upNext)}, after},
+	} {
+		snap.Items, snap.Search = tc.items, nil
+		var got []string
+		for _, c := range Rank(snap, deskBoard(), now) {
+			got = append(got, c.Ref)
+		}
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("picks %v, want %v", got, tc.want)
+		}
+	}
+}
+
 func TestUnofferedSaysWhyNoStepTakesAnItem(t *testing.T) {
 	o := snapshot(t).Order
 	for _, tc := range []struct {
@@ -227,7 +255,11 @@ type fakeGH struct {
 	extras string
 	item   string
 	// added answers addProjectV2ItemById.
-	added     string
+	added string
+	// byIssue answers an issue's projectItems by its number, over item;
+	// moved answers updateProjectV2ItemPosition.
+	byIssue   map[string]string
+	moved     string
 	mutations []string
 	queries   []string
 	repos     []string
@@ -251,6 +283,9 @@ func (f *fakeGH) run(ctx context.Context, args ...string) ([]byte, error) {
 	case strings.Contains(q, "addProjectV2ItemById"):
 		f.mutations = append(f.mutations, "add "+vars["c"]+" to "+vars["p"])
 		return []byte(f.added), nil
+	case strings.Contains(q, "updateProjectV2ItemPosition"):
+		f.mutations = append(f.mutations, fmt.Sprintf("%s after %q", vars["i"], vars["a"]))
+		return []byte(cmp.Or(f.moved, `{"data":{"updateProjectV2ItemPosition":{"clientMutationId":null}}}`)), nil
 	case strings.HasPrefix(q, "query=mutation"):
 		f.mutations = append(f.mutations, vars["i"]+"="+vars["v"])
 		return []byte(`{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"I"}}}}`), nil
@@ -272,6 +307,9 @@ func (f *fakeGH) run(ctx context.Context, args ...string) ([]byte, error) {
 		}
 		return []byte(f.extras), nil
 	case strings.Contains(q, "projectItems"):
+		if a, ok := f.byIssue[vars["n"]]; ok {
+			return []byte(a), nil
+		}
 		return []byte(f.item), nil
 	}
 	f.t.Fatalf("unexpected request %v", args)
@@ -407,7 +445,7 @@ func TestMoveFindsTheItemOfAnIssueOutsideTheOrganisation(t *testing.T) {
 	}
 	// Every call acts on the issue's repository, so the gh link picks the
 	// login that reaches it; the board's items are never read.
-	if len(f.queries) != 4 || readsItems(f.queries) || !slices.Equal(slices.Compact(slices.Clone(f.repos)), []string{"teemow/lab"}) {
+	if len(f.queries) != 4 || readsItems(f.queries) || !slices.Equal(slices.Compact(slices.Clone(f.repos)), []string{labRepo}) {
 		t.Errorf("queries %q acting on %q", f.queries, f.repos)
 	}
 	// The item's own status is a no-op, still without a read of the items.
@@ -424,13 +462,92 @@ func TestMoveFindsTheItemOfAnIssueOutsideTheOrganisation(t *testing.T) {
 	}
 }
 
+// issue9 is the issue the ranks place an item against, labRepo a
+// personal account's repository.
+const (
+	issue9  = "o/r#9"
+	labRepo = "teemow/lab"
+)
+
+// item9 is the issue the ranks place an item against: its item I9 is on
+// the board.
+const item9 = `{"data":{"repository":{"issue":{"id":"ISSUE9","projectItems":{"nodes":[{"id":"I9","project":{"id":"P"},"status":{"name":"Up Next ➡️"},"team":{"name":"X 🐝"}}]}}}}}`
+
+func TestRankMovesTheItemByItsPosition(t *testing.T) {
+	f := &fakeGH{t: t, item: onBoard, byIssue: map[string]string{"9": item9},
+		moved: `{"data":{"updateProjectV2ItemPosition":{"items":{"nodes":[{"id":"I1","content":{"number":5,"repository":{"nameWithOwner":"o/r"}}},{"id":"I9","content":{"number":9,"repository":{"nameWithOwner":"o/r"}}}]}}}}`}
+	c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
+	ctx := context.Background()
+	rk, err := c.Rank(ctx, issue5, Place{Top: true})
+	if err != nil || *rk != (Ranked{Ref: issue5, Top: true, Below: issue9}) || !slices.Equal(f.mutations, []string{`I1 after ""`}) {
+		t.Errorf("Rank top = %+v, %v; mutations %v", rk, err, f.mutations)
+	}
+	if !strings.Contains(f.queries[len(f.queries)-1], "updateProjectV2ItemPosition(input:{projectId:$p,itemId:$i}){clientMutationId items(first:2)") {
+		t.Errorf("a move to the top sends no afterId and reads the two top items: %s", f.queries[len(f.queries)-1])
+	}
+	f.mutations, f.moved = nil, ""
+	rk, err = c.Rank(ctx, issue5, Place{After: "https://github.com/o/r/issues/9"})
+	if err != nil || *rk != (Ranked{Ref: issue5, Above: issue9}) || !slices.Equal(f.mutations, []string{`I1 after "I9"`}) {
+		t.Errorf("Rank after = %+v, %v; mutations %v", rk, err, f.mutations)
+	}
+	// Before is the item after the other one, then the other one after the
+	// item: the other one's predecessor is never read.
+	f.mutations = nil
+	rk, err = c.Rank(ctx, issue5, Place{Before: issue9})
+	if err != nil || *rk != (Ranked{Ref: issue5, Below: issue9}) || !slices.Equal(f.mutations, []string{`I1 after "I9"`, `I9 after "I1"`}) {
+		t.Errorf("Rank before = %+v, %v; mutations %v", rk, err, f.mutations)
+	}
+	if readsItems(slices.DeleteFunc(slices.Clone(f.queries), func(q string) bool { return strings.Contains(q, "items(first:2)") })) {
+		t.Errorf("a rank read the board's items: %q", f.queries)
+	}
+}
+
+func TestRankAddsAMissingIssueAndRefusesWhatIsNotOnTheBoard(t *testing.T) {
+	notOnBoard := `{"data":{"repository":{"issue":{"id":"ISSUE8","projectItems":{"nodes":[{"id":"other","project":{"id":"Q"}}]}}}}}`
+	f := &fakeGH{t: t, item: notOnBoard, byIssue: map[string]string{"9": item9},
+		added: `{"data":{"addProjectV2ItemById":{"item":{"id":"I8","project":{"id":"P"},"status":null,"kind":null,"team":null}}}}`}
+	c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
+	ctx := context.Background()
+	rk, err := c.Rank(ctx, "teemow/lab#8", Place{After: issue9})
+	if err != nil || *rk != (Ranked{Ref: "teemow/lab#8", Above: issue9, Added: true, Team: "X 🐝"}) ||
+		!slices.Equal(f.mutations, []string{"add ISSUE8 to P", "I8=t1", `I8 after "I9"`}) {
+		t.Errorf("Rank of an issue missing from the board = %+v, %v; mutations %v", rk, err, f.mutations)
+	}
+	// The other issue is read on its own repository, the ranked one on its.
+	if !slices.Contains(f.repos, "o/r") || f.repos[0] != labRepo {
+		t.Errorf("acting on %q", f.repos)
+	}
+	var r *Refusal
+	for _, tc := range []struct {
+		at   Place
+		ref  string
+		want string
+	}{
+		{Place{Before: "o/r#3"}, issue5, "o/r#3 is not on the board o/7"},
+		{Place{After: "https://github.com/o/r/issues/5"}, issue5, "o/r#5 cannot be placed against itself"},
+		{Place{Top: true}, "o/r#4", "o/r#4 is no issue: Could not resolve to an Issue with the number of 4."},
+	} {
+		f.mutations = nil
+		f.byIssue = map[string]string{"3": notOnBoard, "4": `{"data":{"repository":{"issue":null}},"errors":[{"message":"Could not resolve to an Issue with the number of 4."}]}`}
+		f.item = onBoard
+		if _, err := c.Rank(ctx, tc.ref, tc.at); !errors.As(err, &r) || r.Reason != tc.want || len(f.mutations) != 0 {
+			t.Errorf("Rank(%s, %+v) = %v, want refusal %q; mutations %v", tc.ref, tc.at, err, tc.want, f.mutations)
+		}
+	}
+	for _, at := range []Place{{}, {Top: true, After: issue9}, {Before: issue9, After: issue9}} {
+		if _, err := c.Rank(ctx, issue5, at); err == nil || !strings.Contains(err.Error(), "one of top, before and after") {
+			t.Errorf("Rank(%+v) = %v", at, err)
+		}
+	}
+}
+
 func TestOpenActsOnTheRepository(t *testing.T) {
 	f := &fakeGH{t: t}
 	c := &Client{GH: func(ctx context.Context, args ...string) ([]byte, error) {
 		f.repos = append(f.repos, github.Repo(ctx))
 		return []byte(`{"data":{"repository":{"issueOrPullRequest":{"state":"OPEN"}}}}`), nil
 	}}
-	if open, err := c.Open(context.Background(), "teemow/lab#7"); err != nil || !open || !slices.Equal(f.repos, []string{"teemow/lab"}) {
+	if open, err := c.Open(context.Background(), "teemow/lab#7"); err != nil || !open || !slices.Equal(f.repos, []string{labRepo}) {
 		t.Errorf("Open = %v, %v acting on %q", open, err, f.repos)
 	}
 }
