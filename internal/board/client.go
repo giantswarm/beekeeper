@@ -560,6 +560,36 @@ func (c *Client) Move(ctx context.Context, ref, in string) (*Moved, error) {
 // existing item, or a new one, which marks mv added. An issue GitHub does
 // not resolve is refused as no issue.
 func (c *Client) item(ctx context.Context, m *meta, mv *Moved, owner, repo string, n int) (projectItem, error) {
+	id, found, err := c.lookup(ctx, m, mv.Ref, owner, repo, n)
+	if err != nil {
+		return projectItem{}, err
+	}
+	if found != nil {
+		return *found, nil
+	}
+	var a struct {
+		Added struct {
+			Item *projectItem `json:"item"`
+		} `json:"addProjectV2ItemById"`
+	}
+	partial, err := c.query(ctx, &a, `mutation($p:ID!,$c:ID!){addProjectV2ItemById(input:{projectId:$p,contentId:$c}){item{`+itemFields+`}}}`,
+		vars{"p": m.ID, "c": id})
+	if err != nil {
+		return projectItem{}, err
+	}
+	if a.Added.Item == nil || a.Added.Item.ID == "" {
+		return projectItem{}, fmt.Errorf("adding %s to the board %s/%d%s", mv.Ref, c.Board.Owner, c.Board.Project, cmp.Or(reason(partial), ": no item answered"))
+	}
+	it := *a.Added.Item
+	// An item that existed carries its fields; a new one none.
+	mv.Added = it.Status == nil && it.Team == nil
+	return it, nil
+}
+
+// lookup reads the issue's node id and its item on the board from the
+// issue's projectItems, nil when they name none. An issue GitHub does not
+// resolve is refused as no issue, ref naming it.
+func (c *Client) lookup(ctx context.Context, m *meta, ref, owner, repo string, n int) (string, *projectItem, error) {
 	var r struct {
 		Repository struct {
 			Issue *struct {
@@ -574,31 +604,163 @@ func (c *Client) item(ctx context.Context, m *meta, mv *Moved, owner, repo strin
 `+itemFields+`}}}}}`,
 		vars{"o": owner, "r": repo, "n": n})
 	if err != nil {
-		return projectItem{}, err
+		return "", nil, err
 	}
-	if r.Repository.Issue == nil {
-		return projectItem{}, &Refusal{mv.Ref + " is no issue" + reason(partial)}
+	is := r.Repository.Issue
+	if is == nil {
+		return "", nil, &Refusal{ref + " is no issue" + reason(partial)}
 	}
-	if i := slices.IndexFunc(r.Repository.Issue.ProjectItems.Nodes, func(x projectItem) bool { return x.Project.ID == m.ID }); i >= 0 {
-		return r.Repository.Issue.ProjectItems.Nodes[i], nil
+	if i := slices.IndexFunc(is.ProjectItems.Nodes, func(x projectItem) bool { return x.Project.ID == m.ID }); i >= 0 {
+		return is.ID, &is.ProjectItems.Nodes[i], nil
 	}
-	var a struct {
-		Added struct {
-			Item *projectItem `json:"item"`
-		} `json:"addProjectV2ItemById"`
-	}
-	partial, err = c.query(ctx, &a, `mutation($p:ID!,$c:ID!){addProjectV2ItemById(input:{projectId:$p,contentId:$c}){item{`+itemFields+`}}}`,
-		vars{"p": m.ID, "c": r.Repository.Issue.ID})
+	return is.ID, nil, nil
+}
+
+// Place is where Rank puts an item: at the top of the board, or right
+// before or right after the item of another issue, one of the three.
+type Place struct {
+	Top           bool
+	Before, After string
+}
+
+// Ranked is a move of an item to a place on the board.
+type Ranked struct {
+	Ref string `json:"ref"`
+	// Above and Below are the item's new neighbours that the move itself
+	// names: the item it went after or before, and for the top the item
+	// now below it; "" for one no request read. A neighbour that is no
+	// issue is "a draft".
+	Above string `json:"above,omitempty"`
+	Below string `json:"below,omitempty"`
+	Top   bool   `json:"top,omitempty"`
+	// Added and Team are as in Moved: the issue had no item on the board.
+	Added bool   `json:"added,omitempty"`
+	Team  string `json:"team,omitempty"`
+}
+
+// Rank moves the board item of the issue ref to the place at with
+// updateProjectV2ItemPosition, the board's position being the order
+// board next reads its items in. An issue without an item is added first,
+// as Move adds it, with board.team as its Team. The item of a Before or
+// After issue is found by that issue's projectItems and must be on the
+// board already; Before is two moves, the item after the other one and the
+// other one after the item, so nothing reads the board's items to find the
+// other one's predecessor. Each call acts on the repository of the issue it
+// asks about. No issue, a reference without an item on the board and an
+// item placed against itself are refused before anything is written.
+func (c *Client) Rank(ctx context.Context, ref string, at Place) (*Ranked, error) {
+	owner, repo, n, err := Ref(ref)
 	if err != nil {
-		return projectItem{}, err
+		return nil, err
 	}
-	if a.Added.Item == nil || a.Added.Item.ID == "" {
-		return projectItem{}, fmt.Errorf("adding %s to the board %s/%d%s", mv.Ref, c.Board.Owner, c.Board.Project, cmp.Or(reason(partial), ": no item answered"))
+	other := cmp.Or(at.Before, at.After)
+	if at.Top == (other != "") || (at.Before != "" && at.After != "") {
+		return nil, errors.New("rank takes one of top, before and after")
 	}
-	it := *a.Added.Item
-	// An item that existed carries its fields; a new one none.
-	mv.Added = it.Status == nil && it.Team == nil
-	return it, nil
+	ctx = github.ActingOn(ctx, owner+"/"+repo)
+	m, err := c.meta(ctx)
+	if err != nil {
+		return nil, err
+	}
+	team, err := c.team(m)
+	if err != nil {
+		return nil, &Refusal{err.Error()}
+	}
+	rk := &Ranked{Ref: fmt.Sprintf("%s/%s#%d", owner, repo, n), Top: at.Top}
+	var otherID string
+	if other != "" {
+		oo, or, on, err := Ref(other)
+		if err != nil {
+			return nil, err
+		}
+		oref := fmt.Sprintf("%s/%s#%d", oo, or, on)
+		if strings.EqualFold(oref, rk.Ref) {
+			return nil, &Refusal{rk.Ref + " cannot be placed against itself"}
+		}
+		_, found, err := c.lookup(github.ActingOn(ctx, oo+"/"+or), m, oref, oo, or, on)
+		if err != nil {
+			return nil, err
+		}
+		if found == nil {
+			return nil, &Refusal{fmt.Sprintf("%s is not on the board %s/%d", oref, c.Board.Owner, c.Board.Project)}
+		}
+		otherID = found.ID
+		if at.Before != "" {
+			rk.Below = oref
+		} else {
+			rk.Above = oref
+		}
+	}
+	mv := &Moved{Ref: rk.Ref}
+	item, err := c.item(ctx, m, mv, owner, repo, n)
+	if err != nil {
+		return nil, err
+	}
+	rk.Added = mv.Added
+	if item.Team == nil && team != nil {
+		if err := c.set(ctx, m.ID, item.ID, team.field, team.id); err != nil {
+			return nil, err
+		}
+		rk.Team = team.name
+	}
+	below, err := c.position(ctx, m.ID, item.ID, otherID) // after the other, or to the top
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case at.Top:
+		rk.Below = below
+	case at.Before != "":
+		if _, err := c.position(ctx, m.ID, otherID, item.ID); err != nil {
+			return nil, err
+		}
+	}
+	return rk, nil
+}
+
+// position moves the item of the project right after the item after, to
+// the top for "", and answers the issue (or "a draft") then right below
+// it when it went to the top, "" otherwise.
+func (c *Client) position(ctx context.Context, project, item, after string) (string, error) {
+	vs := vars{"p": project, "i": item}
+	head, arg, read := "", "", ""
+	if after != "" {
+		head, arg, vs["a"] = ",$a:ID!", ",afterId:$a", after
+	} else {
+		read = `items(first:2){nodes{id content{...on Issue{number repository{nameWithOwner}} ...on PullRequest{number repository{nameWithOwner}}}}}`
+	}
+	var r struct {
+		Moved *struct {
+			Items struct {
+				Nodes []struct {
+					ID      string `json:"id"`
+					Content struct {
+						Number     int `json:"number"`
+						Repository struct {
+							NameWithOwner string `json:"nameWithOwner"`
+						} `json:"repository"`
+					} `json:"content"`
+				} `json:"nodes"`
+			} `json:"items"`
+		} `json:"updateProjectV2ItemPosition"`
+	}
+	partial, err := c.query(ctx, &r, `mutation($p:ID!,$i:ID!`+head+`){updateProjectV2ItemPosition(input:{projectId:$p,itemId:$i`+arg+`}){clientMutationId `+read+`}}`, vs)
+	if err != nil {
+		return "", err
+	}
+	if r.Moved == nil {
+		return "", fmt.Errorf("moving the item %s on the board %s/%d%s", item, c.Board.Owner, c.Board.Project, cmp.Or(reason(partial), ": no answer"))
+	}
+	for _, x := range r.Moved.Items.Nodes {
+		if x.ID == item {
+			continue
+		}
+		if x.Content.Number == 0 {
+			return "a draft", nil
+		}
+		return fmt.Sprintf("%s#%d", x.Content.Repository.NameWithOwner, x.Content.Number), nil
+	}
+	return "", nil
 }
 
 // option is one option of a single-select field: the field's id, the
