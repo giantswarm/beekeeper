@@ -78,7 +78,9 @@ task needs lives only in this session: the next task goes to a fresh one.
   never merged into a branch, which only hides a conflict until the merge; a PR there that conflicts
   with its base, which the gate refuses before it queues, is replaced at once by a new PR from a
   fresh branch of the base. Work happens in a worktree of its own, never in a checkout
-  another session uses.
+  another session uses. Never `git stash` in a worktree: the stash list is the clone's, shared
+  by every worktree of it, so a pop applies another session's entry or drops it; work that has
+  to wait is committed to the worker's own branch, or a throwaway branch, or left in place.
 - **The machine.** Build, test and lint commands run through `beekeeper run` (the PreToolUse hook
   does it): exit 75 means no slot, rerun in the background, never in a loop; exit 137 means the cap
   fired, bound the parallelism, never raise the cap. No heavy work while `beekeeper watch` reports
