@@ -24,6 +24,11 @@ import (
 // for the tests.
 var boardGH github.GH = github.RunGH
 
+// boardClient is the client of the configured board and plans repositories.
+func (a *app) boardClient() *board.Client {
+	return &board.Client{GH: boardGH, Board: a.cfg.Board, Plans: a.cfg.Plans.Repositories}
+}
+
 func (a *app) boardCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "board",
@@ -52,7 +57,16 @@ unblocked; only items created within createdWithin), or a GitHub search's
 open issues. A sub-issue that is a board item is held to the order by its
 own Status, whatever its Team: one no step offers on its own (a Backlog item older than the
 Backlog step's createdWithin, a blocked one, one in Inbox) is skipped with
-the reason, even when its epic is in progress. The first item that is free
+the reason, even when its epic is in progress. The epic gate (board.epics)
+holds whatever the order says: an epic in Up Next is in planning, skipped
+with its plan ("epic in planning (Up Next), plan <url> (draft): its
+sub-issues wait for the go") or without one (its planning session's), and
+never offered through its sub-issues; an issue whose nearest epic among its
+parents on the board is in planning is skipped as "sub-issue of epic
+<owner/repo#n>, in planning (Up Next)". Moving the epic to In Progress is
+the go: from then its open sub-issues are offered, in their order. A plan is
+the open or merged pull request of plans.repositories whose description
+names the epic; its state never gates. The first item that is free
 is picked: not served by a running session (a sessions serve record, a busy
 agent's task; one naming a pull request serves the issues it closes too) nor by an agent on the roster, its CLI running or not, while it is
 busy with its task or parked and kept (agents keep, or an open timer that
@@ -76,11 +90,13 @@ on <person>)), then the item and why it is picked, without --claim the
 free items behind it in their order (the preview of the board's work), and
 the skipped items' count by kind: served (a session's record, a busy
 agent's task), note (an open note names it), assigned (outside
-board.people), blocked, stale, lease (another session holds it) and order
-(a rule of board.order turns it away: an old Backlog item, one in Inbox,
-one without recorded blockers); --json lists every item behind the pick
-as after_pick, each with its skip reason or free (an empty skip), and the
-counts as skipped_by.
+board.people), blocked, stale, lease (another session holds it), planning
+(the epic gate holds it) and order (a rule of board.order turns it away: an
+old Backlog item, one in Inbox, one without recorded blockers), and each
+epic in planning or past its go with its plan's URL, state and head; --json
+lists every item behind the pick as after_pick, each with its skip reason
+or free (an empty skip), the counts as skipped_by and the epics with their
+plans as epics.
 
 --claim records the pick as the calling session's sessions serve record
 under the state lock, after checking again that nobody claimed it since:
@@ -107,7 +123,7 @@ replaces the record. Exit 3 when no item is free or the claim is refused.`,
 			} else {
 				me, _ = a.caller()
 			}
-			cl := &board.Client{GH: boardGH, Board: a.cfg.Board}
+			cl := a.boardClient()
 			snap, err := cl.Read(cmd.Context(), a.now)
 			if err != nil {
 				return err
@@ -149,6 +165,7 @@ replaces the record. Exit 3 when no item is free or the claim is refused.`,
 			if err != nil {
 				return err
 			}
+			res.Epics = snap.Epics()
 			return a.printNext(res, len(cands))
 		},
 	}
@@ -223,6 +240,9 @@ type nextResult struct {
 	Skipped   []board.Candidate `json:"skipped,omitempty"`
 	AfterPick []board.Candidate `json:"after_pick,omitempty"`
 	SkippedBy map[string]int    `json:"skipped_by,omitempty"`
+	// Epics are the epics the epic gate watches, in planning or past their
+	// go, each with its plan.
+	Epics []board.Epic `json:"epics,omitempty"`
 }
 
 // The kinds of a skip reason, skipKind's words and skipped_by's keys.
@@ -233,6 +253,7 @@ const (
 	kindBlocked  = "blocked"
 	kindStale    = "stale"
 	kindLease    = "lease"
+	kindPlanning = "planning"
 	kindOrder    = "order"
 )
 
@@ -252,6 +273,8 @@ func skipKind(reason string) string {
 		return kindStale
 	case strings.HasPrefix(reason, "needs lease "):
 		return kindLease
+	case strings.Contains(reason, "in planning ("):
+		return kindPlanning
 	}
 	return kindOrder
 }
@@ -513,6 +536,10 @@ func (a *app) printNext(res nextResult, offered int) error {
 		if len(res.SkippedBy) > 0 {
 			_, _ = fmt.Fprintf(a.out, "skipped: %s (--json lists each with its reason)\n", skipCounts(res.SkippedBy))
 		}
+		if len(res.Epics) > 0 && !res.Claimed {
+			_, _ = fmt.Fprintf(a.out, "epics in planning and past their go: %d\n", len(res.Epics))
+			a.printEpics(res.Epics, "  ")
+		}
 	}
 	if h := res.Held; h != nil {
 		return refused("no claim: this session serves %s, still open", h.Issue)
@@ -538,20 +565,33 @@ for a personal account's repository) reaches the issue. The status is the
 board's value, or an unambiguous part of it, case, emoji and punctuation
 ignored ("up next", "progress"); anything else is refused with the board's
 values, before anything is written, as is an issue that does not exist.
-Exit 3 when refused.`,
+
+Moving an epic to In Progress (board.epics' go) is the go: when a plan
+pull request names it, the go is recorded as an agent-written comment on
+the epic's private thread naming the plan and its head commit, the plan
+implemented at that head: the epic itself in a private repository, else
+the plan pull request in a private one. An epic of a public repository
+whose plan is public too has no private thread: the move is refused before
+anything is written. Exit 3 when refused.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if _, _, _, err := board.Ref(args[0]); err != nil {
 				return usageErr("%v", err)
 			}
 			me, _ := a.caller()
-			cl := &board.Client{GH: boardGH, Board: a.cfg.Board}
+			cl := a.boardClient()
 			mv, err := cl.Move(cmd.Context(), args[0], args[1])
 			if r := (*board.Refusal)(nil); errors.As(err, &r) {
 				return refused("%s", r.Reason)
 			}
 			if err != nil {
 				return err
+			}
+			if g := mv.Go; g != nil && g.Plan != nil {
+				if g.Comment, err = cl.RecordGo(cmd.Context(), g, g.Text(cmp.Or(me.Name, "the person"), mv.To)); err != nil {
+					return fmt.Errorf("moved %s to %s, the go not recorded on %s: %w", mv.Ref, mv.To, g.Thread, err)
+				}
+				_ = a.store.Log(event(me, "board.go", "%s: plan %s at %s, recorded on %s: %s", mv.Ref, g.Plan.URL, g.Plan.Head, g.Thread, g.Comment))
 			}
 			from := cmp.Or(mv.From, "no Status")
 			team := ""
@@ -574,6 +614,13 @@ Exit 3 when refused.`,
 				_, err = fmt.Fprintf(a.out, "%s is in %s already%s\n", mv.Ref, mv.To, team)
 			default:
 				_, err = fmt.Fprintf(a.out, "moved %s: %s → %s%s\n", mv.Ref, from, mv.To, team)
+			}
+			if g := mv.Go; err == nil && g != nil {
+				if g.Plan == nil {
+					_, err = fmt.Fprintf(a.out, "the go of %s: no plan pull request names it, no plan head recorded\n", mv.Ref)
+				} else {
+					_, err = fmt.Fprintf(a.out, "the go of %s: plan %s (%s) at %s, recorded on %s: %s\n", mv.Ref, g.Plan.URL, g.Plan.State, g.Plan.Head, g.Thread, g.Comment)
+				}
 			}
 			return err
 		},
@@ -608,7 +655,7 @@ against itself.`,
 				}
 			}
 			me, _ := a.caller()
-			cl := &board.Client{GH: boardGH, Board: a.cfg.Board}
+			cl := a.boardClient()
 			rk, err := cl.Rank(cmd.Context(), args[0], at)
 			if r := (*board.Refusal)(nil); errors.As(err, &r) {
 				return refused("%s", r.Reason)
@@ -638,6 +685,13 @@ against itself.`,
 	c.MarkFlagsMutuallyExclusive("top", "before", "after")
 	c.MarkFlagsOneRequired("top", "before", "after")
 	return c
+}
+
+// printEpics prints one line per epic: its status and its plan.
+func (a *app) printEpics(epics []board.Epic, indent string) {
+	for _, e := range epics {
+		_, _ = fmt.Fprintf(a.out, "%s%s %s (%s): %s\n", indent, e.Ref, truncate(e.Title, 50), e.Status, e.PlanText())
+	}
 }
 
 // rankPlace is where rk put the item, with the neighbours it names.

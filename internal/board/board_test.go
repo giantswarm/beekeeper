@@ -39,7 +39,6 @@ func order() []config.BoardStep {
 		{Name: "page", Kind: []string{"alert"}},
 		{Name: "In Progress", Status: []string{"in progress"}, SubIssues: true},
 		{Name: "blocker cleared", Status: []string{"blocked"}, Unblocked: true},
-		{Name: upNextEpic, Status: []string{typedNext}, Kind: []string{"epic"}, SubIssues: true},
 		{Name: "Up Next", Status: []string{typedNext}},
 		{Name: bugStep, Kind: []string{bugStep}},
 		{Name: "queue", Search: "repo:o/tools label:team/x"},
@@ -102,11 +101,16 @@ func fixture() []Item {
 
 func snapshot(t *testing.T) *Snapshot {
 	t.Helper()
-	o, err := ResolveOrder(order(), statuses, []string{epic, bug, "Alert 🚨"})
+	kinds := []string{epic, bug, "Alert 🚨"}
+	o, err := ResolveOrder(order(), statuses, kinds)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Snapshot{Order: o, Items: fixture(), Statuses: statuses, Search: map[int][]Item{6: {{Ref: "o/tools#1", Created: days(5), Updated: days(1)}}}}
+	g, err := ResolveGate(config.EpicGate{}, statuses, kinds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &Snapshot{Order: o, Items: fixture(), Statuses: statuses, Search: map[int][]Item{5: {{Ref: "o/tools#1", Created: days(5), Updated: days(1)}}}, Gate: g}
 }
 
 func TestRankAppliesTheOrderToAFixtureBoard(t *testing.T) {
@@ -136,8 +140,8 @@ func TestRankAppliesTheOrderToAFixtureBoard(t *testing.T) {
 		"o/r#22 In Progress < o/r#15: created 2026-06-24: Backlog takes items created within 90 days",
 		"o/r#23 In Progress < o/r#15: 1 of 2 blockers open",
 		"o/r#6 blocker cleared",
-		"o/r#80 Up Next epic < o/r#8",
-		"o/r#9 Up Next epic",
+		"o/r#8 Up Next: epic in planning (Up Next ➡️), no plan pull request names it: its planning session's",
+		"o/r#9 Up Next: epic in planning (Up Next ➡️), no plan pull request names it: its planning session's",
 		"o/r#10 Up Next",
 		"o/r#11 bug",
 		"o/tools#1 queue",
@@ -237,8 +241,12 @@ func TestRef(t *testing.T) {
 }
 
 func TestFilter(t *testing.T) {
-	o, _ := ResolveOrder(order()[1:5], statuses, []string{epic})
+	o, _ := ResolveOrder(order()[1:4], statuses, []string{epic})
 	if got, want := filter(deskBoard(), o), `is:open team:"X" status:"In Progress ⛏️","Blocked / Waiting ⛔️","Up Next ➡️"`; got != want {
+		t.Errorf("filter = %s, want %s", got, want)
+	}
+	// The epic gate's statuses are read too.
+	if got, want := filter(deskBoard(), o[2:], upNext, inProgress), `is:open team:"X" status:"Up Next ➡️","In Progress ⛏️"`; got != want {
 		t.Errorf("filter = %s, want %s", got, want)
 	}
 	// A step without statuses reads every status.
@@ -328,10 +336,10 @@ func TestReadPagesTheBoardAndReadsSubIssuesAndSearches(t *testing.T) {
 	f := &fakeGH{t: t, pages: []string{
 		`{"data":{"repositoryOwner":{"projectV2":{"items":{"pageInfo":{"hasNextPage":true,"endCursor":"C"},"nodes":[` +
 			node(inProgress, "null", issue(1, `,"assignees":{"nodes":[{"login":"pat"}]}`)) + "," +
-			node(upNext, `{"name":"Epic 🎯"}`, issue(2, `,"subIssuesSummary":{"total":3,"completed":1}`)) + "," +
+			node(inProgress, `{"name":"Epic 🎯"}`, issue(2, `,"subIssuesSummary":{"total":3,"completed":1}`)) + "," +
 			`{"status":{"name":"Up Next ➡️"},"content":{}}]}}}}}`,
 		`{"data":{"repositoryOwner":{"projectV2":{"items":{"pageInfo":{"hasNextPage":false},"nodes":[` +
-			node(upNext, "null", strings.Replace(issue(3, ""), "OPEN", "CLOSED", 1)) + "," + node(upNext, "null", issue(4, "")) + `]}}}}}`,
+			node(upNext, "null", strings.Replace(issue(3, ""), "OPEN", "CLOSED", 1)) + "," + node(upNext, "null", issue(4, `,"parent":{"number":2,"repository":{"nameWithOwner":"o/r"}}`)) + `]}}}}}`,
 	}, extras: `{"data":{"e1":{"issue":{"subIssues":{"nodes":[` +
 		// 20 is on another board only, 22 on this one in Inbox without a Team.
 		issue(20, `,"projectItems":{"nodes":[{"project":{"id":"Q"},"status":{"name":"Inbox 📥"}}]}`) + "," +
@@ -339,8 +347,8 @@ func TestReadPagesTheBoardAndReadsSubIssuesAndSearches(t *testing.T) {
 		issue(22, `,"projectItems":{"nodes":[{"project":{"id":"Q"}},{"project":{"id":"P"},"status":{"name":"Inbox 📥"},"kind":null}]}`) +
 		`]}}},"s2":{"nodes":[` + issue(30, "") + `]}}}`}
 	b := config.Board{Owner: "o", Project: 7, Team: "X", People: []string{"me"}, Order: []config.BoardStep{
+		{Name: "epics", Status: []string{"in progress"}, Kind: []string{defaultEpicKind}, SubIssues: true},
 		{Name: "In Progress", Status: []string{"progress"}},
-		{Name: upNextEpic, Status: []string{typedNext}, Kind: []string{"epic"}, SubIssues: true},
 		{Name: "queue", Search: "repo:o/q"},
 		{Name: "Up Next", Status: []string{"next"}},
 	}}
@@ -353,14 +361,22 @@ func TestReadPagesTheBoardAndReadsSubIssuesAndSearches(t *testing.T) {
 		got = append(got, c.Ref+" "+c.Why()+" "+c.Skip)
 	}
 	want := []string{
+		"o/r#20 epics, sub-issue of o/r#2 ",
+		"o/r#22 epics, sub-issue of o/r#2 (Inbox 📥) no step of board.order offers Inbox 📥",
 		"o/r#1 In Progress (In Progress ⛏️) assigned to pat",
-		"o/r#20 Up Next epic, sub-issue of o/r#2 ",
-		"o/r#22 Up Next epic, sub-issue of o/r#2 (Inbox 📥) no step of board.order offers Inbox 📥",
 		"o/r#30 queue ",
 		"o/r#4 Up Next (Up Next ➡️) ",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("read and ranked:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	// Every issue reads its parent; without plans repositories no plan is
+	// searched for.
+	if i := slices.IndexFunc(snap.Items, func(it Item) bool { return it.Ref == "o/r#4" }); i < 0 || snap.Items[i].Parent != "o/r#2" || snap.Plans != nil {
+		t.Errorf("items %+v, plans %v", snap.Items, snap.Plans)
+	}
+	if es := snap.Epics(); len(es) != 1 || es[0].Ref != "o/r#2" || es[0].Status != inProgress || es[0].Plan != nil {
+		t.Errorf("epics %+v", es)
 	}
 }
 

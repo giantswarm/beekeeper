@@ -112,7 +112,8 @@ machine has a supervisor at all times: the role moves to a successor by relay an
   a free build slot, the kind clusters under `maxKindClusters`), and never starts past ten. A task
   that needs a held lease queues behind the lease without holding the others back. The slots are
   filled from, in order: pages and new alerts in our area; In Progress items with a closable
-  remainder; Blocked items whose blocker is ours; Up Next, epics first; open issues in our
+  remainder; Blocked items whose blocker is ours; Up Next items (an Up Next epic is in planning: its
+  sub-issues are work only after the person's go, the move to In Progress); open issues in our
   repositories, bugs first; the improvement queue of beekeeper and the desk; the top of the
   Backlog. When Up Next runs dry the supervisor pulls the top Backlog items itself and tells the
   guide in one line, which is the person's veto; with nothing startable at all, the guide gets one

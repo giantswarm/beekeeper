@@ -17,10 +17,12 @@ import (
 )
 
 // Client reads and moves the items of one board through the GitHub
-// GraphQL API.
+// GraphQL API; Plans are the plans repositories (owner/repo) an epic's
+// plan is found in.
 type Client struct {
 	GH    github.GH
 	Board config.Board
+	Plans []string
 }
 
 // field is a single-select field of the board.
@@ -48,9 +50,13 @@ type meta struct {
 	Fields map[string]field
 }
 
+// stateOpen is the state of an open issue or pull request.
+const stateOpen = "OPEN"
+
 // issueFields is what every read takes of an issue.
 const issueFields = `fragment I on Issue{number url title state createdAt updatedAt repository{nameWithOwner}
-labels(first:20){nodes{name}} assignees(first:10){nodes{login}} issueDependenciesSummary{blockedBy totalBlockedBy} subIssuesSummary{total completed}}`
+labels(first:20){nodes{name}} assignees(first:10){nodes{login}} issueDependenciesSummary{blockedBy totalBlockedBy} subIssuesSummary{total completed}
+parent{number repository{nameWithOwner}}}`
 
 // boardFields is what every read takes of a board item.
 const boardFields = `status:fieldValueByName(name:"` + StatusField + `"){...on ProjectV2ItemFieldSingleSelectValue{name}}
@@ -85,11 +91,17 @@ type issueJSON struct {
 		Total     int `json:"total"`
 		Completed int `json:"completed"`
 	} `json:"subIssuesSummary"`
+	Parent *struct {
+		Number     int `json:"number"`
+		Repository struct {
+			NameWithOwner string `json:"nameWithOwner"`
+		} `json:"repository"`
+	} `json:"parent"`
 }
 
 // open reports whether j is an open issue; a pull request or a draft has
 // no URL.
-func (j issueJSON) open() bool { return j.URL != "" && j.State == "OPEN" }
+func (j issueJSON) open() bool { return j.URL != "" && j.State == stateOpen }
 
 func (j issueJSON) item() Item {
 	it := Item{
@@ -101,6 +113,9 @@ func (j issueJSON) item() Item {
 	}
 	for _, a := range j.Assignees.Nodes {
 		it.Assignees = append(it.Assignees, a.Login)
+	}
+	if p := j.Parent; p != nil {
+		it.Parent = fmt.Sprintf("%s#%d", p.Repository.NameWithOwner, p.Number)
 	}
 	return it
 }
@@ -199,8 +214,9 @@ fields(first:50){nodes{...on ProjectV2SingleSelectField{id name options{id name}
 }
 
 // filter is the board query of the order's items: open, the team's, and
-// in the statuses its steps name when every board step names some.
-func filter(b config.Board, order []config.BoardStep) string {
+// in the statuses its steps name and extra when every board step names
+// some.
+func filter(b config.Board, order []config.BoardStep, extra ...string) string {
 	parts := []string{"is:open"}
 	if b.Team != "" {
 		parts = append(parts, fmt.Sprintf("%s:%q", strings.ToLower(TeamField), b.Team))
@@ -219,6 +235,11 @@ func filter(b config.Board, order []config.BoardStep) string {
 			}
 		}
 	}
+	for _, s := range extra {
+		if !slices.Contains(statuses, s) {
+			statuses = append(statuses, s)
+		}
+	}
 	if len(statuses) > 0 {
 		q := make([]string, len(statuses))
 		for i, s := range statuses {
@@ -229,9 +250,11 @@ func filter(b config.Board, order []config.BoardStep) string {
 	return strings.Join(parts, " ")
 }
 
-// Read reads the board items the order can offer, the open sub-issues of
-// the items a SubIssues step matches and the search steps' issues: one
-// request for the fields, one per 100 items, one for the rest.
+// Read reads the board items the order can offer and the epic gate holds,
+// the open sub-issues of the items a SubIssues step matches, the search
+// steps' issues and the plans of the epics the gate watches: one request
+// for the fields, one per 100 items, one for the sub-issues and searches,
+// one per plansBatch epics.
 func (c *Client) Read(ctx context.Context, now time.Time) (*Snapshot, error) {
 	if len(c.Board.Order) == 0 {
 		return nil, errors.New("board.order is empty: configure the picking order")
@@ -244,11 +267,19 @@ func (c *Client) Read(ctx context.Context, now time.Time) (*Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	snap := &Snapshot{Order: order, Statuses: m.Fields[StatusField].names(), Search: map[int][]Item{}}
-	if snap.Items, err = c.items(ctx, filter(c.Board, order)); err != nil {
+	gate, err := ResolveGate(c.Board.Epics, m.Fields[StatusField].names(), m.Fields[KindField].names())
+	if err != nil {
 		return nil, err
 	}
-	return snap, c.extras(ctx, snap, m.ID, now)
+	snap := &Snapshot{Order: order, Statuses: m.Fields[StatusField].names(), Search: map[int][]Item{}, Gate: gate}
+	if snap.Items, err = c.items(ctx, filter(c.Board, order, gate.statuses()...)); err != nil {
+		return nil, err
+	}
+	if err := c.extras(ctx, snap, m.ID, now); err != nil {
+		return nil, err
+	}
+	snap.Plans, err = c.plansOf(ctx, snap)
+	return snap, err
 }
 
 func (c *Client) items(ctx context.Context, q string) ([]Item, error) {
@@ -417,7 +448,7 @@ func (c *Client) Open(ctx context.Context, ref string) (bool, error) {
 	if r.Repository.Item == nil {
 		return false, &Refusal{fmt.Sprintf("%s/%s#%d is no issue", owner, repo, n)}
 	}
-	return r.Repository.Item.State == "OPEN", nil
+	return r.Repository.Item.State == stateOpen, nil
 }
 
 // closesBatch is how many refs one request of Closes asks about: the query
@@ -500,6 +531,9 @@ type Moved struct {
 	// it had one or the board names none.
 	Added bool   `json:"added,omitempty"`
 	Team  string `json:"team,omitempty"`
+	// Go is the go the move is, an epic moved to the epic gate's go
+	// status; nil for any other move.
+	Go *Go `json:"go,omitempty"`
 }
 
 // Move sets the Status of the board item of the issue ref to the status in
@@ -512,7 +546,10 @@ type Moved struct {
 // the owner reaches the issue. An unknown or ambiguous status, and a
 // board.team that is none of the Team field's values, are refused with the
 // board's values before anything is written; an issue GitHub does not
-// resolve is refused as no issue, with GitHub's reason.
+// resolve is refused as no issue, with GitHub's reason. A move of an epic
+// to the epic gate's go status is the go: Moved.Go names its plan and the
+// private thread to record it on (RecordGo), and an epic with a plan but
+// no private thread is refused before anything is written.
 func (c *Client) Move(ctx context.Context, ref, in string) (*Moved, error) {
 	owner, repo, n, err := Ref(ref)
 	if err != nil {
@@ -539,6 +576,17 @@ func (c *Client) Move(ctx context.Context, ref, in string) (*Moved, error) {
 	}
 	if item.Status != nil {
 		mv.From = item.Status.Name
+	}
+	gate, err := ResolveGate(c.Board.Epics, sf.names(), m.Fields[KindField].names())
+	if err != nil {
+		return nil, &Refusal{err.Error()}
+	}
+	var it Item
+	item.onto(&it)
+	if mv.From != to && gate.Go != "" && to == gate.Go && gate.Epic(it) {
+		if mv.Go, err = c.goOf(ctx, mv.Ref); err != nil {
+			return nil, err
+		}
 	}
 	if item.Team == nil && team != nil {
 		if err := c.set(ctx, m.ID, item.ID, team.field, team.id); err != nil {

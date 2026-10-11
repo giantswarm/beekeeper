@@ -44,6 +44,8 @@ type Item struct {
 	// for a SubIssues step only.
 	OpenSubIssues int    `json:"openSubIssues,omitempty"`
 	SubIssues     []Item `json:"subIssues,omitempty"`
+	// Parent is the issue it is a sub-issue of, owner/repo#n.
+	Parent string `json:"parent,omitempty"`
 }
 
 // LeaseLabel is the prefix of an issue label naming a lease the work needs:
@@ -72,6 +74,10 @@ type Snapshot struct {
 	Search map[int][]Item
 	// Statuses are the board's Status values, in the board's order.
 	Statuses []string
+	// Gate is the epic gate; Plans the plans of the epics it watches by
+	// their lower-cased ref.
+	Gate  Gate
+	Plans map[string]*Plan
 }
 
 // Candidate is an item the order offers, in its place.
@@ -105,16 +111,24 @@ func (c Candidate) Why() string {
 // offers on its own (an old Backlog item, a blocked one, one in Inbox) is
 // marked skipped with the reason. Items with an open recorded blocker,
 // without activity for b.StaleAfter or assigned to anybody outside
-// b.People are marked skipped too.
+// b.People are marked skipped too. The epic gate (snap.Gate) holds an epic
+// in planning and every issue under it whatever the step: the epic is
+// marked skipped with its plan, never offered through its sub-issues, and
+// an issue whose nearest epic among its parents on the board is in
+// planning is marked skipped naming it.
 func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 	seen := map[string]bool{}
+	byRef := map[string]Item{}
+	for _, it := range snap.Items {
+		byRef[strings.ToLower(it.Ref)] = it
+	}
 	var out []Candidate
 	offer := func(it Item, step, epic, skip string) {
 		if seen[it.Ref] {
 			return
 		}
 		seen[it.Ref] = true
-		out = append(out, Candidate{Item: it, Step: step, Epic: epic, Skip: cmp.Or(skip, skipReason(it, b, now))})
+		out = append(out, Candidate{Item: it, Step: step, Epic: epic, Skip: cmp.Or(skip, snap.planning(it, byRef), skipReason(it, b, now))})
 	}
 	for i, st := range snap.Order {
 		if st.Search != "" {
@@ -127,12 +141,18 @@ func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 			if seen[it.Ref] || !Matches(st, it, now) {
 				continue
 			}
-			if !st.SubIssues || it.OpenSubIssues == 0 {
+			if !st.SubIssues || it.OpenSubIssues == 0 || snap.planning(it, byRef) != "" {
 				offer(it, st.Name, "", "")
 				continue
 			}
 			seen[it.Ref] = true
 			for _, sub := range it.SubIssues {
+				// A sub-issue that is a board item read with the board
+				// carries its board fields from there.
+				if b, ok := byRef[strings.ToLower(sub.Ref)]; ok && !sub.OnBoard {
+					b.SubIssues = nil
+					sub = b
+				}
 				skip := ""
 				if sub.OnBoard {
 					skip = Unoffered(snap.Order, sub, now)

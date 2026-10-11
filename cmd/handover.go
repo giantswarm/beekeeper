@@ -1,12 +1,14 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -26,9 +28,11 @@ func (a *app) handoverCmd() *cobra.Command {
 		Short: "Everything the next supervisor needs, from the live state",
 		Long: `Print the hand-over as Markdown: the supervisor and its context in tokens,
 the running sessions and what each is on, leases and grant queues, holds,
-the merge lanes, registered agents, session records, pinned notes, open
-notes with their defaults, the decisions answered since the last relay,
-timers, what the alert watch reads and the latest events. Everything comes
+the merge lanes, registered agents, session records, the board's epics in
+planning and past their go with their plans (each plan's URL, state and
+head), pinned notes, open notes with their defaults, the decisions answered
+since the last relay, timers, what the alert watch reads and the latest
+events. Everything comes
 from the state and the machine, so a successor (or the same supervisor
 after a restart) reads it instead of a prose brief.
 
@@ -79,6 +83,7 @@ always complete.`,
 			if prompt {
 				return a.printPrompt(cmd.Context(), v, l, al, ans)
 			}
+			ep := a.epicsHandover(cmd.Context())
 			if a.json {
 				return a.printJSON(struct {
 					*view
@@ -87,12 +92,13 @@ always complete.`,
 					Lanes    []laneView     `json:"lanes"`
 					Agents   []agentView    `json:"agents"`
 					Records  []state.Record `json:"records"`
+					Epics    *epicsView     `json:"epics,omitempty"`
 					Notes    []state.Note   `json:"notes"`
 					Answered []answered     `json:"answered"`
 					Timers   []state.Timer  `json:"timers"`
 					Alerts   *alertsView    `json:"alerts"`
 					Events   []state.Event  `json:"events"`
-				}{v, l, holds, a.laneViews(v.st), agents, v.st.Records, v.st.Notes, ans.All, v.st.Timers, al, evs})
+				}{v, l, holds, a.laneViews(v.st), agents, v.st.Records, ep, v.st.Notes, ans.All, v.st.Timers, al, evs})
 			}
 			lanes := a.laneViews(v.st)
 			notes := a.splitNotes(v.st.Notes)
@@ -110,6 +116,7 @@ always complete.`,
 					}
 					a.printLiveRecords(v.st.Records, v.raw)
 				}},
+				{"epics", "Epics", func(bool) { a.printEpicsHandover(ep) }},
 				{"pinned", "Pinned notes", func(bool) { a.printPinned(notes.Pinned) }},
 				{"notes", "Open notes", func(all bool) {
 					if all {
@@ -171,7 +178,41 @@ always complete.`,
 }
 
 // handoverSections names the sections --section takes, in their order.
-const handoverSections = "supervisor, sessions, leases, holds, lanes, agents, records, pinned, notes, answers, timers, alerts, events"
+const handoverSections = "supervisor, sessions, leases, holds, lanes, agents, records, epics, pinned, notes, answers, timers, alerts, events"
+
+// epicsView is the board's epics in planning and past their go with their
+// plans, or why they were not read; nil without a board.
+type epicsView struct {
+	Epics []board.Epic `json:"epics"`
+	Error string       `json:"error,omitempty"`
+}
+
+// epicsHandover reads the board's epics for the hand-over; a failed read is
+// its error, not the hand-over's.
+func (a *app) epicsHandover(ctx context.Context) *epicsView {
+	if a.cfg.Board.Owner == "" || a.cfg.Board.Project == 0 {
+		return nil
+	}
+	epics, err := a.boardClient().Epics(ctx)
+	if err != nil {
+		return &epicsView{Error: err.Error()}
+	}
+	return &epicsView{Epics: epics}
+}
+
+// printEpicsHandover lists the epics with their plans.
+func (a *app) printEpicsHandover(ep *epicsView) {
+	switch {
+	case ep == nil:
+		_, _ = fmt.Fprintln(a.out, "No board configured.")
+	case ep.Error != "":
+		_, _ = fmt.Fprintf(a.out, "Not read: %s\n", ep.Error)
+	case len(ep.Epics) == 0:
+		_, _ = fmt.Fprintln(a.out, "No epic in planning or past its go.")
+	default:
+		a.printEpics(ep.Epics, "- ")
+	}
+}
 
 // sectionKeys names the sections --section takes.
 func sectionKeys(sections []handoverSection) string {

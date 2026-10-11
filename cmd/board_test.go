@@ -433,10 +433,12 @@ func TestSkipKind(t *testing.T) {
 	for reason, want := range map[string]string{
 		`served by "Worker one" through o/r#100`:              kindServed,
 		`note #704 (waits on the supervisor), on epic o/r#10`: kindNote,
-		"assigned to sam":                              kindAssigned,
-		"3 of 4 blockers open":                         kindBlocked,
-		"no activity since 2026-01-01":                 kindStale,
-		`needs lease agentlab-1, held by "Lab holder"`: kindLease,
+		"assigned to sam":                                kindAssigned,
+		"3 of 4 blockers open":                           kindBlocked,
+		"no activity since 2026-01-01":                   kindStale,
+		`needs lease agentlab-1, held by "Lab holder"`:   kindLease,
+		"sub-issue of epic o/r#8, in planning (Up Next)": kindPlanning,
+		"epic in planning (Up Next), no plan pull request names it: its planning session's": kindPlanning,
 		oldBacklog:                            kindOrder,
 		"no step of board.order offers Inbox": kindOrder,
 		"blocker cleared takes items with recorded blockers, it has none": kindOrder,
@@ -487,6 +489,25 @@ func TestPrintNextPreviewListsTheFreeItemsAndCountsTheSkips(t *testing.T) {
 	}
 	if s := out.String(); !strings.Contains(s, "behind it: 5 more, 2 of them free") || strings.Contains(s, "Item 5") {
 		t.Errorf("claim output:\n%s", s)
+	}
+	// The preview names each epic in planning or past its go with its plan.
+	res.Claimed = false
+	res.Epics = []board.Epic{
+		{Ref: "o/r#8", Title: "Epic", Status: "Up Next", Plan: &board.Plan{URL: "https://github.com/o/plans/pull/1", State: "draft", Head: "6a672cdede08"}},
+		{Ref: "o/r#12", Title: "Other", Status: "In Progress"},
+	}
+	out.Reset()
+	if err := (&app{out: &out}).printNext(res, len(cands)); err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range []string{
+		"epics in planning and past their go: 2\n",
+		"  o/r#8 Epic (Up Next): plan https://github.com/o/plans/pull/1 (draft, head 6a672cd)\n",
+		"  o/r#12 Other (In Progress): no plan pull request names it\n",
+	} {
+		if !strings.Contains(out.String(), line) {
+			t.Errorf("preview lacks %q:\n%s", line, out.String())
+		}
 	}
 }
 
