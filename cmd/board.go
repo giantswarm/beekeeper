@@ -524,11 +524,19 @@ func (a *app) printNext(res nextResult, offered int) error {
 func (a *app) boardMoveCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "move <owner/repo#n|URL> <status>",
-		Short: "Set a board item's Status by its canonical name",
-		Long: `Sets the Status of the issue's board item. The status is the board's value,
-or an unambiguous part of it, case, emoji and punctuation ignored ("up next",
-"progress"); anything else is refused with the board's values, before
-anything is written. Exit 3 when refused.`,
+		Short: "Set a board item's Status by its canonical name, adding the issue to the board when it is missing",
+		Long: `Sets the Status of the issue's board item. An issue without an item on the
+board is added first (addProjectV2ItemById, the issue's own mutation: the
+board's items are never read) and given board.team as its Team, then the
+Status; the item an issue of a repository outside the board's organisation
+has on the board is found the same way. Every GitHub call acts on the
+issue's repository (GH_REPO), so a gh link that picks its login by the owner
+(devctl's agent link: the App for the organisation, the person's own login
+for a personal account's repository) reaches the issue. The status is the
+board's value, or an unambiguous part of it, case, emoji and punctuation
+ignored ("up next", "progress"); anything else is refused with the board's
+values, before anything is written, as is an issue that does not exist.
+Exit 3 when refused.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if _, _, _, err := board.Ref(args[0]); err != nil {
@@ -543,17 +551,28 @@ anything is written. Exit 3 when refused.`,
 			if err != nil {
 				return err
 			}
-			if mv.From != mv.To {
-				_ = a.store.Log(event(me, "board.move", "%s: %s → %s", mv.Ref, mv.From, mv.To))
+			from := cmp.Or(mv.From, "no Status")
+			team := ""
+			if mv.Team != "" {
+				team = ", Team " + mv.Team
+			}
+			switch {
+			case mv.Added:
+				_ = a.store.Log(event(me, "board.move", "%s: added to the board%s, → %s", mv.Ref, team, mv.To))
+			case mv.From != mv.To:
+				_ = a.store.Log(event(me, "board.move", "%s: %s → %s%s", mv.Ref, from, mv.To, team))
 			}
 			if a.json {
 				return a.printJSON(mv)
 			}
-			if mv.From == mv.To {
-				_, err = fmt.Fprintf(a.out, "%s is in %s already\n", mv.Ref, mv.To)
-				return err
+			switch {
+			case mv.Added:
+				_, err = fmt.Fprintf(a.out, "added %s to the board %s/%d%s: → %s\n", mv.Ref, a.cfg.Board.Owner, a.cfg.Board.Project, team, mv.To)
+			case mv.From == mv.To:
+				_, err = fmt.Fprintf(a.out, "%s is in %s already%s\n", mv.Ref, mv.To, team)
+			default:
+				_, err = fmt.Fprintf(a.out, "moved %s: %s → %s%s\n", mv.Ref, from, mv.To, team)
 			}
-			_, err = fmt.Fprintf(a.out, "moved %s: %s → %s\n", mv.Ref, mv.From, mv.To)
 			return err
 		},
 	}

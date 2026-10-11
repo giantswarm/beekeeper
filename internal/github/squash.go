@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -51,10 +52,12 @@ const SquashRoute = "plain squash merge"
 // GH runs the gh CLI and returns its stdout; err carries its stderr.
 type GH func(ctx context.Context, args ...string) ([]byte, error)
 
-// RunGH is GH through the gh binary.
+// RunGH is GH through the gh binary, acting on the repository ctx names
+// (ActingOn) through GH_REPO.
 func RunGH(ctx context.Context, args ...string) ([]byte, error) {
 	var stderr bytes.Buffer
 	c := exec.CommandContext(ctx, "gh", args...) //nolint:gosec // gh with the merge's validated owner/repo and number
+	c.Env = ghEnv(os.Environ(), Repo(ctx))
 	c.Stderr = &stderr
 	out, err := c.Output()
 	if err != nil {

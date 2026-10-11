@@ -70,6 +70,6 @@ func boardReadRefusal(cmd string, budget func() string) string {
 		"Instead:\n" +
 		"- add an issue or PR: `gh project item-add <board> --owner <org> --url <issue-url>` (its JSON names the item id)\n" +
 		"- set a field: `gh project item-edit --id <item-id> --project-id <project-id> --field-id <field-id> ...` with the item id from item-add, or from the issue's own `projectItems` (`gh api graphql` over `repository.issue.projectItems`)\n" +
-		"- move an item's Status: `beekeeper board move <owner/repo#n> <status>`\n" +
+		"- move an item's Status, adding the issue to the board when it is missing: `beekeeper board move <owner/repo#n> <status>`\n" +
 		"- find items: `gh project item-list <board> --owner <org> --query \"<filter>\"`, or `projectV2.items(query: \"<filter>\")`"
 }
