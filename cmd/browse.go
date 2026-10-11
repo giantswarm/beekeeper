@@ -39,6 +39,27 @@ const (
 	browseSteps = "The steps:\n\n"
 )
 
+// lostLine is the line a turn ends its report with when the Chrome
+// connection is gone, the steps not done after it.
+const lostLine = "browser connection lost"
+
+// connectionWords tell a browse turn to check the Chrome connection before
+// each step, to reconnect once in the turn when it is gone, and how to
+// report a connection it did not get back: lostLine, then the steps not
+// done, which browse's reconnect turn and the caller read.
+const connectionWords = "The Chrome connection can drop mid-turn: a call answers 'Claude in Chrome is not connected', or list_connected_browsers " +
+	"lists no browser. Check the connection with list_connected_browsers before each step. When it is gone, reconnect once: call " +
+	"list_connected_browsers again and select_browser on the browser it lists, then retry the step. When it lists none, stop, and end " +
+	"your report with the line '" + lostLine + "' followed by the steps not done, verbatim, one per line. "
+
+// reconnectWords are the reconnect turn's prompt, around the call the
+// connection went at: a fresh CLI resuming the session, with a fresh Chrome
+// connection, goes on with the steps not done or reports them.
+const reconnectWords = "beekeeper browse: the Chrome connection was lost at your call %s and did not come back. This turn is the one " +
+	"reconnect, a fresh connection to the browser: call list_connected_browsers; when it lists a browser, select it and go on with the " +
+	"steps not done, under the same rules, the connection checked before each step; when it lists none, do nothing else and end your " +
+	"report with the line '" + lostLine + "' followed by the steps not done, verbatim, one per line."
+
 // deployWords tell a browse turn the one deploy the person's task covers,
 // between the preamble and the steps.
 const deployWords = "The person's task covers one deploy: %s. Once the steps reach the portal's control that performs " +
@@ -155,7 +176,22 @@ A page in a Chrome window the compositor does not draw (occluded, or on
 another workspace) is not rendered: GitHub keeps its Authorize button
 disabled there and every screenshot times out ("the renderer may be
 frozen"). Those timeouts are reported as "not rendered:" below the report;
-bring the window to the front and run the steps again.`,
+bring the window to the front and run the steps again.
+
+The Chrome connection can drop mid-turn (the extension's service worker
+went away): a call answers "Claude in Chrome is not connected", and
+list_connected_browsers lists no browser. The turn checks the connection
+with list_connected_browsers before each step and, when it is gone,
+reconnects once in the turn (select_browser on the browser the list names)
+and retries the step. A connection the turn did not get back is reconnected
+once by browse itself: a fresh CLI resumes the turn's session, a fresh
+Chrome connection, under the same timeout, and goes on with the steps not
+done; its report is printed after the first. Below the report, "connection
+lost:" counts the calls that found the connection gone, names the first,
+and says what came of the reconnect. A reconnect that finds no browser ends
+the command with a non-zero exit, "browser connection lost", naming the call
+the connection went at and the steps the report lists as not done, to run
+again once the extension is connected.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			steps := strings.TrimSpace(args[0])
@@ -199,24 +235,40 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 			return []state.Event{event(me, "browse.turn", "%s in %s: %s", id, dir, bounded(steps, phraseRunes))}, nil
 		})
 	}()
-	ctx, cancel := context.WithTimeout(ctx, wait)
-	defer cancel()
-	c := exec.CommandContext(ctx, bin, browseArgv(id, model, browsePrompt(steps, deploy, consents, lab), browseRules(deploy, consents, lab))...) //nolint:gosec // the claude CLI on PATH
-	c.Dir = dir
-	c.Env = browseEnv(os.Environ())
-	c.Stderr = os.Stderr
-	report, err := c.Output()
-	if ctx.Err() != nil {
-		err = fmt.Errorf("the browse turn did not end within %s and was stopped: a page waiting on a person (a sign-in form, a dialog) is the usual cause", wait)
+	// turn runs one headless turn of the session under its own timeout and
+	// prints its report.
+	turn := func(argv []string) (string, error) {
+		ctx, cancel := context.WithTimeout(ctx, wait)
+		defer cancel()
+		c := exec.CommandContext(ctx, bin, argv...) //nolint:gosec // the claude CLI on PATH
+		c.Dir = dir
+		c.Env = browseEnv(os.Environ())
+		c.Stderr = os.Stderr
+		out, err := c.Output()
+		if ctx.Err() != nil {
+			err = fmt.Errorf("the browse turn did not end within %s and was stopped: a page waiting on a person (a sign-in form, a dialog) is the usual cause", wait)
+		}
+		report := strings.TrimSpace(string(out))
+		if _, werr := fmt.Fprintln(a.out, report); werr != nil {
+			return report, werr
+		}
+		return report, err
 	}
-	if _, werr := fmt.Fprintln(a.out, strings.TrimSpace(string(report))); werr != nil {
-		return werr
-	}
+	rules := browseRules(deploy, consents, lab)
+	report, err := turn(browseArgv(id, model, browsePrompt(steps, deploy, consents, lab), rules, false))
 	path := transcriptOf(a.cfg, id)
 	if path == "" {
 		return errors.Join(err, fmt.Errorf("browse turn %s left no transcript", id))
 	}
 	found, ferr := readFindings(path)
+	// A connection the turn lost and did not get back is reconnected once:
+	// a fresh CLI resuming the session has a fresh Chrome connection and goes
+	// on with the steps not done, its findings read with the first turn's.
+	if err == nil && found.lost() {
+		report, err = turn(browseArgv(id, model, fmt.Sprintf(reconnectWords, found.Lost[0]), rules, true))
+		found, ferr = readFindings(path)
+		found.Reconnected = true
+	}
 	shots, serr := saveScreenshots(path, filepath.Join(a.cfg.StateDir, "browse", id))
 	lines := append(found.lines(steps, deploy, consents, lab), "transcript: "+path)
 	for _, s := range shots {
@@ -228,7 +280,7 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	if _, werr := fmt.Fprintln(a.out, strings.Join(lines, "\n")); werr != nil {
 		return werr
 	}
-	return errors.Join(err, ferr, serr)
+	return errors.Join(err, ferr, serr, found.lostErr(report))
 }
 
 // The turn's classifier names a call it refused in the call's error result:
@@ -248,6 +300,45 @@ const frozenRenderer = "renderer may be frozen"
 // chromeToolPrefix is the Claude in Chrome tools' common prefix, dropped from
 // a call's words.
 const chromeToolPrefix = "mcp__claude-in-chrome__"
+
+// listBrowsers is the Chrome call that lists the connected browsers: an
+// empty list is the connection gone.
+const listBrowsers = chromeToolPrefix + "list_connected_browsers"
+
+// notConnected are the words of a Chrome call's result when the extension's
+// connection is gone: the CLI's, the desktop's and the list's account-wide
+// one. Such a result is no tool error.
+var notConnected = []string{"Claude in Chrome is not connected", "Browser extension is not connected", "No browsers connected"}
+
+// connectionLost reports whether the result text of the Chrome call name
+// says the connection is gone.
+func connectionLost(name, text string) bool {
+	if slices.ContainsFunc(notConnected, func(w string) bool { return strings.Contains(text, w) }) {
+		return true
+	}
+	return name == listBrowsers && strings.TrimSpace(text) == "[]"
+}
+
+// listMark opens a list item of a report: a bullet or a number.
+var listMark = regexp.MustCompile(`^(?:[-*•]|\d+[.)])\s+`)
+
+// stepsNotDone are the steps a report lists after its lostLine, one per
+// line, list marks dropped; none without the line.
+func stepsNotDone(report string) []string {
+	var out []string
+	after := false
+	for _, l := range strings.Split(report, "\n") {
+		l = listMark.ReplaceAllString(strings.TrimSpace(l), "")
+		if !after {
+			after = strings.EqualFold(strings.Trim(l, "*_`#:. "), lostLine)
+			continue
+		}
+		if l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
 
 // grantWords are the words of a step that reads as a grant to the
 // classifier.
@@ -279,35 +370,55 @@ type refusal struct {
 }
 
 // browseFindings are what a turn's transcript says beyond its report: the
-// calls the classifier refused and the screenshots of a page that is not
-// rendered.
+// calls the classifier refused, the screenshots of a page that is not
+// rendered, and the Chrome connection: Lost are the words of each call that
+// found it gone, Recovered whether a Chrome call was answered after the last
+// of them, Reconnected whether browse's own reconnect turn ran, which the
+// run sets.
 type browseFindings struct {
 	Refused     []refusal
 	NotRendered int
+	Lost        []string
+	Recovered   bool
+	Reconnected bool
 }
+
+// lost reports whether the connection is gone at the transcript's end: lost
+// and not answered since.
+func (f browseFindings) lost() bool { return len(f.Lost) > 0 && !f.Recovered }
 
 // readFindings reads the findings of the transcript: a tool result that
 // carries the classifier's denial names the call it answers, one whose
-// screenshot timed out on a frozen renderer counts as not rendered.
+// screenshot timed out on a frozen renderer counts as not rendered, one
+// that says the connection is gone names its call as lost, and any other
+// answer of a Chrome call after that has the connection back.
 func readFindings(transcript string) (browseFindings, error) {
 	var f browseFindings
-	calls := map[string]string{}
+	type call struct{ name, words string }
+	calls := map[string]call{}
+	lost := false
 	err := scanTranscript(transcript, func(line []byte) {
 		for _, b := range contentBlocks(line) {
 			switch b.Type {
 			case "tool_use":
-				calls[b.ID] = callWords(b.Name, b.Input)
+				calls[b.ID] = call{b.Name, callWords(b.Name, b.Input)}
 			case "tool_result":
+				c, text := calls[b.ToolUseID], resultText(b.Content)
+				denied := strings.Contains(text, classifierDenial)
+				if strings.HasPrefix(c.name, chromeToolPrefix) && !denied {
+					if lost = connectionLost(c.name, text); lost {
+						f.Lost = append(f.Lost, c.words)
+					}
+				}
 				if !b.IsError {
 					continue
 				}
-				text := resultText(b.Content)
-				if strings.Contains(text, classifierDenial) {
+				if denied {
 					reason := ""
 					if m := classifierReason.FindStringSubmatch(text); m != nil {
 						reason = m[1]
 					}
-					f.Refused = append(f.Refused, refusal{Call: calls[b.ToolUseID], Reason: reason})
+					f.Refused = append(f.Refused, refusal{Call: c.words, Reason: reason})
 				}
 				if strings.Contains(text, frozenRenderer) {
 					f.NotRendered++
@@ -315,7 +426,28 @@ func readFindings(transcript string) (browseFindings, error) {
 			}
 		}
 	})
+	f.Recovered = len(f.Lost) > 0 && !lost
 	return f, err
+}
+
+// lostErr is the error of a run whose Chrome connection is gone at its end:
+// the call the connection went at, what came of the reconnect, and the
+// steps the report lists as not done; nil while the connection answers.
+func (f browseFindings) lostErr(report string) error {
+	if !f.lost() {
+		return nil
+	}
+	how := "the turn did not get it back"
+	if f.Reconnected {
+		how = "the reconnect turn found no browser"
+	}
+	steps := stepsNotDone(report)
+	if len(steps) == 0 {
+		return fmt.Errorf("%s at %s: %s; the report lists no steps not done: run the steps again once the extension is connected (list_connected_browsers)",
+			lostLine, f.Lost[0], how)
+	}
+	return fmt.Errorf("%s at %s: %s; steps not done, to run again once the extension is connected (list_connected_browsers): %s",
+		lostLine, f.Lost[0], how, strings.Join(steps, "; "))
 }
 
 // lines are the findings as the lines printed below the report: the deploy
@@ -376,6 +508,25 @@ func (f browseFindings) lines(steps, deploy string, consents []guard.App, lab bo
 		out = append(out, fmt.Sprintf("not rendered: %d screenshot%s timed out on a frozen renderer: the page's Chrome window is not drawn "+
 			"(occluded, or on another workspace), where a consent page keeps its Authorize button disabled; "+
 			"bring the window to the front and run the steps again", n, s))
+	}
+	if n := len(f.Lost); n > 0 {
+		s := "s"
+		if n == 1 {
+			s = ""
+		}
+		line := fmt.Sprintf("connection lost: %d call%s found Claude in Chrome not connected, the first %s; ", n, s, f.Lost[0])
+		switch {
+		case f.Reconnected && f.Recovered:
+			line += "the reconnect turn, a fresh connection, found the browser and went on with the steps not done"
+		case f.Reconnected:
+			line += "the reconnect turn, a fresh connection, found no browser: the steps not done are the report's, " +
+				"to run again once the extension is connected (list_connected_browsers)"
+		case f.Recovered:
+			line += "the connection answered again and the turn went on"
+		default:
+			line += "the turn ended without it, before a reconnect"
+		}
+		out = append(out, line)
 	}
 	return out
 }
@@ -526,10 +677,15 @@ const autoModeDefaults = "$defaults"
 // dontAsk mode every call the Chrome tools' allow rule does not cover is
 // refused rather than asked. The rules of a declared deploy, the Apps on
 // record and the lab sign-in the steps name are the turn's settings: its
-// auto mode allows those actions.
-func browseArgv(id, model, prompt string, rules []string) []string {
-	argv := []string{"-p", chromeFlag, toolsFlag, "", strictMCPConfigFlag, permissionModeFlag, modeDontAsk,
-		allowedToolsFlag, browseTools, sessionIDFlag, id}
+// auto mode allows those actions. The first turn starts session id; the
+// reconnect turn resumes it, a fresh CLI with a fresh Chrome connection.
+func browseArgv(id, model, prompt string, rules []string, reconnect bool) []string {
+	session := []string{sessionIDFlag, id}
+	if reconnect {
+		session = []string{resumeFlag, id}
+	}
+	argv := append([]string{"-p", chromeFlag, toolsFlag, "", strictMCPConfigFlag, permissionModeFlag, modeDontAsk,
+		allowedToolsFlag, browseTools}, session...)
 	if model != "" {
 		argv = append(argv, modelFlag, model)
 	}
@@ -539,11 +695,11 @@ func browseArgv(id, model, prompt string, rules []string) []string {
 	return append(argv, "--", prompt)
 }
 
-// browsePrompt is a browse turn's prompt: the preamble, the deploy the
-// person's task covers when one is declared, the Apps on record and the lab
-// sign-in the steps name, then the steps.
+// browsePrompt is a browse turn's prompt: the preamble, the connection
+// words, the deploy the person's task covers when one is declared, the Apps
+// on record and the lab sign-in the steps name, then the steps.
 func browsePrompt(steps, deploy string, consents []guard.App, lab bool) string {
-	p := browsePreamble
+	p := browsePreamble + connectionWords
 	if deploy != "" {
 		p += fmt.Sprintf(deployWords, deploy)
 	}
