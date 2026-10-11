@@ -94,6 +94,9 @@ type wait struct {
 	Session string        `json:"session,omitempty"`
 	Args    string        `json:"args"`
 	Elapsed time.Duration `json:"elapsed"`
+	// Ungated marks a devctl merge or promotion with no beekeeper gate among
+	// its ancestors: it runs outside the lanes, the holds and the budget floor.
+	Ungated bool `json:"ungated,omitempty"`
 }
 
 // oomKill is a kernel OOM kill with whose it was.
@@ -356,7 +359,7 @@ func findWaits(t *proc.Table, sessions []*claude.Session, now time.Time) []wait 
 		if !isWait(p) || slices.ContainsFunc(t.Ancestors(p.PID), isWatch) {
 			continue
 		}
-		w := wait{PID: p.PID, Args: p.Cmdline(), Elapsed: p.Elapsed(now).Round(time.Second)}
+		w := wait{PID: p.PID, Args: p.Cmdline(), Elapsed: p.Elapsed(now).Round(time.Second), Ungated: ungatedProcess(t, p)}
 		if s, ok := claude.OwnerOf(sessions, p.PID); ok {
 			w.Session = s.Name
 		}
@@ -553,7 +556,11 @@ func (a *app) printSnapshot(s *snapshot) {
 			if owner == "" {
 				owner = noSession
 			}
-			p("  %s  %s  (%s)", dur(w.Elapsed), truncate(commandName(w.Args)+" "+tailArgs(w.Args), 70), truncate(owner, 40))
+			var mark string
+			if w.Ungated {
+				mark = "  ungated: no beekeeper gate among its ancestors"
+			}
+			p("  %s  %s  (%s)%s", dur(w.Elapsed), truncate(commandName(w.Args)+" "+tailArgs(w.Args), 70), truncate(owner, 40), mark)
 		}
 	}
 	if s.has(secOOM) {

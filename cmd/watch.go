@@ -1130,6 +1130,7 @@ func (w *watcher) pollSessions(ctx context.Context, since time.Time, t *proc.Tab
 	w.unownedPages(ctx, sessions)
 	w.runaways(sessions, t)
 	w.twins(sessions, t)
+	w.ungated(sessions, t)
 	w.sameTitles(sessions)
 	w.staleWatches(ctx, t)
 }

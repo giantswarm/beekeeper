@@ -248,6 +248,10 @@ type doctorReport struct {
 	stale []*proc.Process
 	// sameTitles are the titles more than one live session carries.
 	sameTitles []sameTitle
+	// ungated are the devctl merges and promotions running with no beekeeper
+	// gate among their ancestors, a line each (ungatedLine); the watch's poll
+	// says them as UNGATED MERGE, so its doctor leaves them to it.
+	ungated []string
 }
 
 // staleLine says a process of a replaced binary and what ends it: a gate
@@ -273,6 +277,7 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 	}
 	rep.stale = slices.DeleteFunc(staleBinaries(t, os.Getpid(), replacedBinary), isWatch)
 	rep.sameTitles = sameTitles(sessions)
+	rep.ungated = ungatedLines(sessions, t)
 	record := func(host string) (*claude.Record, bool) { return claude.ReadRecord(a.cfg, host) }
 	busy := func(p state.Party) bool {
 		_, turn := turnRunning(sessions, t, p, a.now)
@@ -508,6 +513,10 @@ line:
   release refuses (state.stale-writer in the log) until it ends or is
   restarted; a gate call or a merge-child re-executes the installed binary
   at its next step by itself; a watch is named by WATCH STALE instead;
+- reports an ungated merge: a running devctl pr merge, or release promote
+  of one repository, with no beekeeper gate among its ancestors (one a
+  script ran, say), which runs outside the lanes, the holds and the budget
+  floor; the watch says UNGATED MERGE while it runs;
 - reports a title more than one live session carries, each session by PID
   and id: a message by that name reaches neither for sure (a message to a
   role still reaches its holder by its own socket); the watch says SAME
@@ -546,6 +555,9 @@ faults but remedying none.`,
 			}
 			for _, d := range rep.sameTitles {
 				lines = append(lines, "same title: "+d.String())
+			}
+			for _, l := range rep.ungated {
+				lines = append(lines, "ungated merge "+l)
 			}
 			if r := a.trimGoCache(dryRun, goBuilds); r.notable() {
 				lines = append(lines, r.String())
