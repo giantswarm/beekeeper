@@ -46,6 +46,21 @@ type Item struct {
 	SubIssues     []Item `json:"subIssues,omitempty"`
 	// Parent is the issue it is a sub-issue of, owner/repo#n.
 	Parent string `json:"parent,omitempty"`
+	// Missing names the fields of it GitHub answered with an error instead
+	// of their value ("<field>: <message>"): they are unknown, not absent.
+	Missing []string `json:"missing,omitempty"`
+	// subIssues counts its sub-issues, closed ones too: what a read of
+	// them returns.
+	subIssues int
+}
+
+// missingBoardFields is the start of Missing's entry for a sub-issue's
+// board fields (its projectItems).
+const missingBoardFields = "projectItems:"
+
+// boardFieldsUnknown says GitHub answered its board fields with an error.
+func (it Item) boardFieldsUnknown() bool {
+	return slices.ContainsFunc(it.Missing, func(m string) bool { return strings.HasPrefix(m, missingBoardFields) })
 }
 
 // LeaseLabel is the prefix of an issue label naming a lease the work needs:
@@ -78,6 +93,9 @@ type Snapshot struct {
 	// their lower-cased ref.
 	Gate  Gate
 	Plans map[string]*Plan
+	// Missing names what GitHub answered with an error and no item's
+	// Missing holds ("<path>: <message>"), a search step's issues for one.
+	Missing []string
 }
 
 // Candidate is an item the order offers, in its place.
@@ -115,7 +133,10 @@ func (c Candidate) Why() string {
 // in planning and every issue under it whatever the step: the epic is
 // marked skipped with its plan, never offered through its sub-issues, and
 // an issue whose nearest epic among its parents on the board is in
-// planning is marked skipped naming it.
+// planning is marked skipped naming it. What GitHub answered with an error
+// is never read as absent: a sub-issue whose board fields are unknown takes
+// them from its item among snap.Items, else is marked skipped naming them,
+// and an item whose sub-issues are unknown is offered skipped itself.
 func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 	seen := map[string]bool{}
 	byRef := map[string]Item{}
@@ -145,16 +166,24 @@ func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 				offer(it, st.Name, "", "")
 				continue
 			}
+			if len(it.SubIssues) == 0 && len(it.Missing) > 0 {
+				offer(it, st.Name, "", "sub-issues unknown: "+strings.Join(it.Missing, "; "))
+				continue
+			}
 			seen[it.Ref] = true
 			for _, sub := range it.SubIssues {
 				// A sub-issue that is a board item read with the board
-				// carries its board fields from there.
-				if b, ok := byRef[strings.ToLower(sub.Ref)]; ok && !sub.OnBoard {
+				// carries its board fields from there, whatever its own
+				// read answered.
+				if b, ok := byRef[strings.ToLower(sub.Ref)]; ok && (!sub.OnBoard || sub.boardFieldsUnknown()) {
 					b.SubIssues = nil
 					sub = b
 				}
 				skip := ""
-				if sub.OnBoard {
+				switch {
+				case sub.boardFieldsUnknown():
+					skip = "board fields unknown: " + strings.Join(sub.Missing, "; ")
+				case sub.OnBoard:
 					skip = Unoffered(snap.Order, sub, now)
 				}
 				offer(sub, st.Name, it.Ref, skip)

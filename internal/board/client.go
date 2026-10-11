@@ -107,6 +107,7 @@ func (j issueJSON) item() Item {
 	it := Item{
 		Ref: fmt.Sprintf("%s#%d", j.Repository.NameWithOwner, j.Number), URL: j.URL, Title: j.Title,
 		Created: j.CreatedAt, Updated: j.UpdatedAt, Blockers: j.Deps.TotalBlockedBy, OpenBlockers: j.Deps.BlockedBy, OpenSubIssues: j.Subs.Total - j.Subs.Completed,
+		subIssues: j.Subs.Total,
 	}
 	for _, l := range j.Labels.Nodes {
 		it.Labels = append(it.Labels, l.Name)
@@ -123,16 +124,56 @@ func (j issueJSON) item() Item {
 // vars are a query's variables: a string or an int each.
 type vars map[string]any
 
-// graphql runs one query with its variables into v.
-func (c *Client) graphql(ctx context.Context, v any, query string, vs vars) error {
-	_, err := c.query(ctx, v, query, vs)
-	return err
+// GraphQLError is one error GitHub answered beside the data: Path is the
+// field it could not resolve (aliases, field names and list indexes), Type
+// GitHub's kind of error (NOT_FOUND, RESOURCE_LIMITS_EXCEEDED, …).
+type GraphQLError struct {
+	Path    []string
+	Type    string
+	Message string
 }
 
-// query runs one query with its variables into v; partial are the messages
-// of the errors GitHub answered beside the data (a field it could not
-// resolve), none for a clean answer.
-func (c *Client) query(ctx context.Context, v any, query string, vs vars) (partial []string, err error) {
+// Partial is an answer with errors beside its data: the data is decoded,
+// and every field an error's path names is missing from it, never absent.
+type Partial struct{ Errors []GraphQLError }
+
+// partialShown is how many of a Partial's errors its message names.
+const partialShown = 3
+
+func (p *Partial) Error() string {
+	msgs := make([]string, 0, partialShown+1)
+	for i, e := range p.Errors {
+		if i == partialShown {
+			msgs = append(msgs, fmt.Sprintf("and %d more", len(p.Errors)-partialShown))
+			break
+		}
+		msgs = append(msgs, strings.Join(e.Path, ".")+": "+e.Message)
+	}
+	return "GitHub answered partially: " + strings.Join(msgs, "; ")
+}
+
+// reason is p's messages as the tail of a sentence, "" for nil.
+func (p *Partial) reason() string {
+	if p == nil {
+		return ""
+	}
+	msgs := make([]string, len(p.Errors))
+	for i, e := range p.Errors {
+		msgs[i] = e.Message
+	}
+	return ": " + strings.Join(msgs, "; ")
+}
+
+// partialOf is err's Partial, nil for none; ok is false for any other
+// error, which the caller returns.
+func partialOf(err error) (p *Partial, ok bool) {
+	return p, err == nil || errors.As(err, &p)
+}
+
+// graphql runs one query with its variables into v. An answer with errors
+// beside its data is decoded into v and returned as a *Partial: a caller
+// reads it with partialOf and either fails or knows which fields it lacks.
+func (c *Client) graphql(ctx context.Context, v any, query string, vs vars) error {
 	args := []string{"api", "graphql", "-f", "query=" + query}
 	for k, x := range vs {
 		if n, ok := x.(int); ok {
@@ -145,25 +186,33 @@ func (c *Client) query(ctx context.Context, v any, query string, vs vars) (parti
 	var doc struct {
 		Data   json.RawMessage `json:"data"`
 		Errors []struct {
+			Path    []any  `json:"path"`
+			Type    string `json:"type"`
 			Message string `json:"message"`
 		} `json:"errors"`
 	}
 	jerr := json.Unmarshal(out, &doc)
+	p := &Partial{}
 	for _, e := range doc.Errors {
-		partial = append(partial, e.Message)
+		path := make([]string, len(e.Path))
+		for i, x := range e.Path {
+			path[i] = fmt.Sprint(x)
+		}
+		p.Errors = append(p.Errors, GraphQLError{Path: path, Type: e.Type, Message: e.Message})
 	}
 	if jerr != nil || len(doc.Data) == 0 || string(doc.Data) == "null" {
-		return nil, cmp.Or(err, errors.New("gh api graphql: "+cmp.Or(strings.Join(partial, "; "), "no data")))
+		if len(p.Errors) == 0 {
+			return cmp.Or(err, errors.New("gh api graphql: no data"))
+		}
+		return cmp.Or(err, errors.New("gh api graphql"+p.reason()))
 	}
-	return partial, json.Unmarshal(doc.Data, v)
-}
-
-// reason is partial as the tail of a sentence, "" for none.
-func reason(partial []string) string {
-	if len(partial) == 0 {
-		return ""
+	if err := json.Unmarshal(doc.Data, v); err != nil {
+		return err
 	}
-	return ": " + strings.Join(partial, "; ")
+	if len(p.Errors) > 0 {
+		return p
+	}
+	return nil
 }
 
 func (c *Client) owner() (string, error) {
@@ -253,8 +302,8 @@ func filter(b config.Board, order []config.BoardStep, extra ...string) string {
 // Read reads the board items the order can offer and the epic gate holds,
 // the open sub-issues of the items a SubIssues step matches, the search
 // steps' issues and the plans of the epics the gate watches: one request
-// for the fields, one per 100 items, one for the sub-issues and searches,
-// one per plansBatch epics.
+// for the fields, one per 100 items, one per extrasBudget sub-issues for the
+// sub-issues and searches, one per plansBatch epics.
 func (c *Client) Read(ctx context.Context, now time.Time) (*Snapshot, error) {
 	if len(c.Board.Order) == 0 {
 		return nil, errors.New("board.order is empty: configure the picking order")
@@ -328,12 +377,51 @@ content{...I}}}}}}}`+issueFields, vs)
 	}
 }
 
-// extras reads in one request the open sub-issues of the items with any a
-// SubIssues step matches, with their board fields when they are items of
-// the board project, whatever their Team or Status, and the search steps'
-// issues.
+// The sub-issues one request of extras reads: GitHub answers a request of
+// 304 sub-issues with their projectItems in full and one of 396 with
+// RESOURCE_LIMITS_EXCEEDED on every projectItems, so a request stays at
+// half the largest one measured whole.
+const (
+	extrasBudget  = 150
+	subIssuesRead = 50
+)
+
+// extrasPart is one aliased field of an extras request and the sub-issues
+// it reads.
+type extrasPart struct {
+	field string
+	subs  int
+}
+
+// extrasBatches splits parts into requests of at most extrasBudget
+// sub-issues each, in their order; a part over the budget is a request of
+// its own.
+func extrasBatches(parts []extrasPart) [][]extrasPart {
+	var out [][]extrasPart
+	var cur []extrasPart
+	n := 0
+	for _, p := range parts {
+		if len(cur) > 0 && n+p.subs > extrasBudget {
+			out = append(out, cur)
+			cur, n = nil, 0
+		}
+		cur = append(cur, p)
+		n += p.subs
+	}
+	if len(cur) > 0 {
+		out = append(out, cur)
+	}
+	return out
+}
+
+// extras reads the open sub-issues of the items with any a SubIssues step
+// matches, with their board fields when they are items of the board
+// project, whatever their Team or Status, and the search steps' issues,
+// extrasBudget sub-issues per request. What GitHub answers with an error is
+// named in the Missing of the item it belongs to, else of snap; the rest of
+// the answer is kept.
 func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now time.Time) error {
-	var q strings.Builder
+	var parts []extrasPart
 	var epics []int
 	for _, st := range snap.Order {
 		if !st.SubIssues {
@@ -346,21 +434,35 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 				if err != nil {
 					return err
 				}
-				fmt.Fprintf(&q, "e%d:repository(owner:%s,name:%s){issue(number:%d){subIssues(first:50){nodes{...I projectItems(first:20){nodes{project{id} "+boardFields+"}}}}}}", i, quote(owner), quote(repo), n)
+				parts = append(parts, extrasPart{
+					field: fmt.Sprintf("e%d:repository(owner:%s,name:%s){issue(number:%d){subIssues(first:%d){nodes{...I projectItems(first:20){nodes{project{id} "+boardFields+"}}}}}}", i, quote(owner), quote(repo), n, subIssuesRead),
+					subs:  min(it.subIssues, subIssuesRead),
+				})
 			}
 		}
 	}
 	for i, st := range snap.Order {
 		if st.Search != "" {
-			fmt.Fprintf(&q, "s%d:search(query:%s,type:ISSUE,first:50){nodes{...I}}", i, quote(searchQuery(st.Search)))
+			parts = append(parts, extrasPart{field: fmt.Sprintf("s%d:search(query:%s,type:ISSUE,first:50){nodes{...I}}", i, quote(searchQuery(st.Search)))})
 		}
 	}
-	if q.Len() == 0 {
-		return nil
-	}
-	var r map[string]json.RawMessage
-	if err := c.graphql(ctx, &r, "query{"+q.String()+"}"+issueFields, nil); err != nil {
-		return err
+	r := map[string]json.RawMessage{}
+	var missing []GraphQLError
+	for _, batch := range extrasBatches(parts) {
+		var q strings.Builder
+		for _, p := range batch {
+			q.WriteString(p.field)
+		}
+		var part map[string]json.RawMessage
+		err := c.graphql(ctx, &part, "query{"+q.String()+"}"+issueFields, nil)
+		p, ok := partialOf(err)
+		if !ok {
+			return err
+		}
+		if p != nil {
+			missing = append(missing, p.Errors...)
+		}
+		maps.Copy(r, part)
 	}
 	type nodes struct {
 		Nodes []issueJSON `json:"nodes"`
@@ -373,6 +475,32 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 			}
 		}
 		return out
+	}
+	// Each error is named on what it belongs to: a sub-issue (by its epic's
+	// alias and its index among the nodes read), the epic, else snap.
+	epicOf := map[string]int{}
+	for _, i := range epics {
+		epicOf[fmt.Sprintf("e%d", i)] = i
+	}
+	subMissing := map[string][]string{}
+	for _, e := range missing {
+		alias := at(e.Path, 0)
+		i, epic := epicOf[alias]
+		switch {
+		case epic && at(e.Path, 3) == "nodes" && len(e.Path) > 5:
+			key := alias + "/" + e.Path[4]
+			subMissing[key] = noted(subMissing[key], e.Path[5]+": "+e.Message)
+		case epic:
+			snap.Items[i].Missing = noted(snap.Items[i].Missing, strings.Join(e.Path[1:], ".")+": "+e.Message)
+		default:
+			name := strings.Join(e.Path, ".")
+			if s, ok := strings.CutPrefix(alias, "s"); ok {
+				if n, err := strconv.Atoi(s); err == nil && n < len(snap.Order) {
+					name = fmt.Sprintf("board.order %q", snap.Order[n].Name)
+				}
+			}
+			snap.Missing = noted(snap.Missing, name+": "+e.Message)
+		}
 	}
 	for _, i := range epics {
 		var e struct {
@@ -391,7 +519,7 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 		if !ok || json.Unmarshal(raw, &e) != nil {
 			continue
 		}
-		for _, n := range e.Issue.SubIssues.Nodes {
+		for k, n := range e.Issue.SubIssues.Nodes {
 			if !n.open() {
 				continue
 			}
@@ -399,6 +527,7 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 			if j := slices.IndexFunc(n.ProjectItems.Nodes, func(p projectItem) bool { return p.Project.ID == project }); j >= 0 {
 				n.ProjectItems.Nodes[j].onto(&it)
 			}
+			it.Missing = subMissing[fmt.Sprintf("e%d/%d", i, k)]
 			snap.Items[i].SubIssues = append(snap.Items[i].SubIssues, it)
 		}
 	}
@@ -412,6 +541,22 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 		}
 	}
 	return nil
+}
+
+// at is path's element i, "" past its end.
+func at(path []string, i int) string {
+	if i < len(path) {
+		return path[i]
+	}
+	return ""
+}
+
+// noted is list with s, which it holds once.
+func noted(list []string, s string) []string {
+	if slices.Contains(list, s) {
+		return list
+	}
+	return append(list, s)
 }
 
 // searchQuery is a search step's query for open issues, oldest first.
@@ -442,11 +587,15 @@ func (c *Client) Open(ctx context.Context, ref string) (bool, error) {
 	}
 	err = c.graphql(ctx, &r, `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issueOrPullRequest(number:$n){...on Issue{state} ...on PullRequest{state}}}}`,
 		vars{"o": owner, "r": repo, "n": n})
-	if err != nil {
+	p, ok := partialOf(err)
+	if !ok {
 		return false, err
 	}
 	if r.Repository.Item == nil {
-		return false, &Refusal{fmt.Sprintf("%s/%s#%d is no issue", owner, repo, n)}
+		return false, &Refusal{fmt.Sprintf("%s/%s#%d is no issue%s", owner, repo, n, p.reason())}
+	}
+	if p != nil {
+		return false, err
 	}
 	return r.Repository.Item.State == stateOpen, nil
 }
@@ -505,7 +654,17 @@ func (c *Client) closes(ctx context.Context, refs []string) (map[string][]string
 			} `json:"closingIssuesReferences"`
 		} `json:"issueOrPullRequest"`
 	}
-	if err := c.graphql(ctx, &r, "query{"+q.String()+"}", nil); err != nil {
+	// A ref GitHub does not resolve closes nothing; an error on a pull
+	// request it resolved leaves what it closes unknown.
+	err := c.graphql(ctx, &r, "query{"+q.String()+"}", nil)
+	p, ok := partialOf(err)
+	if p != nil {
+		ok = !slices.ContainsFunc(p.Errors, func(e GraphQLError) bool {
+			x := r[at(e.Path, 0)]
+			return x != nil && x.Item != nil
+		})
+	}
+	if !ok {
 		return nil, fmt.Errorf("the issues the served pull requests close: %w", err)
 	}
 	out := map[string][]string{}
@@ -620,13 +779,17 @@ func (c *Client) item(ctx context.Context, m *meta, mv *Moved, owner, repo strin
 			Item *projectItem `json:"item"`
 		} `json:"addProjectV2ItemById"`
 	}
-	partial, err := c.query(ctx, &a, `mutation($p:ID!,$c:ID!){addProjectV2ItemById(input:{projectId:$p,contentId:$c}){item{`+itemFields+`}}}`,
+	err = c.graphql(ctx, &a, `mutation($p:ID!,$c:ID!){addProjectV2ItemById(input:{projectId:$p,contentId:$c}){item{`+itemFields+`}}}`,
 		vars{"p": m.ID, "c": id})
-	if err != nil {
+	p, ok := partialOf(err)
+	if !ok {
 		return projectItem{}, err
 	}
 	if a.Added.Item == nil || a.Added.Item.ID == "" {
-		return projectItem{}, fmt.Errorf("adding %s to the board %s/%d%s", mv.Ref, c.Board.Owner, c.Board.Project, cmp.Or(reason(partial), ": no item answered"))
+		return projectItem{}, fmt.Errorf("adding %s to the board %s/%d%s", mv.Ref, c.Board.Owner, c.Board.Project, cmp.Or(p.reason(), ": no item answered"))
+	}
+	if p != nil {
+		return projectItem{}, fmt.Errorf("adding %s to the board %s/%d: %w", mv.Ref, c.Board.Owner, c.Board.Project, err)
 	}
 	it := *a.Added.Item
 	// An item that existed carries its fields; a new one none.
@@ -648,15 +811,20 @@ func (c *Client) lookup(ctx context.Context, m *meta, ref, owner, repo string, n
 			} `json:"issue"`
 		} `json:"repository"`
 	}
-	partial, err := c.query(ctx, &r, `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){id projectItems(first:50){nodes{
+	err := c.graphql(ctx, &r, `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){id projectItems(first:50){nodes{
 `+itemFields+`}}}}}`,
 		vars{"o": owner, "r": repo, "n": n})
-	if err != nil {
+	p, ok := partialOf(err)
+	if !ok {
 		return "", nil, err
 	}
 	is := r.Repository.Issue
 	if is == nil {
-		return "", nil, &Refusal{ref + " is no issue" + reason(partial)}
+		return "", nil, &Refusal{ref + " is no issue" + p.reason()}
+	}
+	if p != nil {
+		// Its items unknown, the issue is never taken for one off the board.
+		return "", nil, fmt.Errorf("the board items of %s: %w", ref, err)
 	}
 	if i := slices.IndexFunc(is.ProjectItems.Nodes, func(x projectItem) bool { return x.Project.ID == m.ID }); i >= 0 {
 		return is.ID, &is.ProjectItems.Nodes[i], nil
@@ -792,12 +960,16 @@ func (c *Client) position(ctx context.Context, project, item, after string) (str
 			} `json:"items"`
 		} `json:"updateProjectV2ItemPosition"`
 	}
-	partial, err := c.query(ctx, &r, `mutation($p:ID!,$i:ID!`+head+`){updateProjectV2ItemPosition(input:{projectId:$p,itemId:$i`+arg+`}){clientMutationId `+read+`}}`, vs)
-	if err != nil {
+	err := c.graphql(ctx, &r, `mutation($p:ID!,$i:ID!`+head+`){updateProjectV2ItemPosition(input:{projectId:$p,itemId:$i`+arg+`}){clientMutationId `+read+`}}`, vs)
+	p, ok := partialOf(err)
+	if !ok {
 		return "", err
 	}
 	if r.Moved == nil {
-		return "", fmt.Errorf("moving the item %s on the board %s/%d%s", item, c.Board.Owner, c.Board.Project, cmp.Or(reason(partial), ": no answer"))
+		return "", fmt.Errorf("moving the item %s on the board %s/%d%s", item, c.Board.Owner, c.Board.Project, cmp.Or(p.reason(), ": no answer"))
+	}
+	if p != nil {
+		return "", fmt.Errorf("moved the item %s on the board %s/%d, its neighbours unread: %w", item, c.Board.Owner, c.Board.Project, err)
 	}
 	for _, x := range r.Moved.Items.Nodes {
 		if x.ID == item {
