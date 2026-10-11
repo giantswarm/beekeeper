@@ -38,9 +38,10 @@ next applies the configured order (board.order) to the board's open items
 and the roster and prints the first free item with why it is picked; move
 sets an item's Status by the board's canonical names; rank sets an item's
 priority, its position on the board, which is the order next reads the
-items of each step in.`,
+items of each step in; block and unblock record and remove a hold on an
+item, a GitHub blocked-by dependency on another issue, which next reads.`,
 	}
-	c.AddCommand(a.boardNextCmd(), a.boardMoveCmd(), a.boardRankCmd())
+	c.AddCommand(a.boardNextCmd(), a.boardMoveCmd(), a.boardRankCmd(), a.boardHoldCmd(true), a.boardHoldCmd(false))
 	return c
 }
 
@@ -685,6 +686,101 @@ against itself.`,
 	c.MarkFlagsMutuallyExclusive("top", "before", "after")
 	c.MarkFlagsOneRequired("top", "before", "after")
 	return c
+}
+
+// boardHoldCmd is board block, or board unblock when block is false.
+func (a *app) boardHoldCmd(block bool) *cobra.Command {
+	var by string
+	use, short, long := "block", "Hold a board item until another issue closes: record a GitHub blocked-by dependency",
+		`Records the issue --by names as a blocker of the item's issue, a GitHub
+blocked-by dependency (addBlockedBy): board next skips the item while any of
+its recorded blockers is open ("1 of 1 blockers open") and offers it again at
+the next board next once they all closed, with no session acting. A
+dependency recorded already is left as it is.`
+	if !block {
+		use, short, long = "unblock", "Remove a hold from a board item: the GitHub blocked-by dependency block recorded",
+			`Removes the issue --by names from the blockers of the item's issue
+(removeBlockedBy): board next offers the item again once none of its other
+recorded blockers is open. A dependency not recorded is left as it is.`
+	}
+	c := &cobra.Command{
+		Use:   use + " <owner/repo#n|URL> --by <owner/repo#n|URL>",
+		Short: short,
+		Long: long + `
+
+Only the two issues are read, never the board's items; each is read on its
+own repository (GH_REPO), the dependency written on the item's. A hold is on
+an issue: a blocker that is a pull request, or that GitHub does not resolve,
+is refused naming why before anything is written, as is an item that is no
+issue and an item held by itself. A hold on something that is no issue (a
+person's review or answer) is the item's Status Blocked / Waiting plus a
+decision for that person. Exit 3 when refused.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			for _, r := range []string{args[0], by} {
+				if _, _, _, err := board.Ref(r); err != nil {
+					return usageErr("%v", err)
+				}
+			}
+			me, _ := a.caller()
+			cl := a.boardClient()
+			hold := cl.Unblock
+			if block {
+				hold = cl.Block
+			}
+			h, err := hold(cmd.Context(), args[0], by)
+			if r := (*board.Refusal)(nil); errors.As(err, &r) {
+				return refused("%s", r.Reason)
+			}
+			if err != nil {
+				return err
+			}
+			if h.Changed {
+				_ = a.store.Log(event(me, "board."+use, "%s: by %s (%s), %s", h.Ref, h.By, openWord(h.ByOpen), holdState(h)))
+			}
+			if a.json {
+				return a.printJSON(h)
+			}
+			_, err = fmt.Fprintln(a.out, holdText(h, block))
+			return err
+		},
+	}
+	c.Flags().StringVar(&by, "by", "", "the blocking issue, owner/repo#n or its URL")
+	_ = c.MarkFlagRequired("by")
+	return c
+}
+
+// holdText says what board block (block) or unblock did and what board
+// next makes of the item now.
+func holdText(h *board.Held, block bool) string {
+	var did string
+	switch {
+	case block && h.Changed:
+		did = fmt.Sprintf("blocked %s by %s (%s)", h.Ref, h.By, openWord(h.ByOpen))
+	case block:
+		did = fmt.Sprintf("%s is blocked by %s (%s) already", h.Ref, h.By, openWord(h.ByOpen))
+	case h.Changed:
+		did = fmt.Sprintf("unblocked %s: %s (%s) no longer blocks it", h.Ref, h.By, openWord(h.ByOpen))
+	default:
+		did = fmt.Sprintf("%s is not blocked by %s (%s)", h.Ref, h.By, openWord(h.ByOpen))
+	}
+	return did + ": " + holdState(h)
+}
+
+// holdState is what board next makes of a held item's blockers: skipped
+// while one is open, held by none once all closed.
+func holdState(h *board.Held) string {
+	if h.OpenBlockers > 0 {
+		return fmt.Sprintf("%d of %d blockers open, board next skips it until they close", h.OpenBlockers, h.Blockers)
+	}
+	return fmt.Sprintf("%d of %d blockers open, none holds it from board next", h.OpenBlockers, h.Blockers)
+}
+
+func openWord(open bool) string {
+	if open {
+		return "open"
+	}
+	return "closed"
 }
 
 // printEpics prints one line per epic: its status and its plan.

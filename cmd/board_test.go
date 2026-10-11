@@ -559,3 +559,25 @@ func TestOffBoardAsksAboutWhatIsNoBoardItem(t *testing.T) {
 		t.Errorf("off the board %q, want the pull request and the other repository's issue", got)
 	}
 }
+
+func TestHoldTextSaysWhatBoardNextMakesOfTheItem(t *testing.T) {
+	const item, blocker = "o/r#5", "o/r#9"
+	for _, tc := range []struct {
+		h     board.Held
+		block bool
+		want  string
+	}{
+		{board.Held{Ref: item, By: blocker, ByOpen: true, Changed: true, Blockers: 1, OpenBlockers: 1}, true,
+			"blocked o/r#5 by o/r#9 (open): 1 of 1 blockers open, board next skips it until they close"},
+		{board.Held{Ref: item, By: blocker, Blockers: 1}, true,
+			"o/r#5 is blocked by o/r#9 (closed) already: 0 of 1 blockers open, none holds it from board next"},
+		{board.Held{Ref: item, By: blocker, ByOpen: true, Changed: true}, false,
+			"unblocked o/r#5: o/r#9 (open) no longer blocks it: 0 of 0 blockers open, none holds it from board next"},
+		{board.Held{Ref: item, By: blocker, ByOpen: true}, false,
+			"o/r#5 is not blocked by o/r#9 (open): 0 of 0 blockers open, none holds it from board next"},
+	} {
+		if got := holdText(&tc.h, tc.block); got != tc.want {
+			t.Errorf("holdText(%+v, %v) = %q, want %q", tc.h, tc.block, got, tc.want)
+		}
+	}
+}
