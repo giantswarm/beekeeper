@@ -119,12 +119,13 @@ park. An agent without a task is refused: it has nothing to wait for.`,
 						st.Records[j].Waits = waits
 					}
 				}
-				back := "agents resume brings it back"
+				resume := fmt.Sprintf("beekeeper agents resume %q", ag.Name)
+				back := resume + " brings it back"
 				switch {
 				case on != "" && a.cfg.Agents.AutoResume:
 					back = "the watch resumes it with what settles " + on
 				case on != "":
-					back = "the watch says AGENT RESUMABLE once " + on + " settles; agents resume brings it back"
+					back = "the watch says AGENT RESUMABLE once " + on + " settles; " + resume + " brings it back"
 				}
 				line = fmt.Sprintf("%s: %s; counted parked, not busy, and %s. End your turn now.", ag.Name, parkedText(ag.Park, a.now), back)
 				return []state.Event{event(me, parkEvent, "%s: %s", ag.Name, parkedText(ag.Park, a.now))}, nil

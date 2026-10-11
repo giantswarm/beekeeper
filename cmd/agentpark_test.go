@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -84,6 +85,10 @@ func TestParkCountsTheAgentParked(t *testing.T) {
 	}
 	if err := park(t, w, "--on", "3", "Timo's answer on the rollout"); err != nil {
 		t.Fatal(err)
+	}
+	out := w.out.(*bytes.Buffer).String()
+	if want := fmt.Sprintf("beekeeper agents resume %q", agentOne); !strings.Contains(out, want) {
+		t.Errorf("park output lacks the copy-pasteable %s: %q", want, out)
 	}
 	ag := agentOf(t, w)
 	if ag.Task != parkTask || ag.Park == nil || ag.Park.On != "#3" {
