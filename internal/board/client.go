@@ -37,6 +37,11 @@ func (f field) names() []string {
 	return out
 }
 
+// option is the id of the option named name, one of names().
+func (f field) option(name string) string {
+	return f.Options[slices.IndexFunc(f.Options, func(o struct{ ID, Name string }) bool { return o.Name == name })].ID
+}
+
 // meta is the board's id and single-select fields by name.
 type meta struct {
 	ID     string
@@ -50,6 +55,11 @@ labels(first:20){nodes{name}} assignees(first:10){nodes{login}} issueDependencie
 // boardFields is what every read takes of a board item.
 const boardFields = `status:fieldValueByName(name:"` + StatusField + `"){...on ProjectV2ItemFieldSingleSelectValue{name}}
 kind:fieldValueByName(name:"` + KindField + `"){...on ProjectV2ItemFieldSingleSelectValue{name}}`
+
+// itemFields is what a move takes of an item: its id, its board and the
+// board fields with the Team.
+const itemFields = `id project{id} ` + boardFields + `
+team:fieldValueByName(name:"` + TeamField + `"){...on ProjectV2ItemFieldSingleSelectValue{name}}`
 
 type issueJSON struct {
 	Number     int       `json:"number"`
@@ -100,6 +110,14 @@ type vars map[string]any
 
 // graphql runs one query with its variables into v.
 func (c *Client) graphql(ctx context.Context, v any, query string, vs vars) error {
+	_, err := c.query(ctx, v, query, vs)
+	return err
+}
+
+// query runs one query with its variables into v; partial are the messages
+// of the errors GitHub answered beside the data (a field it could not
+// resolve), none for a clean answer.
+func (c *Client) query(ctx context.Context, v any, query string, vs vars) (partial []string, err error) {
 	args := []string{"api", "graphql", "-f", "query=" + query}
 	for k, x := range vs {
 		if n, ok := x.(int); ok {
@@ -115,14 +133,22 @@ func (c *Client) graphql(ctx context.Context, v any, query string, vs vars) erro
 			Message string `json:"message"`
 		} `json:"errors"`
 	}
-	if jerr := json.Unmarshal(out, &doc); jerr != nil || len(doc.Data) == 0 || string(doc.Data) == "null" {
-		msgs := make([]string, len(doc.Errors))
-		for i, e := range doc.Errors {
-			msgs[i] = e.Message
-		}
-		return cmp.Or(err, errors.New("gh api graphql: "+cmp.Or(strings.Join(msgs, "; "), "no data")))
+	jerr := json.Unmarshal(out, &doc)
+	for _, e := range doc.Errors {
+		partial = append(partial, e.Message)
 	}
-	return json.Unmarshal(doc.Data, v)
+	if jerr != nil || len(doc.Data) == 0 || string(doc.Data) == "null" {
+		return nil, cmp.Or(err, errors.New("gh api graphql: "+cmp.Or(strings.Join(partial, "; "), "no data")))
+	}
+	return partial, json.Unmarshal(doc.Data, v)
+}
+
+// reason is partial as the tail of a sentence, "" for none.
+func reason(partial []string) string {
+	if len(partial) == 0 {
+		return ""
+	}
+	return ": " + strings.Join(partial, "; ")
 }
 
 func (c *Client) owner() (string, error) {
@@ -370,12 +396,14 @@ func searchQuery(s string) string {
 	return s
 }
 
-// Open reports whether the issue or pull request ref is open.
+// Open reports whether the issue or pull request ref is open, acting on
+// its repository (github.ActingOn).
 func (c *Client) Open(ctx context.Context, ref string) (bool, error) {
 	owner, repo, n, err := Ref(ref)
 	if err != nil {
 		return false, err
 	}
+	ctx = github.ActingOn(ctx, owner+"/"+repo)
 	var r struct {
 		Repository struct {
 			Item *struct{ State string } `json:"issueOrPullRequest"`
@@ -467,16 +495,30 @@ type Moved struct {
 	Ref  string `json:"ref"`
 	From string `json:"from,omitempty"`
 	To   string `json:"to"`
+	// Added says the issue had no item on the board: one was added before
+	// the move. Team is the Team the item was given, board.team, "" when
+	// it had one or the board names none.
+	Added bool   `json:"added,omitempty"`
+	Team  string `json:"team,omitempty"`
 }
 
 // Move sets the Status of the board item of the issue ref to the status in
-// stands for (see Resolve). An unknown or ambiguous status is refused with
-// the board's values before anything is written.
+// stands for (see Resolve): the item the issue's projectItems name, else
+// the one addProjectV2ItemById answers, which is the issue's existing item
+// (an issue of a repository outside the board's organisation names its
+// item under no projectItems) or a new one, with board.team as its Team
+// when it has none; no read of the board's items. Every call acts on the
+// issue's repository (github.ActingOn), so a gh link choosing its login by
+// the owner reaches the issue. An unknown or ambiguous status, and a
+// board.team that is none of the Team field's values, are refused with the
+// board's values before anything is written; an issue GitHub does not
+// resolve is refused as no issue, with GitHub's reason.
 func (c *Client) Move(ctx context.Context, ref, in string) (*Moved, error) {
 	owner, repo, n, err := Ref(ref)
 	if err != nil {
 		return nil, err
 	}
+	ctx = github.ActingOn(ctx, owner+"/"+repo)
 	m, err := c.meta(ctx)
 	if err != nil {
 		return nil, err
@@ -486,44 +528,104 @@ func (c *Client) Move(ctx context.Context, ref, in string) (*Moved, error) {
 	if err != nil {
 		return nil, &Refusal{err.Error()}
 	}
+	team, err := c.team(m)
+	if err != nil {
+		return nil, &Refusal{err.Error()}
+	}
+	mv := &Moved{Ref: fmt.Sprintf("%s/%s#%d", owner, repo, n), To: to}
+	item, err := c.item(ctx, m, mv, owner, repo, n)
+	if err != nil {
+		return nil, err
+	}
+	if item.Status != nil {
+		mv.From = item.Status.Name
+	}
+	if item.Team == nil && team != nil {
+		if err := c.set(ctx, m.ID, item.ID, team.field, team.id); err != nil {
+			return nil, err
+		}
+		mv.Team = team.name
+	}
+	if mv.From == to {
+		return mv, nil
+	}
+	if err := c.set(ctx, m.ID, item.ID, sf.ID, sf.option(to)); err != nil {
+		return nil, err
+	}
+	return mv, nil
+}
+
+// item is the issue's item on the board, read from the issue's
+// projectItems, else answered by addProjectV2ItemById: the issue's
+// existing item, or a new one, which marks mv added. An issue GitHub does
+// not resolve is refused as no issue.
+func (c *Client) item(ctx context.Context, m *meta, mv *Moved, owner, repo string, n int) (projectItem, error) {
 	var r struct {
 		Repository struct {
 			Issue *struct {
+				ID           string `json:"id"`
 				ProjectItems struct {
 					Nodes []projectItem `json:"nodes"`
 				} `json:"projectItems"`
 			} `json:"issue"`
 		} `json:"repository"`
 	}
-	err = c.graphql(ctx, &r, `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){projectItems(first:50){nodes{
-id project{id} `+boardFields+`}}}}}`,
+	partial, err := c.query(ctx, &r, `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){id projectItems(first:50){nodes{
+`+itemFields+`}}}}}`,
 		vars{"o": owner, "r": repo, "n": n})
 	if err != nil {
-		return nil, err
+		return projectItem{}, err
 	}
-	mv := &Moved{Ref: fmt.Sprintf("%s/%s#%d", owner, repo, n), To: to}
 	if r.Repository.Issue == nil {
-		return nil, &Refusal{mv.Ref + " is no issue"}
+		return projectItem{}, &Refusal{mv.Ref + " is no issue" + reason(partial)}
 	}
-	i := slices.IndexFunc(r.Repository.Issue.ProjectItems.Nodes, func(x projectItem) bool { return x.Project.ID == m.ID })
-	if i < 0 {
-		return nil, &Refusal{fmt.Sprintf("%s is not on the board %s/%d", mv.Ref, c.Board.Owner, c.Board.Project)}
+	if i := slices.IndexFunc(r.Repository.Issue.ProjectItems.Nodes, func(x projectItem) bool { return x.Project.ID == m.ID }); i >= 0 {
+		return r.Repository.Issue.ProjectItems.Nodes[i], nil
 	}
-	item := r.Repository.Issue.ProjectItems.Nodes[i]
-	if item.Status != nil {
-		mv.From = item.Status.Name
+	var a struct {
+		Added struct {
+			Item *projectItem `json:"item"`
+		} `json:"addProjectV2ItemById"`
 	}
-	if mv.From == to {
-		return mv, nil
-	}
-	opt := sf.Options[slices.IndexFunc(sf.Options, func(o struct{ ID, Name string }) bool { return o.Name == to })].ID
-	var done json.RawMessage
-	err = c.graphql(ctx, &done, `mutation($p:ID!,$i:ID!,$f:ID!,$v:String!){updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$v}}){projectV2Item{id}}}`,
-		vars{"p": m.ID, "i": item.ID, "f": sf.ID, "v": opt})
+	partial, err = c.query(ctx, &a, `mutation($p:ID!,$c:ID!){addProjectV2ItemById(input:{projectId:$p,contentId:$c}){item{`+itemFields+`}}}`,
+		vars{"p": m.ID, "c": r.Repository.Issue.ID})
 	if err != nil {
-		return nil, err
+		return projectItem{}, err
 	}
-	return mv, nil
+	if a.Added.Item == nil || a.Added.Item.ID == "" {
+		return projectItem{}, fmt.Errorf("adding %s to the board %s/%d%s", mv.Ref, c.Board.Owner, c.Board.Project, cmp.Or(reason(partial), ": no item answered"))
+	}
+	it := *a.Added.Item
+	// An item that existed carries its fields; a new one none.
+	mv.Added = it.Status == nil && it.Team == nil
+	return it, nil
+}
+
+// option is one option of a single-select field: the field's id, the
+// option's id and its name.
+type option struct{ field, id, name string }
+
+// team is the Team option board.team names; nil when board.team is empty
+// or the board has no Team field. A board.team that is none of the field's
+// values is an error naming them.
+func (c *Client) team(m *meta) (*option, error) {
+	tf, ok := m.Fields[TeamField]
+	if !ok || c.Board.Team == "" {
+		return nil, nil
+	}
+	name, err := Resolve(TeamField, tf.names(), c.Board.Team)
+	if err != nil {
+		return nil, fmt.Errorf("board.team: %w", err)
+	}
+	return &option{field: tf.ID, id: tf.option(name), name: name}, nil
+}
+
+// set sets the single-select field f of the item of the project to the
+// option o.
+func (c *Client) set(ctx context.Context, project, item, f, o string) error {
+	var done json.RawMessage
+	return c.graphql(ctx, &done, `mutation($p:ID!,$i:ID!,$f:ID!,$v:String!){updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$v}}){projectV2Item{id}}}`,
+		vars{"p": project, "i": item, "f": f, "v": o})
 }
 
 // projectItem is an issue's item on a board.
@@ -532,6 +634,7 @@ type projectItem struct {
 	Project struct{ ID string }    `json:"project"`
 	Status  *struct{ Name string } `json:"status"`
 	Kind    *struct{ Name string } `json:"kind"`
+	Team    *struct{ Name string } `json:"team"`
 }
 
 // onto marks it a board item with the board fields of p.

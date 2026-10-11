@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/github"
 )
 
 var now = time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
@@ -218,27 +220,37 @@ func TestFilter(t *testing.T) {
 }
 
 // fakeGH answers the board's GraphQL requests from a fixture and records the
-// mutations.
+// mutations, every request's query and the repository each acted on.
 type fakeGH struct {
-	t         *testing.T
-	pages     []string
-	extras    string
-	item      string
+	t      *testing.T
+	pages  []string
+	extras string
+	item   string
+	// added answers addProjectV2ItemById.
+	added     string
 	mutations []string
+	queries   []string
+	repos     []string
 }
 
 const metaJSON = `{"data":{"repositoryOwner":{"projectV2":{"id":"P","fields":{"nodes":[{},
 {"id":"FS","name":"Status","options":[{"id":"s1","name":"Backlog 📦"},{"id":"s2","name":"Up Next ➡️"},{"id":"s3","name":"In Progress ⛏️"}]},
-{"id":"FK","name":"Kind","options":[{"id":"k1","name":"Epic 🎯"}]}]}}}}}`
+{"id":"FK","name":"Kind","options":[{"id":"k1","name":"Epic 🎯"}]},
+{"id":"FT","name":"Team","options":[{"id":"t1","name":"X 🐝"},{"id":"t2","name":"Y"}]}]}}}}}`
 
-func (f *fakeGH) run(_ context.Context, args ...string) ([]byte, error) {
+func (f *fakeGH) run(ctx context.Context, args ...string) ([]byte, error) {
 	q := args[3]
+	f.queries = append(f.queries, q)
+	f.repos = append(f.repos, github.Repo(ctx))
 	vars := map[string]string{}
 	for i := 4; i+1 < len(args); i += 2 {
 		k, v, _ := strings.Cut(args[i+1], "=")
 		vars[k] = v
 	}
 	switch {
+	case strings.Contains(q, "addProjectV2ItemById"):
+		f.mutations = append(f.mutations, "add "+vars["c"]+" to "+vars["p"])
+		return []byte(f.added), nil
 	case strings.HasPrefix(q, "query=mutation"):
 		f.mutations = append(f.mutations, vars["i"]+"="+vars["v"])
 		return []byte(`{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"I"}}}}`), nil
@@ -314,24 +326,112 @@ func TestReadPagesTheBoardAndReadsSubIssuesAndSearches(t *testing.T) {
 	}
 }
 
+// itemsRead matches a read of a project's items; an issue's projectItems
+// is none.
+var itemsRead = regexp.MustCompile(`\bitems\s*\(`)
+
+// readsItems says whether any of queries reads a project's items.
+func readsItems(queries []string) bool {
+	return slices.ContainsFunc(queries, itemsRead.MatchString)
+}
+
+// issue5 is the issue the moves act on.
+const issue5 = "o/r#5"
+
+// onBoard is an issue whose projectItems name its item I1 on the board, in
+// Backlog, beside one on another board.
+const onBoard = `{"data":{"repository":{"issue":{"id":"ISSUE","projectItems":{"nodes":[{"id":"other","project":{"id":"Q"}},{"id":"I1","project":{"id":"P"},"status":{"name":"Backlog 📦"},"team":{"name":"X 🐝"}}]}}}}}`
+
 func TestMoveTakesOnlyTheBoardsStatuses(t *testing.T) {
-	f := &fakeGH{t: t, item: `{"data":{"repository":{"issue":{"projectItems":{"nodes":[{"id":"other","project":{"id":"Q"}},{"id":"I1","project":{"id":"P"},"status":{"name":"Backlog 📦"}}]}}}}}`}
-	c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7}}
+	f := &fakeGH{t: t, item: onBoard}
+	c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
 	mv, err := c.Move(context.Background(), "https://github.com/o/r/issues/5", "in progress")
-	if err != nil || *mv != (Moved{Ref: "o/r#5", From: backlog, To: inProgress}) || !slices.Equal(f.mutations, []string{"I1=s3"}) {
+	if err != nil || *mv != (Moved{Ref: issue5, From: backlog, To: inProgress}) || !slices.Equal(f.mutations, []string{"I1=s3"}) {
 		t.Fatalf("Move = %+v, %v; mutations %v", mv, err, f.mutations)
 	}
-	_, err = c.Move(context.Background(), "o/r#5", "Doing")
+	// An item on the board is moved by the issue's projectItems: no add,
+	// no read of the board's items, every call on the issue's repository.
+	if len(f.queries) != 3 || readsItems(f.queries) || !slices.Equal(slices.Compact(slices.Clone(f.repos)), []string{"o/r"}) {
+		t.Errorf("queries %q acting on %q", f.queries, f.repos)
+	}
+	_, err = c.Move(context.Background(), issue5, "Doing")
 	var r *Refusal
 	if !errors.As(err, &r) || !strings.Contains(r.Reason, "none of the values: Backlog 📦, Up Next ➡️, In Progress ⛏️") || len(f.mutations) != 1 {
 		t.Errorf("Move to an unknown status = %v; mutations %v", err, f.mutations)
 	}
-	f.item = `{"data":{"repository":{"issue":{"projectItems":{"nodes":[]}}}}}`
-	if _, err := c.Move(context.Background(), "o/r#5", "backlog"); !errors.As(err, &r) || !strings.Contains(r.Reason, "not on the board o/7") {
-		t.Errorf("Move of an item not on the board = %v", err)
+	if mv, err := c.Move(context.Background(), issue5, "backlog"); err != nil || *mv != (Moved{Ref: issue5, From: backlog, To: backlog}) || len(f.mutations) != 1 {
+		t.Errorf("Move to the item's own status = %+v, %v; mutations %v", mv, err, f.mutations)
 	}
-	if _, err := (&Client{GH: f.run}).Move(context.Background(), "o/r#5", "backlog"); err == nil || !strings.Contains(err.Error(), "no board configured") {
+	c.Board.Team = "nobody"
+	if _, err := c.Move(context.Background(), issue5, "backlog"); !errors.As(err, &r) || !strings.Contains(r.Reason, `board.team: Team "nobody" is none of the values: X 🐝, Y`) || len(f.mutations) != 1 {
+		t.Errorf("Move with a board.team the board has not = %v; mutations %v", err, f.mutations)
+	}
+	if _, err := (&Client{GH: f.run}).Move(context.Background(), issue5, "backlog"); err == nil || !strings.Contains(err.Error(), "no board configured") {
 		t.Errorf("Move without a board = %v", err)
+	}
+}
+
+func TestMoveAddsAnIssueMissingFromTheBoard(t *testing.T) {
+	// The issue is on another board only; the add answers a new item.
+	f := &fakeGH{t: t, item: `{"data":{"repository":{"issue":{"id":"ISSUE","projectItems":{"nodes":[{"id":"other","project":{"id":"Q"}}]}}}}}`,
+		added: `{"data":{"addProjectV2ItemById":{"item":{"id":"I2","project":{"id":"P"},"status":null,"kind":null,"team":null}}}}`}
+	c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
+	mv, err := c.Move(context.Background(), issue5, "backlog")
+	if err != nil || *mv != (Moved{Ref: issue5, To: backlog, Added: true, Team: "X 🐝"}) || !slices.Equal(f.mutations, []string{"add ISSUE to P", "I2=t1", "I2=s1"}) || readsItems(f.queries) {
+		t.Errorf("Move = %+v, %v; mutations %v, queries %q", mv, err, f.mutations, f.queries)
+	}
+	// A board without a Team, or none configured, adds without one.
+	f.mutations = nil
+	c.Board.Team = ""
+	if mv, err := c.Move(context.Background(), issue5, "backlog"); err != nil || *mv != (Moved{Ref: issue5, To: backlog, Added: true}) || !slices.Equal(f.mutations, []string{"add ISSUE to P", "I2=s1"}) {
+		t.Errorf("Move without board.team = %+v, %v; mutations %v", mv, err, f.mutations)
+	}
+	// An add GitHub refuses (a login that does not reach the issue) is an
+	// error with its reason, nothing moved.
+	f.mutations = nil
+	f.added = `{"data":{"addProjectV2ItemById":null},"errors":[{"message":"Could not resolve to a node with the global id of 'ISSUE'."}]}`
+	if _, err := c.Move(context.Background(), issue5, "backlog"); err == nil || !strings.Contains(err.Error(), "adding o/r#5 to the board o/7: Could not resolve to a node") || len(f.mutations) != 1 {
+		t.Errorf("Move whose add is refused = %v; mutations %v", err, f.mutations)
+	}
+}
+
+func TestMoveFindsTheItemOfAnIssueOutsideTheOrganisation(t *testing.T) {
+	// The issue's projectItems name no item of the board, which has one: the
+	// add answers it, with its fields.
+	f := &fakeGH{t: t, item: `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[]}}}}}`,
+		added: `{"data":{"addProjectV2ItemById":{"item":{"id":"I3","project":{"id":"P"},"status":{"name":"Backlog 📦"},"kind":null,"team":{"name":"X 🐝"}}}}}`}
+	c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
+	mv, err := c.Move(context.Background(), "https://github.com/teemow/lab/issues/7", "progress")
+	if err != nil || *mv != (Moved{Ref: "teemow/lab#7", From: backlog, To: inProgress}) || !slices.Equal(f.mutations, []string{"add I7 to P", "I3=s3"}) {
+		t.Errorf("Move = %+v, %v; mutations %v", mv, err, f.mutations)
+	}
+	// Every call acts on the issue's repository, so the gh link picks the
+	// login that reaches it; the board's items are never read.
+	if len(f.queries) != 4 || readsItems(f.queries) || !slices.Equal(slices.Compact(slices.Clone(f.repos)), []string{"teemow/lab"}) {
+		t.Errorf("queries %q acting on %q", f.queries, f.repos)
+	}
+	// The item's own status is a no-op, still without a read of the items.
+	f.mutations = nil
+	if mv, err := c.Move(context.Background(), "teemow/lab#7", "backlog"); err != nil || *mv != (Moved{Ref: "teemow/lab#7", From: backlog, To: backlog}) || !slices.Equal(f.mutations, []string{"add I7 to P"}) {
+		t.Errorf("Move to the item's own status = %+v, %v; mutations %v", mv, err, f.mutations)
+	}
+	// Only an issue GitHub does not resolve is no issue, with its reason.
+	f.mutations = nil
+	f.item = `{"data":{"repository":null},"errors":[{"message":"Could not resolve to a Repository with the name 'teemow/lab'."}]}`
+	var r *Refusal
+	if _, err := c.Move(context.Background(), "teemow/lab#7", "backlog"); !errors.As(err, &r) || r.Reason != "teemow/lab#7 is no issue: Could not resolve to a Repository with the name 'teemow/lab'." || len(f.mutations) != 0 {
+		t.Errorf("Move of no issue = %v; mutations %v", err, f.mutations)
+	}
+}
+
+func TestOpenActsOnTheRepository(t *testing.T) {
+	f := &fakeGH{t: t}
+	c := &Client{GH: func(ctx context.Context, args ...string) ([]byte, error) {
+		f.repos = append(f.repos, github.Repo(ctx))
+		return []byte(`{"data":{"repository":{"issueOrPullRequest":{"state":"OPEN"}}}}`), nil
+	}}
+	if open, err := c.Open(context.Background(), "teemow/lab#7"); err != nil || !open || !slices.Equal(f.repos, []string{"teemow/lab"}) {
+		t.Errorf("Open = %v, %v acting on %q", open, err, f.repos)
 	}
 }
 
@@ -361,7 +461,7 @@ func TestClosesReadsTheClosingReferencesInOneRequest(t *testing.T) {
 			"r1":{"issueOrPullRequest":{}},
 			"r2":null}}`), nil
 	}
-	got, err := (&Client{GH: gh}).Closes(t.Context(), []string{"O/R#100", "o/r#5", "not a ref", "gone/r#1"})
+	got, err := (&Client{GH: gh}).Closes(t.Context(), []string{"O/R#100", issue5, "not a ref", "gone/r#1"})
 	if err != nil {
 		t.Fatal(err)
 	}
