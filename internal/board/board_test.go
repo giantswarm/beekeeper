@@ -340,7 +340,7 @@ const issue5 = "o/r#5"
 
 // onBoard is an issue whose projectItems name its item I1 on the board, in
 // Backlog, beside one on another board.
-const onBoard =`{"data":{"repository":{"issue":{"id":"ISSUE","projectItems":{"nodes":[{"id":"other","project":{"id":"Q"}},{"id":"I1","project":{"id":"P"},"status":{"name":"Backlog 📦"},"team":{"name":"X 🐝"}}]}}}}}`
+const onBoard = `{"data":{"repository":{"issue":{"id":"ISSUE","projectItems":{"nodes":[{"id":"other","project":{"id":"Q"}},{"id":"I1","project":{"id":"P"},"status":{"name":"Backlog 📦"},"team":{"name":"X 🐝"}}]}}}}}`
 
 func TestMoveTakesOnlyTheBoardsStatuses(t *testing.T) {
 	f := &fakeGH{t: t, item: onBoard}
