@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/creativeprojects/go-selfupdate"
+	"github.com/giantswarm/go-selfupdate"
 	selfupdatecosign "github.com/giantswarm/selfupdate-cosign"
 
 	"github.com/giantswarm/beekeeper/pkg/project"
