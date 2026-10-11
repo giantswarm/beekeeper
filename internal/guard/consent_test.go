@@ -59,7 +59,7 @@ func TestConsent(t *testing.T) {
 		"other App, the id redacted":       {Page{redactedPage, otherTitle}, recorded, Deny, `GitHub's consent page "` + otherTitle + `" (callback ` + ownCallback + `)`},
 		"other callback host":              {Page{otherCallbackPage, ownTitle}, recorded, Deny, "(callback example.org)"},
 		"no record at all":                 {Page{ownPage, ownTitle}, []App{}, Deny, AllowForm},
-		"other page":                       {Page{applicationsPage, "Applications"}, recorded, "", ""},
+		"other page":                       {Page{applicationsPage, applicationsTitle}, recorded, "", ""},
 		"the portal":                       {Page{"https://portal.example.org/agents", "Agents"}, recorded, "", ""},
 		"lab Dex sign-in":                  {Page{labDexPage, "Log in to agentlab"}, recorded, Allow, "dex.127.0.0.1.nip.io is the lab's own identity provider on a loopback host"},
 		"lab Dex approval on localhost":    {Page{"https://localhost:32000/dex/approval?req=abc", "Grant Access"}, nil, Allow, "localhost:32000 is the lab's own identity provider"},
@@ -69,9 +69,9 @@ func TestConsent(t *testing.T) {
 		"no URL":                           {Page{"", ""}, recorded, "", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
-			d := Consent(tc.apps, tc.page)
+			d := Click(tc.apps, tc.page, clicksAuthorize)
 			if d.Decision != tc.decision || !strings.Contains(d.Reason, tc.reason) {
-				t.Errorf("Consent = %+v, want %q with %q", d, tc.decision, tc.reason)
+				t.Errorf("Click = %+v, want %q with %q", d, tc.decision, tc.reason)
 			}
 		})
 	}
@@ -139,7 +139,7 @@ func TestConsentDecision(t *testing.T) {
 	own := transcriptWith(t, Page{redactedPage, ownTitle}, false)
 	ownJSON := transcriptWith(t, Page{redactedPage, ownTitle}, true)
 	other := transcriptWith(t, Page{redactedPage, otherTitle}, false)
-	plain := transcriptWith(t, Page{applicationsPage, "Applications"}, false)
+	plain := transcriptWith(t, Page{applicationsPage, applicationsTitle}, false)
 	click := tabInput(leftClick, map[string]any{"ref": "ref_45", "action_summary": clicksAuthorize})
 	screenshot := tabInput("screenshot", nil)
 	batch := map[string]any{"actions": []any{batchAction(chromeComputer, screenshot), batchAction(chromeComputer, tabInput(leftClick, nil))}}

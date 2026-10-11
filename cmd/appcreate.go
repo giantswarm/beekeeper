@@ -20,7 +20,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -325,7 +324,7 @@ func (a *app) appPlan(ctx context.Context, name string) (*appPlan, error) {
 	if !strings.EqualFold(decl.Name, name) {
 		return nil, refused("App %s is not declared: %s names the App %s", name, decl.Source, decl.Name)
 	}
-	p := &appPlan{name: name, decl: decl, slug: appSlug(decl.Name), item: guard.OpRef + a.cfg.Secret.Vault + "/" + name}
+	p := &appPlan{name: name, decl: decl, slug: guard.AppSlug(decl.Name), item: guard.OpRef + a.cfg.Secret.Vault + "/" + name}
 	p.org, _, _ = strings.Cut(a.cfg.Apps.Repo, "/")
 	if known, err := a.appKnown(ctx, p.slug); err != nil {
 		return nil, err
@@ -389,15 +388,6 @@ func (a *app) githubID(ctx context.Context, path string) (int64, error) {
 		return 0, fmt.Errorf("gh api %s answered no id", path)
 	}
 	return id, nil
-}
-
-// notSlug matches what GitHub turns into a hyphen in an App's slug.
-var notSlug = regexp.MustCompile(`[^a-z0-9]+`)
-
-// appSlug is the slug GitHub gives an App's name: lower case, every run of
-// other characters one hyphen, none at the ends.
-func appSlug(name string) string {
-	return strings.Trim(notSlug.ReplaceAllString(strings.ToLower(name), "-"), "-")
 }
 
 // holdsBrowser refuses, in an agent session, unless the caller holds the

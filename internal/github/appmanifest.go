@@ -18,7 +18,8 @@ type AppManifest struct {
 	// Name is the App's name.
 	Name string
 	// Callbacks are the hosts (with a port where the URL has one) of the
-	// manifest's callback_urls, lower-case, each once.
+	// manifest's callback_urls, lower-case, each once; none for an App
+	// without callback URLs, one used through the device flow.
 	Callbacks []string
 	// Source is where it was read: <repo>@<commit>:<path>.
 	Source string
@@ -26,8 +27,8 @@ type AppManifest struct {
 
 // ReadAppManifest reads the App manifest at path in repo's default branch:
 // its name, its callback hosts and the commit it was read at. A manifest
-// that is missing, unreadable or names no callback URL is an error: the App
-// is not declared.
+// that is missing, unreadable or names no App is an error: the App is not
+// declared.
 func ReadAppManifest(ctx context.Context, run GH, repo, path string) (AppManifest, error) {
 	sha, err := defaultBranch(ctx, run, repo)
 	if err != nil {
@@ -54,8 +55,8 @@ func ReadAppManifest(ctx context.Context, run GH, repo, path string) (AppManifes
 			a.Callbacks = append(a.Callbacks, h)
 		}
 	}
-	if a.Name == "" || len(a.Callbacks) == 0 {
-		return AppManifest{}, fmt.Errorf("%s declares no App name and callback URL", a.Source)
+	if a.Name == "" {
+		return AppManifest{}, fmt.Errorf("%s declares no App name", a.Source)
 	}
 	return a, nil
 }

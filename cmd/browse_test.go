@@ -209,6 +209,7 @@ func TestReadFindings(t *testing.T) {
 const (
 	turnReport = "the turn's report"
 	noShots    = "screenshot: none taken"
+	theGuide   = "the guide"
 )
 
 // The turn runs the claude on PATH with the browse argv: dontAsk, the Chrome
@@ -291,7 +292,7 @@ func TestBrowseRunsTheTurn(t *testing.T) {
 // under a record says the record did not cover it.
 func TestBrowseConsent(t *testing.T) {
 	rec := []state.App{{Name: recordedApp, ClientID: recordedClientID, Callbacks: []string{recordedCallback, recordedCallback + ":8443"}, Declared: recordedDeclared,
-		Word: personsWord, By: state.Party{Name: "the guide"}, At: time.Date(2026, 10, 10, 8, 16, 0, 0, time.UTC)}}
+		Word: personsWord, By: state.Party{Name: theGuide}, At: time.Date(2026, 10, 10, 8, 16, 0, 0, time.UTC)}}
 	for steps, want := range map[string]int{
 		"Open https://example.org/signin. On GitHub's page '" + recordedTitle + "' click Authorize once.": 1,
 		"Open https://" + recordedCallback + "/connect/github and click Authorize.":                       1,
@@ -312,6 +313,26 @@ func TestBrowseConsent(t *testing.T) {
 		if got := namesLoopback(steps); got != want {
 			t.Errorf("namesLoopback(%q) = %v, want %v", steps, got, want)
 		}
+	}
+	change := state.App{Name: deviceApp, Org: fixtureOrg, Permission: deviceChange, Declared: deviceDeclared, Word: personsWord, By: state.Party{Name: theGuide}, At: rec[0].At}
+	if got := appsNamed(append(rec, change), "Open the permissions page of "+deviceApp+" and set Members to Read-only."); len(got) != 1 || got[0].Permission != deviceChange {
+		t.Errorf("appsNamed of a permission record = %+v", got)
+	}
+	both := guardApps(append(rec, change))
+	if rules := browseRules("", both, false); len(rules) != 2 || rules[0] != consentRule(both[0]) || rules[1] != permissionRule(both[1]) ||
+		!strings.Contains(rules[1], "Own App Permission: The person's organisation declares the App "+deviceApp+" in "+deviceDeclared) ||
+		!strings.Contains(rules[1], "one change of its permissions: "+deviceChange+".") || !strings.Contains(rules[1], "organizations/example/settings/apps/"+deviceApp+"/permissions") ||
+		!strings.Contains(rules[1], "Not covered: any other permission") {
+		t.Errorf("browseRules with a permission record = %q", rules)
+	}
+	if p := browsePrompt("steps", "", both, false); !strings.Contains(p, "The person's own App "+deviceApp+" is declared and on record for one permission change, "+deviceChange+": once the steps reach its permissions page (organizations/example/settings/apps/"+deviceApp+"/permissions)") ||
+		!strings.Contains(p, "The person's own App "+recordedApp+" is declared and on record (callback ") {
+		t.Errorf("browsePrompt with a permission record = %q", p)
+	}
+	if l := (browseFindings{}).lines("steps", "", both, false); len(l) != 2 || !strings.HasPrefix(l[0], "allowed consent: ") ||
+		!strings.HasPrefix(l[1], "allowed permission: "+deviceApp+" ("+deviceChange+", declared in "+deviceDeclared+"): the hook answers the navigation to its permissions page, the clicks of that change and its installation's Review request and Accept new permissions") ||
+		!strings.Contains(l[1], "on record since 2026-10-10 by the guide: "+personsWord) {
+		t.Errorf("lines with a permission record = %q", l)
 	}
 	consents := guardApps(rec)
 	rules := browseRules("", consents, true)
@@ -343,10 +364,11 @@ func TestBrowseConsent(t *testing.T) {
 	}
 	refused := browseFindings{Refused: []refusal{{Call: `computer left_click "Clicks Authorize"`, Reason: reasonGrant}}}
 	if l := refused.lines("On the page click Authorize once.", "", consents, false); len(l) != 3 || l[2] != `the steps' "On the page click Authorize once" reads as a grant: the App on record (`+recordedApp+`) did not cover it: `+
-		"the page named another App or callback host, or the hook saw no page for the call's tab; the refused call says which" {
+		"the page named another App, callback host or permission, or the hook saw no page for the call's tab; the refused call says which" {
 		t.Errorf("lines of a grant refusal under a record = %q", l)
 	}
-	if l := refused.lines("On the page click Authorize once.", "", nil, false); len(l) != 2 || !strings.HasSuffix(l[1], consentHint) || !strings.Contains(consentHint, "beekeeper app allow") {
+	if l := refused.lines("On the page click Authorize once.", "", nil, false); len(l) != 2 || !strings.HasSuffix(l[1], consentHint) || !strings.Contains(consentHint, "beekeeper app allow") ||
+		!strings.Contains(consentHint, "--permission") {
 		t.Errorf("lines of a grant refusal without a record = %q", l)
 	}
 }

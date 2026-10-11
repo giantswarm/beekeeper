@@ -44,12 +44,17 @@ const (
 const deployWords = "The person's task covers one deploy: %s. Once the steps reach the portal's control that performs " +
 	"exactly that deploy or create, click it once; click nothing else that deploys, creates, deletes or changes a shared system. "
 
-// consentWords tell a browse turn the App on record its steps name, and
-// labWords the lab's own identity provider the steps name, the one place a
+// consentWords tell a browse turn the App on record its steps name,
+// permissionWords the one permission change on record for it, and labWords
+// the lab's own identity provider the steps name, the one place a
 // credential is typed: a fixture user's.
 const (
 	consentWords = "The person's own App %s is declared and on record (callback %s): once the steps reach GitHub's page 'Authorize %s' " +
 		"with that callback, click Authorize once; click nothing else that grants access. "
+	permissionWords = "The person's own App %s is declared and on record for one permission change, %s: once the steps reach its permissions " +
+		"page (organizations/%s/settings/apps/%s/permissions) set exactly that permission and click Save changes once, and on the organisation's " +
+		"installation of the App click Review request and Accept new permissions once; name the App and the permission in each call's summary; " +
+		"change nothing else. "
 	labWords = "The lab's own identity provider on a loopback host (*.127.0.0.1.nip.io, localhost) is the person's: " +
 		"there, and only there, a fixture user the steps name signs in with the fixture credential the steps give. "
 )
@@ -107,6 +112,19 @@ and a line below the report says "allowed consent: <name> (callback
   beekeeper browse "Open <sign-in URL>. On GitHub's page 'Authorize <app>'
   click Authorize once. Report the App name and the callback the page
   showed, and the final URL."
+
+A change of an App's permissions is a grant to the classifier too: the
+navigation to the App's permissions page and the click that selects a
+level. One change the person asked for is recorded with "beekeeper app
+allow <name> --permission '<scope>: <level>' --word '<the person's words>'"
+(an App without callback URLs too); the hook then answers the navigation to
+that App's permissions page under the organisation's settings, the clicks
+there that select that level for that permission and Save changes, and the
+installation's Review request and Accept new permissions, refusing the
+permissions page of any other App and any other call there; a turn whose
+steps name the App runs with that change's rule, its prompt says to set
+exactly that permission, and "allowed permission: <name> (<change>,
+declared in <manifest>)" goes below the report.
 
 A sign-in or consent page of the lab's own identity provider on a loopback
 host (*.127.0.0.1.nip.io, localhost) is allowed the same way without a
@@ -235,10 +253,11 @@ const chromeToolPrefix = "mcp__claude-in-chrome__"
 // classifier.
 var grantWords = regexp.MustCompile(`(?i)\b(authori[sz]e|consent|grant|approve|allow)\b`)
 
-// consentHint names the record below a grant refusal of a run whose steps
-// name no App on record.
+// consentHint names the record forms below a grant refusal of a run whose
+// steps name no App on record.
 const consentHint = "a consent for an App the person owns and asked for is recorded with " + guard.AllowForm +
-	", after which the hook answers the click on its consent page and a turn whose steps name the App runs with its rule " +
+	", one change of such an App's permissions with " + guard.PermissionForm + ", after which the hook answers the click on its consent page, " +
+	"or the navigation to its permissions page and the clicks of that change, and a turn whose steps name the App runs with its rule " +
 	"(`beekeeper browse --help`); every other grant stays refused"
 
 // deployReasons are the classifier's reasons a portal's deploy or create
@@ -311,8 +330,15 @@ func (f browseFindings) lines(steps, deploy string, consents []guard.App, lab bo
 		out = append(out, "allowed deploy: "+deploy+": the turn's auto mode allowed that one deploy or create click (--allow-deploy)")
 	}
 	for _, c := range consents {
-		out = append(out, fmt.Sprintf("allowed consent: %s (callback %s, declared in %s): the hook answers the click on its consent page "+
-			"and the turn's auto mode allows it, on record since %s by %s: %s", c.Name, callbacks(c), c.Declared, c.At.UTC().Format("2006-01-02"), c.By, c.Word))
+		if len(c.Callbacks) > 0 {
+			out = append(out, fmt.Sprintf("allowed consent: %s (callback %s, declared in %s): the hook answers the click on its consent page "+
+				"and the turn's auto mode allows it, on record since %s by %s: %s", c.Name, callbacks(c), c.Declared, c.At.UTC().Format("2006-01-02"), c.By, c.Word))
+		}
+		if c.Permission != "" {
+			out = append(out, fmt.Sprintf("allowed permission: %s (%s, declared in %s): the hook answers the navigation to its permissions page, the clicks "+
+				"of that change and its installation's Review request and Accept new permissions, and the turn's auto mode allows them, on record since %s by %s: %s",
+				c.Name, c.Permission, c.Declared, c.At.UTC().Format("2006-01-02"), c.By, c.Word))
+		}
 	}
 	if lab {
 		out = append(out, "allowed lab sign-in: a fixture user's sign-in and consent on the lab's own identity provider, "+
@@ -327,7 +353,7 @@ func (f browseFindings) lines(steps, deploy string, consents []guard.App, lab bo
 	if grant {
 		hint := consentHint
 		if len(consents) > 0 {
-			hint = fmt.Sprintf("the App on record (%s) did not cover it: the page named another App or callback host, or the hook saw no page for the "+
+			hint = fmt.Sprintf("the App on record (%s) did not cover it: the page named another App, callback host or permission, or the hook saw no page for the "+
 				"call's tab; the refused call says which", appNames(consents))
 		}
 		if p := consentPhrase(steps); p != "" {
@@ -522,7 +548,12 @@ func browsePrompt(steps, deploy string, consents []guard.App, lab bool) string {
 		p += fmt.Sprintf(deployWords, deploy)
 	}
 	for _, c := range consents {
-		p += fmt.Sprintf(consentWords, c.Name, callbacks(c), c.Name)
+		if len(c.Callbacks) > 0 {
+			p += fmt.Sprintf(consentWords, c.Name, callbacks(c), c.Name)
+		}
+		if c.Permission != "" {
+			p += fmt.Sprintf(permissionWords, c.Name, c.Permission, c.Org, guard.AppSlug(c.Name))
+		}
 	}
 	if lab {
 		p += labWords
@@ -531,15 +562,21 @@ func browsePrompt(steps, deploy string, consents []guard.App, lab bool) string {
 }
 
 // browseRules are the auto mode allow rules of a browse turn: the declared
-// deploy's, one per App on record the steps name, the lab's when the steps
-// name a loopback host; none without any.
+// deploy's, one per grant on record of each App the steps name (its
+// consent, its permission change), the lab's when the steps name a loopback
+// host; none without any.
 func browseRules(deploy string, consents []guard.App, lab bool) []string {
 	var rules []string
 	if deploy != "" {
 		rules = append(rules, allowDeployRule(deploy))
 	}
 	for _, c := range consents {
-		rules = append(rules, consentRule(c))
+		if len(c.Callbacks) > 0 {
+			rules = append(rules, consentRule(c))
+		}
+		if c.Permission != "" {
+			rules = append(rules, permissionRule(c))
+		}
 	}
 	if lab {
 		rules = append(rules, labRule)
@@ -570,6 +607,21 @@ func consentRule(a guard.App) string {
 		"is pre-authorized and no Permission Grant to refuse, and a step that names it is no grant request; beekeeper's own hook "+
 		"verifies the page and answers the click. Not covered: a consent page of any other App or callback host, any other grant "+
 		"of access, a credential typed anywhere. Every other rule applies in full.", a.Name, a.ClientID, a.Declared, a.Name, callbacks(a))
+}
+
+// permissionRule is the auto mode allow rule of one permission change on
+// record: the person's pre-authorization of the navigation to that App's
+// permissions page, the clicks of that change there and the installation's
+// acceptance, which the hook verifies; any other permission, App or page is
+// not covered.
+func permissionRule(a guard.App) string {
+	return fmt.Sprintf("Own App Permission: The person's organisation declares the App %s in %s and the person asked, on record with beekeeper, "+
+		"for one change of its permissions: %s. On that App's permissions page under the organisation's settings "+
+		"(organizations/%s/settings/apps/%s/permissions) the navigation there, the clicks that select that level for that permission and Save changes, "+
+		"and on the organisation's installation of that App the clicks Review request and Accept new permissions, are pre-authorized and no "+
+		"Permission Grant to refuse, and a step that names them is no grant request; beekeeper's own hook verifies the page and answers each call. "+
+		"Not covered: any other permission, level, App or page, any other grant of access, a credential typed anywhere. Every other rule applies in full.",
+		a.Name, a.Declared, a.Permission, a.Org, guard.AppSlug(a.Name))
 }
 
 // callbacks are an App's callback hosts, as a turn and its report name them.

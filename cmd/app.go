@@ -37,44 +37,78 @@ every credential the flow answers into the shared vault item <name>, where
 no person copies a value from a page (app create --help).
 
 An App on record is one the organisation declares and the person owns and
-asked a consent for, on their word: its name as GitHub's consent page titles
-it ("Authorize <name>"), the OAuth client id its consent URL carries, the
-callback hosts its declaration names, and the person's words (a note's
-answer). allow reads the declaration: its name must be the App's, and the
-hosts of its callback_urls are the record's; an App no manifest declares is
-not recorded. With it, beekeeper hook pretooluse answers a Chrome click on
-GitHub's consent page itself: allowed on the recorded App's page with one of
-its declared callback hosts (the client id, or the name in GitHub's title
-where the tool redacts the id), refused on GitHub's consent page of any
-other App or callback host,
-naming the page and this record's form. A sign-in or consent page of the
-lab's own identity provider on a loopback host (*.127.0.0.1.nip.io,
-localhost) is allowed without a record: a fixture user's sign-in there is
-the person's own lab's. Every other grant stays refused. A browse turn whose
-steps name an App on record runs with the matching auto mode rule
-(beekeeper browse --help).
+asked a grant for, on their word (a note's answer): a consent, or one change
+of its permissions. allow reads the declaration: its name must be the App's;
+an App no manifest declares is not recorded. For a consent (--client-id) the
+record is the App's name as GitHub's consent page titles it ("Authorize
+<name>"), the OAuth client id its consent URL carries and the callback hosts
+of its manifest's callback_urls; with it, beekeeper hook pretooluse answers a
+Chrome click on GitHub's consent page itself: allowed on the recorded App's
+page with one of its declared callback hosts (the client id, or the name in
+GitHub's title where the tool redacts the id), refused on GitHub's consent
+page of any other App or callback host, naming the page and this record's
+form. For a permission change (--permission "<scope>: <level>", an App
+without callback URLs too, one used through the device flow) the hook
+answers the navigation to the App's permissions page under the
+organisation's settings, the clicks there that select that level for that
+permission and Save changes, and the installation's Review request and
+Accept new permissions: allowed for the App and the change on record,
+refused on the permissions page of any other App and for any other call
+there, naming this record's form. A sign-in or consent page of the lab's
+own identity provider on a loopback host (*.127.0.0.1.nip.io, localhost) is
+allowed without a record: a fixture user's sign-in there is the person's
+own lab's. Every other grant stays refused. A browse turn whose steps name
+an App on record runs with the matching auto mode rules (beekeeper browse
+--help).
 
 Without a subcommand, lists the Apps on record.`,
 		RunE: func(*cobra.Command, []string) error { return a.appList() },
 	}
 	var rec state.App
+	var permission string
 	allow := &cobra.Command{
 		Use:   "allow <name>",
-		Short: "Record an App the organisation declares and the person asked a consent for, on their word",
-		Args:  cobra.ExactArgs(1),
+		Short: "Record an App the organisation declares and the person asked a consent, or one permission change, for, on their word",
+		Long: `allow records the App <name> the organisation declares, on the person's
+word, for the grant the person asked for; a record of the same name is
+replaced:
+
+  --client-id <id>: a consent, GitHub's page "Authorize <name>" redirecting
+  to one of the manifest's callback_urls. An App without callback URLs,
+  one used through the device flow, has no consent page to record.
+  --permission "<scope>: <level>": one change of the App's permissions,
+  e.g. "Members: Read-only": the navigation to its permissions page under
+  the organisation's settings, the clicks there that select that level for
+  that permission and Save changes, and the installation's Review request
+  and Accept new permissions. A record carries one change.
+
+Either or both, with --word, the person's words that asked for it.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
 			rec.Name = strings.TrimSpace(args[0])
 			rec.ClientID, rec.Word = strings.TrimSpace(rec.ClientID), strings.TrimSpace(rec.Word)
+			var err error
 			switch {
 			case rec.Name == "":
 				return usageErr("an App is recorded by its name")
-			case rec.ClientID == "":
-				return usageErr("--client-id: the OAuth client id the App's consent URL carries")
 			case rec.Word == "":
-				return usageErr("--word: the person's words that asked for the consent")
+				return usageErr("--word: the person's words that asked for the grant")
+			}
+			if rec.Permission, err = permissionChange(permission); err != nil {
+				return err
+			}
+			if rec.ClientID == "" && rec.Permission == "" {
+				return usageErr("--client-id <id> for a consent (the OAuth client id the App's consent URL carries), --permission \"<scope>: <level>\" for one permission change, or both")
 			}
 			if err := a.declared(c.Context(), &rec); err != nil {
 				return err
+			}
+			if rec.ClientID != "" && len(rec.Callbacks) == 0 {
+				return refused("App %s has no consent page to record: %s declares no callback URL (an App used through the device flow has none); "+
+					"a change of its permissions is recorded with --permission \"<scope>: <level>\"", rec.Name, rec.Declared)
+			}
+			if rec.ClientID == "" {
+				rec.Callbacks = nil
 			}
 			me, err := a.caller()
 			if err != nil {
@@ -84,19 +118,29 @@ Without a subcommand, lists the Apps on record.`,
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Apps = slices.DeleteFunc(st.Apps, func(x state.App) bool { return strings.EqualFold(x.Name, rec.Name) })
 				st.Apps = append(st.Apps, rec)
-				return []state.Event{event(me, appAllowed, "%s: client id %s, callbacks %s, declared in %s: %s", rec.Name, rec.ClientID,
-					strings.Join(rec.Callbacks, " "), rec.Declared, rec.Word)}, nil
+				return []state.Event{event(me, appAllowed, "%s: %s: %s", rec.Name, strings.Join(recordParts(rec), ", "), rec.Word)}, nil
 			})
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(a.out, "App %s on record, declared in %s: its consent page with callback %s is answered by the hook\n",
-				rec.Name, rec.Declared, strings.Join(rec.Callbacks, " or "))
+			var answers []string
+			if len(rec.Callbacks) > 0 {
+				answers = append(answers, "its consent page with callback "+strings.Join(rec.Callbacks, " or "))
+			}
+			if rec.Permission != "" {
+				answers = append(answers, "the change "+rec.Permission+" on its permissions page and its installation's Review request and Accept new permissions")
+			}
+			verb := "is"
+			if len(answers) > 1 {
+				verb = "are"
+			}
+			_, err = fmt.Fprintf(a.out, "App %s on record, declared in %s: %s %s answered by the hook\n", rec.Name, rec.Declared, strings.Join(answers, " and "), verb)
 			return err
 		},
 	}
-	allow.Flags().StringVar(&rec.ClientID, "client-id", "", "the OAuth client id the App's consent URL carries")
-	allow.Flags().StringVar(&rec.Word, "word", "", "the person's words that asked for the consent")
+	allow.Flags().StringVar(&rec.ClientID, "client-id", "", "a consent: the OAuth client id the App's consent URL carries")
+	allow.Flags().StringVar(&permission, "permission", "", "one change of the App's permissions, \"<scope>: <level>\" (e.g. \"Members: Read-only\")")
+	allow.Flags().StringVar(&rec.Word, "word", "", "the person's words that asked for the grant")
 	revoke := &cobra.Command{
 		Use:   "revoke <name>",
 		Short: "Take an App off the record: its consent page is refused again",
@@ -114,7 +158,7 @@ Without a subcommand, lists the Apps on record.`,
 				}
 				r := st.Apps[i]
 				st.Apps = slices.Delete(st.Apps, i, i+1)
-				return []state.Event{event(me, appRevoked, "%s: client id %s, callbacks %s", r.Name, r.ClientID, strings.Join(r.Callbacks, " "))}, nil
+				return []state.Event{event(me, appRevoked, "%s: %s", r.Name, strings.Join(recordParts(r), ", "))}, nil
 			})
 			if err != nil {
 				return err
@@ -123,23 +167,32 @@ Without a subcommand, lists the Apps on record.`,
 			return err
 		},
 	}
-	var title string
+	var title, words string
+	var navigate bool
 	check := &cobra.Command{
 		Use:   "check <url>",
-		Short: "The hook's decision for a click on a page, dry: allow, refuse or no decision, and why",
+		Short: "The hook's decision for a click on a page, or a navigation to it, dry: allow, refuse or no decision, and why",
 		Long: `check prints what the hook answers a Chrome click on the page at <url>
 from the Apps on record, without a session or a click: "allow:", "refuse:"
 or "no decision:" and the reason. --title is the page's title, which GitHub's
 consent page carries the App's name in ("Authorize <name>"): it decides a
 URL whose client id the Chrome tools redacted (client_id=REDACTED), as the
-tool results show it.`,
+tool results show it. --words are the call's own words (the summary the
+model wrote for it, a typed text, a form value), which decide a call on an
+App's permissions page; --navigate asks for a navigation to <url> instead
+of a click on it.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			st, err := a.store.Read()
 			if err != nil {
 				return err
 			}
-			d := guard.Consent(guardApps(st.Apps), guard.Page{URL: args[0], Title: title})
+			var d guard.Decision
+			if navigate {
+				d = guard.Navigation(guardApps(st.Apps), args[0])
+			} else {
+				d = guard.Click(guardApps(st.Apps), guard.Page{URL: args[0], Title: title}, words)
+			}
 			line := "no decision: not a page the hook decides: the classifier decides it as before"
 			switch d.Decision {
 			case guard.Allow:
@@ -152,13 +205,43 @@ tool results show it.`,
 		},
 	}
 	check.Flags().StringVar(&title, "title", "", "the page's title (GitHub's consent page: \"Authorize <name>\")")
+	check.Flags().StringVar(&words, "words", "", "the call's own words (its summary, a typed text, a form value)")
+	check.Flags().BoolVar(&navigate, "navigate", false, "the decision for a navigation to <url> instead of a click on it")
 	c.AddCommand(a.appCreateCmd(), allow, listCmd("List the Apps on record", a.appList), revoke, check)
 	return c
 }
 
-// declared fills rec's callback hosts and declaration from the App's
-// manifest in the organisation's repository, refusing an App it does not
-// declare under rec's name.
+// permissionChange reads --permission: one change as "<scope>: <level>",
+// both named, answered as "<scope>: <level>"; "" for none.
+func permissionChange(flag string) (string, error) {
+	flag = strings.TrimSpace(flag)
+	if flag == "" {
+		return "", nil
+	}
+	scope, level, ok := strings.Cut(flag, ":")
+	scope, level = strings.TrimSpace(scope), strings.TrimSpace(level)
+	if !ok || scope == "" || level == "" {
+		return "", usageErr("--permission names one change as \"<scope>: <level>\" (e.g. \"Members: Read-only\"), not %q", flag)
+	}
+	return scope + ": " + level, nil
+}
+
+// recordParts name a record's facts: its client id and callback hosts for
+// a consent, its permission change, and where the App is declared.
+func recordParts(x state.App) []string {
+	var parts []string
+	if x.ClientID != "" {
+		parts = append(parts, "client id "+x.ClientID, "callbacks "+strings.Join(x.Callbacks, " "))
+	}
+	if x.Permission != "" {
+		parts = append(parts, "permission "+x.Permission)
+	}
+	return append(parts, "declared in "+x.Declared)
+}
+
+// declared fills rec's organisation, callback hosts and declaration from
+// the App's manifest in the organisation's repository, refusing an App it
+// does not declare under rec's name.
 func (a *app) declared(ctx context.Context, rec *state.App) error {
 	path := a.cfg.Apps.ManifestOf(rec.Name)
 	if path == "" {
@@ -172,6 +255,7 @@ func (a *app) declared(ctx context.Context, rec *state.App) error {
 		return refused("App %s is not declared: %s names the App %s", rec.Name, m.Source, m.Name)
 	}
 	rec.Callbacks, rec.Declared = m.Callbacks, m.Source
+	rec.Org, _, _ = strings.Cut(a.cfg.Apps.Repo, "/")
 	return nil
 }
 
@@ -189,8 +273,8 @@ func (a *app) appList() error {
 		return err
 	}
 	for _, x := range st.Apps {
-		if _, err := fmt.Fprintf(a.out, "%s  client id %s  callbacks %s  declared in %s  since %s by %s: %s\n", x.Name, x.ClientID,
-			strings.Join(x.Callbacks, " "), x.Declared, x.At.Local().Format("2006-01-02 15:04"), x.By.Name, x.Word); err != nil {
+		parts := append([]string{x.Name}, recordParts(x)...)
+		if _, err := fmt.Fprintf(a.out, "%s  since %s by %s: %s\n", strings.Join(parts, "  "), x.At.Local().Format("2006-01-02 15:04"), x.By.Name, x.Word); err != nil {
 			return err
 		}
 	}
@@ -218,7 +302,8 @@ func (a *app) allowedApps() []guard.App {
 func guardApps(apps []state.App) []guard.App {
 	out := make([]guard.App, 0, len(apps))
 	for _, x := range apps {
-		out = append(out, guard.App{Name: x.Name, ClientID: x.ClientID, Callbacks: x.Callbacks, Declared: x.Declared, Word: x.Word, By: x.By.Name, At: x.At})
+		out = append(out, guard.App{Name: x.Name, ClientID: x.ClientID, Callbacks: x.Callbacks, Org: x.Org, Permission: x.Permission,
+			Declared: x.Declared, Word: x.Word, By: x.By.Name, At: x.At})
 	}
 	return out
 }
