@@ -1207,7 +1207,7 @@ func (w *watcher) poll(ctx context.Context) {
 		w.pollSessions(ctx, since, t)
 	}
 	w.lostMerges(ctx)
-	w.closeToolWindow(ctx, watchParty)
+	w.pollToolWindow(ctx, watchParty)
 	w.stalls()
 	w.unbrokered()
 	w.vaultWaits()
