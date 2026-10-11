@@ -1075,7 +1075,11 @@ merge …`) passes, and runs through the gate like a merge typed on the command 
   organisation); any other owner's repository takes the **plain squash merge** instead, in the
   same place and unit: as the gh login, it waits up to `--timeout` (45m) for the head's checks,
   refuses what devctl refuses before its wait (a draft, a closed, merged or conflicting pull
-  request: 3; another person's: 5), and squash-merges green with the judged head as the expected
+  request: 3; another person's: 5), refuses as devctl's review guard does a reviewer's
+  unanswered `COMMENTED` or `CHANGES_REQUESTED` review or comment newer than the head (5,
+  `unanswered review: …`, read before the wait and again right before the merge call; its document's
+  `unansweredReviews` lists what the last read found, empty when nothing held the merge), and
+  squash-merges green with the judged head as the expected
   one and `<title> (#<n>)` as the subject, then deletes the branch; red is 1, a timeout 2, a gh
   failure 7, and it waits for no release. Each run's stderr and document are kept in
   `<state>/merge-output/<repo>-<n>-<time>.log` for 7 days, named in its event. A merge call (or
