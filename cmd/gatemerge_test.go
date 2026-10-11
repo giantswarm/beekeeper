@@ -313,6 +313,84 @@ func TestADeadMergesToolWindowCloses(t *testing.T) {
 	}
 }
 
+// Every waiting gate step and every watch poll checks an open devctl window,
+// and of all of them one reads its state per toolCheckEvery: n queued merges
+// read the window's pull request once per interval, not n times per step.
+// After the interval the next step reads again and the window closes; the
+// gate whose merge of the window ended checks at once.
+func TestWaitingGatesShareOneToolWindowRead(t *testing.T) {
+	stubGitHub(t, "", devctlFrom) // restores the stubs, devctl's update a no-op
+	asked, answer, version := 0, "", devctlFrom
+	pullState = func(context.Context, string, int) (github.Pull, error) {
+		asked++
+		if answer == "" {
+			return github.Pull{}, errors.New("no network")
+		}
+		return github.Pull{State: answer}, nil
+	}
+	devctlVersion = func(context.Context) string { return version }
+	store, err := state.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Three merges queued behind the window, whose merge's gate is gone.
+	var gates []*gateRun
+	for range 3 {
+		gates = append(gates, runningMergeIn(t, store, merge.ToolRepo, config.Lane{Name: merge.ToolRepo}))
+	}
+	_ = store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Merges = nil
+		return nil, nil
+	})
+	checkedAgo := func(d time.Duration) {
+		_ = store.Update(func(st *state.State) ([]state.Event, error) {
+			st.Holds[0].ToolChecked = time.Now().Add(-d)
+			return nil, nil
+		})
+	}
+
+	// Four steps of each gate within the interval, GitHub unanswered: one read.
+	for range 4 {
+		for _, g := range gates {
+			g.pollToolWindow(context.Background(), g.me)
+		}
+	}
+	st := gateState(t, gates[0])
+	if asked != 1 || len(st.Holds) != 1 || st.Holds[0].ToolChecked.IsZero() {
+		t.Fatalf("GitHub asked %d times by 12 steps, want 1; holds %+v", asked, st.Holds)
+	}
+
+	// The gate whose merge ended reads at once.
+	gates[0].closeToolWindow(context.Background(), gates[0].me)
+	if asked != 2 {
+		t.Fatalf("GitHub asked %d times after the merge's own check, want 2", asked)
+	}
+
+	// The interval passed, the pull request merged: the next step reads it.
+	answer = github.Merged
+	checkedAgo(toolCheckEvery)
+	gates[1].pollToolWindow(context.Background(), gates[1].me)
+	gates[2].pollToolWindow(context.Background(), gates[2].me)
+	if st = gateState(t, gates[0]); asked != 3 || len(st.Holds) != 1 || !st.Holds[0].ToolMerged {
+		t.Fatalf("GitHub asked %d times after the interval, want 3; holds %+v", asked, st.Holds)
+	}
+
+	// devctl reports the release: the next step after the interval lifts.
+	version = devctlTo
+	gates[2].pollToolWindow(context.Background(), gates[2].me)
+	if st = gateState(t, gates[0]); len(st.Holds) != 1 {
+		t.Fatalf("lifted within the interval: %+v", st.Holds)
+	}
+	checkedAgo(toolCheckEvery)
+	gates[2].pollToolWindow(context.Background(), gates[2].me)
+	if st = gateState(t, gates[0]); len(st.Holds) != 0 {
+		t.Fatalf("not lifted after the interval: %+v", st.Holds)
+	}
+	if d := lastEvent(t, gates[0], "hold.lift"); !strings.Contains(d, "devctl now reports "+devctlTo) {
+		t.Errorf("hold.lift event: %q", d)
+	}
+}
+
 // A merge-child unit fails only where a person must act; devctl's verdicts,
 // the gate's and a stop as asked are its caller's and end the unit
 // successfully.
