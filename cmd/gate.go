@@ -446,7 +446,7 @@ func (g *gateRun) leave(pid int) error {
 // is the merge's turn. It returns what the merge waits for, or "" and the
 // run's outcome once devctl ran or the merge was refused.
 func (g *gateRun) step() (string, error) {
-	g.closeToolWindow(g.ctx, g.me)
+	g.pollToolWindow(g.ctx, g.me)
 	// A running merge whose devctl ended outside the gate (its gate left at
 	// the tool limit) is judged before the lane moves on, as the watch does:
 	// pruned as lost it would settle unjudged, and a lane without an
@@ -1348,20 +1348,61 @@ func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOu
 	return append(ev, e)
 }
 
+// toolCheckEvery is how long the gates and the watch wait between two reads
+// of an open tool-release window's state: the version the tool reports and,
+// for a window whose merge ended unrecorded, its pull request on GitHub.
+const toolCheckEvery = 30 * time.Second
+
+// pollToolWindow is closeToolWindow for a waiting gate step and a watch
+// poll, which all run every few seconds while a window is open: of all of
+// them one reads the window's state per toolCheckEvery, the read claimed in
+// the state (ToolChecked) under its lock before it is made, so n queued
+// merges read the window's pull request once per interval, not n times per
+// step. The gate whose run of the window's merge ended calls closeToolWindow
+// at once instead.
+func (a *app) pollToolWindow(ctx context.Context, by state.Party) {
+	st, err := a.store.Read()
+	if err != nil || !toolWindowOpen(st) {
+		return
+	}
+	now := time.Now().UTC()
+	due := func(h state.Hold) bool { return h.Tool != "" && now.Sub(h.ToolChecked) >= toolCheckEvery }
+	if !slices.ContainsFunc(st.Holds, due) {
+		return
+	}
+	claimed := false
+	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		for i, h := range st.Holds {
+			if due(h) {
+				st.Holds[i].ToolChecked, claimed = now, true
+			}
+		}
+		return nil, nil
+	})
+	if err == nil && claimed {
+		a.closeToolWindow(ctx, by)
+	}
+}
+
+// toolWindowOpen says a tool-release window is open and no merge of the
+// tool's repository runs: its state decides whether it lifts.
+func toolWindowOpen(st *state.State) bool {
+	return slices.ContainsFunc(st.Holds, func(h state.Hold) bool { return h.Tool != "" }) &&
+		!slices.ContainsFunc(st.Merges, func(m state.Merge) bool {
+			return strings.EqualFold(m.Repo, merge.ToolRepo) && m.Phase == state.Running && merge.Runs(m, proc.Alive)
+		})
+}
+
 // closeToolWindow lifts a tool-release window once no merge of the tool's
 // repository runs and the tool reports another version than at its opening,
 // or GitHub reports the window's pull request not merged: its merge ended
 // without the gate recording it (a gate killed, GitHub unanswered). A window
 // whose merge merged updates the tool (updateTool) and lifts once it reports
-// the release.
+// the release. It reads the tool and GitHub every time: a poll goes through
+// pollToolWindow.
 func (a *app) closeToolWindow(ctx context.Context, by state.Party) {
 	st, err := a.store.Read()
-	if err != nil || !slices.ContainsFunc(st.Holds, func(h state.Hold) bool { return h.Tool != "" }) {
-		return
-	}
-	if slices.ContainsFunc(st.Merges, func(m state.Merge) bool {
-		return strings.EqualFold(m.Repo, merge.ToolRepo) && m.Phase == state.Running && merge.Runs(m, proc.Alive)
-	}) {
+	if err != nil || !toolWindowOpen(st) {
 		return
 	}
 	v := devctlVersion(ctx)

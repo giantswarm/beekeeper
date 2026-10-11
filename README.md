@@ -1225,7 +1225,8 @@ release (another version than when the window opened, while the release is unkno
 pull request did not merge: the gate lifts it
 after a run with nothing merged or no release warranted, and `watch` (or the next gate call) asks
 GitHub about a window whose merge ended unrecorded (its gate killed) and lifts it when the pull
-request is open or closed. Once its merge merged, beekeeper installs the release itself: the gate
+request is open or closed; the waiting gates and the watch share that read, one per 30 s over all
+of them, claimed in the state before it is made. Once its merge merged, beekeeper installs the release itself: the gate
 runs `devctl version update` right after the merge (also when the window was lifted by hand), and
 `watch` retries every 2 minutes while devctl does not report the release, logging a failed update
 as `hold.update`. Every merge or promotion that runs devctl starts with `devctl version update`,
