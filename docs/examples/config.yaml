@@ -269,7 +269,7 @@ sandbox:                    # the agent sandbox (README: The agent sandbox); bee
     - {name: GH_TOKEN, hosts: [github.com, api.github.com, uploads.github.com]}
 
 plans:                      # note add --for <guide.person> links an open pull request here only once its stage check is green
-  repositories: [example-org/plans]   # owner/repo; unset, nothing is read
+  repositories: [example-org/plans]   # owner/repo; unset, nothing is read; an epic's plan is the open or merged pull request naming it
   check: plan-stages        # the stage check's name (default)
 
 apps:                       # where the organisation declares its GitHub Apps; beekeeper app allow records only a declared one
@@ -286,11 +286,14 @@ board:                      # the project board `beekeeper board next` picks wor
     - {name: page, kind: [alert]}   # Status and Kind values or an unambiguous part ("up next")
     - {name: In Progress, status: [in progress], subIssues: true}   # an epic offers its open sub-issues
     - {name: blocker cleared, status: [blocked], unblocked: true}   # every recorded blocker closed
-    - {name: Up Next epic, status: [up next], kind: [epic], subIssues: true}
     - {name: Up Next, status: [up next]}
     - {name: bug, status: [backlog], kind: [bug]}
     - {name: queue, search: "repo:example-org/tools label:team/platform"}   # open issues, oldest first
     - {name: Backlog, status: [backlog], createdWithin: 2160h}
+  epics:                    # the epic gate, whatever the order says (these are the defaults)
+    kind: [epic]            # an epic
+    planning: [up next]     # in planning: neither it nor its sub-issues offered, board next shows its plan
+    go: in progress         # the go: its open sub-issues offered in their order; board move records the plan head
 
 claude:
   desktopApp: claude-desktop   # the default; the desktop app's executable, which opens claude:// links

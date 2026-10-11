@@ -127,7 +127,8 @@ type Config struct {
 	// consent `beekeeper app allow` records.
 	Apps Apps `yaml:"apps"`
 	// Plans are the repositories whose pull requests a note for a person
-	// names only once their stage check is green.
+	// names only once their stage check is green, and where an epic's plan
+	// pull request is found.
 	Plans Plans `yaml:"plans"`
 	// Central is the central instance (beekeeper serve behind muster) that
 	// holds the leases of the shared installations and the roster of every
@@ -194,9 +195,11 @@ func (c *Config) IsCentral(res string) bool {
 
 // Plans configures the plans repositories: a note for the guide's person
 // that links one of their open pull requests is refused while the pull
-// request's stage check is red, pending or missing.
+// request's stage check is red, pending or missing, and an epic's plan is
+// the open or merged pull request of theirs whose description names it.
 type Plans struct {
-	// Repositories are owner/repo; empty, no note is checked.
+	// Repositories are owner/repo; empty, no note is checked and no epic
+	// has a plan.
 	Repositories []string `yaml:"repositories"`
 	// Check is the name of the stage check (default plan-stages).
 	Check string `yaml:"check"`
@@ -253,6 +256,22 @@ type Board struct {
 	// Order is the picking order: the first free item of the first step
 	// that offers one is picked.
 	Order []BoardStep `yaml:"order"`
+	// Epics is the epic gate, whatever the order says.
+	Epics EpicGate `yaml:"epics"`
+}
+
+// EpicGate is the epic gate: an epic in a Planning status is in planning,
+// neither it nor any issue under it offered; moving it to Go is the go,
+// from which its open sub-issues are offered. Each value is the board's
+// value or an unambiguous part of it; an unset one is its default, which
+// turns the gate off on a board without the value.
+type EpicGate struct {
+	// Kind are the Kind values of an epic (default epic).
+	Kind []string `yaml:"kind"`
+	// Planning are the statuses of an epic in planning (default up next).
+	Planning []string `yaml:"planning"`
+	// Go is the status of the go (default in progress).
+	Go string `yaml:"go"`
 }
 
 // BoardStep is one step of the picking order: the open board items whose
