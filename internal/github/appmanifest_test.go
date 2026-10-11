@@ -78,19 +78,22 @@ func TestReadAppDeclaration(t *testing.T) {
 	}
 }
 
-// The consent record's reader still answers the name, the callback hosts
-// and the source, and refuses a manifest without callbacks or one the
-// repository lacks.
+// The record's reader answers the name, the callback hosts and the source,
+// no callback host for an App without callback URLs, and refuses a
+// manifest without a name or one the repository lacks.
 func TestReadAppManifest(t *testing.T) {
 	ctx := context.Background()
 	files := map[string]string{manifestPath: `{"name": "` + declaredApp + `", "callback_urls": ["https://Lab.127.0.0.1.nip.io:8443/cb", "https://lab.127.0.0.1.nip.io:8443/other"]}`,
-		"apps/skills/manifest.json": skillsManifest}
+		"apps/skills/manifest.json": skillsManifest, "apps/nameless/manifest.json": `{"callback_urls": ["https://example.org/cb"]}`}
 	m, err := ReadAppManifest(ctx, declaring(files), declaringRepo, manifestPath)
 	if err != nil || m.Name != declaredApp || strings.Join(m.Callbacks, " ") != "lab.127.0.0.1.nip.io:8443" || m.Source != declaredSource {
 		t.Errorf("ReadAppManifest = %+v, %v", m, err)
 	}
-	if _, err := ReadAppManifest(ctx, declaring(files), declaringRepo, "apps/skills/manifest.json"); err == nil || !strings.Contains(err.Error(), "declares no App name and callback URL") {
-		t.Errorf("a manifest without callbacks: %v", err)
+	if m, err := ReadAppManifest(ctx, declaring(files), declaringRepo, "apps/skills/manifest.json"); err != nil || m.Name != declaredApp || len(m.Callbacks) != 0 {
+		t.Errorf("a manifest without callbacks = %+v, %v", m, err)
+	}
+	if _, err := ReadAppManifest(ctx, declaring(files), declaringRepo, "apps/nameless/manifest.json"); err == nil || !strings.Contains(err.Error(), "declares no App name") {
+		t.Errorf("a manifest without a name: %v", err)
 	}
 	if _, err := ReadAppManifest(ctx, declaring(files), declaringRepo, "apps/none/manifest.json"); err == nil || err.Error() != declaringRepo+" declares no App at apps/none/manifest.json" {
 		t.Errorf("a missing manifest: %v", err)

@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/secret/secrettest"
@@ -478,8 +479,8 @@ func TestAppCreateWaitsForTheInstallClick(t *testing.T) {
 // GitHub's slug of a name, and the installation page's query.
 func TestAppSlugAndInstallURL(t *testing.T) {
 	for name, want := range map[string]string{"Example Lab Skills": fixtureApp, fixtureApp: fixtureApp, "  My_App 2!": "my-app-2"} {
-		if got := appSlug(name); got != want {
-			t.Errorf("appSlug(%q) = %q, want %q", name, got, want)
+		if got := guard.AppSlug(name); got != want {
+			t.Errorf("AppSlug(%q) = %q, want %q", name, got, want)
 		}
 	}
 	prev := githubWeb

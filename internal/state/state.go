@@ -560,21 +560,32 @@ func (o AlertOwner) Person() bool { return o.By.Session == "" && o.By.HostSessio
 // ModeBypass is Claude Code's bypassPermissions mode.
 const ModeBypass = "bypassPermissions"
 
-// App is an App the person owns and asked a consent for, on their word:
-// the hook answers the consent click on its page itself (guard.Consent).
+// App is an App the person owns and asked a consent, or one change of its
+// permissions, for, on their word: the hook answers the consent click on
+// its page, and the navigation to its permissions page and the clicks of
+// that change, itself (guard.Click, guard.Navigation).
 type App struct {
 	// Name is the App's name as its consent page titles it ("Authorize
 	// <name>" on GitHub).
 	Name string `json:"name"`
-	// ClientID is the OAuth client id the consent URL carries.
+	// ClientID is the OAuth client id the consent URL carries, "" for a
+	// record without a consent.
 	ClientID string `json:"clientID"`
 	// Callbacks are the hosts the consent page's redirect may go to: the
-	// callback URLs' hosts of the App's declaration.
+	// callback URLs' hosts of the App's declaration; none for a record
+	// without a consent.
 	Callbacks []string `json:"callbacks"`
+	// Org is the organisation whose settings pages the record covers: the
+	// owner of the declaring repository.
+	Org string `json:"org,omitempty"`
+	// Permission is the one change of the App's permissions the person
+	// asked for, "<scope>: <level>" ("Members: Read-only"); "" for a record
+	// without one.
+	Permission string `json:"permission,omitempty"`
 	// Declared is where the organisation declares the App:
 	// <repo>@<commit>:<manifest path>.
 	Declared string `json:"declared"`
-	// Word is the person's words that asked for the consent.
+	// Word is the person's words that asked for the grant.
 	Word string    `json:"word"`
 	By   Party     `json:"by"`
 	At   time.Time `json:"at"`

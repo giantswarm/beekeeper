@@ -21,21 +21,32 @@ import (
 // declared callback hosts, the click is allowed; on
 // GitHub's consent page of any other App or callback host it is refused; on
 // the lab's own identity provider, a loopback host, a fixture user's sign-in
-// and consent are allowed. Any other page gets no decision, as does a call
-// whose page the transcript does not show.
+// and consent are allowed. A change of an App's permissions is decided the
+// same way from the record of the one change the person asked for
+// (appchange.go). Any other page gets no decision, as does a call whose
+// page the transcript does not show.
 
-// App is an App the person owns and asked a consent for.
+// App is an App the person owns and asked a consent, or one permission
+// change, for.
 type App struct {
 	// Name is the App's name as GitHub's consent page titles it.
 	Name string
-	// ClientID is the OAuth client id the consent URL carries.
+	// ClientID is the OAuth client id the consent URL carries, "" for a
+	// record without a consent.
 	ClientID string
-	// Callbacks are the hosts the consent page's redirect may go to.
+	// Callbacks are the hosts the consent page's redirect may go to, none
+	// for a record without a consent.
 	Callbacks []string
+	// Org is the organisation whose settings pages the record covers, the
+	// owner of the declaring repository.
+	Org string
+	// Permission is the one change of the App's permissions the person
+	// asked for, "<scope>: <level>"; "" for a record without one.
+	Permission string
 	// Declared is where the organisation declares the App.
 	Declared string
-	// Word is the person's words that asked for the consent, By whom and
-	// At when they were recorded.
+	// Word is the person's words that asked for the grant, By whom and At
+	// when they were recorded.
 	Word, By string
 	At       time.Time
 }
@@ -75,23 +86,31 @@ const (
 	authorizeTitle = "Authorize "
 )
 
-// The Chrome tools that act on a page (their names after the server's
-// prefix), and the keys of their inputs: the tab a call acts on, a batch
+// The Chrome tools that act on a page or open one (their names after the
+// server's prefix), and the keys of their inputs: the tab a call acts on,
+// the URL a navigate opens, the summary the model wrote for a call, a batch
 // action's name and input.
 const (
-	chromeComputer = "computer"
-	chromeBatch    = "browser_batch"
-	chromeForm     = "form_input"
-	tabKey         = "tabId"
-	nameKey        = "name"
-	inputKey       = "input"
+	chromeComputer   = "computer"
+	chromeBatch      = "browser_batch"
+	chromeForm       = "form_input"
+	chromeNavigation = "navigate"
+	tabKey           = "tabId"
+	urlKey           = "url"
+	summaryKey       = "action_summary"
+	textKey          = "text"
+	valueKey         = "value"
+	nameKey          = "name"
+	inputKey         = "input"
 )
 
-// AllowForm is how an App the person owns and asked for is recorded.
+// AllowForm is how a consent for an App the person owns and asked for is
+// recorded.
 const AllowForm = "`beekeeper app allow <name> --client-id <id> --word \"<the person's words>\"`"
 
-// Consent decides a call acting on page from the Apps on record.
-func Consent(apps []App, page Page) Decision {
+// Click decides a call that acts on page (a click, a key, a typed text, a
+// form value), in the call's own words, from the Apps on record.
+func Click(apps []App, page Page, words string) Decision {
 	u, err := url.Parse(strings.TrimSpace(page.URL))
 	if err != nil {
 		return Decision{}
@@ -100,6 +119,8 @@ func Consent(apps []App, page Page) Decision {
 	switch {
 	case host == githubHost && u.Path == githubAuthorize:
 		return githubConsent(apps, u, page.Title)
+	case host == githubHost:
+		return permissionClick(apps, u, page.Title, words)
 	case loopback(host) && signIn(u.Path):
 		return Decision{Allow, fmt.Sprintf("beekeeper allows it: %s is the lab's own identity provider on a loopback host, "+
 			"whose fixture users' sign-in and consent are the person's own lab's", u.Host)}
@@ -122,7 +143,7 @@ func githubConsent(apps []App, u *url.URL, title string) Decision {
 		if !slices.Contains(a.Callbacks, callback) {
 			continue
 		}
-		if clientID == a.ClientID || (clientID == chromeRedacted && strings.EqualFold(title, authorizeTitle+a.Name)) {
+		if (clientID != "" && clientID == a.ClientID) || (clientID == chromeRedacted && strings.EqualFold(title, authorizeTitle+a.Name)) {
 			return Decision{Allow, fmt.Sprintf("beekeeper allows the click: the consent page of the person's own App %s (callback %s), "+
 				"declared in %s, on record since %s by %s: %s", a.Name, callback, a.Declared, a.At.UTC().Format("2006-01-02"), a.By, a.Word)}
 		}
@@ -154,58 +175,107 @@ func signIn(path string) bool {
 	return false
 }
 
-// consent decides a Chrome call of the event that acts on a page the
-// transcript shows, nil when the hook has no record to decide from, the
-// call only reads, or the page is unknown.
+// consent decides a Chrome call of the event from the Apps on record: each
+// navigation it makes and each call that acts on a page the transcript
+// shows. A refused one refuses the call; the call is allowed when every one
+// of them is allowed; nil when the hook has no record to decide from, the
+// call only reads, a page is unknown, or one of them is not the hook's to
+// decide.
 func (h Hook) consent(ev event) []byte {
 	if h.Apps == nil || !isBrowserTool(ev.ToolName) {
 		return nil
 	}
-	tab, acts := actsOn(ev.ToolName, ev.ToolInput)
-	if !acts {
+	calls := chromeCalls(ev.ToolName, ev.ToolInput)
+	if len(calls) == 0 {
 		return nil
 	}
-	page, ok := lastPage(ev.TranscriptPath, tab)
-	if !ok {
-		return nil
+	apps := h.Apps()
+	var pages map[string]Page
+	allowed := ""
+	for _, c := range calls {
+		var d Decision
+		if c.navigate != "" {
+			d = Navigation(apps, c.navigate)
+		} else {
+			if pages == nil {
+				pages = lastPages(ev.TranscriptPath)
+			}
+			if page, ok := pageOf(pages, c.tab); ok {
+				d = Click(apps, page, c.words)
+			}
+		}
+		switch d.Decision {
+		case Deny:
+			return answer(hookOutput{PermissionDecision: Deny, Reason: d.Reason})
+		case Allow:
+			if allowed == "" {
+				allowed = d.Reason
+			}
+		default:
+			return nil
+		}
 	}
-	d := Consent(h.Apps(), page)
-	if d.Decision == "" {
-		return nil
-	}
-	return answer(hookOutput{PermissionDecision: d.Decision, Reason: d.Reason})
+	return answer(hookOutput{PermissionDecision: Allow, Reason: allowed})
 }
 
 // acting are the computer actions that act on a page rather than read it.
 var acting = []string{"left_click", "right_click", "double_click", "triple_click", "left_click_drag", "key", "type"}
 
-// actsOn reports whether the Chrome call acts on a page (a click, a key, a
-// typed text, a form value), and on which tab (its tabId, "" when the call
-// names none): a batch acts when one of its actions does, on that action's
-// tab.
-func actsOn(tool string, input map[string]any) (string, bool) {
+// chromeCall is one call of a Chrome tool the hook decides: a navigation to
+// a URL, or an action on a tab (its tabId, "" when the call names none) in
+// the call's own words (the summary the model wrote, a typed text, a form
+// value).
+type chromeCall struct {
+	navigate, tab, words string
+}
+
+// chromeCalls are the calls of a Chrome tool call the hook decides: a
+// navigate, a click, a key, a typed text, a form value, and each of a
+// batch's; none for a call that only reads.
+func chromeCalls(tool string, input map[string]any) []chromeCall {
 	t := strings.ToLower(tool)
 	if i := strings.LastIndex(t, "__"); i >= 0 {
 		t = t[i+len("__"):]
 	}
 	switch t {
+	case chromeNavigation:
+		if u, _ := input[urlKey].(string); u != "" {
+			return []chromeCall{{navigate: u}}
+		}
 	case chromeForm:
-		return tabOf(input[tabKey]), true
+		return []chromeCall{{tab: tabOf(input[tabKey]), words: wordsOf(input, valueKey)}}
 	case chromeComputer:
-		action, _ := input[actionKey].(string)
-		return tabOf(input[tabKey]), slices.Contains(acting, action)
+		if action, _ := input[actionKey].(string); slices.Contains(acting, action) {
+			return []chromeCall{{tab: tabOf(input[tabKey]), words: wordsOf(input, textKey)}}
+		}
 	case chromeBatch:
 		actions, _ := input["actions"].([]any)
+		var calls []chromeCall
 		for _, a := range actions {
 			m, _ := a.(map[string]any)
 			name, _ := m[nameKey].(string)
 			in, _ := m[inputKey].(map[string]any)
-			if tab, acts := actsOn(name, in); acts {
-				return tab, true
-			}
+			calls = append(calls, chromeCalls(name, in)...)
 		}
+		return calls
 	}
-	return "", false
+	return nil
+}
+
+// wordsOf are a call's own words: the summary the model wrote for it and
+// the value under key (a typed text, a form value).
+func wordsOf(input map[string]any, key string) string {
+	summary, _ := input[summaryKey].(string)
+	value := ""
+	switch v := input[key].(type) {
+	case string:
+		value = v
+	case json.Number:
+		value = v.String()
+	case float64, bool:
+		value = fmt.Sprint(v)
+	}
+	return strings.TrimSpace(summary + " " + value)
 }
 
 // tabOf is a tabId as the tool wrote it, "" for none.
@@ -237,21 +307,27 @@ const transcriptTail = 8 << 20
 // last known URL and title in the tool results, or, for a call that names
 // no tab, the one tab the results show.
 func lastPage(transcript, tab string) (Page, bool) {
+	return pageOf(lastPages(transcript), tab)
+}
+
+// lastPages are the pages of the tabs as the transcript last showed them,
+// by tabId; none for a transcript that cannot be read.
+func lastPages(transcript string) map[string]Page {
+	pages := map[string]Page{}
 	if transcript == "" {
-		return Page{}, false
+		return pages
 	}
 	f, err := os.Open(transcript) //nolint:gosec // the session's own transcript
 	if err != nil {
-		return Page{}, false
+		return pages
 	}
 	defer func() { _ = f.Close() }()
 	// The tail's first line is cut: it decodes as no result.
 	if fi, err := f.Stat(); err == nil && fi.Size() > transcriptTail {
 		if _, err := f.Seek(fi.Size()-transcriptTail, io.SeekStart); err != nil {
-			return Page{}, false
+			return pages
 		}
 	}
-	pages := map[string]Page{}
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 1<<20), 64<<20)
 	for sc.Scan() {
@@ -264,6 +340,12 @@ func lastPage(transcript, tab string) (Page, bool) {
 			}
 		}
 	}
+	return pages
+}
+
+// pageOf is the page of tab among pages, or, for a call that names no tab,
+// the one page there is.
+func pageOf(pages map[string]Page, tab string) (Page, bool) {
 	if tab != "" {
 		p, ok := pages[tab]
 		return p, ok

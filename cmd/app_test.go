@@ -20,12 +20,27 @@ const (
 	recordedTitle    = "Authorize " + recordedApp
 	recordedConsent  = "https://github.com/login/oauth/authorize?client_id=REDACTED&code_challenge=REDACTED&code_challenge_method=S256" +
 		"&redirect_uri=https%3A%2F%2Fworkspace-manager.127.0.0.1.nip.io%2Fcallback%2Fgithub&response_type=code&state=REDACTED"
-	personsWord  = "your agent has to do this"
-	appAllow     = "allow"
-	appCheck     = "check"
-	titleFlag    = "--title"
-	clientIDFlag = "--client-id"
-	wordFlag     = "--word"
+	personsWord    = "your agent has to do this"
+	appAllow       = "allow"
+	appCheck       = "check"
+	titleFlag      = "--title"
+	clientIDFlag   = "--client-id"
+	wordFlag       = "--word"
+	permissionFlag = "--permission"
+	wordsFlag      = "--words"
+	navigateFlag   = "--navigate"
+)
+
+// The device-flow App on record for one permission change: its manifest
+// carries no callback URL; the pages the hook decides for it.
+const (
+	deviceApp        = "example-lab-devctl"
+	deviceChange     = "Members: Read-only"
+	deviceManifest   = `{"name": "` + deviceApp + `", "url": "https://example.org", "default_permissions": {"members": "read"}}`
+	deviceDeclared   = declaringRepo + "@0123456789ab:apps/" + deviceApp + "/manifest.json"
+	permissionsPage  = "https://github.com/organizations/example/settings/apps/" + deviceApp + "/permissions"
+	permissionsTitle = "GitHub Apps - " + deviceApp
+	selectsReadOnly  = "Selects Read-only for Members access"
 )
 
 // The organisation's declaring repository, the commit its default branch
@@ -102,11 +117,13 @@ func TestAppRecord(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{appAllow, recordedApp}, clientIDFlag},
+		{[]string{appAllow, recordedApp}, wordFlag},
 		{[]string{appAllow, recordedApp, clientIDFlag, recordedClientID}, wordFlag},
+		{[]string{appAllow, recordedApp, wordFlag, "w"}, clientIDFlag + " <id> for a consent (the OAuth client id the App's consent URL carries), --permission \"<scope>: <level>\" for one permission change, or both"},
+		{[]string{appAllow, recordedApp, permissionFlag, "Members", wordFlag, "w"}, `--permission names one change as "<scope>: <level>" (e.g. "Members: Read-only"), not "Members"`},
 		{[]string{appAllow, "undeclared", clientIDFlag, recordedClientID, wordFlag, "w"}, "App undeclared is not declared: " + declaringRepo + " declares no App at apps/undeclared/manifest.json"},
 		{[]string{appAllow, "renamed", clientIDFlag, recordedClientID, wordFlag, "w"}, "App renamed is not declared: " + declaringRepo + "@0123456789ab:apps/renamed/manifest.json names the App another-app"},
-		{[]string{appAllow, "no-callback", clientIDFlag, recordedClientID, wordFlag, "w"}, "declares no App name and callback URL"},
+		{[]string{appAllow, "no-callback", clientIDFlag, recordedClientID, wordFlag, "w"}, "App no-callback has no consent page to record: " + declaringRepo + "@0123456789ab:apps/no-callback/manifest.json declares no callback URL (an App used through the device flow has none); a change of its permissions is recorded with --permission \"<scope>: <level>\""},
 		{[]string{"revoke", recordedApp}, "no App " + recordedApp + " is on record"},
 	} {
 		if _, err := runApp(t, a, tc.args...); err == nil || !strings.Contains(err.Error(), tc.want) {
@@ -167,7 +184,74 @@ func TestAppRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("BEEKEEPER_CONFIG", filepath.Join(a.cfg.StateDir, "config.yaml"))
-	if apps := a.allowedApps(); len(apps) != 1 || apps[0].Name != recordedApp || apps[0].ClientID != recordedClientID || apps[0].Callbacks[0] != recordedCallback || apps[0].Declared != recordedDeclared || apps[0].By != agentOne {
+	if apps := a.allowedApps(); len(apps) != 1 || apps[0].Name != recordedApp || apps[0].ClientID != recordedClientID || apps[0].Callbacks[0] != recordedCallback || apps[0].Declared != recordedDeclared || apps[0].By != agentOne || apps[0].Org != fixtureOrg {
 		t.Errorf("allowedApps = %+v", apps)
+	}
+}
+
+// One permission change of an App is recorded with --permission, for an
+// App without callback URLs too, no client id needed: the record carries
+// the organisation, the change and the declaration, the list, the log and
+// the answer name it, the hook decides the App's permissions page from it
+// (the navigation, a call in the change's words, Save changes; another
+// App's page and another call refused), and a record of both a consent and
+// a change answers both.
+func TestAppPermissionRecord(t *testing.T) {
+	a, _ := stubApp(t)
+	declareApps(t, a, map[string]string{"apps/" + deviceApp + "/manifest.json": deviceManifest, "apps/" + recordedApp + "/manifest.json": recordedManifest})
+	out, err := runApp(t, a, appAllow, deviceApp, permissionFlag, " Members:Read-only ", wordFlag, personsWord)
+	if err != nil || out != "App "+deviceApp+" on record, declared in "+deviceDeclared+": the change "+deviceChange+" on its permissions page and its installation's "+
+		"Review request and Accept new permissions is answered by the hook\n" {
+		t.Fatalf("app allow --permission = %q, %v", out, err)
+	}
+	st, err := a.store.Read()
+	if err != nil || len(st.Apps) != 1 || st.Apps[0].Permission != deviceChange || st.Apps[0].Org != fixtureOrg || st.Apps[0].ClientID != "" || len(st.Apps[0].Callbacks) != 0 ||
+		st.Apps[0].Declared != deviceDeclared || st.Apps[0].Word != personsWord {
+		t.Fatalf("the record = %+v, %v", st.Apps, err)
+	}
+	if out, _ := runApp(t, a, "list"); !strings.Contains(out, deviceApp+"  permission "+deviceChange+"  declared in "+deviceDeclared+"  since ") {
+		t.Errorf("list = %q", out)
+	}
+	if evs, _ := a.store.Events(0, func(e state.Event) bool { return e.Verb == appAllowed }); len(evs) != 1 || !strings.Contains(evs[0].Detail, deviceApp+": permission "+deviceChange+", declared in "+deviceDeclared+": "+personsWord) {
+		t.Errorf("app.allow events = %+v", evs)
+	}
+	for name, tc := range map[string]struct {
+		args []string
+		want string
+	}{
+		"the navigation to its permissions page": {[]string{appCheck, permissionsPage, navigateFlag}, "allow: beekeeper allows it: the permissions page of the person's own App " + deviceApp + ", declared in " + deviceDeclared + ", on record for the change " + deviceChange + " since "},
+		"the click that selects the level":       {[]string{appCheck, permissionsPage, titleFlag, permissionsTitle, wordsFlag, selectsReadOnly}, "allow: beekeeper allows the call: the permissions page of the person's own App " + deviceApp},
+		"Save changes":                           {[]string{appCheck, permissionsPage, wordsFlag, "Clicks Save changes"}, "allow: "},
+		"another level":                          {[]string{appCheck, permissionsPage, wordsFlag, "Selects Read and write for Members access"}, "refuse: Refused: on the permissions page of the person's own App " + deviceApp + " the call \"Selects Read and write for Members access\" is neither the one permission change on record (" + deviceChange + ") nor Save changes"},
+		"another App's page":                     {[]string{appCheck, strings.Replace(permissionsPage, deviceApp, "other-app", 1), navigateFlag}, "refuse: Refused: the permissions page of the App other-app of example is not on record for a permission change"},
+		"the consent page, no consent on record": {[]string{appCheck, recordedConsent, titleFlag, recordedTitle}, "refuse: "},
+		"another navigation":                     {[]string{appCheck, "https://github.com/organizations/example/settings/installations", navigateFlag}, "no decision: "},
+	} {
+		if out, err := runApp(t, a, tc.args...); err != nil || !strings.HasPrefix(out, tc.want) {
+			t.Errorf("%s: app check = %q, %v; want %q", name, out, err, tc.want)
+		}
+	}
+	out, err = runApp(t, a, appAllow, recordedApp, clientIDFlag, recordedClientID, permissionFlag, "Administration: Read and write", wordFlag, personsWord)
+	if err != nil || !strings.HasSuffix(out, ": its consent page with callback "+recordedCallback+" or "+recordedCallback+":8443 and the change Administration: Read and write on its "+
+		"permissions page and its installation's Review request and Accept new permissions are answered by the hook\n") {
+		t.Fatalf("app allow with both = %q, %v", out, err)
+	}
+	if out, _ := runApp(t, a, "list"); !strings.Contains(out, recordedApp+"  client id "+recordedClientID+"  callbacks "+recordedCallback+" "+recordedCallback+":8443  permission Administration: Read and write  declared in ") {
+		t.Errorf("list with both = %q", out)
+	}
+	if out, _ := runApp(t, a, appCheck, recordedConsent, titleFlag, recordedTitle); !strings.HasPrefix(out, "allow: ") {
+		t.Errorf("check of the consent with both = %q", out)
+	}
+	if out, _ := runApp(t, a, appCheck, strings.Replace(permissionsPage, deviceApp, recordedApp, 1), navigateFlag); !strings.HasPrefix(out, "allow: ") {
+		t.Errorf("check of the permissions page with both = %q", out)
+	}
+	if out, err := runApp(t, a, "revoke", deviceApp); err != nil || !strings.Contains(out, "off the record") {
+		t.Fatalf("app revoke = %q, %v", out, err)
+	}
+	if evs, _ := a.store.Events(0, func(e state.Event) bool { return e.Verb == appRevoked }); len(evs) != 1 || !strings.Contains(evs[0].Detail, deviceApp+": permission "+deviceChange+", declared in") {
+		t.Errorf("app.revoke events = %+v", evs)
+	}
+	if out, _ := runApp(t, a, appCheck, permissionsPage, navigateFlag); !strings.HasPrefix(out, "refuse: ") {
+		t.Errorf("check after the revoke = %q", out)
 	}
 }
