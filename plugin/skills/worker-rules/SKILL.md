@@ -15,12 +15,11 @@ CLAUDE.md and rules) apply too and win where stricter or more specific.
   lives only here.
 - **The supervisor** (`beekeeper supervisor status` names it) is `the supervisor` to `SendMessage`
   (`the guide` likewise), in one line: beekeeper's hook reaches the role's holder. `beekeeper agents
-  register` joins the roster, `beekeeper sessions serve "<name>" <owner/repo#n> --waits "<what>"`
-  records the item and the wait.
-- **Problems found** go to the supervisor the moment they are met, in the task or beside it, a
-  line each: what broke, the evidence, the owning repository. It files them, the worker only when
-  its task says so. A broken platform function (reconciler, release, gate, CI) is never bypassed
-  silently: report first, naming a detour.
+  register` joins the roster, `beekeeper sessions serve` records the item served and the wait.
+- **Problems found reach the supervisor at once**: a `SendMessage` line the moment one is met, in
+  the task or beside it, before the next step: what broke, the evidence, the owning repository. It
+  files them, the worker only when its task says so. A broken platform function (a gate, CI) is
+  never bypassed silently: report first, naming a detour.
 - **The person is never asked directly.** No `AskUserQuestion`, no wait on a permission prompt, a
   browser approval or a setting: a one-line question to the supervisor, for the guide to ask; the
   guide's relayed answer is the person's word. A barrier (failing function, unreachable resource,
@@ -33,7 +32,7 @@ CLAUDE.md and rules) apply too and win where stricter or more specific.
   work.
 - **No polling**: no `--watch` or sleep loop; `devctl pr wait` and `devctl pr merge` block.
 - **Nothing left running**: no port-forward, monitor or background wait; kill by the captured PID,
-  never a pattern. Nothing is hard-deleted, only moved aside.
+  never a pattern. Nothing is hard-deleted: move it aside.
 - **Near `agents.relayAt`**, write a handover file, send its path to the supervisor and stop.
 
 Load the step's skill before it: `beekeeper:lease`, `beekeeper:merge`, `beekeeper:github`,

@@ -19,5 +19,6 @@ description: Ending a turn with the task open on a beekeeper desk: parking on a 
   colleague's review or reply, a note) tells the supervisor in one line at once, and the watch says
   it too (PARKED ON A PERSON): the guide carries it to the person, who otherwise never learns the
   work waits on them.
-- **Before the turn ends**, `beekeeper sessions serve` carries the new wait, and nothing is left
+- **Before the turn ends**, `beekeeper sessions serve "<name>" <owner/repo#n> --waits "<what>"`
+  carries the new wait, and nothing is left
   running. A park is not the report: `agents idle --done` comes when the task is finished.
