@@ -227,6 +227,19 @@ type Apps struct {
 	// Manifest is an App's manifest's path in Repo, AppName standing for
 	// the App's name.
 	Manifest string `yaml:"manifest"`
+	// Secrets are, by installation, the SOPS file of the Kubernetes Secret
+	// an App's credentials go into (beekeeper secret github-app).
+	Secrets map[string]AppSecret `yaml:"secrets"`
+}
+
+// AppSecret is the SOPS file of an installation's App Secret and, for a
+// file absent so far, the Secret it starts as.
+type AppSecret struct {
+	// File is the SOPS file, absolute (~/ allowed), under the creation
+	// rules of the .sops.yaml nearest above it.
+	File      string `yaml:"file"`
+	Name      string `yaml:"name"`
+	Namespace string `yaml:"namespace"`
 }
 
 // ManifestOf is the path of the manifest of the App name in Repo, "" while
@@ -1675,6 +1688,10 @@ func (c *Config) defaults() error {
 	for i, f := range c.Kube.Kubeconfig {
 		c.Kube.Kubeconfig[i] = homePath(home, f)
 	}
+	for in, s := range c.Apps.Secrets {
+		s.File = homePath(home, s.File)
+		c.Apps.Secrets[in] = s
+	}
 	c.Sandbox.defaults(home)
 	for i := range c.Scan.SOPS {
 		c.Scan.SOPS[i] = homePath(home, c.Scan.SOPS[i])
@@ -1948,6 +1965,15 @@ func (c *Config) validate() error {
 			if vault, _, _ := strings.Cut(rest, "/"); vault != c.Secret.Vault && !slices.Contains(c.Secret.AgeVaults, vault) {
 				return fmt.Errorf("secret.ageIdentities[%d]: ref %q: the vault %q is neither secret.vault nor one of secret.ageVaults", i, id.Ref, vault)
 			}
+		}
+	}
+	for _, in := range slices.Sorted(maps.Keys(c.Apps.Secrets)) {
+		s := c.Apps.Secrets[in]
+		switch {
+		case !filepath.IsAbs(s.File):
+			return fmt.Errorf("apps.secrets.%s.file: %q is no absolute path (~/ allowed)", in, s.File)
+		case (s.Name == "") != (s.Namespace == ""):
+			return fmt.Errorf("apps.secrets.%s: name and namespace start an absent file's Secret together", in)
 		}
 	}
 	for i, v := range c.Secret.AgeVaults {
