@@ -79,8 +79,8 @@ func createsApp(words string) bool {
 
 // createClick decides the Create click on the manifest page, under org's
 // settings ("" for the person's): allowed for the App a running app create
-// creates there, the one the page, its org or the call's words name, or
-// the one App being created; refused while none is.
+// creates whose organisation the page's path or the call's words name, or
+// whose name the page's title or the call's words name; refused otherwise.
 func createClick(apps []App, org, title, words string) Decision {
 	var running []*App
 	for i := range apps {
@@ -91,11 +91,8 @@ func createClick(apps []App, org, title, words string) Decision {
 			}
 		}
 	}
-	if len(running) == 1 {
-		return Decision{Allow, "beekeeper allows the click: GitHub's manifest page of " + runWords(running[0])}
-	}
 	which := "no `beekeeper app create` runs"
-	if len(running) > 1 {
+	if len(running) > 0 {
 		which = "the page names none of the Apps the running `beekeeper app create` commands create"
 	}
 	return Decision{Deny, fmt.Sprintf("Refused: GitHub's manifest page creates an App, and %s. A creation is a grant, answered only for the "+
