@@ -296,16 +296,17 @@ name, a unique part of one, a session id or a PID.`,
 			if err != nil {
 				return refused("%v", err)
 			}
-			r := state.Record{Session: s.Party(), Issue: args[1], Waits: strings.Join(strings.Fields(waits), " "), By: me, At: a.now.UTC()}
+			r := state.Record{Issue: args[1], Waits: strings.Join(strings.Fields(waits), " "), By: me, At: a.now.UTC()}
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+				r.Session = servedBy(st, s.Party())
 				st.Records = slices.DeleteFunc(st.Records, func(o state.Record) bool { return o.Session.Is(r.Session) })
 				st.Records = append(st.Records, r)
-				return []state.Event{event(me, "session.serve", "%s: %s", s.Name, recordText(r))}, nil
+				return []state.Event{event(me, "session.serve", "%s: %s", r.Session.Name, recordText(r))}, nil
 			})
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(a.out, "%q %s\n", s.Name, recordText(r))
+			_, err = fmt.Fprintf(a.out, "%q %s\n", r.Session.Name, recordText(r))
 			return err
 		},
 	}
@@ -370,6 +371,16 @@ func findRecord(records []state.Record, q string) (int, error) {
 		return i, nil
 	}
 	return -1, refused("%s is served by %s: name the session", q, strings.Join(names, ", "))
+}
+
+// servedBy is the session p as a serve record names it: under its roster
+// name when it is a registered agent, else under its own name (a desktop
+// title, or the process name of a session the desktop has not titled).
+func servedBy(st *state.State, p state.Party) state.Party {
+	if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) }); i >= 0 {
+		p.Name = st.Agents[i].Name
+	}
+	return p
 }
 
 // recordText says what a record's session serves.
