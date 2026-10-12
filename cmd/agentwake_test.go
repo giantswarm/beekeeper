@@ -32,7 +32,7 @@ func writeFile(t *testing.T, path, body string) {
 // directory; beekeeper's start keeps its bypass, a desktop session its
 // recorded mode, and a session known only by its transcript its cwd.
 func TestResolveWake(t *testing.T) {
-	const started, name = "st-1", "test: waker"
+	const started, name, onSonnet = "st-1", "test: waker", "st-2"
 	root := t.TempDir()
 	cfg := &config.Config{Claude: config.Claude{ProjectsDir: filepath.Join(root, "projects"), DesktopDir: filepath.Join(root, "desk")}}
 	writeFile(t, filepath.Join(cfg.Claude.ProjectsDir, "-w", started+".jsonl"), `{"type":"user"}`+"\n")
@@ -40,9 +40,16 @@ func TestResolveWake(t *testing.T) {
 	writeFile(t, filepath.Join(cfg.Claude.ProjectsDir, "-bg", "bg.jsonl"), `{"type":"summary"}`+"\n"+`{"type":"user","cwd":"/bg"}`+"\n")
 	writeFile(t, filepath.Join(cfg.Claude.DesktopDir, "a", "b", "local_"+started+".json"),
 		`{"sessionId":"local_st-1","cliSessionId":"st-1","cwd":"/w","permissionMode":"acceptEdits","title":"test: waker"}`)
+	writeFile(t, filepath.Join(cfg.Claude.ProjectsDir, "-w", "st-2.jsonl"), `{"type":"user"}`+"\n")
+	writeFile(t, filepath.Join(cfg.Claude.DesktopDir, "a", "b", "local_st-2.json"),
+		`{"sessionId":"local_st-2","cliSessionId":"st-2","cwd":"/w","permissionMode":"acceptEdits","title":"sonnet worker","model":"claude-fable-5-1"}`)
 	writeFile(t, filepath.Join(cfg.Claude.DesktopDir, "a", "b", "local_desk.json"),
 		`{"sessionId":"local_desk","cliSessionId":"cli-2","cwd":"/d","permissionMode":"bypassPermissions","title":"Supervisor","model":"claude-opus-5-5"}`)
-	st := &state.State{Starts: []state.Start{{Party: state.Party{Session: started}, Mode: state.ModeBypass, Dir: "/w"}}}
+	st := &state.State{Starts: []state.Start{
+		{Party: state.Party{Session: started}, Mode: state.ModeBypass, Dir: "/w"},
+		// started on sonnet, the desktop recorded its default model
+		{Party: state.Party{Session: onSonnet}, Mode: state.ModeBypass, Dir: "/w", Model: sonnetModel},
+	}}
 
 	for _, tc := range []struct {
 		ag   state.Agent
@@ -52,6 +59,8 @@ func TestResolveWake(t *testing.T) {
 			wakeTarget{name: name, id: started, host: "local_" + started, dir: "/w", mode: state.ModeBypass}},
 		{state.Agent{Party: state.Party{Session: "cli-1", HostSession: "local_desk", Name: "Supervisor"}},
 			wakeTarget{name: "Supervisor", id: "cli-2", host: "local_desk", dir: "/d", mode: state.ModeBypass, model: "claude-opus-5-5"}},
+		{state.Agent{Party: state.Party{Session: onSonnet, HostSession: "local_st-2", Name: "sonnet worker"}},
+			wakeTarget{name: "sonnet worker", id: onSonnet, host: "local_st-2", dir: "/w", mode: state.ModeBypass, model: sonnetModel}},
 		{state.Agent{Party: state.Party{Session: "bg", Name: "bg worker"}},
 			wakeTarget{name: "bg worker", id: "bg", dir: "/bg", mode: "acceptEdits"}},
 	} {

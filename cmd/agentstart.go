@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -132,7 +133,10 @@ it only answers "ready" and gives the transcript its model. Once it ended,
 beekeeper imports the session into the desktop (claude://resume?session=<id>):
 it shows in the sidebar as local_<id>, titled with <name> (beekeeper appends
 the name's custom-title line to the transcript first, and a steward restores
-a title or model the import dropped). The import switches the desktop's main
+a title or model the import dropped; the session never sets its own model,
+which the desktop refuses). --model is the model its turns keep: while the
+desktop records another, its turns run headless on --model, and start says
+so with the call that sets it. The import switches the desktop's main
 window to the new session for a moment and back to the session it showed
 (claude://code/continue); the window's focus does not hold it, the person's
 typing for 1 minute at most, and a locked screen not at all.
@@ -262,7 +266,7 @@ is involved and no import happens.`,
 				_, err = fmt.Fprintln(a.out, titleLine(name, sa.title))
 			}
 			if err == nil {
-				_, err = fmt.Fprintln(a.out, modelLine(sa.model))
+				_, err = fmt.Fprintln(a.out, modelLine(sa.model, sa.want, "local_"+sa.id))
 			}
 			if err == nil {
 				_, err = fmt.Fprintln(a.out, browserLine(sa.chrome))
@@ -318,6 +322,9 @@ type startedAgent struct {
 	// model is the model the desktop recorded for the session's later
 	// turns; empty: none, they run on the desktop's default.
 	model string
+	// want is the model the start chose (--model, as its first reply names
+	// it), which its turns keep; empty: none was chosen.
+	want string
 	// chrome is the Chrome permission mode the desktop recorded for the
 	// session's later turns; empty: none, its browser actions ask.
 	chrome string
@@ -391,7 +398,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if id == "" {
 		id = uuid.NewString()
 	}
-	s := state.Start{Party: state.Party{Session: id, HostSession: "local_" + id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC()}
+	s := state.Start{Party: state.Party{Session: id, HostSession: "local_" + id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Model: sp.model}
 	var reg registration
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		var err error
@@ -428,11 +435,12 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if err := awaitReply(ctx, a.cfg.Claude.ProjectsDir, id, func() bool { return unitEnded(ctx, unit) }, replyQuiet, replyWait); err != nil {
 		return startedAgent{}, fmt.Errorf("%w, not imported into the desktop: journalctl --user -u %s", err, unit)
 	}
+	a.resolveStartModel(id)
 	var follow string
 	if sp.replaces != nil {
 		follow = sp.replaces.HostSession
 	}
-	sa := startedAgent{id: id, unit: unit, dir: dir, task: reg.task}
+	sa := startedAgent{id: id, unit: unit, dir: dir, task: reg.task, want: a.chosenModel(id)}
 	d.urgent = a.asksDesktop(id)
 	if profile != "" {
 		sa.turn = profiledTurn(profile)
@@ -493,6 +501,8 @@ func (a *app) startVisible(ctx context.Context, d desk, sp agentStart, bin, unit
 	if err := awaitTurnEnd(ctx, id, replyWait); err != nil {
 		return startedAgent{}, fmt.Errorf("its seed turn: %w (journalctl --user -u %s)", err, unit)
 	}
+	a.resolveStartModel(id)
+	sa.want = a.chosenModel(id)
 	var follow string
 	if sp.replaces != nil {
 		follow = sp.replaces.HostSession
@@ -511,7 +521,7 @@ func (a *app) startVisible(ctx context.Context, d desk, sp agentStart, bin, unit
 			_ = a.store.Log(event(by, "agents.start", "%s: the desktop did not import it (%v)", sp.name, err))
 		}
 	}
-	w := wakeTarget{name: sp.name, id: id, host: "local_" + id, dir: dir, mode: state.ModeBypass, model: sp.model}
+	w := wakeTarget{name: sp.name, id: id, host: "local_" + id, dir: dir, mode: state.ModeBypass, model: sa.want}
 	line, err := a.turnInDesktop(ctx, w, taskTurn, twinWait)
 	if err == nil {
 		sa.turn = "its task runs as a desktop turn: " + line
@@ -519,6 +529,9 @@ func (a *app) startVisible(ctx context.Context, d desk, sp agentStart, bin, unit
 		return sa, nil
 	}
 	sa.turn = fmt.Sprintf("the desktop runs no turn of it (%v): its task runs headless", err)
+	if errors.As(err, new(modelNotHeld)) {
+		sa.turn += " on " + w.model
+	}
 	_ = a.store.Log(event(by, "agents.start", "%s: %s", sp.name, sa.turn))
 	if err := a.resumeTurn(ctx, by, w, taskTurn); err != nil {
 		return sa, err
@@ -736,12 +749,40 @@ func twinLine(twin int) string {
 	return fmt.Sprintf("stopped the desktop's CLI %d of the session: the headless turn is its only CLI and the only peer under its name, until someone opens it in the desktop", twin)
 }
 
-// modelLine says which model the session's desktop turns run on.
-func modelLine(model string) string {
-	if model == "" {
+// modelLine says which model the session's desktop turns run on: model, the
+// one the desktop recorded for host, and want, the one it was started on
+// (none when empty).
+func modelLine(model, want, host string) string {
+	switch {
+	case want != "" && !sameModel(model, want):
+		return fmt.Sprintf("the model %s could not be set: the desktop records %s for its desktop turns, so they run headless on %s until a session other than it calls %s with session_id %q and model %q",
+			want, cmp.Or(model, "no model (its default)"), want, setModelTool, host, want)
+	case model == "":
 		return "the desktop recorded no model: its desktop turns run on the desktop's default model"
 	}
 	return "its desktop turns run on " + model
+}
+
+// resolveStartModel records the model session id's first reply ran on as
+// the model its start chose, when it chose one: --model can be an alias,
+// the reply names the model's id.
+func (a *app) resolveStartModel(id string) {
+	path := transcriptOf(a.cfg, id)
+	if path == "" {
+		return
+	}
+	model, _ := claude.Model(path)
+	if model == "" {
+		return
+	}
+	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		for i := range st.Starts {
+			if s := &st.Starts[i]; s.Session == id && s.Model != "" {
+				s.Model = model
+			}
+		}
+		return nil, nil
+	})
 }
 
 // importSession imports the session into the desktop. The import switches

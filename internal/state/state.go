@@ -608,6 +608,9 @@ type Start struct {
 	At   time.Time `json:"at"`
 	// Harness is the agent harness started: "" for Claude Code, "omp".
 	Harness string `json:"harness,omitempty"`
+	// Model is the model the session was started on (--model, as its first
+	// reply names it), which its turns keep; empty: none was chosen.
+	Model string `json:"model,omitempty"`
 
 	rest rest
 }

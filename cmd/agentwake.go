@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -259,6 +260,36 @@ func awaitNoHeadless(ctx context.Context, id string, wait time.Duration) error {
 	}
 }
 
+// modelNotHeld is a desktop turn refused because the desktop records
+// another model for the session than the one it was started on.
+type modelNotHeld struct {
+	recorded, want string
+	why            error
+}
+
+func (e modelNotHeld) Error() string {
+	return fmt.Sprintf("the desktop records %s for its desktop turns, not %s, and no session set it (%v)", cmp.Or(e.recorded, "no model"), e.want, e.why)
+}
+
+// holdModel has a steward give the desktop record r of session w the model
+// w was started on. When none does, it ends the idle desktop CLI of w, which
+// runs the recorded model, so the headless turn that follows on w.model is
+// the session's one CLI, and returns modelNotHeld.
+func (a *app) holdModel(ctx context.Context, w wakeTarget, r *claude.Record) error {
+	_, err := a.restoreRecord(ctx, w.host, r.Title, w.model)
+	if err == nil {
+		return nil
+	}
+	if t, terr := plat.Machine.Processes(); terr == nil {
+		if p := desktopTwin(t, w.id); p != nil {
+			if pr, ferr := os.FindProcess(p.PID); ferr == nil {
+				_ = pr.Signal(syscall.SIGTERM)
+			}
+		}
+	}
+	return modelNotHeld{recorded: r.Model, want: w.model, why: err}
+}
+
 // turnInDesktop has the desktop run msg as a turn of the session w, whose
 // row the person sees it run in: its desktop CLI, when one runs or the
 // desktop warms one within warm, takes msg by its socket; else a steward's
@@ -270,7 +301,8 @@ func (a *app) turnInDesktop(ctx context.Context, w wakeTarget, msg string, warm 
 	if w.host == "" || !strings.HasPrefix(w.host, "local_") {
 		return "", errors.New("it has no desktop session")
 	}
-	if _, ok := claude.ReadRecord(a.cfg, w.host); !ok {
+	r, ok := claude.ReadRecord(a.cfg, w.host)
+	if !ok {
 		return "", fmt.Errorf("%s has no row in the desktop", w.host)
 	}
 	t, err := plat.Machine.Processes()
@@ -279,6 +311,11 @@ func (a *app) turnInDesktop(ctx context.Context, w wakeTarget, msg string, warm 
 	}
 	if plat.Opener.Running(t).IsZero() {
 		return "", errors.New("the desktop does not run")
+	}
+	if w.model != "" && !sameModel(r.Model, w.model) {
+		if err := a.holdModel(ctx, w, r); err != nil {
+			return "", err
+		}
 	}
 	if sock := desktopSocketWithin(ctx, w.id, warm); sock != "" {
 		if err := a.peerSend(ctx, "uds:"+sock, msg); err != nil {
@@ -344,6 +381,10 @@ func resolveWake(cfg *config.Config, st *state.State, ag state.Agent) (wakeTarge
 	}
 	for _, id := range []string{w.id, ag.Session} {
 		if s, ok := st.BypassStart(id); ok {
+			// the model it was started on, which its turns keep
+			if s.Model != "" && !sameModel(w.model, s.Model) {
+				w.model = s.Model
+			}
 			w.mode = s.Mode
 			if w.dir == "" {
 				w.dir = s.Dir
