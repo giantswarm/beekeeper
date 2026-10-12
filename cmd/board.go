@@ -383,11 +383,11 @@ func claimNext(store state.Store, cands []board.Candidate, sc pickScope, waits s
 		if res.Pick == nil {
 			return nil, nil
 		}
-		r := state.Record{Session: me, Issue: res.Pick.Ref, Waits: strings.Join(strings.Fields(waits), " "), By: me, At: time.Now().UTC()}
+		r := state.Record{Session: servedBy(st, me), Issue: res.Pick.Ref, Waits: strings.Join(strings.Fields(waits), " "), By: me, At: time.Now().UTC()}
 		st.Records = slices.DeleteFunc(st.Records, func(o state.Record) bool { return o.Session.Is(me) })
 		st.Records = append(st.Records, r)
 		res.Claimed = true
-		return []state.Event{event(me, "board.claim", "%s: %s (%s)", me.Name, recordText(r), res.Pick.Why())}, nil
+		return []state.Event{event(me, "board.claim", "%s: %s (%s)", r.Session.Name, recordText(r), res.Pick.Why())}, nil
 	})
 	return res, err
 }
