@@ -102,6 +102,7 @@ func (a *app) leaseClaimCmd() *cobra.Command {
 	var purpose string
 	var gib int
 	var wait time.Duration
+	var park bool
 	c := &cobra.Command{
 		Use:   "claim <resource>",
 		Short: "Claim a resource: held (exit 0), or queued or refused (exit 3)",
@@ -116,7 +117,15 @@ after the held line. Gate the work on the exit code (claim && work).
 
 A claim does not wait by itself: queued or refused, it exits at once.
 --wait <duration> claims again every 10s until the claim is held or the
-duration has passed, then says the last outcome.
+duration has passed, then says the last outcome. It runs in the foreground
+and is at most 9m: a background wait does not outlive a desktop turn.
+
+A longer wait is a park: --park parks the calling agent (agents park) when
+the claim is queued, after its line, and the claim waits in its queue
+without a process. Once the resource is free and the agent's grant is first
+in its queue, the watch resumes the agent (agents.autoResume; else it says
+AGENT RESUMABLE) with the words to claim it; a grant to another session
+first leaves it parked. The agent ends its turn after the park line.
 
 A model-server claim carries the GiB its models may hold on the host's model
 server (--gib, default ollama.budgetGiB, at most ollama.maxBudgetGiB): a loaded
@@ -134,10 +143,13 @@ model is RAM no cgroup counts, and the watch unloads what exceeds it.`,
 				if cmd.Flags().Changed("gib") {
 					return usageErr("--gib is the model server's budget: %s carries none", res)
 				}
-				if wait > 0 {
-					return usageErr("--wait claims the machine's own resources: %s is the central instance's", res)
+				if wait > 0 || park {
+					return usageErr("--wait and --park claim the machine's own resources: %s is the central instance's", res)
 				}
 				return a.claimCentral(res, purpose)
+			}
+			if wait > claimWaitMax {
+				return usageErr("--wait %s is longer than a foreground claim waits (%s): claim with --park, which waits in the queue without a process", dur(wait), dur(claimWaitMax))
 			}
 			budget, err := a.claimBudget(res, gib, cmd.Flags().Changed("gib"))
 			if err != nil {
@@ -166,6 +178,11 @@ model is RAM no cgroup counts, and the watch unloads what exceeds it.`,
 				if _, err := fmt.Fprintln(a.out, r.line()); err != nil {
 					return err
 				}
+				if park {
+					if _, err := fmt.Fprintln(a.out, a.parkClaim(me, r, purpose)); err != nil {
+						return err
+					}
+				}
 				return &exitError{code: ExitRefused}
 			}
 			if err != nil {
@@ -180,7 +197,8 @@ model is RAM no cgroup counts, and the watch unloads what exceeds it.`,
 	}
 	c.Flags().StringVarP(&purpose, "purpose", "p", "", "what the resource is for (required)")
 	c.Flags().IntVar(&gib, "gib", 0, "model-server only: the GiB your models may hold (default ollama.budgetGiB)")
-	c.Flags().DurationVar(&wait, "wait", 0, "claim again every 10s until held or this long has passed (0: claim once)")
+	c.Flags().DurationVar(&wait, "wait", 0, "claim again every 10s until held or this long has passed, at most 9m (0: claim once)")
+	c.Flags().BoolVar(&park, "park", false, "park the calling agent on a queued claim: the watch resumes it once the lease is its to claim")
 	return c
 }
 
@@ -304,6 +322,25 @@ func (a *app) claimBudget(res string, gib int, set bool) (int, error) {
 // claimPoll is how often a claim with --wait tries again.
 const claimPoll = 10 * time.Second
 
+// claimWaitMax is the longest --wait: a foreground command runs at most 10
+// minutes (hook pretooluse raises a tool's timeout to that), a background
+// one does not outlive a desktop turn. A longer wait is a park (--park).
+const claimWaitMax = 9 * time.Minute
+
+// parkClaim parks me on the lease r queued it for (lease claim --park) and
+// returns the park's line, or why it did not park: a refused claim has no
+// grant to wait on.
+func (a *app) parkClaim(me state.Party, r *claimRefusal, purpose string) string {
+	if !r.queued {
+		return fmt.Sprintf("not parked: no grant of %s to you waits; ask the supervisor `need %s` first", r.res, r.res)
+	}
+	line, err := a.park(me, leaseParkOn(r.res), fmt.Sprintf("the lease %s: %s", r.res, oneLine(purpose)))
+	if err != nil {
+		return "not parked: " + err.Error()
+	}
+	return line
+}
+
 // claimPause waits d between the tries of a claim with --wait.
 var claimPause = func(ctx context.Context, d time.Duration) error {
 	t := time.NewTimer(d)
@@ -337,7 +374,10 @@ func (r *claimRefusal) line() string {
 	if r.waited > 0 {
 		return out + fmt.Sprintf(" (waited %s)", dur(r.waited))
 	}
-	return out + fmt.Sprintf("; not yours: park on `beekeeper lease status %s` in a probe timer, or claim with --wait <duration>", r.res)
+	if r.queued {
+		return out + fmt.Sprintf("; not yours: --park waits in the queue without a process, --wait up to %s in the foreground", dur(claimWaitMax))
+	}
+	return out + fmt.Sprintf("; not yours: claim with --wait up to %s in the foreground", dur(claimWaitMax))
 }
 
 // claimHeld is the outcome of me's claim of the lease cur holds: queued

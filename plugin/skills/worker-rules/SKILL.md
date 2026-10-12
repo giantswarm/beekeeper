@@ -59,7 +59,10 @@ task needs lives only in this session: the next task goes to a fresh one.
   `beekeeper lease release <env>` and returned with `<env> free` when done. The claim's first
   line is its outcome: `held by you since <time>` (exit 0) is the lease; `queued: number <n>
   behind …` and `refused: <reason>` (exit 3) are none, whatever follows; a claim never waits by
-  itself: `--wait <duration>` does, or a probe timer on `beekeeper lease status <env>`. A command
+  itself. A short wait is `--wait <duration>` in the foreground, at most 9 minutes; a longer
+  one is a park, never a background wait, which does not outlive a desktop turn: `beekeeper lease
+  claim <env> -p "<purpose>" --park` leaves the queued claim in its queue, parks the worker and
+  ends its turn, and the watch resumes it once the lease is its to claim. A command
   that needs the lease runs only after the claim exited 0 (`beekeeper lease claim … && <command>`,
   never `;`). A held lease is another session's.
 - **Merges.** One merge command per PR, through the gate (`devctl pr merge <owner/repo> <n>` for the
