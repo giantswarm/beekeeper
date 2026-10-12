@@ -280,6 +280,20 @@ func underSession(t *proc.Table, p *proc.Process, records map[int]*cliRecord) bo
 	return slices.ContainsFunc(t.Ancestors(p.PID), func(a *proc.Process) bool { return runsSession(a, records) })
 }
 
+// Nested reports whether process pid runs inside a claude another session's
+// tool command started (a `claude -p` from a worker's Bash): its parent
+// chain passes two session CLIs. Its environment carries the outer
+// session's CLAUDE_CODE_* ids, which name that session, not it.
+func Nested(t *proc.Table, pid int) bool {
+	n := 0
+	for _, a := range t.Ancestors(pid) {
+		if isCLI(a) || isSpare(a) {
+			n++
+		}
+	}
+	return n > 1
+}
+
 // underDaemon reports whether the claude daemon runs p: it or one of its
 // ancestors is the daemon or a background session's terminal host.
 func underDaemon(t *proc.Table, p *proc.Process) bool {
