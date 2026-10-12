@@ -13,7 +13,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/secret"
 )
 
@@ -24,22 +23,6 @@ const githubAppOp = "github-app"
 // manifestCode is the shape of the one-time code GitHub's manifest flow
 // redirects with: it goes into an API path, so nothing else passes.
 var manifestCode = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
-
-// convertCode turns a manifest flow's code into the App and its
-// credentials as the person's gh login, its answer read by this process
-// alone; a test stubs it.
-var convertCode = func(ctx context.Context, code string) (*githubApp, error) {
-	out, err := appsGH(ctx, "api", "-X", "POST", "app-manifests/"+code+"/conversions")
-	if err != nil {
-		if strings.Contains(err.Error(), "HTTP 404") {
-			return nil, errors.New("GitHub knows no conversion for this code: a manifest code converts once, within an hour of GitHub's redirect. " +
-				"The App it created holds credentials no one has: delete the App on GitHub (Advanced, Delete GitHub App) and create it again for a new code")
-		}
-		// gh's message is GitHub's error, which carries no credential
-		return nil, fmt.Errorf("the conversion: %s", bounded(guard.Message(err.Error()), phraseRunes))
-	}
-	return parseConversion(out)
-}
 
 // githubAppResult is what secret github-app answers: the App's
 // configuration by value, the Secret's keys by length and fingerprint.
@@ -59,8 +42,9 @@ func (a *app) secretGitHubAppCmd() *cobra.Command {
 		Long: `github-app finishes GitHub's manifest flow for an App created on GitHub's
 page: GitHub redirects to the manifest's redirect_url with a one-time code
 (?code=…), and --code takes that code or the whole redirect URL. beekeeper
-converts it in its own process as the person's gh login (POST
-/app-manifests/<code>/conversions) and writes the App's private-key and
+converts it in its own process with GitHub's unauthenticated POST
+/app-manifests/<code>/conversions (no token: the code is the credential)
+and writes the App's private-key and
 client-secret, and webhook-secret when the App has one, into the
 Kubernetes Secret of the SOPS file apps.secrets names for <installation>,
 under stringData, in one sops write (the creation rules of the nearest
@@ -79,9 +63,9 @@ configuration takes in plain:
 
 stderr names the keys written with their lengths and keyed fingerprints;
 the private key and the client secret appear in no output, log entry or
-error. A code GitHub no longer converts (spent, or older than its hour) is
-refused in one line: the App it created then holds credentials no one has,
-and is deleted and created again. beekeeper log records the installation,
+error. A conversion GitHub refuses is refused in one line with GitHub's
+HTTP status and message; a code converts once, within an hour of GitHub's
+redirect. beekeeper log records the installation,
 the file, the App's id, client id and slug, and the fingerprints.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -118,7 +102,7 @@ func (a *app) secretGitHubApp(cmd *cobra.Command, installation, code string, rep
 	var created *githubApp
 	opt.Produce = func(ctx context.Context) (map[string]string, error) {
 		var err error
-		if created, err = convertCode(ctx, code); err != nil {
+		if created, err = convertManifest(ctx, code); err != nil {
 			return nil, err
 		}
 		values := map[string]string{githubPrivateKey: created.PEM, githubClientSecret: created.ClientSecret}

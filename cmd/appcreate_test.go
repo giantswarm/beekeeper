@@ -118,7 +118,9 @@ func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		http.Redirect(w, r, redirect+"?code="+fixtureCode+"&state="+url.QueryEscape(state), http.StatusFound)
 	case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/app-manifests/"):
-		if r.URL.Path != "/app-manifests/"+fixtureCode+"/conversions" {
+		// GitHub's conversion is unauthenticated: a token sent along is
+		// answered as a code it knows no conversion for
+		if r.URL.Path != "/app-manifests/"+fixtureCode+"/conversions" || r.Header.Get("Authorization") != "" || r.Header.Get("Accept") != "application/vnd.github+json" {
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = io.WriteString(w, `{"message": "Not Found"}`)
 			return

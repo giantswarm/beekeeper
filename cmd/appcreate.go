@@ -545,10 +545,17 @@ func apiError(what string, resp *http.Response) error {
 }
 
 // convertManifest turns the redirect's one-time code into the App and its
-// credentials.
+// credentials with GitHub's unauthenticated conversion: the code is the
+// credential, and a token sent along is one GitHub can answer 404 for. A
+// refusal names GitHub's status and message; no error carries the code.
 func convertManifest(ctx context.Context, code string) (*githubApp, error) {
 	resp, err := githubRequest(ctx, http.MethodPost, "/app-manifests/"+url.PathEscape(code)+"/conversions", "")
 	if err != nil {
+		// the request's URL carries the code: only the cause travels
+		var uerr *url.Error
+		if errors.As(err, &uerr) {
+			err = uerr.Err
+		}
 		return nil, fmt.Errorf("the conversion: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
