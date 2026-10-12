@@ -55,6 +55,9 @@ type meta struct {
 // stateOpen is the state of an open issue or pull request.
 const stateOpen = "OPEN"
 
+// isOpen is a board query's filter of the open items.
+const isOpen = "is:open"
+
 // issueFields is what every read takes of an issue.
 const issueFields = `fragment I on Issue{number url title state createdAt updatedAt repository{nameWithOwner}
 labels(first:20){nodes{name}} assignees(first:10){nodes{login}} issueDependenciesSummary{blockedBy totalBlockedBy} subIssuesSummary{total completed}
@@ -269,7 +272,7 @@ fields(first:50){nodes{...on ProjectV2SingleSelectField{id name options{id name}
 // in the statuses its steps name and extra when every board step names
 // some.
 func filter(b config.Board, order []config.BoardStep, extra ...string) string {
-	parts := []string{"is:open"}
+	parts := []string{isOpen}
 	if b.Team != "" {
 		parts = append(parts, fmt.Sprintf("%s:%q", strings.ToLower(TeamField), b.Team))
 	}

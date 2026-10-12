@@ -12,19 +12,30 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 )
 
+// The refs the priority tests share.
+const (
+	ref1 = "o/r#1"
+	ref2 = "o/r#2"
+	ref3 = "o/r#3"
+	// cycleA and cycleB are each other's parent.
+	cycleA = "o/r#17"
+	cycleB = "o/r#18"
+	ref4   = "o/r#4"
+)
+
 func TestRanksOfInheritsTheNearestRankedAncestor(t *testing.T) {
-	r := Ranks{"o/r#1": 2, "o/r#9": 1}
-	parents := map[string]string{"o/r#3": "o/r#2", "o/r#2": "o/r#1", "o/r#1": "o/r#9", "o/r#7": "o/r#8", "o/r#8": "o/r#7"}
+	r := Ranks{ref1: 2, issue9: 1}
+	parents := map[string]string{ref3: ref2, ref2: ref1, ref1: issue9, cycleA: cycleB, cycleB: cycleA}
 	parent := func(ref string) string { return parents[ref] }
 	for _, tc := range []struct {
 		ref  string
 		rank int
 		of   string
 	}{
-		{"o/r#3", 2, "o/r#1"}, // the nearest ranked ancestor wins over a higher one above it
+		{ref3, 2, ref1},       // the nearest ranked ancestor wins over a higher one above it
 		{"O/R#1", 2, "O/R#1"}, // its own rank, case ignored
-		{"o/r#5", 0, ""},      // no parent
-		{"o/r#7", 0, ""},      // a cycle ends
+		{issue5, 0, ""},       // no parent
+		{cycleA, 0, ""},       // a cycle ends
 	} {
 		if n, of := r.Of(tc.ref, parent); n != tc.rank || of != tc.of {
 			t.Errorf("Of(%s) = %d, %q; want %d, %q", tc.ref, n, of, tc.rank, tc.of)
@@ -37,17 +48,17 @@ func TestByPriorityRanksFirstThenTheOrder(t *testing.T) {
 		return Candidate{Item: Item{Ref: ref, Parent: parent}, Step: step, Epic: epic}
 	}
 	cands := []Candidate{
-		cand("o/r#10", "In Progress remainder", "o/r#1", "o/r#1"), // epic 1, unranked
-		cand("o/r#20", "In Progress remainder", "o/r#2", "o/r#2"), // epic 2, rank 2
-		cand("o/r#30", "Up Next", "", "o/r#33"),                   // grandchild of epic 3, rank 1
-		cand("o/r#40", "Backlog", "", ""),                         // unranked
-		cand("o/r#3", "Up Next", "", ""),                          // epic 3 itself
-		cand("o/r#21", "Backlog", "", "o/r#2"),                    // epic 2, behind #20 in the order
+		cand("o/r#10", "In Progress remainder", ref1, ref1), // epic 1, unranked
+		cand("o/r#20", "In Progress remainder", ref2, ref2), // epic 2, rank 2
+		cand("o/r#30", "Up Next", "", "o/r#33"),             // grandchild of epic 3, rank 1
+		cand("o/r#40", "Backlog", "", ""),                   // unranked
+		cand(ref3, "Up Next", "", ""),                       // epic 3 itself
+		cand("o/r#21", "Backlog", "", ref2),                 // epic 2, behind #20 in the order
 	}
 	parent := func(ref string) string {
-		return map[string]string{"o/r#33": "o/r#3"}[ref]
+		return map[string]string{"o/r#33": ref3}[ref]
 	}
-	ByPriority(cands, Ranks{"o/r#3": 1, "o/r#2": 2}, parent)
+	ByPriority(cands, Ranks{ref3: 1, ref2: 2}, parent)
 	var got []string
 	for _, c := range cands {
 		got = append(got, strings.TrimSpace(c.Ref+" "+c.PriorityText()))
@@ -70,9 +81,9 @@ func TestByPriorityRanksFirstThenTheOrder(t *testing.T) {
 
 func TestSnapshotParentReadsItemsAndSubIssues(t *testing.T) {
 	snap := &Snapshot{Items: []Item{
-		{Ref: "o/r#1", Parent: "o/r#9", SubIssues: []Item{{Ref: "o/r#2"}, {Ref: "o/r#3", Parent: "o/r#1"}}},
+		{Ref: ref1, Parent: issue9, SubIssues: []Item{{Ref: ref2}, {Ref: ref3, Parent: ref1}}},
 	}}
-	for ref, want := range map[string]string{"o/r#1": "o/r#9", "O/R#2": "o/r#1", "o/r#3": "o/r#1", "o/r#4": ""} {
+	for ref, want := range map[string]string{ref1: issue9, "O/R#2": ref1, ref3: ref1, ref4: ""} {
 		if got := snap.Parent(ref); got != want {
 			t.Errorf("Parent(%s) = %q, want %q", ref, got, want)
 		}
@@ -152,7 +163,7 @@ func TestPrioritiesReadsTheRankedEpicsByRank(t *testing.T) {
 	if err != nil || listText(l) != "1 o/r#2, 2 o/r#1, 3 o/r#3" || l[0].URL != "https://github.com/o/r/issues/2" || l[0].Status != inProgress {
 		t.Fatalf("Priorities = %+v, %v", l, err)
 	}
-	if r := l.Ranks(); r["o/r#1"] != 2 || r["o/r#99"] != 0 {
+	if r := l.Ranks(); r[ref1] != 2 || r["o/r#99"] != 0 {
 		t.Errorf("Ranks = %v", r)
 	}
 }
@@ -179,12 +190,12 @@ func TestSetPriorityInsertsAndRenumbers(t *testing.T) {
 		list      string
 		mutations []string
 	}{
-		{"a new epic at the top moves the others down", "o/r#5", 1, 0, 1, "1 o/r#5, 2 o/r#1, 3 o/r#2, 4 o/r#3", []string{"I5=1", "I1=2", "I2=3", "I3=4"}},
-		{"a new epic past the end is the end", "o/r#5", 9, 0, 4, "1 o/r#1, 2 o/r#2, 3 o/r#3, 4 o/r#5", []string{"I5=4"}},
-		{"a ranked epic moves up", "o/r#3", 1, 3, 1, "1 o/r#3, 2 o/r#1, 3 o/r#2", []string{"I3=1", "I1=2", "I2=3"}},
-		{"its own rank writes nothing", "o/r#2", 2, 2, 2, "1 o/r#1, 2 o/r#2, 3 o/r#3", nil},
-		{"unset clears it and moves the ones below up", "o/r#1", 0, 1, 0, "1 o/r#2, 2 o/r#3", []string{"I1 cleared", "I2=1", "I3=2"}},
-		{"unset of an unranked epic writes nothing", "o/r#5", 0, 0, 0, "1 o/r#1, 2 o/r#2, 3 o/r#3", nil},
+		{"a new epic at the top moves the others down", issue5, 1, 0, 1, "1 o/r#5, 2 o/r#1, 3 o/r#2, 4 o/r#3", []string{"I5=1", "I1=2", "I2=3", "I3=4"}},
+		{"a new epic past the end is the end", issue5, 9, 0, 4, "1 o/r#1, 2 o/r#2, 3 o/r#3, 4 o/r#5", []string{"I5=4"}},
+		{"a ranked epic moves up", ref3, 1, 3, 1, "1 o/r#3, 2 o/r#1, 3 o/r#2", []string{"I3=1", "I1=2", "I2=3"}},
+		{"its own rank writes nothing", ref2, 2, 2, 2, "1 o/r#1, 2 o/r#2, 3 o/r#3", nil},
+		{"unset clears it and moves the ones below up", ref1, 0, 1, 0, "1 o/r#2, 2 o/r#3", []string{"I1 cleared", "I2=1", "I3=2"}},
+		{"unset of an unranked epic writes nothing", issue5, 0, 0, 0, "1 o/r#1, 2 o/r#2, 3 o/r#3", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := &priorityGH{t: t, ranked: map[int]int{1: 1, 2: 2, 3: 3}, kind: "Epic 🎯"}
@@ -207,7 +218,7 @@ func TestSetPriorityInsertsAndRenumbers(t *testing.T) {
 
 func TestSetPriorityRefusesWhatIsNoEpic(t *testing.T) {
 	f := &priorityGH{t: t, ranked: map[int]int{1: 1}, kind: "Task 🗒️"}
-	_, err := priorityClient(f).SetPriority(context.Background(), "o/r#5", 1)
+	_, err := priorityClient(f).SetPriority(context.Background(), issue5, 1)
 	var r *Refusal
 	if !errors.As(err, &r) || !strings.Contains(r.Reason, "no epic") || len(f.mutations) != 0 {
 		t.Errorf("SetPriority of a task = %v, mutations %v", err, f.mutations)

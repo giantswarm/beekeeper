@@ -10,6 +10,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// supSession is the session of the supervisor the priority tests refuse.
+const supSession = "prio-sup"
+
 // priorityApp is an app of a desk whose person is Timo, its board o/7.
 func priorityApp(t *testing.T, as string) (*app, state.Store) {
 	t.Helper()
@@ -18,7 +21,7 @@ func priorityApp(t *testing.T, as string) (*app, state.Store) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := &config.Config{StateDir: dir, Board: config.Board{Owner: "o", Project: 7}, Guide: config.Guide{Person: "Timo"}}
+	cfg := &config.Config{StateDir: dir, Board: config.Board{Owner: "o", Project: 7}, Guide: config.Guide{Person: personTimo}}
 	return &app{cfg: cfg, store: store, out: &bytes.Buffer{}, as: as}, store
 }
 
@@ -32,15 +35,15 @@ func TestPrioritySetIsThePersonsOnly(t *testing.T) {
 		asked++
 		return nil, nil
 	}
-	sup := state.Party{Session: "sup", Name: "Supervisor run 1"}
+	sup := state.Party{Session: supSession, Name: firstRun}
 	worker := state.Party{Session: "w1", Name: "Worker one"}
 	for _, tc := range []struct {
 		name, as, session, want string
 	}{
 		{"no --as outside a session", "", "", "a call without --as: only the person changes priorities; the guide relays the person's word with --as Timo"},
-		{"the supervisor without --as", "", "sup", "the supervisor without --as: only the person changes priorities"},
+		{"the supervisor without --as", "", supSession, "the supervisor without --as: only the person changes priorities"},
 		{"a worker without --as", "", "w1", "the worker without --as: only the person changes priorities"},
-		{"another name", "supervisor", "sup", `--as "supervisor" is no configured person (Timo): only the person changes priorities`},
+		{"another name", supervisorName, supSession, `--as "supervisor" is no configured person (Timo): only the person changes priorities`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("CLAUDE_CODE_SESSION_ID", tc.session)
@@ -48,12 +51,12 @@ func TestPrioritySetIsThePersonsOnly(t *testing.T) {
 			a, store := priorityApp(t, tc.as)
 			if err := store.Update(func(st *state.State) ([]state.Event, error) {
 				st.SetSupervisorRole(state.Role{Holder: &state.Supervisor{Party: sup}})
-				st.Agents = append(st.Agents, state.Agent{Party: worker, Task: "o/r#1"})
+				st.Agents = append(st.Agents, state.Agent{Party: worker, Task: refOne})
 				return nil, nil
 			}); err != nil {
 				t.Fatal(err)
 			}
-			for _, args := range [][]string{{"o/r#1", "1"}, {"o/r#1"}} {
+			for _, args := range [][]string{{refOne, "1"}, {refOne}} {
 				c := a.prioritySetCmd()
 				if len(args) == 1 {
 					c = a.priorityUnsetCmd()
@@ -78,13 +81,13 @@ func TestPrioritySetIsThePersonsOnly(t *testing.T) {
 // configured persons are guide.person, identity.person and serve.people's
 // names, each once.
 func TestPriorityPersonTakesTheConfiguredPerson(t *testing.T) {
-	a, _ := priorityApp(t, "timo")
+	a, _ := priorityApp(t, strings.ToLower(personTimo))
 	a.cfg.Identity.Person = "timo@example.com"
-	a.cfg.Serve.People = map[string]string{"Timo": "timo@example.com", "pat": "pat@example.com"}
-	if p, err := a.priorityPerson(); err != nil || p != "Timo" {
+	a.cfg.Serve.People = map[string]string{personTimo: "timo@example.com", pat: "pat@example.com"}
+	if p, err := a.priorityPerson(); err != nil || p != personTimo {
 		t.Errorf("priorityPerson = %q, %v; want Timo", p, err)
 	}
-	if got := strings.Join(a.persons(), ", "); got != "Timo, timo@example.com, pat" {
+	if got := strings.Join(a.persons(), ", "); got != "Timo, timo@example.com, Pat" {
 		t.Errorf("persons = %s", got)
 	}
 }

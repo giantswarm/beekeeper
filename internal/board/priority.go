@@ -116,7 +116,7 @@ priority:fieldValueByName(name:"` + PriorityField + `"){...on ProjectV2ItemField
 // priorityFilter is the board query of the epics the priority list can
 // hold: open, the team's, of the epic kinds.
 func (c *Client) priorityFilter(kinds []string) string {
-	parts := []string{"is:open"}
+	parts := []string{isOpen}
 	if c.Board.Team != "" {
 		parts = append(parts, fmt.Sprintf("%s:%q", strings.ToLower(TeamField), c.Board.Team))
 	}
