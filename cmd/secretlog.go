@@ -37,10 +37,22 @@ func (a *app) opLog(result error, verb, format string, args ...any) error {
 	}
 	e := event(who, verb, format, args...)
 	e.Detail += fmt.Sprintf(" (%s)", time.Since(a.now).Round(time.Millisecond))
-	if err := a.store.Record(e); err != nil {
+	if err := a.record(e); err != nil {
 		return errors.Join(result, &exitError{code: ExitError, msg: notLogged(e, err)})
 	}
 	return result
+}
+
+// errNoStore is a log write of an app that opened no state store.
+var errNoStore = errors.New("no state store is open")
+
+// record writes evs to the state's log; an app without a store fails the
+// write instead of panicking, for the call to answer why it is not logged.
+func (a *app) record(evs ...state.Event) error {
+	if a.store == nil {
+		return errNoStore
+	}
+	return a.store.Record(evs...)
 }
 
 // notLogged says why e was not written, with the entry itself, so that the
@@ -92,7 +104,7 @@ func (a *app) brokerSecretLog(pid int, req sandbox.Request, start time.Time, why
 	who := requesterParty(pid)
 	who.Person, who.Team, who.Host = a.cfg.Identity.Person, a.cfg.Identity.Team, a.cfg.Identity.Host
 	e := event(who, "secret."+op, "%s: failed: %s (%s)", strings.Join(rest, " "), why, time.Since(start).Round(time.Millisecond))
-	if err := a.store.Record(e); err != nil {
+	if err := a.record(e); err != nil {
 		return errors.New(notLogged(e, err))
 	}
 	return nil

@@ -338,7 +338,7 @@ var vaultParty = state.Party{Name: "the vault keeper"}
 
 // vaultSigninLog is one line of the event log about the keeper's sign-in.
 func (a *app) vaultSigninLog(format string, args ...any) {
-	if err := a.store.Record(event(vaultParty, "vault.signin", format, args...)); err != nil {
+	if err := a.record(event(vaultParty, "vault.signin", format, args...)); err != nil {
 		fmt.Fprintf(os.Stderr, "vault keeper: %v\n", err)
 	}
 }
@@ -349,6 +349,10 @@ func (a *app) vaultSigninLog(format string, args ...any) {
 // broker holds a session (beekeeper secret status). A failure that passes
 // by itself leaves no note: the broker signs in again at the next call.
 func (a *app) vaultSigninFailed(exe string, cause secret.SigninCause, tries int, err error) {
+	if a.store == nil {
+		fmt.Fprintf(os.Stderr, "vault keeper: %v: sign-in failed (%s) after %s: %s\n", errNoStore, cause, triesOf(tries), lastOf(err.Error()))
+		return
+	}
 	if uerr := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		evs := []state.Event{event(vaultParty, "vault.signin", "failed (%s) after %s: %s", cause, triesOf(tries), lastOf(err.Error()))}
 		probe := guard.ShellQuote(exe) + " secret status"

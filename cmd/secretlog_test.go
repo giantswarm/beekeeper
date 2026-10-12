@@ -73,6 +73,28 @@ func TestSecretCallFailsWhenItsEntryIsNotWritten(t *testing.T) {
 	noSecret(t, "the error", err.Error())
 }
 
+// A failed brokered call on an app without a store answers the call's own
+// error and why it is not logged, never a panic.
+func TestBrokerLogWithoutAStoreFailsTheCall(t *testing.T) {
+	a, _, _ := secretApp(t)
+	a.store = nil
+	req := sandbox.Request{Op: sandbox.OpSecret, Args: []string{copyOp, dbRef, "x.sops.yaml#k"}}
+	refusal := errors.New("refused here")
+	h := a.secretCallLogged(time.Minute, func(context.Context, int, sandbox.Request) (sandbox.Reply, error) {
+		return sandbox.Reply{}, refusal
+	})
+	_, err := h(context.Background(), os.Getpid(), req)
+	if !errors.Is(err, refusal) || !strings.Contains(err.Error(), "the call is not logged: "+errNoStore.Error()+"; the entry: ") {
+		t.Errorf("a refused call without a store = %v", err)
+	}
+	h = a.secretCallLogged(time.Minute, func(context.Context, int, sandbox.Request) (sandbox.Reply, error) {
+		return sandbox.Reply{Code: -1}, nil
+	})
+	if r, err := h(context.Background(), os.Getpid(), req); err != nil || !strings.Contains(r.Err, "beekeeper: the call is not logged: "+errNoStore.Error()) {
+		t.Errorf("a call ended by a signal without a store = %+v, %v", r, err)
+	}
+}
+
 // The broker logs a brokered secret call that ran no process of its own to
 // its end: one refused before it ran, one ended on the broker's deadline.
 // A call that ran to its end logged itself.
