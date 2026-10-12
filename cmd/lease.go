@@ -609,20 +609,15 @@ func purposeText(h lease.Holder) string {
 // the roster whose CLI does not run (its headless turn ended, its import
 // waits), whose grant waits for its next turn, with what says so.
 func (a *app) grantee(sessions []*claude.Session, q string) (*claude.Session, string, error) {
-	to, err := claude.Resolve(sessions, q)
-	if err == nil {
-		return to, "", nil
-	}
-	st, rerr := a.store.Read()
-	if rerr != nil {
+	st, err := a.store.Read()
+	if err != nil {
 		return nil, "", err
 	}
-	i, ferr := findAgent(st, q)
-	if ferr != nil {
-		return nil, "", err
+	to, absent, err := sessionNamed(sessions, st, q, a.now)
+	if absent != "" {
+		absent += "; it claims once a CLI of it runs"
 	}
-	ag := st.Agents[i]
-	return &claude.Session{ID: ag.Session, HostID: ag.HostSession, Name: ag.Name}, noCLI(ag, a.now) + "; it claims once a CLI of it runs", nil
+	return to, absent, err
 }
 
 // unblockText marks a grant an upgrade hold admits.
@@ -642,7 +637,7 @@ func (a *app) leaseGrantCmd() *cobra.Command {
 claim it once it is free and every earlier grant for it is claimed or
 expired. A grant waits while the resource is held; once it is free the grant
 expires after grantTTL (default 30m). The session is a name, a unique part of
-one, a session id or a PID.
+one, a session id or a PID; a registered agent also by its roster name.
 
 While a cluster upgrade holds an installation, every claim on it is refused,
 plain grants included. --upgrade-unblock "<why>" grants the one claim that

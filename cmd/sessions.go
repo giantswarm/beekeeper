@@ -278,7 +278,10 @@ func (a *app) serveCmd() *cobra.Command {
 epic it serves and what it waits on. A new record replaces the session's
 last one. sessions and the hand-over show it, and beekeeper watch prints one
 line when the session ends, naming the issue to re-query. The session is a
-name, a unique part of one, a session id or a PID.`,
+session id, a PID, a session's own name or a registered agent's roster name,
+or a unique part of a name; a whole name wins over a part of another. A
+registered agent whose CLI does not run is recorded too, and the line says
+so.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error {
 			if !issueRef.MatchString(args[1]) {
@@ -292,9 +295,13 @@ name, a unique part of one, a session id or a PID.`,
 			if err != nil {
 				return err
 			}
-			s, err := claude.Resolve(sessions, args[0])
+			st, err := a.store.Read()
 			if err != nil {
-				return refused("%v", err)
+				return err
+			}
+			s, absent, err := sessionNamed(sessions, st, args[0], a.now)
+			if err != nil {
+				return err
 			}
 			r := state.Record{Issue: args[1], Waits: strings.Join(strings.Fields(waits), " "), By: me, At: a.now.UTC()}
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -306,7 +313,11 @@ name, a unique part of one, a session id or a PID.`,
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(a.out, "%q %s\n", r.Session.Name, recordText(r))
+			line := fmt.Sprintf("%q %s", r.Session.Name, recordText(r))
+			if absent != "" {
+				line += "; " + absent
+			}
+			_, err = fmt.Fprintln(a.out, line)
 			return err
 		},
 	}
@@ -371,6 +382,68 @@ func findRecord(records []state.Record, q string) (int, error) {
 		return i, nil
 	}
 	return -1, refused("%s is served by %s: name the session", q, strings.Join(names, ", "))
+}
+
+// sessionNamed is the session q names, by the one rule of the commands that
+// take a session: a session id, host id or PID, else a name matched whole
+// (ignoring case) before a unique part of one, where a running session's
+// names are its own (its desktop title or process name) and, for a
+// registered agent, its roster name. A registered agent whose CLI does not
+// run resolves to its roster entry, and absent says so.
+func sessionNamed(sessions []*claude.Session, st *state.State, q string, now time.Time) (to *claude.Session, absent string, err error) {
+	type target struct {
+		s      *claude.Session
+		names  []string
+		absent string
+	}
+	targets := make([]*target, 0, len(sessions)+len(st.Agents))
+	for _, s := range sessions {
+		targets = append(targets, &target{s: s, names: []string{s.Name}})
+	}
+	for _, ag := range st.Agents {
+		if i := slices.IndexFunc(sessions, func(s *claude.Session) bool { return ag.Is(s.Party()) }); i >= 0 {
+			targets[i].names = append(targets[i].names, ag.Name)
+			continue
+		}
+		targets = append(targets, &target{
+			s:      &claude.Session{ID: ag.Session, HostID: ag.HostSession, Name: ag.Name},
+			names:  []string{ag.Name},
+			absent: noCLI(ag, now),
+		})
+	}
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return nil, "", refused("no session named")
+	}
+	lq := strings.ToLower(q)
+	var whole, part []*target
+	for _, t := range targets {
+		if t.s.ID == q || t.s.HostID == q || t.s.PID != 0 && strconv.Itoa(t.s.PID) == q {
+			return t.s, t.absent, nil
+		}
+		switch {
+		case slices.ContainsFunc(t.names, func(n string) bool { return strings.ToLower(n) == lq }):
+			whole = append(whole, t)
+		case slices.ContainsFunc(t.names, func(n string) bool { return strings.Contains(strings.ToLower(n), lq) }):
+			part = append(part, t)
+		}
+	}
+	hits := whole
+	if len(hits) == 0 {
+		hits = part
+	}
+	switch len(hits) {
+	case 0:
+		return nil, "", refused("no running session or registered agent matches %q: name one by its session name, roster name or session id", q)
+	case 1:
+		return hits[0].s, hits[0].absent, nil
+	}
+	named := make([]string, len(hits))
+	for i, t := range hits {
+		named[i] = fmt.Sprintf("%q (%s)", t.s.Name, t.s.ID)
+	}
+	slices.Sort(named)
+	return nil, "", refused("%q matches %d sessions: %s; pass one's session id", q, len(hits), strings.Join(named, ", "))
 }
 
 // servedBy is the session p as a serve record names it: under its roster
