@@ -25,10 +25,12 @@ type Client struct {
 	Plans []string
 }
 
-// field is a single-select field of the board.
+// field is a field of the board: a single-select one with its options, or
+// a plain one with its data type (NUMBER for the Priority).
 type field struct {
-	ID      string
-	Options []struct{ ID, Name string }
+	ID       string
+	DataType string
+	Options  []struct{ ID, Name string }
 }
 
 func (f field) names() []string {
@@ -44,7 +46,7 @@ func (f field) option(name string) string {
 	return f.Options[slices.IndexFunc(f.Options, func(o struct{ ID, Name string }) bool { return o.Name == name })].ID
 }
 
-// meta is the board's id and single-select fields by name.
+// meta is the board's id and its single-select and plain fields by name.
 type meta struct {
 	ID     string
 	Fields map[string]field
@@ -233,16 +235,17 @@ func (c *Client) meta(ctx context.Context) (*meta, error) {
 				ID     string `json:"id"`
 				Fields struct {
 					Nodes []struct {
-						ID      string `json:"id"`
-						Name    string `json:"name"`
-						Options []struct{ ID, Name string }
+						ID       string `json:"id"`
+						Name     string `json:"name"`
+						DataType string `json:"dataType"`
+						Options  []struct{ ID, Name string }
 					} `json:"nodes"`
 				} `json:"fields"`
 			} `json:"projectV2"`
 		} `json:"repositoryOwner"`
 	}
 	err = c.graphql(ctx, &r, `query($o:String!,$n:Int!){repositoryOwner(login:$o){...on ProjectV2Owner{projectV2(number:$n){id
-fields(first:50){nodes{...on ProjectV2SingleSelectField{id name options{id name}}}}}}}}`,
+fields(first:50){nodes{...on ProjectV2SingleSelectField{id name options{id name}} ...on ProjectV2Field{id name dataType}}}}}}}`,
 		vars{"o": owner, "n": c.Board.Project})
 	if err != nil {
 		return nil, err
@@ -253,7 +256,7 @@ fields(first:50){nodes{...on ProjectV2SingleSelectField{id name options{id name}
 	m := &meta{ID: r.Owner.Project.ID, Fields: map[string]field{}}
 	for _, f := range r.Owner.Project.Fields.Nodes {
 		if f.ID != "" {
-			m.Fields[f.Name] = field{ID: f.ID, Options: f.Options}
+			m.Fields[f.Name] = field{ID: f.ID, DataType: f.DataType, Options: f.Options}
 		}
 	}
 	if _, ok := m.Fields[StatusField]; !ok {

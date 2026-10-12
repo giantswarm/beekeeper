@@ -107,6 +107,10 @@ type Candidate struct {
 	Epic string `json:"epic,omitempty"`
 	// Skip says why it is not free, empty when it is.
 	Skip string `json:"skip,omitempty"`
+	// Priority is the rank ByPriority applied, 0 for none; PriorityOf the
+	// epic it is the rank of, the candidate itself or an ancestor.
+	Priority   int    `json:"priority,omitempty"`
+	PriorityOf string `json:"priorityOf,omitempty"`
 }
 
 // Why says why a free candidate is picked.
@@ -118,7 +122,22 @@ func (c Candidate) Why() string {
 	if c.Status != "" {
 		s += " (" + c.Status + ")"
 	}
+	if p := c.PriorityText(); p != "" {
+		s += ", " + p
+	}
 	return s
+}
+
+// PriorityText says the rank applied: "priority 2", "priority 2 of epic
+// owner/repo#n" when inherited; "" for none.
+func (c Candidate) PriorityText() string {
+	switch {
+	case c.Priority == 0:
+		return ""
+	case strings.EqualFold(c.PriorityOf, c.Ref):
+		return fmt.Sprintf("priority %d", c.Priority)
+	}
+	return fmt.Sprintf("priority %d of epic %s", c.Priority, c.PriorityOf)
 }
 
 // Rank returns the candidates of every step in order, each item once, in

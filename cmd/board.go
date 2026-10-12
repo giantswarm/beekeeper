@@ -37,9 +37,10 @@ func (a *app) boardCmd() *cobra.Command {
 next applies the configured order (board.order) to the board's open items
 and the roster and prints the first free item with why it is picked; move
 sets an item's Status by the board's canonical names; rank sets an item's
-priority, its position on the board, which is the order next reads the
-items of each step in; block and unblock record and remove a hold on an
-item, a GitHub blocked-by dependency on another issue, which next reads.`,
+position on the board, which is the order next reads the items of each step
+in, under the person's priority list (beekeeper priority); block and
+unblock record and remove a hold on an item, a GitHub blocked-by
+dependency on another issue, which next reads.`,
 	}
 	c.AddCommand(a.boardNextCmd(), a.boardMoveCmd(), a.boardRankCmd(), a.boardHoldCmd(true), a.boardHoldCmd(false))
 	return c
@@ -65,7 +66,13 @@ sub-issues wait for the go") or without one (its planning session's), and
 never offered through its sub-issues; an issue whose nearest epic among its
 parents on the board is in planning is skipped as "sub-issue of epic
 <owner/repo#n>, in planning (Up Next)". Moving the epic to In Progress is
-the go: from then its open sub-issues are offered, in their order. A plan is
+the go: from then its open sub-issues are offered, in their order. The
+person's priority list (beekeeper priority, the board's Priority field) comes
+first: the candidates are ordered by the rank of their epic, an issue's own
+or that of its nearest ranked ancestor through the sub-issue relation, the
+unranked after the ranked, each rank in the order above; the pick prints the
+rank it applied ("priority 2 of epic <owner/repo#n>", --json priority and
+priorityOf). A plan is
 the open or merged pull request of plans.repositories whose description
 names the epic; its state never gates. The first item that is free
 is picked: not served by a running session (a sessions serve record, a busy
@@ -135,6 +142,11 @@ replaces the record. Exit 3 when no item is free or the claim is refused.`,
 				return err
 			}
 			cands := board.Rank(snap, a.cfg.Board, a.now)
+			prios, err := cl.Priorities(cmd.Context())
+			if err != nil {
+				return err
+			}
+			board.ByPriority(cands, prios.Ranks(), snap.Parent)
 			listed := time.Now()
 			sessions, _, err := a.sessions()
 			if err != nil {
@@ -540,7 +552,11 @@ func (a *app) printNext(res nextResult, offered int) error {
 				_, _ = fmt.Fprintf(a.out, "free behind it, next in line: %d of %d\n", len(free), n)
 				w := a.table()
 				for _, c := range free {
-					_, _ = fmt.Fprintf(w, "  %s\t%s\t%s\n", c.Ref, truncate(c.Title, 50), c.Step)
+					line := fmt.Sprintf("  %s\t%s\t%s", c.Ref, truncate(c.Title, 50), c.Step)
+					if p := c.PriorityText(); p != "" {
+						line += "\t" + p
+					}
+					_, _ = fmt.Fprintln(w, line)
 				}
 				_ = w.Flush()
 			}
@@ -647,8 +663,9 @@ func (a *app) boardRankCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "rank <owner/repo#n|URL> --top | --before <issue> | --after <issue>",
 		Short: "Set a board item's priority: move it to the top, or before or after another item",
-		Long: `An item's priority is its position on the board: board next walks the items
-of each board.order step in the board's position order, the order a view
+		Long: `An item's position on the board orders it within its rank of the person's
+priority list (beekeeper priority): board next walks the items of each
+board.order step in the board's position order, the order a view
 without a sort shows and a drag in it changes (the roadmap board's Epics and
 Backlogs views). rank moves the issue's item to the top of the board, right
 before or right after the item of another issue (updateProjectV2ItemPosition),
