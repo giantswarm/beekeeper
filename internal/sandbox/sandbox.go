@@ -13,7 +13,6 @@ package sandbox
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io/fs"
 	"maps"
 	"os"
@@ -148,19 +147,58 @@ func New(cfg config.Sandbox, e Paths) Policy {
 		}
 	}
 	for _, ps := range []*[]string{&p.Read, &p.Write, &p.Deny, &p.ToolWrite} {
-		*ps = slices.DeleteFunc(*ps, func(q string) bool { return q == "" })
-		for i, q := range *ps {
-			(*ps)[i] = filepath.Clean(q)
-			// the sandbox mounts what a path resolves to: a symlinked
-			// config or checkout is listed at its target too
-			if r, err := filepath.EvalSymlinks(q); err == nil && r != (*ps)[i] {
-				*ps = append(*ps, r)
-			}
-		}
-		slices.Sort(*ps)
-		*ps = slices.Compact(*ps)
+		normalize(ps)
 	}
+	p.Read = around(p.Read, p.Write)
+	normalize(&p.Read)
 	return p
+}
+
+// normalize drops the empty paths of ps, cleans the rest and lists a
+// symlinked one at its target too: the sandbox mounts what a path resolves
+// to, so a symlinked config or checkout is named by its target.
+func normalize(ps *[]string) {
+	*ps = slices.DeleteFunc(*ps, func(q string) bool { return q == "" })
+	for i, q := range *ps {
+		(*ps)[i] = filepath.Clean(q)
+		if r, err := filepath.EvalSymlinks(q); err == nil && r != (*ps)[i] {
+			*ps = append(*ps, r)
+		}
+	}
+	slices.Sort(*ps)
+	*ps = slices.Compact(*ps)
+}
+
+// around lists the readable tree of each path of read around the paths of
+// write inside it: the sandbox mounts a readable path read-only after the
+// writable ones, so a readable parent (the config directory above the
+// state directory) would leave its writable child read-only. A readable
+// path holding a writable one is listed by its entries instead, the one on
+// the way to the writable path split again, and a path that is writable
+// itself is left to Write, which is readable too. An entry made later in
+// such a parent is readable once the policy is rendered again.
+func around(read, write []string) []string {
+	var out []string
+	for _, r := range read {
+		inside := slices.DeleteFunc(slices.Clone(write), func(w string) bool { return !under(w, r) })
+		switch {
+		case len(inside) == 0:
+			out = append(out, r)
+		case slices.Contains(inside, r):
+			// listed in Write
+		default:
+			entries, err := os.ReadDir(r)
+			if err != nil {
+				continue
+			}
+			names := make([]string, len(entries))
+			for i, e := range entries {
+				names[i] = filepath.Join(r, e.Name())
+			}
+			out = append(out, around(names, inside)...)
+		}
+	}
+	return out
 }
 
 // MountPoints creates every path of Deny that does not exist yet: the
@@ -171,20 +209,6 @@ func (p Policy) MountPoints() error {
 	for _, d := range p.Deny {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return err
-		}
-	}
-	return nil
-}
-
-// Nested refuses a path of Read that holds a path of Write: the sandbox
-// mounts the readable parent after the writable child, which it leaves
-// read-only.
-func (p Policy) Nested() error {
-	for _, r := range p.Read {
-		for _, w := range p.Write {
-			if w != r && under(w, r) {
-				return fmt.Errorf("the writable %s lies inside the readable %s, which the sandbox mounts read-only over it: list neither inside the other", w, r)
-			}
 		}
 	}
 	return nil

@@ -823,8 +823,10 @@ same file passed to `claude --settings` holds one session to it, to try a change
   listed stay unreadable. Only the managed settings' read paths count.
 - **Writes:** the session's working directory (when it is readable itself), the temporary directory,
   beekeeper's state, the build slots and `sandbox.allowWrite`. The sandbox mounts a readable path
-  read-only over a writable one inside it, so `beekeeper sandbox install` refuses that layout and
-  names both paths.
+  read-only over a writable one inside it, so a readable path that holds a writable one (beekeeper's
+  state under its config directory, a `sandbox.allowWrite` under a `sandbox.allowRead`) is listed by
+  its entries around the writable path; an entry made in it later is readable once the policy is
+  installed again.
 - **The harness's config directory** (`~/.claude`, or `CLAUDE_CONFIG_DIR`) is denied for writing:
   Claude Code mounts it writable in the sandbox and masks only the entries it knows, so a command could
   otherwise leave a new file there that the harness reads outside the sandbox. The file tools still write
