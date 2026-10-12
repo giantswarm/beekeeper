@@ -41,38 +41,109 @@ var (
 	// pathVar is a variable reference in a path.
 	pathVar = regexp.MustCompile(`\$\{(\w+)\}|\$(\w+)`)
 	// localShells read a script file, a -c string or their input as a
-	// command line.
-	localShells = map[string]bool{"sh": true, bashCmd: true, zshCmd: true, "dash": true, "ksh": true}
-	// nodeCode are node's code options; runSub the subcommand a script
-	// follows (deno run, bun run).
-	nodeCode = []string{"-e", "--eval", "-p", "--print"}
-	runSub   = []string{"run"}
+	// command line; shellOptions are their options that take a value.
+	localShells  = map[string]bool{"sh": true, bashCmd: true, zshCmd: true, "dash": true, "ksh": true}
+	shellOptions = interpreter{values: []string{"-o", "-O", "+o", "+O", "--rcfile", "--init-file"}}
+	// python, node, perl and ruby, as their command lines are read.
+	python = interpreter{code: []string{"-c"}, module: []string{"-m"}, values: []string{"-W", "-X", "--check-hash-based-pycs"}}
+	node   = interpreter{code: []string{"-e", "--eval", "-p", "--print"}, values: []string{"-r", "--require", "--import", "--loader", "--input-type", "--env-file"}}
+	perl   = interpreter{code: []string{"-e", "-E"}, combined: "eE", values: []string{"-I"}}
+	ruby   = interpreter{code: []string{"-e"}, combined: "e", values: []string{"-I", "-r", "-C", "-E"}}
+	// runSub is the subcommand a script follows (deno run, bun run).
+	runSub = []string{"run"}
 	// interpreters run a script file, the code behind one of their options,
 	// or the program on their input.
 	interpreters = map[string]interpreter{
-		"python":  {code: []string{"-c"}},
-		"python2": {code: []string{"-c"}},
-		"python3": {code: []string{"-c"}},
-		"node":    {code: nodeCode},
-		"nodejs":  {code: nodeCode},
-		"bun":     {code: nodeCode, sub: runSub},
-		"deno":    {code: []string{"eval"}, sub: runSub},
-		"perl":    {code: []string{"-e", "-E"}},
-		"ruby":    {code: []string{"-e"}},
-		"php":     {code: []string{"-r"}},
-		"lua":     {code: []string{"-e"}},
+		"python":  python,
+		"python2": python,
+		"python3": python,
+		"node":    node,
+		"nodejs":  node,
+		"bun":     {code: node.code, sub: runSub, values: []string{"-r", "--preload"}},
+		"deno":    {code: []string{"eval"}, sub: runSub, values: []string{"--config", "--import-map"}},
+		"perl":    perl,
+		"ruby":    ruby,
+		"php":     {code: []string{"-r"}, file: []string{"-f"}, values: []string{"-d", "-c", "-z"}},
+		"lua":     {code: []string{"-e"}, values: []string{"-l"}},
 	}
-	// valueOptions are the options of shells and interpreters that take a
-	// value, so that the value is not taken for the script.
-	valueOptions = map[string]bool{"-o": true, "-m": true, "-W": true, "-X": true, "-r": true, "--require": true, "-I": true, "-M": true}
 	// redirection is a redirection word; bare, its target is the next word.
 	redirection  = regexp.MustCompile(`^\d*[<>&]`)
 	bareRedirect = regexp.MustCompile(`^\d*(?:<<<|[<>]|>>|>\||[<>]&|&>)$`)
 )
 
+// interpreter says how an interpreter's (or a shell's) command line names
+// what it runs. Its program is read in the line's order: the argument of a
+// code option, a module option (the program is a module: nothing on the line
+// is a script), the argument of a file option, or the first operand (a
+// script, or - for the input); an option's value, a redirection's target and
+// a subcommand are no operand. What follows the program is its data.
 type interpreter struct {
-	code []string // the options whose argument is the program
-	sub  []string // the subcommands a script follows (deno run)
+	code     []string // the options whose argument is the program (-c, -e)
+	combined string   // the letters a short option ends in to carry a code option (perl -ne)
+	module   []string // the options whose argument names a module to run (python -m)
+	file     []string // the options whose argument is the script (php -f)
+	values   []string // the other options that take a value
+	sub      []string // the subcommands a script follows (deno run)
+}
+
+// codeOption reports whether the option carries the interpreter's code option.
+func (ip interpreter) codeOption(a string) bool {
+	if slices.Contains(ip.code, a) {
+		return true
+	}
+	return ip.combined != "" && len(a) > 2 && a[0] == '-' && a[1] != '-' && strings.ContainsRune(ip.combined, rune(a[len(a)-1]))
+}
+
+// programKind says what an interpreter's or a shell's command line runs.
+type programKind int
+
+const (
+	programNone   programKind = iota // nothing on the line: a module (python -m)
+	programCode                      // the argument of a code option (python -c, node -e)
+	programScript                    // a script file
+	programInput                     // the program on its input: an operand -, or none
+)
+
+// program is what the interpreter or shell runs, as the interpreter's
+// command line names it: opt the option that names it, arg its argument.
+type program struct {
+	kind     programKind
+	opt, arg string
+}
+
+// readProgram reads the interpreter's program off its arguments, in their
+// order, so that what follows the program is left as its data.
+func readProgram(args []string, ip interpreter) program {
+	for k := 0; k < len(args); k++ {
+		a := args[k]
+		switch {
+		case a == "--":
+			if k+1 < len(args) && args[k+1] != "-" {
+				return program{kind: programScript, arg: args[k+1]}
+			}
+			return program{kind: programInput}
+		case a == "-":
+			return program{kind: programInput}
+		case ip.codeOption(a):
+			if k+1 < len(args) {
+				return program{programCode, a, args[k+1]}
+			}
+			return program{kind: programNone}
+		case slices.Contains(ip.module, a):
+			return program{kind: programNone}
+		case slices.Contains(ip.file, a):
+			if k+1 < len(args) {
+				return program{programScript, a, args[k+1]}
+			}
+			return program{kind: programNone}
+		case slices.Contains(ip.values, a), bareRedirect.MatchString(a):
+			k++
+		case strings.HasPrefix(a, "-"), strings.HasPrefix(a, "+"), redirection.MatchString(a), slices.Contains(ip.sub, a):
+		default:
+			return program{kind: programScript, arg: a}
+		}
+	}
+	return program{kind: programInput}
 }
 
 // scriptMode says how a script's text is read: as a shell command line, as
@@ -147,15 +218,29 @@ func (h Hook) ungated(cmd, cwd string, depth int) *ungated {
 }
 
 // segmentUngated finds what the simple command segs[i] runs outside the gate;
-// missing names a script it runs that cannot be read before the call.
+// missing names a script it runs that cannot be read before the call. A file
+// the command only reads is data, whatever it says: one after the program
+// (`python3 -c '…' log.txt`, `bash x.sh log.txt`, `python3 - log.txt <<'EOF'`),
+// a module's argument (`python3 -m json.tool log.txt`), a read-only command's
+// argument, or a redirection with no command (`$(<report.txt)`).
 func (h Hook) segmentUngated(cmd string, sc shellScan, segs []segment, i int, dirs []string, vars map[string]string, depth int) (*ungated, string) {
 	words := shellWords(sc.plain[segs[i].start:segs[i].end])
 	c := commandAt(words)
-	if c == len(words) {
+	// A redirection before the command word is the command's; one with no
+	// command word reads its file as data ($(<f)).
+	run := c
+	for c < len(words) && redirection.MatchString(words[c]) {
+		if bareRedirect.MatchString(words[c]) {
+			c++
+		}
+		c++
+	}
+	if c >= len(words) {
 		return nil, ""
 	}
 	name, args := path.Base(words[c]), words[c+1:]
 	ip, interp := interpreters[name]
+	mode := modeCode
 	switch {
 	case name == "source" || name == ".":
 		if len(args) == 0 {
@@ -166,20 +251,18 @@ func (h Hook) segmentUngated(cmd string, sc shellScan, segs []segment, i int, di
 		if slices.ContainsFunc(args, isCFlag) || slices.Contains(args, "-n") {
 			return nil, "" // hiddenMerges refuses a -c string; -n runs nothing
 		}
-		if s := operand(args, nil); s != "" && s != "-" {
-			return h.scriptUngated(s, modeShell, true, dirs, vars, depth)
-		}
-		return h.inputUngated(cmd, sc, segs, i, words[c:], modeShell, dirs, vars, depth), ""
+		ip, mode = shellOptions, modeShell
+		fallthrough
 	case interp:
-		for k, a := range args {
-			if slices.Contains(ip.code, a) && k+1 < len(args) {
-				return h.textUngated(args[k+1], name+"'s code ("+a+")", false), ""
-			}
+		switch p := readProgram(args, ip); p.kind {
+		case programCode:
+			return h.textUngated(p.arg, name+"'s code ("+p.opt+")", false), ""
+		case programScript:
+			return h.scriptUngated(p.arg, mode, true, dirs, vars, depth)
+		case programInput:
+			return h.inputUngated(cmd, sc, segs, i, name, words[run:], mode, dirs, vars, depth), ""
 		}
-		if s := operand(args, ip.sub); s != "" && s != "-" {
-			return h.scriptUngated(s, modeCode, true, dirs, vars, depth)
-		}
-		return h.inputUngated(cmd, sc, segs, i, words[c:], modeCode, dirs, vars, depth), ""
+		return nil, ""
 	case strings.Contains(words[c], "/"):
 		// A path run twice over the command line is written by it first.
 		return h.scriptUngated(words[c], modeShebang, strings.Count(cmd, words[c]) > 1, dirs, vars, depth)
@@ -192,32 +275,11 @@ func isCFlag(a string) bool {
 	return strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") && strings.Contains(a, "c")
 }
 
-// operand is the first argument that is no option, no option's value, no
-// redirection and no subcommand of sub: the script, "" for none.
-func operand(args, sub []string) string {
-	for k := 0; k < len(args); k++ {
-		a := args[k]
-		switch {
-		case a == "--":
-			if k+1 < len(args) {
-				return args[k+1]
-			}
-			return ""
-		case valueOptions[a], bareRedirect.MatchString(a):
-			k++
-		case strings.HasPrefix(a, "-") && a != "-", redirection.MatchString(a), slices.Contains(sub, a):
-		default:
-			return a
-		}
-	}
-	return ""
-}
-
-// inputUngated finds what the shell or interpreter words[0] runs from its
-// input: a here-string, a redirected file, a here-document, or the pipeline
-// stages before it (their text, and the files they name).
-func (h Hook) inputUngated(cmd string, sc shellScan, segs []segment, i int, words []string, mode scriptMode, dirs []string, vars map[string]string, depth int) *ungated {
-	name := path.Base(words[0])
+// inputUngated finds what the shell or interpreter name runs from its input:
+// a here-string, a redirected file, a here-document, or the pipeline stages
+// before it (their text, and the files they name); words are its command's,
+// a redirection before the command word included.
+func (h Hook) inputUngated(cmd string, sc shellScan, segs []segment, i int, name string, words []string, mode scriptMode, dirs []string, vars map[string]string, depth int) *ungated {
 	for k, w := range words {
 		switch {
 		case w == "<<<" && k+1 < len(words):

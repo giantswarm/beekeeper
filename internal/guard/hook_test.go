@@ -388,6 +388,138 @@ func TestHookRefusesScriptMerges(t *testing.T) {
 	}
 }
 
+// dataFiles writes the files of the data-file tests into dir: a log and a
+// report whose text names the gated commands as a log and a report do, the
+// read-only programs that read them, and the scripts that run a merge.
+func dataFiles(t *testing.T, dir, gate string) {
+	t.Helper()
+	for name, content := range map[string]string{
+		"log.txt":   "{\"at\": \"2026-10-11T12:47:42Z\", \"line\": \"devctl pr wait o/r 7\"}\ndevctl pr merge o/r 7\nbash merge.sh\n",
+		"report.md": "BK 874: done. merging 7:\ndevctl pr merge o/r 7 ran through the gate; a bash merge.sh is refused, as is\nbash <<'EOF'\ndevctl release promote o/r\nEOF\n",
+		"count.py":  "import sys\nprint(len(open(sys.argv[1]).read()))\n",
+		"count.sh":  "grep -c merge \"$1\"\n",
+		"merge.py":  "import subprocess, sys\nsubprocess.run([\"devctl\", \"pr\", \"merge\", \"o/r\", sys.argv[1]], check=True)\n",
+		"merge.sh":  "set -e\ndevctl pr merge o/r \"$1\"\n",
+		"gated.sh":  "set -e\n" + gate + "devctl pr merge o/r \"$1\"\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestHookLeavesADataFileUnread: the hook reads a file as a script only where
+// the call runs it. A file the program only reads is data, whatever its text
+// says: one after the program (the script, a -c or -e code, the - of a
+// program on the input, however the options before it combine), a module's
+// argument, a read-only command's argument, and a $(<file) or $(cat file) in
+// a quoted argument of a command that only carries text (the class of
+// https://github.com/giantswarm/beekeeper/issues/841, one level down:
+// https://github.com/giantswarm/beekeeper/issues/964).
+func TestHookLeavesADataFileUnread(t *testing.T) {
+	h := Hook{Self: self, Shell: testShell, Clusters: func() []string { return nil }, Leases: func() []lease.Holder { return nil }}
+	dir := t.TempDir()
+	dataFiles(t, dir, self+" gate -- ")
+	log := filepath.Join(dir, "log.txt")
+	for _, cmd := range []string{
+		// The acceptance criterion: a read-only one-liner on a data file.
+		`python3 -c 'import sys; print(open(sys.argv[1]).read())' log.txt`,
+		`python3 -I -c 'import sys; print(open(sys.argv[1]).read())' ` + log,
+		`cd ` + dir + ` && python3 -X utf8 -c 'import sys; print(open(sys.argv[1]).read())' log.txt | tail -3`,
+		// The live case: the program on the input, the file its argument.
+		"f=" + log + "; python3 -I - \"$f\" <<'EOF'\nimport sys, io\np=sys.argv[1]; s=io.open(p, encoding='utf-8').read()\nprint(s)\nEOF",
+		"python3 - log.txt <<'EOF'\nimport sys\nprint(open(sys.argv[1]).read())\nEOF",
+		// A file after the script, whatever the options before the script.
+		"python3 count.py log.txt",
+		"python3 -I count.py " + log + " >| out.md && wc -c out.md",
+		"python3 count.py -c log.txt",
+		"bash count.sh log.txt",
+		"bash -o pipefail count.sh log.txt",
+		"bash gated.sh 7 log.txt",
+		// A module's argument.
+		"python3 -m json.tool log.txt",
+		"python3 -m pytest tests/ log.txt",
+		// The other interpreters' one-liners.
+		`node -e 'console.log(require("fs").readFileSync(process.argv[1], "utf8"))' log.txt`,
+		`node -r ./setup.js -e 'console.log(1)' log.txt`,
+		`perl -ne 'print if /merge/' log.txt`,
+		`perl -lane 'print $F[0]' log.txt`,
+		`ruby -e 'puts File.read(ARGV[0])' log.txt`,
+		`ruby -ne 'puts $_ if /merge/' log.txt`,
+		`php -r 'echo file_get_contents($argv[1]);' log.txt`,
+		// A read-only command's argument, before an interpreter's code too.
+		"grep -n 'devctl pr merge' log.txt",
+		"sed -n 2p log.txt | tail -1",
+		"cat log.txt | python3 -c 'import sys; print(sys.stdin.read())'",
+		"grep merge log.txt | python3 count.py /dev/stdin",
+		// A file read into a quoted argument of a command that only carries text.
+		`beekeeper agents idle --done --report "$(<report.md)" --problem none`,
+		`R=` + dir + `; beekeeper agents idle --done --report "$(<$R/report.md)" --problem "the hook read the report as a script"`,
+		`beekeeper agents idle --done --report "$(cat report.md)" --problem none`,
+		`beekeeper agents idle --done --report "$(< ` + filepath.Join(dir, "report.md") + `)" --problem none`,
+		`beekeeper note add --for x "$(<` + filepath.Join(dir, "report.md") + `)"`,
+		// Wrapped in beekeeper run, the same.
+		self + ` run -- zsh -c 'python3 -c "import sys; print(open(sys.argv[1]).read())" log.txt'`,
+		self + ` run -- zsh -c 'python3 count.py log.txt'`,
+	} {
+		if d := decide(t, h, dir, cmd, nil); d != nil && d.PermissionDecision == decisionDeny {
+			t.Errorf("%q is refused: %s", cmd, d.Reason)
+		}
+	}
+}
+
+// TestHookGatesTheProgramItRuns: what the call runs is read as before, data
+// files beside it or not: a script with a merge is refused, the refusal
+// naming the file, the matched token and its line (so a data file the call
+// does run as a program is seen as such), the forms https://github.com/giantswarm/beekeeper/pull/909
+// gates in place stay gated in place, and a beekeeper run wrapper changes
+// nothing of it.
+func TestHookGatesTheProgramItRuns(t *testing.T) {
+	h := Hook{Self: self, Shell: testShell, Clusters: func() []string { return nil }, Leases: func() []lease.Holder { return nil }}
+	g := self + " gate -- "
+	dir := t.TempDir()
+	dataFiles(t, dir, g)
+	log, script, py := filepath.Join(dir, "log.txt"), filepath.Join(dir, "merge.sh"), filepath.Join(dir, "merge.py")
+	const merge, line2, logLine2 = "a devctl pr merge", "line 2:", "line 2: devctl pr merge o/r 7"
+	for _, c := range []struct {
+		cmd  string
+		want []string // the file, the token and the line
+	}{
+		{"bash merge.sh 7 log.txt", []string{"the script " + script, merge, "line 2: devctl pr merge o/r \"$1\""}},
+		{"bash -o pipefail merge.sh 7", []string{"the script " + script, merge, line2}},
+		{"python3 merge.py 7 log.txt", []string{"the script " + py, merge, "line 2: subprocess.run("}},
+		{"python3 -I merge.py 7", []string{"the script " + py, merge, line2}},
+		{"python3 -X utf8 merge.py 7 -c log.txt", []string{"the script " + py, merge, line2}},
+		{"php -f merge.py", []string{"the script " + py, merge, line2}},
+		// A data file the call does run as its program: the refusal names it.
+		{"bash log.txt", []string{"the script " + log, merge, logLine2}},
+		{"sh < log.txt", []string{"the script " + log, merge, logLine2}},
+		{"cat log.txt | bash", []string{"the script " + log, merge, logLine2}},
+		{"python3 log.txt", []string{"the script " + log, "a devctl pr wait", "line 1: {\"at\": \"2026-10-11T12:47:42Z\", \"line\": \"devctl pr wait o/r 7\"}"}},
+		{"python3 -I - < log.txt", []string{"the script " + log, "a devctl pr wait", "line 1:"}},
+	} {
+		d := decide(t, h, dir, c.cmd, nil)
+		if d == nil || d.PermissionDecision != decisionDeny {
+			t.Errorf("%q: want a refusal, got %+v", c.cmd, d)
+			continue
+		}
+		for _, w := range c.want {
+			if !strings.Contains(d.Reason, w) {
+				t.Errorf("%q: reason lacks %q:\n%s", c.cmd, w, d.Reason)
+			}
+		}
+	}
+	for _, c := range []struct{ cmd, want string }{
+		{"bash <<'EOF'\nset -e\ndevctl pr merge o/r 7\nEOF", "bash <<'EOF'\nset -e\n" + g + "devctl pr merge o/r 7\nEOF"},
+		{"cat <<'EOF' | sh\ndevctl release promote o/r\nEOF", "cat <<'EOF' | sh\n" + g + "devctl release promote o/r\nEOF"},
+		{"make && devctl pr merge o/r 7", self + " run -- zsh -c 'make && " + g + "devctl pr merge o/r 7'"},
+	} {
+		if d := decide(t, h, dir, c.cmd, nil); d == nil || d.UpdatedInput["command"] != c.want {
+			t.Errorf("%q: got %+v, want %q", c.cmd, d, c.want)
+		}
+	}
+}
+
 // TestHookGatesRealMerges feeds every devctl pr merge statement from the
 // transcripts of the machine the hook runs on, reduced to its shell skeleton
 // (words outside the shell structure are x, repositories o/r), with the

@@ -1039,8 +1039,14 @@ merge.py`), read relative to the call's working directory and followed into the 
 turn, a script the call writes before it runs it judged by the call's own text; one in an
 interpreter's code (`python3 -c`, `node -e`, `perl -e`, …); and one in the program a shell or an
 interpreter reads from its input (`echo '…' | bash`, `bash <<< '…'`, `sh < merge.sh`, `python3 -
-<<'EOF'`). A merge the gate precedes in the script or the code (`<this binary> gate -- devctl pr
-merge …`) passes, and runs through the gate like a merge typed on the command line.
+<<'EOF'`). Only what the call runs is read: a file after the program (`python3 -c '…' log.txt`,
+`bash x.sh log.txt`, `python3 - log.txt <<'EOF'`), a module's argument (`python3 -m json.tool
+log.txt`), a read-only command's argument (`grep merge log.txt`) and a file read into a quoted
+argument (`--report "$(<report.txt)"`) are the program's data, whatever they say; a refusal a file
+causes names the file, the matched token and its line, so a data file the call does run as its
+program (`bash log.txt`, `cat log.txt | sh`) is seen as such. A merge the gate precedes in the
+script or the code (`<this binary> gate -- devctl pr merge …`) passes, and runs through the gate
+like a merge typed on the command line.
 
 - **Refused, exit 77**, one line starting `beekeeper gate: refused,` that says why and what to do:
   the repository, its lane, `merges` or `github` is held, or a cluster upgrade runs on the lane's
