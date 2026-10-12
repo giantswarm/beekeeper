@@ -57,9 +57,11 @@ func runningMerge(t *testing.T, repo string, lane config.Lane) *gateRun {
 	return runningMergeIn(t, store, repo, lane)
 }
 
-// runningMergeIn is runningMerge in store.
+// runningMergeIn is runningMerge in store, on a machine that runs no devctl
+// process of its own.
 func runningMergeIn(t *testing.T, store *state.FileStore, repo string, lane config.Lane) *gateRun {
 	t.Helper()
+	hostDevctls(t, 0)
 	cfg := &config.Config{Lanes: []config.Lane{lane}, Merge: config.Merge{SeedTTL: config.Duration{Duration: time.Hour}, DevctlOwners: []string{"o", "giantswarm"}}}
 	me := state.Party{Name: "worker"}
 	g := &gateRun{app: &app{cfg: cfg, store: store, now: relayNow}, ctx: context.Background(), repo: repo, pr: 7, lane: lane, me: me, pid: os.Getpid(),
