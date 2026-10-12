@@ -35,7 +35,7 @@ var secretRead secret.SecretReader
 func (a *app) secretCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "secret",
-		Short: "Credential operations that never return a value: compare, fingerprint, copy, set, capture, rotate, unset; reveal answers configuration; store is the person's",
+		Short: "Credential operations that never return a value: compare, fingerprint, copy, set, capture, rotate, unset, github-app; reveal answers configuration; store is the person's",
 		Long: `beekeeper is the only process that reads, creates, encrypts and decrypts
 secrets; an agent asks it with beekeeper secret. sops and op run in
 beekeeper's process, a value stays in its memory for the one operation and
@@ -132,7 +132,7 @@ anything is not equal.`,
 		},
 	})
 	c.AddCommand(a.secretFingerprintCmd(), a.secretCopyCmd(), a.secretSetCmd(), a.secretCaptureCmd(), a.secretRotateCmd(), a.secretSetupCmd(), a.secretImportCmd(), a.secretRecipientsCmd(),
-		a.secretRevealCmd(), a.secretUnsetCmd())
+		a.secretRevealCmd(), a.secretUnsetCmd(), a.secretGitHubAppCmd())
 	for _, sub := range c.Commands() {
 		run := sub.RunE
 		sub.RunE = func(cmd *cobra.Command, args []string) error {
@@ -1145,7 +1145,22 @@ func (a *app) installationNames() []string {
 // provider whose key is there. The client and the broker decide on it
 // alike.
 func (a *app) secretNeedsVault(dir string, args []string) bool {
-	return a.secretArgsNeedVault(args) || a.ageOps().AgeNeedsVault(dir, args)
+	return a.secretArgsNeedVault(args) || a.ageOps().AgeNeedsVault(dir, a.secretFileArgs(args))
+}
+
+// secretFileArgs are args with a github-app call's installation as the
+// SOPS file apps.secrets names for it, the file the call decrypts.
+func (a *app) secretFileArgs(args []string) []string {
+	if len(args) < 2 || args[0] != githubAppOp {
+		return args
+	}
+	out := slices.Clone(args)
+	for i, arg := range out[1:] {
+		if s, ok := a.cfg.Apps.Secrets[arg]; ok {
+			out[i+1] = s.File
+		}
+	}
+	return out
 }
 
 // secretArgsNeedVault is [app.secretNeedsVault] decided from the arguments
@@ -1160,7 +1175,7 @@ func (a *app) secretArgsNeedVault(args []string) bool {
 // age identity secret.ageIdentities names, a file's included, which the
 // broker alone reads.
 func (a *app) secretNeedsBroker(args []string) bool {
-	return secret.NeedsVault(args) || a.ageOps().AgeNeedsIdentity("", args) || a.recipientsNeedVault(args)
+	return secret.NeedsVault(args) || a.ageOps().AgeNeedsIdentity("", a.secretFileArgs(args)) || a.recipientsNeedVault(args)
 }
 
 // ageOps decide where a SOPS file's age identity lives.
