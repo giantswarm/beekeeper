@@ -43,19 +43,41 @@ func stubBaseRelease(t *testing.T, r github.BaseRelease, err error) *int {
 // startMerge makes runningMerge's merge wait for its turn and starts it.
 func startMerge(t *testing.T, g *gateRun) error {
 	t.Helper()
+	why, err := turnCame(t, g)
+	if why != "" {
+		t.Fatalf("the merge did not start: %s", why)
+	}
+	return err
+}
+
+// turnCame makes runningMerge's merge wait for its turn, under a devctl cap
+// of 10, and starts it: the reason it still waits, if any.
+func turnCame(t *testing.T, g *gateRun) (string, error) {
+	t.Helper()
 	g.cfg.Merge.Cap = 10
 	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges[0].Phase, st.Merges[0].Started = state.Waiting, time.Time{}
 		return nil, nil
 	})
 	if err := g.readRelease(); err != nil {
-		return err
+		return "", err
 	}
-	why, err := g.start("", nil)
-	if why != "" {
-		t.Fatalf("the merge did not start: %s", why)
+	return g.start("", nil)
+}
+
+// The devctl cap counts the machine's devctl processes from its process
+// table: a merge whose turn came waits while the cap's number run.
+func TestAMergeWhoseTurnCameWaitsAtTheMachinesDevctlCap(t *testing.T) {
+	stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
+	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
+	hostDevctls(t, 10)
+	why, err := turnCame(t, g)
+	if err != nil || !strings.Contains(why, "10 devctl processes run machine-wide (cap 10)") {
+		t.Fatalf("start: %q, %v; want a wait for the cap", why, err)
 	}
-	return err
+	if st := gateState(t, g); st.Merges[0].Phase != state.Waiting {
+		t.Errorf("the merge started: %+v", st.Merges)
+	}
 }
 
 // A merge into a branch no Auto-release run tags (a fork line's maintenance
