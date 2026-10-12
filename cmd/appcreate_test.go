@@ -83,6 +83,8 @@ type fakeGitHub struct {
 	installQuery url.Values
 	installed    bool
 	noInstall    bool
+	// appPage is the App's installation page reached without preselection.
+	appPage bool
 	// wrongState redirects with another state than the page received.
 	wrongState bool
 	// tokens counts the installations listings asked with the App's token.
@@ -141,6 +143,9 @@ func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			insts = append(insts, map[string]any{"id": fixtureInstall, "repository_selection": selectedRepos, "account": map[string]any{"login": "Example", "id": 77}})
 		}
 		_ = json.NewEncoder(w).Encode(insts)
+	case r.Method == http.MethodGet && r.URL.Path == "/apps/"+fixtureApp+"/installations/new":
+		g.appPage = true
+		_, _ = io.WriteString(w, "the App's installation page")
 	case r.Method == http.MethodGet && r.URL.Path == "/apps/"+fixtureApp+"/installations/new/permissions":
 		g.installQuery = r.URL.Query()
 		g.installed = !g.noInstall

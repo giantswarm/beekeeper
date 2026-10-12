@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/secret"
 )
 
@@ -80,14 +81,33 @@ the file, the App's id, client id and slug, and the fingerprints.`,
 // secretGitHubApp is secret github-app: the checks, the conversion and the
 // write, logged.
 func (a *app) secretGitHubApp(cmd *cobra.Command, installation, code string, replace bool) error {
-	target, ok := a.cfg.Apps.Secrets[installation]
-	if !ok {
-		return usageErr("apps.secrets names no Secret for %q: it names %s", installation, strings.Join(slices.Sorted(maps.Keys(a.cfg.Apps.Secrets)), ", "))
+	target, err := a.appSecret(installation)
+	if err != nil {
+		return err
 	}
-	code, err := parseManifestCode(code)
+	code, err = parseManifestCode(code)
 	if err != nil {
 		return usageErr("--code: %v", err)
 	}
+	return a.writeGitHubApp(cmd, installation, target, replace, func(ctx context.Context) (*githubApp, error) {
+		return convertManifest(ctx, code)
+	})
+}
+
+// appSecret is the Secret apps.secrets names for installation.
+func (a *app) appSecret(installation string) (config.AppSecret, error) {
+	target, ok := a.cfg.Apps.Secrets[installation]
+	if !ok {
+		return target, usageErr("apps.secrets names no Secret for %q: it names %s", installation, strings.Join(slices.Sorted(maps.Keys(a.cfg.Apps.Secrets)), ", "))
+	}
+	return target, nil
+}
+
+// writeGitHubApp checks target, then runs convert, which spends the code,
+// and writes the App's credentials into the Secret in one sops write; it
+// logs and answers the App's id and client id on stdout, the keys written
+// on stderr.
+func (a *app) writeGitHubApp(cmd *cobra.Command, installation string, target config.AppSecret, replace bool, convert func(context.Context) (*githubApp, error)) error {
 	if err := a.sandboxFiles(nil, []secret.Ref{{File: target.File}}); err != nil {
 		return err
 	}
@@ -102,7 +122,7 @@ func (a *app) secretGitHubApp(cmd *cobra.Command, installation, code string, rep
 	var created *githubApp
 	opt.Produce = func(ctx context.Context) (map[string]string, error) {
 		var err error
-		if created, err = convertManifest(ctx, code); err != nil {
+		if created, err = convert(ctx); err != nil {
 			return nil, err
 		}
 		values := map[string]string{githubPrivateKey: created.PEM, githubClientSecret: created.ClientSecret}
@@ -112,7 +132,7 @@ func (a *app) secretGitHubApp(cmd *cobra.Command, installation, code string, rep
 		return values, nil
 	}
 	written, err := ops.SecretKeys(cmd.Context(), target.File, opt)
-	if err != nil && !errors.Is(err, secret.ErrVault) {
+	if err != nil && !errors.Is(err, secret.ErrVault) && Code(err) == ExitError {
 		if created != nil {
 			err = fmt.Errorf("the App %s (id %d) exists and its credentials are stored nowhere: delete it on GitHub and create it again; %w", created.Slug, created.ID, err)
 		}
