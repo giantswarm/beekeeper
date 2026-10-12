@@ -118,12 +118,15 @@ or "wake turn running".`,
 			if me.Session == "" {
 				return refused("an agent is a Claude Code session: run this inside one, without --as")
 			}
-			if name != "" {
-				me.Name = name
-			}
-			sessions, _, err := a.sessions()
+			sessions, t, err := a.sessions()
 			if err != nil {
 				return err
+			}
+			if claude.Nested(t, os.Getpid()) {
+				return refused("this runs in a claude started inside session %q (%s), whose ids it inherits: its entry stays as it is; a nested claude registers nothing", me.Name, me.Session)
+			}
+			if name != "" {
+				me.Name = name
 			}
 			live := func(p state.Party) bool {
 				_, ok := claude.Live(sessions, p)
