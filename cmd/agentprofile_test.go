@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/plugin"
 )
 
 func TestProfileName(t *testing.T) {
@@ -119,18 +121,25 @@ func TestDryRunStartNamesTheProfile(t *testing.T) {
 	dir := t.TempDir()
 	var out bytes.Buffer
 	a := &app{cfg: &config.Config{StateDir: dir, Agents: config.Agents{Dir: dir, Profile: config.MinimalProfile}}, out: &out}
-	if err := a.dryRunStart(context.Background(), agentStart{name: "w", role: workerRole, dir: dir}); err != nil {
+	prompt := workerPrompt(taskPrompt("BK 1 thing"))
+	if err := a.dryRunStart(context.Background(), agentStart{name: "w", role: workerRole, dir: dir, brief: prompt}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := out.String(); !strings.Contains(got, "under profile minimal: its task runs as a headless turn under profile minimal") || !strings.Contains(got, settingsFlag) {
 		t.Errorf("dry run = %s", got)
 	}
+	if got := out.String(); !strings.Contains(got, fmt.Sprintf("first prompt: %d bytes\n%s\n", len(prompt), prompt)) || strings.Contains(got, "does not serve") {
+		t.Errorf("dry run without the first prompt = %s", got)
+	}
 	out.Reset()
 	a.cfg.Agents.Profile = ""
-	if err := a.dryRunStart(context.Background(), agentStart{name: "w", role: workerRole, dir: dir}); err != nil {
+	if err := a.dryRunStart(context.Background(), agentStart{name: "w", role: workerRole, dir: dir, brief: prompt}, plugin.Topics[1:2]); err != nil {
 		t.Fatal(err)
 	}
 	if got := out.String(); !strings.Contains(got, "under no profile") || strings.Contains(got, settingsFlag) {
 		t.Errorf("dry run without a profile = %s", got)
+	}
+	if got := out.String(); !strings.Contains(got, "does not serve "+topicSkills(plugin.Topics[1:2])+" as") {
+		t.Errorf("dry run without the inline topic's note = %s", got)
 	}
 }

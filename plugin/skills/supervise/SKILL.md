@@ -68,25 +68,6 @@ machine has a supervisor at all times: the role moves to a successor by relay an
   the sessions waiting on them; its one-line copies of their answers reach this session, and the
   answers are in `beekeeper log --verb note.answered`. It does no work of its own: research, proofs
   and test sessions it meets come here as one line. `guide start` in this session is refused.
-- **Which numbers matter.** `MemAvailable` under the watch's `availMinMiB`, machine swap *growing*
-  (a swapped page stays until touched, so the absolute figure only records past bursts), sustained
-  memory PSI, desktop scope *anonymous* memory over `scopeAnonMaxMiB` (cache is reclaimable, anon
-  is not), any `oom_kill` on the scope, any `Killed process` in `journalctl -k`. **Which are
-  noise:** the scope's `memory.current` (mostly page cache trimmed at its `memory.high`), its swap
-  sitting at its cap (cold pages of idle CLIs), high load with iowait while an image is imported
-  into a fresh kind lab and memory PSI stays 0. A kernel OOM line with `constraint=CONSTRAINT_MEMCG`
-  names a cgroup: a pod in a kind lab hitting its own limit, or `beekeeper run`'s cap on one
-  command — the owning session's business, told to it in one message with the container and cause.
-- **The installations in play** are those under `alerts.installations`, every installation held as
-  a lease, and any other one a session changes or names in a proving window. Their firing alerts
-  reach the watch as `ALERT NEW|RESOLVED` lines naming the lease holder and the sessions running
-  commands against the installation, each from its `floor` up; an alert that keeps firing and
-  resolving is one `FLAPPING` line. A NEW line's `during merging …` / `during merged …` names what
-  happened on the installation in the last 30 minutes: a lead, not a cause. While one of its
-  clusters upgrades, beekeeper holds the installation by itself (`UPGRADE` to `UPGRADE ENDED`):
-  the gate refuses its lanes' merges and its claims are refused; nothing to set or lift by hand.
-- **The standby unit** (`contrib/systemd/beekeeper-notify.service`) starts the next supervisor run
-  as a fresh session after a crash and resumes a role session whose CLI came back.
 
 ## Constraints
 
@@ -105,91 +86,8 @@ machine has a supervisor at all times: the role moves to a successor by relay an
   one of them, a full URL or `--checked` for a state claim is refused, naming what is missing. At the deadline,
   the default for anything irreversible or production-facing is not to do it; a reversible default
   proceeds. An answer relayed by the guide is the person's word, followed without asking again.
-- **Five to ten agents are busy.** Busy is a roster agent with a task that is not parked; the
-  supervisor, the guide, parked agents and agents waiting on the person do not count, planning
-  sessions do. At every tick below five, the supervisor fills the free slots in the same turn,
-  within the memory guards (`MemAvailable` well above the watch's floor, machine swap not growing,
-  a free build slot, the kind clusters under `maxKindClusters`), and never starts past ten. A task
-  that needs a held lease queues behind the lease without holding the others back. The slots are
-  filled from, in order: pages and new alerts in our area; In Progress items with a closable
-  remainder; Blocked items whose blocker is ours; Up Next items (an Up Next epic is in planning: its
-  sub-issues are work only after the person's go, the move to In Progress); open issues in our
-  repositories, bugs first; the improvement queue of beekeeper and the desk; the top of the
-  Backlog. When Up Next runs dry the supervisor pulls the top Backlog items itself and tells the
-  guide in one line, which is the person's veto; with nothing startable at all, the guide gets one
-  line `nothing startable: <reason>`. A teammate's item only after a one-line ask to that teammate.
-- **Work comes from the roadmap board and stays on it.** An epic entering Up Next with no plan gets
-  a planning session of its own, started with `beekeeper agents start`, whose question rounds reach
-  the person through the guide and which ends with the plan, the sub-issues and `plan ready
-  <epic>`; an epic already In Progress finishes on the criteria in its issue. An unowned finding
-  becomes an issue on the board, then a task; it is never parked in a note, and notes carry only
-  decisions for a person. Each worker moves its own board item; the guide reconciles the board.
-- **Alerts go to whoever changed the area.** A new alert on an installation in play, in an area a
-  session handed out or changed, goes at once to that session by name, with the alert and where it
-  fires. A page has an owning session within one tick: the session that changed the area,
-  otherwise a worker started for it, which records it with `beekeeper alerts own`; `PAGE UNOWNED`
-  is a page nobody took. A page caused by a teammate's resource on our installation is
-  contained at once by a worker, reversibly (suspend, scale to 0), which tells the owner
-  and notifies the guide. Another team's alert in its own area is noted in the tick and left alone.
-  A `RUNAWAY` session is told its figure in one message; a `LANE STALLED` lane gets its absent
-  place checked with that place's session and dropped (`lanes drop`) only when that merge will not
-  come (a place whose pull request merged or closed leaves by itself). At `HANDOVER DUE "<agent>"`, `beekeeper agents handover "<agent>"` hands that agent to a
-  fresh session in its place.
-- **Consent boundaries.** Bounding or waiting beats killing; never kill a busy session's work; never
-  archive or stop a session or take over a held lab without the person's explicit ask. RAM-backed
-  scratch is deleted only for *dead* sessions (CLI gone, PR merged, no worktree) and only after
-  looking at what is there. A kill of a runaway process names an explicit PID from the live process
-  list, never a pattern.
-- **Coordination between sessions.** Sessions that work on the same thing collide: two worktrees on
-  one repo racing to the default branch, two proofs wanting the same lab, two fixes for one issue, a
-  session bumping a chart another is still releasing. At every tick the supervisor maps what each
-  busy session is on (repo, issue, PR, environment) and looks for overlap. When two overlap, both
-  are told by name what the other is doing and the split is proposed: one owns the shared piece,
-  the other waits for its release or takes the disjoint part; the one further along keeps going.
-  Where order matters, the order and who waits are stated. A session that ignores the message is
-  reported to the person, not stopped. Sessions waiting for the same release or CI are not a
-  collision; sessions rediscovering the same bug are: the second is pointed at the first's PR.
-- **Merges and hand-overs go by name.** Merges go through the gate; beekeeper never replaces the
-  merge command, it only decides when it runs. Sessions merge their own green PRs at once and
-  announce `merging <n>` and `merged <n>`; the supervisor never answers `merge now` and never holds
-  a merge by staying silent. It sequences with `hold <repo>` / `release <repo>` (`beekeeper hold
-  set`, `--lane <name>` for a lane) and with the config's `lanes`, which the gate enforces
-  (`beekeeper lanes`; `lanes queue <repo> <n> --for <session>` seeds a place, `lanes settle <repo>
-  <n> --for <session>` registers a merge that ran outside the gate, `hold set --lane <name> --except
-  <repo#n>` keeps a proving window open for the one merge it waits for): one merge or promotion at
-  a time per lane, the lane's HelmReleases Ready on the release before the next. A merge behind a
-  busy lane waits on in its own run and wakes its session with the outcome, so the lane needs no
-  `clear` message and a promotion no separate `go`; only a hold stops a merge, and `lanes clear` is
-  the repair for a lane whose release will not roll. A hold reaches a merge only before its devctl
-  started; after that the merge is a fact to sequence around. Resources are handed over as `yours <env>` / `browser yours` (the message
-  records the grant) and returned as `<env> free` / `browser free`; the session's claim follows. The
-  worker's side of the vocabulary is the `worker-rules` skill.
 - **Reading is a worker's task.** Board sweeps, epic re-queries and research run as workers; the
   supervisor reads their one-line results, never the boards, epics or transcripts in full itself.
-- **Every session's epic is reported when the session ends.** At first sight each session is mapped
-  to the epic or issue it serves and recorded with `beekeeper sessions serve`; the map is part of
-  every tick, and the watch names the issue once when a recorded session ends. The ending session's
-  report, re-queried live, says what closed, merged and rolled and what is still open; the next
-  tick carries it, and the end summary repeats it per epic. When an epic's last sub-issue closes, a
-  closing worker checks the criteria, runs the live proof and moves the epic on.
-- **A fresh worker per task.** A task goes to a worker started with `beekeeper agents start "<task>"
-  <brief file> --task "<task>"`, a model chosen for the task and a brief that carries only the
-  task: `agents start` puts the shipped worker rules ahead of it, and the worker reports to `the
-  supervisor`, which reaches whoever holds the role then; it shows in the desktop's sidebar under its name and on
-  the roster busy from its start. Every new session starts that way, no session is kept in reserve
-  or given a second task. An empty session the person started and registered with
-  `/register-agent` takes one task by `beekeeper agents assign`. A message to an agent whose CLI
-  may have stopped is `beekeeper agents wake <agent> "<message>"`, never a `SendMessage` to its
-  `local_` id, which the desktop caps when nobody types in the sender's session. Done, an agent
-  reports with `agents idle --done`, whose required `--report` the watch prints as `WORKER REPORT`
-  and whose `--problem` lines as `PROBLEM FOUND`: each finding, and each one a worker messages on
-  the way, becomes an issue in its owning repository and a worker. `PARKED ON A PERSON` goes to the
-  guide, who tells the person. The doctor takes the agent off the roster and archives
-  its session, as it does with relieved role holders and idle entries whose CLI is gone a day
-  (`beekeeper doctor --dry-run` lists them); none of it is a note for the person. Briefs are standalone, because every agent
-  starts on an empty context. The checkout the sessions load their project rules and skills from
-  stays on a current default branch: one left on a branch or behind is moved back before a worker
-  starts there. The tick map lists the idle agents and the running workers.
 - **Interventions are on the machine, not in the work.** Freeing memory, telling a session its pod
   OOMed, asking two sessions to coordinate, re-tuning the watch thresholds: yes. Fixing a session's
   failing test, merging its PR, re-running its CI, editing its branch: no, that is the session's.
@@ -198,37 +96,17 @@ machine has a supervisor at all times: the role moves to a successor by relay an
   leaves the role as it is. `beekeeper supervisor stop` ends supervision for everyone and runs only
   on the person's word. The end state is the person's summary.
 
-## Handing the watch on
+## References
 
-The watch moves to a fresh session by relay, from disk, never by a prose brief. Each supervisor is
-a numbered run, "Supervisor run N": its desktop title, roster name and the name peers message it by.
+The rest of the role is in this skill's `references/` folder, each file read when its moment comes
+and all of them at the first tick:
 
-- **When:** by context, not by time. The watch says `RELAY DUE` once this session's context
-  reaches `supervisor.relayAt` and the machine is quiet (no gated merge running or settling, no
-  grant waiting to be claimed, no claim queued). Still over it `supervisor.relayGrace` (30m) later,
-  the standby watch relays this session itself (`RELAYED`).
-- **How:** everything pending is in beekeeper first (notes with defaults, timers, session records,
-  holds, grants, lane seeds); a standing rule this watch agreed on is a pinned note (`beekeeper note
-  add --pin`), which every hand-over carries. Then `beekeeper supervisor relay` starts "Supervisor
-  run N+1" and opens the relay to it. Its headless first turn only takes the role with `beekeeper
-  supervisor start`, which tells every running agent the new name. Once that turn ended, the
-  relay prints one SendMessage to the successor's `local_` id: this session makes exactly that
-  call, which has the desktop start the successor's CLI, where it reads `beekeeper handover --prompt` (one part in full: `--section
-  <name>`), arms its watch and acknowledges by name. A decision listed there as answered is not
-  asked again. Once `beekeeper supervisor
-  status` exits 4 in this session, it is relieved. A relay not taken expires after
-  `supervisor.relayTTL` or is withdrawn with `supervisor relay --cancel`, and the watch carries on.
-- **Where the watch runs:** only in a desktop turn. A headless turn (a first turn, an `agents
-  wake`) that arms a Monitor never ends, so the desktop never gets the session's CLI; such a turn
-  takes the role or answers and ends. The one exception is the standby
-  watch's headless resume, whose message says the desktop runs no CLI of the session: that turn
-  keeps the watch.
-- **After a crash:** `supervisor.restartGrace` after this session's CLI is gone, the standby unit
-  starts the next run the same way; claims stay gated until its `beekeeper supervisor start`. A
-  supervisor reopened after a reboot (`beekeeper supervisor reopen`) has lost its watch; the
-  standby unit tells it to resume from `beekeeper handover --prompt`, and starts a successor when
-  it is not back within minutes.
-- **A first supervisor** started from the person's message runs `beekeeper supervisor start`
-  (`--take-over` only for a predecessor whose session still runs without a relay) and reads
-  `beekeeper handover --full` for what the last watch left; beekeeper records it as the next run and
-  titles its desktop session with it.
+- `references/scheduling.md`: the five to ten busy agents, the board, a fresh worker per task, the
+  epics reported at a session's end. Read before filling free slots.
+- `references/merges-and-collisions.md`: merges, holds, lanes and hand-overs by name, sessions that
+  overlap. Read when sessions overlap, a lane stalls or a merge needs sequencing.
+- `references/machine-and-alerts.md`: the numbers that matter, the installations in play and their
+  alerts, the standby unit, consent boundaries. Read when the watch reports memory, an OOM kill,
+  an alert or a page.
+- `references/relay.md`: handing the watch on, after a crash or a reboot, a first supervisor. Read
+  at `RELAY DUE`, in a headless turn and when starting the watch.

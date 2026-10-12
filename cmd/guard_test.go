@@ -45,6 +45,9 @@ func TestMain(m *testing.M) {
 			panic(err)
 		}
 	}
+	// No test asks the machine's Claude Code for its plugins; one that
+	// wants a list sets it.
+	listPlugins = func(context.Context) ([]installedPlugin, error) { return nil, nil }
 	os.Exit(m.Run())
 }
 
