@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -30,7 +31,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/secret"
+	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
@@ -248,6 +251,11 @@ func (a *app) createApp(ctx context.Context, name string, wait time.Duration, sa
 		return nil, err
 	}
 	defer flow.stop()
+	unrecord, err := a.recordRun(plan.name, plan.org, plan.decl.Source, flow)
+	if err != nil {
+		return nil, err
+	}
+	defer unrecord()
 
 	repos := "all repositories"
 	if plan.decl.Repositories != nil {
@@ -269,6 +277,11 @@ func (a *app) createApp(ctx context.Context, name string, wait time.Duration, sa
 		return nil, err
 	}
 	stored, err := a.storeFields(ctx, plan.item, appFields(created))
+	where := plan.item
+	if err != nil {
+		where = ""
+	}
+	a.recordCreated(say, plan.name, plan.org, plan.decl.Source, where, created)
 	if err != nil {
 		flow.installs <- flowOutcome{err: err}
 		return nil, fmt.Errorf("the App %s exists at %s and its credentials are stored nowhere (%w): delete it there (Advanced, Delete GitHub App) and run again",
@@ -323,7 +336,7 @@ func serveManifest(org, name, source string, manifest map[string]any) (*manifest
 		return nil, err
 	}
 	createURL := githubWeb + "/organizations/" + url.PathEscape(org) + "/settings/apps/new?state=" + url.QueryEscape(state)
-	flow := &manifestFlow{org: org, local: local, state: state, codes: make(chan string, 1), fails: make(chan error, 1), installs: make(chan flowOutcome, 1),
+	flow := &manifestFlow{org: org, name: name, local: local, state: state, codes: make(chan string, 1), fails: make(chan error, 1), installs: make(chan flowOutcome, 1),
 		page: fmt.Sprintf(manifestPage, html.EscapeString(name), html.EscapeString(createURL), html.EscapeString(name),
 			html.EscapeString(source), html.EscapeString(string(raw)))}
 	srv := &http.Server{Handler: flow.mux(), ReadHeaderTimeout: 10 * time.Second}
@@ -363,7 +376,7 @@ func (f *manifestFlow) awaitCode(ctx context.Context, say io.Writer, open bool, 
 	case err := <-f.fails:
 		return "", err
 	case <-time.After(wait):
-		return "", refused("no redirect from GitHub within %s: the Create click did not come; nothing written", wait)
+		return "", refused("no redirect from GitHub within %s: the Create click did not come; nothing written"+takenWords, wait, f.name, githubWeb, githubWeb, f.org, guard.DeleteForm)
 	case <-ctx.Done():
 		return "", ctx.Err()
 	}
@@ -402,7 +415,7 @@ func (a *app) appPlan(ctx context.Context, name string) (*appPlan, error) {
 	if known, err := a.appKnown(ctx, p.slug); err != nil {
 		return nil, err
 	} else if known != nil {
-		return nil, refused("GitHub already knows an App named %s (%s, id %d, owned by %s): %s; nothing written", decl.Name, known.Slug, known.ID, known.Owner.Login, known.HTMLURL)
+		return nil, knownRefusal(decl.Name, known)
 	}
 	if p.orgID, err = a.githubID(ctx, "orgs/"+p.org); err != nil {
 		return nil, fmt.Errorf("the organisation %s: %w", p.org, err)
@@ -430,7 +443,65 @@ type knownApp struct {
 	HTMLURL string `json:"html_url"`
 	Owner   struct {
 		Login string `json:"login"`
+		Type  string `json:"type"`
 	} `json:"owner"`
+}
+
+// knownRefusal refuses a creation under a name GitHub already knows, saying
+// where GitHub holds the App: its Advanced page under the organisation or
+// under the person's own account, where its deletion goes once on record.
+func knownRefusal(name string, k *knownApp) error {
+	where := fmt.Sprintf("under the account %s's own settings, %s/settings/apps/%s/advanced (that account's alone)", k.Owner.Login, githubWeb, k.Slug)
+	if strings.EqualFold(k.Owner.Type, "Organization") {
+		where = fmt.Sprintf("under the organisation %s's settings, %s/organizations/%s/settings/apps/%s/advanced", k.Owner.Login, githubWeb, k.Owner.Login, k.Slug)
+	}
+	return refused("GitHub already knows an App named %s (%s, id %d, owned by %s): %s; nothing written. GitHub holds it %s; "+
+		"its deletion is answered by the browse hook once on record (%s)", name, k.Slug, k.ID, k.Owner.Login, k.HTMLURL, where, guard.DeleteForm)
+}
+
+// takenWords tell a run whose Create click did not come where GitHub holds
+// a name its page answered "Name is already taken" for, which the API
+// does not show: an App or a reservation under the person's own account or
+// the organisation's.
+const takenWords = `. Where GitHub's page answered "Name is already taken", it holds an App or a reservation of the name %s that its API does not show: ` +
+	"under the person's own account (%s/settings/apps) or the organisation's (%s/organizations/%s/settings/apps): read those pages in a browse turn, " +
+	"and record its deletion with %s"
+
+// recordRun puts this run of the App name on record while its listener
+// serves, for the browse hook's Create and Install clicks, dropping the
+// runs whose process is gone; the func it answers takes it off.
+func (a *app) recordRun(name, org, declared string, flow *manifestFlow) (func(), error) {
+	me, _ := a.caller()
+	run := state.AppRun{Name: name, Org: org, Declared: declared, Listener: strings.TrimPrefix(flow.local, "http://"), PID: os.Getpid(), By: me, At: a.now.UTC()}
+	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.AppRuns = append(slices.DeleteFunc(st.AppRuns, func(x state.AppRun) bool { return !proc.Alive(x.PID) }), run)
+		return nil, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return func() {
+		_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+			st.AppRuns = slices.DeleteFunc(st.AppRuns, func(x state.AppRun) bool { return x.PID == run.PID && x.Listener == run.Listener })
+			return nil, nil
+		})
+	}, nil
+}
+
+// recordCreated enters the App the conversion created into beekeeper's
+// ledger, with where its credentials went ("" for nowhere): the browse
+// hook answers its Install click, and its deletion when nothing holds its
+// credentials. A ledger that does not take it is said on say.
+func (a *app) recordCreated(say io.Writer, name, org, declared, stored string, created *githubApp) {
+	me, _ := a.caller()
+	entry := state.AppCreated{Name: name, Slug: created.Slug, ID: created.ID, Org: org, Declared: declared, Stored: stored, By: me, At: a.now.UTC()}
+	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.AppsCreated = append(slices.DeleteFunc(st.AppsCreated, func(x state.AppCreated) bool { return x.ID == created.ID }), entry)
+		return nil, nil
+	})
+	if err != nil {
+		_, _ = fmt.Fprintf(say, "beekeeper's ledger of its Apps did not take %s (id %d): %v; the browse hook does not answer its Install click\n", created.Slug, created.ID, err)
+	}
 }
 
 // appKnown asks GitHub for the App of slug: the App when it knows one, nil
@@ -519,10 +590,11 @@ type flowOutcome struct {
 // manifestFlow is the loopback listener's state: the page, the state nonce,
 // and the channels between the callback and the command.
 type manifestFlow struct {
-	org, local string
-	state      string
-	page       string
-	stop       func()
+	org, name string
+	local     string
+	state     string
+	page      string
+	stop      func()
 	// codes carries the redirect's code to the command, fails a redirect
 	// the callback refused, installs the command's outcome back.
 	codes    chan string

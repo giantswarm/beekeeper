@@ -545,7 +545,7 @@ func TestBrowseConsent(t *testing.T) {
 		"Open https://" + recordedCallback + ":8443/connect/github and click Authorize.":                  1,
 		"Open https://example.org/ and report the title.":                                                 0,
 	} {
-		if got := appsNamed(rec, steps); len(got) != want || (want == 1 && got[0].Name != recordedApp) {
+		if got := appsNamed(guardApps(rec), steps); len(got) != want || (want == 1 && got[0].Name != recordedApp) {
 			t.Errorf("appsNamed(%q) = %+v, want %d", steps, got, want)
 		}
 	}
@@ -561,7 +561,7 @@ func TestBrowseConsent(t *testing.T) {
 		}
 	}
 	change := state.App{Name: deviceApp, Org: fixtureOrg, Permission: deviceChange, Declared: deviceDeclared, Word: personsWord, By: state.Party{Name: theGuide}, At: rec[0].At}
-	if got := appsNamed(append(rec, change), "Open the permissions page of "+deviceApp+" and set Members to Read-only."); len(got) != 1 || got[0].Permission != deviceChange {
+	if got := appsNamed(guardApps(append(rec, change)), "Open the permissions page of "+deviceApp+" and set Members to Read-only."); len(got) != 1 || got[0].Permission != deviceChange {
 		t.Errorf("appsNamed of a permission record = %+v", got)
 	}
 	both := guardApps(append(rec, change))

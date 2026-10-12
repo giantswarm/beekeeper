@@ -23,7 +23,9 @@ import (
 // the lab's own identity provider, a loopback host, a fixture user's sign-in
 // and consent are allowed. A change of an App's permissions is decided the
 // same way from the record of the one change the person asked for
-// (appchange.go). Any other page gets no decision, as does a call whose
+// (appchange.go), an App's creation, installation and deletion from the
+// running app create, beekeeper's ledger and the person's record
+// (applife.go). Any other page gets no decision, as does a call whose
 // page the transcript does not show.
 
 // App is an App the person owns and asked a consent, or one permission
@@ -43,6 +45,13 @@ type App struct {
 	// Permission is the one change of the App's permissions the person
 	// asked for, "<scope>: <level>"; "" for a record without one.
 	Permission string
+	// Delete says the person asked for the App's deletion (applife.go).
+	Delete bool
+	// Run is the running `beekeeper app create` of the App whose listener
+	// answers, nil for none; Created is beekeeper's ledger entry of the App
+	// it created, nil for none (applife.go).
+	Run     *CreateRun
+	Created *Created
 	// Declared is where the organisation declares the App.
 	Declared string
 	// Word is the person's words that asked for the grant, By whom and At
@@ -120,6 +129,9 @@ func Click(apps []App, page Page, words string) Decision {
 	case host == githubHost && u.Path == githubAuthorize:
 		return githubConsent(apps, u, page.Title)
 	case host == githubHost:
+		if d, ok := lifecycleClick(apps, u, page.Title, words); ok {
+			return d
+		}
 		return permissionClick(apps, u, page.Title, words)
 	case loopback(host) && signIn(u.Path):
 		return Decision{Allow, fmt.Sprintf("beekeeper allows it: %s is the lab's own identity provider on a loopback host, "+
