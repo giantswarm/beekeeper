@@ -117,6 +117,70 @@ func TestHeavyCommandIsWrappedVerbatim(t *testing.T) {
 	}
 }
 
+func TestHeavyClassification(t *testing.T) {
+	for _, tc := range []struct {
+		cmd   string
+		heavy bool
+	}{
+		// lab commands: the lab-count guard and the lab lease govern them
+		{"agentlab platform up", false},
+		{"agentlab up", false},
+		{"agentlab platform", false},
+		{"agentlab test", false},
+		{"agentlab platform-test", false},
+		{"agentlab backstage-test", false},
+		{"agentlab down", false},
+		{"cd ~/lab && agentlab --lab agentlab-1 substrate-step-test --to 0.9.0 2>&1 | tail -40", false},
+		// graphify: the AST-only update and the LLM steps build nothing
+		{"graphify update .", false},
+		{"cd ~/src/x && graphify update . && graphify query 'who calls isHeavy'", false},
+		{"graphify label graphify-out", false},
+		{"graphify cluster-only .", false},
+		// read-only pipelines whose build word is an argument
+		{"gh pr checks 1 --repo o/r | grep -i 'step-test'", false},
+		{"gh pr checks 1 --repo o/r | grep -E 'lint|make|go test|test'", false},
+		{"gh run view 5 --repo o/r --log | grep -E \"FAIL|make: \\*\\*\\*\" | head", false},
+		{"gh pr view 3 --repo o/r --json statusCheckRollup | jq '.statusCheckRollup[] | select(.name|test(\"build|lint\"))'", false},
+		{"kubectl --context kind-a get pods -A | grep -v 'Running|make'", false},
+		{"kubectl --context kind-a logs deploy/x | grep -c 'go test'", false},
+		{"git log --oneline | grep -E 'fix|go build'", false},
+		{"python3 - <<'EOF'\nprint('go test ./...')\nEOF", false},
+		{"cat > notes.md <<EOF\nmake build\nEOF", false},
+		{"echo 'bash -c \"make\"'", false},
+		// builds, tests and lints keep the slot
+		{"go test ./...", true},
+		{"make lint", true},
+		{"make", true},
+		{"docker build .", true},
+		{"docker buildx build -t x .", true},
+		{"golangci-lint run ./...", true},
+		{"npm ci", true},
+		{"yarn test", true},
+		{"ko build ./cmd/x", true},
+		{"kind load docker-image x", true},
+		{"graphify extract .", true},
+		{"go test ./... 2>&1 | grep -E 'FAIL|ok'", true},
+		{"gh pr checks 1 --repo o/r && make test", true},
+		{"zsh -c 'go test ./...'", true},
+		{`bash -c "cd x && make build"`, true},
+		{"eval 'golangci-lint run'", true},
+		{"bash <<'EOF'\ngo test ./...\nEOF", true},
+		{"x=\"$(make image)\"", true},
+	} {
+		if got := isHeavy(tc.cmd); got != tc.heavy {
+			t.Errorf("isHeavy(%q) = %v, want %v", tc.cmd, got, tc.heavy)
+		}
+		d := decide(t, hook(), "/", tc.cmd, nil)
+		c := ""
+		if d != nil {
+			c, _ = d.UpdatedInput["command"].(string)
+		}
+		if wrappedRun := strings.Contains(c, " run -- "); wrappedRun != tc.heavy {
+			t.Errorf("%q: wrapped = %v, want %v (%+v)", tc.cmd, wrappedRun, tc.heavy, d)
+		}
+	}
+}
+
 func TestBackgroundRunGetsTheLongWait(t *testing.T) {
 	d := decide(t, hook(), "/", "yarn test --maxWorkers=4", map[string]any{backgroundKey: true})
 	if d == nil || !strings.HasPrefix(d.UpdatedInput["command"].(string), "MEMCAP_WAIT=60m ") {
@@ -144,10 +208,10 @@ func TestThirdLabIsRefused(t *testing.T) {
 	if d := decide(t, hook("agentlab-1", "agentlab-2"), "/", "cd /nowhere && agentlab up", nil); d == nil || !strings.Contains(d.Reason, "a new lab in /nowhere") {
 		t.Errorf("a new lab directory: want deny, got %+v", d)
 	}
-	// Re-running a lab that runs, or a second lab, is fine (and wrapped: agentlab up is heavy).
+	// Re-running a lab that runs, or a second lab, is fine, and no build: it passes unwrapped.
 	for _, h := range []Hook{hook("agentlab-1", "agentlab-2"), hook("agentlab-1")} {
-		if d := decide(t, h, lab, "agentlab up", nil); d == nil || d.PermissionDecision != decisionAllow {
-			t.Errorf("want allow, got %+v", d)
+		if d := decide(t, h, lab, "agentlab up", nil); d != nil {
+			t.Errorf("want pass-through, got %+v", d)
 		}
 	}
 	h := hook("a", "b")
