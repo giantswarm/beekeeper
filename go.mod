@@ -173,5 +173,3 @@ replace go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.34.0 => go.opentele
 replace go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.34.0 => go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.46.0
 
 replace go.opentelemetry.io/otel/sdk v1.44.0 => go.opentelemetry.io/otel/sdk v1.46.0
-
-replace github.com/mark3labs/mcp-go v1.1.1 => github.com/giantswarm/mcp-go v1.1.2-0.20261002145805-7391a80c86e6
