@@ -86,8 +86,10 @@ var openBrowser = func(ctx context.Context, url string) error {
 
 func (a *app) appCreateCmd() *cobra.Command {
 	var wait time.Duration
+	var manifest, org string
+	var replace, noOpen bool
 	c := &cobra.Command{
-		Use:   "create <name>",
+		Use:   "create <name> | create <installation> --manifest <file>",
 		Short: "Create a GitHub App from its declared manifest: the credentials into the shared vault, then its installation",
 		Long: `create runs GitHub's manifest flow for the App <name> the organisation
 declares (its manifest in the config's apps.repo at apps.manifest, read
@@ -122,13 +124,47 @@ redirect whose state is not this run's, and a Create click that does not
 come within --timeout. An Install click that does not come leaves the
 vault's credentials as written and says how to record the installation's
 id. With secret.session the vault write goes to the broker over the
-keeper's socket, a locked vault refusing before any click (exit 78).`,
+keeper's socket, a locked vault refusing before any click (exit 78).
+
+With --manifest <file>, the argument is an installation of apps.secrets and
+the App is the one the local manifest (JSON, with its "name") declares; its
+credentials go into that installation's SOPS Secret, as secret github-app
+writes them:
+
+  1. Every check runs first: the installation's entry, the Secret's file
+     and its creation rules, no key it holds already unless --replace, and
+     no App GitHub knows by the manifest's name.
+  2. A listener on 127.0.0.1 (a random port, bound before the page exists)
+     serves the page that posts the manifest, with the listener's callback
+     as redirect_url and a state nonce, to GitHub's page for a new App of
+     --org (default: apps.repo's owner). The browser opens it, or with
+     --no-open the caller does (beekeeper browse "open <url> ..."); the
+     click is GitHub's "Create GitHub App".
+  3. The listener takes GitHub's redirect once, checks the state, converts
+     the code in this process (unauthenticated, as GitHub documents it) and
+     writes private-key, client-secret and webhook-secret (when the App has
+     one) in one sops write. The browser goes on to the App's installation
+     page.
+
+stdout is the App's id and client id alone; stderr is the progress and the
+keys written with their lengths and fingerprints. The code, the key and the
+secrets reach no output, log entry or error.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if manifest != "" {
+				return a.appCreateSecret(cmd, strings.TrimSpace(args[0]), manifest, org, wait, replace, !noOpen)
+			}
+			if org != "" || replace || noOpen {
+				return usageErr("--org, --replace and --no-open go with --manifest")
+			}
 			return a.appCreate(cmd.Context(), strings.TrimSpace(args[0]), wait, cmd.ErrOrStderr())
 		},
 	}
 	c.Flags().DurationVar(&wait, "timeout", appCreateWait, "how long each of the person's clicks (Create, Install) is waited for")
+	c.Flags().StringVar(&manifest, "manifest", "", "a local App manifest (JSON): create that App and write its credentials into the SOPS Secret apps.secrets names for <installation>")
+	c.Flags().StringVar(&org, "org", "", "with --manifest, the organisation that owns the App (default: apps.repo's owner)")
+	c.Flags().BoolVar(&replace, "replace", false, "with --manifest, overwrite keys the Secret holds already")
+	c.Flags().BoolVar(&noOpen, "no-open", false, "with --manifest, print the loopback page's URL and open no browser: the caller opens it (beekeeper browse)")
 	return c
 }
 
@@ -207,54 +243,22 @@ func (a *app) createApp(ctx context.Context, name string, wait time.Duration, sa
 	if err := a.holdsBrowser(); err != nil {
 		return nil, err
 	}
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	flow, err := serveManifest(plan.org, plan.name, plan.decl.Source, plan.decl.Manifest)
 	if err != nil {
 		return nil, err
 	}
-	state, err := nonce()
-	if err != nil {
-		_ = l.Close()
-		return nil, err
-	}
-	local := "http://" + l.Addr().String()
-	manifest := maps.Clone(plan.decl.Manifest)
-	manifest[appRedirectField] = local + appCallbackPath
-	raw, err := json.MarshalIndent(manifest, "", "  ")
-	if err != nil {
-		_ = l.Close()
-		return nil, err
-	}
-	createURL := githubWeb + "/organizations/" + url.PathEscape(plan.org) + "/settings/apps/new?state=" + url.QueryEscape(state)
-	flow := &manifestFlow{state: state, codes: make(chan string, 1), fails: make(chan error, 1), installs: make(chan flowOutcome, 1),
-		page: fmt.Sprintf(manifestPage, html.EscapeString(plan.name), html.EscapeString(createURL), html.EscapeString(plan.name),
-			html.EscapeString(plan.decl.Source), html.EscapeString(string(raw)))}
-	srv := &http.Server{Handler: flow.mux(), ReadHeaderTimeout: 10 * time.Second}
-	go func() { _ = srv.Serve(l) }()
-	defer func() { _ = srv.Close() }()
+	defer flow.stop()
 
 	repos := "all repositories"
 	if plan.decl.Repositories != nil {
 		repos = fmt.Sprintf("%d repositories (%s)", len(plan.repoIDs), strings.Join(plan.decl.Repositories, ", "))
 	}
-	if _, err := fmt.Fprintf(say, "App %s, declared in %s, to be installed on %s of %s\n"+
-		"opening %s/ in the browser: it submits the manifest to GitHub (organizations/%s/settings/apps/new). "+
-		"Click \"Create GitHub App\" there; waiting up to %s for GitHub's redirect.\n", plan.name, plan.decl.Source, repos, plan.org, local, plan.org, wait); err != nil {
+	if _, err := fmt.Fprintf(say, "App %s, declared in %s, to be installed on %s of %s\n", plan.name, plan.decl.Source, repos, plan.org); err != nil {
 		return nil, err
 	}
-	if err := openBrowser(ctx, local+"/"); err != nil {
-		if _, err := fmt.Fprintf(say, "the browser did not open (%v): open %s/ yourself\n", err, local); err != nil {
-			return nil, err
-		}
-	}
-	var code string
-	select {
-	case code = <-flow.codes:
-	case err := <-flow.fails:
+	code, err := flow.awaitCode(ctx, say, true, wait)
+	if err != nil {
 		return nil, err
-	case <-time.After(wait):
-		return nil, refused("no redirect from GitHub within %s: the Create click did not come; nothing written", wait)
-	case <-ctx.Done():
-		return nil, ctx.Err()
 	}
 	if _, err := fmt.Fprintln(say, "GitHub redirected with the App's code: converting it and storing the credentials"); err != nil {
 		return nil, err
@@ -294,6 +298,75 @@ func (a *app) createApp(ctx context.Context, name string, wait time.Duration, sa
 	res.InstallationID, res.RepositorySelection = inst.ID, inst.RepositorySelection
 	_, err = fmt.Fprintf(say, "installed: installation-id %d (repositories: %s), wrote %s\n", inst.ID, inst.RepositorySelection, idStored[0].Ref)
 	return res, err
+}
+
+// serveManifest binds this run's loopback listener and serves the page
+// that submits manifest, with the listener's callback as its redirect URL
+// and a fresh state, to GitHub's page for a new App of org. The listener
+// is bound before the page exists; stop closes it.
+func serveManifest(org, name, source string, manifest map[string]any) (*manifestFlow, error) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	state, err := nonce()
+	if err != nil {
+		_ = l.Close()
+		return nil, err
+	}
+	local := "http://" + l.Addr().String()
+	manifest = maps.Clone(manifest)
+	manifest[appRedirectField] = local + appCallbackPath
+	raw, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		_ = l.Close()
+		return nil, err
+	}
+	createURL := githubWeb + "/organizations/" + url.PathEscape(org) + "/settings/apps/new?state=" + url.QueryEscape(state)
+	flow := &manifestFlow{org: org, local: local, state: state, codes: make(chan string, 1), fails: make(chan error, 1), installs: make(chan flowOutcome, 1),
+		page: fmt.Sprintf(manifestPage, html.EscapeString(name), html.EscapeString(createURL), html.EscapeString(name),
+			html.EscapeString(source), html.EscapeString(string(raw)))}
+	srv := &http.Server{Handler: flow.mux(), ReadHeaderTimeout: 10 * time.Second}
+	go func() { _ = srv.Serve(l) }()
+	// stop lets a callback in flight answer the browser, then closes
+	flow.stop = func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if srv.Shutdown(ctx) != nil {
+			_ = srv.Close()
+		}
+	}
+	return flow, nil
+}
+
+// awaitCode names the loopback page, opens it in the browser when open,
+// and waits up to wait for GitHub's redirect with the code.
+func (f *manifestFlow) awaitCode(ctx context.Context, say io.Writer, open bool, wait time.Duration) (string, error) {
+	how := "opening " + f.local + "/ in the browser"
+	if !open {
+		how = "open " + f.local + "/ in the browser"
+	}
+	if _, err := fmt.Fprintf(say, "%s: it submits the manifest to GitHub (organizations/%s/settings/apps/new). "+
+		"Click \"Create GitHub App\" there; waiting up to %s for GitHub's redirect.\n", how, f.org, wait); err != nil {
+		return "", err
+	}
+	if open {
+		if err := openBrowser(ctx, f.local+"/"); err != nil {
+			if _, err := fmt.Fprintf(say, "the browser did not open (%v): open %s/ yourself\n", err, f.local); err != nil {
+				return "", err
+			}
+		}
+	}
+	select {
+	case code := <-f.codes:
+		return code, nil
+	case err := <-f.fails:
+		return "", err
+	case <-time.After(wait):
+		return "", refused("no redirect from GitHub within %s: the Create click did not come; nothing written", wait)
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
 }
 
 // wroteLine is the answer's line of what the vault item holds: the
@@ -446,8 +519,10 @@ type flowOutcome struct {
 // manifestFlow is the loopback listener's state: the page, the state nonce,
 // and the channels between the callback and the command.
 type manifestFlow struct {
-	state string
-	page  string
+	org, local string
+	state      string
+	page       string
+	stop       func()
 	// codes carries the redirect's code to the command, fails a redirect
 	// the callback refused, installs the command's outcome back.
 	codes    chan string
