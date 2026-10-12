@@ -43,6 +43,10 @@ const mergePos = start + `(?:(?:` +
 const devctlOwned = `(?:(?:~|\.\.?|\$\{?\w+\}?)?/(?:[^\s;&|()'"<>=]*/)?)?devctl\s+(?:pr\s+(?:merge|wait)|release\s+(?:wait|promote)|rollout\s+wait)\b`
 
 var (
+	// heavy: the commands that take a build slot, for the CPU and memory a
+	// build, test or lint spends. A lab command (agentlab: the lab-count guard
+	// and the lab lease govern it, and it mostly waits on its cluster) and a
+	// quick refresh (graphify update, AST only) are no build: they stay off.
 	heavy = regexp.MustCompile(`(?m)` + pos + `(` + strings.Join([]string{
 		`go\s+(?:test|build|vet|install|generate|run)\b`,
 		`golangci-lint\b`,
@@ -54,8 +58,8 @@ var (
 		`make\b`,
 		`docker\s+(?:build|buildx\s+build)\b`,
 		`kind\s+(?:load|build)\b`,
-		`agentlab\s+(?:up|platform|test|platform-test|backstage-test|down)\b`,
-		`graphify\s+(?:update|build|extract|label|cluster-only|scan)\b`,
+		// a corpus's full extraction, every file parsed at once
+		`graphify\s+extract\b`,
 		`beekeeper\s+scan\s+sweep\b`,
 	}, "|") + `)`)
 	// lightMake: make targets that build nothing (RE2 has no lookahead).
@@ -482,9 +486,29 @@ func (h Hook) rewrite(input map[string]any, cmd string, changed, bg bool) []byte
 // outside its caller, whose outcome reaches its owner unheard or not.
 func Owned(cmd string) bool { return anyOwned.MatchString(cmd) }
 
+// isHeavy reports whether cmd runs a heavy command at a command position of
+// the shell: one inside a quoted argument (a grep pattern, a jq filter, an
+// echo) is none, one inside a shell's -c or eval string or a here-document a
+// shell reads as its program is.
 func isHeavy(cmd string) bool {
-	for _, m := range heavy.FindAllStringSubmatchIndex(cmd, -1) {
+	sc := scanShell(cmd)
+	for _, m := range heavy.FindAllStringSubmatchIndex(sc.masked, -1) {
 		if cmd[m[2]:m[3]] != "make" || !lightMake.MatchString(cmd[m[1]:]) {
+			return true
+		}
+	}
+	for _, m := range shellC.FindAllStringSubmatchIndex(cmd, -1) {
+		if sc.masked[m[2]] != cmd[m[2]] {
+			continue // the -c itself sits inside a quoted argument
+		}
+		body := cmd[m[1]:]
+		if isHeavy(body[:closingQuote(body, cmd[m[2]])]) {
+			return true
+		}
+	}
+	segs := sc.segments()
+	for _, hd := range sc.heredocs {
+		if shellReads(sc, segs, hd.op) && isHeavy(cmd[hd.start:hd.end]) {
 			return true
 		}
 	}
