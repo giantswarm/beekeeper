@@ -275,6 +275,11 @@ plans:                      # note add --for <guide.person> links an open pull r
 apps:                       # where the organisation declares its GitHub Apps; beekeeper app allow records only a declared one
   repo: example/github      # the declaring repository, read on its default branch; unset, app allow refuses
   manifest: apps/{name}/manifest.json   # an App's manifest (name, callback_urls), {name} for the App's name
+  secrets:                  # by installation, the SOPS Secret beekeeper secret github-app writes an App's private-key and client-secret into
+    example-installation:
+      file: ~/gitops/installations/example-installation/secrets/github-app-secret.yaml
+      name: github-app      # an absent file starts as this Secret
+      namespace: example
 
 board:                      # the project board `beekeeper board next` picks work from
   owner: example-org        # the organisation (or user) and the board's number

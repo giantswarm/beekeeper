@@ -555,8 +555,18 @@ func convertManifest(ctx context.Context, code string) (*githubApp, error) {
 	if resp.StatusCode != http.StatusCreated {
 		return nil, apiError("the conversion", resp)
 	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("the conversion: %w", err)
+	}
+	return parseConversion(raw)
+}
+
+// parseConversion reads the conversion's answer; its errors carry no part
+// of it.
+func parseConversion(raw []byte) (*githubApp, error) {
 	var app githubApp
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&app); err != nil {
+	if err := json.Unmarshal(raw, &app); err != nil {
 		return nil, errors.New("the conversion: GitHub's answer is no App")
 	}
 	if app.ID == 0 || app.Slug == "" || app.ClientID == "" || app.ClientSecret == "" || app.PEM == "" {
