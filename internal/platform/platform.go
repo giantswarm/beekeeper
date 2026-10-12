@@ -265,6 +265,9 @@ type Options struct {
 	// DesktopApp is the Claude desktop app's executable (claude.desktopApp):
 	// it starts the app, or hands a claude:// link to the running one.
 	DesktopApp string
+	// QuietUnits counts every end of a started unit as success
+	// (units.quiet), for an isolated harness state.
+	QuietUnits bool
 }
 
 // Current is the platform this build runs on.

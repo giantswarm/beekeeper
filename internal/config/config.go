@@ -81,7 +81,9 @@ type Config struct {
 	Memcap   Memcap   `yaml:"memcap"`
 	Lanes    []Lane   `yaml:"lanes"`
 	Merge    Merge    `yaml:"merge"`
-	Alerts   Alerts   `yaml:"alerts"`
+	// Units configures the transient user services beekeeper starts.
+	Units  Units  `yaml:"units"`
+	Alerts Alerts `yaml:"alerts"`
 	// Upgrades paces the reading of the installations' Cluster API
 	// upgrades.
 	Upgrades Upgrades `yaml:"upgrades"`
@@ -998,6 +1000,18 @@ type Notify struct {
 func (n Notify) Policy() notify.Policy {
 	q, _ := notify.ParseQuietHours(n.QuietHours) // validated on load
 	return notify.Policy{Kinds: n.Kinds, Quiet: q, Urgency: n.Urgency, Repeat: n.Repeat.Duration}
+}
+
+// Units configures the transient user services beekeeper starts (a gated
+// merge's child, a wake's turn, a reopen).
+type Units struct {
+	// Quiet counts every end of such a unit as success, any exit status
+	// and a kill by SIGKILL, SIGTERM or SIGABRT included: the run's own
+	// files still record the real exit. It is for an isolated harness
+	// state, whose stub tools and deliberate kills would otherwise fail
+	// units in the person's user manager; the desk's own configuration
+	// leaves it off, so a real tooling fault fails its unit.
+	Quiet bool `yaml:"quiet"`
 }
 
 // Alerts configures the reading of the installations' Alertmanagers: watch
