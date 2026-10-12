@@ -1,0 +1,1 @@
+CVE-2026-108859 until=2026-11-12 # mcp-go through v1.2.1, no fixed release; /mcp bodies bounded in serve: https://github.com/giantswarm/beekeeper/issues/999
