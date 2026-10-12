@@ -38,7 +38,8 @@ after a restart) reads it instead of a prose brief.
 
 It shows what a successor acts on in its first minutes: the notes the
 guide serves (those for guide.person and for the guide) are one line, the
-records of sessions ended over an hour ago are one line, and the answered
+records of sessions ended over an hour ago are one line (an agent the roster
+keeps, parked for one, stays listed), and the answered
 decisions are those since the predecessor's start, with a count of the
 others answered within 72 hours. Pinned notes, the standing instructions
 (note add --pin), are in every hand-over until unpinned.
