@@ -7,6 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,24 +28,35 @@ const (
 	plantedClient = secretValue + "-client"
 )
 
-// fakeConversion is gh api's POST /app-manifests/<code>/conversions for one
-// code, counting its calls; any other code is GitHub's 404.
+// fakeConversion is GitHub's API answering POST
+// /app-manifests/<code>/conversions for one code, unauthenticated as GitHub
+// documents it, counting its calls; any other code, and a request that
+// carries a token, is GitHub's 404. No gh call is made.
 func fakeConversion(t *testing.T, webhook string) *int {
 	t.Helper()
 	calls := 0
-	prev := appsGH
-	t.Cleanup(func() { appsGH = prev })
-	appsGH = func(_ context.Context, args ...string) ([]byte, error) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		if strings.Join(args, " ") != "api -X POST app-manifests/"+conversionCode+"/conversions" {
-			return nil, errors.New("gh api: exit status 1: gh: Not Found (HTTP 404)")
+		if r.Method != http.MethodPost || r.URL.Path != "/app-manifests/"+conversionCode+"/conversions" || r.Header.Get("Authorization") != "" {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `{"message": "Not Found", "documentation_url": "https://docs.github.com/rest/apps/apps#create-a-github-app-from-a-manifest"}`)
+			return
 		}
 		hook := "null"
 		if webhook != "" {
 			hook = fmt.Sprintf("%q", webhook)
 		}
-		return fmt.Appendf(nil, `{"id": 123456, "slug": "example-agents", "name": "example-agents", "client_id": "Iv23liExample",
-			"client_secret": %q, "pem": %q, "webhook_secret": %s, "html_url": "https://github.com/apps/example-agents"}`, plantedClient, plantedPEM, hook), nil
+		w.WriteHeader(http.StatusCreated)
+		_, _ = fmt.Fprintf(w, `{"id": 123456, "slug": "example-agents", "name": "example-agents", "client_id": "Iv23liExample",
+			"client_secret": %q, "pem": %q, "webhook_secret": %s, "html_url": "https://github.com/apps/example-agents"}`, plantedClient, plantedPEM, hook)
+	}))
+	t.Cleanup(srv.Close)
+	prevAPI, prevGH := githubAPI, appsGH
+	t.Cleanup(func() { githubAPI, appsGH = prevAPI, prevGH })
+	githubAPI = srv.URL
+	appsGH = func(_ context.Context, args ...string) ([]byte, error) {
+		t.Errorf("secret github-app ran gh %s", strings.Join(args, " "))
+		return nil, errors.New("no gh")
 	}
 	return &calls
 }
@@ -144,8 +158,8 @@ func TestSecretGitHubAppRefusesBeforeSpendingTheCode(t *testing.T) {
 		{[]string{"elsewhere", codeFlag, conversionCode}, ExitUsage, 1, "names no Secret for \"elsewhere\""},
 		{[]string{fixtureOrg, codeFlag, "../../user"}, ExitUsage, 1, "no manifest code"},
 		{[]string{fixtureOrg, codeFlag, ""}, ExitUsage, 1, "no manifest code"},
-		// spent or older than its hour: GitHub's 404, said plainly
-		{[]string{fixtureOrg, "--replace", codeFlag, "expired0code"}, ExitRefused, 2, "converts once, within an hour"},
+		// spent or older than its hour: GitHub's status and message
+		{[]string{fixtureOrg, "--replace", codeFlag, "expired0code"}, ExitRefused, 2, "the conversion: GitHub answered HTTP 404: Not Found"},
 	} {
 		a.out = &bytes.Buffer{}
 		out, err := runSecret(a, append([]string{githubAppOp}, c.args...)...)
@@ -195,5 +209,25 @@ func TestParseManifestCode(t *testing.T) {
 		if (err != nil) != (want == "") || got != want && want != "" {
 			t.Errorf("parseManifestCode(%q) = %q, %v; want %q", in, got, err, want)
 		}
+	}
+}
+
+// A refused conversion names GitHub's status and message, and no error
+// carries the code: not GitHub's answer, not an unreachable API.
+func TestConvertManifestNamesGitHubsRefusal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = io.WriteString(w, `{"message": "Validation Failed"}`)
+	}))
+	prev := githubAPI
+	t.Cleanup(func() { githubAPI = prev })
+	githubAPI = srv.URL
+	if _, err := convertManifest(context.Background(), conversionCode); err == nil || err.Error() != "the conversion: GitHub answered HTTP 422: Validation Failed" {
+		t.Errorf("a 422 = %v", err)
+	}
+	srv.Close()
+	_, err := convertManifest(context.Background(), conversionCode)
+	if err == nil || !strings.HasPrefix(err.Error(), "the conversion: ") || strings.Contains(err.Error(), conversionCode) {
+		t.Errorf("an unreachable API = %v, want the cause without the code", err)
 	}
 }
