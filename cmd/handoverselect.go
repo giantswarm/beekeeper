@@ -84,12 +84,13 @@ func guidedText(s noteSplit) string {
 	return fmt.Sprintf("%d notes the guide serves (%s): `beekeeper guide queue`, `beekeeper handover --section notes`", s.guided(), strings.Join(parts, ", "))
 }
 
-// liveRecords is the records a hand-over shows: the running sessions' and
-// those ended within endedKeep; dropped counts the rest.
-func (a *app) liveRecords(records []state.Record, sessions []*claude.Session) (kept []state.Record, dropped int) {
+// liveRecords is the records a hand-over shows: the running sessions', those
+// of agents the roster keeps (rosterKept: parked, kept, woken by a timer)
+// and those ended within endedKeep; dropped counts the rest.
+func (a *app) liveRecords(st *state.State, records []state.Record, sessions []*claude.Session) (kept []state.Record, dropped int) {
 	for _, r := range records {
 		_, live := claude.Live(sessions, r.Session)
-		if !live && !r.Ended.IsZero() && a.now.Sub(r.Ended) > endedKeep {
+		if !live && !r.Ended.IsZero() && a.now.Sub(r.Ended) > endedKeep && rosterKept(st, r.Session, a.now) == "" {
 			dropped++
 			continue
 		}
@@ -266,7 +267,7 @@ func (a *app) printPinned(notes []state.Note) {
 // printLiveRecords lists the records a hand-over shows and the line for the
 // rest.
 func (a *app) printLiveRecords(st *state.State, records []state.Record, sessions []*claude.Session) {
-	kept, dropped := a.liveRecords(records, sessions)
+	kept, dropped := a.liveRecords(st, records, sessions)
 	if len(kept) > 0 || dropped == 0 {
 		a.printRecords(st, kept, sessions)
 	}

@@ -54,7 +54,7 @@ func TestSplitNotesLeavesTheGuidesNotesToALine(t *testing.T) {
 func TestLiveRecordsDropsSessionsEndedOverAnHourAgo(t *testing.T) {
 	a := &app{now: relayNow}
 	live := []*claude.Session{{ID: "s4", HostID: hostFour, Name: agentFour}}
-	kept, dropped := a.liveRecords([]state.Record{
+	kept, dropped := a.liveRecords(&state.State{}, []state.Record{
 		{Session: four, Issue: issue},
 		{Session: gone, Issue: issue, Ended: relayNow.Add(-10 * time.Minute)},
 		{Session: state.Party{Session: "s8", Name: "old"}, Issue: issue, Ended: relayNow.Add(-26 * time.Hour)},
@@ -205,5 +205,52 @@ func TestStartSummaryFitsInFiveKB(t *testing.T) {
 	got := out.String()
 	if len(got) >= 5*1024 || !strings.Contains(got, "300 the guide serves") || !strings.Contains(got, "(its CLI is not running)") || !strings.Contains(got, "--section <name>") {
 		t.Errorf("%d bytes:\n%s", len(got), got)
+	}
+}
+
+func TestPromptKeepsAParkedWorkerUntilItsParkResolves(t *testing.T) {
+	ended := relayNow.Add(-2 * time.Hour)
+	park := &state.Park{On: "#21", Waits: "the person's word on the threshold", At: ended}
+	record := state.Record{Session: gone, Issue: issue, Waits: "a GPU node", Ended: ended}
+	agent := state.Agent{Party: gone, Task: issue, AssignedAt: ended.Add(-time.Hour)}
+	for _, tc := range []struct {
+		name   string
+		agent  func(state.Agent) []state.Agent
+		record string
+	}{
+		{"parked on a note", func(ag state.Agent) []state.Agent { ag.Park = park; return []state.Agent{ag} },
+			`- "Continue #37639" parked, no CLI, parked on #21: the person's word on the threshold; it serves ` + issue + ", waiting on a GPU node"},
+		{"park resolved", func(ag state.Agent) []state.Agent { return []state.Agent{ag} }, ""},
+		{"done with its task", func(ag state.Agent) []state.Agent { ag.Park, ag.Done = park, true; return []state.Agent{ag} }, ""},
+		{"archived", func(state.Agent) []state.Agent { return nil }, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := &state.State{Records: []state.Record{record}, Agents: tc.agent(agent)}
+			var out bytes.Buffer
+			a := &app{out: &out, now: relayNow}
+			p := func(format string, args ...any) { _, _ = fmt.Fprintf(&out, format+"\n", args...) }
+			a.promptRecords(p, st, nil)
+			got := out.String()
+			if tc.record == "" {
+				if strings.Contains(got, gone.Name) || !strings.Contains(got, droppedText(1)) {
+					t.Errorf("not dropped:\n%s", got)
+				}
+				return
+			}
+			if !strings.Contains(got, tc.record+"\n") || strings.Contains(got, "has ended") || strings.Contains(got, "records of sessions ended") {
+				t.Errorf("prompt lacks %q:\n%s", tc.record, got)
+			}
+		})
+	}
+}
+
+func TestPromptAgentsSaysAParkedAgentsParkAlone(t *testing.T) {
+	var out bytes.Buffer
+	a := &app{out: &out, now: relayNow}
+	p := func(format string, args ...any) { _, _ = fmt.Fprintf(&out, format+"\n", args...) }
+	ag := state.Agent{Party: gone, Task: "review the plan", AssignedAt: relayNow.Add(-3 * time.Hour), Park: &state.Park{Waits: "a colleague's review"}}
+	a.promptAgents(p, []state.Agent{ag}, nil)
+	if got := out.String(); !strings.Contains(got, `"Continue #37639" on review the plan since`) || !strings.Contains(got, ", parked: a colleague's review\n") || strings.Contains(got, "not running") {
+		t.Errorf("agents:\n%s", got)
 	}
 }

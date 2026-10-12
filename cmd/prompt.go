@@ -53,7 +53,7 @@ func (a *app) printPrompt(ctx context.Context, v *view, l *leaseList, al *alerts
 	a.promptLeases(p, l)
 	a.promptHolds(p, a.activeHolds(v.st))
 	a.promptLanes(p, a.laneViews(v.st))
-	a.promptRecords(p, v.st.Records, v.raw)
+	a.promptRecords(p, v.st, v.raw)
 	a.promptAgents(p, v.st.Agents, v.raw)
 	a.promptCapacity(p, v.st, v.raw)
 	a.promptAlerts(p, al)
@@ -284,12 +284,17 @@ func (a *app) promptLanes(p printer, lanes []laneView) {
 	p("")
 }
 
-func (a *app) promptRecords(p printer, all []state.Record, sessions []*claude.Session) {
-	records, dropped := a.liveRecords(all, sessions)
-	if !section(p, "Session records", len(all) == 0, "None.") {
+func (a *app) promptRecords(p printer, st *state.State, sessions []*claude.Session) {
+	records, dropped := a.liveRecords(st, st.Records, sessions)
+	if !section(p, "Session records", len(st.Records) == 0, "None.") {
 		return
 	}
+	parked := parkedRows(st, records, sessions, a.now)
 	for _, r := range records {
+		if i := slices.IndexFunc(parked, func(pr parkedRow) bool { return pr.Session.Is(r.Session) }); i >= 0 {
+			p("- %q %s", r.Session.Name, oneLine(parked[i].text()))
+			continue
+		}
 		_, live := claude.Live(sessions, r.Session)
 		if !live || !r.Ended.IsZero() {
 			p("- %q has ended; it %s: re-query %s", r.Session.Name, oneLine(recordText(r)), r.Issue)
@@ -308,6 +313,10 @@ func (a *app) promptAgents(p printer, agents []state.Agent, sessions []*claude.S
 		return
 	}
 	for _, ag := range agents {
+		if ag.Task != "" && ag.Park != nil {
+			p("- %q on %s since %s, %s", ag.Name, oneLine(ag.Task), a.stamp(ag.AssignedAt), oneLine(parkedText(ag.Park, a.now)))
+			continue
+		}
 		if _, live := claude.Live(sessions, ag.Party); ag.Task != "" && !live {
 			p("- %q on %s since %s; its CLI is not running (stopped by a reboot or a crash): resume it with `%s`", ag.Name, oneLine(ag.Task), a.stamp(ag.AssignedAt), resumeHint(ag))
 			continue
