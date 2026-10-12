@@ -195,7 +195,14 @@ CLI (paused or closed, not archived) and the omp sessions no process runs:
 a message to them does not arrive.
 
 The session records (sessions serve) follow the table: which session serves
-which issue and what it waits on, and the records whose session has ended.
+which issue and what it waits on, then the parked ones, then the records
+whose session has ended. A parked record is a worker's that runs no CLI
+while it stays on the roster parked (agents park) or kept (agents keep, a
+timer that wakes it): it still serves its issue or pull request, and its
+line names the worker and its park reason. This is the served-check: an
+issue or pull request is served while a running or parked record names it.
+--json carries the parked ones in "parked" (session, issue, waits, parked,
+by, at); board next skips the same ones.
 
 A caller that has read the list before gets only what changed since: a
 session that started, ended or changed what it is on, runs or holds, a
@@ -217,15 +224,16 @@ moving is no change), or one "no change" line. --full prints everything.`,
 				return a.printJSON(struct {
 					*view
 					Records []state.Record    `json:"records,omitempty"`
+					Parked  []parkedRow       `json:"parked"`
 					Paused  []*claude.Record  `json:"paused,omitempty"`
 					Ended   []*claude.Session `json:"ended,omitempty"`
-				}{v, v.st.Records, paused, ended})
+				}{v, v.st.Records, parkedRows(v.st, v.st.Records, v.raw, a.now), paused, ended})
 			}
 			printFull := func() {
 				a.printSessions(v)
 				if len(v.st.Records) > 0 {
 					_, _ = fmt.Fprintf(a.out, "\nSession records:\n")
-					a.printRecords(v.st.Records, v.raw)
+					a.printRecords(v.st, v.st.Records, v.raw)
 				}
 				if len(paused)+len(ended) > 0 {
 					_, _ = fmt.Fprintf(a.out, "\nNot running (paused or closed):\n")
@@ -373,17 +381,58 @@ func recordText(r state.Record) string {
 	return s
 }
 
+// parkedRow is a session record whose session runs no CLI while its agent
+// stays on the roster, parked or kept: the work it serves is still served.
+// Parked says what keeps it (agents park, agents keep, a timer that wakes
+// it).
+type parkedRow struct {
+	Session state.Party `json:"session"`
+	Issue   string      `json:"issue"`
+	Waits   string      `json:"waits,omitempty"`
+	Parked  string      `json:"parked"`
+	By      state.Party `json:"by"`
+	At      time.Time   `json:"at"`
+}
+
+// parkedRows are the parked rows among records at now.
+func parkedRows(st *state.State, records []state.Record, sessions []*claude.Session, now time.Time) []parkedRow {
+	rows := []parkedRow{}
+	for _, r := range records {
+		if _, live := claude.Live(sessions, r.Session); live && r.Ended.IsZero() {
+			continue
+		}
+		if k := rosterKept(st, r.Session, now); k != "" {
+			rows = append(rows, parkedRow{Session: r.Session, Issue: r.Issue, Waits: r.Waits, Parked: k, By: r.By, At: r.At})
+		}
+	}
+	return rows
+}
+
+// text says what keeps the row's session and what it serves; the waits the
+// park already says are not said twice.
+func (p parkedRow) text() string {
+	serves := recordText(state.Record{Issue: p.Issue, Waits: p.Waits})
+	if p.Waits != "" && strings.HasSuffix(p.Parked, ": "+p.Waits) {
+		serves = "serves " + p.Issue
+	}
+	return fmt.Sprintf("parked, no CLI, %s; it %s", p.Parked, serves)
+}
+
 // printRecords lists the session records: the running sessions' first,
-// then those whose session has ended.
-func (a *app) printRecords(records []state.Record, sessions []*claude.Session) {
+// then the parked ones (parkedRows), then those whose session has ended.
+func (a *app) printRecords(st *state.State, records []state.Record, sessions []*claude.Session) {
 	if len(records) == 0 {
 		_, _ = fmt.Fprintln(a.out, "no session records")
 		return
 	}
+	parked := parkedRows(st, records, sessions, a.now)
 	var ended []string
 	for _, r := range records {
 		if _, live := claude.Live(sessions, r.Session); live && r.Ended.IsZero() {
 			_, _ = fmt.Fprintf(a.out, "- %q %s\n", r.Session.Name, recordText(r))
+			continue
+		}
+		if slices.ContainsFunc(parked, func(p parkedRow) bool { return p.Session.Is(r.Session) }) {
 			continue
 		}
 		when := "has ended"
@@ -391,6 +440,9 @@ func (a *app) printRecords(records []state.Record, sessions []*claude.Session) {
 			when = "ended at " + clock(a.now, r.Ended)
 		}
 		ended = append(ended, fmt.Sprintf("- %q %s: it %s; re-query %s", r.Session.Name, when, recordText(r), r.Issue))
+	}
+	for _, p := range parked {
+		_, _ = fmt.Fprintf(a.out, "- %q %s\n", p.Session.Name, p.text())
 	}
 	for _, l := range ended {
 		_, _ = fmt.Fprintln(a.out, l)

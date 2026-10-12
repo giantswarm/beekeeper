@@ -265,10 +265,10 @@ func (a *app) printPinned(notes []state.Note) {
 
 // printLiveRecords lists the records a hand-over shows and the line for the
 // rest.
-func (a *app) printLiveRecords(records []state.Record, sessions []*claude.Session) {
+func (a *app) printLiveRecords(st *state.State, records []state.Record, sessions []*claude.Session) {
 	kept, dropped := a.liveRecords(records, sessions)
 	if len(kept) > 0 || dropped == 0 {
-		a.printRecords(kept, sessions)
+		a.printRecords(st, kept, sessions)
 	}
 	if dropped > 0 {
 		_, _ = fmt.Fprintln(a.out, droppedText(dropped))

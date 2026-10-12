@@ -124,7 +124,7 @@ func (a *app) sessionFacts(v *view) []fact {
 			Line: fmt.Sprintf("%s on %s, runs %s, ctx %s, %s", key, on(s), running(s.Commands), contextText(s.Metrics), role),
 		})
 	}
-	facts = append(facts, textFacts("record", a.capture(func() { a.printRecords(v.st.Records, v.raw) }))...)
+	facts = append(facts, textFacts("record", a.capture(func() { a.printRecords(v.st, v.st.Records, v.raw) }))...)
 	for _, o := range v.Overlaps {
 		l := "overlap " + o.Key + ": " + strings.Join(o.Sessions, ", ")
 		facts = append(facts, fact{Key: "overlap " + o.Key, Sig: l, Line: l})
