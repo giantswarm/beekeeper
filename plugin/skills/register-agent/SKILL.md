@@ -31,32 +31,13 @@ session, and beekeeper takes this one off the roster and archives it once its tu
   permission mode, and which connectors this session has (the browser extension, GitHub, chat, the
   board tools). A connector can attach only at the next turn boundary, so one missing in the first
   turn is looked for again before it is reported missing.
-- **The title** is distinct among the peers: the argument's name, otherwise the title the session
-  already has when it is distinct, otherwise the next free `Agent <n>`. A name is one agent's:
-  registering under the name of an entry whose session no longer runs replaces it and inherits the
-  task it left unfinished (beekeeper names it; the session works that task first and says so), and a
-  name a running session holds is refused with exit 3, so the session takes the next free name.
-- **Two kinds of agent, one task each.** A worker started with `beekeeper agents start` has its
-  standalone brief as its first prompt and is on the roster busy with that task from its start (its
-  own `agents register` says `register: <name> busy with "<task>"` and keeps it); its first turn
-  runs from the command line without the desktop tools. A desktop session the person started
-  registers idle and gets its task as a message. Either works the task, reports, goes idle and ends
-  its turn; the supervisor takes it off the roster, which archives a session beekeeper started and
-  leaves one the person started in their sidebar.
-- **No role is handed to an agent.** A supervisor or guide relay, and the hand-over after a crash,
-  start a fresh "Supervisor run N" or "Guide run N" session; a registered agent never takes a role,
-  and a relay or hand-over prompt reaching one is refused in one line to its sender.
-- **Reachability.** A message by name reaches a session only while its CLI runs; `beekeeper agents
-  wake <agent> "<message>"` also reaches a stopped one, resuming its CLI headless for the message's
-  turn. The desktop caps a sender's `local_` messages when nobody types in the sender's session, so
-  the supervisor uses `wake`. While a headless turn runs, the PreToolUse hook sends a `local_`
-  message to the session by name, so no second copy of it starts.
-- **The supervisor's words** and the worker's are in the `worker-rules` skill. Where the supervisor
-  states a different rule for its watch, the supervisor's rule wins.
+- **The supervisor's words** and the worker's are in the `lease` and `merge` skills. Where the
+  supervisor states a different rule for its watch, the supervisor's rule wins.
 
 ## Constraints
 
-- **The task is worked under the `worker-rules` skill** and the desk's own conventions (the
+- **The task is worked under the `worker-rules` skill**, the topic skills it names and the desk's
+  own conventions (the
   project's CLAUDE.md and rules), with the supervisor as the one it reports to; nothing here
   restates or relaxes them. The session moves its own board item at the start and the close.
 - **An unanswered grant is no reason to sit still.** When a grant or go stays unanswered
@@ -82,3 +63,9 @@ session, and beekeeper takes this one off the roster and archives it once its tu
   note and the guide asks. No `AskUserQuestion` and no waiting on a permission prompt, a browser
   approval or a change to settings or configuration: each is a note for the person with its
   default, the session carries on, and a change the person approves is the guide's to make.
+
+## References
+
+`references/roster.md` in this skill's folder: the title and a name's predecessor, the two kinds of
+agent, why no role is handed to an agent, how a message reaches the session. Read it when the
+registration is refused or names a predecessor, or a message does not arrive.

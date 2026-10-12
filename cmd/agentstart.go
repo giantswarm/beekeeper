@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -160,7 +161,8 @@ deny rules, ranked over the person's settings for that process only), the
 desktop imports the session beside it, and start says "its task runs as a
 headless turn under profile <name>". The desktop spawns its own CLI for a
 desktop turn, which no profile reaches. --dry-run prints the profile
-applied and the first turn's command line and starts nothing.
+applied, the first turn's command line and the first prompt, and starts
+nothing.
 
 A start that delivers no turn of the task fails: it exits non-zero, logs
 "task not delivered" with the reason, and the roster's REACHABLE (and the
@@ -170,7 +172,12 @@ delivers a turn.
 The first prompt is the worker rules beekeeper ships with its role skills
 (the worker-rules skill, under the binary's version), then the brief as the
 task: a brief carries only its task, and a worker reports to "the
-supervisor", which the PreToolUse hook delivers to the role's holder.
+supervisor", which the PreToolUse hook delivers to the role's holder. The
+rules name the topic skills a worker loads before the step that needs
+them (beekeeper:lease, beekeeper:merge, beekeeper:github, beekeeper:park);
+a topic no enabled beekeeper plugin installed serves as this binary embeds
+it (none installed, or out of date) follows the rules in the first prompt
+itself, and start says so with the command that updates the plugin.
 
 The desktop runs the session's turns in acceptEdits (its import always
 drops bypass), so requests no allow rule covers would stop at a card:
@@ -219,8 +226,9 @@ is involved and no import happens.`,
 			if task = strings.TrimSpace(task); task == "" {
 				task = briefTask(brief)
 			}
+			gaps := pluginGaps(cmd.Context())
 			if dryRun && harness != omp.Harness {
-				return a.dryRunStart(cmd.Context(), agentStart{name: name, role: workerRole, dir: dir, model: model})
+				return a.dryRunStart(cmd.Context(), agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model}, gaps)
 			}
 			// The start gate: a verdict without room refuses the start
 			// before anything is recorded; --force goes through on record.
@@ -242,7 +250,12 @@ is involved and no import happens.`,
 			}
 			// Every worker gets the shipped rules ahead of its task, whatever
 			// its harness.
-			sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief)), task: task, dir: dir, model: model, desktop: desktop}
+			if note := gapsNote(gaps); note != "" {
+				if _, err := fmt.Fprintln(a.out, note); err != nil {
+					return err
+				}
+			}
+			sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), task: task, dir: dir, model: model, desktop: desktop}
 			switch harness {
 			case omp.Harness:
 				return a.startOmpAgent(cmd.Context(), sp)
@@ -1321,11 +1334,68 @@ func taskPrompt(brief string) string {
 }
 
 // workerPrompt is a worker's first prompt: the worker rules beekeeper
-// ships with its role skills, versioned, ahead of prompt. A brief carries
-// only its task.
-func workerPrompt(prompt string) string {
+// ships with its role skills, versioned, ahead of prompt, with the topic
+// skills in inline (pluginGaps) after them. A brief carries only its task.
+func workerPrompt(prompt string, inline ...string) string {
+	rules := plugin.WorkerRules()
+	if len(inline) > 0 {
+		var b strings.Builder
+		fmt.Fprintf(&b, "%s\n\nThe installed beekeeper plugin does not serve %s as this beekeeper ships them, so they follow here.",
+			rules, topicSkills(inline))
+		for _, t := range inline {
+			b.WriteString("\n\n" + plugin.Skill(t))
+		}
+		rules = b.String()
+	}
 	return fmt.Sprintf("Beekeeper %s gives every worker it starts these rules; they hold for the whole task.\n\n%s\n\n%s",
-		project.Version(), plugin.WorkerRules(), prompt)
+		project.Version(), rules, prompt)
+}
+
+// topicSkills names topics as the skills a worker loads.
+func topicSkills(topics []string) string {
+	names := make([]string, len(topics))
+	for i, t := range topics {
+		names[i] = "beekeeper:" + t
+	}
+	return strings.Join(names, ", ")
+}
+
+// pluginGaps are the worker rules' topic skills a started worker cannot
+// load as this binary ships them: no enabled beekeeper plugin installed
+// carries the same SKILL.md (none is installed, or it is out of date). The
+// first prompt carries those itself, so no rule is lost to a stale plugin.
+func pluginGaps(ctx context.Context) []string {
+	ps, _ := listPlugins(ctx) // none listed: every topic goes inline
+	var gaps []string
+	for _, t := range plugin.Topics {
+		if !slices.ContainsFunc(ps, func(p installedPlugin) bool { return servesSkill(p, t) }) {
+			gaps = append(gaps, t)
+		}
+	}
+	return gaps
+}
+
+// pluginName is the name of the plugin beekeeper ships, in any marketplace.
+const pluginName = "beekeeper"
+
+// servesSkill says whether p is an enabled beekeeper plugin whose skill
+// name is the one this binary embeds.
+func servesSkill(p installedPlugin, name string) bool {
+	if id, _, _ := strings.Cut(p.ID, "@"); id != pluginName || !p.Enabled && !p.ProjectEnabled || p.InstallPath == "" {
+		return false
+	}
+	raw, err := os.ReadFile(filepath.Join(p.InstallPath, plugin.SkillsDir, name, "SKILL.md")) //nolint:gosec // Claude Code's own plugin cache
+	return err == nil && bytes.Equal(raw, plugin.SkillFile(name))
+}
+
+// gapsNote is what start says about the topics pluginGaps put inline, ""
+// when there are none.
+func gapsNote(gaps []string) string {
+	if len(gaps) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("the installed beekeeper plugin does not serve %s as %s ships them: the first prompt carries them (claude plugin marketplace update beekeeper && claude plugin update beekeeper@beekeeper)",
+		topicSkills(gaps), project.Version())
 }
 
 // briefTask is the roster's task for a brief: its first line without a
@@ -1349,9 +1419,24 @@ func profiledTurn(profile string) string {
 }
 
 // dryRunStart prints how agents start would start sp, and starts nothing:
-// the profile applied and the first turn's command line, the prompt left
-// out.
-func (a *app) dryRunStart(ctx context.Context, sp agentStart) error {
+// the profile applied, the first turn's command line with the prompt left
+// out, then the first prompt, sp.brief, with its size and what start says
+// about the topics gaps put inline.
+func (a *app) dryRunStart(ctx context.Context, sp agentStart, gaps []string) error {
+	if err := a.dryRunTurn(ctx, sp); err != nil {
+		return err
+	}
+	if note := gapsNote(gaps); note != "" {
+		if _, err := fmt.Fprintln(a.out, note); err != nil {
+			return err
+		}
+	}
+	_, err := fmt.Fprintf(a.out, "first prompt: %d bytes\n%s\n", len(sp.brief), sp.brief)
+	return err
+}
+
+// dryRunTurn prints the profile and the first turn's command line of sp.
+func (a *app) dryRunTurn(ctx context.Context, sp agentStart) error {
 	dir, err := a.agentDir(sp.dir)
 	if err != nil {
 		return err

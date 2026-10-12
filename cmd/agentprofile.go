@@ -44,18 +44,34 @@ func agentRole(st *state.State, p state.Party) string {
 	return workerRole
 }
 
+// installedPlugin is one entry of claude plugin list --json.
+type installedPlugin struct {
+	ID             string `json:"id"`
+	InstallPath    string `json:"installPath"`
+	Enabled        bool   `json:"enabled"`
+	ProjectEnabled bool   `json:"projectEnabled"`
+}
+
+// listPlugins lists every plugin Claude Code has installed, of any
+// marketplace and scope; tests replace it.
+var listPlugins = func(ctx context.Context) ([]installedPlugin, error) {
+	out, err := exec.CommandContext(ctx, "claude", "plugin", "list", "--json").Output()
+	if err != nil {
+		return nil, fmt.Errorf("listing Claude Code's plugins (claude plugin list --json): %w", err)
+	}
+	var ps []installedPlugin
+	if err := json.Unmarshal(out, &ps); err != nil {
+		return nil, fmt.Errorf("reading claude plugin list --json: %w", err)
+	}
+	return ps, nil
+}
+
 // installedPlugins lists the ids (name@marketplace) of every plugin Claude
 // Code has installed, of any marketplace and scope; tests replace it.
 var installedPlugins = func(ctx context.Context) ([]string, error) {
-	out, err := exec.CommandContext(ctx, "claude", "plugin", "list", "--json").Output()
+	ps, err := listPlugins(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("listing Claude Code's plugins for the profile (claude plugin list --json): %w", err)
-	}
-	var ps []struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal(out, &ps); err != nil {
-		return nil, fmt.Errorf("reading claude plugin list --json: %w", err)
+		return nil, err
 	}
 	ids := make([]string, 0, len(ps))
 	for _, p := range ps {

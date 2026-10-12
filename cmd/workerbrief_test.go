@@ -1,6 +1,11 @@
 package cmd
 
 import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -30,6 +35,80 @@ func TestWorkerPromptCarriesTheRulesAndTheTask(t *testing.T) {
 	}
 	if briefTask(task) != "BK 1 thing: giantswarm/beekeeper#1 to done" {
 		t.Errorf("the roster's task is the brief's first line: %q", briefTask(task))
+	}
+	if strings.Contains(p, plugin.Skill(plugin.Topics[1])) {
+		t.Error("a topic the plugin serves stays out of the prompt")
+	}
+}
+
+// A topic the installed plugin does not serve as this binary embeds it
+// follows the rules in the prompt, ahead of the task.
+func TestWorkerPromptCarriesTheTopicsThePluginLacks(t *testing.T) {
+	task := "BK 2 thing"
+	inline := plugin.Topics[:2]
+	p := workerPrompt(taskPrompt(task), inline...)
+	for _, topic := range inline {
+		if i, j := strings.Index(p, plugin.Skill(topic)), strings.Index(p, task); i < 0 || j < i {
+			t.Errorf("%s is not between the rules and the task:\n%s", topic, p)
+		}
+	}
+	if !strings.Contains(p, "does not serve "+topicSkills(inline)+" as") || strings.Contains(p, plugin.Skill(plugin.Topics[3])) {
+		t.Errorf("the prompt names the inline topics and only those:\n%s", p)
+	}
+	if briefOf(p) != task {
+		t.Errorf("briefOf(prompt) = %q, want the task", briefOf(p))
+	}
+}
+
+// pluginGaps keeps a topic out of the prompt only where an enabled
+// beekeeper plugin carries the embedded SKILL.md byte for byte.
+func TestPluginGaps(t *testing.T) {
+	current, stale := t.TempDir(), t.TempDir()
+	for _, topic := range plugin.Topics {
+		writeSkill(t, current, topic, plugin.SkillFile(topic))
+	}
+	writeSkill(t, stale, plugin.Topics[0], plugin.SkillFile(plugin.Topics[0]))
+	writeSkill(t, stale, plugin.Topics[1], []byte("---\nname: "+plugin.Topics[1]+"\n---\n# an older text\n"))
+	const bk = pluginName + "@" + pluginName
+	for name, tc := range map[string]struct {
+		ps   []installedPlugin
+		want []string
+	}{
+		"none installed":   {nil, plugin.Topics},
+		"current":          {[]installedPlugin{{ID: bk, InstallPath: current, Enabled: true}}, nil},
+		"current, project": {[]installedPlugin{{ID: bk, InstallPath: current, ProjectEnabled: true}}, nil},
+		"disabled":         {[]installedPlugin{{ID: bk, InstallPath: current}}, plugin.Topics},
+		"another plugin":   {[]installedPlugin{{ID: "keeper@beekeeper", InstallPath: current, Enabled: true}}, plugin.Topics},
+		"out of date":      {[]installedPlugin{{ID: bk, InstallPath: stale, Enabled: true}}, plugin.Topics[1:]},
+		"out of date and current": {[]installedPlugin{
+			{ID: bk, InstallPath: stale, Enabled: true},
+			{ID: "beekeeper@mirror", InstallPath: current, Enabled: true},
+		}, nil},
+	} {
+		listPlugins = func(context.Context) ([]installedPlugin, error) { return tc.ps, nil }
+		if got := pluginGaps(context.Background()); !slices.Equal(got, tc.want) {
+			t.Errorf("%s: pluginGaps = %q, want %q", name, got, tc.want)
+		}
+	}
+	listPlugins = func(context.Context) ([]installedPlugin, error) { return nil, errors.New("no claude") }
+	if got := pluginGaps(context.Background()); !slices.Equal(got, plugin.Topics) {
+		t.Errorf("no plugin list: pluginGaps = %q, want every topic", got)
+	}
+	listPlugins = func(context.Context) ([]installedPlugin, error) { return nil, nil }
+	last := plugin.Topics[3:]
+	if gapsNote(nil) != "" || !strings.Contains(gapsNote(last), topicSkills(last)) {
+		t.Errorf("gapsNote: %q, %q", gapsNote(nil), gapsNote(last))
+	}
+}
+
+func writeSkill(t *testing.T, dir, name string, raw []byte) {
+	t.Helper()
+	p := filepath.Join(dir, plugin.SkillsDir, name, "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, raw, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 

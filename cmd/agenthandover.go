@@ -348,7 +348,11 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 	}
 	p := h.prompt()
 	a.say("prompt: %d bytes: %s", len(p), h.summary())
-	sa, err := a.startAgent(ctx, agentStart{name: ag.Name, role: workerRole, brief: workerPrompt(p), task: h.task(), dir: h.dir, model: h.model, replaces: &ag.Party})
+	gaps := pluginGaps(ctx)
+	if note := gapsNote(gaps); note != "" {
+		a.say("%s", note)
+	}
+	sa, err := a.startAgent(ctx, agentStart{name: ag.Name, role: workerRole, brief: workerPrompt(p, gaps...), task: h.task(), dir: h.dir, model: h.model, replaces: &ag.Party})
 	if err != nil {
 		return err
 	}
