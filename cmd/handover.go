@@ -111,10 +111,10 @@ always complete.`,
 				{"agents", "Agents", func(bool) { a.printAgents(agents) }},
 				{"records", "Session records", func(all bool) {
 					if all {
-						a.printRecords(v.st.Records, v.raw)
+						a.printRecords(v.st, v.st.Records, v.raw)
 						return
 					}
-					a.printLiveRecords(v.st.Records, v.raw)
+					a.printLiveRecords(v.st, v.st.Records, v.raw)
 				}},
 				{"epics", "Epics", func(bool) { a.printEpicsHandover(ep) }},
 				{"pinned", "Pinned notes", func(bool) { a.printPinned(notes.Pinned) }},

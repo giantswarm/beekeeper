@@ -448,13 +448,7 @@ func boardOwners(st *state.State, sc pickScope) map[string]string {
 		return fmt.Sprintf("%q", p.Name)
 	}
 	// kept says what keeps the record's session on the roster, parked.
-	kept := func(p state.Party) string {
-		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) })
-		if i < 0 || st.Agents[i].Done {
-			return ""
-		}
-		return keptBy(st, st.Agents[i], listed)
-	}
+	kept := func(p state.Party) string { return rosterKept(st, p, listed) }
 	// busy says the record's session is an agent on the roster working its
 	// task: it owns its item while its CLI is gone (the desktop warmed none,
 	// a headless turn ended) until it reports idle or leaves the roster.

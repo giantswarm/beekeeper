@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -33,6 +34,16 @@ func keptBy(st *state.State, ag state.Agent, now time.Time) string {
 		}
 	}
 	return ""
+}
+
+// rosterKept says what keeps p on the roster at now while it is not done
+// with its task (keptBy); empty when p is no such agent.
+func rosterKept(st *state.State, p state.Party, now time.Time) string {
+	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) })
+	if i < 0 || st.Agents[i].Done {
+		return ""
+	}
+	return keptBy(st, st.Agents[i], now)
 }
 
 func (a *app) agentKeepCmd() *cobra.Command {
