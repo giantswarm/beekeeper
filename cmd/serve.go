@@ -156,6 +156,10 @@ type (
 	tokenKey  struct{}
 )
 
+// mcpMaxBody bounds an MCP request's body: the MCP library reads a body in
+// full before it validates it, so the bound is the server's.
+const mcpMaxBody = 4 << 20
+
 func (s *server) handler() http.Handler {
 	m := mcpserver.NewMCPServer(project.Name, project.Version(), mcpserver.WithToolCapabilities(false),
 		mcpserver.WithResourceCapabilities(true, false), mcpserver.WithHooks(s.subscriptionHooks()))
@@ -164,7 +168,7 @@ func (s *server) handler() http.Handler {
 	}
 	s.addResources(m)
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", s.authenticate(mcpserver.NewStreamableHTTPServer(m, mcpserver.WithStateLess(true))))
+	mux.Handle("/mcp", s.authenticate(http.MaxBytesHandler(mcpserver.NewStreamableHTTPServer(m, mcpserver.WithStateLess(true)), mcpMaxBody)))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	return mux
 }
