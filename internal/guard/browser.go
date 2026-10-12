@@ -68,6 +68,6 @@ func (h Hook) desktopBrowserRefusal(ev event) string {
 		"was not allowed on yet for a person's site approval, which nobody answers. Run the browser steps headless instead: " +
 		"`beekeeper browse \"<the steps, and what to report back>\"` (Bash, timeout up to 10 minutes) runs them in a headless " +
 		"turn on the CLI's own Chrome connection, which never asks, and prints its report and the screenshots it took as image " +
-		"files to Read; a deploy or create click the task covers is declared with `--allow-deploy \"<what, where>\"`. " +
+		"files to Read; a deploy or create click the task covers is declared with `--allow-deploy \"<what, where>\"`, a file the steps upload with `--file <path>`. " +
 		"Hold the browser lease while it runs, as for any browser work."
 }

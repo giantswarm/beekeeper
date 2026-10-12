@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -91,6 +92,7 @@ const browseStart = "beekeeper browse"
 
 func (a *app) browseCmd() *cobra.Command {
 	var model, dir, deploy string
+	var files []string
 	var wait time.Duration
 	c := &cobra.Command{
 		Use:   "browse <steps>",
@@ -190,6 +192,21 @@ nothing else that deploys, and the first line below the turn's report says
 "refused:" line naming the click with the classifier's reason and a line
 naming the flag. A deploy the person did not ask for is never declared.
 
+A file the steps upload through a page's file input is shared with the
+turn by --file <path> (repeatable): browse refuses a path that does not
+exist, is not a regular file, or files over file_upload's 10 MiB before the
+turn starts, copies each file into a stage root of the turn's own
+(<stateDir>/browse/<id>/upload/<n>/<name>, removed after the turn) and
+names that root to the CLI as the folder of the files the person shared with
+the session, which Claude in Chrome's file_upload takes without the Read
+tool. The prompt names each file as the caller wrote it and the copy's path
+file_upload takes; every other path stays refused, the turn's --dir
+included, and the turn still has no file tool. A line below the report
+says "shared for upload: <path>". For example:
+
+  beekeeper browse --file ./shot.png "Open <page>. Attach ./shot.png
+  through the comment box's file input. Report the attachment's name."
+
 A page in a Chrome window the compositor does not draw (occluded, or on
 another workspace) is not rendered: GitHub keeps its Authorize button
 disabled there and every screenshot times out ("the renderer may be
@@ -216,17 +233,22 @@ again once the extension is connected.`,
 			if steps == "" {
 				return usageErr("browse needs the steps to run")
 			}
-			return a.browse(cmd.Context(), steps, dir, model, wait, strings.TrimSpace(deploy))
+			return a.browse(cmd.Context(), steps, dir, model, wait, strings.TrimSpace(deploy), files)
 		},
 	}
 	c.Flags().StringVar(&model, "model", "", "the turn's model (default: Claude Code's)")
 	c.Flags().StringVar(&dir, "dir", ".", "the turn's working directory")
 	c.Flags().DurationVar(&wait, "timeout", browseWait, "stop the turn and fail after this long")
+	c.Flags().StringArrayVar(&files, "file", nil, "a file the steps upload through a page's file input, shared with the turn for this run (repeatable)")
 	c.Flags().StringVar(&deploy, "allow-deploy", "", "a deploy or create click the task covers (\"<what, where>\"), allowed to the turn's auto mode for this run")
 	return c
 }
 
-func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Duration, deploy string) error {
+func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Duration, deploy string, files []string) error {
+	// A file the steps cannot upload is refused before anything starts.
+	if err := checkUploads(files); err != nil {
+		return err
+	}
 	bin, err := exec.LookPath("claude")
 	if err != nil {
 		return err
@@ -253,6 +275,19 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 			return []state.Event{event(me, "browse.turn", "%s in %s: %s", id, dir, bounded(steps, phraseRunes))}, nil
 		})
 	}()
+	// The shared files are copied into the turn's stage root, which goes with
+	// the turn.
+	shared, stage, err := stageUploads(files, dir, filepath.Join(a.cfg.StateDir, "browse", id, "upload"))
+	if stage != "" {
+		defer func() { _ = os.RemoveAll(stage) }()
+	}
+	if err != nil {
+		return err
+	}
+	env := browseEnv(os.Environ())
+	if stage != "" {
+		env = append(env, stageRootEnv+"="+stage)
+	}
 	// turn runs one headless turn of the session under its own timeout and
 	// prints its report.
 	turn := func(argv []string) (string, error) {
@@ -260,7 +295,7 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 		defer cancel()
 		c := exec.CommandContext(ctx, bin, argv...) //nolint:gosec // the claude CLI on PATH
 		c.Dir = dir
-		c.Env = browseEnv(os.Environ())
+		c.Env = env
 		c.Stderr = os.Stderr
 		out, err := c.Output()
 		if ctx.Err() != nil {
@@ -273,7 +308,7 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 		return report, err
 	}
 	rules := browseRules(deploy, consents, lab)
-	report, err := turn(browseArgv(id, model, browsePrompt(steps, deploy, consents, lab), rules, false))
+	report, err := turn(browseArgv(id, model, browsePrompt(steps, deploy, consents, lab, shared), rules, false))
 	path := transcriptOf(a.cfg, id)
 	if path == "" {
 		return errors.Join(err, fmt.Errorf("browse turn %s left no transcript", id))
@@ -288,7 +323,8 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 		found.Reconnected = true
 	}
 	shots, serr := saveScreenshots(path, filepath.Join(a.cfg.StateDir, "browse", id))
-	lines := append(found.lines(steps, deploy, consents, lab), "transcript: "+path)
+	lines := append(sharedLines(shared), found.lines(steps, deploy, consents, lab)...)
+	lines = append(lines, "transcript: "+path)
 	for _, s := range shots {
 		lines = append(lines, "screenshot: "+s)
 	}
@@ -723,10 +759,11 @@ func browseArgv(id, model, prompt string, rules []string, reconnect bool) []stri
 }
 
 // browsePrompt is a browse turn's prompt: the preamble, the connection
-// words, the deploy the person's task covers when one is declared, the Apps
-// on record and the lab sign-in the steps name, then the steps.
-func browsePrompt(steps, deploy string, consents []guard.App, lab bool) string {
-	p := browsePreamble + connectionWords
+// words, the files shared for upload, the deploy the person's task covers
+// when one is declared, the Apps on record and the lab sign-in the steps
+// name, then the steps.
+func browsePrompt(steps, deploy string, consents []guard.App, lab bool, shared []sharedFile) string {
+	p := browsePreamble + connectionWords + uploadPrompt(shared)
 	if deploy != "" {
 		p += fmt.Sprintf(deployWords, deploy)
 	}
@@ -919,15 +956,157 @@ func allowDeployRule(deploy string) string {
 
 // browseEnv is env without the variables a Claude Code CLI gives the
 // commands of its session: a browse turn is a session of its own, not a
-// child of the desktop session that runs the command.
+// child of the desktop session that runs the command; nor the caller's stage
+// root, which would share its files with the turn.
 func browseEnv(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
 		k, _, _ := strings.Cut(kv, "=")
-		if k == "CLAUDECODE" || k == "CLAUDE_PID" || k == "CLAUDE_EFFORT" || strings.HasPrefix(k, "CLAUDE_CODE_") {
+		if k == "CLAUDECODE" || k == "CLAUDE_PID" || k == stageRootEnv || k == "CLAUDE_EFFORT" || strings.HasPrefix(k, "CLAUDE_CODE_") {
 			continue
 		}
 		out = append(out, kv)
+	}
+	return out
+}
+
+// stageRootEnv names the Claude Code CLI's stage root to a turn: the files
+// under it are the ones the person shared with the session, which Claude in
+// Chrome's file_upload takes without the Read tool. A browse turn has no Read
+// tool, and granting it would let the turn read every path the person's own
+// allow rules cover, so a shared file reaches the turn as a copy there.
+const stageRootEnv = "CLAUDE_STAGE_FILE_ROOT"
+
+// uploadLimit is file_upload's bound on the bytes of the files of one call.
+const uploadLimit = 10 << 20
+
+// A sharedFile is a file the caller shares with a browse turn for upload: its
+// path as the caller named it and its copy in the turn's stage root, the path
+// file_upload takes.
+type sharedFile struct {
+	Named, Staged string
+}
+
+// checkUploads refuses files a turn cannot upload: a path that does not
+// exist or is not a regular file, and files over uploadLimit together.
+func checkUploads(files []string) error {
+	var total int64
+	for _, f := range files {
+		fi, err := os.Stat(f)
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			return usageErr("--file %s: no such file", f)
+		case err != nil:
+			return usageErr("--file %s: %v", f, err)
+		case !fi.Mode().IsRegular():
+			return usageErr("--file %s: not a regular file (%s), only a file's bytes are uploaded", f, fi.Mode().Type())
+		}
+		total += fi.Size()
+	}
+	if total > uploadLimit {
+		return usageErr("--file: the files hold %d bytes, over file_upload's %d", total, int64(uploadLimit))
+	}
+	return nil
+}
+
+// stageUploads copies each file into a directory of its own under the stage
+// root, its name kept, and returns the shared files and the root to remove
+// after the turn, "" without files. The CLI ignores a stage root inside the
+// turn's directory or around it: then the root is a temporary directory.
+func stageUploads(files []string, dir, root string) ([]sharedFile, string, error) {
+	if len(files) == 0 {
+		return nil, "", nil
+	}
+	if nested(dir, root) {
+		tmp, err := os.MkdirTemp("", "beekeeper-upload-")
+		if err != nil {
+			return nil, "", err
+		}
+		root = tmp
+	}
+	shared := make([]sharedFile, 0, len(files))
+	for i, f := range files {
+		staged := filepath.Join(root, strconv.Itoa(i+1), filepath.Base(f))
+		if err := copyFile(f, staged); err != nil {
+			return nil, root, fmt.Errorf("--file %s: %w", f, err)
+		}
+		shared = append(shared, sharedFile{Named: f, Staged: staged})
+	}
+	return shared, root, nil
+}
+
+// nested reports whether one of the directories a and b holds the other, or
+// they are the same, after their links are resolved.
+func nested(a, b string) bool {
+	a, b = resolved(a), resolved(b)
+	sep := string(filepath.Separator)
+	return a == b || strings.HasPrefix(a, b+sep) || strings.HasPrefix(b, a+sep)
+}
+
+// resolved is path made absolute, its links resolved as far as it exists.
+func resolved(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+	for rest := ""; ; {
+		if real, err := filepath.EvalSymlinks(abs); err == nil {
+			return filepath.Join(real, rest)
+		}
+		parent := filepath.Dir(abs)
+		if parent == abs {
+			return filepath.Join(abs, rest)
+		}
+		rest = filepath.Join(filepath.Base(abs), rest)
+		abs = parent
+	}
+}
+
+// copyFile copies the bytes of the file src to dst, readable by the person
+// alone.
+func copyFile(src, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return err
+	}
+	in, err := os.Open(src) //nolint:gosec // a file the caller shares with the turn
+	if err != nil {
+		return err
+	}
+	defer func() { _ = in.Close() }()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // under the turn's own stage root
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
+}
+
+// uploadWords tell a browse turn the files shared for upload, one "<named>
+// as <staged>" each.
+const uploadWords = "The caller shares these files with you for upload, and only these: %s. Upload one through a page's file input with " +
+	"file_upload and the path after 'as', the file's copy shared with this session, never the caller's own path; file_upload refuses every other path. "
+
+// uploadPrompt are the upload words of the shared files, "" without any.
+func uploadPrompt(shared []sharedFile) string {
+	if len(shared) == 0 {
+		return ""
+	}
+	named := make([]string, 0, len(shared))
+	for _, f := range shared {
+		named = append(named, fmt.Sprintf("%s as %s", f.Named, f.Staged))
+	}
+	return fmt.Sprintf(uploadWords, strings.Join(named, "; "))
+}
+
+// sharedLines are the lines below the report that name the files shared for
+// upload.
+func sharedLines(shared []sharedFile) []string {
+	out := make([]string, 0, len(shared))
+	for _, f := range shared {
+		out = append(out, "shared for upload: "+f.Named)
 	}
 	return out
 }

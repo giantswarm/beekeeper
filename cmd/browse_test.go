@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,7 +24,7 @@ const (
 
 // A browse turn is one headless turn in dontAsk on the CLI's own Chrome
 // connection, a session of its own: none of its caller's session variables
-// reach it. A declared deploy is the turn's settings, an auto mode allow
+// reach it, nor the caller's stage root. A declared deploy is the turn's settings, an auto mode allow
 // rule for that one action after the shipped rules, and its prompt's word
 // between the preamble and the steps; without one the turn gets no settings.
 func TestBrowseTurn(t *testing.T) {
@@ -85,16 +86,16 @@ func TestBrowseTurn(t *testing.T) {
 	}
 	// Every prompt has the connection words: the check before each step,
 	// the one reconnect in the turn, the lost line and the steps not done.
-	if p := browsePrompt("steps", "", nil, false); p != browsePreamble+connectionWords+browseSteps+"steps" ||
+	if p := browsePrompt("steps", "", nil, false, nil); p != browsePreamble+connectionWords+browseSteps+"steps" ||
 		!strings.Contains(connectionWords, "list_connected_browsers before each step") || !strings.Contains(connectionWords, "select_browser") ||
 		!strings.Contains(connectionWords, "'"+lostLine+"' followed by the steps not done") {
 		t.Errorf("browsePrompt without a deploy = %q", p)
 	}
-	if p := browsePrompt("steps", deploy, nil, false); !strings.HasPrefix(p, browsePreamble+connectionWords+"The person's task covers one deploy: "+deploy+".") ||
+	if p := browsePrompt("steps", deploy, nil, false, nil); !strings.HasPrefix(p, browsePreamble+connectionWords+"The person's task covers one deploy: "+deploy+".") ||
 		!strings.HasSuffix(p, browseSteps+"steps") {
 		t.Errorf("browsePrompt with a deploy = %q", p)
 	}
-	env := browseEnv([]string{"PATH=/bin", "CLAUDECODE=1", "CLAUDE_CODE_ENTRYPOINT=claude-desktop", "CLAUDE_CODE_SESSION_ID=x", "CLAUDE_PID=1", "CLAUDE_CONFIG_DIR=/c", "HOME=/h"})
+	env := browseEnv([]string{"PATH=/bin", "CLAUDECODE=1", "CLAUDE_CODE_ENTRYPOINT=claude-desktop", "CLAUDE_CODE_SESSION_ID=x", "CLAUDE_PID=1", stageRootEnv + "=/s", "CLAUDE_CONFIG_DIR=/c", "HOME=/h"})
 	if !slices.Equal(env, []string{"PATH=/bin", "CLAUDE_CONFIG_DIR=/c", "HOME=/h"}) {
 		t.Errorf("browseEnv = %q", env)
 	}
@@ -394,7 +395,7 @@ func TestBrowseReconnects(t *testing.T) {
 	writeFile(t, transcript+".2", chromeUse("t4", "list_connected_browsers", `{}`)+chromeAnswer("t4", oneBrowser)+
 		chromeUse("t5", "computer", deployClick)+chromeAnswer("t5", "Clicked on element ref_9"))
 	writeFile(t, reportFile+".2", "Clicked Deploy agent; the page says deployed.\n")
-	if err := a.browse(t.Context(), steps, bin, "", time.Minute, ""); err != nil {
+	if err := a.browse(t.Context(), steps, bin, "", time.Minute, "", nil); err != nil {
 		t.Fatalf("browse with a reconnect that found the browser: %v\n%s", err, out.String())
 	}
 	got := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
@@ -423,7 +424,7 @@ func TestBrowseReconnects(t *testing.T) {
 	}
 	writeFile(t, transcript+".2", chromeUse("t4", "list_connected_browsers", `{}`)+chromeAnswer("t4", noBrowsers))
 	writeFile(t, reportFile+".2", lostLine+"\n"+notDoneLines+"\n")
-	err := a.browse(t.Context(), steps, bin, "", time.Minute, "")
+	err := a.browse(t.Context(), steps, bin, "", time.Minute, "", nil)
 	if err == nil || err.Error() != lostLine+" at "+deployCall+": the reconnect turn found no browser; steps not done, to run again once the extension is connected (list_connected_browsers): "+
 		"Click Deploy agent once; Report what the page says" {
 		t.Errorf("browse with a reconnect that found no browser: %v", err)
@@ -446,7 +447,7 @@ func TestBrowseReconnects(t *testing.T) {
 	writeFile(t, transcript+".1", lostTurn+chromeUse("t4", "list_connected_browsers", `{}`)+chromeAnswer("t4", oneBrowser)+
 		chromeUse("t5", "computer", deployClick)+chromeAnswer("t5", "Clicked on element ref_9"))
 	writeFile(t, reportFile+".1", "Clicked Deploy agent after a reconnect; the page says deployed.\n")
-	if err := a.browse(t.Context(), steps, bin, "", time.Minute, ""); err != nil {
+	if err := a.browse(t.Context(), steps, bin, "", time.Minute, "", nil); err != nil {
 		t.Fatalf("browse with a connection that came back: %v\n%s", err, out.String())
 	}
 	got = strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
@@ -493,7 +494,7 @@ func TestBrowseRunsTheTurn(t *testing.T) {
 	// Without the flag the turn gets no settings, and its refused click is
 	// named below the report with the flag to declare it.
 	writeFile(t, transcript, click+`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"`+denial+`"}]}}`+"\n")
-	if err := a.browse(t.Context(), steps, bin, "", time.Minute, ""); err != nil {
+	if err := a.browse(t.Context(), steps, bin, "", time.Minute, "", nil); err != nil {
 		t.Fatalf("browse: %v\n%s", err, out.String())
 	}
 	got := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
@@ -504,7 +505,7 @@ func TestBrowseRunsTheTurn(t *testing.T) {
 	}
 	argv := argvOf()
 	if i := slices.Index(argv, permissionModeFlag); i < 0 || argv[i+1] != modeDontAsk || slices.Contains(argv, settingsFlag) ||
-		argv[len(argv)-1] != browsePrompt(steps, "", nil, false) || !slices.Contains(argv, chromeFlag) {
+		argv[len(argv)-1] != browsePrompt(steps, "", nil, false, nil) || !slices.Contains(argv, chromeFlag) {
 		t.Errorf("the turn without the flag ran with %q", argv)
 	}
 
@@ -513,7 +514,7 @@ func TestBrowseRunsTheTurn(t *testing.T) {
 	const deploy = "the demo agent to the demo cluster"
 	writeFile(t, transcript, click+`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":false,"content":"Clicked"}]}}`+"\n")
 	out.Reset()
-	if err := a.browse(t.Context(), steps, bin, "", time.Minute, deploy); err != nil {
+	if err := a.browse(t.Context(), steps, bin, "", time.Minute, deploy, nil); err != nil {
 		t.Fatalf("browse --allow-deploy: %v\n%s", err, out.String())
 	}
 	got = strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
@@ -523,7 +524,7 @@ func TestBrowseRunsTheTurn(t *testing.T) {
 	}
 	argv = argvOf()
 	i := slices.Index(argv, settingsFlag)
-	if i < 0 || argv[i+1] != allowDeploySettings(deploy) || argv[len(argv)-1] != browsePrompt(steps, deploy, nil, false) {
+	if i < 0 || argv[i+1] != allowDeploySettings(deploy) || argv[len(argv)-1] != browsePrompt(steps, deploy, nil, false, nil) {
 		t.Errorf("the turn with the flag ran with %q", argv)
 	}
 	if i := slices.Index(argv, permissionModeFlag); i < 0 || argv[i+1] != modeDontAsk {
@@ -571,7 +572,7 @@ func TestBrowseConsent(t *testing.T) {
 		!strings.Contains(rules[1], "Not covered: any other permission") {
 		t.Errorf("browseRules with a permission record = %q", rules)
 	}
-	if p := browsePrompt("steps", "", both, false); !strings.Contains(p, "The person's own App "+deviceApp+" is declared and on record for one permission change, "+deviceChange+": once the steps reach its permissions page (organizations/example/settings/apps/"+deviceApp+"/permissions)") ||
+	if p := browsePrompt("steps", "", both, false, nil); !strings.Contains(p, "The person's own App "+deviceApp+" is declared and on record for one permission change, "+deviceChange+": once the steps reach its permissions page (organizations/example/settings/apps/"+deviceApp+"/permissions)") ||
 		!strings.Contains(p, "The person's own App "+recordedApp+" is declared and on record (callback ") {
 		t.Errorf("browsePrompt with a permission record = %q", p)
 	}
@@ -598,7 +599,7 @@ func TestBrowseConsent(t *testing.T) {
 	if i < 0 || argv[i+1] != allowSettings([]string{allowDeployRule(deploy), consentRule(consents[0])}) || strings.Count(argv[i+1], "$defaults") != 1 {
 		t.Errorf("--settings with a deploy and a record = %q", argv)
 	}
-	p := browsePrompt("steps", "", consents, true)
+	p := browsePrompt("steps", "", consents, true, nil)
 	if !strings.HasPrefix(p, browsePreamble+connectionWords+"The person's own App "+recordedApp+" is declared and on record (callback "+recordedCallback+" or "+recordedCallback+":8443):") ||
 		!strings.Contains(p, labWords) || !strings.HasSuffix(p, browseSteps+"steps") {
 		t.Errorf("browsePrompt with a record and the lab = %q", p)
@@ -649,7 +650,7 @@ func TestBrowseTurnWithARecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	steps := "Open https://" + recordedCallback + "/connect/github. On GitHub's page '" + recordedTitle + "' click Authorize once; report the final URL."
-	if err := a.browse(t.Context(), steps, bin, "", time.Minute, ""); err != nil {
+	if err := a.browse(t.Context(), steps, bin, "", time.Minute, "", nil); err != nil {
 		t.Fatalf("browse: %v\n%s", err, out.String())
 	}
 	got := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
@@ -681,4 +682,138 @@ func TestBrowseTurnWithARecord(t *testing.T) {
 	if evs, _ := a.store.Events(0, func(e state.Event) bool { return e.Verb == "browse.turn" }); len(evs) != 1 || !strings.HasPrefix(evs[0].Detail, id+" in "+bin+": Open https://") {
 		t.Errorf("browse.turn events = %+v", evs)
 	}
+}
+
+// A file shared with --file reaches the turn as a copy under the CLI's stage
+// root, named in the prompt with the path file_upload takes, while the turn
+// keeps no file tool and no settings; the copy goes with the turn, and a line
+// below the report names the file.
+func TestBrowseSharesFiles(t *testing.T) {
+	a, out := stubApp(t)
+	bin := t.TempDir()
+	argvFile, transcript, seen := filepath.Join(bin, "argv"), filepath.Join(bin, "transcript.jsonl"), filepath.Join(bin, "seen")
+	// The fake claude records its arguments and what it finds under the stage
+	// root it was given.
+	script := "#!/bin/sh\n: > \"$BROWSE_ARGV\"\nid=; prev=\nfor a in \"$@\"; do\n  printf '%s\\0' \"$a\" >> \"$BROWSE_ARGV\"\n" +
+		"  [ \"$prev\" = --session-id ] && id=$a\n  prev=$a\ndone\n" +
+		"{ echo \"$" + stageRootEnv + "\"; cat \"$" + stageRootEnv + "\"/*/*; } > \"$BROWSE_SEEN\"\n" +
+		"mkdir -p \"$BROWSE_PROJECT\" && cp \"$BROWSE_TRANSCRIPT\" \"$BROWSE_PROJECT/$id.jsonl\"\necho \"the turn's report\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o700); err != nil { //nolint:gosec // a fake claude
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("BROWSE_ARGV", argvFile)
+	t.Setenv("BROWSE_TRANSCRIPT", transcript)
+	t.Setenv("BROWSE_SEEN", seen)
+	t.Setenv("BROWSE_PROJECT", filepath.Join(a.cfg.Claude.ProjectsDir, "p"))
+	t.Setenv(stageRootEnv, "/the/caller's/stage")
+	writeFile(t, transcript, "")
+	files := t.TempDir()
+	shot, log := filepath.Join(files, "shot.png"), filepath.Join(files, "run.log")
+	writeFile(t, shot, "png bytes\n")
+	writeFile(t, log, "log lines\n")
+	const steps = "Open the demo page. Attach shot.png and run.log through its file input."
+
+	if err := a.browse(t.Context(), steps, bin, "", time.Minute, "", []string{shot, log}); err != nil {
+		t.Fatalf("browse --file: %v\n%s", err, out.String())
+	}
+	got := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if len(got) != 5 || got[0] != turnReport || got[1] != "shared for upload: "+shot || got[2] != "shared for upload: "+log ||
+		!strings.HasPrefix(got[3], "transcript: ") || got[4] != noShots {
+		t.Errorf("browse --file printed %q", got)
+	}
+	b, err := os.ReadFile(seen) //nolint:gosec // the test's own file
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, copies, _ := strings.Cut(string(b), "\n")
+	if !strings.HasPrefix(root, filepath.Join(a.cfg.StateDir, "browse")+string(filepath.Separator)) || copies != "png bytes\nlog lines\n" {
+		t.Errorf("the turn found the stage root %q holding %q", root, copies)
+	}
+	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) { //nolint:gosec // the stage root the fake claude reported
+		t.Errorf("the stage root %s outlived the turn: %v", root, err)
+	}
+	argv := strings.Split(strings.TrimSuffix(readFile(t, argvFile), "\x00"), "\x00")
+	shared := []sharedFile{{shot, filepath.Join(root, "1", "shot.png")}, {log, filepath.Join(root, "2", "run.log")}}
+	if argv[len(argv)-1] != browsePrompt(steps, "", nil, false, shared) || slices.Contains(argv, settingsFlag) ||
+		argv[slices.Index(argv, toolsFlag)+1] != "" || argv[slices.Index(argv, allowedToolsFlag)+1] != browseTools {
+		t.Errorf("the turn with shared files ran with %q", argv)
+	}
+	p := argv[len(argv)-1]
+	if !strings.Contains(p, "and only these: "+shot+" as "+shared[0].Staged+"; "+log+" as "+shared[1].Staged+". ") ||
+		!strings.Contains(p, "file_upload refuses every other path") || !strings.HasSuffix(p, browseSteps+steps) {
+		t.Errorf("the prompt with shared files = %q", p)
+	}
+	if browsePrompt(steps, "", nil, false, nil) != browsePreamble+connectionWords+browseSteps+steps {
+		t.Error("a prompt without shared files names uploads")
+	}
+
+	// A file the turn cannot upload is refused before the turn starts.
+	big := filepath.Join(files, "big.bin")
+	if err := os.WriteFile(big, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(big, uploadLimit+1); err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct {
+		files []string
+		want  string
+	}{
+		"missing":  {[]string{shot, filepath.Join(files, "gone.png")}, "gone.png: no such file"},
+		"dir":      {[]string{files}, files + ": not a regular file"},
+		"too big":  {[]string{big}, "over file_upload's 10485760"},
+		"together": {[]string{shot, big}, "over file_upload's 10485760"},
+	} {
+		if err := os.Remove(argvFile); err != nil {
+			t.Fatal(err)
+		}
+		err := a.browse(t.Context(), steps, bin, "", time.Minute, "", c.files)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("browse --file %s: %v, want %q", name, err, c.want)
+		}
+		if _, err := os.Stat(argvFile); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("browse --file %s started the turn", name)
+		}
+		writeFile(t, argvFile, "")
+	}
+}
+
+// The CLI ignores a stage root inside the turn's directory or around it, so
+// such a root moves to a temporary directory; elsewhere it stays.
+func TestStageUploads(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "a.pdf")
+	writeFile(t, src, "pdf")
+	dir := t.TempDir()
+	if shared, root, err := stageUploads(nil, dir, filepath.Join(dir, "x")); shared != nil || root != "" || err != nil {
+		t.Errorf("stageUploads without files = %v, %q, %v", shared, root, err)
+	}
+	for name, root := range map[string]string{"inside": filepath.Join(dir, "state", "upload"), "same": dir, "around": filepath.Dir(dir)} {
+		_, got, err := stageUploads([]string{src}, dir, root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(got) })
+		if nested(dir, got) || !strings.HasPrefix(filepath.Base(got), "beekeeper-upload-") {
+			t.Errorf("stage root %s of the turn in %s: %s", name, dir, got)
+		}
+	}
+	root := filepath.Join(t.TempDir(), "upload")
+	shared, got, err := stageUploads([]string{src}, dir, root)
+	if err != nil || got != root || len(shared) != 1 || shared[0] != (sharedFile{src, filepath.Join(root, "1", "a.pdf")}) || readFile(t, shared[0].Staged) != "pdf" {
+		t.Errorf("stageUploads = %v, %q, %v", shared, got, err)
+	}
+	if fi, err := os.Stat(shared[0].Staged); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("the copy's mode: %v, %v", fi, err)
+	}
+}
+
+// readFile is the content of the test's own file.
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path) //nolint:gosec // the test's own file
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }
