@@ -206,7 +206,8 @@ const (
 // restoreRequest is the message that has a steward set what the desktop
 // lost of a worker's session (its local_ id, or "self" for the title only):
 // the title, unless empty, and the model, unless empty. The desktop refuses
-// a session's switch of its own model, so a model goes to another session.
+// a session's switch of its own model ("a session must not silently re-price
+// its own turns"), so a model goes to another session.
 func restoreRequest(session, title, model string) string {
 	var calls, lost []string
 	if title != "" {
@@ -215,64 +216,112 @@ func restoreRequest(session, title, model string) string {
 	}
 	if model != "" {
 		lost = append(lost, "model")
-		calls = append(calls, fmt.Sprintf("%s with session_id %q and model %q (the model its first turn ran on; when the result lists the offered ids instead, once more with the id it lists for that model)", setModelTool, session, model))
+		calls = append(calls, fmt.Sprintf("%s with session_id %q and model %q (the model it was started on; when the result lists the offered ids instead, once more with the id it lists for that model)", setModelTool, session, model))
 	}
 	return fmt.Sprintf(stewardPreamble+"the desktop lost the %s of a worker beekeeper started. Call %s, then end the turn without another tool call and without a reply.", strings.Join(lost, " and "), strings.Join(calls, ", then "))
 }
 
 // The desktop's import of a start, handling its link twice, often keeps the
 // record of the import that lost the transcript's read: no title and no
-// model, and a session without a model runs every desktop turn on the
-// desktop's default instead of the model its first turn ran on.
+// model. The desktop then records its default model once it warms the
+// session's CLI, and every desktop turn runs on that instead of the model the
+// session was started on.
 
 // keepImport gives the desktop record of a started session, once imported,
-// the title (its name) and the model (its first turn's) the import dropped,
-// through a steward other than the session itself, and puts the record as
-// the desktop keeps it then into sa. It returns what it found or did, one
-// line, empty when the import kept both.
+// the title (its name) and the model (the one it was started on) the import
+// dropped or replaced, through a steward other than the session itself, and
+// puts the record as the desktop keeps it then into sa. It returns what it
+// found or did, one line, empty when the import kept both.
 func (a *app) keepImport(ctx context.Context, id, name string, sa *startedAgent) string {
 	host := "local_" + id
+	line, err := a.restoreRecord(ctx, host, name, a.startedOn(id))
+	if err != nil {
+		line = err.Error()
+	}
+	if r, ok := claude.ReadRecord(a.cfg, host); ok {
+		sa.title, sa.model, sa.chrome = r.Title, r.Model, r.ChromePermissionMode
+	}
+	return line
+}
+
+// restoreRecord has a steward other than the session give the desktop record
+// of host the title name and the model model (none when empty) where it
+// holds others: restoreImport on the desktop's record.
+func (a *app) restoreRecord(ctx context.Context, host, name, model string) (string, error) {
 	record := func() claude.Record {
 		if r, ok := claude.ReadRecord(a.cfg, host); ok {
 			return *r
 		}
 		return claude.Record{}
 	}
-	var model string
-	if path := transcriptOf(a.cfg, id); path != "" {
-		model, _ = claude.Model(path)
-	}
 	find := func(_ context.Context, tried []string) (steward, error) {
 		return a.findSteward(host, append(tried, host))
 	}
-	line, err := restoreImport(ctx, host, name, model, record, find, a.peerSend, retitleWait)
-	if err != nil {
-		line = err.Error()
+	return restoreImport(ctx, host, name, model, record, find, a.peerSend, retitleWait)
+}
+
+// startedOn is the model session id's turns keep: the one its start chose,
+// else the one its transcript's last reply ran on; "" when neither is known.
+func (a *app) startedOn(id string) string {
+	if m := a.chosenModel(id); m != "" {
+		return m
 	}
-	r := record()
-	sa.title, sa.model, sa.chrome = r.Title, r.Model, r.ChromePermissionMode
-	return line
+	if path := transcriptOf(a.cfg, id); path != "" {
+		model, _ := claude.Model(path)
+		return model
+	}
+	return ""
+}
+
+// chosenModel is the model the start of session id chose (--model), ""
+// when it chose none.
+func (a *app) chosenModel(id string) string {
+	if st, err := a.store.Read(); err == nil {
+		if s, ok := st.BypassStart(id); ok {
+			return s.Model
+		}
+	}
+	return ""
+}
+
+// sameModel reports whether recorded, the model the desktop records for a
+// session, is want: the picker's id can carry a suffix such as "[1m]", and
+// an alias (opus, sonnet) names every id of its family.
+func sameModel(recorded, want string) bool {
+	norm := func(m string) string {
+		m, _, _ = strings.Cut(strings.ToLower(strings.TrimSpace(m)), "[")
+		return m
+	}
+	r, w := norm(recorded), norm(want)
+	switch {
+	case r == w:
+		return true
+	case r == "" || w == "":
+		return false
+	case !strings.Contains(w, "-"):
+		return strings.Contains(r, "-"+w+"-") || strings.HasSuffix(r, "-"+w)
+	}
+	return false
 }
 
 // restoreImport is keepImport's decision: record reads the desktop's record
-// of host, name and model are what it should hold, find picks the steward,
-// send delivers the request. A record holding a model holds the one the
-// steward set: the desktop records the id its picker offers, which can
-// differ from the transcript's.
+// of host, name and model are what it should hold (no model when empty),
+// find picks the steward, send delivers the request. A record holding
+// another model than model lost it as much as one holding none.
 func restoreImport(ctx context.Context, host, name, model string, record func() claude.Record, find stewardFinder,
 	send func(ctx context.Context, to, msg string) error, wait time.Duration,
 ) (string, error) {
-	lost := func() (title, mdl string) {
+	lost := func() (title, mdl, held string) {
 		r := record()
 		if r.Title != name {
 			title = name
 		}
-		if r.Model == "" {
+		if model != "" && !sameModel(r.Model, model) {
 			mdl = model
 		}
-		return title, mdl
+		return title, mdl, r.Model
 	}
-	title, mdl := lost()
+	title, mdl, held := lost()
 	if title == "" && mdl == "" {
 		return "", nil
 	}
@@ -281,11 +330,15 @@ func restoreImport(ctx context.Context, host, name, model string, record func() 
 		what = append(what, "title")
 	}
 	if mdl != "" {
-		what = append(what, "model "+mdl)
+		m := "model " + mdl
+		if held != "" {
+			m += " (it records " + held + ")"
+		}
+		what = append(what, m)
 	}
 	dropped := strings.Join(what, " and ")
 	msg := func(steward) string { return restoreRequest(host, title, mdl) }
-	done := func() bool { t, m := lost(); return t == "" && m == "" }
+	done := func() bool { t, m, _ := lost(); return t == "" && m == "" }
 	s, err := delegate(ctx, find, msg, done, send, wait)
 	if err != nil {
 		return "", fmt.Errorf("the desktop's import dropped its %s: %w", dropped, err)

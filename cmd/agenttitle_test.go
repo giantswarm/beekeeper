@@ -261,7 +261,7 @@ func TestAMissedReopenFailsNoUnit(t *testing.T) {
 // the session itself set what was dropped, and restoreImport waits for the
 // desktop to record it; an import that kept both is left alone.
 func TestRestoreImport(t *testing.T) {
-	const name, host, model = "Probe", "local_probe", "claude-sonnet-5-5"
+	const name, host, model = "Probe", "local_probe", sonnetModel
 	other := func(_ context.Context, tried []string) (steward, error) {
 		return steward{host: "local_steward", sock: "/s/43.sock"}, nil
 	}
@@ -278,7 +278,7 @@ func TestRestoreImport(t *testing.T) {
 		{desc: "both kept", records: []claude.Record{kept}, model: model, find: other},
 		{desc: "no model, then set", records: []claude.Record{{Title: name}, {Title: name}, kept}, model: model, find: other,
 			wantCalls: []string{setModelTool}, want: "dropped its model claude-sonnet-5-5: steward local_steward set it"},
-		{desc: "neither, then both set", records: []claude.Record{{}, {Title: name, Model: "claude-sonnet-5-5[1m]"}}, model: model, find: other,
+		{desc: "neither, then both set", records: []claude.Record{{}, {Title: name, Model: sonnet1M}}, model: model, find: other,
 			wantCalls: []string{setTitleTool, setModelTool}, want: "dropped its title and model claude-sonnet-5-5: steward local_steward set them"},
 		{desc: "no title, no model replied", records: []claude.Record{{}, {Title: name}}, find: other,
 			wantCalls: []string{setTitleTool}, want: "dropped its title: steward local_steward set it"},
@@ -287,6 +287,12 @@ func TestRestoreImport(t *testing.T) {
 			want: "no idle desktop CLI", wantErr: true},
 		{desc: "never recorded", records: []claude.Record{{Title: name}}, model: model, find: other,
 			wantCalls: []string{setModelTool}, want: "did not record it", wantErr: true},
+		{desc: "the desktop's default recorded, then set", records: []claude.Record{{Title: name, Model: fableModel}, kept}, model: model, find: other,
+			wantCalls: []string{setModelTool}, want: "dropped its model claude-sonnet-5-5 (it records claude-fable-5-1): steward local_steward set it"},
+		{desc: "the desktop's default recorded, no steward", records: []claude.Record{{Title: name, Model: fableModel}}, model: model,
+			find: func(context.Context, []string) (steward, error) { return steward{}, errNoSteward },
+			want: "dropped its model claude-sonnet-5-5 (it records claude-fable-5-1): no idle desktop CLI", wantErr: true},
+		{desc: "no model chosen, any recorded is kept", records: []claude.Record{{Title: name, Model: fableModel}}, find: other},
 	} {
 		t.Run(c.desc, func(t *testing.T) {
 			var reads atomic.Int32
@@ -370,3 +376,59 @@ func TestArchiveRequestOfAWarmedSteward(t *testing.T) {
 		t.Errorf("request %q", msg)
 	}
 }
+
+// The desktop's record of a model is the model a session was started on
+// when it is that id, the picker's variant of it, or of the alias's family.
+func TestSameModel(t *testing.T) {
+	for _, c := range []struct {
+		recorded, want string
+		same           bool
+	}{
+		{sonnetModel, sonnetModel, true},
+		{sonnet1M, sonnetModel, true},
+		{"Claude-Opus-5-5", "claude-opus-5-5", true},
+		{sonnetModel, "sonnet", true},
+		{fableModel, sonnetModel, false},
+		{fableModel, "sonnet", false},
+		{"", sonnetModel, false},
+		{sonnetModel, "", false},
+		{"", "", true},
+	} {
+		if got := sameModel(c.recorded, c.want); got != c.same {
+			t.Errorf("sameModel(%q, %q) = %v, want %v", c.recorded, c.want, got, c.same)
+		}
+	}
+}
+
+// The start line names the model that holds, and says when the one the
+// session was started on could not be set and how to set it.
+func TestModelLine(t *testing.T) {
+	const host = "local_probe"
+	for _, c := range []struct {
+		model, want string
+		line        string
+	}{
+		{sonnetModel, sonnetModel, "its desktop turns run on claude-sonnet-5-5"},
+		{sonnet1M, sonnetModel, "its desktop turns run on claude-sonnet-5-5[1m]"},
+		{fableModel, "", "its desktop turns run on claude-fable-5-1"},
+		{"", "", "the desktop recorded no model"},
+		{fableModel, sonnetModel, "the model claude-sonnet-5-5 could not be set: the desktop records claude-fable-5-1 for its desktop turns, so they run headless on claude-sonnet-5-5"},
+		{"", sonnetModel, "the model claude-sonnet-5-5 could not be set: the desktop records no model (its default)"},
+	} {
+		got := modelLine(c.model, c.want, host)
+		if !strings.HasPrefix(got, c.line) {
+			t.Errorf("modelLine(%q, %q) = %q, want it to start %q", c.model, c.want, got, c.line)
+		}
+		if c.want != "" && !sameModel(c.model, c.want) && !strings.Contains(got, setModelTool+` with session_id "`+host+`" and model "`+c.want+`"`) {
+			t.Errorf("modelLine(%q, %q) = %q, want the call that sets it", c.model, c.want, got)
+		}
+	}
+}
+
+// The models the import tests name: a worker's, the picker's variant of it,
+// and the desktop's default.
+const (
+	sonnetModel = "claude-sonnet-5-5"
+	sonnet1M    = sonnetModel + "[1m]"
+	fableModel  = "claude-fable-5-1"
+)

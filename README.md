@@ -1499,6 +1499,20 @@ brief carries only its task and reports to `the supervisor`, whoever holds the r
 hand-over puts the rules ahead of the follow-up's prompt again. The roster shows it busy with its
 `--task` from the moment it is started, and the desktop shows it working from its first turn.
 
+**The model.** `--model` is the session's model, which the starter picks per task; without it the
+session runs on Claude Code's default, and a desk's workers are never started on its most
+expensive model by default. The start records the model (the id its first reply names, `--model`
+may be an alias) and its turns keep it. The desktop's import of a start often drops the model, and
+the desktop then records its own default once it warms the session's CLI; the desktop refuses a
+session's switch of its own model, so a steward, another session beekeeper started, sets it with
+`set_session_model` on the session's row. A record holding another model than the start's counts as
+lost as much as one holding none: the reopen restores it through a steward too. While the desktop
+records another model, the task's turn and every wake run headless on the start's model instead of
+as desktop turns, and the start's last lines say so: `its desktop turns run on <model>` when it
+holds, else `the model <m> could not be set` with the call that sets it, which the starter can
+make. `agents handover` keeps the start's model unless `--model` overrides it, and `agents wake`
+resumes on it.
+
 **The start gate.** Before anything is recorded, the start is judged as `beekeeper capacity`
 judges one: the busy agents against `capacity.ceiling`, MemAvailable, disk swap's growth, the
 1-minute load and the kind labs, and for a task that builds, tests or lints, marked `--builds`,
@@ -1514,7 +1528,7 @@ note that it only answers "ready") creates the transcript with its model and tit
 user unit `beekeeper-agent-<id>`. Once it ended, beekeeper imports the session into the desktop
 under its name, past the window's focus (the person's typing holds the link 1 minute at most); a
 title or model the import dropped is restored by a steward, the title by the session's own desktop
-CLI when no other steward runs. The desktop's CLI of the session, which the import warms, then takes
+CLI when no other steward runs (a model never: see the model above). The desktop's CLI of the session, which the import warms, then takes
 the message that starts the task as its turn; when the desktop runs none, a steward's `send_message`
 through the desktop's session messaging starts one with it, the route a relay revives a role holder
 by. Before either spawn, `makeRoom` keeps the desktop under its cap of CLIs by ending one of
@@ -2030,7 +2044,7 @@ line per step:
    around it), its `sessions serve` record, its gated merges, its last events and its note. No
    standing rules and no live values: the follow-up is told to check the live state first.
 3. **The start.** The follow-up is started as `agents start` starts one, in the old session's
-   folder and model, under the agent's name: it takes over the roster entry, the task and the
+   folder and model (the one it was started on, unless `--model` overrides it), under the agent's name: it takes over the roster entry, the task and the
    session record, busy with the task. It shows in the sidebar and runs its first turn from the prompt alone.
 4. **The end.** Once the follow-up's transcript holds its first reply, the old session's CLI and every
    process under it get SIGTERM, then SIGKILL after 10 s, by PID: the desktop shows it stopped. A start

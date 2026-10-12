@@ -184,6 +184,11 @@ func (a *app) readHandover(q string) (handover, error) {
 		if h.dir == "" {
 			h.dir = s.Dir
 		}
+		if s.Model != "" {
+			// the model it was started on, not the desktop's default its
+			// desktop turns may have run on
+			h.model = s.Model
+		}
 		if transcript != "" {
 			if t, found, err := claude.First(transcript); err == nil && found {
 				h.brief = briefOf(t.Text)
@@ -353,7 +358,7 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 		a.say("%s", sa.restored)
 	}
 	a.say("%s", titleLine(ag.Name, sa.title))
-	a.say("%s", modelLine(sa.model))
+	a.say("%s", modelLine(sa.model, sa.want, "local_"+sa.id))
 	if sa.kept != "" {
 		a.say("the desktop still shows %s", sa.kept)
 	}
