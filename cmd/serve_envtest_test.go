@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -243,6 +244,25 @@ func TestEnvtestServeRefusesWithoutAValidToken(t *testing.T) {
 	}
 	if n := strings.Count(e.log.String(), `"outcome":"refused"`); n != 3 {
 		t.Errorf("%d refusals logged, want 3:\n%s", n, e.log.String())
+	}
+}
+
+// A body over mcpMaxBody is refused before the MCP library has read more
+// than the bound.
+func TestEnvtestServeBoundsTheBody(t *testing.T) {
+	e := newServeEnv(t)
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"pad":"` + strings.Repeat("x", mcpMaxBody) + `"}}`
+	req, _ := http.NewRequest(http.MethodPost, e.url, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+e.token(t, "ana@example.com", teamGroup))
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+	if !strings.Contains(string(raw), "request body too large") {
+		t.Errorf("an oversized body: HTTP %d %s", res.StatusCode, raw)
 	}
 }
 
