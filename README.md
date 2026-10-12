@@ -208,7 +208,12 @@ unreachable (a central verb, see [The central instance](#the-central-instance)),
 release is out (`self-update --check`). A claim's first line is its outcome: `held by you since
 <time>` (exit 0), `queued: number <n> behind <holder>` or `refused: <reason>` (exit 3); a kind
 lab's held claim adds its kubeconfig's export line after it. A claim exits at once; `--wait
-<duration>` claims again every 10 seconds until it is held or the duration has passed. A claim gates the action it guards:
+<duration>` claims again every 10 seconds until it is held or the duration has passed, in the
+foreground and at most 9 minutes: a background wait does not outlive a desktop turn. A longer
+wait is a park: `--park` parks the calling agent (`agents park`) on a queued claim, after its
+line, and the claim waits in its queue without a process; once the resource is free and the
+agent's grant is first in its queue, the watch resumes the agent with the words to claim it
+(below). A claim gates the action it guards:
 `beekeeper lease claim staging -p "database migration" && kubectl …`, never a `;` between them.
 
 `--json` prints any command's result as JSON. A session is identified by the environment
@@ -1771,8 +1776,10 @@ never imported, once the desktop runs fewer CLIs than its cap ([above](#agents-s
 A worker that waits on a person, a merge lane or a release parks instead of sleeping in a turn
 that holds its slot and its CLI's memory: `beekeeper agents park [--on <#note|owner/repo#n>]
 "<what it waits for>"` keeps its task, shows it parked in `agents` (KEPT) and `capacity`, not busy,
-and it ends its turn; an agent without a task is refused. Once the note is closed (answered,
-defaulted, done or overtaken) or the issue or pull request merged or closed, the watch says one
+and it ends its turn; an agent without a task is refused. `lease claim <resource> --park` parks it
+on the lease its queued claim waits for. Once the note is closed (answered,
+defaulted, done or overtaken), the issue or pull request merged or closed, or the lease free and
+the agent's to claim (a grant to another session first keeps it parked), the watch says one
 `AGENT RESUMABLE "<agent>"` line with what settled it, a person's answer word for word. With
 `agents.autoResume` the next poll resumes the agent with that answer as `agents wake` does (by name
 to a running CLI, else headless); without it, or for a park without `--on`, `beekeeper agents

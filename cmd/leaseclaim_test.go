@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -72,7 +73,7 @@ func TestLeaseClaimQueued(t *testing.T) {
 		if Code(err) != ExitRefused || !strings.HasPrefix(out, want) {
 			t.Errorf("claim of %s: %q, exit %d; want exit 3 and the first line %q", res, out, Code(err), want)
 		}
-		if !strings.Contains(out, "; not yours: park on `beekeeper lease status "+res+"` in a probe timer, or claim with --wait <duration>\n") {
+		if !strings.Contains(out, "; not yours: --park waits in the queue without a process, --wait up to 9m in the foreground\n") {
 			t.Errorf("a queued claim of %s names no way to wait: %q", res, out)
 		}
 		if strings.Contains(out, "KUBECONFIG") || strings.Count(out, "\n") != 1 {
@@ -156,5 +157,123 @@ func TestLeaseClaimWaitRunsOut(t *testing.T) {
 	if Code(err) != ExitRefused || !strings.HasPrefix(out, `refused: graveler is held by "Agent other"`) || !strings.HasSuffix(out, " (waited "+dur(25*time.Second)+")\n") ||
 		len(pauses) != len(want) || pauses[2] != want[2] {
 		t.Errorf("a claim that waited out: %q, exit %d, pauses %v", out, Code(err), pauses)
+	}
+}
+
+// claimAgent puts "Agent me" on the roster with a task: it parks.
+func claimAgent(t *testing.T, a *app) {
+	t.Helper()
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{{Party: claimMe, Task: parkTask, AssignedAt: relayNow}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// settleParks runs a watch poll's park steps: it marks the settled parks
+// resumable, then resumes them (agents.autoResume).
+func settleParks(t *testing.T, a *app) {
+	t.Helper()
+	a.cfg.Agents.AutoResume = true
+	w := &watcher{app: a, last: map[string]time.Time{}, reported: map[string]bool{}}
+	for range 2 {
+		st, err := a.store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.autoResume(context.Background(), st)
+		parks := w.settledParks(context.Background(), st)
+		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+			_, evs := markResumable(st, parks, true, a.now)
+			return evs, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A queued claim with --park says its queued line first, unchanged, parks
+// the agent on the lease and exits 3; no process waits. The watch leaves it
+// parked while the lease is held and wakes it once, with the words to claim
+// it, when the holder released it and its grant is first.
+func TestLeaseClaimParkWakesOnGrant(t *testing.T) {
+	a := claimApp(t, claimGrant(labOne, claimMe, 5*time.Minute))
+	claimAgent(t, a)
+	woke := stubWakes(t)
+	holdLease(t, a, labOne, claimOther)
+	out, err := runLease(a, "claim", labOne, "-p", "my proof", "--park")
+	first, park, _ := strings.Cut(out, "\n")
+	if Code(err) != ExitRefused || !strings.HasPrefix(first, `queued: number 1 behind "Agent other"`) {
+		t.Fatalf("a parked claim: %q, exit %d; want exit 3 and the queued line first", out, Code(err))
+	}
+	if !strings.HasPrefix(park, "Agent me: parked on lease agentlab-1: the lease agentlab-1: my proof;") || !strings.Contains(park, "End your turn now.") {
+		t.Errorf("the park line: %q", park)
+	}
+	settleParks(t, a)
+	if len(*woke) > 0 {
+		t.Fatalf("woken while the lease is held: %q", *woke)
+	}
+	if err := lease.Dir(a.cfg.LeaseDir).Release(labOne); err != nil {
+		t.Fatal(err)
+	}
+	settleParks(t, a)
+	settleParks(t, a)
+	want := watchParty.Name + " → " + claimMe.Name + ": Your park on lease agentlab-1 (the lease agentlab-1: my proof) is over: agentlab-1 is free and yours: " +
+		"claim it now with `beekeeper lease claim agentlab-1 -p \"<purpose>\"`, within 30m. Re-query the live state of your task and continue it."
+	if !slices.Equal(*woke, []string{want}) {
+		t.Errorf("woke %q\nwant %q", *woke, want)
+	}
+	if ag := agentOf(t, &watcher{app: a}); ag.Park != nil || ag.Task != parkTask {
+		t.Errorf("after the wake: task %q park %+v", ag.Task, ag.Park)
+	}
+	if out, err := runLease(a, "claim", labOne, "-p", "my proof"); err != nil || !strings.HasPrefix(out, "held by you since") {
+		t.Errorf("the claim after the wake: %q, %v", out, err)
+	}
+}
+
+// A lease granted to another session first does not wake a parked claim:
+// the lease freed, it stays parked behind that grant.
+func TestLeaseParkStaysBehindAnotherGrant(t *testing.T) {
+	a := claimApp(t, claimGrant(labTwo, claimFirst, 5*time.Minute), claimGrant(labTwo, claimMe, 4*time.Minute))
+	claimAgent(t, a)
+	woke := stubWakes(t)
+	holdLease(t, a, labTwo, claimOther)
+	if out, err := runLease(a, "claim", labTwo, "-p", "my proof", "--park"); Code(err) != ExitRefused || !strings.Contains(out, "parked on lease agentlab-2") {
+		t.Fatalf("a parked claim: %q, exit %d", out, Code(err))
+	}
+	if err := lease.Dir(a.cfg.LeaseDir).Release(labTwo); err != nil {
+		t.Fatal(err)
+	}
+	settleParks(t, a)
+	if len(*woke) > 0 {
+		t.Errorf("woken while %q is granted the lease first: %q", claimFirst.Name, *woke)
+	}
+	if ag := agentOf(t, &watcher{app: a}); ag.Park == nil || ag.Park.On != "lease agentlab-2" || !ag.Park.Resumable.IsZero() {
+		t.Errorf("the park after the release: %+v", ag.Park)
+	}
+}
+
+// A refused claim with --park parks nothing: no grant waits for it.
+func TestLeaseClaimParkRefusedParksNothing(t *testing.T) {
+	a := claimApp(t)
+	claimAgent(t, a)
+	holdLease(t, a, graveler, claimOther)
+	out, err := runLease(a, "claim", graveler, "-p", "my proof", "--park")
+	if Code(err) != ExitRefused || !strings.HasPrefix(out, "refused: graveler is held") || !strings.Contains(out, "\nnot parked: no grant of graveler to you waits") {
+		t.Errorf("a refused claim with --park: %q, exit %d", out, Code(err))
+	}
+	if ag := agentOf(t, &watcher{app: a}); ag.Park != nil {
+		t.Errorf("parked on a refused claim: %+v", ag.Park)
+	}
+}
+
+// --wait is a foreground wait of at most claimWaitMax; a longer one is
+// refused, naming --park.
+func TestLeaseClaimWaitIsShort(t *testing.T) {
+	a := claimApp(t, claimGrant(labOne, claimMe, 5*time.Minute))
+	_, err := runLease(a, "claim", labOne, "-p", "my proof", "--wait", "4h")
+	if Code(err) != ExitUsage || !strings.Contains(err.Error(), "--park") {
+		t.Errorf("--wait 4h: %v, exit %d; want a usage error naming --park", err, Code(err))
 	}
 }

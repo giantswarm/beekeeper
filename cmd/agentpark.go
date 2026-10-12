@@ -3,6 +3,7 @@ package cmd
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -13,7 +14,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/upgrade"
 )
 
 // The events of a park: set, settled (its note closed or its pull request
@@ -69,8 +72,9 @@ alone, and it ends its turn instead of waiting in a sleep that holds its
 slot and its CLI's memory.
 
 --on names what settles the wait: a note (#12) or an issue or pull request
-(owner/repo#n). Once the note is closed (answered, defaulted, done or
-overtaken) or the pull request merged or closed, the watch says AGENT
+(owner/repo#n); lease claim --park parks on a lease. Once the note is
+closed (answered, defaulted, done or overtaken), the pull request merged or
+closed, or the lease free and the agent's to claim, the watch says AGENT
 RESUMABLE once. With agents.autoResume the watch then resumes the agent
 with what settled it, a person's answer word for word, as agents wake
 does: by name to a running CLI, else headless. agents resume does the same
@@ -89,47 +93,14 @@ park. An agent without a task is refused: it has nothing to wait for.`,
 			if waits == "" {
 				return usageErr("say what the agent waits for")
 			}
-			id, isNote := parkNote(on)
-			if on != "" && !isNote {
+			if _, isNote := parkNote(on); on != "" && !isNote {
 				r, ok := parseRef(on)
 				if !ok {
 					return usageErr("--on %s is neither a note (#12) nor an issue or pull request (owner/repo#n)", on)
 				}
 				on = refName(r)
 			}
-			var line string
-			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-				i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(me) })
-				if i < 0 {
-					return nil, refused("%s is no registered agent: beekeeper agents register first", me.Name)
-				}
-				ag := &st.Agents[i]
-				if ag.Task == "" || ag.Done {
-					return nil, refused("%q has no task: park keeps a task, an idle agent has nothing to wait for", ag.Name)
-				}
-				if isNote {
-					if !slices.ContainsFunc(st.Notes, func(n state.Note) bool { return n.ID == id }) {
-						return nil, refused("note #%d is not open: its answer is in beekeeper log --verb %s", id, noteAnswered)
-					}
-					on = fmt.Sprintf("#%d", id)
-				}
-				ag.Park = &state.Park{By: me, At: a.now.UTC(), On: on, Waits: waits}
-				for j := range st.Records {
-					if st.Records[j].Session.Is(me) {
-						st.Records[j].Waits = waits
-					}
-				}
-				resume := fmt.Sprintf("beekeeper agents resume %q", ag.Name)
-				back := resume + " brings it back"
-				switch {
-				case on != "" && a.cfg.Agents.AutoResume:
-					back = "the watch resumes it with what settles " + on
-				case on != "":
-					back = "the watch says AGENT RESUMABLE once " + on + " settles; " + resume + " brings it back"
-				}
-				line = fmt.Sprintf("%s: %s; counted parked, not busy, and %s. End your turn now.", ag.Name, parkedText(ag.Park, a.now), back)
-				return []state.Event{event(me, parkEvent, "%s: %s", ag.Name, parkedText(ag.Park, a.now))}, nil
-			})
+			line, err := a.park(me, on, waits)
 			if err != nil {
 				return err
 			}
@@ -139,6 +110,82 @@ park. An agent without a task is refused: it has nothing to wait for.`,
 	}
 	c.Flags().StringVar(&on, "on", "", "what settles the wait: a note (#12) or an issue or pull request (owner/repo#n)")
 	return c
+}
+
+// park parks the agent me on on (a note "#12", an issue or pull request
+// owner/repo#n, a lease of leaseParkOn, or nothing) waiting for waits, and
+// returns the line that says so.
+func (a *app) park(me state.Party, on, waits string) (string, error) {
+	id, isNote := parkNote(on)
+	var line string
+	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(me) })
+		if i < 0 {
+			return nil, refused("%s is no registered agent: beekeeper agents register first", me.Name)
+		}
+		ag := &st.Agents[i]
+		if ag.Task == "" || ag.Done {
+			return nil, refused("%q has no task: park keeps a task, an idle agent has nothing to wait for", ag.Name)
+		}
+		if isNote {
+			if !slices.ContainsFunc(st.Notes, func(n state.Note) bool { return n.ID == id }) {
+				return nil, refused("note #%d is not open: its answer is in beekeeper log --verb %s", id, noteAnswered)
+			}
+			on = fmt.Sprintf("#%d", id)
+		}
+		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: on, Waits: waits}
+		for j := range st.Records {
+			if st.Records[j].Session.Is(me) {
+				st.Records[j].Waits = waits
+			}
+		}
+		resume := fmt.Sprintf("beekeeper agents resume %q", ag.Name)
+		back := resume + " brings it back"
+		switch {
+		case on != "" && a.cfg.Agents.AutoResume:
+			back = "the watch resumes it with what settles " + on
+		case on != "":
+			back = "the watch says AGENT RESUMABLE once " + on + " settles; " + resume + " brings it back"
+		}
+		line = fmt.Sprintf("%s: %s; counted parked, not busy, and %s. End your turn now.", ag.Name, parkedText(ag.Park, a.now), back)
+		return []state.Event{event(me, parkEvent, "%s: %s", ag.Name, parkedText(ag.Park, a.now))}, nil
+	})
+	return line, err
+}
+
+// leaseParkOn is the On of a park on the lease res (lease claim --park):
+// it settles once res is free and the agent may claim it.
+func leaseParkOn(res string) string { return "lease " + res }
+
+// parkLease reads a park's On as a lease's resource.
+func parkLease(on string) (string, bool) {
+	res, ok := strings.CutPrefix(on, "lease ")
+	return res, ok && res != ""
+}
+
+// leaseSettled says whether the lease res, which ag's park waits on, is
+// free and ag's to claim, and the words that resume it: free while nobody
+// holds it, ag's while no upgrade holds it and ag's grant is first in its
+// queue (or no supervisor is recorded); a grant to ag that is gone settles
+// the park too, for ag to ask again. A grant to another session first, or
+// a holder, leaves it parked.
+func (a *app) leaseSettled(st *state.State, ag state.Agent, res string) (string, bool) {
+	if cur, err := lease.Dir(a.cfg.LeaseDir).Get(res); err != nil || cur != nil {
+		return "", false
+	}
+	if _, ok := upgrade.Held(st, res, a.now); ok {
+		return "", false
+	}
+	_, err := lease.Check(st, lease.Gate{Resource: res, Caller: ag.Party, Supervisor: st.SupervisorRole().Holder, Now: a.now, TTL: a.cfg.GrantTTL.Duration})
+	claim := fmt.Sprintf("beekeeper lease claim %s -p \"<purpose>\"", res)
+	var r *lease.Refusal
+	switch {
+	case err == nil:
+		return fmt.Sprintf("%s is free and yours: claim it now with `%s`, within %s", res, claim, dur(a.cfg.GrantTTL.Duration)), true
+	case errors.As(err, &r) && r.Position > 0:
+		return "", false
+	}
+	return fmt.Sprintf("%s is free, but no grant of it to you is left: ask the supervisor `need %s` again", res, res), true
 }
 
 func (a *app) agentResumeCmd() *cobra.Command {
@@ -216,9 +263,16 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 	var parked []state.Agent
 	var closed []int
 	var refs []github.PR
+	var out []settledPark
 	for _, ag := range st.Agents {
 		p := ag.Park
 		if p == nil || p.On == "" || !p.Resumable.IsZero() {
+			continue
+		}
+		if res, ok := parkLease(p.On); ok {
+			if answer, ok := w.leaseSettled(st, ag, res); ok {
+				out = append(out, settledPark{ag.Party, p.On, answer})
+			}
 			continue
 		}
 		if id, ok := parkNote(p.On); ok {
@@ -233,7 +287,7 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 		}
 	}
 	if len(parked) == 0 {
-		return nil
+		return out
 	}
 	var states map[github.PR]github.RefState
 	if len(refs) > 0 && !lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now) {
@@ -255,7 +309,7 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 			return false
 		})
 		if err != nil {
-			return nil // the next poll reads them again
+			return out // the next poll reads the notes again
 		}
 		for _, e := range evs {
 			for _, id := range closed {
@@ -269,7 +323,6 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 			}
 		}
 	}
-	var out []settledPark
 	for _, ag := range parked {
 		on := ag.Park.On
 		if id, ok := parkNote(on); ok {

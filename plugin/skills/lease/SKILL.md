@@ -17,8 +17,9 @@ browser. A lease is the supervisor's grant first, then the worker's claim.
   "<purpose>"`. Its first line is its outcome: `held by you since <time>` (exit 0) is the lease;
   `queued: number <n> behind …` and `refused: <reason>` (exit 3) are none, whatever follows.
 - **A claim never waits by itself.** Queued after `yours <env>`, the holder is finishing: the same
-  claim with `--wait <duration>` waits minutes in the foreground. A wait of hours is a probe timer
-  on `beekeeper lease status <env>` and a park (`beekeeper:park`), never a background wait.
+  claim with `--wait <duration>` waits up to 9m in the foreground. Longer is `--park`:
+  the claim stays queued, the worker ends its turn, and the watch resumes it once the lease is
+  its; never a background wait.
 - **A command that needs the lease runs only after the claim exited 0**: `beekeeper lease claim … &&
   <command>`, never `;` and never after a `queued` or `refused` outcome.
 - **A held lease is another session's.** Nothing of the worker runs against it, and the worker
