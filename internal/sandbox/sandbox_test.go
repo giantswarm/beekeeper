@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/config"
@@ -215,22 +214,68 @@ func TestMountPointsCreatesTheDeniedPathsOnAFreshState(t *testing.T) {
 	}
 }
 
-func TestNestedRefusesAWritableChildOfAReadableParent(t *testing.T) {
-	p, home := policy(t)
-	if err := p.Nested(); err != nil {
-		t.Fatalf("the fixture's layout: %v", err)
-	}
-	cfg := filepath.Join(home, ".config")
-	q := New(config.Sandbox{AllowRead: []string{cfg}}, Paths{Home: home, ConfigFile: filepath.Join(cfg, "beekeeper/config.yaml"),
-		StateDir: filepath.Join(cfg, "beekeeper/state"), Exe: filepath.Join(home, ".go/bin/beekeeper")})
-	err := q.Nested()
-	if err == nil {
-		t.Fatal("a writable state inside a readable config directory is accepted")
-	}
-	for _, path := range []string{cfg, filepath.Join(cfg, "beekeeper/state")} {
-		if !strings.Contains(err.Error(), path) {
-			t.Errorf("%q does not name %s", err, path)
+func TestAReadableParentIsListedAroundItsWritableChild(t *testing.T) {
+	home := testHome(t)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	cfg := filepath.Join(home, ".config/beekeeper")
+	for _, d := range []string{"state/scan", "rules"} {
+		if err := os.MkdirAll(filepath.Join(cfg, d), 0o700); err != nil {
+			t.Fatal(err)
 		}
+	}
+	if err := os.WriteFile(filepath.Join(cfg, "config.yaml"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(cfg, "state")
+	p := New(config.Sandbox{AllowRead: []string{filepath.Join(home, ".config")}}, Paths{Home: home, ConfigFile: filepath.Join(cfg, "config.yaml"),
+		StateDir: state, LeaseDir: filepath.Join(state, "leases"), Exe: filepath.Join(home, ".go/bin/beekeeper"), ScanDir: filepath.Join(state, "scan")})
+	for _, r := range p.Read {
+		for _, w := range p.Write {
+			if under(w, r) {
+				t.Errorf("the readable %s holds the writable %s, which the sandbox mounts read-only", r, w)
+			}
+		}
+	}
+	for _, want := range []string{filepath.Join(cfg, "config.yaml"), filepath.Join(cfg, "rules")} {
+		if !slices.Contains(p.Read, want) {
+			t.Errorf("read %v lacks the config directory's %s", p.Read, want)
+		}
+	}
+	if !p.Readable(filepath.Join(cfg, "config.yaml"), home) || !p.Readable(filepath.Join(cfg, "rules/a.md"), home) {
+		t.Error("the config directory's entries are not readable")
+	}
+	if !p.Writable(filepath.Join(state, "state.json"), home) || !p.Writable(filepath.Join(state, "leases/lab"), home) {
+		t.Error("the state directory under the config directory is not writable")
+	}
+	if p.Readable(filepath.Join(state, "scan/key"), home) {
+		t.Error("the scanner's directory opened")
+	}
+}
+
+func TestThePolicyDoesNotDependOnAGitCheckout(t *testing.T) {
+	home := testHome(t)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	plain, repo := filepath.Join(home, "work/plain"), filepath.Join(home, "projects/repo")
+	for _, d := range []string{plain, filepath.Join(repo, ".git")} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	render := func(cwd string) []byte {
+		t.Chdir(cwd)
+		b, err := New(config.Sandbox{AllowWrite: []string{filepath.Join(home, "work")}}, Paths{Home: home, ConfigFile: filepath.Join(home, ".config/beekeeper/config.yaml"),
+			StateDir: filepath.Join(home, ".local/state/beekeeper"), Exe: filepath.Join(home, ".go/bin/beekeeper")}).JSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	if a, b := render(plain), render(repo); string(a) != string(b) {
+		t.Errorf("the policy rendered outside a checkout differs from the one inside:\n%s\n%s", a, b)
+	}
+	p := New(config.Sandbox{AllowWrite: []string{filepath.Join(home, "work")}}, Paths{Home: home, StateDir: filepath.Join(home, ".local/state/beekeeper")})
+	if !p.Writable(filepath.Join(plain, "out.txt"), plain) || !p.Readable(filepath.Join(plain, "in.txt"), plain) {
+		t.Error("a listed working directory outside any checkout is closed to the file tools")
 	}
 }
 

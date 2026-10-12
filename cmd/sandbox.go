@@ -97,15 +97,13 @@ the installed policy is the current one.
 
 install creates the denied paths' mount points (scan/ in the state
 directory), which the sandbox cannot create; the broker does too at its
-start. It refuses a writable path inside a readable one (a
-sandbox.allowWrite under a sandbox.allowRead) and names both: the sandbox
-mounts the readable parent read-only over the writable child.`,
+start. A readable path that holds a writable one (beekeeper's state under
+its config directory, a sandbox.allowWrite under a sandbox.allowRead) is
+listed by its entries around the writable path: the sandbox mounts a
+readable parent read-only over a writable child.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			p := a.sandboxPolicy()
-			if err := p.Nested(); err != nil {
-				return refused("%s", err)
-			}
 			if err := p.MountPoints(); err != nil {
 				return err
 			}
