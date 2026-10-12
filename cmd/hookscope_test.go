@@ -3,11 +3,13 @@ package cmd
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -26,6 +28,7 @@ func scopeApp(t *testing.T, out *bytes.Buffer) (*app, string) {
 	}
 	t.Setenv("CLAUDE_PROJECT_DIR", "")
 	t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", "")
+	t.Setenv(sandbox.Env, "") // a session the test runs in may be held
 	return &app{cfgPath: cfg, out: out}, dir
 }
 
@@ -160,5 +163,56 @@ func TestHookBoardRead(t *testing.T) {
 	}
 	if got := runHook(t, a, &out, "pretooluse", ev(desk, "gh project item-add 273 --owner giantswarm --url https://github.com/giantswarm/beekeeper/issues/487")); strings.Contains(got, `"deny"`) {
 		t.Errorf("item-add refused: %q", got)
+	}
+}
+
+// A sandboxed session outside the scope gets the prelude's PATH drop alone:
+// its gh resolves past the agent's gh link to devctl, which would read a
+// keychain the sandbox closes, and nothing else of the prelude is written.
+func TestHookScopeSandboxedSessionStart(t *testing.T) {
+	var out bytes.Buffer
+	a, dir := scopeApp(t, &out)
+	agentBin, sysBin := filepath.Join(dir, "agent-bin"), filepath.Join(dir, "sys-bin")
+	for _, d := range []string{agentBin, sysBin} {
+		if err := os.MkdirAll(d, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, "gh"), []byte("#!/bin/sh\n"), 0o755); err != nil { //nolint:gosec // an executable stub
+			t.Fatal(err)
+		}
+	}
+	conf := "stateDir: " + dir + "\nhooks:\n  scope:\n    dirs: [" + filepath.Join(dir, "desk") + "]\n" +
+		"agents:\n  shell:\n    path: [" + agentBin + "]\n"
+	if err := os.WriteFile(a.cfgPath, []byte(conf), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_RUNTIME_DIR", dir)
+	t.Setenv(sandbox.Env, "1")
+	envFile := filepath.Join(dir, "env")
+	t.Setenv("CLAUDE_ENV_FILE", envFile)
+	runHook(t, a, &out, "sessionstart", `{"hook_event_name":"SessionStart","session_id":"s1","cwd":"`+filepath.Join(dir, "home-project")+`"}`)
+	raw, err := os.ReadFile(envFile) //nolint:gosec // the test's own file
+	if err != nil {
+		t.Fatalf("held session out of scope: no prelude: %v", err)
+	}
+	if p := string(raw); strings.Contains(p, "unalias") || strings.Contains(p, "no_nomatch") {
+		t.Errorf("held session out of scope: want the PATH drop alone, got %q", p)
+	}
+	cmd := exec.Command("sh", "-c", `. "$1"; command -v gh`, "sh", envFile) //nolint:gosec // the test's own file
+	cmd.Env = append(os.Environ(), "PATH="+agentBin+":"+sysBin+":/usr/bin:/bin", sandbox.Runtime+"=1")
+	got, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(sysBin, "gh"); strings.TrimSpace(string(got)) != want {
+		t.Errorf("gh resolves to %q, want %q", strings.TrimSpace(string(got)), want)
+	}
+
+	t.Setenv(sandbox.Env, "")
+	other := filepath.Join(dir, "env-unheld")
+	t.Setenv("CLAUDE_ENV_FILE", other)
+	runHook(t, a, &out, "sessionstart", `{"hook_event_name":"SessionStart","session_id":"s1","cwd":"`+filepath.Join(dir, "home-project")+`"}`)
+	if _, err := os.Stat(other); err == nil {
+		t.Error("unheld session out of scope wrote the prelude")
 	}
 }

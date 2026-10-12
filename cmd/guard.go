@@ -372,7 +372,9 @@ stays as written instead of failing the command (zsh's "no matches found").
 The person's interactive setup stays theirs; an agent's commands are written
 for the plain tools. agents.shell.path goes first on PATH, except in the
 agent sandbox, where gh reaches GitHub through the broker's egress proxy instead
-of a gh link to devctl: there its directories leave PATH, an inherited one too. It replaces only its own block, so other hooks' lines
+of a gh link to devctl: there its directories leave PATH, an inherited one too.
+Outside hooks.scope.dirs it writes nothing, except in the sandbox, where it
+writes that PATH drop alone. It replaces only its own block, so other hooks' lines
 stay, and prints nothing. beekeeper install registers it in
 ~/.claude/settings.json:
 
@@ -382,13 +384,18 @@ stay, and prints nothing. beekeeper install registers it in
 		RunE: func(*cobra.Command, []string) error {
 			raw, _ := io.ReadAll(os.Stdin)
 			env := os.Getenv("CLAUDE_ENV_FILE")
-			if env == "" || a.loadConfig() != nil || !a.inScope(raw) {
+			held := os.Getenv(sandbox.Env) != ""
+			if env == "" || a.loadConfig() != nil {
 				return nil // a broken configuration must not block a session's start
+			}
+			scoped := a.inScope(raw)
+			if !scoped && !held {
+				return nil
 			}
 			sh := a.cfg.Agents.Shell
 			var drop []string
 			unheld := ""
-			if os.Getenv(sandbox.Env) != "" {
+			if held {
 				// held, gh goes through the egress proxy and a gh link to
 				// devctl would read the keychain the sandbox closes, also from
 				// an inherited PATH; the policy's environment without its
@@ -396,10 +403,16 @@ stay, and prints nothing. beekeeper install registers it in
 				drop, unheld = sh.Path, sandbox.UnsetShell(sandbox.EgressDir(os.Getenv("XDG_RUNTIME_DIR")))
 			}
 			unalias := append(slices.Clone(sh.Unalias), a.cfg.Secret.UnlockCommands...)
-			if err := guard.WritePrelude(env, guard.Prelude(unalias, sh.Globs == config.GlobsLiteral, sh.Path, drop, unheld)); err != nil {
+			globs, path := sh.Globs == config.GlobsLiteral, sh.Path
+			if !scoped {
+				// a held session outside the scope gets the sandbox's part
+				// only: its gh would otherwise resolve to the link to devctl
+				unalias, globs, path = nil, false, nil
+			}
+			if err := guard.WritePrelude(env, guard.Prelude(unalias, globs, path, drop, unheld)); err != nil {
 				return err
 			}
-			if os.Getenv(sandbox.Env) == "" {
+			if !held {
 				a.recordSessionGH(raw, guard.Resolve("gh", guard.PathFirst(sh.Path, os.Getenv("PATH"))))
 			}
 			return nil
