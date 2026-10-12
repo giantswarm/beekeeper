@@ -333,3 +333,22 @@ func TestAStreamedCallsAnswerWithoutItsRequesterIsDropped(t *testing.T) {
 		t.Errorf("the spool keeps %v", left)
 	}
 }
+
+// A handler's panic answers its request with an error, and the broker
+// answers the next request as before.
+func TestServeAnswersAHandlerPanicAndServesOn(t *testing.T) {
+	dir := t.TempDir()
+	broker(t, dir, func(_ context.Context, _ int, req Request) (Reply, error) {
+		if req.Unit == "panic" {
+			panic("a handler's fault")
+		}
+		return Reply{}, nil
+	})
+	err := Ask(dir, Request{Op: OpScope, Unit: "panic"}, 5*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "the broker failed on this request: a handler's fault") {
+		t.Errorf("a panicking handler's answer = %v", err)
+	}
+	if err := Ask(dir, Request{Op: OpScope, Unit: "next"}, 5*time.Second); err != nil {
+		t.Errorf("the next request after a panic = %v", err)
+	}
+}

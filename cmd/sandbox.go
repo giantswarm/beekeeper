@@ -23,6 +23,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
+	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 func (a *app) sandboxCmd() *cobra.Command {
@@ -229,6 +230,13 @@ git's signing call only; the key and the agent stay out of the sandbox.`,
 			if err := a.sandboxPolicy().MountPoints(); err != nil {
 				return err
 			}
+			// the broker logs the calls that logged themselves not, and the
+			// vault keeper's sign-ins, in the state's event log
+			store, err := state.Open(a.cfg.StateDir)
+			if err != nil {
+				return err
+			}
+			a.store = store
 			dir := sandbox.SpoolDir(a.cfg.StateDir)
 			_, _ = fmt.Fprintf(a.out, "serving %s\n", dir)
 			exe, err := os.Executable()

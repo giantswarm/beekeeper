@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -123,7 +124,7 @@ func handle(ctx context.Context, path, procDir string, h Handler) (Reply, bool, 
 	}
 	pid := pids[0]
 	if !req.Stream {
-		r, err := h(ctx, pid, req)
+		r, err := safe(h)(ctx, pid, req)
 		return r, false, err
 	}
 	f, err := os.OpenFile(strings.TrimSuffix(path, reqSuffix)+outSuffix, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, 0o600) //nolint:gosec // the request's output in our own spool; O_EXCL refuses a planted file
@@ -151,9 +152,24 @@ func handle(ctx context.Context, path, procDir string, h Handler) (Reply, bool, 
 			}
 		}
 	}()
-	r, err := h(ctx, pid, req)
+	r, err := safe(h)(ctx, pid, req)
 	// a requester that ended while the call ran reads no answer either
 	return r, gone.Load() || !holds(filepath.Join(procDir, strconv.Itoa(pid)), sys.Dev, sys.Ino), err
+}
+
+// safe is h answering its own panic as the request's error, the stack in
+// the broker's log: one request's fault ends that request, never the
+// broker and the calls it answers beside it.
+func safe(h Handler) Handler {
+	return func(ctx context.Context, pid int, req Request) (r Reply, err error) {
+		defer func() {
+			if v := recover(); v != nil {
+				fmt.Fprintf(os.Stderr, "beekeeper sandbox broker: the %s request of pid %d panicked: %v\n%s", req.Op, pid, v, debug.Stack())
+				r, err = Reply{}, fmt.Errorf("the broker failed on this request: %v (journalctl --user -u beekeeper-sandbox has its stack)", v)
+			}
+		}()
+		return h(ctx, pid, req)
+	}
 }
 
 // read reads the request at path, closed again before its holders are
