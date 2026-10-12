@@ -12,10 +12,12 @@ import (
 )
 
 const (
-	untitledPID   = 1<<23 + 34
-	unrosteredPID = 1<<23 + 35
-	untitledName  = "klaus-lab-34"
-	rosterName    = "BK worker"
+	untitledPID    = 1<<23 + 34
+	unrosteredPID  = 1<<23 + 35
+	untitledName   = "klaus-lab-34"
+	rosterName     = "BK worker"
+	unrosteredName = "klaus-lab-35"
+	servesRoster   = `"BK worker" serves`
 )
 
 // serveApp runs two sessions the desktop has not titled, named by their
@@ -39,7 +41,7 @@ func serveApp(t *testing.T) (*app, state.Store) {
 	a := &app{cfg: cfg, store: store, now: keepNow, out: &bytes.Buffer{}, as: "test: supervisor"}
 	was := plat.Machine
 	t.Cleanup(func() { plat.Machine = was })
-	runLive(t, a, map[int]string{untitledPID: untitledName, unrosteredPID: "klaus-lab-35"})
+	runLive(t, a, map[int]string{untitledPID: untitledName, unrosteredPID: unrosteredName})
 	return a, store
 }
 
@@ -62,11 +64,11 @@ func TestServeRecordsTheRosterName(t *testing.T) {
 	if out, err := serve(a, untitledName, "giantswarm/beekeeper#1027"); err != nil || !strings.Contains(out, `"BK worker" serves giantswarm/beekeeper#1027`) {
 		t.Fatalf("serve the roster's session: %q, %v", out, err)
 	}
-	if out, err := serve(a, "klaus-lab-35", "giantswarm/beekeeper#1026"); err != nil || !strings.Contains(out, `"klaus-lab-35" serves giantswarm/beekeeper#1026`) {
+	if out, err := serve(a, unrosteredName, "giantswarm/beekeeper#1026"); err != nil || !strings.Contains(out, `"klaus-lab-35" serves giantswarm/beekeeper#1026`) {
 		t.Fatalf("serve the session off the roster: %q, %v", out, err)
 	}
 	st, _ := store.Read()
-	if len(st.Records) != 2 || st.Records[0].Session.Name != rosterName || st.Records[1].Session.Name != "klaus-lab-35" {
+	if len(st.Records) != 2 || st.Records[0].Session.Name != rosterName || st.Records[1].Session.Name != unrosteredName {
 		t.Fatalf("records %+v", st.Records)
 	}
 	sessions, _, err := a.sessions()
@@ -88,16 +90,16 @@ func TestServeResolvesTheSession(t *testing.T) {
 	for _, tc := range []struct {
 		name, q, want, refusal string
 	}{
-		{name: "roster name", q: rosterName, want: `"BK worker" serves`},
-		{name: "roster name, any case", q: "bk WORKER", want: `"BK worker" serves`},
-		{name: "session name", q: untitledName, want: `"BK worker" serves`},
-		{name: "session id", q: "s" + strconv.Itoa(untitledPID), want: `"BK worker" serves`},
-		{name: "PID", q: strconv.Itoa(untitledPID), want: `"BK worker" serves`},
-		{name: "session off the roster", q: "klaus-lab-35", want: `"klaus-lab-35" serves`},
+		{name: "roster name", q: rosterName, want: servesRoster},
+		{name: "roster name, any case", q: "bk WORKER", want: servesRoster},
+		{name: "session name", q: untitledName, want: servesRoster},
+		{name: "session id", q: "s" + strconv.Itoa(untitledPID), want: servesRoster},
+		{name: "PID", q: strconv.Itoa(untitledPID), want: servesRoster},
+		{name: "session off the roster", q: unrosteredName, want: strconv.Quote(unrosteredName) + " serves"},
 		{name: "whole name before a part", q: "BK park", want: `"BK park" serves`},
 		{name: "roster agent without a CLI", q: "BK parked worker", want: `"BK parked worker" serves giantswarm/beekeeper#789; no CLI of "BK parked worker" runs`},
 		{name: "part of several names", q: "klaus-lab", refusal: `"klaus-lab" matches 2 sessions: "klaus-lab-34" (s` + strconv.Itoa(untitledPID) + `), "klaus-lab-35"`},
-		{name: "no match", q: "nobody", refusal: `no running session or registered agent matches "nobody": name one by its session name, roster name or session id`},
+		{name: "no match", q: nobodyNamed, refusal: `no running session or registered agent matches "nobody": name one by its session name, roster name or session id`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a, store := serveApp(t)
