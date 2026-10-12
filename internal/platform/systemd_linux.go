@@ -30,7 +30,7 @@ func Name() string { return "linux_systemd" }
 func current(o Options) Platform {
 	return Platform{
 		Machine:     systemdMachine{},
-		Launcher:    systemdLauncher{},
+		Launcher:    systemdLauncher{quiet: o.QuietUnits},
 		Capper:      systemdCapper{},
 		Opener:      systemdOpener{app: o.DesktopApp},
 		Input:       evdevInput{},
@@ -126,28 +126,32 @@ func (systemdMachine) ServiceLog(ctx context.Context, unit, grep string) ([]byte
 
 // systemdLauncher runs units as transient systemd user services: they get
 // the user manager's environment, not the caller's session variables, and
-// outlive the caller.
-type systemdLauncher struct{}
+// outlive the caller. quiet counts every end of a unit as success.
+type systemdLauncher struct{ quiet bool }
 
 func (systemdLauncher) Available() bool { return userSystemd() }
 
-func (systemdLauncher) Start(u Unit) error {
-	out, err := exec.Command("systemd-run", runArgs(u)...).CombinedOutput() //nolint:gosec // starting the unit is the purpose
+func (l systemdLauncher) Start(u Unit) error {
+	out, err := exec.Command("systemd-run", runArgs(u, l.quiet)...).CombinedOutput() //nolint:gosec // starting the unit is the purpose
 	if err != nil {
 		return fmt.Errorf("systemd-run: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
 
-// runArgs is systemd-run's command line for u.
-func runArgs(u Unit) []string {
+// runArgs is systemd-run's command line for u; quiet counts every end of
+// it as success.
+func runArgs(u Unit, quiet bool) []string {
 	args := []string{userManager, "--collect", "--quiet", "--unit=" + u.Name}
 	if u.KeepChildren {
 		args = append(args, "-p", "KillMode=process")
 	} else {
 		args = append(args, "-p", "KillMode=mixed")
 	}
-	if u.TermIsSuccess {
+	switch {
+	case quiet:
+		args = append(args, "-p", "SuccessExitStatus="+quietSuccess)
+	case u.TermIsSuccess:
 		args = append(args, "-p", "SuccessExitStatus=143 SIGTERM")
 	}
 	if u.Dir != "" {
@@ -168,6 +172,16 @@ func runArgs(u Unit) []string {
 	}
 	return append(append(args, "--"), u.Argv...)
 }
+
+// quietSuccess is every exit status and the kill signals: systemd takes no
+// range of statuses, so they are listed.
+var quietSuccess = func() string {
+	statuses := make([]string, 0, 258)
+	for i := 1; i <= 255; i++ {
+		statuses = append(statuses, strconv.Itoa(i))
+	}
+	return strings.Join(append(statuses, "SIGKILL", "SIGTERM", "SIGABRT"), " ")
+}()
 
 // seconds is d as a service manager's time value in whole seconds.
 func seconds(d time.Duration) string { return strconv.Itoa(int(d.Seconds())) }

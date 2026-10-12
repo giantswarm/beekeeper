@@ -5,6 +5,7 @@ package platform
 import (
 	"math"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -89,7 +90,7 @@ func TestSizeBytes(t *testing.T) {
 // A unit's informative ends never fail it: a stop as asked with
 // TermIsSuccess, and the stop-post's own end, a kill included.
 func TestRunArgsExpectedEndsSucceed(t *testing.T) {
-	got := strings.Join(runArgs(Unit{Name: "beekeeper-wake-x", Argv: []string{"claude"}, TermIsSuccess: true, StopPost: detachStopPost, StopTimeout: time.Minute}), " ")
+	got := strings.Join(runArgs(Unit{Name: "beekeeper-wake-x", Argv: []string{"claude"}, TermIsSuccess: true, StopPost: detachStopPost, StopTimeout: time.Minute}, false), " ")
 	for _, want := range []string{"SuccessExitStatus=143 SIGTERM", "ExecStopPost=-/bin/beekeeper agents reopen --detach local_x", "-- claude"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("systemd-run %s: no %q", got, want)
@@ -114,7 +115,7 @@ func TestRunArgsStopAndRuntimeBounds(t *testing.T) {
 			[]string{"-p RuntimeMaxSec=2100 "}, []string{"ExecStopPost", "TimeoutStopSec"}},
 		"neither": {Unit{Name: "beekeeper-merge-x", Argv: []string{"devctl"}}, nil, []string{"ExecStopPost", "TimeoutStopSec", "RuntimeMaxSec"}},
 	} {
-		got := strings.Join(runArgs(c.unit), " ")
+		got := strings.Join(runArgs(c.unit, false), " ")
 		for _, want := range c.want {
 			if !strings.Contains(got, want) {
 				t.Errorf("%s: systemd-run %s: no %q", name, got, want)
@@ -125,5 +126,32 @@ func TestRunArgsStopAndRuntimeBounds(t *testing.T) {
 				t.Errorf("%s: systemd-run %s: has %q", name, got, not)
 			}
 		}
+	}
+}
+
+// units.quiet counts every end of a unit as success, an unmapped exit and
+// a kill included; unset, a merge-child's unit keeps its stop as asked as
+// its only success besides 0, so a kill or a tooling fault fails it.
+func TestRunArgsQuiet(t *testing.T) {
+	argv := []string{"/bin/bk", "merge-child", "/state/merges/x"}
+	merge := Unit{Name: "beekeeper-merge-x", Argv: argv, TermIsSuccess: true}
+	want := func(success string) []string {
+		head := []string{userManager, "--collect", "--quiet", "--unit=beekeeper-merge-x", "-p", "KillMode=mixed", "-p", "SuccessExitStatus=" + success, "--"}
+		return append(head, argv...)
+	}
+	if got := runArgs(merge, true); !slices.Equal(got, want(quietSuccess)) {
+		t.Errorf("quiet: systemd-run %q, want %q", got, want(quietSuccess))
+	}
+	statuses := strings.Fields(quietSuccess)
+	for _, s := range []string{"1", "8", "64", "255", "SIGKILL", "SIGTERM", "SIGABRT"} {
+		if !slices.Contains(statuses, s) {
+			t.Errorf("quiet: SuccessExitStatus has no %s", s)
+		}
+	}
+	if slices.Contains(statuses, "0") || slices.Contains(statuses, "256") {
+		t.Errorf("quiet: SuccessExitStatus %q lists a status out of 1-255", quietSuccess)
+	}
+	if got := runArgs(merge, false); !slices.Equal(got, want("143 SIGTERM")) {
+		t.Errorf("unset: systemd-run %q, want %q", got, want("143 SIGTERM"))
 	}
 }

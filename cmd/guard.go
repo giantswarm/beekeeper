@@ -643,7 +643,7 @@ func (a *app) loadConfig() error {
 			return err
 		}
 	}
-	plat = platform.Current(platform.Options{DesktopApp: a.cfg.Claude.DesktopApp})
+	plat = platform.Current(platform.Options{DesktopApp: a.cfg.Claude.DesktopApp, QuietUnits: a.cfg.Units.Quiet})
 	if !a.hook && sandbox.Unheld(os.Getenv) {
 		// the sandbox policy's environment without its sandbox: beekeeper and
 		// what it runs reach GitHub as on the host

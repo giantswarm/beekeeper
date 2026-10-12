@@ -1262,6 +1262,14 @@ settles its lane with its release unconfirmed and the gate line names `devctl re
 <owner/repo> --pr <n>`; not merged, it leaves the lane; with
 GitHub unanswered, the lane settles as for a lost merge.
 
+A unit beekeeper starts (a merge-child, a wake's turn, a reopen) fails in the user manager only
+on a real fault: devctl's documented codes, the gate's 76 and 77 and a stop as asked end it
+successfully, an unmapped exit or a kill fails it. An isolated harness state, whose stub tools
+and deliberate kills are not faults, sets `units.quiet: true` in its configuration: every end of
+its units then counts as success (`SuccessExitStatus` lists the exit statuses 1–255 and SIGKILL,
+SIGTERM and SIGABRT), the real exit still in the run's `.rc` and `.result` files, and none reaches
+the desktop's failed-unit alerts. The desk's own configuration leaves it unset.
+
 devctl's blocking waits, `pr wait`, `release wait` and `rollout wait`, run the same way outside
 their caller, without a queue, their files under `runs/`. One poller per command on the machine:
 a wait whose identical command line already runs follows that run (the hidden `follow-run`, its
