@@ -3,14 +3,18 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"net"
+	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -57,7 +61,14 @@ refused on the permissions page of any other App and for any other call
 there, naming this record's form. A sign-in or consent page of the lab's
 own identity provider on a loopback host (*.127.0.0.1.nip.io, localhost) is
 allowed without a record: a fixture user's sign-in there is the person's
-own lab's. Every other grant stays refused. A browse turn whose steps name
+own lab's. An App's creation, installation and deletion are grants too: the
+hook allows GitHub's "Create GitHub App" on the manifest page while a
+create runs for the App (its loopback listener answers), Install and its
+confirmation on the installation page of an App a create runs for or
+created (beekeeper's ledger), and the Advanced page's Delete GitHub App and
+its confirmation for an App on record with --delete or one the ledger holds
+no stored credentials of; the same clicks on any other App's page are
+refused, naming the form. Every other grant stays refused. A browse turn whose steps name
 an App on record runs with the matching auto mode rules (beekeeper browse
 --help).
 
@@ -65,7 +76,7 @@ Without a subcommand, lists the Apps on record.`,
 		RunE: func(*cobra.Command, []string) error { return a.appList() },
 	}
 	var rec state.App
-	var permission string
+	var permission, manifest string
 	allow := &cobra.Command{
 		Use:   "allow <name>",
 		Short: "Record an App the organisation declares and the person asked a consent, or one permission change, for, on their word",
@@ -81,8 +92,16 @@ replaced:
   the organisation's settings, the clicks there that select that level for
   that permission and Save changes, and the installation's Review request
   and Accept new permissions. A record carries one change.
+  --delete: the App's deletion, on its Advanced settings page under the
+  organisation's or the person's own account: Delete GitHub App, the
+  App's name typed into GitHub's confirmation and its confirm click, for
+  an App whose credentials were lost or never taken (beekeeper app create
+  refuses a name GitHub already holds). With --manifest <file>, the local
+  manifest of app create --manifest declares the App instead of apps.repo.
+  An App beekeeper app create created and stored no credentials of is
+  deletable without a record (beekeeper's ledger, app list).
 
-Either or both, with --word, the person's words that asked for it.`,
+Any of them, with --word, the person's words that asked for it.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
 			rec.Name = strings.TrimSpace(args[0])
@@ -97,10 +116,19 @@ Either or both, with --word, the person's words that asked for it.`,
 			if rec.Permission, err = permissionChange(permission); err != nil {
 				return err
 			}
-			if rec.ClientID == "" && rec.Permission == "" {
-				return usageErr("--client-id <id> for a consent (the OAuth client id the App's consent URL carries), --permission \"<scope>: <level>\" for one permission change, or both")
+			if manifest != "" && (rec.ClientID != "" || rec.Permission != "" || !rec.Delete) {
+				return usageErr("--manifest declares an App for --delete alone: a consent or a permission change is of an App apps.repo declares")
 			}
-			if err := a.declared(c.Context(), &rec); err != nil {
+			if rec.ClientID == "" && rec.Permission == "" && !rec.Delete {
+				return usageErr("--client-id <id> for a consent (the OAuth client id the App's consent URL carries), --permission \"<scope>: <level>\" for one permission change, " +
+					"--delete for the App's deletion, or several")
+			}
+			if manifest != "" {
+				err = a.declaredLocally(manifest, &rec)
+			} else {
+				err = a.declared(c.Context(), &rec)
+			}
+			if err != nil {
 				return err
 			}
 			if rec.ClientID != "" && len(rec.Callbacks) == 0 {
@@ -130,6 +158,9 @@ Either or both, with --word, the person's words that asked for it.`,
 			if rec.Permission != "" {
 				answers = append(answers, "the change "+rec.Permission+" on its permissions page and its installation's Review request and Accept new permissions")
 			}
+			if rec.Delete {
+				answers = append(answers, "its deletion on its Advanced page under the organisation's or the person's own account")
+			}
 			verb := "is"
 			if len(answers) > 1 {
 				verb = "are"
@@ -140,6 +171,8 @@ Either or both, with --word, the person's words that asked for it.`,
 	}
 	allow.Flags().StringVar(&rec.ClientID, "client-id", "", "a consent: the OAuth client id the App's consent URL carries")
 	allow.Flags().StringVar(&permission, "permission", "", "one change of the App's permissions, \"<scope>: <level>\" (e.g. \"Members: Read-only\")")
+	allow.Flags().BoolVar(&rec.Delete, "delete", false, "the App's deletion: its Advanced page's Delete GitHub App and GitHub's confirmation")
+	allow.Flags().StringVar(&manifest, "manifest", "", "with --delete, the local App manifest (app create --manifest) that declares the App")
 	allow.Flags().StringVar(&rec.Word, "word", "", "the person's words that asked for the grant")
 	revoke := &cobra.Command{
 		Use:   "revoke <name>",
@@ -179,19 +212,27 @@ consent page carries the App's name in ("Authorize <name>"): it decides a
 URL whose client id the Chrome tools redacted (client_id=REDACTED), as the
 tool results show it. --words are the call's own words (the summary the
 model wrote for it, a typed text, a form value), which decide a call on an
-App's permissions page; --navigate asks for a navigation to <url> instead
-of a click on it.`,
+App's permissions page and an App's creation, installation and deletion
+pages; --navigate asks for a navigation to <url> instead of a click on it.
+
+Besides the records of app allow, the hook reads the running app create
+commands, whose loopback listener answers (GitHub's manifest page:
+"Create GitHub App" for the App being created; the App's installation
+page: Install and its confirmation), and beekeeper's ledger of the Apps
+app create created (their installation page; the deletion of one whose
+credentials were stored nowhere). check decides from the same.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			st, err := a.store.Read()
 			if err != nil {
 				return err
 			}
+			apps := guardAppsOf(st)
 			var d guard.Decision
 			if navigate {
-				d = guard.Navigation(guardApps(st.Apps), args[0])
+				d = guard.Navigation(apps, args[0])
 			} else {
-				d = guard.Click(guardApps(st.Apps), guard.Page{URL: args[0], Title: title}, words)
+				d = guard.Click(apps, guard.Page{URL: args[0], Title: title}, words)
 			}
 			line := "no decision: not a page the hook decides: the classifier decides it as before"
 			switch d.Decision {
@@ -236,6 +277,9 @@ func recordParts(x state.App) []string {
 	if x.Permission != "" {
 		parts = append(parts, "permission "+x.Permission)
 	}
+	if x.Delete {
+		parts = append(parts, "delete")
+	}
 	return append(parts, "declared in "+x.Declared)
 }
 
@@ -259,6 +303,25 @@ func (a *app) declared(ctx context.Context, rec *state.App) error {
 	return nil
 }
 
+// declaredLocally fills rec's organisation and declaration from the local
+// manifest file of app create --manifest, refusing one that names another
+// App.
+func (a *app) declaredLocally(file string, rec *state.App) error {
+	_, name, err := readManifest(file)
+	if err != nil {
+		return usageErr("--manifest: %v", err)
+	}
+	if !strings.EqualFold(name, rec.Name) {
+		return refused("App %s is not declared: %s names the App %s", rec.Name, file, name)
+	}
+	if rec.Declared, err = filepath.Abs(file); err != nil {
+		return err
+	}
+	rec.Callbacks = nil
+	rec.Org, _, _ = strings.Cut(a.cfg.Apps.Repo, "/")
+	return nil
+}
+
 // appList prints the Apps on record, one per line.
 func (a *app) appList() error {
 	st, err := a.store.Read()
@@ -269,12 +332,23 @@ func (a *app) appList() error {
 		return a.printJSON(st.Apps)
 	}
 	if len(st.Apps) == 0 {
-		_, err = fmt.Fprintln(a.out, "no App on record: every consent page is refused")
-		return err
+		if _, err := fmt.Fprintln(a.out, "no App on record: every consent page is refused"); err != nil {
+			return err
+		}
 	}
 	for _, x := range st.Apps {
 		parts := append([]string{x.Name}, recordParts(x)...)
 		if _, err := fmt.Fprintf(a.out, "%s  since %s by %s: %s\n", strings.Join(parts, "  "), x.At.Local().Format("2006-01-02 15:04"), x.By.Name, x.Word); err != nil {
+			return err
+		}
+	}
+	for _, x := range st.AppsCreated {
+		stored := "credentials stored nowhere"
+		if x.Stored != "" {
+			stored = "credentials in " + x.Stored
+		}
+		if _, err := fmt.Fprintf(a.out, "created %s  slug %s  id %d  of %s  %s  declared in %s  on %s by %s\n", x.Name, x.Slug, x.ID, x.Org, stored, x.Declared,
+			x.At.Local().Format("2006-01-02 15:04"), x.By.Name); err != nil {
 			return err
 		}
 	}
@@ -295,7 +369,7 @@ func (a *app) allowedApps() []guard.App {
 	if err != nil {
 		return nil
 	}
-	return guardApps(st.Apps)
+	return guardAppsOf(st)
 }
 
 // guardApps are the Apps on record as the guard reads them.
@@ -303,7 +377,54 @@ func guardApps(apps []state.App) []guard.App {
 	out := make([]guard.App, 0, len(apps))
 	for _, x := range apps {
 		out = append(out, guard.App{Name: x.Name, ClientID: x.ClientID, Callbacks: x.Callbacks, Org: x.Org, Permission: x.Permission,
-			Declared: x.Declared, Word: x.Word, By: x.By.Name, At: x.At})
+			Delete: x.Delete, Declared: x.Declared, Word: x.Word, By: x.By.Name, At: x.At})
+	}
+	return out
+}
+
+// listenerUp reports whether a running app create's listener answers: its
+// process lives and its loopback address takes a connection. A test
+// replaces it.
+var listenerUp = func(r state.AppRun) bool {
+	if !proc.Alive(r.PID) {
+		return false
+	}
+	c, err := net.DialTimeout("tcp", r.Listener, 300*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = c.Close()
+	return true
+}
+
+// guardAppsOf are the Apps the hook decides from, as the guard reads them:
+// the records, each with the running app create of the same name whose
+// listener answers and beekeeper's latest ledger entry of it; an App that
+// only runs or only the ledger holds is one of its own.
+func guardAppsOf(st *state.State) []guard.App {
+	out := guardApps(st.Apps)
+	of := func(name, org, declared string) *guard.App {
+		i := slices.IndexFunc(out, func(g guard.App) bool { return strings.EqualFold(g.Name, name) })
+		if i < 0 {
+			out = append(out, guard.App{Name: name})
+			i = len(out) - 1
+		}
+		g := &out[i]
+		if g.Org == "" {
+			g.Org = org
+		}
+		if g.Declared == "" {
+			g.Declared = declared
+		}
+		return g
+	}
+	for _, r := range st.AppRuns {
+		if listenerUp(r) {
+			of(r.Name, r.Org, r.Declared).Run = &guard.CreateRun{Listener: r.Listener, By: r.By.Name, At: r.At}
+		}
+	}
+	for _, c := range st.AppsCreated {
+		of(c.Name, c.Org, c.Declared).Created = &guard.Created{Slug: c.Slug, ID: c.ID, Stored: c.Stored, At: c.At}
 	}
 	return out
 }

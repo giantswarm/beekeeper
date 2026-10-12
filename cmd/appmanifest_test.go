@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/secret/secrettest"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -133,10 +134,18 @@ func TestAppCreateManifestWritesTheSecret(t *testing.T) {
 	if g.manifest["name"] != fixtureApp || !strings.HasPrefix(redirect, "http://127.0.0.1:") || !strings.HasSuffix(redirect, appCallbackPath) || g.state == "" {
 		t.Errorf("GitHub received the manifest %v with state %q", g.manifest, g.state)
 	}
-	if !g.appPage {
+	g.mu.Unlock()
+	// the browser follows the callback's redirect on its own, after the
+	// command answered it
+	reached := false
+	for deadline := time.Now().Add(5 * time.Second); !reached && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		g.mu.Lock()
+		reached = g.appPage
+		g.mu.Unlock()
+	}
+	if !reached {
 		t.Error("the browser never reached the App's installation page")
 	}
-	g.mu.Unlock()
 	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "secret."+githubAppOp })
 	if err != nil || len(evs) != 1 || !strings.Contains(evs[0].Detail, "app "+fixtureApp+", app-id 4242") {
 		t.Fatalf("the log: %+v, %v", evs, err)
@@ -144,6 +153,12 @@ func TestAppCreateManifestWritesTheSecret(t *testing.T) {
 	noFixtureSecret(t, "the log", evs[0].Detail)
 	if strings.Contains(evs[0].Detail, fixtureCode) {
 		t.Errorf("the log carries the code: %s", evs[0].Detail)
+	}
+	// the run is off the record, the App in beekeeper's ledger with the
+	// Secret that holds its credentials
+	if st, err := a.store.Read(); err != nil || len(st.AppRuns) != 0 || len(st.AppsCreated) != 1 || st.AppsCreated[0].Slug != fixtureApp ||
+		st.AppsCreated[0].Stored != file || st.AppsCreated[0].Org != fixtureOrg || st.AppsCreated[0].Declared != manifest {
+		t.Errorf("after the run: runs %+v, ledger %+v, %v", st.AppRuns, st.AppsCreated, err)
 	}
 }
 

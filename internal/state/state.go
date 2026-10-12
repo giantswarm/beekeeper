@@ -585,13 +585,55 @@ type App struct {
 	// asked for, "<scope>: <level>" ("Members: Read-only"); "" for a record
 	// without one.
 	Permission string `json:"permission,omitempty"`
+	// Delete says the person asked for the App's deletion: the hook answers
+	// its Advanced page's Delete GitHub App and the confirmation.
+	Delete bool `json:"delete,omitempty"`
 	// Declared is where the organisation declares the App:
-	// <repo>@<commit>:<manifest path>.
+	// <repo>@<commit>:<manifest path>, or the local manifest of a deletion.
 	Declared string `json:"declared"`
 	// Word is the person's words that asked for the grant.
 	Word string    `json:"word"`
 	By   Party     `json:"by"`
 	At   time.Time `json:"at"`
+
+	rest rest
+}
+
+// AppRun is a running `beekeeper app create`: the App it creates, the
+// loopback listener its manifest page and GitHub's redirect go to, and its
+// process. The hook answers GitHub's Create click on the manifest page and
+// the App's Install click while the listener answers.
+type AppRun struct {
+	Name string `json:"name"`
+	// Org is the organisation the App is created for.
+	Org string `json:"org"`
+	// Declared is where the App is declared: its manifest in the
+	// organisation's repository, or the local manifest file.
+	Declared string `json:"declared"`
+	// Listener is the run's loopback address, host:port.
+	Listener string    `json:"listener"`
+	PID      int       `json:"pid"`
+	By       Party     `json:"by"`
+	At       time.Time `json:"at"`
+
+	rest rest
+}
+
+// AppCreated is an App `beekeeper app create` created: beekeeper's ledger of
+// its own Apps. The hook answers its Install click, and the deletion of one
+// whose credentials were stored nowhere.
+type AppCreated struct {
+	Name string `json:"name"`
+	Slug string `json:"slug"`
+	ID   int64  `json:"id"`
+	// Org is the organisation the App was created for.
+	Org      string `json:"org"`
+	Declared string `json:"declared"`
+	// Stored is where its credentials went (a vault item, a SOPS file), ""
+	// for nowhere.
+	Stored string    `json:"stored,omitempty"`
+	By     Party     `json:"by"`
+	At     time.Time `json:"at"`
 
 	rest rest
 }
@@ -769,6 +811,10 @@ type State struct {
 	// Apps are the Apps the person owns and asked a consent for, what the
 	// hook answers a consent click for.
 	Apps []App `json:"apps,omitempty"`
+	// AppRuns are the running `beekeeper app create` commands.
+	AppRuns []AppRun `json:"appRuns,omitempty"`
+	// AppsCreated are the Apps `beekeeper app create` created.
+	AppsCreated []AppCreated `json:"appsCreated,omitempty"`
 	// Archives are the desktop sessions of agents off the roster the
 	// doctor still owes an archive.
 	Archives []Archive `json:"archives,omitempty"`

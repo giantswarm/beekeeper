@@ -40,7 +40,7 @@ func (a *app) appCreateSecret(cmd *cobra.Command, installation, file, org string
 	if known, err := a.appKnown(ctx, guard.AppSlug(name)); err != nil {
 		return err
 	} else if known != nil {
-		return refused("GitHub already knows an App named %s (%s, id %d, owned by %s): %s; nothing written", name, known.Slug, known.ID, known.Owner.Login, known.HTMLURL)
+		return knownRefusal(name, known)
 	}
 	if open {
 		if err := a.holdsBrowser(); err != nil {
@@ -55,8 +55,13 @@ func (a *app) appCreateSecret(cmd *cobra.Command, installation, file, org string
 		}
 	}()
 	var created *githubApp
+	unrecord := func() {}
+	defer func() { unrecord() }()
 	err = a.writeGitHubApp(cmd, installation, target, replace, func(ctx context.Context) (*githubApp, error) {
 		if flow, err = serveManifest(org, name, file, manifest); err != nil {
+			return nil, err
+		}
+		if unrecord, err = a.recordRun(name, org, file, flow); err != nil {
 			return nil, err
 		}
 		if _, err := fmt.Fprintf(say, "App %s, declared in %s, its credentials for %s (%s)\n", name, file, installation, target.File); err != nil {
@@ -72,6 +77,13 @@ func (a *app) appCreateSecret(cmd *cobra.Command, installation, file, org string
 		created, err = convertManifest(ctx, code)
 		return created, err
 	})
+	if created != nil {
+		stored := target.File
+		if err != nil {
+			stored = ""
+		}
+		a.recordCreated(say, name, org, file, stored, created)
+	}
 	if flow != nil {
 		// the callback holds the browser until the Secret is written
 		out := flowOutcome{err: err}

@@ -76,6 +76,11 @@ const (
 		"page (organizations/%s/settings/apps/%s/permissions) set exactly that permission and click Save changes once, and on the organisation's " +
 		"installation of the App click Review request and Accept new permissions once; name the App and the permission in each call's summary; " +
 		"change nothing else. "
+	createWords = "The person's own App %s of %s is being created or installed by beekeeper app create (declared in %s): on GitHub's manifest page click " +
+		"'Create GitHub App' once, and on the App's installation page click Install and its confirmation once; name the App in each call's summary; " +
+		"create, install or change nothing else. "
+	deleteAppWords = "The person's own App %s (%s) is on record for its deletion: on its Advanced settings page click Delete GitHub App, type its name " +
+		"where GitHub asks for it and confirm, once; name the App and the deletion in each call's summary; delete, transfer or change nothing else. "
 	labWords = "The lab's own identity provider on a loopback host (*.127.0.0.1.nip.io, localhost) is the person's: " +
 		"there, and only there, a fixture user the steps name signs in with the fixture credential the steps give. "
 )
@@ -147,6 +152,19 @@ steps name the App runs with that change's rule, its prompt says to set
 exactly that permission, and "allowed permission: <name> (<change>,
 declared in <manifest>)" goes below the report.
 
+An App's creation, installation and deletion are grants too. While
+"beekeeper app create" runs for an App (its loopback listener answers), the
+hook answers GitHub's "Create GitHub App" on the manifest page, and for an
+App that run creates or beekeeper's ledger holds, the Install click and its
+confirmation on its installation page; for an App on record with "app allow
+<name> --delete" (or one the ledger holds no stored credentials of), the
+Advanced page's Delete GitHub App, the name typed into the confirmation and
+its confirm click, under the organisation or the person's own account. The
+same clicks on any other App's page are refused, naming the form. A turn
+whose steps name such an App (its name, slug or the create's loopback
+address) runs with its rule, its prompt says which clicks, and "allowed
+create:" or "allowed delete:" goes below the report.
+
 A sign-in or consent page of the lab's own identity provider on a loopback
 host (*.127.0.0.1.nip.io, localhost) is allowed the same way without a
 record: a fixture user's sign-in there is the person's own lab's. Steps
@@ -217,7 +235,7 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	if err != nil {
 		return err
 	}
-	consents, lab := appsNamed(st.Apps, steps), namesLoopback(steps)
+	consents, lab := appsNamed(guardAppsOf(st), steps), namesLoopback(steps)
 	id := uuid.NewString()
 	// The turn's start record has the hook act in it wherever it runs; the
 	// turn over, the record goes.
@@ -347,7 +365,8 @@ var grantWords = regexp.MustCompile(`(?i)\b(authori[sz]e|consent|grant|approve|a
 // consentHint names the record forms below a grant refusal of a run whose
 // steps name no App on record.
 const consentHint = "a consent for an App the person owns and asked for is recorded with " + guard.AllowForm +
-	", one change of such an App's permissions with " + guard.PermissionForm + ", after which the hook answers the click on its consent page, " +
+	", one change of such an App's permissions with " + guard.PermissionForm + ", an App's deletion with " + guard.DeleteForm +
+	" (its creation and installation are answered while " + guard.CreateForm + " runs for it), after which the hook answers the click on its consent page, " +
 	"or the navigation to its permissions page and the clicks of that change, and a turn whose steps name the App runs with its rule " +
 	"(`beekeeper browse --help`); every other grant stays refused"
 
@@ -470,6 +489,14 @@ func (f browseFindings) lines(steps, deploy string, consents []guard.App, lab bo
 			out = append(out, fmt.Sprintf("allowed permission: %s (%s, declared in %s): the hook answers the navigation to its permissions page, the clicks "+
 				"of that change and its installation's Review request and Accept new permissions, and the turn's auto mode allows them, on record since %s by %s: %s",
 				c.Name, c.Permission, c.Declared, c.At.UTC().Format("2006-01-02"), c.By, c.Word))
+		}
+		if creates(c) {
+			out = append(out, fmt.Sprintf("allowed create: %s of %s (declared in %s): the hook answers GitHub's Create GitHub App while beekeeper app create runs for it "+
+				"and the Install click on its installation page, and the turn's auto mode allows them", c.Name, c.Org, c.Declared))
+		}
+		if deletes(c) {
+			out = append(out, fmt.Sprintf("allowed delete: %s (%s): the hook answers Delete GitHub App and its confirmation on its Advanced page, "+
+				"and the turn's auto mode allows them", c.Name, deleteRecord(c)))
 		}
 	}
 	if lab {
@@ -710,6 +737,12 @@ func browsePrompt(steps, deploy string, consents []guard.App, lab bool) string {
 		if c.Permission != "" {
 			p += fmt.Sprintf(permissionWords, c.Name, c.Permission, c.Org, guard.AppSlug(c.Name))
 		}
+		if creates(c) {
+			p += fmt.Sprintf(createWords, c.Name, c.Org, c.Declared)
+		}
+		if deletes(c) {
+			p += fmt.Sprintf(deleteAppWords, c.Name, deleteRecord(c))
+		}
 	}
 	if lab {
 		p += labWords
@@ -732,6 +765,12 @@ func browseRules(deploy string, consents []guard.App, lab bool) []string {
 		}
 		if c.Permission != "" {
 			rules = append(rules, permissionRule(c))
+		}
+		if creates(c) {
+			rules = append(rules, createRule(c))
+		}
+		if deletes(c) {
+			rules = append(rules, deleteRule(c))
 		}
 	}
 	if lab {
@@ -780,6 +819,48 @@ func permissionRule(a guard.App) string {
 		a.Name, a.Declared, a.Permission, a.Org, guard.AppSlug(a.Name))
 }
 
+// creates reports whether an App is being created (a running app create)
+// or was created by beekeeper (its ledger): the hook answers its Create and
+// Install clicks.
+func creates(a guard.App) bool { return a.Run != nil || a.Created != nil }
+
+// deletes reports whether the hook answers an App's deletion: on record
+// with --delete, or in beekeeper's ledger with its credentials stored
+// nowhere.
+func deletes(a guard.App) bool { return a.Delete || a.Created != nil && a.Created.Stored == "" }
+
+// deleteRecord names why an App's deletion is answered.
+func deleteRecord(a guard.App) string {
+	if a.Delete {
+		return fmt.Sprintf("declared in %s, on record since %s by %s: %s", a.Declared, a.At.UTC().Format("2006-01-02"), a.By, a.Word)
+	}
+	return fmt.Sprintf("id %d, created by beekeeper app create, its credentials stored nowhere", a.Created.ID)
+}
+
+// createRule is the auto mode allow rule of an App beekeeper app create
+// creates or created: the person's pre-authorization of GitHub's Create
+// GitHub App on the manifest page and of the App's Install, which the hook
+// verifies against the running create and beekeeper's ledger.
+func createRule(a guard.App) string {
+	return fmt.Sprintf("Own App Create: The person's App %s of %s, declared in %s, is created by beekeeper app create, which the person runs: on "+
+		"GitHub's manifest page (settings/apps/manifest, organizations/%s/settings/apps/new) the click 'Create GitHub App for %s', and on the App's "+
+		"installation page (apps/%s/installations/new) the Install click and its confirmation, are pre-authorized and no Permission Grant to refuse, "+
+		"and a step that names them is no grant request; beekeeper's own hook verifies the running create or its ledger and answers each click. "+
+		"Not covered: any other App's creation or installation, any other grant of access, a credential typed anywhere. Every other rule applies in full.",
+		a.Name, a.Org, a.Declared, a.Org, a.Org, guard.AppSlug(a.Name))
+}
+
+// deleteRule is the auto mode allow rule of an App's deletion the hook
+// answers: the person's pre-authorization of its Advanced page's Delete
+// GitHub App and the confirmation.
+func deleteRule(a guard.App) string {
+	return fmt.Sprintf("Own App Delete: The person's own App %s (%s) is to be deleted: on its Advanced settings page (settings/apps/%s/advanced, "+
+		"under the organisation or the person's own account) the click Delete GitHub App, the App's name typed into GitHub's confirmation and the "+
+		"confirm click are pre-authorized and no Permission Grant or destructive action to refuse; beekeeper's own hook verifies the App and answers "+
+		"each call. Not covered: any other App's deletion, a transfer, any other change or grant, a credential typed anywhere. Every other rule applies in full.",
+		a.Name, deleteRecord(a), guard.AppSlug(a.Name))
+}
+
 // callbacks are an App's callback hosts, as a turn and its report name them.
 func callbacks(a guard.App) string { return strings.Join(a.Callbacks, " or ") }
 
@@ -791,17 +872,20 @@ const labRule = "Lab Identity Provider: a sign-in or consent page on a loopback 
 	"consent are pre-authorized, no credential disclosure and no Permission Grant to refuse; beekeeper's own hook verifies the " +
 	"host. Not covered: a page on any other host, a credential of the person's own. Every other rule applies in full."
 
-// appsNamed are the Apps on record the steps name, by name or one of their
-// callback hosts, as the guard reads them.
-func appsNamed(apps []state.App, steps string) []guard.App {
+// appsNamed are the Apps the hook decides from that the steps name, by
+// name, by slug, by one of their callback hosts, or by the loopback
+// listener of their running app create.
+func appsNamed(apps []guard.App, steps string) []guard.App {
 	s := strings.ToLower(steps)
-	var named []state.App
+	var named []guard.App
 	for _, x := range apps {
-		if strings.Contains(s, strings.ToLower(x.Name)) || slices.ContainsFunc(x.Callbacks, func(h string) bool { return strings.Contains(s, h) }) {
+		if strings.Contains(s, strings.ToLower(x.Name)) || strings.Contains(s, guard.AppSlug(x.Name)) ||
+			slices.ContainsFunc(x.Callbacks, func(h string) bool { return strings.Contains(s, h) }) ||
+			x.Run != nil && strings.Contains(s, x.Run.Listener) {
 			named = append(named, x)
 		}
 	}
-	return guardApps(named)
+	return named
 }
 
 // appNames are the Apps' names, comma-separated.

@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -294,9 +295,25 @@ func createEvents(t *testing.T, a *app) []state.Event {
 // lengths and fingerprints only.
 func TestAppCreateRunsTheManifestFlowIntoTheVault(t *testing.T) {
 	a, g, tools := createApp(t, map[string]string{"apps/" + fixtureApp + "/installation.json": `{"repositories": ["workspace-manager", "agentlab"]}`})
+	// the run is on record, for the browse hook, while its page opens
+	var running []state.AppRun
+	open := openBrowser
+	openBrowser = func(ctx context.Context, url string) error {
+		if st, err := a.store.Read(); err == nil {
+			running = st.AppRuns
+		}
+		return open(ctx, url)
+	}
 	out, err := runApp(t, a, appCreate, fixtureApp, timeoutFlag, tenSeconds)
 	if err != nil {
 		t.Fatalf("app create: %v\n%s", err, out)
+	}
+	if len(running) != 1 || running[0].Name != fixtureApp || running[0].Org != fixtureOrg || !strings.HasPrefix(running[0].Listener, "127.0.0.1:") || running[0].PID != os.Getpid() {
+		t.Errorf("the runs on record while the page opened = %+v", running)
+	}
+	if st, err := a.store.Read(); err != nil || len(st.AppRuns) != 0 || len(st.AppsCreated) != 1 || st.AppsCreated[0].ID != 4242 ||
+		st.AppsCreated[0].Slug != fixtureApp || st.AppsCreated[0].Stored != fixtureItem || st.AppsCreated[0].Org != fixtureOrg {
+		t.Errorf("after the run: runs %+v, ledger %+v, %v", st.AppRuns, st.AppsCreated, err)
 	}
 	_, keyPEM := fixtureKey()
 	for field, want := range map[string]string{appIDField: fixtureAppIDText, appClientIDField: fixtureClientID, appSlugField: fixtureApp, githubClientSecret: fixtureSecret,
@@ -447,7 +464,9 @@ func TestAppCreateRefusesTheRedirectOrTheWait(t *testing.T) {
 	openBrowser = func(context.Context, string) error { return nil }
 	a.out = &bytes.Buffer{}
 	_, err = runApp(t, a, appCreate, fixtureApp, timeoutFlag, "100ms")
-	if Code(err) != ExitRefused || err == nil || err.Error() != "no redirect from GitHub within 100ms: the Create click did not come; nothing written" {
+	if Code(err) != ExitRefused || err == nil || !strings.HasPrefix(err.Error(), "no redirect from GitHub within 100ms: the Create click did not come; nothing written. "+
+		`Where GitHub's page answered "Name is already taken", it holds an App or a reservation of the name `+fixtureApp+" that its API does not show: "+
+		"under the person's own account ("+githubWeb+"/settings/apps) or the organisation's ("+githubWeb+"/organizations/"+fixtureOrg+"/settings/apps)") {
 		t.Errorf("no Create click: %v", err)
 	}
 	if calls := strings.Join(tools.Calls, "\n"); strings.Contains(calls, opItemCall) {
