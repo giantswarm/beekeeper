@@ -338,11 +338,8 @@ func TestAppLifecycleCheck(t *testing.T) {
 	}{
 		"Create on the manifest page": {[]string{appCheck, manifestPage, wordsFlag, createWords}, "allow: beekeeper allows the click: GitHub's manifest page of the person's own App " +
 			creating + " of " + fixtureOrg + ", declared in /tmp/glean/manifest.json, which the `beekeeper app create` run by " + agentOne + " since "},
-<<<<<<< HEAD
 		"Create for another organisation": {[]string{appCheck, manifestPage, wordsFlag, "Clicks Create GitHub App for other-org"},
 			"refuse: Refused: GitHub's manifest page creates an App, and the page names none of the Apps the running `beekeeper app create` commands create."},
-=======
->>>>>>> origin/main
 		"the organisation's form submit":    {[]string{appCheck, "https://github.com/organizations/" + fixtureOrg + "/settings/apps/new", wordsFlag, "Submits the form"}, checkAllow},
 		"another call on the manifest page": {[]string{appCheck, manifestPage, wordsFlag, "Scrolls down"}, checkNone},
 		"Install of the App being created":  {[]string{appCheck, "https://github.com/apps/" + creating + "/installations/new", wordsFlag, clickInstall}, "allow: beekeeper allows the click: the installation page of the person's own App " + creating},
