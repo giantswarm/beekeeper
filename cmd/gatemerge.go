@@ -627,12 +627,12 @@ func mergeChild(base string) childResult {
 		return r
 	}
 	rc := guard.ExitNotFound
-	var stop atomic.Int32
+	var stop atomic.Value
 	if err := c.Start(); err == nil {
 		go func() {
 			for s := range sig {
 				if n, ok := s.(syscall.Signal); ok {
-					stop.CompareAndSwap(0, int32(n))
+					stop.CompareAndSwap(nil, n)
 				}
 				_ = c.Process.Signal(s)
 			}
@@ -645,7 +645,8 @@ func mergeChild(base string) childResult {
 	} else {
 		_, _ = fmt.Fprintln(errs, err)
 	}
-	r.rc, r.stop = rc, syscall.Signal(stop.Load())
+	r.rc = rc
+	r.stop, _ = stop.Load().(syscall.Signal)
 	r.doc, _ = os.ReadFile(base + ".json") //nolint:gosec // as above
 	r.last = lastLine(base + ".log")
 	if r.kept = keepOutput(base, r.doc, time.Now()); r.kept != "" {

@@ -228,7 +228,7 @@ func TestMergeChildRecordsItsStop(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := json.Marshal(childSpec{Argv: []string{"devctl", "pr", "merge", "o/r", "7"}, Env: os.Environ()})
+	raw, _ := json.Marshal(childSpec{Argv: mergeArgv("o/r"), Env: os.Environ()})
 	if err := os.WriteFile(base+".spec", raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
