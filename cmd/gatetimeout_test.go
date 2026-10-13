@@ -26,6 +26,9 @@ func TestACallersTimeoutCutsTheCallNotTheWait(t *testing.T) {
 	if runningBinary().Path() == "" {
 		t.Skip("the running binary cannot be read here")
 	}
+	if _, err := plat.Machine.Processes(); err != nil {
+		t.Skipf("no process table on this platform, the gate cannot tell its caller: %v", err)
+	}
 	dir := t.TempDir()
 	// A PATH of its own without systemd-run: merge-child runs in a session
 	// of its own and inherits the run's environment, the wakes file with it.
