@@ -1140,7 +1140,13 @@ like a merge typed on the command line.
   the repository, its lane, `merges` or `github` is held, or a cluster upgrade runs on the lane's
   installation (the hold's reason); the GitHub budget is unknown, checked before devctl makes a
   single request; the lane's installation cannot be read (a lapsed `tsh` login). Nothing was
-  queued: a 77 never says `queued`. Nothing else stops a merge: a lane whose
+  queued: a 77 never says `queued`. A hold refuses a new merge only: a merge that has its place
+  in the lane keeps it during a hold and runs once the hold lifts or lets it through, and a
+  held place holds no place against the one merge the hold lets through (`--except
+  owner/repo#n`), which enters first. A hold with such an exception set while a merge's devctl
+  still waits for CI ends that devctl before it merges, and the merge goes back to its place
+  (`merge.preempted` in the log); one GitHub reports merged all the same is recorded as merged.
+  Nothing else stops a merge: a lane whose
   release has not rolled past `merge.settleTimeout` keeps it waiting, and `watch` says `LANE STUCK`.
 - **Queued, exit 76**, one line starting `beekeeper gate: queued,` with the merge's position and
   whom it waits behind (when the machine-wide devctl cap is the reason, `<n> devctl processes run
