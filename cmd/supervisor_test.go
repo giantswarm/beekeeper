@@ -229,6 +229,8 @@ func TestSettlesByTheGateRule(t *testing.T) {
 	known.Release = "v1.2.3"
 	stuck := known
 	stuck.Finished = relayNow.Add(-time.Hour)
+	failed := m
+	failed.ReleaseFailed = true
 	for _, c := range []struct {
 		name   string
 		m      state.Merge
@@ -240,6 +242,7 @@ func TestSettlesByTheGateRule(t *testing.T) {
 		{"known release rolling", known, notRolled, true},
 		{"known release rolled", known, rolled, false},
 		{"past the settle timeout", stuck, notRolled, false},
+		{"release failed", failed, notRolled, false},
 	} {
 		if got := settles(c.m, cfg, relayNow, c.rolled); got != c.want {
 			t.Errorf("%s: settles %v, want %v", c.name, got, c.want)

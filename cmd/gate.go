@@ -1291,6 +1291,9 @@ func (g *gateRun) record(base string, run childRun) error {
 	case out.Merged && g.handCut() != "":
 		gateLine("%s merged into %s, which no Auto-release run tags: no release awaited, lane %s is free; a tag of %s is cut by hand",
 			g.key(), g.handCut(), g.lane.Name, g.handCut())
+	case out.ReleaseFailed:
+		gateLine("%s merged and its release failed (exit %d): nothing rolls, lane %s settles at once; the fix is the next pull request or a rerun of the failed workflow, do not merge again",
+			g.key(), rc, g.lane.Name)
 	case out.Unconfirmed:
 		gateLine("devctl ended with exit %d before its document, and GitHub reports %s#%d merged: its release is unconfirmed, confirm it with `devctl release wait %s --pr %d`, do not merge again",
 			rc, g.repo, g.pr, g.repo, g.pr)
@@ -1411,7 +1414,7 @@ func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOu
 	case r.unanswered != nil:
 		m.Phase, m.Finished, m.Exit, m.Release, m.Roll = state.Settling, now, rc, "", nil
 	case out.Merged && !out.NoRelease && handCut == "" && (lane.Installation != "" || out.Release == ""):
-		m.Phase, m.Finished, m.Exit, m.Release = state.Settling, now, rc, out.Release
+		m.Phase, m.Finished, m.Exit, m.Release, m.ReleaseFailed = state.Settling, now, rc, out.Release, out.ReleaseFailed
 	default:
 		st.Merges = slices.Delete(st.Merges, i, i+1)
 	}
@@ -1446,6 +1449,10 @@ func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOu
 		release = "none awaited (" + handCut + " has no auto-release)"
 	case out.NoRelease:
 		release = "none warranted"
+	case out.ReleaseFailed && release != "":
+		release += " failed, nothing rolls"
+	case out.ReleaseFailed:
+		release = "failed, nothing rolls"
 	case out.Unconfirmed:
 		release = "unconfirmed (merged per GitHub)"
 	case release == "":
