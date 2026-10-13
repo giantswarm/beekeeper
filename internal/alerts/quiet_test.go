@@ -62,8 +62,12 @@ func TestOtherTeamsTestClustersAreQuiet(t *testing.T) {
 		}
 	}
 
-	// Resolving is as quiet as firing.
-	lines, quiet, _ = triage(t, testClusters, onTestCluster, nil)
+	// Resolving is as quiet as firing, the reading that holds them too.
+	lines, quiet, st := triage(t, testClusters, onTestCluster, nil)
+	if len(lines) != 0 || len(quiet) != 1 || !strings.HasSuffix(quiet[0], "(quiet: every one quiet)") {
+		t.Errorf("held: lines %q, quiet %q", lines, quiet)
+	}
+	lines, quiet, _ = testClusters.Triage(mc, st, ok(), now.Add(2*every))
 	if len(lines) != 0 || len(quiet) != len(onTestCluster) {
 		t.Errorf("resolved: lines %q, quiet %q", lines, quiet)
 	}
@@ -126,18 +130,20 @@ func TestOtherTeamsNotifyAlertsAreQuiet(t *testing.T) {
 	}
 }
 
-// A reading that misses an alert (an Alertmanager restart, a reconnect)
-// resolves it; the next reading has it again with its old start. That NEW
-// is quiet, a real re-fire with a new start is not, and neither is the
-// team's alert or a page.
+// One reading that misses an alert holds it; two readings that miss it (an
+// Alertmanager restart, a reconnect) resolve it, and the next reading has
+// it again with its old start. That NEW is quiet, a real re-fire with a new
+// start is not, and neither is the team's alert or a page.
 func TestRepeatAfterAMissedReadingIsQuiet(t *testing.T) {
 	r := Rules{Team: ourTeam, Collapse: 3, Flap: Damper{Window: time.Hour}}
 	ours := alert("b1", "FluxGiantswarmHelmReleaseFailed", "page", ourTeam, "", "cluster_id", mc, "namespace", "flux-giantswarm", "name", "repo-manager")
 	all := []Raw{notifyOnMC, pageOnMC, ours}
 	_, st := r.Step(mc, nil, ok(all...), now)
 	lines, _, st := r.Triage(mc, st, ok(), now.Add(every))
+	equal(t, lines, []string{"ALERTS alpha 3 of 3 alerts missing from this reading, kept until the next reading confirms them resolved"})
+	lines, _, st = r.Triage(mc, st, ok(), now.Add(every))
 	if len(lines) != 3 {
-		t.Fatalf("missed reading: %q", lines)
+		t.Fatalf("missed readings: %q", lines)
 	}
 	lines, quiet, st := r.Triage(mc, st, ok(all...), now.Add(2*every))
 	if len(quiet) != 1 || !strings.Contains(quiet[0], "KarpenterServiceDegraded") || !strings.HasSuffix(quiet[0], "(quiet: "+Repeat+")") {
@@ -152,6 +158,7 @@ func TestRepeatAfterAMissedReadingIsQuiet(t *testing.T) {
 
 	// Fired again with a new start: it wakes.
 	_, _, st = r.Triage(mc, st, ok(), now.Add(3*every))
+	_, _, st = r.Triage(mc, st, ok(), now.Add(3*every))
 	again := notifyOnMC
 	again.StartsAt = now.Add(4 * every).Format(time.RFC3339)
 	lines, quiet, st = r.Triage(mc, st, ok(again), now.Add(4*every))
@@ -160,6 +167,7 @@ func TestRepeatAfterAMissedReadingIsQuiet(t *testing.T) {
 	}
 
 	// Past the window it is forgotten.
+	_, _, st = r.Triage(mc, st, ok(), now.Add(5*every))
 	_, _, st = r.Triage(mc, st, ok(), now.Add(5*every))
 	st = roundTrip(t, st)
 	if st.Resolved["n1"].Since != again.StartsAt {

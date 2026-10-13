@@ -140,9 +140,11 @@ func TestStepNewAndResolved(t *testing.T) {
 		"2026-09-24T18:45:00Z", "cluster_id", instB, "namespace", "kube-system")
 	lines, st := rules.Step(instB, st, ok(restarted), now)
 	equal(t, lines, []string{
+		"ALERTS beta 1 of 1 alerts missing from this reading, kept until the next reading confirms them resolved",
 		"ALERT NEW beta notify rocket ManagementClusterContainerIsRestartingTooFrequently kube-system since 18:45Z",
-		"ALERT RESOLVED beta PAGE shield FluxCustomerHelmReleaseFailed org-acme/acme0230-kubescape@acme0230",
 	})
+	lines, st = rules.Step(instB, st, ok(restarted), now)
+	equal(t, lines, []string{"ALERT RESOLVED beta PAGE shield FluxCustomerHelmReleaseFailed org-acme/acme0230-kubescape@acme0230"})
 	lines, _ = rules.Step(instB, st, ok(restarted), now)
 	equal(t, lines, nil) // silent when nothing changed
 }
@@ -167,6 +169,7 @@ func TestStepBurstCollapsesAboveTheThreshold(t *testing.T) {
 	if len(lines) != 2 { // two more: still one line each
 		t.Errorf("lines = %v", lines)
 	}
+	_, st = rules.Step(instA, st, ok(), now)
 	lines, _ = rules.Step(instA, st, ok(), now)
 	equal(t, lines, []string{"ALERT RESOLVED alpha PAGE atlas LoggingAgentMissingOnNode x5 (node-0, ...)"})
 }

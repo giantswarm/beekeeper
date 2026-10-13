@@ -16,7 +16,8 @@ or a page.
   a lease, and any other one a session changes or names in a proving window. Their firing alerts
   reach the watch as `ALERT NEW|RESOLVED` lines naming the lease holder and the sessions running
   commands against the installation, each from its `floor` up; an alert that keeps firing and
-  resolving is one `FLAPPING` line. A NEW line's `during merging …` / `during merged …` names what
+  resolving is one `FLAPPING` line; a reading that misses alerts (`… missing from this reading`)
+  keeps them until the next reading confirms the resolve. A NEW line's `during merging …` / `during merged …` names what
   happened on the installation in the last 30 minutes: a lead, not a cause. While one of its
   clusters upgrades, beekeeper holds the installation by itself (`UPGRADE` to `UPGRADE ENDED`):
   the gate refuses its lanes' merges and its claims are refused; nothing to set or lift by hand.

@@ -75,7 +75,12 @@ alert below its installation's floor (alerts.installations[].floor) is never
 printed; it stays in the baseline, so a changed floor prints no burst. The
 alerts.flap.changes-th change of an alert within alerts.flap.window is one
 FLAPPING line (since its first change in the window), and its changes print
-nothing until it has been stable for the window. An installation's first
+nothing until it has been stable for the window; an alert that fires again
+within the window after it resolved is FLAPPING at once, with its first
+start. A reading that misses alerts of the baseline (stretched, cut short
+or partial) resolves none of them: they are kept with their first start,
+one line says how many the reading missed, and they resolve when the next
+reading misses them too. An installation's first
 reading prints its set as OPEN lines; one that does not answer is an
 unreachable line with how long its alerts have been unseen (its set is kept,
 nothing reads as resolved), said again every 15 minutes while it does not

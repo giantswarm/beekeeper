@@ -91,7 +91,8 @@ the note closed and note.overtaken logged; --once names each one it would
 close and writes nothing. The
 installations' alerts are read every alerts.every and each NEW or RESOLVED
 one at or above its installation's floor is a line, a flapping one a single
-FLAPPING line (beekeeper alerts watch); only one watch at a time reads them.
+FLAPPING line, and a reading that misses alerts holds them until the next
+one confirms (beekeeper alerts watch); only one watch at a time reads them.
 Every poll, a firing alert at alerts.pageSeverity in the baseline, of
 alerts.team when it is set, that no session has owned (beekeeper alerts own) for alerts.ownerGrace is one line,
 PAGE UNOWNED <installation> <alertname> <where> for <duration> (one per

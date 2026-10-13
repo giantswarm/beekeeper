@@ -109,8 +109,9 @@ type Rules struct {
 }
 
 // Damper holds back an alert that changes too often: its Changes-th NEW or
-// RESOLVED within Window is one FLAPPING line, and its changes print nothing
-// until it has been stable for Window. Changes under 2 is no damper.
+// RESOLVED within Window is one FLAPPING line, as is a re-fire within Window
+// after it resolved, and its changes print nothing until it has been stable
+// for Window. Changes under 2 is no damper.
 type Damper struct {
 	Changes int
 	Window  time.Duration
@@ -333,8 +334,13 @@ type Installation struct {
 	// window, by fingerprint.
 	Flaps map[string]*Flap `json:"flaps,omitempty"`
 	// Resolved are the alerts resolved within the damper's window, by
-	// fingerprint, for the quiet repeat.
+	// fingerprint, for the quiet repeat and the FLAPPING of a re-fire.
 	Resolved map[string]Resolved `json:"resolved,omitempty"`
+	// Held are the alerts the last reading missed, by fingerprint, with
+	// that reading's time: kept in Alerts, resolved only when the next
+	// reading misses them too. A stretched or partial reading is no
+	// resolve.
+	Held map[string]time.Time `json:"held,omitempty"`
 }
 
 // Step returns the lines one watch run prints for an installation and the
@@ -350,7 +356,7 @@ func (r Rules) Triage(installation string, prev *Installation, ans Answer, now t
 	if !ans.OK {
 		next := &Installation{Said: now}
 		if prev != nil {
-			next.Alerts, next.Flaps, next.Seen, next.Resolved = prev.Alerts, prev.Flaps, prev.Seen, prev.Resolved
+			next.Alerts, next.Flaps, next.Seen, next.Resolved, next.Held = prev.Alerts, prev.Flaps, prev.Seen, prev.Resolved, prev.Held
 			if !prev.Reachable && now.Sub(prev.Said) < UnseenRepeat {
 				next.Said = prev.Said
 				return nil, nil, next
@@ -370,21 +376,106 @@ func (r Rules) Triage(installation string, prev *Installation, ans Answer, now t
 		}
 		lines = append(lines, again)
 	}
+	recent := r.recentResolved(prev.Resolved, now)
+	next.Held = hold(prev, current, now)
+	if l, q := r.heldLine(installation, prev.Alerts, next.Held, recent); l != "" {
+		lines = append(lines, l)
+	} else if q != "" {
+		quiet = append(quiet, q)
+	}
 	next.Flaps = r.Flap.keep(prev.Flaps, now)
 	back, resolved := r.missing(installation, current, prev.Alerts), r.missing(installation, prev.Alerts, current)
-	recent := r.recentResolved(prev.Resolved, now)
 	next.Resolved = nextResolved(recent, resolved, back, now)
+	refired, back := r.refired(installation, back, recent)
+	for fp, a := range refired {
+		c := current[fp]
+		c.Since = a.Since
+		current[fp] = c
+	}
 	added, flapping := r.Flap.damp(next.Flaps, back, now)
 	gone, flappingGone := r.Flap.damp(next.Flaps, resolved, now)
+	again := r.Flap.refire(next.Flaps, refired, now)
 	for _, c := range []struct {
 		kind   string
 		alerts []Alert
-	}{{New, added}, {"RESOLVED", gone}, {"FLAPPING", append(flapping, flappingGone...)}} {
+	}{{New, added}, {"RESOLVED", gone}, {"FLAPPING", slices.Concat(flapping, again, flappingGone)}} {
 		loud, q := r.split(c.kind, installation, c.alerts, recent, now)
 		lines = append(lines, r.changeLines(c.kind, installation, loud, now, r.Collapse)...)
 		quiet = append(quiet, q...)
 	}
 	return lines, quiet, next
+}
+
+// hold keeps in current the alerts of prev a first reading misses, and
+// every alert's first start: Alertmanager answers a stretched or cut-short
+// reading with less, and an alert that fires again after such a gap has a
+// new start. An alert prev held already is missed a second time: it
+// resolves. hold returns the alerts held now.
+func hold(prev *Installation, current Set, now time.Time) map[string]time.Time {
+	held := map[string]time.Time{}
+	for fp, a := range prev.Alerts {
+		if c, ok := current[fp]; ok {
+			c.Since = cmp.Or(a.Since, c.Since)
+			current[fp] = c
+			continue
+		}
+		if _, missed := prev.Held[fp]; !missed {
+			current[fp] = a
+			held[fp] = now
+		}
+	}
+	if len(held) == 0 {
+		return nil
+	}
+	return held
+}
+
+// heldLine says how many of the installation's alerts a reading missed and
+// kept: a line that wakes when one of them would wake at its RESOLVED,
+// else a quiet one.
+func (r Rules) heldLine(installation string, baseline Set, held map[string]time.Time, resolved map[string]Resolved) (line, quiet string) {
+	shown, n, loud := 0, 0, 0
+	for fp, a := range baseline {
+		if !r.shown(installation, a) {
+			continue
+		}
+		shown++
+		if _, ok := held[fp]; !ok {
+			continue
+		}
+		n++
+		if r.quiet(installation, "RESOLVED", fp, a, resolved) == "" {
+			loud++
+		}
+	}
+	if n == 0 {
+		return "", ""
+	}
+	l := fmt.Sprintf("ALERTS %s %d of %d alerts missing from this reading, kept until the next reading confirms them resolved", installation, n, shown)
+	if loud == 0 {
+		return "", l + " (quiet: every one quiet)"
+	}
+	return l, ""
+}
+
+// refired splits the alerts back into those that resolved within the
+// damper's window, each with its start before it resolved, and the rest. A
+// repeat with its old start stays with the rest, quiet (Repeat).
+func (r Rules) refired(installation string, back map[string]Alert, resolved map[string]Resolved) (refired, rest map[string]Alert) {
+	if r.Flap.Changes < 2 {
+		return nil, back
+	}
+	refired, rest = map[string]Alert{}, map[string]Alert{}
+	for fp, a := range back {
+		p, ok := resolved[fp]
+		if !ok || r.quiet(installation, New, fp, a, resolved) == Repeat {
+			rest[fp] = a
+			continue
+		}
+		a.Since = cmp.Or(p.Since, a.Since)
+		refired[fp] = a
+	}
+	return refired, rest
 }
 
 // unseen says since when an unreachable installation's alerts are unseen.
@@ -453,6 +544,27 @@ func (d Damper) damp(flaps map[string]*Flap, changed map[string]Alert, now time.
 		}
 	}
 	return print, flapping
+}
+
+// refire records the change of every alert that fired again after it
+// resolved within the window and returns those that start flapping now: a
+// resolve and a re-fire within the window is flapping, said once with the
+// alert's first start, and its changes print nothing until it has been
+// stable for the window.
+func (d Damper) refire(flaps map[string]*Flap, refired map[string]Alert, now time.Time) (flapping []Alert) {
+	for fp, a := range refired {
+		f := flaps[fp]
+		if f == nil {
+			f = &Flap{}
+			flaps[fp] = f
+		}
+		f.Changes = append(slices.DeleteFunc(f.Changes, func(t time.Time) bool { return now.Sub(t) >= d.Window }), now)
+		if !f.Flapping {
+			f.Flapping = true
+			flapping = append(flapping, a)
+		}
+	}
+	return flapping
 }
 
 func (r Rules) firstLook(installation string, current Set, now time.Time) []string {
