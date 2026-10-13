@@ -11,9 +11,9 @@ import (
 	"testing"
 )
 
-// TestRealSOPSRevealUnset reveals configuration from and unsets keys in a
-// Helm values patch (*.yaml.patch, a name sops types as binary) with the
-// real sops and a throwaway age key, where both are installed: the file
+// TestRealSOPSRevealUnset reveals configuration from and unsets keys, one
+// holding a dot, in a Helm values patch (*.yaml.patch, a name sops types
+// as binary) with the real sops and a throwaway age key, where both are installed: the file
 // keeps its recipient, gets a new MAC, and decrypts without the keys.
 func TestRealSOPSRevealUnset(t *testing.T) {
 	for _, bin := range []string{sopsBin, ageKeygen} {
@@ -40,7 +40,7 @@ func TestRealSOPSRevealUnset(t *testing.T) {
 	ctx := context.Background()
 	patch := filepath.Join(dir, "secret-values.yaml.patch")
 	doc, err := parseDocument([]byte("oidc:\n  extraStaticClients:\n    - id: kagent\n      secret: " + secretValue +
-		"\n      redirectURIs:\n        - https://kagent.example.org/callback\n  staticClients:\n    muster:\n      id: muster\n      secret: " + secretValue + "\nissuer: https://dex.example.org\n"))
+		"\n      redirectURIs:\n        - https://kagent.example.org/callback\n  staticClients:\n    muster:\n      id: muster\n      secret: " + secretValue + "\n  config.json: '{}'\nissuer: https://dex.example.org\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestRealSOPSRevealUnset(t *testing.T) {
 	if err != nil || len(fs) != 2 || fs[0].Value != "kagent" || fs[1].Value != "https://kagent.example.org/callback" {
 		t.Fatalf("reveal = %+v, %v", fs, err)
 	}
-	res, err := o.Unset(ctx, patch, []string{"oidc.extraStaticClients", "oidc.staticClients.muster.secret"}, true)
+	res, err := o.Unset(ctx, patch, []string{"oidc.extraStaticClients", "oidc.staticClients.muster.secret", "oidc.config.json"}, true)
 	if err != nil || !res.Written {
 		t.Fatalf("unset = %+v, %v", res, err)
 	}

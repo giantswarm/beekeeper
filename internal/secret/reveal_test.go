@@ -295,6 +295,39 @@ func TestUnsetListItems(t *testing.T) {
 	}
 }
 
+func TestUnsetAKeyHoldingADot(t *testing.T) {
+	ctx := context.Background()
+	const index = `["stringData"]["credentials.json"]`
+	for _, paths := range [][]string{{dottedKey[0]}, {dottedKey[1]}, {dottedKey[2]}, dottedKey} {
+		tools := secrettest.New(nil)
+		_, src := dottedKeyScratch(t)
+		res, err := ops(tools).Unset(ctx, src, paths, true)
+		if err != nil || !res.Written || len(res.Removed) != 1 || !slices.Contains(paths, res.Removed[0]) || len(res.Absent) != 0 {
+			t.Fatalf("unset %q = %+v, %v", paths, res, err)
+		}
+		if want := []string{"kind", "metadata.name", "stringData.tls.crt"}; !slices.Equal(res.Kept, want) {
+			t.Errorf("unset %q kept %v", paths, res.Kept)
+		}
+		noValue(t, "unset", res)
+		unsets := slices.DeleteFunc(slices.Clone(tools.Calls), func(c string) bool { return !strings.HasPrefix(c, "sops unset") })
+		if len(unsets) != 1 || !strings.HasSuffix(unsets[0], " "+index) {
+			t.Errorf("unset %q calls %q", paths, unsets)
+		}
+		if got := decrypted(t, tools, src); strings.Contains(got, "credentials.json") || !strings.Contains(got, "tls.crt") {
+			t.Errorf("after unset %q:\n%s", paths, got)
+		}
+	}
+	tools := secrettest.New(nil)
+	_, src := dottedKeyScratch(t)
+	res, err := ops(tools).Unset(ctx, src, dottedKeyAbsent, true)
+	if err != nil || res.Written || len(res.Removed) != 0 || !slices.Equal(slices.Sorted(slices.Values(res.Absent)), slices.Sorted(slices.Values(dottedKeyAbsent))) {
+		t.Errorf("unset of absent keys = %+v, %v", res, err)
+	}
+	if slices.ContainsFunc(tools.Calls, func(c string) bool { return strings.HasPrefix(c, "sops unset") }) {
+		t.Error("unset of absent keys ran sops unset")
+	}
+}
+
 // TestDexSplitFlow is the dex split with --vault beekeeper --write as the
 // tool runs it: the configuration revealed, each secret copied into a
 // Secret file of its own, the moved keys unset from the patch.
