@@ -46,6 +46,8 @@ func TestBuildCPULine(t *testing.T) {
 const (
 	deadSID = "11111111-dead-4000-8000-000000000000"
 	liveSID = "22222222-a11e-4000-8000-000000000000"
+	// workDir is the live sessions' working folder.
+	workDir = "/work"
 )
 
 // fixture writes a file of kib KiB under root/rel, touched age ago.
@@ -75,7 +77,7 @@ func newRun(t *testing.T, o Options) (*Run, *bytes.Buffer) {
 			Scratch:  filepath.Join(tmp, "claude-1000"),
 			Projects: filepath.Join(tmp, "projects"),
 			Table:    &proc.Table{ByPID: map[int]*proc.Process{}},
-			Sessions: []*claude.Session{{PID: 4242, ID: liveSID, Name: "Agent one", Cwd: "/work"}},
+			Sessions: []*claude.Session{{PID: 4242, ID: liveSID, Name: "Agent one", Cwd: workDir}},
 			Desk:     &state.State{},
 			Records: func() map[string]*claude.Record {
 				return map[string]*claude.Record{deadSID: {SessionID: "local_dead", Title: "Finished work"}}
@@ -186,7 +188,7 @@ func TestFreeKeepsTheLiveAndRemovesTheDead(t *testing.T) {
 				if pid != 7 {
 					return nil
 				}
-				return []string{"/work", filepath.Join(r.TmpDir, dir, "out.log")}
+				return []string{workDir, filepath.Join(r.TmpDir, dir, "out.log")}
 			}
 		}
 	}

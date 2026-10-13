@@ -58,7 +58,7 @@ func tmpfsApp(t *testing.T) (*app, func() (free.Machine, error), string) {
 			Scratch:  filepath.Join(tmp, "claude-1000"),
 			Projects: filepath.Join(tmp, "projects"),
 			Table:    &proc.Table{ByPID: map[int]*proc.Process{}},
-			Sessions: []*claude.Session{{PID: 4242, ID: tmpfsLive, Name: "Agent one"}},
+			Sessions: []*claude.Session{{PID: 4242, ID: tmpfsLive, Name: agentOne}},
 			Desk:     &state.State{},
 			Now:      now,
 		}, nil

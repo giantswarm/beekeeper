@@ -272,7 +272,7 @@ func TestSelfUpdateCheck(t *testing.T) {
 // live session's name, not the user@host holder field.
 func TestHookNamesLeaseHoldersAsLeaseList(t *testing.T) {
 	a := &app{}
-	sessions := []*claude.Session{{PID: 7, ID: "s-1", Name: "Agent one"}}
+	sessions := []*claude.Session{{PID: 7, ID: "s-1", Name: agentOne}}
 	hs := []lease.Holder{
 		{Env: "kind-1", Holder: "teemow@lab", Session: "s-1", Purpose: "e2e", Since: "2026-09-25T10:00:00Z"},
 		{Env: "kind-2", Holder: "teemow@lab", Purpose: "by hand", Since: "2026-09-25T11:00:00Z"},
