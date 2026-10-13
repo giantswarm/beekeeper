@@ -2164,8 +2164,9 @@ session with no running CLI passes to the desktop, which starts it.
 Claude Code loads the instructions of the project a session started in, not those of another
 repository the session goes on to change. The hook closes that gap: a session's first `Edit`,
 `Write` or `NotebookEdit`, or first `git commit` (in the call's directory, behind `cd <dir> &&`
-or with `git -C <dir>`), in a git repository other than `$CLAUDE_PROJECT_DIR` carries that
-repository's instructions as `additionalContext`, once per session, subagent and repository:
+or with `git -C <dir>`), in a git repository other than `$CLAUDE_PROJECT_DIR` (its worktrees
+included) carries that repository's instructions as `additionalContext`, once per session,
+subagent and repository:
 
 - `CLAUDE.md`, `AGENTS.md` and `.claude/CLAUDE.md`, with their `@path` imports three levels deep;
 - `.claude/rules/**/*.md`;

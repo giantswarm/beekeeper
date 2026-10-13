@@ -170,8 +170,50 @@ func RepoRoot(p string) string {
 	}
 }
 
+// gitCommonDir is the git directory the checkout at root shares with its
+// worktrees: .git itself, or the commondir of the gitdir a worktree's .git
+// file names; "" when root's .git is unreadable. It reads only the file
+// system, never runs git.
+func gitCommonDir(root string) string {
+	dot := filepath.Join(root, ".git")
+	info, err := os.Stat(dot)
+	if err != nil {
+		return ""
+	}
+	dir := dot
+	if !info.IsDir() {
+		raw, err := os.ReadFile(dot) //nolint:gosec // a repository's own .git file
+		if err != nil {
+			return ""
+		}
+		g, ok := strings.CutPrefix(strings.TrimSpace(string(raw)), "gitdir:")
+		if !ok {
+			return ""
+		}
+		dir = within(root, strings.TrimSpace(g))
+		if c, err := os.ReadFile(filepath.Join(dir, "commondir")); err == nil { //nolint:gosec // git's own pointer file
+			dir = within(dir, strings.TrimSpace(string(c)))
+		}
+	}
+	if r, err := filepath.EvalSymlinks(dir); err == nil {
+		return r
+	}
+	return filepath.Clean(dir)
+}
+
+// sameRepo reports whether the checkouts at the RepoRoots a and b are one
+// repository: the same top, or worktrees sharing one git directory.
+func sameRepo(a, b string) bool {
+	if a == b || a == "" || b == "" {
+		return a == b
+	}
+	c := gitCommonDir(a)
+	return c != "" && c == gitCommonDir(b)
+}
+
 // repoReads is the context for a writing call's first write in a repository
-// other than the session's project, "" otherwise.
+// other than the session's project, "" otherwise; a worktree of the project
+// is the project, whose instructions the session loaded at its start.
 func (h Hook) repoReads(ev event) string {
 	if h.Reads == nil || ev.Session == "" {
 		return ""
@@ -185,7 +227,7 @@ func (h Hook) repoReads(ev event) string {
 	if project == "" {
 		project = cwd
 	}
-	if repo == "" || repo == RepoRoot(project) {
+	if repo == "" || sameRepo(repo, RepoRoot(project)) {
 		return ""
 	}
 	who := ev.Session
