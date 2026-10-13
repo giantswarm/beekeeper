@@ -1372,9 +1372,11 @@ and its parent while it runs and one `ENDED` line when it ends, `doctor` lists i
 merge`, and `snapshot` marks the wait `ungated`. Nothing stops it: a merge runs as its own Bash
 command line, which the hook gates.
 
-A merge of giantswarm/devctl opens a tool-release window by itself: a `merges` hold with
-giantswarm/devctl excepted, since the release makes every in-flight devctl run refuse until
-updated. It lifts once no devctl merge runs and the local `devctl version` reports the window's
+A merge or promotion of giantswarm/devctl opens a tool-release window by itself: a `merges` hold
+with giantswarm/devctl excepted, since the release makes every in-flight devctl run refuse until
+updated. A merge that releases only a candidate (`vX.Y.Z-rc.N`) lifts it once recorded: `devctl
+version update` installs only a stable release, so no devctl run outdates, and the candidate's
+promotion opens the window anew. Otherwise it lifts once no devctl merge runs and the local `devctl version` reports the window's
 release (another version than when the window opened, while the release is unknown), or once its
 pull request did not merge: the gate lifts it
 after a run with nothing merged or no release warranted, and `watch` (or the next gate call) asks

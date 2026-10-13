@@ -242,10 +242,11 @@ type Hold struct {
 	Except string `json:"except,omitempty"`
 	// Tool is the binary whose release window this hold is, ToolFrom the
 	// version it reported when the window opened, ToolPR the pull request
-	// that opened it, ToolMerged whether it merged and ToolRelease the release
-	// it produced. The window closes once the tool reports another version
-	// than ToolFrom and no merge of its repository runs, or once its merge
-	// ended with nothing merged or no release warranted. ToolUpdated is when
+	// that opened it (0 for a promotion), ToolMerged whether it merged and
+	// ToolRelease the release it produced. The window closes once the tool
+	// reports another version than ToolFrom and no merge of its repository
+	// runs, or once its merge ended with nothing merged, no release warranted
+	// or only a release candidate. ToolUpdated is when
 	// beekeeper last ran the tool's update for a merged window, ToolChecked
 	// when a gate or the watch last claimed the read of the window's state
 	// (the tool's version, its pull request), which they share.
