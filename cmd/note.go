@@ -51,10 +51,15 @@ asking back: --status-quo and --why, every
 --option as "<choice>: <consequence>", a --default that is an action (not
 "wait" or "none"), the full URL of every #N or owner/repo#N it names, and
 --checked "<source>" for a claim that something is merged, green,
-released, rolled or closed. A note that links an open pull request of a
-plans repository (plans.repositories) is refused while that pull request's
-stage check (plans.check, default plan-stages) is red, pending or missing,
-naming what the check found. A checked note on an issue or PR that an open
+released, rolled or closed. A note that links a pull request of a plans
+repository (plans.repositories) is admitted when that pull request is
+merged, or open with its stage check (plans.check, default plan-stages)
+green or red only for missing stage outputs ("<plan>: <stage> missing"):
+the grill stage, a revision awaiting its passes or a plan sent back by a
+SIMPLIFY or KILL verdict, whose output is questions for the person. It is
+refused, naming the stage and what would admit it, while the pull request
+is closed, the check is pending or missing on the head, or red for
+anything else (the PRD fails its own check). A checked note on an issue or PR that an open
 note for the same person names, asking the same verb (the first word of
 the text), folds into that note (note.folded). A --kind login note closes
 once its --until probe, a shell command the watch runs every tick, exits 0.
@@ -121,12 +126,17 @@ and tells the session that filed it.`,
 			checked := forWho != "" && n.Kind != noteMemo && guides(person, &n)
 			if checked {
 				m := draft.missing()
-				stages, err := planStages(cmd.Context(), a.cfg.Plans, draft.text())
+				stages, grill, err := planStages(cmd.Context(), a.cfg.Plans, draft.text())
 				if err != nil {
 					return err
 				}
 				if m = append(m, stages...); len(m) > 0 {
 					return usageErr("note for %s refused, it lacks: %s", forWho, strings.Join(m, "; "))
+				}
+				for _, g := range grill {
+					if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "admitted: %s; the note carries its questions for %s\n", g, forWho); err != nil {
+						return err
+					}
 				}
 			} else if m := draft.unanswered(); n.Kind == noteDecision && len(m) > 0 {
 				return usageErr("decision for %s refused, it lacks: %s", forWho, strings.Join(m, "; "))

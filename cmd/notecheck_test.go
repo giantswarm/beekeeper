@@ -154,12 +154,24 @@ func TestLoginNoteClosesOnceItsProbePasses(t *testing.T) {
 	}
 }
 
-func TestNoteOnAPlanPullNeedsItsStageCheckGreen(t *testing.T) {
+func TestNoteOnAPlanPullNeedsItsStageCheckGreenOrAtTheGrillStage(t *testing.T) {
+	red := func(job string) string {
+		return `{"state":"OPEN","statusCheckRollup":[{"__typename":"CheckRun","name":"plan-stages","status":"COMPLETED","conclusion":"FAILURE","detailsUrl":"https://github.com/o/plans/actions/runs/1/job/` + job + `"}]}`
+	}
 	rollups := map[string]string{
 		"1": `{"state":"OPEN","statusCheckRollup":[]}`,
-		"2": `{"state":"OPEN","statusCheckRollup":[{"__typename":"CheckRun","name":"plan-stages","status":"COMPLETED","conclusion":"FAILURE","detailsUrl":"https://github.com/o/plans/actions/runs/1/job/9"}]}`,
+		"2": red("2"),
 		"3": `{"state":"OPEN","statusCheckRollup":[{"__typename":"CheckRun","name":"plan-stages","status":"COMPLETED","conclusion":"SUCCESS"}]}`,
 		"4": `{"state":"MERGED","statusCheckRollup":[]}`,
+		"5": red("5"),
+		"6": red("6"),
+		"7": `{"state":"OPEN","statusCheckRollup":[{"__typename":"CheckRun","name":"plan-stages","status":"IN_PROGRESS","detailsUrl":"https://github.com/o/plans/actions/runs/1/job/7"}]}`,
+		"8": `{"state":"CLOSED","statusCheckRollup":[]}`,
+	}
+	annotations := map[string]string{
+		"2": `["p: index.html missing: the last p/index.html (2433d45) is older than the PRD's last change (350fb6c)","p: contrarian missing: this pull request changes p/PRD.md and no p/contrarian"]`,
+		"5": `["p: index.html missing: no p/index.html","p: PRD.md has no ### Slices table"]`,
+		"6": `[]`,
 	}
 	var calls []string
 	prev := notesGH
@@ -167,31 +179,40 @@ func TestNoteOnAPlanPullNeedsItsStageCheckGreen(t *testing.T) {
 	notesGH = func(_ context.Context, args ...string) ([]byte, error) {
 		calls = append(calls, strings.Join(args, " "))
 		if args[0] == "api" {
-			return []byte(`["p: website missing: no p/index.html"]`), nil
+			return []byte(annotations[strings.Split(args[1], "/")[4]]), nil
 		}
 		return []byte(rollups[args[2]]), nil
 	}
-	a, _ := noteApp(t)
+	a, out := noteApp(t)
 	a.cfg.Plans = config.Plans{Repositories: []string{"O/Plans"}, Check: config.DefaultPlansCheck}
 	add := func(url string) error {
-		return addNote(a, "--for", notePerson, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "--due", "3h", "approve the revision "+url+"?")
+		return addNote(a, "--for", notePerson, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "--due", "3h", "decide the grill question on "+url+"?")
 	}
 	plan := "https://github.com/o/plans/pull/"
-	if err := add(plan + "1"); Code(err) != ExitUsage || !strings.Contains(err.Error(), "a green plan-stages check on "+plan+"1 (none on its head)") {
-		t.Fatalf("no check on the head: %v", err)
+	refusals := map[string]string{
+		"1": "a plan-stages check on " + plan + "1 (none on its head): a run on the head, green, or red only for missing stage outputs (the grill stage), admits the note",
+		"5": "a PRD that passes its plan-stages check on " + plan + "5 (red at the PRD itself, not a missing stage output: p: index.html missing: no p/index.html; p: PRD.md has no ### Slices table, https://github.com/o/plans/actions/runs/1/job/5): a fixed PRD,",
+		"6": "(red at the PRD itself, not a missing stage output: no finding, https://github.com/o/plans/actions/runs/1/job/6)",
+		"7": "a finished plan-stages check on " + plan + "7 (pending, https://github.com/o/plans/actions/runs/1/job/7): its outcome,",
+		"8": "an open plan pull request: " + plan + "8 is closed; reopened, its plan-stages check is read again",
 	}
-	if err := add(plan + "2"); Code(err) != ExitUsage || !strings.Contains(err.Error(), "(red: p: website missing: no p/index.html, https://github.com/o/plans/actions/runs/1/job/9)") {
-		t.Fatalf("a red check names the missing stage: %v", err)
-	}
-	for _, url := range []string{plan + "3", plan + "4", prURL} {
-		if err := add(url); err != nil {
-			t.Fatalf("%s: a green check, a merged plan or another repository: %v", url, err)
+	for n, want := range refusals {
+		if err := add(plan + n); Code(err) != ExitUsage || !strings.Contains(err.Error(), want) {
+			t.Fatalf("%s: refused naming the stage and what admits it: %v", n, err)
 		}
+	}
+	for _, url := range []string{plan + "2", plan + "3", plan + "4", prURL} {
+		if err := add(url); err != nil {
+			t.Fatalf("%s: the grill stage, a green check, a merged plan or another repository: %v", url, err)
+		}
+	}
+	if want := "admitted: " + plan + "2 is at its grill stage (plan-stages red only for missing stage outputs: p: index.html missing:"; !strings.Contains(out.String(), want) {
+		t.Fatalf("the admitted grill stage is named: %q", out.String())
 	}
 	if err := addNote(a, "a memo on "+plan+"1"); err != nil {
 		t.Fatalf("a memo is not checked: %v", err)
 	}
-	if len(calls) != 5 {
-		t.Fatalf("one read per plans pull request and one for the red check's annotations: %q", calls)
+	if len(calls) != 11 {
+		t.Fatalf("one read per plans pull request and one per red check's annotations: %q", calls)
 	}
 }
