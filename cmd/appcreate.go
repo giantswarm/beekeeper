@@ -665,13 +665,26 @@ var githubClient = &http.Client{Timeout: 30 * time.Second}
 // githubRequest is one API call with GitHub's headers; auth is the
 // Authorization header, "" for none.
 func githubRequest(ctx context.Context, method, path, auth string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, method, githubAPI+path, nil)
+	return githubSend(ctx, method, githubAPI+path, "application/vnd.github+json", auth, nil)
+}
+
+// githubSend is githubRequest to any GitHub URL, accepting accept, with a
+// form body when form is non-nil.
+func githubSend(ctx context.Context, method, target, accept, auth string, form url.Values) (*http.Response, error) {
+	var body io.Reader
+	if form != nil {
+		body = strings.NewReader(form.Encode())
+	}
+	req, err := http.NewRequestWithContext(ctx, method, target, body)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Accept", accept)
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("User-Agent", project.Name)
+	if form != nil {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
 	if auth != "" {
 		req.Header.Set("Authorization", auth)
 	}
@@ -788,8 +801,9 @@ func installURL(slug string, orgID int64, repoIDs []int64) string {
 
 // installation is what GitHub says of one installation of the App.
 type installation struct {
-	ID                  int64  `json:"id"`
-	RepositorySelection string `json:"repository_selection"`
+	ID                  int64   `json:"id"`
+	RepositorySelection string  `json:"repository_selection"`
+	SuspendedAt         *string `json:"suspended_at"`
 	Account             struct {
 		Login string `json:"login"`
 	} `json:"account"`
