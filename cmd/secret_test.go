@@ -388,8 +388,13 @@ func TestBrokeredSecretRefusesADirectoryTheSandboxCloses(t *testing.T) {
 	t.Setenv(sandbox.Brokered, "1")
 	src := filepath.Join(repo, "db.sops.yaml")
 	t.Chdir(home)
+	// the directory as the call sees it (macOS's /var is /private/var's link)
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
 	out, err := runSecret(a, fingerprintOp, src)
-	if dir, _ := filepath.EvalSymlinks(home); Code(err) != ExitRefused || !strings.Contains(err.Error(), dir+": the agent sandbox does not let this session work in this directory") {
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), dir+": the agent sandbox does not let this session work in this directory") {
 		t.Errorf("a call in the home directory: exit %d, %v", Code(err), err)
 	}
 	noSecret(t, "a refused call", out)
