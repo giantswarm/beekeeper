@@ -655,6 +655,74 @@ func TestADevctlMergeWaitsForThePreviousRelease(t *testing.T) {
 	}
 }
 
+// A devctl merge that releases only a candidate lifts its window once
+// recorded: devctl version update never installs a candidate, so the window
+// would hold every other merge until lifted by hand.
+func TestACandidateToolMergeLiftsItsWindow(t *testing.T) {
+	stubGitHub(t, github.Merged, devctlFrom)
+	g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
+	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+		return recordRun(st, 0, g.lane, g.me, runOutcome{out: merge.Outcome{Merged: true, Release: devctlTo + "-rc.1"}}, time.Now(), ""), nil
+	})
+	if st := gateState(t, g); len(st.Holds) != 0 {
+		t.Fatalf("window left: %+v", st.Holds)
+	}
+	if d := lastEvent(t, g, "hold.lift"); !strings.Contains(d, "released the candidate "+devctlTo+"-rc.1") {
+		t.Errorf("hold.lift event: %q", d)
+	}
+}
+
+// A promotion of devctl opens the window and holds the other merges until
+// devctl reports the stable release; one that ends without its document,
+// with no pull request to ask, lifts it.
+func TestAToolPromotionHoldsUntilDevctlReportsItsRelease(t *testing.T) {
+	stubGitHub(t, github.Merged, devctlFrom)
+	version := devctlFrom + "-rc.1"
+	devctlVersion = func(context.Context) string { return version }
+	devctlUpdate = func(context.Context) error { return nil }
+	promotion := func(t *testing.T) *gateRun {
+		g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
+		g.pr = 0
+		_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+			st.Merges[0].PR, st.Holds[0].ToolPR = 0, 0
+			return nil, nil
+		})
+		return g
+	}
+
+	g := promotion(t)
+	if !g.toolMerge() {
+		t.Fatal("a promotion of devctl opens no window")
+	}
+	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+		return recordRun(st, 0, g.lane, g.me, runOutcome{out: merge.Outcome{Merged: true, Release: devctlTo}}, time.Now(), ""), nil
+	})
+	g.closeToolWindow(context.Background(), watchParty)
+	st := gateState(t, g)
+	if len(st.Holds) != 1 || !st.Holds[0].ToolMerged || st.Holds[0].ToolRelease != devctlTo {
+		t.Fatalf("before devctl reports %s: holds %+v", devctlTo, st.Holds)
+	}
+	if _, ok := merge.Blocking(st, time.Now(), "giantswarm/backstage", 8, config.Lane{Name: "portal-tools"}); !ok {
+		t.Error("the promotion's window lets another merge through")
+	}
+	version = devctlTo
+	g.closeToolWindow(context.Background(), watchParty)
+	if st := gateState(t, g); len(st.Holds) != 0 {
+		t.Fatalf("after devctl reports %s: holds %+v", devctlTo, st.Holds)
+	}
+
+	g = promotion(t)
+	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+		return recordRun(st, 0, g.lane, g.me, runOutcome{rc: 1, unanswered: errors.New("no pull request")}, time.Now(), ""), nil
+	})
+	if st := gateState(t, g); len(st.Holds) != 0 {
+		t.Fatalf("an undocumented promotion left its window: %+v", st.Holds)
+	}
+	if d := lastEvent(t, g, "hold.lift"); !strings.Contains(d, "ended without its document") {
+		t.Errorf("hold.lift event: %q", d)
+	}
+}
+
 // A merged window stays until devctl reports its release: another version
 // than the window's opening one is not enough.
 func TestAMergedToolWindowWaitsForItsRelease(t *testing.T) {

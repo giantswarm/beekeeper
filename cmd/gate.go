@@ -922,8 +922,8 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 			return nil, nil
 		case g.toolMerge() && w >= 0:
 			h := st.Holds[w]
-			why = fmt.Sprintf("next in lane %s, waiting for %s to report %s, the release of %s#%d (its window lifts then)",
-				g.lane.Name, merge.Tool, h.ToolRelease, merge.ToolRepo, h.ToolPR)
+			why = fmt.Sprintf("next in lane %s, waiting for %s to report %s, the release of %s (its window lifts then)",
+				g.lane.Name, merge.Tool, h.ToolRelease, toolKey(h))
 			return nil, nil
 		}
 		if n := devctlRuns(st); n >= g.cfg.Merge.Cap {
@@ -954,7 +954,7 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 		if g.toolMerge() {
 			st.Holds = slices.DeleteFunc(st.Holds, func(h state.Hold) bool { return h.Target == merge.AllMerges })
 			h := state.Hold{Target: merge.AllMerges, Except: merge.ToolRepo, By: g.me, At: g.now.UTC(), Tool: merge.Tool, ToolFrom: toolFrom,
-				ToolPR: g.pr, Reason: fmt.Sprintf("the devctl release window: %s#%d merges and every devctl run refuses until updated; the gate runs `devctl version update` once it released and lifts this once `devctl version` reports the release", g.repo, g.pr)}
+				ToolPR: g.pr, Reason: fmt.Sprintf("the devctl release window: %s runs and every devctl run refuses until updated; the gate runs `devctl version update` once it released and lifts this once `devctl version` reports the release, or at a release candidate, which no update installs", g.key())}
 			st.Holds = append(st.Holds, h)
 			ev = append(ev, event(g.me, "hold.set", "%s except %s until devctl is updated: %s", h.Target, h.Except, h.Reason))
 		}
@@ -1344,9 +1344,9 @@ func parseOutcome(pr int, doc []byte) (merge.Outcome, bool) {
 	return merge.ParseDocument(doc)
 }
 
-// toolMerge says whether the gate merges the merge tool's own repository,
-// which opens the tool-release window.
-func (g *gateRun) toolMerge() bool { return g.pr != 0 && strings.EqualFold(g.repo, merge.ToolRepo) }
+// toolMerge says whether the gate merges or promotes the merge tool's own
+// repository, which opens the tool-release window.
+func (g *gateRun) toolMerge() bool { return strings.EqualFold(g.repo, merge.ToolRepo) }
 
 // runsDevctl says whether the gated command runs devctl: a promotion, or a
 // merge of a repository devctl serves; any other merge takes the plain
@@ -1403,8 +1403,9 @@ type runOutcome struct {
 // no installation to roll leaves it (in that lane once its release is known),
 // so does one with nothing merged (its
 // place dies with its run), and one nothing could judge settles by the
-// settle rule. A devctl merge's release window records the merge, or lifts
-// when nothing merged. It returns the events, with note appended.
+// settle rule. A devctl merge's or promotion's release window records the
+// release, or lifts when nothing merged, when the release is a candidate (no
+// update installs it) or when a promotion ended without its document. It returns the events, with note appended.
 func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOutcome, now time.Time, note string) []state.Event {
 	m := &st.Merges[i]
 	key, repo, pr, out, rc, handCut := m.Key(), m.Repo, m.PR, r.out, r.rc, m.HandCut
@@ -1423,7 +1424,7 @@ func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOu
 	default:
 		st.Merges = slices.Delete(st.Merges, i, i+1)
 	}
-	if strings.EqualFold(repo, merge.ToolRepo) && pr != 0 && r.unanswered == nil {
+	if strings.EqualFold(repo, merge.ToolRepo) && (r.unanswered == nil || pr == 0) {
 		for j, h := range st.Holds {
 			if h.Tool != "" && out.Merged {
 				st.Holds[j].ToolRelease, st.Holds[j].ToolMerged = out.Release, true
@@ -1431,12 +1432,19 @@ func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOu
 		}
 		why := ""
 		switch {
+		case r.unanswered != nil:
+			why = "ended without its document, no pull request to ask: the next devctl run updates devctl first"
 		case !out.Merged:
 			why = "merged nothing"
+			if pr == 0 {
+				why = "promoted nothing"
+			}
 		case out.NoRelease:
 			why = "warranted no release"
 		case handCut != "":
 			why = "awaits no release, " + handCut + " has no auto-release"
+		case merge.PreRelease(out.Release):
+			why = "released the candidate " + out.Release + ", which `devctl version update` never installs: its promotion opens the window anew"
 		}
 		if why != "" {
 			st.Holds = slices.DeleteFunc(st.Holds, func(h state.Hold) bool {
@@ -1515,6 +1523,9 @@ func (a *app) pollToolWindow(ctx context.Context, by state.Party) {
 		a.closeToolWindow(ctx, by)
 	}
 }
+
+// toolKey names the merge or promotion that opened the tool-release window h.
+func toolKey(h state.Hold) string { return state.Merge{Repo: merge.ToolRepo, PR: h.ToolPR}.Key() }
 
 // toolWindowOpen says a tool-release window is open and no merge of the
 // tool's repository runs: its state decides whether it lifts.
