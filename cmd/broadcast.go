@@ -58,7 +58,7 @@ every agent learns the name to report to.`,
 			if len(told) > 0 {
 				line += ": " + strings.Join(told, ", ")
 			}
-			_ = a.store.Log(event(by, "agents."+broadcastName, "%s: %s", line, truncate(msg, 100)))
+			_ = a.store.Record(event(by, "agents."+broadcastName, "%s: %s", line, truncate(msg, 100)))
 			_, err = fmt.Fprintln(a.out, line)
 			return err
 		},

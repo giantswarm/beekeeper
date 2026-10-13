@@ -150,17 +150,23 @@ about credentials is named by its issue only.`,
 }
 
 // reportTime parses a window bound in zone: RFC 3339, "15:04" (the last
-// such time at or before ref) or, for --since, a duration before ref.
+// such time at or before ref) or, for --since, a duration before ref (1h,
+// or days: 30d).
 func reportTime(ref time.Time, s string, zone *time.Location) (time.Time, error) {
 	if d, err := time.ParseDuration(s); err == nil {
 		return ref.Add(-d), nil
+	}
+	if days, ok := strings.CutSuffix(s, "d"); ok {
+		if n, err := strconv.Atoi(days); err == nil && n >= 0 {
+			return ref.AddDate(0, 0, -n), nil
+		}
 	}
 	if t, err := time.Parse(time.RFC3339, s); err == nil {
 		return t, nil
 	}
 	t, err := time.ParseInLocation("15:04", s, zone)
 	if err != nil {
-		return time.Time{}, usageErr("%q is neither a time (15:04, RFC 3339) nor a duration (1h)", s)
+		return time.Time{}, usageErr("%q is neither a time (15:04, RFC 3339) nor a duration (1h, 30d)", s)
 	}
 	r := ref.In(zone)
 	t = time.Date(r.Year(), r.Month(), r.Day(), t.Hour(), t.Minute(), 0, 0, zone)

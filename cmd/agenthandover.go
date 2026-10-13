@@ -60,7 +60,7 @@ follow-up session's prompt.`,
 			case len(text) > maxNote:
 				return usageErr("the note has %d bytes, more than %d", len(text), maxNote)
 			}
-			if err := a.store.Log(event(me, verbNote, "%s", text)); err != nil {
+			if err := a.store.Record(event(me, verbNote, "%s", text)); err != nil {
 				return err
 			}
 			_, err = fmt.Fprintf(a.out, "noted for the hand-over of %s\n", me.Name)
@@ -395,7 +395,7 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 	}
 	a.say("%s", a.archiveHandedOver(ctx, me, ag.Party, sa.id))
 	took := time.Since(began)
-	if err := a.store.Log(event(me, "agents.handover", "%s: session %s at %s tokens to %s, %s, in %s",
+	if err := a.store.Record(event(me, "agents.handover", "%s: session %s at %s tokens to %s, %s, in %s",
 		ag.Name, ag.Session, tokensText(h.context), sa.id, noted, dur(took))); err != nil {
 		return err
 	}

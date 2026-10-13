@@ -31,11 +31,12 @@ func TestWakeOmp(t *testing.T) {
 	var out bytes.Buffer
 	a := &app{cfg: &config.Config{StateDir: dir}, store: store, out: &out}
 	ag := state.Agent{Party: state.Party{HostSession: omp.HostPrefix + id, Name: "test: omp"}}
+	by := state.Party{Name: "test"}
 	inbox := omp.InboxPath(dir, id)
 	if err := omp.MakeInbox(inbox); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.wakeOmp(state.Party{Name: "test"}, ag, id, "hello"); err == nil || !strings.Contains(err.Error(), "no longer runs") {
+	if err := a.wakeOmp(by, ag, id, "hello"); err == nil || !strings.Contains(err.Error(), "no longer runs") {
 		t.Fatalf("wake with no reader = %v, want the refusal", err)
 	}
 	r, err := os.OpenFile(inbox, os.O_RDWR, 0) //nolint:gosec // the test's inbox
@@ -43,7 +44,7 @@ func TestWakeOmp(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = r.Close() }()
-	if err := a.wakeOmp(state.Party{Name: "test"}, ag, id, "hello"); err != nil {
+	if err := a.wakeOmp(by, ag, id, "hello"); err != nil {
 		t.Fatal(err)
 	}
 	if line, _ := bufio.NewReader(r).ReadString('\n'); !strings.Contains(line, `"message":"hello"`) {
@@ -51,6 +52,14 @@ func TestWakeOmp(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "written to its inbox") {
 		t.Fatalf("output %q", out.String())
+	}
+	// A busy state lock delays the agents.wake event, never drops it.
+	a.store = busyStore{store}
+	if err := a.wakeOmp(by, ag, id, "again"); err != nil {
+		t.Fatal(err)
+	}
+	if evs, err := store.Events(0, func(e state.Event) bool { return e.Verb == "agents.wake" }); err != nil || len(evs) != 2 {
+		t.Errorf("agents.wake events under a busy lock = %+v, %v; want both wakes", evs, err)
 	}
 }
 

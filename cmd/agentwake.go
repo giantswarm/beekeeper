@@ -138,7 +138,7 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 		if _, err := (peer.Sender{Dir: a.cfg.StateDir}).Send(ctx, name, msg); err != nil {
 			return fmt.Errorf("waking %s: %w", ag.Name, err)
 		}
-		_ = a.store.Log(event(by, "agents.wake", "%s: sent by name to its running CLI %d", ag.Name, s.PID))
+		_ = a.store.Record(event(by, "agents.wake", "%s: sent by name to its running CLI %d", ag.Name, s.PID))
 		_, err = fmt.Fprintf(a.out, "wake: %s runs (CLI %d): sent by name, it runs the message at its next tool call or as its next turn\n", ag.Name, s.PID)
 		return err
 	}
@@ -146,7 +146,7 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 		return refused("%s: its wake turn %s is starting and not yet reachable by name: send again in a minute", ag.Name, u)
 	}
 	if line, err := a.turnInDesktop(ctx, w, msg, 0); err == nil {
-		_ = a.store.Log(event(by, "agents.wake", "%s: %s", ag.Name, line))
+		_ = a.store.Record(event(by, "agents.wake", "%s: %s", ag.Name, line))
 		_, err = fmt.Fprintf(a.out, "wake: %s: %s\n", ag.Name, line)
 		return err
 	} else if _, err := fmt.Fprintf(a.out, "wake: %s gets no desktop turn (%v): its turn runs headless\n", ag.Name, err); err != nil {
@@ -173,7 +173,7 @@ func (a *app) resumeTurn(ctx context.Context, by state.Party, w wakeTarget, msg 
 		if err != nil {
 			return fmt.Errorf("waking %s: %w", w.name, err)
 		}
-		_ = a.store.Log(event(by, "agents.wake", "%s: sent to its desktop CLI %d, which started meanwhile, instead of resuming it headless", w.name, pid))
+		_ = a.store.Record(event(by, "agents.wake", "%s: sent to its desktop CLI %d, which started meanwhile, instead of resuming it headless", w.name, pid))
 		_, err = fmt.Fprintf(a.out, "wake: %s: its desktop CLI %d runs: sent the message to it instead of resuming the session headless beside it\n", w.name, pid)
 		return err
 	}
@@ -197,7 +197,7 @@ func (a *app) resumeTurn(ctx context.Context, by state.Party, w wakeTarget, msg 
 	if err := launch(unit, w.dir, a.explicitConfig(), stopPost, argv); err != nil {
 		return fmt.Errorf("waking %s: %w", w.name, err)
 	}
-	_ = a.store.Log(event(by, "agents.wake", "%s: resumed session %s headless in %s, %s%s (%s)", w.name, w.id, w.dir, w.mode, underProfile(w.profile), unit))
+	_ = a.store.Record(event(by, "agents.wake", "%s: resumed session %s headless in %s, %s%s (%s)", w.name, w.id, w.dir, w.mode, underProfile(w.profile), unit))
 	_, err = fmt.Fprintf(a.out, "wake: %s had no running CLI: resumed session %s headless in %s, %s, with the message as its turn (journalctl --user -u %s)\n",
 		w.name, w.id, w.dir, w.mode, unit)
 	if err == nil && w.host != "" {
@@ -339,7 +339,7 @@ func (a *app) wakeOmp(by state.Party, ag state.Agent, id, msg string) error {
 	if err := a.sendOmp(ag.Name, id, msg); err != nil {
 		return err
 	}
-	_ = a.store.Log(event(by, "agents.wake", "%s: written to its omp inbox", ag.Name))
+	_ = a.store.Record(event(by, "agents.wake", "%s: written to its omp inbox", ag.Name))
 	_, err := fmt.Fprintf(a.out, "wake: %s runs (omp): written to its inbox, it runs the message at its next tool round or as its next turn\n", ag.Name)
 	return err
 }
