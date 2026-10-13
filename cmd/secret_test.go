@@ -6,7 +6,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -370,6 +373,78 @@ func TestBrokeredSecretHoldsItsFilesToTheSandbox(t *testing.T) {
 	if _, err := runSecret(a, copyOp, src, filepath.Join(repo, "copy.sops.yaml")); err != nil {
 		t.Errorf("a copy inside the sandbox's lists: %v", err)
 	}
+}
+
+func TestBrokeredSecretRefusesADirectoryTheSandboxCloses(t *testing.T) {
+	a, _, repo := secretApp(t)
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("TMPDIR", filepath.Join(base, "tmp"))
+	t.Setenv(sandbox.Env, "1")
+	t.Setenv(sandbox.Brokered, "1")
+	src := filepath.Join(repo, "db.sops.yaml")
+	t.Chdir(home)
+	out, err := runSecret(a, fingerprintOp, src)
+	if dir, _ := filepath.EvalSymlinks(home); Code(err) != ExitRefused || !strings.Contains(err.Error(), dir+": the agent sandbox does not let this session work in this directory") {
+		t.Errorf("a call in the home directory: exit %d, %v", Code(err), err)
+	}
+	noSecret(t, "a refused call", out)
+	t.Chdir(repo)
+	a.out = &bytes.Buffer{}
+	if _, err := runSecret(a, fingerprintOp, src); err != nil {
+		t.Errorf("a call in the checkout: %v", err)
+	}
+}
+
+func TestBrokeredGitConsumerActsOnTheCallerCheckout(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	a, _, repo := secretApp(t)
+	paths := make(chan string, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if u, _, ok := r.BasicAuth(); !ok || u != secret.GitUser {
+			w.Header().Set("WWW-Authenticate", `Basic realm="test"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		paths <- r.URL.Path
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+	// the broker's call on the host, in the caller's checkout, whose origin
+	// only that checkout's configuration names
+	t.Setenv(sandbox.Brokered, "1")
+	t.Chdir(gitCheckout(t, srv.URL+"/caller.git"))
+	out, _ := runSecret(a, copyOp, filepath.Join(repo, "db.sops.yaml")+"#data.password", "--git-askpass", "--", "git", "-C", ".", "ls-remote", "origin")
+	select {
+	case p := <-paths:
+		if !strings.HasPrefix(p, "/caller.git/") {
+			t.Errorf("git asked for %s, want the caller checkout's origin", p)
+		}
+	default:
+		t.Fatalf("git sent no credential to the checkout's origin: %q", out)
+	}
+	noSecret(t, "git's output", out)
+}
+
+// gitCheckout is a new git checkout whose origin is url.
+func gitCheckout(t *testing.T, url string) string {
+	t.Helper()
+	dir := t.TempDir()
+	const gitInit = "init"
+	for _, args := range [][]string{{gitInit, "-q"}, {"remote", "add", "origin", url}} {
+		c := exec.Command("git", append([]string{"-C", dir}, args...)...) //nolint:gosec // the test's own git calls
+		c.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
+		}
+	}
+	return dir
 }
 
 func TestSecretSetRefusesAPlaintextConfigMap(t *testing.T) {

@@ -28,11 +28,31 @@ func TestBrokeredSecretRunsAsTheRequester(t *testing.T) {
 	if err := os.WriteFile(exe, []byte(script), 0o700); err != nil { //nolint:gosec // the test's fake binary
 		t.Fatal(err)
 	}
+	requesterDir := t.TempDir()
+	pid := startRequester(t, requesterDir, []string{"CLAUDE_CODE_SESSION_ID=s-1", "BEEKEEPER_TEST_OTHER=leaked", "PATH=/usr/bin:/bin"})
+	h := brokered(brokeredCap(&recordingCapper{}, platform.Cap{}), map[string]sandbox.Handler{sandbox.OpSecret: brokeredCall(exe, "/proc", brokeredCallTimeout, nil, brokeredSecretArgv(false))})
+	r, err := h(context.Background(), pid, sandbox.Request{Op: sandbox.OpSecret, Args: []string{compareOp, sopsA, sopsB}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, _ := filepath.EvalSymlinks(requesterDir)
+	want := "args=secret compare a.sops.yaml b.sops.yaml pwd=" + dir + " session=s-1 brokered=1 other=\n"
+	if r.Out != want || r.Err != "warned\n" || r.Code != 3 {
+		t.Errorf("reply %+v, want out %q", r, want)
+	}
+	if _, err := h(context.Background(), pid, sandbox.Request{Op: sandbox.OpSecret, Args: []string{"setup"}}); err == nil {
+		t.Error("setup: want a refusal")
+	}
+}
+
+// startRequester starts a process in dir, with env when given, that holds
+// a request for the test's broker, and answers its process id.
+func startRequester(t *testing.T, dir string, env []string) int {
+	t.Helper()
 	// a shell that says when it runs and stays the process (no tail exec):
 	// Start returns before the child's environment is in place
 	requester := exec.Command("/bin/sh", "-c", "echo ready; /bin/sleep 5; true")
-	requester.Dir = t.TempDir()
-	requester.Env = []string{"CLAUDE_CODE_SESSION_ID=s-1", "BEEKEEPER_TEST_OTHER=leaked", "PATH=/usr/bin:/bin"}
+	requester.Dir, requester.Env = dir, env
 	ready, err := requester.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -40,22 +60,32 @@ func TestBrokeredSecretRunsAsTheRequester(t *testing.T) {
 	if err := requester.Start(); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = requester.Process.Kill(); _ = requester.Wait() })
 	if _, err := bufio.NewReader(ready).ReadString('\n'); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = requester.Process.Kill(); _ = requester.Wait() }()
-	h := brokered(brokeredCap(&recordingCapper{}, platform.Cap{}), map[string]sandbox.Handler{sandbox.OpSecret: brokeredCall(exe, "/proc", brokeredCallTimeout, nil, brokeredSecretArgv(false))})
-	r, err := h(context.Background(), requester.Process.Pid, sandbox.Request{Op: sandbox.OpSecret, Args: []string{compareOp, sopsA, sopsB}})
+	return requester.Process.Pid
+}
+
+func TestBrokeredCallActsOnTheRequesterCheckout(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	checkout := gitCheckout(t, "https://git.example/caller.git")
+	bin := t.TempDir()
+	exe := filepath.Join(bin, "beekeeper")
+	// the brokered call's consumer, a relative path in its argv
+	if err := os.WriteFile(exe, []byte("#!/bin/sh\nexec git -C . remote get-url origin\n"), 0o700); err != nil { //nolint:gosec // the test's fake binary
+		t.Fatal(err)
+	}
+	pid := startRequester(t, checkout, nil)
+	h := brokeredCall(exe, "/proc", brokeredCallTimeout, nil, brokeredSecretArgv(false))
+	r, err := h(context.Background(), pid, sandbox.Request{Op: sandbox.OpSecret, Args: []string{copyOp, sopsA, "--", "git", "-C", ".", "ls-remote", "origin"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir, _ := filepath.EvalSymlinks(requester.Dir)
-	want := "args=secret compare a.sops.yaml b.sops.yaml pwd=" + dir + " session=s-1 brokered=1 other=\n"
-	if r.Out != want || r.Err != "warned\n" || r.Code != 3 {
-		t.Errorf("reply %+v, want out %q", r, want)
-	}
-	if _, err := h(context.Background(), requester.Process.Pid, sandbox.Request{Op: sandbox.OpSecret, Args: []string{"setup"}}); err == nil {
-		t.Error("setup: want a refusal")
+	if r.Out != "https://git.example/caller.git\n" || r.Code != 0 {
+		t.Errorf("reply %+v, want the requester checkout's origin", r)
 	}
 }
 

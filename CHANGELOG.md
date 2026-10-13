@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `beekeeper secret copy --help` and the README said a brokered call runs in the broker's directory and that `git -C` takes an absolute path; the broker starts every brokered call, and the call its consumer, in the requester's working directory, so `git -C .` acts on the caller's checkout. A sandboxed session's brokered secret call in a directory its sandbox does not let it read is now refused, the directory named ([#873](https://github.com/giantswarm/beekeeper/issues/873)).
+
 - `beekeeper note add` folds a note into an open one for the same person only when it asks the same question (the same text, case, spacing and closing punctuation aside) on the same issue or PR, keyed on its `--ref`, else the first URL of its `--status-quo`. A shared first word and URLs cited as context no longer fold, so a grilling round's distinct questions on one plan PR stay separate notes with their own `--default` and `--recommend`. The same question with a different default or recommended option is refused, naming the open note; `--fold-into <n>` folds into open note `n` explicitly, whose default and recommendation stand ([#647](https://github.com/giantswarm/beekeeper/issues/647)).
 
 - A test holds the gate's stdout to devctl's document alone on every route a blocking wait takes (owned, unowned, owned without its run files): the gate's own lines and devctl's progress (`waiting for image …`) go to stderr. `beekeeper gate --help` says so, and that a `2>&1` before `| jq` mixes the progress into the document, which is what broke a `devctl release wait … --timeout 9m 2>&1 | jq` at line 1, column 8 ([#875](https://github.com/giantswarm/beekeeper/issues/875)).
