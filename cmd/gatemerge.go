@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -505,18 +506,19 @@ type childDone struct {
 	Doc     []byte      `json:"doc,omitempty"`
 	Last    string      `json:"last,omitempty"`
 	Kept    string      `json:"kept,omitempty"`
+	Stop    int         `json:"stop,omitempty"`
 }
 
 // done is r for the re-executed merge-child.
 func (r childResult) done() childDone {
 	return childDone{Argv: r.spec.Argv, Command: r.spec.Command, Owner: r.spec.Owner, Gate: r.spec.Gate, Config: r.spec.Config,
-		HandCut: r.spec.HandCut, Base: r.base, RC: r.rc, Doc: r.doc, Last: r.last, Kept: r.kept}
+		HandCut: r.spec.HandCut, Base: r.base, RC: r.rc, Doc: r.doc, Last: r.last, Kept: r.kept, Stop: int(r.stop)}
 }
 
 // result is the outcome d carries, as mergeChild returns it.
 func (d childDone) result() childResult {
 	return childResult{spec: childSpec{Argv: d.Argv, Command: d.Command, Owner: d.Owner, Gate: d.Gate, Config: d.Config, HandCut: d.HandCut},
-		base: d.Base, rc: d.RC, doc: d.Doc, last: d.Last, kept: d.Kept}
+		base: d.Base, rc: d.RC, doc: d.Doc, last: d.Last, kept: d.Kept, stop: syscall.Signal(d.Stop)}
 }
 
 // command names the command merge-child ran, the devctl command Argv stands
@@ -573,14 +575,16 @@ const (
 )
 
 // childResult is how one merge-child run ended: its spec, the base of its
-// files, devctl's exit code, document and last stderr line, and the file its
-// output is kept in.
+// files, devctl's exit code, document and last stderr line, the file its
+// output is kept in, and the signal that stopped merge-child itself (a stop
+// of its unit or process), 0 when none did.
 type childResult struct {
 	spec       childSpec
 	base       string
 	rc         int
 	doc        []byte
 	last, kept string
+	stop       syscall.Signal
 }
 
 // mergeChild runs base.spec's command with its stdout in base.json and its
@@ -588,7 +592,7 @@ type childResult struct {
 // the file keepOutput kept its output in in base.kept and the command's exit
 // code (128+n for a signal) in base.rc last. SIGINT is passed on; SIGTERM
 // and SIGHUP too, as they come from the service manager or a person, never
-// from the gate's caller. Re-executed by a replaced merge-child whose
+// from the gate's caller; the first one is the run's stop. Re-executed by a replaced merge-child whose
 // command ended, it returns that outcome (doneResult) and runs nothing.
 func mergeChild(base string) childResult {
 	if r, ok := doneResult(base); ok {
@@ -623,9 +627,13 @@ func mergeChild(base string) childResult {
 		return r
 	}
 	rc := guard.ExitNotFound
+	var stop atomic.Int32
 	if err := c.Start(); err == nil {
 		go func() {
 			for s := range sig {
+				if n, ok := s.(syscall.Signal); ok {
+					stop.CompareAndSwap(0, int32(n))
+				}
 				_ = c.Process.Signal(s)
 			}
 		}()
@@ -637,7 +645,7 @@ func mergeChild(base string) childResult {
 	} else {
 		_, _ = fmt.Fprintln(errs, err)
 	}
-	r.rc = rc
+	r.rc, r.stop = rc, syscall.Signal(stop.Load())
 	r.doc, _ = os.ReadFile(base + ".json") //nolint:gosec // as above
 	r.last = lastLine(base + ".log")
 	if r.kept = keepOutput(base, r.doc, time.Now()); r.kept != "" {

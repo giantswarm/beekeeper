@@ -141,7 +141,10 @@ the session that started it: the caller sees the output and exit code as
 ever while it listens, and when it no longer does (a headless turn that
 ended, a caller killed, its CLI gone, a queued merge) the run wakes its
 owner, a registered agent, with one line: "<command> exit N: <reason>
-(output in <file>)", logged as devctl.unheard.
+(output in <file>)", logged as devctl.unheard. A run stopped by a signal
+before its command settled (a cleanup's SIGTERM, a stop of its unit) wakes
+its owner with the stop instead, as nothing waits for the command any more;
+an owner no longer on the roster is woken by no run.
 
 A desktop Bash call stops its command at 10 minutes without an exit code.
 A foreground merge or promotion therefore leaves merge.toolLimit (default
