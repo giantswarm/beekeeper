@@ -21,12 +21,13 @@ import (
 // declared callback hosts, the click is allowed; on
 // GitHub's consent page of any other App or callback host it is refused; on
 // the lab's own identity provider, a loopback host, a fixture user's sign-in
-// and consent are allowed. A change of an App's permissions is decided the
-// same way from the record of the one change the person asked for
-// (appchange.go), an App's creation, installation and deletion from the
-// running app create, beekeeper's ledger and the person's record
-// (applife.go). Any other page gets no decision, as does a call whose
-// page the transcript does not show.
+// and consent are allowed; a consent page on any other host is refused, so
+// no grant elsewhere is left to the browse turn's classifier. A change of an
+// App's permissions is decided the same way from the record of the one
+// change the person asked for (appchange.go), an App's creation,
+// installation and deletion from the running app create, beekeeper's ledger
+// and the person's record (applife.go). Any other page gets no decision, as
+// does a call whose page the transcript does not show.
 
 // App is an App the person owns and asked a consent, or one permission
 // change, for.
@@ -87,6 +88,19 @@ const (
 // and consent pages (Dex's auth and approval, a portal's sign-in).
 var signInSegments = strings.Fields("dex auth approval login signin connect oauth")
 
+// A consent page elsewhere is one whose path names a consent (consentSegments)
+// or whose title names a grant (grantTitle), where any call acting on it is a
+// grant or its refusal; or an OAuth authorization page (authorizeSegments, or
+// an authorization request's client_id with its response_type or
+// redirect_uri), which also signs in, where only a call whose own words name a
+// grant (grantWords) is one.
+var (
+	consentSegments   = strings.Fields("approval approve consent consents grant")
+	authorizeSegments = strings.Fields("authorize authorization oauth oauth2")
+	grantTitle        = regexp.MustCompile(`(?i)^authori[sz]e\b|grant access|consent|permissions requested`)
+	grantWords        = regexp.MustCompile(`(?i)\b(authori[sz]e|allow|grant|approve|accept|consent)`)
+)
+
 // chromeRedacted is what the Claude in Chrome tools put in place of an
 // auth-like value of a URL they report (a client id, a state); authorizeTitle
 // opens GitHub's consent page's title.
@@ -136,8 +150,32 @@ func Click(apps []App, page Page, words string) Decision {
 	case loopback(host) && signIn(u.Path):
 		return Decision{Allow, fmt.Sprintf("beekeeper allows it: %s is the lab's own identity provider on a loopback host, "+
 			"whose fixture users' sign-in and consent are the person's own lab's", u.Host)}
+	case !loopback(host) && consentElsewhere(u, page.Title, words):
+		return Decision{Deny, fmt.Sprintf("Refused: %s is a consent page (an OAuth grant) on %s, neither GitHub's consent page of an App on record "+
+			"nor the lab's own identity provider on a loopback host. A consent is answered only for an App the person owns and asked for, "+
+			"which %s records on their word; every other grant stays refused.", consentWhich(u, page.Title), u.Host, AllowForm)}
 	}
 	return Decision{}
+}
+
+// consentElsewhere reports whether a call in words acts on a consent page:
+// any call on a page whose path or title names a consent, a call whose words
+// name a grant on an OAuth authorization page.
+func consentElsewhere(u *url.URL, title, words string) bool {
+	if hasSegment(u.Path, consentSegments) || grantTitle.MatchString(strings.TrimSpace(title)) {
+		return true
+	}
+	q := u.Query()
+	authorizing := hasSegment(u.Path, authorizeSegments) || (q.Get("client_id") != "" && (q.Get("response_type") != "" || q.Get("redirect_uri") != ""))
+	return authorizing && grantWords.MatchString(words)
+}
+
+// consentWhich names a consent page: its title, else its path.
+func consentWhich(u *url.URL, title string) string {
+	if t := strings.TrimSpace(title); t != "" {
+		return strconv.Quote(t)
+	}
+	return u.Path
 }
 
 // githubConsent decides a call on GitHub's consent page u: allowed for the
@@ -179,8 +217,13 @@ func loopback(host string) bool {
 // signIn reports whether path is an identity provider's sign-in or consent
 // page.
 func signIn(path string) bool {
+	return hasSegment(path, signInSegments)
+}
+
+// hasSegment reports whether one of path's segments is among segments.
+func hasSegment(path string, segments []string) bool {
 	for s := range strings.SplitSeq(path, "/") {
-		if slices.Contains(signInSegments, strings.ToLower(s)) {
+		if slices.Contains(segments, strings.ToLower(s)) {
 			return true
 		}
 	}

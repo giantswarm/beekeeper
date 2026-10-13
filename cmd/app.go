@@ -66,7 +66,9 @@ refused on the permissions page of any other App and for any other call
 there, naming this record's form. A sign-in or consent page of the lab's
 own identity provider on a loopback host (*.127.0.0.1.nip.io, localhost) is
 allowed without a record: a fixture user's sign-in there is the person's
-own lab's. An App's creation, installation and deletion are grants too: the
+own lab's. A consent page on any other host (a path or title that names a
+consent or a grant, or an OAuth authorization page where the call's own
+words name one) is refused, not left to the browse turn's classifier. An App's creation, installation and deletion are grants too: the
 hook allows GitHub's "Create GitHub App" on the manifest page while a
 create runs for the App (its loopback listener answers), Install and its
 confirmation on the installation page of an App a create runs for or
