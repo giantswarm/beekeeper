@@ -34,7 +34,7 @@ case "$*" in *--accept-red*) echo '`+mergedDoc+`';; *) echo '`+baseRedDoc+`'; ex
 func stubBase(t *testing.T, e2e string, accepts bool) {
 	t.Helper()
 	baseChecks = func(context.Context, string, string) (github.BaseChecks, error) {
-		return github.BaseChecks{Base: "main", Head: "0123456789", Required: []string{"go-build"},
+		return github.BaseChecks{Base: mainBranch, Head: "0123456789", Required: []string{"go-build"},
 			Outcomes: map[string]string{"e2e-test": e2e, "go-build": github.CheckPass}}, nil
 	}
 	devctlAcceptsRed = func(context.Context) bool { return accepts }

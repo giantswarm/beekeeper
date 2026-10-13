@@ -334,7 +334,9 @@ func stubGitHub(t *testing.T, pullAt string, version string) *int {
 		pullState, devctlVersion, devctlUpdate, judgeWait, baseChecks, devctlAcceptsRed = pull, ver, upd, wait, bc, accepts
 	})
 	devctlUpdate = func(context.Context) error { return nil }
-	baseChecks = func(context.Context, string, string) (github.BaseChecks, error) { return github.BaseChecks{}, fmt.Errorf("no network") }
+	baseChecks = func(context.Context, string, string) (github.BaseChecks, error) {
+		return github.BaseChecks{}, fmt.Errorf("no network")
+	}
 	devctlAcceptsRed = func(context.Context) bool { return false }
 	judgeWait = 0
 	pullState = func(context.Context, string, int) (github.Pull, error) {
