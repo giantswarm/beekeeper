@@ -29,6 +29,16 @@ const (
 	otherCallbackPage = "https://github.com/login/oauth/authorize?client_id=" + ownClientID + "&redirect_uri=https%3A%2F%2Fexample.org%2Fcallback%2Fgithub&response_type=code"
 	labDexPage        = "https://dex.127.0.0.1.nip.io/dex/auth/local?req=abc"
 	applicationsPage  = "https://github.com/settings/applications"
+	lanConsentPage    = "http://192.168.1.20:5556/dex/approval?req=abc&hmac=x"
+	authorizePage     = "https://login.example.org/common/oauth2/v2.0/authorize?client_id=x&response_type=code"
+	dexAuthPage       = "https://dex.example.org/dex/auth?client_id=x&redirect_uri=https%3A%2F%2Fportal.example.org%2Fcallback&response_type=code"
+)
+
+// The titles of a consent page, an IdP's sign-in and Dex's sign-in.
+const (
+	grantAccess = "Grant Access"
+	idpSignIn   = "Sign in to your account"
+	dexSignIn   = "Log in to Dex"
 )
 
 // ownDeclared is where the organisation declares the App.
@@ -42,8 +52,8 @@ var recorded = []App{{Name: ownApp, ClientID: ownClientID, Callbacks: []string{o
 // by client id or, where the tool redacted it, by GitHub's title; another
 // App, another callback host and a title that names another App are
 // refused naming the record's form; a page that is no consent page gets no
-// decision; the lab's identity provider on a loopback host is allowed, on
-// another host not decided.
+// decision; the lab's identity provider on a loopback host is allowed, a
+// consent page on any other host refused.
 func TestConsent(t *testing.T) {
 	for name, tc := range map[string]struct {
 		page     Page
@@ -62,9 +72,15 @@ func TestConsent(t *testing.T) {
 		"other page":                       {Page{applicationsPage, applicationsTitle}, recorded, "", ""},
 		"the portal":                       {Page{"https://portal.example.org/agents", "Agents"}, recorded, "", ""},
 		"lab Dex sign-in":                  {Page{labDexPage, "Log in to agentlab"}, recorded, Allow, "dex.127.0.0.1.nip.io is the lab's own identity provider on a loopback host"},
-		"lab Dex approval on localhost":    {Page{"https://localhost:32000/dex/approval?req=abc", "Grant Access"}, nil, Allow, "localhost:32000 is the lab's own identity provider"},
+		"lab Dex approval on localhost":    {Page{"https://localhost:32000/dex/approval?req=abc", grantAccess}, nil, Allow, "localhost:32000 is the lab's own identity provider"},
 		"lab portal sign-in":               {Page{"https://" + ownCallback + "/connect/github", "Connect"}, nil, Allow, "loopback host"},
-		"Dex on another host":              {Page{"https://dex.example.org/dex/approval?req=abc", "Grant Access"}, recorded, "", ""},
+		"Dex on another host":              {Page{"https://dex.example.org/dex/approval?req=abc", grantAccess}, recorded, Deny, `"` + grantAccess + `" is a consent page (an OAuth grant) on dex.example.org`},
+		"a consent on a LAN host":          {Page{lanConsentPage, grantAccess}, recorded, Deny, "on 192.168.1.20:5556, neither GitHub's consent page of an App on record"},
+		"a consent path, no title":         {Page{"https://idp.example.org/oauth2/consent?challenge=c", ""}, recorded, Deny, "/oauth2/consent is a consent page"},
+		"a grant title on any path":        {Page{"https://apps.example.org/connect", "Authorize example-tool"}, recorded, Deny, AllowForm},
+		"another GitHub's consent page":    {Page{"https://github.example.org/login/oauth/authorize?client_id=x&redirect_uri=https%3A%2F%2Fexample.org", ""}, recorded, Deny, "on github.example.org"},
+		"an IdP's authorization page":      {Page{authorizePage, idpSignIn}, recorded, Deny, "on login.example.org"},
+		"Dex's sign-in on another host":    {Page{dexAuthPage, dexSignIn}, recorded, Deny, "on dex.example.org"},
 		"a lab page that is no sign-in":    {Page{"https://backstage.127.0.0.1.nip.io/catalog", "Catalog"}, recorded, "", ""},
 		"no URL":                           {Page{"", ""}, recorded, "", ""},
 	} {
@@ -72,6 +88,32 @@ func TestConsent(t *testing.T) {
 			d := Click(tc.apps, tc.page, clicksAuthorize)
 			if d.Decision != tc.decision || !strings.Contains(d.Reason, tc.reason) {
 				t.Errorf("Click = %+v, want %q with %q", d, tc.decision, tc.reason)
+			}
+		})
+	}
+}
+
+// On an OAuth authorization page elsewhere, which also signs in, a call whose
+// own words name a grant is refused and any other gets no decision; on a
+// consent page every call acting on it is refused, whatever its words.
+func TestConsentElsewhereByWords(t *testing.T) {
+	for name, tc := range map[string]struct {
+		page     Page
+		words    string
+		decision string
+	}{
+		"the SSO button on Dex's sign-in":     {Page{dexAuthPage, dexSignIn}, "Clicks Log in with GitHub", ""},
+		"an account on an IdP's sign-in":      {Page{authorizePage, idpSignIn}, "Clicks the account tile", ""},
+		"a click without words on a sign-in":  {Page{authorizePage, idpSignIn}, "", ""},
+		"Accept on an IdP's authorization":    {Page{authorizePage, idpSignIn}, "Clicks Accept", Deny},
+		"Allow on Dex's sign-in":              {Page{dexAuthPage, dexSignIn}, "Clicks Allow", Deny},
+		"a click without words on a consent":  {Page{lanConsentPage, grantAccess}, "", Deny},
+		"Cancel on a consent":                 {Page{lanConsentPage, grantAccess}, "Clicks Cancel", Deny},
+		"a portal page with a client_id only": {Page{"https://portal.example.org/settings?client_id=x", "Settings"}, "Clicks Allow", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if d := Click(recorded, tc.page, tc.words); d.Decision != tc.decision {
+				t.Errorf("Click = %+v, want %q", d, tc.decision)
 			}
 		})
 	}
@@ -140,6 +182,7 @@ func TestConsentDecision(t *testing.T) {
 	ownJSON := transcriptWith(t, Page{redactedPage, ownTitle}, true)
 	other := transcriptWith(t, Page{redactedPage, otherTitle}, false)
 	plain := transcriptWith(t, Page{applicationsPage, applicationsTitle}, false)
+	lan := transcriptWith(t, Page{lanConsentPage, grantAccess}, false)
 	click := tabInput(leftClick, map[string]any{"ref": "ref_45", "action_summary": clicksAuthorize})
 	screenshot := tabInput("screenshot", nil)
 	batch := map[string]any{"actions": []any{batchAction(chromeComputer, screenshot), batchAction(chromeComputer, tabInput(leftClick, nil))}}
@@ -159,6 +202,8 @@ func TestConsentDecision(t *testing.T) {
 		"the desktop's spelling of the tools": {"mcp__Claude_in_Chrome__" + chromeComputer, click, own, apps, decisionAllow, ownApp},
 		"a click on another App's page":       {browserTools + chromeComputer, click, other, apps, decisionDeny, otherTitle},
 		"a click on no consent page":          {browserTools + chromeComputer, click, plain, apps, "", ""},
+		"a click on a consent page elsewhere": {browserTools + chromeComputer, click, lan, apps, decisionDeny, "on 192.168.1.20:5556"},
+		"a batch on a consent page elsewhere": {browserTools + chromeBatch, batch, lan, apps, decisionDeny, `"` + grantAccess + `" is a consent page`},
 		"a screenshot of the own App's page":  {browserTools + chromeComputer, screenshot, own, apps, "", ""},
 		"a batch that only reads":             {browserTools + chromeBatch, reads, own, apps, "", ""},
 		"a tab the transcript does not show":  {browserTools + chromeComputer, map[string]any{actionKey: leftClick, tabKey: json.Number("8")}, own, apps, "", ""},
