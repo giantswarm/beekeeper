@@ -52,9 +52,12 @@ stays as it is.
 The new binary is renamed over the old one in one step: a running
 beekeeper watch keeps running (the old binary, until it is restarted), and
 every beekeeper started afterwards is the new one. The update names the
-beekeeper processes it leaves on the old binary (pid and command): once the
-new release writes the state, their saves are refused until they end or are
-restarted (beekeeper doctor lists them meanwhile).
+beekeeper processes it leaves on the old binary (pid and command), each
+watch among them (beekeeper watch, alerts watch, guide watch) with the
+command that re-arms it: once the new release writes the state, their saves
+are refused until they end or are restarted (beekeeper doctor lists them
+meanwhile). A watch never re-executes itself: its owner re-arms it, told by
+its own feed (WATCH STALE, GUIDE WATCH STALE).
 
 The beekeeper plugin goes with the binary: an update brings every
 installed beekeeper plugin up to its marketplace's latest (claude plugin
@@ -146,7 +149,8 @@ func (a *app) syncInstalledPlugins(ctx context.Context) error {
 // leftBehind names the beekeeper processes an update leaves on the old
 // binary, one line each, and what becomes of their saves; a gate call or a
 // merge-child re-executes the installed binary at its next step, and says
-// so. "" for none.
+// so, and a watch (beekeeper watch, alerts watch, guide watch) names the
+// command that re-arms it. "" for none.
 func leftBehind(stale []*proc.Process, old, installed string) string {
 	if len(stale) == 0 {
 		return ""
@@ -155,8 +159,11 @@ func leftBehind(stale []*proc.Process, old, installed string) string {
 	fmt.Fprintf(&b, "Left on %s until restarted, their saves of the state refused once %s writes it:\n", old, installed)
 	for _, p := range stale {
 		fmt.Fprintf(&b, "  pid %d: %s", p.PID, display(p.Args))
-		if reexecs(p) {
+		switch {
+		case reexecs(p):
 			fmt.Fprintf(&b, " (re-executes %s at its next step)", installed)
+		case isWatch(p):
+			fmt.Fprintf(&b, " (a watch: %s)", rearm(p.Args))
 		}
 		b.WriteString("\n")
 	}
