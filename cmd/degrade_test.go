@@ -16,7 +16,10 @@ import (
 )
 
 // stubApp is an app on the platform with every part not available, with a
-// supervisor recorded and one lease held by a session.
+// supervisor recorded and one lease held by a session. Its store saves as a
+// dev build's, whichever version the test binary is linked with: a stable
+// tag's `make test` links the release's version, which would stamp the
+// state as its writer and refuse the older releases a test opens.
 func stubApp(t *testing.T) (*app, *bytes.Buffer) {
 	t.Helper()
 	orig := plat
@@ -34,7 +37,7 @@ func stubApp(t *testing.T) (*app, *bytes.Buffer) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := state.Open(c.StateDir)
+	store, err := state.OpenVersion(c.StateDir, "dev")
 	if err != nil {
 		t.Fatal(err)
 	}
