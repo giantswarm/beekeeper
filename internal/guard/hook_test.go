@@ -150,6 +150,15 @@ func TestHeavyClassification(t *testing.T) {
 		{"python3 - <<'EOF'\nprint('go test ./...')\nEOF", false},
 		{"cat > notes.md <<EOF\nmake build\nEOF", false},
 		{"echo 'bash -c \"make\"'", false},
+		// git's working-tree commands build nothing, whatever their branch or
+		// path names say
+		{`git -C "$S" checkout -q -- .`, false},
+		{"git -C /tmp/amp checkout -q --detach e82d26b", false},
+		{"git checkout -q -b fix-make-test origin/main", false},
+		{"git switch -c go-test-flake", false},
+		{"git worktree add -q ~/projects/worktrees/x/make-build -b make-build origin/main", false},
+		{"cd ~/src/x && git fetch -q origin && git checkout -q -B build origin/main", false},
+		{`S=/tmp/amp; git -C "$S" checkout -q -- . && git -C ~/src/x worktree remove "$S"`, false},
 		// builds, tests and lints keep the slot
 		{"go test ./...", true},
 		{"make lint", true},
@@ -169,6 +178,15 @@ func TestHeavyClassification(t *testing.T) {
 		{"eval 'golangci-lint run'", true},
 		{"bash <<'EOF'\ngo test ./...\nEOF", true},
 		{"x=\"$(make image)\"", true},
+		// a build after a git command, at each position the hook keys on
+		{"git checkout -q main && go test ./...", true},
+		{"git switch -q main; make build", true},
+		{"git worktree add -q ../w -b b origin/main\ncd ../w && go build ./...", true},
+		{`S=/tmp/amp; git -C "$S" checkout -q -- .; cd x && go test -race -count=150 ./internal/lab/`, true},
+		{"git checkout -q main || golangci-lint run", true},
+		{"git checkout -q main | timeout 600 go vet ./...", true},
+		{"if git checkout -q main; then make test; fi", true},
+		{"git checkout -q main && (cd x && GOFLAGS=-mod=mod go build ./...)", true},
 		// a help or version flag builds nothing, whatever the command word
 		{"govulncheck -h", false},
 		{"golangci-lint --version", false},

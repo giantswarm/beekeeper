@@ -116,20 +116,35 @@ func RunCommand(detail string) string {
 	return cmd
 }
 
-// CommandHead is the command a run's events name: a shell's -c script
-// rather than the shell (the hook wraps every build in zsh -c), on one line,
-// at most 100 characters.
-func CommandHead(argv []string) string {
-	cmd := argv
+// CommandHead is the command a run's events name, at most 100 characters
+// (commandHead).
+func CommandHead(argv []string) string { return commandHead(argv, 100) }
+
+// commandHead is the command a run names: a shell's -c script rather than the
+// shell (the hook wraps every build in zsh -c), on one line, at most n
+// characters. A command too long for that leads with the heavy command that
+// holds the slot ("… go test …"), never with what runs before it (a cd, an
+// assignment, a git checkout).
+func commandHead(argv []string, n int) string {
+	cmd := strings.Join(argv, " ")
 	if len(argv) >= 3 && argv[1] == "-c" && slices.Contains([]string{"sh", "bash", "zsh"}, filepath.Base(argv[0])) {
-		cmd = argv[2:3]
+		cmd = argv[2]
 	}
-	s := strings.Join(strings.Fields(strings.Join(cmd, " ")), " ")
-	if r := []rune(s); len(r) > 100 {
-		s = string(r[:99]) + "…"
+	s := oneLine(cmd)
+	if len([]rune(s)) <= n {
+		return s
+	}
+	if m := commandMatch(heavy, cmd, keepHeavy); m != nil && m[2] > 0 {
+		s = "… " + oneLine(cmd[m[2]:])
+	}
+	if r := []rune(s); len(r) > n {
+		s = string(r[:n-1]) + "…"
 	}
 	return s
 }
+
+// oneLine is s with every run of whitespace a single space.
+func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // Options configure one capped run.
 type Options struct {
@@ -430,10 +445,7 @@ type holderRecord struct {
 }
 
 func writeHolder(o Options, slot int, argv []string) {
-	cmd := strings.NewReplacer(`"`, "'", "\n", " ").Replace(strings.Join(argv, " "))
-	if r := []rune(cmd); len(r) > 140 {
-		cmd = string(r[:140])
-	}
+	cmd := strings.ReplaceAll(commandHead(argv, 140), `"`, "'")
 	cwd, _ := os.Getwd()
 	f, err := os.OpenFile(filepath.Join(o.SlotDir, strconv.Itoa(slot)+".holder"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {

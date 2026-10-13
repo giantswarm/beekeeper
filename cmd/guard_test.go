@@ -184,6 +184,8 @@ func TestRunKeepsTheCallersShellSemantics(t *testing.T) {
 	}
 }
 
+// TestRunHoldsASlotInACappedScope: the holder record names the build that
+// holds the slot, here behind a command too long for the record's line.
 func TestRunHoldsASlotInACappedScope(t *testing.T) {
 	state, env := capped(t)
 	out, errOut, rc := zsh(t, env, rewrite(t, `grep -o 'memcap.slice/memcap-slot1_test.slice/memcap-test-[0-9]*-[0-9]*' /proc/self/cgroup; cat "$MEMCAP_STATE/slots/1.holder"; if false; then go test; fi`))
@@ -195,7 +197,7 @@ func TestRunHoldsASlotInACappedScope(t *testing.T) {
 		Cmd, Max   string
 		CWD, Since string
 	}
-	if _, rec, _ := strings.Cut(out, "\n"); json.Unmarshal([]byte(rec), &h) != nil || h.PID == 0 || h.Max != "64M" || !strings.HasPrefix(h.Cmd, "zsh -c ") {
+	if _, rec, _ := strings.Cut(out, "\n"); json.Unmarshal([]byte(rec), &h) != nil || h.PID == 0 || h.Max != "64M" || h.Cmd != "… go test; fi" {
 		t.Errorf("holder record %q", out)
 	}
 	if _, err := os.Stat(filepath.Join(state, "slots", "1.holder")); !os.IsNotExist(err) {
