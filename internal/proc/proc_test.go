@@ -54,6 +54,37 @@ func TestWriteBytesAt(t *testing.T) {
 	}
 }
 
+// Held names the working directory, the executable and the open files by
+// their paths, a deleted file by the one it had, and skips what links to no
+// path.
+func TestHeldNamesCwdExeAndOpenFiles(t *testing.T) {
+	root := t.TempDir()
+	fd := filepath.Join(root, "42", "fd")
+	if err := os.MkdirAll(fd, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for link, target := range map[string]string{
+		filepath.Join(root, "42", "cwd"): "/work",
+		filepath.Join(root, "42", "exe"): "/tmp/go-build1/b001/x.test",
+		filepath.Join(fd, "0"):           "/dev/null",
+		filepath.Join(fd, "3"):           "socket:[1234]",
+		filepath.Join(fd, "4"):           "/tmp/claude-1000/p/s/scratchpad/out.log (deleted)",
+	} {
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := held(root, 42)
+	slices.Sort(got)
+	want := []string{"/dev/null", "/tmp/claude-1000/p/s/scratchpad/out.log", "/tmp/go-build1/b001/x.test", "/work"}
+	if !slices.Equal(got, want) {
+		t.Errorf("held = %v, want %v", got, want)
+	}
+	if got := held(root, 43); len(got) != 0 {
+		t.Errorf("a missing process holds %v", got)
+	}
+}
+
 func TestNamedFindsTheCallersProcessesByComm(t *testing.T) {
 	root := t.TempDir()
 	const goComm = "go\n"

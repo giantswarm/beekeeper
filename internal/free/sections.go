@@ -5,6 +5,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -13,51 +15,60 @@ import (
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// minKiB is the size below which a dir is not worth a line.
+// minKiB is the size below which a dir is not worth a line of its own; the
+// section's total counts it.
 const minKiB = 1024
 
+// sessionID matches a Claude Code session id, the name of a session's dir.
+var sessionID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
 // sessionDirs frees the scratch of dead sessions: the session dirs under
-// Scratch whose CLI is gone, untouched (transcript and files) for Stale, with
-// no process working inside. A live session's scratch is kept however idle
-// it is: the session still reads it when it resumes work.
+// Scratch untouched (transcript and files) for Stale whose session is dead.
+// A session lives on while its CLI runs (under this id or, after a restart,
+// a newer one of its desktop session), while the desk counts on it (a roster
+// agent with its task, a role's holder) and while the git worktree it works
+// in remains; a process working or holding a file inside keeps its dir too.
+// A live session's scratch is kept however idle it is: the session still
+// reads it when it resumes work.
 func (r *Run) sessionDirs() {
 	r.head(fmt.Sprintf("dead sessions' dirs in %s (tmpfs; a live session's are kept however idle)", r.Scratch))
 	if !r.tableRead() {
 		return
 	}
-	live := map[string]*claude.Session{}
-	for _, s := range r.Sessions {
-		if s.ID != "" {
-			live[s.ID] = s
-		}
+	if r.Desk == nil {
+		r.say("  every dir kept: beekeeper's state cannot be read, so the sessions the roster and the roles count on are unknown")
+		return
 	}
 	dirs, _ := filepath.Glob(filepath.Join(r.Scratch, "*", "*"))
 	n := 0
 	for _, d := range dirs {
-		if !isDir(filepath.Join(d, "scratchpad")) && !isDir(filepath.Join(d, "tasks")) {
+		sid, slug := filepath.Base(d), filepath.Base(filepath.Dir(d))
+		if !sessionID.MatchString(sid) || !isDir(filepath.Join(d, "scratchpad")) && !isDir(filepath.Join(d, "tasks")) {
 			continue
 		}
-		sid, slug := filepath.Base(d), filepath.Base(filepath.Dir(d))
 		sc := r.scan(d)
+		transcript := filepath.Join(r.Projects, slug, sid+".jsonl")
 		last := sc.newest
-		if fi, err := os.Stat(filepath.Join(r.Projects, slug, sid+".jsonl")); err == nil && fi.ModTime().After(last) {
+		if fi, err := os.Stat(transcript); err == nil && fi.ModTime().After(last) {
 			last = fi.ModTime()
 		}
 		idle := r.Now.Sub(last)
 		if idle < r.Stale {
 			continue
 		}
-		if s, ok := live[sid]; ok {
-			r.say("  keep %s  %q (%s): CLI alive, pid %d, idle %d h", size(sc.kib), s.Name, sid, s.PID, int(idle.Hours()))
+		if name, why := r.alive(sid); why != "" {
+			r.say("  keep %s  %q (%s): %s, idle %d h", size(sc.kib), name, sid, why, int(idle.Hours()))
 			continue
 		}
-		if sc.kib < minKiB {
+		if wt, _ := claude.TranscriptCwd(transcript); claude.LinkedWorktree(wt) {
+			r.say("  keep %s  %s: its worktree %s remains, idle %d h", size(sc.kib), r.name(slug, sid), r.tilde(wt), int(idle.Hours()))
 			continue
 		}
 		if r.inUse(d) {
-			r.say("  keep (a process runs inside): %s", d)
+			r.say("  keep (a process works or holds a file inside): %s", d)
 			continue
 		}
 		n++
@@ -66,29 +77,131 @@ func (r *Run) sessionDirs() {
 			r.sudo = append(r.sudo, "sudo rm -rf "+guard.ShellQuote(d))
 			continue
 		}
-		r.tally(SessionDirs, sc.kib)
-		name := slug + "/" + sid
-		if t := r.title(sid); t != "" {
-			name = fmt.Sprintf("%q (%s)", t, sid)
+		if sc.kib >= minKiB {
+			r.act("remove %d MiB  %s  (CLI gone, idle %d h)", sc.kib/1024, r.name(slug, sid), int(idle.Hours()))
 		}
-		r.act("remove %d MiB  %s  (CLI gone, idle %d h)", sc.kib/1024, name, int(idle.Hours()))
-		r.remove(d, sc.kib)
+		r.drop(SessionDirs, d, sc.kib)
 	}
-	if n == 0 {
-		r.say("  nothing stale")
+	r.total(SessionDirs, n)
+}
+
+// alive names the session sid and says why it lives on: its CLI runs, under
+// this id or, after a restart, a newer one of its desktop session; or the
+// desk counts on it. "" for a dead session.
+func (r *Run) alive(sid string) (name, why string) {
+	host := ""
+	if rec := r.record(sid); rec != nil {
+		host = rec.SessionID
 	}
+	for _, s := range r.Sessions {
+		switch {
+		case s.ID == sid:
+			return s.Name, fmt.Sprintf("CLI alive, pid %d", s.PID)
+		case host != "" && s.HostID == host:
+			return s.Name, fmt.Sprintf("its desktop session runs a newer CLI, pid %d", s.PID)
+		}
+	}
+	return r.counted(sid, host)
+}
+
+// counted says why the desk counts on the session sid, whose desktop session
+// is host: an agent the roster keeps with its task (busy or parked) or the
+// holder of the supervisor's or the guide's role. "" when it does not.
+func (r *Run) counted(sid, host string) (name, why string) {
+	is := func(p state.Party) bool { return p.Session == sid || host != "" && p.HostSession == host }
+	for _, ag := range r.Desk.Agents {
+		if ag.Task != "" && !ag.Done && is(ag.Party) {
+			return ag.Name, "the roster keeps it with its task"
+		}
+	}
+	holders := map[string]*state.Supervisor{roleSupervisor: r.Desk.SupervisorRole().Holder, roleGuide: r.Desk.GuideRole().Holder}
+	for role, h := range holders {
+		if h != nil && is(h.Party) {
+			return h.Name, "it holds the " + role + "'s role"
+		}
+	}
+	return "", ""
+}
+
+// record is the desktop record of the CLI session sid, nil for none.
+func (r *Run) record(sid string) *claude.Record {
+	if r.records == nil && r.Records != nil {
+		r.records = r.Records()
+	}
+	return r.records[sid]
 }
 
 func (r *Run) title(sid string) string {
-	if r.titles == nil && r.Titles != nil {
-		r.titles = r.Titles()
+	if rec := r.record(sid); rec != nil {
+		return rec.Title
 	}
-	return r.titles[sid]
+	return ""
+}
+
+// name is a session dir's session: its desktop title and id, else the dir.
+func (r *Run) name(slug, sid string) string {
+	if t := r.title(sid); t != "" {
+		return fmt.Sprintf("%q (%s)", t, sid)
+	}
+	return slug + "/" + sid
+}
+
+// goBuilds frees the work dirs go commands left in TmpDir. A go command
+// removes its go-build dir as it exits, unless it dies first (killed, out of
+// memory): a go-build dir unchanged for GoBuildAge is orphaned once no go
+// command of the user runs that began before its last change, and no process
+// holds anything inside.
+func (r *Run) goBuilds() {
+	r.head(fmt.Sprintf("orphaned go-build dirs in %s (their go command gone) unchanged for %d min", r.TmpDir, int(GoBuildAge.Minutes())))
+	if !r.tableRead() {
+		return
+	}
+	dirs, _ := filepath.Glob(filepath.Join(r.TmpDir, "go-build*"))
+	n := 0
+	for _, d := range dirs {
+		fi, err := os.Lstat(d)
+		if err != nil || !fi.IsDir() || fileUID(fi) != r.UID {
+			continue
+		}
+		sc := r.scan(d)
+		last := sc.newest
+		if last.IsZero() {
+			last = fi.ModTime()
+		}
+		if r.Now.Sub(last) < GoBuildAge {
+			continue
+		}
+		if p := r.goCommand(last); p != nil {
+			r.say("  keep (go command pid %d began before its last change): %s", p.PID, d)
+			continue
+		}
+		if r.inUse(d) {
+			r.say("  keep (in use): %s", d)
+			continue
+		}
+		n++
+		if sc.kib >= minKiB {
+			r.act("remove %d MiB  %s  (go command gone, unchanged %d h)", sc.kib/1024, d, int(r.Now.Sub(last).Hours()))
+		}
+		r.drop(GoBuild, d, sc.kib)
+	}
+	r.total(GoBuild, n)
+}
+
+// goCommand is a go command of the user that began no later than at, which
+// may own a work dir changed then; nil when none runs.
+func (r *Run) goCommand(at time.Time) *proc.Process {
+	for _, p := range r.procs() {
+		if p.Comm == "go" && !p.Start.After(at) && r.uid(p.PID) == r.UID {
+			return p
+		}
+	}
+	return nil
 }
 
 // tmpPatterns are the throwaway temp dirs tools leave in /tmp: vm-manager's
-// e2e runs, go build, mktemp, pytest and jest's cache.
-var tmpPatterns = []string{"vmm-e2e-*", "go-build*", "tmp.*", "pytest-of-*", "jest_rs"}
+// e2e runs, mktemp, pytest and jest's cache.
+var tmpPatterns = []string{"vmm-e2e-*", "tmp.*", "pytest-of-*", "jest_rs"}
 
 // tmpDirs frees the user's throwaway temp dirs untouched for Stale and not in
 // use; jest's cache stays while jest runs.
@@ -121,14 +234,11 @@ func (r *Run) tmpDirs() {
 				continue
 			}
 			n++
-			r.tally(TmpDirs, sc.kib)
 			r.act("remove %d MiB  %s", sc.kib/1024, d)
-			r.remove(d, sc.kib)
+			r.drop(TmpDirs, d, sc.kib)
 		}
 	}
-	if n == 0 {
-		r.say("  nothing stale")
-	}
+	r.total(TmpDirs, n)
 }
 
 func (r *Run) jestRuns() bool {
@@ -140,15 +250,30 @@ func (r *Run) jestRuns() bool {
 	return false
 }
 
-func (r *Run) remove(d string, kib int) {
-	if !r.Apply {
-		return
+// drop removes d and counts it to section; a dry run only counts it.
+func (r *Run) drop(section, d string, kib int) {
+	if r.Apply {
+		if err := os.RemoveAll(d); err != nil {
+			r.say("  failed: %v", err)
+			return
+		}
+		r.freedKiB += kib
 	}
-	if err := os.RemoveAll(d); err != nil {
-		r.say("  failed: %v", err)
-		return
+	r.tally(section, kib)
+}
+
+// total closes a section of dirs with what it freed, or would free, in all.
+func (r *Run) total(section string, n int) {
+	switch {
+	case n == 0:
+		r.say("  nothing stale")
+	case r.sumN[section] > 0:
+		verb := "would free"
+		if r.Apply {
+			verb = "freed"
+		}
+		r.say("  %s %s", verb, Freed{Section: section, N: r.sumN[section], KiB: r.sumKiB[section]})
 	}
-	r.freedKiB += kib
 }
 
 // orphans kills the user's workers whose parent is gone, reparented to PID 1
@@ -234,23 +359,25 @@ func (r *Run) swap() {
 	r.sudo = append(r.sudo, SwapResetCmd)
 }
 
-// inUse reports whether some process works inside d.
+// inUse reports whether some process works inside d or holds something
+// there: its working directory, its executable or an open file.
 func (r *Run) inUse(d string) bool {
-	if r.cwds == nil {
-		r.cwds = []string{}
+	if r.held == nil {
+		r.held = []string{}
+		tmp, scratch := filepath.Clean(r.TmpDir), filepath.Clean(r.Scratch)
 		for pid := range r.Table.ByPID {
-			if c := r.cwd(pid); c != "" {
-				r.cwds = append(r.cwds, c)
+			for _, p := range r.holds(pid) {
+				if within(p, tmp) || within(p, scratch) {
+					r.held = append(r.held, p)
+				}
 			}
 		}
 	}
-	for _, c := range r.cwds {
-		if c == d || strings.HasPrefix(c, d+"/") {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(r.held, func(p string) bool { return within(p, d) })
 }
+
+// within reports whether path p is d or lies under it.
+func within(p, d string) bool { return p == d || strings.HasPrefix(p, d+"/") }
 
 type dirScan struct {
 	kib     int

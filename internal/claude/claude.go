@@ -483,18 +483,19 @@ func recordFiles(cfg *config.Config) []string {
 	return slices.DeleteFunc(recordPaths(cfg), func(p string) bool { return !strings.HasPrefix(filepath.Base(p), "local_") })
 }
 
-// Titles maps CLI session ids, current and prior, to their desktop titles,
-// archived sessions included: the name of a session whose CLI is gone.
-func Titles(cfg *config.Config) map[string]string {
-	out := map[string]string{}
+// ByCLI maps CLI session ids, current and prior, to their desktop records,
+// archived sessions included: the title and the desktop session of a CLI
+// that is gone.
+func ByCLI(cfg *config.Config) map[string]*Record {
+	out := map[string]*Record{}
 	for _, path := range recordFiles(cfg) {
 		r, ok := readRecord(path)
-		if !ok || r.Title == "" {
+		if !ok {
 			continue
 		}
 		for _, id := range append(r.PriorCLISessionIDs, r.CLISessionID) {
 			if id != "" {
-				out[id] = r.Title
+				out[id] = r
 			}
 		}
 	}

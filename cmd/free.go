@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -34,15 +35,27 @@ func (a *app) freeCmd() *cobra.Command {
 freed without touching running work (the sections --only picks from):
 
   session-dirs  the dirs of dead Claude Code sessions in the tmpfs /tmp
-                (<tmp>/claude-<uid>/<project>/<session>): the session's CLI
-                is gone, transcript and files untouched for --stale-hours,
-                no process inside. A live session's dirs stay however idle
-                it is: it still reads them when it resumes.
-  tmp-dirs      throwaway temp dirs in /tmp (vm-manager e2e, go build,
-                mktemp, pytest, jest's cache) untouched for --stale-hours
+                (<tmp>/claude-<uid>/<project>/<session>), transcript and
+                files untouched for --stale-hours. A session is dead once
+                its CLI is gone (also a newer CLI of its desktop session),
+                the desk counts on it no more (no roster agent with its
+                task, no role; with beekeeper's state unreadable every dir
+                stays), the git worktree it works in is gone and no
+                process works or holds a file inside. A live session's
+                dirs stay however idle it is: it still reads them when it
+                resumes.
+  go-build      the work dirs a go command left in /tmp when it died before
+                removing them: unchanged for an hour, no go command running
+                that began before their last change, nothing held inside
+  tmp-dirs      throwaway temp dirs in /tmp (vm-manager e2e, mktemp,
+                pytest, jest's cache) untouched for --stale-hours
   orphans       jest workers and Claude CLIs whose parent died, older than
                 --orphan-minutes (TERM, then KILL)
   swap          the swap reset, when RAM can take the swapped pages back
+
+Each section of dirs ends with how many it frees and their size. The
+watch frees session-dirs and go-build by itself every doctor.freeEvery
+(1h; see beekeeper doctor).
 
 What only a person decides on is reported with the memory the action would
 return, never touched: kind clusters, idle Claude CLIs, heavy or runaway
@@ -124,9 +137,9 @@ scan with the same options reuses its rows. Two rows say so:
 	}
 	f := c.Flags()
 	f.BoolVar(&o.Apply, "apply", false, "delete and kill; without it free only reports")
-	f.StringSliceVar(&only, "only", nil, "act only on these sections (comma-separated: session-dirs, tmp-dirs, orphans, swap)")
+	f.StringSliceVar(&only, "only", nil, "act only on these sections (comma-separated: "+strings.Join(free.Sections, ", ")+")")
 	f.BoolVar(&o.Summary, "summary", false, "print the candidates as TSV instead of the report; a dry run")
-	f.IntVar(&staleH, "stale-hours", 3, "hours a session's dirs or a temp dir must be untouched to count as stale")
+	f.IntVar(&staleH, "stale-hours", int(free.DefaultStale.Hours()), "hours a session's dirs or a temp dir must be untouched to count as stale")
 	f.IntVar(&cliStaleH, "cli-stale-hours", 12, "hours a Claude CLI's session must be untouched for the CLI to be marked stale (0 marks none)")
 	f.IntVar(&orphanM, "orphan-minutes", 30, "age after which an orphaned worker is killed")
 	f.IntVar(&o.HeavyMiB, "heavy-mib", 500, "anonymous RSS from which a process is reported as heavy (0 turns it off)")
@@ -162,6 +175,23 @@ func (a *app) freeSummary(o free.Options, timeout time.Duration) error {
 // freeMachine gathers what free reads: the process table, the sessions and
 // the kind clusters.
 func (a *app) freeMachine() (free.Machine, error) {
+	m, err := a.freeTmpfsMachine()
+	if err != nil {
+		return m, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	m.Clusters, m.ClustersErr = machine.KindClusters(ctx)
+	m.ClusterNotes = a.freeClusterNotes(m.Clusters, m.Sessions)
+	m.MaxLabs = a.cfg.KindClusters(ramMiB())
+	m.SlotDir, m.Slots = a.cfg.Memcap.SlotDir, a.cfg.Memcap.Slots
+	m.BuildCPU = a.memcapCPU()
+	return m, nil
+}
+
+// freeTmpfsMachine gathers what free's sections of dirs read: the process
+// table, the sessions, the desk, the desktop records and the paths.
+func (a *app) freeTmpfsMachine() (free.Machine, error) {
 	a.now = time.Now()
 	t, err := plat.Machine.Processes()
 	var terr error
@@ -174,29 +204,18 @@ func (a *app) freeMachine() (free.Machine, error) {
 	home, _ := os.UserHomeDir()
 	uid := os.Getuid()
 	tmp := os.TempDir()
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	clusters, cerr := machine.KindClusters(ctx)
-	sessions := discover(a.cfg, t, a.now)
 	return free.Machine{
-		Desk:         a.freeDesk(),
-		UID:          uid,
-		Home:         home,
-		TmpDir:       tmp,
-		Scratch:      filepath.Join(tmp, "claude-"+strconv.Itoa(uid)),
-		Projects:     a.cfg.Claude.ProjectsDir,
-		Table:        t,
-		Sessions:     sessions,
-		Titles:       func() map[string]string { return claude.Titles(a.cfg) },
-		Clusters:     clusters,
-		ClustersErr:  cerr,
-		TableErr:     terr,
-		ClusterNotes: a.freeClusterNotes(clusters, sessions),
-		MaxLabs:      a.cfg.KindClusters(ramMiB()),
-		SlotDir:      a.cfg.Memcap.SlotDir,
-		Slots:        a.cfg.Memcap.Slots,
-		BuildCPU:     a.memcapCPU(),
-		Now:          a.now,
+		Desk:     a.freeDesk(),
+		UID:      uid,
+		Home:     home,
+		TmpDir:   tmp,
+		Scratch:  filepath.Join(tmp, "claude-"+strconv.Itoa(uid)),
+		Projects: a.cfg.Claude.ProjectsDir,
+		Table:    t,
+		Sessions: discover(a.cfg, t, a.now),
+		Records:  func() map[string]*claude.Record { return claude.ByCLI(a.cfg) },
+		TableErr: terr,
+		Now:      a.now,
 	}, nil
 }
 

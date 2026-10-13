@@ -1,8 +1,9 @@
 // Package free finds what the machine can give back without touching running
 // work and frees it on request: dead sessions' scratch in the tmpfs /tmp,
-// throwaway temp dirs and orphaned workers. What only a person decides on it
-// reports with the memory the action would return: kind clusters, idle Claude
-// CLIs, heavy or runaway processes and Chrome renderers. The swap reset and
+// orphaned go-build dirs, throwaway temp dirs and orphaned workers. What only
+// a person decides on it reports with the memory the action would return:
+// kind clusters, idle Claude CLIs, heavy or runaway processes and Chrome
+// renderers. The swap reset and
 // root-owned leftovers need root: beekeeper never runs as root, so they are
 // printed as the commands a person runs.
 package free
@@ -25,20 +26,59 @@ import (
 // The sections --apply acts on, in the order they run and are summarized.
 const (
 	SessionDirs = "session-dirs"
+	GoBuild     = "go-build"
 	TmpDirs     = "tmp-dirs"
 	Orphans     = "orphans"
 	Swap        = "swap"
 )
 
 // Sections lists the acting sections.
-var Sections = []string{SessionDirs, TmpDirs, Orphans, Swap}
+var Sections = []string{SessionDirs, GoBuild, TmpDirs, Orphans, Swap}
+
+// Automatic are the sections the watch frees by itself: what dead sessions
+// and dead go commands leave in the tmpfs /tmp.
+var Automatic = []string{SessionDirs, GoBuild}
 
 // labels are the summary's section labels, shown by the front end.
 var labels = map[string]string{
 	SessionDirs: "dead Claude Code sessions' dirs in /tmp (tmpfs)",
+	GoBuild:     "orphaned go-build dirs in /tmp (tmpfs)",
 	TmpDirs:     "throwaway temp dirs in /tmp",
 	Orphans:     "orphaned jest / Claude workers",
 	Swap:        "cold pages in swap (reset needs root)",
+}
+
+// nouns name what a section counts, one and more.
+var nouns = map[string][2]string{
+	SessionDirs: {"dead session's dir", "dead sessions' dirs"},
+	GoBuild:     {"orphaned go-build dir", "orphaned go-build dirs"},
+	TmpDirs:     {"temp dir", "temp dirs"},
+	Orphans:     {"orphaned worker", "orphaned workers"},
+	Swap:        {"swap reset", "swap resets"},
+}
+
+// DefaultStale is how long a session's scratch or a temp dir stays untouched
+// before it counts as stale, unless --stale-hours says otherwise.
+const DefaultStale = 3 * time.Hour
+
+// GoBuildAge is how long an orphaned go-build dir stays unchanged before it
+// is freed: `go build -work` keeps its dir on purpose, to be looked at.
+const GoBuildAge = time.Hour
+
+// Freed is what one section freed, or would free: how many dirs or workers
+// and their size.
+type Freed struct {
+	Section string
+	N, KiB  int
+}
+
+// String says it as "12 dead sessions' dirs, 340 MiB".
+func (f Freed) String() string {
+	noun := nouns[f.Section][1]
+	if f.N == 1 {
+		noun = nouns[f.Section][0]
+	}
+	return fmt.Sprintf("%d %s, %s", f.N, noun, size(f.KiB))
 }
 
 // SwapResetCmd is what a person runs to pull the swapped pages back into RAM.
@@ -84,16 +124,18 @@ type Options struct {
 type Machine struct {
 	UID  int
 	Home string
-	// TmpDir holds the throwaway temp dirs; Scratch Claude Code's session
-	// dirs (<TmpDir>/claude-<uid>), Projects the transcripts.
+	// TmpDir holds the go-build and throwaway temp dirs; Scratch Claude
+	// Code's session dirs (<TmpDir>/claude-<uid>), Projects the transcripts.
 	TmpDir, Scratch, Projects string
 	Table                     *proc.Table
 	Sessions                  []*claude.Session
 	// Desk is beekeeper's state: the roster and the roles; nil when it
-	// cannot be read, and then no CLI has either.
+	// cannot be read, and then no CLI has either and every session's
+	// scratch stays.
 	Desk *state.State
-	// Titles maps CLI session ids to desktop titles, read when needed.
-	Titles   func() map[string]string
+	// Records maps CLI session ids, current and prior, to their desktop
+	// records (their titles), read when needed.
+	Records  func() map[string]*claude.Record
 	Clusters []machine.Cluster
 	// ClustersErr is set when docker cannot be asked.
 	ClustersErr error
@@ -123,7 +165,7 @@ type Run struct {
 	anonKiB   func(pid int) int
 	uid       func(pid int) int
 	cgroup    func(pid int) string
-	cwd       func(pid int) string
+	holds     func(pid int) []string
 	mem       func() (machine.Mem, error)
 	kill      func(pids []int)
 	scope     func() (*machine.Scope, error)
@@ -136,8 +178,9 @@ type Run struct {
 	sumN     map[string]int
 	sudo     []string
 	freedKiB int
-	cwds     []string
-	titles   map[string]string
+	// held are the paths under TmpDir a process holds, read once.
+	held    []string
+	records map[string]*claude.Record
 }
 
 func (r *Run) defaults() {
@@ -150,8 +193,8 @@ func (r *Run) defaults() {
 	if r.cgroup == nil {
 		r.cgroup = proc.Cgroup
 	}
-	if r.cwd == nil {
-		r.cwd = proc.Cwd
+	if r.holds == nil {
+		r.holds = proc.Held
 	}
 	host := platform.Current(platform.Options{}).Machine
 	if r.mem == nil {
@@ -190,21 +233,7 @@ func (r *Run) Do() {
 	r.clis()
 	r.heavy()
 	r.tabs()
-	for _, s := range Sections {
-		if !r.wants(s) {
-			continue
-		}
-		switch s {
-		case SessionDirs:
-			r.sessionDirs()
-		case TmpDirs:
-			r.tmpDirs()
-		case Orphans:
-			r.orphans()
-		case Swap:
-			r.swap()
-		}
-	}
+	r.sections()
 	if r.Summary {
 		for _, s := range Sections {
 			if r.sumN[s] > 0 {
@@ -224,6 +253,42 @@ func (r *Run) Do() {
 		r.head("needs root, run yourself")
 		for _, c := range r.sudo {
 			r.say("  %s", c)
+		}
+	}
+}
+
+// Free runs only the wanted acting sections, their lines to Out without the
+// report around them, and returns what each freed or, without Apply, would
+// free.
+func (r *Run) Free() []Freed {
+	r.defaults()
+	r.sections()
+	var out []Freed
+	for _, s := range Sections {
+		if r.sumN[s] > 0 {
+			out = append(out, Freed{Section: s, N: r.sumN[s], KiB: r.sumKiB[s]})
+		}
+	}
+	return out
+}
+
+// sections runs the wanted acting sections in their order.
+func (r *Run) sections() {
+	for _, s := range Sections {
+		if !r.wants(s) {
+			continue
+		}
+		switch s {
+		case SessionDirs:
+			r.sessionDirs()
+		case GoBuild:
+			r.goBuilds()
+		case TmpDirs:
+			r.tmpDirs()
+		case Orphans:
+			r.orphans()
+		case Swap:
+			r.swap()
 		}
 	}
 }

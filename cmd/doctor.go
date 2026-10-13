@@ -14,6 +14,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/free"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -508,6 +509,15 @@ line:
   three quarters of the cap, never while a go build runs (the watch does
   it every doctor.goCacheEvery, 1h, and says GO CACHE when a trim waited
   that long or failed); each trim is logged (gocache.trim);
+- frees what dead sessions and dead go commands left in the tmpfs /tmp,
+  beekeeper free --apply's session-dirs and go-build sections: a dead
+  session's scratch (its CLI gone, no roster task or role, its git
+  worktree gone, nothing held inside) and an orphaned go-build dir (its
+  go command gone, unchanged for an hour, nothing held inside), with the
+  count and size of each (the watch does it every doctor.freeEvery, 1h,
+  says FREED when it freed something, and its TMPFS line says when it ran
+  last; negative: off); each run that freed something is logged
+  (free.apply);
 - reports a stale binary: a running beekeeper process of a binary an
   install replaced (a start's reopen), whose saves of the state the newer
   release refuses (state.stale-writer in the log) until it ends or is
@@ -561,6 +571,11 @@ faults but remedying none.`,
 			}
 			if r := a.trimGoCache(dryRun, goBuilds); r.notable() {
 				lines = append(lines, r.String())
+			}
+			if a.cfg.Doctor.FreeEvery.Duration > 0 {
+				if r := a.freeTmpfs(dryRun, func() (free.Machine, error) { return liveTmpfs(a) }); r.notable() {
+					lines = append(lines, r.String())
+				}
 			}
 			if len(lines) == 0 {
 				lines = []string{"doctor: nothing to fix"}
