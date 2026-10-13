@@ -528,7 +528,9 @@ the reason and the entry, and a call the broker refused, left waiting on the loc
 its deadline is logged by the broker as the requester's.
 
 A reference is a SOPS file (every value in it), one value of a SOPS file (`file#a.b.c`, the dotted key
-path; `sops://` in front optional), a field of the shared 1Password vault
+path; a key holding dots resolves as it is, `file#stringData.credentials.json`, the whole remaining path tried as one key
+before it is split, or quoted, `file#stringData."credentials.json"`, or escaped, `file#stringData.credentials\.json`, the form a new key
+takes; `sops://` in front optional), a field of the shared 1Password vault
 (`op://<vault>/<item>/<field>`) or, as a source, a key of a Kubernetes Secret
 (`k8s://<context>/<namespace>/<name>/<key>[#<path>]`, the `copy` row below). beekeeper reads only the vault `secret.vault` names, and only as its
 service account, whose token it reads from `secret.tokenFile` and gives to its own `op` calls alone;

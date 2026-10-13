@@ -229,6 +229,38 @@ func TestCopyValueIntoASOPSPathKeepsTheOthers(t *testing.T) {
 	}
 }
 
+func TestCopyValueFromAKeyHoldingADot(t *testing.T) {
+	tools := secrettest.New(nil)
+	dir, _ := scratch(t)
+	src := filepath.Join(dir, "sa.sops.yaml")
+	plain := "kind: Secret\nmetadata:\n  name: sa\nstringData:\n  credentials.json: " + password + "\n  tls.crt: " + token + "\n"
+	if err := os.WriteFile(src, secrettest.Encrypt(plain), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	o := ops(tools)
+	ctx := context.Background()
+	for _, path := range []string{"stringData.credentials.json", `stringData."credentials.json"`, `stringData.credentials\.json`} {
+		ref, err := secret.ParseRef(src + "#" + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dst := filepath.Join(dir, "out.sops.yaml")
+		if _, err := o.CopyValue(ctx, ref, secret.Ref{File: dst, Path: `stringData."key.json"`}); err != nil {
+			t.Fatalf("copy %s: %v", path, err)
+		}
+		if got := decrypted(t, tools, dst); got != "stringData:\n  key.json: "+password+"\n" {
+			t.Errorf("copy %s wrote:\n%s", path, got)
+		}
+	}
+	for _, path := range []string{"stringData.credentials.yaml", `stringData."credentials.json".x`} {
+		_, err := o.CopyValue(ctx, secret.Ref{File: src, Path: path}, secret.Ref{File: filepath.Join(dir, "x.sops.yaml"), Path: "a"})
+		if err == nil || !strings.HasSuffix(err.Error(), "no value at "+path) {
+			t.Errorf("copy of the absent %s = %v", path, err)
+		}
+		noValue(t, "the refusal", err)
+	}
+}
+
 func TestConsumerAllowList(t *testing.T) {
 	for argv, ok := range map[string]bool{
 		"gh secret set TOKEN --repo o/r":                   true,
