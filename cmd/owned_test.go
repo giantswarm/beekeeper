@@ -4,13 +4,16 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -173,5 +176,74 @@ func TestASecondMergeOfARunningOneIsRefused(t *testing.T) {
 	}
 	if st := gateState(t, g); len(st.Merges) != 1 || st.Merges[0].PID != g.pid {
 		t.Errorf("merges %+v", st.Merges)
+	}
+}
+
+// A waiter stopped by a signal before its command settled wakes its owner
+// with the stop, not with a merge outcome; one whose command reported a
+// merge before the stop still hands that merge over.
+func TestAStoppedWaiterNamesTheStop(t *testing.T) {
+	a, r, woke := tellOwnerRun(t, state.Party{Session: "s1", Name: ownerName})
+	r.spec.Argv, r.spec.Command = strings.Fields("/usr/bin/beekeeper gate --queued -- devctl pr merge o/r 7"), strings.Fields("devctl pr merge o/r 7")
+	r.rc, r.doc, r.stop = 128+int(syscall.SIGTERM), nil, syscall.SIGTERM
+	a.tellOwner(context.Background(), r)
+	want := `beekeeper gate → s1: devctl pr merge o/r 7 did not settle: its waiter was stopped by SIGTERM (exit 143) and nothing waits for it any more: check the pull request or release it waited for and run it again if it still needs to`
+	if len(*woke) != 1 || (*woke)[0] != want {
+		t.Errorf("woke %q, want %q", *woke, want)
+	}
+
+	a, r, woke = tellOwnerRun(t, state.Party{Session: "s1", Name: ownerName})
+	r.spec.Argv, r.rc, r.doc, r.stop = strings.Fields("/usr/bin/devctl pr merge o/r 7"), 0, []byte(mergedDoc), syscall.SIGTERM
+	a.tellOwner(context.Background(), r)
+	if len(*woke) != 1 || !strings.Contains((*woke)[0], "exit 0: merged, release v1.2.4") {
+		t.Errorf("a merge before the stop: woke %q", *woke)
+	}
+}
+
+// A waiter whose owner left the roster while it waited, stopped or not,
+// exits without a wake.
+func TestAWaiterWhoseOwnerLeftWakesNoOne(t *testing.T) {
+	for _, stop := range []syscall.Signal{0, syscall.SIGTERM} {
+		a, r, woke := tellOwnerRun(t, state.Party{Session: "s1", Name: ownerName})
+		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+			st.Agents = nil
+			return nil, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		r.stop = stop
+		a.tellOwner(context.Background(), r)
+		evs, _ := a.store.Events(0, func(e state.Event) bool { return e.Verb == verbUnheard })
+		if len(*woke) != 0 || len(evs) != 1 || !strings.Contains(evs[0].Detail, "is no registered agent, nobody is woken") {
+			t.Errorf("stop %v: woke %q, events %+v", stop, *woke, evs)
+		}
+	}
+}
+
+// merge-child records the SIGTERM that stops it as the run's stop, passes it
+// on to its command and keeps it across the re-exec of a replaced binary.
+func TestMergeChildRecordsItsStop(t *testing.T) {
+	fakeDevctl(t, `echo "queued" >&2; exec sleep 30`)
+	base := filepath.Join(t.TempDir(), ownedRuns, "pr-merge-o_r-7-1")
+	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(childSpec{Argv: mergeArgv("o/r"), Env: os.Environ()})
+	if err := os.WriteFile(base+".spec", raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		for deadline := time.Now().Add(childStart); readPID(base) == 0 && time.Now().Before(deadline); {
+			time.Sleep(followPoll)
+		}
+		time.Sleep(300 * time.Millisecond)
+		_ = syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
+	}()
+	r := mergeChild(base)
+	if r.stop != syscall.SIGTERM || r.rc != 128+int(syscall.SIGTERM) {
+		t.Fatalf("stop %v, exit %d: want SIGTERM, 143", r.stop, r.rc)
+	}
+	if got := r.done().result(); got.stop != syscall.SIGTERM {
+		t.Errorf("the re-exec's outcome lost the stop: %v", got.stop)
 	}
 }
