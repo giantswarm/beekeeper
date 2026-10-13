@@ -392,11 +392,12 @@ const (
 	subIssuesRead = 50
 )
 
-// extrasPart is one aliased field of an extras request and the sub-issues
-// it reads.
+// extrasPart is one aliased field of an extras request, the sub-issues it
+// reads and the repository (owner/repo) it reads them of, "" for a search.
 type extrasPart struct {
 	field string
 	subs  int
+	repo  string
 }
 
 // extrasBatches splits parts into requests of at most extrasBudget
@@ -443,6 +444,7 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 				parts = append(parts, extrasPart{
 					field: fmt.Sprintf("e%d:repository(owner:%s,name:%s){issue(number:%d){subIssues(first:%d){nodes{...I projectItems(first:20){nodes{project{id} "+boardFields+"}}}}}}", i, quote(owner), quote(repo), n, subIssuesRead),
 					subs:  min(it.subIssues, subIssuesRead),
+					repo:  owner + "/" + repo,
 				})
 			}
 		}
@@ -454,13 +456,20 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 	}
 	r := map[string]json.RawMessage{}
 	var missing []GraphQLError
-	for _, batch := range extrasBatches(parts) {
+	// Each request reads the epics of one owner, acting on their repository
+	// (github.ActingOn), so a personal account's epic resolves too; the
+	// searches go with the board owner's epics.
+	var batches [][]extrasPart
+	for _, group := range github.ByOwner(parts, func(p extrasPart) string { return cmp.Or(p.repo, c.Board.Owner+"/") }) {
+		batches = append(batches, extrasBatches(group)...)
+	}
+	for _, batch := range batches {
 		var q strings.Builder
 		for _, p := range batch {
 			q.WriteString(p.field)
 		}
 		var part map[string]json.RawMessage
-		err := c.graphql(ctx, &part, "query{"+q.String()+"}"+issueFields, nil)
+		err := c.graphql(github.ActingOn(ctx, batch[0].repo), &part, "query{"+q.String()+"}"+issueFields, nil)
 		p, ok := partialOf(err)
 		if !ok {
 			return err
@@ -612,13 +621,18 @@ const closesBatch = 50
 
 // Closes reads the issues each pull request among refs closes (its closing
 // references, the Closes and Fixes keywords resolved across repositories),
-// keyed by the lower-cased ref as given, closesBatch refs per request. An
-// issue among refs, or a ref that is no issue, closes nothing; nil when
-// nothing was asked.
+// keyed by the lower-cased ref as given, closesBatch refs of one owner per
+// request, acting on their repository (github.ActingOn). An issue among
+// refs, or a ref that is no issue, closes nothing; nil when nothing was
+// asked.
 func (c *Client) Closes(ctx context.Context, refs []string) (map[string][]string, error) {
 	var out map[string][]string
-	for batch := range slices.Chunk(refs, closesBatch) {
-		part, err := c.closes(ctx, batch)
+	var batches [][]string
+	for _, group := range github.ByOwner(refs, refRepo) {
+		batches = slices.AppendSeq(batches, slices.Chunk(group, closesBatch))
+	}
+	for _, batch := range batches {
+		part, err := c.closes(github.ActingOn(ctx, refRepo(batch[0])), batch)
 		if err != nil {
 			return nil, err
 		}
