@@ -101,7 +101,7 @@ func TestAnUnheardRunWakesItsOwner(t *testing.T) {
 	if len(*woke) != 1 || (*woke)[0] != want {
 		t.Errorf("woke %q, want %q", *woke, want)
 	}
-	evs, _ := a.store.Events(0, func(e state.Event) bool { return e.Verb == "devctl.unheard" })
+	evs, _ := a.store.Events(0, func(e state.Event) bool { return e.Verb == verbUnheard })
 	if len(evs) != 1 || !strings.HasSuffix(evs[0].Detail, `; waking "worker"`) {
 		t.Errorf("events %+v", evs)
 	}
@@ -123,7 +123,7 @@ func TestAnUnheardRunWakesItsOwner(t *testing.T) {
 
 	a, r, woke = tellOwnerRun(t, state.Party{Session: "s9", Name: "a person's session"})
 	a.tellOwner(context.Background(), r)
-	evs, _ = a.store.Events(0, func(e state.Event) bool { return e.Verb == "devctl.unheard" })
+	evs, _ = a.store.Events(0, func(e state.Event) bool { return e.Verb == verbUnheard })
 	if len(*woke) != 0 || len(evs) != 1 || !strings.Contains(evs[0].Detail, "is no registered agent, nobody is woken") {
 		t.Errorf("an owner off the roster: woke %q, events %+v", *woke, evs)
 	}

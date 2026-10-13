@@ -32,6 +32,10 @@ const ownedRuns = "runs"
 // the outcome to the caller.
 const ownerWait = 5 * time.Minute
 
+// verbUnheard logs a run's outcome its caller did not hear, handed to its
+// owner.
+const verbUnheard = "devctl.unheard"
+
 // gateParty logs what a run's merge-child does for its owner.
 var gateParty = state.Party{Name: "beekeeper gate"}
 
@@ -43,7 +47,8 @@ var wakeOwner = (*app).wakeAgent
 // rollout wait) as the gate runs a merge, without a queue: outside its
 // caller (runDetached), its output and exit code unchanged, its outcome
 // handed to its owner by the run's merge-child once the caller no longer
-// listens (tellOwner).
+// listens (tellOwner). A wait whose caller's timeout cuts the call runs on:
+// the call exits 76, as a queued merge does, and the outcome wakes the owner.
 func (a *app) ownedRun(argv []string) error {
 	defer outliveCaller()()
 	me, err := a.caller()
@@ -57,15 +62,35 @@ func (a *app) ownedRun(argv []string) error {
 		return exitCode(runChild(argv, os.Stdout))
 	}
 	spec := childSpec{Argv: argv, Owner: me, Config: a.explicitConfig()}
-	if lead, ok := claimLead(a.store.Dir(), argv, base); ok {
-		defer releaseLead(a.store.Dir(), argv, base)
-	} else if self, err := selfExe(); err == nil {
-		spec.Argv, spec.Command = []string{self, followRunCmd, lead}, argv
-		gateLine("the same command already polls GitHub on this machine (%s): following its outcome instead of polling again", filepath.Base(lead))
+	lead, polls := claimLead(a.store.Dir(), argv, base)
+	if !polls {
+		if self, err := selfExe(); err == nil {
+			spec.Argv, spec.Command = []string{self, followRunCmd, lead}, argv
+			gateLine("the same command already polls GitHub on this machine (%s): following its outcome instead of polling again", filepath.Base(lead))
+		}
 	}
-	r := runDetached(spec, base, func(int) {})
+	var pid int
+	r := runDetached(spec, base, func(p int) { pid = p })
+	if r.left {
+		// The run goes on and keeps the lead: its merge-child hands the
+		// outcome over once this gate is gone without its heard marker.
+		gateLine("%s runs on outside the call (pid %d), %s: do not run it again, do not poll", strings.Join(argv, " "), pid, ownerOf(me))
+		return &exitError{code: ExitGateQueued}
+	}
+	if polls {
+		releaseLead(a.store.Dir(), argv, base)
+	}
 	handOver(base, r, cli)
 	return exitCode(r.rc)
+}
+
+// ownerOf says where the outcome of a wait that runs on outside the call
+// goes: a wake of its owner, a registered agent (tellOwner).
+func ownerOf(me state.Party) string {
+	if me.Session == "" && me.HostSession == "" {
+		return "its outcome reaches nobody, the caller has no session"
+	}
+	return fmt.Sprintf("its outcome wakes %q", me.Name)
 }
 
 // resultKept is how long a finished wait's result file stays for the runs
@@ -297,17 +322,17 @@ func (a *app) tellOwner(ctx context.Context, r childResult) {
 	}
 	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(r.spec.Owner) })
 	if i < 0 {
-		_ = a.store.Log(event(gateParty, "devctl.unheard", "%s; %q is no registered agent, nobody is woken", line, r.spec.Owner.Name))
+		_ = a.store.Log(event(gateParty, verbUnheard, "%s; %q is no registered agent, nobody is woken", line, r.spec.Owner.Name))
 		return
 	}
 	ag := st.Agents[i]
-	_ = a.store.Log(event(gateParty, "devctl.unheard", "%s; waking %q", line, ag.Name))
+	_ = a.store.Log(event(gateParty, verbUnheard, "%s; waking %q", line, ag.Name))
 	q := ag.Session
 	if q == "" {
 		q = ag.HostSession
 	}
 	if err := wakeOwner(a, ctx, gateParty, q, line, ""); err != nil {
-		_ = a.store.Log(event(gateParty, "devctl.unheard", "waking %q failed (%v): %s", ag.Name, err, line))
+		_ = a.store.Log(event(gateParty, verbUnheard, "waking %q failed (%v): %s", ag.Name, err, line))
 	}
 }
 

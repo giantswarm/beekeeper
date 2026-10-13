@@ -30,7 +30,8 @@ CLAUDE.md and rules) apply too and win where stricter or more specific.
 - **Git.** Never a force push, not even `--force-with-lease`: a branch behind its base merges it and
   pushes. Work in a worktree of your own; no `git stash` (every worktree shares it): commit waiting
   work.
-- **No polling**: no `--watch` or sleep loop; `devctl pr wait` and `devctl pr merge` block.
+- **No polling**: no `--watch` or sleep loop; `devctl pr wait` and `devctl pr merge` block; a gated
+  devctl wait is never wrapped in `timeout`, which cuts the call, not the wait.
 - **Nothing left running**: no port-forward, monitor or background wait; kill by the captured PID,
   never a pattern. Nothing is hard-deleted: move it aside.
 - **Near `agents.relayAt`**, write a handover file, send its path to the supervisor and stop.

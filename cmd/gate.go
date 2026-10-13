@@ -133,7 +133,7 @@ document or ended by a signal is judged by GitHub: merged, its release is
 unconfirmed. A second merge of a pull request whose merge runs is refused
 (exit 3) with that run's start, owner and last line.
 
-/home/teemow/.go/bin/beekeeper gate -- devctl pr wait, release wait and rollout wait run the same way outside
+devctl pr wait, release wait and rollout wait run the same way outside
 their caller, without a queue; one whose identical command already runs on
 the machine follows that run (follow-run: its stderr, document and exit
 code) instead of polling GitHub a second time. Whichever command it is, its outcome reaches
@@ -150,7 +150,11 @@ devctl runs: exit 76 as for a queued merge, devctl (or the wait, in a run of
 its own) goes on outside the call, and its outcome wakes the owner as
 above; do not run it again, do not poll. A merge expected to outlive the
 limit runs with run_in_background, which the hook gives --limit 0 (no
-limit) and a 30m wait.`,
+limit) and a 30m wait. A timeout wrapped around the call (timeout 600 devctl
+…, coreutils' timeout, which runs the call as its child; busybox's execs it
+and is not seen) cuts the connection, not the run: its SIGTERM ends the call at once with
+exit 76, devctl goes on outside it and its outcome wakes the owner as above.
+A gated command is therefore never wrapped in timeout.`,
 		Hidden: true,
 		Args:   cobra.MinimumNArgs(1),
 		PersistentPreRunE: func(_ *cobra.Command, args []string) error {
@@ -457,14 +461,19 @@ func leaveAt(now time.Time, limit time.Duration, queued bool) time.Time {
 	return now.Add(limit)
 }
 
-// leave ends the call at its tool limit while the merge's devctl (its
-// merge-child pid) runs on: exit 76, as for a queued merge, without the heard
-// marker, so merge-child wakes the owner with the outcome (tellOwner) and the
-// watch records the run once devctl ended (recordGone).
-func (g *gateRun) leave(pid int) error {
-	gateLine("%s's devctl runs past this call's limit (merge.toolLimit; a desktop Bash call stops at 10 minutes): it runs on outside the call (pid %d), %s: do not run it again, do not poll",
-		g.key(), pid, g.outcomeTo())
-	_ = g.store.Log(event(g.me, "merge.left", "%s: devctl runs on outside the call past its limit (pid %d)", g.key(), pid))
+// leave ends the call at its tool limit, or as its caller's timeout cut it
+// (cut), while the merge's devctl (its merge-child pid) runs on: exit 76, as
+// for a queued merge, without the heard marker, so merge-child wakes the
+// owner with the outcome (tellOwner) and the watch records the run once
+// devctl ended (recordGone).
+func (g *gateRun) leave(pid int, cut bool) error {
+	past, why := "its limit", "this call's limit (merge.toolLimit; a desktop Bash call stops at 10 minutes)"
+	if cut {
+		past, why = "the caller's timeout", "the caller's timeout, which cut the connection, not the merge"
+	}
+	gateLine("%s's devctl runs past %s: it runs on outside the call (pid %d), %s: do not run it again, do not poll",
+		g.key(), why, pid, g.outcomeTo())
+	_ = g.store.Log(event(g.me, "merge.left", "%s: devctl runs on outside the call past %s (pid %d)", g.key(), past, pid))
 	return &exitError{code: ExitGateQueued}
 }
 
@@ -1189,7 +1198,7 @@ func (g *gateRun) follow(base string, pid int, offset int64) error {
 	}
 	run = run.emit()
 	if run.left {
-		return g.leave(pid)
+		return g.leave(pid, run.cut)
 	}
 	if !g.wakesOnFailure(run) {
 		defer handOver(base, run, g.cli)
