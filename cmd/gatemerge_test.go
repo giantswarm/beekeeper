@@ -702,7 +702,7 @@ func TestAToolPromotionHoldsUntilDevctlReportsItsRelease(t *testing.T) {
 	if len(st.Holds) != 1 || !st.Holds[0].ToolMerged || st.Holds[0].ToolRelease != devctlTo {
 		t.Fatalf("before devctl reports %s: holds %+v", devctlTo, st.Holds)
 	}
-	if _, ok := merge.Blocking(st, time.Now(), "giantswarm/backstage", 8, config.Lane{Name: "portal-tools"}); !ok {
+	if _, ok := merge.Blocking(st, time.Now(), scratchRepo, 8, config.Lane{Name: scratchRepo}); !ok {
 		t.Error("the promotion's window lets another merge through")
 	}
 	version = devctlTo
