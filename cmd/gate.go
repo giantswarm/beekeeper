@@ -146,6 +146,11 @@ before its command settled (a cleanup's SIGTERM, a stop of its unit) wakes
 its owner with the stop instead, as nothing waits for the command any more;
 an owner no longer on the roster is woken by no run.
 
+The gate's stdout is devctl's document and nothing else: the gate's own
+lines (prefixed "beekeeper gate: ") and devctl's progress (waiting for
+image …) go to stderr, so "<command> | jq ." parses; a 2>&1 before the
+pipe mixes the progress into the document.
+
 A desktop Bash call stops its command at 10 minutes without an exit code.
 A foreground merge or promotion therefore leaves merge.toolLimit (default
 9m) after the call started, whether it still waits for its turn or its
