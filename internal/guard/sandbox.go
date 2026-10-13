@@ -79,6 +79,34 @@ func globRoot(pat string) string {
 	return pat
 }
 
+// sessionLabs lists the kind labs whose leases session holds, sorted.
+func (h Hook) sessionLabs(session string) []string {
+	if h.Labs == nil {
+		return nil
+	}
+	var labs []string
+	for _, l := range h.Labs() {
+		if heldBy(l, session) {
+			labs = append(labs, l.Env)
+		}
+	}
+	slices.Sort(labs)
+	return labs
+}
+
+// freshLabs has the kubeconfigs in the session's lab leases brought up to
+// date with their clusters before its command runs: a lab recreated under
+// a held lease has a new CA, often a new port, which the copy would no
+// longer reach.
+func (h Hook) freshLabs(ev event) {
+	if ev.ToolName != bashTool || h.FreshLabs == nil {
+		return
+	}
+	if labs := h.sessionLabs(ev.Session); len(labs) > 0 {
+		h.FreshLabs(labs)
+	}
+}
+
 // labProxy puts the refresh of the session's lab kubeconfigs in front of a
 // sandboxed session's command, after the hook's own rewrites: the sandbox
 // reaches a lab's API server only through its SOCKS proxy, whose
@@ -86,19 +114,16 @@ func globRoot(pat string) string {
 // the lease is pointed at this process's proxy before the command runs.
 // out is the hook's answer so far; a refused call stays refused.
 func (h Hook) labProxy(ev event, out []byte) []byte {
-	if ev.ToolName != bashTool || h.Sandbox == nil || h.Labs == nil {
+	if ev.ToolName != bashTool || h.Sandbox == nil {
 		return out
 	}
-	var labs []string
-	for _, l := range h.Labs() {
-		if heldBy(l, ev.Session) {
-			labs = append(labs, ShellQuote(l.Env))
-		}
-	}
+	labs := h.sessionLabs(ev.Session)
 	if len(labs) == 0 {
 		return out
 	}
-	slices.Sort(labs)
+	for i, l := range labs {
+		labs[i] = ShellQuote(l)
+	}
 	input := ev.ToolInput
 	var d hookOutput
 	if out != nil {

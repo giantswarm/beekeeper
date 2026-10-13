@@ -1,17 +1,25 @@
 package cmd
 
 import (
+	"bytes"
 	"cmp"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
+	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 )
@@ -25,7 +33,12 @@ func (a *app) leaseKubeconfigCmd() *cobra.Command {
 (<leaseDir>/<lab>/kubeconfig, mode 0600) and prints its path; release frees
 the lease and the kubeconfig with it. Only the session that holds the lab's
 lease gets one. A lab claim writes it already when the cluster runs; this
-writes it once a lab started after its claim does.
+writes it once a lab started after its claim does. Before every command of
+a session that holds a lab lease, beekeeper's hook checks the copy against
+the lab's API server and rewrites it from kind when it no longer reaches
+it: a lab recreated under the lease (agentlab down and up) has a new CA.
+The copy stays in the lease rather than pointing at kind's own kubeconfig,
+so that a released lease reaches the cluster no more.
 
 In the agent sandbox, which closes the container runtime's socket kind
 needs, the host's broker writes it for the session, and the session points
@@ -187,4 +200,120 @@ func (a *app) holdsLease(res, what string) error {
 		return refused("%s: the %s %s is held by %s, not by you: claim it first (beekeeper lease claim %s)", what, kind, res, holder, res)
 	}
 	return nil
+}
+
+// labProbeTimeout bounds the dial of a lab's API server that checks the
+// kubeconfig in its lease; labRefreshTimeout bounds kind's answer when it
+// no longer reaches it. Both run in the hook, before a command.
+const (
+	labProbeTimeout   = time.Second
+	labRefreshTimeout = 5 * time.Second
+)
+
+// freshLabKubeconfigs brings the kubeconfigs in the lab leases labs, which
+// the caller holds, up to date with their clusters; quiet, what fails is
+// left as it is.
+func (a *app) freshLabKubeconfigs(labs []string) {
+	for _, res := range labs {
+		_, _ = a.refreshLabKubeconfig(context.Background(), res)
+	}
+}
+
+// refreshLabKubeconfig rewrites the kubeconfig in the lease of the lab res
+// from kind when it no longer reaches the lab's API server, the lab
+// recreated with a new CA or port, and reports whether it did. The sandbox
+// proxy the copy names is kept. Only an existing copy is replaced: a
+// released lease, which took its kubeconfig with it, gets none back, and a
+// cluster kind does not answer for leaves the copy as it is.
+func (a *app) refreshLabKubeconfig(ctx context.Context, res string) (bool, error) {
+	cl := a.cfg.LabCluster(res)
+	if cl == "" {
+		return false, nil
+	}
+	path := labKubeconfig(a.cfg.LeaseDir, res)
+	raw, err := os.ReadFile(path) //nolint:gosec // a lease's kubeconfig (labKubeconfig of a configured lab)
+	if err != nil || !staleKubeconfig(ctx, raw) {
+		return false, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, labRefreshTimeout)
+	defer cancel()
+	kc, err := secretRun(ctx, "", nil, nil, "kind", "get", "kubeconfig", "--name", cl)
+	if err != nil {
+		return false, fmt.Errorf("kind cluster %s: %w", cl, err)
+	}
+	if proxy := kubeconfigProxy(raw); proxy != "" {
+		if kc, _, err = sandbox.ProxyKubeconfig(kc, proxy); err != nil {
+			return false, err
+		}
+	}
+	if bytes.Equal(kc, raw) {
+		return false, nil
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, kc, 0o600); err != nil { //nolint:gosec // beside the lease's kubeconfig
+		return false, err
+	}
+	return true, os.Rename(tmp, path)
+}
+
+// staleKubeconfig reports whether the kubeconfig raw no longer reaches a
+// loopback API server it names: the server does not answer, or its
+// certificate does not chain to the CA the kubeconfig carries. A server
+// off loopback, or one without CA data, is not judged.
+func staleKubeconfig(ctx context.Context, raw []byte) bool {
+	cfg, err := clientcmd.Load(raw)
+	if err != nil {
+		return false
+	}
+	for _, c := range cfg.Clusters {
+		u, err := url.Parse(c.Server)
+		if err != nil || !config.Loopback(u.Hostname()) || len(c.CertificateAuthorityData) == 0 {
+			continue
+		}
+		roots := x509.NewCertPool()
+		if !roots.AppendCertsFromPEM(c.CertificateAuthorityData) || !trustedServer(ctx, u.Host, roots) {
+			return true
+		}
+	}
+	return false
+}
+
+// trustedServer reports whether the TLS server at addr answers with a
+// certificate that chains to roots; the name is not checked, the CA is
+// what a recreated lab changes.
+func trustedServer(ctx context.Context, addr string, roots *x509.CertPool) bool {
+	d := tls.Dialer{NetDialer: &net.Dialer{Timeout: labProbeTimeout}, Config: &tls.Config{
+		InsecureSkipVerify: true, //nolint:gosec // the chain is verified against roots below
+		MinVersion:         tls.VersionTLS12,
+	}}
+	conn, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = conn.Close() }()
+	certs := conn.(*tls.Conn).ConnectionState().PeerCertificates
+	if len(certs) == 0 {
+		return false
+	}
+	inter := x509.NewCertPool()
+	for _, c := range certs[1:] {
+		inter.AddCert(c)
+	}
+	_, err = certs[0].Verify(x509.VerifyOptions{Roots: roots, Intermediates: inter})
+	return err == nil
+}
+
+// kubeconfigProxy is the proxy the kubeconfig raw names for a cluster, ""
+// without one.
+func kubeconfigProxy(raw []byte) string {
+	cfg, err := clientcmd.Load(raw)
+	if err != nil {
+		return ""
+	}
+	for _, c := range cfg.Clusters {
+		if c.ProxyURL != "" {
+			return c.ProxyURL
+		}
+	}
+	return ""
 }

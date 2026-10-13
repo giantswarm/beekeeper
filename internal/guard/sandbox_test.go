@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -135,6 +136,30 @@ func TestLabProxyRefreshesHeldLabs(t *testing.T) {
 	broken.ConfigErr = errors.New("bad")
 	if d := run(broken, "s7", "kubectl get nodes"); d == nil || d.PermissionDecision != decisionDeny {
 		t.Errorf("a refused call stays refused: %+v", d)
+	}
+}
+
+func TestFreshLabsBeforeAHoldersCommand(t *testing.T) {
+	var got [][]string
+	h := hook()
+	h.Labs = func() []lease.Holder {
+		return []lease.Holder{{Env: labB, Session: "s7"}, {Env: labA, HostSession: "local_s7"}, {Env: "lab-c", Session: "other"}}
+	}
+	h.FreshLabs = func(labs []string) { got = append(got, labs) }
+	run := func(tool, session string) {
+		ev := toolEvent(tool, map[string]any{commandKey: "kubectl get nodes"})
+		ev["session_id"] = session
+		decideEvent(t, h, ev)
+	}
+	run(bashTool, "s7")
+	if len(got) != 1 || !slices.Equal(got[0], []string{labA, labB}) {
+		t.Errorf("a lab lease's holder, unsandboxed: %q", got)
+	}
+	got = nil
+	run(bashTool, "s2")
+	run("Read", "s7")
+	if got != nil {
+		t.Errorf("no holder's Bash call: %q", got)
 	}
 }
 
