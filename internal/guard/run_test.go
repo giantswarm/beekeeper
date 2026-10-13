@@ -1,6 +1,7 @@
 package guard
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -26,10 +27,39 @@ func TestCommandHead(t *testing.T) {
 		{[]string{"/usr/bin/bash", "-c", "make test", "arg0"}, "make test"},
 		{[]string{"python3", "-c", "bytearray(200<<20)"}, "python3 -c bytearray(200<<20)"},
 		{[]string{"go", "test", strings.Repeat("x", 200)}, "go test " + strings.Repeat("x", 91) + "…"},
+		// too long: the heavy command leads, not the checkout before it
+		{[]string{testShell, "-c", slotIncident}, "… go test -race -timeout 25m -run '^TestSlackProof$' -count=150 -v ./internal/lab/ 2>&1 | /usr/bin/…"},
+		{[]string{testShell, "-c", "git -C " + strings.Repeat("x", 100) + " switch -q main\ngo build ./..."}, "… go build ./..."},
+		// too long with no heavy command: the start, clipped
+		{[]string{testShell, "-c", "git -C " + strings.Repeat("x", 100) + " checkout -q -- ."}, "git -C " + strings.Repeat("x", 92) + "…"},
 	} {
 		if got := CommandHead(c.argv); got != c.want {
 			t.Errorf("CommandHead(%q) = %q, want %q", c.argv, got, c.want)
 		}
+	}
+}
+
+// slotIncident is a compound command whose start (an assignment, a git
+// checkout, a worktree removal) fills a slot record's width; the go test
+// after it is what holds the slot.
+const slotIncident = `S=/tmp/claude-1000/-home-teemow-projects-klaus-lab/5df9a204-e414-4e77-b24b-b146480a8572/scratchpad/amp; ` +
+	`git -C "$S" checkout -q -- . && git -C ~/projects/giantswarm/agentlab worktree remove "$S"; ` +
+	`cd ~/projects/worktrees/agentlab/fix-slackproof-flake && go test -race -timeout 25m -run '^TestSlackProof$' -count=150 -v ./internal/lab/ 2>&1 | /usr/bin/grep -E "^panic|^(--- |ok|FAIL)" | sort | uniq -c`
+
+func TestHolderNamesTheHeavyCommand(t *testing.T) {
+	o := Options{SlotDir: t.TempDir(), Max: "12G"}
+	writeHolder(o, 1, []string{testShell, "-c", slotIncident})
+	b, err := os.ReadFile(filepath.Join(o.SlotDir, "1.holder"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var h holderRecord
+	if err := json.Unmarshal(b, &h); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(h.Cmd, "… go test -race -timeout 25m -run '^TestSlackProof$' -count=150") || strings.Contains(h.Cmd, "checkout") ||
+		strings.Contains(h.Cmd, `"`) || len([]rune(h.Cmd)) > 140 {
+		t.Errorf("holder cmd %q: want the go test first, no checkout, no double quote, at most 140 characters", h.Cmd)
 	}
 }
 
