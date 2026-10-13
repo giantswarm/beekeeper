@@ -44,6 +44,26 @@ const (
 // LogPrefix starts every line Run writes, the cap's victim line included.
 const LogPrefix = "beekeeper run: "
 
+// The wait for a slot when neither --wait nor MEMCAP_WAIT sets one: a
+// foreground call's fits within the Bash tool's 10 minutes, a background
+// call's, which no tool limit stops, is longer. The PreToolUse hook exports
+// BackgroundEnv=1 into every background Bash call, so a run it reaches
+// directly, after a cd or export chain or through a script gets the
+// background wait.
+const (
+	ForegroundWait = "8m"
+	BackgroundWait = "60m"
+	BackgroundEnv  = "MEMCAP_BACKGROUND"
+)
+
+// Where a run's wait came from (Options.WaitFrom).
+const (
+	WaitFromForeground = "the foreground default"
+	WaitFromBackground = "the background default"
+	WaitFromEnv        = "MEMCAP_WAIT"
+	WaitFromFlag       = "--wait"
+)
+
 // plat caps the runs and reads the machine.
 var plat = platform.Current(platform.Options{})
 
@@ -121,11 +141,16 @@ type Options struct {
 	// slot shares (platform.Cap).
 	CPUQuota  string
 	CPUWeight int
-	// Wait bounds the wait for a slot and for the memory the cap needs.
-	Wait    time.Duration
-	SlotDir string
-	Slots   int
-	Stderr  io.Writer
+	// Wait bounds the wait for a slot and for the memory the cap needs;
+	// WaitFrom names where it came from (WaitFromForeground, …), for the
+	// lines that state it.
+	Wait     time.Duration
+	WaitFrom string
+	// Background: the run is part of a background Bash call (BackgroundEnv).
+	Background bool
+	SlotDir    string
+	Slots      int
+	Stderr     io.Writer
 	// Record appends a run event (VerbStart, VerbEnd) to the event log; nil
 	// records nothing. It must not fail or block the run: it swallows its
 	// own errors and bounds its wait.
@@ -173,6 +198,38 @@ func ParseSize(s string) (int64, error) {
 	default:
 		return n << 30, nil
 	}
+}
+
+// ResolveWait returns a run's wait, where it came from (WaitFrom…) and
+// whether the run is part of a background Bash call: flag when set, else
+// $MEMCAP_WAIT, else BackgroundWait with BackgroundEnv=1, else
+// ForegroundWait.
+func ResolveWait(flag string, flagSet bool) (wait, from string, background bool) {
+	background = os.Getenv(BackgroundEnv) == "1"
+	switch env := os.Getenv("MEMCAP_WAIT"); {
+	case flagSet:
+		return flag, WaitFromFlag, background
+	case env != "":
+		return env, WaitFromEnv, background
+	case background:
+		return BackgroundWait, WaitFromBackground, background
+	default:
+		return ForegroundWait, WaitFromForeground, background
+	}
+}
+
+// waitText states the wait applied and, when known, where it came from:
+// "60m (the background default)"; whole minutes in minutes, as the defaults
+// are written.
+func (o Options) waitText() string {
+	s := o.Wait.String()
+	if o.Wait > 0 && o.Wait%time.Minute == 0 {
+		s = strconv.Itoa(int(o.Wait/time.Minute)) + "m"
+	}
+	if o.WaitFrom == "" {
+		return s
+	}
+	return s + " (" + o.WaitFrom + ")"
 }
 
 // ParseWait parses a duration ("8m", "90s", "1h"); a bare number is seconds.
@@ -294,8 +351,12 @@ func waitForSlot(o Options, needKiB int64, session string, argv []string, logf f
 		}
 		now := time.Now()
 		if !now.Before(deadline) {
-			logf("gave up after %s waiting for %s", o.Wait, reason)
-			logf("the machine is busy; run this command with run_in_background (the wait is then 60m) or try again later — do not poll")
+			logf("gave up after %s waiting for %s", o.waitText(), reason)
+			if o.Background {
+				logf("the machine is busy; try again later — do not poll")
+			} else {
+				logf("the machine is busy; run this command with run_in_background (the wait is then %s) or try again later — do not poll", BackgroundWait)
+			}
 			if lock != nil {
 				_ = os.Remove(filepath.Join(o.SlotDir, strconv.Itoa(slot)+".holder"))
 				_ = lock.Unlock()
@@ -303,7 +364,7 @@ func waitForSlot(o Options, needKiB int64, session string, argv []string, logf f
 			return nil, 0
 		}
 		if !waited {
-			logf("waiting (up to %s) for %s", o.Wait, reason)
+			logf("waiting up to %s for %s", o.waitText(), reason)
 			waited = true
 		}
 		time.Sleep(min(deadline.Sub(now), 5*time.Second))

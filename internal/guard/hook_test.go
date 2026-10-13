@@ -184,13 +184,33 @@ func TestHeavyClassification(t *testing.T) {
 	}
 }
 
+// Every background call exports BackgroundEnv, so that a beekeeper run in
+// it, however reached, waits the background default; a foreground call's
+// run, direct or chained, passes unchanged and waits the foreground default.
 func TestBackgroundRunGetsTheLongWait(t *testing.T) {
-	d := decide(t, hook(), "/", "yarn test --maxWorkers=4", map[string]any{backgroundKey: true})
-	if d == nil || !strings.HasPrefix(d.UpdatedInput["command"].(string), "MEMCAP_WAIT=60m ") {
-		t.Fatalf("want the 60m wait, got %+v", d)
+	for _, cmd := range []string{
+		"yarn test --maxWorkers=4",
+		"beekeeper run -- go test ./...",
+		"cd /src/x && export GOFLAGS=-p=2 && beekeeper run -- go test ./...",
+		"./scripts/build.sh",
+		"git status",
+	} {
+		d := decide(t, hook(), "/", cmd, map[string]any{backgroundKey: true})
+		if d == nil || !strings.HasPrefix(d.UpdatedInput["command"].(string), "export MEMCAP_BACKGROUND=1; ") {
+			t.Errorf("%q in the background: want the background export, got %+v", cmd, d)
+			continue
+		}
+		if _, ok := d.UpdatedInput["timeout"]; ok {
+			t.Errorf("%q: a background run keeps its timeout: %v", cmd, d.UpdatedInput)
+		}
 	}
-	if _, ok := d.UpdatedInput["timeout"]; ok {
-		t.Errorf("a background run keeps its timeout: %v", d.UpdatedInput)
+	for _, cmd := range []string{
+		"beekeeper run -- go test ./...",
+		"cd /src/x && export GOFLAGS=-p=2 && beekeeper run -- go test ./...",
+	} {
+		if d := decide(t, hook(), "/", cmd, nil); d != nil {
+			t.Errorf("%q in the foreground: want it unchanged, got %+v", cmd, d)
+		}
 	}
 }
 
@@ -298,7 +318,7 @@ func TestHookGatesMerges(t *testing.T) {
 		{"devctl pr merge giantswarm/marge 3 --timeout 9m | $L record x", g + "devctl pr merge giantswarm/marge 3 --timeout 9m | $L record x", false},
 		{"timeout 600 devctl pr merge o/r 1", "timeout 600 " + g + "devctl pr merge o/r 1", false},
 		{"cd x && devctl pr merge o/r 1", "cd x && " + g + "devctl pr merge o/r 1", false},
-		{"devctl pr merge o/r 1", self + " gate --wait 30m --limit 0 -- devctl pr merge o/r 1", true},
+		{"devctl pr merge o/r 1", backgroundExport + self + " gate --wait 30m --limit 0 -- devctl pr merge o/r 1", true},
 		{"make && devctl pr merge o/r 1", self + " run -- zsh -c 'make && " + g + "devctl pr merge o/r 1'", false},
 		// The live case: only the devctl invocation is wrapped, the pipeline runs as written.
 		{`flock ~/.local/state/lab/locks/merge-marge.lock devctl pr merge --update-branch o/r 7 | tee "$(scripts/scratch orch merge-7.json)" | ./orchestration/ledger.sh record o/r#7 --agent orchestrator`,
@@ -323,7 +343,7 @@ func TestHookGatesMerges(t *testing.T) {
 		{"devctl pr wait o/r 1", g + "devctl pr wait o/r 1", false},
 		{"devctl release wait o/r --pr 1 | tail -3", g + "devctl release wait o/r --pr 1 | tail -3", false},
 		{"devctl rollout wait inst o/r --pr 1 >| r.json", g + "devctl rollout wait inst o/r --pr 1 >| r.json", false},
-		{"devctl pr wait o/r 1", self + " gate --wait 30m --limit 0 -- devctl pr wait o/r 1", true},
+		{"devctl pr wait o/r 1", backgroundExport + self + " gate --wait 30m --limit 0 -- devctl pr wait o/r 1", true},
 		// A merge on a line of its own in a multi-line -c string is gated in place.
 		{"bash -c '\ntrap restore EXIT\ndevctl pr merge o/r 7\n'", "bash -c '\ntrap restore EXIT\n" + g + "devctl pr merge o/r 7\n'", false},
 		// An indented line is a command position too.

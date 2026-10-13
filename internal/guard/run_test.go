@@ -193,3 +193,38 @@ func TestRunInTheSandboxGoesThroughTheBroker(t *testing.T) {
 		t.Errorf("a sandboxed run without a broker: exit %d, %q; want 1 and the refusal", rc, stderr.String())
 	}
 }
+
+func TestResolveWait(t *testing.T) {
+	for _, c := range []struct {
+		bg, env, flag string
+		flagSet       bool
+		wait, from    string
+		background    bool
+	}{
+		{wait: ForegroundWait, from: WaitFromForeground},
+		{bg: "1", wait: BackgroundWait, from: WaitFromBackground, background: true},
+		{bg: "1", env: "5m", wait: "5m", from: WaitFromEnv, background: true},
+		{env: "5m", wait: "5m", from: WaitFromEnv},
+		{bg: "1", env: "5m", flag: "2m", flagSet: true, wait: "2m", from: WaitFromFlag, background: true},
+	} {
+		t.Setenv(BackgroundEnv, c.bg)
+		t.Setenv("MEMCAP_WAIT", c.env)
+		wait, from, bg := ResolveWait(c.flag, c.flagSet)
+		if wait != c.wait || from != c.from || bg != c.background {
+			t.Errorf("%+v: got %s, %s, %v", c, wait, from, bg)
+		}
+	}
+}
+
+func TestWaitText(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		2 * time.Hour: "120m", 60 * time.Minute: "60m", 8 * time.Minute: "8m", 10 * time.Minute: "10m", time.Second: "1s", 90 * time.Second: "1m30s",
+	} {
+		if got := (Options{Wait: d}).waitText(); got != want {
+			t.Errorf("%s: %q, want %q", d, got, want)
+		}
+	}
+	if got := (Options{Wait: time.Hour, WaitFrom: WaitFromBackground}).waitText(); got != "60m (the background default)" {
+		t.Errorf("with its source: %q", got)
+	}
+}
