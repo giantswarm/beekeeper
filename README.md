@@ -1180,7 +1180,13 @@ like a merge typed on the command line.
   branch update) GitHub answers with a 5xx, devctl's exit 7 naming `…/pulls/<n>/merge: 5xx`, is
   sent again while GitHub reports the pull request open, up to three times 10 s, 30 s and 1 m
   apart (`merge.retry` each), with the expected head as before; the caller reads one document,
-  the last run's. A run that ends with nothing merged is `merge.failed` and leaves the lane with
+  the last run's. A red run (exit 1) is judged against its base branch: when every red check is
+  neither required by the base (branch protection or a ruleset, read with `gh api`) nor a security
+  scan (nancy, gitleaks, govulncheck, trivy, CodeQL, ...) and is red on the base branch's head too,
+  devctl runs again with `--accept-red <check>` for each (`merge.acceptred`, naming the checks and
+  why), the caller reading that run's document; a red check green, still running or without a result
+  on the base head, a required one or a security scan ends the run red as before, and so does a
+  devctl without `--accept-red`, the gate's line naming why. A run that ends with nothing merged is `merge.failed` and leaves the lane with
   its run: a place dies with its process, and the session's retry joins the lane anew.
 
 A merge runs when no merge before it in its lane's queue holds its place, nothing else of the lane runs, fewer than

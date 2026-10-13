@@ -116,7 +116,15 @@ SIGTERM aimed at the gate, its caller still there two seconds later,
 stops devctl too, and so does a TaskStop of the background task the gate
 runs (the PreToolUse hook ends its devctl first). A merge call GitHub
 answers with a 5xx is sent again while the pull request is open, up to
-three times (10s, 30s, 1m apart); the caller reads the last document. A run
+three times (10s, 30s, 1m apart); the caller reads the last document. A
+red run whose every red check is let through runs again with devctl's
+--accept-red for each: a check the base branch does not require (branch
+protection or a ruleset), no security scan (nancy, gitleaks, govulncheck,
+trivy, CodeQL, ...), and red on the base branch's head too; one green, still
+running or without a result there, any required check and any security scan
+end the run red as before, the gate's line naming why. An installed devctl
+without the flag ends it red too, the line saying the merge waits for a
+devctl release that has it. A run
 with nothing merged leaves the lane with its run, stays on it as a failed
 attempt with its reason (lanes) until the pull request's next attempt, and
 wakes its owner with devctl's verdict and the failed checks, also while the
@@ -223,6 +231,9 @@ type gateRun struct {
 	// leaveAt is when the call leaves its merge to run on outside it, exit
 	// 76 (merge.toolLimit); zero: never.
 	leaveAt time.Time
+	// acceptRed are the red checks the gate let through (merge.JudgeRed),
+	// which devctl's run again accepts.
+	acceptRed []string
 }
 
 func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration, queued bool) error {
@@ -1007,7 +1018,7 @@ func (g *gateRun) mergeArgv() ([]string, error) {
 	if g.handCut() != "" {
 		argv = merge.NoReleaseWait(argv)
 	}
-	return argv, nil
+	return merge.AcceptRed(argv, g.acceptRed), nil
 }
 
 // launch starts the merge's merge-child (launchChild) and records it as the
@@ -1039,7 +1050,7 @@ var serverRetries = []time.Duration{10 * time.Second, 30 * time.Second, time.Min
 func (g *gateRun) retryServerError(base string, pid int, run childRun) (childRun, int) {
 	for try, pause := range serverRetries {
 		if run.replaced || run.left || !merge.ServerError(run.doc) {
-			return run.emit(), pid
+			return run, pid
 		}
 		p, err := pullState(context.WithoutCancel(g.ctx), g.repo, g.pr)
 		if err != nil || p.State != github.Open {
@@ -1057,16 +1068,73 @@ func (g *gateRun) retryServerError(base string, pid int, run childRun) (childRun
 		}
 		run = followChild(base, pid, 0, g.bin, g.retried(try+1), g.leaveAt)
 	}
-	return run.emit(), pid
+	return run, pid
 }
 
 // retried is followChild's hold for a run after try retries: a document of
-// a 5xx on the merge call while a retry is left.
+// a 5xx on the merge call while a retry is left, and a red one while the
+// gate may judge it (acceptRedRun).
 func (g *gateRun) retried(try int) func([]byte) bool {
-	if try >= len(serverRetries) {
-		return nil
+	return func(doc []byte) bool {
+		return try < len(serverRetries) && merge.ServerError(doc) || g.judgesRed() && merge.Red(doc)
 	}
-	return merge.ServerError
+}
+
+// judgesRed says whether a red run of this merge is the gate's to judge: a
+// pull request's merge through devctl that has accepted no red check yet.
+func (g *gateRun) judgesRed() bool { return g.pr != 0 && g.runsDevctl() && len(g.acceptRed) == 0 }
+
+// acceptRedRun runs the merge again with devctl's --accept-red for each red
+// check the gate lets through, when every red check of the run is let
+// through (merge.JudgeRed): not required by the base, no security scan, and
+// red on the base branch's head too. A run judged otherwise ends as it did,
+// and so does one whose installed devctl lacks the flag; the gate's line
+// names the judgement either way. It returns the last run.
+func (g *gateRun) acceptRedRun(base string, pid int, run childRun) (childRun, int) {
+	if !g.judgesRed() || run.replaced || run.left || !merge.Red(run.doc) {
+		return run, pid
+	}
+	ctx := context.WithoutCancel(g.ctx)
+	j := g.judgeRed(ctx, run.doc)
+	switch {
+	case !j.LetThrough():
+		gateLine("%s is red: %s", g.key(), j)
+		return run, pid
+	case !devctlAcceptsRed(ctx):
+		gateLine("%s is red only on checks the gate lets through (%s), but the installed devctl has no %s: the merge waits for a devctl release that has it, then the same command again",
+			g.key(), j, merge.AcceptRedFlag)
+		return run, pid
+	}
+	gateLine("%s is red only on checks the gate lets through (%s): devctl runs again with %s", g.key(), j, merge.AcceptRedFlag)
+	_ = g.store.Log(event(g.me, "merge.acceptred", "%s: %s", g.key(), j))
+	g.acceptRed = j.Names()
+	var rc int
+	if pid, rc = g.launch(base); rc != 0 {
+		return childRun{rc: rc}, pid
+	}
+	return g.retryServerError(base, pid, followChild(base, pid, 0, g.bin, g.retried(0), g.leaveAt))
+}
+
+// judgeRed judges a red document against the base branch it names; a base
+// GitHub does not answer for lets nothing through.
+func (g *gateRun) judgeRed(ctx context.Context, doc []byte) merge.RedJudgement {
+	ref := merge.BaseRef(doc)
+	if ref == "" {
+		return merge.RedJudgement{Refused: []string{"devctl's document names no base branch"}}
+	}
+	b, err := baseChecks(ctx, g.repo, ref)
+	if err != nil {
+		return merge.RedJudgement{Refused: []string{fmt.Sprintf("the checks of %s do not read: %v", ref, err)}}
+	}
+	return merge.JudgeRed(doc, b)
+}
+
+// followRun follows the merge's devctl from offset to the end of its last
+// run: sent again on a 5xx of its merge call (retryServerError), and with
+// the red checks the gate lets through accepted (acceptRedRun).
+func (g *gateRun) followRun(base string, pid int, offset int64, bin binary) (childRun, int) {
+	run, pid := g.retryServerError(base, pid, followChild(base, pid, offset, bin, g.retried(0), g.leaveAt))
+	return g.acceptRedRun(base, pid, run)
 }
 
 // follow copies the merge's devctl (its merge-child pid) stderr on from
@@ -1075,11 +1143,12 @@ func (g *gateRun) retried(try int) func([]byte) bool {
 // same devctl on from there (resumeMerge), so the installed release records
 // the outcome; one that does not start is followed on under this one.
 func (g *gateRun) follow(base string, pid int, offset int64) error {
-	run, pid := g.retryServerError(base, pid, followChild(base, pid, offset, g.bin, g.retried(0), g.leaveAt))
+	run, pid := g.followRun(base, pid, offset, g.bin)
 	if run.replaced {
 		g.reexec("while "+g.key()+"'s devctl ran", fmt.Sprintf("%s=%d:%d", gateRunningEnv, pid, run.offset))
-		run, _ = g.retryServerError(base, pid, followChild(base, pid, run.offset, nil, g.retried(0), g.leaveAt))
+		run, _ = g.followRun(base, pid, run.offset, nil)
 	}
+	run = run.emit()
 	if run.left {
 		return g.leave(pid)
 	}
@@ -1545,6 +1614,15 @@ func toolVersion(ctx context.Context) string {
 		}
 	}
 	return ""
+}
+
+// toolAcceptsRed says whether the installed merge tool's pr merge has
+// --accept-red: its help names the flag.
+func toolAcceptsRed(ctx context.Context) bool {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	out, _ := exec.CommandContext(ctx, merge.Tool, "pr", "merge", "--help").Output() //nolint:gosec // the merge tool, a constant
+	return strings.Contains(string(out), merge.AcceptRedFlag)
 }
 
 // kubeContext is the lane's context, else the kubeconfig context named

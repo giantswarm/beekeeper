@@ -329,9 +329,13 @@ func TestCheckExcept(t *testing.T) {
 func stubGitHub(t *testing.T, pullAt string, version string) *int {
 	t.Helper()
 	asked := new(int)
-	pull, ver, upd, wait := pullState, devctlVersion, devctlUpdate, judgeWait
-	t.Cleanup(func() { pullState, devctlVersion, devctlUpdate, judgeWait = pull, ver, upd, wait })
+	pull, ver, upd, wait, bc, accepts := pullState, devctlVersion, devctlUpdate, judgeWait, baseChecks, devctlAcceptsRed
+	t.Cleanup(func() {
+		pullState, devctlVersion, devctlUpdate, judgeWait, baseChecks, devctlAcceptsRed = pull, ver, upd, wait, bc, accepts
+	})
 	devctlUpdate = func(context.Context) error { return nil }
+	baseChecks = func(context.Context, string, string) (github.BaseChecks, error) { return github.BaseChecks{}, fmt.Errorf("no network") }
+	devctlAcceptsRed = func(context.Context) bool { return false }
 	judgeWait = 0
 	pullState = func(context.Context, string, int) (github.Pull, error) {
 		*asked++
