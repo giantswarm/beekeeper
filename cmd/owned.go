@@ -338,13 +338,33 @@ func (a *app) tellOwner(ctx context.Context, r childResult) {
 
 // outcome is the run's outcome in one line: "<command> exit N: <reason>
 // (output in <file>)", the reason the document's verdict and reason (a
-// merge's release), else devctl's last stderr line.
+// merge's release), else devctl's last stderr line. A run whose merge-child
+// was stopped (stop) before its command reported a merge has no outcome: the
+// line names the stop, and that nothing waits for the command any more.
 func (r childResult) outcome() string {
+	if o, _ := merge.ParseDocument(r.doc); r.stop != 0 && !o.Merged {
+		return fmt.Sprintf("%s did not settle: its waiter was stopped by %s (exit %d) and nothing waits for it any more: check the pull request or release it waited for and run it again if it still needs to",
+			r.command(), signalName(r.stop), r.rc)
+	}
 	line := fmt.Sprintf("%s exit %d: %s", r.command(), r.rc, runReason(r.doc, r.last, r.spec.HandCut))
 	if r.kept != "" {
 		line += " (output in " + r.kept + ")"
 	}
 	return line
+}
+
+// signalName is s's name as kill(1) spells it, for the signals merge-child
+// takes as its stop.
+func signalName(s syscall.Signal) string {
+	switch s {
+	case syscall.SIGINT:
+		return "SIGINT"
+	case syscall.SIGTERM:
+		return "SIGTERM"
+	case syscall.SIGHUP:
+		return "SIGHUP"
+	}
+	return s.String()
 }
 
 // runReason is what a run's document says about its end (its verdict and
