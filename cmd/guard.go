@@ -293,9 +293,10 @@ Questions, notes, SendMessage, reads and beekeeper pass. Other sessions
 are not affected.
 
 A session's first Edit, Write or NotebookEdit, or first git commit, in a
-git repository other than its own project ($CLAUDE_PROJECT_DIR) carries
-that repository's instructions as additional context, once per session
-(and subagent) and repository: CLAUDE.md and AGENTS.md with their @imports,
+git repository other than its own project ($CLAUDE_PROJECT_DIR, its
+worktrees included) carries that repository's instructions as additional
+context, once per session (and subagent) and repository: CLAUDE.md and
+AGENTS.md with their @imports,
 .claude/rules/*.md, the hooks and permissions of .claude/settings.json, and
 the files these name as mandatory reading, at most 10,000 bytes, a cut file
 and the ones left out named. Only regular text files inside the repository

@@ -8,6 +8,12 @@ import (
 	"testing"
 )
 
+// The instructions of the session's project and of another repository.
+const (
+	projectRules = "project rules"
+	otherRules   = "other rules"
+)
+
 // repoWith makes a git repository under dir holding files.
 func repoWith(t *testing.T, dir string, files map[string]string) string {
 	t.Helper()
@@ -75,7 +81,7 @@ func contextOf(t *testing.T, h Hook, ev call) (string, map[string]any) {
 
 func TestReadsOnFirstWriteOnly(t *testing.T) {
 	root := t.TempDir()
-	project := repoWith(t, filepath.Join(root, "project"), map[string]string{claudeMD: "project rules"})
+	project := repoWith(t, filepath.Join(root, "project"), map[string]string{claudeMD: projectRules})
 	other := repoWith(t, filepath.Join(root, "other"), map[string]string{
 		"AGENTS.md":                   "Use conventional commits.\nRead `docs/style.md` first.\nSee @docs/imported.md\nMail me@example.com, ping @giantswarm/team.",
 		"docs/style.md":               "style guide",
@@ -95,7 +101,7 @@ func TestReadsOnFirstWriteOnly(t *testing.T) {
 			t.Errorf("first write: context lacks %q:\n%s", want, ctx)
 		}
 	}
-	for _, not := range []string{"do-not-show", "personal", "local\"", "project rules"} {
+	for _, not := range []string{"do-not-show", "personal", "local\"", projectRules} {
 		if strings.Contains(ctx, not) {
 			t.Errorf("first write: context has %q:\n%s", not, ctx)
 		}
@@ -128,7 +134,7 @@ func TestReadsOnFirstWriteOnly(t *testing.T) {
 func TestReadsTools(t *testing.T) {
 	root := t.TempDir()
 	project := repoWith(t, filepath.Join(root, "project"), nil)
-	other := repoWith(t, filepath.Join(root, "other"), map[string]string{claudeMD: "other rules"})
+	other := repoWith(t, filepath.Join(root, "other"), map[string]string{claudeMD: otherRules})
 	relative := write(writeTool, filePathKey, "sub/a")
 	relative.CWD = other
 	for name, ev := range map[string]call{
@@ -139,7 +145,7 @@ func TestReadsTools(t *testing.T) {
 		"dash-C":   shell(project, "git -C "+other+" commit -m x"),
 		"in cwd":   shell(other, "git commit --amend --no-edit"),
 	} {
-		if ctx, _ := contextOf(t, readsHook(t, project), ev); !strings.Contains(ctx, "other rules") {
+		if ctx, _ := contextOf(t, readsHook(t, project), ev); !strings.Contains(ctx, otherRules) {
 			t.Errorf("%s: want the reads, got %q", name, ctx)
 		}
 	}
@@ -159,10 +165,10 @@ func TestReadsTools(t *testing.T) {
 
 func TestReadsBesideARewriteAndNotOnADeny(t *testing.T) {
 	root := t.TempDir()
-	other := repoWith(t, filepath.Join(root, "other"), map[string]string{claudeMD: "other rules"})
+	other := repoWith(t, filepath.Join(root, "other"), map[string]string{claudeMD: otherRules})
 	h := readsHook(t, filepath.Join(root, "project"))
 	ctx, d := contextOf(t, h, shell(other, "make test && git commit -m x"))
-	if !strings.Contains(ctx, "other rules") || d["permissionDecision"] != decisionAllow {
+	if !strings.Contains(ctx, otherRules) || d["permissionDecision"] != decisionAllow {
 		t.Fatalf("want the rewrite and the reads, got %+v", d)
 	}
 	if u, _ := d["updatedInput"].(map[string]any); !strings.Contains(u[commandKey].(string), " run -- zsh -c ") {
@@ -234,6 +240,76 @@ func TestRepoRootWorktree(t *testing.T) {
 	}
 	if got := RepoRoot(filepath.Join(root, "x")); got != "" {
 		t.Errorf("outside: RepoRoot = %q", got)
+	}
+}
+
+// worktreeOf lays out a worktree of the repository at main under dir as git
+// does: a .git file naming its gitdir, whose commondir points back.
+func worktreeOf(t *testing.T, main, dir, name string, files map[string]string) string {
+	t.Helper()
+	gitdir := filepath.Join(main, ".git", "worktrees", name)
+	if err := os.MkdirAll(gitdir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gitdir, "commondir"), []byte("../..\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return gitFile(t, dir, "gitdir: "+gitdir+"\n", files)
+}
+
+// gitFile makes a checkout under dir whose .git file holds body.
+func gitFile(t *testing.T, dir, body string, files map[string]string) string {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".git"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, b := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(b), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func TestReadsSkipWorktreesOfTheProject(t *testing.T) {
+	root := t.TempDir()
+	project := repoWith(t, filepath.Join(root, "project"), map[string]string{claudeMD: projectRules})
+	wt := worktreeOf(t, project, filepath.Join(root, "worktrees", "fix"), "fix", map[string]string{claudeMD: projectRules})
+	other := repoWith(t, filepath.Join(root, "other"), map[string]string{claudeMD: otherRules})
+	otherWT := worktreeOf(t, other, filepath.Join(root, "worktrees", "other-fix"), "other-fix", map[string]string{claudeMD: otherRules})
+	// A submodule's .git file names a gitdir of its own, with no commondir.
+	sub := gitFile(t, filepath.Join(project, "sub"), "gitdir: ../.git/modules/sub\n", map[string]string{claudeMD: "sub rules"})
+	if err := os.MkdirAll(filepath.Join(project, ".git", "modules", "sub"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, c := range map[string]struct{ project, write string }{
+		"worktree of the project":                 {project, filepath.Join(wt, "a.go")},
+		"git commit in a worktree of the project": {project, ""},
+		"main checkout from a worktree session":   {wt, filepath.Join(project, "a.go")},
+		"another worktree from a worktree":        {wt, filepath.Join(worktreeOf(t, project, filepath.Join(root, "worktrees", "two"), "two", map[string]string{claudeMD: projectRules}), "a.go")},
+	} {
+		ev := edit(c.write)
+		if c.write == "" {
+			ev = shell(c.project, "git -C "+wt+" commit -m x")
+		}
+		if ctx, _ := contextOf(t, readsHook(t, c.project), ev); ctx != "" {
+			t.Errorf("%s: want nothing, got %q", name, ctx)
+		}
+	}
+	for name, c := range map[string]struct{ project, write, want string }{
+		"another repository":                  {project, filepath.Join(other, "a.go"), otherRules},
+		"a worktree of another repository":    {project, filepath.Join(otherWT, "a.go"), otherRules},
+		"another repository from a worktree":  {wt, filepath.Join(other, "a.go"), otherRules},
+		"a submodule of the project":          {project, filepath.Join(sub, "a.go"), "sub rules"},
+		"a repository from a project in none": {filepath.Join(root, "loose"), filepath.Join(other, "a.go"), otherRules},
+	} {
+		if ctx, _ := contextOf(t, readsHook(t, c.project), edit(c.write)); !strings.Contains(ctx, c.want) {
+			t.Errorf("%s: want %q, got %q", name, c.want, ctx)
+		}
 	}
 }
 
