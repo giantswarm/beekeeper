@@ -113,7 +113,9 @@ const expected = "[a]\n[b]\n<a b>\n<empty>\n<3>\n{l1}\n{l2}\n{A B}\nps=0 pid_ok=
 // capped skips without the user systemd and zsh a capped run needs, and
 // returns the environment of a test's run (MEMCAP_TEST) with private slots
 // and a 64M cap, so the test neither waits for the machine's build slots nor
-// counts as a build, and its cap kill reads as a test kill.
+// counts as a build, and its cap kill reads as a test kill. The caller's own
+// run settings never reach it: a background Bash call exports
+// MEMCAP_BACKGROUND=1, and a case that wants it sets it itself.
 func capped(t *testing.T) (state string, env []string) {
 	t.Helper()
 	if _, err := exec.LookPath(testShell); err != nil {
@@ -121,6 +123,10 @@ func capped(t *testing.T) (state string, env []string) {
 	}
 	if !plat.Launcher.Available() {
 		t.Skip("no user systemd")
+	}
+	for _, k := range []string{guard.BackgroundEnv, "MEMCAP_SLOTS", "MEMCAP_SWAP"} {
+		t.Setenv(k, "")
+		_ = os.Unsetenv(k)
 	}
 	state = t.TempDir()
 	return state, append(os.Environ(), "BEEKEEPER_TEST_MAIN=1", "BEEKEEPER_CONFIG="+filepath.Join(state, "none.yaml"),
