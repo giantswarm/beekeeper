@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -139,17 +140,28 @@ const testShell = "zsh"
 
 func rewrite(t *testing.T, command string) string {
 	t.Helper()
+	return rewriteCall(t, command, false)
+}
+
+// rewriteCall is the command the hook runs for a Bash call, a background
+// one when bg: the command itself when the hook leaves it unchanged.
+func rewriteCall(t *testing.T, command string, bg bool) string {
+	t.Helper()
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := json.Marshal(map[string]any{"tool_name": "Bash", "tool_input": map[string]any{"command": command}})
+	raw, _ := json.Marshal(map[string]any{"tool_name": "Bash", "tool_input": map[string]any{"command": command, "run_in_background": bg}})
 	var o struct {
 		D struct {
 			UpdatedInput struct{ Command string } `json:"updatedInput"`
 		} `json:"hookSpecificOutput"`
 	}
-	if err := json.Unmarshal(guard.Hook{Self: self, Shell: testShell}.Decide(raw), &o); err != nil {
+	out := guard.Hook{Self: self, Shell: testShell}.Decide(raw)
+	if out == nil {
+		return command
+	}
+	if err := json.Unmarshal(out, &o); err != nil {
 		t.Fatal(err)
 	}
 	return o.D.UpdatedInput.Command
@@ -185,8 +197,9 @@ func TestRunHoldsASlotInACappedScope(t *testing.T) {
 	}
 }
 
-func TestRunExits75WhenEverySlotIsHeld(t *testing.T) {
-	state, env := capped(t)
+// holdSlots holds both of the state's slots until the test ends.
+func holdSlots(t *testing.T, state string) {
+	t.Helper()
 	if err := os.MkdirAll(filepath.Join(state, "slots"), 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -195,13 +208,56 @@ func TestRunExits75WhenEverySlotIsHeld(t *testing.T) {
 		if ok, err := l.TryLock(); !ok || err != nil {
 			t.Fatal(err)
 		}
-		defer func() { _ = l.Unlock() }()
+		t.Cleanup(func() { _ = l.Unlock() })
 		_ = os.WriteFile(filepath.Join(state, "slots", i+".holder"), []byte(`{"pid":1,"cmd":"go test holder-`+i+`"}`), 0o600)
 	}
+}
+
+// The exit-75 message states the wait applied and where it came from; only
+// a foreground run is advised to run in the background.
+func TestRunExits75WhenEverySlotIsHeld(t *testing.T) {
+	state, env := capped(t)
+	holdSlots(t, state)
 	self, _ := os.Executable()
 	_, errOut, rc := zsh(t, env, self+" run --wait 1s -- true")
-	if rc != guard.ExitBusy || !strings.Contains(errOut, "slot 2: {\"pid\":1,\"cmd\":\"go test holder-2\"}") || !strings.Contains(errOut, guard.LogPrefix+"gave up after 1s") {
-		t.Errorf("rc %d, stderr %q", rc, errOut)
+	if rc != guard.ExitBusy || !strings.Contains(errOut, "slot 2: {\"pid\":1,\"cmd\":\"go test holder-2\"}") ||
+		!strings.Contains(errOut, guard.LogPrefix+"gave up after 1s (--wait) waiting for") ||
+		!strings.Contains(errOut, "run_in_background (the wait is then 60m)") {
+		t.Errorf("foreground: rc %d, stderr %q", rc, errOut)
+	}
+	_, errOut, rc = zsh(t, append(env, "MEMCAP_WAIT=1s"), "export MEMCAP_BACKGROUND=1; "+self+" run -- true")
+	if rc != guard.ExitBusy || !strings.Contains(errOut, guard.LogPrefix+"gave up after 1s (MEMCAP_WAIT) waiting for") ||
+		strings.Contains(errOut, "run_in_background") {
+		t.Errorf("background: rc %d, stderr %q", rc, errOut)
+	}
+}
+
+// A beekeeper run a background Bash call reaches directly, after a cd and
+// export chain or through a wrapper script waits the background default;
+// timeout cuts the wait once it has started.
+func TestBackgroundCallsRunWaitTheBackgroundDefault(t *testing.T) {
+	state, env := capped(t)
+	env = slices.DeleteFunc(env, func(e string) bool { return strings.HasPrefix(e, "MEMCAP_WAIT=") })
+	holdSlots(t, state)
+	self, _ := os.Executable()
+	dir := t.TempDir()
+	script := filepath.Join(dir, "build.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n"+guard.ShellQuote(self)+" run -- true\n"), 0o700); err != nil { //nolint:gosec // an executable script
+		t.Fatal(err)
+	}
+	for shape, cmd := range map[string]string{
+		"direct": self + " run -- true",
+		"chain":  "cd " + guard.ShellQuote(dir) + " && export FOO=1 && " + self + " run -- true",
+		"script": script,
+	} {
+		_, errOut, rc := zsh(t, env, "timeout 3 "+testShell+" -c "+guard.ShellQuote(rewriteCall(t, cmd, true)))
+		if rc != 124 || !strings.Contains(errOut, guard.LogPrefix+"waiting up to 60m (the background default) for a build slot") {
+			t.Errorf("%s: rc %d, stderr %q", shape, rc, errOut)
+		}
+		_, errOut, rc = zsh(t, append(env, "MEMCAP_WAIT=1s"), rewriteCall(t, cmd, false))
+		if rc != guard.ExitBusy || !strings.Contains(errOut, "gave up after 1s (MEMCAP_WAIT)") {
+			t.Errorf("%s in the foreground: rc %d, stderr %q", shape, rc, errOut)
+		}
 	}
 }
 
