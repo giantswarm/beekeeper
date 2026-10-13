@@ -247,3 +247,57 @@ func TestMergeChildRecordsItsStop(t *testing.T) {
 		t.Errorf("the re-exec's outcome lost the stop: %v", got.stop)
 	}
 }
+
+// The gate's stdout carries devctl's document and nothing else, on every
+// route a wait takes: owned, unowned (no state), and owned without its run
+// files (the gate's own line). The gate's lines and devctl's progress go to
+// stderr, so `<gated wait> | jq .` parses.
+func TestTheGateWritesNothingOfItsOwnToStdout(t *testing.T) {
+	const doc = `{"verdict":"available","reason":""}`
+	for _, c := range []struct {
+		name  string
+		store func(t *testing.T) state.Store
+		said  string // a line of the gate's own on stderr, "" for none required
+	}{
+		{name: "owned", store: func(t *testing.T) state.Store {
+			s, err := state.Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			return s
+		}},
+		{name: "unowned", store: func(*testing.T) state.Store { return nil }},
+		{name: "owned without its run files", store: func(t *testing.T) state.Store {
+			s, err := state.Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			// A file where the runs directory goes: the wait runs unowned.
+			if err := os.WriteFile(filepath.Join(s.Dir(), ownedRuns), nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return s
+		}, said: GatePrefix},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			noSystemd(t)
+			fakeDevctl(t, `echo "waiting for image gsoci.azurecr.io/giantswarm/r:1.0.0" >&2; echo '`+doc+`'`)
+			t.Setenv("CLAUDE_CODE_SESSION_ID", "s1")
+			t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", "")
+			t.Setenv("CLAUDE_CODE_SESSION_NAME", ownerName)
+			a := &app{cfg: &config.Config{}, store: c.store(t), now: relayNow}
+			stdout, stderr := capture(t, &os.Stdout), capture(t, &os.Stderr)
+			err := a.gate(context.Background(), strings.Fields("devctl release wait o/r v1.0.0 --timeout 9m"), DefaultGateWait, 0, false)
+			out, said := stdout(), stderr()
+			if err != nil {
+				t.Errorf("exit: %v, want 0", err)
+			}
+			if strings.TrimSpace(out) != doc || !json.Valid([]byte(out)) {
+				t.Errorf("stdout %q, want devctl's document only", out)
+			}
+			if !strings.Contains(said, "waiting for image") || !strings.Contains(said, c.said) {
+				t.Errorf("stderr %q, want devctl's progress and the gate's lines", said)
+			}
+		})
+	}
+}
