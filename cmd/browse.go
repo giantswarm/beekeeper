@@ -36,9 +36,18 @@ const (
 	browsePreamble = "beekeeper browse: you run browser steps for another Claude session, with the Claude in Chrome tools only. " +
 		"Never type a credential: sign in only through the person's existing session (an SSO or identity provider button). " +
 		"Take a screenshot of each page the steps name as their proof. End with a short plain report of what you saw and did, " +
-		"or of what stopped you. "
+		"or of what stopped you. " + controlWords
+
 	browseSteps = "The steps:\n\n"
 )
+
+// controlWords tell a browse turn which element it clicks: the one a step
+// names, never a subscription, watch, star or notification control, which
+// changes the person's own notifications; the hook refuses such a click.
+const controlWords = "Click only the element a step names: a computer click by that element's ref, its action_summary naming that element; " +
+	"a scripted click (javascript_tool) selects that one element by its own selector (an id, a data-testid, an aria-label), never by a sweep " +
+	"over the page's buttons or links. Never click " + guard.SubscriptionControls + " (GitHub's Subscribe, Unsubscribe, Watch, Star and " +
+	"Notifications buttons): such a click changes the person's own notifications, which no token restores. "
 
 // lostLine is the line a turn ends its report with when the Chrome
 // connection is gone, the steps not done after it.
@@ -207,6 +216,16 @@ says "shared for upload: <path>". For example:
   beekeeper browse --file ./shot.png "Open <page>. Attach ./shot.png
   through the comment box's file input. Report the attachment's name."
 
+A click targets only the element its step names. The turn never clicks
+a subscription, watch, star or notification control (GitHub's Subscribe,
+Unsubscribe, Watch, Star and Notifications buttons), whose click changes
+the person's own notifications, which no agent's token restores: the hook
+refuses, in this turn and in every session, a click whose summary or ref
+names one, a scripted click (javascript_tool) whose code names one, and a
+scripted click that picks its element from a sweep over the page's buttons
+or links. Each such refusal is named below the report, "refused: <the
+call>: beekeeper's hook refused it as [Subscription Control]".
+
 A page in a Chrome window the compositor does not draw (occluded, or on
 another workspace) is not rendered: GitHub keeps its Authorize button
 disabled there and every screenshot times out ("the renderer may be
@@ -355,6 +374,10 @@ const frozenRenderer = "renderer may be frozen"
 // a call's words.
 const chromeToolPrefix = "mcp__claude-in-chrome__"
 
+// scriptTool is the Chrome tool that runs a script in the page, whose code
+// names what a scripted click targets.
+const scriptTool = "javascript_tool"
+
 // listBrowsers is the Chrome call that lists the connected browsers: an
 // empty list is the connection gone.
 const listBrowsers = chromeToolPrefix + "list_connected_browsers"
@@ -417,12 +440,18 @@ var deployReasons = []string{"Production Deploy", "Modify Shared Resources", "Pr
 const deployHint = "a deploy or create click the task covers is declared with `beekeeper browse --allow-deploy \"<what, where>\"`, " +
 	"which lets the turn's auto mode allow that one action for the run; every other deploy stays refused"
 
-// A refusal is one call of the turn the classifier denied: the call's own
-// words and the classifier's reason.
+// A refusal is one call of the turn the classifier denied, or the hook
+// refused as a click on a subscription control: the call's own words and
+// the reason.
 type refusal struct {
 	Call   string
 	Reason string
+	Hook   bool
 }
+
+// reasonControl is the reason of the hook's refusal of a click on a
+// subscription control.
+const reasonControl = "Subscription Control"
 
 // browseFindings are what a turn's transcript says beyond its report: the
 // calls the classifier refused, the screenshots of a page that is not
@@ -468,12 +497,15 @@ func readFindings(transcript string) (browseFindings, error) {
 				if !b.IsError {
 					continue
 				}
-				if denied {
+				switch {
+				case denied:
 					reason := ""
 					if m := classifierReason.FindStringSubmatch(text); m != nil {
 						reason = m[1]
 					}
 					f.Refused = append(f.Refused, refusal{Call: c.words, Reason: reason})
+				case strings.Contains(text, "never clicks "+guard.SubscriptionControls):
+					f.Refused = append(f.Refused, refusal{Call: c.words, Reason: reasonControl, Hook: true})
 				}
 				if strings.Contains(text, frozenRenderer) {
 					f.NotRendered++
@@ -541,7 +573,11 @@ func (f browseFindings) lines(steps, deploy string, consents []guard.App, lab bo
 	}
 	grant, deployed := false, false
 	for _, r := range f.Refused {
-		out = append(out, fmt.Sprintf("refused: %s: the auto mode classifier denied it as [%s]", r.Call, r.Reason))
+		by := "the auto mode classifier denied"
+		if r.Hook {
+			by = "beekeeper's hook refused"
+		}
+		out = append(out, fmt.Sprintf("refused: %s: %s it as [%s]", r.Call, by, r.Reason))
 		grant = grant || r.Reason == reasonGrant
 		deployed = deployed || slices.Contains(deployReasons, r.Reason)
 	}
@@ -617,12 +653,14 @@ func bounded(s string, n int) string {
 }
 
 // callWords are a Chrome call's own words: the tool, its action, its URL
-// and the summary the model wrote for it, a batch's actions after it.
+// and the summary the model wrote for it, a script's code bounded, a batch's
+// actions after it.
 func callWords(name string, input json.RawMessage) string {
 	var in struct {
 		Action  string `json:"action"`
 		Summary string `json:"action_summary"`
 		URL     string `json:"url"`
+		Text    string `json:"text"`
 		Actions []struct {
 			Name  string          `json:"name"`
 			Input json.RawMessage `json:"input"`
@@ -638,6 +676,9 @@ func callWords(name string, input json.RawMessage) string {
 	}
 	if in.Summary != "" {
 		words = append(words, strconv.Quote(in.Summary))
+	}
+	if strings.HasSuffix(name, scriptTool) && in.Text != "" {
+		words = append(words, strconv.Quote(bounded(strings.TrimSpace(in.Text), phraseRunes)))
 	}
 	var actions []string
 	for _, a := range in.Actions {

@@ -216,7 +216,7 @@ func TestConsentDecision(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			ev := toolEvent(tc.tool, tc.input)
 			ev["permission_mode"] = "dontAsk"
-			ev[sessionKey] = "browse-turn"
+			ev[sessionKey] = browseTurn
 			ev["transcript_path"] = tc.transcript
 			d := decideEvent(t, Hook{Apps: tc.apps}, ev)
 			switch {

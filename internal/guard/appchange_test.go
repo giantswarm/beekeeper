@@ -30,7 +30,6 @@ const (
 	savesChangesWord  = "Clicks Save changes"
 	reviewRequest     = "Clicks Review request for " + deviceApp
 	acceptsNew        = "Clicks Accept new permissions"
-	refKey            = "ref"
 	actionsKey        = "actions"
 	refTwelve         = "ref_12"
 	applicationsTitle = "Applications"
@@ -167,7 +166,7 @@ func TestPermissionDecision(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			ev := toolEvent(tc.tool, tc.input)
 			ev["permission_mode"] = "dontAsk"
-			ev[sessionKey] = "browse-turn"
+			ev[sessionKey] = browseTurn
 			ev["transcript_path"] = tc.transcript
 			d := decideEvent(t, Hook{Apps: apps}, ev)
 			switch {

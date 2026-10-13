@@ -369,33 +369,41 @@ func lastPage(transcript, tab string) (Page, bool) {
 // by tabId; none for a transcript that cannot be read.
 func lastPages(transcript string) map[string]Page {
 	pages := map[string]Page{}
+	scanResults(transcript, func(text string) {
+		for _, m := range tabLine.FindAllStringSubmatch(text, -1) {
+			pages[m[1]] = Page{URL: m[3], Title: m[2]}
+		}
+		for _, m := range tabJSON.FindAllStringSubmatch(text, -1) {
+			pages[m[1]] = Page{URL: unquote(m[3]), Title: unquote(m[2])}
+		}
+	})
+	return pages
+}
+
+// scanResults calls fn with the text of each tool result in the
+// transcript's tail, in order; nothing for a transcript that cannot be read.
+func scanResults(transcript string, fn func(text string)) {
 	if transcript == "" {
-		return pages
+		return
 	}
 	f, err := os.Open(transcript) //nolint:gosec // the session's own transcript
 	if err != nil {
-		return pages
+		return
 	}
 	defer func() { _ = f.Close() }()
 	// The tail's first line is cut: it decodes as no result.
 	if fi, err := f.Stat(); err == nil && fi.Size() > transcriptTail {
 		if _, err := f.Seek(fi.Size()-transcriptTail, io.SeekStart); err != nil {
-			return pages
+			return
 		}
 	}
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 1<<20), 64<<20)
 	for sc.Scan() {
 		for _, text := range resultTexts(sc.Bytes()) {
-			for _, m := range tabLine.FindAllStringSubmatch(text, -1) {
-				pages[m[1]] = Page{URL: m[3], Title: m[2]}
-			}
-			for _, m := range tabJSON.FindAllStringSubmatch(text, -1) {
-				pages[m[1]] = Page{URL: unquote(m[3]), Title: unquote(m[2])}
-			}
+			fn(text)
 		}
 	}
-	return pages
 }
 
 // pageOf is the page of tab among pages, or, for a call that names no tab,
