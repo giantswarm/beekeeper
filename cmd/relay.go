@@ -532,7 +532,8 @@ func busyWith(st *state.State, cfg *config.Config, held map[string]bool, now tim
 // settles reports whether a settling merge still holds its lane by the
 // gate's rule: a lane without an installation waits for none; one whose
 // merge settled longer than merge.settleTimeout ago is stuck, not settling;
-// an unknown release settles for merge.settle, a known one until it rolled.
+// a failed release has settled at once, an unknown one settles for
+// merge.settle, a known one until it rolled.
 func settles(m state.Merge, cfg *config.Config, now time.Time, rolled func(state.Merge, config.Lane) bool) bool {
 	lane, ok := cfg.LaneNamed(m.Lane)
 	if !ok || lane.Installation == "" {
@@ -540,7 +541,7 @@ func settles(m state.Merge, cfg *config.Config, now time.Time, rolled func(state
 	}
 	since := now.Sub(m.Finished)
 	switch {
-	case since > cfg.Merge.SettleTimeout.Duration:
+	case since > cfg.Merge.SettleTimeout.Duration, m.ReleaseFailed:
 		return false
 	case m.Release == "":
 		return since < cfg.Merge.Settle.Duration

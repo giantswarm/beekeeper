@@ -1005,6 +1005,10 @@ type Merge struct {
 	Candidate string `json:"candidate,omitempty"`
 	// Release is the tag the merge released, empty when unknown.
 	Release string `json:"release,omitempty"`
+	// ReleaseFailed marks a merge whose release failed (devctl exit 6): its
+	// auto-release run or tag pipeline failed, nothing rolls, and the lane
+	// settles at once.
+	ReleaseFailed bool `json:"releaseFailed,omitempty"`
 	// HandCut is the merge's base branch when no Auto-release run tags a
 	// merge into it (its tags are cut by hand): devctl awaits no release and
 	// the merge leaves its lane once merged.

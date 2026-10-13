@@ -128,6 +128,8 @@ func TestParseDocument(t *testing.T) {
 		{"no release", []byte(`{"exitCode":0,"mergeCommitSha":"abc","release":{"verdict":"no_release","tag":""}}`), Outcome{Merged: true, NoRelease: true}},
 		{"unconfirmed", []byte(`{"exitCode":9,"mergeCommitSha":"abc","release":{"verdict":"timeout","tag":"v1.2.4"}}`), Outcome{Merged: true}},
 		{"nothing merged", []byte(`{"exitCode":3,"mergeCommitSha":"","release":null}`), Outcome{}},
+		{"auto-release failed", []byte(`{"exitCode":6,"mergeCommitSha":"abc","release":{"verdict":"ci_failed","tag":""}}`), Outcome{Merged: true, ReleaseFailed: true}},
+		{"tag pipeline failed", []byte(`{"exitCode":6,"mergeCommitSha":"abc","release":{"verdict":"ci_failed","tag":"v1.2.4-rc.1"}}`), Outcome{Merged: true, Release: "v1.2.4-rc.1", ReleaseFailed: true}},
 	} {
 		if o, ok := ParseDocument(c.doc); !ok || o != c.want {
 			t.Errorf("%s: %+v %v, want %+v", c.name, o, ok, c.want)
@@ -377,6 +379,38 @@ func TestReady(t *testing.T) {
 	s.Roll = roll
 	if ok, why := Ready(lane, hrs, s, now.Add(time.Minute), time.Minute); !ok {
 		t.Errorf("a merge with a roll set and an unknown release keeps the lane after the settle time: %q", why)
+	}
+}
+
+// A merge whose release failed rolls nothing: it settles its lane at once,
+// whether its tag was cut or not, once the lane's HelmReleases are Ready.
+func TestReadySettlesAFailedReleaseAtOnce(t *testing.T) {
+	hrs, err := ParseHelmReleases([]byte(hrJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	for _, release := range []string{"", "v2.66.2"} {
+		s := &state.Merge{Repo: backstage, PR: 9, Release: release, ReleaseFailed: true, Roll: RollSet(hrs, backstage), Finished: now}
+		if ok, why := Ready(portalLane, hrs, s, now, time.Hour); ok || !strings.Contains(why, "flux/marge is not Ready") {
+			t.Errorf("%q: a failed release frees a lane whose HelmRelease is not Ready: %v %q", release, ok, why)
+		}
+		hrs[2].Ready = true
+		if ok, why := Ready(portalLane, hrs, s, now, time.Hour); !ok || why != backstage+"#9's release failed, nothing rolls" {
+			t.Errorf("%q: a failed release waits: %v %q", release, ok, why)
+		}
+		if ok, why := Ready(config.Lane{Name: "o/r"}, nil, s, now, time.Hour); !ok {
+			t.Errorf("%q: a failed release waits in a lane without an installation: %q", release, why)
+		}
+		hrs[2].Ready = false
+	}
+}
+
+func TestPreRelease(t *testing.T) {
+	for release, want := range map[string]bool{"v0.69.1-rc.3": true, "0.69.1-rc.3+abc": true, "v0.69.1": false, "v0.69.1+abc": false, "": false, "main": false} {
+		if got := PreRelease(release); got != want {
+			t.Errorf("PreRelease(%q) = %v, want %v", release, got, want)
+		}
 	}
 }
 

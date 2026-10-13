@@ -234,6 +234,9 @@ type Outcome struct {
 	Release string
 	// NoRelease is true when the merge warranted no release: nothing rolls.
 	NoRelease bool
+	// ReleaseFailed is true when the merge's release failed (devctl exit 6,
+	// verdict ci_failed): nothing rolls. Release is its tag when it was cut.
+	ReleaseFailed bool
 	// Unconfirmed is true when GitHub, not the document, reports the merge:
 	// devctl ended before it confirmed the release.
 	Unconfirmed bool
@@ -259,7 +262,8 @@ func NeedsJudging(ok bool, rc int) bool {
 // giantswarm/devctl): its release object carries the verdict and the tag side
 // by side. The tag counts only with the verdict available, a release devctl
 // confirmed pullable; any other tag is unknown and the lane settles by the
-// settle rule. ok is false when it is none.
+// settle rule. A failed release (ci_failed) keeps its tag, if any, and
+// rolls nothing. ok is false when it is none.
 func ParseDocument(raw []byte) (Outcome, bool) {
 	var doc struct {
 		MergeCommitSha string `json:"mergeCommitSha"`
@@ -278,6 +282,8 @@ func ParseDocument(raw []byte) (Outcome, bool) {
 			o.Release = doc.Release.Tag
 		case "no_release":
 			o.NoRelease = true
+		case "ci_failed":
+			o.Release, o.ReleaseFailed = doc.Release.Tag, true
 		}
 	}
 	return o, true
@@ -364,7 +370,7 @@ func Lost(st *state.State, now time.Time, alive func(pid int) bool) []state.Merg
 	for i, m := range st.Merges {
 		if m.Phase == state.Running && !Runs(m, alive) {
 			st.Merges[i].Phase, st.Merges[i].Finished, st.Merges[i].Exit = state.Settling, now, -1
-			st.Merges[i].Release, st.Merges[i].Roll = "", nil
+			st.Merges[i].Release, st.Merges[i].ReleaseFailed, st.Merges[i].Roll = "", false, nil
 			lost = append(lost, m)
 		}
 	}
@@ -674,7 +680,7 @@ func (q Lane) Passed(repo string, pr int) string {
 // settle rule from the merge on.
 func Merged(m *state.Merge, at time.Time) {
 	m.Phase, m.Finished, m.PID, m.Seeded = state.Settling, at.UTC(), 0, false
-	m.Release, m.Roll, m.Checked = "", nil, time.Time{}
+	m.Release, m.ReleaseFailed, m.Roll, m.Checked = "", false, nil, time.Time{}
 }
 
 // SettlingKeys names the lane's settling merges, oldest first.
@@ -836,6 +842,13 @@ func follows(rng, release string) bool {
 	return c.Check(v)
 }
 
+// PreRelease says whether release is a semver pre-release, a release
+// candidate: an installation on a stable range never runs it.
+func PreRelease(release string) bool {
+	v, err := semver.NewVersion(Bare(release))
+	return err == nil && v.Prerelease() != ""
+}
+
 // reached says whether a HelmRelease on version have runs release or a
 // later one in semver order. A merge cuts a release candidate: an
 // installation on a stable range runs its promotion, X.Y.Z after X.Y.Z-rc.N,
@@ -917,14 +930,17 @@ func RollSet(hrs []HelmRelease, repo string) []string {
 // that release or a later one (reached), or follows a range that never
 // admits it (a release candidate under a stable range); one whose release
 // is unknown (merged without a confirmed release, or its run lost) has
-// settled once settle has passed since it ended. why says what the lane
-// waits for; on a free lane it names the ranges that settled the merge
-// without a roll, "" when nothing did.
+// settled once settle has passed since it ended; one whose release failed
+// rolls nothing and has settled at once. why says what the lane waits for;
+// on a free lane it names why the merge settled without a roll, "" when it
+// rolled.
 func Ready(lane config.Lane, hrs []HelmRelease, settling *state.Merge, now time.Time, settle time.Duration) (bool, string) {
 	mine := laneReleases(lane, hrs)
 	var unfollowed []string
 	switch {
 	case settling == nil:
+	case settling.ReleaseFailed:
+		// Nothing rolls: only the lane's HelmReleases must be Ready.
 	case settling.Release == "":
 		if until := settling.Finished.Add(settle); now.Before(until) {
 			return false, fmt.Sprintf("%s's release is unknown: the lane settles until %s", settling.Key(), until.Local().Format("15:04"))
@@ -951,7 +967,10 @@ func Ready(lane config.Lane, hrs []HelmRelease, settling *state.Merge, now time.
 			return false, fmt.Sprintf("%s is not Ready: %s", hr.Key, strings.TrimSpace(hr.Message))
 		}
 	}
-	if len(unfollowed) > 0 {
+	switch {
+	case settling != nil && settling.ReleaseFailed:
+		return true, fmt.Sprintf("%s's release failed, nothing rolls", settling.Key())
+	case len(unfollowed) > 0:
 		return true, fmt.Sprintf("%s does not follow %s: %s", lane.Installation, Bare(settling.Release), strings.Join(unfollowed, "; "))
 	}
 	return true, ""

@@ -162,6 +162,9 @@ type LaneEntry struct {
 	// Release is the tag the merge released.
 	// +optional
 	Release string `json:"release,omitempty"`
+	// ReleaseFailed marks a merge whose release failed: nothing rolls.
+	// +optional
+	ReleaseFailed bool `json:"releaseFailed,omitempty"`
 	// Roll names the HelmReleases (namespace/name) that must reach Release
 	// before the lane frees.
 	// +optional

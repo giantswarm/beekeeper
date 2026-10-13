@@ -187,6 +187,10 @@ spec:
                     release:
                       description: Release is the tag the merge released.
                       type: string
+                    releaseFailed:
+                      description: 'ReleaseFailed marks a merge whose release failed:
+                        nothing rolls.'
+                      type: boolean
                     repo:
                       type: string
                     roll:
