@@ -8,6 +8,11 @@
 # after checking that the committed CRDs are what pkg/apis generates. Its
 # first image is the one the architect orb's executor runs.
 #
+# test-stable-version runs `make test` linked with a stable release's version
+# on every branch: go-build links a branch's or an RC's version, which the
+# state store neither stamps nor judges, so a test that only fails under a
+# stable version would otherwise first fail on the stable tag.
+#
 # chart-test lints helm/beekeeper and runs its helm-unittest suites, in a plain
 # container: the dependencies are helm and its plugin, not Go tooling. The
 # versions are pinned so a plugin release cannot turn an unrelated PR red.
@@ -39,6 +44,19 @@ jobs:
         command: make test-envtest
     - architect/go-cache-save
 
+  test-stable-version:
+    docker:
+    - image: gsoci.azurecr.io/giantswarm/architect:8.6.0
+      entrypoint: /bin/bash
+    resource_class: medium
+    steps:
+    - checkout
+    - architect/tools-info
+    - architect/go-cache-restore
+    - run:
+        name: Run the unit tests linked with a stable release's version, as a stable tag's go-build does
+        command: make test VERSION=v1.0.0
+
   chart-test:
     docker:
     - image: cimg/base:current
@@ -65,6 +83,7 @@ workflows:
         filters:
           tags:
             only: /^v.*/
+    - test-stable-version
     - chart-test:
         filters:
           tags:
