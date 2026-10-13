@@ -255,7 +255,7 @@ func TestSelfUpdateCheck(t *testing.T) {
 
 	var out bytes.Buffer
 	root := New()
-	root.SetArgs([]string{"self-update", "--check", "--json"})
+	root.SetArgs([]string{selfUpdateCmdName, "--check", "--json"})
 	root.SetOut(&out)
 	root.SetErr(io.Discard)
 	err := root.Execute()

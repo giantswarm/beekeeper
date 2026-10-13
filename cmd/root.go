@@ -2,6 +2,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -147,7 +148,13 @@ with central configured), 125 a newer release (self-update --check).`,
 		SilenceErrors: true,
 		Version:       project.VersionLine(),
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
-			return a.load()
+			if err := a.load(); err != nil {
+				return err
+			}
+			ctx, cancel := context.WithTimeout(cmd.Context(), firstRunTimeout)
+			defer cancel()
+			syncOnce(ctx, cmd.ErrOrStderr(), a.cfg.StateDir)
+			return nil
 		},
 	}
 	root.SetVersionTemplate("{{.Name}} {{.Version}}\n")

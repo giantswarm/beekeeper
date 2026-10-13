@@ -22,6 +22,15 @@ const (
 	newPlugin     = "2b8a6d5b0000"
 	userScope     = "user"
 	latestRelease = "v0.121.0"
+	oldRelease    = "v0.120.0"
+)
+
+// The claude plugin commands that bring the plugin up to date, in the user
+// scope and in none.
+const (
+	refreshMarketplace = "marketplace update beekeeper"
+	updateUserScope    = "update beekeeper@beekeeper --scope user"
+	updateNoScope      = "update beekeeper@beekeeper"
 )
 
 // pluginCopy writes this binary's skills into a plugin cache folder, the
@@ -105,7 +114,7 @@ func selfUpdate(t *testing.T, res update.Result) string {
 	runUpdate = func(context.Context, io.Writer, bool) (update.Result, error) { return res, nil }
 	var out bytes.Buffer
 	root := New()
-	root.SetArgs([]string{"self-update"})
+	root.SetArgs([]string{selfUpdateCmdName})
 	root.SetOut(&out)
 	root.SetErr(io.Discard)
 	if err := root.Execute(); err != nil {
@@ -114,16 +123,17 @@ func selfUpdate(t *testing.T, res update.Result) string {
 	return out.String()
 }
 
-// A self-update that installs a new binary refreshes the marketplace and
-// updates every installed beekeeper plugin with it, so the role skills the
-// plugin serves are the ones the new binary embeds, and says so.
+// A self-update that installs a new binary which does not run (no path
+// here) refreshes the marketplace and updates every installed beekeeper
+// plugin itself, so the role skills the plugin serves are the ones the new
+// binary embeds, and says so.
 func TestSelfUpdateRefreshesPlugin(t *testing.T) {
 	ran := fakePlugins(t, []installedPlugin{
 		{ID: beekeeperID, Version: oldPlugin, Scope: userScope, Enabled: true, InstallPath: pluginCopy(t, "worker-rules")},
 		{ID: "other@beekeeper", Version: "1", Enabled: true},
 	})
-	out := selfUpdate(t, update.Result{Current: "v0.120.0", Latest: latestRelease, Newer: true, Updated: true})
-	want := []string{"marketplace update beekeeper", "update beekeeper@beekeeper --scope user"}
+	out := selfUpdate(t, update.Result{Current: oldRelease, Latest: latestRelease, Newer: true, Updated: true})
+	want := []string{refreshMarketplace, updateUserScope}
 	if !slices.Equal(*ran, want) {
 		t.Errorf("self-update ran claude plugin %q, want %q", *ran, want)
 	}
@@ -143,7 +153,155 @@ func TestSelfUpdateLatestRefreshesOnlyStalePlugin(t *testing.T) {
 	}
 	ran = fakePlugins(t, []installedPlugin{{ID: beekeeperID, Version: oldPlugin, Enabled: true, InstallPath: pluginCopy(t, "lease")}})
 	selfUpdate(t, latest)
-	if want := []string{"marketplace update beekeeper", "update beekeeper@beekeeper"}; !slices.Equal(*ran, want) {
+	if want := []string{refreshMarketplace, updateNoScope}; !slices.Equal(*ran, want) {
 		t.Errorf("a stale plugin: ran %q, want %q", *ran, want)
+	}
+}
+
+// The new binary of the tests, as its version line names it.
+const newBinary = latestRelease + " (commit 2b8a6d5)"
+
+// asBinary makes this test's beekeeper the release id with a state
+// directory of its own, and returns that directory.
+func asBinary(t *testing.T, id string) string {
+	t.Helper()
+	prev := binaryIdentity
+	t.Cleanup(func() { binaryIdentity = prev })
+	binaryIdentity = func() string { return id }
+	t.Setenv("BEEKEEPER_CONFIG", filepath.Join(t.TempDir(), "none.yaml"))
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+	return filepath.Join(state, project.Name)
+}
+
+// recordedSync is the binary the state directory dir records as the last
+// to sync the plugin, "" for none.
+func recordedSync(dir string) string {
+	raw, _ := os.ReadFile(filepath.Join(dir, pluginSyncFile)) //nolint:gosec // the test's state directory
+	return strings.TrimSpace(string(raw))
+}
+
+// beekeeper runs the command line with args and returns its output, both
+// streams.
+func beekeeper(t *testing.T, args ...string) string {
+	t.Helper()
+	var out bytes.Buffer
+	root := New()
+	root.SetArgs(args)
+	root.SetOut(&out)
+	root.SetErr(&out)
+	if err := root.Execute(); err != nil {
+		t.Fatalf("beekeeper %s: %v\n%s", strings.Join(args, " "), err, out.String())
+	}
+	return out.String()
+}
+
+// A release without the plugin sync replaces itself and leaves the plugin
+// as it was; the first command the new binary runs brings it up to the new
+// binary's commit and records that, so the next command does not sync
+// again.
+func TestNewBinarySyncsPluginAfterAnOldSelfUpdate(t *testing.T) {
+	dir := asBinary(t, newBinary)
+	ps := []installedPlugin{{ID: beekeeperID, Version: oldPlugin, Scope: userScope, Enabled: true, InstallPath: pluginCopy(t, "worker-rules")}}
+	ran := fakePlugins(t, ps)
+
+	// The old binary's self-update: the new binary renamed over it, and
+	// nothing after.
+	bin := filepath.Join(t.TempDir(), project.Name)
+	for name, content := range map[string]string{bin: oldRelease, bin + ".new": latestRelease} {
+		if err := os.WriteFile(name, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Rename(bin+".new", bin); err != nil {
+		t.Fatal(err)
+	}
+	if len(*ran) != 0 {
+		t.Fatalf("the old binary's update ran claude plugin %q", *ran)
+	}
+
+	out := beekeeper(t, "timer")
+	if want := []string{refreshMarketplace, updateUserScope}; !slices.Equal(*ran, want) {
+		t.Errorf("the new binary's first command ran claude plugin %q, want %q", *ran, want)
+	}
+	now, _ := listPlugins(context.Background())
+	if now[0].Version != newPlugin || len(stalePlugins(now)) != 0 {
+		t.Errorf("plugin after the first command: %+v, want %s serving this binary's skills", now[0], newPlugin)
+	}
+	if !strings.Contains(out, "beekeeper@beekeeper 50e1b9d0aaaa → 2b8a6d5b0000") {
+		t.Errorf("the first command did not say the plugin's update:\n%s", out)
+	}
+	if got := recordedSync(dir); got != newBinary {
+		t.Errorf("recorded sync %q, want %q", got, newBinary)
+	}
+
+	*ran = nil
+	beekeeper(t, "timer")
+	if len(*ran) != 0 {
+		t.Errorf("a second command synced again: %q", *ran)
+	}
+}
+
+// A Claude Code that does not list its plugins leaves the sync to the next
+// command, unsaid; a development build never syncs.
+func TestFirstRunSyncWaitsForClaudeCode(t *testing.T) {
+	dir := asBinary(t, newBinary)
+	prev := listPlugins
+	t.Cleanup(func() { listPlugins = prev })
+	listPlugins = func(context.Context) ([]installedPlugin, error) { return nil, os.ErrNotExist }
+	if out := beekeeper(t, "timer"); strings.Contains(out, "plugin") {
+		t.Errorf("a failed plugin list was said:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, pluginSyncFile)); !os.IsNotExist(err) {
+		t.Errorf("a sync without the plugin list was recorded: %v", err)
+	}
+
+	asBinary(t, "")
+	ran := fakePlugins(t, []installedPlugin{{ID: beekeeperID, Version: oldPlugin, Enabled: true, InstallPath: pluginCopy(t, "lease")}})
+	beekeeper(t, "timer")
+	if len(*ran) != 0 {
+		t.Errorf("a development build synced: %q", *ran)
+	}
+}
+
+// A self-update that installs a new binary hands the plugin sync to it:
+// the installed binary runs its own sync, once, and this one syncs nothing
+// itself; an installed binary that does not run leaves the sync to this
+// one.
+func TestSelfUpdateHandsPluginSyncToTheNewBinary(t *testing.T) {
+	dir := asBinary(t, newBinary)
+	ran := fakePlugins(t, []installedPlugin{{ID: beekeeperID, Version: oldPlugin, Scope: userScope, Enabled: true, InstallPath: pluginCopy(t, "worker-rules")}})
+	const path = "/usr/local/bin/beekeeper"
+	var handed [][]string
+	prev := runInstalled
+	t.Cleanup(func() { runInstalled = prev })
+	runInstalled = func(_ context.Context, w io.Writer, p string, args ...string) error {
+		handed = append(handed, append([]string{p}, args...))
+		_, _ = io.WriteString(w, beekeeper(t, args...))
+		return nil
+	}
+	res := update.Result{Current: oldRelease, Latest: latestRelease, Newer: true, Updated: true, Path: path}
+	out := selfUpdate(t, res)
+	if want := []string{path, selfUpdateCmdName, "--" + syncPluginsFlag}; len(handed) != 1 || !slices.Equal(handed[0], want) {
+		t.Errorf("self-update ran %q, want %q", handed, want)
+	}
+	if want := []string{refreshMarketplace, updateUserScope}; !slices.Equal(*ran, want) {
+		t.Errorf("claude plugin ran %q, want %q once, by the new binary", *ran, want)
+	}
+	if !strings.Contains(out, "50e1b9d0aaaa → 2b8a6d5b0000") {
+		t.Errorf("self-update did not say the new binary's sync:\n%s", out)
+	}
+	if got := recordedSync(dir); got != newBinary {
+		t.Errorf("recorded sync %q, want %q", got, newBinary)
+	}
+
+	ran = fakePlugins(t, []installedPlugin{{ID: beekeeperID, Version: oldPlugin, Enabled: true, InstallPath: pluginCopy(t, "lease")}})
+	runInstalled = func(context.Context, io.Writer, string, ...string) error { return os.ErrPermission }
+	out = selfUpdate(t, res)
+	if want := []string{refreshMarketplace, updateNoScope}; !slices.Equal(*ran, want) {
+		t.Errorf("a new binary that does not run: ran %q, want %q", *ran, want)
+	}
+	if !strings.Contains(out, "did not sync its plugin") {
+		t.Errorf("self-update did not say the new binary failed:\n%s", out)
 	}
 }
