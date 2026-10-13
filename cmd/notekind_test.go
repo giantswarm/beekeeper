@@ -10,14 +10,15 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// The flags of a question's status quo and why.
+// The flags of a question's status quo, why and due time.
 const (
 	flagStatusQuo = "--status-quo"
 	flagWhy       = "--why"
+	flagDue       = "--due"
 )
 
 // decisionArgs are the parts a complete decision for the person carries.
-var decisionArgs = []string{flagFor, notePerson, flagStatusQuo, sqNow, flagWhy, whyNow, "--default", dfltOK, "--due", "3h"}
+var decisionArgs = []string{flagFor, notePerson, flagStatusQuo, sqNow, flagWhy, whyNow, "--default", dfltOK, flagDue, "3h"}
 
 func TestNoteKindDefaultsByWhomItIsFor(t *testing.T) {
 	a, _ := noteApp(t)
