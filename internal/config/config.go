@@ -1092,8 +1092,9 @@ type Upgrades struct {
 }
 
 // Flap holds back an alert that changes too often: its Changes-th NEW or
-// RESOLVED within Window is one FLAPPING line, and its changes print nothing
-// until it has been stable for Window.
+// RESOLVED within Window is one FLAPPING line, as is a re-fire within Window
+// after it resolved, and its changes print nothing until it has been stable
+// for Window.
 type Flap struct {
 	Changes int      `yaml:"changes"`
 	Window  Duration `yaml:"window"`

@@ -153,10 +153,11 @@ func TestFloorOrDamperChangePrintsNoBurst(t *testing.T) {
 	}
 }
 
-// flapped replays the two recorded readings of lab alternately, the way
-// tonight's alert fired and cleared at every reading, and returns every
-// line printed after the first look. Each reading starts its alerts at its
-// own time: an alert that fires again starts again.
+// flapped replays the two recorded readings of lab alternately, each twice
+// (a single reading that misses an alert only holds it), the way tonight's
+// alert fired and cleared, and returns every line printed after the first
+// look. Each reading starts its alerts at its own time: an alert that fires
+// again starts again.
 func flapped(t *testing.T, r Rules, readings int) ([]string, *Installation) {
 	t.Helper()
 	answers := []Answer{recorded(t, 1, lab), recorded(t, 2, lab)}
@@ -165,11 +166,14 @@ func flapped(t *testing.T, r Rules, readings int) ([]string, *Installation) {
 	for i := 1; i <= readings; i++ {
 		var lines []string
 		at := now.Add(time.Duration(i) * every)
-		lines, st = r.Step(lab, st, startedAt(answers[i%2], at), at)
+		lines, st = r.Step(lab, st, startedAt(answers[(i+1)/2%2], at), at)
 		all = append(all, lines...)
 	}
 	return all, st
 }
+
+// changes are the lines about an alert's change, the held lines left out.
+func changes(lines []string) []string { return mentions(lines, "ALERT") }
 
 // startedAt is the answer with every alert started at t.
 func startedAt(ans Answer, t time.Time) Answer {
@@ -182,26 +186,36 @@ func startedAt(ans Answer, t time.Time) Answer {
 
 func TestFlappingAlertIsOneLine(t *testing.T) {
 	undamped, _ := flapped(t, rules, 12)
-	if len(undamped) < 12 {
+	toggling := len(changes(undamped)) / 6
+	if toggling == 0 || len(mentions(undamped, "FLAPPING")) > 0 {
 		t.Fatalf("the recordings do not flap: %q", undamped)
 	}
 	damped := rules
 	damped.Flap = Damper{Changes: 4, Window: time.Hour}
 	lines, st := flapped(t, damped, 12)
-	flapping, toggling := mentions(lines, "FLAPPING"), len(undamped)/12
+	flapping := mentions(lines, "FLAPPING")
 	if len(flapping) != toggling {
 		t.Errorf("FLAPPING lines = %q, want one for each of the %d toggling alerts", flapping, toggling)
 	}
-	// Three changes print, the fourth is the FLAPPING line, the next eight nothing.
-	if len(lines) != 4*toggling {
-		t.Errorf("lines of 12 flaps:\n%s", strings.Join(lines, "\n"))
+	// A resolve and a re-fire within the window is the FLAPPING line, with
+	// the alert's first start; later readings print nothing.
+	if late, _ := flapped(t, damped, 12); len(changes(late)) != len(changes(lines)) {
+		t.Fatal("the replay is not deterministic")
 	}
-	if want := "since " + now.Add(every).UTC().Format("15:04Z"); !strings.HasSuffix(flapping[0], want) {
-		t.Errorf("flapping line %q does not end in %q (its first change)", flapping[0], want)
+	early, _ := flapped(t, damped, 5)
+	if len(changes(early)) != len(changes(lines)) {
+		t.Errorf("changes after the FLAPPING lines:\n%s", strings.Join(lines, "\n"))
+	}
+	for _, l := range flapping {
+		for i := 3; i <= 5; i++ {
+			if reading := "since " + now.Add(time.Duration(i)*every).UTC().Format("15:04Z"); strings.HasSuffix(l, reading) {
+				t.Errorf("flapping line %q has the re-fire's start, not the alert's first", l)
+			}
+		}
 	}
 	for _, f := range st.Flaps {
-		if !f.Flapping || len(f.Changes) != 12 {
-			t.Errorf("record = %+v, want flapping with the 12 changes of the hour", f)
+		if !f.Flapping || len(f.Changes) != 6 {
+			t.Errorf("record = %+v, want flapping with the 6 changes of the hour", f)
 		}
 	}
 
@@ -212,9 +226,84 @@ func TestFlappingAlertIsOneLine(t *testing.T) {
 	if len(quiet)+len(stable) > 0 || len(st.Flaps) > 0 {
 		t.Errorf("stable: lines %q %q, records %v", quiet, stable, st.Flaps)
 	}
-	again, _ := damped.Step(lab, st, recorded(t, 2, lab), last.Add(time.Hour+every))
-	if len(again) != toggling || len(mentions(again, New)) != toggling {
-		t.Errorf("after being stable: %q", again)
+	again, st := damped.Step(lab, st, recorded(t, 2, lab), last.Add(time.Hour+every))
+	gone, _ := damped.Step(lab, st, recorded(t, 2, lab), last.Add(time.Hour+2*every))
+	both := changes(append(again, gone...))
+	if len(both) != toggling || len(mentions(both, "FLAPPING")) > 0 {
+		t.Errorf("after being stable: %q %q", again, gone)
+	}
+}
+
+// A reading cut short by a slowed or failed read, between two readings with
+// the same alerts, changes no alert and no start; a missed alert resolves
+// only when the next reading misses it too.
+func TestStretchedReadingResolvesNothing(t *testing.T) {
+	damped := rules
+	damped.Flap = Damper{Changes: 4, Window: time.Hour}
+	restarted := alert("r1", "ManagementClusterContainerIsRestartingTooFrequently", "notify", "rocket",
+		"2026-09-24T18:45:00Z", "cluster_id", instB, "namespace", "kube-system")
+	later := func(r Raw) Raw {
+		r.StartsAt = now.Add(20 * time.Minute).Format(time.RFC3339)
+		return r
+	}
+	held := "ALERTS beta 1 of 2 alerts missing from this reading, kept until the next reading confirms them resolved"
+	for _, c := range []struct {
+		name     string
+		readings []Answer
+		want     [][]string
+		// since is the start the baseline keeps of fluxWC.
+		since string
+	}{{
+		name:     "failed read",
+		readings: []Answer{{Why: timedOut}, ok(fluxWC, restarted)},
+		want: [][]string{
+			{"ALERTS beta unreachable, alerts unseen for 5m (since 18:50Z): timed out"},
+			{"ALERTS beta reachable again after 10m unseen"},
+		},
+		since: fluxWC.StartsAt,
+	}, {
+		name:     "partial read",
+		readings: []Answer{ok(restarted), ok(later(fluxWC), restarted)},
+		want:     [][]string{{held}, nil},
+		since:    fluxWC.StartsAt,
+	}, {
+		name:     "partial read, then a failed one",
+		readings: []Answer{ok(restarted), {Why: timedOut}, ok(later(fluxWC), restarted)},
+		want: [][]string{
+			{held},
+			{"ALERTS beta unreachable, alerts unseen for 5m (since 18:55Z): timed out"},
+			{"ALERTS beta reachable again after 10m unseen"},
+		},
+		since: fluxWC.StartsAt,
+	}, {
+		name:     "true resolve",
+		readings: []Answer{ok(restarted), ok(restarted)},
+		want: [][]string{
+			{held},
+			{fluxWCResolved},
+		},
+	}, {
+		name:     "true resolve, re-fire within the window",
+		readings: []Answer{ok(restarted), ok(restarted), ok(later(fluxWC), restarted), ok(restarted), ok(restarted)},
+		want: [][]string{
+			{held},
+			{fluxWCResolved},
+			{"ALERT FLAPPING beta PAGE shield FluxCustomerHelmReleaseFailed org-acme/acme0230-kubescape@acme0230 since 14:37Z"},
+			{held},
+			nil,
+		},
+	}} {
+		t.Run(c.name, func(t *testing.T) {
+			_, st := damped.Step(instB, nil, ok(fluxWC, restarted), now)
+			for i, ans := range c.readings {
+				var lines []string
+				lines, st = damped.Step(instB, roundTrip(t, st), ans, now.Add(time.Duration(i+1)*every))
+				equal(t, lines, c.want[i])
+			}
+			if got := st.Alerts[fluxWC.Fingerprint].Since; got != c.since {
+				t.Errorf("baseline start = %q, want %q", got, c.since)
+			}
+		})
 	}
 }
 
@@ -222,7 +311,7 @@ func TestDamperRecordsSurviveUnreachableAndTheState(t *testing.T) {
 	damped := rules
 	damped.Flap = Damper{Changes: 4, Window: time.Hour}
 	_, st := flapped(t, damped, 5)
-	lines, down := damped.Step(lab, st, Answer{Why: "timed out"}, now.Add(6*every))
+	lines, down := damped.Step(lab, st, Answer{Why: timedOut}, now.Add(6*every))
 	if len(lines) != 1 || len(down.Flaps) != len(st.Flaps) {
 		t.Errorf("unreachable: %q, records %v", lines, down.Flaps)
 	}

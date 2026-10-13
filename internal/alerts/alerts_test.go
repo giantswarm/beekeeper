@@ -54,6 +54,13 @@ var (
 	}
 )
 
+const (
+	// fluxWCResolved is fluxWC's RESOLVED line on beta.
+	fluxWCResolved = "ALERT RESOLVED beta PAGE shield FluxCustomerHelmReleaseFailed org-acme/acme0230-kubescape@acme0230"
+	// timedOut is a failed reading's reason.
+	timedOut = "timed out"
+)
+
 func where(t *testing.T, s Set, fp, want string) {
 	t.Helper()
 	if got := s[fp].Where; got != want {
@@ -140,9 +147,11 @@ func TestStepNewAndResolved(t *testing.T) {
 		"2026-09-24T18:45:00Z", "cluster_id", instB, "namespace", "kube-system")
 	lines, st := rules.Step(instB, st, ok(restarted), now)
 	equal(t, lines, []string{
+		"ALERTS beta 1 of 1 alerts missing from this reading, kept until the next reading confirms them resolved",
 		"ALERT NEW beta notify rocket ManagementClusterContainerIsRestartingTooFrequently kube-system since 18:45Z",
-		"ALERT RESOLVED beta PAGE shield FluxCustomerHelmReleaseFailed org-acme/acme0230-kubescape@acme0230",
 	})
+	lines, st = rules.Step(instB, st, ok(restarted), now)
+	equal(t, lines, []string{fluxWCResolved})
 	lines, _ = rules.Step(instB, st, ok(restarted), now)
 	equal(t, lines, nil) // silent when nothing changed
 }
@@ -167,6 +176,7 @@ func TestStepBurstCollapsesAboveTheThreshold(t *testing.T) {
 	if len(lines) != 2 { // two more: still one line each
 		t.Errorf("lines = %v", lines)
 	}
+	_, st = rules.Step(instA, st, ok(), now)
 	lines, _ = rules.Step(instA, st, ok(), now)
 	equal(t, lines, []string{"ALERT RESOLVED alpha PAGE atlas LoggingAgentMissingOnNode x5 (node-0, ...)"})
 }
@@ -283,7 +293,7 @@ func TestSnapshotGroupedPageAndTeamFirst(t *testing.T) {
 }
 
 func TestSnapshotUnreachable(t *testing.T) {
-	equal(t, rules.SnapshotLines(instA, Answer{Why: "timed out"}, now), []string{"alpha unreachable: timed out"})
+	equal(t, rules.SnapshotLines(instA, Answer{Why: timedOut}, now), []string{"alpha unreachable: timed out"})
 }
 
 func TestTargetsConfiguredThenLeased(t *testing.T) {
