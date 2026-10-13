@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -16,10 +18,25 @@ import (
 // runUpdate is the update; the tests replace it.
 var runUpdate = update.Run
 
+// selfUpdateCmdName is the self-update command's name.
+const selfUpdateCmdName = "self-update"
+
+// syncPluginsFlag runs only the plugin sync of the binary installed at the
+// path, which a self-update hands over to.
+const syncPluginsFlag = "sync-plugins"
+
+// runInstalled runs the binary at path with args, its output to w; the
+// tests replace it.
+var runInstalled = func(ctx context.Context, w io.Writer, path string, args ...string) error {
+	c := exec.CommandContext(ctx, path, args...) //nolint:gosec // the binary this update installed
+	c.Stdout, c.Stderr = w, w
+	return c.Run()
+}
+
 func (a *app) selfUpdateCmd() *cobra.Command {
-	var check bool
+	var check, pluginsOnly bool
 	c := &cobra.Command{
-		Use:   "self-update",
+		Use:   selfUpdateCmdName,
 		Short: "Replace this binary with the latest signed release (--check only asks)",
 		Long: `Look up the latest release of ` + update.Repository + ` and, when it is newer
 than this binary, install its binary for this OS and architecture over the
@@ -44,8 +61,10 @@ installed beekeeper plugin up to its marketplace's latest (claude plugin
 marketplace update, then claude plugin update in the plugin's scope), so
 the role skills it serves are the ones the new binary hands its workers;
 on the latest release a plugin whose skills differ from the binary's is
-brought up the same way. A plugin that stays is said with the command
-that updates it. GitHub is asked
+brought up the same way. The new binary syncs its plugin itself: the
+update runs it for that, and a binary installed by a release without the
+sync (or by hand) syncs on the first command it runs. A plugin that stays
+is said with the command that updates it. GitHub is asked
 anonymously, apart from the budget gh and devctl share, unless GITHUB_TOKEN
 is set. A development build (version dev) is refused.`,
 		Args: cobra.NoArgs,
@@ -55,6 +74,9 @@ is set. A development build (version dev) is refused.`,
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if pluginsOnly {
+				return a.syncInstalledPlugins(cmd.Context())
+			}
 			w := a.out
 			if a.json {
 				w = io.Discard
@@ -73,14 +95,52 @@ is set. A development build (version dev) is refused.`,
 					_, _ = fmt.Fprint(w, leftBehind(staleBinaries(t, os.Getpid(), replacedBinary), res.Current, res.Latest))
 				}
 			}
-			if err == nil && !check {
-				syncPlugins(cmd.Context(), w, res.Updated)
+			switch {
+			case err != nil || check:
+			case res.Updated:
+				a.syncByInstalled(cmd.Context(), w, res.Path)
+			default:
+				syncPlugins(cmd.Context(), w, false)
 			}
 			return err
 		},
 	}
 	c.Flags().BoolVar(&check, "check", false, "only report the running and the latest release; exit 125 when a newer one exists")
+	c.Flags().BoolVar(&pluginsOnly, syncPluginsFlag, false, "only bring the plugin up to date for this binary, once")
+	_ = c.Flags().MarkHidden(syncPluginsFlag)
 	return c
+}
+
+// syncByInstalled has the binary an update installed at path bring the plugins up
+// to date with its own sync, so they follow the new binary whatever this
+// one knows; a new binary that does not run is said, and this one syncs.
+func (a *app) syncByInstalled(ctx context.Context, w io.Writer, path string) {
+	args := []string{selfUpdateCmdName, "--" + syncPluginsFlag}
+	if a.cfgPath != "" {
+		args = append(args, "--"+configFlag, a.cfgPath)
+	}
+	if err := runInstalled(ctx, w, path, args...); err != nil {
+		_, _ = fmt.Fprintf(w, "The installed %s did not sync its plugin (%v): this binary syncs it.\n", path, err)
+		syncPlugins(ctx, w, true)
+	}
+}
+
+// syncInstalledPlugins is self-update --sync-plugins: this binary's plugin
+// sync, once, recorded in the state directory.
+func (a *app) syncInstalledPlugins(ctx context.Context) error {
+	if err := a.loadConfig(); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(a.cfg.StateDir, 0o700); err != nil {
+		return err
+	}
+	switch {
+	case binaryIdentity() == "":
+		_, _ = fmt.Fprintln(a.out, "A development build leaves the beekeeper plugin as it is.")
+	case !syncOnce(ctx, a.out, a.cfg.StateDir):
+		_, _ = fmt.Fprintf(a.out, "The beekeeper plugin is up to date for beekeeper %s.\n", binaryIdentity())
+	}
+	return nil
 }
 
 // leftBehind names the beekeeper processes an update leaves on the old
