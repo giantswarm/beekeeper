@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -48,5 +49,32 @@ func TestRefStates(t *testing.T) {
 	}
 	if states, err := RefStates(context.Background(), nil, nil); states != nil || err != nil {
 		t.Error("RefStates of nothing asks GitHub")
+	}
+}
+
+func TestRefStatesResolvesAPersonalAccountRepository(t *testing.T) {
+	var acting []string
+	run := ownerLink(&acting, func(query string) string {
+		if strings.Contains(query, `owner:"teemow"`) {
+			return `{"data":{"r0":{"issueOrPullRequest":{"state":"OPEN"}}}}`
+		}
+		return `{"data":{"r0":{"issueOrPullRequest":{"state":"MERGED"}},"r1":{"issueOrPullRequest":{"state":"OPEN"}}}}`
+	})
+	refs := []PR{{Repo: orgRepo, N: 1}, {Repo: personalRepo, N: 7}, {Repo: "giantswarm/devctl", N: 2}}
+	states, err := RefStates(context.Background(), run, refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[PR]RefState{refs[0]: {State: Merged}, refs[1]: {State: Open}, refs[2]: {State: Open}}
+	if len(states) != len(want) {
+		t.Errorf("RefStates = %v, want %v", states, want)
+	}
+	for r, s := range want {
+		if states[r] != s {
+			t.Errorf("%v: %+v, want %+v", r, states[r], s)
+		}
+	}
+	if !slices.Equal(acting, []string{orgRepo, personalRepo}) {
+		t.Errorf("requests acted on %q, want one per owner", acting)
 	}
 }

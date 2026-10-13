@@ -323,7 +323,7 @@ func (c *Client) goOf(ctx context.Context, ref string) (*Go, error) {
 			} `json:"issue"`
 		} `json:"repository"`
 	}
-	if err := c.graphql(ctx, &r, `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){isPrivate issue(number:$n){id}}}`,
+	if err := c.graphql(github.ActingOn(ctx, owner+"/"+repo), &r, `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){isPrivate issue(number:$n){id}}}`,
 		vars{"o": owner, "r": repo, "n": n}); err != nil {
 		return nil, err
 	}

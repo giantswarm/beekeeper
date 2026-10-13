@@ -595,24 +595,37 @@ func TestItemLeases(t *testing.T) {
 	}
 }
 
-func TestClosesReadsTheClosingReferencesInOneRequest(t *testing.T) {
-	var queries []string
-	gh := func(_ context.Context, args ...string) ([]byte, error) {
+func TestClosesReadsTheClosingReferencesInOneRequestPerOwner(t *testing.T) {
+	var queries, acting []string
+	gh := func(ctx context.Context, args ...string) ([]byte, error) {
 		queries = append(queries, args[3])
+		acting = append(acting, github.Repo(ctx))
+		if strings.Contains(args[3], `owner:"teemow"`) {
+			// A personal account's repository resolves only on the login
+			// that reaches it: acting on it (github.ActingOn).
+			if github.Repo(ctx) != "teemow/lab" {
+				return []byte(`{"data":null,"errors":[{"type":"NOT_FOUND","message":"Could not resolve to a Repository with the name 'teemow/lab'."}]}`), errors.New("exit status 1")
+			}
+			return []byte(`{"data":{"r0":{"issueOrPullRequest":{"closingIssuesReferences":{"nodes":[{"number":3,"repository":{"nameWithOwner":"teemow/lab"}}]}}}}}`), nil
+		}
 		return []byte(`{"data":{
 			"r0":{"issueOrPullRequest":{"closingIssuesReferences":{"nodes":[{"number":1,"repository":{"nameWithOwner":"O/R"}},{"number":2,"repository":{"nameWithOwner":"other/x"}}]}}},
-			"r1":{"issueOrPullRequest":{}},
-			"r2":null}}`), nil
+			"r1":{"issueOrPullRequest":{}}}}`), nil
 	}
-	got, err := (&Client{GH: gh}).Closes(t.Context(), []string{"O/R#100", issue5, "not a ref", "gone/r#1"})
+	got, err := (&Client{GH: gh}).Closes(t.Context(), []string{"O/R#100", "teemow/lab#9", issue5, "not a ref"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string][]string{"o/r#100": {"o/r#1", "other/x#2"}}
-	if len(queries) != 1 || !strings.Contains(queries[0], `r2:repository(owner:"gone",name:"r")`) || len(got) != 1 || !slices.Equal(got["o/r#100"], want["o/r#100"]) {
+	want := map[string][]string{"o/r#100": {"o/r#1", "other/x#2"}, "teemow/lab#9": {"teemow/lab#3"}}
+	if len(queries) != 2 || !strings.Contains(queries[0], `r1:repository(owner:"o",name:"r")`) || len(got) != len(want) ||
+		!slices.Equal(got["o/r#100"], want["o/r#100"]) || !slices.Equal(got["teemow/lab#9"], want["teemow/lab#9"]) {
 		t.Errorf("closes %v, queries %q", got, queries)
 	}
-	if got, err := (&Client{GH: gh}).Closes(t.Context(), nil); err != nil || got != nil || len(queries) != 1 {
+	if !slices.Equal(acting, []string{"O/R", "teemow/lab"}) {
+		t.Errorf("requests acted on %q, want one per owner", acting)
+	}
+	queries = nil
+	if got, err := (&Client{GH: gh}).Closes(t.Context(), nil); err != nil || got != nil || len(queries) != 0 {
 		t.Errorf("no refs asked GitHub: %v, %v, %d queries", got, err, len(queries))
 	}
 }
