@@ -5,9 +5,12 @@
 package centraltest
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -38,6 +41,51 @@ type Muster struct {
 func New(t *testing.T, backend, server string) *Muster {
 	t.Helper()
 	m := &Muster{}
+	m.srv = httptest.NewServer(m.handler(backend, server))
+	t.Cleanup(m.srv.Close)
+	m.URL = m.srv.URL + "/mcp"
+	return m
+}
+
+type connKey struct{}
+
+// NewStalling starts a test muster over HTTP/2, as muster behind its
+// ingress answers, whose first connection stalls: it takes the requests of
+// the JSON-RPC method on it and never answers them, as a connection whose
+// far end went away without a word; method "" stalls every request on it.
+// Every other connection answers. It returns the muster and the transport
+// that trusts it.
+func NewStalling(t *testing.T, backend, server, method string) (*Muster, *http.Transport) {
+	t.Helper()
+	m := &Muster{}
+	h := m.handler(backend, server)
+	var conns atomic.Int64
+	m.srv = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Context().Value(connKey{}) == int64(1) && r.Body != nil {
+			body, _ := io.ReadAll(r.Body)
+			var msg struct {
+				Method string `json:"method"`
+			}
+			if json.Unmarshal(body, &msg) == nil && (method == "" || msg.Method == method) {
+				<-r.Context().Done()
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+		}
+		h.ServeHTTP(w, r)
+	}))
+	m.srv.EnableHTTP2 = true
+	m.srv.Config.ConnContext = func(ctx context.Context, _ net.Conn) context.Context {
+		return context.WithValue(ctx, connKey{}, conns.Add(1))
+	}
+	m.srv.StartTLS()
+	t.Cleanup(m.srv.Close)
+	m.URL = m.srv.URL + "/mcp"
+	return m, m.srv.Client().Transport.(*http.Transport)
+}
+
+// handler is muster's MCP endpoint in front of backend.
+func (m *Muster) handler(backend, server string) http.Handler {
 	s := mcpserver.NewMCPServer("muster", "test")
 	s.AddTool(mcp.NewTool("call_tool", mcp.WithString("name", mcp.Required()), mcp.WithObject("arguments")),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -58,14 +106,10 @@ func New(t *testing.T, backend, server string) *Muster {
 			env, _ := json.Marshal(map[string]any{"isError": res.IsError, "content": res.Content, "structuredContent": res.StructuredContent})
 			return &mcp.CallToolResult{Content: []mcp.Content{mcp.NewTextContent(string(env))}, IsError: res.IsError, StructuredContent: res.StructuredContent}, nil
 		})
-	h := mcpserver.NewStreamableHTTPServer(s, mcpserver.WithStateLess(true),
+	return mcpserver.NewStreamableHTTPServer(s, mcpserver.WithStateLess(true),
 		mcpserver.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
 			return context.WithValue(ctx, authKey{}, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
 		}))
-	m.srv = httptest.NewServer(h)
-	t.Cleanup(m.srv.Close)
-	m.URL = m.srv.URL + "/mcp"
-	return m
 }
 
 // Down makes the backend unreachable behind muster (down) or reachable.
