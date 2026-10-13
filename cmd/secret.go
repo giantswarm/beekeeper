@@ -142,6 +142,9 @@ anything is not equal.`,
 				// the broker's call: the vault session in its environment
 				// stays out of every other process's reach
 				_ = secret.Protect()
+				if err := a.sandboxDir(); err != nil {
+					return err
+				}
 				return vaultExit(run(cmd, args))
 			}
 			inSandbox := os.Getenv(sandbox.Env) != ""
@@ -398,6 +401,12 @@ value is read. It answers the key names and value lengths, for example:
     op://<vault>/<item>/credential=client-secret app.sops.yaml \
     --name app --namespace team
 
+A consumer runs in the caller's working directory, a brokered call's too:
+the broker starts the call in its requester's directory, so a relative
+path names the caller's file (git -C . the caller's checkout). A sandboxed
+caller in a directory its sandbox does not let it read is refused, the
+directory named.
+
 copy <ref> -- <command…> runs a consumer with the value on stdin: gh secret
 set, garage json-api <endpoint> -, gitlab-rails runner [-e <env>] '<code>'
 whose Ruby code reads STDIN, a command with --password-stdin or one with
@@ -421,11 +430,11 @@ environment or in the answer; git runs without the global and system
 configuration (whose credential helper would answer or store first) and
 without hooks, a repository naming a credential helper is refused, and so
 are the options that set configuration or name a program (-c, --config,
---upload-pack, --receive-pack, --exec). A brokered call runs in the
-broker's directory: -C names the repository by its absolute path.
+--upload-pack, --receive-pack, --exec). git runs in the caller's
+directory, -C . the caller's checkout:
 
   beekeeper secret copy <file>#<path> --git-askpass -- \
-    git -C /path/to/repo push https://<host>/<group>/<project>.git main
+    git -C . push https://<host>/<group>/<project>.git main
 
 copy <ref> --to-secret <context>/<namespace>/<name>/<key> writes one value
 into a key of a Secret in a kind lab, kind-<cluster>, whose lab lease the
