@@ -45,7 +45,9 @@ is logged (beekeeper log) with the session, the references and the
 operation.
 
 A reference is a SOPS file (every value in it), one value in a SOPS file
-(file#a.b.c, the dotted key path; sops:// in front optional), a field of
+(file#a.b.c, the dotted key path, a key holding dots resolving as it is,
+stringData.credentials.json, or quoted, stringData."credentials.json", or
+escaped, stringData.credentials\.json; sops:// in front optional), a field of
 the shared 1Password vault (op://<vault>/<item>/<field>, the vault being
 secret.vault) or, as a source, a key of a Kubernetes Secret
 (k8s://<context>/<namespace>/<name>/<key>, and after # the dotted path of
@@ -355,7 +357,14 @@ way. It answers the key names and value lengths (a Secret's data decoded).
 dst must not exist.
 
 copy <ref> <file#path> puts one value into a SOPS path, creating the file
-or the key when absent, the file's other values kept. The source may be a
+or the key when absent, the file's other values kept. A key holding dots
+resolves unquoted (the whole remaining path tried as one key first), and
+quoted or escaped in a new path:
+
+  beekeeper secret copy 'sa.sops.yaml#stringData.credentials.json' \
+    'lab.sops.yaml#stringData."credentials.json"'
+
+The source may be a
 key of a Kubernetes Secret, k8s://<context>/<namespace>/<name>/<key>, and
 with #<path> one value inside what that key holds: a dotted key of its
 YAML or JSON mapping (tab-indented too), a line of its dotenv lines

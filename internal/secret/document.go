@@ -128,24 +128,58 @@ func (d *document) get(path string) (string, bool) {
 
 // node is the node at a dotted path, nil when absent.
 func (d *document) node(path string) *yaml.Node {
-	n := d.root
-	for _, k := range strings.Split(path, ".") {
-		if n = child(n, k); n == nil {
-			return nil
+	_, n, _ := d.walk(splitPath(path))
+	return n
+}
+
+// walk follows keys from the root, each step to the child [childAt] names,
+// so a key holding dots (credentials.json) resolves unquoted: the node,
+// nil when absent, with its parent and the key it sits under.
+func (d *document) walk(keys []string) (parent, n *yaml.Node, key string) {
+	n = d.root
+	for i := 0; i < len(keys); {
+		c, width := childAt(n, keys[i:])
+		if c == nil {
+			return nil, nil, ""
+		}
+		parent, n, key = n, c, strings.Join(keys[i:i+width], ".")
+		i += width
+	}
+	return parent, n, key
+}
+
+// splitPath reads a dotted path into its keys: a key in double quotes
+// (stringData."credentials.json") or a dot escaped with a backslash
+// (stringData.credentials\.json) keeps its dots.
+func splitPath(path string) []string {
+	var keys []string
+	var k strings.Builder
+	quoted, escaped := false, false
+	for _, r := range path {
+		switch {
+		case escaped:
+			k.WriteRune(r)
+			escaped = false
+		case r == '\\':
+			escaped = true
+		case r == '"':
+			quoted = !quoted
+		case r == '.' && !quoted:
+			keys = append(keys, k.String())
+			k.Reset()
+		default:
+			k.WriteRune(r)
 		}
 	}
-	return n
+	return append(keys, k.String())
 }
 
 // remove deletes the key or list item at a dotted path; an absent one
 // stays absent.
 func (d *document) remove(path string) {
-	parent, k := d.root, path
-	if i := strings.LastIndex(path, "."); i >= 0 {
-		parent, k = d.node(path[:i]), path[i+1:]
-	}
+	parent, n, k := d.walk(splitPath(path))
 	switch {
-	case parent == nil:
+	case n == nil:
 	case parent.Kind == yaml.MappingNode:
 		for i := 0; i+1 < len(parent.Content); i += 2 {
 			if parent.Content[i].Value == k {
@@ -194,19 +228,23 @@ func (d *document) setKeys(keys []string, value string) error {
 // put puts a node at a dotted path, replacing what is there and creating
 // the mappings on the way.
 func (d *document) put(path string, value *yaml.Node) error {
-	return d.putKeys(strings.Split(path, "."), value)
+	return d.putKeys(splitPath(path), value)
 }
 
-// putKeys is [document.put] under keys, one key each.
+// putKeys is [document.put] under keys: an existing key holding dots
+// resolves as in [document.walk], a new one is one key each.
 func (d *document) putKeys(keys []string, value *yaml.Node) error {
 	path := strings.Join(keys, ".")
+	if slices.Contains(keys, "") {
+		return fmt.Errorf("%q: an empty key", path)
+	}
 	n := d.root
-	for i, k := range keys {
-		if k == "" {
-			return fmt.Errorf("%q: an empty key", path)
+	for i := 0; i < len(keys); {
+		c, width := childAt(n, keys[i:])
+		if c == nil {
+			width = 1
 		}
-		c := child(n, k)
-		last := i == len(keys)-1
+		last := i+width == len(keys)
 		if c != nil && !last && c.Kind == yaml.ScalarNode && c.Tag == "!!null" {
 			// an empty key on the way, a skeleton's `stringData:`
 			*c = yaml.Node{Kind: yaml.MappingNode, Tag: mapTag}
@@ -219,9 +257,9 @@ func (d *document) putKeys(keys []string, value *yaml.Node) error {
 			if last {
 				c = &yaml.Node{}
 			}
-			n.Content = append(n.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: strTag, Value: k}, c)
+			n.Content = append(n.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: strTag, Value: keys[i]}, c)
 		}
-		n = c
+		n, i = c, i+width
 	}
 	*n = *value
 	return nil

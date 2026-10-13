@@ -398,7 +398,7 @@ func dotenvValue(v string) string {
 // the shape of what the key, or the node on the way, holds: the format,
 // the keys, the lines and the bytes, never a value.
 func valueAt(raw []byte, path string) (string, error) {
-	return lookup(raw, "", strings.Split(path, "."))
+	return lookup(raw, "", splitPath(path))
 }
 
 // lookup resolves keys in raw, the content under the dotted prefix ("" for
@@ -446,11 +446,15 @@ func lookup(raw []byte, prefix string, keys []string) (string, error) {
 	return n.Value, nil
 }
 
-// childAt is the child the first of keys names, or, for a key holding
-// dots (config.yaml), the one the fewest leading keys joined name; with
-// how many keys it took, 0 for none.
+// childAt is the child all keys joined name as one key (credentials.json
+// as the last key), else the one the fewest leading keys joined name, the
+// first key alone or a key holding dots on the way (config.yaml); with how
+// many keys it took, 0 for none.
 func childAt(n *yaml.Node, keys []string) (*yaml.Node, int) {
-	for width := 1; width <= len(keys); width++ {
+	if c := child(n, strings.Join(keys, ".")); c != nil {
+		return c, len(keys)
+	}
+	for width := 1; width < len(keys); width++ {
 		if c := child(n, strings.Join(keys[:width], ".")); c != nil {
 			return c, width
 		}

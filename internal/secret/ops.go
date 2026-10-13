@@ -279,7 +279,7 @@ func (o *Ops) document(ctx context.Context, file string, nw *NewSecret) (*docume
 // refused when file's creation rule would leave it in plaintext.
 func place(doc *document, file, path string) (string, error) {
 	path = doc.valuePath(path)
-	if err := checkRule(file, strings.Split(path, ".")); err != nil {
+	if err := checkRule(file, splitPath(path)); err != nil {
 		return "", err
 	}
 	return path, nil
