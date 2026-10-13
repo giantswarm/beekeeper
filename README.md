@@ -1588,8 +1588,13 @@ is kept in reserve or repurposed: a relay and a crash both start a fresh session
   `capacity.swapPSIMax`, or MemAvailable under the floor; either unknown counts as pressure) and is
   a warning in parentheses after the verdict without (`room for 7 starts (disk swap growing +391
   MiB/h over 256, without pressure: memory PSI 0% (max 0%), MemAvailable 43.0 GiB (floor 20
-  GiB))`): swap may sit full for days without a byte moving, zswap's writeback moves pages to disk
-  without new swapping, and the window lets a single burst leave the rate.
+  GiB))`): swap may sit full for days without a byte moving, and the window lets a single burst
+  leave the rate. Disk swap's growth counts new swap-outs only: the swap in use less zswap's share
+  (`SwapTotal` − `SwapFree` − `Zswapped` of `/proc/meminfo`) less zswap's writeback (`zswpwb` of
+  `/proc/vmstat`, the pages zswap moves from its pool to the swap device, which grow disk swap with
+  swap in use flat). The writeback is shown apart, never weighed: the headroom line says `disk swap
+  N MiB +G MiB/h (max M), zswap Z MiB writing back W MiB/h`, and the watch's SWAP line `disk +G
+  MiB/h, zswap writeback W MiB/h over the last 10m`.
   The build slot guards only a start that builds: `capacity --builds` and `agents start --builds`
   mark a task that builds, tests or lints (its commands take the slot under `beekeeper run`), and
   such a start is refused while no slot is free. A start without the mark does not build (a filer,
@@ -2463,8 +2468,8 @@ The organisation and desk keys, and their defaults:
 | `memcap.cpuQuota` | half the cores (`1200%` on 24; 100% is one core) | `memcap.slice`'s CPUQuota: the cores every `beekeeper run` command together may use, shared by the slots by equal weight; `install` writes it into the slice unit and every `run` sets it again at its slot |
 | `memcap.cpuWeight` | `50` | `memcap.slice`'s CPUWeight against the desktop's slices (100 each): the runs' share of the cores while the desktop wants them too, a third by default |
 | `watch.availMinMiB`, `watch.scopeAnonMaxMiB`, `watch.gttMaxMiB` | 12%, 32%, 28% of RAM | LOW RAM, DESKTOP SCOPE, IGPU GTT |
-| `watch.swapMaxMiB`, `watch.oomdHeadroomMinMiB` | 60%, 6% of swap | SWAP (disk swap, zswap's share not counted, while it grows and MemAvailable falls), and the headroom under which OOMD IMMINENT is said (only while systemd-oomd watches a cgroup for swap) |
-| `watch.swapWindow` | 10m | how far back swap's growth rate looks (SWAP, OOMD IMMINENT, `capacity`'s swap guard), at least 5m: a writeback burst older than it has left the rate |
+| `watch.swapMaxMiB`, `watch.oomdHeadroomMinMiB` | 60%, 6% of swap | SWAP (disk swap, zswap's share not counted, while it grows from new swap-outs, zswap's writeback not counted, and MemAvailable falls), and the headroom under which OOMD IMMINENT is said (only while systemd-oomd watches a cgroup for swap) |
+| `watch.swapWindow` | 10m | how far back swap's growth rate and zswap's writeback rate look (SWAP, OOMD IMMINENT, `capacity`'s swap guard), at least 5m: a burst older than it has left the rate |
 | `watch.toolProcsMax`, `watch.tools` | `1000`; kubectl, helm, tsh, gh, flux, devctl | LOAD over this many processes of these CLIs machine-wide; negative: off |
 | `desktop.typingQuiet` | `30s` | How long the person's input stays idle before a `claude://` link switches the desktop's window; negative: links do not wait for it |
 | `watch.tmpMaxMiB`, `watch.diskMinMiB` | 45% of `/tmp`, 5% of `/` | TMPFS, LOW DISK |

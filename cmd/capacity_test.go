@@ -155,7 +155,7 @@ func TestCapacityVerdict(t *testing.T) {
 		}
 	}
 	h := roomy()
-	if got, want := h.line(), "headroom: MemAvailable 45.0 GiB (floor 20 GiB), memory PSI 0% (max 0%), disk swap 0 MiB +10 MiB/h (max 256), zswap 0 MiB, 1m load 3 (max 48), build slots 1 of 2 free, kind labs 1 of 2"; got != want {
+	if got, want := h.line(), "headroom: MemAvailable 45.0 GiB (floor 20 GiB), memory PSI 0% (max 0%), disk swap 0 MiB +10 MiB/h (max 256), zswap 0 MiB writing back 0 MiB/h, 1m load 3 (max 48), build slots 1 of 2 free, kind labs 1 of 2"; got != want {
 		t.Errorf("line %q, want %q", got, want)
 	}
 	h.Swap = nil
