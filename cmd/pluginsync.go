@@ -98,14 +98,18 @@ func refreshCommand(p installedPlugin) string {
 // syncPlugins brings the installed beekeeper plugins up to their
 // marketplace's latest, every one when all (an update installed a new
 // binary), else the stale ones, and says each in a line to w. A failure is
-// said with the command that fixes it, and fails nothing else. listed says
-// whether Claude Code listed its plugins.
-func syncPlugins(ctx context.Context, w io.Writer, all bool) (listed bool) {
+// said with the command that fixes it, and fails nothing else.
+func syncPlugins(ctx context.Context, w io.Writer, all bool) {
 	ps, err := listPlugins(ctx)
 	if err != nil {
 		_, _ = fmt.Fprintf(w, "The beekeeper plugin stays as it is: %v\n", err)
-		return false
+		return
 	}
+	syncListed(ctx, w, ps, all)
+}
+
+// syncListed is syncPlugins of the listed plugins ps.
+func syncListed(ctx context.Context, w io.Writer, ps []installedPlugin, all bool) {
 	var due []installedPlugin
 	for _, p := range ps {
 		if all && isBeekeeper(p) {
@@ -135,7 +139,7 @@ func syncPlugins(ctx context.Context, w io.Writer, all bool) (listed bool) {
 		updated = append(updated, p)
 	}
 	if len(updated) == 0 {
-		return true
+		return
 	}
 	now, _ := listPlugins(ctx)
 	for _, p := range updated {
@@ -147,7 +151,6 @@ func syncPlugins(ctx context.Context, w io.Writer, all bool) (listed bool) {
 		}
 		_, _ = fmt.Fprintf(w, "Updated the plugin %s %s → %s: sessions started from now load its skills.\n", p.ID, p.Version, version)
 	}
-	return true
 }
 
 // pluginSyncFile, in the state directory, names the binary that last
@@ -170,9 +173,9 @@ var binaryIdentity = func() string {
 // binary: the first command a newly installed binary runs updates every one
 // as a self-update does, whatever installed the binary (a self-update by a
 // release without the sync, a download, go install), and records the binary
-// in dir. A Claude Code that does not list its plugins leaves the sync to
-// the next command; a process that finds another syncing goes on without.
-// ran says whether this call synced.
+// in dir. A Claude Code that does not list its plugins (none installed, a
+// server) leaves the sync to the next command, unsaid; a process that finds
+// another syncing goes on without. ran says whether this call synced.
 func syncOnce(ctx context.Context, w io.Writer, dir string) (ran bool) {
 	id := binaryIdentity()
 	if id == "" || dir == "" {
@@ -190,10 +193,12 @@ func syncOnce(ctx context.Context, w io.Writer, dir string) (ran bool) {
 	if synced(path, id) {
 		return false
 	}
-	_, _ = fmt.Fprintf(w, "beekeeper %s brings its plugin up to date:\n", id)
-	if syncPlugins(ctx, w, true) {
-		_ = os.WriteFile(path, []byte(id+"\n"), 0o600)
+	ps, err := listPlugins(ctx)
+	if err != nil {
+		return false
 	}
+	syncListed(ctx, w, ps, true)
+	_ = os.WriteFile(path, []byte(id+"\n"), 0o600)
 	return true
 }
 

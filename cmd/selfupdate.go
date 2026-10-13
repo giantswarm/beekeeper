@@ -138,7 +138,7 @@ func (a *app) syncInstalledPlugins(ctx context.Context) error {
 	case binaryIdentity() == "":
 		_, _ = fmt.Fprintln(a.out, "A development build leaves the beekeeper plugin as it is.")
 	case !syncOnce(ctx, a.out, a.cfg.StateDir):
-		_, _ = fmt.Fprintf(a.out, "The beekeeper plugin is up to date for beekeeper %s.\n", binaryIdentity())
+		_, _ = fmt.Fprintf(a.out, "beekeeper %s synced no plugin: it did so before, another beekeeper does now, or Claude Code lists none.\n", binaryIdentity())
 	}
 	return nil
 }

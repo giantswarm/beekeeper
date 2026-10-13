@@ -243,13 +243,15 @@ func TestNewBinarySyncsPluginAfterAnOldSelfUpdate(t *testing.T) {
 }
 
 // A Claude Code that does not list its plugins leaves the sync to the next
-// command; a development build never syncs.
+// command, unsaid; a development build never syncs.
 func TestFirstRunSyncWaitsForClaudeCode(t *testing.T) {
 	dir := asBinary(t, newBinary)
 	prev := listPlugins
 	t.Cleanup(func() { listPlugins = prev })
 	listPlugins = func(context.Context) ([]installedPlugin, error) { return nil, os.ErrNotExist }
-	beekeeper(t, "timer")
+	if out := beekeeper(t, "timer"); strings.Contains(out, "plugin") {
+		t.Errorf("a failed plugin list was said:\n%s", out)
+	}
 	if _, err := os.Stat(filepath.Join(dir, pluginSyncFile)); !os.IsNotExist(err) {
 		t.Errorf("a sync without the plugin list was recorded: %v", err)
 	}
@@ -286,7 +288,7 @@ func TestSelfUpdateHandsPluginSyncToTheNewBinary(t *testing.T) {
 	if want := []string{refreshMarketplace, updateUserScope}; !slices.Equal(*ran, want) {
 		t.Errorf("claude plugin ran %q, want %q once, by the new binary", *ran, want)
 	}
-	if !strings.Contains(out, "beekeeper "+newBinary+" brings its plugin up to date") || !strings.Contains(out, "50e1b9d0aaaa → 2b8a6d5b0000") {
+	if !strings.Contains(out, "50e1b9d0aaaa → 2b8a6d5b0000") {
 		t.Errorf("self-update did not say the new binary's sync:\n%s", out)
 	}
 	if got := recordedSync(dir); got != newBinary {
