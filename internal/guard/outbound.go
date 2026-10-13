@@ -318,11 +318,11 @@ func readFile(name, cwd string) string {
 }
 
 // fileFlags take the name of a file whose content a command sends.
-var fileFlags = map[string]bool{"--body-file": true, "--notes-file": true, flagInput: true, "--file": true, "-F": true, "-T": true, "--upload-file": true}
+var fileFlags = map[string]bool{flagBodyFile: true, "--notes-file": true, flagInput: true, "--file": true, "-F": true, "-T": true, "--upload-file": true}
 
 // curlData are curl's flags that send a body.
 var curlData = map[string]bool{"-d": true, "--data": true, "--data-raw": true, "--data-binary": true, "--data-urlencode": true,
-	"--json": true, "-F": true, "--form": true, "-T": true, "--upload-file": true, "--post-data": true, "--post-file": true}
+	flagJSON: true, "-F": true, "--form": true, "-T": true, "--upload-file": true, "--post-data": true, "--post-file": true}
 
 // resolve is name (~/ allowed) relative to dir.
 func resolve(dir, name string) string {
@@ -359,7 +359,7 @@ func outbound(words []string, cwd string) (sends, bool) {
 		if body := httpBody(args); body != nil {
 			return sends{what: name, dir: cwd, files: sentFiles(args), body: body}, true
 		}
-	case "git":
+	case gitCmd:
 		return gitSends(args, cwd)
 	}
 	return sends{}, false

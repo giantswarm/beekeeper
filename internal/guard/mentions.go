@@ -23,7 +23,7 @@ var mentionTools = []string{
 
 // ghPosts are the gh subcommands that post text: issue and pr comment,
 // create, edit and review, and api (a comments or reviews endpoint).
-var ghPosts = map[string]bool{"comment": true, "create": true, verbEdit: true, "review": true, "close": true}
+var ghPosts = map[string]bool{verbComment: true, verbCreate: true, verbEdit: true, "review": true, verbClose: true}
 
 // mentionHead is what may stand before an @-mention: the start, a space,
 // an opening bracket or punctuation; not a word, path, address or option
@@ -92,10 +92,10 @@ func ghPostText(cmd, cwd string) string {
 		posts = true
 		for i, w := range words {
 			switch {
-			case (w == "--body-file" || w == "-F") && i+1 < len(words):
+			case (w == flagBodyFile || w == "-F") && i+1 < len(words):
 				files = append(files, words[i+1])
-			case strings.HasPrefix(w, "--body-file="):
-				files = append(files, strings.TrimPrefix(w, "--body-file="))
+			case strings.HasPrefix(w, flagBodyFile+"="):
+				files = append(files, strings.TrimPrefix(w, flagBodyFile+"="))
 			}
 		}
 	}

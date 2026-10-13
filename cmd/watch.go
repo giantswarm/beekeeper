@@ -262,13 +262,16 @@ type watcher struct {
 	active map[string]condition
 	// markFile keeps active and reported for a restarted watch; dirty is
 	// set when they changed since it was written.
-	markFile   string
-	dirty      bool
-	lastPoll   time.Time
-	lastBudget time.Time
-	scopeOOM   int64
-	sessions   map[string]*claude.Session
-	seenKills  map[string]bool
+	markFile string
+	dirty    bool
+	lastPoll time.Time
+	// refusedSince is the newest hook.refused event said; zero before the
+	// first reading, which said none.
+	refusedSince time.Time
+	lastBudget   time.Time
+	scopeOOM     int64
+	sessions     map[string]*claude.Session
+	seenKills    map[string]bool
 	// reported are the stale leases said once.
 	reported map[string]bool
 	// notifier sends the events that need a person (--notify); nil prints only.
@@ -1675,6 +1678,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		return // the supervisor's watch reports them
 	}
 	w.noteAnswers(st)
+	w.refusals()
 	if w.chores {
 		w.autoResume(ctx, st) // the parks an earlier poll marked resumable
 	}
@@ -1791,6 +1795,28 @@ func (w *watcher) noteAnswers(st *state.State) {
 		w.answersSince = e.At
 		if an, ok := parseAnswered(e); ok && prev[an.ID] {
 			w.emitNow("pending", "%s", answeredLine(an.ID, cmp.Or(e.By.Person, e.By.Name), truncate(an.Answer, 300)))
+		}
+	}
+}
+
+// refusals says each command the upstream guard refused since the last
+// reading, by whom and to which repository: the supervisor finds out what
+// the session was about to write and why it tried. The first reading is the
+// baseline and says none.
+func (w *watcher) refusals() {
+	evs, err := w.store.Follow("watch.refused", func(e state.Event) bool { return e.Verb == verbHookRefused })
+	if err != nil {
+		return // the next reading reads them again
+	}
+	since := w.refusedSince
+	if since.IsZero() {
+		w.refusedSince = w.now
+		return
+	}
+	for _, e := range evs {
+		if e.At.After(since) {
+			w.refusedSince = e.At
+			w.emitNow("refused", "REFUSED %s: %s", cmp.Or(e.By.Name, e.By.Session), truncate(e.Detail, 400))
 		}
 	}
 }

@@ -182,7 +182,7 @@ that does not load keeps the guards on.`,
 	}
 	c.AddCommand(&cobra.Command{
 		Use:   "pretooluse",
-		Short: "The PreToolUse hook: builds into a slot, the kind lab limit, the merge gate, Secret reads, outbound secrets, questions via the guide, desktop sends by name, a repository's instructions on the first write",
+		Short: "The PreToolUse hook: GitHub writes outside the allowed organizations, builds into a slot, the kind lab limit, the merge gate, Secret reads, outbound secrets, questions via the guide, desktop sends by name, a repository's instructions on the first write",
 		Long: `pretooluse reads a PreToolUse event on stdin. A build, test, lint or lab
 command is rewritten to run through "beekeeper run -- <shell> -c '<command>'"
 (the absolute path of this binary, the configured shell), the tool timeout
@@ -245,6 +245,26 @@ now) is refused, naming beekeeper browse: Claude Desktop holds such a
 session's navigate to a site it was not allowed on yet for a person's site
 approval, which no hook answers. Its headless turns and every other
 session's browser calls pass.
+
+Every GitHub write aimed at a repository outside github.allowedOrgs
+(default giantswarm) is refused before it runs: gh pr create, comment,
+review, close, edit, ready, merge, reopen, lock, unlock, update-branch; gh
+issue create, comment, close, edit, reopen, lock, unlock, delete, transfer,
+pin, unpin, develop; gh release, label and repo writes; gh api with POST,
+PATCH, PUT or DELETE (-X, --method; -f, -F, --field, --raw-field or
+--input without one imply POST) on repos/<owner>/<repo> or orgs/<owner>,
+and curl doing the same to api.github.com; a gh api graphql mutation that
+posts unless every owner it names is allowed; git push to a GitHub remote
+of another owner, its push URL read in the worktree the command runs in (a
+branch of our fork, upstream/<slug> on origin, passes); a GitHub connector
+post with such an owner. The repository is --repo or -R, a URL or
+owner/repo#n argument, the API path, else the one gh acts on: GH_REPO, the
+gh repo set-default remote, else upstream, github, origin. The refusal is
+one line naming the rule, a human decides what goes upstream: patches land
+on our fork and as a row on github.upstreamReview; it is logged as a
+hook.refused event with the session, the repository and the command, which
+the supervisor's watch says as a REFUSED line. Reads (gh pr view, gh issue
+view, gh api GET, gh search, git fetch) pass.
 
 A board-wide project read is refused: gh project item-list without
 --query, and a gh api graphql query over a projectV2's items without a
@@ -313,6 +333,8 @@ Register it in ~/.claude/settings.json:
 				h.Shell, h.Production, h.ContextHint = a.cfg.Shell, a.cfg.Kube.Production, a.cfg.Kube.Context("<installation>")
 				h.MaxLabs = func() int { return a.cfg.KindClusters(ramMiB()) }
 				h.Outbound = outboundGuard(a.cfg.Outbound)
+				h.Upstream = guard.Upstream{Orgs: a.cfg.GitHub.AllowedOrgs, Review: a.cfg.GitHub.UpstreamReview}
+				h.Refused = a.recordRefusal
 				h.Labs = a.heldLabs
 				h.UnlockCommands = a.cfg.Secret.UnlockCommands
 				h.SecretFiles = slices.DeleteFunc(append(slices.Clone(a.cfg.Secret.Files), a.cfg.Secret.TokenFile), func(f string) bool { return f == "" })
@@ -532,6 +554,26 @@ func (a *app) inScope(raw []byte) bool {
 		return true
 	}
 	return st.Knows(state.Party{Session: ev.Session, HostSession: os.Getenv("CLAUDE_CODE_HOST_SESSION_ID")})
+}
+
+// verbHookRefused is the event of a command the upstream guard refused.
+const verbHookRefused = "hook.refused"
+
+// recordRefusal logs the upstream guard's refusal of a session's command as
+// a hook.refused event, the session by its name where its CLI has one. It
+// never changes the refusal: a state it cannot write records nothing.
+func (a *app) recordRefusal(session, command, repo string) {
+	store, err := state.Open(a.cfg.StateDir)
+	if err != nil {
+		return
+	}
+	who := state.Party{Session: session, HostSession: os.Getenv("CLAUDE_CODE_HOST_SESSION_ID"), Name: noSession}
+	if t, err := plat.Machine.Processes(); err == nil {
+		if n := claude.RecordName(a.cfg, t, session); n != "" {
+			who.Name = n
+		}
+	}
+	_ = store.Log(event(who, verbHookRefused, "upstream write to %s: %s", repo, command))
 }
 
 // takeoverGiveUp and takeoverPoll pace a held request; tests shorten them.

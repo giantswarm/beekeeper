@@ -1156,6 +1156,14 @@ type GitHub struct {
 	// ProbeRepo is the repository whose conditional GET reads the budget
 	// headers; any repository the token can read (default: beekeeper's own).
 	ProbeRepo string `yaml:"probeRepo"`
+	// AllowedOrgs are the organizations and accounts whose repositories an
+	// agent writes to (default giantswarm); the hook refuses every GitHub
+	// write to any other repository. An empty list turns the guard off.
+	AllowedOrgs []string `yaml:"allowedOrgs"`
+	// UpstreamReview is where a change meant for an upstream project is
+	// queued for a human's decision (an issue, owner/repo#n), named in the
+	// refusal; unset, the refusal names the team's upstream review list.
+	UpstreamReview string `yaml:"upstreamReview"`
 }
 
 // Overlaps tunes which sessions count as working on the same thing.
@@ -1726,6 +1734,9 @@ func (c *Config) defaults() error {
 	setInt(&c.GitHub.Floor, 2500)
 	setInt(&c.GitHub.UrgentBound, 200)
 	setStr(&c.GitHub.ProbeRepo, "giantswarm/beekeeper")
+	if c.GitHub.AllowedOrgs == nil {
+		c.GitHub.AllowedOrgs = []string{"giantswarm"}
+	}
 
 	w := &c.Watch
 	setDur(&w.Interval, 30*time.Second)

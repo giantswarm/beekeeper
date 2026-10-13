@@ -32,6 +32,17 @@ const (
 	verbCreate   = "create"
 	verbEdit     = "edit"
 	verbList     = "list"
+	verbClose    = "close"
+	verbComment  = "comment"
+	verbUnlock   = "unlock"
+	verbDelete   = "delete"
+	gitCmd       = "git"
+	flagRepo     = "--repo"
+	flagBodyFile = "--body-file"
+	flagJSON     = "--json"
+	flagJQ       = "--jq"
+	flagField    = "--field"
+	flagRawField = "--raw-field"
 	flagOutput   = "--output"
 	flagInput    = "--input"
 	flagTemplate = "--template"
@@ -389,9 +400,9 @@ func (g secretGuard) toolLeak(words []string) *leak {
 	switch {
 	case slices.Contains(g.unlock, name):
 		return &leak{what: name + ", a vault unlock", never: true, unlock: true}
-	case name == "op" && len(sub) > 0 && (sub[0] == "signin" || sub[0] == "unlock" || len(sub) > 1 && sub[0] == "account" && sub[1] == "add"):
+	case name == "op" && len(sub) > 0 && (sub[0] == "signin" || sub[0] == verbUnlock || len(sub) > 1 && sub[0] == "account" && sub[1] == "add"):
 		return &leak{what: "op " + strings.Join(sub[:min(len(sub), 2)], " ") + ", a vault sign-in", never: true, unlock: true}
-	case name == selfCmd && slices.Contains(sub, "secret") && slices.Contains(sub, "unlock"):
+	case name == selfCmd && slices.Contains(sub, "secret") && slices.Contains(sub, verbUnlock):
 		return &leak{what: "beekeeper secret unlock, the person's own unlock", never: true, unlock: true}
 	case name == selfCmd && secretOp(sub) == "store":
 		return &leak{what: "beekeeper secret store, the person's own store into the vault", never: true, person: true}
@@ -412,7 +423,7 @@ func (g secretGuard) toolLeak(words []string) *leak {
 		if f := secretFileArg(args); f != "" {
 			return &leak{what: "a hash of " + f + ", which a guess can be checked against", safe: fileSafe, never: true}
 		}
-	case diffCmds[name], name == "git" && len(sub) > 0 && sub[0] == "diff" && hasAny(args, "--no-index"):
+	case diffCmds[name], name == gitCmd && len(sub) > 0 && sub[0] == "diff" && hasAny(args, "--no-index"):
 		if f := secretFileArg(args); f != "" {
 			return &leak{what: "a diff of " + f + ", which prints its values", safe: fileSafe, never: true}
 		}
