@@ -151,7 +151,8 @@ its own) goes on outside the call, and its outcome wakes the owner as
 above; do not run it again, do not poll. A merge expected to outlive the
 limit runs with run_in_background, which the hook gives --limit 0 (no
 limit) and a 30m wait. A timeout wrapped around the call (timeout 600 devctl
-…) cuts the connection, not the run: its SIGTERM ends the call at once with
+…, coreutils' timeout, which runs the call as its child; busybox's execs it
+and is not seen) cuts the connection, not the run: its SIGTERM ends the call at once with
 exit 76, devctl goes on outside it and its outcome wakes the owner as above.
 A gated command is therefore never wrapped in timeout.`,
 		Hidden: true,

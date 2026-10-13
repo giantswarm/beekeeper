@@ -19,9 +19,14 @@ import (
 // call ends at once with exit 76 and the line that the timeout cut the
 // connection, not the wait; devctl's verdict wakes the owner once it ends.
 func TestACallersTimeoutCutsTheCallNotTheWait(t *testing.T) {
-	timeout, err := exec.LookPath("timeout")
+	// coreutils' timeout runs the command as its child; busybox's execs it
+	// and times it from a child of its own, no ancestor the gate can see.
+	timeout, err := exec.LookPath(timeoutComm)
 	if err != nil {
 		t.Skip("no timeout")
+	}
+	if v, _ := exec.Command(timeout, "--version").Output(); !strings.Contains(string(v), "coreutils") { //nolint:gosec // the machine's timeout
+		t.Skip("timeout is not coreutils'")
 	}
 	if runningBinary().Path() == "" {
 		t.Skip("the running binary cannot be read here")
@@ -79,9 +84,8 @@ echo '` + doc + `'
 	started := time.Now()
 	err = call.Run()
 	var exit *exec.ExitError
-	// coreutils' timeout exits 124, busybox's 143 (its SIGTERM).
-	if !errors.As(err, &exit) || exit.ExitCode() != 124 && exit.ExitCode() != 143 {
-		t.Fatalf("the caller's timeout: %v, want its exit 124 or 143\n%s", err, stderr)
+	if !errors.As(err, &exit) || exit.ExitCode() != 124 {
+		t.Fatalf("the caller's timeout: %v, want its exit 124\n%s", err, stderr)
 	}
 	if took := time.Since(started); took > 10*time.Second {
 		t.Errorf("the call took %s past its timeout of 2s", took)
