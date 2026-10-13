@@ -94,7 +94,7 @@ watch:
   budgetEvery: 5m
   availMinMiB: 10240        # LOW RAM under this MemAvailable; default: 12% of RAM
   swapMaxMiB: 10000         # SWAP over this much disk swap (zswap's share not counted) while it grows and MemAvailable falls; default: 60% of swap
-  swapWindow: 10m           # the default; how far back swap's growth rate looks (SWAP, OOMD IMMINENT, capacity's swap guard), at least 5m: a writeback burst older than this has left the rate
+  swapWindow: 10m           # the default; how far back swap's growth rate and zswap's writeback rate look (SWAP, OOMD IMMINENT, capacity's swap guard), at least 5m: a burst older than this has left the rate
   oomdHeadroomMinMiB: 1024  # OOMD IMMINENT, only when oomd watches a cgroup for swap and disk swap grows while MemAvailable falls: under this much swap growth left before oomd's SwapUsedLimit; default: 6% of swap
   oomdWithin: 30m           # ... or when the last hour's growth rate reaches the trigger within this
   scopeAnonMaxMiB: 28000    # DESKTOP SCOPE anon over this (cache is reclaimable, anon is not); default: 32% of RAM
