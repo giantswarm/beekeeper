@@ -47,6 +47,8 @@ func agentRole(st *state.State, p state.Party) string {
 // installedPlugin is one entry of claude plugin list --json.
 type installedPlugin struct {
 	ID             string `json:"id"`
+	Version        string `json:"version"`
+	Scope          string `json:"scope"`
 	InstallPath    string `json:"installPath"`
 	Enabled        bool   `json:"enabled"`
 	ProjectEnabled bool   `json:"projectEnabled"`

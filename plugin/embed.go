@@ -4,6 +4,7 @@ package plugin
 
 import (
 	"embed"
+	"io/fs"
 	"strings"
 )
 
@@ -18,6 +19,19 @@ const SkillsDir = "skills"
 // Topics are the worker rules' topic skills, in the order the rules name
 // them: the detail a worker loads before the step that needs it.
 var Topics = []string{"lease", "merge", "github", "park"}
+
+// SkillNames are the plugin's skills, by name, sorted.
+func SkillNames() []string {
+	entries, err := fs.ReadDir(Skills, SkillsDir)
+	if err != nil {
+		panic(err) // embedded at build time
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
+}
 
 // SkillFile is the named skill's SKILL.md as embedded, frontmatter and all.
 func SkillFile(name string) []byte {
