@@ -507,10 +507,12 @@ func Owned(cmd string) bool { return anyOwned.MatchString(cmd) }
 // isHeavy reports whether cmd runs a heavy command at a command position of
 // the shell (commandMatch); make with a target that builds nothing is none,
 // and so is an invocation that only prints its help or version (helpOnly).
-func isHeavy(cmd string) bool {
-	return commandMatch(heavy, cmd, func(cmd string, m []int) bool {
-		return (cmd[m[2]:m[3]] != "make" || !lightMake.MatchString(cmd[m[1]:])) && notHelp(cmd, m)
-	}) != nil
+func isHeavy(cmd string) bool { return commandMatch(heavy, cmd, keepHeavy) != nil }
+
+// keepHeavy keeps a heavy match that builds: no make target that builds
+// nothing, no help or version only.
+func keepHeavy(cmd string, m []int) bool {
+	return (cmd[m[2]:m[3]] != "make" || !lightMake.MatchString(cmd[m[1]:])) && notHelp(cmd, m)
 }
 
 // commandMatch is the first match of re, a pattern anchored at a command
