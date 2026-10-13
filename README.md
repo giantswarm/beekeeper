@@ -2003,6 +2003,21 @@ browses through `browse`, a headless turn with its own Chrome tools. A person's 
 untouched. `agents start` says which Chrome mode the desktop
 recorded, and `beekeeper agents` shows it per agent in its BROWSER column: `asks` or `skips`.
 
+**A click targets only the element its step names; a subscription control is never clicked.** The
+controls no browser call touches are a page's Subscribe, Unsubscribe, Watch, Star and Notifications
+buttons (GitHub's thread subscription, repository watch and star, notification settings): their
+click changes the person's own notifications, which an agent's token cannot restore (GitHub answers
+the App's `updateSubscription` with `Resource not accessible by integration`). The browse turn's
+prompt says so, and `beekeeper hook pretooluse`, in every session, refuses a Chrome click (a
+computer click, a form value, a batch's action) whose `action_summary` names such a control or
+whose ref the session's last page read (`read_page`, `find`) names one, a scripted click
+(`javascript_tool` code that calls `.click()`, `dispatchEvent()` or `.submit()`) whose code names
+one, and a scripted click that picks its element from a sweep over the page's buttons or links
+(`querySelectorAll('button')`, `getElementsByTagName('a')`), which can land on one. A scripted click
+selects its one element by its own selector (an id, a `data-testid`, an `aria-label`). `browse`
+names each such refusal below the report in the call's own words, a script's code among them:
+`refused: <the call>: beekeeper's hook refused it as [Subscription Control]`.
+
 **A consent for an App the person owns and asked for is beekeeper's own decision; every other grant
 stays refused.** A consent page (an OAuth grant: GitHub's green Authorize button, an identity
 provider's Allow) is a permission grant to the browse turn's classifier, which refuses the click, or

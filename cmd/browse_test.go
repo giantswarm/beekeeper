@@ -9,10 +9,12 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -816,4 +818,41 @@ func readFile(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// The hook's refusal of a click on a subscription control is a refusal of
+// the report, named in the call's own words, a scripted click's code among
+// them; every prompt tells the turn to click only the element a step names
+// and never a subscription control.
+func TestReadFindingsSubscriptionControl(t *testing.T) {
+	reason := "Refused: the click's ref_45 is " + guard.SubscriptionControls + ` ("Subscribe"). A browser call never clicks ` + guard.SubscriptionControls + "."
+	refused := func(id string) string {
+		b, _ := json.Marshal("PreToolUse:" + chromeToolPrefix + "computer hook error: " + reason)
+		return `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"` + id + `","is_error":true,"content":` + string(b) + `}]}}` + "\n"
+	}
+	code := `[...document.querySelectorAll('button')].find(b => b.textContent.includes('edited')).click()`
+	script, _ := json.Marshal(map[string]any{"action": "javascript_exec", paramText: code, "tabId": 1})
+	lines := chromeUse("c1", "computer", `{"action":"left_click","ref":"ref_45","tabId":1,"action_summary":"Clicks the edited control"}`) + refused("c1") +
+		chromeUse("c2", scriptTool, string(script)) + refused("c2") +
+		chromeUse("c3", "computer", `{"action":"left_click","ref":"ref_12","tabId":1,"action_summary":"Clicks the edited control"}`) + chromeAnswer("c3", "Clicked")
+	transcript := filepath.Join(t.TempDir(), "t.jsonl")
+	if err := os.WriteFile(transcript, []byte(lines), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := readFindings(transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		`refused: computer left_click "Clicks the edited control": beekeeper's hook refused it as [Subscription Control]`,
+		`refused: javascript_tool javascript_exec ` + strconv.Quote(code) + `: beekeeper's hook refused it as [Subscription Control]`,
+	}
+	if got := f.lines("Open the issue and read its edit history", "", nil, false); !slices.Equal(got, want) {
+		t.Errorf("lines = %q, want %q", got, want)
+	}
+	if p := browsePrompt("steps", "", nil, false, nil); !strings.Contains(p, "Click only the element a step names") ||
+		!strings.Contains(p, "Never click "+guard.SubscriptionControls+" (GitHub's Subscribe, Unsubscribe, Watch, Star and Notifications buttons)") ||
+		!strings.Contains(p, "never by a sweep over the page's buttons or links") {
+		t.Errorf("browsePrompt = %q, want the control words", p)
+	}
 }
