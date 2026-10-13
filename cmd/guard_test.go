@@ -47,7 +47,11 @@ func TestMain(m *testing.M) {
 		}
 		os.Exit(int(b[0]) - 1)
 	}
-	if len(os.Args) > 2 && os.Args[1] == mergeChildCmd {
+	// A run that records its owner's wakes runs merge-child whole, its
+	// outcome handed over (tellOwner) into the file instead of a wake.
+	if wakes := os.Getenv(testWakesEnv); wakes != "" {
+		wakeOwner = recordWakes(wakes)
+	} else if len(os.Args) > 2 && os.Args[1] == mergeChildCmd {
 		os.Exit(mergeChild(os.Args[2]).rc)
 	}
 	if len(os.Args) > 2 && os.Args[1] == followRunCmd {
@@ -67,6 +71,23 @@ func TestMain(m *testing.M) {
 	// wants a list sets it.
 	listPlugins = func(context.Context) ([]installedPlugin, error) { return nil, nil }
 	os.Exit(m.Run())
+}
+
+// testWakesEnv names the file a test binary run as beekeeper records its
+// owners' wakes in, one line each, instead of waking anyone (TestMain).
+const testWakesEnv = "BEEKEEPER_TEST_WAKES"
+
+// recordWakes is wakeOwner recording each wake in the file at path.
+func recordWakes(path string) func(*app, context.Context, state.Party, string, string, string) error {
+	return func(_ *app, _ context.Context, by state.Party, q, msg, _ string) error {
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec // the test's file
+		if err != nil {
+			return err
+		}
+		defer func() { _ = f.Close() }()
+		_, err = f.WriteString(by.Name + " → " + q + ": " + msg + "\n")
+		return err
+	}
 }
 
 // Every kind of expansion the wrapper must not touch: zsh-only (${=x}, ${(f)y},

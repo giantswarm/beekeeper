@@ -199,8 +199,10 @@ type childRun struct {
 	// held says the document was kept off the gate's stdout (followChild's
 	// hold): a run the gate may send again, whose caller reads one document.
 	held bool
-	// left says the follow reached its leave time while the run went on.
-	left bool
+	// left says the follow reached its leave time while the run went on;
+	// cut that it left as its caller's timeout cut the connection
+	// (timedCaller).
+	left, cut bool
 }
 
 // emit writes a held document to the gate's stdout.
@@ -216,10 +218,15 @@ func (r childRun) emit() childRun {
 
 // runDetached runs spec's devctl outside its caller (launchChild) and
 // follows it to its end (followChild), its files removed; started gets
-// merge-child's pid. A merge's gate launches and follows apart, as it
+// merge-child's pid. A follow cut by the caller's timeout leaves the files to
+// the run, which goes on. A merge's gate launches and follows apart, as it
 // re-executes a replaced binary in between.
-func runDetached(spec childSpec, base string, started func(pid int)) childRun {
-	defer removeMergeFiles(base)
+func runDetached(spec childSpec, base string, started func(pid int)) (r childRun) {
+	defer func() {
+		if !r.left {
+			removeMergeFiles(base)
+		}
+	}()
 	pid, err := launchChild(spec, base)
 	if err != nil {
 		gateLine("devctl does not start: %v", err)
@@ -242,7 +249,10 @@ func runDetached(spec childSpec, base string, started func(pid int)) childRun {
 // at the gate: its caller still there stopGrace later. A caller going away
 // (SIGHUP, or the gate's parent gone with the SIGTERM, a harness killing its
 // command's process tree) does not stop devctl (outliveCaller keeps it from
-// ending the gate). bin, when given, is the gate's binary: replaced while
+// ending the gate). A SIGTERM from a timeout the gate runs under
+// (timedCaller) cuts the connection, not the run: the follow returns at once
+// with left and cut set, the run's files in place for its merge-child, which
+// hands the outcome to its owner. bin, when given, is the gate's binary: replaced while
 // the run goes on, the follow returns at once with replaced set and the
 // offset reached, the run's files in place, for the gate to re-execute the
 // installed binary and follow on from there. hold, when given, keeps a
@@ -317,6 +327,11 @@ func followChild(base string, pid int, offset int64, bin binary, hold func(doc [
 			case syscall.SIGHUP:
 				away(s)
 			case syscall.SIGTERM:
+				if !said && timedCaller() {
+					gateLine("SIGTERM from the caller's timeout: it cut the connection, not the wait; devctl runs on outside the call (pid %d)", pid)
+					r.left, r.cut = true, true
+					return r
+				}
 				if term.IsZero() && !said {
 					term = time.Now()
 				}
@@ -334,6 +349,32 @@ func followChild(base string, pid int, offset int64, bin binary, hold func(doc [
 			term, said = time.Time{}, true
 		}
 	}
+}
+
+// timedCaller says whether the gate runs under a timeout (coreutils'
+// timeout between it and the Claude Code CLI it runs under, if any), whose
+// SIGTERM is the caller giving up on the call, never a stop aimed at the run;
+// a seam for the tests.
+var timedCaller = func() bool {
+	t, err := plat.Machine.Processes()
+	return err == nil && underTimeout(t, os.Getpid())
+}
+
+// timeoutComm is coreutils' timeout as the process table names it.
+const timeoutComm = "timeout"
+
+// underTimeout says whether a timeout is among pid's ancestors below the
+// Claude Code CLI, if any.
+func underTimeout(t *proc.Table, pid int) bool {
+	for _, p := range t.Ancestors(pid) {
+		switch p.Comm {
+		case timeoutComm:
+			return true
+		case claudeComm:
+			return false
+		}
+	}
+	return false
 }
 
 // signalPID sends s to pid.
