@@ -92,6 +92,10 @@ func (r goCacheRun) notable() bool {
 	return r.max > 0 && (r.over() || r.removed > 0 || r.locked || r.err != nil)
 }
 
+// goCacheDir is the Go build cache the doctor trims. Tests replace it
+// (TestMain), so no test trims the machine's cache.
+var goCacheDir = gocache.Dir
+
 // goBuilds are the PIDs of the caller's running go commands.
 func goBuilds() []int { return proc.Named("go", os.Getuid()) }
 
@@ -99,7 +103,7 @@ func goBuilds() []int { return proc.Named("go", os.Getuid()) }
 // trims it under the lock when it is over the cap and no go build runs
 // (builds), logging what it freed.
 func (a *app) trimGoCache(dryRun bool, builds func() []int) goCacheRun {
-	r := goCacheRun{dir: gocache.Dir(), max: a.cfg.Doctor.GoCacheMax()}
+	r := goCacheRun{dir: goCacheDir(), max: a.cfg.Doctor.GoCacheMax()}
 	if r.dir == "" {
 		r.max = 0
 	}

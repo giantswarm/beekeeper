@@ -35,6 +35,21 @@ func GitInfo(dir string) (repo, branch string) {
 	return originRepo(filepath.Join(common, "config")), branch
 }
 
+// LinkedWorktree reports whether dir is a linked git worktree that exists
+// (git worktree add, or the worktree the desktop makes for a session): its
+// .git is a file naming a gitdir under its repository's worktrees.
+func LinkedWorktree(dir string) bool {
+	if dir == "" {
+		return false
+	}
+	raw, err := os.ReadFile(filepath.Clean(filepath.Join(dir, ".git")))
+	if err != nil {
+		return false
+	}
+	g, ok := strings.CutPrefix(strings.TrimSpace(string(raw)), "gitdir: ")
+	return ok && strings.Contains(filepath.ToSlash(g), "/worktrees/")
+}
+
 func findGitDir(dir string) string {
 	for d := dir; d != "" && d != "/" && d != "."; d = filepath.Dir(d) {
 		p := filepath.Join(d, ".git")

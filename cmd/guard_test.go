@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/gofrs/flock"
 
+	"github.com/giantswarm/beekeeper/internal/free"
+	"github.com/giantswarm/beekeeper/internal/gocache"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
@@ -22,6 +25,21 @@ import (
 // rewrite, which names the running binary, runs this build's `run`; and as a
 // memory hog ("__alloc") for the cap.
 func TestMain(m *testing.M) {
+	// No test frees the machine's /tmp, nor the test binary run as
+	// beekeeper: the automatic free reads no process table, so it frees
+	// nothing; a test that wants a run gives it a machine.
+	liveTmpfs = func(*app) (free.Machine, error) {
+		return free.Machine{TableErr: errors.New("no machine in a test")}, nil
+	}
+	// Nor its Go build cache: the trim sees only a cache a test points
+	// GOCACHE at; the cache the tests started with is no cache to it.
+	machineCache := gocache.Dir()
+	goCacheDir = func() string {
+		if d := gocache.Dir(); d != machineCache {
+			return d
+		}
+		return ""
+	}
 	if len(os.Args) > 1 && os.Args[1] == "__alloc" {
 		b := make([]byte, 512<<20)
 		for i := 0; i < len(b); i += 4096 {

@@ -104,7 +104,7 @@ func TestAlertLinesHoldBackTestClustersUnlessInPlay(t *testing.T) {
 	}
 
 	a = quietApp(t, &out)
-	if _, err := lease.Dir(a.cfg.LeaseDir).Claim(mcName, lease.Holder{Env: mcName, Name: "Agent one", Purpose: "e2e"}); err != nil {
+	if _, err := lease.Dir(a.cfg.LeaseDir).Claim(mcName, lease.Holder{Env: mcName, Name: agentOne, Purpose: "e2e"}); err != nil {
 		t.Fatal(err)
 	}
 	if lines := run(a); len(lines) != len(firing) {
