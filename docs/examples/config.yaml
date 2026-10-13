@@ -274,7 +274,7 @@ sandbox:                    # the agent sandbox (README: The agent sandbox); bee
   mask:                     # the default: GH_TOKEN and GITHUB_TOKEN, to GitHub's hosts only
     - {name: GH_TOKEN, hosts: [github.com, api.github.com, uploads.github.com]}
 
-plans:                      # note add --for <guide.person> links an open pull request here only once its stage check is green
+plans:                      # note add --for <guide.person> links a pull request here only once merged, or open with its stage check green or at the grill stage (red only for missing stage outputs)
   repositories: [example-org/plans]   # owner/repo; unset, nothing is read; an epic's plan is the open or merged pull request naming it
   check: plan-stages        # the stage check's name (default)
 

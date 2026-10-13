@@ -196,8 +196,9 @@ func (c *Config) IsCentral(res string) bool {
 }
 
 // Plans configures the plans repositories: a note for the guide's person
-// that links one of their open pull requests is refused while the pull
-// request's stage check is red, pending or missing, and an epic's plan is
+// that links one of their pull requests is refused while the pull request
+// is closed or its stage check is pending, missing or red for anything but
+// missing stage outputs (the grill stage), and an epic's plan is
 // the open or merged pull request of theirs whose description names it.
 type Plans struct {
 	// Repositories are owner/repo; empty, no note is checked and no epic
