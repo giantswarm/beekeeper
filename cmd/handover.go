@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -251,13 +252,33 @@ func isRun(e state.Event) bool { return strings.HasPrefix(e.Verb, "run.") }
 
 func (a *app) logCmd() *cobra.Command {
 	var n int
-	var verb string
+	var verb, since string
 	c := &cobra.Command{
 		Use:   "log",
 		Short: "The event log: every claim, grant, hold, registration, note and build run",
-		Args:  cobra.NoArgs,
-		RunE: func(*cobra.Command, []string) error {
-			evs, err := a.store.Events(n, func(e state.Event) bool { return strings.HasPrefix(e.Verb, verb) })
+		Long: `The event log: every claim, grant, hold, registration, note and build run.
+
+Retention: events.jsonl in the state directory keeps every event since the
+machine's first, never trimmed or rotated, so --since 30d answers the last 30
+days in full. An agents.* event (start, wake, handover, note, broadcast) waits
+for the state lock rather than give up on a busy one.
+
+Without --since, -n shows the latest 50 events; with it, every event in the
+window unless -n is given too.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			var from time.Time
+			if since != "" {
+				t, err := reportTime(a.now, since, time.Local)
+				if err != nil {
+					return err
+				}
+				from = t
+				if !cmd.Flags().Changed("lines") {
+					n = 0
+				}
+			}
+			evs, err := a.store.Events(n, func(e state.Event) bool { return strings.HasPrefix(e.Verb, verb) && !e.At.Before(from) })
 			if err != nil {
 				return err
 			}
@@ -271,8 +292,9 @@ func (a *app) logCmd() *cobra.Command {
 			return w.Flush()
 		},
 	}
-	c.Flags().IntVarP(&n, "lines", "n", 50, "how many of the latest events (0: all)")
+	c.Flags().IntVarP(&n, "lines", "n", 50, "how many of the latest events (0: all; default all with --since)")
 	c.Flags().StringVar(&verb, "verb", "", "only the events whose verb starts with this (run.: the build runs)")
+	c.Flags().StringVar(&since, "since", "", "only the events from this on: a duration before now (1h, 30d), a time (15:04) or RFC 3339")
 	c.AddCommand(&cobra.Command{
 		Use:   "add <text>",
 		Short: "Log a status line: what happened, for whoever reads the log (verb status)",

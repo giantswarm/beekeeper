@@ -241,7 +241,7 @@ is involved and no import happens.`,
 				if err != nil {
 					return err
 				}
-				if err := a.store.Log(event(by, "agents.start", "%s: started over %s (--force)", name, over)); err != nil {
+				if err := a.store.Record(event(by, "agents.start", "%s: started over %s (--force)", name, over)); err != nil {
 					return err
 				}
 				if _, err := fmt.Fprintf(a.out, "started over %s (--force)\n", over); err != nil {
@@ -457,7 +457,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	d.urgent = a.asksDesktop(id)
 	if profile != "" {
 		sa.turn = profiledTurn(profile)
-		_ = a.store.Log(event(by, "agents.start", "%s: %s", sp.name, sa.turn))
+		_ = a.store.Record(event(by, "agents.start", "%s: %s", sp.name, sa.turn))
 		// its row shows from its first turn, as a desktop turn's does
 		d.urgent = func() bool { return true }
 	}
@@ -531,21 +531,21 @@ func (a *app) startVisible(ctx context.Context, d desk, sp agentStart, bin, unit
 		// runs headless, whose reopen imports it later.
 		if err := a.importVisible(ctx, d, id, sp.name, follow, &sa); err != nil {
 			sa.deferred = err
-			_ = a.store.Log(event(by, "agents.start", "%s: the desktop did not import it (%v)", sp.name, err))
+			_ = a.store.Record(event(by, "agents.start", "%s: the desktop did not import it (%v)", sp.name, err))
 		}
 	}
 	w := wakeTarget{name: sp.name, id: id, host: "local_" + id, dir: dir, mode: state.ModeBypass, model: sa.want}
 	line, err := a.turnInDesktop(ctx, w, taskTurn, twinWait)
 	if err == nil {
 		sa.turn = "its task runs as a desktop turn: " + line
-		_ = a.store.Log(event(by, "agents.start", "%s: %s", sp.name, sa.turn))
+		_ = a.store.Record(event(by, "agents.start", "%s: %s", sp.name, sa.turn))
 		return sa, nil
 	}
 	sa.turn = fmt.Sprintf("the desktop runs no turn of it (%v): its task runs headless", err)
 	if errors.As(err, new(modelNotHeld)) {
 		sa.turn += " on " + w.model
 	}
-	_ = a.store.Log(event(by, "agents.start", "%s: %s", sp.name, sa.turn))
+	_ = a.store.Record(event(by, "agents.start", "%s: %s", sp.name, sa.turn))
 	if err := a.resumeTurn(ctx, by, w, taskTurn); err != nil {
 		return sa, err
 	}
