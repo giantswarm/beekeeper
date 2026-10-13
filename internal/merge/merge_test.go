@@ -212,6 +212,56 @@ func TestBlockingExcept(t *testing.T) {
 	}
 }
 
+// A place queued before a hold that lets a later pull request through holds
+// no place against it: the exception is the lane's next, and once the hold
+// is gone the held place is next again, without queueing anew.
+func TestUnheldLetsTheExceptionAheadOfAHeldPlace(t *testing.T) {
+	const repo = "giantswarm/kagent-upstream"
+	now := time.Now()
+	lane := config.Lane{Name: repo}
+	st := &state.State{Merges: []state.Merge{
+		{Repo: repo, PR: 461, Lane: repo, Phase: state.Waiting, Joined: now.Add(-2 * time.Minute)},
+		{Repo: repo, PR: 460, Lane: repo, Phase: state.Waiting, Joined: now.Add(-time.Minute)},
+	}}
+	all := func(state.Merge) bool { return true }
+	if _, behind := Queue(st, repo).Ahead(repo, 460, Unheld(st, now, lane, all)); !behind {
+		t.Fatal("without a hold, #460 is not behind #461")
+	}
+	st.Holds = []state.Hold{{Target: repo, Except: repo + "#460", At: now}}
+	if ahead, behind := Queue(st, repo).Ahead(repo, 460, Unheld(st, now, lane, all)); behind {
+		t.Errorf("the hold's exception waits behind the held %s", ahead.Key())
+	}
+	st.Holds = nil
+	if _, behind := Queue(st, repo).Ahead(repo, 461, Unheld(st, now, lane, all)); behind {
+		t.Error("after the hold, #461 is not the lane's next")
+	}
+}
+
+func TestPreempts(t *testing.T) {
+	const repo = "giantswarm/kagent-upstream"
+	started := time.Now()
+	lane := config.Lane{Name: repo}
+	m := state.Merge{Repo: repo, PR: 461, Lane: repo, Phase: state.Running, Started: started}
+	for _, c := range []struct {
+		name string
+		hold state.Hold
+		want bool
+	}{
+		{"an exception set after it started", state.Hold{Target: repo, Except: repo + "#460", At: started.Add(time.Minute)}, true},
+		{"a lane hold's exception", state.Hold{Target: LanePrefix + repo, Except: repo + "#460", At: started.Add(time.Minute)}, true},
+		{"an exception set before it started", state.Hold{Target: repo, Except: repo + "#460", At: started.Add(-time.Minute)}, false},
+		{"its own exception", state.Hold{Target: repo, Except: repo + "#461", At: started.Add(time.Minute)}, false},
+		{"a hold without an exception", state.Hold{Target: repo, At: started.Add(time.Minute)}, false},
+		{"the tool-release window", state.Hold{Target: AllMerges, Except: ToolRepo, At: started.Add(time.Minute)}, false},
+		{"an expired hold", state.Hold{Target: repo, Except: repo + "#460", At: started.Add(time.Minute), Until: started.Add(time.Second)}, false},
+	} {
+		st := &state.State{Holds: []state.Hold{c.hold}}
+		if _, got := Preempts(st, started.Add(2*time.Minute), m, lane); got != c.want {
+			t.Errorf("%s: preempts %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 // Only a lane hold that excepts exactly the pull request is its fix window;
 // a repository exception, another lane's hold or a lifted one is not.
 // mmRepo and mmPR are the fix window test's repository and pull request.
