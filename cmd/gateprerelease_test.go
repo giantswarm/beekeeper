@@ -16,6 +16,18 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// platMgrHR is the platform manager's HelmRelease on gazelle, on the
+// stable range platMgrRange.
+const (
+	platMgrHR    = "flux-giantswarm/giantswarm-platform-manager"
+	platMgrRange = ">=0.17.0 <1.0.0"
+)
+
+// platMgrOn is platMgrHR Ready on version.
+func platMgrOn(version string) merge.HelmRelease {
+	return merge.HelmRelease{Key: platMgrHR, Chart: "giantswarm-platform-manager", Version: version, Ready: true, Range: platMgrRange}
+}
+
 // A merge in an installation's lane that rolls nothing there frees its lane
 // for the next one at once, without the settle wait: a release candidate
 // the installation's stable range admits no pre-release of, and a release
@@ -37,7 +49,7 @@ func TestTheNextMergeStartsAtOnceAfterAMergeThatRollsNothing(t *testing.T) {
 		{"tag pipeline failed", `{"mergeCommitSha":"abc","release":{"verdict":"ci_failed","tag":"v0.69.1-rc.3"}}`, "6",
 			platMgr + "#548 exit 6, release v0.69.1-rc.3 failed, nothing rolls", ""},
 		{"release the range admits", `{"mergeCommitSha":"abc","release":{"verdict":"available","tag":"v0.69.1"}}`, "0",
-			platMgr + "#548 exit 0, release v0.69.1", "next in lane portal-tools, waiting for gazelle: flux-giantswarm/giantswarm-platform-manager is on 0.69.0, rolling to 0.69.1 (semver >=0.17.0 <1.0.0)"},
+			platMgr + "#548 exit 0, release v0.69.1", "next in lane portal-tools, waiting for gazelle: " + platMgrHR + " is on 0.69.0, rolling to 0.69.1 (semver " + platMgrRange + ")"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			noSystemd(t)
@@ -46,8 +58,8 @@ func TestTheNextMergeStartsAtOnceAfterAMergeThatRollsNothing(t *testing.T) {
 			newest := "v0.33.5-rc.1"
 			stubCandidate(t, &newest)
 			hrs := []merge.HelmRelease{
-				{Key: "flux-giantswarm/giantswarm-platform-manager", Chart: "giantswarm-platform-manager", Version: "0.69.0", Ready: true, Range: ">=0.17.0 <1.0.0"},
-				{Key: "flux-giantswarm/giantswarm-repo-manager", Chart: "giantswarm-repo-manager", Version: "0.33.4", Ready: true, Range: ">=0.17.0 <1.0.0"},
+				platMgrOn("0.69.0"),
+				{Key: "flux-giantswarm/giantswarm-repo-manager", Chart: "giantswarm-repo-manager", Version: "0.33.4", Ready: true, Range: platMgrRange},
 			}
 			read := readHelmReleases
 			t.Cleanup(func() { readHelmReleases = read })
@@ -56,7 +68,7 @@ func TestTheNextMergeStartsAtOnceAfterAMergeThatRollsNothing(t *testing.T) {
 			now := time.Now()
 			a := queueApp(t,
 				state.Merge{Repo: platMgr, PR: 548, Lane: lane, By: state.Party{Name: aheadName}, Child: sleeper(t), Phase: state.Running,
-					Joined: now.Add(-15 * time.Minute), Started: now.Add(-15 * time.Minute), Roll: []string{"flux-giantswarm/giantswarm-platform-manager"}},
+					Joined: now.Add(-15 * time.Minute), Started: now.Add(-15 * time.Minute), Roll: []string{platMgrHR}},
 				state.Merge{Repo: repoMgr, Lane: lane, By: state.Party{Session: "s1", Name: ownerName}, PID: sleeper(t), Phase: state.Waiting,
 					Joined: now.Add(-12 * time.Minute), Seen: now, Candidate: newest})
 			a.cfg.Lanes = []config.Lane{{Name: lane, Installation: gazelle, Repositories: []string{platMgr, repoMgr}}}
@@ -99,7 +111,7 @@ func TestLanesSayWhatASettlingMergeWaitsFor(t *testing.T) {
 		platMgr = "giantswarm/giantswarm-platform-manager"
 	)
 	stubGitHub(t, github.Open, "")
-	hrs := []merge.HelmRelease{{Key: "flux-giantswarm/giantswarm-platform-manager", Chart: "giantswarm-platform-manager", Version: "0.69.0", Ready: true, Range: ">=0.17.0 <1.0.0"}}
+	hrs := []merge.HelmRelease{platMgrOn("0.69.0")}
 	read := readHelmReleases
 	t.Cleanup(func() { readHelmReleases = read })
 	readHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) { return hrs, nil }
@@ -117,7 +129,7 @@ func TestLanesSayWhatASettlingMergeWaitsFor(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			a := queueApp(t, state.Merge{Repo: platMgr, PR: 548, Lane: lane, By: state.Party{Name: aheadName}, Phase: state.Settling,
-				Finished: time.Now(), Release: c.release, ReleaseFailed: c.failed, Roll: []string{"flux-giantswarm/giantswarm-platform-manager"}})
+				Finished: time.Now(), Release: c.release, ReleaseFailed: c.failed, Roll: []string{platMgrHR}})
 			a.cfg.Lanes = []config.Lane{{Name: lane, Installation: gazelle, Repositories: []string{platMgr}}}
 			a.cfg.Merge.Settle, a.cfg.Merge.SettleTimeout = config.Duration{Duration: 20 * time.Minute}, config.Duration{Duration: 30 * time.Minute}
 			st, _ := a.store.Read()

@@ -399,7 +399,7 @@ func TestReadySettlesAFailedReleaseAtOnce(t *testing.T) {
 		if ok, why := Ready(portalLane, hrs, s, now, time.Hour); !ok || why != backstage+"#9's release failed, nothing rolls" {
 			t.Errorf("%q: a failed release waits: %v %q", release, ok, why)
 		}
-		if ok, why := Ready(config.Lane{Name: "o/r"}, nil, s, now, time.Hour); !ok {
+		if ok, why := Ready(config.Lane{Name: "no-installation"}, nil, s, now, time.Hour); !ok {
 			t.Errorf("%q: a failed release waits in a lane without an installation: %q", release, why)
 		}
 		hrs[2].Ready = false
@@ -407,7 +407,7 @@ func TestReadySettlesAFailedReleaseAtOnce(t *testing.T) {
 }
 
 func TestPreRelease(t *testing.T) {
-	for release, want := range map[string]bool{"v0.69.1-rc.3": true, "0.69.1-rc.3+abc": true, "v0.69.1": false, "v0.69.1+abc": false, "": false, "main": false} {
+	for release, want := range map[string]bool{"v0.69.1-rc.3": true, "0.69.1-rc.3+abc": true, "v0.69.1": false, "v0.69.1+abc": false, "": false, "trunk": false} {
 		if got := PreRelease(release); got != want {
 			t.Errorf("PreRelease(%q) = %v, want %v", release, got, want)
 		}
