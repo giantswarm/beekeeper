@@ -11,7 +11,7 @@ import (
 
 // cli is a live CLI of the session id, untouched for idle.
 func cli(pid int, id, name string, idle time.Duration) *claude.Session {
-	return &claude.Session{PID: pid, ID: id, Name: name, Cwd: "/work", MemMiB: pid, LastActive: now.Add(-idle)}
+	return &claude.Session{PID: pid, ID: id, Name: name, Cwd: workDir, MemMiB: pid, LastActive: now.Add(-idle)}
 }
 
 func TestStaleCLIOffTheRoster(t *testing.T) {

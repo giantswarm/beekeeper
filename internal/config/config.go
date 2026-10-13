@@ -767,6 +767,10 @@ type Doctor struct {
 	// GoCacheEvery is how often the cache's size is read (default 1h);
 	// a trim a build held back is tried again at the next sample.
 	GoCacheEvery Duration `yaml:"goCacheEvery"`
+	// FreeEvery is how often the watch frees what dead sessions and dead go
+	// commands leave in the tmpfs /tmp (free --apply's automatic sections;
+	// default 1h); negative: never.
+	FreeEvery Duration `yaml:"freeEvery"`
 }
 
 // GoCacheMax is the Go build cache's cap in bytes; 0 is off.
@@ -1732,6 +1736,7 @@ func (c *Config) defaults() error {
 	setDur(&w.DiskFillWithin, 2*time.Hour)
 	setInt(&c.Doctor.GoCacheMaxGiB, 20)
 	setDur(&c.Doctor.GoCacheEvery, time.Hour)
+	setDur(&c.Doctor.FreeEvery, time.Hour)
 	setStr(&c.Ollama.Unit, "ollama")
 	setInt(&c.Ollama.BudgetGiB, 12)
 	setInt(&c.Ollama.MaxBudgetGiB, 24)

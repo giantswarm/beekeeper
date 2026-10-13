@@ -279,6 +279,28 @@ func cwd(root string, pid int) string {
 	return d
 }
 
+// Held returns the paths pid holds: its working directory, its executable
+// and every file it has open, a deleted one by the path it had (readable
+// for the caller's own processes).
+func Held(pid int) []string { return held(procRoot, pid) }
+
+func held(root string, pid int) []string {
+	dir := filepath.Join(root, strconv.Itoa(pid))
+	links := []string{filepath.Join(dir, "cwd"), filepath.Join(dir, "exe")}
+	fds, _ := os.ReadDir(filepath.Join(dir, "fd"))
+	for _, fd := range fds {
+		links = append(links, filepath.Join(dir, "fd", fd.Name()))
+	}
+	var out []string
+	for _, l := range links {
+		// Sockets, pipes and anonymous inodes link to no path.
+		if p, err := os.Readlink(l); err == nil && filepath.IsAbs(p) {
+			out = append(out, strings.TrimSuffix(p, " (deleted)"))
+		}
+	}
+	return out
+}
+
 // AnonKiB returns the anonymous resident memory of pid in KiB: what killing
 // it would give back.
 func AnonKiB(pid int) int { return anonKiB(procRoot, pid) }

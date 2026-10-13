@@ -2,8 +2,10 @@ package free
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -13,6 +15,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 var now = time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
@@ -42,7 +45,9 @@ func TestBuildCPULine(t *testing.T) {
 
 const (
 	deadSID = "11111111-dead-4000-8000-000000000000"
-	liveSID = "22222222-live-4000-8000-000000000000"
+	liveSID = "22222222-a11e-4000-8000-000000000000"
+	// workDir is the live sessions' working folder.
+	workDir = "/work"
 )
 
 // fixture writes a file of kib KiB under root/rel, touched age ago.
@@ -72,15 +77,18 @@ func newRun(t *testing.T, o Options) (*Run, *bytes.Buffer) {
 			Scratch:  filepath.Join(tmp, "claude-1000"),
 			Projects: filepath.Join(tmp, "projects"),
 			Table:    &proc.Table{ByPID: map[int]*proc.Process{}},
-			Sessions: []*claude.Session{{PID: 4242, ID: liveSID, Name: "Agent one", Cwd: "/work"}},
-			Titles:   func() map[string]string { return map[string]string{deadSID: "Finished work"} },
-			Now:      now,
+			Sessions: []*claude.Session{{PID: 4242, ID: liveSID, Name: "Agent one", Cwd: workDir}},
+			Desk:     &state.State{},
+			Records: func() map[string]*claude.Record {
+				return map[string]*claude.Record{deadSID: {SessionID: "local_dead", Title: "Finished work"}}
+			},
+			Now: now,
 		},
 		Out:      out,
 		anonKiB:  func(int) int { return 0 },
 		uid:      func(int) int { return os.Getuid() },
 		cgroup:   func(int) string { return "" },
-		cwd:      func(int) string { return "" },
+		holds:    func(int) []string { return nil },
 		mem:      func() (machine.Mem, error) { return machine.Mem{AvailableMiB: 40000, SwapUsedMiB: 100}, nil },
 		scope:    func() (*machine.Scope, error) { return nil, nil },
 		unitPIDs: func(string) []int { return nil },
@@ -105,7 +113,8 @@ func TestSessionDirsFreeOnlyTheDead(t *testing.T) {
 	fixture(t, r.TmpDir, filepath.Join(fresh, "tasks", "a"), 2048, time.Hour)
 	fixture(t, r.TmpDir, filepath.Join(small, "scratchpad", "a"), 10, 5*time.Hour)
 	r.Do()
-	for dir, want := range map[string]bool{dead: false, live: true, fresh: true, small: true} {
+	// A small dead dir gets no line of its own, yet goes: the total counts it.
+	for dir, want := range map[string]bool{dead: false, live: true, fresh: true, small: false} {
 		if _, err := os.Stat(filepath.Join(r.TmpDir, dir)); (err == nil) != want {
 			t.Errorf("%s exists = %v, want %v\n%s", dir, err == nil, want, out)
 		}
@@ -113,11 +122,15 @@ func TestSessionDirsFreeOnlyTheDead(t *testing.T) {
 	for _, s := range []string{
 		`remove 2 MiB  "Finished work" (` + deadSID + `)  (CLI gone, idle 5 h)`,
 		`keep 2 MiB  "Agent one" (` + liveSID + `): CLI alive, pid 4242, idle 5 h`,
+		"freed 2 dead sessions' dirs, 2 MiB",
 		"freed by this run: 2 MiB",
 	} {
 		if !strings.Contains(out.String(), s) {
 			t.Errorf("report lacks %q:\n%s", s, out)
 		}
+	}
+	if strings.Contains(out.String(), "44444444") {
+		t.Errorf("a small dir has a line of its own:\n%s", out)
 	}
 }
 
@@ -129,10 +142,150 @@ func TestSessionDirsTranscriptAndCwdKeep(t *testing.T) {
 	fixture(t, r.TmpDir, filepath.Join("projects", "-home-u-proj", "55555555-dead-4000-8000-000000000000.jsonl"), 1, time.Minute)
 	fixture(t, r.TmpDir, filepath.Join(inside, "scratchpad", "a"), 2048, 5*time.Hour)
 	r.Table.ByPID[7] = &proc.Process{PID: 7}
-	r.cwd = func(int) string { return filepath.Join(r.TmpDir, inside, "scratchpad") }
+	r.holds = func(int) []string { return []string{filepath.Join(r.TmpDir, inside, "scratchpad")} }
 	r.Do()
 	if out.Len() != 0 {
 		t.Errorf("a recent transcript or a process inside must keep the dir; summary:\n%s", out)
+	}
+}
+
+// transcript writes the transcript of the session sid in the fixtures'
+// project, recording cwd as its working folder, untouched for five hours.
+func transcript(t *testing.T, r *Run, sid, cwd string) {
+	t.Helper()
+	entry, err := json.Marshal(map[string]string{"cwd": cwd})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(r.Projects, "-home-u-proj", sid+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, append([]byte(`{"type":"queue-operation"}`+"\n"), append(entry, '\n')...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(p, now.Add(-5*time.Hour), now.Add(-5*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// What --apply keeps and what it removes: a session's dir while the session
+// lives on or a process holds a file inside, a go-build dir while its go
+// command may run, a file inside is held or it changed within the hour.
+func TestFreeKeepsTheLiveAndRemovesTheDead(t *testing.T) {
+	const newerSID, goDir = "66666666-a11e-4000-8000-000000000000", "go-build123"
+	dead := sessionDir(deadSID)
+	desk := func(st *state.State) func(*Run) { return func(r *Run) { r.Desk = st } }
+	goCommand := func(began time.Duration) func(*Run) {
+		return func(r *Run) {
+			r.Table.ByPID[30] = &proc.Process{PID: 30, Comm: "go", Args: []string{"go", "test"}, Start: now.Add(-began)}
+		}
+	}
+	holding := func(dir string) func(*Run) {
+		return func(r *Run) {
+			r.Table.ByPID[7] = &proc.Process{PID: 7, Comm: "tail"}
+			r.holds = func(pid int) []string {
+				if pid != 7 {
+					return nil
+				}
+				return []string{workDir, filepath.Join(r.TmpDir, dir, "out.log")}
+			}
+		}
+	}
+	worktree := func(remains bool) func(*Run) {
+		return func(r *Run) {
+			wt := filepath.Join(r.TmpDir, "repo-wt")
+			transcript(t, r, deadSID, wt)
+			if !remains {
+				return
+			}
+			if err := os.MkdirAll(wt, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: /repo/.git/worktrees/repo-wt\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	restarted := func(r *Run) {
+		r.Sessions = append(r.Sessions, &claude.Session{PID: 4343, ID: newerSID, HostID: "local_dead"})
+	}
+	parked := state.Agent{Party: state.Party{Session: deadSID, Name: "Parked worker"}, Task: "serves #1", Park: &state.Park{}}
+	finished := parked
+	finished.Done = true
+	for name, tc := range map[string]struct {
+		section string
+		dir     string
+		age     time.Duration
+		setup   func(*Run)
+		kept    bool
+	}{
+		"a live session's dir":                           {SessionDirs, sessionDir(liveSID), 5 * time.Hour, nil, true},
+		"a dead session's dir":                           {SessionDirs, dead, 5 * time.Hour, nil, false},
+		"a dead session's dir with a file open":          {SessionDirs, dead, 5 * time.Hour, holding(dead), true},
+		"a dead session's dir in its worktree":           {SessionDirs, dead, 5 * time.Hour, worktree(true), true},
+		"a dead session's dir, its worktree gone":        {SessionDirs, dead, 5 * time.Hour, worktree(false), false},
+		"a parked agent's dir":                           {SessionDirs, dead, 5 * time.Hour, desk(&state.State{Agents: []state.Agent{parked}}), true},
+		"a finished agent's dir":                         {SessionDirs, dead, 5 * time.Hour, desk(&state.State{Agents: []state.Agent{finished}}), false},
+		"every dir while the desk cannot be read":        {SessionDirs, dead, 5 * time.Hour, desk(nil), true},
+		"the supervisor's dir":                           {SessionDirs, dead, 5 * time.Hour, desk(&state.State{Supervisor: &state.Supervisor{Party: parked.Party}}), true},
+		"a dir of a desktop session that runs anew":      {SessionDirs, dead, 5 * time.Hour, restarted, true},
+		"a go-build dir whose go command runs":           {GoBuild, goDir, 2 * time.Hour, goCommand(3 * time.Hour), true},
+		"a go-build dir whose go command is gone":        {GoBuild, goDir, 2 * time.Hour, nil, false},
+		"a go-build dir a later go command cannot own":   {GoBuild, goDir, 2 * time.Hour, goCommand(30 * time.Minute), false},
+		"a go-build dir with a file open":                {GoBuild, goDir, 2 * time.Hour, holding(goDir), true},
+		"a go-build dir changed within the hour":         {GoBuild, goDir, 30 * time.Minute, nil, true},
+		"a session's dir is no go-build dir to the rule": {GoBuild, dead, 5 * time.Hour, nil, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, out := newRun(t, Options{Apply: true, Only: []string{tc.section}})
+			fixture(t, r.TmpDir, filepath.Join(tc.dir, "scratchpad", "a"), 2048, tc.age)
+			if tc.setup != nil {
+				tc.setup(r)
+			}
+			r.Do()
+			if _, err := os.Stat(filepath.Join(r.TmpDir, tc.dir)); (err == nil) != tc.kept {
+				t.Errorf("kept = %v, want %v\n%s", err == nil, tc.kept, out)
+			}
+		})
+	}
+}
+
+// Each section of dirs ends with its count and size, a dry run's as what it
+// would free; Free returns them for the watch, without the report around the
+// sections, and removes what it counts.
+func TestFreeCountsEachClass(t *testing.T) {
+	setup := func(r *Run) {
+		fixture(t, r.TmpDir, filepath.Join(sessionDir(deadSID), "scratchpad", "a"), 2048, 5*time.Hour)
+		fixture(t, r.TmpDir, filepath.Join(sessionDir("44444444-dead-4000-8000-000000000000"), "tasks", "a"), 10, 5*time.Hour)
+		fixture(t, r.TmpDir, "go-build1/b001/a", 3072, 2*time.Hour)
+	}
+	r, out := newRun(t, Options{Only: Automatic})
+	setup(r)
+	r.Do()
+	for _, s := range []string{"would free 2 dead sessions' dirs, 2 MiB", "would free 1 orphaned go-build dir, 3 MiB", "dry run; add --apply to act"} {
+		if !strings.Contains(out.String(), s) {
+			t.Errorf("report lacks %q:\n%s", s, out)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(r.TmpDir, "go-build1")); err != nil {
+		t.Errorf("a dry run removed: %v", err)
+	}
+	r, out = newRun(t, Options{Apply: true, Only: Automatic})
+	setup(r)
+	got := r.Free()
+	want := []Freed{{Section: SessionDirs, N: 2, KiB: 2058}, {Section: GoBuild, N: 1, KiB: 3072}}
+	if !slices.Equal(got, want) {
+		t.Errorf("Free = %+v, want %+v", got, want)
+	}
+	if strings.Contains(out.String(), "== before ==") || strings.Contains(out.String(), "kind clusters") {
+		t.Errorf("Free printed the report around the sections:\n%s", out)
+	}
+	if left, _ := filepath.Glob(filepath.Join(r.TmpDir, "*", "*", "*")); len(left) != 0 {
+		t.Errorf("Free left %v", left)
+	}
+	if s := got[0].String() + "; " + got[1].String(); s != "2 dead sessions' dirs, 2 MiB; 1 orphaned go-build dir, 3 MiB" {
+		t.Errorf("said %q", s)
 	}
 }
 
@@ -213,6 +366,7 @@ func TestSwapIsOnlyPrinted(t *testing.T) {
 
 func TestTmpDirs(t *testing.T) {
 	r, out := newRun(t, Options{Summary: true, Only: []string{TmpDirs}})
+	fixture(t, r.TmpDir, "tmp.stale/a", 3072, 4*time.Hour)
 	fixture(t, r.TmpDir, "go-build123/a", 3072, 4*time.Hour)
 	fixture(t, r.TmpDir, "tmp.fresh/a", 3072, time.Hour)
 	fixture(t, r.TmpDir, "unrelated/a", 3072, 4*time.Hour)
@@ -266,7 +420,7 @@ func TestMissingPartsFreeNothing(t *testing.T) {
 		}
 	}
 	for line, want := range map[string]int{
-		platform.Unavailable("processes"):     6, // CLIs, heavy, tabs, session dirs, temp dirs, orphans
+		platform.Unavailable("processes"):     7, // CLIs, heavy, tabs, session dirs, go-build, temp dirs, orphans
 		platform.Unavailable("memory"):        3, // before, swap, after
 		platform.Unavailable("desktop scope"): 2, // before, after
 	} {

@@ -109,6 +109,13 @@ func TestGitInfoWorktree(t *testing.T) {
 	if repo != "giantswarm/beekeeper" || branch != "someone/feature" {
 		t.Errorf("GitInfo = %q, %q", repo, branch)
 	}
+	// The worktree is linked; the main checkout, a folder inside the
+	// worktree and one that is gone are not.
+	for dir, want := range map[string]bool{wt: true, filepath.Join(root, "repo"): false, filepath.Join(wt, "sub"): false, filepath.Join(root, "gone"): false, "": false} {
+		if got := LinkedWorktree(dir); got != want {
+			t.Errorf("LinkedWorktree(%q) = %v, want %v", dir, got, want)
+		}
+	}
 }
 
 func TestSleepDuration(t *testing.T) {

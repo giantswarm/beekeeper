@@ -127,7 +127,11 @@ once more by every watch that did not say it yet (a restarted watch).
 Every poll but --once's runs beekeeper doctor in the background (its last
 run still going, the poll skips it): one DOCTOR line per agent it took off
 the roster, desktop session it archived or retitled, fault it fixed or
-note it filed, and one DOCTOR FAULT line while a known fault lasts.
+note it filed, and one DOCTOR FAULT line while a known fault lasts. Every
+doctor.freeEvery (1h) one watch frees what dead sessions and dead go
+commands left in the tmpfs /tmp (beekeeper free --apply --only
+session-dirs,go-build): one FREED line when it freed something, FREE
+FAILED while it fails; the TMPFS line says when it ran last.
 
 A running beekeeper watch, this one included, whose binary self-update
 replaced keeps the code it started with: one WATCH STALE line names the
@@ -382,6 +386,13 @@ type watcher struct {
 	goCacheOn   bool
 	goCaching   atomic.Bool
 	goCacheNext time.Time
+	// freeOn runs the automatic free of tmpfs (not for --once); freeing is
+	// set while a run goes, freeNext is when the next is due and lastFree
+	// the last run any watch did, for the TMPFS line.
+	freeOn   bool
+	freeing  atomic.Bool
+	freeNext time.Time
+	lastFree atomic.Pointer[freeMark]
 	// doctored are the chore lines the doctor said, each said once.
 	doctored map[string]bool
 	// timerActs are the fired timers' wakes and commands under way, and
@@ -471,6 +482,8 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 		return w.onceErr()
 	}
 	w.goCacheOn = true
+	w.freeOn = true
+	w.readFreeMark()
 	// The machine is sampled in a loop of its own, so no network read or
 	// subprocess of the rest of the poll ever delays a memory or load line.
 	// The first sample comes before the reads start: they begin knowing
@@ -965,7 +978,7 @@ func (w *watcher) sample(ctx context.Context) {
 		w.check("psi", psi > th.PSIMax, "MEMORY PRESSURE: full avg60 %.0f%%", psi)
 	}
 	if d, err := machine.ReadDisk("/tmp"); err == nil {
-		w.check("tmp", d.UsedMiB > th.TmpMax(d.TotalMiB), "TMPFS /tmp: %d MiB", d.UsedMiB)
+		w.check("tmp", d.UsedMiB > th.TmpMax(d.TotalMiB), "TMPFS /tmp: %d MiB; %s", d.UsedMiB, w.lastFreeNote())
 	}
 	if d, err := machine.ReadDisk("/"); err == nil {
 		var owners map[int]string
@@ -975,6 +988,7 @@ func (w *watcher) sample(ctx context.Context) {
 		w.sampleDisk(now, d, w.cpuTable, owners)
 	}
 	w.goCache(now)
+	w.autoFree(now)
 	s, err := plat.Machine.DesktopScope()
 	w.unavailable(secScope, err)
 	if s != nil {
