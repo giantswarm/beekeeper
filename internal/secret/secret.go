@@ -265,6 +265,17 @@ func (o *Ops) value(ctx context.Context, r Ref) (string, error) {
 	return vs[r.String()], nil
 }
 
+// Use hands the one value r names to use, in this process: the value
+// reaches no output, file or other process. use's error must carry no part
+// of it.
+func (o *Ops) Use(ctx context.Context, r Ref, use func(v string) error) error {
+	v, err := o.value(ctx, r)
+	if err != nil {
+		return err
+	}
+	return use(v)
+}
+
 // op runs op as the service account, or as the person in session mode.
 func (o *Ops) op(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error) {
 	if o.Session {

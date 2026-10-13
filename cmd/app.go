@@ -40,6 +40,11 @@ manifest flow, with the person's two clicks (Create, Install), and writes
 every credential the flow answers into the shared vault item <name>, where
 no person copies a value from a page (app create --help).
 
+installation <installation> --app <id> reads, as the App itself, an
+installation's repository selection and suspension and the App's optional
+features, suspends it, and applies a declared repository selection, which
+GitHub's settings pages keep behind sudo mode (app installation --help).
+
 An App on record is one the organisation declares and the person owns and
 asked a grant for, on their word (a note's answer): a consent, or one change
 of its permissions. allow reads the declaration: its name must be the App's;
@@ -248,7 +253,7 @@ credentials were stored nowhere). check decides from the same.`,
 	check.Flags().StringVar(&title, "title", "", "the page's title (GitHub's consent page: \"Authorize <name>\")")
 	check.Flags().StringVar(&words, "words", "", "the call's own words (its summary, a typed text, a form value)")
 	check.Flags().BoolVar(&navigate, "navigate", false, "the decision for a navigation to <url> instead of a click on it")
-	c.AddCommand(a.appCreateCmd(), allow, listCmd("List the Apps on record", a.appList), revoke, check)
+	c.AddCommand(a.appCreateCmd(), a.appInstallationCmd(), allow, listCmd("List the Apps on record", a.appList), revoke, check)
 	return c
 }
 
