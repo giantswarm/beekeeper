@@ -255,7 +255,7 @@ func TestStretchedReadingResolvesNothing(t *testing.T) {
 		since string
 	}{{
 		name:     "failed read",
-		readings: []Answer{{Why: "timed out"}, ok(fluxWC, restarted)},
+		readings: []Answer{{Why: timedOut}, ok(fluxWC, restarted)},
 		want: [][]string{
 			{"ALERTS beta unreachable, alerts unseen for 5m (since 18:50Z): timed out"},
 			{"ALERTS beta reachable again after 10m unseen"},
@@ -268,7 +268,7 @@ func TestStretchedReadingResolvesNothing(t *testing.T) {
 		since:    fluxWC.StartsAt,
 	}, {
 		name:     "partial read, then a failed one",
-		readings: []Answer{ok(restarted), {Why: "timed out"}, ok(later(fluxWC), restarted)},
+		readings: []Answer{ok(restarted), {Why: timedOut}, ok(later(fluxWC), restarted)},
 		want: [][]string{
 			{held},
 			{"ALERTS beta unreachable, alerts unseen for 5m (since 18:55Z): timed out"},
@@ -280,14 +280,14 @@ func TestStretchedReadingResolvesNothing(t *testing.T) {
 		readings: []Answer{ok(restarted), ok(restarted)},
 		want: [][]string{
 			{held},
-			{"ALERT RESOLVED beta PAGE shield FluxCustomerHelmReleaseFailed org-acme/acme0230-kubescape@acme0230"},
+			{fluxWCResolved},
 		},
 	}, {
 		name:     "true resolve, re-fire within the window",
 		readings: []Answer{ok(restarted), ok(restarted), ok(later(fluxWC), restarted), ok(restarted), ok(restarted)},
 		want: [][]string{
 			{held},
-			{"ALERT RESOLVED beta PAGE shield FluxCustomerHelmReleaseFailed org-acme/acme0230-kubescape@acme0230"},
+			{fluxWCResolved},
 			{"ALERT FLAPPING beta PAGE shield FluxCustomerHelmReleaseFailed org-acme/acme0230-kubescape@acme0230 since 14:37Z"},
 			{held},
 			nil,
@@ -311,7 +311,7 @@ func TestDamperRecordsSurviveUnreachableAndTheState(t *testing.T) {
 	damped := rules
 	damped.Flap = Damper{Changes: 4, Window: time.Hour}
 	_, st := flapped(t, damped, 5)
-	lines, down := damped.Step(lab, st, Answer{Why: "timed out"}, now.Add(6*every))
+	lines, down := damped.Step(lab, st, Answer{Why: timedOut}, now.Add(6*every))
 	if len(lines) != 1 || len(down.Flaps) != len(st.Flaps) {
 		t.Errorf("unreachable: %q, records %v", lines, down.Flaps)
 	}
