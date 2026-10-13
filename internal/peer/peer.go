@@ -14,12 +14,14 @@ package peer
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 )
@@ -110,6 +112,11 @@ func (s Sender) Send(ctx context.Context, to, message string) (Result, error) {
 // was sent.
 var errNoCall = errors.New("the sender called no SendMessage")
 
+// errTurnFailed is a relay turn that ended in an error of its own (the API
+// refused it, the login expired) before any SendMessage: another turn fails
+// the same way, so the send reports it at once.
+var errTurnFailed = errors.New("the relay turn failed")
+
 // turn runs one headless relay turn of req, a SendMessage input.
 func (s Sender) turn(ctx context.Context, bin, model, req string) (Result, error) {
 	c := exec.CommandContext(ctx, bin, "-p", //nolint:gosec // the configured claude binary; the message is one argument
@@ -129,12 +136,12 @@ func (s Sender) turn(ctx context.Context, bin, model, req string) (Result, error
 	out, err := c.Output()
 	r, perr := parse(out)
 	switch {
-	case perr != nil:
+	case errors.Is(perr, errTurnFailed):
 		return r, perr
 	case err != nil && r.Reply == "":
-		return r, fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+		return r, fmt.Errorf("%w: %w: %s", errTurnFailed, err, strings.TrimSpace(stderr.String()))
 	}
-	return r, nil
+	return r, perr
 }
 
 // senderEnv drops the variables a Claude session hands its tool commands, so
@@ -172,15 +179,21 @@ func verdict(to, reply string) error {
 }
 
 // parse reads the turn's stream: the SendMessage tool result and the cost.
+// A turn without a SendMessage result is errNoCall, or errTurnFailed with
+// the error it ended in (an API error message, a result with is_error).
 func parse(out []byte) (Result, error) {
 	var r Result
 	calls := 0
+	var failed []string
 	sc := bufio.NewScanner(bytes.NewReader(out))
 	sc.Buffer(make([]byte, 0, 64*1024), 4<<20)
 	for sc.Scan() {
 		var ev struct {
 			Type    string  `json:"type"`
 			Cost    float64 `json:"total_cost_usd"`
+			IsError bool    `json:"is_error"`
+			Result  string  `json:"result"`
+			Error   string  `json:"error"`
 			Message struct {
 				Content json.RawMessage `json:"content"`
 			} `json:"message"`
@@ -191,6 +204,13 @@ func parse(out []byte) (Result, error) {
 		switch ev.Type {
 		case "result":
 			r.CostUSD = ev.Cost
+			if ev.IsError {
+				failed = append(failed, cmp.Or(firstLine(ev.Result), "is_error"))
+			}
+		case "assistant":
+			if ev.Error != "" {
+				failed = append(failed, ev.Error)
+			}
 		case "user":
 			var blocks []struct {
 				Type    string          `json:"type"`
@@ -207,10 +227,13 @@ func parse(out []byte) (Result, error) {
 			}
 		}
 	}
-	if calls == 0 {
-		return r, errNoCall
+	switch {
+	case calls > 0:
+		return r, nil
+	case len(failed) > 0:
+		return r, fmt.Errorf("%w: %s", errTurnFailed, strings.Join(slices.Compact(failed), "; "))
 	}
-	return r, nil
+	return r, errNoCall
 }
 
 // text flattens a tool result's content: a string or text blocks.

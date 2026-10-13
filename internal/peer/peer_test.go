@@ -131,3 +131,48 @@ echo '{"type":"user","message":{"content":[{"type":"tool_result","content":"{\"s
 		t.Errorf("prompt %q", b)
 	}
 }
+
+// A relay turn that failed on its own (the API refused it, the login
+// expired, the claude command failed) is reported with its error after one
+// turn: another would fail the same way. A clean turn without a call is
+// retried, one with a call is judged by its result.
+func TestSendReportsAFailedTurnAtOnce(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "claude")
+	script := `#!/bin/sh
+n=$(cat "$0.n" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" >| "$0.n"
+case "$TURN" in
+auth)
+  echo '{"type":"assistant","error":"authentication_failed","message":{"content":[{"type":"text","text":"Failed to authenticate: OAuth session expired and could not be refreshed"}]}}'
+  echo '{"type":"result","is_error":true,"result":"Failed to authenticate: OAuth session expired and could not be refreshed","total_cost_usd":0}'
+  exit 1;;
+exit) echo "claude: cannot start" >&2; exit 2;;
+quiet) echo '{"type":"result","total_cost_usd":0.01}';;
+sent) echo '{"type":"user","message":{"content":[{"type":"tool_result","content":"{\"success\":true}"}]}}';;
+esac
+`
+	if err := os.WriteFile(fake, []byte(script), 0o700); err != nil { //nolint:gosec // a test script
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		turn  string
+		turns int
+		want  string
+	}{
+		{"sent", 1, ""},
+		{"auth", 1, "the relay turn failed: authentication_failed; Failed to authenticate: OAuth session expired"},
+		{"exit", 1, "the relay turn failed: exit status 2: claude: cannot start"},
+		{"quiet", attempts, "the sender called no SendMessage in 3 turns"},
+	} {
+		_ = os.Remove(fake + ".n")
+		t.Setenv("TURN", tc.turn)
+		_, err := Sender{Claude: fake, Dir: dir}.Send(context.Background(), "uds:/s/1.sock", "hi")
+		if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+			t.Errorf("%s: err %v, want %q", tc.turn, err, tc.want)
+		}
+		n, _ := os.ReadFile(fake + ".n") //nolint:gosec // the test script's counter
+		if got := strings.TrimSpace(string(n)); got != strconv.Itoa(tc.turns) {
+			t.Errorf("%s: %s turns, want %d", tc.turn, got, tc.turns)
+		}
+	}
+}
