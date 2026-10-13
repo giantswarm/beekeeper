@@ -56,20 +56,31 @@ func (c *closer) ref() string {
 	}
 }
 
-// RefStates reads in one GraphQL request the state of each issue or pull
-// request of refs, and for a closed issue the pull request or commit whose
-// closing keyword closed it. A reference GitHub does not answer is missing
-// from the map.
+// RefStates reads in one GraphQL request per repository owner (ByOwner) the
+// state of each issue or pull request of refs, and for a closed issue the
+// pull request or commit whose closing keyword closed it. A reference GitHub
+// does not answer is missing from the map.
 func RefStates(ctx context.Context, run GH, refs []PR) (map[PR]RefState, error) {
 	if len(refs) == 0 {
 		return nil, nil
 	}
+	states := map[PR]RefState{}
+	for _, group := range ByOwner(refs, func(r PR) string { return r.Repo }) {
+		if err := refStates(ActingOn(ctx, group[0].Repo), run, group, states); err != nil {
+			return nil, err
+		}
+	}
+	return states, nil
+}
+
+// refStates is one request of RefStates, of refs of one owner, into states.
+func refStates(ctx context.Context, run GH, refs []PR, states map[PR]RefState) error {
 	var q strings.Builder
 	q.WriteString("query{")
 	for i, r := range refs {
 		owner, name, ok := strings.Cut(r.Repo, "/")
 		if !ok {
-			return nil, fmt.Errorf("%s is not owner/repo", r.Repo)
+			return fmt.Errorf("%s is not owner/repo", r.Repo)
 		}
 		fmt.Fprintf(&q, "r%d:repository(owner:%s,name:%s){issueOrPullRequest(number:%d){...on Issue{state %s}...on PullRequest{state}}}", i, quote(owner), quote(name), r.N, closedBy)
 	}
@@ -81,9 +92,8 @@ func RefStates(ctx context.Context, run GH, refs []PR) (map[PR]RefState, error) 
 		Data map[string]json.RawMessage `json:"data"`
 	}
 	if jerr := json.Unmarshal(out, &doc); doc.Data == nil {
-		return nil, cmp.Or(err, jerr, fmt.Errorf("gh api graphql: no data"))
+		return cmp.Or(err, jerr, fmt.Errorf("gh api graphql: no data"))
 	}
-	states := map[PR]RefState{}
 	for i, r := range refs {
 		var v struct {
 			Item *struct {
@@ -106,5 +116,5 @@ func RefStates(ctx context.Context, run GH, refs []PR) (map[PR]RefState, error) 
 		}
 		states[r] = s
 	}
-	return states, nil
+	return nil
 }

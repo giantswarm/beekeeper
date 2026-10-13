@@ -357,3 +357,13 @@ func Ref(s string) (owner, repo string, n int, err error) {
 	}
 	return owner, repo, n, nil
 }
+
+// refRepo is the repository (owner/repo) of the issue ref, "" when ref is
+// no issue reference.
+func refRepo(ref string) string {
+	owner, repo, _, err := Ref(ref)
+	if err != nil {
+		return ""
+	}
+	return owner + "/" + repo
+}

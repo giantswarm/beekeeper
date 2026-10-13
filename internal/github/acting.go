@@ -24,6 +24,28 @@ func Repo(ctx context.Context) string {
 	return repo
 }
 
+// ByOwner splits items into groups of one repository owner each, in the
+// order each owner first appears; repo is an item's owner/repo. A query of
+// several repositories acts on one group at a time (ActingOn its first
+// repository), so a gh link that picks its login by the owner reaches every
+// repository of the group, a personal account's as well as an organisation's.
+func ByOwner[T any](items []T, repo func(T) string) [][]T {
+	var out [][]T
+	at := map[string]int{}
+	for _, it := range items {
+		owner, _, _ := strings.Cut(repo(it), "/")
+		owner = strings.ToLower(owner)
+		i, ok := at[owner]
+		if !ok {
+			i = len(out)
+			at[owner] = i
+			out = append(out, nil)
+		}
+		out[i] = append(out[i], it)
+	}
+	return out
+}
+
 // ghEnv is environ with GH_REPO set to repo, replacing one set; environ
 // itself when repo is empty.
 func ghEnv(environ []string, repo string) []string {

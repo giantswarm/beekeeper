@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -31,5 +32,23 @@ func TestLookup(t *testing.T) {
 	}
 	if titles, drafts, err := Lookup(context.Background(), nil, nil, nil); titles != nil || drafts != nil || err != nil {
 		t.Error("Lookup of nothing asks GitHub")
+	}
+}
+
+func TestLookupResolvesAPersonalAccountRepository(t *testing.T) {
+	var acting []string
+	run := ownerLink(&acting, func(query string) string {
+		if strings.Contains(query, `owner:"teemow"`) {
+			return `{"data":{"p0":{"pullRequest":{"title":"fix: lab"}},"d":{"nodes":[{"number":3,"repository":{"nameWithOwner":"teemow/plans"}}]}}}`
+		}
+		return `{"data":{"p0":{"pullRequest":{"title":"feat: beekeeper"}}}}`
+	})
+	pulls := []PR{{Repo: orgRepo, N: 1}, {Repo: personalRepo, N: 7}}
+	titles, drafts, err := Lookup(context.Background(), run, pulls, []string{"teemow/plans"})
+	if err != nil || titles[pulls[0]] != "feat: beekeeper" || titles[pulls[1]] != "fix: lab" || !slices.Equal(drafts, []PR{{Repo: "teemow/plans", N: 3}}) {
+		t.Errorf("Lookup = %v, %v, %v", titles, drafts, err)
+	}
+	if !slices.Equal(acting, []string{orgRepo, personalRepo}) {
+		t.Errorf("requests acted on %q, want one per owner", acting)
 	}
 }
