@@ -232,10 +232,10 @@ func TestSwapLineSaysDiskZswapAndOomdRule(t *testing.T) {
 		t.Errorf("a trigger without a swap-monitored cgroup: %q", got)
 	}
 	watched := &machine.OOMDSwap{LimitPercent: 90, Monitored: []string{swapCgroup}}
-	if got, want := swapLine(m, watched, swapTrend{DiskPerHourMiB: 250, UsedPerHourMiB: 250, AvailFalling: true, Rated: true, Window: 10 * time.Minute}), "SWAP: 10627 of 16383 MiB used, disk 2627 MiB + zswap 8000 MiB in a 2500 MiB pool, 4117 MiB before systemd-oomd's 90 % swap trigger (1 swap-monitored cgroups), disk +250 MiB/h over the last 10m while MemAvailable falls, trigger in 16h28m0s"; got != want {
+	if got, want := swapLine(m, watched, swapTrend{DiskPerHourMiB: 250, UsedPerHourMiB: 250, AvailFalling: true, Rated: true, Window: 10 * time.Minute}), "SWAP: 10627 of 16383 MiB used, disk 2627 MiB + zswap 8000 MiB in a 2500 MiB pool, 4117 MiB before systemd-oomd's 90 % swap trigger (1 swap-monitored cgroups), disk +250 MiB/h, zswap writeback 0 MiB/h over the last 10m while MemAvailable falls, trigger in 16h28m0s"; got != want {
 		t.Errorf("watched, growing:\n got %q\nwant %q", got, want)
 	}
-	if got := swapLine(m, nil, swapTrend{DiskPerHourMiB: -80, Rated: true, Window: time.Hour}); !strings.HasSuffix(got, "systemd-oomd swap rule unknown, disk -80 MiB/h over the last 1h00m") {
+	if got := swapLine(m, nil, swapTrend{DiskPerHourMiB: -80, Rated: true, Window: time.Hour}); !strings.HasSuffix(got, "systemd-oomd swap rule unknown, disk -80 MiB/h, zswap writeback 0 MiB/h over the last 1h00m") {
 		t.Errorf("shrinking: %q", got)
 	}
 }
@@ -264,6 +264,44 @@ func TestSwapTrendOverTheWindow(t *testing.T) {
 	}
 	if tr := w.swapTrend(relayNow.Add(25*time.Minute), at(1500, 400, 41000)); tr.DiskPerHourMiB != 0 || tr.Rated || len(w.swapSamples) != 1 {
 		t.Fatalf("readings older than the window are dropped: %+v %d", tr, len(w.swapSamples))
+	}
+}
+
+// zswap's writeback moves pages already swapped from its pool to disk: with
+// swap in use flat it is no disk swap growth, and new swap-outs alongside it
+// still are.
+func TestSwapTrendCountsZswapWritebackApart(t *testing.T) {
+	cfg, err := config.Load(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := func(used, zswapped, writtenBack int) machine.Mem {
+		return machine.Mem{SwapUsedMiB: used, ZswappedMiB: zswapped, ZswapWrittenBackMiB: writtenBack, AvailableMiB: 30000}
+	}
+	w := &watcher{app: &app{cfg: cfg}}
+	w.swapTrend(relayNow, at(10000, 4000, 50000))
+	// 300 MiB written back in 6 minutes, swap in use flat: disk 6000 → 6300.
+	tr := w.swapTrend(relayNow.Add(6*time.Minute), at(10000, 3700, 50300))
+	if tr.DiskPerHourMiB != 0 || tr.WritebackPerHourMiB != 3000 || tr.UsedPerHourMiB != 0 || tr.pressing() {
+		t.Fatalf("writeback with swap flat is no disk growth: %+v", tr)
+	}
+	if line := swapLine(at(10000, 3700, 50300), nil, tr); !strings.Contains(line, "disk +0 MiB/h, zswap writeback 3000 MiB/h") {
+		t.Errorf("the line does not say the two apart: %s", line)
+	}
+	h := &headroom{SwapGrowthMaxMiB: 256, Swap: &swapReading{Rated: true, PerHourMiB: tr.DiskPerHourMiB, WritebackPerHourMiB: tr.WritebackPerHourMiB}}
+	if line, blocks := h.swapGuard(); line != "" || blocks {
+		t.Errorf("the guard reacts to writeback: %q %v", line, blocks)
+	}
+	// The same writeback and 100 MiB swapped out to disk past zswap.
+	w = &watcher{app: &app{cfg: cfg}}
+	w.swapTrend(relayNow, at(10000, 4000, 50000))
+	tr = w.swapTrend(relayNow.Add(6*time.Minute), at(10100, 3700, 50300))
+	if tr.DiskPerHourMiB != 1000 || tr.WritebackPerHourMiB != 3000 {
+		t.Fatalf("new swap-outs beside writeback: %+v", tr)
+	}
+	h.Swap = &swapReading{Rated: true, PerHourMiB: tr.DiskPerHourMiB}
+	if line, _ := h.swapGuard(); !strings.Contains(line, "disk swap growing +1000 MiB/h over 256") {
+		t.Errorf("the guard misses new swap-outs: %q", line)
 	}
 }
 

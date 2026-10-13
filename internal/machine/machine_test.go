@@ -89,6 +89,16 @@ func TestParseMem(t *testing.T) {
 	}
 }
 
+func TestParseWrittenBack(t *testing.T) {
+	const vmstat = "pswpin 10447538\npswpout 14305474\nzswpin 35492467\nzswpout 59576492\nzswpwb 14305474\n"
+	if got := parseWrittenBack(strings.NewReader(vmstat), 4096); got != 55880 {
+		t.Errorf("zswpwb 14305474 pages of 4 KiB = %d MiB, want 55880", got)
+	}
+	if got := parseWrittenBack(strings.NewReader("pswpout 14305474\n"), 4096); got != 0 {
+		t.Errorf("a kernel without zswpwb: %d", got)
+	}
+}
+
 func TestParseOOMAtASlotSlice(t *testing.T) {
 	const slice = "/user.slice/user-1000.slice/user@1000.service/memcap.slice/memcap-slot2.slice"
 	journal := `2026-10-04T16:00:00+0300 demiurg kernel: oom-kill:constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=user.slice,mems_allowed=0,oom_memcg=` + slice + `,task_memcg=` + slice + `/memcap-42-000001.scope,task=node,pid=43,uid=1000`

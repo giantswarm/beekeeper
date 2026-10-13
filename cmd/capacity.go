@@ -111,20 +111,24 @@ type headroom struct {
 }
 
 // swapReading is a watch's latest machine swap sample: in use, split into
-// disk and zswap, and disk swap's growth per hour over the watch's readings
-// of watch.swapWindow (Rated once they span config.MinSwapSpan). Disk swap
-// growing weighs against a start, with memory pressure and MemAvailable,
-// never the figure in use: swap may sit full for days without a byte
-// moving, and zswap's share is held in RAM.
+// disk and zswap, and per hour over the watch's readings of
+// watch.swapWindow (Rated once they span config.MinSwapSpan) disk swap's
+// growth from new swap-outs and zswap's writeback apart. Disk swap growing
+// weighs against a start, with memory pressure and MemAvailable, never the
+// figure in use: swap may sit full for days without a byte moving, zswap's
+// share is held in RAM, and its writeback moves pages already swapped.
 type swapReading struct {
 	At      time.Time `json:"at"`
 	UsedMiB int       `json:"usedMiB"`
 	DiskMiB int       `json:"diskMiB"`
 	// ZswapMiB is the swap zswap holds compressed in RAM.
 	ZswapMiB int `json:"zswapMiB"`
-	// PerHourMiB is disk swap's growth.
-	PerHourMiB int  `json:"perHourMiB"`
-	Rated      bool `json:"rated"`
+	// PerHourMiB is disk swap's growth less zswap's writeback.
+	PerHourMiB int `json:"perHourMiB"`
+	// WritebackPerHourMiB is zswap's writeback to disk (zswpwb of
+	// /proc/vmstat).
+	WritebackPerHourMiB int  `json:"writebackPerHourMiB"`
+	Rated               bool `json:"rated"`
 }
 
 // swapFile is the state's side file the watch keeps its latest swap reading
@@ -226,7 +230,7 @@ func (h *headroom) line() string {
 	if s := h.Swap; s != nil {
 		swap = fmt.Sprintf("disk swap %d MiB, zswap %d MiB, growth not yet measured", s.DiskMiB, s.ZswapMiB)
 		if s.Rated {
-			swap = fmt.Sprintf("disk swap %d MiB %+d MiB/h (max %d), zswap %d MiB", s.DiskMiB, s.PerHourMiB, h.SwapGrowthMaxMiB, s.ZswapMiB)
+			swap = fmt.Sprintf("disk swap %d MiB %+d MiB/h (max %d), zswap %d MiB writing back %d MiB/h", s.DiskMiB, s.PerHourMiB, h.SwapGrowthMaxMiB, s.ZswapMiB, s.WritebackPerHourMiB)
 		}
 	}
 	load := "load unknown"
@@ -339,10 +343,14 @@ and a role's successor are not counted.
 
 The headroom bounds a start: MemAvailable against capacity.availMinMiB,
 disk swap's growth over the watch's readings of watch.swapWindow against
-capacity.swapGrowthMaxMiB (never the swap in use, and never zswap's share,
-which sits in RAM), the 1-minute load against the watch's HIGH LOAD limit
+capacity.swapGrowthMaxMiB (never the swap in use, never zswap's share,
+which sits in RAM, and never zswap's writeback), the 1-minute load against the watch's HIGH LOAD limit
 (watch.loadMax, or watch.loadPerCoreMax × cores) and the kind labs against
-their cap. Disk swap's growth is weighed with memory pressure and
+their cap. Disk swap's growth is the swap in use less zswap's share
+(SwapTotal − SwapFree − Zswapped of /proc/meminfo) less zswap's writeback
+(zswpwb of /proc/vmstat, pages zswap moves from its pool to the swap
+device), so only new swap-outs count; the writeback is shown apart as
+"writing back N MiB/h". Disk swap's growth is weighed with memory pressure and
 MemAvailable: over the max it blocks a start under pressure (memory PSI,
 full avg60, over capacity.swapPSIMax, or MemAvailable under the floor) and
 is a warning in parentheses after the verdict without, the line naming

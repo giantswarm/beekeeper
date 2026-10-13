@@ -23,7 +23,7 @@ import (
 	"github.com/gofrs/flock"
 )
 
-// Mem is /proc/meminfo in MiB.
+// Mem is /proc/meminfo in MiB, with zswap's writeback from /proc/vmstat.
 type Mem struct {
 	TotalMiB     int `json:"totalMiB"`
 	AvailableMiB int `json:"availableMiB"`
@@ -35,7 +35,11 @@ type Mem struct {
 	// (Zswapped), ZswapPoolMiB the RAM its pool takes for it (Zswap).
 	ZswappedMiB  int `json:"zswappedMiB,omitempty"`
 	ZswapPoolMiB int `json:"zswapPoolMiB,omitempty"`
-	ShmemMiB     int `json:"shmemMiB"`
+	// ZswapWrittenBackMiB is zswap's writeback since boot: the pages zswap
+	// moved from its pool to the swap device (zswpwb of /proc/vmstat), which
+	// grow disk swap without new swapping; 0 on a kernel without the counter.
+	ZswapWrittenBackMiB int `json:"zswapWrittenBackMiB,omitempty"`
+	ShmemMiB            int `json:"shmemMiB"`
 }
 
 // DiskSwapMiB is the swap in use that zswap does not hold: the pages
@@ -50,14 +54,36 @@ func (m Mem) SwapSplit() string {
 	return fmt.Sprintf("disk %d MiB + zswap %d MiB in a %d MiB pool", m.DiskSwapMiB(), m.SwapUsedMiB-m.DiskSwapMiB(), m.ZswapPoolMiB)
 }
 
-// ReadMem parses /proc/meminfo.
+// ReadMem parses /proc/meminfo and zswap's writeback from /proc/vmstat; an
+// unreadable /proc/vmstat leaves the writeback 0.
 func ReadMem() (Mem, error) {
 	f, err := os.Open(filepath.Clean("/proc/meminfo"))
 	if err != nil {
 		return Mem{}, err
 	}
 	defer func() { _ = f.Close() }()
-	return parseMem(f)
+	m, err := parseMem(f)
+	if err != nil {
+		return m, err
+	}
+	if v, verr := os.Open(filepath.Clean("/proc/vmstat")); verr == nil {
+		defer func() { _ = v.Close() }()
+		m.ZswapWrittenBackMiB = parseWrittenBack(v, os.Getpagesize())
+	}
+	return m, nil
+}
+
+// parseWrittenBack reads zswpwb, zswap's written-back pages, from a
+// /proc/vmstat listing in MiB; 0 without the line.
+func parseWrittenBack(r io.Reader, pageSize int) int {
+	sc := bufio.NewScanner(r)
+	for sc.Scan() {
+		if v, ok := strings.CutPrefix(sc.Text(), "zswpwb "); ok {
+			n, _ := strconv.Atoi(strings.TrimSpace(v))
+			return n * pageSize >> 20
+		}
+	}
+	return 0
 }
 
 // parseMem reads a /proc/meminfo listing.

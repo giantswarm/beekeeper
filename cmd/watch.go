@@ -800,21 +800,26 @@ func (w *watcher) notifyAt(ctx context.Context, now time.Time, kind, key, summar
 	}
 }
 
-// swapSample is one poll's swap and MemAvailable.
+// swapSample is one poll's swap, zswap's writeback since boot and
+// MemAvailable.
 type swapSample struct {
-	at                         time.Time
-	usedMiB, diskMiB, availMiB int
+	at                                         time.Time
+	usedMiB, diskMiB, writtenBackMiB, availMiB int
 }
 
 // swapTrend is the swap's movement over watch.swapWindow: disk swap's
-// growth, the growth of all swap in use (what systemd-oomd measures), and
-// whether MemAvailable fell. Rated once the readings span
-// config.MinSwapSpan.
+// growth from new swap-outs, zswap's writeback to disk, the growth of all
+// swap in use (what systemd-oomd measures), and whether MemAvailable fell.
+// Rated once the readings span config.MinSwapSpan.
 type swapTrend struct {
+	// DiskPerHourMiB is disk swap's growth less zswap's writeback: pages
+	// zswap moves to disk leave swap in use flat and are no new swapping.
 	DiskPerHourMiB int
-	UsedPerHourMiB int
-	AvailFalling   bool
-	Rated          bool
+	// WritebackPerHourMiB is zswap's writeback to the swap device.
+	WritebackPerHourMiB int
+	UsedPerHourMiB      int
+	AvailFalling        bool
+	Rated               bool
 	// Window is how far back the rate looks.
 	Window time.Duration
 }
@@ -828,7 +833,7 @@ func (t swapTrend) pressing() bool { return t.Rated && t.DiskPerHourMiB > 0 && t
 // watch.swapWindow.
 func (w *watcher) swapTrend(now time.Time, m machine.Mem) swapTrend {
 	window := w.cfg.Watch.SwapWindow.Duration
-	w.swapSamples = append(w.swapSamples, swapSample{now, m.SwapUsedMiB, m.DiskSwapMiB(), m.AvailableMiB})
+	w.swapSamples = append(w.swapSamples, swapSample{now, m.SwapUsedMiB, m.DiskSwapMiB(), m.ZswapWrittenBackMiB, m.AvailableMiB})
 	i := 0
 	for i < len(w.swapSamples)-1 && now.Sub(w.swapSamples[i].at) > window {
 		i++
@@ -839,19 +844,22 @@ func (w *watcher) swapTrend(now time.Time, m machine.Mem) swapTrend {
 	if span < config.MinSwapSpan {
 		return swapTrend{Window: window}
 	}
-	perHour := func(from, to int) int { return int(float64(to-from) / span.Hours()) }
+	perHour := func(mib int) int { return int(float64(mib) / span.Hours()) }
+	writtenBack := max(0, m.ZswapWrittenBackMiB-first.writtenBackMiB)
 	return swapTrend{
-		DiskPerHourMiB: perHour(first.diskMiB, m.DiskSwapMiB()),
-		UsedPerHourMiB: perHour(first.usedMiB, m.SwapUsedMiB),
-		AvailFalling:   m.AvailableMiB < first.availMiB,
-		Rated:          true,
-		Window:         window,
+		DiskPerHourMiB:      perHour(m.DiskSwapMiB() - first.diskMiB - writtenBack),
+		WritebackPerHourMiB: perHour(writtenBack),
+		UsedPerHourMiB:      perHour(m.SwapUsedMiB - first.usedMiB),
+		AvailFalling:        m.AvailableMiB < first.availMiB,
+		Rated:               true,
+		Window:              window,
 	}
 }
 
 // swapLine says swap in use as disk plus zswap, systemd-oomd's swap rule
-// (its trigger only when it watches a cgroup for swap) and disk swap's
-// growth: the numbers that decide whether swap means pressure.
+// (its trigger only when it watches a cgroup for swap), disk swap's growth
+// from new swap-outs and zswap's writeback apart: the numbers that decide
+// whether swap means pressure.
 func swapLine(m machine.Mem, oomd *machine.OOMDSwap, t swapTrend) string {
 	line := fmt.Sprintf("SWAP: %d of %d MiB used, %s", m.SwapUsedMiB, m.SwapTotalMiB, m.SwapSplit())
 	if oomd == nil {
@@ -862,7 +870,7 @@ func swapLine(m machine.Mem, oomd *machine.OOMDSwap, t swapTrend) string {
 	if !t.Rated {
 		return line + ", growth not yet measured"
 	}
-	line += fmt.Sprintf(", disk %+d MiB/h over the last %s", t.DiskPerHourMiB, dur(t.Window))
+	line += fmt.Sprintf(", disk %+d MiB/h, zswap writeback %d MiB/h over the last %s", t.DiskPerHourMiB, t.WritebackPerHourMiB, dur(t.Window))
 	if t.pressing() {
 		line += " while MemAvailable falls"
 	}
@@ -972,7 +980,7 @@ func (w *watcher) sample(ctx context.Context) {
 			w.check("oomd", !swapoff && w.oomdImminent(m, oomd, t), "OOMD IMMINENT: %s", line)
 		}
 		w.keepSwap(&swapReading{At: now, UsedMiB: m.SwapUsedMiB, DiskMiB: m.DiskSwapMiB(), ZswapMiB: m.ZswappedMiB,
-			PerHourMiB: t.DiskPerHourMiB, Rated: t.Rated})
+			PerHourMiB: t.DiskPerHourMiB, WritebackPerHourMiB: t.WritebackPerHourMiB, Rated: t.Rated})
 	}
 	w.sampleCPU(now, table)
 	psi, err := plat.Machine.MemoryPressure()
