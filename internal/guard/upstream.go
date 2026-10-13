@@ -66,7 +66,9 @@ var (
 	// githubAPI: a REST path under a repository or an organization, in
 	// gh api's form (repos/o/r, /orgs/o) or as a URL of api.github.com.
 	// Groups: the owner of repos/, its repository, the owner of orgs/.
-	githubAPI = regexp.MustCompile(`^(?:https?://api\.github\.com)?/?(?:repos/([^/?#]+)/([^/?#]+)|orgs/([^/?#]+))(?:[/?#].*)?$`)
+	githubAPI = regexp.MustCompile(`^(?:(?i:(?:https?://)?api\.github\.com)(?::\d+)?)?/?(?:repos/([^/?#]+)/([^/?#]+)|orgs/([^/?#]+))(?:[/?#].*)?$`)
+	// graphqlURL: GitHub's GraphQL endpoint.
+	graphqlURL = regexp.MustCompile(`^(?i:(?:https?://)?api\.github\.com)(?::\d+)?/graphql(?:[?#].*)?$`)
 	// issueRef: owner/repo#123.
 	issueRef = regexp.MustCompile(`^([\w.-]+)/([\w.-]+)#\d+$`)
 	// slug: owner/repo, or host/owner/repo as gh's --repo takes it.
@@ -171,7 +173,7 @@ func (u Upstream) write(words []string, cwd string) *upstreamWrite {
 	case gitCmd:
 		what, repo = u.pushWrite(args, cwd)
 	case "curl":
-		what, repo = curlWrite(args)
+		what, repo = u.curlWrite(args)
 	}
 	if repo == "" {
 		return nil
@@ -192,14 +194,13 @@ func (u Upstream) ghWrite(args []string, cwd, env string) (what, repo string) {
 	if args[0] == ghAPISub {
 		return u.ghAPIWrite(args, cwd, env)
 	}
-	if len(args) < 2 || !ghWrites[args[0]][args[1]] {
-		return "", ""
-	}
-	what = "gh " + args[0] + " " + args[1]
-	var named string
-	for i := 2; i < len(args); i++ {
+	// The subcommand and verb are the first two positional words: gh's
+	// --repo is a persistent flag, so it may stand between them.
+	var pos []string
+	named := ""
+	for i := 0; i < len(args); i++ {
 		a := args[i]
-		if v, ok := strings.CutPrefix(a, flagRepo+"="); ok {
+		if v, ok := repoFlag(a); ok {
 			named = repoSlug(v)
 			continue
 		}
@@ -210,18 +211,24 @@ func (u Upstream) ghWrite(args []string, cwd, env string) (what, repo string) {
 			i++
 			continue
 		}
-		if strings.HasPrefix(a, "-") {
-			continue
+		if !strings.HasPrefix(a, "-") {
+			pos = append(pos, a)
 		}
-		// A positional argument: a URL or owner/repo#n names the
-		// repository, as gh repo's owner/repo does.
+	}
+	if len(pos) < 2 || !ghWrites[pos[0]][pos[1]] {
+		return "", ""
+	}
+	what = "gh " + pos[0] + " " + pos[1]
+	// A positional argument: a URL or owner/repo#n names the repository,
+	// as gh repo's owner/repo does.
+	for _, a := range pos[2:] {
 		if r := urlRepo(a); r != "" {
 			return what, r
 		}
 		if m := issueRef.FindStringSubmatch(a); m != nil {
 			return what, m[1] + "/" + m[2]
 		}
-		if r := repoSlug(a); r != "" && args[0] == "repo" {
+		if r := repoSlug(a); r != "" && pos[0] == "repo" {
 			return what, r
 		}
 	}
@@ -229,6 +236,18 @@ func (u Upstream) ghWrite(args []string, cwd, env string) (what, repo string) {
 		return what, named
 	}
 	return what, u.baseRepo(cwd, env)
+}
+
+// repoFlag is the value of a --repo or -R flag written in one word
+// (--repo=o/r, -Ro/r, -R=o/r).
+func repoFlag(a string) (string, bool) {
+	if v, ok := strings.CutPrefix(a, flagRepo+"="); ok {
+		return v, true
+	}
+	if v, ok := strings.CutPrefix(a, "-R"); ok && v != "" {
+		return strings.TrimPrefix(v, "="), true
+	}
+	return "", false
 }
 
 // ghAPIWrite is a gh api call's write: a write method, given or implied by
@@ -259,21 +278,7 @@ func (u Upstream) ghAPIWrite(args []string, cwd, env string) (what, repo string)
 		}
 	}
 	if ep == "graphql" {
-		text := strings.Join(args, " ") + "\n" + ghAPIBodies(words, cwd)
-		if !gqlMutation.MatchString(text) {
-			return "", ""
-		}
-		what = "gh api graphql (" + strings.TrimSuffix(strings.TrimSpace(gqlMutation.FindString(text)), "(") + ")"
-		owners := gqlOwner.FindAllStringSubmatch(text, -1)
-		if len(owners) == 0 {
-			return what, "a repository the mutation names by node id only (write it as gh pr or gh issue with --repo)"
-		}
-		for _, m := range owners {
-			if o := m[1] + m[2]; !u.allows(o) {
-				return what, o + "/*"
-			}
-		}
-		return "", ""
+		return u.gqlWrite("gh api graphql", strings.Join(args, " ")+"\n"+ghAPIBodies(words, cwd))
 	}
 	if method == "" && fields {
 		method = methodPost
@@ -294,9 +299,29 @@ func (u Upstream) ghAPIWrite(args []string, cwd, env string) (what, repo string)
 	return what, m[1] + "/" + m[2]
 }
 
+// gqlWrite is the write of a GraphQL call whose query and variables are in
+// text: a mutation that posts, to an owner outside the organizations or to
+// a target it names by node id only.
+func (u Upstream) gqlWrite(via, text string) (what, repo string) {
+	if !gqlMutation.MatchString(text) {
+		return "", ""
+	}
+	what = via + " (" + strings.TrimSuffix(strings.TrimSpace(gqlMutation.FindString(text)), "(") + ")"
+	owners := gqlOwner.FindAllStringSubmatch(text, -1)
+	if len(owners) == 0 {
+		return what, "a repository the mutation names by node id only (write it as gh pr or gh issue with --repo)"
+	}
+	for _, m := range owners {
+		if o := m[1] + m[2]; !u.allows(o) {
+			return what, o + "/*"
+		}
+	}
+	return "", ""
+}
+
 // curlWrite is a curl call's write to GitHub's REST API: a write method,
 // given or implied by a body, on a repository's or an organization's path.
-func curlWrite(args []string) (what, repo string) {
+func (u Upstream) curlWrite(args []string) (what, repo string) {
 	method, body, target := "", false, ""
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -310,8 +335,8 @@ func curlWrite(args []string) (what, repo string) {
 			method = strings.ToUpper(strings.TrimPrefix(a, "--request="))
 		case curlData[strings.SplitN(a, "=", 2)[0]]:
 			body = true
-		case strings.Contains(a, "api.github.com/"):
-			target = a
+		case strings.Contains(strings.ToLower(a), "api.github.com"):
+			target = strings.TrimPrefix(a, "--url=")
 		}
 	}
 	if method == "" && body {
@@ -319,6 +344,9 @@ func curlWrite(args []string) (what, repo string) {
 	}
 	if target == "" || !writeMethods[method] {
 		return "", ""
+	}
+	if graphqlURL.MatchString(target) {
+		return u.gqlWrite("curl graphql", strings.Join(args, " "))
 	}
 	m := githubAPI.FindStringSubmatch(target)
 	switch {

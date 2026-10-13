@@ -89,6 +89,10 @@ func TestUpstreamRefusesWritesOutsideTheOrgs(t *testing.T) {
 		{oursDir, "gh issue close 5 --repo kagent-dev/kagent", theirRepo},
 		{oursDir, "gh issue edit https://github.com/kagent-dev/kagent/issues/5 --title x", theirRepo},
 		{oursDir, "gh release create v1.0.0 -R kagent-dev/kagent --notes x", theirRepo},
+		// --repo between the subcommand and the verb, in one word
+		{oursDir, "gh pr -R kagent-dev/kagent create --fill", theirRepo},
+		{oursDir, "gh pr create -Rkagent-dev/kagent --fill", theirRepo},
+		{oursDir, "gh issue comment 1 -R=kagent-dev/kagent -b x", theirRepo},
 		// the repository from the worktree: gh's base, upstream before origin
 		{theirsDir, "gh pr create --title t --body b", theirRepo},
 		{forkDir, prFill, theirRepo},
@@ -107,6 +111,9 @@ func TestUpstreamRefusesWritesOutsideTheOrgs(t *testing.T) {
 		{oursDir, mutation, "node id"},
 		{oursDir, `gh api graphql -f owner=kagent-dev -f query='mutation($owner:String!){ createIssue(input:{}) { issue { url } } }'`, "kagent-dev/*"},
 		{oursDir, "curl -sf -X POST -H 'Authorization: token x' -d '{}' https://api.github.com/repos/kagent-dev/kagent/issues", theirRepo},
+		{oursDir, "curl -d '{}' api.github.com/repos/kagent-dev/kagent/issues", theirRepo},
+		{oursDir, "curl -X POST https://API.GitHub.com:443/repos/kagent-dev/kagent/issues", theirRepo},
+		{oursDir, `curl -d '{"query":"mutation { addComment(input:{}) { clientMutationId } }"}' https://api.github.com/graphql`, "node id"},
 		// git push: the remote's URL in the worktree, https, ssh and scp forms
 		{forkDir, "git push upstream upstream/fix-loop", theirRepo},
 		{oursDir, "git push https://github.com/kagent-dev/kagent.git HEAD:main", theirRepo},
@@ -147,6 +154,7 @@ func TestUpstreamPassesReadsAndOurWrites(t *testing.T) {
 		{forkDir, "git fetch upstream"},
 		{oursDir, "curl -s https://api.github.com/repos/kagent-dev/kagent/pulls"},
 		{oursDir, `echo "gh pr create -R kagent-dev/kagent"`},
+		{oursDir, `curl -d '{"query":"{ viewer { login } }"}' https://api.github.com/graphql`},
 		// writes to the orgs, any case, our fork's upstream/<slug> branch
 		{oursDir, prFill},
 		{oursDir, "gh pr create -R giantswarm/kagent --body 'from https://github.com/kagent-dev/kagent/issues/1'"},
