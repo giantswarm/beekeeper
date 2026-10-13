@@ -165,22 +165,31 @@ func (o *Ops) Unset(ctx context.Context, file string, paths []string, write bool
 	if len(paths) == 0 {
 		return res, errors.New("unset <file> <path>…: no path named")
 	}
+	named := make([]unsetTarget, 0, len(paths))
 	for _, p := range paths {
-		if p == "" || p == "sops" || strings.HasPrefix(p, "sops.") || slices.Contains(strings.Split(p, "."), "") {
+		keys := splitPath(p)
+		if keys[0] == "sops" || slices.Contains(keys, "") {
 			return res, fmt.Errorf("%q: unset takes a dotted key path of the document, not sops' metadata", p)
 		}
+		named = append(named, unsetTarget{path: p, keys: keys})
 	}
 	doc, err := o.decrypt(ctx, file)
 	if err != nil {
 		return res, err
 	}
-	for _, p := range unsetOrder(paths) {
-		if doc.node(p) == nil {
-			res.Absent = append(res.Absent, p)
-			continue
+	var held []unsetTarget
+	for _, t := range unsetOrder(named) {
+		if _, n, keys := doc.walk(t.keys); n != nil {
+			held = append(held, unsetTarget{path: t.path, keys: keys})
+		} else {
+			res.Absent = append(res.Absent, t.path)
 		}
-		res.Removed = append(res.Removed, p)
-		doc.remove(p)
+	}
+	var indices []string
+	for _, t := range unsetOrder(held) {
+		res.Removed = append(res.Removed, t.path)
+		indices = append(indices, doc.sopsIndex(t.keys))
+		doc.remove(t.path)
 	}
 	res.Kept = sortedKeys(doc.leaves())
 	if !write || len(res.Removed) == 0 {
@@ -190,8 +199,8 @@ func (o *Ops) Unset(ctx context.Context, file string, paths []string, write bool
 	if err != nil {
 		return res, err
 	}
-	for _, p := range res.Removed {
-		args := append(append([]string{"unset"}, sopsTypes(file, true)...), file, sopsIndex(p))
+	for i, p := range res.Removed {
+		args := append(append([]string{"unset"}, sopsTypes(file, true)...), file, indices[i])
 		if _, err := o.Run(ctx, "", env, nil, "sops", args...); err != nil {
 			return res, fmt.Errorf("%s: unset %s: %w", file, p, err)
 		}
@@ -200,21 +209,31 @@ func (o *Ops) Unset(ctx context.Context, file string, paths []string, write bool
 	return res, nil
 }
 
-// unsetOrder is paths in the order they can be removed one by one: a path
-// under another named one goes (its parent removes it), and of a list's
-// items the later ones first, so that no index shifts before its turn.
-func unsetOrder(paths []string) []string {
-	out := slices.Clone(paths)
-	slices.SortFunc(out, func(a, b string) int { return -comparePath(a, b) })
-	out = slices.Compact(out)
-	return slices.DeleteFunc(out, func(p string) bool {
-		return slices.ContainsFunc(out, func(q string) bool { return strings.HasPrefix(p, q+".") })
+// unsetTarget is a path unset names and the keys it resolves to, as the
+// document holds them: credentials.json one key whichever way the path
+// spells it.
+type unsetTarget struct {
+	path string
+	keys []string
+}
+
+// unsetOrder is targets in the order they can be removed one by one: one
+// under another named one goes (its parent removes it), as does a second
+// spelling of the same keys, and of a list's items the later ones first,
+// so that no index shifts before its turn.
+func unsetOrder(targets []unsetTarget) []unsetTarget {
+	out := slices.Clone(targets)
+	slices.SortStableFunc(out, func(a, b unsetTarget) int { return -compareKeys(a.keys, b.keys) })
+	out = slices.CompactFunc(out, func(a, b unsetTarget) bool { return slices.Equal(a.keys, b.keys) })
+	return slices.DeleteFunc(out, func(t unsetTarget) bool {
+		return slices.ContainsFunc(out, func(u unsetTarget) bool {
+			return len(u.keys) < len(t.keys) && slices.Equal(u.keys, t.keys[:len(u.keys)])
+		})
 	})
 }
 
-// comparePath orders dotted paths segment by segment, numbers as numbers.
-func comparePath(a, b string) int {
-	as, bs := strings.Split(a, "."), strings.Split(b, ".")
+// compareKeys orders key paths key by key, numbers as numbers.
+func compareKeys(as, bs []string) int {
 	for i := 0; i < len(as) && i < len(bs); i++ {
 		x, errX := strconv.Atoi(as[i])
 		y, errY := strconv.Atoi(bs[i])
@@ -228,15 +247,19 @@ func comparePath(a, b string) int {
 	return len(as) - len(bs)
 }
 
-// sopsIndex is a dotted path in sops' index syntax: ["a"][0]["b"].
-func sopsIndex(path string) string {
+// sopsIndex is the node keys name, keys as [document.walk] answers them,
+// in sops' index syntax: ["stringData"]["credentials.json"], a list's item
+// by its number, ["a"][0]["b"].
+func (d *document) sopsIndex(keys []string) string {
 	var b strings.Builder
-	for _, k := range strings.Split(path, ".") {
-		if _, err := strconv.Atoi(k); err == nil {
+	n := d.root
+	for _, k := range keys {
+		if n.Kind == yaml.SequenceNode {
 			b.WriteString("[" + k + "]")
-			continue
+		} else {
+			b.WriteString("[" + strconv.Quote(k) + "]")
 		}
-		b.WriteString("[" + strconv.Quote(k) + "]")
+		n = child(n, k)
 	}
 	return b.String()
 }

@@ -229,17 +229,31 @@ func TestCopyValueIntoASOPSPathKeepsTheOthers(t *testing.T) {
 	}
 }
 
-func TestCopyValueFromAKeyHoldingADot(t *testing.T) {
-	tools := secrettest.New(nil)
-	dir, _ := scratch(t)
-	src := filepath.Join(dir, "sa.sops.yaml")
+// dottedKey is a path to a Secret's key holding a dot in each way it can
+// be spelled: plain, quoted and escaped.
+var dottedKey = []string{"stringData.credentials.json", `stringData."credentials.json"`, `stringData.credentials\.json`}
+
+// dottedKeyAbsent are paths dottedKeyScratch holds no value at.
+var dottedKeyAbsent = []string{"stringData.credentials.yaml", `stringData."credentials.json".x`}
+
+// dottedKeyScratch is a SOPS file of a Secret whose keys hold a dot.
+func dottedKeyScratch(t *testing.T) (dir, src string) {
+	t.Helper()
+	dir, _ = scratch(t)
+	src = filepath.Join(dir, "sa.sops.yaml")
 	plain := "kind: Secret\nmetadata:\n  name: sa\nstringData:\n  credentials.json: " + password + "\n  tls.crt: " + token + "\n"
 	if err := os.WriteFile(src, secrettest.Encrypt(plain), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	return dir, src
+}
+
+func TestCopyValueFromAKeyHoldingADot(t *testing.T) {
+	tools := secrettest.New(nil)
+	dir, src := dottedKeyScratch(t)
 	o := ops(tools)
 	ctx := context.Background()
-	for _, path := range []string{"stringData.credentials.json", `stringData."credentials.json"`, `stringData.credentials\.json`} {
+	for _, path := range dottedKey {
 		ref, err := secret.ParseRef(src + "#" + path)
 		if err != nil {
 			t.Fatal(err)
@@ -252,7 +266,7 @@ func TestCopyValueFromAKeyHoldingADot(t *testing.T) {
 			t.Errorf("copy %s wrote:\n%s", path, got)
 		}
 	}
-	for _, path := range []string{"stringData.credentials.yaml", `stringData."credentials.json".x`} {
+	for _, path := range dottedKeyAbsent {
 		_, err := o.CopyValue(ctx, secret.Ref{File: src, Path: path}, secret.Ref{File: filepath.Join(dir, "x.sops.yaml"), Path: "a"})
 		if err == nil || !strings.HasSuffix(err.Error(), "no value at "+path) {
 			t.Errorf("copy of the absent %s = %v", path, err)

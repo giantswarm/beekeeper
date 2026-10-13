@@ -134,18 +134,20 @@ func (d *document) node(path string) *yaml.Node {
 
 // walk follows keys from the root, each step to the child [childAt] names,
 // so a key holding dots (credentials.json) resolves unquoted: the node,
-// nil when absent, with its parent and the key it sits under.
-func (d *document) walk(keys []string) (parent, n *yaml.Node, key string) {
+// nil when absent, with its parent and the keys as the document holds
+// them, one for each step, the last one the key it sits under.
+func (d *document) walk(keys []string) (parent, n *yaml.Node, held []string) {
 	n = d.root
 	for i := 0; i < len(keys); {
 		c, width := childAt(n, keys[i:])
 		if c == nil {
-			return nil, nil, ""
+			return nil, nil, nil
 		}
-		parent, n, key = n, c, strings.Join(keys[i:i+width], ".")
+		parent, n = n, c
+		held = append(held, strings.Join(keys[i:i+width], "."))
 		i += width
 	}
-	return parent, n, key
+	return parent, n, held
 }
 
 // splitPath reads a dotted path into its keys: a key in double quotes
@@ -177,17 +179,20 @@ func splitPath(path string) []string {
 // remove deletes the key or list item at a dotted path; an absent one
 // stays absent.
 func (d *document) remove(path string) {
-	parent, n, k := d.walk(splitPath(path))
-	switch {
-	case n == nil:
-	case parent.Kind == yaml.MappingNode:
+	parent, n, held := d.walk(splitPath(path))
+	if n == nil {
+		return
+	}
+	k := held[len(held)-1]
+	switch parent.Kind {
+	case yaml.MappingNode:
 		for i := 0; i+1 < len(parent.Content); i += 2 {
 			if parent.Content[i].Value == k {
 				parent.Content = slices.Delete(parent.Content, i, i+2)
 				return
 			}
 		}
-	case parent.Kind == yaml.SequenceNode:
+	case yaml.SequenceNode:
 		if i, err := strconv.Atoi(k); err == nil && i >= 0 && i < len(parent.Content) {
 			parent.Content = slices.Delete(parent.Content, i, i+1)
 		}

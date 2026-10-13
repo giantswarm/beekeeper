@@ -114,12 +114,14 @@ func (a *app) secretUnsetCmd() *cobra.Command {
 		Use:   "unset <sops-file> <path>… [--write]",
 		Short: "Remove keys from a SOPS file, its recipients kept",
 		Long: `unset removes keys from a SOPS file, each path a dotted key path (a number
-indexes a list) naming a value, a mapping or a list item. sops unset runs in
-beekeeper's process with the file's age identity: the file keeps its
-recipients, sops renews its MAC and lastmodified. Without --write it answers
-what it would remove; with it the file is written. A path the file holds no
-longer is answered absent, so a second run removes nothing. It answers the
-paths removed, those absent and the key names the file keeps, never a value.
+indexes a list) naming a value, a mapping or a list item; a key holding dots
+resolves unquoted, "quoted" or escaped (stringData.credentials\.json) as in
+copy. sops unset runs in beekeeper's process with the file's age identity:
+the file keeps its recipients, sops renews its MAC and lastmodified. Without
+--write it answers what it would remove; with it the file is written. A path
+the file holds no longer is answered absent, so a second run removes
+nothing. It answers the paths removed, those absent and the key names the
+file keeps, never a value.
 
   beekeeper secret unset secret-values.yaml.patch oidc.extraStaticClients \
     oidc.staticClients.muster --write`,
