@@ -237,6 +237,9 @@ type gateRun struct {
 	// acceptRed are the red checks the gate let through (merge.JudgeRed),
 	// which devctl's run again accepts.
 	acceptRed []string
+	// requeued says a hold took the running merge back out of its lane
+	// (requeue): its wait for the turn starts again.
+	requeued bool
 }
 
 func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration, queued bool) error {
@@ -263,12 +266,17 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 		bin: runningBinary(), output: gateOutput()}
 	g.central = pr != 0 && a.cfg.CentralLane(g.lane)
 	g.leaveAt = leaveAt(time.Now(), limit, queued)
+	resumed := false
 	if v, ok := os.LookupEnv(gateRunningEnv); ok {
 		_ = os.Unsetenv(gateRunningEnv)
-		return g.resumeMerge(v)
+		// A merge a hold took back out of its lane waits on in its place.
+		if err := g.resumeMerge(v); !errors.As(err, new(*preemptedError)) {
+			return err
+		}
+		resumed = true
 	}
 	// A queued run takes over the place its gate holds: none means dropped.
-	g.placed = queued
+	g.placed = queued || resumed
 	if pr == 0 && !queued {
 		if g.candidate, err = promoteCandidate(ctx, repo); err != nil {
 			return gateRefused("the release candidate of %s is unknown (%v): nothing promoted; run the same command again", repo, err)
@@ -281,7 +289,7 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 	}
 	// A fresh rebase merge, not one that has its place already (its queued
 	// run, a re-executed wait), is judged before it takes a lane place.
-	if _, waiting := os.LookupEnv(gateDeadlineEnv); !waiting && !queued && merge.Rebase(argv) {
+	if _, waiting := os.LookupEnv(gateDeadlineEnv); !waiting && !queued && !resumed && merge.Rebase(argv) {
 		if err := g.checkRebase(); err != nil {
 			return err
 		}
@@ -316,6 +324,13 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 		}
 		if err != nil || why == "" {
 			return err
+		}
+		if g.requeued {
+			// A merge a hold took back out of its lane waits its turn anew.
+			g.requeued = false
+			if deadline = time.Now().Add(wait); !g.leaveAt.IsZero() && g.leaveAt.Before(deadline) {
+				deadline = g.leaveAt
+			}
 		}
 		if !a.now.Before(deadline) {
 			if g.queued {
@@ -478,11 +493,16 @@ func (g *gateRun) step() (string, error) {
 	var hold state.Hold
 	var held bool
 	var dup *state.Merge
+	var ahead state.Merge
+	behind := false
 	dropped := false
 	session := ""
+	// A new merge is refused during a hold; one that has its place keeps it
+	// and waits until the hold lifts or lets it through.
+	placed := g.placed
 	err := g.store.Update(func(st *state.State) ([]state.Event, error) {
 		merge.Prune(st, g.now, g.cfg.Merge.QueueTTL.Duration, g.cfg.Merge.SeedTTL.Duration, proc.Alive)
-		if hold, held = merge.Blocking(st, g.now, g.repo, g.pr, g.lane); held {
+		if hold, held = merge.Blocking(st, g.now, g.repo, g.pr, g.lane); held && !placed {
 			g.drop(st)
 			return nil, nil
 		}
@@ -517,7 +537,11 @@ func (g *gateRun) step() (string, error) {
 			ev = append(ev, event(g.me, "merge.queued", "%s", detail))
 		}
 		g.placed = true
+		if held {
+			return ev, nil
+		}
 		q = merge.Queue(st, g.lane.Name)
+		ahead, behind = q.Ahead(g.repo, g.pr, merge.Unheld(st, g.now, g.lane, g.present))
 		session = g.sessionWait(st)
 		return ev, nil
 	})
@@ -529,7 +553,7 @@ func (g *gateRun) step() (string, error) {
 		return "", gateRefused("the state does not load (%v): fix it, then run the same command again", err)
 	case dropped:
 		return "", g.refuse("%s was taken out of lane %s (beekeeper lanes drop): nothing ran; run it again only if it is still wanted", g.key(), g.lane.Name)
-	case held:
+	case held && !placed:
 		return "", g.refuse("%s is held (%s) by %q until %s: %s; merge after the hold lifts (beekeeper hold), do not poll",
 			g.repo, holdTarget(hold), hold.By.Name, untilText(g.app, hold), hold.Reason)
 	case dup != nil && dup.Phase == state.Waiting:
@@ -544,13 +568,16 @@ func (g *gateRun) step() (string, error) {
 		}
 		return "", g.refuseWith(ExitGateDuplicate, "%s is already merging: started %s by %q (pid %d), last line: %s; its outcome reaches %q, do not merge again",
 			g.key(), clock(g.now, dup.Started), dup.By.Name, dup.PID, last, dup.By.Name)
+	case held:
+		return fmt.Sprintf("held in lane %s (%s) by %q until %s: %s; %s keeps its place and runs once the hold lifts or lets it through",
+			g.lane.Name, holdTarget(hold), hold.By.Name, untilText(g.app, hold), hold.Reason, g.key()), nil
 	}
 	if g.central {
 		if why, err := g.centralTurn(); err != nil || why != "" {
 			return why, err
 		}
 	}
-	if ahead, ok := q.Ahead(g.repo, g.pr, g.present); ok {
+	if behind {
 		if q.Running != nil {
 			ahead = *q.Running
 		}
@@ -875,7 +902,7 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 	err := g.store.Update(func(st *state.State) ([]state.Event, error) {
 		q := merge.Queue(st, g.lane.Name)
 		i := g.mine(st, state.Waiting)
-		_, behind := q.Ahead(g.repo, g.pr, g.present)
+		_, behind := q.Ahead(g.repo, g.pr, merge.Unheld(st, g.now, g.lane, g.present))
 		w := slices.IndexFunc(st.Holds, func(h state.Hold) bool { return h.Tool != "" && h.ToolMerged })
 		switch {
 		case i < 0 || behind || q.Running != nil:
@@ -941,7 +968,11 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 			return why, err
 		}
 	}
-	return "", g.runMerge()
+	err = g.runMerge()
+	if p := (*preemptedError)(nil); errors.As(err, &p) {
+		return p.why, nil
+	}
+	return "", err
 }
 
 // sessionWait is what the merge, its lane's next, waits for under
@@ -1151,10 +1182,18 @@ func (g *gateRun) followRun(base string, pid int, offset int64, bin binary) (chi
 // same devctl on from there (resumeMerge), so the installed release records
 // the outcome; one that does not start is followed on under this one.
 func (g *gateRun) follow(base string, pid int, offset int64) error {
+	stop := g.watchPreempt()
 	run, pid := g.followRun(base, pid, offset, g.bin)
 	if run.replaced {
+		stop()
 		g.reexec("while "+g.key()+"'s devctl ran", fmt.Sprintf("%s=%d:%d", gateRunningEnv, pid, run.offset))
+		stop = g.watchPreempt()
 		run, _ = g.followRun(base, pid, run.offset, nil)
+	}
+	if h, preempted := stop(); preempted && !run.left {
+		if err := g.requeue(base, h); err != nil {
+			return err
+		}
 	}
 	run = run.emit()
 	if run.left {

@@ -300,6 +300,29 @@ func Blocking(st *state.State, now time.Time, repo string, pr int, lane config.L
 	return upgrade.Held(st, lane.Installation, now)
 }
 
+// Unheld is present for a lane's places that no hold blocks: a waiting merge
+// a hold keeps out of the lane holds no place against the merges behind it,
+// so the one merge the hold lets through enters first, and the held place
+// keeps its turn for after the hold.
+func Unheld(st *state.State, now time.Time, lane config.Lane, present func(state.Merge) bool) func(state.Merge) bool {
+	return func(m state.Merge) bool {
+		_, held := Blocking(st, now, m.Repo, m.PR, lane)
+		return !held && present(m)
+	}
+}
+
+// Preempts is the hold that takes the running merge m back out of lane
+// before its devctl merges: a hold set after m started that lets another
+// pull request through (--except owner/repo#n), an order that pull request
+// goes first in. A hold without such an exception stops new merges only.
+func Preempts(st *state.State, now time.Time, m state.Merge, lane config.Lane) (state.Hold, bool) {
+	h, held := Blocking(st, now, m.Repo, m.PR, lane)
+	if !held || !h.At.After(m.Started) || !strings.Contains(h.Except, "#") {
+		return state.Hold{}, false
+	}
+	return h, true
+}
+
 // FixWindow is the active hold on lane that lets exactly repo#pr through
 // (hold set --lane <lane> --except <repo>#<pr>): a declared fix window, in
 // which that pull request merges without the lane's installation Ready or
