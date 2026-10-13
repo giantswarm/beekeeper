@@ -34,8 +34,15 @@ func heldApp(t *testing.T, merges ...state.Merge) *app {
 
 // placedGate is the queued run of o/r#pr, which has its place in the lane.
 func placedGate(a *app, pr int, pid int) *gateRun {
-	return &gateRun{app: a, ctx: context.Background(), argv: mergeArgv(scratchRepo, strconv.Itoa(pr)), repo: scratchRepo, pr: pr,
+	return &gateRun{app: a, ctx: context.Background(), argv: prArgv(pr), repo: scratchRepo, pr: pr,
 		lane: a.cfg.LaneOf(scratchRepo), me: state.Party{Session: "s1", Name: ownerName}, pid: pid, queued: true, placed: true}
+}
+
+// prArgv merges o/r#pr.
+func prArgv(pr int) []string {
+	argv := mergeArgv(scratchRepo)
+	argv[len(argv)-1] = strconv.Itoa(pr)
+	return argv
 }
 
 func setHold(t *testing.T, a *app, h ...state.Hold) {
@@ -78,7 +85,7 @@ func TestAQueuedMergeWaitsForAHoldsExceptionAndKeepsItsPlace(t *testing.T) {
 			Phase: state.Waiting, Joined: joined, Seen: time.Now()},
 		state.Merge{Repo: scratchRepo, PR: 6, Lane: scratchRepo, By: state.Party{Name: aheadName}, PID: other,
 			Phase: state.Waiting, Joined: joined.Add(time.Minute), Seen: time.Now()})
-	setHold(t, a, state.Hold{Target: scratchRepo, Except: scratchRepo + "#6", By: state.Party{Name: "supervisor"}, At: time.Now(), Reason: "#6 first"})
+	setHold(t, a, state.Hold{Target: scratchRepo, Except: scratchRepo + "#6", By: state.Party{Name: supervisorName}, At: time.Now(), Reason: "#6 first"})
 
 	held := placedGate(a, 7, os.Getpid())
 	why, err := held.step()
@@ -96,7 +103,7 @@ func TestAQueuedMergeWaitsForAHoldsExceptionAndKeepsItsPlace(t *testing.T) {
 
 	var refused error
 	fresh := gateStderr(t, func() {
-		refused = a.gate(context.Background(), mergeArgv(scratchRepo, "8"), time.Minute, 0, false)
+		refused = a.gate(context.Background(), prArgv(8), time.Minute, 0, false)
 	})
 	if Code(refused) != ExitGateRefused || !strings.Contains(fresh, "refused, o/r is held") {
 		t.Errorf("a new merge during the hold: exit %d, %q; want it refused", Code(refused), fresh)
@@ -147,7 +154,7 @@ func TestAHoldsExceptionTakesARunningMergeBackToItsPlace(t *testing.T) {
 	if _, ok := g.preemptChild(); ok || len(ended) != 0 {
 		t.Fatalf("no hold: ended %v", ended)
 	}
-	setHold(t, a, state.Hold{Target: scratchRepo, Except: scratchRepo + "#6", By: state.Party{Name: "supervisor"}, At: time.Now(), Reason: "#6 first"})
+	setHold(t, a, state.Hold{Target: scratchRepo, Except: scratchRepo + "#6", By: state.Party{Name: supervisorName}, At: time.Now(), Reason: "#6 first"})
 	h, ok := g.preemptChild()
 	if !ok || !slices.Equal(ended, []int{child}) {
 		t.Fatalf("the hold's exception: preempted %v, ended %v; want o/r#7's devctl ended", ok, ended)
