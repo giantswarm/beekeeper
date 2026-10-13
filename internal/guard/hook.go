@@ -334,7 +334,7 @@ func (h Hook) decide(ev event) []byte {
 	}
 
 	if h.Sandbox != nil {
-		if m := labRuntime.FindStringSubmatchIndex(cmd); m != nil {
+		if m := commandMatch(labRuntime, cmd, nil); m != nil {
 			var held []lease.Holder
 			if h.Leases != nil {
 				held = h.Leases()
@@ -346,7 +346,7 @@ func (h Hook) decide(ev event) []byte {
 				strings.TrimSpace(cmd[m[2]:m[3]]), leaseLines(held))})
 		}
 	}
-	if m := lab.FindStringSubmatchIndex(cmd); m != nil {
+	if m := commandMatch(lab, cmd, nil); m != nil {
 		running := h.Clusters()
 		target := labTarget(cmd, m, cwd)
 		if limit := h.MaxLabs(); !slices.Contains(running, target) && len(running) >= limit {
@@ -487,14 +487,26 @@ func (h Hook) rewrite(input map[string]any, cmd string, changed, bg bool) []byte
 func Owned(cmd string) bool { return anyOwned.MatchString(cmd) }
 
 // isHeavy reports whether cmd runs a heavy command at a command position of
-// the shell: one inside a quoted argument (a grep pattern, a jq filter, an
-// echo) is none, one inside a shell's -c or eval string or a here-document a
-// shell reads as its program is.
+// the shell (commandMatch); make with a target that builds nothing is none.
 func isHeavy(cmd string) bool {
+	return commandMatch(heavy, cmd, func(cmd string, m []int) bool {
+		return cmd[m[2]:m[3]] != "make" || !lightMake.MatchString(cmd[m[1]:])
+	}) != nil
+}
+
+// commandMatch is the first match of re, a pattern anchored at a command
+// position, among the commands the shell runs, as re's
+// FindStringSubmatchIndex indexes cmd; nil for none. One inside a quoted
+// argument (a grep pattern, a jq filter, an echo, an interpreter's code) or a
+// here-document no shell reads (a file's text, an interpreter's program) is
+// none; one inside a shell's -c or eval string or a here-document a shell
+// reads as its program is. keep, unless nil, passes over the matches it
+// rejects.
+func commandMatch(re *regexp.Regexp, cmd string, keep func(cmd string, m []int) bool) []int {
 	sc := scanShell(cmd)
-	for _, m := range heavy.FindAllStringSubmatchIndex(sc.masked, -1) {
-		if cmd[m[2]:m[3]] != "make" || !lightMake.MatchString(cmd[m[1]:]) {
-			return true
+	for _, m := range re.FindAllStringSubmatchIndex(sc.masked, -1) {
+		if keep == nil || keep(cmd, m) {
+			return m
 		}
 	}
 	for _, m := range shellC.FindAllStringSubmatchIndex(cmd, -1) {
@@ -502,17 +514,30 @@ func isHeavy(cmd string) bool {
 			continue // the -c itself sits inside a quoted argument
 		}
 		body := cmd[m[1]:]
-		if isHeavy(body[:closingQuote(body, cmd[m[2]])]) {
-			return true
+		if mm := commandMatch(re, body[:closingQuote(body, cmd[m[2]])], keep); mm != nil {
+			return shiftMatch(mm, m[1])
 		}
 	}
 	segs := sc.segments()
 	for _, hd := range sc.heredocs {
-		if shellReads(sc, segs, hd.op) && isHeavy(cmd[hd.start:hd.end]) {
-			return true
+		if !shellReads(sc, segs, hd.op) {
+			continue
+		}
+		if mm := commandMatch(re, cmd[hd.start:hd.end], keep); mm != nil {
+			return shiftMatch(mm, hd.start)
 		}
 	}
-	return false
+	return nil
+}
+
+// shiftMatch moves a match's offsets by off; an unmatched group stays -1.
+func shiftMatch(m []int, off int) []int {
+	for i := range m {
+		if m[i] >= 0 {
+			m[i] += off
+		}
+	}
+	return m
 }
 
 func answer(o hookOutput) []byte {

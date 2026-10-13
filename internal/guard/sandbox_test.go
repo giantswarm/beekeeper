@@ -146,12 +146,13 @@ func TestSandboxSendsLabRuntimeToTheHost(t *testing.T) {
 		ev["cwd"] = home
 		return decideEvent(t, h, ev)
 	}
-	for _, cmd := range []string{"agentlab up", "cd lab && agentlab down", "agentlab --lab agentlab-2 up --open=false", "kind create cluster --name x", "kind delete cluster --name x", "kind delete clusters --all"} {
+	for _, cmd := range []string{labUp, "cd lab && agentlab down", "agentlab --lab agentlab-2 up --open=false", "kind create cluster --name x", "kind delete cluster --name x", "kind delete clusters --all"} {
 		if d := run(h, cmd); d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "beekeeper lease up <lab>") {
 			t.Errorf("%s: %+v", cmd, d)
 		}
 	}
-	for _, cmd := range []string{"agentlab status", "kind get clusters", "echo agentlab up"} {
+	for _, cmd := range []string{"agentlab status", "kind get clusters", "echo agentlab up", "echo 'x; agentlab down'",
+		"python3 - <<'EOF'\nprint('''\nagentlab down\n''')\nEOF"} {
 		if d := run(h, cmd); d != nil && d.PermissionDecision == decisionDeny {
 			t.Errorf("%s: refused: %s", cmd, d.Reason)
 		}
