@@ -56,8 +56,19 @@ func (w *watcher) staleLine(ctx context.Context, p *proc.Process, path, session 
 	if session != "" {
 		who += ", session " + session
 	}
-	return fmt.Sprintf("WATCH STALE %s): runs %s; self-update installed %s at %s, a re-arm picks it up",
-		who, running, w.binaryVersion(ctx, path), path)
+	return fmt.Sprintf("WATCH STALE %s): runs %s; self-update installed %s at %s, a re-arm picks it up: %s",
+		who, running, w.binaryVersion(ctx, path), path, rearm(p.Args))
+}
+
+// rearm says how the watch running args is re-armed on the installed
+// binary: stopped, then started again with its own command line, which its
+// owner completes when display left a value out of it.
+func rearm(args []string) string {
+	s, cut := masked(args)
+	if cut {
+		return "stop it, then run `" + s + "` with its values"
+	}
+	return "stop it, then run `" + s + "`"
 }
 
 // isWatch reports whether p is a long-running beekeeper watch (beekeeper
@@ -104,6 +115,12 @@ func (w *watcher) binaryVersion(ctx context.Context, file string) string {
 	if w.versionOf != nil {
 		return w.versionOf(ctx, file)
 	}
+	return binaryVersion(ctx, file)
+}
+
+// binaryVersion is the version the beekeeper binary file reports, "an
+// unknown version" when it does not run.
+func binaryVersion(ctx context.Context, file string) string {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	out, err := proc.Command(ctx, file, "version").Output()

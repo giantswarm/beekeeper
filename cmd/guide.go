@@ -539,7 +539,13 @@ relay: GUIDE RELAY DUE at guide.relayAt, taken or
 expired, and a restart of its CLI. Silent otherwise. What it said is kept
 in the state, so a restarted feed says nothing again; only a standing
 GUIDE RELAY DUE is said once more, by each feed and after a change of
-guide.relayAt. Runs until killed; --once polls once.`,
+guide.relayAt. Runs until killed; --once polls once.
+
+The feed never re-executes itself. Once self-update replaced its binary it
+says GUIDE WATCH STALE, once, with the version it runs, the one installed
+and the command that re-arms it. A save a newer release refuses (the state
+written by it) is said as GUIDE SAVE REFUSED with the same command and the
+lines that save would have recorded, again only when those lines change.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
@@ -552,13 +558,11 @@ guide.relayAt. Runs until killed; --once polls once.`,
 			if !once {
 				a.guideDues = relayDues{}
 			}
+			self := newGuideSelf()
 			for {
 				a.now = time.Now()
-				lines, err := a.guideFeed(ctx)
-				if err != nil {
-					lines = []string{fmt.Sprintf("GUIDE FEED: %v", err)}
-				}
-				for _, l := range lines {
+				feed, err := a.guideFeed(ctx)
+				for _, l := range self.lines(ctx, feed, err) {
 					_, _ = fmt.Fprintln(a.out, a.now.Format("15:04:05")+" "+l)
 				}
 				if once {
