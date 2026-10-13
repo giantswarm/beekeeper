@@ -338,6 +338,9 @@ Register it in ~/.claude/settings.json:
 				h.Upstream = guard.Upstream{Orgs: a.cfg.GitHub.AllowedOrgs, Review: a.cfg.GitHub.UpstreamReview}
 				h.Refused = a.recordRefusal
 				h.Labs = a.heldLabs
+				if !inSandbox() {
+					h.FreshLabs = a.freshLabKubeconfigs
+				}
 				h.UnlockCommands = a.cfg.Secret.UnlockCommands
 				h.SecretFiles = slices.DeleteFunc(append(slices.Clone(a.cfg.Secret.Files), a.cfg.Secret.TokenFile), func(f string) bool { return f == "" })
 				h.GraphQL = a.graphqlLeft

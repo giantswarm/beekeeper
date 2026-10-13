@@ -192,6 +192,10 @@ type Hook struct {
 	// Labs lists the held leases of kind labs, unnamed (a lease file read,
 	// no process scan); nil, none.
 	Labs func() []lease.Holder
+	// FreshLabs brings the kubeconfigs in the given lab leases up to date
+	// with their clusters, before a Bash command of the session holding
+	// them; nil, never.
+	FreshLabs func(labs []string)
 	// Started reports whether beekeeper agents start started the session
 	// in bypassPermissions; read only for a browser call in acceptEdits,
 	// nil refuses no browser call.
@@ -240,6 +244,7 @@ func (h Hook) Decide(input []byte) []byte {
 	if dec.Decode(&ev) != nil {
 		return nil
 	}
+	h.freshLabs(ev)
 	out := h.labProxy(ev, h.decide(ev))
 	var o map[string]hookOutput
 	if out != nil && (json.Unmarshal(out, &o) != nil || o["hookSpecificOutput"].PermissionDecision == decisionDeny) {
