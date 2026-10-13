@@ -373,11 +373,7 @@ func (h Hook) decide(ev event) []byte {
 	if !isHeavy(cmd) {
 		return h.rewrite(ev.ToolInput, cmd, gated || vaultCall.MatchString(cmd), bg)
 	}
-	prefix := ""
-	if bg {
-		prefix = "MEMCAP_WAIT=60m "
-	}
-	return h.rewrite(ev.ToolInput, prefix+ShellQuote(h.Self)+" run -- "+ShellQuote(h.Shell)+" -c "+ShellQuote(cmd), true, bg)
+	return h.rewrite(ev.ToolInput, ShellQuote(h.Self)+" run -- "+ShellQuote(h.Shell)+" -c "+ShellQuote(cmd), true, bg)
 }
 
 // gate puts "beekeeper gate --" before every blocking devctl command at a
@@ -478,9 +474,18 @@ func closingQuote(s string, q byte) int {
 	return len(s)
 }
 
+// backgroundExport starts every background Bash call: a beekeeper run
+// anywhere in it, reached directly, after a cd or export chain or through a
+// script, inherits it and waits the background wait.
+var backgroundExport = "export " + BackgroundEnv + "=1; "
+
 // rewrite allows the call with cmd as its command when changed, a
-// foreground call's timeout raised to the Bash tool's 10 minutes.
+// foreground call's timeout raised to the Bash tool's 10 minutes; a
+// background call's command always starts with backgroundExport.
 func (h Hook) rewrite(input map[string]any, cmd string, changed, bg bool) []byte {
+	if bg {
+		cmd, changed = backgroundExport+cmd, true
+	}
 	if !changed {
 		return nil
 	}

@@ -53,8 +53,11 @@ Bound the command's parallelism rather than raising --max.
 
 When every slot is held, or MemAvailable is below the cap, run waits up to
 --wait, one line when the wait starts and one when it ends. A wait that runs
-out exits 75 and lists the holders: run the command in the background
-instead (the PreToolUse hook then sets a 60m wait), never poll.
+out exits 75, states the wait it applied and lists the holders: run the
+command in the background instead, never poll. The wait is --wait, else
+MEMCAP_WAIT, else 8m, or 60m in a background Bash call: the PreToolUse hook
+exports MEMCAP_BACKGROUND=1 into every background call, so a run reached
+directly, after a cd or export chain or through a script gets the 60m.
 
 The slots are memcap's flock files, shared with the memcap wrapper. The
 command's arguments reach it verbatim: systemd-run's own ${VAR} expansion is
@@ -77,7 +80,7 @@ share while the desktop wants the cores too; run sets both at every slot it
 takes, the slots share them by equal weight, and the command starts at nice
 10. snapshot and free show the slice's budget and use.
 
-Environment: MEMCAP_MAX (memcap.max, default 14% of RAM), MEMCAP_SWAP (0), MEMCAP_WAIT (8m),
+Environment: MEMCAP_MAX (memcap.max, default 14% of RAM), MEMCAP_SWAP (0), MEMCAP_WAIT (8m, 60m with MEMCAP_BACKGROUND=1),
 MEMCAP_SLOTS and MEMCAP_STATE (the directory holding slots/) override the
 configuration; the flags override the environment. MEMCAP_TEST=1 marks a
 test's run: its scope is memcap-test-…, and snapshot and watch report a
@@ -113,10 +116,8 @@ kill in it as a test kill, not a build's.`,
 			if f.Changed("swap") {
 				o.Swap = swapFlag
 			}
-			wait := env("MEMCAP_WAIT", "8m")
-			if f.Changed("wait") {
-				wait = waitFlag
-			}
+			var wait string
+			wait, o.WaitFrom, o.Background = guard.ResolveWait(waitFlag, f.Changed("wait"))
 			var err error
 			if o.Wait, err = guard.ParseWait(wait); err != nil {
 				return usageErr("%v", err)
@@ -135,7 +136,7 @@ kill in it as a test kill, not a build's.`,
 	c.Flags().SetInterspersed(false)
 	c.Flags().StringVar(&maxFlag, "max", "", "the command's memory cap, a systemd size (default $MEMCAP_MAX or memcap.max)")
 	c.Flags().StringVar(&swapFlag, "swap", "", "the command's swap cap (default $MEMCAP_SWAP or 0)")
-	c.Flags().StringVar(&waitFlag, "wait", "", "how long to wait for a slot and memory (default $MEMCAP_WAIT or 8m)")
+	c.Flags().StringVar(&waitFlag, "wait", "", "how long to wait for a slot and memory (default $MEMCAP_WAIT, else 8m, 60m in a background call)")
 	return c
 }
 
