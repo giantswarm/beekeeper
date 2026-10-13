@@ -14,9 +14,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
@@ -128,40 +130,67 @@ func (c *Client) Tool(name string) string { return "x_" + c.cfg.Server + "_" + n
 // Call calls the central instance's tool with args and decodes its
 // structured result into v (nil: none wanted). It returns the tool's text.
 // A refusal is *Refused; a call that did not reach the instance is
-// *Unreachable.
+// *Unreachable, naming the stage that timed out and its deadline. Each call
+// connects afresh: a stalled connection of an earlier call is never reused.
 func (c *Client) Call(ctx context.Context, tool string, args map[string]any, v any) (string, error) {
+	deadline := c.cfg.Timeout.Duration
+	if dl, ok := ctx.Deadline(); ok && time.Until(dl) < deadline {
+		deadline = time.Until(dl).Round(time.Millisecond)
+	}
 	ctx, cancel := context.WithTimeout(ctx, c.cfg.Timeout.Duration)
 	defer cancel()
 	url, err := c.endpoint(ctx)
 	if err != nil {
-		return "", err
+		return "", c.timedOut(ctx, stageConnect, deadline, err)
 	}
 	token, err := c.token(ctx)
 	if err != nil {
-		return "", err
+		return "", c.timedOut(ctx, stageAuth, deadline, err)
 	}
-	mc, err := client.NewStreamableHttpClient(url, transport.WithHTTPHeaders(map[string]string{"Authorization": "Bearer " + token}))
+	tr := baseTransport.Clone()
+	defer tr.CloseIdleConnections()
+	mc, err := client.NewStreamableHttpClient(url, transport.WithHTTPBasicClient(&http.Client{Transport: tr}),
+		transport.WithHTTPHeaders(map[string]string{"Authorization": "Bearer " + token}))
 	if err != nil {
 		return "", c.unreachable("%v", err)
 	}
 	defer func() { _ = mc.Close() }()
 	if err := mc.Start(ctx); err != nil {
-		return "", c.unreachable("%v", err)
+		return "", c.timedOut(ctx, stageConnect, deadline, c.unreachable("%v", err))
 	}
 	init := mcp.InitializeRequest{}
 	init.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
 	init.Params.ClientInfo = mcp.Implementation{Name: project.Name, Version: project.Version()}
 	if _, err := mc.Initialize(ctx, init); err != nil {
-		return "", c.unreachable("muster at %s: %v", url, err)
+		return "", c.timedOut(ctx, stageConnect, deadline, c.unreachable("muster at %s: %v", url, err))
 	}
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "call_tool"
 	req.Params.Arguments = map[string]any{"name": c.Tool(tool), "arguments": args}
 	res, err := mc.CallTool(ctx, req)
 	if err != nil {
-		return "", c.unreachable("muster: %s: %v", c.Tool(tool), err)
+		return "", c.timedOut(ctx, stageToolCall, deadline, c.unreachable("muster: %s: %v", c.Tool(tool), err))
 	}
 	return c.result(tool, res, v)
+}
+
+// baseTransport is what each call's own transport is cloned from.
+var baseTransport = http.DefaultTransport.(*http.Transport)
+
+// The stages of a call, as a timeout names them.
+const (
+	stageConnect  = "connect"
+	stageAuth     = "auth"
+	stageToolCall = "tool call"
+)
+
+// timedOut is err, or Unreachable naming stage and deadline when the call's
+// deadline ran out in it.
+func (c *Client) timedOut(ctx context.Context, stage string, deadline time.Duration, err error) error {
+	if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return err
+	}
+	return c.unreachable("%s timed out (deadline %s)", stage, deadline)
 }
 
 // result unwraps muster's call_tool result: its text is the envelope of
