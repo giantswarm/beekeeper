@@ -36,6 +36,7 @@ Without a subcommand, lists the open notes.`,
 	}
 	var forWho, due, overtaken, replaces string
 	var pin bool
+	var foldInto int
 	var refs []string
 	var draft noteDraft
 	add := &cobra.Command{
@@ -54,9 +55,15 @@ asking back: --status-quo and --why, every
 released, rolled or closed. A note that links an open pull request of a
 plans repository (plans.repositories) is refused while that pull request's
 stage check (plans.check, default plan-stages) is red, pending or missing,
-naming what the check found. A checked note on an issue or PR that an open
-note for the same person names, asking the same verb (the first word of
-the text), folds into that note (note.folded). A --kind login note closes
+naming what the check found. A checked note folds into the open note for
+the same person (note.folded) only when it asks the same question (the same
+text once case, spacing and closing punctuation are set aside) on the same
+issue or PR: its --ref, else the first URL of its --status-quo; URLs cited
+as context and a shared first word never fold. The same question with a
+different --default or recommended option is refused, naming the open note:
+fold it with --fold-into <n> (the open note's default and recommendation
+stand) or ask a different question. --fold-into <n> folds into open note n
+for the same person whatever the question. A --kind login note closes
 once its --until probe, a shell command the watch runs every tick, exits 0.
 A memo is not checked. A note for a person
 that asks again what was answered for that person within the last 72
@@ -143,6 +150,9 @@ and tells the session that filed it.`,
 					return err
 				}
 			}
+			if foldInto != 0 && replaces != "" {
+				return usageErr("--fold-into and --replaces: a note folds into one note or replaces one, not both")
+			}
 			old := 0
 			if replaces != "" {
 				ids, err := parseIDs([]string{replaces}, "note")
@@ -152,6 +162,11 @@ and tells the session that filed it.`,
 				old = ids[0]
 			}
 			var folded *state.Note
+			fold := func(o *state.Note, why string) []state.Event {
+				o.Text += fmt.Sprintf(" | Also from %s: %s", me.Name, n.Text)
+				folded = o
+				return []state.Event{event(me, "note.folded", "into #%d (%s): %s", o.ID, why, n.Text)}
+			}
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				var replaced *state.Note
 				if old != 0 {
@@ -163,11 +178,22 @@ and tells the session that filed it.`,
 					replaced = &r
 					st.Notes = slices.Delete(st.Notes, i, i+1)
 					n.Pinned = n.Pinned || r.Pinned
+				} else if foldInto != 0 {
+					i := slices.IndexFunc(st.Notes, func(o state.Note) bool { return o.ID == foldInto })
+					if i < 0 {
+						return nil, refused("note #%d is not open: nothing to fold into", foldInto)
+					}
+					if o := &st.Notes[i]; !strings.EqualFold(o.For, n.For) {
+						return nil, refused("note #%d is for %q, this one for %q: a note folds into one for the same person", o.ID, o.For, n.For)
+					}
+					return fold(&st.Notes[i], "--fold-into"), nil
 				} else if checked {
-					if o, ref := foldTarget(st.Notes, n, draft.Question); o != nil {
-						o.Text += fmt.Sprintf(" | Also from %s: %s", me.Name, n.Text)
-						folded = o
-						return []state.Event{event(me, "note.folded", "into #%d (%s, %s): %s", o.ID, ref, verb(draft.Question), n.Text)}, nil
+					if o, ref := foldTarget(st.Notes, &n); o != nil {
+						if c := foldConflict(o, &n); len(c) > 0 {
+							return nil, refused("note #%d for %s asks the same question on %s, but %s: fold into it with --fold-into %d (its default and recommendation stand) or ask a different question",
+								o.ID, o.For, ref, strings.Join(c, " and "), o.ID)
+						}
+						return fold(o, ref+", the same question"), nil
 					}
 				}
 				st.NextNote++
@@ -183,7 +209,11 @@ and tells the session that filed it.`,
 				return err
 			}
 			if folded != nil {
-				_, err = fmt.Fprintf(a.out, "note #%d (folded: it asks the same on the same issue or PR)\n", folded.ID)
+				why := "it asks the same question on the same issue or PR"
+				if foldInto != 0 {
+					why = "--fold-into: its default and recommendation stand"
+				}
+				_, err = fmt.Fprintf(a.out, "note #%d (folded: %s)\n", folded.ID, why)
 				return err
 			}
 			if old != 0 {
@@ -206,6 +236,7 @@ and tells the session that filed it.`,
 	add.Flags().StringVar(&draft.Kind, "kind", "", `"decision" (the default for the guide's person), "memo" (the default otherwise) or "login" (a sign-in, closed once --until passes)`)
 	add.Flags().StringVar(&replaces, "replaces", "", "a note this one replaces: it closes in the same step (note.replaced)")
 	add.Flags().StringVar(&draft.Until, "until", "", "a login note's probe: a shell command that exits 0 once signed in")
+	add.Flags().IntVar(&foldInto, "fold-into", 0, "an open note for the same person this one folds into, whatever it asks: that note's default and recommendation stand")
 	add.Flags().StringArrayVar(&refs, "ref", nil, "an issue or pull request the note asks about, owner/repo#n (repeatable): the note closes once all are closed or merged")
 	done := &cobra.Command{
 		Use:   "done <id>...",

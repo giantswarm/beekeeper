@@ -249,9 +249,10 @@ func verb(question string) string {
 	return strings.ToLower(strings.Trim(f[0], ".,:;!?\"'`"))
 }
 
-// foldTarget is the open note for the same person that asks the same verb
-// on one of the same issues or PRs as n, or nil.
-func foldTarget(notes []state.Note, n state.Note, question string) (*state.Note, string) {
+// sameVerb is the note for the same person that asks the same verb on one
+// of the same issues or PRs as n, or nil: the looser match that warns of
+// a question answered before.
+func sameVerb(notes []state.Note, n state.Note, question string) (*state.Note, string) {
 	v, rs := verb(question), refs(n.Text)
 	if v == "" || len(rs) == 0 {
 		return nil, ""
@@ -268,6 +269,71 @@ func foldTarget(notes []state.Note, n state.Note, question string) (*state.Note,
 		}
 	}
 	return nil, ""
+}
+
+// sameQuestion normalises a question for the fold: case, spacing and the
+// closing punctuation aside.
+func sameQuestion(q string) string {
+	return strings.TrimRight(strings.ToLower(strings.Join(strings.Fields(q), " ")), ".?!:; ")
+}
+
+// foldKeys are the issues and PRs a note is filed on, as owner/repo#N in
+// lower case: its --ref, else the first URL of its status quo. URLs its
+// question or status quo cite as context are no key.
+func foldKeys(n *state.Note) []string {
+	if len(n.Refs) > 0 {
+		out := make([]string, len(n.Refs))
+		for i, r := range n.Refs {
+			out[i] = strings.ToLower(r)
+		}
+		return out
+	}
+	rs := refs(n.StatusQuo)
+	return rs[:min(1, len(rs))]
+}
+
+// foldTarget is the open note for the same person that asks the same
+// question (sameQuestion) on one of the same issues or PRs (foldKeys) as
+// n, or nil.
+func foldTarget(notes []state.Note, n *state.Note) (*state.Note, string) {
+	q, keys := sameQuestion(n.Question), foldKeys(n)
+	if q == "" || len(keys) == 0 {
+		return nil, ""
+	}
+	for i := range notes {
+		o := &notes[i]
+		if !strings.EqualFold(o.For, n.For) || sameQuestion(o.Question) != q {
+			continue
+		}
+		for _, k := range keys {
+			if slices.Contains(foldKeys(o), k) {
+				return o, k
+			}
+		}
+	}
+	return nil, ""
+}
+
+// foldConflict names what n would lose folded into o: a different
+// --default or recommended option. Empty when the fold loses nothing.
+func foldConflict(o, n *state.Note) []string {
+	var out []string
+	if sameQuestion(o.Default) != sameQuestion(n.Default) {
+		out = append(out, fmt.Sprintf("--default %q, not %q", o.Default, n.Default))
+	}
+	if ro, rn := recommended(o), recommended(n); ro != rn {
+		out = append(out, fmt.Sprintf("recommends %q, not %q", ro, rn))
+	}
+	return out
+}
+
+// recommended is the label of the option n recommends, or "".
+func recommended(n *state.Note) string {
+	if n.Recommend < 1 || n.Recommend > len(n.Options) {
+		return ""
+	}
+	label, _, _ := strings.Cut(n.Options[n.Recommend-1], ":")
+	return strings.ToLower(strings.TrimSpace(label))
 }
 
 // probeLogins runs the probe of every open login note and returns the

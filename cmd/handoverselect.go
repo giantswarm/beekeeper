@@ -220,7 +220,7 @@ func repeats(recent []answered, n state.Note, question string) (*answered, strin
 		j := len(recent) - 1 - i
 		notes[i] = state.Note{ID: j, For: recent[j].For, Text: recent[j].Question}
 	}
-	o, ref := foldTarget(notes, n, question)
+	o, ref := sameVerb(notes, n, question)
 	if o == nil {
 		return nil, ""
 	}

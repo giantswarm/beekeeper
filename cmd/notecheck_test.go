@@ -109,29 +109,91 @@ func TestNoteAddRefusesAndAcceptsForThePerson(t *testing.T) {
 	}
 }
 
-func TestNoteOnTheSameRefAndVerbFolds(t *testing.T) {
+func TestNoteFoldsOnlyTheSameQuestion(t *testing.T) {
 	a, out := noteApp(t)
-	args := []string{flagFor, notePerson, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "--due", "3h"}
-	if err := addNote(a, append(args, "approve "+prURL)...); err != nil {
+	args := append(slices.Clone(decisionArgs), "--ref", prURL)
+	if err := addNote(a, append(args, "Approve the release "+prURL+"?")...); err != nil {
 		t.Fatal(err)
 	}
 	a.as = "Agent two"
-	if err := addNote(a, append(args, "Approve the release, "+strings.ToUpper(prURL[:8])+prURL[8:])...); err != nil {
+	// The same question, case, spacing and punctuation aside: it folds.
+	if err := addNote(a, append(args, "approve  the release "+strings.ToUpper(prURL[:8])+prURL[8:]+"?!")...); err != nil {
 		t.Fatal(err)
 	}
-	if err := addNote(a, append(args, "review "+prURL)...); err != nil {
+	// The same first word, the same PR, another question: its own note.
+	if err := addNote(a, append(args, "Approve the changelog of "+prURL+"?")...); err != nil {
 		t.Fatal(err)
 	}
 	st, _ := a.store.Read()
-	if len(st.Notes) != 2 || !strings.Contains(st.Notes[0].Text, "| Also from Agent two: Approve the release") {
-		t.Fatalf("the second approve folds, the review does not: %+v", st.Notes)
+	if len(st.Notes) != 2 || !strings.Contains(st.Notes[0].Text, "| Also from Agent two: approve  the release") {
+		t.Fatalf("the restated question folds, the other one does not: %+v", st.Notes)
 	}
-	if !strings.Contains(out.String(), "note #1 (folded") {
+	if !strings.Contains(out.String(), "note #1 (folded: it asks the same question") || !strings.HasSuffix(out.String(), "note #2\n") {
 		t.Fatalf("printed %q", out.String())
 	}
 	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "note.folded" })
-	if err != nil || len(evs) != 1 || !strings.Contains(evs[0].Detail, "into #1 (o/r#7, approve)") {
+	if err != nil || len(evs) != 1 || !strings.Contains(evs[0].Detail, "into #1 (o/r#7, the same question)") {
 		t.Fatalf("events %+v, %v", evs, err)
+	}
+}
+
+func TestNoteWithAnotherDefaultIsRefusedOrFoldedExplicitly(t *testing.T) {
+	a, out := noteApp(t)
+	base := []string{flagFor, notePerson, flagStatusQuo, sqNow, flagWhy, whyNow, flagDue, "3h", "--ref", prURL}
+	if err := addNote(a, append(base, "--default", dfltOK, "Approve the release?")...); err != nil {
+		t.Fatal(err)
+	}
+	other := append(slices.Clone(base), "--default", "the release ships tomorrow", "approve the release")
+	err := addNote(a, other...)
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "note #1 for Pat asks the same question on o/r#7") ||
+		!strings.Contains(err.Error(), "--fold-into 1") || !strings.Contains(err.Error(), `--default "`+dfltOK+`"`) {
+		t.Fatalf("the same question with another default: %v", err)
+	}
+	if err := addNote(a, append([]string{"--fold-into", "1"}, other...)...); err != nil {
+		t.Fatalf("an explicit fold: %v", err)
+	}
+	st, _ := a.store.Read()
+	if len(st.Notes) != 1 || st.Notes[0].Default != dfltOK || !strings.Contains(out.String(), "note #1 (folded: --fold-into") {
+		t.Fatalf("folded explicitly, the open note's default stands: %+v, %q", st.Notes, out.String())
+	}
+	if err := addNote(a, "--fold-into", "1", flagFor, "Supervisor", "a memo"); Code(err) != ExitRefused {
+		t.Fatalf("a fold into another person's note: %v", err)
+	}
+	if err := addNote(a, "--fold-into", "9", "a memo"); Code(err) != ExitRefused {
+		t.Fatalf("a fold into no open note: %v", err)
+	}
+	if err := addNote(a, "--fold-into", "1", "--replaces", "1", "a memo"); Code(err) != ExitUsage {
+		t.Fatalf("--fold-into with --replaces: %v", err)
+	}
+}
+
+func TestNoteFoldKeysOnItsRefNotOnCitedURLs(t *testing.T) {
+	a, _ := noteApp(t)
+	plan, tools := "https://github.com/o/plans/pull/136", "https://github.com/o/tools/pull/9"
+	args := []string{flagFor, notePerson, flagWhy, whyNow, flagDue, "3h"}
+	// Two questions opening with "Does", one citing the other's PR as
+	// context: their refs differ, so two notes.
+	if err := addNote(a, append(args, flagStatusQuo, "the toolchain "+tools+" waits", "--default", dfltOK, "--ref", tools, "Does the toolchain ship Go 1.26?")...); err != nil {
+		t.Fatal(err)
+	}
+	if err := addNote(a, append(args, flagStatusQuo, "the plan "+plan+" cites "+tools, "--default", "the plan keeps its testing section", "Does the testing plan of "+plan+" cover "+tools+"?")...); err != nil {
+		t.Fatal(err)
+	}
+	// Two different questions on one plan PR, each with its own default:
+	// two notes.
+	for i, q := range []string{"Does the plan keep its stages?", "Does the plan name its owner?"} {
+		if err := addNote(a, append(args, flagStatusQuo, "the plan "+plan+" is open", "--default", "default "+string(rune('A'+i)), q)...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st, _ := a.store.Read()
+	if len(st.Notes) != 4 {
+		t.Fatalf("four distinct questions stay four notes: %+v", st.Notes)
+	}
+	for i, d := range []string{dfltOK, "the plan keeps its testing section", "default A", "default B"} {
+		if st.Notes[i].Default != d {
+			t.Errorf("note #%d default %q, want %q", st.Notes[i].ID, st.Notes[i].Default, d)
+		}
 	}
 }
 
