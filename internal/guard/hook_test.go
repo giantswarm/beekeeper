@@ -53,6 +53,9 @@ func decideEvent(t *testing.T, h Hook, ev map[string]any) *decision {
 // testShell is the shell the tests' hook rewrites into.
 const testShell = "zsh"
 
+// labUp creates a lab.
+const labUp = "agentlab up"
+
 func hook(clusters ...string) Hook {
 	return Hook{Self: self, Shell: testShell, MaxLabs: func() int { return 2 }, Production: "gazelle",
 		ContextHint: "teleport.giantswarm.io-<installation>", Clusters: func() []string { return clusters },
@@ -124,7 +127,7 @@ func TestHeavyClassification(t *testing.T) {
 	}{
 		// lab commands: the lab-count guard and the lab lease govern them
 		{"agentlab platform up", false},
-		{"agentlab up", false},
+		{labUp, false},
 		{"agentlab platform", false},
 		{"agentlab test", false},
 		{"agentlab platform-test", false},
@@ -210,7 +213,7 @@ func TestThirdLabIsRefused(t *testing.T) {
 	}
 	// Re-running a lab that runs, or a second lab, is fine, and no build: it passes unwrapped.
 	for _, h := range []Hook{hook("agentlab-1", "agentlab-2"), hook("agentlab-1")} {
-		if d := decide(t, h, lab, "agentlab up", nil); d != nil {
+		if d := decide(t, h, lab, labUp, nil); d != nil {
 			t.Errorf("want pass-through, got %+v", d)
 		}
 	}
@@ -218,6 +221,43 @@ func TestThirdLabIsRefused(t *testing.T) {
 	h.Leases = func() []lease.Holder { return nil }
 	if d := decide(t, h, "/", "kind create cluster", nil); d == nil || !strings.HasSuffix(d.Reason, "leases:\nnone held") {
 		t.Errorf("no leases: got %+v", d)
+	}
+}
+
+// TestLabGuardReadsCommands: the lab guard refuses a lab command the shell
+// runs, never the words of a here-document, a quoted string or a script's
+// string literal.
+func TestLabGuardReadsCommands(t *testing.T) {
+	for _, tc := range []struct {
+		name, cmd string
+		refused   bool
+	}{
+		{"a here-document's text", "python3 - <<'EOF'\nimport pathlib\np = pathlib.Path('docs/lab.md')\np.write_text('''Start it:\n\nagentlab up\n''')\nEOF", false},
+		{"a file written from a here-document", "cat > notes.md <<EOF\nagentlab up\nkind create cluster\nEOF", false},
+		{"a quoted string", `echo "run agentlab up first"`, false},
+		{"a quoted string after a separator", `git commit -m "x; agentlab up"`, false},
+		{"a python literal", `python3 -c 'import subprocess; print("agentlab up")'`, false},
+		{"a grep pattern", "grep -rn 'agentlab up' docs/", false},
+		{"the command", labUp, true},
+		{"after a separator", "x; agentlab up", true},
+		{"after &&", "cd /nowhere && agentlab up", true},
+		{"in a pipeline", "true | agentlab up", true},
+		{"a command substitution", "$(agentlab up)", true},
+		{"a command substitution in double quotes", `echo "$(agentlab up)"`, true},
+		{"in a subshell", "(agentlab up)", true},
+		{"after then", "if true; then agentlab up; fi", true},
+		{"a shell's -c string", "bash -c 'agentlab up'", true},
+		{"a here-document a shell reads", "bash <<'EOF'\nagentlab up\nEOF", true},
+		{"kind create cluster", "kind create cluster --name spare", true},
+	} {
+		d := decide(t, hook("a", "b"), "/", tc.cmd, nil)
+		refused := d != nil && d.PermissionDecision == decisionDeny
+		if refused != tc.refused {
+			t.Errorf("%s: %q refused = %v, want %v (%+v)", tc.name, tc.cmd, refused, tc.refused, d)
+		}
+		if refused && !strings.Contains(d.Reason, "kind labs already run") {
+			t.Errorf("%s: refused by another guard: %s", tc.name, d.Reason)
+		}
 	}
 }
 
