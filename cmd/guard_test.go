@@ -19,6 +19,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
+	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -40,6 +41,11 @@ func TestMain(m *testing.M) {
 			return d
 		}
 		return ""
+	}
+	// The test binary is the askpass helper too, as the beekeeper binary
+	// is: the helper copy --git-askpass writes runs this executable.
+	if len(os.Args) > len(secret.AskpassArgs) && slices.Equal(os.Args[1:1+len(secret.AskpassArgs)], secret.AskpassArgs) {
+		os.Exit(Main())
 	}
 	if len(os.Args) > 1 && os.Args[1] == "__alloc" {
 		b := make([]byte, 512<<20)

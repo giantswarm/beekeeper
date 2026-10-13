@@ -364,3 +364,20 @@ func (a *app) sandboxPaths(read, write []string) error {
 	}
 	return nil
 }
+
+// sandboxDir holds a sandboxed session's brokered call to a working
+// directory its sandbox lets it read: the broker starts the call, and the
+// call its consumer, in the requester's directory.
+func (a *app) sandboxDir() error {
+	if os.Getenv(sandbox.Brokered) == "" || os.Getenv(sandbox.Env) == "" {
+		return nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	if !a.sandboxPolicy().Readable(cwd, "") {
+		return refused("%s: the agent sandbox does not let this session work in this directory", cwd)
+	}
+	return nil
+}
