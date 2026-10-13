@@ -109,7 +109,11 @@ or "wake turn running".`,
 	register := &cobra.Command{
 		Use:   "register",
 		Short: "Register the calling session as an idle agent",
-		Args:  cobra.NoArgs,
+		Long: `Register the calling session as an idle agent, named by its title unless
+--name overrides it. A caller whose parent chain passes two claude session
+CLIs, a claude started inside another session, is refused with the name of
+that parent session, whose ids it inherits and whose entry stays as it is.`,
+		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			me, err := a.caller()
 			if err != nil {

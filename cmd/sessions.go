@@ -281,7 +281,8 @@ line when the session ends, naming the issue to re-query. The session is a
 session id, a PID, a session's own name or a registered agent's roster name,
 or a unique part of a name; a whole name wins over a part of another. A
 registered agent whose CLI does not run is recorded too, and the line says
-so.`,
+so. The record stores the roster name of a registered agent, the session's
+own name otherwise.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error {
 			if !issueRef.MatchString(args[1]) {
