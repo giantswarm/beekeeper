@@ -21,6 +21,6 @@ description: Merging, promoting or tagging on a beekeeper desk: the gate, its ex
 - **A release candidate is proven live and promoted as routine**; the person is never asked to
   promote or merge.
 - **Commits.** Conventional subjects of at most 72 characters; no major version bumps.
-- **A rebase-merge line** (merged with `--rebase`) never merges its base into a branch, which only
-  hides a conflict until the merge: a PR there that conflicts with its base (the gate refuses it
-  before it queues) is replaced at once by a new PR from a fresh branch of the base.
+- **A rebase-merge line** (`--rebase`) never merges its base into a branch, which hides a conflict:
+  a PR only behind its base the gate rebases at its turn; one that conflicts (refused before it
+  queues or at its turn) is replaced at once by a PR from a fresh branch of the base.

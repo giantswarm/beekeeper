@@ -79,7 +79,13 @@ installation holds it too); so do a GitHub budget unknown and a lane
 installation that cannot be read. A rebase merge (--rebase) GitHub reports
 not rebaseable or conflicting with its base is refused (77) before it takes
 a lane place, the way out a replacement PR; GitHub not answering whether it
-rebases refuses too. Under the budget floor the merge is
+rebases refuses too. At its turn a rebase merge is read again: one only
+behind a base that requires branches to be up to date (the merge ahead of
+it landed) is rebased onto its base on GitHub's side (Update with rebase,
+never a base merge into the branch), the new head awaited, and devctl runs
+on it, waiting for its checks; one that conflicts by then, or that GitHub
+does not rebase, is refused (77) with nothing merged, naming the
+replacement PR. Under the budget floor the merge is
 queued for the reset (exit 76, as below): a run of its own waits for the
 budget and merges as below; a merge marked urgent (lanes urgent)
 runs under the floor instead, once per reset window. Otherwise the merge
@@ -649,17 +655,23 @@ func (g *gateRun) checkCandidate() error {
 	if err == nil && now == g.candidate {
 		return nil
 	}
+	if err != nil {
+		return g.refuseRunning("its turn came, and the release candidate of %s is unknown (%v): nothing promoted; run the same command again", g.repo, err)
+	}
+	return g.refuseRunning("%s was queued for %s, the newest is %s now: nothing promoted, its place is dropped; decide again whether to promote it",
+		g.key(), candidateText(g.candidate), candidateText(now))
+}
+
+// refuseRunning refuses the merge whose turn came, its place running: the
+// place leaves the lane, which the next merge takes.
+func (g *gateRun) refuseRunning(format string, args ...any) error {
 	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
 		if i := g.mine(st, state.Running); i >= 0 {
 			st.Merges = slices.Delete(st.Merges, i, i+1)
 		}
 		return nil, nil
 	})
-	if err != nil {
-		return g.refuse("its turn came, and the release candidate of %s is unknown (%v): nothing promoted; run the same command again", g.repo, err)
-	}
-	return g.refuse("%s was queued for %s, the newest is %s now: nothing promoted, its place is dropped; decide again whether to promote it",
-		g.key(), candidateText(g.candidate), candidateText(now))
+	return g.refuse(format, args...)
 }
 
 // candidateText names a release candidate, "" as none.
@@ -733,6 +745,39 @@ func (g *gateRun) readRelease() error {
 // has not computed yet.
 const rebaseReads = 3
 
+// readRebase reads whether the pull request rebases onto its base, again
+// while GitHub has not computed it, up to rebaseReads reads.
+func (g *gateRun) readRebase() (github.Rebase, error) {
+	for try := 1; ; try++ {
+		ctx, cancel := context.WithTimeout(g.ctx, time.Minute)
+		r, err := pullRebase(ctx, g.repo, g.pr)
+		cancel()
+		if err != nil || r.Known && r.State != unknownState || try == rebaseReads {
+			return r, err
+		}
+		select {
+		case <-g.ctx.Done():
+			return r, g.ctx.Err()
+		case <-time.After(rebaseRetry):
+		}
+	}
+}
+
+// unknownState is GitHub's mergeable_state while it computes it.
+const unknownState = "unknown"
+
+// conflictWhy says why GitHub does not rebase-merge r, which conflicts.
+func conflictWhy(r github.Rebase) string {
+	if r.State == github.DirtyState {
+		return "it conflicts with its base (mergeable_state dirty)"
+	}
+	return "GitHub reports it not rebaseable"
+}
+
+// replacementPR is the way out of a rebase merge that cannot be brought onto
+// its base.
+const replacementPR = "Open a replacement PR (a fresh branch from the base with the change applied again; never merge the base into a branch), then merge that one"
+
 // checkRebase refuses a rebase merge GitHub reports conflicting with its
 // base before it takes a lane place: devctl would refuse it only at its turn
 // (exit 3, "This branch can't be rebased"), and a base merged into the
@@ -740,38 +785,80 @@ const rebaseReads = 3
 // refuses; a rebase GitHub has not computed after rebaseReads reads queues,
 // devctl judging it at its turn.
 func (g *gateRun) checkRebase() error {
-	var r github.Rebase
-	for try := 1; ; try++ {
-		ctx, cancel := context.WithTimeout(g.ctx, time.Minute)
-		var err error
-		r, err = pullRebase(ctx, g.repo, g.pr)
-		cancel()
-		if err != nil {
-			return g.refuse("whether %s rebases onto its base cannot be read (%v): run the same command again", g.key(), err)
-		}
-		if r.Known || try == rebaseReads {
-			break
-		}
-		select {
-		case <-g.ctx.Done():
-			return g.ctx.Err()
-		case <-time.After(rebaseRetry):
-		}
-	}
+	r, err := g.readRebase()
 	switch {
+	case err != nil:
+		return g.refuse("whether %s rebases onto its base cannot be read (%v): run the same command again", g.key(), err)
 	case r.Conflicts():
-		why := "GitHub reports it not rebaseable"
-		if r.State == github.DirtyState {
-			why = "it conflicts with its base (mergeable_state dirty)"
-		}
-		return g.refuse("%s cannot be rebased onto its base: %s; a rebase merge fails at its turn, so it takes no lane place. "+
-			"Open a replacement PR (a fresh branch from the base with the change applied again; never merge the base into a branch), then merge that one",
-			g.key(), why)
+		return g.refuse("%s cannot be rebased onto its base: %s; a rebase merge fails at its turn, so it takes no lane place. %s",
+			g.key(), conflictWhy(r), replacementPR)
 	case !r.Known:
-		gateLine("GitHub has not computed whether %s rebases (mergeable_state %s): it queues, devctl judges the rebase at its turn", g.key(), cmp.Or(r.State, "unknown"))
+		gateLine("GitHub has not computed whether %s rebases (mergeable_state %s): it queues, devctl judges the rebase at its turn", g.key(), cmp.Or(r.State, unknownState))
 	}
 	return nil
 }
+
+// catchUp brings a rebase merge whose turn came onto its base when it is
+// only behind it: the merge ahead of it in the lane landed, and a base that
+// requires branches to be up to date refuses the merge until it is updated
+// (devctl's exit 3, "behind"). GitHub rebases the head (Update with rebase,
+// which keeps the line's linear history; devctl's --update-branch merges the
+// base in), the gate awaits the new head, and devctl, the only merger, runs
+// on it and waits for its checks. A merge that conflicts by now, or that
+// GitHub does not rebase, is refused with nothing merged; one GitHub does
+// not answer for runs as it stands, devctl judging it.
+func (g *gateRun) catchUp() error {
+	r, err := g.readRebase()
+	switch {
+	case err != nil:
+		gateLine("whether %s is behind its base cannot be read (%v): devctl judges it as it stands", g.key(), err)
+		return nil
+	case r.Conflicts():
+		return g.refuseRunning("its turn came, and %s cannot be rebased onto its base: %s; nothing merged. %s", g.key(), conflictWhy(r), replacementPR)
+	case !r.Behind():
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(g.ctx, time.Minute)
+	err = updateRebase(ctx, g.repo, g.pr)
+	cancel()
+	if err != nil {
+		return g.refuseRunning("its turn came, and %s is behind its base, which GitHub does not rebase it onto (%v); nothing merged. %s", g.key(), err, replacementPR)
+	}
+	head := g.awaitHead(r.Head)
+	why := fmt.Sprintf("%s was behind its base at its turn: GitHub rebased it onto the base (head %s), devctl waits for that head's checks", g.key(), shortSHA(head))
+	if head == "" {
+		why = fmt.Sprintf("%s was behind its base at its turn: GitHub rebases it onto the base, its new head not reported yet; devctl judges the head it reads", g.key())
+	}
+	gateLine("%s", why)
+	_ = g.store.Log(event(g.me, "merge.rebased", "%s", why))
+	return nil
+}
+
+// headReads is how often the gate reads a rebased pull request for its new
+// head, rebaseRetry apart.
+const headReads = 10
+
+// awaitHead is the pull request's head once it is no longer was, "" when
+// GitHub reports none other within headReads reads.
+func (g *gateRun) awaitHead(was string) string {
+	for try := 1; try <= headReads; try++ {
+		select {
+		case <-g.ctx.Done():
+			return ""
+		case <-time.After(rebaseRetry):
+		}
+		ctx, cancel := context.WithTimeout(g.ctx, time.Minute)
+		r, err := pullRebase(ctx, g.repo, g.pr)
+		cancel()
+		if err == nil && r.Head != "" && r.Head != was {
+			return r.Head
+		}
+	}
+	return ""
+}
+
+// shortSHA is a commit's short form.
+func shortSHA(sha string) string { return sha[:min(len(sha), 9)] }
 
 // handCut is the base branch when no Auto-release run tags a merge into it,
 // "" otherwise.
@@ -975,6 +1062,11 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 	if g.central {
 		if why, err := g.centralStart(); err != nil || why != "" {
 			return why, err
+		}
+	}
+	if g.pr != 0 && merge.Rebase(g.argv) {
+		if err := g.catchUp(); err != nil {
+			return "", err
 		}
 	}
 	err = g.runMerge()

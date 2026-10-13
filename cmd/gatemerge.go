@@ -34,6 +34,9 @@ var (
 	pullRebase = func(ctx context.Context, repo string, n int) (github.Rebase, error) {
 		return github.ReadRebase(ctx, github.RunGH, repo, n)
 	}
+	updateRebase = func(ctx context.Context, repo string, n int) error {
+		return github.UpdateByRebase(ctx, github.RunGH, repo, n)
+	}
 	// rebaseRetry is how long the gate waits for GitHub to compute whether a
 	// pull request rebases before it reads again.
 	rebaseRetry   = 2 * time.Second

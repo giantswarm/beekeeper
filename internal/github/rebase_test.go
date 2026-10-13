@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -15,7 +16,7 @@ func TestReadRebase(t *testing.T) {
 		conflicts bool
 		wantErr   bool
 	}{
-		{"rebaseable", `{"rebaseable":true,"mergeable_state":"clean"}`, nil, Rebase{Known: true, Rebaseable: true, State: "clean"}, false, false},
+		{"rebaseable", `{"rebaseable":true,"mergeable_state":"clean","head":{"sha":"abc"}}`, nil, Rebase{Known: true, Rebaseable: true, State: "clean", Head: "abc"}, false, false},
 		{"not rebaseable", `{"rebaseable":false,"mergeable_state":"clean"}`, nil, Rebase{Known: true, State: "clean"}, true, false},
 		{"a base merge hides it, the state does not", `{"rebaseable":true,"mergeable_state":"dirty"}`, nil, Rebase{Known: true, Rebaseable: true, State: DirtyState}, true, false},
 		{"not computed yet", `{"rebaseable":null,"mergeable_state":"unknown"}`, nil, Rebase{State: "unknown"}, false, false},
@@ -35,5 +36,36 @@ func TestReadRebase(t *testing.T) {
 				t.Errorf("asked %q", asked)
 			}
 		})
+	}
+}
+
+func TestRebaseBehind(t *testing.T) {
+	for _, c := range []struct {
+		r    Rebase
+		want bool
+	}{
+		{Rebase{Known: true, Rebaseable: true, State: BehindState}, true},
+		{Rebase{State: BehindState}, true},
+		{Rebase{Known: true, State: BehindState}, false},
+		{Rebase{Known: true, Rebaseable: true, State: "blocked"}, false},
+		{Rebase{Known: true, Rebaseable: true, State: DirtyState}, false},
+	} {
+		if got := c.r.Behind(); got != c.want {
+			t.Errorf("%+v: behind %v, want %v", c.r, got, c.want)
+		}
+	}
+}
+
+func TestUpdateByRebase(t *testing.T) {
+	var asked []string
+	run := func(_ context.Context, args ...string) ([]byte, error) {
+		asked = append(asked, args...)
+		return nil, errors.New("merge conflict")
+	}
+	if err := UpdateByRebase(context.Background(), run, "o/r", 7); err == nil || err.Error() != "merge conflict" {
+		t.Errorf("error %v, want GitHub's", err)
+	}
+	if want := "pr update-branch 7 --repo o/r --rebase"; strings.Join(asked, " ") != want {
+		t.Errorf("asked %q, want %q", asked, want)
 	}
 }
