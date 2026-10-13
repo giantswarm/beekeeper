@@ -530,7 +530,10 @@ line:
 - reports a title more than one live session carries, each session by PID
   and id: a message by that name reaches neither for sure (a message to a
   role still reaches its holder by its own socket); the watch says SAME
-  TITLE while it lasts.
+  TITLE while it lasts;
+- reports a stale plugin: an enabled beekeeper plugin whose skills differ
+  from the ones this binary embeds, with the plugin's version, the
+  binary's and the commands that update it (beekeeper self-update does).
 
 A session a person started is never archived or retitled, nor one that
 holds or held the supervisor's or the guide's role unless a relay
@@ -568,6 +571,11 @@ faults but remedying none.`,
 			}
 			for _, l := range rep.ungated {
 				lines = append(lines, "ungated merge "+l)
+			}
+			if ps, err := listPlugins(cmd.Context()); err == nil {
+				for _, s := range stalePlugins(ps) {
+					lines = append(lines, s.String())
+				}
 			}
 			if r := a.trimGoCache(dryRun, goBuilds); r.notable() {
 				lines = append(lines, r.String())

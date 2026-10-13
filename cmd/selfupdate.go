@@ -37,7 +37,15 @@ beekeeper watch keeps running (the old binary, until it is restarted), and
 every beekeeper started afterwards is the new one. The update names the
 beekeeper processes it leaves on the old binary (pid and command): once the
 new release writes the state, their saves are refused until they end or are
-restarted (beekeeper doctor lists them meanwhile). GitHub is asked
+restarted (beekeeper doctor lists them meanwhile).
+
+The beekeeper plugin goes with the binary: an update brings every
+installed beekeeper plugin up to its marketplace's latest (claude plugin
+marketplace update, then claude plugin update in the plugin's scope), so
+the role skills it serves are the ones the new binary hands its workers;
+on the latest release a plugin whose skills differ from the binary's is
+brought up the same way. A plugin that stays is said with the command
+that updates it. GitHub is asked
 anonymously, apart from the budget gh and devctl share, unless GITHUB_TOKEN
 is set. A development build (version dev) is refused.`,
 		Args: cobra.NoArgs,
@@ -64,6 +72,9 @@ is set. A development build (version dev) is refused.`,
 				if t, terr := proc.Read(); terr == nil {
 					_, _ = fmt.Fprint(w, leftBehind(staleBinaries(t, os.Getpid(), replacedBinary), res.Current, res.Latest))
 				}
+			}
+			if err == nil && !check {
+				syncPlugins(cmd.Context(), w, res.Updated)
 			}
 			return err
 		},

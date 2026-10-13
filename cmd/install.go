@@ -41,6 +41,10 @@ binary it runs from (or --binary):
   - a starter config, the example configuration with every key commented
     out, when no config exists.
 
+Run from the binary it installs, it also brings an installed beekeeper
+plugin whose skills differ from the binary's up to its marketplace's
+latest, as self-update does.
+
 A file that is already what install writes stays as it is. One an earlier
 install wrote, a unit that runs this binary and a hook entry that runs this
 binary's hook command (with an older matcher, say) are updated in place,
@@ -58,7 +62,13 @@ the config and says the service is not available.`,
 			if err := a.installEnv(&e, binary); err != nil {
 				return err
 			}
-			return install.Install(cmd.Context(), e)
+			if err := install.Install(cmd.Context(), e); err != nil {
+				return err
+			}
+			if binary == "" && !e.DryRun {
+				syncPlugins(cmd.Context(), a.out, false)
+			}
+			return nil
 		},
 	}
 	c.Flags().BoolVar(&e.DryRun, "dry-run", false, "print every step and take none")
