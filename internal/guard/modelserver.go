@@ -71,7 +71,8 @@ func port(raw string) string {
 
 // modelServerRefusal returns why the hook refuses cmd, "" when it passes: a
 // command that loads a model on the host's model server runs only in the
-// session holding the model-server lease.
+// session holding the model-server lease. One that only prints its help or
+// version (helpOnly) loads nothing and passes.
 func (h Hook) modelServerRefusal(cmd, session string) string {
 	if h.ModelServer == nil || h.Leases == nil || !mayLoad.MatchString(cmd) {
 		return ""
@@ -80,7 +81,13 @@ func (h Hook) modelServerRefusal(cmd, session string) string {
 	if re == nil {
 		return ""
 	}
-	m := re.FindStringSubmatch(cmd)
+	var m []string
+	for _, i := range re.FindAllStringSubmatchIndex(cmd, -1) {
+		if notHelp(cmd, i) {
+			m = []string{cmd[i[0]:i[1]], cmd[i[2]:i[3]]}
+			break
+		}
+	}
 	if m == nil {
 		return ""
 	}

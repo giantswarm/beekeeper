@@ -169,6 +169,22 @@ func TestHeavyClassification(t *testing.T) {
 		{"eval 'golangci-lint run'", true},
 		{"bash <<'EOF'\ngo test ./...\nEOF", true},
 		{"x=\"$(make image)\"", true},
+		// a help or version flag builds nothing, whatever the command word
+		{"govulncheck -h", false},
+		{"golangci-lint --version", false},
+		{"go version", false},
+		{"go help test", false},
+		{"go env GOPATH", false},
+		{"govulncheck -version", false},
+		{"cd ~/src/x && govulncheck -h 2>&1 | head -30", false},
+		{"go test --help", false},
+		{"golangci-lint run --help > /dev/null", false},
+		{"bash -c 'golangci-lint help'", false},
+		{"govulncheck ./...", true},
+		{"govulncheck -h ./...", true},
+		{"go test ./... --help", true},
+		{"golangci-lint --version && golangci-lint run", true},
+		{"go version && go build ./...", true},
 	} {
 		if got := isHeavy(tc.cmd); got != tc.heavy {
 			t.Errorf("isHeavy(%q) = %v, want %v", tc.cmd, got, tc.heavy)
@@ -269,6 +285,8 @@ func TestLabGuardReadsCommands(t *testing.T) {
 		{"a shell's -c string", "bash -c 'agentlab up'", true},
 		{"a here-document a shell reads", "bash <<'EOF'\nagentlab up\nEOF", true},
 		{"kind create cluster", "kind create cluster --name spare", true},
+		{"its help after a separator", "cd ~/lab && agentlab up --help", false},
+		{"kind create cluster's help", "kind create cluster -h | head", false},
 	} {
 		d := decide(t, hook("a", "b"), "/", tc.cmd, nil)
 		refused := d != nil && d.PermissionDecision == decisionDeny

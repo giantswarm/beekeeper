@@ -347,7 +347,7 @@ func (h Hook) decide(ev event) []byte {
 	}
 
 	if h.Sandbox != nil {
-		if m := commandMatch(labRuntime, cmd, nil); m != nil {
+		if m := commandMatch(labRuntime, cmd, notHelp); m != nil {
 			var held []lease.Holder
 			if h.Leases != nil {
 				held = h.Leases()
@@ -359,7 +359,7 @@ func (h Hook) decide(ev event) []byte {
 				strings.TrimSpace(cmd[m[2]:m[3]]), leaseLines(held))})
 		}
 	}
-	if m := commandMatch(lab, cmd, nil); m != nil {
+	if m := commandMatch(lab, cmd, notHelp); m != nil {
 		running := h.Clusters()
 		target := labTarget(cmd, m, cwd)
 		if limit := h.MaxLabs(); !slices.Contains(running, target) && len(running) >= limit {
@@ -505,10 +505,11 @@ func (h Hook) rewrite(input map[string]any, cmd string, changed, bg bool) []byte
 func Owned(cmd string) bool { return anyOwned.MatchString(cmd) }
 
 // isHeavy reports whether cmd runs a heavy command at a command position of
-// the shell (commandMatch); make with a target that builds nothing is none.
+// the shell (commandMatch); make with a target that builds nothing is none,
+// and so is an invocation that only prints its help or version (helpOnly).
 func isHeavy(cmd string) bool {
 	return commandMatch(heavy, cmd, func(cmd string, m []int) bool {
-		return cmd[m[2]:m[3]] != "make" || !lightMake.MatchString(cmd[m[1]:])
+		return (cmd[m[2]:m[3]] != "make" || !lightMake.MatchString(cmd[m[1]:])) && notHelp(cmd, m)
 	}) != nil
 }
 
