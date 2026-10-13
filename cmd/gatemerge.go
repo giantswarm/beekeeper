@@ -38,10 +38,14 @@ var (
 	rebaseRetry   = 2 * time.Second
 	devctlVersion = toolVersion
 	devctlUpdate  = toolUpdate
-	userSystemd   = plat.Launcher.Available
-	selfExe       = os.Executable
-	runningBinary = func() binary { return liveBinary{platform.RunningBinary()} }
-	gateOutput    = stdoutFile
+	baseChecks    = func(ctx context.Context, repo, base string) (github.BaseChecks, error) {
+		return github.ReadBaseChecks(ctx, github.RunGH, repo, base)
+	}
+	devctlAcceptsRed = toolAcceptsRed
+	userSystemd      = plat.Launcher.Available
+	selfExe          = os.Executable
+	runningBinary    = func() binary { return liveBinary{platform.RunningBinary()} }
+	gateOutput       = stdoutFile
 )
 
 // stdoutFile is the regular file this process's stdout writes to, "" for a
