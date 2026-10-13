@@ -28,8 +28,8 @@ var (
 	// membersWithRole, its teams or a team's members, a user's organizations.
 	membersQuery = regexp.MustCompile(`\bmembersWithRole\b|\borganization\s*\([\s\S]*?\b(?:teams?|members)\s*\(|\buser\s*\([\s\S]*?\borganizations\s*\(`)
 	// ghAPIValued are gh api's flags that take the next word as their value.
-	ghAPIValued = map[string]bool{"-X": true, "--method": true, "-H": true, "--header": true, "-f": true, "--raw-field": true,
-		"-F": true, "--field": true, flagInput: true, "-t": true, flagTemplate: true, "-q": true, "--jq": true,
+	ghAPIValued = map[string]bool{"-X": true, "--method": true, "-H": true, "--header": true, "-f": true, flagRawField: true,
+		"-F": true, flagField: true, flagInput: true, "-t": true, flagTemplate: true, "-q": true, flagJQ: true,
 		"-p": true, "--preview": true, "--hostname": true, "--cache": true}
 )
 

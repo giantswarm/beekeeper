@@ -179,6 +179,13 @@ type Hook struct {
 	// Outbound is the outbound secret guard's configuration; its token
 	// patterns apply without one.
 	Outbound Outbound
+	// Upstream is the upstream guard's configuration (upstream.go); without
+	// organizations it refuses nothing.
+	Upstream Upstream
+	// Refused records the upstream guard's refusal of a session's command
+	// (a hook.refused event) with the repository it aimed at; nil records
+	// nothing.
+	Refused func(session, command, repo string)
 	// Sandbox is the agent sandbox's policy, which the file tools are held
 	// to; nil in a session no sandbox holds.
 	Sandbox *sandbox.Policy
@@ -275,6 +282,9 @@ func (h Hook) decide(ev event) []byte {
 	if r := h.secretFileRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	if w := h.Upstream.connectorWrite(ev.ToolName, ev.ToolInput); w != nil {
+		return h.refuseUpstream(ev.Session, *w)
+	}
 	if ev.ToolName != bashTool {
 		if r := h.Outbound.toolRefusal(ev.ToolName, ev.ToolInput); r != "" {
 			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
@@ -289,6 +299,13 @@ func (h Hook) decide(ev event) []byte {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused: beekeeper's configuration does not load, so its guards cannot run: " +
 			h.ConfigErr.Error() + ". Fix the file (the Edit tool still works), then rerun."})
 	}
+	cwd := ev.CWD
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
+	if w := h.Upstream.bashWrite(cmd, cwd); w != nil {
+		return h.refuseUpstream(ev.Session, *w)
+	}
 	if r := h.kubeRefusal(cmd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
@@ -300,10 +317,6 @@ func (h Hook) decide(ev event) []byte {
 	}
 	if r := h.boardReadRefusal(cmd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
-	}
-	cwd := ev.CWD
-	if cwd == "" {
-		cwd, _ = os.Getwd()
 	}
 	if r := h.membersRefusal(cmd, ev.Session, cwd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})

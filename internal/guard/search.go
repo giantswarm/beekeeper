@@ -19,7 +19,7 @@ var (
 		"--comments": true, "--created": true, "-L": true, "--limit": true, "--interactions": true, "--involves": true,
 		"-l": true, "--label": true, "--language": true, "--match": true, "--mentions": true, "--milestone": true,
 		"--owner": true, "--reactions": true, "--sort": true, "--order": true, "--state": true, "--team-mentions": true,
-		"--updated": true, "--visibility": true, "--json": true, "-q": true, "--jq": true, "-t": true, flagTemplate: true,
+		"--updated": true, "--visibility": true, flagJSON: true, "-q": true, flagJQ: true, "-t": true, flagTemplate: true,
 		"-B": true, "--base": true, "-H": true, "--head": true, "--checks": true, "--merged-at": true, "--review": true,
 		"--review-requested": true, "--reviewed-by": true}
 )
@@ -77,7 +77,7 @@ func ghSearch(words []string) (string, int) {
 			}
 		}
 		for i, w := range words {
-			if (w == "-f" || w == "-F" || w == "--raw-field" || w == "--field") && i+1 < len(words) {
+			if (w == "-f" || w == "-F" || w == flagRawField || w == flagField) && i+1 < len(words) {
 				if q, ok := strings.CutPrefix(words[i+1], "q="); ok {
 					n += len(repoQualifier.FindAllString(q, -1))
 				}
@@ -93,7 +93,7 @@ func searchRepos(args []string) int {
 	n := 0
 	for i := 0; i < len(args); i++ {
 		switch w := args[i]; {
-		case w == "-R" || w == "--repo":
+		case w == "-R" || w == flagRepo:
 			n++
 			i++
 		case strings.HasPrefix(w, "--repo=") || strings.HasPrefix(w, "-R="):
