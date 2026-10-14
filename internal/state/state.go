@@ -672,6 +672,8 @@ type Archive struct {
 	// Tries counts the stewards' turns asked for it, Tried the last.
 	Tries int       `json:"tries,omitempty"`
 	Tried time.Time `json:"tried,omitzero"`
+	// Looked is the last doctor's run that found no steward to ask.
+	Looked time.Time `json:"looked,omitzero"`
 
 	rest rest
 }
