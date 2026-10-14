@@ -13,6 +13,7 @@ const (
 	e2e       = "e2e-test"
 	build     = "go-build"
 	mergeVerb = "merge"
+	lint      = "lint"
 )
 
 // redDocOf is devctl pr merge's red document with checks, each
@@ -86,22 +87,22 @@ func TestJudgeRed(t *testing.T) {
 		{
 			name:     "one let through, one broken: refuses, naming both",
 			doc:      redDocOf(e2e+"|failure", "lint|failure"),
-			base:     base(nil, map[string]string{e2e: github.CheckFail, "lint": github.CheckPass}),
+			base:     base(nil, map[string]string{e2e: github.CheckFail, lint: github.CheckPass}),
 			accepted: []string{e2e},
 			refused:  "lint refuses: green on the head 0123456 of main: this pull request broke it",
 		},
 		{
 			name:    "a red check that died on infrastructure refuses as such, not as the pull request's break",
 			doc:     redDocOf("lint|failure"),
-			base:    base(nil, map[string]string{"lint": github.CheckPass}),
-			infra:   []Infra{{Check: "lint", Repo: "o/r", Run: 7, Job: 9, Signature: "Go module proxy", Line: "stream error"}},
+			base:    base(nil, map[string]string{lint: github.CheckPass}),
+			infra:   []Infra{{Check: lint, Repo: failedRepo, Run: 7, Job: 9, Signature: goProxy, Line: "stream error"}},
 			refused: "lint refuses: a transient infrastructure failure, not this pull request's breakage (Go module proxy: \"stream error\"): rerun the job (`gh run rerun 7 --job 9 --repo o/r`), then the same merge again",
 		},
 		{
 			name:     "a let-through check stays let through whatever its log says",
 			doc:      redDocOf(e2e + "|failure"),
 			base:     base(nil, map[string]string{e2e: github.CheckFail}),
-			infra:    []Infra{{Check: e2e, Repo: "o/r", Run: 7, Job: 9, Signature: "network", Line: "x"}},
+			infra:    []Infra{{Check: e2e, Repo: failedRepo, Run: 7, Job: 9, Signature: "network", Line: "x"}},
 			through:  true,
 			accepted: []string{e2e},
 		},

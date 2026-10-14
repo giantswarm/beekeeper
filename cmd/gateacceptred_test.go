@@ -120,7 +120,7 @@ func TestARedCheckOnAnInfraFlakeIsNotThePullRequestsBreak(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	stubBase(t, github.CheckPass, true)
 	infraReds = func(context.Context, []byte) []merge.Infra {
-		return []merge.Infra{{Check: "e2e-test", Repo: "o/r", Run: 11, Job: 12, Signature: "Go module proxy",
+		return []merge.Infra{{Check: "e2e-test", Repo: scratchRepo, Run: 11, Job: 12, Signature: "Go module proxy",
 			Line: `read "https://proxy.golang.org/golang.org/x/text/@v/v0.41.0.zip": stream error: stream ID 143; INTERNAL_ERROR; received from peer`}}
 	}
 	_ = gateStdout(t)

@@ -317,7 +317,7 @@ func TestARedRunOnAnInfraFlakeWakesItsOwnerWithTheRerun(t *testing.T) {
 		if !merge.Red(doc) {
 			t.Errorf("infra read for a document that is not red")
 		}
-		return []merge.Infra{{Check: "go-lint", Repo: "o/r", Run: 11, Job: 12, Signature: "Go module proxy", Line: "stream error"}}
+		return []merge.Infra{{Check: "go-lint", Repo: scratchRepo, Run: 11, Job: 12, Signature: "Go module proxy", Line: "stream error"}}
 	}
 	r.spec.Argv = strings.Fields("/usr/bin/devctl pr merge o/r 7")
 	r.rc, r.doc = 1, []byte(`{"exitCode":1,"verdict":"red","reason":"check go-lint concluded failure","checks":[{"name":"go-lint","conclusion":"failure"}]}`)

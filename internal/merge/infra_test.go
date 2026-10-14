@@ -8,6 +8,9 @@ import (
 	"testing"
 )
 
+// goProxy is the Go module proxy's signature.
+const goProxy = "Go module proxy"
+
 // proxyStreamError is the go-lint job's failure of a module download from
 // proxy.golang.org, as the Actions log carries it.
 const proxyStreamError = "2026-10-14T14:55:02.1146372Z ##[error]../../../../go/pkg/mod/github.com/spf13/afero@v1.15.0/util.go:28:2: " +
@@ -26,7 +29,7 @@ func TestInfraLine(t *testing.T) {
 				"2026-10-14T14:55:02.1173601Z ##[error]Process completed with exit code 2.",
 				"2026-10-14T14:55:02.3247512Z Cleaning up orphan processes",
 			}, "\n"),
-			signature: "Go module proxy",
+			signature: goProxy,
 			line:      `../../../../go/pkg/mod/github.com/spf13/afero@v1.15.0/util.go:28:2: golang.org/x/text@v0.41.0: read "https://proxy.golang.org/golang.org/x/text/@v/v0.41.0.zip": stream error: stream ID 143; INTERNAL_ERROR; received from peer`,
 		},
 		{
@@ -85,7 +88,7 @@ func TestInfraReds(t *testing.T) {
 		return nil, errors.New("HTTP 410: gone")
 	}
 	infra := InfraReds(context.Background(), gh, doc)
-	if len(infra) != 1 || infra[0].Check != "go-lint" || infra[0].Signature != "Go module proxy" {
+	if len(infra) != 1 || infra[0].Check != "go-lint" || infra[0].Signature != goProxy {
 		t.Fatalf("infra %+v, want go-lint on the Go module proxy", infra)
 	}
 	if got, want := infra[0].Rerun(), "gh run rerun 38584550284 --job 115923395354 --repo o/r"; got != want {
