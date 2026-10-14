@@ -139,6 +139,11 @@ func TestInteractiveShell(t *testing.T) {
 	}
 }
 
+// outsideTable is a watch PID no test's process table holds: the test
+// binary's own PID, the watch's default, may be one of a table's fake PIDs
+// and turn that process into the watch's.
+const outsideTable = -1
+
 // A loop forking 100 processes a second on a machine that forks 10 is one
 // PROCESS STORM line from the second sample over the threshold on and one ENDED line once it stops;
 // four sleeping copies under one parent are one STACKED line and one ENDED.
@@ -149,7 +154,7 @@ func TestSampleProcsSaysAStormAndAStackOnce(t *testing.T) {
 	cfg.Watch.Repeat.Duration = 10 * time.Minute
 	cfg.Watch.ForkRateMax, cfg.Watch.StackMax = 50, 3
 	var forks uint64 = 1000
-	w := &watcher{app: &app{out: &out, cfg: cfg}, last: map[string]time.Time{}}
+	w := &watcher{app: &app{out: &out, cfg: cfg}, last: map[string]time.Time{}, self: outsideTable}
 	w.readForks = func() (uint64, error) { return forks, nil }
 
 	now := time.Now()
@@ -208,7 +213,7 @@ func TestSampleProcsSaysLoadOnce(t *testing.T) {
 	cfg.Watch.Repeat.Duration = 10 * time.Minute
 	cfg.Watch.ForkRateMax, cfg.Watch.StackMax, cfg.Watch.ToolProcsMax = -1, -1, 1000
 	cfg.Watch.Tools = []string{"tsh", "helm"}
-	w := &watcher{app: &app{out: &out, cfg: cfg}, last: map[string]time.Time{}}
+	w := &watcher{app: &app{out: &out, cfg: cfg}, last: map[string]time.Time{}, self: outsideTable}
 	w.readForks = func() (uint64, error) { return 0, nil }
 	owners := map[int]string{1: agentOne, 2: agentFour}
 	w.owners.Store(&owners)
