@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"cmp"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strconv"
@@ -32,7 +33,7 @@ in full until it is unpinned or done.
 
 Without a subcommand, lists the open notes.`,
 		Args: cobra.NoArgs,
-		RunE: func(*cobra.Command, []string) error { return a.noteList("") },
+		RunE: func(*cobra.Command, []string) error { return a.noteList("", false) },
 	}
 	var forWho, due, overtaken, replaces string
 	var pin bool
@@ -349,14 +350,22 @@ waits for the role's next start.`,
 	answer.Flags().IntVar(&choice, "choice", 0, "the option chosen, 1-based")
 	answer.Flags().StringVar(&via, "via", viaCLI, "how the answer came: cli or slack")
 	var listFor string
-	list := listCmd("List the open notes", func() error { return a.noteList(listFor) })
+	var full bool
+	list := listCmd("List the open notes", func() error { return a.noteList(listFor, full) })
+	list.Long = `List the open notes, one line each. --full prints each note's whole
+text, every line of it, followed by its default and the issues and pull
+requests it names (owner/repo#n, from its text and its --ref links; a bare
+#n after the board owner's repository), so a scan sees what a note names
+without reading each one; with --json, --full adds each note's names.`
 	list.Flags().StringVar(&listFor, "for", "", "only the notes for this person or team")
+	list.Flags().BoolVar(&full, "full", false, "each note's whole text and the issues and pull requests it names")
 	c.AddCommand(add, answer, done, a.notePinCmd("pin", true), a.notePinCmd("unpin", false), list)
 	return c
 }
 
-// noteList prints the open notes, those for forWho alone with it set.
-func (a *app) noteList(forWho string) error {
+// noteList prints the open notes, those for forWho alone with it set;
+// full prints each note's whole text and what it names.
+func (a *app) noteList(forWho string, full bool) error {
 	st, err := a.store.Read()
 	if err != nil {
 		return err
@@ -369,15 +378,57 @@ func (a *app) noteList(forWho string) error {
 		for i := range notes {
 			notes[i].Kind = noteKind(a.cfg.Guide.Person, &notes[i])
 		}
-		return a.printJSON(notes)
+		if !full {
+			return a.printJSON(notes)
+		}
+		named := make([]map[string]any, 0, len(notes))
+		for _, n := range notes {
+			m, err := a.namedNote(&n)
+			if err != nil {
+				return err
+			}
+			named = append(named, m)
+		}
+		return a.printJSON(named)
 	}
-	a.printNotes(notes)
+	if full {
+		a.printNotesWith(notes, a.printNotesFull)
+	} else {
+		a.printNotes(notes)
+	}
 	return nil
 }
 
-// printNotes lists notes, the decisions apart from the memos once both
-// are among them.
-func (a *app) printNotes(notes []state.Note) {
+// namedNote is n's JSON object with the issues and pull requests it names
+// as its "names"; a note's own encoding keeps the fields it does not know.
+func (a *app) namedNote(n *state.Note) (map[string]any, error) {
+	b, err := json.Marshal(n)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, err
+	}
+	if names := a.noteNames(n); len(names) > 0 {
+		m["names"] = names
+	}
+	return m, nil
+}
+
+// noteNames are the issues and pull requests (owner/repo#n, lower-cased)
+// n names in its text or links with --ref, as a board scan reads them.
+func (a *app) noteNames(n *state.Note) []string {
+	return namedRefs(strings.Join(append([]string{n.Text}, n.Refs...), " "), a.cfg.Board.Owner)
+}
+
+// printNotes lists notes one line each, the decisions apart from the
+// memos once both are among them.
+func (a *app) printNotes(notes []state.Note) { a.printNotesWith(notes, a.printNoteLines) }
+
+// printNotesWith lists notes with print, the decisions apart from the
+// memos once both are among them.
+func (a *app) printNotesWith(notes []state.Note, print func([]state.Note)) {
 	if len(notes) == 0 {
 		_, _ = fmt.Fprintln(a.out, "no open notes")
 		return
@@ -391,44 +442,65 @@ func (a *app) printNotes(notes []state.Note) {
 		}
 	}
 	if len(decisions) == 0 || len(memos) == 0 {
-		a.printNoteLines(notes)
+		print(notes)
 		return
 	}
 	_, _ = fmt.Fprintf(a.out, "Decisions (%d):\n", len(decisions))
-	a.printNoteLines(decisions)
+	print(decisions)
 	_, _ = fmt.Fprintf(a.out, "Memos (%d):\n", len(memos))
-	a.printNoteLines(memos)
+	print(memos)
 }
 
 // printNoteLines prints one line per note.
 func (a *app) printNoteLines(notes []state.Note) {
 	for _, n := range notes {
-		var tags []string
-		if n.Pinned {
-			tags = append(tags, "pinned")
-		}
-		if n.For != "" {
-			tags = append(tags, "for "+n.For)
-		}
-		if n.By.Owner() != "" {
-			tags = append(tags, "by "+quotedOwner(n.By))
-		}
-		if !n.Due.IsZero() {
-			tags = append(tags, "due "+clock(a.now, n.Due))
-			if n.Due.Before(a.now) {
-				tags[len(tags)-1] += " (overdue)"
-			}
-		}
-		tag := ""
-		if len(tags) > 0 {
-			tag = " [" + strings.Join(tags, ", ") + "]"
-		}
 		dflt := ""
 		if n.Default != "" {
 			dflt = " (default: " + n.Default + ")"
 		}
-		_, _ = fmt.Fprintf(a.out, "#%d%s %s%s\n", n.ID, tag, n.Text, dflt)
+		_, _ = fmt.Fprintf(a.out, "#%d%s %s%s\n", n.ID, a.noteTag(&n), n.Text, dflt)
 	}
+}
+
+// printNotesFull prints each note's id and tags, then its whole text, its
+// default and what it names, indented beneath.
+func (a *app) printNotesFull(notes []state.Note) {
+	for _, n := range notes {
+		_, _ = fmt.Fprintf(a.out, "#%d%s\n", n.ID, a.noteTag(&n))
+		for line := range strings.Lines(strings.TrimRight(n.Text, "\n")) {
+			_, _ = fmt.Fprintf(a.out, "  %s\n", strings.TrimRight(line, "\n"))
+		}
+		if n.Default != "" {
+			_, _ = fmt.Fprintf(a.out, "  default: %s\n", n.Default)
+		}
+		if names := a.noteNames(&n); len(names) > 0 {
+			_, _ = fmt.Fprintf(a.out, "  names: %s\n", strings.Join(names, ", "))
+		}
+	}
+}
+
+// noteTag is n's tags, " [pinned, for …, by …, due …]", or "".
+func (a *app) noteTag(n *state.Note) string {
+	var tags []string
+	if n.Pinned {
+		tags = append(tags, "pinned")
+	}
+	if n.For != "" {
+		tags = append(tags, "for "+n.For)
+	}
+	if n.By.Owner() != "" {
+		tags = append(tags, "by "+quotedOwner(n.By))
+	}
+	if !n.Due.IsZero() {
+		tags = append(tags, "due "+clock(a.now, n.Due))
+		if n.Due.Before(a.now) {
+			tags[len(tags)-1] += " (overdue)"
+		}
+	}
+	if len(tags) == 0 {
+		return ""
+	}
+	return " [" + strings.Join(tags, ", ") + "]"
 }
 
 // notePinCmd pins or unpins notes: a pinned note is in every hand-over.
