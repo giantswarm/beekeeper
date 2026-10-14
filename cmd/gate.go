@@ -150,7 +150,13 @@ owner, a registered agent, with one line: "<command> exit N: <reason>
 (output in <file>)", logged as devctl.unheard. A run stopped by a signal
 before its command settled (a cleanup's SIGTERM, a stop of its unit) wakes
 its owner with the stop instead, as nothing waits for the command any more;
-an owner no longer on the roster is woken by no run.
+a merge stopped so (its user manager going down with a desktop restart)
+wakes it with what GitHub says of the pull request: merged, open or closed.
+An owner no longer on the roster is woken by no run. The outcome is owed in
+the state before it is handed over: one whose merge-child was killed on the
+way, whose pull request GitHub did not answer for or whose wake the service
+manager refused stays owed, and the watch hands it over once it can (a try
+a minute, GitHub's answer awaited 30 minutes, given up after a day).
 
 The gate's stdout is devctl's document and nothing else: the gate's own
 lines (prefixed "beekeeper gate: ") and devctl's progress (waiting for

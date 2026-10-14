@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -184,16 +185,32 @@ func TestASecondMergeOfARunningOneIsRefused(t *testing.T) {
 }
 
 // A waiter stopped by a signal before its command settled wakes its owner
-// with the stop, not with a merge outcome; one whose command reported a
-// merge before the stop still hands that merge over.
+// with the stop, not with a merge outcome; a stopped merge with the state
+// GitHub reports for its pull request; one whose command reported a merge
+// before the stop still hands that merge over.
 func TestAStoppedWaiterNamesTheStop(t *testing.T) {
 	a, r, woke := tellOwnerRun(t, state.Party{Session: "s1", Name: ownerName})
+	r.rc, r.doc, r.stop = 128+int(syscall.SIGTERM), nil, syscall.SIGTERM
+	a.tellOwner(context.Background(), r)
+	want := `beekeeper gate → s1: devctl pr wait o/r 7 did not settle: its waiter was stopped by SIGTERM (exit 143) and nothing waits for it any more: check the pull request or release it waited for and run it again if it still needs to`
+	if len(*woke) != 1 || (*woke)[0] != want {
+		t.Errorf("woke %q, want %q", *woke, want)
+	}
+
+	a, r, woke = tellOwnerRun(t, state.Party{Session: "s1", Name: ownerName})
+	stubPull(t, github.Pull{State: github.Merged, MergedAt: mergedAt}, nil)
 	r.spec.Argv, r.spec.Command = strings.Fields("/usr/bin/beekeeper gate --queued -- devctl pr merge o/r 7"), strings.Fields("devctl pr merge o/r 7")
 	r.rc, r.doc, r.stop = 128+int(syscall.SIGTERM), nil, syscall.SIGTERM
 	a.tellOwner(context.Background(), r)
-	want := `beekeeper gate → s1: devctl pr merge o/r 7 did not settle: its waiter was stopped by SIGTERM (exit 143) and nothing waits for it any more: check the pull request or release it waited for and run it again if it still needs to`
-	if len(*woke) != 1 || (*woke)[0] != want {
-		t.Errorf("woke %q, want %q", *woke, want)
+	if len(*woke) != 1 || (*woke)[0] != "beekeeper gate → s1: "+stoppedMerged {
+		t.Errorf("woke %q, want %q", *woke, stoppedMerged)
+	}
+	if st, _ := a.store.Read(); len(st.Owed) != 0 {
+		t.Errorf("a handed-over outcome stays owed: %+v", st.Owed)
+	}
+	if evs, _ := a.store.Events(0, func(e state.Event) bool { return e.Verb == verbMerged }); len(evs) != 1 ||
+		!strings.HasPrefix(evs[0].Detail, "o/r#7 at 2026-10-14T19:47:02Z per GitHub") {
+		t.Errorf("merged events %+v", evs)
 	}
 
 	a, r, woke = tellOwnerRun(t, state.Party{Session: "s1", Name: ownerName})
