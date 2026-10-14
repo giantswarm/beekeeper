@@ -30,6 +30,9 @@ type Accepted struct {
 type RedJudgement struct {
 	Accepted []Accepted `json:"accepted,omitempty"`
 	Refused  []string   `json:"refused,omitempty"`
+	// Infra are the refused checks that died on a transient infrastructure
+	// failure, not on the pull request's change.
+	Infra []Infra `json:"infra,omitempty"`
 }
 
 // LetThrough says whether every red check of the document is let through.
@@ -56,6 +59,7 @@ func (j RedJudgement) String() string {
 // redCheck is one failed check of devctl's document.
 type redCheck struct {
 	name     string
+	url      string
 	required bool
 	workflow bool
 }
@@ -68,6 +72,7 @@ func redChecks(doc []byte) (reds []redCheck, ok bool) {
 			Name       string `json:"name"`
 			Conclusion string `json:"conclusion"`
 			Required   bool   `json:"required"`
+			URL        string `json:"url"`
 		} `json:"checks"`
 		CircleCI *struct {
 			Workflows []struct {
@@ -85,7 +90,7 @@ func redChecks(doc []byte) (reds []redCheck, ok bool) {
 		switch {
 		case !failed(c.Conclusion):
 		case i < 0:
-			reds = append(reds, redCheck{name: c.Name, required: c.Required})
+			reds = append(reds, redCheck{name: c.Name, url: c.URL, required: c.Required})
 		default:
 			reds[i].required = reds[i].required || c.Required
 		}
@@ -106,8 +111,10 @@ func redChecks(doc []byte) (reds []redCheck, ok bool) {
 // other red check refuses the merge, as does a red CircleCI workflow (a
 // pipeline, judged by none of its jobs' names), a check green on the base
 // head (the pull request broke it), and one the base head has no finished
-// result for, so nothing slips through on a missing comparison.
-func JudgeRed(doc []byte, base github.BaseChecks) RedJudgement {
+// result for, so nothing slips through on a missing comparison. A refused
+// check infra names (InfraReds) is refused as a transient infrastructure
+// failure with its log line and rerun, not as the pull request's breakage.
+func JudgeRed(doc []byte, base github.BaseChecks, infra []Infra) RedJudgement {
 	var j RedJudgement
 	reds, ok := redChecks(doc)
 	if !ok {
@@ -115,7 +122,13 @@ func JudgeRed(doc []byte, base github.BaseChecks) RedJudgement {
 	}
 	at := fmt.Sprintf("the head %.7s of %s", base.Head, base.Base)
 	for _, r := range reds {
-		refuse := func(why string) { j.Refused = append(j.Refused, fmt.Sprintf("%s refuses: %s", r.name, why)) }
+		refuse := func(why string) {
+			if i := infraOf(infra, r.name); i != nil && !r.workflow {
+				j.Infra = append(j.Infra, *i)
+				why = i.Why()
+			}
+			j.Refused = append(j.Refused, fmt.Sprintf("%s refuses: %s", r.name, why))
+		}
 		switch o := base.Outcome(r.name); {
 		case r.workflow:
 			refuse("a red CircleCI workflow")

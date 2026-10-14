@@ -13,6 +13,7 @@ const (
 	e2e       = "e2e-test"
 	build     = "go-build"
 	mergeVerb = "merge"
+	lint      = "lint"
 )
 
 // redDocOf is devctl pr merge's red document with checks, each
@@ -35,6 +36,7 @@ func TestJudgeRed(t *testing.T) {
 		name     string
 		doc      []byte
 		base     github.BaseChecks
+		infra    []Infra
 		through  bool
 		accepted []string
 		refused  string
@@ -85,9 +87,24 @@ func TestJudgeRed(t *testing.T) {
 		{
 			name:     "one let through, one broken: refuses, naming both",
 			doc:      redDocOf(e2e+"|failure", "lint|failure"),
-			base:     base(nil, map[string]string{e2e: github.CheckFail, "lint": github.CheckPass}),
+			base:     base(nil, map[string]string{e2e: github.CheckFail, lint: github.CheckPass}),
 			accepted: []string{e2e},
 			refused:  "lint refuses: green on the head 0123456 of main: this pull request broke it",
+		},
+		{
+			name:    "a red check that died on infrastructure refuses as such, not as the pull request's break",
+			doc:     redDocOf("lint|failure"),
+			base:    base(nil, map[string]string{lint: github.CheckPass}),
+			infra:   []Infra{{Check: lint, Repo: failedRepo, Run: 7, Job: 9, Signature: goProxy, Line: "stream error"}},
+			refused: "lint refuses: a transient infrastructure failure, not this pull request's breakage (Go module proxy: \"stream error\"): rerun the job (`gh run rerun 7 --job 9 --repo o/r`), then the same merge again",
+		},
+		{
+			name:     "a let-through check stays let through whatever its log says",
+			doc:      redDocOf(e2e + "|failure"),
+			base:     base(nil, map[string]string{e2e: github.CheckFail}),
+			infra:    []Infra{{Check: e2e, Repo: failedRepo, Run: 7, Job: 9, Signature: "network", Line: "x"}},
+			through:  true,
+			accepted: []string{e2e},
 		},
 		{
 			name:    "a red CircleCI workflow refuses",
@@ -103,7 +120,7 @@ func TestJudgeRed(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			j := JudgeRed(tc.doc, tc.base)
+			j := JudgeRed(tc.doc, tc.base, tc.infra)
 			if j.LetThrough() != tc.through {
 				t.Errorf("let through %v, want %v: %s", j.LetThrough(), tc.through, j)
 			}
@@ -121,7 +138,7 @@ func TestJudgeRed(t *testing.T) {
 }
 
 func TestJudgeRedSaysWhy(t *testing.T) {
-	j := JudgeRed(redDocOf(e2e+"|failure"), github.BaseChecks{Base: "main", Head: "abcdef0123", Outcomes: map[string]string{e2e: github.CheckFail}})
+	j := JudgeRed(redDocOf(e2e+"|failure"), github.BaseChecks{Base: "main", Head: "abcdef0123", Outcomes: map[string]string{e2e: github.CheckFail}}, nil)
 	want := "e2e-test let through: not required, and red on the head abcdef0 of main too: not this pull request's breakage"
 	if j.String() != want {
 		t.Errorf("judgement %q, want %q", j, want)

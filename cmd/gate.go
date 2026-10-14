@@ -252,6 +252,9 @@ type gateRun struct {
 	// acceptRed are the red checks the gate let through (merge.JudgeRed),
 	// which devctl's run again accepts.
 	acceptRed []string
+	// infra are the red checks of the judged run that died on a transient
+	// infrastructure failure (merge.InfraReds), which its record names.
+	infra []merge.Infra
 	// requeued says a hold took the running merge back out of its lane
 	// (requeue): its wait for the turn starts again.
 	requeued bool
@@ -1258,6 +1261,7 @@ func (g *gateRun) acceptRedRun(base string, pid int, run childRun) (childRun, in
 // judgeRed judges a red document against the base branch it names; a base
 // GitHub does not answer for lets nothing through.
 func (g *gateRun) judgeRed(ctx context.Context, doc []byte) merge.RedJudgement {
+	g.infra = infraReds(ctx, doc)
 	ref := merge.BaseRef(doc)
 	if ref == "" {
 		return merge.RedJudgement{Refused: []string{"devctl's document names no base branch"}}
@@ -1266,7 +1270,7 @@ func (g *gateRun) judgeRed(ctx context.Context, doc []byte) merge.RedJudgement {
 	if err != nil {
 		return merge.RedJudgement{Refused: []string{fmt.Sprintf("the checks of %s do not read: %v", ref, err)}}
 	}
-	return merge.JudgeRed(doc, b)
+	return merge.JudgeRed(doc, b, g.infra)
 }
 
 // followRun follows the merge's devctl from offset to the end of its last
@@ -1346,7 +1350,7 @@ func (g *gateRun) record(base string, run childRun) error {
 	if output != "" {
 		note += ", output in " + output
 	}
-	r := runOutcome{rc: rc, reason: runFailure(doc, lastLine(base+".log"), g.handCut())}
+	r := runOutcome{rc: rc, reason: withInfra(runFailure(doc, lastLine(base+".log"), g.handCut()), g.infra)}
 	var ok bool
 	if r.out, ok = parseOutcome(g.pr, doc); merge.NeedsJudging(ok, rc) {
 		r.out, r.unanswered = judgeRun(g.ctx, g.repo, g.pr, judgeTries)
