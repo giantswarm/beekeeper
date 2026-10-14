@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `beekeeper note list --full` prints each note's whole text, every line of it, indented under its id and tags, with its default and the issues and pull requests it names (`names: owner/repo#n, …`, from its text and its `--ref` links, read as `board next` reads them); `--json --full` adds them as each note's `names`. A scan sees what a memo names in one call, without reading each note. The default output is unchanged ([#920](https://github.com/giantswarm/beekeeper/issues/920)).
+
 ### Fixed
 
 - `beekeeper spend`, `report` and `log` take a bare date (`2026-10-08`) for `--since` and `--until`: that day's 00:00 in the command's zone, for both bounds, so `--since 2026-10-08 --until 2026-10-09` is the whole of October 8; it was refused as `neither a time nor a duration` ([#769](https://github.com/giantswarm/beekeeper/issues/769)). `beekeeper log` gets `--until` beside `--since` (events before it), combinable with `--verb` and `--json`; `--since` is read back from `--until` when both are given ([#810](https://github.com/giantswarm/beekeeper/issues/810)).
