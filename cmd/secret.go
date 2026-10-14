@@ -903,9 +903,9 @@ before a new one.`,
 }
 
 func (a *app) secretImportCmd() *cobra.Command {
-	var recipient string
+	var recipient, forPath string
 	c := &cobra.Command{
-		Use:   "import op://<vault>/<item>/<field> op://<shared-vault>/<item>/<field> | import op://<vault>/<item>/<field> --recipient <age1…>",
+		Use:   "import op://<vault>/<item>/<field> op://<shared-vault>/<item>/<field> | import op://<vault>/<item>/<field> --recipient <age1…> | --for <sops-file|directory>",
 		Short: "Copy a field of the person's vault into the shared vault",
 		Long: `import reads one field of a vault outside the shared vault with the
 person's own 1Password session and writes it into a field of the shared
@@ -926,9 +926,17 @@ identity file's text (comments above the AGE-SECRET-KEY-1… line, as
 keys.txt holds it), is refused unless it holds that recipient's identity;
 only the identity's line is stored:
 
-  beekeeper secret import "op://<vault>/<installation>.agekey/notesPlain" --recipient age1…`,
+  beekeeper secret import "op://<vault>/<installation>.agekey/notesPlain" --recipient age1…
+
+--for <sops-file|directory> takes the recipient from the .sops.yaml the
+repository holds: a SOPS file's recipient, or for a directory that of the
+creation rule for the files below it (else the one recipient its rules
+share). No rule, or several recipients, is refused, naming the path;
+--recipient wins when both are given:
+
+  beekeeper secret import "op://<vault>/<installation>.agekey/notesPlain" --for management-clusters/<installation>`,
 		Args: func(cmd *cobra.Command, args []string) error {
-			if recipient != "" {
+			if recipient != "" || forPath != "" {
 				return cobra.ExactArgs(1)(cmd, args)
 			}
 			return cobra.ExactArgs(2)(cmd, args)
@@ -937,6 +945,11 @@ only the identity's line is stored:
 			r, err := parseRefs(args...)
 			if err != nil {
 				return err
+			}
+			if recipient == "" && forPath != "" {
+				if recipient, err = secret.ImportRecipient(forPath); err != nil {
+					return err
+				}
 			}
 			ops, err := a.secretOps()
 			if err != nil {
@@ -960,6 +973,7 @@ only the identity's line is stored:
 		},
 	}
 	c.Flags().StringVar(&recipient, "recipient", "", "an age recipient (age1…): import its identity into the shared vault's item \"sops age key <recipient>\"")
+	c.Flags().StringVar(&forPath, "for", "", "a SOPS file or directory: import the identity of the age recipient its .sops.yaml declares, as --recipient does")
 	return c
 }
 

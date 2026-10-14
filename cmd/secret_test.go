@@ -635,3 +635,59 @@ func TestSecretCopyFromALabSecretKeyNeedsItsLease(t *testing.T) {
 		noSecret(t, what, s)
 	}
 }
+
+// TestSecretImportForTakesTheRecipientFromTheSOPSFile imports an age
+// identity for the recipient a directory's .sops.yaml declares, refuses a
+// path with several recipients by name, and lets --recipient win.
+func TestSecretImportForTakesTheRecipientFromTheSOPSFile(t *testing.T) {
+	a, tools, repo := secretApp(t)
+	tools.Signed = true
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, o := id.Recipient().String(), other.Recipient().String()
+	rules := fmt.Sprintf("creation_rules:\n  - path_regex: management-clusters/graveler/.*\n    age: %s\n  - path_regex: shared/.*\n    age: %s, %s\n", r, r, o)
+	if err := os.WriteFile(filepath.Join(repo, ".sops.yaml"), []byte(rules), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(repo, "management-clusters", "graveler")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const src, otherSrc = "op://Employee/graveler.agekey/notesPlain", "op://Employee/other.agekey/notesPlain"
+	tools.Vault[src] = "# public key: " + r + "\n" + id.String() + "\n"
+	tools.Vault[otherSrc] = other.String()
+
+	out, err := runSecret(a, importOp, src, "--for", dir)
+	item := secret.AgeItemRef("Shared", r)
+	if err != nil || tools.Vault[item] != id.String() {
+		t.Fatalf("import --for the directory = %v, the item holds %d bytes:\n%s", err, len(tools.Vault[item]), out)
+	}
+	if !strings.Contains(out, item) || strings.Contains(out, id.String()) {
+		t.Errorf("the answer names %s and no value:\n%s", item, out)
+	}
+
+	several := filepath.Join(repo, "shared", "a.yaml")
+	a.out = &bytes.Buffer{}
+	if _, err := runSecret(a, importOp, otherSrc, "--for", several); err == nil || !strings.Contains(err.Error(), several) || !strings.Contains(err.Error(), "2 age recipients") {
+		t.Errorf("import --for a file of two recipients = %v, want an error naming it", err)
+	}
+	if _, ok := tools.Vault[secret.AgeItemRef("Shared", o)]; ok {
+		t.Error("an ambiguous --for wrote an item")
+	}
+
+	// --recipient wins over --for, even one --for would refuse
+	a.out = &bytes.Buffer{}
+	if out, err := runSecret(a, importOp, otherSrc, "--for", several, "--recipient", o); err != nil || tools.Vault[secret.AgeItemRef("Shared", o)] != other.String() {
+		t.Errorf("import --recipient with --for = %v:\n%s", err, out)
+	}
+	a.out = &bytes.Buffer{}
+	if _, err := runSecret(a, importOp, src, otherSrc, "--for", dir); Code(err) != ExitUsage {
+		t.Errorf("import --for with a destination = %v, want a usage error", err)
+	}
+}

@@ -129,3 +129,65 @@ func TestRecipients(t *testing.T) {
 		})
 	}
 }
+
+func TestImportRecipient(t *testing.T) {
+	ids := make([]string, 3)
+	for i := range ids {
+		id, err := age.GenerateX25519Identity()
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids[i] = id.Recipient().String()
+	}
+	r, o, x := ids[0], ids[1], ids[2]
+	write := func(dir, name, content string) string {
+		t.Helper()
+		p := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	repo := t.TempDir()
+	write(repo, ".sops.yaml", fmt.Sprintf("creation_rules:\n  - path_regex: management-clusters/graveler/.*\n    age: %s\n  - path_regex: management-clusters/glean/.*\n    age: %s\n  - path_regex: shared/.*\n    age: %s, %s\n  - path_regex: plain/.*\n", r, o, r, o))
+	graveler := filepath.Join(repo, "management-clusters", "graveler")
+	glean := filepath.Join(repo, "management-clusters", "glean")
+	enc := write(glean, "db.enc.yaml", "data: x\nsops:\n  age:\n    - recipient: "+x+"\n")
+	if err := os.MkdirAll(graveler, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// one recipient, every file of one directory: a single rule
+	single := t.TempDir()
+	write(single, ".sops.yaml", fmt.Sprintf("creation_rules:\n  - path_regex: '.*\\.enc\\.yaml$'\n    age: %s\n  - path_regex: '.*\\.sops\\.yaml$'\n    age: %s\n", r, r))
+
+	for name, tc := range map[string]struct {
+		path, want, err string
+	}{
+		"directory's rule":             {path: graveler, want: r},
+		"another directory's rule":     {path: glean, want: o},
+		"file still to be written":     {path: filepath.Join(graveler, "new.enc.yaml"), want: r},
+		"encrypted file's metadata":    {path: enc, want: x},
+		"rules sharing one recipient":  {path: single, want: r},
+		"rule of several recipients":   {path: filepath.Join(repo, "shared", "a.yaml"), err: "2 age recipients"},
+		"directory of several":         {path: repo, err: "2 age recipients"},
+		"no rule applies":              {path: filepath.Join(repo, "elsewhere", "a.yaml"), err: "no creation rule"},
+		"rule without a recipient":     {path: filepath.Join(repo, "plain", "a.yaml"), err: "names no age recipient"},
+		"directory without .sops.yaml": {path: t.TempDir(), err: ".sops.yaml"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := ImportRecipient(tc.path)
+			if tc.err != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.err) || !strings.Contains(err.Error(), tc.path) {
+					t.Fatalf("ImportRecipient(%s) = %q, %v: want an error naming the path and %q", tc.path, got, err, tc.err)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Errorf("ImportRecipient(%s) = %q, %v, want %q", tc.path, got, err, tc.want)
+			}
+		})
+	}
+}

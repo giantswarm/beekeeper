@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -73,22 +74,9 @@ func (o *Ops) Recipients(ctx context.Context, path string) ([]Recipient, error) 
 			return nil, fmt.Errorf("%s: no creation rule names an age recipient", cfg)
 		}
 	} else {
-		recipients := ageRecipients(abs)
-		if len(recipients) == 0 {
-			cfg, rel, err := sopsTarget(abs)
-			if err != nil {
-				return nil, err
-			}
-			rule, err := ruleFor(cfg, rel)
-			if err != nil {
-				return nil, err
-			}
-			if rule == nil {
-				return nil, fmt.Errorf("%s: no creation rule of %s applies to it", path, cfg)
-			}
-			if recipients = rule.recipients(); len(recipients) == 0 {
-				return nil, fmt.Errorf("%s: the creation rule %s names no age recipient", path, rule)
-			}
+		recipients, err := fileRecipients(path, abs)
+		if err != nil {
+			return nil, err
 		}
 		rules = append(rules, named{rule: path, recipients: recipients, file: abs})
 	}
@@ -127,6 +115,104 @@ func (o *Ops) Recipients(ctx context.Context, path string) ([]Recipient, error) 
 			}
 			out = append(out, rec)
 		}
+	}
+	return out, nil
+}
+
+// fileRecipients are the age recipients of the SOPS file path (abs, its
+// absolute path): its metadata's when encrypted, else its creation rule's.
+func fileRecipients(path, abs string) ([]string, error) {
+	if recipients := ageRecipients(abs); len(recipients) > 0 {
+		return recipients, nil
+	}
+	cfg, rel, err := sopsTarget(abs)
+	if err != nil {
+		return nil, err
+	}
+	rule, err := ruleFor(cfg, rel)
+	if err != nil {
+		return nil, err
+	}
+	if rule == nil {
+		return nil, fmt.Errorf("%s: no creation rule of %s applies to it", path, cfg)
+	}
+	recipients := rule.recipients()
+	if len(recipients) == 0 {
+		return nil, fmt.Errorf("%s: the creation rule %s names no age recipient", path, rule)
+	}
+	return recipients, nil
+}
+
+// ImportRecipient is the one age recipient path's .sops.yaml declares, the
+// recipient whose identity an import stores. For a SOPS file it is the
+// file's recipient (its metadata's when encrypted, else its creation
+// rule's); for a directory the recipient of the creation rule sops applies
+// to the files below it (the first without a path_regex or whose path_regex
+// matches the directory), else the one recipient all its creation rules
+// share. No rule, or several recipients, is an error naming path.
+func ImportRecipient(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	fi, err := os.Stat(abs)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", err
+	}
+	var recipients []string
+	if err == nil && fi.IsDir() {
+		if recipients, err = dirRecipients(path, abs); err != nil {
+			return "", err
+		}
+	} else if recipients, err = fileRecipients(path, abs); err != nil {
+		return "", err
+	}
+	if len(recipients) > 1 {
+		return "", fmt.Errorf("%s: %d age recipients (%s): name one with --recipient", path, len(recipients), strings.Join(recipients, ", "))
+	}
+	return recipients[0], nil
+}
+
+// dirRecipients are the age recipients of the creation rule of the
+// .sops.yaml nearest above the directory abs that applies to the files
+// below it, else the distinct recipients of all its creation rules.
+func dirRecipients(path, abs string) ([]string, error) {
+	cfg, err := sopsConfig(abs)
+	if err != nil {
+		return nil, err
+	}
+	rel, err := filepath.Rel(filepath.Dir(cfg), abs)
+	if err != nil {
+		return nil, err
+	}
+	// the directory as the prefix of the paths below it the rules match
+	prefix := ""
+	if rel != "." {
+		prefix = filepath.ToSlash(rel) + "/"
+	}
+	rule, err := ruleFor(cfg, prefix)
+	if err != nil {
+		return nil, err
+	}
+	if rule != nil {
+		if recipients := rule.recipients(); len(recipients) > 0 {
+			return recipients, nil
+		}
+	}
+	rules, err := rulesOf(cfg)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, r := range rules {
+		for _, recipient := range r.recipients() {
+			if !slices.Contains(out, recipient) {
+				out = append(out, recipient)
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("%s: no creation rule of %s names an age recipient", path, cfg)
 	}
 	return out, nil
 }
