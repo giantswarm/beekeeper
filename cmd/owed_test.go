@@ -38,7 +38,7 @@ func stubPull(t *testing.T, p github.Pull, err error) {
 func stoppedMerge(t *testing.T) (*app, childResult, *[]string) {
 	t.Helper()
 	a, r, woke := tellOwnerRun(t, state.Party{Session: "s1", Name: ownerName})
-	r.spec.Argv = strings.Fields("devctl pr merge --timeout 1h0m0s o/r 7")
+	r.spec.Argv = strings.Fields("devctl pr merge o/r 7")
 	r.rc, r.doc, r.stop = 128+int(syscall.SIGTERM), nil, syscall.SIGTERM
 	return a, r, woke
 }
@@ -91,7 +91,9 @@ func TestAStoppedMergeGitHubDoesNotAnswerForIsHandedOverByTheWatch(t *testing.T)
 		t.Fatalf("a try within owedRetry: woke %q, owed %+v", *woke, ownedState(t, a))
 	}
 	w.owedOutcomes(context.Background())
-	evs, _ := a.store.Events(0, func(e state.Event) bool { return e.Verb == verbUnheard && strings.Contains(e.Detail, "GitHub does not answer") })
+	evs, _ := a.store.Events(0, func(e state.Event) bool {
+		return e.Verb == verbUnheard && strings.Contains(e.Detail, "GitHub does not answer")
+	})
 	if len(evs) != 1 || !strings.HasSuffix(evs[0].Detail, `owed to "worker", the watch tries again`) {
 		t.Errorf("the failure is logged once: %+v", evs)
 	}

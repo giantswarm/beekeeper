@@ -161,7 +161,7 @@ func (w *watcher) owedOutcomes(ctx context.Context) {
 	if err != nil || len(st.Owed) == 0 {
 		return
 	}
-	now := time.Now().UTC()
+	now := w.now.UTC()
 	due := func(o state.Owed) bool {
 		busy := (proc.Alive(o.Gate) || proc.Alive(o.Child)) && now.Sub(o.Since) < owedBusy
 		return !busy && now.Sub(o.Tried) >= owedRetry
