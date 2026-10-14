@@ -231,7 +231,7 @@ func TestSetPriorityRefusesWhatIsNoEpic(t *testing.T) {
 func TestSetPriorityNeverAddsAnEpicOutsideTheOrganisation(t *testing.T) {
 	// An add would be an unexpected request: the refusal comes first.
 	f := &priorityGH{t: t, ranked: map[int]int{1: 1}, kind: "Epic 🎯", offBoard: true}
-	_, err := priorityClient(f).SetPriority(context.Background(), "teemow/lab#7", 1)
+	_, err := priorityClient(f).SetPriority(context.Background(), labIssue7, 1)
 	var r *Refusal
 	if !errors.As(err, &r) || r.Reason != foreignRefusal || len(f.mutations) != 0 {
 		t.Errorf("SetPriority of a foreign epic = %v, mutations %v", err, f.mutations)

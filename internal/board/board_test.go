@@ -459,9 +459,12 @@ func TestMoveAddsAnIssueMissingFromTheBoard(t *testing.T) {
 	}
 }
 
-// foreignRefusal is the refusal of teemow/lab#7, an issue outside the
-// board's owner o without an item on the board.
-const foreignRefusal = "teemow/lab#7 is not on the board o/7 and is never added to it: its repository is outside o; an issue of teemow goes on a project of teemow's own"
+// labIssue7 is an issue of a personal account's repository, outside the
+// board's owner o; foreignRefusal refuses it when it has no item on the board.
+const (
+	labIssue7      = "teemow/lab#7"
+	foreignRefusal = "teemow/lab#7 is not on the board o/7 and is never added to it: its repository is outside o; an issue of teemow goes on a project of teemow's own"
+)
 
 func TestMoveNeverAddsAnIssueOutsideTheOrganisation(t *testing.T) {
 	// The issue's projectItems name no item of the board: it is refused
@@ -470,12 +473,12 @@ func TestMoveNeverAddsAnIssueOutsideTheOrganisation(t *testing.T) {
 		added: `{"data":{"addProjectV2ItemById":{"item":{"id":"I3","project":{"id":"P"},"status":null,"kind":null,"team":null}}}}`}
 	c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
 	var r *Refusal
-	for _, ref := range []string{"https://github.com/teemow/lab/issues/7", "teemow/lab#7"} {
+	for _, ref := range []string{"https://github.com/teemow/lab/issues/7", labIssue7} {
 		if _, err := c.Move(context.Background(), ref, "backlog"); !errors.As(err, &r) || !strings.Contains(r.Reason, "is never added to it") || len(f.mutations) != 0 {
 			t.Errorf("Move(%s) = %v; mutations %v", ref, err, f.mutations)
 		}
 	}
-	if _, err := c.Move(context.Background(), "teemow/lab#7", "progress"); !errors.As(err, &r) || r.Reason != foreignRefusal || len(f.mutations) != 0 {
+	if _, err := c.Move(context.Background(), labIssue7, "progress"); !errors.As(err, &r) || r.Reason != foreignRefusal || len(f.mutations) != 0 {
 		t.Errorf("Move = %v; mutations %v", err, f.mutations)
 	}
 	// Every call acts on the issue's repository, so the gh link picks the
@@ -485,7 +488,7 @@ func TestMoveNeverAddsAnIssueOutsideTheOrganisation(t *testing.T) {
 	}
 	// An item its projectItems name is the issue's own: it moves, nothing added.
 	f.item = `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[{"id":"I3","project":{"id":"P"},"status":{"name":"Backlog 📦"},"team":{"name":"X 🐝"}}]}}}}}`
-	if mv, err := c.Move(context.Background(), "teemow/lab#7", "progress"); err != nil || *mv != (Moved{Ref: "teemow/lab#7", From: backlog, To: inProgress}) || !slices.Equal(f.mutations, []string{"I3=s3"}) {
+	if mv, err := c.Move(context.Background(), labIssue7, "progress"); err != nil || *mv != (Moved{Ref: labIssue7, From: backlog, To: inProgress}) || !slices.Equal(f.mutations, []string{"I3=s3"}) {
 		t.Errorf("Move of an item on the board = %+v, %v; mutations %v", mv, err, f.mutations)
 	}
 	// The board's owner is matched without case: its issue is added.
@@ -497,7 +500,7 @@ func TestMoveNeverAddsAnIssueOutsideTheOrganisation(t *testing.T) {
 	// Only an issue GitHub does not resolve is no issue, with its reason.
 	f.mutations = nil
 	f.item = `{"data":{"repository":null},"errors":[{"message":"Could not resolve to a Repository with the name 'teemow/lab'."}]}`
-	if _, err := c.Move(context.Background(), "teemow/lab#7", "backlog"); !errors.As(err, &r) || r.Reason != "teemow/lab#7 is no issue: Could not resolve to a Repository with the name 'teemow/lab'." || len(f.mutations) != 0 {
+	if _, err := c.Move(context.Background(), labIssue7, "backlog"); !errors.As(err, &r) || r.Reason != "teemow/lab#7 is no issue: Could not resolve to a Repository with the name 'teemow/lab'." || len(f.mutations) != 0 {
 		t.Errorf("Move of no issue = %v; mutations %v", err, f.mutations)
 	}
 }
@@ -566,7 +569,7 @@ func TestRankAddsAMissingIssueAndRefusesWhatIsNotOnTheBoard(t *testing.T) {
 		{Place{Before: "o/r#3"}, issue5, "o/r#3 is not on the board o/7"},
 		{Place{After: "https://github.com/o/r/issues/5"}, issue5, "o/r#5 cannot be placed against itself"},
 		{Place{Top: true}, "o/r#4", "o/r#4 is no issue: Could not resolve to an Issue with the number of 4."},
-		{Place{After: issue9}, "teemow/lab#7", foreignRefusal},
+		{Place{After: issue9}, labIssue7, foreignRefusal},
 	} {
 		f.mutations = nil
 		f.byIssue = map[string]string{"3": notOnBoard, "7": notOnBoard, "9": item9, "4": `{"data":{"repository":{"issue":null}},"errors":[{"message":"Could not resolve to an Issue with the number of 4."}]}`}
