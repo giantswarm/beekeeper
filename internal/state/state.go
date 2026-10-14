@@ -243,19 +243,23 @@ type Hold struct {
 	// Tool is the binary whose release window this hold is, ToolFrom the
 	// version it reported when the window opened, ToolPR the pull request
 	// that opened it (0 for a promotion), ToolMerged whether it merged and
-	// ToolRelease the release it produced. The window closes once the tool
-	// reports another version than ToolFrom and no merge of its repository
-	// runs, or once its merge ended with nothing merged, no release warranted
-	// or only a release candidate. ToolUpdated is when
-	// beekeeper last ran the tool's update for a merged window, ToolChecked
-	// when a gate or the watch last claimed the read of the window's state
-	// (the tool's version, its pull request), which they share.
+	// ToolRelease the release it produced. The window closes once its pull
+	// request merged (or its promotion runs) and the tool reports another
+	// version than ToolFrom (ToolRelease once known), also while the merge's
+	// devctl still waits for the release workflow, or once its merge ended
+	// with nothing merged, no release warranted or only a release candidate.
+	// ToolUpdated is when beekeeper last ran the tool's update for the
+	// window, ToolFailed that update's failure ("" when it ran clean: the
+	// release's binary did not verify, or no newer one is published yet),
+	// ToolChecked when a gate or the watch last claimed the read of the
+	// window's state (the tool's version, its pull request), which they share.
 	Tool        string    `json:"tool,omitempty"`
 	ToolFrom    string    `json:"toolFrom,omitempty"`
 	ToolPR      int       `json:"toolPR,omitempty"`
 	ToolMerged  bool      `json:"toolMerged,omitempty"`
 	ToolRelease string    `json:"toolRelease,omitempty"`
 	ToolUpdated time.Time `json:"toolUpdated,omitzero"`
+	ToolFailed  string    `json:"toolFailed,omitempty"`
 	ToolChecked time.Time `json:"toolChecked,omitzero"`
 	// LiftWhen is a shell command on this machine; the watch lifts the hold
 	// once it exits 0.
