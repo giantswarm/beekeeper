@@ -115,7 +115,9 @@ installation is held (hold upgrade:<installation>/<cluster>): the gate
 refuses the merges of its lanes and lease claims of its name are refused.
 "UPGRADE <installation>/<cluster> <from> → <to>" is said when it begins and
 "UPGRADE ENDED …" when it ends, once each; an unreadable installation is one
-line and keeps its holds.
+line and keeps its holds. The installations whose kube context is not in the
+kubeconfig kubectl reads are not read, keep their holds and alert baselines,
+and are named once per watch in one line each for UPGRADES and ALERTS.
 
 Once the supervisor session's context (its transcript's last request, the
 CTX column) reaches supervisor.relayAt, RELAY DUE is said at the first
@@ -288,6 +290,9 @@ type watcher struct {
 	standby bool
 	// upgrades are the last upgrade readings of the installations.
 	upgrades upgrade.Readings
+	// noContextSaid are the readers (ALERTS, UPGRADES) whose installations
+	// without a kube context this watch said.
+	noContextSaid map[string]bool
 	// gap is the term of the gone supervisor this watch said, until a
 	// supervisor is back.
 	gap string
@@ -622,9 +627,11 @@ func (w *watcher) watchAlerts(ctx context.Context) {
 				other = 0
 				w.emitNow("alerts", "ALERTS taken over by this watch")
 			}
-			for _, l := range w.alertCycle(ctx, store, reader) {
+			lines, noContext := w.alertCycle(ctx, store, reader)
+			for _, l := range lines {
 				w.emitNow("alerts", "%s", l)
 			}
+			w.sayNoContext("ALERTS", noContext)
 		}
 	})
 }

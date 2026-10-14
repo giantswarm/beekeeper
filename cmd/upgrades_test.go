@@ -22,15 +22,19 @@ func (c *stepClock) Timer(time.Duration) (<-chan time.Time, func()) { return nil
 
 // upgradeKubectl is a kubectl that logs the context of each call and
 // answers the installation upgrading with dir/upgrading.json and
-// dir/events.json, every other one with no objects.
+// dir/events.json, the context broken with an error, every other one with no
+// objects. Its kubeconfig's contexts are dir/contexts' lines; without the
+// file, they are unknown.
 func upgradeKubectl(t *testing.T, dir, upgrading string) (kubectl, log string) {
 	t.Helper()
 	kubectl, log = filepath.Join(dir, "kubectl"), filepath.Join(dir, "calls")
 	script := `#!/bin/sh
+if [ "$1" = config ]; then exec cat "` + dir + `/contexts"; fi
 echo "$2 $6" >> "` + log + `"
 case "$2,$6" in
 ` + upgrading + `,events) exec cat "` + dir + `/events.json" ;;
 ` + upgrading + `,*.*) exec cat "` + dir + `/upgrading.json" ;;
+broken,*) echo "error: You must be logged in to the server (Unauthorized)" >&2; exit 1 ;;
 esac
 echo '{"items":[]}'
 `
@@ -256,5 +260,53 @@ func TestStandbyWatchHoldsUpgradesWithoutSupervisorWatch(t *testing.T) {
 	standby.upgradeCycle(context.Background())
 	if got := takeCalls(t, log); len(got) != 2 {
 		t.Fatalf("the standby watch did not take over again: %v", got)
+	}
+}
+
+// Installations whose context is not in the kubeconfig are not read and
+// named in one line per watch, never one line each; one whose context
+// resolves and fails to read keeps its own line. The snapshot's upgrades
+// name them in one entry.
+func TestWatchNamesInstallationsWithoutContextOnce(t *testing.T) {
+	a, out := stubApp(t)
+	dir := t.TempDir()
+	kubectl, log := upgradeKubectl(t, dir, "upgrading")
+	if err := os.WriteFile(filepath.Join(dir, "contexts"), []byte("prod\nbroken\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a.cfg.Alerts.Kubectl = kubectl
+	a.cfg.Alerts.Installations = []config.Installation{
+		{Name: "prod", Context: "prod"}, {Name: "broken", Context: "broken"},
+		{Name: "lost", Context: "teleport.giantswarm.io-lost"}, {Name: "far", Context: "teleport.giantswarm.io-far"},
+	}
+	a.cfg.Watch.Interval.Duration = 30 * time.Second
+	clk := &stepClock{now: time.Date(2026, 9, 25, 8, 30, 0, 0, time.UTC)}
+	w := a.newWatcher(false, false)
+	w.clock = clk
+	for range 3 {
+		w.upgradeCycle(context.Background())
+		clk.now = clk.now.Add(a.cfg.Upgrades.Every.Duration)
+	}
+	if got := takeCalls(t, log); got["lost"] != 0 || got["far"] != 0 || got["teleport.giantswarm.io-lost"] != 0 || got["prod"] != 3 || got["broken"] != 3 {
+		t.Errorf("kubectl calls: %v", got)
+	}
+	text := out.String()
+	if strings.Contains(text, "lost unreadable") || strings.Contains(text, "far unreadable") {
+		t.Errorf("an installation without a kube context has a line of its own:\n%s", text)
+	}
+	if n := strings.Count(text, "UPGRADES: 2 installations without a kube context, not read: lost, far"); n != 1 {
+		t.Errorf("%d summary lines, want 1:\n%s", n, text)
+	}
+	if !strings.Contains(text, "UPGRADES broken unreadable: error: You must be logged in to the server (Unauthorized)") {
+		t.Errorf("the unreadable installation has no line:\n%s", text)
+	}
+
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	words := strings.Join(upgradeWords(a.readUpgrades(context.Background(), st, clk.now), time.Time{}), " · ")
+	if want := "prod none · broken unreadable: error: You must be logged in to the server (Unauthorized) · 2 installations without a kube context, not read: lost, far"; words != want {
+		t.Errorf("snapshot upgrades:\n%s\nwant\n%s", words, want)
 	}
 }

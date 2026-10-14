@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/free"
 	"github.com/giantswarm/beekeeper/internal/github"
@@ -797,11 +798,20 @@ func holdKeys(hs []state.Hold) []string {
 	return out
 }
 
-// upgradeWords is each installation's upgrade state.
+// upgradeWords is each installation's upgrade state, the installations
+// without a kube context in one entry at the end.
 func upgradeWords(ss []upgrade.Status, now time.Time) []string {
 	out := make([]string, 0, len(ss))
+	var noContext []string
 	for _, s := range ss {
+		if s.NoContext {
+			noContext = append(noContext, s.Installation)
+			continue
+		}
 		out = append(out, s.Words(now))
+	}
+	if len(noContext) > 0 {
+		out = append(out, alerts.NoContextLine(noContext))
 	}
 	return out
 }

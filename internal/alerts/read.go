@@ -102,9 +102,13 @@ func Targets(configured []Target, leased map[string]string, template func(string
 
 // ResolveContext is the explicit context, else the templated one (template
 // maps a name to its context, "" for none), else the context named <name>,
-// else the one ending in @<name>.
+// else the one ending in @<name>. An explicit context that contexts lacks
+// is none; nil contexts (unknown) keep it.
 func ResolveContext(name, explicit string, template func(string) string, contexts []string) string {
 	if explicit != "" {
+		if contexts != nil && !slices.Contains(contexts, explicit) {
+			return ""
+		}
 		return explicit
 	}
 	for _, c := range []string{template(name), name} {
@@ -223,10 +227,10 @@ func (r *Reader) Close() {
 // attempts.
 func (r *Reader) fetch(ctx context.Context, t Target) Answer {
 	if t.Context == "" {
-		return Answer{Why: "no kube context for " + t.Name}
+		return Answer{Why: "no kube context for " + t.Name, NoContext: true}
 	}
 	if r.unknown(t.Context) {
-		return Answer{Why: fmt.Sprintf("context %q is not in the kubeconfig", t.Context)}
+		return Answer{Why: fmt.Sprintf("context %q is not in the kubeconfig", t.Context), NoContext: true}
 	}
 	ctx, cancel := context.WithTimeout(ctx, r.Timeout)
 	defer cancel()
@@ -240,6 +244,7 @@ func (r *Reader) fetch(ctx context.Context, t Target) Answer {
 			last = ans
 		}
 		if missingContext.MatchString(ans.Why) {
+			ans.NoContext = true
 			return ans
 		}
 		pause := time.NewTimer(retryPause)

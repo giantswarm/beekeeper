@@ -114,3 +114,19 @@ func TestAlertLinesHoldBackTestClustersUnlessInPlay(t *testing.T) {
 		t.Errorf("leased: quiet log = %q", log)
 	}
 }
+
+// An installation without a kube context says nothing and keeps its
+// baseline; the watch names it with the others in one line (sayNoContext).
+func TestAlertLinesSkipInstallationsWithoutContext(t *testing.T) {
+	var out bytes.Buffer
+	a := quietApp(t, &out)
+	kept := &alerts.Installation{Reachable: true, Alerts: alerts.Set{}}
+	st := &alerts.State{Installations: map[string]*alerts.Installation{mcName: kept}}
+	ans := alerts.Answer{Why: `error: context "teleport.giantswarm.io-` + mcName + `" does not exist`, NoContext: true}
+	if lines := a.alertLines(st, []alerts.Target{{Name: mcName}}, []alerts.Answer{ans}, time.Now()); len(lines) != 0 {
+		t.Errorf("lines = %q, want none", lines)
+	}
+	if st.Installations[mcName] != kept {
+		t.Errorf("baseline = %+v, want it kept", st.Installations[mcName])
+	}
+}

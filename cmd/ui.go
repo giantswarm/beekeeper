@@ -484,7 +484,7 @@ func (c *collector) readUpgrades(st *state.State) {
 	}
 	var errs []string
 	for _, s := range statuses {
-		if s.Err != "" {
+		if s.Err != "" && !s.NoContext {
 			errs = append(errs, fmt.Sprintf("upgrades: %s unreadable: %s", s.Installation, s.Err))
 		}
 	}
