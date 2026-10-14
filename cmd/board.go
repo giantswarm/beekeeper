@@ -546,16 +546,30 @@ func agentIdle(st *state.State, p state.Party) bool {
 // "timer #n", "memo #n" or "decision #n", beekeeper's own items.
 var namedRef = regexp.MustCompile(`(?i)github\.com/([\w.-]+/[\w.-]+)/(?:issues|pull)/(\d+)|\b([a-z][\w.-]*(?:/[\w.-]+)?)(?:#|:\s*#)(\d+)\b|\b(?:notes?|timers?|memos?|decisions?)\s+#\d+\b|#(\d+)\b`)
 
+// listSeparator is what may stand between the items of a list of
+// references: commas, semicolons, "and", "or", slashes and short
+// parenthesised notes, "#534 (a), #535".
+var listSeparator = regexp.MustCompile(`(?i)^(?:\s|[,;&/+]|\band\b|\bor\b|\([^()#]*\))*$`)
+
 // namedRefs are the issues and pull requests text names, lower-cased
 // owner/repo#n, each once in the order named: by URL, as owner/repo#n, as
 // repo#n of owner (the board's), as a repository before a list, or as a
-// bare #n in the context of the last repository named before it, so
-// "beekeeper#173, #176" names two; a bare #n before any repository names
-// nothing, and beekeeper's own items (note #n) nothing.
+// bare #n continuing a list after a reference, so "beekeeper#173, #176"
+// names two; a bare #n after prose, "gpm#282 is live; tick #37850", names
+// nothing, as does one before any repository, and beekeeper's own items
+// (note #n) name nothing and end a list.
 func namedRefs(text, owner string) []string {
 	var out []string
-	repo := ""
-	for _, m := range namedRef.FindAllStringSubmatch(text, -1) {
+	repo, end := "", 0
+	for _, loc := range namedRef.FindAllStringSubmatchIndex(text, -1) {
+		m := make([]string, len(loc)/2)
+		for i := range m {
+			if loc[2*i] >= 0 {
+				m[i] = text[loc[2*i]:loc[2*i+1]]
+			}
+		}
+		listed := listSeparator.MatchString(text[end:loc[0]])
+		end = loc[1]
 		var n string
 		switch {
 		case m[1] != "":
@@ -565,8 +579,11 @@ func namedRefs(text, owner string) []string {
 			if !strings.Contains(repo, "/") {
 				repo = owner + "/" + repo
 			}
-		case m[5] != "":
+		case m[5] != "" && listed:
 			n = m[5]
+		case m[5] == "":
+			// beekeeper's own item ends a list of references.
+			repo = ""
 		}
 		if n == "" || repo == "" {
 			continue
