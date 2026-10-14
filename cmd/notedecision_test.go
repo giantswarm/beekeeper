@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -200,5 +202,96 @@ func TestDecisionAddressee(t *testing.T) {
 		if _, _, _, err := addressee(cfg, f); Code(err) != ExitRefused {
 			t.Errorf("%s: %v", f, err)
 		}
+	}
+}
+
+// A note a supervisor run filed reaches the supervisor holding the role now
+// once that run has ended; with none holding it, or the holder out of reach,
+// the answer waits for the role's next start. Another session's note goes to
+// it as before.
+func TestNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
+	const (
+		ended   = "Supervisor run 5"
+		current = "Supervisor run 6"
+	)
+	a, out := noteApp(t)
+	woke := stubWakes(t)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		for i, by := range []state.Party{{Session: "s5", Name: ended}, {Session: "s5", Name: ended}, {Session: "s5", Name: ended}, {Session: "w1", Name: "agent-x"}} {
+			st.Notes = append(st.Notes, state.Note{ID: i + 1, Kind: noteDecision, By: by, Text: fmt.Sprintf("question %d", i+1)})
+		}
+		st.Supervisor = &state.Supervisor{Party: state.Party{Session: "s6", Name: current}, Since: relayNow}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	answer := func(id string) string {
+		t.Helper()
+		out.Reset()
+		if _, err := noteCommand(a, verbAnswer, id, "yes"); err != nil {
+			t.Fatal(err)
+		}
+		return out.String()
+	}
+
+	got := answer("1")
+	if len(*woke) != 1 || !strings.Contains((*woke)[0], "→ s6: NOTE ANSWERED #1") {
+		t.Fatalf("woke %q, want the current supervisor told", *woke)
+	}
+	if want := fmt.Sprintf("%q, which filed it, no longer holds the supervisor's role: told the supervisor, %q", ended, current); !strings.Contains(got, want) {
+		t.Errorf("output %q lacks %q", got, want)
+	}
+
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Supervisor = nil
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got = answer("2")
+	if len(*woke) != 1 {
+		t.Fatalf("woke %q with no supervisor", *woke)
+	}
+	if want := "no session holds the supervisor's role: the answer waits for its next start"; !strings.Contains(got, want) {
+		t.Errorf("output %q lacks %q", got, want)
+	}
+
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Supervisor = &state.Supervisor{Party: state.Party{Session: "s6", Name: current}, Since: relayNow}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	was := wakeOwner
+	wakeOwner = func(*app, context.Context, state.Party, string, string, string) error {
+		return errors.New("its CLI does not run")
+	}
+	got = answer("3")
+	wakeOwner = was
+	if want := fmt.Sprintf("the supervisor, %q, cannot be told (its CLI does not run): the answer waits", current); !strings.Contains(got, want) {
+		t.Errorf("output %q lacks %q", got, want)
+	}
+
+	if got := answer("4"); strings.TrimSpace(got) != "note #4 answered and closed" || len(*woke) != 2 || !strings.Contains((*woke)[1], "→ w1: NOTE ANSWERED #4") {
+		t.Fatalf("another session's note: output %q, woke %q", got, *woke)
+	}
+
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Notes) != 0 {
+		t.Fatalf("open notes %+v", st.Notes)
+	}
+	if an, _ := a.answeredSince(time.Time{}); len(an) != 4 {
+		t.Fatalf("recorded answers %+v, want 4", an)
+	}
+	st.RoleLines = append(st.RoleLines, state.RoleLine{Role: guideRole.name, Line: "for the guide"})
+	lines := takeRoleLines(st, supervisorRole)
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], "NOTE ANSWERED #2") || !strings.HasPrefix(lines[1], "NOTE ANSWERED #3") {
+		t.Fatalf("waiting lines %q", lines)
+	}
+	if len(st.RoleLines) != 1 || st.RoleLines[0].Role != guideRole.name {
+		t.Fatalf("left %+v, want the guide's line", st.RoleLines)
 	}
 }

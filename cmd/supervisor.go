@@ -198,6 +198,7 @@ func (a *app) runStart(ctx context.Context, rl role, takeOver bool) error {
 	dir := lease.Dir(a.cfg.LeaseDir)
 	var msg string
 	var run int
+	var waiting []string
 	var took bool
 	var after *state.State
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -223,6 +224,7 @@ func (a *app) runStart(ctx context.Context, rl role, takeOver bool) error {
 		}
 		took, after = was == nil || !was.Is(me), st
 		run = rl.get(st).Run
+		waiting = takeRoleLines(st, rl)
 		_, cli := rl.observeCLI(st, sessions, a.now)
 		return append(evs, cli...), nil
 	})
@@ -231,6 +233,11 @@ func (a *app) runStart(ctx context.Context, rl role, takeOver bool) error {
 	}
 	if _, err := fmt.Fprintln(a.out, msg); err != nil {
 		return err
+	}
+	for _, line := range waiting {
+		if _, err := fmt.Fprintf(a.out, "waiting for the %s: %s\n", rl.name, line); err != nil {
+			return err
+		}
 	}
 	if line := a.titleRun(ctx, me, rl.runName(run)); line != "" {
 		if _, err := fmt.Fprintln(a.out, line); err != nil {

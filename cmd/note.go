@@ -304,7 +304,9 @@ note.overtaken with the reason, as the watch does.`,
 the answer verbatim, with the way it came (--via, cli unless it came from
 Slack), so the session that filed the note, the supervisor and the guide's
 feed read it from the log (beekeeper log --verb note.answered); the session
-that filed it is told at once.`,
+that filed it is told at once. A note a role's run filed (the supervisor's,
+the guide's) goes to the role's holder now; while none holds it, the answer
+waits for the role's next start.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			me, err := a.caller()
@@ -336,8 +338,11 @@ that filed it is told at once.`,
 			if err != nil {
 				return err
 			}
-			a.tellFiler(cmd.Context(), me, &n, answeredLine(n.ID, cmp.Or(me.Person, me.Name), text))
-			_, err = fmt.Fprintf(a.out, "note #%d answered and closed\n", ids[0])
+			told := a.tellFiler(cmd.Context(), me, &n, answeredLine(n.ID, cmp.Or(me.Person, me.Name), text))
+			if _, err := fmt.Fprintf(a.out, "note #%d answered and closed\n", ids[0]); err != nil || told == "" {
+				return err
+			}
+			_, err = fmt.Fprintln(a.out, told)
 			return err
 		},
 	}
