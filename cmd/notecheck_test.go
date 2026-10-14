@@ -58,7 +58,7 @@ func TestNoteForPersonRefusesWhatItLacks(t *testing.T) {
 		"default nothing":    {func(d *noteDraft) { d.Default = "nothing" }, "is no action"},
 		"no default":         {func(d *noteDraft) { d.Default = "" }, "is no action"},
 		"claim unchecked":    {func(d *noteDraft) { d.StatusQuo = "CI is green" }, `"green" without --checked`},
-		"login, no probe":    {func(d *noteDraft) { d.Kind = noteLogin }, "--until"},
+		"login, no probe":    {func(d *noteDraft) { d.Kind = noteLogin }, untilFlag},
 		"probe, no login":    {func(d *noteDraft) { d.Until = probeHolds }, "--until without --kind login"},
 		"status only":        {func(d *noteDraft) { d.Question = "Board pull 83 finished its epic." }, "asks nothing"},
 		"status, to the log": {func(d *noteDraft) { d.Question = "worker done" }, "beekeeper log add"},

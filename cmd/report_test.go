@@ -123,7 +123,7 @@ func TestReportTime(t *testing.T) {
 		{"02:00", time.Date(2026, 9, 26, 23, 0, 0, 0, time.UTC)},
 		{"2026-09-27T21:00:00Z", time.Date(2026, 9, 27, 21, 0, 0, 0, time.UTC)},
 		{"2026-09-27", time.Date(2026, 9, 26, 21, 0, 0, 0, time.UTC)}, // 00:00 EEST
-		{"2026-10-08", time.Date(2026, 10, 7, 21, 0, 0, 0, time.UTC)}, // a date after ref parses too
+		{oct8, time.Date(2026, 10, 7, 21, 0, 0, 0, time.UTC)},         // a date after ref parses too
 	} {
 		got, err := reportTime(ref, c.in, zone)
 		if err != nil || !got.Equal(c.want) {
