@@ -892,7 +892,7 @@ func TestReadFindingsWindows(t *testing.T) {
 	}
 	p := browsePrompt("steps", "", nil, false, nil)
 	for _, w := range []string{"document.visibilityState", "tabs_create_mcp (a new tab opens in front)", "close every tab you created",
-		windowCapture, windowRead, "flow=redirect&redirectUrl=", "through the person's SSO button"} {
+		windowCapture, windowRead, "flow=redirect&redirectUrl=", "through the person's SSO button", "wait 2 seconds and read it again"} {
 		if !strings.Contains(p, w) {
 			t.Errorf("the prompt lacks %q", w)
 		}

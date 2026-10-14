@@ -124,7 +124,8 @@ const windowWords = "A click that opens a window (window.open: an identity provi
 	windowRead + " A window captured: navigate this same tab to its address and finish there through the person's SSO button; a Backstage " +
 	"portal's sign-in window (/api/auth/<provider>/start?…&flow=popup) is opened with flow=redirect&redirectUrl=<the page's own URL, " +
 	"URL-encoded> in place of flow=popup, so the portal returns to the page signed in. Back on the page, a sign-in it still shows is clicked " +
-	"once more, which now finds the session. 'none': the click opened no window, go on. "
+	"once more, which now finds the session. 'none': a sign-in window opens once the page has asked its backend, so wait 2 seconds and " +
+	"read it again; still 'none', the click opened no window, go on. "
 
 // browseStart names the browse turn's start record, which has the hook act
 // in the turn wherever it runs.
