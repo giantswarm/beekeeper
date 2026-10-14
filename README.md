@@ -1376,15 +1376,21 @@ A merge or promotion of giantswarm/devctl opens a tool-release window by itself:
 with giantswarm/devctl excepted, since the release makes every in-flight devctl run refuse until
 updated. A merge that releases only a candidate (`vX.Y.Z-rc.N`) lifts it once recorded: `devctl
 version update` installs only a stable release, so no devctl run outdates, and the candidate's
-promotion opens the window anew. Otherwise it lifts once no devctl merge runs and the local `devctl version` reports the window's
-release (another version than when the window opened, while the release is unknown), or once its
-pull request did not merge: the gate lifts it
+promotion opens the window anew. Otherwise it lifts as soon as the release's binary assets exist
+and verify, not after the release workflow devctl's own merge still waits for: once GitHub reports
+the window's pull request merged (a promotion's from its start), the watch and the waiting gates
+run `devctl version update` every minute, which installs a release only once its binary verifies
+against its Sigstore bundle, and the window lifts once the local `devctl version` reports the
+window's release (another version than when the window opened, while the release is unknown), the
+devctl merge still running or not. The merges held behind it then start on the new devctl. An update
+that fails (a release whose binary never verifies) keeps the window, logged as `hold.update` and
+named on the hold (`beekeeper hold`, a held merge's refusal: `its last update failed, the window
+stays: <reason>`). The window also lifts once its pull request did not merge: the gate lifts it
 after a run with nothing merged or no release warranted, and `watch` (or the next gate call) asks
 GitHub about a window whose merge ended unrecorded (its gate killed) and lifts it when the pull
 request is open or closed; the waiting gates and the watch share that read, one per 30 s over all
-of them, claimed in the state before it is made. Once its merge merged, beekeeper installs the release itself: the gate
-runs `devctl version update` right after the merge (also when the window was lifted by hand), and
-`watch` retries every 2 minutes while devctl does not report the release, logging a failed update
+of them, claimed in the state before it is made. The gate also runs `devctl version update` right
+after the merge's record (also when the window was lifted by hand), a failure logged
 as `hold.update`. Every merge or promotion that runs devctl starts with `devctl version update`,
 which installs the latest release when the local devctl is behind it (a failure logged as
 `merge.update`), and the next merge of giantswarm/devctl waits while the previous one's window

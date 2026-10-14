@@ -284,6 +284,16 @@ func holdEnd(a *app, h state.Hold) string {
 	if upgrade.Is(h) {
 		return "the upgrade ends"
 	}
+	if h.Tool != "" {
+		end := h.Tool + " reports its release"
+		if h.ToolRelease != "" {
+			end = h.Tool + " reports " + h.ToolRelease
+		}
+		if h.ToolFailed != "" {
+			end += "; its last update failed, the window stays: " + h.ToolFailed
+		}
+		return end
+	}
 	if h.LiftWhen != "" {
 		probe := "`" + truncate(h.LiftWhen, 60) + "` passes"
 		if h.Until.IsZero() {

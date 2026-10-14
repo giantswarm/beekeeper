@@ -302,16 +302,138 @@ func TestADeadMergesToolWindowCloses(t *testing.T) {
 			}
 		})
 	}
-	// A live devctl keeps the window, whatever GitHub says.
+	// A live devctl of a pull request not merged keeps the window, also when
+	// devctl reports another version: nothing of the window released yet.
+	for _, pull := range []string{github.Open, github.Closed, ""} {
+		stubGitHub(t, pull, devctlTo)
+		updates := 0
+		devctlUpdate = func(context.Context) error { updates++; return nil }
+		g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
+		_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+			st.Merges[0].PID, st.Merges[0].Child = 0, os.Getpid()
+			return nil, nil
+		})
+		g.closeToolWindow(context.Background(), watchParty)
+		if st := gateState(t, g); len(st.Holds) != 1 || st.Holds[0].ToolMerged || updates != 0 {
+			t.Errorf("a running devctl's window, pull request %q: %+v, %d updates", pull, st.Holds, updates)
+		}
+	}
+}
+
+// A devctl merge's window lifts as soon as its release's binary verifies,
+// while the merge's devctl still waits for the release workflow: once GitHub
+// reports the pull request merged the window runs devctl's update once per
+// toolUpdateEvery; an update that installs nothing (no release yet) or fails
+// (no verifying binary) keeps the window and says so, the first that
+// installs the release lifts it, and the merges held behind it pass. The
+// merge's own record then finds no window left.
+func TestARunningToolMergeLiftsItsWindowOnceTheReleaseVerifies(t *testing.T) {
 	asked := stubGitHub(t, github.Open, devctlFrom)
+	pull, version, updates, fail := github.Open, devctlFrom, 0, error(nil)
+	pullState = func(context.Context, string, int) (github.Pull, error) {
+		*asked++
+		return github.Pull{State: pull}, nil
+	}
+	devctlVersion = func(context.Context) string { return version }
+	published := false
+	devctlUpdate = func(context.Context) error {
+		updates++
+		switch {
+		case fail != nil:
+			return fail
+		case published:
+			version = devctlTo
+		}
+		return nil
+	}
 	g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
+	held := func() bool {
+		_, ok := merge.Blocking(gateState(t, g), time.Now(), scratchRepo, 8, config.Lane{Name: scratchRepo})
+		return ok
+	}
+	sinceUpdate := func() {
+		_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+			st.Holds[0].ToolUpdated = time.Now().Add(-toolUpdateEvery)
+			return nil, nil
+		})
+	}
+
+	// The pull request waits for its checks: no update, the window holds.
+	g.closeToolWindow(context.Background(), watchParty)
+	if st := gateState(t, g); len(st.Holds) != 1 || updates != 0 || !held() {
+		t.Fatalf("before the merge: %d updates, holds %+v", updates, st.Holds)
+	}
+
+	// Merged, no release published yet: the update installs nothing.
+	pull = github.Merged
+	g.closeToolWindow(context.Background(), watchParty)
+	st := gateState(t, g)
+	if len(st.Holds) != 1 || !st.Holds[0].ToolMerged || updates != 1 || !held() {
+		t.Fatalf("merged, nothing released: %d updates, holds %+v", updates, st.Holds)
+	}
+	asked0 := *asked
+	g.closeToolWindow(context.Background(), watchParty)
+	if updates != 1 || *asked != asked0 {
+		t.Fatalf("within toolUpdateEvery: %d updates, GitHub asked %d more times", updates, *asked-asked0)
+	}
+
+	// The release is out and its binary does not verify: the window stays
+	// and says why.
+	fail = errors.New("the latest release has no signature bundle for this platform's binary")
+	sinceUpdate()
+	g.closeToolWindow(context.Background(), watchParty)
+	st = gateState(t, g)
+	if len(st.Holds) != 1 || updates != 2 || !held() || !strings.Contains(st.Holds[0].ToolFailed, "no signature bundle") {
+		t.Fatalf("an unverified release: %d updates, holds %+v", updates, st.Holds)
+	}
+	if d := lastEvent(t, g, "hold.update"); !strings.Contains(d, "no signature bundle") {
+		t.Errorf("hold.update event: %q", d)
+	}
+	if end := holdEnd(g.app, st.Holds[0]); !strings.Contains(end, "its last update failed, the window stays") || !strings.Contains(end, "no signature bundle") {
+		t.Errorf("the window's end: %q", end)
+	}
+
+	// The release verifies: the update installs it and the window lifts
+	// while the merge's devctl still runs; the held merges pass.
+	fail, published = nil, true
+	sinceUpdate()
+	g.closeToolWindow(context.Background(), watchParty)
+	st = gateState(t, g)
+	if len(st.Holds) != 0 || updates != 3 || held() {
+		t.Fatalf("a verified release: %d updates, holds %+v", updates, st.Holds)
+	}
+	if len(st.Merges) != 1 || st.Merges[0].Phase != state.Running {
+		t.Errorf("the merge's run changed: %+v", st.Merges)
+	}
+	if d := lastEvent(t, g, "hold.lift"); !strings.Contains(d, "devctl now reports "+devctlTo) || !strings.Contains(d, "still waits for the release workflow") {
+		t.Errorf("hold.lift event: %q", d)
+	}
+
+	// The merge's record later finds the window gone and lifts nothing more.
 	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Merges[0].PID, st.Merges[0].Child = 0, os.Getpid()
+		return recordRun(st, 0, g.lane, g.me, runOutcome{out: merge.Outcome{Merged: true, Release: devctlTo}}, time.Now(), ""), nil
+	})
+	if st = gateState(t, g); len(st.Holds) != 0 {
+		t.Errorf("the record reopened a window: %+v", st.Holds)
+	}
+}
+
+// A running promotion's window updates devctl as its release comes and
+// lifts once devctl reports a release newer than the window's opening one.
+func TestARunningToolPromotionLiftsItsWindowOnceTheReleaseVerifies(t *testing.T) {
+	asked := stubGitHub(t, github.Open, devctlFrom)
+	version := devctlFrom
+	devctlVersion = func(context.Context) string { return version }
+	devctlUpdate = func(context.Context) error { version = devctlTo; return nil }
+	g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
+	g.pr = 0
+	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Merges[0].PR, st.Holds[0].ToolPR = 0, 0
 		return nil, nil
 	})
 	g.closeToolWindow(context.Background(), watchParty)
-	if st := gateState(t, g); len(st.Holds) != 1 || *asked != 0 {
-		t.Errorf("a running devctl's window: %+v, GitHub asked %d times", st.Holds, *asked)
+	if st := gateState(t, g); len(st.Holds) != 0 || *asked != 0 {
+		t.Fatalf("a promotion's verified release: holds %+v, GitHub asked %d times", st.Holds, *asked)
 	}
 }
 
