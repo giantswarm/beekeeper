@@ -161,13 +161,14 @@ func TestSelfUpdateLatestRefreshesOnlyStalePlugin(t *testing.T) {
 // The new binary of the tests, as its version line names it.
 const newBinary = latestRelease + " (commit 2b8a6d5)"
 
-// asBinary makes this test's beekeeper the release id with a state
-// directory of its own, and returns that directory.
+// asBinary makes this test's beekeeper the installed release id with a
+// state directory of its own, and returns that directory.
 func asBinary(t *testing.T, id string) string {
 	t.Helper()
-	prev := binaryIdentity
-	t.Cleanup(func() { binaryIdentity = prev })
+	prev, prevInstalled := binaryIdentity, runsInstalled
+	t.Cleanup(func() { binaryIdentity, runsInstalled = prev, prevInstalled })
 	binaryIdentity = func() string { return id }
+	runsInstalled = func() bool { return true }
 	t.Setenv("BEEKEEPER_CONFIG", filepath.Join(t.TempDir(), "none.yaml"))
 	state := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", state)
@@ -261,6 +262,68 @@ func TestFirstRunSyncWaitsForClaudeCode(t *testing.T) {
 	beekeeper(t, "timer")
 	if len(*ran) != 0 {
 		t.Errorf("a development build synced: %q", *ran)
+	}
+}
+
+// A release binary run from elsewhere than PATH, a downloaded candidate
+// under proof, changes no plugin and records no sync, neither on its first
+// command nor asked to sync; the installed binary of the same release
+// still syncs on its first command.
+func TestACandidateBinaryLeavesThePluginAlone(t *testing.T) {
+	dir := asBinary(t, newBinary)
+	runsInstalled = func() bool { return false }
+	ran := fakePlugins(t, []installedPlugin{{ID: beekeeperID, Version: oldPlugin, Scope: userScope, Enabled: true, InstallPath: pluginCopy(t, "worker-rules")}})
+
+	beekeeper(t, "timer")
+	out := beekeeper(t, selfUpdateCmdName, "--"+syncPluginsFlag)
+	if len(*ran) != 0 {
+		t.Errorf("a candidate binary ran claude plugin %q", *ran)
+	}
+	if got := recordedSync(dir); got != "" {
+		t.Errorf("a candidate binary recorded the sync %q", got)
+	}
+	if !strings.Contains(out, "not the one on PATH") {
+		t.Errorf("a candidate asked to sync did not say why it does not:\n%s", out)
+	}
+
+	runsInstalled = func() bool { return true }
+	beekeeper(t, "timer")
+	if want := []string{refreshMarketplace, updateUserScope}; !slices.Equal(*ran, want) {
+		t.Errorf("the installed binary's first command ran claude plugin %q, want %q", *ran, want)
+	}
+	if got := recordedSync(dir); got != newBinary {
+		t.Errorf("recorded sync %q, want %q", got, newBinary)
+	}
+}
+
+// The installed binary is the beekeeper on PATH, a symbolic link to it
+// included; another file of that name on PATH, or none, makes the running
+// one a binary from elsewhere.
+func TestRunsInstalledIsTheBeekeeperOnPath(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	linked := t.TempDir()
+	if err := os.Symlink(self, filepath.Join(linked, project.Name)); err != nil {
+		t.Fatal(err)
+	}
+	other := t.TempDir()
+	if err := os.WriteFile(filepath.Join(other, project.Name), []byte("#!/bin/sh\n"), 0o700); err != nil { //nolint:gosec // an executable stand-in
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		path string
+		want bool
+	}{
+		{linked, true},
+		{other, false},
+		{t.TempDir(), false},
+	} {
+		t.Setenv("PATH", tc.path)
+		if got := runsInstalled(); got != tc.want {
+			t.Errorf("PATH %s: runsInstalled() = %v, want %v", tc.path, got, tc.want)
+		}
 	}
 }
 
