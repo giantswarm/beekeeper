@@ -381,8 +381,13 @@ func TestNamedRefsReadsTheFormsPeopleWrite(t *testing.T) {
 		{"#5 then o/r#16 and #17", owner, []string{"o/r#16", "o/r#17"}},
 		{"#5 alone", owner, nil},
 		// beekeeper's own items are no issues, and set no context.
-		{"o/r#1 waits on note #708, timer #707, memo #1047, decision #894; notes #3 and #4 too", owner, []string{refOne, "o/r#4"}},
+		{"o/r#1 waits on note #708, timer #707, memo #1047, decision #894; notes #3 and #4 too", owner, []string{refOne}},
 		{"note #708 then #2", owner, nil},
+		// A bare #n after prose is no item of the list before it: a memo
+		// across repositories names each by its own repository.
+		{"Morning, #37850 chip: (1) glean portal steps (gpm#282 encoding fix live as 0.44.1); then Timo ticks #37850 criterion 3. gpm#283 proven; backstage#2597 filed", owner, []string{"gs/gpm#282", "gs/gpm#283", "gs/backstage#2597"}},
+		{"o/r#1 is merged, now tick #2", owner, []string{refOne}},
+		{"o/r#1 / #2 or #6; #62 & #63", owner, []string{refOne, idleRef, "o/r#6", "o/r#62", "o/r#63"}},
 		{"o/r#1 and O/R#1 once", owner, []string{refOne}},
 		// Without a board owner a repo#n names nothing.
 		{"beekeeper#5 and a/b#6", "", []string{"a/b#6"}},
