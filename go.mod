@@ -13,7 +13,7 @@ require (
 	github.com/giantswarm/selfupdate-cosign v0.3.4
 	github.com/go-jose/go-jose/v4 v4.1.5
 	github.com/go-logr/logr v1.4.4
-	github.com/godbus/dbus/v5 v5.2.3
+	github.com/godbus/dbus/v5 v5.2.4
 	github.com/gofrs/flock v0.13.1
 	github.com/google/uuid v1.6.0
 	github.com/itchyny/gojq v0.12.19
