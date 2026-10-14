@@ -3,6 +3,7 @@ package cmd
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -31,12 +32,13 @@ import (
 	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/upgrade"
+	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
 func (a *app) watchCmd() *cobra.Command {
 	var once, notifyDesktop, standby bool
 	c := &cobra.Command{
-		Use:   "watch",
+		Use:   watchName,
 		Short: "Stay silent until something needs a look, then say it in one line",
 		Long: `Poll the machine every watch.interval (30s) and print one line per event,
 silent otherwise: made to be the source of a Monitor, so the supervisor
@@ -138,8 +140,14 @@ FAILED while it fails; the TMPFS line says when it ran last.
 A running beekeeper watch, this one included, whose binary self-update
 replaced keeps the code it started with: one WATCH STALE line names the
 watch, the version it runs and the one installed, and that a re-arm (a
-restart) picks it up; one ENDED line follows once it exits. No watch
-re-executes itself. --once says the stale watches it finds as well.
+restart) picks it up; one ENDED line follows once it exits. --once says
+the stale watches it finds as well. Once beekeeper install or self-update
+asks (restart.json in the state directory), a watch of the replaced binary
+restarts on the installed one: after its current poll it stops as on
+SIGTERM, waits for every run it started, so a save under way ends first,
+says WATCH RESTART and re-executes the installed binary with its own
+command line, the same pid and output; it restarts once per request, and
+an alerts or guide watch keeps its owner's re-arm.
 
 A registered agent whose session's context reaches agents.relayAt gets one
 HANDOVER DUE "<agent>" at <n>k: beekeeper agents handover "<agent>" at its
@@ -238,22 +246,44 @@ back for as long as the sandboxed command runs: a Monitor reads them as
 it reads a watch on the host, and stopping it stops the watch.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			ownScope("watch", brokeredWatchCap)
+			if os.Getenv(restartedEnv) == "" {
+				ownScope("watch", brokeredWatchCap)
+			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			w := a.newWatcher(standby, !once)
-			if notifyDesktop {
-				d := plat.NewNotifier()
-				defer func() { _ = d.Close() }()
-				w.notifier = notify.New(a.cfg.Notify.Policy(), a.cfg.StateDir, d, func(l string) { w.emitNow("notify", "%s", l) })
+			var restart *restartWatch
+			if !once {
+				restart = newRestartWatch(a.cfg.StateDir)
 			}
-			return w.run(ctx, once)
+			for {
+				w := a.newWatcher(standby, !once)
+				w.restart = restart
+				err := a.runWatcher(ctx, w, once, notifyDesktop)
+				if !errors.Is(err, errRestart) {
+					return err
+				}
+				w.emitNow("restart", "WATCH RESTART: %s asked this watch onto the installed %s; re-executing it", w.restartFor.Binary, project.Name)
+				if err := restart.exec(w.restartFor); err != nil {
+					w.emitNow("restart", "WATCH RESTART FAILED: the installed %s does not start (%v): carrying on under %s", w.restartFor.Binary, err, project.Version())
+				}
+			}
 		},
 	}
 	c.Flags().BoolVar(&once, "once", false, "poll once and exit")
 	c.Flags().BoolVar(&notifyDesktop, "notify", false, "send the events that need a person to the desktop too (notify.kinds)")
 	c.Flags().BoolVar(&standby, "standby", false, "while a supervisor runs, leave its events to its watch and never read the alerts")
 	return c
+}
+
+// runWatcher runs w until ctx ends or an install asks it to restart, with
+// its desktop notifier (--notify) open for that run.
+func (a *app) runWatcher(ctx context.Context, w *watcher, once, notifyDesktop bool) error {
+	if notifyDesktop {
+		d := plat.NewNotifier()
+		defer func() { _ = d.Close() }()
+		w.notifier = notify.New(a.cfg.Notify.Policy(), a.cfg.StateDir, d, func(l string) { w.emitNow("notify", "%s", l) })
+	}
+	return w.run(ctx, once)
 }
 
 type watcher struct {
@@ -406,6 +436,14 @@ type watcher struct {
 	// timerActs are the fired timers' wakes and commands under way, and
 	// the defaulted decisions' filers being told.
 	timerActs sync.WaitGroup
+	// bg are the poll's background runs under way (inFlight, the doctor,
+	// the Go cache's and tmpfs's looks): a restart waits for them.
+	bg sync.WaitGroup
+	// restart tells the watch when an install asked it to restart on the
+	// installed binary (nil: never, --once); restartFor is the request
+	// its run ended for.
+	restart    *restartWatch
+	restartFor *restartRequest
 	// openNotes are the notes open at the last tick, answersSince the time
 	// up to which their answers were said.
 	openNotes    map[int]bool
@@ -498,6 +536,8 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 	// whether the machine is strained. The loop's own first sample is one
 	// interval later: two samples in a row span one (CPU PRESSURE).
 	w.sample(ctx)
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	wg.Go(func() {
@@ -516,8 +556,34 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 		}
 	}
 	wg.Go(func() { w.loop(ctx, interval, true, w.upgradeCycle) })
-	w.loop(ctx, interval, false, w.poll)
-	return nil
+	w.loop(ctx, interval, false, func(ctx context.Context) {
+		w.poll(ctx)
+		if req := w.restartDue(); req != nil {
+			w.restartFor = req
+			cancel(errRestart)
+		}
+	})
+	if w.restartFor == nil {
+		return nil
+	}
+	// The restart stops the watch as a SIGTERM does and waits for every run
+	// it started: a save under way ends before the new binary starts, and
+	// the restarted watch's mark says nothing twice.
+	wg.Wait()
+	w.bg.Wait()
+	w.stand.inflight.Wait()
+	w.timerActs.Wait()
+	w.saveMark()
+	return errRestart
+}
+
+// restartDue is the install's request this watch restarts for, nil when
+// none.
+func (w *watcher) restartDue() *restartRequest {
+	if w.restart == nil {
+		return nil
+	}
+	return w.restart.due()
 }
 
 // transcriptFresh is how long a watch takes an unchanged transcript's last
@@ -578,12 +644,14 @@ func (w *watcher) readCtx(ctx context.Context) context.Context {
 // for it at most wait: a hung read holds the poll up for one wait at most,
 // and the next poll skips it instead of starting a second one. fn keeps
 // running on ctx, within its own timeouts.
-func inFlight(ctx context.Context, wait time.Duration, running *atomic.Bool, fn func(context.Context)) {
+func (w *watcher) inFlight(ctx context.Context, wait time.Duration, running *atomic.Bool, fn func(context.Context)) {
 	if !running.CompareAndSwap(false, true) {
 		return
 	}
 	done := make(chan struct{})
+	w.bg.Add(1)
 	go func() {
+		defer w.bg.Done()
 		defer running.Store(false)
 		defer close(done)
 		fn(ctx)
@@ -1248,7 +1316,7 @@ func (w *watcher) poll(ctx context.Context) {
 	now := w.now
 	if now.Sub(w.lastSettle) >= w.readEvery(th.Interval.Duration) {
 		w.lastSettle = now
-		inFlight(w.readCtx(ctx), th.Interval.Duration, &w.settling, func(ctx context.Context) {
+		w.inFlight(w.readCtx(ctx), th.Interval.Duration, &w.settling, func(ctx context.Context) {
 			_ = w.checkPlaces(ctx, watchParty, now, "", "", 0, th.Interval.Duration)
 			w.hungMerges(ctx, now)
 			w.settled(ctx, now)
@@ -1256,20 +1324,20 @@ func (w *watcher) poll(ctx context.Context) {
 	}
 	if now.Sub(w.lastBudget) >= th.BudgetEvery.Duration {
 		w.lastBudget = now
-		inFlight(ctx, th.Interval.Duration, &w.budgeting, func(ctx context.Context) { w.budget(ctx, now) })
+		w.inFlight(ctx, th.Interval.Duration, &w.budgeting, func(ctx context.Context) { w.budget(ctx, now) })
 	}
 	if now.Sub(w.lastTeleport) >= w.readEvery(th.Interval.Duration) {
 		w.lastTeleport = now
-		inFlight(ctx, th.Interval.Duration, &w.teleporting, w.teleport)
+		w.inFlight(ctx, th.Interval.Duration, &w.teleporting, w.teleport)
 	}
 	if w.cfg.Central.Enabled() && now.Sub(w.lastCentral) >= w.readEvery(th.Interval.Duration) {
 		w.lastCentral = now
-		inFlight(ctx, th.Interval.Duration, &w.centraling, w.syncRoster)
+		w.inFlight(ctx, th.Interval.Duration, &w.centraling, w.syncRoster)
 	}
 	if now.Sub(w.lastSweep) >= w.readEvery(w.cfg.Outbound.SweepEvery.Duration) {
 		w.lastSweep = now
 		// The sweep takes a while on a big home directory: the poll does not wait.
-		inFlight(ctx, 0, &w.sweeping, func(context.Context) { w.exposures() })
+		w.inFlight(ctx, 0, &w.sweeping, func(context.Context) { w.exposures() })
 	}
 	w.saveMark()
 	if w.notifier != nil {

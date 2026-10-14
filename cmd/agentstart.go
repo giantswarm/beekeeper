@@ -951,11 +951,14 @@ func (a *app) reopenSession(ctx context.Context, arg, turn string) error {
 	}
 	// A headless turn that ended on a background wait, its task open, is
 	// resumed headless instead: the wait's completion notice never wakes it.
-	if resumed, err := a.resumeOnWait(ctx, id, turn); resumed || err != nil {
-		if err != nil {
-			return a.reopenMissed(name, err)
+	// A reopen an install restarted decided that before.
+	if os.Getenv(restartedEnv) == "" {
+		if resumed, err := a.resumeOnWait(ctx, id, turn); resumed || err != nil {
+			if err != nil {
+				return a.reopenMissed(name, err)
+			}
+			return nil
 		}
-		return nil
 	}
 	release, waits, err := a.holdReopen(id)
 	if err != nil {
@@ -987,7 +990,7 @@ func (a *app) reopenSession(ctx context.Context, arg, turn string) error {
 	wctx, urgent, stop := a.watchReopen(ctx, arg, id)
 	defer stop()
 	d.urgent = urgent
-	err = d.await(wctx, reopenAwayWait, a.importWaits(id, name, reopenAwayWait))
+	err = a.awaitRestartable(wctx, d, a.importWaits(id, name, reopenAwayWait))
 	a.importEnded(id)
 	if end, ok := errors.AsType[reopenEnd](context.Cause(wctx)); ok {
 		return a.reopenEnded(ctx, id, name, end)
@@ -1023,6 +1026,50 @@ func (a *app) reopenSession(ctx context.Context, arg, turn string) error {
 	}
 	return a.reopenWarmed(ctx, id, name, shownAt)
 }
+
+// awaitRestartable waits for the person to leave the desktop's window, as
+// a reopen does before its show, and restarts the reopen on the installed
+// binary when an install asks meanwhile: the wait is all it did so far, and
+// the restarted reopen waits again. A binary that does not start leaves
+// the wait to go on under this one.
+func (a *app) awaitRestartable(ctx context.Context, d desk, onHeld func(error)) error {
+	rw, poll := newRestartWatch(a.cfg.StateDir), reopenPoll
+	for {
+		actx, cancel := context.WithCancelCause(ctx)
+		done := make(chan struct{})
+		go func() {
+			tick := time.NewTicker(poll)
+			defer tick.Stop()
+			for {
+				select {
+				case <-done:
+					return
+				case <-tick.C:
+					if req := rw.due(); req != nil {
+						cancel(restartCause{req})
+						return
+					}
+				}
+			}
+		}()
+		err := d.await(actx, reopenAwayWait, onHeld)
+		close(done)
+		cancel(nil)
+		r, ok := errors.AsType[restartCause](context.Cause(actx))
+		if !ok || ctx.Err() != nil {
+			return err
+		}
+		_, _ = fmt.Fprintf(a.out, "reopen: %s asked this reopen onto the installed %s; re-executing it\n", r.req.Binary, project.Name)
+		if err := rw.exec(r.req); err != nil {
+			_, _ = fmt.Fprintf(a.out, "reopen: the installed %s does not start (%v): waiting on under %s\n", r.req.Binary, err, project.Version())
+		}
+	}
+}
+
+// restartCause ends a reopen's wait for an install's restart request.
+type restartCause struct{ req *restartRequest }
+
+func (restartCause) Error() string { return errRestart.Error() }
 
 // reopenEnded ends the reopen of session id once it has nothing left to
 // show: a desktop CLI of the session that runs already is kept as the

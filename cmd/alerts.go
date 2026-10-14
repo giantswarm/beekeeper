@@ -35,7 +35,7 @@ const (
 
 func (a *app) alertsCmd() *cobra.Command {
 	c := &cobra.Command{
-		Use:   "alerts",
+		Use:   alertsName,
 		Short: "The alerts of the installations the sessions work on",
 		Long: `Read each installation's Alertmanager through a bounded kubectl port-forward
 (Mimir's mimir/mimir-alertmanager:8080 with the giantswarm tenant, else

@@ -627,7 +627,9 @@ func (w *watcher) doctor(ctx context.Context) {
 		w.retitled[host] = d.now
 		return true
 	}
+	w.bg.Add(1)
 	go func() {
+		defer w.bg.Done()
 		defer w.doctoring.Store(false)
 		rep, err := d.doctor(ctx, doctorRun{by: watchParty, retry: retry})
 		if err != nil {
