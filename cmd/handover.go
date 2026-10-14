@@ -252,7 +252,7 @@ func isRun(e state.Event) bool { return strings.HasPrefix(e.Verb, "run.") }
 
 func (a *app) logCmd() *cobra.Command {
 	var n int
-	var verb, since string
+	var verb, since, until string
 	c := &cobra.Command{
 		Use:   "log",
 		Short: "The event log: every claim, grant, hold, registration, note and build run",
@@ -263,22 +263,38 @@ machine's first, never trimmed or rotated, so --since 30d answers the last 30
 days in full. An agents.* event (start, wake, handover, note, broadcast) waits
 for the state lock rather than give up on a busy one.
 
-Without --since, -n shows the latest 50 events; with it, every event in the
-window unless -n is given too.`,
+--since and --until bound the window (--until: before then); a bare date
+(2026-10-08) is that day's 00:00 local time. Without either, -n shows the
+latest 50 events; with one, every event in the window unless -n is given too.`,
+		Example: `  beekeeper log --verb agents.problem --since 19:06
+  beekeeper log --since 2026-10-08 --until 2026-10-09 --json   # the whole of October 8`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			var from time.Time
+			var from, to time.Time
+			ref := a.now
+			if until != "" {
+				t, err := reportTime(a.now, until, time.Local)
+				if err != nil {
+					return err
+				}
+				to, ref = t, t
+			}
 			if since != "" {
-				t, err := reportTime(a.now, since, time.Local)
+				t, err := reportTime(ref, since, time.Local)
 				if err != nil {
 					return err
 				}
 				from = t
-				if !cmd.Flags().Changed("lines") {
-					n = 0
-				}
 			}
-			evs, err := a.store.Events(n, func(e state.Event) bool { return strings.HasPrefix(e.Verb, verb) && !e.At.Before(from) })
+			if !to.IsZero() && !from.Before(to) {
+				return usageErr("--since %s is not before --until %s", from.Format(time.RFC3339), to.Format(time.RFC3339))
+			}
+			if (since != "" || until != "") && !cmd.Flags().Changed("lines") {
+				n = 0
+			}
+			evs, err := a.store.Events(n, func(e state.Event) bool {
+				return strings.HasPrefix(e.Verb, verb) && !e.At.Before(from) && (to.IsZero() || e.At.Before(to))
+			})
 			if err != nil {
 				return err
 			}
@@ -292,9 +308,10 @@ window unless -n is given too.`,
 			return w.Flush()
 		},
 	}
-	c.Flags().IntVarP(&n, "lines", "n", 50, "how many of the latest events (0: all; default all with --since)")
+	c.Flags().IntVarP(&n, "lines", "n", 50, "how many of the latest events (0: all; default all with --since or --until)")
 	c.Flags().StringVar(&verb, "verb", "", "only the events whose verb starts with this (run.: the build runs)")
-	c.Flags().StringVar(&since, "since", "", "only the events from this on: a duration before now (1h, 30d), a time (15:04) or RFC 3339")
+	c.Flags().StringVar(&since, "since", "", "only the events from this on: a duration before --until (1h, 30d), a time (15:04), a date (2006-01-02: its 00:00) or RFC 3339")
+	c.Flags().StringVar(&until, "until", "", "only the events before this: a time (15:04), a date (2006-01-02: its 00:00, the day itself left out) or RFC 3339; default now")
 	c.AddCommand(&cobra.Command{
 		Use:   "add <text>",
 		Short: "Log a status line: what happened, for whoever reads the log (verb status)",

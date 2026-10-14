@@ -143,15 +143,17 @@ about credentials is named by its issue only.`,
 			return err
 		},
 	}
-	c.Flags().StringVar(&since, "since", "", "the window's start: a duration before --until (1h), a time (15:04) or RFC 3339; default reporter.every")
-	c.Flags().StringVar(&until, "until", "", "the window's end: a time (15:04) or RFC 3339; default now")
+	c.Flags().StringVar(&since, "since", "", "the window's start: a duration before --until (1h), a time (15:04), a date (2006-01-02: its 00:00) or RFC 3339; default reporter.every")
+	c.Flags().StringVar(&until, "until", "", "the window's end: a time (15:04), a date (2006-01-02: its 00:00, the day itself left out) or RFC 3339; default now")
 	c.Flags().StringVar(&tz, "tz", "", "the time zone of the report's times (IANA, Europe/Berlin); default reporter.tz, else the machine's")
 	return c
 }
 
-// reportTime parses a window bound in zone: RFC 3339, "15:04" (the last
-// such time at or before ref) or, for --since, a duration before ref (1h,
-// or days: 30d).
+// reportTime parses a window bound in zone: RFC 3339, a bare date
+// (2006-01-02: that day's 00:00, for --since and --until alike, so
+// --since 2026-10-08 --until 2026-10-09 is the whole of October 8), "15:04"
+// (the last such time at or before ref) or, for --since, a duration before
+// ref (1h, or days: 30d).
 func reportTime(ref time.Time, s string, zone *time.Location) (time.Time, error) {
 	if d, err := time.ParseDuration(s); err == nil {
 		return ref.Add(-d), nil
@@ -164,9 +166,12 @@ func reportTime(ref time.Time, s string, zone *time.Location) (time.Time, error)
 	if t, err := time.Parse(time.RFC3339, s); err == nil {
 		return t, nil
 	}
+	if t, err := time.ParseInLocation(time.DateOnly, s, zone); err == nil {
+		return t, nil
+	}
 	t, err := time.ParseInLocation("15:04", s, zone)
 	if err != nil {
-		return time.Time{}, usageErr("%q is neither a time (15:04, RFC 3339) nor a duration (1h, 30d)", s)
+		return time.Time{}, usageErr("%q is neither a time (15:04, 2006-01-02, RFC 3339) nor a duration (1h, 30d)", s)
 	}
 	r := ref.In(zone)
 	t = time.Date(r.Year(), r.Month(), r.Day(), t.Hour(), t.Minute(), 0, 0, zone)

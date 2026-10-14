@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,5 +62,16 @@ unpriced, left out of the total (metrics.models): q/n, x
 	c.SilenceErrors, c.SilenceUsage = true, true
 	if err := c.Execute(); err != nil {
 		t.Fatal(err) // 13:00 is yesterday's, before today's 12:00
+	}
+	// Bare dates are their 00:00: the window is the whole of October 8.
+	out.Reset()
+	a.now = time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	c = a.spendCmd()
+	c.SetArgs([]string{"--since", "2026-10-08", "--until", "2026-10-09", "--tz", "UTC"})
+	if err := c.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if want := strings.Replace(want, "2026-10-08T12:00:00Z", "2026-10-09T00:00:00Z", 1); out.String() != want {
+		t.Errorf("--since 2026-10-08 --until 2026-10-09: got\n%s\nwant\n%s", out.String(), want)
 	}
 }

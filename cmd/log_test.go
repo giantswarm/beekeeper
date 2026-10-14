@@ -66,6 +66,65 @@ func TestLogKeepsAgentsStartsForTheWindow(t *testing.T) {
 	}
 }
 
+// --since and --until bound the window, a bare date at its 00:00 local time.
+func TestLogSinceUntil(t *testing.T) {
+	store, err := state.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	day := time.Date(2026, 10, 8, 0, 0, 0, 0, time.Local)
+	ev := func(at time.Time, verb, detail string) state.Event {
+		return state.Event{At: at, Verb: verb, Detail: detail}
+	}
+	if err := store.Record(
+		ev(day.Add(-time.Minute), "agents.problem", "the day before"),
+		ev(day, "agents.problem", "midnight"),
+		ev(day.Add(20*time.Hour+15*time.Minute), "agents.problem", "20:15"),
+		ev(day.Add(21*time.Hour), "agents.start", "another verb"),
+		ev(day.Add(24*time.Hour), "agents.problem", "the next day"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	now := day.Add(36 * time.Hour)
+	logged := func(args ...string) ([]string, error) {
+		var out bytes.Buffer
+		a := &app{store: store, out: &out, json: true, now: now}
+		c := a.logCmd()
+		c.SetArgs(args)
+		c.SilenceErrors, c.SilenceUsage = true, true
+		if err := c.Execute(); err != nil {
+			return nil, err
+		}
+		var evs []state.Event
+		if err := json.Unmarshal(out.Bytes(), &evs); err != nil {
+			t.Fatalf("log %v: %v in %q", args, err, out.String())
+		}
+		var got []string
+		for _, e := range evs {
+			got = append(got, e.Detail)
+		}
+		return got, nil
+	}
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--verb", "agents.problem", "--since", "2026-10-08", "--until", "2026-10-09"}, "[midnight 20:15]"},
+		{[]string{"--verb", "agents.problem", "--since", "2026-10-08"}, "[midnight 20:15 the next day]"},
+		{[]string{"--verb", "agents.problem", "--until", "2026-10-08"}, "[the day before]"},
+		{[]string{"--verb", "agents.problem", "--since", "20:15", "--until", "2026-10-09"}, "[20:15]"},
+		{[]string{"--since", "2026-10-08", "--until", "2026-10-09"}, "[midnight 20:15 another verb]"},
+	} {
+		got, err := logged(c.args...)
+		if err != nil || fmt.Sprint(got) != c.want {
+			t.Errorf("log %v = %v, %v; want %s", c.args, got, err, c.want)
+		}
+	}
+	if _, err := logged("--since", "2026-10-09", "--until", "2026-10-08"); Code(err) != ExitUsage {
+		t.Errorf("--since after --until = %v, want a usage error", err)
+	}
+}
+
 // --since takes days as well as Go durations.
 func TestReportTimeTakesDays(t *testing.T) {
 	now := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
