@@ -489,11 +489,14 @@ line:
   desktop records it, up to 5 stewards' turns 10 minutes apart within 24h;
   so are archived the session an agents handover ended and the run of the
   supervisor or the guide a relay relieved, which frees its desktop CLI;
-  with no idle steward running, the session's own desktop CLI archives it,
-  warmed by showing the session in the desktop for a moment once the
-  person's typing pauses (a run that asks no steward counts no turn), and
-  never while a headless turn of the session runs (claude -p --resume
-  <id>, a wake's): that turn is its CLI;
+  the steward is an idle desktop CLI of another session; with none
+  running, a finished worker's own desktop CLI archives it, warmed by
+  showing the session in the desktop for a moment once the person's
+  typing pauses, never while a headless turn of the session runs (claude
+  -p --resume <id>, a wake's): that turn is its CLI; a relieved run of the
+  supervisor or the guide is never asked about itself and waits for
+  another steward; a steward that declined is asked for no archive for
+  24h; a run that asks no steward counts no turn and waits 10 minutes;
 - gives a session beekeeper started the roster name back when the desktop
   recorded another title, through a steward;
 - reopens a worker whose session the desktop never imported (no row in the

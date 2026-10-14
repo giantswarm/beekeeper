@@ -568,14 +568,16 @@ const (
 
 // archiveOutcome is what archiving the desktop session of agent did, said
 // by line. host is the desktop session left to archive later, "" when it
-// is archived or never to be; asked says a steward was asked for it in vain;
-// unagreed says the person's agreement is not configured, which the doctor
-// reports once for all agents, not per agent.
+// is archived or never to be; asked says a steward was asked for it in vain,
+// looked that the search for one asked none (none ran, each declined, the
+// desktop did not run); unagreed says the person's agreement is not
+// configured, which the doctor reports once for all agents, not per agent.
 type archiveOutcome struct {
 	agent    state.Party
 	line     string
 	host     string
 	asked    bool
+	looked   bool
 	unagreed bool
 }
 
@@ -585,7 +587,8 @@ const stewardDeclineFor = 24 * time.Hour
 
 // archiveDesktops archives the desktop sessions of agents taken off the
 // roster by the command by, through one steward's turn (archiveSteward: an
-// idle CLI, else one of the sessions' own, warmed for it): only sessions
+// idle CLI of another session, else one of the sessions' own, warmed for
+// it, never a role's past run's, whose role forbids it the call): only sessions
 // beekeeper started, keeping no role (roleKeeps) and running no turn, and
 // only under the person's agreement (agents.archiveAgreement). An archive
 // counts once the desktop records it; the line names the steward whose
@@ -594,7 +597,7 @@ const stewardDeclineFor = 24 * time.Hour
 // outcome per agent.
 func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []state.Party, by string) []archiveOutcome {
 	out := make([]archiveOutcome, len(agents))
-	var hosts []string
+	var hosts, roleRuns []string
 	at := map[string]int{}
 	for i, ag := range agents {
 		out[i].agent = ag
@@ -613,6 +616,9 @@ func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []sta
 		}
 		at[host] = i
 		hosts = append(hosts, host)
+		if keepsRole(st, ag) {
+			roleRuns = append(roleRuns, host)
+		}
 	}
 	if len(hosts) == 0 {
 		return out
@@ -626,9 +632,9 @@ func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []sta
 	wait := archiveWait + time.Duration(len(hosts)-1)*archiveEach
 	var asked []stewardAnswer
 	var errs []error
-	find := func(exclude []string) (steward, error) { return a.findSteward(hosts[0], exclude) }
+	find := func(exclude []string) (steward, error) { return a.findSteward(hosts[0], slices.Concat(exclude, hosts)) }
 	for range stewardTries {
-		s, err := archiveSteward(ctx, left(), append(slices.Clone(declined), stewardHosts(asked)...), find, a.warmSteward)
+		s, err := archiveSteward(ctx, left(), slices.Concat(declined, roleRuns, stewardHosts(asked)), find, a.warmSteward)
 		if err != nil {
 			errs = append(errs, err)
 			break
@@ -652,7 +658,7 @@ func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []sta
 		case who != "":
 			o.line = fmt.Sprintf("archived its desktop session %s (%s's %s call succeeded; the desktop has not recorded it yet)", h, who, archiveTool)
 		default:
-			o.line, o.host, o.asked = fmt.Sprintf("its desktop session %s stays: %v", h, errors.Join(errs...)), h, len(asked) > 0
+			o.line, o.host, o.asked, o.looked = fmt.Sprintf("its desktop session %s stays: %v", h, errors.Join(errs...)), h, len(asked) > 0, len(asked) == 0
 		}
 	}
 	return out

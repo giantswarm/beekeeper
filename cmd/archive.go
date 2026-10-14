@@ -16,7 +16,8 @@ import (
 // doctor asks a steward for it again on its later runs while the CLI runs
 // no turn, until the desktop records it, within archiveTries stewards'
 // turns and archiveOwedFor. A run that asked no steward (the desktop did
-// not run, the person typed) counts no turn.
+// not run, none ran, each declined) counts no turn and waits archiveAgain
+// too, so the doctor does not look again on each of its runs.
 const (
 	archiveTries   = 5
 	archiveOwedFor = 24 * time.Hour
@@ -55,6 +56,9 @@ func owe(st *state.State, outcomes []archiveOutcome, now time.Time) []string {
 		if o.asked {
 			ar.Tries++
 			ar.Tried = now
+		}
+		if o.looked {
+			ar.Looked = now
 		}
 		if why := givenUp(*ar, now); why != "" {
 			st.Archives = slices.Delete(st.Archives, j, j+1)
@@ -181,7 +185,8 @@ func (o owedArchive) String() string {
 // planArchives sorts the archives st owes at now. One is owed no longer once
 // the desktop has it archived or no session of it, the agent is on the
 // roster again or keeps a role unrelieved, or it is past its bounds; it waits while its
-// CLI is busy, or archiveAgain after a steward's turn did not record it.
+// CLI is busy, or archiveAgain after a steward's turn did not record it or a
+// run asked no steward (none ran, or each declined).
 // record reads a desktop session's record.
 func planArchives(st *state.State, record func(host string) (*claude.Record, bool), busy func(state.Party) bool, now time.Time) []owedArchive {
 	out := make([]owedArchive, 0, len(st.Archives))
@@ -205,6 +210,8 @@ func planArchives(st *state.State, record func(host string) (*claude.Record, boo
 			o.wait = fmt.Sprintf("its session stays quiet a day first, until %s", clock(now, latest(ar.Since, r.LastSeen().Add(reseedQuiet))))
 		case !ar.Tried.IsZero() && now.Sub(ar.Tried) < archiveAgain:
 			o.wait = fmt.Sprintf("a steward was asked %s ago", dur(now.Sub(ar.Tried)))
+		case !ar.Looked.IsZero() && now.Sub(ar.Looked) < archiveAgain:
+			o.wait = fmt.Sprintf("no steward was asked %s ago", dur(now.Sub(ar.Looked)))
 		}
 		out = append(out, o)
 	}

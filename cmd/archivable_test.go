@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/platform"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -20,6 +22,7 @@ const (
 	runHost       = "local_run9"
 	personHost    = "local_person"
 	finishedName  = "Board pull 901"
+	finishedID    = "fin"
 	doerHost      = "local_doer"
 	decliningHost = "local_nay"
 	targetHost    = "local_tgt"
@@ -43,7 +46,7 @@ func archiveApp(t *testing.T, st func(*state.State)) (*app, *strings.Builder) {
 // agents archivable confirms a finished worker beekeeper started and
 // refuses a session the person started, a roster agent and a role's run.
 func TestArchivable(t *testing.T) {
-	worker := state.Party{Session: "fin", HostSession: finishedHost, Name: finishedName}
+	worker := state.Party{Session: finishedID, HostSession: finishedHost, Name: finishedName}
 	busy := state.Party{Session: "busy", HostSession: busyHost, Name: "Board pull 902"}
 	run := state.Party{Session: "run9", HostSession: runHost, Name: "Supervisor run 9"}
 	a, out := archiveApp(t, func(st *state.State) {
@@ -81,9 +84,9 @@ func TestArchivable(t *testing.T) {
 // Without the person's agreement configured, no steward is asked to
 // archive and the archive is not owed.
 func TestArchiveNeedsTheAgreement(t *testing.T) {
-	worker := state.Party{Session: "fin", HostSession: finishedHost, Name: finishedName}
+	worker := state.Party{Session: finishedID, HostSession: finishedHost, Name: finishedName}
 	a, _ := archiveApp(t, func(st *state.State) { st.Starts = append(st.Starts, state.Start{Party: worker}) })
-	desktopRecord(t, a.cfg.Claude.DesktopDir, finishedHost, "fin", false)
+	desktopRecord(t, a.cfg.Claude.DesktopDir, finishedHost, finishedID, false)
 	st, err := a.store.Read()
 	if err != nil {
 		t.Fatal(err)
@@ -152,5 +155,75 @@ func TestDeclinesAreRemembered(t *testing.T) {
 	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "agents.archive" })
 	if err != nil || len(evs) != 1 || !strings.Contains(evs[0].Detail, decliningHost+" declined to archive: No.") {
 		t.Errorf("events %+v, %v", evs, err)
+	}
+}
+
+// noCLIMachine runs no process: no CLI to steward an archive.
+type noCLIMachine struct{ platform.Machine }
+
+func (noCLIMachine) Processes() (*proc.Table, error) {
+	return &proc.Table{ByPID: map[int]*proc.Process{}}, nil
+}
+
+// The doctor asks no session about its own archive while it may not: a
+// relieved run of the supervisor never (its role forbids it the call), a
+// finished worker that declined not for a day. Its own CLI is warmed only
+// for a finished worker that has not declined. A run that asked no steward
+// counts no try and leaves the archive archiveAgain, so the doctor does not
+// ask again on every run.
+func TestArchiveAsksNoSessionAboutItselfAgain(t *testing.T) {
+	run := state.Party{Session: "run9", HostSession: runHost, Name: "Supervisor run 9"}
+	worker := state.Party{Session: finishedID, HostSession: finishedHost, Name: finishedName}
+	for _, c := range []struct {
+		desc     string
+		agents   []state.Party
+		declined bool
+		warmed   string // the host whose CLI the doctor would warm, "" for none
+	}{
+		{desc: "a relieved run, then a finished worker", agents: []state.Party{run, worker}, warmed: finishedHost},
+		{desc: "a relieved run alone", agents: []state.Party{run}},
+		{desc: "a finished worker that declined", agents: []state.Party{worker}, declined: true},
+	} {
+		t.Run(c.desc, func(t *testing.T) {
+			a, _ := archiveApp(t, func(st *state.State) {
+				st.Starts = append(st.Starts, state.Start{Party: run}, state.Start{Party: worker})
+				st.Relieved = []state.Relief{{Party: run, Taken: time.Now()}}
+				if c.declined {
+					st.Declines = []state.Decline{{Host: finishedHost, At: time.Now(), Why: "No."}}
+				}
+			})
+			a.cfg.Agents.ArchiveAgreement = "agreed"
+			plat.Machine = noCLIMachine{plat.Machine}
+			desktopRecord(t, a.cfg.Claude.DesktopDir, runHost, "run9", false)
+			desktopRecord(t, a.cfg.Claude.DesktopDir, finishedHost, finishedID, false)
+			st, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			outcomes := a.archiveDesktops(context.Background(), st, c.agents, "test")
+			for _, o := range outcomes {
+				if o.asked || o.host == "" || !strings.Contains(o.line, errNoSteward.Error()) {
+					t.Fatalf("%s: outcome %+v", o.agent.Name, o)
+				}
+				for _, h := range []string{runHost, finishedHost} {
+					if warmed := strings.Contains(o.line, "warm the CLI of "+h); warmed != (h == c.warmed) {
+						t.Errorf("%s: warmed %s %v: %q", o.agent.Name, h, warmed, o.line)
+					}
+				}
+			}
+			now := a.now
+			owe(st, outcomes, now)
+			idle := func(state.Party) bool { return false }
+			for _, p := range planArchives(st, unarchived, idle, now.Add(archiveAgain-time.Second)) {
+				if p.ar.Tries != 0 || !strings.Contains(p.wait, "no steward was asked") {
+					t.Errorf("before archiveAgain: %s, tries %d", p, p.ar.Tries)
+				}
+			}
+			for _, p := range planArchives(st, unarchived, idle, now.Add(archiveAgain)) {
+				if p.wait != "" || p.drop != "" {
+					t.Errorf("after archiveAgain: %s", p)
+				}
+			}
+		})
 	}
 }
