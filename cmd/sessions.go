@@ -390,12 +390,16 @@ func findRecord(records []state.Record, q string) (int, error) {
 // (ignoring case) before a unique part of one, where a running session's
 // names are its own (its desktop title or process name) and, for a
 // registered agent, its roster name. A registered agent whose CLI does not
-// run resolves to its roster entry, and absent says so.
+// run resolves to its roster entry, and absent says so. A name several
+// sessions carry is the registered agent's of that roster name: a hand-over's
+// follow-up, not the session it replaces, which keeps the name until it ends.
 func sessionNamed(sessions []*claude.Session, st *state.State, q string, now time.Time) (to *claude.Session, absent string, err error) {
 	type target struct {
 		s      *claude.Session
 		names  []string
 		absent string
+		// roster is its roster name, "" for a session off the roster.
+		roster string
 	}
 	targets := make([]*target, 0, len(sessions)+len(st.Agents))
 	for _, s := range sessions {
@@ -404,12 +408,14 @@ func sessionNamed(sessions []*claude.Session, st *state.State, q string, now tim
 	for _, ag := range st.Agents {
 		if i := slices.IndexFunc(sessions, func(s *claude.Session) bool { return ag.Is(s.Party()) }); i >= 0 {
 			targets[i].names = append(targets[i].names, ag.Name)
+			targets[i].roster = ag.Name
 			continue
 		}
 		targets = append(targets, &target{
 			s:      &claude.Session{ID: ag.Session, HostID: ag.HostSession, Name: ag.Name},
 			names:  []string{ag.Name},
 			absent: noCLI(ag, now),
+			roster: ag.Name,
 		})
 	}
 	q = strings.TrimSpace(q)
@@ -430,6 +436,9 @@ func sessionNamed(sessions []*claude.Session, st *state.State, q string, now tim
 		}
 	}
 	hits := whole
+	if agents := slices.DeleteFunc(slices.Clone(whole), func(t *target) bool { return !strings.EqualFold(t.roster, q) }); len(whole) > 1 && len(agents) == 1 {
+		hits = agents
+	}
 	if len(hits) == 0 {
 		hits = part
 	}

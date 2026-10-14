@@ -26,7 +26,7 @@ func TestYoursGrantsRecordTheSupervisorsWord(t *testing.T) {
 	a.cfg.Resources = []string{uiLab1}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Supervisor = &state.Supervisor{Party: yoursSup, Since: a.now}
-		st.Agents = append(st.Agents, state.Agent{Party: yoursOne, Registered: a.now, Task: "the proof"})
+		st.Agents = append(st.Agents, state.Agent{Party: yoursOne, Registered: a.now, Task: theProof})
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)

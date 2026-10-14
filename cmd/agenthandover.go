@@ -79,7 +79,8 @@ func (a *app) agentHandoverCmd() *cobra.Command {
 it asks the agent (a peer message) to record what is in flight with
 beekeeper agents note, waiting agents.noteWait (3m) at most; builds the
 follow-up's prompt; starts the follow-up as agents start does, under the
-agent's name, taking over its roster entry, task and session record; stops
+agent's name, taking over its roster entry, task and session record, the
+leases it holds and the grants queued for it, in their places; stops
 the old session's CLI and what it left running (a claude --bg session
 through claude stop first, so its daemon does not resume it); once that CLI
 has exited, archives the old session's desktop row through a steward, as
@@ -357,6 +358,11 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 		return err
 	}
 	a.say("started %q: session %s, desktop local_%s, in %s, busy with %q", ag.Name, sa.id, sa.id, sa.dir, sa.task)
+	if len(sa.handed) > 0 {
+		a.say("leases: %s, now the follow-up's", strings.Join(sa.handed, ", "))
+	} else {
+		a.say("leases: session %s held and was granted none", ag.Session)
+	}
 	a.say("%s", sa.turn)
 	if sa.restored != "" {
 		a.say("%s", sa.restored)

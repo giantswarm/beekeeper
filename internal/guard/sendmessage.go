@@ -11,6 +11,10 @@ const SendMessageTool = "SendMessage"
 // desktop routes (and caps) itself.
 const desktopPrefix = "local_"
 
+// socketPrefix starts a target that is a CLI's own peer socket, which no
+// name of a session matches.
+const socketPrefix = "uds:"
+
 // sendMessage decides a SendMessage call. A message to a role ("the
 // supervisor", "the guide") goes to the session holding the role now: Role
 // names it, so no brief has to name a run that a relay makes stale. A
@@ -25,7 +29,10 @@ const desktopPrefix = "local_"
 // none runs; an error is a send the hook refuses. A running session's
 // message is redirected to its name, which queues it in that CLI. A message
 // by name to a roster agent whose CLI does not run is refused with what
-// Absent says: no CLI runs, and whether an import is pending. A message
+// Absent says: no CLI runs, and whether an import is pending. A message by
+// a name several running CLIs carry goes to the roster agent's of that name
+// through its own socket (Agent), so a hand-over's follow-up gets it while
+// the session it replaces still runs. A message
 // that hands a resource over with the supervisor's word (`yours
 // <resource>`) goes through Yours, whose answer the sender reads as
 // additional context: the grant recorded, or why none was. Every other
@@ -52,6 +59,18 @@ func (h Hook) sendMessage(session string, input map[string]any) []byte {
 			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused by beekeeper: " + r})
 		}
 	}
+	// the target a `yours` grants to: a name, not the socket it is sent to
+	named := to
+	if !ok && h.Agent != nil && !strings.HasPrefix(to, desktopPrefix) {
+		addr, err := h.Agent(to)
+		if err != nil {
+			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused by beekeeper: " + err.Error()})
+		}
+		if addr != "" {
+			why = append(why, "several running CLIs are named "+to+"; sent to the roster agent's own CLI at "+addr)
+			to = addr
+		}
+	}
 	if h.Peer != nil && strings.HasPrefix(to, desktopPrefix) {
 		name, err := h.Peer(to)
 		if err != nil {
@@ -60,12 +79,15 @@ func (h Hook) sendMessage(session string, input map[string]any) []byte {
 		if name != "" {
 			why = append(why, to+" runs a CLI; sent by its name "+name+" so no second copy starts and the desktop's cap is not spent")
 			to = name
+			if !strings.HasPrefix(name, socketPrefix) {
+				named = name
+			}
 		}
 	}
 	var context string
 	if h.Yours != nil {
 		message, _ := input["message"].(string)
-		context = h.Yours(session, to, message)
+		context = h.Yours(session, named, message)
 	}
 	if len(why) == 0 {
 		if context == "" {
