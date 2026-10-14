@@ -88,12 +88,12 @@ func TestBrowseTurn(t *testing.T) {
 	}
 	// Every prompt has the connection words: the check before each step,
 	// the one reconnect in the turn, the lost line and the steps not done.
-	if p := browsePrompt("steps", "", nil, false, nil); p != browsePreamble+connectionWords+browseSteps+"steps" ||
+	if p := browsePrompt("steps", "", nil, false, nil); p != browsePreamble+connectionWords+frontWords+windowWords+browseSteps+"steps" ||
 		!strings.Contains(connectionWords, "list_connected_browsers before each step") || !strings.Contains(connectionWords, "select_browser") ||
 		!strings.Contains(connectionWords, "'"+lostLine+"' followed by the steps not done") {
 		t.Errorf("browsePrompt without a deploy = %q", p)
 	}
-	if p := browsePrompt("steps", deploy, nil, false, nil); !strings.HasPrefix(p, browsePreamble+connectionWords+"The person's task covers one deploy: "+deploy+".") ||
+	if p := browsePrompt("steps", deploy, nil, false, nil); !strings.HasPrefix(p, browsePreamble+connectionWords+frontWords+windowWords+"The person's task covers one deploy: "+deploy+".") ||
 		!strings.HasSuffix(p, browseSteps+"steps") {
 		t.Errorf("browsePrompt with a deploy = %q", p)
 	}
@@ -154,7 +154,7 @@ func TestReadFindings(t *testing.T) {
 	want := browseFindings{Refused: []refusal{
 		{Call: tabsContext, Reason: "Permission Grant"},
 		{Call: `computer left_click "Clicks Authorize for the App"`, Reason: "Permission Grant"},
-	}, NotRendered: 1}
+	}, NotRendered: 1, Tabs: []int64{1}}
 	if err != nil || !reflect.DeepEqual(f, want) {
 		t.Fatalf("readFindings = %+v, %v; want %+v", f, err, want)
 	}
@@ -164,8 +164,10 @@ func TestReadFindings(t *testing.T) {
 		"refused: tabs_context_mcp: the auto mode classifier denied it as [Permission Grant]",
 		`refused: computer left_click "Clicks Authorize for the App": the auto mode classifier denied it as [Permission Grant]`,
 		`the steps' "On GitHub's page, click Authorize once" reads as a grant: ` + consentHint,
-		"not rendered: 1 screenshot timed out on a frozen renderer: the page's Chrome window is not drawn (occluded, or on another workspace), " +
-			"where a consent page keeps its Authorize button disabled; bring the window to the front and run the steps again",
+		"not rendered: 1 screenshot timed out on a frozen renderer: the tab was not in front of its window (behind another tab, or in a window " +
+			"the compositor does not draw), where a consent page keeps its Authorize button disabled; the turn moves to a fresh tab, which opens " +
+			"in front, when its check finds the tab hidden; run the steps again",
+		"windows: the turn worked in tab 1",
 	}
 	if !slices.Equal(got, wantLines) {
 		t.Errorf("lines = %q, want %q", got, wantLines)
@@ -602,7 +604,7 @@ func TestBrowseConsent(t *testing.T) {
 		t.Errorf("--settings with a deploy and a record = %q", argv)
 	}
 	p := browsePrompt("steps", "", consents, true, nil)
-	if !strings.HasPrefix(p, browsePreamble+connectionWords+"The person's own App "+recordedApp+" is declared and on record (callback "+recordedCallback+" or "+recordedCallback+":8443):") ||
+	if !strings.HasPrefix(p, browsePreamble+connectionWords+frontWords+windowWords+"The person's own App "+recordedApp+" is declared and on record (callback "+recordedCallback+" or "+recordedCallback+":8443):") ||
 		!strings.Contains(p, labWords) || !strings.HasSuffix(p, browseSteps+"steps") {
 		t.Errorf("browsePrompt with a record and the lab = %q", p)
 	}
@@ -746,7 +748,7 @@ func TestBrowseSharesFiles(t *testing.T) {
 		!strings.Contains(p, "file_upload refuses every other path") || !strings.HasSuffix(p, browseSteps+steps) {
 		t.Errorf("the prompt with shared files = %q", p)
 	}
-	if browsePrompt(steps, "", nil, false, nil) != browsePreamble+connectionWords+browseSteps+steps {
+	if browsePrompt(steps, "", nil, false, nil) != browsePreamble+connectionWords+frontWords+windowWords+browseSteps+steps {
 		t.Error("a prompt without shared files names uploads")
 	}
 
@@ -846,6 +848,7 @@ func TestReadFindingsSubscriptionControl(t *testing.T) {
 	want := []string{
 		`refused: computer left_click "Clicks the edited control": beekeeper's hook refused it as [Subscription Control]`,
 		`refused: javascript_tool javascript_exec ` + strconv.Quote(code) + `: beekeeper's hook refused it as [Subscription Control]`,
+		"windows: the turn worked in tab 1",
 	}
 	if got := f.lines("Open the issue and read its edit history", "", nil, false); !slices.Equal(got, want) {
 		t.Errorf("lines = %q, want %q", got, want)
@@ -854,5 +857,44 @@ func TestReadFindingsSubscriptionControl(t *testing.T) {
 		!strings.Contains(p, "Never click "+guard.SubscriptionControls+" (GitHub's Subscribe, Unsubscribe, Watch, Star and Notifications buttons)") ||
 		!strings.Contains(p, "never by a sweep over the page's buttons or links") {
 		t.Errorf("browsePrompt = %q, want the control words", p)
+	}
+}
+
+// A turn's calls name the tabs it worked in, a batch's actions too, and a
+// read of a captured window names the window it followed, up to its query;
+// the "windows:" line says both, and the prompt tells the turn to work in a
+// tab in front and to capture a window the page opens.
+func TestReadFindingsWindows(t *testing.T) {
+	start := "https://portal.example.test/api/auth/oidc/start?scope=openid&flow=popup&env=production"
+	lines := []string{
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"mcp__claude-in-chrome__navigate","input":{"url":"https://portal.example.test/","tabId":7}}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"mcp__claude-in-chrome__javascript_tool","input":{"action":"javascript_exec","tabId":7,"text":"read"}}]}}`,
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t2","content":[{"type":"text","text":"` + windowOpened + start + `"}]}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t3","name":"mcp__claude-in-chrome__browser_batch","input":{"actions":[{"name":"navigate","input":{"url":"` + start + `","tabId":7}},{"name":"computer","input":{"action":"screenshot","tabId":9}}]}}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t4","name":"mcp__claude-in-chrome__javascript_tool","input":{"action":"javascript_exec","tabId":9,"text":"x"}}]}}`,
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t4","content":"` + windowOpened + `none"}]}}`,
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t2","content":"` + windowOpened + start + `"}]}}`,
+	}
+	transcript := filepath.Join(t.TempDir(), "t.jsonl")
+	if err := os.WriteFile(transcript, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := readFindings(transcript)
+	if err != nil || !slices.Equal(f.Tabs, []int64{7, 9}) || !slices.Equal(f.Windows, []string{"https://portal.example.test/api/auth/oidc/start"}) {
+		t.Fatalf("readFindings = %+v, %v; want tabs 7, 9 and the start window without its query", f, err)
+	}
+	want := "windows: the turn worked in tab 7, 9; followed 1 window a page opened, in its own tab: https://portal.example.test/api/auth/oidc/start"
+	if l := f.lines("steps", "", nil, false); !slices.Equal(l, []string{want}) {
+		t.Errorf("lines = %q, want %q", l, want)
+	}
+	if l := (browseFindings{Windows: []string{"https://a.test/x", "https://b.test/y"}}).windowsLine(); l != "windows: the turn named no tab; followed 2 windows a page opened, in its own tab: https://a.test/x, https://b.test/y" {
+		t.Errorf("windowsLine without tabs = %q", l)
+	}
+	p := browsePrompt("steps", "", nil, false, nil)
+	for _, w := range []string{"document.visibilityState", "tabs_create_mcp (a new tab opens in front)", "close every tab you created",
+		windowCapture, windowRead, "flow=redirect&redirectUrl=", "through the person's SSO button", "wait 2 seconds and read it again"} {
+		if !strings.Contains(p, w) {
+			t.Errorf("the prompt lacks %q", w)
+		}
 	}
 }
