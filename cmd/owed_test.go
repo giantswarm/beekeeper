@@ -81,7 +81,7 @@ func TestAStoppedMergeGitHubDoesNotAnswerForIsHandedOverByTheWatch(t *testing.T)
 		t.Fatalf("woke %q without GitHub's answer", *woke)
 	}
 	owed := ownedState(t, a)
-	if len(owed) != 1 || !owed[0].Ask || owed[0].Repo != "o/r" || owed[0].PR != 7 || !strings.Contains(owed[0].Why, "GitHub does not answer for o/r#7") {
+	if len(owed) != 1 || !owed[0].Ask || owed[0].Repo != scratchRepo || owed[0].PR != 7 || !strings.Contains(owed[0].Why, "GitHub does not answer for o/r#7") {
 		t.Fatalf("owed %+v", owed)
 	}
 

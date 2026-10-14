@@ -183,7 +183,7 @@ func (w *watcher) owedOutcomes(ctx context.Context) {
 		case now.Sub(o.Since) > owedFor:
 			w.paid(o, fmt.Sprintf("owed to %q since %s and never handed over (%s): given up", o.Owner.Name, clock(now, o.Since), o.Why))
 		default:
-			w.app.payOwed(ctx, o)
+			w.payOwed(ctx, o)
 		}
 	}
 }
