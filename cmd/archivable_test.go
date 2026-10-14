@@ -22,6 +22,7 @@ const (
 	runHost       = "local_run9"
 	personHost    = "local_person"
 	finishedName  = "Board pull 901"
+	finishedID    = "fin"
 	doerHost      = "local_doer"
 	decliningHost = "local_nay"
 	targetHost    = "local_tgt"
@@ -45,7 +46,7 @@ func archiveApp(t *testing.T, st func(*state.State)) (*app, *strings.Builder) {
 // agents archivable confirms a finished worker beekeeper started and
 // refuses a session the person started, a roster agent and a role's run.
 func TestArchivable(t *testing.T) {
-	worker := state.Party{Session: "fin", HostSession: finishedHost, Name: finishedName}
+	worker := state.Party{Session: finishedID, HostSession: finishedHost, Name: finishedName}
 	busy := state.Party{Session: "busy", HostSession: busyHost, Name: "Board pull 902"}
 	run := state.Party{Session: "run9", HostSession: runHost, Name: "Supervisor run 9"}
 	a, out := archiveApp(t, func(st *state.State) {
@@ -83,9 +84,9 @@ func TestArchivable(t *testing.T) {
 // Without the person's agreement configured, no steward is asked to
 // archive and the archive is not owed.
 func TestArchiveNeedsTheAgreement(t *testing.T) {
-	worker := state.Party{Session: "fin", HostSession: finishedHost, Name: finishedName}
+	worker := state.Party{Session: finishedID, HostSession: finishedHost, Name: finishedName}
 	a, _ := archiveApp(t, func(st *state.State) { st.Starts = append(st.Starts, state.Start{Party: worker}) })
-	desktopRecord(t, a.cfg.Claude.DesktopDir, finishedHost, "fin", false)
+	desktopRecord(t, a.cfg.Claude.DesktopDir, finishedHost, finishedID, false)
 	st, err := a.store.Read()
 	if err != nil {
 		t.Fatal(err)
@@ -172,7 +173,7 @@ func (noCLIMachine) Processes() (*proc.Table, error) {
 // ask again on every run.
 func TestArchiveAsksNoSessionAboutItselfAgain(t *testing.T) {
 	run := state.Party{Session: "run9", HostSession: runHost, Name: "Supervisor run 9"}
-	worker := state.Party{Session: "fin", HostSession: finishedHost, Name: finishedName}
+	worker := state.Party{Session: finishedID, HostSession: finishedHost, Name: finishedName}
 	for _, c := range []struct {
 		desc     string
 		agents   []state.Party
@@ -194,7 +195,7 @@ func TestArchiveAsksNoSessionAboutItselfAgain(t *testing.T) {
 			a.cfg.Agents.ArchiveAgreement = "agreed"
 			plat.Machine = noCLIMachine{plat.Machine}
 			desktopRecord(t, a.cfg.Claude.DesktopDir, runHost, "run9", false)
-			desktopRecord(t, a.cfg.Claude.DesktopDir, finishedHost, "fin", false)
+			desktopRecord(t, a.cfg.Claude.DesktopDir, finishedHost, finishedID, false)
 			st, err := a.store.Read()
 			if err != nil {
 				t.Fatal(err)
