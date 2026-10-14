@@ -539,6 +539,28 @@ func headlessTurn(t *proc.Table, id string) string {
 	return ""
 }
 
+// headlessRuns is a desktop CLI not warmed for a session because its
+// headless turn runs: two CLIs on one session are twins.
+type headlessRuns string
+
+func (h headlessRuns) Error() string {
+	return "its headless " + string(h) + " runs, and a desktop CLI warmed beside it would be its twin"
+}
+
+// noHeadlessTurn is the last look before a show warms the desktop's CLI of
+// session id: headlessRuns when a headless turn of it runs. A process table
+// that cannot be read shows none.
+func noHeadlessTurn(id string) error {
+	t, err := plat.Machine.Processes()
+	if err != nil {
+		return nil
+	}
+	if turn := headlessTurn(t, id); turn != "" {
+		return headlessRuns(turn)
+	}
+	return nil
+}
+
 // printsTurn reports whether p is a headless claude turn (-p, --print).
 func printsTurn(p *proc.Process) bool {
 	return p.Comm == claudeComm && (slices.Contains(p.Args, "-p") || slices.Contains(p.Args, "--print"))

@@ -169,6 +169,43 @@ func TestReopenYieldsToAHeadlessResume(t *testing.T) {
 	}
 }
 
+// A reopen (the doctor's of a rowless worker) finds a headless turn of the
+// session that runs in no wake unit right before its show: the desktop
+// warms no second CLI beside it, and the reopen is missed.
+func TestReopenWarmsNoTwinOfAHeadlessTurn(t *testing.T) {
+	a, out := stubApp(t)
+	a.cfg.Desktop.TypingQuiet.Duration = -1
+	id := runSixtySeven
+	a.cfg.Claude.DesktopDir = t.TempDir()
+	desktopRecord(t, a.cfg.Claude.DesktopDir, "local_"+id, id, false)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		p := state.Party{Session: id, Name: "rowless worker"}
+		st.Starts = append(st.Starts, state.Start{Party: p, Mode: state.ModeBypass, At: time.Now()})
+		st.Agents = append(st.Agents, state.Agent{Party: p, Task: "t"})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	saved := desktopWindowActive
+	t.Cleanup(func() { desktopWindowActive = saved })
+	desktopWindowActive = func(context.Context) (bool, error) { return false, nil }
+	plat.Machine = headlessMachine{Machine: plat.Machine, id: id}
+	o := &recordingOpener{}
+	plat.Opener = o
+	plat.Launcher = &unitLauncher{}
+	c := a.agentReopenCmd()
+	c.SetArgs([]string{id})
+	if err := c.ExecuteContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(o.opened) > 0 {
+		t.Errorf("opened %v beside the headless turn", o.opened)
+	}
+	if !strings.Contains(out.String(), "its headless wake turn runs") {
+		t.Errorf("output: %s", out)
+	}
+}
+
 // wakeLaterLauncher runs the wake unit from its second look on: a resume
 // the standby started while a reopen waited for the person.
 type wakeLaterLauncher struct {

@@ -999,12 +999,13 @@ func (a *app) reopenSession(ctx context.Context, arg, turn string) error {
 		return a.yieldToWake(ctx, d, id, name, u)
 	}
 	// The show waits again for the person's typing to pause: a resume that
-	// started meanwhile is looked for right before it.
+	// started meanwhile, or any other headless turn of the session, is
+	// looked for right before it.
 	ready := func() error {
 		if u := wakeRunning(ctx, id); u != "" {
 			return wakeStarted(u)
 		}
-		return nil
+		return noHeadlessTurn(id)
 	}
 	shownAt := time.Now()
 	if _, err := a.showBriefly(wctx, d, url, "local_"+id, "", true, reopenAwayWait, ready); err != nil {

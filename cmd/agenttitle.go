@@ -682,7 +682,8 @@ func archiveSteward(ctx context.Context, hosts, exclude []string, find func(excl
 // steward, warming it first when none runs: the reopen's show of the session
 // in the main window for a moment, after which the window shows the session
 // it showed before. The show disregards the window's focus, like an import's,
-// and waits for the person's typing to pause, never into it.
+// and waits for the person's typing to pause, never into it. A headless turn
+// of the session is its running CLI: none is warmed beside it.
 func (a *app) warmSteward(ctx context.Context, host string) (steward, error) {
 	id := strings.TrimPrefix(host, "local_")
 	if sock := desktopSocketWithin(ctx, id, 0); sock != "" {
@@ -691,6 +692,9 @@ func (a *app) warmSteward(ctx context.Context, host string) (steward, error) {
 	t, err := plat.Machine.Processes()
 	if err != nil {
 		return steward{}, err
+	}
+	if turn := headlessTurn(t, id); turn != "" {
+		return steward{}, fmt.Errorf("the desktop warms no CLI of %s: %w", host, headlessRuns(turn))
 	}
 	if plat.Opener.Running(t).IsZero() {
 		return steward{}, fmt.Errorf("%w, and the desktop does not run to warm the CLI of %s", errNoSteward, host)
@@ -706,7 +710,7 @@ func (a *app) warmSteward(ctx context.Context, host string) (steward, error) {
 	linkMu.Lock()
 	defer linkMu.Unlock()
 	shownAt := time.Now()
-	if _, err := a.showBriefly(ctx, d, continueURL(host), host, "", true, 0, nil); err != nil {
+	if _, err := a.showBriefly(ctx, d, continueURL(host), host, "", true, 0, func() error { return noHeadlessTurn(id) }); err != nil {
 		return steward{}, fmt.Errorf("warming the CLI of %s: %w", host, err)
 	}
 	if sock := desktopSocket(ctx, id); sock != "" {
