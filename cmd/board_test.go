@@ -387,7 +387,7 @@ func TestNamedRefsReadsTheFormsPeopleWrite(t *testing.T) {
 		// across repositories names each by its own repository.
 		{"Morning, #37850 chip: (1) glean portal steps (gpm#282 encoding fix live as 0.44.1); then Timo ticks #37850 criterion 3. gpm#283 proven; backstage#2597 filed", owner, []string{"gs/gpm#282", "gs/gpm#283", "gs/backstage#2597"}},
 		{"o/r#1 is merged, now tick #2", owner, []string{refOne}},
-		{"o/r#1 / #2 or #3; #4 & #5", owner, []string{refOne, idleRef, "o/r#3", "o/r#4", "o/r#5"}},
+		{"o/r#1 / #2 or #6; #7 & #10", owner, []string{refOne, idleRef, "o/r#6", "o/r#7", "o/r#10"}},
 		{"o/r#1 and O/R#1 once", owner, []string{refOne}},
 		// Without a board owner a repo#n names nothing.
 		{"beekeeper#5 and a/b#6", "", []string{"a/b#6"}},
