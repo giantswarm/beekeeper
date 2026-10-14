@@ -1502,7 +1502,8 @@ func startUnit(u platform.Unit, config string, env ...string) error {
 }
 
 // devBuild is the folder of the running beekeeper when it is not the one on
-// PATH: a development build, which the sessions it starts run too.
+// PATH: a development build or a downloaded release candidate, which the
+// sessions it starts run too.
 func devBuild() (string, bool) {
 	self, err := os.Executable()
 	if err != nil {

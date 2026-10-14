@@ -169,16 +169,25 @@ var binaryIdentity = func() string {
 	return project.VersionLine()
 }
 
+// runsInstalled says whether this process runs the installed beekeeper,
+// the one on PATH that a self-update replaces; tests replace it.
+var runsInstalled = func() bool {
+	_, elsewhere := devBuild()
+	return !elsewhere
+}
+
 // syncOnce brings the installed beekeeper plugins up to date once per
 // binary: the first command a newly installed binary runs updates every one
 // as a self-update does, whatever installed the binary (a self-update by a
 // release without the sync, a download, go install), and records the binary
-// in dir. A Claude Code that does not list its plugins (none installed, a
-// server) leaves the sync to the next command, unsaid; a process that finds
-// another syncing goes on without. ran says whether this call synced.
+// in dir. Only the installed binary syncs: one run from elsewhere (a
+// downloaded release candidate under proof, a build) leaves the plugins and
+// the record as they are. A Claude Code that does not list its plugins (none
+// installed, a server) leaves the sync to the next command, unsaid; a
+// process that finds another syncing goes on without. ran says whether this call synced.
 func syncOnce(ctx context.Context, w io.Writer, dir string) (ran bool) {
 	id := binaryIdentity()
-	if id == "" || dir == "" {
+	if id == "" || dir == "" || !runsInstalled() {
 		return false
 	}
 	path := filepath.Join(dir, pluginSyncFile)

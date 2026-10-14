@@ -66,7 +66,9 @@ the role skills it serves are the ones the new binary hands its workers;
 on the latest release a plugin whose skills differ from the binary's is
 brought up the same way. The new binary syncs its plugin itself: the
 update runs it for that, and a binary installed by a release without the
-sync (or by hand) syncs on the first command it runs. A plugin that stays
+sync (or by hand) syncs on the first command it runs. Only the beekeeper
+on PATH syncs: a binary run from elsewhere (a downloaded release candidate)
+leaves the plugin as it is. A plugin that stays
 is said with the command that updates it. GitHub is asked
 anonymously, apart from the budget gh and devctl share, unless GITHUB_TOKEN
 is set. A development build (version dev) is refused.`,
@@ -140,6 +142,8 @@ func (a *app) syncInstalledPlugins(ctx context.Context) error {
 	switch {
 	case binaryIdentity() == "":
 		_, _ = fmt.Fprintln(a.out, "A development build leaves the beekeeper plugin as it is.")
+	case !runsInstalled():
+		_, _ = fmt.Fprintln(a.out, "This beekeeper is not the one on PATH: it leaves the beekeeper plugin as it is.")
 	case !syncOnce(ctx, a.out, a.cfg.StateDir):
 		_, _ = fmt.Fprintf(a.out, "beekeeper %s synced no plugin: it did so before, another beekeeper does now, or Claude Code lists none.\n", binaryIdentity())
 	}
