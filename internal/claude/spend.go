@@ -18,10 +18,10 @@ import (
 )
 
 // Spend is what the API requests of a window cost, read from every
-// transcript under Claude Code's projects directory: the sessions' and
-// their subagents' .jsonl files, whether the session runs, is paused or
-// was archived. A request counts once, by its message id, however many
-// transcripts carry it (a forked or resumed session copies its history).
+// transcript of the harnesses: the sessions' and their subagents' files,
+// whether the session runs, is paused or was archived. A request counts
+// once, by its id, however many transcripts carry it (a forked or resumed
+// session copies its history).
 type Spend struct {
 	From time.Time `json:"from"`
 	To   time.Time `json:"to"`
@@ -48,17 +48,28 @@ type ModelSpend struct {
 	USD      float64 `json:"usd"`
 }
 
-// spendRequest is a request of one transcript and the message id it
-// counts once by.
-type spendRequest struct {
-	id string
-	message
+// SpendRequest is an API request a transcript records.
+type SpendRequest struct {
+	// ID is what the request counts once by; empty, it always counts.
+	ID string
+	At time.Time
+	// Model is the model it is priced by and listed under.
+	Model  string
+	Fast   bool
+	Tokens Tokens
 }
 
-// ReadSpend prices the requests from from up to to of every transcript
-// under dir with m. A transcript last written before from has none and
-// is not read.
-func ReadSpend(dir string, from, to time.Time, m config.Metrics) (Spend, error) {
+// SpendTranscript is the requests of one transcript in a window; a subagent's
+// transcript is no session.
+type SpendTranscript struct {
+	Subagent bool
+	Requests []SpendRequest
+}
+
+// ReadSpendTranscripts reads the requests from from up to to of every Claude
+// Code transcript under dir. A transcript last written before from has
+// none and is not read.
+func ReadSpendTranscripts(dir string, from, to time.Time) ([]SpendTranscript, error) {
 	var files []string
 	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -76,46 +87,47 @@ func ReadSpend(dir string, from, to time.Time, m config.Metrics) (Spend, error) 
 		return nil
 	})
 	if err != nil {
-		return Spend{}, err
+		return nil, err
 	}
-	reqs := make([][]spendRequest, len(files))
+	ts := make([]SpendTranscript, len(files))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, runtime.GOMAXPROCS(0))
 	for i, p := range files {
 		sem <- struct{}{}
 		wg.Go(func() {
 			defer func() { <-sem }()
-			reqs[i] = transcriptRequests(p, from, to)
+			ts[i] = SpendTranscript{Subagent: filepath.Base(filepath.Dir(p)) == "subagents", Requests: transcriptRequests(p, from, to)}
 		})
 	}
 	wg.Wait()
-	return priceSpend(files, reqs, from, to, m), nil
+	return ts, nil
 }
 
-// priceSpend counts each request once, in the order of files, and prices
-// it.
-func priceSpend(files []string, reqs [][]spendRequest, from, to time.Time, m config.Metrics) Spend {
+// PriceSpend counts each request of ts once, in their order, and prices
+// it with m.
+func PriceSpend(ts []SpendTranscript, from, to time.Time, m config.Metrics) Spend {
 	s := Spend{From: from, To: to}
 	byID := map[string]int{}
 	var all []message
-	for i, rs := range reqs {
-		if len(rs) == 0 {
+	for _, t := range ts {
+		if len(t.Requests) == 0 {
 			continue
 		}
 		s.Transcripts++
-		if filepath.Base(filepath.Dir(files[i])) != "subagents" {
+		if !t.Subagent {
 			s.Sessions++
 		}
-		for _, r := range rs {
-			j, seen := byID[r.id]
+		for _, r := range t.Requests {
+			msg := message{at: r.At, model: r.Model, fast: r.Fast, tokens: r.Tokens}
+			j, seen := byID[r.ID]
 			switch {
-			case r.id == "":
-				all = append(all, r.message)
+			case r.ID == "":
+				all = append(all, msg)
 			case !seen:
-				byID[r.id] = len(all)
-				all = append(all, r.message)
-			case r.tokens.Sum() > all[j].tokens.Sum():
-				all[j] = r.message
+				byID[r.ID] = len(all)
+				all = append(all, msg)
+			case r.Tokens.Sum() > all[j].tokens.Sum():
+				all[j] = msg
 			}
 		}
 	}
@@ -166,14 +178,14 @@ type spendEntry struct {
 // from from up to to: a streamed response repeats its id and usage on one
 // line per content block, the last carrying the final usage, and is at
 // its first line's time. A file that cannot be opened has none.
-func transcriptRequests(p string, from, to time.Time) []spendRequest {
+func transcriptRequests(p string, from, to time.Time) []SpendRequest {
 	f, err := os.Open(filepath.Clean(p))
 	if err != nil {
 		return nil
 	}
 	defer func() { _ = f.Close() }()
 	r := bufio.NewReaderSize(f, 1<<20)
-	var out []spendRequest
+	var out []SpendRequest
 	byID := map[string]int{}
 	for {
 		line, err := r.ReadBytes('\n')
@@ -181,13 +193,13 @@ func transcriptRequests(p string, from, to time.Time) []spendRequest {
 			var e spendEntry
 			if json.Unmarshal(line, &e) == nil && e.Type == roleAssistant && e.Message.Usage != nil {
 				u := e.Message.Usage
-				msg := message{at: e.Timestamp, model: e.Message.Model, fast: u.Speed == "fast", tokens: u.tokens()}
-				if i, ok := byID[e.Message.ID]; ok && e.Message.ID != "" {
-					msg.at = out[i].at
-					out[i].message = msg
-				} else if msg.tokens.Sum() > 0 {
-					byID[e.Message.ID] = len(out)
-					out = append(out, spendRequest{id: e.Message.ID, message: msg})
+				r := SpendRequest{ID: e.Message.ID, At: e.Timestamp, Model: e.Message.Model, Fast: u.Speed == "fast", Tokens: u.tokens()}
+				if i, ok := byID[r.ID]; ok && r.ID != "" {
+					r.At = out[i].At
+					out[i] = r
+				} else if r.Tokens.Sum() > 0 {
+					byID[r.ID] = len(out)
+					out = append(out, r)
 				}
 			}
 		}
@@ -195,7 +207,13 @@ func transcriptRequests(p string, from, to time.Time) []spendRequest {
 			break // io.EOF, or a file cut short: what was read counts
 		}
 	}
-	return slices.DeleteFunc(out, func(r spendRequest) bool {
-		return r.at.Before(from) || !r.at.Before(to) || r.tokens.Sum() == 0
+	return InWindow(out, from, to)
+}
+
+// InWindow drops the requests of rs before from, at or after to, or
+// without tokens.
+func InWindow(rs []SpendRequest, from, to time.Time) []SpendRequest {
+	return slices.DeleteFunc(rs, func(r SpendRequest) bool {
+		return r.At.Before(from) || !r.At.Before(to) || r.Tokens.Sum() == 0
 	})
 }

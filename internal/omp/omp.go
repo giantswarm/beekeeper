@@ -245,7 +245,9 @@ type entry struct {
 		IsError    bool            `json:"isError"`
 		ToolName   string          `json:"toolName"`
 		ToolCallID string          `json:"toolCallId"`
+		Provider   string          `json:"provider"`
 		Model      string          `json:"model"`
+		ResponseID string          `json:"responseId"`
 		Usage      *usage          `json:"usage"`
 		Snapshot   *struct {
 			PromptTokens int64 `json:"promptTokens"`

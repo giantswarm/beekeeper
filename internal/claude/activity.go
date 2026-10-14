@@ -413,9 +413,14 @@ func cost(msgs []message, m config.Metrics, since time.Time) (*float64, []string
 }
 
 // price is what the request cost in US dollars; false when its model has
-// no price, or it was a fast request and the model no fast multiplier.
+// no price, or it was a fast request and the model no fast multiplier. A
+// model named provider/id, as omp names it, takes the price of id when the
+// whole name has none.
 func (msg message) price(m config.Metrics) (float64, bool) {
 	p, ok := m.Model(msg.model)
+	if _, id, cut := strings.Cut(msg.model, "/"); !ok && cut {
+		p, ok = m.Model(id)
+	}
 	if !ok || (msg.fast && p.Fast == 0) {
 		return 0, false
 	}
