@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -80,6 +81,9 @@ func tellOwnerRun(t *testing.T, owner state.Party) (*app, childResult, *[]string
 	}); err != nil {
 		t.Fatal(err)
 	}
+	infra := infraReds
+	infraReds = func(context.Context, []byte) []merge.Infra { return nil }
+	t.Cleanup(func() { infraReds = infra })
 	var woke []string
 	was := wakeOwner
 	wakeOwner = func(_ *app, _ context.Context, by state.Party, q, msg, _ string) error {
@@ -299,5 +303,27 @@ func TestTheGateWritesNothingOfItsOwnToStdout(t *testing.T) {
 				t.Errorf("stderr %q, want devctl's progress and the gate's lines", said)
 			}
 		})
+	}
+}
+
+// A red merge whose check died on a transient infrastructure failure wakes
+// its owner naming the matched line and the job's rerun, not as the pull
+// request's break alone.
+func TestARedRunOnAnInfraFlakeWakesItsOwnerWithTheRerun(t *testing.T) {
+	a, r, woke := tellOwnerRun(t, state.Party{Session: "s1", Name: ownerName})
+	was := infraReds
+	t.Cleanup(func() { infraReds = was })
+	infraReds = func(_ context.Context, doc []byte) []merge.Infra {
+		if !merge.Red(doc) {
+			t.Errorf("infra read for a document that is not red")
+		}
+		return []merge.Infra{{Check: "go-lint", Repo: "o/r", Run: 11, Job: 12, Signature: "Go module proxy", Line: "stream error"}}
+	}
+	r.spec.Argv = strings.Fields("/usr/bin/devctl pr merge o/r 7")
+	r.rc, r.doc = 1, []byte(`{"exitCode":1,"verdict":"red","reason":"check go-lint concluded failure","checks":[{"name":"go-lint","conclusion":"failure"}]}`)
+	a.tellOwner(context.Background(), r)
+	want := "beekeeper gate → s1: devctl pr merge o/r 7 exit 1: red: check go-lint concluded failure; go-lint: a transient infrastructure failure, not this pull request's breakage (Go module proxy: \"stream error\"): rerun the job (`gh run rerun 11 --job 12 --repo o/r`), then the same merge again (output in /k/pr-wait.log)"
+	if len(*woke) != 1 || (*woke)[0] != want {
+		t.Errorf("woke %q, want %q", *woke, want)
 	}
 }

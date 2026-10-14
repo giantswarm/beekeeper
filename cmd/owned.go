@@ -307,6 +307,9 @@ func (a *app) tellOwner(ctx context.Context, r childResult) {
 	if err == nil {
 		return
 	}
+	if merge.Red(r.doc) {
+		r.infra = infraReds(ctx, r.doc)
+	}
 	line := r.outcome()
 	if a.store == nil {
 		a.cfgPath = r.spec.Config
@@ -346,7 +349,7 @@ func (r childResult) outcome() string {
 		return fmt.Sprintf("%s did not settle: its waiter was stopped by %s (exit %d) and nothing waits for it any more: check the pull request or release it waited for and run it again if it still needs to",
 			r.command(), signalName(r.stop), r.rc)
 	}
-	line := fmt.Sprintf("%s exit %d: %s", r.command(), r.rc, runReason(r.doc, r.last, r.spec.HandCut))
+	line := fmt.Sprintf("%s exit %d: %s", r.command(), r.rc, withInfra(runReason(r.doc, r.last, r.spec.HandCut), r.infra))
 	if r.kept != "" {
 		line += " (output in " + r.kept + ")"
 	}
@@ -406,6 +409,16 @@ func runReason(doc []byte, last, handCut string) string {
 		return last
 	}
 	return noOutput
+}
+
+// withInfra is a run's reason followed by the red checks that died on a
+// transient infrastructure failure (merge.InfraNote), each with its rerun:
+// past the reason's truncation, so the rerun survives it.
+func withInfra(reason string, infra []merge.Infra) string {
+	if note := merge.InfraNote(infra); note != "" {
+		return strings.Trim(reason+"; "+note, "; ")
+	}
+	return reason
 }
 
 // noOutput is runReason for a run that said nothing.

@@ -11,6 +11,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/merge"
 )
 
 // baseRedDoc is devctl pr merge's document of a pull request red on the
@@ -106,5 +107,39 @@ func TestARedCheckTheGateDoesNotLetThroughRefuses(t *testing.T) {
 				t.Errorf("failed attempts %+v, want the red run", st.Failed)
 			}
 		})
+	}
+}
+
+// A red check whose job died on a transient infrastructure failure is not
+// the pull request's break: the gate refuses it as infra, and the failed
+// attempt's reason, which wakes its owner, names the matched line and the
+// rerun of that job.
+func TestARedCheckOnAnInfraFlakeIsNotThePullRequestsBreak(t *testing.T) {
+	noSystemd(t)
+	calls := acceptingDevctl(t)
+	stubGitHub(t, github.Open, "")
+	stubBase(t, github.CheckPass, true)
+	infraReds = func(context.Context, []byte) []merge.Infra {
+		return []merge.Infra{{Check: "e2e-test", Repo: "o/r", Run: 11, Job: 12, Signature: "Go module proxy",
+			Line: `read "https://proxy.golang.org/golang.org/x/text/@v/v0.41.0.zip": stream error: stream ID 143; INTERNAL_ERROR; received from peer`}}
+	}
+	_ = gateStdout(t)
+	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
+	if err := g.runMerge(); Code(err) != 1 {
+		t.Fatalf("exit %d, want devctl's 1", Code(err))
+	}
+	if got := devctlCalls(t, calls); len(got) != 1 {
+		t.Errorf("devctl ran %q, want once: an infra flake is never let through", got)
+	}
+	st := gateState(t, g)
+	if len(st.Failed) != 1 {
+		t.Fatalf("failed attempts %+v, want the red run", st.Failed)
+	}
+	why := st.Failed[0].Reason
+	for _, want := range []string{"e2e-test: a transient infrastructure failure, not this pull request's breakage (Go module proxy: ",
+		"stream error: stream ID 143", "rerun the job (`gh run rerun 11 --job 12 --repo o/r`)"} {
+		if !strings.Contains(why, want) {
+			t.Errorf("failed reason %q, want it to carry %q", why, want)
+		}
 	}
 }

@@ -19,6 +19,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -44,6 +45,11 @@ var (
 	devctlUpdate  = toolUpdate
 	baseChecks    = func(ctx context.Context, repo, base string) (github.BaseChecks, error) {
 		return github.ReadBaseChecks(ctx, github.RunGH, repo, base)
+	}
+	// infraReds are the red checks of a document that died on a transient
+	// infrastructure failure, read from their jobs' logs.
+	infraReds = func(ctx context.Context, doc []byte) []merge.Infra {
+		return merge.InfraReds(ctx, github.RunGH, doc)
 	}
 	devctlAcceptsRed = toolAcceptsRed
 	userSystemd      = plat.Launcher.Available
@@ -588,6 +594,9 @@ type childResult struct {
 	doc        []byte
 	last, kept string
 	stop       syscall.Signal
+	// infra are the red checks that died on a transient infrastructure
+	// failure, which the outcome names as such.
+	infra []merge.Infra
 }
 
 // mergeChild runs base.spec's command with its stdout in base.json and its
