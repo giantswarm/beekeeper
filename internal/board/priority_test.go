@@ -96,6 +96,7 @@ type priorityGH struct {
 	t         *testing.T
 	ranked    map[int]int // issue → rank
 	kind      string      // the Kind of the issue set reads
+	offBoard  bool        // the issue's projectItems name no item of the board
 	mutations []string
 	queries   []string
 }
@@ -134,6 +135,8 @@ func (f *priorityGH) run(_ context.Context, args ...string) ([]byte, error) {
 		// An epic without a rank is no entry.
 		nodes = append(nodes, `{"id":"I99","status":{"name":"Backlog 📦"},"kind":{"name":"Epic 🎯"},"priority":null,"content":`+issue(99, "")+`}`)
 		return []byte(`{"data":{"repositoryOwner":{"projectV2":{"items":{"pageInfo":{"hasNextPage":false},"nodes":[` + strings.Join(nodes, ",") + `]}}}}}`), nil
+	case strings.Contains(q, "projectItems") && f.offBoard:
+		return []byte(`{"data":{"repository":{"issue":{"id":"ISSUE","projectItems":{"nodes":[]}}}}}`), nil
 	case strings.Contains(q, "projectItems"):
 		return []byte(fmt.Sprintf(`{"data":{"repository":{"issue":{"id":"ISSUE","projectItems":{"nodes":[{"id":"I%s","project":{"id":"P"},"status":{"name":"Backlog 📦"},"kind":{"name":%q},"team":{"name":"X 🐝"}}]}}}}}`, vars["n"], f.kind)), nil
 	case strings.Contains(q, "issue(number:$n){...I}"):
@@ -222,5 +225,15 @@ func TestSetPriorityRefusesWhatIsNoEpic(t *testing.T) {
 	var r *Refusal
 	if !errors.As(err, &r) || !strings.Contains(r.Reason, "no epic") || len(f.mutations) != 0 {
 		t.Errorf("SetPriority of a task = %v, mutations %v", err, f.mutations)
+	}
+}
+
+func TestSetPriorityNeverAddsAnEpicOutsideTheOrganisation(t *testing.T) {
+	// An add would be an unexpected request: the refusal comes first.
+	f := &priorityGH{t: t, ranked: map[int]int{1: 1}, kind: "Epic 🎯", offBoard: true}
+	_, err := priorityClient(f).SetPriority(context.Background(), "teemow/lab#7", 1)
+	var r *Refusal
+	if !errors.As(err, &r) || r.Reason != foreignRefusal || len(f.mutations) != 0 {
+		t.Errorf("SetPriority of a foreign epic = %v, mutations %v", err, f.mutations)
 	}
 }

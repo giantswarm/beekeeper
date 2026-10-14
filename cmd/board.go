@@ -582,8 +582,10 @@ func (a *app) boardMoveCmd() *cobra.Command {
 		Long: `Sets the Status of the issue's board item. An issue without an item on the
 board is added first (addProjectV2ItemById, the issue's own mutation: the
 board's items are never read) and given board.team as its Team, then the
-Status; the item an issue of a repository outside the board's organisation
-has on the board is found the same way. Every GitHub call acts on the
+Status. An issue of a repository outside the board's owner (a personal
+account's, another organisation's) is never added: without an item its
+projectItems name it is refused, naming its owner's own project as its
+place. Every GitHub call acts on the
 issue's repository (GH_REPO), so a gh link that picks its login by the owner
 (devctl's agent link: the App for the organisation, the person's own login
 for a personal account's repository) reaches the issue. The status is the
@@ -665,11 +667,12 @@ Backlogs views). rank moves the issue's item to the top of the board, right
 before or right after the item of another issue (updateProjectV2ItemPosition),
 and prints the neighbours the move names. An issue without an item on the
 board is added first, as move adds it, with board.team as its Team and no
-Status. The other issue must be on the board already. Only the items named
-are read, never the board's items. Every GitHub call acts on the repository
-of the issue it asks about (GH_REPO). Exit 3 when refused: an issue that
-does not exist, another issue that has no item on the board, an item placed
-against itself.`,
+Status; an issue of a repository outside the board's owner is never added.
+The other issue must be on the board already. Only the items named are read,
+never the board's items. Every GitHub call acts on the repository of the
+issue it asks about (GH_REPO). Exit 3 when refused: an issue that does not
+exist, an issue outside the board's owner without an item, another issue
+that has no item on the board, an item placed against itself.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			for _, r := range []string{args[0], at.Before, at.After} {

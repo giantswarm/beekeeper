@@ -718,9 +718,10 @@ type Moved struct {
 // Move sets the Status of the board item of the issue ref to the status in
 // stands for (see Resolve): the item the issue's projectItems name, else
 // the one addProjectV2ItemById answers, which is the issue's existing item
-// (an issue of a repository outside the board's organisation names its
-// item under no projectItems) or a new one, with board.team as its Team
-// when it has none; no read of the board's items. Every call acts on the
+// or a new one, with board.team as its Team when it has none; no read of
+// the board's items. An issue of a repository outside the board's owner
+// whose projectItems name no item of the board is refused: nothing is
+// added to the board for it. Every call acts on the
 // issue's repository (github.ActingOn), so a gh link choosing its login by
 // the owner reaches the issue. An unknown or ambiguous status, and a
 // board.team that is none of the Team field's values, are refused with the
@@ -785,7 +786,9 @@ func (c *Client) Move(ctx context.Context, ref, in string) (*Moved, error) {
 // item is the issue's item on the board, read from the issue's
 // projectItems, else answered by addProjectV2ItemById: the issue's
 // existing item, or a new one, which marks mv added. An issue GitHub does
-// not resolve is refused as no issue.
+// not resolve is refused as no issue; one of a repository outside the
+// board's owner without an item its projectItems name is refused (foreign)
+// before anything is written: nothing is ever added to the board for it.
 func (c *Client) item(ctx context.Context, m *meta, mv *Moved, owner, repo string, n int) (projectItem, error) {
 	id, found, err := c.lookup(ctx, m, mv.Ref, owner, repo, n)
 	if err != nil {
@@ -793,6 +796,9 @@ func (c *Client) item(ctx context.Context, m *meta, mv *Moved, owner, repo strin
 	}
 	if found != nil {
 		return *found, nil
+	}
+	if r := c.foreign(mv.Ref); r != nil {
+		return projectItem{}, r
 	}
 	var a struct {
 		Added struct {
@@ -815,6 +821,19 @@ func (c *Client) item(ctx context.Context, m *meta, mv *Moved, owner, repo strin
 	// An item that existed carries its fields; a new one none.
 	mv.Added = it.Status == nil && it.Team == nil
 	return it, nil
+}
+
+// foreign is the refusal to add the issue ref to the board when its
+// repository's owner is not the board's: a personal account's or another
+// organisation's issue belongs on its owner's own project, never on this
+// board. nil for an issue of the board's owner.
+func (c *Client) foreign(ref string) *Refusal {
+	owner, _, _, err := Ref(ref)
+	if err != nil || strings.EqualFold(owner, c.Board.Owner) {
+		return nil
+	}
+	return &Refusal{fmt.Sprintf("%s is not on the board %s/%d and is never added to it: its repository is outside %s; an issue of %s goes on a project of %s's own",
+		ref, c.Board.Owner, c.Board.Project, c.Board.Owner, owner, owner)}
 }
 
 // lookup reads the issue's node id and its item on the board from the
