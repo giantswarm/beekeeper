@@ -19,6 +19,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -354,6 +355,9 @@ type startedAgent struct {
 	// turn says how the task's first turn runs: a desktop turn, or why it
 	// runs headless.
 	turn string
+	// handed are the leases and grants a hand-over gave it from the session
+	// it replaces (handClaims).
+	handed []string
 }
 
 // startAgent records and registers the session, starts its first turn in a
@@ -413,6 +417,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	}
 	s := state.Start{Party: state.Party{Session: id, HostSession: "local_" + id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Model: sp.model}
 	var reg registration
+	var handed []string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		var err error
 		reg, err = recordStart(st, s, sp.task, live)
@@ -422,17 +427,24 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 		if sp.desktop {
 			st.Agents[len(st.Agents)-1].DesktopTurn = s.At
 		}
+		evs := []state.Event{event(by, "agents.start", "%s: session %s in %s, bypassPermissions, busy with %q", sp.name, id, dir, reg.task)}
 		if sp.replaces != nil {
 			moveRecord(st, *sp.replaces, s.Party)
+			if handed, err = handClaims(st, lease.Dir(a.cfg.LeaseDir), *sp.replaces, s.Party); err != nil {
+				return nil, err
+			}
+			if len(handed) > 0 {
+				evs = append(evs, event(by, "lease.handover", "%s: %s from session %s to %s", sp.name, strings.Join(handed, ", "), sp.replaces.Session, id))
+			}
 		}
-		return []state.Event{event(by, "agents.start", "%s: session %s in %s, bypassPermissions, busy with %q", sp.name, id, dir, reg.task)}, nil
+		return evs, nil
 	})
 	if err != nil {
 		return startedAgent{}, err
 	}
 	unit := "beekeeper-agent-" + id[:8]
 	if !sp.headless {
-		sa, err := a.startVisible(ctx, d, sp, bin, unit, dir, startedAgent{id: id, unit: unit, dir: dir, task: reg.task}, by)
+		sa, err := a.startVisible(ctx, d, sp, bin, unit, dir, startedAgent{id: id, unit: unit, dir: dir, task: reg.task, handed: handed}, by)
 		if err != nil {
 			return sa, a.undelivered(by, s.Party, err)
 		}
@@ -453,7 +465,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if sp.replaces != nil {
 		follow = sp.replaces.HostSession
 	}
-	sa := startedAgent{id: id, unit: unit, dir: dir, task: reg.task, want: a.chosenModel(id)}
+	sa := startedAgent{id: id, unit: unit, dir: dir, task: reg.task, handed: handed, want: a.chosenModel(id)}
 	d.urgent = a.asksDesktop(id)
 	if profile != "" {
 		sa.turn = profiledTurn(profile)
@@ -1321,6 +1333,35 @@ func moveRecord(st *state.State, from, to state.Party) {
 			st.Records[i].Session = to
 		}
 	}
+}
+
+// handClaims gives the leases from holds and the grants queued for it to
+// to, in their places, so a hand-over's follow-up holds and claims what
+// its predecessor did. It returns them as "<resource> held" and
+// "<resource> granted".
+func handClaims(st *state.State, dir lease.Dir, from, to state.Party) ([]string, error) {
+	holders, err := dir.List()
+	if err != nil {
+		return nil, err
+	}
+	var handed []string
+	for _, h := range holders {
+		if !h.Party().Is(from) {
+			continue
+		}
+		h.Session, h.HostSession, h.Name = to.Session, to.HostSession, to.Name
+		if err := dir.Hand(h); err != nil {
+			return handed, fmt.Errorf("handing %s to %s: %w", h.Env, to.Name, err)
+		}
+		handed = append(handed, h.Env+" held")
+	}
+	for i := range st.Grants {
+		if g := &st.Grants[i]; g.To.Is(from) {
+			g.To = to
+			handed = append(handed, g.Resource+" granted")
+		}
+	}
+	return handed, nil
 }
 
 // explicitConfig is the configuration file the caller named (--config or

@@ -168,3 +168,25 @@ func TestCheckAdmitsUpgradeUnblockGrants(t *testing.T) {
 		t.Errorf("a plain grant during the upgrade: %v", err)
 	}
 }
+
+// browserRes is the resource the hand test hands.
+const browserRes = "browser"
+
+func TestDirHand(t *testing.T) {
+	d := Dir(t.TempDir())
+	h := Holder{Env: browserRes, Session: "s1", Name: agentOne, Purpose: "a hand-over", Since: "2026-09-24T20:00:00Z"}
+	if cur, err := d.Claim(browserRes, h); err != nil || cur != nil {
+		t.Fatalf("Claim = %v, %v", cur, err)
+	}
+	h.Session = "s2"
+	if err := d.Hand(h); err != nil {
+		t.Fatal(err)
+	}
+	cur, err := d.Get(browserRes)
+	if err != nil || cur == nil || cur.Session != "s2" || cur.Purpose != "a hand-over" {
+		t.Fatalf("Get = %+v, %v", cur, err)
+	}
+	if list, err := d.List(); err != nil || len(list) != 1 {
+		t.Fatalf("List = %+v, %v", list, err)
+	}
+}

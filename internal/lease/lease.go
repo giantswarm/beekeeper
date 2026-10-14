@@ -117,6 +117,31 @@ func (d Dir) Claim(res string, h Holder) (*Holder, error) {
 	return nil, nil
 }
 
+// Hand gives the lease h.Env, held, to h: its record is replaced in one
+// rename, so a reader sees the old holder or the new one, never none.
+func (d Dir) Hand(h Holder) error {
+	raw, err := json.Marshal(h)
+	if err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(d.path(h.Env), ".holder-*.json")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	_, err = f.Write(append(raw, '\n'))
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, filepath.Join(d.path(h.Env), "holder.json"))
+	}
+	if err != nil {
+		_ = os.Remove(tmp)
+	}
+	return err
+}
+
 // Release frees res.
 func (d Dir) Release(res string) error {
 	return os.RemoveAll(d.path(res))

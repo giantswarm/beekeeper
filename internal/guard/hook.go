@@ -154,6 +154,12 @@ type Hook struct {
 	// roster agent's whose CLI does not run (its headless turn ended, its
 	// import waits); "" passes the send. Nil passes every one.
 	Absent func(name string) string
+	// Agent names where a message by name goes while several running CLIs
+	// carry it and the roster agent of that name is one of them (a
+	// hand-over's follow-up beside the session it replaces): that CLI's own
+	// socket; "" leaves the name as written, an error refuses the send.
+	// Nil reads every name as written.
+	Agent func(name string) (string, error)
 	// Yours records a `yours <resource>` in a message from the session
 	// holding the supervisor role as the resource's grant to the message's
 	// target (to, after the hook's own redirects) and returns what the

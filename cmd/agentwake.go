@@ -684,9 +684,67 @@ func (a *app) desktopPeer(host string) (string, error) {
 	}
 	name, err := uniqueName(sessions, s)
 	if err != nil {
+		if path := liveSocket(s.PID); path != "" {
+			return "uds:" + path, nil
+		}
 		return "", fmt.Errorf("%w. A desktop send to %s would start yet another copy", err, host)
 	}
 	return name, nil
+}
+
+// agentPeer is the PreToolUse hook's lookup for a SendMessage by a name
+// several running CLIs carry: the address sharedNameAddress gives.
+func (a *app) agentPeer(name string) (string, error) {
+	if a.loadConfig() != nil {
+		return "", nil
+	}
+	t, err := plat.Machine.Processes()
+	if err != nil {
+		return "", nil
+	}
+	store, err := state.Open(a.cfg.StateDir)
+	if err != nil {
+		return "", nil
+	}
+	st, err := store.Read()
+	if err != nil {
+		return "", nil
+	}
+	return sharedNameAddress(st, discover(a.cfg, t, time.Now()), name, time.Now(), liveSocket)
+}
+
+// sharedNameAddress is where a message by name goes while running CLIs other
+// than the roster agent's of that name carry it, as a hand-over's
+// follow-up and the session it replaces both do until that one ends: the
+// agent's own CLI's socket, so the follow-up gets it. "" leaves the name as
+// written: no agent carries it, or no other CLI does. An agent whose CLI
+// does not run is refused, as the message would reach the other session.
+func sharedNameAddress(st *state.State, sessions []*claude.Session, name string, now time.Time, sock func(pid int) string) (string, error) {
+	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return strings.EqualFold(ag.Name, name) })
+	if i < 0 {
+		return "", nil
+	}
+	ag := st.Agents[i]
+	own, live := claude.Live(sessions, ag.Party)
+	var others []string
+	for _, s := range sessions {
+		if strings.EqualFold(s.Name, name) && s != own {
+			others = append(others, s.ID)
+		}
+	}
+	switch {
+	case len(others) == 0:
+		return "", nil
+	case !live:
+		return "", refused("%s. By name the message would reach session %s, which is not the agent's: beekeeper agents wake %q <message> reaches it",
+			noCLI(ag, now), strings.Join(others, ", "), ag.Name)
+	}
+	path := sock(own.PID)
+	if path == "" {
+		return "", refused("the running CLIs of sessions %s and %s are named %q and the agent's CLI %d has no peer socket: send to its session id %s",
+			strings.Join(others, ", "), own.ID, name, own.PID, cmp.Or(ag.HostSession, ag.Session))
+	}
+	return "uds:" + path, nil
 }
 
 // absentPeer is the PreToolUse hook's lookup for a SendMessage by name: what
