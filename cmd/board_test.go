@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -186,7 +188,7 @@ func TestSecondClaimKeepsAnOpenServe(t *testing.T) {
 	if err != nil || res.Claimed || res.Pick != nil || res.Held == nil || res.Held.Issue != refOne || !slices.EqualFunc(st.Records, before.Records, recordsEqual) {
 		t.Fatalf("second claim over an open serve: %+v, %v; records %+v", res, err, st.Records)
 	}
-	if err := (&app{out: io.Discard}).printNext(res, len(cands)); Code(err) != ExitRefused {
+	if err := (&app{out: io.Discard}).printNext(res, len(cands), nextView{}); Code(err) != ExitRefused {
 		t.Errorf("refused claim exits %v, want %d", err, ExitRefused)
 	}
 
@@ -469,7 +471,7 @@ func TestPrintNextPreviewListsTheFreeItemsAndCountsTheSkips(t *testing.T) {
 		t.Errorf("skipped by %v, want %v", res.SkippedBy, want)
 	}
 	var out strings.Builder
-	if err := (&app{out: &out}).printNext(res, len(cands)); err != nil {
+	if err := (&app{out: &out}).printNext(res, len(cands), nextView{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, line := range []string{
@@ -486,7 +488,7 @@ func TestPrintNextPreviewListsTheFreeItemsAndCountsTheSkips(t *testing.T) {
 	// A claim prints its pick and how many items are behind it, not the list.
 	res.Claimed = true
 	out.Reset()
-	if err := (&app{out: &out}).printNext(res, len(cands)); err != nil {
+	if err := (&app{out: &out}).printNext(res, len(cands), nextView{}); err != nil {
 		t.Fatal(err)
 	}
 	if s := out.String(); !strings.Contains(s, "behind it: 5 more, 2 of them free") || strings.Contains(s, "Item 5") {
@@ -497,14 +499,14 @@ func TestPrintNextPreviewListsTheFreeItemsAndCountsTheSkips(t *testing.T) {
 	res.Missing = []string{`board.order "queue": Resource limits for this query exceeded.`}
 	res.AfterPick[0].Missing = []string{"projectItems: Resource limits for this query exceeded."}
 	out.Reset()
-	if err := (&app{out: &out}).printNext(res, len(cands)); err != nil {
+	if err := (&app{out: &out}).printNext(res, len(cands), nextView{}); err != nil {
 		t.Fatal(err)
 	}
 	if s := out.String(); !strings.Contains(s, "unknown, GitHub answered with an error: board.order \"queue\": Resource limits for this query exceeded.\n") {
 		t.Errorf("preview lacks the missing search:\n%s", s)
 	}
 	out.Reset()
-	if err := (&app{out: &out, json: true}).printNext(res, len(cands)); err != nil {
+	if err := (&app{out: &out, json: true}).printNext(res, len(cands), nextView{}); err != nil {
 		t.Fatal(err)
 	}
 	if s := out.String(); !strings.Contains(s, `"missing": [`) || !strings.Contains(s, `"projectItems: Resource limits for this query exceeded."`) {
@@ -517,7 +519,7 @@ func TestPrintNextPreviewListsTheFreeItemsAndCountsTheSkips(t *testing.T) {
 		{Ref: "o/r#12", Title: "Other", Status: "In Progress"},
 	}
 	out.Reset()
-	if err := (&app{out: &out}).printNext(res, len(cands)); err != nil {
+	if err := (&app{out: &out}).printNext(res, len(cands), nextView{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, line := range []string{
@@ -542,7 +544,7 @@ func TestPrintNextListsEachSkipBeforeThePick(t *testing.T) {
 	cands[0].Skip = oldBacklog
 	res := nextFree(st, cands, pickScope{me: state.Party{Session: "me"}, alive: func(state.Party) bool { return true }, listed: listed})
 	var out strings.Builder
-	if err := (&app{out: &out}).printNext(res, len(cands)); err != nil {
+	if err := (&app{out: &out}).printNext(res, len(cands), nextView{}); err != nil {
 		t.Fatal(err)
 	}
 	skips := "skipped " + cands[0].Ref + ": " + oldBacklog + "\n" +
@@ -564,7 +566,7 @@ func TestPrintNextListsEachSkipBeforeThePick(t *testing.T) {
 	cands = cands[:3]
 	res = nextFree(st, cands, pickScope{me: state.Party{Session: "me"}, alive: func(state.Party) bool { return true }, listed: listed})
 	out.Reset()
-	if err := (&app{out: &out}).printNext(res, len(cands)); Code(err) != ExitRefused {
+	if err := (&app{out: &out}).printNext(res, len(cands), nextView{}); Code(err) != ExitRefused {
 		t.Fatalf("no free item: err %v, want exit refused", err)
 	}
 	if !strings.HasPrefix(out.String(), skips) {
@@ -599,5 +601,111 @@ func TestHoldTextSaysWhatBoardNextMakesOfTheItem(t *testing.T) {
 		if got := holdText(&tc.h, tc.block); got != tc.want {
 			t.Errorf("holdText(%+v, %v) = %q, want %q", tc.h, tc.block, got, tc.want)
 		}
+	}
+}
+
+func TestPrintNextLimit(t *testing.T) {
+	listed := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	cands := boardCandidates(9)
+	for i := range 3 {
+		cands[i].Skip = oldBacklog
+	}
+	res := nextFree(&state.State{}, cands, pickScope{me: state.Party{Session: "me"}, alive: func(state.Party) bool { return true }, listed: listed})
+	var whole strings.Builder
+	if err := (&app{out: &whole}).printNext(res, len(cands), nextView{}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(whole.String(), "--limit") {
+		t.Errorf("without --limit the output names it:\n%s", whole.String())
+	}
+	var out strings.Builder
+	if err := (&app{out: &out}).printNext(res, len(cands), nextView{limit: 2}); err != nil {
+		t.Fatal(err)
+	}
+	s := out.String()
+	for _, line := range []string{
+		"skipped " + cands[0].Ref + ": ",
+		"skipped " + cands[1].Ref + ": ",
+		"… 1 more skipped above the pick (--limit 2)\n",
+		cands[3].Ref + " ",
+		"free behind it, next in line: 5 of 5\n",
+		"  " + cands[4].Ref + "  ",
+		"  " + cands[5].Ref + "  ",
+		"  … 3 more free (--limit 2)\n",
+		"skipped: 3 in all: order 3",
+	} {
+		if !strings.Contains(s, line) {
+			t.Errorf("--limit 2 output lacks %q:\n%s", line, s)
+		}
+	}
+	for _, c := range []board.Candidate{cands[2], cands[6]} {
+		if strings.Contains(s, c.Ref+":") || strings.Contains(s, "  "+c.Ref+"  ") {
+			t.Errorf("--limit 2 lists %s:\n%s", c.Ref, s)
+		}
+	}
+	// --json caps skipped and after_pick the same and counts what it left out.
+	out.Reset()
+	if err := (&app{out: &out, json: true}).printNext(res, len(cands), nextView{limit: 2}); err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Pick          board.Candidate   `json:"pick"`
+		Skipped       []board.Candidate `json:"skipped"`
+		AfterPick     []board.Candidate `json:"after_pick"`
+		SkippedMore   int               `json:"skipped_more"`
+		AfterPickMore int               `json:"after_pick_more"`
+		SkippedBy     map[string]int    `json:"skipped_by"`
+	}
+	if err := json.Unmarshal([]byte(out.String()), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Pick.Ref != cands[3].Ref || len(doc.Skipped) != 2 || len(doc.AfterPick) != 2 || doc.SkippedMore != 1 || doc.AfterPickMore != 3 || doc.SkippedBy[kindOrder] != 3 {
+		t.Errorf("--json --limit 2: %s", out.String())
+	}
+	// Without --limit, --json names nothing left out.
+	out.Reset()
+	if err := (&app{out: &out, json: true}).printNext(res, len(cands), nextView{}); err != nil {
+		t.Fatal(err)
+	}
+	if s := out.String(); strings.Contains(s, "_more") {
+		t.Errorf("--json without --limit:\n%s", s)
+	}
+}
+
+// fieldRef is a candidate's ref, by its --fields name.
+const fieldRef = "ref"
+
+func TestPrintNextFields(t *testing.T) {
+	listed := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	cands := boardCandidates(3)
+	cands[0].Skip = oldBacklog
+	res := nextFree(&state.State{}, cands, pickScope{me: state.Party{Session: "me"}, alive: func(state.Party) bool { return true }, listed: listed})
+	var out strings.Builder
+	// --fields implies --json.
+	if err := (&app{out: &out}).printNext(res, len(cands), nextView{fields: []string{fieldRef, "skip"}}); err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(out.String()), &doc); err != nil {
+		t.Fatalf("--fields prints no JSON: %v\n%s", err, out.String())
+	}
+	want := map[string]any{
+		"pick":       map[string]any{fieldRef: cands[1].Ref},
+		"skipped":    []any{map[string]any{fieldRef: cands[0].Ref, "skip": oldBacklog}},
+		"after_pick": []any{map[string]any{fieldRef: cands[2].Ref}},
+	}
+	for k, v := range want {
+		if !reflect.DeepEqual(doc[k], v) {
+			t.Errorf("%s = %v, want %v", k, doc[k], v)
+		}
+	}
+	if doc["skipped_by"] == nil {
+		t.Errorf("--fields drops skipped_by:\n%s", out.String())
+	}
+	if err := checkFields([]string{fieldRef, "title", "url", "step", "priorityOf"}); err != nil {
+		t.Error(err)
+	}
+	if err := checkFields([]string{fieldRef, "nope"}); err == nil || !strings.Contains(err.Error(), "--fields nope: no such field") || !strings.Contains(err.Error(), "ref,url,title") {
+		t.Errorf("unknown field: %v", err)
 	}
 }

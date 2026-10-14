@@ -3,9 +3,11 @@ package cmd
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -49,6 +51,7 @@ dependency on another issue, which next reads.`,
 func (a *app) boardNextCmd() *cobra.Command {
 	var claim, replace bool
 	var waits string
+	var view nextView
 	c := &cobra.Command{
 		Use:   "next",
 		Short: "Print the next free board item; --claim records it as the calling session's",
@@ -119,9 +122,24 @@ it with board move. The claim ends when the session ends, when its agent
 reports idle (agents idle) or with sessions unserve <owner/repo#n>. A
 second claim while the session still serves an open item is refused with
 its record, which stays as it was; --replace takes the next item and
-replaces the record. Exit 3 when no item is free or the claim is refused.`,
+replaces the record. Exit 3 when no item is free or the claim is refused.
+
+--limit <n> lists at most n items of each list: the skipped lines above the
+pick and the free items behind it, and --json's skipped and after_pick,
+each followed by how many it left out ("… 12 more skipped above the pick",
+--json skipped_more and after_pick_more); the counts by kind and the
+pick are whole. --fields ref,title,url (implies --json) keeps only the
+named fields of each item in pick, skipped and after_pick, a name it does
+not know refused with the names it knows. Without either the output is
+the whole walk.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if view.limit < 0 {
+				return usageErr("--limit %d: a count of items, 0 for all", view.limit)
+			}
+			if err := checkFields(view.fields); err != nil {
+				return usageErr("%v", err)
+			}
 			var me state.Party
 			if claim {
 				var err error
@@ -184,13 +202,136 @@ replaces the record. Exit 3 when no item is free or the claim is refused.`,
 				return err
 			}
 			res.Epics, res.Missing = snap.Epics(), snap.Missing
-			return a.printNext(res, len(cands))
+			return a.printNext(res, len(cands), view)
 		},
 	}
 	c.Flags().BoolVar(&claim, "claim", false, "record the item as the calling session's (sessions serve), atomically")
 	c.Flags().BoolVar(&replace, "replace", false, "with --claim: replace the session's record even while the item it serves is open")
 	c.Flags().StringVar(&waits, "waits", "", "what the session waits on, for the record")
+	c.Flags().IntVar(&view.limit, "limit", 0, "list at most this many items of each list, saying how many it left out (0: all)")
+	c.Flags().StringSliceVar(&view.fields, "fields", nil, "with --json (implied): keep only these fields of each item, comma-separated: "+strings.Join(candidateFields(), ","))
 	return c
+}
+
+// nextView is how much of a nextResult board next prints: at most limit
+// items of each list (0: all), and with fields only those JSON fields of
+// each item.
+type nextView struct {
+	limit  int
+	fields []string
+}
+
+// firstN is at most n of list (all for 0) and how many it left out.
+func firstN[T any](list []T, n int) ([]T, int) {
+	if n <= 0 || len(list) <= n {
+		return list, 0
+	}
+	return list[:n], len(list) - n
+}
+
+// candidateFields are the JSON names of a board.Candidate's fields, in
+// their order, the names --fields takes.
+func candidateFields() []string {
+	var names []string
+	var walk func(t reflect.Type)
+	walk = func(t reflect.Type) {
+		for i := range t.NumField() {
+			f := t.Field(i)
+			if !f.IsExported() {
+				continue
+			}
+			if f.Anonymous {
+				walk(f.Type)
+				continue
+			}
+			if name, _, _ := strings.Cut(f.Tag.Get("json"), ","); name != "" && name != "-" {
+				names = append(names, name)
+			}
+		}
+	}
+	walk(reflect.TypeFor[board.Candidate]())
+	return names
+}
+
+// checkFields refuses a field name a candidate has not.
+func checkFields(fields []string) error {
+	known := candidateFields()
+	for _, f := range fields {
+		if !slices.Contains(known, f) {
+			return fmt.Errorf("--fields %s: no such field, the fields are %s", f, strings.Join(known, ","))
+		}
+	}
+	return nil
+}
+
+// projectFields keeps the named fields of c; one c leaves empty is left out,
+// as --json leaves it out.
+func projectFields(c board.Candidate, fields []string) (map[string]any, error) {
+	b, err := json.Marshal(c)
+	if err != nil {
+		return nil, err
+	}
+	all := map[string]any{}
+	if err := json.Unmarshal(b, &all); err != nil {
+		return nil, err
+	}
+	out := make(map[string]any, len(fields))
+	for _, f := range fields {
+		if v, ok := all[f]; ok {
+			out[f] = v
+		}
+	}
+	return out, nil
+}
+
+// nextJSON is --json's document: res with its lists capped by view.limit,
+// each item reduced to view.fields when it names any.
+func nextJSON(res nextResult, view nextView) (any, error) {
+	var skippedMore, afterMore int
+	res.Skipped, skippedMore = firstN(res.Skipped, view.limit)
+	res.AfterPick, afterMore = firstN(res.AfterPick, view.limit)
+	type limited struct {
+		nextResult
+		SkippedMore   int `json:"skipped_more,omitempty"`
+		AfterPickMore int `json:"after_pick_more,omitempty"`
+	}
+	doc := limited{res, skippedMore, afterMore}
+	if len(view.fields) == 0 {
+		return doc, nil
+	}
+	b, err := json.Marshal(doc)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{}
+	if err := json.Unmarshal(b, &out); err != nil {
+		return nil, err
+	}
+	many := func(cs []board.Candidate) ([]map[string]any, error) {
+		ps := make([]map[string]any, 0, len(cs))
+		for _, c := range cs {
+			p, err := projectFields(c, view.fields)
+			if err != nil {
+				return nil, err
+			}
+			ps = append(ps, p)
+		}
+		return ps, nil
+	}
+	if res.Pick != nil {
+		if out["pick"], err = projectFields(*res.Pick, view.fields); err != nil {
+			return nil, err
+		}
+	}
+	for key, cs := range map[string][]board.Candidate{"skipped": res.Skipped, "after_pick": res.AfterPick} {
+		if len(cs) == 0 {
+			continue
+		}
+		if out[key], err = many(cs); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // servedOpen asks GitHub whether each item me's records serve is open, ahead
@@ -513,9 +654,13 @@ func coverClosed(owners map[string]string, closes map[string][]string) map[strin
 	return owners
 }
 
-func (a *app) printNext(res nextResult, offered int) error {
-	if a.json {
-		if err := a.printJSON(res); err != nil {
+func (a *app) printNext(res nextResult, offered int, view nextView) error {
+	if a.json || len(view.fields) > 0 {
+		doc, err := nextJSON(res, view)
+		if err != nil {
+			return err
+		}
+		if err := a.printJSON(doc); err != nil {
 			return err
 		}
 	} else {
@@ -524,8 +669,12 @@ func (a *app) printNext(res nextResult, offered int) error {
 		}
 		// Every skip above the pick comes first, the same list as --json's
 		// skipped, so a held item reads apart from an absent one.
-		for _, c := range res.Skipped {
+		skipped, more := firstN(res.Skipped, view.limit)
+		for _, c := range skipped {
 			_, _ = fmt.Fprintf(a.out, "skipped %s: %s\n", c.Ref, c.Skip)
+		}
+		if more > 0 {
+			_, _ = fmt.Fprintf(a.out, "… %d more skipped above the pick (--limit %d)\n", more, view.limit)
 		}
 		if res.Pick != nil {
 			p := res.Pick
@@ -545,7 +694,8 @@ func (a *app) printNext(res nextResult, offered int) error {
 				// The preview lists the free items in their order.
 				_, _ = fmt.Fprintf(a.out, "free behind it, next in line: %d of %d\n", len(free), n)
 				w := a.table()
-				for _, c := range free {
+				shown, more := firstN(free, view.limit)
+				for _, c := range shown {
 					line := fmt.Sprintf("  %s\t%s\t%s", c.Ref, truncate(c.Title, 50), c.Step)
 					if p := c.PriorityText(); p != "" {
 						line += "\t" + p
@@ -553,6 +703,9 @@ func (a *app) printNext(res nextResult, offered int) error {
 					_, _ = fmt.Fprintln(w, line)
 				}
 				_ = w.Flush()
+				if more > 0 {
+					_, _ = fmt.Fprintf(a.out, "  … %d more free (--limit %d)\n", more, view.limit)
+				}
 			}
 		}
 		if len(res.SkippedBy) > 0 {
