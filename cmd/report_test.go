@@ -122,13 +122,17 @@ func TestReportTime(t *testing.T) {
 		{"01:00", time.Date(2026, 9, 27, 22, 0, 0, 0, time.UTC)},
 		{"02:00", time.Date(2026, 9, 26, 23, 0, 0, 0, time.UTC)},
 		{"2026-09-27T21:00:00Z", time.Date(2026, 9, 27, 21, 0, 0, 0, time.UTC)},
+		{"2026-09-27", time.Date(2026, 9, 26, 21, 0, 0, 0, time.UTC)}, // 00:00 EEST
+		{oct8, time.Date(2026, 10, 7, 21, 0, 0, 0, time.UTC)},         // a date after ref parses too
 	} {
 		got, err := reportTime(ref, c.in, zone)
 		if err != nil || !got.Equal(c.want) {
 			t.Errorf("reportTime(%q) = %v, %v; want %v", c.in, got, err, c.want)
 		}
 	}
-	if _, err := reportTime(ref, "soon", zone); err == nil {
-		t.Error("reportTime(soon) parses")
+	for _, bad := range []string{"soon", "2026-13-01", "2026-9-27"} {
+		if _, err := reportTime(ref, bad, zone); Code(err) != ExitUsage {
+			t.Errorf("reportTime(%q) = %v, want a usage error", bad, err)
+		}
 	}
 }
