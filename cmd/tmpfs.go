@@ -121,7 +121,9 @@ func (w *watcher) autoFree(now time.Time) {
 		return
 	}
 	d := *w.app // reading the machine moves its now on
+	w.bg.Add(1)
 	go func() {
+		defer w.bg.Done()
 		defer w.freeing.Store(false)
 		w.freeDue(func() (free.Machine, error) { return liveTmpfs(&d) }, now, every)
 	}()

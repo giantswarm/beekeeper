@@ -151,7 +151,9 @@ func (w *watcher) goCache(now time.Time) {
 		w.goCaching.Store(false)
 		return
 	}
+	w.bg.Add(1)
 	go func() {
+		defer w.bg.Done()
 		defer w.goCaching.Store(false)
 		every := w.cfg.Doctor.GoCacheEvery.Duration
 		var m goCacheMark

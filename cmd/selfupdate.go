@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -49,15 +50,17 @@ verifies for a CircleCI build of ` + update.Repository + `; a release without
 a bundle, or a download that does not match it, is refused and the binary
 stays as it is.
 
-The new binary is renamed over the old one in one step: a running
-beekeeper watch keeps running (the old binary, until it is restarted), and
-every beekeeper started afterwards is the new one. The update names the
-beekeeper processes it leaves on the old binary (pid and command), each
-watch among them (beekeeper watch, alerts watch, guide watch) with the
-command that re-arms it: once the new release writes the state, their saves
-are refused until they end or are restarted (beekeeper doctor lists them
-meanwhile). A watch never re-executes itself: its owner re-arms it, told by
-its own feed (WATCH STALE, GUIDE WATCH STALE).
+The new binary is renamed over the old one in one step, and every
+beekeeper started afterwards is the new one. A running beekeeper watch (the
+standby service's included) and a reopen waiting to show a session restart
+on it once, each at its next quiet moment, as beekeeper install has them
+do; the update names each (restart). It names the other beekeeper processes
+it leaves on the old binary (pid and command), an alerts or guide watch
+with the command that re-arms it: once the new release writes the state,
+their saves are refused until they end or are restarted (beekeeper doctor
+lists them meanwhile). An alerts or guide watch never re-executes itself:
+its owner re-arms it, told by its own feed (WATCH STALE, GUIDE WATCH
+STALE).
 
 The beekeeper plugin goes with the binary: an update brings every
 installed beekeeper plugin up to its marketplace's latest (claude plugin
@@ -97,7 +100,13 @@ is set. A development build (version dev) is refused.`,
 			}
 			if err == nil && res.Updated {
 				if t, terr := proc.Read(); terr == nil {
-					_, _ = fmt.Fprint(w, leftBehind(staleBinaries(t, os.Getpid(), replacedBinary), res.Current, res.Latest))
+					stale := staleBinaries(t, os.Getpid(), replacedBinary)
+					if a.loadConfig() == nil {
+						if restarted, rerr := a.restartReplaced(w, res.Path, t, false); rerr == nil {
+							stale = slices.DeleteFunc(stale, func(p *proc.Process) bool { return slices.Contains(restarted, p) })
+						}
+					}
+					_, _ = fmt.Fprint(w, leftBehind(stale, res.Current, res.Latest))
 				}
 			}
 			switch {
