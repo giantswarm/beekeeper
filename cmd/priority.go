@@ -62,7 +62,8 @@ list stays ranked 1..n, a rank past its end is its end. Only the items whose
 rank changes are written. An epic without an item on the board is added
 first, as board move adds one, with board.team as its Team. Refused (exit 3)
 without --as <person> (` + onlyPerson + `), for an issue that does not exist,
-is closed or is no epic (board.epics' kinds), and on a board without the
+is closed or is no epic (board.epics' kinds), for an issue of a repository
+outside the board's owner without an item (never added), and on a board without the
 number field ` + board.PriorityField + `.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
