@@ -849,6 +849,9 @@ type State struct {
 	// Failed are the gated merges whose last run merged nothing, one per
 	// pull request, shown on their lane until its next attempt joins it.
 	Failed []Failed `json:"failed,omitempty"`
+	// Owed are the outcomes of detached runs their owners have not heard
+	// yet, until the watch hands each over.
+	Owed []Owed `json:"owed,omitempty"`
 	// Report is the scheduled status reporter's current or last run.
 	Report *Report `json:"report,omitempty"`
 	// ReportThreads are the posted reports' Slack threads the feedback
@@ -1039,6 +1042,39 @@ type Merge struct {
 	Roll []string `json:"roll,omitempty"`
 
 	rest rest
+}
+
+// Owed is a detached run's outcome its owner has not heard: recorded by the
+// run's merge-child before it hands the outcome over, so a merge-child stopped
+// or killed on the way (a desktop restart, its user manager stopping) leaves
+// it to the watch. Gate and Child are the pids of the run's gate and
+// merge-child, which hand it over while either runs; Heard is the gate's
+// heard marker, which says its caller heard it. Line is the outcome; Ask
+// marks a merge stopped before devctl reported its end, whose outcome is
+// its pull request's state on GitHub (Repo, PR), Command and Stop naming
+// the command and its stop. Tried is when a hand-over was last claimed, Why
+// why the last one failed.
+type Owed struct {
+	Owner   Party     `json:"owner"`
+	Line    string    `json:"line"`
+	Ask     bool      `json:"ask,omitempty"`
+	Repo    string    `json:"repo,omitempty"`
+	PR      int       `json:"pr,omitempty"`
+	Command string    `json:"command,omitempty"`
+	Stop    string    `json:"stop,omitempty"`
+	Gate    int       `json:"gate,omitempty"`
+	Child   int       `json:"child"`
+	Heard   string    `json:"heard,omitempty"`
+	Since   time.Time `json:"since"`
+	Tried   time.Time `json:"tried,omitzero"`
+	Why     string    `json:"why,omitempty"`
+
+	rest rest
+}
+
+// Key tells owed outcomes apart: the merge-child that owes it and when.
+func (o Owed) Key() string {
+	return fmt.Sprintf("%d@%s", o.Child, o.Since.UTC().Format(time.RFC3339Nano))
 }
 
 // Failed is a gated merge's run that merged nothing: when, devctl's exit

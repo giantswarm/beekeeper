@@ -293,50 +293,37 @@ func handOver(base string, r childRun, cli int) {
 // heard marker (a headless turn that ended, a caller killed, its CLI gone),
 // it logs devctl.unheard and wakes the owner, a registered agent, with the
 // outcome in one line (agents wake: by name when its CLI runs, else a
-// headless turn).
+// headless turn). The outcome is owed in the state first (owe), so a
+// merge-child stopped or killed on the way leaves it to the watch, and a
+// hand-over that fails (GitHub unanswered for a stopped merge, a wake the
+// service manager refuses) stays owed for the watch's next try (payOwed).
 func (a *app) tellOwner(ctx context.Context, r childResult) {
 	if r.spec.Owner.Session == "" && r.spec.Owner.HostSession == "" {
 		return
 	}
+	if a.store == nil {
+		a.cfgPath = r.spec.Config
+		if err := a.load(); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "%s, unheard by %q: the configuration does not load (%v), nobody is woken\n", r.outcome(), r.spec.Owner.Name, err)
+			return
+		}
+	}
+	o := r.owed(time.Now())
+	if err := a.owe(o); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "%s, owed to %q: the state does not take it (%v)\n", o.Line, o.Owner.Name, err)
+	}
 	for deadline := time.Now().Add(ownerWait); proc.Alive(r.spec.Gate) && time.Now().Before(deadline); {
 		time.Sleep(followPoll)
 	}
-	heard := heardFile(r.base, r.spec.Gate)
-	_, err := os.Stat(heard)
-	_ = os.Remove(heard)
-	if err == nil {
+	if heard(o) {
+		a.paid(o)
 		return
 	}
 	if merge.Red(r.doc) {
 		r.infra = infraReds(ctx, r.doc)
+		o.Line = r.outcome()
 	}
-	line := r.outcome()
-	if a.store == nil {
-		a.cfgPath = r.spec.Config
-		if err := a.load(); err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "%s, unheard by %q: the configuration does not load (%v), nobody is woken\n", line, r.spec.Owner.Name, err)
-			return
-		}
-	}
-	st, err := a.store.Read()
-	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "%s, unheard by %q: the state does not load (%v), nobody is woken\n", line, r.spec.Owner.Name, err)
-		return
-	}
-	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(r.spec.Owner) })
-	if i < 0 {
-		_ = a.store.Log(event(gateParty, verbUnheard, "%s; %q is no registered agent, nobody is woken", line, r.spec.Owner.Name))
-		return
-	}
-	ag := st.Agents[i]
-	_ = a.store.Log(event(gateParty, verbUnheard, "%s; waking %q", line, ag.Name))
-	q := ag.Session
-	if q == "" {
-		q = ag.HostSession
-	}
-	if err := wakeOwner(a, ctx, gateParty, q, line, ""); err != nil {
-		_ = a.store.Log(event(gateParty, verbUnheard, "waking %q failed (%v): %s", ag.Name, err, line))
-	}
+	a.payOwed(ctx, o)
 }
 
 // outcome is the run's outcome in one line: "<command> exit N: <reason>

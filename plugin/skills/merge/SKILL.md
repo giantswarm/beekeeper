@@ -12,7 +12,9 @@ description: Merging, promoting or tagging on a beekeeper desk: the gate, its ex
   under `merge.devctlOwners`, `devctl release promote <owner/repo>` likewise (the hook runs it
   under `beekeeper gate`). Act on its exit code, never around it: 76 queued, the merge waits on in
   its lane and its outcome wakes the worker, never run it again (park on the PR); 77 refused, its
-  `beekeeper gate:` line says why, which goes to the supervisor, and no second merge follows.
+  `beekeeper gate:` line says why, which goes to the supervisor, and no second merge follows. A
+  merge cut by a desktop restart (exit 137, 143) runs on or is judged by GitHub: its outcome wakes
+  the worker, never run it again.
 - **Nothing rolls onto an installation while one of its clusters upgrades.**
 - **Before a non-mechanical change**, read the repository's open PRs and recent commits. A
   teammate's open PR that overlaps the task is a hard stop: tell the supervisor.

@@ -1309,6 +1309,7 @@ func (w *watcher) poll(ctx context.Context) {
 		w.pollSessions(ctx, since, t)
 	}
 	w.lostMerges(ctx)
+	w.owedOutcomes(ctx)
 	w.pollToolWindow(ctx, watchParty)
 	w.stalls()
 	w.unbrokered()
