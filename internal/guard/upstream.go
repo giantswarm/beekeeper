@@ -250,15 +250,10 @@ func repoFlag(a string) (string, bool) {
 	return "", false
 }
 
-// ghAPIWrite is a gh api call's write: a write method, given or implied by
-// a field or an input, on a repository's or an organization's path, or a
-// GraphQL mutation that posts.
-func (u Upstream) ghAPIWrite(args []string, cwd, env string) (what, repo string) {
-	words := append([]string{"gh"}, args...)
-	ep := ghAPIEndpoint(words)
-	if ep == "" {
-		return "", ""
-	}
+// ghAPIMethod is the HTTP method of a gh api call's args (from "api" on):
+// the one -X or --method names, else POST when a field or an input gives
+// a body, else "".
+func ghAPIMethod(args []string) string {
 	method, fields := "", false
 	for i := 1; i < len(args); i++ {
 		a := args[i]
@@ -277,12 +272,25 @@ func (u Upstream) ghAPIWrite(args []string, cwd, env string) (what, repo string)
 			i++
 		}
 	}
-	if ep == "graphql" {
-		return u.gqlWrite("gh api graphql", strings.Join(args, " ")+"\n"+ghAPIBodies(words, cwd))
-	}
 	if method == "" && fields {
 		method = methodPost
 	}
+	return method
+}
+
+// ghAPIWrite is a gh api call's write: a write method, given or implied by
+// a field or an input, on a repository's or an organization's path, or a
+// GraphQL mutation that posts.
+func (u Upstream) ghAPIWrite(args []string, cwd, env string) (what, repo string) {
+	words := append([]string{"gh"}, args...)
+	ep := ghAPIEndpoint(words)
+	if ep == "" {
+		return "", ""
+	}
+	if ep == "graphql" {
+		return u.gqlWrite("gh api graphql", strings.Join(args, " ")+"\n"+ghAPIBodies(words, cwd))
+	}
+	method := ghAPIMethod(args)
 	if !writeMethods[method] {
 		return "", ""
 	}

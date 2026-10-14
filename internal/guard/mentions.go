@@ -77,15 +77,20 @@ func postsToGitHub(tool string) bool {
 	return false
 }
 
+// jqFormat is a jq output formatter (@tsv, @csv, @json, …), never a mention.
+var jqFormat = regexp.MustCompile(`@(text|json|html|uri|csv|tsv|sh|base64d?|base32d?)\b`)
+
 // ghPostText is the text a command line's gh posts would send: the whole
-// command line and the files their --body-file, -F and @file arguments
-// name; "" when no segment posts.
+// command line, the formatters of its gh calls' jq and template
+// expressions without their @, and the files their --body-file, -F and
+// @file arguments name; "" when no segment posts.
 func ghPostText(cmd, cwd string) string {
 	sc := scanShell(cmd)
 	posts := false
-	var files []string
+	var files, exprs []string
 	for _, sg := range sc.segments() {
 		words := shellWords(sc.plain[sg.start:sg.end])
+		exprs = append(exprs, ghFormats(words)...)
 		if !ghPost(words) {
 			continue
 		}
@@ -101,6 +106,9 @@ func ghPostText(cmd, cwd string) string {
 	}
 	if !posts {
 		return ""
+	}
+	for _, e := range exprs {
+		cmd = strings.ReplaceAll(cmd, e, jqFormat.ReplaceAllString(e, "$1"))
 	}
 	parts := []string{cmd}
 	for _, f := range files {
@@ -129,6 +137,9 @@ func ghPost(words []string) bool {
 	case "issue", "pr":
 		return ghPosts[words[2]]
 	case ghAPISub:
+		if !writeMethods[ghAPIMethod(words[1:])] {
+			return false
+		}
 		for _, w := range words[2:] {
 			if strings.Contains(w, "/comments") || strings.Contains(w, "/reviews") ||
 				strings.HasSuffix(w, "/issues") || strings.HasSuffix(w, "/pulls") {
@@ -137,6 +148,27 @@ func ghPost(words []string) bool {
 		}
 	}
 	return false
+}
+
+// ghFormats are the output expressions of a gh call's words: the values of
+// --jq and --template, and of gh api's -q and -t (-t is pr create's title).
+func ghFormats(words []string) []string {
+	if len(words) < 2 || path.Base(words[0]) != "gh" {
+		return nil
+	}
+	api := words[1] == ghAPISub
+	var out []string
+	for i, w := range words {
+		switch {
+		case (w == flagJQ || w == flagTemplate || api && (w == "-q" || w == "-t")) && i+1 < len(words):
+			out = append(out, words[i+1])
+		case strings.HasPrefix(w, flagJQ+"="):
+			out = append(out, strings.TrimPrefix(w, flagJQ+"="))
+		case strings.HasPrefix(w, flagTemplate+"="):
+			out = append(out, strings.TrimPrefix(w, flagTemplate+"="))
+		}
+	}
+	return out
 }
 
 func dedupe(s []string) []string {
