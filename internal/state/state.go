@@ -867,6 +867,20 @@ type State struct {
 	// gate, or run under the GitHub budget floor in a reset window that has
 	// not ended.
 	Urgent []Urgent `json:"urgent,omitempty"`
+	// RoleLines are lines for a role's holder that found none to tell: the
+	// role's next start says them.
+	RoleLines []RoleLine `json:"roleLines,omitempty"`
+
+	rest rest
+}
+
+// RoleLine is a line for the holder of a role (supervisor, guide) that no
+// session held, or whose holder could not be told, when it was said: the
+// answer to a note a run of the role filed.
+type RoleLine struct {
+	Role string    `json:"role"`
+	Line string    `json:"line"`
+	At   time.Time `json:"at"`
 
 	rest rest
 }

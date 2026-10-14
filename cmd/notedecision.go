@@ -143,14 +143,79 @@ func closeDefaulted(st *state.State, person string, by state.Party, now time.Tim
 }
 
 // tellFiler delivers line from by to the session that filed n, when it is a
-// registered agent; a central instance has no sessions to tell.
-func (a *app) tellFiler(ctx context.Context, by state.Party, n *state.Note, line string) {
+// registered agent. A note filed in a role (the supervisor's, the guide's)
+// goes to the role's holder now, as a message to the role does: the run that
+// filed it may have relayed since. While no session holds the role, or its
+// holder cannot be told, line waits for the role's next start. It returns
+// what it says of a line that reached another than the filer, or waits, ""
+// otherwise; a central instance has no sessions to tell.
+func (a *app) tellFiler(ctx context.Context, by state.Party, n *state.Note, line string) string {
 	if a.central || n.By.Name == "" {
-		return
+		return ""
 	}
-	quiet := *a // the wake's own report is not the command's
-	quiet.out = io.Discard
-	if err := wakeOwner(&quiet, ctx, by, cmp.Or(n.By.Session, n.By.Name), line, ""); err != nil {
+	st, err := a.store.Read()
+	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "note #%d: telling %q failed (%v): %s\n", n.ID, n.By.Name, err, line)
+		return ""
 	}
+	rl, ok := filedRole(st, n.By)
+	if !ok {
+		if err := a.quietWake(ctx, by, cmp.Or(n.By.Session, n.By.Name), line); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "note #%d: telling %q failed (%v): %s\n", n.ID, n.By.Name, err, line)
+		}
+		return ""
+	}
+	why := fmt.Sprintf("no session holds the %s's role", rl.name)
+	if h := rl.get(st).Holder; h != nil {
+		err := a.quietWake(ctx, by, cmp.Or(h.Session, h.Name), line)
+		switch {
+		case err == nil && h.Is(n.By):
+			return ""
+		case err == nil:
+			return fmt.Sprintf("note #%d: %q, which filed it, no longer holds the %s's role: told the %s, %q", n.ID, n.By.Name, rl.name, rl.name, h.Name)
+		}
+		why = fmt.Sprintf("the %s, %q, cannot be told (%v)", rl.name, h.Name, err)
+	}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.RoleLines = append(st.RoleLines, state.RoleLine{Role: rl.name, Line: line, At: a.now.UTC()})
+		return nil, nil
+	}); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "note #%d: keeping the line for the %s failed (%v): %s\n", n.ID, rl.name, err, line)
+		return ""
+	}
+	return fmt.Sprintf("note #%d: %s: the answer waits for its next start (beekeeper %s start)", n.ID, why, rl.name)
+}
+
+// quietWake wakes the agent q with line from by, its own report discarded:
+// it is not the command's.
+func (a *app) quietWake(ctx context.Context, by state.Party, q, line string) error {
+	quiet := *a
+	quiet.out = io.Discard
+	return wakeOwner(&quiet, ctx, by, q, line, "")
+}
+
+// filedRole is the role p filed its notes in: the one it holds, was relieved
+// of, or whose run its name names.
+func filedRole(st *state.State, p state.Party) (role, bool) {
+	for _, rl := range roles {
+		r := rl.get(st)
+		if (r.Holder != nil && r.Holder.Is(p)) || relievedIn(r, p) != nil || rl.runOf(p.Name) > 0 {
+			return rl, true
+		}
+	}
+	return role{}, false
+}
+
+// takeRoleLines takes the lines waiting for rl's holder out of st, oldest
+// first.
+func takeRoleLines(st *state.State, rl role) []string {
+	var lines []string
+	st.RoleLines = slices.DeleteFunc(st.RoleLines, func(l state.RoleLine) bool {
+		if l.Role != rl.name {
+			return false
+		}
+		lines = append(lines, l.Line)
+		return true
+	})
+	return lines
 }
