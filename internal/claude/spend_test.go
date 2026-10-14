@@ -72,15 +72,16 @@ func spendFixture(t *testing.T, dir string, from time.Time) {
 	}
 }
 
-func TestReadSpendPricesTheWindowOnce(t *testing.T) {
+func TestPriceSpendCountsTheWindowOnce(t *testing.T) {
 	dir := t.TempDir()
 	from := time.Date(2026, 10, 8, 8, 0, 0, 0, time.UTC)
 	to := from.Add(4 * time.Hour)
 	spendFixture(t, dir, from)
-	s, err := ReadSpend(dir, from, to, spendPrices)
+	ts, err := ReadSpendTranscripts(dir, from, to)
 	if err != nil {
 		t.Fatal(err)
 	}
+	s := PriceSpend(ts, from, to, spendPrices)
 	// a1 $4.60 + a2 $6 + b1 $2 + c2 $2.
 	if math.Abs(s.USD-14.60) > 1e-9 {
 		t.Errorf("usd %.6f, want 14.60", s.USD)
@@ -109,8 +110,8 @@ func TestReadSpendPricesTheWindowOnce(t *testing.T) {
 	}
 }
 
-func TestReadSpendWithoutTheDirectory(t *testing.T) {
-	if _, err := ReadSpend(filepath.Join(t.TempDir(), "none"), time.Time{}, time.Now(), spendPrices); err == nil {
+func TestReadSpendTranscriptsWithoutTheDirectory(t *testing.T) {
+	if _, err := ReadSpendTranscripts(filepath.Join(t.TempDir(), "none"), time.Time{}, time.Now()); err == nil {
 		t.Error("no error for a missing projects directory")
 	}
 }

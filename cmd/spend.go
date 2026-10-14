@@ -8,18 +8,21 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/omp"
 )
 
 func (a *app) spendCmd() *cobra.Command {
 	var since, until, tz string
 	c := &cobra.Command{
 		Use:   "spend",
-		Short: "What the Claude Code sessions' API requests of a window cost, from the whole transcripts",
+		Short: "What the Claude Code and omp sessions' API requests of a window cost, from the whole transcripts",
 		Long: `spend prices every API request from --since up to --until in the
-transcripts under claude.projectsDir: the sessions' and their subagents'
-.jsonl files, read whole, of running, paused and archived sessions alike.
-A request counts once by its message id, however many transcripts carry
-it. Prices come from metrics.models; a model without one is named as
+transcripts under claude.projectsDir and the session files under
+omp.sessionsDir: the sessions' and their subagents' .jsonl files, read
+whole, of running, paused and archived sessions alike. A request counts
+once by its id, however many transcripts carry it. Prices come from
+metrics.models; an omp model is named provider/model and takes the price
+of that name or else of its model. A model without one is named as
 unpriced, its requests and tokens counted and left out of the total.
 
 sessions shows the cost of each live session's last 512 KiB of transcript
@@ -45,10 +48,11 @@ only; spend is the figure for a day or any other window.`,
 			if !from.Before(to) {
 				return usageErr("--since %s is not before --until %s", from.In(zone).Format(time.RFC3339), to.In(zone).Format(time.RFC3339))
 			}
-			s, err := claude.ReadSpend(a.cfg.Claude.ProjectsDir, from, to, a.cfg.Metrics)
+			ts, err := claude.ReadSpendTranscripts(a.cfg.Claude.ProjectsDir, from, to)
 			if err != nil {
 				return err
 			}
+			s := claude.PriceSpend(append(ts, omp.SpendTranscripts(a.cfg.Omp.SessionsDir, from, to)...), from, to, a.cfg.Metrics)
 			if a.json {
 				return a.printJSON(s)
 			}
