@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -374,6 +377,89 @@ func TestArchiveRequestOfAWarmedSteward(t *testing.T) {
 	msg := archiveRequest(s, []string{stewardA, stewardB}, "beekeeper doctor", "agreed")
 	if !strings.Contains(msg, strconv.Quote(stewardB)+`, "self"`) {
 		t.Errorf("request %q", msg)
+	}
+}
+
+// headlessMachine runs a headless wake turn of session id, `claude -p
+// --resume <id>`, and no desktop CLI of it.
+type headlessMachine struct {
+	platform.Machine
+	id string
+}
+
+func (m headlessMachine) Processes() (*proc.Table, error) {
+	return &proc.Table{ByPID: map[int]*proc.Process{
+		9: {PID: 9, Comm: claudeComm, Args: []string{claudeComm, "-p", resumeFlag, m.id, "go on"}},
+	}}, nil
+}
+
+// The doctor's archive warms the desktop CLI of a session no CLI of which
+// runs, and none of a session whose headless wake turn runs: that turn is
+// its CLI, and a warmed desktop CLI would be its twin.
+func TestWarmStewardWarmsNoTwinOfAHeadlessTurn(t *testing.T) {
+	host := "local_" + rotationLogin
+	for _, c := range []struct {
+		desc     string
+		headless bool
+	}{
+		{desc: "no CLI runs"},
+		{desc: "a headless wake turn runs", headless: true},
+	} {
+		t.Run(c.desc, func(t *testing.T) {
+			a, _ := stubApp(t)
+			a.cfg.Desktop.TypingQuiet.Duration = -1
+			a.cfg.Claude.DesktopLog = filepath.Join(t.TempDir(), "main.log")
+			saved := desktopWindowActive
+			t.Cleanup(func() { desktopWindowActive = saved })
+			desktopWindowActive = func(context.Context) (bool, error) { return false, nil }
+			runtime := t.TempDir()
+			t.Setenv("XDG_RUNTIME_DIR", runtime)
+			if err := os.MkdirAll(filepath.Join(runtime, "cc-socks"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(peerSocket(runtime, 7), nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			warm := &atomic.Bool{}
+			o := &warmingOpener{warm: warm}
+			plat.Opener = o
+			plat.Machine = warmMachine{Machine: plat.Machine, id: rotationLogin, warm: warm}
+			if c.headless {
+				plat.Machine = headlessMachine{Machine: plat.Machine, id: rotationLogin}
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			s, err := a.warmSteward(ctx, host)
+			if c.headless {
+				if _, ok := errors.AsType[headlessRuns](err); !ok || len(o.opened) > 0 {
+					t.Errorf("err %v, opened %v beside the headless turn", err, o.opened)
+				}
+				if !strings.Contains(fmt.Sprint(err), "its headless wake turn runs") {
+					t.Errorf("err %v", err)
+				}
+				return
+			}
+			if err != nil || s.host != host || len(o.opened) == 0 || o.opened[0] != continueURL(host) {
+				t.Errorf("steward %+v, err %v, opened %v", s, err, o.opened)
+			}
+		})
+	}
+}
+
+// A show's last look finds a headless turn of the session that started
+// while it waited: the show warms no desktop CLI beside it.
+func TestNoHeadlessTurn(t *testing.T) {
+	_, _ = stubApp(t)
+	plat.Machine = tableMachine{plat.Machine}
+	if err := noHeadlessTurn(rotationLogin); err != nil {
+		t.Errorf("no CLI runs: %v", err)
+	}
+	plat.Machine = headlessMachine{Machine: plat.Machine, id: rotationLogin}
+	if err := noHeadlessTurn(rotationLogin); !errors.Is(err, headlessRuns("wake turn")) {
+		t.Errorf("a headless wake turn runs: %v", err)
+	}
+	if err := noHeadlessTurn(runSixtySeven); err != nil {
+		t.Errorf("another session's headless turn: %v", err)
 	}
 }
 
