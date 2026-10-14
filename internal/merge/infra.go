@@ -75,11 +75,12 @@ func (i Infra) Rerun() string {
 	return fmt.Sprintf("gh run rerun %d --job %d --repo %s", i.Run, i.Job, i.Repo)
 }
 
-// Why is the attribution: the signature, its log line, and the rerun.
+// Why is the attribution: the signature, its log line, and the rerun. A
+// long line keeps its end, where a tool's error names the failure.
 func (i Infra) Why() string {
 	line := i.Line
 	if r := []rune(line); len(r) > 200 {
-		line = string(r[:199]) + "…"
+		line = "…" + string(r[len(r)-199:])
 	}
 	return fmt.Sprintf("a transient infrastructure failure, not this pull request's breakage (%s: %q): rerun the job (`%s`), then the same merge again",
 		i.Signature, line, i.Rerun())

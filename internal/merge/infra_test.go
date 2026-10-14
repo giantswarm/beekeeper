@@ -97,8 +97,8 @@ func TestInfraReds(t *testing.T) {
 	if want := fmt.Sprint([]string{"repos/o/r/actions/jobs/115923395354/logs", "repos/o/r/actions/jobs/2/logs", "repos/o/r/actions/jobs/3/logs"}); fmt.Sprint(asked) != want {
 		t.Errorf("read %v, want only the red Actions jobs %v", asked, want)
 	}
-	if note := InfraNote(infra); !strings.HasPrefix(note, "go-lint: a transient infrastructure failure, not this pull request's breakage (Go module proxy: ") ||
-		!strings.Contains(note, "stream error: stream ID 143") || !strings.HasSuffix(note, "rerun the job (`gh run rerun 38584550284 --job 115923395354 --repo o/r`), then the same merge again") {
+	if note := InfraNote(infra); !strings.HasPrefix(note, "go-lint: a transient infrastructure failure, not this pull request's breakage (Go module proxy: \"…") ||
+		!strings.Contains(note, "stream error: stream ID 143; INTERNAL_ERROR; received from peer\"") || !strings.HasSuffix(note, "rerun the job (`gh run rerun 38584550284 --job 115923395354 --repo o/r`), then the same merge again") {
 		t.Errorf("note %q", note)
 	}
 }
