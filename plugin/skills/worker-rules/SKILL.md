@@ -27,6 +27,9 @@ CLAUDE.md and rules) apply too and win where stricter or more specific.
   continue or about local setup: pick the sensible default and say so.
 - **Secrets.** Never read, print or compare a value, not even hashed: keys and metadata only. Every
   cluster call names its context or kubeconfig; `kube.production` is never written to.
+- **Alerts.** A post-roll or proof alert check reads the installation's alerts with
+  `KUBECONFIG="$HOME/.kube/config:$HOME/.local/state/beekeeper/kube/teleport.yaml" beekeeper alerts
+  snapshot`, never Alertmanager or Mimir directly.
 - **Git.** Never a force push, not even `--force-with-lease`: a branch behind its base merges it and
   pushes. Work in a worktree of your own; no `git stash` (every worktree shares it): commit waiting
   work.
