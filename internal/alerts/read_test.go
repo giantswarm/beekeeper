@@ -195,10 +195,10 @@ func TestReadUnreachableIsAnAnswer(t *testing.T) {
 	f.reader.Timeout = time.Second
 	t.Setenv("FAKE_FAIL", "error: connection refused")
 	got := f.reader.Read(context.Background(), []Target{alpha, {Name: instC}})
-	if got[0].OK || !strings.HasPrefix(got[0].Why, "error: connection refused (") || !strings.HasSuffix(got[0].Why, " attempts)") {
+	if got[0].OK || got[0].NoContext || !strings.HasPrefix(got[0].Why, "error: connection refused (") || !strings.HasSuffix(got[0].Why, " attempts)") {
 		t.Errorf("alpha = %+v", got[0])
 	}
-	if got[1].OK || got[1].Why != "no kube context for gamma" {
+	if got[1].OK || !got[1].NoContext || got[1].Why != "no kube context for gamma" {
 		t.Errorf("gamma = %+v", got[1])
 	}
 }
@@ -353,14 +353,14 @@ func TestReadMissingContextIsNotRetried(t *testing.T) {
 	f := newFake(t)
 	missing := Target{Name: "missing", Context: "missing"}
 	got := f.reader.Read(context.Background(), []Target{missing})
-	if got[0].OK || got[0].Why != `error: context "missing" does not exist` || f.runs("port-forward") != 1 {
+	if got[0].OK || !got[0].NoContext || got[0].Why != `error: context "missing" does not exist` || f.runs("port-forward") != 1 {
 		t.Errorf("answer = %+v after %d forwards", got[0], f.runs("port-forward"))
 	}
 	f.reader.Keep = true
 	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "config"))
 	f.reader.Contexts(context.Background())
 	got = f.reader.Read(context.Background(), []Target{missing})
-	if got[0].OK || got[0].Why != `context "missing" is not in the kubeconfig` || f.runs("port-forward") != 1 {
+	if got[0].OK || !got[0].NoContext || got[0].Why != `context "missing" is not in the kubeconfig` || f.runs("port-forward") != 1 {
 		t.Errorf("known contexts: answer = %+v after %d forwards", got[0], f.runs("port-forward"))
 	}
 }

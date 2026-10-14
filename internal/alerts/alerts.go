@@ -82,6 +82,19 @@ type Answer struct {
 	OK     bool
 	Alerts []Raw
 	Why    string
+	// NoContext is an installation whose kube context is not in the
+	// kubeconfig kubectl reads: it is not read, and its baseline stays.
+	NoContext bool
+}
+
+// NoContextLine says in one line that the installations have no kube
+// context in the kubeconfig kubectl reads and are not read.
+func NoContextLine(names []string) string {
+	noun := "installations"
+	if len(names) == 1 {
+		noun = "installation"
+	}
+	return fmt.Sprintf("%d %s without a kube context, not read: %s", len(names), noun, strings.Join(names, ", "))
 }
 
 // Rules are the settings the lines depend on.

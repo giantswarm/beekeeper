@@ -305,7 +305,7 @@ func TestTargetsConfiguredThenLeased(t *testing.T) {
 	want := []Target{
 		{Name: instA, Context: ctxA, Why: `configured, leased by "four"`},
 		{Name: instC, Why: "configured"},
-		{Name: instD, Context: "other", Why: "configured"},
+		{Name: instD, Why: "configured"},
 		{Name: instB, Context: ctxB, Why: `leased by "one"`},
 	}
 	if !slices.Equal(got, want) {
@@ -321,11 +321,26 @@ func TestResolveContext(t *testing.T) {
 			t.Errorf("%s: %q, want %q", name, got, want)
 		}
 	}
-	if got := ResolveContext(instA, "explicit", template, contexts); got != "explicit" {
+	if got := ResolveContext(instA, ctxD, template, contexts); got != ctxD {
 		t.Errorf("explicit: %q", got)
+	}
+	if got := ResolveContext(instA, "explicit", template, contexts); got != "" {
+		t.Errorf("explicit, not in the kubeconfig: %q", got)
+	}
+	if got := ResolveContext(instA, "explicit", template, nil); got != "explicit" {
+		t.Errorf("explicit, the kubeconfig's contexts unknown: %q", got)
 	}
 	none := func(string) string { return "" }
 	if got := ResolveContext(instA, "", none, contexts); got != "" {
 		t.Errorf("without a template: %q", got)
+	}
+}
+
+func TestNoContextLine(t *testing.T) {
+	if got := NoContextLine([]string{instA}); got != "1 installation without a kube context, not read: "+instA {
+		t.Errorf("one: %q", got)
+	}
+	if got := NoContextLine([]string{instA, instB}); got != "2 installations without a kube context, not read: "+instA+", "+instB {
+		t.Errorf("two: %q", got)
 	}
 }

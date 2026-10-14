@@ -106,7 +106,10 @@ command refuses.`,
 			defer func() { _ = store.Release() }()
 			r := a.alertReader()
 			defer r.Close()
-			lines := a.alertCycle(ctx, store, r)
+			lines, noContext := a.alertCycle(ctx, store, r)
+			if len(noContext) > 0 {
+				lines = append(lines, "ALERTS: "+alerts.NoContextLine(noContext))
+			}
 			if a.cfg.Alerts.PagerDuty.Enabled() && ctx.Err() == nil {
 				pd, err := a.ownPagerDuty()
 				if err != nil {
@@ -293,29 +296,35 @@ func (a *app) alertTargetsIn(contexts []string) []alerts.Target {
 }
 
 // alertCycle reads every installation once through r, returns the lines of
-// what changed and keeps the new baseline. An interrupted reading keeps
-// nothing.
-func (a *app) alertCycle(ctx context.Context, store *alerts.Store, r *alerts.Reader) []string {
+// what changed and the installations without a kube context, and keeps the
+// new baseline. An interrupted reading keeps nothing.
+func (a *app) alertCycle(ctx context.Context, store *alerts.Store, r *alerts.Reader) (lines, noContext []string) {
 	targets := a.alertTargetsIn(r.Contexts(ctx))
 	answers := r.Read(ctx, targets)
 	if ctx.Err() != nil {
-		return nil
+		return nil, nil
+	}
+	for i, ans := range answers {
+		if ans.NoContext {
+			noContext = append(noContext, targets[i].Name)
+		}
 	}
 	st, err := store.Load()
 	if err != nil {
-		return []string{"ALERTS baseline unreadable: " + err.Error()}
+		return []string{"ALERTS baseline unreadable: " + err.Error()}, noContext
 	}
-	lines := a.alertLines(st, targets, answers, time.Now())
+	lines = a.alertLines(st, targets, answers, time.Now())
 	if err := store.Save(st); err != nil {
 		lines = append(lines, "ALERTS baseline not saved: "+err.Error())
 	}
-	return lines
+	return lines, noContext
 }
 
 // alertLines steps every target's baseline in st with its answer and returns
 // the lines, each with who is on the installation in brackets, a NEW one
 // also with the merges and lease claims that likely caused it. The lines
-// the quiet rules hold back are logged (watch.quiet), not returned.
+// the quiet rules hold back are logged (watch.quiet), not returned. A
+// target without a kube context keeps its baseline and says nothing.
 func (a *app) alertLines(st *alerts.State, targets []alerts.Target, answers []alerts.Answer, now time.Time) []string {
 	rules := a.alertRules()
 	var lines, quiet []string
@@ -324,6 +333,9 @@ func (a *app) alertLines(st *alerts.State, targets []alerts.Target, answers []al
 	rules.InPlay = a.inPlay(now)
 	for i, ans := range answers {
 		t := targets[i]
+		if ans.NoContext {
+			continue
+		}
 		changed, held, next := rules.Triage(t.Name, st.Installations[t.Name], ans, now)
 		st.Installations[t.Name] = next
 		quiet = append(quiet, held...)
@@ -553,17 +565,25 @@ func runsAgainst(s *claude.Session, t alerts.Target) bool {
 	return false
 }
 
-// alertSnapshot is every installation's current set, grouped, and the
-// team's open PagerDuty incidents.
+// alertSnapshot is every installation's current set, grouped, one line for
+// the installations without a kube context, and the team's open PagerDuty
+// incidents.
 func (a *app) alertSnapshot(ctx context.Context) []string {
 	incidents := make(chan []string, 1)
 	go func() { incidents <- a.pagerDutySnapshot(ctx) }()
 	targets := a.alertTargets(ctx)
 	answers := a.alertReader().Read(ctx, targets)
 	rules, now := a.alertRules(), time.Now()
-	var lines []string
+	var lines, noContext []string
 	for i, t := range targets {
+		if answers[i].NoContext {
+			noContext = append(noContext, t.Name)
+			continue
+		}
 		lines = append(lines, rules.SnapshotLines(t.Name, answers[i], now)...)
+	}
+	if len(noContext) > 0 {
+		lines = append(lines, alerts.NoContextLine(noContext))
 	}
 	return append(lines, <-incidents...)
 }

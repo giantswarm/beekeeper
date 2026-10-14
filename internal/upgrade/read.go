@@ -21,8 +21,8 @@ type Target struct {
 }
 
 // Status is one installation's reading: its running upgrades, or why it
-// could not be read. An unreadable installation is neither upgrading nor
-// quiet.
+// could not be read. An unreadable installation, or one without a kube
+// context, is neither upgrading nor quiet.
 type Status struct {
 	Installation string    `json:"installation"`
 	Err          string    `json:"error,omitempty"`
@@ -30,12 +30,27 @@ type Status struct {
 	// NoClusterAPI is an installation that serves none of the kinds: it has
 	// no cluster to upgrade.
 	NoClusterAPI bool `json:"noClusterAPI,omitempty"`
+	// NoContext is an installation whose kube context is not in the
+	// kubeconfig kubectl reads: it is not read. Its Err is set too, so a
+	// reader of the shared readings that does not know the field keeps its
+	// holds.
+	NoContext bool `json:"noContext,omitempty"`
+}
+
+// noContextErr is the Err of a status without a kube context.
+const noContextErr = "no kube context"
+
+// withoutContext is the status of an installation without a kube context.
+func withoutContext(installation string) Status {
+	return Status{Installation: installation, Err: noContextErr, NoContext: true}
 }
 
 // Words is the status in one line: the installation and none, unreadable,
 // or its upgrades; with a now, also how long each has run and its progress.
 func (s Status) Words(now time.Time) string {
 	switch {
+	case s.NoContext:
+		return s.Installation + " no kube context"
 	case s.Err != "":
 		return s.Installation + " unreadable: " + s.Err
 	case s.NoClusterAPI:
@@ -84,6 +99,12 @@ const notServed = "the server doesn't have a resource type"
 // errNotServed is a kind the installation does not serve.
 var errNotServed = errors.New("not served")
 
+// noContext is kubectl's error for a context the kubeconfig lacks.
+const noContext = "context was not found for specified context"
+
+// errNoContext is a context the kubeconfig lacks.
+var errNoContext = errors.New(noContextErr)
+
 // Read reads every target in parallel, each within r.Timeout: one list of
 // all kinds, and for an upgrade whose hold does not exist yet and whose from
 // release is unknown, its cluster's events. held says which clusters hold
@@ -103,13 +124,15 @@ func (r Reader) Read(ctx context.Context, targets []Target, now time.Time, held 
 func (r Reader) readOne(ctx context.Context, t Target, now time.Time, held func(string) bool) Status {
 	s := Status{Installation: t.Name}
 	if t.Context == "" {
-		s.Err = "no kube context reaches it"
-		return s
+		return withoutContext(t.Name)
 	}
 	ctx, cancel := context.WithTimeout(ctx, r.Timeout)
 	defer cancel()
 	objs, served, err := r.list(ctx, t.Context)
-	if err != nil {
+	switch {
+	case errors.Is(err, errNoContext):
+		return withoutContext(t.Name)
+	case err != nil:
 		s.Err = err.Error()
 		return s
 	}
@@ -207,6 +230,8 @@ func (r Reader) kubectl(ctx context.Context, kubeContext string, args ...string)
 	switch {
 	case strings.Contains(msg, notServed):
 		return nil, errNotServed
+	case strings.Contains(msg, noContext):
+		return nil, errNoContext
 	case ctx.Err() != nil:
 		return nil, fmt.Errorf("no answer within %s", r.Timeout)
 	case msg == "":

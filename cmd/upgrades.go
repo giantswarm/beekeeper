@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"slices"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/alerts"
@@ -36,10 +35,7 @@ func (a *app) upgradeStatuses(ctx context.Context, st *state.State, now time.Tim
 		}
 	}
 	if len(due) > 0 {
-		var contexts []string
-		if slices.ContainsFunc(due, func(in config.Installation) bool { return in.Context == "" }) {
-			contexts = (&alerts.Reader{Kubectl: al.Kubectl}).Contexts(ctx)
-		}
+		contexts := (&alerts.Reader{Kubectl: al.Kubectl}).Contexts(ctx)
 		targets := make([]upgrade.Target, 0, len(due))
 		for _, in := range due {
 			targets = append(targets, upgrade.Target{Name: in.Name, Context: alerts.ResolveContext(in.Name, in.Context, a.cfg.Kube.Context, contexts)})
@@ -99,7 +95,8 @@ func (w *watcher) upgradeWatchLive(now time.Time) bool {
 // watch whose update sets a hold says UPGRADE, the one whose update lifts it
 // UPGRADE ENDED, so a second or restarted watch says neither again. An
 // unreadable installation is one line until it is readable again and keeps
-// its holds as they are. The standby watch runs it only while no
+// its holds as they are; one without a kube context keeps them too and is
+// named once per watch (sayNoContext). The standby watch runs it only while no
 // supervisor's watch does, and says so once.
 func (w *watcher) upgradeCycle(ctx context.Context) {
 	now := w.clk().Now()
@@ -145,13 +142,19 @@ func (w *watcher) upgradeCycle(ctx context.Context) {
 		return
 	}
 	w.clear("upgrades")
+	var noContext []string
 	for _, s := range statuses {
-		if s.Err != "" {
+		switch {
+		case s.NoContext:
+			noContext = append(noContext, s.Installation)
+			w.clear("upgrades:" + s.Installation)
+		case s.Err != "":
 			w.fail("upgrades:"+s.Installation, "UPGRADES %s unreadable: %s", s.Installation, s.Err)
-		} else {
+		default:
 			w.clear("upgrades:" + s.Installation)
 		}
 	}
+	w.sayNoContext("UPGRADES", noContext)
 	for _, h := range begun {
 		w.emitNow("upgrade", "%s", upgrade.Line(h))
 	}
@@ -159,4 +162,24 @@ func (w *watcher) upgradeCycle(ctx context.Context) {
 		w.emitNow("upgrade", "%s", upgrade.EndLine(h))
 	}
 	w.saveMark()
+}
+
+// sayNoContext says once per watch, in one line, the installations of the
+// reader (ALERTS, UPGRADES) without a kube context: they are not read, and
+// no line names them one by one.
+func (w *watcher) sayNoContext(reader string, names []string) {
+	if len(names) == 0 {
+		return
+	}
+	w.mu.Lock()
+	said := w.noContextSaid[reader]
+	if w.noContextSaid == nil {
+		w.noContextSaid = map[string]bool{}
+	}
+	w.noContextSaid[reader] = true
+	w.mu.Unlock()
+	if said {
+		return
+	}
+	w.emitNow("nocontext", "%s: %s", reader, alerts.NoContextLine(names))
 }

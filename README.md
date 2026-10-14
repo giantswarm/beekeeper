@@ -1440,7 +1440,11 @@ reason), `lease claim <installation>` is refused unless an upgrade-unblock grant
 upgrade with its progress. The watch whose update sets the hold says `UPGRADE …`, the one whose
 update lifts it `UPGRADE ENDED …`, so a second or restarted watch says neither again. An
 unreadable installation is one `UPGRADES <installation> unreadable: …` line until it answers
-again and keeps its holds as they are: it counts as neither upgrading nor quiet. `hold set`
+again and keeps its holds as they are: it counts as neither upgrading nor quiet. An installation
+whose kube context is not in the kubeconfig kubectl reads is not read and keeps its holds too;
+the watch names all of them once, in one `UPGRADES: <n> installations without a kube context, not
+read: …` line (`ALERTS: …` for the alerts reader), and `snapshot` in one entry of its upgrades
+and one line of its alerts, never one line each. `hold set`
 refuses an `upgrade:` target; `hold lift upgrade:<installation>/<cluster>` lifts one by hand
 (a workload cluster's roll stuck on a drain need not stop the installation's merges): the hold
 stays lifted, recorded with who lifted it, until that upgrade ends, and only a different upgrade

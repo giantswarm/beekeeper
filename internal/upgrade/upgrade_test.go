@@ -248,8 +248,8 @@ func TestRead(t *testing.T) {
 	if w := ss[0].Words(at); w != "prod/mc 35.0.1 → 35.1.1 for 9m (control plane 3/4, node pools 15/15)" {
 		t.Errorf("words %q", w)
 	}
-	if ss[1].Err == "" {
-		t.Errorf("an installation without a context is readable: %+v", ss[1])
+	if !ss[1].NoContext || ss[1].Err == "" || ss[1].Words(at) != "far no kube context" {
+		t.Errorf("an installation without a context: %+v", ss[1])
 	}
 	// One call lists every kind; one more reads the events of the upgrade
 	// whose from is not known yet.
@@ -269,8 +269,13 @@ func TestRead(t *testing.T) {
 	}
 	t.Setenv(fakeDir, dir)
 	t.Setenv("FAIL", "Unauthorized")
-	if ss = r.Read(context.Background(), []Target{{Name: prod, Context: prod}}, at, none); ss[0].Err != "error: Unauthorized" || len(ss[0].Upgrades) != 0 {
+	if ss = r.Read(context.Background(), []Target{{Name: prod, Context: prod}}, at, none); ss[0].Err != "error: Unauthorized" || ss[0].NoContext || len(ss[0].Upgrades) != 0 {
 		t.Errorf("an unreadable installation: %+v", ss[0])
+	}
+	// A context the kubeconfig lacks is no kube context, not unreadable.
+	t.Setenv("FAIL", "Error in configuration: context was not found for specified context: teleport.giantswarm.io-"+prod)
+	if ss = r.Read(context.Background(), []Target{{Name: prod, Context: "teleport.giantswarm.io-" + prod}}, at, none); !ss[0].NoContext || ss[0].Err == "" {
+		t.Errorf("an installation whose context the kubeconfig lacks: %+v", ss[0])
 	}
 }
 
