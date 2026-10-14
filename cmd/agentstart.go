@@ -1033,12 +1033,12 @@ func (a *app) reopenSession(ctx context.Context, arg, turn string) error {
 // the restarted reopen waits again. A binary that does not start leaves
 // the wait to go on under this one.
 func (a *app) awaitRestartable(ctx context.Context, d desk, onHeld func(error)) error {
-	rw := newRestartWatch(a.cfg.StateDir)
+	rw, poll := newRestartWatch(a.cfg.StateDir), reopenPoll
 	for {
 		actx, cancel := context.WithCancelCause(ctx)
 		done := make(chan struct{})
 		go func() {
-			tick := time.NewTicker(reopenPoll)
+			tick := time.NewTicker(poll)
 			defer tick.Stop()
 			for {
 				select {
