@@ -95,6 +95,37 @@ const (
 		"there, and only there, a fixture user the steps name signs in with the fixture credential the steps give. "
 )
 
+// frontWords tell a browse turn to work in a tab in front of its window: a
+// tab behind another neither paints nor answers, so the turn checks before
+// each screenshot and moves to a fresh tab, which opens in front, and closes
+// the tabs it created, the tab in front before the run in front again.
+const frontWords = "Work in a tab in front of its window: a tab behind another tab neither paints nor answers (its document.visibilityState " +
+	"is 'hidden', its screenshot times out on a frozen renderer, the extension refuses its scripts and navigations). Before each screenshot, " +
+	"check the tab with javascript_tool: document.visibilityState. When it says 'hidden', or the check or a navigation is refused on a page " +
+	"the steps name, open a fresh tab with tabs_create_mcp (a new tab opens in front), go on there, and close the hidden one with " +
+	"tabs_close_mcp. Before you end, close every tab you created, so the tab in front before you began is in front again. "
+
+// windowCapture replaces the page's window.open: the address of a window
+// the page opens is kept on the page instead of a window outside the turn's
+// tab group; windowRead reads it, its result opening with windowOpened.
+const (
+	windowCapture = "window.open = function (u) { window.__beekeeperWindow = new URL(String(u), location.href).href; " +
+		"return { closed: false, close() {}, focus() {}, postMessage() {} }; }; 'window capture on'"
+	windowOpened = "window opened: "
+	windowRead   = "'" + windowOpened + "' + (window.__beekeeperWindow || 'none')"
+)
+
+// windowWords tell a browse turn to follow a window the page opens, an
+// identity provider's sign-in popup, in its own tab: the window opens
+// outside the turn's tab group, where no tool reaches it.
+const windowWords = "A click that opens a window (window.open: an identity provider's sign-in popup) opens it outside your tab group, " +
+	"where no tool reaches it, and the sign-in never completes. So before a click on a sign-in button or any control that opens a window, " +
+	"capture the window with javascript_tool on that page: " + windowCapture + " Click, then read the window's address with javascript_tool: " +
+	windowRead + " A window captured: navigate this same tab to its address and finish there through the person's SSO button; a Backstage " +
+	"portal's sign-in window (/api/auth/<provider>/start?…&flow=popup) is opened with flow=redirect&redirectUrl=<the page's own URL, " +
+	"URL-encoded> in place of flow=popup, so the portal returns to the page signed in. Back on the page, a sign-in it still shows is clicked " +
+	"once more, which now finds the session. 'none': the click opened no window, go on. "
+
 // browseStart names the browse turn's start record, which has the hook act
 // in the turn wherever it runs.
 const browseStart = "beekeeper browse"
@@ -226,11 +257,26 @@ scripted click that picks its element from a sweep over the page's buttons
 or links. Each such refusal is named below the report, "refused: <the
 call>: beekeeper's hook refused it as [Subscription Control]".
 
-A page in a Chrome window the compositor does not draw (occluded, or on
-another workspace) is not rendered: GitHub keeps its Authorize button
-disabled there and every screenshot times out ("the renderer may be
-frozen"). Those timeouts are reported as "not rendered:" below the report;
-bring the window to the front and run the steps again.
+A tab behind another tab of its window is not rendered: its
+document.visibilityState is hidden, GitHub keeps its Authorize button
+disabled there, every screenshot times out ("the renderer may be frozen"),
+and the extension refuses its scripts and navigations. The turn works in a
+tab in front: before each screenshot it checks the tab's visibilityState,
+and a tab it finds hidden (or whose check or navigation is refused) it
+leaves for a fresh tab, which opens in front; before it ends it closes the
+tabs it created, so the tab in front before the run is in front again.
+Screenshots that timed out all the same are reported as "not rendered:"
+below the report.
+
+A window a page opens (window.open: an identity provider's sign-in popup,
+as a portal's OIDC sign-in opens) opens outside the turn's tab group, where
+no tool reaches it. The turn captures it instead: before a click that opens
+a window it replaces the page's window.open with one that keeps the
+window's address, then navigates its own tab there and finishes the sign-in
+through the person's SSO button; a Backstage portal's sign-in window is
+opened with flow=redirect, so the portal returns to the page signed in.
+Below the report, "windows:" names the tabs the turn worked in and each
+window it followed in its own tab, by its address without the query.
 
 The Chrome connection can drop mid-turn (the extension's service worker
 went away): a call answers "Claude in Chrome is not connected", and
@@ -455,13 +501,16 @@ const reasonControl = "Subscription Control"
 
 // browseFindings are what a turn's transcript says beyond its report: the
 // calls the classifier refused, the screenshots of a page that is not
-// rendered, and the Chrome connection: Lost are the words of each call that
+// rendered, the tabs the calls named and the windows the pages opened, in
+// order, and the Chrome connection: Lost are the words of each call that
 // found it gone, Recovered whether a Chrome call was answered after the last
 // of them, Reconnected whether browse's own reconnect turn ran, which the
 // run sets.
 type browseFindings struct {
 	Refused     []refusal
 	NotRendered int
+	Tabs        []int64
+	Windows     []string
 	Lost        []string
 	Recovered   bool
 	Reconnected bool
@@ -471,11 +520,12 @@ type browseFindings struct {
 // and not answered since.
 func (f browseFindings) lost() bool { return len(f.Lost) > 0 && !f.Recovered }
 
-// readFindings reads the findings of the transcript: a tool result that
-// carries the classifier's denial names the call it answers, one whose
-// screenshot timed out on a frozen renderer counts as not rendered, one
-// that says the connection is gone names its call as lost, and any other
-// answer of a Chrome call after that has the connection back.
+// readFindings reads the findings of the transcript: a call names its tabs,
+// a tool result that carries the classifier's denial names the call it
+// answers, one whose screenshot timed out on a frozen renderer counts as not
+// rendered, one that reads a captured window names its address, one that
+// says the connection is gone names its call as lost, and any other answer
+// of a Chrome call after that has the connection back.
 func readFindings(transcript string) (browseFindings, error) {
 	var f browseFindings
 	type call struct{ name, words string }
@@ -486,8 +536,16 @@ func readFindings(transcript string) (browseFindings, error) {
 			switch b.Type {
 			case "tool_use":
 				calls[b.ID] = call{b.Name, callWords(b.Name, b.Input)}
+				for _, t := range callTabs(b.Input) {
+					if !slices.Contains(f.Tabs, t) {
+						f.Tabs = append(f.Tabs, t)
+					}
+				}
 			case "tool_result":
 				c, text := calls[b.ToolUseID], resultText(b.Content)
+				if w := openedWindow(text); w != "" && !slices.Contains(f.Windows, w) {
+					f.Windows = append(f.Windows, w)
+				}
 				denied := strings.Contains(text, classifierDenial)
 				if strings.HasPrefix(c.name, chromeToolPrefix) && !denied {
 					if lost = connectionLost(c.name, text); lost {
@@ -517,6 +575,40 @@ func readFindings(transcript string) (browseFindings, error) {
 	return f, err
 }
 
+// callTabs are the tabs a Chrome call names: its own tabId and its batch's.
+func callTabs(input json.RawMessage) []int64 {
+	var in struct {
+		TabID   *int64 `json:"tabId"`
+		Actions []struct {
+			Input json.RawMessage `json:"input"`
+		} `json:"actions"`
+	}
+	if json.Unmarshal(input, &in) != nil {
+		return nil
+	}
+	var tabs []int64
+	if in.TabID != nil {
+		tabs = append(tabs, *in.TabID)
+	}
+	for _, a := range in.Actions {
+		tabs = append(tabs, callTabs(a.Input)...)
+	}
+	return tabs
+}
+
+// windowAddress is the address a captured window's read names, up to its
+// query: a sign-in window's query carries the flow's state.
+var windowAddress = regexp.MustCompile(regexp.QuoteMeta(windowOpened) + `(https?://[^\s"'?#]+)`)
+
+// openedWindow is the address of the window a result's read names, "" for
+// none.
+func openedWindow(text string) string {
+	if m := windowAddress.FindStringSubmatch(text); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
 // lostErr is the error of a run whose Chrome connection is gone at its end:
 // the call the connection went at, what came of the reconnect, and the
 // steps the report lists as not done; nil while the connection answers.
@@ -541,8 +633,10 @@ func (f browseFindings) lostErr(report string) error {
 // the run declared, the Apps on record and the lab sign-in the steps named,
 // one "refused:" line per refused call, the consent hint once when a
 // refusal is a [Permission Grant], quoting the step that reads as a grant,
-// the deploy hint once when a refusal is a deploy reason, and one "not
-// rendered:" line for the screenshots of an undrawn window.
+// the deploy hint once when a refusal is a deploy reason, one "not
+// rendered:" line for the screenshots of a tab not in front, one "windows:"
+// line for the tabs and the windows the turn used, and one "connection
+// lost:" line.
 func (f browseFindings) lines(steps, deploy string, consents []guard.App, lab bool) []string {
 	var out []string
 	if deploy != "" {
@@ -604,9 +698,12 @@ func (f browseFindings) lines(steps, deploy string, consents []guard.App, lab bo
 		if n == 1 {
 			s = ""
 		}
-		out = append(out, fmt.Sprintf("not rendered: %d screenshot%s timed out on a frozen renderer: the page's Chrome window is not drawn "+
-			"(occluded, or on another workspace), where a consent page keeps its Authorize button disabled; "+
-			"bring the window to the front and run the steps again", n, s))
+		out = append(out, fmt.Sprintf("not rendered: %d screenshot%s timed out on a frozen renderer: the tab was not in front of its window "+
+			"(behind another tab, or in a window the compositor does not draw), where a consent page keeps its Authorize button disabled; "+
+			"the turn moves to a fresh tab, which opens in front, when its check finds the tab hidden; run the steps again", n, s))
+	}
+	if l := f.windowsLine(); l != "" {
+		out = append(out, l)
 	}
 	if n := len(f.Lost); n > 0 {
 		s := "s"
@@ -628,6 +725,30 @@ func (f browseFindings) lines(steps, deploy string, consents []guard.App, lab bo
 		out = append(out, line)
 	}
 	return out
+}
+
+// windowsLine names the tabs the turn worked in and the windows it followed
+// in its own tab, "" when it named none.
+func (f browseFindings) windowsLine() string {
+	if len(f.Tabs) == 0 && len(f.Windows) == 0 {
+		return ""
+	}
+	tabs := make([]string, 0, len(f.Tabs))
+	for _, t := range f.Tabs {
+		tabs = append(tabs, strconv.FormatInt(t, 10))
+	}
+	line := "windows: the turn worked in tab " + strings.Join(tabs, ", ")
+	if len(f.Tabs) == 0 {
+		line = "windows: the turn named no tab"
+	}
+	if n := len(f.Windows); n > 0 {
+		s := "s"
+		if n == 1 {
+			s = ""
+		}
+		line += fmt.Sprintf("; followed %d window%s a page opened, in its own tab: %s", n, s, strings.Join(f.Windows, ", "))
+	}
+	return line
 }
 
 // phraseRunes bounds a quoted step.
@@ -800,11 +921,12 @@ func browseArgv(id, model, prompt string, rules []string, reconnect bool) []stri
 }
 
 // browsePrompt is a browse turn's prompt: the preamble, the connection
-// words, the files shared for upload, the deploy the person's task covers
+// words, the tab in front, the windows the page opens, the files shared for
+// upload, the deploy the person's task covers
 // when one is declared, the Apps on record and the lab sign-in the steps
 // name, then the steps.
 func browsePrompt(steps, deploy string, consents []guard.App, lab bool, shared []sharedFile) string {
-	p := browsePreamble + connectionWords + uploadPrompt(shared)
+	p := browsePreamble + connectionWords + frontWords + windowWords + uploadPrompt(shared)
 	if deploy != "" {
 		p += fmt.Sprintf(deployWords, deploy)
 	}
