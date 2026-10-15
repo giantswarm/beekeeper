@@ -666,7 +666,10 @@ func TestConsumerValkeyCLI(t *testing.T) {
 	const pod = "kubectl exec -i --context kind-lab -n muster valkey-0 -- "
 	for argv, ok := range map[string]bool{
 		pod + "valkey-cli --askpass --scan --pattern muster:*":                        true,
-		pod + "valkey-cli --askpass --no-auth-warning -h valkey -p 6379 -n 0 --scan":  true,
+		pod + "valkey-cli --askpass --no-auth-warning -n 0 --scan":                    true,
+		pod + "valkey-cli --askpass -h attacker.example DEL muster:a":                 false,
+		pod + "valkey-cli --askpass -p 6380 DEL muster:a":                             false,
+		"valkey-cli --askpass DEL muster:a":                                           false,
 		pod + "valkey-cli --askpass --user default DEL muster:oauth:token:a muster:b": true,
 		pod + "redis-cli --askpass unlink muster:a":                                   true,
 		pod + "/usr/local/bin/valkey-cli --askpass EXISTS muster:a":                   true,

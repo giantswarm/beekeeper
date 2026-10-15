@@ -330,14 +330,17 @@ func Consumer(argv []string) error {
 	if filepath.Base(argv[0]) == "git" {
 		return fmt.Errorf("%q: git takes a value through beekeeper's askpass helper: copy <ref> --git-askpass -- git …", strings.Join(argv, " "))
 	}
-	return fmt.Errorf("%q takes no value from beekeeper: the consumers are %s, and `kubectl exec -i --context <context> <pod> -- <one of them>`",
-		strings.Join(argv, " "), stdinReaders)
+	return fmt.Errorf("%q takes no value from beekeeper: the consumers are %s, and `kubectl exec -i --context <context> <pod> -- <one of them or %s>`",
+		strings.Join(argv, " "), stdinReaders, podReaders)
 }
 
 // stdinReaders names the commands stdinReader allows.
 const stdinReaders = "`gh secret set`, `garage json-api <endpoint> -`, `gitlab-rails runner [-e <env>] '<code reading STDIN>'`, " +
-	"`valkey-cli --askpass [-h <host>] [-p <port>] [-n <db>] [--user <user>] --scan [--pattern <glob>] | <" + valkeyVerbList + "> <key…>`, " +
 	"a command with --password-stdin or --secret <name>=-"
+
+// podReaders names the commands a pod's kubectl exec allows besides
+// stdinReaders.
+const podReaders = "`valkey-cli --askpass [-n <db>] [--user <user>] --scan [--pattern <glob>] | <" + valkeyVerbList + "> <key…>`"
 
 // stdinReader reports whether a command reads a secret from stdin and
 // stores it without printing it.
@@ -350,8 +353,6 @@ func stdinReader(argv []string) bool {
 		return len(argv) == 4 && argv[1] == "json-api" && argv[3] == "-"
 	case "gitlab-rails":
 		return railsRunner(argv)
-	case "valkey-cli", "redis-cli":
-		return valkeyCLI(argv[1:])
 	}
 	for i, a := range argv[1:] {
 		switch {
@@ -389,12 +390,18 @@ var valkeyVerbs = []string{"DEL", "UNLINK", "EXISTS", "TYPE", "TTL"}
 // valkeyVerbList names valkeyVerbs for a refusal.
 const valkeyVerbList = "DEL|UNLINK|EXISTS|TYPE|TTL"
 
-// valkeyCLI reports whether args, valkey-cli's or redis-cli's, read the
+// valkeyCLI reports whether argv is valkey-cli or redis-cli reading the
 // password with --askpass, which takes stdin's line when stdin is no
-// terminal and prints no prompt, and either list key names with --scan or
-// run one of valkeyVerbs on named keys. A password on the argv (-a, -u) and
-// every other option is refused.
-func valkeyCLI(args []string) bool {
+// terminal and prints no prompt, and either listing key names with --scan
+// or running one of valkeyVerbs on named keys. It reaches the pod's own
+// server only: a host or port (-h, -p), which would hand the password to
+// another server, a password on the argv (-a, -u) and every other option
+// are refused.
+func valkeyCLI(argv []string) bool {
+	if name := filepath.Base(argv[0]); name != "valkey-cli" && name != "redis-cli" {
+		return false
+	}
+	args := argv[1:]
 	askpass, scan, pattern := false, false, false
 	var cmd []string
 	for i := 0; i < len(args); i++ {
@@ -404,7 +411,7 @@ func valkeyCLI(args []string) bool {
 		case "--scan":
 			scan = true
 		case "--no-auth-warning":
-		case "-h", "-p", "-n", "--user", "--pattern":
+		case "-n", "--user", "--pattern":
 			if i+1 == len(args) {
 				return false
 			}
@@ -431,8 +438,8 @@ func valkeyCLI(args []string) bool {
 
 // kubectlExec allows kubectl exec -i with an explicit --context, no TTY
 // (which would echo stdin) and no verbosity, whose command in the pod is a
-// stdin reader: the value travels on the exec stream alone, never on an
-// argv.
+// stdin reader or valkeyCLI: the value travels on the exec stream alone,
+// never on an argv.
 func kubectlExec(argv []string) error {
 	cmd := strings.Join(argv, " ")
 	dash := slices.Index(argv, "--")
@@ -455,8 +462,8 @@ func kubectlExec(argv []string) error {
 		return fmt.Errorf("%q: the value goes on the exec stream, kubectl exec -i", cmd)
 	case ConsumerContext(argv) == "":
 		return fmt.Errorf("%q: name the cluster, --context <context>", cmd)
-	case dash+1 == len(argv) || !stdinReader(argv[dash+1:]):
-		return fmt.Errorf("%q: the command in the pod reads the value on stdin: %s", cmd, stdinReaders)
+	case dash+1 == len(argv) || !stdinReader(argv[dash+1:]) && !valkeyCLI(argv[dash+1:]):
+		return fmt.Errorf("%q: the command in the pod reads the value on stdin: %s, %s", cmd, stdinReaders, podReaders)
 	}
 	return nil
 }
