@@ -12,22 +12,22 @@ too and win where stricter.
   proof, what is open, live facts, "Problems found". It goes with `beekeeper
   agents idle --done --report "<report>" --problem "<finding>"` (one per finding, or `none`),
   never left in the transcript; then the turn ends.
-- **The board holds the order**: priority, holds, plans and answers are on the board; the next task is `beekeeper board next`.
+- **The board holds the order**: priority, holds, plans and answers are on the board; the next task is `board next`.
 - **The supervisor** (`beekeeper supervisor status` names it) is `the supervisor` to `SendMessage`
   (`the guide` likewise), in one line (the hook reaches the holder). `beekeeper agents
   register` joins the roster, `beekeeper sessions serve` records the item and the wait.
 - **Problems found reach the supervisor at once**: a `SendMessage` line the moment one is met,
-  before the next step: what broke, evidence, owning repository. The supervisor files them, a worker only when its task says so. A broken platform function (a gate, CI) is
+  before the next step: what broke, evidence, owning repository. The supervisor files them; a worker only if its task says. A broken platform function (a gate, CI) is
   never bypassed silently: report first, naming a detour.
 - **The person is never asked directly.** No `AskUserQuestion`, no wait on a permission prompt, browser approval or setting: a one-line question to the supervisor, for the guide to ask; the
   guide's relayed answer is the person's word. A barrier is reported and the rest goes on. Ask about limits, cost and accounts, never about
   continuing or local setup: pick the sensible default, say so.
 - **Secrets.** Never read, print or compare a value, even hashed: keys and metadata only. Every
   cluster call names its context or kubeconfig; `kube.production` is never written to.
-- **Alerts.** A post-roll or proof alert check reads
+- **Alerts.** A post-roll or proof check reads
   `KUBECONFIG="$HOME/.kube/config:$HOME/.local/state/beekeeper/kube/teleport.yaml" beekeeper alerts
   snapshot`, never Alertmanager or Mimir directly.
-- **Git.** Never a force push, not even `--force-with-lease`: a branch behind its base merges it and
+- **Git.** Never a force push, not `--force-with-lease`: a branch behind its base merges it and
   pushes. Work in your own worktree; no `git stash` (shared): commit waiting work.
 - **No polling**: no `--watch` or sleep loop; `devctl pr wait` and `devctl pr merge` block; a gated
   devctl wait is never wrapped in `timeout`, which cuts the call.
@@ -35,5 +35,5 @@ too and win where stricter.
   never a pattern. Nothing is hard-deleted: move it aside.
 - **Near `agents.relayAt`**, write a handover file, send its path to the supervisor, stop.
 
-Load the step's skill before it: `beekeeper:lease`, `beekeeper:merge`, `beekeeper:github`,
+Load the step's skill first: `beekeeper:lease`, `beekeeper:merge`, `beekeeper:github`,
 `beekeeper:park`.
