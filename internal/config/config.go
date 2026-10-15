@@ -772,7 +772,28 @@ type Doctor struct {
 	// commands leave in the tmpfs /tmp (free --apply's automatic sections;
 	// default 1h); negative: never.
 	FreeEvery Duration `yaml:"freeEvery"`
+	// DockerImagesMaxGiB caps the machine's Docker images: over it the
+	// watch removes the unused images created longest ago down to three
+	// quarters of it, never one a container or a kind lab's node uses, and
+	// never while an image import or build runs or a lab lease is fresh.
+	// Default 40; negative: off.
+	DockerImagesMaxGiB int `yaml:"dockerImagesMaxGiB"`
+	// DockerBuildCacheMaxGiB caps Docker's build cache likewise, pruned
+	// by Docker's own least-recently-used order. Default 20; negative: off.
+	DockerBuildCacheMaxGiB int `yaml:"dockerBuildCacheMaxGiB"`
+	// DockerEvery is how often the watch reads Docker's sizes (default 1h);
+	// a prune an import held back is tried again at the next sample.
+	DockerEvery Duration `yaml:"dockerEvery"`
 }
+
+// DockerImagesMax is the Docker images' cap in bytes; 0 is off.
+func (d Doctor) DockerImagesMax() int64 { return gib(d.DockerImagesMaxGiB) }
+
+// DockerBuildCacheMax is the Docker build cache's cap in bytes; 0 is off.
+func (d Doctor) DockerBuildCacheMax() int64 { return gib(d.DockerBuildCacheMaxGiB) }
+
+// gib is n GiB in bytes, 0 for a negative n.
+func gib(n int) int64 { return int64(max(n, 0)) << 30 }
 
 // GoCacheMax is the Go build cache's cap in bytes; 0 is off.
 func (d Doctor) GoCacheMax() int64 {
@@ -1749,6 +1770,9 @@ func (c *Config) defaults() error {
 	setInt(&c.Doctor.GoCacheMaxGiB, 20)
 	setDur(&c.Doctor.GoCacheEvery, time.Hour)
 	setDur(&c.Doctor.FreeEvery, time.Hour)
+	setInt(&c.Doctor.DockerImagesMaxGiB, 40)
+	setInt(&c.Doctor.DockerBuildCacheMaxGiB, 20)
+	setDur(&c.Doctor.DockerEvery, time.Hour)
 	setStr(&c.Ollama.Unit, "ollama")
 	setInt(&c.Ollama.BudgetGiB, 12)
 	setInt(&c.Ollama.MaxBudgetGiB, 24)

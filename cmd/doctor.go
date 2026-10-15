@@ -515,6 +515,16 @@ line:
   three quarters of the cap, never while a go build runs (the watch does
   it every doctor.goCacheEvery, 1h, and says GO CACHE when a trim waited
   that long or failed); each trim is logged (gocache.trim);
+- prunes Docker once its images are over doctor.dockerImagesMaxGiB (40),
+  the unused images created longest ago first, or its build cache is over
+  doctor.dockerBuildCacheMaxGiB (20), each down to three quarters of its
+  cap; an image a container uses or a kind lab's node holds is never
+  removed, and nothing is pruned while an image import or build runs
+  (kind load or create, docker build, load, save or import, buildx, ctr
+  import) or a lab lease was claimed within the hour (the watch does it
+  every doctor.dockerEvery, 1h, and says DOCKER when a prune waited that
+  long or failed); each prune is logged with what it reclaimed
+  (docker.prune);
 - frees what dead sessions and dead go commands left in the tmpfs /tmp,
   beekeeper free --apply's session-dirs and go-build sections: a dead
   session's scratch (its CLI gone, no roster task or role, its git
@@ -584,6 +594,9 @@ faults but remedying none.`,
 				}
 			}
 			if r := a.trimGoCache(dryRun, goBuilds); r.notable() {
+				lines = append(lines, r.String())
+			}
+			if r := a.pruneDocker(dryRun, a.dockerHolds); r.notable() {
 				lines = append(lines, r.String())
 			}
 			if a.cfg.Doctor.FreeEvery.Duration > 0 {
