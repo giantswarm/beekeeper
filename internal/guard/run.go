@@ -326,9 +326,10 @@ func Run(o Options, argv []string) int {
 	rc := scope(capper, unit, o, slot, argv, logf)
 	end := fmt.Sprintf("%s.scope exit %d after %s", unit, rc, time.Since(start).Round(time.Second))
 	if rc != 0 {
-		if v := victims(unit, start, rc); len(v) > 0 {
-			logf("the %s cap killed: %s (exit %d) — bound the parallelism, do not raise --max", o.Max, strings.Join(v, "; "), rc)
-			end += fmt.Sprintf(", the %s cap killed %s", o.Max, strings.Join(v, "; "))
+		if kills := victims(unit, start, rc); len(kills) > 0 {
+			what, advice, detail := killReport(o, unit, slot, shared, kills)
+			logf("%s (exit %d) — %s", what, rc, advice)
+			end += ", " + detail
 		}
 	}
 	o.record(VerbEnd, end+": "+head)
@@ -346,23 +347,24 @@ func waitForSlot(o Options, needKiB int64, session string, argv []string, logf f
 	var lock *flock.Flock
 	slot := 0
 	for {
+		var reason string
 		if lock == nil {
 			if n := sessionSlot(o, session); n > 0 {
 				return nil, n
 			}
-			if lock, slot = acquire(o.SlotDir, o.Slots); lock != nil {
+			var occupied string
+			if lock, slot, occupied = acquire(o); lock != nil {
 				writeHolder(o, slot, argv)
+			} else {
+				reason = fmt.Sprintf("a build slot (all %d held):\n%s%s", o.Slots, holders(o), occupied)
 			}
 		}
-		var reason string
 		if lock != nil {
 			m, err := plat.Machine.Mem()
 			if err != nil || int64(m.AvailableMiB)<<10 >= needKiB {
 				break
 			}
 			reason = fmt.Sprintf("memory: %d MiB available, the cap needs %d", m.AvailableMiB, needKiB>>10)
-		} else {
-			reason = fmt.Sprintf("a build slot (all %d held):\n%s", o.Slots, holders(o))
 		}
 		now := time.Now()
 		if !now.Before(deadline) {
@@ -390,14 +392,27 @@ func waitForSlot(o Options, needKiB int64, session string, argv []string, logf f
 	return lock, slot
 }
 
-func acquire(dir string, n int) (*flock.Flock, int) {
-	for i := 1; i <= n; i++ {
-		l := flock.New(filepath.Join(dir, strconv.Itoa(i)+".lock"))
-		if ok, err := l.TryLock(); err == nil && ok {
-			return l, i
+// acquire takes the first free slot. A slot whose lock is free while its
+// slice still runs scopes (a run that joined the slot outlives the run that
+// held it) is not free: capping the slice for this run would set another
+// run's cap, below that run's memory when this run's cap is smaller, and
+// the kernel would kill at the slice's cap. Those slots are named in
+// occupied, one indented line each.
+func acquire(o Options) (lock *flock.Flock, slot int, occupied string) {
+	var b strings.Builder
+	for i := 1; i <= o.Slots; i++ {
+		l := flock.New(filepath.Join(o.SlotDir, strconv.Itoa(i)+".lock"))
+		if ok, err := l.TryLock(); err != nil || !ok {
+			continue
 		}
+		if s := plat.Machine.SlotSlice(o.SlotSlice(i)); s != nil && len(s.Scopes) > 0 {
+			_ = l.Unlock()
+			fmt.Fprintf(&b, "  slot %d: free, but its slice still runs %s (%d MiB)\n", i, strings.Join(s.Scopes, ", "), s.CurrentMiB)
+			continue
+		}
+		return l, i, ""
 	}
-	return nil, 0
+	return nil, 0, b.String()
 }
 
 // holders lists the held slots' records, one indented line each.
@@ -490,9 +505,41 @@ func scope(capper platform.Capper, unit string, o Options, slot int, argv []stri
 	return c.ProcessState.ExitCode()
 }
 
-// victims names the processes the kernel killed at the scope's cap. The
-// kernel log can trail the exit of the killed process by a moment.
-func victims(unit string, since time.Time, rc int) []string {
+// killReport is what the kernel killed in the run's scope, the advice that
+// follows it, and the end event's detail. The slot slice of a run that
+// holds its slot is capped at the run's own cap, so a kill at either is the
+// command's memory. A run that joined its session's slot shares the slice's cap with the
+// slot's other runs. systemd-run killed before it ran the command is never
+// the command's memory: other runs filled the slot's slice.
+func killReport(o Options, unit string, slot int, shared bool, kills []machine.OOMKill) (what, advice, detail string) {
+	var v []string
+	atSlice, started := false, false
+	for _, k := range kills {
+		v = append(v, fmt.Sprintf("%d (%s) %d MiB", k.PID, k.Task, k.AnonMiB))
+		atSlice = atSlice || strings.HasSuffix(k.Memcg, "/"+o.SlotSlice(slot))
+		started = started || k.Task != "systemd-run"
+	}
+	names := strings.Join(v, "; ")
+	switch {
+	case !started:
+		return fmt.Sprintf("slot %d's cap (%s) killed systemd-run before the command started: %s", slot, o.SlotSlice(slot), names),
+			"other runs in the slot's slice filled it, not this command",
+			fmt.Sprintf("slot %d's cap killed systemd-run before the command started: %s", slot, names)
+	case shared && atSlice:
+		return fmt.Sprintf("slot %d's shared cap (%s) killed: %s", slot, o.SlotSlice(slot), names),
+			"the slot's runs together filled it",
+			fmt.Sprintf("slot %d's shared cap killed %s", slot, names)
+	default:
+		return fmt.Sprintf("the %s cap killed: %s", o.Max, names),
+			"bound the parallelism, do not raise --max",
+			fmt.Sprintf("the %s cap killed %s", o.Max, names)
+	}
+}
+
+// victims are the processes the kernel killed in the run's scope, at its
+// own cap or its slot slice's. The kernel log can trail the exit of the
+// killed process by a moment.
+func victims(unit string, since time.Time, rc int) []machine.OOMKill {
 	tries := 1
 	if rc == 128+int(syscall.SIGKILL) {
 		tries = 4
@@ -507,10 +554,10 @@ func victims(unit string, since time.Time, rc int) []string {
 		if err != nil {
 			return nil
 		}
-		var out []string
+		var out []machine.OOMKill
 		for _, k := range kills {
 			if strings.HasSuffix(k.RunMemcg(), "/"+unit+".scope") {
-				out = append(out, fmt.Sprintf("%d (%s) %d MiB", k.PID, k.Task, k.AnonMiB))
+				out = append(out, k)
 			}
 		}
 		if len(out) > 0 {

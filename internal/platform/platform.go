@@ -65,6 +65,9 @@ type Machine interface {
 	DesktopScope() (*machine.Scope, error)
 	// MemcapScope is the capped run's scope unit, nil when it has ended.
 	MemcapScope(unit string) *machine.Scope
+	// SlotSlice is the build slot slice's runs and memory, nil when it has
+	// no cgroup or this build cannot read it.
+	SlotSlice(slice string) *machine.SlotSlice
 	// ScopePIDs lists the processes of the scope at path (a Scope's Path).
 	ScopePIDs(path string) []int
 	// CgroupPIDs lists the processes of cgroup cg as a process's cgroup

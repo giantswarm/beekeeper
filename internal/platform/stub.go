@@ -52,9 +52,10 @@ func (stubMachine) DesktopScope() (*machine.Scope, error) {
 func (stubMachine) MemcapScope(string) *machine.Scope {
 	return nil
 }
-func (stubMachine) ScopePIDs(string) []int  { return nil }
-func (stubMachine) CgroupPIDs(string) []int { return nil }
-func (stubMachine) OOMPolicy(string) string { return "?" }
+func (stubMachine) SlotSlice(string) *machine.SlotSlice { return nil }
+func (stubMachine) ScopePIDs(string) []int              { return nil }
+func (stubMachine) CgroupPIDs(string) []int             { return nil }
+func (stubMachine) OOMPolicy(string) string             { return "?" }
 func (stubMachine) OOMDSwap(context.Context) (machine.OOMDSwap, error) {
 	return machine.OOMDSwap{}, missing("Machine.OOMDSwap")
 }
