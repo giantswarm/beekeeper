@@ -125,8 +125,8 @@ func TestAMergeIntoAHandCutBranchFreesItsLaneAtTheMerge(t *testing.T) {
 	})
 }
 
-// GitHub not answering for the base branch refuses the merge before devctl
-// runs; a repository on the plain squash merge, which awaits no release, is
+// GitHub not answering for the base branch, its last try too, refuses the
+// merge before devctl runs; a repository on the plain squash merge, which awaits no release, is
 // not asked.
 func TestTheBaseBranchUnreadRefusesTheMerge(t *testing.T) {
 	asked := stubBaseRelease(t, github.BaseRelease{}, errors.New("connection reset"))
@@ -138,7 +138,7 @@ func TestTheBaseBranchUnreadRefusesTheMerge(t *testing.T) {
 		t.Errorf("merge.refused event: %q", d)
 	}
 	g = runningMerge(t, labRepo, config.Lane{Name: labRepo})
-	if err := g.readRelease(); err != nil || *asked != 1 {
+	if err := g.readRelease(); err != nil || *asked != 1+len(readBackoff) {
 		t.Errorf("the squash route: %v, %d reads", err, *asked)
 	}
 }
