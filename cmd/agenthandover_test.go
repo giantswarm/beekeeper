@@ -27,6 +27,8 @@ const (
 	countName = "test: count"
 	issue61   = "o/r#61"
 	noteAB    = "a and b done; c next"
+	// testSupervisor is the session a test's hand-over runs as.
+	testSupervisor = "test: supervisor"
 )
 
 func TestHandoversDue(t *testing.T) {
@@ -34,7 +36,7 @@ func TestHandoversDue(t *testing.T) {
 	agents := []state.Agent{}
 	ids := []string{dueID, "tool", "merging", "small", "said", "sup", "relieved", "gone", "parked", "parked-small"}
 	for _, id := range ids {
-		agents = append(agents, state.Agent{Party: party(id)})
+		agents = append(agents, state.Agent{Party: party(id), LastTask: countTask})
 	}
 	// Two agents with a task whose headless turn ended: their CLI does not
 	// run.
@@ -50,6 +52,9 @@ func TestHandoversDue(t *testing.T) {
 		sessions = append(sessions, &claude.Session{ID: id, Name: "test: " + id})
 	}
 	sessions[1].Commands = []claude.Command{{PID: 7, Args: "sleep 60"}}
+	// A running agent with no task at all has nothing to hand over.
+	st.Agents = append(st.Agents, state.Agent{Party: party("taskless")})
+	sessions = append(sessions, &claude.Session{ID: "taskless", Name: "test: taskless"})
 	contextOf := func(ag state.Agent, s *claude.Session) int64 {
 		if (s == nil) != strings.HasPrefix(ag.Session, "parked") && ag.Session != ids[7] {
 			t.Errorf("%s: session %v", ag.Session, s)
@@ -308,12 +313,71 @@ func TestHandoverRefusedWithoutThePermissionHook(t *testing.T) {
 
 	// handOver refuses before it asks for the note: nothing is sent,
 	// started or stopped.
-	a := &app{cfg: &config.Config{Claude: config.Claude{ProjectsDir: filepath.Join(t.TempDir(), "projects")}}, as: "test: supervisor"}
-	h := handover{agent: state.Agent{Party: state.Party{Session: oldID, Name: countName}}, dir: t.TempDir()}
+	a := &app{cfg: &config.Config{Claude: config.Claude{ProjectsDir: filepath.Join(t.TempDir(), "projects")}}, as: testSupervisor}
+	h := handover{agent: state.Agent{Party: state.Party{Session: oldID, Name: countName}, Task: countTask}, dir: t.TempDir()}
 	err := a.handOver(t.Context(), h)
 	var ee *exitError
 	if !errors.As(err, &ee) || ee.code != ExitRefused || !strings.Contains(ee.msg, "hook permissionrequest") {
 		t.Errorf("handOver without the hook: %v", err)
+	}
+}
+
+// A hand-over of a roster row without a task refuses unless --task gives
+// one, which the follow-up's prompt and row carry; the follow-up's row is
+// made sure of before the old session ends.
+func TestHandoverOfARowWithoutATask(t *testing.T) {
+	a := &app{cfg: &config.Config{Claude: config.Claude{ProjectsDir: filepath.Join(t.TempDir(), "projects")}}, as: testSupervisor}
+	old := state.Party{Session: oldID, HostSession: "local_" + oldID, Name: countName}
+	refusedWith := func(h handover, want string) {
+		t.Helper()
+		var ee *exitError
+		if err := a.handOver(t.Context(), h); !errors.As(err, &ee) || ee.code != ExitRefused || !strings.Contains(ee.msg, want) {
+			t.Errorf("handOver: %v, want refused with %q", err, want)
+		}
+	}
+	// No task, none reported idle on: refused before anything is asked or
+	// started, never a follow-up busy with "".
+	refusedWith(handover{agent: state.Agent{Party: old}, dir: t.TempDir()}, "has no task on the roster")
+	// --task is for a row without one.
+	refusedWith(handover{agent: state.Agent{Party: old, Task: countTask}, given: "count the lines", dir: t.TempDir()}, "--task is for an agent")
+
+	h := handover{agent: state.Agent{Party: old}, given: countTask}
+	if p := h.prompt(); h.task() != countTask || !strings.Contains(p, "Task: "+countTask+"\n(Given by the hand-over") {
+		t.Errorf("prompt with --task:\n%s", p)
+	}
+
+	now := time.Date(2026, 10, 15, 10, 0, 0, 0, time.UTC)
+	to := state.Party{Session: newID, HostSession: "local_" + newID, Name: countName}
+	none := func(state.Party) bool { return false }
+	// The start listed it: nothing to change.
+	st := &state.State{Agents: []state.Agent{{Party: to, Task: countTask}}}
+	if line, err := keepListed(st, to, countTask, none, now); line != "" || err != nil {
+		t.Errorf("listed: %q, %v", line, err)
+	}
+	// It already reported idle on it: left as it is.
+	st.Agents[0].Task, st.Agents[0].LastTask = "", countTask
+	if line, err := keepListed(st, to, countTask, none, now); line != "" || err != nil || st.Agents[0].Task != "" {
+		t.Errorf("reported idle: %q, %v, %+v", line, err, st.Agents)
+	}
+	st.Agents[0].LastTask = ""
+	// Its row lost the task: set again.
+	st.Agents[0].Task = ""
+	if line, err := keepListed(st, to, countTask, none, now); err != nil || !strings.Contains(line, "set to") || st.Agents[0].Task != countTask {
+		t.Errorf("row without the task: %q, %v, %+v", line, err, st.Agents)
+	}
+	// Its row is gone, the old session's left: registered again, the old
+	// row replaced.
+	st = &state.State{Agents: []state.Agent{{Party: old}}}
+	line, err := keepListed(st, to, countTask, none, now)
+	if err != nil || !strings.Contains(line, "registered again") || len(st.Agents) != 1 || !st.Agents[0].Is(to) || st.Agents[0].Task != countTask {
+		t.Errorf("row gone: %q, %v, %+v", line, err, st.Agents)
+	}
+	// Another running session holds the name: the follow-up cannot be
+	// listed, and the hand-over fails.
+	other := state.Party{Session: "s-held", Name: countName}
+	st = &state.State{Agents: []state.Agent{{Party: other}}}
+	if _, err := keepListed(st, to, countTask, func(p state.Party) bool { return p.Is(other) }, now); err == nil {
+		t.Errorf("a name held by a running session must fail: %+v", st.Agents)
 	}
 }
 

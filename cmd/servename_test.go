@@ -38,7 +38,7 @@ func serveApp(t *testing.T) (*app, state.Store) {
 	cfg := &config.Config{StateDir: dir}
 	cfg.Claude.SessionsDir, cfg.Claude.DesktopDir, cfg.Claude.ProjectsDir = t.TempDir(), t.TempDir(), t.TempDir()
 	cfg.Omp.SessionsDir = t.TempDir()
-	a := &app{cfg: cfg, store: store, now: keepNow, out: &bytes.Buffer{}, as: "test: supervisor"}
+	a := &app{cfg: cfg, store: store, now: keepNow, out: &bytes.Buffer{}, as: testSupervisor}
 	was := plat.Machine
 	t.Cleanup(func() { plat.Machine = was })
 	runLive(t, a, map[int]string{untitledPID: untitledName, unrosteredPID: unrosteredName})
