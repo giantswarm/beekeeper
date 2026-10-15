@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -126,29 +127,129 @@ func TestNoteAnsweredDetailParsesBack(t *testing.T) {
 	}
 }
 
-func TestPinnedNoteOfAnOlderBeekeeperReachesNoHandover(t *testing.T) {
-	a, out := noteApp(t)
-	doc := `{"nextNote": 2, "notes": [
-		{"id": 1, "text": "report every merge with its release", "kind": "memo", "pinned": true, "by": {"name": "Agent one"}, "at": "2026-10-01T00:00:00Z"},
-		{"id": 2, "for": "Guide", "text": "archive the test sessions", "by": {"name": "Agent one"}, "at": "2026-10-01T00:00:00Z"}]}`
-	writeState(t, a, doc)
+// pinnedNotes is a state document an older beekeeper wrote with pinned
+// notes, one naming an issue, one naming none over several lines, a pinned
+// decision, an unpinned memo and an open decision.
+const pinnedNotes = `{"nextNote": 5, "notes": [
+	{"id": 1, "for": "Supervisor", "kind": "memo", "pinned": true, "text": "report every merge with its release, o/r#7", "by": {"name": "Agent one"}, "at": "2026-10-01T00:00:00Z"},
+	{"id": 2, "pinned": true, "text": "the lab runs at most two kind clusters.\nAsk before a third:   memory is shared.", "by": {"name": "Guide"}, "at": "2026-10-02T00:00:00Z"},
+	{"id": 3, "for": "Pat", "kind": "decision", "pinned": true, "text": "keep the nightly sweep at 02:00", "by": {"name": "Agent one"}, "at": "2026-10-03T00:00:00Z"},
+	{"id": 4, "for": "Guide", "text": "archive the test sessions", "by": {"name": "Agent one"}, "at": "2026-10-01T00:00:00Z"},
+	{"id": 5, "for": "Pat", "kind": "decision", "text": "merge o/r#9?", "refs": ["o/r#9"], "default": "it waits", "by": {"name": "Agent one"}, "at": "2026-10-01T00:00:00Z"}]}`
+
+// pinTexts are the texts of pinnedNotes' pins.
+var pinTexts = []string{
+	"report every merge with its release, o/r#7",
+	"the lab runs at most two kind clusters.\nAsk before a third:   memory is shared.",
+	"keep the nightly sweep at 02:00",
+}
+
+// handoverPrompts prints the supervisor's and the guide's prompts.
+func handoverPrompts(t *testing.T, a *app, out *bytes.Buffer) (sup, guide string) {
+	t.Helper()
 	st, err := a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(st.Notes) != 0 || len(st.Memos) != 2 {
-		t.Fatalf("the memos are closed for every reader: notes %+v, memos %+v", st.Notes, st.Memos)
-	}
-	a.cfg.Supervisor.Skill, a.cfg.Guide.Skill, a.cfg.StateDir = "supervise", "guide", t.TempDir()
 	out.Reset()
 	if err := a.printPrompt(context.Background(), &view{st: st}, &leaseList{}, &alertsView{}, answers{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.printGuidePrompt(state.Role{}, nil); err != nil {
+	sup = out.String()
+	s, err := a.readStanding(st)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got := out.String(); strings.Contains(got, "report every merge") || strings.Contains(got, "archive the test sessions") || strings.Contains(got, "Standing instructions") {
-		t.Errorf("prompts:\n%s", got)
+	out.Reset()
+	if err := a.printGuidePrompt(state.Role{}, nil, s); err != nil {
+		t.Fatal(err)
+	}
+	return sup, out.String()
+}
+
+// carried counts the pins whose whole text, spacing aside, prompt carries.
+func carried(prompt string) int {
+	flat := strings.Join(strings.Fields(prompt), " ")
+	n := 0
+	for _, p := range pinTexts {
+		if strings.Contains(flat, strings.Join(strings.Fields(p), " ")) {
+			n++
+		}
+	}
+	return n
+}
+
+func TestPinnedNotesReachBothHandoversBeforeAndAfterTheMigration(t *testing.T) {
+	a, out := noteApp(t)
+	a.cfg.Supervisor.Skill, a.cfg.Guide.Skill, a.cfg.StateDir = "supervise", "guide", t.TempDir()
+	writeState(t, a, pinnedNotes)
+
+	sup, guide := handoverPrompts(t, a, out)
+	if carried(sup) != len(pinTexts) || carried(guide) != len(pinTexts) {
+		t.Fatalf("unmigrated: supervisor %d/%d, guide %d/%d pins:\n%s\n---\n%s", carried(sup), len(pinTexts), carried(guide), len(pinTexts), sup, guide)
+	}
+	for _, p := range []string{sup, guide} {
+		if !strings.Contains(p, "### Standing instructions") || strings.Contains(p, "archive the test sessions") {
+			t.Errorf("the pins are standing instructions, the memo none:\n%s", p)
+		}
+	}
+
+	if _, err := noteCommand(a, "migrate", "--apply"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "closed 4 memos and pinned notes; 3 pins moved into ") {
+		t.Errorf("apply: %q", out.String())
+	}
+	if st, _ := a.store.Read(); len(st.Memos) != 0 || len(st.Notes) != 1 {
+		t.Fatalf("every memo and pin closed: notes %+v, memos %+v", st.Notes, st.Memos)
+	}
+	raw, err := os.ReadFile(a.standingPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range pinTexts {
+		if !strings.Contains(string(raw), p) {
+			t.Errorf("%s lacks %q verbatim:\n%s", standingFile, p, raw)
+		}
+	}
+	if !strings.Contains(string(raw), "#### #2 (by \"Guide\", pinned 2026-10-02)\n\nthe lab runs") {
+		t.Errorf("a pin's block names it:\n%s", raw)
+	}
+
+	sup, guide = handoverPrompts(t, a, out)
+	if carried(sup) != len(pinTexts) || carried(guide) != len(pinTexts) {
+		t.Fatalf("migrated: supervisor %d/%d, guide %d/%d pins:\n%s\n---\n%s", carried(sup), len(pinTexts), carried(guide), len(pinTexts), sup, guide)
+	}
+	if strings.Contains(sup, unmovedPins) {
+		t.Errorf("no pin is left to move:\n%s", sup)
+	}
+
+	// A second migration finds nothing and the file keeps one block a pin.
+	writeState(t, a, pinnedNotes)
+	if _, err := noteCommand(a, "migrate", "--apply"); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := os.ReadFile(a.standingPath()); string(again) != string(raw) {
+		t.Errorf("a pin moved twice:\n%s", again)
+	}
+}
+
+func TestNoteMigrateClosesNoPinItCannotMove(t *testing.T) {
+	a, out := noteApp(t)
+	a.cfg.StateDir = t.TempDir()
+	writeState(t, a, pinnedNotes)
+	if err := os.Mkdir(a.standingPath(), 0o700); err != nil { // standing.md cannot be written
+		t.Fatal(err)
+	}
+	_, err := noteCommand(a, "migrate", "--apply")
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "closed nothing: pinned note #1, #2, #3 not moved") {
+		t.Fatalf("migrate into an unwritable file: %v (%s)", err, out.String())
+	}
+	if st, _ := a.store.Read(); len(st.Memos) != 4 {
+		t.Fatalf("every memo and pin stays open: %+v", st.Memos)
+	}
+	if _, err := noteCommand(a, "migrate", "--apply", "4"); err != nil {
+		t.Fatalf("a memo without a pin closes: %v", err)
 	}
 }
 
