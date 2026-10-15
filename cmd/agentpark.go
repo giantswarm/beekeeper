@@ -167,16 +167,24 @@ func parkLease(on string) (string, bool) {
 // free and ag's to claim, and the words that resume it: free while nobody
 // holds it, ag's while no upgrade holds it and ag's grant is first in its
 // queue (or no supervisor is recorded); a grant to ag that is gone settles
-// the park too, for ag to ask again. A grant to another session first, or
-// a holder, leaves it parked.
+// the park too, for ag to ask again, also while the lease is held (the
+// supervisor revoked it). A grant to another session first, or a holder
+// while ag's grant waits, leaves it parked.
 func (a *app) leaseSettled(st *state.State, ag state.Agent, res string) (string, bool) {
-	if cur, err := lease.Dir(a.cfg.LeaseDir).Get(res); err != nil || cur != nil {
+	cur, err := lease.Dir(a.cfg.LeaseDir).Get(res)
+	if err != nil {
 		return "", false
+	}
+	if cur != nil {
+		if st.SupervisorRole().Holder == nil || slices.ContainsFunc(lease.Pending(st, res, true, a.now, a.cfg.GrantTTL.Duration), func(g state.Grant) bool { return g.To.Is(ag.Party) }) {
+			return "", false
+		}
+		return fmt.Sprintf("%s is held by %q and no grant of it to you is left: ask the supervisor `need %s` again", res, cur.Name, res), true
 	}
 	if _, ok := upgrade.Held(st, res, a.now); ok {
 		return "", false
 	}
-	_, err := lease.Check(st, lease.Gate{Resource: res, Caller: ag.Party, Supervisor: st.SupervisorRole().Holder, Now: a.now, TTL: a.cfg.GrantTTL.Duration})
+	_, err = lease.Check(st, lease.Gate{Resource: res, Caller: ag.Party, Supervisor: st.SupervisorRole().Holder, Now: a.now, TTL: a.cfg.GrantTTL.Duration})
 	claim := fmt.Sprintf("beekeeper lease claim %s -p \"<purpose>\"", res)
 	var r *lease.Refusal
 	switch {
