@@ -762,11 +762,11 @@ type Doctor struct {
 	Faults []Fault `yaml:"faults"`
 	// GoCacheMaxGiB caps the Go build cache every session's builds share:
 	// over it the watch trims the least recently used entries down to
-	// three quarters of it, while no go build runs. Default 20; negative:
-	// off.
+	// three quarters of it, while no go build runs or once the cache is
+	// past it by a quarter. Default 20; negative: off.
 	GoCacheMaxGiB int `yaml:"goCacheMaxGiB"`
 	// GoCacheEvery is how often the cache's size is read (default 1h);
-	// a trim a build held back is tried again at the next sample.
+	// a trim a build held back is tried again every five minutes.
 	GoCacheEvery Duration `yaml:"goCacheEvery"`
 	// FreeEvery is how often the watch frees what dead sessions and dead go
 	// commands leave in the tmpfs /tmp (free --apply's automatic sections;

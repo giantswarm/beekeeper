@@ -11,6 +11,7 @@ import (
 	"github.com/gofrs/flock"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/gocache"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -71,9 +72,41 @@ func TestTrimGoCacheRemovesTheLeastRecentlyUsedAndLogs(t *testing.T) {
 	}
 }
 
+// overCap puts the cache of goCacheApp under a 4 GiB cap with a fifth,
+// newest, 512 MiB entry: over the cap, short of its margin.
+func overCap(t *testing.T, a *app, cache string) {
+	t.Helper()
+	a.cfg.Doctor.GoCacheMaxGiB = 4
+	addEntry(t, cache, "04/new-b", 1<<29, time.Now())
+}
+
+// addEntry writes a sparse cache entry of size bytes used at at.
+func addEntry(t *testing.T, cache, name string, size int64, at time.Time) {
+	t.Helper()
+	p := filepath.Join(cache, name)
+	if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Create(p) //nolint:gosec // under the test's own directory
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(size); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+	if err := os.Chtimes(p, at, at); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// building is a go build that always runs.
+func building() []int { return []int{4242} }
+
 func TestTrimGoCacheWaitsWhileAGoBuildRuns(t *testing.T) {
 	a, cache := goCacheApp(t)
-	r := a.trimGoCache(false, func() []int { return []int{4242} })
+	overCap(t, a, cache)
+	r := a.trimGoCache(false, building)
 	if r.removed != 0 || !exists(filepath.Join(cache, "03/oldest-d")) {
 		t.Fatalf("trim removed %d entries while a build ran", r.removed)
 	}
@@ -115,5 +148,68 @@ func TestTrimGoCacheUnderTheCapOrOffIsQuiet(t *testing.T) {
 	a.cfg.Doctor.GoCacheMaxGiB = -1
 	if r := a.trimGoCache(false, noBuilds); r.max != 0 || r.before != 0 || r.notable() {
 		t.Errorf("off: %+v", r)
+	}
+}
+
+func TestTrimGoCachePastTheMarginTrimsWhileAGoBuildRuns(t *testing.T) {
+	a, cache := goCacheApp(t)
+	r := a.trimGoCache(false, building)
+	if r.err != nil || !r.forced || r.removed != 3 || r.after != 1<<30 {
+		t.Fatalf("trim = %+v; want 4 GiB, past 5/4 of the 2 GiB cap, trimmed to 1 GiB while the build runs", r)
+	}
+	if !exists(filepath.Join(cache, "00/new-a")) || exists(filepath.Join(cache, "03/oldest-d")) {
+		t.Error("the newest entry went, or the oldest stayed")
+	}
+	want := "Go build cache " + cache + ": 4.0 GiB, cap 2.0 GiB (doctor.goCacheMaxGiB); trimmed to 1.0 GiB, 3 entries removed least recently used first while go builds run (PIDs 4242), past the cap by a quarter"
+	if got := r.String(); got != want {
+		t.Errorf("line =\n %q\nwant\n %q", got, want)
+	}
+	evs, err := a.store.Events(10, func(e state.Event) bool { return e.Verb == goCacheVerb })
+	if err != nil || len(evs) != 1 || evs[0].Detail != want {
+		t.Errorf("logged %+v, %v; want one %s event with the line", evs, err, goCacheVerb)
+	}
+}
+
+// A desk where a go build always runs: the cache over its cap waits, the
+// watch says GO CACHE with its size, cap and wait once it stayed over the
+// cap across two intervals, and the trim runs once it is past the margin.
+func TestGoCacheLookWithABuildAlwaysRunning(t *testing.T) {
+	a, cache := goCacheApp(t)
+	overCap(t, a, cache)
+	out := &bytes.Buffer{}
+	a.out = out
+	a.cfg.Doctor.GoCacheEvery.Duration = time.Hour
+	a.cfg.Watch.Repeat.Duration = time.Hour
+	w := &watcher{app: a, last: map[string]time.Time{}}
+	t0 := time.Now()
+	for _, at := range []time.Duration{0, goCacheRetry, 55 * time.Minute} {
+		w.goCacheLook(t0.Add(at), building)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("within one interval the watch said:\n%s", out)
+	}
+	if !exists(filepath.Join(cache, "03/oldest-d")) {
+		t.Fatal("a cache short of the margin was trimmed while a build ran")
+	}
+	w.goCacheLook(t0.Add(time.Hour), building)
+	want := "GO CACHE: Go build cache " + cache + ": 4.5 GiB, cap 4.0 GiB (doctor.goCacheMaxGiB); its trim waits for the go builds (PIDs 4242); over the cap for 1h0m0s"
+	if !strings.Contains(out.String(), want) {
+		t.Fatalf("after two intervals the watch said:\n%s\nwant\n%s", out, want)
+	}
+	addEntry(t, cache, "05/new-c", 1<<30, time.Now())
+	w.goCacheLook(t0.Add(time.Hour+goCacheRetry), building)
+	if !strings.Contains(out.String(), "ENDED GO CACHE") {
+		t.Errorf("past the margin the trim did not end GO CACHE:\n%s", out)
+	}
+	if exists(filepath.Join(cache, "03/oldest-d")) || !exists(filepath.Join(cache, "05/new-c")) {
+		t.Error("past the margin the oldest entry stayed, or the newest went")
+	}
+	u, err := gocache.Scan(cache)
+	if err != nil || u.Bytes >= 4<<30 {
+		t.Errorf("the cache is %d bytes after the trim, %v; want under the 4 GiB cap", u.Bytes, err)
+	}
+	var m goCacheMark
+	if _, err := a.store.ReadFile(goCacheFile, &m); err != nil || !m.Waiting.IsZero() {
+		t.Errorf("mark = %+v, %v; want the wait cleared", m, err)
 	}
 }
