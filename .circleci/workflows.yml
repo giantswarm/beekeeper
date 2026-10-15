@@ -5,7 +5,7 @@
 # workflow in .circleci/config.yml merges into this file at pipeline runtime.
 version: 2.1
 orbs:
-  architect: giantswarm/architect@dev:govulncheck-forced-error
+  architect: giantswarm/architect@dev:a4daacac9847566626524474b18a2e3e67f3cc13
 
 workflows:
   build:
