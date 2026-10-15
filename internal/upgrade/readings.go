@@ -26,10 +26,12 @@ func (rs Readings) Merge(o Readings) {
 }
 
 // Fresh says whether the installation's last reading began less than within
-// before now.
+// before now. A reading without a kube context is never fresh: it says only
+// that the kubeconfig of the process that wrote it lacks the context, so
+// each process resolves the context through its own kubeconfig again.
 func (rs Readings) Fresh(installation string, now time.Time, within time.Duration) bool {
 	r, ok := rs[installation]
-	return ok && now.Sub(r.At) < within
+	return ok && !r.Status.NoContext && now.Sub(r.At) < within
 }
 
 // Running says whether the installation's last reading found an upgrade.
