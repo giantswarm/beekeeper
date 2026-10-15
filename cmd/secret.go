@@ -409,9 +409,12 @@ directory named.
 
 copy <ref> -- <command…> runs a consumer with the value on stdin: gh secret
 set, garage json-api <endpoint> -, gitlab-rails runner [-e <env>] '<code>'
-whose Ruby code reads STDIN, a command with --password-stdin or one with
---secret <name>=-, or kubectl exec -i --context <context> <pod> -- <one of
-them> for a command in a pod (no TTY, no -v, never a production context).
+whose Ruby code reads STDIN, valkey-cli or redis-cli --askpass [-h <host>]
+[-p <port>] [-n <db>] [--user <user>] with --scan [--pattern <glob>] or one
+of DEL, UNLINK, EXISTS, TYPE, TTL and its keys (key names and replies, never
+a value), a command with --password-stdin or one with --secret <name>=-, or
+kubectl exec -i --context <context> <pod> -- <one of them> for a command in
+a pod (no TTY, no -v, never a production context).
 --stdin-json '<object>' --stdin-field <key> hands the consumer that JSON
 object with the value at <key> instead of the bare value (garage json-api
 ImportKey's request, for one). It answers the consumer's output with the
@@ -419,6 +422,9 @@ value redacted, and its exit code:
 
   beekeeper secret copy <file>#<path> -- kubectl exec -i --context <context> \
     -n <namespace> <pod> -- gitlab-rails runner 'token = STDIN.read.strip; …'
+  beekeeper secret copy k8s://kind-<lab>/<namespace>/<secret>/<key> -- \
+    kubectl exec -i --context kind-<lab> -n <namespace> <pod> -- \
+    valkey-cli --askpass DEL <key>
 
 copy <ref> --git-askpass -- git [-C <dir>] clone|fetch|push|ls-remote …
 runs git over HTTPS with the value as the password: GIT_ASKPASS names a

@@ -336,6 +336,7 @@ func Consumer(argv []string) error {
 
 // stdinReaders names the commands stdinReader allows.
 const stdinReaders = "`gh secret set`, `garage json-api <endpoint> -`, `gitlab-rails runner [-e <env>] '<code reading STDIN>'`, " +
+	"`valkey-cli --askpass [-h <host>] [-p <port>] [-n <db>] [--user <user>] --scan [--pattern <glob>] | <" + valkeyVerbList + "> <key…>`, " +
 	"a command with --password-stdin or --secret <name>=-"
 
 // stdinReader reports whether a command reads a secret from stdin and
@@ -349,6 +350,8 @@ func stdinReader(argv []string) bool {
 		return len(argv) == 4 && argv[1] == "json-api" && argv[3] == "-"
 	case "gitlab-rails":
 		return railsRunner(argv)
+	case "valkey-cli", "redis-cli":
+		return valkeyCLI(argv[1:])
 	}
 	for i, a := range argv[1:] {
 		switch {
@@ -377,6 +380,53 @@ func railsRunner(argv []string) bool {
 		args = args[1:]
 	}
 	return len(args) == 1 && (strings.Contains(args[0], "STDIN") || strings.Contains(args[0], "$stdin"))
+}
+
+// valkeyVerbs are the commands valkeyCLI allows: a key's name, type and
+// expiry, and its removal, never a value, a configuration or an ACL.
+var valkeyVerbs = []string{"DEL", "UNLINK", "EXISTS", "TYPE", "TTL"}
+
+// valkeyVerbList names valkeyVerbs for a refusal.
+const valkeyVerbList = "DEL|UNLINK|EXISTS|TYPE|TTL"
+
+// valkeyCLI reports whether args, valkey-cli's or redis-cli's, read the
+// password with --askpass, which takes stdin's line when stdin is no
+// terminal and prints no prompt, and either list key names with --scan or
+// run one of valkeyVerbs on named keys. A password on the argv (-a, -u) and
+// every other option is refused.
+func valkeyCLI(args []string) bool {
+	askpass, scan, pattern := false, false, false
+	var cmd []string
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; a {
+		case "--askpass":
+			askpass = true
+		case "--scan":
+			scan = true
+		case "--no-auth-warning":
+		case "-h", "-p", "-n", "--user", "--pattern":
+			if i+1 == len(args) {
+				return false
+			}
+			pattern = pattern || a == "--pattern"
+			i++
+		default:
+			if strings.HasPrefix(a, "-") {
+				return false
+			}
+			cmd = args[i:]
+			i = len(args)
+		}
+	}
+	switch {
+	case !askpass:
+		return false
+	case scan:
+		return len(cmd) == 0
+	case pattern:
+		return false
+	}
+	return len(cmd) > 1 && slices.Contains(valkeyVerbs, strings.ToUpper(cmd[0]))
 }
 
 // kubectlExec allows kubectl exec -i with an explicit --context, no TTY

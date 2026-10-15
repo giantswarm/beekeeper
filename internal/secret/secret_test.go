@@ -662,6 +662,38 @@ func TestConsumerKubectlExec(t *testing.T) {
 	}
 }
 
+func TestConsumerValkeyCLI(t *testing.T) {
+	const pod = "kubectl exec -i --context kind-lab -n muster valkey-0 -- "
+	for argv, ok := range map[string]bool{
+		pod + "valkey-cli --askpass --scan --pattern muster:*":                        true,
+		pod + "valkey-cli --askpass --no-auth-warning -h valkey -p 6379 -n 0 --scan":  true,
+		pod + "valkey-cli --askpass --user default DEL muster:oauth:token:a muster:b": true,
+		pod + "redis-cli --askpass unlink muster:a":                                   true,
+		pod + "/usr/local/bin/valkey-cli --askpass EXISTS muster:a":                   true,
+		pod + "valkey-cli --askpass TTL muster:a":                                     true,
+		pod + "valkey-cli DEL muster:a":                                               false,
+		pod + "valkey-cli -a pw --askpass DEL muster:a":                               false,
+		pod + "valkey-cli -u redis://:pw@valkey --askpass DEL muster:a":               false,
+		pod + "valkey-cli --askpass GET muster:a":                                     false,
+		pod + "valkey-cli --askpass HGETALL muster:a":                                 false,
+		pod + "valkey-cli --askpass CONFIG GET requirepass":                           false,
+		pod + "valkey-cli --askpass ACL LIST":                                         false,
+		pod + "valkey-cli --askpass KEYS *":                                           false,
+		pod + "valkey-cli --askpass DEL":                                              false,
+		pod + "valkey-cli --askpass":                                                  false,
+		pod + "valkey-cli --askpass --scan DEL muster:a":                              false,
+		pod + "valkey-cli --askpass --pattern muster:* DEL muster:a":                  false,
+		pod + "valkey-cli --askpass -x DEL muster:a":                                  false,
+		pod + "valkey-cli --askpass --eval x.lua":                                     false,
+		pod + "valkey-cli --askpass -h":                                               false,
+		pod + "sh -c valkey-cli":                                                      false,
+	} {
+		if err := secret.Consumer(strings.Fields(argv)); (err == nil) != ok {
+			t.Errorf("Consumer(%q) = %v, want allowed %v", argv, err, ok)
+		}
+	}
+}
+
 func TestSetHandsAPodAJSONRequestOnStdin(t *testing.T) {
 	tools := secrettest.New(nil)
 	dir, _ := scratch(t)
