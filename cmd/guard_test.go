@@ -39,6 +39,8 @@ func TestMain(m *testing.M) {
 	// Nor does a command sync the machine's Claude Code plugins, stamped
 	// release build or not: a test that wants the sync names its binary.
 	binaryIdentity = func() string { return "" }
+	// Nor does a gate read that fails in transit pause between its tries.
+	readBackoff = make([]time.Duration, len(readBackoff))
 	// Nor its Go build cache: the trim sees only a cache a test points
 	// GOCACHE at; the cache the tests started with is no cache to it.
 	machineCache := gocache.Dir()

@@ -1171,7 +1171,11 @@ like a merge typed on the command line.
 - **Refused, exit 77**, one line starting `beekeeper gate: refused,` that says why and what to do:
   the repository, its lane, `merges` or `github` is held, or a cluster upgrade runs on the lane's
   installation (the hold's reason); the GitHub budget is unknown, checked before devctl makes a
-  single request; the lane's installation cannot be read (a lapsed `tsh` login). Nothing was
+  single request; the lane's installation cannot be read (a lapsed `tsh` login). A read that
+  fails in transit (a resolver error, a refused or reset connection, a timeout, a killed
+  `kubectl`, gh's `error connecting to`) is sent again three times, 10s, 30s and 1m20s apart,
+  each retry a `reading … failed in transit (…): retrying in …` line, the merge keeping its place; only then
+  does it refuse, naming the read's last error and the tries. Nothing was
   queued: a 77 never says `queued`. A hold refuses a new merge only: a merge that has its place
   in the lane keeps it during a hold and runs once the hold lifts or lets it through, and a
   held place holds no place against the one merge the hold lets through (`--except

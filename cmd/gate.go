@@ -76,7 +76,12 @@ promotion queues and runs in its repository's lane like a merge, its stable
 release settling the lane. Only a hold refuses (exit 77): the repository,
 its lane, "merges" or "github" held (a cluster upgrade on the lane's
 installation holds it too); so do a GitHub budget unknown and a lane
-installation that cannot be read. A rebase merge (--rebase) GitHub reports
+installation that cannot be read. A read of the budget, the installation,
+the release candidate, the base branch or the rebase that fails in transit
+(a resolver error, a refused or reset connection, a timeout, a killed
+kubectl, gh's "error connecting to") is sent again three times (10s, 30s,
+1m20s apart), a line per retry, the merge keeping its place; the refusal
+after the last try names the read's last error. A rebase merge (--rebase) GitHub reports
 not rebaseable or conflicting with its base is refused (77) before it takes
 a lane place, the way out a replacement PR; GitHub not answering whether it
 rebases refuses too. At its turn a rebase merge is read again: one only
@@ -308,7 +313,10 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 	// A queued run takes over the place its gate holds: none means dropped.
 	g.placed = queued || resumed
 	if pr == 0 && !queued {
-		if g.candidate, err = promoteCandidate(ctx, repo); err != nil {
+		if err = g.readRetrying("the release candidate of "+repo, func() (err error) {
+			g.candidate, err = promoteCandidate(ctx, repo)
+			return err
+		}); err != nil {
 			return gateRefused("the release candidate of %s is unknown (%v): nothing promoted; run the same command again", repo, err)
 		}
 		g.candidateRead = true
@@ -636,6 +644,9 @@ func (g *gateRun) step() (string, error) {
 	}
 	b, err := g.gateBudget()
 	if err != nil {
+		if merge.Transient(err) {
+			return "", g.refuse("the GitHub budget is unknown (%v): run the same command again once GitHub answers", err)
+		}
 		return "", g.refuse("the GitHub budget is unknown (%v): fix that (gh auth status), then run the same command again", err)
 	}
 	urgent := false
@@ -667,7 +678,11 @@ func (g *gateRun) step() (string, error) {
 // would promote another worker's candidate. Its place leaves the lane and
 // its owner decides again.
 func (g *gateRun) checkCandidate() error {
-	now, err := promoteCandidate(g.ctx, g.repo)
+	var now string
+	err := g.readRetrying("the release candidate of "+g.repo, func() (err error) {
+		now, err = promoteCandidate(g.ctx, g.repo)
+		return err
+	})
 	if err == nil && now == g.candidate {
 		return nil
 	}
@@ -747,9 +762,13 @@ func (g *gateRun) readRelease() error {
 	if g.release != nil || g.pr == 0 || !g.runsDevctl() {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(g.ctx, time.Minute)
-	defer cancel()
-	r, err := baseRelease(ctx, g.repo, g.pr)
+	var r github.BaseRelease
+	err := g.readRetrying("whether "+g.key()+"'s base branch has auto-release", func() (err error) {
+		ctx, cancel := context.WithTimeout(g.ctx, time.Minute)
+		defer cancel()
+		r, err = baseRelease(ctx, g.repo, g.pr)
+		return err
+	})
 	if err != nil {
 		return g.refuse("whether %s's base branch has auto-release cannot be read (%v): run the same command again", g.key(), err)
 	}
@@ -765,9 +784,13 @@ const rebaseReads = 3
 // while GitHub has not computed it, up to rebaseReads reads.
 func (g *gateRun) readRebase() (github.Rebase, error) {
 	for try := 1; ; try++ {
-		ctx, cancel := context.WithTimeout(g.ctx, time.Minute)
-		r, err := pullRebase(ctx, g.repo, g.pr)
-		cancel()
+		var r github.Rebase
+		err := g.readRetrying("whether "+g.key()+" rebases onto its base", func() (err error) {
+			ctx, cancel := context.WithTimeout(g.ctx, time.Minute)
+			defer cancel()
+			r, err = pullRebase(ctx, g.repo, g.pr)
+			return err
+		})
 		if err != nil || r.Known && r.State != unknownState || try == rebaseReads {
 			return r, err
 		}
@@ -966,10 +989,17 @@ func (g *gateRun) laneReady(q merge.Lane) ([]merge.HelmRelease, string, error) {
 			return nil, "", nil
 		}
 	}
-	hrs, err := readHelmReleases(g.ctx, g.lane)
+	var hrs []merge.HelmRelease
+	err := g.readRetrying("the HelmReleases of "+g.lane.Installation, func() (err error) {
+		hrs, err = readHelmReleases(g.ctx, g.lane)
+		return err
+	})
 	if err != nil {
 		if cause := g.teleportCause(g.ctx); cause != "" {
 			return nil, "", g.refuse("lane %s cannot read the HelmReleases of %s: %s; then run the same command again", g.lane.Name, g.lane.Installation, cause)
+		}
+		if merge.Transient(err) {
+			return nil, "", g.refuse("lane %s cannot read the HelmReleases of %s (%v): run the same command again once it answers", g.lane.Name, g.lane.Installation, err)
 		}
 		return nil, "", g.refuse("lane %s cannot read the HelmReleases of %s (%v): log in (tsh kube login %s), then run the same command again",
 			g.lane.Name, g.lane.Installation, err, g.lane.Installation)
@@ -1771,9 +1801,13 @@ func (g *gateRun) gateBudget() (state.Budget, error) {
 	if b := st.Budget; b != nil && g.now.Sub(b.At) <= g.cfg.Merge.BudgetFresh.Duration && g.now.Before(b.Reset) {
 		return *b, nil
 	}
-	ctx, cancel := context.WithTimeout(g.ctx, 30*time.Second)
-	defer cancel()
-	b, err := readBudget(g.app, ctx)
+	var b github.Budget
+	err = g.readRetrying("the GitHub budget", func() (err error) {
+		ctx, cancel := context.WithTimeout(g.ctx, 30*time.Second)
+		defer cancel()
+		b, err = readBudget(g.app, ctx)
+		return err
+	})
 	return state.Budget{Remaining: b.Remaining, Limit: b.Limit, Reset: b.Reset}, err
 }
 
