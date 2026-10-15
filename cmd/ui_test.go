@@ -60,7 +60,7 @@ func TestUICollectorReadsTheMachineState(t *testing.T) {
 		st.Supervisor = &state.Supervisor{Party: sup, Since: since}
 		st.SupervisorCLI = &state.CLI{Supervisor: sup, Since: since, Gone: now.Add(-2 * time.Hour)}
 		st.Holds = []state.Hold{{Target: uiRepo, Reason: "the release window", By: sup, At: now.Add(-time.Hour)}}
-		st.Notes = []state.Note{{ID: 7, For: pat, Text: uiNoteText, Due: now.Add(-30 * time.Minute), By: sup, At: now.Add(-time.Hour)}}
+		st.Notes = []state.Note{{ID: 7, Kind: noteDecision, For: pat, Text: uiNoteText, Due: now.Add(-30 * time.Minute), By: sup, At: now.Add(-time.Hour)}}
 		st.Timers = []state.Timer{{ID: 3, Due: now.Add(-3 * time.Minute), What: "check", By: sup, At: now.Add(-time.Hour)}}
 		st.Agents = []state.Agent{{Party: agent, Registered: now.Add(-2 * time.Hour), Task: "count", IdleSince: now.Add(-time.Hour)}}
 		st.Records = []state.Record{{Session: agent, Issue: uiIssue, Waits: "CI", By: sup, At: now}}

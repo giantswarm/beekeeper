@@ -16,34 +16,15 @@ import (
 )
 
 // The kinds of a note. A decision waits on a person, who answers it by its
-// due time or lets its default run; a memo is a session's own record (a
-// state summary, a board skip, a list of deferred work) that asks nobody;
-// a login asks its person to sign in, and the watch closes it once its
-// --until probe passes.
+// due time or lets its default run; a login asks its person to sign in, and
+// the watch closes it once its --until probe passes.
 const (
-	noteDecision = "decision"
-	noteMemo     = "memo"
-	noteLogin    = "login"
+	noteDecision = state.NoteDecision
+	noteLogin    = state.NoteLogin
 )
 
 // noteKinds are the kinds `note add --kind` takes.
-var noteKinds = []string{noteDecision, noteMemo, noteLogin}
-
-// noteKind is n's kind: the one it was filed with, else, for a note filed
-// without one, a decision when it is for person (guides) and not pinned (a
-// standing instruction), a memo otherwise.
-func noteKind(person string, n *state.Note) string {
-	if slices.Contains(noteKinds, n.Kind) {
-		return n.Kind
-	}
-	if !n.Pinned && guides(person, n) {
-		return noteDecision
-	}
-	return noteMemo
-}
-
-// decides says whether n waits on its person: a decision or a sign-in.
-func decides(person string, n *state.Note) bool { return noteKind(person, n) != noteMemo }
+var noteKinds = []string{noteDecision, noteLogin}
 
 // probeTimeout bounds one run of a probe: a login note's, a timer's.
 const probeTimeout = 10 * time.Second

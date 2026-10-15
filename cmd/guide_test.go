@@ -81,8 +81,8 @@ func TestGuideFeedSaysEachItemOnce(t *testing.T) {
 	owner := state.Party{Session: "sO", Name: "Agent seven"}
 	a := &app{now: relayNow, cfg: &config.Config{}} // guide.person unset: every --for note
 	st := &state.State{Notes: []state.Note{
-		{ID: 1, For: "Timo", Text: "merge the bump?", Default: "it waits", By: owner},
-		{ID: 2, Text: "check the rollout", By: owner},
+		{ID: 1, Kind: noteDecision, For: "Timo", Text: "merge the bump?", Default: "it waits", By: owner},
+		{ID: 2, Kind: noteDecision, Text: "check the rollout", By: owner},
 	}}
 	agent := state.Party{Session: "sC", Name: agentC.Name}
 	st.Records = []state.Record{{Session: agent, Issue: "o/r#1", Waits: personTimo + ": " + approveADR}}

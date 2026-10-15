@@ -73,7 +73,7 @@ spec:
                 minimum: 1
                 type: integer
               kind:
-                description: Kind is decision, memo or login.
+                description: Kind is decision or login.
                 type: string
               options:
                 description: 'Options are a decision''s choices, "<label>: <consequence>"
@@ -82,9 +82,6 @@ spec:
                   type: string
                 maxItems: 10
                 type: array
-              pinned:
-                description: Pinned is a standing instruction carried by every hand-over.
-                type: boolean
               question:
                 description: Question is a decision's question, one line.
                 maxLength: 150

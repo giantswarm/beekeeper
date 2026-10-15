@@ -311,7 +311,7 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 	if len(closed) > 0 {
 		evs, err := w.store.Events(0, func(e state.Event) bool {
 			switch e.Verb {
-			case answerRecorded, noteDefaulted, noteDone, noteOvertaken, noteReplaced:
+			case answerRecorded, noteDefaulted, noteDone, noteOvertaken:
 				return true
 			}
 			return false

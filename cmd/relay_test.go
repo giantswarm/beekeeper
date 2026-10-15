@@ -37,9 +37,9 @@ var (
 func pendingState() *state.State {
 	return &state.State{
 		Notes: []state.Note{
-			{ID: 1, For: "Timo", Text: "pick a threshold", Due: relayNow.Add(-time.Minute), Default: "the alert stays as is"},
-			{ID: 2, Text: "later", Due: relayNow.Add(time.Hour)},
-			{ID: 3, Text: "no deadline"},
+			{ID: 1, Kind: noteDecision, For: "Timo", Text: "pick a threshold", Due: relayNow.Add(-time.Minute), Default: "the alert stays as is"},
+			{ID: 2, Kind: noteDecision, Text: "later", Due: relayNow.Add(time.Hour)},
+			{ID: 3, Kind: noteDecision, Text: "no deadline"},
 		},
 		Timers: []state.Timer{
 			{ID: 1, Due: relayNow.Add(-time.Second), What: rollout},

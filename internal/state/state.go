@@ -386,6 +386,12 @@ type ImportWait struct {
 // leaves its record behind, past its bound.
 func (w *ImportWait) Pending(now time.Time) bool { return w != nil && now.Before(w.Until) }
 
+// The kinds of a note.
+const (
+	NoteDecision = "decision"
+	NoteLogin    = "login"
+)
+
 // Note is an open item: a question for a person, a deadline.
 type Note struct {
 	ID   int       `json:"id"`
@@ -398,14 +404,11 @@ type Note struct {
 	At      time.Time `json:"at"`
 	// Fired is when a watch reported the note due; it reports it once.
 	Fired time.Time `json:"fired,omitzero"`
-	// Kind is "decision" for a note that waits on a person, "memo" for a
-	// session's own record, "login" for a sign-in the watch closes once
-	// Until, a shell command, exits 0; a note filed before kinds has none.
+	// Kind is NoteDecision for a question that waits on a person or
+	// NoteLogin for a sign-in the watch closes once Until, a shell command,
+	// exits 0.
 	Kind  string `json:"kind,omitempty"`
 	Until string `json:"until,omitempty"`
-	// Pinned is a standing instruction: every hand-over carries it until it
-	// is unpinned or done.
-	Pinned bool `json:"pinned,omitempty"`
 	// Refs are the issues and pull requests (owner/repo#n) the note asks
 	// about: once every one is closed or merged, the watch closes the note
 	// as overtaken, unless a closing keyword closed one and the note's
@@ -432,6 +435,18 @@ type Note struct {
 
 	rest rest
 }
+
+// Memo reports whether n is a record of a kind beekeeper no longer files:
+// a memo, a note filed before kinds, or a pinned note. A state document
+// reads it as closed: it moves from Notes to Memos, which only
+// `note migrate` reads.
+func (n *Note) Memo() bool {
+	return n.Kind != NoteDecision && n.Kind != NoteLogin || n.Pinned()
+}
+
+// Pinned reports whether n was pinned, a standing instruction of an older
+// beekeeper.
+func (n *Note) Pinned() bool { return string(n.rest["pinned"]) == "true" }
 
 // Option is a decision's option i (1-based) split into its label and its
 // consequence; ok is false for none.
@@ -804,13 +819,16 @@ type State struct {
 	Grants []Grant `json:"grants,omitempty"`
 	// Released is when each resource was last released; a grant's TTL runs
 	// from the later of it and the grant.
-	Released  map[string]time.Time `json:"released,omitempty"`
-	Holds     []Hold               `json:"holds,omitempty"`
-	Agents    []Agent              `json:"agents,omitempty"`
-	Notes     []Note               `json:"notes,omitempty"`
-	NextNote  int                  `json:"nextNote,omitempty"`
-	Timers    []Timer              `json:"timers,omitempty"`
-	NextTimer int                  `json:"nextTimer,omitempty"`
+	Released map[string]time.Time `json:"released,omitempty"`
+	Holds    []Hold               `json:"holds,omitempty"`
+	Agents   []Agent              `json:"agents,omitempty"`
+	Notes    []Note               `json:"notes,omitempty"`
+	// Memos are the memos and pinned notes an older beekeeper filed, closed
+	// for every reader but `note migrate`, which lists and removes them.
+	Memos     []Note  `json:"memos,omitempty"`
+	NextNote  int     `json:"nextNote,omitempty"`
+	Timers    []Timer `json:"timers,omitempty"`
+	NextTimer int     `json:"nextTimer,omitempty"`
 	// Records say which session serves which issue.
 	Records []Record `json:"records,omitempty"`
 	// Starts are the sessions beekeeper started, what the permission hook

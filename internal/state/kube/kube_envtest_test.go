@@ -299,7 +299,7 @@ func TestEnvtestRefusals(t *testing.T) {
 			st.Grants = append(st.Grants, state.Grant{Resource: "agentlab-1", To: ana, By: bo, At: time.Now()})
 		}, "not an Environment"},
 		"note without team": {func(st *state.State) {
-			st.Notes = append(st.Notes, state.Note{ID: 1, Text: "x", By: state.Party{Name: "nobody"}, At: time.Now()})
+			st.Notes = append(st.Notes, state.Note{ID: 1, Kind: state.NoteDecision, Text: "x", By: state.Party{Name: "nobody"}, At: time.Now()})
 		}, "filer's team"},
 		"queue cap": {func(st *state.State) {
 			for range v1alpha1.MaxQueue + 1 {

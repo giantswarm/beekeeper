@@ -20,7 +20,7 @@ func onceWatch(t *testing.T, read func(context.Context, []github.PR) (map[github
 	refStates = read
 	var out strings.Builder
 	w.out = &out
-	setNotes(t, w, state.Note{ID: 1, For: personTimo, Text: askedQ, By: state.Party{Name: supRun3}, Refs: []string{refOne, refTwo}})
+	setNotes(t, w, state.Note{ID: 1, Kind: noteDecision, For: personTimo, Text: askedQ, By: state.Party{Name: supRun3}, Refs: []string{refOne, refTwo}})
 	return w, &out
 }
 

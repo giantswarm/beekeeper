@@ -157,7 +157,7 @@ func TestSecretRotateClosesTheRotationNotes(t *testing.T) {
 	carrier := "Rotate sops://" + src + "#data.password: its value was in a Bash result."
 	other := "Rotate op://Shared/other/password: its value was in a Bash result."
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Notes = []state.Note{{ID: 1, Text: "Rotate " + dbRef + ": its value was in a Bash result."}, {ID: 2, Text: carrier}, {ID: 3, Text: other}}
+		st.Notes = []state.Note{{ID: 1, Kind: noteDecision, Text: "Rotate " + dbRef + ": its value was in a Bash result."}, {ID: 2, Kind: noteDecision, Text: carrier}, {ID: 3, Kind: noteDecision, Text: other}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)

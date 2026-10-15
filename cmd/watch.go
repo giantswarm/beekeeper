@@ -84,7 +84,7 @@ with what the lane waits for and one ENDED line when it ends. A note or a
 timer that falls due, the end of a session with a record (sessions serve)
 and a supervisor relay taken or expired are one line each, once: the state keeps that they were reported, so
 a second or restarted watch stays silent about them. An open note for
-someone, not pinned and not a login, is overtaken once every issue and pull
+someone, not a login, is overtaken once every issue and pull
 request it names with note add --ref is closed or merged (one GraphQL read
 a poll, none under the budget floor; a note with no --ref never is, guide
 watch names it once its filing session is archived): one NOTE OVERTAKEN

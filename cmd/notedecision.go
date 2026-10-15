@@ -109,12 +109,12 @@ func defaultedLine(n *state.Note) string {
 
 // defaultDue takes the decisions out of st whose due time has come
 // unanswered and returns them, to close with their default. Only a decision
-// whose default is an action closes: a memo's or a sign-in's due time is a
-// reminder, and a decision filed before defaults had to act stays open.
-func defaultDue(st *state.State, person string, now time.Time) []state.Note {
+// whose default is an action closes: a sign-in's due time is a reminder, and
+// a decision filed before defaults had to act stays open.
+func defaultDue(st *state.State, now time.Time) []state.Note {
 	var due []state.Note
 	st.Notes = slices.DeleteFunc(st.Notes, func(n state.Note) bool {
-		if n.Due.IsZero() || now.Before(n.Due) || !isAction(n.Default) || noteKind(person, &n) != noteDecision {
+		if n.Due.IsZero() || now.Before(n.Due) || !isAction(n.Default) || n.Kind != noteDecision {
 			return false
 		}
 		due = append(due, n)
@@ -126,7 +126,7 @@ func defaultDue(st *state.State, person string, now time.Time) []state.Note {
 // closeDefaulted closes the decisions of st due unanswered with their
 // default and returns their watch lines, their events and the notes.
 func closeDefaulted(st *state.State, person string, by state.Party, now time.Time) ([]string, []state.Event, []state.Note) {
-	due := defaultDue(st, person, now)
+	due := defaultDue(st, now)
 	lines := make([]string, 0, len(due))
 	evs := make([]state.Event, 0, len(due))
 	for i := range due {

@@ -81,10 +81,10 @@ func (s *server) tools() []serveTool {
 		{newTool("lane_turn", "Whether a queued merge is its lane's next, and what is ahead of it.", true, prOptions()...), toolLaneTurn},
 		{newTool("lane_leave", "Take a merge out of its lane: it merged and rolled, failed, or its gate gave up. Its person's, or the team's supervisor role's.", false,
 			append(prOptions(), mcp.WithString(paramReason, mcp.Description("why it leaves: rolled, nothing merged, refused")))...), toolLaneLeave},
-		{newTool("note_add", "File a note: a decision for a person or a team, put to them in Slack, or a memo.", false,
-			mcp.WithString(paramText, mcp.Required(), mcp.Description("the question (one line, at most 150 characters) or the memo")),
+		{newTool("note_add", "File a note: a decision for a person or a team, put to them in Slack, or a sign-in.", false,
+			mcp.WithString(paramText, mcp.Required(), mcp.Description("the question (one line, at most 150 characters)")),
 			mcp.WithString(paramFor, mcp.Description("who decides: a person's name or email, or team:<name>")),
-			mcp.WithString(paramKind, mcp.Description("decision, memo or login")),
+			mcp.WithString(paramKind, mcp.Description("decision (the default) or login")),
 			mcp.WithString("due", mcp.Description("when it is due: a time (22:55) or a duration (3h)")),
 			mcp.WithString("default", mcp.Description("the action if nobody answers by the due time")),
 			mcp.WithString("status_quo", mcp.Description("what is true now")),
@@ -92,9 +92,8 @@ func (s *server) tools() []serveTool {
 			mcp.WithArray("options", mcp.WithStringItems(), mcp.Description(`"<choice>: <consequence>" each, at most 10, labels at most 75 characters`)),
 			mcp.WithNumber("recommend", mcp.Description("the option recommended, 1-based")),
 			mcp.WithString("checked", mcp.Description("where a merged, green, released, rolled or closed claim was checked")),
-			mcp.WithArray(paramRefs, mcp.WithStringItems(), mcp.Description("the issues and pull requests it asks about, owner/repo#n")),
-			mcp.WithBoolean("pin", mcp.Description("a standing instruction"))), toolNoteAdd},
-		{newTool("note_list", "The open notes, decisions apart from memos.", true), toolNoteList},
+			mcp.WithArray(paramRefs, mcp.WithStringItems(), mcp.Description("the issues and pull requests it asks about, owner/repo#n"))), toolNoteAdd},
+		{newTool("note_list", "The open notes: decisions and sign-ins.", true), toolNoteList},
 		{newTool("note_answer", "Answer a decision, word for word, and close it: as the person it is for, or a member of the team it is for.", false,
 			mcp.WithNumber(paramNote, mcp.Required(), mcp.Description("the note's number")),
 			mcp.WithNumber(paramChoice, mcp.Description("the option chosen, 1-based")),
@@ -671,7 +670,7 @@ func toolLaneLeave(c *call, req mcp.CallToolRequest) (any, error) {
 var filedNote = regexp.MustCompile(`(?m)^note #(\d+)`)
 
 func toolNoteAdd(c *call, req mcp.CallToolRequest) (any, error) {
-	text, err := required(req, "text", "the question or the memo")
+	text, err := required(req, "text", "the question")
 	if err != nil {
 		return nil, err
 	}
@@ -686,9 +685,6 @@ func toolNoteAdd(c *call, req mcp.CallToolRequest) (any, error) {
 	}
 	for _, r := range req.GetStringSlice(paramRefs, nil) {
 		args = append(args, "--ref", r)
-	}
-	if req.GetBool("pin", false) {
-		args = append(args, "--pin")
 	}
 	if r := req.GetInt("recommend", 0); r != 0 {
 		args = append(args, "--recommend", strconv.Itoa(r))
@@ -738,11 +734,7 @@ func (c *call) noteList() ([]state.Note, error) {
 	if err != nil {
 		return nil, err
 	}
-	notes := slices.Clone(st.Notes)
-	for i := range notes {
-		notes[i].Kind = noteKind(c.app.cfg.Guide.Person, &notes[i])
-	}
-	return append([]state.Note{}, notes...), nil
+	return append([]state.Note{}, st.Notes...), nil
 }
 
 func toolNoteAnswer(c *call, req mcp.CallToolRequest) (any, error) {
