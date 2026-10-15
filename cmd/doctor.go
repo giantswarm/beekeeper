@@ -207,7 +207,7 @@ func noteFaults(st *state.State, findings []faultFinding, person string, now tim
 				Options:   []string{"run it: the remedy runs once, the doctor probes again"},
 			}
 			st.NextNote++
-			n := state.Note{ID: st.NextNote, For: person, Text: d.text(), By: watchParty, At: now.UTC(),
+			n := state.Note{ID: st.NextNote, For: person, Text: d.text(), By: watchParty, At: now.UTC(), Kind: noteDecision,
 				Default: "the doctor keeps probing and closes this note once the fault is absent"}
 			st.Notes = append(st.Notes, n)
 			lines = append(lines, fmt.Sprintf("note #%d for %s: fault %q", n.ID, person, f.fault.Name))

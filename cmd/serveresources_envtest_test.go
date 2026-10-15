@@ -268,17 +268,17 @@ func TestEnvtestServeSubscriptions(t *testing.T) {
 	anaUp.expect(resourceRoster)
 
 	// A note reaches its addressee's and its filer's subscriptions.
-	e.expect(t, bo, "note_add", map[string]any{paramText: "which lane?", paramFor: anaEmail, paramKind: noteMemo}, false, "note #1")
+	e.expect(t, bo, "note_add", decisionFor("which lane?", anaEmail), false, "note #1")
 	anaUp.expect(resourceNotes + anaEmail)
 	boUp.expect(resourceNotes + boEmail)
-	e.expect(t, pia, "note_add", map[string]any{paramText: "for the team", paramFor: "team:" + ourTeam, paramKind: noteMemo}, false, "note #2")
+	e.expect(t, pia, "note_add", decisionFor("for the team", "team:"+ourTeam), false, "note #2")
 	anaUp.expect(resourceNotes + anaEmail)
 	boUp.expect(resourceNotes + boEmail)
 
 	// A message reaches the receiver's mailbox subscription, not another's.
 	e.expect(t, ana, "send_message", map[string]any{"to": anaAddress, paramMessage: a2a("m1", "hello")}, false, "delivery")
 	anaUp.expect(resourceMailbox + anaEmail)
-	e.expect(t, pia, "note_add", map[string]any{paramText: "marker", paramFor: boEmail, paramKind: noteMemo}, false, "note #3")
+	e.expect(t, pia, "note_add", decisionFor("marker", boEmail), false, "note #3")
 	boUp.expect(resourceNotes + boEmail)
 	boUp.none(resourceMailbox + boEmail)
 }
@@ -441,7 +441,7 @@ func TestEnvtestServeRosterScope(t *testing.T) {
 	e.expect(t, ana, "agents_register", map[string]any{paramAgent: anaAgent, paramHost: lab}, false, "register: ana-agent idle")
 	e.expect(t, bo, "agents_register", map[string]any{paramAgent: boAgent, paramHost: "bo-laptop"}, false, "register: "+boAgent+" idle")
 	boUp.expect(resourceRoster)
-	e.expect(t, pia, "note_add", map[string]any{paramText: "marker", paramFor: boEmail, paramKind: noteMemo}, false, "note #1")
+	e.expect(t, pia, "note_add", decisionFor("marker", boEmail), false, "note #1")
 	boUp.expect(resourceNotes + boEmail)
 	boUp.none(resourceRoster)
 	for who, want := range map[*mcpCaller]string{ana: anaAgent, bo: boAgent, pia: ""} {
@@ -485,4 +485,9 @@ func TestEnvtestServeRosterScope(t *testing.T) {
 	if _, got, _ := pia.call("list_agents", map[string]any{}); len(agentNames(got)) != 0 {
 		t.Errorf("pia's list_agents %v: another team's", agentNames(got))
 	}
+}
+
+// decisionFor is note_add's arguments for a complete decision for forWho.
+func decisionFor(text, forWho string) map[string]any {
+	return map[string]any{paramText: text, paramFor: forWho, paramKind: noteDecision, dueID: "3h", keyDefault: ownLane, paramRefs: []any{privateThread}}
 }

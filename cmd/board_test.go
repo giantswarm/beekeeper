@@ -59,7 +59,7 @@ func TestNextFreeSkipsOwnedItems(t *testing.T) {
 			{Party: state.Party{Session: "s5", Name: busyAgent}, Task: "https://github.com/o/r/issues/7 and o/r#8"},
 			{Party: state.Party{Session: "s6", Name: "Finished"}, Task: "o/r#9", Done: true},
 		},
-		Notes: []state.Note{{ID: 12, For: pat, Text: "decide https://github.com/o/r/issues/10"}},
+		Notes: []state.Note{{ID: 12, Kind: noteDecision, For: pat, Text: "decide https://github.com/o/r/issues/10"}},
 	}
 	cands := boardCandidates(11)
 	cands[10].Skip = "assigned to pat"
@@ -70,7 +70,7 @@ func TestNextFreeSkipsOwnedItems(t *testing.T) {
 	// The ended record's, the gone session's and the finished agent's items
 	// are free; once a running session serves them nothing is.
 	st.Records = append(st.Records, state.Record{Session: running, Issue: idleRef}, state.Record{Session: running, Issue: "o/r#3"},
-		state.Record{Session: running, Issue: "o/r#5"}, state.Record{Session: running, Issue: "o/r#9"})
+		state.Record{Session: running, Issue: "o/r#5"}, state.Record{Session: running, Issue: "o/r#9"}, state.Record{Session: running, Issue: epicTen})
 	if res = nextFree(st, cands, pickScope{me: me, alive: alive, listed: listed}); res.Pick != nil {
 		t.Errorf("all owned, picked %v", res.Pick)
 	}
@@ -88,13 +88,16 @@ func TestNextFreeSkipsOwnedItems(t *testing.T) {
 		`o/r#7: served by "Busy" (task)`,
 		`o/r#8: served by "Busy" (task)`,
 		`o/r#9: served by "Worker one"`,
-		`o/r#10: note #12 "decide https://github.com/o/r/issues/10" (waits on Pat)`,
+		epicTen + `: served by "Worker one"`,
 		`o/r#11: assigned to pat`,
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("skipped:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
+
+// epicTen is the item the board tests hold by a record.
+const epicTen = "o/r#10"
 
 func TestNextFreeHoldsAnEpicsSubIssuesToItsOwners(t *testing.T) {
 	listed := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
@@ -106,7 +109,7 @@ func TestNextFreeHoldsAnEpicsSubIssuesToItsOwners(t *testing.T) {
 			{Session: running, Issue: "o/r#20", At: listed.Add(-time.Hour)},
 			{Session: running, Issue: "o/r#21", At: listed.Add(-time.Hour)},
 		},
-		Notes: []state.Note{{ID: 704, For: pat, Pinned: true, Text: "skip the slices of https://github.com/o/r/issues/10"}},
+		Agents: []state.Agent{{Party: state.Party{Session: "s5", Name: busyAgent}, Task: "the slices of https://github.com/o/r/issues/10"}},
 	}
 	sub := func(n int, epic string) board.Candidate {
 		return board.Candidate{Item: board.Item{Ref: fmt.Sprintf("o/r#%d", n)}, Step: "In Progress", Epic: epic}
@@ -119,8 +122,8 @@ func TestNextFreeHoldsAnEpicsSubIssuesToItsOwners(t *testing.T) {
 		got = append(got, c.Ref+": "+c.Skip)
 	}
 	want := []string{
-		`o/r#11: note #704 "skip the slices of https://github.com/o/r/issues/10" (waits on Pat), on epic o/r#10`,
-		`o/r#12: note #704 "skip the slices of https://github.com/o/r/issues/10" (waits on Pat), on epic O/R#10`,
+		`o/r#11: served by "Busy" (task), on epic o/r#10`,
+		`o/r#12: served by "Busy" (task), on epic O/R#10`,
 		`o/r#21: served by "Worker one"`,
 		`o/r#22: served by "Worker one", on epic o/r#20`,
 	}
@@ -399,47 +402,39 @@ func TestNamedRefsReadsTheFormsPeopleWrite(t *testing.T) {
 	}
 }
 
-func TestNextFreeSkipsWhatANoteNamesAsPeopleWrite(t *testing.T) {
+func TestNextFreeIsHeldByNoNote(t *testing.T) {
 	listed := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	me := state.Party{Session: "me", Name: "Me"}
 	st := &state.State{
 		Agents: []state.Agent{{Party: state.Party{Session: "s5", Name: busyAgent}, Task: "llm-d#29 to merged"}},
 		Notes: []state.Note{
-			{ID: 1, For: pat, Text: "model-manager#258 waits on the GPU", Refs: []string{"x/y#9"}},
-			{ID: 2, Text: "dispatched beekeeper: #525 (a), #555 (b), #563 (c)"},
-			{ID: 3, For: pat, Text: "#4 is nobody's: no repository before it"},
+			{ID: 1, For: pat, Kind: noteDecision, Text: "merge model-manager#258 once the GPU is free?", Refs: []string{"x/y#9"}},
+			{ID: 2, For: pat, Kind: noteLogin, Text: "sign in for beekeeper: #525"},
 		},
 	}
 	item := func(ref string) board.Candidate {
 		return board.Candidate{Item: board.Item{Ref: ref}, Step: stepUpNext}
 	}
-	cands := []board.Candidate{item("gs/model-manager#258"), item("gs/beekeeper#525"), item("gs/beekeeper#555"),
-		item("gs/beekeeper#563"), item("gs/llm-d#29"), item("x/y#9"), item("gs/x#4"), item("o/r#4")}
+	cands := []board.Candidate{item("gs/llm-d#29"), item("gs/model-manager#258"), item("x/y#9"), item("gs/beekeeper#525")}
 	res := nextFree(st, cands, pickScope{me: me, alive: func(state.Party) bool { return true }, listed: listed, owner: "gs"})
 	var got []string
 	for _, c := range res.Skipped {
 		got = append(got, c.Ref+": "+c.Skip)
 	}
-	want := []string{
-		`gs/model-manager#258: note #1 "model-manager#258 waits on the GPU" (waits on Pat)`,
-		`gs/beekeeper#525: note #2 "dispatched beekeeper: #525 (a), #555 (b), #563 (c)" (waits on the supervisor)`,
-		`gs/beekeeper#555: note #2 "dispatched beekeeper: #525 (a), #555 (b), #563 (c)" (waits on the supervisor)`,
-		`gs/beekeeper#563: note #2 "dispatched beekeeper: #525 (a), #555 (b), #563 (c)" (waits on the supervisor)`,
-		`gs/llm-d#29: served by "Busy" (task)`,
-		`x/y#9: note #1 "model-manager#258 waits on the GPU" (waits on Pat)`,
+	want := []string{`gs/llm-d#29: served by "Busy" (task)`}
+	if !slices.Equal(got, want) || res.Pick == nil || res.Pick.Ref != "gs/model-manager#258" {
+		t.Errorf("pick %v, skipped:\n%s\nwant gs/model-manager#258 after:\n%s", res.Pick, strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	if !slices.Equal(got, want) || res.Pick == nil || res.Pick.Ref != "gs/x#4" {
-		t.Errorf("pick %v, skipped:\n%s\nwant gs/x#4 after:\n%s", res.Pick, strings.Join(got, "\n"), strings.Join(want, "\n"))
-	}
-	if n := len(res.AfterPick); n != 1 || res.AfterPick[0].Skip != "" {
-		t.Errorf("after the pick %+v, want o/r#4 free", res.AfterPick)
+	for _, c := range res.AfterPick {
+		if c.Skip != "" {
+			t.Errorf("%s skipped behind the pick: %s; a note holds nothing", c.Ref, c.Skip)
+		}
 	}
 }
 
 func TestSkipKind(t *testing.T) {
 	for reason, want := range map[string]string{
-		`served by "Worker one" through o/r#100`:              kindServed,
-		`note #704 (waits on the supervisor), on epic o/r#10`: kindNote,
+		`served by "Worker one" through o/r#100`:         kindServed,
 		"assigned to sam":                                kindAssigned,
 		"3 of 4 blockers open":                           kindBlocked,
 		"no activity since 2026-01-01":                   kindStale,
@@ -465,14 +460,15 @@ func TestPrintNextPreviewListsTheFreeItemsAndCountsTheSkips(t *testing.T) {
 	cands := boardCandidates(7)
 	st := &state.State{
 		Records: []state.Record{{Session: running, Issue: cands[2].Ref, At: listed.Add(-time.Hour)}},
-		Notes:   []state.Note{{ID: 12, For: pat, Text: cands[3].Ref + " and " + cands[6].Ref}},
+		Agents:  []state.Agent{{Party: state.Party{Session: "s5", Name: busyAgent}, Task: cands[3].Ref + " and " + cands[6].Ref}},
+		Notes:   []state.Note{{ID: 12, For: pat, Kind: noteDecision, Text: "merge " + cands[1].Ref + "?", Refs: []string{cands[1].Ref}}},
 	}
 	cands[0].Skip = oldBacklog
 	for i := range cands {
 		cands[i].Title = fmt.Sprintf("Item %d", i+1)
 	}
 	res := nextFree(st, cands, pickScope{me: me, alive: func(state.Party) bool { return true }, listed: listed})
-	if want := map[string]int{kindNote: 2, kindOrder: 1, kindServed: 1}; !maps.Equal(res.SkippedBy, want) {
+	if want := map[string]int{kindOrder: 1, kindServed: 3}; !maps.Equal(res.SkippedBy, want) {
 		t.Errorf("skipped by %v, want %v", res.SkippedBy, want)
 	}
 	var out strings.Builder
@@ -484,7 +480,7 @@ func TestPrintNextPreviewListsTheFreeItemsAndCountsTheSkips(t *testing.T) {
 		"free behind it, next in line: 2 of 5\n",
 		"  o/r#5  Item 5  Up Next\n",
 		"  o/r#6  Item 6  Up Next\n",
-		"skipped: 4 in all: note 2, order 1, served 1 (--json lists each with its reason)\n",
+		"skipped: 4 in all: served 3, order 1 (--json lists each with its reason)\n",
 	} {
 		if !strings.Contains(out.String(), line) {
 			t.Errorf("preview lacks %q:\n%s", line, out.String())
@@ -544,7 +540,7 @@ func TestPrintNextListsEachSkipBeforeThePick(t *testing.T) {
 	cands := boardCandidates(4)
 	st := &state.State{
 		Records: []state.Record{{Session: running, Issue: cands[1].Ref, At: listed.Add(-time.Hour)}},
-		Notes:   []state.Note{{ID: 12, For: pat, Text: "Which model for " + cands[2].Ref + "?\nThe GPU is busy."}},
+		Agents:  []state.Agent{{Party: state.Party{Session: "s5", Name: busyAgent}, Task: "Which model for " + cands[2].Ref + "?\nThe GPU is busy."}},
 	}
 	cands[0].Skip = oldBacklog
 	res := nextFree(st, cands, pickScope{me: state.Party{Session: "me"}, alive: func(state.Party) bool { return true }, listed: listed})
@@ -554,7 +550,7 @@ func TestPrintNextListsEachSkipBeforeThePick(t *testing.T) {
 	}
 	skips := "skipped " + cands[0].Ref + ": " + oldBacklog + "\n" +
 		"skipped " + cands[1].Ref + ": served by \"Worker one\"\n" +
-		"skipped " + cands[2].Ref + ": note #12 \"Which model for " + cands[2].Ref + "?\" (waits on Pat)\n"
+		"skipped " + cands[2].Ref + ": served by \"Busy\" (task)\n"
 	want := skips + cands[3].Ref + " "
 	if !strings.HasPrefix(out.String(), want) {
 		t.Errorf("output:\n%s\nwant it to start with:\n%s", out.String(), want)

@@ -82,7 +82,7 @@ func TestKeywordCloseKeepsTheNoteOpenAndSaysSoOnce(t *testing.T) {
 	refs := map[string]string{refOne: keywordClosed}
 	w, out := overtakingWatch(t, refs)
 	// The supervisor filed it: no worker's task end can settle it.
-	setNotes(t, w, state.Note{ID: 1, For: personTimo, Text: askedQ, By: state.Party{Name: supRun3}, Refs: []string{refOne}})
+	setNotes(t, w, state.Note{ID: 1, Kind: noteDecision, For: personTimo, Text: askedQ, By: state.Party{Name: supRun3}, Refs: []string{refOne}})
 	for range 2 {
 		w.pending(context.Background(), nil)
 	}
@@ -118,9 +118,9 @@ func TestWorkerNoteIsKeptWhileItsTaskRunsAndOvertakenOnceDone(t *testing.T) {
 		t.Fatal(err)
 	}
 	setNotes(t, w,
-		state.Note{ID: 1, For: personTimo, Text: askedQ, By: worker, Refs: []string{refOne}},
+		state.Note{ID: 1, Kind: noteDecision, For: personTimo, Text: askedQ, By: worker, Refs: []string{refOne}},
 		// Closed by hand while the worker runs: still not its worker's close.
-		state.Note{ID: 2, For: personTimo, Text: "keep it?", By: worker, Refs: []string{refTwo}},
+		state.Note{ID: 2, Kind: noteDecision, For: personTimo, Text: "keep it?", By: worker, Refs: []string{refTwo}},
 	)
 	for range 2 {
 		w.pending(context.Background(), nil)
@@ -163,7 +163,7 @@ func TestWorkerNoteIsKeptWhileItsTaskRunsAndOvertakenOnceDone(t *testing.T) {
 func TestWorkerNoteClosedAfterItsTaskEndedIsOvertaken(t *testing.T) {
 	w, _ := overtakingWatch(t, map[string]string{refOne: keywordClosed})
 	// The worker is off the roster already; its note carries the task's end.
-	setNotes(t, w, state.Note{ID: 1, For: personTimo, Text: askedQ, By: state.Party{Name: agentOne}, Refs: []string{refOne}, TaskEnded: relayNow})
+	setNotes(t, w, state.Note{ID: 1, Kind: noteDecision, For: personTimo, Text: askedQ, By: state.Party{Name: agentOne}, Refs: []string{refOne}, TaskEnded: relayNow})
 	w.pending(context.Background(), nil)
 	if evs := overtakenEvents(t, w); len(evs) != 1 || overtakenReason(evs[0]) != `o/r#1 closed by o/r#2's closing keyword, its worker "Agent one" done` {
 		t.Fatalf("events %+v", evs)
@@ -203,8 +203,8 @@ func TestNoteClosesOnePollAfterItsIssueCloses(t *testing.T) {
 	refs := map[string]string{refOne: github.Open, refTwo: github.Open}
 	w, out := overtakingWatch(t, refs)
 	setNotes(t, w,
-		state.Note{ID: 1, For: personTimo, Text: askedQ, Refs: []string{refOne}},
-		state.Note{ID: 2, For: personTimo, Text: "release both?", Refs: []string{refOne, refTwo}},
+		state.Note{ID: 1, Kind: noteDecision, For: personTimo, Text: askedQ, Refs: []string{refOne}},
+		state.Note{ID: 2, Kind: noteDecision, For: personTimo, Text: "release both?", Refs: []string{refOne, refTwo}},
 	)
 	w.pending(context.Background(), nil)
 	if ids := openIDs(t, w); !slices.Equal(ids, []int{1, 2}) {
@@ -231,9 +231,9 @@ func TestNoteClosesOnePollAfterItsIssueCloses(t *testing.T) {
 
 func TestNoteWithOneOpenAndOneClosedRefStaysOpen(t *testing.T) {
 	w, _ := overtakingWatch(t, map[string]string{refOne: github.Closed, refTwo: github.Open})
-	setNotes(t, w, state.Note{ID: 1, For: personTimo, Text: askedQ, Refs: []string{refOne, refTwo}},
+	setNotes(t, w, state.Note{ID: 1, Kind: noteDecision, For: personTimo, Text: askedQ, Refs: []string{refOne, refTwo}},
 		// A ref GitHub does not answer is not settled.
-		state.Note{ID: 2, For: personTimo, Text: askedQ, Refs: []string{refOne, "o/r#404"}})
+		state.Note{ID: 2, Kind: noteDecision, For: personTimo, Text: askedQ, Refs: []string{refOne, "o/r#404"}})
 	for range 2 {
 		w.pending(context.Background(), nil)
 	}
@@ -246,8 +246,8 @@ func TestAnsweredNoteIsNeverOvertaken(t *testing.T) {
 	refs := map[string]string{refOne: github.Open}
 	w, _ := overtakingWatch(t, refs)
 	setNotes(t, w,
-		state.Note{ID: 1, For: personTimo, Text: askedQ, Refs: []string{refOne}},
-		state.Note{ID: 2, For: personTimo, Text: "asked now", Refs: []string{refOne}},
+		state.Note{ID: 1, Kind: noteDecision, For: personTimo, Text: askedQ, Refs: []string{refOne}},
+		state.Note{ID: 2, Kind: noteDecision, For: personTimo, Text: "asked now", Refs: []string{refOne}},
 	)
 	c := w.noteCmd()
 	c.SetArgs([]string{"answer", "1", "yes"})
@@ -295,13 +295,11 @@ func archivedNotes(t *testing.T, dir string) []state.Note {
 	desktopRecord(t, dir, "local_run", "cli-run", true)
 	worker := state.Party{Session: "cli-archived", HostSession: hostArc, Name: uiAgentName}
 	return []state.Note{
-		{ID: 1, For: personTimo, Text: askedQ, By: worker},
-		{ID: 2, For: personTimo, Text: askedQ, By: state.Party{Session: "cli-stopped", HostSession: "local_stopped", Name: "Agent ten"}},
-		{ID: 3, For: personTimo, Text: askedQ, By: state.Party{Session: "cli-run", HostSession: "local_run", Name: supRun3}},
-		{ID: 4, For: personTimo, Text: askedQ, By: worker, Pinned: true},
-		{ID: 5, Text: "a memo", By: worker},
+		{ID: 1, Kind: noteDecision, For: personTimo, Text: askedQ, By: worker},
+		{ID: 2, Kind: noteDecision, For: personTimo, Text: askedQ, By: state.Party{Session: "cli-stopped", HostSession: "local_stopped", Name: "Agent ten"}},
+		{ID: 3, Kind: noteDecision, For: personTimo, Text: askedQ, By: state.Party{Session: "cli-run", HostSession: "local_run", Name: supRun3}},
 		// With a ref the ref decides, not the session.
-		{ID: 6, For: personTimo, Text: askedQ, By: worker, Refs: []string{refOne}},
+		{ID: 6, Kind: noteDecision, For: personTimo, Text: askedQ, By: worker, Refs: []string{refOne}},
 	}
 }
 
@@ -311,7 +309,7 @@ func TestNoteWithoutRefsStaysOpenOnceItsSessionIsArchived(t *testing.T) {
 	for range 2 {
 		w.pending(context.Background(), nil)
 	}
-	if ids := openIDs(t, w); !slices.Equal(ids, []int{1, 2, 3, 4, 5, 6}) {
+	if ids := openIDs(t, w); !slices.Equal(ids, []int{1, 2, 3, 6}) {
 		t.Fatalf("open %v", ids)
 	}
 	if evs := overtakenEvents(t, w); len(evs) != 0 {
@@ -343,8 +341,8 @@ func TestGuideFeedSaysOrphanedNotesOnce(t *testing.T) {
 func TestWatchOnceNamesOvertakenNotesAndWritesNothing(t *testing.T) {
 	w, out := overtakingWatch(t, map[string]string{refOne: github.Closed, refTwo: github.Closed + " by o/r#3"})
 	w.chores = false
-	setNotes(t, w, state.Note{ID: 7, For: personTimo, Text: askedQ, Refs: []string{refOne}},
-		state.Note{ID: 8, For: personTimo, Text: askedQ, Refs: []string{refTwo}})
+	setNotes(t, w, state.Note{ID: 7, Kind: noteDecision, For: personTimo, Text: askedQ, Refs: []string{refOne}},
+		state.Note{ID: 8, Kind: noteDecision, For: personTimo, Text: askedQ, Refs: []string{refTwo}})
 	w.pending(context.Background(), nil)
 	st, _ := w.store.Read()
 	if ids := openIDs(t, w); !slices.Equal(ids, []int{7, 8}) || len(overtakenEvents(t, w)) != 0 || len(keptEvents(t, w)) != 0 || st.Notes[1].Kept != "" {
@@ -358,10 +356,11 @@ func TestWatchOnceNamesOvertakenNotesAndWritesNothing(t *testing.T) {
 
 func TestNoteAddRefAndDoneOvertaken(t *testing.T) {
 	a, _ := noteApp(t)
-	if err := addNote(a, "--ref", refOne, "--ref", "https://github.com/o/r/pull/2", "--ref", refOne, "a memo"); err != nil {
+	sam := []string{flagFor, samName, flagStatusQuo, sqNow, flagDefault, dfltOK, flagDue, "3h"}
+	if err := addNote(a, append(slices.Clone(sam), "--ref", refOne, "--ref", "https://github.com/o/r/pull/2", "--ref", refOne, "pick a lab?")...); err != nil {
 		t.Fatal(err)
 	}
-	if err := addNote(a, "--ref", "r#1", "a memo"); err == nil {
+	if err := addNote(a, append(slices.Clone(sam), "--ref", "r#1", "pick a lab?")...); err == nil {
 		t.Fatal("a ref without its repository was taken")
 	}
 	st, _ := a.store.Read()
@@ -390,12 +389,12 @@ func TestNoteAddRefAndDoneOvertaken(t *testing.T) {
 
 func TestGuideFeedSaysOvertakenOnce(t *testing.T) {
 	a, _ := noteApp(t)
-	st := &state.State{Notes: []state.Note{{ID: 4, For: notePerson, Text: askedQ, By: state.Party{Name: agentOne}}}}
+	st := &state.State{Notes: []state.Note{{ID: 4, Kind: noteDecision, For: notePerson, Text: askedQ, By: state.Party{Name: agentOne}}}}
 	if lines, _ := a.feedLines(st, nil, nil, nil); len(lines) != 1 {
 		t.Fatalf("first poll: %q", lines)
 	}
 	st.Notes = nil
-	closed := map[int]state.Event{4: overtakenEvent(watchParty, state.Note{ID: 4, Text: askedQ}, "o/r#1 merged")}
+	closed := map[int]state.Event{4: overtakenEvent(watchParty, state.Note{ID: 4, Kind: noteDecision, Text: askedQ}, "o/r#1 merged")}
 	if lines, _ := a.feedLines(st, nil, closed, nil); !slices.Equal(lines, []string{"GUIDE CLOSED #4 overtaken: o/r#1 merged"}) {
 		t.Fatalf("closed: %q", lines)
 	}

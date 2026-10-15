@@ -136,9 +136,7 @@ func guides(person string, n *state.Note) bool {
 func guideQueue(st *state.State, sessions []*claude.Session, person string, since time.Time) (q, stopped []queueItem) {
 	for i := range st.Notes {
 		n := &st.Notes[i]
-		// A pinned note is a standing instruction and a memo asks nobody:
-		// neither is a decision.
-		if !guides(person, n) || n.Pinned || !decides(person, n) {
+		if !guides(person, n) {
 			continue
 		}
 		_, live := claude.Live(sessions, n.By)
@@ -252,8 +250,7 @@ func (a *app) guideQueueCmd() *cobra.Command {
 		Use:   "queue",
 		Short: "The decisions waiting on the person: its open notes and waiting sessions, with their owners",
 		Long: `Every open decision filed for the guide's person, guide.person (note add
---for, or an older note's "[for <person>]" prefix, in any case; a memo or a
-pinned note is none), with the session
+--for, or an older note's "[for <person>]" prefix, in any case), with the session
 that filed it (its owner, and whether it still runs), its deadline and its
 default, then every session that serves a wait on its person (sessions serve
 --waits "<person>: …") with what it needs, while its CLI runs or stopped
@@ -310,7 +307,7 @@ func (a *app) guideNextCmd() *cobra.Command {
 		Short: "Serve the one decision to ask the person now, due first, and mark it as being asked",
 		Long: `Serve one open decision for the guide's person and mark it as being asked:
 the open note filed for the person that is due first (by due time, then the
-undated in filing order; a pinned note is no decision). The same note is
+undated in filing order). The same note is
 served again until it is answered (` + "`beekeeper note answer <id> <answer>`" + `, its
 thread's beekeeper answer) or
 closed (note done); only then comes the next. Only the guide's session
@@ -439,8 +436,7 @@ func (a *app) guideHandoverCmd() *cobra.Command {
 relay and the queue. --prompt prints the successor's session prompt instead:
 the configured instructions (guide.skill or guide.instructions), the queue, an open relay and the commands that read
 the live values; no standing rule and no live value. A caller that has read
-the hand-over before gets only what changed; --full prints everything. The
-pinned notes (note add --pin) are in both.`,
+the hand-over before gets only what changed; --full prints everything.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			st, err := a.store.Read()
@@ -454,7 +450,7 @@ pinned notes (note add --pin) are in both.`,
 			q, _ := a.guideQueue(st, sessions)
 			r := guideRole.get(st)
 			if prompt {
-				return a.printGuidePrompt(r, q, a.splitNotes(st.Notes).Pinned)
+				return a.printGuidePrompt(r, q)
 			}
 			sv := readHolder(r, sessions, a.now, a.cfg.Guide.RestartGrace.Duration)
 			head := "No guide is recorded."
@@ -465,16 +461,12 @@ pinned notes (note add --pin) are in both.`,
 				}
 			}
 			relay := a.relayLine(guideRole, r)
-			pinned := a.splitNotes(st.Notes).Pinned
 			facts := append(textFacts("guide", head+"\n"+relay), a.queueFacts(q)...)
-			facts = append(facts, textFacts("pinned", a.capture(func() { a.printPinned(pinned) }))...)
 			return a.delta("guide-handover", full, facts, func() {
 				_, _ = fmt.Fprintf(a.out, "# Guide hand-over, %s\n\n%s\n", a.now.Format("2006-01-02 15:04 MST"), head)
 				if relay != "" {
 					_, _ = fmt.Fprintln(a.out, relay)
 				}
-				_, _ = fmt.Fprintln(a.out, "\n## Pinned notes")
-				a.printPinned(pinned)
 				_, _ = fmt.Fprintln(a.out, "\n## Queue")
 				a.printQueue(q)
 			})
@@ -502,7 +494,7 @@ var guideLiveCommands = [][2]string{
 	{"beekeeper log --verb note.", "the notes filed, answered and closed"},
 }
 
-func (a *app) printGuidePrompt(r state.Role, q []queueItem, pinned []state.Note) error {
+func (a *app) printGuidePrompt(r state.Role, q []queueItem) error {
 	intro, err := a.roleInstructions(guideRole, r)
 	if err != nil {
 		return err
@@ -510,7 +502,6 @@ func (a *app) printGuidePrompt(r state.Role, q []queueItem, pinned []state.Note)
 	p := func(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format+"\n", args...) }
 	p("%s\n", intro)
 	p("## Pending state, %s\n", a.stamp(a.now))
-	a.promptPinned(p, pinned)
 	if section(p, "Decisions waiting on the person", len(q) == 0, "None open.") {
 		for _, it := range q {
 			p("- %s", a.queueText(it))
@@ -643,7 +634,7 @@ func (a *app) closedNotes(st *state.State) (map[int]state.Event, error) {
 		return out, nil
 	}
 	evs, err := a.store.Events(0, func(e state.Event) bool {
-		return e.Verb == answerRecorded || e.Verb == noteDefaulted || e.Verb == noteDone || e.Verb == noteOvertaken || e.Verb == noteReplaced
+		return e.Verb == answerRecorded || e.Verb == noteDefaulted || e.Verb == noteDone || e.Verb == noteOvertaken
 	})
 	if err != nil {
 		return nil, err
@@ -684,8 +675,8 @@ func (a *app) feedLines(st *state.State, sessions []*claude.Session, closed map[
 		}
 		for _, o := range orphans {
 			i := slices.IndexFunc(st.Notes, func(n state.Note) bool { return n.ID == o.id })
-			if i < 0 || !decides(a.cfg.Guide.Person, &st.Notes[i]) {
-				continue // a memo is its filer's record, not the guide's
+			if i < 0 {
+				continue
 			}
 			k := fmt.Sprintf("orphan#%d", o.id)
 			cur = append(cur, k)
@@ -706,8 +697,6 @@ func (a *app) feedLines(st *state.State, sessions []*claude.Session, closed map[
 				lines = append(lines, fmt.Sprintf("GUIDE ANSWERED (%s): %s", truncate(e.By.Name, 30), truncate(oneLine(e.Detail), 240)))
 			case ok && e.Verb == noteDefaulted:
 				lines = append(lines, "GUIDE DEFAULTED: "+truncate(oneLine(e.Detail), 240))
-			case ok && e.Verb == noteReplaced:
-				lines = append(lines, "GUIDE REPLACED: "+truncate(oneLine(e.Detail), 240))
 			case ok && e.Verb == noteOvertaken:
 				lines = append(lines, fmt.Sprintf("GUIDE CLOSED #%d overtaken: %s", id, truncate(oneLine(overtakenReason(e)), 200)))
 			default:

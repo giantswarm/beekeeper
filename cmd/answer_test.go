@@ -274,8 +274,8 @@ func TestNoteForAPersonNeedsItsThreadAndIsWarnedOfItsAnswer(t *testing.T) {
 	if err := addNote(a, append(noRef, "approve "+prURL+"?")...); Code(err) != ExitUsage || !strings.Contains(err.Error(), "it names no thread: --ref owner/repo#n") {
 		t.Fatalf("a decision without --ref: %v", err)
 	}
-	if err := addNote(a, "--for", supervisorRole.title, "State of the watch"); err != nil {
-		t.Fatalf("a memo --for a role without --ref: %v", err)
+	if err := addNote(a, "--for", supervisorRole.title, "State of the watch"); Code(err) != ExitUsage {
+		t.Fatalf("a memo --for a role: %v", err)
 	}
 	if err := runAnswer(a, decisionRef, "keep the draft"); err != nil {
 		t.Fatal(err)

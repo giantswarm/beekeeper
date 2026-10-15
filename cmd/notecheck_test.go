@@ -91,20 +91,20 @@ func TestNoteAddRefusesAndAcceptsForThePerson(t *testing.T) {
 	if Code(err) != ExitUsage || !strings.Contains(err.Error(), "--status-quo") || !strings.Contains(err.Error(), "#7 without its full URL") {
 		t.Fatalf("an incomplete note for the person: %v", err)
 	}
-	if err := addNote(a, "--for", "Supervisor", "approve #7"); err != nil {
+	if err := addNote(a, append(slices.Clone(samArgs), "approve #7")...); err != nil {
 		t.Fatalf("a note for another name is not checked: %v", err)
 	}
-	if err := addNote(a, "a memo on #7"); err != nil {
-		t.Fatalf("a memo is not checked: %v", err)
+	if err := addNote(a, "a memo on #7"); Code(err) != ExitUsage {
+		t.Fatalf("a note for nobody: %v", err)
 	}
 	if err := addNote(a, "--for", notePerson, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "--due", "3h", "--ref", prURL, "approve "+prURL); err != nil {
 		t.Fatalf("a complete note: %v", err)
 	}
 	st, _ := a.store.Read()
-	if len(st.Notes) != 3 || st.Notes[2].Text != "approve "+prURL+" Status quo: "+sqNow+". Why: "+whyNow+"." {
+	if len(st.Notes) != 2 || st.Notes[1].Text != "approve "+prURL+" Status quo: "+sqNow+". Why: "+whyNow+"." {
 		t.Fatalf("notes %+v", st.Notes)
 	}
-	if !strings.HasSuffix(out.String(), "note #3\n") {
+	if !strings.HasSuffix(out.String(), "note #2\n") {
 		t.Fatalf("printed %q", out.String())
 	}
 }
@@ -156,14 +156,11 @@ func TestNoteWithAnotherDefaultIsRefusedOrFoldedExplicitly(t *testing.T) {
 	if len(st.Notes) != 1 || st.Notes[0].Default != dfltOK || !strings.Contains(out.String(), "note #1 (folded: --fold-into") {
 		t.Fatalf("folded explicitly, the open note's default stands: %+v, %q", st.Notes, out.String())
 	}
-	if err := addNote(a, "--fold-into", "1", flagFor, "Supervisor", "a memo"); Code(err) != ExitRefused {
+	if err := addNote(a, append([]string{flagFoldInto, "1"}, append(slices.Clone(samArgs), "pick a lab?")...)...); Code(err) != ExitRefused {
 		t.Fatalf("a fold into another person's note: %v", err)
 	}
-	if err := addNote(a, "--fold-into", "9", "a memo"); Code(err) != ExitRefused {
+	if err := addNote(a, append([]string{flagFoldInto, "9"}, append(slices.Clone(samArgs), "pick a lab?")...)...); Code(err) != ExitRefused {
 		t.Fatalf("a fold into no open note: %v", err)
-	}
-	if err := addNote(a, "--fold-into", "1", "--replaces", "1", "a memo"); Code(err) != ExitUsage {
-		t.Fatalf("--fold-into with --replaces: %v", err)
 	}
 }
 
@@ -201,7 +198,7 @@ func TestLoginNoteClosesOnceItsProbePasses(t *testing.T) {
 	st := &state.State{Notes: []state.Note{
 		{ID: 1, Kind: noteLogin, Until: probeHolds, Text: "sign in"},
 		{ID: 2, Kind: noteLogin, Until: probeFails, Text: "sign in elsewhere"},
-		{ID: 3, Text: "no probe"},
+		{ID: 3, Kind: noteDecision, Text: "no probe"},
 	}}
 	passed := probeLogins(context.Background(), st.Notes)
 	if !slices.Equal(passed, []int{1}) {
@@ -279,9 +276,6 @@ func TestNoteOnAPlanPullNeedsItsStageCheckGreenOrAtTheGrillStage(t *testing.T) {
 	}
 	if err := about(plan+"5", plan+"3"); Code(err) != ExitUsage || !strings.Contains(err.Error(), "a PRD that passes its plan-stages check on "+plan+"5") {
 		t.Fatalf("a note about a red plan is refused: %v", err)
-	}
-	if err := addNote(a, "a memo on "+plan+"1"); err != nil {
-		t.Fatalf("a memo is not checked: %v", err)
 	}
 	if len(calls) != 14 {
 		t.Fatalf("one read per plans pull request and one per red check's annotations: %q", calls)

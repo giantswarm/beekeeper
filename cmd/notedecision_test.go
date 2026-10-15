@@ -130,7 +130,7 @@ func TestNoteAnswerRecordsTheChoiceAndTheWords(t *testing.T) {
 
 func TestAnswerEventsParse(t *testing.T) {
 	const words, comment = "portal: it rolls (with backstage)", "https://x/c"
-	n := state.Note{ID: 4, For: "team:bumblebee", Text: "Which lane? (a: b)", By: state.Party{Name: "agent-one"}}
+	n := state.Note{ID: 4, Kind: noteDecision, For: "team:bumblebee", Text: "Which lane? (a: b)", By: state.Party{Name: "agent-one"}}
 	rec := &recordedAnswer{Thread: &board.Thread{About: privateThread}, Comment: comment, By: "Kim", Via: viaSlack, Answer: words, Note: 4}
 	an, ok := parseAnswered(answerEvent(state.Party{}, rec, &n))
 	if !ok || an.About != privateThread || an.For != "Kim" || an.Via != viaSlack || an.Comment != comment || an.Answer != words || an.ID != 4 || an.Asker != "agent-one" || an.Question != "Which lane? (a: b)" {
@@ -152,9 +152,9 @@ func TestDueDecisionsCloseWithTheirDefault(t *testing.T) {
 	st := &state.State{Notes: []state.Note{
 		{ID: 1, For: notePerson, Kind: noteDecision, Due: past, Default: dfltOK, Text: "approve?"},
 		{ID: 2, For: notePerson, Kind: noteDecision, Due: later, Default: dfltOK},
-		{ID: 3, Kind: noteMemo, Due: past, Default: "look again"},
+		{ID: 3, For: samName, Kind: noteLogin, Due: past, Default: "look again", Until: probeHolds},
 		{ID: 4, For: notePerson, Kind: noteLogin, Due: past, Default: "sign in"},
-		{ID: 5, For: notePerson, Due: past, Default: "the older decision's default"},
+		{ID: 5, Kind: noteDecision, For: notePerson, Due: past, Default: "the older decision's default"},
 		{ID: 6, For: notePerson, Kind: noteDecision, Due: past, Default: "waits; nothing is closed"},
 	}}
 	lines, evs, closed := closeDefaulted(st, notePerson, watchParty, now)

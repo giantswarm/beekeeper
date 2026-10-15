@@ -81,26 +81,24 @@ names the epic; its state never gates. The first item that is free
 is picked: not served by a running session (a sessions serve record, a busy
 agent's task; one naming a pull request serves the issues it closes too) nor by an agent on the roster, its CLI running or not, while it is
 busy with its task or parked and kept (agents keep, or an open timer that
-wakes it by name), and named by no open note (it waits on the note's person),
-not assigned to anybody outside board.people, without an open recorded
+wakes it by name), not assigned to anybody outside board.people, without an open recorded
 blocker, active within board.staleAfter, and with every lease its labels
 name (lease/<resource>, lease/agentlab-1) free or the caller's: an item
 whose lease another session holds is passed over until it is released,
 the items behind it offered meanwhile. A sub-issue offered through
-an epic passes the same checks, and a serve record, task or note naming
-the epic covers it too ("…, on epic owner/repo#n"). A task or note names
+an epic passes the same checks, and a serve record or task naming
+the epic covers it too ("…, on epic owner/repo#n"). No note holds an item:
+a hold is a blocked-by (board block), a priority a board rank. A task names
 an issue or pull request by its URL, as owner/repo#n, as repo#n of
 board.owner, as a repository before a list ("beekeeper: #524, #525") or as
 a bare #n after the last repository it named ("beekeeper#173, #176"); a
 bare #n before any repository names nothing, and "note #n", "timer #n",
 "memo #n" and "decision #n" are beekeeper's own items. It prints each item
 above the pick that was skipped on a line of its own, "skipped
-<owner/repo#n>: <reason>", the same list as --json's skipped (a note's
-reason names the note and its first line: note #<id> "<first line>" (waits
-on <person>)), then the item and why it is picked, without --claim the
+<owner/repo#n>: <reason>", the same list as --json's skipped, then the item and why it is picked, without --claim the
 free items behind it in their order (the preview of the board's work), and
 the skipped items' count by kind: served (a session's record, a busy
-agent's task), note (an open note names it), assigned (outside
+agent's task), assigned (outside
 board.people), blocked, stale, lease (another session holds it), planning
 (the epic gate holds it), unknown (GitHub answered its board fields or an
 epic's sub-issues with an error) and order (a rule of board.order turns it
@@ -410,7 +408,6 @@ type nextResult struct {
 // The kinds of a skip reason, skipKind's words and skipped_by's keys.
 const (
 	kindServed   = "served"
-	kindNote     = "note"
 	kindAssigned = "assigned"
 	kindBlocked  = "blocked"
 	kindStale    = "stale"
@@ -426,8 +423,6 @@ func skipKind(reason string) string {
 	switch {
 	case strings.HasPrefix(reason, "served by "):
 		return kindServed
-	case strings.HasPrefix(reason, "note #"):
-		return kindNote
 	case strings.HasPrefix(reason, "assigned to "):
 		return kindAssigned
 	case strings.HasSuffix(reason, "blockers open"):
@@ -465,7 +460,7 @@ func skipCounts(by map[string]int) string {
 // unless the session is a registered agent reporting idle, by the record
 // of an agent kept on the roster (keptBy) or busy with its task on it,
 // whether its CLI runs or not, by a
-// busy agent whose task names it and by an open note naming it. An issue a
+// busy agent whose task names it. An issue a
 // pull request closes (sc.closes) is owned by whatever owns
 // the pull request, and a sub-issue offered through an epic by whatever owns
 // the epic.
@@ -474,7 +469,7 @@ func nextFree(st *state.State, cands []board.Candidate, sc pickScope) nextResult
 	res := nextResult{SkippedBy: map[string]int{}}
 	owned := func(ref string) string {
 		o, ok := owners[strings.ToLower(ref)]
-		if ok && !strings.HasPrefix(o, "note ") {
+		if ok {
 			o = "served by " + o
 		}
 		return o
@@ -596,7 +591,7 @@ func namedRefs(text, owner string) []string {
 }
 
 // boardOwners maps each issue (lower-cased owner/repo#n) a live session
-// serves, or an open note waits on, to who serves it or whom it waits on.
+// serves to who serves it.
 func boardOwners(st *state.State, sc pickScope) map[string]string {
 	me, alive, listed := sc.me, sc.alive, sc.listed
 	name := func(p state.Party) string {
@@ -638,16 +633,12 @@ func boardOwners(st *state.State, sc pickScope) map[string]string {
 			named(ag.Task, name(ag.Party)+" (task)")
 		}
 	}
-	// A note names what its text says and what it is linked to (--ref).
-	for _, n := range st.Notes {
-		named(strings.Join(append([]string{n.Text}, n.Refs...), " "), fmt.Sprintf("note #%d %q (waits on %s)", n.ID, truncate(firstLine(n.Text), 60), cmp.Or(n.For, "the supervisor")))
-	}
 	return out
 }
 
 // offBoard are the refs of owners that are no candidate, sorted: a board
 // item is an issue, so the pull requests among what the sessions serve
-// and the tasks and notes name are among these, and Closes is asked about
+// and the tasks name are among these, and Closes is asked about
 // these only.
 func offBoard(owners map[string]string, cands []board.Candidate) []string {
 	return slices.DeleteFunc(slices.Sorted(maps.Keys(owners)), func(ref string) bool {

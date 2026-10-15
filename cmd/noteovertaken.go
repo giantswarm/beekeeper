@@ -60,11 +60,10 @@ func parseRef(s string) (github.PR, bool) {
 func refName(r github.PR) string { return fmt.Sprintf("%s#%d", r.Repo, r.N) }
 
 // overtakable reports whether the watch may close n as overtaken: a note
-// for someone, neither pinned (a standing instruction) nor a login (its
-// probe closes it), and not the note the guide asks its person now, whose
+// for someone, not a login (its probe closes it), and not the note the guide asks its person now, whose
 // answer would otherwise find it closed.
 func overtakable(n state.Note, asking int) bool {
-	return n.For != "" && !n.Pinned && n.Kind != noteLogin && n.ID != asking
+	return n.For != "" && n.Kind != noteLogin && n.ID != asking
 }
 
 // overtakeRefs are the distinct issues and pull requests the overtakable

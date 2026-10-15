@@ -24,10 +24,10 @@ const (
 	endedKeep = time.Hour
 )
 
-// noteSplit is the open notes as a role's hand-over shows them: the pinned
-// standing instructions, the role's own, and those the guide serves.
+// noteSplit is the open notes as a role's hand-over shows them: the role's
+// own and those the guide serves.
 type noteSplit struct {
-	Pinned, Own []state.Note
+	Own []state.Note
 	// Guided counts the notes the guide serves by whom they are for.
 	Guided map[string]int
 }
@@ -41,16 +41,13 @@ func (s noteSplit) guided() int {
 	return n
 }
 
-// splitNotes splits notes for the supervisor's hand-over: the decisions
-// filed for the guide's person and the notes for the guide itself are the
-// guide's; a memo for the person stays the role's own.
+// splitNotes splits notes for the supervisor's hand-over: the notes filed
+// for the guide's person and for the guide itself are the guide's.
 func (a *app) splitNotes(notes []state.Note) noteSplit {
 	s := noteSplit{Guided: map[string]int{}}
 	for _, n := range notes {
 		switch {
-		case n.Pinned:
-			s.Pinned = append(s.Pinned, n)
-		case guides(a.cfg.Guide.Person, &n) && decides(a.cfg.Guide.Person, &n) || forGuide(&n):
+		case guides(a.cfg.Guide.Person, &n) || forGuide(&n):
 			who, _ := noteFor(&n)
 			if p := a.cfg.Guide.Person; strings.EqualFold(who, p) {
 				who = p
@@ -256,15 +253,6 @@ func (a *app) printOwnNotes(s noteSplit) {
 	if s.guided() > 0 {
 		_, _ = fmt.Fprintln(a.out, guidedText(s))
 	}
-}
-
-// printPinned lists the pinned notes, the standing instructions.
-func (a *app) printPinned(notes []state.Note) {
-	if len(notes) == 0 {
-		_, _ = fmt.Fprintln(a.out, "none pinned")
-		return
-	}
-	a.printNotes(notes)
 }
 
 // printLiveRecords lists the records a hand-over shows and the line for the

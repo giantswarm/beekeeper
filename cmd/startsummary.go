@@ -29,7 +29,7 @@ func (a *app) startSummary(st *state.State, sessions []*claude.Session, l *lease
 		}
 	}
 	section(p, "Waiting on you", false, "")
-	p("- %d pinned notes (standing instructions), %d open notes of yours, %d the guide serves", len(notes.Pinned), len(notes.Own), notes.guided())
+	p("- %d open notes of yours, %d the guide serves", len(notes.Own), notes.guided())
 	p("- %d decisions answered since the last relay (%s), %d within %s", len(ans.Recent()), a.stamp(ans.Since), len(ans.All), shortDur(answeredWindow))
 	p("- %d timers, %d of them due\n", len(st.Timers), due)
 	section(p, "Agents", false, "")

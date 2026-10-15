@@ -322,7 +322,7 @@ func TestEnvtestServeTools(t *testing.T) {
 	e.expect(t, pia, "lanes", map[string]any{}, false, "giantswarm/backstage#2")
 
 	// Notes: filed into the filer's team; answered by its addressee.
-	note := e.expect(t, ana, "note_add", map[string]any{paramText: "which lane for muster?", paramFor: boEmail, paramKind: noteMemo, paramRefs: []any{privateThread}}, false, "note #1")
+	note := e.expect(t, ana, "note_add", decisionFor("which lane for muster?", boEmail), false, "note #1")
 	if by, _ := note["by"].(map[string]any); by["team"] != ourTeam {
 		t.Errorf("note_add %v", note)
 	}

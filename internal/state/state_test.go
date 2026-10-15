@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -332,7 +333,7 @@ const newerSchema = `{
     {"session": "s1", "name": "Agent one", "registered": "2026-10-02T14:00:00Z", "keep": {"by": {"name": "s"}, "at": "2026-10-02T14:22:00Z", "ticket": "o/r#1"}, "lane": "x"},
     {"session": "s2", "name": "Agent two", "registered": "2026-10-02T14:00:00Z", "badge": "two"}
   ],
-  "notes": [{"id": 1, "text": "q", "by": {"name": "s"}, "at": "2026-10-02T14:00:00Z", "urgency": "high"}],
+  "notes": [{"id": 1, "kind": "decision", "text": "q", "by": {"name": "s"}, "at": "2026-10-02T14:00:00Z", "urgency": "high"}],
   "timers": [{"id": 1, "due": "2026-10-02T15:00:00Z", "what": "w", "by": {"name": "s"}, "at": "2026-10-02T14:00:00Z", "jitter": "1m"}],
   "records": [{"session": {"name": "a"}, "issue": "o/r#1", "by": {"name": "a"}, "at": "2026-10-02T14:00:00Z", "phase": "ci"}],
   "starts": [{"session": "s1", "name": "Agent one", "mode": "bypassPermissions", "dir": "/w", "by": {"name": "s"}, "at": "2026-10-02T14:00:00Z", "model": "m"}],
@@ -365,7 +366,7 @@ func TestOlderSaveKeepsANewerSchema(t *testing.T) {
 	err = s.Update(func(st *State) ([]Event, error) {
 		st.Agents = []Agent{st.Agents[1], st.Agents[0], {Party: Party{Session: "s3", Name: "Agent three"}}}
 		st.Agents[1].Keep.Reason = "parked"
-		st.Notes = append(st.Notes, Note{ID: 2, Text: "r"})
+		st.Notes = append(st.Notes, Note{ID: 2, Kind: NoteDecision, Text: "r"})
 		return nil, nil
 	})
 	if err != nil {
@@ -521,7 +522,7 @@ func TestPartyIdentityIsPersisted(t *testing.T) {
 	}
 	by := Party{Session: "s1", Name: worker, Person: "alex@example.com", Team: "bumblebee", Host: "lab"}
 	if err := s.Update(func(st *State) ([]Event, error) {
-		st.Notes = append(st.Notes, Note{ID: 1, Text: "q", By: by})
+		st.Notes = append(st.Notes, Note{ID: 1, Kind: NoteDecision, Text: "q", By: by})
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -543,7 +544,7 @@ func TestPartyIdentityIsPersisted(t *testing.T) {
 
 func TestStateWithoutIdentityLoads(t *testing.T) {
 	dir := t.TempDir()
-	doc := `{"notes":[{"id":1,"text":"q","by":{"session":"s1","name":"Worker"}}]}`
+	doc := `{"notes":[{"id":1,"kind":"decision","text":"q","by":{"session":"s1","name":"Worker"}}]}`
 	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(doc), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -609,5 +610,37 @@ func TestFollowReadsOnlyTheNewLines(t *testing.T) {
 	}
 	if evs, _ := s.Follow("t", keep); len(evs) != 1 || evs[0].Verb != "d" {
 		t.Errorf("Follow after the log was replaced = %+v", evs)
+	}
+}
+
+func TestMemosOfAnOlderBeekeeperReadAsClosed(t *testing.T) {
+	doc := `{"nextNote": 5, "notes": [
+		{"id": 1, "kind": "memo", "text": "state of the watch", "by": {"name": "s"}},
+		{"id": 2, "kind": "decision", "pinned": true, "for": "Pat", "text": "report every merge", "by": {"name": "s"}},
+		{"id": 3, "for": "Guide", "text": "deferred work", "by": {"name": "s"}},
+		{"id": 4, "kind": "decision", "for": "Pat", "text": "merge it?", "by": {"name": "s"}},
+		{"id": 5, "kind": "login", "for": "Pat", "text": "sign in", "until": "true", "by": {"name": "s"}}],
+		"memos": [{"id": 0, "kind": "memo", "text": "moved before", "by": {"name": "s"}}]}`
+	var st State
+	if err := json.Unmarshal([]byte(doc), &st); err != nil {
+		t.Fatal(err)
+	}
+	var open, memos []int
+	for _, n := range st.Notes {
+		open = append(open, n.ID)
+	}
+	for _, n := range st.Memos {
+		memos = append(memos, n.ID)
+	}
+	if !slices.Equal(open, []int{4, 5}) || !slices.Equal(memos, []int{0, 1, 2, 3}) || !st.Memos[2].Pinned() {
+		t.Fatalf("open %v, memos %v", open, memos)
+	}
+	raw, err := json.Marshal(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var again State
+	if err := json.Unmarshal(raw, &again); err != nil || len(again.Memos) != 4 || !again.Memos[2].Pinned() || len(again.Notes) != 2 {
+		t.Fatalf("a save keeps the memos apart, the pin with its memo: %s, %v", raw, err)
 	}
 }

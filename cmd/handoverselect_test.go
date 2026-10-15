@@ -35,15 +35,14 @@ func noteCommand(a *app, args ...string) (string, error) {
 func TestSplitNotesLeavesTheGuidesNotesToALine(t *testing.T) {
 	a := &app{cfg: &config.Config{Guide: config.Guide{Person: pat}}}
 	s := a.splitNotes([]state.Note{
-		{ID: 1, For: "pat", Text: "approve"},
-		{ID: 2, For: guideRole.title, Text: "archive the test sessions"},
-		{ID: 3, For: "Guide run 2: Pat's open decisions", Text: "relay"},
-		{ID: 4, Text: "[for Pat] an older note"},
-		{ID: 5, For: supervisorRole.title, Text: "check the lane"},
-		{ID: 6, Text: "a memo"},
-		{ID: 7, For: pat, Text: "report to Pat by name", Pinned: true},
+		{ID: 1, Kind: noteDecision, For: "pat", Text: "approve"},
+		{ID: 2, Kind: noteDecision, For: guideRole.title, Text: "archive the test sessions"},
+		{ID: 3, Kind: noteDecision, For: "Guide run 2: Pat's open decisions", Text: "relay"},
+		{ID: 4, Kind: noteDecision, Text: "[for Pat] an older note"},
+		{ID: 5, Kind: noteDecision, For: supervisorRole.title, Text: "check the lane"},
+		{ID: 6, Kind: noteDecision, For: samName, Text: "pick a lab?"},
 	})
-	if len(s.Own) != 2 || s.Own[0].ID != 5 || s.Own[1].ID != 6 || len(s.Pinned) != 1 || s.Pinned[0].ID != 7 || s.guided() != 4 {
+	if len(s.Own) != 2 || s.Own[0].ID != 5 || s.Own[1].ID != 6 || s.guided() != 4 {
 		t.Fatalf("split %+v", s)
 	}
 	if got, want := guidedText(s), "4 notes the guide serves (1 for Guide, 1 for Guide run 2: Pat's open decisions, 2 for Pat)"; !strings.HasPrefix(got, want) {
@@ -112,7 +111,7 @@ func TestAnswersSinceTheLastRelayAndWithin72h(t *testing.T) {
 
 func TestNoteAnsweredDetailParsesBack(t *testing.T) {
 	a, _ := noteApp(t)
-	if err := addNote(a, "--ref", "o/r#15", "a memo on the lane"); err != nil {
+	if err := addNote(a, flagFor, samName, flagStatusQuo, sqNow, flagDefault, dfltOK, flagDue, "3h", "--ref", "o/r#15", "pick the lane?"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := noteCommand(a, "answer", "1", "keep it", "(for now)"); err != nil {
@@ -122,46 +121,34 @@ func TestNoteAnsweredDetailParsesBack(t *testing.T) {
 	if err != nil || len(all) != 1 {
 		t.Fatalf("%+v, %v", all, err)
 	}
-	if an := all[0]; an.ID != 1 || an.About != "o/r#15" || an.For != agentOne || an.Answer != "keep it (for now)" || an.Asker != agentOne || an.Question != "a memo on the lane" {
+	if an := all[0]; an.ID != 1 || an.About != "o/r#15" || an.For != samName || an.Answer != "keep it (for now)" || an.Asker != agentOne || !strings.HasPrefix(an.Question, "pick the lane?") {
 		t.Errorf("parsed %+v", an)
 	}
 }
 
-func TestPinnedNoteStaysInEveryHandoverUntilUnpinned(t *testing.T) {
+func TestPinnedNoteOfAnOlderBeekeeperReachesNoHandover(t *testing.T) {
 	a, out := noteApp(t)
-	if err := addNote(a, "--pin", "report every merge with its release"); err != nil {
+	doc := `{"nextNote": 2, "notes": [
+		{"id": 1, "text": "report every merge with its release", "kind": "memo", "pinned": true, "by": {"name": "Agent one"}, "at": "2026-10-01T00:00:00Z"},
+		{"id": 2, "for": "Guide", "text": "archive the test sessions", "by": {"name": "Agent one"}, "at": "2026-10-01T00:00:00Z"}]}`
+	writeState(t, a, doc)
+	st, err := a.store.Read()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := addNote(a, "--for", guideRole.title, "archive the test sessions"); err != nil {
-		t.Fatal(err)
+	if len(st.Notes) != 0 || len(st.Memos) != 2 {
+		t.Fatalf("the memos are closed for every reader: notes %+v, memos %+v", st.Notes, st.Memos)
 	}
-	st, _ := a.store.Read()
 	a.cfg.Supervisor.Skill, a.cfg.Guide.Skill, a.cfg.StateDir = "supervise", "guide", t.TempDir()
 	out.Reset()
 	if err := a.printPrompt(context.Background(), &view{st: st}, &leaseList{}, &alertsView{}, answers{}); err != nil {
 		t.Fatal(err)
 	}
-	got := out.String()
-	if !strings.Contains(got, "### Standing instructions (pinned notes)\n\n- #1: report every merge") || strings.Contains(got, "archive the test sessions") ||
-		!strings.Contains(got, "- 1 notes the guide serves (1 for Guide)") {
-		t.Errorf("supervisor prompt:\n%s", got)
-	}
-	out.Reset()
-	if err := a.printGuidePrompt(state.Role{}, nil, a.splitNotes(st.Notes).Pinned); err != nil {
+	if err := a.printGuidePrompt(state.Role{}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "- #1: report every merge") {
-		t.Errorf("guide prompt:\n%s", out.String())
-	}
-	if _, err := noteCommand(a, "unpin", "#1"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := noteCommand(a, "pin", "9"); Code(err) != ExitRefused {
-		t.Errorf("pinning a closed note: %v", err)
-	}
-	st, _ = a.store.Read()
-	if s := a.splitNotes(st.Notes); len(s.Pinned) != 0 || len(s.Own) != 1 {
-		t.Errorf("after unpin: %+v", s)
+	if got := out.String(); strings.Contains(got, "report every merge") || strings.Contains(got, "archive the test sessions") || strings.Contains(got, "Standing instructions") {
+		t.Errorf("prompts:\n%s", got)
 	}
 }
 
@@ -195,7 +182,7 @@ func TestStartSummaryFitsInFiveKB(t *testing.T) {
 	a, out := noteApp(t)
 	st := &state.State{Supervisor: &state.Supervisor{Party: state.Party{Session: "s0", Name: supRun3}, Since: relayNow}}
 	for i := range 300 {
-		st.Notes = append(st.Notes, state.Note{ID: i, For: pat, Text: strings.Repeat("a long question ", 30)})
+		st.Notes = append(st.Notes, state.Note{ID: i, Kind: noteDecision, For: pat, Text: strings.Repeat("a long question ", 30)})
 	}
 	for i := range 30 {
 		st.Agents = append(st.Agents, state.Agent{Party: state.Party{Session: fmt.Sprint("s", i), Name: fmt.Sprintf("Board pull %d with a long title", i)}, Task: strings.Repeat("giantswarm/beekeeper#237 ", 10)})
