@@ -1211,7 +1211,7 @@ const lockWait = 2 * time.Minute
 
 // LockBusyError is a wait for the state lock that ended before its holder
 // released it: who holds it, since when, as the holder recorded it; PID 0
-// is a holder without a record (a reader).
+// is a holder without a record (a reader, or an older beekeeper).
 type LockBusyError struct {
 	PID     int
 	Command string
@@ -1221,7 +1221,7 @@ type LockBusyError struct {
 
 func (e *LockBusyError) Error() string {
 	if e.PID == 0 {
-		return fmt.Sprintf("the state lock is busy: still held by a reader after %s", e.Waited.Round(time.Millisecond))
+		return fmt.Sprintf("the state lock is busy: still held after %s by a process without a holder record (a reader, or a beekeeper before the record)", e.Waited.Round(time.Millisecond))
 	}
 	return fmt.Sprintf("the state lock is busy: held by pid %d (%s) for %s, waited %s; a stopped or frozen holder releases it when it resumes or ends",
 		e.PID, e.Command, time.Since(e.Since).Round(time.Second), e.Waited.Round(time.Millisecond))
