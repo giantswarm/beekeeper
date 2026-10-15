@@ -310,3 +310,57 @@ func TestWatchNamesInstallationsWithoutContextOnce(t *testing.T) {
 		t.Errorf("snapshot upgrades:\n%s\nwant\n%s", words, want)
 	}
 }
+
+// A process whose kubeconfig lacks an installation's context shares a
+// reading without a kube context; a process whose kubeconfig has the context
+// reads the installation within the same upgrades.every, and one still
+// without it does not call kubectl for it.
+func TestSharedReadingWithoutContextIsReadWhereTheContextResolves(t *testing.T) {
+	a, _ := stubApp(t)
+	dir := t.TempDir()
+	kubectl, log := upgradeKubectl(t, dir, "upgrading")
+	contexts := func(names string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, "contexts"), []byte(names), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a.cfg.Alerts.Kubectl = kubectl
+	a.cfg.Alerts.Installations = []config.Installation{
+		{Name: "home", Context: "home"}, {Name: "away", Context: "teleport.giantswarm.io-away"},
+	}
+	now := time.Date(2026, 9, 25, 8, 30, 0, 0, time.UTC)
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	words := func(at time.Time) string {
+		t.Helper()
+		return strings.Join(upgradeWords(a.readUpgrades(context.Background(), st, at), time.Time{}), " · ")
+	}
+
+	// The machine kubeconfig alone: away has no context.
+	contexts("home\n")
+	if got, want := words(now), "home none · 1 installation without a kube context, not read: away"; got != want {
+		t.Fatalf("without away's context:\n%s\nwant\n%s", got, want)
+	}
+	if got := takeCalls(t, log); got["home"] != 1 || len(got) != 1 {
+		t.Fatalf("kubectl calls without away's context: %v", got)
+	}
+	// Still without it a minute later: home's reading is used, away is not read.
+	if got := words(now.Add(time.Minute)); !strings.Contains(got, "without a kube context, not read: away") {
+		t.Fatalf("still without away's context: %s", got)
+	}
+	if got := takeCalls(t, log); len(got) != 0 {
+		t.Fatalf("kubectl calls still without away's context: %v", got)
+	}
+	// The kubeconfig list with away's context: away is read at once, home's
+	// fresh reading is used.
+	contexts("home\nteleport.giantswarm.io-away\n")
+	if got, want := words(now.Add(2*time.Minute)), "home none · away none"; got != want {
+		t.Fatalf("with away's context:\n%s\nwant\n%s", got, want)
+	}
+	if got := takeCalls(t, log); got["teleport.giantswarm.io-away"] != 1 || len(got) != 1 {
+		t.Fatalf("kubectl calls with away's context: %v", got)
+	}
+}
