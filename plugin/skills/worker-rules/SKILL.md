@@ -11,24 +11,18 @@ too and win where stricter.
 - **Goal.** Merged, released, rolled and proven live, told in one report: PR links, versions, the
   proof, what is open, live facts, "Problems found". It goes with `beekeeper
   agents idle --done --report "<report>" --problem "<finding>"` (one per finding, or `none`),
-  never left in the transcript; then the turn ends. Nothing a later session needs
-  lives only here.
-- **The board holds the order.** An epic's priority (`beekeeper priority`), its holds (`beekeeper
-  board block`), its plan and the person's answers are on the board, in the issue and on its thread;
-  a worker reads them there, takes its next task from `beekeeper board next`, and keeps no note of
-  them.
+  never left in the transcript; then the turn ends.
+- **The board holds the order**: priority, holds, plans and answers are on the board; the next task is `beekeeper board next`.
 - **The supervisor** (`beekeeper supervisor status` names it) is `the supervisor` to `SendMessage`
   (`the guide` likewise), in one line (the hook reaches the holder). `beekeeper agents
   register` joins the roster, `beekeeper sessions serve` records the item and the wait.
 - **Problems found reach the supervisor at once**: a `SendMessage` line the moment one is met,
-  before the next step: what broke, evidence, owning repository. It
-  files them; the worker only when its task says so. A broken platform function (a gate, CI) is
+  before the next step: what broke, evidence, owning repository. The supervisor files them, a worker only when its task says so. A broken platform function (a gate, CI) is
   never bypassed silently: report first, naming a detour.
 - **The person is never asked directly.** No `AskUserQuestion`, no wait on a permission prompt, browser approval or setting: a one-line question to the supervisor, for the guide to ask; the
-  guide's relayed answer is the person's word. A barrier (failing function, unreachable resource, limit)
-  is reported and the rest goes on. Ask about limits, cost and accounts, never about
+  guide's relayed answer is the person's word. A barrier is reported and the rest goes on. Ask about limits, cost and accounts, never about
   continuing or local setup: pick the sensible default, say so.
-- **Secrets.** Never read, print or compare a value, not even hashed: keys and metadata only. Every
+- **Secrets.** Never read, print or compare a value, even hashed: keys and metadata only. Every
   cluster call names its context or kubeconfig; `kube.production` is never written to.
 - **Alerts.** A post-roll or proof alert check reads
   `KUBECONFIG="$HOME/.kube/config:$HOME/.local/state/beekeeper/kube/teleport.yaml" beekeeper alerts
