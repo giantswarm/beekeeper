@@ -115,53 +115,49 @@ func (a *app) listMemos() error {
 
 // closeMemos closes the memos and pinned notes with ids, every one without.
 // It closes a pin only once standing.md carries its whole text: a pin it
-// cannot move there keeps every note open and is named in the refusal.
+// cannot move there keeps every note open and is named in the refusal. Each
+// note closes in an update of its own, since the Kubernetes store writes one
+// object per update; beekeeper files no new memo or pin, so none appears
+// between the read and the closes.
 func (a *app) closeMemos(ids []int) error {
 	me, err := a.caller()
 	if err != nil {
 		return err
 	}
-	var missing, lost []int
-	var moveErr error
-	var evs []state.Event
-	moved := 0
-	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-		missing = slices.DeleteFunc(slices.Clone(ids), func(id int) bool {
-			return slices.ContainsFunc(st.Memos, func(n state.Note) bool { return n.ID == id })
-		})
-		if len(missing) > 0 {
-			return nil, nil
-		}
-		closing := func(n state.Note) bool { return len(ids) == 0 || slices.Contains(ids, n.ID) }
-		var pins []state.Note
-		for _, n := range st.Memos {
-			if closing(n) && n.Pinned() {
-				pins = append(pins, n)
-			}
-		}
-		if lost, moveErr = a.movePins(pins); moveErr != nil {
-			return nil, nil
-		}
-		moved = len(pins)
-		st.Memos = slices.DeleteFunc(st.Memos, func(n state.Note) bool {
-			if !closing(n) {
-				return false
-			}
-			evs = append(evs, event(me, noteMigrated, "#%d %s", n.ID, n.Text))
-			return true
-		})
-		return evs, nil
-	})
+	st, err := a.store.Read()
 	if err != nil {
 		return err
 	}
-	if len(missing) > 0 {
+	if missing := slices.DeleteFunc(slices.Clone(ids), func(id int) bool {
+		return slices.ContainsFunc(st.Memos, func(n state.Note) bool { return n.ID == id })
+	}); len(missing) > 0 {
 		return refused("no memo or pinned note #%s: note migrate --dry-run lists them", joinIDs(missing))
 	}
-	if moveErr != nil {
-		return refused("closed nothing: pinned note #%s not moved into %s: %v", joinIDs(lost), a.standingPath(), moveErr)
+	closing := slices.DeleteFunc(slices.Clone(st.Memos), func(n state.Note) bool { return len(ids) > 0 && !slices.Contains(ids, n.ID) })
+	var pins []state.Note
+	for _, n := range closing {
+		if n.Pinned() {
+			pins = append(pins, n)
+		}
 	}
-	_, err = fmt.Fprintf(a.out, "closed %d memos and pinned notes; %d pins moved into %s, which both hand-overs print\n", len(evs), moved, a.standingPath())
+	if lost, err := a.movePins(pins); err != nil {
+		return refused("closed nothing: pinned note #%s not moved into %s: %v", joinIDs(lost), a.standingPath(), err)
+	}
+	closed := 0
+	for _, n := range closing {
+		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+			before := len(st.Memos)
+			st.Memos = slices.DeleteFunc(st.Memos, func(m state.Note) bool { return m.ID == n.ID })
+			if len(st.Memos) == before {
+				return nil, nil
+			}
+			return []state.Event{event(me, noteMigrated, "#%d %s", n.ID, n.Text)}, nil
+		}); err != nil {
+			return fmt.Errorf("closed %d of %d memos and pinned notes, every pin moved into %s: #%d: %w", closed, len(closing), a.standingPath(), n.ID, err)
+		}
+		closed++
+	}
+	_, err = fmt.Fprintf(a.out, "closed %d memos and pinned notes; %d pins moved into %s, which both hand-overs print\n", closed, len(pins), a.standingPath())
 	return err
 }
 

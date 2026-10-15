@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -447,6 +448,20 @@ func (n *Note) Memo() bool {
 // Pinned reports whether n was pinned, a standing instruction of an older
 // beekeeper.
 func (n *Note) Pinned() bool { return string(n.rest["pinned"]) == "true" }
+
+// SetPinned records whether an older beekeeper pinned n, for a store that
+// keeps the flag outside the state document; beekeeper files no new pin.
+func (n *Note) SetPinned(pinned bool) {
+	n.rest = maps.Clone(n.rest)
+	if !pinned {
+		delete(n.rest, "pinned")
+		return
+	}
+	if n.rest == nil {
+		n.rest = rest{}
+	}
+	n.rest["pinned"] = json.RawMessage("true")
+}
 
 // Option is a decision's option i (1-based) split into its label and its
 // consequence; ok is false for none.

@@ -314,6 +314,11 @@ type NoteSpec struct {
 	// Until is the shell command a login note closes on.
 	// +optional
 	Until string `json:"until,omitempty"`
+	// Pinned is kept from an older beekeeper, which pinned standing
+	// instructions; beekeeper files no new pin and `note migrate` moves each
+	// into standing.md.
+	// +optional
+	Pinned bool `json:"pinned,omitempty"`
 	// Refs are the issues and pull requests the note asks about.
 	// +optional
 	Refs []string `json:"refs,omitempty"`

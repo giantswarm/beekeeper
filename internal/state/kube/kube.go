@@ -641,6 +641,7 @@ func (snap *snapshot) state() *state.State {
 			Default: n.Spec.Default, By: party(n.Status.By), At: n.Status.At.Time, Fired: timeOf(n.Status.Fired),
 			Kind: n.Spec.Kind, Until: n.Spec.Until, Refs: n.Spec.Refs,
 			Question: n.Spec.Question, StatusQuo: n.Spec.StatusQuo, Options: n.Spec.Options, Recommend: n.Spec.Recommend, Posted: n.Status.Posted}
+		note.SetPinned(n.Spec.Pinned)
 		if note.Memo() {
 			st.Memos = append(st.Memos, note)
 		} else {
@@ -767,7 +768,7 @@ func (snap *snapshot) apply(st *state.State) (*snapshot, error) {
 			note = cur.DeepCopy()
 		}
 		note.Spec.ID, note.Spec.For, note.Spec.Text, note.Spec.Due = n.ID, n.For, n.Text, apiTime(n.Due)
-		note.Spec.Default, note.Spec.Kind, note.Spec.Until, note.Spec.Refs = n.Default, n.Kind, n.Until, n.Refs
+		note.Spec.Default, note.Spec.Kind, note.Spec.Until, note.Spec.Pinned, note.Spec.Refs = n.Default, n.Kind, n.Until, n.Pinned(), n.Refs
 		note.Spec.Question, note.Spec.StatusQuo, note.Spec.Options, note.Spec.Recommend = n.Question, n.StatusQuo, n.Options, n.Recommend
 		note.Status.By, note.Status.At, note.Status.Fired, note.Status.Posted = apiParty(n.By), metav1.Time{Time: n.At}, apiTime(n.Fired), n.Posted
 		if note.Status.State == "" {

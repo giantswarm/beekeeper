@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -181,9 +182,17 @@ func carried(prompt string) int {
 
 func TestPinnedNotesReachBothHandoversBeforeAndAfterTheMigration(t *testing.T) {
 	a, out := noteApp(t)
-	a.cfg.Supervisor.Skill, a.cfg.Guide.Skill, a.cfg.StateDir = "supervise", "guide", t.TempDir()
-	writeState(t, a, pinnedNotes)
+	pinsSurviveTheMigration(t, a, out, func() { writeState(t, a, pinnedNotes) })
+}
 
+// pinsSurviveTheMigration checks, on whichever store a has, that the pins
+// seed writes (pinnedNotes) reach both hand-overs before and after `note
+// migrate --apply`, which moves each into standing.md once and closes every
+// memo and pin.
+func pinsSurviveTheMigration(t *testing.T, a *app, out *bytes.Buffer, seed func()) {
+	t.Helper()
+	a.cfg.Supervisor.Skill, a.cfg.Guide.Skill, a.cfg.StateDir = "supervise", "guide", t.TempDir()
+	seed()
 	sup, guide := handoverPrompts(t, a, out)
 	if carried(sup) != len(pinTexts) || carried(guide) != len(pinTexts) {
 		t.Fatalf("unmigrated: supervisor %d/%d, guide %d/%d pins:\n%s\n---\n%s", carried(sup), len(pinTexts), carried(guide), len(pinTexts), sup, guide)
@@ -212,7 +221,7 @@ func TestPinnedNotesReachBothHandoversBeforeAndAfterTheMigration(t *testing.T) {
 			t.Errorf("%s lacks %q verbatim:\n%s", standingFile, p, raw)
 		}
 	}
-	if !strings.Contains(string(raw), "#### #2 (by \"Guide\", pinned 2026-10-02)\n\nthe lab runs") {
+	if !regexp.MustCompile(`#### #2 \(by "Guide"( \(team \w+\))?, pinned 2026-10-02\)\n\nthe lab runs`).Match(raw) {
 		t.Errorf("a pin's block names it:\n%s", raw)
 	}
 
@@ -225,7 +234,7 @@ func TestPinnedNotesReachBothHandoversBeforeAndAfterTheMigration(t *testing.T) {
 	}
 
 	// A second migration finds nothing and the file keeps one block a pin.
-	writeState(t, a, pinnedNotes)
+	seed()
 	if _, err := noteCommand(a, "migrate", "--apply"); err != nil {
 		t.Fatal(err)
 	}
@@ -236,8 +245,16 @@ func TestPinnedNotesReachBothHandoversBeforeAndAfterTheMigration(t *testing.T) {
 
 func TestNoteMigrateClosesNoPinItCannotMove(t *testing.T) {
 	a, out := noteApp(t)
+	migrateClosesNoUnmovedPin(t, a, out, func() { writeState(t, a, pinnedNotes) })
+}
+
+// migrateClosesNoUnmovedPin checks, on whichever store a has, that `note
+// migrate --apply` closes nothing while standing.md cannot take the pins
+// seed writes (pinnedNotes), and still closes a memo without a pin.
+func migrateClosesNoUnmovedPin(t *testing.T, a *app, out *bytes.Buffer, seed func()) {
+	t.Helper()
 	a.cfg.StateDir = t.TempDir()
-	writeState(t, a, pinnedNotes)
+	seed()
 	if err := os.Mkdir(a.standingPath(), 0o700); err != nil { // standing.md cannot be written
 		t.Fatal(err)
 	}

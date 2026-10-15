@@ -82,6 +82,12 @@ spec:
                   type: string
                 maxItems: 10
                 type: array
+              pinned:
+                description: |-
+                  Pinned is kept from an older beekeeper, which pinned standing
+                  instructions; beekeeper files no new pin and `note migrate` moves each
+                  into standing.md.
+                type: boolean
               question:
                 description: Question is a decision's question, one line.
                 maxLength: 150
