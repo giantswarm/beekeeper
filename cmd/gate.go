@@ -120,7 +120,9 @@ names no push to it; its tags are cut by hand) runs devctl with
 no release is awaited; GitHub not answering for the base refuses (77). A
 SIGTERM aimed at the gate, its caller still there two seconds later,
 stops devctl too, and so does a TaskStop of the background task the gate
-runs (the PreToolUse hook ends its devctl first). A merge call GitHub
+runs, its output piped on or not (the PreToolUse hook ends its devctl
+first and tells the stopping session whether the merge was cancelled or
+landed before the stop). A merge call GitHub
 answers with a 5xx is sent again while the pull request is open, up to
 three times (10s, 30s, 1m apart); the caller reads the last document. A
 red run whose every red check is let through runs again with devctl's
