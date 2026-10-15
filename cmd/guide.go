@@ -435,7 +435,9 @@ func (a *app) guideHandoverCmd() *cobra.Command {
 		Long: `Print the guide's hand-over: the guide and its context in tokens, an open
 relay and the queue. --prompt prints the successor's session prompt instead:
 the configured instructions (guide.skill or guide.instructions), the queue, an open relay and the commands that read
-the live values; no standing rule and no live value. A caller that has read
+the live values; no live value. Both carry the desk's standing
+instructions in full: standing.md in the state directory and the pinned
+notes note migrate has not moved there yet. A caller that has read
 the hand-over before gets only what changed; --full prints everything.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
@@ -449,8 +451,12 @@ the hand-over before gets only what changed; --full prints everything.`,
 			}
 			q, _ := a.guideQueue(st, sessions)
 			r := guideRole.get(st)
+			s, err := a.readStanding(st)
+			if err != nil {
+				return err
+			}
 			if prompt {
-				return a.printGuidePrompt(r, q)
+				return a.printGuidePrompt(r, q, s)
 			}
 			sv := readHolder(r, sessions, a.now, a.cfg.Guide.RestartGrace.Duration)
 			head := "No guide is recorded."
@@ -462,11 +468,14 @@ the hand-over before gets only what changed; --full prints everything.`,
 			}
 			relay := a.relayLine(guideRole, r)
 			facts := append(textFacts("guide", head+"\n"+relay), a.queueFacts(q)...)
+			facts = append(facts, textFacts("standing", a.capture(func() { a.printStanding(s) }))...)
 			return a.delta("guide-handover", full, facts, func() {
 				_, _ = fmt.Fprintf(a.out, "# Guide hand-over, %s\n\n%s\n", a.now.Format("2006-01-02 15:04 MST"), head)
 				if relay != "" {
 					_, _ = fmt.Fprintln(a.out, relay)
 				}
+				_, _ = fmt.Fprintln(a.out, "\n## Standing instructions")
+				a.printStanding(s)
 				_, _ = fmt.Fprintln(a.out, "\n## Queue")
 				a.printQueue(q)
 			})
@@ -494,7 +503,7 @@ var guideLiveCommands = [][2]string{
 	{"beekeeper log --verb note.", "the notes filed, answered and closed"},
 }
 
-func (a *app) printGuidePrompt(r state.Role, q []queueItem) error {
+func (a *app) printGuidePrompt(r state.Role, q []queueItem, s standing) error {
 	intro, err := a.roleInstructions(guideRole, r)
 	if err != nil {
 		return err
@@ -502,6 +511,7 @@ func (a *app) printGuidePrompt(r state.Role, q []queueItem) error {
 	p := func(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format+"\n", args...) }
 	p("%s\n", intro)
 	p("## Pending state, %s\n", a.stamp(a.now))
+	a.promptStanding(p, s)
 	if section(p, "Decisions waiting on the person", len(q) == 0, "None open.") {
 		for _, it := range q {
 			p("- %s", a.queueText(it))

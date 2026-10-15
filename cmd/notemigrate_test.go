@@ -29,7 +29,7 @@ const olderNotes = `{"nextNote": 5, "notes": [
 
 func TestNoteMigrateListsAndClosesTheMemosAndPins(t *testing.T) {
 	a, out := noteApp(t)
-	a.cfg.Board.Owner = defaultOrg
+	a.cfg.Board.Owner, a.cfg.StateDir = defaultOrg, t.TempDir()
 	writeState(t, a, olderNotes)
 	if _, err := noteCommand(a, "migrate"); Code(err) != ExitUsage {
 		t.Fatalf("migrate without --dry-run or --apply: %v", err)
