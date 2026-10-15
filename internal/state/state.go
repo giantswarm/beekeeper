@@ -1040,6 +1040,10 @@ type Merge struct {
 	// Roll names the HelmReleases (namespace/name) that must reach Release
 	// before the lane frees.
 	Roll []string `json:"roll,omitempty"`
+	// Reset is the GitHub budget reset a merge queued under the floor waits
+	// for: for merge.resetFirst from then it goes before the waits, and the
+	// older such merges before it. Its start clears it.
+	Reset time.Time `json:"reset,omitzero"`
 
 	rest rest
 }
