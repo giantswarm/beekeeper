@@ -233,7 +233,7 @@ doctor:                     # known faults the doctor (beekeeper doctor, every w
       probe: systemctl --user is-active --quiet registry-login.service   # exits 0 while the fault is absent
       remedy: systemctl --user restart registry-login.service
       unattended: true      # the watch runs the remedy by itself; false: one note for guide.person
-  goCacheMaxGiB: 20         # the default; trims the shared Go build cache over this, LRU first, to 3/4; negative: off
+  goCacheMaxGiB: 20         # the default; trims the shared Go build cache over this, LRU first, to 3/4 (while builds run only past 5/4); negative: off
   goCacheEvery: 1h          # the default; how often a watch reads the cache's size
   dockerImagesMaxGiB: 40    # the default; removes unused Docker images over this, oldest first, to 3/4; never a kind lab's; negative: off
   dockerBuildCacheMaxGiB: 20  # the default; prunes Docker's build cache over this to 3/4; negative: off

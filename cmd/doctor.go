@@ -512,9 +512,11 @@ line:
   guide.person, closed once its probe passes;
 - trims the Go build cache that every session's builds share once it is over
   doctor.goCacheMaxGiB (20), least recently used entries first, down to
-  three quarters of the cap, never while a go build runs (the watch does
-  it every doctor.goCacheEvery, 1h, and says GO CACHE when a trim waited
-  that long or failed); each trim is logged (gocache.trim);
+  three quarters of the cap, while no go build runs or once it is past the
+  cap by a quarter (the watch does it every doctor.goCacheEvery, 1h, and
+  says GO CACHE with the size, the cap and the wait when the cache stayed
+  over the cap that long, or a trim failed); each trim is logged
+  (gocache.trim);
 - prunes Docker once its images are over doctor.dockerImagesMaxGiB (40),
   the unused images created longest ago first, or its build cache is over
   doctor.dockerBuildCacheMaxGiB (20), each down to three quarters of its
