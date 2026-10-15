@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gofrs/flock"
+
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -128,5 +130,27 @@ func TestSessionStartRecordsTheAgentsGH(t *testing.T) {
 	}
 	if gh := start(""); gh != filepath.Join(plain, "gh") {
 		t.Errorf("without agents.shell.path: recorded %q", gh)
+	}
+
+	// A stuck holder of the state lock delays the session's start by
+	// sessionStartWait at most, which writes the prelude and records nothing.
+	l := flock.New(filepath.Join(dir, "state.lock"))
+	if err := l.Lock(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, "env")); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	t0 := time.Now()
+	runHook(t, &app{cfgPath: cfgPath, out: &out}, &out, "sessionstart", `{"hook_event_name":"SessionStart","session_id":"s1","cwd":"`+dir+`"}`)
+	if took := time.Since(t0); took > sessionStartWait+time.Second {
+		t.Errorf("the session start under a stuck holder took %s", took)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "env")); err != nil {
+		t.Errorf("the session start under a stuck holder wrote no prelude: %v", err)
+	}
+	if err := l.Unlock(); err != nil {
+		t.Fatal(err)
 	}
 }

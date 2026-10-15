@@ -598,7 +598,7 @@ func (a *app) importVisible(ctx context.Context, d desk, id, name, follow string
 // stopped while a turn runs, so the session runs one CLI. It fills sa's
 // kept, title, model, chrome and twin.
 func (a *app) importBeside(ctx context.Context, d desk, id, name, follow string, sa *startedAgent) error {
-	err := whileFrozen(ctx, sessionUnits(ctx, id, false), func() error {
+	err := whileFrozen(ctx, a.store, sessionUnits(ctx, id, false), func() error {
 		if err := titleTranscript(a.cfg.Claude.ProjectsDir, id, name); err != nil {
 			return fmt.Errorf("%w, not imported into the desktop", err)
 		}
@@ -624,8 +624,10 @@ func (a *app) importBeside(ctx context.Context, d desk, id, name, follow string,
 // session's title and model, and drops that read when the transcript
 // changed in between: a turn that appends a line meanwhile leaves the import
 // untitled, without a model. A unit no longer active (its turn ended, or is
-// ending) has no writer and is not frozen.
-func whileFrozen(ctx context.Context, units []string, fn func() error) error {
+// ending) has no writer and is not frozen. The units freeze while no process
+// holds store's lock, so none of theirs is frozen holding it (its session
+// start's hook for one) and starves every other command for the import.
+func whileFrozen(ctx context.Context, store state.Store, units []string, fn func() error) error {
 	var frozen []string
 	thaw := func(err error) error {
 		for _, u := range frozen {
@@ -635,14 +637,20 @@ func whileFrozen(ctx context.Context, units []string, fn func() error) error {
 		}
 		return err
 	}
-	for _, u := range units {
-		if err := plat.Launcher.Freeze(ctx, u); err != nil {
-			if plat.Launcher.State(ctx, u) != "active" {
-				continue
+	freeze := func() error {
+		for _, u := range units {
+			if err := plat.Launcher.Freeze(ctx, u); err != nil {
+				if plat.Launcher.State(ctx, u) != "active" {
+					continue
+				}
+				return fmt.Errorf("freezing %s for the import: %w", u, err)
 			}
-			return thaw(fmt.Errorf("freezing %s for the import: %w", u, err))
+			frozen = append(frozen, u)
 		}
-		frozen = append(frozen, u)
+		return nil
+	}
+	if err := store.Exclusive(freeze); err != nil {
+		return thaw(err)
 	}
 	return thaw(fn())
 }

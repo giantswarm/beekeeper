@@ -2596,6 +2596,11 @@ writes back with the fields it does not know at every level, `events.jsonl`, who
 `beekeeper log` prints local times, each caller's last
 snapshot, the alert baseline `alerts.json` with its owner's `alerts.lock`, the notification ledger
 `notify.json` with `notify.lock`) and leases in `leases/`, one directory per held resource.
+`state.json` is written under `state.lock`, whose writer records itself in `state.lock.holder`
+while it holds it; a command waits for the lock at most two minutes (a build run's log line one
+second, the SessionStart hook two) and then fails naming the holder's PID, command and how long it
+has held the lock. The desktop import freezes a session's headless turns only while no process
+holds the lock, so a frozen turn never holds it.
 
 ## Development
 

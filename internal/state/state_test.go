@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,6 +16,56 @@ import (
 )
 
 const verbRunStart = "run.start"
+
+// A holder that stops with the lock (a frozen process) fails every wait
+// behind it after the bound, naming its PID and age; a holder without a
+// record (a reader) is said as such, and the record leaves with the lock.
+func TestAStuckHolderFailsTheWaitersWithItsPIDAndAge(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := s.lock(false, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1100 * time.Millisecond)
+	const wait = 50 * time.Millisecond
+	t0 := time.Now()
+	err = s.UpdateWithin(wait, func(*State) ([]Event, error) { t.Error("an update ran under a stuck holder"); return nil, nil })
+	var busy *LockBusyError
+	if !errors.As(err, &busy) || busy.PID != os.Getpid() || busy.Command == "" || time.Since(busy.Since) < time.Second || busy.Waited != wait {
+		t.Fatalf("the update under a stuck holder = %#v", err)
+	}
+	if took := time.Since(t0); took > 20*wait {
+		t.Errorf("the update waited %s, bound %s", took, wait)
+	}
+	if msg := err.Error(); !strings.Contains(msg, "pid "+strconv.Itoa(os.Getpid())) || !regexp.MustCompile(`for [1-9][0-9]*s, waited`).MatchString(msg) {
+		t.Errorf("the error names neither PID nor age: %s", msg)
+	}
+	if err := s.Log(Event{Verb: verbRunStart}); !errors.As(err, &busy) || busy.PID != os.Getpid() {
+		t.Errorf("Log under a stuck holder = %v", err)
+	}
+	unlock()
+	if _, err := os.Stat(s.path(holderFile)); !os.IsNotExist(err) {
+		t.Errorf("the holder's record outlived the lock: %v", err)
+	}
+	if err := s.Update(func(*State) ([]Event, error) { return nil, nil }); err != nil {
+		t.Errorf("the update after the release: %v", err)
+	}
+
+	unlock, err = s.lock(true, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	if err := s.UpdateWithin(wait, func(*State) ([]Event, error) { return nil, nil }); !errors.As(err, &busy) || busy.PID != 0 || !strings.Contains(err.Error(), "reader") {
+		t.Errorf("the update under a stuck reader = %v", err)
+	}
+	if _, err := s.Read(); err != nil {
+		t.Errorf("a read beside a reader: %v", err)
+	}
+}
 
 func TestPartyIs(t *testing.T) {
 	const agentOne = "Agent one"
@@ -98,7 +149,7 @@ func TestLogAppendsWithoutTouchingTheState(t *testing.T) {
 		t.Errorf("Events = %+v, %v", runs, err)
 	}
 	// A held lock drops the event after the bounded wait instead of blocking;
-	// Record waits for the lock, however slow the holder, and loses nothing.
+	// Record waits for the lock, up to lockWait, and loses nothing.
 	l := flock.New(s.path("state.lock"))
 	if err := l.Lock(); err != nil {
 		t.Fatal(err)

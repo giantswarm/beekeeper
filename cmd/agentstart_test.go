@@ -248,6 +248,10 @@ func TestWhileFrozenThawsAfterTheImport(t *testing.T) {
 	}
 	t.Cleanup(func() { _, _ = userCommand("systemctl", "--user", "stop", unit) })
 	ctx := context.Background()
+	store, err := state.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	state := func() string {
 		out, _ := userCommand("systemctl", "--user", "show", "-p", "FreezerState", "--value", unit)
 		return strings.TrimSpace(string(out))
@@ -255,7 +259,7 @@ func TestWhileFrozenThawsAfterTheImport(t *testing.T) {
 	boom := errors.New("import failed")
 	for _, want := range []error{nil, boom} {
 		var during string
-		err := whileFrozen(ctx, []string{unit}, func() error { during = state(); return want })
+		err := whileFrozen(ctx, store, []string{unit}, func() error { during = state(); return want })
 		if !errors.Is(err, want) || (want == nil && err != nil) {
 			t.Errorf("whileFrozen returned %v, want %v", err, want)
 		}
@@ -268,7 +272,7 @@ func TestWhileFrozenThawsAfterTheImport(t *testing.T) {
 	}
 	_, _ = userCommand("systemctl", "--user", "stop", unit)
 	called := false
-	if err := whileFrozen(ctx, []string{unit}, func() error { called = true; return nil }); err != nil || !called {
+	if err := whileFrozen(ctx, store, []string{unit}, func() error { called = true; return nil }); err != nil || !called {
 		t.Errorf("an ended unit: whileFrozen = %v, fn called %v", err, called)
 	}
 }

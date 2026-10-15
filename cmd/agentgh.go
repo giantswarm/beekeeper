@@ -64,7 +64,9 @@ func (w *watcher) unbrokered() {
 
 // recordSessionGH records gh on the roster entry of the session a
 // SessionStart event (raw) starts. It never fails the session's start: a
-// session not on the roster, or a state it cannot write, records nothing.
+// session not on the roster, or a state it cannot write within
+// sessionStartWait, records nothing; the next start or registration reads
+// it again.
 func (a *app) recordSessionGH(raw []byte, gh string) {
 	var ev struct {
 		Session string `json:"session_id"`
@@ -76,7 +78,11 @@ func (a *app) recordSessionGH(raw []byte, gh string) {
 	if st, err := a.store.Peek(); err != nil || !slices.ContainsFunc(st.Agents, func(x state.Agent) bool { return x.Is(p) }) {
 		return
 	}
-	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+	_ = a.store.UpdateWithin(sessionStartWait, func(st *state.State) ([]state.Event, error) {
 		return nil, recordGH(st, p, gh, a.now.UTC())
 	})
 }
+
+// sessionStartWait bounds the SessionStart hook's wait for the state lock:
+// a session's start never queues behind a slow holder.
+const sessionStartWait = 2 * time.Second
