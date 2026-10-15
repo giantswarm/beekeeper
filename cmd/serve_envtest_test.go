@@ -53,7 +53,10 @@ type serveEnv struct {
 	log   *syncBuffer
 }
 
-func newServeEnv(t *testing.T) *serveEnv {
+// envtestKube starts a kube-apiserver with beekeeper's CRDs and returns its
+// config, a Kubernetes store and a client over it. It skips without
+// KUBEBUILDER_ASSETS (make test-envtest sets it).
+func envtestKube(t *testing.T) (*rest.Config, *kube.Store, ctrlclient.Client) {
 	t.Helper()
 	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
 		t.Skip("KUBEBUILDER_ASSETS is not set; run make test-envtest")
@@ -80,6 +83,12 @@ func newServeEnv(t *testing.T) *serveEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return rc, store, c
+}
+
+func newServeEnv(t *testing.T) *serveEnv {
+	t.Helper()
+	rc, store, c := envtestKube(t)
 	ctx := context.Background()
 	for _, o := range []ctrlclient.Object{
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "beekeeper-bumblebee"}},
