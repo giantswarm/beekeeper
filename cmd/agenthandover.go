@@ -46,7 +46,9 @@ func (a *app) agentNoteCmd() *cobra.Command {
 		Short: "Record the calling agent's hand-over note: what is in flight and what is next",
 		Long: `note logs the calling session's hand-over note to the event log. beekeeper
 agents handover asks the agent for it and puts the latest one into its
-follow-up session's prompt.`,
+follow-up session's prompt. It waits 3s at most for the state lock: a lock
+held longer fails the note unsaved, naming the lock's holder and the desktop
+import of the calling session when one is pending; note again.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			me, err := a.caller()
@@ -60,13 +62,35 @@ follow-up session's prompt.`,
 			case len(text) > maxNote:
 				return usageErr("the note has %d bytes, more than %d", len(text), maxNote)
 			}
-			if err := a.store.Record(event(me, verbNote, "%s", text)); err != nil {
-				return err
+			if err := a.store.RecordWithin(noteLockWait, event(me, verbNote, "%s", text)); err != nil {
+				return a.noteBusy(me, err)
 			}
 			_, err = fmt.Fprintf(a.out, "noted for the hand-over of %s\n", me.Name)
 			return err
 		},
 	}
+}
+
+// noteLockWait bounds a note's wait for the state lock: an agent asked
+// for its note while a holder keeps the lock (a desktop import of its
+// session pending, a stopped process) learns why at once and notes again.
+const noteLockWait = 3 * time.Second
+
+// noteBusy is the error of a note the state lock kept from the event log:
+// the lock's holder and, read without the lock, the desktop import of p's
+// session when one is pending; err as it is for any other failure.
+func (a *app) noteBusy(p state.Party, err error) error {
+	var busy *state.LockBusyError
+	if !errors.As(err, &busy) {
+		return err
+	}
+	msg := fmt.Sprintf("the note is not saved: %v", err)
+	if st, perr := a.store.Peek(); perr == nil {
+		if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) }); i >= 0 && st.Agents[i].Import.Pending(a.now) {
+			msg += fmt.Sprintf("; %q waits for the desktop: %s", st.Agents[i].Name, importStatus(st.Agents[i], a.now))
+		}
+	}
+	return errors.New(msg + "; run beekeeper agents note again")
 }
 
 func (a *app) agentHandoverCmd() *cobra.Command {

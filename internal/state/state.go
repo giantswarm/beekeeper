@@ -1141,6 +1141,10 @@ type Store interface {
 	// Record appends events that change no state and must not be lost,
 	// waiting for the lock as an update does.
 	Record(events ...Event) error
+	// RecordWithin is Record for a caller that must not wait long, an
+	// agent's hand-over note for one: a lock busy past wait fails it with
+	// a LockBusyError, the events not appended.
+	RecordWithin(wait time.Duration, events ...Event) error
 	// Events returns the last n events keep accepts, oldest first.
 	Events(n int, keep func(Event) bool) ([]Event, error)
 	// Follow returns every event keep accepts, oldest first, as Events(0,
@@ -1331,7 +1335,12 @@ const logWait = time.Second
 // update does: a busy lock delays the entry, and a lock busy past lockWait
 // fails the call instead of dropping it.
 func (s *FileStore) Record(events ...Event) error {
-	unlock, err := s.lock(false, lockWait)
+	return s.RecordWithin(lockWait, events...)
+}
+
+// RecordWithin is Record waiting at most wait for the lock.
+func (s *FileStore) RecordWithin(wait time.Duration, events ...Event) error {
+	unlock, err := s.lock(false, wait)
 	if err != nil {
 		return err
 	}

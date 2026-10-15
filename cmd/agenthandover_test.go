@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gofrs/flock"
+
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/peer"
@@ -517,5 +519,55 @@ func TestHandoverAsksAParkedAgentInAHeadlessTurn(t *testing.T) {
 	}
 	if got := (handover{}).roster(); !strings.Contains(got, "no sessions serve record") {
 		t.Errorf("roster without a record = %q", got)
+	}
+}
+
+// A note while a holder keeps the state lock, a desktop import of the
+// caller's session pending, fails within the bound, naming the lock's
+// holder and the import, never a bare deadline; once the lock is free it
+// is saved.
+func TestNoteFailsFastNamingAPendingImport(t *testing.T) {
+	a, out := stubApp(t)
+	a.as = ""
+	t.Setenv("CLAUDE_CODE_SESSION_ID", oldID)
+	t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", "")
+	t.Setenv("CLAUDE_CODE_SESSION_NAME", countName)
+	me := state.Party{Session: oldID, Name: countName}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{{Party: me, Task: countTask,
+			Import: &state.ImportWait{On: "the person's typing to pause", Since: a.now.Add(-time.Minute), Until: a.now.Add(time.Hour)}}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	l := flock.New(filepath.Join(a.cfg.StateDir, "state.lock"))
+	if err := l.Lock(); err != nil {
+		t.Fatal(err)
+	}
+	note := a.agentNoteCmd()
+	t0 := time.Now()
+	err := note.RunE(note, []string{noteAB})
+	if took := time.Since(t0); took > 5*time.Second {
+		t.Errorf("the note waited %s for a held lock", took)
+	}
+	if err == nil {
+		t.Fatal("a note under a held lock succeeded")
+	}
+	for _, want := range []string{"the note is not saved", "the state lock is busy", countName + `" waits for the desktop: its import is pending`, "the person's typing to pause", "agents note again"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error lacks %q: %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Errorf("a bare deadline: %v", err)
+	}
+	if err := l.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	if err := note.RunE(note, []string{noteAB}); err != nil {
+		t.Fatalf("the note once the lock is free: %v", err)
+	}
+	if got, ok, err := a.lastNote(me, time.Time{}); err != nil || !ok || got != noteAB || !strings.Contains(out.String(), "noted for the hand-over of "+countName) {
+		t.Errorf("the saved note = %q, %v, %v; output %q", got, ok, err, out)
 	}
 }
