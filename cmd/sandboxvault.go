@@ -461,7 +461,7 @@ func (a *app) brokeredVault(v *vaultBroker, call func(env []string) sandbox.Hand
 		needs := a.secretArgsNeedVault(req.Args)
 		if !needs && (len(a.cfg.Secret.AgeIdentities) > 0 || a.cfg.Secret.Vault != "") {
 			// the files of a call are the requester's, read only for an age identity
-			cwd, _, err := sandbox.Origin("/proc", pid, nil)
+			cwd, _, err := a.requesterOrigin(pid, nil)
 			if err != nil {
 				return sandbox.Reply{}, fmt.Errorf("the requester: %w", err)
 			}
@@ -473,7 +473,7 @@ func (a *app) brokeredVault(v *vaultBroker, call func(env []string) sandbox.Hand
 		for try := 0; ; try++ {
 			if !v.k.State().Unlocked {
 				v.ask(ctx)
-				done := waits.add(secret.VaultWait{Who: requester(pid), Ref: vaultRef(req.Args), Since: time.Now()})
+				done := waits.add(secret.VaultWait{Who: a.requester(pid), Ref: vaultRef(req.Args), Since: time.Now()})
 				wctx, cancel := context.WithTimeout(ctx, a.cfg.Secret.UnlockWait.Duration)
 				err := v.k.Wait(wctx)
 				cancel()

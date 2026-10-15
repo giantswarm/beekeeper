@@ -22,6 +22,7 @@ import (
 // The broker serves on Linux only.
 
 func TestBrokeredSecretRunsAsTheRequester(t *testing.T) {
+	skipWithoutOwnProc(t)
 	bin := t.TempDir()
 	exe := filepath.Join(bin, "beekeeper")
 	script := "#!/bin/sh\necho \"args=$* pwd=$(pwd) session=$CLAUDE_CODE_SESSION_ID brokered=$" + sandbox.Brokered + " other=$BEEKEEPER_TEST_OTHER\"\necho warned >&2\nexit 3\n"
@@ -68,6 +69,7 @@ func startRequester(t *testing.T, dir string, env []string) int {
 }
 
 func TestBrokeredCallActsOnTheRequesterCheckout(t *testing.T) {
+	skipWithoutOwnProc(t)
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")
 	}
@@ -224,6 +226,7 @@ func TestRoleCommandsInTheSandboxGoThroughTheBroker(t *testing.T) {
 }
 
 func TestBrokeredStartKeepsTheScratchState(t *testing.T) {
+	skipWithoutOwnProc(t)
 	bin := t.TempDir()
 	exe := filepath.Join(bin, "beekeeper")
 	script := "#!/bin/sh\necho \"args=$* state=$" + stateFromEnv + " config=$BEEKEEPER_CONFIG\"\n"

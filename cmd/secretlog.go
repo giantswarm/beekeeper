@@ -101,7 +101,7 @@ func (a *app) brokerSecretLog(pid int, req sandbox.Request, start time.Time, why
 	if len(req.Args) > 0 && slices.Contains(brokeredSecretOps, req.Args[0]) {
 		op, rest = req.Args[0], req.Args[1:]
 	}
-	who := requesterParty(pid)
+	who := a.requesterParty(pid)
 	who.Person, who.Team, who.Host = a.cfg.Identity.Person, a.cfg.Identity.Team, a.cfg.Identity.Host
 	e := event(who, "secret."+op, "%s: failed: %s (%s)", strings.Join(rest, " "), why, time.Since(start).Round(time.Millisecond))
 	if err := a.record(e); err != nil {
@@ -120,9 +120,9 @@ func withBrokerLog(r sandbox.Reply, err error) sandbox.Reply {
 
 // requesterParty is the session behind a request, as its environment names
 // it (callerEnv): its ids and its name, else its pid for a name.
-func requesterParty(pid int) state.Party {
+func (a *app) requesterParty(pid int) state.Party {
 	vars := map[string]string{}
-	if _, env, err := sandbox.Origin("/proc", pid, callerEnv); err == nil {
+	if _, env, err := a.requesterOrigin(pid, callerEnv); err == nil {
 		for _, kv := range env {
 			k, v, _ := strings.Cut(kv, "=")
 			vars[k] = v
@@ -136,4 +136,4 @@ func requesterParty(pid int) state.Party {
 }
 
 // requester names the session behind a request: its name, else its pid.
-func requester(pid int) string { return requesterParty(pid).Name }
+func (a *app) requester(pid int) string { return a.requesterParty(pid).Name }

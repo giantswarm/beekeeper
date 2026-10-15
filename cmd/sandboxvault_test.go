@@ -6,8 +6,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -42,7 +42,26 @@ func vaultApp(t *testing.T, wait time.Duration) *app {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &app{store: store, cfg: &config.Config{Secret: config.Secret{Vault: "Shared", Session: true, UnlockWait: config.Duration{Duration: wait}}}}
+	return &app{store: store, cfg: &config.Config{Secret: config.Secret{Vault: "Shared", Session: true, UnlockWait: config.Duration{Duration: wait}}}, origin: testOrigin}
+}
+
+// testOrigin is the requester's origin in a test: the test's working
+// directory and no environment, never a read of /proc, whose pid in a
+// sandbox's PID namespace may name another process or none it may read.
+func testOrigin(int, []string) (string, []string, error) {
+	dir, err := os.Getwd()
+	return dir, nil, err
+}
+
+// skipWithoutOwnProc skips a test that reads a real process's /proc entry
+// when /proc is another PID namespace's, as in a sandbox that runs the test
+// in a namespace of its own without mounting its /proc: a pid there names
+// another process or none, and its entries are denied.
+func skipWithoutOwnProc(t *testing.T) {
+	t.Helper()
+	if self, err := os.Readlink("/proc/self"); err == nil && self != strconv.Itoa(os.Getpid()) {
+		t.Skipf("/proc is another PID namespace's (/proc/self is %s, the test's pid %d): no process of the test's own to read", self, os.Getpid())
+	}
 }
 
 // A call on the vault waits while the broker holds no session, listed for
@@ -125,12 +144,10 @@ func TestBrokeredVaultSignsInOnce(t *testing.T) {
 
 	// a SOPS-only call whose files name no recipient of the vault never
 	// waits on it; the files are read relative to the requester's working
-	// directory, which /proc gives on Linux alone
-	if runtime.GOOS == "linux" {
-		envs = append(envs, []string{"x"})
-		if r, _ := h(context.Background(), os.Getpid(), sandbox.Request{Op: sandbox.OpSecret, Args: []string{"compare", "a.sops.yaml", "b.sops.yaml"}}); r.Out != "ok" || envs[len(envs)-1] != nil {
-			t.Errorf("SOPS-only: %+v, env %q", r, envs[len(envs)-1])
-		}
+	// directory
+	envs = append(envs, []string{"x"})
+	if r, _ := h(context.Background(), os.Getpid(), sandbox.Request{Op: sandbox.OpSecret, Args: []string{"compare", "a.sops.yaml", "b.sops.yaml"}}); r.Out != "ok" || envs[len(envs)-1] != nil {
+		t.Errorf("SOPS-only: %+v, env %q", r, envs[len(envs)-1])
 	}
 }
 
@@ -214,9 +231,6 @@ func TestADropRightAfterTheUnlockSignsInAgain(t *testing.T) {
 // named relative to the requester's directory. One with a file:// identity
 // runs without it.
 func TestBrokeredVaultForAnAgeIdentityInTheVault(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("the sandbox broker runs on Linux only")
-	}
 	for _, e := range []string{"SOPS_AGE_KEY", "SOPS_AGE_KEY_FILE", "SOPS_AGE_KEY_CMD", "SOPS_AGE_SSH_PRIVATE_KEY_FILE"} {
 		t.Setenv(e, "")
 		if err := os.Unsetenv(e); err != nil {

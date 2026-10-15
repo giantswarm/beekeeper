@@ -122,6 +122,18 @@ type app struct {
 	// transcripts keeps a watch's transcript reads across its polls; nil
 	// reads every time.
 	transcripts *claude.TranscriptCache
+	// origin reads a requester's working directory and the keys' variables
+	// of its environment; nil is sandbox.Origin on /proc.
+	origin func(pid int, keys []string) (string, []string, error)
+}
+
+// requesterOrigin is a brokered request's working directory and the keys'
+// variables of its environment (app.origin).
+func (a *app) requesterOrigin(pid int, keys []string) (string, []string, error) {
+	if a.origin != nil {
+		return a.origin(pid, keys)
+	}
+	return sandbox.Origin("/proc", pid, keys)
 }
 
 // New returns the root command.

@@ -406,6 +406,7 @@ func TestBrokeredSecretRefusesADirectoryTheSandboxCloses(t *testing.T) {
 }
 
 func TestBrokeredGitConsumerActsOnTheCallerCheckout(t *testing.T) {
+	skipWithoutOwnProc(t)
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")
 	}
