@@ -217,6 +217,34 @@ func FindMemcapScope(unit string) string {
 	return ""
 }
 
+// SlotSlice is a build slot's slice: the runs still in it and its memory.
+type SlotSlice struct {
+	// Scopes are the run scopes in the slice that still hold processes.
+	Scopes []string
+	// CurrentMiB is the slice's memory, every scope's together.
+	CurrentMiB int
+}
+
+// ReadSlotSlice reads the slot slice (as a Cap names it,
+// "memcap-slot1_….slice"), nil when it has no cgroup.
+func ReadSlotSlice(slice string) *SlotSlice {
+	if slice == "" || strings.ContainsAny(slice, "/*?[") {
+		return nil
+	}
+	m, _ := filepath.Glob(memcapSlice + slice)
+	if len(m) == 0 {
+		return nil
+	}
+	s := &SlotSlice{CurrentMiB: int(readInt(filepath.Join(m[0], "memory.current")) >> 20)}
+	scopes, _ := filepath.Glob(filepath.Join(m[0], "*.scope"))
+	for _, p := range scopes {
+		if keyed(filepath.Join(p, "cgroup.events"))["populated"] == 1 {
+			s.Scopes = append(s.Scopes, filepath.Base(p))
+		}
+	}
+	return s
+}
+
 // BuildCPU is memcap.slice's CPU: the budget every capped run shares and
 // its use over a sample.
 type BuildCPU struct {

@@ -73,6 +73,8 @@ func (systemdMachine) MemcapScope(unit string) *machine.Scope {
 	return nil
 }
 
+func (systemdMachine) SlotSlice(slice string) *machine.SlotSlice { return machine.ReadSlotSlice(slice) }
+
 func (systemdMachine) ScopePIDs(path string) []int { return pidsIn(path) }
 
 func (systemdMachine) CgroupPIDs(cg string) []int { return pidsIn(filepath.Join(cgroupRoot, cg)) }
