@@ -8,8 +8,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/github"
 )
 
 // limits is GitHub's message for a field over its resource limits.
@@ -152,5 +154,23 @@ func TestAnEpicWhoseSubIssuesAreUnknownIsOfferedSkipped(t *testing.T) {
 	got := Rank(snap, b, now)
 	if len(got) != 1 || got[0].Ref != epicRef || got[0].Skip != "sub-issues unknown: issue.subIssues: "+limits {
 		t.Errorf("Rank = %+v", got)
+	}
+}
+
+func TestAReadRetriesAnEmptyOrCutOffAnswer(t *testing.T) {
+	answers := []string{"", `{"data":{"repository":{"issueOrPull`, `{"data":{"repository":{"issueOrPullRequest":{"state":"OPEN"}}}}`}
+	calls := 0
+	gh := func(context.Context, ...string) ([]byte, error) {
+		calls++
+		return []byte(answers[min(calls, len(answers))-1]), nil
+	}
+	c := &Client{GH: github.Retrying(gh, time.Millisecond)}
+	if open, err := c.Open(t.Context(), "example/tools#5"); err != nil || !open || calls != 3 {
+		t.Errorf("Open = %v, %v after %d calls", open, err, calls)
+	}
+
+	answers, calls = []string{""}, 0
+	if _, err := c.Open(t.Context(), "example/tools#5"); err == nil || !strings.HasPrefix(err.Error(), "gh api graphql (repository): an empty body after 3 tries") {
+		t.Errorf("Open of a persistent empty answer = %v after %d calls", err, calls)
 	}
 }

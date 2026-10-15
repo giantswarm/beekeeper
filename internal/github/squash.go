@@ -57,8 +57,12 @@ const SquashRoute = "plain squash merge"
 type GH func(ctx context.Context, args ...string) ([]byte, error)
 
 // RunGH is GH through the gh binary, acting on the repository ctx names
-// (ActingOn) through GH_REPO.
-func RunGH(ctx context.Context, args ...string) ([]byte, error) {
+// (ActingOn) through GH_REPO; a read GitHub answers with a 5xx, an empty or
+// a cut-off body is asked again (Retrying).
+var RunGH = Retrying(execGH, ReadBackoff)
+
+// execGH is one run of the gh binary.
+func execGH(ctx context.Context, args ...string) ([]byte, error) {
 	var stderr bytes.Buffer
 	c := exec.CommandContext(ctx, "gh", args...) //nolint:gosec // gh with the merge's validated owner/repo and number
 	c.Env = ghEnv(os.Environ(), Repo(ctx))
