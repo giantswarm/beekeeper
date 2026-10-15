@@ -174,9 +174,8 @@ func (a *app) persons() []string {
 	return out
 }
 
-// callerRole is the roster role of the calling session: the supervisor or
-// the guide it holds, a worker for an agent on the roster; "" for none or
-// outside a session.
+// callerRole is the roster role of the calling session (rosterRole); "" outside
+// a session.
 func (a *app) callerRole() string {
 	me := envParty(os.Getenv)
 	if me.Session == "" && me.HostSession == "" {
@@ -186,6 +185,12 @@ func (a *app) callerRole() string {
 	if err != nil {
 		return ""
 	}
+	return rosterRole(st, me)
+}
+
+// rosterRole is the roster role of the session me: the supervisor or the guide
+// it holds, a worker for an agent on the roster; "" for none.
+func rosterRole(st *state.State, me state.Party) string {
 	for _, rl := range roles {
 		if h := rl.get(st).Holder; h != nil && h.Is(me) {
 			return rl.name

@@ -130,3 +130,44 @@ func TestServeResolvesTheSession(t *testing.T) {
 		})
 	}
 }
+
+// A worker's serve naming another session is refused, so its records never
+// land on another session's name; serve --clear removes its own record and
+// only that (giantswarm/beekeeper#772).
+func TestServeAWorkerRecordsAndClearsOnlyItsOwn(t *testing.T) {
+	const worker, issue = "BK 772 worker", "giantswarm/beekeeper#772"
+	a, store := serveApp(t)
+	if err := store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: worker}})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := serve(a, unrosteredName, issue); err != nil {
+		t.Fatalf("the supervisor serves another session: %q, %v", out, err)
+	}
+	a.as, a.out = worker, &bytes.Buffer{}
+	for _, q := range []string{rosterName, unrosteredName} {
+		if out, err := serve(a, q, "giantswarm/beekeeper#1"); err == nil || !strings.Contains(err.Error(), "a worker records only its own") {
+			t.Fatalf("a worker served %q: %q, %v", q, out, err)
+		}
+	}
+	if out, err := serve(a, worker, issue); err != nil || !strings.Contains(out, `"BK 772 worker" serves `+issue) {
+		t.Fatalf("a worker serves itself: %q, %v", out, err)
+	}
+	if _, err := serve(a, "--clear", worker); err == nil {
+		t.Error("serve --clear took a session")
+	}
+	a.out = &bytes.Buffer{}
+	if out, err := serve(a, "--clear"); err != nil || !strings.Contains(out, `cleared the record of "BK 772 worker": it serves `+issue) {
+		t.Fatalf("serve --clear: %q, %v", out, err)
+	}
+	st, _ := store.Read()
+	if len(st.Records) != 1 || st.Records[0].Session.Name != unrosteredName {
+		t.Fatalf("records after --clear: %+v", st.Records)
+	}
+	a.out = &bytes.Buffer{}
+	if out, err := serve(a, "--clear"); err != nil || !strings.Contains(out, `"BK 772 worker" has no record to clear`) {
+		t.Fatalf("serve --clear again: %q, %v", out, err)
+	}
+}
