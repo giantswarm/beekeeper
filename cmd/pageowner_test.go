@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -141,14 +143,109 @@ func TestAlertsOwnCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, _ := a.store.Read()
-	if len(st.AlertOwners) != 1 || st.AlertOwners[0].By.Name != agentOne || st.AlertOwners[0].Name != ownedPage {
+	if len(st.AlertOwners) != 1 || st.AlertOwners[0].By.Name != agentOne || st.AlertOwners[0].Name != ownedPage+"#fp1" {
 		t.Fatalf("owners: %+v", st.AlertOwners)
 	}
-	if got := lastEventOf(t, a, verbAlertOwned); !strings.Contains(got, "alpha/PodRestarting ns/app") {
+	if got := lastEventOf(t, a, verbAlertOwned); !strings.Contains(got, "alpha/PodRestarting#fp1 ns/app") {
 		t.Errorf("alert.owned event: %q", got)
 	}
 	w := a.newWatcher(false, true)
 	if got := pollPages(w, out, start, nil, 15, 60, 180); len(got) != 0 {
 		t.Errorf("a person's page is said unowned: %q", got)
+	}
+}
+
+// twoInstances adds a second instance of the page alpha/PodRestarting to
+// pageApp's baseline, firing since start.
+func twoInstances(t *testing.T, a *app, start time.Time) {
+	t.Helper()
+	st := alerts.NewStore(a.cfg.StateDir)
+	base, err := st.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.Installations["alpha"].Alerts["fp4"] = alerts.Alert{Severity: alerts.Page, Team: "t", Alertname: "PodRestarting", Where: "ns/other", Since: start.UTC().Format(time.RFC3339Nano)}
+	if err := st.Save(base); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// runAlerts runs an alerts subcommand with args and returns its output.
+func runAlerts(t *testing.T, c *cobra.Command, out *bytes.Buffer, args ...string) (string, error) {
+	t.Helper()
+	out.Reset()
+	c.SetArgs(args)
+	c.SetOut(out)
+	c.SetErr(out)
+	err := c.Execute()
+	return out.String(), err
+}
+
+// Owning one instance by its fingerprint leaves the alertname's other
+// instances unowned; the bare form takes every instance and names each.
+func TestAlertsOwnOneInstance(t *testing.T) {
+	start := time.Now().Add(-20 * time.Minute)
+	a, out := pageApp(t, start)
+	twoInstances(t, a, start)
+	got, err := runAlerts(t, a.alertsOwnCmd(), out, ownedPage+"#fp1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, ownedPage+"#fp1") || strings.Contains(got, "fp4") {
+		t.Fatalf("own of one instance said:\n%s", got)
+	}
+	st, _ := a.store.Read()
+	if len(st.AlertOwners) != 1 || !strings.HasPrefix(st.AlertOwners[0].Alert, "fp1@") {
+		t.Fatalf("owners: %+v", st.AlertOwners)
+	}
+	w := a.newWatcher(false, true)
+	if lines := pollPages(w, out, start, nil, 15); len(lines) != 1 || !strings.Contains(lines[0], " ns/other for ") || strings.Contains(lines[0], "(+") {
+		t.Fatalf("the other instance is not the one unowned page: %q", lines)
+	}
+	got, err = runAlerts(t, a.alertsOwnCmd(), out, ownedPage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, ownedPage+"#fp1") || !strings.Contains(got, ownedPage+"#fp4") {
+		t.Fatalf("the bare form does not name the instances it took:\n%s", got)
+	}
+	if st, _ := a.store.Read(); len(st.AlertOwners) != 2 {
+		t.Fatalf("the bare form took %d instances, want 2: %+v", len(st.AlertOwners), st.AlertOwners)
+	}
+}
+
+// alerts disown releases an owned instance, logs alert.disowned and leaves
+// the alert unowned from then: the watch says it again after the grace.
+// Naming an alert no one owns is refused.
+func TestAlertsDisown(t *testing.T) {
+	start := time.Now().Add(-20 * time.Minute)
+	a, out := pageApp(t, start)
+	a.now = start.Add(20 * time.Minute)
+	twoInstances(t, a, start)
+	if _, err := runAlerts(t, a.alertsOwnCmd(), out, ownedPage); err != nil {
+		t.Fatal(err)
+	}
+	got, err := runAlerts(t, a.alertsDisownCmd(), out, "fp4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "no longer owns "+ownedPage+"#fp4") {
+		t.Fatalf("disown said:\n%s", got)
+	}
+	if got := lastEventOf(t, a, verbAlertDisowned); !strings.Contains(got, ownedPage+"#fp4") {
+		t.Errorf("alert.disowned event: %q", got)
+	}
+	w := a.newWatcher(false, true)
+	if lines := pollPages(w, out, start, nil, 21, 34); len(lines) != 0 {
+		t.Fatalf("within the grace after the disown: %q", lines)
+	}
+	if lines := pollPages(w, out, start, nil, 35); len(lines) != 1 || !strings.Contains(lines[0], " ns/other for 15m: ") {
+		t.Fatalf("15m after the disown: %q", lines)
+	}
+	if _, err := runAlerts(t, a.alertsDisownCmd(), out, ownedPage+"#fp4"); err == nil || !strings.Contains(err.Error(), "no owner") {
+		t.Fatalf("disown of an unowned alert: %v", err)
+	}
+	if _, err := runAlerts(t, a.alertsDisownCmd(), out, "alpha/Nope"); err == nil || !strings.Contains(err.Error(), "firing pages: ") {
+		t.Fatalf("disown of no alert: %v", err)
 	}
 }

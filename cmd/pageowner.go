@@ -18,60 +18,120 @@ import (
 // verbAlertOwned is the event of alerts own.
 const verbAlertOwned = "alert.owned"
 
+// verbAlertDisowned is the event of alerts disown.
+const verbAlertDisowned = "alert.disowned"
+
 // pageKey starts the reported key of a PAGE UNOWNED line.
 const pageKey = "page "
 
 func (a *app) alertsOwnCmd() *cobra.Command {
 	var by string
 	c := &cobra.Command{
-		Use:   "own <installation/alertname | alertname | fingerprint>",
+		Use:   "own <installation/alertname#fingerprint | fingerprint | installation/alertname | alertname>",
 		Short: "Record the session that owns a firing alert, so the watch stops saying PAGE UNOWNED",
 		Long: `Record the caller (--by: another running session) as the owner of the
-firing alerts the argument names in the alert baseline: <installation>/<alertname>,
-an alertname on any installation, or an alert's fingerprint. Each alert has
-one owner; a new one takes it over. Ownership ends when the owning session
-ends or the alert resolves; an alert that fires again is a new one. A person
-(--as) owns an alert until it resolves.
+firing alerts the argument names in the alert baseline: one instance as
+<installation>/<alertname>#<fingerprint> or its fingerprint, or every instance
+of <installation>/<alertname> or of an alertname on any installation. Each
+line of the output names the instance it took, so one taken by a bare name
+that is not the caller's is released with alerts disown <instance>. Each
+alert has one owner; a new one takes it over. Ownership ends when the owning
+session ends, alerts disown releases it, or the alert resolves; an alert that
+fires again is a new one. A person (--as) owns an alert until it resolves or
+is disowned.
 
 The watch says PAGE UNOWNED for a firing alert at alerts.pageSeverity
 (default page), of alerts.team when it is set, that has had no owner for alerts.ownerGrace (15m), and again
 every alerts.ownerGrace while it stays unowned; --notify sends it to the
-desktop (page-unowned, critical). The owner's session ending starts the
-count again.`,
+desktop (page-unowned, critical). The owner's session ending or a disown
+starts the count again.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			owner, err := a.alertOwnerParty(by)
 			if err != nil {
 				return err
 			}
-			base, err := alerts.NewStore(a.cfg.StateDir).Load()
+			firing, hits, err := a.matchFiring(args[0])
 			if err != nil {
 				return err
-			}
-			firing := base.Firing("")
-			hits := alerts.Match(firing, args[0])
-			if len(hits) == 0 {
-				return noAlertMatches(args[0], base.Firing(a.cfg.Alerts.PageSeverity))
 			}
 			now := a.now.UTC()
 			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.AlertOwners = ownAlerts(st.AlertOwners, firing, hits, owner, now)
 				evs := make([]state.Event, len(hits))
 				for i, f := range hits {
-					evs[i] = event(owner, verbAlertOwned, "%s %s since %s", f.Name(), f.Where, f.Since)
+					evs[i] = event(owner, verbAlertOwned, "%s %s since %s", f.Instance(), f.Where, f.Since)
 				}
 				return evs, nil
 			}); err != nil {
 				return err
 			}
 			for _, f := range hits {
-				_, _ = fmt.Fprintf(a.out, "%q owns %s %s %s %s\n", owner.Name, f.Installation, f.Severity, f.Alertname, f.Where)
+				_, _ = fmt.Fprintf(a.out, "%q owns %s %s %s %s: %s\n", owner.Name, f.Installation, f.Severity, f.Alertname, f.Where, f.Instance())
 			}
 			return nil
 		},
 	}
 	c.Flags().StringVar(&by, "by", "", "the running session that owns it (name or id; default the caller)")
 	return c
+}
+
+func (a *app) alertsDisownCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "disown <installation/alertname#fingerprint | fingerprint | installation/alertname | alertname>",
+		Short: "Release the ownership of a firing alert, so the watch counts it unowned again",
+		Long: `Release the owner of the firing alerts the argument names, in the forms
+alerts own takes: one instance as <installation>/<alertname>#<fingerprint> or
+its fingerprint, or every instance of <installation>/<alertname> or of an
+alertname on any installation. The alert is unowned from now: the watch says
+PAGE UNOWNED for it once it has had no owner for alerts.ownerGrace. An
+argument naming no owned alert is refused.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			by, err := a.caller()
+			if err != nil {
+				return err
+			}
+			_, hits, err := a.matchFiring(args[0])
+			if err != nil {
+				return err
+			}
+			now := a.now.UTC()
+			var released []state.AlertOwner
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.AlertOwners, released = disownAlerts(st.AlertOwners, hits, now)
+				if len(released) == 0 {
+					return nil, fmt.Errorf("no owner holds an alert %q names", args[0])
+				}
+				evs := make([]state.Event, len(released))
+				for i, o := range released {
+					evs[i] = event(by, verbAlertDisowned, "%s from %q", o.Name, o.By.Name)
+				}
+				return evs, nil
+			}); err != nil {
+				return err
+			}
+			for _, o := range released {
+				_, _ = fmt.Fprintf(a.out, "%q no longer owns %s\n", o.By.Name, o.Name)
+			}
+			return nil
+		},
+	}
+}
+
+// matchFiring is the alert baseline's firing alerts and those q names, or
+// an error listing the firing pages when it names none.
+func (a *app) matchFiring(q string) (firing, hits []alerts.Firing, err error) {
+	base, err := alerts.NewStore(a.cfg.StateDir).Load()
+	if err != nil {
+		return nil, nil, err
+	}
+	firing = base.Firing("")
+	hits = alerts.Match(firing, q)
+	if len(hits) == 0 {
+		return nil, nil, noAlertMatches(q, base.Firing(a.cfg.Alerts.PageSeverity))
+	}
+	return firing, hits, nil
 }
 
 // alertOwnerParty is the running session by names, else the caller.
@@ -113,9 +173,22 @@ func ownAlerts(owners []state.AlertOwner, firing, hits []alerts.Firing, owner st
 	}
 	out := slices.DeleteFunc(slices.Clone(owners), func(o state.AlertOwner) bool { return !keep(o.Alert) })
 	for _, f := range hits {
-		out = append(out, state.AlertOwner{Alert: f.Key, Name: f.Name(), By: owner, At: now})
+		out = append(out, state.AlertOwner{Alert: f.Key, Name: f.Instance(), By: owner, At: now})
 	}
 	return out
+}
+
+// disownAlerts are the owners with the current owners of hits ended at now,
+// and the owners it ended.
+func disownAlerts(owners []state.AlertOwner, hits []alerts.Firing, now time.Time) (out, released []state.AlertOwner) {
+	out = slices.Clone(owners)
+	for i, o := range out {
+		if o.Ended.IsZero() && slices.ContainsFunc(hits, func(f alerts.Firing) bool { return f.Key == o.Alert }) {
+			out[i].Ended = now
+			released = append(released, out[i])
+		}
+	}
+	return out, released
 }
 
 // ownedUntil tells of an alert's key when its last owner stopped owning it:
