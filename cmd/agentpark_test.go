@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -57,7 +58,8 @@ func answer(t *testing.T, w *watcher) {
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
 		n := st.Notes[0]
 		st.Notes = nil
-		return []state.Event{answeredEvent(state.Party{Name: personTimo, Person: personTimo}, &n, "terminal", parkAnswer)}, nil
+		rec := &recordedAnswer{Thread: &board.Thread{About: privateThread, Ref: privateThread}, Comment: "https://github.com/o/private/issues/7#c", By: personTimo, Via: viaCLI, Answer: parkAnswer, Note: n.ID}
+		return []state.Event{answerEvent(state.Party{Name: personTimo, Person: personTimo}, rec, &n)}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +142,7 @@ func TestAnsweredNoteResumesTheParkedAgentOnce(t *testing.T) {
 		t.Errorf("line:\n%s", out)
 	}
 	want := watchParty.Name + " → " + agentOne + ": Your park on #3 (Timo's answer) is over: note #3 answered by Timo: " + parkAnswer +
-		". Re-query the live state of your task and continue it."
+		" (https://github.com/o/private/issues/7#c). Re-query the live state of your task and continue it."
 	if !slices.Equal(*woke, []string{want}) {
 		t.Errorf("woke %q\nwant %q", *woke, want)
 	}

@@ -20,9 +20,9 @@ func guideNextApp(t *testing.T) *app {
 	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Guide = &state.Role{Holder: &state.Supervisor{Party: state.Party{Name: agentOne}}}
 		st.Notes = []state.Note{
-			{ID: 1, For: notePerson, Text: "pick a lab?", By: by},
+			{ID: 1, For: notePerson, Text: "pick a lab?", By: by, Refs: []string{refOne}},
 			{ID: 2, For: notePerson, Text: "approve the ADR?", By: by, Due: relayNow.Add(2 * time.Hour)},
-			{ID: 3, For: notePerson, Text: "merge the bump?", By: by, Due: relayNow.Add(time.Hour)},
+			{ID: 3, For: notePerson, Text: "merge the bump?", By: by, Due: relayNow.Add(time.Hour), Refs: []string{"o/r#13"}},
 			{ID: 4, For: notePerson, Text: "standing rule", By: by, Pinned: true},
 			{ID: 5, For: "Dana", Text: "the lease?", By: by},
 		}

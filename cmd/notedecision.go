@@ -92,12 +92,6 @@ func answerText(n *state.Note, choice int, text string) (string, error) {
 	return label + " — " + text, nil
 }
 
-// answeredEvent is the note.answered event of n's answer: parseAnswered
-// reads it back.
-func answeredEvent(by state.Party, n *state.Note, via, answer string) state.Event {
-	return event(by, noteAnswered, "#%d answered for %s via %s: %s (asked by %s: %s)", n.ID, cmp.Or(n.For, "nobody named"), via, answer, n.By.Name, n.Text)
-}
-
 // defaultedEvent is the note.defaulted event of n closed at its due time.
 func defaultedEvent(by state.Party, n *state.Note) state.Event {
 	return event(by, noteDefaulted, "#%d defaulted for %s: %s (asked by %s: %s)", n.ID, cmp.Or(n.For, "nobody named"), n.Default, n.By.Name, n.Text)

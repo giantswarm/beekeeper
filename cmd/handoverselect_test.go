@@ -77,40 +77,42 @@ func TestAnswersSinceTheLastRelayAndWithin72h(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	log(80*time.Hour, "note.answered", "#1 answered for Pat: too old (asked by A: approve x)")
-	log(5*time.Hour, "note.answered", "#2 answered for Pat: Yes, ship it (asked by Agent two: approve "+prURL+" Status quo: green.)")
+	log(80*time.Hour, answerRecorded, "o/r#1 answered by \"Pat\" via cli, recorded at https://c/1, note #1 asked by \"A\": \"approve x\": too old")
+	log(5*time.Hour, answerRecorded, "o/r#7 answered by \"Pat\" via cli, recorded at https://c/2, note #2 asked by \"Agent two\": \"approve "+prURL+" Status quo: green.\": Yes, ship it")
 	log(3*time.Hour, "supervisor.start", "run 2")
-	log(2*time.Hour, "note.answered", "#3 answered for Pat: No (asked by B: merge y)")
+	log(2*time.Hour, answerRecorded, "o/r#8 answered by \"Pat\" via slack, recorded at https://c/3, note #3 asked by \"B\": \"merge y\": No")
+	log(90*time.Minute, answerRecorded, "o/r#9 answered by \"Pat\" via cli, recorded at https://c/4: the draft stays")
 	log(time.Hour, "supervisor.start", "run 3")
 	st := &state.State{Supervisor: &state.Supervisor{Party: sup, Since: a.now.Add(-time.Hour)}}
 	ans, err := a.handoverAnswers(st)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ans.All) != 2 || len(ans.Recent()) != 1 || ans.Recent()[0].ID != 3 || ans.Recent()[0].Answer != "No" || ans.All[0].For != pat {
+	if len(ans.All) != 3 || len(ans.Recent()) != 2 || ans.Recent()[0].ID != 3 || ans.Recent()[0].Answer != "No" || ans.All[0].For != pat || ans.Recent()[1].ID != 0 {
 		t.Fatalf("answers %+v", ans)
 	}
 	a.printAnswers(ans, false)
-	if got := out.String(); !strings.Contains(got, `#3 (for Pat, answered`) || !strings.Contains(got, `"No" on: merge y`) || !strings.Contains(got, "1 more answered within 72h") {
+	if got := out.String(); !strings.Contains(got, `o/r#8 (by Pat, answered`) || !strings.Contains(got, `"No" on note #3: merge y`) ||
+		!strings.Contains(got, `o/r#9 (by Pat, answered`) || !strings.Contains(got, `"the draft stays"`+"\n") || !strings.Contains(got, "1 more answered within 72h") {
 		t.Errorf("printed:\n%s", got)
 	}
 
-	// A new note asking #2 again is filed with the warning.
-	stderr, err := noteCommand(a, "add", "--for", pat, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "--due", "3h", "Approve "+prURL)
+	// A new note on o/r#7 is filed with the warning quoting its answer.
+	stderr, err := noteCommand(a, "add", "--for", pat, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "--due", "3h", "--ref", "o/r#7", "Merge "+prURL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := `warning: note #2 asked approve on o/r#7 and was answered`; !strings.Contains(stderr, want) || !strings.Contains(stderr, `"Yes, ship it"`) {
+	if want := `warning: "Pat" answered on o/r#7 `; !strings.Contains(stderr, want) || !strings.Contains(stderr, `(https://c/2): "Yes, ship it"`) {
 		t.Errorf("stderr %q, want %q", stderr, want)
 	}
-	if stderr, _ := noteCommand(a, "add", "--for", pat, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "--due", "3h", "review "+prURL); stderr != "" {
-		t.Errorf("another verb warned: %q", stderr)
+	if stderr, _ := noteCommand(a, "add", "--for", pat, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "--due", "3h", "--ref", "o/r#10", "review "+prURL); stderr != "" {
+		t.Errorf("another thread warned: %q", stderr)
 	}
 }
 
 func TestNoteAnsweredDetailParsesBack(t *testing.T) {
 	a, _ := noteApp(t)
-	if err := addNote(a, "a memo on the lane"); err != nil {
+	if err := addNote(a, "--ref", "o/r#15", "a memo on the lane"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := noteCommand(a, "answer", "1", "keep it", "(for now)"); err != nil {
@@ -120,7 +122,7 @@ func TestNoteAnsweredDetailParsesBack(t *testing.T) {
 	if err != nil || len(all) != 1 {
 		t.Fatalf("%+v, %v", all, err)
 	}
-	if an := all[0]; an.ID != 1 || an.For != "nobody named" || an.Answer != "keep it (for now)" || an.Asker != agentOne || an.Question != "a memo on the lane" {
+	if an := all[0]; an.ID != 1 || an.About != "o/r#15" || an.For != agentOne || an.Answer != "keep it (for now)" || an.Asker != agentOne || an.Question != "a memo on the lane" {
 		t.Errorf("parsed %+v", an)
 	}
 }
