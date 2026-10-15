@@ -176,6 +176,16 @@ var notesGH github.GH = github.RunGH
 // SIMPLIFY or KILL verdict.
 var missingStage = regexp.MustCompile(`^[^\s:]+: [^\s:]+ missing: `)
 
+// subject is the part of d's text its stage check reads: the pull requests
+// the question asks about. A question that links none leaves the first
+// pull request the rest links; the others the note only cites as context.
+func (d noteDraft) subject() string {
+	if pullURL.MatchString(d.Question) {
+		return d.Question
+	}
+	return pullURL.FindString(d.text())
+}
+
 // planStages checks every pull request of a plans repository that s links
 // by its stage check. A merged one, a green check, or a red one whose every
 // finding is a missing stage output passes: the last is the grill stage,
