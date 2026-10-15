@@ -537,7 +537,7 @@ func (a *app) warnAnswered(cmd *cobra.Command, n state.Note) error {
 		return err
 	}
 	if an := repeats(recent, n); an != nil {
-		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s answered on %s %s (%s): %q\n",
+		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "warning: %q answered on %s %s (%s): %q\n",
 			an.For, an.About, a.stamp(an.At), an.Comment, oneLine(an.Answer))
 	}
 	return err

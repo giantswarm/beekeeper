@@ -666,7 +666,8 @@ func toolLaneLeave(c *call, req mcp.CallToolRequest) (any, error) {
 	return map[string]any{"lane": lane, "merge": key, keyLeft: true, "phase": m.Phase}, err
 }
 
-// filedNote is note add's line naming the note filed, after any warning.
+// filedNote is note add's line naming the note filed, its last line,
+// after any warning.
 var filedNote = regexp.MustCompile(`(?m)^note #(\d+)`)
 
 func toolNoteAdd(c *call, req mcp.CallToolRequest) (any, error) {
@@ -695,11 +696,11 @@ func toolNoteAdd(c *call, req mcp.CallToolRequest) (any, error) {
 	if err := c.verb(c.app.noteCmd(), args...); err != nil {
 		return nil, err
 	}
-	m := filedNote.FindStringSubmatch(c.out.String())
-	if m == nil {
+	all := filedNote.FindAllStringSubmatch(c.out.String(), -1)
+	if all == nil {
 		return nil, fmt.Errorf("the note's number in %q", c.out.String())
 	}
-	id, _ := strconv.Atoi(m[1])
+	id, _ := strconv.Atoi(all[len(all)-1][1])
 	c.concern = kube.NoteObject(c.me.Team, id)
 	n, err := c.note(id)
 	if err != nil || n == nil || n.Posted != "" {

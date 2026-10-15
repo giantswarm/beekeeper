@@ -102,7 +102,7 @@ func TestAnswersSinceTheLastRelayAndWithin72h(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := `warning: Pat answered on o/r#7 `; !strings.Contains(stderr, want) || !strings.Contains(stderr, `(https://c/2): "Yes, ship it"`) {
+	if want := `warning: "Pat" answered on o/r#7 `; !strings.Contains(stderr, want) || !strings.Contains(stderr, `(https://c/2): "Yes, ship it"`) {
 		t.Errorf("stderr %q, want %q", stderr, want)
 	}
 	if stderr, _ := noteCommand(a, "add", "--for", pat, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "--due", "3h", "--ref", "o/r#10", "review "+prURL); stderr != "" {

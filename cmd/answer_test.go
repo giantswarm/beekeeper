@@ -284,7 +284,7 @@ func TestNoteForAPersonNeedsItsThreadAndIsWarnedOfItsAnswer(t *testing.T) {
 	if err := addNote(a, append(slices.Clone(decisionArgs), "approve "+prURL+"?")...); err != nil {
 		t.Fatal(err)
 	}
-	if s := out.String(); !strings.Contains(s, `warning: Pat answered on o/r#7 `) || !strings.Contains(s, `: "keep the draft"`) {
+	if s := out.String(); !strings.Contains(s, `warning: "Pat" answered on o/r#7 `) || !strings.Contains(s, `: "keep the draft"`) {
 		t.Errorf("output %q", s)
 	}
 }
