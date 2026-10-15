@@ -96,11 +96,27 @@ func (l *loader) find(cmd string) string {
 		call = cmd[m[2]:m[3]]
 		return true
 	}
-	if commandMatch(l.start, cmd, keep) == nil {
-		return ""
+	if commandMatch(l.start, cmd, keep) != nil {
+		return call
 	}
-	return call
+	// A here-document fed to a shell a kubectl or docker exec runs is that
+	// shell's program, which commandMatch (local shells only) leaves out.
+	sc := scanShell(cmd)
+	segs := sc.segments()
+	for _, hd := range sc.heredocs {
+		for _, sg := range segs {
+			if hd.op >= sg.start && hd.op < sg.end && execShell.MatchString(sc.plain[sg.start:sg.end]) {
+				if commandMatch(l.start, cmd[hd.start:hd.end], keep) != nil {
+					return call
+				}
+			}
+		}
+	}
+	return ""
 }
+
+// execShell is a command that execs a shell in a pod or container.
+var execShell = regexp.MustCompile(`\bexec\b[^;&|\n]*\s(?:sh|bash|zsh)\b`)
 
 // port is url's port, "" when it has none.
 func port(raw string) string {
