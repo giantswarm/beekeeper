@@ -26,11 +26,22 @@ type ModelServer struct {
 // configuration is read.
 var mayLoad = regexp.MustCompile(`ollama|lemonade|agentlab|/api/|/v1/`)
 
-// loader returns the pattern of a command that makes a model server load a
+// loader is the pattern of a command that makes a model server load a model.
+type loader struct {
+	// start matches, at a command position, the ollama or Lemonade CLI, a lab
+	// test that runs turns on the models, or an HTTP client (group 1).
+	start *regexp.Regexp
+	// call matches an HTTP client's whole call that runs or pulls a model:
+	// the request to a server's port on such a path. It reads the command's
+	// text as written, because a quoted URL is masked in the shell scan.
+	call *regexp.Regexp
+}
+
+// loader returns what recognises a command that makes a model server load a
 // model: the ollama or Lemonade CLI, an HTTP request to a server's port on a
 // path that runs or pulls one, a lab test that runs turns on it. nil when no
 // server is known.
-func (m ModelServer) loader() *regexp.Regexp {
+func (m ModelServer) loader() *loader {
 	var alts, ports []string
 	if p := port(m.URL); p != "" {
 		alts = append(alts, `ollama\s+(?:run|pull|create|push|cp)\b`)
@@ -50,14 +61,45 @@ func (m ModelServer) loader() *regexp.Regexp {
 		}
 		alts = append(alts, `agentlab\s+(?:`+strings.Join(tests, "|")+`)\b`)
 	}
-	// ollama's native and OpenAI paths, and Lemonade's under /api/v1/.
-	alts = append(alts, `(?:curl|wget|xh|https?)\b[^;&|\n]*:(?:`+strings.Join(ports, "|")+
-		`)/(?:api/(?:generate|chat|embed|embeddings|pull|create|push|copy)|v1/|api/v1/(?:chat|completions|responses|embeddings|reranking|load|pull|audio|images))`)
+	alts = append(alts, httpClient)
 	// A command position, or the command a kubectl exec (after --) or a
 	// docker exec (after the container) runs: a mention in an argument, an
 	// issue comment's body say, is no command.
 	at := `(?:` + pos + `|\s--\s+|\bexec\s+(?:-\S+\s+)*[\w.-]+\s+)`
-	return regexp.MustCompile(`(?m)` + at + `(` + strings.Join(alts, "|") + `)`)
+	return &loader{
+		start: regexp.MustCompile(`(?m)` + at + `(` + strings.Join(alts, "|") + `)`),
+		// ollama's native and OpenAI paths, and Lemonade's under /api/v1/.
+		call: regexp.MustCompile(`^` + httpClient + `[^;&|\n]*:(?:` + strings.Join(ports, "|") +
+			`)/(?:api/(?:generate|chat|embed|embeddings|pull|create|push|copy)|v1/|api/v1/(?:chat|completions|responses|embeddings|reranking|load|pull|audio|images))`),
+	}
+}
+
+// httpClient is the commands that make an HTTP request.
+const httpClient = `(?:curl|wget|xh|https?)\b`
+
+var httpStart = regexp.MustCompile(`^` + httpClient)
+
+// find returns the call of cmd that loads a model, "" for none: the first
+// match of the loader at a command position of the shell (commandMatch) whose
+// command is no help or version print and, for an HTTP client, whose call
+// reaches a model path.
+func (l *loader) find(cmd string) string {
+	var call string
+	keep := func(cmd string, m []int) bool {
+		if !notHelp(cmd, m) {
+			return false
+		}
+		if httpStart.MatchString(cmd[m[2]:m[3]]) {
+			call = l.call.FindString(cmd[m[2]:])
+			return call != ""
+		}
+		call = cmd[m[2]:m[3]]
+		return true
+	}
+	if commandMatch(l.start, cmd, keep) == nil {
+		return ""
+	}
+	return call
 }
 
 // port is url's port, "" when it has none.
@@ -81,14 +123,8 @@ func (h Hook) modelServerRefusal(cmd, session string) string {
 	if re == nil {
 		return ""
 	}
-	var m []string
-	for _, i := range re.FindAllStringSubmatchIndex(cmd, -1) {
-		if notHelp(cmd, i) {
-			m = []string{cmd[i[0]:i[1]], cmd[i[2]:i[3]]}
-			break
-		}
-	}
-	if m == nil {
+	call := re.find(cmd)
+	if call == "" {
 		return ""
 	}
 	if slices.ContainsFunc(h.Leases(), func(l lease.Holder) bool {
@@ -96,7 +132,7 @@ func (h Hook) modelServerRefusal(cmd, session string) string {
 	}) {
 		return ""
 	}
-	return "Refused: `" + short(m[1]) + "` makes a host model server load a model into the iGPU's memory, RAM no cgroup " +
+	return "Refused: `" + short(call) + "` makes a host model server load a model into the iGPU's memory, RAM no cgroup " +
 		"counts or caps. Only the session holding the model-server lease loads one: ask your supervisor for \"model-server\" " +
 		"with the GiB your models need, claim it with `beekeeper lease claim model-server -p \"<purpose>\" --gib <n>` after its yes, " +
 		"use models within that budget with keep_alive 0, and release the lease right after. The watch unloads a model no lease covers."
