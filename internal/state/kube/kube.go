@@ -201,6 +201,9 @@ func (s *Store) Log(events ...state.Event) error {
 // Record refuses as Log does.
 func (s *Store) Record(events ...state.Event) error { return s.Log(events...) }
 
+// RecordWithin refuses as Log does.
+func (s *Store) RecordWithin(_ time.Duration, events ...state.Event) error { return s.Log(events...) }
+
 // ReadFile refuses: side files stay on the machine.
 func (s *Store) ReadFile(name string, _ any) (bool, error) {
 	return false, fmt.Errorf("side file %s: %w", name, ErrLocal)

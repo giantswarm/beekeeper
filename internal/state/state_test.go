@@ -46,6 +46,9 @@ func TestAStuckHolderFailsTheWaitersWithItsPIDAndAge(t *testing.T) {
 	if err := s.Log(Event{Verb: verbRunStart}); !errors.As(err, &busy) || busy.PID != os.Getpid() {
 		t.Errorf("Log under a stuck holder = %v", err)
 	}
+	if err := s.RecordWithin(wait, Event{Verb: verbRunStart}); !errors.As(err, &busy) || busy.PID != os.Getpid() || busy.Waited != wait {
+		t.Errorf("RecordWithin under a stuck holder = %v", err)
+	}
 	unlock()
 	if _, err := os.Stat(s.path(holderFile)); !os.IsNotExist(err) {
 		t.Errorf("the holder's record outlived the lock: %v", err)
