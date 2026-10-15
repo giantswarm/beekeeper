@@ -433,9 +433,19 @@ func Queue(st *state.State, lane string) Lane {
 	if n := len(q.AllSettling); n > 0 {
 		q.Settling = q.AllSettling[n-1]
 	}
+	turn := promoteTurns(st, q.Waiting)
 	slices.SortStableFunc(q.Waiting, func(a, b state.Merge) int {
 		if a.Outside != b.Outside {
 			if a.Outside {
+				return -1
+			}
+			return 1
+		}
+		if c := turn(a).Compare(turn(b)); c != 0 {
+			return c
+		}
+		if ap, bp := isPromote(a), isPromote(b); ap != bp {
+			if ap {
 				return -1
 			}
 			return 1
@@ -448,6 +458,32 @@ func Queue(st *state.State, lane string) Lane {
 		}
 	}
 	return q
+}
+
+func isPromote(m state.Merge) bool { return m.PR == 0 }
+
+// promoteTurns gives each waiting merge the time it takes its place in the
+// lane by. While a tool-release window is open, a waiting promotion of the
+// tool's repository goes before every waiting merge of that repository: the
+// merges wait for the window, which closes only once the stable release is
+// promoted and installed, so a promotion queued behind one would wait for the
+// merge that waits for it. Any other merge keeps its join time.
+func promoteTurns(st *state.State, waiting []state.Merge) func(state.Merge) time.Time {
+	open := slices.ContainsFunc(st.Holds, func(h state.Hold) bool { return h.Tool != "" })
+	var first time.Time
+	if open {
+		for _, m := range waiting {
+			if m.Repo == ToolRepo && !isPromote(m) && (first.IsZero() || m.Joined.Before(first)) {
+				first = m.Joined
+			}
+		}
+	}
+	return func(m state.Merge) time.Time {
+		if open && m.Repo == ToolRepo && isPromote(m) && !first.IsZero() && first.Before(m.Joined) {
+			return first
+		}
+		return m.Joined
+	}
 }
 
 // failedFor is how long a failed attempt stays on its lane without a next
