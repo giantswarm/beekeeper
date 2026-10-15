@@ -18,7 +18,10 @@ const (
 )
 
 // decisionArgs are the parts a complete decision for the person carries.
-var decisionArgs = []string{flagFor, notePerson, flagStatusQuo, sqNow, flagWhy, whyNow, "--default", dfltOK, flagDue, "3h"}
+var decisionArgs = []string{flagRef, decisionRef, flagFor, notePerson, flagStatusQuo, sqNow, flagWhy, whyNow, "--default", dfltOK, flagDue, "3h"}
+
+// decisionRef is the thread of decisionArgs, the pull request it asks about.
+const decisionRef = "o/r#7"
 
 func TestNoteKindDefaultsByWhomItIsFor(t *testing.T) {
 	a, _ := noteApp(t)
@@ -88,7 +91,7 @@ func TestDecisionNeedsItsDueAndDefault(t *testing.T) {
 	if err := addNote(a, "--kind", noteDecision, "--for", "Sam", "--default", dfltOK, "--due", "3h", "Pick the lab?"); err == nil || !strings.Contains(err.Error(), "--status-quo") {
 		t.Fatalf("a decision for another person without its status quo: %v", err)
 	}
-	if err := addNote(a, "--kind", noteDecision, "--for", "Sam", "--status-quo", sqNow, "--default", dfltOK, "--due", "3h", "Pick the lab?"); err != nil {
+	if err := addNote(a, "--kind", noteDecision, "--for", "Sam", "--status-quo", sqNow, "--default", dfltOK, "--due", "3h", "--ref", decisionRef, "Pick the lab?"); err != nil {
 		t.Fatalf("a complete decision for another person: %v", err)
 	}
 	if st, _ := a.store.Read(); len(st.Notes) != 1 {

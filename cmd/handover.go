@@ -127,7 +127,7 @@ always complete.`,
 					}
 					a.printOwnNotes(notes)
 				}},
-				{"answers", "Answered decisions", func(all bool) { a.printAnswers(ans, all) }},
+				{"answers", "Answers", func(all bool) { a.printAnswers(ans, all) }},
 				{"timers", "Timers", func(bool) { a.printTimers(v.st.Timers, false) }},
 				{"alerts", "Alerts", func(bool) { a.printAlerts(al) }},
 				{"events", "Latest events", func(bool) {

@@ -111,9 +111,11 @@ func shortDur(d time.Duration) string {
 	return strings.TrimSuffix(s, "0m")
 }
 
-// answered is a decision a person answered: the note.answered event read
-// back.
+// answered is a person's answer recorded on its thread: the
+// answer.recorded event read back. ID is the note it answered, 0 for none.
 type answered struct {
+	About    string
+	Comment  string
 	ID       int
 	For      string
 	Via      string
@@ -124,26 +126,24 @@ type answered struct {
 	By       string
 }
 
-// noteAnswered is the event of a person's answer on a note.
-const noteAnswered = "note.answered"
+// answeredDetail is answer.recorded's detail, as beekeeper answer writes it
+// (answerEvent).
+var answeredDetail = regexp.MustCompile(`(?s)^(\S+) answered by (.*?) via (\w+), recorded at (\S+): (.*?)(?: \(note #(\d+), asked by (.*?): (.*)\))?$`)
 
-// answeredDetail is note.answered's detail, as `note answer` writes it
-// (answeredEvent); one written before answers named their way has no via.
-var answeredDetail = regexp.MustCompile(`(?s)^#(\d+) answered for (.*?)(?: via (\w+))?: (.*?) \(asked by (.*?): (.*)\)$`)
-
-// parseAnswered reads a note.answered event; ok is false for another one.
+// parseAnswered reads an answer.recorded event; ok is false for another
+// one.
 func parseAnswered(e state.Event) (answered, bool) {
 	m := answeredDetail.FindStringSubmatch(e.Detail)
-	if e.Verb != noteAnswered || m == nil {
+	if e.Verb != answerRecorded || m == nil {
 		return answered{}, false
 	}
-	id, _ := strconv.Atoi(m[1])
-	return answered{ID: id, For: m[2], Via: m[3], Answer: m[4], Asker: m[5], Question: m[6], At: e.At, By: e.By.Name}, true
+	id, _ := strconv.Atoi(m[6])
+	return answered{About: m[1], For: m[2], Via: m[3], Comment: m[4], Answer: m[5], ID: id, Asker: m[7], Question: m[8], At: e.At, By: e.By.Name}, true
 }
 
-// answeredSince is the decisions answered since since, oldest first.
+// answeredSince is the answers recorded since since, oldest first.
 func (a *app) answeredSince(since time.Time) ([]answered, error) {
-	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == noteAnswered && e.At.After(since) })
+	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == answerRecorded && e.At.After(since) })
 	if err != nil {
 		return nil, err
 	}
@@ -200,31 +200,30 @@ func (a *app) lastRelay(st *state.State, floor time.Time) (time.Time, error) {
 	return starts[len(starts)-1].At, nil
 }
 
-// answeredText is an answered decision in a line: its answer in full, the
-// question shortened to n runes (0: in full).
+// answeredText is an answer in a line: its thread, its answer in full, the
+// question of the note it answered shortened to n runes (0: in full).
 func (a *app) answeredText(an answered, n int) string {
+	s := fmt.Sprintf("%s (by %s, answered %s): %q", an.About, an.For, a.stamp(an.At), oneLine(an.Answer))
+	if an.ID == 0 {
+		return s
+	}
 	q := oneLine(an.Question)
 	if n > 0 {
 		q = truncate(q, n)
 	}
-	return fmt.Sprintf("#%d (for %s, answered %s): %q on: %s", an.ID, an.For, a.stamp(an.At), oneLine(an.Answer), q)
+	return fmt.Sprintf("%s on note #%d: %s", s, an.ID, q)
 }
 
-// repeats is the decision answered within answeredWindow that n asks
-// again: for the same person, the same verb, on one of the same issues or
-// PRs.
-func repeats(recent []answered, n state.Note, question string) (*answered, string) {
-	// Newest first: the latest answer is the one that stands.
-	notes := make([]state.Note, len(recent))
-	for i := range recent {
-		j := len(recent) - 1 - i
-		notes[i] = state.Note{ID: j, For: recent[j].For, Text: recent[j].Question}
+// repeats is the latest answer recorded within answeredWindow on one of
+// n's threads by the person n is for.
+func repeats(recent []answered, n state.Note) *answered {
+	for i := len(recent) - 1; i >= 0; i-- {
+		an := &recent[i]
+		if strings.EqualFold(an.For, n.For) && slices.ContainsFunc(n.Refs, func(r string) bool { return strings.EqualFold(r, an.About) }) {
+			return an
+		}
 	}
-	o, ref := sameVerb(notes, n, question)
-	if o == nil {
-		return nil, ""
-	}
-	return &recent[o.ID], ref
+	return nil
 }
 
 // printAnswers lists the decisions answered since the last relay and

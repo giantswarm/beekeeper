@@ -30,6 +30,9 @@ func TestMain(m *testing.M) {
 	// No test frees the machine's /tmp, nor the test binary run as
 	// beekeeper: the automatic free reads no process table, so it frees
 	// nothing; a test that wants a run gives it a machine.
+	// Nor does an answer reach GitHub: every thread but unknownThread is a
+	// private one to it; a test that reads the comments stubs its own.
+	boardGH = (&answerGH{}).run
 	liveTmpfs = func(*app) (free.Machine, error) {
 		return free.Machine{TableErr: errors.New("no machine in a test")}, nil
 	}

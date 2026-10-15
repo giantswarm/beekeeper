@@ -256,37 +256,6 @@ func refs(s string) []string {
 	return out
 }
 
-// verb is what a note asks for: the first word of its question.
-func verb(question string) string {
-	f := strings.Fields(question)
-	if len(f) == 0 {
-		return ""
-	}
-	return strings.ToLower(strings.Trim(f[0], ".,:;!?\"'`"))
-}
-
-// sameVerb is the note for the same person that asks the same verb on one
-// of the same issues or PRs as n, or nil: the looser match that warns of
-// a question answered before.
-func sameVerb(notes []state.Note, n state.Note, question string) (*state.Note, string) {
-	v, rs := verb(question), refs(n.Text)
-	if v == "" || len(rs) == 0 {
-		return nil, ""
-	}
-	for i := range notes {
-		o := &notes[i]
-		if !strings.EqualFold(o.For, n.For) || verb(o.Text) != v {
-			continue
-		}
-		for _, r := range rs {
-			if slices.Contains(refs(o.Text), r) {
-				return o, r
-			}
-		}
-	}
-	return nil, ""
-}
-
 // sameQuestion normalises a question for the fold: case, spacing and the
 // closing punctuation aside.
 func sameQuestion(q string) string {

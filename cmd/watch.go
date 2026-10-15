@@ -1879,13 +1879,13 @@ func (w *watcher) noteAnswers(st *state.State) {
 		return
 	}
 	since := w.answersSince
-	evs, err := w.store.Events(0, func(e state.Event) bool { return e.Verb == noteAnswered && e.At.After(since) })
+	evs, err := w.store.Events(0, func(e state.Event) bool { return e.Verb == answerRecorded && e.At.After(since) })
 	if err != nil {
 		return // the next close reads them again
 	}
 	for _, e := range evs {
 		w.answersSince = e.At
-		if an, ok := parseAnswered(e); ok && prev[an.ID] {
+		if an, ok := parseAnswered(e); ok && an.ID != 0 && prev[an.ID] {
 			w.emitNow("pending", "%s", answeredLine(an.ID, cmp.Or(e.By.Person, e.By.Name), truncate(an.Answer, 300)))
 		}
 	}

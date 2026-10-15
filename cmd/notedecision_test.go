@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/identity"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -78,7 +79,7 @@ func TestDecisionKeepsItsParts(t *testing.T) {
 	if err := addNote(a, "--kind", noteDecision, "--for", "team:bumblebee", "--default", dfltOK, "--due", "3h", "which lane?"); err == nil || !strings.Contains(err.Error(), "--status-quo") {
 		t.Fatalf("a team's decision without its status quo: %v", err)
 	}
-	if err := addNote(a, "--kind", noteDecision, "--for", "team:bumblebee", "--status-quo", sqNow, "--default", dfltOK, "--due", "3h", "which lane?"); err != nil {
+	if err := addNote(a, "--kind", noteDecision, "--for", "team:bumblebee", "--status-quo", sqNow, "--default", dfltOK, "--due", "3h", "--ref", decisionRef, "which lane?"); err != nil {
 		t.Fatalf("a team's decision: %v", err)
 	}
 }
@@ -127,16 +128,21 @@ func TestNoteAnswerRecordsTheChoiceAndTheWords(t *testing.T) {
 	}
 }
 
-func TestAnsweredEventsBeforeViaStillParse(t *testing.T) {
-	e := state.Event{Verb: noteAnswered, Detail: "#3 answered for Pat: merge it (asked by agent-one: Merge? Status quo: x.)"}
-	an, ok := parseAnswered(e)
-	if !ok || an.ID != 3 || an.For != notePerson || an.Via != "" || an.Answer != "merge it" {
+func TestAnswerEventsParse(t *testing.T) {
+	const words = "portal: it rolls (with backstage)"
+	n := state.Note{ID: 4, For: "team:bumblebee", Text: "Which lane? (a: b)", By: state.Party{Name: "agent-one"}}
+	rec := &recordedAnswer{Thread: &board.Thread{About: privateThread}, Comment: "https://x/c", By: "Kim", Via: viaSlack, Answer: words, Note: 4}
+	an, ok := parseAnswered(answerEvent(state.Party{}, rec, &n))
+	if !ok || an.About != privateThread || an.For != "Kim" || an.Via != viaSlack || an.Comment != "https://x/c" || an.Answer != words || an.ID != 4 || an.Asker != "agent-one" || an.Question != "Which lane? (a: b)" {
 		t.Fatalf("%+v %v", an, ok)
 	}
-	n := state.Note{ID: 4, For: "team:bumblebee", Text: "Which lane?", By: state.Party{Name: "agent-one"}}
-	an, ok = parseAnswered(answeredEvent(state.Party{}, &n, viaSlack, "portal: it rolls with backstage"))
-	if !ok || an.For != "team:bumblebee" || an.Via != viaSlack || an.Answer != "portal: it rolls with backstage" || an.Question != "Which lane?" {
+	rec.Note = 0
+	an, ok = parseAnswered(answerEvent(state.Party{}, rec, nil))
+	if !ok || an.ID != 0 || an.Answer != words || an.Question != "" {
 		t.Fatalf("%+v %v", an, ok)
+	}
+	if _, ok := parseAnswered(state.Event{Verb: "note.answered", Detail: "#3 answered for Pat: merge it (asked by agent-one: Merge?)"}); ok {
+		t.Fatal("note.answered is no longer read")
 	}
 }
 
@@ -218,7 +224,7 @@ func TestNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 	woke := stubWakes(t)
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		for i, by := range []state.Party{{Session: "s5", Name: ended}, {Session: "s5", Name: ended}, {Session: "s5", Name: ended}, {Session: "w1", Name: "agent-x"}} {
-			st.Notes = append(st.Notes, state.Note{ID: i + 1, Kind: noteDecision, By: by, Text: fmt.Sprintf("question %d", i+1)})
+			st.Notes = append(st.Notes, state.Note{ID: i + 1, Kind: noteDecision, By: by, Text: fmt.Sprintf("question %d", i+1), Refs: []string{privateThread}})
 		}
 		st.Supervisor = &state.Supervisor{Party: state.Party{Session: "s6", Name: current}, Since: relayNow}
 		return nil, nil
@@ -272,7 +278,7 @@ func TestNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 		t.Errorf("output %q lacks %q", got, want)
 	}
 
-	if got := answer("4"); strings.TrimSpace(got) != "note #4 answered and closed" || len(*woke) != 2 || !strings.Contains((*woke)[1], "→ w1: NOTE ANSWERED #4") {
+	if got := answer("4"); !strings.HasSuffix(strings.TrimSpace(got), "note #4 answered and closed") || len(*woke) != 2 || !strings.Contains((*woke)[1], "→ w1: NOTE ANSWERED #4") {
 		t.Fatalf("another session's note: output %q, woke %q", got, *woke)
 	}
 

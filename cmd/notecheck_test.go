@@ -97,7 +97,7 @@ func TestNoteAddRefusesAndAcceptsForThePerson(t *testing.T) {
 	if err := addNote(a, "a memo on #7"); err != nil {
 		t.Fatalf("a memo is not checked: %v", err)
 	}
-	if err := addNote(a, "--for", notePerson, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "--due", "3h", "approve "+prURL); err != nil {
+	if err := addNote(a, "--for", notePerson, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "--due", "3h", "--ref", prURL, "approve "+prURL); err != nil {
 		t.Fatalf("a complete note: %v", err)
 	}
 	st, _ := a.store.Read()
@@ -176,13 +176,13 @@ func TestNoteFoldKeysOnItsRefNotOnCitedURLs(t *testing.T) {
 	if err := addNote(a, append(args, flagStatusQuo, "the toolchain "+tools+" waits", "--default", dfltOK, "--ref", tools, "Does the toolchain ship Go 1.26?")...); err != nil {
 		t.Fatal(err)
 	}
-	if err := addNote(a, append(args, flagStatusQuo, "the plan "+plan+" cites "+tools, "--default", "the plan keeps its testing section", "Does the testing plan of "+plan+" cover "+tools+"?")...); err != nil {
+	if err := addNote(a, append(args, flagStatusQuo, "the plan "+plan+" cites "+tools, "--default", "the plan keeps its testing section", "--ref", plan, "Does the testing plan of "+plan+" cover "+tools+"?")...); err != nil {
 		t.Fatal(err)
 	}
 	// Two different questions on one plan PR, each with its own default:
 	// two notes.
 	for i, q := range []string{"Does the plan keep its stages?", "Does the plan name its owner?"} {
-		if err := addNote(a, append(args, flagStatusQuo, "the plan "+plan+" is open", "--default", "default "+string(rune('A'+i)), q)...); err != nil {
+		if err := addNote(a, append(args, flagStatusQuo, "the plan "+plan+" is open", "--default", "default "+string(rune('A'+i)), "--ref", plan, q)...); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -248,7 +248,7 @@ func TestNoteOnAPlanPullNeedsItsStageCheckGreenOrAtTheGrillStage(t *testing.T) {
 	a, out := noteApp(t)
 	a.cfg.Plans = config.Plans{Repositories: []string{"O/Plans"}, Check: config.DefaultPlansCheck}
 	add := func(url string) error {
-		return addNote(a, "--for", notePerson, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "--due", "3h", "decide the grill question on "+url+"?")
+		return addNote(a, "--for", notePerson, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "--due", "3h", "--ref", url, "decide the grill question on "+url+"?")
 	}
 	plan := "https://github.com/o/plans/pull/"
 	refusals := map[string]string{

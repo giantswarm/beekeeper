@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"cmp"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -72,13 +71,14 @@ note's default and recommendation stand) or ask a different question.
 --fold-into <n> folds into open note n for the same person whatever the
 question. A --kind login note closes
 once its --until probe, a shell command the watch runs every tick, exits 0.
-A memo is not checked. A note for a person
-that asks again what was answered for that person within the last 72
-hours (the same verb on one of the same issues or PRs) is filed with a
-warning that quotes the answer.
+A memo is not checked. A decision is refused without --ref: its answer is
+recorded on that thread (beekeeper answer). A note for a person whose
+--ref an answer of that person was recorded on within the last 72 hours
+(answer.recorded) is filed with a warning that quotes the answer.
 
 --ref links the note to an issue or pull request it asks about
-(owner/repo#n or its URL, repeatable): once every linked one is closed or
+(owner/repo#n or its URL, repeatable; the first is the thread its answer
+is recorded on): once every linked one is closed or
 merged, beekeeper watch closes the note as overtaken (note.overtaken),
 when its worker closed them at the end of its task: an issue a pull
 request's closing keyword closed at its merge, or any close while the
@@ -154,11 +154,14 @@ and tells the session that filed it.`,
 				if m := draft.unrenderable(forWho); len(m) > 0 {
 					return usageErr("decision for %s refused, it cannot render: %s", forWho, strings.Join(m, "; "))
 				}
+				if len(linked) == 0 {
+					return usageErr("decision for %s refused, it names no thread: --ref owner/repo#n, the issue or pull request it concerns, where its answer is recorded", forWho)
+				}
 			} else if draft.Recommend != 0 {
 				return usageErr("--recommend is a decision's: a %s recommends nothing", n.Kind)
 			}
 			if forWho != "" && n.Kind != noteMemo {
-				if err := a.warnAnswered(cmd, n, draft.Question); err != nil {
+				if err := a.warnAnswered(cmd, n); err != nil {
 					return err
 				}
 			}
@@ -299,52 +302,35 @@ note.overtaken with the reason, as the watch does.`,
 	var via string
 	answer := &cobra.Command{
 		Use:   "answer <id> [<answer>]",
-		Short: "Record a person's answer on a note, word for word, and close it",
-		Long: `Close the note with the person's answer: --choice <n>, one of its options
-(1-based), the person's own words, or both. The note.answered event carries
-the answer verbatim, with the way it came (--via, cli unless it came from
-Slack), so the session that filed the note, the supervisor and the guide's
-feed read it from the log (beekeeper log --verb note.answered); the session
-that filed it is told at once. A note a role's run filed (the supervisor's,
-the guide's) goes to the role's holder now; while none holds it, the answer
-waits for the role's next start.`,
+		Short: "Record a person's answer on a note's thread, word for word, and close it",
+		Long: `beekeeper answer for a note: its thread is the note's first --ref. The
+answer is --choice <n>, one of its options (1-based), the person's own
+words, or both, with the way it came (--via, cli unless it came from
+Slack). It is posted on the thread (a public one's private epic or plan,
+as beekeeper answer says), logged as answer.recorded and the note closed;
+the session that filed it is told at once. A note a role's run filed (the
+supervisor's, the guide's) goes to the role's holder now; while none holds
+it, the answer waits for the role's next start. A note without a --ref is
+refused: beekeeper answer <owner/repo#n> --note <id> names its thread.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			me, err := a.caller()
-			if err != nil {
-				return err
-			}
 			ids, err := parseIDs(args[:1], "note")
 			if err != nil {
 				return err
 			}
-			if via != viaCLI && via != viaSlack {
-				return usageErr("--via %q is none of %s, %s", via, viaCLI, viaSlack)
-			}
-			var n state.Note
-			var text string
-			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-				i := slices.IndexFunc(st.Notes, func(n state.Note) bool { return n.ID == ids[0] })
-				if i < 0 {
-					return nil, refused("note #%d is not open", ids[0])
-				}
-				n = st.Notes[i]
-				var err error
-				if text, err = answerText(&n, choice, strings.Join(args[1:], " ")); err != nil {
-					return nil, err
-				}
-				st.Notes = slices.Delete(st.Notes, i, i+1)
-				return []state.Event{answeredEvent(me, &n, via, text)}, nil
-			})
+			st, err := a.store.Read()
 			if err != nil {
 				return err
 			}
-			told := a.tellFiler(cmd.Context(), me, &n, answeredLine(n.ID, cmp.Or(me.Person, me.Name), text))
-			if _, err := fmt.Fprintf(a.out, "note #%d answered and closed\n", ids[0]); err != nil || told == "" {
-				return err
+			i := slices.IndexFunc(st.Notes, func(n state.Note) bool { return n.ID == ids[0] })
+			if i < 0 {
+				return refused("note #%d is not open", ids[0])
 			}
-			_, err = fmt.Fprintln(a.out, told)
-			return err
+			n := st.Notes[i]
+			if len(n.Refs) == 0 {
+				return refused("note #%d links no issue or pull request (--ref) for its answer's thread: beekeeper answer <owner/repo#n> --note %d", n.ID, n.ID)
+			}
+			return a.recordAnswer(cmd.Context(), n.Refs[0], n.ID, choice, via, strings.Join(args[1:], " "))
 		},
 	}
 	answer.Flags().IntVar(&choice, "choice", 0, "the option chosen, 1-based")
@@ -543,16 +529,16 @@ func (a *app) notePinCmd(name string, pin bool) *cobra.Command {
 	}
 }
 
-// warnAnswered warns when n asks again what was answered for the same
-// person within answeredWindow; the note is filed all the same.
-func (a *app) warnAnswered(cmd *cobra.Command, n state.Note, question string) error {
+// warnAnswered warns when the person n is for answered on one of its
+// threads within answeredWindow; the note is filed all the same.
+func (a *app) warnAnswered(cmd *cobra.Command, n state.Note) error {
 	recent, err := a.answeredSince(a.now.Add(-answeredWindow))
 	if err != nil {
 		return err
 	}
-	if an, ref := repeats(recent, n, question); an != nil {
-		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "warning: note #%d asked %s on %s and was answered %s for %s: %q\n",
-			an.ID, verb(an.Question), ref, a.stamp(an.At), an.For, oneLine(an.Answer))
+	if an := repeats(recent, n); an != nil {
+		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s answered on %s %s (%s): %q\n",
+			an.For, an.About, a.stamp(an.At), an.Comment, oneLine(an.Answer))
 	}
 	return err
 }

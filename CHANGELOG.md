@@ -11,8 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `beekeeper answer <owner/repo#n> [--note <id>] [--choice <n>] [--via cli|slack] "<words>"` records a person's words verbatim on the GitHub thread they concern, however they came: an agent-written comment naming who answered, how it came and the note it answers, `answer.recorded` in `beekeeper log` with the thread, the comment's URL and the words, the named note closed and the asking session told (the note's filer, else the sessions serving the thread). A public thread gets nothing: the comment goes to the first private plan pull request naming it or an epic above it, then to the nearest epic above it in a private repository; with neither the answer is refused, naming what to add. `note answer` is this verb on the note's first `--ref`; `note.answered` is no longer written, and the hand-over's answers and `note add`'s re-ask warning read `answer.recorded` by thread ([#942](https://github.com/giantswarm/beekeeper/issues/942)).
 - The doctor keeps Docker's images and build cache under `doctor.dockerImagesMaxGiB` (40) and `doctor.dockerBuildCacheMaxGiB` (20): every `doctor.dockerEvery` (1h) a watch removes the unused images created longest ago and prunes the build cache down to three quarters of each cap. An image a container or a kind lab's node uses is never removed, and nothing is pruned while an image import or build runs or a lab lease is under an hour old. Each prune is a `docker.prune` event with what it reclaimed; a prune held back an hour, or a failed one, is a `DOCKER` line. A lab machine had 76 GiB of images and 39.5 GiB of build cache nothing trimmed ([#1178](https://github.com/giantswarm/beekeeper/issues/1178)).
 - `beekeeper note list --full` prints each note's whole text, every line of it, indented under its id and tags, with its default and the issues and pull requests it names (`names: owner/repo#n, …`, from its text and its `--ref` links, read as `board next` reads them); `--json --full` adds them as each note's `names`. A scan sees what a memo names in one call, without reading each note. The default output is unchanged ([#920](https://github.com/giantswarm/beekeeper/issues/920)).
+
+### Changed
+
+- A decision (`note add --for` the person) is refused without `--ref`: every decision names the thread its answer is recorded on ([#942](https://github.com/giantswarm/beekeeper/issues/942)).
 
 ### Fixed
 

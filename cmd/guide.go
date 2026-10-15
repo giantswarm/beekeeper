@@ -37,8 +37,8 @@ says GUIDE RELAY DUE once the guide's context reaches guide.relayAt.
 Its queue is every open decision filed --for its person, guide.person
 (` + "`beekeeper guide queue`" + `), and every session the desktop files as waiting
 on its person;
-` + "`beekeeper note answer <id> <answer>`" + ` records an answer word for word and closes
-the note.
+` + "`beekeeper answer <owner/repo#n> --note <id> <answer>`" + ` records an answer word for
+word on the thread it concerns and closes the note.
 
 Without a subcommand, shows the guide and its context in tokens against
 guide.relayAt (exit 3 when none runs, 4 in the session a relay relieved).`,
@@ -311,7 +311,8 @@ func (a *app) guideNextCmd() *cobra.Command {
 		Long: `Serve one open decision for the guide's person and mark it as being asked:
 the open note filed for the person that is due first (by due time, then the
 undated in filing order; a pinned note is no decision). The same note is
-served again until it is answered (` + "`beekeeper note answer <id> <answer>`" + `) or
+served again until it is answered (` + "`beekeeper note answer <id> <answer>`" + `, its
+thread's beekeeper answer) or
 closed (note done); only then comes the next. Only the guide's session
 serves decisions. With no open note it says so, and names how many sessions
 wait on the person (` + "`beekeeper guide queue`" + `).`,
@@ -642,14 +643,18 @@ func (a *app) closedNotes(st *state.State) (map[int]state.Event, error) {
 		return out, nil
 	}
 	evs, err := a.store.Events(0, func(e state.Event) bool {
-		return e.Verb == noteAnswered || e.Verb == noteDefaulted || e.Verb == noteDone || e.Verb == noteOvertaken || e.Verb == noteReplaced
+		return e.Verb == answerRecorded || e.Verb == noteDefaulted || e.Verb == noteDone || e.Verb == noteOvertaken || e.Verb == noteReplaced
 	})
 	if err != nil {
 		return nil, err
 	}
 	for _, e := range evs {
 		id, _, _ := strings.Cut(strings.TrimPrefix(e.Detail, "#"), " ")
-		if n, err := strconv.Atoi(id); err == nil && gone[n] {
+		n, err := strconv.Atoi(id)
+		if an, ok := parseAnswered(e); ok {
+			n, err = an.ID, nil
+		}
+		if err == nil && gone[n] {
 			out[n] = e // the latest wins
 		}
 	}
@@ -697,7 +702,7 @@ func (a *app) feedLines(st *state.State, sessions []*claude.Session, closed map[
 				continue // still in the queue, or open and filed for someone else
 			}
 			switch e, ok := closed[id]; {
-			case ok && e.Verb == noteAnswered:
+			case ok && e.Verb == answerRecorded:
 				lines = append(lines, fmt.Sprintf("GUIDE ANSWERED (%s): %s", truncate(e.By.Name, 30), truncate(oneLine(e.Detail), 240)))
 			case ok && e.Verb == noteDefaulted:
 				lines = append(lines, "GUIDE DEFAULTED: "+truncate(oneLine(e.Detail), 240))

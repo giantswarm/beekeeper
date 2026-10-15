@@ -129,7 +129,7 @@ func (a *app) park(me state.Party, on, waits string) (string, error) {
 		}
 		if isNote {
 			if !slices.ContainsFunc(st.Notes, func(n state.Note) bool { return n.ID == id }) {
-				return nil, refused("note #%d is not open: its answer is in beekeeper log --verb %s", id, noteAnswered)
+				return nil, refused("note #%d is not open: its answer is in beekeeper log --verb %s", id, answerRecorded)
 			}
 			on = fmt.Sprintf("#%d", id)
 		}
@@ -303,7 +303,7 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 	if len(closed) > 0 {
 		evs, err := w.store.Events(0, func(e state.Event) bool {
 			switch e.Verb {
-			case noteAnswered, noteDefaulted, noteDone, noteOvertaken, noteReplaced:
+			case answerRecorded, noteDefaulted, noteDone, noteOvertaken, noteReplaced:
 				return true
 			}
 			return false
@@ -313,12 +313,12 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 		}
 		for _, e := range evs {
 			for _, id := range closed {
-				if !strings.HasPrefix(e.Detail, fmt.Sprintf("#%d ", id)) {
-					continue
-				}
-				closes[id] = fmt.Sprintf("note #%d closed: %s", id, oneLine(e.Detail))
 				if an, ok := parseAnswered(e); ok {
-					closes[id] = fmt.Sprintf("note #%d answered by %s: %s", id, cmp.Or(e.By.Person, e.By.Name), an.Answer)
+					if an.ID == id {
+						closes[id] = fmt.Sprintf("note #%d answered by %s: %s (%s)", id, an.For, an.Answer, an.Comment)
+					}
+				} else if strings.HasPrefix(e.Detail, fmt.Sprintf("#%d ", id)) {
+					closes[id] = fmt.Sprintf("note #%d closed: %s", id, oneLine(e.Detail))
 				}
 			}
 		}

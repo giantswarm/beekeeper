@@ -98,10 +98,10 @@ func TestGuideFeedSaysEachItemOnce(t *testing.T) {
 	}
 	st.Notes = st.Notes[1:]
 	st.Records[0].Waits = "Timo: pick a name"
-	closed := map[int]state.Event{1: {Verb: "note.answered", By: state.Party{Name: "Guide"}, Detail: "#1 answered for Timo: yes, merge it (asked by Agent seven: merge the bump?)"}}
+	closed := map[int]state.Event{1: {Verb: answerRecorded, By: state.Party{Name: "Guide"}, Detail: refOne + " answered by Timo via cli, recorded at https://c/1: yes, merge it (note #1, asked by Agent seven: merge the bump?)"}}
 	lines, _ = a.feedLines(st, sessions, closed, nil)
 	if len(lines) != 2 || lines[0] != `GUIDE WAITING: "Agent three" needs its person: Timo: pick a name` ||
-		lines[1] != "GUIDE ANSWERED (Guide): #1 answered for Timo: yes, merge it (asked by Agent seven: merge the bump?)" {
+		lines[1] != "GUIDE ANSWERED (Guide): "+refOne+" answered by Timo via cli, recorded at https://c/1: yes, merge it (note #1, asked by Agent seven: merge the bump?)" {
 		t.Fatalf("answer and new wait: %q", lines)
 	}
 }
@@ -200,8 +200,8 @@ func TestGuideFeedSaysOnlyItsPersonsNotesOnce(t *testing.T) {
 		t.Fatalf("second poll said again: %q", lines)
 	}
 	st.Notes = slices.DeleteFunc(st.Notes, func(n state.Note) bool { return n.ID == 23 || n.ID == 99 })
-	closed := map[int]state.Event{99: {Verb: "note.answered", By: state.Party{Name: "Guide"}, Detail: "#99 answered for Pat: yes"}}
-	if lines, _ := a.feedLines(st, sessions, closed, nil); !slices.Equal(lines, []string{"GUIDE ANSWERED (Guide): #99 answered for Pat: yes"}) {
+	closed := map[int]state.Event{99: {Verb: answerRecorded, By: state.Party{Name: "Guide"}, Detail: "o/r#99 answered by Pat via cli, recorded at https://c/99: yes (note #99, asked by Agent three: merge?)"}}
+	if lines, _ := a.feedLines(st, sessions, closed, nil); !slices.Equal(lines, []string{"GUIDE ANSWERED (Guide): o/r#99 answered by Pat via cli, recorded at https://c/99: yes (note #99, asked by Agent three: merge?)"}) {
 		t.Fatalf("the person's answer, and nothing for the supervisor's closed note: %q", lines)
 	}
 }

@@ -34,9 +34,9 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   `Monitor` with the command the line names. `beekeeper guide next` serves the one decision to ask now, due
   first, and the next only once that one is answered or closed. `beekeeper guide queue` is the whole queue: the open notes for the
   person with the session that filed each, its deadline and its default, then the sessions waiting
-  on them with what they need. `beekeeper note answer <id> "<words>"` records an answer verbatim and
-  closes the note; the owning session and the supervisor read it from `beekeeper log --verb
-  note.answered`. `beekeeper guide` shows this session's context against the relay point.
+  on them with what they need. `beekeeper answer <owner/repo#n> [--note <id>] "<words>"` records an answer
+  verbatim on the thread it concerns (a public one's private epic or plan), closes the note and
+  tells the owning session; the supervisor reads it from `beekeeper log --verb answer.recorded`. `beekeeper guide` shows this session's context against the relay point.
 - **The owning session** of a decision is named in the queue. `beekeeper tail <session>` gives its
   last turns, `ListAgents` its messaging address.
 - **The supervisor** is another session (`/supervise`). It files decisions as `beekeeper note add
@@ -56,7 +56,7 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   only carries out an intent the person already stated, is closed without asking.
 - **Read before asking.** Before a decision goes to the person, the guide reads the owning session's
   transcript and the issue or PR it names: a note may already be answered there, or overtaken by the
-  work. An answer the person already gave is recorded with `note answer` in their words and relayed,
+  work. An answer the person already gave is recorded with `beekeeper answer` in their words and relayed,
   not asked again.
 - **Each decision carries its whole context; the question is one line.** The person decides from the
   message alone, so every decision states, in plain words: what it is, from zero (no plan step,
@@ -70,10 +70,10 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   rolled or closed, and every issue or PR as its full URL; each option's description is its
   consequence. The hook refuses a question that lacks one, naming what it lacks. A decision that
   blocks a session's work also goes to the person's phone with `PushNotification`.
-- **Answers travel word for word.** Each answer goes to `beekeeper note answer <id> "<the person's
-  words>"` and, by `SendMessage`, to the owning session with the same words; the supervisor gets a
-  one-line copy. A waiting session with no note gets the words by `SendMessage` and the supervisor
-  its one line. Nothing is paraphrased, softened or extended.
+- **Answers travel word for word.** Each answer, given on a note, in this conversation or on Slack,
+  goes to `beekeeper answer <owner/repo#n> [--note <id>] "<the person's words>"` on the issue or PR
+  it concerns, which tells the owning session; the supervisor gets a one-line copy. A waiting session
+  with no note gets the words by `SendMessage` too. Nothing is paraphrased, softened or extended.
 - **New ideas and input go where they get worked.** Input on running work goes to its session in the
   person's words; a new idea becomes a board item; an epic that needs a plan is the supervisor's to
   schedule for planning.
