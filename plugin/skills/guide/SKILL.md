@@ -36,7 +36,7 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   person with the session that filed each, its deadline and its default, then the sessions waiting
   on them with what they need. `beekeeper answer <owner/repo#n> [--note <id>] "<words>"` records an answer
   verbatim on the thread it concerns (a public one's private epic or plan), closes the note and
-  tells the owning session; the supervisor reads it from `beekeeper log --verb answer.recorded`. `beekeeper guide` shows this session's context against the relay point.
+  tells the owning session, whichever way the answer came (a note, this conversation, Slack); the supervisor reads it from `beekeeper log --verb answer.recorded`. `beekeeper guide` shows this session's context against the relay point.
 - **The owning session** of a decision is named in the queue. `beekeeper tail <session>` gives its
   last turns, `ListAgents` its messaging address.
 - **The supervisor** is another session (`/supervise`). It files decisions as `beekeeper note add
@@ -74,6 +74,11 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   goes to `beekeeper answer <owner/repo#n> [--note <id>] "<the person's words>"` on the issue or PR
   it concerns, which tells the owning session; the supervisor gets a one-line copy. A waiting session
   with no note gets the words by `SendMessage` too. Nothing is paraphrased, softened or extended.
+- **Priorities and goes are the board's.** A priority the person states is `beekeeper priority set
+  <epic> <rank> --as <person>` (`board rank` orders items within a step), their go on an epic is
+  `beekeeper board move` to In Progress; no note carries either. A question names its
+  thread (`note add --ref <owner/repo#n>`), and the state the guide leaves the next guide is the
+  hand-over.
 - **New ideas and input go where they get worked.** Input on running work goes to its session in the
   person's words; a new idea becomes a board item; an epic that needs a plan is the supervisor's to
   schedule for planning.

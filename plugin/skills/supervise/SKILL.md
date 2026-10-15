@@ -49,14 +49,17 @@ machine has a supervisor at all times: the role moves to a successor by relay an
   <session>` records one without the word (grants queue in order), a hold with
   `beekeeper hold set <repo|github>`, a decision for the person with `beekeeper note add --for
   <person> --ref <owner/repo#n> --due <time> --status-quo "<what is true now>" --why "<why it needs them>" --default
-  "<the action if unanswered>"` (every issue or PR as its full URL; `note add --help` names the checks), its own
-  record (a state summary, a board skip, deferred work) as a memo, `beekeeper note add --kind memo
-  --replaces <the memo it supersedes>`, so each such memo is one open note, a point in time to look at
+  "<the action if unanswered>"` (every issue or PR as its full URL; `note add --help` names the checks; the question names its
+  thread with `--ref`), the order of epics with `beekeeper priority` (the person's list, read
+  never written here) and `beekeeper board rank`, a hold on an item with `beekeeper board block <item> --by
+  <issue>`, which the closing blocker releases without a session acting, a point in time to look at
   something with `beekeeper timer add <time> "<what>"` (`timer done` once looked at), what each
   session serves and waits on with `beekeeper sessions serve`, the registered agents with
   `beekeeper agents`. `beekeeper handover` prints all of it with the sessions; `beekeeper handover
   --prompt` is the successor's whole prompt. `beekeeper status` is the one-line view; `beekeeper
-  supervisor` shows this session's context against `supervisor.relayAt`.
+  supervisor` shows this session's context against `supervisor.relayAt`. Epics, plans, priorities and
+  the person's answers live on the board, in the issue and on its thread; the supervisor keeps
+  no note of them, and a state summary is the hand-over.
 - **Other sessions** are visible through `beekeeper sessions` (what each is on, the commands it
   runs, how long a bounded wait keeps it reachable, overlaps, `CTX` and the last hour's turns,
   errors, GitHub calls and cost) and `beekeeper tail <session>` (its last turns); `ListAgents`
