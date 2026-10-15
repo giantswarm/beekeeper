@@ -1,8 +1,10 @@
 package plugin
 
 import (
+	"fmt"
 	"io/fs"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -50,20 +52,53 @@ func TestWorkerRulesNameTheTopics(t *testing.T) {
 // per token of this text: the core rules at most 1,000 tokens, a topic
 // skill at most 700, its description at most 60.
 func TestWorkerRulesBudget(t *testing.T) {
-	const bytesPerToken = 2.7
-	if n := len(WorkerRules()); n > 1000*bytesPerToken {
-		t.Errorf("the worker rules have %d bytes, more than 1,000 tokens", n)
+	rules := "plugin/" + SkillsDir + "/worker-rules/SKILL.md"
+	if msg := overBudget(rules, "the worker rules", len(WorkerRules()), 1000); msg != "" {
+		t.Error(msg)
 	}
 	for _, topic := range Topics {
+		file := "plugin/" + SkillsDir + "/" + topic + "/SKILL.md"
 		raw := string(SkillFile(topic))
-		if len(raw) > 700*bytesPerToken {
-			t.Errorf("%s has %d bytes, more than 700 tokens", topic, len(raw))
+		if msg := overBudget(file, topic, len(raw), 700); msg != "" {
+			t.Error(msg)
 		}
 		desc, _, _ := strings.Cut(raw[strings.Index(raw, "\ndescription: ")+len("\ndescription: "):], "\n")
-		if len(desc) > 60*bytesPerToken {
-			t.Errorf("%s's description has %d bytes, more than 60 tokens", topic, len(desc))
+		if msg := overBudget(file, topic+"'s description", len(desc), 60); msg != "" {
+			t.Error(msg)
 		}
 	}
+}
+
+// An over-budget text fails naming its file, its size and the budget.
+func TestOverBudgetNamesFileSizeAndBudget(t *testing.T) {
+	const want = "skills/worker-rules/SKILL.md (the worker rules): 2,731 bytes, budget 2,700 (1,000 tokens at 2.7 bytes per token)"
+	if got := overBudget("skills/worker-rules/SKILL.md", "the worker rules", 2731, 1000); got != want {
+		t.Errorf("overBudget = %q, want %q", got, want)
+	}
+	if got := overBudget("skills/worker-rules/SKILL.md", "the worker rules", 2700, 1000); got != "" {
+		t.Errorf("at the budget: %q, want none", got)
+	}
+}
+
+// overBudget is the failure for a text of n bytes over its budget of tokens
+// at bytesPerToken, naming the file, the size and the budget; "" within it.
+func overBudget(file, what string, n, tokens int) string {
+	const bytesPerToken = 2.7
+	budget := int(float64(tokens) * bytesPerToken)
+	if n <= budget {
+		return ""
+	}
+	return fmt.Sprintf("%s (%s): %s bytes, budget %s (%s tokens at %v bytes per token)",
+		file, what, thousands(n), thousands(budget), thousands(tokens), bytesPerToken)
+}
+
+// thousands is n with a comma between its groups of three digits.
+func thousands(n int) string {
+	s := strconv.Itoa(n)
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return s
 }
 
 func TestBody(t *testing.T) {
