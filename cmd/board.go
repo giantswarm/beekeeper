@@ -753,9 +753,11 @@ func (a *app) boardMoveCmd() *cobra.Command {
 board is added first (addProjectV2ItemById, the issue's own mutation: the
 board's items are never read) and given board.team as its Team, then the
 Status. An issue of a repository outside the board's owner (a personal
-account's, another organisation's) is never added: without an item its
-projectItems name it is refused, naming its owner's own project as its
-place. Every GitHub call acts on the
+account's, another organisation's) is never added: its item on a project
+of the repository's own owner (a personal account's user project) moves
+there by that project's Status values, without a Team or the epic gate;
+on no such project, or on several, it is refused with the gh project
+item-add or item-edit recipe. Every GitHub call acts on the
 issue's repository (GH_REPO), so a gh link that picks its login by the owner
 (devctl's agent link: the App for the organisation, the person's own login
 for a personal account's repository) reaches the issue. The status is the
@@ -794,6 +796,9 @@ anything is written. Exit 3 when refused.`,
 			team := ""
 			if mv.Team != "" {
 				team = ", Team " + mv.Team
+			}
+			if mv.Board != "" {
+				team = " on the board " + mv.Board
 			}
 			switch {
 			case mv.Added:
