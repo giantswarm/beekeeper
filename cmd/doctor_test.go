@@ -143,7 +143,8 @@ func TestArchiveRequest(t *testing.T) {
 	}
 }
 
-// agents idle --done marks the work finished; a new assignment clears it.
+// agents idle --done marks the work finished and clears the agent's own
+// session record, no other; a new assignment clears done.
 func TestIdleDone(t *testing.T) {
 	a, out := noteApp(t)
 	run := func(args ...string) {
@@ -157,6 +158,10 @@ func TestIdleDone(t *testing.T) {
 	}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{{Party: state.Party{Name: agentOne}}}
+		st.Records = []state.Record{
+			{Session: state.Party{Name: agentOne}, Issue: "giantswarm/beekeeper#772"},
+			{Session: state.Party{Name: unrosteredName}, Issue: "giantswarm/beekeeper#1"},
+		}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -169,6 +174,9 @@ func TestIdleDone(t *testing.T) {
 	}
 	if len(st.Agents) != 1 || !st.Agents[0].Done || st.Agents[0].Task != "" {
 		t.Fatalf("after idle --done: %+v", st.Agents)
+	}
+	if len(st.Records) != 1 || st.Records[0].Session.Name != unrosteredName {
+		t.Fatalf("records after idle --done: %+v", st.Records)
 	}
 	run("assign", agentOne, "another task")
 	if st, _ = a.store.Read(); st.Agents[0].Done {

@@ -271,8 +271,9 @@ var issueRef = regexp.MustCompile(`^[\w.-]+/[\w.-]+#[0-9]+$`)
 
 func (a *app) serveCmd() *cobra.Command {
 	var waits string
+	var clearOwn bool
 	c := &cobra.Command{
-		Use:   "serve <session> <owner/repo#n>",
+		Use:   "serve <session> <owner/repo#n> | serve --clear",
 		Short: "Record the issue or epic a session serves and what it waits on",
 		Long: `Record, for any running session (a registered agent or not), the issue or
 epic it serves and what it waits on. A new record replaces the session's
@@ -282,9 +283,21 @@ session id, a PID, a session's own name or a registered agent's roster name,
 or a unique part of a name; a whole name wins over a part of another. A
 registered agent whose CLI does not run is recorded too, and the line says
 so. The record stores the roster name of a registered agent, the session's
-own name otherwise.`,
-		Args: cobra.ExactArgs(2),
+own name otherwise.
+
+A worker (a registered agent holding no supervisor or guide role) records
+only its own session: a serve naming another session is refused. --clear
+removes the calling session's own record; agents idle --done clears it too.`,
+		Args: func(c *cobra.Command, args []string) error {
+			if clearOwn {
+				return cobra.NoArgs(c, args)
+			}
+			return cobra.ExactArgs(2)(c, args)
+		},
 		RunE: func(_ *cobra.Command, args []string) error {
+			if clearOwn {
+				return a.clearRecord()
+			}
 			if !issueRef.MatchString(args[1]) {
 				return usageErr("%q is not an issue: owner/repo#n", args[1])
 			}
@@ -307,6 +320,9 @@ own name otherwise.`,
 			r := state.Record{Issue: args[1], Waits: strings.Join(strings.Fields(waits), " "), By: me, At: a.now.UTC()}
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				r.Session = servedBy(st, s.Party())
+				if rosterRole(st, me) == workerRole && !r.Session.Is(me) {
+					return nil, refused("%q is another session: a worker records only its own, `beekeeper sessions serve <its own name> %s`", r.Session.Name, r.Issue)
+				}
 				st.Records = slices.DeleteFunc(st.Records, func(o state.Record) bool { return o.Session.Is(r.Session) })
 				st.Records = append(st.Records, r)
 				return []state.Event{event(me, "session.serve", "%s: %s", r.Session.Name, recordText(r))}, nil
@@ -323,7 +339,48 @@ own name otherwise.`,
 		},
 	}
 	c.Flags().StringVar(&waits, "waits", "", "what the session waits on")
+	c.Flags().BoolVar(&clearOwn, "clear", false, "remove the calling session's own record")
+	c.MarkFlagsMutuallyExclusive("clear", "waits")
 	return c
+}
+
+// clearRecord removes the calling session's own records.
+func (a *app) clearRecord() error {
+	me, err := a.caller()
+	if err != nil {
+		return err
+	}
+	var cleared []state.Record
+	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		cleared = clearRecords(st, me)
+		evs := make([]state.Event, len(cleared))
+		for i, r := range cleared {
+			evs[i] = event(me, "session.unserve", "%s: %s", r.Session.Name, recordText(r))
+		}
+		return evs, nil
+	})
+	if err != nil {
+		return err
+	}
+	if len(cleared) == 0 {
+		_, err = fmt.Fprintf(a.out, "%q has no record to clear\n", me.Name)
+		return err
+	}
+	_, err = fmt.Fprintf(a.out, "cleared the record of %q: it %s\n", cleared[0].Session.Name, recordText(cleared[0]))
+	return err
+}
+
+// clearRecords removes the records of session p and returns them.
+func clearRecords(st *state.State, p state.Party) []state.Record {
+	var gone []state.Record
+	st.Records = slices.DeleteFunc(st.Records, func(r state.Record) bool {
+		if r.Session.Is(p) {
+			gone = append(gone, r)
+			return true
+		}
+		return false
+	})
+	return gone
 }
 
 func (a *app) unserveCmd() *cobra.Command {

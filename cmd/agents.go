@@ -221,7 +221,8 @@ that parent session, whose ids it inherits and whose entry stays as it is.`,
 With --done its work is finished: the watch's doctor takes it off the
 roster and archives the desktop session beekeeper started for it once its
 CLI runs no turn, a desktop CLI kept warm included (beekeeper doctor; the
-desktop's Archived list brings it back).
+desktop's Archived list brings it back), and its session record (sessions
+serve) is cleared.
 
 --done refuses without the final report: --report is what the supervisor
 learns (PR links, release versions, the live proof, what is still open;
@@ -266,6 +267,11 @@ file; the log keeps them (agents.report, agents.problem).`,
 					verb = "agents.done"
 				}
 				evs := []state.Event{event(me, verb, "%s done: %s", ag.Name, ag.LastTask)}
+				if finished {
+					for _, r := range clearRecords(st, ag.Party) {
+						evs = append(evs, event(me, "session.unserve", "%s: %s", r.Session.Name, recordText(r)))
+					}
+				}
 				if report != "" || len(found) > 0 {
 					st.WorkerReports = append(st.WorkerReports, state.WorkerReport{By: ag.Party, At: a.now.UTC(), Task: ag.LastTask, Text: report, Problems: found})
 				}
