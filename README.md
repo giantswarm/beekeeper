@@ -1297,11 +1297,14 @@ gate is killed too, `watch` records the outcome from the files once devctl ended
 RECORDED`, a `merged` or `merge.failed` event naming the gone gate). SIGINT, a person's Ctrl-C,
 reaches devctl at once; a SIGTERM reaches it when it is aimed at the gate: its caller (the gate's
 parent) is still there two seconds later and no SIGHUP came, so `kill <gate pid>` stops the merge. A
-`TaskStop` of the background task a gate runs (its stdout is the task's output file, recorded on
-the merge) is caught by the PreToolUse hook before the stop's SIGTERM, which the gate cannot tell
-from its caller's session ending: it ends a running merge's devctl through its merge-child and
-drops a waiting merge's place (a seeded place stays), `merge.stopped` each, and the gate or the
-next watch tick records the run, nothing merged, which leaves the lane. The watch records a run
+`TaskStop` of the background task a gate runs (the task's output file, recorded on the merge: the
+gate's stdout, or that of the task's shell when the gate's output is piped on, `| tail`) is caught
+by the PreToolUse hook before the stop's SIGTERM, which the gate cannot tell from its caller's
+session ending: it ends a running merge's devctl through its merge-child and drops a waiting
+merge's place (a seeded place stays), `merge.stopped` each, and the gate or the next watch tick
+records the run. The stopping session is told the signal and each merge's outcome, as GitHub
+reports it once devctl is gone: cancelled, nothing merged, it leaves the lane; or merged before
+the stop. The watch records a run
 whose gate is gone once its devctl wrote its exit code, also while merge-child still hands the
 outcome over. A run that ends without its document or
 by a signal (exit 128+n) is judged by GitHub (`gh pr view`), never by its exit code: merged, it

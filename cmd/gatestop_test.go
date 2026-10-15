@@ -5,6 +5,7 @@ package cmd
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -194,6 +195,7 @@ func TestTaskStopEndsTheGatesMerge(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	a := w.app
 	dir := a.store.Dir()
+	stubPulls(t, map[int]github.Pull{1: {State: github.Open}})
 	child := hungChild(t, dir, hungRepo, 1)
 	tasks := filepath.Join(t.TempDir(), "tasks")
 	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -216,13 +218,13 @@ func TestTaskStopEndsTheGatesMerge(t *testing.T) {
 	if !proc.Alive(child) {
 		t.Fatal("a TaskStop that names no gate ended a devctl")
 	}
-	if said := a.stopTask(four.Session, "brun"); !strings.Contains(said, "o/hung#1's devctl (merge-child pid "+strconv.Itoa(child)+") is ended") {
+	if said := a.stopTask(four.Session, "brun"); !strings.Contains(said, "TaskStop brun sends its gate SIGTERM: o/hung#1 cancelled, GitHub reports it open: its devctl (merge-child pid "+strconv.Itoa(child)+") is ended, nothing merged") {
 		t.Errorf("the running merge's TaskStop: %q", said)
 	}
 	if !eventually(5*time.Second, func() bool { return !proc.Alive(child) }) {
 		t.Error("the stopped gate's merge-child runs on")
 	}
-	if said := a.stopTask(four.Session, "bwait"); !strings.Contains(said, "o/next#4 leaves lane scratch") {
+	if said := a.stopTask(four.Session, "bwait"); !strings.Contains(said, "o/next#4 cancelled before its turn, nothing merged; it leaves lane scratch") {
 		t.Errorf("the waiting merge's TaskStop: %q", said)
 	}
 	st, err := a.store.Read()
@@ -241,14 +243,113 @@ func TestTaskStopEndsTheGatesMerge(t *testing.T) {
 // hook ends its devctl and merge-child, and the gate records the run, which
 // merged nothing, its place gone.
 func TestStoppingTheGateLeavesNoChild(t *testing.T) {
+	said := stopGate(t, filepath.Join(t.TempDir(), "tasks", "bgate.output"))
+	if !strings.Contains(said, "TaskStop bgate sends its gate SIGTERM: "+scratchRepo+"#7 cancelled, GitHub reports it open") {
+		t.Errorf("the TaskStop of the gate's task: %q", said)
+	}
+}
+
+// A gate whose output is piped on (`beekeeper gate -- devctl pr merge … |
+// tail`) writes to a pipe, not its task's output file: its task is found
+// through the shell the task runs, so its TaskStop cancels the merge and
+// says so, where it used to leave devctl merging on with "no output".
+func TestStoppingAPipedGateCancelsItsMerge(t *testing.T) {
+	tasks := filepath.Join(t.TempDir(), "tasks")
+	if err := os.MkdirAll(tasks, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(tasks, "bpiped.output")
+	f, err := os.Create(output) //nolint:gosec // the test's file
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	pidFile := filepath.Join(t.TempDir(), "gate.pid")
+	task := exec.Command("sh", "-c", `sh -c 'echo $$ >`+pidFile+`; exec sleep 60' | cat`) //nolint:gosec // the test's own command
+	task.Stdout = f
+	if err := task.Start(); err != nil {
+		t.Skip("no sh:", err)
+	}
+	t.Cleanup(func() { _ = task.Process.Kill(); _ = task.Wait() })
+	var gate int
+	if !eventually(5*time.Second, func() bool {
+		raw, err := os.ReadFile(pidFile) //nolint:gosec // the test's file
+		gate, _ = strconv.Atoi(strings.TrimSpace(string(raw)))
+		return err == nil && gate > 0
+	}) {
+		t.Fatal("the piped gate did not start")
+	}
+	if got := stdoutOf(gate); got != "" {
+		t.Fatalf("the piped gate's stdout is %q, want a pipe", got)
+	}
+	table, err := plat.Machine.Processes()
+	if err != nil {
+		t.Skip("no process table:", err)
+	}
+	found := ancestorOutput(table, gate, stdoutOf)
+	if found != output {
+		t.Fatalf("the piped gate's task output is %q, want %q", found, output)
+	}
+	said := stopGate(t, found)
+	if !strings.Contains(said, "TaskStop bpiped sends its gate SIGTERM: "+scratchRepo+"#7 cancelled, GitHub reports it open: its devctl (merge-child pid ") {
+		t.Errorf("the TaskStop of the piped gate's task: %q", said)
+	}
+}
+
+// A task's output is that of its nearest shell below the Claude Code CLI,
+// never one of the CLI's own ancestors.
+func TestAncestorOutputStopsAtTheCLI(t *testing.T) {
+	table := &proc.Table{ByPID: map[int]*proc.Process{
+		10: {PID: 10, PPID: 9, Comm: "devctl"},
+		9:  {PID: 9, PPID: 8, Comm: testShell},
+		8:  {PID: 8, PPID: 7, Comm: claudeComm},
+		7:  {PID: 7, PPID: 1, Comm: testShell},
+	}}
+	outputs := map[int]string{9: "/t/tasks/bshell.output", 7: "/t/tasks/bouter.output"}
+	if got := ancestorOutput(table, 10, func(pid int) string { return outputs[pid] }); got != outputs[9] {
+		t.Errorf("got %q, want the task shell's", got)
+	}
+	delete(outputs, 9)
+	if got := ancestorOutput(table, 10, func(pid int) string { return outputs[pid] }); got != "" {
+		t.Errorf("got %q past the CLI", got)
+	}
+}
+
+// A TaskStop that reaches a running merge whose pull request merged before
+// it says so, never "nothing merged".
+func TestTaskStopSaysAMergeLandedBeforeIt(t *testing.T) {
+	w, _, _ := notifyingWatch(t, t.TempDir(), false)
+	a := w.app
+	at := time.Date(2026, 10, 9, 4, 4, 20, 0, time.UTC)
+	stubPulls(t, map[int]github.Pull{1: {State: github.Merged, MergedAt: at}})
+	child := hungChild(t, a.store.Dir(), hungRepo, 1)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Merges = []state.Merge{{Repo: hungRepo, PR: 1, Lane: hungLane, By: four, PID: 1, Child: child, Output: "/t/tasks/brun.output", Phase: state.Running}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	said := a.stopTask(four.Session, "brun")
+	if want := "o/hung#1 merged before the stop (at 2026-10-09T04:04:20Z): its devctl (merge-child pid " + strconv.Itoa(child) + ") is ended"; !strings.Contains(said, want) || strings.Contains(said, "nothing merged") {
+		t.Errorf("got %q, want %q", said, want)
+	}
+}
+
+// stopGate runs a gated merge whose devctl hangs and whose background task
+// writes to output, stops that task, and returns what the stopping session
+// is told; it fails unless the gate ends with 143 and leaves no devctl,
+// merge-child or place.
+func stopGate(t *testing.T, output string) string {
+	t.Helper()
 	noSystemd(t)
 	devpid := filepath.Join(t.TempDir(), "devctl.pid")
 	fakeDevctl(t, `echo $$ >`+devpid+`; exec sleep 60`)
 	stubGitHub(t, github.Open, "")
+	// The hook and the gate ask at once: a stub without stubGitHub's count.
+	pullState = func(context.Context, string, int) (github.Pull, error) { return github.Pull{State: github.Open}, nil }
 	gateStdout(t)
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
 	g.cfg.StateDir = g.store.Dir()
-	output := filepath.Join(t.TempDir(), "tasks", "bgate.output")
 	if err := g.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges[0].Output = output
 		return nil, nil
@@ -266,9 +367,8 @@ func TestStoppingTheGateLeavesNoChild(t *testing.T) {
 		t.Fatal("devctl did not start")
 	}
 	child := gateState(t, g).Merges[0].Child
-	if said := g.stopTask("", "bgate"); said == "" {
-		t.Fatal("the TaskStop of the gate's task ended nothing")
-	}
+	task := strings.TrimSuffix(filepath.Base(output), taskOutputExt)
+	said := g.stopTask("", task)
 	select {
 	case err := <-done:
 		if Code(err) != 143 {
@@ -283,4 +383,5 @@ func TestStoppingTheGateLeavesNoChild(t *testing.T) {
 	if st := gateState(t, g); len(st.Merges) != 0 {
 		t.Errorf("places left: %+v", st.Merges)
 	}
+	return said
 }
