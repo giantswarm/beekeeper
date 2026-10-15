@@ -103,3 +103,23 @@ func TestSkillsSuggestNoLongLeaseWait(t *testing.T) {
 		t.Errorf("the lease skill names no --park: %v", err)
 	}
 }
+
+// A code scan's finding is raised on main and names where it was raised,
+// and the supervisor dispatches one only once that is the head: a scan of
+// a stale clone reports what main fixed long ago.
+func TestCodeScanFindingsNameTheirCommit(t *testing.T) {
+	words := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	gh := words(Skill("github"))
+	for _, want := range []string{"fresh worktree of `origin/main`, never a shared clone", "names the commit and module versions"} {
+		if !strings.Contains(gh, want) {
+			t.Errorf("the github skill does not say %q", want)
+		}
+	}
+	raw, err := Skills.ReadFile(SkillsDir + "/supervise/references/scheduling.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(words(string(raw)), "a code scan's finding only once the commit it names is the default branch's head") {
+		t.Error("the supervisor's scheduling does not check a scan finding's commit against the head")
+	}
+}
