@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -30,6 +31,7 @@ const (
 	paramPurpose     = "purpose"
 	paramTarget      = "target"
 	paramNote        = "note"
+	paramRefs        = "refs"
 	paramFor         = "for"
 	paramKind        = "kind"
 	paramText        = "text"
@@ -90,7 +92,7 @@ func (s *server) tools() []serveTool {
 			mcp.WithArray("options", mcp.WithStringItems(), mcp.Description(`"<choice>: <consequence>" each, at most 10, labels at most 75 characters`)),
 			mcp.WithNumber("recommend", mcp.Description("the option recommended, 1-based")),
 			mcp.WithString("checked", mcp.Description("where a merged, green, released, rolled or closed claim was checked")),
-			mcp.WithArray("refs", mcp.WithStringItems(), mcp.Description("the issues and pull requests it asks about, owner/repo#n")),
+			mcp.WithArray(paramRefs, mcp.WithStringItems(), mcp.Description("the issues and pull requests it asks about, owner/repo#n")),
 			mcp.WithBoolean("pin", mcp.Description("a standing instruction"))), toolNoteAdd},
 		{newTool("note_list", "The open notes, decisions apart from memos.", true), toolNoteList},
 		{newTool("note_answer", "Answer a decision, word for word, and close it: as the person it is for, or a member of the team it is for.", false,
@@ -664,6 +666,9 @@ func toolLaneLeave(c *call, req mcp.CallToolRequest) (any, error) {
 	return map[string]any{"lane": lane, "merge": key, keyLeft: true, "phase": m.Phase}, err
 }
 
+// filedNote is note add's line naming the note filed, after any warning.
+var filedNote = regexp.MustCompile(`(?m)^note #(\d+)`)
+
 func toolNoteAdd(c *call, req mcp.CallToolRequest) (any, error) {
 	text, err := required(req, "text", "the question or the memo")
 	if err != nil {
@@ -678,7 +683,7 @@ func toolNoteAdd(c *call, req mcp.CallToolRequest) (any, error) {
 	for _, o := range req.GetStringSlice("options", nil) {
 		args = append(args, "--option", o)
 	}
-	for _, r := range req.GetStringSlice("refs", nil) {
+	for _, r := range req.GetStringSlice(paramRefs, nil) {
 		args = append(args, "--ref", r)
 	}
 	if req.GetBool("pin", false) {
@@ -690,10 +695,11 @@ func toolNoteAdd(c *call, req mcp.CallToolRequest) (any, error) {
 	if err := c.verb(c.app.noteCmd(), args...); err != nil {
 		return nil, err
 	}
-	var id int
-	if _, err := fmt.Sscanf(c.out.String(), "note #%d", &id); err != nil {
-		return nil, fmt.Errorf("the note's number in %q: %w", c.out.String(), err)
+	m := filedNote.FindStringSubmatch(c.out.String())
+	if m == nil {
+		return nil, fmt.Errorf("the note's number in %q", c.out.String())
 	}
+	id, _ := strconv.Atoi(m[1])
 	c.concern = kube.NoteObject(c.me.Team, id)
 	n, err := c.note(id)
 	if err != nil || n == nil || n.Posted != "" {

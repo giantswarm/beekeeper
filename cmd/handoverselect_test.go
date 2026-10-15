@@ -77,11 +77,11 @@ func TestAnswersSinceTheLastRelayAndWithin72h(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	log(80*time.Hour, answerRecorded, "o/r#1 answered by Pat via cli, recorded at https://c/1: too old (note #1, asked by A: approve x)")
-	log(5*time.Hour, answerRecorded, "o/r#7 answered by Pat via cli, recorded at https://c/2: Yes, ship it (note #2, asked by Agent two: approve "+prURL+" Status quo: green.)")
+	log(80*time.Hour, answerRecorded, "o/r#1 answered by \"Pat\" via cli, recorded at https://c/1, note #1 asked by \"A\": \"approve x\": too old")
+	log(5*time.Hour, answerRecorded, "o/r#7 answered by \"Pat\" via cli, recorded at https://c/2, note #2 asked by \"Agent two\": \"approve "+prURL+" Status quo: green.\": Yes, ship it")
 	log(3*time.Hour, "supervisor.start", "run 2")
-	log(2*time.Hour, answerRecorded, "o/r#8 answered by Pat via slack, recorded at https://c/3: No (note #3, asked by B: merge y)")
-	log(90*time.Minute, answerRecorded, "o/r#9 answered by Pat via cli, recorded at https://c/4: the draft stays")
+	log(2*time.Hour, answerRecorded, "o/r#8 answered by \"Pat\" via slack, recorded at https://c/3, note #3 asked by \"B\": \"merge y\": No")
+	log(90*time.Minute, answerRecorded, "o/r#9 answered by \"Pat\" via cli, recorded at https://c/4: the draft stays")
 	log(time.Hour, "supervisor.start", "run 3")
 	st := &state.State{Supervisor: &state.Supervisor{Party: sup, Since: a.now.Add(-time.Hour)}}
 	ans, err := a.handoverAnswers(st)

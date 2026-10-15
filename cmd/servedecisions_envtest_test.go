@@ -132,7 +132,7 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	ask := func(forWho, due string) int {
 		args := map[string]any{paramText: museLane, paramFor: forWho, paramKind: noteDecision, paramAgent: anaAgent, paramHost: lab,
 			keyStatusQuo: "muster has no lane", keyWhy: "only its owners pick its lane", "options": []any{"portal: it rolls with backstage", "own: a lane of its own"}, "recommend": 2,
-			dueID: due, keyDefault: ownLane, "refs": []any{privateThread}}
+			dueID: due, keyDefault: ownLane, paramRefs: []any{privateThread}}
 		id, _ := e.expect(t, ana, "note_add", args, false, "note #")["id"].(float64)
 		return int(id)
 	}
@@ -159,7 +159,7 @@ func TestEnvtestServeDecisions(t *testing.T) {
 		t.Fatalf("closed %q", closed)
 	}
 	evs, err := e.store.Events(0, func(ev state.Event) bool { return ev.Verb == answerRecorded })
-	if err != nil || len(evs) != 1 || evs[0].By.Person != boEmail || !strings.HasPrefix(evs[0].Detail, privateThread+" answered by bo via slack, recorded at ") || !strings.Contains(evs[0].Detail, ": own — until Friday (note #") {
+	if err != nil || len(evs) != 1 || evs[0].By.Person != boEmail || !strings.HasPrefix(evs[0].Detail, privateThread+` answered by "bo" via slack, recorded at `) || !strings.HasSuffix(evs[0].Detail, ": own — until Friday") {
 		t.Fatalf("answer.recorded %+v %v", evs, err)
 	}
 	if len(f.comments) != 1 || !strings.Contains(f.comments[0], "**Answer** from bo via slack to note #") {
@@ -193,18 +193,18 @@ func TestEnvtestServeDecisions(t *testing.T) {
 
 	// A decision that renders not, or reaches nobody, is refused and not kept.
 	if text, _, failed := ana.call("note_add", map[string]any{paramText: whichLane + strings.Repeat("x", questionMax), paramFor: "bo", paramKind: noteDecision,
-		keyStatusQuo: "s", keyWhy: "w", dueID: "3h", keyDefault: ownLane}); !failed || !strings.Contains(text, "cannot render") {
+		keyStatusQuo: "s", keyWhy: "w", dueID: "3h", keyDefault: ownLane, paramRefs: []any{privateThread}}); !failed || !strings.Contains(text, "cannot render") {
 		t.Fatalf("long question: %v %s", failed, text)
 	}
 	if text, _, failed := ana.call("note_add", map[string]any{paramText: whichLane, paramFor: "eve", paramKind: noteDecision,
-		keyStatusQuo: "s", keyWhy: "w", dueID: "3h", keyDefault: ownLane}); !failed || !strings.Contains(text, "nobody's name") {
+		keyStatusQuo: "s", keyWhy: "w", dueID: "3h", keyDefault: ownLane, paramRefs: []any{privateThread}}); !failed || !strings.Contains(text, "nobody's name") {
 		t.Fatalf("unknown person: %v %s", failed, text)
 	}
 	gw.mu.Lock()
 	gw.refuses = true
 	gw.mu.Unlock()
 	if text, _, failed := ana.call("note_add", map[string]any{paramText: whichLane, paramFor: "bo", paramKind: noteDecision,
-		keyStatusQuo: "s", keyWhy: "w", dueID: "3h", keyDefault: ownLane}); !failed || !strings.Contains(text, "not delivered, withdrawn") {
+		keyStatusQuo: "s", keyWhy: "w", dueID: "3h", keyDefault: ownLane, paramRefs: []any{privateThread}}); !failed || !strings.Contains(text, "not delivered, withdrawn") {
 		t.Fatalf("refused by the gateway: %v %s", failed, text)
 	}
 	if st, _ := e.store.Read(); len(st.Notes) != 0 {

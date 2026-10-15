@@ -112,17 +112,23 @@ func (a *app) recordAnswer(ctx context.Context, about string, noteID, choice int
 		return err
 	}
 	rec := recordedAnswer{Thread: t, By: a.answerer(me, n), Via: via, Answer: text, Note: noteID}
-	if rec.Comment, err = cl.Comment(ctx, t, answerBody(&rec, n)); err != nil {
+	if rec.Comment, err = cl.Comment(ctx, t, answerBody(&rec, n, me.Name)); err != nil {
 		return fmt.Errorf("the answer is not recorded on %s: %w", t.Ref, err)
 	}
+	closedMeanwhile := false
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		if n != nil {
+			before := len(st.Notes)
 			st.Notes = slices.DeleteFunc(st.Notes, func(o state.Note) bool { return o.ID == n.ID })
+			closedMeanwhile = len(st.Notes) == before
 		}
 		return []state.Event{answerEvent(me, &rec, n)}, nil
 	})
 	if err != nil {
 		return fmt.Errorf("the answer is posted (%s), not logged: %w", rec.Comment, err)
+	}
+	if closedMeanwhile {
+		return refused("the answer is posted (%s) and logged, but note #%d closed while it was posted: its filer is not told", rec.Comment, n.ID)
 	}
 	line := rec.line()
 	var notes []string
@@ -179,9 +185,9 @@ func (a *app) answerer(me state.Party, n *state.Note) string {
 }
 
 // answerBody is the comment recording rec: who answered, how it came, the
-// note it answers, the words verbatim as a quote, and the thread it
-// concerns when that is public.
-func answerBody(rec *recordedAnswer, n *state.Note) string {
+// note it answers, the words verbatim as a quote, the thread it concerns
+// when that is public, and the session that recorded it.
+func answerBody(rec *recordedAnswer, n *state.Note, recorder string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "**Answer** from %s via %s", rec.By, rec.Via)
 	if n != nil {
@@ -194,18 +200,19 @@ func answerBody(rec *recordedAnswer, n *state.Note) string {
 	for line := range strings.Lines(rec.Answer) {
 		b.WriteString("> " + strings.TrimRight(line, "\n") + "\n")
 	}
-	b.WriteString("\nWritten by an agent (`beekeeper answer`).")
+	fmt.Fprintf(&b, "\nWritten by an agent (`beekeeper answer`, recorded by %s).", cmp.Or(recorder, "an unnamed session"))
 	return b.String()
 }
 
 // answerEvent is the answer.recorded event of rec: parseAnswered reads it
-// back.
+// back. Every field but the words is quoted or has no space, the words
+// last: nothing they say reads as another field.
 func answerEvent(by state.Party, rec *recordedAnswer, n *state.Note) state.Event {
-	e := event(by, answerRecorded, "%s answered by %s via %s, recorded at %s: %s", rec.About(), rec.By, rec.Via, rec.Comment, rec.Answer)
+	note := ""
 	if n != nil {
-		e.Detail += fmt.Sprintf(" (note #%d, asked by %s: %s)", n.ID, n.By.Name, n.Text)
+		note = fmt.Sprintf(", note #%d asked by %q: %q", n.ID, n.By.Name, n.Text)
 	}
-	return e
+	return event(by, answerRecorded, "%s answered by %q via %s, recorded at %s%s: %s", rec.About(), rec.By, rec.Via, rec.Comment, note, rec.Answer)
 }
 
 // tellServing tells the sessions serving about (sessions serve) line, and

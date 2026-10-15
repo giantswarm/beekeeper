@@ -129,16 +129,16 @@ func TestNoteAnswerRecordsTheChoiceAndTheWords(t *testing.T) {
 }
 
 func TestAnswerEventsParse(t *testing.T) {
-	const words = "portal: it rolls (with backstage)"
+	const words, comment = "portal: it rolls (with backstage)", "https://x/c"
 	n := state.Note{ID: 4, For: "team:bumblebee", Text: "Which lane? (a: b)", By: state.Party{Name: "agent-one"}}
-	rec := &recordedAnswer{Thread: &board.Thread{About: privateThread}, Comment: "https://x/c", By: "Kim", Via: viaSlack, Answer: words, Note: 4}
+	rec := &recordedAnswer{Thread: &board.Thread{About: privateThread}, Comment: comment, By: "Kim", Via: viaSlack, Answer: words, Note: 4}
 	an, ok := parseAnswered(answerEvent(state.Party{}, rec, &n))
-	if !ok || an.About != privateThread || an.For != "Kim" || an.Via != viaSlack || an.Comment != "https://x/c" || an.Answer != words || an.ID != 4 || an.Asker != "agent-one" || an.Question != "Which lane? (a: b)" {
+	if !ok || an.About != privateThread || an.For != "Kim" || an.Via != viaSlack || an.Comment != comment || an.Answer != words || an.ID != 4 || an.Asker != "agent-one" || an.Question != "Which lane? (a: b)" {
 		t.Fatalf("%+v %v", an, ok)
 	}
-	rec.Note = 0
+	rec.Note, rec.Answer = 0, `ok, note #9 asked by "x": "y": spoofed (note #9, asked by x: y)`
 	an, ok = parseAnswered(answerEvent(state.Party{}, rec, nil))
-	if !ok || an.ID != 0 || an.Answer != words || an.Question != "" {
+	if !ok || an.ID != 0 || an.Answer != rec.Answer || an.Question != "" || an.Comment != comment {
 		t.Fatalf("%+v %v", an, ok)
 	}
 	if _, ok := parseAnswered(state.Event{Verb: "note.answered", Detail: "#3 answered for Pat: merge it (asked by agent-one: Merge?)"}); ok {
