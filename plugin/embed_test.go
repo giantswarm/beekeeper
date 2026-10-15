@@ -104,6 +104,16 @@ func TestSkillsSuggestNoLongLeaseWait(t *testing.T) {
 	}
 }
 
+// A personal account's repository is merged with gh, outside devctl: the
+// squash subject is the PR title only when --subject names it, as gh takes a
+// one-commit PR's commit message otherwise.
+func TestMergeSkillNamesTheSquashSubject(t *testing.T) {
+	merge := strings.Join(strings.Fields(Skill("merge")), " ")
+	if !strings.Contains(merge, `--squash --subject "<PR title> (#<n>)"`) {
+		t.Error("the merge skill does not name --subject for a personal account's merge")
+	}
+}
+
 // A code scan's finding is raised on main and names where it was raised,
 // and the supervisor dispatches one only once that is the head: a scan of
 // a stale clone reports what main fixed long ago.
