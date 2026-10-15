@@ -5,7 +5,7 @@ description: GitHub reads, builds, browser steps and waits on a beekeeper desk: 
 
 # github — GitHub, builds, the browser and waits
 
-- **Budget.** GitHub work stops while `beekeeper budget --gate` refuses: under the floor until the reset, and at the reset while the merges queued for it go first.
+- **Budget.** GitHub work stops while `beekeeper budget --gate` refuses, until the reset.
 - **Membership** is `beekeeper person <login>`, never a members endpoint of `gh api`: the App's
   token reads a private member as an outsider.
 - **Scans list each repository** (`gh issue list --repo <owner/repo> --search "<query>"`, `gh pr
