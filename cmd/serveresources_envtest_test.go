@@ -489,6 +489,6 @@ func TestEnvtestServeRosterScope(t *testing.T) {
 
 // decisionFor is note_add's arguments for a complete decision for forWho.
 func decisionFor(text, forWho string) map[string]any {
-	return map[string]any{paramText: text, paramFor: forWho, paramKind: noteDecision, keyStatusQuo: "muster has no lane", keyWhy: "only its owners pick its lane",
+	return map[string]any{paramText: text, paramFor: forWho, paramKind: noteDecision, keyStatusQuo: noMuseLane, keyWhy: "only its owners pick its lane",
 		dueID: "3h", keyDefault: ownLane, paramRefs: []any{privateThread}}
 }
