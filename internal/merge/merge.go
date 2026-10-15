@@ -621,6 +621,60 @@ func SessionTurn(st *state.State, me state.Merge, most int, present func(state.M
 	return running, nil, true
 }
 
+// InResetWindow says whether m was queued under the GitHub budget floor for
+// a reset that came less than window ago.
+func InResetWindow(m state.Merge, now time.Time, window time.Duration) bool {
+	return !m.Reset.IsZero() && !now.Before(m.Reset) && now.Before(m.Reset.Add(window))
+}
+
+// ResetFirst are the merges that go first at the GitHub budget's reset,
+// oldest queued first: each waits in a live gate, queued under the floor
+// for a reset that came less than window ago. The waits yield to them until
+// they start or their window ends.
+func ResetFirst(st *state.State, now time.Time, window time.Duration, alive func(pid int) bool) []state.Merge {
+	var out []state.Merge
+	for _, m := range st.Merges {
+		if m.Phase == state.Waiting && InResetWindow(m, now, window) && alive(m.PID) {
+			out = append(out, m)
+		}
+	}
+	slices.SortStableFunc(out, func(a, b state.Merge) int { return a.Joined.Compare(b.Joined) })
+	return out
+}
+
+// ResetAhead are the merges of ResetFirst queued before me that are free to
+// start (their lane's next, nothing running or settling in it): each takes a
+// devctl slot before me.
+func ResetAhead(st *state.State, me state.Merge, now time.Time, window time.Duration, present func(state.Merge) bool, alive func(pid int) bool) []state.Merge {
+	var out []state.Merge
+	for _, m := range ResetFirst(st, now, window, alive) {
+		if m.Joined.Before(me.Joined) && m.Key() != me.Key() && free(st, m, present) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// ResetFirstUntil is when the last window of first ends.
+func ResetFirstUntil(first []state.Merge, window time.Duration) time.Time {
+	var until time.Time
+	for _, m := range first {
+		if end := m.Reset.Add(window); end.After(until) {
+			until = end
+		}
+	}
+	return until
+}
+
+// Keys are the merges' keys, comma-separated.
+func Keys(ms []state.Merge) string {
+	keys := make([]string, len(ms))
+	for i, m := range ms {
+		keys[i] = m.Key()
+	}
+	return strings.Join(keys, ", ")
+}
+
 // free says whether the waiting merge m is its lane's next with nothing
 // running or settling in the lane.
 func free(st *state.State, m state.Merge, present func(state.Merge) bool) bool {

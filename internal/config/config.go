@@ -976,6 +976,11 @@ type Merge struct {
 	SettleTimeout Duration `yaml:"settleTimeout"`
 	// BudgetFresh is how old the last budget reading may be to gate on.
 	BudgetFresh Duration `yaml:"budgetFresh"`
+	// ResetFirst is how long after the GitHub budget's reset the merges
+	// queued under the floor for it go first: the gated waits, the watch's
+	// GitHub timer checks and budget --gate wait for them, and only merges
+	// count against Cap for them, the oldest queued first.
+	ResetFirst Duration `yaml:"resetFirst"`
 	// StallAfter is how long a lane's first arrived merge may wait behind
 	// places whose merges are not in the gate before the lane is stalled.
 	StallAfter Duration `yaml:"stallAfter"`
@@ -1832,6 +1837,7 @@ func (c *Config) defaults() error {
 	setDur(&c.Merge.Settle, 5*time.Minute)
 	setDur(&c.Merge.SettleTimeout, 30*time.Minute)
 	setDur(&c.Merge.BudgetFresh, time.Minute)
+	setDur(&c.Merge.ResetFirst, 5*time.Minute)
 	setDur(&c.Merge.StallAfter, 5*time.Minute)
 	setDur(&c.Merge.HungAfter, 45*time.Minute)
 	setDur(&c.Merge.CITimeout, time.Hour)

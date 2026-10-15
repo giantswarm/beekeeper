@@ -87,7 +87,10 @@ on it, waiting for its checks; one that conflicts by then, or that GitHub
 does not rebase, is refused (77) with nothing merged, naming the
 replacement PR. Under the budget floor the merge is
 queued for the reset (exit 76, as below): a run of its own waits for the
-budget and merges as below; a merge marked urgent (lanes urgent)
+budget and merges as below, and for merge.resetFirst from the reset the
+merges queued for it go first, the oldest queued first: only the running
+merges count against merge.cap for them, and the waits below start after
+them; a merge marked urgent (lanes urgent)
 runs under the floor instead, once per reset window. Otherwise the merge
 joins its lane's queue (a merge registered with lanes settle heads it) and
 runs when no merge before it holds its place (one in the gate or within
@@ -142,7 +145,8 @@ unconfirmed. A second merge of a pull request whose merge runs is refused
 (exit 3) with that run's start, owner and last line.
 
 devctl pr wait, release wait and rollout wait run the same way outside
-their caller, without a queue; one whose identical command already runs on
+their caller, without a queue, at the budget's reset after the merges
+queued for it (merge.resetFirst); one whose identical command already runs on
 the machine follows that run (follow-run: its stderr, document and exit
 code) instead of polling GitHub a second time. Whichever command it is, its outcome reaches
 the session that started it: the caller sees the output and exit code as
@@ -280,7 +284,7 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 	repo, pr, ok := parseGated(argv)
 	if !ok {
 		if a.store != nil && merge.ParseOwned(argv) {
-			return a.ownedRun(argv)
+			return a.ownedRun(ctx, argv)
 		}
 		return exitCode(runChild(argv, os.Stdout))
 	}
@@ -640,6 +644,7 @@ func (g *gateRun) step() (string, error) {
 			return "", g.refuse("the state does not load (%v): fix it, then run the same command again", err)
 		}
 		if !urgent {
+			g.awaitReset(b.Reset)
 			why = cmp.Or(why, fmt.Sprintf("the GitHub budget %d is under the floor %d until the reset at %s", b.Remaining, g.cfg.GitHub.Floor, clock(g.now, b.Reset)))
 			if g.queued {
 				return why, nil
@@ -1024,9 +1029,7 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 				g.lane.Name, merge.Tool, h.ToolRelease, toolKey(h))
 			return nil, nil
 		}
-		if n := devctlRuns(st); n >= g.cfg.Merge.Cap {
-			why = fmt.Sprintf("%d devctl processes run machine-wide (cap %d), not a lane problem: %s is next in lane %s and starts when one ends",
-				n, g.cfg.Merge.Cap, g.key(), g.lane.Name)
+		if why = g.capWait(st, st.Merges[i]); why != "" {
 			return nil, nil
 		}
 		if why = g.sessionWait(st); why != "" {
@@ -1044,7 +1047,7 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 		m := &st.Merges[i]
 		m.Phase, m.Started, m.Roll, m.Seeded, m.Outside = state.Running, g.now.UTC(), merge.RollSet(hrs, g.repo), false, false
 		m.HandCut = g.handCut()
-		m.Finished, m.Exit = time.Time{}, 0
+		m.Finished, m.Exit, m.Reset = time.Time{}, 0, time.Time{}
 		ev := []state.Event{g.startEvent()}
 		if passed != "" {
 			ev[0].Detail += ", ahead of " + passed + " (not arrived)"
@@ -1085,6 +1088,45 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 		return p.why, nil
 	}
 	return "", err
+}
+
+// capWait is what the merge me, its lane's next, waits for under merge.cap,
+// "" when it may start: the machine's devctl processes count, except in the
+// merge's reset window (merge.resetFirst), where the waits go after the
+// merges: only the running merges count, and the older merges queued for
+// the reset that are free to start take their slots first.
+func (g *gateRun) capWait(st *state.State, me state.Merge) string {
+	most := g.cfg.Merge.Cap
+	window := g.cfg.Merge.ResetFirst.Duration
+	if !merge.InResetWindow(me, g.now, window) {
+		if n := devctlRuns(st); n >= most {
+			return fmt.Sprintf("%d devctl processes run machine-wide (cap %d), not a lane problem: %s is next in lane %s and starts when one ends",
+				n, most, g.key(), g.lane.Name)
+		}
+		return ""
+	}
+	ahead := merge.ResetAhead(st, me, g.now, window, g.present, proc.Alive)
+	running := len(runningMerges(st))
+	if running+len(ahead) < most {
+		return ""
+	}
+	if len(ahead) > 0 {
+		return fmt.Sprintf("%d merges run (cap %d) and %s, queued for the reset before it, goes first: %s is next in lane %s",
+			running, most, merge.Keys(ahead), g.key(), g.lane.Name)
+	}
+	return fmt.Sprintf("%d merges run (cap %d): %s, queued for the reset, is next in lane %s and starts when one ends",
+		running, most, g.key(), g.lane.Name)
+}
+
+// awaitReset records on the merge's place the budget reset it waits for
+// under the floor: from then it goes before the waits (merge.ResetFirst).
+func (g *gateRun) awaitReset(reset time.Time) {
+	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+		if i := g.mine(st, state.Waiting); i >= 0 {
+			st.Merges[i].Reset = reset.UTC()
+		}
+		return nil, nil
+	})
 }
 
 // sessionWait is what the merge, its lane's next, waits for under
@@ -1718,28 +1760,34 @@ func (a *app) closeToolWindow(ctx context.Context, by state.Party) {
 }
 
 // gateBudget is the last budget reading when it is younger than
-// merge.budgetFresh, else a fresh one (a conditional request, free on 304).
+// merge.budgetFresh and its reset has not come, else a fresh one (a
+// conditional request, free on 304): a merge queued for the reset reads
+// the new window at once.
 func (g *gateRun) gateBudget() (state.Budget, error) {
 	st, err := g.store.Read()
 	if err != nil {
 		return state.Budget{}, err
 	}
-	if b := st.Budget; b != nil && g.now.Sub(b.At) <= g.cfg.Merge.BudgetFresh.Duration {
+	if b := st.Budget; b != nil && g.now.Sub(b.At) <= g.cfg.Merge.BudgetFresh.Duration && g.now.Before(b.Reset) {
 		return *b, nil
 	}
 	ctx, cancel := context.WithTimeout(g.ctx, 30*time.Second)
 	defer cancel()
-	b, err := g.probeBudget(ctx)
+	b, err := readBudget(g.app, ctx)
 	return state.Budget{Remaining: b.Remaining, Limit: b.Limit, Reset: b.Reset}, err
 }
+
+// readBudget reads the GitHub budget afresh (probeBudget); a seam for the
+// tests.
+var readBudget = (*app).probeBudget
 
 // devctlRuns counts the machine's devctl processes, a running merge's own
 // once even before its devctl started.
 func devctlRuns(st *state.State) int {
-	running, children := map[int]bool{}, map[int]bool{}
+	running, children := runningMerges(st), map[int]bool{}
 	for _, m := range st.Merges {
 		if m.Phase == state.Running {
-			running[m.PID], children[m.Child] = true, true
+			children[m.Child] = true
 		}
 	}
 	n := len(running)
@@ -1753,6 +1801,17 @@ func devctlRuns(st *state.State) int {
 		}
 	}
 	return n
+}
+
+// runningMerges are the gates of the running merges, by pid.
+func runningMerges(st *state.State) map[int]bool {
+	running := map[int]bool{}
+	for _, m := range st.Merges {
+		if m.Phase == state.Running {
+			running[m.PID] = true
+		}
+	}
+	return running
 }
 
 // toolUpdateEvery is how long beekeeper waits between two updates of the

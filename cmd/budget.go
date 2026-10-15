@@ -42,15 +42,20 @@ who asked for it and what its run drew against its own bound. Each session's
 gated merges are a line: those whose devctl polls GitHub (at most
 merge.sessionCap) and those queued in their lanes, which read nothing.
 
+For merge.resetFirst (5m) after the budget's reset, the merges queued under
+the floor for it go first: a line names them, and the gated waits and the
+watch's GitHub timer checks start after them.
+
 --gate exits 3 when GitHub refuses GraphQL calls, the budget is under the
-floor (github.floor, default 2500) or a "github" hold is set:
+floor (github.floor, default 2500), merges queued for the reset go first or
+a "github" hold is set:
 ` + "`beekeeper budget --gate && gh …`" + `.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if floor > 0 {
 				a.cfg.GitHub.Floor = floor
 			}
-			b, err := a.probeBudget(cmd.Context())
+			b, err := readBudget(a, cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -66,6 +71,13 @@ floor (github.floor, default 2500) or a "github" hold is set:
 			hold, held := activeHold(st, a, "github")
 			urgent := urgentLines(a, st)
 			gated := gatedMerges(st, proc.Alive)
+			window := a.cfg.Merge.ResetFirst.Duration
+			first := merge.ResetFirst(st, a.now, window, proc.Alive)
+			firstLine := ""
+			if len(first) > 0 {
+				firstLine = fmt.Sprintf("merges first: %s, queued for the reset, go before the waits until they start, at %s at the latest (merge.resetFirst)",
+					merge.Keys(first), clock(a.now, merge.ResetFirstUntil(first, window)))
+			}
 			if a.json {
 				_ = a.printJSON(struct {
 					github.Budget
@@ -82,6 +94,9 @@ floor (github.floor, default 2500) or a "github" hold is set:
 				}
 				for _, g := range gated {
 					_, _ = fmt.Fprintln(a.out, g.line(a.cfg.Merge.SessionCap))
+				}
+				if firstLine != "" {
+					_, _ = fmt.Fprintln(a.out, firstLine)
 				}
 				if held {
 					_, _ = fmt.Fprintf(a.out, "GitHub is held by %q until %s: %s\n", hold.By.Name, untilText(a, hold), hold.Reason)
@@ -110,6 +125,9 @@ floor (github.floor, default 2500) or a "github" hold is set:
 			}
 			if gate && b.Remaining < a.cfg.GitHub.Floor {
 				return refused("GitHub budget %d is under the floor %d: wait for the reset at %s", b.Remaining, a.cfg.GitHub.Floor, clock(a.now, b.Reset))
+			}
+			if gate && firstLine != "" {
+				return refused("%s", firstLine)
 			}
 			return nil
 		},

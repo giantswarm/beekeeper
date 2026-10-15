@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/merge"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -47,7 +49,8 @@ var runProbe = probePasses
 // checkTimers runs the checks of the conditional timers whose check is due
 // at now, each distinct command once however many timers share it, and
 // returns by timer id what it found. A GitHub condition waits while the
-// budget is under the floor (lowBudget).
+// budget is under the floor (lowBudget), and while the merges queued for its
+// reset go first (resetFirst).
 func checkTimers(ctx context.Context, timers []state.Timer, now time.Time, lowBudget bool) map[int]checkResult {
 	checks := map[string]timerCheck{}
 	byCmd := map[string][]int{}
@@ -81,6 +84,12 @@ func checkTimers(ctx context.Context, timers []state.Timer, now time.Time, lowBu
 // floor until its reset.
 func lowBudget(b *state.Budget, floor int, now time.Time) bool {
 	return b != nil && b.Remaining < floor && now.Before(b.Reset)
+}
+
+// resetFirst reports whether merges queued under the floor for the GitHub
+// budget's reset go first now (merge.resetFirst).
+func (a *app) resetFirst(st *state.State) bool {
+	return len(merge.ResetFirst(st, a.now, a.cfg.Merge.ResetFirst.Duration, proc.Alive)) > 0
 }
 
 // timerFire is an auto timer the watch fired: what it does once the state
