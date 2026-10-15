@@ -345,6 +345,8 @@ func stopGate(t *testing.T, output string) string {
 	devpid := filepath.Join(t.TempDir(), "devctl.pid")
 	fakeDevctl(t, `echo $$ >`+devpid+`; exec sleep 60`)
 	stubGitHub(t, github.Open, "")
+	// The hook and the gate ask at once: a stub without stubGitHub's count.
+	pullState = func(context.Context, string, int) (github.Pull, error) { return github.Pull{State: github.Open}, nil }
 	gateStdout(t)
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
 	g.cfg.StateDir = g.store.Dir()
