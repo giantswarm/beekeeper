@@ -185,6 +185,14 @@ func (s *Store) Update(fn func(*state.State) ([]state.Event, error)) error {
 	return fmt.Errorf("the update lost %d races in a row", s.attempts)
 }
 
+// UpdateWithin is Update: the Kubernetes store takes no lock to wait for.
+func (s *Store) UpdateWithin(_ time.Duration, fn func(*state.State) ([]state.Event, error)) error {
+	return s.Update(fn)
+}
+
+// Exclusive runs fn: the Kubernetes store has no lock a process holds.
+func (s *Store) Exclusive(fn func() error) error { return fn() }
+
 // Log refuses: an event of no object stays in the machine's log.
 func (s *Store) Log(events ...state.Event) error {
 	return fmt.Errorf("%d events: %w", len(events), ErrLocal)

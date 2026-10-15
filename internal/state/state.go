@@ -24,6 +24,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/gofrs/flock"
 
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
@@ -1129,6 +1130,12 @@ type Store interface {
 	// Update runs fn on the state and saves the result together with the
 	// events fn returns; when fn fails nothing is saved.
 	Update(fn func(*State) ([]Event, error)) error
+	// UpdateWithin is Update for a caller that must not wait long, a
+	// session's start for one: a lock busy past wait fails it.
+	UpdateWithin(wait time.Duration, fn func(*State) ([]Event, error)) error
+	// Exclusive runs fn while no other process holds the state, writing
+	// nothing.
+	Exclusive(fn func() error) error
 	// Log appends events that change no state, giving up on a busy lock.
 	Log(events ...Event) error
 	// Record appends events that change no state and must not be lost,
@@ -1189,12 +1196,84 @@ func (s *FileStore) path(name string) string { return filepath.Join(s.dir, name)
 
 // Read returns the current state under a shared lock.
 func (s *FileStore) Read() (*State, error) {
-	l := flock.New(s.path("state.lock"))
-	if err := l.RLock(); err != nil {
+	unlock, err := s.lock(true, lockWait)
+	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = l.Unlock() }()
+	defer unlock()
 	return s.load()
+}
+
+// lockWait bounds every wait for the state lock but Log's: a holder that
+// stops (a frozen or stopped process) fails the commands behind it with its
+// PID and age (LockBusyError) instead of starving them.
+const lockWait = 2 * time.Minute
+
+// LockBusyError is a wait for the state lock that ended before its holder
+// released it: who holds it, since when, as the holder recorded it; PID 0
+// is a holder without a record (a reader).
+type LockBusyError struct {
+	PID     int
+	Command string
+	Since   time.Time
+	Waited  time.Duration
+}
+
+func (e *LockBusyError) Error() string {
+	if e.PID == 0 {
+		return fmt.Sprintf("the state lock is busy: still held by a reader after %s", e.Waited.Round(time.Millisecond))
+	}
+	return fmt.Sprintf("the state lock is busy: held by pid %d (%s) for %s, waited %s; a stopped or frozen holder releases it when it resumes or ends",
+		e.PID, e.Command, time.Since(e.Since).Round(time.Second), e.Waited.Round(time.Millisecond))
+}
+
+// lockHolder is the exclusive holder's record beside the lock, removed
+// before the lock is released.
+type lockHolder struct {
+	PID     int       `json:"pid"`
+	Command string    `json:"command"`
+	At      time.Time `json:"at"`
+}
+
+// lock takes the state lock, shared or exclusive, waiting at most wait;
+// an exclusive holder records itself for the waiters' LockBusyError.
+func (s *FileStore) lock(shared bool, wait time.Duration) (unlock func(), err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	defer cancel()
+	l := flock.New(s.path("state.lock"))
+	take := l.TryLockContext
+	if shared {
+		take = l.TryRLockContext
+	}
+	ok, err := take(ctx, 10*time.Millisecond)
+	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		return nil, err
+	}
+	if !ok {
+		return nil, s.busy(wait)
+	}
+	if shared {
+		return func() { _ = l.Unlock() }, nil
+	}
+	holder := s.path(holderFile)
+	_ = writeJSON(holder, lockHolder{PID: os.Getpid(), Command: command(os.Args), At: time.Now()})
+	return func() {
+		_ = os.Remove(holder)
+		_ = l.Unlock()
+	}, nil
+}
+
+const holderFile = "state.lock.holder"
+
+// busy is the LockBusyError of a wait that ended after waited: a record
+// of a process that ended is a holder without one.
+func (s *FileStore) busy(waited time.Duration) error {
+	e := &LockBusyError{Waited: waited}
+	var h lockHolder
+	if raw, err := os.ReadFile(s.path(holderFile)); err == nil && json.Unmarshal(raw, &h) == nil && proc.Alive(h.PID) {
+		e.PID, e.Command, e.Since = h.PID, h.Command, h.At
+	}
+	return e
 }
 
 // Peek returns the current state without taking the lock, for a caller
@@ -1206,11 +1285,16 @@ func (s *FileStore) Peek() (*State, error) { return s.load() }
 // back atomically together with the events fn returns. When fn fails nothing
 // is written, nor when a newer release wrote the state (StaleWriterError).
 func (s *FileStore) Update(fn func(*State) ([]Event, error)) error {
-	l := flock.New(s.path("state.lock"))
-	if err := l.Lock(); err != nil {
+	return s.UpdateWithin(lockWait, fn)
+}
+
+// UpdateWithin is Update waiting at most wait for the lock.
+func (s *FileStore) UpdateWithin(wait time.Duration, fn func(*State) ([]Event, error)) error {
+	unlock, err := s.lock(false, wait)
+	if err != nil {
 		return err
 	}
-	defer func() { _ = l.Unlock() }()
+	defer unlock()
 	st, err := s.load()
 	if err != nil {
 		return err
@@ -1232,17 +1316,11 @@ func (s *FileStore) Update(fn func(*State) ([]Event, error)) error {
 // the state lock. It waits at most logWait for the lock, so that a caller on
 // every build's path never queues behind a slow update.
 func (s *FileStore) Log(events ...Event) error {
-	ctx, cancel := context.WithTimeout(context.Background(), logWait)
-	defer cancel()
-	l := flock.New(s.path("state.lock"))
-	ok, err := l.TryLockContext(ctx, 10*time.Millisecond)
+	unlock, err := s.lock(false, logWait)
 	if err != nil {
 		return err
 	}
-	if !ok {
-		return errors.New("the state lock is busy")
-	}
-	defer func() { _ = l.Unlock() }()
+	defer unlock()
 	return s.append(events)
 }
 
@@ -1250,14 +1328,27 @@ const logWait = time.Second
 
 // Record appends events that change no state and must not be lost, a secret
 // call's audit entry for one, under the state lock, waiting for it as an
-// update does: a busy lock delays the entry, never drops it.
+// update does: a busy lock delays the entry, and a lock busy past lockWait
+// fails the call instead of dropping it.
 func (s *FileStore) Record(events ...Event) error {
-	l := flock.New(s.path("state.lock"))
-	if err := l.Lock(); err != nil {
+	unlock, err := s.lock(false, lockWait)
+	if err != nil {
 		return err
 	}
-	defer func() { _ = l.Unlock() }()
+	defer unlock()
 	return s.append(events)
+}
+
+// Exclusive runs fn under the exclusive state lock, writing nothing: what
+// must not happen while a process holds the lock, freezing a session's
+// processes for one.
+func (s *FileStore) Exclusive(fn func() error) error {
+	unlock, err := s.lock(false, lockWait)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return fn()
 }
 
 // VerbStaleWriter is the event of an older release's first refused save
