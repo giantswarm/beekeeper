@@ -13,6 +13,10 @@ too and win where stricter.
   agents idle --done --report "<report>" --problem "<finding>"` (one per finding, or `none`),
   never left in the transcript; then the turn ends. Nothing a later session needs
   lives only here.
+- **The board holds the order.** An epic's priority (`beekeeper priority`), its holds (`beekeeper
+  board block`), its plan and the person's answers are on the board, in the issue and on its thread;
+  a worker reads them there, takes its next task from `beekeeper board next`, and keeps no note of
+  them.
 - **The supervisor** (`beekeeper supervisor status` names it) is `the supervisor` to `SendMessage`
   (`the guide` likewise), in one line (the hook reaches the holder). `beekeeper agents
   register` joins the roster, `beekeeper sessions serve` records the item and the wait.

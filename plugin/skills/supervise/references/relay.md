@@ -10,8 +10,9 @@ a numbered run, "Supervisor run N": its desktop title, roster name and the name 
   grant waiting to be claimed, no claim queued). Still over it `supervisor.relayGrace` (30m) later,
   the standby watch relays this session itself (`RELAYED`).
 - **How:** everything pending is in beekeeper first (notes with defaults, timers, session records,
-  holds, grants, lane seeds); a standing rule this watch agreed on is a pinned note (`beekeeper note
-  add --pin`), which every hand-over carries. Then `beekeeper supervisor relay` starts "Supervisor
+  holds, grants, lane seeds) or on the board (priorities, holds on epics, the plan's state); a
+  standing rule this watch agreed on goes into the desk's rules. The hand-over is the state
+  summary. Then `beekeeper supervisor relay` starts "Supervisor
   run N+1" and opens the relay to it. Its headless first turn only takes the role with `beekeeper
   supervisor start`, which tells every running agent the new name. Once that turn ended, the
   relay prints one SendMessage to the successor's `local_` id: this session makes exactly that
