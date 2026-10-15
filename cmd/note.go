@@ -135,7 +135,7 @@ and tells the session that filed it.`,
 			checked := forWho != "" && n.Kind != noteMemo && guides(person, &n)
 			if checked {
 				m := draft.missing()
-				stages, grill, err := planStages(cmd.Context(), a.cfg.Plans, draft.text())
+				stages, grill, err := planStages(cmd.Context(), a.cfg.Plans, draft.subject())
 				if err != nil {
 					return err
 				}

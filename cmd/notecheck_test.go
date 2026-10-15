@@ -271,10 +271,19 @@ func TestNoteOnAPlanPullNeedsItsStageCheckGreenOrAtTheGrillStage(t *testing.T) {
 	if want := "admitted: " + plan + "2 is at its grill stage (plan-stages red only for missing stage outputs: p: index.html missing:"; !strings.Contains(out.String(), want) {
 		t.Fatalf("the admitted grill stage is named: %q", out.String())
 	}
+	about := func(subject, context string) error {
+		return addNote(a, "--for", notePerson, "--status-quo", sqNow, "--why", whyNow+" See "+context+".", "--default", dfltOK, "--due", "3h", "--ref", subject, "decide the grill question on "+subject+"?")
+	}
+	if err := about(plan+"3", plan+"5"); err != nil {
+		t.Fatalf("a note about a green plan that only mentions a red one is admitted: %v", err)
+	}
+	if err := about(plan+"5", plan+"3"); Code(err) != ExitUsage || !strings.Contains(err.Error(), "a PRD that passes its plan-stages check on "+plan+"5") {
+		t.Fatalf("a note about a red plan is refused: %v", err)
+	}
 	if err := addNote(a, "a memo on "+plan+"1"); err != nil {
 		t.Fatalf("a memo is not checked: %v", err)
 	}
-	if len(calls) != 11 {
+	if len(calls) != 14 {
 		t.Fatalf("one read per plans pull request and one per red check's annotations: %q", calls)
 	}
 }
