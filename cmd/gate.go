@@ -1016,7 +1016,7 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 		case q.SettlingKeys() != settling:
 			why = "another merge of the lane just settled"
 			return nil, nil
-		case g.toolMerge() && w >= 0:
+		case g.toolMerge() && g.pr != 0 && w >= 0:
 			h := st.Holds[w]
 			why = fmt.Sprintf("next in lane %s, waiting for %s to report %s, the release of %s (its window lifts then)",
 				g.lane.Name, merge.Tool, h.ToolRelease, toolKey(h))

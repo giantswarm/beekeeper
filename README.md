@@ -1398,6 +1398,13 @@ which installs the latest release when the local devctl is behind it (a failure 
 waits for its release: devctl refuses to run behind its latest release (exit 7). Nobody has to
 update devctl or lift the window by hand.
 
+The window closes only when the stable release carrying the change is promoted and installed: a
+merge that releases a candidate opens none, the candidate's promotion opens it, and it lifts once
+the local `devctl version` reports the promoted release. A promotion of giantswarm/devctl queued
+with a merge of it takes its place first in the lane while a window is open, whatever it joined
+after, and does not wait for the window itself: the merges wait for the window and the promotion
+is what closes it.
+
 The budget floor uses the last reading in the state when it is younger than `merge.budgetFresh`
 (1m, less than one merge's draw at the floor's margin), else a fresh conditional request, which
 costs nothing when GitHub answers 304; a failed read refuses.

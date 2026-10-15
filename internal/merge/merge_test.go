@@ -320,6 +320,26 @@ func TestQueueAndPrune(t *testing.T) {
 	}
 }
 
+func TestQueuePromoteBeforeWindowMerge(t *testing.T) {
+	now := time.Now()
+	waiting := func(repo string, pr int, ago time.Duration) state.Merge {
+		return state.Merge{Repo: repo, PR: pr, Lane: "l", PID: pr + 1, Phase: state.Waiting, Joined: now.Add(-ago), Seen: now}
+	}
+	st := &state.State{Merges: []state.Merge{
+		waiting(ToolRepo, 7, 3*time.Minute),
+		waiting("o/b", 2, 2*time.Minute),
+		waiting(ToolRepo, 0, time.Minute),
+	}}
+	if q := Queue(st, "l"); q.Position(ToolRepo, 7) != 1 || q.Position(ToolRepo, 0) != 3 {
+		t.Errorf("without a window the join order stands: %+v", q.Waiting)
+	}
+	st.Holds = []state.Hold{{Target: AllMerges, Except: ToolRepo, Tool: Tool, ToolMerged: true, ToolRelease: "v1.2.3"}}
+	q := Queue(st, "l")
+	if q.Position(ToolRepo, 0) != 1 || q.Position(ToolRepo, 7) != 2 || q.Position("o/b", 2) != 3 {
+		t.Errorf("a promote of the tool goes before the merge waiting on its window: %+v", q.Waiting)
+	}
+}
+
 func TestMerged(t *testing.T) {
 	at := time.Now().Add(-time.Minute)
 	earlier := state.Merge{Repo: "o/a", PR: 1, Lane: "l", Phase: state.Settling, Release: "v1", Finished: at.Add(-time.Hour)}
