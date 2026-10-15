@@ -424,6 +424,12 @@ type watcher struct {
 	goCacheOn   bool
 	goCaching   atomic.Bool
 	goCacheNext time.Time
+	// dockerOn prunes Docker's images and build cache (not for --once);
+	// dockerPruning is set while a look at it goes, dockerNext is when the
+	// next is due.
+	dockerOn      bool
+	dockerPruning atomic.Bool
+	dockerNext    time.Time
 	// freeOn runs the automatic free of tmpfs (not for --once); freeing is
 	// set while a run goes, freeNext is when the next is due and lastFree
 	// the last run any watch did, for the TMPFS line.
@@ -437,7 +443,7 @@ type watcher struct {
 	// the defaulted decisions' filers being told.
 	timerActs sync.WaitGroup
 	// bg are the poll's background runs under way (inFlight, the doctor,
-	// the Go cache's and tmpfs's looks): a restart waits for them.
+	// the Go cache's, Docker's and tmpfs's looks): a restart waits for them.
 	bg sync.WaitGroup
 	// restart tells the watch when an install asked it to restart on the
 	// installed binary (nil: never, --once); restartFor is the request
@@ -528,6 +534,7 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 		return w.onceErr()
 	}
 	w.goCacheOn = true
+	w.dockerOn = true
 	w.freeOn = true
 	w.readFreeMark()
 	// The machine is sampled in a loop of its own, so no network read or
@@ -1074,6 +1081,7 @@ func (w *watcher) sample(ctx context.Context) {
 		w.sampleDisk(now, d, w.cpuTable, owners)
 	}
 	w.goCache(now)
+	w.docker(now)
 	w.autoFree(now)
 	s, err := plat.Machine.DesktopScope()
 	w.unavailable(secScope, err)

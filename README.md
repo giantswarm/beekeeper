@@ -1877,7 +1877,20 @@ least recently used entries down to three quarters of it; it never starts while 
 `go` commands runs and stops when one begins, trying again five minutes later. One process trims
 at a time, and each trim is one `gocache.trim` event with the size before and after; a trim that
 waited `doctor.goCacheEvery` for the builds, or a cache it cannot read, is one `GO CACHE` line.
-`beekeeper doctor` trims it the same way (`--dry-run` says the size). What dead sessions and dead
+`beekeeper doctor` trims it the same way (`--dry-run` says the size). Docker's images and build
+cache, which dev images loaded into kind labs pile up, are kept under `doctor.dockerImagesMaxGiB`
+(40 GiB) and `doctor.dockerBuildCacheMaxGiB` (20 GiB): every `doctor.dockerEvery` (1h) a watch
+reads `docker system df` and, over a cap, removes the unused images created longest ago (dangling
+ones first) down to three quarters of it, and prunes the build cache with `docker builder prune
+--max-used-space` likewise. An image a container uses (a kind node's included) or a kind lab's
+node holds (`crictl images` in each node, by ID, tag or digest) is never removed; a node that is
+not running leaves every image in place. Nothing is pruned while an image import or build runs
+(`kind load` or `create`, `docker build`, `load`, `save` or `import`, buildx, `ctr … import`),
+and none while a lab lease was claimed within the hour, its holder possibly mid-load; the prune
+tries again five minutes later and stops between images when an import begins. One process
+prunes at a time, and each prune is one `docker.prune` event with what it reclaimed; a prune that
+waited `doctor.dockerEvery`, or a Docker it cannot read, is one `DOCKER` line. `beekeeper doctor`
+prunes the same way (`--dry-run` says the sizes). What dead sessions and dead
 go commands leave in the tmpfs `/tmp` is RAM nothing gives back: every `doctor.freeEvery` (1h) one
 watch runs `beekeeper free --apply --only session-dirs,go-build` by itself, under a lock, the
 watches sharing when it ran last. It removes a dead session's scratch (its CLI gone, also a newer
@@ -2525,6 +2538,7 @@ The organisation and desk keys, and their defaults:
 | `watch.diskCriticalMiB` | 1% of `/` | DISK NEARLY FULL |
 | `watch.diskFillWithin` | 2h | DISK FILLING: `/` would run full within it at the rate its free space fell over the last ten minutes; the line names the commands and sessions whose processes wrote most (`write_bytes` of `/proc/<pid>/io`) and the part of the loss no process the watch can read accounts for (another user's, such as dockerd, or ended ones) |
 | `doctor.goCacheMaxGiB`, `doctor.goCacheEvery` | `20`; `1h` | The cap of the shared Go build cache and how often a watch reads its size; over the cap it is trimmed, least recently used first, to three quarters of it while no go build runs ([Agents started without a click](#agents-started-without-a-click)); negative: off |
+| `doctor.dockerImagesMaxGiB`, `doctor.dockerBuildCacheMaxGiB`, `doctor.dockerEvery` | `40`; `20`; `1h` | The caps of Docker's images and build cache and how often a watch reads their sizes; over a cap the unused images created longest ago, or the least recently used build cache, go down to three quarters of it, never an image a container or a kind lab's node uses, nor while an image import runs or a lab lease is under an hour old ([Agents started without a click](#agents-started-without-a-click)); negative: off |
 | `doctor.freeEvery` | `1h` | How often a watch frees dead sessions' scratch and orphaned go-build dirs in the tmpfs `/tmp` (`free --apply --only session-dirs,go-build`); negative: off |
 | `ollama.url`, `lemonade.url` | unset: no model server | The host's model servers, watched and guarded under the `model-server` lease |
 | `outbound.phrases`, `outbound.paths`, `outbound.storeDeny` | none | What never leaves the machine, the plan files whose writes are outbound, the refused secret-store writes ([What leaves the machine](#what-leaves-the-machine)) |

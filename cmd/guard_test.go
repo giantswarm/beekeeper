@@ -45,6 +45,9 @@ func TestMain(m *testing.M) {
 		}
 		return ""
 	}
+	// Nor its Docker: the prune sees no docker CLI; a test that wants one
+	// gives it a fake.
+	dockerCLI = nil
 	// The test binary is the askpass helper too, as the beekeeper binary
 	// is: the helper copy --git-askpass writes runs this executable.
 	if len(os.Args) > len(secret.AskpassArgs) && slices.Equal(os.Args[1:1+len(secret.AskpassArgs)], secret.AskpassArgs) {

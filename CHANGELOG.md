@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The doctor keeps Docker's images and build cache under `doctor.dockerImagesMaxGiB` (40) and `doctor.dockerBuildCacheMaxGiB` (20): every `doctor.dockerEvery` (1h) a watch removes the unused images created longest ago and prunes the build cache down to three quarters of each cap. An image a container or a kind lab's node uses is never removed, and nothing is pruned while an image import or build runs or a lab lease is under an hour old. Each prune is a `docker.prune` event with what it reclaimed; a prune held back an hour, or a failed one, is a `DOCKER` line. A lab machine had 76 GiB of images and 39.5 GiB of build cache nothing trimmed ([#1178](https://github.com/giantswarm/beekeeper/issues/1178)).
 - `beekeeper note list --full` prints each note's whole text, every line of it, indented under its id and tags, with its default and the issues and pull requests it names (`names: owner/repo#n, …`, from its text and its `--ref` links, read as `board next` reads them); `--json --full` adds them as each note's `names`. A scan sees what a memo names in one call, without reading each note. The default output is unchanged ([#920](https://github.com/giantswarm/beekeeper/issues/920)).
 
 ### Fixed
