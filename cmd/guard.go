@@ -52,7 +52,10 @@ scope notices; run then names the victim in one line starting with
 Bound the command's parallelism rather than raising --max.
 
 When every slot is held, or MemAvailable is below the cap, run waits up to
---wait, one line when the wait starts and one when it ends. A wait that runs
+--wait in the build slot queue it shares with agents start --builds: a
+ticket per waiter under <slotDir>/queue/, the slots taken first in first
+out (the memcap wrapper takes none), one line when the wait starts and one
+when it ends. A wait that runs
 out exits 75, states the wait it applied and lists the holders: run the
 command in the background instead, never poll. The wait is --wait, else
 MEMCAP_WAIT, else 8m, or 60m in a background Bash call: the PreToolUse hook

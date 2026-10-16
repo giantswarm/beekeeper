@@ -285,3 +285,44 @@ func TestPromptCapacity(t *testing.T) {
 		t.Errorf("prompt:\n%s", p)
 	}
 }
+
+// A start that builds, refused by the busy build slot alone, waits its turn
+// in the slot queue and is judged again once it came; any other guard
+// refuses it without the wait, and a turn that does not come refuses it
+// with the waiters still ahead.
+func TestQueueStart(t *testing.T) {
+	k := config.Capacity{Floor: 5, Ceiling: 10}
+	three := countAgents(supervised(3), nil, keepNow)
+	slotBusy := roomy()
+	slotBusy.SlotsFree = 0
+	tightBusy := tight()
+	tightBusy.SlotsFree = 0
+	for _, c := range []struct {
+		name      string
+		h         *headroom
+		turn      bool
+		again     *headroom
+		wantAwait bool
+		wantErr   string
+	}{
+		{"slot busy, turn comes", slotBusy, true, slotBusy, true, ""},
+		{"slot busy, turn comes, memory gone", slotBusy, true, tight(), true, "no start: MemAvailable 5.0 GiB under 20 GiB (beekeeper capacity; --force starts anyway)"},
+		{"slot busy, no turn", slotBusy, false, nil, true, "no start: no free build slot, 2 ahead in the build slot queue after 8m (beekeeper capacity; --force starts anyway)"},
+		{"slot busy and tight", tightBusy, true, nil, false, "no start: MemAvailable 5.0 GiB under 20 GiB; no free build slot (beekeeper capacity; --force starts anyway)"},
+		{"slot free", roomy(), true, nil, false, ""},
+	} {
+		awaited := false
+		await := func() (bool, int, error) { awaited = true; return c.turn, 2, nil }
+		again := func() (*capacityView, error) { return newCapacity(three, k, c.again, false), nil }
+		_, err := queueStart(newCapacity(three, k, c.h, true), true, false, "8m", await, again)
+		if awaited != c.wantAwait {
+			t.Errorf("%s: waited in the queue %v, want %v", c.name, awaited, c.wantAwait)
+		}
+		switch {
+		case c.wantErr == "" && err != nil:
+			t.Errorf("%s: %v, want the start through", c.name, err)
+		case c.wantErr != "" && (err == nil || err.Error() != c.wantErr):
+			t.Errorf("%s: %v, want %q", c.name, err, c.wantErr)
+		}
+	}
+}

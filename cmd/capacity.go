@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -357,7 +359,8 @@ is a warning in parentheses after the verdict without, the line naming
 the three figures. The build slot bounds only a start that builds:
 --builds judges one whose task builds, tests or lints (beekeeper run takes
 the slot), and the verdict is "no start: no free build slot" while none is
-free. Without --builds the verdict is for a start that does not build (a
+free; agents start --builds then waits its turn in the build slot queue
+with beekeeper run's waiters. Without --builds the verdict is for a start that does not build (a
 filer, a dispatcher, a reviewer, a promoter proving a release read-only),
 which has no use for the slot: a busy slot is a note in parentheses after
 the verdict, never a "no start". The verdict is "room for N starts" up to
@@ -419,18 +422,64 @@ func gateStart(v *capacityView, force bool) (string, error) {
 }
 
 // startGate reads the capacity verdict for a start that builds or not, as
-// beekeeper capacity reads it, and judges it (gateStart).
-func (a *app) startGate(ctx context.Context, builds, force bool) (string, error) {
-	st, err := a.store.Read()
+// beekeeper capacity reads it, and judges it (queueStart).
+func (a *app) startGate(ctx context.Context, name string, builds, force bool) (string, error) {
+	v, err := a.startCapacity(ctx, builds)
 	if err != nil {
 		return "", err
 	}
-	sessions, _, err := a.sessions()
-	if err != nil && !platform.Missing(err) {
+	o := guard.Options{SlotDir: a.cfg.Memcap.SlotDir, Slots: a.cfg.Memcap.Slots, Stderr: os.Stderr}
+	var wait string
+	wait, o.WaitFrom, o.Background = guard.ResolveWait("", false)
+	if o.Wait, err = guard.ParseWait(wait); err != nil {
+		return "", usageErr("%v", err)
+	}
+	return queueStart(v, builds, force, wait,
+		func() (bool, int, error) { return guard.AwaitSlot(o, "agents start "+name) },
+		func() (*capacityView, error) { return a.startCapacity(ctx, false) })
+}
+
+// queueStart judges a start's verdict v (gateStart). A start that builds,
+// refused by the busy build slot alone, first waits its turn in the slot
+// queue with the runs (await, up to wait): first in first out, instead of a
+// refusal that a slot held by run after run never lets through. Its turn
+// come, the start is judged again (again) as one the slot no longer stops;
+// a turn that does not come within the wait refuses it, the waiters still
+// ahead named.
+func queueStart(v *capacityView, builds, force bool, wait string, await func() (bool, int, error), again func() (*capacityView, error)) (string, error) {
+	if !builds || force || !v.onlySlot() {
+		return gateStart(v, force)
+	}
+	turn, ahead, err := await()
+	if err != nil {
 		return "", err
 	}
+	if !turn {
+		return "", refused("%s, %d ahead in the build slot queue after %s (beekeeper capacity; --force starts anyway)", v.verdict(), ahead, wait)
+	}
+	if v, err = again(); err != nil {
+		return "", err
+	}
+	return gateStart(v, force)
+}
+
+// startCapacity is capacity's verdict for a start now.
+func (a *app) startCapacity(ctx context.Context, builds bool) (*capacityView, error) {
+	st, err := a.store.Read()
+	if err != nil {
+		return nil, err
+	}
+	sessions, _, err := a.sessions()
+	if err != nil && !platform.Missing(err) {
+		return nil, err
+	}
 	c := countAgents(st, sessions, a.now)
-	return gateStart(newCapacity(c, a.cfg.Capacity, a.readHeadroom(ctx, a.watchSwap()), builds), force)
+	return newCapacity(c, a.cfg.Capacity, a.readHeadroom(ctx, a.watchSwap()), builds), nil
+}
+
+// onlySlot reports whether the busy build slot alone stops the start.
+func (v *capacityView) onlySlot() bool {
+	return v.Room == 0 && len(v.Blocks) == 1 && v.Blocks[0] == noFreeSlot
 }
 
 // keepSwap keeps the machine sample's swap reading for the poll and, in the
