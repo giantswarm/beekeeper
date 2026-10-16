@@ -163,7 +163,7 @@ func (w *watcher) startReport(ctx context.Context, sessions []*claude.Session, a
 			st.ReportPause.Final, st.ReportPause.Since = time.Time{}, w.now.UTC()
 		}
 		s := state.Start{Party: p, Mode: state.ModeBypass, Dir: rc.Dir, By: reporterParty, At: w.now.UTC()}
-		reg, err := recordStart(st, s, briefTask(brief), live)
+		reg, err := recordStart(st, s, briefTask(brief), "", live)
 		if err != nil {
 			return nil, err
 		}

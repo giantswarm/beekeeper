@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -32,7 +33,7 @@ func TestRecordStart(t *testing.T) {
 	// A start is recorded with its mode, the old ones forgotten, and the
 	// agent registered busy with the brief.
 	st := &state.State{Starts: []state.Start{old, kept}}
-	reg, err := recordStart(st, start("n", workerName, now), "Brief: count lines", live)
+	reg, err := recordStart(st, start("n", workerName, now), "Brief: count lines", "", live)
 	if err != nil || reg.task != "Brief: count lines" {
 		t.Fatalf("registration = %+v, err = %v", reg, err)
 	}
@@ -52,11 +53,48 @@ func TestRecordStart(t *testing.T) {
 		{Party: state.Party{Session: "a", Name: workerName}, Task: staleTask, AssignedAt: now.Add(-time.Hour)},
 		{Party: state.Party{Session: "r", Name: "test: busy"}, Task: "x"},
 	}}
-	if reg, err := recordStart(st, start("m", workerName, now), "Brief: other", live); err != nil || reg.task != staleTask || st.Agents[1].Task != staleTask {
+	if reg, err := recordStart(st, start("m", workerName, now), "Brief: other", "", live); err != nil || reg.task != staleTask || st.Agents[1].Task != staleTask {
 		t.Errorf("take over: %+v, %v, roster %+v", reg, err, st.Agents)
 	}
-	if _, err := recordStart(st, start("z", "test: busy", now), "Brief", live); err == nil || len(st.Starts) != 1 {
+	if _, err := recordStart(st, start("z", "test: busy", now), "Brief", "", live); err == nil || len(st.Starts) != 1 {
 		t.Errorf("a running session's name: err = %v, starts = %+v", err, st.Starts)
+	}
+}
+
+func TestAgentsStartServesTheBriefsIssueFromTheStart(t *testing.T) {
+	now := time.Date(2026, 10, 16, 10, 0, 0, 0, time.UTC)
+	const served = "giantswarm/beekeeper#1276"
+	by := state.Party{Session: "sv", Name: claimSupervisor}
+	brief := "# FIX beekeeper 1276 (opus, builds)\n\nIssue: https://github.com/giantswarm/beekeeper/issues/1276 — read it only.\nFollow-up to https://github.com/giantswarm/beekeeper/issues/1259."
+	if got := briefIssue(brief); got != served {
+		t.Fatalf("briefIssue = %q", got)
+	}
+	if got := briefIssue("# Sweep\nno link here, beekeeper#12"); got != "" {
+		t.Errorf("briefIssue of a brief without a URL = %q", got)
+	}
+
+	worker := state.Party{Session: "w", Name: "FIX beekeeper 1276"}
+	s := state.Start{Party: worker, Mode: state.ModeBypass, Dir: "/w", By: by, At: now}
+	live := func(p state.Party) bool { return p.Is(worker) }
+	st := &state.State{}
+	if _, err := recordStart(st, s, briefTask(brief), briefIssue(brief), live); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Records) != 1 || !st.Records[0].Session.Is(worker) || st.Records[0].Issue != served || !st.Records[0].By.Is(by) {
+		t.Fatalf("records = %+v", st.Records)
+	}
+	// board next sees it served with no sessions serve call.
+	cands := []board.Candidate{{Item: board.Item{Ref: served}}, {Item: board.Item{Ref: "giantswarm/beekeeper#1277"}}}
+	res := nextFree(st, cands, pickScope{me: by, alive: live, listed: now.Add(-time.Second)})
+	if res.Pick == nil || res.Pick.Ref != cands[1].Ref || len(res.Skipped) != 1 || res.Skipped[0].Skip != `served by "FIX beekeeper 1276"` {
+		t.Errorf("pick %v, skipped %+v", res.Pick, res.Skipped)
+	}
+
+	// A start taking over a stopped entry's open task keeps that task and
+	// records nothing for the brief.
+	st = &state.State{Agents: []state.Agent{{Party: state.Party{Session: "stopped", Name: worker.Name}, Task: staleTask}}}
+	if _, err := recordStart(st, s, briefTask(brief), briefIssue(brief), live); err != nil || len(st.Records) != 0 {
+		t.Errorf("take over: records %+v, %v", st.Records, err)
 	}
 }
 

@@ -86,7 +86,10 @@ the open or merged pull request of plans.repositories whose description
 names the epic; its state never gates. The first item that is free
 is picked: not served by a running session (a sessions serve record, a busy
 agent's task, or else what a session active within overlaps.activeWithin
-works on now, its sessions ON refs, "(works on it)", a busy agent's however
+works on now, its sessions ON refs, "(works on it)", or names by number in
+its title or a busy agent's task, "BS 3057 …" or "FIX backstage 3067 …":
+a tag its repository's name abbreviates, letter by letter from the first,
+or the repository itself, then the number; a busy agent's however
 quiet: a role holder's and an idle agent's are left out; one naming a pull request serves the issues it
 closes too, In Progress or not) nor by an agent on the roster, its CLI running or not, while it is
 busy with its task or parked and kept (agents keep, or an open timer that
@@ -408,10 +411,11 @@ type pickScope struct {
 }
 
 // sessionWork is the issues and pull requests a running session works on
-// now: its current refs, the sessions table's ON.
+// now: its current refs, the sessions table's ON, and its title.
 type sessionWork struct {
 	party state.Party
 	refs  []string
+	title string
 }
 
 // servingWork is what the running sessions work on now (work[i] is
@@ -428,8 +432,9 @@ func servingWork(st *state.State, sessions []*claude.Session, work []claude.Work
 		if i >= len(work) || holder || registered && agentIdle(st, p) || !registered && s.LastActive.Before(since) {
 			continue
 		}
-		if refs := work[i].Refs; len(refs) > 0 {
-			out = append(out, sessionWork{party: p, refs: refs[:min(claude.Current, len(refs))]})
+		refs := work[i].Refs
+		if len(refs) > 0 || titleRef.MatchString(p.Name) {
+			out = append(out, sessionWork{party: p, refs: refs[:min(claude.Current, len(refs))], title: p.Name})
 		}
 	}
 	return out
@@ -535,12 +540,12 @@ func skipCounts(by map[string]int) string {
 // of an agent kept on the roster (keptBy) or busy with its task on it,
 // whether its CLI runs or not, by a
 // busy agent whose task names it, else by a running session working on it
-// (sc.works). An issue a
+// (sc.works), else by a title naming it by number (coverTitled). An issue a
 // pull request closes (sc.closes) is owned by whatever owns
 // the pull request, and a sub-issue offered through an epic by whatever owns
 // the epic.
 func nextFree(st *state.State, cands []board.Candidate, sc pickScope) nextResult {
-	owners := coverClosed(boardOwners(st, sc), sc.closes)
+	owners := coverTitled(coverClosed(boardOwners(st, sc), sc.closes), titleOwners(st, sc), cands)
 	res := nextResult{SkippedBy: map[string]int{}}
 	owned := func(ref string) string {
 		o, ok := owners[strings.ToLower(ref)]
@@ -665,16 +670,95 @@ func namedRefs(text, owner string) []string {
 	return out
 }
 
+// titleRef is how a desk's task or session title names its item by
+// number: a tag or a repository, then the number, "BS 3057 roster read" or
+// "FIX backstage 3067 avatars"; a version, "AP 4.141.1 promoter", names
+// none.
+var titleRef = regexp.MustCompile(`(?i)^(?:fix\s+)?([a-z][\w.-]*)\s+#?(\d+)(?:[\s,:;()]|$)`)
+
+// titled is an item a title names by number (titleRef) and who it names.
+type titled struct {
+	tag, number, who string
+}
+
+// titleOwners are the items the titles of the sessions working name: a
+// busy agent's task and name, a running session's title (sc.works).
+func titleOwners(st *state.State, sc pickScope) []titled {
+	var out []titled
+	add := func(title, who string) {
+		if m := titleRef.FindStringSubmatch(strings.TrimSpace(title)); m != nil {
+			out = append(out, titled{tag: m[1], number: m[2], who: who})
+		}
+	}
+	for _, ag := range st.Agents {
+		if ag.Task != "" && !ag.Done {
+			add(ag.Task, partyLabel(ag.Party, sc.me)+" (task)")
+			add(ag.Name, partyLabel(ag.Party, sc.me)+" (title)")
+		}
+	}
+	for _, w := range sc.works {
+		add(w.title, partyLabel(w.party, sc.me)+" (title)")
+	}
+	return out
+}
+
+// coverTitled adds to owners each candidate, and each candidate's epic, a
+// title names by its number and a tag its repository's name abbreviates
+// (tagNames), owned by who the title names; an owned item keeps its owner.
+func coverTitled(owners map[string]string, titles []titled, cands []board.Candidate) map[string]string {
+	if len(titles) == 0 {
+		return owners
+	}
+	cover := func(ref string) {
+		ref = strings.ToLower(ref)
+		repo, n, ok := strings.Cut(ref, "#")
+		if !ok || owners[ref] != "" {
+			return
+		}
+		_, name, _ := strings.Cut(repo, "/")
+		if i := slices.IndexFunc(titles, func(t titled) bool { return t.number == n && tagNames(t.tag, name) }); i >= 0 {
+			owners[ref] = titles[i].who
+		}
+	}
+	for _, c := range cands {
+		cover(c.Ref)
+		if c.Epic != "" {
+			cover(c.Epic)
+		}
+	}
+	return owners
+}
+
+// tagNames reports whether tag names the repository name: the name itself,
+// or its letters in order from its first, "BS" backstage, "GH" github,
+// "ACC" app-catalog-cleanup-tool.
+func tagNames(tag, name string) bool {
+	tag, name = strings.ToLower(tag), strings.ToLower(name)
+	if len(tag) < 2 || name == "" || tag[0] != name[0] {
+		return false
+	}
+	i := 0
+	for j := 0; j < len(name) && i < len(tag); j++ {
+		if name[j] == tag[i] {
+			i++
+		}
+	}
+	return i == len(tag)
+}
+
+// partyLabel is how an owner reads: "you" for me, else its quoted name.
+func partyLabel(p, me state.Party) string {
+	if p.Is(me) {
+		return "you"
+	}
+	return fmt.Sprintf("%q", p.Name)
+}
+
 // boardOwners maps each issue (lower-cased owner/repo#n) a live session
 // serves to who serves it.
 func boardOwners(st *state.State, sc pickScope) map[string]string {
 	me, alive, listed := sc.me, sc.alive, sc.listed
-	name := func(p state.Party) string {
-		if p.Is(me) {
-			return "you"
-		}
-		return fmt.Sprintf("%q", p.Name)
-	}
+	name := func(p state.Party) string { return partyLabel(p, me) }
 	// kept says what keeps the record's session on the roster, parked.
 	kept := func(p state.Party) string { return rosterKept(st, p, listed) }
 	// busy says the record's session is an agent on the roster working its
