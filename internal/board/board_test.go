@@ -27,6 +27,8 @@ const (
 	upNextEpic = "Up Next epic"
 	bugStep    = "bug"
 	typedNext  = "up next"
+	// backlogStep is the name of the order's Backlog step.
+	backlogStep = "Backlog"
 )
 
 var statuses = []string{"Inbox 📥", backlog, upNext, inProgress, blocked, "Validation ☑️", "Done ✅"}
@@ -42,7 +44,7 @@ func order() []config.BoardStep {
 		{Name: "Up Next", Status: []string{typedNext}},
 		{Name: bugStep, Kind: []string{bugStep}},
 		{Name: "queue", Search: "repo:o/tools label:team/x"},
-		{Name: "Backlog", Status: []string{"backlog"}, CreatedWithin: config.Duration{Duration: 90 * 24 * time.Hour}},
+		{Name: backlogStep, Status: []string{"backlog"}, CreatedWithin: config.Duration{Duration: 90 * 24 * time.Hour}},
 	}
 }
 
@@ -129,16 +131,16 @@ func TestRankAppliesTheOrderToAFixtureBoard(t *testing.T) {
 		"o/r#1 In Progress: no activity since 2025-08-27",
 		"o/r#2 In Progress: assigned to pat",
 		"o/r#3 In Progress",
-		"o/r#19 In Progress: 1 of 1 blockers open",
+		"o/r#19 In Progress: held: 1 of 1 blockers open",
 		"o/r#40 In Progress < o/r#4",
-		"o/r#41 In Progress < o/r#4: 4 of 4 blockers open",
+		"o/r#41 In Progress < o/r#4: held: 4 of 4 blockers open",
 		"o/r#16 In Progress < o/r#15",
 		"o/r#17 In Progress < o/r#15: created 2026-06-24: Backlog takes items created within 90 days",
 		"o/r#18 In Progress < o/r#15: no step of board.order offers Inbox 📥",
-		"o/r#20 In Progress < o/r#15: 3 of 4 blockers open",
+		"o/r#20 In Progress < o/r#15: held: 3 of 4 blockers open",
 		"o/r#21 In Progress < o/r#15: no step of board.order offers Inbox 📥",
 		"o/r#22 In Progress < o/r#15: created 2026-06-24: Backlog takes items created within 90 days",
-		"o/r#23 In Progress < o/r#15: 1 of 2 blockers open",
+		"o/r#23 In Progress < o/r#15: held: 1 of 2 blockers open",
 		"o/r#6 blocker cleared",
 		"o/r#8 Up Next: epic in planning (Up Next ➡️), no plan pull request names it: its planning session's",
 		"o/r#9 Up Next: epic in planning (Up Next ➡️), no plan pull request names it: its planning session's",
@@ -185,9 +187,7 @@ func TestBlockersClosedIsTheLastCloseOfEveryBlocker(t *testing.T) {
 		var i issueJSON
 		i.Deps.TotalBlockedBy = total
 		for _, c := range closed {
-			i.BlockedBy.Nodes = append(i.BlockedBy.Nodes, struct {
-				ClosedAt *time.Time `json:"closedAt"`
-			}{c})
+			i.BlockedBy.Nodes = append(i.BlockedBy.Nodes, blockerNode{ClosedAt: c})
 		}
 		return i
 	}
@@ -217,7 +217,7 @@ func TestUnofferedSaysWhyNoStepTakesAnItem(t *testing.T) {
 		{Item{Status: backlog, Kind: bug, Created: days(400)}, ""},
 		{Item{Status: backlog, Created: days(100)}, "created 2026-06-23: Backlog takes items created within 90 days"},
 		{Item{Status: blocked}, "blocker cleared takes items with recorded blockers, it has none"},
-		{Item{Status: blocked, Blockers: 3, OpenBlockers: 2}, "2 of 3 blockers open"},
+		{Item{Status: blocked, Blockers: 3, OpenBlockers: 2}, "held: 2 of 3 blockers open"},
 		{Item{Status: blocked, Blockers: 1, StatusSet: days(1), BlockersClosed: days(2)},
 			"held by its Status Blocked / Waiting ⛔️, set 2026-09-30 after its last blocker closed 2026-09-29: it holds until the Status changes"},
 		{Item{Status: blocked, Blockers: 1, StatusSet: days(3), BlockersClosed: days(2)}, ""},
@@ -473,7 +473,7 @@ func TestMoveAddsAnIssueMissingFromTheBoard(t *testing.T) {
 		added: `{"data":{"addProjectV2ItemById":{"item":{"id":"I2","project":{"id":"P"},"status":null,"kind":null,"team":null}}}}`}
 	c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
 	mv, err := c.Move(context.Background(), issue5, "backlog")
-	if err != nil || *mv != (Moved{Ref: issue5, To: backlog, Added: true, Team: "X 🐝"}) || !slices.Equal(f.mutations, []string{"add ISSUE to P", "I2=t1", "I2=s1"}) || readsItems(f.queries) {
+	if err != nil || *mv != (Moved{Ref: issue5, To: backlog, Added: true, Team: teamX}) || !slices.Equal(f.mutations, []string{"add ISSUE to P", "I2=t1", "I2=s1"}) || readsItems(f.queries) {
 		t.Errorf("Move = %+v, %v; mutations %v, queries %q", mv, err, f.mutations, f.queries)
 	}
 	// A board without a Team, or none configured, adds without one.
@@ -647,7 +647,7 @@ func TestRankAddsAMissingIssueAndRefusesWhatIsNotOnTheBoard(t *testing.T) {
 	c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
 	ctx := context.Background()
 	rk, err := c.Rank(ctx, "o/s#8", Place{After: issue9})
-	if err != nil || *rk != (Ranked{Ref: "o/s#8", Above: issue9, Added: true, Team: "X 🐝"}) ||
+	if err != nil || *rk != (Ranked{Ref: "o/s#8", Above: issue9, Added: true, Team: teamX}) ||
 		!slices.Equal(f.mutations, []string{"add ISSUE8 to P", "I8=t1", `I8 after "I9"`}) {
 		t.Errorf("Rank of an issue missing from the board = %+v, %v; mutations %v", rk, err, f.mutations)
 	}
@@ -729,7 +729,7 @@ func TestClosesReadsTheClosingReferencesInOneRequestPerOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string][]string{"o/r#100": {"o/r#1", "other/x#2"}, "teemow/lab#9": {"teemow/lab#3"}}
+	want := map[string][]string{"o/r#100": {ref1, "other/x#2"}, "teemow/lab#9": {"teemow/lab#3"}}
 	if len(queries) != 2 || !strings.Contains(queries[0], `r1:repository(owner:"o",name:"r")`) || len(got) != len(want) ||
 		!slices.Equal(got["o/r#100"], want["o/r#100"]) || !slices.Equal(got["teemow/lab#9"], want["teemow/lab#9"]) {
 		t.Errorf("closes %v, queries %q", got, queries)

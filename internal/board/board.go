@@ -37,9 +37,12 @@ type Item struct {
 	Assignees []string  `json:"assignees,omitempty"`
 	Created   time.Time `json:"created"`
 	Updated   time.Time `json:"updated"`
-	// Blockers counts the recorded blockers, OpenBlockers the open ones.
-	Blockers     int `json:"blockers,omitempty"`
-	OpenBlockers int `json:"openBlockers,omitempty"`
+	// Blockers counts the recorded blockers, OpenBlockers the open ones;
+	// OpenBlockedBy names those read (owner/repo#n), from a read of the
+	// board's items or the priority list only.
+	Blockers      int      `json:"blockers,omitempty"`
+	OpenBlockers  int      `json:"openBlockers,omitempty"`
+	OpenBlockedBy []string `json:"openBlockedBy,omitempty"`
 	// StatusSet is when its Status was last set, BlockersClosed when the
 	// last of its recorded blockers closed; zero when unknown.
 	StatusSet      time.Time `json:"statusSet,omitzero"`
@@ -110,6 +113,8 @@ type Snapshot struct {
 	// Missing names what GitHub answered with an error and no item's
 	// Missing holds ("<path>: <message>"), a search step's issues for one.
 	Missing []string
+	// Priorities is the priority list Read read with the items.
+	Priorities Priorities
 }
 
 // Candidate is an item the order offers, in its place.
@@ -160,7 +165,10 @@ func (c Candidate) PriorityText() string {
 // item without is offered itself. A sub-issue that is a board item, of
 // any Team or Status, is held to the order like any other: one no step
 // offers on its own (an old Backlog item, a blocked one, one in Inbox) is
-// marked skipped with the reason, a blocked one whose Status was set after
+// marked skipped with the reason. An item with an open recorded blocker is
+// held: marked skipped naming its blockers ("held: blocked by …"), an epic
+// offered as itself, never through its sub-issues, and an issue under a
+// held one through the sub-issue relation is marked skipped naming it, a blocked one whose Status was set after
 // its recorded blockers closed too (HeldByStatus). Items with an open recorded blocker,
 // without activity for b.StaleAfter or assigned to anybody outside
 // b.People are marked skipped too. The epic gate (snap.Gate) holds an epic
@@ -183,7 +191,13 @@ func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 			return
 		}
 		seen[it.Ref] = true
-		out = append(out, Candidate{Item: it, Step: step, Epic: epic, Skip: cmp.Or(skip, snap.planning(it, byRef), skipReason(it, b, now))})
+		up := func(ref string) string {
+			if strings.EqualFold(ref, it.Ref) {
+				return cmp.Or(it.Parent, epic)
+			}
+			return snap.Parent(ref)
+		}
+		out = append(out, Candidate{Item: it, Step: step, Epic: epic, Skip: cmp.Or(skip, heldAbove(it.Ref, up, byRef), snap.planning(it, byRef), skipReason(it, b, now))})
 	}
 	for i, st := range snap.Order {
 		if st.Search != "" {
@@ -196,7 +210,7 @@ func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 			if seen[it.Ref] || !Matches(st, it, now) {
 				continue
 			}
-			if !st.SubIssues || it.OpenSubIssues == 0 || snap.planning(it, byRef) != "" {
+			if !st.SubIssues || it.OpenSubIssues == 0 || snap.planning(it, byRef) != "" || it.OpenBlockers > 0 {
 				offer(it, st.Name, "", "")
 				continue
 			}
@@ -268,7 +282,7 @@ func refusal(st config.BoardStep, it Item, now time.Time) string {
 	case st.Unblocked && it.Blockers == 0:
 		return st.Name + " takes items with recorded blockers, it has none"
 	case st.Unblocked && it.OpenBlockers > 0:
-		return blockersOpen(it)
+		return it.HeldText()
 	case st.Unblocked && it.HeldByStatus():
 		return fmt.Sprintf("%s %s, set %s after its last blocker closed %s: it holds until the Status changes",
 			HeldPrefix, it.Status, it.StatusSet.Format(time.DateOnly), it.BlockersClosed.Format(time.DateOnly))
@@ -292,7 +306,7 @@ func span(d time.Duration) string {
 
 func skipReason(it Item, b config.Board, now time.Time) string {
 	if it.OpenBlockers > 0 {
-		return blockersOpen(it)
+		return it.HeldText()
 	}
 	if d := b.StaleAfter.Duration; d > 0 && now.Sub(it.Updated) > d {
 		return "no activity since " + it.Updated.Format(time.DateOnly)
