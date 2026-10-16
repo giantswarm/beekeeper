@@ -102,9 +102,9 @@ func TestChangesNameWhatMovedAndWhoMovedIt(t *testing.T) {
 	at := time.Date(2026, 10, 16, 6, 53, 56, 0, time.UTC)
 	was := []Seen{{Ref: ref1, Rank: 1, Team: "X 🐝"}, {Ref: ref2, Rank: 2, Team: "X 🐝"}, {Ref: ref3, Rank: 3, Team: "X 🐝"}, {Ref: ref4, Rank: 4, Team: "X 🐝"}}
 	now := Priorities{
-		{Ref: ref1, Rank: 1, Team: "X 🐝"},                                  // unchanged
+		{Ref: ref1, Rank: 1, Team: "X 🐝"},                                 // unchanged
 		{Ref: ref2, Rank: 2, Team: "Y", TeamBy: "automation", TeamAt: at}, // Team moved, kept by its label
-		{Ref: "o/r#5", Rank: 5, Team: "X 🐝"},                               // joined: no change of a ranked epic
+		{Ref: "o/r#5", Rank: 5, Team: "X 🐝"},                              // joined: no change of a ranked epic
 	}
 	gone := map[string]*RankedEpic{
 		ref3: {Ref: ref3, Rank: 0, Team: "X 🐝", RankBy: "pat", RankAt: at}, // unranked by somebody
