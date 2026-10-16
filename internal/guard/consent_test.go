@@ -131,7 +131,7 @@ func resultLine(content string) string {
 func transcriptWith(t *testing.T, page Page, asJSON bool) string {
 	t.Helper()
 	ctx := func(p Page) string {
-		return `Tab Context: - Available tabs:   • tabId 7: "` + p.Title + `" ("` + p.URL + `")`
+		return "\n\nTab Context:\n- Available tabs:\n  • tabId 7: \"" + p.Title + `" ("` + p.URL + `")`
 	}
 	lines := []string{
 		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t","name":"mcp__claude-in-chrome__navigate","input":{"url":"https://example.org/"}}]}}`,

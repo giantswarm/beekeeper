@@ -415,11 +415,13 @@ func lastPages(transcript string) map[string]Page {
 			}
 			return
 		}
-		i := strings.LastIndex(text, tabContext)
-		if i < 0 {
+		// The marker opens a line, which no page title does (a title holds
+		// no line break); the last one is the tool's.
+		at := contextLine.FindAllStringIndex(text, -1)
+		if len(at) == 0 {
 			return
 		}
-		for _, m := range trailerTab.FindAllStringSubmatch(text[i:], -1) {
+		for _, m := range trailerTab.FindAllStringSubmatch(text[at[len(at)-1][0]:], -1) {
 			seen(m[1], Page{URL: m[3], Title: m[2]})
 		}
 	})
@@ -431,12 +433,11 @@ func lastPages(transcript string) map[string]Page {
 // title that names another tab names none.
 var trailerTab = regexp.MustCompile(`(?m)^[^\n•]*•\s*tabId (\d+): "(.*)" \("([^"\n]*)"\)[^\S\n]*$`)
 
-// tabContext opens the tab context a Chrome tool appends to its result;
-// tabsJSONOpen opens a tabs_context result.
-const (
-	tabContext   = "Tab Context:"
-	tabsJSONOpen = `{"availableTabs"`
-)
+// contextLine is the line that opens the tab context a Chrome tool
+// appends to its result; tabsJSONOpen opens a tabs_context result.
+var contextLine = regexp.MustCompile(`(?m)^Tab Context:`)
+
+const tabsJSONOpen = `{"availableTabs"`
 
 // scanJoined calls fn with the text of each result of a Chrome tool call
 // in the transcript's tail, its blocks joined, in order: another tool's

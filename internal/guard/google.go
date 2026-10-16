@@ -94,7 +94,7 @@ func (f googleFlow) next(u *url.URL) googleFlow {
 		return googleFlow{callback: cb, request: u.Query().Get("as")}
 	}
 	path, q := strings.ToLower(u.Path), u.Query()
-	if !slices.ContainsFunc(googleFlowPaths, func(p string) bool { return strings.HasPrefix(path, p) }) || q.Has("redirect_uri") {
+	if !slices.ContainsFunc(googleFlowPaths, func(p string) bool { return strings.HasPrefix(path, p) }) || carriesRequest(q) {
 		return googleFlow{}
 	}
 	as := q.Get("as")
@@ -108,6 +108,21 @@ func (f googleFlow) next(u *url.URL) googleFlow {
 		return googleFlow{}
 	}
 	return f
+}
+
+// carriesRequest reports whether q, a page's query that is no request
+// GoogleCallback reads, still carries one: a redirect_uri, or a continue
+// URL with a client id or a redirect_uri.
+func carriesRequest(q url.Values) bool {
+	if q.Has("redirect_uri") {
+		return true
+	}
+	c, err := url.Parse(q.Get("continue"))
+	if err != nil {
+		return q.Has("continue")
+	}
+	cq := c.Query()
+	return cq.Has("redirect_uri") || cq.Has("client_id")
 }
 
 // onGoogle reports whether page is on Google's sign-in.
