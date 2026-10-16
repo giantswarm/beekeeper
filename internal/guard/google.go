@@ -111,18 +111,10 @@ func (f googleFlow) next(u *url.URL) googleFlow {
 }
 
 // carriesRequest reports whether q, a page's query that is no request
-// GoogleCallback reads, still carries one: a redirect_uri, or a continue
-// URL with a client id or a redirect_uri.
+// GoogleCallback reads, may still carry one: a redirect_uri, or any
+// continue or followup URL, whose nesting the hook does not unwrap.
 func carriesRequest(q url.Values) bool {
-	if q.Has("redirect_uri") {
-		return true
-	}
-	c, err := url.Parse(q.Get("continue"))
-	if err != nil {
-		return q.Has("continue")
-	}
-	cq := c.Query()
-	return cq.Has("redirect_uri") || cq.Has("client_id")
+	return q.Has("redirect_uri") || q.Get("continue") != "" || q.Get("followup") != ""
 }
 
 // onGoogle reports whether page is on Google's sign-in.
