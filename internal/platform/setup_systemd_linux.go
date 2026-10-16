@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/giantswarm/beekeeper/contrib/systemd"
 )
@@ -53,7 +54,7 @@ func (systemdSetup) Files(s SetupSpec) ([]File, []string) {
 		{Path: filepath.Join(dir, sandboxUnit), Content: exe(systemd.SandboxService), Service: true},
 	}
 	if s.TeleportEvery > 0 {
-		every := "OnUnitActiveSec=" + strconv.Itoa(int(s.TeleportEvery.Seconds())) + "s"
+		every := "OnCalendar=" + calendar(s.TeleportEvery)
 		files = append(files,
 			File{Path: filepath.Join(dir, teleportServiceUnit), Content: exe(systemd.TeleportService)},
 			File{Path: filepath.Join(dir, teleportTimerUnit), Content: []byte(strings.Replace(systemd.TeleportTimer, systemd.TeleportTimerEvery, every, 1)), Service: true})
@@ -140,4 +141,18 @@ func (systemdSetup) Stop(path string) []string {
 // unit file that is a symlink out of the unit directory (a linked unit).
 func (systemdSetup) Restart(path string) [][]string {
 	return [][]string{{systemctl, userManager, "restart", filepath.Base(path)}}
+}
+
+// calendar is the calendar event that elapses every every on the wall
+// clock, counted from the full minute, hour or day: every rounds down to
+// whole seconds under a minute, whole minutes under an hour, and whole
+// hours (at most 23) from an hour on.
+func calendar(every time.Duration) string {
+	switch {
+	case every < time.Minute:
+		return fmt.Sprintf("*:*:0/%d", max(int(every/time.Second), 1))
+	case every < time.Hour:
+		return fmt.Sprintf("*:0/%d", int(every/time.Minute))
+	}
+	return fmt.Sprintf("0/%d:00", min(int(every/time.Hour), 23))
 }

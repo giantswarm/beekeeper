@@ -67,10 +67,44 @@ func TestDue(t *testing.T) {
 		{"unreadable", Profile{}, errors.New("tsh status: boom"), Record{}, false, "boom"},
 	}
 	for _, c := range cases {
-		due, reason := Due(c.p, c.perr, c.r, now, 90*time.Minute)
+		due, reason := Due(c.p, c.perr, c.r, now, 90*time.Minute, false)
 		if due != c.due || !strings.Contains(reason, c.reason) {
 			t.Errorf("%s: due %v %q, want %v %q", c.name, due, reason, c.due, c.reason)
 		}
+	}
+}
+
+// TestDueAfterAMissedTick is the keeper's first run after a suspend that
+// outlasted the login: the tick is missed, the login expired meanwhile,
+// and the run renews it, even when the run before the suspend failed.
+func TestDueAfterAMissedTick(t *testing.T) {
+	every := 10 * time.Minute
+	suspended := time.Date(2026, 10, 1, 17, 6, 0, 0, time.UTC)
+	resumed := suspended.Add(2*time.Hour + 20*time.Minute)
+	p := Profile{ValidUntil: suspended.Add(110 * time.Minute)}
+
+	r := Record{CheckedAt: suspended}
+	if r.Missed(suspended.Add(every), every) || r.Missed(suspended.Add(2*every), every) || (Record{}).Missed(resumed, every) {
+		t.Error("a regular tick, or a first run, is a missed one")
+	}
+	if !r.Missed(resumed, every) {
+		t.Fatal("the run after the suspend is no missed tick")
+	}
+	if due, why := Due(p, nil, r, resumed, 90*time.Minute, true); !due {
+		t.Errorf("the expired login is not renewed after the missed tick: %s", why)
+	}
+
+	failed := Record{FailedAt: suspended, FailedFor: p.ValidUntil, Reason: "dial tcp: no route to host", CheckedAt: suspended}
+	if due, _ := Due(p, nil, failed, suspended.Add(every), 90*time.Minute, false); due {
+		t.Error("a regular tick retries a failed login")
+	}
+	if due, why := Due(p, nil, failed, resumed, 90*time.Minute, true); !due {
+		t.Errorf("the missed tick does not retry the login that failed before the suspend: %s", why)
+	}
+
+	failed.AfterMiss, failed.FailedAt, failed.CheckedAt = true, resumed, resumed
+	if due, why := Due(p, nil, failed, resumed.Add(every), 90*time.Minute, false); !due {
+		t.Errorf("the run after a missed tick's failure does not try once more: %s", why)
 	}
 }
 

@@ -60,11 +60,30 @@ func TestSystemdSetupFiles(t *testing.T) {
 		service       bool
 	}{
 		{"/c/systemd/user/beekeeper-teleport.service", `ExecStart=/b/beekeeper --as "teleport keeper" teleport renew --keeper` + "\n", false},
-		{"/c/systemd/user/beekeeper-teleport.timer", "OnUnitActiveSec=300s\n", true},
+		{"/c/systemd/user/beekeeper-teleport.timer", "OnCalendar=*:0/5\nPersistent=true\n", true},
 	} {
 		f := files[i+2]
 		if f.Path != want.path || !strings.Contains(string(f.Content), want.content) || f.Service != want.service {
 			t.Errorf("keeper file %d: %s %v\n%s", i, f.Path, f.Service, f.Content)
+		}
+	}
+}
+
+// TestCalendar is the keeper timer's calendar event: a wall-clock event
+// fires the tick a suspend missed at resume, where a monotonic interval
+// waits up to a whole interval after it.
+func TestCalendar(t *testing.T) {
+	for every, want := range map[time.Duration]string{
+		30 * time.Second:  "*:*:0/30",
+		0:                 "*:*:0/1",
+		10 * time.Minute:  "*:0/10",
+		90 * time.Second:  "*:0/1",
+		time.Hour:         "0/1:00",
+		150 * time.Minute: "0/2:00",
+		48 * time.Hour:    "0/23:00",
+	} {
+		if got := calendar(every); got != want {
+			t.Errorf("calendar(%s) = %q, want %q", every, got, want)
 		}
 	}
 }

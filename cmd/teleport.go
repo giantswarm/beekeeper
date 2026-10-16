@@ -82,7 +82,11 @@ func (v teleportView) line(now time.Time) string {
 	}
 	switch v.Key {
 	case teleportFailed:
-		return fmt.Sprintf("TELEPORT RENEWAL FAILED at %s: %s; the login %s: %s", clock(now, v.Keeper.FailedAt), v.Keeper.Reason, until, teleportRenewHint)
+		hint := teleportRenewHint
+		if v.Keeper.AfterMiss {
+			hint = "the keeper tries once more at its next run"
+		}
+		return fmt.Sprintf("TELEPORT RENEWAL FAILED at %s: %s; the login %s: %s", clock(now, v.Keeper.FailedAt), v.Keeper.Reason, until, hint)
 	case teleportUnreadable:
 		return "TELEPORT LOGIN unreadable: " + v.Error
 	case teleportExpired:
@@ -194,7 +198,11 @@ when it is free and granted to nobody, and waits for its next run otherwise.
 
 --keeper is how the keeper's unit runs it: it renews only once less than
 teleport.renewBefore is left, and not again after its renewal of the same
-login failed; a failure leaves a sign-in note for the guide's person. A
+login failed; a failure leaves a sign-in note for the guide's person. The
+run after a missed tick (more than two teleport.every since the keeper's
+last run: a suspend, a powered-off machine) renews a login under
+teleport.renewBefore even after a failure, and a failure of that run is
+tried once more at the next run before the note. A
 login whose SSO callback exchange with the proxy timed out after the
 browser's sign-in is retried once first, both attempts in the log.`,
 		Args: cobra.NoArgs,
@@ -213,10 +221,23 @@ browser's sign-in is retried once first, both attempts in the log.`,
 			}
 			ctx := cmd.Context()
 			before, perr := teleport.Status(ctx, t.Tsh, t.Home)
+			missed := false
 			if keeper {
-				if due, why := teleport.Due(before, perr, rec, a.now, t.RenewBefore.Duration); !due {
+				missed = rec.Missed(a.now, t.Every.Duration)
+				due, why := teleport.Due(before, perr, rec, a.now, t.RenewBefore.Duration, missed)
+				last := rec.CheckedAt
+				rec.CheckedAt = a.now.UTC()
+				if !due {
+					if err := a.store.WriteFile(teleportFile, rec); err != nil {
+						return err
+					}
 					_, err := fmt.Fprintln(a.out, "teleport: "+why)
 					return err
+				}
+				if missed {
+					if _, err := fmt.Fprintf(a.out, "teleport: the run after a missed tick (last run %s): renewing\n", clock(a.now, last)); err != nil {
+						return err
+					}
 				}
 			}
 			release, err := a.holdBrowser(me)
@@ -237,9 +258,9 @@ browser's sign-in is retried once first, both attempts in the log.`,
 				Retry: func(first error) { a.teleportRetry(me, first) }}
 			after, err := r.Renew(ctx, a.now)
 			if err != nil {
-				return a.teleportFailed(me, keeper, before, perr, err)
+				return a.teleportFailed(me, keeper, missed, before, perr, err)
 			}
-			if err := a.store.WriteFile(teleportFile, teleport.Record{RenewedAt: a.now.UTC(), ValidUntil: after.ValidUntil}); err != nil {
+			if err := a.store.WriteFile(teleportFile, teleport.Record{RenewedAt: a.now.UTC(), ValidUntil: after.ValidUntil, CheckedAt: rec.CheckedAt}); err != nil {
 				return err
 			}
 			from := "no active profile"
@@ -271,9 +292,14 @@ func (a *app) teleportRetry(me state.Party, first error) {
 
 // teleportFailed records the failed renewal of the profile before (read
 // with perr) and, for the keeper, leaves a sign-in note for the guide's
-// person that closes once the login is renewed.
-func (a *app) teleportFailed(me state.Party, keeper bool, before teleport.Profile, perr, failure error) error {
-	rec := teleport.Record{FailedAt: a.now.UTC(), Reason: failure.Error()}
+// person that closes once the login is renewed. A keeper's run after a
+// missed tick (missed) leaves no note: its next run tries once more, and
+// the watch says the failure meanwhile.
+func (a *app) teleportFailed(me state.Party, keeper, missed bool, before teleport.Profile, perr, failure error) error {
+	rec := teleport.Record{FailedAt: a.now.UTC(), Reason: failure.Error(), AfterMiss: keeper && missed}
+	if keeper {
+		rec.CheckedAt = a.now.UTC()
+	}
 	until := "has no active profile"
 	if perr == nil {
 		rec.FailedFor = before.ValidUntil
@@ -288,7 +314,7 @@ func (a *app) teleportFailed(me state.Party, keeper bool, before teleport.Profil
 	}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		evs := []state.Event{event(me, "teleport.fail", "%s", failure)}
-		if !keeper {
+		if !keeper || rec.AfterMiss {
 			return evs, nil
 		}
 		st.NextNote++
