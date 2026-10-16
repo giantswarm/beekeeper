@@ -38,8 +38,13 @@ var googleRequestPaths = []string{"/o/oauth2/auth", "/o/oauth2/v2/auth", "/v3/si
 
 // googleGrant reports whether path is one of Google's OAuth grant pages.
 func googleGrant(path string) bool {
+	path = strings.ToLower(path)
 	return slices.ContainsFunc(googleGrantPaths, func(p string) bool { return strings.HasPrefix(path, p) })
 }
+
+// googleFlowPaths open the paths of the pages an OAuth flow on Google's
+// sign-in passes: its request, its grant pages, a sign-in challenge.
+var googleFlowPaths = append([]string{"/v3/signin/"}, googleGrantPaths...)
 
 // GoogleCallback is the callback host of the Google authorization request
 // u carries: its redirect_uri's host, or that of the request its continue
@@ -62,7 +67,7 @@ func GoogleCallback(u *url.URL) string {
 // any other page.
 func requestCallback(u *url.URL) string {
 	q := u.Query()
-	if !slices.Contains(googleRequestPaths, u.Path) || q.Get("client_id") == "" || len(q["redirect_uri"]) != 1 {
+	if !slices.Contains(googleRequestPaths, strings.ToLower(u.Path)) || q.Get("client_id") == "" || len(q["redirect_uri"]) != 1 {
 		return ""
 	}
 	r, err := url.Parse(q.Get("redirect_uri"))
@@ -80,13 +85,19 @@ type googleFlow struct {
 }
 
 // next is the flow once the tab shows u on Google's host: a new
-// authorization request starts a new flow; a page of another request id
-// than the flow's ends it.
+// authorization request starts a new flow; a page off the flow's paths, one
+// carrying a redirect_uri of no request, or one of another request id than
+// the flow's ends it. The account chooser carries no request id: the flow
+// binds the one its first page after carries.
 func (f googleFlow) next(u *url.URL) googleFlow {
 	if cb := GoogleCallback(u); cb != "" {
 		return googleFlow{callback: cb, request: u.Query().Get("as")}
 	}
-	as := u.Query().Get("as")
+	path, q := strings.ToLower(u.Path), u.Query()
+	if !slices.ContainsFunc(googleFlowPaths, func(p string) bool { return strings.HasPrefix(path, p) }) || q.Has("redirect_uri") {
+		return googleFlow{}
+	}
+	as := q.Get("as")
 	switch {
 	case as == "" || f.callback == "":
 		return f
