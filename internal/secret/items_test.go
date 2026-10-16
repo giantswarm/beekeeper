@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/secret/secrettest"
@@ -75,5 +77,32 @@ func TestItemsRefuseAVaultOutsideTheAllowlist(t *testing.T) {
 	}
 	if len(tools.Calls) != 0 {
 		t.Errorf("op ran: %q", tools.Calls)
+	}
+}
+
+// Every op call of a listing has its own deadline: a vault of many items
+// is bounded per read, never by one deadline over the whole listing.
+func TestItemsBoundEachReadOnItsOwn(t *testing.T) {
+	tools := secrettest.New(map[string]string{vaultRef: token, "op://Shared/b/credential": password, "op://Shared/c/credential": password})
+	o := ops(tools)
+	var deadlines []time.Time
+	o.Run = func(ctx context.Context, dir string, env []string, stdin io.Reader, name string, args ...string) ([]byte, error) {
+		d, ok := ctx.Deadline()
+		if !ok {
+			t.Errorf("%s %v runs without a deadline", name, args)
+		}
+		deadlines = append(deadlines, d)
+		return tools.Run(ctx, dir, env, stdin, name, args...)
+	}
+	if _, err := o.Items(context.Background(), shared, secret.ItemsOptions{Fields: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(deadlines) != 4 {
+		t.Fatalf("op calls = %d, want the listing and three reads", len(deadlines))
+	}
+	for i := 1; i < len(deadlines); i++ {
+		if !deadlines[i].After(deadlines[i-1]) {
+			t.Errorf("call %d shares an earlier call's deadline", i)
+		}
 	}
 }

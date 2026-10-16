@@ -58,11 +58,13 @@ func (o *Ops) Items(ctx context.Context, vault string, opt ItemsOptions) ([]Item
 	if err := o.checkVaultIn(Ref{Op: ref + "/"}, o.ListVaults()...); err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, opTimeout)
-	defer cancel()
-	listed, err := o.vaultItems(ctx, vault)
+	var listed []vaultItem
+	err := bounded(ctx, ref, func(ctx context.Context) (err error) {
+		listed, err = o.vaultItems(ctx, vault)
+		return err
+	})
 	if err != nil {
-		return nil, opErr(ctx, ref, err)
+		return nil, err
 	}
 	var out []Item
 	for _, it := range listed {
@@ -71,8 +73,12 @@ func (o *Ops) Items(ctx context.Context, vault string, opt ItemsOptions) ([]Item
 			continue
 		}
 		if opt.Fields {
-			if item.Fields, err = o.itemFields(ctx, vault, it.ID); err != nil {
-				return nil, opErr(ctx, ref+"/"+it.Title, err)
+			err := bounded(ctx, ref+"/"+it.Title, func(ctx context.Context) (err error) {
+				item.Fields, err = o.itemFields(ctx, vault, it.ID)
+				return err
+			})
+			if err != nil {
+				return nil, err
 			}
 		}
 		out = append(out, item)
@@ -84,9 +90,17 @@ func (o *Ops) Items(ctx context.Context, vault string, opt ItemsOptions) ([]Item
 // VaultRef is the reference that names a whole vault, op://<vault>.
 func VaultRef(vault string) string { return guard.OpRef + vault }
 
-// opErr is a failed op call on ref: a vault error, op's silence named.
-func opErr(ctx context.Context, ref string, err error) error {
-	if ctx.Err() != nil {
+// bounded runs one op call on ref within its own opTimeout, so that a
+// listing of many items is bounded per read, not as a whole; a failure is a
+// vault error, op's silence named.
+func bounded(ctx context.Context, ref string, call func(context.Context) error) error {
+	ctx, cancel := context.WithTimeout(ctx, opTimeout)
+	defer cancel()
+	err := call(ctx)
+	switch {
+	case err == nil:
+		return nil
+	case ctx.Err() != nil:
 		return fmt.Errorf("%w: %s: op answered nothing in %s", ErrVault, ref, opTimeout)
 	}
 	return fmt.Errorf("%w: %s: %w", ErrVault, ref, err)
