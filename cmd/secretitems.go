@@ -13,18 +13,23 @@ import (
 func (a *app) secretItemsCmd() *cobra.Command {
 	var opt secret.ItemsOptions
 	c := &cobra.Command{
-		Use:   "items op://<vault> [<match>] [--fields]",
-		Short: "The item titles of a vault beekeeper reads, and with --fields their field names and lengths, never a value",
+		Use:   "items op://<vault> [<match>] [--fields] [--env-keys]",
+		Short: "The item titles of a vault beekeeper reads, and with --fields or --env-keys their field or KEY names and lengths, never a value",
 		Long: `items lists the items of a vault beekeeper reads (secret.vault,
 secret.vaults or secret.ageVaults): each item's title, category, tags and
 last change, the items whose title, category or a tag contains <match>
 (case-insensitive) when one is given. --fields reads each listed item in
 beekeeper's process and answers its fields' labels, sections, types and
-value lengths; no value is printed, logged or returned. Another vault is
-refused before op runs, naming the vaults listed. With secret.session it
-runs in the broker, like every call on the vault.
+value lengths; --env-keys answers the KEY of each KEY=VALUE line of an
+env-style field, an item's notes for one, with its value's length, the
+key copy and compare take as op://<vault>/<item>/<field>#<KEY>. No value is
+printed, logged or returned. Another vault is refused before op runs,
+naming the vaults listed. With secret.session it runs in the broker, like
+every call on the vault.
 
-  beekeeper secret items "op://<vault>" openai --fields`,
+  beekeeper secret items "op://<vault>" openai --fields
+  beekeeper secret items "op://<vault>" "environment variables" --env-keys
+  beekeeper secret copy "op://<vault>/<item>/notesPlain#<KEY>" <file>#<path>`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			vault, ok := strings.CutPrefix(args[0], guard.OpRef)
@@ -52,10 +57,14 @@ runs in the broker, like every call on the vault.
 					}
 					fmt.Fprintf(&b, "  %-48s %-12s %d bytes\n", label, f.Type, f.Length)
 				}
+				for _, k := range it.EnvKeys {
+					fmt.Fprintf(&b, "  %-48s %-12s %d bytes\n", k.Field+"#"+k.Key, "env", k.Length)
+				}
 			}
 			return a.secretPrint(items, b.String())
 		},
 	}
 	c.Flags().BoolVar(&opt.Fields, "fields", false, "also each item's field labels, types and value lengths")
+	c.Flags().BoolVar(&opt.EnvKeys, "env-keys", false, "also the KEY names of each item's KEY=VALUE lines and their value lengths")
 	return c
 }

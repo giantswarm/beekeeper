@@ -20,6 +20,7 @@ type Item struct {
 	Tags     []string    `json:"tags,omitempty"`
 	Updated  string      `json:"updated,omitempty"`
 	Fields   []FieldInfo `json:"fields,omitempty"`
+	EnvKeys  []EnvKey    `json:"envKeys,omitempty"`
 }
 
 // FieldInfo is one field of an item: its label, the section it sits in,
@@ -39,6 +40,9 @@ type ItemsOptions struct {
 	Match string
 	// Fields reads each kept item for its fields' names and lengths.
 	Fields bool
+	// EnvKeys reads each kept item for the keys of its env-style fields'
+	// KEY=VALUE lines and their values' lengths.
+	EnvKeys bool
 }
 
 // ListVaults are the vaults items lists: secret.vault, secret.vaults and
@@ -48,8 +52,10 @@ func (o *Ops) ListVaults() []string {
 }
 
 // Items lists the items of vault, one of [Ops.ListVaults]: titles and
-// metadata, and with opt.Fields each field's label, type and length. A
-// value is read in this process for its length alone and answered nowhere.
+// metadata, with opt.Fields each field's label, type and length, with
+// opt.EnvKeys each KEY of a field's KEY=VALUE lines and its value's length.
+// A value is read in this process for its length alone and answered
+// nowhere.
 func (o *Ops) Items(ctx context.Context, vault string, opt ItemsOptions) ([]Item, error) {
 	ref := VaultRef(vault)
 	if vault == "" || strings.Contains(vault, "/") {
@@ -70,9 +76,16 @@ func (o *Ops) Items(ctx context.Context, vault string, opt ItemsOptions) ([]Item
 		if !item.matches(opt.Match) {
 			continue
 		}
-		if opt.Fields {
-			if item.Fields, err = o.itemFields(ctx, vault, it.ID); err != nil {
+		if opt.Fields || opt.EnvKeys {
+			fields, keys, err := o.itemFields(ctx, vault, it.ID)
+			if err != nil {
 				return nil, opErr(ctx, ref+"/"+it.Title, err)
+			}
+			if opt.Fields {
+				item.Fields = fields
+			}
+			if opt.EnvKeys {
+				item.EnvKeys = keys
 			}
 		}
 		out = append(out, item)
@@ -105,11 +118,12 @@ func (it Item) matches(match string) bool {
 }
 
 // itemFields reads the item id of vault and keeps of each field its
-// metadata and its value's length; the values go out of scope here.
-func (o *Ops) itemFields(ctx context.Context, vault, id string) ([]FieldInfo, error) {
+// metadata and its value's length, and the keys of its KEY=VALUE lines
+// with their values' lengths; the values go out of scope here.
+func (o *Ops) itemFields(ctx context.Context, vault, id string) ([]FieldInfo, []EnvKey, error) {
 	raw, err := o.op(ctx, nil, "item", "get", id, "--vault", vault, "--format", "json")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var item struct {
 		Fields []struct {
@@ -124,15 +138,25 @@ func (o *Ops) itemFields(ctx context.Context, vault, id string) ([]FieldInfo, er
 		} `json:"fields"`
 	}
 	if err := json.Unmarshal(raw, &item); err != nil {
-		return nil, errors.New("op item get answered no item")
+		return nil, nil, errors.New("op item get answered no item")
 	}
 	out := make([]FieldInfo, 0, len(item.Fields))
+	var keys []EnvKey
 	for _, f := range item.Fields {
 		label := f.Label
 		if label == "" {
 			label = f.ID
 		}
 		out = append(out, FieldInfo{Label: label, Section: f.Section.Label, Type: f.Type, Purpose: f.Purpose, Length: len(f.Value)})
+		// the field as op read names it: a built-in one by its id, one in
+		// a section after the section
+		name := label
+		if _, builtin := builtins[f.ID]; builtin {
+			name = f.ID
+		} else if f.Section.Label != "" {
+			name = f.Section.Label + "/" + label
+		}
+		keys = append(keys, envKeys(name, f.Value)...)
 	}
-	return out, nil
+	return out, keys, nil
 }
