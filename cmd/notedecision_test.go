@@ -310,3 +310,22 @@ func TestNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 		t.Fatalf("left %+v, want the guide's line", st.RoleLines)
 	}
 }
+
+// Every decision its default closed longer than defaultedKeep ago leaves in
+// the same call that closes the due ones; a younger one stays answerable.
+func TestCloseDefaultedDropsEveryExpiredDefault(t *testing.T) {
+	now := relayNow
+	old := now.Add(-defaultedKeep - time.Minute)
+	st := &state.State{
+		Notes:     []state.Note{{ID: 4, For: notePerson, Kind: noteDecision, Due: now.Add(-time.Minute), Default: dfltOK}},
+		Defaulted: []state.Note{{ID: 1, Due: old}, {ID: 2, Due: old}, {ID: 3, Due: now.Add(-time.Hour)}},
+	}
+	closeDefaulted(st, notePerson, watchParty, now)
+	var kept []int
+	for _, n := range st.Defaulted {
+		kept = append(kept, n.ID)
+	}
+	if !slices.Equal(kept, []int{3, 4}) {
+		t.Fatalf("defaulted %v, want [3 4]", kept)
+	}
+}

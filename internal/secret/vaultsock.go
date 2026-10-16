@@ -13,6 +13,9 @@ import (
 	"time"
 )
 
+// BrokerUnit is the systemd user unit whose main process is the broker.
+const BrokerUnit = "beekeeper-sandbox.service"
+
 // The person hands the vault session to the broker over a Unix socket in
 // the runtime directory: mode 0600 in a 0700 directory, which the agent
 // sandbox can neither reach (it blocks every Unix socket) nor write. A
@@ -222,7 +225,7 @@ func AskVault(path string, req VaultRequest) (VaultState, error) {
 	var st VaultState
 	c, err := net.DialTimeout("unix", path, 5*time.Second)
 	if err != nil {
-		return st, fmt.Errorf("no vault keeper answers at %s: beekeeper-sandbox.service runs it (beekeeper install): %w", path, err)
+		return st, fmt.Errorf("no vault keeper answers at %s: %s runs it (beekeeper install): %w", path, BrokerUnit, err)
 	}
 	defer func() { _ = c.Close() }()
 	if err := Peer(c); err != nil {

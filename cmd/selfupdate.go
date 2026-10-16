@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -65,6 +66,12 @@ lists them meanwhile). An alerts or guide watch never re-executes itself:
 its owner re-arms it, told by its own feed (WATCH STALE, GUIDE WATCH
 STALE).
 
+The agent sandbox's broker (beekeeper-sandbox.service) that runs the
+replaced binary is restarted onto the new one (restart), which drops its
+vault session: the next secret step waits for the broker's sign-in. A
+broker serving calls (a gate, a secret call, an agents start) is left to
+finish them, and the restart still due is named with its command (due).
+
 The beekeeper plugin goes with the binary: an update brings every
 installed beekeeper plugin up to its marketplace's latest (claude plugin
 marketplace update, then claude plugin update in the plugin's scope), so
@@ -92,6 +99,7 @@ is set. A development build (version dev) is refused.`,
 			if a.json {
 				w = io.Discard
 			}
+			started := time.Now()
 			res, err := runUpdate(cmd.Context(), w, check)
 			if a.json && res.Latest != "" {
 				if perr := a.printJSON(res); perr != nil {
@@ -110,6 +118,7 @@ is set. A development build (version dev) is refused.`,
 						}
 					}
 					_, _ = fmt.Fprint(w, leftBehind(stale, res.Current, res.Latest))
+					restartBrokerOn(cmd.Context(), w, res.Path, started, t, false)
 				}
 			}
 			switch {
