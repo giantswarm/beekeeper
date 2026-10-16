@@ -263,6 +263,11 @@ type Board struct {
 	// Team is the value of the board's Team field whose items are the
 	// desk's; empty, every item is.
 	Team string `yaml:"team"`
+	// TeamLabel is the issue label of the team's epics (default team/ and
+	// Team's first word, lower-cased: team/bumblebee): the priority list
+	// keeps a ranked epic that carries it whatever its Team field says, so
+	// a label sync that moves the Team never drops a rank.
+	TeamLabel string `yaml:"teamLabel"`
 	// People are the logins whose assigned items are free; an item
 	// assigned to anybody else is skipped.
 	People []string `yaml:"people"`

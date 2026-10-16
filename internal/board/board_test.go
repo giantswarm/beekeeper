@@ -129,16 +129,16 @@ func TestRankAppliesTheOrderToAFixtureBoard(t *testing.T) {
 		"o/r#1 In Progress: no activity since 2025-08-27",
 		"o/r#2 In Progress: assigned to pat",
 		"o/r#3 In Progress",
-		"o/r#19 In Progress: 1 of 1 blockers open",
+		"o/r#19 In Progress: held: 1 of 1 blockers open",
 		"o/r#40 In Progress < o/r#4",
-		"o/r#41 In Progress < o/r#4: 4 of 4 blockers open",
+		"o/r#41 In Progress < o/r#4: held: 4 of 4 blockers open",
 		"o/r#16 In Progress < o/r#15",
 		"o/r#17 In Progress < o/r#15: created 2026-06-24: Backlog takes items created within 90 days",
 		"o/r#18 In Progress < o/r#15: no step of board.order offers Inbox 📥",
-		"o/r#20 In Progress < o/r#15: 3 of 4 blockers open",
+		"o/r#20 In Progress < o/r#15: held: 3 of 4 blockers open",
 		"o/r#21 In Progress < o/r#15: no step of board.order offers Inbox 📥",
 		"o/r#22 In Progress < o/r#15: created 2026-06-24: Backlog takes items created within 90 days",
-		"o/r#23 In Progress < o/r#15: 1 of 2 blockers open",
+		"o/r#23 In Progress < o/r#15: held: 1 of 2 blockers open",
 		"o/r#6 blocker cleared",
 		"o/r#8 Up Next: epic in planning (Up Next ➡️), no plan pull request names it: its planning session's",
 		"o/r#9 Up Next: epic in planning (Up Next ➡️), no plan pull request names it: its planning session's",
@@ -185,9 +185,7 @@ func TestBlockersClosedIsTheLastCloseOfEveryBlocker(t *testing.T) {
 		var i issueJSON
 		i.Deps.TotalBlockedBy = total
 		for _, c := range closed {
-			i.BlockedBy.Nodes = append(i.BlockedBy.Nodes, struct {
-				ClosedAt *time.Time `json:"closedAt"`
-			}{c})
+			i.BlockedBy.Nodes = append(i.BlockedBy.Nodes, blockerNode{ClosedAt: c})
 		}
 		return i
 	}
@@ -217,7 +215,7 @@ func TestUnofferedSaysWhyNoStepTakesAnItem(t *testing.T) {
 		{Item{Status: backlog, Kind: bug, Created: days(400)}, ""},
 		{Item{Status: backlog, Created: days(100)}, "created 2026-06-23: Backlog takes items created within 90 days"},
 		{Item{Status: blocked}, "blocker cleared takes items with recorded blockers, it has none"},
-		{Item{Status: blocked, Blockers: 3, OpenBlockers: 2}, "2 of 3 blockers open"},
+		{Item{Status: blocked, Blockers: 3, OpenBlockers: 2}, "held: 2 of 3 blockers open"},
 		{Item{Status: blocked, Blockers: 1, StatusSet: days(1), BlockersClosed: days(2)},
 			"held by its Status Blocked / Waiting ⛔️, set 2026-09-30 after its last blocker closed 2026-09-29: it holds until the Status changes"},
 		{Item{Status: blocked, Blockers: 1, StatusSet: days(3), BlockersClosed: days(2)}, ""},

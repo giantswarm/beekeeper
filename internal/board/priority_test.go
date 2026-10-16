@@ -93,10 +93,13 @@ func TestSnapshotParentReadsItemsAndSubIssues(t *testing.T) {
 // priorityGH is a board with a Priority field: the ranked epics it holds
 // (their items Ii for issue i), the issue a set reads and its item.
 type priorityGH struct {
-	t         *testing.T
-	ranked    map[int]int // issue → rank
-	kind      string      // the Kind of the issue set reads
-	offBoard  bool        // the issue's projectItems name no item of the board
+	t      *testing.T
+	ranked map[int]int // issue → rank
+	// labelled are the ranked epics the team label finds, issue → rank:
+	// those with another Team are missing from the Team's query.
+	labelled  map[int]int
+	kind      string // the Kind of the issue set reads
+	offBoard  bool   // the issue's projectItems name no item of the board
 	mutations []string
 	queries   []string
 }
@@ -125,12 +128,17 @@ func (f *priorityGH) run(_ context.Context, args ...string) ([]byte, error) {
 	case strings.Contains(q, "fields(first:50)"):
 		return []byte(priorityMetaJSON), nil
 	case strings.Contains(q, "items(first:100"):
-		if vars["q"] != `is:open team:"X" kind:"Epic 🎯"` {
+		ranked, team := f.ranked, "X 🐝"
+		switch vars["q"] {
+		case `is:open team:"X" kind:"Epic 🎯"`:
+		case `is:open label:"team/x" kind:"Epic 🎯"`:
+			ranked, team = f.labelled, "Y"
+		default:
 			f.t.Errorf("priority query %q", vars["q"])
 		}
 		var nodes []string
-		for _, n := range slices.Sorted(maps.Keys(f.ranked)) {
-			nodes = append(nodes, fmt.Sprintf(`{"id":"I%d","status":{"name":"In Progress ⛏️"},"kind":{"name":"Epic 🎯"},"priority":{"number":%d},"content":%s}`, n, f.ranked[n], issue(n, "")))
+		for _, n := range slices.Sorted(maps.Keys(ranked)) {
+			nodes = append(nodes, fmt.Sprintf(`{"id":"I%d","status":{"name":"In Progress ⛏️"},"kind":{"name":"Epic 🎯"},"priority":{"number":%d,"updatedAt":"2026-10-12T11:31:09Z","creator":{"login":"teemow"}},"team":{"name":%q,"updatedAt":"2026-10-16T06:53:56Z","creator":{"login":"giantswarm-project-automation"}},"content":%s}`, n, ranked[n], team, issue(n, "")))
 		}
 		// An epic without a rank is no entry.
 		nodes = append(nodes, `{"id":"I99","status":{"name":"Backlog 📦"},"kind":{"name":"Epic 🎯"},"priority":null,"content":`+issue(99, "")+`}`)

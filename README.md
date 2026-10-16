@@ -1096,8 +1096,17 @@ on the board, not in beekeeper's state or in a memo: the board's number field `P
 id. A board without the field has an empty list; `gh project field-create <project> --owner <owner>
 --name Priority --data-type NUMBER` adds it.
 
-- `beekeeper priority` prints the open epics of `board.team` that hold a rank: rank, epic URL, title
-  and Status (`--json` the list).
+- `beekeeper priority` prints the open epics of `board.team` that hold a rank: rank, epic URL, title,
+  Status and hold (`--json` the list). An epic is the team's by its Team field or by its team label
+  (`board.teamLabel`, default `team/<first word of board.team>`), so a label sync that moves the
+  Team keeps the epic on the list. A held epic, one with an open recorded blocker (`board block
+  --by`), keeps its rank and shows `held: blocked by <owner/repo#n>; 1 of 1 blockers open`;
+  `board next` skips it and every issue under it.
+- Every read of the list (`priority`, `board next`) is compared with the last one (the state
+  directory's `board-ranked.json`). A change of a ranked epic's rank or Team that beekeeper did not
+  write is a `board.changed` event in `beekeeper log` and a line `changed outside beekeeper: …`
+  (`board next --json` `changed`), naming the old and new value and the writer GitHub names (the
+  field value's creator). An epic that left the list is read on its own item, never the board.
 - `beekeeper priority set <epic> <rank> --as <person>` puts the epic at the rank. The epics at and
   below it move down one and the list stays ranked 1..n; a rank past its end is its end. Only the
   items whose rank changes are written. An epic missing from the board is added first, as
