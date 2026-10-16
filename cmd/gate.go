@@ -902,10 +902,51 @@ func shortSHA(sha string) string { return sha[:min(len(sha), 9)] }
 // handCut is the base branch when no Auto-release run tags a merge into it,
 // "" otherwise.
 func (g *gateRun) handCut() string {
-	if g.release == nil || g.release.Auto {
+	if g.release == nil || g.release.Auto || g.release.Plugins {
 		return ""
 	}
 	return g.release.Base
+}
+
+// plugins says whether the base branch's Auto Release tags per plugin
+// (github.PluginReleaseWorkflow): devctl awaits no such tag, the gate does
+// (awaitPluginTags).
+func (g *gateRun) plugins() bool { return g.release != nil && g.release.Plugins }
+
+// awaitPluginTags awaits the tags the base's per-plugin Auto Release cuts
+// for its merge commit sha, within pluginTagWait: all cut, they are out's
+// release; none due, out warrants no release. It returns the gate's line on
+// it.
+func (g *gateRun) awaitPluginTags(out *merge.Outcome, sha string) string {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(g.ctx), pluginTagWait)
+	defer cancel()
+	unconfirmed := fmt.Sprintf("its release is unconfirmed: check the Auto Release run of %s, do not merge again", g.repo)
+	tags, err := pluginTags(ctx, g.repo, sha)
+	switch {
+	case err != nil:
+		return fmt.Sprintf("%s merged, and which plugin tags its Auto Release cuts cannot be read (%v): %s", g.key(), err, unconfirmed)
+	case len(tags) == 0:
+		out.NoRelease = true
+		return fmt.Sprintf("%s merged and changed no plugin's version in %s: its Auto Release cuts no tag, no release follows, lane %s is free",
+			g.key(), github.Marketplace, g.lane.Name)
+	}
+	gateLine("%s merged into %s, whose Auto Release tags per plugin: awaiting %s", g.key(), g.release.Base, strings.Join(tags, ", "))
+	missing := slices.Clone(tags)
+	for {
+		missing = slices.DeleteFunc(missing, func(tag string) bool {
+			ok, err := tagExists(ctx, g.repo, tag)
+			return err == nil && ok
+		})
+		if len(missing) == 0 {
+			out.Release = strings.Join(tags, " ")
+			return fmt.Sprintf("%s merged and released %s, lane %s is free", g.key(), strings.Join(tags, ", "), g.lane.Name)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Sprintf("%s merged, and its Auto Release cut no %s within %s: %s", g.key(), strings.Join(missing, ", "), pluginTagWait, unconfirmed)
+		case <-time.After(pluginTagPoll):
+		}
+	}
 }
 
 // key names the merge, owner/repo#n or owner/repo promote.
@@ -1206,9 +1247,13 @@ func (g *gateRun) runMerge() error {
 		gateLine("devctl serves the repositories of %s only (merge.devctlOwners): %s#%d takes the %s as the gh login, green first, no release wait",
 			strings.Join(g.cfg.Merge.DevctlOwners, ", "), g.repo, g.pr, github.SquashRoute)
 	}
-	if b := g.handCut(); b != "" {
+	switch b := g.handCut(); {
+	case b != "":
 		gateLine("%s merges into %s, which no Auto-release run tags: devctl ends at the merge (--no-release-wait), awaits no release and frees lane %s then",
 			g.key(), b, g.lane.Name)
+	case g.plugins():
+		gateLine("%s merges into %s, whose Auto Release tags per plugin (%s): devctl ends at the merge (--no-release-wait), the gate awaits the tags of the plugins whose version it changes",
+			g.key(), g.release.Base, github.PluginReleaseWorkflow)
 	}
 	base, err := g.mergeFiles()
 	if err != nil {
@@ -1238,7 +1283,7 @@ func (g *gateRun) mergeArgv() ([]string, error) {
 	if g.pr != 0 && g.runsDevctl() {
 		argv = merge.CITimeout(argv, g.cfg.Merge.CITimeout.Duration)
 	}
-	if g.handCut() != "" {
+	if g.handCut() != "" || g.plugins() {
 		argv = merge.NoReleaseWait(argv)
 	}
 	return merge.AcceptRed(argv, g.acceptRed), nil
@@ -1435,6 +1480,10 @@ func (g *gateRun) record(base string, run childRun) error {
 	if r.out, ok = parseOutcome(g.pr, doc); merge.NeedsJudging(ok, rc) {
 		r.out, r.unanswered = judgeRun(g.ctx, g.repo, g.pr, judgeTries)
 	}
+	pluginLine := ""
+	if sha := merge.MergeCommit(doc); g.plugins() && r.out.Merged && sha != "" {
+		pluginLine = g.awaitPluginTags(&r.out, sha)
+	}
 	settles := false
 	err := g.store.Update(func(st *state.State) ([]state.Event, error) {
 		i := g.mine(st, state.Running)
@@ -1469,6 +1518,8 @@ func (g *gateRun) record(base string, run childRun) error {
 	case unanswered != nil:
 		gateLine("devctl ended with exit %d without its document and GitHub does not answer (%v): whether %s merged is unknown, lane %s settles by the settle rule; check the pull request, do not rerun blindly",
 			rc, unanswered, g.key(), g.lane.Name)
+	case pluginLine != "":
+		gateLine("%s", pluginLine)
 	case out.Merged && g.handCut() != "":
 		gateLine("%s merged into %s, which no Auto-release run tags: no release awaited, lane %s is free; a tag of %s is cut by hand",
 			g.key(), g.handCut(), g.lane.Name, g.handCut())

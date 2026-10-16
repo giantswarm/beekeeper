@@ -32,7 +32,17 @@ var (
 	baseRelease = func(ctx context.Context, repo string, n int) (github.BaseRelease, error) {
 		return github.ReadBaseRelease(ctx, github.RunGH, repo, n)
 	}
-	pullRebase = func(ctx context.Context, repo string, n int) (github.Rebase, error) {
+	pluginTags = func(ctx context.Context, repo, sha string) ([]string, error) {
+		return github.PluginTags(ctx, github.RunGH, repo, sha)
+	}
+	tagExists = func(ctx context.Context, repo, tag string) (bool, error) {
+		return github.TagExists(ctx, github.RunGH, repo, tag)
+	}
+	// pluginTagPoll is how often the gate looks for a merged plugin's tag,
+	// pluginTagWait how long it awaits the tags of one merge.
+	pluginTagPoll = 10 * time.Second
+	pluginTagWait = 5 * time.Minute
+	pullRebase    = func(ctx context.Context, repo string, n int) (github.Rebase, error) {
 		return github.ReadRebase(ctx, github.RunGH, repo, n)
 	}
 	updateRebase = func(ctx context.Context, repo string, n int) error {

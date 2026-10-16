@@ -165,3 +165,82 @@ func TestASIGTERMToTheGateStopsItsDevctl(t *testing.T) {
 		t.Errorf("merged event: %q", d)
 	}
 }
+
+// stubPluginTags answers the tags a merge's per-plugin Auto Release cuts and
+// whether each exists yet: a tag appears at its second read.
+func stubPluginTags(t *testing.T, tags []string) {
+	t.Helper()
+	wasTags, wasExists, wasPoll := pluginTags, tagExists, pluginTagPoll
+	t.Cleanup(func() { pluginTags, tagExists, pluginTagPoll = wasTags, wasExists, wasPoll })
+	pluginTagPoll = 10 * time.Millisecond
+	pluginTags = func(_ context.Context, repo, sha string) ([]string, error) {
+		if repo != scratchRepo || sha != "abc" {
+			t.Errorf("tags of %s@%s asked, want %s@abc", repo, sha, scratchRepo)
+		}
+		return tags, nil
+	}
+	reads := map[string]int{}
+	tagExists = func(_ context.Context, _, tag string) (bool, error) {
+		reads[tag]++
+		return reads[tag] > 1, nil
+	}
+}
+
+// A merge into a branch whose Auto Release tags per plugin (a plugin
+// marketplace, <plugin>/vX.Y.Z) ends devctl at the merge and awaits the tag
+// of the plugin whose version it changed, which is its release; one that
+// changed no version warrants none. A repository-wide Auto-release is
+// devctl's to await, as before.
+func TestAMergeIntoAPerPluginRepositoryAwaitsThePluginsTag(t *testing.T) {
+	lane := config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}}
+	plugins := github.BaseRelease{Base: mainBranch, Plugins: true}
+	t.Run("a plugin's version changed", func(t *testing.T) {
+		noSystemd(t)
+		fakeDevctl(t, handCutDevctl)
+		stubGitHub(t, github.Merged, "")
+		stubBaseRelease(t, plugins, nil)
+		stubPluginTags(t, []string{"gs-plans/v0.3.0"})
+		g := runningMerge(t, scratchRepo, lane)
+		if err := startMerge(t, g); err != nil {
+			t.Fatalf("exit %d, want 0", Code(err))
+		}
+		if st := gateState(t, g); len(st.Merges) != 0 {
+			t.Errorf("the lane is not free: %+v", st.Merges)
+		}
+		if d := lastEvent(t, g, verbMerged); !strings.Contains(d, "release gs-plans/v0.3.0") {
+			t.Errorf("merged event: %q, want the plugin's tag as its release", d)
+		}
+	})
+	t.Run("no plugin's version changed", func(t *testing.T) {
+		noSystemd(t)
+		fakeDevctl(t, handCutDevctl)
+		stubGitHub(t, github.Merged, "")
+		stubBaseRelease(t, plugins, nil)
+		stubPluginTags(t, nil)
+		g := runningMerge(t, scratchRepo, lane)
+		if err := startMerge(t, g); err != nil {
+			t.Fatalf("exit %d, want 0", Code(err))
+		}
+		if d := lastEvent(t, g, verbMerged); !strings.Contains(d, "release none warranted") {
+			t.Errorf("merged event: %q", d)
+		}
+	})
+	t.Run("a repository-wide auto-release", func(t *testing.T) {
+		noSystemd(t)
+		fakeDevctl(t, `case "$*" in *--no-release-wait*) exit 7 ;; esac; echo '`+mergedDoc+`'`)
+		stubGitHub(t, github.Merged, "")
+		stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
+		stubPluginTags(t, []string{"never/v1.0.0"})
+		pluginTags = func(context.Context, string, string) ([]string, error) {
+			t.Error("plugin tags asked of a repository-wide auto-release")
+			return nil, nil
+		}
+		g := runningMerge(t, scratchRepo, lane)
+		if err := startMerge(t, g); err != nil {
+			t.Fatalf("exit %d, want 0", Code(err))
+		}
+		if d := lastEvent(t, g, verbMerged); !strings.Contains(d, "release v1.2.4") {
+			t.Errorf("merged event: %q", d)
+		}
+	})
+}

@@ -676,3 +676,15 @@ func TestParseHelmReleasesReadsTheAttemptWithoutAHistory(t *testing.T) {
 		t.Fatalf("%+v, %v", hrs, err)
 	}
 }
+
+func TestMergeCommit(t *testing.T) {
+	for doc, want := range map[string]string{
+		`{"mergeCommitSha":"abc","release":null}`: "abc",
+		`{"verdict":"red"}`:                       "",
+		`{}`:                                      "",
+	} {
+		if got := MergeCommit([]byte(doc)); got != want {
+			t.Errorf("%s: %q, want %q", doc, got, want)
+		}
+	}
+}
