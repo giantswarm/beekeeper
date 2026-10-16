@@ -65,8 +65,8 @@ func TestGoogleConsent(t *testing.T) {
 		"a GitHub record of the same callback":  {Page{URL: scopesPage, Title: googleTitle, Flow: googleHostCB}, github, continueClick, Deny, GoogleForm},
 		"Sign in to of an unknown flow":         {Page{URL: signInToPage, Title: googleTitle}, googleRecord, continueClick, "", ""},
 		"Allow on an unknown flow":              {Page{URL: signInToPage, Title: googleTitle}, googleRecord, "Clicks Allow", Deny, "is a consent page (an OAuth grant) on accounts.google.com"},
-		"consent of scopes of an unknown flow":  {Page{URL: scopesPage, Title: googleTitle}, googleRecord, continueClick, Deny, "/signin/oauth/v3/consent is a consent page"},
-		"a redirect_uri on a grant page":        {Page{URL: scopesPage + "&redirect_uri=https%3A%2F%2F" + googleHostCB + "%2Fcb", Title: googleTitle}, googleRecord, continueClick, Deny, "/signin/oauth/v3/consent is a consent page"},
+		"consent of scopes of an unknown flow":  {Page{URL: scopesPage, Title: googleTitle}, googleRecord, continueClick, Deny, `"Sign in - Google Accounts" is a consent page (an OAuth grant) on accounts.google.com`},
+		"a redirect_uri on a grant page":        {Page{URL: scopesPage + "&redirect_uri=https%3A%2F%2F" + googleHostCB + "%2Fcb", Title: googleTitle}, googleRecord, continueClick, Deny, `"Sign in - Google Accounts" is a consent page (an OAuth grant) on accounts.google.com`},
 		"two redirect_uris on the chooser":      {Page{URL: thirdChooser + "&redirect_uri=https%3A%2F%2F" + googleHostCB + "%2Fcb", Title: googleTitle}, googleRecord, "Clicks the account", "", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
