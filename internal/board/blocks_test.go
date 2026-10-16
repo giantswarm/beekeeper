@@ -200,8 +200,8 @@ func TestABlockedItemIsSkippedThenOfferedOnceItsBlockerCloses(t *testing.T) {
 	if _, err := c.Block(ctx, issue5, issue9); err != nil {
 		t.Fatal(err)
 	}
-	if got := rank(); got.Skip != "1 of 1 blockers open" {
-		t.Errorf("blocked item: skip %q, want 1 of 1 blockers open", got.Skip)
+	if got := rank(); got.Skip != "held: blocked by o/r#9; 1 of 1 blockers open" {
+		t.Errorf("blocked item: skip %q, want held: blocked by o/r#9; 1 of 1 blockers open", got.Skip)
 	}
 	// The blocker closes; no session acts on the item.
 	f.nodes["r#9"] = closedIssue

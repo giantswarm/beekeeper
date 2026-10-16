@@ -72,7 +72,7 @@ kind:fieldValueByName(name:"` + KindField + `"){...on ProjectV2ItemFieldSingleSe
 // recorded blockers: when each closed, the last close a blocked item's
 // Status is weighed against (Item.HeldByStatus). An issue with more
 // blockers has its last close unknown.
-const blockerFields = `...on Issue{blockedBy(first:20){nodes{closedAt}}}`
+const blockerFields = `...on Issue{blockedBy(first:20){nodes{closedAt number state repository{nameWithOwner}}}}`
 
 // itemFields is what a move takes of an item: its id, its board and the
 // board fields with the Team.
@@ -111,10 +111,14 @@ type issueJSON struct {
 	} `json:"parent"`
 	// BlockedBy are the recorded blockers, read with blockerFields only.
 	BlockedBy struct {
-		Nodes []struct {
-			ClosedAt *time.Time `json:"closedAt"`
-		} `json:"nodes"`
+		Nodes []blockerNode `json:"nodes"`
 	} `json:"blockedBy"`
+}
+
+// blockerNode is a recorded blocker as blockerFields reads it.
+type blockerNode struct {
+	ClosedAt *time.Time `json:"closedAt"`
+	depRef
 }
 
 // blockersClosed is when the last of the recorded blockers closed: zero
@@ -151,6 +155,11 @@ func (j issueJSON) item() Item {
 	}
 	for _, a := range j.Assignees.Nodes {
 		it.Assignees = append(it.Assignees, a.Login)
+	}
+	for _, b := range j.BlockedBy.Nodes {
+		if b.State == stateOpen {
+			it.OpenBlockedBy = append(it.OpenBlockedBy, fmt.Sprintf("%s#%d", b.Repository.NameWithOwner, b.Number))
+		}
 	}
 	if p := j.Parent; p != nil {
 		it.Parent = fmt.Sprintf("%s#%d", p.Repository.NameWithOwner, p.Number)
@@ -304,9 +313,19 @@ fields(first:50){nodes{...on ProjectV2SingleSelectField{id name options{id name}
 // in the statuses its steps name and extra when every board step names
 // some.
 func filter(b config.Board, order []config.BoardStep, extra ...string) string {
-	parts := []string{isOpen}
+	who := ""
 	if b.Team != "" {
-		parts = append(parts, fmt.Sprintf("%s:%q", strings.ToLower(TeamField), b.Team))
+		who = fmt.Sprintf("%s:%q", strings.ToLower(TeamField), b.Team)
+	}
+	return filterOf(who, order, extra...)
+}
+
+// filterOf is filter with who, the query part that picks the team's items
+// ("" for every item).
+func filterOf(who string, order []config.BoardStep, extra ...string) string {
+	parts := []string{isOpen}
+	if who != "" {
+		parts = append(parts, who)
 	}
 	var statuses []string
 	for _, st := range order {
@@ -337,9 +356,45 @@ func filter(b config.Board, order []config.BoardStep, extra ...string) string {
 	return strings.Join(parts, " ")
 }
 
+// rankedOffTeam adds to snap.Items the epics of the priority list its read
+// of the team's items missed: ranked epics that carry the team label while
+// their Team field says another team, read by the label (one request per
+// 100 items) and kept only when ranked.
+func (c *Client) rankedOffTeam(ctx context.Context, snap *Snapshot, order []config.BoardStep, gate Gate) error {
+	l := c.TeamLabel()
+	if c.Board.Team == "" || l == "" {
+		return nil
+	}
+	have := map[string]bool{}
+	for _, it := range snap.Items {
+		have[strings.ToLower(it.Ref)] = true
+	}
+	missing := map[string]bool{}
+	for _, e := range snap.Priorities {
+		if !have[strings.ToLower(e.Ref)] {
+			missing[strings.ToLower(e.Ref)] = true
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	items, err := c.items(ctx, filterOf(fmt.Sprintf("label:%q", l), order, gate.statuses()...))
+	if err != nil {
+		return err
+	}
+	for _, it := range items {
+		if missing[strings.ToLower(it.Ref)] {
+			snap.Items = append(snap.Items, it)
+		}
+	}
+	return nil
+}
+
 // Read reads the board items the order can offer and the epic gate holds,
 // the open sub-issues of the items a SubIssues step matches, the search
-// steps' issues and the plans of the epics the gate watches: one request
+// steps' issues, the priority list (Priorities, kept as snap.Priorities)
+// with the ranked epics a Team field moved off the team but its label keeps
+// (rankedOffTeam), and the plans of the epics the gate watches: one request
 // for the fields, one per 100 items, one per extrasBudget sub-issues for the
 // sub-issues and searches, one per plansBatch epics.
 func (c *Client) Read(ctx context.Context, now time.Time) (*Snapshot, error) {
@@ -360,6 +415,12 @@ func (c *Client) Read(ctx context.Context, now time.Time) (*Snapshot, error) {
 	}
 	snap := &Snapshot{Order: order, Statuses: m.Fields[StatusField].names(), Search: map[int][]Item{}, Gate: gate}
 	if snap.Items, err = c.items(ctx, filter(c.Board, order, gate.statuses()...)); err != nil {
+		return nil, err
+	}
+	if snap.Priorities, err = c.priorities(ctx, m); err != nil {
+		return nil, err
+	}
+	if err := c.rankedOffTeam(ctx, snap, order, gate); err != nil {
 		return nil, err
 	}
 	if err := c.extras(ctx, snap, m.ID, now); err != nil {

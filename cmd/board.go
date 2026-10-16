@@ -97,7 +97,15 @@ whose lease another session holds is passed over until it is released,
 the items behind it offered meanwhile. A sub-issue offered through
 an epic passes the same checks, and a serve record or task naming
 the epic covers it too ("…, on epic owner/repo#n"). No note holds an item:
-a hold is a blocked-by (board block), a priority a board rank. While the
+a hold is a blocked-by (board block), a priority a board rank. A held item,
+one with an open recorded blocker, is skipped as "held: blocked by
+<owner/repo#n>; 1 of 1 blockers open"; a held epic is never offered through
+its sub-issues, and every issue under it is skipped as "held: sub-issue of
+<epic>, blocked by …". The epics of the priority list are read whatever their
+Team field says when they carry the team label (board.teamLabel), and a
+change of a ranked epic's rank or Team beekeeper did not write is a line
+"changed outside beekeeper: …" first (--json changed) and a board.changed
+event (see priority). While the
 state keeps memos and pinned notes an older beekeeper filed, which held the
 items they name, next offers nothing and is refused (exit 3) until note
 migrate --apply has closed them. A task names
@@ -172,12 +180,9 @@ the whole walk.`,
 			if err != nil {
 				return err
 			}
+			changed := a.rankChanges(cmd.Context(), cl, snap.Priorities)
 			cands := board.Rank(snap, a.cfg.Board, a.now)
-			prios, err := cl.Priorities(cmd.Context())
-			if err != nil {
-				return err
-			}
-			board.ByPriority(cands, prios.Ranks(), snap.Parent)
+			board.ByPriority(cands, snap.Priorities.Ranks(), snap.Parent)
 			listed := time.Now()
 			sessions, _, err := a.sessions()
 			if err != nil {
@@ -215,7 +220,7 @@ the whole walk.`,
 			if err != nil {
 				return err
 			}
-			res.Epics, res.Missing = snap.Epics(), snap.Missing
+			res.Epics, res.Missing, res.Changed = snap.Epics(), snap.Missing, changed
 			return a.printNext(res, len(cands), view)
 		},
 	}
@@ -469,6 +474,9 @@ type nextResult struct {
 	// Missing names what GitHub answered with an error and no candidate's
 	// missing holds, a search step's issues for one.
 	Missing []string `json:"missing,omitempty"`
+	// Changed are the changes of a ranked epic's Team or Priority that
+	// beekeeper did not write, since the last read of the priority list.
+	Changed []string `json:"changed,omitempty"`
 }
 
 // The kinds of a skip reason, skipKind's words and skipped_by's keys.
@@ -491,7 +499,7 @@ func skipKind(reason string) string {
 		return kindServed
 	case strings.HasPrefix(reason, "assigned to "):
 		return kindAssigned
-	case strings.HasSuffix(reason, "blockers open"), strings.HasPrefix(reason, board.HeldPrefix):
+	case strings.HasSuffix(reason, "blockers open"), strings.HasPrefix(reason, board.HeldPrefix), strings.HasPrefix(reason, board.HeldWord):
 		return kindBlocked
 	case strings.HasPrefix(reason, "no activity since "):
 		return kindStale
@@ -747,6 +755,9 @@ func (a *app) printNext(res nextResult, offered int, view nextView) error {
 			return err
 		}
 	} else {
+		for _, l := range res.Changed {
+			_, _ = fmt.Fprintln(a.out, l)
+		}
 		if h := res.Held; h != nil {
 			_, _ = fmt.Fprintf(a.out, "this session %s: finish it, release it with sessions unserve %s, or claim with --replace\n", recordText(*h), h.Issue)
 		}
