@@ -120,7 +120,11 @@ The start is judged first, as beekeeper capacity judges one: the busy
 agents against capacity.ceiling, MemAvailable, disk swap's growth, the
 1-minute load and the kind labs. --builds marks a task that builds, tests
 or lints (its commands take the build slot under beekeeper run): such a
-start waits for a free build slot and is refused while none is. Without
+start, refused by a busy build slot alone, waits its turn in the build
+slot queue it shares with beekeeper run's waiters, first in first out, up
+to MEMCAP_WAIT, else 8m, or 60m in a background Bash call, and is judged
+again once its turn came; a turn that does not come refuses it with the
+waiters still ahead. Without
 --builds the start is one that does not build (a filer, a dispatcher, a
 reviewer, a promoter proving a release read-only): the slot is no guard
 of it, and a busy slot is a note in the verdict, never a refusal. A
@@ -233,7 +237,7 @@ is involved and no import happens.`,
 			}
 			// The start gate: a verdict without room refuses the start
 			// before anything is recorded; --force goes through on record.
-			over, err := a.startGate(cmd.Context(), builds, force)
+			over, err := a.startGate(cmd.Context(), name, builds, force)
 			if err != nil {
 				return err
 			}
@@ -293,7 +297,7 @@ is involved and no import happens.`,
 	c.Flags().StringVar(&task, "task", "", "the task the roster shows it busy with (default: the brief's first line)")
 	c.Flags().StringVar(&harness, "harness", "claude", "the agent harness: claude or omp")
 	c.Flags().BoolVar(&desktop, "desktop", false, "the task needs desktop turns: import it past the desktop window's focus, as agents desktop does")
-	c.Flags().BoolVar(&builds, buildsFlag, false, "the task builds, tests or lints: the start waits for a free build slot")
+	c.Flags().BoolVar(&builds, buildsFlag, false, "the task builds, tests or lints: the start waits its turn for a build slot")
 	c.Flags().BoolVar(&force, "force", false, "start although capacity says no start; the event log records the verdict overridden")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "print how the session would start (the profile applied and its first turn's command line) and start nothing")
 	return c

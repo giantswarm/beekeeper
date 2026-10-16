@@ -336,27 +336,40 @@ func Run(o Options, argv []string) int {
 	return rc
 }
 
-// waitForSlot takes a free slot and waits until MemAvailable covers the cap,
-// both within o.Wait: one line when the wait starts, one when it ends. A
-// slot the session holds, before or during the wait, is shared at once: the
-// slot without a lock. No slot within the wait: 0.
+// waitForSlot takes a free slot in its turn of the slot queue and waits
+// until MemAvailable covers the cap, both within o.Wait: one line when the
+// wait starts, one when it ends. A slot the session holds, before or during
+// the wait, is shared at once: the slot without a lock. No slot within the
+// wait: 0.
 func waitForSlot(o Options, needKiB int64, session string, argv []string, logf func(string, ...any)) (*flock.Flock, int) {
 	deadline := time.Now().Add(o.Wait)
 	t0 := time.Now()
 	waited := false
 	var lock *flock.Flock
 	slot := 0
+	// A queue that cannot be joined leaves the run to take a slot as it
+	// frees, as before the queue.
+	t, _ := enqueue(o.SlotDir, queuedRun(argv))
+	defer func() { t.leave() }()
 	for {
 		var reason string
 		if lock == nil {
 			if n := sessionSlot(o, session); n > 0 {
 				return nil, n
 			}
+			turn, ahead := t.turn(o.Slots)
 			var occupied string
-			if lock, slot, occupied = acquire(o); lock != nil {
-				writeHolder(o, slot, argv)
-			} else {
-				reason = fmt.Sprintf("a build slot (all %d held):\n%s%s", o.Slots, holders(o), occupied)
+			switch {
+			case !turn:
+				reason = fmt.Sprintf("its turn in the build slot queue:\n%s%s", holders(o), ahead)
+			default:
+				if lock, slot, occupied = acquire(o); lock != nil {
+					writeHolder(o, slot, argv)
+					t.leave()
+					t = nil
+				} else {
+					reason = fmt.Sprintf("a build slot (all %d held):\n%s%s", o.Slots, holders(o), occupied)
+				}
 			}
 		}
 		if lock != nil {
@@ -384,7 +397,7 @@ func waitForSlot(o Options, needKiB int64, session string, argv []string, logf f
 			logf("waiting up to %s for %s", o.waitText(), reason)
 			waited = true
 		}
-		time.Sleep(min(deadline.Sub(now), 5*time.Second))
+		time.Sleep(min(deadline.Sub(now), slotPoll))
 	}
 	if waited {
 		logf("slot %d after %ds", slot, int(time.Since(t0).Seconds()))
