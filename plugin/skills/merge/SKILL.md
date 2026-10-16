@@ -13,6 +13,10 @@ description: Merging, promoting or tagging on a beekeeper desk: the gate, its ex
   under `beekeeper gate`). Act on its exit code, never around it: 76 queued, the merge waits on in
   its lane and its outcome wakes the worker, never run it again (park on the PR); 77 refused, its
   `beekeeper gate:` line goes to the supervisor, and no second merge follows.
+- **Branch protection is read and proven with `devctl repo status <owner/repo>`** (its `protection`
+  row names the rule and the required checks): the agent token answers `gh api
+  repos/<owner>/<repo>/branches/<branch>/protection` with 403. A before/after proof around a merge
+  is that command's row twice.
 - **Nothing rolls onto an installation while one of its clusters upgrades.**
 - **Before a non-mechanical change**, read the repo's open PRs and recent commits. A
   teammate's open PR that overlaps the task is a hard stop: tell the supervisor.
