@@ -797,6 +797,62 @@ func TestNextFreeSkipsWhatARunningSessionServesOrWorksOn(t *testing.T) {
 	}
 }
 
+func TestNextFreeSkipsWhatATitleNamesByNumber(t *testing.T) {
+	listed := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	me := state.Party{Session: "me", Name: "Me"}
+	bs := state.Party{Session: "bs", Name: "BS 3057 roster read error"}
+	fix := state.Party{Session: "fx", Name: "FIX backstage 3067 avatars-502"}
+	ap := state.Party{Session: "ap", Name: "AP 4.141.1 promoter"}
+	gh := state.Party{Session: "gh", Name: "devctl pin"}
+	st := &state.State{Agents: []state.Agent{{Party: gh, Task: "GH 6757 devctl pin follows release (sonnet)"}}}
+	sc := pickScope{me: me, alive: func(state.Party) bool { return true }, listed: listed,
+		works: []sessionWork{{party: bs, title: bs.Name}, {party: fix, title: fix.Name}, {party: ap, title: ap.Name}}}
+	ref := func(r string) board.Candidate { return board.Candidate{Item: board.Item{Ref: r}} }
+	cands := []board.Candidate{
+		ref("giantswarm/backstage#3057"), ref("giantswarm/backstage#3067"), ref("giantswarm/github#6757"),
+		ref("giantswarm/beekeeper#3057"), ref("giantswarm/agent-platform#4"), ref("giantswarm/backstage#3068"),
+	}
+	res := nextFree(st, cands, sc)
+	var got []string
+	for _, c := range res.Skipped {
+		got = append(got, c.Ref+": "+c.Skip)
+	}
+	want := []string{
+		`giantswarm/backstage#3057: served by "BS 3057 roster read error" (title)`,
+		`giantswarm/backstage#3067: served by "FIX backstage 3067 avatars-502" (title)`,
+		`giantswarm/github#6757: served by "devctl pin" (task)`,
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("skipped:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	// BS names no beekeeper item, a version no number, and another number
+	// nothing.
+	if res.Pick == nil || res.Pick.Ref != "giantswarm/beekeeper#3057" {
+		t.Errorf("pick %v", res.Pick)
+	}
+	for _, c := range res.AfterPick {
+		if c.Skip != "" {
+			t.Errorf("%s: %s, want free", c.Ref, c.Skip)
+		}
+	}
+}
+
+func TestTagNamesARepositoryByItsLettersInOrder(t *testing.T) {
+	const bs = "backstage"
+	for _, tc := range []struct {
+		tag, name string
+		want      bool
+	}{
+		{"BS", bs, true}, {"GH", "gh-pages", true}, {"ACC", "app-catalog-cleanup-tool", true},
+		{"AL", "agentlog", true}, {"BK", pluginName, true}, {bs, bs, true},
+		{"BS", pluginName, false}, {"SB", bs, false}, {"B", bs, false}, {"FIX", bs, false},
+	} {
+		if got := tagNames(tc.tag, tc.name); got != tc.want {
+			t.Errorf("tagNames(%q, %q) = %v", tc.tag, tc.name, got)
+		}
+	}
+}
+
 func TestServingWorkLeavesOutRolesIdleAgentsAndQuietSessionsNotBusy(t *testing.T) {
 	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	session := func(id string, active time.Time) *claude.Session {

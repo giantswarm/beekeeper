@@ -252,12 +252,12 @@ func TestHandoverStartTakesOverTheRunningEntry(t *testing.T) {
 	}
 	running := func(p state.Party) bool { return p.Is(old) }
 	s := state.Start{Party: state.Party{Session: newID, HostSession: "local_" + newID, Name: old.Name}, Mode: state.ModeBypass, At: now}
-	if _, err := recordStart(st, s, "", running); err == nil {
+	if _, err := recordStart(st, s, "", "", running); err == nil {
 		t.Fatal("a start under a running session's name must be refused")
 	}
 	// The hand-over does not count the session it replaces as running.
 	handedOver := func(p state.Party) bool { return !p.Is(old) && running(p) }
-	reg, err := recordStart(st, s, "", handedOver)
+	reg, err := recordStart(st, s, "", "", handedOver)
 	if err != nil || reg.task != countTask || !reg.assignedAt.Equal(now.Add(-time.Hour)) {
 		t.Fatalf("registration = %+v, err = %v", reg, err)
 	}
@@ -270,7 +270,7 @@ func TestHandoverStartTakesOverTheRunningEntry(t *testing.T) {
 	}
 	// An idle agent's follow-up stays idle.
 	st = &state.State{Agents: []state.Agent{{Party: old}}}
-	if reg, err := recordStart(st, s, "", handedOver); err != nil || reg.task != "" || !st.Agents[0].AssignedAt.IsZero() {
+	if reg, err := recordStart(st, s, "", "", handedOver); err != nil || reg.task != "" || !st.Agents[0].AssignedAt.IsZero() {
 		t.Errorf("idle: %+v, %v, roster %+v", reg, err, st.Agents)
 	}
 }
