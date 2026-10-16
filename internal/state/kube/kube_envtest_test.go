@@ -403,16 +403,18 @@ func TestEnvtestKeepsADefaultedDecision(t *testing.T) {
 	a, _, c := envtestStore(t)
 	namespace(t, c, team)
 	ctx := context.Background()
-	if err := a.Update(func(st *state.State) ([]state.Event, error) {
-		st.Notes = append(st.Notes,
-			state.Note{ID: 1, For: "Pat", Kind: state.NoteDecision, Text: "merge?", By: ana, At: time.Now().Truncate(time.Second)},
-			state.Note{ID: 2, For: "Pat", Kind: state.NoteDecision, Text: "ship?", By: ana, At: time.Now().Truncate(time.Second)})
-		return nil, nil
-	}); err != nil {
-		t.Fatal(err)
+	for id, text := range map[int]string{1: "merge?", 2: "ship?"} {
+		if err := a.Update(func(st *state.State) ([]state.Event, error) {
+			st.Notes = append(st.Notes, state.Note{ID: id, For: "Pat", Kind: state.NoteDecision, Text: text, By: ana, At: time.Now().Truncate(time.Second)})
+			return nil, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := a.Update(func(st *state.State) ([]state.Event, error) {
-		st.Defaulted, st.Notes = st.Notes[:1], st.Notes[1:]
+		i := slices.IndexFunc(st.Notes, func(n state.Note) bool { return n.ID == 1 })
+		st.Defaulted = append(st.Defaulted, st.Notes[i])
+		st.Notes = slices.Delete(st.Notes, i, i+1)
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)

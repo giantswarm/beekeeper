@@ -134,12 +134,15 @@ func defaultDue(st *state.State, now time.Time) []state.Note {
 const defaultedKeep = 24 * time.Hour
 
 // closeDefaulted closes the decisions of st due unanswered with their
-// default, keeps them answerable for defaultedKeep (st.Defaulted, those
-// kept longer dropped), and returns their watch lines, their events and
-// the notes.
+// default, keeps them answerable for defaultedKeep (st.Defaulted), and
+// returns their watch lines, their events and the notes. A call that
+// closes none drops one decision kept longer: the Kubernetes store writes
+// one object per update.
 func closeDefaulted(st *state.State, person string, by state.Party, now time.Time) ([]string, []state.Event, []state.Note) {
-	st.Defaulted = slices.DeleteFunc(st.Defaulted, func(n state.Note) bool { return now.Sub(n.Due) > defaultedKeep })
 	due := defaultDue(st, now)
+	if i := slices.IndexFunc(st.Defaulted, func(n state.Note) bool { return now.Sub(n.Due) > defaultedKeep }); i >= 0 && len(due) == 0 {
+		st.Defaulted = slices.Delete(st.Defaulted, i, i+1)
+	}
 	st.Defaulted = append(st.Defaulted, due...)
 	lines := make([]string, 0, len(due))
 	evs := make([]state.Event, 0, len(due))

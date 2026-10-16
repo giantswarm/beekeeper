@@ -167,14 +167,14 @@ func TestAnswerWithoutANoteIsLoggedAndToldNotPosted(t *testing.T) {
 	}
 }
 
-// desk are words that mean something on one desk only: a posted decision
+// deskWords mean something on one desk only: a posted decision
 // carries none of them.
-var desk = []string{"note #", "#1", noteFiler, "via", viaCLI, "beekeeper", agentOne, "o/private#7", "o/public#3"}
+var deskWords = []string{"note #", "#1", noteFiler, "via", viaCLI, "beekeeper", agentOne, "o/private#7", "o/public#3"}
 
 // noDesk fails t for every desk word in body.
 func noDesk(t *testing.T, body string) {
 	t.Helper()
-	for _, w := range desk {
+	for _, w := range deskWords {
 		if w != "" && strings.Contains(body, w) {
 			t.Errorf("the comment says %q: %q", w, body)
 		}
@@ -338,11 +338,13 @@ func TestAnAnswerAfterItsDefaultReplacesIt(t *testing.T) {
 	if _, err := noteCommand(a, verbAnswer, "2", "too late"); Code(err) != ExitRefused || !strings.Contains(err.Error(), "nor closed by its default within 24h") {
 		t.Errorf("a day after its default: %v", err)
 	}
-	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		closeDefaulted(st, notePerson, watchParty, a.now)
-		return nil, nil
-	}); err != nil {
-		t.Fatal(err)
+	for range 2 {
+		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+			closeDefaulted(st, notePerson, watchParty, a.now)
+			return nil, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if st, _ := a.store.Read(); len(st.Defaulted) != 0 {
 		t.Errorf("kept past a day: %+v", st.Defaulted)

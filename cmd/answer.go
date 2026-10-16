@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -227,7 +226,7 @@ func answerBody(rec *recordedAnswer) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "**Decision** by %s", rec.By)
 	if t := rec.Thread; t != nil && t.Via != "" {
-		fmt.Fprintf(&b, " on %s", cmp.Or(t.AboutURL, refURL(t.About)))
+		fmt.Fprintf(&b, " on %s", cmp.Or(t.AboutURL, issueURL(t.About)))
 	}
 	b.WriteString(":\n\n")
 	for line := range strings.Lines(rec.Answer) {
@@ -237,9 +236,9 @@ func answerBody(rec *recordedAnswer) string {
 	return b.String()
 }
 
-// refURL is the URL of owner/repo#n: GitHub serves an issue's URL for a
+// issueURL is the URL of owner/repo#n: GitHub serves an issue's URL for a
 // pull request too.
-func refURL(ref string) string {
+func issueURL(ref string) string {
 	repo, n, _ := strings.Cut(ref, "#")
 	return "https://github.com/" + repo + "/issues/" + n
 }
