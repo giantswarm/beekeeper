@@ -276,6 +276,11 @@ func (h Hook) consent(ev event) []byte {
 			}
 			if page, ok := pageOf(pages, c.tab); ok {
 				d = Click(apps, page, c.words)
+				// Text typed or set on Google's sign-in is no grant the
+				// record covers: the classifier decides it.
+				if c.typed && d.Decision == Allow && onGoogle(page) {
+					d = Decision{}
+				}
 			}
 		}
 		switch d.Decision {
@@ -301,6 +306,8 @@ var acting = []string{"left_click", "right_click", "double_click", "triple_click
 // value).
 type chromeCall struct {
 	navigate, tab, words string
+	// typed says the call types a text or sets a form value.
+	typed bool
 }
 
 // chromeCalls are the calls of a Chrome tool call the hook decides: a
@@ -313,10 +320,10 @@ func chromeCalls(tool string, input map[string]any) []chromeCall {
 			return []chromeCall{{navigate: u}}
 		}
 	case chromeForm:
-		return []chromeCall{{tab: tabOf(input[tabKey]), words: wordsOf(input, valueKey)}}
+		return []chromeCall{{tab: tabOf(input[tabKey]), words: wordsOf(input, valueKey), typed: true}}
 	case chromeComputer:
 		if action, _ := input[actionKey].(string); slices.Contains(acting, action) {
-			return []chromeCall{{tab: tabOf(input[tabKey]), words: wordsOf(input, textKey)}}
+			return []chromeCall{{tab: tabOf(input[tabKey]), words: wordsOf(input, textKey), typed: action == "type"}}
 		}
 	case chromeBatch:
 		actions, _ := input["actions"].([]any)
@@ -385,31 +392,69 @@ func lastPage(transcript, tab string) (Page, bool) {
 // sign-in carries the callback host of the flow the tab's pages there
 // named since it came to that host.
 func lastPages(transcript string) map[string]Page {
-	pages, flows := map[string]Page{}, map[string]string{}
+	pages, flows := map[string]Page{}, map[string]googleFlow{}
 	seen := func(tab string, p Page) {
+		pages[tab] = p
 		u, err := url.Parse(p.URL)
 		if err != nil || !strings.EqualFold(u.Hostname(), googleHost) {
 			delete(flows, tab)
-		} else if cb := GoogleCallback(u); cb != "" {
-			flows[tab] = cb
+			return
 		}
-		p.Flow = flows[tab]
+		f := flows[tab].next(u)
+		flows[tab] = f
+		p.Flow = f.callback
 		pages[tab] = p
 	}
-	scanResults(transcript, func(text string) {
-		for _, m := range tabLine.FindAllStringSubmatch(text, -1) {
-			seen(m[1], Page{URL: m[3], Title: m[2]})
+	scanJoined(transcript, func(text string) {
+		// The tab context is the tool's trailer of the result: the page's
+		// own text before it names no tab.
+		if trimmed := strings.TrimSpace(text); strings.HasPrefix(trimmed, tabsJSONOpen) {
+			for _, m := range tabJSON.FindAllStringSubmatch(trimmed, -1) {
+				seen(m[1], Page{URL: unquote(m[3]), Title: unquote(m[2])})
+			}
+			return
 		}
-		for _, m := range tabJSON.FindAllStringSubmatch(text, -1) {
-			seen(m[1], Page{URL: unquote(m[3]), Title: unquote(m[2])})
+		i := strings.LastIndex(text, tabContext)
+		if i < 0 {
+			return
+		}
+		for _, m := range tabLine.FindAllStringSubmatch(text[i:], -1) {
+			seen(m[1], Page{URL: m[3], Title: m[2]})
 		}
 	})
 	return pages
 }
 
+// tabContext opens the tab context a Chrome tool appends to its result;
+// tabsJSONOpen opens a tabs_context result.
+const (
+	tabContext   = "Tab Context:"
+	tabsJSONOpen = `{"availableTabs"`
+)
+
+// scanJoined calls fn with the text of each tool result in the
+// transcript's tail, its blocks joined, in order.
+func scanJoined(transcript string, fn func(text string)) {
+	scanLines(transcript, func(line []byte) {
+		for _, texts := range resultGroups(line) {
+			fn(strings.Join(texts, "\n"))
+		}
+	})
+}
+
 // scanResults calls fn with the text of each tool result in the
 // transcript's tail, in order; nothing for a transcript that cannot be read.
 func scanResults(transcript string, fn func(text string)) {
+	scanLines(transcript, func(line []byte) {
+		for _, text := range resultTexts(line) {
+			fn(text)
+		}
+	})
+}
+
+// scanLines calls fn with each line of the transcript's tail, in order;
+// nothing for a transcript that cannot be read.
+func scanLines(transcript string, fn func(line []byte)) {
 	if transcript == "" {
 		return
 	}
@@ -427,9 +472,7 @@ func scanResults(transcript string, fn func(text string)) {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 1<<20), 64<<20)
 	for sc.Scan() {
-		for _, text := range resultTexts(sc.Bytes()) {
-			fn(text)
-		}
+		fn(sc.Bytes())
 	}
 }
 
@@ -451,6 +494,16 @@ func pageOf(pages map[string]Page, tab string) (Page, bool) {
 // resultTexts are the texts of the tool results on one transcript line: a
 // string, or the text blocks of an array.
 func resultTexts(line []byte) []string {
+	var out []string
+	for _, g := range resultGroups(line) {
+		out = append(out, g...)
+	}
+	return out
+}
+
+// resultGroups are the texts of each tool result on one transcript line,
+// one group per result.
+func resultGroups(line []byte) [][]string {
 	var entry struct {
 		Message struct {
 			Content []struct {
@@ -462,23 +515,25 @@ func resultTexts(line []byte) []string {
 	if json.Unmarshal(line, &entry) != nil {
 		return nil
 	}
-	var out []string
+	var out [][]string
 	for _, b := range entry.Message.Content {
 		if b.Type != "tool_result" {
 			continue
 		}
 		var s string
 		if json.Unmarshal(b.Content, &s) == nil {
-			out = append(out, s)
+			out = append(out, []string{s})
 			continue
 		}
 		var blocks []struct {
 			Text string `json:"text"`
 		}
 		if json.Unmarshal(b.Content, &blocks) == nil {
+			var texts []string
 			for _, t := range blocks {
-				out = append(out, t.Text)
+				texts = append(texts, t.Text)
 			}
+			out = append(out, texts)
 		}
 	}
 	return out

@@ -31,6 +31,11 @@ var googleGrantPaths = []string{"/o/oauth2/", "/signin/oauth/"}
 // asked for is recorded.
 const GoogleForm = "`beekeeper app allow <name> --google --callback <host> --word \"<the person's words>\"`"
 
+// googleRequestPaths are the paths of Google's pages whose redirect_uri is
+// the authorization request's own: the authorization endpoint and the
+// account chooser it opens. Any other page's is not read.
+var googleRequestPaths = []string{"/o/oauth2/auth", "/o/oauth2/v2/auth", "/v3/signin/accountchooser", "/o/oauth2/auth/oauthchooseaccount"}
+
 // googleGrant reports whether path is one of Google's OAuth grant pages.
 func googleGrant(path string) bool {
 	return slices.ContainsFunc(googleGrantPaths, func(p string) bool { return strings.HasPrefix(path, p) })
@@ -40,16 +45,64 @@ func googleGrant(path string) bool {
 // u carries: its redirect_uri's host, or that of the request its continue
 // URL carries; "" for none.
 func GoogleCallback(u *url.URL) string {
-	q := u.Query()
-	if r, err := url.Parse(q.Get("redirect_uri")); err == nil && r.Host != "" {
-		return strings.ToLower(r.Host)
+	if !strings.EqualFold(u.Hostname(), googleHost) {
+		return ""
 	}
-	if c, err := url.Parse(q.Get("continue")); err == nil && strings.EqualFold(c.Hostname(), googleHost) {
-		if r, err := url.Parse(c.Query().Get("redirect_uri")); err == nil && r.Host != "" {
-			return strings.ToLower(r.Host)
-		}
+	if cb := requestCallback(u); cb != "" {
+		return cb
+	}
+	if c, err := url.Parse(u.Query().Get("continue")); err == nil && strings.EqualFold(c.Hostname(), googleHost) {
+		return requestCallback(c)
 	}
 	return ""
+}
+
+// requestCallback is the callback host of u, an authorization request on
+// Google's host carrying a client id and exactly one redirect_uri; "" for
+// any other page.
+func requestCallback(u *url.URL) string {
+	q := u.Query()
+	if !slices.Contains(googleRequestPaths, u.Path) || q.Get("client_id") == "" || len(q["redirect_uri"]) != 1 {
+		return ""
+	}
+	r, err := url.Parse(q.Get("redirect_uri"))
+	if err != nil || r.Host == "" {
+		return ""
+	}
+	return strings.ToLower(r.Host)
+}
+
+// googleFlow is a tab's OAuth flow on Google's sign-in: the callback host
+// of its authorization request, and the request id (as) Google's pages
+// after it carry, bound at the first of them.
+type googleFlow struct {
+	callback, request string
+}
+
+// next is the flow once the tab shows u on Google's host: a new
+// authorization request starts a new flow; a page of another request id
+// than the flow's ends it.
+func (f googleFlow) next(u *url.URL) googleFlow {
+	if cb := GoogleCallback(u); cb != "" {
+		return googleFlow{callback: cb, request: u.Query().Get("as")}
+	}
+	as := u.Query().Get("as")
+	switch {
+	case as == "" || f.callback == "":
+		return f
+	case f.request == "":
+		f.request = as
+		return f
+	case as != f.request:
+		return googleFlow{}
+	}
+	return f
+}
+
+// onGoogle reports whether page is on Google's sign-in.
+func onGoogle(page Page) bool {
+	u, err := url.Parse(page.URL)
+	return err == nil && strings.EqualFold(u.Hostname(), googleHost)
 }
 
 // googleClick decides a call on page, at u on Google's host, in the call's
