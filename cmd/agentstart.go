@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"syscall"
@@ -114,7 +115,10 @@ Claude Desktop from its first turn. Before the session exists, beekeeper
 records its id as one of its starts and registers it on the roster under
 <name>, busy with --task, by default the brief's first line (or with the
 open task of a stopped session's entry under that name, which it takes
-over), so the roster shows it at work from its start.
+over), so the roster shows it at work from its start. A brief naming an
+issue or pull request by URL makes the first one named the session's serve
+record (as sessions serve records it), so board next never offers that
+item again while the worker runs.
 
 The start is judged first, as beekeeper capacity judges one: the busy
 agents against capacity.ceiling, MemAvailable, disk swap's growth, the
@@ -167,7 +171,9 @@ desktop imports the session beside it, and start says "its task runs as a
 headless turn under profile <name>". The desktop spawns its own CLI for a
 desktop turn, which no profile reaches. --dry-run prints the profile
 applied, the first turn's command line and the first prompt, and starts
-nothing.
+nothing; with --builds it first prints the build slot as the start would
+find it, "free" or the wait with the slots' holders and the waiters ahead,
+without joining the queue or holding a slot.
 
 A start that delivers no turn of the task fails: it exits non-zero, logs
 "task not delivered" with the reason, and the roster's REACHABLE (and the
@@ -233,6 +239,11 @@ is involved and no import happens.`,
 			}
 			gaps := pluginGaps(cmd.Context())
 			if dryRun && harness != omp.Harness {
+				if builds {
+					if err := a.dryRunSlot(); err != nil {
+						return err
+					}
+				}
 				return a.dryRunStart(cmd.Context(), agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model}, gaps)
 			}
 			// The start gate: a verdict without room refuses the start
@@ -260,7 +271,7 @@ is involved and no import happens.`,
 					return err
 				}
 			}
-			sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), task: task, dir: dir, model: model, desktop: desktop}
+			sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), task: task, serves: briefIssue(brief), dir: dir, model: model, desktop: desktop}
 			switch harness {
 			case omp.Harness:
 				return a.startOmpAgent(cmd.Context(), sp)
@@ -311,6 +322,9 @@ type agentStart struct {
 	role string
 	// task is the roster's task unless the entry taken over holds one.
 	task string
+	// serves is the issue the task works (briefIssue), recorded as the
+	// session's serve record with the task; empty: none.
+	serves string
 	// replaces is the running session a hand-over ends: its roster entry,
 	// task and session record go to the new session.
 	replaces *state.Party
@@ -424,7 +438,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	var handed []string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		var err error
-		reg, err = recordStart(st, s, sp.task, live)
+		reg, err = recordStart(st, s, sp.task, sp.serves, live)
 		if err != nil {
 			return nil, err
 		}
@@ -1396,8 +1410,10 @@ func resumeURL(id string) string { return "claude://resume?session=" + id }
 
 // recordStart records s as one of beekeeper's starts, forgetting those older
 // than startsKept, and registers it on the roster under its name, busy with
-// task unless it takes over a stopped entry's open task.
-func recordStart(st *state.State, s state.Start, task string, live func(state.Party) bool) (registration, error) {
+// task unless it takes over a stopped entry's open task. A task of its own
+// serving an issue (owner/repo#n, briefIssue) is the session's serve record
+// from the start, so board next never offers that item again.
+func recordStart(st *state.State, s state.Start, task, serves string, live func(state.Party) bool) (registration, error) {
 	reg, err := registerAgent(st, s.Party, live, s.At)
 	if err != nil {
 		return registration{}, err
@@ -1406,6 +1422,10 @@ func recordStart(st *state.State, s state.Start, task string, live func(state.Pa
 		reg.task, reg.assignedAt = task, s.At
 		ag := &st.Agents[len(st.Agents)-1]
 		ag.Task, ag.AssignedAt = task, s.At
+		if serves != "" {
+			st.Records = slices.DeleteFunc(st.Records, func(o state.Record) bool { return o.Session.Is(s.Party) })
+			st.Records = append(st.Records, state.Record{Session: s.Party, Issue: serves, By: s.By, At: s.At})
+		}
 	}
 	st.Starts = slices.DeleteFunc(st.Starts, func(x state.Start) bool { return s.At.Sub(x.At) > startsKept })
 	st.Starts = append(st.Starts, s)
@@ -1497,6 +1517,19 @@ func gapsNote(gaps []string) string {
 	}
 	return fmt.Sprintf("the installed beekeeper plugin does not serve %s as %s ships them: the first prompt carries them (claude plugin marketplace update beekeeper && claude plugin update beekeeper@beekeeper)",
 		topicSkills(gaps), project.Version())
+}
+
+// briefURL is an issue's or a pull request's URL in a brief.
+var briefURL = regexp.MustCompile(`https://github\.com/([\w.-]+/[\w.-]+)/(?:issues|pull)/(\d+)`)
+
+// briefIssue is the issue a brief works, owner/repo#n: the first issue or
+// pull request its text names by URL; empty when it names none.
+func briefIssue(brief string) string {
+	m := briefURL.FindStringSubmatch(brief)
+	if m == nil {
+		return ""
+	}
+	return m[1] + "#" + m[2]
 }
 
 // briefTask is the roster's task for a brief: its first line without a

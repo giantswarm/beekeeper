@@ -25,6 +25,22 @@ curl -fsSL -o "$dir/beekeeper" https://github.com/giantswarm/beekeeper/releases/
 chmod +x "$dir/beekeeper"
 ```
 
+Release assets are signed keyless by the CircleCI pipeline, not by a GitHub workflow, and each is
+published next to its Sigstore bundle (`<asset>.bundle`). Verify a download with the CircleCI
+identity and issuer; a `github.com/giantswarm` identity or the GitHub Actions issuer fails with an
+identity mismatch:
+
+```bash
+curl -fsSL -o "$dir/beekeeper.bundle" https://github.com/giantswarm/beekeeper/releases/latest/download/beekeeper-linux-amd64.bundle
+cosign verify-blob --bundle "$dir/beekeeper.bundle" \
+  --certificate-identity-regexp '^https://circleci\.com/api/v2/projects/[0-9a-f-]+/pipeline-definitions/[0-9a-f-]+$' \
+  --certificate-oidc-issuer https://oidc.circleci.com \
+  "$dir/beekeeper"
+```
+
+The certificate's SAN is `https://circleci.com/api/v2/projects/<project-id>/pipeline-definitions/<definition-id>`
+and its issuer `https://oidc.circleci.com`.
+
 Then put it in place for your user, after a look at what it would do:
 
 ```bash
@@ -1402,8 +1418,13 @@ merge`, and `snapshot` marks the wait `ungated`. Nothing stops it: a merge runs 
 command line, which the hook gates.
 
 A merge or promotion of giantswarm/devctl opens a tool-release window by itself: a `merges` hold
-with giantswarm/devctl excepted, since the release makes every in-flight devctl run refuse until
-updated. A merge that releases only a candidate (`vX.Y.Z-rc.N`) lifts it once recorded: `devctl
+with giantswarm/devctl excepted, since the release makes every new devctl run refuse until
+updated. Until the release is coming the window stops no other merge: while the devctl pull request
+waits for its CI the installed devctl is the latest release and runs, so another repository's
+merge and promotion proceed. Once GitHub reports the pull request merged (a promotion's window from
+its start) the window holds them until the release is installed; a merge already running keeps
+its devctl, which checked its version at its start. giantswarm/devctl's own next merge waits for
+the window's release either way. A merge that releases only a candidate (`vX.Y.Z-rc.N`) lifts it once recorded: `devctl
 version update` installs only a stable release, so no devctl run outdates, and the candidate's
 promotion opens the window anew. Otherwise it lifts as soon as the release's binary assets exist
 and verify, not after the release workflow devctl's own merge still waits for: once GitHub reports

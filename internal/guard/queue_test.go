@@ -152,3 +152,50 @@ func TestEndedWaitersTicketIsRemoved(t *testing.T) {
 		t.Errorf("the ended waiter's ticket is still there: %v", err)
 	}
 }
+
+// A peek at the slots judges a start that builds as its wait would, and
+// takes neither a ticket nor a slot: free while a slot is free and fewer
+// waiters than slots are queued, else the holders and the waiters named.
+func TestPeekSlotJudgesWithoutClaiming(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "slots")
+	o := Options{SlotDir: dir, Slots: 1}
+	if free, why, err := PeekSlot(o); !free || why != "" || err != nil {
+		t.Fatalf("PeekSlot on a free slot = %v %q %v, want free", free, why, err)
+	}
+	if lock, _, _ := acquire(o); lock == nil {
+		t.Fatal("the peek left the free slot held")
+	} else {
+		_ = lock.Unlock()
+	}
+	holdSlot(t, dir, 1, "other")
+	free, why, _ := PeekSlot(o)
+	if free || !strings.Contains(why, "all 1 held") || !strings.Contains(why, "agentlab backstage-test") {
+		t.Errorf("PeekSlot on a held slot = %v %q, want busy with its holder", free, why)
+	}
+	waiter, err := enqueue(dir, "run 1: go test ./...")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(waiter.leave)
+	if free, why, _ := PeekSlot(o); free || !strings.Contains(why, "1. run 1: go test ./...") {
+		t.Errorf("PeekSlot behind a waiter = %v %q, want busy with the waiter ahead", free, why)
+	}
+	if entries, _ := os.ReadDir(queueDir(dir)); len(entries) != 1 {
+		t.Errorf("the queue holds %d tickets after the peeks, want the 1 waiter", len(entries))
+	}
+}
+
+// A free slot is no turn while as many waiters as slots are queued: they go
+// first.
+func TestPeekSlotQueuesBehindTheWaiters(t *testing.T) {
+	dir := t.TempDir()
+	waiter, err := enqueue(dir, "agents start BK 4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(waiter.leave)
+	free, why, _ := PeekSlot(Options{SlotDir: dir, Slots: 1})
+	if free || strings.Contains(why, "held") || !strings.Contains(why, "1. agents start BK 4") {
+		t.Errorf("PeekSlot = %v %q, want busy behind the waiter, no slot held", free, why)
+	}
+}

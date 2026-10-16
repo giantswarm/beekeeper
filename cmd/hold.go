@@ -32,8 +32,9 @@ reason; a merge with its place in the lane keeps it and waits, and the
 exception enters ahead of it. A hold that lets one pull request through, set
 while another merge's devctl waits for CI, ends that devctl before it merges
 and puts the merge back in its place. A merge or promotion of
-giantswarm/devctl opens a tool-release window by itself: a "merges" hold that
-lets only giantswarm/devctl through; the gate installs the release with devctl
+giantswarm/devctl opens a tool-release window by itself: a "merges" hold that,
+once the release is coming (its pull request merged, a promotion's from its
+start), lets only giantswarm/devctl through; the gate installs the release with devctl
 version update and lifts the window once the local devctl reports it, or at
 once when the merge released only a candidate, which no update installs.
 

@@ -47,7 +47,9 @@ newer release exists, 0 when this is the latest.
 
 Release binaries are signed in CI (cosign, keyless) and published next to
 their Sigstore bundle. The download is installed only after that bundle
-verifies for a CircleCI build of ` + update.Repository + `; a release without
+verifies for a CircleCI build of ` + update.Repository + ` (certificate identity
+https://circleci.com/api/v2/projects/..., issuer https://oidc.circleci.com, never a
+GitHub identity); a release without
 a bundle, or a download that does not match it, is refused and the binary
 stays as it is.
 
