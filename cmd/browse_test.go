@@ -18,27 +18,41 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// The session id of the argv tests and the Chrome call that reads the tabs.
+// The session id of the argv tests, the beekeeper binary their Stop hook
+// names, and the Chrome call that reads the tabs.
 const (
 	turnID      = "id-1"
+	turnSelf    = "/bin/beekeeper"
 	tabsContext = "tabs_context_mcp"
 )
+
+// selfSettings are the settings of a turn browse runs in this test binary.
+func selfSettings(t *testing.T, rules []string) string {
+	t.Helper()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return browseSettings(self, rules)
+}
 
 // A browse turn is one headless turn in dontAsk on the CLI's own Chrome
 // connection, a session of its own: none of its caller's session variables
 // reach it, nor the caller's stage root. A declared deploy is the turn's settings, an auto mode allow
 // rule for that one action after the shipped rules, and its prompt's word
-// between the preamble and the steps; without one the turn gets no settings.
+// between the preamble and the steps; without one the turn's settings carry
+// its Stop hook alone, which has it close the tabs it opened.
 func TestBrowseTurn(t *testing.T) {
-	argv := browseArgv(turnID, "", "steps", nil, false)
+	argv := browseArgv(turnID, "", "steps", turnSelf, nil, false)
 	want := []string{"-p", chromeFlag, toolsFlag, "", strictMCPConfigFlag, permissionModeFlag, "dontAsk",
-		allowedToolsFlag, "mcp__claude-in-chrome__*", "--session-id", turnID, "--", "steps"}
+		allowedToolsFlag, "mcp__claude-in-chrome__*", "--session-id", turnID, settingsFlag,
+		`{"hooks":{"Stop":[{"hooks":[{"command":"/bin/beekeeper hook browsestop","timeout":10,"type":"command"}]}]}}`, "--", "steps"}
 	if !slices.Equal(argv, want) {
 		t.Errorf("browseArgv = %q, want %q", argv, want)
 	}
 	// The reconnect turn resumes the session with the same tools and mode.
 	want[9], want[10] = resumeFlag, turnID
-	if argv := browseArgv(turnID, "", "steps", nil, true); !slices.Equal(argv, want) {
+	if argv := browseArgv(turnID, "", "steps", turnSelf, nil, true); !slices.Equal(argv, want) {
 		t.Errorf("browseArgv of the reconnect = %q, want %q", argv, want)
 	}
 	// The child has the Chrome tools and nothing else: no built-in tool, no
@@ -53,15 +67,15 @@ func TestBrowseTurn(t *testing.T) {
 			if argv[i+1] != browseTools {
 				t.Errorf("allowed tools %q, want only %q", argv[i+1], browseTools)
 			}
-		case "bypassPermissions", "--dangerously-skip-permissions", "--mcp-config", "--settings":
+		case "bypassPermissions", "--dangerously-skip-permissions", "--mcp-config":
 			t.Errorf("browseArgv carries %q", arg)
 		}
 	}
-	if argv := browseArgv(turnID, "sonnet", "-steps", nil, false); !slices.Contains(argv, "sonnet") || argv[len(argv)-2] != "--" {
+	if argv := browseArgv(turnID, "sonnet", "-steps", turnSelf, nil, false); !slices.Contains(argv, "sonnet") || argv[len(argv)-2] != "--" {
 		t.Errorf("browseArgv with a model = %q", argv)
 	}
 	const deploy = "the demo agent to the demo cluster"
-	argv = browseArgv(turnID, "", "steps", browseRules(deploy, nil, false), false)
+	argv = browseArgv(turnID, "", "steps", turnSelf, browseRules(deploy, nil, false), false)
 	i := slices.Index(argv, "--settings")
 	if i < 0 || i+1 >= len(argv) || argv[len(argv)-2] != "--" || slices.Index(argv, "--") < i {
 		t.Fatalf("browseArgv with a deploy = %q, want --settings before --", argv)
@@ -164,9 +178,9 @@ func TestReadFindings(t *testing.T) {
 		"refused: tabs_context_mcp: the auto mode classifier denied it as [Permission Grant]",
 		`refused: computer left_click "Clicks Authorize for the App": the auto mode classifier denied it as [Permission Grant]`,
 		`the steps' "On GitHub's page, click Authorize once" reads as a grant: ` + consentHint,
-		"not rendered: 1 screenshot timed out on a frozen renderer: the tab was not in front of its window (behind another tab, or in a window " +
-			"the compositor does not draw), where a consent page keeps its Authorize button disabled; the turn moves to a fresh tab, which opens " +
-			"in front, when its check finds the tab hidden; run the steps again",
+		"not rendered: 1 screenshot timed out on a frozen renderer: the tab was not drawn (behind another tab, or its window occluded or " +
+			"minimised, which the compositor does not draw), where a consent page keeps its Authorize button disabled; the turn reloads such a " +
+			"tab once and then reads the page's text instead of its picture; bring the Chrome window forward and run the steps again for a screenshot",
 		"windows: the turn worked in tab 1",
 	}
 	if !slices.Equal(got, wantLines) {
@@ -508,7 +522,7 @@ func TestBrowseRunsTheTurn(t *testing.T) {
 		t.Errorf("browse without the flag printed %q", got)
 	}
 	argv := argvOf()
-	if i := slices.Index(argv, permissionModeFlag); i < 0 || argv[i+1] != modeDontAsk || slices.Contains(argv, settingsFlag) ||
+	if i := slices.Index(argv, permissionModeFlag); i < 0 || argv[i+1] != modeDontAsk || argv[slices.Index(argv, settingsFlag)+1] != selfSettings(t, nil) ||
 		argv[len(argv)-1] != browsePrompt(steps, "", nil, false, nil) || !slices.Contains(argv, chromeFlag) {
 		t.Errorf("the turn without the flag ran with %q", argv)
 	}
@@ -528,7 +542,7 @@ func TestBrowseRunsTheTurn(t *testing.T) {
 	}
 	argv = argvOf()
 	i := slices.Index(argv, settingsFlag)
-	if i < 0 || argv[i+1] != allowDeploySettings(deploy) || argv[len(argv)-1] != browsePrompt(steps, deploy, nil, false, nil) {
+	if i < 0 || argv[i+1] != selfSettings(t, []string{allowDeployRule(deploy)}) || argv[len(argv)-1] != browsePrompt(steps, deploy, nil, false, nil) {
 		t.Errorf("the turn with the flag ran with %q", argv)
 	}
 	if i := slices.Index(argv, permissionModeFlag); i < 0 || argv[i+1] != modeDontAsk {
@@ -598,9 +612,9 @@ func TestBrowseConsent(t *testing.T) {
 		t.Errorf("browseRules of nothing = %q", rules)
 	}
 	const deploy = "the demo agent to the demo cluster"
-	argv := browseArgv(turnID, "", "steps", browseRules(deploy, consents, false), false)
+	argv := browseArgv(turnID, "", "steps", turnSelf, browseRules(deploy, consents, false), false)
 	i := slices.Index(argv, settingsFlag)
-	if i < 0 || argv[i+1] != allowSettings([]string{allowDeployRule(deploy), consentRule(consents[0])}) || strings.Count(argv[i+1], "$defaults") != 1 {
+	if i < 0 || argv[i+1] != browseSettings(turnSelf, []string{allowDeployRule(deploy), consentRule(consents[0])}) || strings.Count(argv[i+1], "$defaults") != 1 {
 		t.Errorf("--settings with a deploy and a record = %q", argv)
 	}
 	p := browsePrompt("steps", "", consents, true, nil)
@@ -739,7 +753,7 @@ func TestBrowseSharesFiles(t *testing.T) {
 	}
 	argv := strings.Split(strings.TrimSuffix(readFile(t, argvFile), "\x00"), "\x00")
 	shared := []sharedFile{{shot, filepath.Join(root, "1", "shot.png")}, {log, filepath.Join(root, "2", "run.log")}}
-	if argv[len(argv)-1] != browsePrompt(steps, "", nil, false, shared) || slices.Contains(argv, settingsFlag) ||
+	if argv[len(argv)-1] != browsePrompt(steps, "", nil, false, shared) || argv[slices.Index(argv, settingsFlag)+1] != selfSettings(t, nil) ||
 		argv[slices.Index(argv, toolsFlag)+1] != "" || argv[slices.Index(argv, allowedToolsFlag)+1] != browseTools {
 		t.Errorf("the turn with shared files ran with %q", argv)
 	}
@@ -891,10 +905,51 @@ func TestReadFindingsWindows(t *testing.T) {
 		t.Errorf("windowsLine without tabs = %q", l)
 	}
 	p := browsePrompt("steps", "", nil, false, nil)
-	for _, w := range []string{"document.visibilityState", "tabs_create_mcp (a new tab opens in front)", "close every tab you created",
+	for _, w := range []string{"document.visibilityState", "tabs_create_mcp (a new tab opens in front)", "reload that same tab once",
+		"name the page 'not rendered'", "close every tab you opened, the blank ones included", "the group's first tab last",
 		windowCapture, windowRead, "flow=redirect&redirectUrl=", "through the person's SSO button", "wait 2 seconds and read it again"} {
 		if !strings.Contains(p, w) {
 			t.Errorf("the prompt lacks %q", w)
 		}
+	}
+}
+
+// A turn that left tabs it opened open fails, naming them in its group and
+// outside it; a turn that closed them all says so.
+func TestReadFindingsTabs(t *testing.T) {
+	result := func(text string) string {
+		quoted, _ := json.Marshal(text)
+		return `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t","content":` + string(quoted) + `}]}}` + "\n"
+	}
+	made := result(`{"availableTabs":[{"tabId":11,"title":"New Tab","url":"chrome://newtab/"}],"tabGroupId":7}` + "\n\nTab Context:\n- Available tabs:\n  • tabId 11: \"New Tab\" (\"chrome://newtab/\")")
+	fresh := result("Created new tab. Tab ID: 12\n\nTab Context:\n- Available tabs:\n  • tabId 11: \"A\" (\"https://a/\")\n  • tabId 12: \"New Tab\" (\"chrome://newtab/\")")
+	stranded := result("Closed tab 11. 1 tab(s) remain.")
+	again := result(`{"availableTabs":[{"tabId":13,"title":"New Tab","url":"chrome://newtab/"}],"tabGroupId":8}` + "\n\nTab Context:\n- Available tabs:\n  • tabId 13: \"New Tab\" (\"chrome://newtab/\")")
+	closed := func(id string) string {
+		return result("Closed tab " + id + ". Group is now empty (auto-removed). \n\nTab Context:\n- Available tabs:\n")
+	}
+	transcript := filepath.Join(t.TempDir(), "t.jsonl")
+
+	writeFile(t, transcript, made+fresh+stranded+again+closed("13"))
+	f, err := readFindings(transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := f.lines("steps", "", nil, false)
+	if err := f.tabsErr(); err == nil || err.Error() != "the browse turn left 1 tab it opened open in the shared Chrome: tab 12 outside its group, out of any turn's reach" ||
+		!slices.Contains(lines, "tabs left open: tab 12 outside its group, out of any turn's reach") {
+		t.Errorf("a stranded tab: %v, %q", err, lines)
+	}
+
+	writeFile(t, transcript, made+fresh)
+	f, _ = readFindings(transcript)
+	if err := f.tabsErr(); err == nil || !strings.Contains(err.Error(), "left 2 tabs it opened open in the shared Chrome: tab 11, 12 in its group") {
+		t.Errorf("two tabs in the group: %v", err)
+	}
+
+	writeFile(t, transcript, made+fresh+result("Closed tab 12. 1 tab(s) remain.")+closed("11"))
+	f, _ = readFindings(transcript)
+	if err := f.tabsErr(); err != nil || !slices.Contains(f.lines("steps", "", nil, false), "tabs closed: the turn closed all 2 tabs it opened") {
+		t.Errorf("all closed: %v, %q", err, f.lines("steps", "", nil, false))
 	}
 }

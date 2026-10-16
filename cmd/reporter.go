@@ -206,15 +206,19 @@ func (w *watcher) launchReport(unit, id, name, prompt string) error {
 		agentArgv(bin, id, name, w.cfg.Reporter.Model, prompt, "--settings", reportSettings(self)))
 }
 
-// hookTypeCommand is a settings hook that runs a command.
-const hookTypeCommand = "command"
+// hookTypeCommand is a settings hook that runs a command; hooksKey holds a
+// settings document's hooks and a matcher's.
+const (
+	hookTypeCommand = "command"
+	hooksKey        = "hooks"
+)
 
 // reportSettings are the reporter session's added settings: the PreToolUse
 // hook that denies a post failing the report check.
 func reportSettings(self string) string {
 	hook := map[string]any{"type": hookTypeCommand, "command": guard.ShellQuote(self) + " hook reportcheck", "timeout": 10}
-	raw, _ := json.Marshal(map[string]any{"hooks": map[string]any{
-		"PreToolUse": []any{map[string]any{"matcher": ".*" + guard.PostTool, "hooks": []any{hook}}},
+	raw, _ := json.Marshal(map[string]any{hooksKey: map[string]any{
+		"PreToolUse": []any{map[string]any{"matcher": ".*" + guard.PostTool, hooksKey: []any{hook}}},
 	}})
 	return string(raw)
 }

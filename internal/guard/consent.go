@@ -288,11 +288,7 @@ type chromeCall struct {
 // navigate, a click, a key, a typed text, a form value, and each of a
 // batch's; none for a call that only reads.
 func chromeCalls(tool string, input map[string]any) []chromeCall {
-	t := strings.ToLower(tool)
-	if i := strings.LastIndex(t, "__"); i >= 0 {
-		t = t[i+len("__"):]
-	}
-	switch t {
+	switch chromeTool(tool) {
 	case chromeNavigation:
 		if u, _ := input[urlKey].(string); u != "" {
 			return []chromeCall{{navigate: u}}
