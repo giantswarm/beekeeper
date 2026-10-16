@@ -118,8 +118,9 @@ func (it Item) matches(match string) bool {
 }
 
 // itemFields reads the item id of vault and keeps of each field its
-// metadata and its value's length, and the keys of its KEY=VALUE lines
-// with their values' lengths; the values go out of scope here.
+// metadata and its value's length, and of each plain text field the keys
+// of its KEY=VALUE lines with their values' lengths; the values go out of
+// scope here.
 func (o *Ops) itemFields(ctx context.Context, vault, id string) ([]FieldInfo, []EnvKey, error) {
 	raw, err := o.op(ctx, nil, "item", "get", id, "--vault", vault, "--format", "json")
 	if err != nil {
@@ -148,6 +149,11 @@ func (o *Ops) itemFields(ctx context.Context, vault, id string) ([]FieldInfo, []
 			label = f.ID
 		}
 		out = append(out, FieldInfo{Label: label, Section: f.Section.Label, Type: f.Type, Purpose: f.Purpose, Length: len(f.Value)})
+		// only a plain text field, notes for one, is read for KEY=VALUE
+		// lines: a concealed value's text before an "=" is part of it
+		if f.Type != plainString {
+			continue
+		}
 		// the field as op read names it: a built-in one by its id, one in
 		// a section after the section
 		name := label

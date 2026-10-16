@@ -50,10 +50,12 @@ func TestItemsAnswerEnvKeysAndLengthsOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	noValue(t, "the env-key listing", string(raw))
-	// a field without KEY=VALUE lines answers no key
+	// a field without KEY=VALUE lines answers no key, a concealed one is
+	// never parsed: its text before an "=" is part of the value
+	tools.Vault[vaultRef] = "planted" + token + "=="
 	plain, err := ops(tools).Items(context.Background(), shared, secret.ItemsOptions{Match: "api", EnvKeys: true})
 	if err != nil || len(plain) != 1 || plain[0].EnvKeys != nil {
-		t.Errorf("a plain field's env keys = %+v, %v", plain, err)
+		t.Errorf("a concealed field's env keys = %+v, %v", plain, err)
 	}
 }
 
