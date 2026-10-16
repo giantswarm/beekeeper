@@ -31,6 +31,8 @@ const (
 	permissionFlag = "--permission"
 	wordsFlag      = "--words"
 	navigateFlag   = "--navigate"
+	googleFlag     = "--google"
+	callbackFlag   = "--callback"
 )
 
 // app check's answers, and the calls and the page of an App's life it
@@ -132,7 +134,7 @@ func TestAppRecord(t *testing.T) {
 	}{
 		{[]string{appAllow, recordedApp}, wordFlag},
 		{[]string{appAllow, recordedApp, clientIDFlag, recordedClientID}, wordFlag},
-		{[]string{appAllow, recordedApp, wordFlag, "w"}, clientIDFlag + " <id> for a consent (the OAuth client id the App's consent URL carries), --permission \"<scope>: <level>\" for one permission change, --delete for the App's deletion, or several"},
+		{[]string{appAllow, recordedApp, wordFlag, "w"}, clientIDFlag + " <id> for a consent (the OAuth client id the App's consent URL carries), --permission \"<scope>: <level>\" for one permission change, --delete for the App's deletion, --google --callback <host> for a Google OAuth client's consent, or several"},
 		{[]string{appAllow, recordedApp, permissionFlag, "Members", wordFlag, "w"}, `--permission names one change as "<scope>: <level>" (e.g. "Members: Read-only"), not "Members"`},
 		{[]string{appAllow, "undeclared", clientIDFlag, recordedClientID, wordFlag, "w"}, "App undeclared is not declared: " + declaringRepo + " declares no App at apps/undeclared/manifest.json"},
 		{[]string{appAllow, "renamed", clientIDFlag, recordedClientID, wordFlag, "w"}, "App renamed is not declared: " + declaringRepo + "@0123456789ab:apps/renamed/manifest.json names the App another-app"},
@@ -198,6 +200,54 @@ func TestAppRecord(t *testing.T) {
 	}
 	t.Setenv("BEEKEEPER_CONFIG", filepath.Join(a.cfg.StateDir, "config.yaml"))
 	if apps := a.allowedApps(); len(apps) != 1 || apps[0].Name != recordedApp || apps[0].ClientID != recordedClientID || apps[0].Callbacks[0] != recordedCallback || apps[0].Declared != recordedDeclared || apps[0].By != agentOne || apps[0].Org != fixtureOrg {
+		t.Errorf("allowedApps = %+v", apps)
+	}
+}
+
+// A Google OAuth client is recorded with --google and its callback hosts,
+// on the person's word alone: no declaring repository is read, a URL's host
+// is taken, the list and the answer name it; check allows Google's consent
+// of its flow and refuses a third party's; a GitHub App's flags and a
+// --callback without --google are refused.
+func TestAppGoogleRecord(t *testing.T) {
+	a, _ := stubApp(t)
+	const (
+		client   = "example-portal"
+		callback = "portal.example.org"
+		chooser  = "https://accounts.google.com/v3/signin/accountchooser?client_id=REDACTED&redirect_uri=https%3A%2F%2F" + callback + "%2Fcb&response_type=code"
+		scopes   = "https://accounts.google.com/o/oauth2/v2/auth?client_id=REDACTED&redirect_uri=https%3A%2F%2F" + callback + "%2Fcb&response_type=code"
+	)
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{appAllow, client, googleFlag, wordFlag, "w"}, "--google needs --callback <host>"},
+		{[]string{appAllow, client, googleFlag, callbackFlag, callback, permissionFlag, deviceChange, wordFlag, "w"}, "--google records a consent on Google's sign-in alone"},
+		{[]string{appAllow, client, googleFlag, callbackFlag, "a b", wordFlag, "w"}, `--callback names a callback host (or a URL), not "a b"`},
+		{[]string{appAllow, client, callbackFlag, callback, clientIDFlag, "x", wordFlag, "w"}, "--callback names a Google OAuth client's callback hosts, with --google"},
+	} {
+		if _, err := runApp(t, a, tc.args...); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("app %q = %v, want a refusal with %q", tc.args, err, tc.want)
+		}
+	}
+	out, err := runApp(t, a, appAllow, client, googleFlag, callbackFlag, "https://Portal.example.org/api/auth/google/handler/frame", callbackFlag, callback, wordFlag, personsWord)
+	if err != nil || out != "App "+client+" on record, declared in "+googleDeclared+": its consent on Google's sign-in with callback "+callback+" is answered by the hook\n" {
+		t.Fatalf("app allow --google = %q, %v", out, err)
+	}
+	if out, _ := runApp(t, a, "list"); !strings.Contains(out, client+"  Google  callbacks "+callback+"  declared in "+googleDeclared+"  since ") {
+		t.Errorf("list = %q", out)
+	}
+	if out, _ := runApp(t, a, appCheck, scopes); !strings.HasPrefix(out, checkAllow+"beekeeper allows it: Google's sign-in to the person's own App "+client) {
+		t.Errorf("check of its flow = %q", out)
+	}
+	if out, _ := runApp(t, a, appCheck, chooser); !strings.HasPrefix(out, checkAllow) {
+		t.Errorf("check of its account chooser = %q", out)
+	}
+	if out, _ := runApp(t, a, appCheck, strings.ReplaceAll(scopes, callback, "app.example.net")); !strings.HasPrefix(out, checkRefuse) || !strings.Contains(out, guard.GoogleForm) {
+		t.Errorf("check of a third party's consent = %q", out)
+	}
+	t.Setenv("BEEKEEPER_CONFIG", filepath.Join(a.cfg.StateDir, "config.yaml"))
+	if apps := a.allowedApps(); len(apps) != 1 || !apps[0].Google || apps[0].Callbacks[0] != callback {
 		t.Errorf("allowedApps = %+v", apps)
 	}
 }
