@@ -179,6 +179,34 @@ func TestPositionIsThePriorityWithinAStep(t *testing.T) {
 	}
 }
 
+func TestBlockersClosedIsTheLastCloseOfEveryBlocker(t *testing.T) {
+	at := func(d int) *time.Time { t := days(d); return &t }
+	j := func(total int, closed ...*time.Time) issueJSON {
+		var i issueJSON
+		i.Deps.TotalBlockedBy = total
+		for _, c := range closed {
+			i.BlockedBy.Nodes = append(i.BlockedBy.Nodes, struct {
+				ClosedAt *time.Time `json:"closedAt"`
+			}{c})
+		}
+		return i
+	}
+	for _, tc := range []struct {
+		name string
+		j    issueJSON
+		want time.Time
+	}{
+		{"all closed", j(2, at(5), at(2)), days(2)},
+		{"one open", j(2, at(5), nil), time.Time{}},
+		{"not every one read", j(3, at(5), at(2)), time.Time{}},
+		{"none", j(0), time.Time{}},
+	} {
+		if got := tc.j.blockersClosed(); !got.Equal(tc.want) {
+			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestUnofferedSaysWhyNoStepTakesAnItem(t *testing.T) {
 	o := snapshot(t).Order
 	for _, tc := range []struct {
@@ -190,6 +218,10 @@ func TestUnofferedSaysWhyNoStepTakesAnItem(t *testing.T) {
 		{Item{Status: backlog, Created: days(100)}, "created 2026-06-23: Backlog takes items created within 90 days"},
 		{Item{Status: blocked}, "blocker cleared takes items with recorded blockers, it has none"},
 		{Item{Status: blocked, Blockers: 3, OpenBlockers: 2}, "2 of 3 blockers open"},
+		{Item{Status: blocked, Blockers: 1, StatusSet: days(1), BlockersClosed: days(2)},
+			"held by its Status Blocked / Waiting ⛔️, set 2026-09-30 after its last blocker closed 2026-09-29: it holds until the Status changes"},
+		{Item{Status: blocked, Blockers: 1, StatusSet: days(3), BlockersClosed: days(2)}, ""},
+		{Item{Status: blocked, Blockers: 1, StatusSet: days(1)}, ""},
 		{Item{}, "no step of board.order offers an item without a Status"},
 	} {
 		if got := Unoffered(o, tc.it, now); got != tc.want {

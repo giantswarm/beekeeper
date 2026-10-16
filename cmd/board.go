@@ -58,7 +58,10 @@ func (a *app) boardNextCmd() *cobra.Command {
 		Long: `Reads the board once and walks board.order: each step offers the open items
 of its statuses, kinds and labels (the open sub-issues of the epics it
 matches, with subIssues; only items whose recorded blockers all closed, with
-unblocked; only items created within createdWithin), or a GitHub search's
+unblocked, and whose Status was set before the last of them closed: a Status
+set after it was set for a reason no blocker records, a person or a plan,
+and holds the item until it changes; only items created within
+createdWithin), or a GitHub search's
 open issues. A sub-issue that is a board item is held to the order by its
 own Status, whatever its Team: one no step offers on its own (a Backlog item older than the
 Backlog step's createdWithin, a blocked one, one in Inbox) is skipped with
@@ -431,7 +434,7 @@ func skipKind(reason string) string {
 		return kindServed
 	case strings.HasPrefix(reason, "assigned to "):
 		return kindAssigned
-	case strings.HasSuffix(reason, "blockers open"):
+	case strings.HasSuffix(reason, "blockers open"), strings.HasPrefix(reason, board.HeldPrefix):
 		return kindBlocked
 	case strings.HasPrefix(reason, "no activity since "):
 		return kindStale
@@ -895,7 +898,9 @@ func (a *app) boardHoldCmd(block bool) *cobra.Command {
 		`Records the issue --by names as a blocker of the item's issue, a GitHub
 blocked-by dependency (addBlockedBy): board next skips the item while any of
 its recorded blockers is open ("1 of 1 blockers open") and offers it again at
-the next board next once they all closed, with no session acting. A
+the next board next once they all closed, with no session acting, unless its
+Status was set after the last of them closed: that Status holds it until it
+changes. A
 dependency recorded already is left as it is.`
 	if !block {
 		use, short, long = "unblock", "Remove a hold from a board item: the GitHub blocked-by dependency block recorded",

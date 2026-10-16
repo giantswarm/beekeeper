@@ -40,6 +40,10 @@ type Item struct {
 	// Blockers counts the recorded blockers, OpenBlockers the open ones.
 	Blockers     int `json:"blockers,omitempty"`
 	OpenBlockers int `json:"openBlockers,omitempty"`
+	// StatusSet is when its Status was last set, BlockersClosed when the
+	// last of its recorded blockers closed; zero when unknown.
+	StatusSet      time.Time `json:"statusSet,omitzero"`
+	BlockersClosed time.Time `json:"blockersClosed,omitzero"`
 	// OpenSubIssues counts the open sub-issues; SubIssues are they, read
 	// for a SubIssues step only.
 	OpenSubIssues int    `json:"openSubIssues,omitempty"`
@@ -62,6 +66,16 @@ const missingBoardFields = "projectItems:"
 func (it Item) boardFieldsUnknown() bool {
 	return slices.ContainsFunc(it.Missing, func(m string) bool { return strings.HasPrefix(m, missingBoardFields) })
 }
+
+// HeldByStatus reports whether its Status was set after the last of its
+// recorded blockers closed: set for a reason no blocker records (a person,
+// a plan), the Status holds it until it changes.
+func (it Item) HeldByStatus() bool {
+	return !it.StatusSet.IsZero() && !it.BlockersClosed.IsZero() && it.StatusSet.After(it.BlockersClosed)
+}
+
+// HeldPrefix starts the refusal of an item its Status holds.
+const HeldPrefix = "held by its Status"
 
 // LeaseLabel is the prefix of an issue label naming a lease the work needs:
 // lease/agentlab-1.
@@ -146,7 +160,8 @@ func (c Candidate) PriorityText() string {
 // item without is offered itself. A sub-issue that is a board item, of
 // any Team or Status, is held to the order like any other: one no step
 // offers on its own (an old Backlog item, a blocked one, one in Inbox) is
-// marked skipped with the reason. Items with an open recorded blocker,
+// marked skipped with the reason, a blocked one whose Status was set after
+// its recorded blockers closed too (HeldByStatus). Items with an open recorded blocker,
 // without activity for b.StaleAfter or assigned to anybody outside
 // b.People are marked skipped too. The epic gate (snap.Gate) holds an epic
 // in planning and every issue under it whatever the step: the epic is
@@ -194,9 +209,14 @@ func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 				// A sub-issue that is a board item read with the board
 				// carries its board fields from there, whatever its own
 				// read answered.
-				if b, ok := byRef[strings.ToLower(sub.Ref)]; ok && (!sub.OnBoard || sub.boardFieldsUnknown()) {
-					b.SubIssues = nil
-					sub = b
+				// Its blockers' last close is read with the board's items
+				// only.
+				if b, ok := byRef[strings.ToLower(sub.Ref)]; ok {
+					if !sub.OnBoard || sub.boardFieldsUnknown() {
+						b.SubIssues = nil
+						sub = b
+					}
+					sub.BlockersClosed = b.BlockersClosed
 				}
 				skip := ""
 				switch {
@@ -241,14 +261,17 @@ func selects(st config.BoardStep, it Item) bool {
 		(len(st.Labels) == 0 || slices.ContainsFunc(it.Labels, func(l string) bool { return containsFold(st.Labels, l) }))
 }
 
-// refusal says why st turns away an item it selects: its blockers or its
-// age; empty when st offers it.
+// refusal says why st turns away an item it selects: its blockers, a
+// Status set after they closed, or its age; empty when st offers it.
 func refusal(st config.BoardStep, it Item, now time.Time) string {
 	switch {
 	case st.Unblocked && it.Blockers == 0:
 		return st.Name + " takes items with recorded blockers, it has none"
 	case st.Unblocked && it.OpenBlockers > 0:
 		return blockersOpen(it)
+	case st.Unblocked && it.HeldByStatus():
+		return fmt.Sprintf("%s %s, set %s after its last blocker closed %s: it holds until the Status changes",
+			HeldPrefix, it.Status, it.StatusSet.Format(time.DateOnly), it.BlockersClosed.Format(time.DateOnly))
 	case st.CreatedWithin.Duration > 0 && now.Sub(it.Created) > st.CreatedWithin.Duration:
 		return fmt.Sprintf("created %s: %s takes items created within %s", it.Created.Format(time.DateOnly), st.Name, span(st.CreatedWithin.Duration))
 	}

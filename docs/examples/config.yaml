@@ -300,7 +300,7 @@ board:                      # the project board `beekeeper board next` picks wor
   order:                    # the first free item of the first step that offers one is picked
     - {name: page, kind: [alert]}   # Status and Kind values or an unambiguous part ("up next")
     - {name: In Progress, status: [in progress], subIssues: true}   # an epic offers its open sub-issues
-    - {name: blocker cleared, status: [blocked], unblocked: true}   # every recorded blocker closed
+    - {name: blocker cleared, status: [blocked], unblocked: true}   # every recorded blocker closed, the Status set before the last close
     - {name: Up Next, status: [up next]}
     - {name: bug, status: [backlog], kind: [bug]}
     - {name: queue, search: "repo:example-org/tools label:team/platform"}   # open issues, oldest first
