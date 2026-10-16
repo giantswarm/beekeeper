@@ -163,18 +163,30 @@ func TestWatchRestartsAfterBackgroundRuns(t *testing.T) {
 	}
 }
 
-// A watch without a request runs on.
+// A watch without a request runs on: poll after poll, each asking for the
+// request, its loops wait for the next, and only the cancel ends the run.
 func TestWatchWithoutRequestRunsOn(t *testing.T) {
 	w, _ := loopWatcher(t, "1h", "", nil)
-	w.restart = &restartWatch{file: filepath.Join(w.cfg.StateDir, restartFile), since: time.Now(),
+	clk := newFakeClock(t)
+	w.clock = clk
+	w.restart = &restartWatch{file: filepath.Join(w.cfg.StateDir, restartFile), since: clk.Now(),
 		binary: func() (string, bool) { return restartExe, true }}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- w.run(ctx, false) }()
+	// Every loop armed its timer: the poll before ran and asked for the
+	// request. A run that ended arms none after the next step, and settle
+	// fails.
+	clk.settle(loopTimers)
+	clk.step(loopTimers)
+	clk.settle(loopTimers)
+	if n := w.polls.Load(); n != 2 {
+		t.Fatalf("%d polls after one interval, want 2", n)
+	}
 	select {
 	case err := <-done:
 		t.Fatalf("the run ended by itself: %v", err)
-	case <-time.After(200 * time.Millisecond):
+	default:
 	}
 	cancel()
 	if err := <-done; err != nil {
