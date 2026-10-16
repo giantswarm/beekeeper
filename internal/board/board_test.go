@@ -27,6 +27,8 @@ const (
 	upNextEpic = "Up Next epic"
 	bugStep    = "bug"
 	typedNext  = "up next"
+	// backlogStep is the name of the order's Backlog step.
+	backlogStep = "Backlog"
 )
 
 var statuses = []string{"Inbox 📥", backlog, upNext, inProgress, blocked, "Validation ☑️", "Done ✅"}
@@ -42,7 +44,7 @@ func order() []config.BoardStep {
 		{Name: "Up Next", Status: []string{typedNext}},
 		{Name: bugStep, Kind: []string{bugStep}},
 		{Name: "queue", Search: "repo:o/tools label:team/x"},
-		{Name: "Backlog", Status: []string{"backlog"}, CreatedWithin: config.Duration{Duration: 90 * 24 * time.Hour}},
+		{Name: backlogStep, Status: []string{"backlog"}, CreatedWithin: config.Duration{Duration: 90 * 24 * time.Hour}},
 	}
 }
 
@@ -471,7 +473,7 @@ func TestMoveAddsAnIssueMissingFromTheBoard(t *testing.T) {
 		added: `{"data":{"addProjectV2ItemById":{"item":{"id":"I2","project":{"id":"P"},"status":null,"kind":null,"team":null}}}}`}
 	c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
 	mv, err := c.Move(context.Background(), issue5, "backlog")
-	if err != nil || *mv != (Moved{Ref: issue5, To: backlog, Added: true, Team: "X 🐝"}) || !slices.Equal(f.mutations, []string{"add ISSUE to P", "I2=t1", "I2=s1"}) || readsItems(f.queries) {
+	if err != nil || *mv != (Moved{Ref: issue5, To: backlog, Added: true, Team: teamX}) || !slices.Equal(f.mutations, []string{"add ISSUE to P", "I2=t1", "I2=s1"}) || readsItems(f.queries) {
 		t.Errorf("Move = %+v, %v; mutations %v, queries %q", mv, err, f.mutations, f.queries)
 	}
 	// A board without a Team, or none configured, adds without one.
@@ -645,7 +647,7 @@ func TestRankAddsAMissingIssueAndRefusesWhatIsNotOnTheBoard(t *testing.T) {
 	c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
 	ctx := context.Background()
 	rk, err := c.Rank(ctx, "o/s#8", Place{After: issue9})
-	if err != nil || *rk != (Ranked{Ref: "o/s#8", Above: issue9, Added: true, Team: "X 🐝"}) ||
+	if err != nil || *rk != (Ranked{Ref: "o/s#8", Above: issue9, Added: true, Team: teamX}) ||
 		!slices.Equal(f.mutations, []string{"add ISSUE8 to P", "I8=t1", `I8 after "I9"`}) {
 		t.Errorf("Rank of an issue missing from the board = %+v, %v; mutations %v", rk, err, f.mutations)
 	}
@@ -727,7 +729,7 @@ func TestClosesReadsTheClosingReferencesInOneRequestPerOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string][]string{"o/r#100": {"o/r#1", "other/x#2"}, "teemow/lab#9": {"teemow/lab#3"}}
+	want := map[string][]string{"o/r#100": {ref1, "other/x#2"}, "teemow/lab#9": {"teemow/lab#3"}}
 	if len(queries) != 2 || !strings.Contains(queries[0], `r1:repository(owner:"o",name:"r")`) || len(got) != len(want) ||
 		!slices.Equal(got["o/r#100"], want["o/r#100"]) || !slices.Equal(got["teemow/lab#9"], want["teemow/lab#9"]) {
 		t.Errorf("closes %v, queries %q", got, queries)

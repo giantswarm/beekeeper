@@ -128,7 +128,7 @@ func (f *priorityGH) run(_ context.Context, args ...string) ([]byte, error) {
 	case strings.Contains(q, "fields(first:50)"):
 		return []byte(priorityMetaJSON), nil
 	case strings.Contains(q, "items(first:100"):
-		ranked, team := f.ranked, "X 🐝"
+		ranked, team := f.ranked, teamX
 		switch vars["q"] {
 		case `is:open team:"X" kind:"Epic 🎯"`:
 		case `is:open label:"team/x" kind:"Epic 🎯"`:
@@ -204,9 +204,9 @@ func TestSetPriorityInsertsAndRenumbers(t *testing.T) {
 		{"a new epic at the top moves the others down", issue5, 1, 0, 1, "1 o/r#5, 2 o/r#1, 3 o/r#2, 4 o/r#3", []string{"I5=1", "I1=2", "I2=3", "I3=4"}},
 		{"a new epic past the end is the end", issue5, 9, 0, 4, "1 o/r#1, 2 o/r#2, 3 o/r#3, 4 o/r#5", []string{"I5=4"}},
 		{"a ranked epic moves up", ref3, 1, 3, 1, "1 o/r#3, 2 o/r#1, 3 o/r#2", []string{"I3=1", "I1=2", "I2=3"}},
-		{"its own rank writes nothing", ref2, 2, 2, 2, "1 o/r#1, 2 o/r#2, 3 o/r#3", nil},
+		{"its own rank writes nothing", ref2, 2, 2, 2, listOf123, nil},
 		{"unset clears it and moves the ones below up", ref1, 0, 1, 0, "1 o/r#2, 2 o/r#3", []string{"I1 cleared", "I2=1", "I3=2"}},
-		{"unset of an unranked epic writes nothing", issue5, 0, 0, 0, "1 o/r#1, 2 o/r#2, 3 o/r#3", nil},
+		{"unset of an unranked epic writes nothing", issue5, 0, 0, 0, listOf123, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := &priorityGH{t: t, ranked: map[int]int{1: 1, 2: 2, 3: 3}, kind: "Epic 🎯"}

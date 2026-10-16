@@ -10,6 +10,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// closedEpic is the ranked epic that leaves the list closed.
+const closedEpic = "o/r#58"
+
 // A change of a ranked epic's Team that beekeeper did not write is a
 // board.changed event and a line; the first read and beekeeper's own writes
 // (recordRanked) are none, and an epic that left the list closed is no
@@ -24,7 +27,7 @@ func TestRankChangesLogsWhatBeekeeperDidNotWrite(t *testing.T) {
 		case strings.Contains(q, "fields(first:50)"):
 			return []byte(`{"data":{"repositoryOwner":{"projectV2":{"id":"P","fields":{"nodes":[{"id":"FS","name":"Status","options":[]}]}}}}}`), nil
 		case strings.Contains(q, "projectItems"):
-			return []byte(`{"data":{"repository":{"issue":{"number":3,"url":"https://github.com/o/r/issues/3","state":"CLOSED","repository":{"nameWithOwner":"o/r"},"projectItems":{"nodes":[]}}}}}`), nil
+			return []byte(`{"data":{"repository":{"issue":{"number":58,"url":"https://github.com/o/r/issues/58","state":"CLOSED","repository":{"nameWithOwner":"o/r"},"projectItems":{"nodes":[]}}}}}`), nil
 		}
 		t.Fatalf("unexpected request %v", args)
 		return nil, nil
@@ -32,7 +35,7 @@ func TestRankChangesLogsWhatBeekeeperDidNotWrite(t *testing.T) {
 	a, store := priorityApp(t, "")
 	cl := a.boardClient()
 	ctx := context.Background()
-	list := board.Priorities{{Rank: 1, Ref: refOne, Team: "X 🐝"}, {Rank: 2, Ref: "o/r#3", Team: "X 🐝"}}
+	list := board.Priorities{{Rank: 1, Ref: refOne, Team: "X 🐝"}, {Rank: 2, Ref: closedEpic, Team: "X 🐝"}}
 	if got := a.rankChanges(ctx, cl, list); got != nil {
 		t.Fatalf("first read: %v", got)
 	}

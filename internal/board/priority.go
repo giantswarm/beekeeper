@@ -271,7 +271,7 @@ content{...I `+blockerFields+`}}}}}}}`+issueFields, vs)
 			it := n.Content.item()
 			n.projectItem.onto(&it)
 			e := RankedEpic{Ref: it.Ref, URL: it.URL, Title: it.Title, Status: it.Status, Held: it.HeldText(), item: n.ID}
-			n.rankedNode.onto(&e)
+			n.onto(&e)
 			*out = append(*out, e)
 		}
 		if !items.PageInfo.HasNextPage {
