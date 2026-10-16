@@ -501,6 +501,8 @@ const (
 	// noteDefaulted is the state of a Note closed by its default and kept
 	// answerable (state.State's Defaulted).
 	noteDefaulted = "defaulted"
+	// noteOpen is the state of a Note open for its answer.
+	noteOpen = "open"
 )
 
 // record writes events as Kubernetes Events on obj; the cluster-scoped
@@ -783,7 +785,7 @@ func (snap *snapshot) apply(st *state.State) (*snapshot, error) {
 		case i >= defaulted:
 			note.Status.State = noteDefaulted
 		case note.Status.State == "" || note.Status.State == noteDefaulted:
-			note.Status.State = "open"
+			note.Status.State = noteOpen
 		}
 		want.notes[k] = note
 	}

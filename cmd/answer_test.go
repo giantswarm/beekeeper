@@ -169,7 +169,7 @@ func TestAnswerWithoutANoteIsLoggedAndToldNotPosted(t *testing.T) {
 
 // deskWords mean something on one desk only: a posted decision
 // carries none of them.
-var deskWords = []string{"note #", "#1", noteFiler, "via", viaCLI, "beekeeper", agentOne, "o/private#7", "o/public#3"}
+var deskWords = []string{"note #", "#1", noteFiler, "via", viaCLI, pluginName, agentOne, "o/private#7", "o/public#3"}
 
 // noDesk fails t for every desk word in body.
 func noDesk(t *testing.T, body string) {

@@ -405,7 +405,7 @@ func TestEnvtestKeepsADefaultedDecision(t *testing.T) {
 	ctx := context.Background()
 	for id, text := range map[int]string{1: "merge?", 2: "ship?"} {
 		if err := a.Update(func(st *state.State) ([]state.Event, error) {
-			st.Notes = append(st.Notes, state.Note{ID: id, For: "Pat", Kind: state.NoteDecision, Text: text, By: ana, At: time.Now().Truncate(time.Second)})
+			st.Notes = append(st.Notes, state.Note{ID: id, For: ana.Person, Kind: state.NoteDecision, Text: text, By: ana, At: time.Now().Truncate(time.Second)})
 			return nil, nil
 		}); err != nil {
 			t.Fatal(err)
@@ -426,7 +426,7 @@ func TestEnvtestKeepsADefaultedDecision(t *testing.T) {
 		}
 		return n.Status.State
 	}
-	if s1, s2 := stateOf(1), stateOf(2); s1 != noteDefaulted || s2 != "open" {
+	if s1, s2 := stateOf(1), stateOf(2); s1 != noteDefaulted || s2 != noteOpen {
 		t.Fatalf("states %q, %q", s1, s2)
 	}
 	st, err := a.Read()
