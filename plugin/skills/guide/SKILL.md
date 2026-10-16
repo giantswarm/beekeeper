@@ -35,8 +35,10 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   first, and the next only once that one is answered or closed. `beekeeper guide queue` is the whole queue: the open notes for the
   person with the session that filed each, its deadline and its default, then the sessions waiting
   on them with what they need. `beekeeper answer <owner/repo#n> [--note <id>] "<words>"` records an answer
-  verbatim on the thread it concerns (a public one's private epic or plan), closes the note and
-  tells the owning session, whichever way the answer came (a note, this conversation, Slack); the supervisor reads it from `beekeeper log --verb answer.recorded`. `beekeeper guide` shows this session's context against the relay point.
+  verbatim in beekeeper's log, closes the note (one its default closed within the day too: the answer
+  replaces the default) and tells the owning session, whichever way the answer came (a note, this
+  conversation, Slack); nothing goes to GitHub, where the work's own result shows. The supervisor reads it
+  from `beekeeper log --verb answer.recorded`. `beekeeper guide` shows this session's context against the relay point.
 - **The owning session** of a decision is named in the queue. `beekeeper tail <session>` gives its
   last turns, `ListAgents` its messaging address.
 - **The supervisor** is another session (`/supervise`). It files decisions as `beekeeper note add
@@ -71,7 +73,7 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   consequence. The hook refuses a question that lacks one, naming what it lacks. A decision that
   blocks a session's work also goes to the person's phone with `PushNotification`.
 - **Answers travel word for word.** Each answer, given on a note, in this conversation or on Slack,
-  goes to `beekeeper answer <owner/repo#n> [--note <id>] "<the person's words>"` on the issue or PR
+  goes to `beekeeper answer <owner/repo#n> [--note <id>] "<the person's words>"` about the issue or PR
   it concerns, which tells the owning session; the supervisor gets a one-line copy. A waiting session
   with no note gets the words by `SendMessage` too. Nothing is paraphrased, softened or extended.
 - **Priorities and goes are the board's.** A priority the person states is `beekeeper priority set

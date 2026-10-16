@@ -744,10 +744,11 @@ func toolNoteAnswer(c *call, req mcp.CallToolRequest) (any, error) {
 	}
 	choice := req.GetInt(paramChoice, 0)
 	text := strings.TrimSpace(req.GetString(paramText, ""))
-	n, err := c.note(id)
+	st, err := c.app.store.Read()
 	if err != nil {
 		return nil, err
 	}
+	n, _ := answerable(st, id, c.app.now)
 	if n != nil {
 		c.concern = kube.NoteObject(n.By.Team, id)
 		if !decidesNote(c.s.cfg.Serve, n, c.who) {

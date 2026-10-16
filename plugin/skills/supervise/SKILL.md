@@ -60,7 +60,7 @@ machine has a supervisor at all times: the role moves to a successor by relay an
   `beekeeper agents`. `beekeeper handover` prints all of it with the sessions; `beekeeper handover
   --prompt` is the successor's whole prompt. `beekeeper status` is the one-line view; `beekeeper
   supervisor` shows this session's context against `supervisor.relayAt`. Epics, plans, priorities and
-  the person's answers live on the board, in the issue and on its thread; the supervisor keeps
+  the person's answers live on the board, in the issue and in `beekeeper log --verb answer.recorded`; the supervisor keeps
   no note of them, and a state summary is the hand-over.
 - **Other sessions** are visible through `beekeeper sessions` (what each is on, the commands it
   runs, how long a bounded wait keeps it reachable, overlaps, `CTX` and the last hour's turns,
@@ -71,7 +71,7 @@ machine has a supervisor at all times: the role moves to a successor by relay an
 - **The guide** is a separate session (`/guide`, `beekeeper guide`) that walks the person through
   their decisions and keeps the roadmap board current. It serves the notes filed for the person and
   the sessions waiting on them; its one-line copies of their answers reach this session, and the
-  answers are in `beekeeper log --verb answer.recorded` and on their threads. It does no work of its own: research, proofs
+  answers are in `beekeeper log --verb answer.recorded`. It does no work of its own: research, proofs
   and test sessions it meets come here as one line. `guide start` in this session is refused.
 
 ## Constraints

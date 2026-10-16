@@ -262,15 +262,17 @@ note.overtaken with the reason, as the watch does.`,
 	done.Flags().StringVar(&overtaken, "overtaken", "", "close them as overtaken: why what they ask is settled")
 	var choice int
 	var via string
+	var post bool
 	answer := &cobra.Command{
 		Use:   "answer <id> [<answer>]",
-		Short: "Record a person's answer on a note's thread, word for word, and close it",
+		Short: "Record a person's answer to a note, word for word, and close it",
 		Long: `beekeeper answer for a note: its thread is the note's first --ref. The
 answer is --choice <n>, one of its options (1-based), the person's own
 words, or both, with the way it came (--via, cli unless it came from
-Slack). It is posted on the thread (a public one's private epic or plan,
-as beekeeper answer says), logged as answer.recorded and the note closed;
-the session that filed it is told at once. A note a role's run filed (the
+Slack). It is logged as answer.recorded and the note closed; the session
+that filed it is told at once. A decision its default closed within the
+last day is answered all the same: the answer replaces the default.
+Nothing is posted to GitHub unless --post (as beekeeper answer says). A note a role's run filed (the
 supervisor's, the guide's) goes to the role's holder now; while none holds
 it, the answer waits for the role's next start. A note without a --ref is
 refused: beekeeper answer <owner/repo#n> --note <id> names its thread.`,
@@ -284,19 +286,19 @@ refused: beekeeper answer <owner/repo#n> --note <id> names its thread.`,
 			if err != nil {
 				return err
 			}
-			i := slices.IndexFunc(st.Notes, func(n state.Note) bool { return n.ID == ids[0] })
-			if i < 0 {
-				return refused("note #%d is not open", ids[0])
+			n, _ := answerable(st, ids[0], a.now)
+			if n == nil {
+				return refused("note #%d is not open, nor closed by its default within %s", ids[0], shortDur(defaultedKeep))
 			}
-			n := st.Notes[i]
 			if len(n.Refs) == 0 {
 				return refused("note #%d links no issue or pull request (--ref) for its answer's thread: beekeeper answer <owner/repo#n> --note %d", n.ID, n.ID)
 			}
-			return a.recordAnswer(cmd.Context(), n.Refs[0], n.ID, choice, via, strings.Join(args[1:], " "))
+			return a.recordAnswer(cmd.Context(), n.Refs[0], n.ID, choice, via, strings.Join(args[1:], " "), post)
 		},
 	}
 	answer.Flags().IntVar(&choice, "choice", 0, "the option chosen, 1-based")
 	answer.Flags().StringVar(&via, "via", viaCLI, "how the answer came: cli or slack")
+	answer.Flags().BoolVar(&post, "post", false, "also record the decision as a GitHub comment")
 	var listFor string
 	var full bool
 	list := listCmd("List the open notes", func() error { return a.noteList(listFor, full) })
@@ -436,8 +438,12 @@ func (a *app) warnAnswered(cmd *cobra.Command, n state.Note) error {
 		return err
 	}
 	if an := repeats(recent, n); an != nil {
-		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "warning: %q answered on %s %s (%s): %q\n",
-			an.For, an.About, a.stamp(an.At), an.Comment, oneLine(an.Answer))
+		at := ""
+		if an.Comment != "" {
+			at = " (" + an.Comment + ")"
+		}
+		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "warning: %q answered on %s %s%s: %q\n",
+			an.For, an.About, a.stamp(an.At), at, oneLine(an.Answer))
 	}
 	return err
 }

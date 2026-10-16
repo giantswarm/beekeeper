@@ -323,7 +323,10 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 			for _, id := range closed {
 				if an, ok := parseAnswered(e); ok {
 					if an.ID == id {
-						closes[id] = fmt.Sprintf("note #%d answered by %s: %s (%s)", id, an.For, an.Answer, an.Comment)
+						closes[id] = fmt.Sprintf("note #%d answered by %s: %s", id, an.For, an.Answer)
+						if an.Comment != "" {
+							closes[id] += " (" + an.Comment + ")"
+						}
 					}
 				} else if strings.HasPrefix(e.Detail, fmt.Sprintf("#%d ", id)) {
 					closes[id] = fmt.Sprintf("note #%d closed: %s", id, oneLine(e.Detail))

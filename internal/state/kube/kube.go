@@ -498,6 +498,11 @@ const (
 	beekeeper    = "beekeeper"
 	byAnnotation = "beekeeper.giantswarm.io/by"
 	idAnnotation = "beekeeper.giantswarm.io/id"
+	// noteDefaulted is the state of a Note closed by its default and kept
+	// answerable (state.State's Defaulted).
+	noteDefaulted = "defaulted"
+	// noteOpen is the state of a Note open for its answer.
+	noteOpen = "open"
 )
 
 // record writes events as Kubernetes Events on obj; the cluster-scoped
@@ -642,9 +647,12 @@ func (snap *snapshot) state() *state.State {
 			Kind: n.Spec.Kind, Until: n.Spec.Until, Refs: n.Spec.Refs,
 			Question: n.Spec.Question, StatusQuo: n.Spec.StatusQuo, Options: n.Spec.Options, Recommend: n.Spec.Recommend, Posted: n.Status.Posted}
 		note.SetPinned(n.Spec.Pinned)
-		if note.Memo() {
+		switch {
+		case n.Status.State == noteDefaulted:
+			st.Defaulted = append(st.Defaulted, note)
+		case note.Memo():
 			st.Memos = append(st.Memos, note)
-		} else {
+		default:
 			st.Notes = append(st.Notes, note)
 		}
 		st.NextNote = max(st.NextNote, n.Spec.ID)
@@ -667,6 +675,7 @@ func canonical(st *state.State) {
 	slices.SortStableFunc(st.Holds, func(a, b state.Hold) int { return strings.Compare(holdName(a.Target), holdName(b.Target)) })
 	slices.SortStableFunc(st.Notes, func(a, b state.Note) int { return a.ID - b.ID })
 	slices.SortStableFunc(st.Memos, func(a, b state.Note) int { return a.ID - b.ID })
+	slices.SortStableFunc(st.Defaulted, func(a, b state.Note) int { return a.ID - b.ID })
 	slices.SortStableFunc(st.Agents, func(a, b state.Agent) int {
 		return strings.Compare(teamNamespace(a.Team)+"/"+rosterName(a.Party), teamNamespace(b.Team)+"/"+rosterName(b.Party))
 	})
@@ -755,7 +764,8 @@ func (snap *snapshot) apply(st *state.State) (*snapshot, error) {
 		want.holds[name] = hold
 	}
 
-	for _, n := range slices.Concat(st.Notes, st.Memos) {
+	defaulted := len(st.Notes) + len(st.Memos)
+	for i, n := range slices.Concat(st.Notes, st.Memos, st.Defaulted) {
 		if n.By.Team == "" {
 			return nil, fmt.Errorf("note #%d: a shared note needs its filer's team", n.ID)
 		}
@@ -771,8 +781,11 @@ func (snap *snapshot) apply(st *state.State) (*snapshot, error) {
 		note.Spec.Default, note.Spec.Kind, note.Spec.Until, note.Spec.Pinned, note.Spec.Refs = n.Default, n.Kind, n.Until, n.Pinned(), n.Refs
 		note.Spec.Question, note.Spec.StatusQuo, note.Spec.Options, note.Spec.Recommend = n.Question, n.StatusQuo, n.Options, n.Recommend
 		note.Status.By, note.Status.At, note.Status.Fired, note.Status.Posted = apiParty(n.By), metav1.Time{Time: n.At}, apiTime(n.Fired), n.Posted
-		if note.Status.State == "" {
-			note.Status.State = "open"
+		switch {
+		case i >= defaulted:
+			note.Status.State = noteDefaulted
+		case note.Status.State == "" || note.Status.State == noteDefaulted:
+			note.Status.State = noteOpen
 		}
 		want.notes[k] = note
 	}

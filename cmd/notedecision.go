@@ -103,6 +103,12 @@ func answeredLine(id int, by, answer string) string {
 	return fmt.Sprintf("NOTE ANSWERED #%d by %s: %s", id, by, answer)
 }
 
+// replacedLine is what the filer of a decision closed by its default is
+// told of an answer that came after it.
+func replacedLine(n *state.Note, by, answer string) string {
+	return fmt.Sprintf("%s (replaces the default applied: %s)", answeredLine(n.ID, by, answer), oneLine(n.Default))
+}
+
 func defaultedLine(n *state.Note) string {
 	return fmt.Sprintf("NOTE DEFAULTED #%d: %s", n.ID, n.Default)
 }
@@ -123,10 +129,21 @@ func defaultDue(st *state.State, now time.Time) []state.Note {
 	return due
 }
 
+// defaultedKeep is how long a decision closed by its default stays
+// answerable: an answer within it replaces the default.
+const defaultedKeep = 24 * time.Hour
+
 // closeDefaulted closes the decisions of st due unanswered with their
-// default and returns their watch lines, their events and the notes.
+// default, keeps them answerable for defaultedKeep (st.Defaulted), and
+// returns their watch lines, their events and the notes. A call that
+// closes none drops one decision kept longer: the Kubernetes store writes
+// one object per update.
 func closeDefaulted(st *state.State, person string, by state.Party, now time.Time) ([]string, []state.Event, []state.Note) {
 	due := defaultDue(st, now)
+	if i := slices.IndexFunc(st.Defaulted, func(n state.Note) bool { return now.Sub(n.Due) > defaultedKeep }); i >= 0 && len(due) == 0 {
+		st.Defaulted = slices.Delete(st.Defaulted, i, i+1)
+	}
+	st.Defaulted = append(st.Defaulted, due...)
 	lines := make([]string, 0, len(due))
 	evs := make([]state.Event, 0, len(due))
 	for i := range due {
@@ -134,6 +151,33 @@ func closeDefaulted(st *state.State, person string, by state.Party, now time.Tim
 		evs = append(evs, defaultedEvent(by, &due[i]))
 	}
 	return lines, evs, due
+}
+
+// answerable is the note id an answer may answer: an open one, or one its
+// default closed within defaultedKeep (defaulted true).
+func answerable(st *state.State, id int, now time.Time) (n *state.Note, defaulted bool) {
+	if i := slices.IndexFunc(st.Notes, func(o state.Note) bool { return o.ID == id }); i >= 0 {
+		return &st.Notes[i], false
+	}
+	if i := slices.IndexFunc(st.Defaulted, func(o state.Note) bool { return o.ID == id }); i >= 0 && now.Sub(st.Defaulted[i].Due) <= defaultedKeep {
+		return &st.Defaulted[i], true
+	}
+	return nil, false
+}
+
+// takeAnswered takes note id out of st's open or defaulted notes, and
+// reports whether it was there and whether its default had closed it.
+func takeAnswered(st *state.State, id int) (found, defaulted bool) {
+	is := func(o state.Note) bool { return o.ID == id }
+	if i := slices.IndexFunc(st.Notes, is); i >= 0 {
+		st.Notes = slices.Delete(st.Notes, i, i+1)
+		return true, false
+	}
+	if i := slices.IndexFunc(st.Defaulted, is); i >= 0 {
+		st.Defaulted = slices.Delete(st.Defaulted, i, i+1)
+		return true, true
+	}
+	return false, false
 }
 
 // tellFiler delivers line from by to the session that filed n, when it is a

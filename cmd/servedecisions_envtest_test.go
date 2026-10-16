@@ -160,11 +160,11 @@ func TestEnvtestServeDecisions(t *testing.T) {
 		t.Fatalf("closed %q", closed)
 	}
 	evs, err := e.store.Events(0, func(ev state.Event) bool { return ev.Verb == answerRecorded })
-	if err != nil || len(evs) != 1 || evs[0].By.Person != boEmail || !strings.HasPrefix(evs[0].Detail, privateThread+` answered by "bo" via slack, recorded at `) || !strings.HasSuffix(evs[0].Detail, ": own — until Friday") {
+	if err != nil || len(evs) != 1 || evs[0].By.Person != boEmail || !strings.HasPrefix(evs[0].Detail, privateThread+` answered by "bo" via slack, note #`) || !strings.HasSuffix(evs[0].Detail, ": own — until Friday") {
 		t.Fatalf("answer.recorded %+v %v", evs, err)
 	}
-	if len(f.comments) != 1 || !strings.Contains(f.comments[0], "**Answer** from bo via slack to note #") {
-		t.Fatalf("comments %q", f.comments)
+	if len(f.comments) != 0 {
+		t.Fatalf("posted on GitHub: %q", f.comments)
 	}
 
 	// A team's decision: posted to its channel, any member answers.
@@ -176,7 +176,7 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	e.expect(t, bo, "note_answer", map[string]any{paramNote: n, paramText: portalLane}, true, "only its addressee")
 	e.expect(t, kim, "note_answer", map[string]any{paramNote: n, paramText: "portal, after the release"}, false, "answered and closed")
 
-	// Withdrawn by its filer; defaulted at its due time.
+	// Withdrawn by its filer; defaulted at its due time, then answered.
 	n = ask("bo", "3h")
 	e.expect(t, bo, "note_done", map[string]any{paramNote: n}, true, "only that person")
 	e.expect(t, ana, "note_done", map[string]any{paramNote: n}, false, "done")
@@ -184,8 +184,10 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	if err := e.srv.defaultDue(context.Background(), time.Now().Add(2*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	e.expect(t, bo, "note_answer", map[string]any{paramNote: n, paramChoice: 1}, true, "not open")
-	if _, closed := gw.seen(); len(closed) != 4 || closed[2] != "d3 withdrawn: " || closed[3] != "d4 defaulted: "+ownLane {
+	// An answer after the default replaces it; a second one finds it closed.
+	e.expect(t, bo, "note_answer", map[string]any{paramNote: n, paramChoice: 1}, false, "the answer replaces")
+	e.expect(t, bo, "note_answer", map[string]any{paramNote: n, paramChoice: 2}, true, "not open")
+	if _, closed := gw.seen(); len(closed) != 5 || closed[2] != "d3 withdrawn: " || closed[3] != "d4 defaulted: "+ownLane || closed[4] != "d4 answered: portal" {
 		t.Fatalf("closed %q", closed)
 	}
 	if evs, _ := e.store.Events(0, func(ev state.Event) bool { return ev.Verb == noteDefaulted }); len(evs) != 1 {
