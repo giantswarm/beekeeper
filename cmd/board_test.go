@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/board"
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -432,14 +433,51 @@ func TestNextFreeIsHeldByNoNote(t *testing.T) {
 	}
 }
 
+func TestBlockerClearedOffersNoItemItsStatusHolds(t *testing.T) {
+	listed := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	const blocked = "Blocked / Waiting ⛔️"
+	closed := listed.Add(-48 * time.Hour)
+	item := func(ref string, statusSet time.Time) board.Item {
+		return board.Item{Ref: ref, OnBoard: true, Status: blocked, Created: listed.Add(-240 * time.Hour), Updated: listed.Add(-time.Hour),
+			Blockers: 1, StatusSet: statusSet, BlockersClosed: closed}
+	}
+	// #1 was set Blocked for a person after its blocker closed; #2 was
+	// Blocked on its dependency alone, which closed since.
+	snap := &board.Snapshot{
+		Order: []config.BoardStep{{Name: "blocker cleared", Status: []string{blocked}, Unblocked: true}},
+		Items: []board.Item{item("o/r#1", closed.Add(time.Hour)), item("o/r#2", closed.Add(-time.Hour))},
+	}
+	res := nextFree(&state.State{}, board.Rank(snap, config.Board{}, listed), pickScope{me: state.Party{Session: "me"}, alive: func(state.Party) bool { return true }, listed: listed})
+	if res.Pick == nil || res.Pick.Ref != "o/r#2" || res.Pick.Step != "blocker cleared" {
+		t.Fatalf("pick %+v, want o/r#2 offered as blocker cleared", res.Pick)
+	}
+	// No step offers #1 on its own: it is no candidate, as a Blocked item
+	// without recorded blockers is none; the order says why.
+	if len(res.Skipped) != 0 || len(res.AfterPick) != 0 {
+		t.Errorf("skipped %+v, after the pick %+v, want o/r#1 offered by no step", res.Skipped, res.AfterPick)
+	}
+	want := "held by its Status Blocked / Waiting ⛔️, set 2026-09-29 after its last blocker closed 2026-09-29: it holds until the Status changes"
+	if why := board.Unoffered(snap.Order, snap.Items[0], listed); why != want || skipKind(why) != kindBlocked {
+		t.Errorf("o/r#1 unoffered: %q (%s), want %q (%s)", why, skipKind(why), want, kindBlocked)
+	}
+	// An open blocker skips both, whenever the Status was set.
+	for i := range snap.Items {
+		snap.Items[i].OpenBlockers, snap.Items[i].BlockersClosed = 1, time.Time{}
+	}
+	if res = nextFree(&state.State{}, board.Rank(snap, config.Board{}, listed), pickScope{me: state.Party{Session: "me"}, alive: func(state.Party) bool { return true }, listed: listed}); res.Pick != nil {
+		t.Errorf("blockers open, picked %+v", res.Pick)
+	}
+}
+
 func TestSkipKind(t *testing.T) {
 	for reason, want := range map[string]string{
-		`served by "Worker one" through o/r#100`:         kindServed,
-		"assigned to sam":                                kindAssigned,
-		"3 of 4 blockers open":                           kindBlocked,
-		"no activity since 2026-01-01":                   kindStale,
-		`needs lease agentlab-1, held by "Lab holder"`:   kindLease,
-		"sub-issue of epic o/r#8, in planning (Up Next)": kindPlanning,
+		`served by "Worker one" through o/r#100`: kindServed,
+		"assigned to sam":                        kindAssigned,
+		"3 of 4 blockers open":                   kindBlocked,
+		"held by its Status Blocked, set 2026-10-02 after its last blocker closed 2026-10-01: it holds until the Status changes": kindBlocked,
+		"no activity since 2026-01-01":                                                      kindStale,
+		`needs lease agentlab-1, held by "Lab holder"`:                                      kindLease,
+		"sub-issue of epic o/r#8, in planning (Up Next)":                                    kindPlanning,
 		"epic in planning (Up Next), no plan pull request names it: its planning session's": kindPlanning,
 		"board fields unknown: projectItems: Resource limits for this query exceeded.":      kindUnknown,
 		"sub-issues unknown: issue.subIssues: Resource limits for this query exceeded.":     kindUnknown,

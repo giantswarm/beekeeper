@@ -305,7 +305,9 @@ type BoardStep struct {
 	// any (an epic's remainder) instead of the item, in their order.
 	SubIssues bool `yaml:"subIssues"`
 	// Unblocked offers only items with recorded blockers, all of them
-	// closed: a blocked item whose blocker cleared.
+	// closed, whose Status was set before the last of them closed: a
+	// blocked item whose blocker cleared. A Status set after it holds the
+	// item until it changes.
 	Unblocked bool `yaml:"unblocked"`
 	// CreatedWithin offers only items created within the duration.
 	CreatedWithin Duration `yaml:"createdWithin"`

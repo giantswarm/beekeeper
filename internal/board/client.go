@@ -63,9 +63,16 @@ const issueFields = `fragment I on Issue{number url title state createdAt update
 labels(first:20){nodes{name}} assignees(first:10){nodes{login}} issueDependenciesSummary{blockedBy totalBlockedBy} subIssuesSummary{total completed}
 parent{number repository{nameWithOwner}}}`
 
-// boardFields is what every read takes of a board item.
-const boardFields = `status:fieldValueByName(name:"` + StatusField + `"){...on ProjectV2ItemFieldSingleSelectValue{name}}
+// boardFields is what every read takes of a board item, the Status with
+// when it was set.
+const boardFields = `status:fieldValueByName(name:"` + StatusField + `"){...on ProjectV2ItemFieldSingleSelectValue{name updatedAt}}
 kind:fieldValueByName(name:"` + KindField + `"){...on ProjectV2ItemFieldSingleSelectValue{name}}`
+
+// blockerFields is what a read of the board's items takes of an issue's
+// recorded blockers: when each closed, the last close a blocked item's
+// Status is weighed against (Item.HeldByStatus). An issue with more
+// blockers has its last close unknown.
+const blockerFields = `...on Issue{blockedBy(first:20){nodes{closedAt}}}`
 
 // itemFields is what a move takes of an item: its id, its board and the
 // board fields with the Team.
@@ -102,6 +109,31 @@ type issueJSON struct {
 			NameWithOwner string `json:"nameWithOwner"`
 		} `json:"repository"`
 	} `json:"parent"`
+	// BlockedBy are the recorded blockers, read with blockerFields only.
+	BlockedBy struct {
+		Nodes []struct {
+			ClosedAt *time.Time `json:"closedAt"`
+		} `json:"nodes"`
+	} `json:"blockedBy"`
+}
+
+// blockersClosed is when the last of the recorded blockers closed: zero
+// while one is open, for none, or when not every one was read.
+func (j issueJSON) blockersClosed() time.Time {
+	ns := j.BlockedBy.Nodes
+	if len(ns) == 0 || len(ns) != j.Deps.TotalBlockedBy {
+		return time.Time{}
+	}
+	var last time.Time
+	for _, n := range ns {
+		if n.ClosedAt == nil {
+			return time.Time{}
+		}
+		if n.ClosedAt.After(last) {
+			last = *n.ClosedAt
+		}
+	}
+	return last
 }
 
 // open reports whether j is an open issue; a pull request or a draft has
@@ -112,7 +144,7 @@ func (j issueJSON) item() Item {
 	it := Item{
 		Ref: fmt.Sprintf("%s#%d", j.Repository.NameWithOwner, j.Number), URL: j.URL, Title: j.Title,
 		Created: j.CreatedAt, Updated: j.UpdatedAt, Blockers: j.Deps.TotalBlockedBy, OpenBlockers: j.Deps.BlockedBy, OpenSubIssues: j.Subs.Total - j.Subs.Completed,
-		subIssues: j.Subs.Total,
+		subIssues: j.Subs.Total, BlockersClosed: j.blockersClosed(),
 	}
 	for _, l := range j.Labels.Nodes {
 		it.Labels = append(it.Labels, l.Name)
@@ -363,7 +395,7 @@ func (c *Client) items(ctx context.Context, q string) ([]Item, error) {
 		}
 		err := c.graphql(ctx, &r, `query($o:String!,$n:Int!,$q:String!,$c:String){repositoryOwner(login:$o){...on ProjectV2Owner{projectV2(number:$n){
 items(first:100,after:$c,query:$q){pageInfo{hasNextPage endCursor} nodes{`+boardFields+`
-content{...I}}}}}}}`+issueFields, vs)
+content{...I `+blockerFields+`}}}}}}}`+issueFields, vs)
 		if err != nil {
 			return nil, err
 		}
@@ -1128,12 +1160,15 @@ status:field(name:"` + StatusField + `"){...on ProjectV2SingleSelectField{id opt
 // projectItem is an issue's item on a board; Home is its project as
 // lookup reads it (homeFields), nil from any other read.
 type projectItem struct {
-	ID      string                 `json:"id"`
-	Project struct{ ID string }    `json:"project"`
-	Status  *struct{ Name string } `json:"status"`
-	Kind    *struct{ Name string } `json:"kind"`
-	Team    *struct{ Name string } `json:"team"`
-	Home    *struct {
+	ID      string              `json:"id"`
+	Project struct{ ID string } `json:"project"`
+	Status  *struct {
+		Name      string
+		UpdatedAt time.Time `json:"updatedAt"`
+	} `json:"status"`
+	Kind *struct{ Name string } `json:"kind"`
+	Team *struct{ Name string } `json:"team"`
+	Home *struct {
 		Number int                    `json:"number"`
 		Owner  struct{ Login string } `json:"owner"`
 		Status *field                 `json:"status"`
@@ -1144,7 +1179,7 @@ type projectItem struct {
 func (p projectItem) onto(it *Item) {
 	it.OnBoard = true
 	if p.Status != nil {
-		it.Status = p.Status.Name
+		it.Status, it.StatusSet = p.Status.Name, p.Status.UpdatedAt
 	}
 	if p.Kind != nil {
 		it.Kind = p.Kind.Name
