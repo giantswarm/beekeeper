@@ -811,8 +811,11 @@ func fieldType(plain bool) string {
 // vaultItem is what a vault's item listing says of one item: metadata, no
 // field and no value.
 type vaultItem struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
+	ID        string   `json:"id"`
+	Title     string   `json:"title"`
+	Category  string   `json:"category"`
+	Tags      []string `json:"tags"`
+	UpdatedAt string   `json:"updated_at"`
 }
 
 // vaultItems lists the items of vault, metadata only.

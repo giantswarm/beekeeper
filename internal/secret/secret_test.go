@@ -191,9 +191,19 @@ func TestFingerprintsAreKeyedAndNameNoValue(t *testing.T) {
 func TestOnlyTheSharedVault(t *testing.T) {
 	tools := secrettest.New(map[string]string{otherVaultRef: password})
 	o := ops(tools)
-	if _, err := o.Fingerprints(context.Background(), secret.Ref{Op: otherVaultRef}); err == nil || !strings.Contains(err.Error(), "only the shared vault") {
+	if _, err := o.Fingerprints(context.Background(), secret.Ref{Op: otherVaultRef}); err == nil || !strings.Contains(err.Error(), `reads only the vaults ["Shared"]`) {
 		t.Errorf("another vault = %v", err)
 	}
+	if len(tools.Calls) != 0 {
+		t.Errorf("op ran: %q", tools.Calls)
+	}
+	// a vault of secret.vaults is read like the shared one
+	o.Vaults = []string{"Private"}
+	if ps, err := o.Fingerprints(context.Background(), secret.Ref{Op: otherVaultRef}); err != nil || len(ps) != 1 {
+		t.Errorf("a configured vault = %v, %v", ps, err)
+	}
+	tools.Calls = nil
+	o.Vaults = nil
 	o.Token = ""
 	if _, err := o.Fingerprints(context.Background(), secret.Ref{Op: vaultRef}); err == nil || !strings.Contains(err.Error(), "secret.tokenFile") {
 		t.Errorf("no service account = %v", err)
