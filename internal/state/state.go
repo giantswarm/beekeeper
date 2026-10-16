@@ -624,6 +624,10 @@ type App struct {
 	// Delete says the person asked for the App's deletion: the hook answers
 	// its Advanced page's Delete GitHub App and the confirmation.
 	Delete bool `json:"delete,omitempty"`
+	// Google says the App is a Google OAuth client of the person's: the
+	// hook answers its consent on Google's sign-in, by the callback hosts
+	// the person named.
+	Google bool `json:"google,omitempty"`
 	// Declared is where the organisation declares the App:
 	// <repo>@<commit>:<manifest path>, or the local manifest of a deletion.
 	Declared string `json:"declared"`

@@ -61,28 +61,28 @@ func TestConsent(t *testing.T) {
 		decision string
 		reason   string
 	}{
-		"own App and host":                 {Page{ownPage, ownTitle}, recorded, Allow, "the person's own App " + ownApp + " (callback " + ownCallback + "), declared in " + ownDeclared + ", on record since 2026-10-10 by the guide: your agent has to do this"},
-		"own App, its other declared host": {Page{strings.Replace(ownPage, ownCallback, ownCallback+"%3A8443", 1), ownTitle}, recorded, Allow, "(callback " + ownCallback + ":8443), declared in"},
-		"own App, the id redacted":         {Page{redactedPage, ownTitle}, recorded, Allow, "the person's own App " + ownApp},
-		"own App by id, title unknown":     {Page{ownPage, ""}, recorded, Allow, ownApp},
-		"other App":                        {Page{otherAppPage, otherTitle}, recorded, Deny, `GitHub's consent page of client id Iv1.ffffffffffffffff (callback ` + ownCallback + `) names an App beekeeper has no record of`},
-		"other App, the id redacted":       {Page{redactedPage, otherTitle}, recorded, Deny, `GitHub's consent page "` + otherTitle + `" (callback ` + ownCallback + `)`},
-		"other callback host":              {Page{otherCallbackPage, ownTitle}, recorded, Deny, "(callback example.org)"},
-		"no record at all":                 {Page{ownPage, ownTitle}, []App{}, Deny, AllowForm},
-		"other page":                       {Page{applicationsPage, applicationsTitle}, recorded, "", ""},
-		"the portal":                       {Page{"https://portal.example.org/agents", "Agents"}, recorded, "", ""},
-		"lab Dex sign-in":                  {Page{labDexPage, "Log in to agentlab"}, recorded, Allow, "dex.127.0.0.1.nip.io is the lab's own identity provider on a loopback host"},
-		"lab Dex approval on localhost":    {Page{"https://localhost:32000/dex/approval?req=abc", grantAccess}, nil, Allow, "localhost:32000 is the lab's own identity provider"},
-		"lab portal sign-in":               {Page{"https://" + ownCallback + "/connect/github", "Connect"}, nil, Allow, "loopback host"},
-		"Dex on another host":              {Page{"https://dex.example.org/dex/approval?req=abc", grantAccess}, recorded, Deny, `"` + grantAccess + `" is a consent page (an OAuth grant) on dex.example.org`},
-		"a consent on a LAN host":          {Page{lanConsentPage, grantAccess}, recorded, Deny, "on 192.168.1.20:5556, neither GitHub's consent page of an App on record"},
-		"a consent path, no title":         {Page{"https://idp.example.org/oauth2/consent?challenge=c", ""}, recorded, Deny, "/oauth2/consent is a consent page"},
-		"a grant title on any path":        {Page{"https://apps.example.org/connect", "Authorize example-tool"}, recorded, Deny, AllowForm},
-		"another GitHub's consent page":    {Page{"https://github.example.org/login/oauth/authorize?client_id=x&redirect_uri=https%3A%2F%2Fexample.org", ""}, recorded, Deny, "on github.example.org"},
-		"an IdP's authorization page":      {Page{authorizePage, idpSignIn}, recorded, Deny, "on login.example.org"},
-		"Dex's sign-in on another host":    {Page{dexAuthPage, dexSignIn}, recorded, Deny, "on dex.example.org"},
-		"a lab page that is no sign-in":    {Page{"https://backstage.127.0.0.1.nip.io/catalog", "Catalog"}, recorded, "", ""},
-		"no URL":                           {Page{"", ""}, recorded, "", ""},
+		"own App and host":                 {Page{URL: ownPage, Title: ownTitle}, recorded, Allow, "the person's own App " + ownApp + " (callback " + ownCallback + "), declared in " + ownDeclared + ", on record since 2026-10-10 by the guide: your agent has to do this"},
+		"own App, its other declared host": {Page{URL: strings.Replace(ownPage, ownCallback, ownCallback+"%3A8443", 1), Title: ownTitle}, recorded, Allow, "(callback " + ownCallback + ":8443), declared in"},
+		"own App, the id redacted":         {Page{URL: redactedPage, Title: ownTitle}, recorded, Allow, "the person's own App " + ownApp},
+		"own App by id, title unknown":     {Page{URL: ownPage, Title: ""}, recorded, Allow, ownApp},
+		"other App":                        {Page{URL: otherAppPage, Title: otherTitle}, recorded, Deny, `GitHub's consent page of client id Iv1.ffffffffffffffff (callback ` + ownCallback + `) names an App beekeeper has no record of`},
+		"other App, the id redacted":       {Page{URL: redactedPage, Title: otherTitle}, recorded, Deny, `GitHub's consent page "` + otherTitle + `" (callback ` + ownCallback + `)`},
+		"other callback host":              {Page{URL: otherCallbackPage, Title: ownTitle}, recorded, Deny, "(callback example.org)"},
+		"no record at all":                 {Page{URL: ownPage, Title: ownTitle}, []App{}, Deny, AllowForm},
+		"other page":                       {Page{URL: applicationsPage, Title: applicationsTitle}, recorded, "", ""},
+		"the portal":                       {Page{URL: "https://portal.example.org/agents", Title: "Agents"}, recorded, "", ""},
+		"lab Dex sign-in":                  {Page{URL: labDexPage, Title: "Log in to agentlab"}, recorded, Allow, "dex.127.0.0.1.nip.io is the lab's own identity provider on a loopback host"},
+		"lab Dex approval on localhost":    {Page{URL: "https://localhost:32000/dex/approval?req=abc", Title: grantAccess}, nil, Allow, "localhost:32000 is the lab's own identity provider"},
+		"lab portal sign-in":               {Page{URL: "https://" + ownCallback + "/connect/github", Title: "Connect"}, nil, Allow, "loopback host"},
+		"Dex on another host":              {Page{URL: "https://dex.example.org/dex/approval?req=abc", Title: grantAccess}, recorded, Deny, `"` + grantAccess + `" is a consent page (an OAuth grant) on dex.example.org`},
+		"a consent on a LAN host":          {Page{URL: lanConsentPage, Title: grantAccess}, recorded, Deny, "on 192.168.1.20:5556, neither the consent page of an App on record"},
+		"a consent path, no title":         {Page{URL: "https://idp.example.org/oauth2/consent?challenge=c", Title: ""}, recorded, Deny, "/oauth2/consent is a consent page"},
+		"a grant title on any path":        {Page{URL: "https://apps.example.org/connect", Title: "Authorize example-tool"}, recorded, Deny, AllowForm},
+		"another GitHub's consent page":    {Page{URL: "https://github.example.org/login/oauth/authorize?client_id=x&redirect_uri=https%3A%2F%2Fexample.org", Title: ""}, recorded, Deny, "on github.example.org"},
+		"an IdP's authorization page":      {Page{URL: authorizePage, Title: idpSignIn}, recorded, Deny, "on login.example.org"},
+		"Dex's sign-in on another host":    {Page{URL: dexAuthPage, Title: dexSignIn}, recorded, Deny, "on dex.example.org"},
+		"a lab page that is no sign-in":    {Page{URL: "https://backstage.127.0.0.1.nip.io/catalog", Title: "Catalog"}, recorded, "", ""},
+		"no URL":                           {Page{URL: "", Title: ""}, recorded, "", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := Click(tc.apps, tc.page, clicksAuthorize)
@@ -102,14 +102,14 @@ func TestConsentElsewhereByWords(t *testing.T) {
 		words    string
 		decision string
 	}{
-		"the SSO button on Dex's sign-in":     {Page{dexAuthPage, dexSignIn}, "Clicks Log in with GitHub", ""},
-		"an account on an IdP's sign-in":      {Page{authorizePage, idpSignIn}, "Clicks the account tile", ""},
-		"a click without words on a sign-in":  {Page{authorizePage, idpSignIn}, "", ""},
-		"Accept on an IdP's authorization":    {Page{authorizePage, idpSignIn}, "Clicks Accept", Deny},
-		"Allow on Dex's sign-in":              {Page{dexAuthPage, dexSignIn}, "Clicks Allow", Deny},
-		"a click without words on a consent":  {Page{lanConsentPage, grantAccess}, "", Deny},
-		"Cancel on a consent":                 {Page{lanConsentPage, grantAccess}, "Clicks Cancel", Deny},
-		"a portal page with a client_id only": {Page{"https://portal.example.org/settings?client_id=x", "Settings"}, "Clicks Allow", ""},
+		"the SSO button on Dex's sign-in":     {Page{URL: dexAuthPage, Title: dexSignIn}, "Clicks Log in with GitHub", ""},
+		"an account on an IdP's sign-in":      {Page{URL: authorizePage, Title: idpSignIn}, "Clicks the account tile", ""},
+		"a click without words on a sign-in":  {Page{URL: authorizePage, Title: idpSignIn}, "", ""},
+		"Accept on an IdP's authorization":    {Page{URL: authorizePage, Title: idpSignIn}, "Clicks Accept", Deny},
+		"Allow on Dex's sign-in":              {Page{URL: dexAuthPage, Title: dexSignIn}, "Clicks Allow", Deny},
+		"a click without words on a consent":  {Page{URL: lanConsentPage, Title: grantAccess}, "", Deny},
+		"Cancel on a consent":                 {Page{URL: lanConsentPage, Title: grantAccess}, "Clicks Cancel", Deny},
+		"a portal page with a client_id only": {Page{URL: "https://portal.example.org/settings?client_id=x", Title: "Settings"}, "Clicks Allow", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if d := Click(recorded, tc.page, tc.words); d.Decision != tc.decision {
@@ -131,11 +131,11 @@ func resultLine(content string) string {
 func transcriptWith(t *testing.T, page Page, asJSON bool) string {
 	t.Helper()
 	ctx := func(p Page) string {
-		return `Tab Context: - Available tabs:   • tabId 7: "` + p.Title + `" ("` + p.URL + `")`
+		return "\n\nTab Context:\n- Available tabs:\n  • tabId 7: \"" + p.Title + `" ("` + p.URL + `")`
 	}
 	lines := []string{
 		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t","name":"mcp__claude-in-chrome__navigate","input":{"url":"https://example.org/"}}]}}`,
-		resultLine(strconv.Quote("[navigate] Navigated to https://example.org/ " + ctx(Page{"https://example.org/", "Example"}))),
+		resultLine(strconv.Quote("[navigate] Navigated to https://example.org/ " + ctx(Page{URL: "https://example.org/", Title: "Example"}))),
 		`{"type":"user","message":{"content":"plain text"}}`,
 		"no json here",
 		resultLine(`[{"type":"text","text":` + strconv.Quote("Successfully captured screenshot "+ctx(page)) + `},{"type":"image"}]`),
@@ -178,11 +178,11 @@ func batchAction(name string, in map[string]any) map[string]any {
 // record to decide from.
 func TestConsentDecision(t *testing.T) {
 	apps := func() []App { return recorded }
-	own := transcriptWith(t, Page{redactedPage, ownTitle}, false)
-	ownJSON := transcriptWith(t, Page{redactedPage, ownTitle}, true)
-	other := transcriptWith(t, Page{redactedPage, otherTitle}, false)
-	plain := transcriptWith(t, Page{applicationsPage, applicationsTitle}, false)
-	lan := transcriptWith(t, Page{lanConsentPage, grantAccess}, false)
+	own := transcriptWith(t, Page{URL: redactedPage, Title: ownTitle}, false)
+	ownJSON := transcriptWith(t, Page{URL: redactedPage, Title: ownTitle}, true)
+	other := transcriptWith(t, Page{URL: redactedPage, Title: otherTitle}, false)
+	plain := transcriptWith(t, Page{URL: applicationsPage, Title: applicationsTitle}, false)
+	lan := transcriptWith(t, Page{URL: lanConsentPage, Title: grantAccess}, false)
 	click := tabInput(leftClick, map[string]any{"ref": "ref_45", "action_summary": clicksAuthorize})
 	screenshot := tabInput("screenshot", nil)
 	batch := map[string]any{"actions": []any{batchAction(chromeComputer, screenshot), batchAction(chromeComputer, tabInput(leftClick, nil))}}
@@ -215,7 +215,7 @@ func TestConsentDecision(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			ev := toolEvent(tc.tool, tc.input)
-			ev["permission_mode"] = "dontAsk"
+			ev["permission_mode"] = dontAsk
 			ev[sessionKey] = browseTurn
 			ev["transcript_path"] = tc.transcript
 			d := decideEvent(t, Hook{Apps: tc.apps}, ev)
@@ -234,7 +234,7 @@ func TestConsentDecision(t *testing.T) {
 // A transcript longer than the tail read keeps the latest page: the tail's
 // cut first line decodes as nothing, the rest reads as usual.
 func TestLastPageReadsTheTail(t *testing.T) {
-	path := transcriptWith(t, Page{redactedPage, ownTitle}, false)
+	path := transcriptWith(t, Page{URL: redactedPage, Title: ownTitle}, false)
 	b, err := os.ReadFile(path) //nolint:gosec // the test's own file
 	if err != nil {
 		t.Fatal(err)

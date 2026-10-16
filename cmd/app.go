@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/url"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -66,7 +67,15 @@ refused on the permissions page of any other App and for any other call
 there, naming this record's form. A sign-in or consent page of the lab's
 own identity provider on a loopback host (*.127.0.0.1.nip.io, localhost) is
 allowed without a record: a fixture user's sign-in there is the person's
-own lab's. A consent page on any other host (a path or title that names a
+own lab's. A Google OAuth client the person owns and asked a consent for is
+recorded with --google --callback <host>, on the person's word alone: on
+Google's sign-in (accounts.google.com) the hook follows the tab's flow to
+the callback host of its authorization request (the account chooser's
+redirect_uri; the pages after it carry only a redacted client id), and
+answers the clicks of that flow (the account, "Sign in to <app>"'s
+Continue, the consent of scopes) for a recorded callback host, refusing
+Google's consent pages of a flow for any other host, a third party's. A
+consent page on any other host (a path or title that names a
 consent or a grant, or an OAuth authorization page where the call's own
 words name one) is refused, not left to the browse turn's classifier. An App's creation, installation and deletion are grants too: the
 hook allows GitHub's "Create GitHub App" on the manifest page while a
@@ -84,6 +93,7 @@ Without a subcommand, lists the Apps on record.`,
 	}
 	var rec state.App
 	var permission, manifest string
+	var hosts []string
 	allow := &cobra.Command{
 		Use:   "allow <name>",
 		Short: "Record an App the organisation declares and the person asked a consent, or one permission change, for, on their word",
@@ -107,6 +117,11 @@ replaced:
   manifest of app create --manifest declares the App instead of apps.repo.
   An App beekeeper app create created and stored no credentials of is
   deletable without a record (beekeeper's ledger, app list).
+  --google --callback <host>: a consent on Google's sign-in for the
+  person's own Google OAuth client, whose redirect goes to <host>
+  (repeatable; a URL's host is taken). No repository declares such a
+  client: the record is the person's word alone. --client-id, when given,
+  must match where Google's URL carries it unredacted.
 
 Any of them, with --word, the person's words that asked for it.`,
 		Args: cobra.ExactArgs(1),
@@ -120,30 +135,13 @@ Any of them, with --word, the person's words that asked for it.`,
 			case rec.Word == "":
 				return usageErr("--word: the person's words that asked for the grant")
 			}
-			if rec.Permission, err = permissionChange(permission); err != nil {
-				return err
-			}
-			if manifest != "" && (rec.ClientID != "" || rec.Permission != "" || !rec.Delete) {
-				return usageErr("--manifest declares an App for --delete alone: a consent or a permission change is of an App apps.repo declares")
-			}
-			if rec.ClientID == "" && rec.Permission == "" && !rec.Delete {
-				return usageErr("--client-id <id> for a consent (the OAuth client id the App's consent URL carries), --permission \"<scope>: <level>\" for one permission change, " +
-					"--delete for the App's deletion, or several")
-			}
-			if manifest != "" {
-				err = a.declaredLocally(manifest, &rec)
+			if rec.Google {
+				err = googleClient(&rec, hosts, permission, manifest)
 			} else {
-				err = a.declared(c.Context(), &rec)
+				err = a.githubApp(c.Context(), &rec, hosts, permission, manifest)
 			}
 			if err != nil {
 				return err
-			}
-			if rec.ClientID != "" && len(rec.Callbacks) == 0 {
-				return refused("App %s has no consent page to record: %s declares no callback URL (an App used through the device flow has none); "+
-					"a change of its permissions is recorded with --permission \"<scope>: <level>\"", rec.Name, rec.Declared)
-			}
-			if rec.ClientID == "" {
-				rec.Callbacks = nil
 			}
 			me, err := a.caller()
 			if err != nil {
@@ -159,7 +157,9 @@ Any of them, with --word, the person's words that asked for it.`,
 				return err
 			}
 			var answers []string
-			if len(rec.Callbacks) > 0 {
+			if rec.Google {
+				answers = append(answers, "its consent on Google's sign-in with callback "+strings.Join(rec.Callbacks, " or "))
+			} else if len(rec.Callbacks) > 0 {
 				answers = append(answers, "its consent page with callback "+strings.Join(rec.Callbacks, " or "))
 			}
 			if rec.Permission != "" {
@@ -181,6 +181,8 @@ Any of them, with --word, the person's words that asked for it.`,
 	allow.Flags().BoolVar(&rec.Delete, "delete", false, "the App's deletion: its Advanced page's Delete GitHub App and GitHub's confirmation")
 	allow.Flags().StringVar(&manifest, "manifest", "", "with --delete, the local App manifest (app create --manifest) that declares the App")
 	allow.Flags().StringVar(&rec.Word, "word", "", "the person's words that asked for the grant")
+	allow.Flags().BoolVar(&rec.Google, "google", false, "a consent on Google's sign-in: the person's own Google OAuth client, by --callback")
+	allow.Flags().StringArrayVar(&hosts, "callback", nil, "with --google, a callback host (or URL) of the client's redirect (repeatable)")
 	revoke := &cobra.Command{
 		Use:   "revoke <name>",
 		Short: "Take an App off the record: its consent page is refused again",
@@ -259,6 +261,71 @@ credentials were stored nowhere). check decides from the same.`,
 	return c
 }
 
+// githubApp fills rec, a GitHub App's record, from its flags and its
+// declaration: a consent, a permission change or a deletion.
+func (a *app) githubApp(ctx context.Context, rec *state.App, hosts []string, permission, manifest string) error {
+	var err error
+	if len(hosts) > 0 {
+		return usageErr("--callback names a Google OAuth client's callback hosts, with --google: a GitHub App's are its manifest's")
+	}
+	if rec.Permission, err = permissionChange(permission); err != nil {
+		return err
+	}
+	if manifest != "" && (rec.ClientID != "" || rec.Permission != "" || !rec.Delete) {
+		return usageErr("--manifest declares an App for --delete alone: a consent or a permission change is of an App apps.repo declares")
+	}
+	if rec.ClientID == "" && rec.Permission == "" && !rec.Delete {
+		return usageErr("--client-id <id> for a consent (the OAuth client id the App's consent URL carries), --permission \"<scope>: <level>\" for one permission change, " +
+			"--delete for the App's deletion, --google --callback <host> for a Google OAuth client's consent, or several")
+	}
+	if manifest != "" {
+		err = a.declaredLocally(manifest, rec)
+	} else {
+		err = a.declared(ctx, rec)
+	}
+	if err != nil {
+		return err
+	}
+	if rec.ClientID != "" && len(rec.Callbacks) == 0 {
+		return refused("App %s has no consent page to record: %s declares no callback URL (an App used through the device flow has none); "+
+			"a change of its permissions is recorded with --permission \"<scope>: <level>\"", rec.Name, rec.Declared)
+	}
+	if rec.ClientID == "" {
+		rec.Callbacks = nil
+	}
+	return nil
+}
+
+// googleDeclared is the declaration of a Google OAuth client on record: no
+// repository declares one, the person's word does.
+const googleDeclared = "the person's word (a Google OAuth client)"
+
+// googleClient fills rec, a Google OAuth client's record, from its flags:
+// its consent, by the callback hosts named.
+func googleClient(rec *state.App, hosts []string, permission, manifest string) error {
+	if permission != "" || rec.Delete || manifest != "" {
+		return usageErr("--google records a consent on Google's sign-in alone: --permission, --delete and --manifest are a GitHub App's")
+	}
+	rec.Callbacks = nil
+	for _, h := range hosts {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if u, err := url.Parse(h); err == nil && u.Host != "" {
+			h = u.Host
+		}
+		if h == "" || strings.ContainsAny(h, "/?# ") {
+			return usageErr("--callback names a callback host (or a URL), not %q", h)
+		}
+		if !slices.Contains(rec.Callbacks, h) {
+			rec.Callbacks = append(rec.Callbacks, h)
+		}
+	}
+	if len(rec.Callbacks) == 0 {
+		return usageErr("--google needs --callback <host>: the host the client's redirect_uri goes to")
+	}
+	rec.Declared = googleDeclared
+	return nil
+}
+
 // permissionChange reads --permission: one change as "<scope>: <level>",
 // both named, answered as "<scope>: <level>"; "" for none.
 func permissionChange(flag string) (string, error) {
@@ -278,8 +345,14 @@ func permissionChange(flag string) (string, error) {
 // a consent, its permission change, and where the App is declared.
 func recordParts(x state.App) []string {
 	var parts []string
+	if x.Google {
+		parts = append(parts, "Google")
+	}
 	if x.ClientID != "" {
-		parts = append(parts, "client id "+x.ClientID, "callbacks "+strings.Join(x.Callbacks, " "))
+		parts = append(parts, "client id "+x.ClientID)
+	}
+	if len(x.Callbacks) > 0 {
+		parts = append(parts, "callbacks "+strings.Join(x.Callbacks, " "))
 	}
 	if x.Permission != "" {
 		parts = append(parts, "permission "+x.Permission)
@@ -384,7 +457,7 @@ func guardApps(apps []state.App) []guard.App {
 	out := make([]guard.App, 0, len(apps))
 	for _, x := range apps {
 		out = append(out, guard.App{Name: x.Name, ClientID: x.ClientID, Callbacks: x.Callbacks, Org: x.Org, Permission: x.Permission,
-			Delete: x.Delete, Declared: x.Declared, Word: x.Word, By: x.By.Name, At: x.At})
+			Delete: x.Delete, Google: x.Google, Declared: x.Declared, Word: x.Word, By: x.By.Name, At: x.At})
 	}
 	return out
 }
