@@ -115,7 +115,7 @@ func Exec(ctx context.Context, dir string, env []string, stdin io.Reader, name s
 }
 
 // Ref names a value or a set of values: an op:// field of the shared
-// vault, a key of a Kubernetes Secret as a source (k8s://<context>/
+// vault (with #<KEY> one KEY=VALUE line of an env-style field), a key of a Kubernetes Secret as a source (k8s://<context>/
 // <namespace>/<name>/<key>, Path then one value inside the document the
 // key holds), a SOPS file, or one path in a SOPS file (file#a.b.c, sops://
 // in front optional).
@@ -132,6 +132,9 @@ func ParseRef(s string) (Ref, error) {
 		parts := strings.Split(strings.TrimPrefix(s, guard.OpRef), "/")
 		if len(parts) < 3 || slicesHasEmpty(parts) {
 			return Ref{}, fmt.Errorf("%q: an op reference is op://<vault>/<item>/<field>", s)
+		}
+		if field, key := splitEnvKey(s); field != s && !envKeyName.MatchString(key) {
+			return Ref{}, fmt.Errorf("%q: one line of an env-style field is op://<vault>/<item>/<field>#<KEY>", s)
 		}
 		return Ref{Op: s}, nil
 	}
@@ -185,6 +188,9 @@ func (r Ref) vault() string {
 // checkVault refuses an op:// reference outside the shared vault, with
 // [ErrVault] when the vault is not configured.
 func (o *Ops) checkVault(r Ref) error {
+	if _, key := splitEnvKey(r.Op); key != "" {
+		return fmt.Errorf("%s: one line of an env-style field is a source only: beekeeper writes whole fields", r.Op)
+	}
 	err := o.checkVaultIn(r, o.Vault)
 	if err != nil && !errors.Is(err, ErrVault) {
 		return fmt.Errorf("%s: beekeeper reads only the shared vault %q", r.Op, o.Vault)
@@ -259,16 +265,21 @@ func (o *Ops) values(ctx context.Context, r Ref) (map[string]string, error) {
 	return map[string]string{r.String(): v}, nil
 }
 
-// readOp reads the op:// field ref, whose vault the caller checked.
+// readOp reads the op:// field ref, whose vault the caller checked, or with
+// #<KEY> after the field the value of that line of the env-style field.
 func (o *Ops) readOp(ctx context.Context, ref string) (string, error) {
+	field, key := splitEnvKey(ref)
 	ctx, cancel := context.WithTimeout(ctx, opTimeout)
 	defer cancel()
-	out, err := o.op(ctx, nil, "read", "--no-newline", ref)
+	out, err := o.op(ctx, nil, "read", "--no-newline", field)
 	if ctx.Err() != nil {
 		return "", fmt.Errorf("%w: %s: op answered nothing in %s", ErrVault, ref, opTimeout)
 	}
 	if err != nil {
 		return "", fmt.Errorf("%w: %s: %w", ErrVault, ref, err)
+	}
+	if key != "" {
+		return envValue(string(out), field, key)
 	}
 	return string(out), nil
 }
