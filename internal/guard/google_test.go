@@ -16,8 +16,8 @@ import (
 // it a redacted client id only, a sign-in challenge the request in its
 // continue URL.
 const (
-	googleName      = "example-portal"
-	googleHostCB = "portal.example.org"
+	googleName     = "example-portal"
+	googleHostCB   = "portal.example.org"
 	googleClientID = "1234-abc.apps.googleusercontent.com"
 	googleTitle    = "Sign in - Google Accounts"
 	chooserPage    = "https://accounts.google.com/v3/signin/accountchooser?client_id=REDACTED&redirect_uri=https%3A%2F%2F" + googleHostCB +
