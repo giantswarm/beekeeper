@@ -25,6 +25,22 @@ curl -fsSL -o "$dir/beekeeper" https://github.com/giantswarm/beekeeper/releases/
 chmod +x "$dir/beekeeper"
 ```
 
+Release assets are signed keyless by the CircleCI pipeline, not by a GitHub workflow, and each is
+published next to its Sigstore bundle (`<asset>.bundle`). Verify a download with the CircleCI
+identity and issuer; a `github.com/giantswarm` identity or the GitHub Actions issuer fails with an
+identity mismatch:
+
+```bash
+curl -fsSL -o "$dir/beekeeper.bundle" https://github.com/giantswarm/beekeeper/releases/latest/download/beekeeper-linux-amd64.bundle
+cosign verify-blob --bundle "$dir/beekeeper.bundle" \
+  --certificate-identity-regexp '^https://circleci\.com/api/v2/projects/[0-9a-f-]+/pipeline-definitions/[0-9a-f-]+$' \
+  --certificate-oidc-issuer https://oidc.circleci.com \
+  "$dir/beekeeper"
+```
+
+The certificate's SAN is `https://circleci.com/api/v2/projects/<project-id>/pipeline-definitions/<definition-id>`
+and its issuer `https://oidc.circleci.com`.
+
 Then put it in place for your user, after a look at what it would do:
 
 ```bash
