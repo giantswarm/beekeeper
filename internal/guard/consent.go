@@ -21,7 +21,9 @@ import (
 // declared callback hosts, the click is allowed; on
 // GitHub's consent page of any other App or callback host it is refused; on
 // the lab's own identity provider, a loopback host, a fixture user's sign-in
-// and consent are allowed; a consent page on any other host is refused, so
+// and consent are allowed; on Google's sign-in, the consent of a Google App
+// on record, by the callback host of the tab's flow, is allowed and any
+// other's refused (google.go); a consent page on any other host is refused, so
 // no grant elsewhere is left to the browse turn's classifier. A change of an
 // App's permissions is decided the same way from the record of the one
 // change the person asked for (appchange.go), an App's creation,
@@ -48,6 +50,9 @@ type App struct {
 	Permission string
 	// Delete says the person asked for the App's deletion (applife.go).
 	Delete bool
+	// Google says the App is a Google OAuth client whose consent is on
+	// Google's sign-in (google.go), not a GitHub App.
+	Google bool
 	// Run is the running `beekeeper app create` of the App whose listener
 	// answers, nil for none; Created is beekeeper's ledger entry of the App
 	// it created, nil for none (applife.go).
@@ -61,9 +66,11 @@ type App struct {
 	At       time.Time
 }
 
-// Page is a tab's page: its URL and title.
+// Page is a tab's page: its URL and title, and on Google's sign-in the
+// callback host of the OAuth flow the tab's earlier pages there named.
 type Page struct {
 	URL, Title string
+	Flow       string
 }
 
 // Decision is the hook's answer for a call acting on a page: Allow, Deny or
@@ -147,15 +154,27 @@ func Click(apps []App, page Page, words string) Decision {
 			return d
 		}
 		return permissionClick(apps, u, page.Title, words)
+	case host == googleHost:
+		return googleClick(apps, u, page, words)
 	case loopback(host) && signIn(u.Path):
 		return Decision{Allow, fmt.Sprintf("beekeeper allows it: %s is the lab's own identity provider on a loopback host, "+
 			"whose fixture users' sign-in and consent are the person's own lab's", u.Host)}
-	case !loopback(host) && consentElsewhere(u, page.Title, words):
-		return Decision{Deny, fmt.Sprintf("Refused: %s is a consent page (an OAuth grant) on %s, neither GitHub's consent page of an App on record "+
-			"nor the lab's own identity provider on a loopback host. A consent is answered only for an App the person owns and asked for, "+
-			"which %s records on their word; every other grant stays refused.", consentWhich(u, page.Title), u.Host, AllowForm)}
+	case !loopback(host):
+		return elsewhere(u, page.Title, words)
 	}
 	return Decision{}
+}
+
+// elsewhere decides a call in words on a page at u on a host no record
+// covers: refused on a consent page, no decision on any other.
+func elsewhere(u *url.URL, title, words string) Decision {
+	if !consentElsewhere(u, title, words) {
+		return Decision{}
+	}
+	return Decision{Deny, fmt.Sprintf("Refused: %s is a consent page (an OAuth grant) on %s, neither the consent page of an App on record "+
+		"nor the lab's own identity provider on a loopback host. A consent is answered only for an App the person owns and asked for, "+
+		"which %s (a GitHub App) or %s (a Google OAuth client) records on their word; every other grant stays refused.",
+		consentWhich(u, title), u.Host, AllowForm, GoogleForm)}
 }
 
 // consentElsewhere reports whether a call in words acts on a consent page:
@@ -190,7 +209,7 @@ func githubConsent(apps []App, u *url.URL, title string) Decision {
 		callback = strings.ToLower(r.Host)
 	}
 	for _, a := range apps {
-		if !slices.Contains(a.Callbacks, callback) {
+		if a.Google || !slices.Contains(a.Callbacks, callback) {
 			continue
 		}
 		if (clientID != "" && clientID == a.ClientID) || (clientID == chromeRedacted && strings.EqualFold(title, authorizeTitle+a.Name)) {
@@ -362,15 +381,27 @@ func lastPage(transcript, tab string) (Page, bool) {
 }
 
 // lastPages are the pages of the tabs as the transcript last showed them,
-// by tabId; none for a transcript that cannot be read.
+// by tabId; none for a transcript that cannot be read. A page on Google's
+// sign-in carries the callback host of the flow the tab's pages there
+// named since it came to that host.
 func lastPages(transcript string) map[string]Page {
-	pages := map[string]Page{}
+	pages, flows := map[string]Page{}, map[string]string{}
+	seen := func(tab string, p Page) {
+		u, err := url.Parse(p.URL)
+		if err != nil || !strings.EqualFold(u.Hostname(), googleHost) {
+			delete(flows, tab)
+		} else if cb := GoogleCallback(u); cb != "" {
+			flows[tab] = cb
+		}
+		p.Flow = flows[tab]
+		pages[tab] = p
+	}
 	scanResults(transcript, func(text string) {
 		for _, m := range tabLine.FindAllStringSubmatch(text, -1) {
-			pages[m[1]] = Page{URL: m[3], Title: m[2]}
+			seen(m[1], Page{URL: m[3], Title: m[2]})
 		}
 		for _, m := range tabJSON.FindAllStringSubmatch(text, -1) {
-			pages[m[1]] = Page{URL: unquote(m[3]), Title: unquote(m[2])}
+			seen(m[1], Page{URL: unquote(m[3]), Title: unquote(m[2])})
 		}
 	})
 	return pages

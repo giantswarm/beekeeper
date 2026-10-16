@@ -953,3 +953,27 @@ func TestReadFindingsTabs(t *testing.T) {
 		t.Errorf("all closed: %v, %q", err, f.lines("steps", "", nil, false))
 	}
 }
+
+// A turn whose steps name a Google OAuth client on record, by its callback
+// host, runs with its auto mode rule, its prompt names the clicks of
+// Google's sign-in for that callback, and the line below the report names
+// the record.
+func TestBrowseGoogleConsent(t *testing.T) {
+	g := []guard.App{{Name: "example-portal", Google: true, Callbacks: []string{"portal.example.org"}, Declared: googleDeclared, Word: personsWord, By: agentOne}}
+	consents := appsNamed(g, "Open https://portal.example.org/ and sign in with Google.")
+	if len(consents) != 1 {
+		t.Fatalf("appsNamed = %+v", consents)
+	}
+	if rules := browseRules("", consents, false); len(rules) != 1 || rules[0] != googleConsentRule(g[0]) ||
+		!strings.Contains(rules[0], "Own Google App Consent") || !strings.Contains(rules[0], "callback host portal.example.org") {
+		t.Errorf("browseRules = %q", rules)
+	}
+	if p := browsePrompt("steps", "", consents, false, nil); !strings.Contains(p, "The person's own Google OAuth client example-portal is on record (callback portal.example.org)") ||
+		strings.Contains(p, "GitHub's page 'Authorize") {
+		t.Errorf("browsePrompt = %q", p)
+	}
+	if l := (browseFindings{}).lines("steps", "", consents, false); len(l) != 1 ||
+		!strings.HasPrefix(l[0], "allowed consent: example-portal (Google, callback portal.example.org, "+googleDeclared+")") {
+		t.Errorf("lines = %q", l)
+	}
+}
