@@ -51,19 +51,24 @@ func ungatedProcess(t *proc.Table, p *proc.Process) bool {
 
 // isTest reports whether p belongs to a Go test run: a test binary (cmd.test,
 // any *.test) or an executable under a test's temporary directory
-// (/tmp/Test…), the fake devctl a test of the gate runs.
+// (/tmp/Test…), the fake devctl a test of the gate runs. The executable is
+// the first argument, or the second for a script its interpreter runs
+// (sh /tmp/Test…/devctl).
 func isTest(p *proc.Process) bool {
 	if strings.HasSuffix(p.Comm, ".test") {
 		return true
 	}
-	if len(p.Args) == 0 {
-		return false
-	}
-	if strings.HasSuffix(filepath.Base(p.Args[0]), ".test") {
+	return slices.ContainsFunc(p.Args[:min(len(p.Args), 2)], testExecutable)
+}
+
+// testExecutable reports whether path is a Go test binary or lies under a
+// test's temporary directory.
+func testExecutable(path string) bool {
+	if strings.HasSuffix(filepath.Base(path), ".test") {
 		return true
 	}
 	for _, root := range []string{os.TempDir(), "/tmp"} {
-		if rel, err := filepath.Rel(root, p.Args[0]); err == nil && strings.HasPrefix(rel, "Test") {
+		if rel, err := filepath.Rel(root, path); err == nil && strings.HasPrefix(rel, "Test") {
 			return true
 		}
 	}

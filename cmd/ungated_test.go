@@ -21,7 +21,7 @@ import (
 // merge (21), the devctl commands the gate does not run: the gate's own
 // dry run (31), a --team promotion (41) and a pr wait (42), and a test run's
 // fake devctl merges: under its cmd.test merge-child (51), under a
-// watch.test (53) and a reparented one under /tmp/Test… (54).
+// watch.test (53) and a reparented script its shell runs from /tmp/Test… (54).
 func ungatedTable() *proc.Table {
 	p := func(pid, ppid int, comm string, args ...string) *proc.Process {
 		return &proc.Process{PID: pid, PPID: ppid, Comm: comm, Args: args, Start: time.Now().Add(-time.Hour), StartTicks: int64(pid) * 100}
@@ -45,7 +45,7 @@ func ungatedTable() *proc.Table {
 		p(51, 50, merge.Tool, "/tmp/TestGate1/001/devctl", "pr", "merge", "o/r", "5"),
 		p(52, 10, "watch.test", "/tmp/go-build2/b002/watch.test"),
 		p(53, 52, merge.Tool, "devctl", "pr", "merge", "o/r", "6"),
-		p(54, 1, merge.Tool, "/tmp/TestGate2/001/devctl", "pr", "merge", "o/r", "7"),
+		p(54, 1, merge.Tool, "sh", "/tmp/TestGate2/001/devctl", "pr", "merge", "o/r", "7"),
 	} {
 		tb.ByPID[pr.PID] = pr
 	}
