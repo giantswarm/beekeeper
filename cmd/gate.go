@@ -1126,7 +1126,7 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 		if g.toolMerge() {
 			st.Holds = slices.DeleteFunc(st.Holds, func(h state.Hold) bool { return h.Target == merge.AllMerges })
 			h := state.Hold{Target: merge.AllMerges, Except: merge.ToolRepo, By: g.me, At: g.now.UTC(), Tool: merge.Tool, ToolFrom: toolFrom,
-				ToolPR: g.pr, Reason: fmt.Sprintf("the devctl release window: %s runs and every devctl run refuses until updated; the gate runs `devctl version update` once it merged, until the release's binary verifies, and lifts this once `devctl version` reports the release, or at a release candidate, which no update installs", g.key())}
+				ToolPR: g.pr, Reason: fmt.Sprintf("the devctl release window: %s runs and every new devctl run refuses from its release on until updated, so the other merges are held once its release is coming (its pull request merged, a promotion's at once); the gate runs `devctl version update` once it merged, until the release's binary verifies, and lifts this once `devctl version` reports the release, or at a release candidate, which no update installs", g.key())}
 			st.Holds = append(st.Holds, h)
 			ev = append(ev, event(g.me, "hold.set", "%s except %s until devctl is updated: %s", h.Target, h.Except, h.Reason))
 		}
@@ -1767,10 +1767,6 @@ func toolMergeRuns(st *state.State) bool {
 	})
 }
 
-// toolReleased says the window h waits for a release that is coming: its
-// pull request merged, or it is a promotion's, which dispatches one.
-func toolReleased(h state.Hold) bool { return h.Tool != "" && (h.ToolMerged || h.ToolPR == 0) }
-
 // closeToolWindow lifts a tool-release window once the tool reports its
 // release, the moment the release's binary assets exist and verify: a
 // window whose pull request merged, or a promotion's, runs the tool's update
@@ -1819,7 +1815,7 @@ func (a *app) closeToolWindow(ctx context.Context, by state.Party) {
 			switch {
 			case h.Tool == "":
 				return false
-			case v != "" && merge.Installed(h, v) && (!running || toolReleased(h)):
+			case v != "" && merge.Installed(h, v) && (!running || merge.ToolReleased(h)):
 				detail := fmt.Sprintf("%s: devctl now reports %s (the window opened on %s)", h.Target, v, h.ToolFrom)
 				if running {
 					detail += ", while " + toolKey(h) + "'s devctl still waits for the release workflow"
@@ -1904,7 +1900,7 @@ func runningMerges(st *state.State) map[int]bool {
 const toolUpdateEvery = time.Minute
 
 // updateTool runs the tool's update for a window whose release is coming
-// (toolReleased) while the tool, reporting v, does not report it yet, at
+// (merge.ToolReleased) while the tool, reporting v, does not report it yet, at
 // most once per toolUpdateEvery and window, so the window lifts within
 // minutes of the release's assets and does not wait for somebody to install
 // the release. The update installs only a release whose binary verifies
@@ -1916,7 +1912,7 @@ func (a *app) updateTool(ctx context.Context, v string, by state.Party) bool {
 	due := false
 	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		for i, h := range st.Holds {
-			if toolReleased(h) && !merge.Installed(h, v) && now.Sub(h.ToolUpdated) >= toolUpdateEvery {
+			if merge.ToolReleased(h) && !merge.Installed(h, v) && now.Sub(h.ToolUpdated) >= toolUpdateEvery {
 				st.Holds[i].ToolUpdated, due = now, true
 			}
 		}

@@ -358,9 +358,10 @@ func TestARunningToolMergeLiftsItsWindowOnceTheReleaseVerifies(t *testing.T) {
 		})
 	}
 
-	// The pull request waits for its checks: no update, the window holds.
+	// The pull request waits for its checks: no update, the window stays and
+	// lets the other merges through, the installed devctl being the latest.
 	g.closeToolWindow(context.Background(), watchParty)
-	if st := gateState(t, g); len(st.Holds) != 1 || updates != 0 || !held() {
+	if st := gateState(t, g); len(st.Holds) != 1 || updates != 0 || held() {
 		t.Fatalf("before the merge: %d updates, holds %+v", updates, st.Holds)
 	}
 
