@@ -40,8 +40,48 @@ var shapers = map[string]bool{"-q": true, "--jq": true, "-t": true, "--template"
 // cut-off body.
 var errNoBody = errors.New("no complete JSON body")
 
+// killed is how gh's exit says a signal killed it: exec.CommandContext's
+// SIGKILL at its context's deadline, or the kernel's OOM killer.
+const killed = "signal: killed"
+
+// tryKey carries how long one try of a read may take.
+type tryKey struct{}
+
+// TryTimeout returns ctx with d as the time each try of a read under it
+// may take (Retrying): a try past d is killed and asked again, where a
+// deadline on ctx itself would kill the read and leave no time for the
+// retry.
+func TryTimeout(ctx context.Context, d time.Duration) context.Context {
+	return context.WithValue(ctx, tryKey{}, d)
+}
+
+// timedOut is the error of a try killed at its TryTimeout.
+type timedOut struct {
+	d   time.Duration
+	err error
+}
+
+func (t *timedOut) Error() string { return t.err.Error() }
+func (t *timedOut) Unwrap() error { return t.err }
+
+// tryRead is one try of a read, within ctx's TryTimeout when it has one.
+func tryRead(ctx context.Context, gh GH, args []string) ([]byte, error) {
+	d, _ := ctx.Value(tryKey{}).(time.Duration)
+	if d <= 0 {
+		return gh(ctx, args...)
+	}
+	tctx, cancel := context.WithTimeout(ctx, d)
+	defer cancel()
+	out, err := gh(tctx, args...)
+	if err != nil && ctx.Err() == nil && errors.Is(tctx.Err(), context.DeadlineExceeded) {
+		err = &timedOut{d: d, err: err}
+	}
+	return out, err
+}
+
 // Retrying is gh whose reads retry what GitHub answers transiently: a 5xx,
-// an empty or a cut-off body. Each read is asked at most readTries times,
+// an empty or a cut-off body, and a gh killed, at its TryTimeout or by the
+// machine. Each read is asked at most readTries times,
 // waiting backoff before the first retry and double that before the next;
 // a read still failing returns an error naming the call, what went wrong
 // and the tries. A write (a mutation, a
@@ -54,7 +94,7 @@ func Retrying(gh GH, backoff time.Duration) GH {
 		}
 		wait := backoff
 		for try := 1; ; try++ {
-			out, err := gh(ctx, args...)
+			out, err := tryRead(ctx, gh, args)
 			why := transient(args, out, err)
 			if why == "" {
 				return out, err
@@ -83,10 +123,17 @@ func orNoBody(err error) error {
 }
 
 // transient says why a read's answer is worth asking again ("HTTP 502", "an
-// empty body", "a cut-off body"), "" for an answer to return as it is.
+// empty body", "a cut-off body", "no answer within 10s", "a killed gh"), ""
+// for an answer to return as it is.
 func transient(args []string, out []byte, err error) string {
+	if t := (*timedOut)(nil); errors.As(err, &t) {
+		return "no answer within " + t.d.String()
+	}
 	if err != nil {
 		msg := err.Error()
+		if strings.Contains(msg, killed) {
+			return "a killed gh"
+		}
 		if m := serverError.FindStringSubmatch(msg); m != nil {
 			return "HTTP " + m[1]
 		}

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -28,10 +29,14 @@ const noteKept = "note.kept"
 // overtakenSep separates an overtaken event's reason from the note's text.
 const overtakenSep = "; the note: "
 
+// refsTimeout bounds one read of refStates: its tries, each bounded by
+// github.RefStates, and the waits between them.
+const refsTimeout = time.Minute
+
 // refStates reads the states of issues and pull requests; a seam for the
 // tests.
 var refStates = func(ctx context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
-	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	ctx, cancel := context.WithTimeout(ctx, refsTimeout)
 	defer cancel()
 	return github.RefStates(ctx, notesGH, refs)
 }

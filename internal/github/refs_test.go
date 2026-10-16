@@ -3,9 +3,11 @@ package github
 import (
 	"context"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRefStates(t *testing.T) {
@@ -49,6 +51,21 @@ func TestRefStates(t *testing.T) {
 	}
 	if states, err := RefStates(context.Background(), nil, nil); states != nil || err != nil {
 		t.Error("RefStates of nothing asks GitHub")
+	}
+}
+
+func TestRefStatesBoundsEachTryByItsBatch(t *testing.T) {
+	tries := map[string]time.Duration{}
+	run := func(ctx context.Context, _ ...string) ([]byte, error) {
+		tries[Repo(ctx)], _ = ctx.Value(tryKey{}).(time.Duration)
+		return []byte(`{"data":{}}`), nil
+	}
+	refs := []PR{{Repo: "example/a", N: 1}, {Repo: "example/b", N: 2}, {Repo: "other/c", N: 3}}
+	if _, err := RefStates(t.Context(), run, refs); err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]time.Duration{"example/a": 10200 * time.Millisecond, "other/c": 10100 * time.Millisecond}; !maps.Equal(tries, want) {
+		t.Errorf("tries %v, want %v", tries, want)
 	}
 }
 
