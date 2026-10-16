@@ -88,7 +88,10 @@ whose lease another session holds is passed over until it is released,
 the items behind it offered meanwhile. A sub-issue offered through
 an epic passes the same checks, and a serve record or task naming
 the epic covers it too ("…, on epic owner/repo#n"). No note holds an item:
-a hold is a blocked-by (board block), a priority a board rank. A task names
+a hold is a blocked-by (board block), a priority a board rank. While the
+state keeps memos and pinned notes an older beekeeper filed, which held the
+items they name, next offers nothing and is refused (exit 3) until note
+migrate --apply has closed them. A task names
 an issue or pull request by its URL, as owner/repo#n, as repo#n of
 board.owner, as a repository before a list ("beekeeper: #524, #525") or as
 a bare #n after the last repository it named ("beekeeper#173, #176"); a
@@ -137,6 +140,9 @@ the whole walk.`,
 			}
 			if err := checkFields(view.fields); err != nil {
 				return usageErr("%v", err)
+			}
+			if err := a.unmigrated("board next"); err != nil {
+				return err
 			}
 			var me state.Party
 			if claim {

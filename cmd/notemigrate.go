@@ -161,6 +161,32 @@ func (a *app) closeMemos(ids []int) error {
 	return err
 }
 
+// pendingMigration names the memos and pinned notes st keeps for note
+// migrate, "" for none. An older beekeeper held the items they name; this
+// one reads none of them as a hold, so a command that offers board items
+// refuses until they are migrated, and self-update says so.
+func pendingMigration(st *state.State) string {
+	if len(st.Memos) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d memos and pinned notes of an older beekeeper wait for note migrate, and an older beekeeper held the items they name: "+
+		"beekeeper note migrate --dry-run lists them, move each one's content to its issue (board block for a hold, board rank for a priority), then beekeeper note migrate --apply",
+		len(st.Memos))
+}
+
+// unmigrated refuses the command named cmd, which offers board items, while
+// the state keeps memos and pinned notes for note migrate.
+func (a *app) unmigrated(cmd string) error {
+	st, err := a.store.Read()
+	if err != nil {
+		return err
+	}
+	if p := pendingMigration(st); p != "" {
+		return refused("%s offers no item: %s", cmd, p)
+	}
+	return nil
+}
+
 // joinIDs is ids as "3, #5".
 func joinIDs(ids []int) string {
 	s := make([]string, len(ids))
