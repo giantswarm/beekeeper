@@ -290,7 +290,8 @@ func (v *capacityView) verdict() string {
 // reading, nil without a fresh one.
 func (a *app) readHeadroom(ctx context.Context, swap *swapReading) *headroom {
 	k := a.cfg.Capacity
-	h := &headroom{AvailMinMiB: k.AvailMinMiB, SwapGrowthMaxMiB: k.SwapGrowthMaxMiB, PSIMax: k.SwapPSIMax, Swap: swap, Slots: a.cfg.Memcap.Slots}
+	slotDir, slots := a.slotView()
+	h := &headroom{AvailMinMiB: k.AvailMinMiB, SwapGrowthMaxMiB: k.SwapGrowthMaxMiB, PSIMax: k.SwapPSIMax, Swap: swap, Slots: slots}
 	m, err := plat.Machine.Mem()
 	if err != nil {
 		h.MemErr = err.Error()
@@ -307,7 +308,7 @@ func (a *app) readHeadroom(ctx context.Context, swap *swapReading) *headroom {
 		h.LoadErr = err.Error()
 	}
 	h.Load1, h.LoadMax = load[0], a.cfg.Watch.LoadLimit(runtime.NumCPU())
-	for _, s := range machine.ReadSlots(a.cfg.Memcap.SlotDir, a.cfg.Memcap.Slots) {
+	for _, s := range machine.ReadSlots(slotDir, slots) {
 		if s.Free {
 			h.SlotsFree++
 		}
@@ -428,15 +429,30 @@ func (a *app) startGate(ctx context.Context, name string, builds, force bool) (s
 	if err != nil {
 		return "", err
 	}
-	o := guard.Options{SlotDir: a.cfg.Memcap.SlotDir, Slots: a.cfg.Memcap.Slots, Stderr: os.Stderr}
-	var wait string
-	wait, o.WaitFrom, o.Background = guard.ResolveWait("", false)
-	if o.Wait, err = guard.ParseWait(wait); err != nil {
-		return "", usageErr("%v", err)
+	o, wait, err := a.startSlot()
+	if err != nil {
+		return "", err
 	}
 	return queueStart(v, builds, force, wait,
 		func() (bool, int, error) { return guard.AwaitSlot(o, "agents start "+name) },
 		func() (*capacityView, error) { return a.startCapacity(ctx, false) })
+}
+
+// startSlot is the build slot a start that builds queues for, in the slots
+// beekeeper run takes (buildSlots), and the wait for its turn: run's
+// default, MEMCAP_WAIT.
+func (a *app) startSlot() (guard.Options, string, error) {
+	o := guard.Options{Stderr: os.Stderr}
+	var err error
+	if o.SlotDir, o.Slots, err = a.buildSlots(); err != nil {
+		return o, "", err
+	}
+	var wait string
+	wait, o.WaitFrom, o.Background = guard.ResolveWait("", false)
+	if o.Wait, err = guard.ParseWait(wait); err != nil {
+		return o, "", usageErr("%v", err)
+	}
+	return o, wait, nil
 }
 
 // queueStart judges a start's verdict v (gateStart). A start that builds,

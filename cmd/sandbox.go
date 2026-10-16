@@ -537,6 +537,7 @@ func (a *app) sandboxPolicy() sandbox.Policy {
 	home, _ := os.UserHomeDir()
 	exe, _ := os.Executable()
 	cfgFile, _ := config.Path(a.cfgPath)
-	return sandbox.New(a.cfg.Sandbox, sandbox.Paths{Home: home, ConfigFile: cfgFile, StateDir: a.cfg.StateDir, LeaseDir: a.cfg.LeaseDir, SlotDir: a.cfg.Memcap.SlotDir, Exe: exe, ScanDir: a.scanDir(),
+	slotDir, _ := a.slotView()
+	return sandbox.New(a.cfg.Sandbox, sandbox.Paths{Home: home, ConfigFile: cfgFile, StateDir: a.cfg.StateDir, LeaseDir: a.cfg.LeaseDir, SlotDir: slotDir, Exe: exe, ScanDir: a.scanDir(),
 		RuntimeDir: os.Getenv("XDG_RUNTIME_DIR")})
 }
