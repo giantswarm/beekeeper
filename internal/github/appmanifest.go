@@ -167,14 +167,11 @@ func defaultBranch(ctx context.Context, run GH, repo string) (string, error) {
 // readFile reads the file at file in repo at the commit sha; one the
 // repository lacks there is errAbsent, wrapped in what the path declares.
 func readFile(ctx context.Context, run GH, repo, file, sha string) ([]byte, error) {
-	raw, err := run(ctx, "api", "-H", "Accept: application/vnd.github.raw", fmt.Sprintf("repos/%s/contents/%s?ref=%s", repo, file, sha))
-	if err != nil {
-		if strings.Contains(err.Error(), "HTTP 404") {
-			return nil, &absentError{repo: repo, file: file}
-		}
-		return nil, err
+	raw, err := rawFile(ctx, run, repo, file, sha)
+	if notFound(err) {
+		return nil, &absentError{repo: repo, file: file}
 	}
-	return raw, nil
+	return raw, err
 }
 
 // source is where a file was read: <repo>@<commit>:<path>.

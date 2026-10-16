@@ -1370,6 +1370,14 @@ merge leaves its lane the moment devctl reports it merged (`merged … release n
 A base branch with auto-release holds its lane until the release rolled, as above. GitHub not
 answering for the base branch refuses the merge (exit 77).
 
+A plugin marketplace tags per plugin instead (giantswarm/claude-code): without the generated
+workflow, a `.github/workflows/auto-release.yaml` that runs when a pull request into the branch
+closes and reads `.claude-plugin/marketplace.json` tags `<plugin>/vX.Y.Z` for every plugin whose
+version the merge changed. devctl runs with `--no-release-wait` there too, and the gate then awaits
+those tags itself, from the merge commit's manifest against its parent's, for up to five minutes:
+all cut, they are the merge's release (`merged … release gs-plans/v0.3.0`); no version changed,
+none is warranted; a tag still missing leaves the release unconfirmed, naming the tag.
+
 A running merge whose gate process and devctl are both gone (killed, or lost with the machine in
 a reboot) is lost: whether it merged is unknown. `watch` turns it into the lane's settling merge with an
 unknown release, one `MERGE LOST` line and a `merge.lost` event, so the lane settles for

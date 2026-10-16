@@ -289,6 +289,16 @@ func ParseDocument(raw []byte) (Outcome, bool) {
 	return o, true
 }
 
+// MergeCommit is the merge commit a merge's document (ParseDocument) names,
+// "" when none.
+func MergeCommit(raw []byte) string {
+	var doc struct {
+		MergeCommitSha string `json:"mergeCommitSha"`
+	}
+	_ = json.Unmarshal(raw, &doc)
+	return doc.MergeCommitSha
+}
+
 // Blocking is the active hold that stops a merge of repo#pr in lane: the
 // repository's, the lane's, github's or one on all merges, unless the hold
 // lets that repository or pull request through, else an upgrade running on
