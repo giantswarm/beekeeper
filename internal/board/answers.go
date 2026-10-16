@@ -21,8 +21,8 @@ type Thread struct {
 	About    string `json:"about"`
 	AboutURL string `json:"aboutURL,omitempty"`
 	Ref      string `json:"thread"`
-	Via   string `json:"via,omitempty"`
-	id    string
+	Via      string `json:"via,omitempty"`
+	id       string
 }
 
 // threadNode is an issue or pull request with its repository's visibility and,
