@@ -61,18 +61,23 @@ func enqueue(slotDir, what string) (*ticket, error) {
 
 // ahead is the live tickets ahead of t, oldest first, each as its file
 // says what it waits for; an ended waiter's ticket is removed.
-func (t *ticket) ahead() []string {
-	entries, err := os.ReadDir(t.dir)
+func (t *ticket) ahead() []string { return waiters(t.dir, t.name) }
+
+// waiters is the live tickets in the queue dir, oldest first, each as its
+// file says what it waits for: those before the ticket name before, or
+// every one for "". An ended waiter's ticket is removed.
+func waiters(dir, before string) []string {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
 	}
 	var out []string
 	for _, e := range entries {
 		n := e.Name()
-		if strings.HasPrefix(n, ".") || n >= t.name {
+		if strings.HasPrefix(n, ".") || (before != "" && n >= before) {
 			continue
 		}
-		p := filepath.Join(t.dir, n)
+		p := filepath.Join(dir, n)
 		l := flock.New(p)
 		if ok, err := l.TryLock(); err == nil && ok {
 			_ = os.Remove(p)
@@ -105,12 +110,44 @@ func (t *ticket) turn(slots int) (bool, string) {
 	if len(a) < slots {
 		return true, ""
 	}
+	return false, aheadText(a)
+}
+
+// aheadText names the waiters a ahead in the queue, one numbered line each.
+func aheadText(a []string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d ahead in the build slot queue:\n", len(a))
 	for i, w := range a {
 		fmt.Fprintf(&b, "  %d. %s\n", i+1, w)
 	}
-	return false, b.String()
+	return b.String()
+}
+
+// PeekSlot reports how a start that builds would find the build slots now,
+// judged as AwaitSlot judges its turn, without joining the queue or holding
+// a slot: free when fewer waiters than slots are queued and a slot is free.
+// Otherwise wait says what the start would wait for: the slots' holders
+// and the waiters ahead of it, one indented line each.
+func PeekSlot(o Options) (free bool, wait string, err error) {
+	if err := os.MkdirAll(o.SlotDir, 0o750); err != nil {
+		return false, "", err
+	}
+	a := waiters(queueDir(o.SlotDir), "")
+	lock, _, occupied := acquire(o)
+	if lock != nil {
+		_ = lock.Unlock()
+		if len(a) < o.Slots {
+			return true, "", nil
+		}
+	}
+	var s string
+	if lock == nil {
+		s = fmt.Sprintf("a build slot (all %d held):\n%s%s", o.Slots, holders(o), occupied)
+	}
+	if len(a) > 0 {
+		s += aheadText(a)
+	}
+	return false, s, nil
 }
 
 // AwaitSlot waits in the slot queue for a start that builds, within o.Wait:

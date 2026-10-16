@@ -455,6 +455,26 @@ func (a *app) startSlot() (guard.Options, string, error) {
 	return o, wait, nil
 }
 
+// dryRunSlot prints the build slot a start that builds would find now, as
+// its start resolves it, and claims nothing: "free", or the wait its start
+// would take its turn in, with the slots' holders and the waiters ahead.
+func (a *app) dryRunSlot() error {
+	o, wait, err := a.startSlot()
+	if err != nil {
+		return err
+	}
+	free, why, err := guard.PeekSlot(o)
+	if err != nil {
+		return err
+	}
+	line := "build slot: free"
+	if !free {
+		line = fmt.Sprintf("build slot: busy, the start waits its turn up to %s for %s", wait, strings.TrimSuffix(why, "\n"))
+	}
+	_, err = fmt.Fprintln(a.out, line)
+	return err
+}
+
 // queueStart judges a start's verdict v (gateStart). A start that builds,
 // refused by the busy build slot alone, first waits its turn in the slot
 // queue with the runs (await, up to wait): first in first out, instead of a

@@ -167,7 +167,9 @@ desktop imports the session beside it, and start says "its task runs as a
 headless turn under profile <name>". The desktop spawns its own CLI for a
 desktop turn, which no profile reaches. --dry-run prints the profile
 applied, the first turn's command line and the first prompt, and starts
-nothing.
+nothing; with --builds it first prints the build slot as the start would
+find it, "free" or the wait with the slots' holders and the waiters ahead,
+without joining the queue or holding a slot.
 
 A start that delivers no turn of the task fails: it exits non-zero, logs
 "task not delivered" with the reason, and the roster's REACHABLE (and the
@@ -233,6 +235,11 @@ is involved and no import happens.`,
 			}
 			gaps := pluginGaps(cmd.Context())
 			if dryRun && harness != omp.Harness {
+				if builds {
+					if err := a.dryRunSlot(); err != nil {
+						return err
+					}
+				}
 				return a.dryRunStart(cmd.Context(), agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model}, gaps)
 			}
 			// The start gate: a verdict without room refuses the start
