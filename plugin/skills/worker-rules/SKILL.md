@@ -29,8 +29,6 @@ too and win where stricter.
   snapshot`, never Alertmanager or Mimir directly.
 - **Git.** Never a force push, not `--force-with-lease`: a branch behind its base merges it and
   pushes. Work in your own worktree; no `git stash` (shared): commit waiting work.
-- **Branch protection** is read and proven with `devctl repo status <owner/repo>`, never `gh api
-  …/protection` (403 for the agent token).
 - **No polling**: no `--watch` or sleep loop; `devctl pr wait` and `devctl pr merge` block; a gated
   devctl wait is never wrapped in `timeout`, which cuts the call.
 - **Nothing left running**: no port-forward, monitor or background wait; kill by captured PID,
