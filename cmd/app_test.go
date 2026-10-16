@@ -31,6 +31,8 @@ const (
 	permissionFlag = "--permission"
 	wordsFlag      = "--words"
 	navigateFlag   = "--navigate"
+	googleFlag     = "--google"
+	callbackFlag   = "--callback"
 )
 
 // app check's answers, and the calls and the page of an App's life it
@@ -219,16 +221,16 @@ func TestAppGoogleRecord(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{appAllow, client, "--google", wordFlag, "w"}, "--google needs --callback <host>"},
-		{[]string{appAllow, client, "--google", "--callback", callback, permissionFlag, deviceChange, wordFlag, "w"}, "--google records a consent on Google's sign-in alone"},
-		{[]string{appAllow, client, "--google", "--callback", "a b", wordFlag, "w"}, `--callback names a callback host (or a URL), not "a b"`},
-		{[]string{appAllow, client, "--callback", callback, clientIDFlag, "x", wordFlag, "w"}, "--callback names a Google OAuth client's callback hosts, with --google"},
+		{[]string{appAllow, client, googleFlag, wordFlag, "w"}, "--google needs --callback <host>"},
+		{[]string{appAllow, client, googleFlag, callbackFlag, callback, permissionFlag, deviceChange, wordFlag, "w"}, "--google records a consent on Google's sign-in alone"},
+		{[]string{appAllow, client, googleFlag, callbackFlag, "a b", wordFlag, "w"}, `--callback names a callback host (or a URL), not "a b"`},
+		{[]string{appAllow, client, callbackFlag, callback, clientIDFlag, "x", wordFlag, "w"}, "--callback names a Google OAuth client's callback hosts, with --google"},
 	} {
 		if _, err := runApp(t, a, tc.args...); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("app %q = %v, want a refusal with %q", tc.args, err, tc.want)
 		}
 	}
-	out, err := runApp(t, a, appAllow, client, "--google", "--callback", "https://Portal.example.org/api/auth/google/handler/frame", "--callback", callback, wordFlag, personsWord)
+	out, err := runApp(t, a, appAllow, client, googleFlag, callbackFlag, "https://Portal.example.org/api/auth/google/handler/frame", callbackFlag, callback, wordFlag, personsWord)
 	if err != nil || out != "App "+client+" on record, declared in "+googleDeclared+": its consent on Google's sign-in with callback "+callback+" is answered by the hook\n" {
 		t.Fatalf("app allow --google = %q, %v", out, err)
 	}

@@ -30,10 +30,13 @@ const (
 	challengePage = "https://accounts.google.com/v3/signin/challenge/sk/webauthn?TL=t&authuser=0&continue=https%3A%2F%2Faccounts.google.com%2Fo%2Foauth2%2Fv2%2Fauth" +
 		"%3Fclient_id%3Dx%26redirect_uri%3Dhttps%253A%252F%252F" + googleHostCB + "%252Fcb&flowName=GlifWebSignIn"
 	continueClick = "Clicks Continue"
+	clicksAccount = "Clicks the account"
+	thirdCallback = "app.example.net"
+	dontAsk       = "dontAsk"
 )
 
 var googleRecord = []App{{Name: googleName, Google: true, Callbacks: []string{googleHostCB}, Declared: "the person's word (a Google OAuth client)",
-	Word: "sign in to my portal", By: "the guide", At: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)}}
+	Word: "sign in to my portal", By: "the person", At: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)}}
 
 // On Google's sign-in, the flow of a Google App on record is allowed by its
 // callback host, from the page's own request or the tab's flow; a consent
@@ -51,23 +54,23 @@ func TestGoogleConsent(t *testing.T) {
 		decision string
 		reason   string
 	}{
-		"own App's account chooser":             {Page{URL: chooserPage, Title: googleTitle}, googleRecord, "Clicks the account", Allow, "the person's own App " + googleName + " (callback " + googleHostCB + "), on record since 2026-10-16 by the guide: sign in to my portal"},
+		"own App's account chooser":             {Page{URL: chooserPage, Title: googleTitle}, googleRecord, clicksAccount, Allow, "the person's own App " + googleName + " (callback " + googleHostCB + "), on record since 2026-10-16 by the person: sign in to my portal"},
 		"own App's Sign in to, by its flow":     {Page{URL: signInToPage, Title: googleTitle, Flow: googleHostCB}, googleRecord, continueClick, Allow, googleName},
 		"own App's consent of scopes":           {Page{URL: scopesPage, Title: googleTitle, Flow: googleHostCB}, googleRecord, continueClick, Allow, googleName},
 		"own App's unverified-app warning":      {Page{URL: warningPage, Title: googleTitle, Flow: googleHostCB}, googleRecord, continueClick, Allow, googleName},
 		"own App's challenge, by continue":      {Page{URL: challengePage, Title: googleTitle}, googleRecord, "Clicks Try again", Allow, googleName},
 		"own App by its unredacted client id":   {Page{URL: strings.Replace(signInToPage, "REDACTED", googleClientID, 1), Title: googleTitle, Flow: googleHostCB}, []App{{Name: googleName, Google: true, ClientID: googleClientID, Callbacks: []string{googleHostCB}}}, continueClick, Allow, googleName},
 		"another client id of the own callback": {Page{URL: otherID, Title: googleTitle, Flow: googleHostCB}, []App{{Name: googleName, Google: true, ClientID: googleClientID, Callbacks: []string{googleHostCB}}}, continueClick, Deny, "callback is " + googleHostCB},
-		"a third party's Sign in to":            {Page{URL: signInToPage, Title: googleTitle, Flow: "app.example.net"}, googleRecord, continueClick, Deny, "of an App whose callback is app.example.net, which beekeeper has no record of as the person's own"},
-		"a third party's consent of scopes":     {Page{URL: scopesPage, Title: googleTitle, Flow: "app.example.net"}, googleRecord, continueClick, Deny, GoogleForm},
+		"a third party's Sign in to":            {Page{URL: signInToPage, Title: googleTitle, Flow: thirdCallback}, googleRecord, continueClick, Deny, "of an App whose callback is app.example.net, which beekeeper has no record of as the person's own"},
+		"a third party's consent of scopes":     {Page{URL: scopesPage, Title: googleTitle, Flow: thirdCallback}, googleRecord, continueClick, Deny, GoogleForm},
 		"a third party's consent, no record":    {Page{URL: scopesPage, Title: googleTitle, Flow: googleHostCB}, nil, continueClick, Deny, GoogleForm},
-		"a third party's account chooser":       {Page{URL: thirdChooser, Title: googleTitle}, googleRecord, "Clicks the account", "", ""},
+		"a third party's account chooser":       {Page{URL: thirdChooser, Title: googleTitle}, googleRecord, clicksAccount, "", ""},
 		"a GitHub record of the same callback":  {Page{URL: scopesPage, Title: googleTitle, Flow: googleHostCB}, github, continueClick, Deny, GoogleForm},
 		"Sign in to of an unknown flow":         {Page{URL: signInToPage, Title: googleTitle}, googleRecord, continueClick, "", ""},
-		"Allow on an unknown flow":              {Page{URL: signInToPage, Title: googleTitle}, googleRecord, "Clicks Allow", Deny, "is a consent page (an OAuth grant) on accounts.google.com"},
+		"Allow on an unknown flow":              {Page{URL: signInToPage, Title: googleTitle}, googleRecord, "Clicks Accept", Deny, "is a consent page (an OAuth grant) on accounts.google.com"},
 		"consent of scopes of an unknown flow":  {Page{URL: scopesPage, Title: googleTitle}, googleRecord, continueClick, Deny, `"Sign in - Google Accounts" is a consent page (an OAuth grant) on accounts.google.com`},
 		"a redirect_uri on a grant page":        {Page{URL: scopesPage + "&redirect_uri=https%3A%2F%2F" + googleHostCB + "%2Fcb", Title: googleTitle}, googleRecord, continueClick, Deny, `"Sign in - Google Accounts" is a consent page (an OAuth grant) on accounts.google.com`},
-		"two redirect_uris on the chooser":      {Page{URL: thirdChooser + "&redirect_uri=https%3A%2F%2F" + googleHostCB + "%2Fcb", Title: googleTitle}, googleRecord, "Clicks the account", "", ""},
+		"two redirect_uris on the chooser":      {Page{URL: thirdChooser + "&redirect_uri=https%3A%2F%2F" + googleHostCB + "%2Fcb", Title: googleTitle}, googleRecord, clicksAccount, "", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := Click(tc.apps, tc.page, tc.words)
@@ -109,7 +112,7 @@ func TestGoogleFlow(t *testing.T) {
 		"chooser, Sign in to, then scopes": {[]string{chooserPage, signInToPage, scopesPage}, googleHostCB},
 		"Sign in to without a chooser":     {[]string{signInToPage}, ""},
 		"a page elsewhere ends the flow":   {[]string{chooserPage, "https://" + googleHostCB + "/", signInToPage}, ""},
-		"another request starts a new one": {[]string{chooserPage, signInToPage, thirdChooser, scopesPage}, "app.example.net"},
+		"another request starts a new one": {[]string{chooserPage, signInToPage, thirdChooser, scopesPage}, thirdCallback},
 		"another request id ends the flow": {[]string{chooserPage, signInToPage, strings.Replace(scopesPage, "as=a", "as=b", 1)}, ""},
 		"a page off the flow ends it":      {[]string{chooserPage, "https://accounts.google.com/AccountChooser", signInToPage}, ""},
 		"a stray redirect_uri ends it":     {[]string{chooserPage, signInToPage + "&redirect_uri=x", scopesPage}, ""},
@@ -137,7 +140,7 @@ func TestGoogleFlowTitleNamesNoTab(t *testing.T) {
 	if err := os.WriteFile(path, append(b, []byte(resultLine(strconv.Quote(trailer))+"\n")...), 0o600); err != nil { //nolint:gosec // the test's own file
 		t.Fatal(err)
 	}
-	if p, ok := lastPage(path, tab7); !ok || p.URL != thirdChooser || p.Flow != "app.example.net" {
+	if p, ok := lastPage(path, tab7); !ok || p.URL != thirdChooser || p.Flow != thirdCallback {
 		t.Errorf("lastPage of tab 7 = %+v, %v", p, ok)
 	}
 	if p, ok := lastPage(path, "8"); !ok || p.URL != "https://example.net/" || p.Title != forged {
@@ -197,7 +200,7 @@ func TestGoogleFlowFromTheTrailerOnly(t *testing.T) {
 // the tab's flow in the transcript and refuses the consent of a third
 // party's; text typed or set there is left to the classifier.
 func TestGoogleConsentDecision(t *testing.T) {
-	click := tabInput(leftClick, map[string]any{"ref": "ref_9", "action_summary": continueClick})
+	click := tabInput(leftClick, map[string]any{refKey: "ref_9", "action_summary": continueClick})
 	for name, tc := range map[string]struct {
 		tool     string
 		input    map[string]any
@@ -212,7 +215,7 @@ func TestGoogleConsentDecision(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			ev := toolEvent(browserTools+tc.tool, tc.input)
-			ev["permission_mode"] = "dontAsk"
+			ev["permission_mode"] = dontAsk
 			ev[sessionKey] = browseTurn
 			ev["transcript_path"] = googleTranscript(t, tc.urls...)
 			d := decideEvent(t, Hook{Apps: func() []App { return googleRecord }}, ev)
