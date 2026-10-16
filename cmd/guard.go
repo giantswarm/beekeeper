@@ -466,6 +466,29 @@ registered in the person's settings.`,
 		},
 	})
 	c.AddCommand(&cobra.Command{
+		Use:   "browsestop",
+		Short: "A browse turn's Stop hook: the turn closes the tabs it opened before it ends",
+		Long: `browsestop reads a Stop event on stdin. While tabs the turn opened (its
+tab group's tabs, the tabs it created) are still open in its group, it
+answers "block": the turn goes on once to close them, the group's first tab
+last, then ends with its report. A turn that went on once already
+(stop_hook_active) ends; browse names the tabs it left as a failure.
+beekeeper browse passes it in each turn's --settings; it is never registered
+in the person's settings.`,
+		Args: cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			defer func() { _ = recover() }() // a broken hook must not hold the turn
+			raw, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				return nil
+			}
+			if out := guard.BrowseStop(raw); out != nil {
+				_, _ = a.out.Write(out)
+			}
+			return nil
+		},
+	})
+	c.AddCommand(&cobra.Command{
 		Use:   "permissionrequest",
 		Short: "The PermissionRequest hook: no card for beekeeper's own bypass starts after the desktop import",
 		Long: `permissionrequest reads a PermissionRequest event on stdin: Claude Code is

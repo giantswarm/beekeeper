@@ -97,13 +97,21 @@ const (
 
 // frontWords tell a browse turn to work in a tab in front of its window: a
 // tab behind another neither paints nor answers, so the turn checks before
-// each screenshot and moves to a fresh tab, which opens in front, and closes
-// the tabs it created, the tab in front before the run in front again.
+// each screenshot and moves to a fresh tab, which opens in front. A
+// screenshot that times out all the same (a window not drawn) is retried once
+// after a reload of the same tab, then the page is read instead. The tab the
+// group was made with closes last: closing it first dissolves the group and
+// strands the others outside it.
 const frontWords = "Work in a tab in front of its window: a tab behind another tab neither paints nor answers (its document.visibilityState " +
 	"is 'hidden', its screenshot times out on a frozen renderer, the extension refuses its scripts and navigations). Before each screenshot, " +
 	"check the tab with javascript_tool: document.visibilityState. When it says 'hidden', or the check or a navigation is refused on a page " +
-	"the steps name, open a fresh tab with tabs_create_mcp (a new tab opens in front), go on there, and close the hidden one with " +
-	"tabs_close_mcp. Before you end, close every tab you created, so the tab in front before you began is in front again. "
+	"the steps name, open a fresh tab with tabs_create_mcp (a new tab opens in front) and go on there. A screenshot that times out " +
+	"('renderer may be frozen') while the tab says 'visible': reload that same tab once (navigate it to its own URL) and take the screenshot " +
+	"once more; timing out again, the window is not drawn (occluded or minimised): take no further screenshot in it, read the page with " +
+	"get_page_text or read_page for the evidence, and name the page 'not rendered' in your report. Never replace a tab by closing it: the " +
+	"first tab tabs_context_mcp gave you is the one your tab group was made with, and closing it while another tab of yours is open " +
+	"dissolves the group and leaves that tab open outside it, where no call reaches it. Before you end, close every tab you opened, the " +
+	"blank ones included, with tabs_close_mcp: the others first, the group's first tab last. "
 
 // windowCapture replaces the page's window.open: the address of a window
 // the page opens is kept on the page instead of a window outside the turn's
@@ -264,10 +272,23 @@ disabled there, every screenshot times out ("the renderer may be frozen"),
 and the extension refuses its scripts and navigations. The turn works in a
 tab in front: before each screenshot it checks the tab's visibilityState,
 and a tab it finds hidden (or whose check or navigation is refused) it
-leaves for a fresh tab, which opens in front; before it ends it closes the
-tabs it created, so the tab in front before the run is in front again.
-Screenshots that timed out all the same are reported as "not rendered:"
-below the report.
+leaves for a fresh tab, which opens in front. A window the compositor does
+not draw (occluded, minimised) freezes the screenshot of a tab that says
+visible: the turn reloads that tab once and screenshots again, and on a
+second timeout reads the page's text instead, naming the page not
+rendered. Screenshots that timed out are counted as "not rendered:" below
+the report.
+
+The turn closes every tab it opened before it ends, the blank ones
+included. Its tab group is keyed by the tab it was made with: closing that
+tab while another of the turn's tabs is open dissolves the group and
+strands the other tab outside it, where no call reaches it, so the hook
+(beekeeper hook pretooluse) refuses that close, naming the order, the
+group's first tab last. The turn's Stop hook (beekeeper hook browsestop, in
+its --settings) has a turn that would end with tabs of its own still open
+go on once to close them. Below the report, "tabs closed:" counts the tabs
+the turn opened and closed; "tabs left open:" names those it left, in its
+group or stranded outside it, and the command fails.
 
 A window a page opens (window.open: an identity provider's sign-in popup,
 as a portal's OIDC sign-in opens) opens outside the turn's tab group, where
@@ -373,8 +394,12 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 		}
 		return report, err
 	}
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
 	rules := browseRules(deploy, consents, lab)
-	report, err := turn(browseArgv(id, model, browsePrompt(steps, deploy, consents, lab, shared), rules, false))
+	report, err := turn(browseArgv(id, model, browsePrompt(steps, deploy, consents, lab, shared), self, rules, false))
 	path := transcriptOf(a.cfg, id)
 	if path == "" {
 		return errors.Join(err, fmt.Errorf("browse turn %s left no transcript", id))
@@ -384,7 +409,7 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	// a fresh CLI resuming the session has a fresh Chrome connection and goes
 	// on with the steps not done, its findings read with the first turn's.
 	if err == nil && found.lost() {
-		report, err = turn(browseArgv(id, model, fmt.Sprintf(reconnectWords, found.Lost[0]), rules, true))
+		report, err = turn(browseArgv(id, model, fmt.Sprintf(reconnectWords, found.Lost[0]), self, rules, true))
 		found, ferr = readFindings(path)
 		found.Reconnected = true
 	}
@@ -400,7 +425,7 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	if _, werr := fmt.Fprintln(a.out, strings.Join(lines, "\n")); werr != nil {
 		return werr
 	}
-	return errors.Join(err, ferr, serr, found.lostErr(report))
+	return errors.Join(err, ferr, serr, found.lostErr(report), found.tabsErr())
 }
 
 // The turn's classifier names a call it refused in the call's error result:
@@ -515,6 +540,7 @@ type browseFindings struct {
 	Lost        []string
 	Recovered   bool
 	Reconnected bool
+	Left        guard.Tabs
 }
 
 // lost reports whether the connection is gone at the transcript's end: lost
@@ -573,7 +599,32 @@ func readFindings(transcript string) (browseFindings, error) {
 		}
 	})
 	f.Recovered = len(f.Lost) > 0 && !lost
+	f.Left = guard.ReadTabs(transcript)
 	return f, err
+}
+
+// tabsErr is the error of a turn that left tabs it opened open: the ones
+// still in its group, and the ones outside it, which no call reaches; nil
+// when it closed them all.
+func (f browseFindings) tabsErr() error {
+	open := f.Left.Open()
+	if len(open) == 0 {
+		return nil
+	}
+	return fmt.Errorf("the browse turn left %s it opened open in the shared Chrome: %s", plural(len(open), "tab"), tabsLeft(f.Left))
+}
+
+// tabsLeft names the open tabs of t: those in the turn's group and those
+// outside it.
+func tabsLeft(t guard.Tabs) string {
+	var parts []string
+	if in := t.Reachable(); len(in) > 0 {
+		parts = append(parts, "tab "+strings.Join(in, ", ")+" in its group")
+	}
+	if out := t.Stray(); len(out) > 0 {
+		parts = append(parts, "tab "+strings.Join(out, ", ")+" outside its group, out of any turn's reach")
+	}
+	return strings.Join(parts, "; ")
 }
 
 // callTabs are the tabs a Chrome call names: its own tabId and its batch's.
@@ -695,23 +746,21 @@ func (f browseFindings) lines(steps, deploy string, consents []guard.App, lab bo
 		out = append(out, hint)
 	}
 	if n := f.NotRendered; n > 0 {
-		s := "s"
-		if n == 1 {
-			s = ""
-		}
-		out = append(out, fmt.Sprintf("not rendered: %d screenshot%s timed out on a frozen renderer: the tab was not in front of its window "+
-			"(behind another tab, or in a window the compositor does not draw), where a consent page keeps its Authorize button disabled; "+
-			"the turn moves to a fresh tab, which opens in front, when its check finds the tab hidden; run the steps again", n, s))
+		out = append(out, fmt.Sprintf("not rendered: %s timed out on a frozen renderer: the tab was not drawn (behind another tab, "+
+			"or its window occluded or minimised, which the compositor does not draw), where a consent page keeps its Authorize button disabled; "+
+			"the turn reloads such a tab once and then reads the page's text instead of its picture; bring the Chrome window forward and "+
+			"run the steps again for a screenshot", plural(n, "screenshot")))
 	}
 	if l := f.windowsLine(); l != "" {
 		out = append(out, l)
 	}
+	if open := f.Left.Open(); len(open) > 0 {
+		out = append(out, "tabs left open: "+tabsLeft(f.Left))
+	} else if len(f.Left.Opened) > 0 {
+		out = append(out, fmt.Sprintf("tabs closed: the turn closed all %s it opened", plural(len(f.Left.Opened), "tab")))
+	}
 	if n := len(f.Lost); n > 0 {
-		s := "s"
-		if n == 1 {
-			s = ""
-		}
-		line := fmt.Sprintf("connection lost: %d call%s found Claude in Chrome not connected, the first %s; ", n, s, f.Lost[0])
+		line := fmt.Sprintf("connection lost: %s found Claude in Chrome not connected, the first %s; ", plural(n, "call"), f.Lost[0])
 		switch {
 		case f.Reconnected && f.Recovered:
 			line += "the reconnect turn, a fresh connection, found the browser and went on with the steps not done"
@@ -743,11 +792,7 @@ func (f browseFindings) windowsLine() string {
 		line = "windows: the turn named no tab"
 	}
 	if n := len(f.Windows); n > 0 {
-		s := "s"
-		if n == 1 {
-			s = ""
-		}
-		line += fmt.Sprintf("; followed %d window%s a page opened, in its own tab: %s", n, s, strings.Join(f.Windows, ", "))
+		line += fmt.Sprintf("; followed %s a page opened, in its own tab: %s", plural(n, "window"), strings.Join(f.Windows, ", "))
 	}
 	return line
 }
@@ -905,7 +950,7 @@ const autoModeDefaults = "$defaults"
 // record and the lab sign-in the steps name are the turn's settings: its
 // auto mode allows those actions. The first turn starts session id; the
 // reconnect turn resumes it, a fresh CLI with a fresh Chrome connection.
-func browseArgv(id, model, prompt string, rules []string, reconnect bool) []string {
+func browseArgv(id, model, prompt, self string, rules []string, reconnect bool) []string {
 	session := []string{sessionIDFlag, id}
 	if reconnect {
 		session = []string{resumeFlag, id}
@@ -915,10 +960,7 @@ func browseArgv(id, model, prompt string, rules []string, reconnect bool) []stri
 	if model != "" {
 		argv = append(argv, modelFlag, model)
 	}
-	if len(rules) > 0 {
-		argv = append(argv, settingsFlag, allowSettings(rules))
-	}
-	return append(argv, "--", prompt)
+	return append(argv, settingsFlag, browseSettings(self, rules), "--", prompt)
 }
 
 // browsePrompt is a browse turn's prompt: the preamble, the connection
@@ -980,18 +1022,24 @@ func browseRules(deploy string, consents []guard.App, lab bool) []string {
 	return rules
 }
 
-// allowSettings are the settings of a turn whose auto mode allows rules:
+// allowMode is the autoMode setting of a turn whose auto mode allows rules:
 // the shipped allow rules with those after them, every other rule list as
 // shipped.
-func allowSettings(rules []string) string {
-	b, _ := json.Marshal(map[string]any{"autoMode": map[string]any{"allow": append([]string{autoModeDefaults}, rules...)}})
-	return string(b)
+func allowMode(rules []string) map[string]any {
+	return map[string]any{"allow": append([]string{autoModeDefaults}, rules...)}
 }
 
-// allowDeploySettings are the settings of a turn whose auto mode allows the
-// declared deploy alone.
-func allowDeploySettings(deploy string) string {
-	return allowSettings([]string{allowDeployRule(deploy)})
+// browseSettings are a browse turn's own settings: the Stop hook that has the
+// turn close the tabs it opened before it ends (beekeeper hook browsestop,
+// self the beekeeper binary), and the auto mode allow rules, when any.
+func browseSettings(self string, rules []string) string {
+	hook := map[string]any{"type": hookTypeCommand, "command": guard.ShellQuote(self) + " hook browsestop", "timeout": 10}
+	settings := map[string]any{hooksKey: map[string]any{"Stop": []any{map[string]any{hooksKey: []any{hook}}}}}
+	if len(rules) > 0 {
+		settings["autoMode"] = allowMode(rules)
+	}
+	b, _ := json.Marshal(settings)
+	return string(b)
 }
 
 // consentRule is the auto mode allow rule of an App on record: the person's
