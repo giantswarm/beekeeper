@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/board"
+	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -32,10 +33,11 @@ const idleRef = "o/r#2"
 
 // The names, steps and reasons the tests share.
 const (
-	stepUpNext = "Up Next"
-	workerOne  = "Worker one"
-	busyAgent  = "Busy"
-	oldBacklog = "created 2026-06-24: Backlog takes items created within 90 days"
+	stepUpNext     = "Up Next"
+	stepInProgress = "In Progress"
+	workerOne      = "Worker one"
+	busyAgent      = "Busy"
+	oldBacklog     = "created 2026-06-24: Backlog takes items created within 90 days"
 )
 
 func TestNextFreeSkipsOwnedItems(t *testing.T) {
@@ -113,7 +115,7 @@ func TestNextFreeHoldsAnEpicsSubIssuesToItsOwners(t *testing.T) {
 		Agents: []state.Agent{{Party: state.Party{Session: "s5", Name: busyAgent}, Task: "the slices of https://github.com/o/r/issues/10"}},
 	}
 	sub := func(n int, epic string) board.Candidate {
-		return board.Candidate{Item: board.Item{Ref: fmt.Sprintf("o/r#%d", n)}, Step: "In Progress", Epic: epic}
+		return board.Candidate{Item: board.Item{Ref: fmt.Sprintf("o/r#%d", n)}, Step: stepInProgress, Epic: epic}
 	}
 	// A sub-issue's own record names it ahead of its epic's.
 	cands := []board.Candidate{sub(11, "o/r#10"), sub(12, "O/R#10"), sub(21, "o/r#20"), sub(22, "o/r#20"), sub(31, "o/r#30")}
@@ -746,5 +748,81 @@ func TestPrintNextFields(t *testing.T) {
 	}
 	if err := checkFields([]string{fieldRef, "nope"}); err == nil || !strings.Contains(err.Error(), "--fields nope: no such field") || !strings.Contains(err.Error(), "ref,url,title") {
 		t.Errorf("unknown field: %v", err)
+	}
+}
+
+// unserved is the In Progress item no session serves.
+const unserved = "t/w#4"
+
+func TestNextFreeSkipsWhatARunningSessionServesOrWorksOn(t *testing.T) {
+	listed := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	me := state.Party{Session: "me", Name: "Me"}
+	recorded := state.Party{Session: "s1", Name: workerOne}
+	working := state.Party{Session: "s2", Name: "No record"}
+	alive := func(p state.Party) bool { return p.Is(recorded) || p.Is(working) || p.Is(me) }
+	st := &state.State{Records: []state.Record{{Session: recorded, Issue: "t/w#1", At: listed.Add(-time.Hour)}}}
+	inProgress := func(n int) board.Candidate {
+		return board.Candidate{Item: board.Item{Ref: fmt.Sprintf("t/w#%d", n)}, Step: stepInProgress}
+	}
+	// The record's item, the item a session works on with no record, and
+	// the issue the pull request it works on closes are served, In Progress
+	// or not; the record wins over the work.
+	cands := []board.Candidate{inProgress(1), inProgress(2), inProgress(3), inProgress(4)}
+	sc := pickScope{me: me, alive: alive, listed: listed, closes: map[string][]string{"t/w#9": {"t/w#3"}},
+		works: []sessionWork{{party: working, refs: []string{"T/W#2", "t/w#9", "t/w#1"}}}}
+	res := nextFree(st, cands, sc)
+	var got []string
+	for _, c := range res.Skipped {
+		got = append(got, c.Ref+": "+c.Skip)
+	}
+	want := []string{
+		`t/w#1: served by "Worker one"`,
+		`t/w#2: served by "No record" (works on it)`,
+		`t/w#3: served by "No record" (works on it) through t/w#9`,
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("skipped:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	// An In Progress item no session serves is offered, and the free list
+	// holds no served item.
+	if res.Pick == nil || res.Pick.Ref != unserved || len(res.AfterPick) != 0 || res.SkippedBy[kindServed] != 3 {
+		t.Errorf("pick %v, after %+v, by %v", res.Pick, res.AfterPick, res.SkippedBy)
+	}
+	cands = append(cands, inProgress(5), inProgress(2))
+	res = nextFree(st, append([]board.Candidate{inProgress(6)}, cands...), sc)
+	for _, c := range res.AfterPick {
+		if c.Skip == "" && c.Ref != unserved && c.Ref != "t/w#5" {
+			t.Errorf("free behind the pick: %s, served", c.Ref)
+		}
+	}
+}
+
+func TestServingWorkLeavesOutRolesIdleAgentsAndQuietSessionsNotBusy(t *testing.T) {
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	session := func(id string, active time.Time) *claude.Session {
+		return &claude.Session{ID: id, Name: id, LastActive: active}
+	}
+	sessions := []*claude.Session{
+		session("wk", now), session("pl", now), session("sv", now), session("id", now), session("qt", now.Add(-2*time.Hour)), session("bz", now.Add(-2*time.Hour)),
+	}
+	work := make([]claude.Work, len(sessions))
+	for i, s := range sessions {
+		work[i] = claude.Work{Refs: []string{"t/w#" + s.ID, "n/lab#1", "t/w#2", unserved}}
+	}
+	st := &state.State{
+		Supervisor: &state.Supervisor{Party: state.Party{Session: "sv"}},
+		Agents: []state.Agent{
+			{Party: state.Party{Session: "wk"}, Task: "its task"},
+			{Party: state.Party{Session: "id"}, LastTask: "its last task"},
+			{Party: state.Party{Session: "bz"}, Task: "its task"},
+		},
+	}
+	var got []string
+	for _, w := range servingWork(st, sessions, work, now.Add(-time.Hour)) {
+		got = append(got, w.party.Session+": "+strings.Join(w.refs, " "))
+	}
+	want := []string{"wk: t/w#wk n/lab#1 t/w#2", "pl: t/w#pl n/lab#1 t/w#2", "bz: t/w#bz n/lab#1 t/w#2"}
+	if !slices.Equal(got, want) {
+		t.Errorf("serving work:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
