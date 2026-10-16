@@ -34,6 +34,9 @@ type Ops struct {
 	// Vault is the shared 1Password vault, the only one an op:// reference
 	// may name; empty refuses every op:// reference.
 	Vault string
+	// Vaults are the shared vaults besides Vault that an op:// reference
+	// may read from (copy, compare, fingerprint); writes go to Vault alone.
+	Vaults []string
 	// Token is the vault's service account token, which only op's own
 	// environment gets; empty refuses every op:// reference.
 	Token string
@@ -189,6 +192,23 @@ func (o *Ops) checkVault(r Ref) error {
 	return err
 }
 
+// checkRead refuses an op:// reference a value is read from outside
+// [Ops.ReadVaults], naming them, with [ErrVault] when the vault is not
+// configured.
+func (o *Ops) checkRead(r Ref) error {
+	vaults := o.ReadVaults()
+	err := o.checkVaultIn(r, vaults...)
+	if err != nil && !errors.Is(err, ErrVault) {
+		return fmt.Errorf("%s: beekeeper reads only the vaults %q (secret.vault, secret.vaults)", r.Op, vaults)
+	}
+	return err
+}
+
+// ReadVaults are the vaults a value is read from: Vault and Vaults.
+func (o *Ops) ReadVaults() []string {
+	return slices.Compact(append([]string{o.Vault}, o.Vaults...))
+}
+
 // checkVaultIn refuses an op:// reference outside vaults, with [ErrVault]
 // when the shared vault is not configured.
 func (o *Ops) checkVaultIn(r Ref, vaults ...string) error {
@@ -208,7 +228,7 @@ func (o *Ops) checkVaultIn(r Ref, vaults ...string) error {
 // values reads what r names: one value under its own name for a single
 // reference, every leaf under its dotted path for a whole file.
 func (o *Ops) values(ctx context.Context, r Ref) (map[string]string, error) {
-	if err := o.checkVault(r); err != nil {
+	if err := o.checkRead(r); err != nil {
 		return nil, err
 	}
 	if r.Op != "" {

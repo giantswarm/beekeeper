@@ -35,7 +35,7 @@ var secretRead secret.SecretReader
 func (a *app) secretCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "secret",
-		Short: "Credential operations that never return a value: compare, fingerprint, copy, set, capture, rotate, unset, github-app; reveal answers configuration; store is the person's",
+		Short: "Credential operations that never return a value: compare, fingerprint, copy, set, capture, rotate, unset, github-app; items lists a vault's item names, reveal answers configuration; store is the person's",
 		Long: `beekeeper is the only process that reads, creates, encrypts and decrypts
 secrets; an agent asks it with beekeeper secret. sops and op run in
 beekeeper's process, a value stays in its memory for the one operation and
@@ -49,7 +49,7 @@ A reference is a SOPS file (every value in it), one value in a SOPS file
 stringData.credentials.json, or quoted, stringData."credentials.json", or
 escaped, stringData.credentials\.json; sops:// in front optional), a field of
 the shared 1Password vault (op://<vault>/<item>/<field>, the vault being
-secret.vault) or, as a source, a key of a Kubernetes Secret
+secret.vault, or for a read one of secret.vaults) or, as a source, a key of a Kubernetes Secret
 (k8s://<context>/<namespace>/<name>/<key>, and after # the dotted path of
 one value inside what the key holds: a YAML or JSON mapping, tab-indented
 YAML, dotenv or key-value lines, or a document one level down under a
@@ -134,7 +134,7 @@ anything is not equal.`,
 		},
 	})
 	c.AddCommand(a.secretFingerprintCmd(), a.secretCopyCmd(), a.secretSetCmd(), a.secretCaptureCmd(), a.secretRotateCmd(), a.secretSetupCmd(), a.secretImportCmd(), a.secretRecipientsCmd(),
-		a.secretRevealCmd(), a.secretUnsetCmd(), a.secretGitHubAppCmd())
+		a.secretItemsCmd(), a.secretRevealCmd(), a.secretUnsetCmd(), a.secretGitHubAppCmd())
 	for _, sub := range c.Commands() {
 		run := sub.RunE
 		sub.RunE = func(cmd *cobra.Command, args []string) error {
@@ -1139,7 +1139,7 @@ func parseRefs(args ...string) ([]secret.Ref, error) {
 // secretOps are the operations with the service account's token, read
 // from secret.tokenFile when the shared vault is configured.
 func (a *app) secretOps() (*secret.Ops, error) {
-	ops := &secret.Ops{Run: secretRun, Apply: secretApply, Read: secretRead, Kubeconfig: a.kubeconfigFiles(), Vault: a.cfg.Secret.Vault, Session: a.cfg.Secret.Session, Ages: a.ageIdentities(),
+	ops := &secret.Ops{Run: secretRun, Apply: secretApply, Read: secretRead, Kubeconfig: a.kubeconfigFiles(), Vault: a.cfg.Secret.Vault, Vaults: a.cfg.Secret.Vaults, Session: a.cfg.Secret.Session, Ages: a.ageIdentities(),
 		AgeVaults: a.cfg.Secret.AgeVaults, Store: secret.Store{Read: a.cfg.Secret.Store.Read, Search: a.cfg.Secret.Store.Search}, Installations: a.installationNames()}
 	if ops.Vault == "" || ops.Session || a.cfg.Secret.TokenFile == "" {
 		return ops, nil

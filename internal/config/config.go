@@ -358,6 +358,11 @@ type Secret struct {
 	// Vault is the team's shared 1Password vault, the only one an op://
 	// reference may name; unset, beekeeper secret reads SOPS files only.
 	Vault string `yaml:"vault"`
+	// Vaults are the shared vaults besides Vault that an op:// reference
+	// is read from (copy, compare, fingerprint) through the same session
+	// or service account, such as a team's shared vault; beekeeper writes
+	// to Vault alone. The list is the person's policy.
+	Vaults []string `yaml:"vaults"`
 	// TokenFile (~/ allowed) holds the vault's service account token,
 	// which beekeeper gives only to its own op calls. Agents reach it
 	// nowhere: it lies outside every agent container's mounts.
@@ -2043,6 +2048,11 @@ func (c *Config) validate() error {
 	for i, v := range c.Secret.AgeVaults {
 		if v == "" || strings.Contains(v, "/") || c.Secret.Vault == "" {
 			return fmt.Errorf("secret.ageVaults[%d]: %q: a vault's name, beside secret.vault", i, v)
+		}
+	}
+	for i, v := range c.Secret.Vaults {
+		if v == "" || strings.Contains(v, "/") || c.Secret.Vault == "" {
+			return fmt.Errorf("secret.vaults[%d]: %q: a vault's name, beside secret.vault", i, v)
 		}
 	}
 	for name, p := range c.Omp.Providers {
