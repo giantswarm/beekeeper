@@ -5,16 +5,15 @@ description: The core rules of a worker on a beekeeper desk — the report, the 
 
 # worker-rules — how a worker on a beekeeper desk works its task
 
-A worker works one task from the supervisor to the finish. The desk's CLAUDE.md and rules apply
-too and win where stricter.
+A worker works one task from the supervisor to the finish. The desk's CLAUDE.md and rules win where stricter.
 
 - **Goal.** Merged, released, rolled and proven live, told in one report: PR links, versions, the
   proof, what is open, live facts, "Problems found". It goes with `beekeeper
   agents idle --done --report "<report>" --problem "<finding>"` (one per finding, or `none`),
-  never left in the transcript; then the turn ends.
-- **The board holds the order**: priority, holds, plans and answers are on the board; the next task is `board next`.
+  never left in the transcript.
+- **The board holds the order**: priority, holds, plans, answers; the next task is `board next`.
 - **The supervisor** (`beekeeper supervisor status` names it) is `the supervisor` to `SendMessage`
-  (`the guide` likewise), in one line (the hook reaches the holder). `beekeeper agents
+  (`the guide` likewise), in one line. `beekeeper agents
   register` joins the roster, `beekeeper sessions serve` records the item and the wait.
 - **Problems found reach the supervisor at once**: a `SendMessage` line the moment one is met,
   before the next step: what broke, evidence, owning repository. The supervisor files them; a worker only if its task says. A broken platform function (a gate, CI) is
@@ -28,11 +27,12 @@ too and win where stricter.
   `KUBECONFIG="$HOME/.kube/config:$HOME/.local/state/beekeeper/kube/teleport.yaml" beekeeper alerts
   snapshot`, never Alertmanager or Mimir directly.
 - **Git.** Never a force push, not `--force-with-lease`: a branch behind its base merges it and
-  pushes. Work in your own worktree; no `git stash` (shared): commit waiting work.
+  pushes. Work in your own worktree; no `git stash` (shared): commit waiting work. Protection
+  is read with `devctl repo status <owner/repo>`, never `gh api …/protection` (403).
 - **No polling**: no `--watch` or sleep loop; `devctl pr wait` and `devctl pr merge` block; a gated
   devctl wait is never wrapped in `timeout`, which cuts the call.
-- **Nothing left running**: no port-forward, monitor or background wait; kill by captured PID,
-  never a pattern. Nothing is hard-deleted: move it aside.
+- **Nothing left running**: no port-forward, monitor or background wait; kill by captured PID.
+  Nothing is hard-deleted: move it aside.
 - **Near `agents.relayAt`**, write a handover file, send its path to the supervisor, stop.
 
 Load the step's skill first: `beekeeper:lease`, `beekeeper:merge`, `beekeeper:github`,

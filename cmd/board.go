@@ -9,8 +9,10 @@ import (
 	"maps"
 	"reflect"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -19,6 +21,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/lease"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -82,7 +85,10 @@ priorityOf). A plan is
 the open or merged pull request of plans.repositories whose description
 names the epic; its state never gates. The first item that is free
 is picked: not served by a running session (a sessions serve record, a busy
-agent's task; one naming a pull request serves the issues it closes too) nor by an agent on the roster, its CLI running or not, while it is
+agent's task, or else what a session active within overlaps.activeWithin
+works on now, its sessions ON refs, "(works on it)", a busy agent's however
+quiet: a role holder's and an idle agent's are left out; one naming a pull request serves the issues it
+closes too, In Progress or not) nor by an agent on the roster, its CLI running or not, while it is
 busy with its task or parked and kept (agents keep, or an open timer that
 wakes it by name), not assigned to anybody outside board.people, without an open recorded
 blocker, active within board.staleAfter, and with every lease its labels
@@ -104,7 +110,7 @@ above the pick that was skipped on a line of its own, "skipped
 <owner/repo#n>: <reason>", the same list as --json's skipped, then the item and why it is picked, without --claim the
 free items behind it in their order (the preview of the board's work), and
 the skipped items' count by kind: served (a session's record, a busy
-agent's task), assigned (outside
+agent's task, a running session's work), assigned (outside
 board.people), blocked, stale, lease (another session holds it), planning
 (the epic gate holds it), unknown (GitHub answered its board fields or an
 epic's sub-issues with an error) and order (a rule of board.order turns it
@@ -189,7 +195,8 @@ the whole walk.`,
 			if err != nil {
 				return err
 			}
-			sc := pickScope{me: me, alive: alive, listed: listed, owner: a.cfg.Board.Owner}
+			sc := pickScope{me: me, alive: alive, listed: listed, owner: a.cfg.Board.Owner,
+				works: servingWork(st, sessions, a.sessionWorks(sessions), a.now.Add(-a.cfg.Overlaps.ActiveWithin.Duration))}
 			if sc.closes, err = cl.Closes(cmd.Context(), offBoard(boardOwners(st, sc), cands)); err != nil {
 				return err
 			}
@@ -384,13 +391,63 @@ func skipHeldLeases(cands []board.Candidate, holders []lease.Holder, me state.Pa
 // pickScope is what a pick reads beside the state: who asks, which sessions
 // run and when they were listed, which issues the pull requests close
 // (closes, from Client.Closes) and the board's owner, which a repo#n a
-// task or note names belongs to.
+// task or note names belongs to, and what the running sessions work on
+// (servingWork).
 type pickScope struct {
 	me     state.Party
 	alive  func(state.Party) bool
 	listed time.Time
 	closes map[string][]string
 	owner  string
+	works  []sessionWork
+}
+
+// sessionWork is the issues and pull requests a running session works on
+// now: its current refs, the sessions table's ON.
+type sessionWork struct {
+	party state.Party
+	refs  []string
+}
+
+// servingWork is what the running sessions work on now (work[i] is
+// sessions[i]'s), for board next, its sessions ON: a busy agent's, quiet
+// or not, and another session's active since since; a role
+// holder's (it reads every item) and an agent's reporting idle (its last
+// task's) are left out.
+func servingWork(st *state.State, sessions []*claude.Session, work []claude.Work, since time.Time) []sessionWork {
+	var out []sessionWork
+	for i, s := range sessions {
+		p := s.Party()
+		holder := slices.ContainsFunc(roles, func(rl role) bool { h := rl.get(st).Holder; return h != nil && h.Is(p) })
+		registered := slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) })
+		if i >= len(work) || holder || registered && agentIdle(st, p) || !registered && s.LastActive.Before(since) {
+			continue
+		}
+		if refs := work[i].Refs; len(refs) > 0 {
+			out = append(out, sessionWork{party: p, refs: refs[:min(claude.Current, len(refs))]})
+		}
+	}
+	return out
+}
+
+// sessionWorks reads what each session's transcript says it works on.
+func (a *app) sessionWorks(sessions []*claude.Session) []claude.Work {
+	out := make([]claude.Work, len(sessions))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, runtime.GOMAXPROCS(0))
+	for i, s := range sessions {
+		sem <- struct{}{}
+		wg.Go(func() {
+			defer func() { <-sem }()
+			if s.Harness == omp.Harness {
+				out[i], _ = omp.ReadTranscript(s.Transcript, a.now)
+			} else {
+				out[i], _ = a.readTranscript(s.Transcript)
+			}
+		})
+	}
+	wg.Wait()
+	return out
 }
 
 // nextResult is the pick, nil when no item is free, the candidates
@@ -469,7 +526,8 @@ func skipCounts(by map[string]int) string {
 // unless the session is a registered agent reporting idle, by the record
 // of an agent kept on the roster (keptBy) or busy with its task on it,
 // whether its CLI runs or not, by a
-// busy agent whose task names it. An issue a
+// busy agent whose task names it, else by a running session working on it
+// (sc.works). An issue a
 // pull request closes (sc.closes) is owned by whatever owns
 // the pull request, and a sub-issue offered through an epic by whatever owns
 // the epic.
@@ -640,6 +698,14 @@ func boardOwners(st *state.State, sc pickScope) map[string]string {
 	for _, ag := range st.Agents {
 		if ag.Task != "" && !ag.Done {
 			named(ag.Task, name(ag.Party)+" (task)")
+		}
+	}
+	// Last, what a running session works on with no record naming it.
+	for _, w := range sc.works {
+		for _, ref := range w.refs {
+			if ref = strings.ToLower(ref); out[ref] == "" {
+				out[ref] = name(w.party) + " (works on it)"
+			}
 		}
 	}
 	return out
