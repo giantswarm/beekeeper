@@ -41,8 +41,8 @@ func (s *syncBuffer) String() string {
 }
 
 // loopWatcher is a standby watch polling every interval, with a merge
-// settling on a lane whose HelmReleases readHRs reads: extra is appended to
-// the watch configuration.
+// settling on a lane whose HelmReleases readHRs reads, none when nil (never
+// kubectl): extra is appended to the watch configuration.
 func loopWatcher(t *testing.T, interval, extra string, readHRs func(context.Context, config.Lane) ([]merge.HelmRelease, error)) (*watcher, *syncBuffer) {
 	t.Helper()
 	dir := t.TempDir()
@@ -73,6 +73,9 @@ func loopWatcher(t *testing.T, interval, extra string, readHRs func(context.Cont
 	}
 	out := &syncBuffer{}
 	w := (&app{cfg: c, store: store, now: now, out: out}).newWatcher(true, false)
+	if readHRs == nil {
+		readHRs = func(context.Context, config.Lane) ([]merge.HelmRelease, error) { return nil, nil }
+	}
 	w.readHRs = readHRs
 	w.stand.send = func(context.Context, string, string) error {
 		t.Error("the test watch sent a message")
