@@ -18,8 +18,10 @@ import (
 // ungatedTable is a machine's process table: a worker's CLI (pid 10) whose
 // script runs a merge (12) and whose python code runs another (44), a
 // promotion in the CLI's own shell (40), a gate's merge-child running a
-// merge (21), and the devctl commands the gate does not run: the gate's own
-// dry run (31), a --team promotion (41) and a pr wait (42).
+// merge (21), the devctl commands the gate does not run: the gate's own
+// dry run (31), a --team promotion (41) and a pr wait (42), and a test run's
+// fake devctl merges: under its cmd.test merge-child (51), under a
+// watch.test (53) and a reparented one under /tmp/Test… (54).
 func ungatedTable() *proc.Table {
 	p := func(pid, ppid int, comm string, args ...string) *proc.Process {
 		return &proc.Process{PID: pid, PPID: ppid, Comm: comm, Args: args, Start: time.Now().Add(-time.Hour), StartTicks: int64(pid) * 100}
@@ -39,6 +41,11 @@ func ungatedTable() *proc.Table {
 		p(42, 10, merge.Tool, "devctl", "pr", "wait", "o/r", "3"),
 		p(43, 10, "python3", "python3", "-c", "import subprocess; subprocess.run(['devctl', 'pr', 'merge', 'o/r', '4'])"),
 		p(44, 43, merge.Tool, "devctl", "pr", "merge", "o/r", "4"),
+		p(50, 10, "cmd.test", "/tmp/go-build1/b001/cmd.test", "-test.run=TestHelperMergeChild", "--", "/tmp/TestGate1/001/state"),
+		p(51, 50, merge.Tool, "/tmp/TestGate1/001/devctl", "pr", "merge", "o/r", "5"),
+		p(52, 10, "watch.test", "/tmp/go-build2/b002/watch.test"),
+		p(53, 52, merge.Tool, "devctl", "pr", "merge", "o/r", "6"),
+		p(54, 1, merge.Tool, "/tmp/TestGate2/001/devctl", "pr", "merge", "o/r", "7"),
 	} {
 		tb.ByPID[pr.PID] = pr
 	}
@@ -54,7 +61,7 @@ const workerSession = "s10"
 // The merges and the one-repository promotion with no gate or merge-child
 // among their ancestors are ungated, by pid, each naming its session and its
 // parent; a merge under a merge-child, the gate's own dry run, a --team
-// promotion and a pr wait are none.
+// promotion, a pr wait and a test run's fake devctl merges are none.
 func TestUngatedMerges(t *testing.T) {
 	sessions := []*claude.Session{{PID: 10, ID: workerSession, Name: "Worker A"}}
 	got := ungatedMerges(sessions, ungatedTable())
@@ -95,7 +102,7 @@ func TestTheWatchSaysAnUngatedMerge(t *testing.T) {
 			t.Errorf("want once: %q\n%s", want, s)
 		}
 	}
-	for _, gated := range []string{"(pid 21,", "(pid 31,", "(pid 41,", "(pid 42,"} {
+	for _, gated := range []string{"(pid 21,", "(pid 31,", "(pid 41,", "(pid 42,", "(pid 51,", "(pid 53,", "(pid 54,"} {
 		if strings.Contains(s, gated) {
 			t.Errorf("a gated or ungateable command is said: %s\n%s", gated, s)
 		}
@@ -141,7 +148,7 @@ func TestFindWaitsMarksAnUngatedMerge(t *testing.T) {
 	for _, w := range findWaits(ungatedTable(), nil, time.Now()) {
 		byPID[w.PID] = w
 	}
-	for pid, want := range map[int]bool{12: true, 44: true, 21: false, 42: false} {
+	for pid, want := range map[int]bool{12: true, 44: true, 21: false, 42: false, 51: false, 53: false, 54: false} {
 		w, ok := byPID[pid]
 		if !ok || w.Ungated != want {
 			t.Errorf("wait %d: listed %v, ungated %v, want %v", pid, ok, w.Ungated, want)

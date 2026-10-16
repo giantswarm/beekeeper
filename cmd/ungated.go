@@ -3,7 +3,10 @@ package cmd
 import (
 	"fmt"
 	"maps"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/merge"
@@ -36,9 +39,35 @@ func isGate(p *proc.Process) bool { return p.Comm == project.Name && reexecs(p) 
 // with no beekeeper gate among its ancestors: outside the lanes, the holds
 // and the budget floor, with devctl's own bypass. The gate runs its command
 // in a merge-child under a transient unit, so the merge-child is the
-// ancestor a gated one has.
+// ancestor a gated one has. A test run's fixture is none: it or one of its
+// ancestors is a test process.
 func ungatedProcess(t *proc.Table, p *proc.Process) bool {
-	return gatedCommand(p) && !slices.ContainsFunc(t.Ancestors(p.PID), isGate)
+	if !gatedCommand(p) || isTest(p) {
+		return false
+	}
+	ancestors := t.Ancestors(p.PID)
+	return !slices.ContainsFunc(ancestors, isGate) && !slices.ContainsFunc(ancestors, isTest)
+}
+
+// isTest reports whether p belongs to a Go test run: a test binary (cmd.test,
+// any *.test) or an executable under a test's temporary directory
+// (/tmp/Test…), the fake devctl a test of the gate runs.
+func isTest(p *proc.Process) bool {
+	if strings.HasSuffix(p.Comm, ".test") {
+		return true
+	}
+	if len(p.Args) == 0 {
+		return false
+	}
+	if strings.HasSuffix(filepath.Base(p.Args[0]), ".test") {
+		return true
+	}
+	for _, root := range []string{os.TempDir(), "/tmp"} {
+		if rel, err := filepath.Rel(root, p.Args[0]); err == nil && strings.HasPrefix(rel, "Test") {
+			return true
+		}
+	}
+	return false
 }
 
 // ungatedMerge is a devctl merge or promotion that runs outside the gate.
