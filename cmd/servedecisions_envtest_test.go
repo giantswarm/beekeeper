@@ -160,11 +160,11 @@ func TestEnvtestServeDecisions(t *testing.T) {
 		t.Fatalf("closed %q", closed)
 	}
 	evs, err := e.store.Events(0, func(ev state.Event) bool { return ev.Verb == answerRecorded })
-	if err != nil || len(evs) != 1 || evs[0].By.Person != boEmail || !strings.HasPrefix(evs[0].Detail, privateThread+` answered by "bo" via slack, recorded at `) || !strings.HasSuffix(evs[0].Detail, ": own — until Friday") {
+	if err != nil || len(evs) != 1 || evs[0].By.Person != boEmail || !strings.HasPrefix(evs[0].Detail, privateThread+` answered by "bo" via slack, note #`) || !strings.HasSuffix(evs[0].Detail, ": own — until Friday") {
 		t.Fatalf("answer.recorded %+v %v", evs, err)
 	}
-	if len(f.comments) != 1 || !strings.Contains(f.comments[0], "**Answer** from bo via slack to note #") {
-		t.Fatalf("comments %q", f.comments)
+	if len(f.comments) != 0 {
+		t.Fatalf("posted on GitHub: %q", f.comments)
 	}
 
 	// A team's decision: posted to its channel, any member answers.
