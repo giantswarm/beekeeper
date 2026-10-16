@@ -69,7 +69,8 @@ type leak struct {
 }
 
 // secretOps names the beekeeper secret operations every refusal points to.
-const secretOps = "Equality: `beekeeper secret compare <a> <b>` or `beekeeper secret fingerprint <ref>`. " +
+const secretOps = "Equality, the one comparison an agent runs: `beekeeper secret compare <a> <b>` or `beekeeper secret fingerprint <ref>`, " +
+	"whose broker compares out of the session, no value reaching it; any other comparison of a value (a hash, a diff, `grep -c|-q`) stays refused. " +
 	"Changes: `beekeeper secret copy <src.sops.yaml> <dst.sops.yaml> [--name n --namespace ns]`, " +
 	"`copy <ref> <file#path>`, `copy <ref> -- <consumer>`, `set <file> <path> --generate [--name n --namespace ns] [--vault op://…] [--to-secret … | -- <consumer>]`, " +
 	"`unset <file> <path>… --write` (keys out of a SOPS file); configuration a SOPS file encrypts (ids, URLs, peers): `reveal <file> <path>…`; " +
