@@ -34,6 +34,33 @@ func (a *app) memcapCPU() platform.Cap {
 	return platform.Cap{CPUQuota: a.cfg.MemcapCPUQuota(runtime.NumCPU()), CPUWeight: a.cfg.Memcap.CPUWeight}
 }
 
+// buildSlots is the build slots' directory and count, the one reading every
+// taker and reader of a slot shares (beekeeper run, a start that builds, the
+// capacity, snapshot, free and ui views): MEMCAP_STATE (the directory
+// holding slots/) and MEMCAP_SLOTS over memcap.slotDir and memcap.slots. A
+// MEMCAP_SLOTS that is no positive number is a usage error, the configured
+// count returned with it for a reader that only shows the slots.
+func (a *app) buildSlots() (dir string, n int, err error) {
+	dir, n = a.cfg.Memcap.SlotDir, a.cfg.Memcap.Slots
+	if s := os.Getenv("MEMCAP_STATE"); s != "" {
+		dir = filepath.Join(s, "slots")
+	}
+	if s := os.Getenv("MEMCAP_SLOTS"); s != "" {
+		v, err := strconv.Atoi(s)
+		if err != nil || v < 1 {
+			return dir, n, usageErr("MEMCAP_SLOTS=%q: want a positive number", s)
+		}
+		n = v
+	}
+	return dir, n, nil
+}
+
+// slotView is buildSlots for a reader that only shows or names the slots.
+func (a *app) slotView() (dir string, n int) {
+	dir, n, _ = a.buildSlots()
+	return dir, n
+}
+
 func (a *app) runCmd() *cobra.Command {
 	var maxFlag, swapFlag, waitFlag string
 	c := &cobra.Command{
@@ -96,21 +123,14 @@ kill in it as a test kill, not a build's.`,
 			cpu := a.memcapCPU()
 			o := guard.Options{Max: env("MEMCAP_MAX", a.cfg.MemcapMax(ramMiB())), Swap: env("MEMCAP_SWAP", "0"),
 				CPUQuota: cpu.CPUQuota, CPUWeight: cpu.CPUWeight,
-				SlotDir: a.cfg.Memcap.SlotDir, Slots: a.cfg.Memcap.Slots, Stderr: os.Stderr, Record: a.runRecorder(),
-				Test: os.Getenv("MEMCAP_TEST") == "1"}
+				Stderr: os.Stderr, Record: a.runRecorder(), Test: os.Getenv("MEMCAP_TEST") == "1"}
+			var err error
+			if o.SlotDir, o.Slots, err = a.buildSlots(); err != nil {
+				return err
+			}
 			if inSandbox() {
 				exe, _ := os.Executable()
 				o.Sandbox = sandbox.Capper{Dir: sandbox.SpoolDir(a.cfg.StateDir), Exe: exe}
-			}
-			if s := os.Getenv("MEMCAP_STATE"); s != "" {
-				o.SlotDir = filepath.Join(s, "slots")
-			}
-			if s := os.Getenv("MEMCAP_SLOTS"); s != "" {
-				n, err := strconv.Atoi(s)
-				if err != nil || n < 1 {
-					return usageErr("MEMCAP_SLOTS=%q: want a positive number", s)
-				}
-				o.Slots = n
 			}
 			f := cmd.Flags()
 			if f.Changed("max") {
@@ -121,7 +141,6 @@ kill in it as a test kill, not a build's.`,
 			}
 			var wait string
 			wait, o.WaitFrom, o.Background = guard.ResolveWait(waitFlag, f.Changed("wait"))
-			var err error
 			if o.Wait, err = guard.ParseWait(wait); err != nil {
 				return usageErr("%v", err)
 			}

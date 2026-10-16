@@ -366,7 +366,7 @@ func (c *collector) uiMachineView(ctx context.Context, v *view, t *proc.Table, w
 	if root, err := machine.ReadDisk("/"); err == nil {
 		m.Root = uiDisk(root)
 	}
-	for _, sl := range machine.ReadSlots(a.cfg.Memcap.SlotDir, a.cfg.Memcap.Slots) {
+	for _, sl := range machine.ReadSlots(a.slotView()) {
 		m.Slots = append(m.Slots, tui.Slot{N: sl.N, Free: sl.Free, Holder: sl.Holder})
 	}
 	clusters, err := machine.KindClusters(ctx)

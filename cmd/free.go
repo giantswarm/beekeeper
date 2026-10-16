@@ -184,7 +184,7 @@ func (a *app) freeMachine() (free.Machine, error) {
 	m.Clusters, m.ClustersErr = machine.KindClusters(ctx)
 	m.ClusterNotes = a.freeClusterNotes(m.Clusters, m.Sessions)
 	m.MaxLabs = a.cfg.KindClusters(ramMiB())
-	m.SlotDir, m.Slots = a.cfg.Memcap.SlotDir, a.cfg.Memcap.Slots
+	m.SlotDir, m.Slots = a.slotView()
 	m.BuildCPU = a.memcapCPU()
 	return m, nil
 }
