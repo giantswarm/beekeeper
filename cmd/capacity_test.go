@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -324,5 +326,33 @@ func TestQueueStart(t *testing.T) {
 		case c.wantErr != "" && (err == nil || err.Error() != c.wantErr):
 			t.Errorf("%s: %v, want %q", c.name, err, c.wantErr)
 		}
+	}
+}
+
+// start --builds --dry-run says how the start would find the build slot:
+// free, or the wait with the slots' holders, and claims nothing.
+func TestDryRunSlotNamesTheWait(t *testing.T) {
+	state := t.TempDir()
+	t.Setenv("MEMCAP_STATE", state)
+	t.Setenv("MEMCAP_SLOTS", "2")
+	t.Setenv("MEMCAP_WAIT", "8m")
+	var out bytes.Buffer
+	a := &app{cfg: &config.Config{}, out: &out}
+	if err := a.dryRunSlot(); err != nil || out.String() != "build slot: free\n" {
+		t.Fatalf("dry run on free slots = %q, %v", out.String(), err)
+	}
+	holdSlots(t, state)
+	out.Reset()
+	if err := a.dryRunSlot(); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{"build slot: busy, the start waits its turn up to 8m for a build slot (all 2 held)", "go test holder-1", "go test holder-2"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("dry run on held slots = %q, want %q", got, want)
+		}
+	}
+	if entries, _ := os.ReadDir(filepath.Join(state, "slots", "queue")); len(entries) != 0 {
+		t.Errorf("the dry run left %d tickets in the queue", len(entries))
 	}
 }
