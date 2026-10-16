@@ -47,7 +47,7 @@ func stubAnswerGH(t *testing.T, f *answerGH) *answerGH {
 
 func issueNode(ref string, private bool, parent string) string {
 	repo, n, _ := strings.Cut(ref, "#")
-	return fmt.Sprintf(`{"__typename":"Issue","id":"ID-%s","number":%s,"repository":{"nameWithOwner":%q,"isPrivate":%t},"parent":%s}`, ref, n, repo, private, parent)
+	return fmt.Sprintf(`{"__typename":"Issue","id":"ID-%s","number":%s,"url":"https://github.com/%s/issues/%s","repository":{"nameWithOwner":%q,"isPrivate":%t},"parent":%s}`, ref, n, repo, n, repo, private, parent)
 }
 
 func (f *answerGH) run(ctx context.Context, args ...string) ([]byte, error) {
@@ -112,9 +112,9 @@ func runAnswer(a *app, args ...string) error {
 	return c.Execute()
 }
 
-// An answer without a note lands on its private thread, in the log, and
-// with the session serving the thread.
-func TestAnswerWithoutANoteLandsOnItsThread(t *testing.T) {
+// An answer without a note is logged and reaches the session serving its
+// thread; nothing is asked of or posted to GitHub.
+func TestAnswerWithoutANoteIsLoggedAndToldNotPosted(t *testing.T) {
 	a, out := answerApp(t)
 	f := stubAnswerGH(t, &answerGH{})
 	woke := stubWakes(t)
@@ -129,25 +129,23 @@ func TestAnswerWithoutANoteLandsOnItsThread(t *testing.T) {
 	if err := runAnswer(a, "https://github.com/o/private/issues/7", "the draft stays;", "implement at its head"); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.comments) != 1 || !strings.HasPrefix(f.comments[0], "ID-o/private#7: **Answer** from Pat via cli:\n\n> the draft stays; implement at its head\n") ||
-		!strings.Contains(f.comments[0], "Written by an agent") {
-		t.Fatalf("comments %q", f.comments)
+	if len(f.repos) != 0 || len(f.comments) != 0 {
+		t.Fatalf("GitHub asked %q, comments %q", f.repos, f.comments)
 	}
-	const url = "https://github.com/o/private#7#issuecomment-1"
-	if s := out.String(); !strings.Contains(s, "answer recorded on o/private#7: "+url) || !strings.Contains(s, "told server") {
+	if s := out.String(); !strings.Contains(s, "answer recorded for o/private#7\n") || !strings.Contains(s, "told server") {
 		t.Errorf("output %q", s)
 	}
-	if len(*woke) != 1 || !strings.Contains((*woke)[0], "→ w1: ANSWER on o/private#7 by Pat: the draft stays; implement at its head ("+url+")") {
+	if len(*woke) != 1 || !strings.HasSuffix((*woke)[0], "→ w1: ANSWER on o/private#7 by Pat: the draft stays; implement at its head") {
 		t.Errorf("woke %q", *woke)
 	}
 	got, err := a.answeredSince(time.Time{})
 	if err != nil || len(got) != 1 {
 		t.Fatalf("answers %+v, %v", got, err)
 	}
-	if an := got[0]; an.About != privateThread || an.Comment != url || an.For != notePerson || an.Via != viaCLI || an.Answer != "the draft stays; implement at its head" || an.ID != 0 {
+	if an := got[0]; an.About != privateThread || an.Comment != "" || an.For != notePerson || an.Via != viaCLI || an.Answer != "the draft stays; implement at its head" || an.ID != 0 {
 		t.Errorf("answer %+v", an)
 	}
-	// With nobody serving it, the answer is still on the thread and in the log.
+	// With nobody serving it, the answer is still in the log.
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Records[0].Ended = relayNow
 		return nil, nil
@@ -158,7 +156,7 @@ func TestAnswerWithoutANoteLandsOnItsThread(t *testing.T) {
 	if err := runAnswer(a, privateThread, "--via", viaSlack, "yes"); err != nil {
 		t.Fatal(err)
 	}
-	if s := out.String(); !strings.Contains(s, "no session serves o/private#7") || len(*woke) != 1 || len(f.comments) != 2 {
+	if s := out.String(); !strings.Contains(s, "no session serves o/private#7: the answer is in the log") || len(*woke) != 1 || len(f.comments) != 0 {
 		t.Errorf("output %q, woke %q", s, *woke)
 	}
 	if err := runAnswer(a, privateThread); Code(err) != ExitUsage {
@@ -169,25 +167,43 @@ func TestAnswerWithoutANoteLandsOnItsThread(t *testing.T) {
 	}
 }
 
-// An answer about a public repository's issue lands on its private plan,
-// else its nearest private epic, never on the public thread; with neither
-// it is refused, nothing posted.
-func TestAnAnswerAboutAPublicIssueLandsOnItsPrivateThread(t *testing.T) {
+// desk are words that mean something on one desk only: a posted decision
+// carries none of them.
+var desk = []string{"note #", "#1", noteFiler, "via", viaCLI, "beekeeper", agentOne, "o/private#7", "o/public#3"}
+
+// noDesk fails t for every desk word in body.
+func noDesk(t *testing.T, body string) {
+	t.Helper()
+	for _, w := range desk {
+		if w != "" && strings.Contains(body, w) {
+			t.Errorf("the comment says %q: %q", w, body)
+		}
+	}
+}
+
+// --post records the decision in plain words: on its private thread, else
+// a public issue's private plan or nearest private epic naming the issue by
+// its URL, never on the public thread; with neither it is refused, nothing
+// posted or logged.
+func TestAPostedAnswerSaysTheDecisionInPlainWords(t *testing.T) {
+	const publicURL = "https://github.com/o/public/issues/3"
 	for name, c := range map[string]struct {
 		gh     answerGH
+		about  string
 		thread string
-		via    string
+		head   string
 	}{
-		"the plan of its epic": {answerGH{plan: publicEpic, epic: privateEpic}, "ID-o/plans#4", "o/plans#4 (the plan of " + publicEpic + ")"},
-		"its own plan":         {answerGH{plan: publicSlice}, "ID-o/plans#4", "o/plans#4 (the plan of " + publicSlice + ")"},
-		"the private epic":     {answerGH{epic: privateEpic}, "ID-" + privateEpic, privateEpic + " (an epic above " + publicSlice + ")"},
-		"neither":              {answerGH{}, "", ""},
+		"its private thread":   {answerGH{}, privateThread, "ID-" + privateThread, "**Decision** by Pat:\n\n> go\n"},
+		"the plan of its epic": {answerGH{plan: publicEpic, epic: privateEpic}, publicSlice, "ID-o/plans#4", "**Decision** by Pat on " + publicURL + ":\n\n> go\n"},
+		"its own plan":         {answerGH{plan: publicSlice}, publicSlice, "ID-o/plans#4", "**Decision** by Pat on " + publicURL + ":"},
+		"the private epic":     {answerGH{epic: privateEpic}, publicSlice, "ID-" + privateEpic, "**Decision** by Pat on " + publicURL + ":"},
+		"neither":              {answerGH{}, publicSlice, "", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			a, out := answerApp(t)
 			f := stubAnswerGH(t, &c.gh)
 			stubWakes(t)
-			err := runAnswer(a, publicSlice, "go")
+			err := runAnswer(a, c.about, "--post", "go")
 			if c.thread == "" {
 				if Code(err) != ExitRefused || !strings.Contains(err.Error(), publicSlice+" is public and has no private thread") || len(f.comments) != 0 {
 					t.Fatalf("refusal %v, comments %q", err, f.comments)
@@ -200,20 +216,22 @@ func TestAnAnswerAboutAPublicIssueLandsOnItsPrivateThread(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(f.comments) != 1 || !strings.HasPrefix(f.comments[0], c.thread+": **Answer** from Pat via cli, about "+publicSlice+":") {
+			if len(f.comments) != 1 || !strings.HasPrefix(f.comments[0], c.thread+": "+c.head) || !strings.HasSuffix(f.comments[0], "\nWritten by an agent.") {
 				t.Fatalf("comments %q", f.comments)
 			}
-			if !strings.Contains(out.String(), "answer recorded on "+c.via) {
+			_, body, _ := strings.Cut(f.comments[0], ": ")
+			noDesk(t, body)
+			if !strings.Contains(out.String(), "answer recorded for "+c.about+", posted at https://github.com/") {
 				t.Errorf("output %q", out.String())
 			}
-			if got, _ := a.answeredSince(time.Time{}); len(got) != 1 || got[0].About != publicSlice {
+			if got, _ := a.answeredSince(time.Time{}); len(got) != 1 || got[0].About != c.about || !strings.HasPrefix(got[0].Comment, "https://github.com/") {
 				t.Errorf("logged %+v", got)
 			}
 		})
 	}
 	a, _ := answerApp(t)
 	stubAnswerGH(t, &answerGH{})
-	if err := runAnswer(a, unknownThread, "go"); Code(err) != ExitRefused || !strings.Contains(err.Error(), "no issue or pull request GitHub resolves") {
+	if err := runAnswer(a, unknownThread, "--post", "go"); Code(err) != ExitRefused || !strings.Contains(err.Error(), "no issue or pull request GitHub resolves") {
 		t.Errorf("an unknown thread: %v", err)
 	}
 	if err := runAnswer(a, "not-a-ref", "go"); Code(err) != ExitUsage {
@@ -222,16 +240,18 @@ func TestAnAnswerAboutAPublicIssueLandsOnItsPrivateThread(t *testing.T) {
 }
 
 // note answer is beekeeper answer on the note's first --ref: the note closes
-// and its filer is told; a note without a --ref names the verb to use.
-func TestNoteAnswerRecordsOnTheNotesThread(t *testing.T) {
+// and its filer is told, nothing posted; with --post the comment names no
+// note, filer or channel. A note without a --ref names the verb to use.
+func TestNoteAnswerTellsTheFilerAndPostsNothing(t *testing.T) {
 	a, _ := answerApp(t)
 	f := stubAnswerGH(t, &answerGH{})
 	woke := stubWakes(t)
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Notes = append(st.Notes,
 			state.Note{ID: 1, For: notePerson, Kind: noteDecision, By: state.Party{Session: "w1", Name: noteFiler}, Text: "Keep the draft?", Refs: []string{privateThread}, Options: []string{optMerge, optWait}},
-			state.Note{ID: 2, For: notePerson, Kind: noteDecision, By: state.Party{Session: "w1", Name: noteFiler}, Text: "Old question?"})
-		st.NextNote = 2
+			state.Note{ID: 2, For: notePerson, Kind: noteDecision, By: state.Party{Session: "w1", Name: noteFiler}, Text: "Old question?"},
+			state.Note{ID: 3, For: notePerson, Kind: noteDecision, By: state.Party{Session: "w1", Name: noteFiler}, Text: "Ship it?", Refs: []string{privateThread}})
+		st.NextNote = 3
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -239,15 +259,24 @@ func TestNoteAnswerRecordsOnTheNotesThread(t *testing.T) {
 	if _, err := noteCommand(a, verbAnswer, "1", flagChoice, "2", "after", "the", "release"); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.comments) != 1 || !strings.HasPrefix(f.comments[0], "ID-o/private#7: **Answer** from Pat via cli to note #1 (asked by filer: Keep the draft?):\n\n> wait — after the release\n") {
-		t.Fatalf("comments %q", f.comments)
+	if len(f.repos) != 0 || len(f.comments) != 0 {
+		t.Fatalf("GitHub asked %q, comments %q", f.repos, f.comments)
 	}
-	if len(*woke) != 1 || !strings.Contains((*woke)[0], "→ w1: NOTE ANSWERED #1 by Pat: wait — after the release (on o/private#7: ") {
+	if len(*woke) != 1 || !strings.HasSuffix((*woke)[0], "→ w1: NOTE ANSWERED #1 by Pat: wait — after the release (on o/private#7)") {
 		t.Errorf("woke %q", *woke)
 	}
 	got, _ := a.answeredSince(time.Time{})
-	if len(got) != 1 || got[0].ID != 1 || got[0].Question != "Keep the draft?" || got[0].Asker != noteFiler || got[0].Answer != "wait — after the release" {
+	if len(got) != 1 || got[0].ID != 1 || got[0].Question != "Keep the draft?" || got[0].Asker != noteFiler || got[0].Answer != "wait — after the release" || got[0].Comment != "" {
 		t.Fatalf("answers %+v", got)
+	}
+	if _, err := noteCommand(a, verbAnswer, "3", "--post", "yes"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.comments) != 1 || f.comments[0] != "ID-o/private#7: **Decision** by Pat:\n\n> yes\n\nWritten by an agent." {
+		t.Fatalf("comments %q", f.comments)
+	}
+	if len(*woke) != 2 || !strings.HasSuffix((*woke)[1], "NOTE ANSWERED #3 by Pat: yes (on o/private#7) posted at https://github.com/o/private#7#issuecomment-1") {
+		t.Errorf("woke %q", *woke)
 	}
 	_, err := noteCommand(a, verbAnswer, "2", "yes")
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "beekeeper answer <owner/repo#n> --note 2") {
@@ -261,6 +290,62 @@ func TestNoteAnswerRecordsOnTheNotesThread(t *testing.T) {
 	}
 	if err := runAnswer(a, privateThread, "--note", "2", "yes"); Code(err) != ExitRefused {
 		t.Errorf("a closed note: %v", err)
+	}
+}
+
+// An answer to a decision its default closed within the day replaces the
+// default: logged, its filer told so, the decision no longer kept. One a
+// day after the default is refused.
+func TestAnAnswerAfterItsDefaultReplacesIt(t *testing.T) {
+	a, out := answerApp(t)
+	stubAnswerGH(t, &answerGH{})
+	woke := stubWakes(t)
+	due := relayNow.Add(-time.Minute)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		for _, id := range []int{1, 2} {
+			st.Notes = append(st.Notes, state.Note{ID: id, For: notePerson, Kind: noteDecision, By: state.Party{Session: "w1", Name: noteFiler},
+				Text: "Merge now?", Refs: []string{privateThread}, Due: due, Default: "merge it at the due time"})
+		}
+		st.NextNote = 2
+		_, evs, closed := closeDefaulted(st, notePerson, watchParty, relayNow)
+		if len(closed) != 2 || len(st.Notes) != 0 || len(st.Defaulted) != 2 {
+			t.Fatalf("closed %+v, open %+v, defaulted %+v", closed, st.Notes, st.Defaulted)
+		}
+		return evs, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := noteCommand(a, verbAnswer, "1", "wait for the release"); err != nil {
+		t.Fatal(err)
+	}
+	if s := out.String(); !strings.Contains(s, `note #1 answered after its default: the answer replaces "merge it at the due time"`) {
+		t.Errorf("output %q", s)
+	}
+	if len(*woke) != 1 || !strings.HasSuffix((*woke)[0], "→ w1: NOTE ANSWERED #1 by Pat: wait for the release (replaces the default applied: merge it at the due time) (on o/private#7)") {
+		t.Errorf("woke %q", *woke)
+	}
+	st, _ := a.store.Read()
+	if len(st.Defaulted) != 1 || st.Defaulted[0].ID != 2 {
+		t.Errorf("defaulted %+v", st.Defaulted)
+	}
+	if got, _ := a.answeredSince(time.Time{}); len(got) != 1 || got[0].ID != 1 || got[0].Answer != "wait for the release" {
+		t.Errorf("answers %+v", got)
+	}
+	if _, err := noteCommand(a, verbAnswer, "1", "again"); Code(err) != ExitRefused {
+		t.Errorf("an answered note: %v", err)
+	}
+	a.now = due.Add(defaultedKeep + time.Minute)
+	if _, err := noteCommand(a, verbAnswer, "2", "too late"); Code(err) != ExitRefused || !strings.Contains(err.Error(), "nor closed by its default within 24h") {
+		t.Errorf("a day after its default: %v", err)
+	}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		closeDefaulted(st, notePerson, watchParty, a.now)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := a.store.Read(); len(st.Defaulted) != 0 {
+		t.Errorf("kept past a day: %+v", st.Defaulted)
 	}
 }
 

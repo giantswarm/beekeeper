@@ -16,9 +16,11 @@ const ancestorsMax = 5
 // Ref itself in a private repository; else the first private plan pull
 // request naming it or an epic above it, then the nearest epic above it in
 // a private repository. Via says why Ref is not About, "" when it is.
+// AboutURL is About's URL as GitHub gives it.
 type Thread struct {
-	About string `json:"about"`
-	Ref   string `json:"thread"`
+	About    string `json:"about"`
+	AboutURL string `json:"aboutURL,omitempty"`
+	Ref      string `json:"thread"`
 	Via   string `json:"via,omitempty"`
 	id    string
 }
@@ -29,6 +31,7 @@ type threadNode struct {
 	Typename   string `json:"__typename"`
 	ID         string `json:"id"`
 	Number     int    `json:"number"`
+	URL        string `json:"url"`
 	Repository struct {
 		NameWithOwner string `json:"nameWithOwner"`
 		IsPrivate     bool   `json:"isPrivate"`
@@ -40,7 +43,7 @@ func (n *threadNode) ref() string { return fmt.Sprintf("%s#%d", n.Repository.Nam
 
 // threadQuery reads an issue or pull request with ancestorsMax parents.
 var threadQuery = func() string {
-	const fields = `__typename id number repository{nameWithOwner isPrivate}`
+	const fields = `__typename id number url repository{nameWithOwner isPrivate}`
 	parents := strings.Repeat(" parent{"+fields, ancestorsMax) + strings.Repeat("}", ancestorsMax)
 	return `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issueOrPullRequest(number:$n){...on Issue{` + fields + parents + `} ...on PullRequest{` + fields + `}}}}`
 }()
@@ -68,7 +71,7 @@ func (c *Client) AnswerThread(ctx context.Context, ref string) (*Thread, error) 
 		return nil, &Refusal{fmt.Sprintf("%s is no issue or pull request GitHub resolves%s: nothing posted", ref, p.reason())}
 	}
 	it := r.Repository.Item
-	t := &Thread{About: it.ref()}
+	t := &Thread{About: it.ref(), AboutURL: it.URL}
 	if it.Repository.IsPrivate {
 		t.Ref, t.id = t.About, it.ID
 		return t, nil

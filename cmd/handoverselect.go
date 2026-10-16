@@ -108,8 +108,8 @@ func shortDur(d time.Duration) string {
 	return strings.TrimSuffix(s, "0m")
 }
 
-// answered is a person's answer recorded on its thread: the
-// answer.recorded event read back. ID is the note it answered, 0 for none.
+// answered is a person's answer recorded: the answer.recorded event read
+// back; Comment is its comment's URL, "" when none was posted. ID is the note it answered, 0 for none.
 type answered struct {
 	About    string
 	Comment  string
@@ -125,7 +125,7 @@ type answered struct {
 
 // answeredDetail is answer.recorded's detail, as beekeeper answer writes it
 // (answerEvent).
-var answeredDetail = regexp.MustCompile(`(?s)^(\S+) answered by ("(?:[^"\\]|\\.)*") via (\w+), recorded at (\S+?)(?:, note #(\d+) asked by ("(?:[^"\\]|\\.)*"): ("(?:[^"\\]|\\.)*"))?: (.*)$`)
+var answeredDetail = regexp.MustCompile(`(?s)^(\S+) answered by ("(?:[^"\\]|\\.)*") via (\w+)(?:, recorded at (\S+?))?(?:, note #(\d+) asked by ("(?:[^"\\]|\\.)*"): ("(?:[^"\\]|\\.)*"))?: (.*)$`)
 
 // parseAnswered reads an answer.recorded event; ok is false for another
 // one.

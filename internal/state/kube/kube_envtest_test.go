@@ -396,3 +396,51 @@ func TestEnvtestRefusals(t *testing.T) {
 		t.Errorf("ReadFile: %v", err)
 	}
 }
+
+// A decision closed by its default stays a Note in state defaulted, read
+// back as Defaulted, until it leaves Defaulted, which deletes it.
+func TestEnvtestKeepsADefaultedDecision(t *testing.T) {
+	a, _, c := envtestStore(t)
+	namespace(t, c, team)
+	ctx := context.Background()
+	if err := a.Update(func(st *state.State) ([]state.Event, error) {
+		st.Notes = append(st.Notes,
+			state.Note{ID: 1, For: "Pat", Kind: state.NoteDecision, Text: "merge?", By: ana, At: time.Now().Truncate(time.Second)},
+			state.Note{ID: 2, For: "Pat", Kind: state.NoteDecision, Text: "ship?", By: ana, At: time.Now().Truncate(time.Second)})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Update(func(st *state.State) ([]state.Event, error) {
+		st.Defaulted, st.Notes = st.Notes[:1], st.Notes[1:]
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stateOf := func(id int) string {
+		n := &v1alpha1.Note{}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: teamNamespace(team), Name: "note-" + strconv.Itoa(id)}, n); err != nil {
+			return err.Error()
+		}
+		return n.Status.State
+	}
+	if s1, s2 := stateOf(1), stateOf(2); s1 != noteDefaulted || s2 != "open" {
+		t.Fatalf("states %q, %q", s1, s2)
+	}
+	st, err := a.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Defaulted) != 1 || st.Defaulted[0].ID != 1 || len(st.Notes) != 1 || st.Notes[0].ID != 2 || st.NextNote != 2 {
+		t.Fatalf("defaulted %+v, notes %+v, next %d", st.Defaulted, st.Notes, st.NextNote)
+	}
+	if err := a.Update(func(st *state.State) ([]state.Event, error) {
+		st.Defaulted = nil
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if s := stateOf(1); !strings.Contains(s, "not found") {
+		t.Errorf("an answered default's Note: %q", s)
+	}
+}

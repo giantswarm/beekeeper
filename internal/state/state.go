@@ -840,7 +840,10 @@ type State struct {
 	Notes    []Note               `json:"notes,omitempty"`
 	// Memos are the memos and pinned notes an older beekeeper filed, closed
 	// for every reader but `note migrate`, which lists and removes them.
-	Memos     []Note  `json:"memos,omitempty"`
+	Memos []Note `json:"memos,omitempty"`
+	// Defaulted are the decisions closed by their default within the last
+	// day: an answer that arrives meanwhile replaces the default.
+	Defaulted []Note  `json:"defaulted,omitempty"`
 	NextNote  int     `json:"nextNote,omitempty"`
 	Timers    []Timer `json:"timers,omitempty"`
 	NextTimer int     `json:"nextTimer,omitempty"`
