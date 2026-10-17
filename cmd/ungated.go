@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"maps"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -51,9 +50,9 @@ func ungatedProcess(t *proc.Table, p *proc.Process) bool {
 
 // isTest reports whether p belongs to a Go test run: a test binary (cmd.test,
 // any *.test) or an executable under a test's temporary directory
-// (/tmp/Test…), the fake devctl a test of the gate runs. The executable is
+// (…/Test…/001), the fake devctl a test of the gate runs. The executable is
 // the first argument, or the second for a script its interpreter runs
-// (sh /tmp/Test…/devctl).
+// (sh /tmp/Test…/001/devctl).
 func isTest(p *proc.Process) bool {
 	if strings.HasSuffix(p.Comm, ".test") {
 		return true
@@ -62,17 +61,36 @@ func isTest(p *proc.Process) bool {
 }
 
 // testExecutable reports whether path is a Go test binary or lies under a
-// test's temporary directory.
+// test's temporary directory, wherever the test's TMPDIR put it: testing's
+// TempDir is <TMPDIR>/<Test|Benchmark|Fuzz name><random>/<NNN>, so a
+// directory named for a test followed by a numbered one is a test's.
 func testExecutable(path string) bool {
 	if strings.HasSuffix(filepath.Base(path), ".test") {
 		return true
 	}
-	for _, root := range []string{os.TempDir(), "/tmp"} {
-		if rel, err := filepath.Rel(root, path); err == nil && strings.HasPrefix(rel, "Test") {
+	dirs := strings.Split(filepath.Dir(filepath.Clean(path)), string(filepath.Separator))
+	for i := 1; i < len(dirs); i++ {
+		if testDir(dirs[i-1]) && numbered(dirs[i]) {
 			return true
 		}
 	}
 	return false
+}
+
+// testDir reports whether name is a test, benchmark or fuzz test's
+// temporary directory: its name and testing's random suffix.
+func testDir(name string) bool {
+	for _, prefix := range []string{"Test", "Benchmark", "Fuzz"} {
+		if strings.HasPrefix(name, prefix) && len(name) > len(prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// numbered reports whether name is one of testing's numbered TempDirs (001).
+func numbered(name string) bool {
+	return len(name) >= 3 && strings.Trim(name, "0123456789") == ""
 }
 
 // ungatedMerge is a devctl merge or promotion that runs outside the gate.
