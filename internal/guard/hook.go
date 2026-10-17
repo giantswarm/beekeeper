@@ -408,21 +408,30 @@ func (h Hook) decide(ev event) []byte {
 // place; one that is content (a file written, an issue body sent) stays as
 // written.
 func (h Hook) gate(cmd string, bg bool) (string, bool) {
-	content := contentHeredocs(cmd)
+	content := contentBodies(scanShell(cmd))
 	var at []int
 	for _, m := range owned.FindAllStringSubmatchIndex(cmd, -1) {
-		if !slices.ContainsFunc(content, func(r [2]int) bool { return m[2] >= r[0] && m[2] < r[1] }) {
+		if !inRanges(content, m[2]) {
 			at = append(at, m[2])
 		}
 	}
 	return h.insertGate(cmd, at, bg), len(at) > 0
 }
 
-// contentHeredocs returns the bodies of the command line's here-documents no
+// inRanges reports whether the offset is inside one of the ranges.
+func inRanges(rs [][2]int, at int) bool {
+	return slices.ContainsFunc(rs, func(r [2]int) bool { return at >= r[0] && at < r[1] })
+}
+
+// inHeredoc reports whether the offset is inside a here-document's body.
+func inHeredoc(sc shellScan, at int) bool {
+	return slices.ContainsFunc(sc.heredocs, func(hd heredoc) bool { return at >= hd.start && at < hd.end })
+}
+
+// contentBodies returns the bodies of the command line's here-documents no
 // local shell reads as its program: the command the operator is on is no
 // shell, and neither is a stage after it in its pipeline.
-func contentHeredocs(cmd string) [][2]int {
-	sc := scanShell(cmd)
+func contentBodies(sc shellScan) [][2]int {
 	segs := sc.segments()
 	var out [][2]int
 	for _, hd := range sc.heredocs {
@@ -455,11 +464,18 @@ func shellReads(sc shellScan, segs []segment, op int) bool {
 
 // hiddenMerges returns cmd with the gate before each blocking devctl command
 // the gate rewrite left inside a sh, bash or zsh -c string or an eval string,
-// and whether there was one.
+// and whether there was one. A -c or eval that is text, inside a quoted
+// argument or a here-document no shell reads (a PR body naming one), runs
+// nothing.
 // The hook refuses such a command rather than rewriting a quoted string.
 func (h Hook) hiddenMerges(cmd string, bg bool) (string, bool) {
+	sc := scanShell(cmd)
+	content := contentBodies(sc)
 	var at []int
 	for _, m := range shellC.FindAllStringSubmatchIndex(cmd, -1) {
+		if inRanges(content, m[2]) || sc.masked[m[2]] != cmd[m[2]] && !inHeredoc(sc, m[2]) {
+			continue
+		}
 		body := cmd[m[1]:]
 		end := closingQuote(body, cmd[m[2]])
 		for _, mm := range anyOwned.FindAllStringIndex(body[:end], -1) {

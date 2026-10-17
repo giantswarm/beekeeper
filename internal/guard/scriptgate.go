@@ -212,7 +212,7 @@ func (h Hook) ungated(cmd, cwd string, depth int) *ungated {
 		}
 	}
 	if unread != "" {
-		return h.textUngated(cmd, "this call, which runs "+unread+" (not readable before the call)", false)
+		return h.textUngated(cmd, "this call, which runs "+unread+" (not readable before the call)", textAny)
 	}
 	return nil
 }
@@ -256,7 +256,7 @@ func (h Hook) segmentUngated(cmd string, sc shellScan, segs []segment, i int, di
 	case interp:
 		switch p := readProgram(args, ip); p.kind {
 		case programCode:
-			return h.textUngated(p.arg, name+"'s code ("+p.opt+")", false), ""
+			return h.textUngated(p.arg, name+"'s code ("+p.opt+")", textCode), ""
 		case programScript:
 			return h.scriptUngated(p.arg, mode, true, dirs, vars, depth)
 		case programInput:
@@ -283,7 +283,7 @@ func (h Hook) inputUngated(cmd string, sc shellScan, segs []segment, i int, name
 	for k, w := range words {
 		switch {
 		case w == "<<<" && k+1 < len(words):
-			return h.textUngated(words[k+1], "the here-string "+name+" reads", mode == modeShell)
+			return h.textUngated(words[k+1], "the here-string "+name+" reads", kindOf(mode == modeShell))
 		case w == "<" && k+1 < len(words):
 			u, _ := h.scriptUngated(words[k+1], mode, false, dirs, vars, depth)
 			return u
@@ -297,7 +297,7 @@ func (h Hook) inputUngated(cmd string, sc shellScan, segs []segment, i int, name
 			continue
 		}
 		body := cmd[hd.start:hd.end]
-		if u := h.textUngated(body, "the here-document "+name+" reads", mode == modeShell); u != nil {
+		if u := h.textUngated(body, "the here-document "+name+" reads", kindOf(mode == modeShell)); u != nil {
 			return u
 		}
 		if mode == modeShell && len(dirs) > 0 {
@@ -308,7 +308,7 @@ func (h Hook) inputUngated(cmd string, sc shellScan, segs []segment, i int, name
 	}
 	if i > 0 && segs[i-1].after == "|" {
 		before := strings.TrimRight(pipelineBefore(sc.plain, segs, i), "| \t")
-		if u := h.textUngated(before, "the input "+name+" reads", false); u != nil {
+		if u := h.textUngated(before, "the input "+name+" reads", textAny); u != nil {
 			return u
 		}
 		for _, w := range shellWords(before) {
@@ -352,7 +352,7 @@ func (h Hook) scriptUngated(p string, mode scriptMode, explicit bool, dirs []str
 			return nil, ""
 		}
 		shell := mode == modeShell || mode == modeShebang && shellScript(raw)
-		if u := h.textUngated(string(raw), "the script "+fp, shell); u != nil {
+		if u := h.textUngated(string(raw), "the script "+fp, kindOf(shell)); u != nil {
 			return u, ""
 		}
 		if shell {
@@ -394,21 +394,51 @@ func shellScript(raw []byte) bool {
 	return m != nil && localShells[m[1]]
 }
 
-// textUngated finds the first blocking devctl command in text that the gate
-// does not precede: at a command position or in a -c or eval string when the
-// text is a shell command line, anywhere in it when it is code.
-func (h Hook) textUngated(text, where string, shell bool) *ungated {
-	at, fix := -1, false
+// textKind says where a text runs the commands it names.
+type textKind int
+
+const (
+	// textShell is a shell command line: a command at a command position, or
+	// in a -c or eval string.
+	textShell textKind = iota
+	// textCode is an interpreter's program: a command its string literals run
+	// (codeUngated); its comments and its prose run nothing.
+	textCode
+	// textAny is text that writes or feeds what runs (a call that writes the
+	// script it runs, the stages before an interpreter's input): a command
+	// anywhere in it.
+	textAny
+)
+
+// kindOf is the text kind of a script or an input: a shell command line, or
+// code.
+func kindOf(shell bool) textKind {
 	if shell {
+		return textShell
+	}
+	return textCode
+}
+
+// textUngated finds the first blocking devctl command in text that the gate
+// does not precede, as the text's kind runs it.
+func (h Hook) textUngated(text, where string, kind textKind) *ungated {
+	at, fix := -1, false
+	switch kind {
+	case textShell:
 		at = firstShellUngated(text)
 		fix = at >= 0
-	} else {
+	case textCode:
+		at = codeUngated(text)
+	case textAny:
 		for _, m := range looseOwned.FindAllStringIndex(text, -1) {
 			if !looseGated.MatchString(text[:m[0]]) {
-				at, fix = m[0], !strings.ContainsAny(text[m[0]:m[1]], `"',`)
+				at = m[0]
 				break
 			}
 		}
+	}
+	if at >= 0 && kind != textShell {
+		fix = !strings.ContainsAny(looseOwned.FindString(text[at:]), `"',`)
 	}
 	if at < 0 {
 		return nil
@@ -448,6 +478,76 @@ func firstShellUngated(text string) int {
 		}
 	}
 	return at
+}
+
+// codeUngated is the offset of the first blocking devctl command an
+// interpreter's program runs that the gate does not precede, -1 for none. A
+// program runs a command from a string literal: one the literal starts with (a
+// command string, the first word of an argument list) or one after a shell
+// operator in it (a command line a shell runs). A command a comment names, or
+// prose in a literal (a document's text, a CHANGELOG entry), runs nothing.
+func codeUngated(code string) int {
+	lits := stringLiterals(code)
+	k := 0
+	for _, m := range looseOwned.FindAllStringIndex(code, -1) {
+		for k < len(lits) && lits[k][1] <= m[0] {
+			k++
+		}
+		if k == len(lits) {
+			return -1
+		}
+		if m[0] < lits[k][0] {
+			continue // outside a literal: code or a comment
+		}
+		before := code[lits[k][0]:m[0]]
+		if strings.TrimSpace(before) != "" && !literalOperator.MatchString(before) {
+			continue // prose: the command is no word a shell or a program runs
+		}
+		if !looseGated.MatchString(code[:m[0]]) {
+			return m[0]
+		}
+	}
+	return -1
+}
+
+// literalOperator is the text in a string literal before a command that a
+// shell runs from it: a shell operator.
+var literalOperator = regexp.MustCompile(`(?:;|&&|\|\|?|\$\()\s*$`)
+
+// stringLiterals are the contents of the program's string literals, in their
+// order: quoted by ', " or ` (a template, a Perl or Ruby command), or by three
+// of one (a Python docstring). A comment (# or //, at a line's start or after
+// a blank) is no literal, nor is a quote inside one.
+func stringLiterals(code string) [][2]int {
+	var out [][2]int
+	for i := 0; i < len(code); i++ {
+		c := code[i]
+		switch {
+		case (c == '#' || c == '/' && strings.HasPrefix(code[i:], "//")) && (i == 0 || strings.ContainsRune(" \t\n", rune(code[i-1]))):
+			if nl := strings.IndexByte(code[i:], '\n'); nl >= 0 {
+				i += nl
+			} else {
+				i = len(code)
+			}
+		case c == '\'' || c == '"' || c == '`':
+			q := code[i : i+1]
+			if strings.HasPrefix(code[i:], strings.Repeat(q, 3)) {
+				q = strings.Repeat(q, 3)
+			}
+			start := i + len(q)
+			end := start
+			for end < len(code) && !strings.HasPrefix(code[end:], q) {
+				if code[end] == '\\' {
+					end++
+				}
+				end++
+			}
+			end = min(end, len(code))
+			out = append(out, [2]int{start, end})
+			i = end + len(q) - 1
+		}
+	}
+	return out
 }
 
 // commandWords is the devctl command the match names, its words apart by one
