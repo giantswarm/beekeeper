@@ -99,8 +99,8 @@ func TestARebaseableMergeQueuesAsBefore(t *testing.T) {
 	}
 }
 
-// GitHub not answering whether the pull request rebases refuses it before
-// it queues; a squash merge and a queued run, which has its place already,
+// GitHub not answering whether the pull request rebases, its last try too,
+// refuses it before it queues; a squash merge and a queued run, which has its place already,
 // are not asked.
 func TestTheRebaseReadOnlyGuardsAFreshRebaseMerge(t *testing.T) {
 	stubGitHub(t, github.Open, "")
@@ -123,8 +123,8 @@ func TestTheRebaseReadOnlyGuardsAFreshRebaseMerge(t *testing.T) {
 		strings.Contains(lastEventOf(t, a, "merge.refused"), "rebase") {
 		t.Fatalf("the queued run: exit %d (%v), want the wait's own refusal", Code(err), err)
 	}
-	if *asked != 1 {
-		t.Errorf("GitHub was read %d times, want once", *asked)
+	if *asked != 1+len(readBackoff) {
+		t.Errorf("GitHub was read %d times, want once with its retries", *asked)
 	}
 }
 

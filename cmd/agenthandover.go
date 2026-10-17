@@ -46,7 +46,9 @@ func (a *app) agentNoteCmd() *cobra.Command {
 		Short: "Record the calling agent's hand-over note: what is in flight and what is next",
 		Long: `note logs the calling session's hand-over note to the event log. beekeeper
 agents handover asks the agent for it and puts the latest one into its
-follow-up session's prompt.`,
+follow-up session's prompt. It waits 3s at most for the state lock: a lock
+held longer fails the note unsaved, naming the lock's holder and the desktop
+import of the calling session when one is pending; note again.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			me, err := a.caller()
@@ -60,8 +62,8 @@ follow-up session's prompt.`,
 			case len(text) > maxNote:
 				return usageErr("the note has %d bytes, more than %d", len(text), maxNote)
 			}
-			if err := a.store.Record(event(me, verbNote, "%s", text)); err != nil {
-				return err
+			if err := a.store.RecordWithin(noteLockWait, event(me, verbNote, "%s", text)); err != nil {
+				return a.noteBusy(me, err)
 			}
 			_, err = fmt.Fprintf(a.out, "noted for the hand-over of %s\n", me.Name)
 			return err
@@ -69,9 +71,31 @@ follow-up session's prompt.`,
 	}
 }
 
+// noteLockWait bounds a note's wait for the state lock: an agent asked
+// for its note while a holder keeps the lock (a desktop import of its
+// session pending, a stopped process) learns why at once and notes again.
+const noteLockWait = 3 * time.Second
+
+// noteBusy is the error of a note the state lock kept from the event log:
+// the lock's holder and, read without the lock, the desktop import of p's
+// session when one is pending; err as it is for any other failure.
+func (a *app) noteBusy(p state.Party, err error) error {
+	var busy *state.LockBusyError
+	if !errors.As(err, &busy) {
+		return err
+	}
+	msg := fmt.Sprintf("the note is not saved: %v", err)
+	if st, perr := a.store.Peek(); perr == nil {
+		if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) }); i >= 0 && st.Agents[i].Import.Pending(a.now) {
+			msg += fmt.Sprintf("; %q waits for the desktop: %s", st.Agents[i].Name, importStatus(st.Agents[i], a.now))
+		}
+	}
+	return errors.New(msg + "; run beekeeper agents note again")
+}
+
 func (a *app) agentHandoverCmd() *cobra.Command {
 	var prompt bool
-	var model, dir string
+	var model, dir, task string
 	c := &cobra.Command{
 		Use:   "handover <agent>",
 		Short: "Hand a registered agent over to a fresh session near its context limit",
@@ -97,6 +121,13 @@ no note, the follow-up's prompt rests on the roster: the task, the sessions
 serve record (the issue and what it waited on) and the last events, and the
 command says so. It exits non-zero when no follow-up was started.
 
+An agent with no task on its roster row (neither an open one nor one it
+reported idle on) is refused, since its follow-up would have nothing to
+carry on: --task names the task, which the follow-up's row records. The
+follow-up is on the roster under the name, busy with the task it was handed,
+before the old session ends; a follow-up that cannot be listed fails the
+hand-over and the old session runs on.
+
 --prompt prints the follow-up's prompt and changes nothing: the roster task,
 the brief it was started with, its session record, its gated merges, its
 last events and its note. It carries no standing rules and no live values.`,
@@ -106,6 +137,7 @@ last events and its note. It carries no standing rules and no live values.`,
 			if err != nil {
 				return err
 			}
+			h.given = strings.TrimSpace(task)
 			if prompt {
 				_, err := fmt.Fprintln(a.out, h.prompt())
 				return err
@@ -128,6 +160,7 @@ last events and its note. It carries no standing rules and no live values.`,
 	c.Flags().BoolVar(&prompt, "prompt", false, "print the follow-up's prompt and change nothing")
 	c.Flags().StringVar(&model, "model", "", "the follow-up's model (default: the old session's)")
 	c.Flags().StringVar(&dir, "dir", "", "the follow-up's working directory (default: the old session's)")
+	c.Flags().StringVar(&task, "task", "", "the follow-up's task when the agent's roster row has none")
 	return c
 }
 
@@ -142,6 +175,8 @@ type handover struct {
 	events  []state.Event
 	note    string
 	brief   string
+	// given is the task --task names for an agent whose row has none.
+	given string
 	// dir and model are the follow-up's.
 	dir, model string
 }
@@ -252,6 +287,8 @@ func (h handover) prompt() string {
 	switch task := h.task(); {
 	case task == "":
 		b.WriteString("Task: (none: the agent was idle; report back idle with beekeeper agents idle)\n")
+	case h.given != "":
+		fmt.Fprintf(&b, "Task: %s\n(Given by the hand-over: the roster held no task for the previous session.)\n", task)
 	case ag.Task == "":
 		fmt.Fprintf(&b, "Task: %s\n(The previous session had reported it idle at %s, waiting: finish what is left of it, then report idle.)\n",
 			task, ag.IdleSince.Local().Format("Jan 2 15:04"))
@@ -293,9 +330,13 @@ func (h handover) prompt() string {
 	return strings.TrimSpace(b.String())
 }
 
-// task is the agent's task: the open one, or the last one it reported idle
-// on, which a hand-over at its first quiet moment carries on.
+// task is the agent's task: the one --task gives, the open one, or the
+// last one it reported idle on, which a hand-over at its first quiet moment
+// carries on.
 func (h handover) task() string {
+	if h.given != "" {
+		return h.given
+	}
 	if h.agent.Task != "" {
 		return h.agent.Task
 	}
@@ -329,6 +370,13 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 	if me.Session != "" && me.Is(ag.Party) {
 		return refused("%q cannot hand itself over: its session ends with the hand-over; another session (the supervisor) runs it", ag.Name)
 	}
+	switch {
+	case h.given != "" && ag.Task != "":
+		return refused("%q is busy with %q: --task is for an agent whose roster row holds no task", ag.Name, ag.Task)
+	case h.task() == "":
+		return refused("%q has no task on the roster, so its follow-up would have nothing to carry on: "+
+			"pass --task \"<task>\", or start a fresh worker with beekeeper agents start", ag.Name)
+	}
 	if h.dir == "" {
 		return usageErr("the folder of %q is unknown: pass --dir", ag.Name)
 	}
@@ -358,6 +406,12 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 		return err
 	}
 	a.say("started %q: session %s, desktop local_%s, in %s, busy with %q", ag.Name, sa.id, sa.id, sa.dir, sa.task)
+	listed, err := a.listSuccessor(me, ag.Party, state.Party{Session: sa.id, HostSession: "local_" + sa.id, Name: ag.Name}, h.task())
+	if err != nil {
+		return fmt.Errorf("the follow-up %s is not on the roster, so session %s runs on: %w "+
+			"(beekeeper agents register in session %s lists it, beekeeper agents remove %q takes it off)", sa.id, ag.Session, err, sa.id, ag.Name)
+	}
+	a.say("%s", listed)
 	if len(sa.handed) > 0 {
 		a.say("leases: %s, now the follow-up's", strings.Join(sa.handed, ", "))
 	} else {
@@ -407,6 +461,65 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 	}
 	a.say("handed over %q in %s: logged as agents.handover", ag.Name, dur(took))
 	return nil
+}
+
+// listSuccessor makes sure the roster lists the follow-up to of the
+// handed-over from under its name, busy with task, before from ends: the
+// start recorded it, but a row lost or changed meanwhile (a stray
+// register under the name, the doctor) would leave it running unlisted or
+// idle. It restores the row when it must and returns the step's line; an
+// error when it cannot.
+func (a *app) listSuccessor(by, from, to state.Party, task string) (string, error) {
+	sessions, _, err := a.sessions()
+	if err != nil {
+		return "", err
+	}
+	live := func(p state.Party) bool {
+		_, ok := claude.Live(sessions, p)
+		return ok && !p.Is(from)
+	}
+	var line string
+	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		var err error
+		line, err = keepListed(st, to, task, live, a.now.UTC())
+		if err != nil || line == "" {
+			return nil, err
+		}
+		return []state.Event{event(by, "agents.handover", "%s: %s", to.Name, line)}, nil
+	})
+	if err != nil {
+		return "", err
+	}
+	if line == "" {
+		return fmt.Sprintf("roster: %q is session %s, busy with %q", to.Name, to.Session, task), nil
+	}
+	return "roster: " + line, nil
+}
+
+// keepListed lists to on the roster busy with task: as it is, with the task
+// set when its row lost it, or registered again when its row is gone. A
+// row that already reported idle on task stays as it is. It returns what it
+// changed; "" when the row was right.
+func keepListed(st *state.State, to state.Party, task string, live func(state.Party) bool, now time.Time) (string, error) {
+	if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(to) }); i >= 0 {
+		ag := &st.Agents[i]
+		if ag.Task == task || ag.LastTask == task {
+			// busy with it, or already reported idle on it
+			return "", nil
+		}
+		was := ag.Task
+		ag.Task, ag.AssignedAt = task, now
+		return fmt.Sprintf("the row of session %s was busy with %q: set to %q", to.Session, was, task), nil
+	}
+	reg, err := registerAgent(st, to, live, now)
+	if err != nil {
+		return "", err
+	}
+	ag := &st.Agents[len(st.Agents)-1]
+	if reg.task == "" {
+		ag.Task, ag.AssignedAt = task, now
+	}
+	return fmt.Sprintf("session %s had no row: registered again, busy with %q", to.Session, ag.Task), nil
 }
 
 // archiveHandedOver archives the desktop session of the handed-over p once
@@ -740,7 +853,9 @@ type dueAgent struct {
 // quiet moment: no tool command of their own running and no gated merge of
 // their own in flight. An agent with a task whose CLI no longer runs (its
 // headless turn ended, waiting on a grant or a person) is due too, with its
-// transcript's context: nothing else relieves it. It skips the agents said
+// transcript's context: nothing else relieves it. An agent with no task at
+// all (none open, none it reported idle on) is not: its follow-up would
+// have nothing to carry on. It skips the agents said
 // already, those that reported their work done (the doctor archives them)
 // and those holding or relieved of a relayed role, which relay instead.
 // An agent in its task's last step (lastStepOf) is held rather than due
@@ -757,7 +872,7 @@ func handoversDue(st *state.State, sessions []*claude.Session, cfg config.Agents
 		}
 		s, live := claude.Live(sessions, ag.Party)
 		switch {
-		case live && len(s.Commands) > 0, !live && ag.Task == "":
+		case live && len(s.Commands) > 0, !live && ag.Task == "", ag.Task == "" && ag.LastTask == "":
 			continue
 		case !live:
 			s = nil

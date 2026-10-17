@@ -32,7 +32,17 @@ var (
 	baseRelease = func(ctx context.Context, repo string, n int) (github.BaseRelease, error) {
 		return github.ReadBaseRelease(ctx, github.RunGH, repo, n)
 	}
-	pullRebase = func(ctx context.Context, repo string, n int) (github.Rebase, error) {
+	pluginTags = func(ctx context.Context, repo, sha string) ([]string, error) {
+		return github.PluginTags(ctx, github.RunGH, repo, sha)
+	}
+	tagExists = func(ctx context.Context, repo, tag string) (bool, error) {
+		return github.TagExists(ctx, github.RunGH, repo, tag)
+	}
+	// pluginTagPoll is how often the gate looks for a merged plugin's tag,
+	// pluginTagWait how long it awaits the tags of one merge.
+	pluginTagPoll = 10 * time.Second
+	pluginTagWait = 5 * time.Minute
+	pullRebase    = func(ctx context.Context, repo string, n int) (github.Rebase, error) {
 		return github.ReadRebase(ctx, github.RunGH, repo, n)
 	}
 	updateRebase = func(ctx context.Context, repo string, n int) error {
@@ -55,14 +65,43 @@ var (
 	userSystemd      = plat.Launcher.Available
 	selfExe          = os.Executable
 	runningBinary    = func() binary { return liveBinary{platform.RunningBinary()} }
-	gateOutput       = stdoutFile
+	gateOutput       = taskOutput
 )
 
-// stdoutFile is the regular file this process's stdout writes to, "" for a
-// pipe, a terminal or where the platform cannot say: a Claude Code
-// background task writes to <tasks>/<task id>.output.
-func stdoutFile() string {
-	p, err := os.Readlink("/proc/self/fd/1")
+// taskOutput is the file of the Claude Code background task this process
+// runs in, which a TaskStop names: its own stdout when that is a regular
+// file, else that of its nearest ancestor below the Claude Code CLI writing
+// to <tasks>/<task id>.output, the task's shell when the gate's output is
+// piped on (`| tail`). "" for none, or where the platform cannot say.
+func taskOutput() string {
+	if p := stdoutOf(os.Getpid()); p != "" {
+		return p
+	}
+	t, err := plat.Machine.Processes()
+	if err != nil {
+		return ""
+	}
+	return ancestorOutput(t, os.Getpid(), stdoutOf)
+}
+
+// ancestorOutput is the task output file the stdout of pid's nearest
+// ancestor below the Claude Code CLI writes to (stdout), "" for none.
+func ancestorOutput(t *proc.Table, pid int, stdout func(pid int) string) string {
+	for _, p := range t.Ancestors(pid) {
+		if p.Comm == claudeComm {
+			return ""
+		}
+		if o := stdout(p.PID); strings.HasSuffix(o, taskOutputExt) {
+			return o
+		}
+	}
+	return ""
+}
+
+// stdoutOf is the file pid's stdout writes to, "" for a pipe or a socket,
+// or where the platform cannot say.
+func stdoutOf(pid int) string {
+	p, err := os.Readlink(filepath.Join("/proc", strconv.Itoa(pid), "fd", "1"))
 	if err != nil || !filepath.IsAbs(p) {
 		return ""
 	}

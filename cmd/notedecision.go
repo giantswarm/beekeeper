@@ -92,12 +92,6 @@ func answerText(n *state.Note, choice int, text string) (string, error) {
 	return label + " — " + text, nil
 }
 
-// answeredEvent is the note.answered event of n's answer: parseAnswered
-// reads it back.
-func answeredEvent(by state.Party, n *state.Note, via, answer string) state.Event {
-	return event(by, noteAnswered, "#%d answered for %s via %s: %s (asked by %s: %s)", n.ID, cmp.Or(n.For, "nobody named"), via, answer, n.By.Name, n.Text)
-}
-
 // defaultedEvent is the note.defaulted event of n closed at its due time.
 func defaultedEvent(by state.Party, n *state.Note) state.Event {
 	return event(by, noteDefaulted, "#%d defaulted for %s: %s (asked by %s: %s)", n.ID, cmp.Or(n.For, "nobody named"), n.Default, n.By.Name, n.Text)
@@ -109,18 +103,24 @@ func answeredLine(id int, by, answer string) string {
 	return fmt.Sprintf("NOTE ANSWERED #%d by %s: %s", id, by, answer)
 }
 
+// replacedLine is what the filer of a decision closed by its default is
+// told of an answer that came after it.
+func replacedLine(n *state.Note, by, answer string) string {
+	return fmt.Sprintf("%s (replaces the default applied: %s)", answeredLine(n.ID, by, answer), oneLine(n.Default))
+}
+
 func defaultedLine(n *state.Note) string {
 	return fmt.Sprintf("NOTE DEFAULTED #%d: %s", n.ID, n.Default)
 }
 
 // defaultDue takes the decisions out of st whose due time has come
 // unanswered and returns them, to close with their default. Only a decision
-// whose default is an action closes: a memo's or a sign-in's due time is a
-// reminder, and a decision filed before defaults had to act stays open.
-func defaultDue(st *state.State, person string, now time.Time) []state.Note {
+// whose default is an action closes: a sign-in's due time is a reminder, and
+// a decision filed before defaults had to act stays open.
+func defaultDue(st *state.State, now time.Time) []state.Note {
 	var due []state.Note
 	st.Notes = slices.DeleteFunc(st.Notes, func(n state.Note) bool {
-		if n.Due.IsZero() || now.Before(n.Due) || !isAction(n.Default) || noteKind(person, &n) != noteDecision {
+		if n.Due.IsZero() || now.Before(n.Due) || !isAction(n.Default) || n.Kind != noteDecision {
 			return false
 		}
 		due = append(due, n)
@@ -129,10 +129,18 @@ func defaultDue(st *state.State, person string, now time.Time) []state.Note {
 	return due
 }
 
+// defaultedKeep is how long a decision closed by its default stays
+// answerable: an answer within it replaces the default.
+const defaultedKeep = 24 * time.Hour
+
 // closeDefaulted closes the decisions of st due unanswered with their
-// default and returns their watch lines, their events and the notes.
+// default, keeps them answerable for defaultedKeep (st.Defaulted), drops
+// the decisions kept longer, and returns their watch lines, their events and
+// the notes.
 func closeDefaulted(st *state.State, person string, by state.Party, now time.Time) ([]string, []state.Event, []state.Note) {
-	due := defaultDue(st, person, now)
+	due := defaultDue(st, now)
+	st.Defaulted = slices.DeleteFunc(st.Defaulted, func(n state.Note) bool { return now.Sub(n.Due) > defaultedKeep })
+	st.Defaulted = append(st.Defaulted, due...)
 	lines := make([]string, 0, len(due))
 	evs := make([]state.Event, 0, len(due))
 	for i := range due {
@@ -140,6 +148,33 @@ func closeDefaulted(st *state.State, person string, by state.Party, now time.Tim
 		evs = append(evs, defaultedEvent(by, &due[i]))
 	}
 	return lines, evs, due
+}
+
+// answerable is the note id an answer may answer: an open one, or one its
+// default closed within defaultedKeep (defaulted true).
+func answerable(st *state.State, id int, now time.Time) (n *state.Note, defaulted bool) {
+	if i := slices.IndexFunc(st.Notes, func(o state.Note) bool { return o.ID == id }); i >= 0 {
+		return &st.Notes[i], false
+	}
+	if i := slices.IndexFunc(st.Defaulted, func(o state.Note) bool { return o.ID == id }); i >= 0 && now.Sub(st.Defaulted[i].Due) <= defaultedKeep {
+		return &st.Defaulted[i], true
+	}
+	return nil, false
+}
+
+// takeAnswered takes note id out of st's open or defaulted notes, and
+// reports whether it was there and whether its default had closed it.
+func takeAnswered(st *state.State, id int) (found, defaulted bool) {
+	is := func(o state.Note) bool { return o.ID == id }
+	if i := slices.IndexFunc(st.Notes, is); i >= 0 {
+		st.Notes = slices.Delete(st.Notes, i, i+1)
+		return true, false
+	}
+	if i := slices.IndexFunc(st.Defaulted, is); i >= 0 {
+		st.Defaulted = slices.Delete(st.Defaulted, i, i+1)
+		return true, true
+	}
+	return false, false
 }
 
 // tellFiler delivers line from by to the session that filed n, when it is a

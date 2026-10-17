@@ -35,7 +35,7 @@ var secretRead secret.SecretReader
 func (a *app) secretCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "secret",
-		Short: "Credential operations that never return a value: compare, fingerprint, copy, set, capture, rotate, unset, github-app; reveal answers configuration; store is the person's",
+		Short: "Credential operations that never return a value: compare, fingerprint, copy, set, capture, rotate, unset, github-app; items lists a vault's item names, reveal answers configuration; store is the person's",
 		Long: `beekeeper is the only process that reads, creates, encrypts and decrypts
 secrets; an agent asks it with beekeeper secret. sops and op run in
 beekeeper's process, a value stays in its memory for the one operation and
@@ -49,7 +49,7 @@ A reference is a SOPS file (every value in it), one value in a SOPS file
 stringData.credentials.json, or quoted, stringData."credentials.json", or
 escaped, stringData.credentials\.json; sops:// in front optional), a field of
 the shared 1Password vault (op://<vault>/<item>/<field>, the vault being
-secret.vault) or, as a source, a key of a Kubernetes Secret
+secret.vault, or for a read one of secret.vaults) or, as a source, a key of a Kubernetes Secret
 (k8s://<context>/<namespace>/<name>/<key>, and after # the dotted path of
 one value inside what the key holds: a YAML or JSON mapping, tab-indented
 YAML, dotenv or key-value lines, or a document one level down under a
@@ -134,7 +134,7 @@ anything is not equal.`,
 		},
 	})
 	c.AddCommand(a.secretFingerprintCmd(), a.secretCopyCmd(), a.secretSetCmd(), a.secretCaptureCmd(), a.secretRotateCmd(), a.secretSetupCmd(), a.secretImportCmd(), a.secretRecipientsCmd(),
-		a.secretRevealCmd(), a.secretUnsetCmd(), a.secretGitHubAppCmd())
+		a.secretItemsCmd(), a.secretRevealCmd(), a.secretUnsetCmd(), a.secretGitHubAppCmd())
 	for _, sub := range c.Commands() {
 		run := sub.RunE
 		sub.RunE = func(cmd *cobra.Command, args []string) error {
@@ -412,6 +412,10 @@ set, garage json-api <endpoint> -, gitlab-rails runner [-e <env>] '<code>'
 whose Ruby code reads STDIN, a command with --password-stdin or one with
 --secret <name>=-, or kubectl exec -i --context <context> <pod> -- <one of
 them> for a command in a pod (no TTY, no -v, never a production context).
+In a pod valkey-cli or redis-cli --askpass [-n <db>] [--user <user>] is
+one too, against the pod's own server, with --scan [--pattern <glob>] or
+one of DEL, UNLINK, EXISTS, TYPE, TTL and its keys: key names and replies,
+never a value.
 --stdin-json '<object>' --stdin-field <key> hands the consumer that JSON
 object with the value at <key> instead of the bare value (garage json-api
 ImportKey's request, for one). It answers the consumer's output with the
@@ -419,6 +423,9 @@ value redacted, and its exit code:
 
   beekeeper secret copy <file>#<path> -- kubectl exec -i --context <context> \
     -n <namespace> <pod> -- gitlab-rails runner 'token = STDIN.read.strip; …'
+  beekeeper secret copy k8s://kind-<lab>/<namespace>/<secret>/<key> -- \
+    kubectl exec -i --context kind-<lab> -n <namespace> <pod> -- \
+    valkey-cli --askpass DEL <key>
 
 copy <ref> --git-askpass -- git [-C <dir>] clone|fetch|push|ls-remote …
 runs git over HTTPS with the value as the password: GIT_ASKPASS names a
@@ -1132,7 +1139,7 @@ func parseRefs(args ...string) ([]secret.Ref, error) {
 // secretOps are the operations with the service account's token, read
 // from secret.tokenFile when the shared vault is configured.
 func (a *app) secretOps() (*secret.Ops, error) {
-	ops := &secret.Ops{Run: secretRun, Apply: secretApply, Read: secretRead, Kubeconfig: a.kubeconfigFiles(), Vault: a.cfg.Secret.Vault, Session: a.cfg.Secret.Session, Ages: a.ageIdentities(),
+	ops := &secret.Ops{Run: secretRun, Apply: secretApply, Read: secretRead, Kubeconfig: a.kubeconfigFiles(), Vault: a.cfg.Secret.Vault, Vaults: a.cfg.Secret.Vaults, Session: a.cfg.Secret.Session, Ages: a.ageIdentities(),
 		AgeVaults: a.cfg.Secret.AgeVaults, Store: secret.Store{Read: a.cfg.Secret.Store.Read, Search: a.cfg.Secret.Store.Search}, Installations: a.installationNames()}
 	if ops.Vault == "" || ops.Session || a.cfg.Secret.TokenFile == "" {
 		return ops, nil

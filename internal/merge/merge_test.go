@@ -153,8 +153,10 @@ func testdata(t *testing.T, name string) []byte {
 }
 
 const (
-	serving = "serving"
-	portal  = "portal"
+	serving     = "serving"
+	portal      = "portal"
+	portalTools = "portal-tools"
+	toolFrom    = "v8.0.0"
 )
 
 func TestBlocking(t *testing.T) {
@@ -166,18 +168,74 @@ func TestBlocking(t *testing.T) {
 	if h, ok := Blocking(st, now, "giantswarm/model-manager", 7, config.Lane{Name: serving}); !ok || h.Reason != "model load" {
 		t.Error("the lane hold does not stop its lane")
 	}
-	if _, ok := Blocking(st, now, backstage, 8, config.Lane{Name: "portal-tools"}); ok {
+	if _, ok := Blocking(st, now, backstage, 8, config.Lane{Name: portalTools}); ok {
 		t.Error("a lane hold stops another lane")
 	}
 	if _, ok := Blocking(st, now, "giantswarm/old", 1, config.Lane{Name: "giantswarm/old"}); ok {
 		t.Error("an expired hold stops a merge")
 	}
 	st.Holds = append(st.Holds, state.Hold{Target: AllMerges, Except: ToolRepo})
-	if _, ok := Blocking(st, now, backstage, 8, config.Lane{Name: "portal-tools"}); !ok {
+	if _, ok := Blocking(st, now, backstage, 8, config.Lane{Name: portalTools}); !ok {
 		t.Error("the tool-release window lets another merge through")
 	}
 	if _, ok := Blocking(st, now, ToolRepo, 9, config.Lane{Name: ToolRepo}); ok {
 		t.Error("the tool-release window stops the tool's own release")
+	}
+}
+
+// A repository hold that waits on the repository's own release lets its
+// promote, which cuts that release, through and holds everything else.
+func TestBlockingReleaseHold(t *testing.T) {
+	const otherRepo = "giantswarm/workspace-manager"
+	now := time.Now()
+	lane := config.Lane{Name: backstage}
+	st := &state.State{Holds: []state.Hold{{Target: backstage, Reason: "promote v3.9.3 first",
+		LiftWhen: "gh release view v3.9.3 --repo " + backstage + " --json isDraft"}}}
+	if _, ok := Blocking(st, now, backstage, 0, lane); ok {
+		t.Error("a hold waiting on the repository's release stops its own promote")
+	}
+	if _, ok := Blocking(st, now, backstage, 8, lane); !ok {
+		t.Error("a hold waiting on the repository's release lets a merge into it through")
+	}
+	if _, ok := Blocking(st, now, otherRepo, 0, config.Lane{Name: AllMerges}); ok {
+		t.Error("a repository hold stops another repository's promote")
+	}
+	st.Holds = append(st.Holds, state.Hold{Target: otherRepo, LiftWhen: "gh release view v1.0.0 --repo " + backstage})
+	if _, ok := Blocking(st, now, otherRepo, 0, config.Lane{Name: otherRepo}); !ok {
+		t.Error("a hold waiting on another repository's release lets the held repository's promote through")
+	}
+	for _, probe := range []string{"", "devctl pr wait " + backstage + " 3130"} {
+		st.Holds = []state.Hold{{Target: backstage, LiftWhen: probe}}
+		if _, ok := Blocking(st, now, backstage, 0, lane); !ok {
+			t.Errorf("a hold whose probe %q waits on no release lets the promote through", probe)
+		}
+	}
+	st.Holds = []state.Hold{{Target: AllMerges, LiftWhen: "gh release view v3.9.3 --repo " + backstage}}
+	if _, ok := Blocking(st, now, backstage, 0, lane); !ok {
+		t.Error("a hold on every merge lets the promote of the repository its probe names through")
+	}
+}
+
+func TestBlockingToolWindow(t *testing.T) {
+	now := time.Now()
+	other := config.Lane{Name: portalTools}
+	st := &state.State{Holds: []state.Hold{{Target: AllMerges, Except: ToolRepo, Tool: Tool, ToolFrom: toolFrom, ToolPR: 9}}}
+	if _, ok := Blocking(st, now, backstage, 8, other); ok {
+		t.Error("a tool-release window whose pull request has not merged stops another repository's merge")
+	}
+	if _, ok := Blocking(st, now, backstage, 0, other); ok {
+		t.Error("a tool-release window whose pull request has not merged stops another repository's promotion")
+	}
+	st.Holds[0].ToolMerged = true
+	if _, ok := Blocking(st, now, backstage, 8, other); !ok {
+		t.Error("a tool-release window whose release is coming lets another merge through")
+	}
+	if _, ok := Blocking(st, now, ToolRepo, 10, config.Lane{Name: ToolRepo}); ok {
+		t.Error("the tool-release window stops the tool's own merge at the gate's hold check")
+	}
+	st.Holds[0].ToolMerged, st.Holds[0].ToolPR = false, 0
+	if _, ok := Blocking(st, now, backstage, 8, other); !ok {
+		t.Error("a promotion's tool-release window lets another merge through")
 	}
 }
 
@@ -317,6 +375,26 @@ func TestQueueAndPrune(t *testing.T) {
 	Prune(st, now, 15*time.Minute, 12*time.Hour, func(pid int) bool { return pid == 1 })
 	if q := Queue(st, "l"); q.Position("o/f", 6) != 1 || q.Position("o/a", 1) != 2 {
 		t.Errorf("a settled outside merge does not head its lane: %+v", q.Waiting)
+	}
+}
+
+func TestQueuePromoteBeforeWindowMerge(t *testing.T) {
+	now := time.Now()
+	waiting := func(repo string, pr int, ago time.Duration) state.Merge {
+		return state.Merge{Repo: repo, PR: pr, Lane: "l", PID: pr + 1, Phase: state.Waiting, Joined: now.Add(-ago), Seen: now}
+	}
+	st := &state.State{Merges: []state.Merge{
+		waiting(ToolRepo, 7, 3*time.Minute),
+		waiting("o/b", 2, 2*time.Minute),
+		waiting(ToolRepo, 0, time.Minute),
+	}}
+	if q := Queue(st, "l"); q.Position(ToolRepo, 7) != 1 || q.Position(ToolRepo, 0) != 3 {
+		t.Errorf("without a window the join order stands: %+v", q.Waiting)
+	}
+	st.Holds = []state.Hold{{Target: AllMerges, Except: ToolRepo, Tool: Tool, ToolMerged: true, ToolRelease: "v1.2.3"}}
+	q := Queue(st, "l")
+	if q.Position(ToolRepo, 0) != 1 || q.Position(ToolRepo, 7) != 2 || q.Position("o/b", 2) != 3 {
+		t.Errorf("a promote of the tool goes before the merge waiting on its window: %+v", q.Waiting)
 	}
 }
 
@@ -624,8 +702,8 @@ func TestHung(t *testing.T) {
 // later one; any other window once the tool reports another version than at
 // its opening.
 func TestInstalled(t *testing.T) {
-	released := state.Hold{Tool: Tool, ToolFrom: "v8.0.0", ToolMerged: true, ToolRelease: "v8.1.0"}
-	opened := state.Hold{Tool: Tool, ToolFrom: "v8.0.0"}
+	released := state.Hold{Tool: Tool, ToolFrom: toolFrom, ToolMerged: true, ToolRelease: "v8.1.0"}
+	opened := state.Hold{Tool: Tool, ToolFrom: toolFrom}
 	for _, c := range []struct {
 		h    state.Hold
 		v    string
@@ -654,5 +732,17 @@ func TestParseHelmReleasesReadsTheAttemptWithoutAHistory(t *testing.T) {
 ]}`))
 	if err != nil || len(hrs) != 2 || hrs[0].Version != "1.2.3" || hrs[1].Version != "" {
 		t.Fatalf("%+v, %v", hrs, err)
+	}
+}
+
+func TestMergeCommit(t *testing.T) {
+	for doc, want := range map[string]string{
+		`{"mergeCommitSha":"abc","release":null}`: "abc",
+		`{"verdict":"red"}`:                       "",
+		`{}`:                                      "",
+	} {
+		if got := MergeCommit([]byte(doc)); got != want {
+			t.Errorf("%s: %q, want %q", doc, got, want)
+		}
 	}
 }

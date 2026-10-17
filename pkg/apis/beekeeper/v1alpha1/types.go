@@ -308,13 +308,15 @@ type NoteSpec struct {
 	// Default is what happens when nobody answers by Due.
 	// +optional
 	Default string `json:"default,omitempty"`
-	// Kind is decision, memo or login.
+	// Kind is decision or login.
 	// +optional
 	Kind string `json:"kind,omitempty"`
 	// Until is the shell command a login note closes on.
 	// +optional
 	Until string `json:"until,omitempty"`
-	// Pinned is a standing instruction carried by every hand-over.
+	// Pinned is kept from an older beekeeper, which pinned standing
+	// instructions; beekeeper files no new pin and `note migrate` moves each
+	// into standing.md.
 	// +optional
 	Pinned bool `json:"pinned,omitempty"`
 	// Refs are the issues and pull requests the note asks about.

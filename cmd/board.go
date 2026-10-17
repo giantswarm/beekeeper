@@ -9,8 +9,10 @@ import (
 	"maps"
 	"reflect"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -19,6 +21,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/lease"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -58,7 +61,10 @@ func (a *app) boardNextCmd() *cobra.Command {
 		Long: `Reads the board once and walks board.order: each step offers the open items
 of its statuses, kinds and labels (the open sub-issues of the epics it
 matches, with subIssues; only items whose recorded blockers all closed, with
-unblocked; only items created within createdWithin), or a GitHub search's
+unblocked, and whose Status was set before the last of them closed: a Status
+set after it was set for a reason no blocker records, a person or a plan,
+and holds the item until it changes; only items created within
+createdWithin), or a GitHub search's
 open issues. A sub-issue that is a board item is held to the order by its
 own Status, whatever its Team: one no step offers on its own (a Backlog item older than the
 Backlog step's createdWithin, a blocked one, one in Inbox) is skipped with
@@ -79,28 +85,43 @@ priorityOf). A plan is
 the open or merged pull request of plans.repositories whose description
 names the epic; its state never gates. The first item that is free
 is picked: not served by a running session (a sessions serve record, a busy
-agent's task; one naming a pull request serves the issues it closes too) nor by an agent on the roster, its CLI running or not, while it is
+agent's task, or else what a session active within overlaps.activeWithin
+works on now, its sessions ON refs, "(works on it)", or names by number in
+its title or a busy agent's task, "BS 3057 …" or "FIX backstage 3067 …":
+a tag its repository's name abbreviates, letter by letter from the first,
+or the repository itself, then the number; a busy agent's however
+quiet: a role holder's and an idle agent's are left out; one naming a pull request serves the issues it
+closes too, In Progress or not) nor by an agent on the roster, its CLI running or not, while it is
 busy with its task or parked and kept (agents keep, or an open timer that
-wakes it by name), and named by no open note (it waits on the note's person),
-not assigned to anybody outside board.people, without an open recorded
+wakes it by name), not assigned to anybody outside board.people, without an open recorded
 blocker, active within board.staleAfter, and with every lease its labels
 name (lease/<resource>, lease/agentlab-1) free or the caller's: an item
 whose lease another session holds is passed over until it is released,
 the items behind it offered meanwhile. A sub-issue offered through
-an epic passes the same checks, and a serve record, task or note naming
-the epic covers it too ("…, on epic owner/repo#n"). A task or note names
+an epic passes the same checks, and a serve record or task naming
+the epic covers it too ("…, on epic owner/repo#n"). No note holds an item:
+a hold is a blocked-by (board block), a priority a board rank. A held item,
+one with an open recorded blocker, is skipped as "held: blocked by
+<owner/repo#n>; 1 of 1 blockers open"; a held epic is never offered through
+its sub-issues, and every issue under it is skipped as "held: sub-issue of
+<epic>, blocked by …". The epics of the priority list are read whatever their
+Team field says when they carry the team label (board.teamLabel), and a
+change of a ranked epic's rank or Team beekeeper did not write is a line
+"changed outside beekeeper: …" first (--json changed) and a board.changed
+event (see priority). While the
+state keeps memos and pinned notes an older beekeeper filed, which held the
+items they name, next offers nothing and is refused (exit 3) until note
+migrate --apply has closed them. A task names
 an issue or pull request by its URL, as owner/repo#n, as repo#n of
 board.owner, as a repository before a list ("beekeeper: #524, #525") or as
 a bare #n after the last repository it named ("beekeeper#173, #176"); a
 bare #n before any repository names nothing, and "note #n", "timer #n",
 "memo #n" and "decision #n" are beekeeper's own items. It prints each item
 above the pick that was skipped on a line of its own, "skipped
-<owner/repo#n>: <reason>", the same list as --json's skipped (a note's
-reason names the note and its first line: note #<id> "<first line>" (waits
-on <person>)), then the item and why it is picked, without --claim the
+<owner/repo#n>: <reason>", the same list as --json's skipped, then the item and why it is picked, without --claim the
 free items behind it in their order (the preview of the board's work), and
 the skipped items' count by kind: served (a session's record, a busy
-agent's task), note (an open note names it), assigned (outside
+agent's task, a running session's work), assigned (outside
 board.people), blocked, stale, lease (another session holds it), planning
 (the epic gate holds it), unknown (GitHub answered its board fields or an
 epic's sub-issues with an error) and order (a rule of board.order turns it
@@ -140,6 +161,9 @@ the whole walk.`,
 			if err := checkFields(view.fields); err != nil {
 				return usageErr("%v", err)
 			}
+			if err := a.unmigrated("board next"); err != nil {
+				return err
+			}
 			var me state.Party
 			if claim {
 				var err error
@@ -159,12 +183,9 @@ the whole walk.`,
 			if err != nil {
 				return err
 			}
+			changed := a.rankChanges(cmd.Context(), cl, snap.Priorities)
 			cands := board.Rank(snap, a.cfg.Board, a.now)
-			prios, err := cl.Priorities(cmd.Context())
-			if err != nil {
-				return err
-			}
-			board.ByPriority(cands, prios.Ranks(), snap.Parent)
+			board.ByPriority(cands, snap.Priorities.Ranks(), snap.Parent)
 			listed := time.Now()
 			sessions, _, err := a.sessions()
 			if err != nil {
@@ -182,7 +203,8 @@ the whole walk.`,
 			if err != nil {
 				return err
 			}
-			sc := pickScope{me: me, alive: alive, listed: listed, owner: a.cfg.Board.Owner}
+			sc := pickScope{me: me, alive: alive, listed: listed, owner: a.cfg.Board.Owner,
+				works: servingWork(st, sessions, a.sessionWorks(sessions), a.now.Add(-a.cfg.Overlaps.ActiveWithin.Duration))}
 			if sc.closes, err = cl.Closes(cmd.Context(), offBoard(boardOwners(st, sc), cands)); err != nil {
 				return err
 			}
@@ -201,7 +223,7 @@ the whole walk.`,
 			if err != nil {
 				return err
 			}
-			res.Epics, res.Missing = snap.Epics(), snap.Missing
+			res.Epics, res.Missing, res.Changed = snap.Epics(), snap.Missing, changed
 			return a.printNext(res, len(cands), view)
 		},
 	}
@@ -377,13 +399,65 @@ func skipHeldLeases(cands []board.Candidate, holders []lease.Holder, me state.Pa
 // pickScope is what a pick reads beside the state: who asks, which sessions
 // run and when they were listed, which issues the pull requests close
 // (closes, from Client.Closes) and the board's owner, which a repo#n a
-// task or note names belongs to.
+// task or note names belongs to, and what the running sessions work on
+// (servingWork).
 type pickScope struct {
 	me     state.Party
 	alive  func(state.Party) bool
 	listed time.Time
 	closes map[string][]string
 	owner  string
+	works  []sessionWork
+}
+
+// sessionWork is the issues and pull requests a running session works on
+// now: its current refs, the sessions table's ON, and its title.
+type sessionWork struct {
+	party state.Party
+	refs  []string
+	title string
+}
+
+// servingWork is what the running sessions work on now (work[i] is
+// sessions[i]'s), for board next, its sessions ON: a busy agent's, quiet
+// or not, and another session's active since since; a role
+// holder's (it reads every item) and an agent's reporting idle (its last
+// task's) are left out.
+func servingWork(st *state.State, sessions []*claude.Session, work []claude.Work, since time.Time) []sessionWork {
+	var out []sessionWork
+	for i, s := range sessions {
+		p := s.Party()
+		holder := slices.ContainsFunc(roles, func(rl role) bool { h := rl.get(st).Holder; return h != nil && h.Is(p) })
+		registered := slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) })
+		if i >= len(work) || holder || registered && agentIdle(st, p) || !registered && s.LastActive.Before(since) {
+			continue
+		}
+		refs := work[i].Refs
+		if len(refs) > 0 || titleRef.MatchString(p.Name) {
+			out = append(out, sessionWork{party: p, refs: refs[:min(claude.Current, len(refs))], title: p.Name})
+		}
+	}
+	return out
+}
+
+// sessionWorks reads what each session's transcript says it works on.
+func (a *app) sessionWorks(sessions []*claude.Session) []claude.Work {
+	out := make([]claude.Work, len(sessions))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, runtime.GOMAXPROCS(0))
+	for i, s := range sessions {
+		sem <- struct{}{}
+		wg.Go(func() {
+			defer func() { <-sem }()
+			if s.Harness == omp.Harness {
+				out[i], _ = omp.ReadTranscript(s.Transcript, a.now)
+			} else {
+				out[i], _ = a.readTranscript(s.Transcript)
+			}
+		})
+	}
+	wg.Wait()
+	return out
 }
 
 // nextResult is the pick, nil when no item is free, the candidates
@@ -405,12 +479,14 @@ type nextResult struct {
 	// Missing names what GitHub answered with an error and no candidate's
 	// missing holds, a search step's issues for one.
 	Missing []string `json:"missing,omitempty"`
+	// Changed are the changes of a ranked epic's Team or Priority that
+	// beekeeper did not write, since the last read of the priority list.
+	Changed []string `json:"changed,omitempty"`
 }
 
 // The kinds of a skip reason, skipKind's words and skipped_by's keys.
 const (
 	kindServed   = "served"
-	kindNote     = "note"
 	kindAssigned = "assigned"
 	kindBlocked  = "blocked"
 	kindStale    = "stale"
@@ -426,11 +502,9 @@ func skipKind(reason string) string {
 	switch {
 	case strings.HasPrefix(reason, "served by "):
 		return kindServed
-	case strings.HasPrefix(reason, "note #"):
-		return kindNote
 	case strings.HasPrefix(reason, "assigned to "):
 		return kindAssigned
-	case strings.HasSuffix(reason, "blockers open"):
+	case strings.HasSuffix(reason, "blockers open"), strings.HasPrefix(reason, board.HeldPrefix), strings.HasPrefix(reason, board.HeldWord):
 		return kindBlocked
 	case strings.HasPrefix(reason, "no activity since "):
 		return kindStale
@@ -465,16 +539,17 @@ func skipCounts(by map[string]int) string {
 // unless the session is a registered agent reporting idle, by the record
 // of an agent kept on the roster (keptBy) or busy with its task on it,
 // whether its CLI runs or not, by a
-// busy agent whose task names it and by an open note naming it. An issue a
+// busy agent whose task names it, else by a running session working on it
+// (sc.works), else by a title naming it by number (coverTitled). An issue a
 // pull request closes (sc.closes) is owned by whatever owns
 // the pull request, and a sub-issue offered through an epic by whatever owns
 // the epic.
 func nextFree(st *state.State, cands []board.Candidate, sc pickScope) nextResult {
-	owners := coverClosed(boardOwners(st, sc), sc.closes)
+	owners := coverTitled(coverClosed(boardOwners(st, sc), sc.closes), titleOwners(st, sc), cands)
 	res := nextResult{SkippedBy: map[string]int{}}
 	owned := func(ref string) string {
 		o, ok := owners[strings.ToLower(ref)]
-		if ok && !strings.HasPrefix(o, "note ") {
+		if ok {
 			o = "served by " + o
 		}
 		return o
@@ -595,16 +670,95 @@ func namedRefs(text, owner string) []string {
 	return out
 }
 
+// titleRef is how a desk's task or session title names its item by
+// number: a tag or a repository, then the number, "BS 3057 roster read" or
+// "FIX backstage 3067 avatars"; a version, "AP 4.141.1 promoter", names
+// none.
+var titleRef = regexp.MustCompile(`(?i)^(?:fix\s+)?([a-z][\w.-]*)\s+#?(\d+)(?:[\s,:;()]|$)`)
+
+// titled is an item a title names by number (titleRef) and who it names.
+type titled struct {
+	tag, number, who string
+}
+
+// titleOwners are the items the titles of the sessions working name: a
+// busy agent's task and name, a running session's title (sc.works).
+func titleOwners(st *state.State, sc pickScope) []titled {
+	var out []titled
+	add := func(title, who string) {
+		if m := titleRef.FindStringSubmatch(strings.TrimSpace(title)); m != nil {
+			out = append(out, titled{tag: m[1], number: m[2], who: who})
+		}
+	}
+	for _, ag := range st.Agents {
+		if ag.Task != "" && !ag.Done {
+			add(ag.Task, partyLabel(ag.Party, sc.me)+" (task)")
+			add(ag.Name, partyLabel(ag.Party, sc.me)+" (title)")
+		}
+	}
+	for _, w := range sc.works {
+		add(w.title, partyLabel(w.party, sc.me)+" (title)")
+	}
+	return out
+}
+
+// coverTitled adds to owners each candidate, and each candidate's epic, a
+// title names by its number and a tag its repository's name abbreviates
+// (tagNames), owned by who the title names; an owned item keeps its owner.
+func coverTitled(owners map[string]string, titles []titled, cands []board.Candidate) map[string]string {
+	if len(titles) == 0 {
+		return owners
+	}
+	cover := func(ref string) {
+		ref = strings.ToLower(ref)
+		repo, n, ok := strings.Cut(ref, "#")
+		if !ok || owners[ref] != "" {
+			return
+		}
+		_, name, _ := strings.Cut(repo, "/")
+		if i := slices.IndexFunc(titles, func(t titled) bool { return t.number == n && tagNames(t.tag, name) }); i >= 0 {
+			owners[ref] = titles[i].who
+		}
+	}
+	for _, c := range cands {
+		cover(c.Ref)
+		if c.Epic != "" {
+			cover(c.Epic)
+		}
+	}
+	return owners
+}
+
+// tagNames reports whether tag names the repository name: the name itself,
+// or its letters in order from its first, "BS" backstage, "GH" github,
+// "ACC" app-catalog-cleanup-tool.
+func tagNames(tag, name string) bool {
+	tag, name = strings.ToLower(tag), strings.ToLower(name)
+	if len(tag) < 2 || name == "" || tag[0] != name[0] {
+		return false
+	}
+	i := 0
+	for j := 0; j < len(name) && i < len(tag); j++ {
+		if name[j] == tag[i] {
+			i++
+		}
+	}
+	return i == len(tag)
+}
+
+// partyLabel is how an owner reads: "you" for me, else its quoted name.
+func partyLabel(p, me state.Party) string {
+	if p.Is(me) {
+		return "you"
+	}
+	return fmt.Sprintf("%q", p.Name)
+}
+
 // boardOwners maps each issue (lower-cased owner/repo#n) a live session
-// serves, or an open note waits on, to who serves it or whom it waits on.
+// serves to who serves it.
 func boardOwners(st *state.State, sc pickScope) map[string]string {
 	me, alive, listed := sc.me, sc.alive, sc.listed
-	name := func(p state.Party) string {
-		if p.Is(me) {
-			return "you"
-		}
-		return fmt.Sprintf("%q", p.Name)
-	}
+	name := func(p state.Party) string { return partyLabel(p, me) }
 	// kept says what keeps the record's session on the roster, parked.
 	kept := func(p state.Party) string { return rosterKept(st, p, listed) }
 	// busy says the record's session is an agent on the roster working its
@@ -638,16 +792,20 @@ func boardOwners(st *state.State, sc pickScope) map[string]string {
 			named(ag.Task, name(ag.Party)+" (task)")
 		}
 	}
-	// A note names what its text says and what it is linked to (--ref).
-	for _, n := range st.Notes {
-		named(strings.Join(append([]string{n.Text}, n.Refs...), " "), fmt.Sprintf("note #%d %q (waits on %s)", n.ID, truncate(firstLine(n.Text), 60), cmp.Or(n.For, "the supervisor")))
+	// Last, what a running session works on with no record naming it.
+	for _, w := range sc.works {
+		for _, ref := range w.refs {
+			if ref = strings.ToLower(ref); out[ref] == "" {
+				out[ref] = name(w.party) + " (works on it)"
+			}
+		}
 	}
 	return out
 }
 
 // offBoard are the refs of owners that are no candidate, sorted: a board
 // item is an issue, so the pull requests among what the sessions serve
-// and the tasks and notes name are among these, and Closes is asked about
+// and the tasks name are among these, and Closes is asked about
 // these only.
 func offBoard(owners map[string]string, cands []board.Candidate) []string {
 	return slices.DeleteFunc(slices.Sorted(maps.Keys(owners)), func(ref string) bool {
@@ -681,6 +839,9 @@ func (a *app) printNext(res nextResult, offered int, view nextView) error {
 			return err
 		}
 	} else {
+		for _, l := range res.Changed {
+			_, _ = fmt.Fprintln(a.out, l)
+		}
 		if h := res.Held; h != nil {
 			_, _ = fmt.Fprintf(a.out, "this session %s: finish it, release it with sessions unserve %s, or claim with --replace\n", recordText(*h), h.Issue)
 		}
@@ -753,9 +914,11 @@ func (a *app) boardMoveCmd() *cobra.Command {
 board is added first (addProjectV2ItemById, the issue's own mutation: the
 board's items are never read) and given board.team as its Team, then the
 Status. An issue of a repository outside the board's owner (a personal
-account's, another organisation's) is never added: without an item its
-projectItems name it is refused, naming its owner's own project as its
-place. Every GitHub call acts on the
+account's, another organisation's) is never added: its item on a project
+of the repository's own owner (a personal account's user project) moves
+there by that project's Status values, without a Team or the epic gate;
+on no such project, or on several, it is refused with the gh project
+item-add or item-edit recipe. Every GitHub call acts on the
 issue's repository (GH_REPO), so a gh link that picks its login by the owner
 (devctl's agent link: the App for the organisation, the person's own login
 for a personal account's repository) reaches the issue. The status is the
@@ -794,6 +957,9 @@ anything is written. Exit 3 when refused.`,
 			team := ""
 			if mv.Team != "" {
 				team = ", Team " + mv.Team
+			}
+			if mv.Board != "" {
+				team = " on the board " + mv.Board
 			}
 			switch {
 			case mv.Added:
@@ -893,7 +1059,9 @@ func (a *app) boardHoldCmd(block bool) *cobra.Command {
 		`Records the issue --by names as a blocker of the item's issue, a GitHub
 blocked-by dependency (addBlockedBy): board next skips the item while any of
 its recorded blockers is open ("1 of 1 blockers open") and offers it again at
-the next board next once they all closed, with no session acting. A
+the next board next once they all closed, with no session acting, unless its
+Status was set after the last of them closed: that Status holds it until it
+changes. A
 dependency recorded already is left as it is.`
 	if !block {
 		use, short, long = "unblock", "Remove a hold from a board item: the GitHub blocked-by dependency block recorded",

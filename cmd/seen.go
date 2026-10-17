@@ -113,15 +113,18 @@ func (a *app) sessionFacts(v *view) []fact {
 	var facts []fact
 	for _, s := range v.Sessions {
 		role := roleText(s, s.Role)
-		cmds := make([]string, 0, len(s.Commands))
-		for _, c := range s.Commands {
-			cmds = append(cmds, commandName(c.Args))
+		cmds := []string{selfRunning}
+		if !s.Self {
+			cmds = make([]string, 0, len(s.Commands))
+			for _, c := range s.Commands {
+				cmds = append(cmds, commandName(c.Args))
+			}
 		}
 		key := fmt.Sprintf("session %q", s.Name)
 		facts = append(facts, fact{
 			Key:  key,
 			Sig:  strings.Join([]string{on(s), strings.Join(cmds, "; "), role}, "|"),
-			Line: fmt.Sprintf("%s on %s, runs %s, ctx %s, %s", key, on(s), running(s.Commands), contextText(s.Metrics), role),
+			Line: fmt.Sprintf("%s on %s, runs %s, ctx %s, %s", key, on(s), s.running(), contextText(s.Metrics), role),
 		})
 	}
 	facts = append(facts, textFacts("record", a.capture(func() { a.printRecords(v.st, v.st.Records, v.raw) }))...)

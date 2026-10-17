@@ -15,6 +15,9 @@ import (
 // verbLeaseClaim is the event a granted claim logs.
 const verbLeaseClaim = "lease.claim"
 
+// verbLeaseWithdraw is a grantee withdrawing its own queued grant (lease release).
+const verbLeaseWithdraw = "lease.withdraw"
+
 // labView is a lab lease with the kind cluster it stands for.
 type labView struct {
 	Lease   string `json:"lease"`

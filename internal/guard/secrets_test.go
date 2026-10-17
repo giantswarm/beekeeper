@@ -414,3 +414,24 @@ func TestCommandAt(t *testing.T) {
 		}
 	}
 }
+
+// The worker rules and every refusal give one answer about comparing a
+// secret: `beekeeper secret compare|fingerprint` is the one allowed form, any
+// other comparison stays refused.
+func TestSecretCompareMatchesWorkerRules(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "plugin", "skills", "worker-rules", "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules := strings.Join(strings.Fields(string(raw)), " ")
+	for _, want := range []string{"compare a value, even hashed, but by `beekeeper secret compare|fingerprint`"} {
+		if !strings.Contains(rules, want) {
+			t.Errorf("the worker rules do not say %q", want)
+		}
+	}
+	for _, want := range []string{"the one comparison an agent runs: `beekeeper secret compare", "`beekeeper secret fingerprint", "any other comparison of a value", "stays refused"} {
+		if !strings.Contains(secretOps, want) {
+			t.Errorf("the refusal does not say %q:\n%s", want, secretOps)
+		}
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -28,10 +29,14 @@ const noteKept = "note.kept"
 // overtakenSep separates an overtaken event's reason from the note's text.
 const overtakenSep = "; the note: "
 
+// refsTimeout bounds one read of refStates: its tries, each bounded by
+// github.RefStates, and the waits between them.
+const refsTimeout = time.Minute
+
 // refStates reads the states of issues and pull requests; a seam for the
 // tests.
 var refStates = func(ctx context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
-	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	ctx, cancel := context.WithTimeout(ctx, refsTimeout)
 	defer cancel()
 	return github.RefStates(ctx, notesGH, refs)
 }
@@ -60,11 +65,10 @@ func parseRef(s string) (github.PR, bool) {
 func refName(r github.PR) string { return fmt.Sprintf("%s#%d", r.Repo, r.N) }
 
 // overtakable reports whether the watch may close n as overtaken: a note
-// for someone, neither pinned (a standing instruction) nor a login (its
-// probe closes it), and not the note the guide asks its person now, whose
+// for someone, not a login (its probe closes it), and not the note the guide asks its person now, whose
 // answer would otherwise find it closed.
 func overtakable(n state.Note, asking int) bool {
-	return n.For != "" && !n.Pinned && n.Kind != noteLogin && n.ID != asking
+	return n.For != "" && n.Kind != noteLogin && n.ID != asking
 }
 
 // overtakeRefs are the distinct issues and pull requests the overtakable

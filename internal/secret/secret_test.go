@@ -191,9 +191,19 @@ func TestFingerprintsAreKeyedAndNameNoValue(t *testing.T) {
 func TestOnlyTheSharedVault(t *testing.T) {
 	tools := secrettest.New(map[string]string{otherVaultRef: password})
 	o := ops(tools)
-	if _, err := o.Fingerprints(context.Background(), secret.Ref{Op: otherVaultRef}); err == nil || !strings.Contains(err.Error(), "only the shared vault") {
+	if _, err := o.Fingerprints(context.Background(), secret.Ref{Op: otherVaultRef}); err == nil || !strings.Contains(err.Error(), `reads only the vaults ["Shared"]`) {
 		t.Errorf("another vault = %v", err)
 	}
+	if len(tools.Calls) != 0 {
+		t.Errorf("op ran: %q", tools.Calls)
+	}
+	// a vault of secret.vaults is read like the shared one
+	o.Vaults = []string{"Private"}
+	if ps, err := o.Fingerprints(context.Background(), secret.Ref{Op: otherVaultRef}); err != nil || len(ps) != 1 {
+		t.Errorf("a configured vault = %v, %v", ps, err)
+	}
+	tools.Calls = nil
+	o.Vaults = nil
 	o.Token = ""
 	if _, err := o.Fingerprints(context.Background(), secret.Ref{Op: vaultRef}); err == nil || !strings.Contains(err.Error(), "secret.tokenFile") {
 		t.Errorf("no service account = %v", err)
@@ -659,6 +669,41 @@ func TestConsumerKubectlExec(t *testing.T) {
 	}
 	if c := secret.ConsumerContext([]string{"gh", "secret", "set", "--context", "x"}); c != "" {
 		t.Errorf("ConsumerContext of gh = %q", c)
+	}
+}
+
+func TestConsumerValkeyCLI(t *testing.T) {
+	const pod = "kubectl exec -i --context kind-lab -n muster valkey-0 -- "
+	for argv, ok := range map[string]bool{
+		pod + "valkey-cli --askpass --scan --pattern muster:*":                        true,
+		pod + "valkey-cli --askpass --no-auth-warning -n 0 --scan":                    true,
+		pod + "valkey-cli --askpass -h attacker.example DEL muster:a":                 false,
+		pod + "valkey-cli --askpass -p 6380 DEL muster:a":                             false,
+		"valkey-cli --askpass DEL muster:a":                                           false,
+		pod + "valkey-cli --askpass --user default DEL muster:oauth:token:a muster:b": true,
+		pod + "redis-cli --askpass unlink muster:a":                                   true,
+		pod + "/usr/local/bin/valkey-cli --askpass EXISTS muster:a":                   true,
+		pod + "valkey-cli --askpass TTL muster:a":                                     true,
+		pod + "valkey-cli DEL muster:a":                                               false,
+		pod + "valkey-cli -a pw --askpass DEL muster:a":                               false,
+		pod + "valkey-cli -u redis://:pw@valkey --askpass DEL muster:a":               false,
+		pod + "valkey-cli --askpass GET muster:a":                                     false,
+		pod + "valkey-cli --askpass HGETALL muster:a":                                 false,
+		pod + "valkey-cli --askpass CONFIG GET requirepass":                           false,
+		pod + "valkey-cli --askpass ACL LIST":                                         false,
+		pod + "valkey-cli --askpass KEYS *":                                           false,
+		pod + "valkey-cli --askpass DEL":                                              false,
+		pod + "valkey-cli --askpass":                                                  false,
+		pod + "valkey-cli --askpass --scan DEL muster:a":                              false,
+		pod + "valkey-cli --askpass --pattern muster:* DEL muster:a":                  false,
+		pod + "valkey-cli --askpass -x DEL muster:a":                                  false,
+		pod + "valkey-cli --askpass --eval x.lua":                                     false,
+		pod + "valkey-cli --askpass -h":                                               false,
+		pod + "sh -c valkey-cli":                                                      false,
+	} {
+		if err := secret.Consumer(strings.Fields(argv)); (err == nil) != ok {
+			t.Errorf("Consumer(%q) = %v, want allowed %v", argv, err, ok)
+		}
 	}
 }
 

@@ -48,15 +48,20 @@ machine has a supervisor at all times: the role moves to a successor by relay an
   the worker (SendMessage, `agents wake`) records its grant, `beekeeper lease grant <resource>
   <session>` records one without the word (grants queue in order), a hold with
   `beekeeper hold set <repo|github>`, a decision for the person with `beekeeper note add --for
-  <person> --due <time> --status-quo "<what is true now>" --why "<why it needs them>" --default
-  "<the action if unanswered>"` (every issue or PR as its full URL; `note add --help` names the checks), its own
-  record (a state summary, a board skip, deferred work) as a memo, `beekeeper note add --kind memo
-  --replaces <the memo it supersedes>`, so each such memo is one open note, a point in time to look at
+  <person> --ref <owner/repo#n> --due <time> --status-quo "<what is true now>" --why "<why it needs them>" --default
+  "<the action if unanswered>"` (every issue or PR as its full URL; `note add --help` names the checks; the question names its
+  thread with `--ref`), the order of epics with `beekeeper priority` (the person's list, read
+  never written here) and `beekeeper board rank`, a hold on an item with `beekeeper board block <item> --by
+  <issue>` (the person's stop too: the issue that carries it), which keeps the item's Team, rank
+  and Status, holds every issue under it and is released by the closing blocker without a session
+  acting, a point in time to look at
   something with `beekeeper timer add <time> "<what>"` (`timer done` once looked at), what each
   session serves and waits on with `beekeeper sessions serve`, the registered agents with
   `beekeeper agents`. `beekeeper handover` prints all of it with the sessions; `beekeeper handover
   --prompt` is the successor's whole prompt. `beekeeper status` is the one-line view; `beekeeper
-  supervisor` shows this session's context against `supervisor.relayAt`.
+  supervisor` shows this session's context against `supervisor.relayAt`. Epics, plans, priorities and
+  the person's answers live on the board, in the issue and in `beekeeper log --verb answer.recorded`; the supervisor keeps
+  no note of them, and a state summary is the hand-over.
 - **Other sessions** are visible through `beekeeper sessions` (what each is on, the commands it
   runs, how long a bounded wait keeps it reachable, overlaps, `CTX` and the last hour's turns,
   errors, GitHub calls and cost) and `beekeeper tail <session>` (its last turns); `ListAgents`
@@ -66,7 +71,7 @@ machine has a supervisor at all times: the role moves to a successor by relay an
 - **The guide** is a separate session (`/guide`, `beekeeper guide`) that walks the person through
   their decisions and keeps the roadmap board current. It serves the notes filed for the person and
   the sessions waiting on them; its one-line copies of their answers reach this session, and the
-  answers are in `beekeeper log --verb note.answered`. It does no work of its own: research, proofs
+  answers are in `beekeeper log --verb answer.recorded`. It does no work of its own: research, proofs
   and test sessions it meets come here as one line. `guide start` in this session is refused.
 
 ## Constraints
@@ -81,7 +86,7 @@ machine has a supervisor at all times: the role moves to a successor by relay an
   so nothing may hold that turn: no `AskUserQuestion` or other dialog that waits for an answer;
   long waits run only in the background.
 - **Decisions go to the guide, never to the person directly.** A decision the supervisor meets, its
-  own or a session's, is filed as `beekeeper note add --for <person> --due <time> --status-quo "<what
+  own or a session's, is filed as `beekeeper note add --for <person> --ref <owner/repo#n> --due <time> --status-quo "<what
   is true now>" --why "<why it needs them>" --default "<the action if unanswered>"`; a note lacking
   one of them, a full URL or `--checked` for a state claim is refused, naming what is missing. At the deadline,
   the default for anything irreversible or production-facing is not to do it; a reversible default

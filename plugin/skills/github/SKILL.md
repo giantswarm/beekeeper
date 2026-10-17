@@ -1,6 +1,6 @@
 ---
 name: github
-description: GitHub reads, builds, browser steps and waits on a beekeeper desk: the budget gate, repository scans, beekeeper run, headless turns, browse. Load before them.
+description: GitHub reads, builds, browser steps and waits on a beekeeper desk: the budget gate, scans, beekeeper run, headless turns, browse. Load before them.
 ---
 
 # github — GitHub, builds, the browser and waits
@@ -9,19 +9,19 @@ description: GitHub reads, builds, browser steps and waits on a beekeeper desk: 
 - **Membership** is `beekeeper person <login>`, never a members endpoint of `gh api`: the App's
   token reads a private member as an outsider.
 - **Scans list each repository** (`gh issue list --repo <owner/repo> --search "<query>"`, `gh pr
-  list` likewise), never one `gh search` over several, which silently drops a private repository.
-  A repository the listing cannot read is a problem found, never "no match".
-- **A rollout** is checked once, when a `beekeeper timer add` set for it falls due.
-- **A headless turn** (a first turn, a `wake` turn) never ends on a background task or wait, whose
-  completion never wakes it: it waits in the foreground (`devctl pr wait`, `devctl pr merge`, a
-  bounded Bash) and ends only done or parked (`beekeeper:park`).
-- **No @-mention** in a post (the hook refuses one): a ping a colleague needs is a question to the
-  supervisor.
+  list` likewise), never one `gh search` over several, which drops a private repository. One
+  the listing cannot read is a problem found, never "no match".
+- **A code scan** (govulncheck, trivy) runs in a fresh worktree of `origin/main`, never a shared
+  clone; a finding names the commit and module versions it was raised on.
+- **A rollout** is checked once, when its `beekeeper timer add` falls due.
+- **A headless turn** (a first or `wake` turn) never ends on a background wait, which never wakes
+  it: it waits in the foreground (`devctl pr wait`, `devctl pr merge`, a bounded Bash) and ends
+  done or parked (`beekeeper:park`).
+- **No @-mention** in a post (the hook refuses one): a ping is a question to the supervisor.
 - **Builds**, tests and lints run through `beekeeper run` (the hook does it): exit 75 is no slot,
-  rerun in the background, never in a loop; exit 137 is the cap, bound the parallelism, never raise
-  it. No heavy work while `beekeeper watch` reports load or memory pressure.
+  rerun in the background, never in a loop; exit 137 is the cap, bound the parallelism. No heavy
+  work while `beekeeper watch` reports load or memory pressure.
 - **The browser never waits on a site approval.** A headless turn has the CLI's Claude in Chrome
   tools; a desktop turn, whose browser tools are refused, runs its steps through `beekeeper browse
-  "<steps>"`, which prints the report and screenshots as image files.
-- **Subagents** only when the brief allows them, each given at least the force-push and secret
-  rules: a subagent reads none of these.
+  "<steps>"` (a report, screenshot files).
+- **Subagents** only when the brief allows them, each told the force-push and secret rules.

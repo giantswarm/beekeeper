@@ -73,7 +73,7 @@ spec:
                 minimum: 1
                 type: integer
               kind:
-                description: Kind is decision, memo or login.
+                description: Kind is decision or login.
                 type: string
               options:
                 description: 'Options are a decision''s choices, "<label>: <consequence>"
@@ -83,7 +83,10 @@ spec:
                 maxItems: 10
                 type: array
               pinned:
-                description: Pinned is a standing instruction carried by every hand-over.
+                description: |-
+                  Pinned is kept from an older beekeeper, which pinned standing
+                  instructions; beekeeper files no new pin and `note migrate` moves each
+                  into standing.md.
                 type: boolean
               question:
                 description: Question is a decision's question, one line.

@@ -146,7 +146,8 @@ merge:
   seedTTL: 12h              # a place queued with lanes queue --for, from its seeding or last arrival; a failed run's, from the failure
   settle: 5m                # a lane waits this long after a merge whose release is unknown
   settleTimeout: 30m        # then refuses its next merge while the release has not rolled
-  budgetFresh: 1m           # the last budget reading is used this long, then read afresh
+  budgetFresh: 1m           # the last budget reading is used this long (never past its reset), then read afresh
+  resetFirst: 5m            # this long after the budget's reset the merges queued under the floor for it go before the waits, oldest first
   stallAfter: 5m            # a lane's first arrived merge waits this long behind absent places, then the lane is stalled
   hungAfter: 45m            # the watch ends a running merge's devctl this long after its pull request merged (a closed one's this long after its start)
   ciTimeout: 1h             # devctl pr merge's --timeout (its CI wait) when the command names none; devctl's own 30m is shorter than a CI --update-branch restarts
@@ -239,6 +240,8 @@ doctor:                     # known faults the doctor (beekeeper doctor, every w
   dockerBuildCacheMaxGiB: 20  # the default; prunes Docker's build cache over this to 3/4; negative: off
   dockerEvery: 1h           # the default; how often a watch reads Docker's sizes
   freeEvery: 1h             # the default; how often a watch frees dead sessions' scratch and orphaned go-build dirs in /tmp; negative: off
+  worktreeRoots: [~/projects/worktrees]  # the default; where a watch looks for workers' git worktrees
+  worktreesEvery: 6h        # the default; how often it removes those whose pull request merged or closed, and the build output of idle ones; negative: off
 reporter:                   # the scheduled status reporter the standby watch starts; off without every and brief
   every: 1h                 # one report per interval, on its multiples (on the hour)
   brief: ~/.local/state/desk/report-brief.md   # what to report and where to post it
@@ -299,7 +302,7 @@ board:                      # the project board `beekeeper board next` picks wor
   order:                    # the first free item of the first step that offers one is picked
     - {name: page, kind: [alert]}   # Status and Kind values or an unambiguous part ("up next")
     - {name: In Progress, status: [in progress], subIssues: true}   # an epic offers its open sub-issues
-    - {name: blocker cleared, status: [blocked], unblocked: true}   # every recorded blocker closed
+    - {name: blocker cleared, status: [blocked], unblocked: true}   # every recorded blocker closed, the Status set before the last close
     - {name: Up Next, status: [up next]}
     - {name: bug, status: [backlog], kind: [bug]}
     - {name: queue, search: "repo:example-org/tools label:team/platform"}   # open issues, oldest first

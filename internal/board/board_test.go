@@ -27,6 +27,8 @@ const (
 	upNextEpic = "Up Next epic"
 	bugStep    = "bug"
 	typedNext  = "up next"
+	// backlogStep is the name of the order's Backlog step.
+	backlogStep = "Backlog"
 )
 
 var statuses = []string{"Inbox 📥", backlog, upNext, inProgress, blocked, "Validation ☑️", "Done ✅"}
@@ -42,7 +44,7 @@ func order() []config.BoardStep {
 		{Name: "Up Next", Status: []string{typedNext}},
 		{Name: bugStep, Kind: []string{bugStep}},
 		{Name: "queue", Search: "repo:o/tools label:team/x"},
-		{Name: "Backlog", Status: []string{"backlog"}, CreatedWithin: config.Duration{Duration: 90 * 24 * time.Hour}},
+		{Name: backlogStep, Status: []string{"backlog"}, CreatedWithin: config.Duration{Duration: 90 * 24 * time.Hour}},
 	}
 }
 
@@ -129,16 +131,16 @@ func TestRankAppliesTheOrderToAFixtureBoard(t *testing.T) {
 		"o/r#1 In Progress: no activity since 2025-08-27",
 		"o/r#2 In Progress: assigned to pat",
 		"o/r#3 In Progress",
-		"o/r#19 In Progress: 1 of 1 blockers open",
+		"o/r#19 In Progress: held: 1 of 1 blockers open",
 		"o/r#40 In Progress < o/r#4",
-		"o/r#41 In Progress < o/r#4: 4 of 4 blockers open",
+		"o/r#41 In Progress < o/r#4: held: 4 of 4 blockers open",
 		"o/r#16 In Progress < o/r#15",
 		"o/r#17 In Progress < o/r#15: created 2026-06-24: Backlog takes items created within 90 days",
 		"o/r#18 In Progress < o/r#15: no step of board.order offers Inbox 📥",
-		"o/r#20 In Progress < o/r#15: 3 of 4 blockers open",
+		"o/r#20 In Progress < o/r#15: held: 3 of 4 blockers open",
 		"o/r#21 In Progress < o/r#15: no step of board.order offers Inbox 📥",
 		"o/r#22 In Progress < o/r#15: created 2026-06-24: Backlog takes items created within 90 days",
-		"o/r#23 In Progress < o/r#15: 1 of 2 blockers open",
+		"o/r#23 In Progress < o/r#15: held: 1 of 2 blockers open",
 		"o/r#6 blocker cleared",
 		"o/r#8 Up Next: epic in planning (Up Next ➡️), no plan pull request names it: its planning session's",
 		"o/r#9 Up Next: epic in planning (Up Next ➡️), no plan pull request names it: its planning session's",
@@ -179,6 +181,32 @@ func TestPositionIsThePriorityWithinAStep(t *testing.T) {
 	}
 }
 
+func TestBlockersClosedIsTheLastCloseOfEveryBlocker(t *testing.T) {
+	at := func(d int) *time.Time { t := days(d); return &t }
+	j := func(total int, closed ...*time.Time) issueJSON {
+		var i issueJSON
+		i.Deps.TotalBlockedBy = total
+		for _, c := range closed {
+			i.BlockedBy.Nodes = append(i.BlockedBy.Nodes, blockerNode{ClosedAt: c})
+		}
+		return i
+	}
+	for _, tc := range []struct {
+		name string
+		j    issueJSON
+		want time.Time
+	}{
+		{"all closed", j(2, at(5), at(2)), days(2)},
+		{"one open", j(2, at(5), nil), time.Time{}},
+		{"not every one read", j(3, at(5), at(2)), time.Time{}},
+		{"none", j(0), time.Time{}},
+	} {
+		if got := tc.j.blockersClosed(); !got.Equal(tc.want) {
+			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestUnofferedSaysWhyNoStepTakesAnItem(t *testing.T) {
 	o := snapshot(t).Order
 	for _, tc := range []struct {
@@ -189,7 +217,11 @@ func TestUnofferedSaysWhyNoStepTakesAnItem(t *testing.T) {
 		{Item{Status: backlog, Kind: bug, Created: days(400)}, ""},
 		{Item{Status: backlog, Created: days(100)}, "created 2026-06-23: Backlog takes items created within 90 days"},
 		{Item{Status: blocked}, "blocker cleared takes items with recorded blockers, it has none"},
-		{Item{Status: blocked, Blockers: 3, OpenBlockers: 2}, "2 of 3 blockers open"},
+		{Item{Status: blocked, Blockers: 3, OpenBlockers: 2}, "held: 2 of 3 blockers open"},
+		{Item{Status: blocked, Blockers: 1, StatusSet: days(1), BlockersClosed: days(2)},
+			"held by its Status Blocked / Waiting ⛔️, set 2026-09-30 after its last blocker closed 2026-09-29: it holds until the Status changes"},
+		{Item{Status: blocked, Blockers: 1, StatusSet: days(3), BlockersClosed: days(2)}, ""},
+		{Item{Status: blocked, Blockers: 1, StatusSet: days(1)}, ""},
 		{Item{}, "no step of board.order offers an item without a Status"},
 	} {
 		if got := Unoffered(o, tc.it, now); got != tc.want {
@@ -441,7 +473,7 @@ func TestMoveAddsAnIssueMissingFromTheBoard(t *testing.T) {
 		added: `{"data":{"addProjectV2ItemById":{"item":{"id":"I2","project":{"id":"P"},"status":null,"kind":null,"team":null}}}}`}
 	c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
 	mv, err := c.Move(context.Background(), issue5, "backlog")
-	if err != nil || *mv != (Moved{Ref: issue5, To: backlog, Added: true, Team: "X 🐝"}) || !slices.Equal(f.mutations, []string{"add ISSUE to P", "I2=t1", "I2=s1"}) || readsItems(f.queries) {
+	if err != nil || *mv != (Moved{Ref: issue5, To: backlog, Added: true, Team: teamX}) || !slices.Equal(f.mutations, []string{"add ISSUE to P", "I2=t1", "I2=s1"}) || readsItems(f.queries) {
 		t.Errorf("Move = %+v, %v; mutations %v, queries %q", mv, err, f.mutations, f.queries)
 	}
 	// A board without a Team, or none configured, adds without one.
@@ -464,7 +496,70 @@ func TestMoveAddsAnIssueMissingFromTheBoard(t *testing.T) {
 const (
 	labIssue7      = "teemow/lab#7"
 	foreignRefusal = "teemow/lab#7 is not on the board o/7 and is never added to it: its repository is outside o; an issue of teemow goes on a project of teemow's own"
+	homeRefusal    = foreignRefusal + ", and it is on no project of teemow: add it to one (`gh project item-add <number> --owner teemow --url https://github.com/teemow/lab/issues/7`), then `beekeeper board move teemow/lab#7 <status>` moves it there"
 )
+
+// homeInProgress is the In Progress option of a user project, without
+// the board's emoji.
+const homeInProgress = "In Progress"
+
+// homeItem is an item of the issue on project number of owner, whose
+// Status field FU has the options u1 Backlog and u2 In Progress.
+func homeItem(id, project, owner string, number int, status string) string {
+	st := "null"
+	if status != "" {
+		st = fmt.Sprintf(`{"name":%q}`, status)
+	}
+	return fmt.Sprintf(`{"id":%q,"project":{"id":%q},"status":%s,"home":{"number":%d,"owner":{"login":%q},
+"status":{"id":"FU","options":[{"id":"u1","name":"Backlog"},{"id":"u2","name":"In Progress"}]}}}`, id, project, st, number, owner)
+}
+
+func TestMoveMovesAnIssueOnItsOwnersProject(t *testing.T) {
+	// The issue of a personal account's repository is on its owner's user
+	// project, not on the board: it moves there by that project's values,
+	// no Team set, nothing added to the board.
+	items := func(nodes ...string) string {
+		return `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[` + strings.Join(nodes, ",") + `]}}}}}`
+	}
+	f := &fakeGH{t: t, item: items(homeItem("U1", "Q", "TeeMow", 1, "Backlog"))}
+	c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
+	mv, err := c.Move(context.Background(), "https://github.com/teemow/lab/issues/7", "progress")
+	if err != nil || *mv != (Moved{Ref: labIssue7, From: "Backlog", To: homeInProgress, Board: "teemow/1"}) || !slices.Equal(f.mutations, []string{"U1=u2"}) {
+		t.Fatalf("Move on the owner's project = %+v, %v; mutations %v", mv, err, f.mutations)
+	}
+	if !slices.Equal(slices.Compact(slices.Clone(f.repos)), []string{labRepo}) {
+		t.Errorf("acting on %q", f.repos)
+	}
+	// An item in the status already is not written; an unknown status is
+	// refused with the project's values.
+	f.mutations = nil
+	f.item = items(homeItem("U1", "Q", "teemow", 1, homeInProgress))
+	if mv, err := c.Move(context.Background(), labIssue7, "in progress"); err != nil || mv.From != mv.To || len(f.mutations) != 0 {
+		t.Errorf("Move = %+v, %v; mutations %v", mv, err, f.mutations)
+	}
+	var r *Refusal
+	if _, err := c.Move(context.Background(), labIssue7, "done"); !errors.As(err, &r) || !strings.Contains(r.Reason, homeInProgress) {
+		t.Errorf("Move to an unknown status = %v", err)
+	}
+	// A project of another owner is none of the issue's own: refused with
+	// the recipe, nothing written.
+	f.mutations = nil
+	f.item = items(homeItem("U1", "Q", "someone", 1, "Backlog"))
+	if _, err := c.Move(context.Background(), labIssue7, "progress"); !errors.As(err, &r) || r.Reason != homeRefusal || len(f.mutations) != 0 {
+		t.Errorf("Move on another owner's project = %v; mutations %v", err, f.mutations)
+	}
+	// Two projects of the owner: ambiguous, refused with the item-edit recipe.
+	f.item = items(homeItem("U1", "Q", "teemow", 1, "Backlog"), homeItem("U2", "R", "teemow", 2, ""))
+	if _, err := c.Move(context.Background(), labIssue7, "progress"); !errors.As(err, &r) ||
+		!strings.Contains(r.Reason, "teemow/1 (item U1), teemow/2 (item U2)") || !strings.Contains(r.Reason, "gh project item-edit --id") || len(f.mutations) != 0 {
+		t.Errorf("Move on two projects = %v; mutations %v", err, f.mutations)
+	}
+	// On the board as well, the board's item is the one that moves.
+	f.item = items(homeItem("U1", "Q", "teemow", 1, "Backlog"), `{"id":"I3","project":{"id":"P"},"status":{"name":"Backlog 📦"},"team":{"name":"X 🐝"}}`)
+	if mv, err := c.Move(context.Background(), labIssue7, "progress"); err != nil || mv.Board != "" || !slices.Equal(f.mutations, []string{"I3=s3"}) {
+		t.Errorf("Move of an item on the board = %+v, %v; mutations %v", mv, err, f.mutations)
+	}
+}
 
 func TestMoveNeverAddsAnIssueOutsideTheOrganisation(t *testing.T) {
 	// The issue's projectItems name no item of the board: it is refused
@@ -478,7 +573,7 @@ func TestMoveNeverAddsAnIssueOutsideTheOrganisation(t *testing.T) {
 			t.Errorf("Move(%s) = %v; mutations %v", ref, err, f.mutations)
 		}
 	}
-	if _, err := c.Move(context.Background(), labIssue7, "progress"); !errors.As(err, &r) || r.Reason != foreignRefusal || len(f.mutations) != 0 {
+	if _, err := c.Move(context.Background(), labIssue7, "progress"); !errors.As(err, &r) || r.Reason != homeRefusal || len(f.mutations) != 0 {
 		t.Errorf("Move = %v; mutations %v", err, f.mutations)
 	}
 	// Every call acts on the issue's repository, so the gh link picks the
@@ -552,7 +647,7 @@ func TestRankAddsAMissingIssueAndRefusesWhatIsNotOnTheBoard(t *testing.T) {
 	c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
 	ctx := context.Background()
 	rk, err := c.Rank(ctx, "o/s#8", Place{After: issue9})
-	if err != nil || *rk != (Ranked{Ref: "o/s#8", Above: issue9, Added: true, Team: "X 🐝"}) ||
+	if err != nil || *rk != (Ranked{Ref: "o/s#8", Above: issue9, Added: true, Team: teamX}) ||
 		!slices.Equal(f.mutations, []string{"add ISSUE8 to P", "I8=t1", `I8 after "I9"`}) {
 		t.Errorf("Rank of an issue missing from the board = %+v, %v; mutations %v", rk, err, f.mutations)
 	}
@@ -634,7 +729,7 @@ func TestClosesReadsTheClosingReferencesInOneRequestPerOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string][]string{"o/r#100": {"o/r#1", "other/x#2"}, "teemow/lab#9": {"teemow/lab#3"}}
+	want := map[string][]string{"o/r#100": {ref1, "other/x#2"}, "teemow/lab#9": {"teemow/lab#3"}}
 	if len(queries) != 2 || !strings.Contains(queries[0], `r1:repository(owner:"o",name:"r")`) || len(got) != len(want) ||
 		!slices.Equal(got["o/r#100"], want["o/r#100"]) || !slices.Equal(got["teemow/lab#9"], want["teemow/lab#9"]) {
 		t.Errorf("closes %v, queries %q", got, queries)

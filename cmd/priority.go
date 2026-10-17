@@ -26,7 +26,17 @@ func (a *app) priorityCmd() *cobra.Command {
 (board.owner, board.project) in its number field ` + board.PriorityField + `: an epic's rank, 1
 the top, written and read per item by its id. Only the person sets it.
 priority prints the open epics of board.team that hold a rank: rank, epic
-URL, title and Status, read from the board (--json the list).
+URL, title, Status and hold, read from the board (--json the list). An epic
+is board.team's by its Team field or by its team label (board.teamLabel,
+default team/<team>): a label sync that moves the Team keeps it on the list.
+A held epic, one with an open recorded blocker (board block --by), keeps its
+rank and shows "held: blocked by <owner/repo#n>; 1 of 1 blockers open":
+board next skips it and every issue under it. Each read is compared with the
+last one: a change of a ranked epic's rank or Team that beekeeper did not
+write (another tool, a label sync, the board's UI) is a board.changed event in
+beekeeper log and a line "changed outside beekeeper: …" naming the old and
+new value and the writer GitHub names (the field value's creator). An epic
+that left the list is read on its own item, never the board.
 
 board next applies it: its candidates are ordered by the rank of their epic
 first, an issue's own or its nearest ranked ancestor's through the native
@@ -42,9 +52,16 @@ guide, a worker), or with another name, is refused (exit 3): ` + onlyPerson + `.
 Every change is a priority.set event in beekeeper log naming the person.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			list, err := a.boardClient().Priorities(cmd.Context())
+			cl := a.boardClient()
+			list, err := cl.Priorities(cmd.Context())
 			if err != nil {
 				return err
+			}
+			changed := a.rankChanges(cmd.Context(), cl, list)
+			if !a.json {
+				for _, l := range changed {
+					_, _ = fmt.Fprintln(a.out, l)
+				}
 			}
 			return a.printPriorities(list)
 		},
@@ -106,6 +123,7 @@ func (a *app) setPriority(cmd *cobra.Command, ref string, rank int) error {
 	if err != nil {
 		return err
 	}
+	a.recordRanked(p.List)
 	by := state.Party{Name: person}
 	relay := ""
 	if s := envParty(os.Getenv); s.Name != "" {
@@ -174,9 +192,8 @@ func (a *app) persons() []string {
 	return out
 }
 
-// callerRole is the roster role of the calling session: the supervisor or
-// the guide it holds, a worker for an agent on the roster; "" for none or
-// outside a session.
+// callerRole is the roster role of the calling session (rosterRole); "" outside
+// a session.
 func (a *app) callerRole() string {
 	me := envParty(os.Getenv)
 	if me.Session == "" && me.HostSession == "" {
@@ -186,6 +203,12 @@ func (a *app) callerRole() string {
 	if err != nil {
 		return ""
 	}
+	return rosterRole(st, me)
+}
+
+// rosterRole is the roster role of the session me: the supervisor or the guide
+// it holds, a worker for an agent on the roster; "" for none.
+func rosterRole(st *state.State, me state.Party) string {
 	for _, rl := range roles {
 		if h := rl.get(st).Holder; h != nil && h.Is(me) {
 			return rl.name
@@ -209,9 +232,9 @@ func (a *app) printPriorities(list board.Priorities) error {
 		return err
 	}
 	w := a.table()
-	_, _ = fmt.Fprintln(w, "RANK\tEPIC\tTITLE\tSTATUS")
+	_, _ = fmt.Fprintln(w, "RANK\tEPIC\tTITLE\tSTATUS\tHOLD")
 	for _, e := range list {
-		_, _ = fmt.Fprintf(w, "%d\t%s\t%s\t%s\n", e.Rank, e.URL, truncate(e.Title, 60), e.Status)
+		_, _ = fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\n", e.Rank, e.URL, truncate(e.Title, 60), e.Status, e.Held)
 	}
 	return w.Flush()
 }

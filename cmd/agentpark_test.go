@@ -25,7 +25,7 @@ func parkingWatch(t *testing.T, refs map[string]string) *watcher {
 	w, _ := overtakingWatch(t, refs)
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{{Party: state.Party{Name: agentOne}, Task: parkTask, AssignedAt: relayNow}}
-		st.Notes = []state.Note{{ID: 3, For: personTimo, Text: askedQ, By: state.Party{Name: agentOne}}}
+		st.Notes = []state.Note{{ID: 3, Kind: noteDecision, For: personTimo, Text: askedQ, By: state.Party{Name: agentOne}}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -57,7 +57,8 @@ func answer(t *testing.T, w *watcher) {
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
 		n := st.Notes[0]
 		st.Notes = nil
-		return []state.Event{answeredEvent(state.Party{Name: personTimo, Person: personTimo}, &n, "terminal", parkAnswer)}, nil
+		rec := &recordedAnswer{About: privateThread, By: personTimo, Via: viaCLI, Answer: parkAnswer, Note: n.ID}
+		return []state.Event{answerEvent(state.Party{Name: personTimo, Person: personTimo}, rec, &n)}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}

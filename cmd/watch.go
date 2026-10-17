@@ -84,7 +84,7 @@ with what the lane waits for and one ENDED line when it ends. A note or a
 timer that falls due, the end of a session with a record (sessions serve)
 and a supervisor relay taken or expired are one line each, once: the state keeps that they were reported, so
 a second or restarted watch stays silent about them. An open note for
-someone, not pinned and not a login, is overtaken once every issue and pull
+someone, not a login, is overtaken once every issue and pull
 request it names with note add --ref is closed or merged (one GraphQL read
 a poll, none under the budget floor; a note with no --ref never is, guide
 watch names it once its filing session is archived): one NOTE OVERTAKEN
@@ -437,6 +437,12 @@ type watcher struct {
 	freeing  atomic.Bool
 	freeNext time.Time
 	lastFree atomic.Pointer[freeMark]
+	// worktreesOn trims finished workers' worktrees (not for --once);
+	// worktreesTrimming is set while a run goes, worktreesNext is when
+	// the next is due.
+	worktreesOn       bool
+	worktreesTrimming atomic.Bool
+	worktreesNext     time.Time
 	// doctored are the chore lines the doctor said, each said once.
 	doctored map[string]bool
 	// timerActs are the fired timers' wakes and commands under way, and
@@ -536,6 +542,7 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 	w.goCacheOn = true
 	w.dockerOn = true
 	w.freeOn = true
+	w.worktreesOn = true
 	w.readFreeMark()
 	// The machine is sampled in a loop of its own, so no network read or
 	// subprocess of the rest of the poll ever delays a memory or load line.
@@ -1083,6 +1090,7 @@ func (w *watcher) sample(ctx context.Context) {
 	w.goCache(now)
 	w.docker(now)
 	w.autoFree(now)
+	w.worktrees(now)
 	s, err := plat.Machine.DesktopScope()
 	w.unavailable(secScope, err)
 	if s != nil {
@@ -1789,7 +1797,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		w.wouldOvertake(st, over, kept)
 		over, kept = nil, nil
 	}
-	found := checkTimers(ctx, st.Timers, w.now, lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now))
+	found := checkTimers(ctx, st.Timers, w.now, lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now) || w.resetFirst(st))
 	var fires []timerFire
 	var defaulted []state.Note
 	fire := func(st *state.State) ([]string, []state.Event, bool) {
@@ -1879,13 +1887,13 @@ func (w *watcher) noteAnswers(st *state.State) {
 		return
 	}
 	since := w.answersSince
-	evs, err := w.store.Events(0, func(e state.Event) bool { return e.Verb == noteAnswered && e.At.After(since) })
+	evs, err := w.store.Events(0, func(e state.Event) bool { return e.Verb == answerRecorded && e.At.After(since) })
 	if err != nil {
 		return // the next close reads them again
 	}
 	for _, e := range evs {
 		w.answersSince = e.At
-		if an, ok := parseAnswered(e); ok && prev[an.ID] {
+		if an, ok := parseAnswered(e); ok && an.ID != 0 && prev[an.ID] {
 			w.emitNow("pending", "%s", answeredLine(an.ID, cmp.Or(e.By.Person, e.By.Name), truncate(an.Answer, 300)))
 		}
 	}

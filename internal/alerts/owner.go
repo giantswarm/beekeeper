@@ -23,6 +23,16 @@ type Firing struct {
 // Name is the alert as alerts own takes it: <installation>/<alertname>.
 func (f Firing) Name() string { return f.Installation + "/" + f.Alertname }
 
+// Fingerprint is the alert's fingerprint in the baseline.
+func (f Firing) Fingerprint() string {
+	fp, _, _ := strings.Cut(f.Key, "@")
+	return fp
+}
+
+// Instance is the one alert as alerts own takes it:
+// <installation>/<alertname>#<fingerprint>.
+func (f Firing) Instance() string { return f.Name() + "#" + f.Fingerprint() }
+
 // Firing are the alerts of the reachable installations' baselines, at
 // severity when it is not empty, by installation, alertname and object. An
 // unreachable installation's last set is not firing: it may have resolved.
@@ -45,13 +55,14 @@ func (st *State) Firing(severity string) []Firing {
 	return out
 }
 
-// Match are the firing alerts q names: <installation>/<alertname>, an
-// alertname on any installation, or a fingerprint.
+// Match are the firing alerts q names: one instance as
+// <installation>/<alertname>#<fingerprint> or a fingerprint, or every
+// instance of <installation>/<alertname> or of an alertname on any
+// installation.
 func Match(firing []Firing, q string) []Firing {
 	var out []Firing
 	for _, f := range firing {
-		fp, _, _ := strings.Cut(f.Key, "@")
-		if q == f.Name() || q == f.Alertname || q == fp {
+		if q == f.Instance() || q == f.Fingerprint() || q == f.Name() || q == f.Alertname {
 			out = append(out, f)
 		}
 	}

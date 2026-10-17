@@ -97,9 +97,16 @@ func TestKeyChangesWithTheStart(t *testing.T) {
 	}
 }
 
+// Match takes one instance by <installation>/<alertname>#<fingerprint> or
+// its fingerprint, every instance by a bare name.
 func TestMatch(t *testing.T) {
-	firing := pageState(time.Now()).Firing("")
-	for q, want := range map[string]int{"alpha/PodRestarting": 1, restarting: 1, "fp2": 1, "alpha/Nope": 0, "beta/Stale": 0} {
+	st := pageState(time.Now())
+	st.Installations["alpha"].Alerts["fp4"] = Alert{Severity: Page, Team: "t", Alertname: restarting, Where: "ns/other", Since: st.Installations["alpha"].Alerts["fp1"].Since}
+	firing := st.Firing("")
+	for q, want := range map[string]int{
+		"alpha/PodRestarting": 2, restarting: 2, "alpha/PodRestarting#fp1": 1, "fp2": 1, "alpha/DiskFilling#fp2": 1,
+		"alpha/DiskFilling#fp1": 0, "alpha/Nope": 0, "beta/Stale": 0, "beta/Stale#fp3": 0,
+	} {
 		if got := len(Match(firing, q)); got != want {
 			t.Errorf("Match(%q) = %d alerts, want %d", q, got, want)
 		}

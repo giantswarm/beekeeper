@@ -34,6 +34,33 @@ func (a *app) memcapCPU() platform.Cap {
 	return platform.Cap{CPUQuota: a.cfg.MemcapCPUQuota(runtime.NumCPU()), CPUWeight: a.cfg.Memcap.CPUWeight}
 }
 
+// buildSlots is the build slots' directory and count, the one reading every
+// taker and reader of a slot shares (beekeeper run, a start that builds, the
+// capacity, snapshot, free and ui views): MEMCAP_STATE (the directory
+// holding slots/) and MEMCAP_SLOTS over memcap.slotDir and memcap.slots. A
+// MEMCAP_SLOTS that is no positive number is a usage error, the configured
+// count returned with it for a reader that only shows the slots.
+func (a *app) buildSlots() (dir string, n int, err error) {
+	dir, n = a.cfg.Memcap.SlotDir, a.cfg.Memcap.Slots
+	if s := os.Getenv("MEMCAP_STATE"); s != "" {
+		dir = filepath.Join(s, "slots")
+	}
+	if s := os.Getenv("MEMCAP_SLOTS"); s != "" {
+		v, err := strconv.Atoi(s)
+		if err != nil || v < 1 {
+			return dir, n, usageErr("MEMCAP_SLOTS=%q: want a positive number", s)
+		}
+		n = v
+	}
+	return dir, n, nil
+}
+
+// slotView is buildSlots for a reader that only shows or names the slots.
+func (a *app) slotView() (dir string, n int) {
+	dir, n, _ = a.buildSlots()
+	return dir, n
+}
+
 func (a *app) runCmd() *cobra.Command {
 	var maxFlag, swapFlag, waitFlag string
 	c := &cobra.Command{
@@ -52,7 +79,10 @@ scope notices; run then names the victim in one line starting with
 Bound the command's parallelism rather than raising --max.
 
 When every slot is held, or MemAvailable is below the cap, run waits up to
---wait, one line when the wait starts and one when it ends. A wait that runs
+--wait in the build slot queue it shares with agents start --builds: a
+ticket per waiter under <slotDir>/queue/, the slots taken first in first
+out (the memcap wrapper takes none), one line when the wait starts and one
+when it ends. A wait that runs
 out exits 75, states the wait it applied and lists the holders: run the
 command in the background instead, never poll. The wait is --wait, else
 MEMCAP_WAIT, else 8m, or 60m in a background Bash call: the PreToolUse hook
@@ -93,21 +123,14 @@ kill in it as a test kill, not a build's.`,
 			cpu := a.memcapCPU()
 			o := guard.Options{Max: env("MEMCAP_MAX", a.cfg.MemcapMax(ramMiB())), Swap: env("MEMCAP_SWAP", "0"),
 				CPUQuota: cpu.CPUQuota, CPUWeight: cpu.CPUWeight,
-				SlotDir: a.cfg.Memcap.SlotDir, Slots: a.cfg.Memcap.Slots, Stderr: os.Stderr, Record: a.runRecorder(),
-				Test: os.Getenv("MEMCAP_TEST") == "1"}
+				Stderr: os.Stderr, Record: a.runRecorder(), Test: os.Getenv("MEMCAP_TEST") == "1"}
+			var err error
+			if o.SlotDir, o.Slots, err = a.buildSlots(); err != nil {
+				return err
+			}
 			if inSandbox() {
 				exe, _ := os.Executable()
 				o.Sandbox = sandbox.Capper{Dir: sandbox.SpoolDir(a.cfg.StateDir), Exe: exe}
-			}
-			if s := os.Getenv("MEMCAP_STATE"); s != "" {
-				o.SlotDir = filepath.Join(s, "slots")
-			}
-			if s := os.Getenv("MEMCAP_SLOTS"); s != "" {
-				n, err := strconv.Atoi(s)
-				if err != nil || n < 1 {
-					return usageErr("MEMCAP_SLOTS=%q: want a positive number", s)
-				}
-				o.Slots = n
 			}
 			f := cmd.Flags()
 			if f.Changed("max") {
@@ -118,7 +141,6 @@ kill in it as a test kill, not a build's.`,
 			}
 			var wait string
 			wait, o.WaitFrom, o.Background = guard.ResolveWait(waitFlag, f.Changed("wait"))
-			var err error
 			if o.Wait, err = guard.ParseWait(wait); err != nil {
 				return usageErr("%v", err)
 			}
@@ -466,6 +488,29 @@ registered in the person's settings.`,
 		},
 	})
 	c.AddCommand(&cobra.Command{
+		Use:   "browsestop",
+		Short: "A browse turn's Stop hook: the turn closes the tabs it opened before it ends",
+		Long: `browsestop reads a Stop event on stdin. While tabs the turn opened (its
+tab group's tabs, the tabs it created) are still open in its group, it
+answers "block": the turn goes on once to close them, the group's first tab
+last, then ends with its report. A turn that went on once already
+(stop_hook_active) ends; browse names the tabs it left as a failure.
+beekeeper browse passes it in each turn's --settings; it is never registered
+in the person's settings.`,
+		Args: cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			defer func() { _ = recover() }() // a broken hook must not hold the turn
+			raw, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				return nil
+			}
+			if out := guard.BrowseStop(raw); out != nil {
+				_, _ = a.out.Write(out)
+			}
+			return nil
+		},
+	})
+	c.AddCommand(&cobra.Command{
 		Use:   "permissionrequest",
 		Short: "The PermissionRequest hook: no card for beekeeper's own bypass starts after the desktop import",
 		Long: `permissionrequest reads a PermissionRequest event on stdin: Claude Code is
@@ -691,10 +736,8 @@ func (a *app) loadConfig() error {
 		}
 	}
 	plat = platform.Current(platform.Options{DesktopApp: a.cfg.Claude.DesktopApp, QuietUnits: a.cfg.Units.Quiet})
-	if !a.hook && sandbox.Unheld(os.Getenv) {
-		// the sandbox policy's environment without its sandbox: beekeeper and
-		// what it runs reach GitHub as on the host
-		sandbox.Unconfine(sandbox.EgressDir(os.Getenv("XDG_RUNTIME_DIR")))
+	if !a.hook {
+		unconfineUnheld(os.Stderr)
 	}
 	return nil
 }

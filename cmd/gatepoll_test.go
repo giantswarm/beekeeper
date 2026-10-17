@@ -4,6 +4,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -78,7 +79,7 @@ func TestAWaitFollowsTheRunThatPolls(t *testing.T) {
 	}
 	stdout := os.Stdout
 	os.Stdout = w
-	err = a.ownedRun(argv)
+	err = a.ownedRun(context.Background(), argv)
 	os.Stdout = stdout
 	_ = w.Close()
 	out, _ := io.ReadAll(r)

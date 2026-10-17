@@ -14,8 +14,8 @@ import (
 // yoursGrant is the PreToolUse hook's record of the supervisor's word: a
 // `yours <resource>` (`<resource> yours`, `<resource> is yours`) in a
 // message from the session holding the supervisor role grants the resource
-// to the message's target, as lease grant records it, so the word and the
-// record never drift apart. It returns what the sender is told: each grant
+// to the message's target, as lease grant --first records it, so the word
+// and the record never drift apart: the granted session claims next. It returns what the sender is told: each grant
 // recorded, or why none was and the command that records it; "" for a
 // message naming no resource or from another session.
 func (a *app) yoursGrant(session, to, message string) string {
@@ -57,7 +57,7 @@ func (a *app) yoursGrants(sessions []*claude.Session, me state.Party, q string, 
 			lines = append(lines, fmt.Sprintf("your `yours %s` recorded no grant: %v; its claim is refused until `beekeeper lease grant %s <session>` records one", res, err, res))
 			continue
 		}
-		msg, gerr := a.grant(me, res, to, "")
+		msg, gerr := a.grant(me, res, to, "", true)
 		if gerr != nil {
 			lines = append(lines, fmt.Sprintf("your `yours %s` recorded no grant: %v; its claim is refused until `beekeeper lease grant %s %q` records one", res, gerr, res, to.Name))
 			continue

@@ -77,7 +77,7 @@ func (a *app) checkCentral(target string) error {
 	}
 	holds, err := a.centralHolds(me)
 	if err != nil {
-		return err
+		return lookupErr(err, "the central hold lookup for %s failed, no verdict", target)
 	}
 	st := &state.State{Holds: holds}
 	h, ok := activeHold(st, a, target)
@@ -88,4 +88,14 @@ func (a *app) checkCentral(target string) error {
 		return refused("%s is held by %q until %s: %s", h.Target, partyName(h.By), untilText(a, h), h.Reason)
 	}
 	return nil
+}
+
+// lookupErr names a failed lookup in front of its cause and keeps the exit
+// code the cause asks for, but for ExitRefused: that is the verdict "held".
+func lookupErr(err error, format string, args ...any) error {
+	code := Code(err)
+	if code == ExitRefused {
+		code = ExitError
+	}
+	return &exitError{code: code, msg: fmt.Sprintf(format, args...) + ": " + err.Error()}
 }

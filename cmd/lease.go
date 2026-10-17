@@ -404,8 +404,13 @@ func (a *app) leaseReleaseCmd() *cobra.Command {
 	var force bool
 	c := &cobra.Command{
 		Use:   "release <resource>",
-		Short: "Release a resource you hold (--force frees another holder's)",
-		Args:  cobra.ExactArgs(1),
+		Short: "Release a resource you hold, or withdraw your queued grant of it (--force frees another holder's)",
+		Long: `Release a resource you hold. A resource you do not hold but are granted,
+queued behind its holder or earlier grants, is withdrawn instead: your grant
+leaves its queue, your park on it (lease claim --park) ends, and the next
+grant moves up. --force frees the lease of another holder whose session is
+gone; it withdraws nothing.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			res := args[0]
 			if err := a.checkResource(res); err != nil {
@@ -425,13 +430,19 @@ func (a *app) leaseReleaseCmd() *cobra.Command {
 				if err != nil {
 					return nil, err
 				}
+				mine := cur != nil && cur.Party().Is(me)
+				if !mine && !force {
+					if line, ev := a.withdraw(st, me, res, cur); line != "" {
+						msg = line
+						return []state.Event{ev}, nil
+					}
+				}
 				if cur == nil {
 					msg = res + " was free"
 					return nil, nil
 				}
-				mine := cur.Party().Is(me)
 				if !mine && !force {
-					return nil, refused("%s is held by %q, not by you: only --force frees another holder's lease", res, cur.Name)
+					return nil, refused("%s is held by %q, not by you, and no grant of it to you waits: only --force frees another holder's lease", res, cur.Name)
 				}
 				if err := dir.Release(res); err != nil {
 					return nil, err
@@ -456,6 +467,43 @@ func (a *app) leaseReleaseCmd() *cobra.Command {
 	}
 	c.Flags().BoolVar(&force, "force", false, "free a lease another session or person holds (its holder is gone)")
 	return c
+}
+
+// withdraw takes me's queued place in the queue of res, which cur holds
+// (nil: free): its grants of res and its park on the lease. It returns the
+// line and the event that say so, or "" when no place of me waits.
+func (a *app) withdraw(st *state.State, me state.Party, res string, cur *lease.Holder) (string, state.Event) {
+	held := cur != nil
+	q := lease.Pending(st, res, held, a.now, a.cfg.GrantTTL.Duration)
+	pos := slices.IndexFunc(q, func(g state.Grant) bool { return g.To.Is(me) })
+	n := len(st.Grants)
+	st.Grants = slices.DeleteFunc(st.Grants, func(g state.Grant) bool { return g.Resource == res && g.To.Is(me) })
+	parked := false
+	for i := range st.Agents {
+		if p := st.Agents[i].Park; p != nil && p.On == leaseParkOn(res) && st.Agents[i].Is(me) {
+			st.Agents[i].Park, parked = nil, true
+		}
+	}
+	if len(st.Grants) == n && !parked {
+		return "", state.Event{}
+	}
+	var place, next string
+	if pos >= 0 {
+		place = fmt.Sprintf(" (number %d in its queue)", pos+1)
+	}
+	if parked {
+		place += " and the park on it"
+	}
+	q = slices.DeleteFunc(q, func(g state.Grant) bool { return g.To.Is(me) })
+	switch {
+	case len(q) > 0:
+		next = fmt.Sprintf("%q is first in its queue now", q[0].To.Name)
+	case held:
+		next = fmt.Sprintf("nothing is queued behind %q now", cur.Name)
+	default:
+		next = "nothing is queued for it now"
+	}
+	return fmt.Sprintf("withdrew your grant of %s%s; %s", res, place, next), event(me, verbLeaseWithdraw, "%s%s; %s", res, place, next)
 }
 
 func (a *app) leaseStatusCmd() *cobra.Command {
@@ -609,11 +657,7 @@ func purposeText(h lease.Holder) string {
 // the roster whose CLI does not run (its headless turn ended, its import
 // waits), whose grant waits for its next turn, with what says so.
 func (a *app) grantee(sessions []*claude.Session, q string) (*claude.Session, string, error) {
-	st, err := a.store.Read()
-	if err != nil {
-		return nil, "", err
-	}
-	to, absent, err := sessionNamed(sessions, st, q, a.now)
+	to, absent, err := a.namedSession(sessions, q, a.now)
 	if absent != "" {
 		absent += "; it claims once a CLI of it runs"
 	}
@@ -630,14 +674,19 @@ func unblockText(g state.Grant) string {
 
 func (a *app) leaseGrantCmd() *cobra.Command {
 	var unblock string
+	var first bool
 	c := &cobra.Command{
 		Use:   "grant <resource> <session>",
-		Short: "Grant a resource to a session: its `yours <resource>`, queued behind earlier grants",
+		Short: "Grant a resource to a session, queued behind earlier grants (--first: ahead of them, as `yours <resource>`)",
 		Long: `Record the supervisor's grant of a resource to a session: the session may
 claim it once it is free and every earlier grant for it is claimed or
-expired. A grant waits while the resource is held; once it is free the grant
-expires after grantTTL (default 30m). The session is a name, a unique part of
-one, a session id or a PID; a registered agent also by its roster name.
+expired. --first puts the grant at the head of the queue, as the
+supervisor's ` + "`yours <resource>`" + ` does: a waiting grant to the session moves
+there, the grants it passes keep their order behind it; while a supervisor
+is recorded, only it gives --first. A grant waits while the resource is
+held; once it is free the grant expires after grantTTL (default 30m). The
+session is a name, a unique part of one, a session id or a PID; a
+registered agent also by its roster name.
 
 While a cluster upgrade holds an installation, every claim on it is refused,
 plain grants included. --upgrade-unblock "<why>" grants the one claim that
@@ -667,7 +716,7 @@ and the log. Such grants are claimed during the upgrade in their order.`,
 			if cmd.Flags().Changed("upgrade-unblock") && unblock == "" {
 				return usageErr("--upgrade-unblock needs the reason: what unblocks the upgrade")
 			}
-			msg, err := a.grant(me, res, to, unblock)
+			msg, err := a.grant(me, res, to, unblock, first)
 			if err != nil {
 				return err
 			}
@@ -679,14 +728,16 @@ and the log. Such grants are claimed during the upgrade in their order.`,
 		},
 	}
 	c.Flags().StringVar(&unblock, "upgrade-unblock", "", "grant the claim that unblocks the upgrade holding the resource, and say why (supervisor only)")
+	c.Flags().BoolVar(&first, "first", false, "put the grant at the head of the resource's queue, ahead of the earlier grants, as the supervisor's `yours` does (supervisor only)")
 	return c
 }
 
 // grant records me's grant of res to the session to, queued behind the
-// earlier grants of res, and returns what to say of it: the grant, or that
-// it was granted already. unblock is the reason of an upgrade unblock, ""
-// for a plain grant.
-func (a *app) grant(me state.Party, res string, to *claude.Session, unblock string) (string, error) {
+// earlier grants of res, or ahead of them with first (a waiting grant of to
+// moves to the head; the grants it passes keep their order), and returns
+// what to say of it: the grant, or that it was granted already. unblock is
+// the reason of an upgrade unblock, "" for a plain grant.
+func (a *app) grant(me state.Party, res string, to *claude.Session, unblock string, first bool) (string, error) {
 	dir := lease.Dir(a.cfg.LeaseDir)
 	var msg string
 	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -696,6 +747,9 @@ func (a *app) grant(me state.Party, res string, to *claude.Session, unblock stri
 		}
 		held := heldMap(holders)
 		lease.Prune(st, held, a.now, a.cfg.GrantTTL.Duration)
+		if sup := st.SupervisorRole().Holder; first && sup != nil && !me.Is(sup.Party) {
+			return nil, refused("only the supervisor %q puts a grant ahead of the queue: grant %s without --first, or ask it for `yours %s`", sup.Name, res, res)
+		}
 		var hold state.Hold
 		if unblock != "" {
 			if r := st.SupervisorRole(); r.Holder == nil || !r.Holder.Is(me) {
@@ -708,16 +762,28 @@ func (a *app) grant(me state.Party, res string, to *claude.Session, unblock stri
 		}
 		q := lease.Pending(st, res, held[res], a.now, a.cfg.GrantTTL.Duration)
 		if i := slices.IndexFunc(q, func(g state.Grant) bool { return g.To.Is(to.Party()) }); i >= 0 {
-			if unblock == "" || q[i].UpgradeUnblock != "" {
-				msg = fmt.Sprintf("%s is already granted to %q (number %d in its queue%s)", res, to.Name, i+1, unblockText(q[i]))
-				return nil, nil
-			}
 			j := slices.IndexFunc(st.Grants, func(g state.Grant) bool { return g.Resource == res && g.To.Is(q[i].To) && g.At.Equal(q[i].At) })
+			var evs []state.Event
+			if first && i > 0 {
+				j = lease.ToHead(st, j, a.now)
+				evs = append(evs, event(me, "lease.grant", "%s to %s, first ahead of %s", res, to.Name, q[0].To.Name))
+			}
+			if unblock == "" || q[i].UpgradeUnblock != "" {
+				if len(evs) == 0 {
+					msg = fmt.Sprintf("%s is already granted to %q (number %d in its queue%s)", res, to.Name, i+1, unblockText(q[i]))
+					return nil, nil
+				}
+				msg = fmt.Sprintf("%s is granted to %q first now, ahead of %s%s", res, to.Name, queueNames(q[:i]), unblockText(q[i])) + a.firstText(res, held[res])
+				return evs, nil
+			}
 			st.Grants[j].UpgradeUnblock = unblock
 			msg = fmt.Sprintf("the grant of %s to %q now unblocks %s: it claims with `beekeeper lease claim %s --purpose ...`", res, to.Name, hold.Reason, res)
 			return []state.Event{event(me, "lease.grant", "%s to %s, upgrade unblock: %s", res, to.Name, unblock)}, nil
 		}
 		st.Grants = append(st.Grants, state.Grant{Resource: res, To: to.Party(), By: me, At: a.now.UTC(), UpgradeUnblock: unblock})
+		if first && len(q) > 0 {
+			lease.ToHead(st, len(st.Grants)-1, a.now)
+		}
 		if unblock != "" {
 			msg = fmt.Sprintf("granted %s to %q to unblock %s: it claims with `beekeeper lease claim %s --purpose ...`; every other claim stays refused", res, to.Name, hold.Reason, res)
 			if held[res] {
@@ -727,6 +793,8 @@ func (a *app) grant(me state.Party, res string, to *claude.Session, unblock stri
 			return []state.Event{event(me, "lease.grant", "%s to %s, upgrade unblock: %s", res, to.Name, unblock)}, nil
 		}
 		switch {
+		case first && len(q) > 0:
+			msg = fmt.Sprintf("granted %s to %q, first in its queue ahead of %s", res, to.Name, queueNames(q)) + a.firstText(res, held[res])
 		case held[res]:
 			cur, _ := dir.Get(res)
 			msg = fmt.Sprintf("granted %s to %q, number %d in its queue: %q holds it (%s)", res, to.Name, len(q)+1, cur.Name, cur.Purpose)
@@ -740,11 +808,36 @@ func (a *app) grant(me state.Party, res string, to *claude.Session, unblock stri
 	return msg, err
 }
 
+// queueNames names the grantees of q, in their order.
+func queueNames(q []state.Grant) string {
+	names := make([]string, len(q))
+	for i, g := range q {
+		names[i] = fmt.Sprintf("%q", g.To.Name)
+	}
+	return strings.Join(names, ", then ")
+}
+
+// firstText ends the line of a grant moved to the head of the queue of res:
+// who holds it, else the claim the grantee makes now.
+func (a *app) firstText(res string, held bool) string {
+	if held {
+		if cur, _ := lease.Dir(a.cfg.LeaseDir).Get(res); cur != nil {
+			return fmt.Sprintf(": %q holds it (%s)", cur.Name, cur.Purpose)
+		}
+	}
+	return fmt.Sprintf(": it claims with `beekeeper lease claim %s --purpose ...` within %s", res, dur(a.cfg.GrantTTL.Duration))
+}
+
 func (a *app) leaseRevokeCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "revoke <resource> <session>",
-		Short: "Withdraw a grant not claimed yet",
-		Args:  cobra.ExactArgs(2),
+		Short: "Withdraw a grant not claimed yet (the supervisor's, or the grantee's own)",
+		Long: `Withdraw the grants of a resource to the sessions whose name contains
+<session> (or whose session id it is), not claimed yet. While a supervisor is
+recorded, only it revokes another session's grant; a grantee withdraws its own
+with ` + "`beekeeper lease release <resource>`" + `. A grantee parked on the lease
+(lease claim --park) is resumed by the watch with the words to ask again.`,
+		Args: cobra.ExactArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error {
 			res, who := args[0], strings.ToLower(args[1])
 			if err := a.checkResource(res); err != nil {
@@ -756,12 +849,20 @@ func (a *app) leaseRevokeCmd() *cobra.Command {
 			}
 			removed := 0
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-				st.Grants = slices.DeleteFunc(st.Grants, func(g state.Grant) bool {
-					hit := g.Resource == res && (strings.Contains(strings.ToLower(g.To.Name), who) || g.To.Session == args[1])
-					if hit {
-						removed++
+				hit := func(g state.Grant) bool {
+					return g.Resource == res && (strings.Contains(strings.ToLower(g.To.Name), who) || g.To.Session == args[1])
+				}
+				for _, g := range st.Grants {
+					if hit(g) && !mayRevoke(st, me, g) {
+						return nil, refused("%s is granted to %q, not to you: only the supervisor %q revokes another session's grant", res, g.To.Name, st.SupervisorRole().Holder.Name)
 					}
-					return hit
+				}
+				st.Grants = slices.DeleteFunc(st.Grants, func(g state.Grant) bool {
+					if hit(g) {
+						removed++
+						return true
+					}
+					return false
 				})
 				if removed == 0 {
 					return nil, nil
@@ -778,4 +879,12 @@ func (a *app) leaseRevokeCmd() *cobra.Command {
 			return err
 		},
 	}
+}
+
+// mayRevoke says whether me may withdraw the grant g: its grantee may, and
+// the supervisor, a person (no session), or anyone while no supervisor is
+// recorded.
+func mayRevoke(st *state.State, me state.Party, g state.Grant) bool {
+	sup := st.SupervisorRole().Holder
+	return sup == nil || me.Session == "" || me.Is(sup.Party) || g.To.Is(me)
 }

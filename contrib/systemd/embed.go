@@ -43,10 +43,10 @@ var SandboxService string
 var TeleportService string
 
 // TeleportTimer is beekeeper-teleport.timer; install replaces
-// TeleportTimerEvery with teleport.every.
+// TeleportTimerEvery with teleport.every's calendar event.
 //
 //go:embed beekeeper-teleport.timer
 var TeleportTimer string
 
 // TeleportTimerEvery is the timer's interval as shipped.
-const TeleportTimerEvery = "OnUnitActiveSec=10m"
+const TeleportTimerEvery = "OnCalendar=*:0/10"

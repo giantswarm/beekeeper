@@ -1,13 +1,18 @@
 # Starts beekeeper-teleport.service every teleport.every: the service
-# renews only once the login is close to its expiry.
+# renews only once the login is close to its expiry. A calendar timer runs
+# on the wall clock, which goes on through a suspend: the tick missed while
+# the machine slept fires at resume, and Persistent= fires one missed while
+# it was off. A monotonic interval stops with the machine and would fire
+# only up to teleport.every after resume.
 [Unit]
 Description=beekeeper: read the Teleport login's expiry
 Documentation=https://github.com/giantswarm/beekeeper#the-teleport-login
 
 [Timer]
 OnStartupSec=2min
-OnUnitActiveSec=10m
-AccuracySec=1min
+OnCalendar=*:0/10
+Persistent=true
+AccuracySec=5s
 
 [Install]
 WantedBy=timers.target

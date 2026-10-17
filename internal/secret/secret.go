@@ -34,6 +34,9 @@ type Ops struct {
 	// Vault is the shared 1Password vault, the only one an op:// reference
 	// may name; empty refuses every op:// reference.
 	Vault string
+	// Vaults are the shared vaults besides Vault that an op:// reference
+	// may read from (copy, compare, fingerprint); writes go to Vault alone.
+	Vaults []string
 	// Token is the vault's service account token, which only op's own
 	// environment gets; empty refuses every op:// reference.
 	Token string
@@ -112,7 +115,7 @@ func Exec(ctx context.Context, dir string, env []string, stdin io.Reader, name s
 }
 
 // Ref names a value or a set of values: an op:// field of the shared
-// vault, a key of a Kubernetes Secret as a source (k8s://<context>/
+// vault (with #<KEY> one KEY=VALUE line of an env-style field), a key of a Kubernetes Secret as a source (k8s://<context>/
 // <namespace>/<name>/<key>, Path then one value inside the document the
 // key holds), a SOPS file, or one path in a SOPS file (file#a.b.c, sops://
 // in front optional).
@@ -129,6 +132,9 @@ func ParseRef(s string) (Ref, error) {
 		parts := strings.Split(strings.TrimPrefix(s, guard.OpRef), "/")
 		if len(parts) < 3 || slicesHasEmpty(parts) {
 			return Ref{}, fmt.Errorf("%q: an op reference is op://<vault>/<item>/<field>", s)
+		}
+		if field, key := splitEnvKey(s); field != s && !envKeyName.MatchString(key) {
+			return Ref{}, fmt.Errorf("%q: one line of an env-style field is op://<vault>/<item>/<field>#<KEY>", s)
 		}
 		return Ref{Op: s}, nil
 	}
@@ -182,11 +188,31 @@ func (r Ref) vault() string {
 // checkVault refuses an op:// reference outside the shared vault, with
 // [ErrVault] when the vault is not configured.
 func (o *Ops) checkVault(r Ref) error {
+	if _, key := splitEnvKey(r.Op); key != "" {
+		return fmt.Errorf("%s: one line of an env-style field is a source only: beekeeper writes whole fields", r.Op)
+	}
 	err := o.checkVaultIn(r, o.Vault)
 	if err != nil && !errors.Is(err, ErrVault) {
 		return fmt.Errorf("%s: beekeeper reads only the shared vault %q", r.Op, o.Vault)
 	}
 	return err
+}
+
+// checkRead refuses an op:// reference a value is read from outside
+// [Ops.ReadVaults], naming them, with [ErrVault] when the vault is not
+// configured.
+func (o *Ops) checkRead(r Ref) error {
+	vaults := o.ReadVaults()
+	err := o.checkVaultIn(r, vaults...)
+	if err != nil && !errors.Is(err, ErrVault) {
+		return fmt.Errorf("%s: beekeeper reads only the vaults %q (secret.vault, secret.vaults)", r.Op, vaults)
+	}
+	return err
+}
+
+// ReadVaults are the vaults a value is read from: Vault and Vaults.
+func (o *Ops) ReadVaults() []string {
+	return slices.Compact(append([]string{o.Vault}, o.Vaults...))
 }
 
 // checkVaultIn refuses an op:// reference outside vaults, with [ErrVault]
@@ -208,7 +234,7 @@ func (o *Ops) checkVaultIn(r Ref, vaults ...string) error {
 // values reads what r names: one value under its own name for a single
 // reference, every leaf under its dotted path for a whole file.
 func (o *Ops) values(ctx context.Context, r Ref) (map[string]string, error) {
-	if err := o.checkVault(r); err != nil {
+	if err := o.checkRead(r); err != nil {
 		return nil, err
 	}
 	if r.Op != "" {
@@ -239,16 +265,21 @@ func (o *Ops) values(ctx context.Context, r Ref) (map[string]string, error) {
 	return map[string]string{r.String(): v}, nil
 }
 
-// readOp reads the op:// field ref, whose vault the caller checked.
+// readOp reads the op:// field ref, whose vault the caller checked, or with
+// #<KEY> after the field the value of that line of the env-style field.
 func (o *Ops) readOp(ctx context.Context, ref string) (string, error) {
+	field, key := splitEnvKey(ref)
 	ctx, cancel := context.WithTimeout(ctx, opTimeout)
 	defer cancel()
-	out, err := o.op(ctx, nil, "read", "--no-newline", ref)
+	out, err := o.op(ctx, nil, "read", "--no-newline", field)
 	if ctx.Err() != nil {
 		return "", fmt.Errorf("%w: %s: op answered nothing in %s", ErrVault, ref, opTimeout)
 	}
 	if err != nil {
 		return "", fmt.Errorf("%w: %s: %w", ErrVault, ref, err)
+	}
+	if key != "" {
+		return envValue(string(out), field, key)
 	}
 	return string(out), nil
 }

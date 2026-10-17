@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // RefState is the state of an issue or pull request as GitHub answered:
@@ -56,17 +57,27 @@ func (c *closer) ref() string {
 	}
 }
 
+// A try of one RefStates request may take refsTry and refsTryPerRef for
+// each of its references (TryTimeout): a batch of 20 answers in about a
+// second, a loaded machine or a slow GitHub takes several.
+const (
+	refsTry       = 10 * time.Second
+	refsTryPerRef = 100 * time.Millisecond
+)
+
 // RefStates reads in one GraphQL request per repository owner (ByOwner) the
 // state of each issue or pull request of refs, and for a closed issue the
 // pull request or commit whose closing keyword closed it. A reference GitHub
-// does not answer is missing from the map.
+// does not answer is missing from the map. Each try of a request is bounded
+// by its batch's size, so run (Retrying) asks a killed one again.
 func RefStates(ctx context.Context, run GH, refs []PR) (map[PR]RefState, error) {
 	if len(refs) == 0 {
 		return nil, nil
 	}
 	states := map[PR]RefState{}
 	for _, group := range ByOwner(refs, func(r PR) string { return r.Repo }) {
-		if err := refStates(ActingOn(ctx, group[0].Repo), run, group, states); err != nil {
+		gctx := TryTimeout(ActingOn(ctx, group[0].Repo), refsTry+time.Duration(len(group))*refsTryPerRef)
+		if err := refStates(gctx, run, group, states); err != nil {
 			return nil, err
 		}
 	}

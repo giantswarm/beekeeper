@@ -3,6 +3,7 @@ package cmd
 import (
 	"cmp"
 	"fmt"
+	"os"
 	"regexp"
 	"slices"
 	"strconv"
@@ -27,6 +28,8 @@ type sessionView struct {
 	Serves *state.Record `json:"serves,omitempty"`
 	// Metrics are how it has been doing: read with its work.
 	Metrics *metrics `json:"metrics,omitempty"`
+	// Self marks the session that runs this command.
+	Self bool `json:"self,omitempty"`
 }
 
 // view is everything the session-level commands show.
@@ -112,8 +115,9 @@ func (a *app) collect(withWork bool) (*view, error) {
 		works, ms = a.sessionMetrics(raw, t, holders)
 		v.Totals = totals(raw, ms)
 	}
+	self := envParty(os.Getenv)
 	for i, s := range raw {
-		sv := &sessionView{Session: s}
+		sv := &sessionView{Session: s, Self: isSelf(self, s)}
 		sv.Role = roleOf(st, s)
 		if i := slices.IndexFunc(st.Records, func(r state.Record) bool { return r.Session.Is(s.Party()) }); i >= 0 {
 			sv.Serves = &st.Records[i]
@@ -171,7 +175,9 @@ issue its record serves and the issues or pull requests its latest turns
 acted on (named in its gh and devctl commands and GitHub tool calls, or
 created; a ref it only quoted or read is no act), else the repository it
 acted in or its checkout, when it was last active, the tool commands it runs right now (a devctl wait, a
-bounded sleep with the time left), its memory, how full its context is,
+bounded sleep with the time left; the caller's own session
+"(this session)", so a grep over the listing never matches its own
+command), its memory, how full its context is,
 its last hour (turns, tool calls and their errors, GitHub calls, cost),
 and its role and leases, after "archived" or "test" for a session the
 guide's feed leaves out. A
@@ -271,8 +277,9 @@ var issueRef = regexp.MustCompile(`^[\w.-]+/[\w.-]+#[0-9]+$`)
 
 func (a *app) serveCmd() *cobra.Command {
 	var waits string
+	var clearOwn bool
 	c := &cobra.Command{
-		Use:   "serve <session> <owner/repo#n>",
+		Use:   "serve <session> <owner/repo#n> | serve --clear",
 		Short: "Record the issue or epic a session serves and what it waits on",
 		Long: `Record, for any running session (a registered agent or not), the issue or
 epic it serves and what it waits on. A new record replaces the session's
@@ -282,9 +289,21 @@ session id, a PID, a session's own name or a registered agent's roster name,
 or a unique part of a name; a whole name wins over a part of another. A
 registered agent whose CLI does not run is recorded too, and the line says
 so. The record stores the roster name of a registered agent, the session's
-own name otherwise.`,
-		Args: cobra.ExactArgs(2),
+own name otherwise.
+
+A worker (a registered agent holding no supervisor or guide role) records
+only its own session: a serve naming another session is refused. --clear
+removes the calling session's own record; agents idle --done clears it too.`,
+		Args: func(c *cobra.Command, args []string) error {
+			if clearOwn {
+				return cobra.NoArgs(c, args)
+			}
+			return cobra.ExactArgs(2)(c, args)
+		},
 		RunE: func(_ *cobra.Command, args []string) error {
+			if clearOwn {
+				return a.clearRecord()
+			}
 			if !issueRef.MatchString(args[1]) {
 				return usageErr("%q is not an issue: owner/repo#n", args[1])
 			}
@@ -296,17 +315,16 @@ own name otherwise.`,
 			if err != nil {
 				return err
 			}
-			st, err := a.store.Read()
-			if err != nil {
-				return err
-			}
-			s, absent, err := sessionNamed(sessions, st, args[0], a.now)
+			s, absent, err := a.namedSession(sessions, args[0], a.now)
 			if err != nil {
 				return err
 			}
 			r := state.Record{Issue: args[1], Waits: strings.Join(strings.Fields(waits), " "), By: me, At: a.now.UTC()}
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				r.Session = servedBy(st, s.Party())
+				if rosterRole(st, me) == workerRole && !r.Session.Is(me) {
+					return nil, refused("%q is another session: a worker records only its own, `beekeeper sessions serve <its own name> %s`", r.Session.Name, r.Issue)
+				}
 				st.Records = slices.DeleteFunc(st.Records, func(o state.Record) bool { return o.Session.Is(r.Session) })
 				st.Records = append(st.Records, r)
 				return []state.Event{event(me, "session.serve", "%s: %s", r.Session.Name, recordText(r))}, nil
@@ -323,7 +341,48 @@ own name otherwise.`,
 		},
 	}
 	c.Flags().StringVar(&waits, "waits", "", "what the session waits on")
+	c.Flags().BoolVar(&clearOwn, "clear", false, "remove the calling session's own record")
+	c.MarkFlagsMutuallyExclusive("clear", "waits")
 	return c
+}
+
+// clearRecord removes the calling session's own records.
+func (a *app) clearRecord() error {
+	me, err := a.caller()
+	if err != nil {
+		return err
+	}
+	var cleared []state.Record
+	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		cleared = clearRecords(st, me)
+		evs := make([]state.Event, len(cleared))
+		for i, r := range cleared {
+			evs[i] = event(me, "session.unserve", "%s: %s", r.Session.Name, recordText(r))
+		}
+		return evs, nil
+	})
+	if err != nil {
+		return err
+	}
+	if len(cleared) == 0 {
+		_, err = fmt.Fprintf(a.out, "%q has no record to clear\n", me.Name)
+		return err
+	}
+	_, err = fmt.Fprintf(a.out, "cleared the record of %q: it %s\n", cleared[0].Session.Name, recordText(cleared[0]))
+	return err
+}
+
+// clearRecords removes the records of session p and returns them.
+func clearRecords(st *state.State, p state.Party) []state.Record {
+	var gone []state.Record
+	st.Records = slices.DeleteFunc(st.Records, func(r state.Record) bool {
+		if r.Session.Is(p) {
+			gone = append(gone, r)
+			return true
+		}
+		return false
+	})
+	return gone
 }
 
 func (a *app) unserveCmd() *cobra.Command {
@@ -557,7 +616,7 @@ func (a *app) printSessions(v *view) {
 		}
 		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%dM\t%s\t%s\t%s\t%s\n",
 			truncate(s.Name, 44), truncate(on(s), 44), ago(a.now, s.LastActive),
-			truncate(running(s.Commands), 40), s.MemMiB, contextText(s.Metrics), cmp.Or(truncate(s.Model, 32), "-"), hour, truncate(roleText(s, role), 40))
+			truncate(s.running(), 40), s.MemMiB, contextText(s.Metrics), cmp.Or(truncate(s.Model, 32), "-"), hour, truncate(roleText(s, role), 40))
 	}
 	_ = w.Flush()
 	if t := v.Totals; t != nil {
@@ -608,6 +667,26 @@ func on(s *sessionView) string {
 	return strings.Join(parts, " ")
 }
 
+// isSelf says s is the session the environment self names: by its ids, never
+// by a name alone.
+func isSelf(self state.Party, s *claude.Session) bool {
+	return (self.Session != "" || self.HostSession != "") && self.Is(s.Party())
+}
+
+// selfRunning stands for the caller's own tool commands: they include the
+// listing itself and whatever reads it, so a text match over the listing
+// would find its own pattern there.
+const selfRunning = "(this session)"
+
+// running summarizes the session's tool commands, selfRunning for the
+// caller's own.
+func (s *sessionView) running() string {
+	if s.Self {
+		return selfRunning
+	}
+	return running(s.Commands)
+}
+
 // running summarizes the tool commands of a session.
 func running(cmds []claude.Command) string {
 	if len(cmds) == 0 {
@@ -636,11 +715,34 @@ func commandName(args string) string {
 	return strings.Join(f[:min(4, len(f))], " ")
 }
 
-// sessionTail reads the last n turns of the session q names (a name, id or
-// PID) among sessions from its harness's transcript; with tools, the tool
-// calls are turns too.
-func sessionTail(sessions []*claude.Session, q string, n int, tools bool) ([]claude.Turn, error) {
-	s, err := claude.Resolve(sessions, q)
+// namedSession is the session q names among sessions by sessionNamed's
+// rule, over the roster as the store holds it at now.
+func (a *app) namedSession(sessions []*claude.Session, q string, now time.Time) (*claude.Session, string, error) {
+	st, err := a.store.Read()
+	if err != nil {
+		return nil, "", err
+	}
+	return sessionNamed(sessions, st, q, now)
+}
+
+// runningNamed is the running session q names by sessionNamed's rule; a
+// registered agent whose CLI does not run is refused with what says so.
+func (a *app) runningNamed(sessions []*claude.Session, q string, now time.Time) (*claude.Session, error) {
+	s, absent, err := a.namedSession(sessions, q, now)
+	if err != nil {
+		return nil, err
+	}
+	if absent != "" {
+		return nil, refused("%s", absent)
+	}
+	return s, nil
+}
+
+// sessionTail reads the last n turns of the running session q names (by
+// sessionNamed's rule) among sessions from its harness's transcript; with
+// tools, the tool calls are turns too.
+func (a *app) sessionTail(sessions []*claude.Session, q string, n int, tools bool, now time.Time) ([]claude.Turn, error) {
+	s, err := a.runningNamed(sessions, q, now)
 	if err != nil {
 		return nil, err
 	}
@@ -666,14 +768,15 @@ func (a *app) tailCmd() *cobra.Command {
 		Short: "Print a session's last turns: what it said and what it was told",
 		Long: `Print the last turns of a session's transcript, without tool calls and tool
 results: its own words, the person's and its peers' messages. The session is
-a name (or a unique part of it), a session id or a PID.`,
+a name (or a unique part of it): its desktop title or, for a registered agent,
+its roster name; or a session id or a PID.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			raw, _, err := a.sessions()
 			if err != nil {
 				return err
 			}
-			turns, err := sessionTail(raw, args[0], n, false)
+			turns, err := a.sessionTail(raw, args[0], n, false, a.now)
 			if err != nil {
 				return err
 			}

@@ -42,11 +42,15 @@ func (a *app) printPrompt(ctx context.Context, v *view, l *leaseList, al *alerts
 		return err
 	}
 	p := func(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format+"\n", args...) }
+	s, err := a.readStanding(v.st)
+	if err != nil {
+		return err
+	}
 	p("%s\n", intro)
 	p("## Scope\n\n%s\n", a.scope(al))
 	p("## Pending state, %s\n", a.stamp(a.now))
+	a.promptStanding(p, s)
 	notes := a.splitNotes(v.st.Notes)
-	a.promptPinned(p, notes.Pinned)
 	a.promptNotes(p, notes)
 	a.promptAnswers(p, ans)
 	a.promptTimers(p, v.st.Timers)
@@ -130,16 +134,6 @@ func section(p printer, title string, empty bool, none string) bool {
 		p("%s\n", none)
 	}
 	return !empty
-}
-
-// promptPinned lists the standing instructions: they stand until unpinned.
-func (a *app) promptPinned(p printer, notes []state.Note) {
-	if len(notes) == 0 {
-		return
-	}
-	section(p, "Standing instructions (pinned notes)", false, "")
-	a.promptNoteLines(p, notes)
-	p("")
 }
 
 // promptNotes lists the supervisor's own notes and the line for the

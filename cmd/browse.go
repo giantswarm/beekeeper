@@ -91,19 +91,32 @@ const (
 		"create, install or change nothing else. "
 	deleteAppWords = "The person's own App %s (%s) is on record for its deletion: on its Advanced settings page click Delete GitHub App, type its name " +
 		"where GitHub asks for it and confirm, once; name the App and the deletion in each call's summary; delete, transfer or change nothing else. "
+	googleConsentWords = "The person's own Google OAuth client %s is on record (callback %s): once the steps reach Google's sign-in " +
+		"(accounts.google.com) for an App whose redirect goes to that callback, choose exactly the account %s on Google's account chooser, " +
+		"naming it in the call's summary, never another account and never 'Use another account', and click Continue " +
+		"(or Allow) on its 'Sign in to' and consent pages once each; click nothing else that grants access, and stop on Google's consent for " +
+		"any other App. "
 	labWords = "The lab's own identity provider on a loopback host (*.127.0.0.1.nip.io, localhost) is the person's: " +
 		"there, and only there, a fixture user the steps name signs in with the fixture credential the steps give. "
 )
 
 // frontWords tell a browse turn to work in a tab in front of its window: a
 // tab behind another neither paints nor answers, so the turn checks before
-// each screenshot and moves to a fresh tab, which opens in front, and closes
-// the tabs it created, the tab in front before the run in front again.
+// each screenshot and moves to a fresh tab, which opens in front. A
+// screenshot that times out all the same (a window not drawn) is the turn's
+// last: the hook refuses every further one, and the page is read instead. The tab the
+// group was made with closes last: closing it first dissolves the group and
+// strands the others outside it.
 const frontWords = "Work in a tab in front of its window: a tab behind another tab neither paints nor answers (its document.visibilityState " +
 	"is 'hidden', its screenshot times out on a frozen renderer, the extension refuses its scripts and navigations). Before each screenshot, " +
 	"check the tab with javascript_tool: document.visibilityState. When it says 'hidden', or the check or a navigation is refused on a page " +
-	"the steps name, open a fresh tab with tabs_create_mcp (a new tab opens in front), go on there, and close the hidden one with " +
-	"tabs_close_mcp. Before you end, close every tab you created, so the tab in front before you began is in front again. "
+	"the steps name, open a fresh tab with tabs_create_mcp (a new tab opens in front) and go on there. A screenshot that times out " +
+	"('renderer may be frozen') while the tab says 'visible' means the window is not drawn (occluded or minimised): take no further " +
+	"screenshot in this turn (the hook refuses them, each would wait out its own timeout), read the page with get_page_text or read_page " +
+	"for the evidence, and name the page 'not rendered' in your report. Never replace a tab by closing it: the " +
+	"first tab tabs_context_mcp gave you is the one your tab group was made with, and closing it while another tab of yours is open " +
+	"dissolves the group and leaves that tab open outside it, where no call reaches it. Before you end, close every tab you opened, the " +
+	"blank ones included, with tabs_close_mcp: the others first, the group's first tab last. "
 
 // windowCapture replaces the page's window.open: the address of a window
 // the page opens is kept on the page instead of a window outside the turn's
@@ -208,6 +221,18 @@ whose steps name such an App (its name, slug or the create's loopback
 address) runs with its rule, its prompt says which clicks, and "allowed
 create:" or "allowed delete:" goes below the report.
 
+A Google OAuth client the person owns and asked a consent for is recorded
+with "beekeeper app allow <name> --google --callback <host> --account
+<address> --word '<the person's words>'". On Google's sign-in the hook
+follows the tab's flow to its authorization request's callback host and
+answers the clicks of that flow for a recorded host (the recorded account on
+Google's account chooser and no other, Continue on "Sign in to <app>", the
+consent of scopes); Google's consent page of a flow for any other host is
+refused, a third party's. A turn whose steps name the client or its
+callback host runs with its auto mode rule, its prompt says which clicks,
+and "allowed consent: <name> (Google, callback <host>, …)" goes below the
+report.
+
 A sign-in or consent page of the lab's own identity provider on a loopback
 host (*.127.0.0.1.nip.io, localhost) is allowed the same way without a
 record: a fixture user's sign-in there is the person's own lab's. Steps
@@ -243,7 +268,18 @@ the session, which Claude in Chrome's file_upload takes without the Read
 tool. The prompt names each file as the caller wrote it and the copy's path
 file_upload takes; every other path stays refused, the turn's --dir
 included, and the turn still has no file tool. A line below the report
-says "shared for upload: <path>". For example:
+says "shared for upload: <path>".
+
+A page keeps hidden file inputs (GitHub's review-reply boxes beside the
+comment box) that take a file_upload as readily as the intended one and
+attach the file nowhere the person sees. Before each file_upload the turn
+runs beekeeper's upload-target check with javascript_tool, scoped to the
+intended form: it marks the one visible, enabled file input there
+(accessible name "beekeeper upload target") and marks none when the scope
+holds only hidden or disabled inputs, or several visible ones. The turn
+then finds that name for the input's ref. The hook (beekeeper hook
+pretooluse, in every session) refuses a file_upload to any ref but the
+one the last check marked and its find gave, naming why. For example:
 
   beekeeper browse --file ./shot.png "Open <page>. Attach ./shot.png
   through the comment box's file input. Report the attachment's name."
@@ -264,10 +300,24 @@ disabled there, every screenshot times out ("the renderer may be frozen"),
 and the extension refuses its scripts and navigations. The turn works in a
 tab in front: before each screenshot it checks the tab's visibilityState,
 and a tab it finds hidden (or whose check or navigation is refused) it
-leaves for a fresh tab, which opens in front; before it ends it closes the
-tabs it created, so the tab in front before the run is in front again.
-Screenshots that timed out all the same are reported as "not rendered:"
-below the report.
+leaves for a fresh tab, which opens in front. A window the compositor does
+not draw (occluded, minimised) freezes the screenshot of a tab that says
+visible, and every later screenshot would wait out its own timeout on it:
+after the first such timeout the hook (beekeeper hook pretooluse) refuses
+every further screenshot and zoom of the turn, which reads the page's text
+instead, naming the page not rendered. Screenshots that timed out are
+counted as "not rendered:" below the report.
+
+The turn closes every tab it opened before it ends, the blank ones
+included. Its tab group is keyed by the tab it was made with: closing that
+tab while another of the turn's tabs is open dissolves the group and
+strands the other tab outside it, where no call reaches it, so the hook
+(beekeeper hook pretooluse) refuses that close, naming the order, the
+group's first tab last. The turn's Stop hook (beekeeper hook browsestop, in
+its --settings) has a turn that would end with tabs of its own still open
+go on once to close them. Below the report, "tabs closed:" counts the tabs
+the turn opened and closed; "tabs left open:" names those it left, in its
+group or stranded outside it, and the command fails.
 
 A window a page opens (window.open: an identity provider's sign-in popup,
 as a portal's OIDC sign-in opens) opens outside the turn's tab group, where
@@ -373,8 +423,12 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 		}
 		return report, err
 	}
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
 	rules := browseRules(deploy, consents, lab)
-	report, err := turn(browseArgv(id, model, browsePrompt(steps, deploy, consents, lab, shared), rules, false))
+	report, err := turn(browseArgv(id, model, browsePrompt(steps, deploy, consents, lab, shared), self, rules, false))
 	path := transcriptOf(a.cfg, id)
 	if path == "" {
 		return errors.Join(err, fmt.Errorf("browse turn %s left no transcript", id))
@@ -384,7 +438,7 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	// a fresh CLI resuming the session has a fresh Chrome connection and goes
 	// on with the steps not done, its findings read with the first turn's.
 	if err == nil && found.lost() {
-		report, err = turn(browseArgv(id, model, fmt.Sprintf(reconnectWords, found.Lost[0]), rules, true))
+		report, err = turn(browseArgv(id, model, fmt.Sprintf(reconnectWords, found.Lost[0]), self, rules, true))
 		found, ferr = readFindings(path)
 		found.Reconnected = true
 	}
@@ -400,7 +454,7 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	if _, werr := fmt.Fprintln(a.out, strings.Join(lines, "\n")); werr != nil {
 		return werr
 	}
-	return errors.Join(err, ferr, serr, found.lostErr(report))
+	return errors.Join(err, ferr, serr, found.lostErr(report), found.tabsErr())
 }
 
 // The turn's classifier names a call it refused in the call's error result:
@@ -412,10 +466,6 @@ const (
 )
 
 var classifierReason = regexp.MustCompile(`Reason: \[([^\]]*)\]`)
-
-// frozenRenderer is in the error of a screenshot of a tab whose window the
-// compositor does not draw: the capture times out.
-const frozenRenderer = "renderer may be frozen"
 
 // chromeToolPrefix is the Claude in Chrome tools' common prefix, dropped from
 // a call's words.
@@ -471,6 +521,7 @@ var grantWords = regexp.MustCompile(`(?i)\b(authori[sz]e|consent|grant|approve|a
 // consentHint names the record forms below a grant refusal of a run whose
 // steps name no App on record.
 const consentHint = "a consent for an App the person owns and asked for is recorded with " + guard.AllowForm +
+	" (a Google OAuth client's with " + guard.GoogleForm + ")" +
 	", one change of such an App's permissions with " + guard.PermissionForm + ", an App's deletion with " + guard.DeleteForm +
 	" (its creation and installation are answered while " + guard.CreateForm + " runs for it), after which the hook answers the click on its consent page, " +
 	"or the navigation to its permissions page and the clicks of that change, and a turn whose steps name the App runs with its rule " +
@@ -515,6 +566,7 @@ type browseFindings struct {
 	Lost        []string
 	Recovered   bool
 	Reconnected bool
+	Left        guard.Tabs
 }
 
 // lost reports whether the connection is gone at the transcript's end: lost
@@ -566,14 +618,39 @@ func readFindings(transcript string) (browseFindings, error) {
 				case strings.Contains(text, "never clicks "+guard.SubscriptionControls):
 					f.Refused = append(f.Refused, refusal{Call: c.words, Reason: reasonControl, Hook: true})
 				}
-				if strings.Contains(text, frozenRenderer) {
+				if strings.Contains(text, guard.FrozenRenderer) {
 					f.NotRendered++
 				}
 			}
 		}
 	})
 	f.Recovered = len(f.Lost) > 0 && !lost
+	f.Left = guard.ReadTabs(transcript)
 	return f, err
+}
+
+// tabsErr is the error of a turn that left tabs it opened open: the ones
+// still in its group, and the ones outside it, which no call reaches; nil
+// when it closed them all.
+func (f browseFindings) tabsErr() error {
+	open := f.Left.Open()
+	if len(open) == 0 {
+		return nil
+	}
+	return fmt.Errorf("the browse turn left %s it opened open in the shared Chrome: %s", plural(len(open), "tab"), tabsLeft(f.Left))
+}
+
+// tabsLeft names the open tabs of t: those in the turn's group and those
+// outside it.
+func tabsLeft(t guard.Tabs) string {
+	var parts []string
+	if in := t.Reachable(); len(in) > 0 {
+		parts = append(parts, "tab "+strings.Join(in, ", ")+" in its group")
+	}
+	if out := t.Stray(); len(out) > 0 {
+		parts = append(parts, "tab "+strings.Join(out, ", ")+" outside its group, out of any turn's reach")
+	}
+	return strings.Join(parts, "; ")
 }
 
 // callTabs are the tabs a Chrome call names: its own tabId and its batch's.
@@ -644,7 +721,11 @@ func (f browseFindings) lines(steps, deploy string, consents []guard.App, lab bo
 		out = append(out, "allowed deploy: "+deploy+": the turn's auto mode allowed that one deploy or create click (--allow-deploy)")
 	}
 	for _, c := range consents {
-		if len(c.Callbacks) > 0 {
+		if c.Google {
+			out = append(out, fmt.Sprintf("allowed consent: %s (Google, callback %s, account %s, %s): the hook answers the clicks of Google's sign-in "+
+				"and consent for that callback and the turn's auto mode allows them, on record since %s by %s: %s", c.Name, callbacks(c), googleAccount(c), c.Declared,
+				c.At.UTC().Format("2006-01-02"), c.By, c.Word))
+		} else if len(c.Callbacks) > 0 {
 			out = append(out, fmt.Sprintf("allowed consent: %s (callback %s, declared in %s): the hook answers the click on its consent page "+
 				"and the turn's auto mode allows it, on record since %s by %s: %s", c.Name, callbacks(c), c.Declared, c.At.UTC().Format("2006-01-02"), c.By, c.Word))
 		}
@@ -695,23 +776,21 @@ func (f browseFindings) lines(steps, deploy string, consents []guard.App, lab bo
 		out = append(out, hint)
 	}
 	if n := f.NotRendered; n > 0 {
-		s := "s"
-		if n == 1 {
-			s = ""
-		}
-		out = append(out, fmt.Sprintf("not rendered: %d screenshot%s timed out on a frozen renderer: the tab was not in front of its window "+
-			"(behind another tab, or in a window the compositor does not draw), where a consent page keeps its Authorize button disabled; "+
-			"the turn moves to a fresh tab, which opens in front, when its check finds the tab hidden; run the steps again", n, s))
+		out = append(out, fmt.Sprintf("not rendered: %s timed out on a frozen renderer: the tab was not drawn (behind another tab, "+
+			"or its window occluded or minimised, which the compositor does not draw), where a consent page keeps its Authorize button disabled; "+
+			"the hook refused every later screenshot and the turn read the page's text instead of its picture; bring the Chrome window forward and "+
+			"run the steps again for a screenshot", plural(n, "screenshot")))
 	}
 	if l := f.windowsLine(); l != "" {
 		out = append(out, l)
 	}
+	if open := f.Left.Open(); len(open) > 0 {
+		out = append(out, "tabs left open: "+tabsLeft(f.Left))
+	} else if len(f.Left.Opened) > 0 {
+		out = append(out, fmt.Sprintf("tabs closed: the turn closed all %s it opened", plural(len(f.Left.Opened), "tab")))
+	}
 	if n := len(f.Lost); n > 0 {
-		s := "s"
-		if n == 1 {
-			s = ""
-		}
-		line := fmt.Sprintf("connection lost: %d call%s found Claude in Chrome not connected, the first %s; ", n, s, f.Lost[0])
+		line := fmt.Sprintf("connection lost: %s found Claude in Chrome not connected, the first %s; ", plural(n, "call"), f.Lost[0])
 		switch {
 		case f.Reconnected && f.Recovered:
 			line += "the reconnect turn, a fresh connection, found the browser and went on with the steps not done"
@@ -743,11 +822,7 @@ func (f browseFindings) windowsLine() string {
 		line = "windows: the turn named no tab"
 	}
 	if n := len(f.Windows); n > 0 {
-		s := "s"
-		if n == 1 {
-			s = ""
-		}
-		line += fmt.Sprintf("; followed %d window%s a page opened, in its own tab: %s", n, s, strings.Join(f.Windows, ", "))
+		line += fmt.Sprintf("; followed %s a page opened, in its own tab: %s", plural(n, "window"), strings.Join(f.Windows, ", "))
 	}
 	return line
 }
@@ -905,7 +980,7 @@ const autoModeDefaults = "$defaults"
 // record and the lab sign-in the steps name are the turn's settings: its
 // auto mode allows those actions. The first turn starts session id; the
 // reconnect turn resumes it, a fresh CLI with a fresh Chrome connection.
-func browseArgv(id, model, prompt string, rules []string, reconnect bool) []string {
+func browseArgv(id, model, prompt, self string, rules []string, reconnect bool) []string {
 	session := []string{sessionIDFlag, id}
 	if reconnect {
 		session = []string{resumeFlag, id}
@@ -915,10 +990,7 @@ func browseArgv(id, model, prompt string, rules []string, reconnect bool) []stri
 	if model != "" {
 		argv = append(argv, modelFlag, model)
 	}
-	if len(rules) > 0 {
-		argv = append(argv, settingsFlag, allowSettings(rules))
-	}
-	return append(argv, "--", prompt)
+	return append(argv, settingsFlag, browseSettings(self, rules), "--", prompt)
 }
 
 // browsePrompt is a browse turn's prompt: the preamble, the connection
@@ -932,7 +1004,9 @@ func browsePrompt(steps, deploy string, consents []guard.App, lab bool, shared [
 		p += fmt.Sprintf(deployWords, deploy)
 	}
 	for _, c := range consents {
-		if len(c.Callbacks) > 0 {
+		if c.Google {
+			p += fmt.Sprintf(googleConsentWords, c.Name, callbacks(c), googleAccount(c))
+		} else if len(c.Callbacks) > 0 {
 			p += fmt.Sprintf(consentWords, c.Name, callbacks(c), c.Name)
 		}
 		if c.Permission != "" {
@@ -961,7 +1035,9 @@ func browseRules(deploy string, consents []guard.App, lab bool) []string {
 		rules = append(rules, allowDeployRule(deploy))
 	}
 	for _, c := range consents {
-		if len(c.Callbacks) > 0 {
+		if c.Google {
+			rules = append(rules, googleConsentRule(c))
+		} else if len(c.Callbacks) > 0 {
 			rules = append(rules, consentRule(c))
 		}
 		if c.Permission != "" {
@@ -980,18 +1056,24 @@ func browseRules(deploy string, consents []guard.App, lab bool) []string {
 	return rules
 }
 
-// allowSettings are the settings of a turn whose auto mode allows rules:
+// allowMode is the autoMode setting of a turn whose auto mode allows rules:
 // the shipped allow rules with those after them, every other rule list as
 // shipped.
-func allowSettings(rules []string) string {
-	b, _ := json.Marshal(map[string]any{"autoMode": map[string]any{"allow": append([]string{autoModeDefaults}, rules...)}})
-	return string(b)
+func allowMode(rules []string) map[string]any {
+	return map[string]any{"allow": append([]string{autoModeDefaults}, rules...)}
 }
 
-// allowDeploySettings are the settings of a turn whose auto mode allows the
-// declared deploy alone.
-func allowDeploySettings(deploy string) string {
-	return allowSettings([]string{allowDeployRule(deploy)})
+// browseSettings are a browse turn's own settings: the Stop hook that has the
+// turn close the tabs it opened before it ends (beekeeper hook browsestop,
+// self the beekeeper binary), and the auto mode allow rules, when any.
+func browseSettings(self string, rules []string) string {
+	hook := map[string]any{"type": hookTypeCommand, "command": guard.ShellQuote(self) + " hook browsestop", "timeout": 10}
+	settings := map[string]any{hooksKey: map[string]any{"Stop": []any{map[string]any{hooksKey: []any{hook}}}}}
+	if len(rules) > 0 {
+		settings["autoMode"] = allowMode(rules)
+	}
+	b, _ := json.Marshal(settings)
+	return string(b)
 }
 
 // consentRule is the auto mode allow rule of an App on record: the person's
@@ -1003,6 +1085,28 @@ func consentRule(a guard.App) string {
 		"is pre-authorized and no Permission Grant to refuse, and a step that names it is no grant request; beekeeper's own hook "+
 		"verifies the page and answers the click. Not covered: a consent page of any other App or callback host, any other grant "+
 		"of access, a credential typed anywhere. Every other rule applies in full.", a.Name, a.ClientID, a.Declared, a.Name, callbacks(a))
+}
+
+// googleConsentRule is the auto mode allow rule of a Google OAuth client
+// on record: the person's pre-authorization of the clicks of Google's
+// sign-in and consent for that client's callback host, which the hook
+// verifies; a consent for any other App or callback host is not covered.
+func googleConsentRule(a guard.App) string {
+	return fmt.Sprintf("Own Google App Consent: The person owns the Google OAuth client %s and asked, on record with beekeeper, for its consent: "+
+		"on Google's sign-in (accounts.google.com) of an authorization request whose redirect goes to the callback host %s, choosing the account "+
+		"%s on Google's account chooser and the Continue or Allow clicks of 'Sign in to' and the consent page are pre-authorized and no Permission Grant to refuse, "+
+		"and a step that names them is no grant request; beekeeper's own hook verifies the flow's callback host and answers each click. Not covered: "+
+		"Google's consent for any other App or callback host, any other grant of access, a credential typed anywhere. Every other rule applies in full.",
+		a.Name, callbacks(a), googleAccount(a))
+}
+
+// googleAccount is the account a Google App's sign-in chooses: the
+// record's, or the person's signed-in one for a record that names none.
+func googleAccount(a guard.App) string {
+	if a.Account != "" {
+		return a.Account
+	}
+	return "the person's signed-in account"
 }
 
 // permissionRule is the auto mode allow rule of one permission change on
@@ -1249,9 +1353,15 @@ func copyFile(src, dst string) error {
 }
 
 // uploadWords tell a browse turn the files shared for upload, one "<named>
-// as <staged>" each.
+// as <staged>" each, and the upload-target check that resolves the input
+// before each file_upload, which the hook requires.
 const uploadWords = "The caller shares these files with you for upload, and only these: %s. Upload one through a page's file input with " +
-	"file_upload and the path after 'as', the file's copy shared with this session, never the caller's own path; file_upload refuses every other path. "
+	"file_upload and the path after 'as', the file's copy shared with this session, never the caller's own path; file_upload refuses every other path. " +
+	"A page keeps hidden file inputs (a review-reply box beside the comment box) that take an upload as readily as the intended one, so before " +
+	"each file_upload resolve its input: run this upload-target check with javascript_tool on the tab, scope set to a selector of the " +
+	"intended form or comment box (\"\" for the whole page): %s It marks the one visible, enabled file input there or says why it marked none " +
+	"(hidden, disabled, several: narrow the scope; none visible: open the intended comment box, or stop and report it). Then find '" +
+	guard.UploadTargetLabel + "' and file_upload to the ref it gives, and only that ref: the hook refuses a file_upload to any other. "
 
 // uploadPrompt are the upload words of the shared files, "" without any.
 func uploadPrompt(shared []sharedFile) string {
@@ -1262,7 +1372,7 @@ func uploadPrompt(shared []sharedFile) string {
 	for _, f := range shared {
 		named = append(named, fmt.Sprintf("%s as %s", f.Named, f.Staged))
 	}
-	return fmt.Sprintf(uploadWords, strings.Join(named, "; "))
+	return fmt.Sprintf(uploadWords, strings.Join(named, "; "), guard.UploadTargetCheck("<selector>"))
 }
 
 // sharedLines are the lines below the report that name the files shared for
