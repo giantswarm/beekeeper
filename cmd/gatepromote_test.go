@@ -80,6 +80,39 @@ func TestAQueuedPromotionRecordsItsCandidate(t *testing.T) {
 	}
 }
 
+// A repository hold that waits on the repository's own release lets its
+// promote run, the step that cuts the release it waits on, and still
+// refuses a merge into the repository. A hold whose probe waits on
+// something else keeps the promote waiting.
+func TestAHoldWaitingOnTheReleaseLetsItsOwnPromoteThrough(t *testing.T) {
+	noSystemd(t)
+	stubGitHub(t, github.Open, "")
+	fakeDevctl(t, `echo '{"repositories":[{"candidate":"`+candidateA+`","state":"dispatched"}]}'`)
+	newest := candidateA
+	stubCandidate(t, &newest)
+	hold := func(probe string) state.Hold {
+		return state.Hold{Target: scratchRepo, Reason: "promote v1.2.4 first", By: state.Party{Name: aheadName}, At: time.Now(), LiftWhen: probe}
+	}
+
+	a, g := promotePlace(t)
+	setHold(t, a, hold("devctl pr wait "+scratchRepo+" 6"))
+	if why, err := g.step(); err != nil || !strings.HasPrefix(why, "held in lane o/r") {
+		t.Fatalf("under a hold waiting on no release: %q, %v, want held", why, err)
+	}
+
+	a, g = promotePlace(t)
+	setHold(t, a, hold("gh release view v1.2.4 --repo "+scratchRepo))
+	if err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, 0, false); Code(err) != ExitGateRefused {
+		t.Errorf("a merge into the held repository: exit %d (%v), want %d", Code(err), err, ExitGateRefused)
+	}
+	if why, err := g.step(); err != nil || why != "" {
+		t.Fatalf("its own promote: %q, %v", why, err)
+	}
+	if d := lastEventOf(t, a, verbMerged); !strings.HasPrefix(d, "o/r promote exit 0, release v1.2.4") {
+		t.Errorf("merged event %q", d)
+	}
+}
+
 // A promotion whose turn comes when another candidate is newest promotes
 // nothing: it is refused, its place leaves the lane, and the refusal names
 // both candidates. With its own candidate still newest, it runs.

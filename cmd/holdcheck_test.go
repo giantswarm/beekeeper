@@ -52,6 +52,14 @@ func TestHoldCheckPrintsAVerdictOrNamesTheFailedLookup(t *testing.T) {
 	if out, code := local("check", "o/r"); code != ExitRefused || !strings.Contains(out, "o/r is held by") || !strings.Contains(out, "fixing main") {
 		t.Errorf("held: exit %d: %q", code, out)
 	}
+	// A hold waiting on the repository's release still holds its merges and
+	// says that it lets the promote through.
+	if out, code := local("set", "o/r", "-r", "promote first", "--lift-when", "gh release view v1.2.4 --repo o/r"); code != 0 {
+		t.Fatalf("set: exit %d: %s", code, out)
+	}
+	if out, code := local("check", "o/r"); code != ExitRefused || !strings.Contains(out, "o/r except its promote is held by") {
+		t.Errorf("held but for its promote: exit %d: %q", code, out)
+	}
 	central := holdRunner(t, "central: {context: lab, muster: "+filepath.Join(t.TempDir(), "no-muster")+"}\nlanes: [{name: portal, installation: gazelle, repositories: [o/r]}]\n")
 	out, code := central("check", "o/r")
 	if code == 0 || code == ExitRefused || !strings.HasPrefix(out, "the central hold lookup for o/r failed, no verdict: ") || strings.Contains(out, "not held") {

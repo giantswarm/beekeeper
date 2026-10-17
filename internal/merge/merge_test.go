@@ -183,6 +183,39 @@ func TestBlocking(t *testing.T) {
 	}
 }
 
+// A repository hold that waits on the repository's own release lets its
+// promote, which cuts that release, through and holds everything else.
+func TestBlockingReleaseHold(t *testing.T) {
+	const otherRepo = "giantswarm/workspace-manager"
+	now := time.Now()
+	lane := config.Lane{Name: backstage}
+	st := &state.State{Holds: []state.Hold{{Target: backstage, Reason: "promote v3.9.3 first",
+		LiftWhen: "gh release view v3.9.3 --repo " + backstage + " --json isDraft"}}}
+	if _, ok := Blocking(st, now, backstage, 0, lane); ok {
+		t.Error("a hold waiting on the repository's release stops its own promote")
+	}
+	if _, ok := Blocking(st, now, backstage, 8, lane); !ok {
+		t.Error("a hold waiting on the repository's release lets a merge into it through")
+	}
+	if _, ok := Blocking(st, now, otherRepo, 0, config.Lane{Name: AllMerges}); ok {
+		t.Error("a repository hold stops another repository's promote")
+	}
+	st.Holds = append(st.Holds, state.Hold{Target: otherRepo, LiftWhen: "gh release view v1.0.0 --repo " + backstage})
+	if _, ok := Blocking(st, now, otherRepo, 0, config.Lane{Name: otherRepo}); !ok {
+		t.Error("a hold waiting on another repository's release lets the held repository's promote through")
+	}
+	for _, probe := range []string{"", "devctl pr wait " + backstage + " 3130"} {
+		st.Holds = []state.Hold{{Target: backstage, LiftWhen: probe}}
+		if _, ok := Blocking(st, now, backstage, 0, lane); !ok {
+			t.Errorf("a hold whose probe %q waits on no release lets the promote through", probe)
+		}
+	}
+	st.Holds = []state.Hold{{Target: AllMerges, LiftWhen: "gh release view v3.9.3 --repo " + backstage}}
+	if _, ok := Blocking(st, now, backstage, 0, lane); !ok {
+		t.Error("a hold on every merge lets the promote of the repository its probe names through")
+	}
+}
+
 func TestBlockingToolWindow(t *testing.T) {
 	now := time.Now()
 	other := config.Lane{Name: portalTools}

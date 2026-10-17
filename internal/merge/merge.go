@@ -302,13 +302,15 @@ func MergeCommit(raw []byte) string {
 // Blocking is the active hold that stops a merge of repo#pr in lane: the
 // repository's, the lane's, github's or one on all merges, unless the hold
 // lets that repository or pull request through, else an upgrade running on
-// the lane's installation. A tool-release window stops the other merges only
+// the lane's installation. pr 0 is the repository's promote, which a hold
+// waiting on the repository's own release lets through (AwaitsOwnRelease):
+// held, the release could never come. A tool-release window stops the other merges only
 // once its release is coming (ToolReleased): until then the installed tool is
 // the latest release and runs, and only from the release on does every new
 // run of it refuse until it is updated.
 func Blocking(st *state.State, now time.Time, repo string, pr int, lane config.Lane) (state.Hold, bool) {
 	for _, h := range st.Holds {
-		if !h.Active(now) || h.Excepts(repo, pr) || h.Tool != "" && !ToolReleased(h) {
+		if !h.Active(now) || h.Excepts(repo, pr) || h.Tool != "" && !ToolReleased(h) || pr == 0 && h.Target == repo && h.AwaitsOwnRelease() {
 			continue
 		}
 		switch h.Target {
