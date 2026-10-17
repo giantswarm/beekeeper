@@ -1,6 +1,8 @@
 package worktrees
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -99,5 +101,36 @@ func TestDecide(t *testing.T) {
 		if got := Decide(c.tree, c.pull, c.live, c.pushed, now); got.Action != c.want {
 			t.Errorf("%s: %s (%s), want %s", c.name, got.Action, got.Why, c.want)
 		}
+	}
+}
+
+func TestDangling(t *testing.T) {
+	base := t.TempDir()
+	gitdir := filepath.Join(base, "repo", ".git", "worktrees", "x")
+	if err := os.MkdirAll(gitdir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct {
+		gitfile string
+		want    bool
+	}{
+		"present":          {"gitdir: " + gitdir, false},
+		"missing":          {"gitdir: " + filepath.Join(base, "gone", ".git", "worktrees", "x"), true},
+		"missing relative": {"gitdir: ../gone/.git/worktrees/x", true},
+		"no gitdir line":   {"ref: x", false},
+	} {
+		dir := filepath.Join(base, name)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".git"), []byte(c.gitfile+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := Dangling(dir); got != c.want {
+			t.Errorf("%s: Dangling = %v, want %v", name, got, c.want)
+		}
+	}
+	if Dangling(filepath.Join(base, "repo")) {
+		t.Error("a folder without a gitfile is dangling")
 	}
 }
