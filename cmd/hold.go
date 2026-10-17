@@ -145,13 +145,15 @@ Without a subcommand, lists the holds.`,
 		Short: "Exit 0 when the target is not held, 3 when it is",
 		Long: `Exit 0 when the target is not held, 3 (with the reason) when it is. A
 repository, or one pull request of it (owner/repo#n), is also held while its
-lane, "merges" or "github" is, unless it is the hold's exception.`,
+lane, "merges" or "github" is, unless it is the hold's exception. Either way
+the verdict is printed; a lookup that fails (the central instance's, for a
+central target) is an error naming that lookup, with its own exit code.`,
 		Args: checkLane.args,
 		RunE: func(_ *cobra.Command, args []string) error {
 			args = checkLane.target(args)
 			st, err := a.store.Read()
 			if err != nil {
-				return err
+				return lookupErr(err, "reading this machine's holds failed, no verdict on %s", args[0])
 			}
 			h, ok := activeHold(st, a, args[0])
 			if repo, pr, isRepo := splitPR(args[0]); isRepo {
@@ -161,9 +163,12 @@ lane, "merges" or "github" is, unless it is the hold's exception.`,
 				return refused("%s is held by %q until %s: %s", h.Target, h.By.Name, untilText(a, h), h.Reason)
 			}
 			if a.centralTarget(args[0]) {
-				return a.checkCentral(args[0])
+				if err := a.checkCentral(args[0]); err != nil {
+					return err
+				}
 			}
-			return nil
+			_, err = fmt.Fprintf(a.out, "%s is not held\n", args[0])
+			return err
 		},
 	}
 	liftLane.register(lift)
