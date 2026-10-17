@@ -130,13 +130,14 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	ana := e.as(t, e.token(t, "ana@example.com", teamGroup))
 	bo := e.as(t, e.token(t, boEmail, "giantswarm:team-planeteers"))
 	kim := e.as(t, e.token(t, "kim@example.com", teamGroup))
-	ask := func(forWho, due string) int {
-		args := map[string]any{paramText: museLane, paramFor: forWho, paramKind: noteDecision, paramAgent: anaAgent, paramHost: lab,
+	askText := func(text, forWho, due string) int {
+		args := map[string]any{paramText: text, paramFor: forWho, paramKind: noteDecision, paramAgent: anaAgent, paramHost: lab,
 			keyStatusQuo: noMuseLane, keyWhy: "only its owners pick its lane", "options": []any{"portal: it rolls with backstage", "own: a lane of its own"}, "recommend": 2,
 			dueID: due, keyDefault: ownLane, paramRefs: []any{privateThread}}
 		id, _ := e.expect(t, ana, "note_add", args, false, "note #")["id"].(float64)
 		return int(id)
 	}
+	ask := func(forWho, due string) int { return askText(museLane, forWho, due) }
 
 	// A person's decision: posted as a direct message, answered by a click.
 	n := ask("bo", "3h")
@@ -182,7 +183,7 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	e.expect(t, bo, "note_done", map[string]any{paramNote: n}, true, "only that person")
 	e.expect(t, ana, "note_done", map[string]any{paramNote: n}, false, "done")
 	n = ask("bo", "1h")
-	ask("bo", "1h")
+	askText(whichLane, "bo", "1h") // the same question would fold into n
 	if err := e.srv.defaultDue(context.Background(), time.Now().Add(2*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
