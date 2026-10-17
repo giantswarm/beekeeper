@@ -396,8 +396,13 @@ func signalName(s syscall.Signal) string {
 // runReason is what a run's document says about its end (its verdict and
 // reason, the failed checks the reason does not name), else its last stderr
 // line; handCut is a merge's base branch that no Auto-release run
-// tags, whose release nobody awaits.
+// tags, whose release nobody awaits. A merge declined on classic branch
+// protection is its cause and fix alone (merge.ClassicProtection), which the
+// truncation of devctl's long reason would cut.
 func runReason(doc []byte, last, handCut string) string {
+	if why := merge.ClassicProtection(doc); why != "" {
+		return why
+	}
 	var d struct {
 		Verdict string `json:"verdict"`
 		Reason  string `json:"reason"`
