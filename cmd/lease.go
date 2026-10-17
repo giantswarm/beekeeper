@@ -751,7 +751,7 @@ func (a *app) grant(me state.Party, res string, to *claude.Session, unblock stri
 		}
 		held := heldMap(holders)
 		lease.Prune(st, held, a.now, a.cfg.GrantTTL.Duration)
-		if sup := st.SupervisorRole().Holder; first && sup != nil && me.Session != "" && !me.Is(sup.Party) {
+		if sup := st.SupervisorRole().Holder; first && sup != nil && !me.Is(sup.Party) {
 			return nil, refused("only the supervisor %q puts a grant ahead of the queue: grant %s without --first, or ask it for `yours %s`", sup.Name, res, res)
 		}
 		var hold state.Hold

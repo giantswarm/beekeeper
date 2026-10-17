@@ -366,3 +366,19 @@ func TestNewGrantFirst(t *testing.T) {
 		t.Errorf("queue %+v", q)
 	}
 }
+
+// A grant --first under --as, a person's name, is refused too while a
+// supervisor is recorded: --as names no session the role could match.
+func TestGrantFirstAsAPersonIsRefused(t *testing.T) {
+	a := claimApp(t, claimGrant(labTwo, claimFirst, 5*time.Minute))
+	a.as = "Timo"
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = append(st.Agents, state.Agent{Party: claimMe, Registered: relayNow})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runLease(a, "grant", labTwo, claimMe.Name, "--first"); Code(err) != ExitRefused {
+		t.Errorf("grant --first --as a person: %q, %v; want refused", out, err)
+	}
+}
