@@ -36,7 +36,7 @@ func TestSecretCaptureAnswersAndLogsNoValue(t *testing.T) {
 	prod := fakeProducer(t, false)
 	file := filepath.Join(repo, "pull.sops.yaml")
 	out, err := runSecret(a, captureOp, file, "--dockerconfigjson", "registry.example.io", "--username", "pull-token",
-		nameFlag, "pull", namespaceFlag, "flux-system", "--vault", "op://Shared/pull/password", "--jq", ".passwords[0].value", "--", prod, "--password1")
+		nameFlag, "pull", namespaceFlag, "flux-system", vaultFlag, "op://Shared/pull/password", "--jq", ".passwords[0].value", "--", prod, "--password1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestSecretCaptureHelp(t *testing.T) {
 	}
 	a.out = &bytes.Buffer{}
 	out, err = runSecret(a, captureOp, "--help")
-	for _, want := range []string{"--jq", "--dockerconfigjson", "--username", "--vault", "--encode", "kubernetes.io/dockerconfigjson", "secret.env"} {
+	for _, want := range []string{"--jq", "--dockerconfigjson", "--username", vaultFlag, "--encode", "kubernetes.io/dockerconfigjson", "secret.env"} {
 		if err != nil || !strings.Contains(out, want) {
 			t.Errorf("capture --help lacks %q: %v", want, err)
 		}
