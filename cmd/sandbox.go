@@ -354,7 +354,7 @@ func brokeredCap(c platform.Capper, cpu platform.Cap) func(int, sandbox.Request)
 // host, outside the sandbox. import
 // reads a vault of the person's that the service account does not: the
 // broker runs it with secret.session only, in the person's session it holds.
-var brokeredSecretOps = []string{"compare", "fingerprint", "copy", "set", "capture", "rotate", "recipients", "reveal", "unset", githubAppOp, importOp}
+var brokeredSecretOps = []string{"compare", "fingerprint", "copy", "set", "capture", "rotate", "recipients", "items", "reveal", "unset", githubAppOp, importOp}
 
 // importOp is the secret subcommand that reads the person's own vault.
 const importOp = "import"
@@ -537,6 +537,7 @@ func (a *app) sandboxPolicy() sandbox.Policy {
 	home, _ := os.UserHomeDir()
 	exe, _ := os.Executable()
 	cfgFile, _ := config.Path(a.cfgPath)
-	return sandbox.New(a.cfg.Sandbox, sandbox.Paths{Home: home, ConfigFile: cfgFile, StateDir: a.cfg.StateDir, LeaseDir: a.cfg.LeaseDir, SlotDir: a.cfg.Memcap.SlotDir, Exe: exe, ScanDir: a.scanDir(),
+	slotDir, _ := a.slotView()
+	return sandbox.New(a.cfg.Sandbox, sandbox.Paths{Home: home, ConfigFile: cfgFile, StateDir: a.cfg.StateDir, LeaseDir: a.cfg.LeaseDir, SlotDir: slotDir, Exe: exe, ScanDir: a.scanDir(),
 		RuntimeDir: os.Getenv("XDG_RUNTIME_DIR")})
 }

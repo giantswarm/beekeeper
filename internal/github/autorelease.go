@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -16,18 +17,30 @@ import (
 // push to a branch its on.push filter names, it tags the merge commit.
 const AutoReleaseWorkflow = ".github/workflows/zz_generated.auto_release.yaml"
 
+// PluginReleaseWorkflow is the Auto Release of a plugin marketplace: on a
+// merged pull request it tags every plugin whose version in Marketplace the
+// merge changed, <plugin>/vX.Y.Z (PluginTag).
+const PluginReleaseWorkflow = ".github/workflows/auto-release.yaml"
+
+// Marketplace is a plugin marketplace's manifest, its plugins' names and
+// versions.
+const Marketplace = ".claude-plugin/marketplace.json"
+
 // BaseRelease is how a pull request's base branch releases: Auto when the
 // Auto-release workflow on the branch runs on a push to it, so a merge into
-// it is tagged; otherwise its tags are cut by hand (a maintenance branch, a
-// fork line's backport branch).
+// it is tagged; Plugins when the branch has no such workflow and its
+// PluginReleaseWorkflow tags the merged plugins (PluginTags); otherwise its
+// tags are cut by hand (a maintenance branch, a fork line's backport branch).
 type BaseRelease struct {
-	Base string
-	Auto bool
+	Base    string
+	Auto    bool
+	Plugins bool
 }
 
 // ReadBaseRelease reads repo#n's base branch and the Auto-release workflow
-// on it, two requests. A branch without the workflow has no auto-release; an
-// error is GitHub not answering either.
+// on it, two requests, and on a branch without it the PluginReleaseWorkflow,
+// a third. A branch without either has no auto-release; an error is GitHub
+// not answering.
 func ReadBaseRelease(ctx context.Context, run GH, repo string, n int) (BaseRelease, error) {
 	out, err := run(ctx, "pr", "view", strconv.Itoa(n), "--repo", repo, "--json", "baseRefName")
 	if err != nil {
@@ -40,18 +53,150 @@ func ReadBaseRelease(ctx context.Context, run GH, repo string, n int) (BaseRelea
 		return BaseRelease{}, fmt.Errorf("gh pr view %d --repo %s: no base branch in its answer", n, repo)
 	}
 	r := BaseRelease{Base: p.BaseRefName}
-	raw, err := run(ctx, "api", "-H", "Accept: application/vnd.github.raw",
-		fmt.Sprintf("repos/%s/contents/%s?ref=%s", repo, AutoReleaseWorkflow, url.QueryEscape(r.Base)))
+	raw, err := rawFile(ctx, run, repo, AutoReleaseWorkflow, r.Base)
 	switch {
-	case err != nil && strings.Contains(err.Error(), "HTTP 404"):
+	case notFound(err):
+	case err != nil:
+		return BaseRelease{}, err
+	default:
+		if r.Auto, err = PushesBranch(raw, r.Base); err != nil {
+			return BaseRelease{}, fmt.Errorf("%s on %s: %w", AutoReleaseWorkflow, r.Base, err)
+		}
+		return r, nil
+	}
+	raw, err = rawFile(ctx, run, repo, PluginReleaseWorkflow, r.Base)
+	switch {
+	case notFound(err):
 		return r, nil
 	case err != nil:
 		return BaseRelease{}, err
 	}
-	if r.Auto, err = PushesBranch(raw, r.Base); err != nil {
-		return BaseRelease{}, fmt.Errorf("%s on %s: %w", AutoReleaseWorkflow, r.Base, err)
+	if r.Plugins, err = ClosesInto(raw, r.Base); err != nil {
+		return BaseRelease{}, fmt.Errorf("%s on %s: %w", PluginReleaseWorkflow, r.Base, err)
 	}
+	r.Plugins = r.Plugins && strings.Contains(string(raw), Marketplace)
 	return r, nil
+}
+
+// rawFile is the file at path on ref, raw; one the repository lacks there
+// is GitHub's 404 (notFound).
+func rawFile(ctx context.Context, run GH, repo, path, ref string) ([]byte, error) {
+	return run(ctx, "api", "-H", "Accept: application/vnd.github.raw",
+		fmt.Sprintf("repos/%s/contents/%s?ref=%s", repo, path, url.QueryEscape(ref)))
+}
+
+// notFound says whether err is GitHub's 404.
+func notFound(err error) bool { return err != nil && strings.Contains(err.Error(), "HTTP 404") }
+
+// ClosesInto says whether a workflow runs when a pull request into branch
+// closes: its on.pull_request (or pull_request_target) trigger lists the
+// closed type, and its branch filters let branch through.
+func ClosesInto(workflow []byte, branch string) (bool, error) {
+	var doc struct {
+		On any `yaml:"on"`
+	}
+	if err := yaml.Unmarshal(workflow, &doc); err != nil {
+		return false, err
+	}
+	on, _ := doc.On.(map[string]any)
+	for _, event := range []string{"pull_request", "pull_request_target"} {
+		f, _ := on[event].(map[string]any)
+		types, _ := f["types"].([]any)
+		if !slices.Contains(types, any("closed")) {
+			continue
+		}
+		branches, hasBranches := f["branches"].([]any)
+		ignore, hasIgnore := f["branches-ignore"].([]any)
+		switch {
+		case hasBranches:
+			return filterMatches(branches, branch)
+		case hasIgnore:
+			m, err := filterMatches(ignore, branch)
+			return !m, err
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+// PluginTag is the tag a plugin marketplace's Auto Release cuts for a
+// plugin's version.
+func PluginTag(plugin, version string) string { return plugin + "/v" + version }
+
+// PluginTags are the tags the PluginReleaseWorkflow cuts for merge commit
+// sha: one per plugin whose version in Marketplace differs from its version
+// in the commit's first parent (a plugin new in it included), in the
+// manifest's order; none when the merge changed no version.
+func PluginTags(ctx context.Context, run GH, repo, sha string) ([]string, error) {
+	parent, err := run(ctx, "api", fmt.Sprintf("repos/%s/commits/%s", repo, sha), "--jq", ".parents[0].sha")
+	if err != nil {
+		return nil, err
+	}
+	now, err := marketplaceAt(ctx, run, repo, sha)
+	if err != nil {
+		return nil, err
+	}
+	var was manifest
+	if p := strings.TrimSpace(string(parent)); p != "" {
+		if was, err = marketplaceAt(ctx, run, repo, p); err != nil {
+			return nil, err
+		}
+	}
+	var tags []string
+	for _, pl := range now.order {
+		if v := now.versions[pl]; v != "" && v != was.versions[pl] {
+			tags = append(tags, PluginTag(pl, v))
+		}
+	}
+	return tags, nil
+}
+
+// manifest is a Marketplace's plugins in order and their versions.
+type manifest struct {
+	order    []string
+	versions map[string]string
+}
+
+// marketplaceAt reads the Marketplace at ref; a ref without one has no
+// plugins.
+func marketplaceAt(ctx context.Context, run GH, repo, ref string) (manifest, error) {
+	raw, err := rawFile(ctx, run, repo, Marketplace, ref)
+	switch {
+	case notFound(err):
+		return manifest{}, nil
+	case err != nil:
+		return manifest{}, err
+	}
+	var doc struct {
+		Plugins []struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		} `json:"plugins"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return manifest{}, fmt.Errorf("%s at %s: %w", Marketplace, shortRef(ref), err)
+	}
+	m := manifest{versions: map[string]string{}}
+	for _, p := range doc.Plugins {
+		m.order = append(m.order, p.Name)
+		m.versions[p.Name] = p.Version
+	}
+	return m, nil
+}
+
+// shortRef is a commit's short form, a branch unchanged.
+func shortRef(ref string) string { return ref[:min(len(ref), 9)] }
+
+// TagExists says whether repo has tag.
+func TagExists(ctx context.Context, run GH, repo, tag string) (bool, error) {
+	_, err := run(ctx, "api", fmt.Sprintf("repos/%s/git/ref/tags/%s", repo, tag))
+	switch {
+	case notFound(err):
+		return false, nil
+	case err != nil:
+		return false, err
+	}
+	return true, nil
 }
 
 // PushesBranch says whether a workflow runs on a push to branch, by its

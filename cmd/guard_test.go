@@ -14,6 +14,7 @@ import (
 
 	"github.com/gofrs/flock"
 
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/free"
 	"github.com/giantswarm/beekeeper/internal/gocache"
 	"github.com/giantswarm/beekeeper/internal/guard"
@@ -30,12 +31,20 @@ func TestMain(m *testing.M) {
 	// No test frees the machine's /tmp, nor the test binary run as
 	// beekeeper: the automatic free reads no process table, so it frees
 	// nothing; a test that wants a run gives it a machine.
+	// Nor does an answer reach GitHub: every thread but unknownThread is a
+	// private one to it; a test that reads the comments stubs its own.
+	boardGH = (&answerGH{}).run
 	liveTmpfs = func(*app) (free.Machine, error) {
 		return free.Machine{TableErr: errors.New("no machine in a test")}, nil
 	}
+	// Nor its worktrees: the trim finds none; a test that wants a run
+	// gives it a machine.
+	liveWorktrees = func(*app) (worktreeMachine, error) { return worktreeMachine{}, nil }
 	// Nor does a command sync the machine's Claude Code plugins, stamped
 	// release build or not: a test that wants the sync names its binary.
 	binaryIdentity = func() string { return "" }
+	// Nor does a gate read that fails in transit pause between its tries.
+	readBackoff = make([]time.Duration, len(readBackoff))
 	// Nor its Go build cache: the trim sees only a cache a test points
 	// GOCACHE at; the cache the tests started with is no cache to it.
 	machineCache := gocache.Dir()
@@ -351,4 +360,57 @@ func runEvents(t *testing.T, dir string) []state.Event {
 		t.Fatal(err)
 	}
 	return evs
+}
+
+// MEMCAP_STATE and MEMCAP_SLOTS override memcap.slotDir and memcap.slots for
+// every taker of a build slot: beekeeper run and a start that builds read
+// the one directory and count.
+func TestBuildSlotsEnvOverConfig(t *testing.T) {
+	const cfgSlots, envState, envSlots = "/cfg/slots", "/env", "/env/slots"
+	a := &app{cfg: &config.Config{Memcap: config.Memcap{SlotDir: cfgSlots, Slots: 2}}}
+	for _, c := range []struct {
+		name, state, slots string
+		wantDir            string
+		wantN              int
+		wantErr            bool
+	}{
+		{"config", "", "", cfgSlots, 2, false},
+		{"MEMCAP_STATE", envState, "", envSlots, 2, false},
+		{"MEMCAP_SLOTS", "", "5", cfgSlots, 5, false},
+		{"both", envState, "5", envSlots, 5, false},
+		{"MEMCAP_SLOTS not a number", envState, "x", envSlots, 2, true},
+		{"MEMCAP_SLOTS zero", "", "0", cfgSlots, 2, true},
+	} {
+		t.Setenv("MEMCAP_STATE", c.state)
+		t.Setenv("MEMCAP_SLOTS", c.slots)
+		dir, n, err := a.buildSlots()
+		if dir != c.wantDir || n != c.wantN || (err != nil) != c.wantErr {
+			t.Errorf("%s: buildSlots %q %d %v, want %q %d, error %v", c.name, dir, n, err, c.wantDir, c.wantN, c.wantErr)
+		}
+		if c.wantErr && Code(err) != ExitUsage {
+			t.Errorf("%s: exit %d, want %d", c.name, Code(err), ExitUsage)
+		}
+		o, _, err := a.startSlot()
+		if !c.wantErr && (err != nil || o.SlotDir != dir || o.Slots != n) {
+			t.Errorf("%s: a start that builds queues in %q (%d slots), %v; run takes %q (%d)", c.name, o.SlotDir, o.Slots, err, dir, n)
+		}
+		if c.wantErr && err == nil {
+			t.Errorf("%s: a start that builds took MEMCAP_SLOTS=%q", c.name, c.slots)
+		}
+		if d, k := a.slotView(); d != dir || k != n {
+			t.Errorf("%s: the views read %q (%d slots), run takes %q (%d)", c.name, d, k, dir, n)
+		}
+	}
+}
+
+// beekeeper run takes a slot in MEMCAP_STATE's slots/ up to MEMCAP_SLOTS:
+// with the two configured-size slots held, a third from MEMCAP_SLOTS runs it.
+func TestRunTakesTheEnvSlots(t *testing.T) {
+	state, env := capped(t)
+	holdSlots(t, state)
+	self, _ := os.Executable()
+	out, errOut, rc := zsh(t, append(env, "MEMCAP_SLOTS=3"), self+` run --wait 1s -- sh -c 'cat "$MEMCAP_STATE/slots/3.holder"'`)
+	if rc != 0 || !strings.Contains(out, `"pid":`) {
+		t.Errorf("rc %d, stdout %q, stderr %q", rc, out, errOut)
+	}
 }

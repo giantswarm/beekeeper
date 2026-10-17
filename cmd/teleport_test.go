@@ -69,7 +69,7 @@ func teleportApp(t *testing.T) *app {
 }
 
 func TestHoldBrowser(t *testing.T) {
-	keeper := state.Party{Name: "teleport keeper"}
+	keeper := state.Party{Name: teleportKeeper}
 	a := teleportApp(t)
 	dir := lease.Dir(a.cfg.LeaseDir)
 
@@ -120,11 +120,11 @@ func TestHoldBrowser(t *testing.T) {
 
 func TestTeleportFailedLeavesASignInNote(t *testing.T) {
 	a := teleportApp(t)
-	keeper := state.Party{Name: "teleport keeper"}
+	keeper := state.Party{Name: teleportKeeper}
 	before := teleport.Profile{ValidUntil: a.now.Add(80 * time.Minute)}
 	failure := errors.New("tsh login did not complete within 3m0s")
 
-	if err := a.teleportFailed(keeper, false, before, nil, failure); !errors.Is(err, failure) {
+	if err := a.teleportFailed(keeper, false, false, before, nil, failure); !errors.Is(err, failure) {
 		t.Fatalf("by hand: %v", err)
 	}
 	st, err := a.store.Read()
@@ -135,7 +135,7 @@ func TestTeleportFailedLeavesASignInNote(t *testing.T) {
 		t.Fatalf("a renewal by hand left a note: %+v", st.Notes)
 	}
 
-	if err := a.teleportFailed(keeper, true, before, nil, failure); !errors.Is(err, failure) {
+	if err := a.teleportFailed(keeper, true, false, before, nil, failure); !errors.Is(err, failure) {
 		t.Fatalf("by the keeper: %v", err)
 	}
 	rec, err := a.teleportRecord()
@@ -145,7 +145,7 @@ func TestTeleportFailedLeavesASignInNote(t *testing.T) {
 	if !rec.Failed(before, nil) || rec.Reason != failure.Error() {
 		t.Errorf("record %+v", rec)
 	}
-	if due, _ := teleport.Due(before, nil, rec, a.now, 90*time.Minute); due {
+	if due, _ := teleport.Due(before, nil, rec, a.now, 90*time.Minute, false); due {
 		t.Error("the keeper would try the same login again")
 	}
 	st, err = a.store.Read()
@@ -161,3 +161,63 @@ func TestTeleportFailedLeavesASignInNote(t *testing.T) {
 		t.Errorf("note %+v", n)
 	}
 }
+
+func TestTeleportFailedAfterAMissedTick(t *testing.T) {
+	a := teleportApp(t)
+	keeper := state.Party{Name: teleportKeeper}
+	before := teleport.Profile{ValidUntil: a.now.Add(-30 * time.Minute)}
+	failure := errors.New("tsh login: dial tcp: lookup login.example.com: no such host")
+
+	if err := a.teleportFailed(keeper, true, true, before, nil, failure); !errors.Is(err, failure) {
+		t.Fatalf("after a missed tick: %v", err)
+	}
+	rec, err := a.teleportRecord()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rec.AfterMiss || !rec.Failed(before, nil) || !rec.CheckedAt.Equal(a.now.UTC()) {
+		t.Errorf("record %+v", rec)
+	}
+	if due, why := teleport.Due(before, nil, rec, a.now.Add(10*time.Minute), 90*time.Minute, false); !due {
+		t.Errorf("the next run does not try once more: %s", why)
+	}
+	v := newTeleportView(before, nil, rec, a.now, time.Hour)
+	if v.Key != teleportFailed || !strings.Contains(v.line(a.now), "the keeper tries once more at its next run") {
+		t.Errorf("the watch does not say the failure: %q %q", v.Key, v.line(a.now))
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Notes) != 0 {
+		t.Errorf("a failure the keeper retries left a note: %+v", st.Notes)
+	}
+	if evs, _ := a.store.Events(0, func(e state.Event) bool { return e.Verb == "teleport.fail" }); len(evs) != 1 {
+		t.Errorf("the failure is not logged: %+v", evs)
+	}
+
+	if err := a.teleportFailed(keeper, true, false, before, nil, failure); !errors.Is(err, failure) {
+		t.Fatal(err)
+	}
+	if rec, _ := a.teleportRecord(); rec.AfterMiss {
+		t.Error("the retry's failure is retried again")
+	}
+	if due, _ := teleport.Due(before, nil, mustRecord(t, a), a.now.Add(20*time.Minute), 90*time.Minute, false); due {
+		t.Error("the keeper tries the same login a third time")
+	}
+	if st, _ := a.store.Read(); len(st.Notes) != 1 {
+		t.Errorf("the retry's failure left no sign-in note: %+v", st.Notes)
+	}
+}
+
+func mustRecord(t *testing.T, a *app) teleport.Record {
+	t.Helper()
+	rec, err := a.teleportRecord()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rec
+}
+
+// teleportKeeper is the name the keeper's unit runs as.
+const teleportKeeper = "teleport keeper"

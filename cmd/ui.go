@@ -145,7 +145,7 @@ func (c *collector) Tail(_ context.Context, session string, turns int) ([]tui.Tu
 	if err != nil {
 		return nil, err
 	}
-	ts, err := sessionTail(raw, session, turns, true)
+	ts, err := c.a.sessionTail(raw, session, turns, true, time.Now())
 	if err != nil {
 		return nil, err
 	}
@@ -161,16 +161,21 @@ func (c *collector) Tail(_ context.Context, session string, turns int) ([]tui.Tu
 // SendMessage does, or into the inbox of an omp agent beekeeper started.
 // It returns where the message went.
 func (c *collector) Send(ctx context.Context, session, text string) (string, error) {
-	a := c.a
 	raw, err := c.running()
 	if err != nil {
 		return "", err
 	}
-	s, err := claude.Resolve(raw, session)
+	return c.a.sendNamed(ctx, raw, session, text, time.Now())
+}
+
+// sendNamed delivers the person's text to the running session q names
+// among sessions, by sessionNamed's rule, and says where it went.
+func (a *app) sendNamed(ctx context.Context, sessions []*claude.Session, q, text string, now time.Time) (string, error) {
+	s, err := a.runningNamed(sessions, q, now)
 	if err != nil {
 		return "", err
 	}
-	return a.messageSession(ctx, raw, s, text)
+	return a.messageSession(ctx, sessions, s, text)
 }
 
 // messageSession delivers the person's text to s, one of the running
@@ -216,7 +221,14 @@ func (c *collector) TakeOver(_ context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	s, err := claude.Resolve(raw, id)
+	return c.takeOver(raw, id, time.Now())
+}
+
+// takeOver brings the approvals of the session q names among sessions, by
+// sessionNamed's rule, to this screen; a registered agent whose CLI does not
+// run brings them once one runs.
+func (c *collector) takeOver(sessions []*claude.Session, q string, now time.Time) error {
+	s, _, err := c.a.namedSession(sessions, q, now)
 	if err != nil {
 		return err
 	}
@@ -366,7 +378,7 @@ func (c *collector) uiMachineView(ctx context.Context, v *view, t *proc.Table, w
 	if root, err := machine.ReadDisk("/"); err == nil {
 		m.Root = uiDisk(root)
 	}
-	for _, sl := range machine.ReadSlots(a.cfg.Memcap.SlotDir, a.cfg.Memcap.Slots) {
+	for _, sl := range machine.ReadSlots(a.slotView()) {
 		m.Slots = append(m.Slots, tui.Slot{N: sl.N, Free: sl.Free, Holder: sl.Holder})
 	}
 	clusters, err := machine.KindClusters(ctx)

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"syscall"
@@ -114,13 +115,20 @@ Claude Desktop from its first turn. Before the session exists, beekeeper
 records its id as one of its starts and registers it on the roster under
 <name>, busy with --task, by default the brief's first line (or with the
 open task of a stopped session's entry under that name, which it takes
-over), so the roster shows it at work from its start.
+over), so the roster shows it at work from its start. A brief naming an
+issue or pull request by URL makes the first one named the session's serve
+record (as sessions serve records it), so board next never offers that
+item again while the worker runs.
 
 The start is judged first, as beekeeper capacity judges one: the busy
 agents against capacity.ceiling, MemAvailable, disk swap's growth, the
 1-minute load and the kind labs. --builds marks a task that builds, tests
 or lints (its commands take the build slot under beekeeper run): such a
-start waits for a free build slot and is refused while none is. Without
+start, refused by a busy build slot alone, waits its turn in the build
+slot queue it shares with beekeeper run's waiters, first in first out, up
+to MEMCAP_WAIT, else 8m, or 60m in a background Bash call, and is judged
+again once its turn came; a turn that does not come refuses it with the
+waiters still ahead. Without
 --builds the start is one that does not build (a filer, a dispatcher, a
 reviewer, a promoter proving a release read-only): the slot is no guard
 of it, and a busy slot is a note in the verdict, never a refusal. A
@@ -163,7 +171,9 @@ desktop imports the session beside it, and start says "its task runs as a
 headless turn under profile <name>". The desktop spawns its own CLI for a
 desktop turn, which no profile reaches. --dry-run prints the profile
 applied, the first turn's command line and the first prompt, and starts
-nothing.
+nothing; with --builds it first prints the build slot as the start would
+find it, "free" or the wait with the slots' holders and the waiters ahead,
+without joining the queue or holding a slot.
 
 A start that delivers no turn of the task fails: it exits non-zero, logs
 "task not delivered" with the reason, and the roster's REACHABLE (and the
@@ -229,11 +239,16 @@ is involved and no import happens.`,
 			}
 			gaps := pluginGaps(cmd.Context())
 			if dryRun && harness != omp.Harness {
+				if builds {
+					if err := a.dryRunSlot(); err != nil {
+						return err
+					}
+				}
 				return a.dryRunStart(cmd.Context(), agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model}, gaps)
 			}
 			// The start gate: a verdict without room refuses the start
 			// before anything is recorded; --force goes through on record.
-			over, err := a.startGate(cmd.Context(), builds, force)
+			over, err := a.startGate(cmd.Context(), name, builds, force)
 			if err != nil {
 				return err
 			}
@@ -256,7 +271,7 @@ is involved and no import happens.`,
 					return err
 				}
 			}
-			sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), task: task, dir: dir, model: model, desktop: desktop}
+			sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), task: task, serves: briefIssue(brief), dir: dir, model: model, desktop: desktop}
 			switch harness {
 			case omp.Harness:
 				return a.startOmpAgent(cmd.Context(), sp)
@@ -293,7 +308,7 @@ is involved and no import happens.`,
 	c.Flags().StringVar(&task, "task", "", "the task the roster shows it busy with (default: the brief's first line)")
 	c.Flags().StringVar(&harness, "harness", "claude", "the agent harness: claude or omp")
 	c.Flags().BoolVar(&desktop, "desktop", false, "the task needs desktop turns: import it past the desktop window's focus, as agents desktop does")
-	c.Flags().BoolVar(&builds, buildsFlag, false, "the task builds, tests or lints: the start waits for a free build slot")
+	c.Flags().BoolVar(&builds, buildsFlag, false, "the task builds, tests or lints: the start waits its turn for a build slot")
 	c.Flags().BoolVar(&force, "force", false, "start although capacity says no start; the event log records the verdict overridden")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "print how the session would start (the profile applied and its first turn's command line) and start nothing")
 	return c
@@ -307,6 +322,9 @@ type agentStart struct {
 	role string
 	// task is the roster's task unless the entry taken over holds one.
 	task string
+	// serves is the issue the task works (briefIssue), recorded as the
+	// session's serve record with the task; empty: none.
+	serves string
 	// replaces is the running session a hand-over ends: its roster entry,
 	// task and session record go to the new session.
 	replaces *state.Party
@@ -420,7 +438,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	var handed []string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		var err error
-		reg, err = recordStart(st, s, sp.task, live)
+		reg, err = recordStart(st, s, sp.task, sp.serves, live)
 		if err != nil {
 			return nil, err
 		}
@@ -528,6 +546,11 @@ func (a *app) startVisible(ctx context.Context, d desk, sp agentStart, bin, unit
 	}
 	a.resolveStartModel(id)
 	sa.want = a.chosenModel(id)
+	// Until its task's turn runs, the session has no CLI and maybe no row:
+	// a wake meanwhile would resume it headless beside the CLI the import
+	// warms.
+	a.importPending(id, d.turnWait()+awayPoll+focusWait+2*twinWait)
+	defer a.importEnded(id)
 	var follow string
 	if sp.replaces != nil {
 		follow = sp.replaces.HostSession
@@ -598,7 +621,7 @@ func (a *app) importVisible(ctx context.Context, d desk, id, name, follow string
 // stopped while a turn runs, so the session runs one CLI. It fills sa's
 // kept, title, model, chrome and twin.
 func (a *app) importBeside(ctx context.Context, d desk, id, name, follow string, sa *startedAgent) error {
-	err := whileFrozen(ctx, sessionUnits(ctx, id, false), func() error {
+	err := whileFrozen(ctx, a.store, sessionUnits(ctx, id, false), func() error {
 		if err := titleTranscript(a.cfg.Claude.ProjectsDir, id, name); err != nil {
 			return fmt.Errorf("%w, not imported into the desktop", err)
 		}
@@ -624,8 +647,10 @@ func (a *app) importBeside(ctx context.Context, d desk, id, name, follow string,
 // session's title and model, and drops that read when the transcript
 // changed in between: a turn that appends a line meanwhile leaves the import
 // untitled, without a model. A unit no longer active (its turn ended, or is
-// ending) has no writer and is not frozen.
-func whileFrozen(ctx context.Context, units []string, fn func() error) error {
+// ending) has no writer and is not frozen. The units freeze while no process
+// holds store's lock, so none of theirs is frozen holding it (its session
+// start's hook for one) and starves every other command for the import.
+func whileFrozen(ctx context.Context, store state.Store, units []string, fn func() error) error {
 	var frozen []string
 	thaw := func(err error) error {
 		for _, u := range frozen {
@@ -635,14 +660,20 @@ func whileFrozen(ctx context.Context, units []string, fn func() error) error {
 		}
 		return err
 	}
-	for _, u := range units {
-		if err := plat.Launcher.Freeze(ctx, u); err != nil {
-			if plat.Launcher.State(ctx, u) != "active" {
-				continue
+	freeze := func() error {
+		for _, u := range units {
+			if err := plat.Launcher.Freeze(ctx, u); err != nil {
+				if plat.Launcher.State(ctx, u) != "active" {
+					continue
+				}
+				return fmt.Errorf("freezing %s for the import: %w", u, err)
 			}
-			return thaw(fmt.Errorf("freezing %s for the import: %w", u, err))
+			frozen = append(frozen, u)
 		}
-		frozen = append(frozen, u)
+		return nil
+	}
+	if err := store.Exclusive(freeze); err != nil {
+		return thaw(err)
 	}
 	return thaw(fn())
 }
@@ -1384,8 +1415,10 @@ func resumeURL(id string) string { return "claude://resume?session=" + id }
 
 // recordStart records s as one of beekeeper's starts, forgetting those older
 // than startsKept, and registers it on the roster under its name, busy with
-// task unless it takes over a stopped entry's open task.
-func recordStart(st *state.State, s state.Start, task string, live func(state.Party) bool) (registration, error) {
+// task unless it takes over a stopped entry's open task. A task of its own
+// serving an issue (owner/repo#n, briefIssue) is the session's serve record
+// from the start, so board next never offers that item again.
+func recordStart(st *state.State, s state.Start, task, serves string, live func(state.Party) bool) (registration, error) {
 	reg, err := registerAgent(st, s.Party, live, s.At)
 	if err != nil {
 		return registration{}, err
@@ -1394,6 +1427,10 @@ func recordStart(st *state.State, s state.Start, task string, live func(state.Pa
 		reg.task, reg.assignedAt = task, s.At
 		ag := &st.Agents[len(st.Agents)-1]
 		ag.Task, ag.AssignedAt = task, s.At
+		if serves != "" {
+			st.Records = slices.DeleteFunc(st.Records, func(o state.Record) bool { return o.Session.Is(s.Party) })
+			st.Records = append(st.Records, state.Record{Session: s.Party, Issue: serves, By: s.By, At: s.At})
+		}
 	}
 	st.Starts = slices.DeleteFunc(st.Starts, func(x state.Start) bool { return s.At.Sub(x.At) > startsKept })
 	st.Starts = append(st.Starts, s)
@@ -1485,6 +1522,19 @@ func gapsNote(gaps []string) string {
 	}
 	return fmt.Sprintf("the installed beekeeper plugin does not serve %s as %s ships them: the first prompt carries them (claude plugin marketplace update beekeeper && claude plugin update beekeeper@beekeeper)",
 		topicSkills(gaps), project.Version())
+}
+
+// briefURL is an issue's or a pull request's URL in a brief.
+var briefURL = regexp.MustCompile(`https://github\.com/([\w.-]+/[\w.-]+)/(?:issues|pull)/(\d+)`)
+
+// briefIssue is the issue a brief works, owner/repo#n: the first issue or
+// pull request its text names by URL; empty when it names none.
+func briefIssue(brief string) string {
+	m := briefURL.FindStringSubmatch(brief)
+	if m == nil {
+		return ""
+	}
+	return m[1] + "#" + m[2]
 }
 
 // briefTask is the roster's task for a brief: its first line without a

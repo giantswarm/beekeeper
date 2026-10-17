@@ -289,13 +289,28 @@ func ParseDocument(raw []byte) (Outcome, bool) {
 	return o, true
 }
 
+// MergeCommit is the merge commit a merge's document (ParseDocument) names,
+// "" when none.
+func MergeCommit(raw []byte) string {
+	var doc struct {
+		MergeCommitSha string `json:"mergeCommitSha"`
+	}
+	_ = json.Unmarshal(raw, &doc)
+	return doc.MergeCommitSha
+}
+
 // Blocking is the active hold that stops a merge of repo#pr in lane: the
 // repository's, the lane's, github's or one on all merges, unless the hold
 // lets that repository or pull request through, else an upgrade running on
-// the lane's installation.
+// the lane's installation. pr 0 is the repository's promote, which a hold
+// waiting on the repository's own release lets through (AwaitsOwnRelease):
+// held, the release could never come. A tool-release window stops the other merges only
+// once its release is coming (ToolReleased): until then the installed tool is
+// the latest release and runs, and only from the release on does every new
+// run of it refuse until it is updated.
 func Blocking(st *state.State, now time.Time, repo string, pr int, lane config.Lane) (state.Hold, bool) {
 	for _, h := range st.Holds {
-		if !h.Active(now) || h.Excepts(repo, pr) {
+		if !h.Active(now) || h.Excepts(repo, pr) || h.Tool != "" && !ToolReleased(h) || pr == 0 && h.Target == repo && h.AwaitsOwnRelease() {
 			continue
 		}
 		switch h.Target {
@@ -433,9 +448,19 @@ func Queue(st *state.State, lane string) Lane {
 	if n := len(q.AllSettling); n > 0 {
 		q.Settling = q.AllSettling[n-1]
 	}
+	turn := promoteTurns(st, q.Waiting)
 	slices.SortStableFunc(q.Waiting, func(a, b state.Merge) int {
 		if a.Outside != b.Outside {
 			if a.Outside {
+				return -1
+			}
+			return 1
+		}
+		if c := turn(a).Compare(turn(b)); c != 0 {
+			return c
+		}
+		if ap, bp := isPromote(a), isPromote(b); ap != bp {
+			if ap {
 				return -1
 			}
 			return 1
@@ -448,6 +473,32 @@ func Queue(st *state.State, lane string) Lane {
 		}
 	}
 	return q
+}
+
+func isPromote(m state.Merge) bool { return m.PR == 0 }
+
+// promoteTurns gives each waiting merge the time it takes its place in the
+// lane by. While a tool-release window is open, a waiting promotion of the
+// tool's repository goes before every waiting merge of that repository: the
+// merges wait for the window, which closes only once the stable release is
+// promoted and installed, so a promotion queued behind one would wait for the
+// merge that waits for it. Any other merge keeps its join time.
+func promoteTurns(st *state.State, waiting []state.Merge) func(state.Merge) time.Time {
+	open := slices.ContainsFunc(st.Holds, func(h state.Hold) bool { return h.Tool != "" })
+	var first time.Time
+	if open {
+		for _, m := range waiting {
+			if m.Repo == ToolRepo && !isPromote(m) && (first.IsZero() || m.Joined.Before(first)) {
+				first = m.Joined
+			}
+		}
+	}
+	return func(m state.Merge) time.Time {
+		if open && m.Repo == ToolRepo && isPromote(m) && !first.IsZero() && first.Before(m.Joined) {
+			return first
+		}
+		return m.Joined
+	}
 }
 
 // failedFor is how long a failed attempt stays on its lane without a next
@@ -583,6 +634,60 @@ func SessionTurn(st *state.State, me state.Merge, most int, present func(state.M
 		return running, &earlier[0], false
 	}
 	return running, nil, true
+}
+
+// InResetWindow says whether m was queued under the GitHub budget floor for
+// a reset that came less than window ago.
+func InResetWindow(m state.Merge, now time.Time, window time.Duration) bool {
+	return !m.Reset.IsZero() && !now.Before(m.Reset) && now.Before(m.Reset.Add(window))
+}
+
+// ResetFirst are the merges that go first at the GitHub budget's reset,
+// oldest queued first: each waits in a live gate, queued under the floor
+// for a reset that came less than window ago. The waits yield to them until
+// they start or their window ends.
+func ResetFirst(st *state.State, now time.Time, window time.Duration, alive func(pid int) bool) []state.Merge {
+	var out []state.Merge
+	for _, m := range st.Merges {
+		if m.Phase == state.Waiting && InResetWindow(m, now, window) && alive(m.PID) {
+			out = append(out, m)
+		}
+	}
+	slices.SortStableFunc(out, func(a, b state.Merge) int { return a.Joined.Compare(b.Joined) })
+	return out
+}
+
+// ResetAhead are the merges of ResetFirst queued before me that are free to
+// start (their lane's next, nothing running or settling in it): each takes a
+// devctl slot before me.
+func ResetAhead(st *state.State, me state.Merge, now time.Time, window time.Duration, present func(state.Merge) bool, alive func(pid int) bool) []state.Merge {
+	var out []state.Merge
+	for _, m := range ResetFirst(st, now, window, alive) {
+		if m.Joined.Before(me.Joined) && m.Key() != me.Key() && free(st, m, present) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// ResetFirstUntil is when the last window of first ends.
+func ResetFirstUntil(first []state.Merge, window time.Duration) time.Time {
+	var until time.Time
+	for _, m := range first {
+		if end := m.Reset.Add(window); end.After(until) {
+			until = end
+		}
+	}
+	return until
+}
+
+// Keys are the merges' keys, comma-separated.
+func Keys(ms []state.Merge) string {
+	keys := make([]string, len(ms))
+	for i, m := range ms {
+		keys[i] = m.Key()
+	}
+	return strings.Join(keys, ", ")
 }
 
 // free says whether the waiting merge m is its lane's next with nothing
@@ -862,6 +967,11 @@ func reached(have, release string) bool {
 	}
 	return !h.LessThan(r)
 }
+
+// ToolReleased says the tool-release window h waits for a release that is
+// coming: its pull request merged, or it is a promotion's, which dispatches
+// one.
+func ToolReleased(h state.Hold) bool { return h.Tool != "" && (h.ToolMerged || h.ToolPR == 0) }
 
 // Installed says whether the merge tool reporting version v ends the
 // tool-release window h: a window whose merge released waits for the tool to

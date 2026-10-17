@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -278,6 +279,73 @@ func TestEnvtestRecords(t *testing.T) {
 	}
 }
 
+// A Note an older beekeeper wrote with spec.pinned reads as pinned, a
+// pinned decision and a pinned memo alike, and keeps its pin through writes
+// of other records until its record is removed.
+func TestEnvtestKeepsAnOlderBeekeepersPins(t *testing.T) {
+	a, _, c := envtestStore(t)
+	namespace(t, c, team)
+	ctx := context.Background()
+	now := metav1.Now()
+	for _, spec := range []v1alpha1.NoteSpec{
+		{ID: 1, For: "Pat", Kind: state.NoteDecision, Pinned: true, Text: "keep the nightly sweep at 02:00"},
+		{ID: 2, Kind: "memo", Pinned: true, Text: "report every merge"},
+		{ID: 3, For: "Pat", Kind: state.NoteDecision, Text: "go?"},
+	} {
+		n := &v1alpha1.Note{ObjectMeta: metav1.ObjectMeta{Namespace: teamNamespace(team), Name: "note-" + strconv.Itoa(spec.ID)}, Spec: spec}
+		if err := c.Create(ctx, n); err != nil {
+			t.Fatal(err)
+		}
+		n.Status = v1alpha1.NoteStatus{By: apiParty(ana), At: now, State: "open"}
+		if err := c.Status().Update(ctx, n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pins := func(st *state.State) (pinned []int) {
+		for _, n := range slices.Concat(st.Notes, st.Memos) {
+			if n.Pinned() {
+				pinned = append(pinned, n.ID)
+			}
+		}
+		return pinned
+	}
+	st, err := a.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := pins(st); !slices.Equal(got, []int{1, 2}) || len(st.Notes) != 1 || len(st.Memos) != 2 {
+		t.Fatalf("pinned %v, notes %+v, memos %+v", got, st.Notes, st.Memos)
+	}
+
+	// Another record's write leaves the pins on their objects.
+	if err := a.Update(func(st *state.State) ([]state.Event, error) {
+		st.Notes[0].Fired = time.Now().Truncate(time.Second)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[int]bool{1: true, 2: true, 3: false} {
+		n := &v1alpha1.Note{}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: teamNamespace(team), Name: "note-" + strconv.Itoa(id)}, n); err != nil || n.Spec.Pinned != want {
+			t.Errorf("note #%d pinned %v, want %v (%v)", id, n.Spec.Pinned, want, err)
+		}
+	}
+
+	// Closing the pins, one per update as note migrate does, deletes their
+	// objects.
+	for _, id := range []int{1, 2} {
+		if err := a.Update(func(st *state.State) ([]state.Event, error) {
+			st.Memos = slices.DeleteFunc(st.Memos, func(n state.Note) bool { return n.ID == id })
+			return nil, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if st, _ := a.Read(); len(pins(st)) != 0 || len(st.Notes) != 1 {
+		t.Errorf("after closing: notes %+v, memos %+v", st.Notes, st.Memos)
+	}
+}
+
 func TestEnvtestRefusals(t *testing.T) {
 	a, _, c := envtestStore(t)
 	environment(t, c, graveler, "glean")
@@ -299,7 +367,7 @@ func TestEnvtestRefusals(t *testing.T) {
 			st.Grants = append(st.Grants, state.Grant{Resource: "agentlab-1", To: ana, By: bo, At: time.Now()})
 		}, "not an Environment"},
 		"note without team": {func(st *state.State) {
-			st.Notes = append(st.Notes, state.Note{ID: 1, Text: "x", By: state.Party{Name: "nobody"}, At: time.Now()})
+			st.Notes = append(st.Notes, state.Note{ID: 1, Kind: state.NoteDecision, Text: "x", By: state.Party{Name: "nobody"}, At: time.Now()})
 		}, "filer's team"},
 		"queue cap": {func(st *state.State) {
 			for range v1alpha1.MaxQueue + 1 {
@@ -326,5 +394,119 @@ func TestEnvtestRefusals(t *testing.T) {
 	}
 	if _, err := a.ReadFile("snapshot.json", nil); !errors.Is(err, ErrLocal) {
 		t.Errorf("ReadFile: %v", err)
+	}
+}
+
+// A decision closed by its default stays a Note in state defaulted, read
+// back as Defaulted, until it leaves Defaulted, which deletes it.
+func TestEnvtestKeepsADefaultedDecision(t *testing.T) {
+	a, _, c := envtestStore(t)
+	namespace(t, c, team)
+	ctx := context.Background()
+	for id, text := range map[int]string{1: "merge?", 2: "ship?"} {
+		if err := a.Update(func(st *state.State) ([]state.Event, error) {
+			st.Notes = append(st.Notes, state.Note{ID: id, For: ana.Person, Kind: state.NoteDecision, Text: text, By: ana, At: time.Now().Truncate(time.Second)})
+			return nil, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := a.Update(func(st *state.State) ([]state.Event, error) {
+		i := slices.IndexFunc(st.Notes, func(n state.Note) bool { return n.ID == 1 })
+		st.Defaulted = append(st.Defaulted, st.Notes[i])
+		st.Notes = slices.Delete(st.Notes, i, i+1)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stateOf := func(id int) string {
+		n := &v1alpha1.Note{}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: teamNamespace(team), Name: "note-" + strconv.Itoa(id)}, n); err != nil {
+			return err.Error()
+		}
+		return n.Status.State
+	}
+	if s1, s2 := stateOf(1), stateOf(2); s1 != noteDefaulted || s2 != noteOpen {
+		t.Fatalf("states %q, %q", s1, s2)
+	}
+	st, err := a.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Defaulted) != 1 || st.Defaulted[0].ID != 1 || len(st.Notes) != 1 || st.Notes[0].ID != 2 || st.NextNote != 2 {
+		t.Fatalf("defaulted %+v, notes %+v, next %d", st.Defaulted, st.Notes, st.NextNote)
+	}
+	if err := a.Update(func(st *state.State) ([]state.Event, error) {
+		st.Defaulted = nil
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if s := stateOf(1); !strings.Contains(s, "not found") {
+		t.Errorf("an answered default's Note: %q", s)
+	}
+}
+
+// An update that changes several Notes writes each, every event on the
+// Note its detail names; one that changes a Note and another object stays
+// refused.
+func TestEnvtestWritesSeveralNotes(t *testing.T) {
+	a, _, c := envtestStore(t)
+	namespace(t, c, team)
+	environment(t, c, graveler)
+	ctx := context.Background()
+	for id := 1; id <= 3; id++ {
+		if err := a.Update(func(st *state.State) ([]state.Event, error) {
+			st.Notes = append(st.Notes, state.Note{ID: id, For: ana.Person, Kind: state.NoteDecision, Text: "merge?", By: ana, At: time.Now().Truncate(time.Second)})
+			return nil, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := a.Update(func(st *state.State) ([]state.Event, error) {
+		st.Defaulted, st.Notes = st.Notes[:1], st.Notes[1:]
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// the expired default dropped, the two open decisions closed by theirs
+	if err := a.Update(func(st *state.State) ([]state.Event, error) {
+		st.Defaulted, st.Notes = st.Notes, nil
+		return []state.Event{
+			{By: bo, Verb: "note.defaulted", Detail: "#2 defaulted"},
+			{By: bo, Verb: "note.defaulted", Detail: "#3 defaulted"},
+		}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := a.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Notes) != 0 || len(st.Defaulted) != 2 || st.Defaulted[0].ID != 2 || st.Defaulted[1].ID != 3 {
+		t.Fatalf("notes %+v, defaulted %+v", st.Notes, st.Defaulted)
+	}
+	events := &corev1.EventList{}
+	if err := c.List(ctx, events, client.InNamespace(teamNamespace(team))); err != nil {
+		t.Fatal(err)
+	}
+	on := map[string]string{}
+	for _, ev := range events.Items {
+		on[ev.Message] = ev.InvolvedObject.Name
+	}
+	if on["#2 defaulted"] != "note-2" || on["#3 defaulted"] != "note-3" {
+		t.Fatalf("events on %v", on)
+	}
+
+	err = a.Update(func(st *state.State) ([]state.Event, error) {
+		st.Defaulted = nil
+		st.Grants = append(st.Grants, state.Grant{Resource: graveler, To: ana, By: bo, At: time.Now()})
+		return nil, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "one object per update, or several Notes") {
+		t.Fatalf("a Note and an Environment: %v", err)
+	}
+	if st, _ := a.Read(); len(st.Defaulted) != 2 || len(st.Grants) != 0 {
+		t.Fatalf("a refused update wrote: defaulted %+v, grants %+v", st.Defaulted, st.Grants)
 	}
 }

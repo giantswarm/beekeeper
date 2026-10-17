@@ -56,7 +56,7 @@ func TestGuideWatchReportsARefusedSave(t *testing.T) {
 	}
 	owner := state.Party{Session: "sO", Name: agentC.Name}
 	if err := newer.Update(func(st *state.State) ([]state.Event, error) {
-		st.Notes = []state.Note{{ID: 1, For: personTimo, Text: uiNoteText, By: owner}}
+		st.Notes = []state.Note{{ID: 1, Kind: noteDecision, For: personTimo, Text: uiNoteText, By: owner}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -87,7 +87,7 @@ func TestGuideWatchReportsARefusedSave(t *testing.T) {
 	}
 
 	if err := newer.Update(func(st *state.State) ([]state.Event, error) {
-		st.Notes = append(st.Notes, state.Note{ID: 2, For: personTimo, Text: "pick a name", By: owner})
+		st.Notes = append(st.Notes, state.Note{ID: 2, Kind: noteDecision, For: personTimo, Text: "pick a name", By: owner})
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)

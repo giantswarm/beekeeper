@@ -87,7 +87,7 @@ func (a *app) startOmpAgent(ctx context.Context, sp agentStart) error {
 	var reg registration
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		var err error
-		reg, err = recordStart(st, s, sp.task, func(p state.Party) bool { _, ok := claude.Live(sessions, p); return ok })
+		reg, err = recordStart(st, s, sp.task, sp.serves, func(p state.Party) bool { _, ok := claude.Live(sessions, p); return ok })
 		if err != nil {
 			return nil, err
 		}

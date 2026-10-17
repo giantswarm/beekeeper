@@ -351,28 +351,5 @@ func (g *Go) Text(by, status string) string {
 // RecordGo posts the go's comment on its private thread, acting on the
 // thread's repository, and returns the comment's URL.
 func (c *Client) RecordGo(ctx context.Context, g *Go, body string) (string, error) {
-	owner, repo, _, err := Ref(g.Thread)
-	if err != nil {
-		return "", err
-	}
-	var r struct {
-		Add *struct {
-			Edge struct {
-				Node struct {
-					URL string `json:"url"`
-				} `json:"node"`
-			} `json:"commentEdge"`
-		} `json:"addComment"`
-	}
-	err = c.graphql(github.ActingOn(ctx, owner+"/"+repo), &r, `mutation($s:ID!,$b:String!){addComment(input:{subjectId:$s,body:$b}){commentEdge{node{url}}}}`,
-		vars{"s": g.threadID, "b": body})
-	p, ok := partialOf(err)
-	if !ok {
-		return "", err
-	}
-	// The URL is all the answer is read for: with it the comment is posted.
-	if r.Add == nil || r.Add.Edge.Node.URL == "" {
-		return "", fmt.Errorf("recording the go on %s%s", g.Thread, p.reason())
-	}
-	return r.Add.Edge.Node.URL, nil
+	return c.comment(ctx, g.Thread, g.threadID, body)
 }

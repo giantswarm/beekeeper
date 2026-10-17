@@ -77,7 +77,7 @@ func Uninstall(ctx context.Context, e Env, purge bool) error {
 	p := &plan{home: e.Spec.Home}
 	if e.Setup.Available() {
 		for _, svc := range m.Services {
-			if e.Setup.Started(ctx, svc) {
+			if !symlink(svc) && e.Setup.Started(ctx, svc) {
 				p.command(ctx, e, e.Setup.Stop(svc))
 			}
 		}
@@ -89,6 +89,8 @@ func Uninstall(ctx context.Context, e Env, purge bool) error {
 		case errors.Is(err, fs.ErrNotExist):
 		case err != nil:
 			p.add("keep", path, err.Error(), nil)
+		case symlink(path):
+			p.add("keep", path, "a symlink to "+resolve(path)+", the person's", nil)
 		case !m.owns(path, cur):
 			p.add("keep", path, "changed since beekeeper install wrote it", nil)
 		default:
@@ -170,8 +172,18 @@ const (
 
 // planFile writes f where it is missing or install's own: written by an
 // earlier install, or a unit that runs this binary (a copy of the shipped
-// one, an install that predates the manifest).
+// one, an install that predates the manifest). A path that is a symlink
+// (into the person's dotfiles) is theirs: install never writes through it,
+// and drops it from the manifest so uninstall neither removes nor disables
+// it (systemd removes a linked unit on disable).
 func (e Env) planFile(p *plan, m *Manifest, f platform.File) fileState {
+	if symlink(f.Path) {
+		delete(m.Files, f.Path)
+		m.Services = slices.DeleteFunc(m.Services, func(s string) bool { return s == f.Path })
+		p.add("keep", f.Path, "a symlink to "+resolve(f.Path)+": install never writes through a link; "+
+			"replace the link with a regular file for install to manage it, or edit the target yourself", nil)
+		return fileKept
+	}
 	cur, err := os.ReadFile(filepath.Clean(f.Path))
 	state := fileNew
 	switch {
@@ -191,15 +203,11 @@ func (e Env) planFile(p *plan, m *Manifest, f platform.File) fileState {
 		p.add("keep", f.Path, err.Error(), nil)
 		return fileKept
 	default:
-		m.addDirs(filepath.Dir(resolve(f.Path)))
+		m.addDirs(filepath.Dir(f.Path))
 		p.add("write", f.Path, "", nil)
 	}
 	m.Files[f.Path] = sum(f.Content)
-	last := &p.steps[len(p.steps)-1]
-	if target := resolve(f.Path); target != f.Path {
-		last.why = strings.TrimPrefix(last.why+"; through the link to "+target, "; ")
-	}
-	last.do = func() error { return writeFile(f.Path, f.Content) }
+	p.steps[len(p.steps)-1].do = func() error { return writeFile(f.Path, f.Content) }
 	return state
 }
 
@@ -406,6 +414,12 @@ func empty(dir string, gone map[string]bool) bool {
 func exists(path string) bool {
 	_, err := os.Lstat(path)
 	return err == nil
+}
+
+// symlink reports whether path is a symlink, a dangling one included.
+func symlink(path string) bool {
+	fi, err := os.Lstat(path)
+	return err == nil && fi.Mode()&fs.ModeSymlink != 0
 }
 
 // resolve is the file a write to path lands in: path, or the end of the

@@ -88,27 +88,27 @@ func TestPermissionClick(t *testing.T) {
 		decision string
 		reason   string
 	}{
-		"selects the level":            {Page{permissionsPage, permissionsTitle}, selectsReadOnly, changeRecorded, Allow, "the permissions page of the person's own App " + deviceApp + ", declared in " + deviceDeclared + ", on record for the change " + deviceChange},
-		"opens the row":                {Page{permissionsPage, permissionsTitle}, opensMembers, changeRecorded, Allow, deviceApp},
-		"a form value":                 {Page{permissionsPage, permissionsTitle}, "Sets Members to Read-only read", changeRecorded, Allow, deviceApp},
-		"the level spelt otherwise":    {Page{permissionsPage, permissionsTitle}, "Members: read only", changeRecorded, Allow, deviceApp},
-		"saves":                        {Page{permissionsPage, permissionsTitle}, savesChangesWord, changeRecorded, Allow, deviceApp},
-		"another level":                {Page{permissionsPage, permissionsTitle}, "Selects Read and write for Members access", changeRecorded, Deny, `the call "Selects Read and write for Members access" is ` + notTheChange + " on record (" + deviceChange + ") nor Save changes"},
-		"no access":                    {Page{permissionsPage, permissionsTitle}, "Selects No access for Members", changeRecorded, Deny, notTheChange},
-		"another permission":           {Page{permissionsPage, permissionsTitle}, "Selects Read-only for Administration", changeRecorded, Deny, notTheChange},
-		"a key":                        {Page{permissionsPage, permissionsTitle}, "Enter", changeRecorded, Deny, notTheChange},
-		"nothing said":                 {Page{permissionsPage, permissionsTitle}, "", changeRecorded, Deny, notTheChange},
-		"the sudo prompt there":        {Page{permissionsPage, sudoTitle}, "Clicks Confirm", changeRecorded, Deny, notTheChange},
-		"another App's page":           {Page{otherAppsPage, "GitHub Apps - other-app"}, selectsReadOnly, changeRecorded, Deny, "the permissions page of the App other-app of " + deviceOrg + " is not on record"},
-		"a consent record only":        {Page{permissionsPage, permissionsTitle}, selectsReadOnly, recorded, Deny, PermissionForm},
-		"review request, titled":       {Page{installPage, "Installed GitHub Apps - " + deviceApp}, "Clicks Review request", changeRecorded, Allow, "the installation of the person's own App " + deviceApp},
-		"review request, named":        {Page{installPage, "Organization settings"}, reviewRequest, changeRecorded, Allow, deviceApp},
-		"accept new permissions":       {Page{acceptPage, permissionsTitle}, acceptsNew, changeRecorded, Allow, deviceApp},
-		"accept, App not named":        {Page{acceptPage, "Organization settings"}, acceptsNew, changeRecorded, "", ""},
-		"accept, another organisation": {Page{strings.Replace(acceptPage, deviceOrg, "other", 1), permissionsTitle}, acceptsNew, changeRecorded, "", ""},
-		"another click there":          {Page{installPage, "Installed GitHub Apps - " + deviceApp}, "Clicks Uninstall", changeRecorded, "", ""},
-		"the installations list":       {Page{"https://github.com/organizations/" + deviceOrg + "/settings/installations", "Installed GitHub Apps"}, "Clicks Configure for " + deviceApp, changeRecorded, "", ""},
-		"another GitHub page":          {Page{applicationsPage, applicationsTitle}, selectsReadOnly, changeRecorded, "", ""},
+		"selects the level":            {Page{URL: permissionsPage, Title: permissionsTitle}, selectsReadOnly, changeRecorded, Allow, "the permissions page of the person's own App " + deviceApp + ", declared in " + deviceDeclared + ", on record for the change " + deviceChange},
+		"opens the row":                {Page{URL: permissionsPage, Title: permissionsTitle}, opensMembers, changeRecorded, Allow, deviceApp},
+		"a form value":                 {Page{URL: permissionsPage, Title: permissionsTitle}, "Sets Members to Read-only read", changeRecorded, Allow, deviceApp},
+		"the level spelt otherwise":    {Page{URL: permissionsPage, Title: permissionsTitle}, "Members: read only", changeRecorded, Allow, deviceApp},
+		"saves":                        {Page{URL: permissionsPage, Title: permissionsTitle}, savesChangesWord, changeRecorded, Allow, deviceApp},
+		"another level":                {Page{URL: permissionsPage, Title: permissionsTitle}, "Selects Read and write for Members access", changeRecorded, Deny, `the call "Selects Read and write for Members access" is ` + notTheChange + " on record (" + deviceChange + ") nor Save changes"},
+		"no access":                    {Page{URL: permissionsPage, Title: permissionsTitle}, "Selects No access for Members", changeRecorded, Deny, notTheChange},
+		"another permission":           {Page{URL: permissionsPage, Title: permissionsTitle}, "Selects Read-only for Administration", changeRecorded, Deny, notTheChange},
+		"a key":                        {Page{URL: permissionsPage, Title: permissionsTitle}, "Enter", changeRecorded, Deny, notTheChange},
+		"nothing said":                 {Page{URL: permissionsPage, Title: permissionsTitle}, "", changeRecorded, Deny, notTheChange},
+		"the sudo prompt there":        {Page{URL: permissionsPage, Title: sudoTitle}, "Clicks Confirm", changeRecorded, Deny, notTheChange},
+		"another App's page":           {Page{URL: otherAppsPage, Title: "GitHub Apps - other-app"}, selectsReadOnly, changeRecorded, Deny, "the permissions page of the App other-app of " + deviceOrg + " is not on record"},
+		"a consent record only":        {Page{URL: permissionsPage, Title: permissionsTitle}, selectsReadOnly, recorded, Deny, PermissionForm},
+		"review request, titled":       {Page{URL: installPage, Title: "Installed GitHub Apps - " + deviceApp}, "Clicks Review request", changeRecorded, Allow, "the installation of the person's own App " + deviceApp},
+		"review request, named":        {Page{URL: installPage, Title: "Organization settings"}, reviewRequest, changeRecorded, Allow, deviceApp},
+		"accept new permissions":       {Page{URL: acceptPage, Title: permissionsTitle}, acceptsNew, changeRecorded, Allow, deviceApp},
+		"accept, App not named":        {Page{URL: acceptPage, Title: "Organization settings"}, acceptsNew, changeRecorded, "", ""},
+		"accept, another organisation": {Page{URL: strings.Replace(acceptPage, deviceOrg, "other", 1), Title: permissionsTitle}, acceptsNew, changeRecorded, "", ""},
+		"another click there":          {Page{URL: installPage, Title: "Installed GitHub Apps - " + deviceApp}, "Clicks Uninstall", changeRecorded, "", ""},
+		"the installations list":       {Page{URL: "https://github.com/organizations/" + deviceOrg + "/settings/installations", Title: "Installed GitHub Apps"}, "Clicks Configure for " + deviceApp, changeRecorded, "", ""},
+		"another GitHub page":          {Page{URL: applicationsPage, Title: applicationsTitle}, selectsReadOnly, changeRecorded, "", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := Click(tc.apps, tc.page, tc.words)
@@ -127,8 +127,8 @@ func TestPermissionClick(t *testing.T) {
 // a call the hook cannot decide is left to the classifier.
 func TestPermissionDecision(t *testing.T) {
 	apps := func() []App { return changeRecorded }
-	own := transcriptWith(t, Page{permissionsPage, permissionsTitle}, false)
-	install := transcriptWith(t, Page{installPage, "Installed GitHub Apps - " + deviceApp}, true)
+	own := transcriptWith(t, Page{URL: permissionsPage, Title: permissionsTitle}, false)
+	install := transcriptWith(t, Page{URL: installPage, Title: "Installed GitHub Apps - " + deviceApp}, true)
 	navigate := func(u string) map[string]any { return map[string]any{urlKey: u} }
 	selects := tabInput(leftClick, map[string]any{refKey: refTwelve, summaryKey: selectsReadOnly})
 	writes := tabInput(leftClick, map[string]any{refKey: refTwelve, summaryKey: "Selects Read and write for Members access"})
@@ -161,11 +161,11 @@ func TestPermissionDecision(t *testing.T) {
 		"review request on the install":   {browserTools + chromeComputer, tabInput(leftClick, map[string]any{summaryKey: "Clicks Review request"}), install, decisionAllow, "the installation of the person's own App " + deviceApp},
 		"another click on the install":    {browserTools + chromeComputer, tabInput(leftClick, map[string]any{summaryKey: "Clicks Uninstall"}), install, "", ""},
 		"a click on a page not shown":     {browserTools + chromeComputer, selects, "", "", ""},
-		"a consent click, record unmoved": {browserTools + chromeComputer, tabInput(leftClick, map[string]any{summaryKey: clicksAuthorize}), transcriptWith(t, Page{redactedPage, ownTitle}, false), decisionDeny, AllowForm},
+		"a consent click, record unmoved": {browserTools + chromeComputer, tabInput(leftClick, map[string]any{summaryKey: clicksAuthorize}), transcriptWith(t, Page{URL: redactedPage, Title: ownTitle}, false), decisionDeny, AllowForm},
 	} {
 		t.Run(name, func(t *testing.T) {
 			ev := toolEvent(tc.tool, tc.input)
-			ev["permission_mode"] = "dontAsk"
+			ev["permission_mode"] = dontAsk
 			ev[sessionKey] = browseTurn
 			ev["transcript_path"] = tc.transcript
 			d := decideEvent(t, Hook{Apps: apps}, ev)

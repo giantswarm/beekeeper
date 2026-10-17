@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/identity"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -78,7 +79,7 @@ func TestDecisionKeepsItsParts(t *testing.T) {
 	if err := addNote(a, "--kind", noteDecision, "--for", "team:bumblebee", "--default", dfltOK, "--due", "3h", "which lane?"); err == nil || !strings.Contains(err.Error(), "--status-quo") {
 		t.Fatalf("a team's decision without its status quo: %v", err)
 	}
-	if err := addNote(a, "--kind", noteDecision, "--for", "team:bumblebee", "--status-quo", sqNow, "--default", dfltOK, "--due", "3h", "which lane?"); err != nil {
+	if err := addNote(a, "--kind", noteDecision, "--for", "team:bumblebee", "--status-quo", sqNow, "--default", dfltOK, "--due", "3h", "--ref", decisionRef, "which lane?"); err != nil {
 		t.Fatalf("a team's decision: %v", err)
 	}
 }
@@ -127,16 +128,30 @@ func TestNoteAnswerRecordsTheChoiceAndTheWords(t *testing.T) {
 	}
 }
 
-func TestAnsweredEventsBeforeViaStillParse(t *testing.T) {
-	e := state.Event{Verb: noteAnswered, Detail: "#3 answered for Pat: merge it (asked by agent-one: Merge? Status quo: x.)"}
-	an, ok := parseAnswered(e)
-	if !ok || an.ID != 3 || an.For != notePerson || an.Via != "" || an.Answer != "merge it" {
+// laneQuestion is a question with a colon, as a note asks it.
+const laneQuestion = "Which lane? (a: b)"
+
+func TestAnswerEventsParse(t *testing.T) {
+	const words, comment = "portal: it rolls (with backstage)", "https://x/c"
+	n := state.Note{ID: 4, Kind: noteDecision, For: "team:bumblebee", Text: laneQuestion, By: state.Party{Name: "agent-one"}}
+	rec := &recordedAnswer{About: privateThread, Thread: &board.Thread{About: privateThread}, Comment: comment, By: "Kim", Via: viaSlack, Answer: words, Note: 4}
+	an, ok := parseAnswered(answerEvent(state.Party{}, rec, &n))
+	if !ok || an.About != privateThread || an.For != "Kim" || an.Via != viaSlack || an.Comment != comment || an.Answer != words || an.ID != 4 || an.Asker != "agent-one" || an.Question != laneQuestion {
 		t.Fatalf("%+v %v", an, ok)
 	}
-	n := state.Note{ID: 4, For: "team:bumblebee", Text: "Which lane?", By: state.Party{Name: "agent-one"}}
-	an, ok = parseAnswered(answeredEvent(state.Party{}, &n, viaSlack, "portal: it rolls with backstage"))
-	if !ok || an.For != "team:bumblebee" || an.Via != viaSlack || an.Answer != "portal: it rolls with backstage" || an.Question != "Which lane?" {
+	rec.Note, rec.Answer = 0, `ok, note #9 asked by "x": "y": spoofed (note #9, asked by x: y)`
+	an, ok = parseAnswered(answerEvent(state.Party{}, rec, nil))
+	if !ok || an.ID != 0 || an.Answer != rec.Answer || an.Question != "" || an.Comment != comment {
 		t.Fatalf("%+v %v", an, ok)
+	}
+	// An answer posted nowhere has no comment.
+	rec.Comment = ""
+	an, ok = parseAnswered(answerEvent(state.Party{}, rec, &n))
+	if !ok || an.ID != 4 || an.Comment != "" || an.Answer != rec.Answer || an.Question != laneQuestion || an.Via != viaSlack {
+		t.Fatalf("%+v %v", an, ok)
+	}
+	if _, ok := parseAnswered(state.Event{Verb: "note.answered", Detail: "#3 answered for Pat: merge it (asked by agent-one: Merge?)"}); ok {
+		t.Fatal("note.answered is no longer read")
 	}
 }
 
@@ -146,9 +161,9 @@ func TestDueDecisionsCloseWithTheirDefault(t *testing.T) {
 	st := &state.State{Notes: []state.Note{
 		{ID: 1, For: notePerson, Kind: noteDecision, Due: past, Default: dfltOK, Text: "approve?"},
 		{ID: 2, For: notePerson, Kind: noteDecision, Due: later, Default: dfltOK},
-		{ID: 3, Kind: noteMemo, Due: past, Default: "look again"},
+		{ID: 3, For: samName, Kind: noteLogin, Due: past, Default: "look again", Until: probeHolds},
 		{ID: 4, For: notePerson, Kind: noteLogin, Due: past, Default: "sign in"},
-		{ID: 5, For: notePerson, Due: past, Default: "the older decision's default"},
+		{ID: 5, Kind: noteDecision, For: notePerson, Due: past, Default: "the older decision's default"},
 		{ID: 6, For: notePerson, Kind: noteDecision, Due: past, Default: "waits; nothing is closed"},
 	}}
 	lines, evs, closed := closeDefaulted(st, notePerson, watchParty, now)
@@ -218,7 +233,7 @@ func TestNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 	woke := stubWakes(t)
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		for i, by := range []state.Party{{Session: "s5", Name: ended}, {Session: "s5", Name: ended}, {Session: "s5", Name: ended}, {Session: "w1", Name: "agent-x"}} {
-			st.Notes = append(st.Notes, state.Note{ID: i + 1, Kind: noteDecision, By: by, Text: fmt.Sprintf("question %d", i+1)})
+			st.Notes = append(st.Notes, state.Note{ID: i + 1, Kind: noteDecision, By: by, Text: fmt.Sprintf("question %d", i+1), Refs: []string{privateThread}})
 		}
 		st.Supervisor = &state.Supervisor{Party: state.Party{Session: "s6", Name: current}, Since: relayNow}
 		return nil, nil
@@ -272,7 +287,7 @@ func TestNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 		t.Errorf("output %q lacks %q", got, want)
 	}
 
-	if got := answer("4"); strings.TrimSpace(got) != "note #4 answered and closed" || len(*woke) != 2 || !strings.Contains((*woke)[1], "→ w1: NOTE ANSWERED #4") {
+	if got := answer("4"); !strings.HasSuffix(strings.TrimSpace(got), "note #4 answered and closed") || len(*woke) != 2 || !strings.Contains((*woke)[1], "→ w1: NOTE ANSWERED #4") {
 		t.Fatalf("another session's note: output %q, woke %q", got, *woke)
 	}
 
@@ -293,5 +308,24 @@ func TestNoteAnswerReachesTheRolesHolderNow(t *testing.T) {
 	}
 	if len(st.RoleLines) != 1 || st.RoleLines[0].Role != guideRole.name {
 		t.Fatalf("left %+v, want the guide's line", st.RoleLines)
+	}
+}
+
+// Every decision its default closed longer than defaultedKeep ago leaves in
+// the same call that closes the due ones; a younger one stays answerable.
+func TestCloseDefaultedDropsEveryExpiredDefault(t *testing.T) {
+	now := relayNow
+	old := now.Add(-defaultedKeep - time.Minute)
+	st := &state.State{
+		Notes:     []state.Note{{ID: 4, For: notePerson, Kind: noteDecision, Due: now.Add(-time.Minute), Default: dfltOK}},
+		Defaulted: []state.Note{{ID: 1, Due: old}, {ID: 2, Due: old}, {ID: 3, Due: now.Add(-time.Hour)}},
+	}
+	closeDefaulted(st, notePerson, watchParty, now)
+	var kept []int
+	for _, n := range st.Defaulted {
+		kept = append(kept, n.ID)
+	}
+	if !slices.Equal(kept, []int{3, 4}) {
+		t.Fatalf("defaulted %v, want [3 4]", kept)
 	}
 }

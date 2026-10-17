@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -24,6 +25,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/gofrs/flock"
 
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
@@ -290,6 +292,18 @@ func (h Hold) Excepts(repo string, pr int) bool {
 	return h.Except != "" && (strings.EqualFold(h.Except, repo) || strings.EqualFold(h.Except, fmt.Sprintf("%s#%d", repo, pr)))
 }
 
+// AwaitsOwnRelease reports whether the hold is a repository's whose lift
+// probe waits on that repository's release or tag: only the repository's
+// own promote cuts it, so the hold lets that promote through.
+func (h Hold) AwaitsOwnRelease() bool {
+	probe := strings.ToLower(h.LiftWhen)
+	if !strings.Contains(h.Target, "/") || !strings.Contains(probe, strings.ToLower(h.Target)) {
+		return false
+	}
+	words := strings.FieldsFunc(probe, func(r rune) bool { return r < 'a' || r > 'z' })
+	return slices.ContainsFunc(words, func(w string) bool { return slices.Contains([]string{"release", "releases", "tag", "tags"}, w) })
+}
+
 // Keep is a roster entry's keep marker: who set it, when, why, and until
 // when (zero: until lifted).
 type Keep struct {
@@ -385,6 +399,12 @@ type ImportWait struct {
 // leaves its record behind, past its bound.
 func (w *ImportWait) Pending(now time.Time) bool { return w != nil && now.Before(w.Until) }
 
+// The kinds of a note.
+const (
+	NoteDecision = "decision"
+	NoteLogin    = "login"
+)
+
 // Note is an open item: a question for a person, a deadline.
 type Note struct {
 	ID   int       `json:"id"`
@@ -397,14 +417,11 @@ type Note struct {
 	At      time.Time `json:"at"`
 	// Fired is when a watch reported the note due; it reports it once.
 	Fired time.Time `json:"fired,omitzero"`
-	// Kind is "decision" for a note that waits on a person, "memo" for a
-	// session's own record, "login" for a sign-in the watch closes once
-	// Until, a shell command, exits 0; a note filed before kinds has none.
+	// Kind is NoteDecision for a question that waits on a person or
+	// NoteLogin for a sign-in the watch closes once Until, a shell command,
+	// exits 0.
 	Kind  string `json:"kind,omitempty"`
 	Until string `json:"until,omitempty"`
-	// Pinned is a standing instruction: every hand-over carries it until it
-	// is unpinned or done.
-	Pinned bool `json:"pinned,omitempty"`
 	// Refs are the issues and pull requests (owner/repo#n) the note asks
 	// about: once every one is closed or merged, the watch closes the note
 	// as overtaken, unless a closing keyword closed one and the note's
@@ -430,6 +447,32 @@ type Note struct {
 	Posted string `json:"posted,omitempty"`
 
 	rest rest
+}
+
+// Memo reports whether n is a record of a kind beekeeper no longer files:
+// a memo, a note filed before kinds, or a pinned note. A state document
+// reads it as closed: it moves from Notes to Memos, which only
+// `note migrate` reads.
+func (n *Note) Memo() bool {
+	return n.Kind != NoteDecision && n.Kind != NoteLogin || n.Pinned()
+}
+
+// Pinned reports whether n was pinned, a standing instruction of an older
+// beekeeper.
+func (n *Note) Pinned() bool { return string(n.rest["pinned"]) == "true" }
+
+// SetPinned records whether an older beekeeper pinned n, for a store that
+// keeps the flag outside the state document; beekeeper files no new pin.
+func (n *Note) SetPinned(pinned bool) {
+	n.rest = maps.Clone(n.rest)
+	if !pinned {
+		delete(n.rest, "pinned")
+		return
+	}
+	if n.rest == nil {
+		n.rest = rest{}
+	}
+	n.rest["pinned"] = json.RawMessage("true")
 }
 
 // Option is a decision's option i (1-based) split into its label and its
@@ -593,6 +636,13 @@ type App struct {
 	// Delete says the person asked for the App's deletion: the hook answers
 	// its Advanced page's Delete GitHub App and the confirmation.
 	Delete bool `json:"delete,omitempty"`
+	// Google says the App is a Google OAuth client of the person's: the
+	// hook answers its consent on Google's sign-in, by the callback hosts
+	// the person named.
+	Google bool `json:"google,omitempty"`
+	// Account is the Google account a Google OAuth client's sign-in
+	// chooses: the hook answers no other account on Google's chooser.
+	Account string `json:"account,omitempty"`
 	// Declared is where the organisation declares the App:
 	// <repo>@<commit>:<manifest path>, or the local manifest of a deletion.
 	Declared string `json:"declared"`
@@ -803,13 +853,19 @@ type State struct {
 	Grants []Grant `json:"grants,omitempty"`
 	// Released is when each resource was last released; a grant's TTL runs
 	// from the later of it and the grant.
-	Released  map[string]time.Time `json:"released,omitempty"`
-	Holds     []Hold               `json:"holds,omitempty"`
-	Agents    []Agent              `json:"agents,omitempty"`
-	Notes     []Note               `json:"notes,omitempty"`
-	NextNote  int                  `json:"nextNote,omitempty"`
-	Timers    []Timer              `json:"timers,omitempty"`
-	NextTimer int                  `json:"nextTimer,omitempty"`
+	Released map[string]time.Time `json:"released,omitempty"`
+	Holds    []Hold               `json:"holds,omitempty"`
+	Agents   []Agent              `json:"agents,omitempty"`
+	Notes    []Note               `json:"notes,omitempty"`
+	// Memos are the memos and pinned notes an older beekeeper filed, closed
+	// for every reader but `note migrate`, which lists and removes them.
+	Memos []Note `json:"memos,omitempty"`
+	// Defaulted are the decisions closed by their default within the last
+	// day: an answer that arrives meanwhile replaces the default.
+	Defaulted []Note  `json:"defaulted,omitempty"`
+	NextNote  int     `json:"nextNote,omitempty"`
+	Timers    []Timer `json:"timers,omitempty"`
+	NextTimer int     `json:"nextTimer,omitempty"`
 	// Records say which session serves which issue.
 	Records []Record `json:"records,omitempty"`
 	// Starts are the sessions beekeeper started, what the permission hook
@@ -1040,6 +1096,10 @@ type Merge struct {
 	// Roll names the HelmReleases (namespace/name) that must reach Release
 	// before the lane frees.
 	Roll []string `json:"roll,omitempty"`
+	// Reset is the GitHub budget reset a merge queued under the floor waits
+	// for: for merge.resetFirst from then it goes before the waits, and the
+	// older such merges before it. Its start clears it.
+	Reset time.Time `json:"reset,omitzero"`
 
 	rest rest
 }
@@ -1125,11 +1185,21 @@ type Store interface {
 	// Update runs fn on the state and saves the result together with the
 	// events fn returns; when fn fails nothing is saved.
 	Update(fn func(*State) ([]Event, error)) error
+	// UpdateWithin is Update for a caller that must not wait long, a
+	// session's start for one: a lock busy past wait fails it.
+	UpdateWithin(wait time.Duration, fn func(*State) ([]Event, error)) error
+	// Exclusive runs fn while no other process holds the state, writing
+	// nothing.
+	Exclusive(fn func() error) error
 	// Log appends events that change no state, giving up on a busy lock.
 	Log(events ...Event) error
 	// Record appends events that change no state and must not be lost,
 	// waiting for the lock as an update does.
 	Record(events ...Event) error
+	// RecordWithin is Record for a caller that must not wait long, an
+	// agent's hand-over note for one: a lock busy past wait fails it with
+	// a LockBusyError, the events not appended.
+	RecordWithin(wait time.Duration, events ...Event) error
 	// Events returns the last n events keep accepts, oldest first.
 	Events(n int, keep func(Event) bool) ([]Event, error)
 	// Follow returns every event keep accepts, oldest first, as Events(0,
@@ -1185,12 +1255,84 @@ func (s *FileStore) path(name string) string { return filepath.Join(s.dir, name)
 
 // Read returns the current state under a shared lock.
 func (s *FileStore) Read() (*State, error) {
-	l := flock.New(s.path("state.lock"))
-	if err := l.RLock(); err != nil {
+	unlock, err := s.lock(true, lockWait)
+	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = l.Unlock() }()
+	defer unlock()
 	return s.load()
+}
+
+// lockWait bounds every wait for the state lock but Log's: a holder that
+// stops (a frozen or stopped process) fails the commands behind it with its
+// PID and age (LockBusyError) instead of starving them.
+const lockWait = 2 * time.Minute
+
+// LockBusyError is a wait for the state lock that ended before its holder
+// released it: who holds it, since when, as the holder recorded it; PID 0
+// is a holder without a record (a reader, or an older beekeeper).
+type LockBusyError struct {
+	PID     int
+	Command string
+	Since   time.Time
+	Waited  time.Duration
+}
+
+func (e *LockBusyError) Error() string {
+	if e.PID == 0 {
+		return fmt.Sprintf("the state lock is busy: still held after %s by a process without a holder record (a reader, or a beekeeper before the record)", e.Waited.Round(time.Millisecond))
+	}
+	return fmt.Sprintf("the state lock is busy: held by pid %d (%s) for %s, waited %s; a stopped or frozen holder releases it when it resumes or ends",
+		e.PID, e.Command, time.Since(e.Since).Round(time.Second), e.Waited.Round(time.Millisecond))
+}
+
+// lockHolder is the exclusive holder's record beside the lock, removed
+// before the lock is released.
+type lockHolder struct {
+	PID     int       `json:"pid"`
+	Command string    `json:"command"`
+	At      time.Time `json:"at"`
+}
+
+// lock takes the state lock, shared or exclusive, waiting at most wait;
+// an exclusive holder records itself for the waiters' LockBusyError.
+func (s *FileStore) lock(shared bool, wait time.Duration) (unlock func(), err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	defer cancel()
+	l := flock.New(s.path("state.lock"))
+	take := l.TryLockContext
+	if shared {
+		take = l.TryRLockContext
+	}
+	ok, err := take(ctx, 10*time.Millisecond)
+	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		return nil, err
+	}
+	if !ok {
+		return nil, s.busy(wait)
+	}
+	if shared {
+		return func() { _ = l.Unlock() }, nil
+	}
+	holder := s.path(holderFile)
+	_ = writeJSON(holder, lockHolder{PID: os.Getpid(), Command: command(os.Args), At: time.Now()})
+	return func() {
+		_ = os.Remove(holder)
+		_ = l.Unlock()
+	}, nil
+}
+
+const holderFile = "state.lock.holder"
+
+// busy is the LockBusyError of a wait that ended after waited: a record
+// of a process that ended is a holder without one.
+func (s *FileStore) busy(waited time.Duration) error {
+	e := &LockBusyError{Waited: waited}
+	var h lockHolder
+	if raw, err := os.ReadFile(s.path(holderFile)); err == nil && json.Unmarshal(raw, &h) == nil && proc.Alive(h.PID) {
+		e.PID, e.Command, e.Since = h.PID, h.Command, h.At
+	}
+	return e
 }
 
 // Peek returns the current state without taking the lock, for a caller
@@ -1202,11 +1344,16 @@ func (s *FileStore) Peek() (*State, error) { return s.load() }
 // back atomically together with the events fn returns. When fn fails nothing
 // is written, nor when a newer release wrote the state (StaleWriterError).
 func (s *FileStore) Update(fn func(*State) ([]Event, error)) error {
-	l := flock.New(s.path("state.lock"))
-	if err := l.Lock(); err != nil {
+	return s.UpdateWithin(lockWait, fn)
+}
+
+// UpdateWithin is Update waiting at most wait for the lock.
+func (s *FileStore) UpdateWithin(wait time.Duration, fn func(*State) ([]Event, error)) error {
+	unlock, err := s.lock(false, wait)
+	if err != nil {
 		return err
 	}
-	defer func() { _ = l.Unlock() }()
+	defer unlock()
 	st, err := s.load()
 	if err != nil {
 		return err
@@ -1228,17 +1375,11 @@ func (s *FileStore) Update(fn func(*State) ([]Event, error)) error {
 // the state lock. It waits at most logWait for the lock, so that a caller on
 // every build's path never queues behind a slow update.
 func (s *FileStore) Log(events ...Event) error {
-	ctx, cancel := context.WithTimeout(context.Background(), logWait)
-	defer cancel()
-	l := flock.New(s.path("state.lock"))
-	ok, err := l.TryLockContext(ctx, 10*time.Millisecond)
+	unlock, err := s.lock(false, logWait)
 	if err != nil {
 		return err
 	}
-	if !ok {
-		return errors.New("the state lock is busy")
-	}
-	defer func() { _ = l.Unlock() }()
+	defer unlock()
 	return s.append(events)
 }
 
@@ -1246,14 +1387,32 @@ const logWait = time.Second
 
 // Record appends events that change no state and must not be lost, a secret
 // call's audit entry for one, under the state lock, waiting for it as an
-// update does: a busy lock delays the entry, never drops it.
+// update does: a busy lock delays the entry, and a lock busy past lockWait
+// fails the call instead of dropping it.
 func (s *FileStore) Record(events ...Event) error {
-	l := flock.New(s.path("state.lock"))
-	if err := l.Lock(); err != nil {
+	return s.RecordWithin(lockWait, events...)
+}
+
+// RecordWithin is Record waiting at most wait for the lock.
+func (s *FileStore) RecordWithin(wait time.Duration, events ...Event) error {
+	unlock, err := s.lock(false, wait)
+	if err != nil {
 		return err
 	}
-	defer func() { _ = l.Unlock() }()
+	defer unlock()
 	return s.append(events)
+}
+
+// Exclusive runs fn under the exclusive state lock, writing nothing: what
+// must not happen while a process holds the lock, freezing a session's
+// processes for one.
+func (s *FileStore) Exclusive(fn func() error) error {
+	unlock, err := s.lock(false, lockWait)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return fn()
 }
 
 // VerbStaleWriter is the event of an older release's first refused save

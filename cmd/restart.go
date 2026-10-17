@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
@@ -187,4 +189,85 @@ func (r *restartWatch) exec(req *restartRequest) error {
 		return errors.New("the running binary is unknown")
 	}
 	return b.Exec(restartedEnv + "=" + strconv.FormatInt(req.At.UnixNano(), 10))
+}
+
+// brokerProcess and restartBroker read and restart the broker unit
+// (beekeeper-sandbox.service); the tests replace them.
+var (
+	brokerProcess = secret.BrokerProcess
+	restartBroker = secret.RestartBroker
+)
+
+// brokerStep is what an install does about the broker unit.
+type brokerStep int
+
+const (
+	// brokerCurrent: no broker, one on another binary, or one started on the
+	// installed one.
+	brokerCurrent brokerStep = iota
+	// brokerRestart: the broker runs the binary replaced at the path and
+	// serves no call.
+	brokerRestart
+	// brokerBusy: the broker runs the replaced binary and serves calls,
+	// which a restart would end.
+	brokerBusy
+)
+
+// brokerDue decides the broker unit's restart: its main process pid, run
+// from bin, against the binary written at exe at written. A broker serves a
+// call as a child process of its own (a gate, a secret call, an agents
+// start); the op daemon its vault session started outlives its parent and
+// is none. It answers the calls the broker serves.
+func brokerDue(pid int, bin, exe string, written time.Time, t *proc.Table) (brokerStep, int) {
+	p := t.ByPID[pid]
+	if p == nil || resolvedPath(bin) != resolvedPath(exe) || !p.Start.Before(written) {
+		return brokerCurrent, 0
+	}
+	calls := 0
+	for _, c := range t.ByPID {
+		if c.PPID == pid {
+			calls++
+		}
+	}
+	if calls > 0 {
+		return brokerBusy, calls
+	}
+	return brokerRestart, 0
+}
+
+// restartBrokerOn puts the broker unit onto the binary an install wrote at
+// exe at written: restarted when it runs the replaced one and serves no
+// call, else the restart still due named with its command. A restart drops
+// the broker's vault session, said with it. dry only names the step.
+func restartBrokerOn(ctx context.Context, w io.Writer, exe string, written time.Time, t *proc.Table, dry bool) {
+	pid, bin, err := brokerProcess()
+	if err != nil {
+		return
+	}
+	const dropped = "its vault session goes with it, the next secret step waits for the broker's sign-in"
+	due := func(why string) {
+		_, _ = fmt.Fprintf(w, "%-7s %s (pid %d) stays on the replaced binary %s: systemctl --user restart %s puts it on %s; %s\n",
+			"due", secret.BrokerUnit, pid, why, secret.BrokerUnit, exe, dropped)
+	}
+	step, calls := brokerDue(pid, bin, exe, written, t)
+	switch step {
+	case brokerBusy:
+		due(fmt.Sprintf("while it serves %d call(s), a restart would end them", calls))
+	case brokerRestart:
+		if !dry {
+			if err := restartBroker(ctx); err != nil {
+				due(fmt.Sprintf("(%v)", err))
+				return
+			}
+		}
+		_, _ = fmt.Fprintf(w, "%-7s %s (pid %d): on %s now; %s\n", "restart", secret.BrokerUnit, pid, exe, dropped)
+	}
+}
+
+// resolvedPath is path with its symbolic links resolved, else path.
+func resolvedPath(path string) string {
+	if p, err := filepath.EvalSymlinks(path); err == nil {
+		return p
+	}
+	return path
 }

@@ -31,7 +31,9 @@ func (a *app) handoverCmd() *cobra.Command {
 the running sessions and what each is on, leases and grant queues, holds,
 the merge lanes, registered agents, session records, the board's epics in
 planning and past their go with their plans (each plan's URL, state and
-head), pinned notes, open notes with their defaults, the decisions answered
+head), the standing instructions (standing.md in the state directory and
+the pinned notes note migrate has not moved there, every one in full),
+open notes with their defaults, the decisions answered
 since the last relay, timers, what the alert watch reads and the latest
 events. Everything comes
 from the state and the machine, so a successor (or the same supervisor
@@ -42,8 +44,7 @@ guide serves (those for guide.person and for the guide) are one line, the
 records of sessions ended over an hour ago are one line (an agent the roster
 keeps, parked for one, stays listed), and the answered
 decisions are those since the predecessor's start, with a count of the
-others answered within 72 hours. Pinned notes, the standing instructions
-(note add --pin), are in every hand-over until unpinned.
+others answered within 72 hours.
 --section <name> prints one section with everything it holds: ` + "`" + `--section
 notes` + "`" + ` every open note, ` + "`" + `--section records` + "`" + ` every record, ` + "`" + `--section
 answers` + "`" + ` every decision answered within 72 hours.
@@ -104,6 +105,10 @@ always complete.`,
 			}
 			lanes := a.laneViews(v.st)
 			notes := a.splitNotes(v.st.Notes)
+			standing, err := a.readStanding(v.st)
+			if err != nil {
+				return err
+			}
 			sections := []handoverSection{
 				{"supervisor", "", func(bool) { a.printSupervisor(v) }},
 				{secSessions, fmt.Sprintf("Sessions (%d running)", len(v.Sessions)), func(bool) { a.printSessions(v) }},
@@ -119,7 +124,7 @@ always complete.`,
 					a.printLiveRecords(v.st, v.st.Records, v.raw)
 				}},
 				{"epics", "Epics", func(bool) { a.printEpicsHandover(ep) }},
-				{"pinned", "Pinned notes", func(bool) { a.printPinned(notes.Pinned) }},
+				{"standing", "Standing instructions", func(bool) { a.printStanding(standing) }},
 				{"notes", "Open notes", func(all bool) {
 					if all {
 						a.printNotes(v.st.Notes)
@@ -127,7 +132,7 @@ always complete.`,
 					}
 					a.printOwnNotes(notes)
 				}},
-				{"answers", "Answered decisions", func(all bool) { a.printAnswers(ans, all) }},
+				{"answers", "Answers", func(all bool) { a.printAnswers(ans, all) }},
 				{"timers", "Timers", func(bool) { a.printTimers(v.st.Timers, false) }},
 				{"alerts", "Alerts", func(bool) { a.printAlerts(al) }},
 				{"events", "Latest events", func(bool) {
@@ -180,7 +185,7 @@ always complete.`,
 }
 
 // handoverSections names the sections --section takes, in their order.
-const handoverSections = "supervisor, sessions, leases, holds, lanes, agents, records, epics, pinned, notes, answers, timers, alerts, events"
+const handoverSections = "supervisor, sessions, leases, holds, lanes, agents, records, epics, standing, notes, answers, timers, alerts, events"
 
 // epicsView is the board's epics in planning and past their go with their
 // plans, or why they were not read; nil without a board.

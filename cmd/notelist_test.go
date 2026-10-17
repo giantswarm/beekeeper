@@ -8,9 +8,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// fullMemo is a multi-line memo that names an off-board issue on a line of
+// fullMemo is a multi-line question that names an off-board issue on a line of
 // its own, past the first.
-const fullMemo = "Board skip: deferred work\n- giantswarm/other#12 waits on a release\n- see https://github.com/q/s/issues/4"
+const fullMemo = "Which of these goes first?\n- giantswarm/other#12 waits on a release\n- see https://github.com/q/s/issues/4"
 
 // memoDefault is the listed decision's default.
 const memoDefault = "the bump waits"
@@ -37,23 +37,21 @@ func listNotes(t *testing.T, notes []state.Note, args ...string) string {
 }
 
 var listedNotes = []state.Note{
-	{ID: 1, For: supervisorRole.title, Text: fullMemo, Refs: []string{refTwo}},
-	{ID: 2, For: notePerson, Text: "approve beekeeper#7?", Default: memoDefault},
+	{ID: 1, Kind: noteDecision, For: supervisorRole.title, Text: fullMemo, Refs: []string{refTwo}},
+	{ID: 2, Kind: noteDecision, For: notePerson, Text: "approve beekeeper#7?", Default: memoDefault},
 }
 
 func TestNoteListFullPrintsTheWholeTextAndWhatItNames(t *testing.T) {
-	want := "Decisions (1):\n" +
-		"#2 [for Pat]\n  approve beekeeper#7?\n  default: " + memoDefault + "\n  names: giantswarm/beekeeper#7\n" +
-		"Memos (1):\n" +
-		"#1 [for Supervisor]\n  Board skip: deferred work\n  - giantswarm/other#12 waits on a release\n  - see https://github.com/q/s/issues/4\n" +
-		"  names: giantswarm/other#12, q/s#4, o/r#2\n"
+	want := "#1 [for Supervisor]\n  Which of these goes first?\n  - giantswarm/other#12 waits on a release\n  - see https://github.com/q/s/issues/4\n" +
+		"  names: giantswarm/other#12, q/s#4, o/r#2\n" +
+		"#2 [for Pat]\n  approve beekeeper#7?\n  default: " + memoDefault + "\n  names: giantswarm/beekeeper#7\n"
 	if got := listNotes(t, listedNotes, "--full"); got != want {
 		t.Fatalf("list --full:\n%s\nwant:\n%s", got, want)
 	}
 }
 
 func TestNoteListDefaultStaysOneEntryPerNote(t *testing.T) {
-	want := "Decisions (1):\n#2 [for Pat] approve beekeeper#7? (default: " + memoDefault + ")\nMemos (1):\n#1 [for Supervisor] " + fullMemo + "\n"
+	want := "#1 [for Supervisor] " + fullMemo + "\n#2 [for Pat] approve beekeeper#7? (default: " + memoDefault + ")\n"
 	if got := listNotes(t, listedNotes); got != want {
 		t.Fatalf("list:\n%s\nwant:\n%s", got, want)
 	}

@@ -434,7 +434,7 @@ func (w *watcher) noteFailedSuccessor(rl role, holder state.Party) int {
 	_ = w.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.NextNote++
 		id = st.NextNote
-		n := state.Note{ID: id, For: person, Text: d.text(), By: watchParty, At: w.now.UTC(),
+		n := state.Note{ID: id, For: person, Text: d.text(), By: watchParty, At: w.now.UTC(), Kind: noteDecision,
 			Default: fmt.Sprintf("the standby watch starts at most %d successors, %s apart and doubling", maxFailedSuccessors, dur(successorBackoff))}
 		st.Notes = append(st.Notes, n)
 		return []state.Event{event(watchParty, "note.add", "#%d %s", n.ID, n.Text)}, nil

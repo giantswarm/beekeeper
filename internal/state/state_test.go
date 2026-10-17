@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,6 +17,59 @@ import (
 )
 
 const verbRunStart = "run.start"
+
+// A holder that stops with the lock (a frozen process) fails every wait
+// behind it after the bound, naming its PID and age; a holder without a
+// record (a reader) is said as such, and the record leaves with the lock.
+func TestAStuckHolderFailsTheWaitersWithItsPIDAndAge(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := s.lock(false, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1100 * time.Millisecond)
+	const wait = 50 * time.Millisecond
+	t0 := time.Now()
+	err = s.UpdateWithin(wait, func(*State) ([]Event, error) { t.Error("an update ran under a stuck holder"); return nil, nil })
+	var busy *LockBusyError
+	if !errors.As(err, &busy) || busy.PID != os.Getpid() || busy.Command == "" || time.Since(busy.Since) < time.Second || busy.Waited != wait {
+		t.Fatalf("the update under a stuck holder = %#v", err)
+	}
+	if took := time.Since(t0); took > 20*wait {
+		t.Errorf("the update waited %s, bound %s", took, wait)
+	}
+	if msg := err.Error(); !strings.Contains(msg, "pid "+strconv.Itoa(os.Getpid())) || !regexp.MustCompile(`for [1-9][0-9]*s, waited`).MatchString(msg) {
+		t.Errorf("the error names neither PID nor age: %s", msg)
+	}
+	if err := s.Log(Event{Verb: verbRunStart}); !errors.As(err, &busy) || busy.PID != os.Getpid() {
+		t.Errorf("Log under a stuck holder = %v", err)
+	}
+	if err := s.RecordWithin(wait, Event{Verb: verbRunStart}); !errors.As(err, &busy) || busy.PID != os.Getpid() || busy.Waited != wait {
+		t.Errorf("RecordWithin under a stuck holder = %v", err)
+	}
+	unlock()
+	if _, err := os.Stat(s.path(holderFile)); !os.IsNotExist(err) {
+		t.Errorf("the holder's record outlived the lock: %v", err)
+	}
+	if err := s.Update(func(*State) ([]Event, error) { return nil, nil }); err != nil {
+		t.Errorf("the update after the release: %v", err)
+	}
+
+	unlock, err = s.lock(true, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	if err := s.UpdateWithin(wait, func(*State) ([]Event, error) { return nil, nil }); !errors.As(err, &busy) || busy.PID != 0 || !strings.Contains(err.Error(), "reader") {
+		t.Errorf("the update under a stuck reader = %v", err)
+	}
+	if _, err := s.Read(); err != nil {
+		t.Errorf("a read beside a reader: %v", err)
+	}
+}
 
 func TestPartyIs(t *testing.T) {
 	const agentOne = "Agent one"
@@ -98,7 +153,7 @@ func TestLogAppendsWithoutTouchingTheState(t *testing.T) {
 		t.Errorf("Events = %+v, %v", runs, err)
 	}
 	// A held lock drops the event after the bounded wait instead of blocking;
-	// Record waits for the lock, however slow the holder, and loses nothing.
+	// Record waits for the lock, up to lockWait, and loses nothing.
 	l := flock.New(s.path("state.lock"))
 	if err := l.Lock(); err != nil {
 		t.Fatal(err)
@@ -278,7 +333,7 @@ const newerSchema = `{
     {"session": "s1", "name": "Agent one", "registered": "2026-10-02T14:00:00Z", "keep": {"by": {"name": "s"}, "at": "2026-10-02T14:22:00Z", "ticket": "o/r#1"}, "lane": "x"},
     {"session": "s2", "name": "Agent two", "registered": "2026-10-02T14:00:00Z", "badge": "two"}
   ],
-  "notes": [{"id": 1, "text": "q", "by": {"name": "s"}, "at": "2026-10-02T14:00:00Z", "urgency": "high"}],
+  "notes": [{"id": 1, "kind": "decision", "text": "q", "by": {"name": "s"}, "at": "2026-10-02T14:00:00Z", "urgency": "high"}],
   "timers": [{"id": 1, "due": "2026-10-02T15:00:00Z", "what": "w", "by": {"name": "s"}, "at": "2026-10-02T14:00:00Z", "jitter": "1m"}],
   "records": [{"session": {"name": "a"}, "issue": "o/r#1", "by": {"name": "a"}, "at": "2026-10-02T14:00:00Z", "phase": "ci"}],
   "starts": [{"session": "s1", "name": "Agent one", "mode": "bypassPermissions", "dir": "/w", "by": {"name": "s"}, "at": "2026-10-02T14:00:00Z", "model": "m"}],
@@ -311,7 +366,7 @@ func TestOlderSaveKeepsANewerSchema(t *testing.T) {
 	err = s.Update(func(st *State) ([]Event, error) {
 		st.Agents = []Agent{st.Agents[1], st.Agents[0], {Party: Party{Session: "s3", Name: "Agent three"}}}
 		st.Agents[1].Keep.Reason = "parked"
-		st.Notes = append(st.Notes, Note{ID: 2, Text: "r"})
+		st.Notes = append(st.Notes, Note{ID: 2, Kind: NoteDecision, Text: "r"})
 		return nil, nil
 	})
 	if err != nil {
@@ -467,7 +522,7 @@ func TestPartyIdentityIsPersisted(t *testing.T) {
 	}
 	by := Party{Session: "s1", Name: worker, Person: "alex@example.com", Team: "bumblebee", Host: "lab"}
 	if err := s.Update(func(st *State) ([]Event, error) {
-		st.Notes = append(st.Notes, Note{ID: 1, Text: "q", By: by})
+		st.Notes = append(st.Notes, Note{ID: 1, Kind: NoteDecision, Text: "q", By: by})
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -489,7 +544,7 @@ func TestPartyIdentityIsPersisted(t *testing.T) {
 
 func TestStateWithoutIdentityLoads(t *testing.T) {
 	dir := t.TempDir()
-	doc := `{"notes":[{"id":1,"text":"q","by":{"session":"s1","name":"Worker"}}]}`
+	doc := `{"notes":[{"id":1,"kind":"decision","text":"q","by":{"session":"s1","name":"Worker"}}]}`
 	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(doc), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -555,5 +610,37 @@ func TestFollowReadsOnlyTheNewLines(t *testing.T) {
 	}
 	if evs, _ := s.Follow("t", keep); len(evs) != 1 || evs[0].Verb != "d" {
 		t.Errorf("Follow after the log was replaced = %+v", evs)
+	}
+}
+
+func TestMemosOfAnOlderBeekeeperReadAsClosed(t *testing.T) {
+	doc := `{"nextNote": 5, "notes": [
+		{"id": 1, "kind": "memo", "text": "state of the watch", "by": {"name": "s"}},
+		{"id": 2, "kind": "decision", "pinned": true, "for": "Pat", "text": "report every merge", "by": {"name": "s"}},
+		{"id": 3, "for": "Guide", "text": "deferred work", "by": {"name": "s"}},
+		{"id": 4, "kind": "decision", "for": "Pat", "text": "merge it?", "by": {"name": "s"}},
+		{"id": 5, "kind": "login", "for": "Pat", "text": "sign in", "until": "true", "by": {"name": "s"}}],
+		"memos": [{"id": 0, "kind": "memo", "text": "moved before", "by": {"name": "s"}}]}`
+	var st State
+	if err := json.Unmarshal([]byte(doc), &st); err != nil {
+		t.Fatal(err)
+	}
+	var open, memos []int
+	for _, n := range st.Notes {
+		open = append(open, n.ID)
+	}
+	for _, n := range st.Memos {
+		memos = append(memos, n.ID)
+	}
+	if !slices.Equal(open, []int{4, 5}) || !slices.Equal(memos, []int{0, 1, 2, 3}) || !st.Memos[2].Pinned() {
+		t.Fatalf("open %v, memos %v", open, memos)
+	}
+	raw, err := json.Marshal(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var again State
+	if err := json.Unmarshal(raw, &again); err != nil || len(again.Memos) != 4 || !again.Memos[2].Pinned() || len(again.Notes) != 2 {
+		t.Fatalf("a save keeps the memos apart, the pin with its memo: %s, %v", raw, err)
 	}
 }

@@ -213,6 +213,21 @@ func Pending(st *state.State, res string, held bool, now time.Time, ttl time.Dur
 	return out
 }
 
+// ToHead moves st.Grants[i] before every other grant of its resource, as
+// given at now: the grants it passes keep their order behind it. It returns
+// the grant's new index.
+func ToHead(st *state.State, i int, now time.Time) int {
+	g := st.Grants[i]
+	g.At = now.UTC()
+	st.Grants = slices.Delete(st.Grants, i, i+1)
+	j := slices.IndexFunc(st.Grants, func(x state.Grant) bool { return x.Resource == g.Resource })
+	if j < 0 {
+		j = len(st.Grants)
+	}
+	st.Grants = slices.Insert(st.Grants, j, g)
+	return j
+}
+
 // Prune drops the grants whose time ran out; held says which resources are
 // held right now (their grants wait without expiring).
 func Prune(st *state.State, held map[string]bool, now time.Time, ttl time.Duration) {

@@ -32,13 +32,18 @@ reason; a merge with its place in the lane keeps it and waits, and the
 exception enters ahead of it. A hold that lets one pull request through, set
 while another merge's devctl waits for CI, ends that devctl before it merges
 and puts the merge back in its place. A merge or promotion of
-giantswarm/devctl opens a tool-release window by itself: a "merges" hold that
-lets only giantswarm/devctl through; the gate installs the release with devctl
+giantswarm/devctl opens a tool-release window by itself: a "merges" hold that,
+once the release is coming (its pull request merged, a promotion's from its
+start), lets only giantswarm/devctl through; the gate installs the release with devctl
 version update and lifts the window once the local devctl reports it, or at
 once when the merge released only a candidate, which no update installs.
 
 --lift-when takes a shell command on this machine: the watch lifts the hold
-once it exits 0, and logs the lift.
+once it exits 0, and logs the lift. A repository's hold whose probe waits on
+that repository's release or tag (it names the repository and "release" or
+"tag": gh release view v1.2.3 --repo owner/repo) lets the repository's own
+promote through, the one step that cuts that release; merges into it stay
+held.
 
 Without a subcommand, lists the holds.`,
 		Args: cobra.NoArgs,
@@ -144,25 +149,34 @@ Without a subcommand, lists the holds.`,
 		Short: "Exit 0 when the target is not held, 3 when it is",
 		Long: `Exit 0 when the target is not held, 3 (with the reason) when it is. A
 repository, or one pull request of it (owner/repo#n), is also held while its
-lane, "merges" or "github" is, unless it is the hold's exception.`,
+lane, "merges" or "github" is, unless it is the hold's exception. Either way
+the verdict is printed; a lookup that fails (the central instance's, for a
+central target) is an error naming that lookup, with its own exit code.`,
 		Args: checkLane.args,
 		RunE: func(_ *cobra.Command, args []string) error {
 			args = checkLane.target(args)
 			st, err := a.store.Read()
 			if err != nil {
-				return err
+				return lookupErr(err, "reading this machine's holds failed, no verdict on %s", args[0])
 			}
 			h, ok := activeHold(st, a, args[0])
 			if repo, pr, isRepo := splitPR(args[0]); isRepo {
 				h, ok = merge.Blocking(st, a.now, repo, pr, a.cfg.LaneOf(repo))
+				if !ok && pr == 0 {
+					// Blocking's pr 0 is the promote; the check asks about merges.
+					h, ok = activeHold(st, a, repo)
+				}
 			}
 			if ok {
-				return refused("%s is held by %q until %s: %s", h.Target, h.By.Name, untilText(a, h), h.Reason)
+				return refused("%s is held by %q until %s: %s", holdTarget(h), h.By.Name, untilText(a, h), h.Reason)
 			}
 			if a.centralTarget(args[0]) {
-				return a.checkCentral(args[0])
+				if err := a.checkCentral(args[0]); err != nil {
+					return err
+				}
 			}
-			return nil
+			_, err = fmt.Fprintf(a.out, "%s is not held\n", args[0])
+			return err
 		},
 	}
 	liftLane.register(lift)
@@ -255,12 +269,19 @@ func activeHold(st *state.State, a *app, target string) (state.Hold, bool) {
 	return state.Hold{}, false
 }
 
-// holdTarget is the hold's target with its exception.
+// holdTarget is the hold's target with its exceptions.
 func holdTarget(h state.Hold) string {
-	if h.Except == "" {
+	var except []string
+	if h.Except != "" {
+		except = append(except, h.Except)
+	}
+	if h.AwaitsOwnRelease() {
+		except = append(except, "its promote")
+	}
+	if len(except) == 0 {
 		return h.Target
 	}
-	return h.Target + " except " + h.Except
+	return h.Target + " except " + strings.Join(except, " and ")
 }
 
 // untilText ends a "held … until" sentence: the hold's end, or "lifted"

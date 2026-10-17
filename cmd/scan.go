@@ -297,7 +297,7 @@ func (a *app) recordRedaction(r guard.ToolResult, found []guard.Finding) error {
 				continue
 			}
 			st.NextNote++
-			n := state.Note{ID: st.NextNote, For: a.cfg.Guide.Person, By: who, At: a.now.UTC(), Text: text,
+			n := state.Note{ID: st.NextNote, For: a.cfg.Guide.Person, By: who, At: a.now.UTC(), Text: text, Kind: noteDecision,
 				Default: "the value stays valid"}
 			st.Notes = append(st.Notes, n)
 			evs = append(evs, event(who, "note.add", "#%d %s", n.ID, n.Text))

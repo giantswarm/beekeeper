@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -25,7 +26,7 @@ func TestCallerCarriesTheIdentity(t *testing.T) {
 	if me.Name != agentOne || me.Owner() != testOwner {
 		t.Fatalf("caller = %+v", me)
 	}
-	if err := addNote(a, "memo: the lab runs"); err != nil {
+	if err := addNote(a, append(slices.Clone(samArgs), "run the lab?")...); err != nil {
 		t.Fatal(err)
 	}
 	st, err := a.store.Read()

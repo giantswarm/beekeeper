@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/gofrs/flock"
 
+	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/platform"
 )
 
@@ -185,6 +187,99 @@ func TestRunJoinsTheSlotItsSessionTakesDuringTheWait(t *testing.T) {
 	}
 	if len(f.capped) != 0 || !slices.Equal(f.ran, []string{o.SlotSlice(1)}) {
 		t.Errorf("capped slots %v, ran in %v: want none capped, ran in the shared slot 1", f.capped, f.ran)
+	}
+}
+
+// busySlices is the machine with slot slices that still run scopes.
+type busySlices struct {
+	platform.Machine
+	slices map[string]*machine.SlotSlice
+}
+
+func (b busySlices) SlotSlice(slice string) *machine.SlotSlice { return b.slices[slice] }
+
+// fakeSlices puts the slot slices' runs into the machine the test's runs read.
+func fakeSlices(t *testing.T, s map[string]*machine.SlotSlice) {
+	t.Helper()
+	saved := plat.Machine
+	plat.Machine = busySlices{Machine: saved, slices: s}
+	t.Cleanup(func() { plat.Machine = saved })
+}
+
+// A slot whose holder has ended while a run that joined it still runs in
+// its slice is not free: capping the slice at a smaller --max would kill at
+// the slice's cap (systemd-run at 0 MiB, before the command starts).
+func TestRunLeavesASlotWhoseSliceStillRuns(t *testing.T) {
+	f := &fakeCapper{}
+	saved := plat.Capper
+	plat.Capper = f
+	t.Cleanup(func() { plat.Capper = saved })
+	dir := t.TempDir()
+	o := Options{Max: "1M", Swap: "0", SlotDir: dir, Slots: 2, Stderr: io.Discard}
+	fakeSlices(t, map[string]*machine.SlotSlice{
+		o.SlotSlice(1): {Scopes: []string{"memcap-4711-000001.scope"}, CurrentMiB: 6778},
+	})
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "fresh")
+	if rc := Run(o, trueCmd); rc != 0 {
+		t.Fatalf("exit %d, want 0", rc)
+	}
+	if !slices.Equal(f.capped, []string{o.SlotSlice(2)}) || !slices.Equal(f.ran, []string{o.SlotSlice(2)}) {
+		t.Errorf("capped slots %v, ran in %v: want slot 1 left alone, slot 2 capped and run in", f.capped, f.ran)
+	}
+
+	f.capped, f.ran = nil, nil
+	var stderr strings.Builder
+	o.Slots, o.Wait, o.Stderr = 1, time.Second, &stderr
+	if rc := Run(o, trueCmd); rc != ExitBusy {
+		t.Errorf("the only slot's slice still runs: exit %d, want %d", rc, ExitBusy)
+	}
+	if len(f.capped) != 0 || len(f.ran) != 0 {
+		t.Errorf("capped slots %v, ran in %v: want none", f.capped, f.ran)
+	}
+	if want := "slot 1: free, but its slice still runs memcap-4711-000001.scope (6778 MiB)"; !strings.Contains(stderr.String(), want) {
+		t.Errorf("the wait does not name the slice's run %q:\n%s", want, stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "1.holder")); !os.IsNotExist(err) {
+		t.Errorf("the occupied slot kept a holder record: %v", err)
+	}
+}
+
+func TestKillReport(t *testing.T) {
+	const ownAdvice, sharedCap = "bound the parallelism", "shared"
+	o := Options{Max: "6G", SlotDir: "/s"}
+	unit := "memcap-1-000001"
+	scope := "/user.slice/user-1000.slice/user@1000.service/memcap.slice/" + o.SlotSlice(1) + "/" + unit + ".scope"
+	slice := path.Dir(scope)
+	for _, c := range []struct {
+		name   string
+		shared bool
+		kills  []machine.OOMKill
+		want   []string
+		not    string
+	}{
+		{"own scope's cap", false, []machine.OOMKill{{PID: 7, Task: "go", AnonMiB: 6100, Memcg: scope}},
+			[]string{"the 6G cap killed: 7 (go) 6100 MiB", ownAdvice}, sharedCap},
+		{"the held slot's slice, capped at the run's cap", false, []machine.OOMKill{{PID: 7, Task: "go", AnonMiB: 6100, Memcg: slice, TaskMemcg: scope}},
+			[]string{"the 6G cap killed: 7 (go) 6100 MiB", ownAdvice}, sharedCap},
+		{"systemd-run at the slice's cap", false, []machine.OOMKill{{PID: 8, Task: "systemd-run", Memcg: slice, TaskMemcg: scope}},
+			[]string{"slot 1's cap (" + o.SlotSlice(1) + ") killed systemd-run before the command started: 8 (systemd-run) 0 MiB", "not this command"}, ownAdvice},
+		{"systemd-run in a joined slot", true, []machine.OOMKill{{PID: 9, Task: "systemd-run", Memcg: slice, TaskMemcg: scope}},
+			[]string{"before the command started"}, ownAdvice},
+		{"the command at a joined slot's cap", true, []machine.OOMKill{{PID: 10, Task: "node", AnonMiB: 900, Memcg: slice, TaskMemcg: scope}},
+			[]string{"slot 1's shared cap", "together filled it"}, ownAdvice},
+		{"the command at its own cap in a joined slot", true, []machine.OOMKill{{PID: 11, Task: "node", AnonMiB: 6100, Memcg: scope}},
+			[]string{"the 6G cap killed", ownAdvice}, sharedCap},
+	} {
+		what, advice, _ := killReport(o, unit, 1, c.shared, c.kills)
+		line := what + " — " + advice
+		for _, w := range c.want {
+			if !strings.Contains(line, w) {
+				t.Errorf("%s: %q lacks %q", c.name, line, w)
+			}
+		}
+		if strings.Contains(line, c.not) {
+			t.Errorf("%s: %q says %q", c.name, line, c.not)
+		}
 	}
 }
 

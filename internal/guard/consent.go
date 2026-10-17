@@ -21,7 +21,9 @@ import (
 // declared callback hosts, the click is allowed; on
 // GitHub's consent page of any other App or callback host it is refused; on
 // the lab's own identity provider, a loopback host, a fixture user's sign-in
-// and consent are allowed; a consent page on any other host is refused, so
+// and consent are allowed; on Google's sign-in, the consent of a Google App
+// on record, by the callback host of the tab's flow, is allowed and any
+// other's refused (google.go); a consent page on any other host is refused, so
 // no grant elsewhere is left to the browse turn's classifier. A change of an
 // App's permissions is decided the same way from the record of the one
 // change the person asked for (appchange.go), an App's creation,
@@ -48,6 +50,12 @@ type App struct {
 	Permission string
 	// Delete says the person asked for the App's deletion (applife.go).
 	Delete bool
+	// Google says the App is a Google OAuth client whose consent is on
+	// Google's sign-in (google.go), not a GitHub App.
+	Google bool
+	// Account is the Google account a Google App's sign-in chooses on
+	// Google's account chooser, "" for any.
+	Account string
 	// Run is the running `beekeeper app create` of the App whose listener
 	// answers, nil for none; Created is beekeeper's ledger entry of the App
 	// it created, nil for none (applife.go).
@@ -61,9 +69,11 @@ type App struct {
 	At       time.Time
 }
 
-// Page is a tab's page: its URL and title.
+// Page is a tab's page: its URL and title, and on Google's sign-in the
+// callback host of the OAuth flow the tab's earlier pages there named.
 type Page struct {
 	URL, Title string
+	Flow       string
 }
 
 // Decision is the hook's answer for a call acting on a page: Allow, Deny or
@@ -147,15 +157,27 @@ func Click(apps []App, page Page, words string) Decision {
 			return d
 		}
 		return permissionClick(apps, u, page.Title, words)
+	case host == googleHost:
+		return googleClick(apps, u, page, words)
 	case loopback(host) && signIn(u.Path):
 		return Decision{Allow, fmt.Sprintf("beekeeper allows it: %s is the lab's own identity provider on a loopback host, "+
 			"whose fixture users' sign-in and consent are the person's own lab's", u.Host)}
-	case !loopback(host) && consentElsewhere(u, page.Title, words):
-		return Decision{Deny, fmt.Sprintf("Refused: %s is a consent page (an OAuth grant) on %s, neither GitHub's consent page of an App on record "+
-			"nor the lab's own identity provider on a loopback host. A consent is answered only for an App the person owns and asked for, "+
-			"which %s records on their word; every other grant stays refused.", consentWhich(u, page.Title), u.Host, AllowForm)}
+	case !loopback(host):
+		return elsewhere(u, page.Title, words)
 	}
 	return Decision{}
+}
+
+// elsewhere decides a call in words on a page at u on a host no record
+// covers: refused on a consent page, no decision on any other.
+func elsewhere(u *url.URL, title, words string) Decision {
+	if !consentElsewhere(u, title, words) {
+		return Decision{}
+	}
+	return Decision{Deny, fmt.Sprintf("Refused: %s is a consent page (an OAuth grant) on %s, neither the consent page of an App on record "+
+		"nor the lab's own identity provider on a loopback host. A consent is answered only for an App the person owns and asked for, "+
+		"which %s (a GitHub App) or %s (a Google OAuth client) records on their word; every other grant stays refused.",
+		consentWhich(u, title), u.Host, AllowForm, GoogleForm)}
 }
 
 // consentElsewhere reports whether a call in words acts on a consent page:
@@ -190,7 +212,7 @@ func githubConsent(apps []App, u *url.URL, title string) Decision {
 		callback = strings.ToLower(r.Host)
 	}
 	for _, a := range apps {
-		if !slices.Contains(a.Callbacks, callback) {
+		if a.Google || !slices.Contains(a.Callbacks, callback) {
 			continue
 		}
 		if (clientID != "" && clientID == a.ClientID) || (clientID == chromeRedacted && strings.EqualFold(title, authorizeTitle+a.Name)) {
@@ -257,6 +279,11 @@ func (h Hook) consent(ev event) []byte {
 			}
 			if page, ok := pageOf(pages, c.tab); ok {
 				d = Click(apps, page, c.words)
+				// Text typed or set on Google's sign-in is no grant the
+				// record covers: the classifier decides it.
+				if c.typed && d.Decision == Allow && onGoogle(page) {
+					d = Decision{}
+				}
 			}
 		}
 		switch d.Decision {
@@ -282,26 +309,25 @@ var acting = []string{"left_click", "right_click", "double_click", "triple_click
 // value).
 type chromeCall struct {
 	navigate, tab, words string
+	// typed says the call enters input: a typed text, a key, a drag, a
+	// form value; anything but a click.
+	typed bool
 }
 
 // chromeCalls are the calls of a Chrome tool call the hook decides: a
 // navigate, a click, a key, a typed text, a form value, and each of a
 // batch's; none for a call that only reads.
 func chromeCalls(tool string, input map[string]any) []chromeCall {
-	t := strings.ToLower(tool)
-	if i := strings.LastIndex(t, "__"); i >= 0 {
-		t = t[i+len("__"):]
-	}
-	switch t {
+	switch chromeTool(tool) {
 	case chromeNavigation:
 		if u, _ := input[urlKey].(string); u != "" {
 			return []chromeCall{{navigate: u}}
 		}
 	case chromeForm:
-		return []chromeCall{{tab: tabOf(input[tabKey]), words: wordsOf(input, valueKey)}}
+		return []chromeCall{{tab: tabOf(input[tabKey]), words: wordsOf(input, valueKey), typed: true}}
 	case chromeComputer:
 		if action, _ := input[actionKey].(string); slices.Contains(acting, action) {
-			return []chromeCall{{tab: tabOf(input[tabKey]), words: wordsOf(input, textKey)}}
+			return []chromeCall{{tab: tabOf(input[tabKey]), words: wordsOf(input, textKey), typed: !strings.HasSuffix(action, "click")}}
 		}
 	case chromeBatch:
 		actions, _ := input["actions"].([]any)
@@ -366,23 +392,111 @@ func lastPage(transcript, tab string) (Page, bool) {
 }
 
 // lastPages are the pages of the tabs as the transcript last showed them,
-// by tabId; none for a transcript that cannot be read.
+// by tabId; none for a transcript that cannot be read. A page on Google's
+// sign-in carries the callback host of the flow the tab's pages there
+// named since it came to that host.
 func lastPages(transcript string) map[string]Page {
-	pages := map[string]Page{}
-	scanResults(transcript, func(text string) {
-		for _, m := range tabLine.FindAllStringSubmatch(text, -1) {
-			pages[m[1]] = Page{URL: m[3], Title: m[2]}
+	pages, flows := map[string]Page{}, map[string]googleFlow{}
+	seen := func(tab string, p Page) {
+		pages[tab] = p
+		u, err := url.Parse(p.URL)
+		if err != nil || !strings.EqualFold(u.Hostname(), googleHost) {
+			delete(flows, tab)
+			return
 		}
-		for _, m := range tabJSON.FindAllStringSubmatch(text, -1) {
-			pages[m[1]] = Page{URL: unquote(m[3]), Title: unquote(m[2])}
+		f := flows[tab].next(u)
+		flows[tab] = f
+		p.Flow = f.callback
+		pages[tab] = p
+	}
+	scanJoined(transcript, func(text string) {
+		// The tab context is the tool's trailer of the result: the page's
+		// own text before it names no tab.
+		if trimmed := strings.TrimSpace(text); strings.HasPrefix(trimmed, tabsJSONOpen) {
+			for _, m := range tabJSON.FindAllStringSubmatch(trimmed, -1) {
+				seen(m[1], Page{URL: unquote(m[3]), Title: unquote(m[2])})
+			}
+			return
+		}
+		// The marker opens a line, which no page title does (a title holds
+		// no line break); the last one is the tool's.
+		at := contextLine.FindAllStringIndex(text, -1)
+		if len(at) == 0 {
+			return
+		}
+		for _, m := range trailerTab.FindAllStringSubmatch(text[at[len(at)-1][0]:], -1) {
+			seen(m[1], Page{URL: m[3], Title: m[2]})
 		}
 	})
 	return pages
 }
 
+// trailerTab is one tab of a tab context, one per line: the line's first
+// bullet names the tab, its title runs to the line's last `" ("`, so a
+// title that names another tab names none.
+var trailerTab = regexp.MustCompile(`(?m)^[^\n•]*•\s*tabId (\d+): "(.*)" \("([^"\n]*)"\)[^\S\n]*$`)
+
+// contextLine is the line that opens the tab context a Chrome tool
+// appends to its result; tabsJSONOpen opens a tabs_context result.
+var contextLine = regexp.MustCompile(`(?m)^Tab Context:`)
+
+const tabsJSONOpen = `{"availableTabs"`
+
+// scanJoined calls fn with the text of each result of a Chrome tool call
+// in the transcript's tail, its blocks joined, in order: another tool's
+// result, a shell's output say, names no tab.
+func scanJoined(transcript string, fn func(text string)) {
+	browser := map[string]bool{}
+	scanLines(transcript, func(line []byte) {
+		for id, name := range toolUses(line) {
+			if isBrowserTool(name) {
+				browser[id] = true
+			}
+		}
+		for _, r := range resultGroups(line) {
+			if browser[r.id] {
+				fn(strings.Join(r.texts, "\n"))
+			}
+		}
+	})
+}
+
+// toolUses are the tool calls on one transcript line: name by id.
+func toolUses(line []byte) map[string]string {
+	var entry struct {
+		Message struct {
+			Content []struct {
+				Type string `json:"type"`
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			} `json:"content"`
+		} `json:"message"`
+	}
+	if json.Unmarshal(line, &entry) != nil {
+		return nil
+	}
+	uses := map[string]string{}
+	for _, b := range entry.Message.Content {
+		if b.Type == "tool_use" {
+			uses[b.ID] = b.Name
+		}
+	}
+	return uses
+}
+
 // scanResults calls fn with the text of each tool result in the
 // transcript's tail, in order; nothing for a transcript that cannot be read.
 func scanResults(transcript string, fn func(text string)) {
+	scanLines(transcript, func(line []byte) {
+		for _, text := range resultTexts(line) {
+			fn(text)
+		}
+	})
+}
+
+// scanLines calls fn with each line of the transcript's tail, in order;
+// nothing for a transcript that cannot be read.
+func scanLines(transcript string, fn func(line []byte)) {
 	if transcript == "" {
 		return
 	}
@@ -400,9 +514,7 @@ func scanResults(transcript string, fn func(text string)) {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 1<<20), 64<<20)
 	for sc.Scan() {
-		for _, text := range resultTexts(sc.Bytes()) {
-			fn(text)
-		}
+		fn(sc.Bytes())
 	}
 }
 
@@ -424,34 +536,52 @@ func pageOf(pages map[string]Page, tab string) (Page, bool) {
 // resultTexts are the texts of the tool results on one transcript line: a
 // string, or the text blocks of an array.
 func resultTexts(line []byte) []string {
+	var out []string
+	for _, g := range resultGroups(line) {
+		out = append(out, g.texts...)
+	}
+	return out
+}
+
+// toolResult is one tool result: the call it answers and its texts.
+type toolResult struct {
+	id    string
+	texts []string
+}
+
+// resultGroups are the tool results on one transcript line.
+func resultGroups(line []byte) []toolResult {
 	var entry struct {
 		Message struct {
 			Content []struct {
-				Type    string          `json:"type"`
-				Content json.RawMessage `json:"content"`
+				Type      string          `json:"type"`
+				ToolUseID string          `json:"tool_use_id"`
+				Content   json.RawMessage `json:"content"`
 			} `json:"content"`
 		} `json:"message"`
 	}
 	if json.Unmarshal(line, &entry) != nil {
 		return nil
 	}
-	var out []string
+	var out []toolResult
 	for _, b := range entry.Message.Content {
 		if b.Type != "tool_result" {
 			continue
 		}
 		var s string
 		if json.Unmarshal(b.Content, &s) == nil {
-			out = append(out, s)
+			out = append(out, toolResult{b.ToolUseID, []string{s}})
 			continue
 		}
 		var blocks []struct {
 			Text string `json:"text"`
 		}
 		if json.Unmarshal(b.Content, &blocks) == nil {
+			var texts []string
 			for _, t := range blocks {
-				out = append(out, t.Text)
+				texts = append(texts, t.Text)
 			}
+			out = append(out, toolResult{b.ToolUseID, texts})
 		}
 	}
 	return out

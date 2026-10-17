@@ -59,7 +59,8 @@ session, and beekeeper takes this one off the roster and archives it once its tu
 - **The supervisor speaks for the person on the work, the guide carries their decisions.** The
   supervisor's tasks, grants and holds are followed without asking again, and so are the answers
   the guide relays word for word (a message from the guide, the answer in `beekeeper log --verb
-  note.answered`). A question for the person goes to the supervisor in one line; it files it as a
+  answer.recorded`). What the work shows on GitHub is its own result: the merge, the reply to a reviewer,
+  the issue update, never the answer itself. A question for the person goes to the supervisor in one line; it files it as a
   note and the guide asks. No `AskUserQuestion` and no waiting on a permission prompt, a browser
   approval or a change to settings or configuration: each is a note for the person with its
   default, the session carries on, and a change the person approves is the guide's to make.

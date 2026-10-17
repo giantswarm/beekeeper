@@ -48,8 +48,13 @@ var wakeOwner = (*app).wakeAgent
 // handed to its owner by the run's merge-child once the caller no longer
 // listens (tellOwner). A wait whose caller's timeout cuts the call runs on:
 // the call exits 76, as a queued merge does, and the outcome wakes the owner.
-func (a *app) ownedRun(argv []string) error {
+// At the GitHub budget's reset it starts after the merges queued for it
+// (yieldToMerges).
+func (a *app) ownedRun(ctx context.Context, argv []string) error {
 	defer outliveCaller()()
+	if err := a.yieldToMerges(ctx, argv); err != nil {
+		return err
+	}
 	me, err := a.caller()
 	if err != nil {
 		me = state.Party{}
@@ -81,6 +86,38 @@ func (a *app) ownedRun(argv []string) error {
 	}
 	handOver(base, r, cli)
 	return exitCode(r.rc)
+}
+
+// yieldPoll is how often a wait that yields to the merges at the reset
+// reads the lanes again.
+var yieldPoll = 5 * time.Second
+
+// yieldToMerges holds a wait back while merges queued under the GitHub
+// budget floor for the reset that came go first (merge.ResetFirst): it
+// returns once none of them waits any more, at the end of their window
+// (merge.resetFirst) at the latest, or with the context's error.
+func (a *app) yieldToMerges(ctx context.Context, argv []string) error {
+	said := false
+	for {
+		st, err := a.store.Read()
+		if err != nil {
+			return nil
+		}
+		first := merge.ResetFirst(st, time.Now(), a.cfg.Merge.ResetFirst.Duration, proc.Alive)
+		if len(first) == 0 {
+			return nil
+		}
+		if !said {
+			gateLine("waiting: %s, queued for the GitHub budget's reset, goes first (merge.resetFirst); %s starts after it, at %s at the latest",
+				merge.Keys(first), strings.Join(argv, " "), clock(time.Now(), merge.ResetFirstUntil(first, a.cfg.Merge.ResetFirst.Duration)))
+			said = true
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(yieldPoll):
+		}
+	}
 }
 
 // ownerOf says where the outcome of a wait that runs on outside the call

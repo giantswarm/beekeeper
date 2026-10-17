@@ -213,3 +213,50 @@ func TestAgentsNameTheRosterTheBusyView(t *testing.T) {
 		t.Errorf("no headless turn, still the note:\n%s", out)
 	}
 }
+
+// startRecorder records the units a wake starts.
+type startRecorder struct {
+	platform.Launcher
+	started []string
+}
+
+func (l *startRecorder) Start(u platform.Unit) error {
+	l.started = append(l.started, u.Name)
+	return nil
+}
+
+func (l *startRecorder) Running(context.Context, bool, ...string) []string { return nil }
+
+// A wake of a started session whose import is pending (no CLI, no desktop
+// row yet) starts no headless turn beside the CLI the import warms: it is
+// refused saying the import is pending, and agents shows it importing.
+func TestWakeDuringAPendingImport(t *testing.T) {
+	a, _ := stubApp(t)
+	plat.Machine = tableMachine{plat.Machine}
+	l := &startRecorder{Launcher: plat.Launcher}
+	useLauncher(t, l)
+	writeFile(t, filepath.Join(a.cfg.Claude.ProjectsDir, "-w", rotationLogin+".jsonl"), `{"type":"user","cwd":"/w"}`+"\n")
+	rosterAgent(t, a, state.Agent{Party: rotationParty, Task: rotationTask})
+	a.importPending(rotationLogin, time.Minute)
+
+	err := a.wakeAgent(t.Context(), state.Party{Name: supervisorName}, rotationName, "your task", "")
+	if err == nil || !strings.Contains(err.Error(), "its import is pending") || !strings.Contains(err.Error(), startImportOn) {
+		t.Errorf("wake during the import: %v, want a refusal naming the pending import", err)
+	}
+	if len(l.started) > 0 {
+		t.Errorf("wake started %v beside the pending import", l.started)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := a.agentViews(st, nil); len(v) != 1 || !strings.HasPrefix(v[0].Reachable, "importing, until ") {
+		t.Errorf("roster: %+v, want it importing", v)
+	}
+
+	a.importEnded(rotationLogin)
+	st, _ = a.store.Read()
+	if v := a.agentViews(st, nil); strings.HasPrefix(v[0].Reachable, "importing") {
+		t.Errorf("roster after the import: %q", v[0].Reachable)
+	}
+}

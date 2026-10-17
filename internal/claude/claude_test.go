@@ -14,7 +14,6 @@ const (
 	mmRepo     = "giantswarm/model-manager"
 	musterRepo = "giantswarm/muster"
 	musterRef  = musterRepo + "#1"
-	supRun     = "Supervisor run 10"
 )
 
 func TestScanWork(t *testing.T) {
@@ -126,22 +125,6 @@ func TestSleepDuration(t *testing.T) {
 	}
 	if _, ok := sleepDuration([]string{"infinity"}); ok {
 		t.Error("infinity parsed")
-	}
-}
-
-func TestResolve(t *testing.T) {
-	ss := []*Session{{PID: 10, ID: "abc", Name: "Agent four"}, {PID: 11, ID: "def", Name: "Agent five"}, {PID: 12, ID: "ghi", Name: supRun}}
-	for q, want := range map[string]string{"agent four": "Agent four", "def": "Agent five", "12": supRun, "supervisor": supRun} {
-		s, err := Resolve(ss, q)
-		if err != nil || s.Name != want {
-			t.Errorf("Resolve(%q) = %v, %v; want %q", q, s, err, want)
-		}
-	}
-	if _, err := Resolve(ss, "agent"); err == nil {
-		t.Error("ambiguous query resolved")
-	}
-	if _, err := Resolve(ss, "nobody"); err == nil {
-		t.Error("unknown query resolved")
 	}
 }
 

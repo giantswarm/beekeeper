@@ -263,6 +263,11 @@ type Board struct {
 	// Team is the value of the board's Team field whose items are the
 	// desk's; empty, every item is.
 	Team string `yaml:"team"`
+	// TeamLabel is the issue label of the team's epics (default team/ and
+	// Team's first word, lower-cased: team/bumblebee): the priority list
+	// keeps a ranked epic that carries it whatever its Team field says, so
+	// a label sync that moves the Team never drops a rank.
+	TeamLabel string `yaml:"teamLabel"`
 	// People are the logins whose assigned items are free; an item
 	// assigned to anybody else is skipped.
 	People []string `yaml:"people"`
@@ -305,7 +310,9 @@ type BoardStep struct {
 	// any (an epic's remainder) instead of the item, in their order.
 	SubIssues bool `yaml:"subIssues"`
 	// Unblocked offers only items with recorded blockers, all of them
-	// closed: a blocked item whose blocker cleared.
+	// closed, whose Status was set before the last of them closed: a
+	// blocked item whose blocker cleared. A Status set after it holds the
+	// item until it changes.
 	Unblocked bool `yaml:"unblocked"`
 	// CreatedWithin offers only items created within the duration.
 	CreatedWithin Duration `yaml:"createdWithin"`
@@ -356,6 +363,11 @@ type Secret struct {
 	// Vault is the team's shared 1Password vault, the only one an op://
 	// reference may name; unset, beekeeper secret reads SOPS files only.
 	Vault string `yaml:"vault"`
+	// Vaults are the shared vaults besides Vault that an op:// reference
+	// is read from (copy, compare, fingerprint) through the same session
+	// or service account, such as a team's shared vault; beekeeper writes
+	// to Vault alone. The list is the person's policy.
+	Vaults []string `yaml:"vaults"`
 	// TokenFile (~/ allowed) holds the vault's service account token,
 	// which beekeeper gives only to its own op calls. Agents reach it
 	// nowhere: it lies outside every agent container's mounts.
@@ -784,6 +796,15 @@ type Doctor struct {
 	// DockerEvery is how often the watch reads Docker's sizes (default 1h);
 	// a prune an import held back is tried again at the next sample.
 	DockerEvery Duration `yaml:"dockerEvery"`
+	// WorktreeRoots are the folders (~/ allowed) under which the watch
+	// looks for the linked git worktrees of finished workers (default
+	// ~/projects/worktrees).
+	WorktreeRoots []string `yaml:"worktreeRoots"`
+	// WorktreesEvery is how often the watch removes the worktrees whose
+	// pull request merged or closed, and the build output of those that
+	// still hold uncommitted or unpushed work and of any other untouched
+	// for six hours (default 6h); negative: never.
+	WorktreesEvery Duration `yaml:"worktreesEvery"`
 }
 
 // DockerImagesMax is the Docker images' cap in bytes; 0 is off.
@@ -976,6 +997,11 @@ type Merge struct {
 	SettleTimeout Duration `yaml:"settleTimeout"`
 	// BudgetFresh is how old the last budget reading may be to gate on.
 	BudgetFresh Duration `yaml:"budgetFresh"`
+	// ResetFirst is how long after the GitHub budget's reset the merges
+	// queued under the floor for it go first: the gated waits, the watch's
+	// GitHub timer checks and budget --gate wait for them, and only merges
+	// count against Cap for them, the oldest queued first.
+	ResetFirst Duration `yaml:"resetFirst"`
 	// StallAfter is how long a lane's first arrived merge may wait behind
 	// places whose merges are not in the gate before the lane is stalled.
 	StallAfter Duration `yaml:"stallAfter"`
@@ -1773,6 +1799,13 @@ func (c *Config) defaults() error {
 	setInt(&c.Doctor.DockerImagesMaxGiB, 40)
 	setInt(&c.Doctor.DockerBuildCacheMaxGiB, 20)
 	setDur(&c.Doctor.DockerEvery, time.Hour)
+	setDur(&c.Doctor.WorktreesEvery, 6*time.Hour)
+	if c.Doctor.WorktreeRoots == nil {
+		c.Doctor.WorktreeRoots = []string{"~/projects/worktrees"}
+	}
+	for i, r := range c.Doctor.WorktreeRoots {
+		c.Doctor.WorktreeRoots[i] = filepath.Clean(homePath(home, r))
+	}
 	setStr(&c.Ollama.Unit, "ollama")
 	setInt(&c.Ollama.BudgetGiB, 12)
 	setInt(&c.Ollama.MaxBudgetGiB, 24)
@@ -1832,6 +1865,7 @@ func (c *Config) defaults() error {
 	setDur(&c.Merge.Settle, 5*time.Minute)
 	setDur(&c.Merge.SettleTimeout, 30*time.Minute)
 	setDur(&c.Merge.BudgetFresh, time.Minute)
+	setDur(&c.Merge.ResetFirst, 5*time.Minute)
 	setDur(&c.Merge.StallAfter, 5*time.Minute)
 	setDur(&c.Merge.HungAfter, 45*time.Minute)
 	setDur(&c.Merge.CITimeout, time.Hour)
@@ -2035,6 +2069,11 @@ func (c *Config) validate() error {
 	for i, v := range c.Secret.AgeVaults {
 		if v == "" || strings.Contains(v, "/") || c.Secret.Vault == "" {
 			return fmt.Errorf("secret.ageVaults[%d]: %q: a vault's name, beside secret.vault", i, v)
+		}
+	}
+	for i, v := range c.Secret.Vaults {
+		if v == "" || strings.Contains(v, "/") || c.Secret.Vault == "" {
+			return fmt.Errorf("secret.vaults[%d]: %q: a vault's name, beside secret.vault", i, v)
 		}
 	}
 	for name, p := range c.Omp.Providers {

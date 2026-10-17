@@ -92,6 +92,50 @@ func TestRetryingAsksAWriteOrAFinalAnswerOnce(t *testing.T) {
 	}
 }
 
+// killedGH is a GH whose first hang tries hang until their context ends and
+// die as exec.CommandContext's SIGKILL leaves gh; the next answer ok.
+type killedGH struct {
+	hang, calls int
+}
+
+func (k *killedGH) run(ctx context.Context, _ ...string) ([]byte, error) {
+	k.calls++
+	if k.calls > k.hang {
+		return []byte(`{"data":{"repositoryOwner":{"id":"X"}}}`), nil
+	}
+	<-ctx.Done()
+	return nil, errors.New("gh api graphql -f: signal: killed: ")
+}
+
+func TestRetryingRetriesAKilledTry(t *testing.T) {
+	k := &killedGH{hang: 1}
+	out, err := Retrying(k.run, time.Millisecond)(TryTimeout(t.Context(), 10*time.Millisecond), graphqlRead...)
+	if err != nil || k.calls != 2 || !strings.Contains(string(out), `"X"`) {
+		t.Errorf("a try killed at its timeout: %q, %v after %d calls", out, err, k.calls)
+	}
+
+	a := &answers{outs: []string{"", `{"data":{}}`}, errs: []error{errors.New("gh api graphql -f: signal: killed: "), nil}}
+	if out, err := Retrying(a.run, time.Millisecond)(t.Context(), graphqlRead...); err != nil || a.calls != 2 || string(out) != `{"data":{}}` {
+		t.Errorf("a gh the machine killed: %q, %v after %d calls", out, err, a.calls)
+	}
+
+	k = &killedGH{hang: readTries}
+	_, err = Retrying(k.run, time.Millisecond)(TryTimeout(t.Context(), 10*time.Millisecond), graphqlRead...)
+	if k.calls != readTries || err == nil || err.Error() != "gh api graphql (repositoryOwner): no answer within 10ms after 3 tries: gh api graphql -f: signal: killed: " {
+		t.Errorf("every try killed: %v after %d calls", err, k.calls)
+	}
+}
+
+func TestRetryingDoesNotOutliveItsContext(t *testing.T) {
+	k := &killedGH{hang: readTries}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
+	defer cancel()
+	_, err := Retrying(k.run, time.Hour)(TryTimeout(ctx, time.Hour), graphqlRead...)
+	if k.calls != 1 || err == nil || !strings.Contains(err.Error(), "a killed gh, retry cancelled") {
+		t.Errorf("the read's own deadline: %v after %d calls", err, k.calls)
+	}
+}
+
 func TestIsRead(t *testing.T) {
 	for args, want := range map[string]bool{
 		"api graphql -f query={viewer{login}}":   true,

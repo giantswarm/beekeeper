@@ -104,3 +104,61 @@ func TestSessionsLeaveOutAParkedWorkerWhoseRecordWasReleased(t *testing.T) {
 		t.Errorf("a done worker's record is not ended:\n%s", got)
 	}
 }
+
+// A guard that greps the listing from a session finds no row of that
+// session: its own commands (the listing and the grep) are masked, in the
+// table and in the changes, while another session's still show.
+func TestSessionsMaskTheCallersOwnCommands(t *testing.T) {
+	const guardName = "Guard"
+	self := envParty(func(k string) string {
+		return map[string]string{"CLAUDE_CODE_SESSION_ID": "s1", "CLAUDE_CODE_SESSION_NAME": guardName}[k]
+	})
+	guard := &claude.Session{ID: "s1", Name: guardName, Commands: []claude.Command{
+		{Args: "/usr/bin/beekeeper sessions --all"}, {Args: "grep reclaim-disk"},
+	}}
+	other := &claude.Session{ID: "s2", Name: "Builder", Commands: []claude.Command{{Args: "beekeeper run -- make test"}}}
+	named := &claude.Session{Name: guardName}
+	if !isSelf(self, guard) || isSelf(self, other) || isSelf(state.Party{Name: guardName}, named) {
+		t.Fatal("isSelf matches by the ids only")
+	}
+	v := &view{Sessions: []*sessionView{{Session: guard, Self: true}, {Session: other}}, st: &state.State{}}
+	var out bytes.Buffer
+	a := &app{out: &out}
+	a.printSessions(v)
+	for _, f := range a.sessionFacts(v) {
+		out.WriteString(f.Sig + "\n" + f.Line + "\n")
+	}
+	for _, l := range strings.Split(out.String(), "\n") {
+		if strings.Contains(l, "reclaim-disk") || strings.Contains(l, "sessions --all") {
+			t.Errorf("the caller's own commands show: %q", l)
+		}
+	}
+	if !strings.Contains(out.String(), selfRunning) || !strings.Contains(out.String(), "beekeeper run -- make") {
+		t.Errorf("want the caller's row marked and the other's command shown:\n%s", out.String())
+	}
+}
+
+// A roster name holding a slash resolves whole, for a running agent whose
+// desktop title is shorter and for one whose CLI does not run; a part of it
+// still resolves, and the slash is never read as a separator.
+func TestSessionNamedRosterNameWithSlash(t *testing.T) {
+	now := time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC)
+	const running, absent = "GMC 2754 violet/elver close", "GMC 2755 violet/elver open"
+	st := &state.State{Agents: []state.Agent{
+		{Party: state.Party{Session: "s1", Name: running}},
+		{Party: state.Party{Session: "s2", Name: absent}},
+	}}
+	sessions := []*claude.Session{
+		{PID: 7, ID: "s1", Name: "GMC 2754"},
+		{PID: 8, ID: "s3", Name: "violet"},
+	}
+	for q, want := range map[string]string{running: "s1", strings.ToUpper(running): "s1", "GMC 2754": "s1", absent: "s2", "elver open": "s2"} {
+		s, _, err := sessionNamed(sessions, st, q, now)
+		if err != nil || s.ID != want {
+			t.Errorf("sessionNamed(%q) = %v, %v; want session %s", q, s, err, want)
+		}
+	}
+	if _, _, err := sessionNamed(sessions, st, "violet/elver", now); err == nil || !strings.Contains(err.Error(), "matches 2 sessions") {
+		t.Errorf("a part two roster names share: %v", err)
+	}
+}

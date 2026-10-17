@@ -16,34 +16,15 @@ import (
 )
 
 // The kinds of a note. A decision waits on a person, who answers it by its
-// due time or lets its default run; a memo is a session's own record (a
-// state summary, a board skip, a list of deferred work) that asks nobody;
-// a login asks its person to sign in, and the watch closes it once its
-// --until probe passes.
+// due time or lets its default run; a login asks its person to sign in, and
+// the watch closes it once its --until probe passes.
 const (
-	noteDecision = "decision"
-	noteMemo     = "memo"
-	noteLogin    = "login"
+	noteDecision = state.NoteDecision
+	noteLogin    = state.NoteLogin
 )
 
 // noteKinds are the kinds `note add --kind` takes.
-var noteKinds = []string{noteDecision, noteMemo, noteLogin}
-
-// noteKind is n's kind: the one it was filed with, else, for a note filed
-// without one, a decision when it is for person (guides) and not pinned (a
-// standing instruction), a memo otherwise.
-func noteKind(person string, n *state.Note) string {
-	if slices.Contains(noteKinds, n.Kind) {
-		return n.Kind
-	}
-	if !n.Pinned && guides(person, n) {
-		return noteDecision
-	}
-	return noteMemo
-}
-
-// decides says whether n waits on its person: a decision or a sign-in.
-func decides(person string, n *state.Note) bool { return noteKind(person, n) != noteMemo }
+var noteKinds = []string{noteDecision, noteLogin}
 
 // probeTimeout bounds one run of a probe: a login note's, a timer's.
 const probeTimeout = 10 * time.Second
@@ -176,6 +157,16 @@ var notesGH github.GH = github.RunGH
 // SIMPLIFY or KILL verdict.
 var missingStage = regexp.MustCompile(`^[^\s:]+: [^\s:]+ missing: `)
 
+// subject is the part of d's text its stage check reads: the pull requests
+// the question asks about. A question that links none leaves the first
+// pull request the rest links; the others the note only cites as context.
+func (d noteDraft) subject() string {
+	if pullURL.MatchString(d.Question) {
+		return d.Question
+	}
+	return pullURL.FindString(d.text())
+}
+
 // planStages checks every pull request of a plans repository that s links
 // by its stage check. A merged one, a green check, or a red one whose every
 // finding is a missing stage output passes: the last is the grill stage,
@@ -254,37 +245,6 @@ func refs(s string) []string {
 		}
 	}
 	return out
-}
-
-// verb is what a note asks for: the first word of its question.
-func verb(question string) string {
-	f := strings.Fields(question)
-	if len(f) == 0 {
-		return ""
-	}
-	return strings.ToLower(strings.Trim(f[0], ".,:;!?\"'`"))
-}
-
-// sameVerb is the note for the same person that asks the same verb on one
-// of the same issues or PRs as n, or nil: the looser match that warns of
-// a question answered before.
-func sameVerb(notes []state.Note, n state.Note, question string) (*state.Note, string) {
-	v, rs := verb(question), refs(n.Text)
-	if v == "" || len(rs) == 0 {
-		return nil, ""
-	}
-	for i := range notes {
-		o := &notes[i]
-		if !strings.EqualFold(o.For, n.For) || verb(o.Text) != v {
-			continue
-		}
-		for _, r := range rs {
-			if slices.Contains(refs(o.Text), r) {
-				return o, r
-			}
-		}
-	}
-	return nil, ""
 }
 
 // sameQuestion normalises a question for the fold: case, spacing and the

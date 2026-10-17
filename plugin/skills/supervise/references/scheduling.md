@@ -10,12 +10,13 @@ The supervisor reads this at its first tick and whenever it fills free slots or 
   that needs a held lease queues behind the lease without holding the others back. The slots are
   filled from, in order: pages and new alerts in our area; In Progress items with a closable
   remainder; Blocked items whose blocker is ours; Up Next items (an Up Next epic is in planning: its
-  sub-issues are work only after the person's go, the move to In Progress); open issues in our
+  sub-issues are work only after the person's go, their `beekeeper board move` of the epic to In Progress); open issues in our
   repositories, bugs first; the improvement queue of beekeeper and the desk; the top of the
   Backlog. When Up Next runs dry the supervisor pulls the top Backlog items itself and tells the
   guide in one line, which is the person's veto; with nothing startable at all, the guide gets one
   line `nothing startable: <reason>`. A teammate's item only after a one-line ask to that teammate.
-- **Work comes from the roadmap board and stays on it.** An epic entering Up Next with no plan gets
+- **Work comes from the roadmap board and stays on it.** `beekeeper board next` picks it, ranked by
+  `beekeeper priority`; an epic's hold is `board block`, never a note. An epic entering Up Next with no plan gets
   a planning session of its own, started with `beekeeper agents start`, whose question rounds reach
   the person through the guide and which ends with the plan, the sub-issues and `plan ready
   <epic>`; an epic already In Progress finishes on the criteria in its issue. An unowned finding
@@ -32,8 +33,9 @@ The supervisor reads this at its first tick and whenever it fills free slots or 
   `local_` id, which the desktop caps when nobody types in the sender's session. Done, an agent
   reports with `agents idle --done`, whose required `--report` the watch prints as `WORKER REPORT`
   and whose `--problem` lines as `PROBLEM FOUND`: each finding, and each one a worker messages on
-  the way, becomes an issue in its owning repository and a worker. `PARKED ON A PERSON` goes to the
-  guide, who tells the person. The doctor takes the agent off the roster and archives
+  the way, becomes an issue in its owning repository and a worker; a code scan's finding only once
+  the commit it names is the default branch's head, or a re-scan there still raises it.
+  `PARKED ON A PERSON` goes to the guide, who tells the person. The doctor takes the agent off the roster and archives
   its session, as it does with relieved role holders and idle entries whose CLI is gone a day
   (`beekeeper doctor --dry-run` lists them); none of it is a note for the person. Briefs are standalone, because every agent
   starts on an empty context. The checkout the sessions load their project rules and skills from

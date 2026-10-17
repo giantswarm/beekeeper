@@ -9,7 +9,6 @@ package claude
 import (
 	"cmp"
 	"encoding/json"
-	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -628,37 +627,6 @@ func sleepDuration(args []string) (time.Duration, bool) {
 		total += time.Duration(f * float64(unit))
 	}
 	return total, true
-}
-
-// Resolve finds the session a name or id refers to: an exact session id,
-// host id or name (case-insensitive), else a unique name substring.
-func Resolve(sessions []*Session, q string) (*Session, error) {
-	lq := strings.ToLower(strings.TrimSpace(q))
-	if lq == "" {
-		return nil, fmt.Errorf("no session named")
-	}
-	for _, s := range sessions {
-		if s.ID == q || s.HostID == q || strings.ToLower(s.Name) == lq || strconv.Itoa(s.PID) == q {
-			return s, nil
-		}
-	}
-	var hits []*Session
-	for _, s := range sessions {
-		if strings.Contains(strings.ToLower(s.Name), lq) {
-			hits = append(hits, s)
-		}
-	}
-	switch len(hits) {
-	case 1:
-		return hits[0], nil
-	case 0:
-		return nil, fmt.Errorf("no running session matches %q", q)
-	}
-	names := make([]string, len(hits))
-	for i, h := range hits {
-		names[i] = fmt.Sprintf("%q", h.Name)
-	}
-	return nil, fmt.Errorf("%q matches %d sessions: %s", q, len(hits), strings.Join(names, ", "))
 }
 
 // Live reports whether party names one of the running sessions, and which.

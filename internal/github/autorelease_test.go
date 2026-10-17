@@ -65,26 +65,55 @@ func TestPushesBranch(t *testing.T) {
 	}
 }
 
+// pluginWorkflow is a plugin marketplace's Auto Release: on a merged pull
+// request into main it tags each plugin whose version changed.
+const pluginWorkflow = `name: Auto Release
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+jobs:
+  auto-release:
+    steps:
+      - run: |
+          CURRENT=$(cat .claude-plugin/marketplace.json)
+          tag="${plugin}/v${current_version}"
+`
+
+// errNotFound is gh's answer for a file a branch lacks.
+var errNotFound = errors.New("gh api: exit status 1: gh: Not Found (HTTP 404)")
+
 func TestReadBaseRelease(t *testing.T) {
 	for _, c := range []struct {
 		name, base string
-		workflow   string
-		wfErr      error
-		want       BaseRelease
-		wantErr    bool
+		// workflow, wfErr answer the generated Auto-release workflow; plugin,
+		// plErr the plugin marketplace's.
+		workflow, plugin string
+		wfErr, plErr     error
+		want             BaseRelease
+		wantErr          bool
+		asks             int
 	}{
-		{"main with auto-release", mainBranch, mainLineWorkflow, nil, BaseRelease{Base: mainBranch, Auto: true}, false},
-		{"a fork line's maintenance branch", handCut, forkLineWorkflow, nil, BaseRelease{Base: handCut}, false},
-		{"a branch without the workflow", handCut, "", errors.New("gh api: exit status 1: gh: Not Found (HTTP 404)"), BaseRelease{Base: handCut}, false},
-		{"GitHub unanswered", mainBranch, "", errors.New("gh api: exit status 1: connection reset"), BaseRelease{}, true},
+		{"main with auto-release", mainBranch, mainLineWorkflow, "", nil, nil, BaseRelease{Base: mainBranch, Auto: true}, false, 2},
+		{"a fork line's maintenance branch", handCut, forkLineWorkflow, "", nil, nil, BaseRelease{Base: handCut}, false, 2},
+		{"a branch without either workflow", handCut, "", "", errNotFound, errNotFound, BaseRelease{Base: handCut}, false, 3},
+		{"a plugin marketplace's main", mainBranch, "", pluginWorkflow, errNotFound, nil, BaseRelease{Base: mainBranch, Plugins: true}, false, 3},
+		{"a plugin marketplace's other branch", handCut, "", pluginWorkflow, errNotFound, nil, BaseRelease{Base: handCut}, false, 3},
+		{"an auto-release.yaml of another kind", mainBranch, "", "on:\n  pull_request:\n    types: [closed]\n", errNotFound, nil, BaseRelease{Base: mainBranch}, false, 3},
+		{"GitHub unanswered", mainBranch, "", "", errors.New("gh api: exit status 1: connection reset"), nil, BaseRelease{}, true, 2},
+		{"GitHub unanswered for the plugin workflow", mainBranch, "", "", errNotFound, errors.New("connection reset"), BaseRelease{}, true, 3},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			var asked []string
 			run := func(_ context.Context, args ...string) ([]byte, error) {
 				call := strings.Join(args, " ")
 				asked = append(asked, call)
-				if strings.HasPrefix(call, "pr view 7 --repo o/r") {
+				switch {
+				case strings.HasPrefix(call, "pr view 7 --repo o/r"):
 					return []byte(`{"baseRefName":"` + c.base + `"}`), nil
+				case strings.HasSuffix(call, PluginReleaseWorkflow+"?ref="+c.base):
+					return []byte(c.plugin), c.plErr
 				}
 				return []byte(c.workflow), c.wfErr
 			}
@@ -92,9 +121,69 @@ func TestReadBaseRelease(t *testing.T) {
 			if (err != nil) != c.wantErr || got != c.want {
 				t.Fatalf("got %+v, %v; want %+v", got, err, c.want)
 			}
-			if len(asked) != 2 || !strings.HasSuffix(asked[1], AutoReleaseWorkflow+"?ref="+c.base) {
+			if len(asked) != c.asks || !strings.HasSuffix(asked[1], AutoReleaseWorkflow+"?ref="+c.base) {
 				t.Errorf("asked %q", asked)
 			}
 		})
+	}
+}
+
+func TestPluginTags(t *testing.T) {
+	const (
+		was = `{"plugins":[{"name":"gs-plans","version":"0.2.0"},{"name":"gs-base","version":"1.4.0"}]}`
+		now = `{"plugins":[{"name":"gs-plans","version":"0.3.0"},{"name":"gs-base","version":"1.4.0"},{"name":"gs-new","version":"0.1.0"}]}`
+	)
+	for _, c := range []struct {
+		name, parent, atParent, atMerge string
+		want                            []string
+	}{
+		{"one plugin bumped, one new", "p1", was, now, []string{"gs-plans/v0.3.0", "gs-new/v0.1.0"}},
+		{"no version changed", "p1", was, was, nil},
+		{"the manifest new in the merge", "p1", "", was, []string{"gs-plans/v0.2.0", "gs-base/v1.4.0"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			run := func(_ context.Context, args ...string) ([]byte, error) {
+				call := strings.Join(args, " ")
+				switch {
+				case call == "api repos/o/r/commits/m1 --jq .parents[0].sha":
+					return []byte(c.parent + "\n"), nil
+				case strings.HasSuffix(call, Marketplace+"?ref=m1"):
+					return []byte(c.atMerge), nil
+				case strings.HasSuffix(call, Marketplace+"?ref="+c.parent) && c.atParent == "":
+					return nil, errNotFound
+				case strings.HasSuffix(call, Marketplace+"?ref="+c.parent):
+					return []byte(c.atParent), nil
+				}
+				t.Fatalf("asked %q", call)
+				return nil, nil
+			}
+			got, err := PluginTags(context.Background(), run, "o/r", "m1")
+			if err != nil || strings.Join(got, " ") != strings.Join(c.want, " ") {
+				t.Errorf("got %q, %v; want %q", got, err, c.want)
+			}
+		})
+	}
+}
+
+func TestTagExists(t *testing.T) {
+	for _, c := range []struct {
+		err     error
+		want    bool
+		wantErr bool
+	}{
+		{nil, true, false},
+		{errNotFound, false, false},
+		{errors.New("connection reset"), false, true},
+	} {
+		run := func(_ context.Context, args ...string) ([]byte, error) {
+			if got := strings.Join(args, " "); got != "api repos/o/r/git/ref/tags/gs-plans/v0.3.0" {
+				t.Errorf("asked %q", got)
+			}
+			return nil, c.err
+		}
+		got, err := TagExists(context.Background(), run, "o/r", "gs-plans/v0.3.0")
+		if got != c.want || (err != nil) != c.wantErr {
+			t.Errorf("%v: got %v, %v", c.err, got, err)
+		}
 	}
 }

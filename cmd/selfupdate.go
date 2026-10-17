@@ -9,10 +9,12 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/update"
 )
 
@@ -46,7 +48,9 @@ newer release exists, 0 when this is the latest.
 
 Release binaries are signed in CI (cosign, keyless) and published next to
 their Sigstore bundle. The download is installed only after that bundle
-verifies for a CircleCI build of ` + update.Repository + `; a release without
+verifies for a CircleCI build of ` + update.Repository + ` (certificate identity
+https://circleci.com/api/v2/projects/..., issuer https://oidc.circleci.com, never a
+GitHub identity); a release without
 a bundle, or a download that does not match it, is refused and the binary
 stays as it is.
 
@@ -61,6 +65,12 @@ their saves are refused until they end or are restarted (beekeeper doctor
 lists them meanwhile). An alerts or guide watch never re-executes itself:
 its owner re-arms it, told by its own feed (WATCH STALE, GUIDE WATCH
 STALE).
+
+The agent sandbox's broker (beekeeper-sandbox.service) that runs the
+replaced binary is restarted onto the new one (restart), which drops its
+vault session: the next secret step waits for the broker's sign-in. A
+broker serving calls (a gate, a secret call, an agents start) is left to
+finish them, and the restart still due is named with its command (due).
 
 The beekeeper plugin goes with the binary: an update brings every
 installed beekeeper plugin up to its marketplace's latest (claude plugin
@@ -89,6 +99,7 @@ is set. A development build (version dev) is refused.`,
 			if a.json {
 				w = io.Discard
 			}
+			started := time.Now()
 			res, err := runUpdate(cmd.Context(), w, check)
 			if a.json && res.Latest != "" {
 				if perr := a.printJSON(res); perr != nil {
@@ -107,6 +118,7 @@ is set. A development build (version dev) is refused.`,
 						}
 					}
 					_, _ = fmt.Fprint(w, leftBehind(stale, res.Current, res.Latest))
+					restartBrokerOn(cmd.Context(), w, res.Path, started, t, false)
 				}
 			}
 			switch {
@@ -156,7 +168,25 @@ func (a *app) syncInstalledPlugins(ctx context.Context) error {
 	case !syncOnce(ctx, a.out, a.cfg.StateDir):
 		_, _ = fmt.Fprintf(a.out, "beekeeper %s synced no plugin: it did so before, another beekeeper does now, or Claude Code lists none.\n", binaryIdentity())
 	}
+	a.sayPendingMigration()
 	return nil
+}
+
+// sayPendingMigration says the migration the state still needs under this
+// binary, which the update hands over to: board next refuses until it ran.
+// It reads the state without its lock and says nothing it cannot read.
+func (a *app) sayPendingMigration() {
+	store, err := state.Open(a.cfg.StateDir)
+	if err != nil {
+		return
+	}
+	st, err := store.Peek()
+	if err != nil {
+		return
+	}
+	if p := pendingMigration(st); p != "" {
+		_, _ = fmt.Fprintf(a.out, "Migration needed, board next refuses until it ran: %s.\n", p)
+	}
 }
 
 // leftBehind names the beekeeper processes an update leaves on the old

@@ -37,9 +37,16 @@ type Item struct {
 	Assignees []string  `json:"assignees,omitempty"`
 	Created   time.Time `json:"created"`
 	Updated   time.Time `json:"updated"`
-	// Blockers counts the recorded blockers, OpenBlockers the open ones.
-	Blockers     int `json:"blockers,omitempty"`
-	OpenBlockers int `json:"openBlockers,omitempty"`
+	// Blockers counts the recorded blockers, OpenBlockers the open ones;
+	// OpenBlockedBy names those read (owner/repo#n), from a read of the
+	// board's items or the priority list only.
+	Blockers      int      `json:"blockers,omitempty"`
+	OpenBlockers  int      `json:"openBlockers,omitempty"`
+	OpenBlockedBy []string `json:"openBlockedBy,omitempty"`
+	// StatusSet is when its Status was last set, BlockersClosed when the
+	// last of its recorded blockers closed; zero when unknown.
+	StatusSet      time.Time `json:"statusSet,omitzero"`
+	BlockersClosed time.Time `json:"blockersClosed,omitzero"`
 	// OpenSubIssues counts the open sub-issues; SubIssues are they, read
 	// for a SubIssues step only.
 	OpenSubIssues int    `json:"openSubIssues,omitempty"`
@@ -62,6 +69,16 @@ const missingBoardFields = "projectItems:"
 func (it Item) boardFieldsUnknown() bool {
 	return slices.ContainsFunc(it.Missing, func(m string) bool { return strings.HasPrefix(m, missingBoardFields) })
 }
+
+// HeldByStatus reports whether its Status was set after the last of its
+// recorded blockers closed: set for a reason no blocker records (a person,
+// a plan), the Status holds it until it changes.
+func (it Item) HeldByStatus() bool {
+	return !it.StatusSet.IsZero() && !it.BlockersClosed.IsZero() && it.StatusSet.After(it.BlockersClosed)
+}
+
+// HeldPrefix starts the refusal of an item its Status holds.
+const HeldPrefix = "held by its Status"
 
 // LeaseLabel is the prefix of an issue label naming a lease the work needs:
 // lease/agentlab-1.
@@ -96,6 +113,8 @@ type Snapshot struct {
 	// Missing names what GitHub answered with an error and no item's
 	// Missing holds ("<path>: <message>"), a search step's issues for one.
 	Missing []string
+	// Priorities is the priority list Read read with the items.
+	Priorities Priorities
 }
 
 // Candidate is an item the order offers, in its place.
@@ -146,7 +165,11 @@ func (c Candidate) PriorityText() string {
 // item without is offered itself. A sub-issue that is a board item, of
 // any Team or Status, is held to the order like any other: one no step
 // offers on its own (an old Backlog item, a blocked one, one in Inbox) is
-// marked skipped with the reason. Items with an open recorded blocker,
+// marked skipped with the reason. An item with an open recorded blocker is
+// held: marked skipped naming its blockers ("held: blocked by …"), an epic
+// offered as itself, never through its sub-issues, and an issue under a
+// held one through the sub-issue relation is marked skipped naming it, a blocked one whose Status was set after
+// its recorded blockers closed too (HeldByStatus). Items with an open recorded blocker,
 // without activity for b.StaleAfter or assigned to anybody outside
 // b.People are marked skipped too. The epic gate (snap.Gate) holds an epic
 // in planning and every issue under it whatever the step: the epic is
@@ -168,7 +191,13 @@ func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 			return
 		}
 		seen[it.Ref] = true
-		out = append(out, Candidate{Item: it, Step: step, Epic: epic, Skip: cmp.Or(skip, snap.planning(it, byRef), skipReason(it, b, now))})
+		up := func(ref string) string {
+			if strings.EqualFold(ref, it.Ref) {
+				return cmp.Or(it.Parent, epic)
+			}
+			return snap.Parent(ref)
+		}
+		out = append(out, Candidate{Item: it, Step: step, Epic: epic, Skip: cmp.Or(skip, heldAbove(it.Ref, up, byRef), snap.planning(it, byRef), skipReason(it, b, now))})
 	}
 	for i, st := range snap.Order {
 		if st.Search != "" {
@@ -181,7 +210,7 @@ func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 			if seen[it.Ref] || !Matches(st, it, now) {
 				continue
 			}
-			if !st.SubIssues || it.OpenSubIssues == 0 || snap.planning(it, byRef) != "" {
+			if !st.SubIssues || it.OpenSubIssues == 0 || snap.planning(it, byRef) != "" || it.OpenBlockers > 0 {
 				offer(it, st.Name, "", "")
 				continue
 			}
@@ -194,9 +223,14 @@ func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 				// A sub-issue that is a board item read with the board
 				// carries its board fields from there, whatever its own
 				// read answered.
-				if b, ok := byRef[strings.ToLower(sub.Ref)]; ok && (!sub.OnBoard || sub.boardFieldsUnknown()) {
-					b.SubIssues = nil
-					sub = b
+				// Its blockers' last close is read with the board's items
+				// only.
+				if b, ok := byRef[strings.ToLower(sub.Ref)]; ok {
+					if !sub.OnBoard || sub.boardFieldsUnknown() {
+						b.SubIssues = nil
+						sub = b
+					}
+					sub.BlockersClosed = b.BlockersClosed
 				}
 				skip := ""
 				switch {
@@ -241,14 +275,17 @@ func selects(st config.BoardStep, it Item) bool {
 		(len(st.Labels) == 0 || slices.ContainsFunc(it.Labels, func(l string) bool { return containsFold(st.Labels, l) }))
 }
 
-// refusal says why st turns away an item it selects: its blockers or its
-// age; empty when st offers it.
+// refusal says why st turns away an item it selects: its blockers, a
+// Status set after they closed, or its age; empty when st offers it.
 func refusal(st config.BoardStep, it Item, now time.Time) string {
 	switch {
 	case st.Unblocked && it.Blockers == 0:
 		return st.Name + " takes items with recorded blockers, it has none"
 	case st.Unblocked && it.OpenBlockers > 0:
-		return blockersOpen(it)
+		return it.HeldText()
+	case st.Unblocked && it.HeldByStatus():
+		return fmt.Sprintf("%s %s, set %s after its last blocker closed %s: it holds until the Status changes",
+			HeldPrefix, it.Status, it.StatusSet.Format(time.DateOnly), it.BlockersClosed.Format(time.DateOnly))
 	case st.CreatedWithin.Duration > 0 && now.Sub(it.Created) > st.CreatedWithin.Duration:
 		return fmt.Sprintf("created %s: %s takes items created within %s", it.Created.Format(time.DateOnly), st.Name, span(st.CreatedWithin.Duration))
 	}
@@ -269,7 +306,7 @@ func span(d time.Duration) string {
 
 func skipReason(it Item, b config.Board, now time.Time) string {
 	if it.OpenBlockers > 0 {
-		return blockersOpen(it)
+		return it.HeldText()
 	}
 	if d := b.StaleAfter.Duration; d > 0 && now.Sub(it.Updated) > d {
 		return "no activity since " + it.Updated.Format(time.DateOnly)

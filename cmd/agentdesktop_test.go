@@ -332,7 +332,7 @@ func TestWatchSaysAnImportWaits(t *testing.T) {
 	if n := strings.Count(out.String(), "IMPORT WAITS"); n != 1 {
 		t.Fatalf("%d IMPORT WAITS lines, want 1:\n%s", n, out)
 	}
-	if l := out.String(); !strings.Contains(l, `"Rotation login" (its import is pending: the reopen waits for the desktop's window to lose the focus`) ||
+	if l := out.String(); !strings.Contains(l, `"Rotation login" (its import is pending: it waits for the desktop's window to lose the focus`) ||
 		!strings.Contains(l, "`beekeeper agents desktop \"Rotation login\"` imports it now") {
 		t.Errorf("watch line:\n%s", l)
 	}

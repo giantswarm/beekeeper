@@ -1,6 +1,7 @@
 package secret
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -13,9 +14,6 @@ import (
 
 	"golang.org/x/sys/unix"
 )
-
-// BrokerUnit is the systemd user unit whose main process is the broker.
-const BrokerUnit = "beekeeper-sandbox.service"
 
 // Peer checks that the other end of c is this user's broker: the main
 // process of BrokerUnit, whose unit runs this very binary. The keeper's
@@ -70,6 +68,20 @@ var brokerProcess = func() (int, string, error) {
 		return 0, "", fmt.Errorf("systemctl show: %w", err)
 	}
 	return parseUnitShow(string(out))
+}
+
+// BrokerProcess is the broker unit's main process and the binary its unit
+// starts; an error when it does not run.
+func BrokerProcess() (int, string, error) { return brokerProcess() }
+
+// RestartBroker restarts the broker unit, onto the binary its unit starts:
+// the vault session it keeps goes with the old process.
+func RestartBroker(ctx context.Context) error {
+	out, err := exec.CommandContext(ctx, "systemctl", "--user", "restart", BrokerUnit).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("systemctl --user restart %s: %w: %s", BrokerUnit, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // execPath is the binary of systemctl show's ExecStart value.

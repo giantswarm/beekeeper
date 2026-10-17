@@ -46,7 +46,7 @@ func TestAWaitRunsOwnedWithItsOutputUnchanged(t *testing.T) {
 	stdout := os.Stdout
 	os.Stdout = w
 	argv := strings.Fields("devctl pr wait o/r 7")
-	err = a.ownedRun(argv)
+	err = a.ownedRun(context.Background(), argv)
 	os.Stdout = stdout
 	_ = w.Close()
 	out, _ := io.ReadAll(r)

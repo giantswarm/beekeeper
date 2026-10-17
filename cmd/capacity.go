@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -288,7 +290,8 @@ func (v *capacityView) verdict() string {
 // reading, nil without a fresh one.
 func (a *app) readHeadroom(ctx context.Context, swap *swapReading) *headroom {
 	k := a.cfg.Capacity
-	h := &headroom{AvailMinMiB: k.AvailMinMiB, SwapGrowthMaxMiB: k.SwapGrowthMaxMiB, PSIMax: k.SwapPSIMax, Swap: swap, Slots: a.cfg.Memcap.Slots}
+	slotDir, slots := a.slotView()
+	h := &headroom{AvailMinMiB: k.AvailMinMiB, SwapGrowthMaxMiB: k.SwapGrowthMaxMiB, PSIMax: k.SwapPSIMax, Swap: swap, Slots: slots}
 	m, err := plat.Machine.Mem()
 	if err != nil {
 		h.MemErr = err.Error()
@@ -305,7 +308,7 @@ func (a *app) readHeadroom(ctx context.Context, swap *swapReading) *headroom {
 		h.LoadErr = err.Error()
 	}
 	h.Load1, h.LoadMax = load[0], a.cfg.Watch.LoadLimit(runtime.NumCPU())
-	for _, s := range machine.ReadSlots(a.cfg.Memcap.SlotDir, a.cfg.Memcap.Slots) {
+	for _, s := range machine.ReadSlots(slotDir, slots) {
 		if s.Free {
 			h.SlotsFree++
 		}
@@ -357,7 +360,8 @@ is a warning in parentheses after the verdict without, the line naming
 the three figures. The build slot bounds only a start that builds:
 --builds judges one whose task builds, tests or lints (beekeeper run takes
 the slot), and the verdict is "no start: no free build slot" while none is
-free. Without --builds the verdict is for a start that does not build (a
+free; agents start --builds then waits its turn in the build slot queue
+with beekeeper run's waiters. Without --builds the verdict is for a start that does not build (a
 filer, a dispatcher, a reviewer, a promoter proving a release read-only),
 which has no use for the slot: a busy slot is a note in parentheses after
 the verdict, never a "no start". The verdict is "room for N starts" up to
@@ -419,18 +423,99 @@ func gateStart(v *capacityView, force bool) (string, error) {
 }
 
 // startGate reads the capacity verdict for a start that builds or not, as
-// beekeeper capacity reads it, and judges it (gateStart).
-func (a *app) startGate(ctx context.Context, builds, force bool) (string, error) {
-	st, err := a.store.Read()
+// beekeeper capacity reads it, and judges it (queueStart).
+func (a *app) startGate(ctx context.Context, name string, builds, force bool) (string, error) {
+	v, err := a.startCapacity(ctx, builds)
 	if err != nil {
 		return "", err
 	}
-	sessions, _, err := a.sessions()
-	if err != nil && !platform.Missing(err) {
+	o, wait, err := a.startSlot()
+	if err != nil {
 		return "", err
 	}
+	return queueStart(v, builds, force, wait,
+		func() (bool, int, error) { return guard.AwaitSlot(o, "agents start "+name) },
+		func() (*capacityView, error) { return a.startCapacity(ctx, false) })
+}
+
+// startSlot is the build slot a start that builds queues for, in the slots
+// beekeeper run takes (buildSlots), and the wait for its turn: run's
+// default, MEMCAP_WAIT.
+func (a *app) startSlot() (guard.Options, string, error) {
+	o := guard.Options{Stderr: os.Stderr}
+	var err error
+	if o.SlotDir, o.Slots, err = a.buildSlots(); err != nil {
+		return o, "", err
+	}
+	var wait string
+	wait, o.WaitFrom, o.Background = guard.ResolveWait("", false)
+	if o.Wait, err = guard.ParseWait(wait); err != nil {
+		return o, "", usageErr("%v", err)
+	}
+	return o, wait, nil
+}
+
+// dryRunSlot prints the build slot a start that builds would find now, as
+// its start resolves it, and claims nothing: "free", or the wait its start
+// would take its turn in, with the slots' holders and the waiters ahead.
+func (a *app) dryRunSlot() error {
+	o, wait, err := a.startSlot()
+	if err != nil {
+		return err
+	}
+	free, why, err := guard.PeekSlot(o)
+	if err != nil {
+		return err
+	}
+	line := "build slot: free"
+	if !free {
+		line = fmt.Sprintf("build slot: busy, the start waits its turn up to %s for %s", wait, strings.TrimSuffix(why, "\n"))
+	}
+	_, err = fmt.Fprintln(a.out, line)
+	return err
+}
+
+// queueStart judges a start's verdict v (gateStart). A start that builds,
+// refused by the busy build slot alone, first waits its turn in the slot
+// queue with the runs (await, up to wait): first in first out, instead of a
+// refusal that a slot held by run after run never lets through. Its turn
+// come, the start is judged again (again) as one the slot no longer stops;
+// a turn that does not come within the wait refuses it, the waiters still
+// ahead named.
+func queueStart(v *capacityView, builds, force bool, wait string, await func() (bool, int, error), again func() (*capacityView, error)) (string, error) {
+	if !builds || force || !v.onlySlot() {
+		return gateStart(v, force)
+	}
+	turn, ahead, err := await()
+	if err != nil {
+		return "", err
+	}
+	if !turn {
+		return "", refused("%s, %d ahead in the build slot queue after %s (beekeeper capacity; --force starts anyway)", v.verdict(), ahead, wait)
+	}
+	if v, err = again(); err != nil {
+		return "", err
+	}
+	return gateStart(v, force)
+}
+
+// startCapacity is capacity's verdict for a start now.
+func (a *app) startCapacity(ctx context.Context, builds bool) (*capacityView, error) {
+	st, err := a.store.Read()
+	if err != nil {
+		return nil, err
+	}
+	sessions, _, err := a.sessions()
+	if err != nil && !platform.Missing(err) {
+		return nil, err
+	}
 	c := countAgents(st, sessions, a.now)
-	return gateStart(newCapacity(c, a.cfg.Capacity, a.readHeadroom(ctx, a.watchSwap()), builds), force)
+	return newCapacity(c, a.cfg.Capacity, a.readHeadroom(ctx, a.watchSwap()), builds), nil
+}
+
+// onlySlot reports whether the busy build slot alone stops the start.
+func (v *capacityView) onlySlot() bool {
+	return v.Room == 0 && len(v.Blocks) == 1 && v.Blocks[0] == noFreeSlot
 }
 
 // keepSwap keeps the machine sample's swap reading for the poll and, in the
