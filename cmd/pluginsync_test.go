@@ -165,10 +165,11 @@ const newBinary = latestRelease + " (commit 2b8a6d5)"
 // state directory of its own, and returns that directory.
 func asBinary(t *testing.T, id string) string {
 	t.Helper()
-	prev, prevInstalled := binaryIdentity, runsInstalled
-	t.Cleanup(func() { binaryIdentity, runsInstalled = prev, prevInstalled })
+	prev, prevInstalled, prevUnder := binaryIdentity, runsInstalled, syncsUnder
+	t.Cleanup(func() { binaryIdentity, runsInstalled, syncsUnder = prev, prevInstalled, prevUnder })
 	binaryIdentity = func() string { return id }
 	runsInstalled = func() bool { return true }
+	syncsUnder = func(string) bool { return true }
 	t.Setenv("BEEKEEPER_CONFIG", filepath.Join(t.TempDir(), "none.yaml"))
 	state := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", state)

@@ -104,12 +104,17 @@ var unitChars = regexp.MustCompile(`[^a-z0-9]+`)
 
 // announce has a transient unit tell every running agent that name answers
 // now; the start does not wait for the sends. The line says where it runs,
-// or what to run where no unit can start.
+// or what to run where no unit can start or the configuration is a scratch
+// one (explicitConfig).
 func (a *app) announce(name string) string {
 	msg := fmt.Sprintf("%q answers now as the supervisor: report to it and ask it as \"the supervisor\", which reaches whoever holds the role whatever its desktop titles it, or by that name (`beekeeper supervisor status` names the holder).", name)
 	by := fmt.Sprintf("run `beekeeper --as %q agents %s %q` to tell the agents", name, broadcastName, msg)
 	if !plat.Launcher.Available() {
 		return "no unit can start here: " + by
+	}
+	if a.explicitConfig() != "" {
+		// a scratch roster can name live sessions: nothing tells them unasked
+		return "a scratch configuration starts no unit: " + by
 	}
 	self, err := os.Executable()
 	if err == nil {

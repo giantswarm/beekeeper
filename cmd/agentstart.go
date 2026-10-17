@@ -1634,11 +1634,16 @@ func startUnit(u platform.Unit, config string, env ...string) error {
 		u.Env = append(u.Env, stateFromEnv+"="+f)
 	}
 	if dir, ok := devBuild(); ok {
-		// Its beekeeper commands run the build that started it.
-		u.Env = append(u.Env, "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		// Its beekeeper commands run the build that started it, which
+		// the PATH no longer tells from the installed one.
+		u.Env = append(u.Env, "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), devBuildEnv+"=1")
 	}
 	return plat.Launcher.Start(u)
 }
+
+// devBuildEnv marks the environment of a unit a development build or a
+// downloaded release candidate started: its PATH leads to that build.
+const devBuildEnv = "BEEKEEPER_DEV_BUILD"
 
 // devBuild is the folder of the running beekeeper when it is not the one on
 // PATH: a development build or a downloaded release candidate, which the
