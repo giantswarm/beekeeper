@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/knownhosts"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/platform"
@@ -119,7 +121,14 @@ Environment: MEMCAP_MAX (memcap.max, default 14% of RAM), MEMCAP_SWAP (0), MEMCA
 MEMCAP_SLOTS and MEMCAP_STATE (the directory holding slots/) override the
 configuration; the flags override the environment. MEMCAP_TEST=1 marks a
 test's run: its scope is memcap-test-…, and snapshot and watch report a
-kill in it as a test kill, not a build's.`,
+kill in it as a test kill, not a build's.
+
+SSH_KNOWN_HOSTS: when the caller sets none and ~/.ssh/known_hosts or
+/etc/ssh/ssh_known_hosts holds a line Go's knownhosts cannot parse (a host
+key type it does not know), the command gets SSH_KNOWN_HOSTS naming a copy
+of both without those lines, <stateDir>/ssh/known_hosts, so that go-git's
+SSH transport, which refuses a whole file for one such line, reads it. The
+machine's files stay untouched.`,
 		Args: cobra.MinimumNArgs(1),
 		PersistentPreRunE: func(*cobra.Command, []string) error {
 			return a.loadConfig()
@@ -155,6 +164,7 @@ kill in it as a test kill, not a build's.`,
 					return usageErr("%v", err)
 				}
 			}
+			a.parseableKnownHosts()
 			if rc := guard.Run(o, args); rc != 0 {
 				return &exitError{code: rc}
 			}
@@ -166,6 +176,28 @@ kill in it as a test kill, not a build's.`,
 	c.Flags().StringVar(&swapFlag, "swap", "", "the command's swap cap (default $MEMCAP_SWAP or 0)")
 	c.Flags().StringVar(&waitFlag, "wait", "", "how long to wait for a slot and memory (default $MEMCAP_WAIT, else 8m, 60m in a background call)")
 	return c
+}
+
+// parseableKnownHosts exports SSH_KNOWN_HOSTS for the run's command when
+// the machine's known_hosts holds a line Go's knownhosts cannot parse
+// (knownhosts.Parseable); a caller's own SSH_KNOWN_HOSTS wins. A failure
+// costs one line and the run goes on with the machine's files.
+func (a *app) parseableKnownHosts() {
+	if os.Getenv(knownhosts.Env) != "" {
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	dst := filepath.Join(a.cfg.StateDir, "ssh", "known_hosts")
+	dropped, err := knownhosts.Parseable(dst, knownhosts.Defaults(home)...)
+	switch {
+	case err != nil:
+		_, _ = fmt.Fprintf(os.Stderr, "%sno parseable known_hosts for SSH_KNOWN_HOSTS: %v\n", guard.LogPrefix, err)
+	case dropped > 0:
+		_ = os.Setenv(knownhosts.Env, dst)
+	}
 }
 
 // noSession names a process no Claude Code session started.
