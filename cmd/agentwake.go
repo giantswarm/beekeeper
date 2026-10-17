@@ -39,6 +39,8 @@ refused: nothing resumes it.
 
 A session whose CLI runs gets the message by name, as SendMessage by name
 does: it queues and runs at the session's next tool call or as its next turn.
+A session whose import is pending (agents shows it importing) is refused: a
+headless turn would run beside the CLI the import warms.
 A session with no running CLI (after a reboot, a crash, the desktop's idle
 drop) and a row in the running desktop gets the message as a desktop turn:
 a steward's send through the desktop's session messaging starts its desktop
@@ -145,6 +147,9 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 	if u := wakeRunning(ctx, w.id); u != "" {
 		return refused("%s: its wake turn %s is starting and not yet reachable by name: send again in a minute", ag.Name, u)
 	}
+	if ag.Import.Pending(a.now) {
+		return a.importRefusal(by, ag)
+	}
 	if line, err := a.turnInDesktop(ctx, w, msg, 0); err == nil {
 		_ = a.store.Record(event(by, "agents.wake", "%s: %s", ag.Name, line))
 		_, err = fmt.Fprintf(a.out, "wake: %s: %s\n", ag.Name, line)
@@ -153,6 +158,14 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 		return err
 	}
 	return a.resumeTurn(ctx, by, w, msg)
+}
+
+// importRefusal refuses the wake of ag, whose import is pending: the CLI the
+// import warms would run beside a headless turn of the wake.
+func (a *app) importRefusal(by state.Party, ag state.Agent) error {
+	_ = a.store.Record(event(by, "agents.wake", "%s: refused, its import is pending", ag.Name))
+	return refused("%s: %s; a headless turn would run beside the CLI the import warms, so wake starts none: send again once beekeeper agents shows it live",
+		ag.Name, importStatus(ag, a.now))
 }
 
 // markDelivered clears the roster's "task not delivered" of p.

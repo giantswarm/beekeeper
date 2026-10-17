@@ -143,6 +143,22 @@ func (a *app) importWaits(id, name string, wait time.Duration) func(error) {
 	}
 }
 
+// importPending records on the agent of session id that its start's import
+// and first turn run, bounded by wait: agents shows it importing, and a wake
+// starts no headless turn beside the CLI the import warms.
+func (a *app) importPending(id string, wait time.Duration) {
+	since := time.Now().UTC()
+	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		if i := agentOfSession(st, id); i >= 0 {
+			st.Agents[i].Import = &state.ImportWait{On: startImportOn, Since: since, Until: since.Add(wait)}
+		}
+		return nil, nil
+	})
+}
+
+// startImportOn is what a start's pending import waits for.
+const startImportOn = "its start's import and first desktop turn"
+
 // importEnded clears the reopen's wait on the agent of session id.
 func (a *app) importEnded(id string) {
 	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -203,7 +219,7 @@ func importStatus(ag state.Agent, now time.Time) string {
 	if !w.Pending(now) {
 		return "no import is pending"
 	}
-	s := fmt.Sprintf("its import is pending: the reopen waits for %s since %s, at the latest until %s", w.On, clock(now, w.Since), clock(now, w.Until))
+	s := fmt.Sprintf("its import is pending: it waits for %s since %s, at the latest until %s", w.On, clock(now, w.Since), clock(now, w.Until))
 	if ag.DesktopTurn.IsZero() {
 		s += fmt.Sprintf(" (`beekeeper agents desktop %q` imports it now)", ag.Name)
 	}

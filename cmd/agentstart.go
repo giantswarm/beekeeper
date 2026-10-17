@@ -546,6 +546,11 @@ func (a *app) startVisible(ctx context.Context, d desk, sp agentStart, bin, unit
 	}
 	a.resolveStartModel(id)
 	sa.want = a.chosenModel(id)
+	// Until its task's turn runs, the session has no CLI and maybe no row:
+	// a wake meanwhile would resume it headless beside the CLI the import
+	// warms.
+	a.importPending(id, d.turnWait()+awayPoll+focusWait+2*twinWait)
+	defer a.importEnded(id)
 	var follow string
 	if sp.replaces != nil {
 		follow = sp.replaces.HostSession
