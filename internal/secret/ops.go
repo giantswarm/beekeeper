@@ -588,6 +588,9 @@ func redact(s, value, ref string) string {
 	return s
 }
 
+// ErrCredentialShape refuses a literal that looks like a credential.
+var ErrCredentialShape = errors.New("refused")
+
 // The character sets set --generate draws from.
 var charsets = map[string]string{
 	"alnum": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
@@ -623,8 +626,12 @@ func Generate(n int, charset string) (string, error) {
 // stdin after it. Each is optional; the value never leaves the process
 // otherwise.
 type SetOptions struct {
-	Length   int
-	Charset  string
+	Length  int
+	Charset string
+	// Literal is a known, public value written instead of a generated one
+	// (a GitHub App's client ID beside its client secret); one with the
+	// shape of a credential is refused.
+	Literal  string
 	Vault    Ref
 	Secret   *KubeTarget
 	Consumer []string
@@ -638,12 +645,13 @@ type SetOptions struct {
 // consumer, its exit code and its output with the value redacted.
 type SetResult struct {
 	Key         string `json:"key"`
+	Length      int    `json:"length"`
 	Fingerprint string `json:"fingerprint"`
 	Code        int    `json:"code,omitempty"`
 	Output      string `json:"output,omitempty"`
 }
 
-// Set generates a value and writes it to the shared vault's field first
+// Set generates a value, or takes opt.Literal, and writes it to the shared vault's field first
 // when one is given, then into the SOPS path, then into a lab's Secret and
 // a consumer's stdin when given, these three in o.Encode. A value without a
 // vault field lives in the SOPS file alone.
@@ -657,6 +665,14 @@ func (o *Ops) Set(ctx context.Context, dst Ref, opt SetOptions) (SetResult, erro
 		}
 		if err := o.checkVault(opt.Vault); err != nil {
 			return SetResult{}, err
+		}
+	}
+	if opt.Literal != "" {
+		if opt.Vault != (Ref{}) {
+			return SetResult{}, fmt.Errorf("%s: a literal is a public value, no vault holds it", opt.Vault)
+		}
+		if shapes := guard.CredentialShapes(opt.Literal); shapes != nil {
+			return SetResult{}, fmt.Errorf("%w: the literal has the shape of a credential (%s); a secret goes by copy from its store or set --generate, never through a session", ErrCredentialShape, strings.Join(shapes, ", "))
 		}
 	}
 	if opt.Secret != nil && opt.Secret.KindCluster() == "" {
@@ -679,10 +695,13 @@ func (o *Ops) Set(ctx context.Context, dst Ref, opt SetOptions) (SetResult, erro
 	if err != nil {
 		return SetResult{}, err
 	}
-	v, err := Generate(opt.Length, opt.Charset)
-	if err != nil {
-		return SetResult{}, err
+	v := opt.Literal
+	if v == "" {
+		if v, err = Generate(opt.Length, opt.Charset); err != nil {
+			return SetResult{}, err
+		}
 	}
+	n := len(v)
 	if opt.Vault != (Ref{}) {
 		if err := o.storeVault(ctx, opt.Vault, v); err != nil {
 			return SetResult{}, err
@@ -696,7 +715,7 @@ func (o *Ops) Set(ctx context.Context, dst Ref, opt SetOptions) (SetResult, erro
 		}
 		return SetResult{}, err
 	}
-	res := SetResult{Key: dst.String(), Fingerprint: o.Fingerprint(v)}
+	res := SetResult{Key: dst.String(), Length: n, Fingerprint: o.Fingerprint(v)}
 	if opt.Secret != nil {
 		if err := o.toSecret(ctx, v, dst.String(), *opt.Secret); err != nil {
 			return res, fmt.Errorf("%s holds the value, the Secret not (copy %s --to-secret %s): %w", dst, dst, opt.Secret, err)

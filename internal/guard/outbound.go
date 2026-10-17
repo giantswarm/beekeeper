@@ -84,6 +84,19 @@ var tokenRules = []tokenRule{
 	rule(urlCredentials, `\b[a-z][a-z0-9+.-]*://[^\s/:@'"]+:[^\s/@'"$<{%*][^\s/@'"]*@[0-9A-Za-z]`, "://"),
 }
 
+// CredentialShapes are the ids of the token rules text matches, once each:
+// the shapes of a credential (a private key, a token's prefix), none for a
+// public value. A gitleaks:allow marker exempts nothing here.
+func CredentialShapes(text string) []string {
+	var out []string
+	for _, r := range tokenRules {
+		if slices.ContainsFunc(r.keywords, func(k string) bool { return strings.Contains(text, k) }) && r.re.MatchString(text) {
+			out = append(out, r.id)
+		}
+	}
+	return out
+}
+
 // hits are the names of what text carries: the rule ids and the numbers of
 // the phrases, in order and once each.
 func (o Outbound) hits(text string) []string {
