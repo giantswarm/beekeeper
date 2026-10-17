@@ -35,6 +35,7 @@ func TestHookLeavesProseUnrefused(t *testing.T) {
 		// A scratch script's string literals and comments.
 		"python3 -I docs.py",
 		"python3 -c 'print(\"wait with devctl pr wait o/r 7\")'",
+		"python3 -c 'print(\"Merge it (see `devctl pr merge o/r 7`), this time devctl pr wait o/r 7 blocks.\")'",
 		"node -e 'console.log(`see devctl rollout wait inst o/r --pr 1`)'",
 		// A PR body draft in a here-document, sent by gh api.
 		"gh api -X PATCH repos/o/r/pulls/7 -f body=\"$(cat <<'EOF'\n## Proof\n\nThe merge ran as devctl pr wait o/r 7, then devctl pr merge o/r 7 --rebase.\nEOF\n)\"",
@@ -45,14 +46,22 @@ func TestHookLeavesProseUnrefused(t *testing.T) {
 			t.Errorf("%q is refused: %s", cmd, d.Reason)
 		}
 	}
+	const pyDoc = "a devctl pr merge in the here-document python3 reads"
 	for _, c := range []struct{ cmd, want string }{
 		// The same commands as commands are refused as before.
-		{"python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['devctl', 'pr', 'merge', 'o/r', '7', '--rebase'], check=True)\nEOF", "a devctl pr merge in the here-document python3 reads"},
+		{"python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['devctl', 'pr', 'merge', 'o/r', '7', '--rebase'], check=True)\nEOF", pyDoc},
 		{"python3 - <<'EOF'\nimport subprocess\nsubprocess.run('cd x && devctl pr merge o/r 7 --rebase', shell=True)\nEOF", "line 2: subprocess.run('cd x && devctl pr merge o/r 7 --rebase', shell=True)"},
 		{"python3 -c 'import os; os.system(\"devctl release promote o/r\")'", "a devctl release promote in python3's code (-c)"},
 		{"perl -e 'print `devctl pr wait o/r 7`'", "a devctl pr wait in perl's code (-e)"},
 		{"node -e 'require(\"child_process\").execSync(`devctl rollout wait inst o/r --pr ${1}`)'", "a devctl rollout wait in node's code (-e)"},
 		{"bash -c 'devctl pr merge o/r 7 --rebase'", "inside a shell's -c or eval string"},
+		// A command behind a prefix, an escaped line break, a shell's -c or a command quote.
+		{"python3 - <<'EOF'\nimport os\nos.system('sudo -E devctl pr merge o/r 7')\nEOF", pyDoc},
+		{"python3 - <<'EOF'\nimport os\nos.system('set -e\\ndevctl pr merge o/r 7')\nEOF", pyDoc},
+		{"python3 - <<'EOF'\nimport os\nos.system('x & devctl pr merge o/r 7')\nEOF", pyDoc},
+		{"python3 - <<'EOF'\nimport os\nos.system('bash -c \"devctl pr merge o/r 7\"')\nEOF", pyDoc},
+		{"perl - <<'EOF'\nprint qx(devctl release promote o/r);\nEOF", "a devctl release promote in the here-document perl reads"},
+		{"ruby -e 'puts %x{devctl pr merge o/r 7}'", "a devctl pr merge in ruby's code (-e)"},
 	} {
 		d := decide(t, h, dir, c.cmd, nil)
 		if d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, c.want) {

@@ -493,14 +493,12 @@ func codeUngated(code string) int {
 		for k < len(lits) && lits[k][1] <= m[0] {
 			k++
 		}
-		if k == len(lits) {
-			return -1
-		}
-		if m[0] < lits[k][0] {
-			continue // outside a literal: code or a comment
-		}
-		before := code[lits[k][0]:m[0]]
-		if strings.TrimSpace(before) != "" && !literalOperator.MatchString(before) {
+		switch {
+		case k == len(lits) || m[0] < lits[k][0]:
+			if !quotedCommand.MatchString(code[:m[0]]) {
+				continue // outside a literal: code or a comment
+			}
+		case !literalCommand.MatchString(code[lits[k][0]:m[0]]):
 			continue // prose: the command is no word a shell or a program runs
 		}
 		if !looseGated.MatchString(code[:m[0]]) {
@@ -510,9 +508,16 @@ func codeUngated(code string) int {
 	return -1
 }
 
-// literalOperator is the text in a string literal before a command that a
-// shell runs from it: a shell operator.
-var literalOperator = regexp.MustCompile(`(?:;|&&|\|\|?|\$\()\s*$`)
+var (
+	// literalCommand is the text in a string literal before a command a shell
+	// or a program runs from it: none, or a shell operator, an escaped line
+	// break, a shell's -c or eval, and the prefix commands after it.
+	literalCommand = regexp.MustCompile(`(?s)^(?:.*(?:[;&|({]|\$\(|\\n|(?:\b(?:ba|z|da|k)?sh\s+(?:-\w+\s+)*-\w*c\w*|\beval)\s+\\?['"]?))?\s*` +
+		`(?:(?:sudo|env|exec|command|nohup|time|nice|timeout(?:\s+\d\S*)?|\w+=\S*)(?:\s+-\S+(?:\s+\d+)?)*\s+)*$`)
+	// quotedCommand is a Perl or Ruby command quote that opens before a
+	// command: qx(…), %x{…}.
+	quotedCommand = regexp.MustCompile(`(?:\bqx|%x)\s*[^\w\s]\s*$`)
+)
 
 // stringLiterals are the contents of the program's string literals, in their
 // order: quoted by ', " or ` (a template, a Perl or Ruby command), or by three
