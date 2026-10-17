@@ -68,12 +68,12 @@ there, naming this record's form. A sign-in or consent page of the lab's
 own identity provider on a loopback host (*.127.0.0.1.nip.io, localhost) is
 allowed without a record: a fixture user's sign-in there is the person's
 own lab's. A Google OAuth client the person owns and asked a consent for is
-recorded with --google --callback <host>, on the person's word alone: on
-Google's sign-in (accounts.google.com) the hook follows the tab's flow to
-the callback host of its authorization request (the account chooser's
-redirect_uri; the pages after it carry only a redacted client id), and
-answers the clicks of that flow (the account, "Sign in to <app>"'s
-Continue, the consent of scopes) for a recorded callback host, refusing
+recorded with --google --callback <host> --account <address>, on the
+person's word alone: on Google's sign-in (accounts.google.com) the hook
+follows the tab's flow to the callback host of its authorization request
+(the account chooser's redirect_uri; the pages after it carry only a
+redacted client id), and answers the clicks of that flow (the recorded
+account and no other, "Sign in to <app>"'s Continue, the consent of scopes) for a recorded callback host, refusing
 Google's consent pages of a flow for any other host, a third party's. A
 consent page on any other host (a path or title that names a
 consent or a grant, or an OAuth authorization page where the call's own
@@ -117,11 +117,13 @@ replaced:
   manifest of app create --manifest declares the App instead of apps.repo.
   An App beekeeper app create created and stored no credentials of is
   deletable without a record (beekeeper's ledger, app list).
-  --google --callback <host>: a consent on Google's sign-in for the
-  person's own Google OAuth client, whose redirect goes to <host>
-  (repeatable; a URL's host is taken). No repository declares such a
-  client: the record is the person's word alone. --client-id, when given,
-  must match where Google's URL carries it unredacted.
+  --google --callback <host> --account <address>: a consent on Google's
+  sign-in for the person's own Google OAuth client, whose redirect goes to
+  <host> (repeatable; a URL's host is taken), signed in with the Google
+  account <address>, the only one the hook answers on Google's account
+  chooser. No repository declares such a client: the record is the
+  person's word alone, kept in the machine's state. --client-id, when
+  given, must match where Google's URL carries it unredacted.
 
 Any of them, with --word, the person's words that asked for it.`,
 		Args: cobra.ExactArgs(1),
@@ -158,7 +160,7 @@ Any of them, with --word, the person's words that asked for it.`,
 			}
 			var answers []string
 			if rec.Google {
-				answers = append(answers, "its consent on Google's sign-in with callback "+strings.Join(rec.Callbacks, " or "))
+				answers = append(answers, "its consent on Google's sign-in with callback "+strings.Join(rec.Callbacks, " or ")+" as "+rec.Account)
 			} else if len(rec.Callbacks) > 0 {
 				answers = append(answers, "its consent page with callback "+strings.Join(rec.Callbacks, " or "))
 			}
@@ -183,6 +185,7 @@ Any of them, with --word, the person's words that asked for it.`,
 	allow.Flags().StringVar(&rec.Word, "word", "", "the person's words that asked for the grant")
 	allow.Flags().BoolVar(&rec.Google, "google", false, "a consent on Google's sign-in: the person's own Google OAuth client, by --callback")
 	allow.Flags().StringArrayVar(&hosts, "callback", nil, "with --google, a callback host (or URL) of the client's redirect (repeatable)")
+	allow.Flags().StringVar(&rec.Account, "account", "", "with --google, the Google account the sign-in chooses on Google's account chooser")
 	revoke := &cobra.Command{
 		Use:   "revoke <name>",
 		Short: "Take an App off the record: its consent page is refused again",
@@ -268,6 +271,9 @@ func (a *app) githubApp(ctx context.Context, rec *state.App, hosts []string, per
 	if len(hosts) > 0 {
 		return usageErr("--callback names a Google OAuth client's callback hosts, with --google: a GitHub App's are its manifest's")
 	}
+	if rec.Account != "" {
+		return usageErr("--account names the account a Google OAuth client's sign-in chooses, with --google")
+	}
 	if rec.Permission, err = permissionChange(permission); err != nil {
 		return err
 	}
@@ -301,7 +307,8 @@ func (a *app) githubApp(ctx context.Context, rec *state.App, hosts []string, per
 const googleDeclared = "the person's word (a Google OAuth client)"
 
 // googleClient fills rec, a Google OAuth client's record, from its flags:
-// its consent, by the callback hosts named.
+// its consent, by the callback hosts named, signed in with the account
+// named.
 func googleClient(rec *state.App, hosts []string, permission, manifest string) error {
 	if permission != "" || rec.Delete || manifest != "" {
 		return usageErr("--google records a consent on Google's sign-in alone: --permission, --delete and --manifest are a GitHub App's")
@@ -321,6 +328,10 @@ func googleClient(rec *state.App, hosts []string, permission, manifest string) e
 	}
 	if len(rec.Callbacks) == 0 {
 		return usageErr("--google needs --callback <host>: the host the client's redirect_uri goes to")
+	}
+	rec.Account = strings.ToLower(strings.TrimSpace(rec.Account))
+	if !strings.Contains(rec.Account, "@") || strings.ContainsAny(rec.Account, " /?#") {
+		return usageErr("--google needs --account <address>: the Google account the sign-in chooses on Google's account chooser, not %q", rec.Account)
 	}
 	rec.Declared = googleDeclared
 	return nil
@@ -353,6 +364,9 @@ func recordParts(x state.App) []string {
 	}
 	if len(x.Callbacks) > 0 {
 		parts = append(parts, "callbacks "+strings.Join(x.Callbacks, " "))
+	}
+	if x.Account != "" {
+		parts = append(parts, "account "+x.Account)
 	}
 	if x.Permission != "" {
 		parts = append(parts, "permission "+x.Permission)
@@ -457,7 +471,7 @@ func guardApps(apps []state.App) []guard.App {
 	out := make([]guard.App, 0, len(apps))
 	for _, x := range apps {
 		out = append(out, guard.App{Name: x.Name, ClientID: x.ClientID, Callbacks: x.Callbacks, Org: x.Org, Permission: x.Permission,
-			Delete: x.Delete, Google: x.Google, Declared: x.Declared, Word: x.Word, By: x.By.Name, At: x.At})
+			Delete: x.Delete, Google: x.Google, Account: x.Account, Declared: x.Declared, Word: x.Word, By: x.By.Name, At: x.At})
 	}
 	return out
 }

@@ -29,7 +29,7 @@ var googleGrantPaths = []string{"/o/oauth2/", "/signin/oauth/"}
 
 // GoogleForm is how a consent for a Google OAuth client the person owns and
 // asked for is recorded.
-const GoogleForm = "`beekeeper app allow <name> --google --callback <host> --word \"<the person's words>\"`"
+const GoogleForm = "`beekeeper app allow <name> --google --callback <host> --account <address> --word \"<the person's words>\"`"
 
 // googleRequestPaths are the paths of Google's pages whose redirect_uri is
 // the authorization request's own: the authorization endpoint and the
@@ -40,6 +40,15 @@ var googleRequestPaths = []string{"/o/oauth2/auth", "/o/oauth2/v2/auth", "/v3/si
 func googleGrant(path string) bool {
 	path = strings.ToLower(path)
 	return slices.ContainsFunc(googleGrantPaths, func(p string) bool { return strings.HasPrefix(path, p) })
+}
+
+// googleChooserPaths are the paths of Google's account chooser, where a
+// click picks the account the flow signs in with.
+var googleChooserPaths = []string{"/v3/signin/accountchooser", "/o/oauth2/auth/oauthchooseaccount"}
+
+// googleChooser reports whether path is Google's account chooser.
+func googleChooser(path string) bool {
+	return slices.Contains(googleChooserPaths, strings.ToLower(path))
 }
 
 // googleFlowPaths open the paths of the pages an OAuth flow on Google's
@@ -125,7 +134,8 @@ func onGoogle(page Page) bool {
 
 // googleClick decides a call on page, at u on Google's host, in the call's
 // own words: allowed on any page of a flow whose callback host is a Google
-// App's on record, refused on a grant page of a flow for any other callback
+// App's on record, but on the account chooser of a record that names its
+// account only for a call whose words name that account; refused on a grant page of a flow for any other callback
 // host; a flow the transcript names no callback host of is decided as a
 // consent page elsewhere, and so is a grant page whose client id is
 // another's than the record of its callback host.
@@ -136,6 +146,11 @@ func googleClick(apps []App, u *url.URL, page Page, words string) Decision {
 	}
 	clientID := u.Query().Get("client_id")
 	if a := googleApp(apps, callback, clientID); a != nil {
+		if a.Account != "" && googleChooser(u.Path) && !strings.Contains(strings.ToLower(words), strings.ToLower(a.Account)) {
+			return Decision{Deny, fmt.Sprintf("Refused: on Google's account chooser of the person's own App %s (callback %s) the record names the "+
+				"account its sign-in chooses, and this call's own words do not name it: choose that account, named in the call's summary, "+
+				"and nothing else on the chooser.", a.Name, callback)}
+		}
 		return Decision{Allow, fmt.Sprintf("beekeeper allows it: Google's sign-in to the person's own App %s (callback %s), on record since %s by %s: %s",
 			a.Name, callback, a.At.UTC().Format("2006-01-02"), a.By, a.Word)}
 	}

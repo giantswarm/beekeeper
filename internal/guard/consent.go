@@ -53,6 +53,9 @@ type App struct {
 	// Google says the App is a Google OAuth client whose consent is on
 	// Google's sign-in (google.go), not a GitHub App.
 	Google bool
+	// Account is the Google account a Google App's sign-in chooses on
+	// Google's account chooser, "" for any.
+	Account string
 	// Run is the running `beekeeper app create` of the App whose listener
 	// answers, nil for none; Created is beekeeper's ledger entry of the App
 	// it created, nil for none (applife.go).

@@ -33,6 +33,7 @@ const (
 	navigateFlag   = "--navigate"
 	googleFlag     = "--google"
 	callbackFlag   = "--callback"
+	accountFlag    = "--account"
 )
 
 // app check's answers, and the calls and the page of an App's life it
@@ -215,6 +216,7 @@ func TestAppGoogleRecord(t *testing.T) {
 		client   = "example-portal"
 		callback = "portal.example.org"
 		chooser  = "https://accounts.google.com/v3/signin/accountchooser?client_id=REDACTED&redirect_uri=https%3A%2F%2F" + callback + "%2Fcb&response_type=code"
+		account  = "person@example.com"
 		scopes   = "https://accounts.google.com/o/oauth2/v2/auth?client_id=REDACTED&redirect_uri=https%3A%2F%2F" + callback + "%2Fcb&response_type=code"
 	)
 	for _, tc := range []struct {
@@ -222,6 +224,8 @@ func TestAppGoogleRecord(t *testing.T) {
 		want string
 	}{
 		{[]string{appAllow, client, googleFlag, wordFlag, "w"}, "--google needs --callback <host>"},
+		{[]string{appAllow, client, googleFlag, callbackFlag, callback, wordFlag, "w"}, "--google needs --account <address>"},
+		{[]string{appAllow, client, clientIDFlag, "x", accountFlag, account, wordFlag, "w"}, "--account names the account a Google OAuth client's sign-in chooses, with --google"},
 		{[]string{appAllow, client, googleFlag, callbackFlag, callback, permissionFlag, deviceChange, wordFlag, "w"}, "--google records a consent on Google's sign-in alone"},
 		{[]string{appAllow, client, googleFlag, callbackFlag, "a b", wordFlag, "w"}, `--callback names a callback host (or a URL), not "a b"`},
 		{[]string{appAllow, client, callbackFlag, callback, clientIDFlag, "x", wordFlag, "w"}, "--callback names a Google OAuth client's callback hosts, with --google"},
@@ -230,24 +234,27 @@ func TestAppGoogleRecord(t *testing.T) {
 			t.Errorf("app %q = %v, want a refusal with %q", tc.args, err, tc.want)
 		}
 	}
-	out, err := runApp(t, a, appAllow, client, googleFlag, callbackFlag, "https://Portal.example.org/api/auth/google/handler/frame", callbackFlag, callback, wordFlag, personsWord)
-	if err != nil || out != "App "+client+" on record, declared in "+googleDeclared+": its consent on Google's sign-in with callback "+callback+" is answered by the hook\n" {
+	out, err := runApp(t, a, appAllow, client, googleFlag, callbackFlag, "https://Portal.example.org/api/auth/google/handler/frame", callbackFlag, callback, accountFlag, " Person@Example.com ", wordFlag, personsWord)
+	if err != nil || out != "App "+client+" on record, declared in "+googleDeclared+": its consent on Google's sign-in with callback "+callback+" as "+account+" is answered by the hook\n" {
 		t.Fatalf("app allow --google = %q, %v", out, err)
 	}
-	if out, _ := runApp(t, a, "list"); !strings.Contains(out, client+"  Google  callbacks "+callback+"  declared in "+googleDeclared+"  since ") {
+	if out, _ := runApp(t, a, "list"); !strings.Contains(out, client+"  Google  callbacks "+callback+"  account "+account+"  declared in "+googleDeclared+"  since ") {
 		t.Errorf("list = %q", out)
 	}
 	if out, _ := runApp(t, a, appCheck, scopes); !strings.HasPrefix(out, checkAllow+"beekeeper allows it: Google's sign-in to the person's own App "+client) {
 		t.Errorf("check of its flow = %q", out)
 	}
-	if out, _ := runApp(t, a, appCheck, chooser); !strings.HasPrefix(out, checkAllow) {
+	if out, _ := runApp(t, a, appCheck, chooser, wordsFlag, "Clicks the account "+account); !strings.HasPrefix(out, checkAllow) {
 		t.Errorf("check of its account chooser = %q", out)
+	}
+	if out, _ := runApp(t, a, appCheck, chooser, wordsFlag, "Clicks the account other@example.com"); !strings.HasPrefix(out, checkRefuse) {
+		t.Errorf("check of another account on its chooser = %q", out)
 	}
 	if out, _ := runApp(t, a, appCheck, strings.ReplaceAll(scopes, callback, "app.example.net")); !strings.HasPrefix(out, checkRefuse) || !strings.Contains(out, guard.GoogleForm) {
 		t.Errorf("check of a third party's consent = %q", out)
 	}
 	t.Setenv("BEEKEEPER_CONFIG", filepath.Join(a.cfg.StateDir, "config.yaml"))
-	if apps := a.allowedApps(); len(apps) != 1 || !apps[0].Google || apps[0].Callbacks[0] != callback {
+	if apps := a.allowedApps(); len(apps) != 1 || !apps[0].Google || apps[0].Callbacks[0] != callback || apps[0].Account != account {
 		t.Errorf("allowedApps = %+v", apps)
 	}
 }
