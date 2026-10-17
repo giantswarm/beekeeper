@@ -5,16 +5,66 @@
 package gocache
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"time"
+
+	"github.com/gofrs/flock"
 )
 
 // ErrBusy stops a trim: a Go build began while it ran.
 var ErrBusy = errors.New("a go build runs")
+
+// lockName is the cache's use lock, a file at its top, where the go command
+// keeps only its README and trim.txt: a beekeeper run holds it shared for
+// the length of its command (Use), a trim exclusive for the length of the
+// trim (TryTrim), so no trim removes an entry a running compile reads.
+const lockName = "beekeeper-use.lock"
+
+// lockRetry is how often Use asks again for a lock a trim holds.
+const lockRetry = 250 * time.Millisecond
+
+func useLock(dir string) (*flock.Flock, error) {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return nil, err
+	}
+	return flock.New(filepath.Join(dir, lockName)), nil
+}
+
+// Use takes the cache's use lock shared for a command that may compile:
+// it waits for a trim under way, until ctx ends. Many commands hold it at
+// once; release gives it back.
+func Use(ctx context.Context, dir string) (release func(), err error) {
+	l, err := useLock(dir)
+	if err != nil {
+		return nil, err
+	}
+	ok, err := l.TryRLockContext(ctx, lockRetry)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, ctx.Err()
+	}
+	return func() { _ = l.Unlock() }, nil
+}
+
+// TryTrim takes the cache's use lock exclusive for a trim, without waiting:
+// ok false while a command holds it (Use).
+func TryTrim(dir string) (release func(), ok bool, err error) {
+	l, err := useLock(dir)
+	if err != nil {
+		return nil, false, err
+	}
+	if ok, err = l.TryLock(); err != nil || !ok {
+		return nil, false, err
+	}
+	return func() { _ = l.Unlock() }, true, nil
+}
 
 // busyEvery is how many removals a trim makes between asking whether a
 // build began.

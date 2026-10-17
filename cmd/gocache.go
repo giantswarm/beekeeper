@@ -20,8 +20,11 @@ import (
 // doctor.goCacheMaxGiB the watch trims it, least recently used first, down
 // to three quarters of the cap, while no go build runs, and logs each trim
 // (gocache.trim). A cache past the cap by goCacheMargin is trimmed even
-// while builds run: removing an entry is safe under a running build, which
-// takes a missing entry for a miss and builds it again. One process trims at a time (gocache.lock), and the
+// while go commands outside a beekeeper run run: the go command takes a
+// missing entry for a miss and builds it again. A beekeeper run holds the
+// cache's use lock shared for its command (gocache.Use), and no trim, forced
+// or not, starts while one holds it: a compile reading an entry the trim
+// removes fails. One process trims at a time (gocache.lock), and the
 // watches share when the cache was read last (gocache.json).
 
 const (
@@ -55,10 +58,12 @@ type goCacheRun struct {
 	removed       int
 	// waits are the go builds running at the trim, which it waits for
 	// unless forced: the cache was past the cap by goCacheMargin. locked
-	// says another process trims the cache now.
+	// says another process trims the cache now; used, that a beekeeper run
+	// holds the cache (gocache.Use), which every trim waits for.
 	waits  []int
 	forced bool
 	locked bool
+	used   bool
 	err    error
 	// waited is how long the cache has stayed over its cap, as the watch
 	// saw it.
@@ -88,6 +93,8 @@ func (r goCacheRun) line() string {
 		return fmt.Sprintf("%s; trimmed to %s, %d entries removed, then: %v", head, gibStr(r.after), r.removed, r.err)
 	case r.err != nil:
 		return fmt.Sprintf("%s; %v", head, r.err)
+	case r.used:
+		return head + "; its trim waits for the beekeeper runs that hold the cache"
 	case r.forced:
 		return fmt.Sprintf("%s; trimmed to %s, %d entries removed least recently used first while go builds run (PIDs %s), past the cap by a quarter", head, gibStr(r.after), r.removed, pidList(r.waits))
 	case len(r.waits) > 0 && r.removed > 0:
@@ -125,8 +132,9 @@ func goBuilds() []int { return proc.Named("go", os.Getuid()) }
 
 // trimGoCache reads the size of the Go build cache and, unless dryRun,
 // trims it under the lock when it is over the cap and no go build runs
-// (builds), or past the cap by goCacheMargin whatever runs, logging what
-// it freed.
+// (builds), or past the cap by goCacheMargin whatever runs outside a
+// beekeeper run, logging what it freed. No trim starts while a beekeeper
+// run holds the cache's use lock, and none begins while the trim holds it.
 func (a *app) trimGoCache(dryRun bool, builds func() []int) goCacheRun {
 	r := goCacheRun{dir: goCacheDir(), max: a.cfg.Doctor.GoCacheMax()}
 	if r.dir == "" {
@@ -147,6 +155,12 @@ func (a *app) trimGoCache(dryRun bool, builds func() []int) goCacheRun {
 	if err != nil || !r.over() || dryRun {
 		return r
 	}
+	release, ok, err := gocache.TryTrim(r.dir)
+	if err != nil || !ok {
+		r.used, r.err = err == nil, err
+		return r
+	}
+	defer release()
 	r.waits = builds()
 	r.forced = len(r.waits) > 0 && r.before > goCacheForce(r.max)
 	if len(r.waits) == 0 || r.forced {

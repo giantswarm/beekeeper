@@ -16,6 +16,7 @@ import (
 
 	"github.com/gofrs/flock"
 
+	"github.com/giantswarm/beekeeper/internal/gocache"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/platform"
 )
@@ -353,3 +354,46 @@ func TestWaitText(t *testing.T) {
 		t.Errorf("with its source: %q", got)
 	}
 }
+
+// A run holds the Go build cache's use lock for its command: no trim starts
+// while it runs, and a run waits for a trim under way, up to its wait.
+func TestRunHoldsTheGoCacheAgainstATrim(t *testing.T) {
+	f := &fakeCapper{}
+	saved := plat.Capper
+	plat.Capper = f
+	t.Cleanup(func() { plat.Capper = saved })
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "fresh")
+	cache := filepath.Join(t.TempDir(), "go-build")
+	marker := filepath.Join(t.TempDir(), "compiling")
+	o := Options{Max: "1M", Swap: "0", SlotDir: t.TempDir(), Slots: 1, Stderr: io.Discard, Wait: time.Second, GoCache: cache}
+
+	rc := make(chan int, 1)
+	go func() { rc <- Run(o, []string{"sh", "-c", "touch " + marker + "; sleep 2"}) }()
+	for deadline := time.Now().Add(5 * time.Second); !exists(marker); time.Sleep(20 * time.Millisecond) {
+		select {
+		case c := <-rc:
+			t.Fatalf("the run ended, exit %d, before its command started", c)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the run's command never started")
+		}
+	}
+	if _, ok, err := gocache.TryTrim(cache); ok || err != nil {
+		t.Fatalf("a trim began while a run compiled: %v, %v", ok, err)
+	}
+	if c := <-rc; c != 0 {
+		t.Fatalf("exit %d, want 0", c)
+	}
+	release, ok, err := gocache.TryTrim(cache)
+	if !ok || err != nil {
+		t.Fatalf("the run kept the cache after it ended: %v, %v", ok, err)
+	}
+	defer release()
+	_ = os.Remove(marker)
+	if c := Run(o, []string{"sh", "-c", "touch " + marker}); c != ExitBusy || exists(marker) {
+		t.Errorf("a run under a trim: exit %d, ran %v; want %d, not run", c, exists(marker), ExitBusy)
+	}
+}
+
+func exists(p string) bool { _, err := os.Stat(p); return err == nil }
