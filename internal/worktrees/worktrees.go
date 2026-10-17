@@ -4,12 +4,14 @@
 // build output is removed whole; one that also holds uncommitted changes or
 // unpushed commits keeps them and loses only its build output, as does an
 // unfinished one left untouched for the grace. A live session's worktree
-// and a locked one are never touched.
+// and a locked one are never touched. A worktree whose gitfile names a
+// repository that no longer exists is an orphan (Dangling).
 package worktrees
 
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -104,6 +106,25 @@ func linked(dir string) bool {
 	}
 	g, ok := strings.CutPrefix(strings.TrimSpace(string(raw)), "gitdir: ")
 	return ok && strings.Contains(filepath.ToSlash(g), "/worktrees/")
+}
+
+// Dangling reports whether dir is a linked worktree whose gitfile names a
+// gitdir that no longer exists: its repository went, or pruned it, and git
+// cannot read it.
+func Dangling(dir string) bool {
+	raw, err := os.ReadFile(filepath.Clean(filepath.Join(dir, ".git")))
+	if err != nil {
+		return false
+	}
+	g, ok := strings.CutPrefix(strings.TrimSpace(string(raw)), "gitdir: ")
+	if !ok {
+		return false
+	}
+	if !filepath.IsAbs(g) {
+		g = filepath.Join(dir, g)
+	}
+	_, err = os.Stat(filepath.Clean(g)) //nolint:gosec // only stats the gitdir a worktree under the configured roots names
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 // Inspect reads dir's state through git. git status runs without its

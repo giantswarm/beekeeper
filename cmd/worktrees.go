@@ -30,22 +30,29 @@ import (
 // A live session's worktree, a locked one, one with an open or no pull
 // request and one touched within worktrees.Grace stay as they are. Each run
 // that removed something is logged with the paths and bytes
-// (worktrees.trim). One process trims at a time (worktrees.lock), and the
+// (worktrees.trim). An orphan, a worktree whose gitfile names a repository
+// that no longer exists, is moved aside under its root's orphansDir, never
+// deleted. One process trims at a time (worktrees.lock), and the
 // watches share when it ran last (worktrees.json).
 
 const (
 	worktreesFile = "worktrees.json"
 	worktreesLock = "worktrees.lock"
 	worktreesVerb = "worktrees.trim"
+	// orphansDir is where, under its root, an orphaned worktree is moved
+	// aside: the walk skips a dot folder.
+	orphansDir = ".orphans"
 	// worktreesTimeout bounds one run: git in every worktree, the pull
 	// requests' reads and the removals.
 	worktreesTimeout = 30 * time.Minute
 )
 
 // worktreeMachine is what a run reads: the linked worktrees under the roots,
-// the folders sessions and processes work in, git and GitHub.
+// the roots they lie under, the folders sessions and processes work in, git
+// and GitHub.
 type worktreeMachine struct {
 	dirs  []string
+	roots []string
 	live  []string
 	git   worktrees.Git
 	pulls func(context.Context, []github.Head) (map[github.Head]github.HeadPull, error)
@@ -62,8 +69,9 @@ var liveWorktrees = (*app).worktreeMachine
 // known, every worktree would look unused.
 func (a *app) worktreeMachine() (worktreeMachine, error) {
 	m := worktreeMachine{
-		dirs: worktrees.Find(a.cfg.Doctor.WorktreeRoots),
-		git:  runGit,
+		dirs:  worktrees.Find(a.cfg.Doctor.WorktreeRoots),
+		roots: a.cfg.Doctor.WorktreeRoots,
+		git:   runGit,
 		pulls: func(ctx context.Context, heads []github.Head) (map[github.Head]github.HeadPull, error) {
 			return github.HeadPulls(ctx, github.RunGH, heads)
 		},
@@ -119,9 +127,10 @@ type worktreeRun struct {
 	dryRun bool
 	// removed are the finished worktrees removed whole, cleaned the
 	// finished ones whose build output went and whose work stays, idle the
-	// unfinished ones untouched for the grace whose build output went;
-	// failed those a removal failed for.
-	removed, cleaned, idle, failed []worktreeOutcome
+	// unfinished ones untouched for the grace whose build output went,
+	// orphaned those whose gitfile names a missing repository, moved aside;
+	// failed those a removal or move failed for.
+	removed, cleaned, idle, orphaned, failed []worktreeOutcome
 	// kept counts the worktrees left as they are, by kind
 	// (worktrees.Kept*).
 	kept   map[string]int
@@ -142,7 +151,23 @@ func sum(outcomes ...[]worktreeOutcome) int64 {
 
 func (r worktreeRun) freed() int64 { return sum(r.removed, r.cleaned, r.idle) }
 
-func (r worktreeRun) acted() bool { return len(r.removed)+len(r.cleaned)+len(r.idle) > 0 }
+func (r worktreeRun) acted() bool {
+	return len(r.removed)+len(r.cleaned)+len(r.idle)+len(r.orphaned) > 0
+}
+
+// verb says what the run does to a path: "removed", in a dry run "would
+// remove"; moved says the same of a move aside.
+func (r worktreeRun) verb(moved bool) string {
+	switch {
+	case moved && r.dryRun:
+		return "would move aside"
+	case moved:
+		return "moved aside"
+	case r.dryRun:
+		return "would remove"
+	}
+	return "removed"
+}
 
 // String says the run in one line.
 func (r worktreeRun) String() string {
@@ -152,9 +177,9 @@ func (r worktreeRun) String() string {
 	case r.err != nil && !r.acted():
 		return fmt.Sprintf("worktrees: %v", r.err)
 	}
-	verb, of := "removed", "freed"
+	verb, of := r.verb(false), "freed"
 	if r.dryRun {
-		verb, of = "would remove", "would free"
+		of = "would free"
 	}
 	var parts []string
 	tier := func(outs []worktreeOutcome, what string) {
@@ -165,10 +190,14 @@ func (r worktreeRun) String() string {
 	tier(r.removed, "%d finished,")
 	tier(r.cleaned, "the build output of %d finished ones holding work,")
 	tier(r.idle, "the build output of %d unfinished ones untouched for "+hoursStr(worktrees.Grace)+",")
+	if len(parts) > 0 {
+		parts = append(parts, fmt.Sprintf("%s %s in all", of, sizeStr(r.freed())))
+	}
+	if len(r.orphaned) > 0 {
+		parts = append(parts, fmt.Sprintf("%s %d orphaned (their repository is gone) %s to %s", r.verb(true), len(r.orphaned), sizeStr(sum(r.orphaned)), orphansDir))
+	}
 	if len(parts) == 0 {
 		parts = append(parts, "nothing to remove")
-	} else {
-		parts = append(parts, fmt.Sprintf("%s %s in all", of, sizeStr(r.freed())))
 	}
 	if n := r.kept[worktrees.KeptWork]; n > 0 {
 		parts = append(parts, fmt.Sprintf("%d finished ones kept whole for their work", n))
@@ -190,8 +219,8 @@ func (r worktreeRun) String() string {
 	return "worktrees: " + strings.Join(parts, "; ")
 }
 
-// paths lists each worktree the run removed, cleaned or failed on, one per
-// line, with its size and why.
+// paths lists each worktree the run removed, cleaned, moved aside or failed
+// on, one per line, with its size and why; a dry run says what it would do.
 func (r worktreeRun) paths() []string {
 	var out []string
 	add := func(what string, outs []worktreeOutcome) {
@@ -203,9 +232,10 @@ func (r worktreeRun) paths() []string {
 			out = append(out, l)
 		}
 	}
-	add("removed", r.removed)
-	add("build output of", r.cleaned)
-	add("build output of", r.idle)
+	add(r.verb(false), r.removed)
+	add(r.verb(false)+" the build output of", r.cleaned)
+	add(r.verb(false)+" the build output of", r.idle)
+	add(r.verb(true), r.orphaned)
 	add("failed", r.failed)
 	return out
 }
@@ -261,6 +291,14 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 	for _, d := range m.dirs {
 		if under(d, m.live) {
 			r.kept[worktrees.KeptLive]++
+			continue
+		}
+		if worktrees.Dangling(d) {
+			o := worktreeOutcome{dir: d, why: "its gitfile names a missing repository", bytes: worktrees.Size(d)}
+			if !r.dryRun {
+				o.err = moveAside(d, m.roots, m.now)
+			}
+			r.record(&r.orphaned, o)
 			continue
 		}
 		t, err := worktrees.Inspect(ctx, m.git, d)
@@ -362,6 +400,31 @@ func removeWorktree(ctx context.Context, git worktrees.Git, dir string) error {
 	return err
 }
 
+// moveAside moves the orphaned worktree dir to the same path under its
+// root's orphansDir, the root being the one of roots it lies under (its
+// parent for none); a path taken there gets the time appended.
+func moveAside(dir string, roots []string, now time.Time) error {
+	root := filepath.Dir(dir)
+	for _, r := range roots {
+		if strings.HasPrefix(dir, r+string(filepath.Separator)) {
+			root = r
+			break
+		}
+	}
+	rel, err := filepath.Rel(root, dir)
+	if err != nil {
+		return err
+	}
+	dst := filepath.Join(root, orphansDir, rel)
+	if _, err := os.Lstat(dst); err == nil {
+		dst += "." + now.UTC().Format("20060102T150405Z")
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return err
+	}
+	return os.Rename(dir, dst)
+}
+
 // worktreesMark is the watches' shared memory of the trim: when it ran last.
 type worktreesMark struct {
 	At time.Time `json:"at"`
@@ -428,8 +491,10 @@ Build output is what git ignores and the untracked directories a build
 writes again (` + strings.Join(worktrees.Regenerable, ", ") + `); in a kept
 worktree only those directories go, git state, branch and commits stay. A
 worktree a running process, a running session or an unarchived desktop
-session works in, and a locked one, are never touched. Each path is listed
-with its size and why; an applied run is logged (worktrees.trim).`,
+session works in, and a locked one, are never touched. An orphan, a
+worktree whose gitfile names a repository that no longer exists, is moved
+aside under its root's ` + orphansDir + ` folder, never deleted. Each path is
+listed with its size and why; an applied run is logged (worktrees.trim).`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			if len(roots) > 0 {
@@ -454,7 +519,7 @@ with its size and why; an applied run is logged (worktrees.trim).`,
 			return nil
 		},
 	}
-	c.Flags().BoolVar(&apply, "apply", false, "remove; without it worktrees only says what it would")
+	c.Flags().BoolVar(&apply, "apply", false, "remove and move aside; without it worktrees only says what it would")
 	c.Flags().StringArrayVar(&roots, "root", nil, "look under this folder instead of doctor.worktreeRoots (repeatable)")
 	return c
 }
