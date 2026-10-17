@@ -628,6 +628,9 @@ type App struct {
 	// hook answers its consent on Google's sign-in, by the callback hosts
 	// the person named.
 	Google bool `json:"google,omitempty"`
+	// Account is the Google account a Google OAuth client's sign-in
+	// chooses: the hook answers no other account on Google's chooser.
+	Account string `json:"account,omitempty"`
 	// Declared is where the organisation declares the App:
 	// <repo>@<commit>:<manifest path>, or the local manifest of a deletion.
 	Declared string `json:"declared"`
