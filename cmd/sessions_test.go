@@ -105,6 +105,39 @@ func TestSessionsLeaveOutAParkedWorkerWhoseRecordWasReleased(t *testing.T) {
 	}
 }
 
+// A guard that greps the listing from a session finds no row of that
+// session: its own commands (the listing and the grep) are masked, in the
+// table and in the changes, while another session's still show.
+func TestSessionsMaskTheCallersOwnCommands(t *testing.T) {
+	const guardName = "Guard"
+	self := envParty(func(k string) string {
+		return map[string]string{"CLAUDE_CODE_SESSION_ID": "s1", "CLAUDE_CODE_SESSION_NAME": guardName}[k]
+	})
+	guard := &claude.Session{ID: "s1", Name: guardName, Commands: []claude.Command{
+		{Args: "/usr/bin/beekeeper sessions --all"}, {Args: "grep reclaim-disk"},
+	}}
+	other := &claude.Session{ID: "s2", Name: "Builder", Commands: []claude.Command{{Args: "beekeeper run -- make test"}}}
+	named := &claude.Session{Name: guardName}
+	if !isSelf(self, guard) || isSelf(self, other) || isSelf(state.Party{Name: guardName}, named) {
+		t.Fatal("isSelf matches by the ids only")
+	}
+	v := &view{Sessions: []*sessionView{{Session: guard, Self: true}, {Session: other}}, st: &state.State{}}
+	var out bytes.Buffer
+	a := &app{out: &out}
+	a.printSessions(v)
+	for _, f := range a.sessionFacts(v) {
+		out.WriteString(f.Sig + "\n" + f.Line + "\n")
+	}
+	for _, l := range strings.Split(out.String(), "\n") {
+		if strings.Contains(l, "reclaim-disk") || strings.Contains(l, "sessions --all") {
+			t.Errorf("the caller's own commands show: %q", l)
+		}
+	}
+	if !strings.Contains(out.String(), selfRunning) || !strings.Contains(out.String(), "beekeeper run -- make") {
+		t.Errorf("want the caller's row marked and the other's command shown:\n%s", out.String())
+	}
+}
+
 // A roster name holding a slash resolves whole, for a running agent whose
 // desktop title is shorter and for one whose CLI does not run; a part of it
 // still resolves, and the slash is never read as a separator.
