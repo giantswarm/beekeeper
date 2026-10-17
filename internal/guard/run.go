@@ -181,6 +181,11 @@ type Options struct {
 	// (gocache.Dir); "" for none. The run holds its use lock shared for the
 	// length of the command, so no trim removes an entry the compile reads.
 	GoCache string
+	// TmpDir holds each run's own temporary directory, which GOTMPDIR and
+	// TMPDIR name for the command (runTmp), off the tmpfs /tmp whose files
+	// take RAM; "" leaves the caller's. The run removes it after the
+	// command.
+	TmpDir string
 }
 
 // cap is the run's cap in the slice of slot n.
@@ -323,6 +328,8 @@ func Run(o Options, argv []string) int {
 		}
 		defer release()
 	}
+	env, cleanup := runTmp(o.TmpDir, logf)
+	defer cleanup()
 
 	prefix := ScopePrefix
 	if o.Test {
@@ -336,7 +343,7 @@ func Run(o Options, argv []string) int {
 	}
 	o.record(VerbStart, fmt.Sprintf("%s.scope %s %d max %s: %s", unit, how, slot, o.Max, head))
 	start := time.Now()
-	rc := scope(capper, unit, o, slot, argv, logf)
+	rc := scope(capper, unit, o, slot, argv, env, logf)
 	end := fmt.Sprintf("%s.scope exit %d after %s", unit, rc, time.Since(start).Round(time.Second))
 	if rc != 0 {
 		if kills := victims(unit, start, rc); len(kills) > 0 {
@@ -522,12 +529,19 @@ func writeHolder(o Options, slot int, argv []string) {
 		Since: time.Now().UTC().Format("2006-01-02T15:04:05Z")})
 }
 
-// scope runs argv in the capped scope unit, in the slot's slice.
-func scope(capper platform.Capper, unit string, o Options, slot int, argv []string, logf func(string, ...any)) int {
+// scope runs argv in the capped scope unit, in the slot's slice, with env
+// over this process's environment.
+func scope(capper platform.Capper, unit string, o Options, slot int, argv, env []string, logf func(string, ...any)) int {
 	c, err := capper.Command(unit, o.cap(slot), argv)
 	if err != nil {
 		logf("%v", err)
 		return ExitNotFound
+	}
+	if len(env) > 0 {
+		if c.Env == nil {
+			c.Env = os.Environ()
+		}
+		c.Env = append(c.Env, env...)
 	}
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	sig := make(chan os.Signal, 1)
