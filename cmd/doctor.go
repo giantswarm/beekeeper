@@ -536,6 +536,20 @@ line:
   says FREED when it freed something, and its TMPFS line says when it ran
   last; negative: off); each run that freed something is logged
   (free.apply);
+- removes the worktrees of finished workers: a linked git worktree under
+  doctor.worktreeRoots (~/projects/worktrees) whose branch's newest pull
+  request merged or closed six hours ago, untouched as long, goes whole
+  (a worktree on a detached HEAD: untouched three days)
+  when it holds nothing but build output (ignored files, and untracked
+  node_modules, dist, bin, .turbo and the like); one that holds
+  uncommitted changes or unpushed commits keeps them and loses only those
+  build directories, as does any other worktree untouched six hours (an
+  open or no pull request); a worktree a running process, a running
+  session or an unarchived desktop session works in, and a locked one,
+  stay untouched; beekeeper worktrees says it per path (the watch does it every
+  doctor.worktreesEvery, 6h, says WORKTREES with the bytes it freed;
+  negative: off); each run is logged with the paths and bytes
+  (worktrees.trim);
 - reports a stale binary: a running beekeeper process of a binary an
   install replaced (a start's reopen), whose saves of the state the newer
   release refuses (state.stale-writer in the log) until it ends or is
@@ -604,6 +618,11 @@ faults but remedying none.`,
 			if a.cfg.Doctor.FreeEvery.Duration > 0 {
 				if r := a.freeTmpfs(dryRun, func() (free.Machine, error) { return liveTmpfs(a) }); r.notable() {
 					lines = append(lines, r.String())
+				}
+			}
+			if a.cfg.Doctor.WorktreesEvery.Duration > 0 {
+				if r := a.trimWorktrees(dryRun, func() (worktreeMachine, error) { return liveWorktrees(a) }); r.notable() {
+					lines = append(append(lines, r.String()), r.paths()...)
 				}
 			}
 			if len(lines) == 0 {

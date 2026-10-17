@@ -796,6 +796,15 @@ type Doctor struct {
 	// DockerEvery is how often the watch reads Docker's sizes (default 1h);
 	// a prune an import held back is tried again at the next sample.
 	DockerEvery Duration `yaml:"dockerEvery"`
+	// WorktreeRoots are the folders (~/ allowed) under which the watch
+	// looks for the linked git worktrees of finished workers (default
+	// ~/projects/worktrees).
+	WorktreeRoots []string `yaml:"worktreeRoots"`
+	// WorktreesEvery is how often the watch removes the worktrees whose
+	// pull request merged or closed, and the build output of those that
+	// still hold uncommitted or unpushed work and of any other untouched
+	// for six hours (default 6h); negative: never.
+	WorktreesEvery Duration `yaml:"worktreesEvery"`
 }
 
 // DockerImagesMax is the Docker images' cap in bytes; 0 is off.
@@ -1790,6 +1799,13 @@ func (c *Config) defaults() error {
 	setInt(&c.Doctor.DockerImagesMaxGiB, 40)
 	setInt(&c.Doctor.DockerBuildCacheMaxGiB, 20)
 	setDur(&c.Doctor.DockerEvery, time.Hour)
+	setDur(&c.Doctor.WorktreesEvery, 6*time.Hour)
+	if c.Doctor.WorktreeRoots == nil {
+		c.Doctor.WorktreeRoots = []string{"~/projects/worktrees"}
+	}
+	for i, r := range c.Doctor.WorktreeRoots {
+		c.Doctor.WorktreeRoots[i] = filepath.Clean(homePath(home, r))
+	}
 	setStr(&c.Ollama.Unit, "ollama")
 	setInt(&c.Ollama.BudgetGiB, 12)
 	setInt(&c.Ollama.MaxBudgetGiB, 24)
