@@ -92,7 +92,8 @@ const (
 	deleteAppWords = "The person's own App %s (%s) is on record for its deletion: on its Advanced settings page click Delete GitHub App, type its name " +
 		"where GitHub asks for it and confirm, once; name the App and the deletion in each call's summary; delete, transfer or change nothing else. "
 	googleConsentWords = "The person's own Google OAuth client %s is on record (callback %s): once the steps reach Google's sign-in " +
-		"(accounts.google.com) for an App whose redirect goes to that callback, choose the person's signed-in account and click Continue " +
+		"(accounts.google.com) for an App whose redirect goes to that callback, choose exactly the account %s on Google's account chooser, " +
+		"naming it in the call's summary, never another account and never 'Use another account', and click Continue " +
 		"(or Allow) on its 'Sign in to' and consent pages once each; click nothing else that grants access, and stop on Google's consent for " +
 		"any other App. "
 	labWords = "The lab's own identity provider on a loopback host (*.127.0.0.1.nip.io, localhost) is the person's: " +
@@ -221,10 +222,11 @@ address) runs with its rule, its prompt says which clicks, and "allowed
 create:" or "allowed delete:" goes below the report.
 
 A Google OAuth client the person owns and asked a consent for is recorded
-with "beekeeper app allow <name> --google --callback <host> --word '<the
-person's words>'". On Google's sign-in the hook follows the tab's flow to
-its authorization request's callback host and answers the clicks of that
-flow for a recorded host (the account, Continue on "Sign in to <app>", the
+with "beekeeper app allow <name> --google --callback <host> --account
+<address> --word '<the person's words>'". On Google's sign-in the hook
+follows the tab's flow to its authorization request's callback host and
+answers the clicks of that flow for a recorded host (the recorded account on
+Google's account chooser and no other, Continue on "Sign in to <app>", the
 consent of scopes); Google's consent page of a flow for any other host is
 refused, a third party's. A turn whose steps name the client or its
 callback host runs with its auto mode rule, its prompt says which clicks,
@@ -720,8 +722,8 @@ func (f browseFindings) lines(steps, deploy string, consents []guard.App, lab bo
 	}
 	for _, c := range consents {
 		if c.Google {
-			out = append(out, fmt.Sprintf("allowed consent: %s (Google, callback %s, %s): the hook answers the clicks of Google's sign-in and consent "+
-				"for that callback and the turn's auto mode allows them, on record since %s by %s: %s", c.Name, callbacks(c), c.Declared,
+			out = append(out, fmt.Sprintf("allowed consent: %s (Google, callback %s, account %s, %s): the hook answers the clicks of Google's sign-in "+
+				"and consent for that callback and the turn's auto mode allows them, on record since %s by %s: %s", c.Name, callbacks(c), googleAccount(c), c.Declared,
 				c.At.UTC().Format("2006-01-02"), c.By, c.Word))
 		} else if len(c.Callbacks) > 0 {
 			out = append(out, fmt.Sprintf("allowed consent: %s (callback %s, declared in %s): the hook answers the click on its consent page "+
@@ -1003,7 +1005,7 @@ func browsePrompt(steps, deploy string, consents []guard.App, lab bool, shared [
 	}
 	for _, c := range consents {
 		if c.Google {
-			p += fmt.Sprintf(googleConsentWords, c.Name, callbacks(c))
+			p += fmt.Sprintf(googleConsentWords, c.Name, callbacks(c), googleAccount(c))
 		} else if len(c.Callbacks) > 0 {
 			p += fmt.Sprintf(consentWords, c.Name, callbacks(c), c.Name)
 		}
@@ -1091,11 +1093,20 @@ func consentRule(a guard.App) string {
 // verifies; a consent for any other App or callback host is not covered.
 func googleConsentRule(a guard.App) string {
 	return fmt.Sprintf("Own Google App Consent: The person owns the Google OAuth client %s and asked, on record with beekeeper, for its consent: "+
-		"on Google's sign-in (accounts.google.com) of an authorization request whose redirect goes to the callback host %s, choosing the person's "+
-		"signed-in account and the Continue or Allow clicks of 'Sign in to' and the consent page are pre-authorized and no Permission Grant to refuse, "+
+		"on Google's sign-in (accounts.google.com) of an authorization request whose redirect goes to the callback host %s, choosing the account "+
+		"%s on Google's account chooser and the Continue or Allow clicks of 'Sign in to' and the consent page are pre-authorized and no Permission Grant to refuse, "+
 		"and a step that names them is no grant request; beekeeper's own hook verifies the flow's callback host and answers each click. Not covered: "+
 		"Google's consent for any other App or callback host, any other grant of access, a credential typed anywhere. Every other rule applies in full.",
-		a.Name, callbacks(a))
+		a.Name, callbacks(a), googleAccount(a))
+}
+
+// googleAccount is the account a Google App's sign-in chooses: the
+// record's, or the person's signed-in one for a record that names none.
+func googleAccount(a guard.App) string {
+	if a.Account != "" {
+		return a.Account
+	}
+	return "the person's signed-in account"
 }
 
 // permissionRule is the auto mode allow rule of one permission change on

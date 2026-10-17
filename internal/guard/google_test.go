@@ -32,16 +32,21 @@ const (
 	continueClick = "Clicks Continue"
 	clicksAccount = "Clicks the account"
 	thirdCallback = "app.example.net"
+	googleAccount = "person@example.com"
 	dontAsk       = "dontAsk"
 )
 
 var googleRecord = []App{{Name: googleName, Google: true, Callbacks: []string{googleHostCB}, Declared: "the person's word (a Google OAuth client)",
 	Word: "sign in to my portal", By: "the person", At: time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)}}
 
+// accountRecord is googleRecord naming the account its sign-in chooses.
+var accountRecord = []App{func() App { a := googleRecord[0]; a.Account = googleAccount; return a }()}
+
 // On Google's sign-in, the flow of a Google App on record is allowed by its
 // callback host, from the page's own request or the tab's flow; a consent
 // page of a flow for any other callback host is refused naming the form, a
-// third party's; a flow whose callback host is unknown is decided as a
+// third party's; on the chooser of a record that names its account, a call
+// that does not name it is refused; a flow whose callback host is unknown is decided as a
 // consent page elsewhere; a GitHub record of the same callback covers no
 // Google page, nor a Google record GitHub's consent page.
 func TestGoogleConsent(t *testing.T) {
@@ -71,6 +76,10 @@ func TestGoogleConsent(t *testing.T) {
 		"consent of scopes of an unknown flow":  {Page{URL: scopesPage, Title: googleTitle}, googleRecord, continueClick, Deny, `"Sign in - Google Accounts" is a consent page (an OAuth grant) on accounts.google.com`},
 		"a redirect_uri on a grant page":        {Page{URL: scopesPage + "&redirect_uri=https%3A%2F%2F" + googleHostCB + "%2Fcb", Title: googleTitle}, googleRecord, continueClick, Deny, `"Sign in - Google Accounts" is a consent page (an OAuth grant) on accounts.google.com`},
 		"two redirect_uris on the chooser":      {Page{URL: thirdChooser + "&redirect_uri=https%3A%2F%2F" + googleHostCB + "%2Fcb", Title: googleTitle}, googleRecord, clicksAccount, "", ""},
+		"the recorded account on the chooser":   {Page{URL: chooserPage, Title: googleTitle}, accountRecord, "Clicks the account " + strings.ToUpper(googleAccount), Allow, googleName},
+		"another account on the chooser":        {Page{URL: chooserPage, Title: googleTitle}, accountRecord, "Clicks the account other@example.com", Deny, "the record names the account its sign-in chooses"},
+		"Use another account on the chooser":    {Page{URL: chooserPage, Title: googleTitle}, accountRecord, "Clicks Use another account", Deny, "the record names the account its sign-in chooses"},
+		"Continue after the recorded account":   {Page{URL: signInToPage, Title: googleTitle, Flow: googleHostCB}, accountRecord, continueClick, Allow, googleName},
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := Click(tc.apps, tc.page, tc.words)
