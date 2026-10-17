@@ -29,6 +29,7 @@ import (
 
 	"github.com/gofrs/flock"
 
+	"github.com/giantswarm/beekeeper/internal/gocache"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/platform"
 )
@@ -176,6 +177,10 @@ type Options struct {
 	// Sandbox caps the run when the agent sandbox keeps the service
 	// manager out of reach (the host's broker); nil outside the sandbox.
 	Sandbox platform.Capper
+	// GoCache is the Go build cache the command compiles with
+	// (gocache.Dir); "" for none. The run holds its use lock shared for the
+	// length of the command, so no trim removes an entry the compile reads.
+	GoCache string
 }
 
 // cap is the run's cap in the slice of slot n.
@@ -311,6 +316,14 @@ func Run(o Options, argv []string) int {
 		}
 	}
 
+	if o.GoCache != "" {
+		release, ok := holdGoCache(o, logf)
+		if !ok {
+			return ExitBusy
+		}
+		defer release()
+	}
+
 	prefix := ScopePrefix
 	if o.Test {
 		prefix = TestScopePrefix
@@ -334,6 +347,29 @@ func Run(o Options, argv []string) int {
 	}
 	o.record(VerbEnd, end+": "+head)
 	return rc
+}
+
+// holdGoCache takes the Go build cache's use lock shared for the command,
+// waiting up to o.Wait for a trim under way; false when the wait ran out. A
+// lock that cannot be taken at all (the cache unwritable) leaves the
+// command to run without it, which the line says.
+func holdGoCache(o Options, logf func(string, ...any)) (release func(), ok bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), max(o.Wait, time.Second))
+	defer cancel()
+	t0 := time.Now()
+	release, err := gocache.Use(ctx, o.GoCache)
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		logf("the Go build cache %s stayed under a trim for %s; nothing ran", o.GoCache, o.waitText())
+		return nil, false
+	case err != nil:
+		logf("running without the Go build cache's use lock: %v", err)
+		return func() {}, true
+	}
+	if d := time.Since(t0); d >= time.Second {
+		logf("the Go build cache's trim ended after %ds", int(d.Seconds()))
+	}
+	return release, true
 }
 
 // waitForSlot takes a free slot in its turn of the slot queue and waits

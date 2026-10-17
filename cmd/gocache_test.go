@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -167,6 +168,29 @@ func TestTrimGoCachePastTheMarginTrimsWhileAGoBuildRuns(t *testing.T) {
 	evs, err := a.store.Events(10, func(e state.Event) bool { return e.Verb == goCacheVerb })
 	if err != nil || len(evs) != 1 || evs[0].Detail != want {
 		t.Errorf("logged %+v, %v; want one %s event with the line", evs, err, goCacheVerb)
+	}
+}
+
+// No trim, not even one past the margin, starts while a beekeeper run
+// holds the cache: a compile reads its entries.
+func TestTrimGoCacheWaitsForABeekeeperRun(t *testing.T) {
+	a, cache := goCacheApp(t)
+	release, err := gocache.Use(context.Background(), cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, builds := range []func() []int{noBuilds, building} {
+		r := a.trimGoCache(false, builds)
+		if r.removed != 0 || !exists(filepath.Join(cache, "03/oldest-d")) {
+			t.Fatalf("trim removed %d entries while a beekeeper run held the cache", r.removed)
+		}
+		if !r.used || !strings.HasSuffix(r.String(), "its trim waits for the beekeeper runs that hold the cache") || !r.notable() {
+			t.Errorf("trim = %+v, line %q", r, r)
+		}
+	}
+	release()
+	if r := a.trimGoCache(false, noBuilds); r.used || r.removed != 3 {
+		t.Errorf("after the run: %+v; want the trim", r)
 	}
 }
 
