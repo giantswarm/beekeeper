@@ -315,11 +315,7 @@ removes the calling session's own record; agents idle --done clears it too.`,
 			if err != nil {
 				return err
 			}
-			st, err := a.store.Read()
-			if err != nil {
-				return err
-			}
-			s, absent, err := sessionNamed(sessions, st, args[0], a.now)
+			s, absent, err := a.namedSession(sessions, args[0], a.now)
 			if err != nil {
 				return err
 			}
@@ -719,11 +715,34 @@ func commandName(args string) string {
 	return strings.Join(f[:min(4, len(f))], " ")
 }
 
-// sessionTail reads the last n turns of the session q names (a name, id or
-// PID) among sessions from its harness's transcript; with tools, the tool
-// calls are turns too.
-func sessionTail(sessions []*claude.Session, q string, n int, tools bool) ([]claude.Turn, error) {
-	s, err := claude.Resolve(sessions, q)
+// namedSession is the session q names among sessions by sessionNamed's
+// rule, over the roster as the store holds it at now.
+func (a *app) namedSession(sessions []*claude.Session, q string, now time.Time) (*claude.Session, string, error) {
+	st, err := a.store.Read()
+	if err != nil {
+		return nil, "", err
+	}
+	return sessionNamed(sessions, st, q, now)
+}
+
+// runningNamed is the running session q names by sessionNamed's rule; a
+// registered agent whose CLI does not run is refused with what says so.
+func (a *app) runningNamed(sessions []*claude.Session, q string, now time.Time) (*claude.Session, error) {
+	s, absent, err := a.namedSession(sessions, q, now)
+	if err != nil {
+		return nil, err
+	}
+	if absent != "" {
+		return nil, refused("%s", absent)
+	}
+	return s, nil
+}
+
+// sessionTail reads the last n turns of the running session q names (by
+// sessionNamed's rule) among sessions from its harness's transcript; with
+// tools, the tool calls are turns too.
+func (a *app) sessionTail(sessions []*claude.Session, q string, n int, tools bool, now time.Time) ([]claude.Turn, error) {
+	s, err := a.runningNamed(sessions, q, now)
 	if err != nil {
 		return nil, err
 	}
@@ -749,14 +768,15 @@ func (a *app) tailCmd() *cobra.Command {
 		Short: "Print a session's last turns: what it said and what it was told",
 		Long: `Print the last turns of a session's transcript, without tool calls and tool
 results: its own words, the person's and its peers' messages. The session is
-a name (or a unique part of it), a session id or a PID.`,
+a name (or a unique part of it): its desktop title or, for a registered agent,
+its roster name; or a session id or a PID.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			raw, _, err := a.sessions()
 			if err != nil {
 				return err
 			}
-			turns, err := sessionTail(raw, args[0], n, false)
+			turns, err := a.sessionTail(raw, args[0], n, false, a.now)
 			if err != nil {
 				return err
 			}

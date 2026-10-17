@@ -134,7 +134,8 @@ func (a *app) matchFiring(q string) (firing, hits []alerts.Firing, err error) {
 	return firing, hits, nil
 }
 
-// alertOwnerParty is the running session by names, else the caller.
+// alertOwnerParty is the running session by names (by sessionNamed's rule),
+// else the caller.
 func (a *app) alertOwnerParty(by string) (state.Party, error) {
 	if by == "" {
 		return a.caller()
@@ -143,7 +144,12 @@ func (a *app) alertOwnerParty(by string) (state.Party, error) {
 	if err != nil {
 		return state.Party{}, err
 	}
-	s, err := claude.Resolve(claude.Discover(a.cfg, t, a.now), by)
+	return a.ownerNamed(claude.Discover(a.cfg, t, a.now), by)
+}
+
+// ownerNamed is the party of the running session by names among sessions.
+func (a *app) ownerNamed(sessions []*claude.Session, by string) (state.Party, error) {
+	s, err := a.runningNamed(sessions, by, a.now)
 	if err != nil {
 		return state.Party{}, err
 	}
