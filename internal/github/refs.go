@@ -4,7 +4,9 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -57,31 +59,62 @@ func (c *closer) ref() string {
 	}
 }
 
-// A try of one RefStates request may take refsTry and refsTryPerRef for
-// each of its references (TryTimeout): a batch of 20 answers in about a
-// second, a loaded machine or a slow GitHub takes several.
+// One RefStates request asks at most refsBatch references of one owner.
+// A try of it may take refsTry and refsTryPerRef for each of its
+// references (TryTimeout): a batch of 20 answers in about a second, a
+// loaded machine or a slow GitHub takes several. refsRead bounds a
+// batch's tries and the waits between them, so a parked set of any size
+// is read batch by batch, none cut short by the others.
 const (
+	refsBatch     = 20
 	refsTry       = 10 * time.Second
 	refsTryPerRef = 100 * time.Millisecond
+	refsRead      = time.Minute
 )
 
-// RefStates reads in one GraphQL request per repository owner (ByOwner) the
-// state of each issue or pull request of refs, and for a closed issue the
-// pull request or commit whose closing keyword closed it. A reference GitHub
-// does not answer is missing from the map. Each try of a request is bounded
-// by its batch's size, so run (Retrying) asks a killed one again.
+// RefStates reads, in GraphQL requests of at most refsBatch references of
+// one repository owner (ByOwner), the state of each issue or pull request
+// of refs, and for a closed issue the pull request or commit whose closing
+// keyword closed it. A reference GitHub does not answer is missing from
+// the map. Each try of a request is bounded by its batch's size, so run
+// (Retrying) asks a killed one again. A batch that still fails leaves its
+// references out and is named in the error, which joins every failed
+// batch's; the other batches' states are returned with it.
 func RefStates(ctx context.Context, run GH, refs []PR) (map[PR]RefState, error) {
 	if len(refs) == 0 {
 		return nil, nil
 	}
 	states := map[PR]RefState{}
+	var errs []error
 	for _, group := range ByOwner(refs, func(r PR) string { return r.Repo }) {
-		gctx := TryTimeout(ActingOn(ctx, group[0].Repo), refsTry+time.Duration(len(group))*refsTryPerRef)
-		if err := refStates(gctx, run, group, states); err != nil {
-			return nil, err
+		batches := slices.Collect(slices.Chunk(group, refsBatch))
+		for i, batch := range batches {
+			if ctx.Err() != nil {
+				errs = append(errs, fmt.Errorf("%s: %w", batchName(batch, i, len(batches)), ctx.Err()))
+				continue
+			}
+			if err := refBatch(ctx, run, batch, states); err != nil {
+				errs = append(errs, fmt.Errorf("%s: %w", batchName(batch, i, len(batches)), err))
+			}
 		}
 	}
-	return states, nil
+	return states, errors.Join(errs...)
+}
+
+// refBatch is one batch of RefStates, its tries bounded by refsRead.
+func refBatch(ctx context.Context, run GH, refs []PR, states map[PR]RefState) error {
+	ctx, cancel := context.WithTimeout(ctx, refsRead)
+	defer cancel()
+	ctx = TryTimeout(ActingOn(ctx, refs[0].Repo), refsTry+time.Duration(len(refs))*refsTryPerRef)
+	return refStates(ctx, run, refs, states)
+}
+
+// batchName names the i-th of n batches of one owner for an error: "refs
+// batch 2/3 of giantswarm (20: giantswarm/a#1 … giantswarm/b#9)".
+func batchName(refs []PR, i, n int) string {
+	owner, _, _ := strings.Cut(refs[0].Repo, "/")
+	first, last := refs[0], refs[len(refs)-1]
+	return fmt.Sprintf("refs batch %d/%d of %s (%d: %s#%d … %s#%d)", i+1, n, owner, len(refs), first.Repo, first.N, last.Repo, last.N)
 }
 
 // refStates is one request of RefStates, of refs of one owner, into states.

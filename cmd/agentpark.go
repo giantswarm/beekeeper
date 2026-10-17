@@ -299,8 +299,9 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 	}
 	var states map[github.PR]github.RefState
 	if len(refs) > 0 && !lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now) {
+		// A failed batch leaves its agents parked; the others settle.
 		s, err := refStates(ctx, refs)
-		if s == nil {
+		if err != nil {
 			w.fail("park-refs", "cannot read the parked agents' issues and pull requests: %v", err)
 		} else {
 			w.clear("park-refs")
