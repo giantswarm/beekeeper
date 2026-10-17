@@ -3,6 +3,7 @@ package install
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io/fs"
 	"maps"
 	"os"
@@ -377,46 +378,84 @@ func TestTakesOverThisBinarysEntries(t *testing.T) {
 	}
 }
 
-// A unit path that is a symlink into the person's dotfiles stays the link:
-// install writes the target, a dangling one too, says where, and restarts
-// the started unit instead of disabling it (systemd removes a linked unit
-// on disable).
-func TestWritesThroughASymlinkedUnit(t *testing.T) {
-	for _, dangling := range []bool{false, true} {
-		home := t.TempDir()
-		f := &fakeSetup{started: true}
-		e, out := env(t, home, f, f.run)
-		service := filepath.Join(home, ".config", "units", "notify.service")
-		target := filepath.Join(home, "dotfiles", "notify.service")
-		if !dangling {
-			write(t, target, "# the person's copy\nExecStart=/opt/bin/beekeeper watch --notify\n")
-		}
-		if err := os.MkdirAll(filepath.Dir(service), 0o750); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Symlink(filepath.Join("..", "..", "dotfiles", "notify.service"), service); err != nil {
-			t.Fatal(err)
-		}
+// A unit path that is a symlink into the person's dotfiles is theirs:
+// install leaves the link and its target, a dangling one too, as they are,
+// says why, and neither starts, restarts nor records the unit; a unit an
+// earlier install recorded before it became a link is dropped from the
+// manifest, so uninstall neither stops nor removes it. A regular unit file
+// is written and started as before.
+func TestRefusesASymlinkedUnit(t *testing.T) {
+	const theirs = "# the person's timer\nOnCalendar=*:0/5\n"
+	for _, c := range []struct {
+		name              string
+		dangling, earlier bool
+	}{{"target", false, false}, {"dangling", true, false}, {"earlier install", false, true}} {
+		t.Run(c.name, func(t *testing.T) {
+			home := t.TempDir()
+			f := &fakeSetup{}
+			e, out := env(t, home, f, f.run)
+			e.Spec.TeleportEvery = 5 * time.Minute
+			timer := filepath.Join(home, ".config", "units", "keeper.timer")
+			target := filepath.Join(home, "dotfiles", "keeper.timer")
+			if c.earlier {
+				if err := Install(context.Background(), e); err != nil {
+					t.Fatal(err)
+				}
+				if fi, err := os.Lstat(timer); err != nil || !fi.Mode().IsRegular() || !slices.Contains(f.ran, "start keeper.timer") {
+					t.Fatalf("a regular unit not written and started: %v, ran %v", err, f.ran)
+				}
+				if err := os.Remove(timer); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !c.dangling {
+				write(t, target, theirs)
+			}
+			if err := os.MkdirAll(filepath.Dir(timer), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Join("..", "..", "dotfiles", "keeper.timer"), timer); err != nil {
+				t.Fatal(err)
+			}
+			f.ran, f.started = nil, true
+			out.Reset()
 
-		if err := Install(context.Background(), e); err != nil {
-			t.Fatal(err)
-		}
-		want := "update  ~/.config/units/notify.service: an earlier unit of this binary; through the link to ~/dotfiles/notify.service"
-		if dangling {
-			want = "write   ~/.config/units/notify.service: through the link to ~/dotfiles/notify.service"
-		}
-		if !strings.Contains(out.String(), want) {
-			t.Errorf("dangling %v: install lacks %q:\n%s", dangling, want, out)
-		}
-		if fi, err := os.Lstat(service); err != nil || fi.Mode()&fs.ModeSymlink == 0 {
-			t.Errorf("dangling %v: the unit path is no longer a symlink: %v", dangling, err)
-		}
-		if raw, _ := os.ReadFile(filepath.Clean(target)); string(raw) != "ExecStart=/opt/bin/beekeeper watch\n" {
-			t.Errorf("dangling %v: the link's target not written: %q", dangling, raw)
-		}
-		if !dangling && (!slices.Contains(f.ran, "restart notify.service") || slices.Contains(f.ran, "stop notify.service")) {
-			t.Errorf("an updated started unit: ran %v, want a restart and no stop", f.ran)
-		}
+			if err := Install(context.Background(), e); err != nil {
+				t.Fatal(err)
+			}
+			want := "keep    ~/.config/units/keeper.timer: a symlink to ~/dotfiles/keeper.timer: install never writes through a link"
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("install lacks %q:\n%s", want, out)
+			}
+			unchanged := func(when string) {
+				t.Helper()
+				if fi, err := os.Lstat(timer); err != nil || fi.Mode()&fs.ModeSymlink == 0 {
+					t.Errorf("%s: the unit path is no longer a symlink: %v", when, err)
+				}
+				raw, err := os.ReadFile(filepath.Clean(target))
+				if c.dangling && !errors.Is(err, fs.ErrNotExist) || !c.dangling && string(raw) != theirs {
+					t.Errorf("%s: the link's target changed: %q, %v", when, raw, err)
+				}
+				for _, ran := range f.ran {
+					if strings.HasSuffix(ran, " keeper.timer") {
+						t.Errorf("%s: ran %q on the linked unit", when, ran)
+					}
+				}
+			}
+			unchanged("install")
+			m, err := readManifest(e.manifest())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := m.Files[timer]; ok || slices.Contains(m.Services, timer) {
+				t.Errorf("the manifest records the linked unit: %+v", m)
+			}
+
+			if err := Uninstall(context.Background(), e, false); err != nil {
+				t.Fatal(err)
+			}
+			unchanged("uninstall")
+		})
 	}
 }
 
