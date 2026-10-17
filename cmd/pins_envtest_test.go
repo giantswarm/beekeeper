@@ -30,7 +30,7 @@ func kubePinApp(t *testing.T) (*app, *bytes.Buffer, func()) {
 	if err := json.Unmarshal([]byte(pinnedNotes), &older); err != nil {
 		t.Fatal(err)
 	}
-	// The Kubernetes store writes one object per update: one note each.
+	// seeded one note per update
 	seed := func() {
 		for _, n := range slices.Concat(older.Notes, older.Memos) {
 			n.By.Team = ourTeam

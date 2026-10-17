@@ -130,13 +130,14 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	ana := e.as(t, e.token(t, "ana@example.com", teamGroup))
 	bo := e.as(t, e.token(t, boEmail, "giantswarm:team-planeteers"))
 	kim := e.as(t, e.token(t, "kim@example.com", teamGroup))
-	ask := func(forWho, due string) int {
-		args := map[string]any{paramText: museLane, paramFor: forWho, paramKind: noteDecision, paramAgent: anaAgent, paramHost: lab,
+	askText := func(text, forWho, due string) int {
+		args := map[string]any{paramText: text, paramFor: forWho, paramKind: noteDecision, paramAgent: anaAgent, paramHost: lab,
 			keyStatusQuo: noMuseLane, keyWhy: "only its owners pick its lane", "options": []any{"portal: it rolls with backstage", "own: a lane of its own"}, "recommend": 2,
 			dueID: due, keyDefault: ownLane, paramRefs: []any{privateThread}}
 		id, _ := e.expect(t, ana, "note_add", args, false, "note #")["id"].(float64)
 		return int(id)
 	}
+	ask := func(forWho, due string) int { return askText(museLane, forWho, due) }
 
 	// A person's decision: posted as a direct message, answered by a click.
 	n := ask("bo", "3h")
@@ -176,21 +177,23 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	e.expect(t, bo, "note_answer", map[string]any{paramNote: n, paramText: portalLane}, true, "only its addressee")
 	e.expect(t, kim, "note_answer", map[string]any{paramNote: n, paramText: "portal, after the release"}, false, "answered and closed")
 
-	// Withdrawn by its filer; defaulted at its due time, then answered.
+	// Withdrawn by its filer; two defaulted at their due time in one
+	// update, then the first answered.
 	n = ask("bo", "3h")
 	e.expect(t, bo, "note_done", map[string]any{paramNote: n}, true, "only that person")
 	e.expect(t, ana, "note_done", map[string]any{paramNote: n}, false, "done")
 	n = ask("bo", "1h")
+	askText(whichLane, "bo", "1h") // the same question would fold into n
 	if err := e.srv.defaultDue(context.Background(), time.Now().Add(2*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	// An answer after the default replaces it; a second one finds it closed.
 	e.expect(t, bo, "note_answer", map[string]any{paramNote: n, paramChoice: 1}, false, "the answer replaces")
 	e.expect(t, bo, "note_answer", map[string]any{paramNote: n, paramChoice: 2}, true, "not open")
-	if _, closed := gw.seen(); len(closed) != 5 || closed[2] != "d3 withdrawn: " || closed[3] != "d4 defaulted: "+ownLane || closed[4] != "d4 answered: portal" {
+	if _, closed := gw.seen(); len(closed) != 6 || closed[2] != "d3 withdrawn: " || closed[3] != "d4 defaulted: "+ownLane || closed[4] != "d5 defaulted: "+ownLane || closed[5] != "d4 answered: portal" {
 		t.Fatalf("closed %q", closed)
 	}
-	if evs, _ := e.store.Events(0, func(ev state.Event) bool { return ev.Verb == noteDefaulted }); len(evs) != 1 {
+	if evs, _ := e.store.Events(0, func(ev state.Event) bool { return ev.Verb == noteDefaulted }); len(evs) != 2 {
 		t.Fatalf("note.defaulted %+v", evs)
 	}
 

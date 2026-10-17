@@ -446,3 +446,67 @@ func TestEnvtestKeepsADefaultedDecision(t *testing.T) {
 		t.Errorf("an answered default's Note: %q", s)
 	}
 }
+
+// An update that changes several Notes writes each, every event on the
+// Note its detail names; one that changes a Note and another object stays
+// refused.
+func TestEnvtestWritesSeveralNotes(t *testing.T) {
+	a, _, c := envtestStore(t)
+	namespace(t, c, team)
+	environment(t, c, graveler)
+	ctx := context.Background()
+	for id := 1; id <= 3; id++ {
+		if err := a.Update(func(st *state.State) ([]state.Event, error) {
+			st.Notes = append(st.Notes, state.Note{ID: id, For: ana.Person, Kind: state.NoteDecision, Text: "merge?", By: ana, At: time.Now().Truncate(time.Second)})
+			return nil, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := a.Update(func(st *state.State) ([]state.Event, error) {
+		st.Defaulted, st.Notes = st.Notes[:1], st.Notes[1:]
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// the expired default dropped, the two open decisions closed by theirs
+	if err := a.Update(func(st *state.State) ([]state.Event, error) {
+		st.Defaulted, st.Notes = st.Notes, nil
+		return []state.Event{
+			{By: bo, Verb: "note.defaulted", Detail: "#2 defaulted"},
+			{By: bo, Verb: "note.defaulted", Detail: "#3 defaulted"},
+		}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := a.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Notes) != 0 || len(st.Defaulted) != 2 || st.Defaulted[0].ID != 2 || st.Defaulted[1].ID != 3 {
+		t.Fatalf("notes %+v, defaulted %+v", st.Notes, st.Defaulted)
+	}
+	events := &corev1.EventList{}
+	if err := c.List(ctx, events, client.InNamespace(teamNamespace(team))); err != nil {
+		t.Fatal(err)
+	}
+	on := map[string]string{}
+	for _, ev := range events.Items {
+		on[ev.Message] = ev.InvolvedObject.Name
+	}
+	if on["#2 defaulted"] != "note-2" || on["#3 defaulted"] != "note-3" {
+		t.Fatalf("events on %v", on)
+	}
+
+	err = a.Update(func(st *state.State) ([]state.Event, error) {
+		st.Defaulted = nil
+		st.Grants = append(st.Grants, state.Grant{Resource: graveler, To: ana, By: bo, At: time.Now()})
+		return nil, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "one object per update, or several Notes") {
+		t.Fatalf("a Note and an Environment: %v", err)
+	}
+	if st, _ := a.Read(); len(st.Defaulted) != 2 || len(st.Grants) != 0 {
+		t.Fatalf("a refused update wrote: defaulted %+v, grants %+v", st.Defaulted, st.Grants)
+	}
+}

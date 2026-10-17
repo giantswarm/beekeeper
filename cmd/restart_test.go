@@ -193,3 +193,81 @@ func TestWatchWithoutRequestRunsOn(t *testing.T) {
 		t.Fatalf("the cancelled run ended with %v", err)
 	}
 }
+
+// The broker that runs the binary an update replaced restarts onto the new
+// one, its dropped vault session said; one serving calls (its children; the
+// op daemon is reparented) is left to them, the restart due named; one on
+// another binary, started after the write or not running stays untouched.
+func TestRestartBrokerOn(t *testing.T) {
+	written := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+	before, after := written.Add(-time.Hour), written.Add(time.Second)
+	cases := []struct {
+		name    string
+		bin     string
+		start   time.Time
+		child   bool
+		down    bool
+		failing bool
+		want    string
+	}{
+		{name: "replaced and idle", bin: restartExe, start: before, want: "restart beekeeper-sandbox.service (pid 40): on " + restartExe + " now; its vault session goes with it"},
+		{name: "serving a call", bin: restartExe, start: before, child: true, want: "due     beekeeper-sandbox.service (pid 40) stays on the replaced binary while it serves 1 call(s)"},
+		{name: "restart refused", bin: restartExe, start: before, failing: true, want: "due     beekeeper-sandbox.service (pid 40) stays on the replaced binary (refused): systemctl --user restart beekeeper-sandbox.service puts it on " + restartExe},
+		{name: "another binary", bin: "/opt/beekeeper", start: before},
+		{name: "started on the new binary", bin: restartExe, start: after},
+		{name: "no broker", bin: restartExe, start: before, down: true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			tab := &proc.Table{ByPID: map[int]*proc.Process{
+				40: {PID: 40, PPID: 1, Comm: project.Name, Start: c.start},
+				41: {PID: 41, PPID: 1, Comm: "op"},
+			}}
+			if c.child {
+				tab.ByPID[42] = &proc.Process{PID: 42, PPID: 40, Comm: project.Name}
+			}
+			prevP, prevR := brokerProcess, restartBroker
+			t.Cleanup(func() { brokerProcess, restartBroker = prevP, prevR })
+			brokerProcess = func() (int, string, error) {
+				if c.down {
+					return 0, "", errors.New("down")
+				}
+				return 40, c.bin, nil
+			}
+			restarted := false
+			restartBroker = func(context.Context) error {
+				restarted = true
+				if c.failing {
+					return errors.New("refused")
+				}
+				return nil
+			}
+			var out bytes.Buffer
+			restartBrokerOn(context.Background(), &out, restartExe, written, tab, false)
+			if c.want == "" {
+				if out.Len() != 0 || restarted {
+					t.Fatalf("restarted %v, said %q; want nothing", restarted, out.String())
+				}
+				return
+			}
+			if !strings.Contains(out.String(), c.want) {
+				t.Fatalf("said %q, want %q", out.String(), c.want)
+			}
+			if want := !c.child; restarted != want {
+				t.Fatalf("restarted %v, want %v", restarted, want)
+			}
+		})
+	}
+
+	// a dry run names the restart and takes none
+	prevP, prevR := brokerProcess, restartBroker
+	t.Cleanup(func() { brokerProcess, restartBroker = prevP, prevR })
+	brokerProcess = func() (int, string, error) { return 40, restartExe, nil }
+	restartBroker = func(context.Context) error { t.Fatal("a dry run restarted the broker"); return nil }
+	var out bytes.Buffer
+	tab := &proc.Table{ByPID: map[int]*proc.Process{40: {PID: 40, Comm: project.Name, Start: before}}}
+	restartBrokerOn(context.Background(), &out, restartExe, written, tab, true)
+	if !strings.HasPrefix(out.String(), "restart beekeeper-sandbox.service (pid 40)") {
+		t.Fatalf("dry run said %q", out.String())
+	}
+}

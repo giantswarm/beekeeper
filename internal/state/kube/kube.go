@@ -6,9 +6,10 @@
 // and the release time of an installation are its Environment, a lane's
 // merges its MergeLane, a hold a Hold, a note a Note in the filer's team
 // namespace, an agent a RosterEntry in its team's namespace. Concurrency is
-// per object: an update writes the one object it changes under the
-// resourceVersion it read, so updates of different installations never
-// contend, and a lost race reruns the update on what won it.
+// per object: an update writes the one object it changes, or the Notes it
+// changes one by one, under the resourceVersion it read, so updates of
+// different installations never contend, and a lost race reruns the update
+// on what won it.
 //
 // The rest of the document (the supervisor, timers, records, the merge
 // gate's processes, side files) belongs to the machine and has no home here:
@@ -135,10 +136,12 @@ func (s *Store) Read() (*state.State, error) {
 func (s *Store) Peek() (*state.State, error) { return s.Read() }
 
 // Update runs fn on the shared state and writes the one object it changed,
-// under the resourceVersion read, with fn's events as Kubernetes Events on
-// it. A lost race reruns fn on the winner's state. An update that changes
-// more than one object, or anything without a home in the resources, is
-// refused with nothing written.
+// or each of the Notes it changed, under the resourceVersion read, with fn's
+// events as Kubernetes Events on the object each names (a note's #id), else
+// on the first. A lost race reruns fn on the winner's state, the Notes
+// written before it included. An update that changes more than one object
+// other than Notes, or anything without a home in the resources, is refused
+// with nothing written.
 func (s *Store) Update(fn func(*state.State) ([]state.Event, error)) error {
 	ctx, cancel := s.ctx()
 	defer cancel()
@@ -166,23 +169,49 @@ func (s *Store) Update(fn func(*state.State) ([]state.Event, error)) error {
 				return fmt.Errorf("%d events without a changed object: %w", len(events), ErrLocal)
 			}
 			return nil
-		case len(changes) > 1:
+		case len(changes) > 1 && !allNotes(changes):
 			names := make([]string, len(changes))
 			for i, c := range changes {
 				names[i] = c.ref()
 			}
-			return fmt.Errorf("the update changes %s; the Kubernetes store writes one object per update", strings.Join(names, ", "))
+			return fmt.Errorf("the update changes %s; the Kubernetes store writes one object per update, or several Notes", strings.Join(names, ", "))
 		}
-		obj, err := s.write(ctx, changes[0])
-		if apierrors.IsConflict(err) || apierrors.IsAlreadyExists(err) {
+		var written []client.Object
+		for _, c := range changes {
+			obj, err := s.write(ctx, c)
+			if apierrors.IsConflict(err) || apierrors.IsAlreadyExists(err) {
+				break
+			}
+			if err != nil {
+				return errors.Join(err, s.record(ctx, written, events, false))
+			}
+			written = append(written, obj)
+		}
+		if len(written) < len(changes) {
+			// a lost race: the rerun judges the notes written so far as
+			// the state it reads
+			if err := s.record(ctx, written, events, false); err != nil {
+				return err
+			}
 			continue
 		}
-		if err != nil {
-			return err
-		}
-		return s.record(ctx, obj, events)
+		return s.record(ctx, written, events, true)
 	}
 	return fmt.Errorf("the update lost %d races in a row", s.attempts)
+}
+
+// allNotes says whether every change is a Note's: the one batch the store
+// writes, a Note at a time. Notes change apart from each other (a decision
+// closed by its default, an expired one dropped), so a race lost after the
+// first write leaves the written ones in place and the rerun goes on from
+// them.
+func allNotes(changes []change) bool {
+	for _, c := range changes {
+		if _, ok := c.obj.(*v1alpha1.Note); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // UpdateWithin is Update: the Kubernetes store takes no lock to wait for.
@@ -302,7 +331,7 @@ func (s *Store) Audit(obj client.Object, team string, e state.Event) error {
 	if obj != nil {
 		err := s.c.Get(ctx, client.ObjectKeyFromObject(obj), obj)
 		if err == nil {
-			return s.record(ctx, obj, []state.Event{e})
+			return s.recordOn(ctx, obj, e)
 		}
 		if !apierrors.IsNotFound(err) {
 			return err
@@ -312,7 +341,7 @@ func (s *Store) Audit(obj client.Object, team string, e state.Event) error {
 	if err := s.c.Get(ctx, client.ObjectKey{Name: TeamNamespace(team)}, ns); err != nil {
 		return fmt.Errorf("auditing %s: the team namespace: %w", e.Verb, err)
 	}
-	return s.record(ctx, ns, []state.Event{e})
+	return s.recordOn(ctx, ns, e)
 }
 
 // HoldObject is the Hold of target. It and the other *Object functions name
@@ -366,7 +395,7 @@ func (s *Store) holder(name string, change func(*v1alpha1.Environment) (bool, er
 		if err != nil {
 			return err
 		}
-		return s.record(ctx, env, []state.Event{event})
+		return s.recordOn(ctx, env, event)
 	}
 	return fmt.Errorf("%s: the claim lost %d races in a row", name, s.attempts)
 }
@@ -505,9 +534,44 @@ const (
 	noteOpen = "open"
 )
 
-// record writes events as Kubernetes Events on obj; the cluster-scoped
-// kinds' go to the default namespace.
-func (s *Store) record(ctx context.Context, obj client.Object, events []state.Event) error {
+// noteRef is the note number an event's detail names first (#12).
+var noteRef = regexp.MustCompile(`#(\d+)`)
+
+// on is the written object event e belongs to: the written Note its detail
+// names, else, once the whole update is written (all), the first object;
+// nil when it has none yet.
+func on(written []client.Object, e state.Event, all bool) client.Object {
+	if m := noteRef.FindStringSubmatch(e.Detail); m != nil {
+		id, _ := strconv.Atoi(m[1])
+		for _, o := range written {
+			if n, ok := o.(*v1alpha1.Note); ok && n.Spec.ID == id {
+				return o
+			}
+		}
+	}
+	if all && len(written) > 0 {
+		return written[0]
+	}
+	return nil
+}
+
+// record writes events as Kubernetes Events on the written objects they
+// belong to (on); the cluster-scoped kinds' go to the default namespace.
+func (s *Store) record(ctx context.Context, written []client.Object, events []state.Event, all bool) error {
+	for _, e := range events {
+		obj := on(written, e, all)
+		if obj == nil {
+			continue
+		}
+		if err := s.recordOn(ctx, obj, e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// recordOn writes e as a Kubernetes Event on obj.
+func (s *Store) recordOn(ctx context.Context, obj client.Object, e state.Event) error {
 	gvk, err := s.c.GroupVersionKindFor(obj)
 	if err != nil {
 		return err
@@ -516,48 +580,46 @@ func (s *Store) record(ctx context.Context, obj client.Object, events []state.Ev
 	if ns == "" {
 		ns = metav1.NamespaceDefault
 	}
-	for _, e := range events {
-		by, err := json.Marshal(apiParty(e.By))
-		if err != nil {
-			return err
-		}
-		at := e.At
-		if at.IsZero() {
-			at = time.Now()
-		}
-		id, err := s.nextID(ctx, at)
-		if err != nil {
-			return fmt.Errorf("recording %s on %s: the feed id: %w", e.Verb, obj.GetName(), err)
-		}
-		ev := &corev1.Event{
-			ObjectMeta: metav1.ObjectMeta{
-				Namespace:   ns,
-				Name:        fmt.Sprintf("%s.%x", obj.GetName(), at.UnixNano()),
-				Labels:      map[string]string{managedBy: beekeeper},
-				Annotations: map[string]string{byAnnotation: string(by), idAnnotation: id},
-			},
-			InvolvedObject: corev1.ObjectReference{
-				APIVersion:      gvk.GroupVersion().String(),
-				Kind:            gvk.Kind,
-				Namespace:       obj.GetNamespace(),
-				Name:            obj.GetName(),
-				UID:             obj.GetUID(),
-				ResourceVersion: obj.GetResourceVersion(),
-			},
-			Reason:              e.Verb,
-			Message:             e.Detail,
-			Type:                corev1.EventTypeNormal,
-			EventTime:           metav1.MicroTime{Time: at},
-			ReportingController: "beekeeper.giantswarm.io/serve",
-			ReportingInstance:   e.By.Host,
-			Action:              e.Verb,
-		}
-		if ev.ReportingInstance == "" {
-			ev.ReportingInstance = beekeeper
-		}
-		if err := s.c.Create(ctx, ev); err != nil && !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("recording %s on %s: %w", e.Verb, obj.GetName(), err)
-		}
+	by, err := json.Marshal(apiParty(e.By))
+	if err != nil {
+		return err
+	}
+	at := e.At
+	if at.IsZero() {
+		at = time.Now()
+	}
+	id, err := s.nextID(ctx, at)
+	if err != nil {
+		return fmt.Errorf("recording %s on %s: the feed id: %w", e.Verb, obj.GetName(), err)
+	}
+	ev := &corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:   ns,
+			Name:        fmt.Sprintf("%s.%x", obj.GetName(), at.UnixNano()),
+			Labels:      map[string]string{managedBy: beekeeper},
+			Annotations: map[string]string{byAnnotation: string(by), idAnnotation: id},
+		},
+		InvolvedObject: corev1.ObjectReference{
+			APIVersion:      gvk.GroupVersion().String(),
+			Kind:            gvk.Kind,
+			Namespace:       obj.GetNamespace(),
+			Name:            obj.GetName(),
+			UID:             obj.GetUID(),
+			ResourceVersion: obj.GetResourceVersion(),
+		},
+		Reason:              e.Verb,
+		Message:             e.Detail,
+		Type:                corev1.EventTypeNormal,
+		EventTime:           metav1.MicroTime{Time: at},
+		ReportingController: "beekeeper.giantswarm.io/serve",
+		ReportingInstance:   e.By.Host,
+		Action:              e.Verb,
+	}
+	if ev.ReportingInstance == "" {
+		ev.ReportingInstance = beekeeper
+	}
+	if err := s.c.Create(ctx, ev); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("recording %s on %s: %w", e.Verb, obj.GetName(), err)
 	}
 	return nil
 }

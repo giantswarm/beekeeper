@@ -57,7 +57,10 @@ A running beekeeper watch (the standby service's included) and a reopen
 waiting to show a session that still run the binary an update replaced at
 this path restart on the installed one once, each at its next quiet
 moment: a watch after its current poll, once every run it started ended,
-a reopen during its wait for the person. Each is named (restart). What it wrote is
+a reopen during its wait for the person. Each is named (restart). The
+broker that runs the binary replaced at this path is restarted onto it,
+its vault session dropped, unless it serves calls: then the restart still
+due is named (due), as self-update does. What it wrote is
 recorded in install.json in the state directory, for uninstall.
 Without a service manager (Linux without systemd) it writes the hooks and
 the config and says the service is not available.`,
@@ -75,6 +78,9 @@ the config and says the service is not available.`,
 			if t, err := proc.Read(); err == nil {
 				if _, err := a.restartReplaced(e.Out, e.Exe, t, e.DryRun); err != nil {
 					return err
+				}
+				if fi, err := os.Stat(e.Exe); err == nil {
+					restartBrokerOn(cmd.Context(), e.Out, e.Exe, fi.ModTime(), t, e.DryRun)
 				}
 			}
 			if binary == "" && !e.DryRun {
