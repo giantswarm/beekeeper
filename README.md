@@ -923,7 +923,14 @@ same file passed to `claude --settings` holds one session to it, to try a change
   command (`SANDBOX_RUNTIME`, which the host never has). Elsewhere the agent shell's prelude, and
   beekeeper itself at start (outside its hooks), drop the egress variables and `BEEKEEPER_SANDBOX`:
   gh, git and devctl act as on the host, with `agents.shell.path` first on `PATH` as outside the
-  sandbox.
+  sandbox. With `BEEKEEPER_DEBUG` set, beekeeper says so on stderr (`beekeeper: debug:
+  BEEKEEPER_SANDBOX set without SANDBOX_RUNTIME: …`), naming the variables it dropped.
+- **Proving a brokered call.** A proof against a scratch broker (`beekeeper sandbox broker` with
+  its own state directory and port) runs its client with `SANDBOX_RUNTIME=1` beside
+  `BEEKEEPER_SANDBOX=1`: with `BEEKEEPER_SANDBOX` alone the environment is unheld, beekeeper drops
+  the variables at start and the call runs locally, so the proof passes on an unfixed binary. Every
+  such proof also makes a control call with no broker answering, which must fail; one that succeeds
+  shows the client went local. `BEEKEEPER_DEBUG=1` on the client puts the drop in the transcript.
 - **Commit signing.** The sandbox reaches no gpg-agent, so the policy sets git's `gpg.program` to a
   script the broker writes into the egress directory, which runs `beekeeper sandbox gpg`: it hands
   the payload of git's signing call (`--status-fd=2 -bsau <key>`, nothing else) to the broker, which
