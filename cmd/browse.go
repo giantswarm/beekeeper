@@ -102,17 +102,17 @@ const (
 // frontWords tell a browse turn to work in a tab in front of its window: a
 // tab behind another neither paints nor answers, so the turn checks before
 // each screenshot and moves to a fresh tab, which opens in front. A
-// screenshot that times out all the same (a window not drawn) is retried once
-// after a reload of the same tab, then the page is read instead. The tab the
+// screenshot that times out all the same (a window not drawn) is the turn's
+// last: the hook refuses every further one, and the page is read instead. The tab the
 // group was made with closes last: closing it first dissolves the group and
 // strands the others outside it.
 const frontWords = "Work in a tab in front of its window: a tab behind another tab neither paints nor answers (its document.visibilityState " +
 	"is 'hidden', its screenshot times out on a frozen renderer, the extension refuses its scripts and navigations). Before each screenshot, " +
 	"check the tab with javascript_tool: document.visibilityState. When it says 'hidden', or the check or a navigation is refused on a page " +
 	"the steps name, open a fresh tab with tabs_create_mcp (a new tab opens in front) and go on there. A screenshot that times out " +
-	"('renderer may be frozen') while the tab says 'visible': reload that same tab once (navigate it to its own URL) and take the screenshot " +
-	"once more; timing out again, the window is not drawn (occluded or minimised): take no further screenshot in it, read the page with " +
-	"get_page_text or read_page for the evidence, and name the page 'not rendered' in your report. Never replace a tab by closing it: the " +
+	"('renderer may be frozen') while the tab says 'visible' means the window is not drawn (occluded or minimised): take no further " +
+	"screenshot in this turn (the hook refuses them, each would wait out its own timeout), read the page with get_page_text or read_page " +
+	"for the evidence, and name the page 'not rendered' in your report. Never replace a tab by closing it: the " +
 	"first tab tabs_context_mcp gave you is the one your tab group was made with, and closing it while another tab of yours is open " +
 	"dissolves the group and leaves that tab open outside it, where no call reaches it. Before you end, close every tab you opened, the " +
 	"blank ones included, with tabs_close_mcp: the others first, the group's first tab last. "
@@ -266,7 +266,18 @@ the session, which Claude in Chrome's file_upload takes without the Read
 tool. The prompt names each file as the caller wrote it and the copy's path
 file_upload takes; every other path stays refused, the turn's --dir
 included, and the turn still has no file tool. A line below the report
-says "shared for upload: <path>". For example:
+says "shared for upload: <path>".
+
+A page keeps hidden file inputs (GitHub's review-reply boxes beside the
+comment box) that take a file_upload as readily as the intended one and
+attach the file nowhere the person sees. Before each file_upload the turn
+runs beekeeper's upload-target check with javascript_tool, scoped to the
+intended form: it marks the one visible, enabled file input there
+(accessible name "beekeeper upload target") and marks none when the scope
+holds only hidden or disabled inputs, or several visible ones. The turn
+then finds that name for the input's ref. The hook (beekeeper hook
+pretooluse, in every session) refuses a file_upload to any ref but the
+one the last check marked and its find gave, naming why. For example:
 
   beekeeper browse --file ./shot.png "Open <page>. Attach ./shot.png
   through the comment box's file input. Report the attachment's name."
@@ -289,10 +300,11 @@ tab in front: before each screenshot it checks the tab's visibilityState,
 and a tab it finds hidden (or whose check or navigation is refused) it
 leaves for a fresh tab, which opens in front. A window the compositor does
 not draw (occluded, minimised) freezes the screenshot of a tab that says
-visible: the turn reloads that tab once and screenshots again, and on a
-second timeout reads the page's text instead, naming the page not
-rendered. Screenshots that timed out are counted as "not rendered:" below
-the report.
+visible, and every later screenshot would wait out its own timeout on it:
+after the first such timeout the hook (beekeeper hook pretooluse) refuses
+every further screenshot and zoom of the turn, which reads the page's text
+instead, naming the page not rendered. Screenshots that timed out are
+counted as "not rendered:" below the report.
 
 The turn closes every tab it opened before it ends, the blank ones
 included. Its tab group is keyed by the tab it was made with: closing that
@@ -453,10 +465,6 @@ const (
 
 var classifierReason = regexp.MustCompile(`Reason: \[([^\]]*)\]`)
 
-// frozenRenderer is in the error of a screenshot of a tab whose window the
-// compositor does not draw: the capture times out.
-const frozenRenderer = "renderer may be frozen"
-
 // chromeToolPrefix is the Claude in Chrome tools' common prefix, dropped from
 // a call's words.
 const chromeToolPrefix = "mcp__claude-in-chrome__"
@@ -608,7 +616,7 @@ func readFindings(transcript string) (browseFindings, error) {
 				case strings.Contains(text, "never clicks "+guard.SubscriptionControls):
 					f.Refused = append(f.Refused, refusal{Call: c.words, Reason: reasonControl, Hook: true})
 				}
-				if strings.Contains(text, frozenRenderer) {
+				if strings.Contains(text, guard.FrozenRenderer) {
 					f.NotRendered++
 				}
 			}
@@ -768,7 +776,7 @@ func (f browseFindings) lines(steps, deploy string, consents []guard.App, lab bo
 	if n := f.NotRendered; n > 0 {
 		out = append(out, fmt.Sprintf("not rendered: %s timed out on a frozen renderer: the tab was not drawn (behind another tab, "+
 			"or its window occluded or minimised, which the compositor does not draw), where a consent page keeps its Authorize button disabled; "+
-			"the turn reloads such a tab once and then reads the page's text instead of its picture; bring the Chrome window forward and "+
+			"the hook refused every later screenshot and the turn read the page's text instead of its picture; bring the Chrome window forward and "+
 			"run the steps again for a screenshot", plural(n, "screenshot")))
 	}
 	if l := f.windowsLine(); l != "" {
@@ -1334,9 +1342,15 @@ func copyFile(src, dst string) error {
 }
 
 // uploadWords tell a browse turn the files shared for upload, one "<named>
-// as <staged>" each.
+// as <staged>" each, and the upload-target check that resolves the input
+// before each file_upload, which the hook requires.
 const uploadWords = "The caller shares these files with you for upload, and only these: %s. Upload one through a page's file input with " +
-	"file_upload and the path after 'as', the file's copy shared with this session, never the caller's own path; file_upload refuses every other path. "
+	"file_upload and the path after 'as', the file's copy shared with this session, never the caller's own path; file_upload refuses every other path. " +
+	"A page keeps hidden file inputs (a review-reply box beside the comment box) that take an upload as readily as the intended one, so before " +
+	"each file_upload resolve its input: run this upload-target check with javascript_tool on the tab, scope set to a selector of the " +
+	"intended form or comment box (\"\" for the whole page): %s It marks the one visible, enabled file input there or says why it marked none " +
+	"(hidden, disabled, several: narrow the scope; none visible: open the intended comment box, or stop and report it). Then find '" +
+	guard.UploadTargetLabel + "' and file_upload to the ref it gives, and only that ref: the hook refuses a file_upload to any other. "
 
 // uploadPrompt are the upload words of the shared files, "" without any.
 func uploadPrompt(shared []sharedFile) string {
@@ -1347,7 +1361,7 @@ func uploadPrompt(shared []sharedFile) string {
 	for _, f := range shared {
 		named = append(named, fmt.Sprintf("%s as %s", f.Named, f.Staged))
 	}
-	return fmt.Sprintf(uploadWords, strings.Join(named, "; "))
+	return fmt.Sprintf(uploadWords, strings.Join(named, "; "), guard.UploadTargetCheck("<selector>"))
 }
 
 // sharedLines are the lines below the report that name the files shared for

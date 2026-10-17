@@ -179,8 +179,8 @@ func TestReadFindings(t *testing.T) {
 		`refused: computer left_click "Clicks Authorize for the App": the auto mode classifier denied it as [Permission Grant]`,
 		`the steps' "On GitHub's page, click Authorize once" reads as a grant: ` + consentHint,
 		"not rendered: 1 screenshot timed out on a frozen renderer: the tab was not drawn (behind another tab, or its window occluded or " +
-			"minimised, which the compositor does not draw), where a consent page keeps its Authorize button disabled; the turn reloads such a " +
-			"tab once and then reads the page's text instead of its picture; bring the Chrome window forward and run the steps again for a screenshot",
+			"minimised, which the compositor does not draw), where a consent page keeps its Authorize button disabled; the hook refused every " +
+			"later screenshot and the turn read the page's text instead of its picture; bring the Chrome window forward and run the steps again for a screenshot",
 		"windows: the turn worked in tab 1",
 	}
 	if !slices.Equal(got, wantLines) {
@@ -759,7 +759,7 @@ func TestBrowseSharesFiles(t *testing.T) {
 	}
 	p := argv[len(argv)-1]
 	if !strings.Contains(p, "and only these: "+shot+" as "+shared[0].Staged+"; "+log+" as "+shared[1].Staged+". ") ||
-		!strings.Contains(p, "file_upload refuses every other path") || !strings.HasSuffix(p, browseSteps+steps) {
+		!strings.Contains(p, "file_upload refuses every other path") || !strings.Contains(p, guard.UploadTargetScript) || !strings.HasSuffix(p, browseSteps+steps) {
 		t.Errorf("the prompt with shared files = %q", p)
 	}
 	if browsePrompt(steps, "", nil, false, nil) != browsePreamble+connectionWords+frontWords+windowWords+browseSteps+steps {
@@ -905,7 +905,7 @@ func TestReadFindingsWindows(t *testing.T) {
 		t.Errorf("windowsLine without tabs = %q", l)
 	}
 	p := browsePrompt("steps", "", nil, false, nil)
-	for _, w := range []string{"document.visibilityState", "tabs_create_mcp (a new tab opens in front)", "reload that same tab once",
+	for _, w := range []string{"document.visibilityState", "tabs_create_mcp (a new tab opens in front)", "take no further screenshot in this turn",
 		"name the page 'not rendered'", "close every tab you opened, the blank ones included", "the group's first tab last",
 		windowCapture, windowRead, "flow=redirect&redirectUrl=", "through the person's SSO button", "wait 2 seconds and read it again"} {
 		if !strings.Contains(p, w) {
