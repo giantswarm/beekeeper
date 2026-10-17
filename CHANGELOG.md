@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.149.0-rc.7] - 2026-10-18
+
 ### Fixed
 
 - The hook that refuses a blocking devctl command run outside the gate keys on the commands a call executes, not on prose that names them. An interpreter's program (a `python3` here-document, a script file, a `-c` or `-e` string) runs a command from a string literal that starts with it or names it after a shell operator; a comment, or document text in a literal (a README, a CHANGELOG entry), runs nothing. A shell's `-c` or `eval` named inside a quoted argument or a content here-document (a PR body draft) is text too. The same commands run by the program or the shell are refused or gated as before. ([#1033](https://github.com/giantswarm/beekeeper/issues/1033)).
