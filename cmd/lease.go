@@ -678,12 +678,15 @@ func unblockText(g state.Grant) string {
 
 func (a *app) leaseGrantCmd() *cobra.Command {
 	var unblock string
+	var first bool
 	c := &cobra.Command{
 		Use:   "grant <resource> <session>",
-		Short: "Grant a resource to a session: its `yours <resource>`, queued behind earlier grants",
+		Short: "Grant a resource to a session, queued behind earlier grants (--first: ahead of them, as `yours <resource>`)",
 		Long: `Record the supervisor's grant of a resource to a session: the session may
 claim it once it is free and every earlier grant for it is claimed or
-expired. A grant waits while the resource is held; once it is free the grant
+expired. --first puts the grant at the head of the queue, as the
+supervisor's ` + "`yours <resource>`" + ` does: a waiting grant to the session moves
+there, the grants it passes keep their order behind it. A grant waits while the resource is held; once it is free the grant
 expires after grantTTL (default 30m). The session is a name, a unique part of
 one, a session id or a PID; a registered agent also by its roster name.
 
@@ -715,7 +718,7 @@ and the log. Such grants are claimed during the upgrade in their order.`,
 			if cmd.Flags().Changed("upgrade-unblock") && unblock == "" {
 				return usageErr("--upgrade-unblock needs the reason: what unblocks the upgrade")
 			}
-			msg, err := a.grant(me, res, to, unblock)
+			msg, err := a.grant(me, res, to, unblock, first)
 			if err != nil {
 				return err
 			}
@@ -727,14 +730,16 @@ and the log. Such grants are claimed during the upgrade in their order.`,
 		},
 	}
 	c.Flags().StringVar(&unblock, "upgrade-unblock", "", "grant the claim that unblocks the upgrade holding the resource, and say why (supervisor only)")
+	c.Flags().BoolVar(&first, "first", false, "put the grant at the head of the resource's queue, ahead of the earlier grants (the supervisor's `yours` does)")
 	return c
 }
 
 // grant records me's grant of res to the session to, queued behind the
-// earlier grants of res, and returns what to say of it: the grant, or that
-// it was granted already. unblock is the reason of an upgrade unblock, ""
-// for a plain grant.
-func (a *app) grant(me state.Party, res string, to *claude.Session, unblock string) (string, error) {
+// earlier grants of res, or ahead of them with first (a waiting grant of to
+// moves to the head; the grants it passes keep their order), and returns
+// what to say of it: the grant, or that it was granted already. unblock is
+// the reason of an upgrade unblock, "" for a plain grant.
+func (a *app) grant(me state.Party, res string, to *claude.Session, unblock string, first bool) (string, error) {
 	dir := lease.Dir(a.cfg.LeaseDir)
 	var msg string
 	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -756,16 +761,28 @@ func (a *app) grant(me state.Party, res string, to *claude.Session, unblock stri
 		}
 		q := lease.Pending(st, res, held[res], a.now, a.cfg.GrantTTL.Duration)
 		if i := slices.IndexFunc(q, func(g state.Grant) bool { return g.To.Is(to.Party()) }); i >= 0 {
-			if unblock == "" || q[i].UpgradeUnblock != "" {
-				msg = fmt.Sprintf("%s is already granted to %q (number %d in its queue%s)", res, to.Name, i+1, unblockText(q[i]))
-				return nil, nil
-			}
 			j := slices.IndexFunc(st.Grants, func(g state.Grant) bool { return g.Resource == res && g.To.Is(q[i].To) && g.At.Equal(q[i].At) })
+			var evs []state.Event
+			if first && i > 0 {
+				j = lease.ToHead(st, j, a.now)
+				evs = append(evs, event(me, "lease.grant", "%s to %s, first ahead of %s", res, to.Name, q[0].To.Name))
+			}
+			if unblock == "" || q[i].UpgradeUnblock != "" {
+				if len(evs) == 0 {
+					msg = fmt.Sprintf("%s is already granted to %q (number %d in its queue%s)", res, to.Name, i+1, unblockText(q[i]))
+					return nil, nil
+				}
+				msg = fmt.Sprintf("%s is granted to %q first now, ahead of %s%s", res, to.Name, queueNames(q[:i]), unblockText(q[i])) + a.firstText(res, held[res])
+				return evs, nil
+			}
 			st.Grants[j].UpgradeUnblock = unblock
 			msg = fmt.Sprintf("the grant of %s to %q now unblocks %s: it claims with `beekeeper lease claim %s --purpose ...`", res, to.Name, hold.Reason, res)
 			return []state.Event{event(me, "lease.grant", "%s to %s, upgrade unblock: %s", res, to.Name, unblock)}, nil
 		}
 		st.Grants = append(st.Grants, state.Grant{Resource: res, To: to.Party(), By: me, At: a.now.UTC(), UpgradeUnblock: unblock})
+		if first && len(q) > 0 {
+			lease.ToHead(st, len(st.Grants)-1, a.now)
+		}
 		if unblock != "" {
 			msg = fmt.Sprintf("granted %s to %q to unblock %s: it claims with `beekeeper lease claim %s --purpose ...`; every other claim stays refused", res, to.Name, hold.Reason, res)
 			if held[res] {
@@ -775,6 +792,8 @@ func (a *app) grant(me state.Party, res string, to *claude.Session, unblock stri
 			return []state.Event{event(me, "lease.grant", "%s to %s, upgrade unblock: %s", res, to.Name, unblock)}, nil
 		}
 		switch {
+		case first && len(q) > 0:
+			msg = fmt.Sprintf("granted %s to %q, first in its queue ahead of %s", res, to.Name, queueNames(q)) + a.firstText(res, held[res])
 		case held[res]:
 			cur, _ := dir.Get(res)
 			msg = fmt.Sprintf("granted %s to %q, number %d in its queue: %q holds it (%s)", res, to.Name, len(q)+1, cur.Name, cur.Purpose)
@@ -786,6 +805,26 @@ func (a *app) grant(me state.Party, res string, to *claude.Session, unblock stri
 		return []state.Event{event(me, "lease.grant", "%s to %s", res, to.Name)}, nil
 	})
 	return msg, err
+}
+
+// queueNames names the grantees of q, in their order.
+func queueNames(q []state.Grant) string {
+	names := make([]string, len(q))
+	for i, g := range q {
+		names[i] = fmt.Sprintf("%q", g.To.Name)
+	}
+	return strings.Join(names, ", then ")
+}
+
+// firstText ends the line of a grant moved to the head of the queue of res:
+// who holds it, else the claim the grantee makes now.
+func (a *app) firstText(res string, held bool) string {
+	if held {
+		if cur, _ := lease.Dir(a.cfg.LeaseDir).Get(res); cur != nil {
+			return fmt.Sprintf(": %q holds it (%s)", cur.Name, cur.Purpose)
+		}
+	}
+	return fmt.Sprintf(": it claims with `beekeeper lease claim %s --purpose ...` within %s", res, dur(a.cfg.GrantTTL.Duration))
 }
 
 func (a *app) leaseRevokeCmd() *cobra.Command {
