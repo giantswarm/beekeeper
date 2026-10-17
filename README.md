@@ -2041,7 +2041,7 @@ window to lose the focus and the input to go quiet; past that the start ends wit
 (`not imported yet`, with what held it), and the reopen
 after the first turn imports the session instead, waiting up to 25 minutes more (the reopen unit's
 `RuntimeMaxSec` covers the wait). While it waits, the agent records what holds it and until when:
-`agents` shows it `not running, import waits until <t>`, the watch says `IMPORT WAITS` once per
+`agents` shows it `importing, until <t>`, the watch says `IMPORT WAITS` once per
 wait, and a `lease grant` or a message by name to the agent says that no CLI of it runs and that
 its import is pending. A reopen that waits it out is recorded as missed. Without a Hyprland session
 there is no focus to ask, and the links go at once. A locked screen is no focus: under a running
@@ -2318,7 +2318,10 @@ command line: one headless turn, `claude -p --resume <id>`, continuing its trans
 same id, as `agents start` runs a first turn. Once the turn ends, `agents reopen` shows the
 session in the desktop for a moment, which warms its desktop CLI, and later messages by name
 reach it. A wake while the unit starts, before its CLI is a peer, is refused (exit 3): send
-again in a minute.
+again in a minute. So is a wake while the session's import is pending (a start's import and first
+desktop turn, or a reopen waiting for the person), which would run a headless turn beside the CLI
+the import warms: the refusal says what the import waits for and until when, and `agents desktop
+<agent>` lets a reopen go ahead.
 
 The desktop also starts a CLI for a `local_` send while a headless turn of that session runs (a
 first turn, a wake): two copies of one session then run turns side by side. The PreToolUse hook
