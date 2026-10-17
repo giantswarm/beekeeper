@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -99,9 +100,10 @@ func worktreeApp(t *testing.T) (*app, func() (worktreeMachine, error), string) {
 	}
 	machine := func() (worktreeMachine, error) {
 		return worktreeMachine{
-			dirs: worktrees.Find([]string{root}),
-			live: []string{filepath.Join(root, "app", "live", "node_modules")},
-			git:  runGit,
+			dirs:  worktrees.Find([]string{root}),
+			roots: []string{root},
+			live:  []string{filepath.Join(root, "app", "live", "node_modules")},
+			git:   runGit,
 			pulls: func(_ context.Context, heads []github.Head) (map[github.Head]github.HeadPull, error) {
 				out := map[github.Head]github.HeadPull{}
 				for _, h := range heads {
@@ -156,6 +158,14 @@ func TestTrimWorktreesRemovesTheFinishedAndKeepsWork(t *testing.T) {
 		!strings.Contains(s, "; removed the build output of 3 unfinished ones untouched for 6h, ") || !strings.Contains(s, " in all") {
 		t.Errorf("run = %q", r)
 	}
+	for _, want := range []string{"  removed ", "  removed the build output of "} {
+		if !slices.ContainsFunc(r.paths(), func(l string) bool { return strings.HasPrefix(l, want) }) {
+			t.Errorf("no path line says %q: %q", want, r.paths())
+		}
+	}
+	if slices.ContainsFunc(r.paths(), func(l string) bool { return strings.Contains(l, "would") }) {
+		t.Errorf("an applied run's path lines say would: %q", r.paths())
+	}
 	if list := gitT(t, filepath.Join(app, "work"), "worktree", "list"); strings.Contains(list, filepath.Join(app, mergedPR)) {
 		t.Errorf("git still lists the removed worktree:\n%s", list)
 	}
@@ -167,11 +177,18 @@ func TestTrimWorktreesRemovesTheFinishedAndKeepsWork(t *testing.T) {
 
 func TestTrimWorktreesDryRunRemovesNothing(t *testing.T) {
 	a, machine, app := worktreeApp(t)
+	orphan := orphanT(t, filepath.Dir(app))
 	r := a.trimWorktrees(true, machine)
-	if !strings.HasPrefix(r.String(), "worktrees: would remove 2 finished, ") || !strings.HasSuffix(r.String(), "kept: 1 live") {
+	if !strings.HasPrefix(r.String(), "worktrees: would remove 2 finished, ") || !strings.HasSuffix(r.String(), "kept: 1 live") ||
+		!strings.Contains(r.String(), "; would move aside 1 orphaned (their repository is gone) ") || r.err != nil {
 		t.Errorf("run = %q", r)
 	}
-	for _, p := range []string{mergedPR, "work/node_modules", "unpushed/node_modules", "open/node_modules"} {
+	for _, l := range r.paths() {
+		if !strings.HasPrefix(l, "  would remove ") && !strings.HasPrefix(l, "  would move aside ") {
+			t.Errorf("a dry run's path line %q says no would", l)
+		}
+	}
+	for _, p := range []string{mergedPR, "work/node_modules", "unpushed/node_modules", "open/node_modules", "../" + orphan} {
 		if !exists(filepath.Join(app, p)) {
 			t.Errorf("a dry run removed %s", p)
 		}
@@ -204,5 +221,41 @@ func TestTrimWorktreesWithoutThePullRequestsRemovesNothing(t *testing.T) {
 	r := a.trimWorktrees(false, read)
 	if r.err == nil || r.acted() || !exists(filepath.Join(app, mergedPR)) {
 		t.Errorf("run = %q, want an error and nothing removed", r)
+	}
+}
+
+// orphanT adds under root a worktree of a clone that is then deleted, its
+// gitfile dangling, and returns its path relative to root.
+func orphanT(t *testing.T, root string) string {
+	t.Helper()
+	clone, rel := filepath.Join(t.TempDir(), "gone"), filepath.Join("gone", "fix", "x")
+	gitT(t, filepath.Dir(clone), "init", "-q", "-b", "main", clone)
+	gitT(t, clone, "commit", "-q", "--allow-empty", "-m", "init")
+	gitT(t, clone, "worktree", "add", "-q", "-b", "fix/x", filepath.Join(root, rel), "main")
+	if err := os.RemoveAll(clone); err != nil {
+		t.Fatal(err)
+	}
+	return rel
+}
+
+func TestTrimWorktreesMovesOrphansAside(t *testing.T) {
+	a, machine, app := worktreeApp(t)
+	root := filepath.Dir(app)
+	orphan := orphanT(t, root)
+	r := a.trimWorktrees(false, machine)
+	if r.err != nil || len(r.failed) > 0 || len(r.orphaned) != 1 {
+		t.Fatalf("run = %q, failed %+v; want one orphan moved aside and no failure", r, r.failed)
+	}
+	if !strings.Contains(r.String(), "; moved aside 1 orphaned (their repository is gone) ") {
+		t.Errorf("run = %q", r)
+	}
+	if want := "  moved aside "; !slices.ContainsFunc(r.paths(), func(l string) bool { return strings.HasPrefix(l, want+"0 MiB "+filepath.Join(root, orphan)) }) {
+		t.Errorf("no path line says %q of the orphan: %q", want, r.paths())
+	}
+	if exists(filepath.Join(root, orphan)) || !exists(filepath.Join(root, orphansDir, orphan, ".git")) {
+		t.Errorf("the orphan is not moved to %s", filepath.Join(root, orphansDir, orphan))
+	}
+	if again := a.trimWorktrees(true, machine); len(again.orphaned) != 0 || again.err != nil {
+		t.Errorf("the next run = %q, want the moved orphan out of sight", again)
 	}
 }
