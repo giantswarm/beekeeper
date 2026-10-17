@@ -67,19 +67,27 @@ const (
 )
 
 // An upload is one file_upload of a Chrome call: the ref and the tab it
-// targets.
-type upload struct{ ref, tab string }
+// targets, and whether an action of its batch before it changes that tab's
+// page.
+type upload struct {
+	ref, tab string
+	changed  bool
+}
 
 // uploads are the file_uploads of a Chrome call, each of a batch's.
 func uploads(tool string, input map[string]any) []upload {
 	switch chromeTool(tool) {
 	case chromeUpload:
 		ref, _ := input[refKey].(string)
-		return []upload{{ref, tabOf(input[tabKey])}}
+		return []upload{{ref: ref, tab: tabOf(input[tabKey])}}
 	case chromeBatch:
 		var out []upload
-		for _, a := range batchActions(input) {
-			out = append(out, uploads(a.name, a.input)...)
+		actions := batchActions(input)
+		for i, a := range actions {
+			for _, up := range uploads(a.name, a.input) {
+				up.changed = slices.ContainsFunc(actions[:i], func(b chromeAction) bool { return changesPage(b.name, b.input, up.tab) })
+				out = append(out, up)
+			}
 		}
 		return out
 	}
@@ -105,15 +113,25 @@ func batchActions(input map[string]any) []chromeAction {
 	return out
 }
 
-// navigates reports whether a Chrome call loads a page in tab: a navigate,
-// or a batch's.
-func navigates(tool string, input map[string]any, tab string) bool {
+// changesPage reports whether a Chrome call can change the page of tab
+// (a call naming no tab can change any): a navigate, a click, key or typed
+// text, a form value, a script other than the upload-target check, or a
+// batch's.
+func changesPage(tool string, input map[string]any, tab string) bool {
+	if t := tabOf(input[tabKey]); t != "" && t != tab && chromeTool(tool) != chromeBatch {
+		return false
+	}
 	switch chromeTool(tool) {
-	case chromeNavigation:
-		t := tabOf(input[tabKey])
-		return t == "" || t == tab
+	case chromeNavigation, chromeForm:
+		return true
+	case chromeComputer:
+		action, _ := input[actionKey].(string)
+		return slices.Contains(acting, action)
+	case chromeScript:
+		code, _ := input[textKey].(string)
+		return !isCheck(code)
 	case chromeBatch:
-		return slices.ContainsFunc(batchActions(input), func(a chromeAction) bool { return navigates(a.name, a.input, tab) })
+		return slices.ContainsFunc(batchActions(input), func(a chromeAction) bool { return changesPage(a.name, a.input, tab) })
 	}
 	return false
 }
@@ -146,7 +164,8 @@ type uploadTarget struct {
 
 // readUploadTarget reads the upload target of the transcript. A result of a
 // javascript_tool call whose code is the upload-target check is a check,
-// which drops the refs read before it; a navigate in its tab drops the check.
+// which drops the refs read before it; a call that can change its tab's page
+// after it (changesPage) drops the check.
 // After a check that marked an input, a ref a find or read_page of its tab
 // gives an element named UploadTargetLabel is the target's.
 func readUploadTarget(transcript string) uploadTarget {
@@ -155,7 +174,7 @@ func readUploadTarget(transcript string) uploadTarget {
 	scanLines(transcript, func(line []byte) {
 		for _, c := range toolCalls(line) {
 			calls[c.id] = c.chromeAction
-			if u.check != "" && navigates(c.name, c.input, u.tab) {
+			if u.check != "" && changesPage(c.name, c.input, u.tab) {
 				u = uploadTarget{}
 			}
 		}
@@ -232,6 +251,8 @@ func uploadRefusal(ev event) string {
 	u := readUploadTarget(ev.TranscriptPath)
 	for _, up := range ups {
 		switch {
+		case up.changed:
+			return uploadReason(fmt.Sprintf("an action of the batch before the file_upload to %s can change its page after the upload-target check", refName(up.ref)))
 		case u.check == "":
 			return uploadReason(fmt.Sprintf("the file_upload to %s comes before any upload-target check of its page", refName(up.ref)))
 		case strings.HasPrefix(u.check, uploadUnmarked):
