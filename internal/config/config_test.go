@@ -236,6 +236,39 @@ func TestAgeIdentityRefs(t *testing.T) {
 	}
 }
 
+func TestSecretFileRoots(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(t.TempDir(), "c.yaml")
+	if err := os.WriteFile(p, []byte("secret: {fileRoots: [~/.codex/, /srv/creds]}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Secret.FileRoots; len(got) != 2 || got[0] != filepath.Join(home, ".codex") || got[1] != "/srv/creds" {
+		t.Errorf("fileRoots = %q", got)
+	}
+	for name, raw := range map[string]string{
+		"relative": "secret: {fileRoots: [creds]}",
+		"the root": "secret: {fileRoots: [/]}",
+		"empty":    "secret: {fileRoots: [\"\"]}",
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), "c.yaml")
+			if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "secret.fileRoots[0]") {
+				t.Errorf("loads: %v", err)
+			}
+		})
+	}
+}
+
 func TestParseTokens(t *testing.T) {
 	for in, want := range map[string]Tokens{"400k": 400_000, "400K": 400_000, "1m": 1_000_000, "0.5M": 500_000, "250000": 250_000, " 80k ": 80_000} {
 		if got, err := ParseTokens(in); err != nil || got != want {

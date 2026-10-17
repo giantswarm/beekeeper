@@ -81,6 +81,9 @@ type Ops struct {
 	// under its .sops.yaml carries as a directory: a refusal names the one
 	// whose recipient has no identity.
 	Installations []string
+	// FileRoots are the directories a file:// reference's plain file must
+	// lie under; empty refuses every such reference.
+	FileRoots []string
 }
 
 // opTimeout bounds one read of the shared vault: op that answers nothing
@@ -117,13 +120,15 @@ func Exec(ctx context.Context, dir string, env []string, stdin io.Reader, name s
 // Ref names a value or a set of values: an op:// field of the shared
 // vault (with #<KEY> one KEY=VALUE line of an env-style field), a key of a Kubernetes Secret as a source (k8s://<context>/
 // <namespace>/<name>/<key>, Path then one value inside the document the
-// key holds), a SOPS file, or one path in a SOPS file (file#a.b.c, sops://
-// in front optional).
+// key holds), one value of a plain file on the host as a source
+// (file://<absolute path>#<path>, the file in Plain), a SOPS file, or one
+// path in a SOPS file (file#a.b.c, sops:// in front optional).
 type Ref struct {
-	Op   string
-	Kube KubeTarget
-	File string
-	Path string
+	Op    string
+	Kube  KubeTarget
+	Plain string
+	File  string
+	Path  string
 }
 
 // ParseRef reads a reference.
@@ -140,6 +145,9 @@ func ParseRef(s string) (Ref, error) {
 	}
 	if strings.HasPrefix(s, K8sRef) {
 		return parseKubeRef(s)
+	}
+	if strings.HasPrefix(s, FileRef) {
+		return parsePlainRef(s)
 	}
 	s = strings.TrimPrefix(s, guard.SOPSRef)
 	file, path, _ := strings.Cut(s, "#")
@@ -167,6 +175,8 @@ func (r Ref) String() string {
 		return K8sRef + r.Kube.String() + "#" + r.Path
 	case r.IsKube():
 		return K8sRef + r.Kube.String()
+	case r.Plain != "":
+		return FileRef + r.Plain + "#" + r.Path
 	case r.Path != "":
 		return r.File + "#" + r.Path
 	}
@@ -176,8 +186,12 @@ func (r Ref) String() string {
 // IsKube is whether the reference names a key of a Kubernetes Secret.
 func (r Ref) IsKube() bool { return r.Kube != (KubeTarget{}) }
 
+// IsSource is whether the reference names a value beekeeper only reads: a
+// key of a Kubernetes Secret or a plain file.
+func (r Ref) IsSource() bool { return r.IsKube() || r.Plain != "" }
+
 // Single is whether the reference names one value.
-func (r Ref) Single() bool { return r.Op != "" || r.IsKube() || r.Path != "" }
+func (r Ref) Single() bool { return r.Op != "" || r.IsSource() || r.Path != "" }
 
 // vault is the vault an op:// reference names.
 func (r Ref) vault() string {
@@ -251,6 +265,13 @@ func (o *Ops) values(ctx context.Context, r Ref) (map[string]string, error) {
 		}
 		return map[string]string{r.String(): v}, nil
 	}
+	if r.Plain != "" {
+		v, err := o.readPlain(r)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{r.String(): v}, nil
+	}
 	doc, err := o.decrypt(ctx, r.File)
 	if err != nil {
 		return nil, err
@@ -287,7 +308,7 @@ func (o *Ops) readOp(ctx context.Context, ref string) (string, error) {
 // value reads the one value a single reference names.
 func (o *Ops) value(ctx context.Context, r Ref) (string, error) {
 	if !r.Single() {
-		return "", fmt.Errorf("%s: name one value (file#path, op://… or k8s://…), not a whole file", r)
+		return "", fmt.Errorf("%s: name one value (file#path, op://…, k8s://… or file://…#path), not a whole file", r)
 	}
 	vs, err := o.values(ctx, r)
 	if err != nil {

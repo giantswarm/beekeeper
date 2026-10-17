@@ -218,13 +218,13 @@ func TestSecretCopyToSecretOnlyIntoAHeldLab(t *testing.T) {
 		t.Fatal(err)
 	}
 	const key = "kagent/kagent-anthropic/ANTHROPIC_API_KEY"
-	out, err := runSecret(a, copyOp, dbRef, "--to-secret", "kind-agentlab/"+key)
+	out, err := runSecret(a, copyOp, dbRef, toSecretOpt, "kind-agentlab/"+key)
 	if err != nil || out != fmt.Sprintf("wrote kind-agentlab/%s: %d bytes\n", key, len(secretValue)) {
 		t.Errorf("copy into the held lab answers %q, %v", out, err)
 	}
 	for _, ctx := range []string{"kind-agentlab-2", "kind-aps-282", "teleport.giantswarm.io-gazelle"} {
 		a.out = &bytes.Buffer{}
-		out, err := runSecret(a, copyOp, dbRef, "--to-secret", ctx+"/"+key)
+		out, err := runSecret(a, copyOp, dbRef, toSecretOpt, ctx+"/"+key)
 		if Code(err) != ExitRefused {
 			t.Errorf("copy into %s = %q, %v, want refused", ctx, out, err)
 		}
@@ -232,14 +232,14 @@ func TestSecretCopyToSecretOnlyIntoAHeldLab(t *testing.T) {
 	}
 	gen := filepath.Join(repo, "gen.sops.yaml")
 	a.out = &bytes.Buffer{}
-	if out, err := runSecret(a, setOp, gen, "data.key", generateFlag, "--length", "20", "--to-secret", "kind-agentlab-2/"+key); Code(err) != ExitRefused {
+	if out, err := runSecret(a, setOp, gen, "data.key", generateFlag, "--length", "20", toSecretOpt, "kind-agentlab-2/"+key); Code(err) != ExitRefused {
 		t.Errorf("set into a lab held by another = %q, %v, want refused", out, err)
 	}
 	if _, err := os.Stat(gen); err == nil {
 		t.Error("a refused set wrote the SOPS file")
 	}
 	a.out = &bytes.Buffer{}
-	out, err = runSecret(a, setOp, gen, "data.key", generateFlag, "--length", "20", "--to-secret", "kind-agentlab/"+key)
+	out, err = runSecret(a, setOp, gen, "data.key", generateFlag, "--length", "20", toSecretOpt, "kind-agentlab/"+key)
 	if err != nil || !strings.HasPrefix(out, "wrote "+gen+"#data.key and kind-agentlab/"+key+": 20 characters, hmac:") {
 		t.Errorf("set into the held lab answers %q, %v", out, err)
 	}
@@ -247,7 +247,7 @@ func TestSecretCopyToSecretOnlyIntoAHeldLab(t *testing.T) {
 		t.Errorf("applied %q", applied)
 	}
 	a.out = &bytes.Buffer{}
-	if _, err := runSecret(a, copyOp, "op://Shared/absent/field", "--to-secret", "kind-agentlab/"+key); Code(err) != ExitVault {
+	if _, err := runSecret(a, copyOp, "op://Shared/absent/field", toSecretOpt, "kind-agentlab/"+key); Code(err) != ExitVault {
 		t.Errorf("a value the vault cannot give = %v (exit %d), want exit %d", err, Code(err), ExitVault)
 	}
 	a.cfg.Secret.TokenFile = ""
@@ -259,10 +259,81 @@ func TestSecretCopyToSecretOnlyIntoAHeldLab(t *testing.T) {
 
 // The flag and encodings the encoded copy's test names.
 const (
-	encodeOpt  = "--encode"
-	base64Enc  = "base64"
-	basicToken = "basic:x-access-token"
+	encodeOpt   = "--encode"
+	base64Enc   = "base64"
+	basicToken  = "basic:x-access-token"
+	toSecretOpt = "--to-secret"
 )
+
+// TestSecretCopyFromAPlainFileIsCheckedByFingerprint copies one value of a
+// CLI's plain JSON credential file under secret.fileRoots into a held lab's
+// Secret: the Secret's key fingerprints like the file:// source, no answer
+// carries the value, the file stays as it was, and a file:// destination
+// and a file outside the roots are refused naming them.
+func TestSecretCopyFromAPlainFileIsCheckedByFingerprint(t *testing.T) {
+	a, _, _ := secretApp(t)
+	a.cfg.LeaseDir = t.TempDir()
+	a.cfg.Resources = []string{labOne}
+	a.cfg.Labs = map[string]string{labOne: labCluster}
+	root := t.TempDir()
+	a.cfg.Secret.FileRoots = []string{root}
+	auth := filepath.Join(root, "auth.json")
+	content := `{"tokens": {"access_token": "` + secretValue + `"}}`
+	if err := os.WriteFile(auth, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stored := map[secret.KubeTarget][]byte{}
+	prevApply, prevRead := secretApply, secretRead
+	secretApply = func(_ context.Context, _ []byte, tg secret.KubeTarget, v []byte) error {
+		stored[tg] = v
+		return nil
+	}
+	secretRead = func(_ context.Context, _ []byte, tg secret.KubeTarget) ([]byte, error) { return stored[tg], nil }
+	t.Cleanup(func() { secretApply, secretRead = prevApply, prevRead })
+	if _, err := lease.Dir(a.cfg.LeaseDir).Claim(labOne, lease.Holder{Env: labOne, Name: a.as}); err != nil {
+		t.Fatal(err)
+	}
+	const target = "kind-agentlab/kagent/codex/access_token"
+	src := "file://" + auth + "#tokens.access_token"
+	out, err := runSecret(a, copyOp, src, toSecretOpt, target)
+	if err != nil || out != fmt.Sprintf("wrote %s: %d bytes\n", target, len(secretValue)) {
+		t.Fatalf("copy answers %q, %v", out, err)
+	}
+	a.out = &bytes.Buffer{}
+	delivered, err := runSecret(a, fingerprintOp, "--secret", target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.out = &bytes.Buffer{}
+	expected, err := runSecret(a, fingerprintOp, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := func(s string) string { f := strings.Fields(s); return f[len(f)-1] }
+	if fp(delivered) != fp(expected) || !strings.HasPrefix(fp(delivered), "hmac:") {
+		t.Errorf("the Secret's fingerprint %q, the source's %q", delivered, expected)
+	}
+	for _, s := range []string{out, delivered, expected} {
+		noSecret(t, "an answer", s)
+	}
+	outside := filepath.Join(t.TempDir(), "auth.json")
+	for _, args := range [][]string{
+		{copyOp, dbRef, src},
+		{copyOp, "file://" + outside + "#tokens.access_token", toSecretOpt, target},
+		{fingerprintOp, "file://" + root + "/absent.json#tokens.access_token"},
+		{fingerprintOp, "file://" + auth + "#tokens.id_token"},
+	} {
+		a.out = &bytes.Buffer{}
+		if _, err := runSecret(a, args...); err == nil {
+			t.Errorf("%v: no refusal", args)
+		} else {
+			noSecret(t, "a refusal", err.Error())
+		}
+	}
+	if raw, _ := os.ReadFile(auth); string(raw) != content { //nolint:gosec // the test's scratch file
+		t.Error("the source file changed")
+	}
+}
 
 // TestSecretCopyEncodedIsCheckedByFingerprint copies a value encoded into a
 // held lab's Secret and checks the delivery with fingerprint alone: the
@@ -286,7 +357,7 @@ func TestSecretCopyEncodedIsCheckedByFingerprint(t *testing.T) {
 	}
 	const target = "kind-agentlab/kagent/private-skills/token"
 	encoded := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + secretValue))
-	out, err := runSecret(a, copyOp, dbRef, encodeOpt, basicToken, "--to-secret", target)
+	out, err := runSecret(a, copyOp, dbRef, encodeOpt, basicToken, toSecretOpt, target)
 	if err != nil || out != fmt.Sprintf("wrote %s: %d bytes\n", target, len(encoded)) {
 		t.Fatalf("copy --encode answers %q, %v", out, err)
 	}
@@ -316,8 +387,8 @@ func TestSecretCopyEncodedIsCheckedByFingerprint(t *testing.T) {
 		}
 	}
 	for _, args := range [][]string{
-		{copyOp, dbRef, encodeOpt, "hex", "--to-secret", target},
-		{copyOp, dbRef, encodeOpt, "basic:", "--to-secret", target},
+		{copyOp, dbRef, encodeOpt, "hex", toSecretOpt, target},
+		{copyOp, dbRef, encodeOpt, "basic:", toSecretOpt, target},
 		{copyOp, filepath.Join(repo, "app.sops.yaml"), filepath.Join(repo, "copy.sops.yaml"), encodeOpt, base64Enc},
 		{copyOp, dbRef + "=a", filepath.Join(repo, "new.sops.yaml"), encodeOpt, base64Enc},
 		{fingerprintOp, dbRef, encodeOpt, "rot13"},
