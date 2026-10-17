@@ -368,8 +368,13 @@ func TestRunHoldsTheGoCacheAgainstATrim(t *testing.T) {
 	o := Options{Max: "1M", Swap: "0", SlotDir: t.TempDir(), Slots: 1, Stderr: io.Discard, Wait: time.Second, GoCache: cache}
 
 	rc := make(chan int, 1)
-	go func() { rc <- Run(o, []string{testShell, "-c", "touch " + marker + "; sleep 2"}) }()
+	go func() { rc <- Run(o, []string{"sh", "-c", "touch " + marker + "; sleep 2"}) }()
 	for deadline := time.Now().Add(5 * time.Second); !exists(marker); time.Sleep(20 * time.Millisecond) {
+		select {
+		case c := <-rc:
+			t.Fatalf("the run ended, exit %d, before its command started", c)
+		default:
+		}
 		if time.Now().After(deadline) {
 			t.Fatal("the run's command never started")
 		}
@@ -386,7 +391,7 @@ func TestRunHoldsTheGoCacheAgainstATrim(t *testing.T) {
 	}
 	defer release()
 	_ = os.Remove(marker)
-	if c := Run(o, []string{testShell, "-c", "touch " + marker}); c != ExitBusy || exists(marker) {
+	if c := Run(o, []string{"sh", "-c", "touch " + marker}); c != ExitBusy || exists(marker) {
 		t.Errorf("a run under a trim: exit %d, ran %v; want %d, not run", c, exists(marker), ExitBusy)
 	}
 }
