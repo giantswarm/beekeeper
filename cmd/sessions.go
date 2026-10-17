@@ -285,8 +285,10 @@ func (a *app) serveCmd() *cobra.Command {
 epic it serves and what it waits on. A new record replaces the session's
 last one. sessions and the hand-over show it, and beekeeper watch prints one
 line when the session ends, naming the issue to re-query. The session is a
-session id, a PID, a session's own name or a registered agent's roster name,
-or a unique part of a name; a whole name wins over a part of another. A
+session id, a PID, a session's own name or a registered agent's roster name
+or task title (the roster name with a suffix such as " (opus, builds)"), or
+a unique part of a name; a whole name wins over a part of another. A name
+that matches nothing is refused with the closest roster names. A
 registered agent whose CLI does not run is recorded too, and the line says
 so. The record stores the roster name of a registered agent, the session's
 own name otherwise.
@@ -459,6 +461,9 @@ func sessionNamed(sessions []*claude.Session, st *state.State, q string, now tim
 		absent string
 		// roster is its roster name, "" for a session off the roster.
 		roster string
+		// title is its task's title (agents start's task line before its
+		// first ": "), "" without one.
+		title string
 	}
 	targets := make([]*target, 0, len(sessions)+len(st.Agents))
 	for _, s := range sessions {
@@ -467,7 +472,7 @@ func sessionNamed(sessions []*claude.Session, st *state.State, q string, now tim
 	for _, ag := range st.Agents {
 		if i := slices.IndexFunc(sessions, func(s *claude.Session) bool { return ag.Is(s.Party()) }); i >= 0 {
 			targets[i].names = append(targets[i].names, ag.Name)
-			targets[i].roster = ag.Name
+			targets[i].roster, targets[i].title = ag.Name, taskTitle(ag.Task)
 			continue
 		}
 		targets = append(targets, &target{
@@ -475,6 +480,7 @@ func sessionNamed(sessions []*claude.Session, st *state.State, q string, now tim
 			names:  []string{ag.Name},
 			absent: noCLI(ag, now),
 			roster: ag.Name,
+			title:  taskTitle(ag.Task),
 		})
 	}
 	q = strings.TrimSpace(q)
@@ -482,20 +488,26 @@ func sessionNamed(sessions []*claude.Session, st *state.State, q string, now tim
 		return nil, "", refused("no session named")
 	}
 	lq := strings.ToLower(q)
+	// bare is q without a task title's parenthesized suffix, which names
+	// the roster agent even after its task changed.
+	bare := strings.TrimSpace(titleSuffix.ReplaceAllString(q, ""))
+	rosterIs := func(t *target) bool {
+		return t.roster != "" && (strings.EqualFold(t.roster, q) || strings.EqualFold(t.roster, bare) || strings.EqualFold(t.title, q))
+	}
 	var whole, part []*target
 	for _, t := range targets {
 		if t.s.ID == q || t.s.HostID == q || t.s.PID != 0 && strconv.Itoa(t.s.PID) == q {
 			return t.s, t.absent, nil
 		}
 		switch {
-		case slices.ContainsFunc(t.names, func(n string) bool { return strings.ToLower(n) == lq }):
+		case rosterIs(t) || slices.ContainsFunc(t.names, func(n string) bool { return strings.ToLower(n) == lq }):
 			whole = append(whole, t)
 		case slices.ContainsFunc(t.names, func(n string) bool { return strings.Contains(strings.ToLower(n), lq) }):
 			part = append(part, t)
 		}
 	}
 	hits := whole
-	if agents := slices.DeleteFunc(slices.Clone(whole), func(t *target) bool { return !strings.EqualFold(t.roster, q) }); len(whole) > 1 && len(agents) == 1 {
+	if agents := slices.DeleteFunc(slices.Clone(whole), func(t *target) bool { return !rosterIs(t) }); len(whole) > 1 && len(agents) == 1 {
 		hits = agents
 	}
 	if len(hits) == 0 {
@@ -503,7 +515,11 @@ func sessionNamed(sessions []*claude.Session, st *state.State, q string, now tim
 	}
 	switch len(hits) {
 	case 0:
-		return nil, "", refused("no running session or registered agent matches %q: name one by its session name, roster name or session id", q)
+		why := fmt.Sprintf("no running session or registered agent matches %q: name one by its session name, roster name or session id", q)
+		if near := closestRoster(st.Agents, bare, 3); len(near) > 0 {
+			why += "; the closest roster names: " + strings.Join(near, ", ")
+		}
+		return nil, "", refused("%s", why)
 	case 1:
 		return hits[0].s, hits[0].absent, nil
 	}
@@ -513,6 +529,59 @@ func sessionNamed(sessions []*claude.Session, st *state.State, q string, now tim
 	}
 	slices.Sort(named)
 	return nil, "", refused("%q matches %d sessions: %s; pass one's session id", q, len(hits), strings.Join(named, ", "))
+}
+
+// titleSuffix is a task title's parenthesized suffix, " (opus, builds)".
+var titleSuffix = regexp.MustCompile(`\s*\([^()]*\)\s*$`)
+
+// taskTitle is the title of an agent's task: agents start's task line up to
+// its first ": ".
+func taskTitle(task string) string {
+	title, _, _ := strings.Cut(task, ": ")
+	return strings.TrimSpace(title)
+}
+
+// closestRoster is up to n roster names nearest to q by edit distance,
+// ignoring case, nearest first, quoted.
+func closestRoster(agents []state.Agent, q string, n int) []string {
+	type near struct {
+		name string
+		d    int
+	}
+	lq := []rune(strings.ToLower(q))
+	ranked := make([]near, 0, len(agents))
+	for _, ag := range agents {
+		if ag.Name != "" {
+			ranked = append(ranked, near{ag.Name, editDistance(lq, []rune(strings.ToLower(ag.Name)))})
+		}
+	}
+	slices.SortStableFunc(ranked, func(a, b near) int { return cmp.Or(cmp.Compare(a.d, b.d), strings.Compare(a.name, b.name)) })
+	out := make([]string, 0, n)
+	for _, r := range ranked[:min(n, len(ranked))] {
+		out = append(out, strconv.Quote(r.name))
+	}
+	return out
+}
+
+// editDistance is the Levenshtein distance between a and b.
+func editDistance(a, b []rune) int {
+	row := make([]int, len(b)+1)
+	for j := range row {
+		row[j] = j
+	}
+	for i := range a {
+		prev := row[0]
+		row[0] = i + 1
+		for j := range b {
+			cur, swap := row[j+1], prev
+			if a[i] != b[j] {
+				swap++
+			}
+			row[j+1] = min(row[j+1]+1, row[j]+1, swap)
+			prev = cur
+		}
+	}
+	return row[len(b)]
 }
 
 // servedBy is the session p as a serve record names it: under its roster
