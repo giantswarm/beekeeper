@@ -99,14 +99,18 @@ func TestServeResolvesTheSession(t *testing.T) {
 		{name: "whole name before a part", q: "BK park", want: `"BK park" serves`},
 		{name: "roster agent without a CLI", q: "BK parked worker", want: `"BK parked worker" serves giantswarm/beekeeper#789; no CLI of "BK parked worker" runs`},
 		{name: "part of several names", q: "klaus-lab", refusal: `"klaus-lab" matches 2 sessions: "klaus-lab-34" (s` + strconv.Itoa(untitledPID) + `), "klaus-lab-35"`},
-		{name: "no match", q: nobodyNamed, refusal: `no running session or registered agent matches "nobody": name one by its session name, roster name or session id`},
+		{name: "task title", q: "BK park (opus, builds)", want: `"BK park" serves`},
+		{name: "task title, any case", q: "bk PARK (Opus, Builds)", want: `"BK park" serves`},
+		{name: "roster name and a suffix", q: "BK parked worker (sonnet, no build)", want: `"BK parked worker" serves`},
+		{name: "no match", q: nobodyNamed, refusal: `no running session or registered agent matches "nobody": name one by its session name, roster name or session id; the closest roster names: `},
+		{name: "near miss", q: "BK wroker (opus, builds)", refusal: `no running session or registered agent matches "BK wroker (opus, builds)": name one by its session name, roster name or session id; the closest roster names: "BK worker", "BK park", "BK parked worker"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a, store := serveApp(t)
 			if err := store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Agents = append(st.Agents,
 					state.Agent{Party: state.Party{Session: "s-parked", Name: "BK parked worker"}},
-					state.Agent{Party: state.Party{Session: "s-park", Name: "BK park"}})
+					state.Agent{Party: state.Party{Session: "s-park", Name: "BK park"}, Task: "BK park (opus, builds): giantswarm/beekeeper#1333"})
 				return nil, nil
 			}); err != nil {
 				t.Fatal(err)
