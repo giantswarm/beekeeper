@@ -2,6 +2,7 @@ package lease
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -188,5 +189,28 @@ func TestDirHand(t *testing.T) {
 	}
 	if list, err := d.List(); err != nil || len(list) != 1 {
 		t.Fatalf("List = %+v, %v", list, err)
+	}
+}
+
+// ToHead moves a grant before the other grants of its resource, keeps their
+// order and leaves other resources' grants in place.
+func TestToHead(t *testing.T) {
+	now := time.Date(2026, 10, 17, 2, 0, 0, 0, time.UTC)
+	g := func(res, name string) state.Grant {
+		return state.Grant{Resource: res, To: state.Party{Session: name, Name: name}, At: now.Add(-time.Hour)}
+	}
+	st := &state.State{Grants: []state.Grant{g("x", "o"), g("r", "a"), g("r", "b"), g("x", "p"), g("r", "c")}}
+	if j := ToHead(st, 4, now); j != 1 {
+		t.Errorf("index %d, want 1", j)
+	}
+	var got []string
+	for _, x := range st.Grants {
+		got = append(got, x.Resource+x.To.Name)
+	}
+	if want := []string{"xo", "rc", "ra", "rb", "xp"}; !slices.Equal(got, want) {
+		t.Errorf("grants %q, want %q", got, want)
+	}
+	if !st.Grants[1].At.Equal(now) {
+		t.Errorf("the moved grant's time %v, want %v", st.Grants[1].At, now)
 	}
 }
