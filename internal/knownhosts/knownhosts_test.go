@@ -3,7 +3,6 @@ package knownhosts
 import (
 	"crypto/ed25519"
 	"encoding/base64"
-	"encoding/binary"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,10 +30,10 @@ func hostLine(t *testing.T, host string) string {
 // OpenSSH writes a post-quantum host key.
 func unknownLine(host string) string {
 	typ := "ssh-mldsa44-ed25519"
-	blob := binary.BigEndian.AppendUint32(nil, uint32(len(typ)))
-	blob = append(blob, typ...)
-	blob = binary.BigEndian.AppendUint32(blob, 4)
-	blob = append(blob, "keyk"...)
+	blob := ssh.Marshal(struct {
+		Type string
+		Key  []byte
+	}{typ, []byte("key")})
 	return host + " " + typ + " " + base64.StdEncoding.EncodeToString(blob)
 }
 
@@ -51,7 +50,7 @@ func TestParseableDropsUnknownKeyTypes(t *testing.T) {
 	good, other := hostLine(t, "github.com"), hostLine(t, "gitlab.com")
 	write(t, home, "# comment", good, unknownLine("pq.example"), "")
 	write(t, etc, other)
-	before, _ := os.ReadFile(home)
+	before, _ := os.ReadFile(home) //nolint:gosec // the test's own temp file
 
 	if _, err := knownhosts.New(home); err == nil {
 		t.Fatal("the source must fail Go's knownhosts, or this test proves nothing")
@@ -76,7 +75,7 @@ func TestParseableDropsUnknownKeyTypes(t *testing.T) {
 			t.Errorf("%s: %v", hosts[0], err)
 		}
 	}
-	after, _ := os.ReadFile(home)
+	after, _ := os.ReadFile(home) //nolint:gosec // the test's own temp file
 	if string(after) != string(before) {
 		t.Error("the source file changed")
 	}
