@@ -1438,9 +1438,11 @@ waits for its CI the installed devctl is the latest release and runs, so another
 merge and promotion proceed. Once GitHub reports the pull request merged (a promotion's window from
 its start) the window holds them until the release is installed; a merge already running keeps
 its devctl, which checked its version at its start. giantswarm/devctl's own next merge waits for
-the window's release either way. A merge that releases only a candidate (`vX.Y.Z-rc.N`) lifts it once recorded: `devctl
-version update` installs only a stable release, so no devctl run outdates, and the candidate's
-promotion opens the window anew. Otherwise it lifts as soon as the release's binary assets exist
+the window's release either way. A merge that releases only a candidate (`vX.Y.Z-rc.N`) lifts it once the
+candidate's tag is published with this platform's binary, while the merge's devctl still waits for
+the rest of the release, or once the merge is recorded: `devctl version update` installs only a
+stable release, so no devctl run outdates, and the candidate's promotion opens the window anew.
+`hold list` and `hold check` name that condition as the window's end. Otherwise it lifts as soon as the release's binary assets exist
 and verify, not after the release workflow devctl's own merge still waits for: once GitHub reports
 the window's pull request merged (a promotion's from its start), the watch and the waiting gates
 run `devctl version update` every minute, which installs a release only once its binary verifies

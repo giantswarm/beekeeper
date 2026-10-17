@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -53,7 +54,15 @@ var (
 	rebaseRetry   = 2 * time.Second
 	devctlVersion = toolVersion
 	devctlUpdate  = toolUpdate
-	baseChecks    = func(ctx context.Context, repo, base string) (github.BaseChecks, error) {
+	// toolCandidate is the newest release candidate of the merge tool
+	// published since a time with this platform's binary uploaded, "" for
+	// none.
+	toolCandidate = func(ctx context.Context, since time.Time) (string, error) {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		return github.PublishedCandidate(ctx, github.RunGH, merge.ToolRepo, merge.Tool+"-"+runtime.GOOS+"-"+runtime.GOARCH, since)
+	}
+	baseChecks = func(ctx context.Context, repo, base string) (github.BaseChecks, error) {
 		return github.ReadBaseChecks(ctx, github.RunGH, repo, base)
 	}
 	// infraReds are the red checks of a document that died on a transient

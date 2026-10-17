@@ -795,6 +795,58 @@ func TestACandidateToolMergeLiftsItsWindow(t *testing.T) {
 	}
 }
 
+// A merged window whose merge released only a candidate lifts once the
+// candidate's tag is published with this platform's binary, while the
+// merge's devctl still waits for the rest of the release: no update installs
+// a candidate, so devctl never reports it.
+func TestAToolWindowLiftsOnceItsCandidateIsPublished(t *testing.T) {
+	stubGitHub(t, github.Merged, devctlFrom)
+	updates := 0
+	devctlUpdate = func(context.Context) error { updates++; return nil }
+	candidate, since := "", time.Time{}
+	toolCandidate = func(_ context.Context, s time.Time) (string, error) { since = s; return candidate, nil }
+	g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
+	held := func() bool {
+		_, ok := merge.Blocking(gateState(t, g), time.Now(), scratchRepo, 8, config.Lane{Name: scratchRepo})
+		return ok
+	}
+
+	// Merged, the candidate not yet published: the window holds.
+	g.closeToolWindow(context.Background(), watchParty)
+	st := gateState(t, g)
+	if len(st.Holds) != 1 || !st.Holds[0].ToolMerged || !held() {
+		t.Fatalf("merged, no candidate: holds %+v", st.Holds)
+	}
+	if opened := st.Holds[0].At; !since.Equal(opened) {
+		t.Errorf("asked for candidates since %v, the window opened %v", since, opened)
+	}
+	if end := holdEnd(g.app, st.Holds[0]); !strings.Contains(end, "candidate") {
+		t.Errorf("the window's end names no candidate: %q", end)
+	}
+
+	// The candidate is out: the window lifts, the merge still runs.
+	candidate = devctlTo + "-rc.1"
+	g.closeToolWindow(context.Background(), watchParty)
+	st = gateState(t, g)
+	if len(st.Holds) != 0 || held() {
+		t.Fatalf("a published candidate left the window: holds %+v", st.Holds)
+	}
+	if len(st.Merges) != 1 || st.Merges[0].Phase != state.Running {
+		t.Errorf("the merge's run changed: %+v", st.Merges)
+	}
+	if d := lastEvent(t, g, "hold.lift"); !strings.Contains(d, "released the candidate "+candidate) || !strings.Contains(d, "still waits for the release workflow") {
+		t.Errorf("hold.lift event: %q", d)
+	}
+
+	// The merge's record later finds the window gone.
+	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+		return recordRun(st, 0, g.lane, g.me, runOutcome{out: merge.Outcome{Merged: true, Release: candidate}}, time.Now(), ""), nil
+	})
+	if st = gateState(t, g); len(st.Holds) != 0 {
+		t.Errorf("the record reopened a window: %+v", st.Holds)
+	}
+}
+
 // A promotion of devctl opens the window and holds the other merges until
 // devctl reports the stable release; one that ends without its document,
 // with no pull request to ask, lifts it.

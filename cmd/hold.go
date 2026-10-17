@@ -35,8 +35,9 @@ and puts the merge back in its place. A merge or promotion of
 giantswarm/devctl opens a tool-release window by itself: a "merges" hold that,
 once the release is coming (its pull request merged, a promotion's from its
 start), lets only giantswarm/devctl through; the gate installs the release with devctl
-version update and lifts the window once the local devctl reports it, or at
-once when the merge released only a candidate, which no update installs.
+version update and lifts the window once the local devctl reports it, or,
+when the merge released only a candidate, which no update installs, once the
+candidate's tag is published with this platform's binary.
 
 --lift-when takes a shell command on this machine: the watch lifts the hold
 once it exits 0, and logs the lift. A repository's hold whose probe waits on
@@ -307,8 +308,13 @@ func holdEnd(a *app, h state.Hold) string {
 	}
 	if h.Tool != "" {
 		end := h.Tool + " reports its release"
-		if h.ToolRelease != "" {
+		switch {
+		case h.ToolRelease != "" && merge.PreRelease(h.ToolRelease):
+			end = "the candidate " + h.ToolRelease + " is published with its binaries"
+		case h.ToolRelease != "":
 			end = h.Tool + " reports " + h.ToolRelease
+		case h.ToolMerged:
+			end += " or its release candidate is published with its binaries"
 		}
 		if h.ToolFailed != "" {
 			end += "; its last update failed, the window stays: " + h.ToolFailed

@@ -1805,7 +1805,8 @@ func (a *app) closeToolWindow(ctx context.Context, by state.Party) {
 	if v != "" && a.updateTool(ctx, v, by) {
 		v = devctlVersion(ctx)
 	}
-	if v == "" && (running || len(pulls) == 0) {
+	candidates := publishedCandidates(ctx, st, pulls)
+	if v == "" && len(candidates) == 0 && (running || len(pulls) == 0) {
 		return
 	}
 	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -1815,6 +1816,13 @@ func (a *app) closeToolWindow(ctx context.Context, by state.Party) {
 			switch {
 			case h.Tool == "":
 				return false
+			case candidates[h.ToolPR] != "" && awaitsCandidate(h, pulls):
+				detail := fmt.Sprintf("%s: %s released the candidate %s, its tag published with its binaries, which `devctl version update` never installs: its promotion opens the window anew", h.Target, toolKey(h), candidates[h.ToolPR])
+				if running {
+					detail += "; " + toolKey(h) + "'s devctl still waits for the release workflow"
+				}
+				ev = append(ev, event(by, "hold.lift", "%s", detail))
+				return true
 			case v != "" && merge.Installed(h, v) && (!running || merge.ToolReleased(h)):
 				detail := fmt.Sprintf("%s: devctl now reports %s (the window opened on %s)", h.Target, v, h.ToolFrom)
 				if running {
@@ -1834,6 +1842,33 @@ func (a *app) closeToolWindow(ctx context.Context, by state.Party) {
 		})
 		return ev, nil
 	})
+}
+
+// awaitsCandidate says the tool-release window h waits on a merge that may
+// have released only a candidate: its pull request merged (pulls holds the
+// read of this pass), its release not yet recorded or recorded a candidate.
+func awaitsCandidate(h state.Hold, pulls map[int]github.Pull) bool {
+	merged := h.ToolMerged || pulls[h.ToolPR].State == github.Merged
+	return h.Tool != "" && h.ToolPR != 0 && merged && (h.ToolRelease == "" || merge.PreRelease(h.ToolRelease))
+}
+
+// publishedCandidates are, by pull request, the release candidates of the
+// tool published since their window opened with this platform's binary,
+// for the windows that await one (awaitsCandidate): a merge's release is
+// a candidate no update installs, so the window lifts on its tag and its
+// binaries, not on what devctl reports. A failed read finds none; the next
+// poll asks again.
+func publishedCandidates(ctx context.Context, st *state.State, pulls map[int]github.Pull) map[int]string {
+	found := map[int]string{}
+	for _, h := range st.Holds {
+		if !awaitsCandidate(h, pulls) {
+			continue
+		}
+		if c, err := toolCandidate(ctx, h.At); err == nil && c != "" && (h.ToolRelease == "" || merge.Bare(c) == merge.Bare(h.ToolRelease)) {
+			found[h.ToolPR] = c
+		}
+	}
+	return found
 }
 
 // gateBudget is the last budget reading when it is younger than
