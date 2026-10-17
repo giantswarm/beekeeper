@@ -351,8 +351,11 @@ beekeeper keeps that login:
   FAILED` after a failed renewal, each with one ENDED line once renewed. A merge gate refusal for an
   unreadable installation names an expired login as its cause.
 - `beekeeper install` writes the keeper, `beekeeper-teleport.timer`, which runs `beekeeper teleport
-  renew --keeper` every `teleport.every` (default 10m); it renews once less than
-  `teleport.renewBefore` (default 90m) is left. `uninstall` stops and removes it with the other units.
+  renew --keeper` every `teleport.every` (default 10m, rounded down to whole minutes, or whole hours
+  from 1h); it renews once less than `teleport.renewBefore` (default 90m) is left. The timer is a
+  calendar event on the wall clock (`OnCalendar=*:0/10`, `Persistent=true`), which goes on through a
+  suspend: the tick missed while the machine slept fires within seconds of resume, and renews a
+  login that expired meanwhile. `uninstall` stops and removes it with the other units.
 - A renewal runs `tsh login --proxy=<proxy> --auth=<connector>` in an empty staging home, because a
   valid profile makes `tsh login` print its status only. tsh opens the login URL in the default
   browser, and a browser holding the SSO session completes it without a click; nothing types
@@ -367,7 +370,10 @@ beekeeper keeps that login:
 - A login that does not complete within `teleport.loginTimeout` (default 3m: the browser's SSO
   session is gone, or the sign-in needs a click) leaves the profile as it was. The keeper does not
   try that login again: it leaves a sign-in note for `guide.person` that closes by itself once the
-  login is renewed, and the watch says `TELEPORT RENEWAL FAILED`.
+  login is renewed, and the watch says `TELEPORT RENEWAL FAILED`. The run after a missed tick (more
+  than two `teleport.every` since the keeper's last run) tries a failed login again, and a failure
+  of that run, which may meet a network not yet back from the suspend, is tried once more at the
+  next run before the note; the watch says `TELEPORT RENEWAL FAILED` meanwhile.
 - A login whose SSO callback exchange with the proxy timed out after the browser's sign-in
   (`identity provider callback failed` … `Client.Timeout exceeded while awaiting headers`) is
   retried once, in the same staging home, before the renewal fails: the first attempt is logged as
