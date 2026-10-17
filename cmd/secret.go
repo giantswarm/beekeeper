@@ -59,7 +59,13 @@ Secret without a person and without its value reaching a session. The
 read is one Secret GET, in beekeeper's process, through kind for a lab's
 context (kind-<cluster>, its lab lease held by the caller) and through
 the kubeconfig files kube.kubeconfig names (KUBECONFIG's, else
-~/.kube/config) for any other; nothing is written to that cluster. A SOPS
+~/.kube/config) for any other; nothing is written to that cluster. As a
+source too, one value of a plain file on the host
+(file://<absolute path>#<path>, the path a dotted key of its JSON or YAML
+mapping or a line of its dotenv lines): a credential a CLI writes as a
+plain file (the Codex CLI's auth.json, for one) is read in beekeeper's
+process, the file under a directory of secret.fileRoots and never written,
+moved or deleted. A SOPS
 file is encrypted under the creation rules of the .sops.yaml nearest above
 it.
 
@@ -197,7 +203,7 @@ holds. The two together check a delivery without reading a value:
 				return err
 			}
 			if !enc.IsZero() && !r[0].Single() {
-				return usageErr("--encode encodes one value: file#path, op://… or k8s://…, not a whole file")
+				return usageErr("--encode encodes one value: file#path, op://…, k8s://… or file://…#path, not a whole file")
 			}
 			if err := a.checkKubeSources(r); err != nil {
 				return err
@@ -388,6 +394,15 @@ top-level or line keys, for other text each line's head before its first
   beekeeper secret copy k8s://<context>/<namespace>/<name>/<key>#CLIENT_SECRET \
     values.sops.yaml#connectors.0.config.clientSecret
 
+The source may also be one value of a plain file on the host,
+file://<absolute path>#<path>, under a directory of secret.fileRoots: a
+dotted key of its JSON or YAML mapping or a line of its dotenv lines. The
+file is read, never written; one outside the roots, a missing file or a
+path that reaches nothing fails in one line naming it, never a value:
+
+  beekeeper secret copy 'file://<codex home>/auth.json#tokens.access_token' \
+    --to-secret kind-<lab>/<namespace>/<name>/<key>
+
 copy <ref>=<path> [<ref>=<path>…] <new-file> writes several values, each
 <ref> one value (op://<vault>/<item>/<field>, k8s://…, file#path), into a new SOPS
 file in one encryption: sops needs only the recipients of the nearest
@@ -510,7 +525,7 @@ failing or answering nothing within a minute) exits 78.`,
 				return err
 			}
 			if !enc.IsZero() && !src[0].Single() {
-				return usageErr("--encode encodes one value: file#path, op://… or k8s://…, not a whole file")
+				return usageErr("--encode encodes one value: file#path, op://…, k8s://… or file://…#path, not a whole file")
 			}
 			if err := a.checkKubeSources(src); err != nil {
 				return err
@@ -568,6 +583,9 @@ failing or answering nothing within a minute) exits 78.`,
 			if dst[0].IsKube() {
 				return usageErr("%s: k8s:// names a source; a lab's Secret is written with --to-secret %s", dst[0], dst[0].Kube)
 			}
+			if dst[0].Plain != "" {
+				return usageErr("%s: file:// names a source, beekeeper never writes a plain file", dst[0])
+			}
 			if dst[0].Path != "" || dst[0].Op != "" {
 				if name != "" || namespace != "" {
 					return usageErr("--name and --namespace rewrite a copied file, not one value")
@@ -607,8 +625,8 @@ func copyPairs(args []string) ([]secret.Pair, error) {
 	if err != nil {
 		return nil, usageErr("%v", err)
 	}
-	if dst.Op != "" || dst.IsKube() || dst.Path != "" {
-		return nil, usageErr("%s: copy <ref>=<path>… <file> writes a whole new file, no path, op:// or k8s:// in it", dst)
+	if dst.Op != "" || dst.IsSource() || dst.Path != "" {
+		return nil, usageErr("%s: copy <ref>=<path>… <file> writes a whole new file, no path, op://, k8s:// or file:// in it", dst)
 	}
 	pairs := make([]secret.Pair, 0, len(args)-1)
 	for _, s := range args[:len(args)-1] {
@@ -1162,7 +1180,7 @@ func parseRefs(args ...string) ([]secret.Ref, error) {
 // from secret.tokenFile when the shared vault is configured.
 func (a *app) secretOps() (*secret.Ops, error) {
 	ops := &secret.Ops{Run: secretRun, Apply: secretApply, Read: secretRead, Kubeconfig: a.kubeconfigFiles(), Vault: a.cfg.Secret.Vault, Vaults: a.cfg.Secret.Vaults, Session: a.cfg.Secret.Session, Ages: a.ageIdentities(),
-		AgeVaults: a.cfg.Secret.AgeVaults, Store: secret.Store{Read: a.cfg.Secret.Store.Read, Search: a.cfg.Secret.Store.Search}, Installations: a.installationNames()}
+		AgeVaults: a.cfg.Secret.AgeVaults, Store: secret.Store{Read: a.cfg.Secret.Store.Read, Search: a.cfg.Secret.Store.Search}, Installations: a.installationNames(), FileRoots: a.cfg.Secret.FileRoots}
 	if ops.Vault == "" || ops.Session || a.cfg.Secret.TokenFile == "" {
 		return ops, nil
 	}
