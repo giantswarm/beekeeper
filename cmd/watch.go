@@ -437,6 +437,12 @@ type watcher struct {
 	freeing  atomic.Bool
 	freeNext time.Time
 	lastFree atomic.Pointer[freeMark]
+	// worktreesOn trims finished workers' worktrees (not for --once);
+	// worktreesTrimming is set while a run goes, worktreesNext is when
+	// the next is due.
+	worktreesOn       bool
+	worktreesTrimming atomic.Bool
+	worktreesNext     time.Time
 	// doctored are the chore lines the doctor said, each said once.
 	doctored map[string]bool
 	// timerActs are the fired timers' wakes and commands under way, and
@@ -536,6 +542,7 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 	w.goCacheOn = true
 	w.dockerOn = true
 	w.freeOn = true
+	w.worktreesOn = true
 	w.readFreeMark()
 	// The machine is sampled in a loop of its own, so no network read or
 	// subprocess of the rest of the poll ever delays a memory or load line.
@@ -1083,6 +1090,7 @@ func (w *watcher) sample(ctx context.Context) {
 	w.goCache(now)
 	w.docker(now)
 	w.autoFree(now)
+	w.worktrees(now)
 	s, err := plat.Machine.DesktopScope()
 	w.unavailable(secScope, err)
 	if s != nil {

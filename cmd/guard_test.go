@@ -37,6 +37,9 @@ func TestMain(m *testing.M) {
 	liveTmpfs = func(*app) (free.Machine, error) {
 		return free.Machine{TableErr: errors.New("no machine in a test")}, nil
 	}
+	// Nor its worktrees: the trim finds none; a test that wants a run
+	// gives it a machine.
+	liveWorktrees = func(*app) (worktreeMachine, error) { return worktreeMachine{}, nil }
 	// Nor does a command sync the machine's Claude Code plugins, stamped
 	// release build or not: a test that wants the sync names its binary.
 	binaryIdentity = func() string { return "" }
