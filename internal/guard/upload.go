@@ -3,6 +3,7 @@ package guard
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -56,63 +57,130 @@ func UploadTargetCheck(scope string) string {
 	return "const scope = " + string(q) + ";\n" + UploadTargetScript
 }
 
-// chromeUpload is the Chrome tool that sets the files of a file input.
-const chromeUpload = "file_upload"
+// chromeUpload is the Chrome tool that sets the files of a file input;
+// chromeFind and chromeReadPage are the page reads that give an element's
+// ref.
+const (
+	chromeUpload   = "file_upload"
+	chromeFind     = "find"
+	chromeReadPage = "read_page"
+)
 
-// uploadRefs are the refs the Chrome call's file_uploads target, each of a
-// batch's; "" for one that names none.
-func uploadRefs(tool string, input map[string]any) []string {
+// An upload is one file_upload of a Chrome call: the ref and the tab it
+// targets.
+type upload struct{ ref, tab string }
+
+// uploads are the file_uploads of a Chrome call, each of a batch's.
+func uploads(tool string, input map[string]any) []upload {
 	switch chromeTool(tool) {
 	case chromeUpload:
 		ref, _ := input[refKey].(string)
-		return []string{ref}
+		return []upload{{ref, tabOf(input[tabKey])}}
 	case chromeBatch:
-		actions, _ := input["actions"].([]any)
-		var refs []string
-		for _, a := range actions {
-			m, _ := a.(map[string]any)
-			name, _ := m[nameKey].(string)
-			in, _ := m[inputKey].(map[string]any)
-			refs = append(refs, uploadRefs(name, in)...)
+		var out []upload
+		for _, a := range batchActions(input) {
+			out = append(out, uploads(a.name, a.input)...)
 		}
-		return refs
+		return out
 	}
 	return nil
 }
 
-// uploadTarget is what the transcript says of the session's upload target:
-// the last check's result and the refs its label's page reads gave after it.
-type uploadTarget struct {
-	check string
-	refs  []string
+// A chromeAction is one Chrome call or batch action: its tool and input.
+type chromeAction struct {
+	name  string
+	input map[string]any
 }
 
-// readUploadTarget reads the upload target of the transcript: a result of a
-// javascript_tool call that ran UploadTargetScript is a check, which drops
-// the refs read before it; after a check that marked an input, every ref a
-// result's line names beside UploadTargetLabel is the target's.
+// batchActions are the actions of a browser_batch's input.
+func batchActions(input map[string]any) []chromeAction {
+	actions, _ := input["actions"].([]any)
+	out := make([]chromeAction, 0, len(actions))
+	for _, a := range actions {
+		m, _ := a.(map[string]any)
+		name, _ := m[nameKey].(string)
+		in, _ := m[inputKey].(map[string]any)
+		out = append(out, chromeAction{name, in})
+	}
+	return out
+}
+
+// navigates reports whether a Chrome call loads a page in tab: a navigate,
+// or a batch's.
+func navigates(tool string, input map[string]any, tab string) bool {
+	switch chromeTool(tool) {
+	case chromeNavigation:
+		t := tabOf(input[tabKey])
+		return t == "" || t == tab
+	case chromeBatch:
+		return slices.ContainsFunc(batchActions(input), func(a chromeAction) bool { return navigates(a.name, a.input, tab) })
+	}
+	return false
+}
+
+// checkScope opens the upload-target check: its scope line.
+var checkScope = regexp.MustCompile(`^const scope = ("(?:[^"\\\n]|\\.)*");\n`)
+
+// isCheck reports whether code is the upload-target check and nothing else:
+// a scope line, then UploadTargetScript.
+func isCheck(code string) bool {
+	code = strings.TrimSpace(code)
+	m := checkScope.FindStringSubmatch(code)
+	var scope string
+	return m != nil && json.Unmarshal([]byte(m[1]), &scope) == nil && code[len(m[0]):] == UploadTargetScript
+}
+
+// labelled is the element line of a page read whose accessible name is
+// UploadTargetLabel: find's `- ref_9: button "<label>" (file)` and
+// read_page's `button "<label>" [ref_9] type="file"`.
+var labelled = regexp.MustCompile(`^\s*(?:-\s*(ref_\d+):\s*\S+\s+` + regexp.QuoteMeta(quoteLabel) + `(?:\s|$)|\S+\s+` +
+	regexp.QuoteMeta(quoteLabel) + `\s+\[(ref_\d+)\])`)
+
+// uploadTarget is what the transcript says of the session's upload target:
+// the last check's result and its tab, and the refs the page reads of that
+// tab gave the label after it.
+type uploadTarget struct {
+	check, tab string
+	refs       []string
+}
+
+// readUploadTarget reads the upload target of the transcript. A result of a
+// javascript_tool call whose code is the upload-target check is a check,
+// which drops the refs read before it; a navigate in its tab drops the check.
+// After a check that marked an input, a ref a find or read_page of its tab
+// gives an element named UploadTargetLabel is the target's.
 func readUploadTarget(transcript string) uploadTarget {
 	var u uploadTarget
-	checks := map[string]bool{}
+	calls := map[string]chromeAction{}
 	scanLines(transcript, func(line []byte) {
-		for _, id := range checkCalls(line) {
-			checks[id] = true
+		for _, c := range toolCalls(line) {
+			calls[c.id] = c.chromeAction
+			if u.check != "" && navigates(c.name, c.input, u.tab) {
+				u = uploadTarget{}
+			}
 		}
 		for _, r := range resultGroups(line) {
+			c, ok := calls[r.id]
+			if !ok {
+				continue
+			}
 			text := strings.Join(r.texts, "\n")
-			if checks[r.id] {
-				u.check, u.refs = "", nil
-				if i := strings.Index(text, UploadTargetLabel+": "); i >= 0 {
-					u.check, _, _ = strings.Cut(text[i:], "\n")
+			tab := tabOf(c.input[tabKey])
+			switch tool := chromeTool(c.name); {
+			case tool == chromeScript:
+				code, _ := c.input[textKey].(string)
+				if !isCheck(code) {
+					continue
 				}
-				continue
-			}
-			if !strings.HasPrefix(u.check, uploadMarked) {
-				continue
-			}
-			for l := range strings.SplitSeq(text, "\n") {
-				if strings.Contains(l, UploadTargetLabel) {
-					u.refs = append(u.refs, refPattern.FindAllString(l, -1)...)
+				u = uploadTarget{tab: tab}
+				if strings.HasPrefix(text, UploadTargetLabel+": ") {
+					u.check, _, _ = strings.Cut(text, "\n")
+				}
+			case (tool == chromeFind || tool == chromeReadPage) && strings.HasPrefix(u.check, uploadMarked) && tab == u.tab:
+				for l := range strings.SplitSeq(text, "\n") {
+					if m := labelled.FindStringSubmatch(l); m != nil {
+						u.refs = addTab(u.refs, m[1]+m[2])
+					}
 				}
 			}
 		}
@@ -120,9 +188,14 @@ func readUploadTarget(transcript string) uploadTarget {
 	return u
 }
 
-// checkCalls are the ids of the javascript_tool calls on a transcript line
-// that run the upload-target check.
-func checkCalls(line []byte) []string {
+// A toolUse is one tool call of a transcript line: its id, tool and input.
+type toolUse struct {
+	id string
+	chromeAction
+}
+
+// toolCalls are the tool calls on a transcript line, with their inputs.
+func toolCalls(line []byte) []toolUse {
 	var entry struct {
 		Message struct {
 			Content []struct {
@@ -136,41 +209,42 @@ func checkCalls(line []byte) []string {
 	if json.Unmarshal(line, &entry) != nil {
 		return nil
 	}
-	var ids []string
+	var out []toolUse
 	for _, b := range entry.Message.Content {
-		if b.Type != "tool_use" || chromeTool(b.Name) != chromeScript {
-			continue
-		}
-		if code, _ := b.Input[textKey].(string); strings.Contains(code, UploadTargetScript) {
-			ids = append(ids, b.ID)
+		if b.Type == "tool_use" {
+			out = append(out, toolUse{b.ID, chromeAction{b.Name, b.Input}})
 		}
 	}
-	return ids
+	return out
 }
 
 // uploadRefusal returns why the hook refuses a Chrome call's file_upload, ""
-// when it passes: one whose ref is not the input the session's last
-// upload-target check marked.
+// when it passes: one whose tab and ref are not the tab and the one input
+// the session's last upload-target check marked.
 func uploadRefusal(ev event) string {
 	if !isBrowserTool(ev.ToolName) {
 		return ""
 	}
-	refs := uploadRefs(ev.ToolName, ev.ToolInput)
-	if len(refs) == 0 {
+	ups := uploads(ev.ToolName, ev.ToolInput)
+	if len(ups) == 0 {
 		return ""
 	}
 	u := readUploadTarget(ev.TranscriptPath)
-	for _, ref := range refs {
+	for _, up := range ups {
 		switch {
 		case u.check == "":
-			return uploadReason(fmt.Sprintf("the file_upload to %s comes before any upload-target check", refName(ref)))
+			return uploadReason(fmt.Sprintf("the file_upload to %s comes before any upload-target check of its page", refName(up.ref)))
 		case strings.HasPrefix(u.check, uploadUnmarked):
 			return uploadReason(fmt.Sprintf("the last upload-target check marked no input (%s)", u.check))
+		case up.tab != u.tab:
+			return uploadReason(fmt.Sprintf("the file_upload targets tab %s, the last upload-target check ran in tab %s", refName(up.tab), refName(u.tab)))
 		case len(u.refs) == 0:
-			return uploadReason("no find for " + quoteLabel + " followed the last upload-target check, so no ref is the marked input's")
-		case ref == "" || !slices.Contains(u.refs, ref):
+			return uploadReason("no find for " + quoteLabel + " in its tab followed the last upload-target check, so no ref is the marked input's")
+		case len(u.refs) > 1:
+			return uploadReason(fmt.Sprintf("the page reads after the last upload-target check give several refs the label (%s)", strings.Join(u.refs, ", ")))
+		case up.ref != u.refs[0]:
 			return uploadReason(fmt.Sprintf("%s is not the input the last upload-target check marked (%s; find gave %s)",
-				refName(ref), strings.TrimPrefix(u.check, uploadMarked), strings.Join(u.refs, ", ")))
+				refName(up.ref), strings.TrimPrefix(u.check, uploadMarked), u.refs[0]))
 		}
 	}
 	return ""
@@ -179,10 +253,10 @@ func uploadRefusal(ev event) string {
 // quoteLabel is UploadTargetLabel as find is asked for it.
 const quoteLabel = `"` + UploadTargetLabel + `"`
 
-// refName names a file_upload's ref, "no ref" for none.
+// refName names a file_upload's ref or tab, "none" for none.
 func refName(ref string) string {
 	if ref == "" {
-		return "no ref"
+		return "none"
 	}
 	return ref
 }
@@ -208,15 +282,7 @@ func takesPicture(tool string, input map[string]any) bool {
 		action, _ := input[actionKey].(string)
 		return action == "screenshot" || action == "zoom"
 	case chromeBatch:
-		actions, _ := input["actions"].([]any)
-		for _, a := range actions {
-			m, _ := a.(map[string]any)
-			name, _ := m[nameKey].(string)
-			in, _ := m[inputKey].(map[string]any)
-			if takesPicture(name, in) {
-				return true
-			}
-		}
+		return slices.ContainsFunc(batchActions(input), func(a chromeAction) bool { return takesPicture(a.name, a.input) })
 	}
 	return false
 }

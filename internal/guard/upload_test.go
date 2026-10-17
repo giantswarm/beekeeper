@@ -50,16 +50,28 @@ func turnTranscript(t *testing.T, calls ...turnCall) string {
 // The calls of an upload: the check, its result, the find and its refs.
 var (
 	checkCall = func(result string) turnCall {
-		return turnCall{scriptTool, map[string]any{textKey: UploadTargetCheck("#new_comment_form"), tabKey: 7}, result}
+		return turnCall{scriptTool, map[string]any{textKey: UploadTargetCheck("#new_comment_form"), tabKey: json.Number("7")}, result}
 	}
 	marked   = checkCall(UploadTargetLabel + ": marked input#fc-new_comment_field in form#new_comment_form (2 other file inputs hidden or disabled); find")
 	unmarked = checkCall(UploadTargetLabel + ": none: 2 file inputs, every one hidden or disabled (input in form#review-reply)")
-	findCall = turnCall{"mcp__claude-in-chrome__find", map[string]any{"query": UploadTargetLabel},
-		"Found 1 matching element\n- ref_42: input \"" + UploadTargetLabel + "\" (file)\n"}
-	readPage = turnCall{"mcp__claude-in-chrome__read_page", map[string]any{},
-		"- ref_9: input (file) in a hidden review reply\n- ref_42: input \"" + UploadTargetLabel + "\"\n"}
-	// fake is a script of the turn's own that prints the check's words.
-	fake = turnCall{scriptTool, map[string]any{textKey: "'" + UploadTargetLabel + ": marked x'"}, UploadTargetLabel + ": marked x"}
+	findCall = turnCall{"mcp__claude-in-chrome__find", map[string]any{"query": UploadTargetLabel, tabKey: json.Number("7")},
+		"Found 1 matching element\n\n- ref_42: button \"" + UploadTargetLabel + "\" (file) - Exact match of the accessible name\n"}
+	readPage = turnCall{"mcp__claude-in-chrome__read_page", map[string]any{tabKey: json.Number("7")},
+		"form [ref_2]\n label \"Attach to reply\" [ref_4]\n  button [ref_9] type=\"file\"\n  button \"" + UploadTargetLabel + "\" [ref_42] type=\"file\"\n"}
+	// fake is a script of the turn's own that prints the check's words;
+	// appended runs the check and more code after it.
+	fake     = turnCall{scriptTool, map[string]any{textKey: "'" + UploadTargetLabel + ": marked x'", tabKey: json.Number("7")}, UploadTargetLabel + ": marked x"}
+	appended = turnCall{scriptTool, map[string]any{textKey: UploadTargetCheck("") + ";document.querySelector('#reply-file').setAttribute('aria-label','" +
+		UploadTargetLabel + "')", tabKey: json.Number("7")}, UploadTargetLabel + ": marked x"}
+	// otherTab is the find in another tab; reload navigates the check's tab;
+	// twice is a find that gives two refs the label.
+	otherTab = turnCall{"mcp__claude-in-chrome__find", map[string]any{"query": UploadTargetLabel, tabKey: json.Number("8")},
+		"- ref_42: button \"" + UploadTargetLabel + "\" (file)\n"}
+	reload = turnCall{"mcp__claude-in-chrome__navigate", map[string]any{urlKey: "https://x", tabKey: json.Number("7")}, "Navigated"}
+	twice  = turnCall{"mcp__claude-in-chrome__find", map[string]any{"query": UploadTargetLabel, tabKey: json.Number("7")},
+		"- ref_42: button \"" + UploadTargetLabel + "\" (file)\n- ref_9: button \"" + UploadTargetLabel + "\" (file)\n"}
+	// namedIn is a page read whose text names the label in no element's name.
+	namedIn = turnCall{"mcp__claude-in-chrome__get_page_text", map[string]any{tabKey: json.Number("7")}, "ref_9 says " + UploadTargetLabel}
 )
 
 // A file_upload passes only to the ref the last upload-target check marked
@@ -68,7 +80,7 @@ var (
 // check is refused; a batch's file_upload is decided the same way.
 func TestUploadRefusal(t *testing.T) {
 	upload := func(ref string) map[string]any {
-		return map[string]any{refKey: ref, tabKey: 7, "paths": []any{"/x/shot.png"}}
+		return map[string]any{refKey: ref, tabKey: json.Number("7"), "paths": []any{"/x/shot.png"}}
 	}
 	cases := map[string]struct {
 		calls  []turnCall
@@ -83,7 +95,13 @@ func TestUploadRefusal(t *testing.T) {
 		"a check that marked none":      {[]turnCall{marked, findCall, unmarked}, uploadTool, upload("ref_42"), "marked no input"},
 		"no find after the check":       {[]turnCall{findCall, marked}, uploadTool, upload("ref_42"), "no find for"},
 		"the turn's own imitation":      {[]turnCall{fake, findCall}, uploadTool, upload("ref_42"), "before any upload-target check"},
-		"no ref":                        {[]turnCall{marked, findCall}, uploadTool, map[string]any{tabKey: 7}, "no ref is not the input"},
+		"code after the check":          {[]turnCall{appended, findCall}, uploadTool, upload("ref_42"), "before any upload-target check"},
+		"a find in another tab":         {[]turnCall{marked, otherTab}, uploadTool, upload("ref_42"), "no find for"},
+		"an upload to another tab":      {[]turnCall{marked, findCall}, uploadTool, map[string]any{refKey: "ref_42", tabKey: json.Number("8")}, "targets tab 8"},
+		"a navigate after the check":    {[]turnCall{marked, findCall, reload}, uploadTool, upload("ref_42"), "before any upload-target check"},
+		"two refs with the label":       {[]turnCall{marked, twice}, uploadTool, upload("ref_42"), "several refs"},
+		"a mention in a page's text":    {[]turnCall{marked, namedIn}, uploadTool, upload("ref_9"), "no find for"},
+		"no ref":                        {[]turnCall{marked, findCall}, uploadTool, map[string]any{tabKey: json.Number("7")}, "none is not the input"},
 		"a batch's upload": {[]turnCall{marked, findCall}, "mcp__claude-in-chrome__browser_batch",
 			map[string]any{actionsKey: []any{map[string]any{nameKey: "file_upload", inputKey: upload("ref_9")}}}, "ref_9 is not"},
 		"no upload": {nil, scriptTool, map[string]any{textKey: "1"}, ""},
@@ -111,7 +129,7 @@ func TestUploadTargetCheck(t *testing.T) {
 // and so does a screenshot before any timeout.
 func TestFrozenRefusal(t *testing.T) {
 	computer := "mcp__claude-in-chrome__computer"
-	shot := map[string]any{actionKey: "screenshot", tabKey: 7}
+	shot := map[string]any{actionKey: "screenshot", tabKey: json.Number("7")}
 	timedOut := turnCall{computer, shot, "Error capturing screenshot: Timed out, the " + FrozenRenderer}
 	fine := turnCall{computer, shot, "Screenshot taken"}
 	batch := map[string]any{actionsKey: []any{map[string]any{nameKey: "navigate", inputKey: map[string]any{urlKey: "https://x"}},
@@ -124,7 +142,7 @@ func TestFrozenRefusal(t *testing.T) {
 	}{
 		"a screenshot after a timeout":   {[]turnCall{fine, timedOut}, computer, shot, true},
 		"a batch's zoom after a timeout": {[]turnCall{timedOut}, "mcp__claude-in-chrome__browser_batch", batch, true},
-		"a page read after a timeout":    {[]turnCall{timedOut}, "mcp__claude-in-chrome__get_page_text", map[string]any{tabKey: 7}, false},
+		"a page read after a timeout":    {[]turnCall{timedOut}, "mcp__claude-in-chrome__get_page_text", map[string]any{tabKey: json.Number("7")}, false},
 		"a click after a timeout":        {[]turnCall{timedOut}, computer, map[string]any{actionKey: "left_click"}, false},
 		"a screenshot before any":        {[]turnCall{fine}, computer, shot, false},
 	}
