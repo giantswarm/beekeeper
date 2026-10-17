@@ -281,6 +281,12 @@ func (h Hook) decide(ev event) []byte {
 	if r := tabCloseRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	if r := uploadRefusal(ev); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
+	if r := frozenRefusal(ev); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
 	if out := h.consent(ev); out != nil {
 		return out
 	}
