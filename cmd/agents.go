@@ -513,7 +513,7 @@ func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentVie
 	for _, ag := range st.Agents {
 		v := agentView{Agent: ag, Reachable: "not running", Browser: agentBrowser(a.cfg, ag), Kept: keptBy(st, ag, a.now)}
 		if w := ag.Import; w.Pending(a.now) {
-			v.Reachable = "not running, import waits until " + clock(a.now, w.Until)
+			v.Reachable = "importing, until " + clock(a.now, w.Until)
 		}
 		if ag.Undelivered != "" {
 			v.Reachable = "task not delivered: " + ag.Undelivered
