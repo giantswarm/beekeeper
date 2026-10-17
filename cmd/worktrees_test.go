@@ -89,7 +89,7 @@ func worktreeApp(t *testing.T) (*app, func() (worktreeMachine, error), string) {
 	now := time.Now().Add(7 * time.Hour)
 	long := now.Add(-24 * time.Hour)
 	pulls := map[string]github.HeadPull{
-		mergedPR: {N: 1, State: github.Merged, HeadOid: head, ClosedAt: long},
+		mergedPR:   {N: 1, State: github.Merged, HeadOid: head, ClosedAt: long},
 		"work":     {N: 2, State: github.Merged, HeadOid: head, ClosedAt: long},
 		"unpushed": {N: 3, State: github.Merged, HeadOid: head, ClosedAt: long},
 		"open":     {N: 4, State: github.Open, HeadOid: head},
