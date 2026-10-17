@@ -371,7 +371,7 @@ func TestNewGrantFirst(t *testing.T) {
 // supervisor is recorded: --as names no session the role could match.
 func TestGrantFirstAsAPersonIsRefused(t *testing.T) {
 	a := claimApp(t, claimGrant(labTwo, claimFirst, 5*time.Minute))
-	a.as = "Timo"
+	a.as = personTimo
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = append(st.Agents, state.Agent{Party: claimMe, Registered: relayNow})
 		return nil, nil
