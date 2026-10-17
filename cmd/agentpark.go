@@ -79,7 +79,10 @@ RESUMABLE once. With agents.autoResume the watch then resumes the agent
 with what settled it, a person's answer word for word, as agents wake
 does: by name to a running CLI, else headless. agents resume does the same
 by hand, also for a park without --on. A new task or agents idle ends the
-park. An agent without a task is refused: it has nothing to wait for.`,
+park. An agent without a task is refused: it has nothing to wait for. One
+that reported its task idle (agents idle, --done included) has a task
+again once the supervisor's next message re-tasks it, by SendMessage or
+agents wake: its task is that message's first line.`,
 		Example: `  beekeeper agents park --on 41 "Timo's answer on the rollout window"
   beekeeper agents park --on giantswarm/beekeeper#371 "the merge ahead of mine in the lane"
   beekeeper agents park "the supervisor's go"`,
