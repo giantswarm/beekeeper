@@ -64,6 +64,8 @@ var (
 	}, "|") + `)`)
 	// lightMake: make targets that build nothing (RE2 has no lookahead).
 	lightMake = regexp.MustCompile(`^\s+(?:-n\b|--dry-run\b|help\b|version\b|clean\b|fmt\b|print-|list\b)`)
+	// pkgManager: a heavy match that is a package manager's script run.
+	pkgManager = regexp.MustCompile(`^(?:yarn|npm|pnpm|bun)\s`)
 	// owned: a blocking devctl command at a command position, the gate goes
 	// before it.
 	owned = regexp.MustCompile(`(?m)` + mergePos + `(` + devctlOwned + `)`)
@@ -533,9 +535,27 @@ func Owned(cmd string) bool { return anyOwned.MatchString(cmd) }
 func isHeavy(cmd string) bool { return commandMatch(heavy, cmd, keepHeavy) != nil }
 
 // keepHeavy keeps a heavy match that builds: no make target that builds
-// nothing, no help or version only.
+// nothing, no package script that runs a lab e2e proof, no help or version
+// only.
 func keepHeavy(cmd string, m []int) bool {
-	return (cmd[m[2]:m[3]] != "make" || !lightMake.MatchString(cmd[m[1]:])) && notHelp(cmd, m)
+	return (cmd[m[2]:m[3]] != "make" || !lightMake.MatchString(cmd[m[1]:])) && !labScript(cmd, m) && notHelp(cmd, m)
+}
+
+// labScript reports whether a heavy match runs a package script that is a
+// lab e2e proof (yarn test:e2e:agentlab): its script name, the match's last
+// word with the rest of that word after the match, names agentlab. Like the
+// agentlab e2e commands it builds nothing and waits on the lab.
+func labScript(cmd string, m []int) bool {
+	if !pkgManager.MatchString(cmd[m[2]:m[3]]) {
+		return false
+	}
+	word := cmd[strings.LastIndexAny(cmd[:m[3]], " \t\n")+1 : m[3]]
+	if end := strings.IndexAny(cmd[m[3]:], " \t\n;&|()<>'\""); end >= 0 {
+		word += cmd[m[3] : m[3]+end]
+	} else {
+		word += cmd[m[3]:]
+	}
+	return strings.Contains(word, "agentlab")
 }
 
 // commandMatch is the first match of re, a pattern anchored at a command
