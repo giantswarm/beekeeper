@@ -657,11 +657,7 @@ func purposeText(h lease.Holder) string {
 // the roster whose CLI does not run (its headless turn ended, its import
 // waits), whose grant waits for its next turn, with what says so.
 func (a *app) grantee(sessions []*claude.Session, q string) (*claude.Session, string, error) {
-	st, err := a.store.Read()
-	if err != nil {
-		return nil, "", err
-	}
-	to, absent, err := sessionNamed(sessions, st, q, a.now)
+	to, absent, err := a.namedSession(sessions, q, a.now)
 	if absent != "" {
 		absent += "; it claims once a CLI of it runs"
 	}
