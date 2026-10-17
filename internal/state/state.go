@@ -292,6 +292,18 @@ func (h Hold) Excepts(repo string, pr int) bool {
 	return h.Except != "" && (strings.EqualFold(h.Except, repo) || strings.EqualFold(h.Except, fmt.Sprintf("%s#%d", repo, pr)))
 }
 
+// AwaitsOwnRelease reports whether the hold is a repository's whose lift
+// probe waits on that repository's release or tag: only the repository's
+// own promote cuts it, so the hold lets that promote through.
+func (h Hold) AwaitsOwnRelease() bool {
+	probe := strings.ToLower(h.LiftWhen)
+	if !strings.Contains(h.Target, "/") || !strings.Contains(probe, strings.ToLower(h.Target)) {
+		return false
+	}
+	words := strings.FieldsFunc(probe, func(r rune) bool { return r < 'a' || r > 'z' })
+	return slices.ContainsFunc(words, func(w string) bool { return slices.Contains([]string{"release", "releases", "tag", "tags"}, w) })
+}
+
 // Keep is a roster entry's keep marker: who set it, when, why, and until
 // when (zero: until lifted).
 type Keep struct {
