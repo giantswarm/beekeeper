@@ -104,3 +104,28 @@ func TestSessionsLeaveOutAParkedWorkerWhoseRecordWasReleased(t *testing.T) {
 		t.Errorf("a done worker's record is not ended:\n%s", got)
 	}
 }
+
+// A roster name holding a slash resolves whole, for a running agent whose
+// desktop title is shorter and for one whose CLI does not run; a part of it
+// still resolves, and the slash is never read as a separator.
+func TestSessionNamedRosterNameWithSlash(t *testing.T) {
+	now := time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC)
+	const running, absent = "GMC 2754 violet/elver close", "GMC 2755 violet/elver open"
+	st := &state.State{Agents: []state.Agent{
+		{Party: state.Party{Session: "s1", Name: running}},
+		{Party: state.Party{Session: "s2", Name: absent}},
+	}}
+	sessions := []*claude.Session{
+		{PID: 7, ID: "s1", Name: "GMC 2754"},
+		{PID: 8, ID: "s3", Name: "violet"},
+	}
+	for q, want := range map[string]string{running: "s1", strings.ToUpper(running): "s1", "GMC 2754": "s1", absent: "s2", "elver open": "s2"} {
+		s, _, err := sessionNamed(sessions, st, q, now)
+		if err != nil || s.ID != want {
+			t.Errorf("sessionNamed(%q) = %v, %v; want session %s", q, s, err, want)
+		}
+	}
+	if _, _, err := sessionNamed(sessions, st, "violet/elver", now); err == nil || !strings.Contains(err.Error(), "matches 2 sessions") {
+		t.Errorf("a part two roster names share: %v", err)
+	}
+}
