@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The shipped `merge` skill's gated merge line is `devctl pr merge <owner/repo> <n> --update-branch` (`--rebase --update-branch` on a rebase line): from devctl 8.140.0 a head behind its base is exit 3 without it, strict protection or not. An exit 3 that still says behind on a squash line (GitHub refused the update) gets the base merged into the branch and pushed, then the same merge once more; a rebase line keeps its fresh PR from the base. A test holds every shipped skill's gated merge line to `--update-branch` ([#1306](https://github.com/giantswarm/beekeeper/issues/1306)).
 - A decision (`note add --for` the person) is refused without `--ref`: every decision names the thread its answer is recorded on ([#942](https://github.com/giantswarm/beekeeper/issues/942)).
 
 ### Fixed
