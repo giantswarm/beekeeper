@@ -218,11 +218,13 @@ that parent session, whose ids it inherits and whose entry stays as it is.`,
 		Use:   "idle",
 		Short: "Report the calling agent's task done: idle again",
 		Long: `Reports the calling agent's task done: idle again, ready for the next.
-With --done its work is finished: the watch's doctor takes it off the
-roster and archives the desktop session beekeeper started for it once its
-CLI runs no turn, a desktop CLI kept warm included (beekeeper doctor; the
-desktop's Archived list brings it back), and its session record (sessions
-serve) is cleared.
+With --done its work is finished: the commands its session left running
+in the background (a wait loop, a port-forward: every tool shell of its
+CLI but the one this command runs under) are stopped, the watch's doctor
+takes it off the roster and archives the desktop session beekeeper
+started for it once its CLI runs no turn, a desktop CLI kept warm included
+(beekeeper doctor; the desktop's Archived list brings it back), and its
+session record (sessions serve) is cleared.
 
 --done refuses without the final report: --report is what the supervisor
 learns (PR links, release versions, the live proof, what is still open;
@@ -292,6 +294,9 @@ file; the log keeps them (agents.report, agents.problem).`,
 				}
 			}
 			if finished {
+				if err := a.stopOwnBackground(); err != nil {
+					return err
+				}
 				_, err = fmt.Fprintf(a.out, "register: %s finished: off the roster and archived once its turn ends\n", me.Name)
 				return err
 			}

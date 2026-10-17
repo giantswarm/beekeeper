@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A finished worker's leftover background commands no longer keep its session from being archived. `agents idle --done` stops every tool shell of the calling session's CLI but the one it runs under, with the processes below them (a wait loop, a port-forward), and says which it stopped. The doctor stops the tool shells of a done agent whose CLI runs nothing else but `sleep`s (no headless turn, no gated merge, no transcript written within 30s), so it takes the agent off the roster and archives its session; `--dry-run` says "would stop". Such a sleeping wait used to count as a running turn for hours ([#1360](https://github.com/giantswarm/beekeeper/issues/1360)).
+
 ## [0.149.0-rc.3] - 2026-10-17
 
 ### Fixed
