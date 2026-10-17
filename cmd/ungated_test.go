@@ -21,7 +21,9 @@ import (
 // merge (21), the devctl commands the gate does not run: the gate's own
 // dry run (31), a --team promotion (41) and a pr wait (42), and a test run's
 // fake devctl merges: under its cmd.test merge-child (51), under a
-// watch.test (53) and a reparented script its shell runs from /tmp/Test… (54).
+// watch.test (53), and reparented scripts their shell runs from a test's
+// temporary directory: under /tmp (54), under a TMPDIR of the test's own (55)
+// and a benchmark's (56).
 func ungatedTable() *proc.Table {
 	p := func(pid, ppid int, comm string, args ...string) *proc.Process {
 		return &proc.Process{PID: pid, PPID: ppid, Comm: comm, Args: args, Start: time.Now().Add(-time.Hour), StartTicks: int64(pid) * 100}
@@ -46,6 +48,8 @@ func ungatedTable() *proc.Table {
 		p(52, 10, "watch.test", "/tmp/go-build2/b002/watch.test"),
 		p(53, 52, merge.Tool, "devctl", "pr", "merge", "o/r", "6"),
 		p(54, 1, merge.Tool, "sh", "/tmp/TestGate2/001/devctl", "pr", "merge", "o/r", "7"),
+		p(55, 1, merge.Tool, "sh", "/home/u/.cache/tmp/TestAGateAtItsToolLimit405443892/001/devctl", "pr", "merge", "o/r", "8"),
+		p(56, 1, merge.Tool, "/var/tmp/BenchmarkGate7/002/devctl", "pr", "merge", "o/r", "9"),
 	} {
 		tb.ByPID[pr.PID] = pr
 	}
@@ -143,6 +147,28 @@ func TestTheDoctorReportsAnUngatedMerge(t *testing.T) {
 
 // A snapshot's waits mark the merges running outside the gate, a gated one
 // and a wait not.
+// A test binary and an executable in testing's TempDir layout are a test's,
+// under any TMPDIR; an installed devctl or a directory merely named Test… is
+// not.
+func TestTestExecutable(t *testing.T) {
+	for path, want := range map[string]bool{
+		"/tmp/go-build1/b001/cmd.test":                    true,
+		"/tmp/TestGate1/001/devctl":                       true,
+		"/home/u/.cache/tmp/TestGate405443892/001/devctl": true,
+		"/var/tmp/BenchmarkGate7/002/bin/devctl":          true,
+		"/tmp/FuzzArgs99/001/devctl":                      true,
+		"/home/u/.go/bin/devctl":                          false,
+		merge.Tool:                                        false,
+		"/home/u/TestRepos/devctl":                        false,
+		"/home/u/Testing/v2/devctl":                       false,
+		"/home/u/Test/001/devctl":                         false,
+	} {
+		if got := testExecutable(path); got != want {
+			t.Errorf("testExecutable(%q) = %v, want %v", path, got, want)
+		}
+	}
+}
+
 func TestFindWaitsMarksAnUngatedMerge(t *testing.T) {
 	byPID := map[int]wait{}
 	for _, w := range findWaits(ungatedTable(), nil, time.Now()) {
