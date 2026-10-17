@@ -109,6 +109,17 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 				return err
 			}
 		}
+		// A wake carrying the next task to an agent that reported its
+		// last idle restores its task record, as a SendMessage does.
+		line, err := a.retaskAgent(by, rosterIndex(ag.Party), msg)
+		if err != nil {
+			return err
+		}
+		if line != "" {
+			if _, err := fmt.Fprintln(a.out, "wake: "+line); err != nil {
+				return err
+			}
+		}
 	}
 	if ag.Undelivered != "" {
 		// A delivered turn is the task's start agents start did not make.
@@ -757,7 +768,7 @@ func sharedNameAddress(st *state.State, sessions []*claude.Session, name string,
 		return "", refused("the running CLIs of sessions %s and %s are named %q and the agent's CLI %d has no peer socket: send to its session id %s",
 			strings.Join(others, ", "), own.ID, name, own.PID, cmp.Or(ag.HostSession, ag.Session))
 	}
-	return "uds:" + path, nil
+	return socketAddress + path, nil
 }
 
 // absentPeer is the PreToolUse hook's lookup for a SendMessage by name: what

@@ -165,7 +165,9 @@ with central configured), 125 a newer release (self-update --check).`,
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), firstRunTimeout)
 			defer cancel()
-			syncOnce(ctx, cmd.ErrOrStderr(), a.cfg.StateDir)
+			if syncsUnder(a.explicitConfig()) {
+				syncOnce(ctx, cmd.ErrOrStderr(), a.cfg.StateDir)
+			}
 			return nil
 		},
 	}

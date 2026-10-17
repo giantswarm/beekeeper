@@ -170,11 +170,20 @@ var binaryIdentity = func() string {
 }
 
 // runsInstalled says whether this process runs the installed beekeeper,
-// the one on PATH that a self-update replaces; tests replace it.
+// the one on PATH that a self-update replaces, and not a build a unit's
+// PATH leads to (devBuildEnv); tests replace it.
 var runsInstalled = func() bool {
+	if os.Getenv(devBuildEnv) != "" {
+		return false
+	}
 	_, elsewhere := devBuild()
 	return !elsewhere
 }
+
+// syncsUnder says whether a command under the configuration file config
+// (explicitConfig, "" for the default one) syncs the user-wide plugins: a
+// scratch configuration leaves them alone; tests replace it.
+var syncsUnder = func(config string) bool { return config == "" }
 
 // syncOnce brings the installed beekeeper plugins up to date once per
 // binary: the first command a newly installed binary runs updates every one
