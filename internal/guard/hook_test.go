@@ -132,6 +132,13 @@ func TestHeavyClassification(t *testing.T) {
 		{"agentlab test", false},
 		{"agentlab platform-test", false},
 		{"agentlab backstage-test", false},
+		// the package-script form of a lab e2e proof
+		{"yarn test:e2e:agentlab", false},
+		{"cd ~/src/backstage && AGENTLAB_KUBECONFIG=~/lab/kubeconfig yarn test:e2e:agentlab 2>&1 | tail -40", false},
+		{"npm run test:e2e:agentlab", false},
+		{"yarn workspace app test:e2e:agentlab", false},
+		{"yarn test:e2e:agentlab && yarn tsc", true},
+		{"yarn test:e2e", true},
 		{"agentlab down", false},
 		{"cd ~/lab && agentlab --lab agentlab-1 substrate-step-test --to 0.9.0 2>&1 | tail -40", false},
 		// graphify: the AST-only update and the LLM steps build nothing
