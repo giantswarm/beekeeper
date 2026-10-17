@@ -6,6 +6,9 @@ import (
 	"testing"
 )
 
+// The policy's variables are unheld unless the sandbox runtime
+// (SANDBOX_RUNTIME) or a broker holds the command: a scratch-broker proof's
+// client that sets BEEKEEPER_SANDBOX alone is unheld.
 func TestUnheld(t *testing.T) {
 	for _, tc := range []struct {
 		env  map[string]string
@@ -15,6 +18,7 @@ func TestUnheld(t *testing.T) {
 		{map[string]string{Env: "1"}, true},
 		{map[string]string{Env: "1", Runtime: "1"}, false},
 		{map[string]string{Env: "1", Brokered: "1"}, false},
+		{map[string]string{Runtime: "1"}, false},
 	} {
 		if got := Unheld(func(k string) string { return tc.env[k] }); got != tc.want {
 			t.Errorf("Unheld(%v) = %v, want %v", tc.env, got, tc.want)
