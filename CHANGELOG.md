@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - A finished worker's leftover background commands no longer keep its session from being archived. `agents idle --done` stops every tool shell of the calling session's CLI but the one it runs under, with the processes below them (a wait loop, a port-forward), and says which it stopped. The doctor stops the tool shells of a done agent whose CLI runs nothing else but `sleep`s (no headless turn, no gated merge, no transcript written within 30s), so it takes the agent off the roster and archives its session; `--dry-run` says "would stop". Such a sleeping wait used to count as a running turn for hours ([#1360](https://github.com/giantswarm/beekeeper/issues/1360)).
+- The hook that refuses a blocking devctl command run outside the gate keys on the commands a call executes, not on prose that names them. An interpreter's program (a `python3` here-document, a script file, a `-c` or `-e` string) runs a command from a string literal that starts with it or names it after a shell operator; a comment, or document text in a literal (a README, a CHANGELOG entry), runs nothing. A shell's `-c` or `eval` named inside a quoted argument or a content here-document (a PR body draft) is text too. The same commands run by the program or the shell are refused or gated as before. ([#1033](https://github.com/giantswarm/beekeeper/issues/1033)).
 
 ## [0.149.0-rc.3] - 2026-10-17
 
