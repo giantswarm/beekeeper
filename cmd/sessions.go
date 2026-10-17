@@ -3,6 +3,7 @@ package cmd
 import (
 	"cmp"
 	"fmt"
+	"os"
 	"regexp"
 	"slices"
 	"strconv"
@@ -27,6 +28,8 @@ type sessionView struct {
 	Serves *state.Record `json:"serves,omitempty"`
 	// Metrics are how it has been doing: read with its work.
 	Metrics *metrics `json:"metrics,omitempty"`
+	// Self marks the session that runs this command.
+	Self bool `json:"self,omitempty"`
 }
 
 // view is everything the session-level commands show.
@@ -112,8 +115,9 @@ func (a *app) collect(withWork bool) (*view, error) {
 		works, ms = a.sessionMetrics(raw, t, holders)
 		v.Totals = totals(raw, ms)
 	}
+	self := envParty(os.Getenv)
 	for i, s := range raw {
-		sv := &sessionView{Session: s}
+		sv := &sessionView{Session: s, Self: isSelf(self, s)}
 		sv.Role = roleOf(st, s)
 		if i := slices.IndexFunc(st.Records, func(r state.Record) bool { return r.Session.Is(s.Party()) }); i >= 0 {
 			sv.Serves = &st.Records[i]
@@ -171,7 +175,9 @@ issue its record serves and the issues or pull requests its latest turns
 acted on (named in its gh and devctl commands and GitHub tool calls, or
 created; a ref it only quoted or read is no act), else the repository it
 acted in or its checkout, when it was last active, the tool commands it runs right now (a devctl wait, a
-bounded sleep with the time left), its memory, how full its context is,
+bounded sleep with the time left; the caller's own session
+"(this session)", so a grep over the listing never matches its own
+command), its memory, how full its context is,
 its last hour (turns, tool calls and their errors, GitHub calls, cost),
 and its role and leases, after "archived" or "test" for a session the
 guide's feed leaves out. A
@@ -614,7 +620,7 @@ func (a *app) printSessions(v *view) {
 		}
 		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%dM\t%s\t%s\t%s\t%s\n",
 			truncate(s.Name, 44), truncate(on(s), 44), ago(a.now, s.LastActive),
-			truncate(running(s.Commands), 40), s.MemMiB, contextText(s.Metrics), cmp.Or(truncate(s.Model, 32), "-"), hour, truncate(roleText(s, role), 40))
+			truncate(s.running(), 40), s.MemMiB, contextText(s.Metrics), cmp.Or(truncate(s.Model, 32), "-"), hour, truncate(roleText(s, role), 40))
 	}
 	_ = w.Flush()
 	if t := v.Totals; t != nil {
@@ -663,6 +669,26 @@ func on(s *sessionView) string {
 		parts = append(parts, repo)
 	}
 	return strings.Join(parts, " ")
+}
+
+// isSelf says s is the session the environment self names: by its ids, never
+// by a name alone.
+func isSelf(self state.Party, s *claude.Session) bool {
+	return (self.Session != "" || self.HostSession != "") && self.Is(s.Party())
+}
+
+// selfRunning stands for the caller's own tool commands: they include the
+// listing itself and whatever reads it, so a text match over the listing
+// would find its own pattern there.
+const selfRunning = "(this session)"
+
+// running summarizes the session's tool commands, selfRunning for the
+// caller's own.
+func (s *sessionView) running() string {
+	if s.Self {
+		return selfRunning
+	}
+	return running(s.Commands)
 }
 
 // running summarizes the tool commands of a session.
