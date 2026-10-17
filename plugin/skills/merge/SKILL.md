@@ -14,10 +14,6 @@ description: Merging, promoting or tagging on a beekeeper desk: the gate, its ex
   gate:` line goes to the supervisor, no second merge; 3 still "behind" (the update refused) on a
   squash line: merge the base into the branch, push, the same merge once more.
 - **Protection** is read with `devctl repo status <owner/repo>`; `gh api …/protection` is 403.
-  Classic protection that declines a green merge for a review (exit 3): lift `enforce_admins` for
-  the one gated merge where a token may, restore it right after, also on failure. A 403 on the lift
-  (the gate's line names the cause) means align the repository: `align: true` on its entry in its
-  giantswarm/github team file, a PR there, then the same merge; never a manual setting, never `--admin`.
 - **Nothing rolls onto an installation while one of its clusters upgrades.**
 - **Before a non-mechanical change**, read the repo's open PRs and recent commits: a
   teammate's overlapping one is a hard stop, told to the supervisor.

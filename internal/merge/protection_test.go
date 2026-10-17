@@ -43,7 +43,7 @@ func TestClassicProtectionOtherDocuments(t *testing.T) {
 	for _, doc := range []string{
 		`{"exitCode":3,"reason":"pull request is behind its base"}`,
 		`{"exitCode":1,"verdict":"red","reason":"classic branch protection"}`,
-		`not json`,
+		`{`,
 	} {
 		if got := ClassicProtection([]byte(doc)); got != "" {
 			t.Errorf("ClassicProtection(%s) = %q, want none", doc, got)
