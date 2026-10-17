@@ -1,6 +1,7 @@
 package gocache
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -117,5 +118,54 @@ func TestDir(t *testing.T) {
 	t.Setenv("GOCACHE", "off")
 	if d := Dir(); d != "" {
 		t.Errorf("Dir with GOCACHE=off = %q, want \"\"", d)
+	}
+}
+
+// A trim waits for the commands that use the cache, and a command for the
+// trim under way.
+func TestUseAndTrimExcludeEachOther(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "go-build")
+	a, err := Use(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := Use(context.Background(), dir)
+	if err != nil {
+		t.Fatal("a second command waited for the first:", err)
+	}
+	if _, ok, err := TryTrim(dir); ok || err != nil {
+		t.Fatalf("a trim began while two commands used the cache: %v, %v", ok, err)
+	}
+	a()
+	if _, ok, _ := TryTrim(dir); ok {
+		t.Fatal("a trim began while a command used the cache")
+	}
+	b()
+	release, ok, err := TryTrim(dir)
+	if !ok || err != nil {
+		t.Fatalf("no trim once the commands ended: %v, %v", ok, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if _, err := Use(ctx, dir); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a command used the cache under a trim: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		r, err := Use(context.Background(), dir)
+		if err == nil {
+			r()
+		}
+		done <- err
+	}()
+	time.Sleep(100 * time.Millisecond)
+	release()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the command still waits after the trim ended")
 	}
 }

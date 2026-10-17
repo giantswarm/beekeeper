@@ -97,6 +97,11 @@ broker (beekeeper sandbox broker) caps the slot and moves the command into
 its scope, the command still in the sandbox; with no broker answering, run
 refuses (exit 1) rather than run a build uncapped.
 
+For the length of the command a run holds the Go build cache's use lock
+shared, so no trim of the cache (doctor.goCacheMaxGiB) removes an entry a
+compile reads; a run that begins during a trim waits for its end, within
+the same wait.
+
 Every capped run leaves a run.start and a run.end event in beekeeper log,
 naming the scope, the session and the command, so that a cap kill found
 later (snapshot, watch) names them after the run has ended. Logging never
@@ -123,7 +128,8 @@ kill in it as a test kill, not a build's.`,
 			cpu := a.memcapCPU()
 			o := guard.Options{Max: env("MEMCAP_MAX", a.cfg.MemcapMax(ramMiB())), Swap: env("MEMCAP_SWAP", "0"),
 				CPUQuota: cpu.CPUQuota, CPUWeight: cpu.CPUWeight,
-				Stderr: os.Stderr, Record: a.runRecorder(), Test: os.Getenv("MEMCAP_TEST") == "1"}
+				Stderr: os.Stderr, Record: a.runRecorder(), Test: os.Getenv("MEMCAP_TEST") == "1",
+				GoCache: goCacheDir()}
 			var err error
 			if o.SlotDir, o.Slots, err = a.buildSlots(); err != nil {
 				return err
