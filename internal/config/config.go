@@ -383,6 +383,11 @@ type Secret struct {
 	// refuses them in agent sessions under any path, like op signin, and
 	// the agent shell prelude removes their aliases and shell functions.
 	UnlockCommands []string `yaml:"unlockCommands"`
+	// FileRoots are the directories (~/ allowed) whose plain files beekeeper
+	// secret reads one value of as a source, file://<absolute path>#<path>:
+	// a CLI's own credential directory, for one. A file outside them is
+	// refused; none configured refuses every file:// source.
+	FileRoots []string `yaml:"fileRoots"`
 	// Files are files known to hold secret values (~/ and globs allowed)
 	// that the hook refuses to let an agent read whole, beside its built-in
 	// list (omp's provider configuration and the like) and TokenFile.
@@ -1760,6 +1765,9 @@ func (c *Config) defaults() error {
 	for i, f := range c.Secret.Files {
 		c.Secret.Files[i] = homePath(home, f)
 	}
+	for i, f := range c.Secret.FileRoots {
+		c.Secret.FileRoots[i] = filepath.Clean(homePath(home, f))
+	}
 	for i, f := range c.Kube.Kubeconfig {
 		c.Kube.Kubeconfig[i] = homePath(home, f)
 	}
@@ -2069,6 +2077,11 @@ func (c *Config) validate() error {
 	for i, v := range c.Secret.AgeVaults {
 		if v == "" || strings.Contains(v, "/") || c.Secret.Vault == "" {
 			return fmt.Errorf("secret.ageVaults[%d]: %q: a vault's name, beside secret.vault", i, v)
+		}
+	}
+	for i, r := range c.Secret.FileRoots {
+		if !filepath.IsAbs(r) || r == "/" {
+			return fmt.Errorf("secret.fileRoots[%d]: %q: a directory's absolute path (~/ allowed), not the root", i, r)
 		}
 	}
 	for i, v := range c.Secret.Vaults {

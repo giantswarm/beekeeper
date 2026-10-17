@@ -90,7 +90,7 @@ type CaptureResult struct {
 // producer's stdout is never answered.
 func (o *Ops) Capture(ctx context.Context, dst Ref, opt CaptureOptions) (CaptureResult, error) {
 	switch {
-	case dst.Op != "" || dst.IsKube():
+	case dst.Op != "" || dst.IsSource():
 		return CaptureResult{}, fmt.Errorf("%s: capture writes a SOPS file", dst)
 	case opt.Docker == nil && dst.Path == "":
 		return CaptureResult{}, fmt.Errorf("%s: capture writes a SOPS path, file#path, or a Secret's .dockerconfigjson with --dockerconfigjson", dst)

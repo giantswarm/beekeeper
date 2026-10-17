@@ -104,7 +104,8 @@ func (o *Ops) ageVaults() []string {
 
 // The references of an age identity besides a vault field.
 const (
-	// FileRef starts the reference of an identity file on the host.
+	// FileRef starts the reference of a file on the host: an age identity
+	// file, or one value of a plain file as a source (file://<path>#<path>).
 	FileRef = "file://"
 	// StoreRef starts the reference of an entry of the person's own
 	// credential store; with no entry, the store's search finds it by the
@@ -286,7 +287,7 @@ func (o *Ops) ageNeeds(dir string, args []string, match func(*AgeIdentity) bool)
 		return false
 	}
 	for _, a := range args {
-		if strings.HasPrefix(a, "-") || strings.HasPrefix(a, guard.OpRef) || strings.HasPrefix(a, K8sRef) {
+		if strings.HasPrefix(a, "-") || strings.HasPrefix(a, guard.OpRef) || strings.HasPrefix(a, K8sRef) || strings.HasPrefix(a, FileRef) {
 			continue
 		}
 		r, err := ParseRef(a)
