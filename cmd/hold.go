@@ -39,7 +39,11 @@ version update and lifts the window once the local devctl reports it, or at
 once when the merge released only a candidate, which no update installs.
 
 --lift-when takes a shell command on this machine: the watch lifts the hold
-once it exits 0, and logs the lift.
+once it exits 0, and logs the lift. A repository's hold whose probe waits on
+that repository's release or tag (it names the repository and "release" or
+"tag": gh release view v1.2.3 --repo owner/repo) lets the repository's own
+promote through, the one step that cuts that release; merges into it stay
+held.
 
 Without a subcommand, lists the holds.`,
 		Args: cobra.NoArgs,
@@ -158,9 +162,13 @@ central target) is an error naming that lookup, with its own exit code.`,
 			h, ok := activeHold(st, a, args[0])
 			if repo, pr, isRepo := splitPR(args[0]); isRepo {
 				h, ok = merge.Blocking(st, a.now, repo, pr, a.cfg.LaneOf(repo))
+				if !ok && pr == 0 {
+					// Blocking's pr 0 is the promote; the check asks about merges.
+					h, ok = activeHold(st, a, repo)
+				}
 			}
 			if ok {
-				return refused("%s is held by %q until %s: %s", h.Target, h.By.Name, untilText(a, h), h.Reason)
+				return refused("%s is held by %q until %s: %s", holdTarget(h), h.By.Name, untilText(a, h), h.Reason)
 			}
 			if a.centralTarget(args[0]) {
 				if err := a.checkCentral(args[0]); err != nil {
@@ -261,12 +269,19 @@ func activeHold(st *state.State, a *app, target string) (state.Hold, bool) {
 	return state.Hold{}, false
 }
 
-// holdTarget is the hold's target with its exception.
+// holdTarget is the hold's target with its exceptions.
 func holdTarget(h state.Hold) string {
-	if h.Except == "" {
+	var except []string
+	if h.Except != "" {
+		except = append(except, h.Except)
+	}
+	if h.AwaitsOwnRelease() {
+		except = append(except, "its promote")
+	}
+	if len(except) == 0 {
 		return h.Target
 	}
-	return h.Target + " except " + h.Except
+	return h.Target + " except " + strings.Join(except, " and ")
 }
 
 // untilText ends a "held … until" sentence: the hold's end, or "lifted"
