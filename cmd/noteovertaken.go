@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -29,15 +28,10 @@ const noteKept = "note.kept"
 // overtakenSep separates an overtaken event's reason from the note's text.
 const overtakenSep = "; the note: "
 
-// refsTimeout bounds one read of refStates: its tries, each bounded by
-// github.RefStates, and the waits between them.
-const refsTimeout = time.Minute
-
-// refStates reads the states of issues and pull requests; a seam for the
-// tests.
+// refStates reads the states of issues and pull requests, batch by batch
+// (github.RefStates): an error names the batches that failed, the states
+// are the others'; a seam for the tests.
 var refStates = func(ctx context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
-	ctx, cancel := context.WithTimeout(ctx, refsTimeout)
-	defer cancel()
 	return github.RefStates(ctx, notesGH, refs)
 }
 
@@ -213,13 +207,14 @@ func (w *watcher) overtakenNow(ctx context.Context, st *state.State) (over, kept
 				st.Budget.Reset.Local().Format("15:04"))
 		}
 	default:
+		// A failed batch keeps its notes open; the others' are decided.
 		s, err := refStates(ctx, refs)
-		if s == nil {
+		states = s
+		if err != nil {
 			w.fail("note-refs", "NOTE REFS UNREADABLE: cannot read the notes' issues and pull requests: %v", err)
 			break
 		}
 		w.clear("note-refs")
-		states = s
 		if unanswered := slices.DeleteFunc(slices.Clone(refs), func(r github.PR) bool { _, ok := s[r]; return ok }); len(unanswered) > 0 && !w.chores {
 			names := make([]string, len(unanswered))
 			for i, r := range unanswered {

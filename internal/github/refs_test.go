@@ -5,6 +5,7 @@ import (
 	"errors"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -93,5 +94,57 @@ func TestRefStatesResolvesAPersonalAccountRepository(t *testing.T) {
 	}
 	if !slices.Equal(acting, []string{orgRepo, personalRepo}) {
 		t.Errorf("requests acted on %q, want one per owner", acting)
+	}
+}
+
+func TestRefStatesReadsALargeParkedSetInBatches(t *testing.T) {
+	var asked []int
+	tries := map[time.Duration]int{}
+	run := func(ctx context.Context, args ...string) ([]byte, error) {
+		query := args[len(args)-1]
+		n := strings.Count(query, ":repository(")
+		asked = append(asked, n)
+		d, _ := ctx.Value(tryKey{}).(time.Duration)
+		tries[d]++
+		if _, ok := ctx.Deadline(); !ok {
+			t.Error("a batch's read has no deadline of its own")
+		}
+		// The second batch is killed: it fails alone.
+		if strings.Contains(query, "number:21)") {
+			return nil, errors.New("gh api graphql: signal: killed")
+		}
+		var b strings.Builder
+		b.WriteString(`{"data":{`)
+		for i := range n {
+			if i > 0 {
+				b.WriteString(",")
+			}
+			b.WriteString(`"r` + strconv.Itoa(i) + `":{"issueOrPullRequest":{"state":"OPEN"}}`)
+		}
+		b.WriteString("}}")
+		return []byte(b.String()), nil
+	}
+	var refs []PR
+	for n := 1; n <= 45; n++ {
+		refs = append(refs, PR{Repo: "example/notes", N: n})
+	}
+	states, err := RefStates(t.Context(), run, refs)
+	if !slices.Equal(asked, []int{20, 20, 5}) {
+		t.Errorf("requests asked %v references, want batches of at most 20", asked)
+	}
+	if want := map[time.Duration]int{12 * time.Second: 2, 10500 * time.Millisecond: 1}; !maps.Equal(tries, want) {
+		t.Errorf("tries %v, want each bounded by its own batch %v", tries, want)
+	}
+	if err == nil || !strings.Contains(err.Error(), "refs batch 2/3 of example (20: example/notes#21 … example/notes#40): gh api graphql: signal: killed") {
+		t.Errorf("err = %v, want the failed batch named", err)
+	}
+	if strings.Contains(err.Error(), "batch 1/3") || strings.Contains(err.Error(), "batch 3/3") {
+		t.Errorf("err = %v names a batch that answered", err)
+	}
+	if len(states) != 25 || states[refs[0]].State != Open || states[refs[44]].State != Open {
+		t.Errorf("states of the answered batches = %v", states)
+	}
+	if _, ok := states[refs[20]]; ok {
+		t.Error("a reference of the failed batch has a state")
 	}
 }
