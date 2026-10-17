@@ -34,6 +34,9 @@ const (
 	sopsA         = "a.sops.yaml"
 	sopsB         = "b.sops.yaml"
 	generateFlag  = "--generate"
+	literalFlag   = "--literal"
+	vaultFlag     = "--vault"
+	newKey        = "stringData.x"
 	ghSecret      = "secret"
 	setOp         = "set"
 	nameFlag      = "--name"
@@ -106,7 +109,7 @@ func TestSecretOperationsReturnNoValueAndAreLogged(t *testing.T) {
 		{fingerprintOp, dbRef},
 		{copyOp, dbRef, dst + "#stringData.extra"},
 		{copyOp, dbRef, "--", consumer, ghSecret, setOp, "X"},
-		{setOp, dst, "stringData.generated", generateFlag, "--vault", "op://Shared/gen/password"},
+		{setOp, dst, "stringData.generated", generateFlag, vaultFlag, "op://Shared/gen/password"},
 		{setOp, dst, "stringData.local", generateFlag},
 		{setOp, dst, "stringData.fed", generateFlag, "--", consumer, ghSecret, setOp, "X"},
 		{jsonFlag, copyOp, src, filepath.Join(repo, "json.sops.yaml")},
@@ -471,7 +474,6 @@ func TestSecretSetRefusesAPlaintextConfigMap(t *testing.T) {
 }
 
 func TestSecretSetNewSecretAndPodConsumers(t *testing.T) {
-	const newKey = "stringData.x"
 	a, tools, repo := secretApp(t)
 	a.cfg.Kube.Production = gazelle
 	file := filepath.Join(repo, "s3.sops.yaml")
@@ -499,6 +501,63 @@ func TestSecretSetNewSecretAndPodConsumers(t *testing.T) {
 		calls := len(tools.Calls)
 		if _, err := runSecret(a, c.args...); Code(err) != c.code || len(tools.Calls) != calls {
 			t.Errorf("secret %s = %v, want exit %d and no tool run", strings.Join(c.args, " "), err, c.code)
+		}
+	}
+}
+
+func TestSecretSetWritesALiteralBesideTheOtherValues(t *testing.T) {
+	const clientID = "Iv23liPublicClientID01"
+	a, tools, repo := secretApp(t)
+	file := filepath.Join(repo, "db.sops.yaml")
+	out, err := runSecret(a, setOp, file, "stringData.client-id", literalFlag, clientID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := file + "#stringData.client-id"
+	if want := fmt.Sprintf("wrote %s: %d characters, hmac:", key, len(clientID)); !strings.HasPrefix(out, want) {
+		t.Errorf("set --literal answers %q, want %q…", out, want)
+	}
+	plain, err := tools.Run(context.Background(), "", nil, nil, "sops", "decrypt", "--output-type", "yaml", file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []string{"client-id: " + clientID, "password: " + base64.StdEncoding.EncodeToString([]byte(secretValue))} {
+		if !strings.Contains(string(plain), w) {
+			t.Errorf("the SOPS file lacks %q:\n%s", w, plain)
+		}
+	}
+	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "secret.set" })
+	if err != nil || len(evs) != 1 || !strings.Contains(evs[0].Detail, key+": literal hmac:") {
+		t.Fatalf("set --literal logged %+v, %v", evs, err)
+	}
+}
+
+func TestSecretSetRefusesACredentialShapedLiteral(t *testing.T) {
+	const token = "ghp_" + "0123456789abcdefghijABCDEFGHIJ012345" // gitleaks:allow
+	a, tools, repo := secretApp(t)
+	file := filepath.Join(repo, "db.sops.yaml")
+	before, _ := os.ReadFile(file) //nolint:gosec // the test's scratch file
+	out, err := runSecret(a, setOp, file, "stringData.client-id", literalFlag, token)
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "github-pat") || strings.Contains(out+err.Error(), token) || len(tools.Calls) != 0 {
+		t.Fatalf("set --literal <token> = %q, %v, ran %q; want a refusal naming github-pat", out, err, tools.Calls)
+	}
+	if raw, _ := os.ReadFile(file); string(raw) != string(before) { //nolint:gosec // the test's scratch file
+		t.Error("the refused set changed the file")
+	}
+	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "secret.set" })
+	if err != nil || len(evs) != 1 || !strings.Contains(evs[0].Detail, "failed") || strings.Contains(evs[0].Detail, token) {
+		t.Fatalf("the refusal logged %+v, %v", evs, err)
+	}
+	for _, args := range [][]string{
+		{setOp, file, newKey},
+		{setOp, file, newKey, literalFlag, "v", generateFlag},
+		{setOp, file, newKey, literalFlag, ""},
+		{setOp, file, newKey, literalFlag, "v", "--length", "40"},
+		{setOp, file, newKey, literalFlag, "v", vaultFlag, "op://Shared/app/id"},
+	} {
+		a.out = &bytes.Buffer{}
+		if _, err := runSecret(a, args...); Code(err) != ExitUsage {
+			t.Errorf("secret %s = %v, want a usage error", strings.Join(args, " "), err)
 		}
 	}
 }

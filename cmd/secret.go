@@ -731,13 +731,13 @@ func (a *app) kubeconfigFiles() []string {
 }
 
 func (a *app) secretSetCmd() *cobra.Command {
-	var vault, charset, toSecret, name, namespace, encode string
+	var vault, charset, toSecret, name, namespace, encode, literal string
 	var length int
 	var generate bool
 	var in secret.Stdin
 	c := &cobra.Command{
-		Use:   "set <sops-file> <path> --generate [--name n --namespace ns] [--vault op://<vault>/<item>/<field>] [--to-secret <context>/<namespace>/<name>/<key> | -- <consumer…>]",
-		Short: "Generate a value into a SOPS path, and the shared vault, a lab's Secret or a consumer",
+		Use:   "set <sops-file> <path> --generate|--literal <value> [--name n --namespace ns] [--vault op://<vault>/<item>/<field>] [--to-secret <context>/<namespace>/<name>/<key> | -- <consumer…>]",
+		Short: "Generate a value, or write a public one, into a SOPS path, and the shared vault, a lab's Secret or a consumer",
 		Long: `set --generate draws a new value in beekeeper's process and writes it into
 the SOPS file's dotted path (creating the file or the key when absent,
 encrypted to the recipients of its .sops.yaml), and answers its
@@ -750,6 +750,12 @@ mapping) is refused by what it is, before sops sees it.
 A Secret's value goes under stringData unless the path names data or
 stringData. A path the file's .sops.yaml creation rule would leave in
 plaintext is refused before any value is drawn, naming the rule.
+
+--literal <value> writes a known, public value instead (a GitHub App's
+client ID beside its client secret), the file's other values kept, and
+answers its key, length and fingerprint. A literal with the shape of a
+credential (a private key, a token's prefix) is refused naming the shape;
+no vault holds a literal.
 
 --vault op://<vault>/<item>/<field> writes the shared vault's field first
 (creating the item or the field when absent), then the SOPS path.
@@ -781,14 +787,22 @@ encoded form's.`,
 			return cobra.ExactArgs(2)(cmd, args)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !generate {
-				return usageErr("set takes no value: --generate makes one")
+			lit := cmd.Flags().Changed("literal")
+			switch {
+			case generate == lit:
+				return usageErr("set takes --generate or --literal <value>, one of them")
+			case lit && literal == "":
+				return usageErr("--literal: an empty value")
+			case lit && (cmd.Flags().Changed("length") || cmd.Flags().Changed("charset")):
+				return usageErr("--length and --charset shape a generated value, not a literal")
+			case lit && vault != "":
+				return usageErr("--literal writes a public value: no vault holds it")
 			}
 			enc, err := secret.ParseEncoding(encode)
 			if err != nil {
 				return usageErr("%v", err)
 			}
-			opt := secret.SetOptions{Length: length, Charset: charset}
+			opt := secret.SetOptions{Length: length, Charset: charset, Literal: literal}
 			if vault != "" {
 				v, err := parseRefs(vault)
 				if err != nil {
@@ -840,17 +854,24 @@ encoded form's.`,
 			}
 			ops.Encode = enc
 			res, err := ops.Set(cmd.Context(), dst, opt)
+			if errors.Is(err, secret.ErrCredentialShape) {
+				err = refused("%v", err)
+			}
 			if res.Key != "" {
 				to[slices.Index(to, dst.String())] = res.Key
 			}
-			done := "generated" + encodedAs(enc) + " " + res.Fingerprint
+			done := "generated"
+			if lit {
+				done = "literal"
+			}
+			done += encodedAs(enc) + " " + res.Fingerprint
 			if opt.Consumer != nil {
 				done += fmt.Sprintf(", consumer exit %d", res.Code)
 			}
 			if err := a.secretLog(err, "set", "%s: %s", strings.Join(to, " and "), outcome(err, done)); err != nil {
 				return err
 			}
-			text := fmt.Sprintf("wrote %s: %d characters%s, %s\n", strings.Join(to, " and "), length, encodedAs(enc), res.Fingerprint)
+			text := fmt.Sprintf("wrote %s: %d characters%s, %s\n", strings.Join(to, " and "), res.Length, encodedAs(enc), res.Fingerprint)
 			if err := a.secretPrint(res, text+res.Output); err != nil {
 				return err
 			}
@@ -862,6 +883,7 @@ encoded form's.`,
 	}
 	f := c.Flags()
 	f.BoolVar(&generate, "generate", false, "generate the value")
+	f.StringVar(&literal, "literal", "", "write this known, public value instead; one shaped like a credential is refused")
 	f.StringVar(&vault, "vault", "", "the shared vault's field that holds the value first (op://<vault>/<item>/<field>); none keeps it in the SOPS file alone")
 	f.StringVar(&toSecret, "to-secret", "", "also a key of a Secret in a lab you hold: <context>/<namespace>/<name>/<key>")
 	f.IntVar(&length, "length", 32, "the value's length")
