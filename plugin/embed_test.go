@@ -168,3 +168,40 @@ func TestCodeScanFindingsNameTheirCommit(t *testing.T) {
 		t.Error("the supervisor's scheduling does not check a scan finding's commit against the head")
 	}
 }
+
+// Every gated merge line a shipped skill shows passes --update-branch: from
+// devctl 8.140.0 a head behind its base is exit 3 without it, strict
+// protection or not. The merge skill says what an exit 3 that still says
+// behind gets.
+func TestGatedMergeLinesUpdateTheBranch(t *testing.T) {
+	line := regexp.MustCompile("`devctl pr merge [^`]+`")
+	err := fs.WalkDir(Skills, SkillsDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		raw, err := Skills.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, m := range line.FindAllString(string(raw), -1) {
+			if !strings.Contains(m, "--update-branch") {
+				t.Errorf("%s shows %s without --update-branch", path, m)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	merge := strings.Join(strings.Fields(Skill("merge")), " ")
+	for _, want := range []string{
+		"`devctl pr merge <owner/repo> <n> --update-branch`",
+		"`--rebase --update-branch`",
+		`3 still "behind"`,
+		"merge the base into the branch, push, the same merge once more",
+	} {
+		if !strings.Contains(merge, want) {
+			t.Errorf("the merge skill does not say %q", want)
+		}
+	}
+}
