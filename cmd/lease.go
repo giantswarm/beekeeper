@@ -686,9 +686,11 @@ func (a *app) leaseGrantCmd() *cobra.Command {
 claim it once it is free and every earlier grant for it is claimed or
 expired. --first puts the grant at the head of the queue, as the
 supervisor's ` + "`yours <resource>`" + ` does: a waiting grant to the session moves
-there, the grants it passes keep their order behind it. A grant waits while the resource is held; once it is free the grant
-expires after grantTTL (default 30m). The session is a name, a unique part of
-one, a session id or a PID; a registered agent also by its roster name.
+there, the grants it passes keep their order behind it; while a supervisor
+is recorded, only it gives --first. A grant waits while the resource is
+held; once it is free the grant expires after grantTTL (default 30m). The
+session is a name, a unique part of one, a session id or a PID; a
+registered agent also by its roster name.
 
 While a cluster upgrade holds an installation, every claim on it is refused,
 plain grants included. --upgrade-unblock "<why>" grants the one claim that
@@ -730,7 +732,7 @@ and the log. Such grants are claimed during the upgrade in their order.`,
 		},
 	}
 	c.Flags().StringVar(&unblock, "upgrade-unblock", "", "grant the claim that unblocks the upgrade holding the resource, and say why (supervisor only)")
-	c.Flags().BoolVar(&first, "first", false, "put the grant at the head of the resource's queue, ahead of the earlier grants (the supervisor's `yours` does)")
+	c.Flags().BoolVar(&first, "first", false, "put the grant at the head of the resource's queue, ahead of the earlier grants, as the supervisor's `yours` does (supervisor only)")
 	return c
 }
 
@@ -749,6 +751,9 @@ func (a *app) grant(me state.Party, res string, to *claude.Session, unblock stri
 		}
 		held := heldMap(holders)
 		lease.Prune(st, held, a.now, a.cfg.GrantTTL.Duration)
+		if sup := st.SupervisorRole().Holder; first && sup != nil && me.Session != "" && !me.Is(sup.Party) {
+			return nil, refused("only the supervisor %q puts a grant ahead of the queue: grant %s without --first, or ask it for `yours %s`", sup.Name, res, res)
+		}
 		var hold state.Hold
 		if unblock != "" {
 			if r := st.SupervisorRole(); r.Holder == nil || !r.Holder.Is(me) {
