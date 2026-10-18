@@ -122,7 +122,7 @@ func (st *deleteState) check(raw []string, depth int) string {
 				st.nounset = true
 			}
 		}
-	case name == "export" || name == "local" || name == "declare" || name == "readonly" || name == "typeset":
+	case declarations[name]:
 		st.assign(raw[k+1:], words[k+1:])
 	case shells[name]:
 		for _, a := range words[k+1:] {

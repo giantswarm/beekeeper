@@ -874,3 +874,77 @@ func TestANSICEscapes(t *testing.T) {
 		}
 	}
 }
+
+// TestHookLeavesAssignedTextAlone: a value a variable is assigned is data (a
+// comment's, an issue's or a PR's body), never rewritten, and a variable that
+// holds a blocking devctl command passes only where the call uses it as text:
+// https://github.com/giantswarm/beekeeper/issues/1067.
+func TestHookLeavesAssignedTextAlone(t *testing.T) {
+	h := Hook{Self: self, Shell: testShell, Clusters: func() []string { return nil }, Leases: func() []lease.Holder { return nil }}
+	g := self + " gate -- "
+	for _, cmd := range []string{
+		// The live case: a proof comment's body in a variable.
+		`body="Proof: devctl pr merge o/r 7 ran"; gh issue comment 1 --repo o/r --body "$body"`,
+		`body='Proof: devctl pr wait o/r 7 green'; gh pr comment 7 --repo o/r --body "$body" 2>&1 | tail -1`,
+		`R=o/r; gh pr create --repo "$R" --title t --body "Merged with devctl pr merge o/r 7 (release wait: devctl release wait o/r v1)"`,
+		`B='Proof: devctl release promote o/r ran' gh issue create --repo o/r --title t --body "$B"`,
+		`for i in 1; do body="Proof: devctl rollout wait i o/r --pr 7"; gh pr comment 7 --repo o/r --body "${body}"; done`,
+		`local body='merged with devctl release promote o/r'; git commit -m "$body"`,
+		// Copied into another variable, or into a here-document that is content.
+		`body="x; devctl pr merge o/r 7"; full="$body and more"; gh issue comment 1 --repo o/r --body "$full"`,
+		`body="x; devctl pr merge o/r 7"; full=$body; gh pr comment 1 --repo o/r -b "$full" | tail -1`,
+		"body=\"x; devctl pr merge o/r 7\"; gh issue comment 1 --repo o/r --body-file - <<EOF\n$body\nEOF",
+		// A heredoc body assigned or passed is data too.
+		"body=$(cat <<'X'\nmerged: devctl pr merge o/r 7\nX\n); gh issue comment 1 --repo o/r --body \"$body\"",
+		"gh pr comment 7 --repo o/r --body \"$(cat <<'X'\nmerged: devctl pr merge o/r 7\nX\n)\"",
+		// A here-document a program writes to a file is data, Go source with a string literal too.
+		"python3 - <<'EOF'\nsrc = '''\n\tcmd := \"devctl release wait o/r v1\"\n'''\nopen('x_test.go', 'w').write(src)\nEOF",
+		"cat >| x_test.go <<'EOF'\n\tcmd := \"devctl release wait o/r v1\"\nEOF",
+	} {
+		if d := decide(t, h, t.TempDir(), cmd, nil); d != nil {
+			t.Errorf("%q: got %+v, want it unchanged", cmd, d)
+		}
+	}
+	// A real merge beside the assigned text: only the real one is gated.
+	for _, c := range []struct{ cmd, want string }{
+		{`body="Proof: devctl pr merge o/r 7 ran"; gh issue comment 1 --repo o/r --body "$body" && devctl pr merge o/r 7`,
+			`body="Proof: devctl pr merge o/r 7 ran"; gh issue comment 1 --repo o/r --body "$body" && ` + g + `devctl pr merge o/r 7`},
+		{`x="$(devctl pr merge o/r 7)"`, `x="$(` + g + `devctl pr merge o/r 7)"`},
+	} {
+		if d := decide(t, h, t.TempDir(), c.cmd, nil); d == nil || d.UpdatedInput["command"] != c.want {
+			t.Errorf("%q: got %+v, want %q", c.cmd, d, c.want)
+		}
+	}
+	// A variable holding a merge that may run is refused, not rewritten.
+	for _, cmd := range []string{
+		`c="devctl pr merge o/r 7"; $c`,
+		`c="nohup devctl pr merge o/r 7"; $c`,
+		`c="devctl pr merge o/r 7"; eval "$c"`,
+		`c='devctl pr merge o/r 7'; bash -c "$c"`,
+		`body="x; devctl pr merge o/r 7"; echo "$body" | sh`,
+		"body=\"x; devctl pr merge o/r 7\"; bash <<EOF\n$body\nEOF",
+		`GIT_EDITOR="nohup devctl pr merge o/r 7" git commit`,
+		`export body="x; devctl pr merge o/r 7"; gh issue comment 1 --body "$body"`,
+		`c="devctl pr merge o/r 7"; d="$c"; watch "$d"`,
+		// Exported or reached by another name later on the line.
+		`body="x; devctl pr merge o/r 7"; export body; GIT_EDITOR='sh -c "$body"' true`,
+		`set -a; body="x; devctl pr merge o/r 7"; gh issue comment 1 --repo o/r --body "$body"`,
+		`body="x; devctl pr merge o/r 7"; declare -x body; gh issue comment 1 --repo o/r --body "$body"`,
+		`body="x; devctl pr merge o/r 7"; n=body; gh issue comment 1 --repo o/r --body "${!n}"`,
+		`body="x; devctl pr merge o/r 7"; declare -n r=body; gh issue comment 1 --repo o/r --body "$r"`,
+		`body="x; devctl pr merge o/r 7"; printf -v c '%s' "$body"; $c`,
+		`set -e -a; body="x; devctl pr merge o/r 7"; gh issue comment 1 --repo o/r --body "$body"`,
+		`set -euo allexport; body="x; devctl pr merge o/r 7"; gh issue comment 1 --repo o/r --body "$body"`,
+		`set -o errexit -o allexport; body="x; devctl pr merge o/r 7"; gh issue comment 1 --repo o/r --body "$body"`,
+		// Arithmetic evaluates a bare name's value, a command substitution in it too.
+		`x='a[$(devctl pr merge o/r 7)]'; (( x )); gh issue comment 1 --repo o/r --body "$x"`,
+		`x='a[$(devctl pr merge o/r 7)]'; let y=x+1`,
+		`x='a[$(devctl pr merge o/r 7)]'; [[ x -eq 1 ]]`,
+		`x='a[$(devctl pr merge o/r 7)]'; declare -i y=x`,
+	} {
+		d := decide(t, h, t.TempDir(), cmd, nil)
+		if d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "the variable ") {
+			t.Errorf("%q: got %+v, want a refusal naming the variable", cmd, d)
+		}
+	}
+}
