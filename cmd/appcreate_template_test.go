@@ -142,7 +142,7 @@ func TestAppCreateFromATemplateRefusesBeforeAnyClick(t *testing.T) {
 		"bad installation": {[]string{appCreate, portalPurpose, installationFlag, "Graveler", baseDomainFlag, portalDomain}, ExitUsage, "a lower-case DNS label"},
 		"bad domain":       {[]string{appCreate, portalPurpose, installationFlag, portalInstallation, baseDomainFlag, "localhost"}, ExitUsage, "a lower-case DNS name"},
 		"nothing to replace": {[]string{appCreate, portalPurpose, installationFlag, portalInstallation, baseDomainFlag, portalDomain, replaceFlag}, ExitRefused,
-			"GitHub knows no App giantswarm-portal-graveler for --replace to succeed"},
+			"neither the vault Shared nor GitHub knows an App giantswarm-portal-graveler for --replace to succeed"},
 		"known name":    {[]string{appCreate, "bare", installationFlag, "taken"}, ExitRefused, "GitHub already knows an App named bare-taken"},
 		"replace alone": {[]string{appCreate, fixtureApp, replaceFlag}, ExitUsage, "--replace and --base-domain go with --installation"},
 		"domain alone":  {[]string{appCreate, fixtureApp, baseDomainFlag, portalDomain}, ExitUsage, "--replace and --base-domain go with --installation"},
@@ -155,5 +155,38 @@ func TestAppCreateFromATemplateRefusesBeforeAnyClick(t *testing.T) {
 	}
 	if opened != 0 || len(vault) != 1 {
 		t.Errorf("a refused creation opened %d pages and wrote the vault: %q", opened, vault)
+	}
+}
+
+// A private App is invisible to an installation token's GET /apps: the
+// generations the shared vault holds items of are the latest, and the
+// successor follows them; the old App is named without an id GitHub did
+// not answer.
+func TestAppCreateReplaceFollowsTheVaultsGenerations(t *testing.T) {
+	a, g, vault := templateApp(t)
+	for _, name := range []string{portalApp, portalApp + "-2", portalApp + "-twin"} {
+		vault["op://Shared/"+name+"/"+appIDField] = "1"
+	}
+	out, err := runApp(t, a, appCreate, portalPurpose, installationFlag, portalInstallation, baseDomainFlag, portalDomain, replaceFlag, timeoutFlag, tenSeconds)
+	if err != nil {
+		t.Fatalf("app create --replace: %v\n%s", err, out)
+	}
+	if g.manifest["name"] != portalApp+"-3" || vault["op://Shared/"+portalApp+"-3/"+appIDField] != "4242" || vault["op://Shared/"+portalApp+"-2/"+appIDField] != "1" {
+		t.Errorf("GitHub received %v; the vault: %q", g.manifest["name"], vault)
+	}
+	if want := "the App " + portalApp + "-2 and its vault item stay untouched until its consumers have switched to op://Shared/" + portalApp + "-3; " +
+		"then deleting it is the person's step: " + githubWeb + "/organizations/" + fixtureOrg + "/settings/apps/" + portalApp + "-2/advanced"; !strings.Contains(out, want) {
+		t.Errorf("the answer lacks %q:\n%s", want, out)
+	}
+}
+
+// A name's generation of an App: the App itself, its -<n> successors, and
+// no other name.
+func TestAppGeneration(t *testing.T) {
+	for name, want := range map[string]int{portalApp: 1, "Giantswarm-Portal-Graveler": 1, portalApp + "-2": 2, portalApp + "-12": 12,
+		portalApp + "-1": 0, portalApp + "-02": 0, portalApp + "-twin": 0, portalApp + "2": 0, "other": 0} {
+		if got := generation(portalApp, name); got != want {
+			t.Errorf("generation(%s) = %d, want %d", name, got, want)
+		}
 	}
 }
