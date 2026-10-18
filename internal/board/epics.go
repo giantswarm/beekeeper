@@ -404,9 +404,10 @@ func pick(ref string, prs []planPR) *Plan {
 	return cmp.Or(open, merged)
 }
 
-// epicThreads reads the comments of each epic of refs, keyed by the
-// lower-cased ref, plansBatch epics of one owner per request, acting on
-// their repository. An epic GitHub does not resolve has none.
+// epicThreads reads the comments of each epic of refs in a private
+// repository, the go's private thread, keyed by the lower-cased ref,
+// plansBatch epics of one owner per request, acting on their repository. An
+// epic in a public repository, or one GitHub does not resolve, has none.
 func (c *Client) epicThreads(ctx context.Context, refs []string) (map[string]thread, error) {
 	out := map[string]thread{}
 	for _, group := range github.ByOwner(refs, refRepo) {
@@ -417,10 +418,11 @@ func (c *Client) epicThreads(ctx context.Context, refs []string) (map[string]thr
 				if err != nil {
 					return nil, err
 				}
-				fmt.Fprintf(&q, "e%d:repository(owner:%s,name:%s){issue(number:%d){comments(last:%d){nodes{body url createdAt}}}}", i, quote(owner), quote(repo), n, goComments)
+				fmt.Fprintf(&q, "e%d:repository(owner:%s,name:%s){isPrivate issue(number:%d){comments(last:%d){nodes{body url createdAt}}}}", i, quote(owner), quote(repo), n, goComments)
 			}
 			var r map[string]*struct {
-				Issue *struct {
+				IsPrivate bool `json:"isPrivate"`
+				Issue     *struct {
 					Comments thread `json:"comments"`
 				} `json:"issue"`
 			}
@@ -430,7 +432,7 @@ func (c *Client) epicThreads(ctx context.Context, refs []string) (map[string]thr
 				}
 			}
 			for i, ref := range batch {
-				if e := r[fmt.Sprintf("e%d", i)]; e != nil && e.Issue != nil {
+				if e := r[fmt.Sprintf("e%d", i)]; e != nil && e.IsPrivate && e.Issue != nil {
 					out[strings.ToLower(ref)] = e.Issue.Comments
 				}
 			}
@@ -444,8 +446,8 @@ func (c *Client) epicThreads(ctx context.Context, refs []string) (map[string]thr
 var goLine = regexp.MustCompile(`^\*\*Go:\*\* (\S+) moved to .*? implemented at (?:this plan|plan (\S+)) at its head (\S+) \(`)
 
 // readGo adds to the plan p of the epic ref, past its go, the go: the
-// latest go comment on the epic's thread or on a plan pull request naming
-// it (prs), and how the plan moved on since. Without a go comment p is
+// latest go comment on its private thread (epicThreads) or on a private
+// plan pull request naming it (prs), a public thread's never, and how the plan moved on since. Without a go comment p is
 // returned as it is; with no current plan, the go's plan (closed, or no
 // longer naming the epic) is the plan.
 func readGo(ref string, p *Plan, prs []planPR, epic thread) *Plan {
@@ -462,7 +464,9 @@ func readGo(ref string, p *Plan, prs []planPR, epic thread) *Plan {
 	}
 	note(epic, "")
 	for i := range prs {
-		note(prs[i].Comments, prs[i].URL)
+		if prs[i].Repository.IsPrivate {
+			note(prs[i].Comments, prs[i].URL)
+		}
 	}
 	if at.IsZero() {
 		return p
@@ -494,7 +498,7 @@ func readGo(ref string, p *Plan, prs []planPR, epic thread) *Plan {
 		p.Since = "the plan no longer names the epic"
 	case closed:
 		p.Since = "plan closed"
-	case !strings.HasPrefix(p.Head, head):
+	case p.Head != head:
 		p.Moved = since(of, head)
 		if p.Moved < 0 {
 			p.Moved, p.Since = 0, fmt.Sprintf("plan moved since the go: head %s not among its last %d commits", short(head), goCommits)
@@ -512,7 +516,7 @@ func readGo(ref string, p *Plan, prs []planPR, epic thread) *Plan {
 // head is not among them.
 func since(pr *planPR, head string) int {
 	for i, n := range slices.Backward(pr.Commits.Nodes) {
-		if strings.HasPrefix(n.Commit.OID, head) {
+		if n.Commit.OID == head {
 			return len(pr.Commits.Nodes) - 1 - i
 		}
 	}

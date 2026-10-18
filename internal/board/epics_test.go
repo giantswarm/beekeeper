@@ -204,12 +204,13 @@ func TestTheGoOfAnEpicPastItIsReadFromItsGoComment(t *testing.T) {
 				// Implemented at plan 4, closed since.
 				`"p2":{"nodes":[` + goNode(4, "CLOSED", false, 52, goComment(52, "", "d4", 1), "d4") + `]},` +
 				// No go recorded; its head not among the last commits is moved.
-				`"p3":{"nodes":[` + goNode(5, "OPEN", false, 53, "", "e5") + `]},` +
+				`"p3":{"nodes":[` + goNode(5, "OPEN", false, 53, "", "e5") + "," + strings.Replace(goNode(8, "OPEN", false, 53, goComment(53, "", "e8", 6), "e8"), `"isPrivate":true`, `"isPrivate":false`, 1) + `]},` +
 				`"p4":{"nodes":[` + goNode(6, "OPEN", false, 54, goComment(54, "", "old", 1), "f6", "g6") + `]},` +
 				`"p5":{"nodes":[` + planNode(7, "OPEN", true, false, "Epic: https://github.com/o/r/issues/55") + `]}}}`), nil
 		}
-		return []byte(`{"data":{"e0":{"issue":{"comments":{"nodes":[]}}},"e1":{"issue":{"comments":{"nodes":[` + goComment(51, "https://github.com/o/plans/pull/2", "c2", 4) + `]}}},` +
-			`"e2":null,"e3":{"issue":{"comments":{"nodes":[]}}},"e4":{"issue":{"comments":{"nodes":[]}}}}}`), nil
+		// A go comment on a public thread is anyone's: never read.
+		return []byte(`{"data":{"e0":{"isPrivate":true,"issue":{"comments":{"nodes":[]}}},"e1":{"isPrivate":true,"issue":{"comments":{"nodes":[` + goComment(51, "https://github.com/o/plans/pull/2", "c2", 4) + `]}}},` +
+			`"e2":null,"e3":{"isPrivate":false,"issue":{"comments":{"nodes":[` + goComment(53, "https://github.com/o/plans/pull/5", "e5", 5) + `]}}},"e4":{"isPrivate":true,"issue":{"comments":{"nodes":[]}}}}}`), nil
 	}}
 	snap := gatedBoard(t, order())
 	snap.Items = nil
@@ -244,7 +245,7 @@ func TestTheGoOfAnEpicPastItIsReadFromItsGoComment(t *testing.T) {
 	}
 	// One search, the comments and commits only for the epics past their
 	// go; one read of their threads.
-	if len(queries) != 2 || strings.Count(queries[0], "comments(last:50)") != 5 || !strings.Contains(queries[1], `e4:repository(owner:"o",name:"r"){issue(number:54)`) || strings.Contains(queries[1], "e5:") {
+	if len(queries) != 2 || strings.Count(queries[0], "comments(last:50)") != 5 || !strings.Contains(queries[1], `e4:repository(owner:"o",name:"r"){isPrivate issue(number:54)`) || strings.Contains(queries[1], "e5:") {
 		t.Errorf("queries %q", queries)
 	}
 }
