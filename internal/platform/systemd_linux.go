@@ -42,6 +42,9 @@ func current(o Options) Platform {
 // userManager points systemctl and systemd-run at the user's service manager.
 const userManager = "--user"
 
+// quietRun keeps systemd-run from printing the unit it started.
+const quietRun = "--quiet"
+
 // cgroupRoot is where cgroup v2 is mounted.
 const cgroupRoot = "/sys/fs/cgroup"
 
@@ -144,7 +147,7 @@ func (l systemdLauncher) Start(u Unit) error {
 // runArgs is systemd-run's command line for u; quiet counts every end of
 // it as success.
 func runArgs(u Unit, quiet bool) []string {
-	args := []string{userManager, "--collect", "--quiet", "--unit=" + u.Name}
+	args := []string{userManager, "--collect", quietRun, "--unit=" + u.Name}
 	if u.KeepChildren {
 		args = append(args, "-p", "KillMode=process")
 	} else {
@@ -318,7 +321,7 @@ func (systemdCapper) Command(name string, c Cap, argv []string) (*exec.Cmd, erro
 // the slot's slice, the memory cap, and the command at RunNice, which
 // systemd-run applies itself in --scope mode.
 func scopeArgs(name string, c Cap, argv []string) []string {
-	return append([]string{userManager, "--scope", "--quiet", "--expand-environment=no", "--unit=" + name,
+	return append([]string{userManager, "--scope", quietRun, "--expand-environment=no", "--unit=" + name,
 		"--slice=" + c.slice(), "--nice=" + strconv.Itoa(RunNice), "-p", "MemoryMax=" + c.Max, "-p", "MemorySwapMax=" + c.Swap,
 		"-p", "OOMPolicy=continue", "--"}, argv...)
 }
@@ -417,16 +420,25 @@ func (o systemdOpener) Running(t *proc.Table) time.Time {
 	return time.Time{}
 }
 
-// Open starts the app where the desktop starts it too, so it outlives the
-// unit or watch that started it.
+// Open runs the app where the desktop runs it too, in a scope of its own
+// under app.slice: a new app outlives the unit or watch that started it,
+// and the instance that hands url to a running app (a whole Electron start)
+// never counts against that unit's memory cap.
 func (o systemdOpener) Open(ctx context.Context, url string, running bool) error {
 	if running {
-		return exec.CommandContext(ctx, o.app, url).Run() //nolint:gosec // a claude:// link built from the state's local_ id
+		return exec.CommandContext(ctx, "systemd-run", openArgs(o.app, url, time.Now())...).Run() //nolint:gosec // a claude:// link built from the state's local_ id
 	}
-	c := exec.Command("systemd-run", userManager, "--scope", "--quiet", "--slice=app.slice", //nolint:gosec // as above
-		"--unit=app-com.anthropic.Claude-beekeeper-"+strconv.FormatInt(time.Now().Unix(), 10), o.app, url)
+	c := exec.Command("systemd-run", openArgs(o.app, url, time.Now())...) //nolint:gosec // as above
 	if err := c.Start(); err != nil {
 		return err
 	}
 	return c.Process.Release()
+}
+
+// openArgs is systemd-run's argument list for the app on url in a scope
+// named like the desktop's own, so its drop-ins apply, and collected
+// whether the app exits zero or not.
+func openArgs(app, url string, now time.Time) []string {
+	return []string{userManager, "--scope", quietRun, "--collect", "--slice=app.slice",
+		"--unit=app-com.anthropic.Claude-beekeeper-" + strconv.FormatInt(now.UnixNano(), 10), app, url}
 }
