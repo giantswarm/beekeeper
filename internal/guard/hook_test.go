@@ -693,6 +693,9 @@ func TestHookRefusesHiddenMerges(t *testing.T) {
 		{`bash -c 'devctl pr '"merge o/r 7" | tee m.json`, `bash -c '` + g + `devctl pr '"merge o/r 7" | tee m.json`, false},
 		{`bash -c "cd \"$D\"; "'devctl'" pr wait o/r 7"`, `bash -c "cd \"$D\"; "'` + g + `devctl'" pr wait o/r 7"`, false},
 		{`bash -c devctl\ pr\ merge\ o/r\ 7`, `bash -c ` + strings.ReplaceAll(g, " ", `\ `) + `devctl\ pr\ merge\ o/r\ 7`, false},
+		// $'…' escapes are decoded as bash decodes them.
+		{`bash -c $'\x64evctl pr merge o/r 7'`, `bash -c $'` + g + `\x64evctl pr merge o/r 7'`, false},
+		{`bash -c 'cd x;'$'\n\144evctl pr merge o/r 7'`, `bash -c 'cd x;'$'\n` + g + `\144evctl pr merge o/r 7'`, false},
 		// eval runs all its words, joined by spaces.
 		{`eval 'cd x;' devctl pr merge o/r 7`, `eval 'cd x;' ` + strings.ReplaceAll(g, " ", `\ `) + `devctl pr merge o/r 7`, false},
 		// A -c string the parser cannot resolve fails closed: the rest of the line is its text.
@@ -712,9 +715,17 @@ func TestHookRefusesHiddenMerges(t *testing.T) {
 	}
 	for _, cmd := range []string{`bash -c 'devctl pr view o/r 7'`, `bash -c 'echo ok' && echo "devctl pr merge o/r 7"`, `ssh -c aes x`,
 		// Words after a -c string are its arguments, not its text; a joined string without a merge runs none.
-		`bash -c 'echo "$@"' _ devctl pr merge o/r 7`, `bash -c 'cd x; '"devctl pr view o/r 7"`, `bash -c "$(cat run.sh)"`} {
+		`bash -c 'echo "$@"' _ devctl pr merge o/r 7`, `bash -c 'cd x; '"devctl pr view o/r 7"`, `bash -c "$(cat run.sh)"`,
+		`bash -c $'echo \'devctl\tpr view\''`} {
 		if d := decide(t, h, t.TempDir(), cmd, nil); d != nil && d.PermissionDecision == decisionDeny {
 			t.Errorf("%q is refused: %s", cmd, d.Reason)
+		}
+	}
+	// A string the parser cannot resolve that names devctl ungated fails closed.
+	for _, cmd := range []string{`bash -c "$(echo devctl) pr merge o/r 7"`, "sh -c \"`printf devctl` release promote o/r\"",
+		`bash -c 'x=1; '"$(printf '%s' ~/bin/devctl) pr wait o/r 7"`} {
+		if d := decide(t, h, t.TempDir(), cmd, nil); d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "cannot read") {
+			t.Errorf("%q: got %+v, want a refusal", cmd, d)
 		}
 	}
 }

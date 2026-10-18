@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/giantswarm/beekeeper/internal/lease"
@@ -363,9 +364,14 @@ func (h Hook) decide(ev event) []byte {
 	}
 	bg, _ := ev.ToolInput[backgroundKey].(bool)
 	cmd, gated := h.gate(cmd, bg)
-	if fixed, ok := h.hiddenMerges(cmd, bg); ok {
+	fixed, hidden, unread := h.hiddenMerges(cmd, bg)
+	if hidden {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused: a devctl pr merge, release promote, pr wait, release wait or rollout wait " +
 			"inside a shell's -c or eval string runs outside the gate. Run it as its own command, or with the gate written in:\n" + fixed})
+	}
+	if unread {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused: a shell's -c or eval string names devctl in a form the merge gate cannot read " +
+			"(a command substitution, a quote left open), so a merge, promote or wait in it would run outside the gate. Run devctl as its own command."})
 	}
 	if r := h.ungatedRefusal(cmd, cwd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
@@ -472,7 +478,9 @@ func shellReads(sc shellScan, segs []segment, op int) bool {
 // is text, inside a quoted argument or a here-document no shell reads (a PR
 // body naming one), runs nothing.
 // The hook refuses such a command rather than rewriting a quoted string.
-func (h Hook) hiddenMerges(cmd string, bg bool) (string, bool) {
+// unread reports a string the parser cannot resolve that names devctl other
+// than gated: what it runs is unknown, so it fails closed.
+func (h Hook) hiddenMerges(cmd string, bg bool) (fixed string, hidden, unread bool) {
 	sc := scanShell(cmd)
 	content := contentBodies(sc)
 	var at []int
@@ -482,38 +490,58 @@ func (h Hook) hiddenMerges(cmd string, bg bool) (string, bool) {
 		if w == len(cmd) || inRanges(content, w) || sc.masked[w] != cmd[w] && !inHeredoc(sc, w) {
 			continue
 		}
-		text, offs, unquoted := commandString(cmd[w:], m[2] >= 0)
-		for _, mm := range anyOwned.FindAllStringIndex(text, -1) {
-			if !gated.MatchString(text[:mm[0]]) && !slices.Contains(at, w+offs[mm[0]]) {
-				at = append(at, w+offs[mm[0]])
-				bare[w+offs[mm[0]]] = unquoted[mm[0]]
+		cs := commandString(cmd[w:], m[2] >= 0)
+		var owned []int
+		for _, mm := range anyOwned.FindAllStringIndex(cs.text, -1) {
+			owned = append(owned, mm[0])
+			if at1 := w + cs.offs[mm[0]]; !gated.MatchString(cs.text[:mm[0]]) && !slices.Contains(at, at1) {
+				at = append(at, at1)
+				bare[at1] = cs.bare[mm[0]]
 			}
+		}
+		if cs.resolved {
+			continue
+		}
+		for _, mm := range devctlMention.FindAllStringIndex(cs.text, -1) {
+			unread = unread || !slices.Contains(owned, mm[0]) && !gated.MatchString(cs.text[:mm[0]])
 		}
 	}
 	slices.Sort(at)
-	return h.insertGate(cmd, at, bg, bare), len(at) > 0
+	return h.insertGate(cmd, at, bg, bare), len(at) > 0, unread
+}
+
+// cString is a shell's -c or eval command string as the shell builds it: its
+// text, the offset in the command line's word of each byte, and whether each
+// stands bare (unquoted). resolved is false for a string the parser cannot
+// resolve, whose text is the rest of the line as written.
+type cString struct {
+	text     string
+	offs     []int
+	bare     []bool
+	resolved bool
 }
 
 // commandString is the command string a shell's -c option or eval runs from
-// s, the text from its first word on: the word with its quotes removed and
-// its adjacent single-quoted, double-quoted, $'…' and bare pieces joined (for
-// eval every word up to the end of its command, joined by a space), the
-// offset in s of each of its bytes, and whether each stands bare (unquoted).
-// A word the parser cannot resolve (a quote left open, a command
-// substitution, an escape in $'…') fails closed: the rest of s, as written.
-func commandString(s string, eval bool) (string, []int, []bool) {
+// s, the text from its first word on: the word with its quotes removed, $'…'
+// escapes decoded, and its adjacent single-quoted, double-quoted, $'…' and
+// bare pieces joined (for eval every word up to the end of its command,
+// joined by a space). A word the parser cannot resolve (a quote left open, a
+// command substitution) fails closed: the rest of s, as written, unresolved.
+func commandString(s string, eval bool) cString {
 	var text []byte
 	var offs []int
 	var bare []bool
-	put := func(i int, unquoted bool) {
-		text, offs, bare = append(text, s[i]), append(offs, i), append(bare, unquoted)
+	add := func(b byte, i int, unquoted bool) {
+		text, offs, bare = append(text, b), append(offs, i), append(bare, unquoted)
 	}
-	unresolved := func() (string, []int, []bool) {
+	put := func(i int, unquoted bool) { add(s[i], i, unquoted) }
+	done := func() cString { return cString{string(text), offs, bare, true} }
+	unresolved := func() cString {
 		offs, bare = make([]int, len(s)), make([]bool, len(s))
 		for i := range offs {
 			offs[i] = i
 		}
-		return s, offs, bare
+		return cString{s, offs, bare, false}
 	}
 	const ends = "\n;&|()<>"
 	for i := 0; i < len(s); {
@@ -525,13 +553,12 @@ func commandString(s string, eval bool) (string, []int, []bool) {
 				j++
 			}
 			if !eval || j == len(s) || strings.IndexByte(ends, s[j]) >= 0 {
-				return string(text), offs, bare
+				return done()
 			}
-			put(i, true)
-			text[len(text)-1] = ' '
+			add(' ', i, true)
 			i = j
 		case strings.IndexByte(ends, c) >= 0:
-			return string(text), offs, bare
+			return done()
 		case c == '`', c == '$' && strings.HasPrefix(s[i:], "$("):
 			return unresolved()
 		case c == '\'':
@@ -544,14 +571,22 @@ func commandString(s string, eval bool) (string, []int, []bool) {
 			}
 			i += j + 2
 		case c == '$' && strings.HasPrefix(s[i:], "$'"):
-			j := strings.IndexByte(s[i+2:], '\'')
-			if j < 0 || strings.IndexByte(s[i+2:i+2+j], '\\') >= 0 {
+			for i += 2; i < len(s) && s[i] != '\''; {
+				if s[i] != '\\' {
+					put(i, false)
+					i++
+					continue
+				}
+				b, n := ansiC(s[i:])
+				for _, x := range b {
+					add(x, i, false)
+				}
+				i += n
+			}
+			if i >= len(s) {
 				return unresolved()
 			}
-			for k := i + 2; k < i+2+j; k++ {
-				put(k, false)
-			}
-			i += j + 3
+			i++
 		case c == '"':
 			for i++; i < len(s) && s[i] != '"'; i++ {
 				switch {
@@ -579,7 +614,55 @@ func commandString(s string, eval bool) (string, []int, []bool) {
 			i++
 		}
 	}
-	return string(text), offs, bare
+	return done()
+}
+
+// devctlMention: devctl named anywhere, by name or path.
+var devctlMention = regexp.MustCompile(`(?:(?:~|\.\.?|\$\{?\w+\}?)?/(?:[^\s;&|()'"<>=]*/)?)?devctl\b`)
+
+// ansiC decodes the escape s starts with inside $'…', as bash does: the bytes
+// it stands for and its length in s.
+func ansiC(s string) ([]byte, int) {
+	if len(s) < 2 {
+		return []byte(s), len(s)
+	}
+	if b, ok := map[byte]byte{'a': 7, 'b': 8, 'e': 27, 'E': 27, 'f': 12, 'n': '\n', 'r': '\r', 't': '\t', 'v': 11,
+		'\\': '\\', '\'': '\'', '"': '"', '?': '?'}[s[1]]; ok {
+		return []byte{b}, 2
+	}
+	const octal, hex = "01234567", "0123456789abcdefABCDEF"
+	digits := func(from, most int, set string) (uint64, int) {
+		n := from
+		for n < len(s) && n < from+most && strings.IndexByte(set, s[n]) >= 0 {
+			n++
+		}
+		base := 16
+		if set == octal {
+			base = 8
+		}
+		v, _ := strconv.ParseUint(s[from:n], base, 32)
+		return v, n
+	}
+	switch c := s[1]; {
+	case c >= '0' && c <= '7':
+		v, n := digits(1, 3, octal)
+		return []byte{byte(v)}, n
+	case c == 'x':
+		if v, n := digits(2, 2, hex); n > 2 {
+			return []byte{byte(v)}, n
+		}
+	case c == 'u' || c == 'U':
+		most := 4
+		if c == 'U' {
+			most = 8
+		}
+		if v, n := digits(2, most, hex); n > 2 {
+			return []byte(string(rune(v))), n
+		}
+	case c == 'c' && len(s) > 2:
+		return []byte{s[2] & 0x1f}, 3
+	}
+	return []byte(s[:2]), 2
 }
 
 // insertGate puts the gate before each offset in at, in ascending order; a
