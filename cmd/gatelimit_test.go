@@ -63,7 +63,7 @@ func TestAGateAtItsToolLimitLeavesTheMergeRunning(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := &app{cfg: g.cfg, store: g.store, now: time.Now()}
-	recorded, lost := w.recordGone(context.Background())
+	recorded, _, lost := w.recordGone(context.Background())
 	if len(recorded) != 1 || !strings.Contains(recorded[0], "o/r#7 exit 0, release v1.2.4") || len(lost) != 0 {
 		t.Fatalf("recorded %q, lost %+v", recorded, lost)
 	}
