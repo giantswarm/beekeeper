@@ -290,8 +290,16 @@ func (p Plans) Covers(repo string) bool {
 	return slices.ContainsFunc(p.Repositories, func(r string) bool { return strings.EqualFold(r, repo) })
 }
 
-// AppName is the placeholder of the App's name in Apps.Manifest.
+// AppName is the placeholder of the App's name in Apps.Manifest, and of
+// the purpose in Apps.Template.
 const AppName = "{name}"
+
+// The placeholders a manifest template's strings may carry: the
+// installation's name and its base domain.
+const (
+	AppInstallation = "{installation}"
+	AppBaseDomain   = "{baseDomain}"
+)
 
 // Apps is the repository that declares the organisation's GitHub Apps, one
 // manifest each (GitHub's App manifest: name, callback_urls). Unset, `app
@@ -303,6 +311,10 @@ type Apps struct {
 	// Manifest is an App's manifest's path in Repo, AppName standing for
 	// the App's name.
 	Manifest string `yaml:"manifest"`
+	// Template is the path in Repo of the manifest template of a purpose
+	// whose Apps exist once per installation, AppName standing for the
+	// purpose; unset, Manifest's file with .template.json for .json.
+	Template string `yaml:"template"`
 	// Secrets are, by installation, the SOPS file of the Kubernetes Secret
 	// an App's credentials go into (beekeeper secret github-app).
 	Secrets map[string]AppSecret `yaml:"secrets"`
@@ -325,6 +337,23 @@ func (a Apps) ManifestOf(name string) string {
 		return ""
 	}
 	return strings.ReplaceAll(a.Manifest, AppName, name)
+}
+
+// TemplateOf is the path of the manifest template of purpose in Repo, ""
+// while the declaring repository or the path is unset.
+func (a Apps) TemplateOf(purpose string) string {
+	tmpl := a.Template
+	if tmpl == "" {
+		base, ok := strings.CutSuffix(a.Manifest, ".json")
+		if !ok {
+			return ""
+		}
+		tmpl = base + ".template.json"
+	}
+	if a.Repo == "" || !strings.Contains(tmpl, AppName) {
+		return ""
+	}
+	return strings.ReplaceAll(tmpl, AppName, purpose)
 }
 
 // Board is a GitHub project board and the order its work is picked in.

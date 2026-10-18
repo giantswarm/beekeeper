@@ -137,6 +137,10 @@ func (systemdSetup) Stop(path string) []string {
 	return []string{systemctl, userManager, "disable", "--now", filepath.Base(path)}
 }
 
+func (systemdSetup) Halt(path string) []string {
+	return []string{systemctl, userManager, "stop", filepath.Base(path)}
+}
+
 // Restart restarts the unit after the reload: disable would also remove a
 // unit file that is a symlink out of the unit directory (a linked unit).
 func (systemdSetup) Restart(path string) [][]string {

@@ -1551,12 +1551,16 @@ func (w *watcher) stalls() {
 }
 
 // lostMerges records the outcome of each running merge whose gate process
-// and devctl are gone (recordGone), one MERGE RECORDED or MERGE LOST line
-// each. The gate itself prunes a lost merge only when the lane's next merge
-// arrives, and until then the lane shows a merge running that no process
-// runs.
+// and devctl are gone (recordGone), one MERGE CUT, MERGE RECORDED or MERGE
+// LOST line each; a cut run's owed outcome wakes its owner in the same poll
+// (owedOutcomes). The gate itself prunes a lost merge only when the lane's
+// next merge arrives, and until then the lane shows a merge running that no
+// process runs.
 func (w *watcher) lostMerges(ctx context.Context) {
-	recorded, lost := w.recordGone(ctx)
+	recorded, cut, lost := w.recordGone(ctx)
+	for _, d := range cut {
+		w.emitNow("lanes", "MERGE CUT: %s", d)
+	}
 	for _, d := range recorded {
 		w.emitNow("lanes", "MERGE RECORDED: %s", d)
 	}
