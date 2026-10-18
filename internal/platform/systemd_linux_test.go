@@ -37,6 +37,22 @@ func TestOpenerRunning(t *testing.T) {
 	}
 }
 
+// The app runs in a collected scope of its own under app.slice, named so
+// the desktop scope's drop-ins apply, never in the caller's cgroup.
+func TestOpenArgs(t *testing.T) {
+	now := time.Unix(1760805743, 123)
+	got := openArgs("claude-desktop", "claude://resume?session=local_1", now)
+	want := []string{"--user", "--scope", "--quiet", "--collect", "--slice=app.slice",
+		"--unit=app-com.anthropic.Claude-beekeeper-1760805743000000123", "claude-desktop", "claude://resume?session=local_1"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("openArgs = %q, want %q", got, want)
+	}
+	unit := strings.TrimPrefix(got[5], "--unit=") + ".scope"
+	if p, ok := scopePrefix(unit); !ok || !strings.HasPrefix(p, "app-com.anthropic.Claude-") {
+		t.Errorf("scope %s: prefix %q, want one under app-com.anthropic.Claude-", unit, p)
+	}
+}
+
 // The properties a slot's cap sets: memcap.slice's CPU budget first, with
 // a CPUWeight, then the slot slice's memory; a scope's systemd-run
 // arguments carry the slot's slice, the memory cap and RunNice.

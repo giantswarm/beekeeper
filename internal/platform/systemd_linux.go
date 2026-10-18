@@ -417,16 +417,25 @@ func (o systemdOpener) Running(t *proc.Table) time.Time {
 	return time.Time{}
 }
 
-// Open starts the app where the desktop starts it too, so it outlives the
-// unit or watch that started it.
+// Open runs the app where the desktop runs it too, in a scope of its own
+// under app.slice: a new app outlives the unit or watch that started it,
+// and the instance that hands url to a running app (a whole Electron start)
+// never counts against that unit's memory cap.
 func (o systemdOpener) Open(ctx context.Context, url string, running bool) error {
 	if running {
-		return exec.CommandContext(ctx, o.app, url).Run() //nolint:gosec // a claude:// link built from the state's local_ id
+		return exec.CommandContext(ctx, "systemd-run", openArgs(o.app, url, time.Now())...).Run() //nolint:gosec // a claude:// link built from the state's local_ id
 	}
-	c := exec.Command("systemd-run", userManager, "--scope", "--quiet", "--slice=app.slice", //nolint:gosec // as above
-		"--unit=app-com.anthropic.Claude-beekeeper-"+strconv.FormatInt(time.Now().Unix(), 10), o.app, url)
+	c := exec.Command("systemd-run", openArgs(o.app, url, time.Now())...) //nolint:gosec // as above
 	if err := c.Start(); err != nil {
 		return err
 	}
 	return c.Process.Release()
+}
+
+// openArgs is systemd-run's argument list for the app on url in a scope
+// named like the desktop's own, so its drop-ins apply, and collected
+// whether the app exits zero or not.
+func openArgs(app, url string, now time.Time) []string {
+	return []string{userManager, "--scope", "--quiet", "--collect", "--slice=app.slice",
+		"--unit=app-com.anthropic.Claude-beekeeper-" + strconv.FormatInt(now.UnixNano(), 10), app, url}
 }
