@@ -2,7 +2,7 @@
 #
 #    devctl
 #
-#    https://github.com/giantswarm/devctl/tree/v8.145.0-rc.3
+#    https://github.com/giantswarm/devctl/blob/04334ff66e688e6562a10436ad17ea55631ac849/pkg/gen/input/workflows/internal/file/chart_tests.yaml.template
 #
 
 name: chart-tests

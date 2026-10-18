@@ -2,7 +2,7 @@
 #
 #    devctl
 #
-#    https://github.com/giantswarm/devctl/tree/v8.145.0-rc.3
+#    https://github.com/giantswarm/devctl/blob/5271fd6c7de989d9776e7af86a4d89c94c9274f3/pkg/gen/input/workflows/internal/file/cliff.toml.template
 #
 # git-cliff config for the push-based auto-release flow.
 #
