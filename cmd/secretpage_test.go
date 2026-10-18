@@ -39,6 +39,7 @@ const (
 func fakePageClaude(args []string) int {
 	dir := os.Getenv("FAKE_PAGE_DIR")
 	value := os.Getenv("FAKE_PAGE_VALUE")
+	shown := strings.TrimSpace(value + " " + os.Getenv("FAKE_PAGE_VALUE2"))
 	_ = os.WriteFile(filepath.Join(dir, "argv"), []byte(strings.Join(args, "\x00")), 0o600) //nolint:gosec // the fake turn's own files
 	var id, settings string
 	for i := 0; i+1 < len(args); i++ {
@@ -81,10 +82,10 @@ func fakePageClaude(args []string) int {
 	if path := os.Getenv("FAKE_PAGE_DOWNLOAD"); path != "" && value != "" {
 		_ = os.WriteFile(path, []byte(value), 0o600) //nolint:gosec // the fake turn's own files
 	} else if value != "" {
-		answers += hook(guard.PostToolUseEvent, scriptTool, map[string]any{}, json.RawMessage(`[{"type":"text","text":"[\"`+value+`\"]"}]`))
+		answers += hook(guard.PostToolUseEvent, scriptTool, map[string]any{}, json.RawMessage(`[{"type":"text","text":"`+shown+`"}]`))
 	}
 	_ = os.WriteFile(filepath.Join(dir, "hook"), []byte(answers), 0o600) //nolint:gosec // the fake turn's own files
-	transcript := chromeUse("t1", scriptTool, `{"text":"reader"}`) + chromeAnswer("t1", "page shows "+value)
+	transcript := chromeUse("t1", scriptTool, `{"text":"reader"}`) + chromeAnswer("t1", "page shows "+shown)
 	project := filepath.Join(os.Getenv("FAKE_PAGE_PROJECTS"), "p")
 	_ = os.MkdirAll(project, 0o700)                                                  //nolint:gosec // the fake turn's own files
 	_ = os.WriteFile(filepath.Join(project, id+".jsonl"), []byte(transcript), 0o600) //nolint:gosec // the fake turn's own files
@@ -112,8 +113,17 @@ func capturePageApp(t *testing.T, value string) (*app, *clipboardTools, string, 
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("FAKE_PAGE_DIR", dir)
 	t.Setenv("FAKE_PAGE_VALUE", value)
+	t.Setenv("FAKE_PAGE_VALUE2", "")
 	t.Setenv("FAKE_PAGE_PROJECTS", a.cfg.Claude.ProjectsDir)
 	t.Setenv("FAKE_PAGE_DOWNLOAD", "")
+	// a unix socket's path is short (104 bytes on macOS): the capture's
+	// socket goes under a short runtime directory of the test's own
+	run, err := os.MkdirTemp("/tmp", "bkp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(run) })
+	t.Setenv("XDG_RUNTIME_DIR", run)
 	cfg := filepath.Join(dir, "config.yaml")
 	writeFile(t, cfg, "stateDir: "+filepath.Join(dir, "state")+"\n")
 	t.Setenv("BEEKEEPER_CONFIG", cfg)
@@ -151,7 +161,7 @@ func TestSecretPageCapturesTheValueBlind(t *testing.T) {
 	}
 	if strings.Contains(out, pageValue) || !strings.Contains(out, "Clicked Create; the dialog showed "+guard.CaptureMask) ||
 		!strings.Contains(out, fmt.Sprintf("wrote %s: %d bytes, hmac:", pageRef, len(pageValue))) ||
-		!strings.Contains(out, "the turn's transcript held it 1 times, now masked") {
+		!strings.Contains(out, "1 places in the turn's transcript masked") {
 		t.Errorf("the answer:\n%s", out)
 	}
 	hook, _ := os.ReadFile(filepath.Join(dir, "hook")) //nolint:gosec // the test's own file
@@ -185,7 +195,8 @@ func TestSecretPageCapturesTheValueBlind(t *testing.T) {
 }
 
 // A turn that leaves no value stores nothing and says the page may hold a
-// new value no vault records.
+// new value no vault records; a page that shows two values gives none, and
+// both are masked in the report and the transcript all the same.
 func TestSecretPageWithoutAValueStoresNothing(t *testing.T) {
 	a, c, _, _ := capturePageApp(t, "")
 	out, err := runSecret(a, pageOp, pageRef, "--create", pageCreate, "--match", pageMatchQ, "--", pageSteps)
@@ -194,6 +205,31 @@ func TestSecretPageWithoutAValueStoresNothing(t *testing.T) {
 	}
 	if _, ok := c.Vault[pageRef]; ok {
 		t.Error("something was stored")
+	}
+
+	other := strings.Replace(pageValue, "uv", "zz", 1)
+	a, c, _, dir := capturePageApp(t, pageValue)
+	t.Setenv("FAKE_PAGE_VALUE2", other)
+	out, err = runSecret(a, pageOp, pageRef, "--create", pageCreate, "--match", pageMatchQ, "--", pageSteps)
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "found no value on the page") {
+		t.Errorf("page with two values: %v\n%s", err, out)
+	}
+	if _, ok := c.Vault[pageRef]; ok {
+		t.Error("one of two values was stored")
+	}
+	hook, _ := os.ReadFile(filepath.Join(dir, "hook")) //nolint:gosec // the test's own file
+	transcripts, _ := filepath.Glob(filepath.Join(a.cfg.Claude.ProjectsDir, "*", "*.jsonl"))
+	if len(transcripts) != 1 {
+		t.Fatalf("transcripts %q", transcripts)
+	}
+	tr, _ := os.ReadFile(transcripts[0]) //nolint:gosec // the test's own file
+	for what, text := range map[string]string{"the answer": out, "the hook's answer": string(hook), "the transcript": string(tr)} {
+		if strings.Contains(text, pageValue) || strings.Contains(text, other) {
+			t.Errorf("%s carries a value:\n%s", what, text)
+		}
+	}
+	if !strings.Contains(string(hook), "2 different values") {
+		t.Errorf("the hook answered:\n%s", hook)
 	}
 }
 

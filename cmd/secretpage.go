@@ -61,13 +61,15 @@ client secret or private key, an API key a provider's console shows on
 creation. An agent runs it while it holds the browser lease.
 
 It runs the steps in a capture turn, a beekeeper browse turn (its tools
-and rules, beekeeper browse --help) made blind: the turn has no
-screenshot, zoom, page text, page read or traffic read; it finds its
-controls with find and clicks them by ref; the one script it runs is
-beekeeper's reader, which answers the matches of --match on the page. The
+and rules, beekeeper browse --help) made blind: its hook passes an allow
+list of Chrome calls alone, so the turn has no screenshot, zoom, page
+text, page read, traffic read or batch, no copy or paste key and no
+navigate but to an http or https page; it finds its controls with find
+and clicks them by ref; the one script it runs is beekeeper's reader,
+which answers the matches of --match on the page. The
 turn's own hook, a beekeeper process, takes the one match from the reader's
 result and hands it over a private socket to this process; every result
-reaches the model with images dropped and every match and every run of 24
+reaches the model with images dropped and every match and every run of 16
 or more token characters masked. The declared create (--create, or the
 preset's) is the one creating click the turn's auto mode allows.
 
@@ -79,7 +81,8 @@ The value goes into the field through the vault keeper's session
 (secret.session) or the service account, as beekeeper secret store writes
 one, the item created when absent. Afterwards the turn's transcript and
 report carry the value nowhere: each place it appears is replaced by a mask
-before the report is printed. page answers the field, the length and the
+before the report is printed, and so is every match of --match, a stored
+value or not. page answers the field, the length and the
 keyed fingerprint; beekeeper log records them with the source.
 
 Presets name the page and the value:
@@ -224,24 +227,27 @@ func (a *app) secretPage(ctx context.Context, ref secret.Ref, pc pageCapture, wa
 	} else {
 		err = refused("%v; nothing stored: the page may now hold %s that no vault records", err, pc.create)
 	}
-	scrubbed := 0
+	// every value the page showed is masked, the stored one or not: each
+	// the hook delivered, each match of the pattern
+	hide := taken.all()
 	if value != "" {
-		scrubbed = scrubTranscript(transcriptOf(a.cfg, blind.id), value)
-		if err == nil && pc.download != "" {
-			err = secret.Shred(from)
-		}
+		hide = append(hide, value)
 	}
-	report := scrub(blind.out.String(), value)
+	scrubbed := scrubTranscript(transcriptOf(a.cfg, blind.id), pc.match, hide)
+	if value != "" && err == nil && pc.download != "" {
+		err = secret.Shred(from)
+	}
+	report := scrub(blind.out.String(), pc.match, hide)
 	if _, werr := fmt.Fprint(a.out, report); werr != nil {
 		return werr
 	}
-	done := fmt.Sprintf("%d bytes, %s; transcript scrubbed of %d", stored.Bytes, stored.Fingerprint, scrubbed)
+	done := fmt.Sprintf("%d bytes, %s; %d transcript places masked", stored.Bytes, stored.Fingerprint, scrubbed)
 	if err := a.secretLog(err, pageOp, "%s from %s (%s): %s", ref, from, pc.create, outcome(err, done)); err != nil {
 		return errors.Join(err, terr)
 	}
 	// the value is stored; the turn's own failure (a tab left open) still
 	// fails the call
-	if err := a.secretPrint(stored, fmt.Sprintf("wrote %s: %d bytes, %s (from %s; the turn's transcript held it %d times, now masked)\n",
+	if err := a.secretPrint(stored, fmt.Sprintf("wrote %s: %d bytes, %s (from %s; %d places in the turn's transcript masked)\n",
 		stored.Ref, stored.Bytes, stored.Fingerprint, from, scrubbed)); err != nil {
 		return err
 	}
@@ -277,6 +283,16 @@ type pageValues struct {
 	values []string
 }
 
+// all are the values delivered; none on a capture without a pattern.
+func (p *pageValues) all() []string {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Clone(p.values)
+}
+
 // one is the single value delivered, or why there is none.
 func (p *pageValues) one() (string, error) {
 	p.mu.Lock()
@@ -304,6 +320,10 @@ func listenForValue(fallback string) (string, *pageValues, func(), error) {
 		return "", nil, nil, err
 	}
 	path := filepath.Join(dir, "s")
+	if len(path) > maxSocketPath {
+		_ = os.RemoveAll(dir) //nolint:gosec // the directory MkdirTemp made
+		return "", nil, nil, fmt.Errorf("the capture's socket %s is longer than a unix socket's %d bytes: set XDG_RUNTIME_DIR to a short directory", path, maxSocketPath)
+	}
 	l, err := net.Listen("unix", path)
 	if err != nil {
 		_ = os.RemoveAll(dir) //nolint:gosec // the directory MkdirTemp made
@@ -337,15 +357,23 @@ func listenForValue(fallback string) (string, *pageValues, func(), error) {
 	return path, got, func() { _ = l.Close(); _ = os.RemoveAll(dir) }, nil //nolint:gosec // the directory MkdirTemp made
 }
 
+// maxSocketPath is the longest unix socket path every platform binds
+// (macOS's sun_path, 104 bytes with its terminator).
+const maxSocketPath = 103
+
+// deliverTimeout bounds the hook's delivery well inside its own timeout
+// (captureHookTimeout): the masked answer never waits on it.
+const deliverTimeout = 3 * time.Second
+
 // deliverValue hands the value to the capture's socket: the capture turn's
 // hook, a beekeeper process, calls it.
 func deliverValue(socket, value string) error {
-	c, err := net.DialTimeout("unix", socket, 5*time.Second)
+	c, err := net.DialTimeout("unix", socket, deliverTimeout)
 	if err != nil {
 		return fmt.Errorf("beekeeper secret page is not listening: %w", err)
 	}
 	defer func() { _ = c.Close() }()
-	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+	_ = c.SetDeadline(time.Now().Add(deliverTimeout))
 	b, _ := json.Marshal(value)
 	if _, err := c.Write(append(b, '\n')); err != nil {
 		return err
@@ -360,32 +388,42 @@ func deliverValue(socket, value string) error {
 	return nil
 }
 
-// scrub is text with every form of value (as written, and JSON-escaped as
-// a transcript holds a multi-line one) replaced by the mask.
-func scrub(text, value string) string {
-	if value == "" {
-		return text
+// scrub is text with every match of the pattern and every form of each
+// value (as written, and JSON-escaped as a transcript holds a multi-line
+// one) replaced by the mask.
+func scrub(text, match string, values []string) string {
+	if match != "" {
+		if re, err := regexp.Compile(match); err == nil {
+			text = re.ReplaceAllString(text, guard.CaptureMask)
+		}
 	}
-	for _, form := range valueForms(value) {
-		text = strings.ReplaceAll(text, form, guard.CaptureMask)
+	for _, v := range values {
+		for _, form := range valueForms(v) {
+			text = strings.ReplaceAll(text, form, guard.CaptureMask)
+		}
 	}
 	return text
 }
 
 // valueForms are the forms value takes in a transcript: as written, and
-// JSON-escaped, each trimmed of surrounding whitespace.
+// JSON-escaped, each trimmed of surrounding whitespace; none for "".
 func valueForms(value string) []string {
-	forms := []string{strings.TrimSpace(value)}
-	b, _ := json.Marshal(strings.TrimSpace(value))
-	if esc := string(b[1 : len(b)-1]); esc != forms[0] {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		return nil
+	}
+	forms := []string{v}
+	b, _ := json.Marshal(v)
+	if esc := string(b[1 : len(b)-1]); esc != v {
 		forms = append(forms, esc)
 	}
 	return forms
 }
 
-// scrubTranscript replaces every form of value in the transcript by the
-// mask and answers how many it replaced; 0 for a transcript it cannot read.
-func scrubTranscript(path, value string) int {
+// scrubTranscript masks every match of the pattern and every form of each
+// value in the transcript and answers how many places it masked; 0 for a
+// transcript it cannot read.
+func scrubTranscript(path, match string, values []string) int {
 	if path == "" {
 		return 0
 	}
@@ -393,18 +431,17 @@ func scrubTranscript(path, value string) int {
 	if err != nil {
 		return 0
 	}
-	text, n := string(raw), 0
-	for _, form := range valueForms(value) {
-		n += strings.Count(text, form)
-	}
-	if n == 0 {
+	text := string(raw)
+	out := scrub(text, match, values)
+	if out == text {
 		return 0
 	}
+	n := strings.Count(out, guard.CaptureMask) - strings.Count(text, guard.CaptureMask)
 	fi, err := os.Stat(path)
 	if err != nil {
 		return 0
 	}
-	if err := os.WriteFile(path, []byte(scrub(text, value)), fi.Mode().Perm()); err != nil { //nolint:gosec // the capture turn's own transcript
+	if err := os.WriteFile(path, []byte(out), fi.Mode().Perm()); err != nil { //nolint:gosec // the capture turn's own transcript
 		return 0
 	}
 	return n
@@ -442,6 +479,11 @@ func (b *blindTurn) shape(argv []string, self string) []string {
 	return out
 }
 
+// captureHookTimeout is the capture hook's timeout in seconds, far above
+// its delivery's deliverTimeout: a hook Claude Code stops passes the
+// result unmasked.
+const captureHookTimeout = 30
+
 // disallowedToolsFlag removes tools from a turn.
 const disallowedToolsFlag = "--disallowedTools"
 
@@ -465,7 +507,7 @@ func (b *blindTurn) settings(base, self string) string {
 		Command string `json:"command"`
 		Timeout int    `json:"timeout"`
 	}
-	entry := []any{map[string]any{"matcher": chromeToolPrefix + ".*", hooksKey: []hook{{Type: hookTypeCommand, Command: command, Timeout: 15}}}}
+	entry := []any{map[string]any{"matcher": chromeToolPrefix + ".*", hooksKey: []hook{{Type: hookTypeCommand, Command: command, Timeout: captureHookTimeout}}}}
 	hooks["PreToolUse"], hooks["PostToolUse"] = entry, entry
 	s[hooksKey] = hooks
 	out, _ := json.Marshal(s)

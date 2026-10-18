@@ -43,8 +43,10 @@ func quoted(s string) string {
 }
 
 // A capture turn sees no pixels and no page text beyond find's: the hook
-// refuses a screenshot, a zoom, a page read, a batch and every script but
-// the reader; a click, a find and the reader itself pass.
+// passes the calls its allow list names and refuses every other, a
+// screenshot, a zoom, a page read, a batch, a copy or paste key, a navigate
+// to a javascript: URL and every script but the reader; a click, a key, a
+// find, a navigate and the reader itself pass.
 func TestCapturePageRefusesReads(t *testing.T) {
 	c := Capture{Pattern: regexp.MustCompile(pageMatch)}
 	for _, call := range []struct {
@@ -60,6 +62,13 @@ func TestCapturePageRefusesReads(t *testing.T) {
 		{chromeScript, `{"text":"document.body.innerText"}`, true},
 		{chromeScript, `{"text":` + quoted(" "+ReaderScript(pageMatch)+"\n") + `}`, false},
 		{chromeComputer, `{"action":"left_click","ref":"ref_3"}`, false},
+		{chromeComputer, `{"action":"key","text":"ctrl+c"}`, true},
+		{chromeComputer, `{"action":"key","text":"cmd+shift+v"}`, true},
+		{chromeComputer, `{"action":"key","text":"Return"}`, false},
+		{chromeNavigation, `{"url":"javascript:document.title=document.body.innerText"}`, true},
+		{chromeNavigation, `{"url":"back"}`, false},
+		{"upload_image", `{}`, true},
+		{"made_up_tool", `{}`, true},
 		{"find", `{"query":"Create Key button"}`, false},
 		{chromeNavigation, `{"url":"https://console.example/"}`, false},
 	} {

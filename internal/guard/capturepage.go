@@ -19,10 +19,22 @@ var BlindReads = []string{
 	"gif_creator", "upload_image", "file_upload", "shortcuts_execute", chromeBatch,
 }
 
-// tokenRun is a run of token characters long enough to be a credential (an
-// API key, a client secret, a private key's base64 line): a capture turn's
-// results carry each as CaptureMask.
-var tokenRun = regexp.MustCompile(`[A-Za-z0-9_+=-]{24,}`)
+// captureTools are the Chrome tools a capture turn may call, each by its
+// name after the server's prefix; every other call is refused. computer
+// passes without its picture actions and its copy and paste keys, navigate
+// with an http or https URL alone, javascript_tool with the reader alone.
+var captureTools = []string{
+	"find", chromeComputer, chromeNavigation, chromeForm, chromeScript, "resize_window",
+	"tabs_context_mcp", "tabs_create_mcp", "tabs_close_mcp", "list_connected_browsers", "select_browser", "switch_browser",
+}
+
+// clipboardKey is a key press that copies, cuts, pastes or selects all.
+var clipboardKey = regexp.MustCompile(`(?i)\b(?:ctrl|cmd|meta|super)\+(?:shift\+)?[acvx]\b`)
+
+// tokenRun is a run of token characters long enough to be a piece of a
+// credential (an API key, a client secret, a private key's base64 line): a
+// capture turn's results carry each as CaptureMask.
+var tokenRun = regexp.MustCompile(`[A-Za-z0-9_+=-]{16,}`)
 
 // CaptureMask stands for a token run, or the captured value, in a capture
 // turn's result and transcript.
@@ -50,8 +62,9 @@ type Capture struct {
 }
 
 // CapturePage is a capture turn's hook (beekeeper hook capturepage, in the
-// turn's --settings alone). On PreToolUse it refuses a screenshot or zoom,
-// a Chrome tool of BlindReads should the turn have one, and every script
+// turn's --settings alone). On PreToolUse it refuses every Chrome call but
+// those captureTools allows: no screenshot, zoom, page read or batch, no
+// copy or paste key, no navigate but to an http or https page, no script
 // but the reader. On PostToolUse it delivers the one distinct match of the
 // pattern a result carries, and answers every result with images dropped,
 // every match of the pattern and every token run masked, so the value
@@ -109,18 +122,23 @@ func CapturePage(input []byte, c Capture) []byte {
 }
 
 // refusal returns why a capture turn's Chrome call is refused, "" when it
-// passes.
+// passes: an allow list, every call it does not name refused.
 func (c Capture) refusal(tool string, input json.RawMessage) string {
 	name := strings.ToLower(tool[strings.LastIndex(tool, "__")+2:])
 	var in map[string]any
 	_ = json.Unmarshal(input, &in)
-	script, _ := in[textKey].(string)
+	str := func(k string) string { v, _ := in[k].(string); return v }
+	const blind = "Refused: this turn captures a value the page shows once, which no session sees: "
 	switch {
-	case slices.Contains(BlindReads, name), takesPicture(tool, in):
-		return "Refused: this turn captures a value the page shows once, which no session sees: no screenshot, zoom or page read. " +
-			"Find each control with find (by its words, never the value) and click it by its ref."
-	case name == chromeScript && strings.TrimSpace(script) != ReaderScript(c.Pattern.String()):
-		return "Refused: the one script this turn runs is beekeeper's reader, verbatim: " + ReaderScript(c.Pattern.String())
+	case !slices.Contains(captureTools, name), takesPicture(tool, in):
+		return blind + "no screenshot, zoom, page read or batch. Find each control with find (by its words, never the value) and click it by its ref."
+	case name == chromeComputer && clipboardKey.MatchString(str(textKey)):
+		return blind + "no copy, cut, paste or select-all key."
+	case name == chromeNavigation && !strings.HasPrefix(str(urlKey), "https://") && !strings.HasPrefix(str(urlKey), "http://") &&
+		str(urlKey) != "back" && str(urlKey) != "forward":
+		return blind + "navigate opens an http or https page only."
+	case name == chromeScript && strings.TrimSpace(str(textKey)) != ReaderScript(c.Pattern.String()):
+		return blind + "the one script it runs is beekeeper's reader, verbatim: " + ReaderScript(c.Pattern.String())
 	}
 	return ""
 }
