@@ -26,28 +26,67 @@ const PluginReleaseWorkflow = ".github/workflows/auto-release.yaml"
 // versions.
 const Marketplace = ".claude-plugin/marketplace.json"
 
+// The release-PR flow devctl generates in place of Auto-release:
+// CreateReleasePRWorkflow opens a release pull request (head
+// <base>#release#<level>, title "chore(release): vX.Y.Z") on a push of such
+// a branch, and CreateReleaseWorkflow, on a push to a branch its on.push
+// filter names, tags vX.Y.Z when the pushed commit's subject is that title:
+// the merge of the release pull request.
+const (
+	CreateReleasePRWorkflow = ".github/workflows/zz_generated.create_release_pr.yaml"
+	CreateReleaseWorkflow   = ".github/workflows/zz_generated.create_release.yaml"
+)
+
+// releaseTitle is the title of a release pull request, the subject
+// CreateReleaseWorkflow tags from: chore(release) or the older Release,
+// then the version.
+var releaseTitle = regexp.MustCompile(`(?i)^(?:chore\(release\):|Release) (v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$`)
+
+// ReleaseVersion is the tag the merge of a release pull request with head
+// branch head and title cuts, "" when it is no release pull request.
+func ReleaseVersion(head, title string) string {
+	if !strings.Contains(head, "release#") {
+		return ""
+	}
+	if m := releaseTitle.FindStringSubmatch(strings.TrimSpace(title)); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
 // BaseRelease is how a pull request's base branch releases: Auto when the
 // Auto-release workflow on the branch runs on a push to it, so a merge into
 // it is tagged; Plugins when the branch has no such workflow and its
-// PluginReleaseWorkflow tags the merged plugins (PluginTags); otherwise its
-// tags are cut by hand (a maintenance branch, a fork line's backport branch).
+// PluginReleaseWorkflow tags the merged plugins (PluginTags); ReleasePR when
+// it has neither and releases through the release-PR flow
+// (CreateReleaseWorkflow), whose release pull request's merge tags Version;
+// otherwise its tags are cut by hand (a maintenance branch, a fork line's
+// backport branch).
 type BaseRelease struct {
-	Base    string
-	Auto    bool
-	Plugins bool
+	Base      string
+	Auto      bool
+	Plugins   bool
+	ReleasePR bool
+	// Version is the tag the merge of the pull request cuts when it is the
+	// release pull request of a ReleasePR branch (ReleaseVersion), "" for
+	// any other pull request.
+	Version string
 }
 
 // ReadBaseRelease reads repo#n's base branch and the Auto-release workflow
-// on it, two requests, and on a branch without it the PluginReleaseWorkflow,
-// a third. A branch without either has no auto-release; an error is GitHub
-// not answering.
+// on it, two requests; on a branch without it the PluginReleaseWorkflow, a
+// third; on a branch without either the release-PR flow's two workflows,
+// up to two more. A branch without any has no auto-release; an error is
+// GitHub not answering.
 func ReadBaseRelease(ctx context.Context, run GH, repo string, n int) (BaseRelease, error) {
-	out, err := run(ctx, "pr", "view", strconv.Itoa(n), "--repo", repo, "--json", "baseRefName")
+	out, err := run(ctx, "pr", "view", strconv.Itoa(n), "--repo", repo, "--json", "baseRefName,headRefName,title")
 	if err != nil {
 		return BaseRelease{}, err
 	}
 	var p struct {
 		BaseRefName string `json:"baseRefName"`
+		HeadRefName string `json:"headRefName"`
+		Title       string `json:"title"`
 	}
 	if err := json.Unmarshal(out, &p); err != nil || p.BaseRefName == "" {
 		return BaseRelease{}, fmt.Errorf("gh pr view %d --repo %s: no base branch in its answer", n, repo)
@@ -67,15 +106,51 @@ func ReadBaseRelease(ctx context.Context, run GH, repo string, n int) (BaseRelea
 	raw, err = rawFile(ctx, run, repo, PluginReleaseWorkflow, r.Base)
 	switch {
 	case notFound(err):
-		return r, nil
 	case err != nil:
 		return BaseRelease{}, err
+	default:
+		if r.Plugins, err = ClosesInto(raw, r.Base); err != nil {
+			return BaseRelease{}, fmt.Errorf("%s on %s: %w", PluginReleaseWorkflow, r.Base, err)
+		}
+		if r.Plugins = r.Plugins && strings.Contains(string(raw), Marketplace); r.Plugins {
+			return r, nil
+		}
 	}
-	if r.Plugins, err = ClosesInto(raw, r.Base); err != nil {
-		return BaseRelease{}, fmt.Errorf("%s on %s: %w", PluginReleaseWorkflow, r.Base, err)
+	if r.ReleasePR, err = releasesByPR(ctx, run, repo, r.Base); err != nil {
+		return BaseRelease{}, err
 	}
-	r.Plugins = r.Plugins && strings.Contains(string(raw), Marketplace)
+	if r.ReleasePR {
+		r.Version = ReleaseVersion(p.HeadRefName, p.Title)
+	}
 	return r, nil
+}
+
+// releasesByPR says whether base releases through the release-PR flow: its
+// CreateReleaseWorkflow runs on a push to it, and its
+// CreateReleasePRWorkflow is there to open the release pull request.
+func releasesByPR(ctx context.Context, run GH, repo, base string) (bool, error) {
+	raw, err := rawFile(ctx, run, repo, CreateReleaseWorkflow, base)
+	switch {
+	case notFound(err):
+		return false, nil
+	case err != nil:
+		return false, err
+	}
+	pushes, err := PushesBranch(raw, base)
+	if err != nil {
+		return false, fmt.Errorf("%s on %s: %w", CreateReleaseWorkflow, base, err)
+	}
+	if !pushes {
+		return false, nil
+	}
+	_, err = rawFile(ctx, run, repo, CreateReleasePRWorkflow, base)
+	switch {
+	case notFound(err):
+		return false, nil
+	case err != nil:
+		return false, err
+	}
+	return true, nil
 }
 
 // rawFile is the file at path on ref, raw; one the repository lacks there

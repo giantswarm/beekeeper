@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -39,6 +40,18 @@ var (
 	tagExists = func(ctx context.Context, repo, tag string) (bool, error) {
 		return github.TagExists(ctx, github.RunGH, repo, tag)
 	}
+	// releaseWait runs devctl release wait for repo's version, its progress
+	// on the gate's stderr, and returns its document.
+	releaseWait = func(ctx context.Context, repo, version string) []byte {
+		var out bytes.Buffer
+		c := exec.CommandContext(ctx, merge.Tool, "release", "wait", repo, version) //nolint:gosec // the merge tool, a checked repository and version
+		c.Stdout, c.Stderr = &out, os.Stderr
+		_ = c.Run() // its exit code is the document's verdict
+		return out.Bytes()
+	}
+	// releasePRWait bounds the wait for a release pull request's tag
+	// pipeline: devctl release wait's own default timeout and a margin.
+	releasePRWait = 35 * time.Minute
 	// pluginTagPoll is how often the gate looks for a merged plugin's tag,
 	// pluginTagWait how long it awaits the tags of one merge.
 	pluginTagPoll = 10 * time.Second

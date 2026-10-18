@@ -1442,6 +1442,17 @@ those tags itself, from the merge commit's manifest against its parent's, for up
 all cut, they are the merge's release (`merged … release gs-plans/v0.3.0`); no version changed,
 none is warranted; a tag still missing leaves the release unconfirmed, naming the tag.
 
+A repository on the release-PR flow releases through a pull request of its own: without the
+Auto-release workflow, `.github/workflows/zz_generated.create_release_pr.yaml` opens a
+`<base>#release#<level>` pull request titled `chore(release): vX.Y.Z`, and
+`.github/workflows/zz_generated.create_release.yaml`, which a push to the branch runs, tags its
+merge. devctl runs with `--no-release-wait` there, and the gate line names the flow. Any other pull
+request's merge cuts no tag and leaves its lane at the merge (`release none warranted`). The release
+pull request's merge holds its lane while the gate runs `devctl release wait <repo> vX.Y.Z` for up
+to 35 minutes: available, the tag is the merge's release and rolls as above; a failed tag pipeline
+or commit status is a failed release; anything else leaves the release unconfirmed, naming the
+command that resumes the wait.
+
 A running merge whose gate process and devctl are both gone (killed, or lost with the machine in
 a reboot) is lost: whether it merged is unknown. `watch` turns it into the lane's settling merge with an
 unknown release, one `MERGE LOST` line and a `merge.lost` event, so the lane settles for

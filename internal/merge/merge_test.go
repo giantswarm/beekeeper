@@ -755,3 +755,28 @@ func TestMergeCommit(t *testing.T) {
 		}
 	}
 }
+
+// waitedTag is the tag devctl release wait waited for.
+const waitedTag = "v1.4.0"
+
+func TestParseReleaseWait(t *testing.T) {
+	for _, c := range []struct {
+		name, doc  string
+		want       Outcome
+		wantReason string
+		ok         bool
+	}{
+		{"available", `{"verdict":"available","reason":"","tag":"v1.4.0"}`, Outcome{Merged: true, Release: waitedTag}, "", true},
+		{"tag pipeline failed", `{"verdict":"ci_failed","reason":"push failed","tag":"v1.4.0"}`, Outcome{Merged: true, Release: waitedTag, ReleaseFailed: true}, "push failed", true},
+		{"a status failed", `{"verdict":"status_failed","reason":"ci/x failed","tag":"v1.4.0"}`, Outcome{Merged: true, Release: waitedTag, ReleaseFailed: true}, "ci/x failed", true},
+		{"timed out", `{"verdict":"timeout","reason":"30m","tag":"v1.4.0"}`, Outcome{Merged: true, Unconfirmed: true}, "30m", true},
+		{"no document", ``, Outcome{}, "", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, reason, ok := ParseReleaseWait([]byte(c.doc))
+			if got != c.want || reason != c.wantReason || ok != c.ok {
+				t.Errorf("got %+v, %q, %v; want %+v, %q, %v", got, reason, ok, c.want, c.wantReason, c.ok)
+			}
+		})
+	}
+}

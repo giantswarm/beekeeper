@@ -244,3 +244,98 @@ func TestAMergeIntoAPerPluginRepositoryAwaitsThePluginsTag(t *testing.T) {
 		}
 	})
 }
+
+// releasePRTag is the tag a release pull request's merge cuts.
+const releasePRTag = "v1.4.0"
+
+// stubReleaseWait answers devctl release wait with doc and records the
+// version asked.
+func stubReleaseWait(t *testing.T, doc string) *[]string {
+	t.Helper()
+	asked := new([]string)
+	was := releaseWait
+	t.Cleanup(func() { releaseWait = was })
+	releaseWait = func(_ context.Context, repo, version string) []byte {
+		*asked = append(*asked, repo+" "+version)
+		return []byte(doc)
+	}
+	return asked
+}
+
+// A merge into a branch that releases through the release-PR flow (the bot's
+// <base>#release#<level> pull request, tagged on its merge) names that flow,
+// not a hand cut: the release pull request's merge awaits its tag pipeline
+// and settles its lane on the release, any other merge cuts no tag and frees
+// its lane. A branch with neither flow stays cut by hand
+// (TestAMergeIntoAHandCutBranchFreesItsLaneAtTheMerge).
+func TestAMergeIntoAReleasePRBranchTracksTheReleasePullRequestsTag(t *testing.T) {
+	lane := config.Lane{Name: serving, Installation: gazelle, Repositories: []string{scratchRepo}}
+	t.Run("the release pull request", func(t *testing.T) {
+		noSystemd(t)
+		fakeDevctl(t, handCutDevctl)
+		stubGitHub(t, github.Merged, "")
+		stubBaseRelease(t, github.BaseRelease{Base: mainBranch, ReleasePR: true, Version: releasePRTag}, nil)
+		asked := stubReleaseWait(t, `{"verdict":"available","reason":"","tag":"v1.4.0"}`)
+		g := runningMerge(t, scratchRepo, lane)
+		var err error
+		out := gateStderr(t, func() { err = startMerge(t, g) })
+		if err != nil {
+			t.Fatalf("exit %d, want 0", Code(err))
+		}
+		if len(*asked) != 1 || (*asked)[0] != scratchRepo+" "+releasePRTag {
+			t.Errorf("release waits: %q, want one of %s v1.4.0", *asked, scratchRepo)
+		}
+		if !strings.Contains(out, "is the release pull request of v1.4.0: awaiting its tag pipeline") || strings.Contains(out, "no Auto-release run tags") {
+			t.Errorf("gate lines:\n%s", out)
+		}
+		st := gateState(t, g)
+		if len(st.Merges) != 1 || st.Merges[0].Phase != state.Settling || st.Merges[0].Release != releasePRTag || st.Merges[0].HandCut != "" {
+			t.Errorf("want the merge settling on v1.4.0: %+v", st.Merges)
+		}
+	})
+	t.Run("the release pull request's tag pipeline failed", func(t *testing.T) {
+		noSystemd(t)
+		fakeDevctl(t, handCutDevctl)
+		stubGitHub(t, github.Merged, "")
+		stubBaseRelease(t, github.BaseRelease{Base: mainBranch, ReleasePR: true, Version: releasePRTag}, nil)
+		stubReleaseWait(t, `{"verdict":"ci_failed","reason":"push-to-registries failed","tag":"v1.4.0"}`)
+		g := runningMerge(t, scratchRepo, lane)
+		var err error
+		out := gateStderr(t, func() { err = startMerge(t, g) })
+		if err != nil {
+			t.Fatalf("exit %d, want 0", Code(err))
+		}
+		if !strings.Contains(out, "its release v1.4.0 failed (push-to-registries failed)") {
+			t.Errorf("gate lines:\n%s", out)
+		}
+		if d := lastEvent(t, g, verbMerged); !strings.Contains(d, "release v1.4.0 failed, nothing rolls") {
+			t.Errorf("merged event: %q", d)
+		}
+	})
+	t.Run("another pull request", func(t *testing.T) {
+		noSystemd(t)
+		fakeDevctl(t, handCutDevctl)
+		stubGitHub(t, github.Merged, "")
+		stubBaseRelease(t, github.BaseRelease{Base: mainBranch, ReleasePR: true}, nil)
+		asked := stubReleaseWait(t, "")
+		g := runningMerge(t, scratchRepo, lane)
+		var err error
+		out := gateStderr(t, func() { err = startMerge(t, g) })
+		if err != nil {
+			t.Fatalf("exit %d, want 0", Code(err))
+		}
+		if len(*asked) != 0 {
+			t.Errorf("release waits: %q, want none", *asked)
+		}
+		if !strings.Contains(out, "which releases through the release-PR flow (the bot opens a main#release#<level> pull request, zz_generated.create_release.yaml tags its merge)") ||
+			strings.Contains(out, "no Auto-release run tags") || strings.Contains(out, "cut by hand") {
+			t.Errorf("gate lines:\n%s", out)
+		}
+		if st := gateState(t, g); len(st.Merges) != 0 {
+			t.Errorf("the lane is not free: %+v", st.Merges)
+		}
+		if d := lastEvent(t, g, verbMerged); !strings.Contains(d, "release none warranted") {
+			t.Errorf("merged event: %q", d)
+		}
+	})
+}
