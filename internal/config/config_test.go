@@ -138,6 +138,8 @@ func TestLoadRejects(t *testing.T) {
 		"unknown floor":              "alerts: {installations: [{name: x, floor: low}]}",
 		"unknown pageSeverity":       "alerts: {pageSeverity: urgent}",
 		"short ownerGrace":           "alerts: {ownerGrace: 10s}",
+		"discover without a team":    "alerts: {discover: {every: 1h}}",
+		"bad discover exclude":       "alerts: {team: t, discover: {exclude: ['[']}}",
 		"pagerduty without services": "alerts: {pagerduty: {context: example}}",
 		"flapping at once":           "alerts: {flap: {changes: 1}}",
 		"bad duration":               "grantTTL: soon",
@@ -453,6 +455,9 @@ func TestExampleConfig(t *testing.T) {
 		c.Alerts.Tenant != "example-org" || len(c.Alerts.Installations) != 3 || len(c.Lanes) != 2 ||
 		c.Board.Project != 12 || len(c.Board.Order) != 7 || !c.Board.Order[1].SubIssues || c.Board.Epics.Go != "in progress" || len(c.Board.Epics.Planning) != 1 || c.Board.StaleAfter.Hours() != 8760 {
 		t.Errorf("config = %+v", c)
+	}
+	if d := c.Alerts.Discover; !d.Enabled() || d.Every.Duration != time.Hour || d.Label != "application.giantswarm.io/team" || !slices.Equal(d.Exclude, []string{"*-*", "*.*"}) {
+		t.Errorf("alerts.discover %+v", d)
 	}
 	if tp := c.Teleport; !tp.Enabled() || tp.Proxy != "login.example.com:443" || tp.Auth != "github" || tp.Tsh != "tsh" ||
 		tp.RenewBefore.Duration != 90*time.Minute || tp.WarnBefore.Duration != time.Hour || tp.Every.Duration != 10*time.Minute {

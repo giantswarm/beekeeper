@@ -24,7 +24,7 @@ const SubscriptionControls = "a subscription, watch, star or notification contro
 var controlWords = regexp.MustCompile(`(?i)\b(?:un)?(?:subscribe[ds]?|subscriptions?|watch(?:ed|ing)?|star(?:s|red)?|notifications?)\b`)
 
 // clicking are the computer actions that click an element.
-var clicking = []string{"left_click", "right_click", "double_click", "triple_click"}
+var clicking = []string{actionLeftClick, "right_click", "double_click", "triple_click"}
 
 // The javascript tool of the Chrome tools, the key of its code, and a click
 // in its code.
