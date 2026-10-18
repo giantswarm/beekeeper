@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - A gated wait (`devctl pr wait`, `release wait`, `rollout wait`) ends with its caller: once its gate is gone without leaving the run to run on (its shell stopped by a TaskStop, killed, or gone with an ended turn), the run's merge-child stops devctl within a second and wakes nobody, where devctl used to run on to its own timeout. A wait another run of the same command follows runs on while that follower runs. A wait the call leaves on purpose (merge.toolLimit, which now applies to a foreground wait as to a merge, or the caller's `timeout`) runs on and wakes its owner as before, as does a merge's own run ([#1372](https://github.com/giantswarm/beekeeper/issues/1372)).
+- The hook's shell scan reads `$'…'` to its first unescaped quote and decodes its escapes in a command's words, so `echo $'a\''; devctl pr merge o/r 7` has its merge gated and a `$'…'` argument containing `\'` stays text to its end ([#1380](https://github.com/giantswarm/beekeeper/issues/1380)).
+- The build rewrite, the gate's command-position test, the script-file merge check and the guide's work check read a shell's `-c` or `eval` string as the merge gate does, its pieces joined and `$'…'` decoded: `bash -c 'cd x && '"go test ./..."` runs through `beekeeper run`, and a merge in such a string inside a script file is refused ([#1381](https://github.com/giantswarm/beekeeper/issues/1381)).
 
 ## [0.149.0] - 2026-10-18
 
@@ -25,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `alerts.kubeconfig` lists kubeconfig files the installations' reads resolve their contexts in, passed to kubectl as `KUBECONFIG` for the context listing, every Alertmanager port-forward and the upgrade reading, behind the machine kubeconfig unless the list names it. An installation whose context lives only in a kubeconfig of the watch's own (`KUBECONFIG=<file> tsh kube login <cluster>`) is read by `beekeeper alerts snapshot` and the watch without a `KUBECONFIG` in the environment ([#705](https://github.com/giantswarm/beekeeper/issues/705)).
 
+## [0.149.0-rc.11] - 2026-10-18
+
+### Fixed
+
+- The merge gate's rewrite puts the gate only before a blocking devctl command the shell runs: on the command line, in a shell's `-c` or `eval` string, or in a here-document a shell reads. A command named after a `;`, `&` or `(` inside a quoted argument of a command that reads it as text (a `gh … --body` text, a `git` commit message, a `grep` or `jq` pattern, an `echo`) stays as written, unless it sits in a subshell or a command or process substitution or its pipeline feeds a command that may run it; a quoted argument of any other command (`flock -c`, `watch`, `su -c`, a shell with options before its `-c`, `git rebase -x`) keeps its gate. ([#1364](https://github.com/giantswarm/beekeeper/issues/1364)).
+
 ## [0.149.0-rc.8] - 2026-10-18
 
 ### Fixed
@@ -36,7 +44,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - The hook that refuses a blocking devctl command run outside the gate keys on the commands a call executes, not on prose that names them. An interpreter's program (a `python3` here-document, a script file, a `-c` or `-e` string) runs a command from a string literal that starts with it or names it after a shell operator; a comment, or document text in a literal (a README, a CHANGELOG entry), runs nothing. A shell's `-c` or `eval` named inside a quoted argument or a content here-document (a PR body draft) is text too. The same commands run by the program or the shell are refused or gated as before. ([#1033](https://github.com/giantswarm/beekeeper/issues/1033)).
-- The merge gate's rewrite puts the gate only before a blocking devctl command the shell runs: on the command line, in a shell's `-c` or `eval` string, or in a here-document a shell reads. A command named after a `;`, `&` or `(` inside a quoted argument of a command that reads it as text (a `gh … --body` text, a `git` commit message, a `grep` or `jq` pattern, an `echo`) stays as written, unless it sits in a subshell or a command or process substitution or its pipeline feeds a command that may run it; a quoted argument of any other command (`flock -c`, `watch`, `su -c`, a shell with options before its `-c`, `git rebase -x`) keeps its gate. ([#1364](https://github.com/giantswarm/beekeeper/issues/1364)).
 
 ## [0.149.0-rc.3] - 2026-10-17
 
