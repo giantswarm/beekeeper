@@ -280,4 +280,15 @@ func TestNoteOnAPlanPullNeedsItsStageCheckGreenOrAtTheGrillStage(t *testing.T) {
 	if len(calls) != 14 {
 		t.Fatalf("one read per plans pull request and one per red check's annotations: %q", calls)
 	}
+	evs, err := a.store.Events(0, func(e state.Event) bool { return strings.HasPrefix(e.Verb, "plan.") })
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plans []string
+	for _, e := range evs {
+		plans = append(plans, e.Verb+" "+e.Subject)
+	}
+	if want := []string{"plan.grilling o/plans#2", "plan.ready o/plans#3"}; !slices.Equal(plans, want) {
+		t.Fatalf("an added note records its plan at the grill stage or ready for review, neither a merged one, a refused note's nor a folded one's: %q, want %q", plans, want)
+	}
 }
