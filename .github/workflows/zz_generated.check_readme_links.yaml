@@ -2,7 +2,7 @@
 #
 #    devctl
 #
-#    https://github.com/giantswarm/devctl/tree/v8.145.0-rc.3
+#    https://github.com/giantswarm/devctl/blob/e642529ff98450dc48c8cbe580f4289af155a026/pkg/gen/input/workflows/internal/file/check_readme_links.yaml.template
 #
 
 name: check-readme-links

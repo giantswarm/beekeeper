@@ -2,7 +2,7 @@
 #
 #    devctl
 #
-#    https://github.com/giantswarm/devctl/tree/v8.145.0-rc.3
+#    https://github.com/giantswarm/devctl/blob/ee062182d7b7130f1153a8c708d493a5aa5fffd3/pkg/gen/input/workflows/internal/file/fix_vulnerabilities.yaml.template
 #
 
 name: Fix Go vulnerabilities
