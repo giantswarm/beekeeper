@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.149.1-rc.1] - 2026-10-18
+
 ### Fixed
 
 - A gated wait (`devctl pr wait`, `release wait`, `rollout wait`) ends with its caller: once its gate is gone without leaving the run to run on (its shell stopped by a TaskStop, killed, or gone with an ended turn), the run's merge-child stops devctl within a second and wakes nobody, where devctl used to run on to its own timeout. A wait another run of the same command follows runs on while that follower runs. A wait the call leaves on purpose (merge.toolLimit, which now applies to a foreground wait as to a merge, or the caller's `timeout`) runs on and wakes its owner as before, as does a merge's own run ([#1372](https://github.com/giantswarm/beekeeper/issues/1372)).
