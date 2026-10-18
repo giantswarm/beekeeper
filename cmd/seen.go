@@ -3,13 +3,16 @@ package cmd
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"maps"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 // fact is one thing a reading command says: Key names it, Line is how it
@@ -26,17 +29,35 @@ type readMark struct {
 
 // fullFlag adds --full to a reading command.
 func fullFlag(c *cobra.Command, full *bool) {
-	c.Flags().BoolVar(full, "full", false, "print everything, not only what changed since your last read")
+	c.Flags().BoolVar(full, "full", false, "print everything, not only what changed since your last read; a pipe's reader always gets everything")
+}
+
+// scripted reports whether w is read by a script, not by its caller: a pipe
+// (a grep, a $(…), a timer's probe), a socket or a device that is no
+// terminal (/dev/null). A terminal and a session's tool output file are
+// read by the caller; so is a writer that is no file (a test's buffer).
+var scripted = func(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	fi, err := f.Stat()
+	if err != nil || fi.Mode().IsRegular() {
+		return false
+	}
+	return !term.IsTerminal(int(f.Fd()))
 }
 
 // delta prints what the caller has not read yet: the facts that are new or
 // changed since its last read of cmd, and the keys of those gone, or one
-// "no change" line. The whole text (printFull) is for a first read, --full
-// and a caller outside a Claude session (a person at a terminal). Every
-// read moves the caller's mark to the facts it now has.
+// "no change" line. The whole text (printFull) is for a first read, --full,
+// a caller outside a Claude session (a person at a terminal) and a script
+// reading the output, which must see a busy lane as busy; a script's read
+// leaves the caller's mark alone. Every other read moves the caller's mark
+// to the facts it now has.
 func (a *app) delta(cmd string, full bool, facts []fact, printFull func()) error {
 	me, err := a.caller()
-	if err != nil {
+	if err != nil || scripted(a.out) {
 		printFull()
 		return nil
 	}
