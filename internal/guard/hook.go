@@ -763,6 +763,11 @@ func commandString(s string, eval bool) cString {
 				put(k, false)
 			}
 			i += j + 2
+		case c == '$' && strings.HasPrefix(s[i:], "$$"):
+			// the shell's pid: a quote after it is a plain one
+			put(i, true)
+			put(i+1, true)
+			i += 2
 		case c == '$' && strings.HasPrefix(s[i:], "$'"):
 			for i += 2; i < len(s) && s[i] != '\''; {
 				if s[i] != '\\' {

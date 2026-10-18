@@ -223,6 +223,8 @@ func TestHeavyClassification(t *testing.T) {
 		// $'…' ends at its unescaped quote, not at an escaped one
 		{`echo $'it\'s'; go test ./...`, true},
 		{`echo $'it\'s; go test ./...'`, false},
+		{`echo $$'\'; go test ./...`, true},
+		{`bash -c 'cd x;'$$'\'; go vet ./...`, true},
 	} {
 		if got := isHeavy(tc.cmd); got != tc.heavy {
 			t.Errorf("isHeavy(%q) = %v, want %v", tc.cmd, got, tc.heavy)
@@ -418,6 +420,8 @@ func TestHookGatesMerges(t *testing.T) {
 		{`echo $'a\''; devctl pr merge o/r 7; echo 'b'`, `echo $'a\''; ` + g + `devctl pr merge o/r 7; echo 'b'`, false},
 		{`gh pr comment 7 --repo o/r --body $'it\'s\\'; devctl pr merge o/r 7 # 'x`,
 			`gh pr comment 7 --repo o/r --body $'it\'s\\'; ` + g + `devctl pr merge o/r 7 # 'x`, false},
+		// $$ is the pid: the quote after it is a plain one, no $'…'.
+		{`echo $$'\'; devctl pr merge o/r 7; echo '\'`, `echo $$'\'; ` + g + `devctl pr merge o/r 7; echo '\'`, false},
 		{`printf '%s\n' $'\''; devctl release promote o/r; echo '\'`,
 			`printf '%s\n' $'\''; ` + g + `devctl release promote o/r; echo '\'`, false},
 	} {

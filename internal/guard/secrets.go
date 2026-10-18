@@ -870,6 +870,8 @@ func scanShell(s string) shellScan {
 		case c == '\\' && i+1 < len(b):
 			b[i+1] = '_'
 			i++
+		case c == '$' && i+1 < len(b) && b[i+1] == '$':
+			i++ // $$ is the shell's pid: a quote after it is a plain one
 		case c == '$' && i+1 < len(b) && b[i+1] == '\'':
 			// $'…' ends at its first unescaped quote
 			for i += 2; i < len(b) && s[i] != '\''; i++ {
@@ -1004,6 +1006,10 @@ func shellWords(s string) []string {
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		switch {
+		case c == '$' && i+1 < len(s) && s[i+1] == '$':
+			w.WriteString("$$") // the shell's pid: a quote after it is a plain one
+			i++
+			in = true
 		case c == '$' && i+1 < len(s) && s[i+1] == '\'':
 			for i += 2; i < len(s) && s[i] != '\''; {
 				if s[i] != '\\' {
