@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- `note migrate` and the memo code are gone: the state keeps no memos and no pinned notes, `board next` reads priorities and holds from GitHub only and is never refused over an older beekeeper's memos, `self-update` names no migration, and the hand-overs' standing instructions are `standing.md` alone. A state document an older beekeeper left with memos keeps them as written and unread; the Note resource has no `pinned` field ([#938](https://github.com/giantswarm/beekeeper/issues/938)).
+
 ## [0.149.1-rc.3] - 2026-10-18
 
 ### Fixed

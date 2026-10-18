@@ -108,10 +108,7 @@ its sub-issues, and every issue under it is skipped as "held: sub-issue of
 Team field says when they carry the team label (board.teamLabel), and a
 change of a ranked epic's rank or Team beekeeper did not write is a line
 "changed outside beekeeper: …" first (--json changed) and a board.changed
-event (see priority). While the
-state keeps memos and pinned notes an older beekeeper filed, which held the
-items they name, next offers nothing and is refused (exit 3) until note
-migrate --apply has closed them. A task names
+event (see priority). A task names
 an issue or pull request by its URL, as owner/repo#n, as repo#n of
 board.owner, as a repository before a list ("beekeeper: #524, #525") or as
 a bare #n after the last repository it named ("beekeeper#173, #176"); a
@@ -160,9 +157,6 @@ the whole walk.`,
 			}
 			if err := checkFields(view.fields); err != nil {
 				return usageErr("%v", err)
-			}
-			if err := a.unmigrated("board next"); err != nil {
-				return err
 			}
 			var me state.Party
 			if claim {

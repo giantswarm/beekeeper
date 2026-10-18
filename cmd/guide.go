@@ -436,8 +436,7 @@ func (a *app) guideHandoverCmd() *cobra.Command {
 relay and the queue. --prompt prints the successor's session prompt instead:
 the configured instructions (guide.skill or guide.instructions), the queue, an open relay and the commands that read
 the live values; no live value. Both carry the desk's standing
-instructions in full: standing.md in the state directory and the pinned
-notes note migrate has not moved there yet. A caller that has read
+instructions in full: standing.md in the state directory. A caller that has read
 the hand-over before gets only what changed; --full prints everything.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
@@ -451,7 +450,7 @@ the hand-over before gets only what changed; --full prints everything.`,
 			}
 			q, _ := a.guideQueue(st, sessions)
 			r := guideRole.get(st)
-			s, err := a.readStanding(st)
+			s, err := a.readStanding()
 			if err != nil {
 				return err
 			}
@@ -503,7 +502,7 @@ var guideLiveCommands = [][2]string{
 	{"beekeeper log --verb note.", "the notes filed, answered and closed"},
 }
 
-func (a *app) printGuidePrompt(r state.Role, q []queueItem, s standing) error {
+func (a *app) printGuidePrompt(r state.Role, q []queueItem, s string) error {
 	intro, err := a.roleInstructions(guideRole, r)
 	if err != nil {
 		return err
@@ -511,7 +510,7 @@ func (a *app) printGuidePrompt(r state.Role, q []queueItem, s standing) error {
 	p := func(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format+"\n", args...) }
 	p("%s\n", intro)
 	p("## Pending state, %s\n", a.stamp(a.now))
-	a.promptStanding(p, s)
+	promptStanding(p, s)
 	if section(p, "Decisions waiting on the person", len(q) == 0, "None open.") {
 		for _, it := range q {
 			p("- %s", a.queueText(it))
