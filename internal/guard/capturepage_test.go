@@ -44,7 +44,7 @@ func quoted(s string) string {
 
 // A capture turn sees no pixels and no page text beyond find's: the hook
 // passes the calls its allow list names and refuses every other, a
-// screenshot, a zoom, a page read, a batch, a copy or paste key, a navigate
+// screenshot, a zoom, a page read, a batch, a drag, a triple click, a key chord or function key, a navigate
 // to a javascript: URL and every script but the reader; a click, a key, a
 // find, a navigate and the reader itself pass.
 func TestCapturePageRefusesReads(t *testing.T) {
@@ -64,6 +64,13 @@ func TestCapturePageRefusesReads(t *testing.T) {
 		{chromeComputer, `{"action":"left_click","ref":"ref_3"}`, false},
 		{chromeComputer, `{"action":"key","text":"ctrl+c"}`, true},
 		{chromeComputer, `{"action":"key","text":"cmd+shift+v"}`, true},
+		{chromeComputer, `{"action":"key","text":"shift+ctrl+C"}`, true},
+		{chromeComputer, `{"action":"key","text":"control+a"}`, true},
+		{chromeComputer, `{"action":"key","text":"F6"}`, true},
+		{chromeComputer, `{"action":"key","text":"Tab Tab Return"}`, false},
+		{chromeComputer, `{"action":"triple_click","ref":"ref_4"}`, true},
+		{chromeComputer, `{"action":"left_click_drag","coordinate":[9,9]}`, true},
+		{chromeComputer, `{"action":"type","text":"installation graveler"}`, false},
 		{chromeComputer, `{"action":"key","text":"Return"}`, false},
 		{chromeNavigation, `{"url":"javascript:document.title=document.body.innerText"}`, true},
 		{chromeNavigation, `{"url":"back"}`, false},
