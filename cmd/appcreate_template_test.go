@@ -5,6 +5,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The fixture purpose whose Apps exist once per installation, its manifest
@@ -188,5 +189,33 @@ func TestAppGeneration(t *testing.T) {
 		if got := generation(portalApp, name); got != want {
 			t.Errorf("generation(%s) = %d, want %d", name, got, want)
 		}
+	}
+}
+
+// With secret.session the vault's generations come from the broker, which
+// holds the vault session, as secret items --json lists them there; a
+// broker that cannot list refuses with its words and nothing written.
+func TestAppCreateReplaceAsksTheBrokerInSessionMode(t *testing.T) {
+	a, _, _ := templateApp(t)
+	a.cfg.Secret.Session = true
+	var asked []string
+	prev := brokeredItems
+	t.Cleanup(func() { brokeredItems = prev })
+	brokeredItems = func(_ string, args []string, _ time.Duration) (string, error) {
+		asked = args
+		return `[{"title": "` + portalApp + `", "id": "a"}, {"title": "` + portalApp + `-2", "id": "b"}]`, nil
+	}
+	plan, err := a.appTemplatePlan(context.Background(), portalPurpose, portalInstallation, portalDomain, true)
+	if err != nil || plan.name != portalApp+"-3" || plan.replaces == nil || plan.replaces.Slug != portalApp+"-2" {
+		t.Fatalf("the plan = %+v, %v", plan, err)
+	}
+	if strings.Join(asked, " ") != "items --json=true op://Shared "+portalApp {
+		t.Errorf("the broker was asked %q", asked)
+	}
+	brokeredItems = func(string, []string, time.Duration) (string, error) {
+		return "", &exitError{code: ExitVault, msg: "the vault is locked"}
+	}
+	if _, err := a.appTemplatePlan(context.Background(), portalPurpose, portalInstallation, portalDomain, true); Code(err) != ExitVault || !strings.Contains(err.Error(), "the vault is locked") {
+		t.Errorf("a broker that cannot list: %v (exit %d)", err, Code(err))
 	}
 }
