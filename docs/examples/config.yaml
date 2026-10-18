@@ -292,6 +292,7 @@ plans:                      # note add --for <guide.person> links a pull request
 apps:                       # where the organisation declares its GitHub Apps; beekeeper app allow records only a declared one
   repo: example/github      # the declaring repository, read on its default branch; unset, app allow refuses
   manifest: apps/{name}/manifest.json   # an App's manifest (name, callback_urls), {name} for the App's name
+  # template: apps/{name}/manifest.template.json   # a purpose's manifest template, {installation} and {baseDomain} in its strings (default: manifest's file as manifest.template.json)
   secrets:                  # by installation, the SOPS Secret beekeeper secret github-app writes an App's private-key and client-secret into
     example-installation:
       file: ~/gitops/installations/example-installation/secrets/github-app-secret.yaml

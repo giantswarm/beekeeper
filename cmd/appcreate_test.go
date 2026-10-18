@@ -107,6 +107,10 @@ func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	_, keyPEM := fixtureKey()
+	slug := fixtureApp
+	if name, ok := g.manifest["name"].(string); ok {
+		slug = guard.AppSlug(name)
+	}
 	switch {
 	case r.Method == http.MethodPost && r.URL.Path == "/organizations/"+fixtureOrg+"/settings/apps/new":
 		g.state = r.URL.Query().Get("state")
@@ -129,8 +133,8 @@ func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": fixtureAppID, "slug": fixtureApp, "name": fixtureApp, "client_id": fixtureClientID,
-			"client_secret": fixtureSecret, "webhook_secret": fixtureWebhook, "pem": keyPEM, "html_url": "https://github.com/apps/" + fixtureApp,
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": fixtureAppID, "slug": slug, "name": g.manifest["name"], "client_id": fixtureClientID,
+			"client_secret": fixtureSecret, "webhook_secret": fixtureWebhook, "pem": keyPEM, "html_url": "https://github.com/apps/" + slug,
 			"owner": map[string]any{"login": fixtureOrg, "id": 77}})
 	case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
 		if !g.appToken(r.Header.Get("Authorization")) {
@@ -144,10 +148,10 @@ func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			insts = append(insts, map[string]any{"id": fixtureInstall, "repository_selection": selectedRepos, "account": map[string]any{"login": "Example", "id": 77}})
 		}
 		_ = json.NewEncoder(w).Encode(insts)
-	case r.Method == http.MethodGet && r.URL.Path == "/apps/"+fixtureApp+"/installations/new":
+	case r.Method == http.MethodGet && r.URL.Path == "/apps/"+slug+"/installations/new":
 		g.appPage = true
 		_, _ = io.WriteString(w, "the App's installation page")
-	case r.Method == http.MethodGet && r.URL.Path == "/apps/"+fixtureApp+"/installations/new/permissions":
+	case r.Method == http.MethodGet && r.URL.Path == "/apps/"+slug+"/installations/new/permissions":
 		g.installQuery = r.URL.Query()
 		g.installed = !g.noInstall
 		_, _ = io.WriteString(w, "the installation page")

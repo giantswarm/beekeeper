@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"path"
 	"slices"
@@ -116,6 +117,65 @@ func ReadAppDeclaration(ctx context.Context, run GH, repo, file string) (AppDecl
 		return AppDeclaration{}, fmt.Errorf("%s: %w", d.Installation, err)
 	}
 	return d, nil
+}
+
+// Render is the declaration with every placeholder of vars replaced in each
+// string of the manifest, at any depth, and the name read again; d itself
+// is unchanged.
+func (d AppDeclaration) Render(vars map[string]string) AppDeclaration {
+	pairs := make([]string, 0, 2*len(vars))
+	for _, k := range slices.Sorted(maps.Keys(vars)) {
+		pairs = append(pairs, k, vars[k])
+	}
+	r := strings.NewReplacer(pairs...)
+	d.Manifest, _ = renderValue(d.Manifest, r).(map[string]any)
+	d.Name, _ = d.Manifest["name"].(string)
+	return d
+}
+
+// Carries reports whether a string of the manifest carries placeholder.
+func (d AppDeclaration) Carries(placeholder string) bool {
+	found := false
+	walkStrings(d.Manifest, func(s string) { found = found || strings.Contains(s, placeholder) })
+	return found
+}
+
+// renderValue is v, a decoded JSON value, with r applied to every string,
+// copied.
+func renderValue(v any, r *strings.Replacer) any {
+	switch x := v.(type) {
+	case string:
+		return r.Replace(x)
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, e := range x {
+			out[k] = renderValue(e, r)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			out[i] = renderValue(e, r)
+		}
+		return out
+	}
+	return v
+}
+
+// walkStrings calls f with every string of v, a decoded JSON value.
+func walkStrings(v any, f func(string)) {
+	switch x := v.(type) {
+	case string:
+		f(x)
+	case map[string]any:
+		for _, e := range x {
+			walkStrings(e, f)
+		}
+	case []any:
+		for _, e := range x {
+			walkStrings(e, f)
+		}
+	}
 }
 
 // parseInstallation reads an installation file: the repositories by name,
