@@ -40,10 +40,13 @@ const actionKey = "action"
 // look: a screenshot, a scroll, a zoom, a wait, a hover.
 var computerReads = []string{actionScreenshot, "scroll", "scroll_to", actionZoom, "wait", "hover"}
 
-// The computer actions that answer the page's pixels.
+// The computer actions that answer the page's pixels, the one that clicks
+// an element and the one that presses keys.
 const (
 	actionScreenshot = "screenshot"
 	actionZoom       = "zoom"
+	actionLeftClick  = "left_click"
+	actionKeyPress   = "key"
 )
 
 // connectorWork are the GitHub connector tools that merge, review or push.

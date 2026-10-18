@@ -28,8 +28,24 @@ var captureTools = []string{
 	"tabs_context_mcp", "tabs_create_mcp", "tabs_close_mcp", "list_connected_browsers", "select_browser", "switch_browser",
 }
 
-// clipboardKey is a key press that copies, cuts, pastes or selects all.
-var clipboardKey = regexp.MustCompile(`(?i)\b(?:ctrl|cmd|meta|super)\+(?:shift\+)?[acvx]\b`)
+// captureActions are the computer actions a capture turn may take: no
+// picture, no drag, double or triple click that selects the page's text.
+var captureActions = []string{actionLeftClick, "type", actionKeyPress, "scroll", "scroll_to", "hover", "wait"}
+
+// captureKeys are the keys a capture turn may press, each alone: no chord
+// with a modifier (a copy, a paste, a select-all, the address bar's focus)
+// and no function key.
+var captureKeys = []string{
+	"return", "enter", "tab", "escape", "esc", "backspace", "space",
+	"up", "down", "left", "right", "arrowup", "arrowdown", "arrowleft", "arrowright", "home", "end", "pageup", "pagedown",
+}
+
+// plainKeys reports whether every key a key action presses (space
+// separated) is one of captureKeys, alone.
+func plainKeys(text string) bool {
+	keys := strings.Fields(strings.ToLower(text))
+	return len(keys) > 0 && !slices.ContainsFunc(keys, func(k string) bool { return !slices.Contains(captureKeys, k) })
+}
 
 // tokenRun is a run of token characters long enough to be a piece of a
 // credential (an API key, a client secret, a private key's base64 line): a
@@ -63,8 +79,8 @@ type Capture struct {
 
 // CapturePage is a capture turn's hook (beekeeper hook capturepage, in the
 // turn's --settings alone). On PreToolUse it refuses every Chrome call but
-// those captureTools allows: no screenshot, zoom, page read or batch, no
-// copy or paste key, no navigate but to an http or https page, no script
+// those captureTools and captureActions allow: no screenshot, zoom, page
+// read, batch, drag or triple click, no key but a plain one (captureKeys), no navigate but to an http or https page, no script
 // but the reader. On PostToolUse it delivers the one distinct match of the
 // pattern a result carries, and answers every result with images dropped,
 // every match of the pattern and every token run masked, so the value
@@ -132,8 +148,10 @@ func (c Capture) refusal(tool string, input json.RawMessage) string {
 	switch {
 	case !slices.Contains(captureTools, name), takesPicture(tool, in):
 		return blind + "no screenshot, zoom, page read or batch. Find each control with find (by its words, never the value) and click it by its ref."
-	case name == chromeComputer && clipboardKey.MatchString(str(textKey)):
-		return blind + "no copy, cut, paste or select-all key."
+	case name == chromeComputer && !slices.Contains(captureActions, str(actionKey)):
+		return blind + "no screenshot, zoom, drag, double or triple click: computer clicks, types, presses a key, scrolls, hovers or waits."
+	case name == chromeComputer && str(actionKey) == actionKeyPress && !plainKeys(str(textKey)):
+		return blind + "a key is pressed alone, one of " + strings.Join(captureKeys, ", ") + ": no chord with a modifier, no function key."
 	case name == chromeNavigation && !strings.HasPrefix(str(urlKey), "https://") && !strings.HasPrefix(str(urlKey), "http://") &&
 		str(urlKey) != "back" && str(urlKey) != "forward":
 		return blind + "navigate opens an http or https page only."

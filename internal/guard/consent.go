@@ -301,7 +301,7 @@ func (h Hook) consent(ev event) []byte {
 }
 
 // acting are the computer actions that act on a page rather than read it.
-var acting = []string{"left_click", "right_click", "double_click", "triple_click", "left_click_drag", "key", "type"}
+var acting = []string{actionLeftClick, "right_click", "double_click", "triple_click", "left_click_drag", actionKeyPress, "type"}
 
 // chromeCall is one call of a Chrome tool the hook decides: a navigation to
 // a URL, or an action on a tab (its tabId, "" when the call names none) in
