@@ -63,7 +63,8 @@ creation. An agent runs it while it holds the browser lease.
 It runs the steps in a capture turn, a beekeeper browse turn (its tools
 and rules, beekeeper browse --help) made blind: its hook passes an allow
 list of Chrome calls alone, so the turn has no screenshot, zoom, page
-text, page read, traffic read or batch, no copy or paste key and no
+text, page read, traffic read or batch, no drag, double or triple click, no key
+but a plain one pressed alone (no chord, no function key) and no
 navigate but to an http or https page; it finds its controls with find
 and clicks them by ref; the one script it runs is beekeeper's reader,
 which answers the matches of --match on the page. The

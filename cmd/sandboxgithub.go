@@ -18,10 +18,15 @@ import (
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 )
 
-// githubRenew is how often the broker reads devctl's App token for the
-// egress proxy: devctl renews it once under ten minutes are left, so the
-// proxy never holds a token with less than five.
-const githubRenew = 5 * time.Minute
+// githubRenewal is how the broker reads devctl's App token for the egress
+// proxy: every five minutes, as devctl renews it once under ten minutes
+// are left, so the proxy never holds a token with less than five. A cold
+// devctl right after a boot takes over a minute, so a broker without a
+// token waits three; a failed read is tried again after 30s, 1m and 2m.
+var githubRenewal = sandbox.GitHubRenewal{
+	Every: 5 * time.Minute, Bound: time.Minute, ColdBound: 3 * time.Minute,
+	Backoff: []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute},
+}
 
 // gateBrokeredTimeout bounds a sandboxed session's gated devctl command on
 // the host: the wait for its turn, devctl's own --timeout (45m for a merge)
@@ -59,7 +64,7 @@ func (a *app) listenEgress(ctx context.Context) (serve func() error, err error) 
 	say(fmt.Sprintf("egress proxy on %s, its CA in %s", ln.Addr(), dir))
 	tok := &sandbox.Token{}
 	devctl := a.cfg.Sandbox.Devctl
-	go sandbox.KeepGitHub(ctx, tok, githubRenew, func(ctx context.Context) (string, error) {
+	go sandbox.KeepGitHub(ctx, tok, githubRenewal, func(ctx context.Context) (string, error) {
 		return devctlToken(ctx, devctl)
 	}, say)
 	e := &sandbox.Egress{
@@ -71,14 +76,19 @@ func (a *app) listenEgress(ctx context.Context) (serve func() error, err error) 
 
 // devctlToken is devctl's App user token: devctl auth exec hands it to a
 // command's environment only, so the command prints it into this process.
+// ctx bounds the read (githubRenewal). Its error names the cause: no devctl
+// login, which devctl answers by naming `devctl auth login`, or devctl's
+// own error.
 func devctlToken(ctx context.Context, devctl string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
 	var out, errOut bytes.Buffer
 	c := exec.CommandContext(ctx, devctl, "auth", "exec", "--", "printenv", "GH_TOKEN") //nolint:gosec // the configured devctl
 	c.Stdout, c.Stderr = &out, &errOut
 	if err := c.Run(); err != nil {
-		return "", fmt.Errorf("devctl auth exec: %w: %s", err, strings.TrimSpace(errOut.String()))
+		said := strings.TrimSpace(errOut.String())
+		if strings.Contains(said, "devctl auth login") {
+			return "", fmt.Errorf("no devctl login (devctl auth exec: %w: %s)", err, said)
+		}
+		return "", fmt.Errorf("devctl's own error (devctl auth exec: %w: %s)", err, said)
 	}
 	return strings.TrimSpace(out.String()), nil
 }
