@@ -267,15 +267,17 @@ func (d *document) sopsIndex(keys []string) string {
 // secretKey is a key whose value is a secret whatever it looks like.
 var secretKey = regexp.MustCompile(`(?i)secret|passw(or)?d|pwd|token|key|credential|private|cookie|salt|hmac|cert`)
 
-// publicIDKey is a leaf naming an OAuth client, public in every authorize
-// URL however random it looks.
-var publicIDKey = regexp.MustCompile(`(?i)^(id|client_?id)$`)
+// publicIDKey is a leaf naming an OAuth client or App, public in every
+// authorize URL however random it looks: id, or client, app or application
+// joined to id plain, by a hyphen or an underscore (client-id, appId,
+// application_id).
+var publicIDKey = regexp.MustCompile(`(?i)^(id|(client|app|application)[-_]?id)$`)
 
 // peersKey is a list of client ids, each item public like publicIDKey.
 var peersKey = regexp.MustCompile(`(?i)^(trusted_?)?peers$`)
 
-// publicID reports whether the leaf at path is a client id: a key named id
-// or clientID, or an item of a trustedPeers or peers list.
+// publicID reports whether the leaf at path is a client id: a key named like
+// publicIDKey, or an item of a trustedPeers or peers list.
 func publicID(path string) bool {
 	ks := strings.Split(path, ".")
 	last := ks[len(ks)-1]

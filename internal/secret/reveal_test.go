@@ -171,6 +171,37 @@ privateKey:
 	}
 }
 
+func TestRevealAppIDKeys(t *testing.T) {
+	ids := []string{clientIDKey, "clientId", "client_id", "app-id", "appId", "app_id", "application-id", "applicationId", "application_id"}
+	var doc strings.Builder
+	doc.WriteString("oauth:\n")
+	for _, k := range ids {
+		doc.WriteString("  " + k + ": " + keyLike + "\n")
+	}
+	doc.WriteString("  " + clientSecretKey + ": " + keyLike + "x\n  private-key: " + keyLike + "y\n  app-idx: " + keyLike + "\n")
+	f := filepath.Join(t.TempDir(), "app.sops.yaml")
+	if err := os.WriteFile(f, secrettest.Encrypt(doc.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range ids {
+		fs, err := ops(secrettest.New(nil)).Reveal(context.Background(), f, []string{"oauth." + k})
+		if want := []secret.Field{{Path: "oauth." + k, Value: keyLike}}; err != nil || !slices.Equal(fs, want) {
+			t.Errorf("%s = %+v, %v", k, fs, err)
+		}
+	}
+	for path, why := range map[string]string{
+		"oauth." + clientSecretKey: `under the key "` + clientSecretKey + `"`,
+		"oauth.private-key":        `under the key "private-key"`,
+		"oauth.app-idx":            "a key's entropy",
+	} {
+		fs, err := ops(secrettest.New(nil)).Reveal(context.Background(), f, []string{path})
+		if !errors.Is(err, secret.ErrSecretLike) || !strings.Contains(err.Error(), why) || fs != nil {
+			t.Errorf("%s: %v, %+v", path, err, fs)
+		}
+		noDexSecret(t, "reveal "+path, err)
+	}
+}
+
 func TestSecretLikeValues(t *testing.T) {
 	for v, secretish := range map[string]bool{
 		"dex-k8s-authenticator":                             false,
