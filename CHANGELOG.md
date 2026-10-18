@@ -11,8 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- A message to "the supervisor" or "the guide" during a relay reaches a run that takes it. The successor's start, run in its headless first turn, now records the relay's desktop id on its holder, so the role resolves to that desktop session instead of a bare run name nothing answers. From that start, for the role's `relayTTL`, while the successor's CLI takes no message (no CLI, or no peer socket yet), the message goes to the outgoing holder the relay relieved, while that one's CLI does; never to an older relieved run ([#634](https://github.com/giantswarm/beekeeper/issues/634)).
 - The hook writes no gate into a variable's assigned value: `body="Proof: devctl pr merge o/r 7 ran"; gh issue comment 1 --body "$body"` passes unchanged, where the gate's path used to be inserted into the comment's text. A variable holding a blocking devctl command passes only where the call expands it as text (a quoted argument of gh, git commit, echo or printf, a here-document that is content, another such variable); one that may run (`$c`, `eval "$c"`, `bash -c "$c"`, a shell's input, an exported or prefix value, or a line that exports or reaches variables indirectly: `export`, `set -a`, `declare -x`, `-n` or `-i`, `${!…}`, `printf -v`, `read`, `set` with `a` or `allexport` in any option, an arithmetic context) is refused ([#1067](https://github.com/giantswarm/beekeeper/issues/1067)).
+
+## [0.149.1-rc.3] - 2026-10-18
+
+### Fixed
+
+- A message to "the supervisor" or "the guide" during a relay reaches a run that takes it. The successor's start, run in its headless first turn, now records the relay's desktop id on its holder, so the role resolves to that desktop session instead of a bare run name nothing answers. From that start, for the role's `relayTTL`, while the successor's CLI takes no message (no CLI, or no peer socket yet), the message goes to the outgoing holder the relay relieved, while that one's CLI does; never to an older relieved run ([#634](https://github.com/giantswarm/beekeeper/issues/634)).
 
 ## [0.149.1-rc.1] - 2026-10-18
 
