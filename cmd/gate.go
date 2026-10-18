@@ -73,7 +73,12 @@ func (a *app) gateCmd() *cobra.Command {
 		Long: `gate is what the PreToolUse hook puts in front of every devctl pr merge and
 every devctl release promote of one repository; a session never calls it. A
 promotion queues and runs in its repository's lane like a merge, its stable
-release settling the lane. Only a hold refuses (exit 77): the repository,
+release settling the lane. One pinned with --version vX.Y.Z-rc.N promotes
+that candidate when its turn comes, whatever was cut after it. An unpinned
+one promotes the candidate newest when it was called, or nothing: a newer
+one by its turn refuses it (77), and where a merge would wait on outside the
+call (exit 76, below) it is refused (77) instead, naming the newest
+candidate to pin. Only a hold refuses (exit 77): the repository,
 its lane, "merges" or "github" held (a cluster upgrade on the lane's
 installation holds it too); so do a GitHub budget unknown and a lane
 installation that cannot be read. A read of the budget, the installation,
@@ -248,6 +253,9 @@ type gateRun struct {
 	// call read it (a fresh promote), else it is its place's.
 	candidate     string
 	candidateRead bool
+	// pinned says the promotion names its candidate (--version): devctl
+	// promotes that one whatever is newest when its turn comes.
+	pinned bool
 	// central says the merge's lane queues in the central instance: joined
 	// once the merge has its place there, centralWhy what it waits for
 	// there as of centralAsked.
@@ -312,14 +320,20 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 	}
 	// A queued run takes over the place its gate holds: none means dropped.
 	g.placed = queued || resumed
-	if pr == 0 && !queued {
-		if err = g.readRetrying("the release candidate of "+repo, func() (err error) {
-			g.candidate, err = promoteCandidate(ctx, repo)
-			return err
-		}); err != nil {
-			return gateRefused("the release candidate of %s is unknown (%v): nothing promoted; run the same command again", repo, err)
+	if pr == 0 {
+		_, pin, _ := merge.ParsePromote(argv)
+		switch {
+		case pin != "":
+			g.candidate, g.candidateRead, g.pinned = pin, true, true
+		case !queued:
+			if err = g.readRetrying("the release candidate of "+repo, func() (err error) {
+				g.candidate, err = promoteCandidate(ctx, repo)
+				return err
+			}); err != nil {
+				return gateRefused("the release candidate of %s is unknown (%v): nothing promoted; run the same command again", repo, err)
+			}
+			g.candidateRead = true
 		}
-		g.candidateRead = true
 	}
 	if v, ok := os.LookupEnv(gateFromEnv); ok {
 		_ = os.Unsetenv(gateFromEnv)
@@ -441,8 +455,14 @@ func (g *gateRun) resumeMerge(running string) error {
 // (launchChild), the same gate under --queued: it keeps the merge's place, merges
 // when its turn comes and wakes the owner with the outcome (tellOwner), as
 // this gate leaves without its heard marker. It returns exit 76, for a
-// merge that waited its turn and for one under the budget floor alike.
+// merge that waited its turn and for one under the budget floor alike. An
+// unpinned promotion is refused instead (77): its turn, later, would promote
+// a candidate nobody chose.
 func (g *gateRun) enqueue(why string) error {
+	if g.pr == 0 && !g.pinned {
+		return g.refuse("%s, and only a pinned promotion waits on outside the call: unpinned, its turn would promote whatever candidate is newest by then. Nothing promoted, its place is dropped: run %s release promote %s --version <the candidate you proved> (the newest is %s now)",
+			why, merge.Tool, g.repo, cmp.Or(g.candidate, "none"))
+	}
 	queued := &exitError{code: ExitGateQueued}
 	self, err := selfExe()
 	if err == nil {
@@ -673,8 +693,8 @@ func (g *gateRun) step() (string, error) {
 	return why, err
 }
 
-// checkCandidate refuses a promotion whose turn came, its place running,
-// when the newest release candidate is not the one it was queued for: it
+// checkCandidate refuses an unpinned promotion whose turn came, its place
+// running, when the newest release candidate is not the one it was queued for: it
 // would promote another worker's candidate. Its place leaves the lane and
 // its owner decides again.
 func (g *gateRun) checkCandidate() error {
@@ -1139,7 +1159,7 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 		return why, nil
 	}
 	g.leaveCentral(g.ctx, settled, "rolled, HelmReleases of "+g.lane.Installation+" Ready")
-	if g.pr == 0 {
+	if g.pr == 0 && !g.pinned {
 		if err := g.checkCandidate(); err != nil {
 			return "", err
 		}
@@ -1558,7 +1578,7 @@ func parseGated(argv []string) (repo string, pr int, ok bool) {
 	if repo, pr, ok = merge.ParseArgs(argv); ok {
 		return repo, pr, ok
 	}
-	repo, ok = merge.ParsePromote(argv)
+	repo, _, ok = merge.ParsePromote(argv)
 	return repo, 0, ok
 }
 

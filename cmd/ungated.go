@@ -26,7 +26,7 @@ func gatedCommand(p *proc.Process) bool {
 	if _, _, ok := merge.ParseArgs(p.Args); ok {
 		return true
 	}
-	_, ok := merge.ParsePromote(p.Args)
+	_, _, ok := merge.ParsePromote(p.Args)
 	return ok
 }
 
