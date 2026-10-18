@@ -520,7 +520,9 @@ Refused unless their output ends in an allowed form:
   column (`ps aux`, `ps -ef`, `ps -eo pid,args`, BSD-style words without `c`, BSD `e`), `pgrep -a`,
   `pstree -a`, a read of `/proc/<pid>/cmdline` or `environ` (`ls`, `stat` and `wc` pass), `docker|podman
   inspect` without a `--format` limited to names and state, and `docker ps --no-trunc` with the
-  command column. The safe forms: `beekeeper ps` (below), `ps -eo pid,ppid,etime,time,rss,comm`,
+  command column. `ps` counts where it runs as the command (past `sudo`, `timeout` and the other
+  wrappers, after `watch`, `ssh <host>`, `docker exec <c>` or `kubectl exec <pod> --`), never as
+  another program's subcommand (`ollama ps`, `docker ps`) or a URL's path (`/api/ps`). The safe forms: `beekeeper ps` (below), `ps -eo pid,ppid,etime,time,rss,comm`,
   `pgrep -l`, `pgrep -c`, `docker inspect --format '{{.Name}} {{.State.Status}}'`.
 
 The allowed forms: a `jq`/`yq` filter that keeps only keys or metadata (`jq '.data|keys'`,
