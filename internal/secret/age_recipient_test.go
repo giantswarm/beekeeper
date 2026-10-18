@@ -3,6 +3,7 @@ package secret
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -28,9 +29,13 @@ func TestCompareAndCopyFindTheIdentityByRecipient(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			file := sopsFileAt(t, path, "", r)
-			dst := sopsFileAt(t, filepath.Join(t.TempDir(), "copy.yaml"), "", r)
+			dstDir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dstDir, ".sops.yaml"), []byte("creation_rules:\n  - age: "+r+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			dst := sopsFileAt(t, filepath.Join(dstDir, "copy.yaml"), "", r)
 			f := &vaultsTools{vaults: map[string]map[string]map[string]string{
-				ageVault:  {unrelatedItem: {ageItemField: "x"}, "elver.agekey": {noteField: other.String()}},
+				ageVault:  {unrelatedItem: {ageItemField: "x"}, elverItem: {noteField: other.String()}},
 				ageVaultB: {"alder.agekey": {noteField: other.String()}, cedarItem: {"": "# public key: " + r + "\n" + id.String() + "\n"}},
 			}}
 			o := &Ops{Run: f.run, Vault: ageVault, Token: "t", AgeVaults: []string{ageVaultB}}
@@ -42,11 +47,11 @@ func TestCompareAndCopyFindTheIdentityByRecipient(t *testing.T) {
 			if len(vs) != 1 || vs[0].State != Equal {
 				t.Errorf("compare = %+v", vs)
 			}
-			if _, err := o.CopyValue(context.Background(), src, Ref{File: dst, Path: "stringData.password"}); err != nil {
-				t.Fatalf("copy: %v", err)
-			}
 			if len(f.env) != 1 || f.env[0] != envAgeKey+"="+id.String() {
 				t.Errorf("sops did not get the identity of the file's recipient (%d entries)", len(f.env))
+			}
+			if _, err := o.CopyValue(context.Background(), src, Ref{File: dst, Path: "stringData.password"}); err != nil {
+				t.Fatalf("copy: %v", err)
 			}
 			rs, err := o.Recipients(context.Background(), file)
 			if err != nil || len(rs) != 1 || rs[0].Missing() {
@@ -73,7 +78,7 @@ func TestNoIdentityForTheRecipientNamesIt(t *testing.T) {
 			file := sopsFileAt(t, path, "", r)
 			f := &vaultsTools{vaults: map[string]map[string]map[string]string{
 				ageVault:  {},
-				ageVaultB: {"elver.agekey": {noteField: other.String()}},
+				ageVaultB: {elverItem: {noteField: other.String()}},
 			}}
 			o := &Ops{Run: f.run, Vault: ageVault, Token: "t", AgeVaults: []string{ageVaultB}}
 			_, err := o.values(context.Background(), Ref{File: file})

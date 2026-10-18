@@ -504,6 +504,7 @@ const (
 	titleKey      = "title"
 	opRead        = "read"
 	cedarItem     = "cedar.agekey"
+	elverItem     = "elver.agekey"
 	commonRef     = "op://" + ageVaultB + "/" + cedarItem + "/" + noteField
 )
 
@@ -584,7 +585,7 @@ func TestAgeIdentityFromTheInstallationItem(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := &vaultsTools{vaults: map[string]map[string]map[string]string{
 				ageVault:  {unrelatedItem: {ageItemField: "x"}},
-				ageVaultB: {cedarItem: fields, "elver.agekey": {noteField: other.String()}},
+				ageVaultB: {cedarItem: fields, elverItem: {noteField: other.String()}},
 			}}
 			o := &Ops{Run: f.run, Vault: ageVault, Token: "t", AgeVaults: []string{ageVaultB}}
 			if !o.AgeNeedsVault("", []string{file}) {
@@ -650,7 +651,7 @@ func TestNoInstallationItemHoldingTheRecipientFails(t *testing.T) {
 	// installation items holding other recipients' identities are refused,
 	// the path's installation's among them
 	f.vaults[ageVaultB][cedarItem] = map[string]string{noteField: other.String()}
-	f.vaults[ageVaultB]["elver.agekey"] = map[string]string{noteField: other.String()}
+	f.vaults[ageVaultB][elverItem] = map[string]string{noteField: other.String()}
 	_, err = o.values(context.Background(), Ref{File: file})
 	for _, w := range []string{"for its recipient " + r, `"cedar.agekey" of Common, "elver.agekey" of Common`, "they hold the identity of " + other.Recipient().String()} {
 		if err == nil || !strings.Contains(err.Error(), w) {
