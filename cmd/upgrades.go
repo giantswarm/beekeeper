@@ -35,12 +35,12 @@ func (a *app) upgradeStatuses(ctx context.Context, st *state.State, now time.Tim
 		}
 	}
 	if len(due) > 0 {
-		contexts := (&alerts.Reader{Kubectl: al.Kubectl}).Contexts(ctx)
+		contexts := (&alerts.Reader{Kubectl: al.Kubectl, Kubeconfig: a.alertKubeconfig()}).Contexts(ctx)
 		targets := make([]upgrade.Target, 0, len(due))
 		for _, in := range due {
 			targets = append(targets, upgrade.Target{Name: in.Name, Context: alerts.ResolveContext(in.Name, in.Context, a.cfg.Kube.Context, contexts)})
 		}
-		r := upgrade.Reader{Kubectl: al.Kubectl, Timeout: al.Timeout.Duration}
+		r := upgrade.Reader{Kubectl: al.Kubectl, Kubeconfig: a.alertKubeconfig(), Timeout: al.Timeout.Duration}
 		read := r.Read(ctx, targets, now, upgrade.HeldClusters(st, now))
 		if ctx.Err() == nil {
 			rs.Keep(read, now)

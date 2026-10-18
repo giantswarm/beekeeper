@@ -21,10 +21,11 @@ import (
 // port in $FAKE_<SERVICE> (mimir-alertmanager is FAKE_MIMIR, the plain one
 // FAKE_PLAIN), says "not found" for a service without one, and fails with
 // $FAKE_FAIL, or once with $FAKE_FAIL_ONCE (the file $FAKE_FAILED records
-// that it did). Every run appends its arguments to $FAKE_CALLS. It starts a child like a real port-forward's helpers and
+// that it did). Every run appends its arguments and its KUBECONFIG to
+// $FAKE_CALLS. It starts a child like a real port-forward's helpers and
 // records both PIDs, so the test can tell whether the process group ended.
 const fakeKubectl = `#!/bin/sh
-echo "$*" >> "$FAKE_CALLS"
+echo "$* KUBECONFIG=$KUBECONFIG" >> "$FAKE_CALLS"
 case "$*" in *"config get-contexts"*) echo teleport.giantswarm.io-alpha; exit 0;; esac
 case "$*" in *"--context missing"*) echo 'error: context "missing" does not exist' >&2; exit 1;; esac
 if [ -n "$FAKE_FAIL" ]; then echo "$FAKE_FAIL" >&2; exit 1; fi
@@ -362,5 +363,41 @@ func TestReadMissingContextIsNotRetried(t *testing.T) {
 	got = f.reader.Read(context.Background(), []Target{missing})
 	if got[0].OK || !got[0].NoContext || got[0].Why != `context "missing" is not in the kubeconfig` || f.runs("port-forward") != 1 {
 		t.Errorf("known contexts: answer = %+v after %d forwards", got[0], f.runs("port-forward"))
+	}
+}
+
+// A Reader with kubeconfig files of its own resolves contexts and forwards
+// through them, whatever KUBECONFIG the process has, and notices a change of
+// them.
+func TestReadUsesItsOwnKubeconfig(t *testing.T) {
+	f := newFake(t)
+	f.serve("FAKE_MIMIR")
+	dir := t.TempDir()
+	machine, own := filepath.Join(dir, "config"), filepath.Join(dir, "teleport.yaml")
+	for _, p := range []string{machine, own} {
+		if err := os.WriteFile(p, []byte("a"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("KUBECONFIG", filepath.Join(dir, "person"))
+	f.reader.Keep = true
+	f.reader.Kubeconfig = []string{machine, own}
+	defer f.reader.Close()
+	f.reader.Contexts(context.Background())
+	listed := Target{Name: instA, Context: "teleport.giantswarm.io-alpha"}
+	if got := f.reader.Read(context.Background(), []Target{listed}); !got[0].OK {
+		t.Fatalf("answer = %+v", got[0])
+	}
+	want := "KUBECONFIG=" + machine + string(os.PathListSeparator) + own + "\n"
+	if n := f.runs(want); n != 2 {
+		raw, _ := os.ReadFile(f.calls)
+		t.Errorf("runs with %q = %d, want 2 (get-contexts, port-forward):\n%s", want, n, raw)
+	}
+	if err := os.WriteFile(own, []byte("ab"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.reader.Contexts(context.Background())
+	if n := f.runs("get-contexts"); n != 2 {
+		t.Errorf("kubectl asked %d times after its own kubeconfig changed, want twice", n)
 	}
 }
