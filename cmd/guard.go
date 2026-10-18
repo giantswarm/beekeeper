@@ -570,7 +570,9 @@ take-over folder naming the running screen) has its request held for the
 screen: the screen's allow or deny is the answer. No answer within 290 s,
 the screen gone, or the take-over released: no answer, and the request
 goes to the session's own window. Each is a takeover.answer or
-takeover.back event.
+takeover.back event. The take-over comes before the allow: a beekeeper
+start the person took over asks the screen, and its unanswered request
+gets the window's card, not the allow.
 
 Every other request gets no answer at once and the person gets the normal
 card: sessions beekeeper did not start, desktop sessions, and beekeeper's
@@ -677,29 +679,39 @@ var (
 	takeoverPoll   = takeover.Poll
 )
 
-// permissionRequest decides one PermissionRequest event: beekeeper's own
-// bypass starts are allowed, a taken-over session's request is held for the
-// screen, every other one gets no answer (nil) at once.
+// permissionRequest decides one PermissionRequest event: a taken-over
+// session's request is held for the screen, beekeeper's own bypass starts
+// are allowed, every other one gets no answer (nil) at once. The take-over
+// comes first, so a beekeeper start the person took over asks the screen,
+// and its unanswered request goes to its window's card, never to the allow.
 func (a *app) permissionRequest(ctx context.Context, raw []byte) []byte {
+	if out, held := a.heldRequest(ctx, raw); held {
+		return out
+	}
 	var start state.Start
 	out, req := guard.Permission(raw, func(session string) bool {
 		var ok bool
 		start, ok = a.bypassStart(session)
 		return ok
 	})
-	if out != nil {
-		if a.store != nil {
-			_ = a.store.Log(event(start.Party, "hook.allow", "%s in %s", req.Tool, start.Dir))
-		}
-		return out
+	if out != nil && a.store != nil {
+		_ = a.store.Log(event(start.Party, "hook.allow", "%s in %s", req.Tool, start.Dir))
 	}
-	if req.Event != guard.PermissionEvent || req.Session == "" || a.loadConfig() != nil {
-		return nil
+	return out
+}
+
+// heldRequest holds the request in raw for the screen when its session is
+// taken over: held is true and out the screen's answer, nil when none came.
+// A session not taken over is told by one file read without a lock.
+func (a *app) heldRequest(ctx context.Context, raw []byte) (out []byte, held bool) {
+	var req guard.Request
+	if json.Unmarshal(raw, &req) != nil || req.Event != guard.PermissionEvent || req.Session == "" || a.loadConfig() != nil {
+		return nil, false
 	}
 	dir := takeover.Dir(a.cfg.StateDir)
 	f, ok := takeover.Taken(dir, req.Session, proc.Alive)
 	if !ok {
-		return nil
+		return nil, false
 	}
 	ctx, cancel := context.WithTimeout(ctx, takeoverGiveUp)
 	defer cancel()
@@ -715,9 +727,9 @@ func (a *app) permissionRequest(ctx context.Context, raw []byte) []byte {
 		}
 	}
 	if !answered {
-		return nil
+		return nil, true
 	}
-	return guard.PermissionDecision(d.Behavior, d.Message)
+	return guard.PermissionDecision(d.Behavior, d.Message), true
 }
 
 // reportCheck decides a reporter's PreToolUse event: a post failing the
