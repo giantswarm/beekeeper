@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.149.1-rc.1] - 2026-10-18
+
 ### Fixed
 
 - The hook's shell scan reads `$'…'` to its first unescaped quote and decodes its escapes in a command's words, so `echo $'a\''; devctl pr merge o/r 7` has its merge gated and a `$'…'` argument containing `\'` stays text to its end ([#1380](https://github.com/giantswarm/beekeeper/issues/1380)).
