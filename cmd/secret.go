@@ -160,7 +160,7 @@ anything is not equal.`,
 			return vaultExit(run(cmd, args))
 		}
 	}
-	c.AddCommand(a.secretUnlockCmd(), a.secretLockCmd(), a.secretStatusCmd(), a.secretStoreCmd())
+	c.AddCommand(a.secretUnlockCmd(), a.secretLockCmd(), a.secretStatusCmd(), a.secretStoreCmd(), a.secretPageCmd())
 	return c
 }
 

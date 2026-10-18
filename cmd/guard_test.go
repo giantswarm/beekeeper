@@ -79,6 +79,9 @@ func TestMain(m *testing.M) {
 	if len(os.Args) > 2 && os.Args[1] == followRunCmd {
 		os.Exit(followRun(os.Args[2], os.Stdout, os.Stderr))
 	}
+	if os.Getenv(fakePageClaudeEnv) == "1" {
+		os.Exit(fakePageClaude(os.Args[1:]))
+	}
 	if os.Getenv("BEEKEEPER_TEST_MAIN") == "1" {
 		os.Exit(Main())
 	}

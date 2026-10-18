@@ -38,7 +38,13 @@ const actionKey = "action"
 
 // computerReads are the actions of the browser's computer tool that only
 // look: a screenshot, a scroll, a zoom, a wait, a hover.
-var computerReads = []string{"screenshot", "scroll", "scroll_to", "zoom", "wait", "hover"}
+var computerReads = []string{actionScreenshot, "scroll", "scroll_to", actionZoom, "wait", "hover"}
+
+// The computer actions that answer the page's pixels.
+const (
+	actionScreenshot = "screenshot"
+	actionZoom       = "zoom"
+)
 
 // connectorWork are the GitHub connector tools that merge, review or push.
 var connectorWork = []string{

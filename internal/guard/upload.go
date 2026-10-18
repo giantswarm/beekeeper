@@ -301,7 +301,7 @@ func takesPicture(tool string, input map[string]any) bool {
 	switch chromeTool(tool) {
 	case chromeComputer:
 		action, _ := input[actionKey].(string)
-		return action == "screenshot" || action == "zoom"
+		return action == actionScreenshot || action == actionZoom
 	case chromeBatch:
 		return slices.ContainsFunc(batchActions(input), func(a chromeAction) bool { return takesPicture(a.name, a.input) })
 	}
