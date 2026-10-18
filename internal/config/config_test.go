@@ -640,3 +640,24 @@ func TestProfileFor(t *testing.T) {
 		t.Errorf("the desk's minimal did not replace the built-in one: %+v", p)
 	}
 }
+
+// A purpose's manifest template is apps.template with the purpose for
+// {name}, or apps.manifest's file as manifest.template.json; none without
+// the declaring repository or a {name}.
+func TestAppsTemplateOf(t *testing.T) {
+	const manifest, repo = "apps/{name}/manifest.json", "o/r"
+	for _, tc := range []struct {
+		apps Apps
+		want string
+	}{
+		{Apps{Repo: repo, Manifest: manifest}, "apps/portal/manifest.template.json"},
+		{Apps{Repo: repo, Manifest: manifest, Template: "templates/{name}.json"}, "templates/portal.json"},
+		{Apps{Manifest: manifest}, ""},
+		{Apps{Repo: repo, Manifest: "apps/{name}/manifest.yaml"}, ""},
+		{Apps{Repo: repo, Template: "templates/portal.json"}, ""},
+	} {
+		if got := tc.apps.TemplateOf("portal"); got != tc.want {
+			t.Errorf("%+v.TemplateOf(portal) = %q, want %q", tc.apps, got, tc.want)
+		}
+	}
+}
