@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `uninstall` resolves a symlinked unit: the person's link stays, and a target an earlier install wrote through the link is removed, its unit stopped without being disabled (systemd removes a linked unit's symlink on disable); `uninstall --dry-run` names the target it would remove and the link that stays. A target the person changed since stays as theirs ([#764](https://github.com/giantswarm/beekeeper/issues/764)).
+- The secrets hook reads `ps` as the command word only: `ollama ps <model>` and a `curl` or `wget` of `/api/ps` with options after the URL (`-H …`, `-w …`) pass, where the words after them were read as BSD-style `ps` options and refused as a ps with command lines; `ps aux`, `ps -ef`, `ps -o cmd`, and `ps` after a wrapper, `watch`, `ssh <host>`, `docker exec` or `kubectl exec --` keep their refusal ([#812](https://github.com/giantswarm/beekeeper/issues/812)).
 
 ### Removed
 

@@ -34,10 +34,33 @@ var (
 // ps.
 var subcommandHosts = map[string]bool{dockerCmd: true, podmanCmd: true, "nerdctl": true, "crictl": true, "compose": true, selfCmd: true}
 
+// commandRunners run their first argument as a command: watch ps aux is ps.
+var commandRunners = map[string]bool{watchCmd: true}
+
+// processLister reports whether words[k] runs the process lister: the
+// simple command's own word, or a word a runner (watch, ssh host, docker
+// exec c, kubectl exec p --) passes on as a command. Another program's
+// subcommand (ollama ps, docker ps) and a URL's path segment (/api/ps) are
+// none.
+func processLister(words []string, k int) bool {
+	c := commandAt(words)
+	w := words[k]
+	switch {
+	case k == c:
+		return true
+	case k < c, strings.Contains(w, ":"), strings.Contains(w, "/") && !strings.HasPrefix(w, "/"):
+		return false
+	case k == c+1:
+		return commandRunners[path.Base(words[c])]
+	}
+	return !subcommandHosts[path.Base(words[k-1])]
+}
+
 const (
 	dockerCmd = "docker"
 	podmanCmd = "podman"
 	userFlag  = "--user"
+	watchCmd  = "watch"
 )
 
 // procReaders are the commands that name a /proc file without printing it.
