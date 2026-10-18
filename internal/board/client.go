@@ -810,6 +810,9 @@ type Moved struct {
 	// board: the project of the issue's repository's own owner
 	// (owner/number); "" for the configured board.
 	Board string `json:"board,omitempty"`
+	// Kept says a release left the item as it is: its Status was changed
+	// since the hold set it (Release).
+	Kept bool `json:"kept,omitempty"`
 }
 
 // Move sets the Status of the board item of the issue ref to the status in

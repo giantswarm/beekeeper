@@ -34,6 +34,7 @@ const (
 	// passwordPurpose is a Password item's category and its password
 	// field's purpose.
 	passwordPurpose = "PASSWORD"
+	concealedType   = "CONCEALED"
 	create          = "create"
 	get             = "get"
 )
@@ -164,7 +165,7 @@ func (t *Tools) vault(args []string) ([]byte, error) {
 // builtins are op's built-in item fields by id: their purpose and type,
 // which op's validator requires.
 var builtins = map[string][2]string{
-	"password":   {passwordPurpose, "CONCEALED"},
+	"password":   {passwordPurpose, concealedType},
 	"username":   {"USERNAME", "STRING"},
 	"notesPlain": {"NOTES", "STRING"},
 }
@@ -195,7 +196,7 @@ func (t *Tools) item(args []string, stdin io.Reader) ([]byte, error) {
 			it = &item{ID: "id-" + parts[1], Title: parts[1]}
 			items[parts[1]] = it
 		}
-		f := field{ID: parts[2], Label: parts[2], Type: "CONCEALED", Value: v}
+		f := field{ID: parts[2], Label: parts[2], Type: concealedType, Value: v}
 		if typ, ok := t.Types[ref]; ok {
 			f.Type = typ
 		}
@@ -235,11 +236,20 @@ func (t *Tools) item(args []string, stdin io.Reader) ([]byte, error) {
 		}
 		var refused []string
 		password := false
+		emptyPassword, custom := false, false
 		for _, f := range it.Fields {
 			password = password || f.Purpose == passwordPurpose
+			emptyPassword = emptyPassword || f.Purpose == passwordPurpose && f.Value == ""
+			_, builtin := builtins[f.ID]
+			custom = custom || !builtin && f.Type == concealedType
 			if b, ok := builtins[f.ID]; ok && (f.Purpose != b[0] || f.Type != b[1]) {
 				refused = append(refused, fmt.Sprintf("field %q must have purpose %s and type %s", f.ID, b[0], b[1]))
 			}
+		}
+		// op refuses a Password item whose password is empty beside a
+		// concealed field of its own
+		if emptyPassword && custom {
+			refused = append(refused, "Password item requires ps value")
 		}
 		if it.Category == passwordPurpose && !password {
 			refused = append(refused, "a Password item must have a field with purpose PASSWORD")
