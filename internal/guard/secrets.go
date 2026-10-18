@@ -152,7 +152,7 @@ var (
 	// codeFile: a file name that holds code or prose, not a secret's values.
 	codeFile = regexp.MustCompile(`(?i)\.(?:go|md|ts|tsx|js|mjs|py|sh|rs|java|kt|rb|tf|html|css|tpl|snap|golden|mod|sum)$`)
 	dataWord = regexp.MustCompile(`(?i)\b(?:string)?data\b`)
-	shells   = map[string]bool{"sh": true, "bash": true, "zsh": true, "ksh": true, "dash": true, "ssh": true, evalCmd: true, "watch": true}
+	shells   = map[string]bool{"sh": true, "bash": true, "zsh": true, "ksh": true, "dash": true, "ssh": true, evalCmd: true, watchCmd: true}
 	hashCmds = map[string]bool{"sha256sum": true, "sha1sum": true, "sha224sum": true, "sha384sum": true, "sha512sum": true, "md5sum": true, "b2sum": true, "cksum": true, "shasum": true}
 	diffCmds = map[string]bool{"diff": true, "cmp": true, "colordiff": true, "sdiff": true, "diff3": true, "vimdiff": true, "delta": true, "difft": true}
 	// wrapperValues: the options of wrappers that take a value.
@@ -257,7 +257,7 @@ func (g secretGuard) nested(cmd string, sc shellScan, sg segment, words []string
 		}
 		// Every argument is scanned as a command line of its own: a -c
 		// string, ssh's remote command, watch's; one word (zsh -ic f) too.
-		script := name != "ssh" && name != "watch" && name != evalCmd
+		script := name != "ssh" && name != watchCmd && name != evalCmd
 		for _, arg := range words[k+1:] {
 			if strings.HasPrefix(arg, "-") {
 				continue
@@ -350,7 +350,7 @@ func (g secretGuard) sourceLeak(words []string, before string, aliases map[strin
 		case "kubectl-view_secret":
 			return &leak{what: "kubectl view-secret", safe: kubectlSafe, never: true}
 		case "ps", "pgrep", "pstree", dockerCmd, podmanCmd:
-			if k > 0 && subcommandHosts[path.Base(words[k-1])] {
+			if !processLister(words, k) {
 				continue
 			}
 			if l := procLeak(name, args); l != nil {

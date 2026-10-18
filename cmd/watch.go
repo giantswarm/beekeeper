@@ -1822,7 +1822,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	}
 	found := checkTimers(ctx, st.Timers, w.now, lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now) || w.resetFirst(st))
 	var fires []timerFire
-	var defaulted []state.Note
+	var defaulted, overtaken []state.Note
 	fire := func(st *state.State) ([]string, []state.Event, bool) {
 		seen, ce := observeCLI(st, sessions, w.now)
 		lines, evs := closeProbed(st, signedIn)
@@ -1830,6 +1830,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		lines, evs = append(lines, hl...), append(evs, he...)
 		nl, ne, nd := closeDefaulted(st, w.cfg.Guide.Person, watchParty, w.now)
 		lines, evs, defaulted = append(lines, nl...), append(evs, ne...), nd
+		overtaken = heldAmong(st.Notes, over)
 		ol, oe := closeOvertaken(st, over, watchParty)
 		lines, evs = append(lines, ol...), append(evs, oe...)
 		ol, oe = keepOpen(st, kept, watchParty)
@@ -1885,7 +1886,21 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	}
 	w.actTimers(ctx, fires)
 	for _, n := range defaulted {
-		w.timerActs.Go(func() { w.tellFiler(ctx, watchParty, &n, defaultedLine(&n)) })
+		w.timerActs.Go(func() {
+			w.tellFiler(ctx, watchParty, &n, defaultedLine(&n))
+			w.emitReleased(ctx, &n, closedDefaulted)
+		})
+	}
+	for _, n := range overtaken {
+		w.timerActs.Go(func() { w.emitReleased(ctx, &n, closedOvertaken) })
+	}
+}
+
+// emitReleased releases the board item the closed decision n held and says
+// so.
+func (w *watcher) emitReleased(ctx context.Context, n *state.Note, how string) {
+	if l := w.release(ctx, watchParty, n, how); l != "" {
+		w.emitNow("pending", "%s", l)
 	}
 }
 

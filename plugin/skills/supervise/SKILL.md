@@ -54,7 +54,9 @@ machine has a supervisor at all times: the role moves to a successor by relay an
   never written here) and `beekeeper board rank`, a hold on an item with `beekeeper board block <item> --by
   <issue>` (the person's stop too: the issue that carries it), which keeps the item's Team, rank
   and Status, holds every issue under it and is released by the closing blocker without a session
-  acting, a point in time to look at
+  acting, a hold on a person (an answer, a review) with `beekeeper note add --for <person> --ref
+  <item> --holds …`, which sets the item Blocked / Waiting and is released by the decision's answer
+  or default without a session acting, a point in time to look at
   something with `beekeeper timer add <time> "<what>"` (`timer done` once looked at), what each
   session serves and waits on with `beekeeper sessions serve`, the registered agents with
   `beekeeper agents`. `beekeeper handover` prints all of it with the sessions; `beekeeper handover
