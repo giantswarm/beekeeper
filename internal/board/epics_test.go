@@ -17,6 +17,7 @@ const (
 	planURL   = "https://github.com/o/plans/pull/1"
 	planHead  = "6a672cdede08fd2e7b00fb904d539d040419a24f"
 	plansRepo = "o/plans"
+	planRef   = "o/plans#1"
 )
 
 // gatedBoard is an Up Next epic with a merged plan, a sub-issue off the
@@ -41,7 +42,7 @@ func gatedBoard(t *testing.T, o []config.BoardStep) *Snapshot {
 	ep.OpenSubIssues, ep.SubIssues = 2, []Item{it(51, "", "", epicRef), slice}
 	return &Snapshot{Order: order, Statuses: statuses, Gate: g,
 		Items: []Item{ep, slice, it(53, upNext, "", "o/r#52"), it(10, upNext, "", "")},
-		Plans: map[string]*Plan{epicRef: {Ref: "o/plans#1", URL: planURL, State: "merged", Head: planHead}}}
+		Plans: map[string]*Plan{epicRef: {Ref: planRef, URL: planURL, State: "merged", Head: planHead}}}
 }
 
 func ranked(snap *Snapshot) []string {
@@ -83,7 +84,7 @@ func TestAnUpNextEpicIsInPlanningAndInProgressIsTheGo(t *testing.T) {
 		if got := ranked(snap); !slices.Equal(got, want) {
 			t.Errorf("after the go:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 		}
-		if es := snap.Epics(); len(es) != 1 || es[0].Ref != epicRef || es[0].Status != inProgress || es[0].PlanText() != "plan "+planURL+" (merged, head 6a672cd)" {
+		if es := snap.Epics(); len(es) != 1 || es[0].Ref != epicRef || es[0].Status != inProgress || es[0].PlanText() != "plan "+planURL+" (merged, head 6a672cd), no go recorded" {
 			t.Errorf("epics %+v", es)
 		}
 	}
@@ -161,6 +162,90 @@ func TestFindPlansTakesTheOpenPlanNamingTheEpic(t *testing.T) {
 	}
 	if got, err := (&Client{}).FindPlans(context.Background(), []string{"x/y#2"}); got != nil || err != nil {
 		t.Errorf("without plans repositories = %v, %v", got, err)
+	}
+}
+
+// goNode is a plan pull request a plans search answers for an epic past its
+// go, with its comments and commits.
+func goNode(n int, state string, merged bool, epic int, comments string, commits ...string) string {
+	oids := make([]string, len(commits))
+	for i, c := range commits {
+		oids[i] = fmt.Sprintf(`{"commit":{"oid":%q}}`, c)
+	}
+	node := planNode(n, state, false, merged, fmt.Sprintf("Epic: https://github.com/o/r/issues/%d", epic))
+	if len(commits) > 0 {
+		node = strings.Replace(node, fmt.Sprintf(`"h%d"`, n), fmt.Sprintf("%q", commits[len(commits)-1]), 1)
+	}
+	return strings.TrimSuffix(node, "}") + `,"comments":{"nodes":[` + comments + `]},"commits":{"nodes":[` + strings.Join(oids, ",") + `]}}`
+}
+
+// goComment is a comment that records the go of the epic o/r#n on a plan
+// (plan "" for the plan's own thread) at head, at the hour.
+func goComment(n int, plan, head string, hour int) string {
+	g := &Go{Epic: fmt.Sprintf("o/r#%d", n), Plan: &Plan{Ref: planRef, URL: plan, Head: head}, Thread: "o/r#1"}
+	if plan == "" {
+		g.Thread = g.Plan.Ref
+	}
+	return fmt.Sprintf(`{"body":%q,"url":"https://github.com/c/%d","createdAt":"2026-10-01T%02d:00:00Z"}`, g.Text("guide", inProgress), hour, hour)
+}
+
+func TestTheGoOfAnEpicPastItIsReadFromItsGoComment(t *testing.T) {
+	var queries []string
+	c := &Client{Plans: []string{plansRepo}, GH: func(ctx context.Context, args ...string) ([]byte, error) {
+		q := args[3]
+		queries = append(queries, q)
+		if strings.Contains(q, "search(") {
+			return []byte(`{"data":{` +
+				// Pushed from head a1 to b1 since the go on the plan's thread, an
+				// older go and a go of another epic beside it.
+				`"p0":{"nodes":[` + goNode(1, "OPEN", false, 50, goComment(50, "", "a0", 1)+","+goComment(50, "", "a1", 2)+","+goComment(9, "", "z9", 3), "a0", "a1", "x1", "b1") + `]},` +
+				// Implemented at plan 2, recorded on the private epic; plan 3 is newer.
+				`"p1":{"nodes":[` + goNode(3, "OPEN", false, 51, "", "c3") + "," + goNode(2, "MERGED", true, 51, "", "c2") + `]},` +
+				// Implemented at plan 4, closed since.
+				`"p2":{"nodes":[` + goNode(4, "CLOSED", false, 52, goComment(52, "", "d4", 1), "d4") + `]},` +
+				// No go recorded; its head not among the last commits is moved.
+				`"p3":{"nodes":[` + goNode(5, "OPEN", false, 53, "", "e5") + `]},` +
+				`"p4":{"nodes":[` + goNode(6, "OPEN", false, 54, goComment(54, "", "old", 1), "f6", "g6") + `]},` +
+				`"p5":{"nodes":[` + planNode(7, "OPEN", true, false, "Epic: https://github.com/o/r/issues/55") + `]}}}`), nil
+		}
+		return []byte(`{"data":{"e0":{"issue":{"comments":{"nodes":[]}}},"e1":{"issue":{"comments":{"nodes":[` + goComment(51, "https://github.com/o/plans/pull/2", "c2", 4) + `]}}},` +
+			`"e2":null,"e3":{"issue":{"comments":{"nodes":[]}}},"e4":{"issue":{"comments":{"nodes":[]}}}}}`), nil
+	}}
+	snap := gatedBoard(t, order())
+	snap.Items = nil
+	for n := 50; n <= 55; n++ {
+		status := inProgress
+		if n == 55 {
+			status = upNext
+		}
+		snap.Items = append(snap.Items, Item{Ref: fmt.Sprintf("o/r#%d", n), OnBoard: true, Status: status, Kind: epic})
+	}
+	var err error
+	if snap.Plans, err = c.plansOf(context.Background(), snap); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, e := range snap.Epics() {
+		got = append(got, e.Ref+": "+e.PlanText())
+	}
+	want := []string{
+		"o/r#50: plan https://github.com/o/plans/pull/1 (open, head b1, implemented a1): plan moved since the go: 2 commits",
+		"o/r#51: plan https://github.com/o/plans/pull/3 (open, head c3, implemented c2 of https://github.com/o/plans/pull/2): superseded by https://github.com/o/plans/pull/3",
+		"o/r#52: plan https://github.com/o/plans/pull/4 (closed, head d4, implemented d4): plan closed",
+		"o/r#53: plan https://github.com/o/plans/pull/5 (open, head e5), no go recorded",
+		"o/r#54: plan https://github.com/o/plans/pull/6 (open, head g6, implemented old): plan moved since the go: head old not among its last 100 commits",
+		"o/r#55: plan https://github.com/o/plans/pull/7 (draft, head h7)",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("epics:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if p := snap.Plans["o/r#50"]; p.Implemented != "a1" || p.Moved != 2 || p.GoComment != "https://github.com/c/2" || p.GoAt == nil || p.GoAt.Hour() != 2 {
+		t.Errorf("go of #50 = %+v", p)
+	}
+	// One search, the comments and commits only for the epics past their
+	// go; one read of their threads.
+	if len(queries) != 2 || strings.Count(queries[0], "comments(last:50)") != 5 || !strings.Contains(queries[1], `e4:repository(owner:"o",name:"r"){issue(number:54)`) || strings.Contains(queries[1], "e5:") {
+		t.Errorf("queries %q", queries)
 	}
 }
 
