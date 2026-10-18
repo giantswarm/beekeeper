@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/takeover"
 	"github.com/giantswarm/beekeeper/internal/tui"
@@ -102,6 +103,45 @@ func TestPermissionRequestTakeOver(t *testing.T) {
 	start = time.Now()
 	if out := a.permissionRequest(context.Background(), permissionEvent(tTakenSession)); out != nil || time.Since(start) > 500*time.Millisecond {
 		t.Errorf("a flag whose screen is gone held the request (%s) or answered %s", time.Since(start), out)
+	}
+}
+
+// A beekeeper start the person took over asks the screen before the
+// bypass allow: its unanswered request gets no decision (the window's
+// card), and once released the allow answers again.
+func TestPermissionRequestTakeOverBeforeBypassAllow(t *testing.T) {
+	a, dir := permissionApp(t)
+	store, err := state.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts = []state.Start{{Party: state.Party{Session: tTakenSession, Name: tBeeName}, Mode: state.ModeBypass, At: time.Now()}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ev := []byte(strings.Replace(string(permissionEvent(tTakenSession)), `"default"`, `"acceptEdits"`, 1))
+	allow := string(guard.PermissionDecision(takeover.Allow, ""))
+	if out := a.permissionRequest(context.Background(), ev); string(out) != allow {
+		t.Fatalf("a bypass start not taken over got %s, want the allow", out)
+	}
+
+	tdir := takeover.Dir(dir)
+	if err := takeover.Take(tdir, tTakenSession, takeover.Flag{PID: os.Getpid(), By: tPerson}); err != nil {
+		t.Fatal(err)
+	}
+	defer func(g, p time.Duration) { takeoverGiveUp, takeoverPoll = g, p }(takeoverGiveUp, takeoverPoll)
+	takeoverGiveUp, takeoverPoll = 40*time.Millisecond, 5*time.Millisecond
+	if out := a.permissionRequest(context.Background(), ev); out != nil {
+		t.Fatalf("a taken-over bypass start's unanswered request got %s, want none", out)
+	}
+
+	if err := takeover.Release(tdir, tTakenSession); err != nil {
+		t.Fatal(err)
+	}
+	if out := a.permissionRequest(context.Background(), ev); string(out) != allow {
+		t.Errorf("a released bypass start got %s, want the allow", out)
 	}
 }
 
