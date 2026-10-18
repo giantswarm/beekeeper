@@ -1173,13 +1173,18 @@ Sessions keep typing `devctl pr merge <owner/repo> <n> [flags]`; beekeeper never
 `devctl release promote <owner/repo>` (one repository, no `--dry-run`) passes the same gate: it
 queues in its repository's lane and runs like a merge, and the stable release it dispatches
 settles the lane as a merge's release does; a promotion of several repositories or of a `--team`
-runs ungated. A promotion is queued for one release candidate: the gate asks `devctl release
-promote <owner/repo> --dry-run` for the newest one when the call arrives, records it on the place
-(`merge.queued … for candidate vX.Y.Z-rc.N`), and asks again when the turn comes, right before
-devctl runs. When the newest candidate is another by then (a merge behind it cut a new one), the
-promotion is refused (exit 77, `… was queued for candidate A, the newest is candidate B now:
-nothing promoted`), its place leaves the lane and the refusal wakes its owner, who decides again:
-a promotion queued by one worker never promotes another worker's candidate. `beekeeper lanes drop
+runs ungated. A promotion is queued for one release candidate. Pinned, `devctl release promote
+<owner/repo> --version vX.Y.Z-rc.N` (the candidate proven live), the place records that candidate
+(`merge.queued … for candidate vX.Y.Z-rc.N`) and devctl promotes it at its turn, whatever was cut
+after it. Unpinned, the gate asks `devctl release promote <owner/repo> --dry-run` for the newest
+one when the call arrives, records it on the place, and asks again when the turn comes, right
+before devctl runs. When the newest candidate is another by then (a merge behind it cut a new
+one), the promotion is refused (exit 77, `… was queued for candidate A, the newest is candidate B
+now: nothing promoted`), its place leaves the lane and the refusal wakes its owner, who decides
+again: a promotion queued by one worker never promotes another worker's candidate. An unpinned
+promotion never waits on outside its call: where a merge would be queued (exit 76) it is refused
+(exit 77, `… only a pinned promotion waits on outside the call`), naming the newest candidate,
+since its later turn would promote a candidate nobody proved. `beekeeper lanes drop
 <owner/repo> promote` takes a waiting promotion out of its lane; its gate, a queued run of its own
 included, refuses and wakes its owner, as for a merge's place taken out with `lanes drop
 <owner/repo> <n>`.

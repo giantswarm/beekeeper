@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -22,8 +23,10 @@ const (
 	candidateB = "v1.2.4-rc.2"
 )
 
-// promoteArgv is devctl release promote o/r.
-func promoteArgv() []string { return []string{merge.Tool, "release", promoteArg, scratchRepo} }
+// promoteArgv is devctl release promote o/r with extra flags.
+func promoteArgv(extra ...string) []string {
+	return append([]string{merge.Tool, "release", promoteArg, scratchRepo}, extra...)
+}
 
 // stubCandidate answers promoteCandidate with *newest.
 func stubCandidate(t *testing.T, newest *string) *int {
@@ -57,18 +60,25 @@ func promotePlace(t *testing.T) (*app, *gateRun) {
 		me: me, pid: os.Getpid(), queued: true, placed: true, from: gate}
 }
 
-// A promotion records the newest release candidate when it joins its lane.
-func TestAQueuedPromotionRecordsItsCandidate(t *testing.T) {
+// A pinned promotion behind a busy lane waits on in a run of its own (exit
+// 76), its place recording the candidate it pins, not the newest; the run
+// carries the pin.
+func TestAQueuedPromotionRecordsItsPinnedCandidate(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	_, launched := stubSelf(t)
-	newest := candidateA
-	stubCandidate(t, &newest)
+	newest := candidateB
+	asked := stubCandidate(t, &newest)
 	a := busyLaneApp(t)
 
-	if err := a.gate(context.Background(), promoteArgv(), 0, 0, false); Code(err) != ExitGateQueued {
+	if err := a.gate(context.Background(), promoteArgv("--version", candidateA), 0, 0, false); Code(err) != ExitGateQueued {
 		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateQueued)
 	}
-	launched()
+	if spec := launched(); !slices.Contains(spec.Argv, "--version") || !slices.Contains(spec.Argv, candidateA) {
+		t.Errorf("the queued run drops the pin: %q", spec.Argv)
+	}
+	if *asked != 0 {
+		t.Errorf("a pinned promotion read the newest candidate %d times", *asked)
+	}
 	st, _ := a.store.Read()
 	i := slices.IndexFunc(st.Merges, func(m state.Merge) bool { return m.PR == 0 && m.Phase == state.Waiting })
 	if i < 0 || st.Merges[i].Candidate != candidateA {
@@ -77,6 +87,57 @@ func TestAQueuedPromotionRecordsItsCandidate(t *testing.T) {
 	evs, _ := a.store.Events(0, func(e state.Event) bool { return e.Verb == "merge.queued" })
 	if len(evs) == 0 || evs[0].Detail != "o/r promote in lane o/r, for candidate "+candidateA {
 		t.Errorf("queued events %+v", evs)
+	}
+}
+
+// An unpinned promotion is never queued: where it would wait on outside the
+// call it is refused (77), its place dropped, and the refusal names the
+// newest candidate to pin.
+func TestAnUnpinnedPromotionIsNeverQueued(t *testing.T) {
+	stubGitHub(t, github.Open, "")
+	stubSelf(t)
+	newest := candidateA
+	stubCandidate(t, &newest)
+	a := busyLaneApp(t)
+
+	err := a.gate(context.Background(), promoteArgv(), 0, 0, false)
+	if Code(err) != ExitGateRefused {
+		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateRefused)
+	}
+	if d, want := lastEventOf(t, a, "merge.refused"), "release promote o/r --version <the candidate you proved> (the newest is "+candidateA+" now)"; !strings.Contains(d, want) {
+		t.Errorf("refusal %q, want %q", d, want)
+	}
+	if st, _ := a.store.Read(); slices.ContainsFunc(st.Merges, func(m state.Merge) bool { return m.PR == 0 }) {
+		t.Errorf("the unpinned promotion kept a place: %+v", st.Merges)
+	}
+	if d := lastEventOf(t, a, "merge.queued"); strings.Contains(d, "run of its own") {
+		t.Errorf("handed to a run of its own: %q", d)
+	}
+}
+
+// A newer candidate cut while a pinned promotion is queued changes nothing:
+// at its turn devctl runs with the pin and promotes the pinned candidate.
+func TestAPinnedPromotionPromotesItsCandidateWhenANewerOneAppears(t *testing.T) {
+	noSystemd(t)
+	stubGitHub(t, github.Open, "")
+	args := filepath.Join(t.TempDir(), "args")
+	fakeDevctl(t, `echo "$@" > `+args+`; echo '{"repositories":[{"candidate":"`+candidateA+`","state":"dispatched"}]}'`)
+	newest := candidateB
+	asked := stubCandidate(t, &newest)
+
+	a, g := promotePlace(t)
+	g.argv, g.pinned = promoteArgv("--version", candidateA), true
+	if why, err := g.step(); err != nil || why != "" {
+		t.Fatalf("step: %q, %v", why, err)
+	}
+	if *asked != 0 {
+		t.Errorf("the pinned promotion was judged against the newest candidate")
+	}
+	if raw, _ := os.ReadFile(args); !strings.Contains(string(raw), "--version "+candidateA) { //nolint:gosec // the test's file
+		t.Errorf("devctl ran %q, want the pin", raw)
+	}
+	if d := lastEventOf(t, a, verbMerged); !strings.HasPrefix(d, "o/r promote exit 0, release v1.2.4") {
+		t.Errorf("merged event %q", d)
 	}
 }
 
