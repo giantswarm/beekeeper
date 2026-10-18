@@ -926,6 +926,13 @@ func TestHookLeavesAssignedTextAlone(t *testing.T) {
 		`GIT_EDITOR="nohup devctl pr merge o/r 7" git commit`,
 		`export body="x; devctl pr merge o/r 7"; gh issue comment 1 --body "$body"`,
 		`c="devctl pr merge o/r 7"; d="$c"; watch "$d"`,
+		// Exported or reached by another name later on the line.
+		`body="x; devctl pr merge o/r 7"; export body; GIT_EDITOR='sh -c "$body"' true`,
+		`set -a; body="x; devctl pr merge o/r 7"; gh issue comment 1 --repo o/r --body "$body"`,
+		`body="x; devctl pr merge o/r 7"; declare -x body; gh issue comment 1 --repo o/r --body "$body"`,
+		`body="x; devctl pr merge o/r 7"; n=body; gh issue comment 1 --repo o/r --body "${!n}"`,
+		`body="x; devctl pr merge o/r 7"; declare -n r=body; gh issue comment 1 --repo o/r --body "$r"`,
+		`body="x; devctl pr merge o/r 7"; printf -v c '%s' "$body"; $c`,
 	} {
 		d := decide(t, h, t.TempDir(), cmd, nil)
 		if d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "the variable ") {
