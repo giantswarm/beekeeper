@@ -626,22 +626,31 @@ func TestFollows(t *testing.T) {
 }
 
 func TestParsePromote(t *testing.T) {
-	const repo = "o/r"
+	const repo, rc = "o/r", "v1.2.4-rc.1"
 	for _, c := range []struct {
-		argv string
-		repo string
+		argv    string
+		repo    string
+		version string
 	}{
-		{"devctl release promote " + repo, repo},
-		{"/usr/bin/devctl release promote " + repo + " --progress", repo},
-		{"devctl release promote o/r o/s", ""},
-		{"devctl release promote --team team-x", ""},
-		{"devctl release promote o/r --dry-run", ""},
-		{"devctl release promote --help", ""},
-		{"devctl release wait o/r v1.0.0", ""},
+		{"devctl release promote " + repo, repo, ""},
+		{"/usr/bin/devctl release promote " + repo + " --progress", repo, ""},
+		{"devctl release promote " + repo + " --version " + rc, repo, rc},
+		{"devctl release promote --version " + rc + " " + repo + " --progress", repo, rc},
+		{"devctl release promote " + repo + " --version=" + rc, repo, rc},
+		{"devctl release promote " + repo + " --version", "", ""},
+		{"devctl release promote " + repo + " --version=", "", ""},
+		{"devctl release promote " + repo + " --version --dry-run", "", ""},
+		{"devctl release promote " + repo + " --version " + rc + " --version v1.2.4-rc.2", "", ""},
+		{"devctl release promote o/r o/s", "", ""},
+		{"devctl release promote --team team-x", "", ""},
+		{"devctl release promote o/r --dry-run", "", ""},
+		{"devctl release promote o/r --version " + rc + " --dry-run", "", ""},
+		{"devctl release promote --help", "", ""},
+		{"devctl release wait o/r v1.0.0", "", ""},
 	} {
-		repo, ok := ParsePromote(strings.Fields(c.argv))
-		if repo != c.repo || ok != (c.repo != "") {
-			t.Errorf("%s: %q %v, want %q", c.argv, repo, ok, c.repo)
+		repo, version, ok := ParsePromote(strings.Fields(c.argv))
+		if repo != c.repo || version != c.version || ok != (c.repo != "") {
+			t.Errorf("%s: %q %q %v, want %q %q", c.argv, repo, version, ok, c.repo, c.version)
 		}
 	}
 }

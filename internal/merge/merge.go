@@ -146,24 +146,37 @@ func CITimeout(argv []string, d time.Duration) []string {
 	return slices.Insert(slices.Clone(argv), i+1, timeoutFlag, d.String())
 }
 
+// versionFlag pins devctl release promote to one release candidate.
+const versionFlag = "--version"
+
 // ParsePromote finds the one repository of a devctl release promote
-// argument vector; ok is false for anything else (several repositories,
-// --team, --dry-run, --help), which runs ungated.
-func ParsePromote(argv []string) (repo string, ok bool) {
+// argument vector and the candidate its --version pins, "" when it promotes
+// whatever candidate is newest; ok is false for anything else (several
+// repositories, --team, --dry-run, --help), which runs ungated.
+func ParsePromote(argv []string) (repo, version string, ok bool) {
 	i := slices.Index(argv, "promote")
 	if i < 2 || argv[i-1] != "release" {
-		return "", false
+		return "", "", false
 	}
-	for _, a := range argv[i+1:] {
+	for j := i + 1; j < len(argv); j++ {
+		a := argv[j]
 		switch {
 		case a == "--progress" || strings.HasPrefix(a, "--log-level"):
+		case a == versionFlag && j+1 < len(argv) && version == "":
+			j++
+			version = argv[j]
+		case strings.HasPrefix(a, versionFlag+"=") && version == "":
+			version = strings.TrimPrefix(a, versionFlag+"=")
 		case strings.HasPrefix(a, "-") || repo != "" || !repoArg.MatchString(a):
-			return "", false
+			return "", "", false
 		default:
 			repo = a
 		}
 	}
-	return repo, repo != ""
+	if repo == "" || strings.HasPrefix(version, "-") || slices.Contains(argv[i+1:], versionFlag+"=") {
+		return "", "", false
+	}
+	return repo, version, true
 }
 
 // ParsePromoteDocument reads devctl release promote's JSON document: a
