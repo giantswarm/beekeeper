@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.149.1-rc.3] - 2026-10-18
+
 ### Fixed
 
 - The hook writes no gate into a variable's assigned value: `body="Proof: devctl pr merge o/r 7 ran"; gh issue comment 1 --body "$body"` passes unchanged, where the gate's path used to be inserted into the comment's text. A variable holding a blocking devctl command passes only where the call expands it as text (a quoted argument of gh, git commit, echo or printf, a here-document that is content, another such variable); one that may run (`$c`, `eval "$c"`, `bash -c "$c"`, a shell's input, an exported or prefix value, or a line that exports or reaches variables indirectly: `export`, `set -a`, `declare -x`, `-n` or `-i`, `${!…}`, `printf -v`, `read`, `set` with `a` or `allexport` in any option, an arithmetic context) is refused ([#1067](https://github.com/giantswarm/beekeeper/issues/1067)).
