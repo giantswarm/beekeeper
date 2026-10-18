@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - The merge gate reads a shell's `-c` or `eval` string as the shell builds it: adjacent single-quoted, double-quoted, `$'…'` and bare pieces are joined and `$'…'` escapes decoded before it looks for a blocking devctl command (eval's words joined by a space), so `bash -c 'cd x; '"devctl pr merge o/r 7"` is refused with the gated form, as a single-quoted string is. A string the parser cannot resolve (a quote left open, a command substitution) fails closed: the rest of the command line counts as its text, and one that names devctl other than behind the gate is refused. Words after a `-c` string are its arguments and stay out of it ([#1373](https://github.com/giantswarm/beekeeper/issues/1373)).
+- The hook's shell scan reads `$'…'` to its first unescaped quote and decodes its escapes in a command's words, so `echo $'a\''; devctl pr merge o/r 7` has its merge gated and a `$'…'` argument containing `\'` stays text to its end ([#1380](https://github.com/giantswarm/beekeeper/issues/1380)).
+- The build rewrite, the gate's command-position test, the script-file merge check and the guide's work check read a shell's `-c` or `eval` string as the merge gate does, its pieces joined and `$'…'` decoded: `bash -c 'cd x && '"go test ./..."` runs through `beekeeper run`, and a merge in such a string inside a script file is refused ([#1381](https://github.com/giantswarm/beekeeper/issues/1381)).
 
 ## [0.149.0-rc.12] - 2026-10-18
 

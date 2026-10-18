@@ -72,11 +72,8 @@ var (
 	// anyOwned: one anywhere; gated: the gate ends the text before it.
 	anyOwned = regexp.MustCompile(devctlOwned)
 	gated    = regexp.MustCompile(`\bgate\s+(?:--(?:wait|limit)\s+\S+\s+)*--\s+$`)
-	// shellC: a shell's -c option, or eval, up to the quote opening its
-	// command string.
-	shellC = regexp.MustCompile(`(?:^|[\s;&|(/])(?:(?:ba|z|da|k)?sh\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*c[a-zA-Z]*|eval)\s+(['"])`)
-	// shellCArg: the same, up to its command string's first word, quoted or
-	// bare; the group is eval's.
+	// shellCArg: a shell's -c option, or eval, up to its command string's
+	// first word, quoted or bare; the group is eval's.
 	shellCArg = regexp.MustCompile(`(?:^|[\s;&|(/])(?:(?:ba|z|da|k)?sh\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*c[a-zA-Z]*|(eval))\s+`)
 	lab       = regexp.MustCompile(`(?m)` + pos + `(agentlab\s+up\b|kind\s+create\s+cluster\b)`)
 	// labRuntime: a lab's creation or teardown, which takes the container
@@ -475,13 +472,12 @@ func mayRun(cmd string, at int) bool {
 	if sc.masked[at] == cmd[at] {
 		return true
 	}
-	for _, m := range shellC.FindAllStringSubmatchIndex(cmd, -1) {
-		if sc.masked[m[2]] != cmd[m[2]] {
+	for _, cs := range shellStrings(cmd) {
+		if sc.masked[cs.at] != cmd[cs.at] {
 			continue // the -c itself sits inside a quoted argument
 		}
-		body := cmd[m[1]:]
-		if end := m[1] + closingQuote(body, cmd[m[2]]); at >= m[1] && at < end {
-			return mayRun(cmd[m[1]:end], at-m[1])
+		if k := slices.Index(cs.offs, at-cs.at); k >= 0 {
+			return mayRun(cs.text, k)
 		}
 	}
 	segs := sc.segments()
@@ -645,12 +641,11 @@ func (h Hook) hiddenMerges(cmd string, bg bool) (fixed string, hidden, unread bo
 	content := contentBodies(sc)
 	var at []int
 	bare := map[int]bool{}
-	for _, m := range shellCArg.FindAllStringSubmatchIndex(cmd, -1) {
-		w := m[1]
-		if w == len(cmd) || inRanges(content, w) || sc.masked[w] != cmd[w] && !inHeredoc(sc, w) {
+	for _, cs := range shellStrings(cmd) {
+		w := cs.at
+		if inRanges(content, w) || sc.masked[w] != cmd[w] && !inHeredoc(sc, w) {
 			continue
 		}
-		cs := commandString(cmd[w:], m[2] >= 0)
 		var owned []int
 		for _, mm := range anyOwned.FindAllStringIndex(cs.text, -1) {
 			owned = append(owned, mm[0])
@@ -673,12 +668,50 @@ func (h Hook) hiddenMerges(cmd string, bg bool) (fixed string, hidden, unread bo
 // cString is a shell's -c or eval command string as the shell builds it: its
 // text, the offset in the command line's word of each byte, and whether each
 // stands bare (unquoted). resolved is false for a string the parser cannot
-// resolve, whose text is the rest of the line as written.
+// resolve, whose text is the rest of the line as written. at is the offset of
+// its first word in the command line (shellStrings), offs relative to it.
 type cString struct {
 	text     string
 	offs     []int
 	bare     []bool
 	resolved bool
+	at       int
+}
+
+// shellStrings are the command strings of every shell -c option and eval in
+// cmd, as the shell builds them (commandString), quoted text included: a
+// caller that reads cmd as a command line skips one whose first word scanShell
+// masks.
+func shellStrings(cmd string) []cString {
+	var out []cString
+	for _, m := range shellCArg.FindAllStringSubmatchIndex(cmd, -1) {
+		if m[1] == len(cmd) {
+			continue
+		}
+		cs := commandString(cmd[m[1]:], m[2] >= 0)
+		cs.at = m[1]
+		out = append(out, cs)
+	}
+	return out
+}
+
+// place maps a match's offsets in the string's text (FindStringSubmatchIndex)
+// to offsets in the command line; an unmatched group stays -1.
+func (cs cString) place(m []int) []int {
+	out := make([]int, len(m))
+	for i, v := range m {
+		switch {
+		case v < 0:
+			out[i] = v
+		case len(cs.offs) == 0:
+			out[i] = cs.at
+		case i%2 == 1 && v > 0: // an end: after the byte before it
+			out[i] = cs.at + cs.offs[v-1] + 1
+		default:
+			out[i] = cs.at + cs.offs[min(v, len(cs.offs)-1)]
+		}
+	}
+	return out
 }
 
 // commandString is the command string a shell's -c option or eval runs from
@@ -695,13 +728,13 @@ func commandString(s string, eval bool) cString {
 		text, offs, bare = append(text, b), append(offs, i), append(bare, unquoted)
 	}
 	put := func(i int, unquoted bool) { add(s[i], i, unquoted) }
-	done := func() cString { return cString{string(text), offs, bare, true} }
+	done := func() cString { return cString{text: string(text), offs: offs, bare: bare, resolved: true} }
 	unresolved := func() cString {
 		offs, bare = make([]int, len(s)), make([]bool, len(s))
 		for i := range offs {
 			offs[i] = i
 		}
-		return cString{s, offs, bare, false}
+		return cString{text: s, offs: offs, bare: bare}
 	}
 	const ends = "\n;&|()<>"
 	for i := 0; i < len(s); {
@@ -854,20 +887,6 @@ func (h Hook) insertGate(cmd string, at []int, bg bool, bare map[int]bool) strin
 	return cmd
 }
 
-// closingQuote is the offset of the quote q closing the string s starts in,
-// len(s) when it does not close.
-func closingQuote(s string, q byte) int {
-	for i := 0; i < len(s); i++ {
-		switch {
-		case s[i] == q:
-			return i
-		case s[i] == '\\' && q == '"':
-			i++
-		}
-	}
-	return len(s)
-}
-
 // backgroundExport starts every background Bash call: a beekeeper run
 // anywhere in it, reached directly, after a cd or export chain or through a
 // script, inherits it and waits the background wait.
@@ -932,9 +951,9 @@ func labScript(cmd string, m []int) bool {
 // FindStringSubmatchIndex indexes cmd; nil for none. One inside a quoted
 // argument (a grep pattern, a jq filter, an echo, an interpreter's code) or a
 // here-document no shell reads (a file's text, an interpreter's program) is
-// none; one inside a shell's -c or eval string or a here-document a shell
-// reads as its program is. keep, unless nil, passes over the matches it
-// rejects.
+// none; one inside a shell's -c or eval string, read as the shell builds it
+// (commandString), or a here-document a shell reads as its program is. keep,
+// unless nil, passes over the matches it rejects.
 func commandMatch(re *regexp.Regexp, cmd string, keep func(cmd string, m []int) bool) []int {
 	sc := scanShell(cmd)
 	for _, m := range re.FindAllStringSubmatchIndex(sc.masked, -1) {
@@ -942,13 +961,12 @@ func commandMatch(re *regexp.Regexp, cmd string, keep func(cmd string, m []int) 
 			return m
 		}
 	}
-	for _, m := range shellC.FindAllStringSubmatchIndex(cmd, -1) {
-		if sc.masked[m[2]] != cmd[m[2]] {
+	for _, cs := range shellStrings(cmd) {
+		if sc.masked[cs.at] != cmd[cs.at] {
 			continue // the -c itself sits inside a quoted argument
 		}
-		body := cmd[m[1]:]
-		if mm := commandMatch(re, body[:closingQuote(body, cmd[m[2]])], keep); mm != nil {
-			return shiftMatch(mm, m[1])
+		if mm := commandMatch(re, cs.text, keep); mm != nil {
+			return cs.place(mm)
 		}
 	}
 	segs := sc.segments()
