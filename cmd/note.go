@@ -24,7 +24,8 @@ puts them to the person (guide queue, guide watch). beekeeper watch
 reports a note once when it is due. Notes appear in every hand-over until
 marked done. A session's state is its hand-over, rendered from live
 state; deferred work is a board item, a priority a board rank and a hold
-a blocked-by (board rank, board block): no note holds a board item.
+a blocked-by (board rank, board block), or on a person a decision that
+sets its item's Status (note add --holds).
 
 Without a subcommand, lists the open notes.`,
 		Args: cobra.NoArgs,
@@ -32,6 +33,7 @@ Without a subcommand, lists the open notes.`,
 	}
 	var forWho, due, overtaken string
 	var foldInto int
+	var holds bool
 	var refs []string
 	var draft noteDraft
 	add := &cobra.Command{
@@ -70,6 +72,17 @@ A decision is refused without --ref: its answer is
 recorded on that thread (beekeeper answer). A note for a person whose
 --ref an answer of that person was recorded on within the last 72 hours
 (answer.recorded) is filed with a warning that quotes the answer.
+
+--holds holds the decision's first --ref on the board: its Status is set to
+Blocked / Waiting, which board next offers in no step, and the Status it had
+is recorded on the note. When the decision closes, answered (beekeeper
+answer, note answer, the serve tool), by its default, as overtaken or by
+hand, the item is set back to that Status (board.released, BOARD RELEASED)
+and its filer told. An item whose Status was changed while held is left as
+it is (HOLD LEFT), the filer told why; one another open decision holds stays
+held until that one closes (HOLD KEPT). --holds without --ref, on an issue
+that is not on the board or has no Status, on a sign-in or with --fold-into
+is refused.
 
 --ref links the note to an issue or pull request it asks about
 (owner/repo#n or its URL, repeatable; the first is the thread its answer
@@ -127,6 +140,16 @@ and tells the session that filed it.`,
 				return usageErr("--until is a login's: --kind login")
 			}
 			n.Kind, draft.Due = draft.Kind, due
+			if holds {
+				switch {
+				case n.Kind != noteDecision:
+					return refused("--holds is a decision's: a %s holds no board item", n.Kind)
+				case len(linked) == 0:
+					return refused("--holds needs --ref: the board item it holds is its first --ref")
+				case foldInto != 0:
+					return refused("--holds with --fold-into: the open note's hold stands; file the hold on a note of its own")
+				}
+			}
 			checked := guides(person, &n)
 			if checked {
 				m := draft.missing()
@@ -158,9 +181,21 @@ and tells the session that filed it.`,
 			if err := a.warnAnswered(cmd, n); err != nil {
 				return err
 			}
+			if holds {
+				st, err := a.store.Read()
+				if err != nil {
+					return err
+				}
+				if n.Held, err = a.holdOn(cmd.Context(), st.Notes, linked[0]); err != nil {
+					return err
+				}
+			}
 			var folded *state.Note
 			fold := func(o *state.Note, why string) []state.Event {
 				o.Text += fmt.Sprintf(" | Also from %s: %s", me.Name, n.Text)
+				if o.Held == nil {
+					o.Held = n.Held
+				}
 				folded = o
 				return []state.Event{event(me, "note.folded", "into #%d (%s): %s", o.ID, why, n.Text)}
 			}
@@ -199,7 +234,10 @@ and tells the session that filed it.`,
 				_, err = fmt.Fprintf(a.out, "note #%d (folded: %s)\n", folded.ID, why)
 				return err
 			}
-			_, err = fmt.Fprintf(a.out, "note #%d\n", n.ID)
+			if _, err = fmt.Fprintf(a.out, "note #%d\n", n.ID); err != nil || n.Held == nil {
+				return err
+			}
+			_, err = fmt.Fprintf(a.out, "holds %s: %s until the decision closes, then %s again\n", n.Held.Ref, n.Held.Status, n.Held.Was)
 			return err
 		},
 	}
@@ -214,6 +252,7 @@ and tells the session that filed it.`,
 	add.Flags().StringVar(&draft.Kind, "kind", "", `"decision" (the default) or "login" (a sign-in, closed once --until passes)`)
 	add.Flags().StringVar(&draft.Until, "until", "", "a login note's probe: a shell command that exits 0 once signed in")
 	add.Flags().IntVar(&foldInto, "fold-into", 0, "an open note for the same person this one folds into, whatever it asks: that note's default and recommendation stand")
+	add.Flags().BoolVar(&holds, "holds", false, "the decision holds its first --ref: its board Status is Blocked / Waiting until the decision closes, then set back")
 	add.Flags().StringArrayVar(&refs, "ref", nil, "an issue or pull request the note asks about, owner/repo#n (repeatable): the note closes once all are closed or merged")
 	done := &cobra.Command{
 		Use:   "done <id>...",
@@ -236,9 +275,12 @@ note.overtaken with the reason, as the watch does.`,
 				return usageErr("--overtaken needs the reason")
 			}
 			var evs []state.Event
+			var closed []state.Note
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+				evs, closed = nil, nil
 				st.Notes = slices.DeleteFunc(st.Notes, func(n state.Note) bool {
 					if slices.Contains(ids, n.ID) {
+						closed = append(closed, n)
 						if why != "" {
 							evs = append(evs, overtakenEvent(me, n, why))
 						} else {
@@ -252,6 +294,15 @@ note.overtaken with the reason, as the watch does.`,
 			})
 			if err != nil {
 				return err
+			}
+			how := closedDone
+			if why != "" {
+				how = closedOvertaken
+			}
+			for _, l := range a.releaseHolds(cmd.Context(), me, closed, how) {
+				if _, err := fmt.Fprintln(a.out, l); err != nil {
+					return err
+				}
 			}
 			if len(evs) < len(ids) {
 				return refused("%d of the %d notes were open", len(evs), len(ids))

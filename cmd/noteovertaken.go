@@ -263,6 +263,18 @@ func closeOvertaken(st *state.State, over []overtake, by state.Party) ([]string,
 	return lines, evs
 }
 
+// heldAmong are the notes among notes that over closes and that hold a
+// board item, for their release.
+func heldAmong(notes []state.Note, over []overtake) []state.Note {
+	var out []state.Note
+	for _, n := range notes {
+		if n.Held != nil && slices.ContainsFunc(over, func(o overtake) bool { return o.id == n.ID }) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 // overtakenEvent is the note.overtaken event of n closed for reason.
 func overtakenEvent(by state.Party, n state.Note, reason string) state.Event {
 	return event(by, noteOvertaken, "#%d overtaken: %s%s%s", n.ID, oneLine(reason), overtakenSep, n.Text)

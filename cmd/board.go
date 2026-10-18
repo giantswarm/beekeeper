@@ -99,8 +99,10 @@ name (lease/<resource>, lease/agentlab-1) free or the caller's: an item
 whose lease another session holds is passed over until it is released,
 the items behind it offered meanwhile. A sub-issue offered through
 an epic passes the same checks, and a serve record or task naming
-the epic covers it too ("…, on epic owner/repo#n"). No note holds an item:
-a hold is a blocked-by (board block), a priority a board rank. A held item,
+the epic covers it too ("…, on epic owner/repo#n"). No note is read: a
+hold is a blocked-by (board block) or the Status Blocked / Waiting a
+decision sets while it is open (note add --holds), a priority a board
+rank. A held item,
 one with an open recorded blocker, is skipped as "held: blocked by
 <owner/repo#n>; 1 of 1 blockers open"; a held epic is never offered through
 its sub-issues, and every issue under it is skipped as "held: sub-issue of
@@ -1073,8 +1075,9 @@ own repository (GH_REPO), the dependency written on the item's. A hold is on
 an issue: a blocker that is a pull request, or that GitHub does not resolve,
 is refused naming why before anything is written, as is an item that is no
 issue and an item held by itself. A hold on something that is no issue (a
-person's review or answer) is the item's Status Blocked / Waiting plus a
-decision for that person. Exit 3 when refused.`,
+person's review or answer) is a decision for that person that holds the
+item, note add --holds: the item's Status is Blocked / Waiting until the
+decision closes, then set back. Exit 3 when refused.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			for _, r := range []string{args[0], by} {
