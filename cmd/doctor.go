@@ -280,9 +280,26 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 	rep.sameTitles = sameTitles(sessions)
 	rep.ungated = ungatedLines(sessions, t)
 	record := func(host string) (*claude.Record, bool) { return claude.ReadRecord(a.cfg, host) }
+	inFlight := func(p state.Party) bool { return mergeInFlight(st, p, proc.Alive) }
+	waits := sleepingWaits(st, sessions, t, inFlight, a.now)
+	for _, w := range waits {
+		if r.dryRun {
+			rep.chores = append(rep.chores, "would stop "+w.String())
+			continue
+		}
+		stopProcesses(w.pids())
+		line := "stopped " + w.String()
+		rep.chores = append(rep.chores, line)
+		_ = a.store.Update(func(*state.State) ([]state.Event, error) {
+			return []state.Event{event(r.by, "agents.stop", "%s", line)}, nil
+		})
+	}
 	busy := func(p state.Party) bool {
+		if slices.ContainsFunc(waits, func(w leftWait) bool { return w.agent.Is(p) }) {
+			return false // its only activity, the sleeping waits, is stopped
+		}
 		_, turn := turnRunning(sessions, t, p, a.now)
-		return turn || mergeInFlight(st, p, proc.Alive)
+		return turn || inFlight(p)
 	}
 	chores := planChores(st, sessions, record, busy, a.cfg.Agents.StaleAfter.Duration, a.now)
 	fix := func(f config.Fault) bool { return !r.dryRun && (f.Unattended || slices.Contains(r.attended, f.Name)) }
@@ -477,7 +494,8 @@ func (a *app) doctorCmd() *cobra.Command {
 line:
 
 - takes an agent off the roster once it reported its work done (agents idle
-  --done) and its CLI runs no turn, once it was relieved of the
+  --done) and its CLI runs no turn, a turn that only sleeps in tool shells
+  it left behind (a background wait loop) stopped first, once it was relieved of the
   supervisor's or the guide's role, or once it stayed idle
   agents.staleAfter (24h) with no CLI running; the desktop sessions
   beekeeper started for the finished and the stale ones are archived in
