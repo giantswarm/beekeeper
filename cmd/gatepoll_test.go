@@ -79,7 +79,7 @@ func TestAWaitFollowsTheRunThatPolls(t *testing.T) {
 	}
 	stdout := os.Stdout
 	os.Stdout = w
-	err = a.ownedRun(context.Background(), argv)
+	err = a.ownedRun(context.Background(), argv, 0)
 	os.Stdout = stdout
 	_ = w.Close()
 	out, _ := io.ReadAll(r)

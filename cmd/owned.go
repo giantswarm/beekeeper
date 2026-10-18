@@ -46,11 +46,14 @@ var wakeOwner = (*app).wakeAgent
 // rollout wait) as the gate runs a merge, without a queue: outside its
 // caller (runDetached), its output and exit code unchanged, its outcome
 // handed to its owner by the run's merge-child once the caller no longer
-// listens (tellOwner). A wait whose caller's timeout cuts the call runs on:
-// the call exits 76, as a queued merge does, and the outcome wakes the owner.
-// At the GitHub budget's reset it starts after the merges queued for it
-// (yieldToMerges).
-func (a *app) ownedRun(ctx context.Context, argv []string) error {
+// listens (tellOwner). A wait ends with its caller (childSpec.WithCaller): a
+// caller stopped or gone (TaskStop, a killed shell, an ended turn) stops its
+// devctl and wakes nobody. A wait whose caller's timeout cuts the call, or
+// that reaches the call's limit (merge.toolLimit), runs on: the call exits
+// 76, as a queued merge does, leaves the left mark (leftExt) and the outcome
+// wakes the owner. At the GitHub budget's reset it starts after the merges
+// queued for it (yieldToMerges).
+func (a *app) ownedRun(ctx context.Context, argv []string, limit time.Duration) error {
 	defer outliveCaller()()
 	if err := a.yieldToMerges(ctx, argv); err != nil {
 		return err
@@ -65,7 +68,7 @@ func (a *app) ownedRun(ctx context.Context, argv []string) error {
 		gateLine("%v: this runs unowned, its outcome reaches nobody if your turn ends first", err)
 		return exitCode(runChild(argv, os.Stdout))
 	}
-	spec := childSpec{Argv: argv, Owner: me, Config: a.explicitConfig()}
+	spec := childSpec{Argv: argv, Owner: me, Config: a.explicitConfig(), WithCaller: true}
 	lead, polls := claimLead(a.store.Dir(), argv, base)
 	if !polls {
 		if self, err := selfExe(); err == nil {
@@ -74,10 +77,17 @@ func (a *app) ownedRun(ctx context.Context, argv []string) error {
 		}
 	}
 	var pid int
-	r := runDetached(spec, base, func(p int) { pid = p })
+	r := runDetached(spec, base, leaveAt(time.Now(), limit, false), func(p int) { pid = p })
+	if r.ended {
+		// Its merge-child stops devctl once this gate is gone.
+		return exitCode(r.rc)
+	}
 	if r.left {
 		// The run goes on and keeps the lead: its merge-child hands the
 		// outcome over once this gate is gone without its heard marker.
+		if err := os.WriteFile(base+leftExt, nil, 0o600); err != nil {
+			gateLine("the run cannot be marked to run on (%v): it ends with this call", err)
+		}
 		gateLine("%s runs on outside the call (pid %d), %s: do not run it again, do not poll", strings.Join(argv, " "), pid, ownerOf(me))
 		return &exitError{code: ExitGateQueued}
 	}
@@ -236,7 +246,13 @@ func (a *app) followRunCmd() *cobra.Command {
 // followRun copies the stderr of the run at lead onto stderr as it grows,
 // then writes the run's document to stdout and returns its exit code, 137
 // when the run is gone without a result.
+// It marks the lead as followed (followerGlob) while it follows, so that
+// the lead runs on when its own caller goes away.
 func followRun(lead string, stdout, stderr io.Writer) int {
+	mark := strings.Replace(followerGlob(lead), "*", strconv.Itoa(os.Getpid()), 1)
+	if os.WriteFile(mark, nil, 0o600) == nil { //nolint:gosec // the gate's own file
+		defer func() { _ = os.Remove(mark) }() //nolint:gosec // as above
+	}
 	log, err := os.Open(lead + ".log") //nolint:gosec // the gate's own file
 	if err == nil {
 		defer func() { _ = log.Close() }()
@@ -335,6 +351,10 @@ func handOver(base string, r childRun, cli int) {
 // service manager refuses) stays owed for the watch's next try (payOwed).
 func (a *app) tellOwner(ctx context.Context, r childResult) {
 	if r.spec.Owner.Session == "" && r.spec.Owner.HostSession == "" {
+		return
+	}
+	if r.callerGone {
+		_, _ = fmt.Fprintf(os.Stderr, "%s ended with its caller, nobody is woken\n", r.command())
 		return
 	}
 	if a.store == nil {
