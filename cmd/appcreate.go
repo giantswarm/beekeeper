@@ -33,6 +33,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/pkg/project"
@@ -525,17 +526,13 @@ func (a *app) appTemplatePlan(ctx context.Context, purpose, installation, baseDo
 // GitHub knows, GitHub's answer when it shows that one. None is a refusal:
 // --replace succeeds an App that exists.
 func (a *app) latestGeneration(ctx context.Context, base string) (*knownApp, error) {
-	ops, err := a.secretOps()
+	titles, err := a.vaultTitles(ctx, base)
 	if err != nil {
 		return nil, err
 	}
-	items, err := ops.Items(ctx, a.cfg.Secret.Vault, secret.ItemsOptions{Match: base})
-	if err != nil {
-		return nil, vaultExit(err)
-	}
 	gen := 0
-	for _, it := range items {
-		gen = max(gen, generation(base, it.Title))
+	for _, t := range titles {
+		gen = max(gen, generation(base, t))
 	}
 	org, _, _ := strings.Cut(a.cfg.Apps.Repo, "/")
 	latest := &knownApp{Slug: guard.AppSlug(generationName(base, gen))}
@@ -565,6 +562,57 @@ func (a *app) latestGeneration(ctx context.Context, base string) (*knownApp, err
 		}
 	}
 	return latest, nil
+}
+
+// vaultTitles are the titles of the shared vault's items whose title
+// contains match, metadata alone: with secret.session from the broker,
+// which holds the vault session, as beekeeper secret items --json runs
+// there; else as the service account in this process.
+func (a *app) vaultTitles(ctx context.Context, match string) ([]string, error) {
+	var items []secret.Item
+	if a.cfg.Secret.Session && os.Getenv(sandbox.Brokered) == "" {
+		out, err := brokeredItems(a.cfg.StateDir, []string{"items", "--json=true", secret.VaultRef(a.cfg.Secret.Vault), match},
+			a.cfg.Secret.UnlockWait.Duration+brokeredCallTimeout+time.Minute)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(out), &items); err != nil {
+			return nil, &exitError{code: ExitVault, msg: "the broker's listing of " + secret.VaultRef(a.cfg.Secret.Vault) + " is no list of items"}
+		}
+	} else {
+		ops, err := a.secretOps()
+		if err != nil {
+			return nil, err
+		}
+		if items, err = ops.Items(ctx, a.cfg.Secret.Vault, secret.ItemsOptions{Match: match}); err != nil {
+			return nil, vaultExit(err)
+		}
+	}
+	titles := make([]string, 0, len(items))
+	for _, it := range items {
+		titles = append(titles, it.Title)
+	}
+	return titles, nil
+}
+
+// brokeredItems runs the beekeeper secret call args in the broker serving
+// stateDir's spool and answers its output: a broker that does not answer,
+// or a call that fails, is its exit with its words. Tests replace it.
+var brokeredItems = func(stateDir string, args []string, timeout time.Duration) (string, error) {
+	dir := sandbox.SpoolDir(stateDir)
+	if !(sandbox.Capper{Dir: dir}).Available() {
+		return "", &exitError{code: ExitVault, msg: "no broker answers in " + dir + ": with secret.session the vault's items are listed there (beekeeper install)"}
+	}
+	r, err := sandbox.Call(dir, sandbox.Request{Op: sandbox.OpSecret, Args: args}, timeout)
+	switch {
+	case err != nil:
+		return "", &exitError{code: ExitVault, msg: err.Error()}
+	case r.Error != "":
+		return "", &exitError{code: ExitVault, msg: r.Error}
+	case r.Code != 0:
+		return "", &exitError{code: r.Code, msg: strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(r.Err), "beekeeper: "))}
+	}
+	return r.Out, nil
 }
 
 // generation is name's generation of the App base: 1 for base itself
