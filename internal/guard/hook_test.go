@@ -632,6 +632,34 @@ func TestHookGatesTheProgramItRuns(t *testing.T) {
 	}
 }
 
+// A quoted argument that a command may run as a command line keeps its gate:
+// only one of a command that reads it as text stays as written.
+func TestHookGatesQuotedCommandLines(t *testing.T) {
+	h := Hook{Self: self, Shell: testShell, Clusters: func() []string { return nil }, Leases: func() []lease.Holder { return nil }}
+	for _, cmd := range []string{
+		"bash -o pipefail -c 'cd x; devctl pr merge o/r 7'",
+		"bash --login -c 'cd x; devctl pr merge o/r 7'",
+		"flock x.lock -c 'cd x; devctl pr merge o/r 7'",
+		"flock --command 'cd x; devctl pr merge o/r 7' x.lock",
+		"watch 'cd x; devctl pr wait o/r 7'",
+		"su u -c 'cd x; devctl pr merge o/r 7'",
+		"script -qc 'cd x; devctl pr merge o/r 7' /dev/null",
+		"tmux new -d 'cd x; devctl pr merge o/r 7'",
+		"echo 'cd x; devctl pr merge o/r 7' | sh",
+		"printf '%s\\n' 'cd x; devctl pr merge o/r 7' | xargs -I{} sh -c '{}'",
+		"git -c alias.m='!cd x; devctl pr merge o/r 7' m",
+	} {
+		d := decide(t, h, t.TempDir(), cmd, nil)
+		if d == nil {
+			t.Errorf("%q passes ungated", cmd)
+			continue
+		}
+		if got, _ := d.UpdatedInput["command"].(string); d.PermissionDecision != decisionDeny && !strings.Contains(got, self+" gate ") {
+			t.Errorf("%q passes ungated: %q", cmd, got)
+		}
+	}
+}
+
 // TestHookGatesRealMerges feeds every devctl pr merge statement from the
 // transcripts of the machine the hook runs on, reduced to its shell skeleton
 // (words outside the shell structure are x, repositories o/r), with the

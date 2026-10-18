@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -405,23 +406,33 @@ func (h Hook) decide(ev event) []byte {
 // command position, behind its prefix commands, so that only the devctl
 // invocation is wrapped and pipelines and lists run as written. A shell's -c
 // or eval string and a here-document a shell reads as its program are
-// command lines too, gated in place; a quoted argument of another command
-// (an interpreter's code, a PR body) and a here-document that is content (a
-// file written, an issue body sent) stay as written.
+// command lines too, gated in place; a here-document that is content (a file
+// written, an issue body sent) and a quoted argument of a command that only
+// reads it as text (a PR body, a commit message, a pattern) stay as written.
 func (h Hook) gate(cmd string, bg bool) (string, bool) {
 	var at []int
 	for _, m := range owned.FindAllStringSubmatchIndex(cmd, -1) {
-		if shellRuns(cmd, m[2]) {
+		if mayRun(cmd, m[2]) {
 			at = append(at, m[2])
 		}
 	}
 	return h.insertGate(cmd, at, bg), len(at) > 0
 }
 
-// shellRuns reports whether the shell runs the text at offset at of cmd as part
-// of a command line: outside quotes, or inside a shell's -c or eval string or
-// a here-document a shell reads, by the same test within it.
-func shellRuns(cmd string, at int) bool {
+// textCommands read their quoted arguments as text and run none of them:
+// gh's and git's messages, the search patterns and filters, the printers.
+var textCommands = map[string]bool{
+	"gh": true, "git": true, "grep": true, "egrep": true, "fgrep": true, "rg": true, "ug": true, "ugrep": true,
+	"jq": true, "yq": true, "echo": true, "printf": true,
+}
+
+// mayRun reports whether the shell may run the text at offset at of cmd as
+// part of a command line: outside quotes, or inside a shell's -c or eval
+// string or a here-document a shell reads, by the same test within it. A
+// quoted argument may run too, unless it belongs to one of textCommands
+// whose pipeline feeds no shell: flock -c, watch, su -c, a shell with options
+// before its -c and the like run theirs.
+func mayRun(cmd string, at int) bool {
 	sc := scanShell(cmd)
 	if sc.masked[at] == cmd[at] {
 		return true
@@ -432,16 +443,39 @@ func shellRuns(cmd string, at int) bool {
 		}
 		body := cmd[m[1]:]
 		if end := m[1] + closingQuote(body, cmd[m[2]]); at >= m[1] && at < end {
-			return shellRuns(cmd[m[1]:end], at-m[1])
+			return mayRun(cmd[m[1]:end], at-m[1])
 		}
 	}
 	segs := sc.segments()
 	for _, hd := range sc.heredocs {
 		if at >= hd.start && at < hd.end {
-			return shellReads(sc, segs, hd.op) && shellRuns(cmd[hd.start:hd.end], at-hd.start)
+			return shellReads(sc, segs, hd.op) && mayRun(cmd[hd.start:hd.end], at-hd.start)
 		}
 	}
-	return false
+	for i, sg := range segs {
+		if at >= sg.start && at < sg.end {
+			return !readsAsText(sc, segs, i)
+		}
+	}
+	return true
+}
+
+// readsAsText reports whether segment i's command is one of textCommands
+// (git without a -c, which can define an alias that runs a shell) and no
+// later stage of its pipeline is a shell or xargs, which could run its output.
+func readsAsText(sc shellScan, segs []segment, i int) bool {
+	words := shellWords(sc.plain[segs[i].start:segs[i].end])
+	c := commandAt(words)
+	if c >= len(words) || !textCommands[path.Base(words[c])] || path.Base(words[c]) == "git" && slices.Contains(words[c:], "-c") {
+		return false
+	}
+	for j := i; segs[j].after == "|" && j+1 < len(segs); j++ {
+		next := shellWords(sc.plain[segs[j+1].start:segs[j+1].end])
+		if k := commandAt(next); runsLocalShell(next) || k < len(next) && path.Base(next[k]) == "xargs" {
+			return false
+		}
+	}
+	return true
 }
 
 // inRanges reports whether the offset is inside one of the ranges.
