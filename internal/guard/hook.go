@@ -369,6 +369,9 @@ func (h Hook) decide(ev event) []byte {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused: a shell's -c or eval string names devctl in a form the merge gate cannot read " +
 			"(a command substitution, a quote left open), so a merge, promote or wait in it would run outside the gate. Run devctl as its own command."})
 	}
+	if r := heldMerges(cmd); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
 	if r := h.ungatedRefusal(cmd, cwd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
@@ -486,6 +489,9 @@ func mayRun(cmd string, at int) bool {
 			return shellReads(sc, segs, hd.op) && mayRun(cmd[hd.start:hd.end], at-hd.start)
 		}
 	}
+	if _, ok := assignedValue(sc, segs, at); ok {
+		return false // assigning stores the text; heldMerges follows the variable
+	}
 	for i, sg := range segs {
 		if at >= sg.start && at < sg.end {
 			return !readsAsText(sc, segs, i)
@@ -499,7 +505,13 @@ func mayRun(cmd string, at int) bool {
 // (textCommand), and every later stage of its pipeline is a text command or
 // one of sinks.
 func readsAsText(sc shellScan, segs []segment, i int) bool {
-	if words := segWords(sc, segs[i]); !flatLine(sc, segs) || words == nil || !textCommand(words) {
+	return flatLine(sc, segs) && textStage(sc, segs, i)
+}
+
+// textStage reports whether segment i is a text command (textCommand) and
+// every later stage of its pipeline a text command or one of sinks.
+func textStage(sc shellScan, segs []segment, i int) bool {
+	if words := segWords(sc, segs[i]); words == nil || !textCommand(words) {
 		return false
 	}
 	for j := i; segs[j].after == "|" && j+1 < len(segs); j++ {
