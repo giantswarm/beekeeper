@@ -870,6 +870,17 @@ func scanShell(s string) shellScan {
 		case c == '\\' && i+1 < len(b):
 			b[i+1] = '_'
 			i++
+		case c == '$' && i+1 < len(b) && b[i+1] == '$':
+			i++ // $$ is the shell's pid: a quote after it is a plain one
+		case c == '$' && i+1 < len(b) && b[i+1] == '\'':
+			// $'…' ends at its first unescaped quote
+			for i += 2; i < len(b) && s[i] != '\''; i++ {
+				if s[i] == '\\' && i+1 < len(b) {
+					b[i] = '_'
+					i++
+				}
+				b[i] = '_'
+			}
 		case c == '\'':
 			j := strings.IndexByte(s[i+1:], '\'')
 			if j < 0 {
@@ -986,7 +997,8 @@ func (sc shellScan) segments() []segment {
 	return append(segs, segment{start, len(m), before, ""})
 }
 
-// shellWords splits a simple command into its words with the quotes removed.
+// shellWords splits a simple command into its words with the quotes removed
+// and $'…' escapes decoded.
 func shellWords(s string) []string {
 	var words []string
 	var w strings.Builder
@@ -994,6 +1006,22 @@ func shellWords(s string) []string {
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		switch {
+		case c == '$' && i+1 < len(s) && s[i+1] == '$':
+			w.WriteString("$$") // the shell's pid: a quote after it is a plain one
+			i++
+			in = true
+		case c == '$' && i+1 < len(s) && s[i+1] == '\'':
+			for i += 2; i < len(s) && s[i] != '\''; {
+				if s[i] != '\\' {
+					w.WriteByte(s[i])
+					i++
+					continue
+				}
+				b, n := ansiC(s[i:])
+				w.Write(b)
+				i += n
+			}
+			in = true
 		case c == '\'':
 			j := strings.IndexByte(s[i+1:], '\'')
 			if j < 0 {

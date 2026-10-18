@@ -28,6 +28,7 @@ var guideCalls = map[string]map[string]any{
 	"commit -C":       bashCall("git -C ~/repo commit -am x"),
 	"push":            bashCall("cd ~/repo; git push origin HEAD"),
 	"push in sh -c":   bashCall("zsh -c 'git push'"),
+	"push in pieces":  bashCall(`bash -c 'cd x; '"git push"`),
 	"devctl merge":    bashCall("devctl pr merge o/r 7"),
 	"devctl path":     bashCall("~/go/bin/devctl pr merge o/r 7"),
 	"devctl promote":  bashCall("devctl release promote o/r"),
