@@ -78,12 +78,14 @@ person's own credential store holding its identity; store:// alone
 searches the store for the file's recipients) or, for a recipient no entry
 names, from a vault item: the shared vault's item per recipient, titled
 "sops age key <recipient>", its password field the AGE-SECRET-KEY-1…
-identity, and for a file of installations/<name>/ the item "<name>.agekey"
-of the shared vault or of secret.ageVaults, one of its fields or its
-document the identity file. Each is read in beekeeper's process for the
-one sops call, and only the identity of the file's recipient is used. A
-file none of them has an identity for fails before sops runs, in one line
-naming the installation, the recipient and the items the vaults lack;
+identity, else the installation items "<installation>.agekey" of the
+shared vault and of secret.ageVaults, one of their fields or their
+document the identity file, the one holding the identity of the file's
+recipient, at any path (the installation the path names is read first).
+Each is read in beekeeper's process for the one sops call, and only the
+identity of the file's recipient is used. A file none of them has an
+identity for fails before sops runs, in one line naming the recipient and
+the items checked;
 recipients shows, for a gitops repository's path, each
 creation rule's recipient and where its identity is, no value read.`,
 		Args: cobra.NoArgs,
@@ -1278,9 +1280,10 @@ it, a gitops repository's installations' for one, and for a SOPS file the
 file's recipients (its metadata when encrypted, else its creation rule's),
 each with where its identity is: sops' own sources, the entry of
 secret.ageIdentities, the shared vault's item per recipient ("sops age key
-<recipient>") or the installation's item ("<installation>.agekey" in the
-shared vault or secret.ageVaults), each found in the vaults' item
-listings, metadata only, or none, naming the items the vaults lack. No
+<recipient>") or the installations' items ("<installation>.agekey" in the
+shared vault or secret.ageVaults, the one holding the recipient's identity
+found when read), each found in the vaults' item listings, metadata only,
+or none, naming the items the vaults lack. No
 value is read. It exits 1 when a
 recipient has no identity: a Secret for it is one no agent can change.`,
 		Args: cobra.MaximumNArgs(1),

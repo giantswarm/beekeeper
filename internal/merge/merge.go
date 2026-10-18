@@ -155,7 +155,7 @@ const versionFlag = "--version"
 // repositories, --team, --dry-run, --help), which runs ungated.
 func ParsePromote(argv []string) (repo, version string, ok bool) {
 	i := slices.Index(argv, "promote")
-	if i < 2 || argv[i-1] != "release" {
+	if i < 2 || argv[i-1] != releaseCmd {
 		return "", "", false
 	}
 	for j := i + 1; j < len(argv); j++ {
@@ -219,23 +219,41 @@ func ParsePromoteCandidate(raw []byte) (candidate string, ok bool) {
 
 // owned are the subcommands of devctl that block until an outcome, which
 // the gate runs outside their caller so that the outcome reaches its owner.
-var owned = [][2]string{{"pr", "merge"}, {"pr", waitVerb}, {"release", waitVerb}, {"rollout", waitVerb}}
+var owned = [][2]string{{"pr", "merge"}, {"pr", waitVerb}, {releaseCmd, waitVerb}, {"rollout", waitVerb}}
 
-const waitVerb = "wait"
+const (
+	waitVerb   = "wait"
+	releaseCmd = "release"
+)
+
+// capped are the subcommands of devctl that count against merge.cap: the
+// merges and promotes. The waits only poll and run outside it.
+var capped = [][2]string{{"pr", "merge"}, {releaseCmd, "promote"}}
 
 // ParseOwned reports whether argv is devctl pr merge, pr wait, release wait
 // or rollout wait, not a help call.
 func ParseOwned(argv []string) bool {
+	return slices.Contains(owned, subcommand(argv))
+}
+
+// ParseCapped reports whether argv is devctl pr merge or release promote,
+// not a help call or a dry run: a run that counts against merge.cap.
+func ParseCapped(argv []string) bool {
+	return !slices.Contains(argv, "--dry-run") && slices.Contains(capped, subcommand(argv))
+}
+
+// subcommand is the command and verb of a devctl argument vector, zero for
+// a help call or a vector without both.
+func subcommand(argv []string) [2]string {
 	if slices.Contains(argv, "-h") || slices.Contains(argv, "--help") {
-		return false
+		return [2]string{}
 	}
 	for i := 1; i+1 < len(argv); i++ {
-		if strings.HasPrefix(argv[i], "-") {
-			continue
+		if !strings.HasPrefix(argv[i], "-") {
+			return [2]string{argv[i], argv[i+1]}
 		}
-		return slices.Contains(owned, [2]string{argv[i], argv[i+1]})
 	}
-	return false
+	return [2]string{}
 }
 
 // Outcome is what devctl's document says about the merge.

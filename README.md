@@ -608,7 +608,7 @@ repository matches. beekeeper reads YAML documents: a file whose name sops does 
 | `github-app <installation> --code <code> [--replace]` | A GitHub App created on GitHub's manifest page outside `app create`: `--code` takes the one-time code GitHub redirects with (`?code=…`), or the whole redirect URL. beekeeper converts it in its own process with GitHub's unauthenticated `POST /app-manifests/<code>/conversions` (the code is the credential; no token goes along) and writes `private-key` and `client-secret`, and `webhook-secret` for an App with a webhook, under `stringData` of the Kubernetes Secret in the SOPS file `apps.secrets` names for `<installation>`, in one sops write (an absent file starts as the entry's `name` and `namespace`). stdout is `app-id <id>` and `client-id <id>`, the values a consumer's configuration takes in plain; stderr names the keys written with their lengths and keyed fingerprints; `beekeeper log` (`secret.github-app`) records the installation, the file, the ids, the slug and the fingerprints, never the code or a value. Every check runs before the code is spent: the installation's entry, the file's directory, the file a Secret (or absent with a name), each key encrypted by the creation rule, no key taken unless `--replace`. A conversion GitHub refuses is refused in one line with GitHub's HTTP status and message (`the conversion: GitHub answered HTTP 404: Not Found`); a code converts once, within an hour of the redirect. A browser turn cannot hand a code over (the Chrome tools show it as `REDACTED`): `app create <installation> --manifest <file>` takes the redirect itself ([GitHub Apps](#github-apps)). |
 | `beekeeper app create <name> [--timeout <duration>]` | A GitHub App from the manifest the organisation declares (`apps.repo` at `apps.manifest`, `{name}` for the App's name, read from the default branch), its credentials into the shared vault item `<name>` without a person copying a value. The manifest, with this run's redirect URL and a `state` nonce, goes to `https://github.com/organizations/<org>/settings/apps/new` from a page on a loopback listener, opened in the person's browser (in an agent session the caller holds the browser lease, as for `browse`; the person's own terminal needs none); the person clicks **Create GitHub App**; GitHub redirects to the listener with a one-time code, whose `state` must be this run's; beekeeper converts the code in its own process (`POST /app-manifests/<code>/conversions`) and writes the answer into the item in one `op` call: `app-id`, `client-id` and `slug` as configuration (string fields), `client-secret`, `private-key` and, for an App with a webhook, `webhook-secret` concealed. The browser then goes on to `https://github.com/apps/<slug>/installations/new` with the organisation and the repositories preselected that `installation.json` next to the manifest declares (`{"repositories": "all" \| ["<name>", …]}`, names of the organisation's repositories, at most 100; absent: all); the person clicks **Install**, and the installation's id, found as the App itself with a token signed by the key still in beekeeper's memory, is recorded as `installation-id`. Each click is named and waited for up to `--timeout` (10m). The answer and `beekeeper log` (`app.create`) carry the ids, the slug and each secret's length and keyed fingerprint, never a value. Every check runs before the page opens: the declaration under the App's name, that GitHub knows no App of that name, the organisation's and the repositories' ids, the vault writable and, with `secret.session`, unlocked (exit 78). Refused in one line, nothing written: an App no manifest declares under its name, one GitHub already knows by that name, a redirect whose `state` is not this run's, and a Create click that does not come in time; an Install click that does not come leaves the credentials as written and names `secret store` for the id. With `secret.session` the write is a `store-item` request to the broker over the keeper's socket, one item in one call, each field plain or concealed. |
 | `rotate platform://<installation>/<capability>/<name> --reason <text>` | A credential the platform manager generates: `platformctl installation reconcile <installation> <capability> --commit --rotate <name>` on the host, the manager writing the new value into the installation's SOPS files in a pull request; nothing is decrypted and no copy reaches the vault. `--dry-run` shows the files that hold it. |
-| `recipients [<directory> \| <sops-file>]` | For a directory (the working directory by default), every age recipient of the creation rules of the `.sops.yaml` nearest above it, a gitops repository's installations' for one (`management-clusters/graveler/.*` → its recipient); for a SOPS file, the file's recipients (its metadata when encrypted, else its creation rule's). Each comes with where its identity is: sops' own sources, the entry of `secret.ageIdentities`, the shared vault's item per recipient or the installation's item `<installation>.agekey` in `secret.vault` or `secret.ageVaults` (found in the vaults' item listings, metadata only) or `none`, naming the items the vaults lack. No value is read; exit 1 when a recipient has no identity. With `secret.session` it runs in the broker, like a call on the vault. |
+| `recipients [<directory> \| <sops-file>]` | For a directory (the working directory by default), every age recipient of the creation rules of the `.sops.yaml` nearest above it, a gitops repository's installations' for one (`management-clusters/graveler/.*` → its recipient); for a SOPS file, the file's recipients (its metadata when encrypted, else its creation rule's). Each comes with where its identity is: sops' own sources, the entry of `secret.ageIdentities`, the shared vault's item per recipient or an installation's item `<installation>.agekey` in `secret.vault` or `secret.ageVaults` (found in the vaults' item listings, metadata only) or `none`, naming the items the vaults lack. No value is read; exit 1 when a recipient has no identity. With `secret.session` it runs in the broker, like a call on the vault. |
 | `items op://<vault> [<match>] [--fields] [--env-keys]` | The items of a vault beekeeper reads (`secret.vault`, `secret.vaults` or `secret.ageVaults`): each item's title, category, tags and last change, those whose title, category or a tag contains `<match>` (case-insensitive) when one is given. `--fields` reads each listed item in beekeeper's process and answers its fields' labels, sections, types and value lengths; `--env-keys` answers the `KEY` of each `KEY=VALUE` line of a plain text field, notes for one, never a concealed one (blank lines, comments and an `export ` in front skipped, matching quotes dropped) with its value's length, listed as `<field>#<KEY>`, the reference `copy`, `compare` and `fingerprint` take; no value is printed, logged or returned. Another vault is refused before `op` runs, naming the vaults listed. With `secret.session` it runs in the broker, like a call on the vault. |
 | `reveal <sops-file> <path>…` | The configuration a SOPS file encrypts next to its secrets, in plaintext: each path one scalar or every scalar under it (an OAuth client's `id`, `name`, `redirectURIs`, a `trustedPeers` list), for a split that moves the secrets into SOPS files of their own and the configuration into a plaintext values file. Every leaf is classified first, and one that looks secret refuses the call (exit 3), named by its path and the reason, never its value: a key on its path named like a secret (`secret`, `password`, `token`, `key`, `credential`, `private`, `cookie`, `salt`, `hmac`, `cert`), a value the value scanner matches (a token pattern or an indexed secret), a URL carrying a password, a run of 16 or more characters at a key's entropy, except in a client or App id (a leaf named `id`, or `client`, `app` or `application` joined to `id` plain, by a hyphen or an underscore: `clientID`, `client-id`, `appId`, `application_id`; an item of a `trustedPeers` or `peers` list), public in every authorize URL however random, which is refused instead when it equals a value under a secret-named key of the same file. `--json` answers `[{"path", "value"}]`, a tool's input. `--to <plain.yaml#path>` writes what one path names into a path of a plaintext YAML file instead (created when absent, its other keys kept), printing no value: a dry run without `--write`, `unchanged` when the destination holds it already; a SOPS file as the destination is refused. |
 | `unset <sops-file> <path>… [--write]` | Keys out of a SOPS file (a value, a mapping or a list item; a number in the dotted path indexes a list; a key holding dots, `stringData.credentials.json`, resolves unquoted, quoted or escaped as in `copy`, and two spellings of one key unset it once), with `sops unset` in beekeeper's process and the file's age identity: the file keeps its recipients, sops renews its MAC and `lastmodified`. A dry run without `--write`. A path the file holds no longer is answered `absent`, so a second run removes nothing; a path under another named one goes with its parent, a list's later items first. It answers the paths removed, those absent and the key names the file keeps, never a value. |
@@ -712,8 +712,7 @@ by `path_regex`), finds the item in the vault's item listing (titles only, metad
 reads it like any `op://` field for the one sops call. `beekeeper secret recipients <directory>`
 shows, for a gitops repository's path, each creation rule's recipient and where its identity is,
 reading no value. A file whose recipient has neither an entry nor an item fails before sops in one
-line, naming the installation (`alerts.installations`, by the directory of the file's path), the
-recipient and the item the vault lacks: a Secret for it is one no agent can change, and no person
+line, naming the recipient and the items checked, never the path's layout: a Secret for it is one no agent can change, and no person
 is asked to decrypt it. With `secret.session` the call runs in the broker, like a call on the vault.
 
 #### The installation's item
@@ -721,9 +720,11 @@ is asked to decrypt it. With `secret.session` the call runs in the broker, like 
 A customer's gitops repository keeps an installation's files under `installations/<installation>/`,
 and the identity of the installation's recipient lives in an item titled `<installation>.agekey`,
 the identity file's text in one of its fields (a Secure Note's `notesPlain`, for one) or as the
-document it is. beekeeper looks the item up by the installation the file's path names, in
-`secret.vault` and in every vault of `secret.ageVaults`, the vaults the same session or service
-account reads age identities from:
+document it is. beekeeper finds the item by the recipient the file's `sops.age` block names, at
+any path (a bare path, `management-clusters/<installation>/…` outside a checkout): it reads the
+`*.agekey` items of `secret.vault` and of every vault of `secret.ageVaults`, the vaults the same
+session or service account reads age identities from, one at a time until one holds the
+recipient's identity, the item of the installation the file's path names first:
 
 ```yaml
 secret:
@@ -731,9 +732,9 @@ secret:
   ageVaults: [<vault holding the installations' .agekey items>]
 ```
 
-The item is found in the vaults' item listings (titles only, metadata, no value); the broker reads
-its fields in its own process for the one sops call and gives sops only the identity of the file's
-recipient, so an item holding another recipient's identity is refused. No entry per installation is
+The items are found in the vaults' item listings (titles only, metadata, no value); the broker
+reads their fields in its own process for the one sops call and gives sops only the identity of the
+file's recipient, so items holding other recipients' identities are refused, naming the recipient. No entry per installation is
 configured. An `op://` entry of `secret.ageIdentities` may name a field of one of `secret.ageVaults`;
 no other `op://` reference reads them. `beekeeper secret recipients` names the item and its vault, or,
 when no vault holds it, the items the vaults lack.
@@ -835,8 +836,9 @@ beekeeper takes them there so no person or session copies a value from a page. F
   declares, a rendered name without the installation or too long, a template carrying
   `{baseDomain}` without `--base-domain`, and a name GitHub knows already.
   - `--replace` creates the successor App for a credential past its expiry. The successor's name
-    carries the next generation suffix GitHub knows no App of: `giantswarm-portal-graveler-2`, then
-    `-3`, and so on. Its vault item of that name is written beside the old one. The old App and
+    carries the generation suffix after the latest one: `giantswarm-portal-graveler-2`, then `-3`,
+    and so on. The latest is the highest the shared vault holds an item of, or GitHub knows; a private
+    App is invisible to an installation token's `GET /apps/<slug>`, its item is not. Its vault item of that name is written beside the old one. The old App and
     its item stay untouched until their consumers have switched. Deleting the old App on its
     Advanced settings page is the person's step, and the answer names that page. `--json` also
     carries `replaces`, the old App's slug, and `beekeeper log` (`app.create`) says `succeeding
@@ -1306,7 +1308,8 @@ like a merge typed on the command line.
   its run: a place dies with its process, and the session's retry joins the lane anew.
 
 A merge runs when no merge before it in its lane's queue holds its place, nothing else of the lane runs, fewer than
-`merge.cap` devctl processes run on the machine, the calling session runs fewer than `merge.sessionCap` merges
+`merge.cap` devctl merges and promotes run on the machine (a `pr wait`, `release wait` or `rollout wait` only polls
+and does not count), the calling session runs fewer than `merge.sessionCap` merges
 (default 2; each running devctl polls GitHub, so ten merges one session queued poll as two would, the others wait in
 their lanes without reading GitHub and start in the order they queued; `beekeeper budget` lists each session's
 polling and waiting merges), and the lane's installation is ready: every
@@ -1512,7 +1515,7 @@ A merge queued under the floor waits for the reset with that reset recorded on i
 first: a gated `devctl pr wait`, `release wait` or `rollout wait` started then waits until none of
 them waits any more (the gate's line names them), the watch's GitHub timer checks wait as well,
 `beekeeper budget` names them and `budget --gate` refuses (exit 3). For such a merge only the
-running merges count against `merge.cap`, not the waits' devctl processes, and an older merge
+running merges count against `merge.cap`, and an older merge
 queued for the reset that is free to start takes a slot before it. A merge leaves the window when it
 starts; the waits run with what the merges leave, at the window's end at the latest.
 
@@ -2723,7 +2726,7 @@ The organisation and desk keys, and their defaults:
 | `secret.sessionLifetime` | `12h` | How long the broker holds the vault session after a sign-in ([The vault session](#the-vault-session)) |
 | `secret.unlockWait` | `8m` | How long a call on the vault waits for the broker's sign-in, and how long one sign-in waits for the credential store and tries again after a failure ([The vault session](#the-vault-session)) |
 | `secret.ageIdentities` | none | Age identities in the shared vault, in an identity file (`file://`) or in the person's own credential store (`store://`), by recipient or `pathRegex`, for the SOPS files no local sops identity decrypts; a recipient no entry names has its identity in the vault's item `sops age key <recipient>` ([Age identities](#age-identities)) |
-| `secret.ageVaults` | none | The vaults besides `secret.vault` that age identities are read from: an `op://` entry of `secret.ageIdentities` may name one, and a file under `installations/<name>/` finds its identity in the item `<name>.agekey` of `secret.vault` or one of them ([The installation's item](#the-installations-item)) |
+| `secret.ageVaults` | none | The vaults besides `secret.vault` that age identities are read from: an `op://` entry of `secret.ageIdentities` may name one, and a SOPS file at any path finds its identity in the item `<installation>.agekey` of `secret.vault` or one of them holding the identity of its recipient ([The installation's item](#the-installations-item)) |
 | `secret.store.read`, `secret.store.search` | none | The person's own commands that read an entry of their credential store and search it by an age recipient, for `store://` age identities ([Age identities](#age-identities)) |
 | `secret.fileRoots` | none | The directories (`~/` allowed) whose plain files a `file://<absolute path>#<path>` source reads one value of, a CLI's own credential directory for one; a file outside them, its symlinks resolved, is refused, naming them, and none configured refuses every `file://` source |
 | `secret.files` | none | Files known to hold secret values (`~/` and globs allowed) that no agent reads whole, beside the built-in list ([Secret reads](#secret-reads)) |
