@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/giantswarm/beekeeper/internal/lease"
@@ -630,34 +629,41 @@ func ansiC(s string) ([]byte, int) {
 		'\\': '\\', '\'': '\'', '"': '"', '?': '?'}[s[1]]; ok {
 		return []byte{b}, 2
 	}
-	const octal, hex = "01234567", "0123456789abcdefABCDEF"
-	digits := func(from, most int, set string) (uint64, int) {
+	// digits reads up to most digits of base from s[from:]: their value, wrapped
+	// as bash wraps it, and the end offset.
+	digits := func(from, most int, base rune) (rune, int) {
+		var v rune
 		n := from
-		for n < len(s) && n < from+most && strings.IndexByte(set, s[n]) >= 0 {
-			n++
+		for ; n < len(s) && n < from+most; n++ {
+			d, c := base, rune(s[n]|0x20)
+			switch {
+			case c >= '0' && c <= '9':
+				d = c - '0'
+			case c >= 'a' && c <= 'f':
+				d = c - 'a' + 10
+			}
+			if d >= base {
+				break
+			}
+			v = v*base + d
 		}
-		base := 16
-		if set == octal {
-			base = 8
-		}
-		v, _ := strconv.ParseUint(s[from:n], base, 32)
 		return v, n
 	}
 	switch c := s[1]; {
 	case c >= '0' && c <= '7':
-		v, n := digits(1, 3, octal)
-		return []byte{byte(v)}, n
+		v, n := digits(1, 3, 8)
+		return []byte{byte(v & 0xff)}, n
 	case c == 'x':
-		if v, n := digits(2, 2, hex); n > 2 {
-			return []byte{byte(v)}, n
+		if v, n := digits(2, 2, 16); n > 2 {
+			return []byte{byte(v & 0xff)}, n
 		}
 	case c == 'u' || c == 'U':
 		most := 4
 		if c == 'U' {
 			most = 8
 		}
-		if v, n := digits(2, most, hex); n > 2 {
-			return []byte(string(rune(v))), n
+		if v, n := digits(2, most, 16); n > 2 {
+			return []byte(string(v)), n
 		}
 	case c == 'c' && len(s) > 2:
 		return []byte{s[2] & 0x1f}, 3
