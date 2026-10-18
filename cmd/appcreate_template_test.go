@@ -29,7 +29,7 @@ func templateApp(t *testing.T, known ...string) (*app, *fakeGitHub, map[string]s
 	a, g, tools := createApp(t, map[string]string{
 		"apps/" + portalPurpose + "/manifest.template.json": portalTemplate,
 		"apps/fixed/manifest.template.json":                 `{"name": "fixed-name", "url": "https://{baseDomain}"}`,
-		"apps/bare/manifest.template.json":                 `{"name": "bare-{installation}", "url": "https://example.org"}`,
+		"apps/bare/manifest.template.json":                  `{"name": "bare-{installation}", "url": "https://example.org"}`,
 	})
 	inner := appsGH
 	appsGH = func(ctx context.Context, args ...string) ([]byte, error) {
@@ -143,7 +143,7 @@ func TestAppCreateFromATemplateRefusesBeforeAnyClick(t *testing.T) {
 		"bad domain":       {[]string{appCreate, portalPurpose, installationFlag, portalInstallation, baseDomainFlag, "localhost"}, ExitUsage, "a lower-case DNS name"},
 		"nothing to replace": {[]string{appCreate, portalPurpose, installationFlag, portalInstallation, baseDomainFlag, portalDomain, replaceFlag}, ExitRefused,
 			"GitHub knows no App giantswarm-portal-graveler for --replace to succeed"},
-		"known name":         {[]string{appCreate, "bare", installationFlag, "taken"}, ExitRefused, "GitHub already knows an App named bare-taken"},
+		"known name":    {[]string{appCreate, "bare", installationFlag, "taken"}, ExitRefused, "GitHub already knows an App named bare-taken"},
 		"replace alone": {[]string{appCreate, fixtureApp, replaceFlag}, ExitUsage, "--replace and --base-domain go with --installation"},
 		"domain alone":  {[]string{appCreate, fixtureApp, baseDomainFlag, portalDomain}, ExitUsage, "--replace and --base-domain go with --installation"},
 		"with manifest": {[]string{appCreate, portalInstallation, "--manifest", "m.json", installationFlag, portalInstallation}, ExitUsage, "not --manifest's file"},
