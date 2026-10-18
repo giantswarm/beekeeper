@@ -296,8 +296,9 @@ func TestAMergeUnderTheBudgetFloorIsQueuedForTheReset(t *testing.T) {
 	}
 }
 
-// A held repository is refused (exit 77) with its reason, and nothing is
-// queued: 77 never comes with a "queued" line.
+// A held repository is refused (exit 77) with its reason and the park that
+// waits for its lift, and nothing is queued: 77 never comes with a "queued"
+// line.
 func TestAHeldMergeIsRefusedNotQueued(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	a := queueApp(t)
@@ -312,8 +313,9 @@ func TestAHeldMergeIsRefusedNotQueued(t *testing.T) {
 	if Code(err) != ExitGateRefused {
 		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateRefused)
 	}
-	if !strings.Contains(stderr, GatePrefix+"refused, o/r is held") || !strings.Contains(stderr, "a test hold") || strings.Contains(stderr, "queued") {
-		t.Errorf("stderr %q, want the refusal with its reason", stderr)
+	if !strings.Contains(stderr, GatePrefix+"refused, o/r is held") || !strings.Contains(stderr, "a test hold") || strings.Contains(stderr, "queued") ||
+		!strings.Contains(stderr, "beekeeper agents park --on hold:"+scratchRepo+" ") {
+		t.Errorf("stderr %q, want the refusal with its reason and its park", stderr)
 	}
 	if d := lastEventOf(t, a, "merge.queued"); strings.Contains(d, "run of its own") {
 		t.Errorf("a refused merge was queued: %q", d)

@@ -8,7 +8,8 @@ description: Ending a turn with the task open on a beekeeper desk: parking on a 
 - **A worker that can go no further** until an answer, a merge ahead of it in the lane or a release
   comes parks and ends its turn, never sleeps on it: `beekeeper agents park --on <#note|owner/repo#n>
   "<what>"`. The resume (the supervisor's `beekeeper agents wake`, or the watch's) carries what
-  settled the wait.
+  settled the wait. A merge the gate refused on a hold (exit 77) parks on that hold,
+  `--on hold:<target>` as the refusal names it, and runs the same merge once the resume says it lifted.
 - **A wait on an external state** (a rollout, a registry, a CI outside `devctl`) is a timer
   that wakes the worker, then the park: `beekeeper timer add <time> "<what>" --when "<condition>"`
   or `--probe "<command>"`, with `--wake "<agent>" --until <duration>`.

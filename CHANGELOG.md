@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `agents park --on hold:<target>` parks on a hold: the watch says the park resumable once the hold is lifted or its time passed, and resumes it with agents.autoResume. A park on a target nothing holds is refused. The gate's exit 77 on a hold names the park, so a worker refused by a short window (a devctl release window) resumes when it lifts instead of staying parked on its own pull request ([#1417](https://github.com/giantswarm/beekeeper/issues/1417)).
+
 ### Fixed
 
 - `uninstall` resolves a symlinked unit: the person's link stays, and a target an earlier install wrote through the link is removed, its unit stopped without being disabled (systemd removes a linked unit's symlink on disable); `uninstall --dry-run` names the target it would remove and the link that stays. A target the person changed since stays as theirs ([#764](https://github.com/giantswarm/beekeeper/issues/764)).
