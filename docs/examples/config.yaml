@@ -177,6 +177,10 @@ alerts:
     server: pd              # its muster name: x_<server>_<tool>, the read-only list_incidents and list_alerts_from_incident
     services: [PABC123]     # the team's service ids
     every: 1m               # a page is a PAGERDUTY NEW line within it
+  discover:                 # every Teleport cluster carrying a HelmRelease labelled with the team joins installations; off without every
+    every: 1h               # the watch discovers this often (beekeeper alerts discover: now); a cluster without a context is logged into the first non-machine file of kubeconfig
+    label: application.giantswarm.io/team   # the HelmRelease label naming the team
+    exclude: ["*-*", "*.*"] # Teleport cluster names never read: workload clusters (<installation>-<cluster>) and the proxy
   quiet:                    # alerts whose changes are logged, not said; default: [{severity: notify}] once team is set, else none
     - {cluster: "t-*"}      # fields installation, cluster, alertname, severity, globs; a page only by a rule naming a cluster
     - {severity: notify}    # other teams' and team-less notify alerts
