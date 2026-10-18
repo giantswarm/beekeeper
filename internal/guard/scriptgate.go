@@ -468,12 +468,10 @@ func firstShellUngated(text string) int {
 			break
 		}
 	}
-	for _, m := range shellC.FindAllStringSubmatchIndex(text, -1) {
-		body := text[m[1]:]
-		end := closingQuote(body, text[m[2]])
-		for _, mm := range anyOwned.FindAllStringIndex(body[:end], -1) {
-			if !gated.MatchString(body[:mm[0]]) && (at < 0 || m[1]+mm[0] < at) {
-				at = m[1] + mm[0]
+	for _, cs := range shellStrings(text) {
+		for _, mm := range anyOwned.FindAllStringIndex(cs.text, -1) {
+			if o := cs.at + cs.offs[mm[0]]; !gated.MatchString(cs.text[:mm[0]]) && (at < 0 || o < at) {
+				at = o
 			}
 		}
 	}

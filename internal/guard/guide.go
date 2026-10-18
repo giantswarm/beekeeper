@@ -97,9 +97,8 @@ func commandWork(cmd string) string {
 	if m := guideWork.FindStringSubmatch(cmd); m != nil {
 		return m[1]
 	}
-	for _, m := range shellC.FindAllStringSubmatchIndex(cmd, -1) {
-		body := cmd[m[1]:]
-		if w := commandWork(body[:closingQuote(body, cmd[m[2]])]); w != "" {
+	for _, cs := range shellStrings(cmd) {
+		if w := commandWork(cs.text); w != "" {
 			return w
 		}
 	}

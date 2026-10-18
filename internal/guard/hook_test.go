@@ -210,6 +210,21 @@ func TestHeavyClassification(t *testing.T) {
 		{"go test ./... --help", true},
 		{"golangci-lint --version && golangci-lint run", true},
 		{"go version && go build ./...", true},
+		// a -c or eval string is read as the shell builds it: adjacent quoted
+		// pieces joined, $'…' decoded
+		{`bash -c 'cd x && '"go test ./..."`, true},
+		{`sh -c "cd x; "'make build'`, true},
+		{`bash -c 'cd x; 'go\ vet\ ./...`, true},
+		{`bash -c $'cd x\ngo test ./...'`, true},
+		{`zsh -c 'cd x;'$'\n\x67o build ./...'`, true},
+		{`eval 'cd x;' go test ./...`, true},
+		{`bash -c 'echo "$@"' _ go test ./...`, false},
+		{`bash -c 'echo '"'go test ./...'"`, false},
+		// $'…' ends at its unescaped quote, not at an escaped one
+		{`echo $'it\'s'; go test ./...`, true},
+		{`echo $'it\'s; go test ./...'`, false},
+		{`echo $$'\'; go test ./...`, true},
+		{`bash -c 'cd x;'$$'\'; go vet ./...`, true},
 	} {
 		if got := isHeavy(tc.cmd); got != tc.heavy {
 			t.Errorf("isHeavy(%q) = %v, want %v", tc.cmd, got, tc.heavy)
@@ -400,6 +415,15 @@ func TestHookGatesMerges(t *testing.T) {
 			`gh pr comment 7 --repo o/r --body 'Next: x; devctl pr merge o/r 7' && ` + g + `devctl pr merge o/r 7`, false},
 		{`grep -E '(x & devctl pr wait o/r 7|y; devctl pr merge)' log.txt; devctl pr wait o/r 7`,
 			`grep -E '(x & devctl pr wait o/r 7|y; devctl pr merge)' log.txt; ` + g + `devctl pr wait o/r 7`, false},
+		// $'…' ends at its unescaped quote: what follows a text command's
+		// $'…' argument is a command line again.
+		{`echo $'a\''; devctl pr merge o/r 7; echo 'b'`, `echo $'a\''; ` + g + `devctl pr merge o/r 7; echo 'b'`, false},
+		{`gh pr comment 7 --repo o/r --body $'it\'s\\'; devctl pr merge o/r 7 # 'x`,
+			`gh pr comment 7 --repo o/r --body $'it\'s\\'; ` + g + `devctl pr merge o/r 7 # 'x`, false},
+		// $$ is the pid: the quote after it is a plain one, no $'…'.
+		{`echo $$'\'; devctl pr merge o/r 7; echo '\'`, `echo $$'\'; ` + g + `devctl pr merge o/r 7; echo '\'`, false},
+		{`printf '%s\n' $'\''; devctl release promote o/r; echo '\'`,
+			`printf '%s\n' $'\''; ` + g + `devctl release promote o/r; echo '\'`, false},
 	} {
 		d := decide(t, h, t.TempDir(), c.cmd, map[string]any{backgroundKey: c.bg})
 		if d == nil || d.UpdatedInput["command"] != c.want {
@@ -418,7 +442,12 @@ func TestHookGatesMerges(t *testing.T) {
 		// A quoted argument of another command is text after its ; & or ( too.
 		`gh issue comment 1 --repo o/r --body "Run it: cd x; devctl pr merge o/r 7 (or & devctl pr wait o/r 7)"`,
 		`jq -r 'select(.cmd | test("x & devctl pr wait o/r 7"))' log.json`,
-		"git commit -m 'gate: x\n\n(devctl pr merge o/r 7)'"} {
+		"git commit -m 'gate: x\n\n(devctl pr merge o/r 7)'",
+		// The gate written in after a $'…' argument passes as written.
+		`echo $'a\''; ` + g + `devctl pr merge o/r 7; echo 'b'`,
+		// A $'…' argument with an escaped quote is text to its end.
+		`echo $'it\'s done; devctl pr merge o/r 7'`,
+		`gh pr comment 7 --repo o/r --body $'next:\n\tdevctl pr merge o/r 7 (it\'s gated)'`} {
 		if d := decide(t, h, t.TempDir(), cmd, nil); d != nil {
 			t.Errorf("%q is rewritten: %v", cmd, d.UpdatedInput["command"])
 		}
@@ -446,6 +475,7 @@ func TestHookRefusesScriptMerges(t *testing.T) {
 	write("merge.py", "#!/usr/bin/env python3\nimport subprocess\nsubprocess.run([\"devctl\", \"pr\", \"merge\", \"o/r\", \"7\"], check=True)\n", 0o755)
 	write("promote.sh", "devctl release promote o/r\n", 0o644)
 	write("heredoc.sh", "python3 - <<'EOF'\nimport os\nos.system('devctl pr merge o/r 7')\nEOF\n", 0o644)
+	write("pieces.sh", "bash -c 'cd x; '\"devctl pr merge o/r 7\"\n", 0o644)
 	script := filepath.Join(dir, "merge.sh")
 	const line5 = "line 5: devctl pr merge o/r $pr | tee \"m-$pr.json\""
 	for _, c := range []struct {
@@ -460,6 +490,8 @@ func TestHookRefusesScriptMerges(t *testing.T) {
 		{"S=" + dir + "; bash \"$S/merge.sh\"", []string{"the script " + script, line5}},
 		{"nohup bash outer.sh >| out.log 2>&1 &", []string{"the script " + script, line5}},
 		{"bash promote.sh", []string{"a devctl release promote in the script " + filepath.Join(dir, "promote.sh"), "line 1: devctl release promote o/r"}},
+		// A -c string in a script is read as the shell builds it, its pieces joined.
+		{"bash pieces.sh", []string{"a devctl pr merge in the script " + filepath.Join(dir, "pieces.sh"), `line 1: bash -c 'cd x; '"devctl pr merge o/r 7"`}},
 		{"bash heredoc.sh", []string{"a devctl pr merge in the here-document python3 reads", "line 2: os.system('devctl pr merge o/r 7')", "os.system('" + g + "devctl pr merge o/r 7')"}},
 		// One written and run in the same call.
 		{"cat <<'EOF' >| run.sh\ndevctl pr merge o/r 7\nEOF\nbash run.sh", []string{"this call, which runs run.sh (not readable before the call)", "line 2: devctl pr merge o/r 7"}},
