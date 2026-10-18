@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `uninstall` resolves a symlinked unit: the person's link stays, and a target an earlier install wrote through the link is removed, its unit stopped without being disabled (systemd removes a linked unit's symlink on disable); `uninstall --dry-run` names the target it would remove and the link that stays. A target the person changed since stays as theirs ([#764](https://github.com/giantswarm/beekeeper/issues/764)).
+
 ### Removed
 
 - `note migrate` and the memo code are gone: the state keeps no memos and no pinned notes, `board next` reads priorities and holds from GitHub only and is never refused over an older beekeeper's memos, `self-update` names no migration, and the hand-overs' standing instructions are `standing.md` alone. A state document an older beekeeper left with memos keeps them as written and unread; the Note resource has no `pinned` field ([#938](https://github.com/giantswarm/beekeeper/issues/938)).

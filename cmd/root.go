@@ -400,6 +400,16 @@ func event(by state.Party, verb, format string, a ...any) state.Event {
 	return state.Event{At: time.Now().UTC(), By: by, Verb: verb, Detail: fmt.Sprintf(format, a...)}
 }
 
+// about is e with the issue or pull request ref names (owner/repo#n or its
+// URL) as its Subject, which the event sink dispatches; a ref that names
+// none leaves e as it is.
+func about(e state.Event, ref string) state.Event {
+	if r, ok := parseRef(ref); ok {
+		e.Subject = refName(r)
+	}
+	return e
+}
+
 // listCmd is the `list` subcommand of a noun, which the noun alone runs too.
 func listCmd(short string, run func() error) *cobra.Command {
 	return &cobra.Command{

@@ -99,3 +99,24 @@ func TestReadAppManifest(t *testing.T) {
 		t.Errorf("a missing manifest: %v", err)
 	}
 }
+
+// Render replaces the placeholders in every string of the manifest, at any
+// depth, and reads the name again; the template stays as it was. Carries
+// finds a placeholder at any depth.
+func TestAppDeclarationRender(t *testing.T) {
+	const portalName = "portal-{installation}"
+	tmpl := AppDeclaration{Name: portalName, Manifest: map[string]any{"name": portalName, "public": false,
+		"callback_urls": []any{"https://portal.{baseDomain}/cb"}, "hook_attributes": map[string]any{"url": "https://portal.{baseDomain}/hook"}}}
+	if !tmpl.Carries("{baseDomain}") || tmpl.Carries("{other}") {
+		t.Error("Carries misses a nested placeholder or finds an absent one")
+	}
+	got := tmpl.Render(map[string]string{"{installation}": "graveler", "{baseDomain}": "graveler.example.org"})
+	hook, _ := got.Manifest["hook_attributes"].(map[string]any)
+	if got.Name != "portal-graveler" || got.Manifest["callback_urls"].([]any)[0] != "https://portal.graveler.example.org/cb" ||
+		hook["url"] != "https://portal.graveler.example.org/hook" || got.Manifest["public"] != false {
+		t.Errorf("Render = %+v", got)
+	}
+	if tmpl.Manifest["name"] != portalName || tmpl.Manifest["callback_urls"].([]any)[0] != "https://portal.{baseDomain}/cb" {
+		t.Errorf("Render changed the template: %+v", tmpl)
+	}
+}

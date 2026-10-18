@@ -54,7 +54,10 @@ repository (plans.repositories) is admitted when that pull request is
 merged, or open with its stage check (plans.check, default plan-stages)
 green or red only for missing stage outputs ("<plan>: <stage> missing"):
 the grill stage, a revision awaiting its passes or a plan sent back by a
-SIMPLIFY or KILL verdict, whose output is questions for the person. It is
+SIMPLIFY or KILL verdict, whose output is questions for the person. An
+added note logs plan.grilling for each plan pull request it links at its
+grill stage and plan.ready for each open one whose check is green, which
+the event sink (sink.verbs) dispatches. It is
 refused, naming the stage and what would admit it, while the pull request
 is closed, the check is pending or missing on the head, or red for
 anything else (the PRD fails its own check). A checked note folds into
@@ -151,16 +154,17 @@ and tells the session that filed it.`,
 				}
 			}
 			checked := guides(person, &n)
+			var stage planStage
 			if checked {
 				m := draft.missing()
-				stages, grill, err := planStages(cmd.Context(), a.cfg.Plans, draft.subject())
+				stage, err = planStages(cmd.Context(), a.cfg.Plans, draft.subject())
 				if err != nil {
 					return err
 				}
-				if m = append(m, stages...); len(m) > 0 {
+				if m = append(m, stage.Refused...); len(m) > 0 {
 					return usageErr("note for %s refused, it lacks: %s", forWho, strings.Join(m, "; "))
 				}
-				for _, g := range grill {
+				for _, g := range stage.Grill {
 					if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "admitted: %s; the note carries its questions for %s\n", g, forWho); err != nil {
 						return err
 					}
@@ -221,7 +225,7 @@ and tells the session that filed it.`,
 				st.NextNote++
 				n.ID = st.NextNote
 				st.Notes = append(st.Notes, n)
-				return []state.Event{event(me, "note.add", "#%d %s", n.ID, n.Text)}, nil
+				return append([]state.Event{event(me, "note.add", "#%d %s", n.ID, n.Text)}, stage.events(me, n.ID, forWho)...), nil
 			})
 			if err != nil {
 				return err

@@ -167,14 +167,42 @@ func (d noteDraft) subject() string {
 	return pullURL.FindString(d.text())
 }
 
+// planStage is what a plan stage check found on the pull requests a note
+// links.
+type planStage struct {
+	// Refused names what keeps the note out: a closed pull request, a check
+	// pending or missing on the head, a red one with another finding.
+	Refused []string
+	// Grill names each pull request at its grill stage, for the person.
+	Grill []string
+	// Grilling are the pull requests at their grill stage, Ready the open
+	// ones whose check is green, each owner/repo#n.
+	Grilling, Ready []string
+}
+
+// events are the plan events of note id for forWho: plan.grilling for
+// each pull request at its grill stage, plan.ready for each open one whose
+// check is green, each with the pull request as its subject.
+func (p planStage) events(me state.Party, id int, forWho string) []state.Event {
+	var out []state.Event
+	for _, ref := range p.Grilling {
+		out = append(out, about(event(me, verbPlanGrilling, "%s: note #%d carries its questions for %s", ref, id, forWho), ref))
+	}
+	for _, ref := range p.Ready {
+		out = append(out, about(event(me, verbPlanReady, "%s: note #%d asks %s for the review", ref, id, forWho), ref))
+	}
+	return out
+}
+
 // planStages checks every pull request of a plans repository that s links
 // by its stage check. A merged one, a green check, or a red one whose every
 // finding is a missing stage output passes: the last is the grill stage,
-// whose output is questions for the person, and is named in grill. refused
-// names the rest: a closed pull request, a check pending or missing on the
-// head, a red one with another finding (the PRD fails its own check). A
-// pull request GitHub does not answer for is an error, never a pass.
-func planStages(ctx context.Context, plans config.Plans, s string) (refused, grill []string, err error) {
+// whose output is questions for the person. Refused names the rest: a
+// closed pull request, a check pending or missing on the head, a red one
+// with another finding (the PRD fails its own check). A pull request GitHub
+// does not answer for is an error, never a pass.
+func planStages(ctx context.Context, plans config.Plans, s string) (planStage, error) {
+	var p planStage
 	var seen []string
 	for _, m := range pullURL.FindAllStringSubmatch(s, -1) {
 		ref := strings.ToLower(m[1]) + "#" + m[2]
@@ -184,11 +212,11 @@ func planStages(ctx context.Context, plans config.Plans, s string) (refused, gri
 		seen = append(seen, ref)
 		n, err := strconv.Atoi(m[2])
 		if err != nil {
-			return nil, nil, err
+			return planStage{}, err
 		}
 		c, err := github.PullCheck(ctx, notesGH, m[1], n, plans.Check)
 		if err != nil {
-			return nil, nil, fmt.Errorf("%s: reading its %s check: %w", m[0], plans.Check, err)
+			return planStage{}, fmt.Errorf("%s: reading its %s check: %w", m[0], plans.Check, err)
 		}
 		at := ""
 		if c.URL != "" {
@@ -196,24 +224,27 @@ func planStages(ctx context.Context, plans config.Plans, s string) (refused, gri
 		}
 		const admits = "green, or red only for missing stage outputs (the grill stage), admits the note"
 		switch {
-		case c.State == github.Merged || (c.State == github.Open && c.Outcome == github.CheckPass):
+		case c.State == github.Merged:
+		case c.State == github.Open && c.Outcome == github.CheckPass:
+			p.Ready = append(p.Ready, m[1]+"#"+m[2])
 		case c.State != github.Open:
-			refused = append(refused, fmt.Sprintf("an open plan pull request: %s is closed; reopened, its %s check is read again", m[0], plans.Check))
+			p.Refused = append(p.Refused, fmt.Sprintf("an open plan pull request: %s is closed; reopened, its %s check is read again", m[0], plans.Check))
 		case c.Outcome == github.CheckMissing:
-			refused = append(refused, fmt.Sprintf("a %s check on %s (none on its head): a run on the head, %s", plans.Check, m[0], admits))
+			p.Refused = append(p.Refused, fmt.Sprintf("a %s check on %s (none on its head): a run on the head, %s", plans.Check, m[0], admits))
 		case c.Outcome == github.CheckPending:
-			refused = append(refused, fmt.Sprintf("a finished %s check on %s (pending%s): its outcome, %s", plans.Check, m[0], at, admits))
+			p.Refused = append(p.Refused, fmt.Sprintf("a finished %s check on %s (pending%s): its outcome, %s", plans.Check, m[0], at, admits))
 		case len(c.Annotations) > 0 && !slices.ContainsFunc(c.Annotations, func(a string) bool { return !missingStage.MatchString(a) }):
-			grill = append(grill, fmt.Sprintf("%s is at its grill stage (%s red only for missing stage outputs: %s%s)", m[0], plans.Check, strings.Join(c.Annotations, "; "), at))
+			p.Grill = append(p.Grill, fmt.Sprintf("%s is at its grill stage (%s red only for missing stage outputs: %s%s)", m[0], plans.Check, strings.Join(c.Annotations, "; "), at))
+			p.Grilling = append(p.Grilling, m[1]+"#"+m[2])
 		default:
 			why := "no finding"
 			if len(c.Annotations) > 0 {
 				why = strings.Join(c.Annotations, "; ")
 			}
-			refused = append(refused, fmt.Sprintf("a PRD that passes its %s check on %s (red at the PRD itself, not a missing stage output: %s%s): a fixed PRD, %s", plans.Check, m[0], why, at, admits))
+			p.Refused = append(p.Refused, fmt.Sprintf("a PRD that passes its %s check on %s (red at the PRD itself, not a missing stage output: %s%s): a fixed PRD, %s", plans.Check, m[0], why, at, admits))
 		}
 	}
-	return refused, grill, nil
+	return p, nil
 }
 
 // unlinked lists the issue and PR references in s that have no full URL

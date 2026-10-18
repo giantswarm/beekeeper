@@ -140,6 +140,78 @@ type Config struct {
 	// Feedback is the Slack feedback watch: the person's replies in the
 	// threads of the reporter's posts, read through muster as the person.
 	Feedback Feedback `yaml:"feedback"`
+	// Sink dispatches a GitHub workflow on selected events.
+	Sink Sink `yaml:"sink"`
+}
+
+// The events the sink may dispatch: those that carry the issue or pull
+// request they concern (owner/repo#n) as their subject.
+const (
+	// SinkPlanGrilling is a note for the guide's person admitted on a plan
+	// pull request at its grill stage.
+	SinkPlanGrilling = "plan.grilling"
+	// SinkPlanReady is a note for the guide's person admitted on an open
+	// plan pull request whose stage check is green: the plan awaits review.
+	SinkPlanReady = "plan.ready"
+	// SinkServe is a session's record of the issue it serves (sessions
+	// serve), SinkBoardClaim one board next --claim records.
+	SinkServe      = "session.serve"
+	SinkBoardClaim = "board.claim"
+	// SinkMerged is a pull request the merge gate merged, with its release.
+	SinkMerged = "merged"
+)
+
+// SinkVerbs are the events the sink may dispatch, the default of
+// sink.verbs.
+var SinkVerbs = []string{SinkPlanGrilling, SinkPlanReady, SinkServe, SinkBoardClaim, SinkMerged}
+
+// Sink dispatches Workflow of Repo (workflow_dispatch) for every event of
+// Verbs, within a watch.interval of the event, with the inputs verb,
+// subject (owner/repo#n) and time (RFC 3339, UTC), nothing else. Unset
+// (no repo), nothing is dispatched.
+type Sink struct {
+	// Repo is the workflow's repository, owner/repo.
+	Repo string `yaml:"repo"`
+	// Workflow is the workflow's file name or id, refresh.yaml.
+	Workflow string `yaml:"workflow"`
+	// Ref is the branch or tag the workflow runs on (default: the
+	// repository's default branch).
+	Ref string `yaml:"ref"`
+	// Verbs are the events dispatched, of SinkVerbs (default: all of them).
+	Verbs []string `yaml:"verbs"`
+}
+
+// Enabled reports whether a workflow is configured.
+func (s Sink) Enabled() bool { return s.Repo != "" }
+
+// Selects reports whether an event of verb is dispatched.
+func (s Sink) Selects(verb string) bool { return s.Enabled() && slices.Contains(s.Verbs, verb) }
+
+func (s *Sink) defaults() {
+	if s.Enabled() && len(s.Verbs) == 0 {
+		s.Verbs = slices.Clone(SinkVerbs)
+	}
+}
+
+func (s Sink) validate() error {
+	if !s.Enabled() {
+		if s.Workflow != "" || s.Ref != "" || len(s.Verbs) > 0 {
+			return fmt.Errorf("sink: no repo: set sink.repo, the workflow's owner/repo, or nothing of sink")
+		}
+		return nil
+	}
+	if err := ownerRepos("sink.repo", []string{s.Repo}); err != nil {
+		return err
+	}
+	if strings.TrimSpace(s.Workflow) == "" {
+		return fmt.Errorf("sink.workflow: the workflow of %s to dispatch, its file name or id", s.Repo)
+	}
+	for _, v := range s.Verbs {
+		if !slices.Contains(SinkVerbs, v) {
+			return fmt.Errorf("sink.verbs: %q is none of %s", v, strings.Join(SinkVerbs, ", "))
+		}
+	}
+	return nil
 }
 
 // Feedback configures the Slack feedback watch of the standby watch. It
@@ -218,8 +290,16 @@ func (p Plans) Covers(repo string) bool {
 	return slices.ContainsFunc(p.Repositories, func(r string) bool { return strings.EqualFold(r, repo) })
 }
 
-// AppName is the placeholder of the App's name in Apps.Manifest.
+// AppName is the placeholder of the App's name in Apps.Manifest, and of
+// the purpose in Apps.Template.
 const AppName = "{name}"
+
+// The placeholders a manifest template's strings may carry: the
+// installation's name and its base domain.
+const (
+	AppInstallation = "{installation}"
+	AppBaseDomain   = "{baseDomain}"
+)
 
 // Apps is the repository that declares the organisation's GitHub Apps, one
 // manifest each (GitHub's App manifest: name, callback_urls). Unset, `app
@@ -231,6 +311,10 @@ type Apps struct {
 	// Manifest is an App's manifest's path in Repo, AppName standing for
 	// the App's name.
 	Manifest string `yaml:"manifest"`
+	// Template is the path in Repo of the manifest template of a purpose
+	// whose Apps exist once per installation, AppName standing for the
+	// purpose; unset, Manifest's file with .template.json for .json.
+	Template string `yaml:"template"`
 	// Secrets are, by installation, the SOPS file of the Kubernetes Secret
 	// an App's credentials go into (beekeeper secret github-app).
 	Secrets map[string]AppSecret `yaml:"secrets"`
@@ -253,6 +337,23 @@ func (a Apps) ManifestOf(name string) string {
 		return ""
 	}
 	return strings.ReplaceAll(a.Manifest, AppName, name)
+}
+
+// TemplateOf is the path of the manifest template of purpose in Repo, ""
+// while the declaring repository or the path is unset.
+func (a Apps) TemplateOf(purpose string) string {
+	tmpl := a.Template
+	if tmpl == "" {
+		base, ok := strings.CutSuffix(a.Manifest, ".json")
+		if !ok {
+			return ""
+		}
+		tmpl = base + ".template.json"
+	}
+	if a.Repo == "" || !strings.Contains(tmpl, AppName) {
+		return ""
+	}
+	return strings.ReplaceAll(tmpl, AppName, purpose)
 }
 
 // Board is a GitHub project board and the order its work is picked in.
@@ -1818,6 +1919,7 @@ func (c *Config) defaults() error {
 		c.Scan.SOPS[i] = homePath(home, c.Scan.SOPS[i])
 	}
 	setStr(&c.Plans.Check, DefaultPlansCheck)
+	c.Sink.defaults()
 	c.Teleport.defaults(home)
 	setStr(&c.Shell, os.Getenv("SHELL"))
 	setStr(&c.Shell, "sh")
@@ -2167,6 +2269,9 @@ func (c *Config) validate() error {
 		return err
 	}
 	if err := ownerRepos("plans.repositories", c.Plans.Repositories); err != nil {
+		return err
+	}
+	if err := c.Sink.validate(); err != nil {
 		return err
 	}
 	for i, st := range c.Board.Order {
