@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `alerts.kubeconfig` lists kubeconfig files the installations' reads resolve their contexts in, passed to kubectl as `KUBECONFIG` for the context listing, every Alertmanager port-forward and the upgrade reading, behind the machine kubeconfig unless the list names it. An installation whose context lives only in a kubeconfig of the watch's own (`KUBECONFIG=<file> tsh kube login <cluster>`) is read by `beekeeper alerts snapshot` and the watch without a `KUBECONFIG` in the environment ([#705](https://github.com/giantswarm/beekeeper/issues/705)).
+
 ### Fixed
 
 - A finished worker's leftover background commands no longer keep its session from being archived. `agents idle --done` stops every tool shell of the calling session's CLI but the one it runs under, with the processes below them (a wait loop, a port-forward), and says which it stopped. The doctor stops the tool shells of a done agent whose CLI runs nothing else but `sleep`s (no headless turn, no gated merge, no transcript written within 30s), so it takes the agent off the roster and archives its session; `--dry-run` says "would stop". Such a sleeping wait used to count as a running turn for hours ([#1360](https://github.com/giantswarm/beekeeper/issues/1360)).
