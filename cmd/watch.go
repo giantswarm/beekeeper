@@ -30,6 +30,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/secret"
+	"github.com/giantswarm/beekeeper/internal/sink"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/upgrade"
 	"github.com/giantswarm/beekeeper/pkg/project"
@@ -174,6 +175,14 @@ notify again after notify.repeat (30m); notify.quietHours hold
 everything but a critical one and send what they held as one notification
 when they end. Nothing routine notifies. With no notification service the
 watch runs on, prints its lines and says so once.
+
+With sink.repo set, a running watch (not --once) dispatches sink.workflow
+for each event of sink.verbs within one interval, with the inputs verb,
+subject (owner/repo#n) and time only: plan.grilling, plan.ready,
+session.serve, board.claim and merged. sink.json in the state directory
+claims each event once across the machine's watches; a dispatch is logged
+(sink.dispatched), a failed one said (SINK FAILED, sink.failed) and tried
+again by the next poll.
 
 --standby is for a watch that runs when no supervisor does (the
 beekeeper-notify user unit): while a supervisor's session runs it leaves
@@ -392,6 +401,12 @@ type watcher struct {
 	// runs: the next poll skips it instead of queueing a second one.
 	settling, budgeting atomic.Bool
 	lastSettle          time.Time
+	// sinkPending are the events of the sink's verbs within sink.Window,
+	// sinking is set while their dispatch runs, sinkLedger claims each one
+	// once across the machine's watches.
+	sinkPending []state.Event
+	sinking     atomic.Bool
+	sinkLedger  *sink.Ledger
 	// sweeping is set while the exposure sweep runs, lastSweep when it began.
 	sweeping  atomic.Bool
 	lastSweep time.Time
@@ -1333,6 +1348,7 @@ func (w *watcher) poll(ctx context.Context) {
 	w.stalls()
 	w.unbrokered()
 	w.vaultWaits()
+	w.sink(ctx)
 	now := w.now
 	if now.Sub(w.lastSettle) >= w.readEvery(th.Interval.Duration) {
 		w.lastSettle = now
@@ -1806,7 +1822,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	}
 	found := checkTimers(ctx, st.Timers, w.now, lowBudget(st.Budget, w.cfg.GitHub.Floor, w.now) || w.resetFirst(st))
 	var fires []timerFire
-	var defaulted []state.Note
+	var defaulted, overtaken []state.Note
 	fire := func(st *state.State) ([]string, []state.Event, bool) {
 		seen, ce := observeCLI(st, sessions, w.now)
 		lines, evs := closeProbed(st, signedIn)
@@ -1814,6 +1830,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		lines, evs = append(lines, hl...), append(evs, he...)
 		nl, ne, nd := closeDefaulted(st, w.cfg.Guide.Person, watchParty, w.now)
 		lines, evs, defaulted = append(lines, nl...), append(evs, ne...), nd
+		overtaken = heldAmong(st.Notes, over)
 		ol, oe := closeOvertaken(st, over, watchParty)
 		lines, evs = append(lines, ol...), append(evs, oe...)
 		ol, oe = keepOpen(st, kept, watchParty)
@@ -1869,7 +1886,21 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	}
 	w.actTimers(ctx, fires)
 	for _, n := range defaulted {
-		w.timerActs.Go(func() { w.tellFiler(ctx, watchParty, &n, defaultedLine(&n)) })
+		w.timerActs.Go(func() {
+			w.tellFiler(ctx, watchParty, &n, defaultedLine(&n))
+			w.emitReleased(ctx, &n, closedDefaulted)
+		})
+	}
+	for _, n := range overtaken {
+		w.timerActs.Go(func() { w.emitReleased(ctx, &n, closedOvertaken) })
+	}
+}
+
+// emitReleased releases the board item the closed decision n held and says
+// so.
+func (w *watcher) emitReleased(ctx context.Context, n *state.Note, how string) {
+	if l := w.release(ctx, watchParty, n, how); l != "" {
+		w.emitNow("pending", "%s", l)
 	}
 }
 
