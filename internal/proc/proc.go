@@ -78,13 +78,32 @@ func ReadAt(root string) (*Table, error) {
 		if err != nil {
 			continue // exited while scanning
 		}
-		t.ByPID[pid] = p
-		t.children[p.PPID] = append(t.children[p.PPID], pid)
+		t.add(p)
 	}
+	t.sortChildren()
+	return t, nil
+}
+
+// NewTable is the table of the processes ps, linked by their parents: a
+// process tree built in memory rather than read.
+func NewTable(ps ...*Process) *Table {
+	t := &Table{ByPID: map[int]*Process{}, children: map[int][]int{}}
+	for _, p := range ps {
+		t.add(p)
+	}
+	t.sortChildren()
+	return t
+}
+
+func (t *Table) add(p *Process) {
+	t.ByPID[p.PID] = p
+	t.children[p.PPID] = append(t.children[p.PPID], p.PID)
+}
+
+func (t *Table) sortChildren() {
 	for _, c := range t.children {
 		slices.Sort(c)
 	}
-	return t, nil
 }
 
 // Started is when the live process pid started.

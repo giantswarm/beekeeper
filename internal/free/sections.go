@@ -8,7 +8,6 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
@@ -319,19 +318,7 @@ func (r *Run) orphaned(p *proc.Process) bool {
 }
 
 // terminate sends TERM, and KILL to what survives two seconds.
-func terminate(pids []int) {
-	for _, pid := range pids {
-		if p, err := os.FindProcess(pid); err == nil {
-			_ = p.Signal(syscall.SIGTERM)
-		}
-	}
-	time.Sleep(2 * time.Second)
-	for _, pid := range pids {
-		if p, err := os.FindProcess(pid); err == nil && p.Signal(syscall.Signal(0)) == nil {
-			_ = p.Kill()
-		}
-	}
-}
+func terminate(pids []int) { proc.Terminate(pids, 2*time.Second) }
 
 // swap offers the swap reset when RAM can take the swapped pages back. It
 // needs root, so free only prints the command.
