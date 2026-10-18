@@ -140,8 +140,9 @@ the vault item of its name. Refused before any click: a purpose no
 template declares, a rendered name without the installation or longer
 than GitHub's 34 characters, and a template with {baseDomain} without
 --base-domain. --replace creates the successor of the installation's App
-for a credential past its expiry: the name with the next generation
-suffix (-2, -3, ...) into an item of its own beside the old one, which
+for a credential past its expiry: the name with the generation suffix
+after the latest (-2, -3, ...; the latest is the highest the shared vault
+holds an item of, or GitHub knows) into an item of its own beside the old one, which
 stays untouched with its App until its consumers have switched; deleting
 the old App on its settings page is the person's step, named in the answer.
 

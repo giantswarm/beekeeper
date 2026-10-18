@@ -184,7 +184,7 @@ func TestAppCreateReplaceFollowsTheVaultsGenerations(t *testing.T) {
 // no other name.
 func TestAppGeneration(t *testing.T) {
 	for name, want := range map[string]int{portalApp: 1, "Giantswarm-Portal-Graveler": 1, portalApp + "-2": 2, portalApp + "-12": 12,
-		portalApp + "-1": 0, portalApp + "-02": 0, portalApp + "-twin": 0, portalApp + "2": 0, "other": 0} {
+		portalApp + "-1": 0, portalApp + "-02": 0, portalApp + "-twin": 0, portalApp + "2": 0, "unrelated": 0} {
 		if got := generation(portalApp, name); got != want {
 			t.Errorf("generation(%s) = %d, want %d", name, got, want)
 		}
