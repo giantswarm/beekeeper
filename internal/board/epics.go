@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
@@ -35,9 +36,10 @@ func (g Gate) InPlanning(it Item) bool { return g.Epic(it) && slices.Contains(g.
 
 // watched reports whether it is an epic in planning or past its go, whose
 // plan board next shows.
-func (g Gate) watched(it Item) bool {
-	return g.InPlanning(it) || (g.Epic(it) && g.Go != "" && it.Status == g.Go)
-}
+func (g Gate) watched(it Item) bool { return g.InPlanning(it) || g.past(it) }
+
+// past reports whether it is an epic past its go.
+func (g Gate) past(it Item) bool { return g.Epic(it) && g.Go != "" && it.Status == g.Go }
 
 // statuses are the statuses of the epics the gate watches.
 func (g Gate) statuses() []string {
@@ -127,29 +129,60 @@ type Plan struct {
 	Ref   string `json:"ref"`
 	URL   string `json:"url"`
 	Title string `json:"title"`
-	// State is draft, open or merged; Head the head commit.
+	// State is draft, open or merged, closed only for the plan an epic past
+	// its go was implemented at when no other names it; Head the head commit.
 	State   string `json:"state"`
 	Head    string `json:"head"`
 	Private bool   `json:"private"`
-	id      string
+	// The go, read for an epic past it from the latest go comment on its
+	// private thread: the plan it named (ImplementedPlan, its URL) at the
+	// head Implemented, given at GoAt in the comment GoComment. Since says how
+	// the plan moved on from it, Moved the commits pushed to it since; ""
+	// and 0 when it did not.
+	ImplementedPlan string     `json:"implementedPlan,omitempty"`
+	Implemented     string     `json:"implemented,omitempty"`
+	GoAt            *time.Time `json:"goAt,omitempty"`
+	GoComment       string     `json:"goComment,omitempty"`
+	Since           string     `json:"since,omitempty"`
+	Moved           int        `json:"moved,omitempty"`
+	id              string
 }
 
 // Epic is an epic the gate watches, in planning or past its go, with its
-// plan, nil when no plan pull request names it.
+// plan, nil when no plan pull request names it. NoGo is an epic past its go
+// with no go recorded.
 type Epic struct {
 	Ref    string `json:"ref"`
 	URL    string `json:"url"`
 	Title  string `json:"title"`
 	Status string `json:"status"`
 	Plan   *Plan  `json:"plan"`
+	NoGo   bool   `json:"noGo,omitempty"`
 }
 
-// PlanText is the plan in a few words: its URL, its state and its head.
+// PlanText is the plan in a few words: its URL, its state and its head,
+// for an epic past its go the head implemented and how the plan moved on.
 func (e Epic) PlanText() string {
+	var b strings.Builder
 	if e.Plan == nil {
-		return "no plan pull request names it"
+		b.WriteString("no plan pull request names it")
+	} else {
+		fmt.Fprintf(&b, "plan %s (%s, head %s", e.Plan.URL, e.Plan.State, short(e.Plan.Head))
+		if e.Plan.Implemented != "" {
+			fmt.Fprintf(&b, ", implemented %s", short(e.Plan.Implemented))
+			if e.Plan.ImplementedPlan != e.Plan.URL {
+				fmt.Fprintf(&b, " of %s", e.Plan.ImplementedPlan)
+			}
+		}
+		b.WriteString(")")
+		if e.Plan.Since != "" {
+			b.WriteString(": " + e.Plan.Since)
+		}
 	}
-	return fmt.Sprintf("plan %s (%s, head %s)", e.Plan.URL, e.Plan.State, short(e.Plan.Head))
+	if e.NoGo {
+		b.WriteString(", no go recorded")
+	}
+	return b.String()
 }
 
 func short(sha string) string { return sha[:min(len(sha), 7)] }
@@ -160,7 +193,9 @@ func (snap *Snapshot) Epics() []Epic {
 	var out []Epic
 	for _, it := range snap.Items {
 		if snap.Gate.watched(it) {
-			out = append(out, Epic{Ref: it.Ref, URL: it.URL, Title: it.Title, Status: it.Status, Plan: snap.Plans[strings.ToLower(it.Ref)]})
+			p := snap.Plans[strings.ToLower(it.Ref)]
+			out = append(out, Epic{Ref: it.Ref, URL: it.URL, Title: it.Title, Status: it.Status, Plan: p,
+				NoGo: snap.Gate.past(it) && (p == nil || p.Implemented == "")})
 		}
 	}
 	return out
@@ -168,7 +203,8 @@ func (snap *Snapshot) Epics() []Epic {
 
 // Epics reads the board's epics in planning or past their go, the team's,
 // with their plans: one request for the fields, one per 100 items, one per
-// plansBatch epics. Nil when the gate is off.
+// plansBatch epics, and one per plansBatch epics past their go of one owner
+// for their threads. Nil when the gate is off.
 func (c *Client) Epics(ctx context.Context) ([]Epic, error) {
 	m, err := c.meta(ctx)
 	if err != nil {
@@ -189,19 +225,102 @@ func (c *Client) Epics(ctx context.Context) ([]Epic, error) {
 	return snap.Epics(), nil
 }
 
-// plansOf reads the plans of the snapshot's watched epics.
+// plansOf reads the plans of the snapshot's watched epics, for those past
+// their go with the go (readGo).
 func (c *Client) plansOf(ctx context.Context, snap *Snapshot) (map[string]*Plan, error) {
-	var refs []string
+	var refs, gone []string
+	past := map[string]bool{}
 	for _, it := range snap.Items {
 		if snap.Gate.watched(it) {
 			refs = append(refs, it.Ref)
 		}
+		if snap.Gate.past(it) {
+			past[strings.ToLower(it.Ref)] = true
+			gone = append(gone, it.Ref)
+		}
 	}
-	return c.FindPlans(ctx, refs)
+	prs, err := c.searchPlans(ctx, refs, past)
+	if err != nil || prs == nil {
+		return nil, err
+	}
+	threads, err := c.epicThreads(ctx, gone)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]*Plan{}
+	for _, ref := range refs {
+		l := strings.ToLower(ref)
+		p := pick(ref, prs[l])
+		if past[l] {
+			p = readGo(ref, p, prs[l], threads[l])
+		}
+		if p != nil {
+			out[l] = p
+		}
+	}
+	return out, nil
 }
 
 // plansBatch is how many epics one request of FindPlans asks about.
 const plansBatch = 20
+
+// The go is read from the last goComments comments of a thread, a plan's
+// commits since it from its last goCommits commits.
+const (
+	goComments = 50
+	goCommits  = 100
+)
+
+// planPR is a pull request a plans search answers, with its comments and
+// commits when it is read for an epic past its go.
+type planPR struct {
+	ID         string `json:"id"`
+	Number     int    `json:"number"`
+	URL        string `json:"url"`
+	Title      string `json:"title"`
+	State      string `json:"state"`
+	IsDraft    bool   `json:"isDraft"`
+	Merged     bool   `json:"merged"`
+	Head       string `json:"headRefOid"`
+	Body       string `json:"body"`
+	Repository struct {
+		NameWithOwner string `json:"nameWithOwner"`
+		IsPrivate     bool   `json:"isPrivate"`
+	} `json:"repository"`
+	Comments thread `json:"comments"`
+	Commits  struct {
+		Nodes []struct {
+			Commit struct {
+				OID string `json:"oid"`
+			} `json:"commit"`
+		} `json:"nodes"`
+	} `json:"commits"`
+}
+
+// thread is the comments of an issue or pull request.
+type thread struct {
+	Nodes []struct {
+		Body      string    `json:"body"`
+		URL       string    `json:"url"`
+		CreatedAt time.Time `json:"createdAt"`
+	} `json:"nodes"`
+}
+
+// plan is the pull request as an epic's plan, its state the board's word.
+func (n *planPR) plan() *Plan {
+	p := &Plan{Ref: fmt.Sprintf("%s#%d", n.Repository.NameWithOwner, n.Number), URL: n.URL, Title: n.Title, Head: n.Head, Private: n.Repository.IsPrivate, id: n.ID}
+	switch {
+	case n.Merged:
+		p.State = "merged"
+	case n.State != stateOpen:
+		p.State = "closed"
+	case n.IsDraft:
+		p.State = "draft"
+	default:
+		p.State = "open"
+	}
+	return p
+}
 
 // FindPlans finds the plan of each epic of refs, keyed by the lower-cased
 // ref: one search of the plans repositories (Client.Plans) per epic for
@@ -211,6 +330,24 @@ const plansBatch = 20
 // else the most recently updated merged one; a closed one never is. Nil
 // when no plans repository is configured.
 func (c *Client) FindPlans(ctx context.Context, refs []string) (map[string]*Plan, error) {
+	prs, err := c.searchPlans(ctx, refs, nil)
+	if err != nil || prs == nil {
+		return nil, err
+	}
+	out := map[string]*Plan{}
+	for _, ref := range refs {
+		if p := pick(ref, prs[strings.ToLower(ref)]); p != nil {
+			out[strings.ToLower(ref)] = p
+		}
+	}
+	return out, nil
+}
+
+// searchPlans searches the plans repositories for the pull requests naming
+// each epic of refs, keyed by the lower-cased ref, most recently updated
+// first, with their comments and commits for the epics past (lower-cased)
+// names; nil when no plans repository is configured.
+func (c *Client) searchPlans(ctx context.Context, refs []string, past map[string]bool) (map[string][]planPR, error) {
 	if len(c.Plans) == 0 || len(refs) == 0 {
 		return nil, nil
 	}
@@ -219,7 +356,7 @@ func (c *Client) FindPlans(ctx context.Context, refs []string) (map[string]*Plan
 	for i, r := range c.Plans {
 		repos[i] = "repo:" + r
 	}
-	out := map[string]*Plan{}
+	out := map[string][]planPR{}
 	for batch := range slices.Chunk(refs, plansBatch) {
 		var q strings.Builder
 		for i, ref := range batch {
@@ -228,54 +365,162 @@ func (c *Client) FindPlans(ctx context.Context, refs []string) (map[string]*Plan
 				return nil, err
 			}
 			query := fmt.Sprintf("%s is:pr %q sort:updated-desc", strings.Join(repos, " "), fmt.Sprintf("%s/%s/issues/%d", owner, repo, n))
-			fmt.Fprintf(&q, "p%d:search(query:%s,type:ISSUE,first:10){nodes{...on PullRequest{id number url title state isDraft merged headRefOid body repository{nameWithOwner isPrivate}}}}", i, quote(query))
+			var gone string
+			if past[strings.ToLower(ref)] {
+				gone = fmt.Sprintf(" comments(last:%d){nodes{body url createdAt}} commits(last:%d){nodes{commit{oid}}}", goComments, goCommits)
+			}
+			fmt.Fprintf(&q, "p%d:search(query:%s,type:ISSUE,first:10){nodes{...on PullRequest{id number url title state isDraft merged headRefOid body repository{nameWithOwner isPrivate}%s}}}", i, quote(query), gone)
 		}
 		var r map[string]struct {
-			Nodes []struct {
-				ID         string `json:"id"`
-				Number     int    `json:"number"`
-				URL        string `json:"url"`
-				Title      string `json:"title"`
-				State      string `json:"state"`
-				IsDraft    bool   `json:"isDraft"`
-				Merged     bool   `json:"merged"`
-				Head       string `json:"headRefOid"`
-				Body       string `json:"body"`
-				Repository struct {
-					NameWithOwner string `json:"nameWithOwner"`
-					IsPrivate     bool   `json:"isPrivate"`
-				} `json:"repository"`
-			} `json:"nodes"`
+			Nodes []planPR `json:"nodes"`
 		}
 		if err := c.graphql(ctx, &r, "query{"+q.String()+"}", nil); err != nil {
 			return nil, fmt.Errorf("the epics' plan pull requests: %w", err)
 		}
 		for i, ref := range batch {
-			names := naming(ref)
-			var open, merged *Plan
-			for _, n := range r[fmt.Sprintf("p%d", i)].Nodes {
-				if n.URL == "" || !names.MatchString(n.Body) {
-					continue
+			out[strings.ToLower(ref)] = r[fmt.Sprintf("p%d", i)].Nodes
+		}
+	}
+	return out, nil
+}
+
+// pick is the plan of the epic ref among the pull requests its search
+// answered (FindPlans), nil for none.
+func pick(ref string, prs []planPR) *Plan {
+	names := naming(ref)
+	var open, merged *Plan
+	for i := range prs {
+		n := &prs[i]
+		if n.URL == "" || !names.MatchString(n.Body) {
+			continue
+		}
+		switch {
+		case n.State == stateOpen && open == nil:
+			open = n.plan()
+		case n.Merged && merged == nil:
+			merged = n.plan()
+		}
+	}
+	return cmp.Or(open, merged)
+}
+
+// epicThreads reads the comments of each epic of refs in a private
+// repository, the go's private thread, keyed by the lower-cased ref,
+// plansBatch epics of one owner per request, acting on their repository. An
+// epic in a public repository, or one GitHub does not resolve, has none.
+func (c *Client) epicThreads(ctx context.Context, refs []string) (map[string]thread, error) {
+	out := map[string]thread{}
+	for _, group := range github.ByOwner(refs, refRepo) {
+		for batch := range slices.Chunk(group, plansBatch) {
+			var q strings.Builder
+			for i, ref := range batch {
+				owner, repo, n, err := Ref(ref)
+				if err != nil {
+					return nil, err
 				}
-				p := &Plan{Ref: fmt.Sprintf("%s#%d", n.Repository.NameWithOwner, n.Number), URL: n.URL, Title: n.Title, Head: n.Head, Private: n.Repository.IsPrivate, id: n.ID}
-				switch {
-				case n.State == stateOpen && open == nil:
-					p.State = "open"
-					if n.IsDraft {
-						p.State = "draft"
-					}
-					open = p
-				case n.Merged && merged == nil:
-					p.State = "merged"
-					merged = p
+				fmt.Fprintf(&q, "e%d:repository(owner:%s,name:%s){isPrivate issue(number:%d){comments(last:%d){nodes{body url createdAt}}}}", i, quote(owner), quote(repo), n, goComments)
+			}
+			var r map[string]*struct {
+				IsPrivate bool `json:"isPrivate"`
+				Issue     *struct {
+					Comments thread `json:"comments"`
+				} `json:"issue"`
+			}
+			if err := c.graphql(github.ActingOn(ctx, refRepo(batch[0])), &r, "query{"+q.String()+"}", nil); err != nil {
+				if _, ok := partialOf(err); !ok {
+					return nil, fmt.Errorf("the threads of the epics past their go: %w", err)
 				}
 			}
-			if p := cmp.Or(open, merged); p != nil {
-				out[strings.ToLower(ref)] = p
+			for i, ref := range batch {
+				if e := r[fmt.Sprintf("e%d", i)]; e != nil && e.IsPrivate && e.Issue != nil {
+					out[strings.ToLower(ref)] = e.Issue.Comments
+				}
 			}
 		}
 	}
 	return out, nil
+}
+
+// goLine matches the comment that records a go (Go.Text): the epic, the
+// plan it names ("this plan" on the plan's own thread) and its head.
+var goLine = regexp.MustCompile(`^\*\*Go:\*\* (\S+) moved to .*? implemented at (?:this plan|plan (\S+)) at its head (\S+) \(`)
+
+// readGo adds to the plan p of the epic ref, past its go, the go: the
+// latest go comment on its private thread (epicThreads) or on a private
+// plan pull request naming it (prs), a public thread's never, and how the plan moved on since. Without a go comment p is
+// returned as it is; with no current plan, the go's plan (closed, or no
+// longer naming the epic) is the plan.
+func readGo(ref string, p *Plan, prs []planPR, epic thread) *Plan {
+	var at time.Time
+	var url, plan, head string
+	note := func(t thread, thread string) {
+		for _, c := range t.Nodes {
+			m := goLine.FindStringSubmatch(c.Body)
+			if m == nil || !strings.EqualFold(m[1], ref) || cmp.Or(m[2], thread) == "" || !c.CreatedAt.After(at) {
+				continue
+			}
+			at, url, plan, head = c.CreatedAt, c.URL, cmp.Or(m[2], thread), m[3]
+		}
+	}
+	note(epic, "")
+	for i := range prs {
+		if prs[i].Repository.IsPrivate {
+			note(prs[i].Comments, prs[i].URL)
+		}
+	}
+	if at.IsZero() {
+		return p
+	}
+	var of *planPR
+	for i := range prs {
+		if prs[i].URL == plan {
+			of = &prs[i]
+			break
+		}
+	}
+	switch {
+	case p != nil:
+		cp := *p
+		p = &cp
+	case of != nil:
+		p = of.plan()
+	default:
+		p = &Plan{URL: plan}
+	}
+	p.ImplementedPlan, p.Implemented, p.GoAt, p.GoComment = plan, head, &at, url
+	closed := of != nil && of.State != stateOpen && !of.Merged
+	switch {
+	case p.URL != plan && closed:
+		p.Since = "plan closed, superseded by " + p.URL
+	case p.URL != plan:
+		p.Since = "superseded by " + p.URL
+	case of == nil:
+		p.Since = "the plan no longer names the epic"
+	case closed:
+		p.Since = "plan closed"
+	case p.Head != head:
+		p.Moved = since(of, head)
+		if p.Moved < 0 {
+			p.Moved, p.Since = 0, fmt.Sprintf("plan moved since the go: head %s not among its last %d commits", short(head), goCommits)
+		} else {
+			p.Since = fmt.Sprintf("plan moved since the go: %d commits", p.Moved)
+			if p.Moved == 1 {
+				p.Since = "plan moved since the go: 1 commit"
+			}
+		}
+	}
+	return p
+}
+
+// since is how many of the pull request's commits follow head, -1 when
+// head is not among them.
+func since(pr *planPR, head string) int {
+	for i, n := range slices.Backward(pr.Commits.Nodes) {
+		if n.Commit.OID == head {
+			return len(pr.Commits.Nodes) - 1 - i
+		}
+	}
+	return -1
 }
 
 // naming matches a description whose Epic line names the epic ref

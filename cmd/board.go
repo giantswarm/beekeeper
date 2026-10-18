@@ -125,8 +125,10 @@ board.people), blocked, stale, lease (another session holds it), planning
 (the epic gate holds it), unknown (GitHub answered its board fields or an
 epic's sub-issues with an error) and order (a rule of board.order turns it
 away: an old Backlog item, one in Inbox, one without recorded blockers), and
-each epic in planning or past its go with its plan's URL, state and head;
---json lists every item behind the pick as after_pick, each with its skip
+each epic in planning or past its go with its plan's URL, state and head,
+for one past its go the head its go comment implemented and how the plan
+moved on since (plan moved since the go: <n> commits, superseded by <newer
+plan URL>, plan closed) or no go recorded; --json lists every item behind the pick as after_pick, each with its skip
 reason or free (an empty skip), the counts as skipped_by and the epics with
 their plans as epics. The sub-issues are read 150 at a time, under GitHub's
 resource limits; whatever GitHub still answers with an error is named, never
