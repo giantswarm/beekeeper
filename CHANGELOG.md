@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `agents park --on hold:<target>` parks on a hold: the watch says the park resumable once the hold is lifted or its time passed, and resumes it with agents.autoResume. A park on a target nothing holds is refused. The gate's exit 77 on a hold names the park, so a worker refused by a short window (a devctl release window) resumes when it lifts instead of staying parked on its own pull request ([#1417](https://github.com/giantswarm/beekeeper/issues/1417)).
 - `beekeeper browse --file` refuses a path outside the worker's directories (the working directory, the turn's `--dir`, beekeeper's state directory, the calling session's scratchpad; links resolved) before the turn starts, and the hook refuses a browse turn's `file_upload` of any path not shared with `--file`, which the report names as `refused: file_upload <path>: beekeeper's hook refused it as [Not Shared]` with a line naming the flag. `browse --help` says how a turn uploads on GitHub's comment editor, which renders no file input ([#821](https://github.com/giantswarm/beekeeper/issues/821)).
 
 ### Fixed

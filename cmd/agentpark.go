@@ -71,10 +71,11 @@ capacity count it parked, not busy, the doctor and the watch leave it
 alone, and it ends its turn instead of waiting in a sleep that holds its
 slot and its CLI's memory.
 
---on names what settles the wait: a note (#12) or an issue or pull request
-(owner/repo#n); lease claim --park parks on a lease. Once the note is
-closed (answered, defaulted, done or overtaken), the pull request merged or
-closed, or the lease free and the agent's to claim, the watch says AGENT
+--on names what settles the wait: a note (#12), an issue or pull request
+(owner/repo#n) or a hold (hold:<target>, the one a gate's exit 77 names);
+lease claim --park parks on a lease. Once the note is closed (answered,
+defaulted, done or overtaken), the pull request merged or closed, the hold
+lifted or ended, or the lease free and the agent's to claim, the watch says AGENT
 RESUMABLE once. With agents.autoResume the watch then resumes the agent
 with what settled it, a person's answer word for word, as agents wake
 does: by name to a running CLI, else headless. agents resume does the same
@@ -85,6 +86,7 @@ again once the supervisor's next message re-tasks it, by SendMessage or
 agents wake: its task is that message's first line.`,
 		Example: `  beekeeper agents park --on 41 "Timo's answer on the rollout window"
   beekeeper agents park --on giantswarm/beekeeper#371 "the merge ahead of mine in the lane"
+  beekeeper agents park --on hold:merges "the devctl release window my merge was refused on"
   beekeeper agents park "the supervisor's go"`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
@@ -96,10 +98,15 @@ agents wake: its task is that message's first line.`,
 			if waits == "" {
 				return usageErr("say what the agent waits for")
 			}
-			if _, isNote := parkNote(on); on != "" && !isNote {
+			if target, isHold := strings.CutPrefix(on, holdParkFlag); isHold {
+				if target = strings.TrimSpace(target); target == "" {
+					return usageErr("--on %s names no hold: hold:<target>, as beekeeper hold lists it", on)
+				}
+				on = holdParkOn(target)
+			} else if _, isNote := parkNote(on); on != "" && !isNote {
 				r, ok := parseRef(on)
 				if !ok {
-					return usageErr("--on %s is neither a note (#12) nor an issue or pull request (owner/repo#n)", on)
+					return usageErr("--on %s is neither a note (#12), an issue or pull request (owner/repo#n) nor a hold (hold:<target>)", on)
 				}
 				on = refName(r)
 			}
@@ -111,13 +118,13 @@ agents wake: its task is that message's first line.`,
 			return err
 		},
 	}
-	c.Flags().StringVar(&on, "on", "", "what settles the wait: a note (#12) or an issue or pull request (owner/repo#n)")
+	c.Flags().StringVar(&on, "on", "", "what settles the wait: a note (#12), an issue or pull request (owner/repo#n) or a hold (hold:<target>)")
 	return c
 }
 
 // park parks the agent me on on (a note "#12", an issue or pull request
-// owner/repo#n, a lease of leaseParkOn, or nothing) waiting for waits, and
-// returns the line that says so.
+// owner/repo#n, a hold of holdParkOn, a lease of leaseParkOn, or nothing)
+// waiting for waits, and returns the line that says so.
 func (a *app) park(me state.Party, on, waits string) (string, error) {
 	id, isNote := parkNote(on)
 	var line string
@@ -135,6 +142,9 @@ func (a *app) park(me state.Party, on, waits string) (string, error) {
 				return nil, refused("note #%d is not open: its answer is in beekeeper log --verb %s", id, answerRecorded)
 			}
 			on = fmt.Sprintf("#%d", id)
+		}
+		if target, ok := parkHold(on); ok && !holdStands(st, target, a.now) {
+			return nil, refused("nothing holds %s: run the refused command again, there is nothing to park on", target)
 		}
 		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: on, Waits: waits}
 		for j := range st.Records {
@@ -164,6 +174,24 @@ func leaseParkOn(res string) string { return "lease " + res }
 func parkLease(on string) (string, bool) {
 	res, ok := strings.CutPrefix(on, "lease ")
 	return res, ok && res != ""
+}
+
+// holdParkFlag prefixes a hold's target in park --on.
+const holdParkFlag = "hold:"
+
+// holdParkOn is the On of a park on the hold of target: it settles once
+// that hold is lifted or its time passed.
+func holdParkOn(target string) string { return "hold " + target }
+
+// parkHold reads a park's On as a hold's target.
+func parkHold(on string) (string, bool) {
+	target, ok := strings.CutPrefix(on, "hold ")
+	return target, ok && target != ""
+}
+
+// holdStands says whether an active hold of target is in st at now.
+func holdStands(st *state.State, target string, now time.Time) bool {
+	return slices.ContainsFunc(st.Holds, func(h state.Hold) bool { return h.Target == target && h.Active(now) })
 }
 
 // leaseSettled says whether the lease res, which ag's park waits on, is
@@ -262,8 +290,8 @@ type settledPark struct {
 	on, answer string
 }
 
-// settledParks reads which parks of st settled: a note it parked on is no
-// longer open (the log, read only then, has its answer), an issue or pull
+// settledParks reads which parks of st settled: a hold it parked on is
+// lifted or ended, a note it parked on is no longer open (the log, read only then, has its answer), an issue or pull
 // request is merged or closed (GitHub, read only for parks on one and while
 // the budget is over its floor).
 func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPark {
@@ -283,6 +311,12 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 		if res, ok := parkLease(p.On); ok {
 			if answer, ok := w.leaseSettled(st, ag, res); ok {
 				out = append(out, settledPark{ag.Party, p.On, answer})
+			}
+			continue
+		}
+		if target, ok := parkHold(p.On); ok {
+			if !holdStands(st, target, w.now) {
+				out = append(out, settledPark{ag.Party, p.On, fmt.Sprintf("nothing holds %s any more: run the refused command again", target)})
 			}
 			continue
 		}

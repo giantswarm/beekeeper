@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -195,5 +196,45 @@ func TestResumeByHand(t *testing.T) {
 	want := resumer + " → " + agentOne + ": Your park on the supervisor's go is over: " + resumer + " resumed you by hand. Re-query the live state of your task and continue it."
 	if !slices.Equal(*woke, []string{want}) {
 		t.Errorf("woke %q", *woke)
+	}
+}
+
+// A park on a hold is refused while nothing holds the target, and settles
+// once the hold is lifted: a gate's exit 77 waits there, not on a pull
+// request that never settles while the hold lifts.
+func TestLiftedHoldMakesTheParkResumable(t *testing.T) {
+	w := parkingWatch(t, nil)
+	if err := park(t, w, "--on", "hold:merges", "the devctl release window"); err == nil || !strings.Contains(err.Error(), "nothing holds merges") {
+		t.Fatalf("park on a hold nothing holds: %v", err)
+	}
+	w.out.(*bytes.Buffer).Reset()
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Holds = []state.Hold{{Target: merge.AllMerges, Except: devctlRepo, By: state.Party{Name: aheadName}, At: relayNow, Reason: "the devctl release window"}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := park(t, w, "--on", "hold:merges", "the devctl release window"); err != nil {
+		t.Fatal(err)
+	}
+	if ag := agentOf(t, w); ag.Park == nil || ag.Park.On != "hold merges" {
+		t.Fatalf("park %+v", ag.Park)
+	}
+	w.out.(*bytes.Buffer).Reset()
+	w.pending(context.Background(), nil)
+	if out := w.out.(*bytes.Buffer).String(); strings.Contains(out, `AGENT RESUMABLE "`) {
+		t.Fatalf("resumable while held:\n%s", out)
+	}
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Holds = nil
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w.pending(context.Background(), nil)
+	w.pending(context.Background(), nil)
+	out := w.out.(*bytes.Buffer).String()
+	if n := strings.Count(out, `AGENT RESUMABLE "`); n != 1 || !strings.Contains(out, "nothing holds merges any more: run the refused command again") {
+		t.Errorf("%d lines:\n%s", n, out)
 	}
 }
