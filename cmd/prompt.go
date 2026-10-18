@@ -42,14 +42,14 @@ func (a *app) printPrompt(ctx context.Context, v *view, l *leaseList, al *alerts
 		return err
 	}
 	p := func(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format+"\n", args...) }
-	s, err := a.readStanding(v.st)
+	s, err := a.readStanding()
 	if err != nil {
 		return err
 	}
 	p("%s\n", intro)
 	p("## Scope\n\n%s\n", a.scope(al))
 	p("## Pending state, %s\n", a.stamp(a.now))
-	a.promptStanding(p, s)
+	promptStanding(p, s)
 	notes := a.splitNotes(v.st.Notes)
 	a.promptNotes(p, notes)
 	a.promptAnswers(p, ans)

@@ -14,7 +14,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/proc"
-	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/update"
 )
 
@@ -168,25 +167,7 @@ func (a *app) syncInstalledPlugins(ctx context.Context) error {
 	case !syncOnce(ctx, a.out, a.cfg.StateDir):
 		_, _ = fmt.Fprintf(a.out, "beekeeper %s synced no plugin: it did so before, another beekeeper does now, or Claude Code lists none.\n", binaryIdentity())
 	}
-	a.sayPendingMigration()
 	return nil
-}
-
-// sayPendingMigration says the migration the state still needs under this
-// binary, which the update hands over to: board next refuses until it ran.
-// It reads the state without its lock and says nothing it cannot read.
-func (a *app) sayPendingMigration() {
-	store, err := state.Open(a.cfg.StateDir)
-	if err != nil {
-		return
-	}
-	st, err := store.Peek()
-	if err != nil {
-		return
-	}
-	if p := pendingMigration(st); p != "" {
-		_, _ = fmt.Fprintf(a.out, "Migration needed, board next refuses until it ran: %s.\n", p)
-	}
 }
 
 // leftBehind names the beekeeper processes an update leaves on the old
