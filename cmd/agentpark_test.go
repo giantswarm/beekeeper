@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -208,7 +209,7 @@ func TestLiftedHoldMakesTheParkResumable(t *testing.T) {
 	}
 	w.out.(*bytes.Buffer).Reset()
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Holds = []state.Hold{{Target: "merges", Except: "giantswarm/devctl", By: state.Party{Name: aheadName}, At: relayNow, Reason: "the devctl release window"}}
+		st.Holds = []state.Hold{{Target: merge.AllMerges, Except: devctlRepo, By: state.Party{Name: aheadName}, At: relayNow, Reason: "the devctl release window"}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
