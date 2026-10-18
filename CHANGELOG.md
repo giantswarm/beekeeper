@@ -9,11 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A message to "the supervisor" or "the guide" during a relay reaches a run that takes it. The successor's start, run in its headless first turn, now records the relay's desktop id on its holder, so the role resolves to that desktop session instead of a bare run name nothing answers. From that start, for the role's `relayTTL`, while the successor's CLI takes no message (no CLI, or no peer socket yet), the message goes to the outgoing holder the relay relieved, while that one's CLI does; never to an older relieved run ([#634](https://github.com/giantswarm/beekeeper/issues/634)).
+
 ## [0.149.1-rc.1] - 2026-10-18
 
 ### Fixed
 
-- A message to "the supervisor" or "the guide" during a relay reaches a run that takes it. The successor's start, run in its headless first turn, now records the relay's desktop id on its holder, so the role resolves to that desktop session instead of a bare run name nothing answers. From that start, for the role's `relayTTL`, while the successor's CLI takes no message (no CLI, or no peer socket yet), the message goes to the outgoing holder the relay relieved, while that one's CLI does; never to an older relieved run ([#634](https://github.com/giantswarm/beekeeper/issues/634)).
 - The hook's shell scan reads `$'…'` to its first unescaped quote and decodes its escapes in a command's words, so `echo $'a\''; devctl pr merge o/r 7` has its merge gated and a `$'…'` argument containing `\'` stays text to its end ([#1380](https://github.com/giantswarm/beekeeper/issues/1380)).
 - The build rewrite, the gate's command-position test, the script-file merge check and the guide's work check read a shell's `-c` or `eval` string as the merge gate does, its pieces joined and `$'…'` decoded: `bash -c 'cd x && '"go test ./..."` runs through `beekeeper run`, and a merge in such a string inside a script file is refused ([#1381](https://github.com/giantswarm/beekeeper/issues/1381)).
 
