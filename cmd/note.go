@@ -309,7 +309,7 @@ requests it names (owner/repo#n, from its text and its --ref links; a bare
 without reading each one; with --json, --full adds each note's names.`
 	list.Flags().StringVar(&listFor, "for", "", "only the notes for this person or team")
 	list.Flags().BoolVar(&full, "full", false, "each note's whole text and the issues and pull requests it names")
-	c.AddCommand(add, answer, done, a.noteMigrateCmd(), list)
+	c.AddCommand(add, answer, done, list)
 	return c
 }
 

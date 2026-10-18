@@ -141,26 +141,77 @@ func (t *Token) set(v string) {
 	t.mu.Unlock()
 }
 
-// KeepGitHub sets tok to what token returns now and every every until ctx
-// ends, telling say what happened, never the token. A failed read keeps
-// the token it had: a session's GitHub calls fail once it expires, and say
-// names why.
-func KeepGitHub(ctx context.Context, tok *Token, every time.Duration, token func(context.Context) (string, error), say func(string)) {
+// GitHubRenewal is how KeepGitHub reads the token: every Every while
+// reads succeed, a failed one tried again after Backoff's waits before the
+// next tick. A read is cut at Bound while the proxy holds a token, at
+// ColdBound while it holds none: a broker started at boot reads first while
+// devctl may still wait on what the boot has not brought up (the keyring
+// on the session bus, the network), and five minutes without a token is
+// every sandboxed gh call failing.
+type GitHubRenewal struct {
+	Every, Bound, ColdBound time.Duration
+	// Backoff is the wait before the retry after each failed read in a
+	// row; once spent, the next read is at Every.
+	Backoff []time.Duration
+}
+
+// KeepGitHub sets tok to what token returns now and then as r says until
+// ctx ends, telling say what happened, never the token. A failed read
+// keeps the token it had, and say names its cause: the bound that cut it,
+// the token func's error, or no token in devctl's answer.
+func KeepGitHub(ctx context.Context, tok *Token, r GitHubRenewal, token func(context.Context) (string, error), say func(string)) {
+	fails := 0
 	for {
-		t, err := token(ctx)
+		held := tok.Get() != ""
+		bound := r.ColdBound
+		if held {
+			bound = r.Bound
+		}
+		tctx, cancel := context.WithTimeout(ctx, bound)
+		t, err := token(tctx)
+		cut := errors.Is(tctx.Err(), context.DeadlineExceeded)
+		cancel()
+		if ctx.Err() != nil {
+			return
+		}
+		var cause string
 		switch {
+		case cut:
+			cause = fmt.Sprintf("killed at its %s bound (%v)", bound, err)
 		case err != nil:
-			say(fmt.Sprintf("github token: not renewed (%v); the egress proxy keeps the token it has until it expires", err))
+			cause = err.Error()
 		case t == "":
-			say("github token: devctl answered no token; the egress proxy keeps the token it has")
-		case t != tok.Get():
-			tok.set(t)
-			say("github token: renewed for the egress proxy")
+			cause = "devctl answered no token"
+		}
+		wait := r.Every
+		if cause == "" {
+			fails = 0
+			if t != tok.Get() {
+				tok.set(t)
+				say("github token: renewed for the egress proxy")
+			}
+		} else {
+			fails++
+			wait = r.retryAfter(fails)
+			keeps := "the egress proxy has no token yet"
+			if held {
+				keeps = "the egress proxy keeps the token it has until it expires"
+			}
+			say(fmt.Sprintf("github token: not renewed: %s; try %d at %s; %s",
+				cause, fails+1, time.Now().Add(wait).Local().Format(time.TimeOnly), keeps))
 		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(every):
+		case <-time.After(wait):
 		}
 	}
+}
+
+// retryAfter is the wait before the read after fails failed ones in a row.
+func (r GitHubRenewal) retryAfter(fails int) time.Duration {
+	if fails < 1 || fails > len(r.Backoff) {
+		return r.Every
+	}
+	return min(r.Backoff[fails-1], r.Every)
 }

@@ -77,7 +77,7 @@ func TestKeepGitHub(t *testing.T) {
 	var said []string
 	tok := &Token{}
 	n := 0
-	KeepGitHub(ctx, tok, time.Millisecond, func(context.Context) (string, error) {
+	KeepGitHub(ctx, tok, GitHubRenewal{Every: time.Millisecond, Bound: time.Minute, ColdBound: time.Minute}, func(context.Context) (string, error) {
 		n++
 		if n > len(tokens) {
 			cancel()
@@ -97,8 +97,109 @@ func TestKeepGitHub(t *testing.T) {
 			renewed++
 		}
 	}
-	if renewed != 1 || tok.Get() != testToken || !strings.Contains(strings.Join(said, "\n"), "not renewed (no login)") {
+	if renewed != 1 || tok.Get() != testToken || !strings.Contains(strings.Join(said, "\n"), "not renewed: no login") {
 		t.Errorf("lines %q: want one renewal and the failed one", said)
+	}
+}
+
+// TestKeepGitHubRetriesBeforeTheTick is a broker started at boot: its first
+// read is cut at the cold bound, devctl's error and an empty answer follow,
+// and each is tried again after the backoff, long before the next renewal.
+func TestKeepGitHubRetriesBeforeTheTick(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := GitHubRenewal{Every: time.Hour, Bound: time.Hour, ColdBound: 20 * time.Millisecond,
+		Backoff: []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}}
+	var said []string
+	tok := &Token{}
+	n := 0
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		KeepGitHub(ctx, tok, r, func(ctx context.Context) (string, error) {
+			n++
+			switch n {
+			case 1:
+				<-ctx.Done()
+				return "", errors.New("devctl auth exec: signal: killed")
+			case 2:
+				return "", errors.New("devctl answered exit status 1")
+			case 3:
+				return "", nil
+			}
+			return testToken, nil
+		}, func(s string) {
+			said = append(said, s)
+			if strings.HasPrefix(s, "github token: renewed") {
+				cancel()
+			}
+		})
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("no retry before the next renewal")
+	}
+	all := strings.Join(said, "\n")
+	for _, want := range []string{
+		"not renewed: killed at its 20ms bound (devctl auth exec: signal: killed); try 2 at ",
+		"not renewed: devctl answered exit status 1; try 3 at ",
+		"not renewed: devctl answered no token; try 4 at ",
+		"the egress proxy has no token yet",
+		"renewed for the egress proxy",
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("lines %q: want %q", said, want)
+		}
+	}
+	if tok.Get() != testToken || strings.Contains(all, testToken) {
+		t.Errorf("token %v, lines %q: want the token held and never said", tok.Get() == testToken, said)
+	}
+}
+
+// TestKeepGitHubBound bounds a read by ColdBound while the proxy holds no
+// token and by Bound once it does, and waits Every after the backoff is
+// spent.
+func TestKeepGitHubBound(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := GitHubRenewal{Every: time.Millisecond, Bound: time.Minute, ColdBound: time.Hour, Backoff: []time.Duration{time.Millisecond}}
+	var bounds []time.Duration
+	tok := &Token{}
+	KeepGitHub(ctx, tok, r, func(ctx context.Context) (string, error) {
+		d, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("a read without a bound")
+		}
+		bounds = append(bounds, time.Until(d))
+		switch len(bounds) {
+		case 1, 2:
+			return "", errors.New("no login")
+		case 3:
+			return testToken, nil
+		case 4:
+			return "", errors.New("no login")
+		}
+		cancel()
+		return testToken, nil
+	}, func(string) {})
+	for i, b := range bounds {
+		want := r.Bound
+		if i < 3 {
+			want = r.ColdBound
+		}
+		if b > want || b < want-time.Second {
+			t.Errorf("read %d bounded by %s, want %s", i+1, b, want)
+		}
+	}
+	if len(bounds) != 5 {
+		t.Errorf("%d reads, want 5", len(bounds))
+	}
+	if got := r.retryAfter(1); got != time.Millisecond {
+		t.Errorf("first retry after %s, want the backoff's", got)
+	}
+	if got := r.retryAfter(2); got != r.Every {
+		t.Errorf("retry after a spent backoff after %s, want Every", got)
 	}
 }
 

@@ -3,7 +3,6 @@ package state
 import (
 	"encoding/json"
 	"reflect"
-	"slices"
 	"strings"
 	"sync"
 )
@@ -129,20 +128,8 @@ type (
 	plainRoleLine     RoleLine
 )
 
-func (v *State) UnmarshalJSON(b []byte) error {
-	if err := decodeKeeping(b, (*plainState)(v), &v.rest); err != nil {
-		return err
-	}
-	v.Notes = slices.DeleteFunc(v.Notes, func(n Note) bool {
-		if n.Memo() {
-			v.Memos = append(v.Memos, n)
-			return true
-		}
-		return false
-	})
-	return nil
-}
-func (v State) MarshalJSON() ([]byte, error) { return encodeKeeping(plainState(v), v.rest) }
+func (v *State) UnmarshalJSON(b []byte) error { return decodeKeeping(b, (*plainState)(v), &v.rest) }
+func (v State) MarshalJSON() ([]byte, error)  { return encodeKeeping(plainState(v), v.rest) }
 func (v *Supervisor) UnmarshalJSON(b []byte) error {
 	return decodeKeeping(b, (*plainSupervisor)(v), &v.rest)
 }

@@ -708,13 +708,9 @@ func (snap *snapshot) state() *state.State {
 			Default: n.Spec.Default, By: party(n.Status.By), At: n.Status.At.Time, Fired: timeOf(n.Status.Fired),
 			Kind: n.Spec.Kind, Until: n.Spec.Until, Refs: n.Spec.Refs,
 			Question: n.Spec.Question, StatusQuo: n.Spec.StatusQuo, Options: n.Spec.Options, Recommend: n.Spec.Recommend, Posted: n.Status.Posted}
-		note.SetPinned(n.Spec.Pinned)
-		switch {
-		case n.Status.State == noteDefaulted:
+		if n.Status.State == noteDefaulted {
 			st.Defaulted = append(st.Defaulted, note)
-		case note.Memo():
-			st.Memos = append(st.Memos, note)
-		default:
+		} else {
 			st.Notes = append(st.Notes, note)
 		}
 		st.NextNote = max(st.NextNote, n.Spec.ID)
@@ -730,13 +726,12 @@ func (snap *snapshot) state() *state.State {
 
 // canonical orders the document the way state renders it: grants and
 // merges by their Environment and lane (keeping each one's queue order),
-// holds by object name, notes and memos by id, agents by namespace and name.
+// holds by object name, notes by id, agents by namespace and name.
 func canonical(st *state.State) {
 	slices.SortStableFunc(st.Grants, func(a, b state.Grant) int { return strings.Compare(a.Resource, b.Resource) })
 	slices.SortStableFunc(st.Merges, func(a, b state.Merge) int { return strings.Compare(a.Lane, b.Lane) })
 	slices.SortStableFunc(st.Holds, func(a, b state.Hold) int { return strings.Compare(holdName(a.Target), holdName(b.Target)) })
 	slices.SortStableFunc(st.Notes, func(a, b state.Note) int { return a.ID - b.ID })
-	slices.SortStableFunc(st.Memos, func(a, b state.Note) int { return a.ID - b.ID })
 	slices.SortStableFunc(st.Defaulted, func(a, b state.Note) int { return a.ID - b.ID })
 	slices.SortStableFunc(st.Agents, func(a, b state.Agent) int {
 		return strings.Compare(teamNamespace(a.Team)+"/"+rosterName(a.Party), teamNamespace(b.Team)+"/"+rosterName(b.Party))
@@ -826,8 +821,8 @@ func (snap *snapshot) apply(st *state.State) (*snapshot, error) {
 		want.holds[name] = hold
 	}
 
-	defaulted := len(st.Notes) + len(st.Memos)
-	for i, n := range slices.Concat(st.Notes, st.Memos, st.Defaulted) {
+	defaulted := len(st.Notes)
+	for i, n := range slices.Concat(st.Notes, st.Defaulted) {
 		if n.By.Team == "" {
 			return nil, fmt.Errorf("note #%d: a shared note needs its filer's team", n.ID)
 		}
@@ -840,7 +835,7 @@ func (snap *snapshot) apply(st *state.State) (*snapshot, error) {
 			note = cur.DeepCopy()
 		}
 		note.Spec.ID, note.Spec.For, note.Spec.Text, note.Spec.Due = n.ID, n.For, n.Text, apiTime(n.Due)
-		note.Spec.Default, note.Spec.Kind, note.Spec.Until, note.Spec.Pinned, note.Spec.Refs = n.Default, n.Kind, n.Until, n.Pinned(), n.Refs
+		note.Spec.Default, note.Spec.Kind, note.Spec.Until, note.Spec.Refs = n.Default, n.Kind, n.Until, n.Refs
 		note.Spec.Question, note.Spec.StatusQuo, note.Spec.Options, note.Spec.Recommend = n.Question, n.StatusQuo, n.Options, n.Recommend
 		note.Status.By, note.Status.At, note.Status.Fired, note.Status.Posted = apiParty(n.By), metav1.Time{Time: n.At}, apiTime(n.Fired), n.Posted
 		switch {
