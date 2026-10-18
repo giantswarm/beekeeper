@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `alerts.kubeconfig` lists kubeconfig files the installations' reads resolve their contexts in, passed to kubectl as `KUBECONFIG` for the context listing, every Alertmanager port-forward and the upgrade reading, behind the machine kubeconfig unless the list names it. An installation whose context lives only in a kubeconfig of the watch's own (`KUBECONFIG=<file> tsh kube login <cluster>`) is read by `beekeeper alerts snapshot` and the watch without a `KUBECONFIG` in the environment ([#705](https://github.com/giantswarm/beekeeper/issues/705)).
 
-## [0.149.0-rc.7] - 2026-10-18
+## [0.149.0-rc.8] - 2026-10-18
 
 ### Fixed
 
