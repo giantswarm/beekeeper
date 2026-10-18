@@ -271,7 +271,18 @@ func (a *app) alertRules() alerts.Rules {
 // alertReader is a Reader whose forwards end with each read; the watches
 // keep theirs (alertCycle).
 func (a *app) alertReader() *alerts.Reader {
-	return &alerts.Reader{Kubectl: a.cfg.Alerts.Kubectl, Timeout: a.cfg.Alerts.Timeout.Duration, Tenant: a.cfg.Alerts.Tenant}
+	return &alerts.Reader{Kubectl: a.cfg.Alerts.Kubectl, Kubeconfig: a.alertKubeconfig(), Timeout: a.cfg.Alerts.Timeout.Duration, Tenant: a.cfg.Alerts.Tenant}
+}
+
+// alertKubeconfig are the kubeconfig files the installations' reads resolve
+// a context in: alerts.kubeconfig behind the machine kubeconfig, unless it
+// names it; none configured, kubectl's own default.
+func (a *app) alertKubeconfig() []string {
+	files := a.cfg.Alerts.Kubeconfig
+	if m := machineKubeconfig(); len(files) > 0 && m != "" && !slices.Contains(files, m) {
+		return append([]string{m}, files...)
+	}
+	return files
 }
 
 // alertTargets are the configured installations and the leased ones.

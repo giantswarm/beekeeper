@@ -2,6 +2,7 @@ package proc
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -40,5 +41,24 @@ func TestCommandNicesBackgroundReads(t *testing.T) {
 	want, _ := strconv.Atoi(Niceness)
 	if want = min(fg+want, 19); bg != want {
 		t.Fatalf("a background command runs at nice %d, a foreground one at %d: want %d", bg, fg, want)
+	}
+}
+
+func TestKubeconfigSetsTheList(t *testing.T) {
+	t.Setenv("KUBECONFIG", "/person")
+	read := func(files []string) string {
+		c := Command(context.Background(), "sh", "-c", "printf %s \"$KUBECONFIG\"")
+		Kubeconfig(c, files)
+		out, err := c.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(out)
+	}
+	if got, want := read([]string{"/a", "/b"}), "/a"+string(os.PathListSeparator)+"/b"; got != want {
+		t.Errorf("KUBECONFIG = %q, want %q", got, want)
+	}
+	if got := read(nil); got != "/person" {
+		t.Errorf("without files KUBECONFIG = %q, want the environment's", got)
 	}
 }

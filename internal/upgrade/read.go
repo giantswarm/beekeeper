@@ -89,6 +89,9 @@ func minutes(d time.Duration) string {
 type Reader struct {
 	// Kubectl is the kubectl binary.
 	Kubectl string
+	// Kubeconfig are the kubeconfig files kubectl reads, as KUBECONFIG;
+	// empty, the environment's.
+	Kubeconfig []string
 	// Timeout bounds the reading of one installation.
 	Timeout time.Duration
 }
@@ -221,6 +224,7 @@ func (r Reader) kubectl(ctx context.Context, kubeContext string, args ...string)
 	args = append([]string{"--context", kubeContext, "--request-timeout", r.Timeout.String()}, args...)
 	var stderr bytes.Buffer
 	cmd := proc.Command(ctx, r.Kubectl, args...) //nolint:gosec // kubectl from the configuration
+	proc.Kubeconfig(cmd, r.Kubeconfig)
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err == nil {

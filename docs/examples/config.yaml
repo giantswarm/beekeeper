@@ -168,6 +168,7 @@ alerts:
   collapse: 3               # more changes of one alertname in one reading are one line
   every: 5m
   timeout: 1m               # per installation, port-forwards included, a failed attempt tried again within it; also bounds the upgrade reading
+  kubeconfig: [~/.local/state/beekeeper/kube/teleport.yaml]   # the watch's own kubeconfig (KUBECONFIG=<file> tsh kube login <cluster>), behind ~/.kube/config unless listed: the installations' contexts, port-forwards and upgrade reads; default: kubectl's own
   flap: {changes: 4, window: 1h}   # an alert's 4th change within 1h is one FLAPPING line, then quiet until stable for 1h
   pageSeverity: page        # a firing alert at it (team's, when set) with no owner (alerts own) for ownerGrace is PAGE UNOWNED, again every ownerGrace
   ownerGrace: 15m
