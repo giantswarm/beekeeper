@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `merge.cap` counts the machine's devctl merges and promotes only: a `devctl pr wait`, `release wait` or `rollout wait` polls and no longer takes a slot, so nine waits running leave a queued merge free to start under a cap of 5. The gate's line reads "N merges and promotes run machine-wide (cap M)" ([#778](https://github.com/giantswarm/beekeeper/issues/778)).
+
 ### Removed
 
 - `note migrate` and the memo code are gone: the state keeps no memos and no pinned notes, `board next` reads priorities and holds from GitHub only and is never refused over an older beekeeper's memos, `self-update` names no migration, and the hand-overs' standing instructions are `standing.md` alone. A state document an older beekeeper left with memos keeps them as written and unread; the Note resource has no `pinned` field ([#938](https://github.com/giantswarm/beekeeper/issues/938)).

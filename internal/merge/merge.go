@@ -223,19 +223,34 @@ var owned = [][2]string{{"pr", "merge"}, {"pr", waitVerb}, {"release", waitVerb}
 
 const waitVerb = "wait"
 
+// capped are the subcommands of devctl that count against merge.cap: the
+// merges and promotes. The waits only poll and run outside it.
+var capped = [][2]string{{"pr", "merge"}, {"release", "promote"}}
+
 // ParseOwned reports whether argv is devctl pr merge, pr wait, release wait
 // or rollout wait, not a help call.
 func ParseOwned(argv []string) bool {
+	return slices.Contains(owned, subcommand(argv))
+}
+
+// ParseCapped reports whether argv is devctl pr merge or release promote,
+// not a help call or a dry run: a run that counts against merge.cap.
+func ParseCapped(argv []string) bool {
+	return !slices.Contains(argv, "--dry-run") && slices.Contains(capped, subcommand(argv))
+}
+
+// subcommand is the command and verb of a devctl argument vector, zero for
+// a help call or a vector without both.
+func subcommand(argv []string) [2]string {
 	if slices.Contains(argv, "-h") || slices.Contains(argv, "--help") {
-		return false
+		return [2]string{}
 	}
 	for i := 1; i+1 < len(argv); i++ {
-		if strings.HasPrefix(argv[i], "-") {
-			continue
+		if !strings.HasPrefix(argv[i], "-") {
+			return [2]string{argv[i], argv[i+1]}
 		}
-		return slices.Contains(owned, [2]string{argv[i], argv[i+1]})
 	}
-	return false
+	return [2]string{}
 }
 
 // Outcome is what devctl's document says about the merge.
