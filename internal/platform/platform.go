@@ -246,6 +246,9 @@ type Setup interface {
 	// Stop stops and disables it.
 	Start(path string) []string
 	Stop(path string) []string
+	// Halt stops the unit and leaves it enabled: disabling a unit whose
+	// file is a symlink out of the unit directory removes that link.
+	Halt(path string) []string
 	// Restart are the commands that make the started unit defined by the
 	// file at path run its changed definition, keeping it enabled.
 	Restart(path string) [][]string

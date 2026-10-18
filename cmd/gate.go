@@ -781,7 +781,7 @@ const outsideCheck = time.Minute
 const (
 	verbMerging     = "merging"
 	verbPromoting   = "promoting"
-	verbMerged      = "merged"
+	verbMerged      = config.SinkMerged
 	verbLaneSettled = "lane.settled"
 )
 
@@ -1755,7 +1755,7 @@ func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOu
 			e.Detail += ": " + r.reason
 		}
 	default:
-		e = event(by, verbMerged, "%s exit %d, release %s", key, rc, release)
+		e = about(event(by, verbMerged, "%s exit %d, release %s", key, rc, release), key)
 	}
 	e.Detail += note
 	return append(ev, e)

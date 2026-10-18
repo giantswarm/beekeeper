@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `merge.cap` counts the machine's devctl merges and promotes only: a `devctl pr wait`, `release wait` or `rollout wait` polls and no longer takes a slot, so nine waits running leave a queued merge free to start under a cap of 5. The gate's line reads "N merges and promotes run machine-wide (cap M)" ([#778](https://github.com/giantswarm/beekeeper/issues/778)).
+- `uninstall` resolves a symlinked unit: the person's link stays, and a target an earlier install wrote through the link is removed, its unit stopped without being disabled (systemd removes a linked unit's symlink on disable); `uninstall --dry-run` names the target it would remove and the link that stays. A target the person changed since stays as theirs ([#764](https://github.com/giantswarm/beekeeper/issues/764)).
 
 ### Removed
 
