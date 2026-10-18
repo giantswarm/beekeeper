@@ -835,8 +835,9 @@ beekeeper takes them there so no person or session copies a value from a page. F
   declares, a rendered name without the installation or too long, a template carrying
   `{baseDomain}` without `--base-domain`, and a name GitHub knows already.
   - `--replace` creates the successor App for a credential past its expiry. The successor's name
-    carries the next generation suffix GitHub knows no App of: `giantswarm-portal-graveler-2`, then
-    `-3`, and so on. Its vault item of that name is written beside the old one. The old App and
+    carries the generation suffix after the latest one: `giantswarm-portal-graveler-2`, then `-3`,
+    and so on. The latest is the highest the shared vault holds an item of, or GitHub knows; a private
+    App is invisible to an installation token's `GET /apps/<slug>`, its item is not. Its vault item of that name is written beside the old one. The old App and
     its item stay untouched until their consumers have switched. Deleting the old App on its
     Advanced settings page is the person's step, and the answer names that page. `--json` also
     carries `replaces`, the old App's slug, and `beekeeper log` (`app.create`) says `succeeding
