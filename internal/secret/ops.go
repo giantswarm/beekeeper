@@ -756,8 +756,9 @@ func (o *Ops) storeVaultFields(ctx context.Context, vault, title, ref string, fi
 		}
 	}
 	// a new item is op's Password template: its password field is the
-	// built-in one, which op's validator requires of the category
-	item := map[string]any{"title": title, "category": passwordPurpose, "fields": []any{builtinField(passwordField, "", false)}}
+	// built-in one, which op's validator requires of the category with a
+	// value, so it carries the first secret field's label and value
+	item := map[string]any{"title": title, "category": passwordPurpose, "fields": []any{newItemPassword(fields)}}
 	if id != "" {
 		raw, err := o.op(ctx, nil, "item", "get", id, "--vault", vault, "--format", "json")
 		if err != nil {
@@ -800,6 +801,20 @@ const (
 	concealed       = "CONCEALED"
 	plainString     = "STRING"
 )
+
+// newItemPassword is the built-in password field of a new item: the first
+// secret field of fields that is no other built-in one, under its own
+// label, a reference naming that label resolving to it; empty without one.
+func newItemPassword(fields []ItemField) map[string]any {
+	f := builtinField(passwordField, "", false)
+	for _, x := range fields {
+		if _, builtin := builtins[x.Label]; !x.Plain && (!builtin || x.Label == passwordField) {
+			f["label"], f["value"] = x.Label, x.Value
+			break
+		}
+	}
+	return f
+}
 
 // builtins are op's built-in fields by id: op's validator refuses one
 // without its purpose and type.
