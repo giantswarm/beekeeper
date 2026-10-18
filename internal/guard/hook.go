@@ -635,12 +635,14 @@ func ansiC(s string) ([]byte, int) {
 		var v rune
 		n := from
 		for ; n < len(s) && n < from+most; n++ {
-			d, c := base, rune(s[n]|0x20)
+			d, c := base, rune(s[n])
 			switch {
 			case c >= '0' && c <= '9':
 				d = c - '0'
 			case c >= 'a' && c <= 'f':
 				d = c - 'a' + 10
+			case c >= 'A' && c <= 'F':
+				d = c - 'A' + 10
 			}
 			if d >= base {
 				break

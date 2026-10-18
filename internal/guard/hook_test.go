@@ -757,3 +757,15 @@ func TestVaultCallGetsTheLongTimeout(t *testing.T) {
 		}
 	}
 }
+
+// ansiC decodes $'…' escapes as bash does; a control byte after one is no
+// digit (0x14 is no "4").
+func TestANSICEscapes(t *testing.T) {
+	for in, want := range map[string]string{`\x64`: "d", `\144`: "d", `\u0064`: "d", `\U00000064`: "d", `\n`: "\n", `\cA`: "\x01",
+		`\x6G`: "\x06", "\\1\x14": "\x01", "\\x\x16": `\x`, `\q`: `\q`} {
+		b, n := ansiC(in)
+		if string(b) != want {
+			t.Errorf("ansiC(%q) = %q, %d; want %q", in, b, n, want)
+		}
+	}
+}
