@@ -436,15 +436,16 @@ var (
 		"gh": wordSet("-R --repo -t --title -b --body -F --body-file -l --label --add-label --remove-label -a --assignee " +
 			"-B --base -H --head -d --draft -m --milestone -r --reviewer --json -q --jq -s --state -L --limit " +
 			"-n --notes --notes-file -f --raw-field --field -X --method --paginate --input --header"),
-		gitCmd: wordSet("-m --message -a --all -am -s --signoff -q --quiet --allow-empty --amend --no-edit --no-verify " +
-			"-F --file -f --force --annotate"),
+		gitCmd: wordSet("-m --message -a --all -am -s --signoff -q --quiet --allow-empty --no-verify -F --file"),
 	}
+	// gitMessage are the options that give git its message, so no editor opens.
+	gitMessage = wordSet("-m --message -am -F --file")
 	// sinks are the pipeline stages after a text command that run nothing
 	// they read and have no option that runs a command.
 	sinks = wordSet("head tail wc uniq cut tr cat column")
-	// setsVariables sets or exports a variable (an editor, a pager, a
-	// configuration) a later command may run, or runs its arguments.
-	setsVariables = wordSet("export declare typeset readonly local alias set unset builtin eval source .")
+	// lineCommands may stand beside a text command on its line: they change
+	// nothing a text command reads and run no text.
+	lineCommands = wordSet("cd true devctl")
 	// compound opens or continues a compound command or a group, whose
 	// output a later stage may run.
 	compound = wordSet("{ } if then elif else fi for while until do done case esac select function")
@@ -516,9 +517,12 @@ func writes(sc shellScan, sg segment) bool {
 	return strings.Contains(sc.masked[sg.start:sg.end], ">")
 }
 
-// flatLine reports whether the command line is a list of simple pipelines:
-// no subshell, group, compound command or command or process substitution
-// anywhere in it, whose output a stage may run.
+// flatLine reports whether the command line is a list of simple pipelines
+// of known commands alone: no subshell, group, compound command, command or
+// process substitution, assignment or redirection anywhere in it, and every
+// command a text command (textCommand), one of sinks or one of lineCommands.
+// Anything else (an export, an alias, hash, a file written) may change what
+// a text command does or run what it prints.
 func flatLine(sc shellScan, segs []segment) bool {
 	for _, sg := range segs {
 		switch sg.after {
@@ -526,9 +530,14 @@ func flatLine(sc shellScan, segs []segment) bool {
 			return false
 		}
 		words := shellWords(sc.plain[sg.start:sg.end])
+		if len(words) == 0 {
+			continue
+		}
 		c := commandAt(words)
-		if slices.ContainsFunc(words[:min(c+1, len(words))], func(w string) bool { return compound[w] || envWord.MatchString(w) }) ||
-			c < len(words) && setsVariables[path.Base(words[c])] {
+		if writes(sc, sg) || c >= len(words) || slices.ContainsFunc(words[:c+1], func(w string) bool { return compound[w] || envWord.MatchString(w) }) {
+			return false
+		}
+		if name := path.Base(words[c]); !sinks[name] && !lineCommands[name] && !textCommand(words) {
 			return false
 		}
 	}
@@ -553,18 +562,16 @@ func textCommand(words []string) bool {
 	if !ok {
 		return true
 	}
-	opts := textOptions[name]
-	for k, w := range words[c+1:] {
-		if !strings.HasPrefix(w, "-") {
-			return subs[w] && !slices.ContainsFunc(words[c+2+k:], func(o string) bool {
-				return strings.HasPrefix(o, "-") && o != "-" && !opts[strings.SplitN(o, "=", 2)[0]]
-			})
-		}
-		if name == gitCmd {
-			return false // -c, --config-env, -C and every other option before the subcommand
-		}
+	// the subcommand comes first: no -c, --config-env, -C or gh option before it
+	if len(words) == c+1 || !subs[words[c+1]] {
+		return false
 	}
-	return false
+	opts, rest := textOptions[name], words[c+2:]
+	option := func(o string) string { return strings.SplitN(o, "=", 2)[0] }
+	if slices.ContainsFunc(rest, func(o string) bool { return strings.HasPrefix(o, "-") && o != "-" && !opts[option(o)] }) {
+		return false
+	}
+	return name != gitCmd || slices.ContainsFunc(rest, func(o string) bool { return gitMessage[option(o)] })
 }
 
 // inRanges reports whether the offset is inside one of the ranges.
