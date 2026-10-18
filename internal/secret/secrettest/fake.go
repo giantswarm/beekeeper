@@ -262,6 +262,10 @@ func (t *Tools) item(args []string, stdin io.Reader) ([]byte, error) {
 			t.Types = map[string]string{}
 		}
 		for _, f := range it.Fields {
+			if _, builtin := builtins[f.ID]; builtin {
+				// op keeps a built-in field's own label
+				f.Label = f.ID
+			}
 			ref := "op://" + vault + "/" + it.Title + "/" + f.Label
 			t.Vault[ref], t.Types[ref] = f.Value, f.Type
 		}

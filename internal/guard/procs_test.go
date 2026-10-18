@@ -54,6 +54,12 @@ func TestHookRefusesCommandLineReads(t *testing.T) {
 		"timeout 5 ps -ef",
 		"ps -ef | grep -c claude",
 		"cat /proc/1234/cmdline | sha256sum",
+		"/usr/bin/ps aux",
+		"sudo ps -ef",
+		"watch ps -o cmd",
+		"ssh host ps aux",
+		"docker exec c ps -ef",
+		"kubectl exec p -- ps aux",
 	} {
 		d := decide(t, hook(), "/", cmd, nil)
 		if d == nil || d.PermissionDecision != decisionDeny {
@@ -99,6 +105,15 @@ func TestHookPassesMaskedProcessReads(t *testing.T) {
 		"beekeeper ps",
 		"beekeeper ps claude 1234",
 		"kill 1234",
+		"ollama ps",
+		"ollama ps qwen3",
+		"curl -s localhost:11434/api/ps",
+		"curl -s http://127.0.0.1:11434/api/ps -H 'Accept: application/json'",
+		"curl -sf localhost:11434/api/ps -w '%{http_code}'",
+		"curl http://127.0.0.1:11434/api/ps | jq -r '.models[].name'",
+		"wget -qO- http://127.0.0.1:11434/api/ps --header 'Accept: x'",
+		"docker compose ps aux",
+		"podman pod ps",
 	} {
 		if d := decide(t, hook(), "/", cmd, nil); d != nil && d.PermissionDecision == decisionDeny {
 			t.Errorf("%q: want no refusal, got %s", cmd, d.Reason)
