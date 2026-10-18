@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"syscall"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/github"
@@ -30,16 +31,21 @@ func (r childResult) owed(now time.Time) state.Owed {
 	o := state.Owed{Owner: r.spec.Owner, Line: r.outcome(), Gate: r.spec.Gate, Child: os.Getpid(),
 		Heard: heardFile(r.base, r.spec.Gate), Since: now.UTC(), Tried: now.UTC()}
 	if repo, pr, ok := r.stoppedMerge(); ok {
+		stop := r.stop
+		if stop == 0 {
+			stop = syscall.Signal(r.rc - 128)
+		}
 		o.Ask, o.Repo, o.PR = true, repo, pr
-		o.Command, o.Stop = r.command(), fmt.Sprintf("%s (exit %d)", signalName(r.stop), r.rc)
+		o.Command, o.Stop = r.command(), fmt.Sprintf("%s (exit %d)", signalName(stop), r.rc)
 	}
 	return o
 }
 
-// stoppedMerge is the pull request of a merge whose merge-child was stopped
-// before devctl reported its end: whether it merged is GitHub's to say.
+// stoppedMerge is the pull request of a merge whose merge-child was stopped,
+// or whose devctl a signal ended, before devctl reported its end: whether it
+// merged is GitHub's to say.
 func (r childResult) stoppedMerge() (string, int, bool) {
-	if o, _ := merge.ParseDocument(r.doc); r.stop == 0 || o.Merged {
+	if o, _ := merge.ParseDocument(r.doc); r.stop == 0 && r.rc <= 128 || o.Merged {
 		return "", 0, false
 	}
 	argv := r.spec.Argv

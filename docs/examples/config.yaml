@@ -177,6 +177,10 @@ alerts:
     server: pd              # its muster name: x_<server>_<tool>, the read-only list_incidents and list_alerts_from_incident
     services: [PABC123]     # the team's service ids
     every: 1m               # a page is a PAGERDUTY NEW line within it
+  discover:                 # every Teleport cluster carrying a HelmRelease labelled with the team joins installations; off without every
+    every: 1h               # the watch discovers this often (beekeeper alerts discover: now); a cluster without a context is logged into the first non-machine file of kubeconfig
+    label: application.giantswarm.io/team   # the HelmRelease label naming the team
+    exclude: ["*-*", "*.*"] # Teleport cluster names never read: workload clusters (<installation>-<cluster>) and the proxy
   quiet:                    # alerts whose changes are logged, not said; default: [{severity: notify}] once team is set, else none
     - {cluster: "t-*"}      # fields installation, cluster, alertname, severity, globs; a page only by a rule naming a cluster
     - {severity: notify}    # other teams' and team-less notify alerts
@@ -288,6 +292,7 @@ plans:                      # note add --for <guide.person> links a pull request
 apps:                       # where the organisation declares its GitHub Apps; beekeeper app allow records only a declared one
   repo: example/github      # the declaring repository, read on its default branch; unset, app allow refuses
   manifest: apps/{name}/manifest.json   # an App's manifest (name, callback_urls), {name} for the App's name
+  # template: apps/{name}/manifest.template.json   # a purpose's manifest template, {installation} and {baseDomain} in its strings (default: manifest's file as manifest.template.json)
   secrets:                  # by installation, the SOPS Secret beekeeper secret github-app writes an App's private-key and client-secret into
     example-installation:
       file: ~/gitops/installations/example-installation/secrets/github-app-secret.yaml

@@ -138,6 +138,8 @@ func TestLoadRejects(t *testing.T) {
 		"unknown floor":              "alerts: {installations: [{name: x, floor: low}]}",
 		"unknown pageSeverity":       "alerts: {pageSeverity: urgent}",
 		"short ownerGrace":           "alerts: {ownerGrace: 10s}",
+		"discover without a team":    "alerts: {discover: {every: 1h}}",
+		"bad discover exclude":       "alerts: {team: t, discover: {exclude: ['[']}}",
 		"pagerduty without services": "alerts: {pagerduty: {context: example}}",
 		"flapping at once":           "alerts: {flap: {changes: 1}}",
 		"bad duration":               "grantTTL: soon",
@@ -454,6 +456,9 @@ func TestExampleConfig(t *testing.T) {
 		c.Board.Project != 12 || len(c.Board.Order) != 7 || !c.Board.Order[1].SubIssues || c.Board.Epics.Go != "in progress" || len(c.Board.Epics.Planning) != 1 || c.Board.StaleAfter.Hours() != 8760 {
 		t.Errorf("config = %+v", c)
 	}
+	if d := c.Alerts.Discover; !d.Enabled() || d.Every.Duration != time.Hour || d.Label != "application.giantswarm.io/team" || !slices.Equal(d.Exclude, []string{"*-*", "*.*"}) {
+		t.Errorf("alerts.discover %+v", d)
+	}
 	if tp := c.Teleport; !tp.Enabled() || tp.Proxy != "login.example.com:443" || tp.Auth != "github" || tp.Tsh != "tsh" ||
 		tp.RenewBefore.Duration != 90*time.Minute || tp.WarnBefore.Duration != time.Hour || tp.Every.Duration != 10*time.Minute {
 		t.Errorf("teleport %+v", tp)
@@ -638,5 +643,26 @@ func TestProfileFor(t *testing.T) {
 	c.Agents.Profiles[MinimalProfile] = Profile{Tools: []string{"Glob"}}
 	if p, _ := c.Agents.ProfileFor(MinimalProfile); !slices.Equal(p.Tools, []string{"Glob"}) {
 		t.Errorf("the desk's minimal did not replace the built-in one: %+v", p)
+	}
+}
+
+// A purpose's manifest template is apps.template with the purpose for
+// {name}, or apps.manifest's file as manifest.template.json; none without
+// the declaring repository or a {name}.
+func TestAppsTemplateOf(t *testing.T) {
+	const manifest, repo = "apps/{name}/manifest.json", "o/r"
+	for _, tc := range []struct {
+		apps Apps
+		want string
+	}{
+		{Apps{Repo: repo, Manifest: manifest}, "apps/portal/manifest.template.json"},
+		{Apps{Repo: repo, Manifest: manifest, Template: "templates/{name}.json"}, "templates/portal.json"},
+		{Apps{Manifest: manifest}, ""},
+		{Apps{Repo: repo, Manifest: "apps/{name}/manifest.yaml"}, ""},
+		{Apps{Repo: repo, Template: "templates/portal.json"}, ""},
+	} {
+		if got := tc.apps.TemplateOf("portal"); got != tc.want {
+			t.Errorf("%+v.TemplateOf(portal) = %q, want %q", tc.apps, got, tc.want)
+		}
 	}
 }

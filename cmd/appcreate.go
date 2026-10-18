@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -89,10 +90,10 @@ var openBrowser = func(ctx context.Context, url string) error {
 
 func (a *app) appCreateCmd() *cobra.Command {
 	var wait time.Duration
-	var manifest, org string
+	var manifest, org, installation, baseDomain string
 	var replace, noOpen bool
 	c := &cobra.Command{
-		Use:   "create <name> | create <installation> --manifest <file>",
+		Use:   "create <name> | create <purpose> --installation <name> --base-domain <domain> [--replace] | create <installation> --manifest <file>",
 		Short: "Create a GitHub App from its declared manifest: the credentials into the shared vault, then its installation",
 		Long: `create runs GitHub's manifest flow for the App <name> the organisation
 declares (its manifest in the config's apps.repo at apps.manifest, read
@@ -129,6 +130,21 @@ vault's credentials as written and says how to record the installation's
 id. With secret.session the vault write goes to the broker over the
 keeper's socket, a locked vault refusing before any click (exit 78).
 
+With --installation <name>, the argument is a purpose whose Apps exist
+once per installation, so that no credential is shared between two: its
+manifest template in apps.repo at apps.template (default: apps.manifest's
+file as manifest.template.json) carries {installation} and {baseDomain}
+in its strings, which --installation and --base-domain fill. The rendered
+App, whose name must contain the installation's, is created as above into
+the vault item of its name. Refused before any click: a purpose no
+template declares, a rendered name without the installation or longer
+than GitHub's 34 characters, and a template with {baseDomain} without
+--base-domain. --replace creates the successor of the installation's App
+for a credential past its expiry: the name with the next generation
+suffix (-2, -3, ...) into an item of its own beside the old one, which
+stays untouched with its App until its consumers have switched; deleting
+the old App on its settings page is the person's step, named in the answer.
+
 With --manifest <file>, the argument is an installation of apps.secrets and
 the App is the one the local manifest (JSON, with its "name") declares; its
 credentials go into that installation's SOPS Secret, as secret github-app
@@ -154,19 +170,33 @@ keys written with their lengths and fingerprints. The code, the key and the
 secrets reach no output, log entry or error.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if manifest != "" {
-				return a.appCreateSecret(cmd, strings.TrimSpace(args[0]), manifest, org, wait, replace, !noOpen)
+			name := strings.TrimSpace(args[0])
+			switch {
+			case manifest != "":
+				if installation != "" || baseDomain != "" {
+					return usageErr("--installation and --base-domain render a template of apps.repo, not --manifest's file")
+				}
+				return a.appCreateSecret(cmd, name, manifest, org, wait, replace, !noOpen)
+			case org != "" || noOpen:
+				return usageErr("--org and --no-open go with --manifest")
+			case installation != "":
+				return a.appCreate(cmd.Context(), name, wait, cmd.ErrOrStderr(), func(ctx context.Context) (*appPlan, error) {
+					return a.appTemplatePlan(ctx, name, strings.TrimSpace(installation), strings.TrimSpace(baseDomain), replace)
+				})
+			case replace || baseDomain != "":
+				return usageErr("--replace and --base-domain go with --installation (or --replace with --manifest)")
 			}
-			if org != "" || replace || noOpen {
-				return usageErr("--org, --replace and --no-open go with --manifest")
-			}
-			return a.appCreate(cmd.Context(), strings.TrimSpace(args[0]), wait, cmd.ErrOrStderr())
+			return a.appCreate(cmd.Context(), name, wait, cmd.ErrOrStderr(), func(ctx context.Context) (*appPlan, error) {
+				return a.appPlan(ctx, name)
+			})
 		},
 	}
 	c.Flags().DurationVar(&wait, "timeout", appCreateWait, "how long each of the person's clicks (Create, Install) is waited for")
 	c.Flags().StringVar(&manifest, "manifest", "", "a local App manifest (JSON): create that App and write its credentials into the SOPS Secret apps.secrets names for <installation>")
 	c.Flags().StringVar(&org, "org", "", "with --manifest, the organisation that owns the App (default: apps.repo's owner)")
-	c.Flags().BoolVar(&replace, "replace", false, "with --manifest, overwrite keys the Secret holds already")
+	c.Flags().StringVar(&installation, "installation", "", "the installation whose App of the purpose <name> is created from the purpose's manifest template")
+	c.Flags().StringVar(&baseDomain, "base-domain", "", "with --installation, the installation's base domain, for the template's {baseDomain}")
+	c.Flags().BoolVar(&replace, "replace", false, "with --installation, create the successor App (-2, -3, ...) beside the old one; with --manifest, overwrite keys the Secret holds already")
 	c.Flags().BoolVar(&noOpen, "no-open", false, "with --manifest, print the loopback page's URL and open no browser: the caller opens it (beekeeper browse)")
 	return c
 }
@@ -179,6 +209,8 @@ type appPlan struct {
 	decl                  github.AppDeclaration
 	orgID                 int64
 	repoIDs               []int64
+	// replaces is the App a successor's creation leaves in place.
+	replaces *knownApp
 }
 
 // appCreation is a creation's answer.
@@ -193,10 +225,12 @@ type appCreation struct {
 	Fields              []secret.Stored `json:"fields"`
 	InstallationID      int64           `json:"installationID,omitempty"`
 	RepositorySelection string          `json:"repositorySelection,omitempty"`
+	Replaces            string          `json:"replaces,omitempty"`
 }
 
-// appCreate is app create: the checks, the flow and the answer, logged.
-func (a *app) appCreate(ctx context.Context, name string, wait time.Duration, progress io.Writer) error {
+// appCreate is app create: the checks plan makes, the flow and the
+// answer, logged under name.
+func (a *app) appCreate(ctx context.Context, name string, wait time.Duration, progress io.Writer, plan func(context.Context) (*appPlan, error)) error {
 	if name == "" {
 		return usageErr("an App is created by its name")
 	}
@@ -204,13 +238,16 @@ func (a *app) appCreate(ctx context.Context, name string, wait time.Duration, pr
 	if a.json {
 		say = progress
 	}
-	res, err := a.createApp(ctx, name, wait, say)
+	res, err := a.createApp(ctx, plan, wait, say)
 	if err != nil && !errors.Is(err, secret.ErrVault) && Code(err) == ExitError {
 		err = refused("%v", err)
 	}
 	done := "nothing written"
 	if res != nil {
 		done = fmt.Sprintf("%s: app-id %d, client-id %s, slug %s", res.Item, res.AppID, res.ClientID, res.Slug)
+		if res.Replaces != "" {
+			done += ", succeeding " + res.Replaces
+		}
 		for _, s := range res.Fields {
 			done += fmt.Sprintf("; %s %d bytes, %s", s.Ref, s.Bytes, s.Fingerprint)
 		}
@@ -229,14 +266,14 @@ func (a *app) appCreate(ctx context.Context, name string, wait time.Duration, pr
 
 // createApp runs the flow and answers what it wrote, nil before GitHub
 // was touched; what it wrote travels with a failure after that point.
-func (a *app) createApp(ctx context.Context, name string, wait time.Duration, say io.Writer) (*appCreation, error) {
+func (a *app) createApp(ctx context.Context, planOf func(context.Context) (*appPlan, error), wait time.Duration, say io.Writer) (*appCreation, error) {
 	if inSandbox() {
 		return nil, refused("app create runs on the host: the agent sandbox reaches neither the person's browser nor the vault keeper")
 	}
 	if a.cfg.Secret.Vault == "" {
 		return nil, &exitError{code: ExitVault, msg: "no shared vault is configured (secret.vault): app create writes the App's credentials there"}
 	}
-	plan, err := a.appPlan(ctx, name)
+	plan, err := planOf(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -289,10 +326,19 @@ func (a *app) createApp(ctx context.Context, name string, wait time.Duration, sa
 	}
 	res := &appCreation{Item: plan.item, AppID: created.ID, ClientID: created.ClientID, Slug: created.Slug, URL: created.HTMLURL,
 		Declared: plan.decl.Source, Installation: plan.decl.Installation, Fields: stored}
+	if plan.replaces != nil {
+		res.Replaces = plan.replaces.Slug
+	}
 	installURL := installURL(created.Slug, plan.orgID, plan.repoIDs)
 	flow.installs <- flowOutcome{installURL: installURL}
 	if _, err := fmt.Fprintf(say, "created App %s (id %d, client id %s): %s\n%s\n", created.Slug, created.ID, created.ClientID, created.HTMLURL, wroteLine(res)); err != nil {
 		return res, err
+	}
+	if old := plan.replaces; old != nil {
+		if _, err := fmt.Fprintf(say, "the App %s (id %d) and its vault item stay untouched until its consumers have switched to %s; "+
+			"then deleting it is the person's step: %s (Delete GitHub App)\n", old.Slug, old.ID, plan.item, advancedURL(old)); err != nil {
+			return res, err
+		}
 	}
 	if _, err := fmt.Fprintf(say, "the browser goes on to %s with %s preselected. Click \"Install\" there; waiting up to %s for the installation.\n",
 		installURL, repos, wait); err != nil {
@@ -410,6 +456,93 @@ func (a *app) appPlan(ctx context.Context, name string) (*appPlan, error) {
 	if !strings.EqualFold(decl.Name, name) {
 		return nil, refused("App %s is not declared: %s names the App %s", name, decl.Source, decl.Name)
 	}
+	return a.planDeclared(ctx, decl)
+}
+
+// maxAppName is the longest name GitHub gives an App.
+const maxAppName = 34
+
+// maxGeneration bounds the successors looked for under one App's name.
+const maxGeneration = 99
+
+// appTemplatePlan is appPlan for the App of purpose that installation runs
+// on: the purpose's manifest template rendered with the installation's name
+// and base domain, the rendered name carrying the installation's. With
+// replace the App is the successor of the installation's latest one: its
+// name with the next generation suffix, the latest left as it is.
+func (a *app) appTemplatePlan(ctx context.Context, purpose, installation, baseDomain string, replace bool) (*appPlan, error) {
+	if purpose == "" {
+		return nil, usageErr("an App of an installation is created by its purpose")
+	}
+	if !dnsLabel.MatchString(installation) {
+		return nil, usageErr("--installation %q: an installation's name is a lower-case DNS label", installation)
+	}
+	if baseDomain != "" && !dnsName.MatchString(baseDomain) {
+		return nil, usageErr("--base-domain %q: a base domain is a lower-case DNS name", baseDomain)
+	}
+	path := a.cfg.Apps.TemplateOf(purpose)
+	if path == "" {
+		return nil, refused("no repository declares the organisation's Apps: set apps.repo and apps.manifest or apps.template (with %s) in the config", config.AppName)
+	}
+	tmpl, err := github.ReadAppDeclaration(ctx, appsGH, a.cfg.Apps.Repo, path)
+	if err != nil {
+		return nil, refused("no template declares the Apps of %s: %v", purpose, err)
+	}
+	if baseDomain == "" && tmpl.Carries(config.AppBaseDomain) {
+		return nil, usageErr("--base-domain: %s carries %s, the installation's base domain", tmpl.Source, config.AppBaseDomain)
+	}
+	decl := tmpl.Render(map[string]string{config.AppInstallation: installation, config.AppBaseDomain: baseDomain})
+	if !strings.Contains(strings.ToLower(decl.Name), installation) {
+		return nil, refused("%s renders the App name %s, which lacks the installation %s: one App per installation carries its name; nothing written", tmpl.Source, decl.Name, installation)
+	}
+	var latest *knownApp
+	if replace {
+		if latest, err = a.appKnown(ctx, guard.AppSlug(decl.Name)); err != nil {
+			return nil, err
+		}
+		if latest == nil {
+			return nil, refused("GitHub knows no App %s for --replace to succeed: create it without --replace; nothing written", decl.Name)
+		}
+		base := decl.Name
+		for gen := 2; ; gen++ {
+			if gen > maxGeneration {
+				return nil, refused("GitHub knows %d generations of %s: delete the ones no consumer uses; nothing written", maxGeneration-1, base)
+			}
+			decl.Name = fmt.Sprintf("%s-%d", base, gen)
+			next, err := a.appKnown(ctx, guard.AppSlug(decl.Name))
+			if err != nil {
+				return nil, err
+			}
+			if next == nil {
+				break
+			}
+			latest = next
+		}
+		decl.Manifest["name"] = decl.Name
+	}
+	if len(decl.Name) > maxAppName {
+		return nil, refused("the App name %s has %d characters, GitHub takes at most %d: a shorter installation name or purpose; nothing written", decl.Name, len(decl.Name), maxAppName)
+	}
+	p, err := a.planDeclared(ctx, decl)
+	if err != nil {
+		return nil, err
+	}
+	p.replaces = latest
+	return p, nil
+}
+
+// The names an installation and its base domain take.
+var (
+	dnsLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+	dnsName  = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$`)
+)
+
+// planDeclared is the rest of a creation's checks for the App decl
+// declares: that GitHub knows no App of its name, the organisation's id,
+// the vault item of its name, and the ids of the declared repositories.
+func (a *app) planDeclared(ctx context.Context, decl github.AppDeclaration) (*appPlan, error) {
+	var err error
+	name := decl.Name
 	p := &appPlan{name: name, decl: decl, slug: guard.AppSlug(decl.Name), item: guard.OpRef + a.cfg.Secret.Vault + "/" + name}
 	p.org, _, _ = strings.Cut(a.cfg.Apps.Repo, "/")
 	if known, err := a.appKnown(ctx, p.slug); err != nil {
@@ -451,12 +584,21 @@ type knownApp struct {
 // where GitHub holds the App: its Advanced page under the organisation or
 // under the person's own account, where its deletion goes once on record.
 func knownRefusal(name string, k *knownApp) error {
-	where := fmt.Sprintf("under the account %s's own settings, %s/settings/apps/%s/advanced (that account's alone)", k.Owner.Login, githubWeb, k.Slug)
+	where := fmt.Sprintf("under the account %s's own settings, %s (that account's alone)", k.Owner.Login, advancedURL(k))
 	if strings.EqualFold(k.Owner.Type, "Organization") {
-		where = fmt.Sprintf("under the organisation %s's settings, %s/organizations/%s/settings/apps/%s/advanced", k.Owner.Login, githubWeb, k.Owner.Login, k.Slug)
+		where = fmt.Sprintf("under the organisation %s's settings, %s", k.Owner.Login, advancedURL(k))
 	}
 	return refused("GitHub already knows an App named %s (%s, id %d, owned by %s): %s; nothing written. GitHub holds it %s; "+
 		"its deletion is answered by the browse hook once on record (%s)", name, k.Slug, k.ID, k.Owner.Login, k.HTMLURL, where, guard.DeleteForm)
+}
+
+// advancedURL is the settings page of the App k where it is deleted: under
+// the organisation that owns it, or the account's own settings.
+func advancedURL(k *knownApp) string {
+	if strings.EqualFold(k.Owner.Type, "Organization") {
+		return fmt.Sprintf("%s/organizations/%s/settings/apps/%s/advanced", githubWeb, k.Owner.Login, k.Slug)
+	}
+	return fmt.Sprintf("%s/settings/apps/%s/advanced", githubWeb, k.Slug)
 }
 
 // takenWords tell a run whose Create click did not come where GitHub holds

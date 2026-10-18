@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -120,5 +121,55 @@ func TestAlertKubeconfig(t *testing.T) {
 		if got := a.alertKubeconfig(); !slices.Equal(got, c.want) {
 			t.Errorf("alerts.kubeconfig %q: files = %q, want %q", c.files, got, c.want)
 		}
+	}
+}
+
+// A discovered installation is logged into the first file of
+// alerts.kubeconfig that is not the machine kubeconfig; none, nowhere.
+func TestAlertLoginFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	machine, own := filepath.Join(home, ".kube", "config"), "/own"
+	for _, c := range []struct {
+		files []string
+		want  string
+	}{
+		{nil, ""},
+		{[]string{machine}, ""},
+		{[]string{machine, own}, own},
+	} {
+		a := &app{cfg: &config.Config{Alerts: config.Alerts{Kubeconfig: c.files}}}
+		if got := a.alertLoginFile(); got != c.want {
+			t.Errorf("alerts.kubeconfig %q: login file %q, want %q", c.files, got, c.want)
+		}
+	}
+}
+
+// The installations a discovery kept join the configured ones, with alerts
+// read in the context they resolve to; a configured one is not repeated, and
+// nothing joins while discovery is off.
+func TestAlertTargetsAddTheDiscoveredInstallations(t *testing.T) {
+	const found, foundCtx = "antiz103", "tp-antiz103"
+	dir := t.TempDir()
+	if err := alerts.SaveDiscovery(dir, &alerts.Discovery{At: time.Now(), Installations: map[string]alerts.Found{
+		gazelle: {Context: "tp-" + gazelle, Releases: []string{"muster"}},
+		found:   {Context: foundCtx, Releases: []string{"kagent", "substrate"}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{StateDir: dir, LeaseDir: filepath.Join(dir, "leases"), Kube: config.Kube{ContextTemplate: "tp-{installation}"},
+		Alerts: config.Alerts{Team: ourTeam, Installations: []config.Installation{{Name: gazelle}},
+			Discover: config.Discover{Every: config.Duration{Duration: time.Hour}}}}
+	a := &app{cfg: cfg}
+	contexts := []string{"tp-" + gazelle, foundCtx}
+	got := a.alertTargetsIn(contexts)
+	want := []alerts.Target{{Name: gazelle, Context: "tp-" + gazelle, Why: alerts.WhyConfigured},
+		{Name: found, Context: foundCtx, Why: "carries " + ourTeam + "'s kagent, substrate"}}
+	if !slices.Equal(got, want) {
+		t.Errorf("targets = %+v, want %+v", got, want)
+	}
+	cfg.Alerts.Discover.Every.Duration = 0
+	if got := a.alertTargetsIn(contexts); len(got) != 1 {
+		t.Errorf("discovery off: targets = %+v", got)
 	}
 }
