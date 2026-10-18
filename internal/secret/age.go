@@ -156,18 +156,26 @@ func (o *Ops) ageEnv(ctx context.Context, file string) ([]string, error) {
 	if id == nil || err != nil {
 		return nil, err
 	}
-	var keys []ageKey
 	if id.item {
-		keys, err = o.itemKeys(ctx, file, recipients)
-	} else if keys, err = o.ageKeys(ctx, id.Ref, recipients); err != nil {
-		err = fmt.Errorf("%s: the age identity of secret.ageIdentities: %w", file, err)
+		return o.itemEnv(ctx, file, recipients)
 	}
+	keys, err := o.ageKeys(ctx, id.Ref, recipients)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s: the age identity of secret.ageIdentities: %w", file, err)
 	}
-	var held, from []string
+	env, held := identityFor(keys, recipients)
+	if env != nil {
+		return env, nil
+	}
+	return nil, heldError(file, keys, held, recipients)
+}
+
+// identityFor is the sops environment of the first identity keys hold for
+// one of recipients, nil with the recipients they hold identities of when
+// none is.
+func identityFor(keys []ageKey, recipients []string) ([]string, []string) {
+	var held []string
 	for _, k := range keys {
-		from = append(from, k.source)
 		// the parse error is dropped: it may quote the line it failed on
 		parsed, err := age.ParseIdentities(strings.NewReader(k.value))
 		if err != nil {
@@ -185,10 +193,20 @@ func (o *Ops) ageEnv(ctx context.Context, file string) ([]string, error) {
 			held = append(held, r)
 		}
 	}
-	if len(held) == 0 {
-		return nil, fmt.Errorf("%s: %s holds no age identity (AGE-SECRET-KEY-1…)", file, strings.Join(from, ", "))
+	return nil, held
+}
+
+// heldError refuses keys, read for file, that hold no identity of
+// recipients: naming where they came from and whose identities they hold.
+func heldError(file string, keys []ageKey, held, recipients []string) error {
+	from := make([]string, 0, len(keys))
+	for _, k := range keys {
+		from = append(from, k.source)
 	}
-	return nil, fmt.Errorf("%s: %s holds the identity of %s, not of the file's recipients %s", file, strings.Join(from, ", "), strings.Join(held, ", "), strings.Join(recipients, ", "))
+	if len(held) == 0 {
+		return fmt.Errorf("%s: %s holds no age identity (AGE-SECRET-KEY-1…)", file, strings.Join(from, ", "))
+	}
+	return fmt.Errorf("%s: %s holds the identity of %s, not of the file's recipients %s", file, strings.Join(from, ", "), strings.Join(held, ", "), strings.Join(recipients, ", "))
 }
 
 // ageKey is a value that may hold an age identity, with where it came from.
@@ -346,17 +364,25 @@ func (o *Ops) configured(recipients []string, abs string) *AgeIdentity {
 	return nil
 }
 
-// itemKeys read the vault items of a file no secret.ageIdentities entry
-// names, those the vaults' item listings name (metadata, no value): the
-// shared vault's item per recipient ([AgeItemTitle]) and the item of the
-// file's installation ([AgeInstallationItem]) in the shared vault and
-// secret.ageVaults. With none, the call fails in one line naming the
-// installation, the recipient and the items the vaults lack: never a
-// person's own sops run.
-func (o *Ops) itemKeys(ctx context.Context, file string, recipients []string) ([]ageKey, error) {
-	inst := o.installation(file)
-	var out []ageKey
+// itemEnv finds, for a file no secret.ageIdentities entry names, the vault
+// item holding the identity of one of the file's recipients, by the
+// recipient alone: the shared vault's item per recipient ([AgeItemTitle]),
+// else the installation items ([AgeInstallationItem]) of the shared vault
+// and secret.ageVaults, the one of the installation the file's path names
+// first (a hint, never a condition), read one at a time in beekeeper's own
+// process until one holds the identity. The vaults' item listings
+// (metadata, no value) say which items exist. With none holding it, the
+// call fails in one line naming the recipients and the items checked:
+// never a person's own sops run.
+func (o *Ops) itemEnv(ctx context.Context, file string, recipients []string) ([]string, error) {
+	// an item to read; ref is set for an item per recipient
+	type item struct{ vault, id, title, ref string }
+	var perRecipient, installations []item
 	var missing []string
+	hint := ""
+	if inst := o.installation(file); inst != "" {
+		hint = AgeInstallationItem(inst)
+	}
 	for _, vault := range o.ageVaults() {
 		items, err := o.vaultItems(ctx, vault)
 		if err != nil {
@@ -364,51 +390,79 @@ func (o *Ops) itemKeys(ctx context.Context, file string, recipients []string) ([
 		}
 		if vault == o.Vault {
 			for _, r := range recipients {
-				if itemID(items, AgeItemTitle(r)) == "" {
+				if id := itemID(items, AgeItemTitle(r)); id != "" {
+					perRecipient = append(perRecipient, item{vault, id, AgeItemTitle(r), AgeItemRef(vault, r)})
+				} else {
 					missing = append(missing, fmt.Sprintf("%q", AgeItemTitle(r)))
-					continue
 				}
-				ref := AgeItemRef(o.Vault, r)
-				v, err := o.readOp(ctx, ref)
-				if err != nil {
-					return nil, fmt.Errorf("%s: the age identity in the vault: %w", file, err)
-				}
-				out = append(out, ageKey{ref, v})
 			}
 		}
-		if inst == "" {
-			continue
+		for _, it := range items {
+			if strings.HasSuffix(it.Title, ageInstallationSuffix) {
+				installations = append(installations, item{vault, it.ID, it.Title, ""})
+			}
 		}
-		id := itemID(items, AgeInstallationItem(inst))
-		if id == "" {
-			continue
-		}
-		keys, err := o.installationKeys(ctx, vault, id, AgeInstallationItem(inst))
+	}
+	// the installation the path names first, the rest in the vaults' order
+	slices.SortStableFunc(installations, func(a, b item) int {
+		return boolOrder(b.title == hint) - boolOrder(a.title == hint)
+	})
+	var read []ageKey
+	var held []string
+	try := func(keys []ageKey) []string {
+		env, h := identityFor(keys, recipients)
+		read, held = append(read, keys...), append(held, h...)
+		return env
+	}
+	for _, it := range perRecipient {
+		v, err := o.readOp(ctx, it.ref)
 		if err != nil {
-			return nil, fmt.Errorf("%s: the age identity in the vault %s: %w", file, vault, err)
+			return nil, fmt.Errorf("%s: the age identity in the vault: %w", file, err)
 		}
-		out = append(out, keys...)
-	}
-	if len(out) == 0 {
-		whose := "its"
-		if inst != "" {
-			whose = inst + "'s"
+		if env := try([]ageKey{{it.ref, v}}); env != nil {
+			return env, nil
 		}
-		return nil, fmt.Errorf("%s: %w for %s recipient %s: %s",
-			file, ErrNoAgeIdentity, whose, strings.Join(recipients, ", "), o.lacking(strings.Join(missing, " or "), inst))
 	}
-	return out, nil
+	for _, it := range installations {
+		keys, err := o.installationKeys(ctx, it.vault, it.id, it.title)
+		if err != nil {
+			return nil, fmt.Errorf("%s: the age identity in the vault %s: %w", file, it.vault, err)
+		}
+		if env := try(keys); env != nil {
+			return env, nil
+		}
+	}
+	if len(perRecipient) > 0 {
+		return nil, heldError(file, read, held, recipients)
+	}
+	checked := make([]string, 0, len(installations))
+	for _, it := range installations {
+		checked = append(checked, fmt.Sprintf("%q of %s", it.title, it.vault))
+	}
+	why := o.lacking(strings.Join(missing, " or "), checked)
+	if len(held) > 0 {
+		why += "; they hold the identity of " + strings.Join(held, ", ")
+	}
+	return nil, fmt.Errorf("%s: %w for its recipient %s: %s", file, ErrNoAgeIdentity, strings.Join(recipients, ", "), why)
+}
+
+// boolOrder is 1 for true, 0 for false.
+func boolOrder(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // lacking says which items the vaults lack: the shared vault's items per
-// recipient (quoted titles) and, for a file of an installation, the
-// installation's item in every vault.
-func (o *Ops) lacking(perRecipient, inst string) string {
+// recipient (quoted titles), and an installation item holding the identity
+// among those checked, each "<title> of <vault>" (none when empty).
+func (o *Ops) lacking(perRecipient string, checked []string) string {
 	s := fmt.Sprintf("the vault %s holds no item %s, whose password field is the AGE-SECRET-KEY-1… identity", o.Vault, perRecipient)
-	if inst != "" {
-		s += fmt.Sprintf(", and no vault of %s an item %q holding the installation's identity file", strings.Join(o.ageVaults(), ", "), AgeInstallationItem(inst))
+	if len(checked) == 0 {
+		return s + fmt.Sprintf(", and no vault of %s an installation item (<installation>%s) holding it", strings.Join(o.ageVaults(), ", "), ageInstallationSuffix)
 	}
-	return s
+	return s + fmt.Sprintf(", and no installation item of %s holds it (checked %s)", strings.Join(o.ageVaults(), ", "), strings.Join(checked, ", "))
 }
 
 // itemID is the ID of the item titled title, "" when items hold none.
