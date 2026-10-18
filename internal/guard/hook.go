@@ -423,19 +423,28 @@ var (
 	// textCommands read their quoted arguments as text and run none of them:
 	// the search patterns and filters, the printers, and gh and git in the
 	// subcommands textSubcommands names.
-	textCommands = wordSet("gh " + gitCmd + " grep egrep fgrep jq yq echo printf")
+	textCommands = wordSet("gh " + gitCmd + " grep egrep fgrep jq echo printf")
 	// textSubcommands are gh's and git's subcommands whose quoted arguments
-	// are messages, bodies, titles and patterns.
+	// are messages, bodies and titles.
 	textSubcommands = map[string]map[string]bool{
-		"gh":   wordSet("issue pr release api search label"),
-		gitCmd: wordSet("commit tag notes log show"),
+		"gh":   wordSet("issue pr release api"),
+		gitCmd: wordSet("commit tag"),
+	}
+	// textOptions are the only options gh and git may carry there: none opens
+	// an editor or a browser, writes a file or loads a configuration.
+	textOptions = map[string]map[string]bool{
+		"gh": wordSet("-R --repo -t --title -b --body -F --body-file -l --label --add-label --remove-label -a --assignee " +
+			"-B --base -H --head -d --draft -m --milestone -r --reviewer --json -q --jq -s --state -L --limit " +
+			"-n --notes --notes-file -f --raw-field --field -X --method --paginate --input --header"),
+		gitCmd: wordSet("-m --message -a --all -am -s --signoff -q --quiet --allow-empty --amend --no-edit --no-verify " +
+			"-F --file -f --force --annotate"),
 	}
 	// sinks are the pipeline stages after a text command that run nothing
 	// they read and have no option that runs a command.
 	sinks = wordSet("head tail wc uniq cut tr cat column")
 	// setsVariables sets or exports a variable (an editor, a pager, a
-	// configuration) a later command may run.
-	setsVariables = wordSet("export declare typeset readonly local alias set unset")
+	// configuration) a later command may run, or runs its arguments.
+	setsVariables = wordSet("export declare typeset readonly local alias set unset builtin eval source .")
 	// compound opens or continues a compound command or a group, whose
 	// output a later stage may run.
 	compound = wordSet("{ } if then elif else fi for while until do done case esac select function")
@@ -516,21 +525,21 @@ func flatLine(sc shellScan, segs []segment) bool {
 		case "$(", "<(", "(", ")", "`":
 			return false
 		}
-		if words := shellWords(sc.plain[sg.start:sg.end]); len(words) > 0 && (compound[words[0]] || setsVariables[words[0]] || envWord.MatchString(words[0])) {
+		words := shellWords(sc.plain[sg.start:sg.end])
+		c := commandAt(words)
+		if slices.ContainsFunc(words[:min(c+1, len(words))], func(w string) bool { return compound[w] || envWord.MatchString(w) }) ||
+			c < len(words) && setsVariables[path.Base(words[c])] {
 			return false
 		}
 	}
 	return true
 }
 
-// opensProgram is an option of gh or git that opens an editor or a browser.
-var opensProgram = regexp.MustCompile(`^(?:-e|--edit|--editor|-w|--web)$`)
-
 // textCommand reports whether the simple command's words run one of
 // textCommands with no assignment before it (an editor, a pager, a
 // configuration that runs a command), printf without -v, gh and git only in
-// a subcommand textSubcommands names and without an option that opens an
-// editor or a browser, git with no option before it (-c, --config-env).
+// a subcommand textSubcommands names with textOptions alone, git with no
+// option before it (-c, --config-env).
 func textCommand(words []string) bool {
 	c := commandAt(words)
 	if c >= len(words) || !textCommands[path.Base(words[c])] || slices.ContainsFunc(words[:c], envWord.MatchString) {
@@ -544,9 +553,12 @@ func textCommand(words []string) bool {
 	if !ok {
 		return true
 	}
+	opts := textOptions[name]
 	for k, w := range words[c+1:] {
 		if !strings.HasPrefix(w, "-") {
-			return subs[w] && !slices.ContainsFunc(words[c+2+k:], opensProgram.MatchString)
+			return subs[w] && !slices.ContainsFunc(words[c+2+k:], func(o string) bool {
+				return strings.HasPrefix(o, "-") && o != "-" && !opts[strings.SplitN(o, "=", 2)[0]]
+			})
 		}
 		if name == gitCmd {
 			return false // -c, --config-env, -C and every other option before the subcommand
