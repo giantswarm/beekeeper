@@ -1141,6 +1141,10 @@ type Event struct {
 	By     Party     `json:"by"`
 	Verb   string    `json:"verb"`
 	Detail string    `json:"detail"`
+	// Subject is the issue or pull request the event concerns, owner/repo#n,
+	// on the events the sink may dispatch (config.SinkVerbs); empty on the
+	// rest.
+	Subject string `json:"subject,omitempty"`
 }
 
 // Store is the seam every command reads and changes the state through.

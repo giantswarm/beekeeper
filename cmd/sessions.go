@@ -329,7 +329,7 @@ removes the calling session's own record; agents idle --done clears it too.`,
 				}
 				st.Records = slices.DeleteFunc(st.Records, func(o state.Record) bool { return o.Session.Is(r.Session) })
 				st.Records = append(st.Records, r)
-				return []state.Event{event(me, "session.serve", "%s: %s", r.Session.Name, recordText(r))}, nil
+				return []state.Event{about(event(me, verbServe, "%s: %s", r.Session.Name, recordText(r)), r.Issue)}, nil
 			})
 			if err != nil {
 				return err
