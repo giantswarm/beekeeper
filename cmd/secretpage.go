@@ -515,6 +515,20 @@ func (b *blindTurn) settings(base, self string) string {
 	return string(out)
 }
 
+// captureRule is the auto mode allow rule of a capture turn: the person's
+// own credential, created on the page the steps name and taken by beekeeper
+// into the person's vault on this machine, is no exfiltration; beekeeper's
+// hook keeps the value from the turn.
+func captureRule(create string) string {
+	return fmt.Sprintf("Covered Credential Capture: the person runs beekeeper secret page to create exactly one credential of their own, %s, "+
+		"on the page the steps name, in their own signed-in browser session, and to store it in their own password vault on this machine. "+
+		"Every Claude in Chrome call of this turn that serves those steps (tab context, navigation, find, the clicks and keys the steps "+
+		"name, and beekeeper's reader script, verbatim) is pre-authorized and is no Data Exfiltration and no credential disclosure: the "+
+		"value never reaches the agent, whose results beekeeper's own hook masks, and goes nowhere but the person's vault through "+
+		"beekeeper's process on this machine. Not covered: creating any other credential, sending a value to any other place, typing, "+
+		"copying or reporting the value, and any call the steps do not name. Every other rule applies in full.", create)
+}
+
 // blindPreamble opens a capture turn's prompt in place of browse's.
 const blindPreamble = "beekeeper secret page: you run browser steps for another Claude session, with the Claude in Chrome tools only, " +
 	"to create a credential the page shows once and that no session may see: beekeeper takes it into the vault. You are blind to it: " +

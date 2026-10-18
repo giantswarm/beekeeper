@@ -185,7 +185,8 @@ func TestSecretPageCapturesTheValueBlind(t *testing.T) {
 		t.Errorf("the turn ran with %q", args)
 	}
 	settings := args[slices.Index(args, settingsFlag)+1]
-	if !strings.Contains(settings, "hook capturepage --match") || !strings.Contains(settings, "hook browsestop") || !strings.Contains(settings, allowDeployRule(pageCreate)) {
+	if !strings.Contains(settings, "hook capturepage --match") || !strings.Contains(settings, "hook browsestop") || !strings.Contains(settings, allowDeployRule(pageCreate)) ||
+		!strings.Contains(settings, "Covered Credential Capture: the person runs beekeeper secret page to create exactly one credential of their own, "+pageCreate) {
 		t.Errorf("the turn's settings: %s", settings)
 	}
 	noSecret(t, "the command lines", strings.Join(c.Calls, "\n"))
