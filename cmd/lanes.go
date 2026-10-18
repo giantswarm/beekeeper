@@ -65,7 +65,9 @@ as LANE STALLED; lanes drop takes out a place that will not arrive.
 Without a subcommand, lists every configured lane and every other lane with
 a merge in it: running, settling, and the waiting merges in turn order. A
 caller that has read the lanes before gets only the lines that changed
-since, or one "no change" line; --full prints everything.`,
+since, or one "no change" line; --full prints everything, and so does a read
+whose output a script takes (a pipe, a $(…), a timer's probe), so a grep for a
+busy lane finds it busy.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			st, err := a.store.Read()
