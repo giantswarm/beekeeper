@@ -19,7 +19,7 @@ import (
 )
 
 // heldApp is queueApp at the devctl cap, its budget fresh: a merge whose
-// turn came says so ("devctl processes run machine-wide") instead of
+// turn came says so ("merges and promotes run machine-wide") instead of
 // running devctl.
 func heldApp(t *testing.T, merges ...state.Merge) *app {
 	t.Helper()
@@ -97,7 +97,7 @@ func TestAQueuedMergeWaitsForAHoldsExceptionAndKeepsItsPlace(t *testing.T) {
 	}
 
 	exception := placedGate(a, 6, other)
-	if why, err := exception.step(); err != nil || !strings.Contains(why, "devctl processes run machine-wide") || !strings.Contains(why, "o/r#6 is next in lane o/r") {
+	if why, err := exception.step(); err != nil || !strings.Contains(why, "merges and promotes run machine-wide") || !strings.Contains(why, "o/r#6 is next in lane o/r") {
 		t.Errorf("o/r#6, the hold's exception: %q, %v; want it the lane's next, ahead of the held o/r#7", why, err)
 	}
 

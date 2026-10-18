@@ -1307,7 +1307,8 @@ like a merge typed on the command line.
   its run: a place dies with its process, and the session's retry joins the lane anew.
 
 A merge runs when no merge before it in its lane's queue holds its place, nothing else of the lane runs, fewer than
-`merge.cap` devctl processes run on the machine, the calling session runs fewer than `merge.sessionCap` merges
+`merge.cap` devctl merges and promotes run on the machine (a `pr wait`, `release wait` or `rollout wait` only polls
+and does not count), the calling session runs fewer than `merge.sessionCap` merges
 (default 2; each running devctl polls GitHub, so ten merges one session queued poll as two would, the others wait in
 their lanes without reading GitHub and start in the order they queued; `beekeeper budget` lists each session's
 polling and waiting merges), and the lane's installation is ready: every
@@ -1513,7 +1514,7 @@ A merge queued under the floor waits for the reset with that reset recorded on i
 first: a gated `devctl pr wait`, `release wait` or `rollout wait` started then waits until none of
 them waits any more (the gate's line names them), the watch's GitHub timer checks wait as well,
 `beekeeper budget` names them and `budget --gate` refuses (exit 3). For such a merge only the
-running merges count against `merge.cap`, not the waits' devctl processes, and an older merge
+running merges count against `merge.cap`, and an older merge
 queued for the reset that is free to start takes a slot before it. A merge leaves the window when it
 starts; the waits run with what the merges leave, at the window's end at the latest.
 
