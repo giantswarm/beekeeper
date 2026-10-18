@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"strconv"
@@ -97,6 +98,10 @@ func (rl role) start(st *state.State, me state.Party, prevLive, takeOver bool, n
 	case prev == nil || prev.Is(me):
 		// A restart of the same holder keeps an open relay.
 	case r.Relay.Open(now) && r.Relay.From.Is(prev.Party) && r.Relay.To.Is(me):
+		// The start runs in my headless first turn, which knows no desktop
+		// id: the relay's keeps the role addressable until my desktop CLI
+		// runs.
+		me.HostSession = cmp.Or(me.HostSession, r.Relay.To.HostSession)
 		r.Relay.Taken = now.UTC()
 		r.Relieved = append(dropRelief(r.Relieved, prev.Party),
 			state.Relief{Party: prev.Party, By: me, At: r.Relay.At, Taken: r.Relay.Taken})
