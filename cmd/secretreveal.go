@@ -31,8 +31,9 @@ configuration: no key on its path named like a secret (secret, password,
 token, key, credential, private, cookie, salt, hmac, cert), no value the
 value scanner matches (a token pattern, an indexed secret), no URL carrying
 a password, no run of 16 or more characters at a key's entropy. A client
-id (a leaf named id, clientID or client_id, an item of a trustedPeers or
-peers list) is public in every authorize URL and answered however random it
+or App id (a leaf named id, or client, app or application joined to id
+plain, by a hyphen or an underscore: clientID, client-id, appId,
+application_id; an item of a trustedPeers or peers list) is public in every authorize URL and answered however random it
 looks, unless it equals a value under a secret-named key of the same file.
 One that looks secret refuses the whole call (exit 3), named by its path and the
 reason, never its value; copy and compare move and check a secret.

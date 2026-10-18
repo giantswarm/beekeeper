@@ -714,7 +714,7 @@ func TestBrowseSharesFiles(t *testing.T) {
 	// root it was given.
 	script := "#!/bin/sh\n: > \"$BROWSE_ARGV\"\nid=; prev=\nfor a in \"$@\"; do\n  printf '%s\\0' \"$a\" >> \"$BROWSE_ARGV\"\n" +
 		"  [ \"$prev\" = --session-id ] && id=$a\n  prev=$a\ndone\n" +
-		"{ echo \"$" + stageRootEnv + "\"; cat \"$" + stageRootEnv + "\"/*/*; } > \"$BROWSE_SEEN\"\n" +
+		"{ echo \"$" + stageRootEnv + "\"; echo \"$" + guard.SharedEnv + "\"; cat \"$" + stageRootEnv + "\"/*/*; } > \"$BROWSE_SEEN\"\n" +
 		"mkdir -p \"$BROWSE_PROJECT\" && cp \"$BROWSE_TRANSCRIPT\" \"$BROWSE_PROJECT/$id.jsonl\"\necho \"the turn's report\"\n"
 	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o700); err != nil { //nolint:gosec // a fake claude
 		t.Fatal(err)
@@ -725,8 +725,9 @@ func TestBrowseSharesFiles(t *testing.T) {
 	t.Setenv("BROWSE_SEEN", seen)
 	t.Setenv("BROWSE_PROJECT", filepath.Join(a.cfg.Claude.ProjectsDir, "p"))
 	t.Setenv(stageRootEnv, "/the/caller's/stage")
+	t.Setenv(guard.SharedEnv, "/the/caller's/shared")
 	writeFile(t, transcript, "")
-	files := t.TempDir()
+	files := filepath.Join(bin, "out")
 	shot, log := filepath.Join(files, "shot.png"), filepath.Join(files, "run.log")
 	writeFile(t, shot, "png bytes\n")
 	writeFile(t, log, "log lines\n")
@@ -744,9 +745,14 @@ func TestBrowseSharesFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root, copies, _ := strings.Cut(string(b), "\n")
+	root, rest, _ := strings.Cut(string(b), "\n")
+	sharedEnv, copies, _ := strings.Cut(rest, "\n")
 	if !strings.HasPrefix(root, filepath.Join(a.cfg.StateDir, "browse")+string(filepath.Separator)) || copies != "png bytes\nlog lines\n" {
 		t.Errorf("the turn found the stage root %q holding %q", root, copies)
+	}
+	// The hook in the turn reads the copies' paths, and only those.
+	if want := filepath.Join(root, "1", "shot.png") + string(os.PathListSeparator) + filepath.Join(root, "2", "run.log"); sharedEnv != want {
+		t.Errorf("the turn's %s = %q, want %q", guard.SharedEnv, sharedEnv, want)
 	}
 	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) { //nolint:gosec // the stage root the fake claude reported
 		t.Errorf("the stage root %s outlived the turn: %v", root, err)
@@ -766,7 +772,14 @@ func TestBrowseSharesFiles(t *testing.T) {
 		t.Error("a prompt without shared files names uploads")
 	}
 
-	// A file the turn cannot upload is refused before the turn starts.
+	// A file the turn cannot upload is refused before the turn starts: one
+	// outside the worker's directories too, directly or through a link.
+	elsewhere := filepath.Join(t.TempDir(), "secret.txt")
+	writeFile(t, elsewhere, "not the worker's")
+	link := filepath.Join(files, "link.txt")
+	if err := os.Symlink(elsewhere, link); err != nil {
+		t.Fatal(err)
+	}
 	big := filepath.Join(files, "big.bin")
 	if err := os.WriteFile(big, nil, 0o600); err != nil {
 		t.Fatal(err)
@@ -782,6 +795,8 @@ func TestBrowseSharesFiles(t *testing.T) {
 		"dir":      {[]string{files}, files + ": not a regular file"},
 		"too big":  {[]string{big}, "over file_upload's 10485760"},
 		"together": {[]string{shot, big}, "over file_upload's 10485760"},
+		"outside":  {[]string{shot, elsewhere}, elsewhere + ": outside the worker's directories"},
+		"a link":   {[]string{link}, link + ": outside the worker's directories"},
 	} {
 		if err := os.Remove(argvFile); err != nil {
 			t.Fatal(err)
@@ -823,6 +838,55 @@ func TestStageUploads(t *testing.T) {
 	}
 	if fi, err := os.Stat(shared[0].Staged); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Errorf("the copy's mode: %v, %v", fi, err)
+	}
+}
+
+// The hook's refusal of a file_upload of a path the caller did not share is
+// a refusal of the report, the call named with its path, and a line names
+// --file.
+func TestReadFindingsNotShared(t *testing.T) {
+	reason, _ := json.Marshal("PreToolUse:" + chromeToolPrefix + "file_upload hook error: " + guard.NotShared + "/home/x/.ssh/id_ed25519. This browse turn uploads only …")
+	lines := chromeUse("u1", "file_upload", `{"paths":["/home/x/.ssh/id_ed25519"],"ref":"ref_42","tabId":3}`) +
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"u1","is_error":true,"content":` + string(reason) + `}]}}` + "\n"
+	transcript := filepath.Join(t.TempDir(), "t.jsonl")
+	writeFile(t, transcript, lines)
+	f, err := readFindings(transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"refused: file_upload /home/x/.ssh/id_ed25519: beekeeper's hook refused it as [Not Shared]",
+		sharedHint,
+		"windows: the turn worked in tab 3",
+	}
+	if got := f.lines("Upload the key to the form", "", nil, false); !slices.Equal(got, want) {
+		t.Errorf("lines = %q, want %q", got, want)
+	}
+}
+
+// A file shared for upload lies in one of the worker's directories: the
+// working directory, the turn's, beekeeper's state directory or the calling
+// session's scratchpad, found by its session id.
+func TestUploadRoots(t *testing.T) {
+	session := "s-" + strconv.Itoa(os.Getpid())
+	pad := filepath.Join(os.TempDir(), "claude-"+strconv.Itoa(os.Getuid()), "-project-"+session, session)
+	if err := os.MkdirAll(pad, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Dir(pad)) })
+	if got := uploadRoots("/w", "", "/s", session); !slices.Equal(got, []string{"/w", "/s", pad}) {
+		t.Errorf("uploadRoots = %q", got)
+	}
+	if got := uploadRoots("/w", "/d", "/s", "*"); !slices.Equal(got, []string{"/w", "/d", "/s"}) {
+		t.Errorf("uploadRoots of a pattern session = %q", got)
+	}
+	f := filepath.Join(pad, "scratchpad", "out.pdf")
+	writeFile(t, f, "pdf")
+	if err := checkUploads([]string{f}, uploadRoots("/w", "", "", session)); err != nil {
+		t.Errorf("a file in the session's scratchpad: %v", err)
+	}
+	if err := checkUploads([]string{f}, uploadRoots("/w", "", "", "another")); err == nil || !strings.Contains(err.Error(), "outside the worker's directories (/w)") {
+		t.Errorf("a file in another session's scratchpad: %v", err)
 	}
 }
 

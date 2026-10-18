@@ -259,16 +259,29 @@ nothing else that deploys, and the first line below the turn's report says
 naming the flag. A deploy the person did not ask for is never declared.
 
 A file the steps upload through a page's file input is shared with the
-turn by --file <path> (repeatable): browse refuses a path that does not
-exist, is not a regular file, or files over file_upload's 10 MiB before the
-turn starts, copies each file into a stage root of the turn's own
-(<stateDir>/browse/<id>/upload/<n>/<name>, removed after the turn) and
-names that root to the CLI as the folder of the files the person shared with
-the session, which Claude in Chrome's file_upload takes without the Read
-tool. The prompt names each file as the caller wrote it and the copy's path
-file_upload takes; every other path stays refused, the turn's --dir
-included, and the turn still has no file tool. A line below the report
-says "shared for upload: <path>".
+turn by --file <path> (repeatable): browse refuses, before the turn starts,
+a path that does not exist, is not a regular file, or lies outside the
+worker's directories (the working directory, the turn's --dir, beekeeper's
+state directory and the calling session's scratchpad, links resolved), and
+files over file_upload's 10 MiB. It copies each file into a stage root of
+the turn's own (<stateDir>/browse/<id>/upload/<n>/<name>, removed after the
+turn) and names that root to the CLI as the folder of the files the person
+shared with the session, which Claude in Chrome's file_upload takes without
+the Read tool. The prompt names each file as the caller wrote it and the
+copy's path file_upload takes; the turn still has no file tool. The hook
+(beekeeper hook pretooluse, in the turn) refuses a file_upload of any other
+path, the turn's --dir included, naming it, and the refusal reaches the
+report as "refused: file_upload <path>: beekeeper's hook refused it as [Not
+Shared]" with a line naming the flag. A line below the report says "shared
+for upload: <path>".
+
+GitHub's issue and comment editor renders no file input until its paperclip
+opens a native file picker, which no turn drives. There the steps add a
+temporary, visible <input type=file multiple> to the comment form with
+javascript_tool, run the upload-target check scoped to that form, find its
+ref and file_upload to it, then dispatch a drop event (DragEvent 'drop' with a DataTransfer holding
+the input's files) on the comment textarea: GitHub inserts the attachment
+links as for a dropped file.
 
 A page keeps hidden file inputs (GitHub's review-reply boxes beside the
 comment box) that take a file_upload as readily as the intended one and
@@ -365,7 +378,8 @@ again once the extension is connected.`,
 // its caller to print once the value is stored and scrubbed.
 func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Duration, deploy string, files []string, blind *blindTurn) error {
 	// A file the steps cannot upload is refused before anything starts.
-	if err := checkUploads(files); err != nil {
+	cwd, _ := os.Getwd()
+	if err := checkUploads(files, uploadRoots(cwd, dir, a.cfg.StateDir, os.Getenv("CLAUDE_CODE_SESSION_ID"))); err != nil {
 		return err
 	}
 	bin, err := exec.LookPath("claude")
@@ -410,7 +424,13 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	if err != nil {
 		return err
 	}
-	env := browseEnv(os.Environ())
+	// The shared copies' paths mark the turn's session to the hook, which
+	// refuses a file_upload of any other path.
+	staged := make([]string, 0, len(shared))
+	for _, f := range shared {
+		staged = append(staged, f.Staged)
+	}
+	env := append(browseEnv(os.Environ()), guard.SharedEnv+"="+strings.Join(staged, string(os.PathListSeparator)))
 	if stage != "" {
 		env = append(env, stageRootEnv+"="+stage)
 	}
@@ -568,8 +588,16 @@ type refusal struct {
 }
 
 // reasonControl is the reason of the hook's refusal of a click on a
-// subscription control.
-const reasonControl = "Subscription Control"
+// subscription control, reasonNotShared of a file_upload of a path the
+// caller did not share with --file.
+const (
+	reasonControl   = "Subscription Control"
+	reasonNotShared = "Not Shared"
+)
+
+// sharedHint names the flag below a refused upload.
+const sharedHint = "a file the steps upload is shared with `beekeeper browse --file <path>` (repeatable), a file in the working directory, " +
+	"the turn's --dir, beekeeper's state directory or the session's scratchpad; the turn uploads no other path"
 
 // browseFindings are what a turn's transcript says beyond its report: the
 // calls the classifier refused, the screenshots of a page that is not
@@ -637,6 +665,8 @@ func readFindings(transcript string) (browseFindings, error) {
 					f.Refused = append(f.Refused, refusal{Call: c.words, Reason: reason})
 				case strings.Contains(text, "never clicks "+guard.SubscriptionControls):
 					f.Refused = append(f.Refused, refusal{Call: c.words, Reason: reasonControl, Hook: true})
+				case strings.Contains(text, guard.NotShared):
+					f.Refused = append(f.Refused, refusal{Call: c.words, Reason: reasonNotShared, Hook: true})
 				}
 				if strings.Contains(text, guard.FrozenRenderer) {
 					f.NotRendered++
@@ -767,7 +797,7 @@ func (f browseFindings) lines(steps, deploy string, consents []guard.App, lab bo
 		out = append(out, "allowed lab sign-in: a fixture user's sign-in and consent on the lab's own identity provider, "+
 			"a loopback host the steps name, which the hook allows and the turn's auto mode allows")
 	}
-	grant, deployed := false, false
+	grant, deployed, unshared := false, false, false
 	for _, r := range f.Refused {
 		by := "the auto mode classifier denied"
 		if r.Hook {
@@ -776,6 +806,10 @@ func (f browseFindings) lines(steps, deploy string, consents []guard.App, lab bo
 		out = append(out, fmt.Sprintf("refused: %s: %s it as [%s]", r.Call, by, r.Reason))
 		grant = grant || r.Reason == reasonGrant
 		deployed = deployed || slices.Contains(deployReasons, r.Reason)
+		unshared = unshared || r.Reason == reasonNotShared
+	}
+	if unshared {
+		out = append(out, sharedHint)
 	}
 	if grant {
 		hint := consentHint
@@ -874,10 +908,11 @@ func bounded(s string, n int) string {
 // actions after it.
 func callWords(name string, input json.RawMessage) string {
 	var in struct {
-		Action  string `json:"action"`
-		Summary string `json:"action_summary"`
-		URL     string `json:"url"`
-		Text    string `json:"text"`
+		Action  string   `json:"action"`
+		Summary string   `json:"action_summary"`
+		URL     string   `json:"url"`
+		Text    string   `json:"text"`
+		Paths   []string `json:"paths"`
 		Actions []struct {
 			Name  string          `json:"name"`
 			Input json.RawMessage `json:"input"`
@@ -897,6 +932,7 @@ func callWords(name string, input json.RawMessage) string {
 	if strings.HasSuffix(name, scriptTool) && in.Text != "" {
 		words = append(words, strconv.Quote(bounded(strings.TrimSpace(in.Text), phraseRunes)))
 	}
+	words = append(words, in.Paths...)
 	var actions []string
 	for _, a := range in.Actions {
 		actions = append(actions, callWords(a.Name, a.Input))
@@ -1250,7 +1286,7 @@ func browseEnv(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
 		k, _, _ := strings.Cut(kv, "=")
-		if k == "CLAUDECODE" || k == "CLAUDE_PID" || k == stageRootEnv || k == "CLAUDE_EFFORT" || strings.HasPrefix(k, "CLAUDE_CODE_") {
+		if k == "CLAUDECODE" || k == "CLAUDE_PID" || k == stageRootEnv || k == guard.SharedEnv || k == "CLAUDE_EFFORT" || strings.HasPrefix(k, "CLAUDE_CODE_") {
 			continue
 		}
 		out = append(out, kv)
@@ -1276,8 +1312,9 @@ type sharedFile struct {
 }
 
 // checkUploads refuses files a turn cannot upload: a path that does not
-// exist or is not a regular file, and files over uploadLimit together.
-func checkUploads(files []string) error {
+// exist or is not a regular file, one outside the worker's directories
+// (roots, links resolved), and files over uploadLimit together.
+func checkUploads(files, roots []string) error {
 	var total int64
 	for _, f := range files {
 		fi, err := os.Stat(f)
@@ -1288,6 +1325,9 @@ func checkUploads(files []string) error {
 			return usageErr("--file %s: %v", f, err)
 		case !fi.Mode().IsRegular():
 			return usageErr("--file %s: not a regular file (%s), only a file's bytes are uploaded", f, fi.Mode().Type())
+		case !slices.ContainsFunc(roots, func(r string) bool { return within(f, r) }):
+			return usageErr("--file %s: outside the worker's directories (%s): a file the steps upload lies in the working directory, "+
+				"the turn's --dir, beekeeper's state directory or the session's scratchpad", f, strings.Join(roots, ", "))
 		}
 		total += fi.Size()
 	}
@@ -1329,6 +1369,30 @@ func nested(a, b string) bool {
 	a, b = resolved(a), resolved(b)
 	sep := string(filepath.Separator)
 	return a == b || strings.HasPrefix(a, b+sep) || strings.HasPrefix(b, a+sep)
+}
+
+// within reports whether the file path lies below the directory dir, after
+// their links are resolved: a link in dir to a file elsewhere is not within.
+func within(path, dir string) bool {
+	return strings.HasPrefix(resolved(path), resolved(dir)+string(filepath.Separator))
+}
+
+// uploadRoots are the worker's directories a file shared for upload lies
+// in: its working directory, the turn's directory, beekeeper's state
+// directory (an earlier turn's screenshots) and the scratchpad of the
+// calling Claude Code session (session), <tmp>/claude-<uid>/<project>/<session>.
+func uploadRoots(cwd, dir, stateDir, session string) []string {
+	roots := []string{}
+	for _, r := range []string{cwd, dir, stateDir} {
+		if r != "" {
+			roots = append(roots, r)
+		}
+	}
+	if session != "" && !strings.ContainsAny(session, `/\*?[`) {
+		pads, _ := filepath.Glob(filepath.Join(os.TempDir(), "claude-"+strconv.Itoa(os.Getuid()), "*", session))
+		roots = append(roots, pads...)
+	}
+	return roots
 }
 
 // resolved is path made absolute, its links resolved as far as it exists.
@@ -1393,6 +1457,16 @@ func uploadPrompt(shared []sharedFile) string {
 		named = append(named, fmt.Sprintf("%s as %s", f.Named, f.Staged))
 	}
 	return fmt.Sprintf(uploadWords, strings.Join(named, "; "), guard.UploadTargetCheck("<selector>"))
+}
+
+// sharedUploads reports whether the hook runs in a browse turn, from its
+// environment, and the files the turn's caller shared with it for upload.
+func sharedUploads() ([]string, bool) {
+	v, ok := os.LookupEnv(guard.SharedEnv)
+	if !ok {
+		return nil, false
+	}
+	return filepath.SplitList(v), true
 }
 
 // sharedLines are the lines below the report that name the files shared for
