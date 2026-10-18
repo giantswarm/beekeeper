@@ -5,8 +5,12 @@ import (
 	"encoding/json"
 )
 
-// PostToolUseEvent is the hook event a ToolResult names.
-const PostToolUseEvent = "PostToolUse"
+// PostToolUseEvent is the hook event a ToolResult names; PreToolUseEvent
+// the one before a call.
+const (
+	PostToolUseEvent = "PostToolUse"
+	PreToolUseEvent  = "PreToolUse"
+)
 
 // ToolResult is the part of a PostToolUse event the hook reads.
 type ToolResult struct {
