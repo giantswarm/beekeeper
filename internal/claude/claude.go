@@ -564,12 +564,66 @@ var shells = map[string]bool{"zsh": true, "bash": true, "sh": true, "dash": true
 // each: `devctl pr merge …`, `sleep 1500`, `memcap -- …`.
 func toolCommands(t *proc.Table, tree []*proc.Process, now time.Time) []Command {
 	var out []Command
-	for _, p := range tree {
-		if shells[p.Comm] && strings.Contains(p.Cmdline(), "shell-snapshots/snapshot-") && !isToolShellChild(t, p) {
-			out = append(out, shellCommands(t, p, now)...)
-		}
+	for _, sh := range toolShells(t, tree, now) {
+		out = append(out, sh.Commands...)
 	}
 	return out
+}
+
+// ToolShell is a tool shell of a session's CLI: its process, every process
+// below it, and the commands it runs.
+type ToolShell struct {
+	PID      int
+	Tree     []int
+	Commands []Command
+}
+
+// Sleeping reports whether the shell only waits: every command it runs is
+// a `sleep`, the turn of a background wait loop between its checks.
+func (sh ToolShell) Sleeping() bool {
+	return len(sh.Commands) > 0 && !slices.ContainsFunc(sh.Commands, func(c Command) bool {
+		f := strings.Fields(c.Args)
+		return len(f) == 0 || filepath.Base(f[0]) != "sleep"
+	})
+}
+
+// ToolShells returns the tool shells of the CLI pid, those of the sessions
+// its tool commands started included.
+func ToolShells(t *proc.Table, pid int, now time.Time) []ToolShell {
+	return toolShells(t, ownTree(t, pid, nil), now)
+}
+
+func toolShells(t *proc.Table, tree []*proc.Process, now time.Time) []ToolShell {
+	var out []ToolShell
+	for _, p := range tree {
+		if !isToolShell(p) || isToolShellChild(t, p) {
+			continue
+		}
+		sh := ToolShell{PID: p.PID, Tree: []int{p.PID}, Commands: shellCommands(t, p, now)}
+		for _, d := range t.Descendants(p.PID) {
+			sh.Tree = append(sh.Tree, d.PID)
+		}
+		out = append(out, sh)
+	}
+	return out
+}
+
+// OwnCLI is the CLI of the session whose tool command runs the process
+// pid: its nearest ancestor that is a session's CLI; nil when none is in
+// the table (a sandbox's own process namespace hides it).
+func OwnCLI(t *proc.Table, pid int) *proc.Process {
+	for _, p := range t.Ancestors(pid) {
+		if isCLI(p) {
+			return p
+		}
+	}
+	return nil
+}
+
+// isToolShell reports whether p is a shell Claude Code started for a tool
+// command: its command line sources a shell snapshot.
+func isToolShell(p *proc.Process) bool {
+	return shells[p.Comm] && strings.Contains(p.Cmdline(), "shell-snapshots/snapshot-")
 }
 
 // shellCommands reports the first non-shell process under each branch of
@@ -599,7 +653,7 @@ func shellCommands(t *proc.Table, sh *proc.Process, now time.Time) []Command {
 // nested shell of a tool command), which descend already covers.
 func isToolShellChild(t *proc.Table, p *proc.Process) bool {
 	pp := t.ByPID[p.PPID]
-	return pp != nil && shells[pp.Comm] && strings.Contains(pp.Cmdline(), "shell-snapshots/snapshot-")
+	return pp != nil && isToolShell(pp)
 }
 
 // sleepDuration sums sleep's operands ("300", "5m", "1.5h").
