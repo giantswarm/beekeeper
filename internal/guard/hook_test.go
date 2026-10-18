@@ -685,6 +685,20 @@ func TestHookRefusesHiddenMerges(t *testing.T) {
 		{self + ` run -- zsh -c 'devctl pr merge o/r 7'`, self + ` run -- zsh -c '` + g + `devctl pr merge o/r 7'`, false},
 		{`bash -c 'devctl pr wait o/r 7'`, `bash -c '` + g + `devctl pr wait o/r 7'`, false},
 		{`eval "devctl pr merge o/r 7"`, `eval "` + g + `devctl pr merge o/r 7"`, false},
+		// Adjacent quoted and bare pieces are one -c string, as the shell joins them.
+		{`bash -c 'cd x; '"devctl pr merge o/r 7"`, `bash -c 'cd x; '"` + g + `devctl pr merge o/r 7"`, false},
+		{`sh -c "cd x; "'devctl pr merge o/r 7'`, `sh -c "cd x; "'` + g + `devctl pr merge o/r 7'`, false},
+		{`zsh -c 'cd x; '$'devctl release promote o/r'`, `zsh -c 'cd x; '$'` + g + `devctl release promote o/r'`, false},
+		{`bash -c 'cd x; 'devctl\ pr\ merge\ o/r\ 7`, `bash -c 'cd x; '` + strings.ReplaceAll(g, " ", `\ `) + `devctl\ pr\ merge\ o/r\ 7`, false},
+		{`bash -c 'devctl pr '"merge o/r 7" | tee m.json`, `bash -c '` + g + `devctl pr '"merge o/r 7" | tee m.json`, false},
+		{`bash -c "cd \"$D\"; "'devctl'" pr wait o/r 7"`, `bash -c "cd \"$D\"; "'` + g + `devctl'" pr wait o/r 7"`, false},
+		{`bash -c devctl\ pr\ merge\ o/r\ 7`, `bash -c ` + strings.ReplaceAll(g, " ", `\ `) + `devctl\ pr\ merge\ o/r\ 7`, false},
+		// eval runs all its words, joined by spaces.
+		{`eval 'cd x;' devctl pr merge o/r 7`, `eval 'cd x;' ` + strings.ReplaceAll(g, " ", `\ `) + `devctl pr merge o/r 7`, false},
+		// A -c string the parser cannot resolve fails closed: the rest of the line is its text.
+		{`bash -c "$(printf 'cd x; ')"'devctl pr merge o/r 7'`, `bash -c "$(printf 'cd x; ')"'` + g + `devctl pr merge o/r 7'`, false},
+		{"bash -c 'cd x; '\"`echo`devctl pr merge o/r 7\"", "bash -c 'cd x; '\"`echo`" + g + "devctl pr merge o/r 7\"", false},
+		{`bash -c 'cd x; '"devctl pr merge o/r 7`, `bash -c 'cd x; '"` + g + `devctl pr merge o/r 7`, false},
 	} {
 		d := decide(t, h, t.TempDir(), c.cmd, map[string]any{backgroundKey: c.bg})
 		if d == nil || d.PermissionDecision != decisionDeny || !strings.HasSuffix(d.Reason, "\n"+c.fixed) {
@@ -696,7 +710,9 @@ func TestHookRefusesHiddenMerges(t *testing.T) {
 			t.Errorf("%q: the gated form is refused too: %s", c.fixed, d.Reason)
 		}
 	}
-	for _, cmd := range []string{`bash -c 'devctl pr view o/r 7'`, `bash -c 'echo ok' && echo "devctl pr merge o/r 7"`, `ssh -c aes x`} {
+	for _, cmd := range []string{`bash -c 'devctl pr view o/r 7'`, `bash -c 'echo ok' && echo "devctl pr merge o/r 7"`, `ssh -c aes x`,
+		// Words after a -c string are its arguments, not its text; a joined string without a merge runs none.
+		`bash -c 'echo "$@"' _ devctl pr merge o/r 7`, `bash -c 'cd x; '"devctl pr view o/r 7"`, `bash -c "$(cat run.sh)"`} {
 		if d := decide(t, h, t.TempDir(), cmd, nil); d != nil && d.PermissionDecision == decisionDeny {
 			t.Errorf("%q is refused: %s", cmd, d.Reason)
 		}

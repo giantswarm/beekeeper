@@ -75,7 +75,10 @@ var (
 	// shellC: a shell's -c option, or eval, up to the quote opening its
 	// command string.
 	shellC = regexp.MustCompile(`(?:^|[\s;&|(/])(?:(?:ba|z|da|k)?sh\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*c[a-zA-Z]*|eval)\s+(['"])`)
-	lab    = regexp.MustCompile(`(?m)` + pos + `(agentlab\s+up\b|kind\s+create\s+cluster\b)`)
+	// shellCArg: the same, up to its command string's first word, quoted or
+	// bare; the group is eval's.
+	shellCArg = regexp.MustCompile(`(?:^|[\s;&|(/])(?:(?:ba|z|da|k)?sh\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*c[a-zA-Z]*|(eval))\s+`)
+	lab       = regexp.MustCompile(`(?m)` + pos + `(agentlab\s+up\b|kind\s+create\s+cluster\b)`)
 	// labRuntime: a lab's creation or teardown, which takes the container
 	// runtime's socket the agent sandbox closes.
 	labRuntime = regexp.MustCompile(`(?m)` + pos + `(agentlab\s+(?:--lab[= ]\s*\S+\s+)?(?:up|down)\b|kind\s+(?:create|delete)\s+clusters?\b)`)
@@ -415,7 +418,7 @@ func (h Hook) gate(cmd string, bg bool) (string, bool) {
 			at = append(at, m[2])
 		}
 	}
-	return h.insertGate(cmd, at, bg), len(at) > 0
+	return h.insertGate(cmd, at, bg, nil), len(at) > 0
 }
 
 // inRanges reports whether the offset is inside one of the ranges.
@@ -464,39 +467,137 @@ func shellReads(sc shellScan, segs []segment, op int) bool {
 
 // hiddenMerges returns cmd with the gate before each blocking devctl command
 // the gate rewrite left inside a sh, bash or zsh -c string or an eval string,
-// and whether there was one. A -c or eval that is text, inside a quoted
-// argument or a here-document no shell reads (a PR body naming one), runs
-// nothing.
+// and whether there was one. The string is read as the shell builds it
+// (commandString): adjacent quoted and bare pieces joined. A -c or eval that
+// is text, inside a quoted argument or a here-document no shell reads (a PR
+// body naming one), runs nothing.
 // The hook refuses such a command rather than rewriting a quoted string.
 func (h Hook) hiddenMerges(cmd string, bg bool) (string, bool) {
 	sc := scanShell(cmd)
 	content := contentBodies(sc)
 	var at []int
-	for _, m := range shellC.FindAllStringSubmatchIndex(cmd, -1) {
-		if inRanges(content, m[2]) || sc.masked[m[2]] != cmd[m[2]] && !inHeredoc(sc, m[2]) {
+	bare := map[int]bool{}
+	for _, m := range shellCArg.FindAllStringSubmatchIndex(cmd, -1) {
+		w := m[1]
+		if w == len(cmd) || inRanges(content, w) || sc.masked[w] != cmd[w] && !inHeredoc(sc, w) {
 			continue
 		}
-		body := cmd[m[1]:]
-		end := closingQuote(body, cmd[m[2]])
-		for _, mm := range anyOwned.FindAllStringIndex(body[:end], -1) {
-			if !gated.MatchString(body[:mm[0]]) {
-				at = append(at, m[1]+mm[0])
+		text, offs, unquoted := commandString(cmd[w:], m[2] >= 0)
+		for _, mm := range anyOwned.FindAllStringIndex(text, -1) {
+			if !gated.MatchString(text[:mm[0]]) && !slices.Contains(at, w+offs[mm[0]]) {
+				at = append(at, w+offs[mm[0]])
+				bare[w+offs[mm[0]]] = unquoted[mm[0]]
 			}
 		}
 	}
-	return h.insertGate(cmd, at, bg), len(at) > 0
+	slices.Sort(at)
+	return h.insertGate(cmd, at, bg, bare), len(at) > 0
+}
+
+// commandString is the command string a shell's -c option or eval runs from
+// s, the text from its first word on: the word with its quotes removed and
+// its adjacent single-quoted, double-quoted, $'…' and bare pieces joined (for
+// eval every word up to the end of its command, joined by a space), the
+// offset in s of each of its bytes, and whether each stands bare (unquoted).
+// A word the parser cannot resolve (a quote left open, a command
+// substitution, an escape in $'…') fails closed: the rest of s, as written.
+func commandString(s string, eval bool) (string, []int, []bool) {
+	var text []byte
+	var offs []int
+	var bare []bool
+	put := func(i int, unquoted bool) {
+		text, offs, bare = append(text, s[i]), append(offs, i), append(bare, unquoted)
+	}
+	unresolved := func() (string, []int, []bool) {
+		offs, bare = make([]int, len(s)), make([]bool, len(s))
+		for i := range offs {
+			offs[i] = i
+		}
+		return s, offs, bare
+	}
+	const ends = "\n;&|()<>"
+	for i := 0; i < len(s); {
+		c := s[i]
+		switch {
+		case c == ' ' || c == '\t':
+			j := i
+			for j < len(s) && (s[j] == ' ' || s[j] == '\t') {
+				j++
+			}
+			if !eval || j == len(s) || strings.IndexByte(ends, s[j]) >= 0 {
+				return string(text), offs, bare
+			}
+			put(i, true)
+			text[len(text)-1] = ' '
+			i = j
+		case strings.IndexByte(ends, c) >= 0:
+			return string(text), offs, bare
+		case c == '`', c == '$' && strings.HasPrefix(s[i:], "$("):
+			return unresolved()
+		case c == '\'':
+			j := strings.IndexByte(s[i+1:], '\'')
+			if j < 0 {
+				return unresolved()
+			}
+			for k := i + 1; k <= i+j; k++ {
+				put(k, false)
+			}
+			i += j + 2
+		case c == '$' && strings.HasPrefix(s[i:], "$'"):
+			j := strings.IndexByte(s[i+2:], '\'')
+			if j < 0 || strings.IndexByte(s[i+2:i+2+j], '\\') >= 0 {
+				return unresolved()
+			}
+			for k := i + 2; k < i+2+j; k++ {
+				put(k, false)
+			}
+			i += j + 3
+		case c == '"':
+			for i++; i < len(s) && s[i] != '"'; i++ {
+				switch {
+				case s[i] == '`' || strings.HasPrefix(s[i:], "$("):
+					return unresolved()
+				case s[i] == '\\' && i+1 < len(s) && s[i+1] == '\n':
+					i++
+					continue
+				case s[i] == '\\' && i+1 < len(s) && strings.IndexByte("\"\\$`", s[i+1]) >= 0:
+					i++
+				}
+				put(i, false)
+			}
+			if i == len(s) {
+				return unresolved()
+			}
+			i++
+		case c == '\\' && i+1 < len(s):
+			if s[i+1] != '\n' {
+				put(i+1, true)
+			}
+			i += 2
+		default:
+			put(i, true)
+			i++
+		}
+	}
+	return string(text), offs, bare
 }
 
 // insertGate puts the gate before each offset in at, in ascending order; a
 // background merge waits up to 30 minutes for its turn (a wait has none) and
 // runs without the tool limit, as no Bash call limit stops a background task.
-func (h Hook) insertGate(cmd string, at []int, bg bool) string {
+// An offset bare names stands unquoted in its word: the gate's blanks are
+// escaped there, so that the word stays one.
+func (h Hook) insertGate(cmd string, at []int, bg bool, bare map[int]bool) string {
 	gate := ShellQuote(h.Self) + " gate -- "
 	if bg {
 		gate = ShellQuote(h.Self) + " gate --wait 30m --limit 0 -- "
 	}
 	for i := len(at) - 1; i >= 0; i-- {
-		cmd = cmd[:at[i]] + gate + cmd[at[i]:]
+		g := gate
+		if bare[at[i]] {
+			g = strings.ReplaceAll(gate, " ", `\ `)
+		}
+		cmd = cmd[:at[i]] + g + cmd[at[i]:]
 	}
 	return cmd
 }
