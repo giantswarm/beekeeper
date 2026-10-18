@@ -66,7 +66,7 @@ func TestRecipients(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	item, none := fmt.Sprintf("the vault item %q", AgeItemTitle(r)), fmt.Sprintf("none: the vault Shared holds no item %q, whose password field is the AGE-SECRET-KEY-1… identity", AgeItemTitle(o))
+	item, none := fmt.Sprintf("the vault item %q", AgeItemTitle(r)), fmt.Sprintf("none: the vault Shared holds no item %q, whose password field is the AGE-SECRET-KEY-1… identity, and no vault of Shared an installation item (<installation>.agekey) holding it", AgeItemTitle(o))
 	want := []Recipient{{graveler, r, item}, {glean, o, none}, {`\.sops\.yaml$`, r, item}, {`\.sops\.yaml$`, o, none}}
 	if !slices.Equal(rs, want) {
 		t.Errorf("recipients of the directory = %+v, want %+v", rs, want)
