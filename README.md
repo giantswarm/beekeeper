@@ -906,7 +906,10 @@ same file passed to `claude --settings` holds one session to it, to try a change
   container runtime's registry login, the agents' sockets), apart from the egress proxy's directory.
 - **The GitHub token:** `gh`, `git push` and `devctl` act with devctl's App user token (eight hours,
   capped by the App's permissions), and the sandbox never holds it, not even as a placeholder. The
-  broker reads it every five minutes with `devctl auth exec` (`sandbox.devctl`) into its memory. Its
+  broker reads it every five minutes with `devctl auth exec` (`sandbox.devctl`) into its memory, a
+  read bounded by a minute, by three while it holds no token (a cold devctl right after a boot); a
+  failed read is tried again after 30 s, 1 m and 2 m, its journal line naming the cause (killed at
+  the bound, no devctl login, devctl's own error, no token in its answer). Its
   egress proxy terminates TLS for `github.com`, `api.github.com` and `uploads.github.com` with a CA it
   makes at start, its key in memory alone and name-constrained to those hosts, and sets each request's
   `Authorization` header itself (Basic for git on `github.com`, a token for the API), replacing what
