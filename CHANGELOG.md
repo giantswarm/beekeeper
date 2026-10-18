@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A message to "the supervisor" or "the guide" during a relay reaches a run that takes it. The successor's start, run in its headless first turn, now records the relay's desktop id on its holder, so the role resolves to that desktop session instead of a bare run name nothing answers. From that start, for the role's `relayTTL`, while the successor's CLI takes no message (no CLI, or no peer socket yet), the message goes to the outgoing holder the relay relieved, while that one's CLI does; never to an older relieved run ([#634](https://github.com/giantswarm/beekeeper/issues/634)).
+
 ## [0.149.1-rc.1] - 2026-10-18
 
 ### Fixed
