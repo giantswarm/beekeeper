@@ -423,7 +423,7 @@ var (
 	// textCommands read their quoted arguments as text and run none of them:
 	// the search patterns and filters, the printers, and gh and git in the
 	// subcommands textSubcommands names.
-	textCommands = wordSet("gh " + gitCmd + " grep egrep fgrep rg ug ugrep jq yq echo printf")
+	textCommands = wordSet("gh " + gitCmd + " grep egrep fgrep jq yq echo printf")
 	// textSubcommands are gh's and git's subcommands whose quoted arguments
 	// are messages, bodies, titles and patterns.
 	textSubcommands = map[string]map[string]bool{
@@ -432,7 +432,10 @@ var (
 	}
 	// sinks are the pipeline stages after a text command that run nothing
 	// they read and have no option that runs a command.
-	sinks = wordSet("tee head tail wc uniq cut tr cat column")
+	sinks = wordSet("head tail wc uniq cut tr cat column")
+	// setsVariables sets or exports a variable (an editor, a pager, a
+	// configuration) a later command may run.
+	setsVariables = wordSet("export declare typeset readonly local alias set unset")
 	// compound opens or continues a compound command or a group, whose
 	// output a later stage may run.
 	compound = wordSet("{ } if then elif else fi for while until do done case esac select function")
@@ -486,16 +489,22 @@ func mayRun(cmd string, at int) bool {
 // (textCommand), and every later stage of its pipeline is a text command or
 // one of sinks.
 func readsAsText(sc shellScan, segs []segment, i int) bool {
-	if !flatLine(sc, segs) || !textCommand(shellWords(sc.plain[segs[i].start:segs[i].end])) {
+	if !flatLine(sc, segs) || writes(sc, segs[i]) || !textCommand(shellWords(sc.plain[segs[i].start:segs[i].end])) {
 		return false
 	}
 	for j := i; segs[j].after == "|" && j+1 < len(segs); j++ {
 		next := shellWords(sc.plain[segs[j+1].start:segs[j+1].end])
-		if k := commandAt(next); k >= len(next) || !sinks[path.Base(next[k])] && !textCommand(next) {
+		if k := commandAt(next); writes(sc, segs[j+1]) || k >= len(next) || !sinks[path.Base(next[k])] && !textCommand(next) {
 			return false
 		}
 	}
 	return true
+}
+
+// writes reports whether the segment redirects its output to a file, which
+// a later command may run.
+func writes(sc shellScan, sg segment) bool {
+	return strings.Contains(sc.masked[sg.start:sg.end], ">")
 }
 
 // flatLine reports whether the command line is a list of simple pipelines:
@@ -507,30 +516,37 @@ func flatLine(sc shellScan, segs []segment) bool {
 		case "$(", "<(", "(", ")", "`":
 			return false
 		}
-		if words := shellWords(sc.plain[sg.start:sg.end]); len(words) > 0 && compound[words[0]] {
+		if words := shellWords(sc.plain[sg.start:sg.end]); len(words) > 0 && (compound[words[0]] || setsVariables[words[0]] || envWord.MatchString(words[0])) {
 			return false
 		}
 	}
 	return true
 }
 
+// opensProgram is an option of gh or git that opens an editor or a browser.
+var opensProgram = regexp.MustCompile(`^(?:-e|--edit|--editor|-w|--web)$`)
+
 // textCommand reports whether the simple command's words run one of
 // textCommands with no assignment before it (an editor, a pager, a
-// configuration that runs a command), gh and git only in a subcommand
-// textSubcommands names, git with no option before it (-c, --config-env).
+// configuration that runs a command), printf without -v, gh and git only in
+// a subcommand textSubcommands names and without an option that opens an
+// editor or a browser, git with no option before it (-c, --config-env).
 func textCommand(words []string) bool {
 	c := commandAt(words)
 	if c >= len(words) || !textCommands[path.Base(words[c])] || slices.ContainsFunc(words[:c], envWord.MatchString) {
 		return false
 	}
 	name := path.Base(words[c])
+	if name == "printf" {
+		return len(words) == c+1 || !strings.HasPrefix(words[c+1], "-") // printf -v sets a variable
+	}
 	subs, ok := textSubcommands[name]
 	if !ok {
 		return true
 	}
-	for _, w := range words[c+1:] {
+	for k, w := range words[c+1:] {
 		if !strings.HasPrefix(w, "-") {
-			return subs[w]
+			return subs[w] && !slices.ContainsFunc(words[c+2+k:], opensProgram.MatchString)
 		}
 		if name == gitCmd {
 			return false // -c, --config-env, -C and every other option before the subcommand

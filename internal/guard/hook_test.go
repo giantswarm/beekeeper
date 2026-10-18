@@ -663,6 +663,12 @@ func TestHookGatesQuotedCommandLines(t *testing.T) {
 		"EDITOR=sh gh issue create -b 'cd x; devctl pr merge o/r 7'",
 		"git grep -O'sh -c' 'cd x; devctl pr merge o/r 7'",
 		"echo 'cd x; devctl pr merge o/r 7' | sort --compress-program=sh",
+		"rg --pre sh 'cd x; devctl pr merge o/r 7' .",
+		"export GIT_EDITOR=sh; git commit -e -m 'cd x; devctl pr merge o/r 7'",
+		"git commit -e -m 'cd x; devctl pr merge o/r 7'",
+		"printf -v c 'cd x; devctl pr merge o/r 7'; eval \"$c\"",
+		"echo 'cd x; devctl pr merge o/r 7' >| m.sh; sh m.sh",
+		"echo 'cd x; devctl pr merge o/r 7' | tee m.sh; sh m.sh",
 	} {
 		d := decide(t, h, t.TempDir(), cmd, nil)
 		if d == nil {
