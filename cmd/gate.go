@@ -160,10 +160,15 @@ queued for it (merge.resetFirst); one whose identical command already runs on
 the machine follows that run (follow-run: its stderr, document and exit
 code) instead of polling GitHub a second time. Whichever command it is, its outcome reaches
 the session that started it: the caller sees the output and exit code as
-ever while it listens, and when it no longer does (a headless turn that
-ended, a caller killed, its CLI gone, a queued merge) the run wakes its
-owner, a registered agent, with one line: "<command> exit N: <reason>
-(output in <file>)", logged as devctl.unheard. A run stopped by a signal
+ever while it listens, and when it no longer does (a merge whose caller
+was killed, a headless turn that ended, its CLI gone, a queued merge) the
+run wakes its owner, a registered agent, with one line: "<command> exit N:
+<reason> (output in <file>)", logged as devctl.unheard. A wait ends with
+its caller instead: its shell stopped (TaskStop), killed or gone with an
+ended turn, its devctl is stopped within a second and nobody is woken,
+unless another run of the same command follows it; a wait the call leaves
+(merge.toolLimit, the caller's timeout, below) runs on and wakes its owner
+as a merge does. A run stopped by a signal
 before its command settled (a cleanup's SIGTERM, a stop of its unit) wakes
 its owner with the stop instead, as nothing waits for the command any more;
 a merge stopped so (its user manager going down with a desktop restart)
@@ -180,8 +185,8 @@ image …) go to stderr, so "<command> | jq ." parses; a 2>&1 before the
 pipe mixes the progress into the document.
 
 A desktop Bash call stops its command at 10 minutes without an exit code.
-A foreground merge or promotion therefore leaves merge.toolLimit (default
-9m) after the call started, whether it still waits for its turn or its
+A foreground merge, promotion or wait therefore leaves merge.toolLimit
+(default 9m) after the call started, whether it still waits for its turn or its
 devctl runs: exit 76 as for a queued merge, devctl (or the wait, in a run of
 its own) goes on outside the call, and its outcome wakes the owner as
 above; do not run it again, do not poll. A merge expected to outlive the
@@ -212,7 +217,7 @@ A gated command is therefore never wrapped in timeout.`,
 	}
 	c.Flags().SetInterspersed(false)
 	c.Flags().DurationVar(&wait, "wait", DefaultGateWait, "how long to wait for the merge's turn")
-	c.Flags().DurationVar(&limit, "limit", 0, "how long the call runs before it exits 76 and the merge runs on outside it (default merge.toolLimit; 0: no limit)")
+	c.Flags().DurationVar(&limit, "limit", 0, "how long the call runs before it exits 76 and the merge or wait runs on outside it (default merge.toolLimit; 0: no limit)")
 	c.Flags().BoolVar(&queued, "queued", false, "wait as a queued merge's own run, which refuses at the end of --wait")
 	_ = c.Flags().MarkHidden("queued")
 	return c
@@ -297,7 +302,7 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 	repo, pr, ok := parseGated(argv)
 	if !ok {
 		if a.store != nil && merge.ParseOwned(argv) {
-			return a.ownedRun(ctx, argv)
+			return a.ownedRun(ctx, argv, limit)
 		}
 		return exitCode(runChild(argv, os.Stdout))
 	}
@@ -1354,7 +1359,7 @@ func (g *gateRun) retryServerError(base string, pid int, run childRun) (childRun
 		if pid, rc = g.launch(base); rc != 0 {
 			return childRun{rc: rc}, pid
 		}
-		run = followChild(base, pid, 0, g.bin, g.retried(try+1), g.leaveAt)
+		run = followChild(base, pid, 0, g.bin, g.retried(try+1), g.leaveAt, false)
 	}
 	return run, pid
 }
@@ -1400,7 +1405,7 @@ func (g *gateRun) acceptRedRun(base string, pid int, run childRun) (childRun, in
 	if pid, rc = g.launch(base); rc != 0 {
 		return childRun{rc: rc}, pid
 	}
-	return g.retryServerError(base, pid, followChild(base, pid, 0, g.bin, g.retried(0), g.leaveAt))
+	return g.retryServerError(base, pid, followChild(base, pid, 0, g.bin, g.retried(0), g.leaveAt, false))
 }
 
 // judgeRed judges a red document against the base branch it names; a base
@@ -1422,7 +1427,7 @@ func (g *gateRun) judgeRed(ctx context.Context, doc []byte) merge.RedJudgement {
 // run: sent again on a 5xx of its merge call (retryServerError), and with
 // the red checks the gate lets through accepted (acceptRedRun).
 func (g *gateRun) followRun(base string, pid int, offset int64, bin binary) (childRun, int) {
-	run, pid := g.retryServerError(base, pid, followChild(base, pid, offset, bin, g.retried(0), g.leaveAt))
+	run, pid := g.retryServerError(base, pid, followChild(base, pid, offset, bin, g.retried(0), g.leaveAt, false))
 	return g.acceptRedRun(base, pid, run)
 }
 

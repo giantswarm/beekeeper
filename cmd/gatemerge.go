@@ -151,14 +151,15 @@ func (g *gateRun) mergeFiles() (string, error) {
 
 // mergeBase is the base of a merge's files in the state directory: devctl's
 // document (.json) and stderr (.log), its exit code (.rc), its runner's pid
-// (.pid), the command it runs (.spec) and the file its output is kept in
-// (.kept). Not the caller's pipes, which close with the caller's session.
+// (.pid), the command it runs (.spec), the file its output is kept in
+// (.kept) and, for a wait, the gate's mark that it left the run to run on
+// (.left). Not the caller's pipes, which close with the caller's session.
 func mergeBase(stateDir, repo string, pr int) string {
 	return filepath.Join(stateDir, "merges", fmt.Sprintf("%s-%d", strings.ReplaceAll(repo, "/", "_"), pr))
 }
 
 // mergeExts are the extensions of a merge's files.
-var mergeExts = []string{".json", ".log", ".rc", ".pid", ".spec", ".kept"}
+var mergeExts = []string{".json", ".log", ".rc", ".pid", ".spec", ".kept", leftExt}
 
 // removeMergeFiles removes a merge's files.
 func removeMergeFiles(base string) {
@@ -230,7 +231,9 @@ const (
 // hands it over while its caller listens, Config the configuration a wake of
 // the owner loads, Command the devctl command Argv stands for when Argv is
 // beekeeper's own (a queued merge, a wait that follows another's poller),
-// HandCut a merge's base branch that no Auto-release run tags.
+// HandCut a merge's base branch that no Auto-release run tags. WithCaller
+// says the run ends with its gate (a wait): merge-child stops the command
+// once the gate is gone without leaving the run to run on (leftExt).
 type childSpec struct {
 	Argv    []string    `json:"argv"`
 	Command []string    `json:"command,omitempty"`
@@ -240,6 +243,8 @@ type childSpec struct {
 	Gate    int         `json:"gate,omitempty"`
 	Config  string      `json:"config,omitempty"`
 	HandCut string      `json:"handCut,omitempty"`
+	// WithCaller is set for a wait, never for a merge or a queued merge's run.
+	WithCaller bool `json:"withCaller,omitempty"`
 }
 
 // childRun is how a detached run ended for its gate: devctl's document and
@@ -261,6 +266,9 @@ type childRun struct {
 	// cut that it left as its caller's timeout cut the connection
 	// (timedCaller).
 	left, cut bool
+	// ended says the follow returned as its caller went away, for a run that
+	// ends with it (withCaller): its merge-child stops the command.
+	ended bool
 }
 
 // emit writes a held document to the gate's stdout.
@@ -276,12 +284,13 @@ func (r childRun) emit() childRun {
 
 // runDetached runs spec's devctl outside its caller (launchChild) and
 // follows it to its end (followChild), its files removed; started gets
-// merge-child's pid. A follow cut by the caller's timeout leaves the files to
-// the run, which goes on. A merge's gate launches and follows apart, as it
+// merge-child's pid. A follow cut by the caller's timeout or past leave, or
+// ended with a caller going away (spec.WithCaller), leaves the files to the
+// run's merge-child. A merge's gate launches and follows apart, as it
 // re-executes a replaced binary in between.
-func runDetached(spec childSpec, base string, started func(pid int)) (r childRun) {
+func runDetached(spec childSpec, base string, leave time.Time, started func(pid int)) (r childRun) {
 	defer func() {
-		if !r.left {
+		if !r.left && !r.ended {
 			removeMergeFiles(base)
 		}
 	}()
@@ -291,7 +300,7 @@ func runDetached(spec childSpec, base string, started func(pid int)) (r childRun
 		return childRun{rc: guard.ExitNotFound}
 	}
 	started(pid)
-	return followChild(base, pid, 0, nil, nil, time.Time{})
+	return followChild(base, pid, 0, nil, nil, leave, spec.WithCaller)
 }
 
 // followChild follows the devctl that merge-child pid runs outside its
@@ -307,7 +316,8 @@ func runDetached(spec childSpec, base string, started func(pid int)) (r childRun
 // at the gate: its caller still there stopGrace later. A caller going away
 // (SIGHUP, or the gate's parent gone with the SIGTERM, a harness killing its
 // command's process tree) does not stop devctl (outliveCaller keeps it from
-// ending the gate). A SIGTERM from a timeout the gate runs under
+// ending the gate), unless withCaller: then the follow returns at once with
+// ended set, and the run's merge-child stops devctl as the gate is gone. A SIGTERM from a timeout the gate runs under
 // (timedCaller) cuts the connection, not the run: the follow returns at once
 // with left and cut set, the run's files in place for its merge-child, which
 // hands the outcome to its owner. bin, when given, is the gate's binary: replaced while
@@ -318,7 +328,7 @@ func runDetached(spec childSpec, base string, started func(pid int)) (r childRun
 // when set, is when the follow returns with left set while the run goes on
 // (the gate's tool limit), its files in place for its merge-child and the
 // watch.
-func followChild(base string, pid int, offset int64, bin binary, hold func(doc []byte) bool, leave time.Time) (r childRun) {
+func followChild(base string, pid int, offset int64, bin binary, hold func(doc []byte) bool, leave time.Time, withCaller bool) (r childRun) {
 	r.rc = guard.ExitNotFound
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
@@ -331,11 +341,17 @@ func followChild(base string, pid int, offset int64, bin binary, hold func(doc [
 		}
 	}
 	said, ppid, term := false, os.Getppid(), time.Time{}
-	away := func(s os.Signal) {
+	away := func(s os.Signal) bool {
+		if withCaller {
+			gateLine("%v: the caller is going away, and the wait ends with it (pid %d)", s, pid)
+			r.rc, r.ended = 128+int(syscall.SIGTERM), true
+			return true
+		}
 		if !said {
 			gateLine("%v: the caller is going away; devctl runs on outside it (pid %d) and its outcome reaches its owner", s, pid)
 			said = true
 		}
+		return false
 	}
 	for {
 		if log != nil {
@@ -383,7 +399,9 @@ func followChild(base string, pid int, offset int64, bin binary, hold func(doc [
 			case syscall.SIGINT:
 				signalPID(pid, os.Interrupt)
 			case syscall.SIGHUP:
-				away(s)
+				if away(s) {
+					return r
+				}
 			case syscall.SIGTERM:
 				if !said && timedCaller() {
 					gateLine("SIGTERM from the caller's timeout: it cut the connection, not the wait; devctl runs on outside the call (pid %d)", pid)
@@ -399,7 +417,9 @@ func followChild(base string, pid int, offset int64, bin binary, hold func(doc [
 		switch {
 		case term.IsZero():
 		case said || os.Getppid() != ppid:
-			away(syscall.SIGTERM)
+			if away(syscall.SIGTERM) {
+				return r
+			}
 			term = time.Time{}
 		case time.Since(term) >= stopGrace:
 			gateLine("SIGTERM with the caller still there: stopping devctl (pid %d); the run is recorded as one ended by a signal", pid)
@@ -504,6 +524,39 @@ func awaitPID(base string) (int, error) {
 	return 0, fmt.Errorf("no pid in %s.pid after %s", base, childStart)
 }
 
+// leftExt marks a wait its gate left to run on outside the call (its
+// caller's timeout, the tool limit): its merge-child goes on without the
+// gate and hands the outcome to the owner.
+const leftExt = ".left"
+
+// leftToRunOn says the gate left the wait at base to run on (leftExt).
+func leftToRunOn(base string) bool {
+	_, err := os.Stat(base + leftExt) //nolint:gosec // the gate's own file
+	return err == nil
+}
+
+// followerGlob matches the marks of the runs that follow the run at base
+// (followRun), each named after its follow-run's pid.
+func followerGlob(base string) string { return base + ".follower-*" }
+
+// callerGone says the gate of the wait at base is gone without leaving the
+// run to run on, and no other run's follow-run still follows it.
+func callerGone(base string, gate int) bool {
+	if proc.Alive(gate) {
+		return false
+	}
+	if leftToRunOn(base) {
+		return false
+	}
+	marks, _ := filepath.Glob(followerGlob(base))
+	for _, m := range marks {
+		if pid, err := strconv.Atoi(strings.TrimPrefix(m, base+".follower-")); err == nil && proc.Alive(pid) {
+			return false
+		}
+	}
+	return true
+}
+
 // mergeChildCmd is the hidden command that runs one gated devctl command
 // for the gate.
 const mergeChildCmd = "merge-child"
@@ -564,18 +617,20 @@ type childDone struct {
 	Last    string      `json:"last,omitempty"`
 	Kept    string      `json:"kept,omitempty"`
 	Stop    int         `json:"stop,omitempty"`
+	// CallerGone is childResult's callerGone.
+	CallerGone bool `json:"callerGone,omitempty"`
 }
 
 // done is r for the re-executed merge-child.
 func (r childResult) done() childDone {
 	return childDone{Argv: r.spec.Argv, Command: r.spec.Command, Owner: r.spec.Owner, Gate: r.spec.Gate, Config: r.spec.Config,
-		HandCut: r.spec.HandCut, Base: r.base, RC: r.rc, Doc: r.doc, Last: r.last, Kept: r.kept, Stop: int(r.stop)}
+		HandCut: r.spec.HandCut, Base: r.base, RC: r.rc, Doc: r.doc, Last: r.last, Kept: r.kept, Stop: int(r.stop), CallerGone: r.callerGone}
 }
 
 // result is the outcome d carries, as mergeChild returns it.
 func (d childDone) result() childResult {
 	return childResult{spec: childSpec{Argv: d.Argv, Command: d.Command, Owner: d.Owner, Gate: d.Gate, Config: d.Config, HandCut: d.HandCut},
-		base: d.Base, rc: d.RC, doc: d.Doc, last: d.Last, kept: d.Kept, stop: syscall.Signal(d.Stop)}
+		base: d.Base, rc: d.RC, doc: d.Doc, last: d.Last, kept: d.Kept, stop: syscall.Signal(d.Stop), callerGone: d.CallerGone}
 }
 
 // command names the command merge-child ran, the devctl command Argv stands
@@ -645,6 +700,10 @@ type childResult struct {
 	// infra are the red checks that died on a transient infrastructure
 	// failure, which the outcome names as such.
 	infra []merge.Infra
+	// callerGone says the run ended with its caller (spec.WithCaller): its
+	// gate went away without leaving it to run on, so nobody waits for its
+	// outcome and nobody is woken with it.
+	callerGone bool
 }
 
 // mergeChild runs base.spec's command with its stdout in base.json and its
@@ -652,7 +711,10 @@ type childResult struct {
 // the file keepOutput kept its output in in base.kept and the command's exit
 // code (128+n for a signal) in base.rc last. SIGINT is passed on; SIGTERM
 // and SIGHUP too, as they come from the service manager or a person, never
-// from the gate's caller; the first one is the run's stop. Re-executed by a replaced merge-child whose
+// from the gate's caller; the first one is the run's stop. A wait
+// (spec.WithCaller) ends with its caller: once its gate is gone without the
+// left mark (leftExt) and no other run follows it (followerGlob), devctl is
+// sent SIGTERM and the run is callerGone. Re-executed by a replaced merge-child whose
 // command ended, it returns that outcome (doneResult) and runs nothing.
 func mergeChild(base string) childResult {
 	if r, ok := doneResult(base); ok {
@@ -688,6 +750,7 @@ func mergeChild(base string) childResult {
 	}
 	rc := guard.ExitNotFound
 	var stop atomic.Value
+	var gone atomic.Bool
 	if err := c.Start(); err == nil {
 		go func() {
 			for s := range sig {
@@ -697,7 +760,25 @@ func mergeChild(base string) childResult {
 				_ = c.Process.Signal(s)
 			}
 		}()
+		ended := make(chan struct{})
+		if spec.WithCaller && spec.Gate > 0 {
+			go func() {
+				for {
+					select {
+					case <-ended:
+						return
+					case <-time.After(followPoll):
+					}
+					if callerGone(base, spec.Gate) {
+						gone.Store(true)
+						_ = c.Process.Signal(syscall.SIGTERM)
+						return
+					}
+				}
+			}()
+		}
 		_ = c.Wait()
+		close(ended)
 		rc = c.ProcessState.ExitCode()
 		if ws, ok := c.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
 			rc = 128 + int(ws.Signal())
@@ -707,6 +788,9 @@ func mergeChild(base string) childResult {
 	}
 	r.rc = rc
 	r.stop, _ = stop.Load().(syscall.Signal)
+	// A gate gone without the left mark while followers kept the run going
+	// ended with its caller all the same: nobody waits for this outcome.
+	r.callerGone = gone.Load() || spec.WithCaller && spec.Gate > 0 && !proc.Alive(spec.Gate) && !leftToRunOn(base)
 	r.doc, _ = os.ReadFile(base + ".json") //nolint:gosec // as above
 	r.last = lastLine(base + ".log")
 	if r.kept = keepOutput(base, r.doc, time.Now()); r.kept != "" {
