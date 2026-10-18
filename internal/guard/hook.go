@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -446,9 +445,6 @@ var (
 	// lineCommands may stand beside a text command on its line: they change
 	// nothing a text command reads and run no text.
 	lineCommands = wordSet("cd true devctl")
-	// compound opens or continues a compound command or a group, whose
-	// output a later stage may run.
-	compound = wordSet("{ } if then elif else fi for while until do done case esac select function")
 )
 
 // wordSet is the set of the space-separated words in s.
@@ -499,16 +495,31 @@ func mayRun(cmd string, at int) bool {
 // (textCommand), and every later stage of its pipeline is a text command or
 // one of sinks.
 func readsAsText(sc shellScan, segs []segment, i int) bool {
-	if !flatLine(sc, segs) || writes(sc, segs[i]) || !textCommand(shellWords(sc.plain[segs[i].start:segs[i].end])) {
+	if words := segWords(sc, segs[i]); !flatLine(sc, segs) || words == nil || !textCommand(words) {
 		return false
 	}
 	for j := i; segs[j].after == "|" && j+1 < len(segs); j++ {
-		next := shellWords(sc.plain[segs[j+1].start:segs[j+1].end])
-		if k := commandAt(next); writes(sc, segs[j+1]) || k >= len(next) || !sinks[path.Base(next[k])] && !textCommand(next) {
+		if next := segWords(sc, segs[j+1]); next == nil || !sinks[next[0]] && !textCommand(next) {
 			return false
 		}
 	}
 	return true
+}
+
+// plainName is a command written as a plain name: no path, quote or
+// expansion in it.
+var plainName = regexp.MustCompile(`^[a-z]+$`)
+
+// segWords are the segment's words when its command is its first word,
+// written as a plain name: no wrapper (env, sudo, timeout, command, xargs),
+// assignment, keyword or quoting before or in it; nil otherwise.
+func segWords(sc shellScan, sg segment) []string {
+	raw := strings.TrimLeft(sc.plain[sg.start:sg.end], " \t\n")
+	words := shellWords(raw)
+	if len(words) == 0 || !plainName.MatchString(words[0]) || !strings.HasPrefix(raw, words[0]) {
+		return nil
+	}
+	return words
 }
 
 // writes reports whether the segment redirects its output to a file, which
@@ -529,44 +540,38 @@ func flatLine(sc shellScan, segs []segment) bool {
 		case "$(", "<(", "(", ")", "`":
 			return false
 		}
-		words := shellWords(sc.plain[sg.start:sg.end])
-		if len(words) == 0 {
+		if strings.TrimSpace(sc.plain[sg.start:sg.end]) == "" {
 			continue
 		}
-		c := commandAt(words)
-		if writes(sc, sg) || c >= len(words) || slices.ContainsFunc(words[:c+1], func(w string) bool { return compound[w] || envWord.MatchString(w) }) {
-			return false
-		}
-		if name := path.Base(words[c]); !sinks[name] && !lineCommands[name] && !textCommand(words) {
+		words := segWords(sc, sg)
+		if words == nil || writes(sc, sg) || !sinks[words[0]] && !lineCommands[words[0]] && !textCommand(words) {
 			return false
 		}
 	}
 	return true
 }
 
-// textCommand reports whether the simple command's words run one of
-// textCommands with no assignment before it (an editor, a pager, a
-// configuration that runs a command), printf without -v, gh and git only in
-// a subcommand textSubcommands names with textOptions alone, git with no
-// option before it (-c, --config-env).
+// textCommand reports whether a segment's words (segWords) run one of
+// textCommands: printf without -v, gh and git only with a subcommand
+// textSubcommands names first (no -c, --config-env or other option before
+// it) and textOptions alone, git with an explicit message.
 func textCommand(words []string) bool {
-	c := commandAt(words)
-	if c >= len(words) || !textCommands[path.Base(words[c])] || slices.ContainsFunc(words[:c], envWord.MatchString) {
+	name := words[0]
+	if !textCommands[name] {
 		return false
 	}
-	name := path.Base(words[c])
 	if name == "printf" {
-		return len(words) == c+1 || !strings.HasPrefix(words[c+1], "-") // printf -v sets a variable
+		return len(words) == 1 || !strings.HasPrefix(words[1], "-") // printf -v sets a variable
 	}
 	subs, ok := textSubcommands[name]
 	if !ok {
 		return true
 	}
 	// the subcommand comes first: no -c, --config-env, -C or gh option before it
-	if len(words) == c+1 || !subs[words[c+1]] {
+	if len(words) == 1 || !subs[words[1]] {
 		return false
 	}
-	opts, rest := textOptions[name], words[c+2:]
+	opts, rest := textOptions[name], words[2:]
 	option := func(o string) string { return strings.SplitN(o, "=", 2)[0] }
 	if slices.ContainsFunc(rest, func(o string) bool { return strings.HasPrefix(o, "-") && o != "-" && !opts[option(o)] }) {
 		return false

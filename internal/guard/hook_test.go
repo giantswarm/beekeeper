@@ -679,6 +679,11 @@ func TestHookGatesQuotedCommandLines(t *testing.T) {
 		"gh --repo o/r issue create -b 'cd x; devctl pr merge o/r 7'",
 		"hash -p /bin/sh gh; gh issue create -b 'cd x; devctl pr merge o/r 7'",
 		">| m.sh; echo 'cd x; devctl pr merge o/r 7'",
+		"env -S 'sh -c' echo 'cd x; devctl pr merge o/r 7'",
+		"sudo -s echo 'cd x; devctl pr merge o/r 7'",
+		"xargs -a args.txt echo 'cd x; devctl pr merge o/r 7'",
+		"'sh -c' echo 'cd x; devctl pr merge o/r 7'",
+		"/tmp/gh/echo 'cd x; devctl pr merge o/r 7'",
 	} {
 		d := decide(t, h, t.TempDir(), cmd, nil)
 		if d == nil {
