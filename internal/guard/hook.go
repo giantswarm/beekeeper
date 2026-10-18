@@ -423,30 +423,36 @@ var (
 	// textCommands read their quoted arguments as text and run none of them:
 	// the search patterns and filters, the printers, and gh and git in the
 	// subcommands textSubcommands names.
-	textCommands = map[string]bool{
-		"gh": true, "git": true, "grep": true, "egrep": true, "fgrep": true, "rg": true, "ug": true, "ugrep": true,
-		"jq": true, "yq": true, "echo": true, "printf": true,
-	}
+	textCommands = wordSet("gh " + gitCmd + " grep egrep fgrep rg ug ugrep jq yq echo printf")
 	// textSubcommands are gh's and git's subcommands whose quoted arguments
 	// are messages, bodies, titles and patterns.
 	textSubcommands = map[string]map[string]bool{
-		"gh":  {"issue": true, "pr": true, "release": true, "api": true, "search": true, "label": true},
-		"git": {"commit": true, "tag": true, "notes": true, "log": true, "show": true, "grep": true},
+		"gh":   wordSet("issue pr release api search label"),
+		gitCmd: wordSet("commit tag notes log show"),
 	}
 	// sinks are the pipeline stages after a text command that run nothing
-	// they read.
-	sinks = map[string]bool{
-		"tee": true, "head": true, "tail": true, "wc": true, "sort": true, "uniq": true, "cut": true, "tr": true,
-		"cat": true, "less": true, "column": true,
-	}
+	// they read and have no option that runs a command.
+	sinks = wordSet("tee head tail wc uniq cut tr cat column")
+	// compound opens or continues a compound command or a group, whose
+	// output a later stage may run.
+	compound = wordSet("{ } if then elif else fi for while until do done case esac select function")
 )
+
+// wordSet is the set of the space-separated words in s.
+func wordSet(s string) map[string]bool {
+	set := map[string]bool{}
+	for _, w := range strings.Fields(s) {
+		set[w] = true
+	}
+	return set
+}
 
 // mayRun reports whether the shell may run the text at offset at of cmd as
 // part of a command line: outside quotes, or inside a shell's -c or eval
 // string or a here-document a shell reads, by the same test within it. A
-// quoted argument may run too, unless it belongs to one of textCommands
-// whose pipeline feeds no shell: flock -c, watch, su -c, a shell with options
-// before its -c and the like run theirs.
+// quoted argument may run too, unless readsAsText says it is only read as
+// text: flock -c, watch, su -c, a shell with options before its -c and the
+// like run theirs.
 func mayRun(cmd string, at int) bool {
 	sc := scanShell(cmd)
 	if sc.masked[at] == cmd[at] {
@@ -475,23 +481,12 @@ func mayRun(cmd string, at int) bool {
 	return true
 }
 
-// readsAsText reports whether segment i is a command line of its own, not
-// inside a subshell or a command or process substitution whose output may
-// run; its command is a text command (textCommand); and every later stage of
-// its pipeline is a text command or one of sinks.
+// readsAsText reports whether segment i's quoted arguments are only read as
+// text: the command line is flat (flatLine), its command is a text command
+// (textCommand), and every later stage of its pipeline is a text command or
+// one of sinks.
 func readsAsText(sc shellScan, segs []segment, i int) bool {
-	depth, quoted := 0, false
-	for _, sg := range segs[:i] {
-		switch sg.after {
-		case "$(", "<(", "(":
-			depth++
-		case ")":
-			depth--
-		case "`":
-			quoted = !quoted
-		}
-	}
-	if depth != 0 || quoted || !textCommand(shellWords(sc.plain[segs[i].start:segs[i].end])) {
+	if !flatLine(sc, segs) || !textCommand(shellWords(sc.plain[segs[i].start:segs[i].end])) {
 		return false
 	}
 	for j := i; segs[j].after == "|" && j+1 < len(segs); j++ {
@@ -503,13 +498,29 @@ func readsAsText(sc shellScan, segs []segment, i int) bool {
 	return true
 }
 
+// flatLine reports whether the command line is a list of simple pipelines:
+// no subshell, group, compound command or command or process substitution
+// anywhere in it, whose output a stage may run.
+func flatLine(sc shellScan, segs []segment) bool {
+	for _, sg := range segs {
+		switch sg.after {
+		case "$(", "<(", "(", ")", "`":
+			return false
+		}
+		if words := shellWords(sc.plain[sg.start:sg.end]); len(words) > 0 && compound[words[0]] {
+			return false
+		}
+	}
+	return true
+}
+
 // textCommand reports whether the simple command's words run one of
-// textCommands, gh and git only in a subcommand textSubcommands names, git
-// with no configuration from its options or the environment (an alias or a
-// hook that runs a shell).
+// textCommands with no assignment before it (an editor, a pager, a
+// configuration that runs a command), gh and git only in a subcommand
+// textSubcommands names, git with no option before it (-c, --config-env).
 func textCommand(words []string) bool {
 	c := commandAt(words)
-	if c >= len(words) || !textCommands[path.Base(words[c])] {
+	if c >= len(words) || !textCommands[path.Base(words[c])] || slices.ContainsFunc(words[:c], envWord.MatchString) {
 		return false
 	}
 	name := path.Base(words[c])
@@ -517,14 +528,11 @@ func textCommand(words []string) bool {
 	if !ok {
 		return true
 	}
-	if name == "git" && slices.ContainsFunc(words[:c], func(w string) bool { return strings.HasPrefix(w, "GIT_") }) {
-		return false
-	}
 	for _, w := range words[c+1:] {
 		if !strings.HasPrefix(w, "-") {
 			return subs[w]
 		}
-		if name == "git" {
+		if name == gitCmd {
 			return false // -c, --config-env, -C and every other option before the subcommand
 		}
 	}
