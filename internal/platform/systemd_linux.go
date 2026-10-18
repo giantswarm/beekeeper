@@ -42,6 +42,9 @@ func current(o Options) Platform {
 // userManager points systemctl and systemd-run at the user's service manager.
 const userManager = "--user"
 
+// quietRun keeps systemd-run from printing the unit it started.
+const quietRun = "--quiet"
+
 // cgroupRoot is where cgroup v2 is mounted.
 const cgroupRoot = "/sys/fs/cgroup"
 
@@ -144,7 +147,7 @@ func (l systemdLauncher) Start(u Unit) error {
 // runArgs is systemd-run's command line for u; quiet counts every end of
 // it as success.
 func runArgs(u Unit, quiet bool) []string {
-	args := []string{userManager, "--collect", "--quiet", "--unit=" + u.Name}
+	args := []string{userManager, "--collect", quietRun, "--unit=" + u.Name}
 	if u.KeepChildren {
 		args = append(args, "-p", "KillMode=process")
 	} else {
@@ -318,7 +321,7 @@ func (systemdCapper) Command(name string, c Cap, argv []string) (*exec.Cmd, erro
 // the slot's slice, the memory cap, and the command at RunNice, which
 // systemd-run applies itself in --scope mode.
 func scopeArgs(name string, c Cap, argv []string) []string {
-	return append([]string{userManager, "--scope", "--quiet", "--expand-environment=no", "--unit=" + name,
+	return append([]string{userManager, "--scope", quietRun, "--expand-environment=no", "--unit=" + name,
 		"--slice=" + c.slice(), "--nice=" + strconv.Itoa(RunNice), "-p", "MemoryMax=" + c.Max, "-p", "MemorySwapMax=" + c.Swap,
 		"-p", "OOMPolicy=continue", "--"}, argv...)
 }
@@ -436,6 +439,6 @@ func (o systemdOpener) Open(ctx context.Context, url string, running bool) error
 // named like the desktop's own, so its drop-ins apply, and collected
 // whether the app exits zero or not.
 func openArgs(app, url string, now time.Time) []string {
-	return []string{userManager, "--scope", "--quiet", "--collect", "--slice=app.slice",
+	return []string{userManager, "--scope", quietRun, "--collect", "--slice=app.slice",
 		"--unit=app-com.anthropic.Claude-beekeeper-" + strconv.FormatInt(now.UnixNano(), 10), app, url}
 }

@@ -42,7 +42,7 @@ func TestOpenerRunning(t *testing.T) {
 func TestOpenArgs(t *testing.T) {
 	now := time.Unix(1760805743, 123)
 	got := openArgs("claude-desktop", "claude://resume?session=local_1", now)
-	want := []string{"--user", "--scope", "--quiet", "--collect", "--slice=app.slice",
+	want := []string{"--user", "--scope", quietRun, "--collect", "--slice=app.slice",
 		"--unit=app-com.anthropic.Claude-beekeeper-1760805743000000123", "claude-desktop", "claude://resume?session=local_1"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("openArgs = %q, want %q", got, want)
@@ -82,7 +82,7 @@ func TestCapProperties(t *testing.T) {
 	}
 
 	args := scopeArgs("memcap-42-000001", c, []string{"zsh", "-c", "go build ./..."})
-	wantArgs := []string{"--user", "--scope", "--quiet", "--expand-environment=no", "--unit=memcap-42-000001",
+	wantArgs := []string{"--user", "--scope", quietRun, "--expand-environment=no", "--unit=memcap-42-000001",
 		"--slice=" + slot, "--nice=10", "-p", "MemoryMax=12G", "-p", noSwap, "-p", "OOMPolicy=continue",
 		"--", "zsh", "-c", "go build ./..."}
 	if !reflect.DeepEqual(args, wantArgs) {
@@ -152,7 +152,7 @@ func TestRunArgsQuiet(t *testing.T) {
 	argv := []string{"/bin/bk", "merge-child", "/state/merges/x"}
 	merge := Unit{Name: "beekeeper-merge-x", Argv: argv, TermIsSuccess: true}
 	want := func(success string) []string {
-		head := []string{userManager, "--collect", "--quiet", "--unit=beekeeper-merge-x", "-p", "KillMode=mixed", "-p", "SuccessExitStatus=" + success, "--"}
+		head := []string{userManager, "--collect", quietRun, "--unit=beekeeper-merge-x", "-p", "KillMode=mixed", "-p", "SuccessExitStatus=" + success, "--"}
 		return append(head, argv...)
 	}
 	if got := runArgs(merge, true); !slices.Equal(got, want(quietSuccess)) {
