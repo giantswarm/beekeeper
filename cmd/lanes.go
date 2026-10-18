@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
@@ -554,16 +555,21 @@ func (a *app) checkPlaces(ctx context.Context, by state.Party, now time.Time, la
 // document and exit code its runner left in the state directory, or from
 // GitHub when there is no document (a gate killed with its caller while
 // devctl merged on, a hung devctl ended, a gate stopped). A merge nothing
-// can judge (GitHub unanswered) is lost: it settles, once. It returns what
-// it recorded and the lost merges.
-func (a *app) recordGone(ctx context.Context) (recorded []string, lost []state.Merge) {
+// can judge (GitHub unanswered) is lost: it settles, once. A run cut before
+// any merge-child wrote its exit code (cutRun: killed with the machine or
+// the desktop) is recorded as cut, once, and its outcome owed to its owner
+// (cutOwed), which the watch hands over from GitHub's answer. It returns
+// what it recorded, the cut runs and the lost merges.
+func (a *app) recordGone(ctx context.Context) (recorded, cut []string, lost []state.Merge) {
 	st, err := a.store.Read()
 	if err != nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	gone := func(m state.Merge) bool {
 		return m.Phase == state.Running && !proc.Alive(m.PID) && (!proc.Alive(m.Child) || exited(mergeBase(a.store.Dir(), m.Repo, m.PR)))
 	}
+	isCut := func(m state.Merge) bool { return cutRun(a.store.Dir(), m, proc.Alive) }
+	var cutBases []string
 	runs := map[string]runOutcome{}
 	for _, m := range st.Merges {
 		if !gone(m) {
@@ -580,11 +586,30 @@ func (a *app) recordGone(ctx context.Context) (recorded []string, lost []state.M
 		}
 		runs[m.Key()] = r
 	}
-	if len(runs) == 0 && !slices.ContainsFunc(st.Merges, gone) {
-		return nil, nil
+	if len(runs) == 0 && !slices.ContainsFunc(st.Merges, gone) && !slices.ContainsFunc(st.Merges, isCut) {
+		return nil, nil, nil
 	}
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		var evs []state.Event
+		now := a.now.UTC()
+		// Judged under the lock, before the records below take the runs
+		// out of their phase: once owed, a cut is never owed again.
+		for i, m := range st.Merges {
+			if !isCut(m) {
+				continue
+			}
+			if m.Run != "" {
+				cutBases = append(cutBases, m.Run)
+			}
+			st.Merges[i].Run = ""
+			e := event(watchParty, "merge.cut", "%s in lane %s: %s", m.Key(), m.Lane, cutText(m))
+			if m.By.Session != "" || m.By.HostSession != "" {
+				st.Owed = append(st.Owed, cutOwed(m, now))
+				e.Detail += fmt.Sprintf("; its outcome is owed to %q", m.By.Name)
+			}
+			evs = append(evs, e)
+			cut = append(cut, e.Detail)
+		}
 		for key, r := range runs {
 			i := slices.IndexFunc(st.Merges, func(m state.Merge) bool { return m.Key() == key && gone(m) })
 			if i < 0 {
@@ -593,7 +618,7 @@ func (a *app) recordGone(ctx context.Context) (recorded []string, lost []state.M
 			m := st.Merges[i]
 			lane, _ := a.cfg.LaneNamed(m.Lane)
 			lane.Name = m.Lane
-			ev := recordRun(st, i, lane, watchParty, r, a.now.UTC(), fmt.Sprintf(" (for %q, whose gate, pid %d, is gone)", m.By.Name, m.PID))
+			ev := recordRun(st, i, lane, watchParty, r, now, fmt.Sprintf(" (for %q, whose gate, pid %d, is gone)", m.By.Name, m.PID))
 			evs = append(evs, ev...)
 			recorded = append(recorded, ev[len(ev)-1].Detail)
 			removeMergeFiles(mergeBase(a.store.Dir(), m.Repo, m.PR))
@@ -605,9 +630,61 @@ func (a *app) recordGone(ctx context.Context) (recorded []string, lost []state.M
 		return evs, nil
 	})
 	if err != nil {
-		return nil, nil
+		return nil, nil, nil
 	}
-	return recorded, lost
+	for _, base := range cutBases {
+		removeMergeFiles(base)
+	}
+	return recorded, cut, lost
+}
+
+// cutRun says whether m is a gated run cut before any of its merge-children
+// wrote its exit code, so that none owes its outcome: a running merge whose
+// gate and devctl's merge-child are gone without devctl's exit code, or a
+// queued merge's own run (m.Run) cut, waiting or running. A merge-child that
+// wrote its exit code owes the outcome itself (tellOwner); a queued run's
+// removes its files once it did, so only a cut one leaves its pid behind.
+func cutRun(stateDir string, m state.Merge, alive func(int) bool) bool {
+	queuedCut := func() bool {
+		pid := readPID(m.Run)
+		return pid != 0 && !alive(pid) && !exited(m.Run)
+	}
+	switch m.Phase {
+	case state.Running:
+		return !alive(m.PID) && !alive(m.Child) && !exited(mergeBase(stateDir, m.Repo, m.PR)) && (m.Run == "" || queuedCut())
+	case state.Waiting:
+		return m.Run != "" && !alive(m.PID) && queuedCut()
+	}
+	return false
+}
+
+// cutStop names what cut a run that left no exit code, for its owed line.
+const cutStop = "a shutdown or a crash (its gate and merge-child gone without devctl's exit code)"
+
+// cutText says how m's run was cut.
+func cutText(m state.Merge) string {
+	if m.Phase == state.Waiting {
+		return fmt.Sprintf("its queued run (pid %d) was cut while it waited for its turn, before devctl ran", m.PID)
+	}
+	return fmt.Sprintf("its gate (pid %d) and devctl were cut before devctl's exit code: whether it merged is GitHub's to say", m.PID)
+}
+
+// cutOwed is the outcome of m's cut run owed to its owner: a merge's from its
+// pull request's state on GitHub (owedLine), a promotion's as the cut
+// itself. Its gate and merge-child are gone, so the watch hands it over at
+// once.
+func cutOwed(m state.Merge, now time.Time) state.Owed {
+	o := state.Owed{Owner: m.By, Gate: m.PID, Child: cmp.Or(m.Child, m.PID), Since: now, Tried: now.Add(-owedRetry), Stop: cutStop}
+	if m.PR == 0 {
+		o.Command = merge.Tool + " release promote " + m.Repo
+		o.Line = fmt.Sprintf("%s was stopped by %s before devctl reported its end: check whether %s's release candidate was promoted, and run it again only if not",
+			o.Command, cutStop, m.Repo)
+		return o
+	}
+	o.Command = fmt.Sprintf("%s pr merge %s %d", merge.Tool, m.Repo, m.PR)
+	o.Ask, o.Repo, o.PR = true, m.Repo, m.PR
+	o.Line = fmt.Sprintf("%s was stopped by %s before devctl reported its end: check %s#%d, and run it again only if it is still open", o.Command, cutStop, m.Repo, m.PR)
+	return o
 }
 
 // exited says whether the devctl of the merge whose files are at base wrote

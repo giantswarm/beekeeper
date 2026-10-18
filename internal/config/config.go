@@ -19,6 +19,7 @@ import (
 	"math"
 	"net"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -1104,8 +1105,8 @@ type Units struct {
 // reads them every Every and prints NEW and RESOLVED lines, snapshot adds
 // the current set as a section.
 type Alerts struct {
-	// Installations are read always; a held lease whose name resolves to a
-	// kube context is read too.
+	// Installations are read always; the discovered ones (Discover) and a
+	// held lease whose name resolves to a kube context are read too.
 	Installations []Installation `yaml:"installations"`
 	// Ignore are alert names that never appear; setting it replaces the
 	// default (Watchdog).
@@ -1151,7 +1152,34 @@ type Alerts struct {
 	// PagerDuty is the second alert source: the team's PagerDuty services'
 	// open incidents.
 	PagerDuty PagerDuty `yaml:"pagerduty"`
+	// Discover adds every installation that carries the team's
+	// HelmReleases.
+	Discover Discover `yaml:"discover"`
 }
+
+// Discover finds the installations to read beyond alerts.installations:
+// every cluster Teleport lists (tsh kube ls, teleport.tsh on
+// teleport.home), but the excluded ones, that carries a HelmRelease
+// labelled Label=alerts.team. One without a kube context is logged into the
+// first file of alerts.kubeconfig that is not the machine kubeconfig
+// (KUBECONFIG=<file> tsh kube login <cluster>), so its reads need no
+// context in the person's kubeconfig. The watch discovers every Every and
+// keeps the result (alerts-discovery.json in the state directory), which
+// every reading of the alerts adds to its installations.
+type Discover struct {
+	// Every is the discovery's interval; unset, nothing is discovered.
+	Every Duration `yaml:"every"`
+	// Label is the HelmRelease label naming the team (default
+	// application.giantswarm.io/team).
+	Label string `yaml:"label"`
+	// Exclude are the glob patterns of Teleport cluster names never read
+	// (default "*-*", a workload cluster's <installation>-<cluster>, and
+	// "*.*", the proxy's own).
+	Exclude []string `yaml:"exclude"`
+}
+
+// Enabled says whether installations are discovered.
+func (d Discover) Enabled() bool { return d.Every.Duration > 0 }
 
 // PagerDuty configures the reading of the open incidents of the team's
 // PagerDuty services, through muster's read-only PagerDuty tools as the
@@ -1947,6 +1975,10 @@ func (c *Config) defaults() error {
 	setDur(&al.OwnerGrace, 15*time.Minute)
 	setStr(&al.PagerDuty.Server, "pd")
 	setDur(&al.PagerDuty.Every, time.Minute)
+	setStr(&al.Discover.Label, "application.giantswarm.io/team")
+	if al.Discover.Exclude == nil {
+		al.Discover.Exclude = []string{"*-*", "*.*"}
+	}
 	setDur(&c.Upgrades.Every, 5*time.Minute)
 	if c.Notify.Kinds == nil {
 		c.Notify.Kinds = slices.Clone(notify.Kinds)
@@ -2187,6 +2219,14 @@ func (c *Config) validate() error {
 	}
 	if pd := c.Alerts.PagerDuty; pd.Enabled() && len(pd.Services) == 0 {
 		return fmt.Errorf("alerts.pagerduty.services: reading PagerDuty through muster context %s needs the team's service ids", pd.Context)
+	}
+	if d := c.Alerts.Discover; d.Enabled() && c.Alerts.Team == "" {
+		return errors.New("alerts.discover: discovering the installations that carry the team's HelmReleases needs alerts.team")
+	}
+	for _, p := range c.Alerts.Discover.Exclude {
+		if _, err := path.Match(p, ""); err != nil {
+			return fmt.Errorf("alerts.discover.exclude: %q: %w", p, err)
+		}
 	}
 	for i, in := range c.Alerts.Installations {
 		if in.Name == "" {
