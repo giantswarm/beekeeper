@@ -1009,7 +1009,7 @@ func shiftMatch(m []int, off int) []int {
 }
 
 func answer(o hookOutput) []byte {
-	o.HookEventName = "PreToolUse"
+	o.HookEventName = PreToolUseEvent
 	var b bytes.Buffer
 	enc := json.NewEncoder(&b)
 	enc.SetEscapeHTML(false)

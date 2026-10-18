@@ -349,7 +349,7 @@ again once the extension is connected.`,
 			if steps == "" {
 				return usageErr("browse needs the steps to run")
 			}
-			return a.browse(cmd.Context(), steps, dir, model, wait, strings.TrimSpace(deploy), files)
+			return a.browse(cmd.Context(), steps, dir, model, wait, strings.TrimSpace(deploy), files, nil)
 		},
 	}
 	c.Flags().StringVar(&model, "model", "", "the turn's model (default: Claude Code's)")
@@ -360,7 +360,10 @@ again once the extension is connected.`,
 	return c
 }
 
-func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Duration, deploy string, files []string) error {
+// browse runs the steps in a headless turn and prints its report and
+// findings; a capture turn (blind) collects them in blind.out instead, for
+// its caller to print once the value is stored and scrubbed.
+func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Duration, deploy string, files []string, blind *blindTurn) error {
 	// A file the steps cannot upload is refused before anything starts.
 	if err := checkUploads(files); err != nil {
 		return err
@@ -375,6 +378,9 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	}
 	consents, lab := appsNamed(guardAppsOf(st), steps), namesLoopback(steps)
 	id := uuid.NewString()
+	if blind != nil {
+		blind.id = id
+	}
 	// The turn's start record has the hook act in it wherever it runs; the
 	// turn over, the record goes.
 	me, _ := a.caller()
@@ -400,35 +406,49 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	if err != nil {
 		return err
 	}
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
 	env := browseEnv(os.Environ())
 	if stage != "" {
 		env = append(env, stageRootEnv+"="+stage)
 	}
+	out := a.out
+	if blind != nil {
+		out = &blind.out
+	}
 	// turn runs one headless turn of the session under its own timeout and
 	// prints its report.
 	turn := func(argv []string) (string, error) {
+		if blind != nil {
+			argv = blind.shape(argv, self)
+		}
 		ctx, cancel := context.WithTimeout(ctx, wait)
 		defer cancel()
 		c := exec.CommandContext(ctx, bin, argv...) //nolint:gosec // the claude CLI on PATH
 		c.Dir = dir
 		c.Env = env
 		c.Stderr = os.Stderr
-		out, err := c.Output()
+		if blind != nil {
+			c.Stderr = &blind.out
+		}
+		stdout, err := c.Output()
 		if ctx.Err() != nil {
 			err = fmt.Errorf("the browse turn did not end within %s and was stopped: a page waiting on a person (a sign-in form, a dialog) is the usual cause", wait)
 		}
-		report := strings.TrimSpace(string(out))
-		if _, werr := fmt.Fprintln(a.out, report); werr != nil {
+		report := strings.TrimSpace(string(stdout))
+		if _, werr := fmt.Fprintln(out, report); werr != nil {
 			return report, werr
 		}
 		return report, err
 	}
-	self, err := os.Executable()
-	if err != nil {
-		return err
-	}
 	rules := browseRules(deploy, consents, lab)
-	report, err := turn(browseArgv(id, model, browsePrompt(steps, deploy, consents, lab, shared), self, rules, false))
+	prompt := browsePrompt(steps, deploy, consents, lab, shared)
+	if blind != nil {
+		prompt = blindPrompt(steps, deploy, consents, lab, blind.match)
+	}
+	report, err := turn(browseArgv(id, model, prompt, self, rules, false))
 	path := transcriptOf(a.cfg, id)
 	if path == "" {
 		return errors.Join(err, fmt.Errorf("browse turn %s left no transcript", id))
@@ -451,7 +471,7 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	if len(shots) == 0 {
 		lines = append(lines, "screenshot: none taken")
 	}
-	if _, werr := fmt.Fprintln(a.out, strings.Join(lines, "\n")); werr != nil {
+	if _, werr := fmt.Fprintln(out, strings.Join(lines, "\n")); werr != nil {
 		return werr
 	}
 	return errors.Join(err, ferr, serr, found.lostErr(report), found.tabsErr())

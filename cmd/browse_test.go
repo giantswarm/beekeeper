@@ -413,7 +413,7 @@ func TestBrowseReconnects(t *testing.T) {
 	writeFile(t, transcript+".2", chromeUse("t4", "list_connected_browsers", `{}`)+chromeAnswer("t4", oneBrowser)+
 		chromeUse("t5", "computer", deployClick)+chromeAnswer("t5", "Clicked on element ref_9"))
 	writeFile(t, reportFile+".2", "Clicked Deploy agent; the page says deployed.\n")
-	if err := a.browse(t.Context(), steps, bin, "", time.Minute, "", nil); err != nil {
+	if err := a.browse(t.Context(), steps, bin, "", time.Minute, "", nil, nil); err != nil {
 		t.Fatalf("browse with a reconnect that found the browser: %v\n%s", err, out.String())
 	}
 	got := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
@@ -442,7 +442,7 @@ func TestBrowseReconnects(t *testing.T) {
 	}
 	writeFile(t, transcript+".2", chromeUse("t4", "list_connected_browsers", `{}`)+chromeAnswer("t4", noBrowsers))
 	writeFile(t, reportFile+".2", lostLine+"\n"+notDoneLines+"\n")
-	err := a.browse(t.Context(), steps, bin, "", time.Minute, "", nil)
+	err := a.browse(t.Context(), steps, bin, "", time.Minute, "", nil, nil)
 	if err == nil || err.Error() != lostLine+" at "+deployCall+": the reconnect turn found no browser; steps not done, to run again once the extension is connected (list_connected_browsers): "+
 		"Click Deploy agent once; Report what the page says" {
 		t.Errorf("browse with a reconnect that found no browser: %v", err)
@@ -465,7 +465,7 @@ func TestBrowseReconnects(t *testing.T) {
 	writeFile(t, transcript+".1", lostTurn+chromeUse("t4", "list_connected_browsers", `{}`)+chromeAnswer("t4", oneBrowser)+
 		chromeUse("t5", "computer", deployClick)+chromeAnswer("t5", "Clicked on element ref_9"))
 	writeFile(t, reportFile+".1", "Clicked Deploy agent after a reconnect; the page says deployed.\n")
-	if err := a.browse(t.Context(), steps, bin, "", time.Minute, "", nil); err != nil {
+	if err := a.browse(t.Context(), steps, bin, "", time.Minute, "", nil, nil); err != nil {
 		t.Fatalf("browse with a connection that came back: %v\n%s", err, out.String())
 	}
 	got = strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
@@ -512,7 +512,7 @@ func TestBrowseRunsTheTurn(t *testing.T) {
 	// Without the flag the turn gets no settings, and its refused click is
 	// named below the report with the flag to declare it.
 	writeFile(t, transcript, click+`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"`+denial+`"}]}}`+"\n")
-	if err := a.browse(t.Context(), steps, bin, "", time.Minute, "", nil); err != nil {
+	if err := a.browse(t.Context(), steps, bin, "", time.Minute, "", nil, nil); err != nil {
 		t.Fatalf("browse: %v\n%s", err, out.String())
 	}
 	got := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
@@ -532,7 +532,7 @@ func TestBrowseRunsTheTurn(t *testing.T) {
 	const deploy = "the demo agent to the demo cluster"
 	writeFile(t, transcript, click+`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":false,"content":"Clicked"}]}}`+"\n")
 	out.Reset()
-	if err := a.browse(t.Context(), steps, bin, "", time.Minute, deploy, nil); err != nil {
+	if err := a.browse(t.Context(), steps, bin, "", time.Minute, deploy, nil, nil); err != nil {
 		t.Fatalf("browse --allow-deploy: %v\n%s", err, out.String())
 	}
 	got = strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
@@ -668,7 +668,7 @@ func TestBrowseTurnWithARecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	steps := "Open https://" + recordedCallback + "/connect/github. On GitHub's page '" + recordedTitle + "' click Authorize once; report the final URL."
-	if err := a.browse(t.Context(), steps, bin, "", time.Minute, "", nil); err != nil {
+	if err := a.browse(t.Context(), steps, bin, "", time.Minute, "", nil, nil); err != nil {
 		t.Fatalf("browse: %v\n%s", err, out.String())
 	}
 	got := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
@@ -732,7 +732,7 @@ func TestBrowseSharesFiles(t *testing.T) {
 	writeFile(t, log, "log lines\n")
 	const steps = "Open the demo page. Attach shot.png and run.log through its file input."
 
-	if err := a.browse(t.Context(), steps, bin, "", time.Minute, "", []string{shot, log}); err != nil {
+	if err := a.browse(t.Context(), steps, bin, "", time.Minute, "", []string{shot, log}, nil); err != nil {
 		t.Fatalf("browse --file: %v\n%s", err, out.String())
 	}
 	got := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
@@ -786,7 +786,7 @@ func TestBrowseSharesFiles(t *testing.T) {
 		if err := os.Remove(argvFile); err != nil {
 			t.Fatal(err)
 		}
-		err := a.browse(t.Context(), steps, bin, "", time.Minute, "", c.files)
+		err := a.browse(t.Context(), steps, bin, "", time.Minute, "", c.files, nil)
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("browse --file %s: %v, want %q", name, err, c.want)
 		}

@@ -555,6 +555,7 @@ in the person's settings.`,
 			return nil
 		},
 	})
+	c.AddCommand(a.capturePageHookCmd())
 	c.AddCommand(&cobra.Command{
 		Use:   "permissionrequest",
 		Short: "The PermissionRequest hook: no card for beekeeper's own bypass starts after the desktop import",
