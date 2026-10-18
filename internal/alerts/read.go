@@ -68,7 +68,11 @@ type Target struct {
 	Why     string `json:"why"`
 }
 
-// Targets are the configured installations, then every leased one whose name
+// WhyConfigured is the reason a configured installation is read.
+const WhyConfigured = "configured"
+
+// Targets are the configured installations (a reason given kept, else
+// WhyConfigured), then every leased one whose name
 // resolves to a kube context (a kind lab's or the browser's does not), each
 // with its context resolved (template: ResolveContext's).
 func Targets(configured []Target, leased map[string]string, template func(string) string, contexts []string) []Target {
@@ -78,7 +82,7 @@ func Targets(configured []Target, leased map[string]string, template func(string
 		if _, ok := seen[t.Name]; ok {
 			continue
 		}
-		t.Context, t.Why = ResolveContext(t.Name, t.Context, template, contexts), "configured"
+		t.Context, t.Why = ResolveContext(t.Name, t.Context, template, contexts), cmp.Or(t.Why, WhyConfigured)
 		seen[t.Name] = len(out)
 		out = append(out, t)
 	}
@@ -164,15 +168,10 @@ func (r *Reader) Contexts(ctx context.Context) []string {
 		}
 		r.mu.Unlock()
 	}
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	cmd := proc.Command(ctx, r.Kubectl, "config", "get-contexts", "-o", "name") //nolint:gosec // kubectl from the configuration
-	proc.Kubeconfig(cmd, r.Kubeconfig)
-	out, err := cmd.Output()
-	if err != nil {
+	contexts := kubeContexts(ctx, r.Kubectl, r.Kubeconfig)
+	if contexts == nil {
 		return nil
 	}
-	contexts := strings.Fields(string(out))
 	if r.Keep {
 		r.mu.Lock()
 		r.contexts, r.stamp = contexts, stamp

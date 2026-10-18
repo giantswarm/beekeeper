@@ -43,8 +43,9 @@ monitoring/kube-prometheus-stack-alertmanager:9093): active, unsilenced and
 uninhibited alerts, the names in alerts.ignore left out. alerts.team's alerts
 that only InhibitionOutsideWorkingHours inhibits are read too: working hours
 keep them from paging, not from the watch. The installations are
-alerts.installations plus every held lease whose name resolves to a kube
-context, read in parallel, each within alerts.timeout; a failed port-forward
+alerts.installations, the ones alerts discover found carrying the team's
+HelmReleases (alerts.discover), and every held lease whose name resolves to
+a kube context, read in parallel, each within alerts.timeout; a failed port-forward
 or request is tried again until the timeout.
 
 beekeeper watch runs the watch every alerts.every; these commands run it
@@ -252,7 +253,47 @@ before the watch gets it. The baseline is read, never owned or written.`,
 		},
 	}
 	replay.Flags().DurationVar(&every, "every", 0, "the time between two readings (default alerts.every)")
-	c.AddCommand(watch, snapshot, imp, capture, replay, a.alertsOwnCmd(), a.alertsDisownCmd())
+	discover := &cobra.Command{
+		Use:   "discover",
+		Short: "Find the installations that carry the team's HelmReleases now, and keep them",
+		Long: `Discover once what beekeeper watch discovers every alerts.discover.every:
+every cluster Teleport lists, but alerts.discover.exclude, read for the
+HelmReleases labelled alerts.discover.label=alerts.team; one without a kube
+context is logged into the watch's own kubeconfig (the first file of
+alerts.kubeconfig that is not the machine kubeconfig) first. The ones that
+carry any are kept in the state directory, and every reading of the alerts
+adds those alerts.installations does not name. Prints each installation
+found with its context and releases, the ones that joined or left, and the
+ones that did not answer, which keep what the last discovery found.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if !a.cfg.Alerts.Discover.Enabled() {
+				return errors.New("alerts.discover.every is unset: nothing is discovered")
+			}
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			changed, unread, err := a.alertDiscovery(ctx)
+			if err != nil {
+				return err
+			}
+			d, err := alerts.LoadDiscovery(a.cfg.StateDir)
+			if err != nil {
+				return err
+			}
+			for _, name := range slices.Sorted(maps.Keys(d.Installations)) {
+				f := d.Installations[name]
+				_, _ = fmt.Fprintf(a.out, "%s %s %s\n", name, f.Context, strings.Join(f.Releases, ","))
+			}
+			for _, l := range changed {
+				_, _ = fmt.Fprintln(a.out, l)
+			}
+			for _, u := range unread {
+				_, _ = fmt.Fprintln(a.out, "unread "+u)
+			}
+			return nil
+		},
+	}
+	c.AddCommand(watch, snapshot, imp, capture, replay, discover, a.alertsOwnCmd(), a.alertsDisownCmd())
 	return c
 }
 
@@ -290,12 +331,17 @@ func (a *app) alertTargets(ctx context.Context) []alerts.Target {
 	return a.alertTargetsIn(a.alertReader().Contexts(ctx))
 }
 
-// alertTargetsIn are the configured installations and the leased ones,
-// their contexts resolved among contexts.
+// alertTargetsIn are the configured installations, the discovered and the
+// leased ones, their contexts resolved among contexts.
 func (a *app) alertTargetsIn(contexts []string) []alerts.Target {
 	var configured []alerts.Target
 	for _, in := range a.cfg.Alerts.Installations {
 		configured = append(configured, alerts.Target{Name: in.Name, Context: in.Context})
+	}
+	if a.cfg.Alerts.Discover.Enabled() {
+		if d, err := alerts.LoadDiscovery(a.cfg.StateDir); err == nil {
+			configured = append(configured, d.Targets(a.cfg.Alerts.Team, a.installationNames())...)
+		}
 	}
 	leased := map[string]string{}
 	if holders, err := lease.Dir(a.cfg.LeaseDir).List(); err == nil {
@@ -304,6 +350,46 @@ func (a *app) alertTargetsIn(contexts []string) []alerts.Target {
 		}
 	}
 	return alerts.Targets(configured, leased, a.cfg.Kube.Context, contexts)
+}
+
+// alertDiscoverer finds the installations that carry the team's
+// HelmReleases (alerts.discover).
+func (a *app) alertDiscoverer() alerts.Discoverer {
+	al := a.cfg.Alerts
+	return alerts.Discoverer{Tsh: a.cfg.Teleport.Tsh, TeleportHome: a.cfg.Teleport.Home, Kubectl: al.Kubectl,
+		Kubeconfig: a.alertKubeconfig(), Login: a.alertLoginFile(), Template: a.cfg.Kube.Context,
+		Exclude: al.Discover.Exclude, Label: al.Discover.Label, Team: al.Team, Timeout: al.Timeout.Duration}
+}
+
+// alertLoginFile is the kubeconfig of the watch's own that a discovered
+// installation without a context is logged into: the first file of
+// alerts.kubeconfig that is not the machine kubeconfig; none, "".
+func (a *app) alertLoginFile() string {
+	m := machineKubeconfig()
+	for _, f := range a.cfg.Alerts.Kubeconfig {
+		if f != m {
+			return f
+		}
+	}
+	return ""
+}
+
+// alertDiscovery discovers the installations once and keeps the result. It
+// returns the lines of the installations that joined or left and those of
+// the ones it could not read.
+func (a *app) alertDiscovery(ctx context.Context) (changed, unread []string, err error) {
+	prev, err := alerts.LoadDiscovery(a.cfg.StateDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	next, unread, err := a.alertDiscoverer().Discover(ctx, prev, time.Now())
+	if err != nil || ctx.Err() != nil {
+		return nil, nil, cmp.Or(err, ctx.Err())
+	}
+	if err := alerts.SaveDiscovery(a.cfg.StateDir, next); err != nil {
+		return nil, unread, err
+	}
+	return alerts.DiscoveryLines(prev, next, a.cfg.Alerts.Team, a.installationNames()), unread, nil
 }
 
 // alertCycle reads every installation once through r, returns the lines of
@@ -700,4 +786,28 @@ func (a *app) printAlerts(v *alertsView) {
 		}
 		p("PagerDuty: the open incidents of %s, read every %s through muster context %s: %s.", strings.Join(pd.Services, ", "), pd.Every, pd.Context, base)
 	}
+}
+
+// watchDiscovery discovers the installations that carry the team's
+// HelmReleases every alerts.discover.every, beginning with a restart only
+// once the kept discovery is that old, and says the ones that joined or
+// left; a failed listing of Teleport's clusters is a lasting condition.
+func (w *watcher) watchDiscovery(ctx context.Context) {
+	every := w.cfg.Alerts.Discover.Every.Duration
+	w.loop(ctx, every, true, func(ctx context.Context) {
+		if d, err := alerts.LoadDiscovery(w.cfg.StateDir); err == nil && time.Since(d.At) < every-time.Minute {
+			return
+		}
+		changed, _, err := w.alertDiscovery(ctx)
+		if err != nil {
+			if ctx.Err() == nil {
+				w.emit("discover", "ALERTS discovery failed: %v", err)
+			}
+			return
+		}
+		w.clear("discover")
+		for _, l := range changed {
+			w.emitNow("alerts", "%s", l)
+		}
+	})
 }
