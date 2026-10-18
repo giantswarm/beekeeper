@@ -591,7 +591,7 @@ func printsTurn(p *proc.Process) bool {
 }
 
 // roleTarget is the PreToolUse hook's lookup for a message to a role (the
-// supervisor, the guide): roleAddress of its holder now. A relay moves the
+// supervisor, the guide): relayAddress of its record now. A relay moves the
 // role, so a brief names the role, never the holder.
 func (a *app) roleTarget(name string) (string, error) {
 	if err := a.loadConfig(); err != nil {
@@ -609,11 +609,12 @@ func (a *app) roleTarget(name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	now := time.Now()
 	var sessions []*claude.Session
 	if t, err := plat.Machine.Processes(); err == nil {
-		sessions = claude.Discover(a.cfg, t, time.Now())
+		sessions = claude.Discover(a.cfg, t, now)
 	}
-	return roleAddress(rl.get(st).Holder, rl, sessions, liveSocket)
+	return relayAddress(rl.get(st), rl, sessions, liveSocket, now, rl.cfg(a.cfg).RelayTTL.Duration)
 }
 
 // liveSocket is the peer socket of the CLI pid, "" when it has none.
@@ -665,6 +666,27 @@ func holderRole(st *state.State, name string) string {
 		}
 	}
 	return ""
+}
+
+// relayAddress is where a message to rl goes: its holder's roleAddress,
+// except in the relay window: from the successor's start, for window, while
+// the successor's CLI takes no message (its headless first turn ending, its
+// desktop CLI not up yet), the outgoing holder the relay relieved gets it
+// while its own CLI does. Only the relay's From, never an older relieved run.
+func relayAddress(r state.Role, rl role, sessions []*claude.Session, sock func(pid int) string, now time.Time, window time.Duration) (string, error) {
+	rel := r.Relay
+	if r.Holder != nil && rel != nil && !rel.Taken.IsZero() && rel.To.Is(r.Holder.Party) && now.Sub(rel.Taken) < window &&
+		!reachable(sessions, r.Holder.Party, sock) && reachable(sessions, rel.From, sock) {
+		return roleAddress(&state.Supervisor{Party: rel.From}, rl, sessions, sock)
+	}
+	return roleAddress(r.Holder, rl, sessions, sock)
+}
+
+// reachable reports whether p's CLI runs and takes messages: its peer
+// socket is there.
+func reachable(sessions []*claude.Session, p state.Party, sock func(pid int) string) bool {
+	s, ok := claude.Live(sessions, p)
+	return ok && sock(s.PID) != ""
 }
 
 // roleAddress is where a message to rl's holder goes: the name its running
