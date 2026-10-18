@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -613,34 +612,23 @@ func TestFollowReadsOnlyTheNewLines(t *testing.T) {
 	}
 }
 
-func TestMemosOfAnOlderBeekeeperReadAsClosed(t *testing.T) {
-	doc := `{"nextNote": 5, "notes": [
-		{"id": 1, "kind": "memo", "text": "state of the watch", "by": {"name": "s"}},
-		{"id": 2, "kind": "decision", "pinned": true, "for": "Pat", "text": "report every merge", "by": {"name": "s"}},
-		{"id": 3, "for": "Guide", "text": "deferred work", "by": {"name": "s"}},
-		{"id": 4, "kind": "decision", "for": "Pat", "text": "merge it?", "by": {"name": "s"}},
-		{"id": 5, "kind": "login", "for": "Pat", "text": "sign in", "until": "true", "by": {"name": "s"}}],
-		"memos": [{"id": 0, "kind": "memo", "text": "moved before", "by": {"name": "s"}}]}`
+// An older beekeeper's memos are nobody's to read: the state document keeps
+// them as written through a save, and none of them is a note.
+func TestMemosOfAnOlderBeekeeperAreKeptUnread(t *testing.T) {
+	doc := `{"nextNote": 4, "notes": [{"id": 4, "kind": "decision", "for": "Pat", "text": "merge it?", "by": {"name": "s"}}],
+		"memos": [{"id": 1, "kind": "memo", "pinned": true, "text": "Board skip: o/r#10", "by": {"name": "s"}}]}`
 	var st State
 	if err := json.Unmarshal([]byte(doc), &st); err != nil {
 		t.Fatal(err)
 	}
-	var open, memos []int
-	for _, n := range st.Notes {
-		open = append(open, n.ID)
-	}
-	for _, n := range st.Memos {
-		memos = append(memos, n.ID)
-	}
-	if !slices.Equal(open, []int{4, 5}) || !slices.Equal(memos, []int{0, 1, 2, 3}) || !st.Memos[2].Pinned() {
-		t.Fatalf("open %v, memos %v", open, memos)
+	if len(st.Notes) != 1 || st.Notes[0].ID != 4 {
+		t.Fatalf("notes %+v", st.Notes)
 	}
 	raw, err := json.Marshal(st)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var again State
-	if err := json.Unmarshal(raw, &again); err != nil || len(again.Memos) != 4 || !again.Memos[2].Pinned() || len(again.Notes) != 2 {
-		t.Fatalf("a save keeps the memos apart, the pin with its memo: %s, %v", raw, err)
+	if !strings.Contains(string(raw), `"memos":[{"id":1,"kind":"memo","pinned":true,"text":"Board skip: o/r#10","by":{"name":"s"}}]`) {
+		t.Errorf("a save drops or rewrites the memos: %s", raw)
 	}
 }

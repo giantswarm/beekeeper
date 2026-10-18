@@ -31,8 +31,8 @@ func (a *app) handoverCmd() *cobra.Command {
 the running sessions and what each is on, leases and grant queues, holds,
 the merge lanes, registered agents, session records, the board's epics in
 planning and past their go with their plans (each plan's URL, state and
-head), the standing instructions (standing.md in the state directory and
-the pinned notes note migrate has not moved there, every one in full),
+head), the standing instructions (standing.md in the state directory, in
+full),
 open notes with their defaults, the decisions answered
 since the last relay, timers, what the alert watch reads and the latest
 events. Everything comes
@@ -105,7 +105,7 @@ always complete.`,
 			}
 			lanes := a.laneViews(v.st)
 			notes := a.splitNotes(v.st.Notes)
-			standing, err := a.readStanding(v.st)
+			standing, err := a.readStanding()
 			if err != nil {
 				return err
 			}
