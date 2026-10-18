@@ -155,7 +155,7 @@ const versionFlag = "--version"
 // repositories, --team, --dry-run, --help), which runs ungated.
 func ParsePromote(argv []string) (repo, version string, ok bool) {
 	i := slices.Index(argv, "promote")
-	if i < 2 || argv[i-1] != "release" {
+	if i < 2 || argv[i-1] != releaseCmd {
 		return "", "", false
 	}
 	for j := i + 1; j < len(argv); j++ {
@@ -219,13 +219,16 @@ func ParsePromoteCandidate(raw []byte) (candidate string, ok bool) {
 
 // owned are the subcommands of devctl that block until an outcome, which
 // the gate runs outside their caller so that the outcome reaches its owner.
-var owned = [][2]string{{"pr", "merge"}, {"pr", waitVerb}, {"release", waitVerb}, {"rollout", waitVerb}}
+var owned = [][2]string{{"pr", "merge"}, {"pr", waitVerb}, {releaseCmd, waitVerb}, {"rollout", waitVerb}}
 
-const waitVerb = "wait"
+const (
+	waitVerb   = "wait"
+	releaseCmd = "release"
+)
 
 // capped are the subcommands of devctl that count against merge.cap: the
 // merges and promotes. The waits only poll and run outside it.
-var capped = [][2]string{{"pr", "merge"}, {"release", "promote"}}
+var capped = [][2]string{{"pr", "merge"}, {releaseCmd, "promote"}}
 
 // ParseOwned reports whether argv is devctl pr merge, pr wait, release wait
 // or rollout wait, not a help call.

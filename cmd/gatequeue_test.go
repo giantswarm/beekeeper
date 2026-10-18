@@ -78,14 +78,15 @@ func hostDevctl(t *testing.T, argv ...[]string) {
 // the host's own.
 func hostDevctls(t *testing.T, n int) {
 	t.Helper()
-	hostDevctl(t, devctlArgv(n, "pr", "merge")...)
+	hostDevctl(t, devctlArgv(n, "pr merge")...)
 }
 
-// devctlArgv is n devctl command lines of the subcommand verb.
-func devctlArgv(n int, verb ...string) [][]string {
+// devctlArgv is n devctl command lines of the subcommand sub, its words
+// separated by spaces.
+func devctlArgv(n int, sub string) [][]string {
 	out := make([][]string, n)
 	for i := range out {
-		out[i] = append(append([]string{merge.Tool}, verb...), "o/x", strconv.Itoa(i+1))
+		out[i] = append(append([]string{merge.Tool}, strings.Fields(sub)...), "o/x", strconv.Itoa(i+1))
 	}
 	return out
 }
