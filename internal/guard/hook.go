@@ -75,7 +75,10 @@ var (
 	// shellC: a shell's -c option, or eval, up to the quote opening its
 	// command string.
 	shellC = regexp.MustCompile(`(?:^|[\s;&|(/])(?:(?:ba|z|da|k)?sh\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*c[a-zA-Z]*|eval)\s+(['"])`)
-	lab    = regexp.MustCompile(`(?m)` + pos + `(agentlab\s+up\b|kind\s+create\s+cluster\b)`)
+	// shellCArg: the same, up to its command string's first word, quoted or
+	// bare; the group is eval's.
+	shellCArg = regexp.MustCompile(`(?:^|[\s;&|(/])(?:(?:ba|z|da|k)?sh\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*c[a-zA-Z]*|(eval))\s+`)
+	lab       = regexp.MustCompile(`(?m)` + pos + `(agentlab\s+up\b|kind\s+create\s+cluster\b)`)
 	// labRuntime: a lab's creation or teardown, which takes the container
 	// runtime's socket the agent sandbox closes.
 	labRuntime = regexp.MustCompile(`(?m)` + pos + `(agentlab\s+(?:--lab[= ]\s*\S+\s+)?(?:up|down)\b|kind\s+(?:create|delete)\s+clusters?\b)`)
@@ -360,9 +363,14 @@ func (h Hook) decide(ev event) []byte {
 	}
 	bg, _ := ev.ToolInput[backgroundKey].(bool)
 	cmd, gated := h.gate(cmd, bg)
-	if fixed, ok := h.hiddenMerges(cmd, bg); ok {
+	fixed, hidden, unread := h.hiddenMerges(cmd, bg)
+	if hidden {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused: a devctl pr merge, release promote, pr wait, release wait or rollout wait " +
 			"inside a shell's -c or eval string runs outside the gate. Run it as its own command, or with the gate written in:\n" + fixed})
+	}
+	if unread {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused: a shell's -c or eval string names devctl in a form the merge gate cannot read " +
+			"(a command substitution, a quote left open), so a merge, promote or wait in it would run outside the gate. Run devctl as its own command."})
 	}
 	if r := h.ungatedRefusal(cmd, cwd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
@@ -415,7 +423,7 @@ func (h Hook) gate(cmd string, bg bool) (string, bool) {
 			at = append(at, m[2])
 		}
 	}
-	return h.insertGate(cmd, at, bg), len(at) > 0
+	return h.insertGate(cmd, at, bg, nil), len(at) > 0
 }
 
 var (
@@ -625,39 +633,223 @@ func shellReads(sc shellScan, segs []segment, op int) bool {
 
 // hiddenMerges returns cmd with the gate before each blocking devctl command
 // the gate rewrite left inside a sh, bash or zsh -c string or an eval string,
-// and whether there was one. A -c or eval that is text, inside a quoted
-// argument or a here-document no shell reads (a PR body naming one), runs
-// nothing.
+// and whether there was one. The string is read as the shell builds it
+// (commandString): adjacent quoted and bare pieces joined. A -c or eval that
+// is text, inside a quoted argument or a here-document no shell reads (a PR
+// body naming one), runs nothing.
 // The hook refuses such a command rather than rewriting a quoted string.
-func (h Hook) hiddenMerges(cmd string, bg bool) (string, bool) {
+// unread reports a string the parser cannot resolve that names devctl other
+// than gated: what it runs is unknown, so it fails closed.
+func (h Hook) hiddenMerges(cmd string, bg bool) (fixed string, hidden, unread bool) {
 	sc := scanShell(cmd)
 	content := contentBodies(sc)
 	var at []int
-	for _, m := range shellC.FindAllStringSubmatchIndex(cmd, -1) {
-		if inRanges(content, m[2]) || sc.masked[m[2]] != cmd[m[2]] && !inHeredoc(sc, m[2]) {
+	bare := map[int]bool{}
+	for _, m := range shellCArg.FindAllStringSubmatchIndex(cmd, -1) {
+		w := m[1]
+		if w == len(cmd) || inRanges(content, w) || sc.masked[w] != cmd[w] && !inHeredoc(sc, w) {
 			continue
 		}
-		body := cmd[m[1]:]
-		end := closingQuote(body, cmd[m[2]])
-		for _, mm := range anyOwned.FindAllStringIndex(body[:end], -1) {
-			if !gated.MatchString(body[:mm[0]]) {
-				at = append(at, m[1]+mm[0])
+		cs := commandString(cmd[w:], m[2] >= 0)
+		var owned []int
+		for _, mm := range anyOwned.FindAllStringIndex(cs.text, -1) {
+			owned = append(owned, mm[0])
+			if at1 := w + cs.offs[mm[0]]; !gated.MatchString(cs.text[:mm[0]]) && !slices.Contains(at, at1) {
+				at = append(at, at1)
+				bare[at1] = cs.bare[mm[0]]
 			}
 		}
+		if cs.resolved {
+			continue
+		}
+		for _, mm := range devctlMention.FindAllStringIndex(cs.text, -1) {
+			unread = unread || !slices.Contains(owned, mm[0]) && !gated.MatchString(cs.text[:mm[0]])
+		}
 	}
-	return h.insertGate(cmd, at, bg), len(at) > 0
+	slices.Sort(at)
+	return h.insertGate(cmd, at, bg, bare), len(at) > 0, unread
+}
+
+// cString is a shell's -c or eval command string as the shell builds it: its
+// text, the offset in the command line's word of each byte, and whether each
+// stands bare (unquoted). resolved is false for a string the parser cannot
+// resolve, whose text is the rest of the line as written.
+type cString struct {
+	text     string
+	offs     []int
+	bare     []bool
+	resolved bool
+}
+
+// commandString is the command string a shell's -c option or eval runs from
+// s, the text from its first word on: the word with its quotes removed, $'…'
+// escapes decoded, and its adjacent single-quoted, double-quoted, $'…' and
+// bare pieces joined (for eval every word up to the end of its command,
+// joined by a space). A word the parser cannot resolve (a quote left open, a
+// command substitution) fails closed: the rest of s, as written, unresolved.
+func commandString(s string, eval bool) cString {
+	var text []byte
+	var offs []int
+	var bare []bool
+	add := func(b byte, i int, unquoted bool) {
+		text, offs, bare = append(text, b), append(offs, i), append(bare, unquoted)
+	}
+	put := func(i int, unquoted bool) { add(s[i], i, unquoted) }
+	done := func() cString { return cString{string(text), offs, bare, true} }
+	unresolved := func() cString {
+		offs, bare = make([]int, len(s)), make([]bool, len(s))
+		for i := range offs {
+			offs[i] = i
+		}
+		return cString{s, offs, bare, false}
+	}
+	const ends = "\n;&|()<>"
+	for i := 0; i < len(s); {
+		c := s[i]
+		switch {
+		case c == ' ' || c == '\t':
+			j := i
+			for j < len(s) && (s[j] == ' ' || s[j] == '\t') {
+				j++
+			}
+			if !eval || j == len(s) || strings.IndexByte(ends, s[j]) >= 0 {
+				return done()
+			}
+			add(' ', i, true)
+			i = j
+		case strings.IndexByte(ends, c) >= 0:
+			return done()
+		case c == '`', c == '$' && strings.HasPrefix(s[i:], "$("):
+			return unresolved()
+		case c == '\'':
+			j := strings.IndexByte(s[i+1:], '\'')
+			if j < 0 {
+				return unresolved()
+			}
+			for k := i + 1; k <= i+j; k++ {
+				put(k, false)
+			}
+			i += j + 2
+		case c == '$' && strings.HasPrefix(s[i:], "$'"):
+			for i += 2; i < len(s) && s[i] != '\''; {
+				if s[i] != '\\' {
+					put(i, false)
+					i++
+					continue
+				}
+				b, n := ansiC(s[i:])
+				for _, x := range b {
+					add(x, i, false)
+				}
+				i += n
+			}
+			if i >= len(s) {
+				return unresolved()
+			}
+			i++
+		case c == '"':
+			for i++; i < len(s) && s[i] != '"'; i++ {
+				switch {
+				case s[i] == '`' || strings.HasPrefix(s[i:], "$("):
+					return unresolved()
+				case s[i] == '\\' && i+1 < len(s) && s[i+1] == '\n':
+					i++
+					continue
+				case s[i] == '\\' && i+1 < len(s) && strings.IndexByte("\"\\$`", s[i+1]) >= 0:
+					i++
+				}
+				put(i, false)
+			}
+			if i == len(s) {
+				return unresolved()
+			}
+			i++
+		case c == '\\' && i+1 < len(s):
+			if s[i+1] != '\n' {
+				put(i+1, true)
+			}
+			i += 2
+		default:
+			put(i, true)
+			i++
+		}
+	}
+	return done()
+}
+
+// devctlMention: devctl named anywhere, by name or path.
+var devctlMention = regexp.MustCompile(`(?:(?:~|\.\.?|\$\{?\w+\}?)?/(?:[^\s;&|()'"<>=]*/)?)?devctl\b`)
+
+// ansiC decodes the escape s starts with inside $'…', as bash does: the bytes
+// it stands for and its length in s.
+func ansiC(s string) ([]byte, int) {
+	if len(s) < 2 {
+		return []byte(s), len(s)
+	}
+	if b, ok := map[byte]byte{'a': 7, 'b': 8, 'e': 27, 'E': 27, 'f': 12, 'n': '\n', 'r': '\r', 't': '\t', 'v': 11,
+		'\\': '\\', '\'': '\'', '"': '"', '?': '?'}[s[1]]; ok {
+		return []byte{b}, 2
+	}
+	// digits reads up to most digits of base from s[from:]: their value, wrapped
+	// as bash wraps it, and the end offset.
+	digits := func(from, most int, base rune) (rune, int) {
+		var v rune
+		n := from
+		for ; n < len(s) && n < from+most; n++ {
+			d, c := base, rune(s[n])
+			switch {
+			case c >= '0' && c <= '9':
+				d = c - '0'
+			case c >= 'a' && c <= 'f':
+				d = c - 'a' + 10
+			case c >= 'A' && c <= 'F':
+				d = c - 'A' + 10
+			}
+			if d >= base {
+				break
+			}
+			v = v*base + d
+		}
+		return v, n
+	}
+	switch c := s[1]; {
+	case c >= '0' && c <= '7':
+		v, n := digits(1, 3, 8)
+		return []byte{byte(v & 0xff)}, n
+	case c == 'x':
+		if v, n := digits(2, 2, 16); n > 2 {
+			return []byte{byte(v & 0xff)}, n
+		}
+	case c == 'u' || c == 'U':
+		most := 4
+		if c == 'U' {
+			most = 8
+		}
+		if v, n := digits(2, most, 16); n > 2 {
+			return []byte(string(v)), n
+		}
+	case c == 'c' && len(s) > 2:
+		return []byte{s[2] & 0x1f}, 3
+	}
+	return []byte(s[:2]), 2
 }
 
 // insertGate puts the gate before each offset in at, in ascending order; a
 // background merge waits up to 30 minutes for its turn (a wait has none) and
 // runs without the tool limit, as no Bash call limit stops a background task.
-func (h Hook) insertGate(cmd string, at []int, bg bool) string {
+// An offset bare names stands unquoted in its word: the gate's blanks are
+// escaped there, so that the word stays one.
+func (h Hook) insertGate(cmd string, at []int, bg bool, bare map[int]bool) string {
 	gate := ShellQuote(h.Self) + " gate -- "
 	if bg {
 		gate = ShellQuote(h.Self) + " gate --wait 30m --limit 0 -- "
 	}
 	for i := len(at) - 1; i >= 0; i-- {
-		cmd = cmd[:at[i]] + gate + cmd[at[i]:]
+		g := gate
+		if bare[at[i]] {
+			g = strings.ReplaceAll(gate, " ", `\ `)
+		}
+		cmd = cmd[:at[i]] + g + cmd[at[i]:]
 	}
 	return cmd
 }

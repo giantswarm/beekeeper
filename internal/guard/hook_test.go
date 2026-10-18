@@ -758,6 +758,23 @@ func TestHookRefusesHiddenMerges(t *testing.T) {
 		{self + ` run -- zsh -c 'devctl pr merge o/r 7'`, self + ` run -- zsh -c '` + g + `devctl pr merge o/r 7'`, false},
 		{`bash -c 'devctl pr wait o/r 7'`, `bash -c '` + g + `devctl pr wait o/r 7'`, false},
 		{`eval "devctl pr merge o/r 7"`, `eval "` + g + `devctl pr merge o/r 7"`, false},
+		// Adjacent quoted and bare pieces are one -c string, as the shell joins them.
+		{`bash -c 'cd x; '"devctl pr merge o/r 7"`, `bash -c 'cd x; '"` + g + `devctl pr merge o/r 7"`, false},
+		{`sh -c "cd x; "'devctl pr merge o/r 7'`, `sh -c "cd x; "'` + g + `devctl pr merge o/r 7'`, false},
+		{`zsh -c 'cd x; '$'devctl release promote o/r'`, `zsh -c 'cd x; '$'` + g + `devctl release promote o/r'`, false},
+		{`bash -c 'cd x; 'devctl\ pr\ merge\ o/r\ 7`, `bash -c 'cd x; '` + strings.ReplaceAll(g, " ", `\ `) + `devctl\ pr\ merge\ o/r\ 7`, false},
+		{`bash -c 'devctl pr '"merge o/r 7" | tee m.json`, `bash -c '` + g + `devctl pr '"merge o/r 7" | tee m.json`, false},
+		{`bash -c "cd \"$D\"; "'devctl'" pr wait o/r 7"`, `bash -c "cd \"$D\"; "'` + g + `devctl'" pr wait o/r 7"`, false},
+		{`bash -c devctl\ pr\ merge\ o/r\ 7`, `bash -c ` + strings.ReplaceAll(g, " ", `\ `) + `devctl\ pr\ merge\ o/r\ 7`, false},
+		// $'…' escapes are decoded as bash decodes them.
+		{`bash -c $'\x64evctl pr merge o/r 7'`, `bash -c $'` + g + `\x64evctl pr merge o/r 7'`, false},
+		{`bash -c 'cd x;'$'\n\144evctl pr merge o/r 7'`, `bash -c 'cd x;'$'\n` + g + `\144evctl pr merge o/r 7'`, false},
+		// eval runs all its words, joined by spaces.
+		{`eval 'cd x;' devctl pr merge o/r 7`, `eval 'cd x;' ` + strings.ReplaceAll(g, " ", `\ `) + `devctl pr merge o/r 7`, false},
+		// A -c string the parser cannot resolve fails closed: the rest of the line is its text.
+		{`bash -c "$(printf 'cd x; ')"'devctl pr merge o/r 7'`, `bash -c "$(printf 'cd x; ')"'` + g + `devctl pr merge o/r 7'`, false},
+		{"bash -c 'cd x; '\"`echo`devctl pr merge o/r 7\"", "bash -c 'cd x; '\"`echo`" + g + "devctl pr merge o/r 7\"", false},
+		{`bash -c 'cd x; '"devctl pr merge o/r 7`, `bash -c 'cd x; '"` + g + `devctl pr merge o/r 7`, false},
 	} {
 		d := decide(t, h, t.TempDir(), c.cmd, map[string]any{backgroundKey: c.bg})
 		if d == nil || d.PermissionDecision != decisionDeny || !strings.HasSuffix(d.Reason, "\n"+c.fixed) {
@@ -769,9 +786,19 @@ func TestHookRefusesHiddenMerges(t *testing.T) {
 			t.Errorf("%q: the gated form is refused too: %s", c.fixed, d.Reason)
 		}
 	}
-	for _, cmd := range []string{`bash -c 'devctl pr view o/r 7'`, `bash -c 'echo ok' && echo "devctl pr merge o/r 7"`, `ssh -c aes x`} {
+	for _, cmd := range []string{`bash -c 'devctl pr view o/r 7'`, `bash -c 'echo ok' && echo "devctl pr merge o/r 7"`, `ssh -c aes x`,
+		// Words after a -c string are its arguments, not its text; a joined string without a merge runs none.
+		`bash -c 'echo "$@"' _ devctl pr merge o/r 7`, `bash -c 'cd x; '"devctl pr view o/r 7"`, `bash -c "$(cat run.sh)"`,
+		`bash -c $'echo \'devctl\tpr view\''`} {
 		if d := decide(t, h, t.TempDir(), cmd, nil); d != nil && d.PermissionDecision == decisionDeny {
 			t.Errorf("%q is refused: %s", cmd, d.Reason)
+		}
+	}
+	// A string the parser cannot resolve that names devctl ungated fails closed.
+	for _, cmd := range []string{`bash -c "$(echo devctl) pr merge o/r 7"`, "sh -c \"`printf devctl` release promote o/r\"",
+		`bash -c 'x=1; '"$(printf '%s' ~/bin/devctl) pr wait o/r 7"`} {
+		if d := decide(t, h, t.TempDir(), cmd, nil); d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "cannot read") {
+			t.Errorf("%q: got %+v, want a refusal", cmd, d)
 		}
 	}
 }
@@ -800,6 +827,18 @@ func TestVaultCallGetsTheLongTimeout(t *testing.T) {
 			t.Errorf("%q: %+v, want the command with the 10 minutes", cmd, d)
 		case !long && d != nil && d.UpdatedInput["timeout"] == float64(600000):
 			t.Errorf("%q: raised the timeout", cmd)
+		}
+	}
+}
+
+// ansiC decodes $'…' escapes as bash does; a control byte after one is no
+// digit (0x14 is no "4").
+func TestANSICEscapes(t *testing.T) {
+	for in, want := range map[string]string{`\x64`: "d", `\144`: "d", `\u0064`: "d", `\U00000064`: "d", `\n`: "\n", `\cA`: "\x01",
+		`\x6G`: "\x06", "\\1\x14": "\x01", "\\x\x16": `\x`, `\q`: `\q`} {
+		b, n := ansiC(in)
+		if string(b) != want {
+			t.Errorf("ansiC(%q) = %q, %d; want %q", in, b, n, want)
 		}
 	}
 }
