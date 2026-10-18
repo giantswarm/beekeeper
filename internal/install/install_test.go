@@ -46,6 +46,7 @@ func (f *fakeSetup) Started(context.Context, string) bool { return f.started }
 func (*fakeSetup) Reload() []string                       { return []string{reload} }
 func (*fakeSetup) Start(p string) []string                { return []string{"start", filepath.Base(p)} }
 func (*fakeSetup) Stop(p string) []string                 { return []string{"stop", filepath.Base(p)} }
+func (*fakeSetup) Halt(p string) []string                 { return []string{"halt", filepath.Base(p)} }
 func (*fakeSetup) Restart(p string) [][]string            { return [][]string{{"restart", filepath.Base(p)}} }
 
 func (f *fakeSetup) run(_ context.Context, argv []string) error {
@@ -53,7 +54,7 @@ func (f *fakeSetup) run(_ context.Context, argv []string) error {
 	switch argv[0] {
 	case "start":
 		f.started = true
-	case "stop":
+	case "stop", "halt":
 		f.started = false
 	}
 	return nil
@@ -455,6 +456,88 @@ func TestRefusesASymlinkedUnit(t *testing.T) {
 				t.Fatal(err)
 			}
 			unchanged("uninstall")
+		})
+	}
+}
+
+// A unit an earlier install wrote through the person's symlink is
+// beekeeper's content at the person's path: uninstall stops the unit
+// without disabling it (systemd removes a linked unit on disable), removes
+// the target beekeeper wrote and leaves the link; a dry run names both. A
+// target the person changed since is theirs and kept.
+func TestUninstallResolvesASymlinkedUnit(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		changed bool
+	}{{"beekeeper's target", false}, {"the person's target", true}} {
+		t.Run(c.name, func(t *testing.T) {
+			home := t.TempDir()
+			f := &fakeSetup{}
+			e, out := env(t, home, f, f.run)
+			if err := Install(context.Background(), e); err != nil {
+				t.Fatal(err)
+			}
+			unit := filepath.Join(home, ".config", "units", "notify.service")
+			target := filepath.Join(home, "dotfiles", "notify.service")
+			if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(unit, target); err != nil {
+				t.Fatal(err)
+			}
+			link := filepath.Join("..", "..", "dotfiles", "notify.service")
+			if err := os.Symlink(link, unit); err != nil {
+				t.Fatal(err)
+			}
+			if c.changed {
+				write(t, target, "# the person's own\n")
+			}
+			content, _ := os.ReadFile(filepath.Clean(target))
+			linkKept := func(when string) {
+				t.Helper()
+				if got, err := os.Readlink(unit); err != nil || got != link {
+					t.Errorf("%s: the person's link changed: %q, %v", when, got, err)
+				}
+			}
+
+			f.ran = nil
+			out.Reset()
+			e.DryRun = true
+			if err := Uninstall(context.Background(), e, false); err != nil {
+				t.Fatal(err)
+			}
+			want := "remove  ~/dotfiles/notify.service: beekeeper install wrote it through the symlink ~/.config/units/notify.service, which stays"
+			if c.changed {
+				want = "keep    ~/.config/units/notify.service: a symlink to ~/dotfiles/notify.service, the person's"
+			}
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("dry run lacks %q:\n%s", want, out)
+			}
+			if raw, err := os.ReadFile(filepath.Clean(target)); err != nil || !bytes.Equal(raw, content) || len(f.ran) > 0 {
+				t.Errorf("the dry run changed something: %q, %v, ran %v", raw, err, f.ran)
+			}
+			linkKept("dry run")
+
+			e.DryRun = false
+			if err := Uninstall(context.Background(), e, false); err != nil {
+				t.Fatal(err)
+			}
+			linkKept("uninstall")
+			raw, err := os.ReadFile(filepath.Clean(target))
+			switch {
+			case c.changed && (err != nil || !bytes.Equal(raw, content)):
+				t.Errorf("uninstall changed the person's target: %q, %v", raw, err)
+			case !c.changed && !errors.Is(err, fs.ErrNotExist):
+				t.Errorf("uninstall left beekeeper's unit at the link's target: %q, %v", raw, err)
+			}
+			for _, ran := range f.ran {
+				if strings.HasPrefix(ran, "stop ") {
+					t.Errorf("uninstall disabled the linked unit, which removes the link: %q", ran)
+				}
+			}
+			if halted := slices.Contains(f.ran, "halt notify.service"); halted == c.changed {
+				t.Errorf("uninstall ran %v", f.ran)
+			}
 		})
 	}
 }

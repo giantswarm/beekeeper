@@ -289,9 +289,16 @@ plans:                      # note add --for <guide.person> links a pull request
   repositories: [example-org/plans]   # owner/repo; unset, nothing is read; an epic's plan is the open or merged pull request naming it
   check: plan-stages        # the stage check's name (default)
 
+sink:                       # dispatches a GitHub workflow on selected events, within a watch.interval; unset (no repo), nothing is dispatched
+  repo: example-org/magazine   # the workflow's owner/repo
+  workflow: refresh.yaml    # its file name or id; it declares the workflow_dispatch inputs verb, subject (owner/repo#n) and time (RFC 3339)
+  ref: main                 # the branch it runs on (default: the repository's default branch)
+  verbs: [plan.grilling, plan.ready, session.serve, board.claim, merged]   # the default: every event the sink may dispatch
+
 apps:                       # where the organisation declares its GitHub Apps; beekeeper app allow records only a declared one
   repo: example/github      # the declaring repository, read on its default branch; unset, app allow refuses
   manifest: apps/{name}/manifest.json   # an App's manifest (name, callback_urls), {name} for the App's name
+  # template: apps/{name}/manifest.template.json   # a purpose's manifest template, {installation} and {baseDomain} in its strings (default: manifest's file as manifest.template.json)
   secrets:                  # by installation, the SOPS Secret beekeeper secret github-app writes an App's private-key and client-secret into
     example-installation:
       file: ~/gitops/installations/example-installation/secrets/github-app-secret.yaml

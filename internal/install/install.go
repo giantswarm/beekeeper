@@ -68,7 +68,9 @@ func Install(ctx context.Context, e Env) error {
 }
 
 // Uninstall removes what install wrote and nothing else: a file changed
-// since is kept. Config and state stay unless purge.
+// since is kept. A path that is the person's symlink stays: a target
+// install wrote through it goes, its unit stopped without disabling it.
+// Config and state stay unless purge.
 func Uninstall(ctx context.Context, e Env, purge bool) error {
 	m, err := readManifest(e.manifest())
 	if err != nil {
@@ -77,8 +79,15 @@ func Uninstall(ctx context.Context, e Env, purge bool) error {
 	p := &plan{home: e.Spec.Home}
 	if e.Setup.Available() {
 		for _, svc := range m.Services {
-			if !symlink(svc) && e.Setup.Started(ctx, svc) {
-				p.command(ctx, e, e.Setup.Stop(svc))
+			stop := e.Setup.Stop
+			if symlink(svc) {
+				if !m.ownsTarget(svc) {
+					continue
+				}
+				stop = e.Setup.Halt
+			}
+			if e.Setup.Started(ctx, svc) {
+				p.command(ctx, e, stop(svc))
 			}
 		}
 	}
@@ -89,6 +98,13 @@ func Uninstall(ctx context.Context, e Env, purge bool) error {
 		case errors.Is(err, fs.ErrNotExist):
 		case err != nil:
 			p.add("keep", path, err.Error(), nil)
+		case symlink(path) && m.owns(path, cur):
+			// An install that wrote through the person's link: its content
+			// goes, their link stays.
+			target := resolve(path)
+			removed[target] = true
+			p.add("remove", target, "beekeeper install wrote it through the symlink "+path+", which stays",
+				func() error { return os.Remove(target) })
 		case symlink(path):
 			p.add("keep", path, "a symlink to "+resolve(path)+", the person's", nil)
 		case !m.owns(path, cur):
@@ -376,6 +392,13 @@ func (m *Manifest) addDirs(dir string) {
 func (m Manifest) owns(path string, cur []byte) bool {
 	h, ok := m.Files[path]
 	return ok && h == sum(cur)
+}
+
+// ownsTarget reports whether install wrote the file the symlink at path
+// resolves to.
+func (m Manifest) ownsTarget(path string) bool {
+	cur, err := os.ReadFile(filepath.Clean(path))
+	return err == nil && m.owns(path, cur)
 }
 
 func sum(b []byte) string {

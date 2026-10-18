@@ -102,8 +102,10 @@ func (a *app) uninstallCmd() *cobra.Command {
 		Short: "Remove what install put in place",
 		Long: `Uninstall stops the units install started and removes the files,
 directories and hooks install wrote, as install.json in the state directory
-records them; a file changed since install wrote it stays. The config and
-the state stay too, unless --purge.`,
+records them; a file changed since install wrote it stays. A unit path that
+is a symlink (into dotfiles) stays as the person's link: a target an earlier
+install wrote through it is removed, its unit stopped, never disabled. The
+config and the state stay too, unless --purge.`,
 		Args: cobra.NoArgs,
 		PersistentPreRunE: func(*cobra.Command, []string) error {
 			return a.loadConfig()

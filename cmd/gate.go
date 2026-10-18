@@ -171,8 +171,14 @@ unless another run of the same command follows it; a wait the call leaves
 as a merge does. A run stopped by a signal
 before its command settled (a cleanup's SIGTERM, a stop of its unit) wakes
 its owner with the stop instead, as nothing waits for the command any more;
-a merge stopped so (its user manager going down with a desktop restart)
-wakes it with what GitHub says of the pull request: merged, open or closed.
+a merge stopped so (its user manager going down with a desktop restart),
+or whose devctl a signal ended without its document, wakes it with what
+GitHub says of the pull request: merged, open or closed. A merge cut before
+any merge-child wrote devctl's exit code (killed with the machine or the
+desktop: its gate and merge-child gone, running or a queued merge's own run
+still waiting) is recorded as cut (merge.cut, the watch's MERGE CUT line)
+at the watch's next poll after the start, and its owner woken the same way,
+once.
 An owner no longer on the roster is woken by no run. The outcome is owed in
 the state before it is handed over: one whose merge-child was killed on the
 way, whose pull request GitHub did not answer for or whose wake the service
@@ -503,6 +509,15 @@ func (g *gateRun) outcomeTo() string {
 	return "its outcome is logged (beekeeper log --verb merged)"
 }
 
+// queuedRun is the files' base of this queued merge's own run, the one
+// enqueue launched from the gate g.from; "" for any other call.
+func (g *gateRun) queuedRun() string {
+	if !g.queued || g.from == 0 {
+		return ""
+	}
+	return ownedBase(g.store.Dir(), g.argv, g.from)
+}
+
 // leaveAt is when a call started at now leaves its merge to run on outside
 // it: a re-executed call's own time (gateLimitEnv), else now+limit; never for
 // a queued merge's own run, which no tool call bounds, nor without a limit.
@@ -580,7 +595,7 @@ func (g *gateRun) step() (string, error) {
 		merge.Retry(st, g.repo, g.pr)
 		if i := g.mine(st, state.Waiting); i >= 0 {
 			m := &st.Merges[i]
-			m.PID, m.By, m.Seen, m.Output = g.pid, g.me, g.now.UTC(), g.output
+			m.PID, m.By, m.Seen, m.Output, m.Run = g.pid, g.me, g.now.UTC(), g.output, g.queuedRun()
 			g.seeded = m.Seeded
 			if g.candidateRead {
 				m.Candidate = g.candidate
@@ -765,7 +780,7 @@ const outsideCheck = time.Minute
 const (
 	verbMerging     = "merging"
 	verbPromoting   = "promoting"
-	verbMerged      = "merged"
+	verbMerged      = config.SinkMerged
 	verbLaneSettled = "lane.settled"
 )
 
@@ -1005,9 +1020,14 @@ func (g *gateRun) mine(st *state.State, phase string) int {
 	})
 }
 
-// drop removes the merge's waiting entry; a seeded place stays.
+// drop removes the merge's waiting entry; a seeded place stays, without the
+// run that leaves it (its merge-child owes the outcome).
 func (g *gateRun) drop(st *state.State) {
-	if i := g.mine(st, state.Waiting); i >= 0 && !st.Merges[i].Seeded {
+	switch i := g.mine(st, state.Waiting); {
+	case i < 0:
+	case st.Merges[i].Seeded:
+		st.Merges[i].Run = ""
+	default:
 		st.Merges = slices.Delete(st.Merges, i, i+1)
 	}
 }
@@ -1734,7 +1754,7 @@ func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOu
 			e.Detail += ": " + r.reason
 		}
 	default:
-		e = event(by, verbMerged, "%s exit %d, release %s", key, rc, release)
+		e = about(event(by, verbMerged, "%s exit %d, release %s", key, rc, release), key)
 	}
 	e.Detail += note
 	return append(ev, e)
