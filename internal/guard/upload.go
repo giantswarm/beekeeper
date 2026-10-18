@@ -3,6 +3,7 @@ package guard
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -266,6 +267,63 @@ func uploadRefusal(ev event) string {
 		case up.ref != u.refs[0]:
 			return uploadReason(fmt.Sprintf("%s is not the input the last upload-target check marked (%s; find gave %s)",
 				refName(up.ref), strings.TrimPrefix(u.check, uploadMarked), u.refs[0]))
+		}
+	}
+	return ""
+}
+
+// SharedEnv names, in a browse turn's environment, the files the caller
+// shared with it for upload (beekeeper browse --file): their copies' paths,
+// joined by the path list separator, empty when it shared none. Its presence
+// marks the session a browse turn.
+const SharedEnv = "BEEKEEPER_BROWSE_SHARED"
+
+// NotShared opens the hook's refusal of a file_upload of a path the caller
+// did not share with the browse turn.
+const NotShared = "Refused: not shared for upload: "
+
+// uploadPaths are the paths of a Chrome call's file_uploads, a batch's too.
+func uploadPaths(tool string, input map[string]any) []string {
+	switch chromeTool(tool) {
+	case chromeUpload:
+		raw, _ := input["paths"].([]any)
+		out := make([]string, 0, len(raw))
+		for _, p := range raw {
+			if s, ok := p.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	case chromeBatch:
+		var out []string
+		for _, a := range batchActions(input) {
+			out = append(out, uploadPaths(a.name, a.input)...)
+		}
+		return out
+	}
+	return nil
+}
+
+// sharedRefusal returns why the hook refuses a browse turn's file_upload, ""
+// when it passes: in a browse turn (shared reports one, with the files its
+// caller shared), every path a file_upload names is one of the shared files.
+func sharedRefusal(ev event, shared func() ([]string, bool)) string {
+	if shared == nil || !isBrowserTool(ev.ToolName) {
+		return ""
+	}
+	paths := uploadPaths(ev.ToolName, ev.ToolInput)
+	if len(paths) == 0 {
+		return ""
+	}
+	files, browse := shared()
+	if !browse {
+		return ""
+	}
+	for _, p := range paths {
+		if !slices.Contains(files, filepath.Clean(p)) {
+			return NotShared + p + ". This browse turn uploads only the files its caller shared with `beekeeper browse --file <path>`, " +
+				"by the path of their copy the prompt names after 'as' (shared: " + refName(strings.Join(files, ", ")) + "). Upload nothing else: stop and report that the step " +
+				"names a file not shared, for the caller to run the steps again with --file."
 		}
 	}
 	return ""
