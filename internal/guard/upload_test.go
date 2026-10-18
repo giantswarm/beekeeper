@@ -138,6 +138,49 @@ func TestUploadRefusal(t *testing.T) {
 	}
 }
 
+// In a browse turn the hook passes a file_upload only of the files the
+// caller shared with --file, alone or in a batch, and names the path and the
+// flag when it refuses; outside a browse turn it decides no path.
+func TestSharedRefusal(t *testing.T) {
+	staged := "/state/browse/1/upload/1/shot.png"
+	shared := func(files ...string) func() ([]string, bool) { return func() ([]string, bool) { return files, true } }
+	notBrowse := func() ([]string, bool) { return nil, false }
+	upload := func(paths ...any) map[string]any { return map[string]any{refKey: "ref_42", "paths": paths} }
+	batch := func(paths ...any) map[string]any {
+		return map[string]any{actionsKey: []any{map[string]any{nameKey: chromeUpload, inputKey: upload(paths...)}}}
+	}
+	cases := map[string]struct {
+		shared func() ([]string, bool)
+		tool   string
+		input  map[string]any
+		refuse string
+	}{
+		"the shared copy":          {shared(staged), uploadTool, upload(staged), ""},
+		"the shared copy, unclean": {shared(staged), uploadTool, upload("/state/browse/1/upload/./1/shot.png"), ""},
+		"the caller's own path":    {shared(staged), uploadTool, upload("/work/shot.png"), NotShared + "/work/shot.png"},
+		"one of two not shared":    {shared(staged), uploadTool, upload(staged, "/home/x/.ssh/id_ed25519"), NotShared + "/home/x/.ssh/id_ed25519"},
+		"nothing shared":           {shared(), uploadTool, upload("/work/shot.png"), "(shared: none)"},
+		"a batch's upload":         {shared(staged), batchTool, batch("/work/shot.png"), NotShared + "/work/shot.png"},
+		"a batch's shared upload":  {shared(staged), batchTool, batch(staged), ""},
+		"not a browse turn":        {notBrowse, uploadTool, upload("/work/shot.png"), ""},
+		"no hook configuration":    {nil, uploadTool, upload("/work/shot.png"), ""},
+		"not an upload":            {shared(), scriptTool, map[string]any{textKey: "1"}, ""},
+	}
+	for name, c := range cases {
+		got := sharedRefusal(event{ToolName: c.tool, ToolInput: c.input}, c.shared)
+		if c.refuse == "" && got != "" || c.refuse != "" && (!strings.Contains(got, c.refuse) || !strings.Contains(got, "beekeeper browse --file <path>")) {
+			t.Errorf("%s: refusal = %q, want %q", name, got, c.refuse)
+		}
+	}
+	// The hook answers with the refusal, before the upload-target check's.
+	ev := toolEvent(uploadTool, upload("/work/shot.png"))
+	ev[sessionKey] = "s"
+	raw, _ := json.Marshal(ev)
+	if out := string((Hook{Shared: shared(staged)}).Decide(raw)); !strings.Contains(out, `"permissionDecision":"deny"`) || !strings.Contains(out, "not shared for upload: /work/shot.png") {
+		t.Errorf("Decide = %s", out)
+	}
+}
+
 // The check's scope line quotes the selector the session gives.
 func TestUploadTargetCheck(t *testing.T) {
 	if got := UploadTargetCheck(`form[action="/x"]`); !strings.HasPrefix(got, `const scope = "form[action=\"/x\"]";`+"\n(() => {") {

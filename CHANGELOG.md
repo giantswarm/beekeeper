@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `beekeeper browse --file` refuses a path outside the worker's directories (the working directory, the turn's `--dir`, beekeeper's state directory, the calling session's scratchpad; links resolved) before the turn starts, and the hook refuses a browse turn's `file_upload` of any path not shared with `--file`, which the report names as `refused: file_upload <path>: beekeeper's hook refused it as [Not Shared]` with a line naming the flag. `browse --help` says how a turn uploads on GitHub's comment editor, which renders no file input ([#821](https://github.com/giantswarm/beekeeper/issues/821)).
+
 ### Fixed
 
 - `uninstall` resolves a symlinked unit: the person's link stays, and a target an earlier install wrote through the link is removed, its unit stopped without being disabled (systemd removes a linked unit's symlink on disable); `uninstall --dry-run` names the target it would remove and the link that stays. A target the person changed since stays as theirs ([#764](https://github.com/giantswarm/beekeeper/issues/764)).
