@@ -115,11 +115,11 @@ func (a *app) recordAnswer(ctx context.Context, about string, noteID, choice int
 			return err
 		}
 	}
-	closedMeanwhile := false
+	closedMeanwhile, wasOpen := false, false
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		if n != nil {
 			found, defaulted := takeAnswered(st, n.ID)
-			closedMeanwhile = !found
+			closedMeanwhile, wasOpen = !found, found && !defaulted
 			if defaulted {
 				rec.Replaced = n.Default
 			}
@@ -138,6 +138,12 @@ func (a *app) recordAnswer(ctx context.Context, about string, noteID, choice int
 		rec.Told = []string{n.By.Name}
 		if s := a.tellFiler(ctx, me, n, line); s != "" {
 			notes = append(notes, s)
+		}
+		// A decision its default closed released its hold then.
+		if wasOpen {
+			if l := a.release(ctx, me, n, closedAnswered); l != "" {
+				notes = append(notes, l)
+			}
 		}
 	} else {
 		rec.Told, notes = a.tellServing(ctx, me, about, line)

@@ -110,6 +110,32 @@ watch: {quietSessions: []}`
 	}
 }
 
+func TestSinkSelectsItsVerbsAllByDefault(t *testing.T) {
+	for raw, want := range map[string][]string{
+		"":                                       nil,
+		"sink: {repo: o/site, workflow: r.yaml}": SinkVerbs,
+		"sink: {repo: o/site, workflow: r.yaml, verbs: [plan.ready, merged]}": {SinkPlanReady, SinkMerged},
+	} {
+		p := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		c, err := Load(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, v := range SinkVerbs {
+			if c.Sink.Selects(v) {
+				got = append(got, v)
+			}
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("%q selects %q, want %q", raw, got, want)
+		}
+	}
+}
+
 func TestLabs(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(p, []byte("resources: [agentlab-1, agentlab-2, staging]\nlabs: {agentlab-1: agentlab, agentlab-2: agentlab-2}\n"), 0o600); err != nil {
@@ -143,6 +169,10 @@ func TestLoadRejects(t *testing.T) {
 		"pagerduty without services": "alerts: {pagerduty: {context: example}}",
 		"flapping at once":           "alerts: {flap: {changes: 1}}",
 		"bad duration":               "grantTTL: soon",
+		"sink without a repo":        "sink: {workflow: refresh.yaml}",
+		"sink repo not owner/repo":   "sink: {repo: site, workflow: refresh.yaml}",
+		"sink without a workflow":    "sink: {repo: o/site}",
+		"sink of an unknown verb":    "sink: {repo: o/site, workflow: refresh.yaml, verbs: [note.add]}",
 		"skill and file":             "supervisor: {skill: supervise, instructions: /x.md}",
 		"unknown worker profile":     "agents: {profile: lean}",
 		"profile name as a path":     "agents: {profiles: {../x: {tools: [Read]}}}",

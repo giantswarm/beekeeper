@@ -444,8 +444,21 @@ type Note struct {
 	Recommend int      `json:"recommend,omitempty"`
 	// Posted is the gateway's handle on the decision's message, once posted.
 	Posted string `json:"posted,omitempty"`
+	// Held is the board item the decision holds (note add --holds): its
+	// Status set to Blocked / Waiting until the decision closes, then set
+	// back. nil for a note that holds nothing.
+	Held *ItemHold `json:"held,omitempty"`
 
 	rest rest
+}
+
+// ItemHold is a board item a decision holds on its person: the issue, the
+// Status the hold set and the Status it had before, which its release sets
+// back.
+type ItemHold struct {
+	Ref    string `json:"ref"`
+	Status string `json:"status"`
+	Was    string `json:"was"`
 }
 
 // Option is a decision's option i (1-based) split into its label and its
@@ -1146,6 +1159,10 @@ type Event struct {
 	By     Party     `json:"by"`
 	Verb   string    `json:"verb"`
 	Detail string    `json:"detail"`
+	// Subject is the issue or pull request the event concerns, owner/repo#n,
+	// on the events the sink may dispatch (config.SinkVerbs); empty on the
+	// rest.
+	Subject string `json:"subject,omitempty"`
 }
 
 // Store is the seam every command reads and changes the state through.

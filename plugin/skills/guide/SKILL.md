@@ -78,7 +78,9 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   with no note gets the words by `SendMessage` too. Nothing is paraphrased, softened or extended.
 - **Priorities and goes are the board's.** A priority the person states is `beekeeper priority set
   <epic> <rank> --as <person>` (`board rank` orders items within a step), their go on an epic is
-  `beekeeper board move` to In Progress; no note carries either. A question names its
+  `beekeeper board move` to In Progress; no note carries either. An item held on the person's
+  answer is held by the decision itself (`note add --holds`): the answer, or its default, releases
+  it. A question names its
   thread (`note add --ref <owner/repo#n>`), and the state the guide leaves the next guide is the
   hand-over.
 - **New ideas and input go where they get worked.** Input on running work goes to its session in the
