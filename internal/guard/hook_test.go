@@ -933,6 +933,14 @@ func TestHookLeavesAssignedTextAlone(t *testing.T) {
 		`body="x; devctl pr merge o/r 7"; n=body; gh issue comment 1 --repo o/r --body "${!n}"`,
 		`body="x; devctl pr merge o/r 7"; declare -n r=body; gh issue comment 1 --repo o/r --body "$r"`,
 		`body="x; devctl pr merge o/r 7"; printf -v c '%s' "$body"; $c`,
+		`set -e -a; body="x; devctl pr merge o/r 7"; gh issue comment 1 --repo o/r --body "$body"`,
+		`set -euo allexport; body="x; devctl pr merge o/r 7"; gh issue comment 1 --repo o/r --body "$body"`,
+		`set -o errexit -o allexport; body="x; devctl pr merge o/r 7"; gh issue comment 1 --repo o/r --body "$body"`,
+		// Arithmetic evaluates a bare name's value, a command substitution in it too.
+		`x='a[$(devctl pr merge o/r 7)]'; (( x )); gh issue comment 1 --repo o/r --body "$x"`,
+		`x='a[$(devctl pr merge o/r 7)]'; let y=x+1`,
+		`x='a[$(devctl pr merge o/r 7)]'; [[ x -eq 1 ]]`,
+		`x='a[$(devctl pr merge o/r 7)]'; declare -i y=x`,
 	} {
 		d := decide(t, h, t.TempDir(), cmd, nil)
 		if d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "the variable ") {

@@ -16,10 +16,12 @@ var (
 	// declarations assign the variables their words name.
 	declarations = wordSet(exportCmd + " local declare typeset readonly")
 	// indirection exports a variable or reaches one by another name, out of
-	// heldMerges' sight: export, set -a or allexport, declare/typeset/local/
-	// readonly with -x or -n, printf -v, read on the masked line;
-	// heldMerges also refuses ${!…} anywhere, quoted or not.
-	indirection = regexp.MustCompile(`\bexport\b|\bset\s+(?:-\w*a|-o\s+allexport\b)|\b(?:declare|typeset|local|readonly)\s+(?:-\w+\s+)*-\w*[xn]|\bprintf\s+-v\b|\b(?:read|mapfile|readarray)\b`)
+	// heldMerges' sight: export, set with a or allexport in any option,
+	// declare/typeset/local/readonly with -x, -n or -i, printf -v, read, and
+	// the arithmetic contexts that evaluate a bare name's value ((( )), $[ ],
+	// let, [[ ]]) on the masked line; heldMerges also refuses ${!…} anywhere,
+	// quoted or not.
+	indirection = regexp.MustCompile(`\bexport\b|\bset\b[^;&|\n]*(?:\s[-+]\w*a|\ballexport\b)|\b(?:declare|typeset|local|readonly)\s+(?:-\w+\s+)*-\w*[xni]|\bprintf\s+-v\b|\b(?:read|mapfile|readarray|let)\b|\(\(|\$\[|\[\[`)
 	// maskedWord is a word of the masked line: quoted blanks are masked.
 	maskedWord = regexp.MustCompile(`\S+`)
 )
@@ -117,7 +119,7 @@ func heldMerges(cmd string) string {
 	}
 	if len(names) > 0 && (indirection.MatchString(sc.masked) || strings.Contains(cmd, "${!")) {
 		return "Refused: the variable " + names[0] + " holds a " + held[names[0]] + " and the call exports or reaches " +
-			"variables indirectly (export, set -a, declare -x or -n, ${!…}, printf -v), so a command may run it outside " +
+			"variables indirectly (export, set -a, declare -x, -n or -i, ${!…}, printf -v, read, arithmetic), so a command may run it outside " +
 			"the gate. Run devctl as its own command line; text that only names it goes into a quoted argument of a text " +
 			"command, or into a file."
 	}
