@@ -132,10 +132,10 @@ func TestTheOldestMergeQueuedForTheResetGoesFirst(t *testing.T) {
 	if why := g.capWait(st, me); why != "" {
 		t.Errorf("cap wait %q with a slot for both, want none", why)
 	}
-	// Past its window the merge counts the machine's devctl processes again.
+	// Past its window the merge counts the machine's merges and promotes again.
 	a.now = reset.Add(a.cfg.Merge.ResetFirst.Duration)
-	if why := g.capWait(st, me); !strings.Contains(why, "11 devctl processes run machine-wide (cap 3)") {
-		t.Errorf("cap wait %q past the window, want the machine's devctl processes", why)
+	if why := g.capWait(st, me); !strings.Contains(why, "11 merges and promotes run machine-wide (cap 3)") {
+		t.Errorf("cap wait %q past the window, want the machine's merges and promotes", why)
 	}
 }
 

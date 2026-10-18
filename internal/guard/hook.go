@@ -212,6 +212,9 @@ type Hook struct {
 	// Chrome call on a consent page is decided from (consent.go); read only
 	// for a browser call that acts on a page, nil decides no consent page.
 	Apps func() []App
+	// Shared reports whether the session is a browse turn and the files
+	// its caller shared with it for upload (SharedEnv); nil, none is.
+	Shared func() (files []string, browse bool)
 	// GraphQL is the GraphQL budget as beekeeper last read it, for a
 	// board-read refusal; nil or "", unknown.
 	GraphQL func() string
@@ -281,6 +284,9 @@ func (h Hook) decide(ev event) []byte {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	if r := tabCloseRefusal(ev); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
+	if r := sharedRefusal(ev, h.Shared); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	if r := uploadRefusal(ev); r != "" {

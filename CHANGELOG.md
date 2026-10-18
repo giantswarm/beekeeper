@@ -12,10 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `agents park --on hold:<target>` parks on a hold: the watch says the park resumable once the hold is lifted or its time passed, and resumes it with agents.autoResume. A park on a target nothing holds is refused. The gate's exit 77 on a hold names the park, so a worker refused by a short window (a devctl release window) resumes when it lifts instead of staying parked on its own pull request ([#1417](https://github.com/giantswarm/beekeeper/issues/1417)).
+- `beekeeper browse --file` refuses a path outside the worker's directories (the working directory, the turn's `--dir`, beekeeper's state directory, the calling session's scratchpad; links resolved) before the turn starts, and the hook refuses a browse turn's `file_upload` of any path not shared with `--file`, which the report names as `refused: file_upload <path>: beekeeper's hook refused it as [Not Shared]` with a line naming the flag. `browse --help` says how a turn uploads on GitHub's comment editor, which renders no file input ([#821](https://github.com/giantswarm/beekeeper/issues/821)).
 
 ### Fixed
 
+- `merge.cap` counts the machine's devctl merges and promotes only: a `devctl pr wait`, `release wait` or `rollout wait` polls and no longer takes a slot, so nine waits running leave a queued merge free to start under a cap of 5. The gate's line reads "N merges and promotes run machine-wide (cap M)" ([#778](https://github.com/giantswarm/beekeeper/issues/778)).
 - `uninstall` resolves a symlinked unit: the person's link stays, and a target an earlier install wrote through the link is removed, its unit stopped without being disabled (systemd removes a linked unit's symlink on disable); `uninstall --dry-run` names the target it would remove and the link that stays. A target the person changed since stays as theirs ([#764](https://github.com/giantswarm/beekeeper/issues/764)).
+- The secrets hook reads `ps` as the command word only: `ollama ps <model>` and a `curl` or `wget` of `/api/ps` with options after the URL (`-H …`, `-w …`) pass, where the words after them were read as BSD-style `ps` options and refused as a ps with command lines; `ps aux`, `ps -ef`, `ps -o cmd`, and `ps` after a wrapper, `watch`, `ssh <host>`, `docker exec` or `kubectl exec --` keep their refusal ([#812](https://github.com/giantswarm/beekeeper/issues/812)).
 
 ### Removed
 

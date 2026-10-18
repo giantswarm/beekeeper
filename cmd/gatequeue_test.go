@@ -50,28 +50,45 @@ func queueApp(t *testing.T, merges ...state.Merge) *app {
 	return &app{cfg: cfg, store: store, now: time.Now()}
 }
 
-// devctlMachine is a machine whose process table holds n devctl processes
-// and nothing else.
+// devctlMachine is a machine whose process table holds one devctl process
+// per argument vector and nothing else.
 type devctlMachine struct {
 	platform.Machine
-	n int
+	argv [][]string
 }
 
 func (m devctlMachine) Processes() (*proc.Table, error) {
 	t := &proc.Table{ByPID: map[int]*proc.Process{}}
-	for pid := 1; pid <= m.n; pid++ {
-		t.ByPID[pid] = &proc.Process{PID: pid, PPID: 1, Comm: merge.Tool}
+	for i, argv := range m.argv {
+		t.ByPID[i+1] = &proc.Process{PID: i + 1, PPID: 1, Comm: merge.Tool, Args: argv}
 	}
 	return t, nil
 }
 
-// hostDevctls makes the gate count n devctl processes machine-wide instead
-// of the host's own.
-func hostDevctls(t *testing.T, n int) {
+// hostDevctl makes the gate see one devctl process per argument vector
+// machine-wide instead of the host's own.
+func hostDevctl(t *testing.T, argv ...[]string) {
 	t.Helper()
 	was := plat.Machine
-	plat.Machine = devctlMachine{Machine: was, n: n}
+	plat.Machine = devctlMachine{Machine: was, argv: argv}
 	t.Cleanup(func() { plat.Machine = was })
+}
+
+// hostDevctls makes the gate see n devctl merges machine-wide instead of
+// the host's own.
+func hostDevctls(t *testing.T, n int) {
+	t.Helper()
+	hostDevctl(t, devctlArgv(n, "pr merge")...)
+}
+
+// devctlArgv is n devctl command lines of the subcommand sub, its words
+// separated by spaces.
+func devctlArgv(n int, sub string) [][]string {
+	out := make([][]string, n)
+	for i := range out {
+		out[i] = append(append([]string{merge.Tool}, strings.Fields(sub)...), "o/x", strconv.Itoa(i+1))
+	}
+	return out
 }
 
 // stubSelf stands in for this binary as merge-child: it records its pid and
