@@ -2,7 +2,9 @@ package proc
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -42,4 +44,12 @@ func Command(ctx context.Context, name string, arg ...string) *exec.Cmd {
 	c := exec.CommandContext(ctx, name, arg...) // #nosec G204 -- the caller's configured read (kubectl), optionally through nice
 	c.WaitDelay = waitDelay
 	return c
+}
+
+// Kubeconfig makes c read the kubeconfig files as kubectl merges a
+// KUBECONFIG list; none, c keeps the environment's.
+func Kubeconfig(c *exec.Cmd, files []string) {
+	if len(files) > 0 {
+		c.Env = append(os.Environ(), "KUBECONFIG="+strings.Join(files, string(os.PathListSeparator)))
+	}
 }

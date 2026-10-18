@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -99,5 +100,25 @@ func TestDecorateGivesTheHintsToNewLinesOnly(t *testing.T) {
 	}
 	if got := decorate([]string{"ALERTS gazelle reachable again"}, nil, hints); got[0] != "ALERTS gazelle reachable again" {
 		t.Errorf("nobody on it: %q", got[0])
+	}
+}
+
+// alerts.kubeconfig is read behind the machine kubeconfig unless it names
+// it; none configured leaves kubectl's own default.
+func TestAlertKubeconfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	machine, own := filepath.Join(home, ".kube", "config"), "/own"
+	for _, c := range []struct {
+		files, want []string
+	}{
+		{nil, nil},
+		{[]string{own}, []string{machine, own}},
+		{[]string{own, machine}, []string{own, machine}},
+	} {
+		a := &app{cfg: &config.Config{Alerts: config.Alerts{Kubeconfig: c.files}}}
+		if got := a.alertKubeconfig(); !slices.Equal(got, c.want) {
+			t.Errorf("alerts.kubeconfig %q: files = %q, want %q", c.files, got, c.want)
+		}
 	}
 }

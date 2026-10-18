@@ -131,6 +131,9 @@ func ResolveContext(name, explicit string, template func(string) string, context
 type Reader struct {
 	// Kubectl is the kubectl binary.
 	Kubectl string
+	// Kubeconfig are the kubeconfig files kubectl reads, as KUBECONFIG;
+	// empty, the environment's.
+	Kubeconfig []string
 	// Timeout bounds the reading of one installation, forwards included.
 	Timeout time.Duration
 	// Tenant is the Mimir tenant read first; empty, only the plain
@@ -152,7 +155,7 @@ type Reader struct {
 // Contexts are the kubeconfig's context names; a Reader that keeps its
 // forwards asks kubectl again only once the kubeconfig changed.
 func (r *Reader) Contexts(ctx context.Context) []string {
-	stamp := kubeconfigStamp()
+	stamp := kubeconfigStamp(r.Kubeconfig)
 	if r.Keep {
 		r.mu.Lock()
 		if r.contexts != nil && r.stamp == stamp {
@@ -163,7 +166,9 @@ func (r *Reader) Contexts(ctx context.Context) []string {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	out, err := proc.Command(ctx, r.Kubectl, "config", "get-contexts", "-o", "name").Output() //nolint:gosec // kubectl from the configuration
+	cmd := proc.Command(ctx, r.Kubectl, "config", "get-contexts", "-o", "name") //nolint:gosec // kubectl from the configuration
+	proc.Kubeconfig(cmd, r.Kubeconfig)
+	out, err := cmd.Output()
 	if err != nil {
 		return nil
 	}
@@ -177,9 +182,13 @@ func (r *Reader) Contexts(ctx context.Context) []string {
 }
 
 // kubeconfigStamp is the path, modification time and size of each
-// kubeconfig file kubectl reads: $KUBECONFIG's, else ~/.kube/config.
-func kubeconfigStamp() string {
-	paths := filepath.SplitList(os.Getenv("KUBECONFIG"))
+// kubeconfig file kubectl reads: files, else $KUBECONFIG's, else
+// ~/.kube/config.
+func kubeconfigStamp(files []string) string {
+	paths := files
+	if len(paths) == 0 {
+		paths = filepath.SplitList(os.Getenv("KUBECONFIG"))
+	}
 	if len(paths) == 0 {
 		if home, err := os.UserHomeDir(); err == nil {
 			paths = []string{filepath.Join(home, ".kube", "config")}
@@ -385,6 +394,7 @@ func (r *Reader) forward(ctx context.Context, kubeContext string, ep endpoint) (
 	fctx, cancel := context.WithCancel(life)
 	cmd := proc.Command(fctx, r.Kubectl, "--context", kubeContext, "-n", ep.namespace, //nolint:gosec // kubectl from the configuration
 		"port-forward", "svc/"+ep.service, fmt.Sprintf(":%d", ep.port))
+	proc.Kubeconfig(cmd, r.Kubeconfig)
 	ownGroup(cmd)
 	cmd.WaitDelay = stopGrace
 	pr, pw, err := os.Pipe()

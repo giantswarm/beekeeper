@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `alerts.kubeconfig` lists kubeconfig files the installations' reads resolve their contexts in, passed to kubectl as `KUBECONFIG` for the context listing, every Alertmanager port-forward and the upgrade reading, behind the machine kubeconfig unless the list names it. An installation whose context lives only in a kubeconfig of the watch's own (`KUBECONFIG=<file> tsh kube login <cluster>`) is read by `beekeeper alerts snapshot` and the watch without a `KUBECONFIG` in the environment ([#705](https://github.com/giantswarm/beekeeper/issues/705)).
+
 ### Fixed
 
 - The merge gate reads a shell's `-c` or `eval` string as the shell builds it: adjacent single-quoted, double-quoted, `$'…'` and bare pieces are joined and `$'…'` escapes decoded before it looks for a blocking devctl command (eval's words joined by a space), so `bash -c 'cd x; '"devctl pr merge o/r 7"` is refused with the gated form, as a single-quoted string is. A string the parser cannot resolve (a quote left open, a command substitution) fails closed: the rest of the command line counts as its text, and one that names devctl other than behind the gate is refused. Words after a `-c` string are its arguments and stay out of it ([#1373](https://github.com/giantswarm/beekeeper/issues/1373)).
@@ -24,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - The hook that refuses a blocking devctl command run outside the gate keys on the commands a call executes, not on prose that names them. An interpreter's program (a `python3` here-document, a script file, a `-c` or `-e` string) runs a command from a string literal that starts with it or names it after a shell operator; a comment, or document text in a literal (a README, a CHANGELOG entry), runs nothing. A shell's `-c` or `eval` named inside a quoted argument or a content here-document (a PR body draft) is text too. The same commands run by the program or the shell are refused or gated as before. ([#1033](https://github.com/giantswarm/beekeeper/issues/1033)).
+- The merge gate's rewrite puts the gate only before a blocking devctl command the shell runs: on the command line, in a shell's `-c` or `eval` string, or in a here-document a shell reads. A command named after a `;`, `&` or `(` inside a quoted argument of a command that reads it as text (a `gh … --body` text, a `git` commit message, a `grep` or `jq` pattern, an `echo`) stays as written, unless it sits in a subshell or a command or process substitution or its pipeline feeds a command that may run it; a quoted argument of any other command (`flock -c`, `watch`, `su -c`, a shell with options before its `-c`, `git rebase -x`) keeps its gate. ([#1364](https://github.com/giantswarm/beekeeper/issues/1364)).
 
 ## [0.149.0-rc.3] - 2026-10-17
 

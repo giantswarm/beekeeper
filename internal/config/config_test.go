@@ -493,13 +493,16 @@ func TestThresholdsDefaultToFractions(t *testing.T) {
 	if _, err := Load(writeTemp(t, "kube: {contextTemplate: login.example.com}\n")); err == nil {
 		t.Error("a context template without {installation} loads")
 	}
-	kc, err := Load(writeTemp(t, "kube: {kubeconfig: [~/.kube/config, /srv/kube/teleport.yaml]}\n"))
+	kc, err := Load(writeTemp(t, "kube: {kubeconfig: [~/.kube/config, /srv/kube/teleport.yaml]}\nalerts: {kubeconfig: [~/.local/state/beekeeper/kube/teleport.yaml]}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	home, _ := os.UserHomeDir()
 	if want := []string{filepath.Join(home, ".kube", "config"), "/srv/kube/teleport.yaml"}; !slices.Equal(kc.Kube.Kubeconfig, want) {
 		t.Errorf("kube.kubeconfig = %q, want %q", kc.Kube.Kubeconfig, want)
+	}
+	if want := []string{filepath.Join(home, ".local", "state", "beekeeper", "kube", "teleport.yaml")}; !slices.Equal(kc.Alerts.Kubeconfig, want) {
+		t.Errorf("alerts.kubeconfig = %q, want %q", kc.Alerts.Kubeconfig, want)
 	}
 }
 

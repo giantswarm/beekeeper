@@ -1095,6 +1095,13 @@ type Alerts struct {
 	Timeout Duration `yaml:"timeout"`
 	// Kubectl is the kubectl binary.
 	Kubectl string `yaml:"kubectl"`
+	// Kubeconfig lists the kubeconfig files (~/ allowed) the installations'
+	// contexts are resolved and read in, passed to kubectl as KUBECONFIG:
+	// a kubeconfig of the watch's own, logged into with KUBECONFIG=<file>
+	// tsh kube login <cluster>, so an installation reads without a context
+	// in the machine kubeconfig. The machine kubeconfig is merged first
+	// unless the list names it. Empty, kubectl's own default.
+	Kubeconfig []string `yaml:"kubeconfig"`
 	// Flap is the flap damper.
 	Flap Flap `yaml:"flap"`
 	// Quiet are the rules whose alerts' changes are no wake-up: the watch
@@ -1770,6 +1777,9 @@ func (c *Config) defaults() error {
 	}
 	for i, f := range c.Kube.Kubeconfig {
 		c.Kube.Kubeconfig[i] = homePath(home, f)
+	}
+	for i, f := range c.Alerts.Kubeconfig {
+		c.Alerts.Kubeconfig[i] = homePath(home, f)
 	}
 	for in, s := range c.Apps.Secrets {
 		s.File = homePath(home, s.File)

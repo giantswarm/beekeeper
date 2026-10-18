@@ -411,19 +411,180 @@ func (h Hook) decide(ev event) []byte {
 
 // gate puts "beekeeper gate --" before every blocking devctl command at a
 // command position, behind its prefix commands, so that only the devctl
-// invocation is wrapped and pipelines and lists run as written. A
-// here-document a shell reads as its program is a command line too, gated in
-// place; one that is content (a file written, an issue body sent) stays as
-// written.
+// invocation is wrapped and pipelines and lists run as written. A shell's -c
+// or eval string and a here-document a shell reads as its program are
+// command lines too, gated in place; a here-document that is content (a file
+// written, an issue body sent) and a quoted argument of a command that only
+// reads it as text (a PR body, a commit message, a pattern) stay as written.
 func (h Hook) gate(cmd string, bg bool) (string, bool) {
-	content := contentBodies(scanShell(cmd))
 	var at []int
 	for _, m := range owned.FindAllStringSubmatchIndex(cmd, -1) {
-		if !inRanges(content, m[2]) {
+		if mayRun(cmd, m[2]) {
 			at = append(at, m[2])
 		}
 	}
 	return h.insertGate(cmd, at, bg, nil), len(at) > 0
+}
+
+var (
+	// textCommands read their quoted arguments as text and run none of them:
+	// the search patterns and filters, the printers, and gh and git in the
+	// subcommands textSubcommands names.
+	textCommands = wordSet("gh " + gitCmd + " grep egrep fgrep jq echo printf")
+	// textSubcommands are gh's and git's subcommands whose quoted arguments
+	// are messages, bodies and titles.
+	textSubcommands = map[string]map[string]bool{
+		"gh":   wordSet("issue pr release api"),
+		gitCmd: wordSet("commit tag"),
+	}
+	// textOptions are the only options gh and git may carry there: none opens
+	// an editor or a browser, writes a file or loads a configuration.
+	textOptions = map[string]map[string]bool{
+		"gh": wordSet("-R --repo -t --title -b --body -F --body-file -l --label --add-label --remove-label -a --assignee " +
+			"-B --base -H --head -d --draft -m --milestone -r --reviewer --json -q --jq -s --state -L --limit " +
+			"-n --notes --notes-file -f --raw-field --field -X --method --paginate --input --header"),
+		gitCmd: wordSet("-m --message -a --all -am -s --signoff -q --quiet --allow-empty --no-verify -F --file"),
+	}
+	// gitMessage are the options that give git its message, so no editor opens.
+	gitMessage = wordSet("-m --message -am -F --file")
+	// sinks are the pipeline stages after a text command that run nothing
+	// they read and have no option that runs a command.
+	sinks = wordSet("head tail wc uniq cut tr cat column")
+	// lineCommands may stand beside a text command on its line: they change
+	// nothing a text command reads and run no text.
+	lineCommands = wordSet("cd true devctl")
+)
+
+// wordSet is the set of the space-separated words in s.
+func wordSet(s string) map[string]bool {
+	set := map[string]bool{}
+	for _, w := range strings.Fields(s) {
+		set[w] = true
+	}
+	return set
+}
+
+// mayRun reports whether the shell may run the text at offset at of cmd as
+// part of a command line: outside quotes, or inside a shell's -c or eval
+// string or a here-document a shell reads, by the same test within it. A
+// quoted argument may run too, unless readsAsText says it is only read as
+// text: flock -c, watch, su -c, a shell with options before its -c and the
+// like run theirs.
+func mayRun(cmd string, at int) bool {
+	sc := scanShell(cmd)
+	if sc.masked[at] == cmd[at] {
+		return true
+	}
+	for _, m := range shellC.FindAllStringSubmatchIndex(cmd, -1) {
+		if sc.masked[m[2]] != cmd[m[2]] {
+			continue // the -c itself sits inside a quoted argument
+		}
+		body := cmd[m[1]:]
+		if end := m[1] + closingQuote(body, cmd[m[2]]); at >= m[1] && at < end {
+			return mayRun(cmd[m[1]:end], at-m[1])
+		}
+	}
+	segs := sc.segments()
+	for _, hd := range sc.heredocs {
+		if at >= hd.start && at < hd.end {
+			return shellReads(sc, segs, hd.op) && mayRun(cmd[hd.start:hd.end], at-hd.start)
+		}
+	}
+	for i, sg := range segs {
+		if at >= sg.start && at < sg.end {
+			return !readsAsText(sc, segs, i)
+		}
+	}
+	return true
+}
+
+// readsAsText reports whether segment i's quoted arguments are only read as
+// text: the command line is flat (flatLine), its command is a text command
+// (textCommand), and every later stage of its pipeline is a text command or
+// one of sinks.
+func readsAsText(sc shellScan, segs []segment, i int) bool {
+	if words := segWords(sc, segs[i]); !flatLine(sc, segs) || words == nil || !textCommand(words) {
+		return false
+	}
+	for j := i; segs[j].after == "|" && j+1 < len(segs); j++ {
+		if next := segWords(sc, segs[j+1]); next == nil || !sinks[next[0]] && !textCommand(next) {
+			return false
+		}
+	}
+	return true
+}
+
+// plainName is a command written as a plain name: no path, quote or
+// expansion in it.
+var plainName = regexp.MustCompile(`^[a-z]+$`)
+
+// segWords are the segment's words when its command is its first word,
+// written as a plain name: no wrapper (env, sudo, timeout, command, xargs),
+// assignment, keyword or quoting before or in it; nil otherwise.
+func segWords(sc shellScan, sg segment) []string {
+	raw := strings.TrimLeft(sc.plain[sg.start:sg.end], " \t\n")
+	words := shellWords(raw)
+	if len(words) == 0 || !plainName.MatchString(words[0]) || !strings.HasPrefix(raw, words[0]) {
+		return nil
+	}
+	return words
+}
+
+// writes reports whether the segment redirects its output to a file, which
+// a later command may run.
+func writes(sc shellScan, sg segment) bool {
+	return strings.Contains(sc.masked[sg.start:sg.end], ">")
+}
+
+// flatLine reports whether the command line is a list of simple pipelines
+// of known commands alone: no subshell, group, compound command, command or
+// process substitution, assignment or redirection anywhere in it, and every
+// command a text command (textCommand), one of sinks or one of lineCommands.
+// Anything else (an export, an alias, hash, a file written) may change what
+// a text command does or run what it prints.
+func flatLine(sc shellScan, segs []segment) bool {
+	for _, sg := range segs {
+		switch sg.after {
+		case "$(", "<(", "(", ")", "`":
+			return false
+		}
+		if strings.TrimSpace(sc.plain[sg.start:sg.end]) == "" {
+			continue
+		}
+		words := segWords(sc, sg)
+		if words == nil || writes(sc, sg) || !sinks[words[0]] && !lineCommands[words[0]] && !textCommand(words) {
+			return false
+		}
+	}
+	return true
+}
+
+// textCommand reports whether a segment's words (segWords) run one of
+// textCommands: printf without -v, gh and git only with a subcommand
+// textSubcommands names first (no -c, --config-env or other option before
+// it) and textOptions alone, git with an explicit message.
+func textCommand(words []string) bool {
+	name := words[0]
+	if !textCommands[name] {
+		return false
+	}
+	if name == "printf" {
+		return len(words) == 1 || !strings.HasPrefix(words[1], "-") // printf -v sets a variable
+	}
+	subs, ok := textSubcommands[name]
+	if !ok {
+		return true
+	}
+	// the subcommand comes first: no -c, --config-env, -C or gh option before it
+	if len(words) == 1 || !subs[words[1]] {
+		return false
+	}
+	opts, rest := textOptions[name], words[2:]
+	option := func(o string) string { return strings.SplitN(o, "=", 2)[0] }
+	if slices.ContainsFunc(rest, func(o string) bool { return strings.HasPrefix(o, "-") && o != "-" && !opts[option(o)] }) {
+		return false
+	}
+	return name != gitCmd || slices.ContainsFunc(rest, func(o string) bool { return gitMessage[option(o)] })
 }
 
 // inRanges reports whether the offset is inside one of the ranges.
