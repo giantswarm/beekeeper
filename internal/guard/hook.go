@@ -419,12 +419,27 @@ func (h Hook) gate(cmd string, bg bool) (string, bool) {
 	return h.insertGate(cmd, at, bg), len(at) > 0
 }
 
-// textCommands read their quoted arguments as text and run none of them:
-// gh's and git's messages, the search patterns and filters, the printers.
-var textCommands = map[string]bool{
-	"gh": true, "git": true, "grep": true, "egrep": true, "fgrep": true, "rg": true, "ug": true, "ugrep": true,
-	"jq": true, "yq": true, "echo": true, "printf": true,
-}
+var (
+	// textCommands read their quoted arguments as text and run none of them:
+	// the search patterns and filters, the printers, and gh and git in the
+	// subcommands textSubcommands names.
+	textCommands = map[string]bool{
+		"gh": true, "git": true, "grep": true, "egrep": true, "fgrep": true, "rg": true, "ug": true, "ugrep": true,
+		"jq": true, "yq": true, "echo": true, "printf": true,
+	}
+	// textSubcommands are gh's and git's subcommands whose quoted arguments
+	// are messages, bodies, titles and patterns.
+	textSubcommands = map[string]map[string]bool{
+		"gh":  {"issue": true, "pr": true, "release": true, "api": true, "search": true, "label": true},
+		"git": {"commit": true, "tag": true, "notes": true, "log": true, "show": true, "grep": true},
+	}
+	// sinks are the pipeline stages after a text command that run nothing
+	// they read.
+	sinks = map[string]bool{
+		"tee": true, "head": true, "tail": true, "wc": true, "sort": true, "uniq": true, "cut": true, "tr": true,
+		"cat": true, "less": true, "column": true,
+	}
+)
 
 // mayRun reports whether the shell may run the text at offset at of cmd as
 // part of a command line: outside quotes, or inside a shell's -c or eval
@@ -460,22 +475,60 @@ func mayRun(cmd string, at int) bool {
 	return true
 }
 
-// readsAsText reports whether segment i's command is one of textCommands
-// (git without a -c, which can define an alias that runs a shell) and no
-// later stage of its pipeline is a shell or xargs, which could run its output.
+// readsAsText reports whether segment i is a command line of its own, not
+// inside a subshell or a command or process substitution whose output may
+// run; its command is a text command (textCommand); and every later stage of
+// its pipeline is a text command or one of sinks.
 func readsAsText(sc shellScan, segs []segment, i int) bool {
-	words := shellWords(sc.plain[segs[i].start:segs[i].end])
-	c := commandAt(words)
-	if c >= len(words) || !textCommands[path.Base(words[c])] || path.Base(words[c]) == "git" && slices.Contains(words[c:], "-c") {
+	depth, quoted := 0, false
+	for _, sg := range segs[:i] {
+		switch sg.after {
+		case "$(", "<(", "(":
+			depth++
+		case ")":
+			depth--
+		case "`":
+			quoted = !quoted
+		}
+	}
+	if depth != 0 || quoted || !textCommand(shellWords(sc.plain[segs[i].start:segs[i].end])) {
 		return false
 	}
 	for j := i; segs[j].after == "|" && j+1 < len(segs); j++ {
 		next := shellWords(sc.plain[segs[j+1].start:segs[j+1].end])
-		if k := commandAt(next); runsLocalShell(next) || k < len(next) && path.Base(next[k]) == "xargs" {
+		if k := commandAt(next); k >= len(next) || !sinks[path.Base(next[k])] && !textCommand(next) {
 			return false
 		}
 	}
 	return true
+}
+
+// textCommand reports whether the simple command's words run one of
+// textCommands, gh and git only in a subcommand textSubcommands names, git
+// with no configuration from its options or the environment (an alias or a
+// hook that runs a shell).
+func textCommand(words []string) bool {
+	c := commandAt(words)
+	if c >= len(words) || !textCommands[path.Base(words[c])] {
+		return false
+	}
+	name := path.Base(words[c])
+	subs, ok := textSubcommands[name]
+	if !ok {
+		return true
+	}
+	if name == "git" && slices.ContainsFunc(words[:c], func(w string) bool { return strings.HasPrefix(w, "GIT_") }) {
+		return false
+	}
+	for _, w := range words[c+1:] {
+		if !strings.HasPrefix(w, "-") {
+			return subs[w]
+		}
+		if name == "git" {
+			return false // -c, --config-env, -C and every other option before the subcommand
+		}
+	}
+	return false
 }
 
 // inRanges reports whether the offset is inside one of the ranges.

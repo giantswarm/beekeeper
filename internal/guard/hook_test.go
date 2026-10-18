@@ -648,6 +648,14 @@ func TestHookGatesQuotedCommandLines(t *testing.T) {
 		"echo 'cd x; devctl pr merge o/r 7' | sh",
 		"printf '%s\\n' 'cd x; devctl pr merge o/r 7' | xargs -I{} sh -c '{}'",
 		"git -c alias.m='!cd x; devctl pr merge o/r 7' m",
+		"git rebase -x 'cd x; devctl pr merge o/r 7' main",
+		"git submodule foreach 'cd x; devctl pr merge o/r 7'",
+		"gh alias set m --shell 'cd x; devctl pr merge o/r 7'",
+		"$(echo 'cd x; devctl pr merge o/r 7')",
+		"`echo 'cd x; devctl pr merge o/r 7'`",
+		"sh <(echo 'cd x; devctl pr merge o/r 7')",
+		"echo 'cd x; devctl pr merge o/r 7' | python3 -c 'import os,sys; os.system(sys.stdin.read())'",
+		"echo 'cd x; devctl pr merge o/r 7' | parallel",
 	} {
 		d := decide(t, h, t.TempDir(), cmd, nil)
 		if d == nil {
