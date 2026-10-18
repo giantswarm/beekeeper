@@ -395,6 +395,11 @@ func TestHookGatesMerges(t *testing.T) {
 		{"bash <<'EOF'\nset -e\n  devctl pr merge o/r 7\nEOF", "bash <<'EOF'\nset -e\n  " + g + "devctl pr merge o/r 7\nEOF", false},
 		{"cat <<'EOF' | sh\ndevctl release promote o/r\nEOF", "cat <<'EOF' | sh\n" + g + "devctl release promote o/r\nEOF", false},
 		{"eval devctl pr merge o/r 7", "eval " + g + "devctl pr merge o/r 7", false},
+		// A real merge beside a quoted argument naming one: only the real one is gated.
+		{`gh pr comment 7 --repo o/r --body 'Next: x; devctl pr merge o/r 7' && devctl pr merge o/r 7`,
+			`gh pr comment 7 --repo o/r --body 'Next: x; devctl pr merge o/r 7' && ` + g + `devctl pr merge o/r 7`, false},
+		{`grep -E '(x & devctl pr wait o/r 7|y; devctl pr merge)' log.txt; devctl pr wait o/r 7`,
+			`grep -E '(x & devctl pr wait o/r 7|y; devctl pr merge)' log.txt; ` + g + `devctl pr wait o/r 7`, false},
 	} {
 		d := decide(t, h, t.TempDir(), c.cmd, map[string]any{backgroundKey: c.bg})
 		if d == nil || d.UpdatedInput["command"] != c.want {
@@ -409,7 +414,11 @@ func TestHookGatesMerges(t *testing.T) {
 		"flock x.lock " + g + "~/bin/devctl pr merge o/r 1", "sed -i 's/gs-pr-merge/devctl pr merge/g' f", "pgrep -f 'devctl pr merge'",
 		// A here-document that is content stays as written: an issue body, a file.
 		"gh issue create --repo o/r --title t --body-file - <<'EOF'\nThe merge failed:\n\n    devctl pr merge o/r 7\nEOF",
-		"cat <<'EOF' >| notes.md\ndevctl pr merge o/r 7\nEOF"} {
+		"cat <<'EOF' >| notes.md\ndevctl pr merge o/r 7\nEOF",
+		// A quoted argument of another command is text after its ; & or ( too.
+		`gh issue comment 1 --repo o/r --body "Run it: cd x; devctl pr merge o/r 7 (or & devctl pr wait o/r 7)"`,
+		`jq -r 'select(.cmd | test("x & devctl pr wait o/r 7"))' log.json`,
+		"git commit -m 'gate: x\n\n(devctl pr merge o/r 7)'"} {
 		if d := decide(t, h, t.TempDir(), cmd, nil); d != nil {
 			t.Errorf("%q is rewritten: %v", cmd, d.UpdatedInput["command"])
 		}
@@ -657,8 +666,8 @@ func TestHookGatesRealMerges(t *testing.T) {
 			got = strings.ReplaceAll(got, `'"'"'`, `'`)
 			got = strings.TrimSuffix(strings.TrimPrefix(got, self+" run -- zsh -c '"), "'")
 		}
-		// A mention after a | or ; inside a quoted string is gated too (a
-		// grep pattern): more gates than merges only where there are mentions.
+		// A mention inside a quoted argument (a grep pattern) stays as
+		// written: more gates than merges only where there are mentions.
 		k, want := strings.Count(got, self+" gate -- "), c.Merges+len(waits.FindAllString(c.Command, -1))
 		if k < want || k > want && len(anyOwned.FindAllString(c.Command, -1)) == want {
 			t.Errorf("%q: %d gates, want %d: %s", c.Command, k, want, got)

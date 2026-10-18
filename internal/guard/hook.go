@@ -403,19 +403,45 @@ func (h Hook) decide(ev event) []byte {
 
 // gate puts "beekeeper gate --" before every blocking devctl command at a
 // command position, behind its prefix commands, so that only the devctl
-// invocation is wrapped and pipelines and lists run as written. A
-// here-document a shell reads as its program is a command line too, gated in
-// place; one that is content (a file written, an issue body sent) stays as
-// written.
+// invocation is wrapped and pipelines and lists run as written. A shell's -c
+// or eval string and a here-document a shell reads as its program are
+// command lines too, gated in place; a quoted argument of another command
+// (an interpreter's code, a PR body) and a here-document that is content (a
+// file written, an issue body sent) stay as written.
 func (h Hook) gate(cmd string, bg bool) (string, bool) {
-	content := contentBodies(scanShell(cmd))
 	var at []int
 	for _, m := range owned.FindAllStringSubmatchIndex(cmd, -1) {
-		if !inRanges(content, m[2]) {
+		if shellRuns(cmd, m[2]) {
 			at = append(at, m[2])
 		}
 	}
 	return h.insertGate(cmd, at, bg), len(at) > 0
+}
+
+// shellRuns reports whether the shell runs the text at offset at of cmd as part
+// of a command line: outside quotes, or inside a shell's -c or eval string or
+// a here-document a shell reads, by the same test within it.
+func shellRuns(cmd string, at int) bool {
+	sc := scanShell(cmd)
+	if sc.masked[at] == cmd[at] {
+		return true
+	}
+	for _, m := range shellC.FindAllStringSubmatchIndex(cmd, -1) {
+		if sc.masked[m[2]] != cmd[m[2]] {
+			continue // the -c itself sits inside a quoted argument
+		}
+		body := cmd[m[1]:]
+		if end := m[1] + closingQuote(body, cmd[m[2]]); at >= m[1] && at < end {
+			return shellRuns(cmd[m[1]:end], at-m[1])
+		}
+	}
+	segs := sc.segments()
+	for _, hd := range sc.heredocs {
+		if at >= hd.start && at < hd.end {
+			return shellReads(sc, segs, hd.op) && shellRuns(cmd[hd.start:hd.end], at-hd.start)
+		}
+	}
+	return false
 }
 
 // inRanges reports whether the offset is inside one of the ranges.
