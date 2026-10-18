@@ -1042,6 +1042,11 @@ type Merge struct {
 	// Child is a running merge's devctl, in a session of its own: it merges
 	// on when the gate's caller, or the gate, is gone.
 	Child int `json:"child,omitempty"`
+	// Run is the files' base of a queued merge's own run (the gate under
+	// --queued and its merge-child), whose merge-child owes the outcome to
+	// the owner: a run cut before that merge-child wrote its exit code
+	// leaves the outcome to the watch. Cleared once the cut is owed.
+	Run string `json:"run,omitempty"`
 	// Output is the file the gate's stdout writes to, a background task's
 	// output file: a TaskStop naming that task stops the merge.
 	Output string `json:"output,omitempty"`
