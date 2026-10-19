@@ -216,7 +216,7 @@ func (a *app) readHandover(q string) (handover, error) {
 			h.context = act.Context
 		}
 	}
-	if s, ok := st.BypassStart(p.Session); ok {
+	if s, ok := st.BypassStartOf(p); ok {
 		if h.dir == "" {
 			h.dir = s.Dir
 		}
