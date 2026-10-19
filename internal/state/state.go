@@ -786,8 +786,22 @@ func (r *Report) Running() bool { return r != nil && r.Ended.IsZero() }
 // BypassStart returns the start of session when beekeeper started it in
 // bypassPermissions.
 func (st *State) BypassStart(session string) (Start, bool) {
+	if session == "" {
+		return Start{}, false
+	}
+	return st.BypassStartOf(Party{Session: session})
+}
+
+// BypassStartOf returns the start of p when beekeeper started it in
+// bypassPermissions, matched by its CLI session id or its desktop host id:
+// the desktop gives a session's restarted CLI a new session id and keeps
+// its host id.
+func (st *State) BypassStartOf(p Party) (Start, bool) {
+	if p.Session == "" && p.HostSession == "" {
+		return Start{}, false
+	}
 	for _, s := range st.Starts {
-		if session != "" && s.Session == session && s.Mode == ModeBypass {
+		if s.Mode == ModeBypass && s.Is(Party{Session: p.Session, HostSession: p.HostSession}) {
 			return s, true
 		}
 	}
