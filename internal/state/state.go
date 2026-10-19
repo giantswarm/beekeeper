@@ -797,15 +797,24 @@ func (st *State) BypassStart(session string) (Start, bool) {
 // the desktop gives a session's restarted CLI a new session id and keeps
 // its host id.
 func (st *State) BypassStartOf(p Party) (Start, bool) {
-	if p.Session == "" && p.HostSession == "" {
-		return Start{}, false
-	}
 	for _, s := range st.Starts {
-		if s.Mode == ModeBypass && s.Is(Party{Session: p.Session, HostSession: p.HostSession}) {
+		if s.Mode == ModeBypass && s.of(p) {
 			return s, true
 		}
 	}
 	return Start{}, false
+}
+
+// StartIndex is the index in Starts of p's start in any mode, matched as
+// BypassStartOf matches; -1 when beekeeper did not start it.
+func (st *State) StartIndex(p Party) int {
+	return slices.IndexFunc(st.Starts, func(s Start) bool { return s.of(p) })
+}
+
+// of reports whether s is the start of p, by its CLI session id or its
+// desktop host id; a name alone matches no start.
+func (s Start) of(p Party) bool {
+	return (p.Session != "" || p.HostSession != "") && s.Is(Party{Session: p.Session, HostSession: p.HostSession})
 }
 
 // Knows reports whether p is a session beekeeper started (any mode), holds

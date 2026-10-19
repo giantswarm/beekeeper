@@ -692,7 +692,7 @@ func (a *app) permissionRequest(ctx context.Context, raw []byte) []byte {
 	var start state.Start
 	out, req := guard.Permission(raw, func(session string) bool {
 		var ok bool
-		start, ok = a.bypassStart(state.Party{Session: session})
+		start, ok = a.hookStart(session)
 		return ok
 	})
 	if out != nil && a.store != nil {
@@ -711,6 +711,13 @@ func (a *app) heldRequest(ctx context.Context, raw []byte) (out []byte, held boo
 	}
 	dir := takeover.Dir(a.cfg.StateDir)
 	f, ok := takeover.Taken(dir, req.Session, proc.Alive)
+	if s, started := a.hookStart(req.Session); !ok && started && s.Session != req.Session {
+		// a take-over of the start's CLI holds its restarted CLI's request
+		// too, as the allow matches it by its host id
+		if f, ok = takeover.Taken(dir, s.Session, proc.Alive); ok {
+			req.Session = s.Session
+		}
+	}
 	if !ok {
 		return nil, false
 	}
@@ -771,15 +778,20 @@ func (a *app) bypassStart(p state.Party) (state.Start, bool) {
 }
 
 // startedWorker reports whether beekeeper agents start started session in
-// bypassPermissions, the refusals' check: matched by its desktop host id
-// too, so a worker whose CLI the desktop restarted under a new session id
-// keeps them. The permission request's allow matches the session id only.
+// bypassPermissions, the refusals' check.
 func (a *app) startedWorker(session string) bool {
-	if session == "" {
-		return false
-	}
-	_, ok := a.bypassStart(state.Party{Session: session, HostSession: os.Getenv("CLAUDE_CODE_HOST_SESSION_ID")})
+	_, ok := a.hookStart(session)
 	return ok
+}
+
+// hookStart is bypassStart for the hook event's session, matched by its
+// desktop host id too, so a worker whose CLI the desktop restarted under a
+// new session id keeps its refusals and its permission allow.
+func (a *app) hookStart(session string) (state.Start, bool) {
+	if session == "" {
+		return state.Start{}, false
+	}
+	return a.bypassStart(state.Party{Session: session, HostSession: os.Getenv("CLAUDE_CODE_HOST_SESSION_ID")})
 }
 
 // firstReads reports whether this is the session's first write in repo. The

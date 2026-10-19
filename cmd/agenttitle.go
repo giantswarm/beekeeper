@@ -277,7 +277,7 @@ func (a *app) startedOn(id string) string {
 // when it chose none.
 func (a *app) chosenModel(id string) string {
 	if st, err := a.store.Read(); err == nil {
-		if s, ok := st.BypassStart(id); ok {
+		if s, ok := st.BypassStartOf(state.Party{Session: id, HostSession: "local_" + id}); ok {
 			return s.Model
 		}
 	}
@@ -432,7 +432,7 @@ func pickSteward(st *state.State, sessions []*claude.Session, t *proc.Table, tar
 // stewards reports whether s may steward a request about target.
 func stewards(st *state.State, t *proc.Table, s *claude.Session, target string, now time.Time) bool {
 	p := t.ByPID[s.PID]
-	i := slices.IndexFunc(st.Starts, func(x state.Start) bool { return x.Session == s.ID })
+	i := st.StartIndex(state.Party{Session: s.ID, HostSession: s.HostID})
 	switch {
 	case s.HostID == "" || s.Archived || p == nil || !slices.Contains(p.Args, permissionPromptTool):
 		return false // not the desktop's CLI: no desktop session tools
@@ -457,7 +457,7 @@ func handedOver(st *state.State, start state.Start) bool {
 	if start.Name == "" {
 		return false
 	}
-	other := func(p state.Party) bool { return p.Name == start.Name && p.Session != start.Session }
+	other := func(p state.Party) bool { return p.Name == start.Name && !p.Is(start.Party) }
 	return slices.ContainsFunc(st.Starts, func(x state.Start) bool { return other(x.Party) && x.At.After(start.At) }) ||
 		slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return other(ag.Party) })
 }
@@ -881,7 +881,7 @@ func (a *app) archivableRecord(st *state.State, ag state.Party) (host, why strin
 	if strings.HasPrefix(ag.HostSession, omp.HostPrefix) {
 		return "", "an omp agent has no desktop session"
 	}
-	i := slices.IndexFunc(st.Starts, func(x state.Start) bool { return x.Session != "" && x.Session == ag.Session })
+	i := st.StartIndex(ag)
 	if i < 0 {
 		return "", "its desktop session stays: beekeeper did not start it"
 	}

@@ -403,8 +403,8 @@ func resolveWake(cfg *config.Config, st *state.State, ag state.Agent) (wakeTarge
 			}
 		}
 	}
-	for _, id := range []string{w.id, ag.Session} {
-		if s, ok := st.BypassStart(id); ok {
+	for _, p := range []state.Party{{Session: w.id, HostSession: w.host}, ag.Party} {
+		if s, ok := st.BypassStartOf(p); ok {
 			// the model it was started on, which its turns keep
 			if s.Model != "" && !sameModel(w.model, s.Model) {
 				w.model = s.Model
