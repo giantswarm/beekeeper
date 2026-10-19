@@ -434,12 +434,15 @@ func (a *app) guideHandoverCmd() *cobra.Command {
 		Short: "Everything the next guide needs: the guide, its queue and an open relay",
 		Long: `Print the guide's hand-over: the guide and its context in tokens, an open
 relay and the queue. --prompt prints the successor's session prompt instead:
-the configured instructions (guide.skill or guide.instructions), the queue, an open relay and the commands that read
-the live values; no live value. Both carry the desk's standing
+the configured instructions (guide.skill or guide.instructions), the
+priorities and holds read from GitHub and the epics with their plans (as
+beekeeper handover --prompt shows them; a failed read is shown as not read),
+the queue, an open relay and the commands that read the live values; no
+other live value. Both carry the desk's standing
 instructions in full: standing.md in the state directory. A caller that has read
 the hand-over before gets only what changed; --full prints everything.`,
 		Args: cobra.NoArgs,
-		RunE: func(*cobra.Command, []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			st, err := a.store.Read()
 			if err != nil {
 				return err
@@ -455,7 +458,7 @@ the hand-over before gets only what changed; --full prints everything.`,
 				return err
 			}
 			if prompt {
-				return a.printGuidePrompt(r, q, s)
+				return a.printGuidePrompt(r, q, s, a.prioritiesHandover(cmd.Context(), st.Notes))
 			}
 			sv := readHolder(r, sessions, a.now, a.cfg.Guide.RestartGrace.Duration)
 			head := "No guide is recorded."
@@ -499,10 +502,11 @@ var guideLiveCommands = [][2]string{
 	{"beekeeper guide next", "the one decision to ask now, due first; the next after its note answer"},
 	{"beekeeper guide queue", "the decisions waiting on the person now"},
 	{"beekeeper guide status", "the guide and its context against guide.relayAt"},
+	{"beekeeper priority", "the priority list now, with each epic's hold"},
 	{"beekeeper log --verb note.", "the notes filed, answered and closed"},
 }
 
-func (a *app) printGuidePrompt(r state.Role, q []queueItem, s string) error {
+func (a *app) printGuidePrompt(r state.Role, q []queueItem, s string, pv *prioritiesView) error {
 	intro, err := a.roleInstructions(guideRole, r)
 	if err != nil {
 		return err
@@ -511,6 +515,7 @@ func (a *app) printGuidePrompt(r state.Role, q []queueItem, s string) error {
 	p("%s\n", intro)
 	p("## Pending state, %s\n", a.stamp(a.now))
 	promptStanding(p, s)
+	a.promptPriorities(p, pv)
 	if section(p, "Decisions waiting on the person", len(q) == 0, "None open.") {
 		for _, it := range q {
 			p("- %s", a.queueText(it))

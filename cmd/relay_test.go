@@ -141,7 +141,7 @@ func TestPromptHasThePendingStateAndNoLiveValue(t *testing.T) {
 			"a": {Alertname: "AppWithoutTeamAnnotation"}, "b": {Alertname: "AppWithoutTeamAnnotation"}, "c": {Alertname: "ChartOrphanConfigMap"},
 		}}},
 	}
-	if err := a.printPrompt(context.Background(), &view{st: st, raw: []*claude.Session{{ID: "s4", HostID: hostFour, Name: agentFour}}}, l, al, answers{}); err != nil {
+	if err := a.printPrompt(context.Background(), &view{st: st, raw: []*claude.Session{{ID: "s4", HostID: hostFour, Name: agentFour}}}, l, al, answers{}, nil); err != nil {
 		t.Fatal(err)
 	}
 	got := out.String()
