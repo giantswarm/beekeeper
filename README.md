@@ -2652,6 +2652,19 @@ to the central roster on their transitions only (registered, a task taken or end
 answers again; what was not published meanwhile is published then. A watch with nothing to
 publish asks every five minutes.
 
+The standby watch delivers the person's mailbox to the machine's agents. It subscribes to
+`beekeeper://mailbox/<person>` through muster (`subscriptions/listen`, MCP 2026-07-28) and, once
+the subscription stands and on each update, calls `receive_messages`: each message addressed to
+one of the machine's agents (`local:<host>/<name>`) arrives in that agent's running session at its
+next tool round, else as a wake's turn, as `Message from <person> via slack (<id>): <text>`, and
+is acked once delivered (`MAILBOX to <name>: …`). A message its agent does not take stays, with
+the later ones to that agent in their order (`MAILBOX <id> waits for <name>`), and is delivered
+again every `watch.interval`; one to another machine's agent is left to that machine; an expiry
+notice is said and acked. A subscription that ends is one `MAILBOX UNSUBSCRIBED` line; the watch
+subscribes again after a minute and drains every `watch.interval` meanwhile. An agent writes to
+its person in Slack with `beekeeper converse "<text>"` (the central instance's `converse`): the
+guide's questions open its thread, and the person's replies there come back the same way.
+
 A lane whose installation is central queues centrally too, so two people's merges into it roll
 one after the other. The gate queues the merge in the central lane (`lane_queue`) as well as
 the machine's, asks for its turn there every 15 seconds while it waits, and runs devctl only when
