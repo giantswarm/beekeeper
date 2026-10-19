@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -113,6 +114,20 @@ func TestPermissionRequestAllowsARestartedWorker(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", restartHost)
 	if out := a.permissionRequest(context.Background(), ev); string(out) != allow {
 		t.Errorf("a restarted worker got %s, want the allow", out)
+	}
+	// The person took the worker over under its first CLI id: the
+	// restarted CLI's request is held for the screen, never allowed.
+	tdir := takeover.Dir(dir)
+	if err := takeover.Take(tdir, firstCLI, takeover.Flag{PID: os.Getpid(), By: tPerson}); err != nil {
+		t.Fatal(err)
+	}
+	defer func(g, p time.Duration) { takeoverGiveUp, takeoverPoll = g, p }(takeoverGiveUp, takeoverPoll)
+	takeoverGiveUp, takeoverPoll = 40*time.Millisecond, 5*time.Millisecond
+	if out := a.permissionRequest(context.Background(), ev); out != nil {
+		t.Errorf("a restarted worker taken over under its first CLI got %s, want none", out)
+	}
+	if err := takeover.Release(tdir, firstCLI); err != nil {
+		t.Fatal(err)
 	}
 	t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", "local_stranger")
 	if out := a.permissionRequest(context.Background(), ev); out != nil {

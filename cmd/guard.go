@@ -711,6 +711,13 @@ func (a *app) heldRequest(ctx context.Context, raw []byte) (out []byte, held boo
 	}
 	dir := takeover.Dir(a.cfg.StateDir)
 	f, ok := takeover.Taken(dir, req.Session, proc.Alive)
+	if s, started := a.hookStart(req.Session); !ok && started && s.Session != req.Session {
+		// a take-over of the start's CLI holds its restarted CLI's request
+		// too, as the allow matches it by its host id
+		if f, ok = takeover.Taken(dir, s.Session, proc.Alive); ok {
+			req.Session = s.Session
+		}
+	}
 	if !ok {
 		return nil, false
 	}
