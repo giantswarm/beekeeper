@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -97,6 +98,8 @@ type mailEnvelope struct {
 	To   string `json:"to"`
 	From struct {
 		Person string `json:"person"`
+		Agent  string `json:"agent"`
+		Host   string `json:"host"`
 		Source string `json:"source"`
 	} `json:"from"`
 	Message   a2aMessage `json:"message"`
@@ -163,13 +166,16 @@ func (w *watcher) drainMailbox(ctx context.Context) bool {
 }
 
 // mailBody is the turn a delivered message is: its text stamped with its
-// person and where they wrote it, and how to answer there.
+// person and where they wrote it, and how to answer there. A message one
+// of the person's agents sent names that agent: it is not the person's own
+// writing, whatever source it claims.
 func mailBody(d mailbox.Delivery, env mailEnvelope) string {
-	person := env.From.Person
-	if person == "" {
-		person = d.Sender
+	person := cmp.Or(env.From.Person, d.Sender)
+	text := env.Message.text()
+	if env.From.Agent != "" && !strings.EqualFold(env.From.Agent, person) {
+		return fmt.Sprintf("Message from %s's agent %s on %s (%s): %s", person, env.From.Agent, env.From.Host, d.MessageID, text)
 	}
-	body := fmt.Sprintf("Message from %s%s (%s): %s", person, via(d.Envelope), d.MessageID, env.Message.text())
+	body := fmt.Sprintf("Message from %s%s (%s): %s", person, via(d.Envelope), d.MessageID, text)
 	if env.From.Source == viaSlack {
 		body += "\n\nThey wrote it in your Slack thread with them: answer there with `beekeeper converse \"<text>\"`."
 	}

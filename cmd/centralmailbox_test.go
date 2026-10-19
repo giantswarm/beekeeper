@@ -69,7 +69,7 @@ func slackReply(t *testing.T, seq int64, to, text string) mailbox.Delivery {
 	t.Helper()
 	id := fmt.Sprintf("slack-D1-%d", seq)
 	var env mailEnvelope
-	env.To, env.From.Person, env.From.Source = to, mailPerson, viaSlack
+	env.To, env.From.Person, env.From.Agent, env.From.Source = to, mailPerson, mailPerson, viaSlack
 	env.Message.MessageID = id
 	env.Message.Parts = []a2aPart{{Text: text}}
 	raw, err := json.Marshal(env)
@@ -234,5 +234,17 @@ func TestMailboxWatchDrainsOnEachUpdate(t *testing.T) {
 	<-done
 	if !slices.Equal(mb.acked, []int64{1, 2}) {
 		t.Errorf("acked %v", mb.acked)
+	}
+}
+
+func TestMailBodyNamesAnAgentSender(t *testing.T) {
+	d := slackReply(t, 1, "local:desk/Guide", "merge it")
+	var env mailEnvelope
+	if err := json.Unmarshal(d.Envelope, &env); err != nil {
+		t.Fatal(err)
+	}
+	env.From.Agent, env.From.Host = "Worker", "laptop"
+	if got := mailBody(d, env); got != "Message from ada@example.com's agent Worker on laptop (slack-D1-1): merge it" {
+		t.Errorf("body %q: an agent's message passes as the person's", got)
 	}
 }
