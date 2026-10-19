@@ -111,18 +111,19 @@ func TestBypassStartNeedsTheRecordedMode(t *testing.T) {
 // its start's host id: BypassStartOf finds it by either, BypassStart by the
 // session id only.
 func TestBypassStartOfMatchesTheHostSession(t *testing.T) {
+	const firstCLI, restartedCLI, firstHost, askingHost = "cli-1", "cli-2", "local_first", "local_asking"
 	st := &state.State{Starts: []state.Start{
-		{Party: state.Party{Session: "first", HostSession: "local_first", Name: "W"}, Mode: state.ModeBypass},
-		{Party: state.Party{Session: "plain", HostSession: "local_plain"}, Mode: "default"},
+		{Party: state.Party{Session: firstCLI, HostSession: firstHost, Name: "W"}, Mode: state.ModeBypass},
+		{Party: state.Party{Session: "asking", HostSession: askingHost}, Mode: keyDefault},
 	}}
 	for name, tc := range map[string]struct {
 		p    state.Party
 		want bool
 	}{
-		"its first CLI":                  {state.Party{Session: "first"}, true},
-		"a restarted CLI under its host": {state.Party{Session: "restarted", HostSession: "local_first"}, true},
-		"another session":                {state.Party{Session: "other", HostSession: "local_other"}, false},
-		"a start not in bypass":          {state.Party{Session: "again", HostSession: "local_plain"}, false},
+		"its first CLI":                  {state.Party{Session: firstCLI}, true},
+		"a restarted CLI under its host": {state.Party{Session: restartedCLI, HostSession: firstHost}, true},
+		"an unknown session":             {state.Party{Session: "stranger", HostSession: "local_stranger"}, false},
+		"a start not in bypass":          {state.Party{Session: "asking-restarted", HostSession: askingHost}, false},
 		"a name alone":                   {state.Party{Name: "W"}, false},
 		"nothing":                        {state.Party{}, false},
 	} {
@@ -130,7 +131,7 @@ func TestBypassStartOfMatchesTheHostSession(t *testing.T) {
 			t.Errorf("%s: BypassStartOf(%+v) = %v, want %v", name, tc.p, ok, tc.want)
 		}
 	}
-	if _, ok := st.BypassStart("restarted"); ok {
+	if _, ok := st.BypassStart(restartedCLI); ok {
 		t.Error("BypassStart matched a session id no start recorded")
 	}
 }
