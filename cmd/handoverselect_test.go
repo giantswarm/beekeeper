@@ -138,7 +138,7 @@ func handoverPrompts(t *testing.T, a *app, out *bytes.Buffer) (sup, guide string
 		t.Fatal(err)
 	}
 	out.Reset()
-	if err := a.printPrompt(context.Background(), &view{st: st}, &leaseList{}, &alertsView{}, answers{}); err != nil {
+	if err := a.printPrompt(context.Background(), &view{st: st}, &leaseList{}, &alertsView{}, answers{}, nil); err != nil {
 		t.Fatal(err)
 	}
 	sup = out.String()
@@ -147,7 +147,7 @@ func handoverPrompts(t *testing.T, a *app, out *bytes.Buffer) (sup, guide string
 		t.Fatal(err)
 	}
 	out.Reset()
-	if err := a.printGuidePrompt(state.Role{}, nil, s); err != nil {
+	if err := a.printGuidePrompt(state.Role{}, nil, s, nil); err != nil {
 		t.Fatal(err)
 	}
 	return sup, out.String()
