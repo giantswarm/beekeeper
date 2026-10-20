@@ -197,9 +197,14 @@ of NEW lines.`,
 			if err := os.MkdirAll(args[0], 0o700); err != nil {
 				return err
 			}
+			var noContext []string
 			for i, t := range targets {
 				ans := answers[i]
-				if !ans.OK {
+				switch {
+				case ans.NoContext:
+					noContext = append(noContext, t.Name)
+					continue
+				case !ans.OK:
 					_, _ = fmt.Fprintf(a.out, "%s unreachable: %s\n", t.Name, ans.Why)
 					continue
 				}
@@ -208,6 +213,9 @@ of NEW lines.`,
 					return err
 				}
 				_, _ = fmt.Fprintf(a.out, "%s: %d alerts in %s\n", t.Name, len(ans.Alerts), path)
+			}
+			if len(noContext) > 0 {
+				_, _ = fmt.Fprintln(a.out, alerts.NoContextLine(noContext))
 			}
 			return nil
 		},
@@ -670,7 +678,12 @@ func (a *app) alertSnapshot(ctx context.Context) []string {
 	go func() { incidents <- a.pagerDutySnapshot(ctx) }()
 	targets := a.alertTargets(ctx)
 	answers := a.alertReader().Read(ctx, targets)
-	rules, now := a.alertRules(), time.Now()
+	return append(snapshotLines(a.alertRules(), targets, answers, time.Now()), <-incidents...)
+}
+
+// snapshotLines are each read installation's grouped set, an unreachable
+// one's line with its cause, and one line for those without a kube context.
+func snapshotLines(rules alerts.Rules, targets []alerts.Target, answers []alerts.Answer, now time.Time) []string {
 	var lines, noContext []string
 	for i, t := range targets {
 		if answers[i].NoContext {
@@ -682,7 +695,7 @@ func (a *app) alertSnapshot(ctx context.Context) []string {
 	if len(noContext) > 0 {
 		lines = append(lines, alerts.NoContextLine(noContext))
 	}
-	return append(lines, <-incidents...)
+	return lines
 }
 
 // alertsView is what the alert watch reads, for the hand-over.
