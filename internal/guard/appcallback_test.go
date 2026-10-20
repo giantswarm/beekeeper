@@ -65,11 +65,12 @@ func TestCallbackClick(t *testing.T) {
 		reason   string
 	}{
 		"add callback URL":       {page, addsCallbackURL, Allow, "the settings page of the person's own App " + callbackApp},
-		"the new field, named":   {page, "Clicks the new field for " + callbackURL, Allow, callbackApp},
+		"the new field, named":   {page, "Clicks the new callback field for " + callbackURL, Allow, callbackApp},
+		"the URL, no callback":   {page, "Clicks the Homepage field for " + callbackURL, Deny, notTheCallback},
 		"a callback field":       {page, "Clicks the new Callback URL field", Deny, notTheCallback},
 		"the private key":        {page, "Clicks Generate a private key for " + callbackURL, Deny, notTheCallback},
 		"types the URL":          {page, "Types the callback URL " + callbackURL, Allow, callbackApp},
-		"the URL alone":          {page, "HTTPS://Agents.Example.org/callback/github/", Allow, callbackApp},
+		"the URL respelt":        {page, "Callback URL HTTPS://Agents.Example.org/callback/github/", Allow, callbackApp},
 		"saves":                  {page, "Clicks Save changes", Allow, callbackApp},
 		"another URL":            {page, "Types the callback URL https://evil.example.net/callback", Deny, notTheCallback + " on record (" + callbackURL + ")"},
 		"the webhook URL":        {page, "Types https://agents.example.org/webhook into the Webhook URL field", Deny, notTheCallback},

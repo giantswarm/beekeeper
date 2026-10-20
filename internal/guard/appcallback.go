@@ -72,7 +72,8 @@ func callbackClick(apps []App, u *url.URL, words string) (Decision, bool) {
 
 // addsCallback reports whether a call's words are a step of adding the
 // recorded callback URL: they name no other URL and no other part of the
-// page, and name Add Callback URL, Save changes or the recorded URL.
+// page, and name Add Callback URL, Save changes, or a callback with the
+// recorded URL.
 func addsCallback(a *App, words string) bool {
 	if otherWords.MatchString(words) {
 		return false
@@ -84,7 +85,7 @@ func addsCallback(a *App, words string) bool {
 		}
 	}
 	if len(urls) > 0 {
-		return true
+		return containsFold(words, "callback")
 	}
 	for _, l := range callbackLabels {
 		if containsFold(words, l) {
