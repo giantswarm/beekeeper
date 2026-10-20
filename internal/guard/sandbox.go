@@ -21,6 +21,31 @@ func (h Hook) DecideSandbox(input []byte) []byte {
 	return nil
 }
 
+// unsandboxed is why a session the agent sandbox's policy does not hold is
+// refused under sandbox.required.
+const unsandboxed = "Refused: sandbox.required is set and the agent sandbox's policy does not hold this session (no BEEKEEPER_SANDBOX): " +
+	"the policy is not installed in Claude Code's managed settings, or the session started before it was. " +
+	"Every tool call but SendMessage is refused; tell the supervisor in one line. The person installs the policy (beekeeper sandbox install) and starts the session again."
+
+// DecideUnsandboxed is the PreToolUse answer for a session the policy
+// does not hold while sandbox.required is set: every call is refused but a
+// SendMessage, by which the session says why it stopped. Malformed input
+// passes.
+func DecideUnsandboxed(input []byte) []byte {
+	var ev event
+	if json.Unmarshal(input, &ev) != nil || ev.ToolName == SendMessageTool {
+		return nil
+	}
+	return answer(hookOutput{PermissionDecision: decisionDeny, Reason: unsandboxed})
+}
+
+// UnsandboxedStart is the SessionStart answer for such a session: the
+// refusal as its context, before its first call.
+func UnsandboxedStart() []byte {
+	b, _ := json.Marshal(map[string]hookOutput{"hookSpecificOutput": {HookEventName: "SessionStart", AdditionalContext: unsandboxed}})
+	return append(b, '\n')
+}
+
 // sandboxRefusal holds the harness's own file tools, which run outside the
 // agent sandbox, to the sandbox's allow lists: a path outside them is
 // refused. "" when the call passes or no sandbox holds the session.

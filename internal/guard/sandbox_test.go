@@ -188,3 +188,26 @@ func TestSandboxSendsLabRuntimeToTheHost(t *testing.T) {
 		t.Errorf("outside the sandbox: refused: %s", d.Reason)
 	}
 }
+
+func TestDecideUnsandboxed(t *testing.T) {
+	for _, c := range []struct {
+		in     string
+		refuse bool
+	}{
+		{`{"tool_name":"Bash","tool_input":{"command":"ls"}}`, true},
+		{`{"tool_name":"Read","tool_input":{"file_path":"/etc/hosts"}}`, true},
+		{`{"tool_name":"mcp__x__y","tool_input":{}}`, true},
+		{`{"tool_name":"SendMessage","tool_input":{"to":"the supervisor"}}`, false},
+		{`{`, false},
+	} {
+		out := DecideUnsandboxed([]byte(c.in))
+		if refused := strings.Contains(string(out), `"permissionDecision":"deny"`); refused != c.refuse {
+			t.Errorf("%s: %s, want refused %v", c.in, out, c.refuse)
+		}
+	}
+	var start map[string]hookOutput
+	if err := json.Unmarshal(UnsandboxedStart(), &start); err != nil || start["hookSpecificOutput"].HookEventName != "SessionStart" ||
+		!strings.Contains(start["hookSpecificOutput"].AdditionalContext, "beekeeper sandbox install") {
+		t.Errorf("start: %+v %v", start, err)
+	}
+}

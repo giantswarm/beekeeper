@@ -998,6 +998,12 @@ same file passed to `claude --settings` holds one session to it, to try a change
   roster entry and events land in the scratch state, the live ones untouched; nothing else of the
   scratch file reaches the host, whose commands would run outside the sandbox.
 - **No way out:** unsandboxed retries are off, and a session whose sandbox cannot start does not start.
+- **Required.** `sandbox.required: true` refuses every session the policy does not hold: one whose
+  environment lacks `BEEKEEPER_SANDBOX` because the policy is not installed or the session started
+  before it was. `beekeeper hook pretooluse` refuses its every tool call but `SendMessage`, by which it
+  tells the supervisor, in the hooks' scope or not, and `beekeeper hook sessionstart` gives it the
+  refusal as context at its start. Off by default: it is set once the policy is installed and
+  sessions work under it. A configuration that does not load refuses nothing.
 - **The file tools.** Read, Grep, Glob, Edit, Write and NotebookEdit run in the harness, outside the
   sandbox. The policy runs `beekeeper hook pretooluse` for them and sets `BEEKEEPER_SANDBOX`, and the
   hook holds them to the same lists in every session, in the hooks' scope or not: a path is resolved
@@ -2784,6 +2790,7 @@ The organisation and desk keys, and their defaults:
 | `secret.env` | none | Names (globs, such as `*_TOKEN`) of environment variables that carry a secret: the producer of `beekeeper secret capture` runs without them, as without the vault's credentials and `SOPS_AGE_KEY` |
 | `sandbox.allowRead`, `sandbox.allowWrite`, `sandbox.domains` | none | The paths under the home directory the agent sandbox re-allows for reading and writing, and the hosts commands reach besides GitHub ([The agent sandbox](#the-agent-sandbox)) |
 | `sandbox.proxyPort` | `3190` | The port of the broker's egress proxy on `127.0.0.1`, the sandbox's only way out ([The agent sandbox](#the-agent-sandbox)) |
+| `sandbox.required` | `false` | Refuse every tool call but `SendMessage` of a session the agent sandbox's policy does not hold ([The agent sandbox](#the-agent-sandbox)) |
 | `sandbox.devctl` | `devctl` on the broker's `PATH` | The devctl the broker runs on the host: it renews the egress proxy's GitHub token and runs their gated devctl commands ([The agent sandbox](#the-agent-sandbox)) |
 | `scan.sops`, `scan.vaults`, `scan.minLength` | none, none, 12 | The SOPS file globs and 1Password vaults `beekeeper scan index` fingerprints, and the shortest value it takes ([What reaches the model](#what-reaches-the-model)) |
 | `plans.repositories`, `plans.check` | none, `plan-stages` | The plans repositories whose pull requests a note for `guide.person` links only once merged, or open with their stage check green or red only for missing stage outputs (the grill stage) |

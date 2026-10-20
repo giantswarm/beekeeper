@@ -216,3 +216,57 @@ func TestHookScopeSandboxedSessionStart(t *testing.T) {
 		t.Error("unheld session out of scope wrote the prelude")
 	}
 }
+
+// With sandbox.required, a session the policy does not hold is refused
+// every tool call, in the hooks' scope or not, but SendMessage, and is
+// told so at its start; a held session and an unrequired desk pass.
+func TestSandboxRequiredRefusesUnheldSessions(t *testing.T) {
+	var out bytes.Buffer
+	a, dir := scopeApp(t, &out)
+	t.Setenv("XDG_RUNTIME_DIR", dir)
+	envFile := filepath.Join(dir, "env")
+	t.Setenv("CLAUDE_ENV_FILE", envFile)
+	read := func(cwd string) string {
+		return `{"hook_event_name":"PreToolUse","session_id":"s1","cwd":"` + cwd + `","tool_name":"Read","tool_input":{"file_path":"` + filepath.Join(cwd, "go.mod") + `"}}`
+	}
+	send := `{"hook_event_name":"PreToolUse","session_id":"s1","cwd":"` + dir + `","tool_name":"SendMessage","tool_input":{"to":"the supervisor","message":"x"}}`
+	start := `{"hook_event_name":"SessionStart","session_id":"s1","cwd":"` + dir + `"}`
+
+	for _, cwd := range []string{filepath.Join(dir, "desk"), filepath.Join(dir, "elsewhere")} {
+		if got := runHook(t, a, &out, "pretooluse", read(cwd)); got != "" {
+			t.Errorf("not required, %s: %q", cwd, got)
+		}
+	}
+	if got := runHook(t, a, &out, "sessionstart", start); strings.Contains(got, "sandbox.required") {
+		t.Errorf("not required, session start: %q", got)
+	}
+
+	conf := "stateDir: " + dir + "\nhooks:\n  scope:\n    dirs: [" + filepath.Join(dir, "desk") + "]\nsandbox:\n  required: true\n"
+	if err := os.WriteFile(a.cfgPath, []byte(conf), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, cwd := range []string{filepath.Join(dir, "desk"), filepath.Join(dir, "elsewhere")} {
+		got := runHook(t, a, &out, "pretooluse", read(cwd))
+		if !strings.Contains(got, `"permissionDecision":"deny"`) || !strings.Contains(got, "sandbox.required") {
+			t.Errorf("required, unheld, %s: %q", cwd, got)
+		}
+	}
+	if got := runHook(t, a, &out, "pretooluse", send); got != "" {
+		t.Errorf("required, unheld, SendMessage: %q", got)
+	}
+	got := runHook(t, a, &out, "sessionstart", start)
+	if !strings.Contains(got, `"hookEventName":"SessionStart"`) || !strings.Contains(got, "sandbox.required") {
+		t.Errorf("required, unheld, session start: %q", got)
+	}
+	if _, err := os.Stat(envFile); err == nil {
+		t.Error("required, unheld: the prelude was written")
+	}
+
+	t.Setenv(sandbox.Env, "1")
+	if got := runHook(t, a, &out, "pretooluse", read(filepath.Join(dir, "desk"))); strings.Contains(got, "sandbox.required") {
+		t.Errorf("required, held: %q", got)
+	}
+	if got := runHook(t, a, &out, "sessionstart", start); strings.Contains(got, "sandbox.required") {
+		t.Errorf("required, held, session start: %q", got)
+	}
+}

@@ -583,6 +583,12 @@ type Sandbox struct {
 	// GitHub token from devctl's App login and runs a sandboxed session's
 	// gated devctl commands, which read the keychain the sandbox closes.
 	Devctl string `yaml:"devctl"`
+	// Required refuses every tool call of a Claude Code session the policy
+	// does not hold (no BEEKEEPER_SANDBOX: the policy is not installed, or
+	// the session started before it was), SendMessage aside, and tells the
+	// session so at its start. Off by default: set it once the policy is
+	// installed and sessions work under it.
+	Required bool `yaml:"required"`
 }
 
 // Scan configures the transcript value scanner: beekeeper scan index
