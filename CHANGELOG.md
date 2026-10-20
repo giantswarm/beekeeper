@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `sandbox.required`: a Claude Code session the agent sandbox's policy does not hold (no `BEEKEEPER_SANDBOX`: the policy not installed, or the session started before it) is refused every tool call but `SendMessage` by `beekeeper hook pretooluse`, in the hooks' scope or not, and `beekeeper hook sessionstart` gives it the refusal as context at its start. Off by default ([#138](https://github.com/giantswarm/beekeeper/issues/138)).
 - `serve.organizations`: further Dex groups that make a caller a member, one per connector that spells the organization differently (a GitHub org's `<org>:<team>`, a directory's group name), beside `serve.organization`. A caller refused as no member or in no team is told, and serve's call log says, which groups the token carries, or that it carries no groups claim.
 - `beekeeper app create <installation> --manifest <file> --user <login>` creates a GitHub App owned by a personal account: the manifest goes to GitHub's `settings/apps/new`, the conversion runs inside beekeeper as for an organisation's App, and the credentials land in the installation's SOPS Secret. The installation page preselects the owner and the repositories `installation.json` beside the manifest names, for `--org` too ([#1451](https://github.com/giantswarm/beekeeper/issues/1451)).
 

@@ -371,6 +371,10 @@ are read, never a secret's name (settings.local.json, *.local.md, .env*,
 keys, sops files). The call is never refused for it; the markers live
 under <stateDir>/reads.
 
+With sandbox.required, a session the agent sandbox's policy does not hold
+(no BEEKEEPER_SANDBOX) is refused every call but SendMessage, in the hooks'
+scope or not, before any other check.
+
 Register it in ~/.claude/settings.json:
 
   "PreToolUse": [{"matcher": "Bash|Read|Grep|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage|TaskStop|mcp__.*", "hooks": [{"type": "command",
@@ -384,6 +388,13 @@ Register it in ~/.claude/settings.json:
 			}
 			cfgErr := a.loadConfig()
 			sandboxed := a.sandboxed(cfgErr)
+			if sandboxed == nil && cfgErr == nil && a.cfg.Sandbox.Required {
+				// every session on the machine, the desk's or not
+				if out := guard.DecideUnsandboxed(raw); out != nil {
+					_, _ = a.out.Write(out)
+				}
+				return nil
+			}
 			if !a.inScope(raw) {
 				// the sandbox holds every session, the desk's or not
 				if out := (guard.Hook{Sandbox: sandboxed}).DecideSandbox(raw); out != nil {
@@ -469,7 +480,9 @@ agent sandbox, where gh reaches GitHub through the broker's egress proxy instead
 of a gh link to devctl: there its directories leave PATH, an inherited one too.
 Outside hooks.scope.dirs it writes nothing, except in the sandbox, where it
 writes that PATH drop alone. It replaces only its own block, so other hooks' lines
-stay, and prints nothing. beekeeper install registers it in
+stay, and prints nothing. With sandbox.required, a session the policy does
+not hold gets no prelude and the refusal its tool calls will meet as its
+context instead. beekeeper install registers it in
 ~/.claude/settings.json:
 
   "SessionStart": [{"matcher": "", "hooks": [{"type": "command",
@@ -479,8 +492,15 @@ stay, and prints nothing. beekeeper install registers it in
 			raw, _ := io.ReadAll(os.Stdin)
 			env := os.Getenv("CLAUDE_ENV_FILE")
 			held := os.Getenv(sandbox.Env) != ""
-			if env == "" || a.loadConfig() != nil {
+			if a.loadConfig() != nil {
 				return nil // a broken configuration must not block a session's start
+			}
+			if !held && a.cfg.Sandbox.Required {
+				_, _ = a.out.Write(guard.UnsandboxedStart())
+				return nil
+			}
+			if env == "" {
+				return nil
 			}
 			scoped := a.inScope(raw)
 			if !scoped && !held {
