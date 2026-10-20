@@ -4,12 +4,15 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -69,6 +72,77 @@ func TestAGateAtItsToolLimitLeavesTheMergeRunning(t *testing.T) {
 	}
 	if *asked != 0 {
 		t.Errorf("GitHub asked %d times about a run whose document is in its files", *asked)
+	}
+}
+
+// The merge-child of a gate that left records the run itself once devctl
+// ended, before it wakes the owner: the lane no longer lists the merge as
+// running when the owner hears the outcome. One killed before its record
+// leaves the run to the watch's recordGone, the backstop.
+func TestAMergeChildRecordsTheRunItsGateLeft(t *testing.T) {
+	asked := stubGitHub(t, github.Open, "")
+	lane := config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}}
+	owner := state.Party{Session: "s1", Name: ownerName}
+	left := func(t *testing.T) (*app, string) {
+		t.Helper()
+		g, gate := runningMerge(t, scratchRepo, lane), deadPID(t)
+		if err := g.store.Update(func(st *state.State) ([]state.Event, error) {
+			st.Merges[0].PID, st.Merges[0].By = gate, owner
+			st.Agents = []state.Agent{{Party: owner}}
+			return nil, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		base := mergeBase(g.store.Dir(), scratchRepo, 7)
+		if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		spec := childSpec{Argv: []string{"/bin/sh", "-c", "echo '" + mergedDoc + "'"}, Command: mergeArgv(scratchRepo), Owner: owner, Gate: gate}
+		raw, _ := json.Marshal(spec)
+		if err := os.WriteFile(base+".spec", raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return g.app, base
+	}
+
+	a, base := left(t)
+	var running []bool
+	was := wakeOwner
+	wakeOwner = func(a *app, _ context.Context, _ state.Party, _, _, _ string) error {
+		st, err := a.store.Read()
+		running = append(running, err != nil || slices.ContainsFunc(st.Merges, func(m state.Merge) bool { return m.Phase == state.Running }))
+		return nil
+	}
+	t.Cleanup(func() { wakeOwner = was })
+	if err := a.mergeChildRun(context.Background(), base, &fakeBinary{}); err != nil {
+		t.Fatalf("unit exit %d (%v), want 0", Code(err), err)
+	}
+	if !slices.Equal(running, []bool{false}) {
+		t.Fatalf("woken %d times, the merge running at the wake: %v", len(running), running)
+	}
+	if st, _ := a.store.Read(); len(st.Merges) != 0 {
+		t.Errorf("merges left: %+v", st.Merges)
+	}
+	if d := lastEvent(t, &gateRun{app: a}, verbMerged); !strings.Contains(d, "o/r#7 exit 0, release v1.2.4") {
+		t.Errorf("merged event %q", d)
+	}
+	if _, err := os.Stat(base + ".rc"); err == nil {
+		t.Error("the run's files are left after the record")
+	}
+
+	// Killed after devctl ended, before its record: the watch records it.
+	a, base = left(t)
+	_ = mergeChild(base)
+	w := &app{cfg: a.cfg, store: a.store, now: time.Now()}
+	recorded, _, lost := w.recordGone(context.Background())
+	if len(recorded) != 1 || !strings.Contains(recorded[0], "o/r#7 exit 0, release v1.2.4") || len(lost) != 0 {
+		t.Fatalf("recorded %q, lost %+v", recorded, lost)
+	}
+	if st, _ := a.store.Read(); len(st.Merges) != 0 {
+		t.Errorf("merges left: %+v", st.Merges)
+	}
+	if *asked != 0 {
+		t.Errorf("GitHub asked %d times about runs whose documents are in their files", *asked)
 	}
 }
 
