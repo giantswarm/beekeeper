@@ -195,7 +195,7 @@ with central configured), 125 a newer release (self-update --check).`,
 		c.GroupID = "supervising"
 		root.AddCommand(c)
 	}
-	for _, c := range []*cobra.Command{a.runCmd(), a.hookCmd(), a.freeCmd(), a.gateCmd(), a.scanCmd(), a.secretCmd(), a.sandboxCmd(), a.appCmd()} {
+	for _, c := range []*cobra.Command{a.runCmd(), a.hookCmd(), a.freeCmd(), a.cacheCmd(), a.gateCmd(), a.scanCmd(), a.secretCmd(), a.sandboxCmd(), a.appCmd()} {
 		c.GroupID = "guarding"
 		root.AddCommand(c)
 	}

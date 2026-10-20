@@ -237,3 +237,104 @@ func TestGoCacheLookWithABuildAlwaysRunning(t *testing.T) {
 		t.Errorf("mark = %+v, %v; want the wait cleared", m, err)
 	}
 }
+
+// A clear waits for the beekeeper run that holds the cache, then clears
+// it with go clean and logs the clear: the run's compile never misses an
+// entry.
+func TestClearGoCacheWaitsForABeekeeperRun(t *testing.T) {
+	a, cache := goCacheApp(t)
+	run, err := gocache.Use(context.Background(), cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiting := make(chan string, 1)
+	done := make(chan error, 1)
+	var line string
+	go func() {
+		var err error
+		line, err = a.clearGoCache(context.Background(), false, func(s string) { waiting <- s })
+		done <- err
+	}()
+	if say := <-waiting; !strings.Contains(say, "waiting for the beekeeper runs that hold the Go build cache "+cache) {
+		t.Errorf("said %q", say)
+	}
+	time.Sleep(500 * time.Millisecond)
+	if !exists(filepath.Join(cache, "03/oldest-d")) {
+		t.Fatal("the clear removed an entry while a beekeeper run held the cache")
+	}
+	run()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []string{"00/new-a", "03/oldest-d"} {
+		if exists(filepath.Join(cache, e)) {
+			t.Errorf("%s stayed after the clear", e)
+		}
+	}
+	if !strings.HasPrefix(line, "Go build cache "+cache+" cleared: 4.0 GiB freed") {
+		t.Errorf("line = %q", line)
+	}
+	evs, err := a.store.Events(10, func(e state.Event) bool { return e.Verb == goCacheClearVerb })
+	if err != nil || len(evs) != 1 || evs[0].Detail != line {
+		t.Errorf("logged %+v, %v; want one %s event with the line", evs, err, goCacheClearVerb)
+	}
+	again, err := gocache.Use(context.Background(), cache)
+	if err != nil {
+		t.Fatalf("a run after the clear: %v", err)
+	}
+	again()
+}
+
+func TestClearGoCacheModcache(t *testing.T) {
+	a, _ := goCacheApp(t)
+	mod := t.TempDir()
+	t.Setenv("GOMODCACHE", mod)
+	// The go command keeps the module cache read-only.
+	pkg := filepath.Join(mod, "example.com", "m@v1.0.0")
+	if err := os.MkdirAll(pkg, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "go.mod"), []byte("module example.com/m\n"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(pkg, 0o500); err != nil { //nolint:gosec // read-only, as the go command leaves it
+		t.Fatal(err)
+	}
+	line, err := a.clearGoCache(context.Background(), true, func(string) { t.Error("waited with no run") })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exists(pkg) || !strings.Contains(line, "; module cache "+mod+" cleared") {
+		t.Errorf("module left: %v; line %q", exists(pkg), line)
+	}
+}
+
+func TestClearGoCacheGivesUpAfterItsWait(t *testing.T) {
+	a, cache := goCacheApp(t)
+	run, err := gocache.Use(context.Background(), cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer run()
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	if _, err := a.clearGoCache(ctx, false, func(string) {}); err == nil || !strings.Contains(err.Error(), "nothing cleared (--wait)") {
+		t.Fatalf("clear = %v", err)
+	}
+	if !exists(filepath.Join(cache, "03/oldest-d")) {
+		t.Error("cleared after the wait ran out")
+	}
+}
+
+// Inside a beekeeper run, which holds the cache, the clear would wait on
+// its own run.
+func TestClearGoCacheRefusedInsideARun(t *testing.T) {
+	a, cache := goCacheApp(t)
+	t.Setenv(gocache.HeldEnv, cache)
+	if _, err := a.clearGoCache(context.Background(), false, func(string) { t.Error("waited") }); err == nil || !strings.Contains(err.Error(), "inside a beekeeper run") {
+		t.Fatalf("clear = %v", err)
+	}
+	if !exists(filepath.Join(cache, "00/new-a")) {
+		t.Error("cleared")
+	}
+}

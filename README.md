@@ -218,6 +218,7 @@ a relayed successor opens with the plugin's role.
 | `beekeeper lint briefs <file or folder>...` | Refuses dated lines, "until X ships" clauses, notes on the release that fixed something, workarounds, role run numbers and shell examples' bare `>` into a file in skills and briefs (every Markdown file below a folder), one `path:line: rule: why` per finding, exit 3 on any. |
 | `beekeeper hook permissionrequest` | The PermissionRequest hook: answers `allow` only for a session `agents start` started in bypass that now runs in `acceptEdits`; every other request gets no answer, so the person sees the normal card. Below. |
 | `beekeeper worktrees [--apply] [--root DIR]...` | Say, with `--apply` do, what the watch does every `doctor.worktreesEvery` to the linked git worktrees under `doctor.worktreeRoots`: remove a finished one (its pull request merged or closed six hours ago, a detached HEAD untouched three days) that holds nothing but build output, and only the build output of a finished one holding uncommitted or unpushed work and of any other untouched six hours; a live session's and a locked one stay. Each path is listed with its size and why. |
+| `beekeeper cache clear go [--modcache] [--wait 1h]` | Clear the shared Go build cache, and the module cache with `--modcache`, once no `beekeeper run` holds it: it waits up to `--wait` for the runs, holds back new ones meanwhile, and logs a `gocache.clear` event. Refused inside a `beekeeper run`. The hook refuses `go clean -cache`, `go clean -modcache` and a delete of either cache, naming it. |
 | `beekeeper free [--apply] [--only SECTIONS] [--summary]` | Show where the memory is and, with `--apply`, free what no running work needs: dead sessions' dirs in the tmpfs `/tmp` (`session-dirs`: the CLI is gone, also a newer one of its desktop session, no roster agent with its task or role holder is the session, the git worktree it works in is gone and no process works or holds a file inside; an idle session's stay), orphaned go-build dirs (`go-build`: unchanged for an hour, no go command running that began before their last change, nothing held inside), throwaway temp dirs and orphaned jest or Claude workers; each section of dirs ends with how many it frees and their size. The watch frees `session-dirs` and `go-build` by itself every `doctor.freeEvery` (1h). Kind clusters, idle CLIs, heavy or runaway processes and Chrome renderers are only reported. Each Claude CLI is listed with its session's title and id, its roster state (busy, parked, idle), its role (supervisor, guide, relay spare) and the hours since its transcript changed; one whose session is untouched for `--cli-stale-hours` (12) with no role and not busy or parked is marked stale with the memory its exit returns, and stays running. Never runs as root: the swap reset and root-owned leftovers are printed as the commands to run. `--summary` prints the TSV rows a desktop front end parses. |
 | `beekeeper self-update` | Install the latest signed release over this binary; `--check` only asks. |
 
@@ -2032,7 +2033,13 @@ during a trim waits for its end, up to its `--wait`. One process trims at a time
 with the size before and after; a cache that stayed over the cap across two `doctor.goCacheEvery`
 intervals is one `GO CACHE` line with its size, the cap and how long it has waited, as is a cache
 it cannot read.
-`beekeeper doctor` trims it the same way (`--dry-run` says the size). Docker's images and build
+`beekeeper doctor` trims it the same way (`--dry-run` says the size). The caches are cleared only
+with `beekeeper cache clear go [--modcache]`, which takes the use lock exclusive: it waits up to
+`--wait` (1h) for the runs that hold it, holds back the runs that start meanwhile, runs `go clean
+-cache` (and `-modcache`) and logs one `gocache.clear` event. The hook refuses `go clean -cache`,
+`go clean -modcache` and a delete of either cache's directory, of every entry in it or of a
+directory that holds it, naming the command: a build running meanwhile fails on the entries it
+loses. Docker's images and build
 cache, which dev images loaded into kind labs pile up, are kept under `doctor.dockerImagesMaxGiB`
 (40 GiB) and `doctor.dockerBuildCacheMaxGiB` (20 GiB): every `doctor.dockerEvery` (1h) a watch
 reads `docker system df` and, over a cap, removes the unused images created longest ago (dangling
