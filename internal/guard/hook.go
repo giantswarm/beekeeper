@@ -118,6 +118,10 @@ type Hook struct {
 	ConfigErr error
 	// Shell is the shell a rewritten command runs in (sh -c semantics).
 	Shell string
+	// GoCache and GoModCache are the Go build and module caches the
+	// machine's builds share, which only beekeeper cache clear go clears;
+	// empty, that cache is not guarded.
+	GoCache, GoModCache string
 	// MaxLabs is how many kind clusters the machine runs at most; read
 	// only for a command that creates one.
 	MaxLabs func() int
@@ -359,6 +363,9 @@ func (h Hook) decide(ev event) []byte {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: l.reason()})
 	}
 	if r := deleteRefusal(cmd); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
+	if r := h.goCacheRefusal(cmd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	if r := h.Outbound.bashRefusal(cmd, cwd); r != "" {

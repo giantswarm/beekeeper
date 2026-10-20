@@ -54,6 +54,13 @@ func TestMain(m *testing.M) {
 		}
 		return ""
 	}
+	machineModCache := gocache.ModDir()
+	goModCacheDir = func() string {
+		if d := gocache.ModDir(); d != machineModCache {
+			return d
+		}
+		return ""
+	}
 	// Nor its Docker: the prune sees no docker CLI; a test that wants one
 	// gives it a fake.
 	dockerCLI = nil

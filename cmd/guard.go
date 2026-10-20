@@ -408,7 +408,8 @@ Register it in ~/.claude/settings.json:
 				Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(),
 				ModelServer: a.modelServer, ConfigErr: cfgErr, Sandbox: sandboxed,
 				Started: a.startedWorker,
-				Apps:    a.allowedApps, Shared: sharedUploads}
+				Apps:    a.allowedApps, Shared: sharedUploads,
+				GoCache: goCacheDir(), GoModCache: goModCacheDir()}
 			if h.ConfigErr == nil {
 				h.Shell, h.Production, h.ContextHint = a.cfg.Shell, a.cfg.Kube.Production, a.cfg.Kube.Context("<installation>")
 				h.MaxLabs = func() int { return a.cfg.KindClusters(ramMiB()) }
