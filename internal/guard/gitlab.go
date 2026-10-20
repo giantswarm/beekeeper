@@ -28,6 +28,24 @@ func gitlabHost(apps []App, host string) bool {
 	return slices.ContainsFunc(apps, func(a App) bool { return a.GitLab != "" && strings.EqualFold(a.GitLab, host) })
 }
 
+// gitlabTitleSuffixes close GitLab's authorize page title after the
+// application's name, outermost first: the site's name, the question.
+var gitlabTitleSuffixes = []string{" · GitLab", " | GitLab", " to use your account?"}
+
+// gitlabTitled is the application name a GitLab authorize page's title
+// carries, exactly: "Authorize <name>[ to use your account?][ · GitLab]"; ""
+// for any other title. A name is matched whole, never by its prefix.
+func gitlabTitled(title string) string {
+	t := strings.TrimSpace(title)
+	if !strings.HasPrefix(t, authorizeTitle) {
+		return ""
+	}
+	for _, s := range gitlabTitleSuffixes {
+		t = strings.TrimSuffix(t, s)
+	}
+	return strings.TrimSpace(strings.TrimPrefix(t, authorizeTitle))
+}
+
 // gitlabConsent decides a call on the authorize page u of a GitLab on
 // record, titled title.
 func gitlabConsent(apps []App, u *url.URL, title string) Decision {
@@ -42,8 +60,7 @@ func gitlabConsent(apps []App, u *url.URL, title string) Decision {
 		if !strings.EqualFold(a.GitLab, host) || !slices.Contains(a.Callbacks, callback) {
 			continue
 		}
-		titled := strings.HasPrefix(strings.ToLower(strings.TrimSpace(title)), strings.ToLower(authorizeTitle+a.Name))
-		if (clientID != "" && clientID == a.ClientID) || (clientID == chromeRedacted && titled) {
+		if (clientID != "" && clientID == a.ClientID) || (clientID == chromeRedacted && strings.EqualFold(gitlabTitled(title), a.Name)) {
 			return Decision{Allow, fmt.Sprintf("beekeeper allows the click: the consent page on %s of the person's own GitLab application %s (callback %s), "+
 				"declared in %s, on record since %s by %s: %s", host, a.Name, callback, a.Declared, a.At.UTC().Format("2006-01-02"), a.By, a.Word)}
 		}
