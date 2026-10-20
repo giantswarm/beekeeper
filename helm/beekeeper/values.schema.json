@@ -2599,6 +2599,24 @@
                         }
                     }
                 },
+                "identity": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "audience": {
+                            "type": "string"
+                        },
+                        "clientID": {
+                            "type": "string"
+                        },
+                        "connectorID": {
+                            "type": "string"
+                        },
+                        "tokenFile": {
+                            "type": "string"
+                        }
+                    }
+                },
                 "issuer": {
                     "type": "string"
                 },
