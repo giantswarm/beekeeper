@@ -98,7 +98,7 @@ func (f *fakeInstallation) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case !asApp && !asInst && !strings.HasPrefix(p, "/user/installations/"):
 		w.WriteHeader(http.StatusUnauthorized)
 	case p == "/app" && asApp:
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": fixtureAppID, "slug": fixtureApp, "client_id": fixtureClientID})
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": fixtureAppID, appSlugField: fixtureApp, clientIDKey: fixtureClientID})
 	case p == "/orgs/"+fixtureOrg+"/installation" && asApp:
 		if !f.installed {
 			http.NotFound(w, r)

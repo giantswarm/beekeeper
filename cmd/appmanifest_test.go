@@ -224,7 +224,7 @@ func TestAppCreateManifestForAPersonalAccount(t *testing.T) {
 		t.Error("the Secret lacks the App's client secret")
 	}
 	g.mu.Lock()
-	if g.createPath != "/settings/apps/new" || g.manifest["name"] != fixtureApp {
+	if g.createPath != personalNewApp || g.manifest["name"] != fixtureApp {
 		t.Errorf("the manifest %v went to %s, want the personal account's settings/apps/new", g.manifest, g.createPath)
 	}
 	g.mu.Unlock()
@@ -233,6 +233,86 @@ func TestAppCreateManifestForAPersonalAccount(t *testing.T) {
 	}
 	if st, err := a.store.Read(); err != nil || len(st.AppsCreated) != 1 || st.AppsCreated[0].Org != fixtureUser || st.AppsCreated[0].Stored != file {
 		t.Errorf("the ledger: %+v, %v", st.AppsCreated, err)
+	}
+}
+
+// An App app create --manifest --user created on the person's own account,
+// which apps.repo does not declare, is recorded for a consent from
+// beekeeper's ledger: its local manifest's callback hosts, its owner and
+// client id as the App itself answers them with the key in the Secret. The
+// hook then answers its consent page for a declared callback host alone.
+// Another client id, the settings changes of an organisation's App, an
+// owner other than the person, a manifest naming another App and an App
+// declared nowhere are refused, naming where allow looked.
+func TestAppAllowPersonalAccountApp(t *testing.T) {
+	a, _, _, _, manifest := manifestApp(t)
+	const callback = "muster.example-person.test"
+	declaration := `{"name": "` + fixtureApp + `", "url": "https://example.org", "public": false, "callback_urls": ["https://` + callback + `/oauth/proxy/callback"]}`
+	if err := os.WriteFile(manifest, []byte(declaration), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	if _, err := runManifest(a, &stderr, fixtureOrg, manifestFlag, manifest, userFlag, fixtureUser, timeoutFlag, tenSeconds); err != nil {
+		t.Fatalf("app create --manifest --user: %v\n%s", err, stderr.String())
+	}
+	a.cfg.Apps.Repo, a.cfg.Apps.Manifest = fixtureOrg+"/github", "apps/{name}/manifest.json"
+	person := fixtureUser
+	created := appsGH
+	appsGH = func(ctx context.Context, args ...string) ([]byte, error) {
+		if strings.Join(args, " ") == "api user --jq .login" {
+			return []byte(person + "\n"), nil
+		}
+		return created(ctx, args...)
+	}
+	allow := func(args ...string) (string, error) {
+		a.out = &bytes.Buffer{}
+		out, err := runApp(t, a, append([]string{appAllow, fixtureApp, wordFlag, personsWord}, args...)...)
+		noFixtureSecret(t, "app allow's answer", out)
+		return out, err
+	}
+	other := filepath.Join(t.TempDir(), "manifest.json")
+	if err := os.WriteFile(other, []byte(`{"name": "another-app"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		args []string
+		want string
+	}{
+		"another client id": {[]string{clientIDFlag, "Iv1.another"}, "App " + fixtureApp + " (id 4242) has the client id " + fixtureClientID + ", not Iv1.another"},
+		"a permission":      {[]string{permissionFlag, deviceChange}, "App " + fixtureApp + " is on " + fixtureUser + "'s own account: the hook answers a permission change or a callback URL on an organisation's settings pages alone"},
+		"another manifest":  {[]string{clientIDFlag, fixtureClientID, manifestFlag, other}, "App " + fixtureApp + " is not declared: " + other + " names the App another-app"},
+	} {
+		if _, err := allow(tc.args...); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: app allow = %v, want %q", name, err, tc.want)
+		}
+	}
+	person = "someone-else"
+	if _, err := allow(clientIDFlag, fixtureClientID); err == nil ||
+		!strings.Contains(err.Error(), "belongs to the user "+fixtureUser+", not to the person's own account someone-else") {
+		t.Errorf("app allow for another person's App = %v", err)
+	}
+	person = fixtureUser
+	a.out = &bytes.Buffer{}
+	if _, err := runApp(t, a, appAllow, "nowhere", clientIDFlag, fixtureClientID, wordFlag, personsWord); err == nil ||
+		!strings.Contains(err.Error(), "App nowhere is not declared: ") || !strings.Contains(err.Error(), "nor does beekeeper's ledger hold an App nowhere") {
+		t.Errorf("app allow for an App declared nowhere = %v", err)
+	}
+	out, err := allow(clientIDFlag, fixtureClientID)
+	declared := manifest + " (App 4242 on " + fixtureUser + "'s own account)"
+	if err != nil || out != "App "+fixtureApp+" on record, declared in "+declared+": its consent page with callback "+callback+" is answered by the hook\n" {
+		t.Fatalf("app allow = %q, %v", out, err)
+	}
+	st, err := a.store.Read()
+	if err != nil || len(st.Apps) != 1 || st.Apps[0].Org != fixtureUser || st.Apps[0].ClientID != fixtureClientID || st.Apps[0].Declared != declared {
+		t.Fatalf("the record = %+v, %v", st.Apps, err)
+	}
+	consent := "https://github.com/login/oauth/authorize?client_id=" + fixtureClientID + "&redirect_uri=https%3A%2F%2F" + callback + "%2Foauth%2Fproxy%2Fcallback&response_type=code&state=x"
+	title := "Authorize " + fixtureApp
+	if out, _ := runApp(t, a, appCheck, consent, titleFlag, title); !strings.HasPrefix(out, checkAllow) {
+		t.Errorf("check on the App's consent page = %q", out)
+	}
+	if out, _ := runApp(t, a, appCheck, strings.ReplaceAll(consent, callback, "example.org"), titleFlag, title); !strings.HasPrefix(out, checkRefuse) {
+		t.Errorf("check on another callback host = %q", out)
 	}
 }
 

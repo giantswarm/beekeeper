@@ -39,14 +39,21 @@ func ReadAppManifest(ctx context.Context, run GH, repo, path string) (AppManifes
 	if err != nil {
 		return AppManifest{}, err
 	}
+	return ParseAppManifest(raw, source(repo, sha, path))
+}
+
+// ParseAppManifest reads an App manifest's content, read at src: its name
+// and its callback hosts. A manifest that is no JSON object or names no App
+// is an error: the App is not declared.
+func ParseAppManifest(raw []byte, src string) (AppManifest, error) {
 	var m struct {
 		Name         string   `json:"name"`
 		CallbackURLs []string `json:"callback_urls"`
 	}
 	if err := json.Unmarshal(raw, &m); err != nil {
-		return AppManifest{}, fmt.Errorf("%s:%s: %w", repo, path, err)
+		return AppManifest{}, fmt.Errorf("%s: %w", src, err)
 	}
-	a := AppManifest{Name: m.Name, Source: source(repo, sha, path)}
+	a := AppManifest{Name: strings.TrimSpace(m.Name), Source: src}
 	for _, c := range m.CallbackURLs {
 		u, err := url.Parse(c)
 		if err != nil || u.Host == "" {

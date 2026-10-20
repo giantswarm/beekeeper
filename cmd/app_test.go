@@ -3,13 +3,16 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/secret/secrettest"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -229,7 +232,7 @@ func TestAppGoogleRecord(t *testing.T) {
 		{[]string{appAllow, client, clientIDFlag, "x", accountFlag, account, wordFlag, "w"}, "--account names the account a Google OAuth client's sign-in chooses, with --google"},
 		{[]string{appAllow, client, googleFlag, callbackFlag, callback, permissionFlag, deviceChange, wordFlag, "w"}, "--google records a consent on Google's sign-in alone"},
 		{[]string{appAllow, client, googleFlag, callbackFlag, "a b", wordFlag, "w"}, `--callback names a callback host (or a URL), not "a b"`},
-		{[]string{appAllow, client, callbackFlag, callback, clientIDFlag, "x", wordFlag, "w"}, "--callback names a Google OAuth client's callback hosts, with --google"},
+		{[]string{appAllow, client, callbackFlag, callback, clientIDFlag, "x", wordFlag, "w"}, "--callback names a Google OAuth client's or a GitLab application's callback hosts, with --google or --gitlab"},
 	} {
 		if _, err := runApp(t, a, tc.args...); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("app %q = %v, want a refusal with %q", tc.args, err, tc.want)
@@ -257,6 +260,76 @@ func TestAppGoogleRecord(t *testing.T) {
 	t.Setenv("BEEKEEPER_CONFIG", filepath.Join(a.cfg.StateDir, "config.yaml"))
 	if apps := a.allowedApps(); len(apps) != 1 || !apps[0].Google || apps[0].Callbacks[0] != callback || apps[0].Account != account {
 		t.Errorf("allowedApps = %+v", apps)
+	}
+}
+
+// A self-hosted GitLab's OAuth application is recorded with --gitlab, its
+// client id, its callback hosts and the person's own declaration of the
+// client id, compared in-process: another declared client id is refused, as
+// are a missing flag and a GitHub App's flags. check allows the
+// application's authorize page on that GitLab for a recorded callback host,
+// the redacted client id by its title too, and refuses another application
+// or callback host there; another host's authorize page stays a consent
+// page elsewhere.
+func TestAppGitLabRecord(t *testing.T) {
+	a, _, repo := secretApp(t)
+	const (
+		app      = "workspace-manager"
+		gitlab   = "gitlab.example.org"
+		uid      = "planted-gitlab-uid-0f1e"
+		callback = "muster.example.org"
+		gitlabFl = "--gitlab"
+		declFl   = "--declared"
+	)
+	file := filepath.Join(repo, "oauth.sops.yaml")
+	plain := "apiVersion: v1\nkind: Secret\nmetadata:\n  name: oauth\n  namespace: team-a\nstringData:\n  client-id: " + uid + "\n"
+	if err := os.WriteFile(file, secrettest.Encrypt(plain), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	declared := file + "#stringData.client-id"
+	base := []string{appAllow, app, gitlabFl, "https://GitLab.example.org/", callbackFlag, "https://" + callback + "/oauth/proxy/callback", wordFlag, personsWord}
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{append(slices.Clone(base), clientIDFlag, uid), "--gitlab needs --declared <ref>"},
+		{append(slices.Clone(base), declFl, declared), "--gitlab needs --client-id <uid>"},
+		{append(slices.Clone(base), clientIDFlag, "another-uid", declFl, declared), "GitLab application " + app + " is not declared: " + declared + " carries another client id than another-uid"},
+		{append(slices.Clone(base), clientIDFlag, uid, declFl, declared, googleFlag), "--google or --gitlab"},
+		{append(slices.Clone(base), clientIDFlag, uid, declFl, declared, permissionFlag, deviceChange), "--gitlab records a consent on a GitLab's authorize page alone"},
+		{[]string{appAllow, app, clientIDFlag, uid, declFl, declared, wordFlag, "w"}, "--declared names the person's own declaration of a GitLab application's client id, with --gitlab"},
+		{[]string{appAllow, app, gitlabFl, gitlab, clientIDFlag, uid, declFl, declared, wordFlag, "w"}, "--gitlab needs --callback <host>"},
+	} {
+		out, err := runApp(t, a, tc.args...)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("app %q = %v, want a refusal with %q", tc.args, err, tc.want)
+		}
+		if strings.Contains(out+fmt.Sprint(err), "planted-gitlab-uid") && !strings.Contains(strings.Join(tc.args, " "), uid) {
+			t.Errorf("app %q answers the declared value: %q %v", tc.args, out, err)
+		}
+	}
+	out, err := runApp(t, a, append(slices.Clone(base), clientIDFlag, uid, declFl, declared)...)
+	if err != nil || out != "App "+app+" on record, declared in "+declared+": its consent on "+gitlab+"'s authorize page with callback "+callback+" is answered by the hook\n" {
+		t.Fatalf("app allow --gitlab = %q, %v", out, err)
+	}
+	if out, _ := runApp(t, a, "list"); !strings.Contains(out, app+"  GitLab "+gitlab+"  client id "+uid+"  callbacks "+callback+"  declared in "+declared+"  since ") {
+		t.Errorf("list = %q", out)
+	}
+	authorize := "https://" + gitlab + "/oauth/authorize?client_id=" + uid + "&redirect_uri=https%3A%2F%2F" + callback + "%2Foauth%2Fproxy%2Fcallback&response_type=code&scope=api"
+	title := "Authorize " + app + " to use your account? · GitLab"
+	for name, tc := range map[string]struct {
+		url, title, want string
+	}{
+		"its authorize page":     {authorize, title, checkAllow + "beekeeper allows the click: the consent page on " + gitlab + " of the person's own GitLab application " + app},
+		"the redacted client id": {strings.ReplaceAll(authorize, uid, "REDACTED"), title, checkAllow},
+		"another application":    {strings.ReplaceAll(authorize, uid, "REDACTED"), "Authorize other-app · GitLab", checkRefuse + "Refused: " + gitlab + "'s consent page"},
+		"another client id":      {strings.ReplaceAll(authorize, uid, "other-uid"), title, checkRefuse},
+		"another callback host":  {strings.ReplaceAll(authorize, callback, "evil.example.net"), title, checkRefuse},
+		"another GitLab":         {strings.ReplaceAll(authorize, gitlab, "gitlab.example.net"), title, checkRefuse + "Refused: \"" + title + "\" is a consent page (an OAuth grant) on gitlab.example.net"},
+	} {
+		if out, err := runApp(t, a, appCheck, tc.url, titleFlag, tc.title); err != nil || !strings.HasPrefix(out, tc.want) {
+			t.Errorf("%s: app check = %q, %v; want %q", name, out, err, tc.want)
+		}
 	}
 }
 
@@ -418,7 +491,8 @@ func TestAppLifecycleCheck(t *testing.T) {
 		want string
 	}{
 		{[]string{appAllow, recordedApp, deleteFlag}, wordFlag},
-		{[]string{appAllow, recordedApp, manifestFlag, local, wordFlag, "w"}, "--manifest declares an App for --delete alone"},
+		{[]string{appAllow, recordedApp, manifestFlag, local, wordFlag, "w"}, clientIDFlag + " <id> for a consent"},
+		{[]string{appAllow, "example-lab-half", clientIDFlag, recordedClientID, manifestFlag, local, wordFlag, "w"}, "App example-lab-half is not declared: beekeeper's ledger holds no App of that name"},
 		{[]string{appAllow, "another", deleteFlag, manifestFlag, local, wordFlag, "w"}, "App another is not declared: " + local + " names the App example-lab-half"},
 	} {
 		if _, err := runApp(t, a, tc.args...); err == nil || !strings.Contains(err.Error(), tc.want) {
