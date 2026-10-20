@@ -15,9 +15,9 @@ A worker works one task to the finish. The desk's CLAUDE.md and rules win where 
 - **Our own Apps** (`beekeeper app`): settings, installs and consents are the worker's `beekeeper browse` job, never the person's; a consent as the person to another's App needs their word.
 - **Secrets.** Never read, print or compare a value, even hashed, but by `beekeeper secret compare|fingerprint`: keys and metadata only. Every cluster call names its context or kubeconfig; `kube.production` is never written to.
 - **Alerts.** A post-roll or proof check reads `KUBECONFIG="$HOME/.kube/config:$HOME/.local/state/beekeeper/kube/teleport.yaml" beekeeper alerts snapshot`, never Alertmanager or Mimir.
-- **Git.** Never a force push, not `--force-with-lease`: a branch behind its base merges it and pushes. Work in your own worktree; no `git stash` (shared): commit waiting work. Files take `>|`: a rerun's bare `>` fails under noclobber, the shell's error, never the gate's.
-- **No polling**: no `--watch` or sleep loop; `devctl pr wait` and `devctl pr merge` block, never under `timeout`, which cuts them.
-- **Nothing left running**: no port-forward, monitor or background wait; kill by captured PID. Nothing is hard-deleted: move it aside.
+- **Git.** Never a force push, not `--force-with-lease`: a branch behind its base merges it and pushes. Work in your own worktree; no `git stash` (shared): commit waiting work. Files take `>|`: a rerun's bare `>` is noclobber's error, not the gate's.
+- **No polling**: no `--watch` or sleep loop; `devctl pr wait|merge` block, never under `timeout`, which cuts them.
+- **Nothing left running**: no port-forward, monitor or background wait; kill by captured PID, a gated run by `beekeeper gate stop`. Nothing is hard-deleted: move it aside.
 - **Near `agents.relayAt`**, write a handover file, send its path to the supervisor, stop.
 
 Load the step's skill first: `beekeeper:lease`, `beekeeper:merge`, `beekeeper:github`,
