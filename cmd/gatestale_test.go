@@ -103,7 +103,11 @@ func TestAnOlderReleasesGateNamesTheSkewOfAStateItDoesNotLoad(t *testing.T) {
 // refused save to the wait loop, which re-executes or names the skew,
 // instead of refusing it as a state that does not load.
 func TestAStaleStartIsTheSkewNotAnUnloadableState(t *testing.T) {
-	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
+	store, err := state.OpenVersion(t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := runningMergeIn(t, store, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
 	newer, err := state.OpenVersion(g.store.Dir(), newerRelease)
 	if err != nil {
 		t.Fatal(err)
