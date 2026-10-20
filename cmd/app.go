@@ -70,7 +70,7 @@ to the App's settings page under the organisation's settings, the clicks
 there that name Add Callback URL, that URL or Save changes, and typing
 exactly that URL, refusing another URL or field, a removal, a key or other
 input there. A sign-in or consent page of the lab's
-own identity provider on a loopback host (*.127.0.0.1.nip.io, localhost) is
+own identity provider on a loopback host (*.127.0.0.<n>.nip.io, localhost) is
 allowed without a record: a fixture user's sign-in there is the person's
 own lab's. A Google OAuth client the person owns and asked a consent for is
 recorded with --google --callback <host> --account <address>, on the
