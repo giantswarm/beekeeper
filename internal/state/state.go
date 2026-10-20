@@ -650,7 +650,8 @@ type App struct {
 // the App's Install click while the listener answers.
 type AppRun struct {
 	Name string `json:"name"`
-	// Org is the organisation the App is created for.
+	// Org is the account the App is created for: an organisation, or a
+	// personal account (app create --manifest --user).
 	Org string `json:"org"`
 	// Declared is where the App is declared: its manifest in the
 	// organisation's repository, or the local manifest file.

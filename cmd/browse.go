@@ -1243,7 +1243,7 @@ func deleteRecord(a guard.App) string {
 // verifies against the running create and beekeeper's ledger.
 func createRule(a guard.App) string {
 	return fmt.Sprintf("Own App Create: The person's App %s of %s, declared in %s, is created by beekeeper app create, which the person runs: on "+
-		"GitHub's manifest page (settings/apps/manifest, organizations/%s/settings/apps/new) the click 'Create GitHub App for %s', and on the App's "+
+		"GitHub's manifest page (settings/apps/manifest, settings/apps/new, organizations/%s/settings/apps/new) the click 'Create GitHub App for %s', and on the App's "+
 		"installation page (apps/%s/installations/new) the Install click and its confirmation, are pre-authorized and no Permission Grant to refuse, "+
 		"and a step that names them is no grant request; beekeeper's own hook verifies the running create or its ledger and answers each click. "+
 		"Not covered: any other App's creation or installation, any other grant of access, a credential typed anywhere. Every other rule applies in full.",
