@@ -965,8 +965,13 @@ type Serve struct {
 	// person's token for, and the one the installations exchange tokens for.
 	ClientIDs []string `yaml:"clientIDs"`
 	// Organization is the Dex group every member of the organization
-	// carries: a caller without it is refused.
+	// carries: a caller without it, and without any of Organizations, is
+	// refused.
 	Organization string `yaml:"organization"`
+	// Organizations are further groups that make a caller a member: one per
+	// Dex connector where the connectors spell the organization differently
+	// (a GitHub org's <org>:<team>, a directory's group name).
+	Organizations []string `yaml:"organizations"`
 	// Teams maps a Dex group to the team its members belong to; a caller
 	// in none is refused.
 	Teams map[string]string `yaml:"teams"`

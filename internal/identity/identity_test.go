@@ -68,8 +68,9 @@ func TestVerify(t *testing.T) {
 		{"no email", iss.Token(t, "muster", identitytest.Claims{Groups: member}), "no email"},
 		{"unverified email", iss.Token(t, "muster", identitytest.Claims{Email: ana, EmailVerified: &no, Groups: member}), "not verified"},
 		{"no email_verified", iss.Token(t, "muster", identitytest.Claims{Email: ana, Groups: member}), "not verified"},
-		{"not a member", iss.Token(t, "muster", identitytest.Claims{Email: "eve@example.com", EmailVerified: identitytest.Verified(), Groups: []string{teamGroup}}), "not a member"},
-		{"no team", iss.Token(t, "muster", identitytest.Claims{Email: ana, EmailVerified: identitytest.Verified(), Groups: []string{org}}), "no team"},
+		{"not a member", iss.Token(t, "muster", identitytest.Claims{Email: "eve@example.com", EmailVerified: identitytest.Verified(), Groups: []string{teamGroup}}), "not a member of " + org + ": the token carries the groups " + teamGroup},
+		{"no groups", iss.Token(t, "muster", identitytest.Claims{Email: "eve@example.com", EmailVerified: identitytest.Verified()}), "the token carries no groups claim"},
+		{"no team", iss.Token(t, "muster", identitytest.Claims{Email: ana, EmailVerified: identitytest.Verified(), Groups: []string{org}}), "no team's group (serve.teams): the token carries the groups " + org},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := v.Verify(ctx, tc.token)
@@ -81,12 +82,34 @@ func TestVerify(t *testing.T) {
 	}
 }
 
+func TestVerifyOrganizations(t *testing.T) {
+	iss := identitytest.New(t)
+	ctx := context.Background()
+	cfg := serveConfig(iss.URL)
+	cfg.Organization, cfg.Organizations = "", []string{org, "giantswarm-admins"}
+	cfg.Teams["giantswarm-admins"] = bumblebee
+	v, err := identity.New(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, groups := range [][]string{{org, teamGroup}, {"giantswarm-admins"}} {
+		c, err := v.Verify(ctx, iss.Token(t, "muster", identitytest.Claims{Email: ana, EmailVerified: identitytest.Verified(), Groups: groups}))
+		if err != nil || c.Team != bumblebee {
+			t.Errorf("groups %v: caller %+v, %v; want a member of bumblebee", groups, c, err)
+		}
+	}
+	_, err = v.Verify(ctx, iss.Token(t, "muster", identitytest.Claims{Email: ana, EmailVerified: identitytest.Verified(), Groups: []string{teamGroup}}))
+	if err == nil || !strings.Contains(err.Error(), "not a member of "+org+" or giantswarm-admins") {
+		t.Errorf("a caller in neither organization group: %v", err)
+	}
+}
+
 func TestNewRefusesAnOpenConfiguration(t *testing.T) {
 	iss := identitytest.New(t)
 	for name, mod := range map[string]func(*config.Serve){
 		"issuer":       func(c *config.Serve) { c.Issuer = "" },
 		"clientIDs":    func(c *config.Serve) { c.ClientIDs = nil },
-		"organization": func(c *config.Serve) { c.Organization = "" },
+		"organization": func(c *config.Serve) { c.Organization, c.Organizations = "", nil },
 		"teams":        func(c *config.Serve) { c.Teams = nil },
 	} {
 		cfg := serveConfig(iss.URL)

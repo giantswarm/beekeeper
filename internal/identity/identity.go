@@ -54,7 +54,7 @@ func New(ctx context.Context, cfg config.Serve) (*Verifier, error) {
 		return nil, errors.New("serve.issuer is not set: the Dex issuer every token is checked against")
 	case len(cfg.ClientIDs) == 0:
 		return nil, errors.New("serve.clientIDs is not set: the audiences a token may carry")
-	case cfg.Organization == "":
+	case cfg.Organization == "" && len(cfg.Organizations) == 0:
 		return nil, errors.New("serve.organization is not set: the Dex group every member carries")
 	case len(cfg.Teams) == 0:
 		return nil, errors.New("serve.teams is not set: the Dex groups that name a caller's team")
@@ -94,8 +94,8 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (Caller, error) {
 		return Caller{}, refused("the token's email %s is not verified", claims.Email)
 	}
 	c := Caller{Email: strings.ToLower(claims.Email), Groups: claims.Groups}
-	if !c.In(v.cfg.Organization) {
-		return Caller{}, refused("%s is not a member of %s", c.Email, v.cfg.Organization)
+	if !slices.ContainsFunc(v.organization(), c.In) {
+		return Caller{}, refused("%s is not a member of %s: %s", c.Email, strings.Join(v.organization(), " or "), carries(c.Groups))
 	}
 	groups := make([]string, 0, len(v.cfg.Teams))
 	for g := range v.cfg.Teams {
@@ -108,7 +108,26 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (Caller, error) {
 			return c, nil
 		}
 	}
-	return Caller{}, refused("%s is in no team's group (serve.teams)", c.Email)
+	return Caller{}, refused("%s is in no team's group (serve.teams): %s", c.Email, carries(c.Groups))
+}
+
+// organization is every group that makes a caller a member.
+func (v *Verifier) organization() []string {
+	var out []string
+	if v.cfg.Organization != "" {
+		out = append(out, v.cfg.Organization)
+	}
+	return append(out, v.cfg.Organizations...)
+}
+
+// carries words the groups a refused token carries: group names are
+// configuration, never a credential, and they are what serve.organization
+// and serve.teams have to name.
+func carries(groups []string) string {
+	if len(groups) == 0 {
+		return "the token carries no groups claim"
+	}
+	return "the token carries the groups " + strings.Join(groups, ", ")
 }
 
 // Supervises reports whether c holds team's supervisor role.

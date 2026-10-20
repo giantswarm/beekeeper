@@ -15,6 +15,11 @@ serve:
   clientIDs: []  # @schema item: string
   # The Dex group every member of the organization carries.
   organization: ""
+  # Further groups that make a caller a member, one per Dex connector that
+  # spells the organization differently (a GitHub org's <org>:<team>, a
+  # directory's group name). A refused caller's log line names the groups its
+  # token carries.
+  organizations: []  # @schema item: string
   # Dex group -> team. Each team gets its namespace, beekeeper-<team>, for its
   # notes and agents (teamNamespaces.create).
   teams: {}  # @schema additionalProperties: true

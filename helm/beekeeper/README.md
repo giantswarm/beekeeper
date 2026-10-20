@@ -25,6 +25,7 @@ beekeeper serve, the central instance - leases, holds, merge lanes, notes and th
 | serve.issuer | string | `""` |  |
 | serve.clientIDs | list | `[]` |  |
 | serve.organization | string | `""` |  |
+| serve.organizations | list | `[]` |  |
 | serve.teams | object | `{}` |  |
 | serve.supervisors | object | `{}` |  |
 | serve.muster | string | `""` |  |

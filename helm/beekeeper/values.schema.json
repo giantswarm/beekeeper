@@ -2612,6 +2612,12 @@
                 "organization": {
                     "type": "string"
                 },
+                "organizations": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "people": {
                     "type": "object",
                     "additionalProperties": true
