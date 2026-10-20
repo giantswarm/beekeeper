@@ -48,6 +48,10 @@ type App struct {
 	// Permission is the one change of the App's permissions the person
 	// asked for, "<scope>: <level>"; "" for a record without one.
 	Permission string
+	// CallbackURL is the one callback URL the person asked to add to the
+	// App's settings, on a callback host its manifest declares; "" for a
+	// record without one (appcallback.go).
+	CallbackURL string
 	// Delete says the person asked for the App's deletion (applife.go).
 	Delete bool
 	// Google says the App is a Google OAuth client whose consent is on
@@ -154,6 +158,9 @@ func Click(apps []App, page Page, words string) Decision {
 		return githubConsent(apps, u, page.Title)
 	case host == githubHost:
 		if d, ok := lifecycleClick(apps, u, page.Title, words); ok {
+			return d
+		}
+		if d, ok := callbackClick(apps, u, words); ok {
 			return d
 		}
 		return permissionClick(apps, u, page.Title, words)

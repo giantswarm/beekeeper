@@ -45,7 +45,7 @@ const (
 const ownDeclared = "example/github@0123456789ab:apps/" + ownApp + "/manifest.json"
 
 var recorded = []App{{Name: ownApp, ClientID: ownClientID, Callbacks: []string{ownCallback, ownCallback + ":8443"}, Declared: ownDeclared,
-	Word: "your agent has to do this", By: "the guide", At: time.Date(2026, 10, 10, 8, 16, 0, 0, time.UTC)}}
+	Word: "your agent has to do this", By: byGuide, At: time.Date(2026, 10, 10, 8, 16, 0, 0, time.UTC)}}
 
 // The App on record is allowed on its consent page with one of its declared
 // callback hosts,

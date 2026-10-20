@@ -38,7 +38,7 @@ const (
 )
 
 var changeRecorded = []App{{Name: deviceApp, Org: deviceOrg, Permission: deviceChange, Declared: deviceDeclared,
-	Word: "make sure beekeeper handles such permission grants with the hook", By: "the guide", At: time.Date(2026, 10, 10, 10, 20, 0, 0, time.UTC)}}
+	Word: "make sure beekeeper handles such permission grants with the hook", By: byGuide, At: time.Date(2026, 10, 10, 10, 20, 0, 0, time.UTC)}}
 
 // A navigation to the permissions page of the App on record is allowed
 // with the record; to the permissions page of another App, or the same

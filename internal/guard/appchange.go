@@ -50,8 +50,9 @@ func AppSlug(name string) string {
 // Navigation decides a navigation to rawURL from the Apps on record: the
 // permissions page of an App on record for a permission change is allowed,
 // the permissions page of any other App refused; the Advanced page of an App
-// whose deletion is answered (applife.go) is allowed; every other URL gets
-// no decision.
+// whose deletion is answered (applife.go) and the settings page of an App on
+// record for a callback URL (appcallback.go) are allowed; every other URL
+// gets no decision.
 func Navigation(apps []App, rawURL string) Decision {
 	u, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil || !strings.EqualFold(u.Hostname(), githubHost) {
@@ -62,6 +63,9 @@ func Navigation(apps []App, rawURL string) Decision {
 			return Decision{Allow, "beekeeper allows it: the Advanced page of " + deleteWords(a)}
 		}
 		return Decision{}
+	}
+	if d, ok := callbackNavigation(apps, u.Path); ok {
+		return d
 	}
 	m := permissionsPath.FindStringSubmatch(u.Path)
 	if m == nil {

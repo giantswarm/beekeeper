@@ -86,6 +86,9 @@ const (
 		"page (organizations/%s/settings/apps/%s/permissions) set exactly that permission and click Save changes once, and on the organisation's " +
 		"installation of the App click Review request and Accept new permissions once; name the App and the permission in each call's summary; " +
 		"change nothing else. "
+	callbackWords = "The person's own App %s is declared and on record for one callback URL, %s: once the steps reach its settings page " +
+		"(organizations/%s/settings/apps/%s) click Add Callback URL, type exactly that URL into the new field and click Save changes once; name the " +
+		"App and the callback URL in each call's summary; remove or change nothing else. "
 	createWords = "The person's own App %s of %s is being created or installed by beekeeper app create (declared in %s): on GitHub's manifest page click " +
 		"'Create GitHub App' once, and on the App's installation page click Install and its confirmation once; name the App in each call's summary; " +
 		"create, install or change nothing else. "
@@ -207,6 +210,16 @@ permissions page of any other App and any other call there; a turn whose
 steps name the App runs with that change's rule, its prompt says to set
 exactly that permission, and "allowed permission: <name> (<change>,
 declared in <manifest>)" goes below the report.
+
+Adding a callback URL to an App's settings is such a change too. One URL
+the person asked for, on a callback host the App's manifest declares, is
+recorded with "beekeeper app allow <name> --callback-url <url> --word
+'<the person's words>'"; the hook then answers the navigation to that App's
+settings page under the organisation's settings and the calls there that
+name a callback, that URL or Save changes, refusing a call there that names
+another URL or removes anything; a turn whose steps name the App runs with
+that URL's rule, its prompt says to add exactly that URL, and "allowed
+callback URL: <name> (<url>, declared in <manifest>)" goes below the report.
 
 An App's creation, installation and deletion are grants too. While
 "beekeeper app create" runs for an App (its loopback listener answers), the
@@ -562,9 +575,10 @@ var grantWords = regexp.MustCompile(`(?i)\b(authori[sz]e|consent|grant|approve|a
 // steps name no App on record.
 const consentHint = "a consent for an App the person owns and asked for is recorded with " + guard.AllowForm +
 	" (a Google OAuth client's with " + guard.GoogleForm + ")" +
-	", one change of such an App's permissions with " + guard.PermissionForm + ", an App's deletion with " + guard.DeleteForm +
+	", one change of such an App's permissions with " + guard.PermissionForm + ", one callback URL with " + guard.CallbackForm +
+	", an App's deletion with " + guard.DeleteForm +
 	" (its creation and installation are answered while " + guard.CreateForm + " runs for it), after which the hook answers the click on its consent page, " +
-	"or the navigation to its permissions page and the clicks of that change, and a turn whose steps name the App runs with its rule " +
+	"or the navigation to its permissions or settings page and the calls of that change, and a turn whose steps name the App runs with its rule " +
 	"(`beekeeper browse --help`); every other grant stays refused"
 
 // deployReasons are the classifier's reasons a portal's deploy or create
@@ -783,6 +797,11 @@ func (f browseFindings) lines(steps, deploy string, consents []guard.App, lab bo
 			out = append(out, fmt.Sprintf("allowed permission: %s (%s, declared in %s): the hook answers the navigation to its permissions page, the clicks "+
 				"of that change and its installation's Review request and Accept new permissions, and the turn's auto mode allows them, on record since %s by %s: %s",
 				c.Name, c.Permission, c.Declared, c.At.UTC().Format("2006-01-02"), c.By, c.Word))
+		}
+		if c.CallbackURL != "" {
+			out = append(out, fmt.Sprintf("allowed callback URL: %s (%s, declared in %s): the hook answers the navigation to its settings page and the calls "+
+				"that add that URL and save, and the turn's auto mode allows them, on record since %s by %s: %s",
+				c.Name, c.CallbackURL, c.Declared, c.At.UTC().Format("2006-01-02"), c.By, c.Word))
 		}
 		if creates(c) {
 			out = append(out, fmt.Sprintf("allowed create: %s of %s (declared in %s): the hook answers GitHub's Create GitHub App while beekeeper app create runs for it "+
@@ -1068,6 +1087,9 @@ func browsePrompt(steps, deploy string, consents []guard.App, lab bool, shared [
 		if c.Permission != "" {
 			p += fmt.Sprintf(permissionWords, c.Name, c.Permission, c.Org, guard.AppSlug(c.Name))
 		}
+		if c.CallbackURL != "" {
+			p += fmt.Sprintf(callbackWords, c.Name, c.CallbackURL, c.Org, guard.AppSlug(c.Name))
+		}
 		if creates(c) {
 			p += fmt.Sprintf(createWords, c.Name, c.Org, c.Declared)
 		}
@@ -1098,6 +1120,9 @@ func browseRules(deploy string, consents []guard.App, lab bool) []string {
 		}
 		if c.Permission != "" {
 			rules = append(rules, permissionRule(c))
+		}
+		if c.CallbackURL != "" {
+			rules = append(rules, callbackRule(c))
 		}
 		if creates(c) {
 			rules = append(rules, createRule(c))
@@ -1178,6 +1203,20 @@ func permissionRule(a guard.App) string {
 		"Permission Grant to refuse, and a step that names them is no grant request; beekeeper's own hook verifies the page and answers each call. "+
 		"Not covered: any other permission, level, App or page, any other grant of access, a credential typed anywhere. Every other rule applies in full.",
 		a.Name, a.Declared, a.Permission, a.Org, guard.AppSlug(a.Name))
+}
+
+// callbackRule is the auto mode allow rule of one callback URL on record:
+// the person's pre-authorization of the navigation to that App's settings
+// page and the calls there that add that URL, which the hook verifies; any
+// other URL, setting, App or page is not covered.
+func callbackRule(a guard.App) string {
+	return fmt.Sprintf("Own App Callback URL: The person's organisation declares the App %s in %s and the person asked, on record with beekeeper, "+
+		"for one callback URL added to its settings: %s, on a callback host the declaration names. On that App's settings page under the organisation's "+
+		"settings (organizations/%s/settings/apps/%s) the navigation there, the click Add Callback URL, typing exactly that URL into the new field and "+
+		"Save changes are pre-authorized and no Permission Grant or settings change to refuse, and a step that names them is no grant request; beekeeper's "+
+		"own hook verifies the page and answers each call. Not covered: any other URL, a removal, any other setting, App or page, any other grant of "+
+		"access, a credential typed anywhere. Every other rule applies in full.",
+		a.Name, a.Declared, a.CallbackURL, a.Org, guard.AppSlug(a.Name))
 }
 
 // creates reports whether an App is being created (a running app create)

@@ -619,6 +619,10 @@ type App struct {
 	// asked for, "<scope>: <level>" ("Members: Read-only"); "" for a record
 	// without one.
 	Permission string `json:"permission,omitempty"`
+	// CallbackURL is the one callback URL the person asked to add to the
+	// App's settings, on a callback host its manifest declares; "" for a
+	// record without one.
+	CallbackURL string `json:"callbackURL,omitempty"`
 	// Delete says the person asked for the App's deletion: the hook answers
 	// its Advanced page's Delete GitHub App and the confirmation.
 	Delete bool `json:"delete,omitempty"`
