@@ -476,6 +476,10 @@ func TestHookRefusesScriptMerges(t *testing.T) {
 	write("promote.sh", "devctl release promote o/r\n", 0o644)
 	write("heredoc.sh", "python3 - <<'EOF'\nimport os\nos.system('devctl pr merge o/r 7')\nEOF\n", 0o644)
 	write("pieces.sh", "bash -c 'cd x; '\"devctl pr merge o/r 7\"\n", 0o644)
+	if err := os.Mkdir(filepath.Join(dir, "sweep"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	write("sweep/loop.sh", "#!/usr/bin/env bash\nwhile read n; do devctl pr merge o/r \"$n\"; done < prs.txt\n", 0o755)
 	script := filepath.Join(dir, "merge.sh")
 	const line5 = "line 5: devctl pr merge o/r $pr | tee \"m-$pr.json\""
 	for _, c := range []struct {
@@ -495,6 +499,14 @@ func TestHookRefusesScriptMerges(t *testing.T) {
 		{"bash heredoc.sh", []string{"a devctl pr merge in the here-document python3 reads", "line 2: os.system('devctl pr merge o/r 7')", "os.system('" + g + "devctl pr merge o/r 7')"}},
 		// One written and run in the same call.
 		{"cat <<'EOF' >| run.sh\ndevctl pr merge o/r 7\nEOF\nbash run.sh", []string{"this call, which runs run.sh (not readable before the call)", "line 2: devctl pr merge o/r 7"}},
+		// One written and run by its path, detached: the loop of a marge sweep.
+		{"cd " + dir + "/sw*p && cat > run.sh <<'EOF'\n#!/usr/bin/env bash\nwhile read r n; do\n  out=$(devctl pr merge giantswarm/$r $n --update-branch 2>&1); ec=$?\n  echo \"$r#$n exit=$ec\" >> results.log\ndone < merge2.txt\nEOF\nchmod +x run.sh; : >| results.log; ./run.sh >/dev/null 2>&1 &\necho $!",
+			[]string{"this call, which runs ./run.sh (not readable before the call)", "line 4: out=$(devctl pr merge giantswarm/$r $n --update-branch 2>&1); ec=$?"}},
+		{"printf '%s\\n' 'devctl pr merge o/r 7' >| ./drive.sh && setsid nohup bash ./drive.sh &", []string{"this call, which runs ./drive.sh (not readable before the call)"}},
+		{"python3 -c \"import sys; open('run.sh', 'w').write(sys.argv[1])\" 'devctl pr merge o/r 7' && ./run.sh", []string{"this call, which runs ./run.sh (not readable before the call)"}},
+		// One written before, in a directory the call reaches through a glob.
+		{"cd " + dir + "/[!x]weep && ./loop.sh", []string{"the script " + filepath.Join(dir, "sweep", "loop.sh")}},
+		{"cd " + dir + "/sw*p && nohup ./loop.sh >/dev/null 2>&1 &", []string{"the script " + filepath.Join(dir, "sweep", "loop.sh"), "line 2: while read n; do devctl pr merge o/r \"$n\"; done < prs.txt"}},
 		// An interpreter's script, by name or by its shebang.
 		{"python3 merge.py", []string{"a devctl pr merge in the script " + filepath.Join(dir, "merge.py"), "line 3: subprocess.run([\"devctl\", \"pr\", \"merge\", \"o/r\", \"7\"], check=True)"}},
 		{"./merge.py", []string{"the script " + filepath.Join(dir, "merge.py"), "line 3:"}},
@@ -525,6 +537,8 @@ func TestHookRefusesScriptMerges(t *testing.T) {
 		"bash gated.sh", "bash mention.sh", "./mention.sh", "cat merge.sh", "grep -n merge merge.sh", "bash /nowhere/merge.sh",
 		"python3 -c 'print(\"devctl pr view o/r 7\")'", "python3 -m pytest tests/", "bash -n merge.sh && echo ok | bash",
 		g + "devctl pr merge o/r 7 | tee m.json | ./mention.sh record o/r#7",
+		// A path the call does not write, absent before it, beside a gated merge.
+		"cd " + dir + "/sw*p && ./bin/tool --version && " + g + "devctl pr merge o/r 7",
 	} {
 		if d := decide(t, h, dir, cmd, nil); d != nil && d.PermissionDecision == decisionDeny {
 			t.Errorf("%q is refused: %s", cmd, d.Reason)
