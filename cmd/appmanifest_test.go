@@ -6,9 +6,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -21,6 +23,13 @@ import (
 const (
 	manifestFlag = "--manifest"
 	orgFlag      = "--org"
+	userFlag     = "--user"
+	// fixtureUser is the personal account of --user, fixtureUserID its id,
+	// fixtureRepoID the id of the repository an installation file names.
+	fixtureUser   = "example-person"
+	fixtureUserID = "88"
+	fixtureRepoID = "901"
+	fixtureRepo   = "workspaces"
 )
 
 // pageLine is the progress line that names the loopback page.
@@ -67,8 +76,15 @@ func manifestApp(t *testing.T) (*app, *fakeGitHub, *secrettest.Tools, string, st
 	prevGH, prevOpen := appsGH, openBrowser
 	t.Cleanup(func() { appsGH, openBrowser = prevGH, prevOpen })
 	appsGH = func(_ context.Context, args ...string) ([]byte, error) {
-		if call := strings.Join(args, " "); call == "api apps/taken" {
+		switch strings.Join(args, " ") {
+		case "api apps/taken":
 			return []byte(`{"id": 7, "slug": "taken", "html_url": "https://github.com/apps/taken", "owner": {"login": "someone"}}`), nil
+		case "api orgs/" + fixtureOrg + " --jq .id":
+			return []byte(fixtureOrgID + "\n"), nil
+		case "api users/" + fixtureUser + " --jq .id":
+			return []byte(fixtureUserID + "\n"), nil
+		case "api repos/" + fixtureUser + "/" + fixtureRepo + " --jq .id":
+			return []byte(fixtureRepoID + "\n"), nil
 		}
 		return nil, errors.New("gh: Not Found (HTTP 404)")
 	}
@@ -135,16 +151,16 @@ func TestAppCreateManifestWritesTheSecret(t *testing.T) {
 		t.Errorf("GitHub received the manifest %v with state %q", g.manifest, g.state)
 	}
 	g.mu.Unlock()
-	// the browser follows the callback's redirect on its own, after the
-	// command answered it
-	reached := false
-	for deadline := time.Now().Add(5 * time.Second); !reached && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-		g.mu.Lock()
-		reached = g.appPage
-		g.mu.Unlock()
+	g.mu.Lock()
+	if g.createPath != "/organizations/"+fixtureOrg+"/settings/apps/new" {
+		t.Errorf("the manifest went to %s, want the organisation's page", g.createPath)
 	}
-	if !reached {
-		t.Error("the browser never reached the App's installation page")
+	g.mu.Unlock()
+	// the browser follows the callback's redirect on its own, after the
+	// command answered it, to the installation page with the organisation
+	// preselected and, without an installation file, all its repositories
+	if q := installQuery(t, g); q.Get("suggested_target_id") != fixtureOrgID || q.Has("repository_ids[]") {
+		t.Errorf("the installation page's query = %v, want the organisation %s and no repository", q, fixtureOrgID)
 	}
 	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "secret."+githubAppOp })
 	if err != nil || len(evs) != 1 || !strings.Contains(evs[0].Detail, "app "+fixtureApp+", app-id 4242") {
@@ -159,6 +175,64 @@ func TestAppCreateManifestWritesTheSecret(t *testing.T) {
 	if st, err := a.store.Read(); err != nil || len(st.AppRuns) != 0 || len(st.AppsCreated) != 1 || st.AppsCreated[0].Slug != fixtureApp ||
 		st.AppsCreated[0].Stored != file || st.AppsCreated[0].Org != fixtureOrg || st.AppsCreated[0].Declared != manifest {
 		t.Errorf("after the run: runs %+v, ledger %+v, %v", st.AppRuns, st.AppsCreated, err)
+	}
+}
+
+// installQuery waits for the browser to reach the App's installation page
+// and answers the page's query.
+func installQuery(t *testing.T, g *fakeGitHub) url.Values {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		g.mu.Lock()
+		q := g.installQuery
+		g.mu.Unlock()
+		if q != nil {
+			return q
+		}
+	}
+	t.Fatal("the browser never reached the App's installation page")
+	return nil
+}
+
+// --user creates the App under the personal account: the manifest goes to
+// GitHub's settings/apps/new, the conversion runs in this process and the
+// credentials land in the installation's SOPS Secret, and the installation
+// page preselects the account and the repositories the installation file
+// beside the manifest names.
+func TestAppCreateManifestForAPersonalAccount(t *testing.T) {
+	a, g, tools, file, manifest := manifestApp(t)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(manifest), "installation.json"), []byte(`{"repositories": ["`+fixtureRepo+`"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	out, err := runManifest(a, &stderr, fixtureOrg, manifestFlag, manifest, userFlag, fixtureUser, timeoutFlag, tenSeconds)
+	if err != nil {
+		t.Fatalf("app create --manifest --user: %v\n%s", err, stderr.String())
+	}
+	if out != "app-id 4242\nclient-id "+fixtureClientID+"\n" {
+		t.Errorf("stdout = %q, want the App's id and client id alone", out)
+	}
+	if !strings.Contains(stderr.String(), "it submits the manifest to GitHub (settings/apps/new)") {
+		t.Errorf("stderr names no personal manifest page:\n%s", stderr.String())
+	}
+	noFixtureSecret(t, "stdout and stderr", out+stderr.String())
+	plain, err := tools.Run(context.Background(), "", nil, nil, "sops", "decrypt", file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(plain), "client-secret: "+fixtureSecret) {
+		t.Error("the Secret lacks the App's client secret")
+	}
+	g.mu.Lock()
+	if g.createPath != "/settings/apps/new" || g.manifest["name"] != fixtureApp {
+		t.Errorf("the manifest %v went to %s, want the personal account's settings/apps/new", g.manifest, g.createPath)
+	}
+	g.mu.Unlock()
+	if q := installQuery(t, g); q.Get("suggested_target_id") != fixtureUserID || !slices.Equal(q["repository_ids[]"], []string{fixtureRepoID}) {
+		t.Errorf("the installation page's query = %v, want the account %s and the repository %s", q, fixtureUserID, fixtureRepoID)
+	}
+	if st, err := a.store.Read(); err != nil || len(st.AppsCreated) != 1 || st.AppsCreated[0].Org != fixtureUser || st.AppsCreated[0].Stored != file {
+		t.Errorf("the ledger: %+v, %v", st.AppsCreated, err)
 	}
 }
 
@@ -201,13 +275,33 @@ func TestAppCreateManifestRefuses(t *testing.T) {
 		"nameless":     {[]string{fixtureOrg, manifestFlag, nameless, orgFlag, fixtureOrg}, ExitUsage, `names no App ("name")`},
 		"no file":      {[]string{fixtureOrg, manifestFlag, filepath.Join(dir, "absent.json"), orgFlag, fixtureOrg}, ExitUsage, "--manifest: "},
 		"known":        {[]string{fixtureOrg, manifestFlag, taken, orgFlag, fixtureOrg}, ExitRefused, "GitHub already knows an App named taken"},
-		"no org":       {[]string{fixtureOrg, manifestFlag, manifest}, ExitUsage, "--org names the organisation"},
+		"no org":       {[]string{fixtureOrg, manifestFlag, manifest}, ExitUsage, "--org or --user names the account"},
+		"org and user": {[]string{fixtureOrg, manifestFlag, manifest, orgFlag, fixtureOrg, userFlag, fixtureUser}, ExitUsage, "--org or --user owns the App, not both"},
 		"flags":        {[]string{fixtureApp, "--no-open"}, ExitUsage, "go with --manifest"},
+		"user flag":    {[]string{fixtureApp, userFlag, fixtureUser}, ExitUsage, "go with --manifest"},
+		"no account":   {[]string{fixtureOrg, manifestFlag, manifest, userFlag, "absent-person"}, ExitError, "the account absent-person: "},
 	} {
 		_, err := runManifest(a, &bytes.Buffer{}, tc.args...)
 		if Code(err) != tc.code || err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: %v (exit %d), want exit %d with %q", name, err, Code(err), tc.code, tc.want)
 		}
+	}
+	// an installation file that names a repository the account lacks, or
+	// is no installation file, refuses before any page
+	inst := filepath.Join(filepath.Dir(manifest), "installation.json")
+	for content, want := range map[string]string{
+		`{"repositories": ["absent"]}`: "names the repository absent, which " + fixtureUser + " lacks; nothing written",
+		`{"repositories": "some"}`:     inst + `: "repositories" is "all" or a list of names`,
+	} {
+		if err := os.WriteFile(inst, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := runManifest(a, &bytes.Buffer{}, fixtureOrg, manifestFlag, manifest, userFlag, fixtureUser); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("installation file %s: %v, want %q", content, err, want)
+		}
+	}
+	if err := os.Remove(inst); err != nil {
+		t.Fatal(err)
 	}
 	if opened != 0 {
 		t.Errorf("a refusal opened %d pages", opened)

@@ -91,7 +91,7 @@ var openBrowser = func(ctx context.Context, url string) error {
 
 func (a *app) appCreateCmd() *cobra.Command {
 	var wait time.Duration
-	var manifest, org, installation, baseDomain string
+	var manifest, org, user, installation, baseDomain string
 	var replace, noOpen bool
 	c := &cobra.Command{
 		Use:   "create <name> | create <purpose> --installation <name> --base-domain <domain> [--replace] | create <installation> --manifest <file>",
@@ -153,19 +153,24 @@ credentials go into that installation's SOPS Secret, as secret github-app
 writes them:
 
   1. Every check runs first: the installation's entry, the Secret's file
-     and its creation rules, no key it holds already unless --replace, and
-     no App GitHub knows by the manifest's name.
+     and its creation rules, no key it holds already unless --replace, no
+     App GitHub knows by the manifest's name, and the owner's id and the
+     repositories' that installation.json names.
   2. A listener on 127.0.0.1 (a random port, bound before the page exists)
      serves the page that posts the manifest, with the listener's callback
      as redirect_url and a state nonce, to GitHub's page for a new App of
-     --org (default: apps.repo's owner). The browser opens it, or with
+     --org (default: apps.repo's owner; organizations/<org>/settings/apps/new)
+     or of the personal account --user (settings/apps/new, the account
+     signed in to GitHub in the browser). The browser opens it, or with
      --no-open the caller does (beekeeper browse "open <url> ..."); the
      click is GitHub's "Create GitHub App".
   3. The listener takes GitHub's redirect once, checks the state, converts
      the code in this process (unauthenticated, as GitHub documents it) and
      writes private-key, client-secret and webhook-secret (when the App has
      one) in one sops write. The browser goes on to the App's installation
-     page.
+     page with the owner and the repositories preselected that
+     installation.json next to the manifest declares ({"repositories":
+     "all" | ["<name>", …]}; absent: all).
 
 stdout is the App's id and client id alone; stderr is the progress and the
 keys written with their lengths and fingerprints. The code, the key and the
@@ -178,9 +183,16 @@ secrets reach no output, log entry or error.`,
 				if installation != "" || baseDomain != "" {
 					return usageErr("--installation and --base-domain render a template of apps.repo, not --manifest's file")
 				}
-				return a.appCreateSecret(cmd, name, manifest, org, wait, replace, !noOpen)
-			case org != "" || noOpen:
-				return usageErr("--org and --no-open go with --manifest")
+				if org != "" && user != "" {
+					return usageErr("--org or --user owns the App, not both")
+				}
+				owner := appOwner{login: strings.TrimSpace(org)}
+				if user != "" {
+					owner = appOwner{login: strings.TrimSpace(user), user: true}
+				}
+				return a.appCreateSecret(cmd, name, manifest, owner, wait, replace, !noOpen)
+			case org != "" || user != "" || noOpen:
+				return usageErr("--org, --user and --no-open go with --manifest")
 			case installation != "":
 				return a.appCreate(cmd.Context(), name, wait, cmd.ErrOrStderr(), func(ctx context.Context) (*appPlan, error) {
 					return a.appTemplatePlan(ctx, name, strings.TrimSpace(installation), strings.TrimSpace(baseDomain), replace)
@@ -196,6 +208,7 @@ secrets reach no output, log entry or error.`,
 	c.Flags().DurationVar(&wait, "timeout", appCreateWait, "how long each of the person's clicks (Create, Install) is waited for")
 	c.Flags().StringVar(&manifest, "manifest", "", "a local App manifest (JSON): create that App and write its credentials into the SOPS Secret apps.secrets names for <installation>")
 	c.Flags().StringVar(&org, "org", "", "with --manifest, the organisation that owns the App (default: apps.repo's owner)")
+	c.Flags().StringVar(&user, "user", "", "with --manifest, the personal account that owns the App instead of an organisation: the one signed in to GitHub in the browser")
 	c.Flags().StringVar(&installation, "installation", "", "the installation whose App of the purpose <name> is created from the purpose's manifest template")
 	c.Flags().StringVar(&baseDomain, "base-domain", "", "with --installation, the installation's base domain, for the template's {baseDomain}")
 	c.Flags().BoolVar(&replace, "replace", false, "with --installation, create the successor App (-2, -3, ...) beside the old one; with --manifest, overwrite keys the Secret holds already")
@@ -285,7 +298,7 @@ func (a *app) createApp(ctx context.Context, planOf func(context.Context) (*appP
 	if err := a.holdsBrowser(); err != nil {
 		return nil, err
 	}
-	flow, err := serveManifest(plan.org, plan.name, plan.decl.Source, plan.decl.Manifest)
+	flow, err := serveManifest(appOwner{login: plan.org}, plan.name, plan.decl.Source, plan.decl.Manifest)
 	if err != nil {
 		return nil, err
 	}
@@ -365,11 +378,37 @@ func (a *app) createApp(ctx context.Context, planOf func(context.Context) (*appP
 	return res, err
 }
 
+// appOwner is the account a new App belongs to: an organisation, or a
+// personal account when user.
+type appOwner struct {
+	login string
+	user  bool
+}
+
+// newAppPath is GitHub's page for a new App of the owner: the
+// organisation's settings, or the personal account's own, which GitHub
+// takes as the signed-in person's.
+func (o appOwner) newAppPath() string {
+	if o.user {
+		return "settings/apps/new"
+	}
+	return "organizations/" + url.PathEscape(o.login) + "/settings/apps/new"
+}
+
+// apiPath is the owner's API resource, whose id the installation page
+// preselects as its target.
+func (o appOwner) apiPath() string {
+	if o.user {
+		return "users/" + url.PathEscape(o.login)
+	}
+	return "orgs/" + url.PathEscape(o.login)
+}
+
 // serveManifest binds this run's loopback listener and serves the page
 // that submits manifest, with the listener's callback as its redirect URL
-// and a fresh state, to GitHub's page for a new App of org. The listener
+// and a fresh state, to GitHub's page for a new App of owner. The listener
 // is bound before the page exists; stop closes it.
-func serveManifest(org, name, source string, manifest map[string]any) (*manifestFlow, error) {
+func serveManifest(owner appOwner, name, source string, manifest map[string]any) (*manifestFlow, error) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
@@ -387,8 +426,8 @@ func serveManifest(org, name, source string, manifest map[string]any) (*manifest
 		_ = l.Close()
 		return nil, err
 	}
-	createURL := githubWeb + "/organizations/" + url.PathEscape(org) + "/settings/apps/new?state=" + url.QueryEscape(state)
-	flow := &manifestFlow{org: org, name: name, local: local, state: state, codes: make(chan string, 1), fails: make(chan error, 1), installs: make(chan flowOutcome, 1),
+	createURL := githubWeb + "/" + owner.newAppPath() + "?state=" + url.QueryEscape(state)
+	flow := &manifestFlow{owner: owner, name: name, local: local, state: state, codes: make(chan string, 1), fails: make(chan error, 1), installs: make(chan flowOutcome, 1),
 		page: fmt.Sprintf(manifestPage, html.EscapeString(name), html.EscapeString(createURL), html.EscapeString(name),
 			html.EscapeString(source), html.EscapeString(string(raw)))}
 	srv := &http.Server{Handler: flow.mux(), ReadHeaderTimeout: 10 * time.Second}
@@ -411,8 +450,8 @@ func (f *manifestFlow) awaitCode(ctx context.Context, say io.Writer, open bool, 
 	if !open {
 		how = "open " + f.local + "/ in the browser"
 	}
-	if _, err := fmt.Fprintf(say, "%s: it submits the manifest to GitHub (organizations/%s/settings/apps/new). "+
-		"Click \"Create GitHub App\" there; waiting up to %s for GitHub's redirect.\n", how, f.org, wait); err != nil {
+	if _, err := fmt.Fprintf(say, "%s: it submits the manifest to GitHub (%s). "+
+		"Click \"Create GitHub App\" there; waiting up to %s for GitHub's redirect.\n", how, f.owner.newAppPath(), wait); err != nil {
 		return "", err
 	}
 	if open {
@@ -428,7 +467,7 @@ func (f *manifestFlow) awaitCode(ctx context.Context, say io.Writer, open bool, 
 	case err := <-f.fails:
 		return "", err
 	case <-time.After(wait):
-		return "", refused("no redirect from GitHub within %s: the Create click did not come; nothing written"+takenWords, wait, f.name, githubWeb, githubWeb, f.org, guard.DeleteForm)
+		return "", refused("no redirect from GitHub within %s: the Create click did not come; nothing written"+takenWords, wait, f.name, githubWeb, githubWeb, f.owner.login, guard.DeleteForm)
 	case <-ctx.Done():
 		return "", ctx.Err()
 	}
@@ -656,23 +695,38 @@ func (a *app) planDeclared(ctx context.Context, decl github.AppDeclaration) (*ap
 	} else if known != nil {
 		return nil, knownRefusal(decl.Name, known)
 	}
-	if p.orgID, err = a.githubID(ctx, "orgs/"+p.org); err != nil {
-		return nil, fmt.Errorf("the organisation %s: %w", p.org, err)
-	}
-	if len(decl.Repositories) > maxPreselectedRepos {
-		return nil, refused("%s names %d repositories: GitHub preselects at most %d on the installation page", decl.Installation, len(decl.Repositories), maxPreselectedRepos)
-	}
-	for _, r := range decl.Repositories {
-		id, err := a.githubID(ctx, "repos/"+p.org+"/"+r)
-		if err != nil {
-			if strings.Contains(err.Error(), "HTTP 404") {
-				return nil, refused("%s names the repository %s, which %s lacks; nothing written", decl.Installation, r, p.org)
-			}
-			return nil, fmt.Errorf("the repository %s/%s: %w", p.org, r, err)
-		}
-		p.repoIDs = append(p.repoIDs, id)
+	if p.orgID, p.repoIDs, err = a.installTarget(ctx, appOwner{login: p.org}, decl.Installation, decl.Repositories); err != nil {
+		return nil, err
 	}
 	return p, nil
+}
+
+// installTarget is what the App's installation page preselects: the id of
+// owner and those of the repositories source names under it (none for all).
+func (a *app) installTarget(ctx context.Context, owner appOwner, source string, repos []string) (int64, []int64, error) {
+	what := "the organisation"
+	if owner.user {
+		what = "the account"
+	}
+	ownerID, err := a.githubID(ctx, owner.apiPath())
+	if err != nil {
+		return 0, nil, fmt.Errorf("%s %s: %w", what, owner.login, err)
+	}
+	if len(repos) > maxPreselectedRepos {
+		return 0, nil, refused("%s names %d repositories: GitHub preselects at most %d on the installation page", source, len(repos), maxPreselectedRepos)
+	}
+	var ids []int64
+	for _, r := range repos {
+		id, err := a.githubID(ctx, "repos/"+owner.login+"/"+r)
+		if err != nil {
+			if strings.Contains(err.Error(), "HTTP 404") {
+				return 0, nil, refused("%s names the repository %s, which %s lacks; nothing written", source, r, owner.login)
+			}
+			return 0, nil, fmt.Errorf("the repository %s/%s: %w", owner.login, r, err)
+		}
+		ids = append(ids, id)
+	}
+	return ownerID, ids, nil
 }
 
 // knownApp is what GitHub says of an App it knows by its slug.
@@ -838,11 +892,12 @@ type flowOutcome struct {
 // manifestFlow is the loopback listener's state: the page, the state nonce,
 // and the channels between the callback and the command.
 type manifestFlow struct {
-	org, name string
-	local     string
-	state     string
-	page      string
-	stop      func()
+	owner appOwner
+	name  string
+	local string
+	state string
+	page  string
+	stop  func()
 	// codes carries the redirect's code to the command, fails a redirect
 	// the callback refused, installs the command's outcome back.
 	codes    chan string
@@ -1037,10 +1092,11 @@ func (a *app) storeFields(ctx context.Context, item string, fields []secret.Item
 	return st.Fields, nil
 }
 
-// installURL is the App's installation page with the organisation and the
-// repositories preselected (all of them without ids).
-func installURL(slug string, orgID int64, repoIDs []int64) string {
-	q := url.Values{"suggested_target_id": {strconv.FormatInt(orgID, 10)}}
+// installURL is the App's installation page with the owner (organisation
+// or personal account) and the repositories preselected (all of them
+// without ids).
+func installURL(slug string, ownerID int64, repoIDs []int64) string {
+	q := url.Values{"suggested_target_id": {strconv.FormatInt(ownerID, 10)}}
 	for _, id := range repoIDs {
 		q.Add("repository_ids[]", strconv.FormatInt(id, 10))
 	}

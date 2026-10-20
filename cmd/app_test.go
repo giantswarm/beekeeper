@@ -445,9 +445,10 @@ func TestAppLifecycleCheck(t *testing.T) {
 			creating + " of " + fixtureOrg + ", declared in /tmp/glean/manifest.json, which the `beekeeper app create` run by " + agentOne + " since "},
 		"Create for another organisation": {[]string{appCheck, manifestPage, wordsFlag, "Clicks Create GitHub App for other-org"},
 			"refuse: Refused: GitHub's manifest page creates an App, and the page names none of the Apps the running `beekeeper app create` commands create."},
-		"the organisation's form submit":    {[]string{appCheck, "https://github.com/organizations/" + fixtureOrg + "/settings/apps/new", wordsFlag, "Submits the form"}, checkAllow},
-		"another call on the manifest page": {[]string{appCheck, manifestPage, wordsFlag, "Scrolls down"}, checkNone},
-		"Install of the App being created":  {[]string{appCheck, "https://github.com/apps/" + creating + "/installations/new", wordsFlag, clickInstall}, "allow: beekeeper allows the click: the installation page of the person's own App " + creating},
+		"Create on the personal account's page": {[]string{appCheck, "https://github.com/settings/apps/new", wordsFlag, createWords}, "allow: beekeeper allows the click: GitHub's manifest page of the person's own App " + creating},
+		"the organisation's form submit":        {[]string{appCheck, "https://github.com/organizations/" + fixtureOrg + "/settings/apps/new", wordsFlag, "Submits the form"}, checkAllow},
+		"another call on the manifest page":     {[]string{appCheck, manifestPage, wordsFlag, "Scrolls down"}, checkNone},
+		"Install of the App being created":      {[]string{appCheck, "https://github.com/apps/" + creating + "/installations/new", wordsFlag, clickInstall}, "allow: beekeeper allows the click: the installation page of the person's own App " + creating},
 		"Install of a ledger App": {[]string{appCheck, "https://github.com/apps/" + keptApp + "/installations/new/permissions?suggested_target_id=1", wordsFlag, "Clicks Install & Authorize"},
 			"allow: beekeeper allows the click: the installation page of the person's own App " + keptApp + " of " + fixtureOrg + " (id 12), declared in " + recordedDeclared +
 				", which `beekeeper app create` created on "},
