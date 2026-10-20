@@ -1000,7 +1000,8 @@ type Writer struct {
 }
 
 // StaleWriterError is a save refused because a newer release wrote the
-// state: this binary would save it by rules that release changed (a watch,
+// state, or a state a newer release wrote that this binary does not load
+// (Load): this binary would save it by rules that release changed (a watch,
 // a start's reopen or a gate call left running by an install). The state
 // stays as it is; the process ends or is restarted, and the installed
 // beekeeper runs its command.
@@ -1009,11 +1010,18 @@ type StaleWriterError struct {
 	Command string
 	// Version is this binary's, Newer the one that wrote the state.
 	Version, Newer string
+	// Load is why the state does not decode, nil for a refused save.
+	Load error
 }
 
 func (e *StaleWriterError) Error() string {
+	if e.Load != nil {
+		return fmt.Sprintf("pid %d (%s) runs beekeeper %s, older than the %s that wrote the state: it does not load it (%v); restart it on the installed beekeeper", e.PID, e.Command, e.Version, e.Newer, e.Load)
+	}
 	return fmt.Sprintf("pid %d (%s) runs beekeeper %s, older than the %s that wrote the state: its save is refused; restart it on the installed beekeeper", e.PID, e.Command, e.Version, e.Newer)
 }
+
+func (e *StaleWriterError) Unwrap() error { return e.Load }
 
 // Budget is one reading of the GitHub core budget.
 type Budget struct {
@@ -1509,9 +1517,35 @@ func (s *FileStore) load() (*State, error) {
 		return nil, err
 	}
 	if err := json.Unmarshal(raw, st); err != nil {
-		return nil, fmt.Errorf("%s: %w", s.path("state.json"), err)
+		err = fmt.Errorf("%s: %w", s.path("state.json"), err)
+		if newer := s.newerWriter(raw); newer != "" {
+			return nil, &StaleWriterError{PID: os.Getpid(), Command: command(os.Args), Version: s.version, Newer: newer, Load: err}
+		}
+		return nil, err
 	}
 	return st, nil
+}
+
+// newerWriter is the release that wrote raw, a state this binary does not
+// decode, when it is newer than this one; "" otherwise. A build without a
+// release version judges none, as stamp does.
+func (s *FileStore) newerWriter(raw []byte) string {
+	own, ok := release(s.version)
+	if !ok {
+		return ""
+	}
+	var head struct {
+		Writer struct {
+			Version string `json:"version"`
+		} `json:"writer"`
+	}
+	if json.Unmarshal(raw, &head) != nil {
+		return ""
+	}
+	if newer, ok := release(head.Writer.Version); ok && own.LessThan(newer) {
+		return head.Writer.Version
+	}
+	return ""
 }
 
 func (s *FileStore) append(events []Event) error {
