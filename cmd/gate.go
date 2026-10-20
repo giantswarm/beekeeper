@@ -208,7 +208,10 @@ limit) and a 30m wait. A timeout wrapped around the call (timeout 600 devctl
 …, coreutils' timeout, which runs the call as its child; busybox's execs it
 and is not seen) cuts the connection, not the run: its SIGTERM ends the call at once with
 exit 76, devctl goes on outside it and its outcome wakes the owner as above.
-A gated command is therefore never wrapped in timeout.`,
+A gated command is therefore never wrapped in timeout.
+
+gate runs lists the runs the gate runs outside their callers, gate stop
+<id> ends one and its devctl: never a kill by pid.`,
 		Hidden: true,
 		Args:   cobra.MinimumNArgs(1),
 		PersistentPreRunE: func(_ *cobra.Command, args []string) error {
@@ -233,6 +236,7 @@ A gated command is therefore never wrapped in timeout.`,
 	c.Flags().DurationVar(&limit, "limit", 0, "how long the call runs before it exits 76 and the merge or wait runs on outside it (default merge.toolLimit; 0: no limit)")
 	c.Flags().BoolVar(&queued, "queued", false, "wait as a queued merge's own run, which refuses at the end of --wait")
 	_ = c.Flags().MarkHidden("queued")
+	c.AddCommand(a.gateRunsCmd(), a.gateStopCmd())
 	return c
 }
 
