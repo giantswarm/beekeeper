@@ -47,8 +47,8 @@ features, suspends it, and applies a declared repository selection, which
 GitHub's settings pages keep behind sudo mode (app installation --help).
 
 An App on record is one the organisation declares and the person owns and
-asked a grant for, on their word (a note's answer): a consent, or one change
-of its permissions. allow reads the declaration: its name must be the App's;
+asked a grant for, on their word (a note's answer): a consent, one change
+of its permissions, or one callback URL added to its settings. allow reads the declaration: its name must be the App's;
 an App no manifest declares is not recorded. For a consent (--client-id) the
 record is the App's name as GitHub's consent page titles it ("Authorize
 <name>"), the OAuth client id its consent URL carries and the callback hosts
@@ -64,7 +64,12 @@ organisation's settings, the clicks there that select that level for that
 permission and Save changes, and the installation's Review request and
 Accept new permissions: allowed for the App and the change on record,
 refused on the permissions page of any other App and for any other call
-there, naming this record's form. A sign-in or consent page of the lab's
+there, naming this record's form. For a callback URL (--callback-url <url>,
+on a callback host the manifest declares) the hook answers the navigation
+to the App's settings page under the organisation's settings, the clicks
+there that name Add Callback URL, that URL or Save changes, and typing
+exactly that URL, refusing another URL or field, a removal, a key or other
+input there. A sign-in or consent page of the lab's
 own identity provider on a loopback host (*.127.0.0.1.nip.io, localhost) is
 allowed without a record: a fixture user's sign-in there is the person's
 own lab's. A Google OAuth client the person owns and asked a consent for is
@@ -96,7 +101,7 @@ Without a subcommand, lists the Apps on record.`,
 	var hosts []string
 	allow := &cobra.Command{
 		Use:   "allow <name>",
-		Short: "Record an App the organisation declares and the person asked a consent, or one permission change, for, on their word",
+		Short: "Record an App the organisation declares and the person asked a grant for (a consent, a permission change, a callback URL, a deletion), on their word",
 		Long: `allow records the App <name> the organisation declares, on the person's
 word, for the grant the person asked for; a record of the same name is
 replaced:
@@ -109,6 +114,12 @@ replaced:
   the organisation's settings, the clicks there that select that level for
   that permission and Save changes, and the installation's Review request
   and Accept new permissions. A record carries one change.
+  --callback-url <url>: one callback URL added to the App's settings, on a
+  callback host its manifest's callback_urls declare: the navigation to its
+  settings page under the organisation's settings, the clicks there that
+  name Add Callback URL, that URL or Save changes, and typing exactly that
+  URL. Another URL or field, a removal, a key or other input is refused. A
+  record carries one URL, http(s) without user info, as written back.
   --delete: the App's deletion, on its Advanced settings page under the
   organisation's or the person's own account: Delete GitHub App, the
   App's name typed into GitHub's confirmation and its confirm click, for
@@ -129,7 +140,7 @@ Any of them, with --word, the person's words that asked for it.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
 			rec.Name = strings.TrimSpace(args[0])
-			rec.ClientID, rec.Word = strings.TrimSpace(rec.ClientID), strings.TrimSpace(rec.Word)
+			rec.ClientID, rec.Word, rec.CallbackURL = strings.TrimSpace(rec.ClientID), strings.TrimSpace(rec.Word), strings.TrimSpace(rec.CallbackURL)
 			var err error
 			switch {
 			case rec.Name == "":
@@ -167,6 +178,9 @@ Any of them, with --word, the person's words that asked for it.`,
 			if rec.Permission != "" {
 				answers = append(answers, "the change "+rec.Permission+" on its permissions page and its installation's Review request and Accept new permissions")
 			}
+			if rec.CallbackURL != "" {
+				answers = append(answers, "the callback URL "+rec.CallbackURL+" added on its settings page")
+			}
 			if rec.Delete {
 				answers = append(answers, "its deletion on its Advanced page under the organisation's or the person's own account")
 			}
@@ -180,6 +194,7 @@ Any of them, with --word, the person's words that asked for it.`,
 	}
 	allow.Flags().StringVar(&rec.ClientID, "client-id", "", "a consent: the OAuth client id the App's consent URL carries")
 	allow.Flags().StringVar(&permission, "permission", "", "one change of the App's permissions, \"<scope>: <level>\" (e.g. \"Members: Read-only\")")
+	allow.Flags().StringVar(&rec.CallbackURL, "callback-url", "", "one callback URL to add on the App's settings page, on a callback host its manifest declares")
 	allow.Flags().BoolVar(&rec.Delete, "delete", false, "the App's deletion: its Advanced page's Delete GitHub App and GitHub's confirmation")
 	allow.Flags().StringVar(&manifest, "manifest", "", "with --delete, the local App manifest (app create --manifest) that declares the App")
 	allow.Flags().StringVar(&rec.Word, "word", "", "the person's words that asked for the grant")
@@ -277,12 +292,12 @@ func (a *app) githubApp(ctx context.Context, rec *state.App, hosts []string, per
 	if rec.Permission, err = permissionChange(permission); err != nil {
 		return err
 	}
-	if manifest != "" && (rec.ClientID != "" || rec.Permission != "" || !rec.Delete) {
-		return usageErr("--manifest declares an App for --delete alone: a consent or a permission change is of an App apps.repo declares")
+	if manifest != "" && (rec.ClientID != "" || rec.Permission != "" || rec.CallbackURL != "" || !rec.Delete) {
+		return usageErr("--manifest declares an App for --delete alone: a consent, a permission change or a callback URL is of an App apps.repo declares")
 	}
-	if rec.ClientID == "" && rec.Permission == "" && !rec.Delete {
+	if rec.ClientID == "" && rec.Permission == "" && rec.CallbackURL == "" && !rec.Delete {
 		return usageErr("--client-id <id> for a consent (the OAuth client id the App's consent URL carries), --permission \"<scope>: <level>\" for one permission change, " +
-			"--delete for the App's deletion, --google --callback <host> for a Google OAuth client's consent, or several")
+			"--callback-url <url> for one callback URL, --delete for the App's deletion, --google --callback <host> for a Google OAuth client's consent, or several")
 	}
 	if manifest != "" {
 		err = a.declaredLocally(manifest, rec)
@@ -290,6 +305,9 @@ func (a *app) githubApp(ctx context.Context, rec *state.App, hosts []string, per
 		err = a.declared(ctx, rec)
 	}
 	if err != nil {
+		return err
+	}
+	if err := declaredCallback(rec); err != nil {
 		return err
 	}
 	if rec.ClientID != "" && len(rec.Callbacks) == 0 {
@@ -302,6 +320,24 @@ func (a *app) githubApp(ctx context.Context, rec *state.App, hosts []string, per
 	return nil
 }
 
+// declaredCallback checks rec's callback URL, if any, against its
+// declaration: an http(s) URL on one of the callback hosts its manifest's
+// callback_urls declare.
+func declaredCallback(rec *state.App) error {
+	if rec.CallbackURL == "" {
+		return nil
+	}
+	u, err := url.Parse(rec.CallbackURL)
+	if err != nil || !guard.CanonicalCallback(rec.CallbackURL) {
+		return usageErr("--callback-url names one callback URL, http(s)://<host>/<path> without user info or characters a URL escapes, not %q", rec.CallbackURL)
+	}
+	if !slices.Contains(rec.Callbacks, strings.ToLower(u.Host)) {
+		return refused("App %s declares no callback host %s in %s: a callback URL is recorded on a host the App's manifest declares, "+
+			"so the declaration gains it first", rec.Name, u.Host, rec.Declared)
+	}
+	return nil
+}
+
 // googleDeclared is the declaration of a Google OAuth client on record: no
 // repository declares one, the person's word does.
 const googleDeclared = "the person's word (a Google OAuth client)"
@@ -310,8 +346,8 @@ const googleDeclared = "the person's word (a Google OAuth client)"
 // its consent, by the callback hosts named, signed in with the account
 // named.
 func googleClient(rec *state.App, hosts []string, permission, manifest string) error {
-	if permission != "" || rec.Delete || manifest != "" {
-		return usageErr("--google records a consent on Google's sign-in alone: --permission, --delete and --manifest are a GitHub App's")
+	if permission != "" || rec.CallbackURL != "" || rec.Delete || manifest != "" {
+		return usageErr("--google records a consent on Google's sign-in alone: --permission, --callback-url, --delete and --manifest are a GitHub App's")
 	}
 	rec.Callbacks = nil
 	for _, h := range hosts {
@@ -370,6 +406,9 @@ func recordParts(x state.App) []string {
 	}
 	if x.Permission != "" {
 		parts = append(parts, "permission "+x.Permission)
+	}
+	if x.CallbackURL != "" {
+		parts = append(parts, "callback URL "+x.CallbackURL)
 	}
 	if x.Delete {
 		parts = append(parts, "delete")
@@ -471,7 +510,7 @@ func guardApps(apps []state.App) []guard.App {
 	out := make([]guard.App, 0, len(apps))
 	for _, x := range apps {
 		out = append(out, guard.App{Name: x.Name, ClientID: x.ClientID, Callbacks: x.Callbacks, Org: x.Org, Permission: x.Permission,
-			Delete: x.Delete, Google: x.Google, Account: x.Account, Declared: x.Declared, Word: x.Word, By: x.By.Name, At: x.At})
+			CallbackURL: x.CallbackURL, Delete: x.Delete, Google: x.Google, Account: x.Account, Declared: x.Declared, Word: x.Word, By: x.By.Name, At: x.At})
 	}
 	return out
 }

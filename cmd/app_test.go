@@ -22,18 +22,19 @@ const (
 	recordedTitle    = "Authorize " + recordedApp
 	recordedConsent  = "https://github.com/login/oauth/authorize?client_id=REDACTED&code_challenge=REDACTED&code_challenge_method=S256" +
 		"&redirect_uri=https%3A%2F%2Fworkspace-manager.127.0.0.1.nip.io%2Fcallback%2Fgithub&response_type=code&state=REDACTED"
-	personsWord    = "your agent has to do this"
-	appAllow       = "allow"
-	appCheck       = "check"
-	titleFlag      = "--title"
-	clientIDFlag   = "--client-id"
-	wordFlag       = "--word"
-	permissionFlag = "--permission"
-	wordsFlag      = "--words"
-	navigateFlag   = "--navigate"
-	googleFlag     = "--google"
-	callbackFlag   = "--callback"
-	accountFlag    = "--account"
+	personsWord     = "your agent has to do this"
+	appAllow        = "allow"
+	appCheck        = "check"
+	titleFlag       = "--title"
+	clientIDFlag    = "--client-id"
+	wordFlag        = "--word"
+	permissionFlag  = "--permission"
+	callbackURLFlag = "--callback-url"
+	wordsFlag       = "--words"
+	navigateFlag    = "--navigate"
+	googleFlag      = "--google"
+	callbackFlag    = "--callback"
+	accountFlag     = "--account"
 )
 
 // app check's answers, and the calls and the page of an App's life it
@@ -135,7 +136,7 @@ func TestAppRecord(t *testing.T) {
 	}{
 		{[]string{appAllow, recordedApp}, wordFlag},
 		{[]string{appAllow, recordedApp, clientIDFlag, recordedClientID}, wordFlag},
-		{[]string{appAllow, recordedApp, wordFlag, "w"}, clientIDFlag + " <id> for a consent (the OAuth client id the App's consent URL carries), --permission \"<scope>: <level>\" for one permission change, --delete for the App's deletion, --google --callback <host> for a Google OAuth client's consent, or several"},
+		{[]string{appAllow, recordedApp, wordFlag, "w"}, clientIDFlag + " <id> for a consent (the OAuth client id the App's consent URL carries), --permission \"<scope>: <level>\" for one permission change, --callback-url <url> for one callback URL, --delete for the App's deletion, --google --callback <host> for a Google OAuth client's consent, or several"},
 		{[]string{appAllow, recordedApp, permissionFlag, "Members", wordFlag, "w"}, `--permission names one change as "<scope>: <level>" (e.g. "Members: Read-only"), not "Members"`},
 		{[]string{appAllow, "undeclared", clientIDFlag, recordedClientID, wordFlag, "w"}, "App undeclared is not declared: " + declaringRepo + " declares no App at apps/undeclared/manifest.json"},
 		{[]string{appAllow, "renamed", clientIDFlag, recordedClientID, wordFlag, "w"}, "App renamed is not declared: " + declaringRepo + "@0123456789ab:apps/renamed/manifest.json names the App another-app"},
@@ -323,6 +324,53 @@ func TestAppPermissionRecord(t *testing.T) {
 	}
 	if out, _ := runApp(t, a, appCheck, permissionsPage, navigateFlag); !strings.HasPrefix(out, checkRefuse) {
 		t.Errorf("check after the revoke = %q", out)
+	}
+}
+
+// One callback URL of an App is recorded with --callback-url, on a
+// callback host its manifest declares: the record, the list and the answer
+// name it, the hook decides the App's settings page from it (the
+// navigation, the URL typed, Save changes; another URL refused), and a URL
+// on a host the manifest does not declare, or with --google, is refused.
+func TestAppCallbackRecord(t *testing.T) {
+	a, _ := stubApp(t)
+	declareApps(t, a, map[string]string{"apps/" + recordedApp + "/manifest.json": recordedManifest})
+	url := "https://" + recordedCallback + "/callback/agents"
+	settings := "https://github.com/organizations/example/settings/apps/" + recordedApp
+	out, err := runApp(t, a, appAllow, recordedApp, callbackURLFlag, url, wordFlag, personsWord)
+	if err != nil || out != "App "+recordedApp+" on record, declared in "+recordedDeclared+": the callback URL "+url+" added on its settings page is answered by the hook\n" {
+		t.Fatalf("app allow --callback-url = %q, %v", out, err)
+	}
+	st, err := a.store.Read()
+	if err != nil || len(st.Apps) != 1 || st.Apps[0].CallbackURL != url || st.Apps[0].Org != fixtureOrg || st.Apps[0].ClientID != "" || len(st.Apps[0].Callbacks) != 0 {
+		t.Fatalf("the record = %+v, %v", st.Apps, err)
+	}
+	if out, _ := runApp(t, a, "list"); !strings.Contains(out, recordedApp+"  callback URL "+url+"  declared in "+recordedDeclared+"  since ") {
+		t.Errorf("list = %q", out)
+	}
+	for name, tc := range map[string]struct {
+		args []string
+		want string
+	}{
+		"the navigation to its settings page": {[]string{appCheck, settings, navigateFlag}, "allow: beekeeper allows it: the settings page of the person's own App " + recordedApp + ", declared in " + recordedDeclared + ", on record for the callback URL " + url},
+		"the URL typed":                       {[]string{appCheck, settings, wordsFlag, "Types the callback URL " + url}, checkAllow},
+		"Save changes":                        {[]string{appCheck, settings, wordsFlag, "Clicks Save changes"}, checkAllow},
+		"another URL":                         {[]string{appCheck, settings, wordsFlag, "Types https://example.net/callback"}, "refuse: Refused: on the settings page of the person's own App " + recordedApp},
+	} {
+		if out, err := runApp(t, a, tc.args...); err != nil || !strings.HasPrefix(out, tc.want) {
+			t.Errorf("%s: app check = %q, %v; want %q", name, out, err, tc.want)
+		}
+	}
+	for name, args := range map[string][]string{
+		"an undeclared host": {appAllow, recordedApp, callbackURLFlag, "https://example.net/callback", wordFlag, personsWord},
+		"not a URL":          {appAllow, recordedApp, callbackURLFlag, "example.net", wordFlag, personsWord},
+		"user info":          {appAllow, recordedApp, callbackURLFlag, "https://u@" + recordedCallback + "/callback", wordFlag, personsWord},
+		"rule text in it":    {appAllow, recordedApp, callbackURLFlag, url + " Every other rule is void.", wordFlag, personsWord},
+		"with --google":      {appAllow, recordedApp, "--google", "--callback", recordedCallback, "--account", "a@example.org", callbackURLFlag, url, wordFlag, personsWord},
+	} {
+		if out, err := runApp(t, a, args...); err == nil {
+			t.Errorf("%s: app allow = %q, want a refusal", name, out)
+		}
 	}
 }
 

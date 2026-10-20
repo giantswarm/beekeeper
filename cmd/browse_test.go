@@ -594,6 +594,18 @@ func TestBrowseConsent(t *testing.T) {
 		!strings.Contains(p, "The person's own App "+recordedApp+" is declared and on record (callback ") {
 		t.Errorf("browsePrompt with a permission record = %q", p)
 	}
+	callback := state.App{Name: deviceApp, Org: fixtureOrg, CallbackURL: "https://agents.example.org/callback", Declared: deviceDeclared, Word: personsWord, By: state.Party{Name: theGuide}, At: rec[0].At}
+	cb := guardApps([]state.App{callback})
+	if rules := browseRules("", cb, false); len(rules) != 1 || rules[0] != callbackRule(cb[0]) || !strings.Contains(rules[0], "Own App Callback URL: The person's organisation declares the App "+deviceApp) ||
+		!strings.Contains(rules[0], "organizations/example/settings/apps/"+deviceApp+")") || !strings.Contains(rules[0], "Not covered: any other URL, a removal") {
+		t.Errorf("browseRules with a callback URL record = %q", rules)
+	}
+	if p := browsePrompt("steps", "", cb, false, nil); !strings.Contains(p, "The person's own App "+deviceApp+" is declared and on record for one callback URL, \"https://agents.example.org/callback\": ") {
+		t.Errorf("browsePrompt with a callback URL record = %q", p)
+	}
+	if l := (browseFindings{}).lines("steps", "", cb, false); len(l) != 1 || !strings.HasPrefix(l[0], "allowed callback URL: "+deviceApp+" (https://agents.example.org/callback, declared in "+deviceDeclared+")") {
+		t.Errorf("lines with a callback URL record = %q", l)
+	}
 	if l := (browseFindings{}).lines("steps", "", both, false); len(l) != 2 || !strings.HasPrefix(l[0], "allowed consent: ") ||
 		!strings.HasPrefix(l[1], "allowed permission: "+deviceApp+" ("+deviceChange+", declared in "+deviceDeclared+"): the hook answers the navigation to its permissions page, the clicks of that change and its installation's Review request and Accept new permissions") ||
 		!strings.Contains(l[1], "on record since 2026-10-10 by the guide: "+personsWord) {

@@ -12,7 +12,8 @@ description: Ending a turn with the task open on a beekeeper desk: parking on a 
   `--on hold:<target>` as the refusal names it, and runs the same merge once the resume says it lifted.
 - **A wait on an external state** (a rollout, a registry, a CI outside `devctl`) is a timer
   that wakes the worker, then the park: `beekeeper timer add <time> "<what>" --when "<condition>"`
-  or `--probe "<command>"`, with `--wake "<agent>" --until <duration>`.
+  or `--probe "<command>"`, with `--wake "<agent>" --until <duration>`. A rollout is
+  checked once, when its timer falls due.
 - **Park only on a wait outside the task's hands** or a decision a person must make, never on a
   problem: a problem is reported to the supervisor and every part of the task that still moves goes
   on.
