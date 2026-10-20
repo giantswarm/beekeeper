@@ -49,17 +49,20 @@ func (c *call) ownMailbox(req mcp.CallToolRequest) (string, error) {
 // a2aMessage is what send_message reads of an A2A Message; the rest
 // travels as it came.
 type a2aMessage struct {
-	MessageID string `json:"messageId"`
-	Role      string `json:"role"`
-	Parts     []struct {
-		Kind string `json:"kind"`
-		Text string `json:"text"`
-	} `json:"parts"`
+	MessageID string    `json:"messageId"`
+	Role      string    `json:"role"`
+	Parts     []a2aPart `json:"parts"`
 	// Metadata.Source is where the person wrote it: slack for a reply in a
 	// conversation's thread.
 	Metadata struct {
 		Source string `json:"source"`
 	} `json:"metadata"`
+}
+
+// a2aPart is what send_message reads of an A2A Part.
+type a2aPart struct {
+	Kind string `json:"kind"`
+	Text string `json:"text"`
 }
 
 // text is the message's text parts, one per line.

@@ -107,6 +107,35 @@ func TestBypassStartNeedsTheRecordedMode(t *testing.T) {
 	}
 }
 
+// A worker whose CLI the desktop restarted runs under a new session id and
+// its start's host id: BypassStartOf finds it by either, BypassStart by the
+// session id only.
+func TestBypassStartOfMatchesTheHostSession(t *testing.T) {
+	const firstCLI, restartedCLI, firstHost, askingHost = "cli-1", "cli-2", "local_first", "local_asking"
+	st := &state.State{Starts: []state.Start{
+		{Party: state.Party{Session: firstCLI, HostSession: firstHost, Name: "W"}, Mode: state.ModeBypass},
+		{Party: state.Party{Session: "asking", HostSession: askingHost}, Mode: keyDefault},
+	}}
+	for name, tc := range map[string]struct {
+		p    state.Party
+		want bool
+	}{
+		"its first CLI":                  {state.Party{Session: firstCLI}, true},
+		"a restarted CLI under its host": {state.Party{Session: restartedCLI, HostSession: firstHost}, true},
+		"an unknown session":             {state.Party{Session: "stranger", HostSession: "local_stranger"}, false},
+		"a start not in bypass":          {state.Party{Session: "asking-restarted", HostSession: askingHost}, false},
+		"a name alone":                   {state.Party{Name: "W"}, false},
+		"nothing":                        {state.Party{}, false},
+	} {
+		if _, ok := st.BypassStartOf(tc.p); ok != tc.want {
+			t.Errorf("%s: BypassStartOf(%+v) = %v, want %v", name, tc.p, ok, tc.want)
+		}
+	}
+	if _, ok := st.BypassStart(restartedCLI); ok {
+		t.Error("BypassStart matched a session id no start recorded")
+	}
+}
+
 // Every headless turn of a start, the first (headlessStartArgv) and a wake
 // (wakeArgv), runs in bypass with the CLI's own Chrome connection and no
 // narrowed tool set: browse's narrowing is for the desktop turns.

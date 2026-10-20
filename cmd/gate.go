@@ -107,7 +107,8 @@ runs when no merge before it holds its place (one in the gate or within
 merge.queueTTL of its last run; for a seeded place also the seeds before
 it), nothing else of the lane runs, the lane's HelmReleases are Ready and
 the previous merge's release has rolled, fewer than merge.cap devctl
-processes run and the calling session runs fewer than merge.sessionCap
+merges and promotes run (the waits only poll and do not count) and the
+calling session runs fewer than merge.sessionCap
 merges (default 2: each running devctl polls GitHub, a waiting place does
 not; the session's merges start in the order they queued). A wait longer than --wait hands the merge to a run of its
 own outside the caller (exit 76): the same gate under --queued keeps the
@@ -637,8 +638,8 @@ func (g *gateRun) step() (string, error) {
 	case dropped:
 		return "", g.refuse("%s was taken out of lane %s (beekeeper lanes drop): nothing ran; run it again only if it is still wanted", g.key(), g.lane.Name)
 	case held && !placed:
-		return "", g.refuse("%s is held (%s) by %q until %s: %s; merge after the hold lifts (beekeeper hold), do not poll",
-			g.repo, holdTarget(hold), hold.By.Name, untilText(g.app, hold), hold.Reason)
+		return "", g.refuse("%s is held (%s) by %q until %s: %s; park until it lifts (beekeeper agents park --on %s%s \"<what>\"), merge then, do not poll",
+			g.repo, holdTarget(hold), hold.By.Name, untilText(g.app, hold), hold.Reason, holdParkFlag, hold.Target)
 	case dup != nil && dup.Phase == state.Waiting:
 		why := fmt.Sprintf("%s is already queued in lane %s: since %s for %q (pid %d); its outcome reaches %q, do not merge again",
 			g.key(), g.lane.Name, clock(g.now, dup.Joined), dup.By.Name, dup.PID, dup.By.Name)
@@ -1164,7 +1165,7 @@ func (g *gateRun) laneReady(q merge.Lane) ([]merge.HelmRelease, string, error) {
 
 // start makes the merge the lane's running one, when it still is first, its
 // lane's settling merges are the ones it checked, the machine runs fewer
-// than merge.cap devctl processes and its party may start one more
+// than merge.cap devctl merges and promotes and its party may start one more
 // (sessionWait), and runs devctl.
 func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error) {
 	if g.runsDevctl() {
@@ -1258,16 +1259,16 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 }
 
 // capWait is what the merge me, its lane's next, waits for under merge.cap,
-// "" when it may start: the machine's devctl processes count, except in the
-// merge's reset window (merge.resetFirst), where the waits go after the
-// merges: only the running merges count, and the older merges queued for
-// the reset that are free to start take their slots first.
+// "" when it may start: the machine's devctl merges and promotes count, the
+// waits never, except in the merge's reset window (merge.resetFirst): only
+// the running merges count, and the older merges queued for the reset that
+// are free to start take their slots first.
 func (g *gateRun) capWait(st *state.State, me state.Merge) string {
 	most := g.cfg.Merge.Cap
 	window := g.cfg.Merge.ResetFirst.Duration
 	if !merge.InResetWindow(me, g.now, window) {
-		if n := devctlRuns(st); n >= most {
-			return fmt.Sprintf("%d devctl processes run machine-wide (cap %d), not a lane problem: %s is next in lane %s and starts when one ends",
+		if n := capRuns(st); n >= most {
+			return fmt.Sprintf("%d merges and promotes run machine-wide (cap %d), not a lane problem: %s is next in lane %s and starts when one ends",
 				n, most, g.key(), g.lane.Name)
 		}
 		return ""
@@ -2002,9 +2003,10 @@ func (g *gateRun) gateBudget() (state.Budget, error) {
 // tests.
 var readBudget = (*app).probeBudget
 
-// devctlRuns counts the machine's devctl processes, a running merge's own
-// once even before its devctl started.
-func devctlRuns(st *state.State) int {
+// capRuns counts the machine's devctl merges and promotes, a running
+// merge's own once even before its devctl started; the waits only poll and
+// do not count.
+func capRuns(st *state.State) int {
 	running, children := runningMerges(st), map[int]bool{}
 	for _, m := range st.Merges {
 		if m.Phase == state.Running {
@@ -2017,7 +2019,7 @@ func devctlRuns(st *state.State) int {
 		return n
 	}
 	for _, p := range t.ByPID {
-		if p.Comm == merge.Tool && !running[p.PPID] && !children[p.PPID] {
+		if p.Comm == merge.Tool && merge.ParseCapped(p.Args) && !running[p.PPID] && !children[p.PPID] {
 			n++
 		}
 	}

@@ -1083,7 +1083,8 @@ type Lane struct {
 
 // Merge configures the gate on devctl pr merge.
 type Merge struct {
-	// Cap is the most devctl processes the machine runs when a merge starts.
+	// Cap is the most devctl merges and promotes the machine runs when a
+	// merge starts; the waits only poll and do not count.
 	Cap int `yaml:"cap"`
 	// SessionCap is the most merges and promotions one session runs at once:
 	// each running devctl polls GitHub, so the rest of its queued merges wait

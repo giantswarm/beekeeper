@@ -33,6 +33,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/pkg/project"
@@ -140,8 +141,9 @@ the vault item of its name. Refused before any click: a purpose no
 template declares, a rendered name without the installation or longer
 than GitHub's 34 characters, and a template with {baseDomain} without
 --base-domain. --replace creates the successor of the installation's App
-for a credential past its expiry: the name with the next generation
-suffix (-2, -3, ...) into an item of its own beside the old one, which
+for a credential past its expiry: the name with the generation suffix
+after the latest (-2, -3, ...; the latest is the highest the shared vault
+holds an item of, or GitHub knows) into an item of its own beside the old one, which
 stays untouched with its App until its consumers have switched; deleting
 the old App on its settings page is the person's step, named in the answer.
 
@@ -335,8 +337,12 @@ func (a *app) createApp(ctx context.Context, planOf func(context.Context) (*appP
 		return res, err
 	}
 	if old := plan.replaces; old != nil {
-		if _, err := fmt.Fprintf(say, "the App %s (id %d) and its vault item stay untouched until its consumers have switched to %s; "+
-			"then deleting it is the person's step: %s (Delete GitHub App)\n", old.Slug, old.ID, plan.item, advancedURL(old)); err != nil {
+		id := ""
+		if old.ID != 0 {
+			id = fmt.Sprintf(" (id %d)", old.ID)
+		}
+		if _, err := fmt.Fprintf(say, "the App %s%s and its vault item stay untouched until its consumers have switched to %s; "+
+			"then deleting it is the person's step: %s (Delete GitHub App)\n", old.Slug, id, plan.item, advancedURL(old)); err != nil {
 			return res, err
 		}
 	}
@@ -497,27 +503,10 @@ func (a *app) appTemplatePlan(ctx context.Context, purpose, installation, baseDo
 	}
 	var latest *knownApp
 	if replace {
-		if latest, err = a.appKnown(ctx, guard.AppSlug(decl.Name)); err != nil {
+		if latest, err = a.latestGeneration(ctx, decl.Name); err != nil {
 			return nil, err
 		}
-		if latest == nil {
-			return nil, refused("GitHub knows no App %s for --replace to succeed: create it without --replace; nothing written", decl.Name)
-		}
-		base := decl.Name
-		for gen := 2; ; gen++ {
-			if gen > maxGeneration {
-				return nil, refused("GitHub knows %d generations of %s: delete the ones no consumer uses; nothing written", maxGeneration-1, base)
-			}
-			decl.Name = fmt.Sprintf("%s-%d", base, gen)
-			next, err := a.appKnown(ctx, guard.AppSlug(decl.Name))
-			if err != nil {
-				return nil, err
-			}
-			if next == nil {
-				break
-			}
-			latest = next
-		}
+		decl.Name = fmt.Sprintf("%s-%d", decl.Name, generation(decl.Name, latest.Slug)+1)
 		decl.Manifest["name"] = decl.Name
 	}
 	if len(decl.Name) > maxAppName {
@@ -529,6 +518,123 @@ func (a *app) appTemplatePlan(ctx context.Context, purpose, installation, baseDo
 	}
 	p.replaces = latest
 	return p, nil
+}
+
+// latestGeneration is the latest App of the generations of base: base,
+// base-2, base-3, …, the highest one the shared vault holds an item of
+// (private Apps are invisible to an installation token's GET /apps) or
+// GitHub knows, GitHub's answer when it shows that one. None is a refusal:
+// --replace succeeds an App that exists.
+func (a *app) latestGeneration(ctx context.Context, base string) (*knownApp, error) {
+	titles, err := a.vaultTitles(ctx, base)
+	if err != nil {
+		return nil, err
+	}
+	gen := 0
+	for _, t := range titles {
+		gen = max(gen, generation(base, t))
+	}
+	org, _, _ := strings.Cut(a.cfg.Apps.Repo, "/")
+	latest := &knownApp{Slug: guard.AppSlug(generationName(base, gen))}
+	latest.Owner.Login, latest.Owner.Type = org, "Organization"
+	// GitHub may know a later generation than the vault, created elsewhere
+	for next := gen + 1; next <= maxGeneration; next++ {
+		k, err := a.appKnown(ctx, guard.AppSlug(generationName(base, next)))
+		if err != nil {
+			return nil, err
+		}
+		if k == nil {
+			break
+		}
+		gen, latest = next, k
+	}
+	if gen == 0 {
+		return nil, refused("neither the vault %s nor GitHub knows an App %s for --replace to succeed: create it without --replace; nothing written", a.cfg.Secret.Vault, base)
+	}
+	if gen >= maxGeneration {
+		return nil, refused("%s has %d generations: delete the ones no consumer uses; nothing written", base, gen)
+	}
+	if gen == generation(base, latest.Slug) && latest.ID == 0 {
+		if k, err := a.appKnown(ctx, latest.Slug); err != nil {
+			return nil, err
+		} else if k != nil {
+			latest = k
+		}
+	}
+	return latest, nil
+}
+
+// vaultTitles are the titles of the shared vault's items whose title
+// contains match, metadata alone: with secret.session from the broker,
+// which holds the vault session, as beekeeper secret items --json runs
+// there; else as the service account in this process.
+func (a *app) vaultTitles(ctx context.Context, match string) ([]string, error) {
+	var items []secret.Item
+	if a.cfg.Secret.Session && os.Getenv(sandbox.Brokered) == "" {
+		out, err := brokeredItems(a.cfg.StateDir, []string{"items", "--json=true", secret.VaultRef(a.cfg.Secret.Vault), match},
+			a.cfg.Secret.UnlockWait.Duration+brokeredCallTimeout+time.Minute)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(out), &items); err != nil {
+			return nil, &exitError{code: ExitVault, msg: "the broker's listing of " + secret.VaultRef(a.cfg.Secret.Vault) + " is no list of items"}
+		}
+	} else {
+		ops, err := a.secretOps()
+		if err != nil {
+			return nil, err
+		}
+		if items, err = ops.Items(ctx, a.cfg.Secret.Vault, secret.ItemsOptions{Match: match}); err != nil {
+			return nil, vaultExit(err)
+		}
+	}
+	titles := make([]string, 0, len(items))
+	for _, it := range items {
+		titles = append(titles, it.Title)
+	}
+	return titles, nil
+}
+
+// brokeredItems runs the beekeeper secret call args in the broker serving
+// stateDir's spool and answers its output: a broker that does not answer,
+// or a call that fails, is its exit with its words. Tests replace it.
+var brokeredItems = func(stateDir string, args []string, timeout time.Duration) (string, error) {
+	dir := sandbox.SpoolDir(stateDir)
+	if !(sandbox.Capper{Dir: dir}).Available() {
+		return "", &exitError{code: ExitVault, msg: "no broker answers in " + dir + ": with secret.session the vault's items are listed there (beekeeper install)"}
+	}
+	r, err := sandbox.Call(dir, sandbox.Request{Op: sandbox.OpSecret, Args: args}, timeout)
+	switch {
+	case err != nil:
+		return "", &exitError{code: ExitVault, msg: err.Error()}
+	case r.Error != "":
+		return "", &exitError{code: ExitVault, msg: r.Error}
+	case r.Code != 0:
+		return "", &exitError{code: r.Code, msg: strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(r.Err), "beekeeper: "))}
+	}
+	return r.Out, nil
+}
+
+// generation is name's generation of the App base: 1 for base itself
+// (any case), n for base-<n>, 0 for a name of no generation of it.
+func generation(base, name string) int {
+	if strings.EqualFold(name, base) {
+		return 1
+	}
+	rest, ok := strings.CutPrefix(strings.ToLower(name), strings.ToLower(base)+"-")
+	n, err := strconv.Atoi(rest)
+	if !ok || err != nil || n < 2 || strconv.Itoa(n) != rest {
+		return 0
+	}
+	return n
+}
+
+// generationName is the name of base's generation gen: base for the first.
+func generationName(base string, gen int) string {
+	if gen <= 1 {
+		return base
+	}
+	return fmt.Sprintf("%s-%d", base, gen)
 }
 
 // The names an installation and its base domain take.

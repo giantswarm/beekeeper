@@ -174,6 +174,66 @@ func (c *Client) Call(ctx context.Context, tool string, args map[string]any, v a
 	return c.result(tool, res, v)
 }
 
+// Listen subscribes to uris through muster's subscriptions/listen (MCP
+// 2026-07-28) as the person and blocks until ctx ends (nil) or the stream
+// does (*Unreachable, or *Refused when the subscription is refused). ready
+// is called each time the subscription is acknowledged, updated with the
+// URI of each notifications/resources/updated. Only the handshake is bound
+// by the call timeout: the stream lasts.
+func (c *Client) Listen(ctx context.Context, uris []string, ready func(), updated func(uri string)) error {
+	hctx, cancel := context.WithTimeout(ctx, c.cfg.Timeout.Duration)
+	defer cancel()
+	url, err := c.endpoint(hctx)
+	if err != nil {
+		return err
+	}
+	token, err := c.token(hctx)
+	if err != nil {
+		return err
+	}
+	tr := baseTransport.Clone()
+	defer tr.CloseIdleConnections()
+	mc, err := client.NewStreamableHttpClient(url, transport.WithHTTPBasicClient(&http.Client{Transport: tr}),
+		transport.WithHTTPHeaders(map[string]string{"Authorization": "Bearer " + token}))
+	if err != nil {
+		return c.unreachable("%v", err)
+	}
+	defer func() { _ = mc.Close() }()
+	mc.OnNotification(func(n mcp.JSONRPCNotification) {
+		switch n.Method {
+		case mcp.MethodNotificationSubscriptionsAcknowledged:
+			ready()
+		case mcp.MethodNotificationResourceUpdated:
+			if uri, ok := n.Params.AdditionalFields["uri"].(string); ok {
+				updated(uri)
+			}
+		}
+	})
+	if err := mc.Start(ctx); err != nil {
+		return c.unreachable("%v", err)
+	}
+	init := mcp.InitializeRequest{}
+	init.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
+	init.Params.ClientInfo = mcp.Implementation{Name: project.Name, Version: project.Version()}
+	if _, err := mc.Initialize(hctx, init); err != nil {
+		return c.timedOut(hctx, stageConnect, c.cfg.Timeout.Duration, c.unreachable("muster at %s: %v", url, err))
+	}
+	if v := mc.ProtocolVersion(); !mcp.IsModernProtocol(v) {
+		return c.unreachable("muster at %s speaks MCP %s: subscriptions/listen needs %s", url, v, mcp.ProtocolVersion20260728)
+	}
+	err = mc.Listen(ctx, mcp.SubscriptionFilter{ResourceSubscriptions: uris})
+	switch {
+	case ctx.Err() != nil:
+		return nil
+	case err == nil:
+		return c.unreachable("muster ended the subscription")
+	}
+	if te := (*transport.Error)(nil); errors.As(err, &te) {
+		return c.unreachable("subscriptions/listen: %v", err)
+	}
+	return &Refused{Message: fmt.Sprintf("subscriptions/listen %s: %v", strings.Join(uris, " "), err)}
+}
+
 // baseTransport is what each call's own transport is cloned from.
 var baseTransport = http.DefaultTransport.(*http.Transport)
 

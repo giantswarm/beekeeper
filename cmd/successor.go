@@ -82,7 +82,7 @@ func (a *app) startSuccessor(ctx context.Context, rl role, from, by state.Party,
 	// A machine without a process table shows no session carrying the title.
 	sessions, _, _ := a.sessions()
 	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		if s, ok := st.BypassStart(from.Session); ok {
+		if s, ok := st.BypassStartOf(from); ok {
 			startDir = s.Dir
 		}
 		r := rl.get(st)

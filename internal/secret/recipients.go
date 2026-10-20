@@ -217,10 +217,11 @@ func dirRecipients(path, abs string) ([]string, error) {
 	return out, nil
 }
 
-// itemIdentity says which vault item holds recipient's identity: the shared
-// vault's item per recipient, else the item of the installation inst ("" for
-// none) in the first vault that holds it, else none, naming the items the
-// vaults lack.
+// itemIdentity says which vault item holds recipient's identity, by the
+// listings alone: the shared vault's item per recipient, else the item of
+// the installation inst ("" for none) in the first vault that holds it,
+// else the vaults' installation items, the one holding the recipient's
+// identity found when read; none when the vaults hold neither.
 func (o *Ops) itemIdentity(recipient, inst string, listing func(vault string) ([]vaultItem, error)) (string, error) {
 	items, err := listing(o.Vault)
 	if err != nil {
@@ -229,17 +230,22 @@ func (o *Ops) itemIdentity(recipient, inst string, listing func(vault string) ([
 	if itemID(items, AgeItemTitle(recipient)) != "" {
 		return fmt.Sprintf("the vault item %q", AgeItemTitle(recipient)), nil
 	}
-	if inst != "" {
-		for _, vault := range o.ageVaults() {
-			if items, err = listing(vault); err != nil {
-				return "", err
-			}
-			if itemID(items, AgeInstallationItem(inst)) != "" {
-				return fmt.Sprintf("the vault item %q of %s", AgeInstallationItem(inst), vault), nil
-			}
+	var holding []string
+	for _, vault := range o.ageVaults() {
+		if items, err = listing(vault); err != nil {
+			return "", err
+		}
+		if inst != "" && itemID(items, AgeInstallationItem(inst)) != "" {
+			return fmt.Sprintf("the vault item %q of %s", AgeInstallationItem(inst), vault), nil
+		}
+		if slices.ContainsFunc(items, func(it vaultItem) bool { return strings.HasSuffix(it.Title, ageInstallationSuffix) }) {
+			holding = append(holding, vault)
 		}
 	}
-	return None + ": " + o.lacking(fmt.Sprintf("%q", AgeItemTitle(recipient)), inst), nil
+	if len(holding) > 0 {
+		return fmt.Sprintf("an installation item (<installation>%s) of %s, by its recipient when read", ageInstallationSuffix, strings.Join(holding, ", ")), nil
+	}
+	return None + ": " + o.lacking(fmt.Sprintf("%q", AgeItemTitle(recipient)), nil), nil
 }
 
 // localAgeIdentityFor reports whether one of sops' own sources holds an

@@ -396,7 +396,7 @@ Register it in ~/.claude/settings.json:
 				Project: os.Getenv("CLAUDE_PROJECT_DIR"), Reads: a.firstReads,
 				Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(),
 				ModelServer: a.modelServer, ConfigErr: cfgErr, Sandbox: sandboxed,
-				Started: func(session string) bool { _, ok := a.bypassStart(session); return ok },
+				Started: a.startedWorker,
 				Apps:    a.allowedApps, Shared: sharedUploads}
 			if h.ConfigErr == nil {
 				h.Shell, h.Production, h.ContextHint = a.cfg.Shell, a.cfg.Kube.Production, a.cfg.Kube.Context("<installation>")
@@ -692,7 +692,7 @@ func (a *app) permissionRequest(ctx context.Context, raw []byte) []byte {
 	var start state.Start
 	out, req := guard.Permission(raw, func(session string) bool {
 		var ok bool
-		start, ok = a.bypassStart(session)
+		start, ok = a.hookStart(session)
 		return ok
 	})
 	if out != nil && a.store != nil {
@@ -711,6 +711,13 @@ func (a *app) heldRequest(ctx context.Context, raw []byte) (out []byte, held boo
 	}
 	dir := takeover.Dir(a.cfg.StateDir)
 	f, ok := takeover.Taken(dir, req.Session, proc.Alive)
+	if s, started := a.hookStart(req.Session); !ok && started && s.Session != req.Session {
+		// a take-over of the start's CLI holds its restarted CLI's request
+		// too, as the allow matches it by its host id
+		if f, ok = takeover.Taken(dir, s.Session, proc.Alive); ok {
+			req.Session = s.Session
+		}
+	}
 	if !ok {
 		return nil, false
 	}
@@ -751,10 +758,10 @@ func (a *app) reportCheck(raw []byte) []byte {
 	})
 }
 
-// bypassStart returns the record of session when beekeeper agents start
-// started it in bypassPermissions. It reads the state without its lock, so
-// that a permission request never waits on a slow update.
-func (a *app) bypassStart(session string) (state.Start, bool) {
+// bypassStart returns the record of p when beekeeper agents start started
+// it in bypassPermissions. It reads the state without its lock, so that a
+// permission request never waits on a slow update.
+func (a *app) bypassStart(p state.Party) (state.Start, bool) {
 	if a.loadConfig() != nil {
 		return state.Start{}, false
 	}
@@ -767,7 +774,24 @@ func (a *app) bypassStart(session string) (state.Start, bool) {
 		return state.Start{}, false
 	}
 	a.store = store
-	return st.BypassStart(session)
+	return st.BypassStartOf(p)
+}
+
+// startedWorker reports whether beekeeper agents start started session in
+// bypassPermissions, the refusals' check.
+func (a *app) startedWorker(session string) bool {
+	_, ok := a.hookStart(session)
+	return ok
+}
+
+// hookStart is bypassStart for the hook event's session, matched by its
+// desktop host id too, so a worker whose CLI the desktop restarted under a
+// new session id keeps its refusals and its permission allow.
+func (a *app) hookStart(session string) (state.Start, bool) {
+	if session == "" {
+		return state.Start{}, false
+	}
+	return a.bypassStart(state.Party{Session: session, HostSession: os.Getenv("CLAUDE_CODE_HOST_SESSION_ID")})
 }
 
 // firstReads reports whether this is the session's first write in repo. The

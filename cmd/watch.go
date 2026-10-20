@@ -587,6 +587,10 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 			wg.Go(func() { w.watchDiscovery(ctx) })
 		}
 	}
+	if w.standby && w.cfg.Central.Enabled() {
+		w.hub() // made before the mailbox and the roster sync share it
+		wg.Go(func() { w.watchMailbox(ctx) })
+	}
 	wg.Go(func() { w.loop(ctx, interval, true, w.upgradeCycle) })
 	w.loop(ctx, interval, false, func(ctx context.Context) {
 		w.poll(ctx)

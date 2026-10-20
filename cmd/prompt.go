@@ -26,17 +26,20 @@ var liveCommands = [][2]string{
 	{"beekeeper lease list", "the leases and grant queues now"},
 	{"beekeeper alerts snapshot", "the installations' current alerts"},
 	{"beekeeper budget", "the GitHub budget and who draws on it"},
+	{"beekeeper priority", "the priority list now, with each epic's hold"},
+	{"beekeeper board next", "the next free board item, every held one above it with what holds it"},
 	{"beekeeper log", "the latest events"},
 	{"beekeeper self-update --check", "whether a newer beekeeper is released"},
 	{"gh issue view / gh pr view <n> --repo <owner/repo>", "an issue's or a pull request's state"},
 }
 
 // printPrompt prints the successor's session prompt: the configured
-// instructions, the scope and the pending state, then the commands that read
-// the live values. It carries no standing rule and no live value (a version,
-// a memory figure, a pull request's state): those belong to the instructions
-// and to the commands, and a prompt that restates them goes stale.
-func (a *app) printPrompt(ctx context.Context, v *view, l *leaseList, al *alertsView, ans answers) error {
+// instructions, the scope and the pending state with the priorities and
+// holds pv read from GitHub, then the commands that read the live values. It
+// carries no standing rule and no other live value (a version, a memory
+// figure, a pull request's state): those belong to the instructions and to
+// the commands, and a prompt that restates them goes stale.
+func (a *app) printPrompt(ctx context.Context, v *view, l *leaseList, al *alertsView, ans answers, pv *prioritiesView) error {
 	intro, err := a.instructions(v.st)
 	if err != nil {
 		return err
@@ -50,6 +53,7 @@ func (a *app) printPrompt(ctx context.Context, v *view, l *leaseList, al *alerts
 	p("## Scope\n\n%s\n", a.scope(al))
 	p("## Pending state, %s\n", a.stamp(a.now))
 	promptStanding(p, s)
+	a.promptPriorities(p, pv)
 	notes := a.splitNotes(v.st.Notes)
 	a.promptNotes(p, notes)
 	a.promptAnswers(p, ans)

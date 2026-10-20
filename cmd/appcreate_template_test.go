@@ -5,6 +5,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The fixture purpose whose Apps exist once per installation, its manifest
@@ -142,7 +143,7 @@ func TestAppCreateFromATemplateRefusesBeforeAnyClick(t *testing.T) {
 		"bad installation": {[]string{appCreate, portalPurpose, installationFlag, "Graveler", baseDomainFlag, portalDomain}, ExitUsage, "a lower-case DNS label"},
 		"bad domain":       {[]string{appCreate, portalPurpose, installationFlag, portalInstallation, baseDomainFlag, "localhost"}, ExitUsage, "a lower-case DNS name"},
 		"nothing to replace": {[]string{appCreate, portalPurpose, installationFlag, portalInstallation, baseDomainFlag, portalDomain, replaceFlag}, ExitRefused,
-			"GitHub knows no App giantswarm-portal-graveler for --replace to succeed"},
+			"neither the vault Shared nor GitHub knows an App giantswarm-portal-graveler for --replace to succeed"},
 		"known name":    {[]string{appCreate, "bare", installationFlag, "taken"}, ExitRefused, "GitHub already knows an App named bare-taken"},
 		"replace alone": {[]string{appCreate, fixtureApp, replaceFlag}, ExitUsage, "--replace and --base-domain go with --installation"},
 		"domain alone":  {[]string{appCreate, fixtureApp, baseDomainFlag, portalDomain}, ExitUsage, "--replace and --base-domain go with --installation"},
@@ -155,5 +156,66 @@ func TestAppCreateFromATemplateRefusesBeforeAnyClick(t *testing.T) {
 	}
 	if opened != 0 || len(vault) != 1 {
 		t.Errorf("a refused creation opened %d pages and wrote the vault: %q", opened, vault)
+	}
+}
+
+// A private App is invisible to an installation token's GET /apps: the
+// generations the shared vault holds items of are the latest, and the
+// successor follows them; the old App is named without an id GitHub did
+// not answer.
+func TestAppCreateReplaceFollowsTheVaultsGenerations(t *testing.T) {
+	a, g, vault := templateApp(t)
+	for _, name := range []string{portalApp, portalApp + "-2", portalApp + "-twin"} {
+		vault["op://Shared/"+name+"/"+appIDField] = "1"
+	}
+	out, err := runApp(t, a, appCreate, portalPurpose, installationFlag, portalInstallation, baseDomainFlag, portalDomain, replaceFlag, timeoutFlag, tenSeconds)
+	if err != nil {
+		t.Fatalf("app create --replace: %v\n%s", err, out)
+	}
+	if g.manifest["name"] != portalApp+"-3" || vault["op://Shared/"+portalApp+"-3/"+appIDField] != "4242" || vault["op://Shared/"+portalApp+"-2/"+appIDField] != "1" {
+		t.Errorf("GitHub received %v; the vault: %q", g.manifest["name"], vault)
+	}
+	if want := "the App " + portalApp + "-2 and its vault item stay untouched until its consumers have switched to op://Shared/" + portalApp + "-3; " +
+		"then deleting it is the person's step: " + githubWeb + "/organizations/" + fixtureOrg + "/settings/apps/" + portalApp + "-2/advanced"; !strings.Contains(out, want) {
+		t.Errorf("the answer lacks %q:\n%s", want, out)
+	}
+}
+
+// A name's generation of an App: the App itself, its -<n> successors, and
+// no other name.
+func TestAppGeneration(t *testing.T) {
+	for name, want := range map[string]int{portalApp: 1, "Giantswarm-Portal-Graveler": 1, portalApp + "-2": 2, portalApp + "-12": 12,
+		portalApp + "-1": 0, portalApp + "-02": 0, portalApp + "-twin": 0, portalApp + "2": 0, "unrelated": 0} {
+		if got := generation(portalApp, name); got != want {
+			t.Errorf("generation(%s) = %d, want %d", name, got, want)
+		}
+	}
+}
+
+// With secret.session the vault's generations come from the broker, which
+// holds the vault session, as secret items --json lists them there; a
+// broker that cannot list refuses with its words and nothing written.
+func TestAppCreateReplaceAsksTheBrokerInSessionMode(t *testing.T) {
+	a, _, _ := templateApp(t)
+	a.cfg.Secret.Session = true
+	var asked []string
+	prev := brokeredItems
+	t.Cleanup(func() { brokeredItems = prev })
+	brokeredItems = func(_ string, args []string, _ time.Duration) (string, error) {
+		asked = args
+		return `[{"title": "` + portalApp + `", "id": "a"}, {"title": "` + portalApp + `-2", "id": "b"}]`, nil
+	}
+	plan, err := a.appTemplatePlan(context.Background(), portalPurpose, portalInstallation, portalDomain, true)
+	if err != nil || plan.name != portalApp+"-3" || plan.replaces == nil || plan.replaces.Slug != portalApp+"-2" {
+		t.Fatalf("the plan = %+v, %v", plan, err)
+	}
+	if strings.Join(asked, " ") != "items --json=true op://Shared "+portalApp {
+		t.Errorf("the broker was asked %q", asked)
+	}
+	brokeredItems = func(string, []string, time.Duration) (string, error) {
+		return "", &exitError{code: ExitVault, msg: "the vault is locked"}
+	}
+	if _, err := a.appTemplatePlan(context.Background(), portalPurpose, portalInstallation, portalDomain, true); Code(err) != ExitVault || !strings.Contains(err.Error(), "the vault is locked") {
+		t.Errorf("a broker that cannot list: %v (exit %d)", err, Code(err))
 	}
 }

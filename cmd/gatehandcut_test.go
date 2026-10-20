@@ -65,14 +65,14 @@ func turnCame(t *testing.T, g *gateRun) (string, error) {
 	return g.start("", nil)
 }
 
-// The devctl cap counts the machine's devctl processes from its process
+// The devctl cap counts the machine's devctl merges from its process
 // table: a merge whose turn came waits while the cap's number run.
 func TestAMergeWhoseTurnCameWaitsAtTheMachinesDevctlCap(t *testing.T) {
 	stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
 	hostDevctls(t, 10)
 	why, err := turnCame(t, g)
-	if err != nil || !strings.Contains(why, "10 devctl processes run machine-wide (cap 10)") {
+	if err != nil || !strings.Contains(why, "10 merges and promotes run machine-wide (cap 10)") {
 		t.Fatalf("start: %q, %v; want a wait for the cap", why, err)
 	}
 	if st := gateState(t, g); st.Merges[0].Phase != state.Waiting {
