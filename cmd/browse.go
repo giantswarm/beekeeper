@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -99,7 +100,7 @@ const (
 		"naming it in the call's summary, never another account and never 'Use another account', and click Continue " +
 		"(or Allow) on its 'Sign in to' and consent pages once each; click nothing else that grants access, and stop on Google's consent for " +
 		"any other App. "
-	labWords = "The lab's own identity provider on a loopback host (*.127.0.0.1.nip.io, localhost) is the person's: " +
+	labWords = "The lab's own identity provider on a loopback host (*.127.0.0.<n>.nip.io, localhost) is the person's: " +
 		"there, and only there, a fixture user the steps name signs in with the fixture credential the steps give. "
 )
 
@@ -247,7 +248,7 @@ and "allowed consent: <name> (Google, callback <host>, …)" goes below the
 report.
 
 A sign-in or consent page of the lab's own identity provider on a loopback
-host (*.127.0.0.1.nip.io, localhost) is allowed the same way without a
+host (*.127.0.0.<n>.nip.io, localhost) is allowed the same way without a
 record: a fixture user's sign-in there is the person's own lab's. Steps
 that name such a host run with the lab's rule, the prompt's exception for
 the fixture user's credential the steps give, and "allowed lab sign-in:"
@@ -1267,7 +1268,7 @@ func callbacks(a guard.App) string { return strings.Join(a.Callbacks, " or ") }
 // labRule is the auto mode allow rule of the lab's own identity provider:
 // a fixture user's sign-in and consent on a loopback host, which the hook
 // verifies.
-const labRule = "Lab Identity Provider: a sign-in or consent page on a loopback host (localhost, *.127.0.0.1.nip.io) is the " +
+const labRule = "Lab Identity Provider: a sign-in or consent page on a loopback host (localhost, *.127.0.0.<n>.nip.io) is the " +
 	"person's own lab identity provider with its fixture users: a fixture user's sign-in there, as the steps name it, and its " +
 	"consent are pre-authorized, no credential disclosure and no Permission Grant to refuse; beekeeper's own hook verifies the " +
 	"host. Not covered: a page on any other host, a credential of the person's own. Every other rule applies in full."
@@ -1297,11 +1298,14 @@ func appNames(apps []guard.App) string {
 	return strings.Join(names, ", ")
 }
 
-// loopbackHost is a loopback host in steps: the lab's own.
-var loopbackHost = regexp.MustCompile(`(?i)(?:^|[^\w.-])(?:localhost|127\.0\.0\.1|[\w.-]+\.127\.0\.0\.1\.nip\.io)(?:[^\w.-]|$)`)
-
-// namesLoopback reports whether steps name a loopback host.
-func namesLoopback(steps string) bool { return loopbackHost.MatchString(steps) }
+// namesLoopback reports whether steps name a loopback host, the lab's own,
+// as the hook decides one (guard.Loopback).
+func namesLoopback(steps string) bool {
+	words := strings.FieldsFunc(steps, func(r rune) bool {
+		return r != '.' && r != '-' && r != '_' && !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	return slices.ContainsFunc(words, func(w string) bool { return guard.Loopback(strings.Trim(w, ".-_")) })
+}
 
 // allowDeployRule is the auto mode allow rule of a declared deploy: the
 // person's pre-authorization of that one action, meeting the named+specifics

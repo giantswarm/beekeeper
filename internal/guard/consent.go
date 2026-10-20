@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/netip"
 	"net/url"
 	"os"
 	"regexp"
@@ -166,10 +167,10 @@ func Click(apps []App, page Page, words string) Decision {
 		return permissionClick(apps, u, page.Title, words)
 	case host == googleHost:
 		return googleClick(apps, u, page, words)
-	case loopback(host) && signIn(u.Path):
+	case Loopback(host) && signIn(u.Path):
 		return Decision{Allow, fmt.Sprintf("beekeeper allows it: %s is the lab's own identity provider on a loopback host, "+
 			"whose fixture users' sign-in and consent are the person's own lab's", u.Host)}
-	case !loopback(host):
+	case !Loopback(host):
 		return elsewhere(u, page.Title, words)
 	}
 	return Decision{}
@@ -236,12 +237,28 @@ func githubConsent(apps []App, u *url.URL, title string) Decision {
 		"records on their word; every other grant stays refused.", which, callback, AllowForm)}
 }
 
-// loopback reports whether host is the machine itself: localhost, the
-// loopback addresses, and the lab domain nip.io resolves to loopback.
-func loopback(host string) bool {
-	h := strings.ToLower(host)
-	return h == "localhost" || h == "127.0.0.1" || h == "::1" || strings.HasSuffix(h, ".localhost") || strings.HasSuffix(h, ".127.0.0.1.nip.io")
+// Loopback reports whether host is the machine itself: localhost and its
+// subdomains, a loopback address (127.0.0.0/8, ::1), and a nip.io name whose
+// address is one, which every agentlab binds its own of
+// (*.127.0.0.1.nip.io, *.lab2.127.0.0.2.nip.io).
+func Loopback(host string) bool {
+	h := strings.TrimSuffix(strings.ToLower(host), ".")
+	if h == "localhost" || strings.HasSuffix(h, ".localhost") {
+		return true
+	}
+	if ip, err := netip.ParseAddr(strings.Trim(h, "[]")); err == nil {
+		return ip.IsLoopback()
+	}
+	m := nipAddr.FindStringSubmatch(h)
+	if m == nil {
+		return false
+	}
+	ip, err := netip.ParseAddr(strings.ReplaceAll(m[1]+m[2], "-", "."))
+	return err == nil && ip.IsLoopback()
 }
+
+// nipAddr is the IPv4 address a nip.io name resolves to, dotted or dashed.
+var nipAddr = regexp.MustCompile(`(?:^|[.-])(?:(\d{1,3}(?:\.\d{1,3}){3})|(\d{1,3}(?:-\d{1,3}){3}))\.nip\.io$`)
 
 // signIn reports whether path is an identity provider's sign-in or consent
 // page.
