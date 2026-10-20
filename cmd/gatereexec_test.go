@@ -254,7 +254,11 @@ func TestAGateReplacedMidMergeExitsWithDevctlsCode(t *testing.T) {
 				t.Fatal(err)
 			}
 			select {
-			case <-exited:
+			case err := <-exited:
+				var exit *exec.ExitError
+				if err != nil && !errors.As(err, &exit) {
+					t.Fatalf("waiting for the gate: %v\n%s", err, stderr)
+				}
 			case <-time.After(30 * time.Second):
 				t.Fatalf("the gate did not end\n%s", stderr)
 			}
