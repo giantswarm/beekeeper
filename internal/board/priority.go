@@ -295,10 +295,11 @@ type Prioritized struct {
 }
 
 // SetPriority puts the epic ref at rank in the priority list, 1 the top:
-// the epics at and below the rank move down one, and the list stays ranked
-// 1..n (a rank past its end is its end). rank 0 takes the epic off the
-// list, the epics below it moving up one. Only the items whose rank changes
-// are written, each by its id; the list is read with Priorities, the epic's
+// the epics at and below the rank move down one and every epic above keeps
+// its rank (a rank past its end is its end; reranked). rank 0 takes the epic
+// off the list, the epics below it moving up one. Only the items whose rank changes
+// are written, each by its id; the list is read with Priorities, again after
+// the writes until no read names an epic the change has not seen, the epic's
 // item from its projectItems (added to the board as Move adds one). The
 // caller is the one to check that the person asked for it. Refused before
 // anything is written: a board without a number field Priority, an issue
@@ -334,44 +335,95 @@ func (c *Client) SetPriority(ctx context.Context, ref string, rank int) (*Priori
 	var epic RankedEpic
 	if at >= 0 {
 		epic, p.From = list[at], list[at].Rank
-		list = slices.Delete(list, at, at+1)
 	}
 	if rank > 0 && at < 0 {
 		if epic, err = c.epicItem(ctx, m, gate, p, owner, repo, n); err != nil {
 			return nil, err
 		}
 	}
-	// The ranks before the change, by item: what is written is what differs.
-	was := map[string]int{}
+	// now is the rank each item holds, by its id: read before the change,
+	// then as written. The board's search can answer with part of the list;
+	// renumbering that part collides with the epics it left out, which keep
+	// their ranks. So the list is read again after each write: an epic the
+	// reads had not shown joins at its rank, and the change is made again on
+	// the fuller list, until a read shows none.
+	now := map[string]int{epic.item: p.From}
 	for _, e := range list {
-		was[e.item] = e.Rank
+		now[e.item] = e.Rank
 	}
-	if rank > 0 {
-		pos := min(rank-1, len(list))
-		list = slices.Insert(list, pos, epic)
-		p.To = pos + 1
-	}
-	for i := range list {
-		list[i].Rank = i + 1
-	}
-	if rank == 0 && at >= 0 {
-		if err := c.clear(ctx, m.ID, epic.item, pf.ID); err != nil {
-			return nil, err
+	for round := 1; ; round++ {
+		next := reranked(list, epic, p.From, rank)
+		if rank == 0 && now[epic.item] > 0 {
+			if err := c.clear(ctx, m.ID, epic.item, pf.ID); err != nil {
+				return nil, err
+			}
+			now[epic.item] = 0
 		}
+		for _, e := range next {
+			if now[e.item] == e.Rank {
+				continue
+			}
+			if err := c.setNumber(ctx, m.ID, e.item, pf.ID, e.Rank); err != nil {
+				return nil, fmt.Errorf("ranking %s %d: %w", e.Ref, e.Rank, err)
+			}
+			now[e.item] = e.Rank
+		}
+		if rank > 0 {
+			p.To = next[slices.IndexFunc(next, func(e RankedEpic) bool { return e.item == epic.item })].Rank
+		}
+		p.List = next
+		again, err := c.priorities(ctx, m)
+		if err != nil {
+			return nil, fmt.Errorf("reading the priority list after the change: %w", err)
+		}
+		var unseen []string
+		for _, e := range again {
+			if _, ok := now[e.item]; !ok {
+				list = append(list, e)
+				now[e.item] = e.Rank
+				unseen = append(unseen, fmt.Sprintf("%s (%d)", e.Ref, e.Rank))
+			}
+		}
+		if len(unseen) == 0 {
+			return p, nil
+		}
+		if round == maxRounds {
+			return nil, fmt.Errorf("the board's reads of the priority list keep naming epics the change has not seen (%s): beekeeper priority shows the list; set it again", strings.Join(unseen, ", "))
+		}
+		slices.SortStableFunc(list, func(a, b RankedEpic) int { return cmp.Compare(a.Rank, b.Rank) })
 	}
-	for _, e := range list {
-		if r, ok := was[e.item]; ok && r == e.Rank {
-			continue
+}
+
+// maxRounds bounds SetPriority's reads of the list after a write.
+const maxRounds = 3
+
+// reranked is list, by its ranks before the change, with epic taken out of
+// its rank from (0 for none), the epics below from moving up one, and, for a
+// rank, put in at it (a rank past the end is the end): the epics at and
+// below it move down one, an epic sharing a rank with the one above it below
+// that one, and every epic above keeps its rank. list is left as it is.
+func reranked(list Priorities, epic RankedEpic, from, rank int) Priorities {
+	out := slices.DeleteFunc(slices.Clone(list), func(e RankedEpic) bool { return e.item == epic.item })
+	last := 0
+	for i := range out {
+		if from > 0 && out[i].Rank > from {
+			out[i].Rank--
 		}
-		if e.item == epic.item && p.From == e.Rank {
-			continue
-		}
-		if err := c.setNumber(ctx, m.ID, e.item, pf.ID, e.Rank); err != nil {
-			return nil, fmt.Errorf("ranking %s %d: %w", e.Ref, e.Rank, err)
-		}
+		last = max(last, out[i].Rank)
 	}
-	p.List = list
-	return p, nil
+	if rank == 0 {
+		return out
+	}
+	epic.Rank = min(rank, last+1)
+	at := slices.IndexFunc(out, func(e RankedEpic) bool { return e.Rank >= epic.Rank })
+	if at < 0 {
+		return append(out, epic)
+	}
+	out = slices.Insert(out, at, epic)
+	for i := at + 1; i < len(out); i++ {
+		out[i].Rank = max(out[i].Rank, out[i-1].Rank) + 1
+	}
+	return out
 }
 
 // epicItem is the item of the epic owner/repo#n on the board, added as Move
