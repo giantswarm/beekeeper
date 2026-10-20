@@ -20,6 +20,31 @@ tests:
       - equal:
           path: spec.template.spec.serviceAccountName
           value: RELEASE-NAME
+  - it: adds the extra environment, volumes, mounts and init containers
+    template: deployment.yaml
+    set:
+      extraEnv:
+        - {name: SSL_CERT_FILE, value: /etc/idp-ca/ca.crt}
+      extraVolumes:
+        - {name: idp-ca, secret: {secretName: dex-ca}}
+      extraVolumeMounts:
+        - {name: idp-ca, mountPath: /etc/idp-ca, readOnly: true}
+      initContainers:
+        - {name: proxy, image: socat, restartPolicy: Always}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: SSL_CERT_FILE, value: /etc/idp-ca/ca.crt}
+      - contains:
+          path: spec.template.spec.volumes
+          content: {name: idp-ca, secret: {secretName: dex-ca}}
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: idp-ca, mountPath: /etc/idp-ca, readOnly: true}
+      - equal:
+          path: spec.template.spec.initContainers
+          value:
+            - {name: proxy, image: socat, restartPolicy: Always}
   - it: reads the database URL from the named Secret key
     template: deployment.yaml
     set:

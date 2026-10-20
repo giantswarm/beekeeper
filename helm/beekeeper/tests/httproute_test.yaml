@@ -1,0 +1,40 @@
+suite: http route
+templates:
+  - httproute.yaml
+tests:
+  - it: renders none by default
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: routes /mcp of the host names to serve's Service
+    set:
+      httpRoute:
+        enabled: true
+        hostnames: [beekeeper.example.org]
+        parentRefs:
+          - {name: giantswarm-default, namespace: envoy-gateway-system}
+    asserts:
+      - isKind:
+          of: HTTPRoute
+      - equal:
+          path: spec.hostnames
+          value: [beekeeper.example.org]
+      - equal:
+          path: spec.parentRefs
+          value:
+            - {name: giantswarm-default, namespace: envoy-gateway-system}
+      - equal:
+          path: spec.rules[0]
+          value:
+            matches:
+              - path: {type: PathPrefix, value: /mcp}
+            backendRefs:
+              - {name: RELEASE-NAME, port: 8080}
+  - it: refuses an enabled route without host names
+    set:
+      httpRoute.enabled: true
+      httpRoute.parentRefs:
+        - {name: giantswarm-default}
+    asserts:
+      - failedTemplate:
+          errorPattern: "httpRoute.hostnames"

@@ -23,6 +23,10 @@ spec:
       serviceAccountName: {{ include "beekeeper.name" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.initContainers }}
+      initContainers:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: beekeeper
           image: "{{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
@@ -41,6 +45,9 @@ spec:
                 secretKeyRef:
                   name: {{ . }}
                   key: {{ $.Values.database.secretKey }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
           ports:
             - name: http
@@ -69,6 +76,9 @@ spec:
               mountPath: {{ dir .Values.serve.gateway.tokenFile }}
               readOnly: true
             {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
       volumes:
         - name: config
           configMap:
@@ -84,6 +94,9 @@ spec:
                   audience: klaus-gateway
                   expirationSeconds: 3600
                   path: {{ base .Values.serve.gateway.tokenFile }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

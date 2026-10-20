@@ -1,0 +1,59 @@
+suite: environments and merge lanes
+templates:
+  - environments.yaml
+  - mergelanes.yaml
+tests:
+  - it: renders one Environment per entry, the installation defaulting to its name
+    template: environments.yaml
+    set:
+      environments:
+        - name: gazelle
+          team: bumblebee
+        - name: graveler
+          installation: graveler
+          musterCluster: graveler
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: Environment
+      - equal:
+          path: metadata.name
+          value: gazelle
+        documentIndex: 0
+      - equal:
+          path: spec
+          value:
+            installation: gazelle
+            team: bumblebee
+        documentIndex: 0
+      - equal:
+          path: spec
+          value:
+            installation: graveler
+            musterCluster: graveler
+        documentIndex: 1
+      - notExists:
+          path: metadata.namespace
+  - it: renders one MergeLane per entry with its repositories
+    template: mergelanes.yaml
+    set:
+      lanes:
+        - name: agent-platform
+          installation: gazelle
+          repositories: [giantswarm/agent-platform]
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: MergeLane
+      - equal:
+          path: spec
+          value:
+            installation: gazelle
+            repositories: [giantswarm/agent-platform]
+  - it: renders none by default
+    template: environments.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
