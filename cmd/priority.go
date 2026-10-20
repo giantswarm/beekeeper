@@ -74,9 +74,12 @@ func (a *app) prioritySetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "set <epic: owner/repo#n|URL> <rank> --as <person>",
 		Short: "Put an epic at a rank of the priority list, 1 the top, on the person's word",
-		Long: `Puts the epic at the rank: the epics at and below it move down one and the
-list stays ranked 1..n, a rank past its end is its end. Only the items whose
-rank changes are written. An epic without an item on the board is added
+		Long: `Puts the epic at the rank: the epics at and below it move down one, an epic
+sharing a rank below the one above it, and every epic above keeps its rank; a
+rank past the list's end is its end. Only the items whose rank changes are
+written. The list is read again after the writes: an epic the board's search
+left out of the first read is moved as if it had been read, so a partial
+read never leaves two epics at one rank. An epic without an item on the board is added
 first, as board move adds one, with board.team as its Team. Refused (exit 3)
 without --as <person> (` + onlyPerson + `), for an issue that does not exist,
 is closed or is no epic (board.epics' kinds), for an issue of a repository
