@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -197,7 +198,7 @@ func (h Hook) ungated(cmd, cwd string, depth int) *ungated {
 	if cwd != "" {
 		dirs = []string{cwd}
 		for _, m := range cdArg.FindAllStringSubmatch(sc.plain, -1) {
-			dirs = append(dirs, within(cwd, m[1]))
+			dirs = append(dirs, cdDirs(cwd, m[1])...)
 		}
 	}
 	vars := assignments(sc.plain)
@@ -264,10 +265,35 @@ func (h Hook) segmentUngated(cmd string, sc shellScan, segs []segment, i int, di
 		}
 		return nil, ""
 	case strings.Contains(words[c], "/"):
-		// A path run twice over the command line is written by it first.
-		return h.scriptUngated(words[c], modeShebang, strings.Count(cmd, words[c]) > 1, dirs, vars, depth)
+		return h.scriptUngated(words[c], modeShebang, writtenByCall(sc.plain, words[c]), dirs, vars, depth)
 	}
 	return nil, ""
+}
+
+// writtenByCall reports whether the command line names the file it runs by
+// path more than once, however it spells it: a script the call writes first
+// (cat > run.sh, chmod +x run.sh, then ./run.sh).
+func writtenByCall(plain, run string) bool {
+	base, n := path.Base(run), 0
+	for _, w := range shellWords(plain) {
+		if path.Base(strings.TrimLeft(w, "0123456789<>&|")) == base {
+			n++
+		}
+	}
+	return n > 1
+}
+
+// cdDirs are the directories a cd to arg reaches from cwd, its glob expanded
+// as the shell expands it.
+func cdDirs(cwd, arg string) []string {
+	d := within(cwd, arg)
+	if !strings.ContainsAny(d, "*?[") {
+		return []string{d}
+	}
+	if m, err := filepath.Glob(d); err == nil && len(m) > 0 {
+		return m
+	}
+	return []string{d}
 }
 
 // isCFlag reports whether a shell's option carries -c.
