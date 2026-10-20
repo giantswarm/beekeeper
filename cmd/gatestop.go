@@ -57,45 +57,65 @@ func (a *app) stopTask(session, task string) string {
 	mine := func(m state.Merge) bool {
 		return m.Output != "" && filepath.Base(m.Output) == task+taskOutputExt && (m.By.Session == "" || m.By.Session == session)
 	}
-	var said []string
-	var running []stopped
-	err = store.Update(func(st *state.State) ([]state.Event, error) {
-		var evs []state.Event
-		me := state.Party{Session: session}
+	me := state.Party{Session: session}
+	if st, err := store.Read(); err == nil {
 		if i := slices.IndexFunc(st.Merges, func(m state.Merge) bool { return mine(m) && m.By.Session != "" }); i >= 0 {
 			me = st.Merges[i].By
 		}
+	}
+	said, err := stopMerges(store, me, mine, true, func(m state.Merge) string {
+		return fmt.Sprintf("its gate (pid %d) is stopped (TaskStop %s)", m.PID, task)
+	})
+	if err != nil || len(said) == 0 {
+		return ""
+	}
+	return GatePrefix + "TaskStop " + task + " sends its gate SIGTERM: " + strings.Join(said, "; ")
+}
+
+// stopMerges ends the merges pick takes, logged as by's merge.stopped with
+// how each was stopped: a waiting merge leaves its lane (a seeded place
+// stays when keepSeeded, its gate's output cleared), a running merge's
+// devctl is ended through its merge-child, never a pid that is not the
+// merge's recorded merge-child, and its gate, or the watch once the gate is
+// gone, records the run. It returns each merge's outcome, a running one's
+// as GitHub reports it once its devctl is gone (stopOutcome).
+func stopMerges(store state.Store, by state.Party, pick func(state.Merge) bool, keepSeeded bool, how func(state.Merge) string) ([]string, error) {
+	var said []string
+	var running []stopped
+	err := store.Update(func(st *state.State) ([]state.Event, error) {
+		var evs []state.Event
 		st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool {
-			if !mine(m) {
+			if !pick(m) {
 				return false
 			}
 			switch m.Phase {
 			case state.Waiting:
 				what := "leaves lane " + m.Lane
-				if m.Seeded {
+				keep := keepSeeded && m.Seeded
+				if keep {
 					what = "keeps its seeded place in lane " + m.Lane
 				}
 				said = append(said, m.Key()+" cancelled before its turn, nothing merged; it "+what)
-				evs = append(evs, event(me, "merge.stopped", "%s: its gate (pid %d) is stopped (TaskStop %s), it %s", m.Key(), m.PID, task, what))
-				return !m.Seeded
+				evs = append(evs, event(by, "merge.stopped", "%s: %s, it %s", m.Key(), how(m), what))
+				return !keep
 			case state.Running:
 				end := m.Child != 0 && proc.Alive(m.Child) && readPID(mergeBase(store.Dir(), m.Repo, m.PR)) == m.Child
 				running = append(running, stopped{merge: m, end: end})
 				if end {
-					evs = append(evs, event(me, "merge.stopped", "%s in lane %s: its gate (pid %d) is stopped (TaskStop %s), its devctl (merge-child pid %d) ended", m.Key(), m.Lane, m.PID, task, m.Child))
+					evs = append(evs, event(by, "merge.stopped", "%s in lane %s: %s, its devctl (merge-child pid %d) ended", m.Key(), m.Lane, how(m), m.Child))
 				}
 			}
 			return false
 		})
 		for i := range st.Merges {
-			if mine(st.Merges[i]) && st.Merges[i].Phase == state.Waiting {
+			if pick(st.Merges[i]) && st.Merges[i].Phase == state.Waiting {
 				st.Merges[i].Output = "" // a seeded place outlives its stopped gate
 			}
 		}
 		return evs, nil
 	})
-	if err != nil || len(said)+len(running) == 0 {
-		return ""
+	if err != nil {
+		return nil, err
 	}
 	for _, s := range running {
 		if s.end {
@@ -105,7 +125,7 @@ func (a *app) stopTask(session, task string) string {
 	for _, s := range running {
 		said = append(said, stopOutcome(s))
 	}
-	return GatePrefix + "TaskStop " + task + " sends its gate SIGTERM: " + strings.Join(said, "; ")
+	return said, nil
 }
 
 // stopOutcome says how a running merge a TaskStop reached ended: its ended

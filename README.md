@@ -1405,7 +1405,14 @@ session ending: it ends a running merge's devctl through its merge-child and dro
 merge's place (a seeded place stays), `merge.stopped` each, and the gate or the next watch tick
 records the run. The stopping session is told the signal and each merge's outcome, as GitHub
 reports it once devctl is gone: cancelled, nothing merged, it leaves the lane; or merged before
-the stop. The watch records a run
+the stop. `beekeeper gate runs` lists every run the gate runs outside its caller (a running merge or
+promotion, one waiting in a queued run of its own, a devctl wait, also one its call left to run on):
+its id, owning session, command, start, merge-child and devctl pids. `beekeeper gate stop <id>` ends
+one, never a kill by pid: a merge as a `TaskStop` of its task does (a seeded place leaves too); a
+wait's merge-child gets SIGTERM, which it passes on to devctl, killed when it has not ended 5 s
+later. The wait's owner is woken with who stopped it, unless the owner did, and the stop is logged
+(`merge.stopped`, `devctl.stopped`); its devctl gone, the run holds no lane place and no devctl
+slot. Only a pid the run recorded is signalled. The watch records a run
 whose gate is gone once its devctl wrote its exit code, also while merge-child still hands the
 outcome over. A run that ends without its document or
 by a signal (exit 128+n) is judged by GitHub (`gh pr view`), never by its exit code: merged, it

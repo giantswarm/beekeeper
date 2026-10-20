@@ -349,12 +349,17 @@ func handOver(base string, r childRun, cli int) {
 // merge-child stopped or killed on the way leaves it to the watch, and a
 // hand-over that fails (GitHub unanswered for a stopped merge, a wake the
 // service manager refuses) stays owed for the watch's next try (payOwed).
+// A run its owner stopped with gate stop wakes nobody.
 func (a *app) tellOwner(ctx context.Context, r childResult) {
 	if r.spec.Owner.Session == "" && r.spec.Owner.HostSession == "" {
 		return
 	}
 	if r.callerGone {
 		_, _ = fmt.Fprintf(os.Stderr, "%s ended with its caller, nobody is woken\n", r.command())
+		return
+	}
+	if r.stoppedBy.Is(r.spec.Owner) {
+		_, _ = fmt.Fprintf(os.Stderr, "%s was stopped by its owner (gate stop), nobody is woken\n", r.command())
 		return
 	}
 	if a.store == nil {
@@ -386,9 +391,15 @@ func (a *app) tellOwner(ctx context.Context, r childResult) {
 // (output in <file>)", the reason the document's verdict and reason (a
 // merge's release), else devctl's last stderr line. A run whose merge-child
 // was stopped (stop) before its command reported a merge has no outcome: the
-// line names the stop, and that nothing waits for the command any more.
+// line names the stop, and who stopped it with gate stop (stoppedBy), and
+// that nothing waits for the command any more.
 func (r childResult) outcome() string {
-	if o, _ := merge.ParseDocument(r.doc); r.stop != 0 && !o.Merged {
+	o, _ := merge.ParseDocument(r.doc)
+	if r.stoppedBy != (state.Party{}) && !o.Merged {
+		return fmt.Sprintf("%s did not settle: %q stopped it (beekeeper gate stop, exit %d) and nothing waits for it any more: check the pull request or release it waited for and run it again if it still needs to",
+			r.command(), r.stoppedBy.Name, r.rc)
+	}
+	if r.stop != 0 && !o.Merged {
 		return fmt.Sprintf("%s did not settle: its waiter was stopped by %s (exit %d) and nothing waits for it any more: check the pull request or release it waited for and run it again if it still needs to",
 			r.command(), signalName(r.stop), r.rc)
 	}
