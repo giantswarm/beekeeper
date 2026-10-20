@@ -49,15 +49,18 @@ const (
 	fixtureItem      = "op://Shared/" + fixtureApp
 	fixtureManifest  = `{"name": "` + fixtureApp + `", "url": "https://example.org", "public": false, "hook_attributes": {"url": "https://example.org/hook"}, ` +
 		`"default_permissions": {"contents": "read", "metadata": "read"}}`
-	takenManifest = `{"name": "taken", "url": "https://example.org"}`
-	renamedApp    = "renamed"
-	appCreate     = "create"
-	timeoutFlag   = "--timeout"
-	tenSeconds    = "10s"
-	selectedRepos = "selected"
-	plainType     = "STRING"
-	concealedType = "CONCEALED"
-	opItemCall    = "op item"
+	takenManifest  = `{"name": "taken", "url": "https://example.org"}`
+	renamedApp     = "renamed"
+	appCreate      = "create"
+	timeoutFlag    = "--timeout"
+	tenSeconds     = "10s"
+	selectedRepos  = "selected"
+	plainType      = "STRING"
+	concealedType  = "CONCEALED"
+	opItemCall     = "op item"
+	personalNewApp = "/settings/apps/new"
+	clientIDKey    = "client_id"
+	loginKey       = "login"
 )
 
 // fixtureKey is the App's private key the fake conversion answers, made
@@ -112,7 +115,7 @@ func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		slug = guard.AppSlug(name)
 	}
 	switch {
-	case r.Method == http.MethodPost && (r.URL.Path == "/organizations/"+fixtureOrg+"/settings/apps/new" || r.URL.Path == "/settings/apps/new"):
+	case r.Method == http.MethodPost && (r.URL.Path == "/organizations/"+fixtureOrg+"/settings/apps/new" || r.URL.Path == personalNewApp):
 		g.state, g.createPath = r.URL.Query().Get("state"), r.URL.Path
 		if err := r.ParseForm(); err != nil || json.Unmarshal([]byte(r.FormValue(appManifestField)), &g.manifest) != nil {
 			http.Error(w, "no manifest", http.StatusBadRequest)
@@ -133,9 +136,19 @@ func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": fixtureAppID, "slug": slug, "name": g.manifest["name"], "client_id": fixtureClientID,
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": fixtureAppID, appSlugField: slug, "name": g.manifest["name"], clientIDKey: fixtureClientID,
 			"client_secret": fixtureSecret, "webhook_secret": fixtureWebhook, "pem": keyPEM, "html_url": "https://github.com/apps/" + slug,
-			"owner": map[string]any{"login": fixtureOrg, "id": 77}})
+			"owner": map[string]any{loginKey: fixtureOrg, "id": 77}})
+	case r.Method == http.MethodGet && r.URL.Path == "/app":
+		if !g.appToken(r.Header.Get("Authorization")) {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		owner := map[string]any{loginKey: fixtureOrg, "type": "Organization"}
+		if g.createPath == personalNewApp {
+			owner = map[string]any{loginKey: fixtureUser, "type": "User"}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": fixtureAppID, appSlugField: slug, clientIDKey: fixtureClientID, "owner": owner})
 	case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
 		if !g.appToken(r.Header.Get("Authorization")) {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -145,7 +158,7 @@ func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		g.tokens++
 		insts := []any{}
 		if g.installed {
-			insts = append(insts, map[string]any{"id": fixtureInstall, "repository_selection": selectedRepos, "account": map[string]any{"login": "Example", "id": 77}})
+			insts = append(insts, map[string]any{"id": fixtureInstall, "repository_selection": selectedRepos, "account": map[string]any{loginKey: "Example", "id": 77}})
 		}
 		_ = json.NewEncoder(w).Encode(insts)
 	case r.Method == http.MethodGet && r.URL.Path == "/apps/"+slug+"/installations/new/permissions":
