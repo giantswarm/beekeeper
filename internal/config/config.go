@@ -1002,6 +1002,28 @@ type Serve struct {
 	// Gateway is the klaus-gateway that puts decisions to their addressee
 	// in Slack; without its URL, decisions stay in beekeeper.
 	Gateway Gateway `yaml:"gateway"`
+	// Identity is serve's own identity toward muster, for the calls no
+	// person makes (the fleet watch's reads).
+	Identity ServeIdentity `yaml:"identity"`
+}
+
+// ServeIdentity is serve's own Dex identity: its projected ServiceAccount
+// token exchanged at serve.issuer's Dex (RFC 8693) for a short-lived Dex ID
+// token, the only token serve presents to muster as itself. muster accepts
+// no ServiceAccount token; Dex is the one trust point.
+type ServeIdentity struct {
+	// TokenFile is the projected ServiceAccount token (the audience Dex's
+	// connector expects), read anew for each exchange.
+	TokenFile string `yaml:"tokenFile"`
+	// ConnectorID is the Dex connector that trusts the cluster's
+	// ServiceAccount issuer.
+	ConnectorID string `yaml:"connectorID"`
+	// ClientID is the public Dex client the exchange is made as.
+	ClientID string `yaml:"clientID"`
+	// Audience is the Dex client the issued token is for, requested with
+	// Dex's cross-client scope (that client trusts ClientID as a peer);
+	// empty, the token is for ClientID.
+	Audience string `yaml:"audience"`
 }
 
 // Gateway configures the decisions' delivery through klaus-gateway's
@@ -1878,6 +1900,7 @@ func (c *Config) defaults() error {
 	setStr(&c.Serve.Gateway.TokenFile, "/var/run/secrets/klaus-gateway/token")
 	setStr(&c.Serve.Gateway.AnswerTool, "x_beekeeper_note_answer")
 	setStr(&c.Serve.Gateway.SendTool, "x_beekeeper_send_message")
+	setStr(&c.Serve.Identity.TokenFile, "/var/run/secrets/dex/token")
 	setStr(&c.Central.Server, "beekeeper")
 	setStr(&c.Central.Muster, "muster")
 	setDur(&c.Central.Timeout, 30*time.Second)

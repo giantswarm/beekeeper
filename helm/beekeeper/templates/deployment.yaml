@@ -76,6 +76,11 @@ spec:
               mountPath: {{ dir .Values.serve.gateway.tokenFile }}
               readOnly: true
             {{- end }}
+            {{- if .Values.serve.identity.connectorID }}
+            - name: dex-token
+              mountPath: {{ dir .Values.serve.identity.tokenFile }}
+              readOnly: true
+            {{- end }}
             {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -94,6 +99,16 @@ spec:
                   audience: klaus-gateway
                   expirationSeconds: 3600
                   path: {{ base .Values.serve.gateway.tokenFile }}
+        {{- end }}
+        {{- if .Values.serve.identity.connectorID }}
+        # Exchanged at Dex for serve's own Dex identity toward muster.
+        - name: dex-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: {{ required "serve.issuer: the Dex serve.identity is exchanged at" .Values.serve.issuer }}
+                  expirationSeconds: 3600
+                  path: {{ base .Values.serve.identity.tokenFile }}
         {{- end }}
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}

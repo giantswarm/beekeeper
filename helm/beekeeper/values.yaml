@@ -48,6 +48,20 @@ serve:
     # The muster tool a person's reply in a conversation with one of their
     # agents calls, as the person.
     sendTool: x_beekeeper_send_message
+  # serve's own identity toward muster, for the calls no person makes (the
+  # fleet watch's reads): its projected ServiceAccount token (audience: the
+  # issuer) exchanged at the issuer's Dex (RFC 8693) for a short-lived Dex ID
+  # token. Empty connectorID mounts no token.
+  identity:
+    # The Dex connector that trusts the cluster's ServiceAccount issuer.
+    connectorID: ""
+    # The public Dex client the exchange is made as.
+    clientID: ""
+    # The Dex client the issued token is for (cross-client scope; that client
+    # trusts clientID as a peer), e.g. dex-k8s-authenticator. Empty: clientID.
+    audience: ""
+    # Where the projected ServiceAccount token is mounted.
+    tokenFile: /var/run/secrets/dex/token
 
 # The watch serve runs in-process (the watch: section of its config.yaml).
 watch:
