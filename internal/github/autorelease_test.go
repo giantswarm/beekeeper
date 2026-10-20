@@ -97,10 +97,10 @@ func TestReadBaseRelease(t *testing.T) {
 	}{
 		{"main with auto-release", mainBranch, mainLineWorkflow, "", nil, nil, BaseRelease{Base: mainBranch, Auto: true}, false, 2},
 		{"a fork line's maintenance branch", handCut, forkLineWorkflow, "", nil, nil, BaseRelease{Base: handCut}, false, 2},
-		{"a branch without either workflow", handCut, "", "", errNotFound, errNotFound, BaseRelease{Base: handCut}, false, 3},
+		{"a branch without any workflow", handCut, "", "", errNotFound, errNotFound, BaseRelease{Base: handCut}, false, 4},
 		{"a plugin marketplace's main", mainBranch, "", pluginWorkflow, errNotFound, nil, BaseRelease{Base: mainBranch, Plugins: true}, false, 3},
-		{"a plugin marketplace's other branch", handCut, "", pluginWorkflow, errNotFound, nil, BaseRelease{Base: handCut}, false, 3},
-		{"an auto-release.yaml of another kind", mainBranch, "", "on:\n  pull_request:\n    types: [closed]\n", errNotFound, nil, BaseRelease{Base: mainBranch}, false, 3},
+		{"a plugin marketplace's other branch", handCut, "", pluginWorkflow, errNotFound, nil, BaseRelease{Base: handCut}, false, 4},
+		{"an auto-release.yaml of another kind", mainBranch, "", "on:\n  pull_request:\n    types: [closed]\n", errNotFound, nil, BaseRelease{Base: mainBranch}, false, 4},
 		{"GitHub unanswered", mainBranch, "", "", errors.New("gh api: exit status 1: connection reset"), nil, BaseRelease{}, true, 2},
 		{"GitHub unanswered for the plugin workflow", mainBranch, "", "", errNotFound, errors.New("connection reset"), BaseRelease{}, true, 3},
 	} {
@@ -125,6 +125,84 @@ func TestReadBaseRelease(t *testing.T) {
 				t.Errorf("asked %q", asked)
 			}
 		})
+	}
+}
+
+// createReleaseWorkflow is the release-PR flow's tagging workflow as devctl
+// generates it.
+const createReleaseWorkflow = `name: Create Release
+on:
+  push:
+    branches:
+      - 'legacy'
+      - 'main'
+      - 'master'
+      - 'release-v*.*.x'
+      - '!release-v*.x.x'
+`
+
+func TestReadBaseReleaseOfTheReleasePRFlow(t *testing.T) {
+	const releaseHead = "main#release#patch"
+	for _, c := range []struct {
+		name, base, head, title string
+		// create, createErr answer CreateReleaseWorkflow; prErr
+		// CreateReleasePRWorkflow.
+		create           string
+		createErr, prErr error
+		want             BaseRelease
+		wantErr          bool
+		asks             int
+	}{
+		{"the release pull request", mainBranch, releaseHead, "chore(release): v1.4.0", createReleaseWorkflow, nil, nil,
+			BaseRelease{Base: mainBranch, ReleasePR: true, Version: "v1.4.0"}, false, 5},
+		{"an older release pull request", mainBranch, releaseHead, "Release v1.4.0", createReleaseWorkflow, nil, nil,
+			BaseRelease{Base: mainBranch, ReleasePR: true, Version: "v1.4.0"}, false, 5},
+		{"another pull request", mainBranch, "fix-thing", "fix: the thing", createReleaseWorkflow, nil, nil,
+			BaseRelease{Base: mainBranch, ReleasePR: true}, false, 5},
+		{"a branch the tagging workflow does not push-trigger", "feature", "feature-fix", "fix", createReleaseWorkflow, nil, nil,
+			BaseRelease{Base: "feature"}, false, 4},
+		{"the tagging workflow without the release-PR one", mainBranch, releaseHead, "chore(release): v1.4.0", createReleaseWorkflow, nil, errNotFound,
+			BaseRelease{Base: mainBranch}, false, 5},
+		{"GitHub unanswered for the tagging workflow", mainBranch, releaseHead, "x", "", errors.New("connection reset"), nil,
+			BaseRelease{}, true, 4},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			asks := 0
+			run := func(_ context.Context, args ...string) ([]byte, error) {
+				asks++
+				call := strings.Join(args, " ")
+				switch {
+				case strings.HasPrefix(call, "pr view 7 --repo o/r --json baseRefName,headRefName,title"):
+					return []byte(`{"baseRefName":"` + c.base + `","headRefName":"` + c.head + `","title":"` + c.title + `"}`), nil
+				case strings.Contains(call, CreateReleaseWorkflow+"?ref="):
+					return []byte(c.create), c.createErr
+				case strings.Contains(call, CreateReleasePRWorkflow+"?ref="):
+					return []byte("name: Create Release PR\n"), c.prErr
+				}
+				return nil, errNotFound
+			}
+			got, err := ReadBaseRelease(context.Background(), run, "o/r", 7)
+			if (err != nil) != c.wantErr || got != c.want {
+				t.Fatalf("got %+v, %v; want %+v", got, err, c.want)
+			}
+			if asks != c.asks {
+				t.Errorf("%d requests, want %d", asks, c.asks)
+			}
+		})
+	}
+}
+
+func TestReleaseVersion(t *testing.T) {
+	for _, c := range []struct{ head, title, want string }{
+		{"main#release#patch", "chore(release): v1.2.3", "v1.2.3"},
+		{"main#release#minor-rc", "chore(release): v1.3.0-rc.1", "v1.3.0-rc.1"},
+		{"release#minor", "Release v1.3.0", "v1.3.0"},
+		{"main#release#patch", "chore(release): bump things", ""},
+		{"fix-release-notes", "chore(release): v1.2.3", ""},
+	} {
+		if got := ReleaseVersion(c.head, c.title); got != c.want {
+			t.Errorf("ReleaseVersion(%q, %q) = %q, want %q", c.head, c.title, got, c.want)
+		}
 	}
 }
 

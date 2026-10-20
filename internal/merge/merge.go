@@ -320,6 +320,32 @@ func ParseDocument(raw []byte) (Outcome, bool) {
 	return o, true
 }
 
+// ParseReleaseWait reads devctl release wait's JSON document as a merge's
+// release: available is its tag, a failed tag pipeline or commit status
+// (ci_failed, status_failed) a failed release that keeps its tag, any other
+// verdict (timeout, ambiguous_release, …) unconfirmed. reason is devctl's;
+// ok is false when the document is none.
+func ParseReleaseWait(raw []byte) (o Outcome, reason string, ok bool) {
+	var doc struct {
+		Verdict string `json:"verdict"`
+		Reason  string `json:"reason"`
+		Tag     string `json:"tag"`
+	}
+	if json.Unmarshal(raw, &doc) != nil || doc.Verdict == "" {
+		return Outcome{}, "", false
+	}
+	o.Merged = true
+	switch doc.Verdict {
+	case "available":
+		o.Release = doc.Tag
+	case "ci_failed", "status_failed":
+		o.Release, o.ReleaseFailed = doc.Tag, true
+	default:
+		o.Unconfirmed = true
+	}
+	return o, doc.Reason, true
+}
+
 // MergeCommit is the merge commit a merge's document (ParseDocument) names,
 // "" when none.
 func MergeCommit(raw []byte) string {

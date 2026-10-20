@@ -132,6 +132,11 @@ run tags (the Auto-release workflow on the branch, read once per merge,
 names no push to it; its tags are cut by hand) runs devctl with
 --no-release-wait: its lane frees the moment devctl reports it merged and
 no release is awaited; GitHub not answering for the base refuses (77). A
+base branch on the release-PR flow (zz_generated.create_release.yaml tags
+the merge of the bot's <base>#release#<level> pull request) runs devctl
+with --no-release-wait too: the release pull request's merge holds its lane
+while the gate awaits its tag pipeline (devctl release wait), any other
+merge frees it at the merge. A
 SIGTERM aimed at the gate, its caller still there two seconds later,
 stops devctl too, and so does a TaskStop of the background task the gate
 runs, its output piped on or not (the PreToolUse hook ends its devctl
@@ -943,7 +948,7 @@ func shortSHA(sha string) string { return sha[:min(len(sha), 9)] }
 // handCut is the base branch when no Auto-release run tags a merge into it,
 // "" otherwise.
 func (g *gateRun) handCut() string {
-	if g.release == nil || g.release.Auto || g.release.Plugins {
+	if g.release == nil || g.release.Auto || g.release.Plugins || g.release.ReleasePR {
 		return ""
 	}
 	return g.release.Base
@@ -953,6 +958,52 @@ func (g *gateRun) handCut() string {
 // (github.PluginReleaseWorkflow): devctl awaits no such tag, the gate does
 // (awaitPluginTags).
 func (g *gateRun) plugins() bool { return g.release != nil && g.release.Plugins }
+
+// releasePR says whether the base branch releases through the release-PR
+// flow (github.CreateReleaseWorkflow): devctl awaits no release there, the
+// gate awaits the tag of a release pull request's merge (awaitReleasePR).
+func (g *gateRun) releasePR() bool { return g.release != nil && g.release.ReleasePR }
+
+// releasePRFlow names the release-PR flow of the base branch for the gate's
+// lines.
+func (g *gateRun) releasePRFlow() string {
+	return fmt.Sprintf("which releases through the release-PR flow (the bot opens a %s#release#<level> pull request, %s tags its merge)",
+		g.release.Base, filepath.Base(github.CreateReleaseWorkflow))
+}
+
+// awaitReleasePR awaits the release a merge into a release-PR branch cuts:
+// none for a pull request other than the release pull request, which
+// warrants none; the release pull request's tag and its pipeline through
+// devctl release wait, within releasePRWait, out's release. It returns the
+// gate's line on it.
+func (g *gateRun) awaitReleasePR(out *merge.Outcome) string {
+	v := g.release.Version
+	if v == "" {
+		out.NoRelease = true
+		return fmt.Sprintf("%s merged into %s, %s: this merge cuts no tag, the release pull request's merge does; lane %s is free",
+			g.key(), g.release.Base, g.releasePRFlow(), g.lane.Name)
+	}
+	gateLine("%s is the release pull request of %s: awaiting its tag pipeline (%s release wait %s %s); lane %s holds until it settles",
+		g.key(), v, merge.Tool, g.repo, v, g.lane.Name)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(g.ctx), releasePRWait)
+	defer cancel()
+	o, reason, ok := merge.ParseReleaseWait(releaseWait(ctx, g.repo, v))
+	resume := fmt.Sprintf("`%s release wait %s %s` resumes the wait, do not merge again", merge.Tool, g.repo, v)
+	switch {
+	case !ok:
+		out.Unconfirmed = true
+		return fmt.Sprintf("%s merged, and %s release wait ended without its document: the release %s is unconfirmed; %s", g.key(), merge.Tool, v, resume)
+	case o.ReleaseFailed:
+		out.Release, out.ReleaseFailed = o.Release, true
+		return fmt.Sprintf("%s merged and its release %s failed (%s): nothing rolls, lane %s settles at once; the fix is the next pull request or a rerun of the failed workflow, do not merge again",
+			g.key(), v, reason, g.lane.Name)
+	case o.Unconfirmed:
+		out.Unconfirmed = true
+		return fmt.Sprintf("%s merged, and its release %s is unconfirmed (%s): %s", g.key(), v, reason, resume)
+	}
+	out.Release = o.Release
+	return fmt.Sprintf("%s merged and released %s, its tag pipeline green", g.key(), o.Release)
+}
 
 // awaitPluginTags awaits the tags the base's per-plugin Auto Release cuts
 // for its merge commit sha, within pluginTagWait: all cut, they are out's
@@ -1300,6 +1351,12 @@ func (g *gateRun) runMerge() error {
 	case g.plugins():
 		gateLine("%s merges into %s, whose Auto Release tags per plugin (%s): devctl ends at the merge (--no-release-wait), the gate awaits the tags of the plugins whose version it changes",
 			g.key(), g.release.Base, github.PluginReleaseWorkflow)
+	case g.releasePR() && g.release.Version != "":
+		gateLine("%s merges into %s, %s: it is the release pull request of %s, devctl ends at the merge (--no-release-wait) and the gate awaits the tag pipeline of %s",
+			g.key(), g.release.Base, g.releasePRFlow(), g.release.Version, g.release.Version)
+	case g.releasePR():
+		gateLine("%s merges into %s, %s: devctl ends at the merge (--no-release-wait), this merge awaits no release and frees lane %s then",
+			g.key(), g.release.Base, g.releasePRFlow(), g.lane.Name)
 	}
 	base, err := g.mergeFiles()
 	if err != nil {
@@ -1329,7 +1386,7 @@ func (g *gateRun) mergeArgv() ([]string, error) {
 	if g.pr != 0 && g.runsDevctl() {
 		argv = merge.CITimeout(argv, g.cfg.Merge.CITimeout.Duration)
 	}
-	if g.handCut() != "" || g.plugins() {
+	if g.handCut() != "" || g.plugins() || g.releasePR() {
 		argv = merge.NoReleaseWait(argv)
 	}
 	return merge.AcceptRed(argv, g.acceptRed), nil
@@ -1526,9 +1583,12 @@ func (g *gateRun) record(base string, run childRun) error {
 	if r.out, ok = parseOutcome(g.pr, doc); merge.NeedsJudging(ok, rc) {
 		r.out, r.unanswered = judgeRun(g.ctx, g.repo, g.pr, judgeTries)
 	}
-	pluginLine := ""
-	if sha := merge.MergeCommit(doc); g.plugins() && r.out.Merged && sha != "" {
-		pluginLine = g.awaitPluginTags(&r.out, sha)
+	releaseLine := ""
+	switch sha := merge.MergeCommit(doc); {
+	case g.plugins() && r.out.Merged && sha != "":
+		releaseLine = g.awaitPluginTags(&r.out, sha)
+	case g.releasePR() && r.out.Merged && r.unanswered == nil:
+		releaseLine = g.awaitReleasePR(&r.out)
 	}
 	settles := false
 	err := g.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -1564,8 +1624,8 @@ func (g *gateRun) record(base string, run childRun) error {
 	case unanswered != nil:
 		gateLine("devctl ended with exit %d without its document and GitHub does not answer (%v): whether %s merged is unknown, lane %s settles by the settle rule; check the pull request, do not rerun blindly",
 			rc, unanswered, g.key(), g.lane.Name)
-	case pluginLine != "":
-		gateLine("%s", pluginLine)
+	case releaseLine != "":
+		gateLine("%s", releaseLine)
 	case out.Merged && g.handCut() != "":
 		gateLine("%s merged into %s, which no Auto-release run tags: no release awaited, lane %s is free; a tag of %s is cut by hand",
 			g.key(), g.handCut(), g.lane.Name, g.handCut())
