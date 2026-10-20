@@ -113,7 +113,7 @@ func ReadAppDeclaration(ctx context.Context, run GH, repo, file string) (AppDecl
 		return AppDeclaration{}, err
 	}
 	d.Installation = source(repo, sha, inst)
-	if d.Repositories, err = parseInstallation(raw); err != nil {
+	if d.Repositories, err = ParseInstallation(raw); err != nil {
 		return AppDeclaration{}, fmt.Errorf("%s: %w", d.Installation, err)
 	}
 	return d, nil
@@ -178,9 +178,9 @@ func walkStrings(v any, f func(string)) {
 	}
 }
 
-// parseInstallation reads an installation file: the repositories by name,
+// ParseInstallation reads an installation file: the repositories by name,
 // nil for "all".
-func parseInstallation(raw []byte) ([]string, error) {
+func ParseInstallation(raw []byte) ([]string, error) {
 	var f struct {
 		Repositories json.RawMessage `json:"repositories"`
 	}

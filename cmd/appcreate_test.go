@@ -76,16 +76,16 @@ var fixtureKey = sync.OnceValues(func() (*rsa.PrivateKey, string) {
 type fakeGitHub struct {
 	srv *httptest.Server
 	mu  sync.Mutex
-	// manifest and state are what the create page received.
-	manifest map[string]any
-	state    string
+	// manifest and state are what the create page received, createPath
+	// the page: the organisation's or the personal account's.
+	manifest   map[string]any
+	state      string
+	createPath string
 	// installQuery is the installation page's query once the browser got
 	// there, which is the Install click unless noInstall.
 	installQuery url.Values
 	installed    bool
 	noInstall    bool
-	// appPage is the App's installation page reached without preselection.
-	appPage bool
 	// wrongState redirects with another state than the page received.
 	wrongState bool
 	// tokens counts the installations listings asked with the App's token.
@@ -112,8 +112,8 @@ func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		slug = guard.AppSlug(name)
 	}
 	switch {
-	case r.Method == http.MethodPost && r.URL.Path == "/organizations/"+fixtureOrg+"/settings/apps/new":
-		g.state = r.URL.Query().Get("state")
+	case r.Method == http.MethodPost && (r.URL.Path == "/organizations/"+fixtureOrg+"/settings/apps/new" || r.URL.Path == "/settings/apps/new"):
+		g.state, g.createPath = r.URL.Query().Get("state"), r.URL.Path
 		if err := r.ParseForm(); err != nil || json.Unmarshal([]byte(r.FormValue(appManifestField)), &g.manifest) != nil {
 			http.Error(w, "no manifest", http.StatusBadRequest)
 			return
@@ -148,9 +148,6 @@ func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			insts = append(insts, map[string]any{"id": fixtureInstall, "repository_selection": selectedRepos, "account": map[string]any{"login": "Example", "id": 77}})
 		}
 		_ = json.NewEncoder(w).Encode(insts)
-	case r.Method == http.MethodGet && r.URL.Path == "/apps/"+slug+"/installations/new":
-		g.appPage = true
-		_, _ = io.WriteString(w, "the App's installation page")
 	case r.Method == http.MethodGet && r.URL.Path == "/apps/"+slug+"/installations/new/permissions":
 		g.installQuery = r.URL.Query()
 		g.installed = !g.noInstall
