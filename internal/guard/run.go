@@ -321,15 +321,16 @@ func Run(o Options, argv []string) int {
 		}
 	}
 
+	env, cleanup := runTmp(o.TmpDir, logf)
+	defer cleanup()
 	if o.GoCache != "" {
 		release, ok := holdGoCache(o, logf)
 		if !ok {
 			return ExitBusy
 		}
 		defer release()
+		env = append(env, gocache.HeldEnv+"="+o.GoCache)
 	}
-	env, cleanup := runTmp(o.TmpDir, logf)
-	defer cleanup()
 
 	prefix := ScopePrefix
 	if o.Test {
@@ -357,7 +358,8 @@ func Run(o Options, argv []string) int {
 }
 
 // holdGoCache takes the Go build cache's use lock shared for the command,
-// waiting up to o.Wait for a trim under way; false when the wait ran out. A
+// waiting up to o.Wait for a trim or a clear under way; false when the wait
+// ran out. A
 // lock that cannot be taken at all (the cache unwritable) leaves the
 // command to run without it, which the line says.
 func holdGoCache(o Options, logf func(string, ...any)) (release func(), ok bool) {
@@ -367,14 +369,14 @@ func holdGoCache(o Options, logf func(string, ...any)) (release func(), ok bool)
 	release, err := gocache.Use(ctx, o.GoCache)
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
-		logf("the Go build cache %s stayed under a trim for %s; nothing ran", o.GoCache, o.waitText())
+		logf("the Go build cache %s stayed under a trim or a clear for %s; nothing ran", o.GoCache, o.waitText())
 		return nil, false
 	case err != nil:
 		logf("running without the Go build cache's use lock: %v", err)
 		return func() {}, true
 	}
 	if d := time.Since(t0); d >= time.Second {
-		logf("the Go build cache's trim ended after %ds", int(d.Seconds()))
+		logf("the Go build cache's trim or clear ended after %ds", int(d.Seconds()))
 	}
 	return release, true
 }

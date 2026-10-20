@@ -22,8 +22,19 @@ var ErrBusy = errors.New("a go build runs")
 // lockName is the cache's use lock, a file at its top, where the go command
 // keeps only its README and trim.txt: a beekeeper run holds it shared for
 // the length of its command (Use), a trim exclusive for the length of the
-// trim (TryTrim), so no trim removes an entry a running compile reads.
+// trim (TryTrim) and a clear for the length of the clear (Hold), so no trim
+// or clear removes an entry a running compile reads.
 const lockName = "beekeeper-use.lock"
+
+// turnstileName is the lock a clear holds exclusive while it waits for the
+// runs that hold the use lock, and Use passes through shared before it
+// takes it: a run that starts while a clear waits waits behind it, so
+// overlapping runs never keep a clear waiting for ever.
+const turnstileName = "beekeeper-clear.lock"
+
+// HeldEnv names, in a beekeeper run's environment, the cache whose use lock
+// the run holds: a clear started inside the run would wait on its own run.
+const HeldEnv = "BEEKEEPER_GOCACHE_HELD"
 
 // lockRetry is how often Use asks again for a lock a trim holds.
 const lockRetry = 250 * time.Millisecond
@@ -36,14 +47,23 @@ func useLock(dir string) (*flock.Flock, error) {
 }
 
 // Use takes the cache's use lock shared for a command that may compile:
-// it waits for a trim under way, until ctx ends. Many commands hold it at
-// once; release gives it back.
+// it waits for a trim or a clear under way or waiting, until ctx ends. Many
+// commands hold it at once; release gives it back.
 func Use(ctx context.Context, dir string) (release func(), err error) {
 	l, err := useLock(dir)
 	if err != nil {
 		return nil, err
 	}
-	ok, err := l.TryRLockContext(ctx, lockRetry)
+	turn := flock.New(filepath.Join(dir, turnstileName))
+	ok, err := turn.TryRLockContext(ctx, lockRetry)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, ctx.Err()
+	}
+	defer func() { _ = turn.Unlock() }()
+	ok, err = l.TryRLockContext(ctx, lockRetry)
 	if err != nil {
 		return nil, err
 	}
@@ -64,6 +84,54 @@ func TryTrim(dir string) (release func(), ok bool, err error) {
 		return nil, false, err
 	}
 	return func() { _ = l.Unlock() }, true, nil
+}
+
+// Hold takes the cache's use lock exclusive for a clear: it waits until no
+// command holds it (Use) and no trim runs, until ctx ends, and calls
+// waiting once when it has to wait. Runs that start meanwhile wait behind
+// it. release gives both locks back.
+func Hold(ctx context.Context, dir string, waiting func()) (release func(), err error) {
+	l, err := useLock(dir)
+	if err != nil {
+		return nil, err
+	}
+	turn := flock.New(filepath.Join(dir, turnstileName))
+	ok, err := turn.TryLockContext(ctx, lockRetry)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, ctx.Err()
+	}
+	if ok, err = l.TryLock(); err == nil && !ok {
+		waiting()
+		ok, err = l.TryLockContext(ctx, lockRetry)
+	}
+	if err != nil || !ok {
+		_ = turn.Unlock()
+		if err == nil {
+			err = ctx.Err()
+		}
+		return nil, err
+	}
+	return func() { _ = l.Unlock(); _ = turn.Unlock() }, nil
+}
+
+// ModDir is the module cache the go command uses: $GOMODCACHE, else pkg/mod
+// in the first $GOPATH entry, else in go under the home directory; "" when
+// unknown.
+func ModDir() string {
+	if d := os.Getenv("GOMODCACHE"); d != "" {
+		return d
+	}
+	if p := filepath.SplitList(os.Getenv("GOPATH")); len(p) > 0 && p[0] != "" {
+		return filepath.Join(p[0], "pkg", "mod")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, "go", "pkg", "mod")
 }
 
 // busyEvery is how many removals a trim makes between asking whether a
